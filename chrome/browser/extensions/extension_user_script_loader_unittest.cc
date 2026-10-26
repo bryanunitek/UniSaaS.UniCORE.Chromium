@@ -356,7 +356,8 @@ TEST_F(ExtensionUserScriptLoaderTest, ComponentExtensionContentScriptIsLoaded) {
       return false;
     }
     const ui::TemplateReplacements* GetTemplateReplacementsForExtension(
-        const ExtensionId& extension_id) const override {
+        const ExtensionId& extension_id,
+        content::BrowserContext* context) const override {
       return nullptr;
     }
   };

@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {HAS_BEEN_PASSWORD_SYMBOL, ID_SYMBOL} from '//components/autofill/ios/form_util/resources/fill_constants.js';
+import {HAS_BEEN_PASSWORD_SYMBOL} from '//components/autofill/ios/form_util/resources/fill_constants.js';
+import {safeOwnerDocument} from '//components/autofill/ios/form_util/resources/unique_node_id.js';
 import {APC_NODE_DEPTH_COST, getRemoteFrameRemoteToken, NONCE_ATTR} from '//ios/chrome/browser/intelligence/proto_wrappers/resources/common.js';
-import {getNodeId, getOrCreateNodeId, safeOwnerDocument} from '//ios/chrome/browser/intelligence/proto_wrappers/resources/dom_node_ids.js';
-import {AxRole, FormControlType, PageContentAnchorRel, PageContentAnnotatedRole, PageContentAttributeType, PageContentClickabilityReason, PageContentInteractionDisabledReason, PageContentMediaType, PageContentRedactionDecision, PageContentTableRowType, PageContentTextSize} from '//ios/chrome/browser/intelligence/proto_wrappers/resources/page_content_types.js';
-import type {PageContent, PageContentAttributes, PageContentFormControlData, PageContentFormData, PageContentFrameData, PageContentFrameInteractionInfo, PageContentGeometry, PageContentMediaData, PageContentNode, PageContentNodeInteractionInfo, PageContentPageInteractionInfo, PageContentScrollerInfo, PageContentTableData, Point, Rect as BasicRect} from '//ios/chrome/browser/intelligence/proto_wrappers/resources/page_content_types.js';
+import {getNodeId, getOrCreateNodeId} from '//ios/chrome/browser/intelligence/proto_wrappers/resources/dom_node_ids.js';
+import {AxRole, FormControlType, PageContentAnchorRel, PageContentAnnotatedRole, PageContentAttributeType, PageContentClickabilityReason, PageContentCssPosition, PageContentInteractionDisabledReason, PageContentMediaType, PageContentRedactionDecision, PageContentTableRowType, PageContentTextSize} from '//ios/chrome/browser/intelligence/proto_wrappers/resources/page_content_types.js';
+import type {PageContent, PageContentAttributes, PageContentFormControlData, PageContentFormData, PageContentFrameData, PageContentFrameInteractionInfo, PageContentGeometry, PageContentMediaData, PageContentNode, PageContentNodeInteractionInfo, PageContentPageInteractionInfo, PageContentScrollerInfo, PageContentTableData, Point, Rect} from '//ios/chrome/browser/intelligence/proto_wrappers/resources/page_content_types.js';
 
-// TODO(crbug.com/504261632): Report metrics from here down to the the native
+// TODO(crbug.com/504261632): Report metrics from here down to the native
 // browser side so they can be uma-reported.
 
 // Set of DOM Node IDs that are considered interactive (focused, selection
@@ -25,12 +26,6 @@ interface HtmlElementWithDisabled extends HTMLElement {
 // it has been a password field.
 interface PasswordTrackedElement extends HTMLInputElement {
   [HAS_BEEN_PASSWORD_SYMBOL]?: boolean;
-}
-
-// An HTMLInputElement that can hold an Autofill node id via the designated
-// symbol property.
-interface HtmlElementWithAutofillId extends HTMLElement {
-  [ID_SYMBOL]?: number;
 }
 
 // Safe getters for prototype properties to prevent DOM stomping/clobbering.
@@ -50,6 +45,10 @@ const isContentEditableGetter =
         ?.get;
 const tabIndexGetter =
     Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'tabIndex')?.get;
+const shadowRootGetter =
+    Object.getOwnPropertyDescriptor(Element.prototype, 'shadowRoot')?.get;
+const tableCaptionGetter =
+    Object.getOwnPropertyDescriptor(HTMLTableElement.prototype, 'caption')?.get;
 
 const textContentGetter =
     Object.getOwnPropertyDescriptor(Node.prototype, 'textContent')?.get;
@@ -57,6 +56,7 @@ const getRootNodeMethod = Node.prototype.getRootNode;
 
 const getBoundingClientRectMethod = Element.prototype.getBoundingClientRect;
 const getClientRectsMethod = Element.prototype.getClientRects;
+const createRangeMethod = Document.prototype.createRange;
 
 const clientHeightGetter =
     Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight')?.get;
@@ -91,10 +91,23 @@ function safeNodeType(node: Node): number {
 
 
 // Returns the equivalent of `node.parentElement` but directly calls the `Node`
-// prototype to prevent clobbering.
-function safeParentElement(node: Node): HTMLElement|null {
-  return parentElementGetter ? parentElementGetter.call(node) :
-                               node.parentElement;
+// prototype to prevent clobbering. Text directly under a ShadowRoot uses the
+// shadow host as its styling parent because ShadowRoot.parentElement is null.
+function safeParentElement(node: Node): Element|null {
+  const parentElement =
+      parentElementGetter ? parentElementGetter.call(node) : node.parentElement;
+  if (parentElement) {
+    return parentElement;
+  }
+  const root = getRootNodeMethod.call(node);
+  return root instanceof ShadowRoot ? root.host : null;
+}
+
+// Returns the equivalent of `table.caption` but directly calls the
+// `HTMLTableElement` prototype getter to prevent clobbering.
+function safeTableCaption(table: HTMLTableElement): HTMLTableCaptionElement|
+    null {
+  return tableCaptionGetter ? tableCaptionGetter.call(table) : table.caption;
 }
 
 // Returns the equivalent of `element.tagName` but directly calls the `Element`
@@ -122,6 +135,12 @@ function safeGetAttribute(element: Element, name: string): string|null {
     return element.getAttribute(name);
   }
   return getAttributeMethod.call(element, name);
+}
+
+// Returns the equivalent of `element.shadowRoot` but directly calls the
+// `Element` prototype to prevent clobbering.
+function safeShadowRoot(element: Element): ShadowRoot|null {
+  return shadowRootGetter ? shadowRootGetter.call(element) : element.shadowRoot;
 }
 
 // Returns the equivalent of `element.hasAttribute(name)` but directly calls the
@@ -153,22 +172,32 @@ function safeMatches(element: Element, selector: string): boolean {
 }
 
 // Returns the equivalent of `element.isContentEditable` but directly calls the
-// `HTMLElement` prototype to prevent clobbering.
-function safeIsContentEditable(element: HTMLElement): boolean {
-  if (typeof element.isContentEditable === 'boolean') {
-    return element.isContentEditable;
+// `HTMLElement` prototype to prevent DOM clobbering. Non-HTMLElement nodes
+// (e.g. SVGElement) do not inherit from HTMLElement and calling the prototype
+// getter on them throws a TypeError. Returns false for non-HTMLElements to
+// mirror Blink's `IsEditable()` in:
+// third_party/blink/renderer/modules/content_extraction/ai_page_content_agent
+function safeIsContentEditable(element: Element): boolean {
+  if (typeof (element as HTMLElement).isContentEditable === 'boolean') {
+    return (element as HTMLElement).isContentEditable;
   }
-  return isContentEditableGetter ? isContentEditableGetter.call(element) :
-                                   element.isContentEditable;
+  return isContentEditableGetter && element instanceof HTMLElement ?
+      isContentEditableGetter.call(element) :
+      false;
 }
 
 // Returns the equivalent of `element.tabIndex` but directly calls the
-// `HTMLElement` prototype to prevent clobbering.
-function safeTabIndex(element: HTMLElement): number {
-  if (typeof element.tabIndex === 'number') {
-    return element.tabIndex;
+// `HTMLElement` prototype to prevent DOM clobbering. If the tabIndex property
+// is not numeric and the element is not an HTMLElement, returns -1 (the default
+// for non-focusable nodes), mirroring Blink's `AdjustedTabIndex()` in:
+// third_party/blink/renderer/modules/content_extraction/ai_page_content_agent
+function safeTabIndex(element: Element): number {
+  if (typeof (element as HTMLElement).tabIndex === 'number') {
+    return (element as HTMLElement).tabIndex;
   }
-  return tabIndexGetter ? tabIndexGetter.call(element) : element.tabIndex;
+  return tabIndexGetter && element instanceof HTMLElement ?
+      tabIndexGetter.call(element) :
+      -1;
 }
 
 // Returns the equivalent of `node.textContent` but directly calls the `Node`
@@ -206,6 +235,15 @@ function safeGetClientRects(element: Element): DOMRectList {
     return element.getClientRects();
   }
   return getClientRectsMethod.call(element);
+}
+
+// Returns the equivalent of `document.createRange()` but directly calls the
+// `Document` prototype to prevent clobbering.
+function safeCreateRange(document: Document): Range {
+  if (typeof document.createRange === 'function') {
+    return document.createRange();
+  }
+  return createRangeMethod.call(document);
 }
 
 // Returns the equivalent of `element.clientHeight` but directly calls the
@@ -284,6 +322,9 @@ interface StyleCache {
 
   // The window object.
   window?: Window;
+
+  // Reusable Range for measuring text node bounding boxes in actionable mode.
+  textRange?: Range;
 }
 
 // Tags that we fundamentally do not support or that contain non-content data.
@@ -322,6 +363,8 @@ const TAG_IFRAME = 'IFRAME';
 const TAG_IMG = 'IMG';
 const TAG_A = 'A';
 const TAG_TABLE = 'TABLE';
+const TAG_THEAD = 'THEAD';
+const TAG_TFOOT = 'TFOOT';
 const TAG_TR = 'TR';
 const TAG_TD = 'TD';
 const TAG_TH = 'TH';
@@ -330,6 +373,7 @@ const TAG_INPUT = 'INPUT';
 const TAG_TEXTAREA = 'TEXTAREA';
 const TAG_SELECT = 'SELECT';
 const TAG_BUTTON = 'BUTTON';
+const TAG_FIELDSET = 'FIELDSET';
 const TAG_P = 'P';
 const TAG_OL = 'OL';
 const TAG_UL = 'UL';
@@ -473,6 +517,7 @@ const ATTR_KEY_NAME = 'name';
 // Attribute and style values.
 const ATTR_VALUE_TRUE = 'true';
 const ATTR_VALUE_FALSE = 'false';
+const ATTR_VALUE_CURSOR_AUTO = 'auto';
 const ATTR_VALUE_CURSOR_NOT_ALLOWED = 'not-allowed';
 const ATTR_VALUE_CURSOR_POINTER = 'pointer';
 const ATTR_VALUE_ROLE_BUTTON = 'button';
@@ -497,14 +542,24 @@ const ATTR_VALUE_ROLE_REGION = 'region';
 const ATTR_VALUE_ROLE_COMPLEMENTARY = 'complementary';
 const ATTR_VALUE_ROLE_CONTENT_INFO = 'contentinfo';
 const ATTR_VALUE_ROLE_NONE = 'none';
+const ATTR_VALUE_ROLE_PRESENTATION = 'presentation';
 
 // Style values.
 const ATTR_POSITION_ABSOLUTE = 'absolute';
 const ATTR_POSITION_FIXED = 'fixed';
+const ATTR_POSITION_RELATIVE = 'relative';
 const ATTR_POSITION_STATIC = 'static';
 const ATTR_POSITION_STICKY = 'sticky';
 const ATTR_DISPLAY_NONE = 'none';
 const ATTR_DISPLAY_INLINE = 'inline';
+const ATTR_DISPLAY_TABLE = 'table';
+const ATTR_DISPLAY_INLINE_TABLE = 'inline-table';
+const ATTR_DISPLAY_TABLE_ROW = 'table-row';
+const ATTR_DISPLAY_TABLE_CELL = 'table-cell';
+const ATTR_DISPLAY_TABLE_HEADER_GROUP = 'table-header-group';
+const ATTR_DISPLAY_TABLE_FOOTER_GROUP = 'table-footer-group';
+const ATTR_DISPLAY_TABLE_ROW_GROUP = 'table-row-group';
+const ATTR_DISPLAY_TABLE_CAPTION = 'table-caption';
 const ATTR_VISIBILITY_HIDDEN = 'hidden';
 const ATTR_VISIBILITY_VISIBLE = 'visible';
 const ATTR_TRANSFORM_UPPERCASE = 'uppercase';
@@ -541,6 +596,7 @@ const STYLE_VALUE_AUTO = 'auto';
 const STYLE_VALUE_SCROLL = 'scroll';
 const STYLE_VALUE_CLIP = 'clip';
 const STYLE_VALUE_HIDDEN = 'hidden';
+const STYLE_VALUE_NONE = 'none';
 
 
 // Type alias for accessing webkit-specific fullscreen document properties that
@@ -556,12 +612,24 @@ const ARIA_LABEL = 'aria-label';
 // Regex used to split aria strings.
 const SPACE_SEPARATOR = /\s+/;
 
+// Table extraction constants.
 /**
- * Returns true if page context IPC optimization is enabled.
+ * Maximum ancestor traversal depth when determining table row types to avoid
+ * unbounded loops in pathological DOM trees.
  */
-function isPageContextIPCOptimizationEnabled() {
-  return (window as any).gCrWebPlaceholderPageContextIPCOptimization ?? false;
-}
+const MAX_TABLE_ANCESTOR_LOOKUP_DEPTH = 100;
+
+/**
+ * Maximum number of direct child elements to inspect when searching for a
+ * table-caption element, preventing costly computed style loops on large
+ * tables.
+ */
+const MAX_CAPTION_CHILD_SEARCH_COUNT = 50;
+
+/**
+ * `CSS.supports()` query for CSS anchor positioning.
+ */
+const ANCHOR_POSITIONING_SUPPORT_QUERY = 'anchor-name: --a';
 
 /**
  * Returns true if page context actionable optimization is enabled.
@@ -570,6 +638,20 @@ function isPageContextActionableOptimizationEnabled() {
   return (window as any).gCrWebPlaceholderPageContextActionableOptimization ??
       false;
 }
+
+/**
+ * Whether `filter` creates a containing block for fixed- and absolute-position
+ * descendants in WebKit.
+ *
+ * In iOS 18 and earlier, `filter` does not create a containing block, causing
+ * those descendants to be laid out relative to an outer containing block, such
+ * as the viewport. Detecting this layout fix
+ * (https://commits.webkit.org/295958) directly would require a layout probe, so
+ * support for CSS anchor positioning (`anchor-name`) is used as an iOS version
+ * proxy: both features debuted together in iOS 26.
+ */
+const FILTER_FORMS_CONTAINING_BLOCK =
+    CSS.supports(ANCHOR_POSITIONING_SUPPORT_QUERY);
 
 /**
  * Maps a tag name to its corresponding PageContentAnnotatedRole.
@@ -692,6 +774,7 @@ function getAXRoleForAriaRole(roleString: string): AxRole {
       case ATTR_VALUE_ROLE_CONTENT_INFO:
         return AxRole.AX_ROLE_CONTENT_INFO;
       case ATTR_VALUE_ROLE_NONE:
+      case ATTR_VALUE_ROLE_PRESENTATION:
         return AxRole.AX_ROLE_NONE;
       default:
         continue;
@@ -721,41 +804,19 @@ const HEADING_6_FONT_SIZE_MULTIPLIER = 0.67;
  * Heading 6: 0.67em
  *
  * @param fontSize The font size string (e.g., "16px").
- * @param doc The document to use for root font size reference.
  * @param styleCache The style cache to use for computed styles.
  * @return The corresponding PageContentTextSize category.
  */
 function getTextSizeCategory(
-    fontSize: string, doc: Document,
-    styleCache?: StyleCache): PageContentTextSize {
+    fontSize: string, styleCache?: StyleCache): PageContentTextSize {
   const size = parseFloat(fontSize);
   if (isNaN(size)) {
     return PageContentTextSize.M;
   }
 
-  // If the cache exists, the font size should have already been computed
-  // pre-walk. Fallback to PageContentTextSize.M if it was not determined.
-  if (styleCache && styleCache.docFontSize === undefined) {
+  const docFontSize = styleCache?.docFontSize;
+  if (!docFontSize) {
     return PageContentTextSize.M;
-  }
-
-  let docFontSize = styleCache?.docFontSize;
-
-  // TODO(crbug.com/480945289): Remove this fallback when optimizations are
-  // enabled by default. It is evaluated at the beginning of the extraction.
-  // Fallback for cacheless path.
-  if (docFontSize === undefined) {
-    // Avoid caching the style as this would cause cache thrashing, erasing the
-    // latest walked element style.
-    const rootStyle =
-        getComputedStyleForElement(doc.documentElement, undefined);
-    if (!rootStyle) {
-      return PageContentTextSize.M;
-    }
-    docFontSize = parseFloat(rootStyle.fontSize);
-    if (isNaN(docFontSize) || docFontSize <= 0) {
-      return PageContentTextSize.M;
-    }
   }
 
   const multiplier = size / docFontSize;
@@ -856,6 +917,10 @@ function getFormControlType(element: HTMLElement): FormControlType|undefined {
 
   if (tagName === TAG_TEXTAREA) {
     return FormControlType.TEXT_AREA;
+  }
+
+  if (tagName === TAG_FIELDSET) {
+    return FormControlType.FIELDSET;
   }
 
   // Fallback, though we shouldn't reach here for form controls.
@@ -997,7 +1062,8 @@ function getAriaFormControlData(element: HTMLElement):
 
   if (formControlType === FormControlType.INPUT_TEXT ||
       formControlType === FormControlType.INPUT_SEARCH) {
-    const placeholder = safeGetAttribute(element, 'aria-placeholder');
+    const placeholder = safeGetAttribute(element, 'placeholder') ||
+        safeGetAttribute(element, 'aria-placeholder');
     if (placeholder) {
       formControlData.placeholder = placeholder;
     }
@@ -1046,18 +1112,74 @@ function mayContainSensitivePayment(element: HTMLElement): boolean {
 }
 
 /**
- * Checks whether geometry should be extracted for sensitive payment redaction.
+ * Checks whether the form control element may contain OTP information.
+ *
+ * Note: Includes `INPUT_PASSWORD` to mirror Blink's OTP extraction candidates
+ * for 2FA forms that mask OTP digits. Password fields are prioritized and
+ * processed first as `REDACTION_DECISION_REDACTED_HAS_BEEN_PASSWORD` in
+ * `getFormControlData`.
  *
  * @param element The DOM element to check.
- * @param includeSensitivePaymentsForRedaction Whether the configuration is
- *     enabled.
- * @return True if geometry should be extracted for sensitive payment.
+ * @return True if the form control may contain OTP.
  */
-function shouldExtractGeometryForSensitivePayment(
-    element: HTMLElement,
-    includeSensitivePaymentsForRedaction: boolean): boolean {
-  return includeSensitivePaymentsForRedaction &&
-      mayContainSensitivePayment(element);
+function mayContainOtp(element: HTMLElement): boolean {
+  const formControlType = getFormControlType(element);
+  if (formControlType === undefined) {
+    return false;
+  }
+
+  switch (formControlType) {
+    case FormControlType.INPUT_NUMBER:
+    case FormControlType.INPUT_PASSWORD:
+    case FormControlType.INPUT_TELEPHONE:
+    case FormControlType.INPUT_TEXT:
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Checks whether geometry should be extracted for screenshot redaction
+ * purposes (e.g. sensitive payment fields, OTP fields, password fields, or
+ * iframes). Iframes are included if any redaction flag is enabled because their
+ * geometries are required for coordinate translation during frame grafting.
+ *
+ * @param element The DOM element to check.
+ * @param includeSensitivePaymentsForRedaction Whether sensitive payments
+ *     redaction is enabled.
+ * @param extractAutofillOtpRedactions Whether OTP redaction is enabled.
+ * @param extractPasswordScreenshotRedactions Whether password screenshot
+ *     redaction is enabled.
+ * @param styleCache Optional cache for computed styles.
+ * @return True if geometry should be extracted for redaction.
+ */
+function shouldExtractGeometryForRedaction(
+    element: HTMLElement, includeSensitivePaymentsForRedaction: boolean,
+    extractAutofillOtpRedactions: boolean,
+    extractPasswordScreenshotRedactions: boolean,
+    styleCache?: StyleCache): boolean {
+  const tagName = getStandardTagName(element);
+  if (tagName === TAG_IFRAME) {
+    return includeSensitivePaymentsForRedaction ||
+        extractAutofillOtpRedactions || extractPasswordScreenshotRedactions;
+  }
+
+  if (includeSensitivePaymentsForRedaction &&
+      mayContainSensitivePayment(element)) {
+    return true;
+  }
+
+  if (extractAutofillOtpRedactions && mayContainOtp(element)) {
+    return true;
+  }
+
+  if (extractPasswordScreenshotRedactions &&
+      isPasswordField(element, tagName, styleCache)) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -1299,6 +1421,10 @@ function isGenericContainer(
   }
 
   const style = getComputedStyleForElement(element, styleCache);
+  if (isTableSectionOrCaptionDisplay(style?.display)) {
+    return false;
+  }
+
   const position = style?.position;
   if (position === ATTR_POSITION_FIXED || position === ATTR_POSITION_STICKY) {
     return true;
@@ -1357,62 +1483,67 @@ function getScrollerInfo(
   const scrollWidth = safeScrollWidth(element);
   const scrollHeight = safeScrollHeight(element);
 
-  // TODO(crbug.com/480945289): Remove this when page context IPC optimization
-  // is enabled.
-  if (isPageContextIPCOptimizationEnabled()) {
-    // Make sure to call element.clientWidth before element.scrollWidth.
-    // This will guide the layout engine to perform the shallow layout first
-    // and then the deep layout calculation.
-    const visibleArea = {
-      x: scrollLeft,
-      y: scrollTop,
-      width: clientWidth,
-      height: clientHeight,
-      top: scrollTop,
-      right: scrollLeft + clientWidth,
-      bottom: scrollTop + clientHeight,
-      left: scrollLeft,
-    };
+  // Make sure to call element.clientWidth before element.scrollWidth.
+  // This will guide the layout engine to perform the shallow layout first
+  // and then the deep layout calculation.
+  const visibleArea =
+      createRect(scrollLeft, scrollTop, clientWidth, clientHeight);
 
-    // Populate bounds.
-    // Scrolling bounds = whole content size.
-    const scrollingBounds = {
-      width: scrollWidth,
-      height: scrollHeight,
-    };
+  // Populate bounds.
+  // Scrolling bounds = whole content size.
+  const scrollingBounds = {
+    width: scrollWidth,
+    height: scrollHeight,
+  };
 
-    return {
-      scrollingBounds,
-      visibleArea,
-      userScrollableHorizontal: isScrollableX && (scrollWidth > clientWidth),
-      userScrollableVertical: isScrollableY && (scrollHeight > clientHeight),
-    };
-  } else {
-    // Populate bounds.
-    // Scrolling bounds = whole content size.
-    const scrollingBounds = {
-      width: scrollWidth,
-      height: scrollHeight,
-    };
+  return {
+    scrollingBounds,
+    visibleArea,
+    userScrollableHorizontal: isScrollableX && (scrollWidth > clientWidth),
+    userScrollableVertical: isScrollableY && (scrollHeight > clientHeight),
+  };
+}
 
-    const visibleArea = {
-      x: scrollLeft,
-      y: scrollTop,
-      width: clientWidth,
-      height: clientHeight,
-      top: scrollTop,
-      right: scrollLeft + clientWidth,
-      bottom: scrollTop + clientHeight,
-      left: scrollLeft,
-    };
-
-    return {
-      scrollingBounds,
-      visibleArea,
-      userScrollableHorizontal: isScrollableX && (scrollWidth > clientWidth),
-      userScrollableVertical: isScrollableY && (scrollHeight > clientHeight),
-    };
+/**
+ * Checks if the element uses a pointer cursor, either via explicit CSS styling
+ * or default desktop User-Agent styling (e.g. <a> and <area> links with href).
+ *
+ * @param element The DOM element to check.
+ * @param tagName The standard tag name of the element.
+ * @param style The computed style of the element.
+ * @param styleCache The style cache to use for computing parent styles.
+ * @return True if the element uses a pointer cursor and did not inherit it.
+ */
+function hasPointerCursor(
+    element: Element, tagName: string, style?: CSSStyleDeclaration,
+    styleCache?: StyleCache): boolean {
+  // Links with `href` use pointer cursors by default unless explicitly
+  // disabled.
+  const isLink = (tagName === TAG_A || tagName === TAG_AREA) &&
+      safeHasAttribute(element, ATTR_KEY_HREF);
+  if (isLink) {
+    return !style?.cursor || style.cursor === ATTR_VALUE_CURSOR_AUTO ||
+        style.cursor === ATTR_VALUE_CURSOR_POINTER;
   }
+
+  // Non-link elements only qualify if their computed cursor is `pointer`.
+  if (style?.cursor !== ATTR_VALUE_CURSOR_POINTER) {
+    return false;
+  }
+
+  // Explicit inline style on this element takes precedence over inheritance.
+  const hasInlinePointer = 'style' in element &&
+      (element as HTMLElement).style?.cursor === ATTR_VALUE_CURSOR_POINTER;
+  if (hasInlinePointer) {
+    return true;
+  }
+
+  // Suppress elements that merely inherit `cursor: pointer` from their parent.
+  const parent = safeParentElement(element);
+  const parentHasPointer = parent &&
+      getComputedStyleForElement(parent, styleCache)?.cursor ===
+          ATTR_VALUE_CURSOR_POINTER;
+  return !parentHasPointer;
 }
 
 /**
@@ -1501,9 +1632,11 @@ function getNodeInteractionInfo(
       safeHasAttribute(element, ATTR_KEY_ONMOUSEUP)) {
     clickabilityReasons.push(PageContentClickabilityReason.MOUSE_CLICK);
   }
-  if (safeHasAttribute(element, ATTR_KEY_ONMOUSEOVER) ||
-      safeHasAttribute(element, ATTR_KEY_ONMOUSEENTER)) {
-    clickabilityReasons.push(PageContentClickabilityReason.MOUSE_HOVER);
+  if (safeHasAttribute(element, ATTR_KEY_ONMOUSEENTER)) {
+    clickabilityReasons.push(PageContentClickabilityReason.MOUSE_ENTER);
+  }
+  if (safeHasAttribute(element, ATTR_KEY_ONMOUSEOVER)) {
+    clickabilityReasons.push(PageContentClickabilityReason.MOUSE_OVER);
   }
   if (safeHasAttribute(element, ATTR_KEY_ONKEYDOWN) ||
       safeHasAttribute(element, ATTR_KEY_ONKEYUP) ||
@@ -1512,7 +1645,7 @@ function getNodeInteractionInfo(
   }
 
   // Pointer Cursor.
-  if (style?.cursor === ATTR_VALUE_CURSOR_POINTER) {
+  if (hasPointerCursor(element, tagName, style, styleCache)) {
     clickabilityReasons.push(PageContentClickabilityReason.CURSOR_POINTER);
   }
 
@@ -2046,9 +2179,7 @@ function getAttributesForTextNode(
   const weight = style.fontWeight;
   const hasEmphasis = weight === 'bold' || weight === '700' ||
       parseInt(weight) >= 700 || style.fontStyle === 'italic';
-  const doc = safeOwnerDocument(domNode);
-  const textSize = doc ? getTextSizeCategory(style.fontSize, doc, styleCache) :
-                         PageContentTextSize.M;
+  const textSize = getTextSizeCategory(style.fontSize, styleCache);
   const color = parseCssColor(style.color)?.toString();
 
   return {
@@ -2083,7 +2214,9 @@ function getContentForIframeNode(
     iframeElement: HTMLIFrameElement, nonce: string, depth: number,
     maxDepth: number, actionableMode: boolean,
     paidContentContext: PaidContentExtractionContext,
-    includeSensitivePaymentsForRedaction: boolean): PageContentNode|null {
+    includeSensitivePaymentsForRedaction: boolean,
+    extractAutofillOtpRedactions: boolean,
+    extractPasswordScreenshotRedactions: boolean): PageContentNode|null {
   const attributes: PageContentAttributes = {
     attributeType: PageContentAttributeType.IFRAME,
     annotatedRoles: [],
@@ -2112,7 +2245,8 @@ function getContentForIframeNode(
           contentDoc, nonce, depth + APC_NODE_DEPTH_COST, maxDepth,
           actionableMode, paidContentContext.extractPaidContent,
           paidContentContext.attemptPaidContentJsonFixing,
-          includeSensitivePaymentsForRedaction);
+          includeSensitivePaymentsForRedaction, extractAutofillOtpRedactions,
+          extractPasswordScreenshotRedactions);
       if (pageContent) {
         childTree = pageContent.rootNode;
         localFrameData = pageContent.frameData;
@@ -2348,19 +2482,40 @@ function isLikelyJSCustomPasswordField(fieldValue: string): boolean {
 /**
  * Checks if the element is a custom password field (e.g. using CSS
  * text-security or JS masking).
+ *
+ * @param element The DOM element to process.
+ * @param styleCache The style cache to use for computing styles.
+ * @return True if the element is a custom password field.
  */
-function isCustomPassword(element: Element, styleCache?: StyleCache): boolean {
+function isCustomPasswordField(
+    element: Element, styleCache?: StyleCache): boolean {
   const tagName = getStandardTagName(element);
-  if (tagName === TAG_INPUT || tagName === TAG_TEXTAREA) {
-    const value = (element as HTMLInputElement | HTMLTextAreaElement).value;
-    if (value && isLikelyJSCustomPasswordField(value)) {
-      return true;
-    }
+  if (tagName !== TAG_INPUT && tagName !== TAG_TEXTAREA) {
+    return false;
+  }
+
+  const value = (element as HTMLInputElement | HTMLTextAreaElement).value;
+  if (value && isLikelyJSCustomPasswordField(value)) {
+    return true;
   }
 
   const style = getComputedStyleForElement(element, styleCache);
   const textSecurity = style?.getPropertyValue('-webkit-text-security');
-  return !!textSecurity && textSecurity !== 'none';
+  return Boolean(textSecurity && textSecurity !== 'none');
+}
+
+/**
+ * Checks if the element is a standard password input (or was previously one).
+ *
+ * @param domNode The DOM element to process.
+ * @param tagName The tag name of the element.
+ * @return True if the element is a standard password field.
+ */
+function isStandardPasswordField(
+    domNode: HTMLElement, tagName: string): boolean {
+  return tagName === TAG_INPUT &&
+      (Boolean((domNode as PasswordTrackedElement)[HAS_BEEN_PASSWORD_SYMBOL]) ||
+       (domNode as HTMLInputElement).type === PASSWORD_TYPE);
 }
 
 /**
@@ -2373,32 +2528,29 @@ function isCustomPassword(element: Element, styleCache?: StyleCache): boolean {
  */
 function isPasswordField(
     domNode: HTMLElement, tagName: string, styleCache?: StyleCache): boolean {
-  if (tagName === TAG_INPUT &&
-      ((domNode as PasswordTrackedElement)[HAS_BEEN_PASSWORD_SYMBOL] ||
-       (domNode as HTMLInputElement).type === PASSWORD_TYPE)) {
-    // A plain password input.
-    return true;
-  }
-
-  if (tagName === TAG_INPUT || tagName === TAG_TEXTAREA) {
-    // Check for custom password fields (CSS or JS masked).
-    return isCustomPassword(domNode, styleCache);
-  }
-  return false;
+  return isStandardPasswordField(domNode, tagName) ||
+      isCustomPasswordField(domNode, styleCache);
 }
 
 /**
- * Gets the autofill node ID for the `element` if one is available.
+ * Gets the custom password redaction decision for a custom password element.
  *
  * @param element The DOM element to process.
- * @return The autofill node ID, or undefined if there is no ID.
+ * @param needRedaction Whether the field contains non-empty text requiring
+ *     redaction.
+ * @return The custom password PageContentRedactionDecision.
  */
-function getAutofillNodeId(element: HTMLElement): number|undefined {
-  const id = (element as HtmlElementWithAutofillId)[ID_SYMBOL];
-  if (Number.isFinite(id)) {
-    return id;
+function getCustomPasswordRedactionDecision(
+    element: Element, needRedaction: boolean): PageContentRedactionDecision {
+  const value = (element as HTMLInputElement | HTMLTextAreaElement).value;
+  if (value && isLikelyJSCustomPasswordField(value)) {
+    return needRedaction ?
+        PageContentRedactionDecision.REDACTED_CUSTOM_PASSWORD_JS :
+        PageContentRedactionDecision.UNREDACTED_EMPTY_CUSTOM_PASSWORD;
   }
-  return undefined;
+  return needRedaction ?
+      PageContentRedactionDecision.REDACTED_CUSTOM_PASSWORD_CSS :
+      PageContentRedactionDecision.UNREDACTED_EMPTY_CUSTOM_PASSWORD;
 }
 
 /**
@@ -2431,12 +2583,15 @@ function getFormControlData(
   const value = (domNode as HTMLInputElement).value;
   if (value !== undefined) {
     let needRedaction = false;
-    if (isPasswordField(domNode, tagName, styleCache)) {
+    if (isStandardPasswordField(domNode, tagName)) {
       needRedaction = !!value;
-      // Exclude password field value mirroring Blink's logic.
       formControlData.redactionDecision = needRedaction ?
           PageContentRedactionDecision.REDACTED_HAS_BEEN_PASSWORD :
           PageContentRedactionDecision.UNREDACTED_EMPTY_PASSWORD;
+    } else if (isCustomPasswordField(domNode, styleCache)) {
+      needRedaction = !!value;
+      formControlData.redactionDecision =
+          getCustomPasswordRedactionDecision(domNode, needRedaction);
     }
     if (!needRedaction) {
       formControlData.fieldValue = value;
@@ -2471,15 +2626,11 @@ function getFormControlData(
   }
 
   // Placeholder.
-  const placeholder = (domNode as HTMLInputElement).placeholder;
+  const placeholder = (domNode as HTMLInputElement).placeholder ||
+      safeGetAttribute(domNode as Element, 'placeholder') ||
+      safeGetAttribute(domNode as Element, 'aria-placeholder');
   if (placeholder) {
     formControlData.placeholder = placeholder;
-  } else {
-    const ariaPlaceholder =
-        safeGetAttribute(domNode as Element, 'aria-placeholder');
-    if (ariaPlaceholder) {
-      formControlData.placeholder = ariaPlaceholder;
-    }
   }
 
   // Select Options.
@@ -2499,30 +2650,95 @@ function getFormControlData(
     }
   }
 
-  formControlData.autofillNodeId = getAutofillNodeId(domNode);
-
   return formControlData as PageContentFormControlData;
 }
 
 /**
- * Extracts table name from a given table DOM Node.
+ * Returns true if the display style corresponds to a table section or caption
+ * grouping (header-group, row-group, footer-group, or caption).
+ */
+function isTableSectionOrCaptionDisplay(display: string|undefined): boolean {
+  return display === ATTR_DISPLAY_TABLE_HEADER_GROUP ||
+      display === ATTR_DISPLAY_TABLE_ROW_GROUP ||
+      display === ATTR_DISPLAY_TABLE_FOOTER_GROUP ||
+      display === ATTR_DISPLAY_TABLE_CAPTION;
+}
+
+/**
+ * Determines the TableRowType (Header, Footer, or Body) for a table row element
+ * based on its enclosing section element or CSS display type.
+ *
+ * @param domNode The table row element.
+ * @param styleCache The style cache to use for computing styles.
+ * @return The table row type.
+ */
+function getTableRowType(
+    domNode: Element, styleCache?: StyleCache): PageContentTableRowType {
+  let curr: Element|null = safeParentElement(domNode);
+  let depth = 0;
+  while (curr && depth < MAX_TABLE_ANCESTOR_LOOKUP_DEPTH) {
+    const currTagName = getStandardTagName(curr);
+    if (currTagName === TAG_THEAD) {
+      return PageContentTableRowType.HEADER;
+    }
+    if (currTagName === TAG_TFOOT) {
+      return PageContentTableRowType.FOOTER;
+    }
+    if (currTagName === TAG_TABLE) {
+      break;
+    }
+    const currStyle = getComputedStyleForElement(curr, styleCache);
+    if (currStyle?.display === ATTR_DISPLAY_TABLE_HEADER_GROUP) {
+      return PageContentTableRowType.HEADER;
+    }
+    if (currStyle?.display === ATTR_DISPLAY_TABLE_FOOTER_GROUP) {
+      return PageContentTableRowType.FOOTER;
+    }
+    if (currStyle?.display === ATTR_DISPLAY_TABLE ||
+        currStyle?.display === ATTR_DISPLAY_INLINE_TABLE) {
+      break;
+    }
+    curr = safeParentElement(curr);
+    depth++;
+  }
+  return PageContentTableRowType.BODY;
+}
+
+/**
+ * Extracts table name (caption) for a table node.
  *
  * @param domNode The table element to process.
  * @param styleCache The style cache to use for computing styles.
  * @return The populated PageContentTableData.
  */
 function getTableNameForTableNode(
-    domNode: HTMLElement, styleCache?: StyleCache): PageContentTableData {
+    domNode: Element, styleCache?: StyleCache): PageContentTableData {
   const tableData: PageContentTableData = {};
-  const tableElement = domNode as HTMLTableElement;
-  // NOTE: Table names will appear twice in the APC tree(once as a part of a
+  // NOTE: Table names will appear twice in the APC tree (once as a part of a
   // table node and once as a part of a text node). This matches Blink's
   // behavior.
-  const caption = tableElement.caption;
-  if (caption) {
-    let tableName = caption.innerText?.trim();
+  let captionElement: HTMLElement|null = null;
+
+  if (domNode instanceof HTMLTableElement) {
+    captionElement = safeTableCaption(domNode);
+  } else if (domNode.children) {
+    const searchLimit =
+        Math.min(domNode.children.length, MAX_CAPTION_CHILD_SEARCH_COUNT);
+    for (let i = 0; i < searchLimit; i++) {
+      const child = domNode.children[i] as HTMLElement;
+      if (getStandardTagName(child) === TAG_CAPTION ||
+          getComputedStyleForElement(child, styleCache)?.display ===
+              ATTR_DISPLAY_TABLE_CAPTION) {
+        captionElement = child;
+        break;
+      }
+    }
+  }
+
+  if (captionElement) {
+    let tableName = captionElement.innerText?.trim();
     if (tableName) {
-      const style = getComputedStyleForElement(caption, styleCache);
+      const style = getComputedStyleForElement(captionElement, styleCache);
       if (style) {
         // TODO(crbug.com/513835087): Consider covering nested blocks with
         // similar text protections. Though note that this would appear to go
@@ -2552,6 +2768,8 @@ function getBasicContentForNonGenericElement(
     domNode: HTMLElement, nonce: string, depth: number, maxDepth: number,
     actionableMode: boolean, paidContentContext: PaidContentExtractionContext,
     includeSensitivePaymentsForRedaction: boolean,
+    extractAutofillOtpRedactions: boolean,
+    extractPasswordScreenshotRedactions: boolean,
     styleCache?: StyleCache): PageContentNode|null {
   const tagName = getStandardTagName(domNode);
 
@@ -2560,7 +2778,8 @@ function getBasicContentForNonGenericElement(
     case TAG_IFRAME:
       return getContentForIframeNode(
           domNode as HTMLIFrameElement, nonce, depth, maxDepth, actionableMode,
-          paidContentContext, includeSensitivePaymentsForRedaction);
+          paidContentContext, includeSensitivePaymentsForRedaction,
+          extractAutofillOtpRedactions, extractPasswordScreenshotRedactions);
     case TAG_IMG:
       return {
         childrenNodes: [],
@@ -2643,25 +2862,13 @@ function getBasicContentForNonGenericElement(
       };
     }
     case TAG_TR: {
-      let rowType = PageContentTableRowType.BODY;
-      // Use closest to find the nearest table section or table ancestor.
-      // This handles cases where TR might be nested in a generic container
-      // within a section. We include 'table' to ensure we stop at the nearest
-      // table boundary and don't match a section from an outer table if this
-      // row is inside a nested table.
-      const section = domNode.closest('thead, tfoot, table');
-      if (section && getStandardTagName(section) === 'THEAD') {
-        rowType = PageContentTableRowType.HEADER;
-      } else if (section && getStandardTagName(section) === 'TFOOT') {
-        rowType = PageContentTableRowType.FOOTER;
-      }
       return {
         childrenNodes: [],
         contentAttributes: {
           ...BASIC_CONTENT_ATTRIBUTES,
           attributeType: PageContentAttributeType.TABLE_ROW,
           tableRowData: {
-            rowType: rowType,
+            rowType: getTableRowType(domNode, styleCache),
           },
         },
       };
@@ -2687,7 +2894,8 @@ function getBasicContentForNonGenericElement(
     case TAG_INPUT:
     case TAG_TEXTAREA:
     case TAG_SELECT:
-    case TAG_BUTTON: {
+    case TAG_BUTTON:
+    case TAG_FIELDSET: {
       return {
         childrenNodes: [],
         contentAttributes: {
@@ -2745,10 +2953,110 @@ function getBasicContentForNonGenericElement(
           attributeType: PageContentAttributeType.LIST_ITEM,
         },
       };
+    case TAG_DIALOG: {
+      const isModal = typeof CSS !== 'undefined' &&
+          typeof CSS.supports === 'function' &&
+          CSS.supports('selector(:modal)') && safeMatches(domNode, ':modal');
+      return {
+        childrenNodes: [],
+        contentAttributes: {
+          ...BASIC_CONTENT_ATTRIBUTES,
+          attributeType: isModal ? PageContentAttributeType.DIALOG_MODAL :
+                                   PageContentAttributeType.DIALOG_MODELESS,
+        },
+      };
+    }
 
     default:
-      break;
+      return null;
   }
+}
+
+/**
+ * Checks if a non-native-table element is styled or annotated as a table
+ * structure via CSS table display values or ARIA table/grid roles, and returns
+ * the corresponding PageContentNode.
+ */
+function getContentForCustomTableElement(
+    domNode: HTMLElement, styleCache?: StyleCache): PageContentNode|null {
+  // 1. ARIA Table & Grid Roles.
+  const role = safeGetAttribute(domNode, ATTR_KEY_ROLE)?.toLowerCase();
+  if (role === 'table' || role === 'grid') {
+    return {
+      childrenNodes: [],
+      contentAttributes: {
+        ...BASIC_CONTENT_ATTRIBUTES,
+        attributeType: PageContentAttributeType.TABLE,
+        tableData: getTableNameForTableNode(domNode, styleCache),
+      },
+    };
+  }
+  if (role === 'row') {
+    return {
+      childrenNodes: [],
+      contentAttributes: {
+        ...BASIC_CONTENT_ATTRIBUTES,
+        attributeType: PageContentAttributeType.TABLE_ROW,
+        tableRowData: {
+          rowType: getTableRowType(domNode, styleCache),
+        },
+      },
+    };
+  }
+  if (role === 'cell' || role === 'gridcell' || role === 'columnheader' ||
+      role === 'rowheader') {
+    return {
+      childrenNodes: [],
+      contentAttributes: {
+        ...BASIC_CONTENT_ATTRIBUTES,
+        attributeType: PageContentAttributeType.TABLE_CELL,
+      },
+    };
+  }
+
+  // 2. CSS Table Display Values.
+  const style = getComputedStyleForElement(domNode, styleCache);
+  const display = style?.display;
+
+  if (display === ATTR_DISPLAY_TABLE || display === ATTR_DISPLAY_INLINE_TABLE) {
+    return {
+      childrenNodes: [],
+      contentAttributes: {
+        ...BASIC_CONTENT_ATTRIBUTES,
+        attributeType: PageContentAttributeType.TABLE,
+        tableData: getTableNameForTableNode(domNode, styleCache),
+      },
+    };
+  }
+  if (display === ATTR_DISPLAY_TABLE_ROW) {
+    return {
+      childrenNodes: [],
+      contentAttributes: {
+        ...BASIC_CONTENT_ATTRIBUTES,
+        attributeType: PageContentAttributeType.TABLE_ROW,
+        tableRowData: {
+          rowType: getTableRowType(domNode, styleCache),
+        },
+      },
+    };
+  }
+  if (display === ATTR_DISPLAY_TABLE_CELL) {
+    return {
+      childrenNodes: [],
+      contentAttributes: {
+        ...BASIC_CONTENT_ATTRIBUTES,
+        attributeType: PageContentAttributeType.TABLE_CELL,
+      },
+    };
+  }
+
+  // If this element is a table section (table-header-group / table-row-group /
+  // table-footer-group) or caption, it is not a standalone content node; its
+  // rows participate in the enclosing table.
+  if (isTableSectionOrCaptionDisplay(display)) {
+    return null;
+  }
+
   return null;
 }
 
@@ -2769,14 +3077,10 @@ function getBasicContentForNonGenericElement(
  * @param styleCache The style cache to use for computing styles.
  */
 function populateCommonAttributes(
-    element: HTMLElement,
-    attributes: PageContentAttributes,
-    interactionInfo: PageContentNodeInteractionInfo | undefined,
-    paidContentContext: PaidContentExtractionContext,
-    actionableMode: boolean,
-    annotatedRoles?: PageContentAnnotatedRole[],
-    styleCache?: StyleCache) {
-
+    element: HTMLElement, attributes: PageContentAttributes,
+    interactionInfo: PageContentNodeInteractionInfo|undefined,
+    paidContentContext: PaidContentExtractionContext, actionableMode: boolean,
+    annotatedRoles?: PageContentAnnotatedRole[], styleCache?: StyleCache) {
   if (interactionInfo) {
     attributes.nodeInteractionInfo = interactionInfo;
   }
@@ -2792,8 +3096,13 @@ function populateCommonAttributes(
   }
   if (actionableMode) {
     const roleStr = safeGetAttribute(element, ATTR_KEY_ROLE);
-    attributes.ariaRole =
+    const ariaRole =
         roleStr ? getAXRoleForAriaRole(roleStr) : AxRole.AX_ROLE_UNKNOWN;
+    // Match Blink: omit missing, empty, or invalid roles, but preserve explicit
+    // presentational roles as AX_ROLE_NONE.
+    if (ariaRole !== AxRole.AX_ROLE_UNKNOWN) {
+      attributes.ariaRole = ariaRole;
+    }
   }
 
   const ariaLabel = getAriaLabel(element, styleCache);
@@ -2824,6 +3133,8 @@ function getContentForElementNode(
     actionableMode: boolean, interactiveNodeIds: InteractiveNodeIds,
     paidContentContext: PaidContentExtractionContext,
     includeSensitivePaymentsForRedaction: boolean,
+    extractAutofillOtpRedactions: boolean,
+    extractPasswordScreenshotRedactions: boolean,
     styleCache?: StyleCache): PageContentNode|null {
   let labelForDOMNodeID: number | undefined = undefined;
   if (actionableMode && getStandardTagName(domNode) === TAG_LABEL) {
@@ -2836,12 +3147,19 @@ function getContentForElementNode(
   // 1. Try to get basic content for non-generic elements.
   contentNode = getBasicContentForNonGenericElement(
       domNode, nonce, depth, maxDepth, actionableMode, paidContentContext,
-      includeSensitivePaymentsForRedaction, styleCache);
+      includeSensitivePaymentsForRedaction, extractAutofillOtpRedactions,
+      extractPasswordScreenshotRedactions, styleCache);
+
+  // 2. Try to get content for custom table elements (CSS display or ARIA
+  // roles).
+  if (!contentNode) {
+    contentNode = getContentForCustomTableElement(domNode, styleCache);
+  }
 
   const annotatedRoles: PageContentAnnotatedRole[] = [];
   addAnnotatedRoles(domNode, annotatedRoles, paidContentContext, styleCache);
 
-  // 2. Try to get content for ARIA custom form controls.
+  // 3. Try to get content for ARIA custom form controls.
   if (!contentNode) {
     const ariaFormControlData = getAriaFormControlData(domNode);
     if (ariaFormControlData) {
@@ -2856,7 +3174,7 @@ function getContentForElementNode(
     }
   }
 
-  // 3. Fallback: Generic Container.
+  // 4. Fallback: Generic Container.
   if (!contentNode &&
       isGenericContainer(
           domNode, interactiveNodeIds, interactionInfo, annotatedRoles,
@@ -2922,18 +3240,6 @@ function addAnnotatedRoles(
   }
 }
 
-// Defines a rectangle compatible with DOMRectReadOnly.
-interface Rect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  top: number;
-  right: number;
-  bottom: number;
-  left: number;
-}
-
 /**
  * Computes the intersection of two rectangles.
  * Returns a 0-size rectangle at (0,0) if they do not intersect,
@@ -2946,8 +3252,8 @@ function intersection(r1: Rect, r2: Rect): Rect {
 
   const x = Math.max(r1.x, r2.x);
   const y = Math.max(r1.y, r2.y);
-  const right = Math.min(r1.right, r2.right);
-  const bottom = Math.min(r1.bottom, r2.bottom);
+  const right = Math.min(r1.x + r1.width, r2.x + r2.width);
+  const bottom = Math.min(r1.y + r1.height, r2.y + r2.height);
 
   // TODO(crbug.com/499496584): Double check that a 0-size rectangle and no
   // rectangle are semantically the same for fully clipped rectangles.
@@ -2967,17 +3273,13 @@ function createRect(x: number, y: number, width: number, height: number): Rect {
     y,
     width,
     height,
-    top: y,
-    right: x + width,
-    bottom: y + height,
-    left: x,
   };
 }
 
 /**
  * Calculates the center point of a given rectangle.
  */
-function getCenterPoint(rect: BasicRect): Point {
+function getCenterPoint(rect: Rect): Point {
   return {
     x: rect.x + (rect.width / 2),
     y: rect.y + (rect.height / 2),
@@ -2995,8 +3297,8 @@ function toEnclosingRect(rect: Rect): Rect {
   }
   const x = Math.floor(rect.x);
   const y = Math.floor(rect.y);
-  const right = Math.ceil(rect.right);
-  const bottom = Math.ceil(rect.bottom);
+  const right = Math.ceil(rect.x + rect.width);
+  const bottom = Math.ceil(rect.y + rect.height);
   return createRect(x, y, right - x, bottom - y);
 }
 
@@ -3070,6 +3372,91 @@ function populateFragmentsIfNeeded(
 }
 
 /**
+ * Checks whether an element establishes a containing block for fixed-position
+ * descendants (and by extension, absolute-position descendants).
+ *
+ * Per CSS Transforms, CSS Filter Effects, and CSS Containment specifications,
+ * elements with properties such as transform, translate, rotate, scale,
+ * perspective, filter, backdrop-filter, or contain: paint/layout/strict/content
+ * create a containing block for fixed descendants. `filter` only does so on
+ * WebKit versions that implement it (see `FILTER_FORMS_CONTAINING_BLOCK`).
+ *
+ * @param style The computed style of the element.
+ * @return True if the element forms a containing block for fixed elements.
+ */
+function formsContainingBlockForFixed(style?: CSSStyleDeclaration): boolean {
+  if (!style) {
+    return false;
+  }
+
+  // Each computed style property is read exactly once into a local, and the
+  // properties that WebKit doesn't treat as layout-dependent are checked first
+  // so that the layout-dependent ones (see below) are only read when none of
+  // the others apply.
+  const translate = style.translate;
+  if (translate && translate !== STYLE_VALUE_NONE) {
+    return true;
+  }
+  const rotate = style.rotate;
+  if (rotate && rotate !== STYLE_VALUE_NONE) {
+    return true;
+  }
+  const scale = style.scale;
+  if (scale && scale !== STYLE_VALUE_NONE) {
+    return true;
+  }
+  const perspective = style.perspective;
+  if (perspective && perspective !== STYLE_VALUE_NONE) {
+    return true;
+  }
+  const contain = style.contain;
+  if (contain && /\b(paint|layout|strict|content)\b/.test(contain)) {
+    return true;
+  }
+  const willChange = style.willChange;
+  if (willChange && willChange !== STYLE_VALUE_AUTO) {
+    const properties =
+        willChange.split(',').map(p => p.trim().replace(/^-webkit-/, ''));
+    if (properties.includes('transform') ||
+        properties.includes('perspective') || properties.includes('filter') ||
+        properties.includes('backdrop-filter') ||
+        properties.includes('translate') || properties.includes('rotate') ||
+        properties.includes('scale') || properties.includes('contain')) {
+      return true;
+    }
+  }
+
+  // In WebKit (`Source/WebCore/style/StyleExtractor.cpp`), reading computed
+  // `transform`, `filter`, `backdrop-filter`, or `-webkit-backdrop-filter` is
+  // treated as layout-dependent by `isLayoutDependent()`.
+  //
+  // When read on an element inside a `content-visibility` skipped subtree,
+  // `Extractor::computeStyle()` forces a layout update with
+  // `LayoutOptions::TreatContentVisibilityHiddenAsVisible`, which invokes
+  // `runForcedLayoutOnSkippedContentIfNeeded()` and walks all descendants of
+  // the skipped subtree on every read.
+  //
+  // Reading these is deferred until after all non-layout-dependent properties
+  // have been checked, and each is read at most once.
+  const transform = style.transform;
+  if (transform && transform !== STYLE_VALUE_NONE) {
+    return true;
+  }
+  if (FILTER_FORMS_CONTAINING_BLOCK) {
+    const filter = style.filter;
+    if (filter && filter !== STYLE_VALUE_NONE) {
+      return true;
+    }
+  }
+  const backdropFilter = style.backdropFilter ||
+      (style as {webkitBackdropFilter?: string}).webkitBackdropFilter;
+  if (backdropFilter && backdropFilter !== STYLE_VALUE_NONE) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Calculates and adds geometry information to a node's content attributes.
  * This includes the element's bounding box and visible bounding box, adjusted
  * for any clipping from parent elements.
@@ -3086,12 +3473,16 @@ function addNodeGeometry(
     element: HTMLElement, attributes: PageContentAttributes,
     context: ClippingContext, actionableMode: boolean,
     includeSensitivePaymentsForRedaction: boolean,
+    extractAutofillOtpRedactions: boolean,
+    extractPasswordScreenshotRedactions: boolean,
     styleCache?: StyleCache): ClippingContext {
   // Process element nodes when in actionable mode, or if it may contain
-  // sensitive payments and they should be redacted.
+  // sensitive fields (payments, OTP, or passwords) that should be redacted.
   if (!actionableMode &&
-      !shouldExtractGeometryForSensitivePayment(
-          element, includeSensitivePaymentsForRedaction)) {
+      !shouldExtractGeometryForRedaction(
+          element, includeSensitivePaymentsForRedaction,
+          extractAutofillOtpRedactions, extractPasswordScreenshotRedactions,
+          styleCache)) {
     return context;
   }
 
@@ -3104,8 +3495,9 @@ function addNodeGeometry(
 
   if (position === ATTR_POSITION_FIXED) {
     // Fixed positioned elements are relative to the viewport, bypassing parent
-    // clips.
-    clipToUse = elementDoc ? getViewportRect(elementDoc) : null;
+    // clips, unless an ancestor established a containing block for fixed
+    // elements.
+    clipToUse = context.fixedClip;
   } else if (position === ATTR_POSITION_ABSOLUTE) {
     clipToUse = context.absoluteClip;
   } else {
@@ -3128,6 +3520,18 @@ function addNodeGeometry(
   const geometry = {} as PageContentGeometry;
   geometry.outerBoundingBox = toEnclosingRect(elementRect);
 
+  let cssPosition = PageContentCssPosition.STATIC;
+  if (position === ATTR_POSITION_RELATIVE) {
+    cssPosition = PageContentCssPosition.RELATIVE;
+  } else if (position === ATTR_POSITION_ABSOLUTE) {
+    cssPosition = PageContentCssPosition.ABSOLUTE;
+  } else if (position === ATTR_POSITION_FIXED) {
+    cssPosition = PageContentCssPosition.FIXED;
+  } else if (position === ATTR_POSITION_STICKY) {
+    cssPosition = PageContentCssPosition.STICKY;
+  }
+  geometry.cssPosition = cssPosition;
+
   // Calculate visibleBoundingBox by intersecting the element's client rect with
   // the selected clip rect.
   if (clipToUse) {
@@ -3142,32 +3546,94 @@ function addNodeGeometry(
 
   attributes.geometry = geometry;
 
-  // Determine the new clip context to pass down to children.
-  let newNormalClip = context.normalClip;
-  let newAbsoluteClip = context.absoluteClip;
-
-  const overflowX = style?.overflowX || '';
-  const overflowY = style?.overflowY || '';
-
-  if (isClippedStyle(overflowX) || isClippedStyle(overflowY)) {
-    const visibleRectForClip = visibleRect;
-
-    // If the element actively clips its children, its own visible bounds become
-    // the new absolute boundary for any descendant.
-    newNormalClip = visibleRectForClip;
-
-    // Absolute descendants are only clipped if this element forms a containing
-    // block (i.e., one that is not statically positioned).
-    if (position && position !== ATTR_POSITION_STATIC) {
-      newAbsoluteClip = visibleRectForClip;
-    }
-  } else if (position && position !== ATTR_POSITION_STATIC) {
-    // Since this positioned element forms a containing block but doesn't clip,
-    // reset the absolute clip to match the current normal flow clip.
-    newAbsoluteClip = context.normalClip;
+  // Match Blink's IsAnchoredOffscreen logic: if an interactive node is
+  // clipped completely offscreen inside an overflow container, drop
+  // nodeInteractionInfo so offscreen carousel items are not retained.
+  if (!geometry.visibleBoundingBox && attributes.nodeInteractionInfo &&
+      context.hasOverflowClip) {
+    delete attributes.nodeInteractionInfo;
   }
 
-  return {normalClip: newNormalClip, absoluteClip: newAbsoluteClip};
+  // Determine the new clip context to pass down to children. An element that
+  // clips its overflow becomes the clip for its normal flow descendants and for
+  // descendants for which it forms a containing block.
+  const clipsOverflow = isClippedStyle(style?.overflowX || '') ||
+      isClippedStyle(style?.overflowY || '');
+  const containingBlockClip = clipsOverflow ? visibleRect : clipToUse;
+  let normalClip = context.normalClip;
+  if (clipsOverflow) {
+    normalClip = visibleRect;
+  } else if (
+      (position === ATTR_POSITION_ABSOLUTE ||
+       position === ATTR_POSITION_FIXED) &&
+      clipToUse) {
+    normalClip = clipToUse;
+  }
+
+  // Lazily evaluate `formsContainingBlockForFixed()` at most once.
+  let isFixedContainingBlock: boolean|undefined;
+  const formsFixedContainingBlock = () => isFixedContainingBlock ??=
+      formsContainingBlockForFixed(style);
+  let absoluteClip: Rect|null|undefined;
+  let fixedClip: Rect|null|undefined;
+  const isPositioned = !!position && position !== ATTR_POSITION_STATIC;
+
+  return {
+    normalClip,
+    get absoluteClip() {
+      if (absoluteClip === undefined) {
+        absoluteClip = isPositioned || formsFixedContainingBlock() ?
+            containingBlockClip :
+            context.absoluteClip;
+      }
+      return absoluteClip;
+    },
+    get fixedClip() {
+      if (fixedClip === undefined) {
+        fixedClip = formsFixedContainingBlock() ? containingBlockClip :
+                                                  context.fixedClip;
+      }
+      return fixedClip;
+    },
+    hasOverflowClip: clipsOverflow || context.hasOverflowClip,
+  };
+}
+
+/**
+ * Calculates and adds geometry information to a text node's content attributes.
+ *
+ * @param textNode The DOM text node to calculate geometry for.
+ * @param attributes The attributes object where geometry will be stored.
+ * @param context The clipping context inherited from parent elements.
+ * @param range A reusable DOM Range used to measure the text node's bounds.
+ */
+function addTextNodeGeometry(
+    textNode: Node, attributes: PageContentAttributes, context: ClippingContext,
+    range: Range): void {
+  range.selectNodeContents(textNode);
+  const domRect = range.getBoundingClientRect();
+
+  const geometry: PageContentGeometry = {
+    outerBoundingBox: toEnclosingRect(domRect),
+    cssPosition: PageContentCssPosition.STATIC,
+  };
+
+  const clipRect = context.normalClip;
+  if (domRect.width > 0 && domRect.height > 0 && clipRect.width > 0 &&
+      clipRect.height > 0) {
+    const left = Math.max(domRect.x, clipRect.x);
+    const top = Math.max(domRect.y, clipRect.y);
+    const right = Math.min(domRect.right, clipRect.x + clipRect.width);
+    const bottom = Math.min(domRect.bottom, clipRect.y + clipRect.height);
+    if (left < right && top < bottom) {
+      const x = Math.floor(left);
+      const y = Math.floor(top);
+      geometry.visibleBoundingBox =
+          createRect(x, y, Math.ceil(right) - x, Math.ceil(bottom) - y);
+    }
+  }
+
+  attributes.geometry = geometry;
 }
 
 // TODO(crbug.com/476341187): Carry status information when the max depth is
@@ -3186,7 +3652,12 @@ function addNodeGeometry(
  * @param actionableMode Whether to extract actionable interaction info.
  * @param paidContentContext Context regarding paid content.
  * @param hasCanvas Whether there is a canvas element on the page.
- * @param parentClipRect The clipping rectangle of the parent.
+ * @param parentContext The clipping context inherited from parent elements.
+ * @param includeSensitivePaymentsForRedaction Whether sensitive payments
+ *     redaction is enabled.
+ * @param extractAutofillOtpRedactions Whether OTP redaction is enabled.
+ * @param extractPasswordScreenshotRedactions Whether password screenshot
+ *     redaction is enabled.
  * @param styleCache The style cache to use for computing styles.
  * @return A new PageContentNode if valid content was found, null otherwise.
  */
@@ -3195,7 +3666,9 @@ function maybeGenerateContentNode(
     interactiveNodeIds: InteractiveNodeIds, actionableMode: boolean,
     paidContentContext: PaidContentExtractionContext, hasCanvas: boolean,
     parentContext: ClippingContext,
-    includeSensitivePaymentsForRedaction: boolean, styleCache?: StyleCache): {
+    includeSensitivePaymentsForRedaction: boolean,
+    extractAutofillOtpRedactions: boolean,
+    extractPasswordScreenshotRedactions: boolean, styleCache?: StyleCache): {
   node: PageContentNode|null,
   nextClippingContext: ClippingContext,
 } {
@@ -3207,8 +3680,12 @@ function maybeGenerateContentNode(
       if (domNodeId !== null) {
         contentAttributes.domNodeId = domNodeId;
       }
+      if (actionableMode && styleCache?.textRange) {
+        addTextNodeGeometry(
+            domNode, contentAttributes, parentContext, styleCache.textRange);
+      }
       // Text nodes don't have children, so they don't need a clip rect passed
-      // down. Explicit geometry for text nodes isn't currently extracted.
+      // down.
       return {
         node: {
           childrenNodes: [],
@@ -3225,7 +3702,8 @@ function maybeGenerateContentNode(
     const contentNode = getContentForElementNode(
         element, nonce, depth, maxDepth, interactionInfo, actionableMode,
         interactiveNodeIds, paidContentContext,
-        includeSensitivePaymentsForRedaction, styleCache);
+        includeSensitivePaymentsForRedaction, extractAutofillOtpRedactions,
+        extractPasswordScreenshotRedactions, styleCache);
     if (contentNode) {
       const domNodeId = getOrCreateNodeId(domNode);
       if (domNodeId !== null) {
@@ -3235,7 +3713,8 @@ function maybeGenerateContentNode(
 
       const nextClippingContext = addNodeGeometry(
           element, contentNode.contentAttributes, parentContext, actionableMode,
-          includeSensitivePaymentsForRedaction, styleCache);
+          includeSensitivePaymentsForRedaction, extractAutofillOtpRedactions,
+          extractPasswordScreenshotRedactions, styleCache);
       return {node: contentNode, nextClippingContext};
     }
   }
@@ -3298,14 +3777,26 @@ function shouldAcceptNode(node: Node, styleCache?: StyleCache): number {
 }
 
 /**
- * Tracks inherited clipping rectangles separately for normal flow elements
- * and absolute positioned elements.
+ * Tracks inherited clipping rectangles separately for normal flow elements,
+ * absolute positioned elements, and fixed positioned elements.
+ *
+ * `absoluteClip` and `fixedClip` are implemented as lazy getters that defer
+ * reading layout-dependent styles until a positioned descendant is encountered.
+ * Contexts must be consumed synchronously during the walk; copying them
+ * triggers eager evaluation.
  */
 interface ClippingContext {
   /** Clipping rectangle applied to static and relative positioned elements. */
-  normalClip: Rect|null;
+  normalClip: Rect;
   /** Clipping rectangle applied to absolute positioned elements. */
   absoluteClip: Rect|null;
+  /**
+   * Clipping rectangle applied to fixed positioned elements when an ancestor
+   * forms a containing block for fixed elements.
+   */
+  fixedClip: Rect|null;
+  /** Whether an ancestor element has an overflow clipping style. */
+  hasOverflowClip?: boolean;
 }
 
 // Item in the ancestor stack.
@@ -3343,7 +3834,8 @@ function generateAndPushContentNode(
     ancestorStack: AncestorStackItem[], interactiveNodeIds: InteractiveNodeIds,
     actionableMode: boolean, paidContentContext: PaidContentExtractionContext,
     hasCanvas: boolean, includeSensitivePaymentsForRedaction: boolean,
-    styleCache?: StyleCache) {
+    extractAutofillOtpRedactions: boolean,
+    extractPasswordScreenshotRedactions: boolean, styleCache?: StyleCache) {
   const parentStackItem = ancestorStack[ancestorStack.length - 1]!;
 
   // 2. Generate Content Node. Skip nodes that are too deep while keep
@@ -3359,7 +3851,8 @@ function generateAndPushContentNode(
   const result = maybeGenerateContentNode(
       node, nonce, currentDepth, maxDepth, interactiveNodeIds, actionableMode,
       paidContentContext, hasCanvas, parentContext,
-      includeSensitivePaymentsForRedaction, styleCache);
+      includeSensitivePaymentsForRedaction, extractAutofillOtpRedactions,
+      extractPasswordScreenshotRedactions, styleCache);
   if (!result.node) {
     // Ignore the node if it can't be parsed. That node cannot be a parent
     // either where another node in the ancestor stack will be picked as the
@@ -3636,7 +4129,8 @@ function computeZOrder(rootNode: PageContentNode, rootDoc: Document) {
   for (const node of actionableNodes) {
     const box = node.visibleBox;
     sweepPoints.push({top: box.y, pointType: SWEEP_POINT_START, node});
-    sweepPoints.push({top: box.bottom, pointType: SWEEP_POINT_END, node});
+    sweepPoints.push(
+        {top: box.y + box.height, pointType: SWEEP_POINT_END, node});
   }
 
   // Sort sweep points from lowest to highest Y.
@@ -3665,8 +4159,8 @@ function computeZOrder(rootNode: PageContentNode, rootDoc: Document) {
       for (const activeNode of activeSet) {
         const activeNodeBox = activeNode.visibleBox;
         // X-overlap check
-        if (newNodeBox.x < activeNodeBox.right &&
-            newNodeBox.right > activeNodeBox.x) {
+        if (newNodeBox.x < activeNodeBox.x + activeNodeBox.width &&
+            newNodeBox.x + newNodeBox.width > activeNodeBox.x) {
           // True 2D overlap occurs. Calculate intersection rectangle.
           const intersectionRect = intersection(newNodeBox, activeNodeBox);
 
@@ -3856,7 +4350,9 @@ export function extractAnnotatedPageContent(
     document: Document, nonce: string, depth: number = 0, maxDepth: number,
     actionableMode: boolean, extractPaidContent: boolean,
     attemptPaidContentJsonFixing: boolean,
-    includeSensitivePaymentsForRedaction: boolean): PageContent|null {
+    includeSensitivePaymentsForRedaction: boolean,
+    extractAutofillOtpRedactions: boolean,
+    extractPasswordScreenshotRedactions: boolean): PageContent|null {
   if (depth > maxDepth) {
     return null;
   }
@@ -3867,24 +4363,23 @@ export function extractAnnotatedPageContent(
     return null;
   }
 
-  const styleCache = !isPageContextIPCOptimizationEnabled() ? undefined : {
+  const styleCache: StyleCache = {
     lastStyledNode: null,
     lastComputedStyle: undefined,
     window: documentWindow,
-  } as StyleCache;
+    textRange: actionableMode ? safeCreateRange(document) : undefined,
+  };
 
-  // Pre-calculate root font size if optimization is enabled.
-  if (styleCache) {
-    let fontSize: number|undefined = undefined;
-    const rootStyle = documentWindow.getComputedStyle(document.documentElement);
-    if (rootStyle) {
-      const parsedSize = parseFloat(rootStyle.fontSize);
-      if (!isNaN(parsedSize) && parsedSize > 0) {
-        fontSize = parsedSize;
-      }
+  // Pre-calculate root font size.
+  let fontSize: number|undefined = undefined;
+  const rootStyle = documentWindow.getComputedStyle(document.documentElement);
+  if (rootStyle) {
+    const parsedSize = parseFloat(rootStyle.fontSize);
+    if (!isNaN(parsedSize) && parsedSize > 0) {
+      fontSize = parsedSize;
     }
-    styleCache.docFontSize = fontSize;
   }
+  styleCache.docFontSize = fontSize;
 
   const root = document.body;
   if (!root) {
@@ -3897,12 +4392,9 @@ export function extractAnnotatedPageContent(
   }
   safeSetAttribute(root, NONCE_ATTR, nonce);
 
-  // TODO(crbug.com/480945289): Assume there is a canvas when feature is
-  // disabled. We only need to extract the scroller info for nodes when there is
-  // a canvas on the page. It is required to compute the canvas heavy heuristic.
-  const hasCanvas = isPageContextIPCOptimizationEnabled() ?
-      document.querySelector('canvas') !== null :
-      true;
+  // We only need to extract the scroller info for nodes when there is a canvas
+  // on the page. It is required to compute the canvas heavy heuristic.
+  const hasCanvas = document.querySelector('canvas') !== null;
 
   // Perform pre-walk extraction of paid content globals and specific nodes.
   const paidContentContext = extractContainsPaidContent(
@@ -3930,6 +4422,8 @@ export function extractAnnotatedPageContent(
       root, rootNode.contentAttributes, rootInteractionInfo, paidContentContext,
       actionableMode, undefined, styleCache);
 
+  const viewportRect = getViewportRect(document);
+
   // Stack to track the current ancestry chain. At this point it is known that
   // that there is at least a root node that is walkable.
   // We use this to find the correct parent for the current node without
@@ -3941,28 +4435,66 @@ export function extractAnnotatedPageContent(
     isVisible: true,
     clippingContext: addNodeGeometry(
         root, rootNode.contentAttributes, {
-          normalClip: getViewportRect(document),
-          absoluteClip: getViewportRect(document),
+          normalClip: viewportRect,
+          absoluteClip: viewportRect,
+          fixedClip: null,
         },
-        actionableMode, includeSensitivePaymentsForRedaction, styleCache),
+        actionableMode, includeSensitivePaymentsForRedaction,
+        extractAutofillOtpRedactions, extractPasswordScreenshotRedactions,
+        styleCache),
   }];
 
   // Collect interactive nodes (focused element, selection start/end).
   const interactiveNodeIds = getInteractiveNodeIds(document);
 
+  walkTreeAndPopulate(
+      root, ancestorStack, document, nonce, maxDepth, interactiveNodeIds,
+      actionableMode, paidContentContext, hasCanvas,
+      includeSensitivePaymentsForRedaction, extractAutofillOtpRedactions,
+      extractPasswordScreenshotRedactions, styleCache);
+
+  const pageInteractionInfo = extractPageInteractionInfo(document);
+
+  // Start the viewport at (0, 0) as it represents the entire page surface which
+  // is the root surface. This deliberately extracts the layout viewport bounds,
+  // rather than accounting for visual viewport offsets (e.g., pinch-to-zoom),
+  // to maintain parity with Blink's ConvertViewportGeometry in
+  // components/optimization_guide/content/browser/page_content_proto_provider.cc.
+  const viewportGeometry = toEnclosingRect(viewportRect);
+
+  if (actionableMode) {
+    computeZOrder(rootNode, document);
+  }
+
+  return {
+    rootNode,
+    pageInteractionInfo,
+    frameData: extractFrameData(document, paidContentContext),
+    viewportGeometry,
+    visibleBoundingBoxesForPasswordRedaction: [],
+  };
+}
+
+// Walks the DOM subtree rooted at `root` (a document body or a ShadowRoot),
+// populating the APC node tree under `ancestorStack[0]`. `ancestorStack` must
+// start with that single base item. A separate function so it can recurse into
+// open shadow roots, which a TreeWalker does not cross.
+function walkTreeAndPopulate(
+    root: Node, ancestorStack: AncestorStackItem[], document: Document,
+    nonce: string, maxDepth: number, interactiveNodeIds: InteractiveNodeIds,
+    actionableMode: boolean, paidContentContext: PaidContentExtractionContext,
+    hasCanvas: boolean, includeSensitivePaymentsForRedaction: boolean,
+    extractAutofillOtpRedactions: boolean,
+    extractPasswordScreenshotRedactions: boolean,
+    styleCache?: StyleCache): void {
   // Create a tree walker to traverse the DOM tree.
   // Uses `undefined` as the filter lambda to avoid performance penalty since
   // the walker would have to cross WebCore C++/JS bridge for every node.
   // Instead, `shouldAcceptNode` will be called at the beginning of the loop
   // and will skip traversal of subtrees that should not be processed like
   // the tree walker does natively.
-  const walker = isPageContextIPCOptimizationEnabled() ?
-      document.createTreeWalker(
-          root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, undefined) :
-      document.createTreeWalker(
-          root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, (node) => {
-            return shouldAcceptNode(node, styleCache);
-          });
+  const walker = document.createTreeWalker(
+      root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, undefined);
 
   // Helper to find the next sibling after the current node's subtree.
   const jumpSubtree = (w: TreeWalker): Node|null => {
@@ -3988,16 +4520,14 @@ export function extractAnnotatedPageContent(
 
   let currentNode = walker.nextNode();
   while (currentNode) {
-    if (isPageContextIPCOptimizationEnabled()) {
-      const filterResult = shouldAcceptNode(currentNode, styleCache);
-      if (filterResult === NodeFilter.FILTER_REJECT) {
-        currentNode = jumpSubtree(walker);
-        continue;
-      }
-      if (filterResult === NodeFilter.FILTER_SKIP) {
-        currentNode = walker.nextNode();
-        continue;
-      }
+    const filterResult = shouldAcceptNode(currentNode, styleCache);
+    if (filterResult === NodeFilter.FILTER_REJECT) {
+      currentNode = jumpSubtree(walker);
+      continue;
+    }
+    if (filterResult === NodeFilter.FILTER_SKIP) {
+      currentNode = walker.nextNode();
+      continue;
     }
 
     // 1. Maintain Stack Invariant & Post-Pruning.
@@ -4046,7 +4576,26 @@ export function extractAnnotatedPageContent(
     generateAndPushContentNode(
         currentNode, nonce, maxDepth, ancestorStack, interactiveNodeIds,
         actionableMode, paidContentContext, hasCanvas,
-        includeSensitivePaymentsForRedaction, styleCache);
+        includeSensitivePaymentsForRedaction, extractAutofillOtpRedactions,
+        extractPasswordScreenshotRedactions, styleCache);
+
+    // Descend into an open shadow root, which the TreeWalker does not cross.
+    // Anchor it at the current stack top (the host's node if emitted, else the
+    // nearest emitted ancestor) so shadow content is not dropped.
+    if (safeNodeType(currentNode) === Node.ELEMENT_NODE) {
+      const shadowRoot = safeShadowRoot(currentNode as Element);
+      if (shadowRoot) {
+        // TODO(crbug.com/537140560): Walk the composed tree so shadow and
+        // light-DOM children retain visual order and assigned nodes are
+        // visited at their slots.
+        walkTreeAndPopulate(
+            shadowRoot, [ancestorStack[ancestorStack.length - 1]!], document,
+            nonce, maxDepth, interactiveNodeIds, actionableMode,
+            paidContentContext, hasCanvas, includeSensitivePaymentsForRedaction,
+            extractAutofillOtpRedactions, extractPasswordScreenshotRedactions,
+            styleCache);
+      }
+    }
 
     currentNode = walker.nextNode();
   }
@@ -4061,25 +4610,4 @@ export function extractAnnotatedPageContent(
       childrenOfParent.pop();
     }
   }
-
-  const pageInteractionInfo = extractPageInteractionInfo(document);
-
-  // Start the viewport at (0, 0) as it represents the entire page surface which
-  // is the root surface. This deliberately extracts the layout viewport bounds,
-  // rather than accounting for visual viewport offsets (e.g., pinch-to-zoom),
-  // to maintain parity with Blink's ConvertViewportGeometry in
-  // components/optimization_guide/content/browser/page_content_proto_provider.cc.
-  const viewportGeometry = toEnclosingRect(getViewportRect(document));
-
-  if (actionableMode) {
-    computeZOrder(rootNode, document);
-  }
-
-  return {
-    rootNode,
-    pageInteractionInfo,
-    frameData: extractFrameData(document, paidContentContext),
-    viewportGeometry,
-    visibleBoundingBoxesForPasswordRedaction: [],
-  };
 }

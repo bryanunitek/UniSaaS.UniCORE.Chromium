@@ -31,8 +31,6 @@ import android.view.ViewGroup.MarginLayoutParams;
 import android.widget.ImageView;
 import android.widget.TextView;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -42,7 +40,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.R;
@@ -52,12 +49,9 @@ import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
 /** Tests for {@link SingleTabViewBinder} with {@link R.layout.single_tab_module_layout} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SingleTabModuleViewBinderUnitTest {
     private static final String TEST_TITLE = "test";
     private static final String TEST_URL = "www.foo.com";
-    private static final int TAB_ID = 1;
-    private static final String HISTOGRAM_START_SURFACE_MODULE_CLICK = "StartSurface.Module.Click";
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     private Activity mActivity;
@@ -99,7 +93,6 @@ public class SingleTabModuleViewBinderUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testVisibility() {
         mPropertyModel.set(IS_VISIBLE, true);
         assertTrue(isViewVisible(R.id.single_tab_view));
@@ -109,7 +102,6 @@ public class SingleTabModuleViewBinderUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSetTitle() {
         TextView title = mSingleTabModuleView.findViewById(R.id.tab_title_view);
         assertEquals("", title.getText());
@@ -119,7 +111,6 @@ public class SingleTabModuleViewBinderUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSetUrl() {
         TextView url = mSingleTabModuleView.findViewById(R.id.tab_url_view);
         assertEquals("", url.getText());
@@ -129,7 +120,6 @@ public class SingleTabModuleViewBinderUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSetFavicon() {
         ImageView favicon = mSingleTabModuleView.findViewById(R.id.tab_favicon_view);
         assertNull(favicon.getDrawable());
@@ -139,7 +129,6 @@ public class SingleTabModuleViewBinderUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSetTabThumbnail() {
         // Fake a layout so the UI has a size.
         mSingleTabModuleView.measure(0, 0);
@@ -155,7 +144,6 @@ public class SingleTabModuleViewBinderUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSetTabThumbnailUpdateMatrixOnResize() {
         ImageView thumbnail = mSingleTabModuleView.findViewById(R.id.tab_thumbnail);
 
@@ -174,7 +162,6 @@ public class SingleTabModuleViewBinderUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testClickListener() {
         mPropertyModel.set(CLICK_LISTENER, mClickListener);
         mSingleTabModuleView.performClick();
@@ -189,7 +176,6 @@ public class SingleTabModuleViewBinderUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testStartMargin() {
         int lateralMargin = 100;
         MarginLayoutParams marginLayoutParams =

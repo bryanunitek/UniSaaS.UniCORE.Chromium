@@ -229,6 +229,27 @@ TEST(RecordTileImpressionTest, ShouldRecordUmaForIconType) {
                            .Build());
 }
 
+TEST(RecordTileImpressionTest, ShouldRecordImpressionsForAiMode) {
+  base::HistogramTester histogram_tester;
+
+  RecordTileImpression(Builder()
+                           .WithIndex(2)
+                           .WithSource(TileSource::AI_MODE)
+                           .WithVisualType(ICON_REAL)
+                           .Build());
+
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("NewTabPage.SuggestionsImpression"),
+      ElementsAre(base::Bucket(/*min=*/2, /*count=*/1)));
+  EXPECT_THAT(histogram_tester.GetAllSamples(
+                  "NewTabPage.SuggestionsImpression.ai_mode"),
+              ElementsAre(base::Bucket(/*min=*/2, /*count=*/1)));
+  EXPECT_THAT(histogram_tester.GetAllSamples("NewTabPage.TileType.ai_mode"),
+              ElementsAre(base::Bucket(ICON_REAL, /*count=*/1)));
+  EXPECT_THAT(histogram_tester.GetAllSamples("NewTabPage.TileTitle.ai_mode"),
+              ElementsAre(base::Bucket(kUnknownTitleSource, /*count=*/1)));
+}
+
 TEST(RecordTileClickTest, ShouldRecordUmaForIcon) {
   base::HistogramTester histogram_tester;
   RecordTileClick(Builder()
@@ -340,6 +361,53 @@ TEST(RecordTileClickTest, ShouldRecordClicksForIconType) {
                       .WithVisualType(ICON_REAL)
                       .WithIconType(IconType::kWebManifestIcon)
                       .Build());
+}
+
+TEST(RecordTileClickTest, ShouldRecordClicksForAiMode) {
+  base::HistogramTester histogram_tester;
+
+  RecordTileClick(Builder()
+                      .WithIndex(2)
+                      .WithSource(TileSource::AI_MODE)
+                      .WithVisualType(ICON_REAL)
+                      .Build());
+
+  EXPECT_THAT(histogram_tester.GetAllSamples("NewTabPage.MostVisited"),
+              ElementsAre(base::Bucket(/*min=*/2, /*count=*/1)));
+  EXPECT_THAT(histogram_tester.GetAllSamples("NewTabPage.MostVisited.ai_mode"),
+              ElementsAre(base::Bucket(/*min=*/2, /*count=*/1)));
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("NewTabPage.TileTypeClicked.ai_mode"),
+      ElementsAre(base::Bucket(ICON_REAL, /*count=*/1)));
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("NewTabPage.TileTitleClicked.ai_mode"),
+      ElementsAre(base::Bucket(kUnknownTitleSource, /*count=*/1)));
+}
+
+TEST(CustomPrefixMetricsTest, ShouldRecordMetricsWithCustomPrefix) {
+  base::HistogramTester histogram_tester;
+
+  RecordPageImpression(/*number_of_tiles=*/4, "Omnibox");
+  EXPECT_THAT(histogram_tester.GetAllSamples("Omnibox.NumberOfTiles"),
+              ElementsAre(base::Bucket(4, /*count=*/1)));
+
+  RecordTileImpression(
+      Builder().WithIndex(0).WithSource(TileSource::TOP_SITES).Build(),
+      "Omnibox");
+  EXPECT_THAT(histogram_tester.GetAllSamples("Omnibox.SuggestionsImpression"),
+              ElementsAre(base::Bucket(0, /*count=*/1)));
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Omnibox.SuggestionsImpression.client"),
+      ElementsAre(base::Bucket(0, /*count=*/1)));
+
+  RecordTileClick(
+      Builder().WithIndex(1).WithSource(TileSource::CUSTOM_LINKS).Build(),
+      "Omnibox");
+  EXPECT_THAT(histogram_tester.GetAllSamples("Omnibox.MostVisited"),
+              ElementsAre(base::Bucket(1, /*count=*/1)));
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Omnibox.MostVisited.custom_links"),
+      ElementsAre(base::Bucket(1, /*count=*/1)));
 }
 
 }  // namespace

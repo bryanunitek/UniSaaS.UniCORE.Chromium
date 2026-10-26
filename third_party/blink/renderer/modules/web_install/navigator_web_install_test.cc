@@ -13,11 +13,13 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/mojom/web_install/web_install.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_tester.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_exception.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_install_params.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_web_install_result.h"
+#include "third_party/blink/renderer/core/dom/document_encoding_data.h"
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -41,22 +43,10 @@ class MockWebInstallService : public mojom::blink::WebInstallService {
                              std::move(handle)));
   }
 
-  void IsInstalled(mojom::blink::InstallOptionsPtr options,
+  // mojom::blink::WebInstallService impl:
+  void IsInstalled(mojom::blink::ManifestInstallOptionsPtr options,
                    IsInstalledCallback callback) override {
     std::move(callback).Run(false);
-  }
-
-  void Install(mojom::blink::InstallOptionsPtr options,
-               InstallCallback callback) override {
-    CHECK(!callback_) << "Keep the tests simple: one call at a time.";
-    options_ = std::move(options);
-    callback_ = std::move(callback);
-    called_.SetValue();
-  }
-
-  void InstallFromElement(mojom::blink::InstallOptionsPtr options,
-                          InstallCallback callback) override {
-    NOTIMPLEMENTED();
   }
 
   void InstallFromManifest(mojom::blink::ManifestInstallOptionsPtr options,
@@ -67,32 +57,18 @@ class MockWebInstallService : public mojom::blink::WebInstallService {
     manifest_called_.SetValue();
   }
 
-  void WaitForCall() { EXPECT_TRUE(called_.Wait()); }
+  void ElementInstallFromManifest(
+      mojom::blink::ManifestInstallOptionsPtr options,
+      InstallFromManifestCallback callback) override {
+    NOTIMPLEMENTED();
+  }
+
   void WaitForManifestCall() { EXPECT_TRUE(manifest_called_.Wait()); }
+
+  bool manifest_called() const { return manifest_called_.IsReady(); }
 
   const mojom::blink::ManifestInstallOptions* manifest_options() const {
     return manifest_options_.get();
-  }
-
-  void RespondWithSuccess(const KURL& manifest_id = KURL()) {
-    CHECK(callback_);
-    std::move(callback_).Run(mojom::blink::WebInstallServiceResult::kSuccess,
-                             manifest_id);
-    called_.Clear();
-  }
-
-  void RespondWithAbortError() {
-    CHECK(callback_);
-    std::move(callback_).Run(mojom::blink::WebInstallServiceResult::kAbortError,
-                             KURL());
-    called_.Clear();
-  }
-
-  void RespondWithDataError() {
-    CHECK(callback_);
-    std::move(callback_).Run(mojom::blink::WebInstallServiceResult::kDataError,
-                             KURL());
-    called_.Clear();
   }
 
   void RespondToManifestInstallWithSuccess() {
@@ -118,9 +94,6 @@ class MockWebInstallService : public mojom::blink::WebInstallService {
 
  private:
   mojo::ReceiverSet<mojom::blink::WebInstallService> receivers_;
-  mojom::blink::InstallOptionsPtr options_;
-  InstallCallback callback_;
-  base::test::TestFuture<void> called_;
   mojom::blink::ManifestInstallOptionsPtr manifest_options_;
   InstallFromManifestCallback manifest_callback_;
   base::test::TestFuture<void> manifest_called_;
@@ -184,11 +157,21 @@ TEST_F(NavigatorWebInstallTest, Success) {
   ASSERT_FALSE(exception_state.HadException());
   ScriptPromiseTester tester(GetScriptState(), promise);
 
-  mock_service().WaitForCall();
-  mock_service().RespondWithSuccess();
+  mock_service().WaitForManifestCall();
+  EXPECT_FALSE(mock_service().manifest_options());
+  mock_service().RespondToManifestInstallWithSuccess();
 
   tester.WaitUntilSettled();
   EXPECT_TRUE(tester.IsFulfilled());
+
+  // The manifest install flow resolves with an empty WebInstallResult
+  // dictionary: success is reported but no manifest ID is exposed to the caller
+  DummyExceptionStateForTesting conversion_exception_state;
+  WebInstallResult* result = NativeValueTraits<WebInstallResult>::NativeValue(
+      GetScriptState()->GetIsolate(), tester.Value().V8Value(),
+      conversion_exception_state);
+  ASSERT_FALSE(conversion_exception_state.HadException());
+  ASSERT_TRUE(result);
 }
 
 TEST_F(NavigatorWebInstallTest, AbortError) {
@@ -200,8 +183,9 @@ TEST_F(NavigatorWebInstallTest, AbortError) {
   ASSERT_FALSE(exception_state.HadException());
   ScriptPromiseTester tester(GetScriptState(), promise);
 
-  mock_service().WaitForCall();
-  mock_service().RespondWithAbortError();
+  mock_service().WaitForManifestCall();
+  EXPECT_FALSE(mock_service().manifest_options());
+  mock_service().RespondToManifestInstallWithAbortError();
 
   tester.WaitUntilSettled();
   EXPECT_TRUE(tester.IsRejected());
@@ -221,8 +205,9 @@ TEST_F(NavigatorWebInstallTest, DataError) {
   ASSERT_FALSE(exception_state.HadException());
   ScriptPromiseTester tester(GetScriptState(), promise);
 
-  mock_service().WaitForCall();
-  mock_service().RespondWithDataError();
+  mock_service().WaitForManifestCall();
+  EXPECT_FALSE(mock_service().manifest_options());
+  mock_service().RespondToManifestInstallWithDataError();
 
   tester.WaitUntilSettled();
   EXPECT_TRUE(tester.IsRejected());
@@ -281,61 +266,20 @@ TEST_F(NavigatorWebInstallTest, BlockedWithoutUserActivation) {
   EXPECT_TRUE(promise.IsEmpty());
 }
 
-TEST_F(NavigatorWebInstallTest, EmptyInstallUrl) {
-  LocalFrame::NotifyUserActivation(
-      &GetFrame(), mojom::UserActivationNotificationType::kTest);
+TEST_F(NavigatorWebInstallTest, DetachedNavigator) {
+  ScriptState* script_state = GetScriptState();
+  Navigator* navigator = GetNavigator();
+  GetFrame().Detach(FrameDetachType::kRemove);
 
   DummyExceptionStateForTesting exception_state;
-  auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
-                                              String(""), exception_state);
-  ASSERT_FALSE(exception_state.HadException());
+  auto promise =
+      NavigatorWebInstall::install(script_state, *navigator, exception_state);
 
-  ScriptPromiseTester tester(GetScriptState(), promise);
-  tester.WaitUntilSettled();
-  EXPECT_TRUE(tester.IsRejected());
-}
-
-TEST_F(NavigatorWebInstallTest, InvalidInstallUrl) {
-  LocalFrame::NotifyUserActivation(
-      &GetFrame(), mojom::UserActivationNotificationType::kTest);
-
-  DummyExceptionStateForTesting exception_state;
-  auto promise = NavigatorWebInstall::install(
-      GetScriptState(), *GetNavigator(), String("://invalid"), exception_state);
-  ASSERT_FALSE(exception_state.HadException());
-
-  ScriptPromiseTester tester(GetScriptState(), promise);
-  tester.WaitUntilSettled();
-  EXPECT_TRUE(tester.IsRejected());
-}
-
-TEST_F(NavigatorWebInstallTest, WhitespaceOnlyInstallUrl) {
-  LocalFrame::NotifyUserActivation(
-      &GetFrame(), mojom::UserActivationNotificationType::kTest);
-
-  DummyExceptionStateForTesting exception_state;
-  auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
-                                              String("   "), exception_state);
-  ASSERT_FALSE(exception_state.HadException());
-
-  ScriptPromiseTester tester(GetScriptState(), promise);
-  tester.WaitUntilSettled();
-  EXPECT_TRUE(tester.IsRejected());
-}
-
-TEST_F(NavigatorWebInstallTest, EmptyManifestId) {
-  LocalFrame::NotifyUserActivation(
-      &GetFrame(), mojom::UserActivationNotificationType::kTest);
-
-  DummyExceptionStateForTesting exception_state;
-  auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
-                                              String("https://example.com"),
-                                              String(""), exception_state);
-  ASSERT_FALSE(exception_state.HadException());
-
-  ScriptPromiseTester tester(GetScriptState(), promise);
-  tester.WaitUntilSettled();
-  EXPECT_TRUE(tester.IsRejected());
+  EXPECT_TRUE(exception_state.HadException());
+  EXPECT_EQ(DOMExceptionCode::kInvalidStateError,
+            exception_state.CodeAs<DOMExceptionCode>());
+  EXPECT_TRUE(promise.IsEmpty());
+  EXPECT_FALSE(mock_service().manifest_called());
 }
 
 TEST_F(NavigatorWebInstallTest, InstallFromManifest_Success) {
@@ -366,7 +310,7 @@ TEST_F(NavigatorWebInstallTest, InstallFromManifest_WithIdSuccess) {
       &GetFrame(), mojom::UserActivationNotificationType::kTest);
   auto* params = MakeGarbageCollected<InstallParams>();
   params->setManifest("https://example.com/manifest.json");
-  params->setId("https://example.com/app/");
+  params->setManifestId("https://example.com/app/");
 
   NonThrowableExceptionState exception_state;
   auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
@@ -380,6 +324,79 @@ TEST_F(NavigatorWebInstallTest, InstallFromManifest_WithIdSuccess) {
             KURL("https://example.com/manifest.json"));
   EXPECT_EQ(mock_service().manifest_options()->manifest_id,
             KURL("https://example.com/app/"));
+  mock_service().RespondToManifestInstallWithSuccess();
+
+  tester.WaitUntilSettled();
+  EXPECT_TRUE(tester.IsFulfilled());
+}
+
+TEST_F(NavigatorWebInstallTest, InstallFromManifest_RelativeManifestSuccess) {
+  LocalFrame::NotifyUserActivation(
+      &GetFrame(), mojom::UserActivationNotificationType::kTest);
+  auto* params = MakeGarbageCollected<InstallParams>();
+  params->setManifest("/resources/manifest.json");
+
+  NonThrowableExceptionState exception_state;
+  auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
+                                              params, exception_state);
+  ASSERT_FALSE(exception_state.HadException());
+  ScriptPromiseTester tester(GetScriptState(), promise);
+
+  mock_service().WaitForManifestCall();
+  ASSERT_TRUE(mock_service().manifest_options());
+  EXPECT_EQ(mock_service().manifest_options()->manifest_url,
+            KURL("https://example.com/resources/manifest.json"));
+  EXPECT_FALSE(mock_service().manifest_options()->manifest_id);
+  mock_service().RespondToManifestInstallWithSuccess();
+
+  tester.WaitUntilSettled();
+  EXPECT_TRUE(tester.IsFulfilled());
+}
+
+TEST_F(NavigatorWebInstallTest,
+       InstallFromManifest_RelativeManifestUsesDocumentBaseUrl) {
+  GetFrame().GetDocument()->SetBaseURLOverride(
+      KURL("https://example.com/resources/"));
+  LocalFrame::NotifyUserActivation(
+      &GetFrame(), mojom::UserActivationNotificationType::kTest);
+  auto* params = MakeGarbageCollected<InstallParams>();
+  params->setManifest("manifest.json");
+
+  NonThrowableExceptionState exception_state;
+  auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
+                                              params, exception_state);
+  ASSERT_FALSE(exception_state.HadException());
+  ScriptPromiseTester tester(GetScriptState(), promise);
+
+  mock_service().WaitForManifestCall();
+  ASSERT_TRUE(mock_service().manifest_options());
+  EXPECT_EQ(mock_service().manifest_options()->manifest_url,
+            KURL("https://example.com/resources/manifest.json"));
+  EXPECT_FALSE(mock_service().manifest_options()->manifest_id);
+  mock_service().RespondToManifestInstallWithSuccess();
+
+  tester.WaitUntilSettled();
+  EXPECT_TRUE(tester.IsFulfilled());
+}
+
+TEST_F(NavigatorWebInstallTest,
+       InstallFromManifest_RelativeManifestWithSurroundingWhitespace) {
+  LocalFrame::NotifyUserActivation(
+      &GetFrame(), mojom::UserActivationNotificationType::kTest);
+  auto* params = MakeGarbageCollected<InstallParams>();
+  params->setManifest(" \t\n /resources/manifest.json \r\f ");
+
+  NonThrowableExceptionState exception_state;
+  auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
+                                              params, exception_state);
+  ASSERT_FALSE(exception_state.HadException());
+  ScriptPromiseTester tester(GetScriptState(), promise);
+
+  mock_service().WaitForManifestCall();
+  ASSERT_TRUE(mock_service().manifest_options());
+  EXPECT_EQ(mock_service().manifest_options()->manifest_url,
+            KURL("https://example.com/resources/manifest.json"));
+  EXPECT_FALSE(mock_service().manifest_options()->manifest_id);
   mock_service().RespondToManifestInstallWithSuccess();
 
   tester.WaitUntilSettled();
@@ -448,13 +465,31 @@ TEST_F(NavigatorWebInstallTest, InstallFromManifest_EmptyManifestUrl) {
   ScriptPromiseTester tester(GetScriptState(), promise);
   tester.WaitUntilSettled();
   EXPECT_TRUE(tester.IsRejected());
+  EXPECT_FALSE(mock_service().manifest_options());
+}
+
+TEST_F(NavigatorWebInstallTest, InstallFromManifest_WhitespaceOnlyManifestUrl) {
+  LocalFrame::NotifyUserActivation(
+      &GetFrame(), mojom::UserActivationNotificationType::kTest);
+  auto* params = MakeGarbageCollected<InstallParams>();
+  params->setManifest(" \t\n ");
+
+  NonThrowableExceptionState exception_state;
+  auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
+                                              params, exception_state);
+  ASSERT_FALSE(exception_state.HadException());
+
+  ScriptPromiseTester tester(GetScriptState(), promise);
+  tester.WaitUntilSettled();
+  EXPECT_TRUE(tester.IsRejected());
+  EXPECT_FALSE(mock_service().manifest_options());
 }
 
 TEST_F(NavigatorWebInstallTest, InstallFromManifest_InvalidManifestUrl) {
   LocalFrame::NotifyUserActivation(
       &GetFrame(), mojom::UserActivationNotificationType::kTest);
   auto* params = MakeGarbageCollected<InstallParams>();
-  params->setManifest("://not-a-url");
+  params->setManifest("https://[");
 
   NonThrowableExceptionState exception_state;
   auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
@@ -471,7 +506,7 @@ TEST_F(NavigatorWebInstallTest, InstallFromManifest_EmptyId) {
       &GetFrame(), mojom::UserActivationNotificationType::kTest);
   auto* params = MakeGarbageCollected<InstallParams>();
   params->setManifest("https://example.com/manifest.json");
-  params->setId("");
+  params->setManifestId("");
 
   NonThrowableExceptionState exception_state;
   auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
@@ -483,16 +518,72 @@ TEST_F(NavigatorWebInstallTest, InstallFromManifest_EmptyId) {
   EXPECT_TRUE(tester.IsRejected());
 }
 
-TEST_F(NavigatorWebInstallTest, InstallFromManifest_NullIdTreatedAsAbsent) {
-  // `id` is declared `USVString?` in install_params.idl. When JS passes `null`,
-  // the binding produces a null `String`; this should be treated the same as
-  // omitting `id` entirely, and no `manifest_id` should be set on the mojo
-  // options struct.
+TEST_F(NavigatorWebInstallTest,
+       InstallFromManifest_RelativeIdWithSurroundingWhitespace) {
+  GetFrame().GetDocument()->SetURL(KURL("https://example.com/page/index.html"));
+  GetFrame().GetDocument()->SetBaseURLOverride(
+      KURL("https://example.com/catalog/"));
+  LocalFrame::NotifyUserActivation(
+      &GetFrame(), mojom::UserActivationNotificationType::kTest);
+  auto* params = MakeGarbageCollected<InstallParams>();
+  params->setManifest("https://example.com/manifests/app.json");
+  params->setManifestId(" \t\n app-id \r\f ");
+
+  NonThrowableExceptionState exception_state;
+  auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
+                                              params, exception_state);
+  ASSERT_FALSE(exception_state.HadException());
+  ScriptPromiseTester tester(GetScriptState(), promise);
+
+  mock_service().WaitForManifestCall();
+  ASSERT_TRUE(mock_service().manifest_options());
+  EXPECT_EQ(mock_service().manifest_options()->manifest_url,
+            KURL("https://example.com/manifests/app.json"));
+  EXPECT_EQ(mock_service().manifest_options()->manifest_id,
+            KURL("https://example.com/catalog/app-id"));
+  mock_service().RespondToManifestInstallWithSuccess();
+
+  tester.WaitUntilSettled();
+  EXPECT_TRUE(tester.IsFulfilled());
+}
+
+TEST_F(NavigatorWebInstallTest,
+       InstallFromManifest_IdUsesUtf8OnLegacyEncodedDocument) {
+  DocumentEncodingData encoding_data;
+  encoding_data.SetEncoding(TextEncoding("windows-1252"));
+  GetFrame().GetDocument()->SetEncodingData(encoding_data);
   LocalFrame::NotifyUserActivation(
       &GetFrame(), mojom::UserActivationNotificationType::kTest);
   auto* params = MakeGarbageCollected<InstallParams>();
   params->setManifest("https://example.com/manifest.json");
-  params->setId(String());
+  params->setManifestId(String(u"https://example.com/?id=\u00E9"));
+
+  NonThrowableExceptionState exception_state;
+  auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
+                                              params, exception_state);
+  ASSERT_FALSE(exception_state.HadException());
+  ScriptPromiseTester tester(GetScriptState(), promise);
+
+  mock_service().WaitForManifestCall();
+  ASSERT_TRUE(mock_service().manifest_options());
+  EXPECT_EQ(mock_service().manifest_options()->manifest_id,
+            KURL("https://example.com/?id=%C3%A9"));
+  mock_service().RespondToManifestInstallWithSuccess();
+
+  tester.WaitUntilSettled();
+  EXPECT_TRUE(tester.IsFulfilled());
+}
+
+TEST_F(NavigatorWebInstallTest, InstallFromManifest_NullIdTreatedAsAbsent) {
+  // `manifestId` is declared `USVString?` in install_params.idl. When JS passes
+  // `null`, the binding produces a null `String`; this should be treated the
+  // same as omitting `manifestId` entirely, and no `manifest_id` should be set
+  // on the mojo options struct.
+  LocalFrame::NotifyUserActivation(
+      &GetFrame(), mojom::UserActivationNotificationType::kTest);
+  auto* params = MakeGarbageCollected<InstallParams>();
+  params->setManifest("https://example.com/manifest.json");
+  params->setManifestId(String());
 
   NonThrowableExceptionState exception_state;
   auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
@@ -516,7 +607,7 @@ TEST_F(NavigatorWebInstallTest, InstallFromManifest_InvalidId) {
       &GetFrame(), mojom::UserActivationNotificationType::kTest);
   auto* params = MakeGarbageCollected<InstallParams>();
   params->setManifest("https://example.com/manifest.json");
-  params->setId("://invalid");
+  params->setManifestId("https://[");
 
   DummyExceptionStateForTesting exception_state;
   auto promise = NavigatorWebInstall::install(GetScriptState(), *GetNavigator(),
@@ -541,6 +632,24 @@ TEST_F(NavigatorWebInstallTest,
   EXPECT_EQ(DOMExceptionCode::kNotAllowedError,
             exception_state.CodeAs<DOMExceptionCode>());
   EXPECT_TRUE(promise.IsEmpty());
+}
+
+TEST_F(NavigatorWebInstallTest, InstallFromManifest_DetachedNavigator) {
+  ScriptState* script_state = GetScriptState();
+  Navigator* navigator = GetNavigator();
+  GetFrame().Detach(FrameDetachType::kRemove);
+  auto* params = MakeGarbageCollected<InstallParams>();
+  params->setManifest("https://example.com/manifest.json");
+
+  DummyExceptionStateForTesting exception_state;
+  auto promise = NavigatorWebInstall::install(script_state, *navigator, params,
+                                              exception_state);
+
+  EXPECT_TRUE(exception_state.HadException());
+  EXPECT_EQ(DOMExceptionCode::kInvalidStateError,
+            exception_state.CodeAs<DOMExceptionCode>());
+  EXPECT_TRUE(promise.IsEmpty());
+  EXPECT_FALSE(mock_service().manifest_called());
 }
 
 TEST_F(NavigatorWebInstallTest, InstallFromManifest_BlockedInSandbox) {

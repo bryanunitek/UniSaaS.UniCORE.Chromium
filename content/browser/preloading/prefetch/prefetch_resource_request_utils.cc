@@ -4,6 +4,7 @@
 
 #include "content/browser/preloading/prefetch/prefetch_resource_request_utils.h"
 
+#include "base/trace_event/trace_event.h"
 #include "components/variations/net/variations_http_headers.h"
 #include "content/browser/devtools/devtools_agent_host_impl.h"
 #include "content/browser/devtools/devtools_instrumentation.h"
@@ -355,7 +356,8 @@ void AddClientHintsHeaders(net::HttpRequestHeaders& request_headers,
 // Hints):
 void MaybeApplyOverrideForDevtoolsUserAgentHeader(
     net::HttpRequestHeaders& request_headers,
-    const PrefetchRequest& prefetch_request) {
+    const PrefetchRequest& prefetch_request,
+    const GURL& request_url) {
   if (!base::FeatureList::IsEnabled(
           features::kPrefetchDevtoolsUserAgentOverride) ||
       !prefetch_request.referring_web_contents()) {
@@ -384,13 +386,15 @@ void MaybeApplyOverrideForDevtoolsUserAgentHeader(
     // mode UA override. There are other types of UA overrides, which are at
     // WebContents level.
     devtools_instrumentation::ApplyEmulationOverrides(
-        RenderFrameDevToolsAgentHost::GetFor(referring_ftn), &request_headers);
+        RenderFrameDevToolsAgentHost::GetFor(referring_ftn), &request_headers,
+        request_url);
   }
 }
 
 network::HttpRequestHeadersUpdateParams PrepareInitialHeadersForPrefetchPhase1(
     const GURL& request_url,
     const PrefetchRequest& prefetch_request) {
+  TRACE_EVENT("loading", "PrepareInitialHeadersForPrefetchPhase1");
   network::HttpRequestHeadersUpdateParams headers_update_params;
 
   url::Origin request_url_origin = url::Origin::Create(request_url);
@@ -415,6 +419,24 @@ network::HttpRequestHeadersUpdateParams PrepareInitialHeadersForPrefetchPhase1(
   AddSpeculationTagsHeader(headers_update_params.modified_headers,
                            request_url_origin, prefetch_request);
 
+  // ------------------------------------------------------------------------
+  // [2] `Accept`:
+  if (base::FeatureList::IsEnabled(features::kPrefetchRevampAcceptHeader)) {
+    // When `kPrefetchRevampAcceptHeader` is enabled, `allow_sxg_responses`
+    // is set to false because the prefetch cache doesn't recognize SXG
+    // responses, and therefore `Accept` header value can be different between
+    // prefetch and would-be navigation.
+    // Also the "Accept" header is added in Phase1 which is executed in a non-UI
+    // thread for OMT Prefetch.
+    //
+    // `browser_context` is set to null because this can run on non-UI threads,
+    // and `browser_context` isn't needed when `allow_sxg_responses` is false.
+    headers_update_params.modified_headers.SetHeader(
+        net::HttpRequestHeaders::kAccept,
+        FrameAcceptHeaderValue(/*allow_sxg_responses=*/false,
+                               /*browser_context=*/nullptr));
+  }
+
   return headers_update_params;
 }
 
@@ -422,18 +444,24 @@ network::HttpRequestHeadersUpdateParams PrepareInitialHeadersForPrefetchPhase2(
     const GURL& request_url,
     const PrefetchRequest& prefetch_request,
     bool is_first_party_context_for_variations_header) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  TRACE_EVENT("loading", "PrepareInitialHeadersForPrefetchPhase2");
 
   network::HttpRequestHeadersUpdateParams headers_update_params;
 
   url::Origin request_url_origin = url::Origin::Create(request_url);
 
   // [2] `Accept`:
-  CHECK(prefetch_request.browser_context());
-  headers_update_params.modified_headers.SetHeader(
-      net::HttpRequestHeaders::kAccept,
-      FrameAcceptHeaderValue(/*allow_sxg_responses=*/true,
-                             prefetch_request.browser_context()));
+  if (!base::FeatureList::IsEnabled(features::kPrefetchRevampAcceptHeader)) {
+    // When `kPrefetchRevampAcceptHeader` is disabled, "Accept" header is added
+    // in Phase2 and `allow_sxg_responses` is set to true to keep the existing
+    // behavior.
+    CHECK(prefetch_request.browser_context());
+    headers_update_params.modified_headers.SetHeader(
+        net::HttpRequestHeaders::kAccept,
+        FrameAcceptHeaderValue(/*allow_sxg_responses=*/true,
+                               prefetch_request.browser_context()));
+  }
 
   // ------------------------------------------------------------------------
   // [2] `X-Client-Data`:
@@ -481,7 +509,7 @@ network::HttpRequestHeadersUpdateParams PrepareInitialHeadersForPrefetchPhase2(
   // WebContents override. See also the comment in
   // `PrefetchContainer::MakeResourceRequest()` for the overriding order.
   MaybeApplyOverrideForDevtoolsUserAgentHeader(
-      headers_update_params.modified_headers, prefetch_request);
+      headers_update_params.modified_headers, prefetch_request, request_url);
 
   return headers_update_params;
 }
@@ -489,6 +517,7 @@ network::HttpRequestHeadersUpdateParams PrepareInitialHeadersForPrefetchPhase2(
 network::HttpRequestHeadersUpdateParams PrepareRedirectHeadersForPrefetch(
     const GURL& request_url,
     const PrefetchRequest& prefetch_request) {
+  TRACE_EVENT("loading", "PrepareRedirectHeadersForPrefetch");
   // There are sometimes other headers that are modified during navigation
   // redirects; see `NavigationRequest::OnRedirectChecksComplete` (including
   // some which are added by throttles). These aren't yet supported for
@@ -557,7 +586,7 @@ network::HttpRequestHeadersUpdateParams PrepareRedirectHeadersForPrefetch(
   // TODO(crbug.com/422193319): Reconsider the appropriate place to set DevTools
   // override of non-UA Client Hints.
   MaybeApplyOverrideForDevtoolsUserAgentHeader(
-      headers_update_params.modified_headers, prefetch_request);
+      headers_update_params.modified_headers, prefetch_request, request_url);
 
   return headers_update_params;
 }
@@ -595,6 +624,7 @@ std::unique_ptr<network::ResourceRequest>
 MakeInitialResourceRequestWithoutHeadersForPrefetch(
     const PrefetchRequest& prefetch_request,
     bool is_decoy) {
+  TRACE_EVENT("loading", "MakeInitialResourceRequestWithoutHeadersForPrefetch");
   const GURL& url = prefetch_request.key().url();
   url::Origin origin = url::Origin::Create(url);
   net::IsolationInfo isolation_info = net::IsolationInfo::Create(
@@ -716,7 +746,8 @@ MakeInitialResourceRequestWithoutHeadersForPrefetch(
 std::unique_ptr<network::ResourceRequest> MakeInitialResourceRequestForPrefetch(
     const PrefetchRequest& prefetch_request,
     bool is_decoy) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  TRACE_EVENT("loading", "MakeInitialResourceRequestForPrefetch");
 
   auto resource_request = MakeInitialResourceRequestWithoutHeadersForPrefetch(
       prefetch_request, is_decoy);
@@ -748,6 +779,7 @@ MakeInitialResourceRequestForPrePrefetch(
     const PrefetchRequest& prefetch_request,
     const network::HttpRequestHeadersUpdateParams&
         ui_thread_pre_calculated_headers) {
+  TRACE_EVENT("loading", "MakeInitialResourceRequestForPrePrefetch");
   auto resource_request = MakeInitialResourceRequestWithoutHeadersForPrefetch(
       prefetch_request, /*is_decoy=*/false);
 

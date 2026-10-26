@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/i18n/time_formatting.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/feedback/system_logs/log_sources/chrome_internal_log_source.h"
@@ -25,7 +25,6 @@
 #include "chrome/browser/support_tool/signin_data_collector.h"
 #include "chrome/browser/support_tool/support_tool_handler.h"
 #include "chrome/browser/support_tool/system_log_source_data_collector_adaptor.h"
-#include "third_party/icu/source/i18n/unicode/timezone.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "build/chromeos_buildflags.h"
@@ -36,7 +35,6 @@
 #include "chrome/browser/ash/system_logs/dbus_log_source.h"
 #include "chrome/browser/ash/system_logs/iwlwifi_dump_log_source.h"
 #include "chrome/browser/ash/system_logs/touch_log_source.h"
-#include "chrome/browser/ash/system_logs/traffic_counters_log_source.h"
 #include "chrome/browser/ash/system_logs/virtual_keyboard_log_source.h"
 #include "chrome/browser/support_tool/ash/chrome_user_logs_data_collector.h"
 #include "chrome/browser/support_tool/ash/network_health_data_collector.h"
@@ -81,7 +79,6 @@ constexpr support_tool::DataCollectorType kDataCollectorsChromeosAsh[] = {
     support_tool::CHROMEOS_CHROME_USER_LOGS,
     support_tool::CHROMEOS_BLUETOOTH_FLOSS,
     support_tool::CHROMEOS_CONNECTED_INPUT_DEVICES,
-    support_tool::CHROMEOS_TRAFFIC_COUNTERS,
     support_tool::CHROMEOS_VIRTUAL_KEYBOARD,
     support_tool::CHROMEOS_NETWORK_HEALTH,
     support_tool::CHROMEOS_APP_SERVICE,
@@ -256,12 +253,6 @@ std::unique_ptr<SupportToolHandler> GetSupportToolHandler(
             "Fetches the information about connected input devices.",
             std::make_unique<system_logs::ConnectedInputDevicesLogSource>()));
         break;
-      case support_tool::CHROMEOS_TRAFFIC_COUNTERS:
-        handler->AddDataCollector(
-            std::make_unique<SystemLogSourceDataCollectorAdaptor>(
-                "Fetches traffic counters information.",
-                std::make_unique<system_logs::TrafficCountersLogSource>()));
-        break;
       case support_tool::CHROMEOS_VIRTUAL_KEYBOARD:
         handler->AddDataCollector(
             std::make_unique<SystemLogSourceDataCollectorAdaptor>(
@@ -361,9 +352,12 @@ base::FilePath GetFilepathToExport(base::FilePath target_directory,
   if (!case_id.empty()) {
     filename += case_id + "_";
   }
-  return target_directory.AppendASCII(
-      filename + base::UnlocalizedTimeFormatWithPattern(
-                     timestamp, "'UTC'yyyyMMdd_HHmm", icu::TimeZone::getGMT()));
+  base::Time::Exploded exploded;
+  timestamp.UTCExplode(&exploded);
+  std::string timestamp_str = base::StringPrintf(
+      "UTC%04d%02d%02d_%02d%02d", exploded.year, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute);
+  return target_directory.AppendASCII(filename + timestamp_str);
 }
 
 std::string SupportToolErrorsToString(

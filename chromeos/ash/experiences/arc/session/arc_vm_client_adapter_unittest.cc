@@ -56,8 +56,8 @@
 #include "chromeos/ash/experiences/arc/test/connection_holder_util.h"
 #include "chromeos/ash/experiences/arc/test/fake_app_host.h"
 #include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
-#include "components/user_manager/fake_user_manager.h"
-#include "components/user_manager/scoped_user_manager.h"
+#include "components/prefs/testing_pref_service.h"
+#include "components/session_manager/test/user_session_test_environment.h"
 #include "components/user_manager/user_names.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -352,6 +352,10 @@ class ArcVmClientAdapterTest : public testing::Test,
   }
 
   void SetUp() override {
+    ash::test::UserSessionTestEnvironment::RegisterLocalStatePrefs(
+        local_state_.registry());
+    user_session_test_environment_ =
+        std::make_unique<ash::test::UserSessionTestEnvironment>(&local_state_);
     run_loop_ = std::make_unique<base::RunLoop>();
     adapter_ = CreateArcVmClientAdapterForTesting(base::BindRepeating(
         &ArcVmClientAdapterTest::RewriteStatus, base::Unretained(this)));
@@ -388,19 +392,17 @@ class ArcVmClientAdapterTest : public testing::Test,
     adapter_->SetDemoModeDelegate(&demo_mode_delegate_);
     app_host_ = std::make_unique<FakeAppHost>(arc_bridge_service()->app());
     app_instance_ = std::make_unique<FakeAppInstance>(app_host_.get());
-
-    auto fake_user_manager = std::make_unique<user_manager::FakeUserManager>();
-    scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
-        std::move(fake_user_manager));
   }
 
   void TearDown() override {
-    scoped_user_manager_.reset();
+    app_instance_.reset();
+    app_host_.reset();
     ash::PatchPanelClient::Shutdown();
     ash::SessionManagerClient::Shutdown();
     adapter_->RemoveObserver(this);
     adapter_.reset();
     run_loop_.reset();
+    user_session_test_environment_.reset();
   }
 
   // ArcClientAdapter::Observer:
@@ -636,11 +638,14 @@ class ArcVmClientAdapterTest : public testing::Test,
     status->set_system_image_ext_format_for_testing(system_image_ext_format_);
   }
 
+  content::BrowserTaskEnvironment browser_task_environment_;
+  TestingPrefServiceSimple local_state_;
+  std::unique_ptr<ash::test::UserSessionTestEnvironment>
+      user_session_test_environment_;
   std::unique_ptr<base::RunLoop> run_loop_;
   std::unique_ptr<ArcClientAdapter> adapter_;
   std::optional<bool> is_system_shutdown_;
 
-  content::BrowserTaskEnvironment browser_task_environment_;
   base::ScopedTempDir dir_;
   ArcServiceManager arc_service_manager_;
 
@@ -655,7 +660,6 @@ class ArcVmClientAdapterTest : public testing::Test,
   std::unique_ptr<FakeAppHost> app_host_;
   std::unique_ptr<FakeAppInstance> app_instance_;
   std::unique_ptr<TestDebugDaemonClient> test_debug_daemon_client_;
-  std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
 };
 
 // Tests that SetUserInfo() doesn't crash.
@@ -2251,7 +2255,7 @@ TEST_F(ArcVmClientAdapterTest, ArcVmMemorySizeEnabledOn32Bit) {
     bool GetSystemMemoryInfo(base::SystemMemoryInfo* info) override {
       // Return a value larger than k32bitVmRamMaxMib to verify that the VM
       // memory size is actually limited.
-      info->total = base::MiBU(k32bitVmRamMaxMib + 1000);
+      info->total = base::MiB(k32bitVmRamMaxMib + 1000);
       return true;
     }
     bool IsCrosvm32bit() override { return true; }
@@ -2535,7 +2539,7 @@ TEST_F(ArcVmClientAdapterTest, ArcGuestZramSwappinessValid) {
 TEST_F(ArcVmClientAdapterTest, ArcGuestZramSizeByPercentage_5GbSystem) {
   class TestDelegate : public ArcVmClientAdapterDelegate {
     bool GetSystemMemoryInfo(base::SystemMemoryInfo* info) override {
-      info->total = base::GiBU(5);
+      info->total = base::GiB(5);
       return true;
     }
     bool IsCrosvm32bit() override { return false; }
@@ -2560,7 +2564,7 @@ TEST_F(ArcVmClientAdapterTest, ArcGuestZramSizeByPercentage_5GbSystem) {
 TEST_F(ArcVmClientAdapterTest, ArcGuestZramSizeByPercentage_4GbSystem) {
   class TestDelegate : public ArcVmClientAdapterDelegate {
     bool GetSystemMemoryInfo(base::SystemMemoryInfo* info) override {
-      info->total = base::GiBU(4);
+      info->total = base::GiB(4);
       return true;
     }
     bool IsCrosvm32bit() override { return false; }
@@ -2585,7 +2589,7 @@ TEST_F(ArcVmClientAdapterTest, ArcGuestZramSizeByPercentage_4GbSystem) {
 TEST_F(ArcVmClientAdapterTest, ArcGuestZramSizeByPercentage_CustomMem) {
   class TestDelegate : public ArcVmClientAdapterDelegate {
     bool GetSystemMemoryInfo(base::SystemMemoryInfo* info) override {
-      info->total = base::GiBU(6);
+      info->total = base::GiB(6);
       return true;
     }
     bool IsCrosvm32bit() override { return false; }
@@ -2607,32 +2611,14 @@ TEST_F(ArcVmClientAdapterTest, ArcGuestZramSizeByPercentage_CustomMem) {
   EXPECT_EQ(2048u, request.guest_zram_mib());
 }
 
-// Test that StartArcVmRequest has no matching command line flag
-// when kVmMemoryPSIReports is disabled.
-TEST_F(ArcVmClientAdapterTest, ArcVmMemoryPSIReportsDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(kVmMemoryPSIReports);
+// Test that StartArcVmRequest has correct command line flag by default.
+TEST_F(ArcVmClientAdapterTest, ArcVmMemoryPSIReportsDefault) {
   StartParams start_params(GetPopulatedStartParams());
   StartMiniArcWithParams(true, std::move(start_params));
   EXPECT_GE(GetTestConciergeClient()->start_arc_vm_call_count(), 1);
   EXPECT_FALSE(is_system_shutdown().has_value());
   const auto& request = GetTestConciergeClient()->start_arc_vm_request();
-  EXPECT_EQ(request.vm_memory_psi_period(), -1);
-}
-
-// Test that StartArcVmRequest has correct  command line flag
-// when kVmMemoryPSIReports is enabled.
-TEST_F(ArcVmClientAdapterTest, ArcVmMemoryPSIReportsEnabled) {
-  base::test::ScopedFeatureList feature_list;
-  base::FieldTrialParams params;
-  params["period"] = "300";
-  feature_list.InitAndEnableFeatureWithParameters(kVmMemoryPSIReports, params);
-  StartParams start_params(GetPopulatedStartParams());
-  StartMiniArcWithParams(true, std::move(start_params));
-  EXPECT_GE(GetTestConciergeClient()->start_arc_vm_call_count(), 1);
-  EXPECT_FALSE(is_system_shutdown().has_value());
-  const auto& request = GetTestConciergeClient()->start_arc_vm_request();
-  EXPECT_EQ(request.vm_memory_psi_period(), 300);
+  EXPECT_EQ(request.vm_memory_psi_period(), 10);
 }
 
 struct DalvikMemoryProfileTestParam {

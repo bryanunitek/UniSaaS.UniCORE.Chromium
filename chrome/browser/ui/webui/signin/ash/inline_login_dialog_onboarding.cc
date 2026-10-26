@@ -65,16 +65,18 @@ InlineLoginDialogOnboarding* InlineLoginDialogOnboarding::Show(
     const gfx::Size& size,
     gfx::NativeWindow window,
     base::OnceClosure dialog_closed_callback) {
-  DCHECK(ProfileManager::GetActiveUserProfile()->IsChild());
+  CHECK(ProfileManager::GetActiveUserProfile()->IsChild(),
+        base::NotFatalUntil::M162);
 
   account_manager::RecordAccountAdditionSource(
       account_manager::AccountAdditionSource::kOnboarding);
 
-  DCHECK(window);
+  CHECK(window, base::NotFatalUntil::M162);
 
   auto* dialog =
       new InlineLoginDialogOnboarding(size, std::move(dialog_closed_callback));
   dialog->ShowSystemDialog(window);
+  dialog->AttachWidgetObserver();
 
   return dialog;
 }

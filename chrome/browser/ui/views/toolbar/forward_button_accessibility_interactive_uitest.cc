@@ -5,6 +5,8 @@
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_accessibility_test.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
@@ -28,15 +30,20 @@ DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(ui::test::PollingStateObserver<int>,
 class ForwardButtonAccessibilityTest : public ToolbarAccessibilityTest {
  public:
   ForwardButtonAccessibilityTest() {
+    // TODO(crbug.com/452061489): Fix tests for when WebUI Omnibox is enabled
+    // and remove this explicit disable of WebUI Omnibox.
     if (GetParam()) {
       feature_list_.InitWithFeatures(
           {features::kInitialWebUI, features::kWebUIBackForwardButton,
            features::kWebUIReloadButton},
-          {});
+          {omnibox::internal::kWebUIOmniboxPopup,
+           omnibox::internal::kWebUIOmniboxAimPopup});
     } else {
       feature_list_.InitWithFeatures(
-          {}, {features::kInitialWebUI, features::kWebUIBackForwardButton,
-               features::kWebUIReloadButton});
+          {},
+          {features::kInitialWebUI, features::kWebUIBackForwardButton,
+           features::kWebUIReloadButton, omnibox::internal::kWebUIOmniboxPopup,
+           omnibox::internal::kWebUIOmniboxAimPopup});
     }
   }
 
@@ -92,15 +99,15 @@ IN_PROC_BROWSER_TEST_P(ForwardButtonAccessibilityTest,
       // Go back
       MoveMouseToElement(kToolbarBackButtonElementId), ClickMouse(),
       WaitForWebContentsNavigation(kWebContentsElementId, url1),
-      Check([&]() { return browser()->tab_strip_model()->count() == 1; }),
+      Check([&]() { return browser()->GetTabStripModel()->count() == 1; }),
       PollState(kTabCountState,
-                [this]() { return browser()->tab_strip_model()->count(); }),
+                [this]() { return browser()->GetTabStripModel()->count(); }),
       // Middle-click forward
       MoveMouseToElement(kToolbarForwardButtonElementId),
       ClickMouse(ui_controls::MIDDLE), WaitForState(kTabCountState, 2),
       Check([&]() {
         return browser()
-                   ->tab_strip_model()
+                   ->GetTabStripModel()
                    ->GetWebContentsAt(1)
                    ->GetVisibleURL() == url2;
       }));
@@ -179,20 +186,20 @@ IN_PROC_BROWSER_TEST_P(ForwardButtonAccessibilityTest,
   RunTestSequence(
       // Start visible
       Do([this]() {
-        browser()->profile()->GetPrefs()->SetBoolean(prefs::kShowForwardButton,
-                                                     true);
+        browser()->GetProfile()->GetPrefs()->SetBoolean(
+            prefs::kShowForwardButton, true);
       }),
       WaitForShow(kToolbarForwardButtonElementId),
       // Hide it
       Do([this]() {
-        browser()->profile()->GetPrefs()->SetBoolean(prefs::kShowForwardButton,
-                                                     false);
+        browser()->GetProfile()->GetPrefs()->SetBoolean(
+            prefs::kShowForwardButton, false);
       }),
       WaitForHide(kToolbarForwardButtonElementId),
       // Show it again
       Do([this]() {
-        browser()->profile()->GetPrefs()->SetBoolean(prefs::kShowForwardButton,
-                                                     true);
+        browser()->GetProfile()->GetPrefs()->SetBoolean(
+            prefs::kShowForwardButton, true);
       }),
       WaitForShow(kToolbarForwardButtonElementId));
 }

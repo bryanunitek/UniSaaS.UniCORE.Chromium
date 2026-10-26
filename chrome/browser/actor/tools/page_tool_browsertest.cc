@@ -23,10 +23,12 @@
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/browser/actor/tools/tools_test_util.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/actor.mojom.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
+#include "components/actor/core/actor_features.h"
 #include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/enterprise/connectors/core/features.h"
 #include "content/public/browser/web_contents.h"
@@ -55,7 +57,7 @@ class ActorPageToolBrowserTest : public ActorToolsTest {
  public:
   void SetUpOnMainThread() override {
     ActorToolsTest::SetUpOnMainThread();
-    ASSERT_TRUE(embedded_test_server()->Start());
+    ASSERT_TRUE(embedded_https_test_server().Start());
   }
 };
 
@@ -80,7 +82,8 @@ class ActorPageToolMagicCursorTest : public ActorPageToolBrowserTest,
 };
 
 IN_PROC_BROWSER_TEST_P(ActorPageToolMagicCursorTest, RemovedElement) {
-  const GURL url = embedded_test_server()->GetURL("/actor/link.html");
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/link.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#link");
@@ -119,9 +122,9 @@ class ActorPageToolTimeoutBrowserTest : public ActorPageToolBrowserTest {
   ActorPageToolTimeoutBrowserTest() {
     feature_list_.InitWithFeaturesAndParameters(
         /*enabled_features=*/
-        {{features::kGlicActor,
-          {{"glic-actor-page-tool-timeout", "2s"},
-           {features::kGlicActorPolicyControlExemption.name, "true"}}},
+        {{features::kGlicActor, {}},
+         {features::kGlicActorPolicyControlExemption, {}},
+         {kActorPageToolTimeout, {{kActorPageToolTimeoutParam.name, "2s"}}},
          {features::kGlicActorIncrementalTyping,
           {{"glic-actor-long-text-paste-threshold", "1000000000"},
            {"glic-actor-incremental-typing-long-text-threshold",
@@ -142,7 +145,8 @@ class ActorPageToolTimeoutBrowserTest : public ActorPageToolBrowserTest {
 #define MAYBE_Timeout Timeout
 #endif
 IN_PROC_BROWSER_TEST_F(ActorPageToolTimeoutBrowserTest, MAYBE_Timeout) {
-  const GURL url = embedded_test_server()->GetURL("/actor/cancel_typing.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_typing.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // Create a very long string (512KB) to type. This should take much longer
@@ -182,12 +186,14 @@ class ActorPageToolLongClickDelayBrowserTest
     std::vector<base::test::FeatureRefAndParams> enabled_features_and_params;
     std::vector<base::test::FeatureRef> disabled_features;
 
+    enabled_features_and_params.push_back({features::kGlicActor, {}});
     enabled_features_and_params.push_back(
-        {features::kGlicActor,
-         // Delay holding the mouse down before mouse up.
-         {{"glic-actor-click-delay", "2d"},
-          {"glic-actor-page-tool-timeout", "2d"},
-          {features::kGlicActorPolicyControlExemption.name, "true"}}});
+        {features::kGlicActorPolicyControlExemption, {}});
+    // Delay holding the mouse down before mouse up.
+    enabled_features_and_params.push_back(
+        {kActorClickDelay, {{kActorClickDelayParam.name, "2d"}}});
+    enabled_features_and_params.push_back(
+        {kActorPageToolTimeout, {{kActorPageToolTimeoutParam.name, "2d"}}});
 
     if (GetParam()) {
       enabled_features_and_params.push_back(
@@ -207,7 +213,8 @@ class ActorPageToolLongClickDelayBrowserTest
 // Click, then pause after mouse down. The click gets canceled, and the mouse
 // button is lifted.
 IN_PROC_BROWSER_TEST_P(ActorPageToolLongClickDelayBrowserTest, CancelClick) {
-  const GURL url = embedded_test_server()->GetURL("/actor/cancel_click.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_click.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> button_id = GetDOMNodeId(*main_frame(), "#clickable");
@@ -274,10 +281,8 @@ class ActorPageToolLongMouseMoveDelayBrowserTest
  public:
   ActorPageToolLongMouseMoveDelayBrowserTest() {
     feature_list_.InitWithFeaturesAndParameters(
-        /*enabled_features=*/{{features::kGlicActor,
-                               {{features::kGlicActorPolicyControlExemption
-                                     .name,
-                                 "true"}}},
+        /*enabled_features=*/{{features::kGlicActor, {}},
+                              {features::kGlicActorPolicyControlExemption, {}},
                               {features::kGlicActorMoveBeforeClick,
                                // Delay after mouse move to target and before
                                // mouse down.
@@ -293,7 +298,8 @@ class ActorPageToolLongMouseMoveDelayBrowserTest
 // mouse down or up.
 IN_PROC_BROWSER_TEST_F(ActorPageToolLongMouseMoveDelayBrowserTest,
                        CancelDuringMouseMove) {
-  const GURL url = embedded_test_server()->GetURL("/actor/cancel_click.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_click.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> button_id = GetDOMNodeId(*main_frame(), "#clickable");
@@ -337,9 +343,9 @@ class ActorPageToolLongKeyDownDelayBrowserTest
         /*enabled_features=*/
         {{features::kGlicActor,
           // Delay holding down the keyboard key.
-          {{"glic-actor-incremental-typing-key-down-duration", "2d"},
-           {"glic-actor-page-tool-timeout", "2d"},
-           {features::kGlicActorPolicyControlExemption.name, "true"}}}},
+          {{"glic-actor-incremental-typing-key-down-duration", "2d"}}},
+         {features::kGlicActorPolicyControlExemption, {}},
+         {kActorPageToolTimeout, {{kActorPageToolTimeoutParam.name, "2d"}}}},
         /*disabled_features=*/{});
   }
 
@@ -350,7 +356,8 @@ class ActorPageToolLongKeyDownDelayBrowserTest
 // Hold down a keyboard key, then pause. The key press gets canceled, and the
 // key is lifted.
 IN_PROC_BROWSER_TEST_F(ActorPageToolLongKeyDownDelayBrowserTest, CancelTyping) {
-  const GURL url = embedded_test_server()->GetURL("/actor/cancel_typing.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_typing.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#input");
@@ -403,7 +410,8 @@ class ActorPageToolMagicCursorRendererResolvedTest
 
 IN_PROC_BROWSER_TEST_F(ActorPageToolMagicCursorRendererResolvedTest,
                        RecordsMatchOnSuccess) {
-  const GURL url = embedded_test_server()->GetURL("/actor/link.html");
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/link.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#link");
@@ -447,7 +455,8 @@ class ActorPageToolContentScanningTest
 
 IN_PROC_BROWSER_TEST_P(ActorPageToolContentScanningTest,
                        ContentScanningBlocked) {
-  const GURL url = embedded_test_server()->GetURL("/actor/cancel_typing.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_typing.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#input");
@@ -475,7 +484,8 @@ IN_PROC_BROWSER_TEST_P(ActorPageToolContentScanningTest,
 
 IN_PROC_BROWSER_TEST_P(ActorPageToolContentScanningTest,
                        ContentScanningAllowed) {
-  const GURL url = embedded_test_server()->GetURL("/actor/cancel_typing.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_typing.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#input");
@@ -502,7 +512,8 @@ IN_PROC_BROWSER_TEST_P(ActorPageToolContentScanningTest,
 
 IN_PROC_BROWSER_TEST_P(ActorPageToolContentScanningTest,
                        ContentScanningDropped) {
-  const GURL url = embedded_test_server()->GetURL("/actor/cancel_typing.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_typing.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#input");

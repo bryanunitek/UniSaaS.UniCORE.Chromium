@@ -19,14 +19,12 @@ include_rules = [
   "+chrome/browser/ash/arc/session",
   "+chrome/browser/ash/arc/test",
   "+chrome/browser/ash/arc/tracing",
-  "+chromeos/ash/experiences/arc/video",
   "+chrome/browser/ash/bruschetta",
   "+chrome/browser/ash/certificate_provider",
   "+chrome/browser/ash/crostini",
   "+chrome/browser/ash/fusebox",
   "+chrome/browser/ash/login",
   "+chrome/browser/ash/net",
-  "+chrome/browser/ash/plugin_vm",
   "+chrome/browser/ash/policy/dlp",
   "+chrome/browser/ash/policy/handlers",
   "+chrome/browser/ash/power/ml",
@@ -35,11 +33,8 @@ include_rules = [
   "+chrome/browser/ash/settings",
   "+chrome/browser/chromeos/policy/dlp",
   "+chrome/browser/component_updater",
-  "+chrome/browser/enterprise/browser_management",
   "+chrome/browser/policy",
   "+chrome/browser/profiles",
-  "+chrome/browser/ui/browser.h",
-  "+chrome/common/chrome_paths.h",
   "+chrome/common/chrome_switches.h",
   "+chrome/test/base",
 
@@ -47,6 +42,10 @@ include_rules = [
 ]
 
 specific_include_rules = {
+  # Only tests need these //chrome dependencies.
+  ".*_(unittest|browsertest|apitest|uitest)\\.cc": [
+    "+chrome/browser/enterprise/browser_management",
+  ],
   "cryptohome_key_delegate_service_provider_browsertest\\.cc": [
     "+chrome/browser/browser_process.h",
   ]

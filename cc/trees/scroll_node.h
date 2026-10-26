@@ -28,15 +28,18 @@ namespace cc {
 struct CC_EXPORT ScrollNode {
   ScrollNode();
   ScrollNode(const ScrollNode& other);
+  ScrollNode(ScrollNode&& other) noexcept;
   ~ScrollNode();
+
+  ScrollNode& operator=(const ScrollNode& other);
+  ScrollNode& operator=(ScrollNode&& other) noexcept;
 
   // The node index of this node in the scroll tree node vector.
   int id = kInvalidPropertyNodeId;
   // The node index of the parent node in the scroll tree node vector.
   int parent_id = kInvalidPropertyNodeId;
 
-  uint32_t main_thread_repaint_reasons =
-      MainThreadScrollingReason::kNotScrollingOnMain;
+  MainThreadRepaintReasons main_thread_repaint_reasons;
 
   // Size of the container area that the contents scrolls in, not including
   // non-overlay scrollbars. Overlay scrollbars do not affect these bounds.

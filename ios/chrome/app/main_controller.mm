@@ -5,6 +5,7 @@
 #import "ios/chrome/app/main_controller.h"
 
 #import <memory>
+#import <optional>
 #import <utility>
 
 #import "base/apple/bundle_locations.h"
@@ -25,10 +26,13 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/task/bind_post_task.h"
 #import "base/task/sequenced_task_runner.h"
+#import "base/time/time.h"
+#import "base/timer/elapsed_timer.h"
 #import "base/timer/timer.h"
 #import "base/values.h"
 #import "components/application_locale_storage/application_locale_storage.h"
 #import "components/component_updater/component_updater_service.h"
+#import "components/component_updater/installer_policies/actor_safety_lists_component_installer.h"
 #import "components/component_updater/installer_policies/on_device_head_suggest_component_installer.h"
 #import "components/component_updater/installer_policies/optimization_hints_component_installer.h"
 #import "components/component_updater/installer_policies/safety_tips_component_installer.h"
@@ -52,6 +56,7 @@
 #import "ios/chrome/app/background_refresh/background_refresh_app_agent.h"
 #import "ios/chrome/app/background_refresh/discover_feed_provider.h"
 #import "ios/chrome/app/background_refresh/test_refresher.h"
+#import "ios/chrome/app/background_task/background_continued_processing_app_agent.h"
 #import "ios/chrome/app/blocking_scene_commands.h"
 #import "ios/chrome/app/change_profile_animator.h"
 #import "ios/chrome/app/change_profile_commands.h"
@@ -59,11 +64,15 @@
 #import "ios/chrome/app/deferred_initialization_task_names.h"
 #import "ios/chrome/app/enterprise_app_agent.h"
 #import "ios/chrome/app/launch_screen_view_controller.h"
+#import "ios/chrome/app/legacy_scene_identifier_map.h"
 #import "ios/chrome/app/memory_monitor.h"
 #import "ios/chrome/app/profile/profile_controller.h"
 #import "ios/chrome/app/profile/profile_state.h"
 #import "ios/chrome/app/profile/profile_state_observer.h"
 #import "ios/chrome/app/safe_mode_app_state_agent.h"
+#import "ios/chrome/app/scene_identifier_map.h"
+#import "ios/chrome/app/scene_identifier_map_impl.h"
+#import "ios/chrome/app/startup/app_startup_utils.h"
 #import "ios/chrome/app/startup/chrome_app_startup_parameters.h"
 #import "ios/chrome/app/startup/chrome_main_starter.h"
 #import "ios/chrome/app/startup/client_registration.h"
@@ -91,8 +100,10 @@
 #import "ios/chrome/browser/device_orientation/ui_bundled/scoped_force_portrait_orientation.h"
 #import "ios/chrome/browser/discover_feed/model/discover_feed_app_agent.h"
 #import "ios/chrome/browser/download/model/download_directory_util.h"
+#import "ios/chrome/browser/enterprise/cloud_content_scanning/model/background_cloud_scanner_manager.h"
 #import "ios/chrome/browser/first_run/model/first_run.h"
 #import "ios/chrome/browser/first_run/public/first_run_util.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/memory/model/memory_debugger_manager.h"
 #import "ios/chrome/browser/metrics/model/first_user_action_recorder.h"
 #import "ios/chrome/browser/metrics/model/incognito_usage_app_state_agent.h"
@@ -111,8 +122,6 @@
 #import "ios/chrome/browser/share_extension/model/share_extension_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_delegate.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_state_options.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_util.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_list.h"
@@ -120,7 +129,6 @@
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/paths/paths.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
-#import "ios/chrome/browser/shared/model/profile/features.h"
 #import "ios/chrome/browser/shared/model/profile/profile_attributes_ios.h"
 #import "ios/chrome/browser/shared/model/profile/profile_attributes_storage_ios.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
@@ -159,7 +167,7 @@
 #import "ui/base/device_form_factor.h"
 
 #if BUILDFLAG(IOS_CREDENTIAL_PROVIDER_ENABLED)
-#import "ios/chrome/app/credential_provider_migrator_app_agent.h"
+#import "ios/chrome/browser/credential_provider/model/credential_provider_migrator_app_agent.h"
 #endif
 
 #if BUILDFLAG(IOS_ENABLE_SANDBOX_DUMP)
@@ -199,6 +207,9 @@ NSString* const kDeleteChooseFile = @"DeleteChooseFile";
 // Constants for deferred deletion of leftover temporary passwords files.
 NSString* const kDeleteTempPasswords = @"DeleteTempPasswords";
 
+// Constants for deferred deletion of leftover temporary enterprise scan files.
+NSString* const kDeleteTempEnterpriseScan = @"DeleteTempEnterpriseScan";
+
 // Constants for deferred UMA logging of existing Siri User shortcuts.
 NSString* const kLogSiriShortcuts = @"LogSiriShortcuts";
 
@@ -224,12 +235,8 @@ NSString* const kDefaultBrowserStatusCheck = @"DefaultBrowserStatusCheck";
 // defaults.
 NSString* const kLogInstallAttribution = @"LogInstallAttribution";
 
-// Constant for enabling  multi-profile.
-NSString* const kMultiprofileKey = @"MultiprofileKey";
-
-// Constant for enabling the swap of confirmation button order.
-NSString* const kConfirmationButtonSwapOrderKey =
-    @"ConfirmationButtonSwapOrderKey";
+// Constant for deferred MetricKit registration.
+NSString* const kRegisterMetricKit = @"RegisterMetricKit";
 
 // Adapted from chrome/browser/ui/browser_init.cc.
 void RegisterComponentsForUpdate() {
@@ -237,9 +244,16 @@ void RegisterComponentsForUpdate() {
       GetApplicationContext()->GetComponentUpdateService();
   DCHECK(cus);
   RegisterOnDeviceHeadSuggestComponent(
-      cus, GetApplicationContext()->GetApplicationLocaleStorage()->Get());
+      cus, std::string(GetApplicationContext()
+                           ->GetApplicationLocaleStorage()
+                           ->GetTag()
+                           .tag_string()));
   RegisterSafetyTipsComponent(cus);
   RegisterOptimizationHintsComponent(cus);
+  if (IsActorEnabled()) {
+    component_updater::RegisterActorSafetyListsComponent(cus,
+                                                         base::DoNothing());
+  }
 }
 
 // The delay before beginning memory experimentation.
@@ -254,76 +268,6 @@ void BeginMemoryExperimentationAfterDelay() {
                  });
 }
 
-// Inserts `session_ids` into the set of discarded sessions for `attrs`.
-void InsertDiscardedSessions(const std::set<std::string>& session_ids,
-                             ProfileAttributesIOS& attrs) {
-  auto discarded_sessions = attrs.GetDiscardedSessions();
-  discarded_sessions.insert(session_ids.begin(), session_ids.end());
-  attrs.SetDiscardedSessions(discarded_sessions);
-}
-
-// Mark all `sessions` as discarded sessions for all profiles.
-void MarkSessionsAsDiscardedForAllProfiles(NSSet<UISceneSession*>* sessions) {
-  ProfileAttributesStorageIOS* storage = GetApplicationContext()
-                                             ->GetProfileManager()
-                                             ->GetProfileAttributesStorage();
-
-  // Usually Chrome uses -[SceneState sceneSessionID] as identifier to properly
-  // support devices that do not support multi-window (and which use a constant
-  // identifier). For devices that do not support multi-window the session is
-  // saved at a constant path, so it is harmless to delete files at a path
-  // derived from -persistentIdentifier (since there won't be files deleted).
-  // For devices that do support multi-window, there is data to delete once the
-  // session is garbage collected.
-  //
-  // Thus it is always correct to use -persistentIdentifier here.
-  std::set<std::string> sessionIDs;
-  for (UISceneSession* session in sessions) {
-    sessionIDs.insert(base::SysNSStringToUTF8(session.persistentIdentifier));
-  }
-
-  storage->IterateOverProfileAttributes(
-      base::BindRepeating(&InsertDiscardedSessions, sessionIDs));
-}
-
-// It was found that -application:didDiscardSceneSessions: may be called with
-// UISceneSession* corresponding to SceneState* that are still connected. It
-// caused flakyness of EarlGrey tests (see https://crbug.com/390108895). The
-// behaviour has only been confirmed for EarlGrey tests. Record an histogram
-// counting how many Scenes are discarded while still connected to detect if
-// the issue also reproduce in production (if it were to reproduce, it would
-// cause unexplained tab losses).
-//
-// See https://crbug.com/392575873 for details.
-void RecordDiscardSceneStillConnected(NSSet<UISceneSession*>* scene_sessions,
-                                      NSArray<SceneState*>* connected_scenes) {
-  // iPhone do not use -persistentIdentifier to identify the session data
-  // for a SceneState, so they will never delete data. Only record metric
-  // for iPad since even if the issue reproduce on iPhone, it won't have
-  // any impact.
-  if (ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_TABLET) {
-    return;
-  }
-
-  NSUInteger count_discarded_scene_still_connected = 0;
-  NSMutableSet<NSString*>* connected_identifiers = [[NSMutableSet alloc] init];
-  for (SceneState* scene_state in connected_scenes) {
-    [connected_identifiers
-        addObject:base::SysUTF8ToNSString(scene_state.sceneSessionID)];
-  }
-
-  for (UISceneSession* scene_session in scene_sessions) {
-    NSString* persistent_identifier = scene_session.persistentIdentifier;
-    if ([connected_identifiers containsObject:persistent_identifier]) {
-      ++count_discarded_scene_still_connected;
-    }
-  }
-
-  base::UmaHistogramExactLinear(
-      "IOS.Sessions.DiscardedScenesStillConnectedCount",
-      count_discarded_scene_still_connected, 100);
-}
-
 // Possible choices for which profile to use for a scene.
 enum class ProfileChoice {
   kProfileFromTask,
@@ -336,14 +280,6 @@ enum class ProfileChoice {
 
 // Returns the available ProfileChoices.
 base::span<const ProfileChoice> GetProfileChoices() {
-  if (!AreSeparateProfilesForManagedAccountsEnabled()) {
-    // Note: Separate profiles for managed accounts are launched; this code path
-    // is only relevant for some EG tests covering the migration.
-    static constexpr auto kSingleProfileChoices = std::to_array<ProfileChoice>({
-        ProfileChoice::kPersonalProfile,
-    });
-    return kSingleProfileChoices;
-  }
   static constexpr auto kProfileChoices = std::to_array<ProfileChoice>({
       ProfileChoice::kProfileFromTask,
       ProfileChoice::kProfileForScene,
@@ -355,14 +291,14 @@ base::span<const ProfileChoice> GetProfileChoices() {
   return kProfileChoices;
 }
 
-// Returns the profile name associated with a pending task for `scene_state` in
-// `orchestrator`, if any.
-std::string GetProfileNameFromTask(std::string_view scene_state_id,
+// Returns the profile name associated with a pending task for
+// `scene_state` in `orchestrator`, if any.
+std::string GetProfileNameFromTask(SceneState* scene_state,
                                    TaskOrchestrator* orchestrator) {
   if (!orchestrator) {
     return std::string();
   }
-  NSString* gaia_id = [orchestrator gaiaIDForScene:scene_state_id];
+  NSString* gaia_id = [orchestrator gaiaIDForScene:scene_state];
   if (!gaia_id) {
     return std::string();
   }
@@ -383,8 +319,10 @@ std::string GetProfileNameFromTask(std::string_view scene_state_id,
 
 // Returns the name of the profile for `choice`. May be empty in some cases,
 // e.g. when a corresponding pref isn't set yet.
+// TODO(crbug.com/558220430): Refactor this method.
 std::string GetProfileNameForChoice(ProfileChoice choice,
                                     std::string_view scene_state_id,
+                                    SceneState* scene_state,
                                     UISceneConnectionOptions* options,
                                     TaskOrchestrator* orchestrator,
                                     ProfileManagerIOS* manager,
@@ -392,7 +330,7 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
                                     PrefService* local_state) {
   switch (choice) {
     case ProfileChoice::kProfileFromTask:
-      return GetProfileNameFromTask(scene_state_id, orchestrator);
+      return GetProfileNameFromTask(scene_state, orchestrator);
     case ProfileChoice::kProfileFromActivity: {
       for (NSUserActivity* activity in options.userActivities) {
         std::string profile_name = GetProfileNameFromActivity(activity);
@@ -456,6 +394,9 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
 // Schedule the deletion of the temporary passwords files that might
 // be left over from incomplete export operations.
 - (void)scheduleDeleteTempPasswordsDirectory;
+// Schedules the deletion of temporary enterprise scan files that might be
+// left over from the last time Chrome was run.
+- (void)scheduleDeleteTempEnterpriseScanDirectory;
 // Schedule the start of memory experimentation.
 - (void)scheduleMemoryExperimentation;
 // Schedules the removal of files that were scheduled for automatic deletion and
@@ -473,31 +414,14 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
 // background initilisation that are required, and then transition to the
 // next stage.
 - (void)startUpBrowserBackgroundInitialization;
-
 @end
 
 @implementation MainController {
   // The object that drives the Chrome startup/shutdown logic.
   std::unique_ptr<IOSChromeMain> _chromeMain;
 
-  // True if the current session began from a cold start. False if the app has
-  // entered the background at least once since start up.
-  BOOL _isColdStart;
-
-  // True if the launch metrics have already been recorded.
-  BOOL _launchMetricsRecorded;
-
-  // YES if the user has ever interacted with the application. May be NO if the
-  // application has been woken up by the system for background work.
-  BOOL _userInteracted;
-
-  // Whether the application is currently in the background. Workaround for
-  // rdar://22392526 where -applicationDidEnterBackground: can be called twice.
-  // TODO(crbug.com/41211311): remove when rdar:22392526 is fixed
-  BOOL _applicationInBackground;
-
-  // YES if any Profile had initialized the UI for its first Scene.
-  BOOL _firstWindowCreated;
+  // Used to assign identifiers to SceneState objects.
+  std::unique_ptr<SceneIdentifierMap> _sceneIdentifierMap;
 
   // An object to record metrics related to the user's first action.
   std::unique_ptr<FirstUserActionRecorder> _firstUserActionRecorder;
@@ -531,6 +455,14 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   // Used to force the device orientation in portrait mode on iPhone.
   std::unique_ptr<ScopedForcePortraitOrientation> _scopedForceOrientation;
 
+  // Timer used to schedule the unload of unused profiles during the next
+  // run loop (to avoid unloading a profile and destroying all objects in
+  // an observer method as this can be dangerous if it destroys the sender).
+  base::OneShotTimer _timer;
+
+  // The controller that will process the share extension files.
+  ShareExtensionController* _shareExtensionController;
+
   // The highest ProfileInitStage reached by any ProfileState. This value
   // can only be increased, never decreased. It gates application-level
   // initialisation that should only happen once at least one Profile has
@@ -538,10 +470,35 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   // user to interact with the application, ...).
   ProfileInitStage _highestProfileInitStageReached;
 
-  // Timer used to schedule the unload of unused profiles during the next
-  // run loop (to avoid unloading a profile and destroying all objects in
-  // an observer method as this can be dangerous if it destroy the sender).
-  base::OneShotTimer _timer;
+  // Whether any SceneState has been connected (for SceneIdentifierMap).
+  BOOL _anySceneConnected;
+
+  // True if the current session began from a cold start. False if the app has
+  // entered the background at least once since start up.
+  BOOL _isColdStart;
+
+  // The initial launch reason for the application process. Unset if not yet
+  // determined.
+  std::optional<IOSLaunchReason> _launchReason;
+
+  // Duration between process creation and the call to main(), or std::nullopt
+  // if unavailable or invalid.
+  std::optional<base::TimeDelta> _preMainDuration;
+
+  // True if the launch metrics have already been recorded.
+  BOOL _launchMetricsRecorded;
+
+  // YES if the user has ever interacted with the application. May be NO if the
+  // application has been woken up by the system for background work.
+  BOOL _userInteracted;
+
+  // Whether the application is currently in the background. Workaround for
+  // rdar://22392526 where -applicationDidEnterBackground: can be called twice.
+  // TODO(crbug.com/41211311): remove when rdar:22392526 is fixed
+  BOOL _applicationInBackground;
+
+  // YES if any Profile had initialized the UI for its first Scene.
+  BOOL _firstWindowCreated;
 
 #if BUILDFLAG(ENABLE_RLZ)
   // Record whether the RLZTracker has been initialized or not. Calling
@@ -554,19 +511,18 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   // singleton during the shutdown creates.
   BOOL _rlzTrackerInitialized;
 #endif
-
-  // The controller that will process the share extension files.
-  ShareExtensionController* _shareExtensionController;
 }
 
 // Defined by public protocols.
 // - StartupInformation
 @synthesize isColdStart = _isColdStart;
-@synthesize appLaunchTime = _appLaunchTime;
+@synthesize appLaunchTimer = _appLaunchTimer;
+@synthesize preMainDuration = _preMainDuration;
 @synthesize isFirstRun = _isFirstRun;
 @synthesize isTerminating = _isTerminating;
 @synthesize didFinishLaunchingTime = _didFinishLaunchingTime;
 @synthesize firstSceneConnectionTime = _firstSceneConnectionTime;
+@synthesize coldStartFromMainDuration = _coldStartFromMainDuration;
 
 #pragma mark - Application lifecycle
 
@@ -584,7 +540,8 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
 }
 
 - (void)startUpBrowserBasicInitialization {
-  _appLaunchTime = IOSChromeMain::StartTime();
+  _appLaunchTimer = IOSChromeMain::StartTimer();
+  _preMainDuration = IOSChromeMain::PreMainDuration();
   _isColdStart = YES;
   UMA_HISTOGRAM_BOOLEAN("IOS.Process.ActivePrewarm",
                         base::ios::IsApplicationPreWarmed());
@@ -605,6 +562,21 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
                    forProtocol:@protocol(ChangeProfileCommands)];
 }
 
+- (std::optional<IOSLaunchReason>)launchReason {
+  return _launchReason;
+}
+
+- (BOOL)isLaunchedInBackground {
+  return _launchReason.has_value() && IsBackgroundLaunchReason(*_launchReason);
+}
+
+- (void)maybeSetLaunchReason:(IOSLaunchReason)launchReason {
+  if (!_launchReason.has_value()) {
+    _launchReason = launchReason;
+    base::UmaHistogramEnumeration("Startup.IOSLaunchReason", *_launchReason);
+  }
+}
+
 - (void)startUpBrowserBackgroundInitialization {
   NSBundle* baseBundle = base::apple::OuterBundle();
   base::apple::SetBaseBundleIDOverride(
@@ -623,9 +595,28 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
 
   _chromeMain = [ChromeMainStarter startChromeMain];
 
+  ApplicationContext* applicationContext = GetApplicationContext();
+  if (base::FeatureList::IsEnabled(kRecoverTabsOfLastClosedWindow)) {
+    _sceneIdentifierMap = std::make_unique<SceneIdentifierMapImpl>(
+        applicationContext->GetLocalState(),
+        applicationContext->GetProfileManager()->GetProfileAttributesStorage(),
+        base::ios::IsMultipleScenesSupported());
+  } else {
+    _sceneIdentifierMap = std::make_unique<LegacySceneIdentifierMap>(
+        self.appState,
+        applicationContext->GetProfileManager()->GetProfileAttributesStorage(),
+        base::ios::IsMultipleScenesSupported());
+
+    // Clear preferences used by SceneIdentifierMapImpl (in case the feature
+    // has been enabled and then disabled).
+    PrefService* localState = applicationContext->GetLocalState();
+    localState->ClearPref(prefs::kLastConnectedSceneIdentifier);
+    localState->ClearPref(prefs::kSceneSessionIdentifierMap);
+  }
+  CHECK(_sceneIdentifierMap);
+
   // Register the ChangeProfileCommands handler with AccountProfileMapper.
-  GetApplicationContext()
-      ->GetAccountProfileMapper()
+  applicationContext->GetAccountProfileMapper()
       ->SetChangeProfileCommandsHandler(HandlerForProtocol(
           self.appState.appCommandDispatcher, ChangeProfileCommands));
 
@@ -654,7 +645,7 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   // TODO(crbug.com/40190949): Stop watching for a crash if this is a background
   // fetch.
   if (_userInteracted) {
-    GetApplicationContext()->GetMetricsService()->OnAppEnterForeground();
+    applicationContext->GetMetricsService()->OnAppEnterForeground();
   }
 
   web::WebUIIOSControllerFactory::RegisterFactory(
@@ -671,7 +662,9 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   // TODO(crbug.com/462018636): Remove once the feature is fully launched.
   SaveEnableNewStartupFlowForNextStart();
 
-  [self.appState queueTransitionToNextInitStage];
+  if (!tests_hook::ShouldPauseStartupAtBackgroundStage()) {
+    [self.appState queueTransitionToNextInitStage];
+  }
 }
 
 // This initialization must happen before any windows are created.
@@ -944,8 +937,7 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   applicationContext->GetSystemIdentityManager()
       ->ApplicationDidDiscardSceneSessions(sceneSessions);
 
-  MarkSessionsAsDiscardedForAllProfiles(sceneSessions);
-  RecordDiscardSceneStillConnected(sceneSessions, _appState.connectedScenes);
+  _sceneIdentifierMap->OnSessionsDiscarded(sceneSessions);
 
   crash_keys::SetConnectedScenesCount(_appState.connectedScenes.count);
 }
@@ -1047,6 +1039,7 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
 #if BUILDFLAG(IOS_CREDENTIAL_PROVIDER_ENABLED)
   [self.appState addAgent:[[CredentialProviderMigratorAppAgent alloc] init]];
 #endif
+  [self.appState addAgent:[[BackgroundContinuedProcessingAppAgent alloc] init]];
   [self.appState addAgent:[[DefaultBrowserBannerPromoAppAgent alloc] init]];
 }
 
@@ -1054,6 +1047,9 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
 
 - (void)profileState:(ProfileState*)profileState
     sceneDisconnected:(SceneState*)sceneState {
+  if (self.appState.connectedScenes.count == 0) {
+    _sceneIdentifierMap->OnLastSceneStateDisconnected(sceneState);
+  }
   if (profileState.connectedScenes.count == 0) {
     [self scheduleDropUnusedProfileControllers];
   }
@@ -1181,7 +1177,8 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   // not be possible to determine here whether they will be run (e.g. if
   // the depend on the state of a profile).
   if (_isFirstRun) {
-    _scopedForceOrientation = ForcePortraitOrientationOnIphone(_appState);
+    _scopedForceOrientation =
+        std::make_unique<ScopedForcePortraitOrientation>(_appState);
   }
 
   // Create app state agents.
@@ -1195,9 +1192,7 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   refreshAgent.audience = _appState;
   [_appState addAgent:refreshAgent];
   // Register background refresh providers.
-  if (IsDiscoverBackgroundRefreshEnabled()) {
-    [refreshAgent addAppRefreshProvider:[[DiscoverFeedProvider alloc] init]];
-  }
+  [refreshAgent addAppRefreshProvider:[[DiscoverFeedProvider alloc] init]];
 
   [refreshAgent addAppRefreshProvider:[[TestRefresher alloc]
                                           initWithAppState:self.appState]];
@@ -1266,6 +1261,10 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   }
 
   _profileControllers.clear();
+
+  // Destroy the SceneIdentifierMap after shutting down all ProfileController
+  // as they will disconnect the Scenes as part of the shut down sequence.
+  _sceneIdentifierMap.reset();
 
   // Cancel any pending deferred startup tasks (the application is shutting
   // down, so there is no point in running them).
@@ -1401,23 +1400,7 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
 // Some experiments value may be useful for first-party applications, so save
 // the value in the shared application group.
 - (void)saveFieldTrialValuesForGroupApp {
-  NSUserDefaults* sharedDefaults = app_group::GetCommonGroupUserDefaults();
-  NSNumber* supportsShowDefaultBrowserPromo = @YES;
-
-  NSMutableDictionary* capabilities = [[NSMutableDictionary alloc] init];
-  [capabilities setObject:supportsShowDefaultBrowserPromo
-                   forKey:app_group::kChromeShowDefaultBrowserPromoCapability];
-
-  [capabilities
-      setObject:@(IsShareDefaultBrowserStatusEnabled())
-         forKey:app_group::kChromeSupportShareDefaultBrowserStatusCapability];
-
-  [capabilities
-      setObject:@[ app_group::kYoutubeBundleID ]
-         forKey:app_group::kChromeSupportOpenLinksParametersFromCapability];
-
-  [sharedDefaults setObject:capabilities
-                     forKey:app_group::kChromeCapabilitiesPreference];
+  SaveFieldTrialValuesForGroupApp();
 }
 
 // Some extensions need the value of field trials but can't get them because the
@@ -1438,14 +1421,6 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
     kWidgetKitRefreshFiveMinutes : @{
       kFieldTrialValueKey : @([[NSUserDefaults standardUserDefaults]
           boolForKey:kWidgetKitRefreshFiveMinutes]),
-      kFieldTrialVersionKey : @1,
-    },
-    kMultiprofileKey : @{
-      kFieldTrialValueKey : @(AreSeparateProfilesForManagedAccountsEnabled()),
-      kFieldTrialVersionKey : @1,
-    },
-    kConfirmationButtonSwapOrderKey : @{
-      kFieldTrialValueKey : @(IsConfirmationButtonSwapOrderEnabled()),
       kFieldTrialVersionKey : @1,
     },
   };
@@ -1485,6 +1460,7 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   [self scheduleDeleteTempDownloadsDirectory];
   [self scheduleDeleteTempPasswordsDirectory];
   [self scheduleDeleteTempChooseFileDirectory];
+  [self scheduleDeleteTempEnterpriseScanDirectory];
   [self scheduleLogSiriShortcuts];
   [self scheduleStartupAttemptReset];
   [self startFreeMemoryMonitoring];
@@ -1500,6 +1476,7 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
 #endif  // BUILDFLAG(IOS_ENABLE_SANDBOX_DUMP)
 
   [self scheduleProcessingShareExtensionFiles];
+  [self scheduleMetricKitRegistration];
 }
 
 - (void)scheduleDeleteTempDownloadsDirectory {
@@ -1521,6 +1498,14 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
       enqueueBlockNamed:kDeleteTempPasswords
                   block:^{
                     password_manager::DeletePasswordsDirectory();
+                  }];
+}
+
+- (void)scheduleDeleteTempEnterpriseScanDirectory {
+  [_appState.deferredRunner
+      enqueueBlockNamed:kDeleteTempEnterpriseScan
+                  block:^{
+                    enterprise_connectors::DeleteTempEnterpriseScanDirectory();
                   }];
 }
 
@@ -1584,6 +1569,15 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
 - (void)scheduleProcessingShareExtensionFiles {
   _shareExtensionController = [[ShareExtensionController alloc] init];
   [_shareExtensionController startFilesProcessing];
+}
+
+- (void)scheduleMetricKitRegistration {
+  __weak MetricsMediator* weakMetricsMediator = _metricsMediator;
+  [_appState.deferredRunner
+      enqueueBlockNamed:kRegisterMetricKit
+                  block:^{
+                    [weakMetricsMediator registerMetricKitSubscriberIfNeeded];
+                  }];
 }
 
 - (void)expireFirstUserActionRecorder {
@@ -1703,7 +1697,6 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
              forScene:(SceneState*)sceneState
                reason:(ChangeProfileReason)reason
          continuation:(ChangeProfileContinuation)continuation {
-  CHECK(AreSeparateProfilesForManagedAccountsEnabled());
   CHECK_EQ(self.appState.initStage, AppInitStage::kFinal);
 
   CHECK(sceneState);
@@ -1769,7 +1762,6 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
 }
 
 - (void)deleteProfile:(std::string_view)profileName {
-  CHECK(AreSeparateProfilesForManagedAccountsEnabled());
   CHECK_EQ(self.appState.initStage, AppInitStage::kFinal);
   ProfileManagerIOS* manager = GetApplicationContext()->GetProfileManager();
   CHECK(manager->CanDeleteProfileWithName(profileName));
@@ -1836,8 +1828,11 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
               profileManager:(ProfileManagerIOS*)manager
            attributesStorage:(ProfileAttributesStorageIOS*)storage
                   localState:(PrefService*)localState {
-  // Determine the identifier for the SceneState.
-  std::string sceneStateID = SessionIdentifierForScene(sceneState.scene);
+  // Assign an identifier to the SceneState.
+  const BOOL isFirstScene = !std::exchange(_anySceneConnected, YES);
+  _sceneIdentifierMap->AssignIdentifierToSceneState(
+      sceneState, sceneState.scene.session, isFirstScene);
+  const std::string_view sceneStateID = sceneState.sceneSessionID;
 
   // Determine which profile to use. The logic is to take the first valid
   // profile (i.e. the value is set and the profile is known) amongst the
@@ -1847,7 +1842,7 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   std::string profileName;
   for (ProfileChoice choice : GetProfileChoices()) {
     profileName = GetProfileNameForChoice(
-        choice, sceneStateID, sceneState.connectionOptions,
+        choice, sceneStateID, sceneState, sceneState.connectionOptions,
         self.appState.taskOrchestrator, manager, storage, localState);
 
     // Pick the first valid profile name found.
@@ -1872,17 +1867,13 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   // kLastUsedProfile was sometimes not correctly updated).
   localState->SetString(prefs::kLastUsedProfile, profileName);
 
-  auto iterator = _profileControllers.find(profileName);
-  if (iterator == _profileControllers.end()) {
+  auto [iterator, inserted] = _profileControllers.try_emplace(profileName, nil);
+  if (inserted) {
     ProfileController* controller =
         [[ProfileController alloc] initWithAppState:self.appState
                                     metricsMediator:_metricsMediator];
     [controller.state addObserver:self];
-
-    auto insertion_result =
-        _profileControllers.insert(std::make_pair(profileName, controller));
-    DCHECK(insertion_result.second);
-    iterator = insertion_result.first;
+    iterator->second = controller;
 
     // Start loading the profile.
     [controller loadProfileNamed:profileName usingManager:manager];
@@ -1892,9 +1883,7 @@ std::string GetProfileNameForChoice(ProfileChoice choice,
   DCHECK(iterator->second.state != nil);
 
   // Connects the SceneState to the ProfileState.
-  [sceneState.controller
-      connectWithOptions:{.profile_state = iterator->second.state,
-                          .identifier = std::move(sceneStateID)}];
+  [sceneState.controller setProfileState:iterator->second.state];
 }
 
 // Drops all unused profile controllers. This will cause the corresponding

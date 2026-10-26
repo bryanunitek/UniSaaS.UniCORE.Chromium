@@ -15,7 +15,6 @@
 #include "base/memory/free_deleter.h"
 #include "base/memory/ref_counted.h"
 #include "base/test/run_until.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "testing/platform_test.h"
@@ -25,7 +24,6 @@
 #include "ui/base/clipboard/clipboard_observer.h"
 #include "ui/base/clipboard/clipboard_util_mac.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/skia_util.h"
 
@@ -124,6 +122,16 @@ class ClipboardMacTest : public PlatformTest {
         ClipboardBuffer::kCopyPaste, /*objects=*/{}, /*raw_objects=*/{},
         /*platform_representations=*/{}, std::move(data_src), pasteboard,
         /*privacy_types=*/0);
+  }
+
+  ClipboardSequenceNumberToken GetSequenceNumber(
+      const ClipboardMac* clipboard_mac,
+      NSPasteboard* pasteboard) {
+    return clipboard_mac->GetSequenceNumber(pasteboard);
+  }
+
+  void ClipboardChanged(ClipboardMac* clipboard_mac, NSPasteboard* pasteboard) {
+    clipboard_mac->ClipboardChanged(pasteboard);
   }
 
   // Helper method to run assertion with given count value
@@ -266,10 +274,6 @@ TEST_F(ClipboardMacTest, SourceTracking) {
 }
 
 TEST_F(ClipboardMacTest, ClipboardChangeAPI_BrowserTriggered) {
-  base::test::ScopedFeatureList scoped_feature_list_;
-  scoped_feature_list_.InitAndEnableFeature(
-      features::kPlatformClipboardMonitor);
-
   TestClipboardObserver observer;
 
   // Note that general pasteboard is used since the clipboard monitoring
@@ -292,10 +296,6 @@ TEST_F(ClipboardMacTest, ClipboardChangeAPI_BrowserTriggered) {
 }
 
 TEST_F(ClipboardMacTest, ClipboardChangeAPI_ExternallyTriggered) {
-  base::test::ScopedFeatureList scoped_feature_list_;
-  scoped_feature_list_.InitAndEnableFeature(
-      features::kPlatformClipboardMonitor);
-
   TestClipboardObserver observer;
 
   Clipboard* clipboard = Clipboard::GetForCurrentThread();
@@ -311,6 +311,55 @@ TEST_F(ClipboardMacTest, ClipboardChangeAPI_ExternallyTriggered) {
   AssertClipboardObserverCount(observer, 1);
 
   Clear(clipboard_mac, nspasteboard);
+}
+
+// Regression test for crbug.com/568453825: an external app writes to the
+// pasteboard and immediately triggers a paste. Blink reads the sequence number
+// at the start of the paste (minting a token for the new changeCount) before
+// the asynchronous pasteboard-changed notification has been delivered. When
+// that notification arrives for the same changeCount, it must not mint a
+// second token, or Blink will conclude the clipboard changed mid-paste and
+// drop the paste.
+//
+// A private pasteboard is used, and the change notification is delivered
+// directly, so that test processes running in parallel on the same machine
+// (which share the general pasteboard) cannot perturb the changeCount.
+TEST_F(ClipboardMacTest, SequenceNumberStableAcrossChangeNotification) {
+  TestClipboardObserver observer;
+  scoped_refptr<UniquePasteboard> pasteboard = new UniquePasteboard;
+
+  Clipboard* clipboard = Clipboard::GetForCurrentThread();
+  ClipboardMac* clipboard_mac = static_cast<ClipboardMac*>(clipboard);
+
+  // Simulate an external application writing to the pasteboard.
+  [pasteboard->get() clearContents];
+  [pasteboard->get() setString:@"Hello from external app"
+                       forType:NSPasteboardTypeString];
+
+  // Simulate Blink reading the sequence number at the start of a paste, before
+  // the change notification has been processed.
+  const ClipboardSequenceNumberToken token_before =
+      GetSequenceNumber(clipboard_mac, pasteboard->get());
+
+  // Deliver the change notification for the same changeCount. Observers must
+  // be told, but the token must not change.
+  const int count_before = observer.data_changed_count();
+  ClipboardChanged(clipboard_mac, pasteboard->get());
+  EXPECT_EQ(observer.data_changed_count(), count_before + 1);
+  EXPECT_EQ(token_before, GetSequenceNumber(clipboard_mac, pasteboard->get()));
+
+  // Re-delivering a notification for an unchanged changeCount is a no-op.
+  ClipboardChanged(clipboard_mac, pasteboard->get());
+  EXPECT_EQ(observer.data_changed_count(), count_before + 1);
+  EXPECT_EQ(token_before, GetSequenceNumber(clipboard_mac, pasteboard->get()));
+
+  // A real change must still produce a new token and a notification.
+  [pasteboard->get() clearContents];
+  [pasteboard->get() setString:@"Something else"
+                       forType:NSPasteboardTypeString];
+  ClipboardChanged(clipboard_mac, pasteboard->get());
+  EXPECT_EQ(observer.data_changed_count(), count_before + 2);
+  EXPECT_NE(token_before, GetSequenceNumber(clipboard_mac, pasteboard->get()));
 }
 
 }  // namespace ui

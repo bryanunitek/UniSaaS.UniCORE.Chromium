@@ -10,12 +10,16 @@
 #include "ash/public/cpp/network_config_service.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/webui/common/trusted_types_util.h"
+#include "base/check_deref.h"
 #include "build/build_config.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/floating_workspace/floating_workspace_handler.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/grit/floating_workspace_resources.h"
 #include "chrome/grit/floating_workspace_resources_map.h"
 #include "chrome/grit/generated_resources.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -24,20 +28,30 @@
 
 namespace ash {
 
-FloatingWorkspaceUIConfig::FloatingWorkspaceUIConfig()
-    : ChromeOSWebUIConfig(content::kChromeUIScheme,
-                          ash::kChromeUIFloatingWorkspaceDialogHost) {}
+FloatingWorkspaceUIConfig::FloatingWorkspaceUIConfig(PrefService* local_state)
+    : WebUIConfig(content::kChromeUIScheme,
+                  ash::kChromeUIFloatingWorkspaceDialogHost),
+      local_state_(CHECK_DEREF(local_state)) {}
 
-FloatingWorkspaceUI::FloatingWorkspaceUI(content::WebUI* web_ui)
+FloatingWorkspaceUIConfig::~FloatingWorkspaceUIConfig() = default;
+
+std::unique_ptr<content::WebUIController>
+FloatingWorkspaceUIConfig::CreateWebUIController(content::WebUI* web_ui,
+                                                 const GURL& url) {
+  return std::make_unique<FloatingWorkspaceUI>(local_state_.get(), web_ui);
+}
+
+FloatingWorkspaceUI::FloatingWorkspaceUI(const PrefService& local_state,
+                                         content::WebUI* web_ui)
     : MojoWebDialogUI(web_ui) {
   auto main_handler = std::make_unique<FloatingWorkspaceDialogHandler>();
   main_handler_ = main_handler.get();
   web_ui->AddMessageHandler(std::move(main_handler));
 
-  content::BrowserContext* browser_context =
-      web_ui->GetWebContents()->GetBrowserContext();
+  Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      browser_context, ash::kChromeUIFloatingWorkspaceDialogHost);
+      profile, ash::kChromeUIFloatingWorkspaceDialogHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   webui::SetupWebUIDataSource(source, kFloatingWorkspaceResources,
                               IDR_FLOATING_WORKSPACE_FLOATING_WORKSPACE_HTML);
@@ -76,7 +90,7 @@ FloatingWorkspaceUI::FloatingWorkspaceUI(content::WebUI* web_ui)
   ui::network_element::AddLocalizedStrings(source);
   ui::network_element::AddOncLocalizedStrings(source);
 
-  OobeUI::AddOobeComponents(source);
+  OobeUI::AddOobeComponents(local_state, source);
   ash::EnableTrustedTypesCSP(source);
 }
 

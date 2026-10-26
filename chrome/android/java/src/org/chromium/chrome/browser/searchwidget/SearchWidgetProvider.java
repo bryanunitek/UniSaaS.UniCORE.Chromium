@@ -28,13 +28,12 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.firstrun.FirstRunFlowSequencer;
 import org.chromium.chrome.browser.locale.LocaleManager;
-import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityClient;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.IntentOrigin;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.SearchType;
+import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferences;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferencesManager;
-import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferencesManager.SearchActivityPreferences;
 
 import java.util.function.Consumer;
 
@@ -103,9 +102,6 @@ public class SearchWidgetProvider extends AppWidgetProvider {
 
     public static void initialize() {
         SearchActivityPreferencesManager.addObserver(getDelegate());
-        // This is a one-time operation to remove the obsolete key.
-        ChromeSharedPreferences.getInstance()
-                .removeKey(ChromePreferenceKeys.SEARCH_WIDGET_NUM_CONSECUTIVE_CRASHES);
     }
 
     @Override

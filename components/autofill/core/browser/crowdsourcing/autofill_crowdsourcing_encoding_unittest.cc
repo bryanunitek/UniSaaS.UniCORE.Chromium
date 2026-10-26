@@ -29,13 +29,13 @@
 #include "components/autofill/core/browser/metrics/log_event.h"
 #include "components/autofill/core/browser/proto/api_v1.pb.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
-#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_util.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/test_utils/field_prediction_test_matchers.h"
 #include "components/autofill/core/common/autofill_debug_features.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/form_field_data.h"
@@ -373,10 +373,6 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeUploadRequest) {
            {.label = u"Country",
             .name = u"country",
             .form_control_type = FormControlType::kSelectOne},
-           // Add checkable field.
-           {.label = u"Checkable1",
-            .name = u"Checkable1",
-            .form_control_type = FormControlType::kInputCheckbox},
        }});
 
   std::vector<FieldTypeSet> possible_field_types;
@@ -384,13 +380,8 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeUploadRequest) {
   test::InitializePossibleTypes(possible_field_types, {NAME_LAST});
   test::InitializePossibleTypes(possible_field_types, {EMAIL_ADDRESS});
   test::InitializePossibleTypes(possible_field_types,
-
                                 {PHONE_HOME_WHOLE_NUMBER});
   test::InitializePossibleTypes(possible_field_types,
-
-                                {ADDRESS_HOME_COUNTRY});
-  test::InitializePossibleTypes(possible_field_types,
-
                                 {ADDRESS_HOME_COUNTRY});
 
   std::unique_ptr<FormStructure> form_structure =
@@ -408,8 +399,7 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeUploadRequest) {
   AutofillUploadContents upload;
   upload.set_submission(true);
   upload.set_submission_event(AutofillUploadContents::HTML_FORM_SUBMISSION);
-  upload.set_client_version(
-      std::string(GetProductNameAndVersionForUserAgent()));
+  upload.set_client_version(GetProductNameAndVersionForUserAgent());
   upload.set_form_signature(form_structure->form_signature().value());
   upload.set_structural_form_signature(
       form_structure->structural_form_signature().value());
@@ -510,8 +500,7 @@ TEST_F(AutofillCrowdsourcingEncoding,
   // Prepare the expected proto.
   AutofillUploadContents upload;
   upload.set_submission(true);
-  upload.set_client_version(
-      std::string(GetProductNameAndVersionForUserAgent()));
+  upload.set_client_version(GetProductNameAndVersionForUserAgent());
   upload.set_form_signature(form_structure->form_signature().value());
   upload.set_structural_form_signature(
       form_structure->structural_form_signature().value());
@@ -570,8 +559,7 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeUploadRequestWithFormatStrings) {
   // Prepare the expected proto string.
   AutofillUploadContents upload;
   upload.set_submission(true);
-  upload.set_client_version(
-      std::string(GetProductNameAndVersionForUserAgent()));
+  upload.set_client_version(GetProductNameAndVersionForUserAgent());
   upload.set_form_signature(form_structure->form_signature().value());
   upload.set_structural_form_signature(
       form_structure->structural_form_signature().value());
@@ -695,8 +683,7 @@ TEST_F(AutofillCrowdsourcingEncoding,
   // Prepare the expected proto string.
   AutofillUploadContents upload;
   upload.set_submission(true);
-  upload.set_client_version(
-      std::string(GetProductNameAndVersionForUserAgent()));
+  upload.set_client_version(GetProductNameAndVersionForUserAgent());
   upload.set_form_signature(form_structure->form_signature().value());
   upload.set_structural_form_signature(
       form_structure->structural_form_signature().value());
@@ -798,8 +785,7 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeUploadRequestWithPropertiesMask) {
   // Prepare the expected proto string.
   AutofillUploadContents upload;
   upload.set_submission(true);
-  upload.set_client_version(
-      std::string(GetProductNameAndVersionForUserAgent()));
+  upload.set_client_version(GetProductNameAndVersionForUserAgent());
   upload.set_form_signature(form_structure->form_signature().value());
   upload.set_structural_form_signature(
       form_structure->structural_form_signature().value());
@@ -865,8 +851,7 @@ TEST_F(AutofillCrowdsourcingEncoding,
   // Prepare the expected proto string.
   AutofillUploadContents upload;
   upload.set_submission(false);
-  upload.set_client_version(
-      std::string(GetProductNameAndVersionForUserAgent()));
+  upload.set_client_version(GetProductNameAndVersionForUserAgent());
   upload.set_form_signature(form_structure->form_signature().value());
   upload.set_structural_form_signature(
       form_structure->structural_form_signature().value());
@@ -922,8 +907,7 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeUploadRequest_WithLabels) {
   // Prepare the expected proto string.
   AutofillUploadContents upload;
   upload.set_submission(true);
-  upload.set_client_version(
-      std::string(GetProductNameAndVersionForUserAgent()));
+  upload.set_client_version(GetProductNameAndVersionForUserAgent());
   upload.set_form_signature(form_structure->form_signature().value());
   upload.set_structural_form_signature(
       form_structure->structural_form_signature().value());
@@ -1074,8 +1058,7 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeUploadRequest_WithSubForms) {
     upload.set_submission(true);
     upload.set_submission_event(
         AutofillUploadContents_SubmissionIndicatorEvent_NONE);
-    upload.set_client_version(
-        std::string(GetProductNameAndVersionForUserAgent()));
+    upload.set_client_version(GetProductNameAndVersionForUserAgent());
     upload.set_form_signature(form_structure->form_signature().value());
     upload.set_structural_form_signature(
         form_structure->structural_form_signature().value());
@@ -1091,8 +1074,7 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeUploadRequest_WithSubForms) {
 
   const AutofillUploadContents upload_name_exp = [&] {
     AutofillUploadContents upload;
-    upload.set_client_version(
-        std::string(GetProductNameAndVersionForUserAgent()));
+    upload.set_client_version(GetProductNameAndVersionForUserAgent());
     upload.set_form_signature(form.fields()[0].host_form_signature().value());
     upload.set_autofill_used(false);
     upload.set_data_present("0000000000001850");
@@ -1103,8 +1085,7 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeUploadRequest_WithSubForms) {
 
   const AutofillUploadContents upload_number = [&] {
     AutofillUploadContents upload;
-    upload.set_client_version(
-        std::string(GetProductNameAndVersionForUserAgent()));
+    upload.set_client_version(GetProductNameAndVersionForUserAgent());
     upload.set_form_signature(form.fields()[1].host_form_signature().value());
     upload.set_autofill_used(false);
     upload.set_data_present("0000000000001850");
@@ -1114,8 +1095,7 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeUploadRequest_WithSubForms) {
 
   const AutofillUploadContents upload_cvc = [&] {
     AutofillUploadContents upload;
-    upload.set_client_version(
-        std::string(GetProductNameAndVersionForUserAgent()));
+    upload.set_client_version(GetProductNameAndVersionForUserAgent());
     upload.set_form_signature(form.fields()[3].host_form_signature().value());
     upload.set_autofill_used(false);
     upload.set_data_present("0000000000001850");
@@ -1351,8 +1331,7 @@ TEST_F(AutofillCrowdsourcingEncoding, CheckDataPresence) {
   // Prepare the expected proto string.
   AutofillUploadContents upload;
   upload.set_submission(true);
-  upload.set_client_version(
-      std::string(GetProductNameAndVersionForUserAgent()));
+  upload.set_client_version(GetProductNameAndVersionForUserAgent());
   upload.set_form_signature(form_structure.form_signature().value());
   upload.set_structural_form_signature(
       form_structure.structural_form_signature().value());
@@ -1582,8 +1561,7 @@ TEST_F(AutofillCrowdsourcingEncoding, CheckMultipleTypes) {
   // Prepare the expected proto string.
   AutofillUploadContents upload;
   upload.set_submission(true);
-  upload.set_client_version(
-      std::string(GetProductNameAndVersionForUserAgent()));
+  upload.set_client_version(GetProductNameAndVersionForUserAgent());
   upload.set_form_signature(form_structure->form_signature().value());
   upload.set_structural_form_signature(
       form_structure->structural_form_signature().value());
@@ -1830,7 +1808,7 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeUploadRequest_RichMetadata) {
   ASSERT_EQ(static_cast<size_t>(upload.field_data_size()),
             form.fields().size());
 
-  ASSERT_EQ(1, upload.randomized_form_metadata().button_title().size());
+  ASSERT_EQ(upload.randomized_form_metadata().button_title().size(), 1);
   EXPECT_EQ(
       upload.randomized_form_metadata()
           .button_title()[0]
@@ -1839,8 +1817,8 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeUploadRequest_RichMetadata) {
       options.encoder->EncodeForTesting(form_signature, FieldSignature(),
                                         RandomizedEncoder::kFormButtonTitles,
                                         form.button_titles()[0].first));
-  EXPECT_EQ(ButtonTitleType::BUTTON_ELEMENT_SUBMIT_TYPE,
-            upload.randomized_form_metadata().button_title()[0].type());
+  EXPECT_EQ(upload.randomized_form_metadata().button_title()[0].type(),
+            ButtonTitleType::BUTTON_ELEMENT_SUBMIT_TYPE);
 
   for (int i = 0; i < upload.field_data_size(); ++i) {
     SCOPED_TRACE(testing::Message() << "field with index " << i);
@@ -2147,7 +2125,7 @@ TEST_F(AutofillCrowdsourcingEncoding,
 // fallback. Chrome clients should upload all form fields, see
 // crbug.com/444147005 for more details.
 TEST_F(AutofillCrowdsourcingEncoding,
-       EncodeUploadRequest_SkipFieldsFilledWithFallback) {
+       EncodeUploadRequest_UploadFieldsFilledWithFallback) {
   FormData form = test::GetFormData({.fields = {{.role = NAME_FIRST}}});
   FormStructure form_structure(form);
 
@@ -2212,17 +2190,6 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeAutofillPageQueryRequest) {
   field.set_host_form_signature(FormSignature(12345UL));
   test_api(form).Append(field);
 
-  // Add checkable field.
-  FormFieldData checkable_field;
-  checkable_field.set_form_control_type(FormControlType::kInputCheckbox);
-  checkable_field.set_check_status(
-      FormFieldData::CheckStatus::kCheckableButUnchecked);
-  checkable_field.set_label(u"Checkable1");
-  checkable_field.set_name(u"Checkable1");
-  checkable_field.set_renderer_id(test::MakeFieldRendererId());
-  checkable_field.set_host_form_signature(form_signature);
-  test_api(form).Append(checkable_field);
-
   std::vector<FormData> forms = {form};
 
   std::vector<FormSignature> expected_signatures;
@@ -2232,7 +2199,7 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeAutofillPageQueryRequest) {
 
   // Prepare the expected proto string.
   AutofillPageQueryRequest query;
-  query.set_client_version(std::string(GetProductNameAndVersionForUserAgent()));
+  query.set_client_version(GetProductNameAndVersionForUserAgent());
   {
     AutofillPageQueryRequest::Form* query_form = query.add_forms();
     query_form->set_signature(form_signature.value());
@@ -2360,42 +2327,6 @@ TEST_F(AutofillCrowdsourcingEncoding, EncodeAutofillPageQueryRequest) {
   EXPECT_TRUE(encoded_signatures6.empty());
 }
 
-TEST_F(AutofillCrowdsourcingEncoding, SkipFieldTest) {
-  FormData form = test::GetFormData({
-      .fields = {{.role = USERNAME},
-                 {.label = u"select",
-                  .name = u"select",
-                  .form_control_type = FormControlType::kInputCheckbox},
-                 {.role = EMAIL_ADDRESS}},
-      .name = u"the-name",
-      .url = "http://cool.com",
-      .action = "http://cool.com/login",
-  });
-
-  std::vector<FormData> forms = {form};
-
-  // Create the expected query and serialize it to a string.
-  AutofillPageQueryRequest query;
-  query.set_client_version(std::string(GetProductNameAndVersionForUserAgent()));
-  AutofillPageQueryRequest::Form* query_form = query.add_forms();
-  query_form->set_signature(CalculateFormSignature(form).value());
-  query_form->set_alternative_signature(
-      CalculateAlternativeFormSignature(form).value());
-  query_form->set_structural_signature(
-      CalculateStructuralFormSignature(form).value());
-
-  query_form->add_fields()->set_signature(239111655U);
-  query_form->add_fields()->set_signature(420638584U);
-
-  const FormSignature kExpectedSignature(18006745212084723782UL);
-
-  auto [encoded_query, encoded_signatures] =
-      EncodeAutofillPageQueryRequest(forms);
-  ASSERT_EQ(1U, encoded_signatures.size());
-  EXPECT_EQ(kExpectedSignature, encoded_signatures.front());
-  EXPECT_THAT(encoded_query, EqualsIgnoringMetadataValues(query));
-}
-
 TEST_F(AutofillCrowdsourcingEncoding,
        EncodeAutofillPageQueryRequest_WithLabels) {
   FormData form = test::GetFormData({
@@ -2415,7 +2346,7 @@ TEST_F(AutofillCrowdsourcingEncoding,
 
   // Create the expected query and serialize it to a string.
   AutofillPageQueryRequest query;
-  query.set_client_version(std::string(GetProductNameAndVersionForUserAgent()));
+  query.set_client_version(GetProductNameAndVersionForUserAgent());
   AutofillPageQueryRequest::Form* query_form = query.add_forms();
   query_form->set_signature(CalculateFormSignature(form).value());
   query_form->set_alternative_signature(
@@ -2460,7 +2391,7 @@ TEST_F(AutofillCrowdsourcingEncoding,
 
   // Create the expected query and serialize it to a string.
   AutofillPageQueryRequest query;
-  query.set_client_version(std::string(GetProductNameAndVersionForUserAgent()));
+  query.set_client_version(GetProductNameAndVersionForUserAgent());
   AutofillPageQueryRequest::Form* query_form = query.add_forms();
   query_form->set_signature(CalculateFormSignature(form).value());
   query_form->set_alternative_signature(
@@ -2502,7 +2433,7 @@ TEST_F(AutofillCrowdsourcingEncoding,
 
   // Create the expected query and serialize it to a string.
   AutofillPageQueryRequest query;
-  query.set_client_version(std::string(GetProductNameAndVersionForUserAgent()));
+  query.set_client_version(GetProductNameAndVersionForUserAgent());
   AutofillPageQueryRequest::Form* query_form = query.add_forms();
   query_form->set_signature(CalculateFormSignature(form).value());
   query_form->set_alternative_signature(
@@ -2516,8 +2447,8 @@ TEST_F(AutofillCrowdsourcingEncoding,
   const FormSignature kExpectedSignature(16416961345885087496UL);
   auto [encoded_query, encoded_signatures] =
       EncodeAutofillPageQueryRequest(forms);
-  ASSERT_EQ(1U, encoded_signatures.size());
-  EXPECT_EQ(kExpectedSignature, encoded_signatures.front());
+  ASSERT_EQ(encoded_signatures.size(), 1U);
+  EXPECT_EQ(encoded_signatures.front(), kExpectedSignature);
   EXPECT_THAT(encoded_query, EqualsIgnoringMetadataValues(query));
 }
 
@@ -2565,16 +2496,18 @@ TEST_F(AutofillCrowdsourcingEncoding,
   ASSERT_EQ(form.field_count(), 2U);
 
   // Validate the type predictions.
-  EXPECT_EQ(UNKNOWN_TYPE, form.field(0)->heuristic_type());
-  EXPECT_EQ(HtmlFieldType::kName, form.field(0)->html_type());
-  EXPECT_EQ(NAME_FIRST, form.field(0)->server_type());
-  EXPECT_EQ(UNKNOWN_TYPE, form.field(1)->heuristic_type());
-  EXPECT_EQ(HtmlFieldType::kName, form.field(1)->html_type());
-  EXPECT_EQ(NAME_LAST, form.field(1)->server_type());
+  EXPECT_EQ(form.field(0)->heuristic_type(), UNKNOWN_TYPE);
+  EXPECT_EQ(form.field(0)->html_type(), HtmlFieldType::kName);
+  EXPECT_EQ(form.field(0)->server_type(), NAME_FIRST);
+  EXPECT_EQ(form.field(1)->heuristic_type(), UNKNOWN_TYPE);
+  EXPECT_EQ(form.field(1)->html_type(), HtmlFieldType::kName);
+  EXPECT_EQ(form.field(1)->server_type(), NAME_LAST);
 
   // Validate that the overrides are set correctly.
-  EXPECT_TRUE(form.field(0)->server_type_prediction_is_override());
-  EXPECT_FALSE(form.field(1)->server_type_prediction_is_override());
+  EXPECT_EQ(form.field(0)->PredictionSource(),
+            AutofillPredictionSource::kServerOverride);
+  EXPECT_NE(form.field(1)->PredictionSource(),
+            AutofillPredictionSource::kServerOverride);
 
   // Validate that the server prediction won for the first field.
   EXPECT_THAT(form.field(0)->Type().GetTypes(), ElementsAre(NAME_FIRST));
@@ -2623,10 +2556,10 @@ TEST_F(AutofillCrowdsourcingEncoding,
   ASSERT_EQ(form.field_count(), 3U);
 
   // Validate the heuristic and server predictions.
-  EXPECT_EQ(NAME_LAST_FIRST, form.field(1)->heuristic_type());
-  EXPECT_EQ(NAME_LAST_SECOND, form.field(2)->heuristic_type());
-  EXPECT_EQ(NAME_LAST, form.field(1)->server_type());
-  EXPECT_EQ(NAME_LAST, form.field(2)->server_type());
+  EXPECT_EQ(form.field(1)->heuristic_type(), NAME_LAST_FIRST);
+  EXPECT_EQ(form.field(2)->heuristic_type(), NAME_LAST_SECOND);
+  EXPECT_EQ(form.field(1)->server_type(), NAME_LAST);
+  EXPECT_EQ(form.field(2)->server_type(), NAME_LAST);
 
   // Validate that the heuristic prediction wins for the two last name fields.
   EXPECT_THAT(form.field(0)->Type().GetTypes(), ElementsAre(NAME_FIRST));
@@ -2668,10 +2601,10 @@ TEST_F(AutofillCrowdsourcingEncoding,
   ASSERT_EQ(form.field_count(), 4U);
 
   // Validate the heuristic and server predictions.
-  EXPECT_EQ(ADDRESS_HOME_STREET_NAME, form.field(1)->heuristic_type());
-  EXPECT_EQ(ADDRESS_HOME_HOUSE_NUMBER, form.field(2)->heuristic_type());
-  EXPECT_EQ(ADDRESS_HOME_LINE1, form.field(1)->server_type());
-  EXPECT_EQ(ADDRESS_HOME_LINE2, form.field(2)->server_type());
+  EXPECT_EQ(form.field(1)->heuristic_type(), ADDRESS_HOME_STREET_NAME);
+  EXPECT_EQ(form.field(2)->heuristic_type(), ADDRESS_HOME_HOUSE_NUMBER);
+  EXPECT_EQ(form.field(1)->server_type(), ADDRESS_HOME_LINE1);
+  EXPECT_EQ(form.field(2)->server_type(), ADDRESS_HOME_LINE2);
 
   // Validate that the heuristic prediction wins for the street name and house
   // number.
@@ -2794,21 +2727,21 @@ TEST_F(AutofillCrowdsourcingEncoding, ParseQueryResponse_TooManyTypes) {
   ASSERT_EQ(form.field_count(), 3U);
 
   // Validate field 0.
-  EXPECT_EQ(NAME_FIRST, form.field(0)->heuristic_type());
-  EXPECT_EQ(NAME_FIRST, form.field(0)->server_type());
-  EXPECT_EQ(HtmlFieldType::kUnspecified, form.field(0)->html_type());
+  EXPECT_EQ(form.field(0)->heuristic_type(), NAME_FIRST);
+  EXPECT_EQ(form.field(0)->server_type(), NAME_FIRST);
+  EXPECT_EQ(form.field(0)->html_type(), HtmlFieldType::kUnspecified);
   EXPECT_THAT(form.field(0)->Type().GetTypes(), ElementsAre(NAME_FIRST));
 
   // Validate field 1.
-  EXPECT_EQ(NAME_LAST, form.field(1)->heuristic_type());
-  EXPECT_EQ(NAME_LAST, form.field(1)->server_type());
-  EXPECT_EQ(HtmlFieldType::kUnspecified, form.field(1)->html_type());
+  EXPECT_EQ(form.field(1)->heuristic_type(), NAME_LAST);
+  EXPECT_EQ(form.field(1)->server_type(), NAME_LAST);
+  EXPECT_EQ(form.field(1)->html_type(), HtmlFieldType::kUnspecified);
   EXPECT_THAT(form.field(1)->Type().GetTypes(), ElementsAre(NAME_LAST));
 
   // Validate field 2. Note: HtmlFieldType::kAddressLevel2 -> City
-  EXPECT_EQ(EMAIL_ADDRESS, form.field(2)->heuristic_type());
-  EXPECT_EQ(ADDRESS_HOME_LINE1, form.field(2)->server_type());
-  EXPECT_EQ(HtmlFieldType::kAddressLevel2, form.field(2)->html_type());
+  EXPECT_EQ(form.field(2)->heuristic_type(), EMAIL_ADDRESS);
+  EXPECT_EQ(form.field(2)->server_type(), ADDRESS_HOME_LINE1);
+  EXPECT_EQ(form.field(2)->html_type(), HtmlFieldType::kAddressLevel2);
   EXPECT_THAT(form.field(2)->Type().GetTypes(), ElementsAre(ADDRESS_HOME_CITY));
 
   // Also check the extreme case of an empty form.
@@ -3122,10 +3055,7 @@ TEST_F(AutofillCrowdsourcingEncoding, ParseQueryResponse) {
   // Make form 1 data.
   FormData form = test::GetFormData(
       {.fields = {{.label = u"fullname", .name = u"fullname"},
-                  {.label = u"address", .name = u"address"},
-                  // Checkable fields should be ignored in parsing
-                  {.label = u"radio_button",
-                   .form_control_type = FormControlType::kInputRadio}}});
+                  {.label = u"address", .name = u"address"}}});
 
   // Make form 2 data.
   FormData form2 = test::GetFormData(
@@ -3366,7 +3296,7 @@ TEST_F(AutofillCrowdsourcingEncoding,
 
   const FieldSignature kFieldSignature =
       CalculateFieldSignatureForField(field1);
-  EXPECT_EQ(kFieldSignature, CalculateFieldSignatureForField(field2));
+  EXPECT_EQ(CalculateFieldSignatureForField(field2), kFieldSignature);
 
   FormData form;
   form.set_fields({field1, field2});
@@ -3426,8 +3356,8 @@ TEST_F(AutofillCrowdsourcingEncoding,
 
   const FieldSignature kFieldSignature =
       CalculateFieldSignatureForField(field1);
-  EXPECT_EQ(kFieldSignature, CalculateFieldSignatureForField(field2));
-  EXPECT_EQ(kFieldSignature, CalculateFieldSignatureForField(field3));
+  EXPECT_EQ(CalculateFieldSignatureForField(field2), kFieldSignature);
+  EXPECT_EQ(CalculateFieldSignatureForField(field3), kFieldSignature);
 
   FormData form;
   form.set_fields({field1, field2, field3});
@@ -3504,9 +3434,9 @@ TEST_F(AutofillCrowdsourcingEncoding,
 
   const FieldSignature kFieldSignature =
       CalculateFieldSignatureForField(field1);
-  EXPECT_EQ(kFieldSignature, CalculateFieldSignatureForField(field2));
-  EXPECT_EQ(kFieldSignature, CalculateFieldSignatureForField(field3));
-  EXPECT_EQ(kFieldSignature, CalculateFieldSignatureForField(field4));
+  EXPECT_EQ(CalculateFieldSignatureForField(field2), kFieldSignature);
+  EXPECT_EQ(CalculateFieldSignatureForField(field3), kFieldSignature);
+  EXPECT_EQ(CalculateFieldSignatureForField(field4), kFieldSignature);
 
   FormData form;
   form.set_fields({field1, field2, field3, field4});
@@ -3758,7 +3688,7 @@ TEST_F(AutofillCrowdsourcingEncoding,
   // Verify that the form fields remain intact because we could not parse the
   // server's response because it was badly serialized.
   ASSERT_GE(forms[0]->field_count(), 1U);
-  EXPECT_EQ(NAME_FULL, forms[0]->field(0)->server_type());
+  EXPECT_EQ(forms[0]->field(0)->server_type(), NAME_FULL);
 }
 
 // Tests parsing the server response when the payload is not base64 where we
@@ -3796,7 +3726,7 @@ TEST_F(AutofillCrowdsourcingEncoding, ParseQueryResponse_WhenPayloadNotBase64) {
   // Verify that the form fields remain intact because we could not parse the
   // server's response that was badly encoded.
   ASSERT_GE(forms[0]->field_count(), 1U);
-  EXPECT_EQ(NAME_FULL, forms[0]->field(0)->server_type());
+  EXPECT_EQ(forms[0]->field(0)->server_type(), NAME_FULL);
 }
 
 // Tests that predictions from small address fields are not removed when
@@ -3905,8 +3835,8 @@ TEST_F(AutofillCrowdsourcingEncoding,
       .OnLoadedServerPredictions(SerializeAndEncode(response),
                                  test::GetEncodedSignatures(forms), {form});
 
-  ASSERT_EQ(1U, forms.size());
-  ASSERT_EQ(4U, forms[0]->field_count());
+  ASSERT_EQ(forms.size(), 1U);
+  ASSERT_EQ(forms[0]->field_count(), 4U);
 
   // Only NAME_LAST should be affected by the flag.
   EXPECT_THAT(forms[0]->field(1)->Type().GetTypes(), ElementsAre(NAME_LAST));
@@ -3949,8 +3879,8 @@ TEST_F(AutofillCrowdsourcingEncoding, NoServerDataCCFields_CVC_NoOverwrite) {
       .OnLoadedServerPredictions(SerializeAndEncode(response),
                                  test::GetEncodedSignatures(forms), {form});
 
-  ASSERT_EQ(1U, forms.size());
-  ASSERT_EQ(4U, forms[0]->field_count());
+  ASSERT_EQ(forms.size(), 1U);
+  ASSERT_EQ(forms[0]->field_count(), 4U);
   EXPECT_THAT(forms[0]->field(0)->Type().GetTypes(),
               ElementsAre(CREDIT_CARD_NAME_FULL));
   EXPECT_THAT(forms[0]->field(1)->Type().GetTypes(),
@@ -3997,8 +3927,8 @@ TEST_F(AutofillCrowdsourcingEncoding, WithServerDataCCFields_CVC_NoOverwrite) {
       .OnLoadedServerPredictions(SerializeAndEncode(response),
                                  test::GetEncodedSignatures(forms), {form});
 
-  ASSERT_EQ(1U, forms.size());
-  ASSERT_EQ(4U, forms[0]->field_count());
+  ASSERT_EQ(forms.size(), 1U);
+  ASSERT_EQ(forms[0]->field_count(), 4U);
 
   // Regardless of the flag, the fields should not have been overwritten,
   // including the CVC field.

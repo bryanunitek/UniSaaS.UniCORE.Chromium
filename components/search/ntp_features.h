@@ -20,21 +20,35 @@ namespace ntp_features {
 // The features should be documented alongside the definition of their values in
 // the .cc file.
 
-BASE_DECLARE_FEATURE(kConfirmSuggestionRemovals);
 BASE_DECLARE_FEATURE(kCustomizeChromeSidePanelExtensionsCard);
 BASE_DECLARE_FEATURE(kCustomizeChromeWallpaperSearch);
 BASE_DECLARE_FEATURE(kCustomizeChromeWallpaperSearchButton);
 BASE_DECLARE_FEATURE(kCustomizeChromeWallpaperSearchInspirationCard);
+enum class EnergyEffectVariant {
+  // M149 / 12% shadow
+  kEnergyEffectOriginal = 0,
+  // Variant 1 (20% shadow)
+  kEnergyEffectDarkerShadow = 1,
+  // Variant 2 (reduced original shadow + darker border)
+  kPreEnergyEffectWithBorder = 2,
+  // Default / Launch (Fusebox shadow @ 16%)
+  kEnergyEffectFusebox = 3,
+};
+
 BASE_DECLARE_FEATURE(kEnergyEffect);
 BASE_DECLARE_FEATURE(kEnergyEffectAnimation);
 BASE_DECLARE_FEATURE(kRealboxCr23Theming);
 BASE_DECLARE_FEATURE(kRealboxMatchOmniboxTheme);
+BASE_DECLARE_FEATURE(kRealboxVirtualFocusNavigation);
 BASE_DECLARE_FEATURE(kNtpAlphaBackgroundCollections);
 BASE_DECLARE_FEATURE(kNtpAnimatedCaret);
 BASE_DECLARE_FEATURE(kNtpBackgroundImageErrorDetection);
 BASE_DECLARE_FEATURE(kNtpCalendarModule);
 BASE_DECLARE_FEATURE(kNtpChromeCartModule);
+BASE_DECLARE_FEATURE(kNtpComponentExtension);
+extern const base::FeatureParam<bool> kNtpComponentExtensionUseComponentUpdater;
 BASE_DECLARE_FEATURE(kNtpCustomizeChromeAutoOpen);
+BASE_DECLARE_FEATURE(kNtpCustomizeWebUiAndroid);
 BASE_DECLARE_FEATURE(kNtpDisableBrowserInitiatedLinks);
 BASE_DECLARE_FEATURE(kNtpDriveModule);
 BASE_DECLARE_FEATURE(kNtpDriveModuleHistorySyncRequirement);
@@ -44,16 +58,18 @@ BASE_DECLARE_FEATURE(kNtpDriveModuleSegmentation);
 BASE_DECLARE_FEATURE(kNtpDummyModules);
 #endif
 BASE_DECLARE_FEATURE(kNtpComprehensiveTheming);
+BASE_DECLARE_FEATURE(kNtpGoogleLogo26);
 BASE_DECLARE_FEATURE(kNtpLogo);
 BASE_DECLARE_FEATURE(kNtpMiddleSlotPromo);
-BASE_DECLARE_FEATURE(kNtpMiddleSlotPromoDismissal);
 BASE_DECLARE_FEATURE(kNtpModulesLoadTimeoutMilliseconds);
 BASE_DECLARE_FEATURE(kNtpModulesOrder);
-BASE_DECLARE_FEATURE(kNtpModulesDragAndDrop);
 BASE_DECLARE_FEATURE(kNtpModulesLoad);
 BASE_DECLARE_FEATURE(kNtpModuleSignInRequirement);
 BASE_DECLARE_FEATURE(kNtpOutlookCalendarModule);
 BASE_DECLARE_FEATURE(kNtpOneGoogleBar);
+BASE_DECLARE_FEATURE(kNtpScaledActionChips);
+BASE_DECLARE_FEATURE(kNtpScaledActionChipsSmall);
+BASE_DECLARE_FEATURE(kNtpActionChipsSuggestTimeout);
 BASE_DECLARE_FEATURE(kNtpSharepointModule);
 enum class NtpSharepointModuleDataType {
   kTrendingInsights,
@@ -63,6 +79,7 @@ enum class NtpSharepointModuleDataType {
   kCombinedSuggestions,
 };
 BASE_DECLARE_FEATURE(kNtpShortcuts);
+BASE_DECLARE_FEATURE(kNtpMostVisitedHighDpiFavicons);
 BASE_DECLARE_FEATURE(kNtpHandleMostVisitedNavigationExplicitly);
 BASE_DECLARE_FEATURE(kNtpMostRelevantTabResumptionModule);
 BASE_DECLARE_FEATURE(kNtpMostRelevantTabResumptionAllowFaviconServerFallback);
@@ -82,13 +99,15 @@ BASE_DECLARE_FEATURE(kNtpTabGroupsModule);
 BASE_DECLARE_FEATURE(kNtpTabGroupsModuleZeroState);
 BASE_DECLARE_FEATURE(kNtpFeatureOptimizationModuleRemoval);
 BASE_DECLARE_FEATURE(kNtpFeatureOptimizationShortcutsRemoval);
-BASE_DECLARE_FEATURE(kNtpFeatureOptimizationDismissModulesRemoval);
 BASE_DECLARE_FEATURE(kNtpAnimatedDoodles);
 BASE_DECLARE_FEATURE(kNtpDoodleMurals);
 BASE_DECLARE_FEATURE(kLightningTakeoverEdition);
 BASE_DECLARE_FEATURE(kNtpShortcutsRedesign);
 BASE_DECLARE_FEATURE(kNtpSimplificationBookmarkBar);
 BASE_DECLARE_FEATURE(kBookmarkBarUpdatesForTesting);
+BASE_DECLARE_FEATURE(kNtpThreadsRail);
+BASE_DECLARE_FEATURE(kNtpEnableInstantApiAndroid);
+BASE_DECLARE_FEATURE(kNtpShortcutsReorder);
 
 // Parameter for controlling the luminosity difference for NTP elements on light
 // backgrounds.
@@ -133,8 +152,6 @@ extern const char kNtpDriveModuleCacheMaxAgeSParam[];
 extern const char kNtpDriveModuleExperimentGroupParam[];
 // Parameter determining the type of calendar data to render.
 extern const char kNtpOutlookCalendarModuleDataParam[];
-// Parameter determining the type of middle slot promo data to render.
-extern const char kNtpMiddleSlotPromoDismissalParam[];
 // Parameter determining the modules that are eligigle for HaTS.
 extern const char kNtpModulesEligibleForHappinessTrackingSurveyParam[];
 // Parameter determining module trigger ids for HaTS for eligible module ids for
@@ -263,6 +280,17 @@ extern const base::FeatureParam<bool> kNtpNextDisablementParam;
 // added from an action chip.
 extern const base::FeatureParam<bool> kAddTabUploadDelayOnActionChipClick;
 
+// Parameter determining the maximum number of small action chips to show.
+extern const base::FeatureParam<int> kNtpMaxSmallChips;
+
+// Parameter determining if fallback action chips should be shown.
+// Used for local testing.
+extern const base::FeatureParam<bool> kNtpScaledActionChipsShowFallback;
+
+// Parameter determining the timeout for action chips suggestions requests.
+extern const base::FeatureParam<base::TimeDelta>
+    kNtpActionChipsSuggestTimeoutParam;
+
 // Parameter determining the minimum amount of time that must pass before
 // shortcuts staleness counters will be incremented.
 extern const base::FeatureParam<base::TimeDelta>
@@ -289,6 +317,11 @@ extern const base::FeatureParam<int> kBookmarkBarCountThreshold;
 // are updated.
 extern const base::FeatureParam<base::TimeDelta>
     kBookmarkBarMinStalenessTimeInterval;
+
+// Parameter determining whether the Threads Rail is shown in hybrid mode: the
+// folded state is rendered natively by Chrome, while the expanded state is
+// rendered by GWS.
+extern const base::FeatureParam<bool> kNtpThreadsRailHybridParam;
 
 // Returns the timeout after which the load of a module should be aborted.
 base::TimeDelta GetModulesLoadTimeout();
@@ -341,6 +374,8 @@ int GetMaxEnterpriseShortcuts();
 base::TimeDelta GetBookmarkBarMinStalenessTimeInterval();
 
 int GetBookmarkBarCountThreshold();
+
+extern const base::FeatureParam<EnergyEffectVariant> kEnergyEffectVariantParam;
 
 }  // namespace ntp_features
 

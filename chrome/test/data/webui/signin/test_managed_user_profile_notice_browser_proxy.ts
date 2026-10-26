@@ -17,6 +17,7 @@ export class TestManagedUserProfileNoticeBrowserProxy extends TestBrowserProxy
       'initializedWithSize',
       'proceed',
       'cancel',
+      'learnMoreClicked',
     ]);
 
     this.managedUserProfileInfo_ = info;
@@ -49,5 +50,9 @@ export class TestManagedUserProfileNoticeBrowserProxy extends TestBrowserProxy
 
   setMatchMediaMatches(matches: boolean): void {
     this.mediaQueryList_.matches = matches;
+  }
+
+  learnMoreClicked() {
+    this.methodCalled('learnMoreClicked');
   }
 }

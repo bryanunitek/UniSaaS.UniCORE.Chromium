@@ -18,7 +18,7 @@
 #include "ui/aura/window_observer.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/display/display.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/display/manager/managed_display_info.h"
@@ -122,8 +122,8 @@ void WallpaperView::SetLockShieldEnabled(bool enabled) {
     shield_view_ = new views::View();
     parent()->AddChildViewAt(shield_view_.get(), 0);
     shield_view_->SetPaintToLayer(ui::LAYER_SOLID_COLOR);
-    shield_view_->layer()->SetColor(SK_ColorBLACK);
-    shield_view_->layer()->SetName("WallpaperViewShield");
+    shield_view_->layer()->AsSolidColor()->SetColor(SkColors::kBlack);
+    shield_view_->layer()->SetName("WallpaperView:Shield");
     shield_view_->SetBoundsRect(parent()->GetLocalBounds());
     // Mark the layer transparent to make sure that the compositor will draw the
     // solid color even if the texture for the wallpaper is missing.  This will

@@ -449,17 +449,16 @@ static bool DisplayStateMediaFeatureEval(const MediaQueryExpValue& value,
 static bool ResizableMediaFeatureEval(const MediaQueryExpValue& value,
                                       MediaQueryOperator,
                                       const MediaValues& media_values) {
-  // No value = boolean context:
-  // https://w3c.github.io/csswg-drafts/mediaqueries/#mq-boolean-context
+  bool resizable = media_values.Resizable();
+
+  // No value = boolean context.
   if (!value.IsValid()) {
-    return true;
+    return resizable;
   }
 
   if (!value.IsId()) {
     return false;
   }
-
-  bool resizable = media_values.Resizable();
 
   return (resizable && value.Id() == CSSValueID::kTrue) ||
          (!resizable && value.Id() == CSSValueID::kFalse);
@@ -516,9 +515,12 @@ static bool DynamicRangeMediaFeatureEval(const MediaQueryExpValue& value,
   UseCounter::Count(media_values.GetDocument(),
                     WebFeature::kDynamicRangeMediaQuery);
 
-  if (!value.IsId()) {
-    return false;
+  // An invalid value is only possible in a boolean context with no value
+  // attached. We should treat no value as truthy.
+  if (!value.IsValid()) {
+    return true;
   }
+  CHECK(value.IsId());
 
   switch (value.Id()) {
     case CSSValueID::kStandard:
@@ -1128,23 +1130,13 @@ static bool ColorGamutMediaFeatureEval(const MediaQueryExpValue& value,
   ColorSpaceGamut gamut = media_values.ColorGamut();
 
   switch (gamut) {
-    case ColorSpaceGamut::kUnknown:
-    case ColorSpaceGamut::kLessThanNTSC:
-    case ColorSpaceGamut::NTSC:
     case ColorSpaceGamut::SRGB:
       return value.Id() == CSSValueID::kSRGB;
-    case ColorSpaceGamut::kAlmostP3:
     case ColorSpaceGamut::P3:
-    case ColorSpaceGamut::kAdobeRGB:
-    case ColorSpaceGamut::kWide:
       return value.Id() == CSSValueID::kSRGB || value.Id() == CSSValueID::kP3;
     case ColorSpaceGamut::BT2020:
-    case ColorSpaceGamut::kProPhoto:
-    case ColorSpaceGamut::kUltraWide:
       return value.Id() == CSSValueID::kSRGB || value.Id() == CSSValueID::kP3 ||
              value.Id() == CSSValueID::kRec2020;
-    case ColorSpaceGamut::kEnd:
-      NOTREACHED();
   }
 
   NOTREACHED();
@@ -1764,8 +1756,9 @@ unsigned ConversionFlagsToUnitFlags(
                           static_cast<Flags>(Flag::kGlyphRelative))) {
     unit_flags |= UnitFlags::kFontRelative;
   }
-  if (conversion_flags & (static_cast<Flags>(Flag::kRootFontRelative))) {
-    unit_flags |= UnitFlags::kRootFontRelative;
+  if (conversion_flags & (static_cast<Flags>(Flag::kRootFontRelative) |
+                          static_cast<Flags>(Flag::kRlhRelative))) {
+    unit_flags |= UnitFlags::kRootRelative;
   }
   if (conversion_flags & static_cast<Flags>(Flag::kDynamicViewport)) {
     unit_flags |= UnitFlags::kDynamicViewport;
@@ -1779,6 +1772,9 @@ unsigned ConversionFlagsToUnitFlags(
   }
   if (conversion_flags & static_cast<Flags>(Flag::kSiblingRelative)) {
     unit_flags |= UnitFlags::kTreeCounting;
+  }
+  if (conversion_flags & static_cast<Flags>(Flag::kLhRelative)) {
+    unit_flags |= UnitFlags::kLineHeightRelative;
   }
 
   return unit_flags;
@@ -1807,8 +1803,12 @@ KleeneValue MediaQueryEvaluator::EvalStyleFeature(
 
     StyleResolverState state(*document, *container);
     state.CreateNewClonedStyle(container->ComputedStyleRef());
+    state.UpdateLineHeight();
     const auto* context = MakeGarbageCollected<CSSParserContext>(*document);
 
+    if (feature.ReferenceValue().HasRandomFunctions()) {
+      return KleeneValue::kUnknown;
+    }
     const CSSValue* reference = StyleCascade::CoerceIntoNumericValue(
         state, feature.ReferenceValue(), document, *context);
     if (!reference) {
@@ -1820,6 +1820,9 @@ KleeneValue MediaQueryEvaluator::EvalStyleFeature(
           DynamicTo<CSSUnparsedDeclarationValue>(
               bounds.left.value.GetCSSValue());
       DCHECK(left);
+      if (left->HasRandomFunctions()) {
+        return KleeneValue::kUnknown;
+      }
       const CSSValue* left_resolved = StyleCascade::CoerceIntoNumericValue(
           state, *left, document, *context);
       if (!left_resolved) {
@@ -1835,6 +1838,9 @@ KleeneValue MediaQueryEvaluator::EvalStyleFeature(
           DynamicTo<CSSUnparsedDeclarationValue>(
               bounds.right.value.GetCSSValue());
       DCHECK(right);
+      if (right->HasRandomFunctions()) {
+        return KleeneValue::kUnknown;
+      }
       const CSSValue* right_resolved = StyleCascade::CoerceIntoNumericValue(
           state, *right, document, *context);
       if (!right_resolved) {
@@ -1868,6 +1874,10 @@ KleeneValue MediaQueryEvaluator::EvalStyleFeature(
                                         ? bounds.right.value.GetCSSValue()
                                         : *CSSInitialValue::Create();
 
+  if (query_specified.HasRandomFunctions()) {
+    return KleeneValue::kUnknown;
+  }
+
   // https://drafts.csswg.org/css-conditional-5/#style-container
   // https://drafts.csswg.org/css-cascade-5/#cascade-dependent-keyword
   if (query_specified.IsCascadeDependentKeyword()) {
@@ -1875,9 +1885,14 @@ KleeneValue MediaQueryEvaluator::EvalStyleFeature(
   }
 
   CSSToLengthConversionData::Flags conversion_flags = 0;
-  const CSSValue* query_value =
-      StyleResolver::ComputeValue(container, CSSPropertyName(property_name),
-                                  query_specified, conversion_flags);
+  bool has_random = false;
+  const CSSValue* query_value = StyleResolver::ComputeValue(
+      container, CSSPropertyName(property_name), query_specified,
+      conversion_flags, has_random);
+
+  if (has_random) {
+    return KleeneValue::kUnknown;
+  }
 
   if (const auto* decl_value =
           DynamicTo<CSSUnparsedDeclarationValue>(query_value)) {
@@ -1885,6 +1900,9 @@ KleeneValue MediaQueryEvaluator::EvalStyleFeature(
         decl_value ? decl_value->VariableDataValue() : nullptr;
     CSSVariableData* computed =
         container->ComputedStyleRef().GetVariableData(property_name);
+    if (computed && computed->HasRandomFunctions()) {
+      return KleeneValue::kUnknown;
+    }
 
     if (computed == query_computed ||
         (computed && query_computed &&

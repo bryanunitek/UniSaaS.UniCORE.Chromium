@@ -8,35 +8,29 @@
 #include <string>
 
 #include "chrome/browser/apps/link_capturing/link_capturing_feature_test_support.h"
-#include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/views/location_bar/intent_chip_button.h"
-#include "chrome/browser/ui/views/page_action/page_action_view.h"
-#include "ui/views/controls/button/button.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_accessor.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 class IntentChipButtonTestBase {
  public:
   virtual ~IntentChipButtonTestBase() = default;
 
   // Checks if the intent chip is fully collapsed.
-  bool IsIntentChipFullyCollapsed(Browser* browser);
+  bool IsIntentChipFullyCollapsed(BrowserWindowInterface* browser);
 
-  // Gets the intent chip button.
-  views::Button* GetIntentChip(Browser* browser);
+  // Gets the intent chip accessor.
+  page_actions::PageActionTestAccessor GetIntentChip(
+      BrowserWindowInterface* browser) const;
 
   // Check if the intent picker chip is done animating
   testing::AssertionResult WaitForPageActionButtonVisible(
-      Browser* browser) const;
+      BrowserWindowInterface* browser) const;
 
   // Function to generate test names for IntentChipButton tests.
   static std::string GenerateIntentChipTestName(
-      const testing::TestParamInfo<
-          std::tuple<apps::test::LinkCapturingFeatureVersion, bool>>&
+      const testing::TestParamInfo<apps::test::LinkCapturingFeatureVersion>&
           param_info);
-
-  // To check if migration has been enabled for page actions
-  bool IsMigrationEnabled() const;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_INTENT_CHIP_BUTTON_TEST_BASE_H_

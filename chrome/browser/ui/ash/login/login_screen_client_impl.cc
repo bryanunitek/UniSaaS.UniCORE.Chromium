@@ -25,11 +25,10 @@
 #include "chrome/browser/ash/child_accounts/parent_access_code/parent_access_service.h"
 #include "chrome/browser/ash/login/existing_user_controller.h"
 #include "chrome/browser/ash/login/help_app_launcher.h"
-#include "chrome/browser/ash/login/lock/screen_locker.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/ash/login/login_auth_recorder.h"
 #include "chrome/browser/ash/login/reauth_stats.h"
 #include "chrome/browser/ash/login/startup_utils.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/login/login_display_host_webui.h"
@@ -62,7 +61,7 @@ LoginScreenClientImpl::LoginScreenClientImpl(PrefService* local_state)
   // Register this object as the client interface implementation.
   ash::LoginScreen::Get()->SetClient(this);
 
-  DCHECK(!g_login_screen_client_instance);
+  CHECK(!g_login_screen_client_instance, base::NotFatalUntil::M162);
   g_login_screen_client_instance = this;
 
   if (user_manager::UserManager::IsInitialized()) {
@@ -79,7 +78,7 @@ LoginScreenClientImpl::~LoginScreenClientImpl() {
     CHECK_IS_TEST();
   }
   ash::LoginScreen::Get()->SetClient(nullptr);
-  DCHECK_EQ(this, g_login_screen_client_instance);
+  CHECK_EQ(this, g_login_screen_client_instance, base::NotFatalUntil::M162);
   g_login_screen_client_instance = nullptr;
 }
 
@@ -90,7 +89,7 @@ bool LoginScreenClientImpl::HasInstance() {
 
 // static
 LoginScreenClientImpl* LoginScreenClientImpl::Get() {
-  DCHECK(g_login_screen_client_instance);
+  CHECK(g_login_screen_client_instance, base::NotFatalUntil::M162);
   return g_login_screen_client_instance;
 }
 
@@ -350,7 +349,8 @@ void LoginScreenClientImpl::CancelAddUser() {
 }
 
 void LoginScreenClientImpl::LoginAsGuest() {
-  DCHECK(!ash::ScreenLocker::default_screen_locker());
+  CHECK(!ash::ScreenLockerController::Get().screen_locker(),
+        base::NotFatalUntil::M162);
   if (ash::LoginDisplayHost::default_host()) {
     ash::LoginDisplayHost::default_host()->GetExistingUserController()->Login(
         ash::UserContext(user_manager::UserType::kGuest,

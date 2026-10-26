@@ -167,6 +167,11 @@ class AppListControllerImplTest : public AshTestBase {
 
   ~AppListControllerImplTest() override = default;
 
+  void SetUpInitParams(AshTestHelper::InitParams& init_params) override {
+    AshTestBase::SetUpInitParams(init_params);
+    init_params.add_default_shelf_icon = false;
+  }
+
   void SetUp() override {
     AshTestBase::SetUp();
     shelf_item_factory_ = std::make_unique<ShelfItemFactoryFake>();
@@ -371,6 +376,7 @@ TEST_F(AppListControllerImplTest, PageResetByTimerInTabletMode) {
   // Once the app list is closed, the page should be reset when the timer is
   // skipped.
   EXPECT_EQ(0, apps_grid_view->pagination_model()->selected_page());
+  GetAppListView()->SetSkipPageResetTimerForTesting(false);
 }
 
 TEST_F(AppListControllerImplTest, PagePersistanceTabletModeTest) {

@@ -35,9 +35,7 @@ source_set("lib") {
     "//components/payments/content/android",
     "//components/safe_browsing/android:safe_browsing_api_handler",
     "//components/sampling_profiler:profile_params",
-    "//components/services/heap_profiling/public/cpp",
     "//components/spellcheck:buildflags",
-    "//components/stylus_handwriting/android",
     "//components/variations",
     "//components/variations:variations_associated_data",
     "//components/version_info",
@@ -69,6 +67,7 @@ source_set("webview_entry_point") {
     "//android_webview",
     "//base",
     "//base:jni_onload",
+    "//build:is_android_web_view",
   ]
 
   sources = [ "webview_entry_point.cc" ]

@@ -273,6 +273,7 @@ public class DownloadActivityV2Test {
                         mTracker,
                         faviconProvider,
                         mStubbedOfflineContentProvider,
+                        /* openWithHandler= */ null,
                         mDiscardableReferencePool);
         sActivity.setContentView(mDownloadCoordinator.getView());
         BackPressHelper.create(
@@ -419,6 +420,7 @@ public class DownloadActivityV2Test {
 
     @Test
     @MediumTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/571584010
     public void testAddRemoveItems() throws Exception {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {

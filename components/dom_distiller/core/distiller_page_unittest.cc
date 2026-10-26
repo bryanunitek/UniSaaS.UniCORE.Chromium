@@ -12,11 +12,13 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
+#include "components/dom_distiller/core/distiller_options.h"
 #include "components/dom_distiller/core/dom_distiller_constants.h"
 #include "components/dom_distiller/core/dom_distiller_features.h"
 #include "components/dom_distiller/core/extraction_utils.h"
+#include "components/dom_distiller/core/proto/distilled_page.pb.h"
+#include "components/dom_distiller/core/readability_options.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/dom_distiller_js/dom_distiller.pb.h"
 #include "url/gurl.h"
 
 namespace dom_distiller {
@@ -43,7 +45,7 @@ class TestDistillerPage : public DistillerPage {
   };
 
   TestDistillerPage() {
-    SetMinimumAllowableDistilledContentLengthForTesting(0);
+    SetMinimumAllowableDistilledContentLength(0);
   }
 
   // Configures the mock to simulate a specific result.
@@ -53,12 +55,6 @@ class TestDistillerPage : public DistillerPage {
   void SetNextResultValue(std::optional<base::Value> val) {
     simulate_result_ = SimulatedResult::kCustomResult;
     simulate_result_val_ = std::move(val);
-  }
-
-  bool ShouldFetchOfflineData() override { return false; }
-
-  DistillerType GetDistillerType() override {
-    return DistillerType::kReadability;
   }
 
   // The overridden implementation now simulates one of three outcomes based on
@@ -117,8 +113,7 @@ TEST_F(DistillerPageTest, RecordsSuccessMetric) {
   distiller_page.SetNextResult(TestDistillerPage::SimulatedResult::kSuccess);
 
   distiller_page.DistillPage(GURL("http://example.com/success"),
-                             dom_distiller::proto::DomDistillerOptions(),
-                             base::DoNothing());
+                             DistillerOptions(), base::DoNothing());
 
   // Check that the UMA metric was recorded with the correct enum value.
   histogram_tester_.ExpectUniqueSample("DomDistiller.Distillation.Result",
@@ -132,8 +127,7 @@ TEST_F(DistillerPageTest, RecordsParseFailureMetric) {
       TestDistillerPage::SimulatedResult::kParseFailure);
 
   distiller_page.DistillPage(GURL("http://example.com/failure"),
-                             dom_distiller::proto::DomDistillerOptions(),
-                             base::DoNothing());
+                             DistillerOptions(), base::DoNothing());
 
   histogram_tester_.ExpectUniqueSample("DomDistiller.Distillation.Result",
                                        DistillationParseResult::kParseFailure,
@@ -146,8 +140,7 @@ TEST_F(DistillerPageTest, RecordsNoResultMetric) {
   distiller_page.SetNextResult(TestDistillerPage::SimulatedResult::kNoResult);
 
   distiller_page.DistillPage(GURL("http://example.com/no-result"),
-                             dom_distiller::proto::DomDistillerOptions(),
-                             base::DoNothing());
+                             DistillerOptions(), base::DoNothing());
 
   histogram_tester_.ExpectUniqueSample("DomDistiller.Distillation.Result",
                                        DistillationParseResult::kNoData, 1);
@@ -159,23 +152,24 @@ TEST_F(DistillerPageTest, RecordsNullResultMetric) {
   distiller_page.SetNextResult(TestDistillerPage::SimulatedResult::kNullResult);
 
   distiller_page.DistillPage(GURL("http://example.com/null-result"),
-                             dom_distiller::proto::DomDistillerOptions(),
-                             base::DoNothing());
+                             DistillerOptions(), base::DoNothing());
 
   histogram_tester_.ExpectUniqueSample("DomDistiller.Distillation.Result",
                                        DistillationParseResult::kNoData, 1);
 }
 
-// Asserts the fields exist in the DomDistillerResult.
-void AssertCorrectDomDistillerResult(proto::DomDistillerResult& result,
+// Asserts the fields exist in the DistilledPageProto.
+void AssertCorrectDistilledPageProto(const DistilledPageProto& result,
                                      const std::string& title,
                                      const std::string& content,
+                                     const std::string& text_content,
                                      const std::string& dir,
                                      const int word_count) {
   ASSERT_EQ(title, result.title());
-  ASSERT_EQ(content, result.distilled_content().html());
+  ASSERT_EQ(content, result.html());
+  ASSERT_EQ(text_content, result.text_content());
   ASSERT_EQ(dir, result.text_direction());
-  ASSERT_EQ(word_count, result.statistics_info().word_count());
+  ASSERT_EQ(word_count, result.word_count());
 }
 
 TEST_F(DistillerPageTest, ReadabilityObjectIsExtracted) {
@@ -195,19 +189,18 @@ TEST_F(DistillerPageTest, ReadabilityObjectIsExtracted) {
   base::RunLoop run_loop;
   DistillerPage::DistillerPageCallback cb =
       base::BindOnce(
-          [](std::string title, std::string content, std::string dir,
-             int word_count,
-             std::unique_ptr<proto::DomDistillerResult> distilled_page,
+          [](std::string title, std::string content, std::string text_content,
+             std::string dir, int word_count,
+             std::unique_ptr<DistilledPageProto> distilled_page,
              DistillationParseResult result) {
             EXPECT_EQ(DistillationParseResult::kSuccess, result);
-            AssertCorrectDomDistillerResult(*distilled_page.get(), title,
-                                            content, dir, 10);
+            AssertCorrectDistilledPageProto(*distilled_page, title, content,
+                                            text_content, dir, 10);
           },
-          title, content, dir, 10)
+          title, content, text_content, dir, 10)
           .Then(run_loop.QuitClosure());
   distiller_page.DistillPage(GURL("http://example.com/success"),
-                             dom_distiller::proto::DomDistillerOptions(),
-                             std::move(cb));
+                             DistillerOptions(), std::move(cb));
   run_loop.Run();
   histogram_tester_.ExpectUniqueSample("DomDistiller.Distillation.Result",
                                        DistillationParseResult::kSuccess, 1);
@@ -230,19 +223,18 @@ TEST_F(DistillerPageTest,
   base::RunLoop run_loop;
   DistillerPage::DistillerPageCallback cb =
       base::BindOnce(
-          [](std::string title, std::string content, std::string dir,
-             int word_count,
-             std::unique_ptr<proto::DomDistillerResult> distilled_page,
+          [](std::string title, std::string content, std::string text_content,
+             std::string dir, int word_count,
+             std::unique_ptr<DistilledPageProto> distilled_page,
              DistillationParseResult result) {
             EXPECT_EQ(DistillationParseResult::kSuccess, result);
-            AssertCorrectDomDistillerResult(*distilled_page.get(), title,
-                                            content, dir, 10);
+            AssertCorrectDistilledPageProto(*distilled_page, title, content,
+                                            text_content, dir, 10);
           },
-          title, content, dir, 10)
+          title, content, text_content, dir, 10)
           .Then(run_loop.QuitClosure());
   distiller_page.DistillPage(GURL("http://example.com/success"),
-                             dom_distiller::proto::DomDistillerOptions(),
-                             std::move(cb));
+                             DistillerOptions(), std::move(cb));
   run_loop.Run();
   histogram_tester_.ExpectUniqueSample("DomDistiller.Distillation.Result",
                                        DistillationParseResult::kSuccess, 1);
@@ -255,15 +247,12 @@ TEST_F(DistillerPageTest, ReadabilityObjectIsExtracted_FailureWhenNotDict) {
 
   base::RunLoop run_loop;
   DistillerPage::DistillerPageCallback cb =
-      base::BindOnce(
-          [](std::unique_ptr<proto::DomDistillerResult> distilled_page,
-             DistillationParseResult result) {
-            EXPECT_EQ(DistillationParseResult::kParseFailure, result);
-          })
-          .Then(run_loop.QuitClosure());
+      base::BindOnce([](std::unique_ptr<DistilledPageProto> distilled_page,
+                        DistillationParseResult result) {
+        EXPECT_EQ(DistillationParseResult::kParseFailure, result);
+      }).Then(run_loop.QuitClosure());
   distiller_page.DistillPage(GURL("http://example.com/success"),
-                             dom_distiller::proto::DomDistillerOptions(),
-                             std::move(cb));
+                             DistillerOptions(), std::move(cb));
   run_loop.Run();
 
   histogram_tester_.ExpectUniqueSample("DomDistiller.Distillation.Result",
@@ -284,29 +273,77 @@ TEST_F(DistillerPageTest, DistillationFailsWhenMinContentLengthNotMet) {
       "one two; three. four!  fivefive six, seven, eight nine ten";
   readability_result.Set(kReadabilityTextContent, text_content);
   TestDistillerPage distiller_page;
-  distiller_page.SetMinimumAllowableDistilledContentLengthForTesting(1000);
+  distiller_page.SetMinimumAllowableDistilledContentLength(1000);
   distiller_page.SetNextResultValue(base::Value(std::move(readability_result)));
 
   base::RunLoop run_loop;
   DistillerPage::DistillerPageCallback cb =
       base::BindOnce(
           [](std::string title, std::string content, std::string dir,
-             int word_count,
-             std::unique_ptr<proto::DomDistillerResult> distilled_page,
+             int word_count, std::unique_ptr<DistilledPageProto> distilled_page,
              DistillationParseResult result) {
             EXPECT_EQ(DistillationParseResult::kContentTooShort, result);
           },
           title, content, dir, 10)
           .Then(run_loop.QuitClosure());
   distiller_page.DistillPage(GURL("http://example.com/success"),
-                             dom_distiller::proto::DomDistillerOptions(),
-                             std::move(cb));
+                             DistillerOptions(), std::move(cb));
   run_loop.Run();
   histogram_tester_.ExpectUniqueSample(
       "DomDistiller.Distillation.Result",
       DistillationParseResult::kContentTooShort, 1);
 }
+
+TEST_F(DistillerPageTest,
+       DistillationSucceedsWhenCustomLowerMinContentLengthMet) {
+  base::DictValue readability_result;
+  const std::string title = "test_title";
+  readability_result.Set(kReadabilityTitle, title);
+  const std::string content = "test content";
+  readability_result.Set(kReadabilityContent, content);
+  const std::string dir = "ltr";
+  readability_result.Set(kReadabilityDir, dir);
+  const std::string text_content =
+      "one two; three. four!  fivefive six, seven, eight nine ten";
+  readability_result.Set(kReadabilityTextContent, text_content);
+
+  // Use a threshold (10 words) lower than the 100-word Android default and
+  // verify that a 10-word article succeeds.
+  TestDistillerPage distiller_page;
+  distiller_page.SetMinimumAllowableDistilledContentLength(10);
+  distiller_page.SetNextResultValue(base::Value(std::move(readability_result)));
+
+  base::RunLoop run_loop;
+  DistillerPage::DistillerPageCallback cb =
+      base::BindOnce(
+          [](std::string title, std::string content, std::string text_content,
+             std::string dir, int word_count,
+             std::unique_ptr<DistilledPageProto> distilled_page,
+             DistillationParseResult result) {
+            EXPECT_EQ(DistillationParseResult::kSuccess, result);
+            AssertCorrectDistilledPageProto(*distilled_page, title, content,
+                                            text_content, dir, word_count);
+          },
+          title, content, text_content, dir, 10)
+          .Then(run_loop.QuitClosure());
+  distiller_page.DistillPage(GURL("http://example.com/success"),
+                             DistillerOptions(), std::move(cb));
+  run_loop.Run();
+  histogram_tester_.ExpectUniqueSample("DomDistiller.Distillation.Result",
+                                       DistillationParseResult::kSuccess, 1);
+}
 #endif
+
+// Test that the readability script options are injected correctly.
+TEST_F(DistillerPageTest, ReadabilityScriptOptionsHandling) {
+  ReadabilityOptions custom_options;
+  std::string default_script = GetReadabilityDistillerScript(custom_options);
+  EXPECT_NE(std::string::npos, default_script.find("})(undefined);"));
+
+  custom_options.allowed_video_regex = "youtube|vimeo";
+  std::string custom_script = GetReadabilityDistillerScript(custom_options);
+  EXPECT_NE(std::string::npos, custom_script.find("})(\"youtube|vimeo\");"));
+}
 
 }  // namespace
 

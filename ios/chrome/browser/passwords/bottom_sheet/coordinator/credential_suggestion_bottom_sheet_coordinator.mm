@@ -27,12 +27,14 @@
 #import "ios/chrome/browser/passwords/bottom_sheet/ui/credential_suggestion_bottom_sheet_view_controller.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_account_password_store_factory.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_profile_password_store_factory.h"
-#import "ios/chrome/browser/passwords/model/password_controller_delegate.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
+#import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/tips_manager/model/tips_manager_ios.h"
 #import "ios/chrome/browser/tips_manager/model/tips_manager_ios_factory.h"
 #import "ios/chrome/browser/welcome_back/model/features.h"
@@ -53,9 +55,6 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
 @end
 
 @implementation CredentialSuggestionBottomSheetCoordinator {
-  // The password controller delegate used to open the password manager.
-  __weak id<PasswordControllerDelegate> _passwordControllerDelegate;
-
   // Currently in the process of dismissing the bottom sheet.
   bool _dismissing;
 
@@ -72,29 +71,25 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
   std::optional<webauthn::IOSPasskeyClient::RequestInfo> _requestInfo;
 }
 
-- (instancetype)
-    initWithBaseViewController:(UIViewController*)viewController
-                       browser:(Browser*)browser
-                        params:(const autofill::FormActivityParams&)params
-                      delegate:(id<PasswordControllerDelegate>)delegate {
+- (instancetype)initWithBaseViewController:(UIViewController*)viewController
+                                   browser:(Browser*)browser
+                                    params:(const autofill::FormActivityParams&)
+                                               params {
   self = [super initWithBaseViewController:viewController browser:browser];
   if (self) {
-    _passwordControllerDelegate = delegate;
     _dismissing = NO;
     _params = params;
   }
   return self;
 }
 
-- (instancetype)
-    initWithBaseViewController:(UIViewController*)viewController
-                       browser:(Browser*)browser
-                   requestInfo:
-                       (webauthn::IOSPasskeyClient::RequestInfo)requestInfo
-                      delegate:(id<PasswordControllerDelegate>)delegate {
+- (instancetype)initWithBaseViewController:(UIViewController*)viewController
+                                   browser:(Browser*)browser
+                               requestInfo:
+                                   (webauthn::IOSPasskeyClient::RequestInfo)
+                                       requestInfo {
   self = [super initWithBaseViewController:viewController browser:browser];
   if (self) {
-    _passwordControllerDelegate = delegate;
     _dismissing = NO;
     _requestInfo = std::move(requestInfo);
   }
@@ -106,7 +101,7 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
 - (void)start {
   if (!_params.has_value() && !_requestInfo.has_value()) {
     // Cleanup the coordinator if it couldn't be started.
-    [self.browserCoordinatorCommandsHandler dismissPasswordSuggestions];
+    [self dismissPasswordSuggestions];
     // Do not add any logic past this point in this specific context since the
     // the coordinator was torn down at this point hence now unusable.
     return;
@@ -171,8 +166,10 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
   // If the bottom sheet has no suggestion to show, stop the presentation right
   // away.
   if (![_mediator hasSuggestions]) {
+    // If there is an active passkey request, defer it to the renderer.
+    [_mediator deferPasskeyRequestToRenderer];
     // Cleanup the coordinator if it couldn't be started.
-    [self.browserCoordinatorCommandsHandler dismissPasswordSuggestions];
+    [self dismissPasswordSuggestions];
     // Do not add any logic past this point in this specific context since the
     // the coordinator was torn down at this point hence now unusable.
     return;
@@ -200,10 +197,11 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
   // coordinator should be in the most up to date state where it can be safely
   // stopped.
 
-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(^{
+  ExecuteWhenTransitionsComplete(
+      ^{
         [weakSelf verifyPresentation];
-      }));
+      },
+      self.baseViewController);
 }
 
 - (void)stop {
@@ -225,9 +223,8 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
   [_navigationController.presentingViewController
       dismissViewControllerAnimated:NO
                          completion:^{
-                           [weakSelf displaySavedPasswordList];
-                           [weakSelf.browserCoordinatorCommandsHandler
-                                   dismissPasswordSuggestions];
+                           [weakSelf showSavedPasswordsSettings];
+                           [weakSelf dismissPasswordSuggestions];
                          }];
 }
 
@@ -235,15 +232,9 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
     (FormSuggestion*)formSuggestion {
   _dismissing = YES;
 
-  CredentialSuggestionBottomSheetMediator*
-      credentialSuggestionBottomSheetMediator =
-          base::apple::ObjCCastStrict<CredentialSuggestionBottomSheetMediator>(
-              _mediator);
-
-  [credentialSuggestionBottomSheetMediator logExitReason:kShowPasswordDetails];
+  [_mediator logExitReason:kShowPasswordDetails];
   std::optional<password_manager::CredentialUIEntry> credential =
-      [credentialSuggestionBottomSheetMediator
-          getCredentialForFormSuggestion:formSuggestion];
+      [_mediator getCredentialForFormSuggestion:formSuggestion];
 
   __weak __typeof(self) weakSelf = self;
   [_navigationController.presentingViewController
@@ -257,8 +248,7 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
                            base::UmaHistogramBoolean("IOS.PasswordBottomSheet."
                                                      "Details.ValidCredential",
                                                      credential.has_value());
-                           [weakSelf.browserCoordinatorCommandsHandler
-                                   dismissPasswordSuggestions];
+                           [weakSelf dismissPasswordSuggestions];
                          }];
 }
 
@@ -286,8 +276,7 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
       [weakSelf.navigationController.presentingViewController
           dismissViewControllerAnimated:YES
                              completion:^{
-                               [weakSelf.browserCoordinatorCommandsHandler
-                                       dismissPasswordSuggestions];
+                               [weakSelf dismissPasswordSuggestions];
                              }];
     };
     [self didSelectSuggestion:formSuggestion
@@ -295,7 +284,7 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
                    completion:completion];
   } else {
     ProceduralBlock completion = ^{
-      [weakSelf.browserCoordinatorCommandsHandler dismissPasswordSuggestions];
+      [weakSelf dismissPasswordSuggestions];
     };
     [_navigationController.presentingViewController
         dismissViewControllerAnimated:YES
@@ -359,7 +348,7 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
   // Disconnect as a last step of cleaning up the presentation. This should
   // always be kept as the last step.
   [_mediator disconnect];
-  [self.browserCoordinatorCommandsHandler dismissPasswordSuggestions];
+  [self dismissPasswordSuggestions];
 }
 
 #pragma mark - CredentialSuggestionBottomSheetPresenter
@@ -391,13 +380,21 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
 
 #pragma mark - Private
 
+// Returns the handler for settings commands.
+- (id<SettingsCommands>)settingsHandler {
+  return HandlerForProtocol(self.browser->GetCommandDispatcher(),
+                            SettingsCommands);
+}
+
 - (void)setInitialVoiceOverFocus {
   UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification,
                                   _viewController.aboveTitleView);
 }
 
-- (void)displaySavedPasswordList {
-  [_passwordControllerDelegate displaySavedPasswordList];
+// Opens the list of saved passwords in the settings.
+- (void)showSavedPasswordsSettings {
+  [[self settingsHandler]
+      showSavedPasswordsSettingsFromViewController:self.baseViewController];
 }
 
 // Sends the information about which suggestion from the bottom sheet was
@@ -410,9 +407,11 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
                       completion:completion];
 }
 
+// Opens the password details for `credential`.
 - (void)showPasswordDetailsForCredential:
     (password_manager::CredentialUIEntry)credential {
-  [_passwordControllerDelegate showPasswordDetailsForCredential:credential];
+  [[self settingsHandler] showPasswordDetailsForCredential:std::move(credential)
+                                                inEditMode:NO];
 }
 
 // Dismisses the soft keyboard. Make sure to only call this when there is an
@@ -432,8 +431,16 @@ using PasswordSuggestionBottomSheetExitReason::kUsePasswordSuggestion;
   if (!_navigationController.presentingViewController &&
       !_navigationController.beingPresented) {
     [_mediator logExitReason:kCouldNotPresent];
-    [self.browserCoordinatorCommandsHandler dismissPasswordSuggestions];
+    [_mediator deferPasskeyRequestToRenderer];
+    [self dismissPasswordSuggestions];
   }
+}
+
+// Dismisses the password suggestions bottom sheet.
+- (void)dismissPasswordSuggestions {
+  id<BrowserCoordinatorCommands> browserCoordinatorHandler = HandlerForProtocol(
+      self.browser->GetCommandDispatcher(), BrowserCoordinatorCommands);
+  [browserCoordinatorHandler dismissPasswordSuggestions];
 }
 
 @end

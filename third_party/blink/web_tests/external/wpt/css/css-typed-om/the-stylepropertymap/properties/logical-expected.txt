@@ -1,5 +1,5 @@
 This is a testharness.js-based test.
-Found 216 FAIL, 0 TIMEOUT, 0 NOTRUN.
+Found 176 FAIL, 0 TIMEOUT, 0 NOTRUN.
 [FAIL] Can set 'margin-block' to CSS-wide keywords: initial
   assert_equals: expected "CSSKeywordValue" but got "CSSStyleValue"
 [FAIL] Can set 'margin-block' to CSS-wide keywords: inherit
@@ -52,14 +52,6 @@ Found 216 FAIL, 0 TIMEOUT, 0 NOTRUN.
   Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
 [FAIL] Can set 'margin-inline' to a length: calc(0px + 0em)
   Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'padding-block-start' to a percent: -3.14%
-  assert_approx_equals: expected 0 +/- 0.00001 but got -3.140000104904175
-[FAIL] Can set 'padding-block-end' to a percent: -3.14%
-  assert_approx_equals: expected 0 +/- 0.00001 but got -3.140000104904175
-[FAIL] Can set 'padding-inline-start' to a percent: -3.14%
-  assert_approx_equals: expected 0 +/- 0.00001 but got -3.140000104904175
-[FAIL] Can set 'padding-inline-end' to a percent: -3.14%
-  assert_approx_equals: expected 0 +/- 0.00001 but got -3.140000104904175
 [FAIL] Can set 'padding-block' to CSS-wide keywords: initial
   assert_equals: expected "CSSKeywordValue" but got "CSSStyleValue"
 [FAIL] Can set 'padding-block' to CSS-wide keywords: inherit
@@ -176,26 +168,8 @@ Found 216 FAIL, 0 TIMEOUT, 0 NOTRUN.
   assert_equals: expected "CSSUnparsedValue" but got "CSSStyleValue"
 [FAIL] Can set 'border-block-start' to the 'none' keyword: none
   Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-start-width' to the 'thin' keyword: thin
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-start-width' to the 'medium' keyword: medium
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-start-width' to the 'thick' keyword: thick
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-start-width' to a length: 0px
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-start-width' to a length: -3.14em
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-start-width' to a length: 3.14cm
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-start-width' to a length: calc(0px + 0em)
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
 [FAIL] Can set 'border-block-start-color' to the 'currentcolor' keyword: currentcolor
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-start-style' to the 'none' keyword: none
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-start-style' to the 'solid' keyword: solid
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
+  assert_equals: expected "CSSKeywordValue" but got "CSSStyleValue"
 [FAIL] Can set 'border-block-end' to CSS-wide keywords: initial
   assert_equals: expected "CSSKeywordValue" but got "CSSStyleValue"
 [FAIL] Can set 'border-block-end' to CSS-wide keywords: inherit
@@ -208,26 +182,8 @@ Found 216 FAIL, 0 TIMEOUT, 0 NOTRUN.
   assert_equals: expected "CSSUnparsedValue" but got "CSSStyleValue"
 [FAIL] Can set 'border-block-end' to the 'none' keyword: none
   Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-end-width' to the 'thin' keyword: thin
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-end-width' to the 'medium' keyword: medium
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-end-width' to the 'thick' keyword: thick
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-end-width' to a length: 0px
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-end-width' to a length: -3.14em
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-end-width' to a length: 3.14cm
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-end-width' to a length: calc(0px + 0em)
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
 [FAIL] Can set 'border-block-end-color' to the 'currentcolor' keyword: currentcolor
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-end-style' to the 'none' keyword: none
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-block-end-style' to the 'solid' keyword: solid
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
+  assert_equals: expected "CSSKeywordValue" but got "CSSStyleValue"
 [FAIL] Can set 'border-inline-start' to CSS-wide keywords: initial
   assert_equals: expected "CSSKeywordValue" but got "CSSStyleValue"
 [FAIL] Can set 'border-inline-start' to CSS-wide keywords: inherit
@@ -240,26 +196,8 @@ Found 216 FAIL, 0 TIMEOUT, 0 NOTRUN.
   assert_equals: expected "CSSUnparsedValue" but got "CSSStyleValue"
 [FAIL] Can set 'border-inline-start' to the 'none' keyword: none
   Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-start-width' to the 'thin' keyword: thin
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-start-width' to the 'medium' keyword: medium
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-start-width' to the 'thick' keyword: thick
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-start-width' to a length: 0px
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-start-width' to a length: -3.14em
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-start-width' to a length: 3.14cm
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-start-width' to a length: calc(0px + 0em)
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
 [FAIL] Can set 'border-inline-start-color' to the 'currentcolor' keyword: currentcolor
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-start-style' to the 'none' keyword: none
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-start-style' to the 'solid' keyword: solid
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
+  assert_equals: expected "CSSKeywordValue" but got "CSSStyleValue"
 [FAIL] Can set 'border-inline-end' to CSS-wide keywords: initial
   assert_equals: expected "CSSKeywordValue" but got "CSSStyleValue"
 [FAIL] Can set 'border-inline-end' to CSS-wide keywords: inherit
@@ -272,26 +210,8 @@ Found 216 FAIL, 0 TIMEOUT, 0 NOTRUN.
   assert_equals: expected "CSSUnparsedValue" but got "CSSStyleValue"
 [FAIL] Can set 'border-inline-end' to the 'none' keyword: none
   Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-end-width' to the 'thin' keyword: thin
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-end-width' to the 'medium' keyword: medium
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-end-width' to the 'thick' keyword: thick
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-end-width' to a length: 0px
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-end-width' to a length: -3.14em
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-end-width' to a length: 3.14cm
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-end-width' to a length: calc(0px + 0em)
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
 [FAIL] Can set 'border-inline-end-color' to the 'currentcolor' keyword: currentcolor
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-end-style' to the 'none' keyword: none
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
-[FAIL] Can set 'border-inline-end-style' to the 'solid' keyword: solid
-  Failed to execute 'set' on 'StylePropertyMap': Invalid type for property
+  assert_equals: expected "CSSKeywordValue" but got "CSSStyleValue"
 [FAIL] Can set 'border-block' to CSS-wide keywords: initial
   assert_equals: expected "CSSKeywordValue" but got "CSSStyleValue"
 [FAIL] Can set 'border-block' to CSS-wide keywords: inherit

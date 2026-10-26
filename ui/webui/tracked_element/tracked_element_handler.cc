@@ -10,17 +10,50 @@
 #include "base/notreached.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "ui/base/interaction/element_highlighter.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
-#include "ui/webui/resources/js/tracked_element/tracked_element.mojom.h"
 #include "ui/webui/tracked_element/element_highlighter_webui.h"
 #include "ui/webui/tracked_element/tracked_element_web_ui.h"
 
+#if !BUILDFLAG(IS_ANDROID)
+#include "ui/views/controls/webview/webview.h"
+#include "ui/views/view_utils.h"
+#include "ui/views/widget/widget.h"
+#endif
+
 namespace ui {
+
+#if !BUILDFLAG(IS_ANDROID)
+namespace {
+
+views::WebView* FindWebViewWithContentsRecursive(
+    views::View* from_view,
+    const content::WebContents* contents) {
+  if (!from_view || !contents) {
+    return nullptr;
+  }
+  auto* const web_view = views::AsViewClass<views::WebView>(from_view);
+  if (web_view && web_view->web_contents() == contents) {
+    return web_view;
+  }
+
+  for (views::View* const child_view : from_view->children()) {
+    auto* const result = FindWebViewWithContentsRecursive(child_view, contents);
+    if (result) {
+      return result;
+    }
+  }
+
+  return nullptr;
+}
+
+}  // namespace
+#endif
 
 TrackedElementHandler::TrackedElementHandler(
     content::WebUIController* controller)
@@ -40,6 +73,29 @@ TrackedElementHandler::TrackedElementHandler(content::WebContents* web_contents,
     is_web_contents_visible_ =
         web_contents->GetVisibility() == content::Visibility::VISIBLE;
   }
+}
+
+TrackedElementHandler::TrackedElementHandler(
+    content::WebContents* web_contents,
+    mojo::PendingReceiver<tracked_element::mojom::TrackedElementHandler>
+        receiver,
+    ui::ElementContext context,
+    const std::vector<ui::ElementIdentifier>& identifiers,
+    content::RenderFrameHost* render_frame_host)
+    : context_(context),
+      receiver_(this, std::move(receiver)),
+      rfh_id_(render_frame_host ? render_frame_host->GetGlobalId()
+                                : content::GlobalRenderFrameHostId()) {
+  ui::ElementHighlighter::GetElementHighlighter()
+      ->MaybeRegisterBackend<ElementHighlighterWebUI>();
+
+  if (web_contents) {
+    Observe(web_contents);
+    is_web_contents_visible_ =
+        web_contents->GetVisibility() == content::Visibility::VISIBLE;
+  }
+
+  RegisterIdentifiers(identifiers);
 }
 
 TrackedElementHandler::~TrackedElementHandler() = default;
@@ -81,16 +137,22 @@ void TrackedElementHandler::SetHighlightState(
   if (manager_remote_) {
     manager_remote_->OnElementHighlightChanged(
         tracked_element::mojom::TrackedElementIdentifier::New(
-            element.identifier().GetName(), element.secondary_identifier()),
+            element.identifier().GetName(), element.GetSecondaryIdentifier()),
         highlight);
   }
+}
+
+content::RenderFrameHost* TrackedElementHandler::render_frame_host() const {
+  return content::RenderFrameHost::FromID(rfh_id_);
 }
 
 void TrackedElementHandler::FlushManagerRemoteForTesting() {
   manager_remote_.FlushForTesting();  // IN-TEST
 }
 
-bool TrackedElementHandler::ClickElement(TrackedElementWebUI& element) {
+bool TrackedElementHandler::ClickElement(
+    TrackedElementWebUI& element,
+    tracked_element::mojom::InputType input_type) {
   CHECK_IS_TEST();
   if (!manager_remote_) {
     return false;
@@ -99,7 +161,8 @@ bool TrackedElementHandler::ClickElement(TrackedElementWebUI& element) {
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
   manager_remote_->ClickElement(
       tracked_element::mojom::TrackedElementIdentifier::New(
-          element.identifier().GetName(), element.secondary_identifier()),
+          element.identifier().GetName(), element.GetSecondaryIdentifier()),
+      input_type,
       base::BindOnce(
           [](bool* success_ptr, base::OnceClosure quit_closure, bool result) {
             *success_ptr = result;
@@ -119,7 +182,7 @@ bool TrackedElementHandler::FocusElement(TrackedElementWebUI& element) {
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
   manager_remote_->FocusElement(
       tracked_element::mojom::TrackedElementIdentifier::New(
-          element.identifier().GetName(), element.secondary_identifier()),
+          element.identifier().GetName(), element.GetSecondaryIdentifier()),
       base::BindOnce(
           [](bool* success_ptr, base::OnceClosure quit_closure, bool result) {
             *success_ptr = result;
@@ -140,7 +203,7 @@ bool TrackedElementHandler::SelectTab(TrackedElementWebUI& element,
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
   manager_remote_->SelectTab(
       tracked_element::mojom::TrackedElementIdentifier::New(
-          element.identifier().GetName(), element.secondary_identifier()),
+          element.identifier().GetName(), element.GetSecondaryIdentifier()),
       index,
       base::BindOnce(
           [](bool* success_ptr, base::OnceClosure quit_closure, bool result) {
@@ -162,7 +225,7 @@ bool TrackedElementHandler::SelectDropdownItem(TrackedElementWebUI& element,
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
   manager_remote_->SelectDropdownItem(
       tracked_element::mojom::TrackedElementIdentifier::New(
-          element.identifier().GetName(), element.secondary_identifier()),
+          element.identifier().GetName(), element.GetSecondaryIdentifier()),
       index,
       base::BindOnce(
           [](bool* success_ptr, base::OnceClosure quit_closure, bool result) {
@@ -186,7 +249,7 @@ bool TrackedElementHandler::EnterText(
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
   manager_remote_->EnterText(
       tracked_element::mojom::TrackedElementIdentifier::New(
-          element.identifier().GetName(), element.secondary_identifier()),
+          element.identifier().GetName(), element.GetSecondaryIdentifier()),
       text, mode,
       base::BindOnce(
           [](bool* success_ptr, base::OnceClosure quit_closure, bool result) {
@@ -207,7 +270,7 @@ bool TrackedElementHandler::Confirm(TrackedElementWebUI& element) {
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
   manager_remote_->Confirm(
       tracked_element::mojom::TrackedElementIdentifier::New(
-          element.identifier().GetName(), element.secondary_identifier()),
+          element.identifier().GetName(), element.GetSecondaryIdentifier()),
       base::BindOnce(
           [](bool* success_ptr, base::OnceClosure quit_closure, bool result) {
             *success_ptr = result;
@@ -381,5 +444,35 @@ void TrackedElementHandler::ReportBadMessage(
       "\"%s\"",
       description, id->native_identifier, id->secondary_identifier));
 }
+
+#if !BUILDFLAG(IS_ANDROID)
+void TrackedElementHandler::SetWebViewForTesting(views::WebView* web_view) {
+  web_view_tracker_.SetView(web_view);
+}
+
+views::WebView* TrackedElementHandler::GetWebView() const {
+  if (!web_contents()) {
+    return nullptr;
+  }
+  if (auto* const view = web_view_tracker_.view()) {
+    if (auto* const web_view = views::AsViewClass<views::WebView>(view)) {
+      if (web_view->web_contents() == web_contents()) {
+        return web_view;
+      }
+    }
+  }
+  auto* const widget = views::Widget::GetWidgetForNativeWindow(
+      web_contents()->GetTopLevelNativeWindow());
+  if (!widget) {
+    return nullptr;
+  }
+  auto* const web_view = FindWebViewWithContentsRecursive(
+      widget->GetContentsView(), web_contents());
+  if (web_view) {
+    web_view_tracker_.SetView(web_view);
+  }
+  return web_view;
+}
+#endif
 
 }  // namespace ui

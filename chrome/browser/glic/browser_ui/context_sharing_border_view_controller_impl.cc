@@ -12,7 +12,7 @@
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/frame/contents_web_view.h"
 
 namespace glic {
@@ -25,7 +25,7 @@ ContextSharingBorderViewControllerImpl::
 void ContextSharingBorderViewControllerImpl::Initialize(
     ContextSharingBorderView* border_view,
     ContentsWebView* contents_web_view,
-    Browser* browser) {
+    BrowserWindowInterface* browser) {
   border_view_ = border_view;
   contents_web_view_ = contents_web_view;
   glic_service_ =
@@ -194,14 +194,7 @@ void ContextSharingBorderViewControllerImpl::UpdateBorderView(
       break;
     }
     case UpdateBorderReason::kFocusedTabChanged_NoFocusChange: {
-      if (ShouldShowBorderAnimation()) {
-        if (!border_view_->IsShowing()) {
-          // There is be a chance that the border view has already stopped
-          // showing. In that case, gracefully handle the crash case in
-          // crbug.com/398319435 by closing(minimizing) the glic window.
-          glic_service_->instance_coordinator().Close({});
-        }
-
+      if (ShouldShowBorderAnimation() && border_view_->IsShowing()) {
         border_view_->ResetAnimationCycle();
       }
       break;

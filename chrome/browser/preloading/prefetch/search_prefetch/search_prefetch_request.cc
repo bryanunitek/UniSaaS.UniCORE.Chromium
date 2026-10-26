@@ -18,7 +18,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/not_fatal_until.h"
 #include "base/state_transitions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
@@ -31,8 +30,8 @@
 #include "chrome/browser/preloading/preloading_features.h"
 #include "chrome/browser/preloading/prerender/prerender_manager.h"
 #include "chrome/browser/preloading/prerender/prerender_utils.h"
-#include "chrome/browser/preloading/prerender/search_prewarm_progress_service.h"
-#include "chrome/browser/preloading/prerender/search_prewarm_progress_service_factory.h"
+#include "chrome/browser/preloading/prerender/search_preload_progress_service.h"
+#include "chrome/browser/preloading/prerender/search_preload_progress_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/common/chrome_features.h"
@@ -172,7 +171,7 @@ SearchPrefetchRequest::SearchPrefetchRequest(
       report_error_callback_(std::move(report_error_callback)) {
   base::trace_event::EmitNamedTrigger("search-prefetch-start");
   auto* prewarm_service =
-      SearchPrewarmProgressServiceFactory::GetForProfile(&profile);
+      SearchPreloadProgressServiceFactory::GetForProfile(&profile);
   if (!prewarm_service) {
     return;
   }
@@ -288,8 +287,7 @@ bool SearchPrefetchRequest::StartPrefetchRequest(
   // `SearchPrefetchService::MaybePrefetchURL()` should be already prohibiting
   // this.
   CHECK(profile->GetPrefs() &&
-            profile->GetPrefs()->GetBoolean(prefs::kWebKitJavascriptEnabled),
-        base::NotFatalUntil::M136);
+        profile->GetPrefs()->GetBoolean(prefs::kWebKitJavascriptEnabled));
 
   AddClientHintsHeadersToPrefetchNavigation(
       prefetch_origin, &(resource_request->headers), profile,

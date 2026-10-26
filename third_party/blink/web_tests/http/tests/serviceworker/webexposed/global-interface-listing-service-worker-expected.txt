@@ -90,6 +90,67 @@ interface ByteLengthQueuingStrategy
     getter highWaterMark
     getter size
     method constructor
+interface CSSKeywordValue : CSSStyleValue
+    attribute @@toStringTag
+    getter value
+    method constructor
+    setter value
+interface CSSMathClamp : CSSMathValue
+    attribute @@toStringTag
+    getter lower
+    getter upper
+    getter value
+    method constructor
+interface CSSMathInvert : CSSMathValue
+    attribute @@toStringTag
+    getter value
+    method constructor
+interface CSSMathMax : CSSMathValue
+    attribute @@toStringTag
+    getter values
+    method constructor
+interface CSSMathMin : CSSMathValue
+    attribute @@toStringTag
+    getter values
+    method constructor
+interface CSSMathNegate : CSSMathValue
+    attribute @@toStringTag
+    getter value
+    method constructor
+interface CSSMathProduct : CSSMathValue
+    attribute @@toStringTag
+    getter values
+    method constructor
+interface CSSMathSum : CSSMathValue
+    attribute @@toStringTag
+    getter values
+    method constructor
+interface CSSMathValue : CSSNumericValue
+    attribute @@toStringTag
+    getter operator
+    method constructor
+interface CSSNumericArray
+    attribute @@toStringTag
+    getter length
+    method @@iterator
+    method constructor
+    method entries
+    method forEach
+    method keys
+    method values
+interface CSSNumericValue : CSSStyleValue
+    attribute @@toStringTag
+    method add
+    method constructor
+    method div
+    method equals
+    method max
+    method min
+    method mul
+    method sub
+    method to
+    method toSum
+    method type
 interface CSSSkewX : CSSTransformComponent
     attribute @@toStringTag
     getter ax
@@ -100,6 +161,25 @@ interface CSSSkewY : CSSTransformComponent
     getter ay
     method constructor
     setter ay
+interface CSSStyleValue
+    attribute @@toStringTag
+    method constructor
+    method toString
+interface CSSUnitValue : CSSNumericValue
+    attribute @@toStringTag
+    getter unit
+    getter value
+    method constructor
+    setter value
+interface CSSUnparsedValue : CSSStyleValue
+    attribute @@toStringTag
+    getter length
+    method @@iterator
+    method constructor
+    method entries
+    method forEach
+    method keys
+    method values
 interface Cache
     attribute @@toStringTag
     method add
@@ -419,6 +499,14 @@ interface DOMStringList
     method constructor
     method contains
     method item
+interface DecisionModel
+    static method availability
+    static method create
+    attribute @@toStringTag
+    getter preference
+    method constructor
+    method decide
+    method destroy
 interface DecompressionStream
     attribute @@toStringTag
     getter readable
@@ -436,8 +524,6 @@ interface DisposableStack
     method use
 interface ElementImage
     attribute @@toStringTag
-    getter height
-    getter width
     method close
     method constructor
 interface ErrorEvent : Event
@@ -622,6 +708,7 @@ interface FontFace
     getter variant
     getter variationSettings
     getter weight
+    getter width
     method constructor
     method load
     setter ascentOverride
@@ -637,6 +724,7 @@ interface FontFace
     setter variant
     setter variationSettings
     setter weight
+    setter width
 interface FontFaceSet : EventTarget
     attribute @@toStringTag
     getter onloading
@@ -778,6 +866,7 @@ interface GPUComputePassEncoder
     method setBindGroup
     method setImmediates
     method setPipeline
+    method setResourceTable
     method writeTimestamp
     setter label
 interface GPUComputePipeline
@@ -807,6 +896,7 @@ interface GPUDevice : EventTarget
     method createRenderBundleEncoder
     method createRenderPipeline
     method createRenderPipelineAsync
+    method createResourceTable
     method createSampler
     method createShaderModule
     method createTexture
@@ -857,8 +947,8 @@ interface GPUQueue
     attribute @@toStringTag
     getter label
     method constructor
-    method copyElementImageToTexture
     method copyExternalImageToTexture
+    method drawElementImageToTexture
     method onSubmittedWorkDone
     method submit
     method writeBuffer
@@ -920,6 +1010,16 @@ interface GPURenderPipeline
     getter label
     method constructor
     method getBindGroupLayout
+    setter label
+interface GPUResourceTable
+    attribute @@toStringTag
+    getter label
+    getter size
+    method constructor
+    method destroy
+    method insert
+    method remove
+    method update
     setter label
 interface GPUSampler
     attribute @@toStringTag
@@ -1394,11 +1494,13 @@ interface OffscreenCanvas : EventTarget
     getter oncontextlost
     getter oncontextrestored
     getter width
+    method clearElementGeometry
     method constructor
     method convertToBlob
     method getContext
-    method getElementTransform
+    method getElementImageDefaultSize
     method transferToImageBitmap
+    method updateElementGeometry
     setter height
     setter oncontextlost
     setter oncontextrestored
@@ -1666,6 +1768,12 @@ interface Permissions
     method request
     method requestAll
     method revoke
+interface ProgressEvent : Event
+    attribute @@toStringTag
+    getter lengthComputable
+    getter loaded
+    getter total
+    method constructor
 interface PromiseRejectionEvent : Event
     attribute @@toStringTag
     getter promise
@@ -1969,15 +2077,21 @@ interface Subscriber
     method error
     method next
 interface SubtleCrypto
+    static method supports
     attribute @@toStringTag
     method constructor
+    method decapsulateBits
+    method decapsulateKey
     method decrypt
     method deriveBits
     method deriveKey
     method digest
+    method encapsulateBits
+    method encapsulateKey
     method encrypt
     method exportKey
     method generateKey
+    method getPublicKey
     method importKey
     method sign
     method unwrapKey
@@ -2036,6 +2150,7 @@ interface TextDecoderStream
     getter writable
     method constructor
 interface TextDetector
+    static method create
     attribute @@toStringTag
     method constructor
     method detect
@@ -2092,11 +2207,6 @@ interface TrustedHTML
     method constructor
     method toJSON
     method toString
-interface TrustedParserOptions
-    attribute @@toStringTag
-    getter runScripts
-    getter sanitizer
-    method constructor
 interface TrustedScript
     static method fromLiteral
     attribute @@toStringTag
@@ -2114,7 +2224,6 @@ interface TrustedTypePolicy
     getter name
     method constructor
     method createHTML
-    method createParserOptions
     method createScript
     method createScriptURL
 interface TrustedTypePolicyFactory
@@ -2852,6 +2961,7 @@ interface WebGL2RenderingContext
     method drawElementsInstanced
     method drawRangeElements
     method drawingBufferStorage
+    method drawingBufferToneMapping
     method enable
     method enableVertexAttribArray
     method endQuery
@@ -2939,7 +3049,7 @@ interface WebGL2RenderingContext
     method stencilMaskSeparate
     method stencilOp
     method stencilOpSeparate
-    method texElementImage2D
+    method texElementSubImage2D
     method texImage2D
     method texImage3D
     method texParameterf
@@ -3386,6 +3496,7 @@ interface WebGLRenderingContext
     method drawArrays
     method drawElements
     method drawingBufferStorage
+    method drawingBufferToneMapping
     method enable
     method enableVertexAttribArray
     method finish
@@ -3442,7 +3553,7 @@ interface WebGLRenderingContext
     method stencilMaskSeparate
     method stencilOp
     method stencilOpSeparate
-    method texElementImage2D
+    method texElementSubImage2D
     method texImage2D
     method texParameterf
     method texParameteri
@@ -3544,21 +3655,26 @@ interface WebSocketStream
     method close
     method constructor
 interface WebTransport
+    static getter supportsReliableOnly
     attribute @@toStringTag
     getter anticipatedConcurrentIncomingBidirectionalStreams
     getter anticipatedConcurrentIncomingUnidirectionalStreams
     getter closed
     getter congestionControl
     getter datagrams
+    getter draining
     getter incomingBidirectionalStreams
     getter incomingUnidirectionalStreams
     getter protocol
     getter ready
+    getter reliability
+    getter responseHeaders
     method close
     method constructor
     method createBidirectionalStream
     method createSendGroup
     method createUnidirectionalStream
+    method exportKeyingMaterial
     method getStats
     setter anticipatedConcurrentIncomingBidirectionalStreams
     setter anticipatedConcurrentIncomingUnidirectionalStreams
@@ -3579,12 +3695,20 @@ interface WebTransportDatagramDuplexStream
     getter readable
     getter writable
     method constructor
+    method createWritable
     setter incomingHighWaterMark
     setter incomingMaxAge
     setter incomingMaxBufferedDatagrams
     setter outgoingHighWaterMark
     setter outgoingMaxAge
     setter outgoingMaxBufferedDatagrams
+interface WebTransportDatagramsWritable : WritableStream
+    attribute @@toStringTag
+    getter sendGroup
+    getter sendOrder
+    method constructor
+    setter sendGroup
+    setter sendOrder
 interface WebTransportError : DOMException
     attribute @@toStringTag
     getter source
@@ -3675,6 +3799,7 @@ interface WorkerNavigator
     getter appVersion
     getter connection
     getter deviceMemory
+    getter globalPrivacyControl
     getter gpu
     getter hardwareConcurrency
     getter language

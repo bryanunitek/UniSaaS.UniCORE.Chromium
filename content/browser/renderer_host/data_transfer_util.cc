@@ -192,7 +192,9 @@ blink::mojom::DragDataPtr DropDataToDragData(
     int child_id,
     scoped_refptr<ChromeBlobStorageContext> chrome_blob_storage_context) {
   // These fields are currently unused when dragging into Blink.
-  CHECK(!drop_data.download_metadata.has_value(), base::NotFatalUntil::M152);
+  // TODO(crbug.com/540942115): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(!drop_data.download_metadata.has_value());
 
   std::vector<blink::mojom::DragItemPtr> items;
   if (drop_data.text) {
@@ -331,7 +333,6 @@ blink::mojom::DragDataPtr DropMetaDataToDragData(
     if (meta_data_item.kind == DropData::Kind::FILESYSTEMFILE) {
       blink::mojom::DragItemFileSystemFilePtr item =
           blink::mojom::DragItemFileSystemFile::New();
-      item->url = meta_data_item.file_system_url;
       items.push_back(
           blink::mojom::DragItem::NewFileSystemFile(std::move(item)));
       continue;

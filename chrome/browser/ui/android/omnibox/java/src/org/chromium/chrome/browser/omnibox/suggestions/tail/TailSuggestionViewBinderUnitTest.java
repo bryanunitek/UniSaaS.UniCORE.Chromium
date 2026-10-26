@@ -4,9 +4,7 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions.tail;
 
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
+import static org.junit.Assert.assertEquals;
 
 import android.content.Context;
 import android.view.ContextThemeWrapper;
@@ -23,6 +21,7 @@ import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.styles.SuggestionSpannable;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties;
+import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionView;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
@@ -34,18 +33,22 @@ public class TailSuggestionViewBinderUnitTest {
     private Context mContext;
 
     private TailSuggestionView mTailSuggestionView;
+    private BaseSuggestionView<TailSuggestionView> mBaseView;
+    private OmniboxResourceProvider mResourceProvider;
 
     @Before
     public void setUp() {
         mContext =
                 new ContextThemeWrapper(
                         ContextUtils.getApplicationContext(), R.style.Theme_BrowserUI_DayNight);
-
-        mTailSuggestionView = spy(new TailSuggestionView(mContext));
-
-        mModel = new PropertyModel(TailSuggestionViewProperties.ALL_KEYS);
-        PropertyModelChangeProcessor.create(
-                mModel, mTailSuggestionView, TailSuggestionViewBinder::bind);
+        mTailSuggestionView = new TailSuggestionView(mContext);
+        mResourceProvider = new OmniboxResourceProvider(mContext, BrandedColorScheme.APP_DEFAULT);
+        mModel =
+                new PropertyModel.Builder(TailSuggestionViewProperties.ALL_KEYS)
+                        .with(SuggestionCommonProperties.RESOURCE_PROVIDER, mResourceProvider)
+                        .build();
+        mBaseView = new BaseSuggestionView<>(mTailSuggestionView);
+        PropertyModelChangeProcessor.create(mModel, mBaseView, new TailSuggestionViewBinder());
     }
 
     @Test
@@ -53,7 +56,7 @@ public class TailSuggestionViewBinderUnitTest {
         AlignmentManager alignmentManager = new AlignmentManager();
 
         mModel.set(TailSuggestionViewProperties.ALIGNMENT_MANAGER, alignmentManager);
-        verify(mTailSuggestionView, times(1)).setAlignmentManager(alignmentManager);
+        assertEquals(alignmentManager, mTailSuggestionView.getAlignmentManagerForTesting());
     }
 
     @Test
@@ -61,7 +64,7 @@ public class TailSuggestionViewBinderUnitTest {
         final SuggestionSpannable span = new SuggestionSpannable("test");
 
         mModel.set(TailSuggestionViewProperties.TEXT, span);
-        verify(mTailSuggestionView, times(1)).setTailText(span);
+        assertEquals(span.toString(), mTailSuggestionView.getText().toString());
     }
 
     @Test
@@ -69,16 +72,18 @@ public class TailSuggestionViewBinderUnitTest {
         final String test = "test";
 
         mModel.set(TailSuggestionViewProperties.FILL_INTO_EDIT, test);
-        verify(mTailSuggestionView, times(1)).setFullText(test);
+        assertEquals(
+                (int) mTailSuggestionView.getPaint().measureText(test, 0, test.length()),
+                mTailSuggestionView.getFullTextWidthForTesting());
     }
 
     @Test
     public void tailSuggestionView_setTextColor() {
         final @BrandedColorScheme int colorScheme = BrandedColorScheme.LIGHT_BRANDED_THEME;
-        final @ColorInt int color =
-                OmniboxResourceProvider.getSuggestionPrimaryTextColor(mContext, colorScheme);
+        mResourceProvider.setBrandedColorScheme(colorScheme);
+        final @ColorInt int color = mResourceProvider.getSuggestionPrimaryTextColor();
 
         mModel.set(SuggestionCommonProperties.COLOR_SCHEME, colorScheme);
-        verify(mTailSuggestionView, times(1)).setTextColor(color);
+        assertEquals(color, mTailSuggestionView.getCurrentTextColor());
     }
 }

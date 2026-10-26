@@ -2,17 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
+
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/permissions/system/system_permission_settings.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/location_bar/location_bar.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+#include "chrome/browser/ui/views/location_bar/location_icon_test_accessor.h"
 #include "chrome/browser/ui/views/location_bar/location_icon_view.h"
 #include "chrome/browser/ui/views/page_info/chosen_object_view.h"
-#include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_main_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_permission_content_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
@@ -33,6 +37,7 @@
 #include "net/dns/mock_host_resolver.h"
 #include "third_party/blink/public/common/features_generated.h"
 #include "ui/events/test/test_event.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/controls/styled_label.h"
@@ -53,15 +58,11 @@ const char kSecondPermissionRow[] = "SecondPermissionRow";
 #endif
 
 // Clicks the location icon to open the page info bubble.
-void OpenPageInfoBubble(Browser* browser) {
-  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-  LocationIconView* location_icon_view =
-      browser_view->toolbar()->location_bar_view()->location_icon_view();
-  ASSERT_TRUE(location_icon_view);
-  ui::test::TestEvent event;
-  location_icon_view->ShowBubble(event);
+void OpenPageInfoBubble(BrowserWindowInterface* browser) {
+  LocationIconTestAccessor(browser).ShowBubble();
   views::BubbleDialogDelegateView* page_info =
-      PageInfoBubbleView::GetPageInfoBubbleForTesting();
+      PageInfoBubbleView::GetPageInfoBubbleForTesting(
+          browser->GetTabStripModel()->GetActiveWebContents());
   EXPECT_NE(nullptr, page_info);
   page_info->set_close_on_deactivate(false);
 }
@@ -143,26 +144,31 @@ class WebContentsFocusTracker : public FocusTracker,
       return false;
     }
     return BrowserView::GetBrowserViewForBrowser(browser)
-        ->contents_web_view()
+        ->GetContentsView()
         ->HasFocus();
   }
 };
 
-// Watches a View for focus changes.
-class ViewFocusTracker : public FocusTracker, public views::ViewObserver {
+// Watches a LocationBar for focus changes.
+class LocationBarFocusTracker : public FocusTracker,
+                                public LocationBar::Observer {
  public:
-  explicit ViewFocusTracker(views::View* view)
-      : FocusTracker(view->HasFocus()) {
-    scoped_observation_.Observe(view);
+  explicit LocationBarFocusTracker(LocationBar* location_bar)
+      : FocusTracker(location_bar->IsFocusWithin()) {
+    scoped_observation_.Observe(location_bar);
   }
 
-  void OnViewFocused(views::View* observed_view) override { OnFocused(); }
-
-  void OnViewBlurred(views::View* observed_view) override { OnBlurred(); }
+  void OnLocationBarFocusChanged() override {
+    if (scoped_observation_.GetSource()->IsFocusWithin()) {
+      OnFocused();
+    } else {
+      OnBlurred();
+    }
+  }
 
  private:
-  base::ScopedObservation<views::View, views::ViewObserver> scoped_observation_{
-      this};
+  base::ScopedObservation<LocationBar, LocationBar::Observer>
+      scoped_observation_{this};
 };
 
 }  // namespace
@@ -176,7 +182,7 @@ class PageInfoBubbleViewFocusInteractiveUiTest : public InProcessBrowserTest {
       const PageInfoBubbleViewFocusInteractiveUiTest& test) = delete;
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   void TriggerReloadPromptOnClose() const {
@@ -188,9 +194,11 @@ class PageInfoBubbleViewFocusInteractiveUiTest : public InProcessBrowserTest {
     permission.default_setting = ContentSetting::CONTENT_SETTING_ASK;
     permission.source = content_settings::SettingSource::kUser;
 
-    PageInfo* presenter = static_cast<PageInfoBubbleView*>(
-                              PageInfoBubbleView::GetPageInfoBubbleForTesting())
-                              ->presenter_for_testing();
+    PageInfo* presenter =
+        static_cast<PageInfoBubbleView*>(
+            PageInfoBubbleView::GetPageInfoBubbleForTesting(
+                browser()->GetTabStripModel()->GetActiveWebContents()))
+            ->presenter_for_testing();
     presenter->OnSitePermissionChanged(permission.type, permission.setting,
                                        permission.requesting_origin,
                                        permission.is_one_time);
@@ -216,7 +224,7 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewFocusInteractiveUiTest,
   base::RunLoop().RunUntilIdle();
 
   auto* page_info_bubble_view =
-      PageInfoBubbleView::GetPageInfoBubbleForTesting();
+      PageInfoBubbleView::GetPageInfoBubbleForTesting(web_contents());
   EXPECT_FALSE(web_contents_focus_tracker.focused());
 
   page_info_bubble_view->GetWidget()->CloseWithReason(
@@ -241,8 +249,8 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewFocusInteractiveUiTest,
 IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewFocusInteractiveUiTest,
                        MAYBE_FocusDoesNotReturnToContentsOnReloadPrompt) {
   WebContentsFocusTracker web_contents_focus_tracker(web_contents());
-  ViewFocusTracker location_bar_focus_tracker(
-      BrowserView::GetBrowserViewForBrowser(browser())->GetLocationBarView());
+  LocationBarFocusTracker location_bar_focus_tracker(
+      BrowserView::GetBrowserViewForBrowser(browser())->GetLocationBar());
   web_contents()->Focus();
   web_contents_focus_tracker.WaitForFocus(true);
 
@@ -250,7 +258,7 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewFocusInteractiveUiTest,
   base::RunLoop().RunUntilIdle();
 
   auto* page_info_bubble_view =
-      PageInfoBubbleView::GetPageInfoBubbleForTesting();
+      PageInfoBubbleView::GetPageInfoBubbleForTesting(web_contents());
   EXPECT_FALSE(web_contents_focus_tracker.focused());
 
   TriggerReloadPromptOnClose();
@@ -305,21 +313,19 @@ class PageInfoBubbleViewInteractiveUiTest : public InteractiveBrowserTest {
   }
 
   auto TogglePermission(ElementSpecifier row) {
-    return WithElement(
-        row, base::BindOnce([](ui::TrackedElement* el) {
-          views::test::InteractionTestUtilSimulatorViews::PressButton(
-              static_cast<views::Button*>(AsView<PermissionToggleRowView>(el)
-                                              ->toggle_button_for_testing()));
-        }));
+    return WithElement(row, [this](ui::TrackedElement* el) {
+      views::test::InteractionTestUtilSimulatorViews::PressButton(
+          static_cast<views::Button*>(AsView<PermissionToggleRowView>(el)
+                                          ->toggle_button_for_testing()));
+    });
   }
 
   auto DeleteGrant(ElementSpecifier row) {
-    return WithElement(
-        row, base::BindOnce([](ui::TrackedElement* el) {
-          views::test::InteractionTestUtilSimulatorViews::PressButton(
-              static_cast<views::Button*>(
-                  AsView<ChosenObjectView>(el)->GetDeleteButtonForTesting()));
-        }));
+    return WithElement(row, [this](ui::TrackedElement* el) {
+      views::test::InteractionTestUtilSimulatorViews::PressButton(
+          static_cast<views::Button*>(
+              AsView<ChosenObjectView>(el)->GetDeleteButtonForTesting()));
+    });
   }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -328,7 +334,7 @@ class PageInfoBubbleViewInteractiveUiTest : public InteractiveBrowserTest {
     return CheckResult(
         base::BindLambdaForTesting([this, reader_name]() {
           return SmartCardPermissionContextFactory::GetForProfile(
-                     *browser()->profile())
+                     *browser()->GetProfile())
               .HasReaderPermission(url::Origin::Create(GetURL()), reader_name);
         }),
         is_granted,
@@ -366,7 +372,8 @@ class PageInfoBubbleViewInteractiveUiTest : public InteractiveBrowserTest {
   }
 
   HostContentSettingsMap* host_content_settings_map() {
-    return HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+    return HostContentSettingsMapFactory::GetForProfile(
+        browser()->GetProfile());
   }
 
   void SetPermission(ContentSettingsType type, ContentSetting setting) {
@@ -382,13 +389,13 @@ class PageInfoBubbleViewInteractiveUiTest : public InteractiveBrowserTest {
 
 #if BUILDFLAG(IS_CHROMEOS)
   void GrantSmartCardReaderPermission(const std::string& reader_name) {
-    SmartCardPermissionContextFactory::GetForProfile(*browser()->profile())
+    SmartCardPermissionContextFactory::GetForProfile(*browser()->GetProfile())
         .GrantPersistentReaderPermission(url::Origin::Create(GetURL()),
                                          reader_name);
   }
 
   void ResetSmartCardReaderGrants() {
-    SmartCardPermissionContextFactory::GetForProfile(*browser()->profile())
+    SmartCardPermissionContextFactory::GetForProfile(*browser()->GetProfile())
         .RevokeAllPermissions();
   }
 #endif

@@ -866,22 +866,26 @@ void SurfaceControl::Transaction::SetOpaque(const Surface& surface,
 
 void SurfaceControl::Transaction::SetDamageRect(const Surface& surface,
                                                 const gfx::Rect& rect) {
+  // SF will reject the transaction if the damage rect is empty.
+  CHECK(!rect.IsEmpty());
   auto a_rect = RectToARect(rect);
   SurfaceControlMethods::Get().ASurfaceTransaction_setDamageRegionFn(
       transaction_, surface.surface(), &a_rect, 1u);
 }
 
-void SurfaceControl::Transaction::SetColorSpace(const Surface& surface,
-                                                const ColorSpace& color_space,
-                                                const HDRMetadata& metadata) {
+void SurfaceControl::Transaction::SetColorSpace(
+    const Surface& surface,
+    const ColorSpace& color_space,
+    const HDRMetadata& metadata,
+    float desired_brightness_ratio) {
   // Populate the data space and brightness ratios.
   ADataSpace data_space = ADATASPACE_UNKNOWN;
   float extended_range_brightness_ratio = 1.f;
-  float desired_brightness_ratio = 1.f;
-  if (metadata.extended_range &&
-      SurfaceControlMethods::Get()
-          .ASurfaceTransaction_setExtendedRangeBrightnessFn) {
-    desired_brightness_ratio = metadata.extended_range->desired_headroom;
+  if (!SurfaceControlMethods::Get()
+           .ASurfaceTransaction_setExtendedRangeBrightnessFn) {
+    // Without ASurfaceTransaction_setExtendedRangeBrightness, HDR headroom
+    // cannot be requested.
+    desired_brightness_ratio = 1.f;
   }
   ColorSpaceToADataSpace(color_space, desired_brightness_ratio, data_space,
                          extended_range_brightness_ratio);

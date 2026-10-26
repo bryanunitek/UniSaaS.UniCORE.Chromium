@@ -15,6 +15,7 @@ import sys
 
 import setup_modules  # pylint: disable=unused-import
 
+
 import chromium_src.tools.metrics.ukm.ukm_model as ukm_model
 import chromium_src.tools.metrics.ukm.builders_template as builders_template
 import chromium_src.tools.metrics.ukm.decode_template as decode_template
@@ -53,7 +54,8 @@ def read_filtered_data(path):
     data[event_tag] = list(filter(ukm_model.is_not_obsolete, data[event_tag]))
     for event in data[event_tag]:
       event[metric_tag] = list(
-          filter(ukm_model.is_not_obsolete, event[metric_tag]))
+        filter(ukm_model.is_not_obsolete, event[metric_tag])
+      )
     return data
 
 

@@ -137,11 +137,18 @@ class PasswordManagerViewControllerTest
             @protocol(PasswordManagerViewControllerPresentationDelegate));
     passwords_controller.presentationDelegate =
         password_manager_view_controller_presentation_delegate_mock_;
+    OCMStub([password_manager_view_controller_presentation_delegate_mock_
+        showLevelUpWalkthroughIPH]);
 
     // Show the Password Manager widget promo.
     passwords_controller.shouldShowPasswordManagerWidgetPromo = YES;
 
     WaitForPasswordsLoadingCompletion();
+  }
+
+  void TearDown() override {
+    [mediator_ disconnect];
+    LegacyChromeTableViewControllerTest::TearDown();
   }
 
   int GetSectionIndex(PasswordSectionIdentifier section) {
@@ -228,7 +235,7 @@ class PasswordManagerViewControllerTest
     cred.username_element = u"Email";
     cred.username_value = username_value;
     cred.password_element = u"Passwd";
-    cred.password_value = u"test";
+    cred.password_value = password_manager::PasswordString(u"test");
     cred.submit_element = u"signIn";
     cred.signon_realm = "http://www.example.com/";
     cred.scheme = password_manager::PasswordForm::Scheme::kHtml;
@@ -250,7 +257,7 @@ class PasswordManagerViewControllerTest
     cred.username_element = u"Email";
     cred.username_value = u"test@egmail.com";
     cred.password_element = u"Passwd";
-    cred.password_value = u"test";
+    cred.password_value = password_manager::PasswordString(u"test");
     cred.submit_element = u"signIn";
     cred.signon_realm = "http://www.example2.com/";
     cred.scheme = password_manager::PasswordForm::Scheme::kHtml;
@@ -518,11 +525,8 @@ TEST_F(PasswordManagerViewControllerTest,
 
 // Tests that the password manager is updated when passwords change while in
 // search mode.
-// TODO(crbug.com/347688002): The test is flaky on iPad on iOS 17.
-TEST_F(PasswordManagerViewControllerTest,
-       DISABLED_TestChangePasswordsWhileSearching) {
-  root_view_controller_ = [[UIViewController alloc] init];
-  scoped_window_.Get().rootViewController = root_view_controller_;
+TEST_F(PasswordManagerViewControllerTest, TestChangePasswordsWhileSearching) {
+  root_view_controller_ = scoped_window_.Get().rootViewController;
 
   PasswordManagerViewController* passwords_controller =
       GetPasswordManagerViewController();
@@ -1428,9 +1432,10 @@ TEST_F(PasswordManagerViewControllerTest, ManageAccountHeaderIsBeingUpdated) {
   CrURL* expectedHeaderUrl = [[CrURL alloc]
       initWithGURL:google_util::AppendGoogleLocaleParam(
                        GURL(password_manager::kPasswordManagerHelpCenteriOSURL),
-                       GetApplicationContext()
-                           ->GetApplicationLocaleStorage()
-                           ->Get())];
+                       std::string(GetApplicationContext()
+                                       ->GetApplicationLocaleStorage()
+                                       ->GetTag()
+                                       .tag_string()))];
   EXPECT_NSEQ(header.urls[0].nsurl, expectedHeaderUrl.nsurl);
 
   [GetPasswordManagerViewController() settingsWillBeDismissed];

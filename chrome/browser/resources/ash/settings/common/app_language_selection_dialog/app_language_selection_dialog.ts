@@ -16,7 +16,6 @@ import 'chrome://resources/ash/common/cr_elements/cr_shared_style.css.js';
 import './app_language_selection_item.js';
 import '../../settings_shared.css.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
 import type {CrSearchFieldElement} from 'chrome://resources/ash/common/cr_elements/cr_search_field/cr_search_field.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
@@ -25,6 +24,8 @@ import {browserProxyFactory} from 'chrome://resources/cr_components/app_manageme
 import {getAppIcon} from 'chrome://resources/cr_components/app_management/util.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {DomRepeatEvent} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+
+import {PrefsMixin} from '../../prefs/prefs_mixin.js';
 
 import {getTemplate} from './app_language_selection_dialog.html.js';
 
@@ -62,19 +63,33 @@ export class AppLanguageSelectionDialogElement extends
             'getFilteredLanguages_(searchQuery_.length, suggestedLanguages_)',
       },
       entryPoint: String,
+      suggestedLanguages_: {
+        type: Array,
+        value: () => [],
+      },
+      selectedLanguage_: Object,
+      searchQuery_: {
+        type: String,
+        value: '',
+      },
     };
+  }
+
+  constructor() {
+    super();
+    this.filteredLanguages_ = [];
   }
 
   // Public API: Bidirectional data flow.
   // prefs is provided by PrefsMixin.
 
   // App must be present when this dialog is shown.
-  app: App;
-  entryPoint: AppLanguageSelectionDialogEntryPoint;
-  private suggestedLanguages_: Locale[] = [];
-  private filteredLanguages_: Locale[] = [];
-  private selectedLanguage_?: Locale;
-  private searchQuery_ = '';
+  declare app: App;
+  declare entryPoint: AppLanguageSelectionDialogEntryPoint;
+  declare private suggestedLanguages_: Locale[];
+  declare private filteredLanguages_: Locale[];
+  declare private selectedLanguage_?: Locale;
+  declare private searchQuery_: string;
 
   override ready(): void {
     super.ready();

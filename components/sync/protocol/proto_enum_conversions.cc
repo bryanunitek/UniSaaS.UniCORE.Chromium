@@ -119,7 +119,6 @@ const char* ProtoEnumToString(
   switch (response_type) {
     ENUM_CASE(sync_pb::CommitResponse, SUCCESS);
     ENUM_CASE(sync_pb::CommitResponse, CONFLICT);
-    ENUM_CASE(sync_pb::CommitResponse, RETRY);
     ENUM_CASE(sync_pb::CommitResponse, INVALID_MESSAGE);
     ENUM_CASE(sync_pb::CommitResponse, OVER_QUOTA);
     ENUM_CASE(sync_pb::CommitResponse, TRANSIENT_ERROR);
@@ -778,17 +777,6 @@ const char* ProtoEnumToString(
   NOTREACHED();
 }
 
-const char* ProtoEnumToString(sync_pb::WebApkIconInfo::Purpose purpose) {
-  ASSERT_ENUM_BOUNDS(sync_pb::WebApkIconInfo, Purpose, UNSPECIFIED, MONOCHROME);
-  switch (purpose) {
-    ENUM_CASE(sync_pb::WebApkIconInfo, UNSPECIFIED);
-    ENUM_CASE(sync_pb::WebApkIconInfo, ANY);
-    ENUM_CASE(sync_pb::WebApkIconInfo, MASKABLE);
-    ENUM_CASE(sync_pb::WebApkIconInfo, MONOCHROME);
-  }
-  NOTREACHED();
-}
-
 const char* ProtoEnumToString(sync_pb::WebAppIconInfo::Purpose purpose) {
   ASSERT_ENUM_BOUNDS(sync_pb::WebAppIconInfo, Purpose, UNSPECIFIED, MONOCHROME);
   switch (purpose) {
@@ -1112,19 +1100,21 @@ const char* ProtoEnumToString(sync_pb::SharedUrlContext::Source source) {
 
 const char* ProtoEnumToString(sync_pb::SkillSource skill_source) {
   ASSERT_ENUM_BOUNDS(sync_pb, SkillSource, SKILL_SOURCE_UNKNOWN,
-                     SKILL_SOURCE_DERIVED_FROM_FIRST_PARTY);
+                     SKILL_SOURCE_DERIVED_FROM_ENTERPRISE);
   switch (skill_source) {
     ENUM_CASE(sync_pb, SKILL_SOURCE_UNKNOWN);
     ENUM_CASE(sync_pb, SKILL_SOURCE_FIRST_PARTY);
     ENUM_CASE(sync_pb, SKILL_SOURCE_USER_CREATED);
     ENUM_CASE(sync_pb, SKILL_SOURCE_DERIVED_FROM_FIRST_PARTY);
+    ENUM_CASE(sync_pb, SKILL_SOURCE_ENTERPRISE);
+    ENUM_CASE(sync_pb, SKILL_SOURCE_DERIVED_FROM_ENTERPRISE);
   }
 }
 
 const char* ProtoEnumToString(
     sync_pb::AutofillValuableMetadataSpecifics::PassType pass_type) {
   ASSERT_ENUM_BOUNDS(sync_pb::AutofillValuableMetadataSpecifics, PassType,
-                     PASS_TYPE_UNSPECIFIED, KNOWN_TRAVELER_NUMBER);
+                     PASS_TYPE_UNSPECIFIED, SHIPMENT);
   switch (pass_type) {
     ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics,
               PASS_TYPE_UNSPECIFIED);
@@ -1137,6 +1127,8 @@ const char* ProtoEnumToString(
     ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics, REDRESS_NUMBER);
     ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics,
               KNOWN_TRAVELER_NUMBER);
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics, ORDER);
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics, SHIPMENT);
   }
 }
 

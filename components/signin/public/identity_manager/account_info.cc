@@ -115,20 +115,24 @@ AccountInfo& AccountInfo::operator=(const AccountInfo& other) = default;
 
 AccountInfo& AccountInfo::operator=(AccountInfo&& other) noexcept = default;
 
+const CoreAccountInfo& AccountInfo::GetCoreAccountInfo() const {
+  return core_account_info_;
+}
+
 const CoreAccountId& AccountInfo::GetAccountId() const {
-  return account_id;
+  return core_account_info_.account_id;
 }
 
 const GaiaId& AccountInfo::GetGaiaId() const {
-  return gaia;
+  return core_account_info_.gaia;
 }
 
 std::string_view AccountInfo::GetEmail() const {
-  return email;
+  return core_account_info_.email;
 }
 
 bool AccountInfo::IsUnderAdvancedProtection() const {
-  return is_under_advanced_protection;
+  return core_account_info_.is_under_advanced_protection;
 }
 
 std::optional<std::string_view> AccountInfo::GetFullName() const {
@@ -174,16 +178,16 @@ AccountInfo::GetLastDownloadedAvatarUrlWithSize() const {
 }
 
 std::optional<gfx::Image> AccountInfo::GetAvatarImage() const {
-  if (account_image.IsEmpty()) {
+  if (account_image_.IsEmpty()) {
     return std::nullopt;
   }
-  return account_image;
+  return account_image_;
 }
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
 std::optional<signin_metrics::AccessPoint>
 AccountInfo::GetLastAuthenticationAccessPoint() const {
-  return access_point;
+  return access_point_;
 }
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
@@ -196,45 +200,51 @@ signin::Tribool AccountInfo::IsChildAccount() const {
 }
 
 std::optional<std::string_view> AccountInfo::GetLocale() const {
-  if (locale.empty()) {
+  if (locale_.empty()) {
     return std::nullopt;
   }
-  return locale;
+  return locale_;
 }
 
 bool AccountInfo::IsEmpty() const {
-  return CoreAccountInfo::IsEmpty() && hosted_domain_.empty() &&
-         full_name_.empty() && given_name_.empty() && locale.empty() &&
+  return core_account_info_.IsEmpty() && hosted_domain_.empty() &&
+         full_name_.empty() && given_name_.empty() && locale_.empty() &&
          picture_url_.empty();
 }
 
 bool AccountInfo::IsValid() const {
-  return !account_id.empty() && !email.empty() && !gaia.empty() &&
-         !hosted_domain_.empty() && !full_name_.empty() &&
-         !given_name_.empty() && !picture_url_.empty();
+  return !core_account_info_.account_id.empty() &&
+         !core_account_info_.email.empty() &&
+         !core_account_info_.gaia.empty() && !hosted_domain_.empty() &&
+         !full_name_.empty() && !given_name_.empty() && !picture_url_.empty();
 }
 
 bool AccountInfo::UpdateWith(const AccountInfo& other) {
-  if (account_id != other.account_id) {
+  if (core_account_info_.account_id != other.core_account_info_.account_id) {
     // Only updates with a compatible AccountInfo.
     return false;
   }
 
   bool modified = false;
-  modified |= UpdateField(&gaia, other.gaia);
-  modified |= UpdateField(&email, other.email, nullptr);
+  modified |=
+      UpdateField(&core_account_info_.gaia, other.core_account_info_.gaia);
+  modified |= UpdateField(&core_account_info_.email,
+                          other.core_account_info_.email, nullptr);
   modified |= UpdateField(&full_name_, other.full_name_, nullptr);
   modified |= UpdateField(&given_name_, other.given_name_, nullptr);
   modified |=
       UpdateField(&hosted_domain_, other.hosted_domain_, kNoHostedDomainFound);
-  modified |= UpdateField(&locale, other.locale, nullptr);
+  modified |= UpdateField(&locale_, other.locale_, nullptr);
   modified |=
       UpdateField(&picture_url_, other.picture_url_, kNoPictureURLFound);
   modified |= UpdateField(&is_child_account_, other.is_child_account_);
-  modified |= UpdateField(&access_point, other.access_point,
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  modified |= UpdateField(&access_point_, other.access_point_,
                           std::optional<signin_metrics::AccessPoint>());
-  modified |= UpdateField(&is_under_advanced_protection,
-                          other.is_under_advanced_protection);
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+  modified |=
+      UpdateField(&core_account_info_.is_under_advanced_protection,
+                  other.core_account_info_.is_under_advanced_protection);
   modified |= capabilities_.UpdateWith(other.capabilities_);
 
   return modified;
@@ -278,8 +288,8 @@ bool AccountInfo::CanHaveEmailAddressDisplayed() const {
 AccountInfo::Builder::Builder(const GaiaId& gaia_id, std::string_view email) {
   CHECK(!gaia_id.empty());
   CHECK(!email.empty());
-  account_info_.gaia = gaia_id;
-  account_info_.email = std::string(email);
+  account_info_.core_account_info_.gaia = gaia_id;
+  account_info_.core_account_info_.email = std::string(email);
 }
 
 AccountInfo::Builder::Builder(const CoreAccountInfo& core_account_info) {
@@ -292,11 +302,7 @@ AccountInfo::Builder::Builder(const CoreAccountInfo& core_account_info) {
   CHECK(!core_account_info.IsEmpty());
   CHECK(!base::FeatureList::IsEnabled(switches::kGaiaAccountIdEnforcement) ||
         !core_account_info.gaia.empty());
-  account_info_.account_id = core_account_info.account_id;
-  account_info_.gaia = core_account_info.gaia;
-  account_info_.email = core_account_info.email;
-  account_info_.is_under_advanced_protection =
-      core_account_info.is_under_advanced_protection;
+  account_info_.core_account_info_ = core_account_info;
 }
 
 AccountInfo::Builder::Builder(const AccountInfo& account_info)
@@ -314,28 +320,30 @@ AccountInfo::Builder::~Builder() = default;
 
 AccountInfo AccountInfo::Builder::Build() {
   if (base::FeatureList::IsEnabled(switches::kGaiaAccountIdEnforcement)) {
-    CHECK(!account_info_.gaia.empty());
-    account_info_.account_id = CoreAccountId::FromGaiaId(account_info_.gaia);
+    CHECK(!account_info_.core_account_info_.gaia.empty());
+    account_info_.core_account_info_.account_id =
+        CoreAccountId::FromGaiaId(account_info_.core_account_info_.gaia);
   }
   return std::move(account_info_);
 }
 
 AccountInfo::Builder& AccountInfo::Builder::SetEmail(std::string_view email) {
   CHECK(!email.empty());
-  account_info_.email = std::string(email);
+  account_info_.core_account_info_.email = std::string(email);
   return *this;
 }
 
 AccountInfo::Builder& AccountInfo::Builder::SetAccountId(
     const CoreAccountId& account_id) {
   CHECK(!account_id.empty());
-  account_info_.account_id = account_id;
+  account_info_.core_account_info_.account_id = account_id;
   return *this;
 }
 
 AccountInfo::Builder& AccountInfo::Builder::SetIsUnderAdvancedProtection(
     bool is_under_advanced_protection) {
-  account_info_.is_under_advanced_protection = is_under_advanced_protection;
+  account_info_.core_account_info_.is_under_advanced_protection =
+      is_under_advanced_protection;
   return *this;
 }
 
@@ -362,14 +370,14 @@ AccountInfo::Builder& AccountInfo::Builder::SetLastDownloadedAvatarUrlWithSize(
 
 AccountInfo::Builder& AccountInfo::Builder::SetAvatarImage(
     const gfx::Image& avatar_image) {
-  account_info_.account_image = avatar_image;
+  account_info_.account_image_ = avatar_image;
   return *this;
 }
 
 AccountInfo::Builder& AccountInfo::Builder::SetLocale(
     std::string_view locale_val) {
   CHECK(!locale_val.empty());
-  account_info_.locale = std::string(locale_val);
+  account_info_.locale_ = std::string(locale_val);
   return *this;
 }
 
@@ -388,11 +396,13 @@ AccountInfo::Builder& AccountInfo::Builder::SetAvatarUrl(
   return *this;
 }
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
 AccountInfo::Builder& AccountInfo::Builder::SetLastAuthenticationAccessPoint(
     signin_metrics::AccessPoint access_point_val) {
-  account_info_.access_point = access_point_val;
+  account_info_.access_point_ = access_point_val;
   return *this;
 }
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 AccountInfo::Builder& AccountInfo::Builder::SetIsChildAccount(
     signin::Tribool is_child_account) {
@@ -424,8 +434,23 @@ AccountInfo::Builder AccountInfo::Builder::CreateWithPossiblyEmptyGaiaId(
          "kGaiaAccountIdEnforcement is enabled";
   CHECK(!email.empty());
   AccountInfo::Builder builder;
-  builder.account_info_.gaia = gaia_id;
-  builder.account_info_.email = email;
+  builder.account_info_.core_account_info_.gaia = gaia_id;
+  builder.account_info_.core_account_info_.email = email;
+  return builder;
+}
+
+// static
+AccountInfo::Builder
+AccountInfo::Builder::CreateWithPossiblyEmptyGaiaIdAndEmail(
+    const GaiaId& gaia_id,
+    std::string_view email) {
+  CHECK(!gaia_id.empty() ||
+        !base::FeatureList::IsEnabled(switches::kGaiaAccountIdEnforcement))
+      << "Creating AccountInfo with empty GaiaId is not allowed when "
+         "kGaiaAccountIdEnforcement is enabled";
+  AccountInfo::Builder builder;
+  builder.account_info_.core_account_info_.gaia = gaia_id;
+  builder.account_info_.core_account_info_.email = email;
   return builder;
 }
 
@@ -439,6 +464,11 @@ std::ostream& operator<<(std::ostream& os, const CoreAccountInfo& account) {
   os << "account_id: " << account.account_id << ", gaia: " << account.gaia
      << ", email: " << account.email << ", adv_prot: " << std::boolalpha
      << account.is_under_advanced_protection;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const AccountInfo& account) {
+  os << account.GetCoreAccountInfo();
   return os;
 }
 
@@ -465,11 +495,12 @@ base::android::ScopedJavaLocalRef<jobject> ConvertToJavaAccountInfo(
                 env, maybe_hosted_domain->empty() ? kNoHostedDomainFound
                                                   : *maybe_hosted_domain)
           : nullptr;
+  std::optional<gfx::Image> maybe_account_image = account_info.GetAvatarImage();
   base::android::ScopedJavaLocalRef<jobject> account_image =
-      account_info.account_image.IsEmpty()
-          ? nullptr
-          : gfx::ConvertToJavaBitmap(
-                *account_info.account_image.AsImageSkia().bitmap());
+      maybe_account_image.has_value()
+          ? gfx::ConvertToJavaBitmap(
+                *maybe_account_image->AsImageSkia().bitmap())
+          : nullptr;
   return signin::Java_AccountInfo_Constructor(
       env, account_info.GetAccountId(), std::string(account_info.GetEmail()),
       account_info.GetGaiaId(),

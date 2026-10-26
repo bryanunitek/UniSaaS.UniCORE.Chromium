@@ -6,6 +6,7 @@
 
 #import "base/barrier_closure.h"
 #import "base/functional/bind.h"
+#import "base/logging.h"
 #import "base/memory/raw_ptr.h"
 #import "base/strings/string_number_conversions.h"
 #import "base/strings/sys_string_conversions.h"
@@ -174,7 +175,6 @@
         completionCallback:std::move(completionCallback)];
 
     [pageContextWrapper setShouldGetSnapshot:NO];
-    [pageContextWrapper setShouldForceUpdateMissingSnapshots:NO];
     [pageContextWrapper setShouldGetAnnotatedPageContent:NO];
     [pageContextWrapper setShouldGetInnerText:YES];
 

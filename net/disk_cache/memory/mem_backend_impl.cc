@@ -46,7 +46,7 @@ int32_t CalculateDefaultMaxSize() {
 
   // We want to use up to 2% of the computer's memory, with a limit of 50 MB,
   // reached on system with more than 2.5 GB of RAM.
-  if (total_memory >= base::MiBU(2500)) {
+  if (total_memory >= base::MiB(2500)) {
     return kMaxMemoryCacheSize;
   }
 
@@ -57,9 +57,9 @@ int32_t CalculateDefaultMaxSize() {
 // Returns the next entry after |node| in |lru_list| that's not a child
 // of |node|.  This is useful when dooming, since dooming a parent entry
 // will also doom its children.
-base::LinkNode<MemEntryImpl>* NextSkippingChildren(
-    const base::LinkedList<MemEntryImpl>& lru_list,
-    base::LinkNode<MemEntryImpl>* node) {
+base::UnsafeLinkNode<MemEntryImpl>* NextSkippingChildren(
+    const base::UnsafeLinkedList<MemEntryImpl>& lru_list,
+    base::UnsafeLinkNode<MemEntryImpl>* node) {
   MemEntryImpl* cur = node->value();
   do {
     node = node->next();
@@ -70,8 +70,8 @@ base::LinkNode<MemEntryImpl>* NextSkippingChildren(
 constexpr base::MemoryConsumerTraits kMemBackendImplTraits(
     // Scales with system RAM up to a cap in the tens of MBs.
     base::MemoryConsumerTraits::EstimatedMemoryUsage::kMedium,
-    // Eviction traverses linked list and erases map entries.
-    base::MemoryConsumerTraits::ReleaseMemoryCost::kRequiresTraversal,
+    // Eviction walks the linked list, reading the entries being freed.
+    base::MemoryConsumerTraits::ReleaseMemoryDataAccess::kReads,
     // Evicted entries can be re-fetched from network.
     base::MemoryConsumerTraits::InformationRetention::kLossless,
     // Eviction runs inline synchronously.
@@ -123,7 +123,7 @@ void MemBackendImpl::OnEntryInserted(MemEntryImpl* entry) {
 }
 
 void MemBackendImpl::OnEntryUpdated(MemEntryImpl* entry) {
-  // LinkedList<>::RemoveFromList() removes |entry| from |lru_list_|.
+  // UnsafeLinkedList<>::RemoveFromList() removes |entry| from |lru_list_|.
   entry->RemoveFromList();
   lru_list_.Append(entry);
 }
@@ -131,7 +131,7 @@ void MemBackendImpl::OnEntryUpdated(MemEntryImpl* entry) {
 void MemBackendImpl::OnEntryDoomed(MemEntryImpl* entry) {
   if (entry->type() == MemEntryImpl::EntryType::kParent)
     entries_.erase(entry->key());
-  // LinkedList<>::RemoveFromList() removes |entry| from |lru_list_|.
+  // UnsafeLinkedList<>::RemoveFromList() removes |entry| from |lru_list_|.
   entry->RemoveFromList();
 }
 
@@ -227,7 +227,7 @@ net::Error MemBackendImpl::DoomEntriesBetween(Time initial_time,
     end_time = Time::Max();
   DCHECK_GE(end_time, initial_time);
 
-  base::LinkNode<MemEntryImpl>* node = lru_list_.head();
+  base::UnsafeLinkNode<MemEntryImpl>* node = lru_list_.head();
   while (node != lru_list_.end()) {
     MemEntryImpl* candidate = node->value();
     node = NextSkippingChildren(lru_list_, node);
@@ -260,7 +260,7 @@ int64_t MemBackendImpl::CalculateSizeOfEntriesBetween(
   DCHECK_GE(end_time, initial_time);
 
   int size = 0;
-  base::LinkNode<MemEntryImpl>* node = lru_list_.head();
+  base::UnsafeLinkNode<MemEntryImpl>* node = lru_list_.head();
   while (node != lru_list_.end()) {
     MemEntryImpl* entry = node->value();
     if (entry->GetLastUsed() >= initial_time &&
@@ -356,7 +356,7 @@ void MemBackendImpl::EvictIfNeeded() {
 }
 
 void MemBackendImpl::EvictTill(int target_size) {
-  base::LinkNode<MemEntryImpl>* entry = lru_list_.head();
+  base::UnsafeLinkNode<MemEntryImpl>* entry = lru_list_.head();
   while (current_size_ > target_size && entry != lru_list_.end()) {
     MemEntryImpl* to_doom = entry->value();
     entry = NextSkippingChildren(lru_list_, entry);
@@ -367,17 +367,17 @@ void MemBackendImpl::EvictTill(int target_size) {
 }
 
 int32_t MemBackendImpl::CalculateTargetMemoryLimit() const {
-  if (memory_limit() <= base::kModerateMemoryPressureThreshold) {
+  if (memory_limit() <= base::MemoryLimit::ModeratePressureThreshold()) {
     // Under moderate pressure or worse, we use linear interpolation to ensure
     // the cache is never completely cleared. We map the [0, 50] memory limit
     // range to [10%, 50%] of max_size_.
     float min = max_size_ / 10.0f;
     float max = max_size_ / 2.0f;
     return base::checked_cast<int32_t>(
-        std::lerp(min, max, memory_limit_ratio() / 0.5));
+        std::lerp(min, max, memory_limit().ratio() / 0.5));
   }
 
-  return base::ScaleByMemoryLimit(max_size_, memory_limit());
+  return memory_limit().Scale(max_size_);
 }
 
 void MemBackendImpl::OnUpdateMemoryLimit() {
@@ -397,9 +397,10 @@ void MemBackendImpl::OnReleaseMemory() {
     EvictTill(current_max_size_);
   } else {
     // Stateless behavior, evict to specific limits.
-    if (memory_limit() <= base::kCriticalMemoryPressureThreshold) {
+    if (memory_limit() <= base::MemoryLimit::CriticalPressureThreshold()) {
       EvictTill(max_size_ / 10);
-    } else if (memory_limit() <= base::kModerateMemoryPressureThreshold) {
+    } else if (memory_limit() <=
+               base::MemoryLimit::ModeratePressureThreshold()) {
       EvictTill(max_size_ / 2);
     }
   }

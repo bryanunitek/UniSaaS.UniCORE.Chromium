@@ -11,13 +11,14 @@
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_utils.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/login/user_adding_screen.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -150,9 +151,7 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, TestFullscreenExit) {
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     ui_test_utils::FullscreenWaiter waiter(browser(), {.tab_fullscreen = true});
-    browser()
-        ->GetFeatures()
-        .exclusive_access_manager()
+    ExclusiveAccessManager::From(browser())
         ->fullscreen_controller()
         ->EnterFullscreenModeForTab(web_contents->GetPrimaryMainFrame());
     waiter.Wait();
@@ -180,12 +179,12 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, TestShowTwice) {
   tester.Lock();
 
   // Calling Show again simply send LockCompleted signal.
-  ScreenLocker::Show();
+  ScreenLockerController::Get().ShowLockScreen();
   EXPECT_TRUE(tester.IsLocked());
   EXPECT_EQ(2, session_manager_client()->notify_lock_screen_shown_call_count());
 
   // Close the locker to match expectations.
-  ScreenLocker::Hide();
+  ScreenLockerController::Get().HideLockScreen();
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(tester.IsLocked());
   EXPECT_EQ(
@@ -203,7 +202,7 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, PasswordAuthWhenAuthDisabled) {
   EXPECT_TRUE(tester.IsLocked());
 
   // Disable authentication for user.
-  ScreenLocker::default_screen_locker()->TemporarilyDisableAuthForUser(
+  ScreenLockerController::Get().screen_locker()->TemporarilyDisableAuthForUser(
       user_manager::StubAccountId(),
       AuthDisabledData(AuthDisabledReason::kTimeWindowLimit,
                        base::Time::Now() + base::Hours(1), base::Hours(1),
@@ -214,7 +213,7 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, PasswordAuthWhenAuthDisabled) {
   EXPECT_TRUE(tester.IsLocked());
 
   // Re-enable authentication for user.
-  ScreenLocker::default_screen_locker()->ReenableAuthForUser(
+  ScreenLockerController::Get().screen_locker()->ReenableAuthForUser(
       user_manager::StubAccountId());
 
   // Try to authenticate with password.
@@ -240,7 +239,7 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, FingerprintAuthWhenAuthDisabled) {
   EXPECT_TRUE(tester.IsLocked());
 
   // Disable authentication for user.
-  ScreenLocker::default_screen_locker()->TemporarilyDisableAuthForUser(
+  ScreenLockerController::Get().screen_locker()->TemporarilyDisableAuthForUser(
       user_manager::StubAccountId(),
       AuthDisabledData(AuthDisabledReason::kTimeUsageLimit,
                        base::Time::Now() + base::Hours(1), base::Hours(3),
@@ -251,7 +250,7 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, FingerprintAuthWhenAuthDisabled) {
   EXPECT_TRUE(tester.IsLocked());
 
   // Re-enable authentication for user.
-  ScreenLocker::default_screen_locker()->ReenableAuthForUser(
+  ScreenLockerController::Get().screen_locker()->ReenableAuthForUser(
       user_manager::StubAccountId());
 
   // Try to authenticate with fingerprint.

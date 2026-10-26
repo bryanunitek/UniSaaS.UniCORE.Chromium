@@ -8,6 +8,7 @@
 
 #include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_job_coordinator.h"
 #include "content/browser/service_worker/service_worker_registration.h"
@@ -29,13 +30,20 @@ ServiceWorkerUnregisterJob::ServiceWorkerUnregisterJob(
       key_(key),
       is_immediate_(is_immediate),
       initiator_(initiator) {
-  DCHECK(context_);
+  CHECK(context_, base::NotFatalUntil::M159);
 }
 
 ServiceWorkerUnregisterJob::~ServiceWorkerUnregisterJob() = default;
 
 void ServiceWorkerUnregisterJob::AddCallback(UnregistrationCallback callback) {
-  callbacks_.emplace_back(std::move(callback));
+  if (!is_promise_resolved_) {
+    callbacks_.emplace_back(std::move(callback));
+    return;
+  }
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(std::move(callback), promise_resolved_registration_id_,
+                     promise_resolved_status_));
 }
 
 void ServiceWorkerUnregisterJob::Start() {
@@ -65,7 +73,7 @@ void ServiceWorkerUnregisterJob::OnRegistrationFound(
     blink::ServiceWorkerStatusCode status,
     scoped_refptr<ServiceWorkerRegistration> registration) {
   if (status == blink::ServiceWorkerStatusCode::kErrorNotFound) {
-    DCHECK(!registration.get());
+    CHECK(!registration.get(), base::NotFatalUntil::M159);
     Complete(blink::mojom::kInvalidServiceWorkerRegistrationId,
              blink::ServiceWorkerStatusCode::kErrorNotFound);
     return;
@@ -76,7 +84,7 @@ void ServiceWorkerUnregisterJob::OnRegistrationFound(
     return;
   }
 
-  DCHECK(!registration->is_uninstalling());
+  CHECK(!registration->is_uninstalling(), base::NotFatalUntil::M159);
 
   ResolvePromise(registration->id(), blink::ServiceWorkerStatusCode::kOk);
 
@@ -106,11 +114,14 @@ void ServiceWorkerUnregisterJob::CompleteInternal(
 void ServiceWorkerUnregisterJob::ResolvePromise(
     int64_t registration_id,
     blink::ServiceWorkerStatusCode status) {
-  DCHECK(!is_promise_resolved_);
+  CHECK(!is_promise_resolved_, base::NotFatalUntil::M159);
   is_promise_resolved_ = true;
-  for (UnregistrationCallback& callback : callbacks_)
+  promise_resolved_registration_id_ = registration_id;
+  promise_resolved_status_ = status;
+  std::vector<UnregistrationCallback> callbacks;
+  callbacks.swap(callbacks_);
+  for (UnregistrationCallback& callback : callbacks)
     std::move(callback).Run(registration_id, status);
-  callbacks_.clear();
 }
 
 }  // namespace content

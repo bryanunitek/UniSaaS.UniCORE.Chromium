@@ -10,10 +10,12 @@
 
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/views/tabs/hovercard/tab_hover_card_controller.h"
 #include "chrome/browser/ui/views/tabs/shared/drop_arrow.h"
 #include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
+#include "components/tabs/public/tab_collection.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 
 class BrowserView;
@@ -31,7 +33,8 @@ class TabCollectionNode;
 
 // Shared collection-based foundation for tabstrip region views. Manages
 // observers and controllers used for both horizontal and vertical orientations.
-class BaseTabStripRegionView : public TabStripRegionView {
+class BaseTabStripRegionView : public TabStripRegionView,
+                               public views::WidgetObserver {
   METADATA_HEADER(BaseTabStripRegionView, TabStripRegionView)
 
  public:
@@ -58,7 +61,8 @@ class BaseTabStripRegionView : public TabStripRegionView {
   void UpdateLoadingAnimations(const base::TimeDelta& elapsed_time) override;
   std::optional<int> GetFocusedTabIndex() const override;
   const tabs::TabData& GetTabData(const tabs::TabHandle& tab) override;
-  views::View* GetTabAnchorViewAt(int tab_index) override;
+  TabHoverCardController* GetHoverCardController() override;
+  views::View* GetTabAnchorView(const tabs::TabHandle& tab) override;
   views::View* GetTabGroupAnchorView(
       const tab_groups::TabGroupId& group) override;
   void OnTabGroupFocusChanged(
@@ -78,6 +82,7 @@ class BaseTabStripRegionView : public TabStripRegionView {
   void OnDragExited() override;
   void SetTabStripObserver(TabStripObserver* observer) override;
   views::View* GetTabStripView() override;
+  void OnGlassFrameEligibilityChanged(bool is_eligible) override;
   bool TraverseUsingUpDownKeys() override;
   std::unique_ptr<ExpandOnHoverLock> GetExpandOnHoverLock(
       ExpandOnHoverLockType lock_type) override;
@@ -86,6 +91,14 @@ class BaseTabStripRegionView : public TabStripRegionView {
   void HandleDragUpdate(
       const std::optional<BrowserRootView::DropIndex>& index) override;
   void HandleDragExited() override;
+
+  // Views::View:
+  void AddedToWidget() override;
+  void RemovedFromWidget() override;
+  void Layout(PassKey) override;
+
+  // views::WidgetObserver:
+  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override;
 
   void DisableTabStripEditingForTesting() override;
   gfx::Rect GetLinkDropBoundsForTesting(
@@ -96,21 +109,57 @@ class BaseTabStripRegionView : public TabStripRegionView {
   TabStripOrientation orientation() const { return orientation_; }
 
  protected:
-  virtual views::View* SetTabStripView(std::unique_ptr<views::View> view) = 0;
-  virtual void ClearTabStripView(views::View* view);
+  // Adds the tab strip view at the correct location and index in the tab strip
+  // region view hierarchy. Also sets any other required properties, registers
+  // any required listeners, and does any other initialization required when the
+  // tab strip is set.
+  //
+  // Default behavior adds `view` as a child of `this`.
+  //
+  // Note that `view` does not need to be added as a direct child of `this`, but
+  // if you place it elsewhere, you will also have to override
+  // `RemoveTabStripView()` to correctly remove and retrieve it.
+  virtual void AddTabStripView(std::unique_ptr<views::View> view);
+
+  // Removes the tab strip view from this view's hierarchy and returns it. Also
+  // does any other required teardown, resetting of state, releasing of
+  // listeners, etc.
+  //
+  // Default behavior attempts to remove `view` as a child of `this`.
+  virtual std::unique_ptr<views::View> RemoveTabStripView(views::View* view);
 
   void RecordNewTabButtonPressed();
-  void OnChildrenAdded();
-  void OnChildrenRemoved();
-  void OnChildMoved(TabCollectionNode* moved_node);
-  void OnActiveTabChanged(const tabs::TabInterface* active_tab);
+  virtual void OnActiveTabChanged(const tabs::TabInterface* active_tab);
 
   void SetLinkDropArrow(const std::optional<BrowserRootView::DropIndex>& index);
-  gfx::Rect GetLinkDropBounds(const BrowserRootView::DropIndex& drop_index,
-                              DropArrow::Direction* direction);
   virtual gfx::Point GetLinkDropArrowPosition(
       const BrowserRootView::DropIndex& drop_index,
       DropArrow::Direction* direction) = 0;
+  views::View* GetTabViewAt(int tab_index) const;
+  bool IsDropBeforeGroupHeader(const BrowserRootView::DropIndex& drop_index,
+                               const tabs::TabInterface* tab) const;
+  views::View* GetGroupHeaderView(const tab_groups::TabGroupId& group_id) const;
+  bool IsDragging() const;
+
+  BrowserView* browser_view() const { return browser_view_; }
+  actions::ActionItem* root_action_item() const { return root_action_item_; }
+  TabStripModel* tab_strip_model() const { return tab_strip_model_; }
+  TabStripView* tab_strip_view() const { return tab_strip_view_; }
+  DropArrow* drop_arrow() const { return drop_arrow_.get(); }
+  TabHoverCardController* hover_card_controller() const {
+    return hover_card_controller_.get();
+  }
+
+ private:
+  views::View* SetTabStripView(std::unique_ptr<views::View> view);
+  void ClearTabStripView(views::View* view);
+
+  void OnChildrenAdded(const tabs::TabCollectionNodes& handles);
+  void OnChildrenRemoved();
+  void OnChildMoved(TabCollectionNode* moved_node);
+
+  gfx::Rect GetLinkDropBounds(const BrowserRootView::DropIndex& drop_index,
+                              DropArrow::Direction* direction);
   gfx::Rect GetLinkDropBoundsFromPosition(gfx::Point position,
                                           DropArrow::Direction direction);
 
@@ -125,13 +174,12 @@ class BaseTabStripRegionView : public TabStripRegionView {
   raw_ptr<TabDragHandler> drag_handler_ = nullptr;
   std::unique_ptr<DropArrow> drop_arrow_;
 
-  std::unique_ptr<TabStripCollectionController> tab_strip_controller_;
   std::unique_ptr<RootTabCollectionNode> root_node_;
+  std::unique_ptr<TabStripCollectionController> tab_strip_controller_;
 
   std::unique_ptr<TabHoverCardController> hover_card_controller_;
   std::unique_ptr<HoverTabSelector> hover_tab_selector_;
 
-  base::CallbackListSubscription paint_as_active_subscription_;
   std::optional<base::CallbackListSubscription> on_children_added_subscription_;
   std::optional<base::CallbackListSubscription>
       on_children_removed_subscription_;
@@ -140,6 +188,10 @@ class BaseTabStripRegionView : public TabStripRegionView {
       on_active_tab_changed_subscription_;
 
   std::optional<base::TimeTicks> new_tab_button_pressed_start_time_;
+
+  bool is_first_window_presentation_ = true;
+  base::ScopedObservation<views::Widget, views::WidgetObserver>
+      widget_observation_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BASE_TAB_STRIP_REGION_VIEW_H_

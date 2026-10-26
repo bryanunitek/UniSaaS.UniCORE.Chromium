@@ -4,6 +4,8 @@
 
 #include "content/browser/media/capture/native_screen_capture_picker_mac.h"
 
+#import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CoreVideo.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 
 #include <map>
@@ -24,6 +26,7 @@
 #include "media/capture/video/video_capture_device.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 
 using Source = webrtc::DesktopCapturer::Source;
 
@@ -127,13 +130,147 @@ API_AVAILABLE(macos(14.0))
 
 @interface FakeSCContentFilter : NSObject
 @property(strong) NSArray* includedWindows;
+@property(strong) NSArray* includedDisplays;
+@property(assign, readonly) CGRect contentRect;
 @end
 
 @implementation FakeSCContentFilter
 @synthesize includedWindows = _includedWindows;
+@synthesize includedDisplays = _includedDisplays;
+- (CGRect)contentRect {
+  return CGRectMake(0, 0, 100, 100);
+}
 @end
 
+API_AVAILABLE(macos(14.0))
+static CMSampleBufferRef g_fake_sample_buffer = nil;
+API_AVAILABLE(macos(14.0))
+static NSError* g_fake_stream_error = nil;
+
+API_AVAILABLE(macos(14.0))
+@interface FakeSCStreamForPicker : NSObject
+@property(weak) id<SCStreamDelegate> delegate;
+@property(weak) id<SCStreamOutput> output;
+@property(strong) dispatch_queue_t sampleQueue;
+- (instancetype)initWithFilter:(SCContentFilter*)filter
+                 configuration:(SCStreamConfiguration*)config
+                      delegate:(id<SCStreamDelegate>)delegate;
+- (BOOL)addStreamOutput:(id<SCStreamOutput>)output
+                   type:(SCStreamOutputType)type
+     sampleHandlerQueue:(dispatch_queue_t)sampleHandlerQueue
+                  error:(NSError**)error;
+- (void)startCaptureWithCompletionHandler:
+    (void (^)(NSError* _Nullable error))completionHandler;
+- (void)stopCaptureWithCompletionHandler:
+    (void (^)(NSError* _Nullable error))completionHandler;
+@end
+
+@implementation FakeSCStreamForPicker
+@synthesize delegate = _delegate;
+@synthesize output = _output;
+@synthesize sampleQueue = _sampleQueue;
+
+- (instancetype)initWithFilter:(SCContentFilter*)filter
+                 configuration:(SCStreamConfiguration*)config
+                      delegate:(id<SCStreamDelegate>)delegate {
+  if ((self = [super init])) {
+    _delegate = delegate;
+  }
+  return self;
+}
+
+- (BOOL)addStreamOutput:(id<SCStreamOutput>)output
+                   type:(SCStreamOutputType)type
+     sampleHandlerQueue:(dispatch_queue_t)sampleHandlerQueue
+                  error:(NSError**)error {
+  _output = output;
+  _sampleQueue = sampleHandlerQueue;
+  return YES;
+}
+
+- (void)startCaptureWithCompletionHandler:
+    (void (^)(NSError* _Nullable error))completionHandler {
+  if (g_fake_stream_error) {
+    completionHandler(g_fake_stream_error);
+    return;
+  }
+  completionHandler(nil);
+  if (g_fake_sample_buffer && _output) {
+    [_output stream:(SCStream*)self
+        didOutputSampleBuffer:g_fake_sample_buffer
+                       ofType:SCStreamOutputTypeScreen];
+  }
+}
+
+- (void)stopCaptureWithCompletionHandler:
+    (void (^)(NSError* _Nullable error))completionHandler {
+  if (completionHandler) {
+    completionHandler(nil);
+  }
+}
+@end
+
+API_AVAILABLE(macos(14.0))
+@interface SCStream (NativeScreenCapturePickerMacTest)
+- (instancetype)initFakePickerWithFilter:(SCContentFilter*)filter
+                           configuration:(SCStreamConfiguration*)config
+                                delegate:(id<SCStreamDelegate>)delegate;
+@end
+
+@implementation SCStream (NativeScreenCapturePickerMacTest)
+- (instancetype)initFakePickerWithFilter:(SCContentFilter*)filter
+                           configuration:(SCStreamConfiguration*)config
+                                delegate:(id<SCStreamDelegate>)delegate {
+  if (@available(macOS 14.0, *)) {
+    return (SCStream*)[[FakeSCStreamForPicker alloc] initWithFilter:filter
+                                                      configuration:config
+                                                           delegate:delegate];
+  }
+  return nil;
+}
+@end
+
+static CVPixelBufferRef CreateTestPixelBuffer(int width, int height) {
+  CVPixelBufferRef pixel_buffer = nullptr;
+  CVReturn status =
+      CVPixelBufferCreate(kCFAllocatorDefault, width, height,
+                          kCVPixelFormatType_32BGRA, nullptr, &pixel_buffer);
+  if (status != kCVReturnSuccess || !pixel_buffer) {
+    return nullptr;
+  }
+  return pixel_buffer;
+}
+
+static CMSampleBufferRef CreateTestSampleBuffer(CVPixelBufferRef pixel_buffer) {
+  CMSampleBufferRef sample_buffer = nullptr;
+  CMSampleTimingInfo timing_info = {.duration = kCMTimeInvalid,
+                                    .presentationTimeStamp = CMTimeMake(0, 1),
+                                    .decodeTimeStamp = kCMTimeInvalid};
+  CMVideoFormatDescriptionRef format_desc = nullptr;
+  OSStatus status = CMVideoFormatDescriptionCreateForImageBuffer(
+      kCFAllocatorDefault, pixel_buffer, &format_desc);
+  if (status != noErr || !format_desc) {
+    return nullptr;
+  }
+  status = CMSampleBufferCreateForImageBuffer(
+      kCFAllocatorDefault, pixel_buffer, true, nullptr, nullptr, format_desc,
+      &timing_info, &sample_buffer);
+  CFRelease(format_desc);
+  if (status != noErr) {
+    return nullptr;
+  }
+  return sample_buffer;
+}
+
 namespace content {
+
+namespace {
+
+constexpr int kTestFrameWidth = 100;
+constexpr int kTestFrameHeight = 100;
+constexpr base::TimeDelta kScreenshotFadeOutDelay = base::Milliseconds(250);
+
+}  // namespace
 
 class NativeScreenCapturePickerMacTest : public testing::Test {
  public:
@@ -153,6 +290,11 @@ class NativeScreenCapturePickerMacTest : public testing::Test {
               @selector(runningApplicationWithProcessIdentifier:));
       NativeScreenCapturePickerMac::SetGetWindowOwnerPidForTesting(
           base::BindRepeating(&GetWindowOwnerPidFake));
+      g_fake_sample_buffer = nil;
+      g_fake_stream_error = nil;
+      stream_swizzler_ = std::make_unique<base::apple::ScopedObjCClassSwizzler>(
+          [SCStream class], @selector(initWithFilter:configuration:delegate:),
+          @selector(initFakePickerWithFilter:configuration:delegate:));
       picker_ = CreateNativeScreenCapturePickerMac();
     } else {
       GTEST_SKIP() << "Skipping tests on macOS < 14.0";
@@ -163,10 +305,16 @@ class NativeScreenCapturePickerMacTest : public testing::Test {
     picker_.reset();
     picker_swizzler_.reset();
     ns_running_app_swizzler_.reset();
+    stream_swizzler_.reset();
     if (@available(macOS 14.0, *)) {
       g_fake_picker = nil;
       NativeScreenCapturePickerMac::SetGetWindowOwnerPidForTesting(
           base::NullCallback());
+      if (g_fake_sample_buffer) {
+        CFRelease(g_fake_sample_buffer);
+        g_fake_sample_buffer = nil;
+      }
+      g_fake_stream_error = nil;
     }
   }
 
@@ -180,9 +328,17 @@ class NativeScreenCapturePickerMacTest : public testing::Test {
                                    onScreen:YES];
   }
 
+  // Helper to create a fake display.
+  FakeSCDisplay* CreateFakeDisplay(CGDirectDisplayID display_id) {
+    return [[FakeSCDisplay alloc] initWithID:display_id frame:CGRectZero];
+  }
+
   // Triggers a picker observer update. If |window_id| is provided, the filter
-  // will include that specific window (macOS 15.2+).
-  void TriggerUpdate(std::optional<CGWindowID> window_id = std::nullopt) {
+  // will include that specific window (macOS 15.2+). If |display_id| is
+  // provided, the filter will include that display (macOS 15.2+).
+  void TriggerUpdate(std::optional<CGWindowID> window_id = std::nullopt,
+                     std::optional<CGDirectDisplayID> display_id = std::nullopt,
+                     SCStream* stream = nil) {
     if (@available(macOS 14.0, *)) {
       FakeSCContentFilter* filter = [[FakeSCContentFilter alloc] init];
       if (window_id.has_value()) {
@@ -190,10 +346,34 @@ class NativeScreenCapturePickerMacTest : public testing::Test {
           filter.includedWindows = @[ CreateFakeWindow(*window_id) ];
         }
       }
+      if (display_id.has_value()) {
+        if (@available(macOS 15.2, *)) {
+          filter.includedDisplays =
+              @[ (SCDisplay*)CreateFakeDisplay(*display_id) ];
+        }
+      }
       [g_fake_picker.observer
           contentSharingPicker:(SCContentSharingPicker*)g_fake_picker
            didUpdateWithFilter:(SCContentFilter*)filter
-                     forStream:nil];
+                     forStream:stream];
+    }
+  }
+
+  SCStream* CreateAndRegisterFakeStream(DesktopMediaID::Id session_id) {
+    if (@available(macOS 14.0, *)) {
+      SCStream* fake_stream = (SCStream*)[[FakeSCStreamForPicker alloc] init];
+      NativeScreenCapturePickerMac::GetInstance()->UpdateStreamMap(session_id,
+                                                                   fake_stream);
+      return fake_stream;
+    }
+    return nil;
+  }
+
+  void TriggerCancel() {
+    if (@available(macOS 14.0, *)) {
+      [g_fake_picker.observer
+          contentSharingPicker:(SCContentSharingPicker*)g_fake_picker
+            didCancelForStream:nil];
     }
   }
 
@@ -242,6 +422,7 @@ class NativeScreenCapturePickerMacTest : public testing::Test {
   std::unique_ptr<base::apple::ScopedObjCClassSwizzler> picker_swizzler_;
   std::unique_ptr<base::apple::ScopedObjCClassSwizzler>
       ns_running_app_swizzler_;
+  std::unique_ptr<base::apple::ScopedObjCClassSwizzler> stream_swizzler_;
 };
 
 TEST_F(NativeScreenCapturePickerMacTest, OpenCallsSystemPickerForScreen) {
@@ -286,6 +467,25 @@ TEST_F(NativeScreenCapturePickerMacTest, ObserverUpdateCallback) {
   }
 }
 
+TEST_F(NativeScreenCapturePickerMacTest, ObserverUpdatePopulatesDisplayId) {
+  if (@available(macOS 15.2, *)) {
+    Source selected_source;
+    base::RunLoop run_loop;
+    picker_->Open(DesktopMediaID::TYPE_SCREEN, base::DoNothing(),
+                  base::BindLambdaForTesting([&](Source source) {
+                    selected_source = source;
+                    run_loop.Quit();
+                  }),
+                  base::DoNothing(), base::DoNothing(), base::DoNothing());
+    constexpr CGDirectDisplayID kTestDisplayId = 42;
+    TriggerUpdate(/*window_id=*/std::nullopt, kTestDisplayId);
+    run_loop.Run();
+
+    EXPECT_EQ(selected_source.id, 1);
+    EXPECT_EQ(selected_source.display_id, kTestDisplayId);
+  }
+}
+
 TEST_F(NativeScreenCapturePickerMacTest, CleanupLogic) {
   if (@available(macOS 14.0, *)) {
     DesktopMediaID::Id id = OpenPickerAndSelect(DesktopMediaID::TYPE_SCREEN);
@@ -325,17 +525,109 @@ TEST_F(NativeScreenCapturePickerMacTest, DeactivateOnlyWhenLastDeviceClosed) {
 
 TEST_F(NativeScreenCapturePickerMacTest, MultipleOpenCalls) {
   if (@available(macOS 14.0, *)) {
-    picker_->Open(
-        DesktopMediaID::TYPE_SCREEN,
-        base::BindOnce([](DesktopMediaID::Id id) { EXPECT_EQ(id, 1); }),
-        base::DoNothing(), base::DoNothing(), base::DoNothing(),
-        base::DoNothing());
+    EXPECT_EQ(OpenPickerAndSelect(DesktopMediaID::TYPE_SCREEN), 1);
+    EXPECT_EQ(OpenPickerAndSelect(DesktopMediaID::TYPE_WINDOW), 2);
+  }
+}
 
+TEST_F(NativeScreenCapturePickerMacTest,
+       SecondOpenIsRejectedWhilePickerIsShowing) {
+  if (@available(macOS 14.0, *)) {
+    std::optional<DesktopMediaID::Id> first_selected_id;
+    bool first_error_called = false;
     picker_->Open(
         DesktopMediaID::TYPE_WINDOW,
-        base::BindOnce([](DesktopMediaID::Id id) { EXPECT_EQ(id, 2); }),
-        base::DoNothing(), base::DoNothing(), base::DoNothing(),
+        base::BindOnce([](DesktopMediaID::Id id) { EXPECT_EQ(id, 1); }),
+        base::BindLambdaForTesting(
+            [&](Source source) { first_selected_id = source.id; }),
+        base::DoNothing(),
+        base::BindLambdaForTesting([&]() { first_error_called = true; }),
         base::DoNothing());
+
+    // A second request arrives while the system picker is still showing for
+    // the first one.
+    bool second_created_called = false;
+    bool second_selected_called = false;
+    bool second_error_called = false;
+    picker_->Open(
+        DesktopMediaID::TYPE_WINDOW,
+        base::BindLambdaForTesting(
+            [&](DesktopMediaID::Id id) { second_created_called = true; }),
+        base::BindLambdaForTesting(
+            [&](Source source) { second_selected_called = true; }),
+        base::DoNothing(),
+        base::BindLambdaForTesting([&]() { second_error_called = true; }),
+        base::DoNothing());
+    EXPECT_FALSE(second_created_called);
+    EXPECT_TRUE(second_error_called);
+
+    // The user makes a selection in the system picker. It must be delivered to
+    // the original request that opened the picker.
+    TriggerUpdate();
+    base::RunLoop fence_run_loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, fence_run_loop.QuitClosure());
+    fence_run_loop.Run();
+
+    ASSERT_TRUE(first_selected_id.has_value());
+    EXPECT_EQ(*first_selected_id, 1);
+    EXPECT_FALSE(first_error_called);
+    EXPECT_FALSE(second_selected_called);
+  }
+}
+
+TEST_F(NativeScreenCapturePickerMacTest, OpenAfterCancel) {
+  if (@available(macOS 14.0, *)) {
+    base::RunLoop cancel_run_loop;
+    picker_->Open(
+        DesktopMediaID::TYPE_WINDOW,
+        base::BindOnce([](DesktopMediaID::Id id) { EXPECT_EQ(id, 1); }),
+        base::DoNothing(), cancel_run_loop.QuitClosure(), base::DoNothing(),
+        base::DoNothing());
+    TriggerCancel();
+    cancel_run_loop.Run();
+
+    // After the first request is cancelled, a new request can be served.
+    EXPECT_EQ(OpenPickerAndSelect(DesktopMediaID::TYPE_WINDOW), 2);
+  }
+}
+
+TEST_F(NativeScreenCapturePickerMacTest, OpenAfterClose) {
+  if (@available(macOS 14.0, *)) {
+    DesktopMediaID::Id id1 = 0;
+    bool selected_called = false;
+    bool cancel_called = false;
+    bool error_called = false;
+    picker_->Open(
+        DesktopMediaID::TYPE_WINDOW,
+        base::BindLambdaForTesting([&](DesktopMediaID::Id id) { id1 = id; }),
+        base::BindLambdaForTesting(
+            [&](Source source) { selected_called = true; }),
+        base::BindLambdaForTesting([&]() { cancel_called = true; }),
+        base::BindLambdaForTesting([&]() { error_called = true; }),
+        base::DoNothing());
+    EXPECT_EQ(id1, 1);
+
+    // Closing the active session while the picker is still open clears the
+    // in-flight request.
+    picker_->Close(DesktopMediaID(DesktopMediaID::TYPE_WINDOW, id1));
+
+    // Fast-forward past the cleanup timer so the closed session is erased.
+    task_environment_.FastForwardBy(base::Seconds(60));
+
+    // Late observer callbacks for the closed session are ignored.
+    TriggerUpdate();
+    TriggerCancel();
+    base::RunLoop fence_run_loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, fence_run_loop.QuitClosure());
+    fence_run_loop.Run();
+    EXPECT_FALSE(selected_called);
+    EXPECT_FALSE(cancel_called);
+    EXPECT_FALSE(error_called);
+
+    // A subsequent request can now be served.
+    EXPECT_EQ(OpenPickerAndSelect(DesktopMediaID::TYPE_WINDOW), 2);
   }
 }
 
@@ -361,12 +653,14 @@ TEST_F(NativeScreenCapturePickerMacTest,
     GetBundleMap()[kWindowA] = "com.example.AppA";
     GetBundleMap()[kWindowB] = "com.example.AppB";
 
-    OpenPickerAndSelect(DesktopMediaID::TYPE_WINDOW, kWindowA,
-                        base::BindLambdaForTesting([&](DesktopMediaID::Id id) {
-                          EXPECT_EQ(id, 1);
-                          stop_audio_run_loop.Quit();
-                        }));
-    TriggerUpdate(kWindowB);
+    DesktopMediaID::Id session_id = OpenPickerAndSelect(
+        DesktopMediaID::TYPE_WINDOW, kWindowA,
+        base::BindLambdaForTesting([&](DesktopMediaID::Id id) {
+          EXPECT_EQ(id, 1);
+          stop_audio_run_loop.Quit();
+        }));
+    SCStream* fake_stream = CreateAndRegisterFakeStream(session_id);
+    TriggerUpdate(kWindowB, /*display_id=*/std::nullopt, fake_stream);
 
     stop_audio_run_loop.Run();
     EXPECT_TRUE(true);
@@ -382,10 +676,11 @@ TEST_F(NativeScreenCapturePickerMacTest,
     GetBundleMap()[kWindowA] = "com.example.AppA";
     GetBundleMap()[kWindowB] = "com.example.AppB";
 
-    OpenPickerAndSelect(DesktopMediaID::TYPE_WINDOW, kWindowA,
-                        base::BindLambdaForTesting([&](DesktopMediaID::Id id) {
-                          stop_audio_called = true;
-                        }));
+    DesktopMediaID::Id session_id = OpenPickerAndSelect(
+        DesktopMediaID::TYPE_WINDOW, kWindowA,
+        base::BindLambdaForTesting(
+            [&](DesktopMediaID::Id id) { stop_audio_called = true; }));
+    SCStream* fake_stream = CreateAndRegisterFakeStream(session_id);
 
     // Update with both windows (A and B).
     FakeSCContentFilter* filter = [[FakeSCContentFilter alloc] init];
@@ -394,7 +689,7 @@ TEST_F(NativeScreenCapturePickerMacTest,
     [g_fake_picker.observer
         contentSharingPicker:(SCContentSharingPicker*)g_fake_picker
          didUpdateWithFilter:(SCContentFilter*)filter
-                   forStream:nil];
+                   forStream:fake_stream];
 
     base::RunLoop fence_run_loop;
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -421,6 +716,143 @@ TEST_F(NativeScreenCapturePickerMacTest, SequentialOpenCalls) {
     OpenPickerAndSelect(DesktopMediaID::TYPE_WINDOW, kWindow2);
     ASSERT_NO_FATAL_FAILURE(VerifyApplicationAudioCaptureId(1, kBundle1));
     ASSERT_NO_FATAL_FAILURE(VerifyApplicationAudioCaptureId(2, kBundle2));
+  }
+}
+
+TEST_F(NativeScreenCapturePickerMacTest, CaptureScreenshotSuccess) {
+  if (@available(macOS 14.0, *)) {
+    // 1. Create a fake session.
+    const CGWindowID kWindowId = 101;
+    DesktopMediaID::Id session_id =
+        OpenPickerAndSelect(DesktopMediaID::TYPE_WINDOW, kWindowId);
+
+    // 2. Set up fake CMSampleBuffer.
+    CVPixelBufferRef pixel_buffer =
+        CreateTestPixelBuffer(kTestFrameWidth, kTestFrameHeight);
+    ASSERT_TRUE(pixel_buffer != nullptr);
+    g_fake_sample_buffer = CreateTestSampleBuffer(pixel_buffer);
+    CVPixelBufferRelease(pixel_buffer);
+    ASSERT_TRUE(g_fake_sample_buffer != nil);
+
+    // 3. Trigger CaptureScreenshot.
+    base::test::TestFuture<const SkBitmap&> future;
+    NativeScreenCapturePickerMac::GetInstance()->CaptureScreenshot(
+        session_id, future.GetCallback());
+
+    // 4. Fast forward delayed capture trigger.
+    task_environment_.FastForwardBy(kScreenshotFadeOutDelay);
+
+    // 5. Verify screenshot was captured and has correct size.
+    const SkBitmap& bitmap = future.Get();
+    EXPECT_FALSE(bitmap.drawsNothing());
+    EXPECT_EQ(bitmap.width(), kTestFrameWidth);
+    EXPECT_EQ(bitmap.height(), kTestFrameHeight);
+    EXPECT_FALSE(g_fake_picker.active);
+  }
+}
+
+TEST_F(NativeScreenCapturePickerMacTest, CaptureScreenshotError) {
+  if (@available(macOS 14.0, *)) {
+    // 1. Create a fake session.
+    const CGWindowID kWindowId = 101;
+    DesktopMediaID::Id session_id =
+        OpenPickerAndSelect(DesktopMediaID::TYPE_WINDOW, kWindowId);
+
+    // 2. Set up error.
+    if (g_fake_sample_buffer) {
+      CFRelease(g_fake_sample_buffer);
+      g_fake_sample_buffer = nil;
+    }
+    g_fake_stream_error = [NSError errorWithDomain:@"TestDomain"
+                                              code:-1
+                                          userInfo:nil];
+
+    // 3. Trigger CaptureScreenshot.
+    base::test::TestFuture<const SkBitmap&> future;
+    NativeScreenCapturePickerMac::GetInstance()->CaptureScreenshot(
+        session_id, future.GetCallback());
+
+    // 4. Fast forward delayed capture trigger.
+    task_environment_.FastForwardBy(kScreenshotFadeOutDelay);
+
+    // 5. Verify it returns an empty bitmap.
+    const SkBitmap& bitmap = future.Get();
+    EXPECT_TRUE(bitmap.drawsNothing());
+    EXPECT_FALSE(g_fake_picker.active);
+  }
+}
+
+TEST_F(NativeScreenCapturePickerMacTest, CaptureScreenshotInvalidSession) {
+  if (@available(macOS 14.0, *)) {
+    // Trigger CaptureScreenshot on a non-existent session.
+    base::test::TestFuture<const SkBitmap&> future;
+    NativeScreenCapturePickerMac::GetInstance()->CaptureScreenshot(
+        999, future.GetCallback());
+
+    // Should return immediately with empty bitmap (no task delay).
+    const SkBitmap& bitmap = future.Get();
+    EXPECT_TRUE(bitmap.drawsNothing());
+    EXPECT_FALSE(g_fake_picker.active);
+  }
+}
+
+TEST_F(NativeScreenCapturePickerMacTest, CancelPickerDeactivatesSystemPicker) {
+  if (@available(macOS 14.0, *)) {
+    base::RunLoop cancel_run_loop;
+    picker_->Open(DesktopMediaID::TYPE_SCREEN, base::DoNothing(),
+                  base::DoNothing(),
+                  base::BindLambdaForTesting([&]() { cancel_run_loop.Quit(); }),
+                  base::DoNothing(), base::DoNothing());
+
+    EXPECT_TRUE(g_fake_picker.active);
+
+    [g_fake_picker.observer
+        contentSharingPicker:(SCContentSharingPicker*)g_fake_picker
+          didCancelForStream:nil];
+
+    cancel_run_loop.Run();
+    EXPECT_FALSE(g_fake_picker.active);
+  }
+}
+
+TEST_F(NativeScreenCapturePickerMacTest, OpenExcludesHiddenWindows) {
+  if (@available(macOS 14.0, *)) {
+    // Ensure NSApplication is initialized so created NSWindows are tracked in
+    // [NSApp windows].
+    [NSApplication sharedApplication];
+
+    NSWindow* hidden_window =
+        [[NSWindow alloc] initWithContentRect:NSMakeRect(100, 100, 400, 300)
+                                    styleMask:NSWindowStyleMaskTitled
+                                      backing:NSBackingStoreBuffered
+                                        defer:NO];
+    [hidden_window setReleasedWhenClosed:NO];
+    [hidden_window orderOut:nil];
+    ASSERT_FALSE([hidden_window isVisible]);
+    ASSERT_GT([hidden_window windowNumber], 0);
+
+    NSWindow* visible_window =
+        [[NSWindow alloc] initWithContentRect:NSMakeRect(100, 100, 400, 300)
+                                    styleMask:NSWindowStyleMaskTitled
+                                      backing:NSBackingStoreBuffered
+                                        defer:NO];
+    [visible_window setReleasedWhenClosed:NO];
+    [visible_window orderFront:nil];
+    ASSERT_TRUE([visible_window isVisible]);
+    ASSERT_GT([visible_window windowNumber], 0);
+
+    picker_->Open(DesktopMediaID::TYPE_WINDOW, base::DoNothing(),
+                  base::DoNothing(), base::DoNothing(), base::DoNothing(),
+                  base::DoNothing());
+
+    NSArray<NSNumber*>* excluded_ids =
+        g_fake_picker.defaultConfiguration.excludedWindowIDs;
+    EXPECT_TRUE([excluded_ids containsObject:@([hidden_window windowNumber])]);
+    EXPECT_FALSE(
+        [excluded_ids containsObject:@([visible_window windowNumber])]);
+
+    [hidden_window close];
+    [visible_window close];
   }
 }
 

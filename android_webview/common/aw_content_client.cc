@@ -16,6 +16,7 @@
 #include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/cdm/common/android_cdm_registration.h"
@@ -23,7 +24,6 @@
 #include "components/heap_profiling/in_process/child_process_snapshot_controller.h"
 #include "components/heap_profiling/in_process/heap_profiler_controller.h"
 #include "components/heap_profiling/in_process/mojom/snapshot_controller.mojom.h"
-#include "components/services/heap_profiling/public/cpp/profiling_client.h"
 #include "components/version_info/version_info.h"
 #include "content/public/common/cdm_info.h"
 #include "content/public/common/content_features.h"
@@ -46,10 +46,13 @@ AwContentClient::~AwContentClient() = default;
 
 void AwContentClient::AddAdditionalSchemes(Schemes* schemes) {
   schemes->local_schemes.push_back(url::kContentScheme);
-  schemes->secure_schemes.push_back(
-      android_webview::kAndroidWebViewVideoPosterScheme);
-  schemes->csp_bypassing_schemes.push_back(
-      android_webview::kAndroidWebViewVideoPosterScheme);
+  if (!base::FeatureList::IsEnabled(
+          features::kWebViewIgnoreDefaultVideoPoster)) {
+    schemes->secure_schemes.push_back(
+        android_webview::kAndroidWebViewVideoPosterScheme);
+    schemes->csp_bypassing_schemes.push_back(
+        android_webview::kAndroidWebViewVideoPosterScheme);
+  }
   schemes->allow_non_standard_schemes_in_origins = true;
 }
 
@@ -68,7 +71,8 @@ std::string_view AwContentClient::GetDataResource(
       resource_id, scale_factor);
 }
 
-base::RefCountedMemory* AwContentClient::GetDataResourceBytes(int resource_id) {
+scoped_refptr<base::RefCountedMemory> AwContentClient::GetDataResourceBytes(
+    int resource_id) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytes(
       resource_id);
 }
@@ -106,22 +110,8 @@ media::MediaDrmBridgeClient* AwContentClient::GetMediaDrmBridgeClient() {
 void AwContentClient::ExposeInterfacesToBrowser(
     scoped_refptr<base::SequencedTaskRunner> io_task_runner,
     mojo::BinderMap* binders) {
-  // This creates a process-wide heap_profiling::ProfilingClient that listens
-  // for requests from the HeapProfilingService to start profiling the current
-  // process.
-  binders->Add<heap_profiling::mojom::ProfilingClient>(
-      base::BindRepeating(
-          [](mojo::PendingReceiver<heap_profiling::mojom::ProfilingClient>
-                 receiver) {
-            static base::NoDestructor<heap_profiling::ProfilingClient>
-                profiling_client;
-            profiling_client->BindToInterface(std::move(receiver));
-          }),
-      io_task_runner);
-
-  // Sets up the simplified in-process heap profiler. The
-  // ChildProcessSnapshotController allows the browser process tell the child
-  // process when to collect the samples into a snapshot.
+  // The ChildProcessSnapshotController allows the browser process tell the
+  // child process when to collect the samples into a snapshot.
   if (base::FeatureList::IsEnabled(features::kWebViewMemoryProfilingClient)) {
     const auto* heap_profiler_controller =
         heap_profiling::HeapProfilerController::GetInstance();

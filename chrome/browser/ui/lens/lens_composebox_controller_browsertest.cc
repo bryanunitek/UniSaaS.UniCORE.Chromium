@@ -12,7 +12,7 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/themes/theme_service.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/lens/lens_composebox_handler.h"
 #include "chrome/browser/ui/lens/lens_overlay_controller.h"
 #include "chrome/browser/ui/lens/lens_overlay_side_panel_coordinator.h"
@@ -39,6 +39,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "net/dns/mock_host_resolver.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/lens_server_proto/aim_communication.pb.h"
 #include "ui/base/unowned_user_data/user_data_factory.h"
@@ -53,7 +54,6 @@ class TestLensComposeboxController : public lens::LensComposeboxController {
 
   void BindComposebox(
       mojo::PendingReceiver<composebox::mojom::PageHandler> pending_handler,
-      mojo::PendingRemote<composebox::mojom::Page> pending_page,
       mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page,
       mojo::PendingReceiver<searchbox::mojom::PageHandler>
           pending_searchbox_handler) override {
@@ -64,8 +64,7 @@ class TestLensComposeboxController : public lens::LensComposeboxController {
       mock_searchbox_page_.receiver_.reset();
     }
     lens::LensComposeboxController::BindComposebox(
-        std::move(pending_handler), std::move(pending_page),
-        mock_searchbox_page_.BindAndGetRemote(),
+        std::move(pending_handler), mock_searchbox_page_.BindAndGetRemote(),
         std::move(pending_searchbox_handler));
   }
 
@@ -191,6 +190,7 @@ class LensComposeboxControllerBrowserTest : public InProcessBrowserTest {
           {{"lens-aim-suggestions-type", "Contextual"}}},
          {lens::features::kLensSearchReinvocationAffordance, {}}},
         /*disabled_features=*/{contextual_tasks::kContextualTasks,
+                               contextual_tasks::kContextualTasksSidePanel,
                                omnibox::kAimServerEligibilityEnabled});
 
     InProcessBrowserTest::SetUp();
@@ -198,10 +198,11 @@ class LensComposeboxControllerBrowserTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
     embedded_test_server()->StartAcceptingConnections();
 
     // Permits sharing the page screenshot by default.
-    PrefService* prefs = browser()->profile()->GetPrefs();
+    PrefService* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(lens::prefs::kLensSharingPageScreenshotEnabled, true);
     prefs->SetBoolean(lens::prefs::kLensSharingPageContentEnabled, true);
   }
@@ -211,7 +212,7 @@ class LensComposeboxControllerBrowserTest : public InProcessBrowserTest {
     InProcessBrowserTest::TearDownOnMainThread();
 
     // Disallow sharing the page screenshot by default.
-    PrefService* prefs = browser()->profile()->GetPrefs();
+    PrefService* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(lens::prefs::kLensSharingPageScreenshotEnabled, false);
     prefs->SetBoolean(lens::prefs::kLensSharingPageContentEnabled, false);
   }
@@ -1144,7 +1145,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   // Issue a text search request to open the side panel without the overlay.
   controller->IssueTextSearchRequest(
       lens::LensOverlayInvocationSource::kContentAreaContextMenuText, "query",
-      {}, AutocompleteMatchType::Type::SEARCH_WHAT_YOU_TYPED,
+      {}, omnibox::AutocompleteMatchType::kSearchWhatYouTyped,
       /*is_zero_prefix_suggestion=*/false,
       /*suppress_contextualization=*/true);
 
@@ -1216,7 +1217,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   // Issue a text search request to open the side panel without the overlay.
   controller->IssueTextSearchRequest(
       lens::LensOverlayInvocationSource::kContentAreaContextMenuText, "query",
-      {}, AutocompleteMatchType::Type::SEARCH_WHAT_YOU_TYPED,
+      {}, omnibox::AutocompleteMatchType::kSearchWhatYouTyped,
       /*is_zero_prefix_suggestion=*/false,
       /*suppress_contextualization=*/true);
 
@@ -1286,7 +1287,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   // Issue a text search request to open the side panel without the overlay.
   controller->IssueTextSearchRequest(
       lens::LensOverlayInvocationSource::kContentAreaContextMenuText, "query",
-      {}, AutocompleteMatchType::Type::SEARCH_WHAT_YOU_TYPED,
+      {}, omnibox::AutocompleteMatchType::kSearchWhatYouTyped,
       /*is_zero_prefix_suggestion=*/false,
       /*suppress_contextualization=*/true);
 
@@ -1396,4 +1397,214 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
 
   // Simulate focus. This should not crash.
   GetLensComposeboxController()->OnFocusChanged(true);
+}
+
+IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
+                       LensButtonClickDoesNotReshowOnDifferentOrigin) {
+  const GURL initial_url =
+      embedded_test_server()->GetURL("a.com", "/select.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
+
+  auto* controller = GetLensSearchController();
+  ASSERT_TRUE(controller->IsOff());
+
+  // Issue a text search request to open the side panel without the overlay.
+  controller->IssueTextSearchRequest(
+      lens::LensOverlayInvocationSource::kContentAreaContextMenuText, "query",
+      {}, omnibox::AutocompleteMatchType::kSearchWhatYouTyped,
+      /*is_zero_prefix_suggestion=*/false,
+      /*suppress_contextualization=*/true);
+
+  // Wait for side panel to be visible.
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return IsResultsSidePanelShowing(); }));
+
+  // Wait for the composebox handler to be set.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return GetLensComposeboxController()->composebox_handler_for_testing() !=
+           nullptr;
+  }));
+
+  auto* overlay_controller = GetLensOverlayController();
+  EXPECT_FALSE(overlay_controller->IsOverlayActive());
+
+  // Navigate the main tab to a different origin.
+  const GURL different_origin_url =
+      embedded_test_server()->GetURL("b.com", "/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), different_origin_url));
+
+  // Trigger Lens button click from composebox handler.
+  GetLensComposeboxController()
+      ->composebox_handler_for_testing()
+      ->HandleLensButtonClick();
+
+  // The overlay must not open on the different origin.
+  EXPECT_FALSE(overlay_controller->IsOverlayActive());
+  EXPECT_NE(overlay_controller->state(), State::kOverlay);
+}
+
+IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
+                       FocusChangedDoesNotContextualizeOnDifferentOrigin) {
+  const GURL initial_url =
+      embedded_test_server()->GetURL("a.com", "/select.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
+
+  auto* controller = GetLensSearchController();
+  ASSERT_TRUE(controller->IsOff());
+
+  // Issue a text search request to open the side panel without the overlay.
+  controller->IssueTextSearchRequest(
+      lens::LensOverlayInvocationSource::kContentAreaContextMenuText, "query",
+      {}, omnibox::AutocompleteMatchType::kSearchWhatYouTyped,
+      /*is_zero_prefix_suggestion=*/false,
+      /*suppress_contextualization=*/true);
+
+  // Wait for side panel to be visible.
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return IsResultsSidePanelShowing(); }));
+
+  // Wait for the composebox handler to be set.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return GetLensComposeboxController()->composebox_handler_for_testing() !=
+           nullptr;
+  }));
+
+  auto* fake_query_controller =
+      static_cast<lens::TestLensOverlayQueryController*>(
+          controller->lens_overlay_query_controller());
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return fake_query_controller->num_full_image_requests_sent() == 1 &&
+           fake_query_controller->num_page_content_update_requests_sent() == 1;
+  }));
+
+  const int initial_updates =
+      fake_query_controller->num_page_content_update_requests_sent();
+
+  auto* composebox_controller = GetLensComposeboxController();
+  auto* test_composebox_controller =
+      static_cast<TestLensComposeboxController*>(composebox_controller);
+  ASSERT_TRUE(test_composebox_controller);
+  MockSearchboxPage& mock_searchbox_page =
+      test_composebox_controller->mock_searchbox_page();
+  EXPECT_CALL(mock_searchbox_page, SetThumbnail(testing::_, testing::_))
+      .Times(0);
+
+  // Navigate the main tab to a different origin.
+  const GURL different_origin_url =
+      embedded_test_server()->GetURL("b.com", "/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), different_origin_url));
+
+  // Trigger FocusChanged from composebox handler.
+  GetLensComposeboxController()->composebox_handler_for_testing()->FocusChanged(
+      true);
+
+  // Verify that no new page content update was sent for the different origin.
+  EXPECT_EQ(fake_query_controller->num_page_content_update_requests_sent(),
+            initial_updates);
+}
+
+IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
+                       OpenLensOverlayInCurrentSessionRequiresPermission) {
+  WaitForPaint();
+
+  auto* controller = GetLensSearchController();
+  ASSERT_TRUE(controller->IsOff());
+
+  // Issue a text search request to open the side panel without the overlay.
+  controller->IssueTextSearchRequest(
+      lens::LensOverlayInvocationSource::kContentAreaContextMenuText, "query",
+      {}, omnibox::AutocompleteMatchType::kSearchWhatYouTyped,
+      /*is_zero_prefix_suggestion=*/false,
+      /*suppress_contextualization=*/true);
+
+  // Wait for side panel to be visible.
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return IsResultsSidePanelShowing(); }));
+
+  // Wait for the composebox handler to be set.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return GetLensComposeboxController()->composebox_handler_for_testing() !=
+           nullptr;
+  }));
+
+  auto* overlay_controller = GetLensOverlayController();
+  EXPECT_FALSE(overlay_controller->IsOverlayActive());
+
+  // Revoke screenshot and content permissions.
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
+  prefs->SetBoolean(lens::prefs::kLensSharingPageScreenshotEnabled, false);
+  prefs->SetBoolean(lens::prefs::kLensSharingPageContentEnabled, false);
+
+  // Attempt to open overlay in current session without permission.
+  controller->OpenLensOverlayInCurrentSession();
+
+  // Overlay should not open because eligibility checks require permission.
+  EXPECT_FALSE(overlay_controller->IsOverlayActive());
+  EXPECT_NE(overlay_controller->state(), State::kOverlay);
+}
+
+IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
+                       SuggestInputsAndSubmitQueryClearedOnDifferentOrigin) {
+  const GURL initial_url =
+      embedded_test_server()->GetURL("a.com", "/select.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
+
+  auto* controller = GetLensSearchController();
+  ASSERT_TRUE(controller->IsOff());
+
+  // Issue a text search request to open the side panel without the overlay.
+  controller->IssueTextSearchRequest(
+      lens::LensOverlayInvocationSource::kContentAreaContextMenuText, "query",
+      {}, omnibox::AutocompleteMatchType::kSearchWhatYouTyped,
+      /*is_zero_prefix_suggestion=*/false,
+      /*suppress_contextualization=*/true);
+
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return IsResultsSidePanelShowing(); }));
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return GetLensComposeboxController()->composebox_handler_for_testing() !=
+           nullptr;
+  }));
+
+  EXPECT_TRUE(controller->IsCurrentTabSameOrigin());
+
+  // Navigate to different origin.
+  const GURL different_origin_url =
+      embedded_test_server()->GetURL("b.com", "/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), different_origin_url));
+
+  EXPECT_FALSE(controller->IsCurrentTabSameOrigin());
+
+  // Suggest inputs should be empty on different origin.
+  auto suggest_inputs = GetLensComposeboxController()->GetLensSuggestInputs();
+  EXPECT_TRUE(
+      suggest_inputs.encoded_visual_search_interaction_log_data().empty());
+  EXPECT_TRUE(suggest_inputs.search_session_id().empty());
+
+  // Mock a handshake call so the composebox controller can send query messages.
+  lens::AimToClientMessage aim_to_client_message;
+  aim_to_client_message.mutable_handshake_response()->add_capabilities(
+      lens::FeatureCapability::DEFAULT);
+  MockAimToClientMessage(aim_to_client_message);
+
+  // SubmitQuery message should not include visual search interaction data or
+  // valid visual input type for the different origin.
+  GetLensComposeboxController()->composebox_handler_for_testing()->SubmitQuery(
+      "new query", /*mouse_button=*/0, /*alt_key=*/false, /*ctrl_key=*/false,
+      /*meta_key=*/false, /*shift_key=*/false, /*is_voice_search=*/false);
+
+  auto* test_side_panel_coordinator = GetLensSidePanelCoordinator();
+  ASSERT_TRUE(test_side_panel_coordinator);
+  ASSERT_TRUE(test_side_panel_coordinator->last_sent_client_message_to_aim_
+                  .has_submit_query());
+  const auto& submit_query =
+      test_side_panel_coordinator->last_sent_client_message_to_aim_
+          .submit_query();
+  ASSERT_EQ(submit_query.payload().lens_image_query_data_size(), 1);
+  const auto& image_query_data =
+      submit_query.payload().lens_image_query_data(0);
+  EXPECT_FALSE(image_query_data.has_visual_search_interaction_data());
+  EXPECT_EQ(image_query_data.visual_input_type(),
+            lens::LensOverlayVisualInputType::VISUAL_INPUT_TYPE_UNKNOWN);
 }

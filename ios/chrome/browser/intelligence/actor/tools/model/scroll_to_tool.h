@@ -11,6 +11,7 @@
 #import "base/memory/weak_ptr.h"
 #import "base/types/expected.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/action_target.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/action_target_java_script_feature.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/web_actor_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
@@ -23,33 +24,31 @@ namespace actor {
 
 class ScrollToolJavaScriptFeature;
 
-class ProfileContextResolver;
-
 // Tool to scroll an element into view on a page.
 class ScrollToTool : public WebActorTool {
  public:
   ~ScrollToTool() override;
 
-  static base::expected<std::unique_ptr<ScrollToTool>, ToolExecutionResult>
-  Create(const optimization_guide::proto::ScrollToAction& action,
-         const ProfileContextResolver& profile_context_resolver);
+  static std::unique_ptr<ScrollToTool> Create(
+      base::WeakPtr<web::WebState> web_state,
+      const optimization_guide::proto::ScrollToAction& action);
 
   // ActorTool:
+  void Validate(ToolExecutionCallback callback) override;
   void Execute(ToolExecutionCallback callback) override;
   base::WeakPtr<web::WebState> GetTargetWebState() const override;
   ToolType GetToolType() const override;
+  std::string DebugString() const override;
 
  private:
-  ScrollToTool(const optimization_guide::proto::ScrollToAction& action,
-               base::WeakPtr<web::WebState> web_state);
+  ScrollToTool(base::WeakPtr<web::WebState> web_state, ActionTarget target);
 
   void OnTargetFrameResolved(
-      optimization_guide::proto::ScrollToAction action,
       ToolExecutionCallback callback,
       base::expected<ActionTargetJavaScriptFeature::TargetFrameResult,
                      ToolExecutionResult> result);
 
-  optimization_guide::proto::ScrollToAction action_;
+  ActionTarget target_;
   base::WeakPtr<web::WebState> web_state_;
   raw_ptr<ScrollToolJavaScriptFeature> js_feature_ = nullptr;
   base::WeakPtrFactory<ScrollToTool> weak_ptr_factory_{this};

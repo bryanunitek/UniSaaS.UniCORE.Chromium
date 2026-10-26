@@ -6,7 +6,6 @@
                                   'modulesMoreActions',
                                   'modulesTabResumptionTitle')}"
     @disable-button-click="${this.onDisableButtonClick_}"
-    @dismiss-button-click="${this.onHeaderDismissButtonClick_}"
     @info-button-click="${this.onInfoButtonClick_}">
 </ntp-module-header>
 <div id="urlVisits">
@@ -48,7 +47,8 @@
   `)}
   <div id="seeMoreButtonContainer">
     <a href="chrome://history/syncedTabs"
-        @click="${this.onSeeMoreButtonClick_}">
+        @click="${this.onSeeMoreButtonClick_}"
+        aria-label="$i18n{modulesMostRelevantTabResumptionSeeMoreAcc}">
       $i18n{modulesMostRelevantTabResumptionSeeMore}
       <div id="hoverContainer"></div>
     </a>

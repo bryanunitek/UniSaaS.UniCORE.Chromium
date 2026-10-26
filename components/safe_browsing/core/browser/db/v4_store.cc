@@ -17,7 +17,6 @@
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/files/file.h"
-#include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
@@ -101,6 +100,18 @@ void RecordApplyUpdateResult(const std::string& base_metric,
                                  APPLY_UPDATE_RESULT_MAX, file_path);
 }
 
+void RecordUpdateCategory(SafeBrowsingUpdateCategory category,
+                          const base::FilePath& file_path) {
+  std::string suffix = GetUmaSuffixForStore(file_path);
+  base::UmaHistogramEnumeration("SafeBrowsing.V4Update.Category", category);
+  base::UmaHistogramEnumeration("SafeBrowsing.V4Update.Category" + suffix,
+                                category);
+
+  base::UmaHistogramEnumeration("SafeBrowsing.SBUpdate.Category", category);
+  base::UmaHistogramEnumeration("SafeBrowsing.SBUpdate.Category" + suffix,
+                                category);
+}
+
 void RecordAdditionsHashesCount(const std::string& base_metric,
                                 int32_t count,
                                 const base::FilePath& file_path) {
@@ -149,28 +160,6 @@ void RecordStoreWriteResult(StoreWriteResult result) {
                             STORE_WRITE_RESULT_MAX);
 }
 
-// Cleans up files that are no longer needed after a successful write. These are
-// hash files that may be left behind in the event of a crash or other failure
-// which fails to clean up.
-void CleanupExtraFiles(const base::FilePath& store_path,
-                       const V4StoreFileFormat& file_format) {
-  std::set<base::FilePath> paths_in_use{store_path};
-  for (const auto& hash_file : file_format.hash_files()) {
-    paths_in_use.insert(
-        HashPrefixMap::GetPath(store_path, hash_file.extension()));
-  }
-
-  // Iterate through all files that start with the store path name. All hash
-  // files will be the store path plus an extension.
-  base::FileEnumerator e(
-      store_path.DirName(), false, base::FileEnumerator::FILES,
-      store_path.BaseName().value() + FILE_PATH_LITERAL(".*"));
-  for (base::FilePath name = e.Next(); !name.empty(); name = e.Next()) {
-    if (paths_in_use.find(name) == paths_in_use.end()) {
-      base::DeleteFile(name);
-    }
-  }
-}
 
 void RecordMigrationTime(base::TimeDelta elapsed,
                          const base::FilePath& store_path) {
@@ -244,9 +233,7 @@ V4Store::V4Store(const scoped_refptr<base::SequencedTaskRunner>& task_runner,
       is_eligible_for_migration_(is_eligible_for_migration),
       is_extensions_blocklist_(is_extensions_blocklist) {
   CHECK_GT(v5_prefix_size_, 0u);
-  if (base::FeatureList::IsEnabled(
-          kAllowSafeBrowsingV4StoreDiskMigrationChanges) &&
-      is_extensions_blocklist_) {
+  if (is_extensions_blocklist_) {
     CHECK_EQ(v5_prefix_size_, 16u);
   }
 }
@@ -280,6 +267,14 @@ void V4Store::Reset() {
   expected_checksum_.clear();
   hash_prefix_map_->Clear();
   state_ = "";
+}
+
+std::vector<base::FilePath> V4Store::GetPathsInUse() const {
+  std::vector<base::FilePath> paths{store_path_};
+  for (const auto& path : hash_prefix_map_->GetPaths()) {
+    paths.push_back(path);
+  }
+  return paths;
 }
 
 ApplyUpdateResult V4Store::ProcessPartialUpdateAndWriteToDisk(
@@ -419,6 +414,27 @@ void V4Store::ApplyUpdate(
   ApplyUpdateResult apply_update_result;
   std::optional<std::string> metric;
   ApplyUpdateType apply_update_type;
+  bool is_full_update =
+      (v4_response->response_type() == ListUpdateResponse::FULL_UPDATE);
+  SafeBrowsingUpdateCategory category;
+  if (is_first_update_after_v5_migration_) {
+    category = is_full_update
+                   ? SafeBrowsingUpdateCategory::kPostMigrationFullUpdate
+                   : SafeBrowsingUpdateCategory::kPostMigrationPartialUpdate;
+  } else if (is_new_database_) {
+    category = is_full_update
+                   ? SafeBrowsingUpdateCategory::kNewDatabaseFullUpdate
+                   : SafeBrowsingUpdateCategory::kNewDatabasePartialUpdate;
+  } else {
+    category = is_full_update
+                   ? SafeBrowsingUpdateCategory::kRegularFullUpdate
+                   : SafeBrowsingUpdateCategory::kRegularPartialUpdate;
+  }
+  RecordUpdateCategory(category, store_path_);
+
+  is_first_update_after_v5_migration_ = false;
+  is_new_database_ = false;
+
   if (v4_response->response_type() == ListUpdateResponse::PARTIAL_UPDATE) {
     metric = kProcessPartialUpdate;
     apply_update_type = ApplyUpdateType::kPartial;
@@ -774,14 +790,15 @@ V5ToV4MigrationResult V4Store::AttemptV5ToV4Migration() {
 StoreReadResult V4Store::ReadFromDisk() {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
-  if (!base::FeatureList::IsEnabled(
-          kAllowSafeBrowsingV4StoreDiskMigrationChanges)) {
-    return ReadFromDiskInternal();
-  }
-
   V5ToV4MigrationResult migration_result = AttemptV5ToV4Migration();
   base::UmaHistogramEnumeration("SafeBrowsing.V4Store.V5ToV4MigrationResult",
                                 migration_result);
+  if (migration_result == V5ToV4MigrationResult::kV5StoreNotFound) {
+    is_new_database_ = true;
+  } else if (migration_result != V5ToV4MigrationResult::kDiskAlreadyV4) {
+    is_first_update_after_v5_migration_ = true;
+  }
+
   switch (migration_result) {
     case V5ToV4MigrationResult::kDiskAlreadyV4:
     case V5ToV4MigrationResult::kV5ToV4MigrationSucceeded:
@@ -1067,10 +1084,6 @@ StoreWriteResult V4Store::WriteToDisk(V4StoreFileFormat* file_format) {
               size += hash_file.file_size();
             }
             return size;
-          },
-          /*cleanup_extra_files=*/
-          [this, file_format] {
-            CleanupExtraFiles(store_path_, *file_format);
           });
 
   if (file_size_or_error.has_value()) {
@@ -1128,8 +1141,6 @@ bool V4Store::VerifyChecksum() {
   base::ElapsedThreadTimer thread_timer;
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
-  // TODO(crbug.com/362791941): Remove this once have confirmed assumption that
-  // empty checksums are rare for valid stores.
   if (has_valid_data_) {
     base::UmaHistogramBoolean(
         "SafeBrowsing.V4Store.VerifyChecksum.ValidStoreChecksumEmpty" +

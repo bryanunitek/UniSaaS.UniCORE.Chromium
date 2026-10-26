@@ -40,7 +40,7 @@
 #include "components/permissions/permission_manager.h"
 #include "extensions/buildflags/buildflags.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/clipboard/chrome_clipboard_permission_context_delegate.h"
 #endif
 
@@ -92,7 +92,8 @@ permissions::PermissionManager::PermissionContextMap CreatePermissionContexts(
   if (features::IsOsLevelGeolocationPermissionSupportEnabled()) {
     delegates.geolocation_system_permission_manager =
         device::GeolocationSystemPermissionManager::GetInstance();
-    DCHECK(delegates.geolocation_system_permission_manager);
+    CHECK(delegates.geolocation_system_permission_manager,
+          base::NotFatalUntil::M162);
   }
 #endif
   delegates.media_stream_device_enumerator =
@@ -109,14 +110,14 @@ permissions::PermissionManager::PermissionContextMap CreatePermissionContexts(
       std::make_unique<ChromeNfcPermissionContextDelegate>(nullptr);
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   delegates.clipboard_read_write_permission_context_delegate =
       std::make_unique<ChromeClipboardPermissionContextDelegate>(
           ChromeClipboardPermissionContextDelegate::Type::kReadWrite);
   delegates.clipboard_sanitized_write_permission_context_delegate =
       std::make_unique<ChromeClipboardPermissionContextDelegate>(
           ChromeClipboardPermissionContextDelegate::Type::kSanitizedWrite);
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   // Create default permission contexts initially.
   permissions::PermissionManager::PermissionContextMap permission_contexts =

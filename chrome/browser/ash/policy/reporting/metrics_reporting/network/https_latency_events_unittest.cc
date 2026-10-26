@@ -24,6 +24,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
+#include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
 #include "chromeos/ash/components/mojo_service_manager/fake_mojo_service_manager.h"
 #include "chromeos/ash/components/network/network_handler_test_helper.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
@@ -33,7 +34,7 @@
 #include "components/reporting/proto/synced/metric_data.pb.h"
 #include "components/reporting/proto/synced/record_constants.pb.h"
 #include "components/reporting/util/test_support_callbacks.h"
-#include "components/session_manager/test/test_user_session_manager.h"
+#include "components/session_manager/test/user_session_test_environment.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "google_apis/gaia/gaia_id.h"
@@ -128,8 +129,8 @@ class HttpsLatencyEventsTest : public ::testing::Test {
     reporting_test_enviroment_ =
         reporting::ReportingClient::TestEnvironment::CreateWithStorageModule();
 
-    test_user_session_manager_ =
-        std::make_unique<ash::test::TestUserSessionManager>(
+    user_session_test_environment_ =
+        std::make_unique<ash::test::UserSessionTestEnvironment>(
             g_browser_process->local_state());
     ::ash::DebugDaemonClient::InitializeFake();
     ::ash::cros_healthd::FakeCrosHealthd::Initialize();
@@ -138,8 +139,8 @@ class HttpsLatencyEventsTest : public ::testing::Test {
   void InitProfile(bool affiliated) {
     const auto account_id =
         AccountId::FromUserEmailGaiaId("ini_fan@gmail.com", GaiaId("123456"));
-    ASSERT_TRUE(test_user_session_manager_->AddRegularUser(account_id));
-    test_user_session_manager_->LogIn(account_id);
+    ASSERT_TRUE(user_session_test_environment_->AddRegularUser(account_id));
+    user_session_test_environment_->LogIn(account_id);
     user_manager::UserManager::Get()->SetUserPolicyStatus(
         account_id, /*is_managed=*/affiliated, affiliated);
 
@@ -171,7 +172,7 @@ class HttpsLatencyEventsTest : public ::testing::Test {
   void TearDown() override {
     ::ash::cros_healthd::FakeCrosHealthd::Shutdown();
     ::ash::DebugDaemonClient::Shutdown();
-    test_user_session_manager_.reset();
+    user_session_test_environment_.reset();
 
     reporting_test_enviroment_.reset();
   }
@@ -190,7 +191,8 @@ class HttpsLatencyEventsTest : public ::testing::Test {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   std::unique_ptr<reporting::ReportingClient::TestEnvironment>
       reporting_test_enviroment_;
-  std::unique_ptr<ash::test::TestUserSessionManager> test_user_session_manager_;
+  std::unique_ptr<ash::test::UserSessionTestEnvironment>
+      user_session_test_environment_;
 
   ::ash::mojo_service_manager::FakeMojoServiceManager fake_service_manager_;
 
@@ -214,8 +216,10 @@ TEST_F(HttpsLatencyEventsTest, RoutineVerdictProblem) {
   diagnostics.SetResultNoProblem(latency_ms);
   auto init_delay = delegate->GetInitDelay();
 
-  auto metric_reporting_manager =
-      test::MetricReportingManagerForTest::Create(std::move(delegate), nullptr);
+  auto metric_reporting_manager = test::MetricReportingManagerForTest::Create(
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      TestingBrowserProcess::GetGlobal()->network_quality_tracker(),
+      std::move(delegate), nullptr);
 
   metric_reporting_manager->OnLogin(profile_.get());
 
@@ -321,8 +325,10 @@ TEST_F(HttpsLatencyEventsTest, ReportDeviceNetworkStatusDisabled) {
       std::make_unique<::testing::NiceMock<FakeMetricReportingManagerDelegate>>(
           &diagnostics);
 
-  auto metric_reporting_manager =
-      test::MetricReportingManagerForTest::Create(std::move(delegate), nullptr);
+  auto metric_reporting_manager = test::MetricReportingManagerForTest::Create(
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      TestingBrowserProcess::GetGlobal()->network_quality_tracker(),
+      std::move(delegate), nullptr);
   metric_reporting_manager->OnLogin(profile_.get());
 
   HttpsLatencyTestReportQueue* const fake_event_queue =
@@ -342,8 +348,10 @@ TEST_F(HttpsLatencyEventsTest, ReportDeviceNetworkStatusUnaffiliatedUser) {
   auto delegate =
       std::make_unique<::testing::NiceMock<FakeMetricReportingManagerDelegate>>(
           &diagnostics);
-  auto metric_reporting_manager =
-      test::MetricReportingManagerForTest::Create(std::move(delegate), nullptr);
+  auto metric_reporting_manager = test::MetricReportingManagerForTest::Create(
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      TestingBrowserProcess::GetGlobal()->network_quality_tracker(),
+      std::move(delegate), nullptr);
   metric_reporting_manager->OnLogin(profile_.get());
 
   HttpsLatencyTestReportQueue* const fake_event_queue =
@@ -373,8 +381,10 @@ TEST_F(HttpsLatencyEventsTest, EventCheckingRateSet) {
       std::make_unique<::testing::NiceMock<FakeMetricReportingManagerDelegate>>(
           &diagnostics);
   auto init_delay = delegate->GetInitDelay();
-  auto metric_reporting_manager =
-      test::MetricReportingManagerForTest::Create(std::move(delegate), nullptr);
+  auto metric_reporting_manager = test::MetricReportingManagerForTest::Create(
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      TestingBrowserProcess::GetGlobal()->network_quality_tracker(),
+      std::move(delegate), nullptr);
   metric_reporting_manager->OnLogin(profile_.get());
 
   HttpsLatencyTestReportQueue* const fake_event_queue =

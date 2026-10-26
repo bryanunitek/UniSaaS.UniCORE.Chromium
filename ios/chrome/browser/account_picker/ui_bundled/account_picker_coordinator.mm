@@ -91,8 +91,7 @@
                    accessPoint:(signin_metrics::AccessPoint)accessPoint {
   self = [super initWithBaseViewController:baseViewController browser:browser];
   if (self) {
-    CHECK_EQ(browser->type(), Browser::Type::kRegular,
-             base::NotFatalUntil::M145);
+    CHECK_EQ(browser->type(), Browser::Type::kRegular);
     _accessPoint = accessPoint;
     _configuration = configuration;
     _mediator = [[AccountPickerMediator alloc]
@@ -223,8 +222,7 @@
 // Called on completion of the AddAccountSigninCoordinator view.
 - (void)addAccountCompletionWithCoordinator:(SigninCoordinator*)coordinator
                                    identity:(id<SystemIdentity>)identity {
-  CHECK_EQ(_addAccountSigninCoordinator, coordinator,
-           base::NotFatalUntil::M151);
+  CHECK_EQ(_addAccountSigninCoordinator, coordinator);
   self.openAddAccountOperationInProgress = NO;
   if (!identity) {
     return;
@@ -367,8 +365,7 @@
 
 - (void)accountPickerSelectionScreenCoordinatorWantsToBeStopped:
     (AccountPickerSelectionScreenCoordinator*)coordinator {
-  CHECK_EQ(coordinator, _accountPickerSelectionScreenCoordinator,
-           base::NotFatalUntil::M151);
+  CHECK_EQ(coordinator, _accountPickerSelectionScreenCoordinator);
   [self.delegate accountPickerCoordinatorWantsToBeStopped:self];
 }
 
@@ -376,8 +373,7 @@
 
 - (void)accountPickerConfirmationScreenCoordinatorWantsToBeStopped:
     (AccountPickerConfirmationScreenCoordinator*)coordinator {
-  CHECK_EQ(coordinator, _accountPickerConfirmationScreenCoordinator,
-           base::NotFatalUntil::M151);
+  CHECK_EQ(coordinator, _accountPickerConfirmationScreenCoordinator);
   [self.delegate accountPickerCoordinatorWantsToBeStopped:self];
 }
 

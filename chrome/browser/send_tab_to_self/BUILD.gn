@@ -12,16 +12,11 @@ source_set("send_tab_to_self") {
   ]
   public_deps = [
     "//base",
-    "//chrome/browser/notifications",
     "//chrome/browser/profiles:profile",
     "//components/keyed_service/core",
     "//components/send_tab_to_self",
     "//content/public/browser",
   ]
-
-  if (is_android) {
-    public_deps += [ "//components/messages/android" ]
-  }
 }
 
 source_set("impl") {
@@ -36,10 +31,8 @@ source_set("impl") {
     ":send_tab_to_self",
     "//chrome/browser/sync",
     "//chrome/browser/sync:factories",
-    "//components/prefs",
-    "//components/signin/public/base",
-    "//components/signin/public/identity_manager",
-    "//components/sync/service",
+    "//components/autofill/content/browser",
+    "//components/user_manager",
     "//content/public/browser",
     "//url",
   ]
@@ -47,12 +40,11 @@ source_set("impl") {
   if (is_android) {
     deps += [ "//chrome/browser/android/send_tab_to_self" ]
   } else {
-    deps += [
-      "//chrome/browser/ui",
-      "//chrome/browser/ui/send_tab_to_self",
-    ]
+    deps += [ "//chrome/browser/ui/send_tab_to_self" ]
   }
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
+  if (is_chromeos) {
+    deps += [ "//chrome/browser/ash/profiles" ]
+  }
 }
 
 source_set("unit_tests") {
@@ -63,6 +55,7 @@ source_set("unit_tests") {
     "//base",
     "//chrome/browser/sync",
     "//chrome/test:test_support",
+    "//chrome/test/base:chrome_render_view_host_test_harness",
     "//components/send_tab_to_self:test_support",
     "//content/test:test_support",
     "//testing/gmock",
@@ -72,10 +65,10 @@ source_set("unit_tests") {
 
   if (is_android) {
     sources += [
-      "../android/send_tab_to_self/android_notification_handler_test_util.cc",
       "../android/send_tab_to_self/android_notification_handler_unittest.cc",
     ]
     deps += [
+      "//chrome/android:chrome_jni_headers",
       "//chrome/browser/android/send_tab_to_self",
       "//chrome/browser/ui/android/tab_model:test_support",
       "//components/tabs:test_support",
@@ -91,7 +84,6 @@ if (is_android) {
     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
     sources = [
       "../android/send_tab_to_self/android_notification_handler_browsertest.cc",
-      "../android/send_tab_to_self/android_notification_handler_test_util.cc",
     ]
     deps = [
       ":send_tab_to_self",
@@ -116,14 +108,12 @@ if (is_android) {
     deps = [
       ":send_tab_to_self",
       "//base",
-      "//chrome/browser/notifications",
+      "//chrome/browser",
       "//chrome/browser/profiles:profile",
       "//chrome/browser/sync",
-      "//chrome/browser/ui",
+      "//chrome/browser/ui:browser_window_header",
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/send_tab_to_self",
-      "//chrome/browser/ui/views/send_tab_to_self",
-      "//chrome/browser/ui/views/toolbar",
       "//chrome/test:test_support_ui",
       "//components/send_tab_to_self",
       "//components/send_tab_to_self:test_support",
@@ -131,11 +121,6 @@ if (is_android) {
       "//components/sync/base",
       "//content/test:test_support",
       "//testing/gmock",
-      "//ui/base",
-      "//ui/gfx",
-      "//ui/message_center/public/cpp",
-      "//ui/strings:ui_strings",
-      "//ui/strings:ui_strings_grit",
     ]
   }
 }

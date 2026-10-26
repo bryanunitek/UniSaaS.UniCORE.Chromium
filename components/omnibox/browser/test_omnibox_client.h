@@ -52,7 +52,10 @@ class TestOmniboxClient final : public testing::NiceMock<OmniboxClient> {
   gfx::Image GetSizedIcon(const gfx::Image& icon) const override;
   std::u16string GetFormattedFullURL() const override;
   std::u16string GetURLForDisplay() const override;
+  bool IsContextualTasksPage() const override;
   GURL GetNavigationEntryURL() const override;
+  const GURL& GetURL() const override;
+  void SetURL(const GURL& url);
   metrics::OmniboxEventProto::PageClassification GetPageClassification(
       bool is_prefetch) const override;
   security_state::SecurityLevel GetSecurityLevel() const override;
@@ -81,7 +84,7 @@ class TestOmniboxClient final : public testing::NiceMock<OmniboxClient> {
                TemplateURLRef::PostContent* post_content,
                WindowOpenDisposition disposition,
                ui::PageTransition transition,
-               AutocompleteMatchType::Type match_type,
+               omnibox::AutocompleteMatchType match_type,
                base::TimeTicks match_selection_timestamp,
                bool destination_url_entered_without_scheme,
                bool destination_url_entered_with_http_scheme,
@@ -102,6 +105,11 @@ class TestOmniboxClient final : public testing::NiceMock<OmniboxClient> {
               (),
               (const, override));
   MOCK_METHOD(GURL, GetContextualTasksInnerFrameURL, (), (const, override));
+  MOCK_METHOD(bool,
+              ShowConfirmationDialogIfDefaultSearchExtensionControlled,
+              (const GURL&,
+               base::OnceCallback<void(ExtensionControlledDialogResult)>),
+              (override));
 
   base::WeakPtr<OmniboxClient> AsWeakPtr() override;
 
@@ -115,6 +123,11 @@ class TestOmniboxClient final : public testing::NiceMock<OmniboxClient> {
     return &autocomplete_classifier_;
   }
 
+  // Returns how many times `GetAutocompleteClassifier()` has been called.
+  int get_autocomplete_classifier_count() const {
+    return get_autocomplete_classifier_count_;
+  }
+
  private:
   SessionID session_id_;
   TestLocationBarModel location_bar_model_;
@@ -122,7 +135,9 @@ class TestOmniboxClient final : public testing::NiceMock<OmniboxClient> {
   std::unique_ptr<TestAiModeButtonService> ai_mode_button_service_;
   TestSchemeClassifier scheme_classifier_;
   AutocompleteClassifier autocomplete_classifier_;
+  int get_autocomplete_classifier_count_ = 0;
   WindowOpenDisposition last_log_disposition_;
+  GURL url_;
   base::WeakPtrFactory<TestOmniboxClient> weak_factory_{this};
 };
 

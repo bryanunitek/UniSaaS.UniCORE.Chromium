@@ -5,7 +5,6 @@
 #include "components/component_updater/component_updater_service.h"
 
 #include <algorithm>
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -23,6 +22,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/branding_buildflags.h"
@@ -54,15 +54,19 @@ using ::testing::Unused;
 class MockInstaller : public update_client::CrxInstaller {
  public:
   MockInstaller() = default;
-  MOCK_METHOD5(Install,
-               void(const base::FilePath& unpack_path,
-                    const std::string& public_key,
-                    std::unique_ptr<InstallParams> install_params,
-                    ProgressCallback progress_callback,
-                    Callback callback));
-  MOCK_METHOD1(GetInstalledFile,
-               std::optional<base::FilePath>(const std::string& file));
-  MOCK_METHOD0(Uninstall, bool());
+  MOCK_METHOD(void,
+              Install,
+              (const base::FilePath& unpack_path,
+               const std::string& public_key,
+               std::unique_ptr<InstallParams> install_params,
+               ProgressCallback progress_callback,
+               Callback callback),
+              (override));
+  MOCK_METHOD(std::optional<base::FilePath>,
+              GetInstalledFile,
+              (const std::string& file),
+              (override));
+  MOCK_METHOD(bool, Uninstall, (), (override));
 
  private:
   ~MockInstaller() override = default;
@@ -72,38 +76,48 @@ class MockUpdateClient : public UpdateClient {
  public:
   MockUpdateClient() = default;
 
-  MOCK_METHOD1(AddObserver, void(Observer* observer));
-  MOCK_METHOD1(RemoveObserver, void(Observer* observer));
-  MOCK_METHOD4(
-      Install,
-      base::RepeatingClosure(const std::string& id,
-                             CrxDataCallback crx_data_callback,
-                             CrxStateChangeCallback crx_state_change_callback,
-                             Callback callback));
-  MOCK_METHOD5(Update,
-               void(const std::vector<std::string>& ids,
-                    CrxDataCallback crx_data_callback,
-                    CrxStateChangeCallback crx_state_change_callback,
-                    bool is_foreground,
-                    Callback callback));
-  MOCK_METHOD5(CheckForUpdate,
-               void(const std::string& ids,
-                    CrxDataCallback crx_data_callback,
-                    CrxStateChangeCallback crx_state_change_callback,
-                    bool is_foreground,
-                    Callback callback));
-  MOCK_CONST_METHOD2(GetCrxUpdateState,
-                     bool(const std::string& id, CrxUpdateItem* update_item));
-  MOCK_CONST_METHOD1(IsUpdating, bool(const std::string& id));
-  MOCK_METHOD0(Stop, void());
-  MOCK_METHOD3(SendPing,
-               void(const CrxComponent& crx_component,
-                    PingParams ping_params,
-                    Callback callback));
-  MOCK_METHOD2(SendRegistrationPing,
-               void(const CrxComponent& crx_component, Callback callback));
-  MOCK_METHOD2(CleanupStaleDownloads,
-               void(base::Time older_than, base::OnceClosure callback));
+  MOCK_METHOD(void, AddObserver, (Observer * observer), (override));
+  MOCK_METHOD(void, RemoveObserver, (Observer * observer), (override));
+  MOCK_METHOD(base::RepeatingClosure,
+              Install,
+              (const std::string& id,
+               CrxDataCallback crx_data_callback,
+               CrxStateChangeCallback crx_state_change_callback,
+               Callback callback),
+              (override));
+  MOCK_METHOD(void,
+              Update,
+              (const std::vector<std::string>& ids,
+               CrxDataCallback crx_data_callback,
+               CrxStateChangeCallback crx_state_change_callback,
+               bool is_foreground,
+               Callback callback),
+              (override));
+  MOCK_METHOD(void,
+              CheckForUpdate,
+              (const std::string& ids,
+               CrxDataCallback crx_data_callback,
+               CrxStateChangeCallback crx_state_change_callback,
+               bool is_foreground,
+               Callback callback),
+              (override));
+  MOCK_METHOD(bool,
+              GetCrxUpdateState,
+              (const std::string& id, CrxUpdateItem* update_item),
+              (const, override));
+  MOCK_METHOD(bool, IsUpdating, (const std::string& id), (const, override));
+  MOCK_METHOD(void, Stop, (), (override));
+  MOCK_METHOD(bool, Cancel, (const std::string& id), (override));
+  MOCK_METHOD(void,
+              SendPing,
+              (const CrxComponent& crx_component,
+               PingParams ping_params,
+               Callback callback),
+              (override));
+  MOCK_METHOD(void,
+              CleanupStaleDownloads,
+              (base::Time older_than, base::OnceClosure callback),
+              (override));
 
  private:
   ~MockUpdateClient() override = default;
@@ -111,17 +125,19 @@ class MockUpdateClient : public UpdateClient {
 
 class MockServiceObserver : public ServiceObserver {
  public:
-  MOCK_METHOD1(OnEvent, void(const update_client::CrxUpdateItem&));
+  MOCK_METHOD(void, OnEvent, (const update_client::CrxUpdateItem&), (override));
 };
 
 class MockUpdateScheduler : public UpdateScheduler {
  public:
-  MOCK_METHOD4(Schedule,
-               void(base::TimeDelta initial_delay,
-                    base::TimeDelta delay,
-                    const UserTask& user_task,
-                    const OnStopTaskCallback& on_stop));
-  MOCK_METHOD0(Stop, void());
+  MOCK_METHOD(void,
+              Schedule,
+              (base::TimeDelta initial_delay,
+               base::TimeDelta delay,
+               const UserTask& user_task,
+               const OnStopTaskCallback& on_stop),
+              (override));
+  MOCK_METHOD(void, Stop, (), (override));
 };
 
 class LoopHandler {
@@ -230,7 +246,8 @@ std::unique_ptr<ComponentUpdateService> TestComponentUpdateServiceFactory(
   EXPECT_TRUE(config);
   return std::make_unique<CrxUpdateService>(
       config, std::make_unique<MockUpdateScheduler>(),
-      base::MakeRefCounted<MockUpdateClient>(), "");
+      base::MakeRefCounted<MockUpdateClient>(), "",
+      /*update_checks_disabled=*/false);
 }
 
 ComponentUpdaterTest::ComponentUpdaterTest() {
@@ -243,7 +260,8 @@ ComponentUpdaterTest::ComponentUpdaterTest() {
   update_client::RegisterPrefs(pref_->registry());
   config_ = base::MakeRefCounted<TestConfigurator>(pref_.get());
   component_updater_ = std::make_unique<CrxUpdateService>(
-      config_, std::move(scheduler), update_client_, "");
+      config_, std::move(scheduler), update_client_, "",
+      /*update_checks_disabled=*/false);
 }
 
 ComponentUpdaterTest::~ComponentUpdaterTest() {
@@ -437,6 +455,55 @@ TEST_F(ComponentUpdaterTest, OnDemandUpdate) {
   ht.ExpectUniqueSample("ComponentUpdater.Calls", 0, 2);
   ht.ExpectUniqueSample("ComponentUpdater.UpdateCompleteResult", 0, 2);
   ht.ExpectTotalCount("ComponentUpdater.UpdateCompleteTime", 2);
+}
+
+// Tests that with update checks disabled, components are registered but no
+// update checks are made, neither periodically nor on demand.
+TEST_F(ComponentUpdaterTest, UpdateChecksDisabled) {
+  auto update_client = base::MakeRefCounted<MockUpdateClient>();
+  auto scheduler = std::make_unique<MockUpdateScheduler>();
+  EXPECT_CALL(*update_client, AddObserver(_));
+  EXPECT_CALL(*update_client, RemoveObserver(_));
+  EXPECT_CALL(*update_client, Stop());
+  EXPECT_CALL(*update_client, Update).Times(0);
+  EXPECT_CALL(*scheduler, Schedule).Times(0);
+  EXPECT_CALL(*scheduler, Stop());
+  CrxUpdateService cus(configurator(), std::move(scheduler), update_client, "",
+                       /*update_checks_disabled=*/true);
+
+  const std::string id = "jebgalgnebhfojomionfpkfelancnnkf";
+  EXPECT_TRUE(cus.RegisterComponent(ComponentRegistration(
+      id, /*name=*/{}, base::ToVector(update_client::jebg_hash),
+      base::Version("0.9"), /*fingerprint=*/{}, /*installer_attributes=*/{},
+      /*action_handler=*/nullptr, base::MakeRefCounted<MockInstaller>(),
+      /*requires_network_encryption=*/false,
+      /*supports_group_policy_enable_component_updates=*/true,
+      /*allow_cached_copies=*/true,
+      /*allow_updates_on_metered_connection=*/true,
+      /*allow_updates=*/true)));
+  CrxUpdateItem item;
+  EXPECT_TRUE(cus.GetComponentDetails(id, &item));
+
+  base::test::TestFuture<update_client::Error> future;
+  cus.OnDemandUpdate(id, OnDemandUpdater::Priority::FOREGROUND,
+                     future.GetCallback());
+  EXPECT_EQ(future.Get(), update_client::Error::UPDATE_DISABLED);
+
+  // Also for components that are not registered, which is the case for the
+  // components normally registered by RegisterComponentsForUpdate().
+  base::test::TestFuture<update_client::Error> unregistered_future;
+  cus.OnDemandUpdate("ihfokbkgjpifnbbojhneepfflplebdkc",
+                     OnDemandUpdater::Priority::FOREGROUND,
+                     unregistered_future.GetCallback());
+  EXPECT_EQ(unregistered_future.Get(), update_client::Error::UPDATE_DISABLED);
+
+  // Throttled requests are unblocked right away instead of waiting on an
+  // update.
+  bool unblocked = false;
+  cus.MaybeThrottle(
+      id,
+      base::BindOnce([](bool* unblocked) { *unblocked = true; }, &unblocked));
+  EXPECT_TRUE(unblocked);
 }
 
 // Tests that throttling an update invokes UpdateClient::Update.

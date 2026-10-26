@@ -10,10 +10,10 @@
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/page_action/test_support/page_action_test_support.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_accessor.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -23,6 +23,7 @@
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager_test_api.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/common/autofill_clock.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "content/public/test/content_mock_cert_verifier.h"
 #include "net/dns/mock_host_resolver.h"
 
@@ -30,16 +31,18 @@ namespace autofill {
 
 namespace {
 constexpr char kDefaultTestPromoCode[] = "5PCTOFFSHOES";
-constexpr char kDefaultTestValuePropText[] = "5% off on shoes. Up to $50.";
-constexpr char kDefaultTestSeeDetailsText[] = "See details";
-constexpr char kDefaultTestUsageInstructionsText[] =
-    "Click the promo code field at checkout to autofill it.";
 constexpr char kDefaultTestDetailsUrlString[] = "https://pay.google.com";
-constexpr int64_t kCreditCardInstrumentId = 0x4444;
+constexpr char kDefaultTestOfferShortTitle[] = "5% off";
 }  // namespace
 
 OfferNotificationBubbleViewsTestBase::OfferNotificationBubbleViewsTestBase()
-    : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {}
+    : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
+  feature_list_.InitWithFeatures(
+      /*enabled_features=*/
+      {features::kAutofillEnableWalletDirectOffers,
+       features::kAutofillEnableWalletDirectOffersNotificationBubble},
+      /*disabled_features=*/{});
+}
 
 OfferNotificationBubbleViewsTestBase::~OfferNotificationBubbleViewsTestBase() =
     default;
@@ -99,80 +102,26 @@ void OfferNotificationBubbleViewsTestBase::OnBubbleShown() {
 }
 
 std::unique_ptr<AutofillOfferData>
-OfferNotificationBubbleViewsTestBase::CreateCardLinkedOfferDataWithDomains(
+OfferNotificationBubbleViewsTestBase::CreateWalletDirectOfferDataWithDomains(
     const std::vector<GURL>& domains) {
-  auto card = std::make_unique<CreditCard>();
-  card->set_instrument_id(kCreditCardInstrumentId);
-  personal_data_->payments_data_manager().AddServerCreditCardForTest(
-      std::move(card));
-  test_api(personal_data_->payments_data_manager()).NotifyObservers();
-  int64_t offer_id = 4444;
+  std::string offer_id = "6666";
   base::Time expiry = AutofillClock::Now() + base::Days(2);
   std::vector<GURL> merchant_origins;
   for (auto url : domains) {
     merchant_origins.emplace_back(url.DeprecatedGetOriginAsURL());
   }
-  GURL offer_details_url;
-  DisplayStrings display_strings;
-  std::vector<int64_t> eligible_instrument_ids = {kCreditCardInstrumentId};
-  std::string offer_reward_amount = "5%";
   return std::make_unique<AutofillOfferData>(
-      AutofillOfferData::GPayCardLinkedOffer(
-          offer_id, expiry, merchant_origins, offer_details_url,
-          display_strings, eligible_instrument_ids, offer_reward_amount));
-}
-
-std::unique_ptr<AutofillOfferData>
-OfferNotificationBubbleViewsTestBase::CreateGPayPromoCodeOfferDataWithDomains(
-    const std::vector<GURL>& domains) {
-  int64_t offer_id = 5555;
-  base::Time expiry = AutofillClock::Now() + base::Days(2);
-  std::vector<GURL> merchant_origins;
-  for (auto url : domains) {
-    merchant_origins.emplace_back(url.DeprecatedGetOriginAsURL());
-  }
-  DisplayStrings display_strings;
-  display_strings.value_prop_text = GetDefaultTestValuePropText();
-  display_strings.see_details_text = GetDefaultTestSeeDetailsText();
-  display_strings.usage_instructions_text =
-      GetDefaultTestUsageInstructionsText();
-  auto promo_code = GetDefaultTestPromoCode();
-  GURL offer_details_url = GURL(GetDefaultTestDetailsUrlString());
-  return std::make_unique<AutofillOfferData>(
-      AutofillOfferData::GPayPromoCodeOffer(offer_id, expiry, merchant_origins,
-                                            offer_details_url, display_strings,
-                                            promo_code));
-}
-
-void OfferNotificationBubbleViewsTestBase::SetUpOfferDataWithDomains(
-    AutofillOfferData::OfferType offer_type,
-    const std::vector<GURL>& domains) {
-  switch (offer_type) {
-    case AutofillOfferData::OfferType::GPAY_CARD_LINKED_OFFER:
-      SetUpCardLinkedOfferDataWithDomains(domains);
-      break;
-    case AutofillOfferData::OfferType::GPAY_PROMO_CODE_OFFER:
-      SetUpGPayPromoCodeOfferDataWithDomains(domains);
-      break;
-    case AutofillOfferData::OfferType::UNKNOWN:
-      NOTREACHED();
-  }
-}
-
-void OfferNotificationBubbleViewsTestBase::SetUpCardLinkedOfferDataWithDomains(
-    const std::vector<GURL>& domains) {
-  personal_data_->payments_data_manager().ClearAllServerDataForTesting();
-  // CreateCardLinkedOfferDataWithDomains(~) will add the necessary card.
-  test_api(personal_data_->payments_data_manager())
-      .AddOfferData(CreateCardLinkedOfferDataWithDomains(domains));
-  test_api(personal_data_->payments_data_manager()).NotifyObservers();
+      offer_id, expiry, merchant_origins,
+      GURL(GetDefaultTestDetailsUrlString()), DisplayStrings(),
+      GetDefaultTestPromoCode(), GetDefaultTestOfferShortTitle(),
+      /*issue_time=*/base::Time());
 }
 
 void OfferNotificationBubbleViewsTestBase::
-    SetUpGPayPromoCodeOfferDataWithDomains(const std::vector<GURL>& domains) {
+    SetUpWalletDirectOfferDataWithDomains(const std::vector<GURL>& domains) {
   personal_data_->payments_data_manager().ClearAllServerDataForTesting();
   test_api(personal_data_->payments_data_manager())
-      .AddOfferData(CreateGPayPromoCodeOfferDataWithDomains(domains));
+      .AddOfferData(CreateWalletDirectOfferDataWithDomains(domains));
   test_api(personal_data_->payments_data_manager()).NotifyObservers();
 }
 
@@ -208,23 +157,22 @@ OfferNotificationBubbleViewsTestBase::GetOfferNotificationBubbleViews() {
       controller->GetOfferNotificationBubbleView());
 }
 
-IconLabelBubbleView*
+page_actions::PageActionViewInterface*
 OfferNotificationBubbleViewsTestBase::GetOfferNotificationPageActionView() {
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
   auto* provider = browser_view->toolbar_button_provider();
-  return page_actions::GetIconLabelBubbleViewForTesting(
-      provider->GetPageActionViewInterface(kActionOffersAndRewardsForPage),
-      kActionOffersAndRewardsForPage);
+  return provider->GetPageActionViewInterface(kActionOffersAndRewardsForPage);
 }
 
 bool OfferNotificationBubbleViewsTestBase::IsIconVisible() {
-  return GetOfferNotificationPageActionView() &&
-         GetOfferNotificationPageActionView()->GetVisible();
+  return page_actions::PageActionTestAccessor(browser(),
+                                              kActionOffersAndRewardsForPage)
+      .GetVisible();
 }
 
 content::WebContents*
 OfferNotificationBubbleViewsTestBase::GetActiveWebContents() {
-  return browser()->tab_strip_model()->GetActiveWebContents();
+  return browser()->GetTabStripModel()->GetActiveWebContents();
 }
 
 void OfferNotificationBubbleViewsTestBase::AddEventObserverToController(
@@ -244,25 +192,14 @@ std::string OfferNotificationBubbleViewsTestBase::GetDefaultTestPromoCode()
   return kDefaultTestPromoCode;
 }
 
-std::string OfferNotificationBubbleViewsTestBase::GetDefaultTestValuePropText()
-    const {
-  return kDefaultTestValuePropText;
-}
-
-std::string OfferNotificationBubbleViewsTestBase::GetDefaultTestSeeDetailsText()
-    const {
-  return kDefaultTestSeeDetailsText;
-}
-
-std::string
-OfferNotificationBubbleViewsTestBase::GetDefaultTestUsageInstructionsText()
-    const {
-  return kDefaultTestUsageInstructionsText;
-}
-
 std::string
 OfferNotificationBubbleViewsTestBase::GetDefaultTestDetailsUrlString() const {
   return kDefaultTestDetailsUrlString;
+}
+
+std::string
+OfferNotificationBubbleViewsTestBase::GetDefaultTestOfferShortTitle() const {
+  return kDefaultTestOfferShortTitle;
 }
 
 AutofillOfferManager* OfferNotificationBubbleViewsTestBase::GetOfferManager() {

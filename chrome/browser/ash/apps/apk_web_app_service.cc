@@ -21,7 +21,6 @@
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
-#include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -105,7 +104,7 @@ class ApkWebAppServiceDelegateImpl : public ApkWebAppService::Delegate,
  public:
   explicit ApkWebAppServiceDelegateImpl(Profile* profile)
       : profile_(profile), arc_app_list_prefs_(ArcAppListPrefs::Get(profile)) {
-    DCHECK(arc_app_list_prefs_);
+    CHECK(arc_app_list_prefs_, base::NotFatalUntil::M160);
   }
 
   void MaybeUninstallPackageInArc(const std::string& package_name) override {
@@ -158,7 +157,7 @@ ApkWebAppService::ApkWebAppService(Profile* profile, Delegate* test_delegate)
       arc_app_list_prefs_(nullptr),
       real_delegate_(std::make_unique<ApkWebAppServiceDelegateImpl>(profile)),
       test_delegate_(test_delegate) {
-  DCHECK(web_app::AreWebAppsEnabled(profile));
+  CHECK(web_app::AreWebAppsEnabled(profile), base::NotFatalUntil::M160);
 
   apps::AppRegistryCache& app_registry_cache =
       apps::AppServiceProxyFactory::GetForProfile(profile)->AppRegistryCache();
@@ -294,7 +293,7 @@ void ApkWebAppService::MaybeUninstallWebApp(const webapps::AppId& web_app_id) {
   }
 
   auto* provider = web_app::WebAppProvider::GetForWebApps(profile_);
-  DCHECK(provider);
+  CHECK(provider, base::NotFatalUntil::M160);
   provider->scheduler().RemoveInstallManagementMaybeUninstall(
       web_app_id, web_app::WebAppManagement::kWebAppStore,
       webapps::WebappUninstallSource::kArc,
@@ -325,7 +324,7 @@ void ApkWebAppService::UpdateShelfPin(
     // package there is no way to determine which app is more suitable to
     // replace the previous web app shortcut. For simplicity we will just use
     // the first one.
-    DCHECK(arc_app_list_prefs_);
+    CHECK(arc_app_list_prefs_, base::NotFatalUntil::M160);
     absl::flat_hash_set<std::string> apps =
         arc_app_list_prefs_->GetAppsForPackage(package_name);
     if (!apps.empty()) {
@@ -547,7 +546,7 @@ void ApkWebAppService::SyncArcAndWebApps() {
     auto& web_app_info_dict = web_app_info_value.GetDict();
     const std::string* package_name =
         web_app_info_dict.FindString(kPackageNameKey);
-    DCHECK(package_name);
+    CHECK(package_name, base::NotFatalUntil::M160);
     if (!package_name ||
         base::StartsWith(*package_name, kGeneratedWebApkPackagePrefix)) {
       // This shouldn't happen, but clean up bad data anyway.
@@ -645,7 +644,7 @@ void ApkWebAppService::SyncArcAndWebApps() {
     } else if (was_web_app && !is_web_app) {
       UpdateShelfPin(package_name, package->web_app_info);
       // The package was a web app, but now isn't. Remove the web app.
-      DCHECK(web_app_id);
+      CHECK(web_app_id, base::NotFatalUntil::M160);
       MaybeUninstallWebApp(*web_app_id);
     }
   }
@@ -658,7 +657,7 @@ void ApkWebAppService::SyncArcAndWebApps() {
     auto& web_app_info_dict = web_app_info_value.GetDict();
     const std::string* package_name =
         web_app_info_dict.FindString(kPackageNameKey);
-    DCHECK(package_name);
+    CHECK(package_name, base::NotFatalUntil::M160);
     if (!package_name) {
       // This shouldn't happen, but ignore bad data anyway.
       continue;

@@ -46,8 +46,7 @@ StringView StripLeadingAndTrailingHtmlSpaces(const StringView& string) {
 
 Vector<String> SplitOnASCIIWhitespace(const String& input) {
   return input.SplitSkippingEmpty(
-      [](const StringView& input,
-         string_size_t pos) -> std::optional<string_size_t> {
+      [](const StringView& input, wtf_size_t pos) -> std::optional<wtf_size_t> {
         // SAFETY: SplitSkippingEmpty() guarantees that pos is always in bounds.
         if (IsHTMLSpace(UNSAFE_BUFFERS(input[pos]))) {
           return 1u;
@@ -433,9 +432,12 @@ inline StringImpl* FindStringIfStatic(base::span<const CharType> characters) {
   if (characters.size() > StringImpl::HighestStaticStringLength()) {
     return nullptr;
   }
-  // ComputeHashAndMaskTop8Bits is the function StringImpl::Hash() uses.
-  unsigned hash = StringHasher::ComputeHashAndMaskTop8Bits(
-      reinterpret_cast<const char*>(characters.data()), characters.size());
+  const auto bytes = base::as_bytes(characters);
+  // HashString24() is the function StringImpl::Hash() uses.
+  // Note: The following code computes incorrect hash values for UChar
+  // strings, but this doesn't matter because static strings contain no 16-bit
+  // strings, and we have Equal() below.
+  uint32_t hash = HashString24(bytes);
   const StaticStringsTable& table = StringImpl::AllStaticStrings();
   DCHECK(!table.empty());
 

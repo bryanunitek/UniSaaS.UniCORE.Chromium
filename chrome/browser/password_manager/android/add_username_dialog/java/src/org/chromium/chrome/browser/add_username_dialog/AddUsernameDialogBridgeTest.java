@@ -12,6 +12,8 @@ import static org.mockito.Mockito.when;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import org.jni_zero.JniRawPtr;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -24,7 +26,6 @@ import org.robolectric.Robolectric;
 import org.robolectric.android.controller.ActivityController;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.test.util.modaldialog.FakeModalDialogManager;
 
@@ -32,14 +33,13 @@ import java.lang.ref.WeakReference;
 
 /** Tests for {@link AddUsernameDialogBridge} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.PER_CLASS)
 public class AddUsernameDialogBridgeTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
     @Mock private AddUsernameDialogBridge.Natives mBridgeJniMock;
     @Mock private WindowAndroid mWindowAndroid;
 
-    private static final long sTestNativePointer = 1;
+    private JniRawPtr<AddUsernameDialogBridge.NativeAddUsernameDialogBridge> mTestNativePointer;
 
     private final FakeModalDialogManager mModalDialogManager = new FakeModalDialogManager(0);
     private AddUsernameDialogBridge mBridge;
@@ -47,22 +47,28 @@ public class AddUsernameDialogBridgeTest {
     @Before
     public void setUp() {
         AddUsernameDialogBridgeJni.setInstanceForTesting(mBridgeJniMock);
+        mTestNativePointer = JniRawPtr.createForTesting(1L);
 
-        mBridge = new AddUsernameDialogBridge(sTestNativePointer, mWindowAndroid);
+        mBridge = new AddUsernameDialogBridge(mTestNativePointer, mWindowAndroid);
+    }
+
+    @After
+    public void tearDown() {
+        mTestNativePointer.release();
     }
 
     @Test
     public void testOnDialogDismissed() {
         mBridge.onDialogDismissed();
         mBridge.onDialogDismissed();
-        verify(mBridgeJniMock, times(1)).onDialogDismissed(sTestNativePointer);
+        verify(mBridgeJniMock, times(1)).onDialogDismissed(mTestNativePointer);
     }
 
     @Test
     public void testOnDialogAccepted() {
         String username = "username";
         mBridge.onDialogAccepted(username);
-        verify(mBridgeJniMock).onDialogAccepted(sTestNativePointer, username);
+        verify(mBridgeJniMock).onDialogAccepted(mTestNativePointer, username);
     }
 
     @Test

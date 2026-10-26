@@ -9,7 +9,7 @@
 #import "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #import "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #import "components/autofill/core/browser/data_model/payments/credit_card.h"
-#import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #import "components/infobars/core/infobar.h"
 #import "components/password_manager/core/browser/mock_password_form_manager_for_ui.h"
 #import "components/password_manager/core/browser/password_form.h"
@@ -102,8 +102,7 @@ TEST_F(DefaultInfobarOverlayRequestFactoryTest, Confirm) {
 
 // Tests that the factory creates a save card request.
 TEST_F(DefaultInfobarOverlayRequestFactoryTest, SaveCard) {
-  autofill::CreditCard card(base::Uuid::GenerateRandomV4().AsLowercaseString(),
-                            "https://www.example.com/");
+  autofill::CreditCard card(base::Uuid::GenerateRandomV4().AsLowercaseString());
 
   InfoBarIOS infobar(
       InfobarType::kInfobarTypeSaveCard,

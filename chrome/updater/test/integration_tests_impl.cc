@@ -4,9 +4,10 @@
 
 #include "chrome/updater/test/integration_tests_impl.h"
 
+#include <stdint.h>
+#include <stdlib.h>
+
 #include <algorithm>
-#include <cstdint>
-#include <cstdlib>
 #include <map>
 #include <memory>
 #include <optional>
@@ -46,6 +47,7 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/test_timeouts.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "base/version.h"
@@ -1678,8 +1680,13 @@ void RunRecoveryComponent(UpdaterScope scope,
                           const std::string& app_id,
                           const base::Version& version) {
   base::CommandLine command(GetSetupExecutablePath());
-  command.AppendSwitchUTF8(kBrowserVersionSwitch, version.GetString());
-  command.AppendSwitchUTF8(kAppGuidSwitch, app_id);
+  command.AppendSwitch(kRecoverSwitch);
+  if (version.IsValid()) {
+    command.AppendSwitchUTF8(kBrowserVersionSwitch, version.GetString());
+  }
+  if (!app_id.empty()) {
+    command.AppendSwitchUTF8(kAppGuidSwitch, app_id);
+  }
   int exit_code = -1;
   Run(scope, command, &exit_code);
   ASSERT_EQ(exit_code, kErrorOk);
@@ -1760,10 +1767,9 @@ bool VersionProcessFilter::Includes(const base::ProcessEntry& entry) const {
     return false;
   }
 
-  DWORD path_len = MAX_PATH;
-  std::wstring path(path_len, '\0');
-  if (!::QueryFullProcessImageName(process.Handle(), 0, path.data(),
-                                   &path_len)) {
+  wchar_t path[MAX_PATH] = {};
+  DWORD path_len = std::size(path);
+  if (!::QueryFullProcessImageName(process.Handle(), 0, path, &path_len)) {
     return false;
   }
 
@@ -1923,9 +1929,14 @@ void UninstallEnterpriseCompanionApp() {
   base::CommandLine command_line(*exe_path);
   command_line.AppendSwitch(kUninstallCompanionAppSwitch);
   base::Process uninstall_process = base::LaunchProcess(command_line, {});
-  if (uninstall_process.IsValid() && WaitForProcess(uninstall_process) == 0) {
+  // The enterprise companion completes its uninstall asynchronously (e.g. via
+  // a separate cmd script on Windows).
+  if (uninstall_process.IsValid() && WaitForProcess(uninstall_process) == 0 &&
+      WaitFor([] { return !enterprise_companion::FindExistingInstall(); })) {
     VLOG(1) << "Enterprise companion app is removed.";
-    return;
+  } else {
+    LOG(WARNING) << "Failed to uninstall the enterprise companion app at "
+                 << *exe_path;
   }
 }
 

@@ -21,6 +21,7 @@
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "components/skills/features.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "url/url_util.h"
 
@@ -105,6 +106,39 @@ void AddTestAccountToFakeAccountManagerFacade(const std::string& email,
 }  // namespace
 #endif
 
+namespace {
+
+void ServeGlicFiles(net::test_server::EmbeddedTestServer* server,
+                    std::string_view server_name) {
+  if (!server) {
+    return;
+  }
+  if (server->StartedAcceptingConnection()) {
+    LOG(WARNING) << server_name
+                 << " was already started; unable to serve Glic test files.";
+    return;
+  }
+  // On Desktop, tests serve test files directly from the repository source
+  // directory. However, on Android automated testing bots and devices, the
+  // host repository checkout path does not exist on the device filesystem;
+  // test files are packaged under DIR_ASSETS/chrome/test/data/webui/glic/.
+  // Both gen/ and source asset paths must be served to prevent 404 errors
+  // when loading scripts and initializing Mojo connection in test
+  // environments.
+  server->ServeFilesFromDirectory(
+      base::PathService::CheckedGet(base::DIR_ASSETS)
+          .AppendASCII("gen/chrome/test/data/webui/glic/"));
+#if BUILDFLAG(IS_ANDROID)
+  server->ServeFilesFromDirectory(
+      base::PathService::CheckedGet(base::DIR_ASSETS)
+          .AppendASCII("chrome/test/data/webui/glic/"));
+#else
+  server->ServeFilesFromSourceDirectory("chrome/test/data/webui/glic/");
+#endif
+}
+
+}  // namespace
+
 namespace glic {
 
 namespace internal {
@@ -119,12 +153,15 @@ class TestCookieSynchronizer : public glic::GlicCookieSynchronizer {
   static TestCookieSynchronizer* InjectForProfile(Profile* profile) {
     GlicKeyedService* service =
         GlicKeyedServiceFactory::GetGlicKeyedService(profile, true);
+    auto* auth_controller = service->GetAuthController();
+    if (!auth_controller) {
+      return nullptr;
+    }
     auto cookie_synchronizer = std::make_unique<TestCookieSynchronizer>(
         profile, IdentityManagerFactory::GetForProfile(profile));
     TestCookieSynchronizer* ptr = cookie_synchronizer.get();
-    service->GetAuthController().SetCookieSynchronizerForTesting(
+    auth_controller->SetCookieSynchronizerForTesting(
         std::move(cookie_synchronizer));
-
     return ptr;
   }
 
@@ -199,7 +236,7 @@ std::vector<base::test::FeatureRef> GetDefaultEnabledGlicTestFeatures() {
 }
 std::vector<base::test::FeatureRef> GetDefaultDisabledGlicTestFeatures() {
   return {features::kGlicWarming, features::kGlicCountryFiltering,
-          features::kGlicLocaleFiltering};
+          features::kGlicLocaleFiltering, features::kSkillsServiceApi};
 }
 
 GlicTestEnvironment::GlicTestEnvironment(
@@ -279,30 +316,31 @@ void GlicTestEnvironment::OnProfileInitializationComplete(Profile* profile) {
   GetService(profile, true);
 }
 
-bool GlicTestEnvironment::SetupEmbeddedTestServers(
-    net::test_server::EmbeddedTestServer* http_server,
-    net::test_server::EmbeddedTestServer* https_server) {
-  CHECK(guest_url_.is_empty()) << "SetupEmbeddedTestServers called twice";
-
-  http_server->ServeFilesFromDirectory(
-      base::PathService::CheckedGet(base::DIR_ASSETS)
-          .AppendASCII("gen/chrome/test/data/webui/glic/"));
-  http_server->ServeFilesFromSourceDirectory("chrome/test/data/webui/glic/");
-  if (https_server) {
-    https_server->ServeFilesFromDirectory(
-        base::PathService::CheckedGet(base::DIR_ASSETS)
-            .AppendASCII("gen/chrome/test/data/webui/glic/"));
-    https_server->ServeFilesFromSourceDirectory("chrome/test/data/webui/glic/");
+bool GlicTestEnvironment::StartTestServerIfNeeded(
+    net::test_server::EmbeddedTestServer* server,
+    net::test_server::EmbeddedTestServerHandle& handle) {
+  if (server->StartedAcceptingConnection()) {
+    return true;
   }
 
-  test_server_handle_ = http_server->StartAndReturnHandle();
-  if (!test_server_handle_) {
+  handle = server->Started()
+               ? server->StartAcceptingConnectionsAndReturnHandle()
+               : server->StartAndReturnHandle();
+  return static_cast<bool>(handle);
+}
+
+bool GlicTestEnvironment::InitializeEmbeddedTestServers(
+    net::test_server::EmbeddedTestServer* https_server) {
+  CHECK(guest_url_.is_empty()) << "InitializeEmbeddedTestServers called twice";
+  CHECK(https_server);
+
+  // Initialize the listen socket so the port is known and `GetURL()` can be
+  // queried in `SetUpCommandLine()`, without starting the IO thread before the
+  // sandbox is initialized.
+  if (!https_server->Started() && !https_server->InitializeAndListen()) {
     return false;
   }
 
-  // Need to set this here rather than in SetUpCommandLine because we need to
-  // use the embedded test server to get the right URL and it's not started
-  // at that time.
   std::ostringstream path;
   path << glic_page_path_;
 
@@ -317,24 +355,47 @@ bool GlicTestEnvironment::SetupEmbeddedTestServers(
     }
   }
 
+  guest_url_ = https_server->GetURL(path.str());
   auto* command_line = base::CommandLine::ForCurrentProcess();
-  guest_url_ = http_server->GetURL(path.str());
   command_line->AppendSwitchASCII(::switches::kGlicGuestURL, guest_url_.spec());
 
+  return true;
+}
+
+bool GlicTestEnvironment::SetupEmbeddedTestServers(
+    net::test_server::EmbeddedTestServer* http_server,
+    net::test_server::EmbeddedTestServer* https_server) {
+  CHECK(https_server);
+
+  if (guest_url_.is_empty() && !InitializeEmbeddedTestServers(https_server)) {
+    return false;
+  }
+
+  if (http_server) {
+    ServeGlicFiles(http_server, "HTTP test server");
+    if (!StartTestServerIfNeeded(http_server, test_server_handle_)) {
+      return false;
+    }
+  }
+  ServeGlicFiles(https_server, "HTTPS test server");
+
+  if (!StartTestServerIfNeeded(https_server, https_test_server_handle_)) {
+    return false;
+  }
 
   return true;
 }
 
 void GlicTestEnvironment::SetGlicPagePath(const std::string& path) {
   CHECK(guest_url_.is_empty())
-      << "SetGlicPagePath must be called before SetupEmbeddedTestServers";
+      << "SetGlicPagePath must be called before InitializeEmbeddedTestServers";
   glic_page_path_ = path;
 }
 
 void GlicTestEnvironment::AddMockGlicQueryParam(const std::string_view& key,
                                                 const std::string_view& value) {
-  CHECK(guest_url_.is_empty())
-      << "AddMockGlicQueryParam must be called before SetupEmbeddedTestServers";
+  CHECK(guest_url_.is_empty()) << "AddMockGlicQueryParam must be called before "
+                                  "InitializeEmbeddedTestServers";
   mock_glic_query_params_.emplace(key, value);
 }
 
@@ -348,7 +409,9 @@ GlicTestEnvironmentService::GlicTestEnvironmentService(Profile* profile)
   internal::TestCookieSynchronizer* cookie_synchronizer =
       internal::TestCookieSynchronizer::InjectForProfile(profile);
 
-  cookie_synchronizer_ = cookie_synchronizer->GetWeakPtr();
+  if (cookie_synchronizer) {
+    cookie_synchronizer_ = cookie_synchronizer->GetWeakPtr();
+  }
   const GlicTestEnvironmentConfig& config = internal::GetConfig();
   if (config.fre_status) {
     SetFRECompletion(*config.fre_status);
@@ -406,7 +469,9 @@ GlicKeyedService* GlicTestEnvironmentService::GetService() {
 }
 
 void GlicTestEnvironmentService::SetResultForFutureCookieSync(bool result) {
-  cookie_synchronizer_->set_copy_cookies_result(result);
+  if (cookie_synchronizer_) {
+    cookie_synchronizer_->set_copy_cookies_result(result);
+  }
 }
 
 void GlicTestEnvironmentService::SetFRECompletion(prefs::FreStatus fre_status) {
@@ -434,6 +499,18 @@ internal::GlicTestEnvironmentShared::GlicTestEnvironmentShared(
     std::vector<base::test::FeatureRef> enabled_features,
     std::vector<base::test::FeatureRef> disabled_features) {
   scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
+
+  // The enabled list above includes chromeos::features::kFeatureManagementGlic
+  // so that the system requirement is met, but
+  // GlicGlobalEnabling::IsSystemRequirementMet() reads it into a
+  // function-local static. That static is settled by whichever test in the
+  // process asks first, so without pinning it here the features set up above
+  // may have no effect.
+  GlicEnabling::SetSystemRequirementMetForTesting(true);
+}
+
+internal::GlicTestEnvironmentShared::~GlicTestEnvironmentShared() {
+  GlicEnabling::SetSystemRequirementMetForTesting(std::nullopt);
 }
 
 }  // namespace glic

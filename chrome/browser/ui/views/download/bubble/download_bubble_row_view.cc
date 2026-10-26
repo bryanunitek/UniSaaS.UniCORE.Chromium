@@ -23,8 +23,8 @@
 #include "chrome/browser/download/drag_download_item.h"
 #include "chrome/browser/icon_manager.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -245,7 +245,7 @@ void DownloadBubbleRowView::OnFileIconLoaded(gfx::Image icon) {
 }
 
 void DownloadBubbleRowView::SetFileIconAsIcon(bool is_default_icon) {
-  DCHECK(!file_icon_.IsEmpty());
+  CHECK(!file_icon_.IsEmpty(), base::NotFatalUntil::M162);
   has_default_icon_ = is_default_icon;
   SetIconFromImage(file_icon_);
 }
@@ -330,7 +330,7 @@ DownloadBubbleRowView::DownloadBubbleRowView(
     const DownloadBubbleRowViewInfo& info,
     base::WeakPtr<DownloadBubbleUIController> bubble_controller,
     base::WeakPtr<DownloadBubbleNavigationHandler> navigation_handler,
-    base::WeakPtr<Browser> browser,
+    base::WeakPtr<BrowserWindowInterface> browser,
     int fixed_width)
     : info_(info),
       context_menu_(std::make_unique<DownloadUiContextMenuView>(
@@ -955,7 +955,7 @@ bool DownloadBubbleRowView::AcceleratorPressed(
     ui::Accelerator registered_accelerator;
     if (browser_view &&
         browser_view->GetAccelerator(IDC_COPY, &registered_accelerator)) {
-      DCHECK(accelerator == registered_accelerator);
+      CHECK(accelerator == registered_accelerator, base::NotFatalUntil::M162);
     }
   }
 #endif
@@ -977,6 +977,9 @@ void DownloadBubbleRowView::OnOcclusionStateChanged(bool occluded) {
   transparent_button_->SetEnabled(!occluded);
   for (auto& [command, action_button] : quick_actions_) {
     action_button->SetEnabled(!occluded);
+  }
+  for (auto& [command, main_page_button] : main_page_buttons_) {
+    main_page_button->SetEnabled(!occluded);
   }
 }
 
@@ -1050,6 +1053,13 @@ views::ImageButton* DownloadBubbleRowView::GetQuickActionButtonForTesting(
     DownloadCommands::Command command) {
   auto it = quick_actions_.find(command);
   CHECK(it != quick_actions_.end());
+  return it->second;
+}
+
+views::MdTextButton* DownloadBubbleRowView::GetMainPageButtonForTesting(
+    DownloadCommands::Command command) {
+  auto it = main_page_buttons_.find(command);
+  CHECK(it != main_page_buttons_.end());
   return it->second;
 }
 

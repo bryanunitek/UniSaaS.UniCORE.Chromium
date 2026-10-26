@@ -23,6 +23,7 @@
 #include "third_party/blink/renderer/core/svg/svg_a_element.h"
 
 #include "third_party/blink/public/mojom/input/focus_type.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_string_trustedscripturl.h"
 #include "third_party/blink/renderer/core/dom/attr.h"
 #include "third_party/blink/renderer/core/dom/attribute.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -46,10 +47,13 @@
 #include "third_party/blink/renderer/core/svg/animation/svg_smil_element.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_string.h"
 #include "third_party/blink/renderer/core/svg_names.h"
+#include "third_party/blink/renderer/core/url/dom_origin.h"
 #include "third_party/blink/renderer/core/xlink_names.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 
 namespace blink {
@@ -93,15 +97,7 @@ void SVGAElement::SvgAttributeChanged(const SvgAttributeChangedParams& params) {
   // SVGURIReference changes as none of the other properties changes the linking
   // behaviour for our <a> element.
   if (SVGURIReference::IsKnownAttribute(params.name)) {
-    bool was_link = IsLink();
-    SetIsLink(!HrefString().IsNull());
-
-    if (was_link || IsLink()) {
-      PseudoStateChanged(CSSSelector::kPseudoLink);
-      PseudoStateChanged(CSSSelector::kPseudoVisited);
-      PseudoStateChanged(CSSSelector::kPseudoWebkitAnyLink);
-      PseudoStateChanged(CSSSelector::kPseudoAnyLink);
-    }
+    AnchorElementUtils::UpdateHref(*this, AtomicString(HrefString()));
     return;
   }
 
@@ -171,8 +167,6 @@ void SVGAElement::DefaultEventHandler(Event& event) {
           request, FastGetAttribute(svg_names::kReferrerpolicyAttr),
           link_relations_, GetDocument());
 
-      request.SetHasUserGesture(LocalFrame::HasTransientUserActivation(frame));
-
       // Respect the download attribute only if we can read the content, and the
       // event is not an alt-click or similar.
       if (FastHasAttribute(svg_names::kDownloadAttr) &&
@@ -237,6 +231,26 @@ bool SVGAElement::IsValidInterestInvoker(Element& target) const {
 KURL SVGAElement::Url() const {
   return GetDocument().CompleteURL(
       StripLeadingAndTrailingHtmlSpaces(HrefString()));
+}
+
+DOMOrigin* SVGAElement::GetDOMOrigin(LocalDOMWindow*) const {
+  // No access check is necessary, as anchor elements are not accessible
+  // cross-origin.
+  if (HrefIsSpecified()) {
+    return DOMOrigin::Create(SecurityOrigin::Create(Url()));
+  }
+  return nullptr;
+}
+
+void SVGAElement::SetUrl(const KURL& url) {
+  auto* value =
+      MakeGarbageCollected<V8UnionStringOrTrustedScriptURL>(url.GetString());
+
+  href()->setBaseVal(value, ASSERT_NO_EXCEPTION);
+}
+
+String SVGAElement::Input() const {
+  return HrefString();
 }
 
 bool SVGAElement::HasActivationBehavior() const {

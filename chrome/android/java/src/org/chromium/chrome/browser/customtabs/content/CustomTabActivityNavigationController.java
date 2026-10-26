@@ -22,6 +22,7 @@ import android.text.TextUtils;
 import androidx.annotation.IntDef;
 import androidx.core.app.ActivityOptionsCompat;
 
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.Log;
@@ -251,8 +252,13 @@ public class CustomTabActivityNavigationController
                         assertNonNull(mIntentDataProvider.getIntent()), transition));
 
         // The sender of an intent can't be trusted, so we navigate from an opaque Origin to
-        // avoid sending same-site cookies.
-        params.setInitiatorOrigin(Origin.createOpaqueOrigin());
+        // avoid sending same-site cookies. Callers that have verified who really initiated the
+        // navigation (e.g. TWA share targets, whose action URL is verified to be within the
+        // app's scope) set the initiator themselves; don't clobber that. See
+        // crbug.com/40061291.
+        if (params.getInitiatorOrigin() == null) {
+            params.setInitiatorOrigin(Origin.createOpaqueOrigin());
+        }
 
         // Notifies PreloadingImpl that a navigation to CCT is happening. This is used to calculate
         // the recall of CCT prefetch's attempt. Please see
@@ -366,6 +372,7 @@ public class CustomTabActivityNavigationController
         assertUrlNotNullForOpenInBrowser(url, tab);
 
         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        intent.addCategory(Intent.CATEGORY_BROWSABLE);
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         intent.putExtra(IntentHandler.EXTRA_FROM_OPEN_IN_BROWSER, true);
         ResolveInfo resolveInfo = DefaultBrowserInfo.getDefaultWebBrowserInfo();
@@ -385,6 +392,11 @@ public class CustomTabActivityNavigationController
         boolean canFinishActivity =
                 !mIntentDataProvider.isTrustedWebActivity()
                         && !mIntentDataProvider.isWebappOrWebApkActivity();
+
+        // A TWA/Webapp/WebAPK can still hand the tab over to the browser when it is a
+        // separate child tab (e.g. created by target="_blank"): the tab model then falls
+        // back to the app's own tab, so the activity stays alive without finishing.
+        boolean canReparentKeepingActivity = !canFinishActivity && mTabController.getTabCount() > 1;
 
         willChromeHandleIntent |=
                 ExternalNavigationDelegateImpl.willChromeHandleIntent(intent, true);
@@ -408,23 +420,32 @@ public class CustomTabActivityNavigationController
             IntentUtils.addTrustedIntentExtras(intent);
             mActivity.startActivity(intent, startActivityOptions);
             finish(FinishReason.OPEN_IN_BROWSER);
-        } else if (canFinishActivity && willChromeHandleIntent) {
+        } else if ((canFinishActivity || canReparentKeepingActivity) && willChromeHandleIntent) {
             Activity adjacentActivity = MultiWindowUtils.getForegroundWindowActivity(mActivity);
-            if (adjacentActivity != null) {
+            if (canFinishActivity && adjacentActivity != null) {
                 openInAdjacentActivity(tab, adjacentActivity);
-            } else {
+            } else if (canFinishActivity) {
                 // Remove observer to not trigger finishing in onAllTabsClosed() callback - we'll
                 // use reparenting finish callback instead.
                 mTabProvider.removeObserver(mTabObserver);
                 mTabController.detachAndStartReparenting(
                         intent, startActivityOptions, () -> finish(REPARENTING));
+            } else {
+                // Move the in-app browser tab to the browser; the tab model swaps back to
+                // the web app's own tab, keeping the app and its state alive.
+                mTabController.detachAndStartReparenting(
+                        intent, startActivityOptions, CallbackUtils.emptyRunnable());
             }
         } else {
             if (mIntentDataProvider.isInfoPage()) {
                 IntentHandler.startChromeLauncherActivityForTrustedIntent(intent);
             } else if (PackageManagerUtils.canResolveActivity(intent)) {
                 mActivity.startActivity(intent, startActivityOptions);
-                finish(FinishReason.OPEN_IN_BROWSER);
+                // When the tab is hosted by a TWA/Webapp/WebAPK, finishing the activity would
+                // close (and thus crash) the installed app, so only finish plain Custom Tabs.
+                if (canFinishActivity) {
+                    finish(FinishReason.OPEN_IN_BROWSER);
+                }
             } else {
                 Toast.makeText(
                                 mActivity,

@@ -44,9 +44,7 @@ class ServiceLaunchedVideoCaptureDevice : public LaunchedVideoCaptureDevice {
       base::OnceCallback<void(media::mojom::ApplySubCaptureTargetResult)>
           callback) override;
   void RequestRefreshFrame() override;
-
-  void SetDesktopCaptureWindowIdAsync(gfx::NativeViewId window_id,
-                                      base::OnceClosure done_cb) override;
+  void InvalidateBuffers() override;
 
   void OnUtilizationReport(media::VideoCaptureFeedback feedback) override;
 

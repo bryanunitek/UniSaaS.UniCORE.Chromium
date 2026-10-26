@@ -37,6 +37,10 @@ IN_PROC_BROWSER_TEST_F(PrintPreviewTest, DuplexSettings) {
   RunTest("chromeos/print_preview/duplex_settings_test.js", "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(PrintPreviewTest, InputMixin) {
+  RunTest("chromeos/print_preview/input_mixin_test.js", "mocha.run()");
+}
+
 IN_PROC_BROWSER_TEST_F(PrintPreviewTest, InvalidSettings) {
   RunTest("chromeos/print_preview/invalid_settings_test.js", "mocha.run()");
 }
@@ -1293,8 +1297,8 @@ IN_PROC_BROWSER_TEST_F(PrintPreviewDestinationSettingsTest,
   RunTestCase("SelectRecentDestination");
 }
 
-IN_PROC_BROWSER_TEST_F(PrintPreviewDestinationSettingsTest, OpenDialog) {
-  RunTestCase("OpenDialog");
+IN_PROC_BROWSER_TEST_F(PrintPreviewDestinationSettingsTest, SeeMoreButton) {
+  RunTestCase("SeeMoreButton");
 }
 
 IN_PROC_BROWSER_TEST_F(PrintPreviewDestinationSettingsTest,
@@ -1388,11 +1392,6 @@ class PrintPreviewManagedPrintOptionsTest : public PrintPreviewBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(PrintPreviewManagedPrintOptionsTest,
-                       DisabledViaExperiment) {
-  RunTestCase("DisabledViaExperiment");
-}
-
-IN_PROC_BROWSER_TEST_F(PrintPreviewManagedPrintOptionsTest,
                        SupportedDefaultValues) {
   RunTestCase("SupportedDefaultValues");
 }
@@ -1419,4 +1418,8 @@ IN_PROC_BROWSER_TEST_F(PrintPreviewManagedPrintOptionsTest,
 
 IN_PROC_BROWSER_TEST_F(PrintPreviewManagedPrintOptionsTest, DuplexSetting) {
   RunTestCase("DuplexSetting");
+}
+
+IN_PROC_BROWSER_TEST_F(PrintPreviewManagedPrintOptionsTest, LayoutSetting) {
+  RunTestCase("LayoutSetting");
 }

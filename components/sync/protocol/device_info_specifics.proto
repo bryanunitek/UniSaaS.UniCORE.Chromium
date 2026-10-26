@@ -104,16 +104,19 @@ message DeviceInfoSpecifics {
 
   // A name determined by the server that can be used to personalize the device.
   optional string server_determined_model_name = 22;
+
+  // Device specific information for Personal Context feature.
+  optional PersonalContextSpecificFields personal_context_fields = 23;
 }
 
 // Feature specific information about the device that is running a sync-enabled
 // Chrome browser. Adding to this proto is discouraged and should only be added
 // when the information can not be derived more generally.
 message FeatureSpecificFields {
-  // Tracks whether the SendTabToSelf feature is enabled on the device. For this
-  // to be true, two things must be true: (1) The receiving side of the feature
-  // must be enabled on the device (2) The user has enabled sync for this
-  // feature.
+  // Tracks whether the SendTabToSelf feature is enabled on the device.
+  // Deprecated in M158; unconditionally true on Chrome clients since M101.
+  // TODO(crbug.com/573435919): Reserve this field once M157 passes the Sync
+  // client support horizon.
   optional bool send_tab_to_self_receiving_enabled = 1;
 
   // Tracks which type of Send Tab To Self message(s) can be sent to the
@@ -145,6 +148,11 @@ message FeatureSpecificFields {
   // Tracks the experimental triggering version of Glic on the device.
   // Optional. If not set, the state is unavailable or unsupported.
   optional int32 glic_experimental_triggering_version = 8;
+
+  // Capabilities supported for experimental triggering. The possible
+  // values are defined in:
+  // //chrome/browser/glic/experimental_triggering/glic_experimental_triggering_types.h.
+  repeated string glic_experimental_triggering_capabilities = 9;
 }
 
 // Device specific information for Sharing feature. Used to send end-to-end
@@ -169,16 +177,18 @@ message SharingSpecificFields {
     UNKNOWN = 0;
     SMS_FETCHER = 3;
     REMOTE_COPY = 4;
-    // Supports Click to Call via sender ID.
-    CLICK_TO_CALL_V2 = 7;
-    // Supports Shared Clipboard via sender ID.
-    SHARED_CLIPBOARD_V2 = 8;
+    reserved 7;
+    reserved "CLICK_TO_CALL_V2";
+    reserved 8;
+    reserved "SHARED_CLIPBOARD_V2";
     // Supports optimization guide push notification.
     OPTIMIZATION_GUIDE_PUSH_NOTIFICATION = 9;
     // Supports receiving notifications about new OneTimeTokens in the backend.
     ONE_TIME_TOKEN_BACKEND_NOTIFICATION = 10;
     // Supports experimental triggering.
     GLIC_EXPERIMENTAL_TRIGGERING = 11;
+    // Supports browser actuator.
+    BROWSER_ACTUATOR = 12;
   }
   // LINT.ThenChange(/components/sync_device_info/device_info.h:SharingFeature)
 
@@ -258,3 +268,16 @@ message ChromeVersionInfo {
 message GooglePlayServicesVersionInfo {
   optional string apk_version_name = 1;
 }
+
+// Device specific information for Personal Context feature.
+message PersonalContextSpecificFields {
+  // Public key for message encryption using Personal Context sender ID.
+  optional bytes p256dh_v2 = 1 [deprecated = true];
+
+  // Serialized proto bytes of tink.Keyset
+  optional bytes serialized_tink_keyset = 2;
+
+  // Whether the device is eligible for SPII (e.g. passport, driver's license).
+  optional bool eligible_for_spii = 3;
+}
+

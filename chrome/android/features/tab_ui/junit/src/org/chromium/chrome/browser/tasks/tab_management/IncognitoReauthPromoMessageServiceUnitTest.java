@@ -14,6 +14,7 @@ import static org.mockito.ArgumentMatchers.notNull;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
@@ -41,9 +42,13 @@ import org.robolectric.annotation.Config;
 import org.chromium.base.Callback;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.device_reauth.BiometricStatus;
+import org.chromium.chrome.browser.device_reauth.DeviceAuthAvailabilityCheckerBridge;
 import org.chromium.chrome.browser.device_reauth.ReauthenticatorBridge;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthManager;
 import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthSettingUtils;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
@@ -62,7 +67,7 @@ import org.chromium.components.user_prefs.UserPrefsJni;
 
 /** Robolectric tests for {@link IncognitoReauthPromoMessageService}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, sdk = VERSION_CODES.R)
+@Config(sdk = VERSION_CODES.R)
 public class IncognitoReauthPromoMessageServiceUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -223,7 +228,7 @@ public class IncognitoReauthPromoMessageServiceUnitTest {
 
         mIncognitoReauthPromoMessageService.initialize(mServiceDismissActionProvider);
 
-        assertEquals(1, mIncognitoReauthPromoMessageService.getMessageItems().size());
+        assertEquals(1, mIncognitoReauthPromoMessageService.getMessageItemsForTesting().size());
         verify(mContext, atLeastOnce()).getResources();
         verify(mContext, atLeastOnce()).getString(anyInt());
     }
@@ -318,6 +323,7 @@ public class IncognitoReauthPromoMessageServiceUnitTest {
     }
 
     @Test
+    @DisableFeatures(ChromeFeatureList.DEVICE_REAUTH_REFACTOR)
     public void
             testReviewActionProvider_triggersIncognitoReauth_Success_EnablesPref_And_Dismisses() {
         createIncognitoReauthPromoMessageService();
@@ -349,6 +355,51 @@ public class IncognitoReauthPromoMessageServiceUnitTest {
         IncognitoReauthPromoMessageService.setIsPromoEnabledForTesting(false);
 
         verify(mReauthenticatorBridge).getBiometricAvailabilityStatus();
+        verify(mReauthenticatorBridge).reauthenticate(notNull());
+        verify(mPrefService).setBoolean(Pref.INCOGNITO_REAUTHENTICATION_FOR_ANDROID, true);
+        verify(mServiceDismissActionProvider).dismiss(INCOGNITO_REAUTH_PROMO_MESSAGE);
+
+        verify(mContext).getString(R.string.incognito_reauth_snackbar_text);
+        verify(mContext).getColor(R.color.floating_snackbar_background_incognito);
+        verify(mSnackbarManager).showSnackbar(mSnackbarArgumentCaptor.getValue());
+
+        assertFalse(
+                mSharedPreferenceManager.readBoolean(INCOGNITO_REAUTH_PROMO_CARD_ENABLED, true));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.DEVICE_REAUTH_REFACTOR)
+    public void
+            testReviewActionProvider_triggersIncognitoReauth_Success_EnablesPref_And_Dismisses_refactorFlagEnabled() {
+        createIncognitoReauthPromoMessageService();
+
+        mIncognitoReauthPromoMessageService.initialize(mServiceDismissActionProvider);
+        IncognitoReauthManager.setIsIncognitoReauthFeatureAvailableForTesting(
+                /* isAvailable= */ true);
+        DeviceAuthAvailabilityCheckerBridge.setBiometricAvailabilityStatusForTesting(
+                BiometricStatus.BIOMETRICS_AVAILABLE);
+        doAnswer(
+                        invocation -> {
+                            Callback<Boolean> callback = invocation.getArgument(0);
+                            callback.onResult(true);
+                            return true;
+                        })
+                .when(mReauthenticatorBridge)
+                .reauthenticate(notNull());
+
+        // Setup snackbar interaction.
+        final String snackBarTestString = "This is written inside the snackbar.";
+        when(mContext.getString(R.string.incognito_reauth_snackbar_text))
+                .thenReturn(snackBarTestString);
+        when(mContext.getColor(R.color.floating_snackbar_background_incognito))
+                .thenReturn(R.color.floating_snackbar_background_incognito);
+        doNothing().when(mSnackbarManager).showSnackbar(mSnackbarArgumentCaptor.capture());
+
+        IncognitoReauthPromoMessageService.setIsPromoEnabledForTesting(true);
+        mIncognitoReauthPromoMessageService.review();
+        IncognitoReauthPromoMessageService.setIsPromoEnabledForTesting(false);
+
+        verify(mReauthenticatorBridge, never()).getBiometricAvailabilityStatus();
         verify(mReauthenticatorBridge).reauthenticate(notNull());
         verify(mPrefService).setBoolean(Pref.INCOGNITO_REAUTHENTICATION_FOR_ANDROID, true);
         verify(mServiceDismissActionProvider).dismiss(INCOGNITO_REAUTH_PROMO_MESSAGE);
@@ -457,7 +508,7 @@ public class IncognitoReauthPromoMessageServiceUnitTest {
         IncognitoReauthPromoMessageService.setIsPromoEnabledForTesting(true);
         mPauseResumeWithNativeObserver.onResumeWithNative();
 
-        assertEquals(1, mIncognitoReauthPromoMessageService.getMessageItems().size());
+        assertEquals(1, mIncognitoReauthPromoMessageService.getMessageItemsForTesting().size());
         assertTrue(mSharedPreferenceManager.readBoolean(INCOGNITO_REAUTH_PROMO_CARD_ENABLED, true));
         verify(mContext, atLeastOnce()).getResources();
         verify(mContext, atLeastOnce()).getString(anyInt());

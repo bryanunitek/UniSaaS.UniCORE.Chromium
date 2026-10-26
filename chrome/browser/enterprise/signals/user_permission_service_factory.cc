@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
@@ -15,6 +16,7 @@
 #include "components/device_signals/core/browser/user_delegate.h"
 #include "components/device_signals/core/browser/user_permission_service.h"
 #include "components/device_signals/core/browser/user_permission_service_impl.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -25,8 +27,8 @@
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/enterprise/connectors/device_trust/device_trust_connector_service.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_connector_service_factory.h"
+#include "components/enterprise/device_trust/core/device_trust_connector_service.h"  // nogncheck
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 namespace enterprise_signals {
@@ -51,6 +53,11 @@ UserPermissionServiceFactory::UserPermissionServiceFactory()
               .WithRegular(ProfileSelection::kOwnInstance)
               // TODO(crbug.com/41488885): Check if this service is needed for
               // Ash Internals.
+              .WithIsolatedMode(base::FeatureList::IsEnabled(
+                                    enterprise_isolated_mode::
+                                        kEnterpriseIsolatedModeMilestone2)
+                                    ? ProfileSelection::kRedirectedToOriginal
+                                    : ProfileSelection::kOwnInstance)
               .WithAshInternals(ProfileSelection::kOwnInstance)
               .Build()) {
   DependsOn(IdentityManagerFactory::GetInstance());

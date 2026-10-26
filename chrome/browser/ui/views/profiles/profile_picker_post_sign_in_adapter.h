@@ -125,9 +125,8 @@ class ProfilePickerPostSignInAdapter : public content::WebContentsDelegate,
   // Returns the profile color, taking into account current policies.
   std::optional<SkColor> GetProfileColor() const;
 
-  // Returns the URL for sync confirmation screen (or for the "is-loading"
-  // version of it, if `loading` is true).
-  GURL GetSyncConfirmationURL(bool loading);
+  // Returns the URL for the post-sign-in loading spinner screen.
+  GURL GetLoadingScreenURL() const;
 
   ProfilePickerWebContentsHost* host() const { return host_; }
   Profile* profile() const { return profile_; }
@@ -146,14 +145,14 @@ class ProfilePickerPostSignInAdapter : public content::WebContentsDelegate,
   // Callbacks that finalize initialization of WebUI pages.
   void SwitchToSyncConfirmationFinished();
   void SwitchToHistorySyncOptinFinished();
-  void SwitchToManagedUserProfileNoticeFinished(
-      ManagedUserProfileNoticeUI::ScreenType type,
-      signin::SigninChoiceCallback process_user_choice_callback);
   void SwitchToSignInCelebrationFinished(base::OnceClosure celebration_finished);
 
   // Returns whether the flow is initialized (i.e. whether `Init()` has been
   // called).
   bool IsInitialized() const;
+
+  // Returns the account info for the signed-in account.
+  AccountInfo GetAccountInfo() const;
 
   // The host object, must outlive this object.
   raw_ptr<ProfilePickerWebContentsHost> host_;

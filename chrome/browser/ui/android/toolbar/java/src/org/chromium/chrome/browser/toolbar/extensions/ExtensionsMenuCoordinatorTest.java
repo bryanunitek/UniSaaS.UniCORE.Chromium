@@ -11,9 +11,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyFloat;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.anyLong;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.eq;
@@ -30,6 +28,8 @@ import android.view.View;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniUniquePtr;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -55,6 +55,9 @@ import org.chromium.chrome.browser.tabmodel.TabCreator;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
 import org.chromium.chrome.browser.toolbar.extensions.ExtensionsToolbarCoordinatorImpl.MenuButtonPinningDelegate;
 import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask.NativeBrowserWindowInterface;
+import org.chromium.chrome.browser.ui.extensions.ExtensionActionContextMenuBridge;
+import org.chromium.chrome.browser.ui.extensions.ExtensionActionContextMenuBridgeJni;
 import org.chromium.chrome.browser.ui.extensions.ExtensionTestUtils;
 import org.chromium.chrome.browser.ui.extensions.ExtensionsMenuBridge;
 import org.chromium.chrome.browser.ui.extensions.ExtensionsMenuBridgeJni;
@@ -66,10 +69,13 @@ import org.chromium.components.feature_engagement.EventConstants;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.content_public.browser.LoadUrlParams;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.listmenu.ListMenuButton;
 import org.chromium.ui.listmenu.ListMenuHost;
+import org.chromium.ui.listmenu.MenuModelBridge;
 import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.widget.AnchoredPopupWindow;
 
@@ -89,14 +95,18 @@ public class ExtensionsMenuCoordinatorTest {
     @Mock private Profile mProfile;
     @Mock private TabCreator mTabCreator;
     @Mock private ChromeAndroidTask mTask;
+    @Mock private JniPtr<NativeBrowserWindowInterface> mBrowserWindow;
     @Mock private Tab mTab;
     @Mock private ThemeColorProvider mThemeColorProvider;
     @Mock private ExtensionsToolbarBridge mExtensionsToolbarBridge;
     @Mock private ExtensionsMenuBridge.Natives mExtensionsMenuBridgeJniMock;
+    @Mock private ExtensionActionContextMenuBridge.Native mActionContextMenuBridgeJniMock;
+    @Mock private MenuModelBridge mActionContextMenuModelBridge;
     @Mock private MenuButtonPinningDelegate mMenuButtonPinningDelegate;
     @Mock private Tracker mTracker;
     @Mock private WindowAndroid mWindowAndroid;
     @Mock private ModalDialogManager mModalDialogManager;
+    @Mock private Runnable mClearOmniboxFocus;
 
     @Captor private ArgumentCaptor<LoadUrlParams> mLoadUrlParamsCaptor;
 
@@ -114,7 +124,15 @@ public class ExtensionsMenuCoordinatorTest {
     public void setUp() {
         TrackerFactory.setTrackerForTests(mTracker);
         ExtensionsMenuBridgeJni.setInstanceForTesting(mExtensionsMenuBridgeJniMock);
-        when(mExtensionsMenuBridgeJniMock.init(any(), anyLong(), anyLong())).thenReturn(1L);
+        when(mExtensionsMenuBridgeJniMock.init(any(), any(), any()))
+                .thenAnswer(invocation -> JniUniquePtr.createForTesting(1L));
+
+        ExtensionActionContextMenuBridgeJni.setInstanceForTesting(mActionContextMenuBridgeJniMock);
+        when(mActionContextMenuBridgeJniMock.init(any(), any(), any(), anyInt()))
+                .thenAnswer(invocation -> JniUniquePtr.createForTesting(10000L));
+        when(mActionContextMenuBridgeJniMock.getMenuModelBridge(any()))
+                .thenReturn(mActionContextMenuModelBridge);
+        when(mActionContextMenuModelBridge.populateModelList()).thenReturn(new ModelList());
 
         AppCompatActivity activity =
                 Robolectric.buildActivity(AppCompatActivity.class).setup().get();
@@ -125,6 +143,7 @@ public class ExtensionsMenuCoordinatorTest {
         activity.setContentView(mExtensionsMenuButton);
 
         when(mTask.getOrCreateNativeBrowserWindowPtr(mProfile)).thenReturn(BROWSER_WINDOW_POINTER);
+        when(mTask.getOrCreateNativeBrowserWindow(mProfile)).thenReturn(mBrowserWindow);
         WeakReference<Activity> mockActivityRef = new WeakReference<>(mContext);
         when(mWindowAndroid.getActivity()).thenReturn(mockActivityRef);
         when(mTab.getProfile()).thenReturn(mProfile);
@@ -138,13 +157,13 @@ public class ExtensionsMenuCoordinatorTest {
         doAnswer(
                         invocation -> {
                             mCapturedMenuBridge = invocation.getArgument(0);
-                            return EXTENSIONS_MENU_BRIDGE_POINTER;
+                            return JniUniquePtr.createForTesting(EXTENSIONS_MENU_BRIDGE_POINTER);
                         })
                 .when(mExtensionsMenuBridgeJniMock)
-                .init(any(), anyLong(), anyLong());
+                .init(any(), any(), any());
 
         // Default to not ready, so we can test the waiting logic.
-        when(mExtensionsMenuBridgeJniMock.isReady(anyLong())).thenReturn(false);
+        when(mExtensionsMenuBridgeJniMock.isReady(any())).thenReturn(false);
 
         // Set the current tab.
         mCurrentTabSupplier.set(mTab);
@@ -164,7 +183,9 @@ public class ExtensionsMenuCoordinatorTest {
                         mTabCreator,
                         mExtensionsToolbarBridge,
                         mMenuButtonPinningDelegate,
-                        mModalDialogManager);
+                        mModalDialogManager,
+                        mClearOmniboxFocus,
+                        /* isWebApp= */ false);
 
         // Clear invocations from initialization to ensure tests start fresh.
         clearInvocations(mExtensionsMenuBridgeJniMock);
@@ -172,7 +193,107 @@ public class ExtensionsMenuCoordinatorTest {
 
     @After
     public void tearDown() {
+        org.chromium.base.lifetime.LifetimeAssert.resetForTesting();
         mExtensionsMenuCoordinator.destroy();
+    }
+
+    /**
+     * Tests that triggering an extension action from the menu executes the action and closes the
+     * menu.
+     */
+    @Test
+    public void testTriggeringExtensionClosesMenu() {
+        ListMenuHost.PopupMenuShownListener shownListener =
+                mock(ListMenuHost.PopupMenuShownListener.class);
+        mExtensionsMenuButton.addPopupListener(shownListener);
+
+        mExtensionsMenuButton.performClick();
+        triggerOnMediatorReady();
+        verify(shownListener).onPopupMenuShown();
+        assertTrue(mExtensionsMenuCoordinator.isExtensionsMenuOpen());
+
+        View primaryActionButton =
+                mExtensionsMenuCoordinator
+                        .getContentView()
+                        .findViewById(R.id.extensions_menu_item_primary_action);
+        assertNotNull(primaryActionButton);
+
+        primaryActionButton.performClick();
+
+        verify(mExtensionsMenuBridgeJniMock).executeAction(any(), eq("id_a"));
+
+        mExtensionsMenuCoordinator.closeExtensionsMenuIfOpen();
+        assertFalse(mExtensionsMenuCoordinator.isExtensionsMenuOpen());
+    }
+
+    /** Tests that clicking the context menu button on an extension item opens the context menu. */
+    @Test
+    public void testClickingContextMenuButton() {
+        org.chromium.content_public.browser.WebContents webContents =
+                mock(org.chromium.content_public.browser.WebContents.class);
+        when(mTab.getWebContents()).thenReturn(webContents);
+        mCurrentTabSupplier.set(mTab);
+
+        mExtensionsMenuButton.performClick();
+        triggerOnMediatorReady();
+
+        View contextMenuButton =
+                mExtensionsMenuCoordinator
+                        .getContentView()
+                        .findViewById(R.id.extensions_menu_item_context_menu);
+        assertNotNull(contextMenuButton);
+
+        contextMenuButton.performClick();
+
+        verify(mActionContextMenuBridgeJniMock)
+                .init(eq(mBrowserWindow), eq("id_a"), eq(webContents), anyInt());
+    }
+
+    /** Tests that the reload page prompt is shown and clicking reload notifies native. */
+    @Test
+    public void testReloadPageSection_VisibilityAndClick() {
+        mExtensionsMenuButton.performClick();
+        triggerOnMediatorReady();
+
+        mExtensionsMenuCoordinator
+                .getMainPageModel()
+                .set(
+                        ExtensionsMenuProperties.OPTIONAL_SECTION_TYPE,
+                        ExtensionsMenuTypes.OptionalSectionType.RELOAD_PAGE);
+
+        View reloadSection =
+                mExtensionsMenuCoordinator
+                        .getContentView()
+                        .findViewById(R.id.extensions_menu_reload_section);
+        assertEquals(View.VISIBLE, reloadSection.getVisibility());
+
+        View reloadButton =
+                mExtensionsMenuCoordinator
+                        .getContentView()
+                        .findViewById(R.id.extensions_menu_reload_button);
+        reloadButton.performClick();
+
+        verify(mExtensionsMenuBridgeJniMock).onReloadPageButtonClicked(any());
+    }
+
+    /** Tests that the extensions menu button state is updated when the menu opens and closes. */
+    @Test
+    public void testExtensionsMenuButtonHighlight() {
+        org.chromium.content_public.browser.WebContents webContents =
+                mock(org.chromium.content_public.browser.WebContents.class);
+        when(mTab.getWebContents()).thenReturn(webContents);
+
+        mExtensionsMenuButton.performClick();
+        triggerOnMediatorReady();
+
+        mExtensionsMenuCoordinator.onActiveWebContentsChanged(webContents);
+
+        assertTrue(mExtensionsMenuCoordinator.isExtensionsMenuOpen());
+        verify(mExtensionsToolbarBridge)
+                .getMenuButtonState(eq(webContents), anyInt(), anyInt(), anyFloat(), anyInt());
+
+        mExtensionsMenuCoordinator.closeExtensionsMenuIfOpen();
+        assertFalse(mExtensionsMenuCoordinator.isExtensionsMenuOpen());
     }
 
     private ExtensionsMenuTypes.MenuEntryState wrap(ExtensionsMenuTypes.MenuEntryState entry) {
@@ -208,6 +329,40 @@ public class ExtensionsMenuCoordinatorTest {
         // Menu should be shown once mediator trigger the onReady runnable.
         triggerOnMediatorReady();
         verify(shownListener).onPopupMenuShown();
+    }
+
+    /**
+     * Tests that clicking the extensions menu button when the menu is open dismisses the menu and
+     * does not immediately re-open it.
+     */
+    @Test
+    public void testClickMenuButtonWhileOpen_DismissesAndDoesNotReopen() {
+        ListMenuHost.PopupMenuShownListener shownListener =
+                mock(ListMenuHost.PopupMenuShownListener.class);
+        mExtensionsMenuButton.addPopupListener(shownListener);
+
+        // Click opens the menu.
+        mExtensionsMenuButton.performClick();
+        triggerOnMediatorReady();
+        verify(shownListener, times(1)).onPopupMenuShown();
+
+        // Simulate clicking the button again while the menu is open:
+        // Popup is dismissed (dismissal triggers onPopupMenuDismissed).
+        mExtensionsMenuButton.dismiss();
+        verify(shownListener, times(1)).onPopupMenuDismissed();
+
+        // Extensions menu is clicked again, but should not be shown again.
+        mExtensionsMenuButton.performClick();
+        verify(shownListener, times(1)).onPopupMenuShown();
+
+        // Advance the clock by 250ms to pass the 200ms cooldown.
+        mExtensionsMenuButton.postDelayed(() -> {}, 250);
+        ShadowLooper.idleMainLooper();
+
+        // A subsequent click should open it again.
+        mExtensionsMenuButton.performClick();
+        triggerOnMediatorReady();
+        verify(shownListener, times(2)).onPopupMenuShown();
     }
 
     /** Tests that the extensions menu can be dismissed by clicking the close button. */
@@ -326,10 +481,9 @@ public class ExtensionsMenuCoordinatorTest {
                                 "Extension A",
                                 ExtensionTestUtils.createSimpleIcon(Color.RED),
                                 /* isPinned= */ false)));
-        when(mExtensionsMenuBridgeJniMock.getMenuEntries(anyLong())).thenReturn(mockEntries);
+        when(mExtensionsMenuBridgeJniMock.getMenuEntries(any())).thenReturn(mockEntries);
         mSiteSettingsState = createSiteSettingsState("label", true);
-        when(mExtensionsMenuBridgeJniMock.getSiteSettings(anyLong()))
-                .thenReturn(mSiteSettingsState);
+        when(mExtensionsMenuBridgeJniMock.getSiteSettings(any())).thenReturn(mSiteSettingsState);
 
         // This simulates the actual C++ -> Java call (Observer.onReady) that happens when
         // the native model is initialized.
@@ -383,12 +537,11 @@ public class ExtensionsMenuCoordinatorTest {
         // Click to toggle from checked (default) to unchecked.
         container.performClick();
         verify(mExtensionsMenuBridgeJniMock, times(1))
-                .onSiteSettingsToggleChanged(anyLong(), eq(false));
+                .onSiteSettingsToggleChanged(any(), eq(false));
 
         // Click again to toggle back to checked.
         container.performClick();
-        verify(mExtensionsMenuBridgeJniMock, times(1))
-                .onSiteSettingsToggleChanged(anyLong(), eq(true));
+        verify(mExtensionsMenuBridgeJniMock, times(1)).onSiteSettingsToggleChanged(any(), eq(true));
     }
 
     /** Tests that calling {@code closeExtensionsMenuIfOpen()} successfully dismisses the menu. */
@@ -448,6 +601,69 @@ public class ExtensionsMenuCoordinatorTest {
 
         // Verify that updateDesiredContentSize(0, 0, true) was called.
         verify(mockPopup).updateDesiredContentSize(0, 0, true);
+    }
+
+    @Test
+    public void testOnActiveWebContentsChanged_UpdatesButtonStateWithWebContents() {
+        WebContents mockWebContents = mock(WebContents.class);
+        clearInvocations(mExtensionsToolbarBridge);
+
+        mExtensionsMenuCoordinator.onActiveWebContentsChanged(mockWebContents);
+
+        verify(mExtensionsToolbarBridge)
+                .getMenuButtonState(eq(mockWebContents), anyInt(), anyInt(), anyFloat(), anyInt());
+    }
+
+    @Test
+    public void testCurrentTabSupplierChange_UpdatesButtonState() {
+        Tab newTab = mock(Tab.class);
+        WebContents newWebContents = mock(WebContents.class);
+        when(newTab.getWebContents()).thenReturn(newWebContents);
+        clearInvocations(mExtensionsToolbarBridge);
+
+        mCurrentTabSupplier.set(newTab);
+
+        verify(mExtensionsToolbarBridge)
+                .getMenuButtonState(eq(newWebContents), anyInt(), anyInt(), anyFloat(), anyInt());
+    }
+
+    @Test
+    public void testPinMenuIconButton_VisibilityInBrowserVsWebApp() {
+        // In browser mode (isWebApp = false), pin to toolbar row is visible.
+        View browserPinRow =
+                mExtensionsMenuCoordinator
+                        .getContentView()
+                        .findViewById(R.id.extensions_menu_pin_menu_icon_button);
+        assertEquals(View.VISIBLE, browserPinRow.getVisibility());
+
+        // In web app mode (isWebApp = true), pin to toolbar row is gone.
+        ExtensionsMenuCoordinator webAppCoordinator =
+                new ExtensionsMenuCoordinator(
+                        mContext,
+                        mExtensionsMenuButton,
+                        mThemeColorProvider,
+                        mTask,
+                        mWindowAndroid,
+                        mProfile,
+                        mCurrentTabSupplier,
+                        mTabCreator,
+                        mExtensionsToolbarBridge,
+                        mMenuButtonPinningDelegate,
+                        mModalDialogManager,
+                        mClearOmniboxFocus,
+                        /* isWebApp= */ true);
+        View webAppPinRow =
+                webAppCoordinator
+                        .getContentView()
+                        .findViewById(R.id.extensions_menu_pin_menu_icon_button);
+        assertEquals(View.GONE, webAppPinRow.getVisibility());
+        webAppCoordinator.destroy();
+    }
+
+    @Test
+    public void testClickMenuButton_clearsOmniboxFocus() {
+        mExtensionsMenuButton.performClick();
+        verify(mClearOmniboxFocus).run();
     }
 
     private ExtensionsMenuTypes.SiteSettingsState createSiteSettingsState(

@@ -8,7 +8,10 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <vector>
 
+#include "base/gtest_prod_util.h"
+#include "base/i18n/language_tag.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -79,8 +82,15 @@ class ContentTranslateDriver : public TranslateDriver,
     translate_manager_ = manager;
   }
 
+  TranslateManager* translate_manager() { return translate_manager_; }
+
+  static ContentTranslateDriver* FromWebContents(
+      content::WebContents* web_contents);
+
   // Initiates translation once the page is finished loading.
   void InitiateTranslation(const std::string& page_lang, int attempt);
+
+
 
   // TranslateDriver methods.
   void OnIsPageTranslatedChanged() override;
@@ -116,14 +126,41 @@ class ContentTranslateDriver : public TranslateDriver,
       mojo::PendingRemote<translate::mojom::TranslateAgent> translate_agent,
       const translate::LanguageDetectionDetails& details,
       bool page_level_translation_criteria_met) override;
+  // Called to trigger translation for a PDF if it has a pending translation.
+  void MaybeTriggerPendingPdfTranslation();
 
  private:
+  struct TranslationResult {
+    bool cancelled;
+    base::i18n::LanguageTag source_lang;
+    base::i18n::LanguageTag translated_lang;
+    TranslateErrors error_type;
+  };
+
+  void OnAllPagesTranslated(const std::vector<TranslationResult>& results);
+
   void OnPageAway(int page_seq_no);
+  void OnSidePanelAway(int page_seq_no);
+  bool IsPdfTranslation();
+
+  int UpdatePageSequenceNumber();
+  void BindSidePanelTranslateAgent(
+      int page_seq_no,
+      mojo::PendingRemote<mojom::TranslateAgent> translate_agent);
+  void BindMainTranslateAgent(
+      int page_seq_no,
+      mojo::PendingRemote<mojom::TranslateAgent> translate_agent);
 
   void InitiateTranslationIfReload(
       content::NavigationHandle* navigation_handle);
 
-  raw_ptr<TranslateManager, DanglingUntriaged> translate_manager_;
+  // Returns the relevant TranslateAgents for the given page sequence number.
+  // For PDF translations, only the side panel agent will be returned. For
+  // html translations with reading mode open, both main and side panel agents
+  // will be returned.
+  std::vector<mojom::TranslateAgent*> GetTranslateAgents(int page_seq_no);
+
+  raw_ptr<TranslateManager> translate_manager_ = nullptr;
 
   base::ObserverList<TranslationObserver, true> translation_observers_;
 
@@ -136,12 +173,19 @@ class ContentTranslateDriver : public TranslateDriver,
   // Max number of attempts before checking if a page has been reloaded.
   int max_reload_check_attempts_;
 
+  ukm::SourceId last_registered_page_id_;
+  int active_page_seq_no_;
+
   // Records mojo connections with all current alive pages.
   int next_page_seq_no_;
   // mojo::Remote<TranslateAgent> is the connection between this driver and a
   // TranslateAgent (which are per RenderFrame). Each TranslateAgent has a
   // |binding_| member, representing the other end of this pipe.
-  std::map<int, mojo::Remote<mojom::TranslateAgent>> translate_agents_;
+  struct PageAgents {
+    mojo::Remote<mojom::TranslateAgent> main_agent;
+    mojo::Remote<mojom::TranslateAgent> side_panel_agent;
+  };
+  std::map<int, PageAgents> translate_agents_;
 
   // Histogram to be notified about detected language of every page visited. Not
   // owned here.

@@ -6,8 +6,10 @@
 
 #include <stddef.h>
 
+#include <array>
+
+#include "base/check_deref.h"
 #include "base/command_line.h"
-#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -24,6 +26,8 @@
 #include "content/public/test/test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/ime/ash/component_extension_ime_manager.h"
+#include "ui/base/ime/ash/input_method_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace ash {
@@ -84,12 +88,12 @@ const struct {
 std::string GetExpectedLanguage(const std::string& required) {
   std::string expected = required;
 
-  for (size_t i = 0; i < std::size(locale_aliases); ++i) {
-    if (required != UNSAFE_TODO(locale_aliases[i]).locale_alias) {
+  for (const auto& alias : locale_aliases) {
+    if (required != alias.locale_alias) {
       continue;
     }
 
-    expected = UNSAFE_TODO(locale_aliases[i]).locale_name;
+    expected = alias.locale_name;
     break;
   }
 
@@ -131,82 +135,32 @@ constexpr const char* kVPDInitialLocales[] = {
     "pt-BR,pt-PT,ro,ru,sk,sl,sr,sv,ta,te,th,tr,vi,zh-CN,zh-TW",
 };
 
-const std::vector<std::string> languages_available = {
-    "ar",
-    "bg",
-    "bn",
-    "ca",
-    "cs",
-    "da",
-    "de",
-    "el",
-    "en-AU",
-    "en-CA",
-    "en-GB",
-    "en-NZ",
-    "en-US",
-    "en-ZA",
-    "es",
-    "es-419",
-    "et",
-    "fa",
-    "fi",
-    "fil",
-    "fr",
-    "fr-CA",
-    "gu",
-    "he",
-    "hi",
-    "hr",
-    "hu",
-    "id",
-    "it",
-    "ja",
-    "kn",
-    "ko",
-    "lt",
-    "lv",
-    "ml",
-    "mr",
-    "ms",
-    "nl",
-    "nb",
-    "pl",
-    "pt-BR",
-    "pt-PT",
-    "ro",
-    "ru",
-    "sk",
-    "sl",
-    "sr",
-    "sv",
-    "ta",
-    "te",
-    "th",
-    "tr",
-    "vi",
-    "zh-CN",
-    "zh-TW"
-};
+constexpr auto kLanguagesAvailable = std::to_array<const char*>(
+    {"ar",    "bg",    "bn",    "ca",    "cs",    "da",    "de",   "el",
+     "en-AU", "en-CA", "en-GB", "en-NZ", "en-US", "en-ZA", "es",   "es-419",
+     "et",    "fa",    "fi",    "fil",   "fr",    "fr-CA", "gu",   "he",
+     "hi",    "hr",    "hu",    "id",    "it",    "ja",    "kn",   "ko",
+     "lt",    "lv",    "ml",    "mr",    "ms",    "nl",    "nb",   "pl",
+     "pt-BR", "pt-PT", "ro",    "ru",    "sk",    "sl",    "sr",   "sv",
+     "ta",    "te",    "th",    "tr",    "vi",    "zh-CN", "zh-TW"});
 
 }  // anonymous namespace
 
 typedef InProcessBrowserTest CustomizationLocaleTest;
 
 IN_PROC_BROWSER_TEST_F(CustomizationLocaleTest, CheckAvailableLocales) {
-  for (size_t i = 0; i < languages_available.size(); ++i) {
+  for (const char* language : kLanguagesAvailable) {
     LanguageSwitchedWaiter waiter(base::BindOnce(&VerifyLanguageSwitched));
     locale_util::SwitchLanguage(
         g_browser_process->GetFeatures()->application_locale_storage(),
-        languages_available[i], true, true, waiter.Callback(),
+        language, true, true, waiter.Callback(),
         ProfileManager::GetActiveUserProfile());
     waiter.Wait();
     {
       base::ScopedAllowBlockingForTesting allow_blocking;
-      EXPECT_THAT(l10n_util::CheckAndResolveLocale(languages_available[i]),
-                  Optional(StrEq(GetExpectedLanguage(languages_available[i]))))
-          << "CheckAndResolveLocale() failed for language='"
-          << languages_available[i] << "'";
+      EXPECT_THAT(l10n_util::CheckAndResolveLocale(language),
+                  Optional(StrEq(GetExpectedLanguage(language))))
+          << "CheckAndResolveLocale() failed for language='" << language << "'";
     }
   }
 }
@@ -240,9 +194,12 @@ IN_PROC_BROWSER_TEST_P(CustomizationVPDTest, GetUILanguageList) {
       << "Test failed for initial_locale='" << GetParam()
       << "', locales=" << Print(locales);
 
-  auto ui_language_list =
-      GetUILanguageList(g_browser_process->GetApplicationLocale(), nullptr, "",
-                        input_method::InputMethodManager::Get());
+  input_method::InputMethodManager& input_method_manager =
+      CHECK_DEREF(input_method::InputMethodManager::Get());
+  auto ui_language_list = GetUILanguageList(
+      g_browser_process->GetApplicationLocale(), nullptr, "",
+      CHECK_DEREF(input_method_manager.GetComponentExtensionIMEManager())
+          .GetXkbIMEAsInputMethodDescriptor());
   EXPECT_GE(ui_language_list.size(), locales.size())
       << "Test failed for initial_locale='" << GetParam() << "'";
 

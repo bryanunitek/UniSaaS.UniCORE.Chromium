@@ -6,14 +6,17 @@
 
 #import <CoreSpotlight/CoreSpotlight.h>
 
+#import "base/test/metrics/histogram_tester.h"
 #import "base/test/scoped_feature_list.h"
 #import "base/test/task_environment.h"
+#import "components/handoff/handoff_utility.h"
 #import "ios/chrome/app/app_startup_parameters.h"
 #import "ios/chrome/app/application_delegate/tab_opening.h"
 #import "ios/chrome/app/application_mode.h"
 #import "ios/chrome/app/profile/profile_state.h"
 #import "ios/chrome/app/spotlight/actions_spotlight_manager.h"
 #import "ios/chrome/app/spotlight/spotlight_util.h"
+#import "ios/chrome/app/startup/app_launch_metrics.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/test/fake_scene_state.h"
@@ -89,12 +92,12 @@ class TaskRequestForUserActivityTest : public PlatformTest {
     SaveEnableNewStartupFlowForNextStart();
 
     profile_ = TestProfileIOS::Builder().Build();
-    scene_state_ = [[FakeSceneState alloc] initWithAppState:nil
-                                                    profile:profile_.get()];
 
-    mock_profile_state_ = OCMClassMock([ProfileState class]);
-    OCMStub([mock_profile_state_ profile]).andReturn(profile_.get());
-    scene_state_.profileState = mock_profile_state_;
+    profile_state_ = [[ProfileState alloc] initWithAppState:nil];
+    profile_state_.profile = profile_.get();
+
+    scene_state_ = [[FakeSceneState alloc] initWithProfile:profile_.get()];
+    scene_state_.profileState = profile_state_;
 
     test_tab_opener_ = [[TestTabOpener alloc] initWithSceneState:scene_state_];
     scene_state_.controller = test_tab_opener_;
@@ -106,6 +109,7 @@ class TaskRequestForUserActivityTest : public PlatformTest {
     browser_.reset();
     [scene_state_ shutdown];
     scene_state_ = nil;
+    profile_state_ = nil;
     profile_.reset();
     ResetEnableNewStartupFlowEnabledForTesting();
     PlatformTest::TearDown();
@@ -114,13 +118,14 @@ class TaskRequestForUserActivityTest : public PlatformTest {
   web::WebTaskEnvironment task_environment_;
   base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<TestProfileIOS> profile_;
-  ProfileState* mock_profile_state_;
+  ProfileState* profile_state_;
   FakeSceneState* scene_state_;
   TestTabOpener* test_tab_opener_;
   std::unique_ptr<TestBrowser> browser_;
 
   // Helper method to execute a Spotlight action.
   void ExecuteSpotlightAction(NSString* action_name) {
+    base::HistogramTester histogram_tester;
     NSUserActivity* user_activity = [[NSUserActivity alloc]
         initWithActivityType:CSSearchableItemActionType];
     NSString* action =
@@ -135,7 +140,14 @@ class TaskRequestForUserActivityTest : public PlatformTest {
         [TaskRequestForUserActivity taskRequestWithUserActivity:user_activity
                                                      sceneState:scene_state_
                                                     isColdStart:NO];
+    histogram_tester.ExpectTotalCount(kAppLaunchSource, 0);
+    histogram_tester.ExpectTotalCount(spotlight::kSpotlightActionsHistogram, 0);
+
     [request execute];
+
+    histogram_tester.ExpectUniqueSample(kAppLaunchSource,
+                                        AppLaunchSource::SPOTLIGHT_CHROME, 1);
+    histogram_tester.ExpectTotalCount(spotlight::kSpotlightActionsHistogram, 1);
   }
 };
 
@@ -224,4 +236,25 @@ TEST_F(TaskRequestForUserActivityTest, SpotlightActionSetDefaultBrowser) {
 
   // Cleanup.
   [mock_application stopMocking];
+}
+
+// Test that metrics for simple user activities are recorded during execute and
+// not initialization.
+TEST_F(TaskRequestForUserActivityTest,
+       SimpleUserActivityMetricsRecordedOnExecute) {
+  base::HistogramTester histogram_tester;
+  NSUserActivity* user_activity = [[NSUserActivity alloc]
+      initWithActivityType:handoff::kChromeHandoffActivityType];
+  user_activity.webpageURL = [NSURL URLWithString:@"https://www.chromium.org"];
+
+  TaskRequestForUserActivity* request =
+      [TaskRequestForUserActivity taskRequestWithUserActivity:user_activity
+                                                   sceneState:scene_state_
+                                                  isColdStart:NO];
+  histogram_tester.ExpectTotalCount(kAppLaunchSource, 0);
+
+  [request execute];
+
+  histogram_tester.ExpectUniqueSample(kAppLaunchSource,
+                                      AppLaunchSource::HANDOFF, 1);
 }

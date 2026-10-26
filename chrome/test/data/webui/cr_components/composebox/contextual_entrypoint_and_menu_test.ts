@@ -253,6 +253,7 @@ suite('ContextualEntrypointAndMenu', () => {
               url: 'about:blank?1',
               showInCurrentTabChip: false,
               showInPreviousTabChip: false,
+              isLoading: false,
               lastActive: {internalValue: 0n},
             },
             {
@@ -261,6 +262,7 @@ suite('ContextualEntrypointAndMenu', () => {
               url: 'about:blank?2',
               showInCurrentTabChip: false,
               showInPreviousTabChip: false,
+              isLoading: false,
               lastActive: {internalValue: 0n},
             },
           ];
@@ -374,5 +376,32 @@ suite('ContextualEntrypointAndMenu', () => {
 
       assertTrue(!!(await hoverEventPromise));
     });
+
+    test(
+        'unboundedMenuEnabled property reflects and propagates to menu',
+        async () => {
+          entrypointAndMenu.unboundedMenuEnabled = true;
+          await microtasksFinished();
+
+          assertTrue(entrypointAndMenu.hasAttribute('unbounded-menu-enabled'));
+          assertTrue(entrypointAndMenu.$.menu.unboundedMenuEnabled);
+
+          entrypointAndMenu.unboundedMenuEnabled = false;
+          await microtasksFinished();
+
+          assertFalse(entrypointAndMenu.hasAttribute('unbounded-menu-enabled'));
+          assertFalse(entrypointAndMenu.$.menu.unboundedMenuEnabled);
+        });
+
+    test(
+        'composeboxContextMenuTooltipsEnabled propagates to menu', async () => {
+          entrypointAndMenu.composeboxContextMenuTooltipsEnabled = true;
+          await microtasksFinished();
+          assertTrue(entrypointAndMenu.$.menu.contextMenuTooltipsEnabled);
+
+          entrypointAndMenu.composeboxContextMenuTooltipsEnabled = false;
+          await microtasksFinished();
+          assertFalse(entrypointAndMenu.$.menu.contextMenuTooltipsEnabled);
+        });
   });
 });

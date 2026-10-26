@@ -6,7 +6,7 @@
 
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ui/ash/account_manager/scoped_fake_account_manager_dialog.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/account_manager_core/account_manager_metrics.h"
 #include "components/account_manager_core/account_upsertion_result.h"
@@ -31,7 +31,7 @@ using SigninUiUtilChromeOSTest = InProcessBrowserTest;
 IN_PROC_BROWSER_TEST_F(SigninUiUtilChromeOSTest,
                        ShowReauthForAccountOpensAccountManagerDialog) {
   base::HistogramTester histogram_tester;
-  auto* profile = browser()->profile();
+  auto* profile = browser()->GetProfile();
   ash::test::ScopedFakeAccountManagerDialog fake_account_manager_dialog(
       profile);
 

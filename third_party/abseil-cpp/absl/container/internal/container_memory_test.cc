@@ -16,11 +16,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <map>
 #include <memory>
+#include <string>
 #include <tuple>
 #include <type_traits>
 #include <typeindex>
-#include <typeinfo>
 #include <utility>
 
 #include "gmock/gmock.h"
@@ -28,6 +30,7 @@
 #include "absl/base/config.h"
 #include "absl/base/no_destructor.h"
 #include "absl/container/internal/test_instance_tracker.h"
+#include "absl/functional/overload.h"
 #include "absl/meta/type_traits.h"
 #include "absl/strings/string_view.h"
 
@@ -171,7 +174,7 @@ DecomposeValueImpl(int, F&& f, Arg&& arg) {
 }
 
 template <class F, class Arg>
-const char* DecomposeValueImpl(char, F&& f, Arg&& arg) {
+const char* DecomposeValueImpl(char, F&&, Arg&&) {
   return "not decomposable";
 }
 
@@ -205,7 +208,7 @@ DecomposePairImpl(int, F&& f, Args&&... args) {
 }
 
 template <class F, class... Args>
-const char* DecomposePairImpl(char, F&& f, Args&&... args) {
+const char* DecomposePairImpl(char, F&&, Args&&...) {
   return "not decomposable";
 }
 
@@ -216,14 +219,21 @@ TryDecomposePair(F&& f, Args&&... args) {
 }
 
 TEST(DecomposePair, Decomposable) {
-  auto f = [](const int& x,  // NOLINT
-              std::piecewise_construct_t, std::tuple<int&&> k,
-              std::tuple<double>&& v) {
-    EXPECT_EQ(&x, &std::get<0>(k));
+  static constexpr auto f0 = [](const int& x,  // NOLINT
+                                int&& k, double&& v) {
+    EXPECT_EQ(&x, &k);
     EXPECT_EQ(42, x);
-    EXPECT_EQ(0.5, std::get<0>(v));
+    EXPECT_EQ(0.5, v);
     return 'A';
   };
+  static constexpr auto f = absl::Overload(
+      [](const int& x,  // NOLINT
+         std::piecewise_construct_t, std::tuple<int&&> k,
+         std::tuple<double>&& v) {
+        return f0(x, std::get<0>(std::move(k)), std::get<0>(std::move(v)));
+      },
+      f0);
+  EXPECT_EQ('A', TryDecomposePair(f, std::pair<int&&, double&&>(42, 0.5)));
   EXPECT_EQ('A', TryDecomposePair(f, 42, 0.5));
   EXPECT_EQ('A', TryDecomposePair(f, std::make_pair(42, 0.5)));
   EXPECT_EQ('A', TryDecomposePair(f, std::piecewise_construct,
@@ -313,10 +323,10 @@ TEST(ApplyTest, TypeErasedApplyToSlotFn) {
   size_t x = 7;
   size_t seed = 100;
   auto fn = [](size_t v) { return v * 2; };
-  EXPECT_EQ(
-      (TypeErasedApplyToSlotFn<decltype(fn), size_t, /*kIsDefault=*/false>(
-          &fn, &x, seed)),
-      (HashElement<decltype(fn), /*kIsDefault=*/false>(fn, seed)(x)));
+  EXPECT_EQ((TypeErasedApplyToSlotFn<decltype(fn), size_t, /*kIsAbsl=*/false,
+                                     /*kSeedShift=*/0>(&fn, &x, seed)),
+            (HashElement<decltype(fn), /*kIsAbsl=*/false, /*kSeedShift=*/0>(
+                fn, seed)(x)));
 }
 
 TEST(ApplyTest, TypeErasedDerefAndApplyToSlotFn) {
@@ -324,10 +334,12 @@ TEST(ApplyTest, TypeErasedDerefAndApplyToSlotFn) {
   size_t seed = 100;
   auto fn = [](size_t v) { return v * 2; };
   size_t* x_ptr = &x;
-  EXPECT_EQ((TypeErasedDerefAndApplyToSlotFn<decltype(fn), size_t,
-                                             /*kIsDefault=*/false>(&fn, &x_ptr,
-                                                                   seed)),
-            (HashElement<decltype(fn), /*kIsDefault=*/false>(fn, seed)(x)));
+  EXPECT_EQ(
+      (TypeErasedDerefAndApplyToSlotFn<decltype(fn), size_t,
+                                       /*kIsAbsl=*/false,
+                                       /*kSeedShift=*/0>(&fn, &x_ptr, seed)),
+      (HashElement<decltype(fn), /*kIsAbsl=*/false, /*kSeedShift=*/0>(
+          fn, seed)(x)));
 }
 
 TEST(HashElement, DefaultHash) {
@@ -339,7 +351,8 @@ TEST(HashElement, DefaultHash) {
       return v * 2 + seed * 3;
     }
   } hash;
-  EXPECT_EQ((HashElement<HashWithSeed, /*kIsDefault=*/true>(hash, seed)(x)),
+  EXPECT_EQ((HashElement<HashWithSeed, /*kIsAbsl=*/true,
+                         /*kSeedShift=*/0>(hash, seed)(x)),
             hash.hash_with_seed(x, seed));
 }
 
@@ -348,9 +361,19 @@ TEST(HashElement, NonDefaultHash) {
   size_t seed = 100;
   auto fn = [](size_t v) { return v * 2; };
   EXPECT_EQ(
-      (HashElement<decltype(fn), /*kIsDefault=*/false>(
+      (HashElement<decltype(fn), /*kIsAbsl=*/false, /*kSeedShift=*/0>(
           fn, seed)(x)),
       fn(x) ^ seed);
+}
+
+TEST(HashElement, NonDefaultHashWithSeedShift) {
+  size_t x = 7;
+  size_t seed = 100;
+  auto fn = [](size_t v) { return v * 2; };
+  EXPECT_EQ(
+      (HashElement<decltype(fn), /*kIsAbsl=*/false, /*kSeedShift=*/1>(
+          fn, seed)(x)),
+      fn(x) ^ (seed >> 1));
 }
 
 }  // namespace

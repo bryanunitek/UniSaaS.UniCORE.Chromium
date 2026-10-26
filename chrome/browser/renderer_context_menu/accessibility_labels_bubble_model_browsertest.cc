@@ -7,7 +7,7 @@
 #include <memory>
 
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -15,6 +15,7 @@
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 namespace {
@@ -31,7 +32,7 @@ class AccessibilityLabelsBubbleModelTest : public InProcessBrowserTest {
 
   std::unique_ptr<AccessibilityLabelsBubbleModel> CreateConfirmBubble() {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     auto model = std::make_unique<AccessibilityLabelsBubbleModel>(
         browser()->GetProfile(), web_contents, /*enable_always=*/true);
     return model;
@@ -41,7 +42,7 @@ class AccessibilityLabelsBubbleModelTest : public InProcessBrowserTest {
 }  // namespace
 
 IN_PROC_BROWSER_TEST_F(AccessibilityLabelsBubbleModelTest, ConfirmSetsPref) {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityImageLabelsEnabled, false);
   std::unique_ptr<AccessibilityLabelsBubbleModel> model = CreateConfirmBubble();
   model->Accept();
@@ -51,7 +52,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityLabelsBubbleModelTest, ConfirmSetsPref) {
 
 IN_PROC_BROWSER_TEST_F(AccessibilityLabelsBubbleModelTest,
                        CancelDoesNotSetPref) {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityImageLabelsEnabled, false);
   std::unique_ptr<AccessibilityLabelsBubbleModel> model = CreateConfirmBubble();
   model->Cancel();
@@ -64,7 +65,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityLabelsBubbleModelTest, OpenHelpPage) {
   ui_test_utils::AllBrowserTabAddedWaiter waiter;
   model->OpenHelpPage();
   content::WebContents* web_contents = waiter.Wait();
-  EXPECT_EQ(web_contents->GetBrowserContext(), browser()->profile());
+  EXPECT_EQ(web_contents->GetBrowserContext(), browser()->GetProfile());
   EXPECT_EQ(web_contents->GetVisibleURL(), model->GetHelpPageURL());
 }
 
@@ -82,10 +83,10 @@ IN_PROC_BROWSER_TEST_F(AccessibilityLabelsBubbleModelTest,
   ASSERT_TRUE(AddTabAtIndex(0, GURL("data:text/html,<p>kittens!</p>"),
                             ui::PAGE_TRANSITION_TYPED));
   std::unique_ptr<AccessibilityLabelsBubbleModel> model = CreateConfirmBubble();
-  browser()->tab_strip_model()->GetActiveWebContents()->Close();
+  browser()->GetTabStripModel()->GetActiveWebContents()->Close();
   ui_test_utils::AllBrowserTabAddedWaiter waiter;
   model->OpenHelpPage();
   content::WebContents* web_contents = waiter.Wait();
-  EXPECT_EQ(web_contents->GetBrowserContext(), browser()->profile());
+  EXPECT_EQ(web_contents->GetBrowserContext(), browser()->GetProfile());
   EXPECT_EQ(web_contents->GetVisibleURL(), model->GetHelpPageURL());
 }

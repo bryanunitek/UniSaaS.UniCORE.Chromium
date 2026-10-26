@@ -9,13 +9,12 @@
 #include <string_view>
 #include <vector>
 
-#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
-#include "base/i18n/time_formatting.h"
 #include "base/json/json_writer.h"
 #include "base/linux_util.h"
 #include "base/process/process_iterator.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_tokenizer.h"
 #include "base/strings/string_util.h"
@@ -104,7 +103,7 @@ bool ReadNameFromStatus(pid_t pid, pid_t tid, std::string* out_name) {
     }
     std::vector<std::string_view> split_value_str = base::SplitStringPiece(
         value_str, "\t", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-    DCHECK_EQ(2U, split_value_str.size());
+    CHECK_EQ(2U, split_value_str.size(), base::NotFatalUntil::M160);
     *out_name = std::string(split_value_str[1]);
     return true;
   }
@@ -148,7 +147,7 @@ std::unique_ptr<OverviewTracingResult> BuildGraphicsModel(
     const std::string& data,
     std::unique_ptr<OverviewTracingHandler::ActiveTrace> trace,
     const base::FilePath& model_path) {
-  DCHECK(trace);
+  CHECK(trace, base::NotFatalUntil::M160);
 
   if (base::FeatureList::IsEnabled(arc::kSaveRawFilesOnTracing)) {
     const base::FilePath raw_path =
@@ -197,7 +196,7 @@ std::unique_ptr<OverviewTracingResult> BuildGraphicsModel(
   std::string json_content;
   base::JSONWriter::WriteWithOptions(
       model, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json_content);
-  DCHECK(!json_content.empty());
+  CHECK(!json_content.empty(), base::NotFatalUntil::M160);
 
   if (!base::WriteFile(model_path, json_content)) {
     LOG(ERROR) << "Failed serialize model to " << model_path.value() << ".";
@@ -222,28 +221,32 @@ base::trace_event::TraceConfig GetTracingConfig() {
 std::string OverviewTracingHandler::GetModelBaseNameFromTitle(
     std::string_view title,
     base::Time timestamp) {
-  constexpr size_t kMaxNameSize = 32;
-  char normalized_name[kMaxNameSize];
-  size_t index = 0;
+  constexpr size_t kMaxNameSize = 31;
+  std::string normalized_name;
+  normalized_name.reserve(kMaxNameSize);
   for (char c : title) {
-    if (index == kMaxNameSize - 1) {
+    if (normalized_name.size() >= kMaxNameSize) {
       break;
     }
+
     c = base::ToLowerASCII(c);
     if (c == ' ') {
-      UNSAFE_TODO(normalized_name[index++]) = '_';
+      normalized_name.push_back('_');
       continue;
     }
     if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
-      UNSAFE_TODO(normalized_name[index++]) = c;
+      normalized_name.push_back(c);
     }
   }
-  UNSAFE_TODO(normalized_name[index]) = 0;
 
-  const std::string time =
-      base::UnlocalizedTimeFormatWithPattern(timestamp, "yyyy-MM-dd_HH-mm-ss");
-  return base::StringPrintf("overview_tracing_%s_%s.json", normalized_name,
-                            time.c_str());
+  base::Time::Exploded exploded;
+  timestamp.LocalExplode(&exploded);
+
+  std::string time_str = base::StringPrintf(
+      "%04d-%02d-%02d_%02d-%02d-%02d", exploded.year, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second);
+  return base::StrCat(
+      {"overview_tracing_", normalized_name, "_", time_str, ".json"});
 }
 
 OverviewTracingHandler::OverviewTracingHandler(
@@ -251,7 +254,7 @@ OverviewTracingHandler::OverviewTracingHandler(
     : arc_window_focus_change_(arc_window_focus_change),
       wm_helper_(exo::WMHelper::HasInstance() ? exo::WMHelper::GetInstance()
                                               : nullptr) {
-  DCHECK(wm_helper_);
+  CHECK(wm_helper_, base::NotFatalUntil::M160);
 
   aura::Window* const current_active = wm_helper_->GetActiveWindow();
   if (current_active) {
@@ -309,7 +312,7 @@ void OverviewTracingHandler::OnWindowActivated(ActivationReason reason,
 void OverviewTracingHandler::OnWindowPropertyChanged(aura::Window* window,
                                                      const void* key,
                                                      intptr_t old) {
-  DCHECK_EQ(arc_active_window_, window);
+  CHECK_EQ(arc_active_window_, window, base::NotFatalUntil::M160);
   if (key != aura::client::kAppIconKey) {
     return;
   }
@@ -320,7 +323,7 @@ void OverviewTracingHandler::OnWindowPropertyChanged(aura::Window* window,
 }
 
 void OverviewTracingHandler::OnWindowDestroying(aura::Window* window) {
-  DCHECK_EQ(arc_active_window_, window);
+  CHECK_EQ(arc_active_window_, window, base::NotFatalUntil::M160);
   DiscardActiveArcWindow();
 }
 
@@ -329,7 +332,7 @@ void OverviewTracingHandler::OnSurfaceDestroying(exo::Surface* surface) {
 }
 
 void OverviewTracingHandler::OnCommit(exo::Surface* surface) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (!active_trace_) {
     return;
   }
@@ -339,8 +342,8 @@ void OverviewTracingHandler::OnCommit(exo::Surface* surface) {
 }
 
 void OverviewTracingHandler::UpdateActiveArcWindowInfo() {
-  DCHECK(arc_active_window_);
-  DCHECK(active_trace_);
+  CHECK(arc_active_window_, base::NotFatalUntil::M160);
+  CHECK(active_trace_, base::NotFatalUntil::M160);
 
   active_trace_->task_title =
       base::UTF16ToASCII(arc_active_window_->GetTitle());

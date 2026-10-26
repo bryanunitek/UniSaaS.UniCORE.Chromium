@@ -20,24 +20,12 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/android/restore_entity_tracker_android.h"
-#include "chrome/browser/android/tab_android_conversions.h"
 #include "chrome/browser/android/tab_storage_packager_android.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 namespace tabs {
 
 namespace {
-
-TabCanonicalizer GetTabCanonicalizer() {
-#if BUILDFLAG(IS_ANDROID)
-  return base::BindRepeating(
-      [](const TabInterface* tab) -> const TabInterface* {
-        return ToTabAndroidChecked(tab);
-      });
-#else
-  return base::BindRepeating([](const TabInterface* tab) { return tab; });
-#endif  // !BUILDFLAG(IS_ANDROID)
-}
 
 RestoreEntityTrackerFactory GetRestoreEntityTrackerFactory() {
 #if BUILDFLAG(IS_ANDROID)
@@ -98,7 +86,7 @@ TabStateStorageServiceFactory::~TabStateStorageServiceFactory() = default;
 std::unique_ptr<KeyedService>
 TabStateStorageServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  DCHECK(context);
+  CHECK(context, base::NotFatalUntil::M161);
 
   Profile* profile = static_cast<Profile*>(context);
   std::unique_ptr<TabStoragePackager> packager;
@@ -110,7 +98,7 @@ TabStateStorageServiceFactory::BuildServiceInstanceForBrowserContext(
 #endif
   return std::make_unique<TabStateStorageService>(
       profile->GetPath(), support_off_the_record_data, std::move(packager),
-      GetTabCanonicalizer(), GetRestoreEntityTrackerFactory());
+      GetRestoreEntityTrackerFactory());
 }
 
 }  // namespace tabs

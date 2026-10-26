@@ -31,19 +31,23 @@
 #include <optional>
 #include <utility>
 
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/auth.h"
 #include "net/base/ip_endpoint.h"
 #include "net/http/alternate_protocol_usage.h"
 #include "net/ssl/ssl_info.h"
 #include "services/network/public/cpp/cors/cors_error_status.h"
+#include "services/network/public/mojom/cache_storage_side_data_writer.mojom-blink.h"
 #include "services/network/public/mojom/cross_origin_embedder_policy.mojom-forward.h"
 #include "services/network/public/mojom/device_bound_sessions.mojom-shared.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "services/network/public/mojom/ip_address_space.mojom-shared.h"
 #include "third_party/blink/public/mojom/timing/resource_timing.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/web_url_response.h"
+#include "third_party/blink/renderer/platform/loader/fetch/url_loader/cached_metadata_handler.h"
 #include "third_party/blink/renderer/platform/network/http_header_map.h"
 #include "third_party/blink/renderer/platform/network/http_parsers.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
@@ -128,6 +132,10 @@ class PLATFORM_EXPORT ResourceResponse final {
   // This returns the same URL as CurrentRequestUrl() unless a service worker
   // responded to the request. See the comments for that function.
   KURL ResponseUrl() const;
+
+  // Returns true if this response has a non-empty service worker URL list whose
+  // final URL matches the current request URL.
+  bool HasMatchingServiceWorkerUrl() const;
 
   // Returns true if this response is the result of a service worker
   // effectively calling `evt.respondWith(fetch(evt.request))`.  Specifically,
@@ -237,6 +245,10 @@ class PLATFORM_EXPORT ResourceResponse final {
     from_synthetic_response_ = value;
   }
 
+  // See network.mojom.URLResponseHead.intercepted_by_plugin.
+  bool InterceptedByPlugin() const { return intercepted_by_plugin_; }
+  void SetInterceptedByPlugin(bool value) { intercepted_by_plugin_ = value; }
+
   network::mojom::FetchResponseSource GetServiceWorkerResponseSource() const {
     return service_worker_response_source_;
   }
@@ -277,6 +289,17 @@ class PLATFORM_EXPORT ResourceResponse final {
   }
   void SetCacheStorageCacheName(const String& cache_storage_cache_name) {
     cache_storage_cache_name_ = cache_storage_cache_name;
+  }
+
+  mojo::PendingRemote<network::mojom::blink::CacheStorageSideDataWriter>
+  TakeCacheStorageSideDataWriter() const {
+    return std::move(cache_storage_side_data_writer_->data);
+  }
+  void SetCacheStorageSideDataWriter(
+      mojo::PendingRemote<network::mojom::blink::CacheStorageSideDataWriter>
+          cache_storage_side_data_writer) {
+    cache_storage_side_data_writer_->data =
+        std::move(cache_storage_side_data_writer);
   }
 
   const Vector<String>& CorsExposedHeaderNames() const {
@@ -460,9 +483,7 @@ class PLATFORM_EXPORT ResourceResponse final {
     request_include_credentials_ = request_include_credentials;
   }
 
-  bool ShouldUseSourceHashForJSCodeCache() const {
-    return should_use_source_hash_for_js_code_cache_;
-  }
+  bool ShouldUseSourceHashForJSCodeCache() const;
   void SetShouldUseSourceHashForJSCodeCache(
       bool should_use_source_hash_for_js_code_cache) {
     if (should_use_source_hash_for_js_code_cache) {
@@ -543,6 +564,10 @@ class PLATFORM_EXPORT ResourceResponse final {
 
   // True if the response is created with the synthetic response.
   bool from_synthetic_response_ : 1;
+
+  // True if a plugin or MIME handler intercepted the response, replacing its
+  // body with a browser-generated document that embeds the handler.
+  bool intercepted_by_plugin_ : 1;
 
   // True if service worker navigation preload was performed due to
   // the request for this resource.
@@ -652,6 +677,14 @@ class PLATFORM_EXPORT ResourceResponse final {
   // The cache name of the CacheStorage from where the response is served via
   // the ServiceWorker. Null if the response isn't from the CacheStorage.
   String cache_storage_cache_name_;
+
+  // Direct Mojo remote to the CacheStorageCache entry from where the response
+  // is served via the ServiceWorker, used for writing code cache side data.
+  // The underlying PendingRemote is invalid if the response isn't from
+  // CacheStorage.
+  scoped_refptr<CacheStorageSideDataWriterHolder>
+      cache_storage_side_data_writer_ =
+          base::MakeRefCounted<CacheStorageSideDataWriterHolder>();
 
   // The headers that should be exposed according to CORS. Only guaranteed
   // to be set if the response was fetched by a ServiceWorker.

@@ -22,15 +22,17 @@
 #include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/buildflag.h"
-#include "components/accessibility_annotator/core/annotation_reducer/memory_data_type.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/integrators/at_memory/memory_data_type.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
+#include "components/autofill/core/common/dense_set.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
+#include "components/autofill/android/main_autofill_jni_headers/AtMemoryPayload_jni.h"
 #include "components/autofill/android/main_autofill_jni_headers/AutofillAiPayload_jni.h"
 #include "components/autofill/android/main_autofill_jni_headers/AutofillProfilePayload_jni.h"
 #include "components/autofill/android/main_autofill_jni_headers/PaymentsPayload_jni.h"
@@ -55,12 +57,12 @@ std::string ConvertMinorTextToPrintableString(Suggestion suggestion) {
 std::string_view ConvertAcceptabilityToPrintableString(
     Suggestion::Acceptability acceptability) {
   switch (acceptability) {
-    case Suggestion::Acceptability::kAcceptable:
-      return "kAcceptable";
-    case Suggestion::Acceptability::kUnacceptable:
-      return "kUnacceptable";
-    case Suggestion::Acceptability::kUnacceptableWithDeactivatedStyle:
-      return "kUnacceptableWithDeactivatedStyle";
+    case Suggestion::Acceptability::kSelectableAndAcceptable:
+      return "kSelectableAndAcceptable";
+    case Suggestion::Acceptability::kSelectableButUnacceptable:
+      return "kSelectableButUnacceptable";
+    case Suggestion::Acceptability::kUnselectableAndUnacceptable:
+      return "kUnselectableAndUnacceptable";
   }
   NOTREACHED();
 }
@@ -92,8 +94,8 @@ std::string_view ConvertIconToPrintableString(Suggestion::Icon icon) {
       return "kAccount";
     case Suggestion::Icon::kAndroidMessages:
       return "kAndroidMessages";
-    case Suggestion::Icon::kClear:
-      return "kClear";
+    case Suggestion::Icon::kClose:
+      return "kClose";
     case Suggestion::Icon::kCode:
       return "kCode";
     case Suggestion::Icon::kDelete:
@@ -138,12 +140,18 @@ std::string_view ConvertIconToPrintableString(Suggestion::Icon icon) {
       return "kLocation";
     case Suggestion::Icon::kLocationSpark:
       return "kLocationSpark";
-    case Suggestion::Icon::kLoyalty:
-      return "kLoyalty";
+    case Suggestion::Icon::kLoyaltyPrograms:
+      return "kLoyaltyPrograms";
+    case Suggestion::Icon::kLoyaltyProgramsSpark:
+      return "kLoyaltyProgramsSpark";
     case Suggestion::Icon::kMagic:
       return "kMagic";
+    case Suggestion::Icon::kMailAsterisk:
+      return "kMailAsterisk";
     case Suggestion::Icon::kOfferTag:
       return "kOfferTag";
+    case Suggestion::Icon::kOpenInNew:
+      return "kOpenInNew";
     case Suggestion::Icon::kOrder:
       return "kOrder";
     case Suggestion::Icon::kOrderSpark:
@@ -269,11 +277,44 @@ Suggestion::PasswordSuggestionDetails::operator=(PasswordSuggestionDetails&&) =
     default;
 Suggestion::PasswordSuggestionDetails::~PasswordSuggestionDetails() = default;
 
+Suggestion::PersonalContextSourceCitation::PersonalContextSourceCitation() =
+    default;
+
+Suggestion::PersonalContextSourceCitation::PersonalContextSourceCitation(
+    GURL url,
+    gfx::Range range)
+    : url(std::move(url)), range(range) {}
+
+Suggestion::PersonalContextSourceCitation::PersonalContextSourceCitation(
+    const PersonalContextSourceCitation&) = default;
+
+Suggestion::PersonalContextSourceCitation::PersonalContextSourceCitation(
+    PersonalContextSourceCitation&&) = default;
+
+Suggestion::PersonalContextSourceCitation&
+Suggestion::PersonalContextSourceCitation::operator=(
+    const PersonalContextSourceCitation&) = default;
+
+Suggestion::PersonalContextSourceCitation&
+Suggestion::PersonalContextSourceCitation::operator=(
+    PersonalContextSourceCitation&&) = default;
+
+Suggestion::PersonalContextSourceCitation::~PersonalContextSourceCitation() =
+    default;
+
 Suggestion::AutofillAiPayload::AutofillAiPayload() = default;
 
 Suggestion::AutofillAiPayload::AutofillAiPayload(EntityInstance::EntityId guid,
                                                  bool requires_server_fetch)
     : guid(std::move(guid)), requires_server_fetch(requires_server_fetch) {}
+
+Suggestion::AutofillAiPayload::AutofillAiPayload(
+    EntityInstance::EntityId guid,
+    std::vector<PersonalContextSourceCitation> citations,
+    bool requires_server_fetch)
+    : guid(std::move(guid)),
+      citations(std::move(citations)),
+      requires_server_fetch(requires_server_fetch) {}
 
 Suggestion::AutofillAiPayload::AutofillAiPayload(const AutofillAiPayload&) =
     default;
@@ -352,9 +393,8 @@ Suggestion::IdentityCredentialPayload::~IdentityCredentialPayload() = default;
 
 Suggestion::AtMemoryPayload::AtMemoryPayload() = default;
 
-Suggestion::AtMemoryPayload::AtMemoryPayload(
-    std::u16string value,
-    accessibility_annotator::MemoryDataType memory_data_type)
+Suggestion::AtMemoryPayload::AtMemoryPayload(std::u16string value,
+                                             MemoryDataType memory_data_type)
     : value(std::move(value)), memory_data_type(memory_data_type) {}
 
 Suggestion::AtMemoryPayload::AtMemoryPayload(const AtMemoryPayload&) = default;
@@ -368,6 +408,14 @@ Suggestion::AtMemoryPayload& Suggestion::AtMemoryPayload::operator=(
     AtMemoryPayload&&) = default;
 
 Suggestion::AtMemoryPayload::~AtMemoryPayload() = default;
+
+#if BUILDFLAG(IS_ANDROID)
+base::android::ScopedJavaLocalRef<jobject>
+Suggestion::AtMemoryPayload::CreateJavaObject() const {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  return Java_AtMemoryPayload_Constructor(env, type_name);
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 Suggestion::OpenGeminiPayload::OpenGeminiPayload() = default;
 Suggestion::OpenGeminiPayload::OpenGeminiPayload(std::u16string prompt)
@@ -498,23 +546,32 @@ Suggestion& Suggestion::operator=(Suggestion&& other) = default;
 Suggestion::~Suggestion() = default;
 
 bool Suggestion::IsAcceptable() const {
+  using enum SuggestionType;
+  // LINT.IfChange(UnacceptableSuggestionTypes)
+  static constexpr auto kUnacceptableItemIds =
+      DenseSet({kSeparator, kInsecureContextPaymentDisabledMessage, kTitle,
+                kAtMemorySourceAttribution, kAutofillAiSourceAttribution});
+  // LINT.ThenChange(/components/autofill/android/java/src/org/chromium/components/autofill/AutofillSuggestion.java:UnacceptableSuggestionTypes)
+  if (kUnacceptableItemIds.contains(type)) {
+    return false;
+  }
   switch (acceptability) {
-    case Acceptability::kAcceptable:
+    case Acceptability::kSelectableAndAcceptable:
       return true;
-    case Acceptability::kUnacceptable:
-    case Acceptability::kUnacceptableWithDeactivatedStyle:
+    case Acceptability::kSelectableButUnacceptable:
+    case Acceptability::kUnselectableAndUnacceptable:
       return false;
   }
   NOTREACHED();
 }
 
-bool Suggestion::HasDeactivatedStyle() const {
+bool Suggestion::IsSelectable() const {
   switch (acceptability) {
-    case Acceptability::kAcceptable:
-    case Acceptability::kUnacceptable:
-      return false;
-    case Acceptability::kUnacceptableWithDeactivatedStyle:
+    case Acceptability::kSelectableAndAcceptable:
+    case Acceptability::kSelectableButUnacceptable:
       return true;
+    case Acceptability::kUnselectableAndUnacceptable:
+      return false;
   }
   NOTREACHED();
 }
@@ -536,6 +593,7 @@ void PrintTo(const Suggestion& suggestion, std::ostream* os) {
 }  // namespace autofill
 
 #if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(AtMemoryPayload)
 DEFINE_JNI(AutofillProfilePayload)
 DEFINE_JNI(PaymentsPayload)
 #endif

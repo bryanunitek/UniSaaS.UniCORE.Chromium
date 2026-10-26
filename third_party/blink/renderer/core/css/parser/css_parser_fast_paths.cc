@@ -15,6 +15,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/numerics/angle_conversions.h"
 #include "build/build_config.h"
 #include "third_party/blink/public/public_buildflags.h"
 #include "third_party/blink/renderer/core/css/css_color.h"
@@ -263,7 +264,10 @@ static inline bool IsColorPropertyID(CSSPropertyID property_id) {
       CSSPropertyID::kInternalVisitedBorderRightColor,
       CSSPropertyID::kInternalVisitedBorderTopColor,
       CSSPropertyID::kInternalVisitedFill,
+      CSSPropertyID::kInternalVisitedFloodColor,
+      CSSPropertyID::kInternalVisitedLightingColor,
       CSSPropertyID::kInternalVisitedOutlineColor,
+      CSSPropertyID::kInternalVisitedStopColor,
       CSSPropertyID::kInternalVisitedStroke,
       CSSPropertyID::kInternalVisitedBorderBlockEndColor,
       CSSPropertyID::kInternalVisitedBorderBlockStartColor,
@@ -1010,7 +1014,7 @@ static bool FastParseColorInternal(Color& color,
         // Unitless numbers are to be treated as degrees.
         break;
       case CSSPrimitiveValue::UnitType::kRadians:
-        hue = Rad2deg(hue);
+        hue = base::RadToDeg(hue);
         break;
       case CSSPrimitiveValue::UnitType::kGradians:
         hue = Grad2deg(hue);
@@ -1277,6 +1281,9 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
     case CSSPropertyID::kMathStyle:
       return value_id == CSSValueID::kNormal ||
              value_id == CSSValueID::kCompact;
+    case CSSPropertyID::kMaxContentSizing:
+      return value_id == CSSValueID::kAuto ||
+             value_id == CSSValueID::kShrinkToFit;
     case CSSPropertyID::kObjectFit:
       return value_id == CSSValueID::kFill ||
              value_id == CSSValueID::kContain ||
@@ -1699,16 +1706,17 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
       return value_id == CSSValueID::kAuto || value_id == CSSValueID::kThin ||
              value_id == CSSValueID::kNone;
     case CSSPropertyID::kScrollSnapStop:
-      return value_id == CSSValueID::kNormal || value_id == CSSValueID::kAlways;
+      return value_id == CSSValueID::kNormal ||
+             value_id == CSSValueID::kAlways ||
+             (value_id == CSSValueID::kBefore &&
+              RuntimeEnabledFeatures::CSSScrollSnapStopBeforeEnabled());
     case CSSPropertyID::kOverscrollBehaviorInline:
     case CSSPropertyID::kOverscrollBehaviorBlock:
     case CSSPropertyID::kOverscrollBehaviorX:
     case CSSPropertyID::kOverscrollBehaviorY:
       return value_id == CSSValueID::kAuto ||
              value_id == CSSValueID::kContain ||
-             value_id == CSSValueID::kNone ||
-             (value_id == CSSValueID::kChain &&
-              RuntimeEnabledFeatures::CSSOverscrollBehaviorChainEnabled());
+             value_id == CSSValueID::kNone || value_id == CSSValueID::kChain;
     case CSSPropertyID::kOriginTrialTestProperty:
       return value_id == CSSValueID::kNormal || value_id == CSSValueID::kNone;
     case CSSPropertyID::kTextBoxTrim:
@@ -1725,11 +1733,13 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
     case CSSPropertyID::kBlockEllipsis:
       return value_id == CSSValueID::kEllipsis ||
              value_id == CSSValueID::kNoEllipsis;
-    case CSSPropertyID::kInternalOverscrollArea:
+    case CSSPropertyID::kOverscrollContainerType:
       return value_id == CSSValueID::kNone || value_id == CSSValueID::kAuto ||
-             value_id == CSSValueID::kOverlay;
-    case CSSPropertyID::kInternalOverscrollPosition:
+             value_id == CSSValueID::kPush || value_id == CSSValueID::kOverlay;
+    case CSSPropertyID::kInternalOverscrollContainer:
       return value_id == CSSValueID::kNone || value_id == CSSValueID::kAuto;
+    case CSSPropertyID::kInternalUnbounded:
+      return value_id == CSSValueID::kNone || value_id == CSSValueID::kActive;
     default:
       NOTREACHED();
   }
@@ -1784,6 +1794,7 @@ CSSBitset CSSParserFastPaths::handled_by_keyword_fast_paths_properties_{{
     CSSPropertyID::kMaskType,
     CSSPropertyID::kMathShift,
     CSSPropertyID::kMathStyle,
+    CSSPropertyID::kMaxContentSizing,
     CSSPropertyID::kObjectFit,
     CSSPropertyID::kOutlineStyle,
     CSSPropertyID::kOverflowAnchor,
@@ -1880,8 +1891,9 @@ CSSBitset CSSParserFastPaths::handled_by_keyword_fast_paths_properties_{{
     CSSPropertyID::kTextBoxTrim,
     CSSPropertyID::kScrollInitialTarget,
     CSSPropertyID::kInteractivity,
-    CSSPropertyID::kInternalOverscrollArea,
-    CSSPropertyID::kInternalOverscrollPosition,
+    CSSPropertyID::kOverscrollContainerType,
+    CSSPropertyID::kInternalOverscrollContainer,
+    CSSPropertyID::kInternalUnbounded,
 }};
 
 bool CSSParserFastPaths::IsValidSystemFont(CSSValueID value_id) {

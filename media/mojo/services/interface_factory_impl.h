@@ -54,11 +54,11 @@ class InterfaceFactoryImpl final
   void CreateVideoDecoder(
       mojo::PendingReceiver<mojom::VideoDecoder> receiver,
       mojo::PendingRemote<media::mojom::VideoDecoder> dst_video_decoder) final;
-#if BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
+#if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
   void CreateVideoDecoderWithTracker(
       mojo::PendingReceiver<mojom::VideoDecoder> receiver,
       mojo::PendingRemote<mojom::VideoDecoderTracker> tracker) final;
-#endif  // BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
+#endif  // BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
 
   void CreateAudioEncoder(
       mojo::PendingReceiver<mojom::AudioEncoder> receiver) final;
@@ -115,11 +115,11 @@ class InterfaceFactoryImpl final
                                CreateCdmStatus status);
 #endif  // BUILDFLAG(ENABLE_MOJO_CDM)
 
-#if BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
+#if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
   void FinishCreatingVideoDecoder(
       mojo::PendingReceiver<mojom::VideoDecoder> receiver,
       mojo::PendingRemote<media::mojom::VideoDecoder> dst_video_decoder);
-#endif  // BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
+#endif  // BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
 
   // Must be declared before the receivers below because the bound objects might
   // take a raw pointer of |cdm_service_context_| and assume it's always
@@ -146,6 +146,8 @@ class InterfaceFactoryImpl final
   mojo::UniqueReceiverSet<mojom::Renderer> renderer_receivers_;
 #endif
 
+  mojo::Remote<mojom::FrameInterfaceFactory> frame_interfaces_;
+
 #if BUILDFLAG(ENABLE_MOJO_CDM)
   std::unique_ptr<CdmFactory> cdm_factory_;
   mojo::UniqueReceiverSet<mojom::ContentDecryptionModule> cdm_receivers_;
@@ -154,8 +156,6 @@ class InterfaceFactoryImpl final
   std::map<MojoCdmService*, std::unique_ptr<MojoCdmService>>
       pending_mojo_cdm_services_;
 #endif  // BUILDFLAG(ENABLE_MOJO_CDM)
-
-  mojo::Remote<mojom::FrameInterfaceFactory> frame_interfaces_;
 
   mojo::UniqueReceiverSet<mojom::Decryptor> decryptor_receivers_;
 

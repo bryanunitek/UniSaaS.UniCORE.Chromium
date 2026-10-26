@@ -5,7 +5,6 @@
 #include "services/network/test/test_url_loader_network_observer.h"
 
 #include "net/base/net_errors.h"
-#include "services/network/public/mojom/shared_storage.mojom.h"
 
 namespace network {
 
@@ -43,6 +42,7 @@ void TestURLLoaderNetworkObserver::OnAuthRequired(
     int32_t request_id,
     const GURL& url,
     bool first_auth_attempt,
+    bool do_not_prompt_for_login,
     const net::AuthChallengeInfo& auth_info,
     const scoped_refptr<net::HttpResponseHeaders>& head_headers,
     mojo::PendingRemote<mojom::AuthChallengeResponder>
@@ -62,6 +62,8 @@ void TestURLLoaderNetworkObserver::OnPlatformLocalNetworkPermissionRequired(
 
 void TestURLLoaderNetworkObserver::OnClearSiteData(
     const GURL& url,
+    const std::optional<net::SchemefulSite>& top_level_site,
+    const std::optional<base::UnguessableToken>& nonce,
     const std::string& header_value,
     int32_t load_flags,
     const std::optional<net::CookiePartitionKey>& cookie_partition_key,
@@ -81,18 +83,6 @@ void TestURLLoaderNetworkObserver::OnDataUseUpdate(
     base::ByteSize recv_bytes,
     base::ByteSize sent_bytes) {}
 
-void TestURLLoaderNetworkObserver::OnSharedStorageHeaderReceived(
-    const url::Origin& request_origin,
-    std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
-        methods_with_options,
-    const std::optional<std::string>& with_lock,
-    OnSharedStorageHeaderReceivedCallback callback) {
-  std::move(callback).Run();
-}
-
-void TestURLLoaderNetworkObserver::OnAdAuctionEventRecordHeaderReceived(
-    network::AdAuctionEventRecord event_record,
-    const std::optional<url::Origin>& top_frame_origin) {}
 
 void TestURLLoaderNetworkObserver::Clone(
     mojo::PendingReceiver<URLLoaderNetworkServiceObserver> observer) {

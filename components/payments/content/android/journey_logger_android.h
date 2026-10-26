@@ -33,6 +33,9 @@ class JourneyLoggerAndroid {
   void SetSkippedShow(JNIEnv* env);
   void SetShown(JNIEnv* env);
   void SetPayClicked(JNIEnv* env);
+  void SetCanMakePaymentCalled(JNIEnv* env);
+  void SetHasEnrolledInstrumentCalled(JNIEnv* env);
+  void SetInitiatedInCrossSiteIframe(JNIEnv* env);
   void SetSelectedMethod(JNIEnv* env, int32_t jPaymentMethodCategory);
   void SetRequestedInformation(JNIEnv* env,
                                bool requested_shipping,
@@ -44,7 +47,7 @@ class JourneyLoggerAndroid {
       const base::android::JavaRef<jintArray>& jmethods);
   void SetCompleted(JNIEnv* env);
   void SetAborted(JNIEnv* env, int32_t jreason);
-  void SetNotShown(JNIEnv* env);
+  void SetNotShown(JNIEnv* env, int32_t jreason);
   void RecordCheckoutStep(JNIEnv* env, int32_t jstep);
   void SetPaymentAppUkmSourceId(JNIEnv* env, ukm::SourceId source_id);
 

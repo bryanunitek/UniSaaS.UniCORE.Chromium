@@ -43,17 +43,11 @@ bool ShowDeepSearchTool();
 // Whether to enable the server side state.
 bool EnableComposeboxServerSideState();
 
-// Whether to enable compact mode.
-bool IsComposeboxCompactModeEnabled();
-
-// Whether to force the composebox on top.
-bool IsComposeboxForceTopEnabled();
+// Weather verbatim suggestion is enabled in AIM in composebox.
+bool IsComposeboxVerbatimSuggestionInAIMEnabled();
 
 // Used to enable the extra advanced controls in the composebox.
 BASE_DECLARE_FEATURE(kComposeboxAdditionalAdvancedTools);
-
-// Used to enable the compact "one line" mode in the composebox.
-BASE_DECLARE_FEATURE(kComposeboxCompactMode);
 
 // Used to enable deep search in the composebox.
 BASE_DECLARE_FEATURE(kComposeboxDeepSearch);
@@ -61,8 +55,8 @@ BASE_DECLARE_FEATURE(kComposeboxDeepSearch);
 // Used to enable server side state in the composebox.
 BASE_DECLARE_FEATURE(kComposeboxServerSideState);
 
-// Used to force top input plate in the composebox.
-BASE_DECLARE_FEATURE(kComposeboxForceTop);
+// Used to enable verbatim suggestions in AIM.
+BASE_DECLARE_FEATURE(kComposeboxVerbatimSuggestionInAIM);
 
 // Used to enable the AIM nudge button in the composebox.
 BASE_DECLARE_FEATURE(kComposeboxAIMNudge);
@@ -70,15 +64,6 @@ BASE_DECLARE_FEATURE(kComposeboxAIMNudge);
 // Determines if the persistent re-enable AIM button stays visible after the
 // user exits the session.
 bool IsComposeboxAIMNudgeEnabled();
-
-// Used to check if we should display contextual suggestions for multiple
-// attachments.
-BASE_DECLARE_FEATURE(
-    kComposeboxFetchContextualSuggestionsForMultipleAttachments);
-
-// Whether or not we should display contextual suggestions for multiple
-// attachments;
-bool IsComposeboxFetchContextualSuggestionsForMultiAttachmentsEnabled();
 
 // Used to conditionally show the + button in the composebox input plate.
 BASE_DECLARE_FEATURE(kComposeboxConditionalPlusButton);
@@ -110,5 +95,17 @@ BASE_DECLARE_FEATURE(kComposeboxPhysicalKeyboardReturnKeys);
 
 // Returns whether the physical keyboard Return key behaviors are enabled.
 bool IsComposeboxPhysicalKeyboardReturnKeysEnabled();
+
+// Used to enable rich APC extraction when attaching tabs in Aim.
+BASE_DECLARE_FEATURE(kComposeboxAimRichAPCExtraction);
+
+// Returns whether rich APC extraction is enabled when attaching tabs in Aim.
+bool IsComposeboxAimRichAPCExtractionEnabled();
+
+// Used to enable the Connected Apps setting entry.
+BASE_DECLARE_FEATURE(kComposeboxConnectedAppsSetting);
+
+// Returns whether to enable the Connected Apps setting entry.
+bool IsComposeboxConnectedAppsSettingEnabled();
 
 #endif  // IOS_CHROME_BROWSER_COMPOSEBOX_PUBLIC_FEATURES_H_

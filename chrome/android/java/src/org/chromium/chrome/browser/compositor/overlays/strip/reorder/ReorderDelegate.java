@@ -27,7 +27,6 @@ import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutTab;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutTabDelegate;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutUtils;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutView;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab_ui.ActionConfirmationManager;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.ui.base.LocalizationUtils;
@@ -105,10 +104,7 @@ public class ReorderDelegate {
         void setCompositorButtonsVisible(boolean visible);
 
         /**
-         * Returns the next index to select when the provided list of tabs is closed. This is
-         * different from the default {@link TabModel} behavior, as tab strip closures prefer
-         * expanded tabs, and also tabs after (as opposed to before) the closed tab if the feature
-         * flag {@link ChromeFeatureList#TAB_STRIP_AUTO_SELECT_ON_CLOSE_CHANGE} is enabled.
+         * Returns the next index to select when the provided list of tabs is closed.
          *
          * @param closingTabs The closing {@link StripLayoutTab}s.
          * @return The next index to select. {@link TabModel#INVALID_TAB_INDEX} if no valid index
@@ -534,21 +530,22 @@ public class ReorderDelegate {
             StripLayoutTab[] stripTabs,
             StripLayoutView reorderingView,
             boolean toLeft) {
-        if (reorderingView instanceof StripLayoutTab) {
-            if (mModel.isTabMultiSelected(((StripLayoutTab) reorderingView).getTabId())
-                    && mModel.getMultiSelectedTabsCount() > 1) {
-                mMultiTabStrategy.reorderViewInDirection(
-                        tabDelegate, stripViews, groupTitles, stripTabs, reorderingView, toLeft);
-            } else {
-                mTabStrategy.reorderViewInDirection(
-                        tabDelegate, stripViews, groupTitles, stripTabs, reorderingView, toLeft);
-            }
-        } else if (reorderingView instanceof StripLayoutGroupTitle) {
-            mGroupStrategy.reorderViewInDirection(
-                    tabDelegate, stripViews, groupTitles, stripTabs, reorderingView, toLeft);
-        } else {
-            assert false : "Attempted to reorder an invalid view type.";
+        // Interrupt the current reorder, if any.
+        if (mActiveStrategy != null && getInReorderMode()) {
+            stopReorderMode(stripViews, groupTitles, /* isDragCancelled= */ false);
         }
+
+        // Set reorder state, then trigger reorder. Intentionally does not use #startReorderMode.
+        mInReorderModeSupplier.set(true);
+        mActiveStrategy = getReorderStrategy(reorderingView, ReorderType.DRAG_WITHIN_STRIP);
+        mActiveStrategy.reorderViewInDirection(
+                tabDelegate, stripViews, groupTitles, stripTabs, reorderingView, toLeft);
+
+        // Reset state. Intentionally does not use #stopReorderMode, as it would cancel the
+        // animations that we triggered for the #reorderViewInDirection call above.
+        // TODO(crbug.com/552569691): Unify with drag reorder methods if possible.
+        mActiveStrategy = null;
+        mInReorderModeSupplier.set(false);
     }
 
     // ============================================================================================

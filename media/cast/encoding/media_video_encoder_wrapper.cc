@@ -220,6 +220,19 @@ MediaVideoEncoderWrapper::MediaVideoEncoderWrapper(
   options_.bitrate = Bitrate::ConstantBitrate(
       base::checked_cast<uint32_t>(video_config.start_bitrate));
 
+  // Mirroring captures tabs, windows, and screens, so tune the encoder for
+  // screen content. This enables screen content tuning in software encoders
+  // (e.g. screen content mode for VP8), and the "display" content type for
+  // hardware encoders, which keeps text and other sharp edges legible.
+  //
+  // TODO(crbug.com/572902679): Enable this for VP9 software encoding too.
+  // libvpx's VP9 screen content mode uses a stronger loop filter and lowers QP
+  // more slowly than camera mode, so text blurs after every content change and
+  // static content takes several frames to sharpen again.
+  if (codec_ != media::VideoCodec::kVP9 || is_hardware_encoder_) {
+    options_.content_hint = media::VideoEncoder::ContentHint::Screen;
+  }
+
   // NOTE: the H264 encoder can produce either AVC or annexb formatted frames.
   // Annexb is better supported by Cast receivers.
   if (codec_ == media::VideoCodec::kH264) {
@@ -243,13 +256,6 @@ bool MediaVideoEncoderWrapper::EncodeVideoFrame(
     FrameEncodedCallback frame_encoded_callback) {
   CHECK(cast_environment_->CurrentlyOn(CastEnvironment::ThreadId::kMain));
   CHECK(!video_frame->visible_rect().IsEmpty());
-
-  // TODO(crbug.com/282984511): consider adding optimization to store frames
-  // that are queued for encoding and sending them once updating options is
-  // complete.
-  if (num_pending_updates_ > 0) {
-    return false;
-  }
 
   // Construct and initialize the encoder on the first call to this method.
   const gfx::Size frame_size = video_frame->visible_rect().size();
@@ -377,7 +383,11 @@ void MediaVideoEncoderWrapper::OnEncodedFrame(
   CachedMetadata& metadata = recent_metadata_.front();
   auto encoded_frame = std::make_unique<SenderEncodedFrame>();
   encoded_frame->is_key_frame = output.key_frame;
-  encoded_frame->frame_id = next_frame_id_++;
+  // An empty output means the encoder dropped the frame (e.g. due to rate
+  // control). Dropped frames never become references, so don't consume a
+  // FrameId: the next emitted frame should reference the last emitted one.
+  encoded_frame->frame_id =
+      output.data.empty() ? next_frame_id_ : next_frame_id_++;
   encoded_frame->referenced_frame_id = encoded_frame->is_key_frame
                                            ? encoded_frame->frame_id
                                            : encoded_frame->frame_id - 1;
@@ -682,10 +692,12 @@ void MediaVideoEncoderWrapper::OnOptionsUpdated(int encoder_version,
   --num_pending_updates_;
 
   if (num_pending_updates_ == 0) {
-    for (auto& task : pending_encodes_) {
+    std::vector<base::OnceClosure> pending_encodes =
+        std::move(pending_encodes_);
+    pending_encodes_.clear();
+    for (auto& task : pending_encodes) {
       CallEncoderOnCorrectThread(std::move(task));
     }
-    pending_encodes_.clear();
   }
 
   OnEncoderStatus(encoder_version, status);

@@ -9,7 +9,7 @@
 #include "chrome/browser/enterprise/connectors/reporting/browser_crash_event_router.h"
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/enterprise/connectors/core/connectors_prefs.h"
 #include "components/prefs/pref_service.h"
@@ -26,7 +26,7 @@ IN_PROC_BROWSER_TEST_F(CrashReportingContextTest, OnCloudReportingLaunched) {
   ::policy::SetDMTokenForTesting(
       ::policy::DMToken::CreateValidToken("FAKE_DM_TOKEN"));
 
-  auto* profile = browser()->profile();
+  auto* profile = browser()->GetProfile();
   profile->GetPrefs()->SetInteger(kOnSecurityEventScopePref,
                                   policy::POLICY_SCOPE_MACHINE);
   constexpr char kConnectorsPrefValue[] = R"([

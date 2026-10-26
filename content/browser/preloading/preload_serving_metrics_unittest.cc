@@ -4,12 +4,13 @@
 
 #include "content/browser/preloading/preload_serving_metrics.h"
 
+#include <optional>
+
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "content/browser/preloading/prefetch/prefetch_match_resolver.h"
 #include "content/browser/preloading/prerender/prerender_features.h"
-#include "content/common/features.h"
-#include "content/public/browser/preloading.h"
+#include "content/public/common/content_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace content {
@@ -56,7 +57,10 @@ TEST(PreloadServingMetricsTest, NavigationWithoutPreload) {
   log->prerender_initial_preload_serving_metrics = nullptr;
 
   log->RecordMetricsForNonPrerenderNavigationCommitted();
-  log->RecordFirstContentfulPaint(base::Milliseconds(334));
+  EXPECT_EQ(log->GetUsedInstantLoad(
+                /*nav_used_bfcache=*/false,
+                /*is_served_by_legacy_search_prefetch=*/false),
+            UsedInstantLoad::kNoInstantLoad);
 
   histogram_tester.ExpectUniqueSample(
       "PreloadServingMetrics.ForNavigationCommitted.PrefetchMatchMetrics.Count",
@@ -212,18 +216,41 @@ TEST(PreloadServingMetricsTest, NavigationWithoutPreload) {
       "PotentialCandidateServingResult",
       0);
 
-  histogram_tester.ExpectUniqueTimeSample(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithoutPreload",
-      base::Milliseconds(334), 1);
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrefetch",
-      0);
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrerender",
-      0);
+}
+
+// Scenario:
+//
+// - Navigation A started.
+// - A committed.
+// - A entered BackForwardCache.
+// - Navigation B is started and used A, which is restored from
+//   BackForwardCache.
+TEST(PreloadServingMetricsTest, NavigationWithBFCacheRestore) {
+  base::HistogramTester histogram_tester;
+
+  auto log = MakeSkeletonPreloadServingMetrics({.n_prefetch_match_metrics = 0});
+  log->is_prerender_aborted_by_prerender_url_loader_throttle = false;
+  log->RecordMetricsForNonPrerenderNavigationCommitted();
+  EXPECT_EQ(log->GetUsedInstantLoad(
+                /*nav_used_bfcache=*/true,
+                /*is_served_by_legacy_search_prefetch=*/false),
+            UsedInstantLoad::kBFCache);
+}
+
+// Scenario:
+//
+// - Navigation A is served by legacy search prefetch (DSEv1).
+// - A committed.
+TEST(PreloadServingMetricsTest, NavigationWithLegacySearchPrefetch) {
+  auto log = MakeSkeletonPreloadServingMetrics({.n_prefetch_match_metrics = 0});
+  log->is_prerender_aborted_by_prerender_url_loader_throttle = false;
+  log->prerender_initial_preload_serving_metrics = nullptr;
+
+  log->RecordMetricsForNonPrerenderNavigationCommitted();
+  EXPECT_EQ(log->GetUsedInstantLoad(
+                /*nav_used_bfcache=*/false,
+                /*is_served_by_legacy_search_prefetch=*/true),
+            UsedInstantLoad::kPrefetchWithoutPrePrefetch);
 }
 
 // Scenario:
@@ -285,7 +312,10 @@ TEST(PreloadServingMetricsTest, NavigationWithPrefetch) {
   log->prerender_initial_preload_serving_metrics = nullptr;
 
   log->RecordMetricsForNonPrerenderNavigationCommitted();
-  log->RecordFirstContentfulPaint(base::Milliseconds(334));
+  EXPECT_EQ(log->GetUsedInstantLoad(
+                /*nav_used_bfcache=*/false,
+                /*is_served_by_legacy_search_prefetch=*/false),
+            UsedInstantLoad::kPrefetchWithoutPrePrefetch);
 
   histogram_tester.ExpectUniqueSample(
       "PreloadServingMetrics.ForNavigationCommitted.PrefetchMatchMetrics.Count",
@@ -335,7 +365,6 @@ TEST(PreloadServingMetricsTest, NavigationWithPrefetch) {
       "PreloadServingMetrics.ForNavigationCommitted.PrefetchMatchMetrics."
       "PotentialMatchThen.WithAheadOfPrerender.PotentialCandidateServingResult",
       0);
-
   histogram_tester.ExpectTotalCount(
       "PreloadServingMetrics.ForPrerenderInitialNavigationUsed."
       "PrefetchMatchMetrics.Count",
@@ -442,26 +471,6 @@ TEST(PreloadServingMetricsTest, NavigationWithPrefetch) {
       "PotentialCandidateServingResult",
       0);
 
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithoutPreload",
-      0);
-  histogram_tester.ExpectUniqueTimeSample(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrefetch",
-      base::Milliseconds(334), 1);
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrefetch.WithPrePrefetch",
-      0);
-  histogram_tester.ExpectUniqueTimeSample(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrefetch.WithoutPrePrefetch",
-      base::Milliseconds(334), 1);
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrerender",
-      0);
 }
 
 TEST(PreloadServingMetricsTest, NavigationWithPrefetchWithPrePrefetch) {
@@ -517,7 +526,10 @@ TEST(PreloadServingMetricsTest, NavigationWithPrefetchWithPrePrefetch) {
   log->prerender_initial_preload_serving_metrics = nullptr;
 
   log->RecordMetricsForNonPrerenderNavigationCommitted();
-  log->RecordFirstContentfulPaint(base::Milliseconds(334));
+  EXPECT_EQ(log->GetUsedInstantLoad(
+                /*nav_used_bfcache=*/false,
+                /*is_served_by_legacy_search_prefetch=*/false),
+            UsedInstantLoad::kPrefetchWithPrePrefetch);
 
   histogram_tester.ExpectUniqueSample(
       "PreloadServingMetrics.ForNavigationCommitted.PrefetchMatchMetrics.Count",
@@ -566,27 +578,6 @@ TEST(PreloadServingMetricsTest, NavigationWithPrefetchWithPrePrefetch) {
   histogram_tester.ExpectTotalCount(
       "PreloadServingMetrics.ForNavigationCommitted.PrefetchMatchMetrics."
       "PotentialMatchThen.WithAheadOfPrerender.PotentialCandidateServingResult",
-      0);
-
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithoutPreload",
-      0);
-  histogram_tester.ExpectUniqueTimeSample(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrefetch",
-      base::Milliseconds(334), 1);
-  histogram_tester.ExpectUniqueTimeSample(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrefetch.WithPrePrefetch",
-      base::Milliseconds(334), 1);
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrefetch.WithoutPrePrefetch",
-      0);
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrerender",
       0);
 }
 
@@ -658,7 +649,10 @@ TEST(PreloadServingMetricsTest,
   log->prerender_initial_preload_serving_metrics = std::move(log_prerender);
 
   log->RecordMetricsForNonPrerenderNavigationCommitted();
-  log->RecordFirstContentfulPaint(base::Milliseconds(334));
+  EXPECT_EQ(log->GetUsedInstantLoad(
+                /*nav_used_bfcache=*/false,
+                /*is_served_by_legacy_search_prefetch=*/false),
+            UsedInstantLoad::kPrerender);
 
   histogram_tester.ExpectUniqueSample(
       "PreloadServingMetrics.ForNavigationCommitted.PrefetchMatchMetrics.Count",
@@ -816,18 +810,6 @@ TEST(PreloadServingMetricsTest,
       "PotentialCandidateServingResult",
       0);
 
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithoutPreload",
-      0);
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrefetch",
-      0);
-  histogram_tester.ExpectUniqueTimeSample(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrerender",
-      base::Milliseconds(334), 1);
 }
 
 // Scenario:
@@ -920,7 +902,10 @@ TEST(PreloadServingMetricsTest,
 
   log_prerender->RecordMetricsForPrerenderInitialNavigationFailed();
   log->RecordMetricsForNonPrerenderNavigationCommitted();
-  log->RecordFirstContentfulPaint(base::Milliseconds(2157));
+  EXPECT_EQ(log->GetUsedInstantLoad(
+                /*nav_used_bfcache=*/false,
+                /*is_served_by_legacy_search_prefetch=*/false),
+            UsedInstantLoad::kNoInstantLoad);
 
   histogram_tester.ExpectUniqueSample(
       "PreloadServingMetrics.ForNavigationCommitted.PrefetchMatchMetrics.Count",
@@ -1137,18 +1122,6 @@ TEST(PreloadServingMetricsTest,
       "WithAheadOfPrerender.PotentialCandidateServingResult",
       0);
 
-  histogram_tester.ExpectUniqueTimeSample(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithoutPreload",
-      base::Milliseconds(2157), 1);
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrefetch",
-      0);
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrerender",
-      0);
 }
 
 // Variant of PrefetchTriggeredPrerenderTriggeredNavigationStartedPrefetchFailed
@@ -1232,7 +1205,10 @@ TEST(
 
   log_prerender->RecordMetricsForPrerenderInitialNavigationFailed();
   log->RecordMetricsForNonPrerenderNavigationCommitted();
-  log->RecordFirstContentfulPaint(base::Milliseconds(10334));
+  EXPECT_EQ(log->GetUsedInstantLoad(
+                /*nav_used_bfcache=*/false,
+                /*is_served_by_legacy_search_prefetch=*/false),
+            UsedInstantLoad::kNoInstantLoad);
 
   histogram_tester.ExpectUniqueSample(
       "PreloadServingMetrics.ForNavigationCommitted.PrefetchMatchMetrics.Count",
@@ -1448,18 +1424,6 @@ TEST(
       "WithAheadOfPrerender.PotentialCandidateServingResult",
       PrefetchPotentialCandidateServingResult::kNotServedLoadFailed, 1);
 
-  histogram_tester.ExpectUniqueTimeSample(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithoutPreload",
-      base::Milliseconds(10334), 1);
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrefetch",
-      0);
-  histogram_tester.ExpectTotalCount(
-      "PreloadServingMetrics.PageLoad.Clients.PaintTiming."
-      "NavigationToFirstContentfulPaint.WithPrerender",
-      0);
 }
 
 // Check for `PrefetchMatchPrerenderDebugMetrics`
@@ -1555,7 +1519,10 @@ TEST(PreloadServingMetricsTest, PrefetchMatchPrerenderDebugMetrics) {
 
   log_prerender->RecordMetricsForPrerenderInitialNavigationFailed();
   log->RecordMetricsForNonPrerenderNavigationCommitted();
-  log->RecordFirstContentfulPaint(base::Milliseconds(10334));
+  EXPECT_EQ(log->GetUsedInstantLoad(
+                /*nav_used_bfcache=*/false,
+                /*is_served_by_legacy_search_prefetch=*/false),
+            UsedInstantLoad::kNoInstantLoad);
 
   histogram_tester.ExpectUniqueSample(
       "PreloadServingMetrics.ForPrerenderInitialNavigationFailed."

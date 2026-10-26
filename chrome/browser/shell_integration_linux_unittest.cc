@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/shell_integration_linux.h"
-#include "chrome/browser/shell_integration.h"
 
 #include <stddef.h>
 
@@ -27,11 +26,16 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/scoped_path_override.h"
 #include "build/branding_buildflags.h"
+#include "chrome/browser/shell_integration.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/web_applications/os_integration/web_app_shortcut.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_paths_internal.h"
 #include "components/services/app_service/public/cpp/file_handler.h"
 #include "components/version_info/channel.h"
 #include "components/webapps/common/web_app_id.h"
@@ -40,7 +44,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/ozone/public/ozone_platform.h"
 #include "url/gurl.h"
-#include "base/test/scoped_path_override.h"
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 #include "chrome/test/base/scoped_channel_override.h"
@@ -631,6 +634,64 @@ TEST(ShellIntegrationTest, GetMimeTypesRegistrationFileContents) {
   EXPECT_EQ(file_contents, expected_file_contents);
 }
 
+TEST(ShellIntegrationTest,
+     GetMimeTypesRegistrationFileContentsFiltersSchemeHandlers) {
+  apps::FileHandlers file_handlers;
+  {
+    apps::FileHandler file_handler;
+    {
+      apps::FileHandler::AcceptEntry accept_entry;
+      // "x-scheme-handler/*" is a FreeDesktop pseudo-MIME type for URL scheme
+      // handling, not a valid media type for file associations. It should be
+      // ignored during shared MIME-info file registration.
+      accept_entry.mime_type = "x-scheme-handler/mailto";
+      accept_entry.file_extensions.insert(".eml");
+      file_handler.accept.push_back(accept_entry);
+    }
+    {
+      apps::FileHandler::AcceptEntry accept_entry;
+      // Bare "x-scheme-handler" without trailing slash must also be ignored.
+      accept_entry.mime_type = "x-scheme-handler";
+      accept_entry.file_extensions.insert(".bad");
+      file_handler.accept.push_back(accept_entry);
+    }
+    {
+      apps::FileHandler::AcceptEntry accept_entry;
+      // Uppercase pseudo-types must also be ignored case-insensitively.
+      accept_entry.mime_type = "X-Scheme-Handler/custom";
+      accept_entry.file_extensions.insert(".cust");
+      file_handler.accept.push_back(accept_entry);
+    }
+    {
+      apps::FileHandler::AcceptEntry accept_entry;
+      // Uppercase bare "X-Scheme-Handler" must also be ignored.
+      accept_entry.mime_type = "X-Scheme-Handler";
+      accept_entry.file_extensions.insert(".bad2");
+      file_handler.accept.push_back(accept_entry);
+    }
+    {
+      apps::FileHandler::AcceptEntry accept_entry;
+      accept_entry.mime_type = "text/plain";
+      accept_entry.file_extensions.insert(".txt");
+      file_handler.accept.push_back(accept_entry);
+    }
+    file_handlers.push_back(file_handler);
+  }
+
+  const std::string file_contents =
+      GetMimeTypesRegistrationFileContents(file_handlers);
+  const std::string expected_file_contents =
+      "<?xml version=\"1.0\"?>\n"
+      "<mime-info "
+      "xmlns=\"http://www.freedesktop.org/standards/shared-mime-info\">\n"
+      " <mime-type type=\"text/plain\">\n"
+      "  <glob pattern=\"*.txt\"/>\n"
+      " </mime-type>\n"
+      "</mime-info>\n";
+
+  EXPECT_EQ(file_contents, expected_file_contents);
+}
+
 // The WM class name may be either capitalised or not, depending on the
 // platform.
 void CheckProgramClassClass(const std::string& class_name) {
@@ -719,6 +780,128 @@ TEST(ShellIntegrationTest, GetXdgAppIdForWebAppWithDesktopIdPrefix) {
   EXPECT_EQ("org.example.Browser.chrome-extensionid-Profile_1",
             GetXdgAppIdForWebApp("_crx_extensionid",
                                  base::FilePath("/tmp/Profile 1")));
+}
+
+TEST(ShellIntegrationTest, GetPerProfileDesktopId) {
+  const base::FilePath kUserDataDir("/home/user/.config/google-chrome");
+
+  // The default profile keeps the browser's main identity.
+  EXPECT_EQ("", internal::GetPerProfileDesktopId(
+                    kUserDataDir.Append(chrome::kInitialProfile), kUserDataDir,
+                    "google-chrome.desktop"));
+
+  // Other profiles get a per-profile ID based on the desktop base name and
+  // the profile directory, with spaces replaced.
+  EXPECT_EQ(
+      "google-chrome-Profile_1",
+      internal::GetPerProfileDesktopId(kUserDataDir.Append("Profile 1"),
+                                       kUserDataDir, "google-chrome.desktop"));
+  EXPECT_EQ("google-chrome-beta-Profile_2",
+            internal::GetPerProfileDesktopId(kUserDataDir.Append("Profile 2"),
+                                             kUserDataDir,
+                                             "google-chrome-beta.desktop"));
+  EXPECT_EQ("com.google.Chrome-Profile_1",
+            internal::GetPerProfileDesktopId(kUserDataDir.Append("Profile 1"),
+                                             kUserDataDir,
+                                             "com.google.Chrome.desktop"));
+
+  // Profiles outside of the default user data directory, e.g. when
+  // --user-data-dir is used, keep the browser's main identity.
+  EXPECT_EQ("", internal::GetPerProfileDesktopId(
+                    base::FilePath("/tmp/udd/Profile 1"), kUserDataDir,
+                    "google-chrome.desktop"));
+  EXPECT_EQ("", internal::GetPerProfileDesktopId(base::FilePath(), kUserDataDir,
+                                                 "google-chrome.desktop"));
+
+  // Characters that aren't valid in D-Bus names are replaced, including each
+  // byte of non-ASCII UTF-8 characters.
+  EXPECT_EQ("google-chrome-Pr__file_1-x_y",
+            internal::GetPerProfileDesktopId(
+                kUserDataDir.Append("Pr\u00f6file 1-x.y"), kUserDataDir,
+                "google-chrome.desktop"));
+}
+
+TEST(ShellIntegrationTest, InstalledPerProfileDesktopId) {
+  content::BrowserTaskEnvironment task_environment;
+  base::test::ScopedFeatureList feature_list(features::kLinuxPerProfileAppId);
+  base::ScopedTempDir data_home;
+  ASSERT_TRUE(data_home.CreateUniqueTempDir());
+  base::ScopedEnvironmentVariableOverride data_home_override(
+      "XDG_DATA_HOME", data_home.GetPath().value());
+  base::ScopedEnvironmentVariableOverride data_dirs_override(
+      "XDG_DATA_DIRS", data_home.GetPath().Append("nonexistent").value());
+
+  base::FilePath user_data_dir;
+  ASSERT_TRUE(chrome::GetDefaultUserDataDirectory(&user_data_dir));
+  const base::FilePath default_profile =
+      user_data_dir.Append(chrome::kInitialProfile);
+  const base::FilePath profile_1 = user_data_dir.Append("Profile 1");
+  const base::FilePath profile_2 = user_data_dir.Append("Profile 2");
+  const std::string profile_1_id = GetPerProfileDesktopId(profile_1);
+  ASSERT_FALSE(profile_1_id.empty());
+
+  // Only Profile 1 has a desktop entry.
+  const base::FilePath applications =
+      data_home.GetPath().Append("applications");
+  ASSERT_TRUE(base::CreateDirectory(applications));
+  ASSERT_TRUE(base::WriteFile(applications.Append(profile_1_id + ".desktop"),
+                              "[Desktop Entry]\n"));
+
+  DetectInstalledPerProfileDesktopEntries(
+      {default_profile, profile_1, profile_2});
+  EXPECT_EQ("", GetInstalledPerProfileDesktopId(default_profile));
+  EXPECT_EQ(profile_1_id, GetInstalledPerProfileDesktopId(profile_1));
+  EXPECT_EQ("", GetInstalledPerProfileDesktopId(profile_2));
+
+  // Desktop entries can also be registered and unregistered directly.
+  SetPerProfileDesktopEntryInstalled(profile_2, true);
+  EXPECT_EQ(GetPerProfileDesktopId(profile_2),
+            GetInstalledPerProfileDesktopId(profile_2));
+  SetPerProfileDesktopEntryInstalled(profile_1, false);
+  EXPECT_EQ("", GetInstalledPerProfileDesktopId(profile_1));
+
+  // Removing the file is noticed on the next detection.
+  SetPerProfileDesktopEntryInstalled(profile_1, true);
+  ASSERT_TRUE(base::DeleteFile(applications.Append(profile_1_id + ".desktop")));
+  DetectInstalledPerProfileDesktopEntries({profile_1});
+  EXPECT_EQ("", GetInstalledPerProfileDesktopId(profile_1));
+
+  SetPerProfileDesktopEntryInstalled(profile_2, false);
+}
+
+TEST(ShellIntegrationTest, InstalledPerProfileDesktopIdFeatureDisabled) {
+  content::BrowserTaskEnvironment task_environment;
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kLinuxPerProfileAppId);
+
+  base::FilePath user_data_dir;
+  ASSERT_TRUE(chrome::GetDefaultUserDataDirectory(&user_data_dir));
+  const base::FilePath profile_1 = user_data_dir.Append("Profile 1");
+
+  SetPerProfileDesktopEntryInstalled(profile_1, true);
+  EXPECT_EQ("", GetInstalledPerProfileDesktopId(profile_1));
+  SetPerProfileDesktopEntryInstalled(profile_1, false);
+}
+
+TEST(ShellIntegrationTest, PerProfileDesktopEntryChangedCallback) {
+  content::BrowserTaskEnvironment task_environment;
+  const base::FilePath profile_path("/tmp/udd/Profile 1");
+  std::vector<base::FilePath> notified;
+  base::CallbackListSubscription subscription =
+      RegisterPerProfileDesktopEntryChangedCallback(base::BindRepeating(
+          [](std::vector<base::FilePath>* notified,
+             const base::FilePath& path) { notified->push_back(path); },
+          &notified));
+
+  // Only actual changes are notified.
+  SetPerProfileDesktopEntryInstalled(profile_path, true);
+  EXPECT_THAT(notified, ElementsAre(profile_path));
+  SetPerProfileDesktopEntryInstalled(profile_path, true);
+  EXPECT_THAT(notified, ElementsAre(profile_path));
+  SetPerProfileDesktopEntryInstalled(profile_path, false);
+  EXPECT_THAT(notified, ElementsAre(profile_path, profile_path));
+  SetPerProfileDesktopEntryInstalled(profile_path, false);
+  EXPECT_THAT(notified, ElementsAre(profile_path, profile_path));
 }
 
 TEST(ShellIntegrationLinuxTest,

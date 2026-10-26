@@ -4,14 +4,13 @@
 
 #include "extensions/browser/api/protocol_handlers/protocol_handlers_manager.h"
 
-#include "base/check_is_test.h"
 #include "base/lazy_instance.h"
 #include "base/one_shot_event.h"
 #include "components/custom_handlers/protocol_handler.h"
 #include "components/custom_handlers/protocol_handler_registry.h"
-#include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/browser/extension_util.h"
 #include "extensions/common/manifest_handlers/protocol_handler_info.h"
 #include "third_party/blink/public/common/security/protocol_handler_security_level.h"
 
@@ -48,28 +47,14 @@ static void RegisterHandlersIfNeeded(
   }
 }
 
-static void UnregisterHandlersIfNeeded(
-    const ExtensionId& id,
-    const ProtocolHandlersInfo& info,
-    custom_handlers::ProtocolHandlerRegistry& registry) {
-  for (const auto& handler_info : info) {
-    custom_handlers::ProtocolHandler handler =
-        custom_handlers::ProtocolHandler::CreateExtensionProtocolHandler(
-            handler_info.protocol, handler_info.url, id);
-
-    DCHECK(handler.IsValid());
-
-    registry.RemoveHandler(handler);
-  }
-}
-
 }  // namespace
 
 ProtocolHandlersManager::ProtocolHandlersManager(
     content::BrowserContext* context)
     : browser_context_(context) {
   DCHECK(browser_context_);
-  ExtensionRegistry::Get(browser_context_)->AddObserver(this);
+  extension_registry_observation_.Observe(
+      ExtensionRegistry::Get(browser_context_));
   ExtensionSystem::Get(browser_context_)
       ->ready()
       .Post(
@@ -81,7 +66,7 @@ ProtocolHandlersManager::ProtocolHandlersManager(
 ProtocolHandlersManager::~ProtocolHandlersManager() = default;
 
 void ProtocolHandlersManager::Shutdown() {
-  ExtensionRegistry::Get(browser_context_)->RemoveObserver(this);
+  extension_registry_observation_.Reset();
 }
 
 // static
@@ -108,14 +93,13 @@ void ProtocolHandlersManager::OnExtensionLoaded(content::BrowserContext*,
   // update its own profile's ProtocolHandlerRegistry.
   auto* registry = ExtensionsBrowserClient::Get()->GetProtocolHandlerRegistry(
       browser_context_);
-  // Can be null for tests using dummy profiles.
+  // Null when the embedder does not provide one.
   if (!registry) {
-    CHECK_IS_TEST();
     return;
   }
 
-  ExtensionPrefs* prefs = ExtensionPrefs::Get(browser_context_);
-  bool allowed_in_incognito = prefs->IsIncognitoEnabled(extension->id());
+  bool allowed_in_incognito =
+      util::IsIncognitoEnabled(extension, browser_context_);
   RegisterHandlersIfNeeded(extension->id(), *info, *registry,
                            allowed_in_incognito);
 }
@@ -124,22 +108,21 @@ void ProtocolHandlersManager::OnExtensionUnloaded(
     content::BrowserContext*,
     const Extension* extension,
     UnloadedExtensionReason reason) {
-  const ProtocolHandlersInfo* info =
-      ProtocolHandlers::GetProtocolHandlers(*extension);
-  if (!info) {
-    return;
-  }
-
   // Use browser_context_ for the same reason as OnExtensionLoaded.
   auto* registry = ExtensionsBrowserClient::Get()->GetProtocolHandlerRegistry(
       browser_context_);
-  // Can be null for tests using dummy profiles.
+  // Null when the embedder does not provide one.
   if (!registry) {
-    CHECK_IS_TEST();
     return;
   }
 
-  UnregisterHandlersIfNeeded(extension->id(), *info, *registry);
+  // Remove every handler associated with this extension. This covers handlers
+  // declared in the manifest as well as handlers registered at runtime via
+  // navigator.registerProtocolHandler from a privileged extension page.
+  for (const auto& handler :
+       registry->GetExtensionProtocolHandlers(extension->id())) {
+    registry->RemoveHandler(handler);
+  }
 }
 
 void ProtocolHandlersManager::ProtocolHandlersSanityCheck() {
@@ -148,9 +131,8 @@ void ProtocolHandlersManager::ProtocolHandlersSanityCheck() {
   auto* ph_registry =
       ExtensionsBrowserClient::Get()->GetProtocolHandlerRegistry(
           browser_context_);
-  // Can be null for tests using dummy profiles.
+  // Null when the embedder does not provide one.
   if (!ph_registry) {
-    CHECK_IS_TEST();
     return;
   }
   for (const auto& handler : ph_registry->GetExtensionProtocolHandlers()) {

@@ -169,7 +169,7 @@ void BrowserCaptionButtonContainer::ResetWindowControls() {
 void BrowserCaptionButtonContainer::AddedToWidget() {
   views::Widget* const widget = GetWidget();
 
-  DCHECK(!widget_observation_.IsObserving());
+  CHECK(!widget_observation_.IsObserving(), base::NotFatalUntil::M162);
   widget_observation_.Observe(widget);
 
   UpdateButtons();
@@ -184,7 +184,7 @@ void BrowserCaptionButtonContainer::AddedToWidget() {
 }
 
 void BrowserCaptionButtonContainer::RemovedFromWidget() {
-  DCHECK(widget_observation_.IsObserving());
+  CHECK(widget_observation_.IsObserving(), base::NotFatalUntil::M162);
   widget_observation_.Reset();
 }
 
@@ -195,14 +195,6 @@ void BrowserCaptionButtonContainer::OnWidgetBoundsChanged(
 }
 
 void BrowserCaptionButtonContainer::UpdateButtons() {
-  if (!ShouldBrowserCustomDrawTitlebar(frame_view_->GetBrowserView())) {
-    minimize_button_->SetVisible(false);
-    maximize_button_->SetVisible(false);
-    restore_button_->SetVisible(false);
-    close_button_->SetVisible(false);
-    return;
-  }
-
   minimize_button_->SetVisible(frame_view_->GetBrowserView()->CanMinimize());
 
   const bool is_maximized = frame_view_->IsMaximized();

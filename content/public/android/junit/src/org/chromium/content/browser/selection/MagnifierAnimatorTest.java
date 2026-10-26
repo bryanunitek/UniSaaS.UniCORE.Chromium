@@ -16,26 +16,22 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.InOrder;
-import org.mockito.Mockito;
+import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
 
 /** Unit tests for MagnifierAnimator. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class MagnifierAnimatorTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
-    private MagnifierWrapper mMagnifier;
+    @Mock private MagnifierWrapper mMagnifier;
     private MagnifierAnimator mAnimator;
 
     @Before
     public void setUp() {
-
-        mMagnifier = Mockito.mock(MagnifierWrapper.class);
         when(mMagnifier.isAvailable()).thenReturn(true);
 
         mAnimator = new MagnifierAnimator(mMagnifier);

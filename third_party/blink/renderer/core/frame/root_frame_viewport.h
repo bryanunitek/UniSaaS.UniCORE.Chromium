@@ -80,7 +80,6 @@ class CORE_EXPORT RootFrameViewport final
   gfx::PointF ScrollOffsetToPosition(const ScrollOffset& offset) const override;
   ScrollOffset ScrollPositionToOffset(
       const gfx::PointF& position) const override;
-  gfx::Vector2d ScrollOffsetInt() const override;
   ScrollOffset GetScrollOffset() const override;
   gfx::Vector2d MinimumScrollOffsetInt() const override;
   gfx::Vector2d MaximumScrollOffsetInt() const override;
@@ -118,7 +117,7 @@ class CORE_EXPORT RootFrameViewport final
   LayoutBox* GetLayoutBox() const override;
   gfx::QuadF LocalToVisibleContentQuad(const gfx::QuadF&,
                                        const LayoutObject*,
-                                       unsigned = 0) const final;
+                                       MapCoordinatesFlags = {}) const final;
   scoped_refptr<base::SingleThreadTaskRunner> GetTimerTaskRunner() const final;
   ScrollbarTheme& GetPageScrollbarTheme() const override;
 

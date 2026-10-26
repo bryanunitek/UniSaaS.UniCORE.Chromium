@@ -19,6 +19,9 @@
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/chromeos/strings/grit/ui_chromeos_strings.h"
+#include "ui/gfx/font.h"
+#include "ui/gfx/font_list.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 
 namespace policy {
@@ -187,7 +190,7 @@ std::u16string DlpWarnDialog::GetMessage() {
     case DlpWarnDialog::Restriction::kPrinting:
       return l10n_util::GetStringUTF16(IDS_POLICY_DLP_PRINTING_WARN_MESSAGE);
     case DlpWarnDialog::Restriction::kScreenShare:
-      DCHECK(application_title_.has_value());
+      CHECK(application_title_.has_value(), base::NotFatalUntil::M161);
       return l10n_util::GetStringFUTF16(
           IDS_POLICY_DLP_SCREEN_SHARE_WARN_MESSAGE, application_title_.value());
     case DlpWarnDialog::Restriction::kFiles:
@@ -197,7 +200,7 @@ std::u16string DlpWarnDialog::GetMessage() {
 
 void DlpWarnDialog::AddConfidentialRow(const gfx::ImageSkia& icon,
                                        const std::u16string& title) {
-  DCHECK(scroll_view_container_);
+  CHECK(scroll_view_container_, base::NotFatalUntil::M161);
   views::View* row =
       scroll_view_container_->AddChildView(std::make_unique<views::View>());
   row->SetLayoutManager(std::make_unique<views::BoxLayout>(

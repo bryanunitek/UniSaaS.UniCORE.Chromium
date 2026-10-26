@@ -5,7 +5,6 @@
 #include "gpu/command_buffer/service/shared_image/angle_vulkan_image_backing.h"
 
 #include "base/logging.h"
-#include "components/viz/common/gpu/vulkan_context_provider.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
@@ -14,6 +13,7 @@
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
 #include "gpu/command_buffer/service/shared_image/skia_gl_image_representation.h"
 #include "gpu/command_buffer/service/skia_utils.h"
+#include "gpu/command_buffer/service/vulkan_context_provider.h"
 #include "gpu/vulkan/vulkan_device_queue.h"
 #include "gpu/vulkan/vulkan_fence_helper.h"
 #include "gpu/vulkan/vulkan_image.h"
@@ -26,6 +26,7 @@
 #include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "third_party/skia/include/gpu/ganesh/vk/GrVkBackendSurface.h"
 #include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
+#include "ui/gfx/extension_set.h"
 #include "ui/gl/egl_util.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/scoped_egl_image.h"
@@ -277,12 +278,26 @@ bool AngleVulkanImageBacking::Initialize(
   VkImageUsageFlags vk_usage = VK_IMAGE_USAGE_SAMPLED_BIT |
                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  VkImageCreateFlags vk_create_flags = 0;
   if (usage().HasAny(usages_needing_color_attachment)) {
     vk_usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                 VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
     if (format().IsCompressed()) {
       DLOG(ERROR) << "ETC1 format cannot be used as color attachment.";
       return false;
+    }
+
+    // ANGLE supportsMultisampledRenderToSingleSampled requires
+    // VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT. We don't
+    // directly know if ANGLE enables the feature or not, but the feature is
+    // tied to Vulkan's
+    // VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME and
+    // multisampledRenderToSingleSampled.
+    if (gfx::HasExtension(
+            device_queue->enabled_extensions(),
+            VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME)) {
+      vk_create_flags |=
+          VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT;
     }
   }
 
@@ -293,7 +308,6 @@ bool AngleVulkanImageBacking::Initialize(
   for (int plane = 0; plane < num_planes; ++plane) {
     VkFormat vk_format = ToVkFormat(format(), plane);
     gfx::Size plane_size = format().GetPlaneSize(plane, size());
-    VkImageCreateFlags vk_create_flags = 0;
     auto vulkan_image =
         VulkanImage::Create(device_queue, plane_size, vk_format, vk_usage,
                             vk_create_flags, VK_IMAGE_TILING_OPTIMAL);
@@ -313,7 +327,10 @@ bool AngleVulkanImageBacking::Initialize(
       return false;
     }
     SkPixmap pixmap(image_info, data.data(), image_info.minRowBytes());
-    UploadFromMemory({pixmap});
+    if (!UploadFromMemory({pixmap})) {
+      DLOG(ERROR) << "Failed to upload initial pixel data";
+      return false;
+    }
     SetCleared();
   }
 
@@ -367,8 +384,8 @@ bool AngleVulkanImageBacking::UploadFromMemory(
   return updated;
 }
 
-void AngleVulkanImageBacking::Update(std::unique_ptr<gfx::GpuFence> in_fence) {
-  DCHECK(!in_fence);
+void AngleVulkanImageBacking::Update(gfx::GpuFenceHandle in_fence) {
+  DCHECK(in_fence.is_null());
 }
 
 std::unique_ptr<GLTexturePassthroughImageRepresentation>

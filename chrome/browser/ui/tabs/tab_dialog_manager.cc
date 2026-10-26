@@ -125,7 +125,8 @@ gfx::Rect GetModalDialogBounds(views::Widget* widget,
 
     // The requested dialog bounds should never fall outside the bounds of the
     // transient parent.
-    DCHECK(dialog_screen_bounds.Intersects(host_screen_bounds));
+    CHECK(dialog_screen_bounds.Intersects(host_screen_bounds),
+          base::NotFatalUntil::M162);
 
     // Adjust the dialog bound to ensure it remains visible on the display.
     const gfx::Rect display_work_area =
@@ -302,7 +303,8 @@ TabDialogManager::~TabDialogManager() = default;
 
 std::unique_ptr<views::Widget> TabDialogManager::CreateTabScopedDialog(
     views::DialogDelegate* delegate) {
-  DCHECK_EQ(ui::mojom::ModalType::kChild, delegate->GetModalType());
+  CHECK_EQ(ui::mojom::ModalType::kChild, delegate->GetModalType(),
+           base::NotFatalUntil::M162);
   views::Widget* host = GetHostWidget();
   CHECK(host);
 
@@ -357,7 +359,9 @@ void TabDialogManager::ShowDialog(views::Widget* widget,
   // Only show as active if the primary window widget (usually the browser
   // window) is painted as active. This prevents a background browser window
   // from becoming foreground on showing the dialog.
-  if (GetHostWidget()->ShouldPaintAsActive()) {
+  views::Widget* const host_widget = GetHostWidget();
+  if (host_widget && host_widget->ShouldPaintAsActive() &&
+      !params_->should_show_inactive) {
     widget_->Show();
   } else {
     widget->ShowInactive();
@@ -405,15 +409,25 @@ bool TabDialogManager::MaybeActivateDialog() {
 
 void TabDialogManager::WidgetDestroyed(views::Widget* widget) {
   CHECK_EQ(widget, widget_.get());
+  // Check if we had blocked the web contents in this iteration.
+  const bool did_block_web_contents = params_ && params_->disable_input;
   widget_ = nullptr;
   params_.reset();
   tab_dialog_widget_observer_.reset();
   scoped_ignore_input_events_.reset();
   web_contents_modal_dialog_host_observer_.reset();
   bounds_animation_.reset();
-  tab_interface_->GetBrowserWindowInterface()
-      ->capabilities()
-      ->SetWebContentsBlocked(tab_interface_->GetContents(), /*blocked=*/false);
+  // Only clobber the blocked web contents bit if we were also the one that
+  // blocked it. Otherwise leave it alone, since it may have been set by some
+  // other legacy dialog.
+  if (did_block_web_contents) {
+    if (auto* const browser_window_interface =
+            tab_interface_->GetBrowserWindowInterface()) {
+      browser_window_interface->capabilities()->SetWebContentsBlocked(
+          tab_interface_->GetContents(),
+          /*blocked=*/false);
+    }
+  }
   // Resetting ScopedTabModalUI may cause the showing of a new dialog.
   // Leaving it at the end of the function to prevent its side effects
   // from being overridden.
@@ -421,8 +435,15 @@ void TabDialogManager::WidgetDestroyed(views::Widget* widget) {
 }
 
 views::Widget* TabDialogManager::GetHostWidget() const {
-  return BrowserElementsViews::From(tab_interface_->GetBrowserWindowInterface())
-      ->GetPrimaryWindowWidget();
+  auto* const browser_window_interface =
+      tab_interface_->GetBrowserWindowInterface();
+  if (!browser_window_interface) {
+    return nullptr;
+  }
+  auto* const browser_elements =
+      BrowserElementsViews::From(browser_window_interface);
+  return browser_elements ? browser_elements->GetPrimaryWindowWidget()
+                          : nullptr;
 }
 
 void TabDialogManager::UpdateModalDialogBounds() {
@@ -539,7 +560,7 @@ void TabDialogManager::TabDidEnterForeground(TabInterface* tab_interface) {
     // Check if the tab was detached and dragged to a new browser window. This
     // ensures the widget is properly reparented.
     auto* parent_widget = GetHostWidget();
-    if (parent_widget != widget_->parent()) {
+    if (parent_widget && parent_widget != widget_->parent()) {
       widget_->Reparent(parent_widget);
     }
     UpdateDialogVisibility();
@@ -559,7 +580,8 @@ void TabDialogManager::TabWillEnterBackground(TabInterface* tab_interface) {
 
 void TabDialogManager::TabWillDetach(TabInterface* tab_interface,
                                      TabInterface::DetachReason reason) {
-  if (widget_ && params_->close_on_detach) {
+  if (widget_ && (reason == TabInterface::DetachReason::kDelete ||
+                  params_->close_on_detach)) {
     CloseDialog();
   }
 }
@@ -575,10 +597,13 @@ bool TabDialogManager::GetDialogWidgetVisibility() {
   // The dialog widget should be visible if and only if the tab is in the
   // foreground and the host window is not minimized. The inactive tab in a
   // split view can show a modal dialog.
-  return GetWidgetVisibility(
-      tab_interface_->IsVisible(),
-      tab_interface_->GetBrowserWindowInterface()->GetWindow()->IsMinimized(),
-      params_->should_show_callback);
+  auto* const browser_window_interface =
+      tab_interface_->GetBrowserWindowInterface();
+  const bool is_minimized =
+      browser_window_interface && browser_window_interface->GetWindow() &&
+      browser_window_interface->GetWindow()->IsMinimized();
+  return GetWidgetVisibility(tab_interface_->IsVisible(), is_minimized,
+                             params_->should_show_callback);
 }
 
 void TabDialogManager::AnimationProgressed(const gfx::Animation* animation) {

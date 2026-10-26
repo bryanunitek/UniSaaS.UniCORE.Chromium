@@ -32,6 +32,7 @@
 #include <optional>
 #include <variant>
 
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
 #include "base/time/time.h"
@@ -106,6 +107,7 @@ class TextTrackList;
 class TimeRanges;
 class VideoTrack;
 class VideoTrackList;
+class UIEvent;
 class V8CanPlayTypeResult;
 class V8TextTrackKind;
 
@@ -201,6 +203,9 @@ class CORE_EXPORT HTMLMediaElement
       std::variant<MediaStreamDescriptor*, MediaSourceHandle*>;
   void SetSrcObjectVariant(SrcObjectVariant src_object_variant);
   SrcObjectVariant GetSrcObjectVariant() const;
+  bool HasSrcObject() const {
+    return src_object_stream_descriptor_ || src_object_media_source_handle_;
+  }
 
   enum NetworkState {
     kNetworkEmpty,
@@ -257,6 +262,7 @@ class CORE_EXPORT HTMLMediaElement
   TimeRanges* played();
   WebTimeRanges SeekableInternal() const;
   TimeRanges* seekable() const;
+  bool CanSeekTo(double time) const;
   bool ended() const;
   bool Autoplay() const;
   bool Loop() const;
@@ -356,6 +362,9 @@ class CORE_EXPORT HTMLMediaElement
   // Notifies the media element that the media controls became visible, so
   // that text track layout may be updated to avoid overlapping them.
   void MediaControlsDidBecomeVisible();
+  // Notifies the media element that the media controls became hidden, so
+  // that text track layout may be updated to reclaim the freed space.
+  void MediaControlsDidBecomeHidden();
 
   void SourceWasRemoved(HTMLSourceElement*);
   void SourceWasAdded(HTMLSourceElement*);
@@ -405,6 +414,9 @@ class CORE_EXPORT HTMLMediaElement
   void DidAudioOutputSinkChanged(const String& hashed_device_id);
 
   void SetCcLayerForTesting(cc::Layer* layer) { SetCcLayer(layer); }
+  void SetIsEncryptedForTesting(bool is_encrypted) {
+    is_encrypted_media_ = is_encrypted;
+  }
   void AddTrackForTesting(const media::MediaTrack& t) { AddTrack(t); }
   void SetTrackStateForTesting(const media::MediaTrack& t,
                                media::MediaTrack::State s) {
@@ -440,7 +452,8 @@ class CORE_EXPORT HTMLMediaElement
   bool IsValidBuiltinCommand(HTMLElement& invoker,
                              CommandEventType command) override;
   bool HandleCommandInternal(HTMLElement& invoker,
-                             CommandEventType command) override;
+                             CommandEventType command,
+                             UIEvent* activate_event) override;
 
   // media::RemotePlaybackClientWrapper overrides:
   std::string GetActivePresentationId() override;
@@ -465,6 +478,7 @@ class CORE_EXPORT HTMLMediaElement
   HTMLMediaElement(const QualifiedName&, Document&);
   ~HTMLMediaElement() override;
   void Dispose();
+  bool IsDisposing() const { return is_disposing_; }
 
   // Returns a constant reference to the HeapMojoAssociatedRemoteSet holding all
   // the bound remotes for the media::mojom::blink::MediaPlayerObserver
@@ -583,7 +597,6 @@ class CORE_EXPORT HTMLMediaElement
   // state is updated. This is typically handled during `UpdatePlayState`.
   virtual void UpdateVideoVisibilityTracker() {}
 
-
   void SetShowPosterFlag(bool value);
 
   void SetReadyState(ReadyState);
@@ -591,7 +604,7 @@ class CORE_EXPORT HTMLMediaElement
 
   // WebMediaPlayerClient implementation.
   void NetworkStateChanged() final;
-  void ReadyStateChanged() final;
+  void ReadyStateChanged() override;
   void TimeChanged() final;
   void Repaint() final;
   void DurationChanged() final;
@@ -672,6 +685,7 @@ class CORE_EXPORT HTMLMediaElement
   void RecordAutoPictureInPictureInfo(
       const media::PictureInPictureEventsInfo::AutoPipInfo&
           auto_picture_in_picture_info) override;
+  void RequestSaveVideoFrame() override;
 
   void LoadTimerFired(TimerBase*);
   void ProgressEventTimerFired();
@@ -760,6 +774,7 @@ class CORE_EXPORT HTMLMediaElement
   void RequireOfficialPlaybackPositionUpdate() const;
 
   void UpdateControlsVisibility();
+  virtual void UpdateVideoFrameAvailability() {}
 
   TextTrackContainer& EnsureTextTrackContainer();
 
@@ -893,7 +908,8 @@ class CORE_EXPORT HTMLMediaElement
   LazyMediaLoadState lazy_media_load_state_ = LazyMediaLoadState::kNone;
 
   std::unique_ptr<WebMediaPlayer> web_media_player_;
-  cc::Layer* cc_layer_ = nullptr;
+  raw_ptr<cc::Layer, UnprotectedInRelease | DanglingUntriaged> cc_layer_ =
+      nullptr;
 
   // These two fields must be carefully set and reset: the actual derived type
   // of the attachment (same-thread vs cross-thread, for instance) must be the
@@ -1012,7 +1028,7 @@ class CORE_EXPORT HTMLMediaElement
 
   // AudioSourceProviderImpl wraps a WebAudioSourceProvider.
   // provideInput() calls into Chromium to get a rendered audio stream.
-  class AudioSourceProviderImpl final : public AudioSourceProvider {
+  class CORE_EXPORT AudioSourceProviderImpl final : public AudioSourceProvider {
     DISALLOW_NEW();
 
    public:
@@ -1081,7 +1097,7 @@ class CORE_EXPORT HTMLMediaElement
 
   Member<AutoplayPolicy> autoplay_policy_;
 
-  RemotePlaybackClient* remote_playback_client_ = nullptr;
+  Member<RemotePlaybackClient> remote_playback_client_;
 
   Member<MediaControls> media_controls_;
   Member<HTMLMediaElementControlsList> controls_list_;
@@ -1107,17 +1123,16 @@ class CORE_EXPORT HTMLMediaElement
       HeapMojoAssociatedReceiverSet<media::mojom::blink::MediaPlayer,
                                     HTMLMediaElement>>>
       media_player_receiver_set_;
+
+  bool is_disposing_ = false;
 };
 
 template <>
 struct DowncastTraits<HTMLMediaElement> {
   static bool AllowFrom(const Node& node) {
-    auto* html_element = DynamicTo<HTMLElement>(node);
-    return html_element && AllowFrom(*html_element);
-  }
-  static bool AllowFrom(const HTMLElement& html_element) {
-    return html_element.HasTagName(html_names::kAudioTag) ||
-           html_element.HasTagName(html_names::kVideoTag);
+    const ElementType type = node.GetElementType();
+    return type == ElementType::kHTMLAudioElement ||
+           type == ElementType::kHTMLVideoElement;
   }
 };
 

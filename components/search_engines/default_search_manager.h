@@ -119,6 +119,8 @@ class DefaultSearchManager
     kMirrorCheckReset = 2,
     kRecentHmacReset = 3,
     kStaleHmacReset = 4,
+    // Reset skipped when DSE is mandatory by policy, or when no user-controlled
+    // DSE setting or recent HMAC reset is present.
     kResetSkippedForManagedDefaultSearch = 5,
     kMaxValue = kResetSkippedForManagedDefaultSearch,
   };
@@ -158,6 +160,9 @@ class DefaultSearchManager
   // any extension-provided search engines.
   std::unique_ptr<TemplateURLData> GetDefaultSearchEngineIgnoringExtensions()
       const;
+
+  // Returns a pointer to the recommended search engine from policy, if any.
+  std::unique_ptr<TemplateURLData> GetRecommendedDefaultSearchEngine() const;
 
   // Gets the source of the current Default Search Engine value.
   Source GetDefaultSearchEngineSource() const;

@@ -11,6 +11,7 @@
 
 #include "ash/constants/ash_switches.h"
 #include "ash/constants/chrome_pref_names.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/functional/bind.h"
@@ -19,6 +20,7 @@
 #include "base/json/json_string_value_serializer.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/uuid.h"
 #include "base/values.h"
 #include "chrome/browser/ash/arc/enterprise/cert_store/cert_store_service.h"
@@ -26,12 +28,14 @@
 #include "chrome/browser/ash/arc/policy/arc_policy_util.h"
 #include "chrome/browser/ash/arc/policy/managed_configuration_variables.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
+#include "chrome/browser/ash/policy/core/device_attributes_impl.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/browser_process_platform_part_ash.h"
 #include "chrome/browser/chromeos/platform_keys/extension_key_permissions_service.h"
 #include "chrome/browser/policy/developer_tools_policy_handler.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_switches.h"
 #include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
@@ -285,8 +289,10 @@ void AddChoosePrivateKeyRuleToPolicy(
 
 // Finds managed configurations of applications in |arc_policy| and replace
 // string values that refer to template variables.
-void ReplaceManagedConfigurationVariables(const Profile* profile,
-                                          base::DictValue* arc_policy) {
+void ReplaceManagedConfigurationVariables(
+    const user_manager::User& user,
+    const policy::DeviceAttributes& device_attributes,
+    base::DictValue* arc_policy) {
   // Replace template variables in application managed configuration.
   base::ListValue* applications =
       arc_policy->FindList(policy_util::kArcPolicyKeyApplications);
@@ -295,7 +301,8 @@ void ReplaceManagedConfigurationVariables(const Profile* profile,
       base::DictValue* config =
           entry.GetDict().FindDict(ArcPolicyBridge::kManagedConfiguration);
       if (config) {
-        RecursivelyReplaceManagedConfigurationVariables(profile, *config);
+        RecursivelyReplaceManagedConfigurationVariables(user, device_attributes,
+                                                        *config);
       }
     }
   }
@@ -426,7 +433,7 @@ void OverrideArcPolicies(base::DictValue& filtered_policies,
   // available for ARC as well. This must be after the initial writing of
   // "debuggingFeaturesDisabled".
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kForceDevToolsAvailable)) {
+          ash::switches::kForceDevToolsAvailable)) {
     filtered_policies.Set(policy_util::kArcPolicyKeyDebuggingFeaturesDisabled,
                           false);
   }
@@ -461,11 +468,13 @@ void OverrideArcPolicies(base::DictValue& filtered_policies,
 }
 
 base::DictValue GetFilteredDictPolicies(
+    const user_manager::User& user,
     policy::PolicyService* const policy_service,
     const std::string& guid,
     bool is_affiliated,
     const CertStoreService* cert_store_service,
-    const Profile* profile) {
+    const Profile* profile,
+    const policy::DeviceAttributes& device_attributes) {
   const policy::PolicyNamespace policy_namespace(policy::POLICY_DOMAIN_CHROME,
                                                  std::string());
   const policy::PolicyMap& policy_map =
@@ -480,20 +489,25 @@ base::DictValue GetFilteredDictPolicies(
   AddChoosePrivateKeyRuleToPolicy(policy_service, cert_store_service,
                                   &filtered_policies);
 
-  ReplaceManagedConfigurationVariables(profile, &filtered_policies);
+  ReplaceManagedConfigurationVariables(user, device_attributes,
+                                       &filtered_policies);
 
   OverrideArcPolicies(filtered_policies, policy_map, guid, is_affiliated,
                       profile);
   return filtered_policies;
 }
 
-std::string GetFilteredJSONPolicies(policy::PolicyService* const policy_service,
-                                    const std::string& guid,
-                                    bool is_affiliated,
-                                    const CertStoreService* cert_store_service,
-                                    const Profile* profile) {
-  base::DictValue filtered_policies = GetFilteredDictPolicies(
-      policy_service, guid, is_affiliated, cert_store_service, profile);
+std::string GetFilteredJSONPolicies(
+    const user_manager::User& user,
+    policy::PolicyService* const policy_service,
+    const std::string& guid,
+    bool is_affiliated,
+    const CertStoreService* cert_store_service,
+    const Profile* profile,
+    const policy::DeviceAttributes& device_attributes) {
+  base::DictValue filtered_policies =
+      GetFilteredDictPolicies(user, policy_service, guid, is_affiliated,
+                              cert_store_service, profile, device_attributes);
 
   std::string policy_json;
   JSONStringValueSerializer serializer(&policy_json);
@@ -567,15 +581,25 @@ base::WeakPtr<ArcPolicyBridge> ArcPolicyBridge::GetWeakPtr() {
 
 ArcPolicyBridge::ArcPolicyBridge(content::BrowserContext* context,
                                  ArcBridgeService* bridge_service)
-    : ArcPolicyBridge(context, bridge_service, nullptr /* policy_service */) {}
+    : ArcPolicyBridge(context,
+                      bridge_service,
+                      /*policy_service=*/nullptr,
+                      // TODO(crbug.com/404130092): Avoid g_browser_process.
+                      std::make_unique<policy::DeviceAttributesImpl>(
+                          g_browser_process->platform_part()
+                              ->browser_policy_connector_ash())) {}
 
-ArcPolicyBridge::ArcPolicyBridge(content::BrowserContext* context,
-                                 ArcBridgeService* bridge_service,
-                                 policy::PolicyService* policy_service)
+ArcPolicyBridge::ArcPolicyBridge(
+    content::BrowserContext* context,
+    ArcBridgeService* bridge_service,
+    policy::PolicyService* policy_service,
+    std::unique_ptr<policy::DeviceAttributes> device_attributes)
     : context_(context),
       arc_bridge_service_(bridge_service),
       policy_service_(policy_service),
-      instance_guid_(base::Uuid::GenerateRandomV4().AsLowercaseString()) {
+      instance_guid_(base::Uuid::GenerateRandomV4().AsLowercaseString()),
+      device_attributes_(std::move(device_attributes)) {
+  CHECK(device_attributes_);
   VLOG(2) << "ArcPolicyBridge::ArcPolicyBridge";
   arc_bridge_service_->policy()->SetHost(this);
   arc_bridge_service_->policy()->AddObserver(this);
@@ -723,6 +747,8 @@ void ArcPolicyBridge::OnCommandReceived(
 
   if (!instance) {
     VLOG(1) << "ARC not ready yet, will retry remote command once it is ready.";
+    // TODO(crbug.com/569687178): CHECK-exclusion: Convert to a CHECK once we
+    // are confident it won't be triggered.
     DCHECK(on_arc_instance_ready_callback_.is_null());
 
     // base::Unretained is safe here since this class owns the callback's
@@ -760,9 +786,9 @@ std::string ArcPolicyBridge::GetCurrentJSONPolicies() const {
   const CertStoreService* cert_store_service =
       CertStoreServiceFactory::GetForBrowserContext(context_);
 
-  return GetFilteredJSONPolicies(policy_service_, instance_guid_,
-                                 user->IsAffiliated(), cert_store_service,
-                                 profile);
+  return GetFilteredJSONPolicies(
+      CHECK_DEREF(user), policy_service_, instance_guid_, user->IsAffiliated(),
+      cert_store_service, profile, *device_attributes_);
 }
 
 void ArcPolicyBridge::OnReportComplianceParse(
@@ -797,14 +823,26 @@ void ArcPolicyBridge::ActivateArcIfRequiredByPolicy(
     return;
   }
   bool hasForceInstallApps =
-      std::any_of(apps->cbegin(), apps->cbegin(), [](const auto& app) {
-        return *app.GetDict().FindString(kPolicyAppInstallType) ==
-               kPolicyAppInstallTypeForceInstalled;
+      std::any_of(apps->cbegin(), apps->cend(), [](const auto& app) {
+        const std::string* install_type =
+            app.GetDict().FindString(kPolicyAppInstallType);
+        return install_type != nullptr &&
+               *install_type == kPolicyAppInstallTypeForceInstalled;
       });
   if (hasForceInstallApps) {
     VLOG(1) << "Force install apps found, allowing ARC activation.";
-    arc::ArcSessionManager::Get()->AllowActivation(
-        arc::ArcSessionManager::AllowActivationReason::kForcedByPolicy);
+    // PostTask is used here to avoid re-entrancy issues with ArcSessionManager
+    // observers, as this function can be called from within an observer
+    // callback.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce([]() {
+          auto* manager = arc::ArcSessionManager::Get();
+          if (manager) {
+            manager->AllowActivation(
+                arc::ArcSessionManager::AllowActivationReason::
+                    kForcedByPolicy);
+          }
+        }));
   }
 }
 

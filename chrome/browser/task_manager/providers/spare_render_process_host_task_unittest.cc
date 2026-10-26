@@ -25,8 +25,9 @@ namespace {
 
 // Matcher that checks if the set contains an element where
 // GetChildProcessUniqueID() == rph_id;
-Matcher<std::set<Task*>> ContainsRphId(int rph_id) {
-  return Contains(Property(&Task::GetChildProcessUniqueID, rph_id));
+Matcher<std::set<raw_ptr<Task>>> ContainsRphId(content::ChildProcessId rph_id) {
+  return Contains(
+      testing::Pointee(Property(&Task::GetChildProcessUniqueID, rph_id)));
 }
 
 }  // namespace
@@ -60,10 +61,12 @@ class SpareRenderProcessHostTaskTest : public Test,
     provider->OnSpareRenderProcessHostRemoved(render_process);
   }
 
-  const std::set<Task*>& provided_tasks() const { return provided_tasks_; }
+  const std::set<raw_ptr<Task>>& provided_tasks() const {
+    return provided_tasks_;
+  }
 
  private:
-  std::set<Task*> provided_tasks_;
+  std::set<raw_ptr<Task>> provided_tasks_;
 
   content::BrowserTaskEnvironment task_environment_;
 };
@@ -81,22 +84,16 @@ TEST_F(SpareRenderProcessHostTaskTest, Basic) {
   EXPECT_TRUE(provided_tasks().empty());
 
   OnSpareRenderProcessHostReady(&provider, render_process1.get());
-  EXPECT_THAT(provided_tasks(),
-              ContainsRphId(render_process1->GetDeprecatedID()));
-  EXPECT_THAT(provided_tasks(),
-              Not(ContainsRphId(render_process2->GetDeprecatedID())));
+  EXPECT_THAT(provided_tasks(), ContainsRphId(render_process1->GetID()));
+  EXPECT_THAT(provided_tasks(), Not(ContainsRphId(render_process2->GetID())));
 
   OnSpareRenderProcessHostReady(&provider, render_process2.get());
-  EXPECT_THAT(provided_tasks(),
-              ContainsRphId(render_process1->GetDeprecatedID()));
-  EXPECT_THAT(provided_tasks(),
-              ContainsRphId(render_process2->GetDeprecatedID()));
+  EXPECT_THAT(provided_tasks(), ContainsRphId(render_process1->GetID()));
+  EXPECT_THAT(provided_tasks(), ContainsRphId(render_process2->GetID()));
 
   OnSpareRenderProcessHostRemoved(&provider, render_process1.get());
-  EXPECT_THAT(provided_tasks(),
-              Not(ContainsRphId(render_process1->GetDeprecatedID())));
-  EXPECT_THAT(provided_tasks(),
-              ContainsRphId(render_process2->GetDeprecatedID()));
+  EXPECT_THAT(provided_tasks(), Not(ContainsRphId(render_process1->GetID())));
+  EXPECT_THAT(provided_tasks(), ContainsRphId(render_process2->GetID()));
 
   OnSpareRenderProcessHostRemoved(&provider, render_process2.get());
   EXPECT_TRUE(provided_tasks().empty());

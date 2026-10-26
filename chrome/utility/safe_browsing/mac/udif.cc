@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -26,10 +27,13 @@
 #include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/numerics/ostream_operators.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/numerics/safe_math.h"
 #include "base/strings/sys_string_conversions.h"
 #include "chrome/utility/safe_browsing/mac/convert_big_endian.h"
 #include "chrome/utility/safe_browsing/mac/read_stream.h"
+#include "chrome/utility/safe_browsing/mac/rust/read_stream_bridge.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "third_party/zlib/zlib.h"
 
 namespace safe_browsing {
@@ -363,15 +367,39 @@ class UDIFBlockChunkReadStream : public ReadStream {
 
 }  // namespace
 
+size_t& GetMaxDecompressChunkSize() {
+  static size_t max_chunk_size = std::numeric_limits<uint32_t>::max();
+  return max_chunk_size;
+}
+
 UDIFParser::UDIFParser(ReadStream* stream)
-    : stream_(stream),
-      partition_names_(),
-      blocks_(),
-      block_size_(kSectorSize) {}
+    : stream_(stream), block_size_(kSectorSize) {
+  if (stream && base::FeatureList::IsEnabled(kSafeBrowsingRustDmgParser)) {
+    // `new_udif_parser` requires a valid, non-null `ReadStream` pointer that
+    // outlives the parser and any child `ReadStream`s. `stream` is checked to
+    // be non-null above, and the `UDIFParser` constructor contract requires the
+    // caller to ensure `stream` outlives this `UDIFParser` and any streams
+    // returned by `GetPartitionReadStream()`.
+    rust_parser_ = rust_ffi::new_udif_parser(stream);
+  }
+}
 
 UDIFParser::~UDIFParser() = default;
 
 bool UDIFParser::Parse() {
+  if (!stream_) {
+    return false;
+  }
+
+  if (rust_parser_.has_value()) {
+    if (!(*rust_parser_)->parse()) {
+      return false;
+    }
+    ::rust::Slice<const uint8_t> sig = (*rust_parser_)->code_signature();
+    signature_blob_.assign(sig.begin(), sig.end());
+    return true;
+  }
+
   if (!ParseBlkx())
     return false;
 
@@ -383,15 +411,24 @@ const std::vector<uint8_t>& UDIFParser::GetCodeSignature() {
 }
 
 size_t UDIFParser::GetNumberOfPartitions() {
+  if (rust_parser_.has_value()) {
+    return (*rust_parser_)->number_of_partitions();
+  }
   return blocks_.size();
 }
 
 std::string UDIFParser::GetPartitionName(size_t part_number) {
+  if (rust_parser_.has_value()) {
+    return std::string((*rust_parser_)->partition_name(part_number));
+  }
   DCHECK_LT(part_number, partition_names_.size());
   return partition_names_[part_number];
 }
 
 std::string UDIFParser::GetPartitionType(size_t part_number) {
+  if (rust_parser_.has_value()) {
+    return std::string((*rust_parser_)->partition_type(part_number));
+  }
   // The partition type is embedded in the Name field, as such:
   // "Partition-Name (Partition-Type : Partition-ID)".
   std::string name = GetPartitionName(part_number);
@@ -414,6 +451,9 @@ std::string UDIFParser::GetPartitionType(size_t part_number) {
 }
 
 size_t UDIFParser::GetPartitionSize(size_t part_number) {
+  if (rust_parser_.has_value()) {
+    return (*rust_parser_)->partition_size(part_number);
+  }
   DCHECK_LT(part_number, blocks_.size());
   auto size =
       base::CheckedNumeric<size_t>(blocks_[part_number]->sector_count()) *
@@ -423,6 +463,10 @@ size_t UDIFParser::GetPartitionSize(size_t part_number) {
 
 std::unique_ptr<ReadStream> UDIFParser::GetPartitionReadStream(
     size_t part_number) {
+  if (rust_parser_.has_value()) {
+    return rust_ffi::WrapRustReadStream(
+        (*rust_parser_)->partition_read_stream(part_number));
+  }
   DCHECK_LT(part_number, blocks_.size());
   return std::make_unique<UDIFPartitionReadStream>(stream_, block_size_,
                                                    blocks_[part_number].get());
@@ -744,12 +788,12 @@ UDIFBlockChunkReadStream::UDIFBlockChunkReadStream(ReadStream* stream,
                                                    const UDIFBlockChunk* chunk)
     : stream_(stream),
       chunk_(chunk),
-      length_in_bytes_(chunk->sector_count * block_size),
       offset_(0),
       decompress_buffer_(),
       did_decompress_(false) {
-  // Make sure the multiplication above did not overflow.
-  CHECK(length_in_bytes_ == 0 || length_in_bytes_ >= block_size);
+  base::CheckedNumeric<size_t> length =
+      base::CheckedNumeric<size_t>(chunk->sector_count) * block_size;
+  CHECK(length.AssignIfValid(&length_in_bytes_));
 }
 
 UDIFBlockChunkReadStream::~UDIFBlockChunkReadStream() = default;
@@ -849,12 +893,38 @@ bool UDIFBlockChunkReadStream::HandleZLib(base::span<uint8_t> buf,
     }
 
     decompress_buffer_.resize(length_in_bytes_);
-    zlib.next_in = compressed_data.data();
-    zlib.avail_in = compressed_data.size();
-    zlib.next_out = decompress_buffer_.data();
-    zlib.avail_out = decompress_buffer_.size();
+    base::span<const uint8_t> remaining_in = compressed_data;
+    base::span<uint8_t> remaining_out = decompress_buffer_;
 
-    int rv = inflate(&zlib, Z_FINISH);
+    int rv = Z_OK;
+    while (rv == Z_OK && (!remaining_in.empty() || !remaining_out.empty())) {
+      zlib.next_in = const_cast<uint8_t*>(remaining_in.data());
+      zlib.avail_in = base::checked_cast<uInt>(
+          std::min(remaining_in.size(), GetMaxDecompressChunkSize()));
+      zlib.next_out = remaining_out.data();
+      zlib.avail_out = base::checked_cast<uInt>(
+          std::min(remaining_out.size(), GetMaxDecompressChunkSize()));
+
+      uInt avail_in_before = zlib.avail_in;
+      uInt avail_out_before = zlib.avail_out;
+
+      int flush = (remaining_in.size() <= GetMaxDecompressChunkSize() &&
+                   remaining_out.size() <= GetMaxDecompressChunkSize())
+                      ? Z_FINISH
+                      : Z_NO_FLUSH;
+      rv = inflate(&zlib, flush);
+
+      size_t bytes_consumed = avail_in_before - zlib.avail_in;
+      size_t bytes_produced = avail_out_before - zlib.avail_out;
+
+      if (bytes_consumed == 0 && bytes_produced == 0 && rv == Z_OK) {
+        break;
+      }
+
+      remaining_in = remaining_in.subspan(bytes_consumed);
+      remaining_out = remaining_out.subspan(bytes_produced);
+    }
+
     inflateEnd(&zlib);
 
     if (rv != Z_STREAM_END) {
@@ -884,12 +954,35 @@ bool UDIFBlockChunkReadStream::HandleBZ2(base::span<uint8_t> buf,
     }
 
     decompress_buffer_.resize(length_in_bytes_);
-    bz.next_in = reinterpret_cast<char*>(compressed_data.data());
-    bz.avail_in = compressed_data.size();
-    bz.next_out = reinterpret_cast<char*>(decompress_buffer_.data());
-    bz.avail_out = decompress_buffer_.size();
+    base::span<const uint8_t> remaining_in = compressed_data;
+    base::span<uint8_t> remaining_out = decompress_buffer_;
 
-    int rv = BZ2_bzDecompress(&bz);
+    int rv = BZ_OK;
+    while (rv == BZ_OK && (!remaining_in.empty() || !remaining_out.empty())) {
+      bz.next_in =
+          const_cast<char*>(reinterpret_cast<const char*>(remaining_in.data()));
+      bz.avail_in = base::checked_cast<unsigned int>(
+          std::min(remaining_in.size(), GetMaxDecompressChunkSize()));
+      bz.next_out = reinterpret_cast<char*>(remaining_out.data());
+      bz.avail_out = base::checked_cast<unsigned int>(
+          std::min(remaining_out.size(), GetMaxDecompressChunkSize()));
+
+      unsigned int avail_in_before = bz.avail_in;
+      unsigned int avail_out_before = bz.avail_out;
+
+      rv = BZ2_bzDecompress(&bz);
+
+      size_t bytes_consumed = avail_in_before - bz.avail_in;
+      size_t bytes_produced = avail_out_before - bz.avail_out;
+
+      if (bytes_consumed == 0 && bytes_produced == 0 && rv == BZ_OK) {
+        break;
+      }
+
+      remaining_in = remaining_in.subspan(bytes_consumed);
+      remaining_out = remaining_out.subspan(bytes_produced);
+    }
+
     BZ2_bzDecompressEnd(&bz);
 
     if (rv != BZ_STREAM_END) {

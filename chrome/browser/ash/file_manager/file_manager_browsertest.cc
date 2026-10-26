@@ -34,8 +34,7 @@
 #include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/fake_gaia_mixin.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -55,6 +54,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/download_test_observer.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/window_open_disposition.h"
 
 using file_manager::test::TestCase;
 
@@ -258,7 +258,7 @@ IN_PROC_BROWSER_TEST_F(QuickOfficeForceFileDownloadEnabledBrowserTest,
       embedded_test_server()->GetURL("/chromeos/file_manager/text.docx");
 
   content::DownloadManager* download_manager =
-      browser()->profile()->GetDownloadManager();
+      browser()->GetProfile()->GetDownloadManager();
   std::unique_ptr<content::DownloadTestObserver> download_observer(
       new content::DownloadTestObserverTerminal(
           download_manager, /*num_downloads=*/1,
@@ -266,7 +266,7 @@ IN_PROC_BROWSER_TEST_F(QuickOfficeForceFileDownloadEnabledBrowserTest,
 
   // This call will not wait for the download to finish.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), download_url, WindowOpenDisposition::CURRENT_TAB,
+      browser(), download_url, WindowOpenDisposition::kCurrentTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // Wait for the download itself to complete.
@@ -319,7 +319,6 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
         TestCase("fileDisplayUsb")
             .FeatureIds({"screenplay-ade01078-3b79-41d2-953e-e22a544a28b3"}),
         TestCase("fileDisplayUsbPartition"),
-        TestCase("fileDisplayUsbPartition").EnableSinglePartitionFormat(),
         TestCase("fileDisplayUsbPartitionSort"),
         TestCase("fileDisplayPartitionFileTable"),
         TestCase("fileSearch"),
@@ -738,12 +737,10 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
         TestCase("dirContextMenuCrostini"),
         TestCase("dirContextMenuPlayFiles"),
         TestCase("dirContextMenuUsbs"),
-        TestCase("dirContextMenuUsbs").EnableSinglePartitionFormat(),
         TestCase("dirContextMenuFsp"),
         TestCase("dirContextMenuDocumentsProvider")
             .EnableGenericDocumentsProvider(),
         TestCase("dirContextMenuUsbDcim"),
-        TestCase("dirContextMenuUsbDcim").EnableSinglePartitionFormat(),
         TestCase("dirContextMenuMtp"),
         TestCase("dirContextMenuMyDrive"),
         TestCase("dirContextMenuSharedDrive"),
@@ -882,9 +879,6 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
 // TODO(crbug.com/40783093): Remove flakiness and enable this test.
 #if !defined(ADDRESS_SANITIZER) && defined(NDEBUG)
         TestCase("transferDragAndHoverTreeItemFakeEntry")
-            .FeatureIds({"screenplay-9e3628b5-86db-481f-8623-f13eac08d61a"}),
-        TestCase("transferDragAndHoverTreeItemFakeEntry")
-            .EnableSinglePartitionFormat()
             .FeatureIds({"screenplay-9e3628b5-86db-481f-8623-f13eac08d61a"}),
 #endif
         TestCase("transferDragFileListItemSelects")
@@ -1243,10 +1237,7 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
             .EnableGenericDocumentsProvider()
             .FeatureIds({"screenplay-56f7e10e-b7ba-4425-b397-14ce54d670dc"}),
         TestCase("openHelpPageFromDownloadsVolume"),
-        TestCase("openHelpPageFromDriveVolume"),
-        TestCase("showManageMirrorSyncShowsOnlyInLocalRoot"),
-        TestCase("showManageMirrorSyncShowsOnlyInLocalRoot")
-            .EnableMirrorSync()));
+        TestCase("openHelpPageFromDriveVolume")));
 
 WRAPPED_INSTANTIATE_TEST_SUITE_P(
     FilesTooltip, /* files_tooltip.ts */
@@ -1288,10 +1279,7 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
         TestCase("mountCrostiniWithSubFolder"),
         TestCase("enableDisableCrostini"),
         TestCase("sharePathWithCrostini")
-            .FeatureIds({"screenplay-122c00f8-9842-4666-8ca0-b6bf47454551"}),
-        TestCase("pluginVmDirectoryNotSharedErrorDialog"),
-        TestCase("pluginVmFileOnExternalDriveErrorDialog"),
-        TestCase("pluginVmFileDropFailErrorDialog")));
+            .FeatureIds({"screenplay-122c00f8-9842-4666-8ca0-b6bf47454551"})));
 
 WRAPPED_INSTANTIATE_TEST_SUITE_P(
     MyFiles, /* my_files.ts */
@@ -1450,21 +1438,13 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
 WRAPPED_INSTANTIATE_TEST_SUITE_P(
     FormatDialog, /* format_dialog.ts */
     FilesAppBrowserTest,
-    ::testing::Values(
-        TestCase("formatDialog"),
-        TestCase("formatDialogIsModal"),
-        TestCase("formatDialogEmpty"),
-        TestCase("formatDialogCancel"),
-        TestCase("formatDialogNameLength"),
-        TestCase("formatDialogNameInvalid"),
-        TestCase("formatDialogGearMenu"),
-        TestCase("formatDialog").EnableSinglePartitionFormat(),
-        TestCase("formatDialogIsModal").EnableSinglePartitionFormat(),
-        TestCase("formatDialogEmpty").EnableSinglePartitionFormat(),
-        TestCase("formatDialogCancel").EnableSinglePartitionFormat(),
-        TestCase("formatDialogNameLength").EnableSinglePartitionFormat(),
-        TestCase("formatDialogNameInvalid").EnableSinglePartitionFormat(),
-        TestCase("formatDialogGearMenu").EnableSinglePartitionFormat()));
+    ::testing::Values(TestCase("formatDialog"),
+                      TestCase("formatDialogIsModal"),
+                      TestCase("formatDialogEmpty"),
+                      TestCase("formatDialogCancel"),
+                      TestCase("formatDialogNameLength"),
+                      TestCase("formatDialogNameInvalid"),
+                      TestCase("formatDialogGearMenu")));
 
 WRAPPED_INSTANTIATE_TEST_SUITE_P(
     Trash, /* trash.ts */
@@ -1533,26 +1513,19 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
 WRAPPED_INSTANTIATE_TEST_SUITE_P(
     Office, /* office.ts */
     FilesAppBrowserTest,
-    ::testing::Values(
-        TestCase("openOfficeWordFile").EnableUploadOfficeToCloud(),
-        TestCase("openOfficeWordFromMyFiles").EnableUploadOfficeToCloud(),
-        TestCase("uploadToDriveRequiresUploadOfficeToCloudEnabled"),
-        TestCase("openMultipleOfficeWordFromDrive").EnableUploadOfficeToCloud(),
-        TestCase("openOfficeWordFromDrive").EnableUploadOfficeToCloud(),
-        TestCase("openOfficeExcelFromDrive").EnableUploadOfficeToCloud(),
-        TestCase("openOfficePowerPointFromDrive").EnableUploadOfficeToCloud(),
-        TestCase("openOfficeWordFromDriveNotSynced")
-            .EnableUploadOfficeToCloud(),
-        TestCase("openOfficeWordFromMyFilesOffline")
-            .EnableUploadOfficeToCloud()
-            .Offline(),
-        TestCase("openOfficeWordFromDriveOffline")
-            .EnableUploadOfficeToCloud()
-            .Offline()
-        // TODO(b/339102272): Re-enable after resolving flakiness.
-        //            ,
-        //       TestCase("officeShowNudgeGoogleDrive")
-        ));
+    ::testing::Values(TestCase("openOfficeWordFile"),
+                      TestCase("openOfficeWordFromMyFiles"),
+                      TestCase("openMultipleOfficeWordFromDrive"),
+                      TestCase("openOfficeWordFromDrive"),
+                      TestCase("openOfficeExcelFromDrive"),
+                      TestCase("openOfficePowerPointFromDrive"),
+                      TestCase("openOfficeWordFromDriveNotSynced"),
+                      TestCase("openOfficeWordFromMyFilesOffline").Offline(),
+                      TestCase("openOfficeWordFromDriveOffline").Offline()
+                      // TODO(b/339102272): Re-enable after resolving flakiness.
+                      //            ,
+                      //       TestCase("officeShowNudgeGoogleDrive")
+                      ));
 
 WRAPPED_INSTANTIATE_TEST_SUITE_P(
     GuestOs, /* guest_os.ts */

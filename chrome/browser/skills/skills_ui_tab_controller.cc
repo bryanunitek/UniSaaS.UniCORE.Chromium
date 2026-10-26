@@ -11,6 +11,7 @@
 #include "chrome/browser/glic/public/glic_passkeys.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/skills/skills_glic_mojom_util.h"
+#include "chrome/browser/skills/skills_service_factory.h"
 #include "chrome/browser/skills/skills_ui_window_controller.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/webui/skills/skills_dialog_delegate.h"
@@ -24,8 +25,10 @@
 #include "components/skills/public/skills_service.h"
 #include "components/sync/protocol/skill_specifics.pb.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/views/window/dialog_delegate.h"
+#include "url/gurl.h"
 
 DEFINE_USER_DATA(skills::SkillsUiTabController);
 
@@ -80,7 +83,11 @@ void SkillsUiTabController::ShowDialog(Skill skill,
   content::WebContents* contents = tab_->GetContents();
   CHECK(contents);
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
-  auto dialog_view = std::make_unique<skills::SkillsDialogView>(profile);
+  GURL dialog_url =
+      skills::AppendOpenStartTime(GURL(std::string(chrome::kChromeUISkillsURL) +
+                                       chrome::kChromeUISkillsDialogPath));
+  auto dialog_view =
+      std::make_unique<skills::SkillsDialogView>(profile, dialog_url);
 
   dialog_delegate_ = std::make_unique<views::DialogDelegate>();
   dialog_delegate_->SetShowCloseButton(false);
@@ -129,6 +136,10 @@ void SkillsUiTabController::CloseDialog() {
   dialog_widget_->Close();
 }
 
+BrowserWindowInterface* SkillsUiTabController::GetBrowserWindowInterface() {
+  return tab_->GetBrowserWindowInterface();
+}
+
 void SkillsUiTabController::OnWidgetDestroyed(views::Widget* widget) {
   if (dialog_widget_.get() != widget) {
     return;
@@ -164,7 +175,22 @@ bool SkillsUiTabController::IsShowing() const {
   return dialog_widget_ != nullptr;
 }
 
-void SkillsUiTabController::InvokeSkill(std::string_view skill_id) {
+Profile* SkillsUiTabController::GetProfile() {
+  content::WebContents* contents = tab_->GetContents();
+  if (!contents) {
+    return nullptr;
+  }
+  return Profile::FromBrowserContext(contents->GetBrowserContext());
+}
+
+void SkillsUiTabController::InvokeSkill(std::string_view skill_id,
+                                        std::string_view skill_name,
+                                        std::string_view skill_icon,
+                                        bool auto_submit) {
+  if (!SkillsServiceFactory::IsSkillsEnabledForProfile(GetProfile())) {
+    return;
+  }
+
   last_invoked_skill_id_for_testing_ = skill_id;
 
   const skills::Skill* skill = nullptr;
@@ -188,6 +214,12 @@ void SkillsUiTabController::InvokeSkill(std::string_view skill_id) {
       case sync_pb::SkillSource::SKILL_SOURCE_DERIVED_FROM_FIRST_PARTY:
         RecordSkillsInvokeAction(SkillsInvokeAction::kDerivedFromFirstParty);
         break;
+      case sync_pb::SkillSource::SKILL_SOURCE_ENTERPRISE:
+        RecordSkillsInvokeAction(SkillsInvokeAction::kEnterprise);
+        break;
+      case sync_pb::SkillSource::SKILL_SOURCE_DERIVED_FROM_ENTERPRISE:
+        RecordSkillsInvokeAction(SkillsInvokeAction::kDerivedFromEnterprise);
+        break;
       // This is an edge case. It occurs when there is an update that introduces
       // a new SkillSource, but the user is using an older version of Chrome
       // that isn't updated to support the new SkillSource.
@@ -201,10 +233,49 @@ void SkillsUiTabController::InvokeSkill(std::string_view skill_id) {
     glic::GlicInvokeOptions options(
         glic::Target(tab_.get(), glic::DefaultConversation()),
         glic::mojom::InvocationSource::kSkills);
+    // For v2, the skill would not exist.
     if (skill) {
       options.prompts.push_back(skill->prompt);
     }
+    // TODO(b/537830140): Remove this field entirely once we settled on the new
+    // struct and old web clients are updated.
     options.skill_id = std::string(skill_id);
+
+    auto mojo_skills_payload = glic::mojom::SkillsPayload::New();
+    mojo_skills_payload->skill_id = std::string(skill_id);
+    // Pass in extra items for skills v2.
+    if (base::FeatureList::IsEnabled(features::kSkillsWebViewV2Enabled)) {
+      // We know these exist in V2, because they are mandatory in the page
+      // handler.
+      mojo_skills_payload->skill_name = std::string(skill_name);
+      mojo_skills_payload->skill_icon = std::string(skill_icon);
+    }
+    options.source_or_payload =
+        glic::mojom::InvocationPayload::NewSkillsPayload(
+            std::move(mojo_skills_payload));
+
+    if (!base::FeatureList::IsEnabled(features::kSkillsWebViewV2Enabled) &&
+        target_) {
+      // For v1, copy target. For v2, default to DefaultConversation.
+      options.target = std::move(*target_);
+    }
+    target_.reset();
+    if (auto_submit) {
+      service->InvokeWithAutoSubmit(
+          glic::InvokeWithAutoSubmitPasskeyProvider::GetPassKey(),
+          std::move(options));
+    } else {
+      service->Invoke(std::move(options));
+    }
+  }
+}
+
+void SkillsUiTabController::SendPrompt(std::string_view prompt) {
+  if (auto* service = GetGlicService()) {
+    glic::GlicInvokeOptions options(
+        glic::Target(tab_.get(), glic::DefaultConversation()),
+        glic::mojom::InvocationSource::kSkills);
+    options.prompts.emplace_back(prompt);
     if (target_) {
       options.target = std::move(*target_);
       target_.reset();

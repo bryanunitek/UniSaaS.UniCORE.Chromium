@@ -10,7 +10,7 @@
 #include "base/values.h"
 #include "chrome/browser/policy/safe_search_policy_test.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/policy/core/common/policy_types.h"
@@ -83,7 +83,7 @@ IN_PROC_BROWSER_TEST_F(SafeSearchPolicyTest, LegacySafeSearch) {
 
     // Google safe search can be triggered by the ForceGoogleSafeSearch policy
     // or the legacy safe search mode.
-    PrefService* prefs = browser()->profile()->GetPrefs();
+    PrefService* prefs = browser()->GetProfile()->GetPrefs();
     EXPECT_EQ(google_safe_search != 0 || legacy_safe_search_in_effect,
               prefs->IsManagedPreference(
                   policy::policy_prefs::kForceGoogleSafeSearch));
@@ -146,7 +146,7 @@ IN_PROC_BROWSER_TEST_F(SafeSearchPolicyTest, ForceGoogleSafeSearch) {
         std::nullopt,   // ForceYouTubeSafetyMode
         std::nullopt);  // ForceYouTubeRestrict
     // Verify that the safe search pref behaves the way we expect.
-    PrefService* prefs = browser()->profile()->GetPrefs();
+    PrefService* prefs = browser()->GetProfile()->GetPrefs();
     EXPECT_EQ(safe_search != 0,
               prefs->IsManagedPreference(
                   policy::policy_prefs::kForceGoogleSafeSearch));
@@ -168,7 +168,7 @@ IN_PROC_BROWSER_TEST_F(SafeSearchPolicyTest, ForceGoogleSafeSearch) {
 
     {
       // Now check subresource loads.
-      FetchSubresource(browser()->tab_strip_model()->GetActiveWebContents(),
+      FetchSubresource(browser()->GetTabStripModel()->GetActiveWebContents(),
                        GURL("http://google.com/"));
 
       base::AutoLock auto_lock(lock);

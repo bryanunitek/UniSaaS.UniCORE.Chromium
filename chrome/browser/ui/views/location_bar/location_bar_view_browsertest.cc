@@ -18,30 +18,36 @@
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ssl/chrome_security_state_util.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+#include "chrome/browser/ui/omnibox/omnibox_popup_state_manager.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/location_bar/location_icon_view.h"
+#include "chrome/browser/ui/views/location_bar/webui_content_setting_image_control.h"
+#include "chrome/browser/ui/views/location_bar/webui_location_bar.h"
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_coordinator.h"
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_context_menu.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
 #include "chrome/browser/ui/views/page_action/page_action_container_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_controller.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_view.h"
-#include "chrome/browser/ui/views/page_action/test_support/page_action_test_support.h"
+#include "chrome/browser/ui/views/page_action/page_action_view_interface.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_accessor.h"
+#include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -49,9 +55,9 @@
 #include "components/omnibox/browser/aim_eligibility_service_features.h"
 #include "components/omnibox/browser/omnibox_prefs.h"
 #include "components/permissions/permission_request_manager.h"
-#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/security_state/core/security_state.h"
 #include "components/zoom/zoom_controller.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
@@ -67,9 +73,12 @@
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/pointer/touch_ui_controller.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/background.h"
+#include "ui/views/controls/focus_ring.h"
 #include "ui/views/test/views_test_utils.h"
 
 #if BUILDFLAG(IS_OZONE)
@@ -77,12 +86,6 @@
 #endif
 
 namespace {
-void FocusNextView(views::FocusManager* focus_manager) {
-  views::View* const focused_view = focus_manager->GetFocusedView();
-  views::View* const next_view =
-      focus_manager->GetNextFocusableView(focused_view, nullptr, false, false);
-  focus_manager->SetFocusedView(next_view);
-}
 
 class TestLocationBarObserver : public LocationBar::Observer {
  public:
@@ -102,7 +105,9 @@ class TestLocationBarObserver : public LocationBar::Observer {
 
 class LocationBarViewBrowserTest : public InProcessBrowserTest {
  protected:
-  LocationBarViewBrowserTest() = default;
+  LocationBarViewBrowserTest() {
+    scoped_feature_list_.InitAndDisableFeature(features::kWebUILocationBar);
+  }
 
   LocationBarViewBrowserTest(const LocationBarViewBrowserTest&) = delete;
   LocationBarViewBrowserTest& operator=(const LocationBarViewBrowserTest&) =
@@ -121,69 +126,79 @@ class LocationBarViewBrowserTest : public InProcessBrowserTest {
     return browser_view->GetLocationBarView();
   }
 
-  views::View* GetZoomView() {
-    auto* toolbar_button_provider =
-        BrowserView::GetBrowserViewForBrowser(browser())
-            ->toolbar_button_provider();
-    return page_actions::GetIconLabelBubbleViewForTesting(
-        toolbar_button_provider->GetPageActionViewInterface(kActionZoomNormal),
-        kActionZoomNormal);
+  page_actions::PageActionTestAccessor GetZoomAccessor() {
+    return page_actions::PageActionTestAccessor(browser(),
+                                                kActionShowZoomBubble);
   }
 
   ContentSettingImageView& GetContentSettingImageView(
       ContentSettingImageModel::ImageType image_type) {
     LocationBarView* location_bar_view =
         BrowserView::GetBrowserViewForBrowser(browser())->GetLocationBarView();
+    CHECK(location_bar_view);
     return **std::ranges::find(
         location_bar_view->GetContentSettingViewsForTest(), image_type,
         &ContentSettingImageView::GetType);
   }
 
+  bool IsContentSettingImageVisible(
+      ContentSettingImageModel::ImageType image_type) {
+    auto* location_bar =
+        BrowserWindow::FromBrowser(browser())->GetLocationBar();
+    CHECK(location_bar);
+    auto* testing = location_bar->GetLocationBarForTesting();
+    CHECK(testing);
+    return testing->IsContentSettingImageVisible(
+        ContentSettingImageModel::GetContentSettingImageModelIndexForTesting(
+            image_type));
+  }
+
   raw_ptr<ZoomBubbleCoordinator> zoom_bubble_coordinator_;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Ensure the location bar decoration is added when zooming, and is removed when
 // the bubble is closed, but only if zoom was reset.
 IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest, LocationBarDecoration) {
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   zoom::ZoomController* zoom_controller =
       zoom::ZoomController::FromWebContents(web_contents);
-  auto* zoom_view = GetZoomView();
 
-  ASSERT_TRUE(zoom_view);
-  EXPECT_FALSE(zoom_view->GetVisible());
+  EXPECT_FALSE(GetZoomAccessor().GetVisible());
   EXPECT_FALSE(zoom_bubble_coordinator_->bubble());
 
   // Altering zoom should display a bubble. Note ZoomBubbleView closes
   // asynchronously, so precede checks with a run loop flush.
   zoom_controller->SetZoomLevel(blink::ZoomFactorToZoomLevel(1.5));
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(zoom_view->GetVisible());
+  EXPECT_TRUE(GetZoomAccessor().GetVisible());
   EXPECT_TRUE(zoom_bubble_coordinator_->bubble());
 
   // Close the bubble at other than 100% zoom. Icon should remain visible.
   zoom_bubble_coordinator_->Hide();
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(zoom_view->GetVisible());
+  EXPECT_TRUE(GetZoomAccessor().GetVisible());
   EXPECT_FALSE(zoom_bubble_coordinator_->bubble());
 
   // Show the bubble again.
   zoom_controller->SetZoomLevel(blink::ZoomFactorToZoomLevel(2.0));
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(zoom_view->GetVisible());
+  EXPECT_TRUE(GetZoomAccessor().GetVisible());
   EXPECT_TRUE(zoom_bubble_coordinator_->bubble());
 
   // Remains visible at 100% until the bubble is closed.
   zoom_controller->SetZoomLevel(blink::ZoomFactorToZoomLevel(1.0));
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(zoom_view->GetVisible());
+  EXPECT_TRUE(GetZoomAccessor().GetVisible());
   EXPECT_TRUE(zoom_bubble_coordinator_->bubble());
 
   // Closing at 100% hides the icon.
   zoom_bubble_coordinator_->Hide();
   base::RunLoop().RunUntilIdle();
-  EXPECT_FALSE(zoom_view->GetVisible());
+  EXPECT_FALSE(GetZoomAccessor().GetVisible());
   EXPECT_FALSE(zoom_bubble_coordinator_->bubble());
 }
 
@@ -211,7 +226,7 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest, MiddleClickPasteAndGo) {
 
   // Set up an observer to wait for the navigation.
   content::TestNavigationObserver observer(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
 
   // Simulate a middle-click on the location icon.
   ui::MouseEvent middle_click_event(ui::EventType::kMousePressed, gfx::Point(),
@@ -224,7 +239,7 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest, MiddleClickPasteAndGo) {
   observer.Wait();
 
   EXPECT_EQ(paste_url, browser()
-                           ->tab_strip_model()
+                           ->GetTabStripModel()
                            ->GetActiveWebContents()
                            ->GetLastCommittedURL());
 }
@@ -232,17 +247,15 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest, MiddleClickPasteAndGo) {
 // Ensure that location bar bubbles close when the webcontents hides.
 IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest, BubblesCloseOnHide) {
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   zoom::ZoomController* zoom_controller =
       zoom::ZoomController::FromWebContents(web_contents);
-  auto* zoom_view = GetZoomView();
 
-  ASSERT_TRUE(zoom_view);
-  EXPECT_FALSE(zoom_view->GetVisible());
+  EXPECT_FALSE(GetZoomAccessor().GetVisible());
 
   zoom_controller->SetZoomLevel(blink::ZoomFactorToZoomLevel(1.5));
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(zoom_view->GetVisible());
+  EXPECT_TRUE(GetZoomAccessor().GetVisible());
   EXPECT_TRUE(zoom_bubble_coordinator_->bubble());
 
   chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
@@ -267,21 +280,22 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest, ScriptBlockedIcon) {
   GURL url(std::string("data:text/html,") + kHtml);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
-  // Get the script blocked icon on the omnibox. It should be hidden.
-  ContentSettingImageView& script_blocked_icon = GetContentSettingImageView(
-      ContentSettingImageModel::ImageType::kJavaScript);
-  EXPECT_FALSE(script_blocked_icon.GetVisible());
+  // Check that the script blocked icon on the omnibox is hidden.
+  EXPECT_FALSE(IsContentSettingImageVisible(
+      ContentSettingImageModel::ImageType::kJavaScript));
 
   // Disable javascript.
-  HostContentSettingsMapFactory::GetForProfile(browser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile())
       ->SetDefaultContentSetting(ContentSettingsType::JAVASCRIPT,
                                  CONTENT_SETTING_BLOCK);
   // Reload the page
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
 
-  // Waits until the geolocation icon is visible, or aborts the tests otherwise.
+  // Waits until the script blocked icon is visible, or aborts the tests
+  // otherwise.
   ASSERT_TRUE(base::test::RunUntil([&]() {
-    return script_blocked_icon.GetVisible();
+    return IsContentSettingImageVisible(
+        ContentSettingImageModel::ImageType::kJavaScript);
   })) << "Timeout waiting for the script blocked icon to become visible.";
 }
 
@@ -365,21 +379,16 @@ IN_PROC_BROWSER_TEST_F(TouchLocationBarViewBrowserTest, AccessibleProperties) {
   EXPECT_EQ(data.role, ax::mojom::Role::kGroup);
 }
 
-class SecurityIndicatorTest : public InProcessBrowserTest {
+class SecurityIndicatorTest : public LocationBarViewBrowserTest {
  public:
-  void SetUpOnMainThread() override {
-    host_resolver()->AddRule("*", "127.0.0.1");
-  }
-
   SecurityIndicatorTest() = default;
 
   SecurityIndicatorTest(const SecurityIndicatorTest&) = delete;
   SecurityIndicatorTest& operator=(const SecurityIndicatorTest&) = delete;
 
-  LocationBarView* GetLocationBarView() {
-    BrowserView* browser_view =
-        BrowserView::GetBrowserViewForBrowser(browser());
-    return browser_view->GetLocationBarView();
+  void SetUpOnMainThread() override {
+    LocationBarViewBrowserTest::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
   }
 };
 
@@ -398,19 +407,19 @@ IN_PROC_BROWSER_TEST_F(SecurityIndicatorTest, CheckIndicatorText) {
       embedded_test_server()->GetURL("example.test", "/empty.html");
 
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
-  SecurityStateTabHelper* helper = SecurityStateTabHelper::FromWebContents(tab);
-  ASSERT_TRUE(helper);
   LocationBarView* location_bar_view = GetLocationBarView();
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), kMockSecureURL));
-  EXPECT_EQ(security_state::SECURE, helper->GetSecurityLevel());
+  EXPECT_EQ(security_state::SECURE,
+            chrome_security_state::GetSecurityLevel(tab));
   EXPECT_FALSE(location_bar_view->location_icon_view()->ShouldShowLabel());
   EXPECT_TRUE(location_bar_view->location_icon_view()->GetText().empty());
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), kMockNonsecureURL));
-  EXPECT_EQ(security_state::WARNING, helper->GetSecurityLevel());
+  EXPECT_EQ(security_state::WARNING,
+            chrome_security_state::GetSecurityLevel(tab));
   EXPECT_TRUE(location_bar_view->location_icon_view()->ShouldShowLabel());
   EXPECT_TRUE(base::EqualsCaseInsensitiveASCII(
       location_bar_view->location_icon_view()->GetText(), "not secure"));
@@ -430,12 +439,13 @@ class LocationBarViewGeolocationBackForwardCacheBrowserTest
   }
 
   void SetUpOnMainThread() override {
+    LocationBarViewBrowserTest::SetUpOnMainThread();
     // Replace any hostname to 127.0.0.1. (e.g. b.com -> 127.0.0.1)
     host_resolver()->AddRule("*", "127.0.0.1");
   }
 
   content::WebContents* web_contents() const {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
  private:
@@ -463,12 +473,9 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewGeolocationBackForwardCacheBrowserTest,
   EXPECT_TRUE(content::NavigateToURL(web_contents(), url_a));
   EXPECT_TRUE(content::WaitForLoadStop(web_contents()));
 
-  // Get the geolocation icon on the omnibox.
-  ContentSettingImageView& geolocation_icon = GetContentSettingImageView(
-      ContentSettingImageModel::ImageType::kGeolocation);
-
   // Geolocation icon should be off in the beginning.
-  EXPECT_FALSE(geolocation_icon.GetVisible());
+  EXPECT_FALSE(IsContentSettingImageVisible(
+      ContentSettingImageModel::ImageType::kGeolocation));
 
   // Query current position, and wait for the query to complete.
   content::RenderFrameHost* rfh_a = web_contents()->GetPrimaryMainFrame();
@@ -479,7 +486,8 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewGeolocationBackForwardCacheBrowserTest,
   )"));
 
   // Geolocation icon should be on since geolocation API is used.
-  EXPECT_TRUE(geolocation_icon.GetVisible());
+  EXPECT_TRUE(IsContentSettingImageVisible(
+      ContentSettingImageModel::ImageType::kGeolocation));
 
   content::RenderFrameDeletedObserver deleted(rfh_a);
 
@@ -489,7 +497,8 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewGeolocationBackForwardCacheBrowserTest,
   content::RenderFrameHost* rfh_b = web_contents()->GetPrimaryMainFrame();
 
   // Geolocation icon should be off after navigation.
-  EXPECT_FALSE(geolocation_icon.GetVisible());
+  EXPECT_FALSE(IsContentSettingImageVisible(
+      ContentSettingImageModel::ImageType::kGeolocation));
 
   // The previous page should be bfcached.
   EXPECT_FALSE(deleted.deleted());
@@ -505,7 +514,8 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewGeolocationBackForwardCacheBrowserTest,
             content::RenderFrameHost::LifecycleState::kInBackForwardCache);
 
   // Geolocation icon should be on again.
-  EXPECT_TRUE(geolocation_icon.GetVisible());
+  EXPECT_TRUE(IsContentSettingImageVisible(
+      ContentSettingImageModel::ImageType::kGeolocation));
 
   // 4) Navigate forward to B. |RenderFrameHost| have to be restored from
   // BackForwardCache and be the primary main frame.
@@ -514,101 +524,22 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewGeolocationBackForwardCacheBrowserTest,
   EXPECT_TRUE(rfh_b->IsInPrimaryMainFrame());
 
   // Geolocation icon should be off.
-  EXPECT_FALSE(geolocation_icon.GetVisible());
-}
-
-class LocationBarViewPageActionsMigrationTest
-    : public LocationBarViewBrowserTest {
- public:
-  LocationBarViewPageActionsMigrationTest() {
-    scoped_feature_list_.InitWithFeaturesAndParameters(
-        {{::features::kPageActionsMigration,
-          {{::features::kPageActionsMigrationBookmarkStar.name, "false"}}},
-         {lens::features::kLensOverlayOmniboxEntryPoint, {}}},
-        {});
-  }
-  ~LocationBarViewPageActionsMigrationTest() override = default;
-
-  LocationBarViewPageActionsMigrationTest(
-      const LocationBarViewPageActionsMigrationTest&) = delete;
-  LocationBarViewPageActionsMigrationTest& operator=(
-      const LocationBarViewPageActionsMigrationTest&) = delete;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-// This test fails on both X11 and Wayland on Linux. The root cause for X11
-// might be different from Wayland (where programmatically changing window
-// activation is not supported).
-// TODO(crbug.com/376285664): Remove this test altogether once the migration
-// is complete.
-#if BUILDFLAG(IS_LINUX)
-#define MAYBE_LocationBarFocusOrder DISABLED_LocationBarFocusOrder
-#else
-#define MAYBE_LocationBarFocusOrder LocationBarFocusOrder
-#endif
-
-// Tests that shifting focus from the omnibox will focus the migrated page
-// actions first, followed by the legacy page actions.
-IN_PROC_BROWSER_TEST_F(LocationBarViewPageActionsMigrationTest,
-                       MAYBE_LocationBarFocusOrder) {
-#if BUILDFLAG(IS_OZONE)
-  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
-    GTEST_SKIP() << "Wayland doesn't support changing window activation "
-                    "programmatically";
-  }
-#endif
-  actions::ActionItem* const lens_action =
-      actions::ActionManager::Get().FindAction(
-          kActionSidePanelShowLensOverlayResults);
-  ASSERT_NE(lens_action, nullptr);
-  lens_action->SetVisible(true);
-  lens_action->SetEnabled(true);
-  browser()
-      ->GetActiveTabInterface()
-      ->GetTabFeatures()
-      ->page_action_controller()
-      ->Show(kActionSidePanelShowLensOverlayResults);
-
-  views::View* const lens_overlay_page_action_view =
-      GetLocationBarView()->page_action_container()->GetPageActionView(
-          kActionSidePanelShowLensOverlayResults);
-  views::View* const bookmark_page_action_view =
-      GetLocationBarView()->page_action_icon_controller()->GetIconView(
-          PageActionIconType::kBookmarkStar);
-  ASSERT_TRUE(bookmark_page_action_view->GetVisible());
-
-  views::FocusManager* const focus_manager =
-      GetLocationBarView()->GetFocusManager();
-
-  GetLocationBarView()->FocusLocation(/*is_user_initiated=*/true,
-                                      /*clear_focus_if_failed=*/false);
-  OmniboxViewViews* const omnibox = GetLocationBarView()->omnibox_view();
-  ASSERT_EQ(focus_manager->GetFocusedView(), omnibox);
-
-  FocusNextView(focus_manager);
-  EXPECT_EQ(focus_manager->GetFocusedView(), lens_overlay_page_action_view);
-
-  FocusNextView(focus_manager);
-  EXPECT_EQ(focus_manager->GetFocusedView(), bookmark_page_action_view);
+  EXPECT_FALSE(IsContentSettingImageVisible(
+      ContentSettingImageModel::ImageType::kGeolocation));
 }
 
 class LocationBarViewPageActionHideWhileEditingTests
-    : public InProcessBrowserTest {
+    : public LocationBarViewBrowserTest {
  public:
-  LocationBarViewPageActionHideWhileEditingTests() {
-    scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        ::features::kPageActionsMigration,
-        {
-            {features::kPageActionsMigrationZoom.name, "true"},
-        });
-  }
+  LocationBarViewPageActionHideWhileEditingTests() = default;
 
   void SetUpOnMainThread() override {
+    LocationBarViewBrowserTest::SetUpOnMainThread();
+
     // 1. Ensure the Zoom action is globally visible/enabled.
-    auto* zoom_action =
-        actions::ActionManager::Get().FindAction(kActionZoomNormal);
+    auto* zoom_action = actions::ActionManager::Get().FindAction(
+        kActionShowZoomBubble,
+        BrowserActions::From(browser())->root_action_item());
     ASSERT_TRUE(zoom_action);
     zoom_action->SetVisible(true);
     zoom_action->SetEnabled(true);
@@ -619,10 +550,10 @@ class LocationBarViewPageActionHideWhileEditingTests
     page_actions::PageActionController* controller =
         tab_features->page_action_controller();
     ASSERT_TRUE(controller);
-    controller->Show(kActionZoomNormal);
+    controller->Show(kActionShowZoomBubble);
 
     // 3. Make the Zoom icon visible by actually adjusting page zoom from 100%.
-    auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+    auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
     auto* zoom_controller = zoom::ZoomController::FromWebContents(web_contents);
     ASSERT_TRUE(zoom_controller);
     zoom_controller->SetZoomLevel(
@@ -632,12 +563,7 @@ class LocationBarViewPageActionHideWhileEditingTests
  protected:
   page_actions::PageActionView* GetZoomPageActionView() {
     return GetLocationBarView()->page_action_container()->GetPageActionView(
-        kActionZoomNormal);
-  }
-
-  LocationBarView* GetLocationBarView() {
-    return BrowserView::GetBrowserViewForBrowser(browser())
-        ->GetLocationBarView();
+        kActionShowZoomBubble);
   }
 
   OmniboxView* GetOmniboxView() {
@@ -645,8 +571,6 @@ class LocationBarViewPageActionHideWhileEditingTests
   }
 
   void EnsureLayout() { views::test::RunScheduledLayout(GetLocationBarView()); }
-
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(LocationBarViewPageActionHideWhileEditingTests,
@@ -691,11 +615,60 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewPageActionHideWhileEditingTests,
   EXPECT_TRUE(zoom_view->GetVisible());
 }
 
+class LocationBarViewFullWebUIPopupAppearanceTest
+    : public LocationBarViewPageActionHideWhileEditingTests {
+ private:
+  base::test::ScopedFeatureList feature_list_{
+      omnibox::internal::kWebUIOmniboxFullPopup};
+};
+
+// Under `kFull`, the native location bar keeps its focused look (focus ring,
+// unindented location icon with background, visible page actions) underneath
+// the full WebUI popup, while `kAim` uses the popup-open look.
+IN_PROC_BROWSER_TEST_F(LocationBarViewFullWebUIPopupAppearanceTest,
+                       KeepsFocusedLookUnderFullPopupAndNotAimPopup) {
+  LocationBarView* location_bar = GetLocationBarView();
+  auto* focus_ring = views::FocusRing::Get(location_bar);
+  ASSERT_TRUE(focus_ring);
+  page_actions::PageActionView* zoom_view = GetZoomPageActionView();
+  ASSERT_TRUE(zoom_view);
+
+  // Set focus directly on the edit model rather than via `SetFocus()`, which
+  // relies on `RequestFocus()` before the WebUI popup finishes loading and
+  // no-ops on inactive windows when `browser_tests` runs in parallel.
+  location_bar->GetOmniboxController()->edit_model()->OnSetFocus(
+      /*control_down=*/false);
+  EnsureLayout();
+  const int focused_icon_x = location_bar->location_icon_view()->bounds().x();
+  EXPECT_TRUE(focus_ring->ShouldPaintForTesting());
+  EXPECT_NE(location_bar->location_icon_view()->GetBackground()->color(),
+            SK_ColorTRANSPARENT);
+  EXPECT_TRUE(zoom_view->GetVisible());
+
+  auto* state_manager =
+      location_bar->GetOmniboxController()->popup_state_manager();
+  state_manager->SetPopupState(OmniboxPopupState::kFull);
+  EnsureLayout();
+  EXPECT_TRUE(focus_ring->ShouldPaintForTesting());
+  EXPECT_EQ(location_bar->location_icon_view()->bounds().x(), focused_icon_x);
+  EXPECT_NE(location_bar->location_icon_view()->GetBackground()->color(),
+            SK_ColorTRANSPARENT);
+  EXPECT_TRUE(zoom_view->GetVisible());
+
+  state_manager->SetPopupState(OmniboxPopupState::kAim);
+  EnsureLayout();
+  EXPECT_FALSE(focus_ring->ShouldPaintForTesting());
+  EXPECT_GT(location_bar->location_icon_view()->bounds().x(), focused_icon_x);
+  EXPECT_EQ(location_bar->location_icon_view()->GetBackground()->color(),
+            SK_ColorTRANSPARENT);
+  EXPECT_FALSE(zoom_view->GetVisible());
+}
+
 class LocationBarViewAddContextButtonBrowserTest
     : public LocationBarViewBrowserTest {
  public:
   LocationBarViewAddContextButtonBrowserTest() {
-    scoped_feature_list_.InitWithFeaturesAndParameters(
+    feature_list_.InitWithFeaturesAndParameters(
         /*enabled_features=*/
         {{omnibox::internal::kWebUIOmniboxAimPopup,
           {{omnibox::kShowToolsAndModels.name, "true"}}},
@@ -712,7 +685,7 @@ class LocationBarViewAddContextButtonBrowserTest
   ~LocationBarViewAddContextButtonBrowserTest() override = default;
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
+  base::test::ScopedFeatureList feature_list_;
 };
 
 // TODO(crbug.com/459561205): This test is flaky on Linux.
@@ -777,7 +750,7 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewAddContextButtonBrowserTest,
                        MAYBE_PrefChangesAddContextButtonVisibility) {
   LocationBarView* location_bar_view = GetLocationBarView();
   OmniboxViewViews* omnibox_view = location_bar_view->omnibox_view();
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
 
   // pref is initially true to show the button.
   prefs->SetBoolean(omnibox::kShowAiModeOmniboxButton, true);
@@ -802,39 +775,140 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewAddContextButtonBrowserTest,
       [&]() { return location_bar_view->ShouldShowAddContextButton(); }));
 }
 
-IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest, OmniboxActionsRegistered) {
-  LocationBarView* location_bar_view = GetLocationBarView();
-  ASSERT_TRUE(location_bar_view);
-
-  auto* action_manager = &actions::ActionManager::Get();
-  ASSERT_TRUE(action_manager);
-
-  struct ExpectedAction {
-    actions::ActionId action_id;
-    int string_id;
-  };
-
-  std::vector<ExpectedAction> expected_actions = {
-      {kActionOmniboxContextAddImage, IDS_NTP_COMPOSE_ADD_IMAGE},
-      {kActionOmniboxContextAddFile, IDS_NTP_COMPOSE_ADD_FILE},
-      {kActionOmniboxContextCreateImages, IDS_NTP_COMPOSE_CREATE_IMAGES},
-      {kActionOmniboxContextDeepResearch, IDS_NTP_COMPOSE_DEEP_SEARCH},
-      {kActionOmniboxContextCanvas, IDS_NTP_COMPOSE_CANVAS},
-      {kActionOmniboxContextSetModelAuto, IDS_NTP_COMPOSE_AUTO_MODEL},
-      {kActionOmniboxContextSetModelThinking, IDS_NTP_COMPOSE_THINKING_3_PRO},
-  };
-
-  for (const auto& expected : expected_actions) {
-    auto* action = action_manager->FindAction(expected.action_id);
-    ASSERT_TRUE(action) << "Action not found: " << expected.action_id;
-    EXPECT_EQ(action->GetText(), l10n_util::GetStringUTF16(expected.string_id));
-    EXPECT_FALSE(action->GetImage().IsEmpty());
+// Tests that unsafe schemes are not allowed to be opened from middle clicks.
+IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest,
+                       MiddleClickPasteAndGoBlocksUnsafeSchemes) {
+  if (!ui::Clipboard::IsMiddleClickPasteEnabled() ||
+      !ui::Clipboard::IsSupportedClipboardBuffer(
+          ui::ClipboardBuffer::kSelection)) {
+    return;
   }
 
-  // kActionOmniboxContextSetModelRegular has no text (only icon).
-  auto* regular_model_action =
-      action_manager->FindAction(kActionOmniboxContextSetModelRegular);
-  ASSERT_TRUE(regular_model_action);
-  EXPECT_TRUE(regular_model_action->GetText().empty());
-  EXPECT_FALSE(regular_model_action->GetImage().IsEmpty());
+  ASSERT_TRUE(embedded_test_server()->Start());
+  GURL start_url = embedded_test_server()->GetURL("/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), start_url));
+
+  LocationBarView* location_bar_view = GetLocationBarView();
+  LocationIconView* location_icon_view =
+      location_bar_view->location_icon_view();
+
+  // Try file:// URL. Note: ui::Clipboard::ReadText is asynchronous on Linux, so
+  // we must pump the runloop to allow the callback to run and be rejected.
+  {
+    ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kSelection);
+    writer.WriteText(u"file:///etc/passwd");
+  }
+
+  ui::MouseEvent middle_click_event(ui::EventType::kMousePressed, gfx::Point(),
+                                    gfx::Point(), base::TimeTicks::Now(),
+                                    ui::EF_MIDDLE_MOUSE_BUTTON,
+                                    ui::EF_MIDDLE_MOUSE_BUTTON);
+  location_icon_view->OnMousePressed(middle_click_event);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(start_url, browser()
+                           ->GetTabStripModel()
+                           ->GetActiveWebContents()
+                           ->GetLastCommittedURL());
+
+  // Try chrome:// URL.
+  {
+    ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kSelection);
+    writer.WriteText(u"chrome://version");
+  }
+
+  location_icon_view->OnMousePressed(middle_click_event);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(start_url, browser()
+                           ->GetTabStripModel()
+                           ->GetActiveWebContents()
+                           ->GetLastCommittedURL());
+}
+
+class LocationBarViewElevatedToolbarBrowserTest
+    : public LocationBarViewBrowserTest {
+ public:
+  LocationBarViewElevatedToolbarBrowserTest() {
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kPageActionsElevatedToolbar);
+  }
+
+  ~LocationBarViewElevatedToolbarBrowserTest() override = default;
+
+ protected:
+  LocationBarView* GetLocationBarView() {
+    return BrowserView::GetBrowserViewForBrowser(browser())
+        ->GetLocationBarView();
+  }
+
+  void EnsureLayout() { views::test::RunScheduledLayout(GetLocationBarView()); }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(LocationBarViewElevatedToolbarBrowserTest,
+                       LayoutWithElevatedToolbarActiveAndInactive) {
+  LocationBarView* location_bar = GetLocationBarView();
+  ASSERT_TRUE(location_bar);
+
+  auto* tab_features = browser()->GetActiveTabInterface()->GetTabFeatures();
+  ASSERT_TRUE(tab_features);
+  auto* controller = tab_features->page_action_controller();
+  ASSERT_TRUE(controller);
+  auto* const root_action_item =
+      BrowserActions::From(browser())->root_action_item();
+
+  // Hide any default actions to test clean transitions.
+  for (views::View* child : location_bar->page_action_container()->children()) {
+    if (auto* page_action_view =
+            views::AsViewClass<page_actions::PageActionView>(child)) {
+      controller->Hide(page_action_view->GetActionId());
+    }
+  }
+  EnsureLayout();
+
+  // Layout when no page actions are visible.
+  EXPECT_FALSE(location_bar->page_action_container()->IsCapsuleActive());
+  EnsureLayout();
+
+  // Make Zoom page action visible (capsule inactive, not a chip).
+  auto* zoom_action = actions::ActionManager::Get().FindAction(
+      kActionShowZoomBubble, root_action_item);
+  ASSERT_TRUE(zoom_action);
+  zoom_action->SetVisible(true);
+  zoom_action->SetEnabled(true);
+  controller->Show(kActionShowZoomBubble);
+
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* zoom_controller = zoom::ZoomController::FromWebContents(web_contents);
+  ASSERT_TRUE(zoom_controller);
+  zoom_controller->SetZoomLevel(
+      blink::ZoomFactorToZoomLevel(/*zoom_factor=*/1.5));
+
+  EnsureLayout();
+  EXPECT_TRUE(location_bar->page_action_container()->GetVisible());
+  EXPECT_FALSE(location_bar->page_action_container()->IsCapsuleActive());
+  EXPECT_FALSE(location_bar->page_action_container()->IsFirstVisibleViewChip());
+
+  // Make a second action visible (capsule active).
+  auto* cookie_action = actions::ActionManager::Get().FindAction(
+      kActionShowCookieControls, root_action_item);
+  if (cookie_action) {
+    cookie_action->SetVisible(true);
+    cookie_action->SetEnabled(true);
+    controller->Show(kActionShowCookieControls);
+    EnsureLayout();
+    EXPECT_TRUE(location_bar->page_action_container()->IsCapsuleActive());
+  }
+
+  // Test suggestion chip branch when capsule is inactive.
+  if (cookie_action) {
+    controller->Hide(kActionShowCookieControls);
+  }
+  controller->ShowSuggestionChip(kActionShowZoomBubble);
+  EnsureLayout();
+  EXPECT_TRUE(location_bar->page_action_container()->IsFirstVisibleViewChip());
+  EXPECT_FALSE(location_bar->page_action_container()->IsCapsuleActive());
 }

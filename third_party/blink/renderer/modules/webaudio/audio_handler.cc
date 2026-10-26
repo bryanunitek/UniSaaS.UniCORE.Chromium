@@ -4,8 +4,6 @@
 
 #include "third_party/blink/renderer/modules/webaudio/audio_handler.h"
 
-#include <inttypes.h>
-
 #include "base/trace_event/trace_event.h"
 #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_input.h"
@@ -14,12 +12,12 @@
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/instance_counters.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 #if DEBUG_AUDIONODE_REFERENCES
 #include <stdio.h>
 #endif
-
-#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
 
@@ -41,7 +39,7 @@ AudioHandler::AudioHandler(NodeType node_type,
 #endif
   InstanceCounters::IncrementCounter(InstanceCounters::kAudioHandlerCounter);
 
-  SendLogMessage(__func__, String::Format("({sample_rate=%0.f})", sample_rate));
+  SendLogMessage(__func__, Format("({{sample_rate={:.0f}}})", sample_rate));
 #if DEBUG_AUDIONODE_REFERENCES
   fprintf(
       stderr,
@@ -88,6 +86,7 @@ void AudioHandler::Dispose() {
   deferred_task_handler_->RemoveChangedChannelCountMode(this);
   deferred_task_handler_->RemoveChangedChannelInterpretation(this);
   deferred_task_handler_->RemoveAutomaticPullNode(this);
+  deferred_task_handler_->RemoveTailProcessingHandler(this, false);
   for (auto& output : outputs_) {
     output->Dispose();
   }
@@ -348,9 +347,8 @@ void AudioHandler::ProcessIfNecessary(uint32_t frames_to_process) {
     }
 
     if (!is_processing_) {
-      SendLogMessage(__func__,
-                     String::Format("=> (processing is alive [frames=%u])",
-                                    frames_to_process));
+      SendLogMessage(__func__, Format("=> (processing is alive [frames={}])",
+                                      frames_to_process));
       is_processing_ = true;
     }
   }
@@ -617,12 +615,9 @@ void AudioHandler::UpdateChannelInterpretation() {
 
 void AudioHandler::SendLogMessage(const String& function_name,
                                   const String& message) {
-  WebRtcLogMessage(
-      StrCat({"[WA]AH::", function_name, " ", message,
-              " [type=", NodeTypeName(), ", this=0x",
-              String::Format("%" PRIXPTR, reinterpret_cast<uintptr_t>(this)),
-              "]"})
-          .Utf8());
+  WebRtcLogMessage(StrCat({"[WA]AH::", function_name, " ", message,
+                           " [type=", NodeTypeName(), "]"})
+                       .Utf8());
 }
 
 }  // namespace blink

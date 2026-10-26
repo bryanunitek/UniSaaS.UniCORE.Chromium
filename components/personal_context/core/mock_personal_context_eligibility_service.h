@@ -5,7 +5,10 @@
 #ifndef COMPONENTS_PERSONAL_CONTEXT_CORE_MOCK_PERSONAL_CONTEXT_ELIGIBILITY_SERVICE_H_
 #define COMPONENTS_PERSONAL_CONTEXT_CORE_MOCK_PERSONAL_CONTEXT_ELIGIBILITY_SERVICE_H_
 
+#include <optional>
+
 #include "components/personal_context/core/personal_context_eligibility_service.h"
+#include "components/personal_context/core/personal_context_types.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace personal_context {
@@ -18,10 +21,16 @@ class MockPersonalContextEligibilityService
 
   MOCK_METHOD(void, AddObserver, (Observer * observer), (override));
   MOCK_METHOD(void, RemoveObserver, (Observer * observer), (override));
+  MOCK_METHOD(bool, IsInitialized, (), (const, override));
   MOCK_METHOD(PersonalContextEligibilityState,
               GetEligibilityState,
               (),
               (override));
+  MOCK_METHOD(bool, IsEligibleForEncryption, (), (const, override));
+  MOCK_METHOD(std::optional<PersonalContextNonEligibilityReason>,
+              GetNonEligibilityReason,
+              (),
+              (const, override));
 };
 
 }  // namespace personal_context

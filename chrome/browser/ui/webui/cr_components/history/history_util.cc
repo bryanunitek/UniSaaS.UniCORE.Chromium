@@ -10,12 +10,14 @@
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/webui/cr_components/history_clusters/history_clusters_util.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
+#include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/history_resources.h"
 #include "chrome/grit/history_resources_map.h"
 #include "chrome/grit/locale_settings.h"
 #include "components/browsing_data/core/features.h"
+#include "components/critical_actions/core/browser/features.h"
 #include "components/favicon_base/favicon_url_parser.h"
 #include "components/history/core/browser/features.h"
 #include "components/history/core/common/pref_names.h"
@@ -48,9 +50,14 @@ content::WebUIDataSource* HistoryUtil::PopulateCommonSourceForHistory(
       {"deleteConfirm", IDS_HISTORY_DELETE_PRIOR_VISITS_CONFIRM_BUTTON},
       {"deleteSession", IDS_HISTORY_OTHER_SESSIONS_HIDE_FOR_NOW},
       {"deleteWarning", IDS_HISTORY_DELETE_PRIOR_VISITS_WARNING},
+      {"deviceFilterAllDevices", IDS_HISTORY_DEVICE_FILTER_ALL_DEVICES},
       {"entrySummary", IDS_HISTORY_ENTRY_SUMMARY},
       {"expandSessionButton", IDS_HISTORY_OTHER_SESSIONS_EXPAND_SESSION},
       {"foundSearchResults", IDS_HISTORY_FOUND_SEARCH_RESULTS},
+      {"goToGeminiChat", IDS_HISTORY_GO_TO_GEMINI_CHAT},
+      {"goToGeminiChatError", IDS_HISTORY_GO_TO_GEMINI_CHAT_ERROR},
+      {"historyClustersTabLabel", IDS_HISTORY_CLUSTERS_BY_GROUP_TAB_LABEL},
+      {"historyListTabLabel", IDS_HISTORY_CLUSTERS_BY_DATE_TAB_LABEL},
       {"historyMenuButton", IDS_HISTORY_HISTORY_MENU_DESCRIPTION},
       {"historyMenuItem", IDS_HISTORY_HISTORY_MENU_ITEM},
       {"itemsSelected", IDS_HISTORY_ITEMS_SELECTED},
@@ -66,18 +73,34 @@ content::WebUIDataSource* HistoryUtil::PopulateCommonSourceForHistory(
       {"removeBookmark", IDS_HISTORY_REMOVE_BOOKMARK},
       {"removeFromHistory", IDS_HISTORY_REMOVE_PAGE},
       {"removeSelected", IDS_HISTORY_REMOVE_SELECTED_ITEMS},
+      {"resetFilters", IDS_HISTORY_RESET_FILTERS},
+      {"reviewGeminiActivity", IDS_HISTORY_REVIEW_GEMINI_ACTIVITY},
+      {"geminiKeyBrowsingActionsTitle",
+       IDS_HISTORY_GEMINI_KEY_BROWSING_ACTIONS_TITLE},
+      {"criticalActionLinkoutA11yLabel",
+       IDS_HISTORY_CRITICAL_ACTION_LINKOUT_A11Y_LABEL},
       {"searchPrompt", IDS_HISTORY_SEARCH_PROMPT},
       {"searchResult", IDS_HISTORY_SEARCH_RESULT},
       {"searchResults", IDS_HISTORY_SEARCH_RESULTS},
       {"searchResultExactMatch", IDS_HISTORY_SEARCH_EXACT_MATCH_RESULT},
       {"searchResultExactMatches", IDS_HISTORY_SEARCH_EXACT_MATCH_RESULTS},
+      {"sourceFilterAllActors", IDS_HISTORY_ACTOR_FILTER_ALL_ACTORS},
       {"sourceFilterChipsAriaLabel",
        IDS_HISTORY_SOURCE_FILTER_CHIPS_ARIA_LABEL},
-      {"sourceFilterChipActor", IDS_HISTORY_SOURCE_FILTER_CHIP_ACTOR},
       {"sourceFilterChipUser", IDS_HISTORY_SOURCE_FILTER_CHIP_USER},
       {"title", IDS_HISTORY_TITLE},
   };
   source->AddLocalizedStrings(kStrings);
+
+  source->AddLocalizedString(
+      "sourceFilterChipActor",
+      base::FeatureList::IsEnabled(
+          critical_actions::features::kCriticalActionHistory)
+          ? IDS_HISTORY_SOURCE_FILTER_CHIP_ACTOR_GEMINI
+          : IDS_HISTORY_SOURCE_FILTER_CHIP_ACTOR);
+
+  source->AddString("myActivityGeminiAppsUrl",
+                    chrome::kMyActivityGeminiAppsUrl);
 
   PrefService* prefs = profile->GetPrefs();
   bool allow_deleting_history =
@@ -95,6 +118,10 @@ content::WebUIDataSource* HistoryUtil::PopulateCommonSourceForHistory(
   history_embeddings::PopulateSourceForWebUI(source, profile);
 
   static constexpr webui::LocalizedString kHistoryEmbeddingsStrings[] = {
+      {"historyEmbeddingsAnswersPromoBody",
+       IDS_HISTORY_EMBEDDINGS_ANSWERS_PROMO_BODY},
+      {"historyEmbeddingsAnswersPromoHeading",
+       IDS_HISTORY_EMBEDDINGS_ANSWERS_PROMO_HEADING},
       {"historyEmbeddingsAnswersSearchAlternativePrompt1",
        IDS_HISTORY_EMBEDDINGS_SEARCH_ANSWERS_ALTERNATIVE_PROMPT_1},
       {"historyEmbeddingsAnswersSearchAlternativePrompt2",
@@ -103,6 +130,12 @@ content::WebUIDataSource* HistoryUtil::PopulateCommonSourceForHistory(
        IDS_HISTORY_EMBEDDINGS_SEARCH_ANSWERS_ALTERNATIVE_PROMPT_3},
       {"historyEmbeddingsAnswersSearchAlternativePrompt4",
        IDS_HISTORY_EMBEDDINGS_SEARCH_ANSWERS_ALTERNATIVE_PROMPT_4},
+      {"historyEmbeddingsPromoBody", IDS_HISTORY_EMBEDDINGS_PROMO_BODY},
+      {"historyEmbeddingsPromoClose", IDS_HISTORY_EMBEDDINGS_PROMO_CLOSE},
+      {"historyEmbeddingsPromoHeading", IDS_HISTORY_EMBEDDINGS_PROMO_HEADING},
+      {"historyEmbeddingsPromoLabel", IDS_HISTORY_EMBEDDINGS_PROMO_LABEL},
+      {"historyEmbeddingsPromoSettingsLinkText",
+       IDS_HISTORY_EMBEDDIGNS_PROMO_SETTINGS_LINK_TEXT},
       {"historyEmbeddingsShowByLabel",
        IDS_HISTORY_EMBEDDINGS_SHOW_BY_ARIA_LABEL},
       {"historyEmbeddingsShowByDate", IDS_HISTORY_EMBEDDINGS_SHOW_BY_DATE},

@@ -20,17 +20,14 @@
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "base/timer/wall_clock_timer.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller_util.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "components/application_locale_storage/application_locale_storage.h"
 #include "components/google/core/common/google_util.h"
@@ -66,17 +63,6 @@ GraduationManagerImpl::~GraduationManagerImpl() {
 
 std::string GraduationManagerImpl::GetLanguageCode() const {
   return google_util::GetGoogleLocale(application_locale_storage_->Get());
-}
-
-signin::IdentityManager* GraduationManagerImpl::GetIdentityManager(
-    content::BrowserContext* context) {
-  CHECK(context) << "Graduation requested identity manager before user session "
-                    "start.";
-  signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(
-          Profile::FromBrowserContext(context));
-  CHECK(identity_manager);
-  return identity_manager;
 }
 
 content::StoragePartition* GraduationManagerImpl::GetStoragePartition(

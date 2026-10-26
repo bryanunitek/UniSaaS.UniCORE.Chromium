@@ -559,10 +559,11 @@ class ABSL_LOCKABLE ABSL_ATTRIBUTE_WARN_UNUSED Mutex {
                             const Condition* absl_nullable cond,
                             synchronization_internal::KernelTimeout t,
                             int flags);
-  void LockSlow(MuHow absl_nonnull how, const Condition* absl_nullable cond,
-                int flags) ABSL_ATTRIBUTE_COLD;
+  ABSL_ATTRIBUTE_COLD void LockSlow(MuHow absl_nonnull how,
+                                    const Condition* absl_nullable cond,
+                                    int flags);
   // slow path release
-  void UnlockSlow(SynchWaitParams* absl_nullable waitp) ABSL_ATTRIBUTE_COLD;
+  ABSL_ATTRIBUTE_COLD void UnlockSlow(SynchWaitParams* absl_nullable waitp);
   // TryLock slow path.
   bool TryLockSlow();
   // ReaderTryLock slow path.
@@ -621,7 +622,7 @@ class ABSL_SCOPED_LOCKABLE MutexLock {
 
   // Calls `mu.lock()` and returns when that call returns. That is, `mu` is
   // guaranteed to be locked when this object is constructed.
-  explicit MutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
+  explicit MutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
       ABSL_EXCLUSIVE_LOCK_FUNCTION(mu)
       : mu_(mu) {
     this->mu_.lock();
@@ -637,7 +638,7 @@ class ABSL_SCOPED_LOCKABLE MutexLock {
   // Like above, but calls `mu.LockWhen(cond)` instead. That is, in addition to
   // the above, the condition given by `cond` is also guaranteed to hold when
   // this object is constructed.
-  explicit MutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this),
+  explicit MutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS,
                      const Condition& cond) ABSL_EXCLUSIVE_LOCK_FUNCTION(mu)
       : mu_(mu) {
     this->mu_.LockWhen(cond);
@@ -666,7 +667,7 @@ class ABSL_SCOPED_LOCKABLE MutexLock {
 // releases a shared lock on a `Mutex` via RAII.
 class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
  public:
-  explicit ReaderMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
+  explicit ReaderMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
       ABSL_SHARED_LOCK_FUNCTION(mu)
       : mu_(mu) {
     mu.lock_shared();
@@ -676,7 +677,7 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
   explicit ReaderMutexLock(Mutex* absl_nonnull mu) ABSL_SHARED_LOCK_FUNCTION(mu)
       : ReaderMutexLock(*mu) {}
 
-  explicit ReaderMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this),
+  explicit ReaderMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS,
                            const Condition& cond) ABSL_SHARED_LOCK_FUNCTION(mu)
       : mu_(mu) {
     mu.ReaderLockWhen(cond);
@@ -705,7 +706,7 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
 // releases a write (exclusive) lock on a `Mutex` via RAII.
 class ABSL_SCOPED_LOCKABLE WriterMutexLock {
  public:
-  explicit WriterMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
+  explicit WriterMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
       ABSL_EXCLUSIVE_LOCK_FUNCTION(mu)
       : mu_(mu) {
     mu.lock();
@@ -716,7 +717,7 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
       ABSL_EXCLUSIVE_LOCK_FUNCTION(mu)
       : WriterMutexLock(*mu) {}
 
-  explicit WriterMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this),
+  explicit WriterMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS,
                            const Condition& cond)
       ABSL_EXCLUSIVE_LOCK_FUNCTION(mu)
       : mu_(mu) {
@@ -961,7 +962,7 @@ class Condition {
 
   // Helper methods for storing, validating, and reading callback arguments.
   template <typename T>
-  inline void StoreCallback(T callback) {
+  void StoreCallback(T callback) {
     static_assert(
         sizeof(callback) <= sizeof(callback_),
         "An overlarge pointer was passed as a callback to Condition.");
@@ -969,7 +970,7 @@ class Condition {
   }
 
   template <typename T>
-  inline void ReadCallback(T* absl_nonnull callback) const {
+  void ReadCallback(T* absl_nonnull callback) const {
     std::memcpy(callback, callback_, sizeof(*callback));
   }
 
@@ -1139,8 +1140,9 @@ class ABSL_SCOPED_LOCKABLE MutexLockMaybe {
 // mutex before destruction. `Release()` may be called at most once.
 class ABSL_SCOPED_LOCKABLE ReleasableMutexLock {
  public:
-  explicit ReleasableMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(
-      this)) ABSL_EXCLUSIVE_LOCK_FUNCTION(mu)
+  explicit ReleasableMutexLock(
+      Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
+      ABSL_EXCLUSIVE_LOCK_FUNCTION(mu)
       : mu_(&mu) {
     this->mu_->lock();
   }
@@ -1151,7 +1153,7 @@ class ABSL_SCOPED_LOCKABLE ReleasableMutexLock {
       : ReleasableMutexLock(*mu) {}
 
   explicit ReleasableMutexLock(
-      Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this),
+      Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS,
       const Condition& cond) ABSL_EXCLUSIVE_LOCK_FUNCTION(mu)
       : mu_(&mu) {
     this->mu_->LockWhen(cond);
@@ -1183,7 +1185,7 @@ inline Mutex::Mutex() : mu_(0) {
   ABSL_TSAN_MUTEX_CREATE(this, __tsan_mutex_not_static);
 }
 
-inline constexpr Mutex::Mutex(absl::ConstInitType) : mu_(0) {}
+constexpr Mutex::Mutex(absl::ConstInitType) : mu_(0) {}
 
 #if !defined(__APPLE__) && !defined(ABSL_BUILD_DLL)
 ABSL_ATTRIBUTE_ALWAYS_INLINE

@@ -12,7 +12,11 @@ if (is_ios) {
 
 buildflag_header("buildflags") {
   header = "crypto_buildflags.h"
-  flags = [ "USE_NSS_CERTS=$use_nss_certs" ]
+  flags = [
+    "USE_NSS_CLIENT_CERTS=$use_nss_client_certs",
+    "USE_NSS_SERVER_CERTS=$use_nss_server_certs",
+    "USE_NSS_CERTS=$use_nss_certs",
+  ]
 }
 
 import("//build/rust/rust_static_library.gni")
@@ -26,8 +30,6 @@ rust_static_library("tpm") {
 
   # Required for cxx bridge generated code.
   allow_unsafe = true
-
-  deps = [ "//base" ]
 }
 
 rust_static_library("tpm_unittests") {
@@ -50,8 +52,6 @@ component("crypto") {
     "aes_cbc.h",
     "aes_ctr.cc",
     "aes_ctr.h",
-    "cose.cc",
-    "cose.h",
     "crypto_export.h",
     "ecdsa_utils.cc",
     "ecdsa_utils.h",
@@ -59,8 +59,6 @@ component("crypto") {
     "encrypt.h",
     "evp.cc",
     "evp.h",
-    "features.cc",
-    "features.h",
     "hash.cc",
     "hash.h",
     "hmac.cc",
@@ -69,6 +67,8 @@ component("crypto") {
     "hpke.h",
     "kdf.cc",
     "kdf.h",
+    "kem.cc",
+    "kem.h",
     "kex.cc",
     "kex.h",
     "keypair.cc",
@@ -94,8 +94,6 @@ component("crypto") {
     "sha2.h",
     "sign.cc",
     "sign.h",
-    "signature_verifier.cc",
-    "signature_verifier.h",
     "subtle_passkey.cc",
     "subtle_passkey.h",
     "tpm_parser.cc",
@@ -109,10 +107,7 @@ component("crypto") {
     "user_verifying_key.h",
   ]
 
-  deps = [
-    ":tpm",
-    "//components/cbor",
-  ]
+  deps = [ ":tpm" ]
 
   public_deps = [
     ":buildflags",
@@ -197,7 +192,6 @@ component("crypto") {
   }
 
   defines = [ "CRYPTO_IMPLEMENTATION" ]
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
 if (is_apple) {
@@ -227,6 +221,19 @@ if (is_apple) {
   }
 }
 
+source_set("cose") {
+  sources = [
+    "cose.cc",
+    "cose.h",
+  ]
+  deps = [
+    ":crypto",
+    "//base",
+    "//components/cbor",
+    "//third_party/boringssl",
+  ]
+}
+
 test("crypto_unittests") {
   sources = [
     "aead_unittest.cc",
@@ -240,6 +247,7 @@ test("crypto_unittests") {
     "hmac_unittest.cc",
     "hpke_unittest.cc",
     "kdf_unittest.cc",
+    "kem_unittest.cc",
     "kex_unittest.cc",
     "keypair_unittest.cc",
     "obsolete/md5_unittest.cc",
@@ -250,13 +258,13 @@ test("crypto_unittests") {
     "secure_hash_unittest.cc",
     "sha2_unittest.cc",
     "sign_unittest.cc",
-    "signature_verifier_unittest.cc",
     "tpm_parser_unittest.cc",
     "unexportable_key_metrics_unittest.cc",
     "unexportable_key_unittest.cc",
   ]
 
   deps = [
+    ":cose",
     ":crypto",
     ":test_support",
     ":tpm",
@@ -308,8 +316,6 @@ test("crypto_unittests") {
   if (is_apple) {
     deps += [ ":mock_apple_keychain" ]
   }
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
 static_library("test_support") {
@@ -371,8 +377,6 @@ static_library("test_support") {
     "//base",
     "//testing/gmock",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
 bundle_data("unittests_bundle_data") {

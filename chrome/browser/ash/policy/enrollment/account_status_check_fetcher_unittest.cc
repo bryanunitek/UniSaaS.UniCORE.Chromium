@@ -18,6 +18,7 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/policy/core/common/cloud/mock_device_management_service.h"
 #include "content/public/test/browser_task_environment.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -45,8 +46,6 @@ class AccountStatusCheckFetcherUnitTest : public testing::TestWithParam<bool> {
   void SetUpAccountStatusCheckFetcher(const std::string& email) {
     service_ =
         std::make_unique<FakeDeviceManagementService>(&job_creation_handler_);
-    service_->ScheduleInitialization(0);
-    base::RunLoop().RunUntilIdle();
     shared_url_loader_factory_ =
         base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
             &url_loader_factory_);
@@ -56,14 +55,13 @@ class AccountStatusCheckFetcherUnitTest : public testing::TestWithParam<bool> {
 
   void SetReply(const em::DeviceManagementResponse& response) {
     EXPECT_CALL(job_creation_handler_, OnJobCreation)
-        .WillOnce(DoAll(service_->SendJobOKAsync(response)))
+        .WillOnce(service_->SendJobOKAsync(response))
         .RetiresOnSaturation();
   }
 
   void SetFailReply(int net_error, int response_code) {
     EXPECT_CALL(job_creation_handler_, OnJobCreation)
-        .WillOnce(
-            DoAll(service_->SendJobResponseAsync(net_error, response_code)))
+        .WillOnce(service_->SendJobResponseAsync(net_error, response_code))
         .RetiresOnSaturation();
   }
 

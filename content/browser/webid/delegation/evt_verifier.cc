@@ -6,11 +6,12 @@
 
 #include "base/base64url.h"
 #include "base/json/json_reader.h"
-#include "base/strings/string_util.h"
 #include "base/types/expected.h"
 #include "content/browser/webid/delegation/jwt_signer.h"
 #include "crypto/sha2.h"
 #include "crypto/sign.h"
+#include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace content::webid {
 
@@ -29,7 +30,12 @@ base::expected<void, Result> VerifyEVT(const sdjwt::SdJwt& sd_jwt,
     return base::unexpected(Result::kSdJwtInvalidTyp);
   }
 
-  if (header.alg != "EdDSA" && header.alg != "RS256" && header.alg != "ES256") {
+  // TODO(crbug.com/561405995): drop "EdDSA" once no deployed issuer sends it.
+  // RFC 9864 deprecated it in favour of the fully-specified "Ed25519", which
+  // the Email Verification Protocol requires; it is accepted here only so the
+  // browser keeps working with issuers that have not migrated yet.
+  if (header.alg != "Ed25519" && header.alg != "EdDSA" &&
+      header.alg != "RS256" && header.alg != "ES256") {
     return base::unexpected(Result::kSdJwtUnsupportedHeaderAlg);
   }
 
@@ -53,7 +59,10 @@ base::expected<void, Result> VerifyEVT(const sdjwt::SdJwt& sd_jwt,
     return base::unexpected(Result::kSdJwtInvalidIssuedAt);
   }
 
-  if (payload.iss != issuer.Serialize()) {
+  url::Origin iss_origin = url::Origin::Create(GURL(payload.iss));
+  if (iss_origin.opaque() || iss_origin.scheme() != url::kHttpsScheme ||
+      iss_origin.Serialize() != payload.iss ||
+      payload.iss != issuer.Serialize()) {
     return base::unexpected(Result::kSdJwtInvalidIssuer);
   }
 
@@ -95,7 +104,7 @@ base::expected<void, Result> VerifyEVT(const sdjwt::SdJwt& sd_jwt,
     return base::unexpected(Result::kSdJwtInvalidEmailVerified);
   }
 
-  if (!base::EqualsCaseInsensitiveASCII(payload.email, email)) {
+  if (payload.email != email) {
     return base::unexpected(Result::kSdJwtInvalidEmail);
   }
 

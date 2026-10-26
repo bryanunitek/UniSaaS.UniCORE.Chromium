@@ -14,6 +14,7 @@ pub(crate) const MAJOR_TYPE_SIMPLE_VALUE: u8 = 7;
 
 // CBOR Additional Information Values (RFC 8949 Section 3)
 // https://datatracker.ietf.org/doc/html/rfc8949#section-3
+pub(crate) const ADDL_INFO_DIRECT_MAX: u8 = 23;
 pub(crate) const ADDL_INFO_1_BYTE: u8 = 24;
 pub(crate) const ADDL_INFO_2_BYTES: u8 = 25;
 pub(crate) const ADDL_INFO_4_BYTES: u8 = 26;
@@ -26,7 +27,6 @@ pub(crate) const SIMPLE_VALUE_TRUE: u8 = 21;
 pub(crate) const SIMPLE_VALUE_NULL: u8 = 22;
 pub(crate) const SIMPLE_VALUE_UNDEFINED: u8 = 23;
 pub(crate) const SIMPLE_VALUE_FLOAT_16: u8 = 25;
-pub(crate) const SIMPLE_VALUE_FLOAT_32: u8 = 26;
 pub(crate) const SIMPLE_VALUE_FLOAT_64: u8 = 27;
 
 /// MAX_DEPTH is the maximum "depth" of a structure that will be parsed.

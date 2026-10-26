@@ -39,10 +39,6 @@ enum class TrustedVaultRecoveryFactorRegistrationStateForUMA {
   kRegistrationWithConstantKeyNotSupported = 7,
   kMaxValue = kRegistrationWithConstantKeyNotSupported,
 };
-// TODO(crbug.com/369980730): this is used in internals, replace usages with the
-// version above and delete this alias.
-using TrustedVaultDeviceRegistrationStateForUMA =
-    TrustedVaultRecoveryFactorRegistrationStateForUMA;
 // LINT.ThenChange(/tools/metrics/histograms/metadata/trusted_vault/enums.xml:TrustedVaultRecoveryFactorRegistrationState)
 
 // These values are persisted to logs. Entries should not be renumbered and
@@ -143,9 +139,35 @@ enum class TrustedVaultFileReadStatusForUMA {
   kFileProtoDeserializationFailed = 4,
   kDataProtoDeserializationFailed = 5,
   kSHA256DigestMismatch = 6,
-  kMaxValue = kSHA256DigestMismatch
+  kUnsupportedVersion = 7,
+  kDecryptionFailed = 8,
+  kMaxValue = kDecryptionFailed
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/trusted_vault/enums.xml:TrustedVaultFileReadStatus)
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(TrustedVaultFileWriteStatus)
+enum class TrustedVaultFileWriteStatusForUMA {
+  kSuccess = 0,
+  kEncryptionFailed = 1,
+  kFileWriteFailed = 2,
+  kMaxValue = kFileWriteFailed
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/trusted_vault/enums.xml:TrustedVaultFileWriteStatus)
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(TrustedVaultLocalDomainsMigrationStatus)
+enum class TrustedVaultLocalDomainsMigrationStatusForUMA {
+  kMigrated = 0,
+  kNoLegacyFile = 1,
+  kLegacyFileEmpty = 2,
+  kLegacyFileReadFailed = 3,
+  kNewFileWriteFailed = 4,
+  kMaxValue = kNewFileWriteFailed
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/trusted_vault/enums.xml:TrustedVaultLocalDomainsMigrationStatus)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -172,13 +194,9 @@ void RecordTrustedVaultRecoveryFlowTriggeredEndpoint(
     TrustedVaultRecoveryFlowEndpoint endpoint);
 
 void RecordTrustedVaultHintDegradedRecoverabilityChangedReason(
+    SecurityDomainId security_domain_id,
     TrustedVaultHintDegradedRecoverabilityChangedReasonForUMA
         hint_degraded_recoverability_changed_reason);
-
-// TODO(crbug.com/369980730): this is used in internals, replace usages with the
-// version below and delete this one.
-void RecordTrustedVaultDeviceRegistrationState(
-    TrustedVaultDeviceRegistrationStateForUMA registration_state);
 
 void RecordTrustedVaultRecoveryFactorRegistrationState(
     LocalRecoveryFactorType local_recovery_factor_type,
@@ -227,8 +245,18 @@ void RecordTrustedVaultRecoverKeysOutcome(
     SecurityDomainId security_domain_id,
     TrustedVaultRecoverKeysOutcomeForUMA status);
 
-void RecordTrustedVaultFileReadStatus(SecurityDomainId security_domain_id,
-                                      TrustedVaultFileReadStatusForUMA status);
+void RecordTrustedVaultFileReadStatusForSecurityDomain(
+    SecurityDomainId security_domain_id,
+    TrustedVaultFileReadStatusForUMA status);
+void RecordTrustedVaultFileReadStatus(TrustedVaultFileReadStatusForUMA status);
+void RecordTrustedVaultFileWriteSuccessForSecurityDomain(
+    SecurityDomainId security_domain_id,
+    bool success);
+void RecordTrustedVaultFileWriteSuccess(bool success);
+void RecordTrustedVaultFileWriteStatus(
+    TrustedVaultFileWriteStatusForUMA status);
+void RecordTrustedVaultLocalDomainsMigrationStatus(
+    TrustedVaultLocalDomainsMigrationStatusForUMA status);
 
 enum class IsOffTheRecord { kNo, kYes };
 

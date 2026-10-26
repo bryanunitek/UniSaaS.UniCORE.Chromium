@@ -21,6 +21,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/notimplemented.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/synchronization/lock.h"
 #include "base/time/time.h"
 #include "crypto/apple/keychain_v2.h"
 
@@ -68,6 +69,7 @@ FakeKeychainV2::~FakeKeychainV2() {
 }
 
 NSArray* FakeKeychainV2::GetTokenIDs() {
+  base::AutoLock auto_lock(lock_);
   if (is_secure_enclave_available_) {
     return @[ base::apple::CFToNSPtrCast(kSecAttrTokenIDSecureEnclave) ];
   }
@@ -77,6 +79,7 @@ NSArray* FakeKeychainV2::GetTokenIDs() {
 base::apple::ScopedCFTypeRef<SecKeyRef> FakeKeychainV2::KeyCreateRandomKey(
     CFDictionaryRef params,
     CFErrorRef* error) {
+  base::AutoLock auto_lock(lock_);
   // Validate certain fields that we always expect to be set.
   DCHECK(
       base::apple::GetValueFromDictionary<CFStringRef>(params, kSecAttrLabel));
@@ -164,6 +167,7 @@ base::apple::ScopedCFTypeRef<SecKeyRef> FakeKeychainV2::KeyCreateRandomKey(
 
 base::apple::ScopedCFTypeRef<CFDictionaryRef> FakeKeychainV2::KeyCopyAttributes(
     SecKeyRef key) {
+  base::AutoLock auto_lock(lock_);
   const auto& it = std::ranges::find_if(items_, [&key](const auto& item) {
     return CFEqual(key, CFDictionaryGetValue(item.get(), kSecValueRef));
   });
@@ -180,6 +184,7 @@ base::apple::ScopedCFTypeRef<CFDictionaryRef> FakeKeychainV2::KeyCopyAttributes(
 
 OSStatus FakeKeychainV2::ItemAdd(CFDictionaryRef attributes,
                                  CFTypeRef* result) {
+  base::AutoLock auto_lock(lock_);
   CFStringRef keychain_access_group =
       base::apple::GetValueFromDictionary<CFStringRef>(attributes,
                                                        kSecAttrAccessGroup);
@@ -194,6 +199,7 @@ OSStatus FakeKeychainV2::ItemAdd(CFDictionaryRef attributes,
 
 OSStatus FakeKeychainV2::ItemCopyMatching(CFDictionaryRef query,
                                           CFTypeRef* result) {
+  base::AutoLock auto_lock(lock_);
   CFStringRef match_limit =
       base::apple::GetValueFromDictionary<CFStringRef>(query, kSecMatchLimit);
   bool match_all = match_limit && CFEqual(match_limit, kSecMatchLimitAll);
@@ -281,6 +287,7 @@ OSStatus FakeKeychainV2::ItemCopyMatching(CFDictionaryRef query,
 }
 
 OSStatus FakeKeychainV2::ItemDelete(CFDictionaryRef query) {
+  base::AutoLock auto_lock(lock_);
   // Validate certain fields that we always expect to be set.
   DCHECK_EQ(base::apple::GetValueFromDictionary<CFStringRef>(query, kSecClass),
             kSecClassKey);
@@ -312,6 +319,7 @@ OSStatus FakeKeychainV2::ItemDelete(CFDictionaryRef query) {
 
 OSStatus FakeKeychainV2::ItemUpdate(CFDictionaryRef query,
                                     CFDictionaryRef attributes_to_update) {
+  base::AutoLock auto_lock(lock_);
   if (item_update_result_ != noErr) {
     return item_update_result_;
   }
@@ -329,6 +337,8 @@ OSStatus FakeKeychainV2::ItemUpdate(CFDictionaryRef query,
   CFStringRef query_account =
       base::apple::GetValueFromDictionary<CFStringRef>(query, kSecAttrAccount);
 
+  std::vector<base::apple::ScopedCFTypeRef<CFDictionaryRef>> new_items;
+  OSStatus result = errSecItemNotFound;
   for (base::apple::ScopedCFTypeRef<CFDictionaryRef>& item : items_) {
     if (query_application_label) {
       CFDataRef item_application_label =
@@ -336,6 +346,7 @@ OSStatus FakeKeychainV2::ItemUpdate(CFDictionaryRef query,
               item.get(), kSecAttrApplicationLabel);
       if (!item_application_label ||
           !CFEqual(query_application_label, item_application_label)) {
+        new_items.push_back(item);
         continue;
       }
     }
@@ -344,6 +355,7 @@ OSStatus FakeKeychainV2::ItemUpdate(CFDictionaryRef query,
           base::apple::GetValueFromDictionary<CFStringRef>(item.get(),
                                                            kSecAttrAccount);
       if (!item_account || !CFEqual(query_account, item_account)) {
+        new_items.push_back(item);
         continue;
       }
     }
@@ -354,12 +366,13 @@ OSStatus FakeKeychainV2::ItemUpdate(CFDictionaryRef query,
     [base::apple::CFToNSPtrCast(item_copy.get())
         addEntriesFromDictionary:base::apple::CFToNSPtrCast(
                                      attributes_to_update)];
-    item = item_copy;
-    // TODO(crbug.com/510320946): `ItemUpdate()` should support updating
-    // multiple values.
-    return errSecSuccess;
+    new_items.push_back(item_copy);
+    // Succeed if we replaced at least one item matching the query.
+    result = errSecSuccess;
   }
-  return errSecItemNotFound;
+
+  items_ = new_items;
+  return result;
 }
 
 base::expected<std::vector<uint8_t>, OSStatus>
@@ -367,6 +380,7 @@ FakeKeychainV2::FindGenericPassword(std::string_view service_name,
                                     std::string_view account_name) {
   IncrementKeychainAccessHistogram();
 
+  base::AutoLock auto_lock(lock_);
   // When simulating |noErr|, return mock password. Otherwise, return given
   // code.
   if (find_generic_result_ == noErr) {
@@ -381,6 +395,7 @@ OSStatus FakeKeychainV2::AddGenericPassword(
     std::string_view account_name,
     base::span<const uint8_t> password) {
   IncrementKeychainAccessHistogram();
+  base::AutoLock auto_lock(lock_);
   called_add_generic_ = true;
 
   DCHECK(!password.empty());
@@ -414,6 +429,7 @@ FakeKeychainV2::TaskCopyValueForEntitlement(SecTaskRef task,
 BOOL FakeKeychainV2::LAContextCanEvaluatePolicy(
     LAPolicy policy,
     NSError* __autoreleasing* error) {
+  base::AutoLock auto_lock(lock_);
   switch (policy) {
     case LAPolicyDeviceOwnerAuthentication:
       return uv_method_ == UVMethod::kBiometrics ||

@@ -24,8 +24,6 @@ import static org.chromium.chrome.browser.magic_stack.HomeModulesUtils.INVALID_I
 
 import android.text.TextUtils;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -36,9 +34,7 @@ import org.mockito.Mockito;
 import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
-import org.chromium.base.FeatureOverrides;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
@@ -67,7 +63,6 @@ import java.util.Set;
 
 /** Unit tests for {@link HomeModulesMediator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class HomeModulesMediatorUnitTest {
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -100,7 +95,6 @@ public class HomeModulesMediatorUnitTest {
         registerModule(1, ModuleType.PRICE_CHANGE);
         registerModule(2, ModuleType.SAFETY_HUB);
 
-        FeatureOverrides.newBuilder().disable(ChromeFeatureList.HOME_MODULE_PREF_REFACTOR).apply();
         mHomeModulesConfigManager = new HomeModulesConfigManager();
         HomeModulesConfigManager.setInstanceForTesting(mHomeModulesConfigManager);
         mMediator =
@@ -122,7 +116,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testShowModule_CacheRanking() {
         List<Integer> moduleList = List.of(mModuleTypeList[2], mModuleTypeList[0]);
         mMediator.cacheRanking(moduleList);
@@ -134,7 +127,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testShowModule_BuildWithoutRegisteredModules() {
         List<Integer> moduleList = List.of(mModuleTypeList[2], mModuleTypeList[0]);
         // Registers three modules to the ModuleRegistry.
@@ -150,7 +142,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testShowModule_BuildWithUnRegisteredModule() {
         List<Integer> moduleList = List.of(mModuleTypeList[2], mModuleTypeList[0]);
         // Registers three modules to the ModuleRegistry.
@@ -176,7 +167,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testShowModule_WaitHighestRankingModule() {
         List<Integer> moduleList =
                 List.of(mModuleTypeList[2], mModuleTypeList[0], mModuleTypeList[1]);
@@ -220,7 +210,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testShowModule_HighestRankingModuleDoesNotHaveData() {
         List<Integer> moduleList =
                 List.of(mModuleTypeList[2], mModuleTypeList[0], mModuleTypeList[1]);
@@ -269,7 +258,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testUpdateModules() {
         List<Integer> moduleList =
                 List.of(mModuleTypeList[0], mModuleTypeList[1], mModuleTypeList[2]);
@@ -312,7 +300,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testHide() {
         // Adds 3 modules' data to the magic stack's RecyclerView.
         List<Integer> moduleList =
@@ -355,7 +342,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testHide_NoModuleRepliedBeforeTimeOut() {
         List<Integer> moduleList =
                 List.of(mModuleTypeList[0], mModuleTypeList[1], mModuleTypeList[2]);
@@ -384,7 +370,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testHide_NoModuleCanBeBuilt() {
         List<Integer> moduleList =
                 List.of(mModuleTypeList[0], mModuleTypeList[1], mModuleTypeList[2]);
@@ -396,7 +381,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testFindModuleIndexInRecyclerView() {
         // The ranking of the modules are 0, 1, 2, but type 1 doesn't have data and thus isn't
         // added.
@@ -411,7 +395,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testAppend() {
         List<Integer> moduleList = List.of(mModuleTypeList[0], mModuleTypeList[1]);
         int size = moduleList.size();
@@ -440,7 +423,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testRemove() {
         List<Integer> moduleList = List.of(mModuleTypeList[0]);
         when(mModuleRegistry.build(eq(mModuleTypeList[0]), eq(mModuleDelegate), any()))
@@ -462,7 +444,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testTimeOut() {
         List<Integer> moduleList =
                 List.of(mModuleTypeList[2], mModuleTypeList[1], mModuleTypeList[0]);
@@ -528,7 +509,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testTimeOutCalledAfterHide() {
         List<Integer> moduleList =
                 List.of(mModuleTypeList[2], mModuleTypeList[1], mModuleTypeList[0]);
@@ -557,7 +537,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testGetFilteredEnabledModuleSet() {
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
         when(mModuleRegistry.getEnabledModuleSet()).thenReturn(Set.of(ModuleType.SINGLE_TAB));
@@ -566,7 +545,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testGetFilteredEnabledModuleSet_AllModules() {
         Set<Integer> activeModules = HomeModulesMetricsUtils.getAllActiveModulesForTesting();
         when(mModuleRegistry.getEnabledModuleSet()).thenReturn(activeModules);
@@ -586,9 +564,6 @@ public class HomeModulesMediatorUnitTest {
                         ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
                         ModuleType.ADDRESS_BAR_PLACEMENT_PROMO,
                         ModuleType.SETUP_LIST_TWO_CELL_CONTAINER,
-                        ModuleType.SIGN_IN_PROMO,
-                        ModuleType.SAVE_PASSWORDS_PROMO,
-                        ModuleType.PASSWORD_CHECKUP_PROMO,
                         ModuleType.SETUP_LIST_CELEBRATORY_PROMO,
                         ModuleType.NTP_THEME_PROMO);
         assertEquals(expectedModuleSet, mMediator.getFilteredEnabledModuleSet());
@@ -609,16 +584,12 @@ public class HomeModulesMediatorUnitTest {
                         ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
                         ModuleType.ADDRESS_BAR_PLACEMENT_PROMO,
                         ModuleType.SETUP_LIST_TWO_CELL_CONTAINER,
-                        ModuleType.SIGN_IN_PROMO,
-                        ModuleType.SAVE_PASSWORDS_PROMO,
-                        ModuleType.PASSWORD_CHECKUP_PROMO,
                         ModuleType.SETUP_LIST_CELEBRATORY_PROMO,
                         ModuleType.NTP_THEME_PROMO);
         assertEquals(expectedModuleSet, mMediator.getFilteredEnabledModuleSet());
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({
         ChromeFeatureList.SEGMENTATION_PLATFORM_ANDROID_HOME_MODULE_RANKER,
         ChromeFeatureList.SEGMENTATION_PLATFORM_ANDROID_HOME_MODULE_RANKER_V2
@@ -639,7 +610,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({ChromeFeatureList.SEGMENTATION_PLATFORM_ANDROID_HOME_MODULE_RANKER})
     @DisableFeatures({ChromeFeatureList.SEGMENTATION_PLATFORM_ANDROID_HOME_MODULE_RANKER_V2})
     public void testCreateOptions_FlagDisabled() {
@@ -654,7 +624,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testFilterEnabledModuleList() {
         ClassificationResult classificationResult =
                 new ClassificationResult(
@@ -686,7 +655,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testFilterEnabledModuleList_withInvalidType() {
         ClassificationResult classificationResult =
                 new ClassificationResult(
@@ -706,7 +674,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testInput() {
         @ModuleType int moduleType = ModuleType.SINGLE_TAB;
         String expectedFreshnessString = "single_tab_freshness";
@@ -716,7 +683,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testGetSortedManuallyRankedModules_OrderingAndTabTracking() {
         // Mock module registry with a mix of manual and segmentation modules.
         when(mModuleRegistry.getAllRegisteredModuleTypes())
@@ -793,7 +759,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({
         ChromeFeatureList.SEGMENTATION_PLATFORM_ANDROID_HOME_MODULE_RANKER,
         ChromeFeatureList.SEGMENTATION_PLATFORM_ANDROID_HOME_MODULE_RANKER_V2
@@ -867,7 +832,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testOnModuleViewCreated() {
         @ModuleType int moduleType1 = ModuleType.TAB_GROUP_PROMO;
         @ModuleType int moduleType2 = ModuleType.TAB_GROUP_SYNC_PROMO;
@@ -892,7 +856,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testOnModuleViewCreated_SkipsManualModules() {
         @ModuleType int moduleType = ModuleType.DEFAULT_BROWSER_PROMO;
 
@@ -910,9 +873,7 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
-    public void testGetFilteredEnabledModuleSet_withRefactorEnabled() {
-        FeatureOverrides.newBuilder().enable(ChromeFeatureList.HOME_MODULE_PREF_REFACTOR).apply();
+    public void testGetFilteredEnabledModuleSet_allCardsDisabled() {
         ChromeSharedPreferences.getInstance()
                 .writeBoolean(ChromePreferenceKeys.HOME_MODULE_CARDS_ENABLED, false);
 
@@ -920,7 +881,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testGetCombinedRankedModules() {
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
 
@@ -962,7 +922,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testGetCombinedRankedModules_FiltersDuplicates() {
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
 
@@ -986,7 +945,6 @@ public class HomeModulesMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testGetCombinedRankedModules_CornerCases() {
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
 

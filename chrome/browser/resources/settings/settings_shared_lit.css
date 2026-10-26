@@ -11,6 +11,54 @@
  * #include=cr-shared-style-lit search-highlight-style-lit
  * #css_wrapper_metadata_end */
 
+/* Style overrides for Settings Refresh 2026 experiment */
+:host-context([settings-refresh-2026]) {
+  --cr-active-background-color: var(--color-settings-row-background-active);
+  --cr-card-border-radius: 16px;
+  --cr-hover-background-color: var(--color-settings-row-background-hovered);
+  --cr-section-vertical-padding: 16px;
+  --cr-card-background-color: transparent;
+  --cr-card-shadow: none;
+  --cr-separator-line: none;
+  --cr-title-text-color: var(--color-settings-title-text);
+  --cr-icon-button-margin-start: 8px;
+
+  .cr-title-text {
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 24px;
+    margin: 0;
+    padding: 16px 20px;
+  }
+
+  .cr-row:has(.cr-title-text) {
+    padding: 0;
+  }
+
+  cr-input.stroked {
+    --cr-input-hover-background-color: transparent;
+  }
+
+  cr-input.stroked[disabled] {
+    --cr-input-background-color: var(--cr-hover-background-color);
+  }
+
+  .cr-row,
+  cr-link-row,
+  .settings-box,
+  settings-toggle-button {
+    --cr-actionable-row-background-color:
+        var(--color-settings-section-background);
+    --cr-section-vertical-padding: 16px;
+    border-radius: 4px;
+  }
+
+  .cr-row {
+    background-color: var(--color-settings-section-background);
+  }
+
+}
+
 /* Common styles for Material Design settings. */
 
 /* Prevent action-links from being selected to avoid accidental
@@ -22,17 +70,13 @@ a[is=action-link] {
 /* Use <h2> as the "sub-header" mentioned in the UX design docs. */
 h2 {
   align-items: center;
-  /* TODO(crbug.com/454617005): consider changing to auto */
-  align-self: flex-start;
   color: var(--cr-secondary-text-color);
   display: flex;
   font-size: inherit;
   font-weight: 500;
   margin: 0;
-  /* TODO(crbug.com/454617005): consider changing to 0 */
-  padding-bottom: 12px;
-  /* TODO(crbug.com/454617005): consider changing to 12px */
-  padding-top: 32px;
+  padding-bottom: 0;
+  padding-top: 12px;
 }
 
 cr-icon,

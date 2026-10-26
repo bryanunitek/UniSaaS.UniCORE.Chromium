@@ -4,7 +4,9 @@
 
 package org.chromium.chrome.browser.omnibox.status;
 
+import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import android.view.View;
 
@@ -13,10 +15,13 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
@@ -27,16 +32,26 @@ import org.chromium.chrome.browser.user_education.UserEducationHelper;
 @RunWith(BaseRobolectricTestRunner.class)
 public class SiteControlsIphControllerUnitTest {
 
-    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
     @Mock private UserEducationHelper mUserEducationHelper;
-    @Mock private View mAnchorView;
     @Mock private AppMenuHandler mAppMenuHandler;
+    @Captor private ArgumentCaptor<IphCommand> mIphCommandCaptor;
 
+    private boolean mIsAnchorViewShown = true;
+    private View mAnchorView;
     private SiteControlsIphController mController;
 
     @Before
     public void setUp() {
+        mAnchorView =
+                new View(ContextUtils.getApplicationContext()) {
+                    @Override
+                    public boolean isShown() {
+                        return mIsAnchorViewShown;
+                    }
+                };
         mController =
                 new SiteControlsIphController(mUserEducationHelper, mAnchorView, mAppMenuHandler);
     }
@@ -45,14 +60,32 @@ public class SiteControlsIphControllerUnitTest {
     public void testShowIph() {
         mController.showIph();
 
-        ArgumentCaptor<IphCommand> captor = ArgumentCaptor.forClass(IphCommand.class);
-        verify(mUserEducationHelper).requestShowIph(captor.capture());
+        verify(mUserEducationHelper).requestShowIph(mIphCommandCaptor.capture());
 
-        IphCommand command = captor.getValue();
+        IphCommand command = mIphCommandCaptor.getValue();
+        assertEquals(SiteControlsIphController.AUTO_DISMISS_TIMEOUT_MS, command.autoDismissTimeout);
+
         command.onShowCallback.run();
         verify(mAppMenuHandler).setMenuHighlight(R.id.info_menu_id);
 
         command.onDismissCallback.run();
         verify(mAppMenuHandler).clearMenuHighlight();
+    }
+
+    @Test
+    public void testShowIph_nullAnchorView() {
+        SiteControlsIphController controller =
+                new SiteControlsIphController(mUserEducationHelper, (View) null, mAppMenuHandler);
+        controller.showIph();
+
+        verifyNoInteractions(mUserEducationHelper);
+    }
+
+    @Test
+    public void testShowIph_anchorViewNotShown() {
+        mIsAnchorViewShown = false;
+        mController.showIph();
+
+        verifyNoInteractions(mUserEducationHelper);
     }
 }

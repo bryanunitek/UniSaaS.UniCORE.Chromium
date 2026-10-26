@@ -29,10 +29,12 @@ import org.chromium.chrome.browser.bookmarks.BookmarkOpener;
 import org.chromium.chrome.browser.bookmarks.BookmarkOpenerImpl;
 import org.chromium.chrome.browser.bookmarks.BookmarkPage;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs;
+import org.chromium.chrome.browser.device_lock.DeviceLockActivityLauncherImpl;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManagerFactory;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.signin.SigninAndHistorySyncActivityLauncherImpl;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeControllerFactory;
 import org.chromium.chrome.browser.ui.system.StatusBarColorController;
@@ -79,7 +81,8 @@ public class BookmarkActivity extends SnackbarActivity {
                 new BookmarkOpenerImpl(
                         () -> BookmarkModel.getForProfile(profile),
                         /* context= */ this,
-                        /* componentName= */ parentComponent);
+                        /* componentName= */ parentComponent,
+                        /* multiInstanceManager= */ null);
 
         ScrimManager scrimManager =
                 new ScrimManager(this, getContentView(), ScrimClient.BOOKMARK_ACTIVITY);
@@ -94,7 +97,7 @@ public class BookmarkActivity extends SnackbarActivity {
                         getWindow(),
                         getWindowAndroid().getKeyboardDelegate(),
                         () -> sheetContainer,
-                        () -> getEdgeToEdgeInset(),
+                        this::getEdgeToEdgeInset,
                         /* desktopWindowStateManager= */ null,
                         getWindowAndroid().getInsetObserver(),
                         /* enableLargeFormFactorUi= */ ChromeFeatureList
@@ -118,7 +121,9 @@ public class BookmarkActivity extends SnackbarActivity {
                         /* edgeToEdgePadAdjusterGenerator= */ view ->
                                 EdgeToEdgeControllerFactory.createForViewAndObserveSupplier(
                                         view, getEdgeToEdgeSupplier()),
-                        /* backPressManager= */ null);
+                        /* backPressManager= */ null,
+                        SigninAndHistorySyncActivityLauncherImpl.get(),
+                        DeviceLockActivityLauncherImpl.get());
         String url = getIntent().getDataString();
         UrlConstantResolver resolver = UrlConstantResolverFactory.getForProfile(profile);
         if (TextUtils.isEmpty(url)) url = resolver.getBookmarksPageUrl();

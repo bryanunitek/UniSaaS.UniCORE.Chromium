@@ -156,8 +156,12 @@ enum class ProfileSignout {
   // User tapped 'Undo' in a snackbar that is shown right after sign-in through
   // Autofill and Passwords Sign-in promo. Android only.
   kUserTappedUndoRightAfterSignInFromAutofillAndPasswords = 46,
+  // User tapped 'Sign out' on the enterprise signals disclaimer or dismissed it
+  // by sliding down, using back press or by tapping outside of the dialog.
+  // Android only.
+  kUserDeclinedEnterpriseSignalsDisclaimer = 47,
   // Keep this as the last enum.
-  kMaxValue = kUserTappedUndoRightAfterSignInFromAutofillAndPasswords,
+  kMaxValue = kUserDeclinedEnterpriseSignalsDisclaimer,
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/signin/enums.xml)
 
@@ -179,7 +183,7 @@ enum class AccessPoint : int {
   // kAppsPageLink = 7, no longer used.
   kBookmarkBubble = 8,
   kBookmarkManager = 9,
-  kAvatarBubbleSignIn = 10,
+  // kAvatarBubbleSignIn = 10, no longer used.
   kUserManager = 11,
   // kDevicesPage = 12, no longer used.
   // kCloudPrint = 13, no longer used.
@@ -262,9 +266,9 @@ enum class AccessPoint : int {
   // reauthentication is necessary to sign in with or save a passkey from the
   // Google Password Manager.
   kWebauthnModalDialog = 65,
-  // Signin button from the profile menu that is labelled as a "Signin" button,
-  // but is followed by a Sync confirmation screen as a promo.
-  kAvatarBubbleSignInWithSyncPromo = 66,
+  // Signin, history sync promo, or reauth button from the profile menu (avatar
+  // bubble).
+  kProfileMenuPrimaryButton = 66,
   // Signin as part of switching accounts via the account menu.
   kAccountMenuSwitchAccount = 67,
   // Signin via Product Specifications.
@@ -284,8 +288,9 @@ enum class AccessPoint : int {
   kCollaborationShareTabGroup = 73,
   // Glic launch button on the tab strip.
   kGlicLaunchButton = 74,
-  // History sync promo shown on the History page. Should not be visible when
-  // the use is not signed-in. Android only.
+  // History sync promo shown on the History page. On Android, it should not be
+  // visible when the user is not signed-in. On Desktop, it can also be used to
+  // sign in and enable history sync.
   kHistoryPage = 75,
   // Access point triggered when a user attempts to join a tab group without
   // being signed in or synced.
@@ -359,10 +364,30 @@ enum class AccessPoint : int {
   // Triggered when the user taps the sign-in action on the Level Up screen
   // snackbar. iOS only.
   kLevelUp = 107,
+  // Triggered when the user taps the Undo action on the sign-out snackbar.
+  // The snackbar is displayed after the user signs out from the account menu,
+  // when IdentityAwareness is enabled. iOS only.
+  kSignoutUndoSnackbar = 108,
+  // Sign-in promo shown for the Composebox Drive context menu option.
+  kComposeboxDriveContextMenuOptionBubble = 109,
+  // Triggered when the user clicks sign-in on the Skills dialog error state
+  // (e.g. opened from Gemini in Chrome while signed out). Desktop only.
+  kSkills = 110,
+  // Triggered from the signed-out state of the account menu opened by tapping
+  // the toolbar avatar button. Android desktop only.
+  kAccountMenuSignedOutState = 111,
+  // Triggered when entering the Gemini flow from the iOS App Switcher AI
+  // Summarization entry point. iOS only.
+  kAppSwitcherAISummarization = 112,
+  // Triggered when entering the Gemini flow from an App Store In-App Event
+  // external action. iOS only.
+  kGeminiExternalAppStoreEvent = 113,
+  // Sign-in promo card shown on the Password Manager page. Desktop only.
+  kPasswordManagerCard = 114,
   // Add values above this line with a corresponding label to the
   // "SigninAccessPoint" enum in
   // tools/metrics/histograms/metadata/signin/enums.xml.
-  kMaxValue = kLevelUp,  // This must be last.
+  kMaxValue = kPasswordManagerCard,  // This must be last.
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/signin/enums.xml)
 
@@ -610,8 +635,9 @@ enum class FetchAccountCapabilitiesFromSystemLibraryResult {
   // Errors after 20 are reserved for iOS.
   kErrorMissingCapability = 20,
   kErrorUnexpectedValue = 21,
+  kPartialSuccess = 22,
 
-  kMaxValue = kErrorUnexpectedValue
+  kMaxValue = kPartialSuccess
 };
 
 // Tracks type of the button that was presented to the user.
@@ -689,7 +715,8 @@ enum class ReauthAccessPoint : int {
   kAccountMenu = 0,
   kAccountSettings = 1,
   kRecentTabs = 2,
-  kMaxValue = kRecentTabs,
+  kReauthInfoBar = 3,
+  kMaxValue = kReauthInfoBar,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:ReauthAccessPoint)
 #endif  // BUILDFLAG(IS_IOS)
@@ -739,10 +766,6 @@ void LogSyncOptInOffered(AccessPoint access_point);
 // Logs a sync opt-in offered event (`Signin.HistorySyncOptIn.Offered`
 // histogram) and its associated access point.
 void LogHistorySyncOptInOffered(AccessPoint access_point);
-
-// Logs that the sync settings were opened at the end of the sync opt-in flow,
-// and the associated access points.
-void LogSyncSettingsOpened(AccessPoint access_point);
 
 // Logs to UMA histograms how many accounts are in the browser for this
 // profile.

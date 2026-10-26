@@ -69,7 +69,7 @@ bool ShouldSuspendDuringNavigation(crdtp::span<uint8_t> method) {
   return !ShouldSendOnIO(method);
 }
 
-// Async control commands (such as CSS.enable) are idempotant and can
+// Async control commands (such as CSS.enable) are idempotent and can
 // be safely replayed in the new RenderFrameHost. We will always forward
 // them to the new renderer on cross process navigation. Main rationale for
 // it is that the client doesn't expect such calls to fail in normal
@@ -78,7 +78,7 @@ bool ShouldSuspendDuringNavigation(crdtp::span<uint8_t> method) {
 // Ideally all non-control async commands shoulds be listed here but we
 // conservatively start with Runtime domain where the decision is more
 // clear.
-bool TerminateOnCrossProcessNavigation(crdtp::span<uint8_t> method) {
+bool MayCauseJavascriptExecution(crdtp::span<uint8_t> method) {
   static auto* kEntries = new std::vector<crdtp::span<uint8_t>>{
       crdtp::SpanFrom("Runtime.awaitPromise"),
       crdtp::SpanFrom("Runtime.callFunctionOn"),
@@ -244,11 +244,11 @@ void DevToolsSession::AttachToAgent(blink::mojom::DevToolsAgent* agent,
   // We're attaching to a new agent while suspended; therefore, messages that
   // have been sent previously either need to be terminated or re-sent once we
   // resume, as we will not get any responses from the old agent at this point.
-  if (suspended_sending_messages_to_agent_) {
+  if (suspend_mode_ != SuspendMode::kNone) {
     for (auto it = pending_messages_.begin(); it != pending_messages_.end();) {
       const PendingMessage& message = *it;
       if (waiting_for_response_.count(message.call_id) &&
-          TerminateOnCrossProcessNavigation(crdtp::SpanFrom(message.method))) {
+          MayCauseJavascriptExecution(crdtp::SpanFrom(message.method))) {
         // Send error to the client and remove the message from pending.
         SendProtocolResponse(
             message.call_id,
@@ -444,9 +444,15 @@ void DevToolsSession::FallThrough(int call_id,
 
   auto it = pending_messages_.emplace(pending_messages_.end(), call_id, method,
                                       message, std::string(fallthrough_data));
-  if (suspended_sending_messages_to_agent_ &&
-      ShouldSuspendDuringNavigation(method))
-    return;
+  if (ShouldSuspendDuringNavigation(method)) {
+    if (suspend_mode_ == SuspendMode::kAll) {
+      return;
+    }
+    if (suspend_mode_ == SuspendMode::kExecutionOnly &&
+        MayCauseJavascriptExecution(method)) {
+      return;
+    }
+  }
 
   DispatchToAgent(pending_messages_.back());
   waiting_for_response_[call_id] = it;
@@ -506,14 +512,14 @@ void DevToolsSession::DispatchToAgent(const PendingMessage& message) {
   }
 }
 
-void DevToolsSession::SuspendSendingMessagesToAgent() {
+void DevToolsSession::SuspendSendingMessagesToAgent(SuspendMode mode) {
   DCHECK(!browser_only_);
-  suspended_sending_messages_to_agent_ = true;
+  suspend_mode_ = mode;
 }
 
 void DevToolsSession::ResumeSendingMessagesToAgent() {
   DCHECK(!browser_only_);
-  suspended_sending_messages_to_agent_ = false;
+  suspend_mode_ = SuspendMode::kNone;
   for (auto it = pending_messages_.begin(); it != pending_messages_.end();
        ++it) {
     const PendingMessage& message = *it;
@@ -591,16 +597,19 @@ void DevToolsSession::DispatchProtocolResponseOrNotification(
       break;
   }
 
-  if (message_span.empty() ||
-      !ValidateMessage(session_id, /*expected_has_id=*/!is_notification,
-                       message_span)) {
+  const bool message_is_valid =
+      !message_span.empty() &&
+      ValidateMessage(session_id,
+                      /*expected_has_id=*/!is_notification, message_span,
+                      /*expect_cbor */ client->UsesBinaryProtocol());
+  if (!message_is_valid) {
     if (RenderProcessHost* process_host = agent_host->GetProcessHost()) {
       bad_message::ReceivedBadMessage(
           process_host, bad_message::RFH_INCONSISTENT_DEVTOOLS_MESSAGE);
     }
     return;
   }
-  client->DispatchProtocolMessage(agent_host, message->data);
+  client->DispatchProtocolMessage(agent_host, message_span);
 }
 
 void DevToolsSession::DispatchProtocolResponse(
@@ -771,11 +780,24 @@ DevToolsSession* DevToolsSession::GetSessionById(const std::string& session_id) 
 // static
 bool DevToolsSession::ValidateMessage(const std::string& expected_session_id,
                                       const bool expected_has_id,
-                                      base::span<const uint8_t> message) {
+                                      base::span<const uint8_t> message,
+                                      bool expect_cbor) {
   std::vector<uint8_t> cbor_message;
   crdtp::span<uint8_t> span_message = crdtp::SpanFrom(message);
 
-  if (!crdtp::cbor::IsCBORMessage(span_message)) {
+  const bool is_cbor = crdtp::cbor::IsCBORMessage(span_message);
+  if (expect_cbor != is_cbor) {
+    // The renderer has sent a message in the format different that we asked
+    // for, something is fishy.
+    return false;
+  }
+  if (!is_cbor) {
+    // '\0' is definitely not allowed unescaped in JSON and is of particular
+    // concern since it is used as a framing character for sending JSON via
+    // the remote debugging pipe.
+    if (std::ranges::find(span_message, '\0') != span_message.end()) {
+      return false;
+    }
     if (!crdtp::json::ConvertJSONToCBOR(span_message, &cbor_message).ok()) {
       return false;  // Safely terminate renderer on malformed JSON
     }

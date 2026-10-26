@@ -17,6 +17,7 @@
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/apps/app_service/publishers/arc_apps_factory.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_list_prefs_factory.h"
 #include "chrome/browser/ash/app_list/arc/arc_package_syncable_service_factory.h"
 #include "chrome/browser/ash/app_list/arc/arc_usb_host_permission_manager.h"
 #include "chrome/browser/ash/app_list/arc/arc_usb_host_permission_manager_factory.h"
@@ -51,31 +52,27 @@
 #include "chrome/browser/ash/arc/net/cert_manager_impl.h"
 #include "chrome/browser/ash/arc/notification/arc_boot_error_notification.h"
 #include "chrome/browser/ash/arc/notification/arc_provision_notification_service.h"
-#include "chrome/browser/ash/arc/notification/arc_vm_data_migration_notifier.h"
 #include "chrome/browser/ash/arc/pip/arc_pip_bridge.h"
 #include "chrome/browser/ash/arc/policy/arc_policy_bridge.h"
 #include "chrome/browser/ash/arc/print_spooler/arc_print_spooler_bridge.h"
-#include "chrome/browser/ash/arc/privacy_items/arc_privacy_items_bridge.h"
 #include "chrome/browser/ash/arc/screen_capture/arc_screen_capture_bridge.h"
 #include "chrome/browser/ash/arc/session/arc_disk_space_monitor.h"
 #include "chrome/browser/ash/arc/session/arc_initial_optin_metrics_recorder_factory.h"
 #include "chrome/browser/ash/arc/session/arc_play_store_enabled_preference_handler.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/arc/sharesheet/arc_sharesheet_bridge.h"
-#include "chrome/browser/ash/arc/survey/arc_survey_service.h"
 #include "chrome/browser/ash/arc/tracing/arc_app_performance_tracing.h"
 #include "chrome/browser/ash/arc/tracing/arc_tracing_bridge.h"
 #include "chrome/browser/ash/arc/tts/arc_tts_service.h"
-#include "chrome/browser/ash/arc/user_session/arc_user_session_service.h"
 #include "chrome/browser/ash/arc/vmm/arc_system_state_bridge.h"
 #include "chrome/browser/ash/arc/vmm/arc_vmm_manager.h"
 #include "chrome/browser/ash/arc/wallpaper/arc_wallpaper_service.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/net/nss_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/channel/channel_info.h"
 #include "chromeos/ash/components/memory/swap_configuration.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_launch_notifier.h"
@@ -105,6 +102,7 @@
 #include "chromeos/ash/experiences/arc/pay/arc_digital_goods_bridge.h"
 #include "chromeos/ash/experiences/arc/pay/arc_payment_app_bridge.h"
 #include "chromeos/ash/experiences/arc/power/arc_power_bridge.h"
+#include "chromeos/ash/experiences/arc/privacy_items/arc_privacy_items_bridge.h"
 #include "chromeos/ash/experiences/arc/process/arc_process_service.h"
 #include "chromeos/ash/experiences/arc/safety/arc_safety_bridge.h"
 #include "chromeos/ash/experiences/arc/sensor/arc_iio_sensor_bridge.h"
@@ -113,6 +111,7 @@
 #include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
 #include "chromeos/ash/experiences/arc/system_ui/arc_system_ui_bridge.h"
 #include "chromeos/ash/experiences/arc/usb/usb_host_bridge.h"
+#include "chromeos/ash/experiences/arc/user_session/arc_user_session_service.h"
 #include "chromeos/ash/experiences/arc/video/gpu_arc_video_service_host.h"
 #include "chromeos/ash/experiences/arc/volume_mounter/arc_volume_mounter_bridge.h"
 #include "chromeos/ash/experiences/arc/wake_lock/arc_wake_lock_bridge.h"
@@ -146,9 +145,12 @@ ArcSessionRunner* g_arc_session_runner_for_testing = nullptr;
 
 // `local_state` and `application_locale_storage` must be non-null and must
 // outlive the returned object.
+// `metrics_service` may be null in tests. If non-null, it must remain valid
+// until Shutdown() of the returned object is called.
 std::unique_ptr<ArcSessionManager> CreateArcSessionManager(
     PrefService* local_state,
     const ApplicationLocaleStorage* application_locale_storage,
+    metrics::MetricsService* metrics_service,
     ArcBridgeService* arc_bridge_service,
     version_info::Channel channel,
     ash::SchedulerConfigurationManagerBase* scheduler_configuration_manager,
@@ -162,8 +164,8 @@ std::unique_ptr<ArcSessionManager> CreateArcSessionManager(
                             scheduler_configuration_manager, delegate.get()));
   }
   return std::make_unique<ArcSessionManager>(
-      local_state, application_locale_storage, std::move(runner),
-      std::move(delegate), arc_dlc_installer);
+      local_state, application_locale_storage, metrics_service,
+      std::move(runner), std::move(delegate), arc_dlc_installer);
 }
 
 }  // namespace
@@ -171,20 +173,23 @@ std::unique_ptr<ArcSessionManager> CreateArcSessionManager(
 ArcServiceLauncher::ArcServiceLauncher(
     PrefService* local_state,
     const ApplicationLocaleStorage* application_locale_storage,
+    metrics::MetricsService* metrics_service,
     ash::SchedulerConfigurationManagerBase* scheduler_configuration_manager)
     : local_state_(CHECK_DEREF(local_state)),
       application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      metrics_service_(metrics_service),
       arc_service_manager_(std::make_unique<ArcServiceManager>()),
       scheduler_configuration_manager_(scheduler_configuration_manager),
       arc_dlc_installer_(std::make_unique<ArcDlcInstaller>()),
       arc_session_manager_(
           CreateArcSessionManager(&local_state_.get(),
                                   &application_locale_storage_.get(),
+                                  metrics_service_,
                                   arc_service_manager_->arc_bridge_service(),
                                   ash::GetChannel(),
                                   scheduler_configuration_manager,
                                   arc_dlc_installer_.get())) {
-  DCHECK(g_arc_service_launcher == nullptr);
+  CHECK(g_arc_service_launcher == nullptr, base::NotFatalUntil::M160);
   g_arc_service_launcher = this;
 
   if (base::FeatureList::IsEnabled(kEnableVirtioBlkForData) ||
@@ -194,7 +199,7 @@ ArcServiceLauncher::ArcServiceLauncher(
 }
 
 ArcServiceLauncher::~ArcServiceLauncher() {
-  DCHECK_EQ(g_arc_service_launcher, this);
+  CHECK_EQ(g_arc_service_launcher, this, base::NotFatalUntil::M160);
   g_arc_service_launcher = nullptr;
 }
 
@@ -250,8 +255,12 @@ void ArcServiceLauncher::MaybeSetProfile(Profile* profile) {
   // allowed for ARC.
   // TODO(hidehiko): DCHECK(!arc_session_manager_->IsAllowed()) here, and
   // get rid of Shutdown().
-  if (arc_session_manager_->profile())
+  if (arc_session_manager_->profile()) {
+    // The handler is bound to the previous profile and must be destroyed before
+    // shutting down the session manager (matching the order in Shutdown()).
+    arc_play_store_enabled_preference_handler_.reset();
     arc_session_manager_->Shutdown();
+  }
 
   arc_session_manager_->SetProfile(profile);
   arc_service_manager_->set_browser_context(profile);
@@ -259,9 +268,11 @@ void ArcServiceLauncher::MaybeSetProfile(Profile* profile) {
       multi_user_util::GetAccountIdFromProfile(profile));
 }
 
-void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
-  DCHECK(arc_service_manager_);
-  DCHECK(arc_session_manager_);
+void ArcServiceLauncher::OnPrimaryUserProfilePrepared(
+    Profile* profile,
+    consent_auditor::ConsentAuditor* consent_auditor) {
+  CHECK(arc_service_manager_, base::NotFatalUntil::M160);
+  CHECK(arc_session_manager_, base::NotFatalUntil::M160);
 
   // Initialize the locked fullscreen manager with the primary user profile.
   arc_locked_fullscreen_manager_ =
@@ -345,8 +356,8 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   {
     auto* arc_net_host_impl = ArcNetHostImpl::GetForBrowserContext(profile);
     arc_net_host_impl->SetPrefService(profile->GetPrefs());
-    arc_net_host_impl->SetCertManager(
-        std::make_unique<CertManagerImpl>(profile));
+    arc_net_host_impl->SetCertManager(std::make_unique<CertManagerImpl>(
+        NssServiceFactory::GetForContext(profile)));
     arc_net_url_opener_ = std::make_unique<BrowserUrlOpenerImpl>();
   }
   ArcOemCryptoBridge::GetForBrowserContext(profile);
@@ -362,7 +373,6 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   ArcScreenCaptureBridge::GetForBrowserContext(profile);
   ArcSettingsService::GetForBrowserContext(profile);
   ArcSharesheetBridge::GetForBrowserContext(profile);
-  ArcSurveyService::GetForBrowserContext(profile);
   ArcSystemUIBridge::GetForBrowserContext(profile);
   if (base::FeatureList::IsEnabled(kArcTracingDataSource)) {
     ArcTracingBridge::GetForBrowserContext(profile);
@@ -390,10 +400,6 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
     ArcSafetyBridge::GetForBrowserContext(profile);
     ArcSystemStateBridge::GetForBrowserContext(profile);
 
-    if (base::FeatureList::IsEnabled(kEnableArcVmDataMigration)) {
-      arc_vm_data_migration_notifier_ =
-          std::make_unique<ArcVmDataMigrationNotifier>(profile);
-    }
     ArcIdleManager::GetForBrowserContext(profile);
     if (ShouldUseArcKeyMint()) {
       auto serial_number = arc_session_manager_->GetSerialNumberForKeyMint();
@@ -410,11 +416,19 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
     web_apk_manager_ = std::make_unique<apps::WebApkManager>(profile);
   }
 
-  arc_session_manager_->Initialize();
-  arc_play_store_enabled_preference_handler_ =
-      std::make_unique<ArcPlayStoreEnabledPreferenceHandler>(
-          profile, arc_session_manager_.get());
-  arc_play_store_enabled_preference_handler_->Start();
+  arc_session_manager_->Initialize(consent_auditor);
+  // In SyncTest, SyncArcPackageHelper drives `prefs::kArcEnabled` and calls
+  // `NotifyArcPlayStoreEnabledChanged()` directly, so the handler must not
+  // call `RequestEnable()` or `RequestDisable()`.
+  if (!ArcAppListPrefsFactory::IsFactorySetForSyncTest()) {
+    // Shutdown() and MaybeSetProfile() reset this before the profiles -- and so
+    // their keyed services -- are destroyed, so holding the ConsentAuditor is
+    // safe.
+    arc_play_store_enabled_preference_handler_ =
+        std::make_unique<ArcPlayStoreEnabledPreferenceHandler>(
+            profile, arc_session_manager_.get(), consent_auditor);
+    arc_play_store_enabled_preference_handler_->Start();
+  }
 }
 
 void ArcServiceLauncher::Shutdown() {
@@ -428,21 +442,24 @@ void ArcServiceLauncher::Shutdown() {
   web_apk_manager_.reset();
   arc_net_url_opener_.reset();
   arc_icon_cache_delegate_provider_.reset();
+  metrics_service_ = nullptr;
 }
 
 void ArcServiceLauncher::ResetForTesting() {
   // First destroy the internal states, then re-initialize them.
   // These are for workaround of singletonness DCHECK in their ctors/dtors.
+  metrics::MetricsService* metrics_service = metrics_service_.get();
   Shutdown();
   arc_session_manager_.reset();
 
+  metrics_service_ = metrics_service;
   arc_dlc_installer_ = std::make_unique<ArcDlcInstaller>();
 
   // No recreation of arc_service_manager. Pointers to its ArcBridgeService
   // may be referred from existing KeyedService, so destoying it would cause
   // unexpected behavior, specifically on test teardown.
   arc_session_manager_ = CreateArcSessionManager(
-      &local_state_.get(), &application_locale_storage_.get(),
+      &local_state_.get(), &application_locale_storage_.get(), metrics_service_,
       arc_service_manager_->arc_bridge_service(), ash::GetChannel(),
       scheduler_configuration_manager_, arc_dlc_installer_.get());
 }
@@ -552,7 +569,6 @@ void ArcServiceLauncher::EnsureFactoriesBuilt() {
   ArcScreenCaptureBridge::EnsureFactoryBuilt();
   ArcSettingsService::EnsureFactoryBuilt();
   ArcSharesheetBridge::EnsureFactoryBuilt();
-  ArcSurveyService::EnsureFactoryBuilt();
   ArcSystemUIBridge::EnsureFactoryBuilt();
   ArcSystemStateBridge::EnsureFactoryBuilt();
   ArcTracingBridge::EnsureFactoryBuilt();

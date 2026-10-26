@@ -7,7 +7,6 @@
 #include <algorithm>
 
 #include "base/feature_list.h"
-#include "chrome/browser/enterprise/connectors/connectors_service.h"
 #include "chrome/browser/enterprise/connectors/referrer_cache_utils.h"
 #include "chrome/browser/enterprise/data_protection/data_protection_features.h"
 #include "chrome/browser/enterprise/data_protection/data_protection_navigation_observer.h"
@@ -16,8 +15,13 @@
 #include "components/enterprise/connectors/core/reporting_constants.h"
 #include "components/enterprise/data_protection/utils.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/tabs/public/tab_features.h"  // nogncheck
+#endif
 
 #if BUILDFLAG(ENTERPRISE_WATERMARK)
 #include "components/enterprise/watermarking/content/watermark_text_container.h"
@@ -25,6 +29,35 @@
 #endif  // BUILDFLAG(ENTERPRISE_WATERMARK)
 
 namespace enterprise_data_protection {
+
+// static
+DataProtectionNavigationController*
+DataProtectionNavigationController::FromWebContents(
+    content::WebContents* web_contents) {
+  if (!web_contents) {
+    return nullptr;
+  }
+#if !BUILDFLAG(IS_ANDROID)
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents);
+  if (!tab || !tab->GetTabFeatures()) {
+    return nullptr;
+  }
+  return tab->GetTabFeatures()->data_protection_controller();
+#else
+  return nullptr;
+#endif
+}
+
+bool IsScreenShareBlocked(content::WebContents* web_contents) {
+#if BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
+  if (auto* controller =
+          DataProtectionNavigationController::FromWebContents(web_contents)) {
+    return !controller->screenshot_allowed();
+  }
+#endif  // BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
+  return false;
+}
 
 DataProtectionNavigationController::DataProtectionNavigationController(
     tabs::TabInterface* tab_interface)
@@ -126,9 +159,8 @@ void DataProtectionNavigationController::
 #if BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
   if (clear_screenshot_protection_on_page_load_) {
     screenshot_allowed_ = true;
-    screenshot_allowed_updated_callbacks_.Notify(screenshot_allowed_);
-
     clear_screenshot_protection_on_page_load_ = false;
+    screenshot_allowed_updated_callbacks_.Notify(screenshot_allowed_);
   }
 #endif
 }
@@ -143,30 +175,9 @@ void DataProtectionNavigationController::DidFinishNavigation(
     return;
   }
 
-  auto* service =
-      enterprise_connectors::ConnectorsServiceFactory::GetForBrowserContext(
-          navigation_handle->GetWebContents()->GetBrowserContext());
-  if (!service) {
-    return;
-  }
-
   // Only cache referrer chain data if a policy that uses it has been enabled.
-  if (service->IsConnectorEnabled(
-          enterprise_connectors::AnalysisConnector::BULK_DATA_ENTRY) ||
-      service->IsConnectorEnabled(
-          enterprise_connectors::AnalysisConnector::FILE_ATTACHED) ||
-      service->IsConnectorEnabled(
-          enterprise_connectors::AnalysisConnector::FILE_DOWNLOADED) ||
-#if BUILDFLAG(IS_CHROMEOS)
-      service->IsConnectorEnabled(
-          enterprise_connectors::AnalysisConnector::FILE_TRANSFER) ||
-#endif
-      service->IsConnectorEnabled(
-          enterprise_connectors::AnalysisConnector::PRINT) ||
-      service->GetReportingSettings().has_value() ||
-      service->GetAppliedRealTimeUrlCheck() ==
-          enterprise_connectors::EnterpriseRealTimeUrlCheckMode::
-              REAL_TIME_CHECK_FOR_MAINFRAME_ENABLED) {
+  if (enterprise_connectors::IsReferrerChainNeededForEnterprise(
+          navigation_handle->GetWebContents()->GetBrowserContext())) {
     enterprise_connectors::SetReferrerChain(
         navigation_handle->GetURL(), *navigation_handle->GetWebContents());
   }
@@ -183,14 +194,12 @@ void DataProtectionNavigationController::
   }
 
 #if BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
-  if (!settings.allow_screenshots) {
+  clear_screenshot_protection_on_page_load_ =
+      settings.allow_screenshots && !is_same_document;
+
+  if (!clear_screenshot_protection_on_page_load_) {
     screenshot_allowed_ = settings.allow_screenshots;
     screenshot_allowed_updated_callbacks_.Notify(screenshot_allowed_);
-
-  } else {
-    // Screenshot protection should be cleared.  Delay that until the page
-    // finishes loading.
-    clear_screenshot_protection_on_page_load_ = true;
   }
 #endif  // BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
 

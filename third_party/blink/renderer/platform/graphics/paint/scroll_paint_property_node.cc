@@ -7,6 +7,7 @@
 #include "third_party/blink/renderer/platform/geometry/infinite_int_rect.h"
 #include "third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -47,6 +48,9 @@ PaintPropertyChangeType ScrollPaintPropertyNode::State::ComputeChange(
       prevent_scroll_axis_locking != other.prevent_scroll_axis_locking) {
     return PaintPropertyChangeType::kChangedOnlyValues;
   }
+  if (scrolling_contents_cull_rect != other.scrolling_contents_cull_rect) {
+    return PaintPropertyChangeType::kChangedOnlySimpleValues;
+  }
   return PaintPropertyChangeType::kUnchanged;
 }
 
@@ -80,7 +84,7 @@ std::unique_ptr<JSONObject> ScrollPaintPropertyNode::ToJSON() const {
   }
   if (state_.overflow_clip_node) {
     json->SetString("overflowClipNode",
-                    String::Format("%p", state_.overflow_clip_node.Get()));
+                    Format("{}", state_.overflow_clip_node.Get()));
   }
   if (state_.user_scrollable_horizontal || state_.user_scrollable_vertical) {
     json->SetString(
@@ -89,7 +93,7 @@ std::unique_ptr<JSONObject> ScrollPaintPropertyNode::ToJSON() const {
             ? (state_.user_scrollable_vertical ? "both" : "horizontal")
             : "vertical");
   }
-  if (state_.main_thread_repaint_reasons) {
+  if (!state_.main_thread_repaint_reasons.empty()) {
     json->SetString("mainThreadReasons", cc::MainThreadScrollingReason::AsText(
                                              state_.main_thread_repaint_reasons)
                                              .c_str());
@@ -125,6 +129,10 @@ std::unique_ptr<JSONObject> ScrollPaintPropertyNode::ToJSON() const {
       json->SetArray("snap_area_rects", std::move(area_rects_json));
     }
   }
+
+  auto& rect = state_.scrolling_contents_cull_rect;
+  json->SetString("contents_cull_rect",
+                  rect == InfiniteIntRect() ? "Inf" : String(rect.ToString()));
 
   return json;
 }

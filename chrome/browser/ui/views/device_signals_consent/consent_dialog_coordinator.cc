@@ -12,7 +12,6 @@
 #include "chrome/browser/enterprise/browser_management/management_identity.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_window.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
@@ -99,19 +98,19 @@ std::unique_ptr<ConsentRequester> ConsentRequester::CreateConsentRequester(
   if (!browser) {
     return nullptr;
   }
-  return std::make_unique<ConsentDialogCoordinator>(
-      browser->GetBrowserForMigrationOnly(), profile);
+  return std::make_unique<ConsentDialogCoordinator>(browser, profile);
 }
 
 // static
 void ConsentRequester::SetConsentRequesterForTest(
     std::unique_ptr<ConsentRequester> consent_requester) {
-  DCHECK(consent_requester);
+  CHECK(consent_requester, base::NotFatalUntil::M162);
   *GetTestInstanceStorage() = std::move(consent_requester);
 }
 
-ConsentDialogCoordinator::ConsentDialogCoordinator(Browser* browser,
-                                                   Profile* profile)
+ConsentDialogCoordinator::ConsentDialogCoordinator(
+    BrowserWindowInterface* browser,
+    Profile* profile)
     : browser_(browser), profile_(profile) {}
 
 ConsentDialogCoordinator::~ConsentDialogCoordinator() {
@@ -152,8 +151,13 @@ void ConsentDialogCoordinator::Show() {
     return;
   }
   base::RecordAction(base::UserMetricsAction("DeviceSignalsConsent_Shown"));
-  dialog_widget_ = chrome::ShowBrowserModal(
+
+  auto weak_this = weak_ptr_factory_.GetWeakPtr();
+  views::Widget* widget = chrome::ShowBrowserModal(
       browser_, CreateDeviceSignalsConsentDialogModel());
+  if (weak_this) {
+    dialog_widget_ = widget;
+  }
 }
 
 void ConsentDialogCoordinator::OnConsentDialogAccept() {

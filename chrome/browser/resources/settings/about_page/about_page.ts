@@ -7,7 +7,6 @@
  * information.
  */
 
-import '/shared/settings/prefs/prefs.js';
 // <if expr="not is_chromeos">
 import '../relaunch_confirmation_dialog.js';
 // </if>
@@ -286,14 +285,14 @@ export class SettingsAboutPageElement extends SettingsAboutPageElementBase
     // If this platform has reached the end of the line, display an error icon
     // and ignore UpdateStatus.
     if (this.obsoleteSystemInfo_.endOfLine) {
-      return 'cr:error';
+      return 'cr:error-filled';
     }
 
     switch (this.currentUpdateStatusEvent_!.status) {
       case UpdateStatus.DISABLED_BY_ADMIN:
         return 'cr20:domain';
       case UpdateStatus.FAILED:
-        return 'cr:error';
+        return 'cr:error-filled';
       case UpdateStatus.UPDATED:
       case UpdateStatus.NEARLY_UPDATED:
         return 'cr:check-circle';

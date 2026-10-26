@@ -6,8 +6,6 @@ assert(!is_android)
 
 source_set("device_identity") {
   sources = [
-    "device_identity_provider.cc",
-    "device_identity_provider.h",
     "device_oauth2_token_service.cc",
     "device_oauth2_token_service.h",
     "device_oauth2_token_service_factory.cc",
@@ -17,7 +15,6 @@ source_set("device_identity") {
 
   public_deps = [
     "//base",
-    "//components/invalidation:legacy_topics_cleanup",
     "//google_apis",
   ]
 
@@ -33,10 +30,10 @@ source_set("device_identity") {
       "device_oauth2_token_store_desktop.cc",
       "device_oauth2_token_store_desktop.h",
     ]
-    public_deps += [ "//components/os_crypt/async/common" ]
+    public_deps += [ "//components/os_crypt/common" ]
     deps += [
       "//chrome/common:constants",
-      "//components/os_crypt/async/browser",
+      "//components/os_crypt/browser",
       "//components/policy/core/common:common_constants",
     ]
   } else {
@@ -48,6 +45,7 @@ source_set("device_identity") {
     ]
     public_deps += [ "//chromeos/ash/components/settings" ]
     deps += [
+      "//ash/constants",
       "//chrome/common:constants",
       "//chromeos/ash/components/cryptohome",
     ]
@@ -61,6 +59,7 @@ source_set("unit_tests") {
     ":device_identity",
     "//chrome/common:constants",
     "//chrome/test:test_support",
+    "//chrome/test/base:testing_browser_process",
     "//components/prefs:test_support",
     "//content/public/browser",
     "//content/test:test_support",
@@ -74,13 +73,16 @@ source_set("unit_tests") {
       "chromeos/device_oauth2_token_store_chromeos_unittest.cc",
       "chromeos/token_encryptor_unittest.cc",
     ]
-    deps += [ "//chromeos/ash/components/policy/device_policy:test_support" ]
+    deps += [
+      "//ash/constants",
+      "//chromeos/ash/components/policy/device_policy:test_support",
+    ]
   } else {
     sources += [ "device_oauth2_token_store_desktop_unittest.cc" ]
     deps += [
       "//base/test:test_support",
-      "//components/os_crypt/async/browser",
-      "//components/os_crypt/async/browser:test_support",
+      "//components/os_crypt/browser",
+      "//components/os_crypt/browser:test_support",
       "//components/policy/core/common:common_constants",
       "//components/prefs",
     ]

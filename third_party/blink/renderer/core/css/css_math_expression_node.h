@@ -53,7 +53,9 @@
 #include "third_party/blink/renderer/core/dom/tree_scope.h"
 #include "third_party/blink/renderer/core/layout/geometry/axis.h"
 #include "third_party/blink/renderer/platform/geometry/calculation_value.h"
+#include "third_party/blink/renderer/platform/geometry/progress_clamping.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
+#include "third_party/blink/renderer/platform/wtf/gc_plugin.h"
 #include "third_party/blink/renderer/platform/wtf/threading.h"
 
 namespace blink {
@@ -69,8 +71,8 @@ class WritingDirectionMode;
 class CSSMathExpressionNode;
 class CSSParserLocalContext;
 
-// The order of this enum should not change since its elements are used as
-// indices in the addSubtractResult matrix.
+// kCalcOther must remain the last element, since it's used as the upper bound
+// of CalculationResultCategorySet.
 enum CalculationResultCategory {
   kCalcNumber,
   kCalcLength,
@@ -185,6 +187,13 @@ class CORE_EXPORT CSSMathExpressionNode
   static CSSMathExpressionNode* Create(const CalculationValue& node);
   static CSSMathExpressionNode* Create(PixelsAndPercent pixels_and_percent);
   static CSSMathExpressionNode* Create(const CalculationExpressionNode& node);
+
+  // Returns |node| with its sum/product operations simplified, per
+  // "simplify a calculation tree". Used when building the internal
+  // representation of a CSSMathValue (which is otherwise unsimplified),
+  // per the resolution of csswg-drafts#9451.
+  static const CSSMathExpressionNode* SimplifyCalculationTree(
+      const CSSMathExpressionNode* node);
 
   enum class Flag : uint8_t {
     AllowPercent,
@@ -702,19 +711,22 @@ class CORE_EXPORT CSSMathExpressionOperation final
                              CSSMathType type);
 
   // Note: `CSSMathType type` is default for all non-arithemtic operations.
-  CSSMathExpressionOperation(CalculationResultCategory category,
-                             Operands&& operands,
-                             CSSMathOperator op,
-                             CSSMathType type);
+  CSSMathExpressionOperation(
+      CalculationResultCategory category,
+      Operands&& operands,
+      CSSMathOperator op,
+      CSSMathType type,
+      ProgressClamping clamping = ProgressClamping::kClamp);
 
   CSSMathExpressionNode* Copy() const final {
     Operands operands(operands_);
     return MakeGarbageCollected<CSSMathExpressionOperation>(
-        category_, std::move(operands), operator_, type_);
+        category_, std::move(operands), operator_, type_, clamping_);
   }
 
   const Operands& GetOperands() const { return operands_; }
   CSSMathOperator OperatorType() const { return operator_; }
+  ProgressClamping Clamping() const { return clamping_; }
 
   bool IsOperation() const final { return true; }
   bool IsAddOrSubtract() const {
@@ -773,8 +785,6 @@ class CORE_EXPORT CSSMathExpressionOperation final
     return has_nested_intermediate_result_;
   }
 
-  String CSSTextAsClamp() const;
-
   const CSSMathType& Type() const { return type_; }
 
   const CSSMathExpressionNode* ConvertLiteralsFromPercentageToNumber()
@@ -819,11 +829,13 @@ class CORE_EXPORT CSSMathExpressionOperation final
       const CSSMathExpressionNode* right_side);
 
   double Evaluate(const Vector<double>& operands) const {
-    return EvaluateOperator(operands, operator_);
+    return EvaluateOperator(operands, operator_, clamping_);
   }
 
-  static double EvaluateOperator(const Vector<double>& operands,
-                                 CSSMathOperator op);
+  static double EvaluateOperator(
+      const Vector<double>& operands,
+      CSSMathOperator op,
+      ProgressClamping clamping = ProgressClamping::kClamp);
 
   // Helper for iterating from the 2nd to the last operands
   base::span<const Member<const CSSMathExpressionNode>> SecondToLastOperands()
@@ -838,6 +850,7 @@ class CORE_EXPORT CSSMathExpressionOperation final
   Operands operands_;
   const CSSMathOperator operator_;
   const CSSMathType type_;
+  const ProgressClamping clamping_ = ProgressClamping::kClamp;
 };
 
 template <>
@@ -1203,6 +1216,9 @@ class CORE_EXPORT RandomCacheKey : public GarbageCollected<RandomCacheKey> {
     const AtomicString ua_ident;
     ElementScoped is_element_scoped;
   };
+  GC_PLUGIN_IGNORE(
+      "crbug.com/570923792: Variant/optional/raw_ptr/raw_ref of "
+      "GCed/traceable/Member is disallowed")
   std::variant<RandomName, Member<const CSSPrimitiveValue>> value_;
 };
 
@@ -1270,15 +1286,11 @@ class CORE_EXPORT CSSMathExpressionRandomFunction final
   bool MayHaveRelativeUnit() const final;
   CSSPrimitiveValue::UnitType ResolvedUnitType() const final;
   const CSSMathExpressionNode& PopulateWithTreeScope(
-      const TreeScope*) const final {
-    NOTREACHED();
-  }
+      const TreeScope*) const final;
   const CSSMathExpressionNode* TransformAnchors(
       LogicalAxis,
       const TryTacticTransform&,
-      const WritingDirectionMode&) const final {
-    NOTREACHED();
-  }
+      const WritingDirectionMode&) const final;
   bool HasInvalidAnchorFunctions(const CSSLengthResolver&) const final;
   const RandomCacheKey* GetRandomCacheKey() const { return random_cache_key_; }
   const CSSMathExpressionNode* Min() const { return min_; }

@@ -11,7 +11,6 @@
 #include "base/sequence_checker.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/optimization_guide/core/model_execution/on_device_capability.h"
-#include "components/optimization_guide/core/model_execution/remote_model_executor.h"
 #include "components/optimization_guide/proto/model_execution.pb.h"
 #include "components/optimization_guide/proto/model_validation.pb.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -19,6 +18,31 @@
 class Profile;
 
 namespace optimization_guide {
+
+class ModelQualityLogEntry;
+struct OptimizationGuideModelExecutionResult;
+
+// Triggers validation of the model. Used for manual testing.
+inline constexpr char kModelValidateSwitch[] =
+    "optimization-guide-model-validate";
+
+// Triggers validation of the server-side AI model execution. Used for
+// integration testing.
+inline constexpr char kModelExecutionValidateSwitch[] =
+    "optimization-guide-model-execution-validate";
+
+// Enables the on-device model to run validation at startup after a delay. A
+// text file can be provided used as input for the validation job and an output
+// file path can be provided to write the response to.
+inline constexpr char kOnDeviceValidationRequestOverrideSwitch[] =
+    "ondevice-validation-request-override";
+inline constexpr char kOnDeviceValidationWriteToFileSwitch[] =
+    "ondevice-validation-write-to-file";
+
+// Returns whether model validator service should be started to validate various
+// model executions such as TFLite, server-side AI, on-device AI models. Used
+// for integration testing purposes.
+bool ShouldStartModelValidator();
 
 // Keyed service that validates models when enabled via command-line switch.
 class ModelValidatorKeyedService : public KeyedService,

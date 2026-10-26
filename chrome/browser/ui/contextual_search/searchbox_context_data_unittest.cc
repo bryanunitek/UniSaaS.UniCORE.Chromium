@@ -7,7 +7,9 @@
 #include "base/unguessable_token.h"
 #include "components/omnibox/browser/searchbox.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/omnibox_proto/model_mode.pb.h"
 #include "third_party/omnibox_proto/tool_mode.pb.h"
+#include "ui/base/unowned_user_data/unowned_user_data_host.h"
 #include "url/gurl.h"
 
 namespace {
@@ -26,12 +28,14 @@ const char kExampleUrl[] = "https://example.com";
 class SearchboxContextDataTest : public testing::Test {};
 
 TEST_F(SearchboxContextDataTest, TakePendingContextReturnsNullPtrWhenNotSet) {
-  SearchboxContextData data;
+  ui::UnownedUserDataHost host;
+  SearchboxContextData data(host);
   EXPECT_EQ(nullptr, data.TakePendingContext());
 }
 
 TEST_F(SearchboxContextDataTest, SetAndTakePendingContext) {
-  SearchboxContextData data;
+  ui::UnownedUserDataHost host;
+  SearchboxContextData data(host);
   auto context = std::make_unique<SearchboxContextData::Context>();
   context->text = kHelloText;
   data.SetPendingContext(std::move(context));
@@ -44,7 +48,8 @@ TEST_F(SearchboxContextDataTest, SetAndTakePendingContext) {
 }
 
 TEST_F(SearchboxContextDataTest, SetAndTakePendingContextWithToolMode) {
-  SearchboxContextData data;
+  ui::UnownedUserDataHost host;
+  SearchboxContextData data(host);
   auto context = std::make_unique<SearchboxContextData::Context>();
   context->mode = omnibox::TOOL_MODE_IMAGE_GEN;
   data.SetPendingContext(std::move(context));
@@ -56,15 +61,43 @@ TEST_F(SearchboxContextDataTest, SetAndTakePendingContextWithToolMode) {
   EXPECT_EQ(nullptr, data.TakePendingContext());
 }
 
+TEST_F(SearchboxContextDataTest, GetOrCreatePendingContextCreatesContext) {
+  ui::UnownedUserDataHost host;
+  SearchboxContextData data(host);
+  data.GetOrCreatePendingContext().model = omnibox::MODEL_MODE_GEMINI_PRO;
+
+  std::unique_ptr<SearchboxContextData::Context> taken_context =
+      data.TakePendingContext();
+  ASSERT_NE(nullptr, taken_context);
+  EXPECT_EQ(omnibox::MODEL_MODE_GEMINI_PRO, taken_context->model);
+  EXPECT_EQ(nullptr, data.TakePendingContext());
+}
+
+TEST_F(SearchboxContextDataTest, GetOrCreatePendingContextKeepsContext) {
+  ui::UnownedUserDataHost host;
+  SearchboxContextData data(host);
+  auto context = std::make_unique<SearchboxContextData::Context>();
+  context->text = kHelloText;
+  data.SetPendingContext(std::move(context));
+  data.GetOrCreatePendingContext().mode = omnibox::TOOL_MODE_DEEP_SEARCH;
+
+  std::unique_ptr<SearchboxContextData::Context> taken_context =
+      data.TakePendingContext();
+  ASSERT_NE(nullptr, taken_context);
+  EXPECT_EQ(kHelloText, taken_context->text);
+  EXPECT_EQ(omnibox::TOOL_MODE_DEEP_SEARCH, taken_context->mode);
+}
+
 TEST_F(SearchboxContextDataTest, SetAndTakePendingContextWithFileAttachment) {
-  SearchboxContextData data;
+  ui::UnownedUserDataHost host;
+  SearchboxContextData data(host);
   auto context = std::make_unique<SearchboxContextData::Context>();
   context->text = kWorldText;
   context->file_infos.push_back(
       searchbox::mojom::SearchContextAttachment::NewFileAttachment(
           searchbox::mojom::FileAttachment::New(
               base::UnguessableToken::Create(), kTestPdf, kApplicationPdf,
-              kImageUrl, std::nullopt, std::nullopt)));
+              kImageUrl, std::nullopt, std::nullopt, std::nullopt)));
   data.SetPendingContext(std::move(context));
 
   std::unique_ptr<SearchboxContextData::Context> taken_context =
@@ -85,13 +118,17 @@ TEST_F(SearchboxContextDataTest, SetAndTakePendingContextWithFileAttachment) {
 }
 
 TEST_F(SearchboxContextDataTest, SetAndTakePendingContextWithTabAttachment) {
-  SearchboxContextData data;
+  ui::UnownedUserDataHost host;
+  SearchboxContextData data(host);
   auto context = std::make_unique<SearchboxContextData::Context>();
   context->text = kWorldText;
   context->file_infos.push_back(
       searchbox::mojom::SearchContextAttachment::NewTabAttachment(
-          searchbox::mojom::TabAttachment::New(kTabId, kTabName,
-                                                   GURL(kExampleUrl))));
+          searchbox::mojom::TabAttachment::New(
+              kTabId, kTabName, GURL(kExampleUrl),
+              searchbox::mojom::TabAttachmentSource::kContextMenu,
+              /*from_single_tab_menu_item=*/false,
+              /*is_active_tab=*/false)));
   data.SetPendingContext(std::move(context));
 
   std::unique_ptr<SearchboxContextData::Context> taken_context =

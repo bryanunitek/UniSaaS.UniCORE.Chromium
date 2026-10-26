@@ -45,7 +45,7 @@ class CORE_EXPORT ApplyStyleCommand final : public CompositeEditCommand {
   enum InlineStyleRemovalMode { kRemoveIfNeeded, kRemoveAlways, kRemoveNone };
   enum AddStyledElement { kAddStyledElement, kDoNotAddStyledElement };
   enum MergeSiblings { kMergeSiblings, kDoNotMergeSiblings };
-  typedef bool (*IsInlineElementToRemoveFunction)(const Element*);
+  using IsInlineElementToRemoveFunction = bool (*)(const Element*);
 
   ApplyStyleCommand(Document&,
                     const EditingStyle*,
@@ -56,10 +56,11 @@ class CORE_EXPORT ApplyStyleCommand final : public CompositeEditCommand {
                     const Position& start,
                     const Position& end);
   ApplyStyleCommand(Element*, bool remove_only);
-  ApplyStyleCommand(Document&,
-                    const EditingStyle*,
-                    bool (*is_inline_element_to_remove)(const Element*),
-                    InputEvent::InputType);
+  ApplyStyleCommand(
+      Document&,
+      const EditingStyle*,
+      IsInlineElementToRemoveFunction is_inline_element_to_remove_function,
+      InputEvent::InputType);
 
   void Trace(Visitor*) const override;
 
@@ -173,14 +174,15 @@ class CORE_EXPORT ApplyStyleCommand final : public CompositeEditCommand {
   Position EndPosition();
 
   const Member<EditingStyle> style_;
-  const InputEvent::InputType input_type_;
-  const PropertyLevel property_level_;
+  const InputEvent::InputType input_type_ = InputEvent::InputType::kNone;
+  const PropertyLevel property_level_ = kPropertyDefault;
   Position start_;
   Position end_;
-  bool use_ending_selection_;
-  const Member<Element> styled_inline_element_;
-  const bool remove_only_;
-  IsInlineElementToRemoveFunction const is_inline_element_to_remove_function_;
+  bool use_ending_selection_ = true;
+  const Member<Element> styled_inline_element_ = nullptr;
+  const bool remove_only_ = false;
+  IsInlineElementToRemoveFunction const is_inline_element_to_remove_function_ =
+      nullptr;
 };
 
 enum ShouldStyleAttributeBeEmpty {

@@ -74,6 +74,7 @@
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/test/test_windows.h"
 #include "ui/aura/window.h"
+#include "ui/base/window_open_disposition.h"
 
 using ::testing::_;
 using ::testing::Eq;
@@ -1047,7 +1048,7 @@ TEST_F(AppPlatformMetricsServiceTest, LaunchApps) {
   // TODO(crbug.com/40199106): Register non-mojom apps.
   proxy->LaunchAppWithParams(AppLaunchParams(
       kWebAppId2, LaunchContainer::kLaunchContainerTab,
-      WindowOpenDisposition::NEW_FOREGROUND_TAB, LaunchSource::kFromTest));
+      WindowOpenDisposition::kNewForegroundTab, LaunchSource::kFromTest));
 
   VerifyAppsLaunchUkm("https://foo2.com", AppTypeName::kChromeBrowser,
                       LaunchSource::kFromTest);
@@ -1056,7 +1057,7 @@ TEST_F(AppPlatformMetricsServiceTest, LaunchApps) {
 
   proxy->LaunchAppWithParams(AppLaunchParams(
       kSystemWebAppId, LaunchContainer::kLaunchContainerTab,
-      WindowOpenDisposition::NEW_FOREGROUND_TAB, LaunchSource::kFromTest));
+      WindowOpenDisposition::kNewForegroundTab, LaunchSource::kFromTest));
   VerifyAppsLaunchUkm("app://" + std::string(kSystemWebAppId),
                       AppTypeName::kSystemWeb, LaunchSource::kFromTest);
   VerifyAppLaunchPerAppTypeHistogram(1, AppTypeName::kSystemWeb);

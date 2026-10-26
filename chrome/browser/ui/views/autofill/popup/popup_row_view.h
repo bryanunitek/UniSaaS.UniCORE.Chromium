@@ -13,6 +13,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ui/autofill/next_idle_barrier.h"
+#include "chrome/browser/ui/views/autofill/popup/popup_interactive_row_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_view_utils.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/input/native_web_keyboard_event.h"
@@ -22,9 +23,9 @@
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
 
-namespace content {
-struct NativeWebKeyboardEvent;
-}  // namespace content
+namespace views {
+class Link;
+}
 
 namespace autofill {
 
@@ -36,17 +37,10 @@ class PopupRowContentView;
 // responsible for the view layout. It expects a `PopupRowContentView` instead.
 // It also supports the expanding control depending on whether the suggestion
 // has children or not (see `Suggestion::children`).
-class PopupRowView : public views::View, public views::ViewObserver {
-  METADATA_HEADER(PopupRowView, views::View)
+class PopupRowView : public PopupInteractiveRowView,
+                     public views::ViewObserver {
+  METADATA_HEADER(PopupRowView, PopupInteractiveRowView)
  public:
-  // Enum class describing the different cells that a `PopupRowView` can
-  // contain.
-  enum class CellType {
-    // The cell containing the main content of the row.
-    kContent = 0,
-    // The cell containing the control elements (such as a delete button).
-    kControl = 1
-  };
 
   // Interface used to announce changes in selected cells to accessibility
   // frameworks.
@@ -88,6 +82,8 @@ class PopupRowView : public views::View, public views::ViewObserver {
   ~PopupRowView() override;
 
   // views::View:
+  void ViewHierarchyChanged(
+      const views::ViewHierarchyChangedDetails& details) override;
   bool OnMouseDragged(const ui::MouseEvent& event) override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
@@ -100,9 +96,11 @@ class PopupRowView : public views::View, public views::ViewObserver {
   // views::ViewObserver:
   void OnViewFocused(views::View* focused_now) override;
 
-  // Gets and sets the selected cell within this row.
-  std::optional<CellType> GetSelectedCell() const { return selected_cell_; }
-  virtual void SetSelectedCell(std::optional<CellType> cell);
+  // PopupInteractiveRowView:
+  std::optional<CellType> GetSelectedCell() const override;
+  void SetSelectedCell(std::optional<CellType> cell) override;
+  bool HandleKeyPressEvent(const input::NativeWebKeyboardEvent& event) override;
+  bool IsSelectable() const override;
 
   // Sets whether the row's child suggestions are displayed in a sub-popup.
   // Note that the row doesn't control the sub-popup, but rather should be
@@ -112,19 +110,11 @@ class PopupRowView : public views::View, public views::ViewObserver {
   // Returns the control cell's bounds. The cell must be present.
   gfx::RectF GetControlCellBounds() const;
 
-  // Attempts to process a key press `event`. Returns true if it did (and the
-  // parent no longer needs to handle it).
-  virtual bool HandleKeyPressEvent(const input::NativeWebKeyboardEvent& event);
-
-  // Returns if the popup row is available for selection.
-  bool IsSelectable() const;
-
   // Accepts the suggestion that corresponds to this view's line number.
   bool Accept(AutofillMetrics::SuggestionAcceptedMethod method) const;
 
   // Returns the view representing the content area of the row.
   PopupRowContentView& GetContentView() { return *content_view_; }
-  const PopupRowContentView& GetContentView() const { return *content_view_; }
 
   // Returns the view representing the suggestions expanding control of the row.
   views::View* GetExpandChildSuggestionsView() {
@@ -159,6 +149,16 @@ class PopupRowView : public views::View, public views::ViewObserver {
   // the screen long enough, see `OnVisibleBoundsChanged()` implementation for
   // what these "enough"s mean.
   bool IsViewVisibleEnough() const;
+
+  // Helpers for traversing and focusing inline `views::Link` children inside
+  // `content_view_`. `FocusNextLink()` and `FocusPreviousLink()` return `true`
+  // if link focus changed, or `false` if the caller should handle the key.
+  views::Link* GetFocusedLink() const;
+  std::vector<views::Link*> GetLinks() const;
+  bool FocusNextLink();
+  bool FocusPreviousLink();
+  void SetFocusedLink(std::optional<size_t> link_index);
+  void RefreshLinkFocusRings();
 
   // The delegate used for accessibility announcements (implemented by the
   // parent view).
@@ -220,6 +220,10 @@ class PopupRowView : public views::View, public views::ViewObserver {
   // suggestion. If `false` the content part is not highlighted separately,
   // but the whole row is highlighted instead as for the control view.
   const bool suggestion_is_acceptable_;
+
+  // Index of the currently focused link in `GetLinks()`, or `std::nullopt`
+  // when no individual link is focused.
+  std::optional<size_t> focused_link_index_;
 };
 
 }  // namespace autofill

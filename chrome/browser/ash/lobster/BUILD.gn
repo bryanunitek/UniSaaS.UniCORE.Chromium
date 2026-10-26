@@ -40,8 +40,6 @@ static_library("lobster") {
     "lobster_system_state_provider_impl.h",
   ]
 
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
-
   deps = [
     "//ash",
     "//ash/public/cpp",
@@ -110,8 +108,6 @@ source_set("unit_tests") {
     "lobster_system_state_provider_impl_unittest.cc",
   ]
 
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
-
   deps = [
     ":lobster",
     "//base",
@@ -122,6 +118,7 @@ source_set("unit_tests") {
     "//chrome/browser/signin",
     "//chrome/test:test_support",
     "//chrome/test:test_support_unit",
+    "//chrome/test/base:testing_browser_process",
     "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/editor_menu/public/cpp",
     "//chromeos/ash/components/specialized_features",

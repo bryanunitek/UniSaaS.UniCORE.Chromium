@@ -7,11 +7,11 @@
 <translation id="1046742265332833834">Blåt tema</translation>
 <translation id="1070329623210597193">Filer, som dette website kan se eller redigere</translation>
 <translation id="1074758928858737435">Du kan anmode om at se computerversionen af websites</translation>
+<translation id="1089791933924803646">Få Chrome-forslag i andre apps</translation>
 <translation id="1109482864356262001">Funktioner, der skal bruge bevægelses- eller lyssensorer, fungerer ikke</translation>
 <translation id="1126523729897810826">Udfør de foreslåede handlinger nedenfor for at få mest muligt ud af Chrome</translation>
 <translation id="113098737392899175">Naviger på sider med en tekstmarkør, når der er tilsluttet et tastatur</translation>
 <translation id="1148624853678088576">Så er du klar</translation>
-<translation id="1149644372535087155">Gem adgangskoder i Chrome</translation>
 <translation id="1178015372320901893">Feltet i bunden, der viser Mine genveje</translation>
 <translation id="1178581264944972037">Pause</translation>
 <translation id="1181037720776840403">Fjern</translation>
@@ -29,9 +29,8 @@
 <translation id="131112695174432497">Data, der påvirker personlig tilpasning af annoncer, slettes</translation>
 <translation id="1317194122196776028">Glem dette website</translation>
 <translation id="1321110954513621549">Tilladt • Omtrentlig</translation>
-<translation id="1323433172918577554">Se flere</translation>
+<translation id="1323433172918577554">Vis flere</translation>
 <translation id="1333965224356556482">Tillad ikke, at websites ser din lokation</translation>
-<translation id="1343356790768851700">Dette website foretager en vurdering af, hvad du kan lide, og foreslår derefter annoncer til andre websites</translation>
 <translation id="1369915414381695676">Websitet <ph name="SITE_NAME" /> blev tilføjet</translation>
 <translation id="1371239764779356792">Tillad, at et website gemmer data på din enhed</translation>
 <translation id="1383876407941801731">Søg</translation>
@@ -47,12 +46,14 @@
 <translation id="1464044141348608623">Tillad ikke, at websites ved, hvornår du aktivt bruger din enhed</translation>
 <translation id="146867109637325312">{COUNT,plural, =1{<ph name="SITE_COUNT" /> website}one{<ph name="SITE_COUNT" /> website}other{<ph name="SITE_COUNT" /> websites}}</translation>
 <translation id="1476700086976862423">Sepia temafarve</translation>
+<translation id="1497214680865404175">Billede uploadet af bruger</translation>
 <translation id="1500473259453106018">Skjul kortet Vis prisfald på faner</translation>
 <translation id="1508931164824684991">Websites kan anvende JavaScript</translation>
 <translation id="1510341833810331442">Websites har ikke tilladelse til at gemme data på din enhed</translation>
 <translation id="1532175480576580256">Felt i bunden med Mine genveje åbnet i fuld højde</translation>
 <translation id="1538031354170655462">Websites bruger normalt NFC (Near Field Communication) til at fungere med tags eller enheder i nærheden, f.eks. til scanning af badges eller kontaktløs betaling</translation>
 <translation id="1547123415014299762">Tredjepartscookies er tilladt</translation>
+<translation id="1565353932454306569"><ph name="ORIGIN" /> – Træk fra siden af skærmen for at afslutte fuld skærm.</translation>
 <translation id="1569054338208717605">Gør websites hurtigere med Chromes V8-maskine, som dog gør Chrome en smule mindre modstandsdygtig over for angreb</translation>
 <translation id="1593426485665524382">Nye handlinger er tilgængelige øverst på skærmen</translation>
 <translation id="1594521731409209842">Knib fingrene sammen på skærmen for at tilpasse størrelsen på billedet</translation>
@@ -84,6 +85,7 @@
 <translation id="1818308510395330587">Aktivér også kameraet i <ph name="BEGIN_LINK" />Android-indstillingerne<ph name="END_LINK" /> for at give <ph name="APP_NAME" /> tilladelse til at bruge AR.</translation>
 <translation id="1822318649925991542">Skift placering for at tilpasse din browseroplevelse</translation>
 <translation id="1848033246551405023">Sans Serif-skrifttype</translation>
+<translation id="1861244985839668297">Når denne indstilling er aktiveret, kan websites anmode om tilladelse til at bruge HID-enheder. Når denne indstilling er deaktiveret, kan websites ikke bruge HID-enheder.</translation>
 <translation id="1861262398884155592">Denne mappe er tom</translation>
 <translation id="1881806992065048905">Feltet i bunden, der viser udseendet af siden Ny fane</translation>
 <translation id="1887786770086287077">Lokationsadgang er deaktiveret for denne enhed. Aktivér det under <ph name="BEGIN_LINK" />indstillinger for Android<ph name="END_LINK" />.</translation>
@@ -136,6 +138,7 @@
 <translation id="2315043854645842844">Klientens certifikatvalg understøttes ikke af operativsystemet.</translation>
 <translation id="2347601491101454548">Felt i bunden med Mine genveje åbnet i halv højde</translation>
 <translation id="2359808026110333948">Fortsæt</translation>
+<translation id="2364212713469273030"><ph name="ORIGIN" /> – Træk fra toppen af skærmen, og stryg fra venstre eller højre kant for at afslutte fuld skærm.</translation>
 <translation id="2379925928934107488">Anvend Mørkt tema på websites, når Chrome anvender Mørkt tema (når det er muligt)</translation>
 <translation id="2390272837142897736">Zoom in</translation>
 <translation id="2397689164757137845">Tilladt • Præcis</translation>
@@ -178,9 +181,7 @@
 <translation id="2710883118091822664">Log ind for nemt at fortsætte på alle dine enheder</translation>
 <translation id="2713106313042589954">Slå kamera fra</translation>
 <translation id="2717722538473713889">Mailadresser</translation>
-<translation id="2726059656860238749">Åbn Chrome med omnifeltet i fokus, hvilket reducerer opstartstiden på mindre avancerede enheder.</translation>
 <translation id="2750481671343847896">Websites kan vise loginmeddelelser fra identitetstjenester.</translation>
-<translation id="2787357173144933081">Åbn omnifeltet</translation>
 <translation id="2789132527330338807">Websites kan anmode om at oprette et 3D-kort over dine omgivelser eller registrere kamerapositionen</translation>
 <translation id="2790501146643349491">Når dette er slået til, kan nyligt lukkede websites gennemføre afsendelse og modtagelse af data. Når dette er slået fra, kan nyligt lukkede websites ikke sende eller modtage data.</translation>
 <translation id="2795716239552913152">Websites bruger normalt din lokation til relevante formål eller oplysninger om lokale nyheder eller butikker i nærheden</translation>
@@ -192,6 +193,7 @@
 <translation id="2850913818900871965">Anmod om mobilvenlig visning</translation>
 <translation id="2870560284913253234">Website</translation>
 <translation id="2874939134665556319">Forrige nummer</translation>
+<translation id="2890412325133442491">Chrome-standard</translation>
 <translation id="2891975107962658722">Bloker et website på en måde, hvor det ikke kan gemme data på din enhed</translation>
 <translation id="2903493209154104877">Adresser</translation>
 <translation id="2903764741244499151">Websites kan automatisk åbne integreret billede. På den måde kan du fortsætte med at se en video og samtidig have plads til at udføre andre opgaver på skærmen.</translation>
@@ -224,7 +226,6 @@
 <translation id="3167868116600277716">Discover-feed</translation>
 <translation id="3198916472715691905"><ph name="STORAGE_AMOUNT" /> gemte data</translation>
 <translation id="3199078925536734975">Tilladt denne gang • Omtrentlig</translation>
-<translation id="3208584281581115441">Tjek nu</translation>
 <translation id="321187648315454507">Aktivér også notifikationer i <ph name="BEGIN_LINK" />Android-indstillingerne<ph name="END_LINK" /> for at give <ph name="APP_NAME" /> tilladelse til at sende dig notifikationer.</translation>
 <translation id="3223425961342298674">Adgang til lokation er ikke tilladt</translation>
 <translation id="3227137524299004712">Mikrofon</translation>
@@ -280,11 +281,9 @@
 <translation id="3779154269823594982">Skift adgangskoder</translation>
 <translation id="3797520601150691162">Anvend ikke Mørkt tema på et bestemt website</translation>
 <translation id="3803367742635802571">Websites, du besøger, holder muligvis op med at fungere som forventet</translation>
-<translation id="3816118180265633665">Chrome-farver</translation>
 <translation id="381841723434055211">Telefonnumre</translation>
 <translation id="3823453485268218808">Mono-skrifttype</translation>
 <translation id="3826050100957962900">Tredjepartslogin</translation>
-<translation id="3831065134033923230">Tjek dine gemte adgangskoder</translation>
 <translation id="3835233591525155343">Din enhedsbrug</translation>
 <translation id="3843916486309149084">I dag blokerer Chrome cookies igen</translation>
 <translation id="385051799172605136">Tilbage</translation>
@@ -292,8 +291,6 @@
 <translation id="3870711497942672548">Gør Chrome personlig med tilpassede farver og billeder på din startside</translation>
 <translation id="389521680295183045">Websites kan anmode om at få at vide, hvornår du aktivt bruger din enhed</translation>
 <translation id="3895926599014793903">Tving aktivering af zoom</translation>
-<translation id="3903738175795615004">Træk fra toppen af skærmen, eller tryk på Esc-tasten for at afslutte fuld skærm.</translation>
-<translation id="3905475044299942653">Sæt en stopper for mange notifikationer</translation>
 <translation id="3922092564198021702">Åbn Indstillinger på din telefon</translation>
 <translation id="3924858949939391676">Vis links, når Læsetilstand er aktiveret</translation>
 <translation id="3933121352599513978">Skjul uønskede anmodninger (anbefales)</translation>
@@ -353,7 +350,6 @@
 <translation id="4479647676395637221">Spørg, før websites bruger dit kamera (anbefales)</translation>
 <translation id="4505788138578415521">Webadressen er udvidet</translation>
 <translation id="4522570452068850558">Detaljer</translation>
-<translation id="4523472416386354622">Log ind for at starte</translation>
 <translation id="4529207923544043455">Feltet i bunden viser udførte og ikke-udførte opgaver på konfigurationslisten</translation>
 <translation id="4534723447064627427">Aktivér også din mikrofon i <ph name="BEGIN_LINK" />Android-indstillingerne<ph name="END_LINK" /> for at give <ph name="APP_NAME" /> adgang til mikrofonen.</translation>
 <translation id="4545694195887112015">Konfigurationsarket er lukket</translation>
@@ -366,13 +362,13 @@
 <translation id="4645575059429386691">Administreret af en af dine forældre</translation>
 <translation id="4651224148644053314">Flere farver og valgmuligheder</translation>
 <translation id="4652266463001779298">Ikke tilladt</translation>
-<translation id="4655846733459137112">Tryk på Ja for nemt at bruge denne adgangskode, næste gang du logger ind</translation>
 <translation id="4663373278480897665">Der er givet adgang til kameraet</translation>
 <translation id="4670064810192446073">Virtual reality</translation>
 <translation id="4672315773691449562">Tryk på Browserapp og derefter på Chrome</translation>
 <translation id="4676059169848868271">Aktivér desuden registrering af håndbevægelser i <ph name="BEGIN_LINK" />systemindstillingerne<ph name="END_LINK" /> for at give <ph name="APP_NAME" /> tilladelse til at bruge håndregistrering.</translation>
 <translation id="4688045258817337666">Administrer dine kort</translation>
 <translation id="4722332387043141878">Websites bruger normalt din enheds bevægelses- og lyssensorer til funktioner som f.eks. virtual reality eller registrering af motion</translation>
+<translation id="4748783296226936791">Websites opretter normalt forbindelse til HID-enheder i forbindelse med funktioner, der anvender ualmindelige tastaturer, spilcontrollere og andre enheder</translation>
 <translation id="4755971844837804407">Når dette er slået til, kan websites vise dig en hvilken som helst annonce. Når dette er slået fra, kan websites ikke vise påtrængende eller vildledende annoncer.</translation>
 <translation id="4779083564647765204">Zoom</translation>
 <translation id="4807122856660838973">Aktivér Beskyttet browsing</translation>
@@ -388,7 +384,6 @@
 <translation id="4936863036653376783">Du finder dine grupper i sektionen for fanegrupper på alle dine enheder</translation>
 <translation id="4945443401464700059"><ph name="SITE" /> er blokeret, så det ikke kan bruge dine oplysninger på</translation>
 <translation id="4953688446973710931">Når dette er slået til, kan websites anmode om tilladelse til automatisk at downloade flere filer. Når dette er slået fra, kan websites ikke downloade flere filer automatisk.</translation>
-<translation id="4962975101802056554">Tilbagekald alle tilladelser for enheden</translation>
 <translation id="4972737347717125191">Websites kan anmode om tilladelse til at bruge virtual reality-enheder og -data</translation>
 <translation id="4973805849704516244">Felt i bunden med Chrome-farver</translation>
 <translation id="497421865427891073">Gå fremad</translation>
@@ -412,7 +407,6 @@
 <translation id="512938610812707830">Feltet i bunden med temasamlinger til siden Ny fane er åbnet i fuld højde</translation>
 <translation id="5137460097045297858">Feltet i bunden med Discover-feedet er åbnet i halv højde</translation>
 <translation id="5139253256813381453">{PRICE_DROP_COUNT,plural, =1{Prisfald på dine åbne faner}one{Prisfald på dine åbne faner}other{Prisfald på dine åbne faner}}</translation>
-<translation id="5150048675001754041">Log hurtigt og nemt ind på websites og i apps</translation>
 <translation id="5186036860380548585">Se valgmuligheden øverst på skærmen</translation>
 <translation id="5197729504361054390">De kontakter, du vælger, deles med <ph name="BEGIN_BOLD" /><ph name="SITE" /><ph name="END_BOLD" />.</translation>
 <translation id="5198930230016462977">Feltet i bunden med tilpasning af siden Ny fane er lukket</translation>
@@ -422,14 +416,12 @@
 <translation id="5239623327352565343">Adgang til lokation er tilladt</translation>
 <translation id="5246825184569358663">Denne handling sletter alle lokale data, herunder cookies, og nulstiller alle tilladelser for <ph name="DOMAIN" /> samt alle websites under domænet</translation>
 <translation id="5264323282659631142">Fjern "<ph name="CHIP_LABEL" />"</translation>
-<translation id="528192093759286357">Træk fra toppen, og tryk på tilbageknappen igen for at afslutte fuld skærm.</translation>
 <translation id="5286194356314741248">Søger</translation>
 <translation id="5300589172476337783">Vis</translation>
 <translation id="5301954838959518834">OK, det er forstået</translation>
 <translation id="5317780077021120954">Gem</translation>
 <translation id="5335288049665977812">Tillad, at websites kører JavaScript (anbefales)</translation>
 <translation id="534295439873310000">NFC-enheder</translation>
-<translation id="5344522958567249764">Administrer privatliv vedrørende annoncering</translation>
 <translation id="5373874281522292782">Dine fanegrupper gemmes</translation>
 <translation id="5394307150471348411">{DETAIL_COUNT,plural, =1{(+ 1 anden)}one{(+ # anden)}other{(+ # andre)}}</translation>
 <translation id="5403592356182871684">Navne</translation>
@@ -453,11 +445,13 @@
 <translation id="5668404140385795438">Tilsidesæt en anmodning fra et website om at undgå at zoome ind</translation>
 <translation id="5668843533782548925">Websites er langsommere, men mere sikre</translation>
 <translation id="5677928146339483299">Blokeret</translation>
-<translation id="5689516760719285838">Placering</translation>
+<translation id="5679089750838794164">Chrome kan nu vise dig forslag i andre apps baseret på dine browserdata, f.eks. din seneste browserhistorik. Disse data behandles på sikker vis på din enhed. Du kan til enhver tid deaktivere dette i Chrome-indstillingerne.</translation>
+<translation id="5689516760719285838">Lokation</translation>
 <translation id="5690795753582697420">Kameraet er deaktiveret i Android-indstillingerne</translation>
 <translation id="5700761515355162635">Tredjepartscookies er tilladt</translation>
 <translation id="5706552988683188916">Denne handling sletter cookies og andre websitedata for <ph name="WEBSITE" /></translation>
 <translation id="571222594670061844">Websites kan vise loginmeddelelser fra identitetstjenester.</translation>
+<translation id="5719854774000914513">Websites kan anmode om tilladelse til at oprette forbindelse til HID-enheder</translation>
 <translation id="5740126560802162366">Websites kan gemme data på din enhed</translation>
 <translation id="5743425052258407233">Se din historik på alle dine enheder, så du nemt kan fortsætte, hvor du slap</translation>
 <translation id="5749158352074143502">Fortsæt med denne fane</translation>
@@ -469,7 +463,6 @@
 <translation id="5804241973901381774">Tilladelser</translation>
 <translation id="5817042798620209981">Websiteoplysninger, dialogboks</translation>
 <translation id="5822675474983796325">Feltet i bunden med tilpasning af siden Ny fane er åbnet i fuld højde</translation>
-<translation id="5826403277762134844">Feltet i bunden med vejledning i at gemme adgangskoder i Chrome</translation>
 <translation id="5833899990800318936">Tillad ikke, at websites anvender JavaScript</translation>
 <translation id="583673505367439042">Websites kan anmode om tilladelse til at redigere filer og mapper på din enhed</translation>
 <translation id="5844448279347999754">Når dette er slået til, kan websites anmode om tilladelse at se tekst og billeder, der er gemt i din udklipsholder. Når dette er slået fra, kan websites ikke se tekst eller billeder, der er gemt i din udklipsholder.</translation>
@@ -506,7 +499,7 @@
 <translation id="6085954183010297841">Vil du slette tilladelsen til filredigering? <ph name="FILE" /></translation>
 <translation id="6104860901391833523">Når indstillingen er aktiveret, kan websites automatisk åbne integreret billede. Når indstillingen er deaktiveret, kan websites ikke automatisk åbne integreret billede.</translation>
 <translation id="6120483543004435978">Når dette er slået til, kan websites anmode om tilladelse til at blive underrettet, når du aktivt bruger din enhed. Når dette er slået fra, kan websites ikke se, hvornår du aktivt bruger din enhed.</translation>
-<translation id="6132075343662013154">Chrome tilbyder at gemme din adgangskode</translation>
+<translation id="612871598708395517">Skjul Få Chrome-forslag i andre apps</translation>
 <translation id="615886654739818377">Tillad ikke, at websites administrerer vinduer på alle dine skærme</translation>
 <translation id="6165508094623778733">Flere oplysninger</translation>
 <translation id="6171020522141473435">Når dette er slået til, kan websites anmode om tilladelse til at bruge Bluetooth-enheder. Når dette er slået fra, kan websites ikke bruge Bluetooth-enheder.</translation>
@@ -514,7 +507,6 @@
 <translation id="6181444274883918285">Tilføj en undtagelse for et website</translation>
 <translation id="6194967801833346599">{DAYS,plural, =1{I morgen blokerer Chrome cookies igen}one{Cookies blokeres igen om # dag}other{Cookies blokeres igen om # dage}}</translation>
 <translation id="6196640612572343990">Bloker cookies fra tredjeparter</translation>
-<translation id="6205314730813004066">Privatliv vedrørende annoncering</translation>
 <translation id="6207207788774442484">Slet data, og nulstil tilladelser</translation>
 <translation id="6211409961905616543">Websites kan bruge bevægelses- og lyssensorer</translation>
 <translation id="6218508144653756827">Pink tema</translation>
@@ -530,10 +522,10 @@
 <translation id="6398765197997659313">Afslut fuld skærm</translation>
 <translation id="640163077447496506">Udløber i dag</translation>
 <translation id="6405650995156823521"><ph name="FIRST_PART" /> • <ph name="SECOND_PART" /></translation>
-<translation id="6413980879783180524">Temasamlinger</translation>
 <translation id="6439114592976064011">Bloker websites fra at benytte dine virtual reality-enheder og -data</translation>
 <translation id="6447842834002726250">Cookies</translation>
 <translation id="6452138246455930388">Prisfald på din åbne fane fra <ph name="OLD_PRICE" /> til <ph name="NEW_PRICE" />, <ph name="PRODUCT_NAME" />, <ph name="DOMAIN_NAME" /></translation>
+<translation id="6495608040096939405">Tilbagekald enhedstilladelse for <ph name="NAME" /></translation>
 <translation id="6500423977866688905">Når vinduet er smalt, kan du anmode om mobilvenlig visning</translation>
 <translation id="6527303717912515753">Del</translation>
 <translation id="6530703012083415527">Når dette er slået til, kan websites anvende pop op-vinduer og omdirigeringer. Når dette er slået fra, kan websites ikke anvende pop op-vinduer og omdirigeringer.</translation>
@@ -579,20 +571,18 @@
 <translation id="6950072572526089586">Et website, du besøger, kan gemme oplysninger om, hvad du foretager dig, så det kan fungere optimalt – f.eks. så du kan forblive logget ind på et website eller gemme varer i din indkøbskurv. Websites gemmer ofte disse oplysninger midlertidigt på din enhed.</translation>
 <translation id="6964291282260073066">"WebGPU" er deaktiveret.</translation>
 <translation id="6965382102122355670">OK</translation>
+<translation id="6972629891077993081">HID-enheder</translation>
 <translation id="6980507581230208647">Rosa tema</translation>
 <translation id="6980861169612950611">Vil du slette websitedata? <ph name="SITE_NAME" /></translation>
 <translation id="6981982820502123353">Hjælpefunktioner</translation>
 <translation id="6991142177939282156">Tilladt • Bruger omtrentlig</translation>
-<translation id="6992014788289743568">Gør din sikkerhed stærkere, og beskyt dine data bedre ved at tjekke dine adgangskoder</translation>
 <translation id="6992289844737586249">Spørg, før websites bruger din mikrofon (anbefales)</translation>
 <translation id="7000754031042624318">Deaktiveret i indstillingerne for Android</translation>
-<translation id="702275896380648118">Dette website foretager en vurdering af, hvad du kan lide, og foreslår derefter annoncer til andre websites. Dette website indhenter også dine annonceemner fra Chrome med henblik på at vise dig mere relevante annoncer.</translation>
 <translation id="7036823721811529709">Hør musik i baggrunden</translation>
 <translation id="7044081119134178347">Der er givet adgang til kameraet denne gang</translation>
 <translation id="7053983685419859001">Bloker</translation>
 <translation id="7055552182600664515">For at afspille ophavsretligt beskyttet indhold kan det være nødvendigt for websites at benytte en tjeneste til beskyttelse af indhold. <ph name="BEGIN_LINK" />Få flere oplysninger<ph name="END_LINK" /></translation>
 <translation id="7066151586745993502">{NUM_SELECTED,plural, =1{1 er valgt}one{# er valgt}other{# er valgt}}</translation>
-<translation id="708014373017851679">"<ph name="APP_NAME" />" er forældet. Opdater appen.</translation>
 <translation id="7084115944294706056">Vælg placering for adresselinje</translation>
 <translation id="7087918508125750058"><ph name="ITEM_COUNT" /> er markeret. De tilgængelige valgmuligheder er øverst på skærmen</translation>
 <translation id="7141896414559753902">Bloker visning af pop up-vinduer på websites og omdirigeringer (anbefales)</translation>
@@ -601,6 +591,7 @@
 <translation id="7188508872042490670">Websitedata på enheden</translation>
 <translation id="7201549776650881587">Denne handling sletter alle data og cookies, som er gemt af alle websites i gruppen <ph name="ORIGIN" /> eller den tilhørende app på din startside</translation>
 <translation id="7219254577985949841">Vil du slette websitedata?</translation>
+<translation id="7225256190577194089">Tilbagekald alle tilladelser for enheden <ph name="DEVICE_NAME" /></translation>
 <translation id="723171743924126238">Vælg billeder</translation>
 <translation id="7243246278722455312">Feltet i bunden med tilpasning af siden Ny fane</translation>
 <translation id="7243308994586599757">Du finder indstillingerne nederst på skærmen</translation>
@@ -625,6 +616,7 @@ Avanceret beskyttelse styrer disse Chrome-indstillinger:</translation>
 <translation id="7423098979219808738">Spørg først</translation>
 <translation id="7423538860840206698">Blokeret fra at læse udklipsholderen</translation>
 <translation id="7425915948813553151">Mørkt tema på websites</translation>
+<translation id="7429767477925996803">Chrome-farver</translation>
 <translation id="746412105358554870">JavaScript-optimering og -sikkerhed</translation>
 <translation id="7478658909253570368">Tillad ikke, at websites opretter forbindelse til serieporte</translation>
 <translation id="7488573225650545859">Skjul Se faner på din appliste</translation>
@@ -651,7 +643,6 @@ Avanceret beskyttelse styrer disse Chrome-indstillinger:</translation>
 <translation id="775043444390799886">Tilbagekald tilladelse</translation>
 <translation id="7758789811447313947">Violet tema</translation>
 <translation id="7759147511335618829">Styring/omprogrammering af MIDI</translation>
-<translation id="7771089277295008211">Feltet i bunden med vejledning i at gemme adgangskoder er lukket</translation>
 <translation id="7781829728241885113">I går</translation>
 <translation id="7791543448312431591">Tilføj</translation>
 <translation id="780301667611848630">Nej tak</translation>
@@ -668,7 +659,6 @@ Avanceret beskyttelse styrer disse Chrome-indstillinger:</translation>
 <translation id="7940722705963108451">Påmind mig</translation>
 <translation id="7948081750384205628">Få flere oplysninger om <ph name="SETTING_TITLE" /></translation>
 <translation id="7952708427581814389">Websites kan anmode om tilladelse til at se tekst og billeder i din udklipsholder</translation>
-<translation id="7958779728312669715">Feltet i bunden med vejledning i at gemme adgangskoder er åbnet helt</translation>
 <translation id="798299424881500862">Orange tema</translation>
 <translation id="7986741934819883144">Vælg en kontakt</translation>
 <translation id="7990211076305263060">Når dette er slået til, kan websites anmode om at anvende din mikrofon. Når dette er slået fra, kan websites ikke anvende din mikrofon.</translation>
@@ -676,7 +666,6 @@ Avanceret beskyttelse styrer disse Chrome-indstillinger:</translation>
 <translation id="802154636333426148">Download mislykkedes</translation>
 <translation id="8033047164036749181">Abonner på notifikationer fra dette website</translation>
 <translation id="8051193500142930381">Funktioner, der skal bruge et kamera, fungerer ikke</translation>
-<translation id="8056330801132235235">Standard i Chrome</translation>
 <translation id="8067883171444229417">Afspil video</translation>
 <translation id="8068648041423924542">Certifikatet kunne ikke vælges.</translation>
 <translation id="8077120325605624147">Ethvert website, du besøger, kan vise dig en hvilken som helst annonce</translation>
@@ -715,7 +704,6 @@ Avanceret beskyttelse styrer disse Chrome-indstillinger:</translation>
 <translation id="8428213095426709021">Indstillinger</translation>
 <translation id="8441146129660941386">Spol tilbage</translation>
 <translation id="8444433999583714703">Aktivér også lokation i <ph name="BEGIN_LINK" />Android-indstillingerne<ph name="END_LINK" /> for at give <ph name="APP_NAME" /> adgang til din lokation.</translation>
-<translation id="8447861592752582886">Tilbagekald adgangstilladelsen til enheden</translation>
 <translation id="8463843545738141778">Denne indstilling er deaktiveret, fordi du har aktiveret Avanceret beskyttelse i Android-indstillingerne.</translation>
 <translation id="8467359479529706065">Feltet i bunden, der viser udseendet af siden Ny fane, er åbnet i halv højde</translation>
 <translation id="8471525937465764768">Websites opretter normalt forbindelse til USB-enheder for at kunne udskrive dokumenter eller gemme filer på en lagerenhed</translation>
@@ -730,7 +718,6 @@ Avanceret beskyttelse styrer disse Chrome-indstillinger:</translation>
 <translation id="8514955299594277296">Tillad ikke, at websites gemmer data på din enhed (anbefales ikke)</translation>
 <translation id="851751545965956758">Bloker websites fra at oprette forbindelse til enheder</translation>
 <translation id="8525306231823319788">Fuld skærm</translation>
-<translation id="8541410041357371550">Dette website henter dine annonceemner fra Chrome for at vise dig mere relevante annoncer</translation>
 <translation id="854876774113449365">De websites, du besøger, kan indlejre indhold fra andre websites, f.eks. billeder, annoncer og tekst. Disse andre websites kan anmode om tilladelse til at bruge de oplysninger, de har gemt om dig, når du besøger websitet. <ph name="BEGIN_LINK" />Få flere oplysninger om indlejret indhold<ph name="END_LINK" /></translation>
 <translation id="8549127125482561383">Visning af anmodninger</translation>
 <translation id="8558480467877843976">Du kan nu bruge Chrome, hver gang du browser eller trykker på links i meddelelser, dokumenter og andre apps.</translation>
@@ -738,12 +725,13 @@ Avanceret beskyttelse styrer disse Chrome-indstillinger:</translation>
 <translation id="8593422116412089302">Når indstillingen er aktiveret, kan websites anmode om tilladelse til at bruge de oplysninger, de har gemt om dig. Når indstillingen er deaktiveret, kan websites ikke anmode om tilladelse til at bruge de oplysninger, de har gemt om dig.</translation>
 <translation id="8609465669617005112">Flyt op</translation>
 <translation id="8617611086246832542">Når dette er slået til, anvendes computervenlig visning af websites. Når dette er slået fra, anvendes mobilvenlig visning af websites.</translation>
+<translation id="8625916342247441948">Tillad ikke, at websites opretter forbindelse til HID-enheder</translation>
 <translation id="8670078035093027626">Feltet i bunden med standardbrowseren er åbnet i fuld højde</translation>
 <translation id="8676316391139423634">Når dette er aktiveret, kan websites anmode om tilladelse til at registrere dine hænder. Når dette er deaktiveret, kan websites ikke registrere dine hænder.</translation>
 <translation id="8676374126336081632">Ryd indtastning</translation>
 <translation id="8681886425883659911">Annoncer blokeres på websites, som er kendt for at vise påtrængende eller vildledende annoncer</translation>
 <translation id="868929229000858085">Søg blandt dine kontakter</translation>
-<translation id="8712637175834984815">Forstået</translation>
+<translation id="8712637175834984815">OK</translation>
 <translation id="8715862698998036666">Træk fra toppen af skærmen, og stryg fra venstre eller højre kant for at afslutte fuld skærm.</translation>
 <translation id="8716050156658570300">Websites kan anmode om tilladelse til at bruge bevægelses- og lyssensorer</translation>
 <translation id="8719283222052720129">Aktivér tilladelse for <ph name="APP_NAME" /> i <ph name="BEGIN_LINK" />Android-indstillingerne<ph name="END_LINK" />.</translation>
@@ -764,7 +752,6 @@ Avanceret beskyttelse styrer disse Chrome-indstillinger:</translation>
 <translation id="8889294078294184559">Når du derefter bruger nettet, kan websites ved hjælp af Chrome tjekke og verificere via et website, du tidligere har besøgt, at du sandsynligvis er en rigtig person</translation>
 <translation id="8899807382908246773">Påtrængende annoncer</translation>
 <translation id="8903921497873541725">Zoom ind</translation>
-<translation id="8919911527569629802">Log ind på et hvilket som helst website</translation>
 <translation id="8921772741368021346"><ph name="POSITION" />/<ph name="DURATION" /></translation>
 <translation id="8926389886865778422">Spørg ikke igen</translation>
 <translation id="8926666909099850184">NFC er deaktiveret for denne enhed. Aktivér funktionen i <ph name="BEGIN_LINK" />Android-indstillingerne<ph name="END_LINK" />.</translation>
@@ -788,6 +775,7 @@ Avanceret beskyttelse styrer disse Chrome-indstillinger:</translation>
 <translation id="9138217887606523162">Det aktuelle zoomniveau er <ph name="ZOOM_LEVEL" /> %%</translation>
 <translation id="9156722768168878035">Få Chrome til at vise dine seneste faner på din enheds appliste og i søgeresultaterne. Du kan til enhver tid deaktivere dette i Chrome-indstillingerne.</translation>
 <translation id="9162462602695099906">Denne side er farlig</translation>
+<translation id="9172068157980844189">Du kan aktivere bogmærkelinjen under Indstillinger &gt; Udseende</translation>
 <translation id="9182556968660520230">Tillad ikke, at websites afspiller beskyttet indhold</translation>
 <translation id="927148002081263046">Del en kontakt</translation>
 <translation id="947156494302904893">Websites, du besøger, kan verificere, at du er en rigtig person og ikke en bot</translation>

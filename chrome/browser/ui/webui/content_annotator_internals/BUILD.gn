@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 assert(!is_android)
+
 source_set("content_annotator_internals") {
   sources = [
     "content_annotator_internals_page_handler.cc",
@@ -41,8 +42,8 @@ source_set("unit_tests") {
     "//components/accessibility_annotator/core/content_annotator",
     "//components/accessibility_annotator/core/logging:mojo_bindings",
     "//components/accessibility_annotator/core/storage",
-    "//components/os_crypt/async/browser",
-    "//components/os_crypt/async/browser:test_support",
+    "//components/os_crypt/browser",
+    "//components/os_crypt/browser:test_support",
     "//components/sync:test_support",
     "//components/version_info",
     "//content/test:test_support",

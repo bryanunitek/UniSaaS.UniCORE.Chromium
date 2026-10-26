@@ -2,27 +2,28 @@
 # Protocol Buffers Compiler - Python code generator
 ################################################################################
 
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 load("@rules_pkg//pkg:mappings.bzl", "pkg_files", "strip_prefix")
 load("//build_defs:cpp_opts.bzl", "COPTS")
 
-cc_library(
-    name = "generator_headers",
-    hdrs = [
-        "generator.h",
-        "pyi_generator.h",
-    ],
-    copts = COPTS,
-    strip_include_prefix = "/src",
-    visibility = ["//pkg:__pkg__"],
+cc_binary(
+    name = "protoc-gen-python",
+    srcs = ["plugin_main.cc"],
+    visibility = ["//visibility:public"],
     deps = [
-        "//src/google/protobuf",
-        "//src/google/protobuf/compiler:code_generator",
-        "@abseil-cpp//absl/container:flat_hash_map",
-        "@abseil-cpp//absl/container:flat_hash_set",
-        "@abseil-cpp//absl/memory",
-        "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/synchronization",
+        ":python",
+        "//src/google/protobuf/compiler:plugin",
+    ],
+)
+
+cc_binary(
+    name = "protoc-gen-pyi",
+    srcs = ["pyi_plugin_main.cc"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":python",
+        "//src/google/protobuf/compiler:plugin",
     ],
 )
 
@@ -90,13 +91,6 @@ cc_test(
 ################################################################################
 # Distribution packaging
 ################################################################################
-
-pkg_files(
-    name = "dist_files",
-    srcs = glob(["**/*"]),
-    strip_prefix = strip_prefix.from_root(""),
-    visibility = ["//src:__pkg__"],
-)
 
 filegroup(
     name = "test_srcs",

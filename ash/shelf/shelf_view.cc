@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <ranges>
 #include <utility>
 
 #include "ash/app_list/app_list_controller_impl.h"
@@ -20,7 +21,6 @@
 #include "ash/public/cpp/shelf_item.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_types.h"
-#include "ash/public/cpp/window_properties.h"
 #include "ash/screen_util.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shelf/hotseat_widget.h"
@@ -39,16 +39,13 @@
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/style/ash_color_provider.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/user_education/user_education_class_properties.h"
 #include "ash/wm/desks/desks_util.h"
-#include "ash/wm/mru_window_tracker.h"
 #include "ash/wm/window_pin_util.h"
 #include "ash/wm/window_util.h"
 #include "base/auto_reset.h"
 #include "base/check_op.h"
-#include "base/containers/adapters.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -169,7 +166,6 @@ bool ShelfButtonIsInDrag(const ShelfItemType item_type,
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
-    case TYPE_UNPINNED_BROWSER_SHORTCUT:
       return static_cast<const ShelfAppButton*>(item_view)->state() &
              ShelfAppButton::STATE_DRAGGING;
     case TYPE_DIALOG:
@@ -342,11 +338,9 @@ ShelfView::ShelfView(ShelfModel* model,
   set_context_menu_controller(this);
   set_allow_deactivate_on_esc(true);
 
-  if (features::IsUserEducationEnabled()) {
-    // NOTE: Set `kHelpBubbleContextKey` before `views::kElementIdentifierKey`
-    // in case registration causes a help bubble to be created synchronously.
-    SetProperty(kHelpBubbleContextKey, HelpBubbleContext::kAsh);
-  }
+  // NOTE: Set `kHelpBubbleContextKey` before `views::kElementIdentifierKey`
+  // in case registration causes a help bubble to be created synchronously.
+  SetProperty(kHelpBubbleContextKey, HelpBubbleContext::kAsh);
   SetProperty(views::kElementIdentifierKey, kShelfViewElementId);
 
   announcement_view_ = new views::View();
@@ -508,28 +502,26 @@ bool ShelfView::ShouldHideTooltip(const gfx::Point& cursor_location,
   return !LocationInsideVisibleShelfItemBounds(cursor_location);
 }
 
-const std::vector<aura::Window*> ShelfView::GetOpenWindowsForView(
-    views::View* view) {
-  std::vector<raw_ptr<aura::Window, VectorExperimental>> window_list =
-      Shell::Get()->mru_window_tracker()->BuildWindowForCycleList(kActiveDesk);
-  std::vector<aura::Window*> open_windows;
+aura::Window* ShelfView::GetSingleOpenWindowForShelfView(
+    const views::View* view) {
   const ShelfItem* item = ShelfItemForView(view);
-
-  // The concept of a list of open windows doesn't make sense for something
-  // that isn't an app shortcut: return an empty list.
-  if (!item)
-    return open_windows;
-
-  for (aura::Window* window : window_list) {
-    const std::string window_app_id =
-        ShelfID::Deserialize(window->GetProperty(kShelfIDKey)).app_id;
-    if (window_app_id == item->id.app_id) {
-      // TODO: In the very first version we only show one window. Add the proper
-      // UI to show all windows for a given open app.
-      open_windows.push_back(window);
-    }
+  if (!item) {
+    return nullptr;
   }
-  return open_windows;
+
+  ShelfItemDelegate* delegate = model_->GetShelfItemDelegate(item->id);
+  if (!delegate) {
+    return nullptr;
+  }
+
+  ShelfItemDelegate::AppMenuItems menu_items = delegate->GetAppMenuItems(
+      ui::EF_NONE, base::BindRepeating(&ShouldIncludeMenuItem));
+  if (menu_items.size() != 1) {
+    return nullptr;
+  }
+
+  return delegate->GetAppMenuItemWindow(menu_items[0].command_id)
+      .value_or(nullptr);
 }
 
 std::u16string ShelfView::GetTitleForView(const views::View* view) const {
@@ -668,7 +660,7 @@ View* ShelfView::GetTooltipHandlerForPoint(const gfx::Point& point) {
   // Similar implementation as views::View, but without going into each
   // child's subviews.
   View::Views children = GetChildrenInZOrder();
-  for (views::View* child : base::Reversed(children)) {
+  for (views::View* child : std::views::reverse(children)) {
     if (!child->GetVisible())
       continue;
 
@@ -757,7 +749,6 @@ void ShelfView::ButtonPressed(views::Button* sender,
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
-    case TYPE_UNPINNED_BROWSER_SHORTCUT:
       base::RecordAction(base::UserMetricsAction("Launcher_ClickOnApp"));
       break;
 
@@ -999,7 +990,6 @@ views::View* ShelfView::CreateViewForItem(const ShelfItem& item) {
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
-    case TYPE_UNPINNED_BROWSER_SHORTCUT:
     case TYPE_DIALOG: {
       ShelfAppButton* button = new ShelfAppButton(
           this, shelf_button_delegate_ ? shelf_button_delegate_.get() : this);
@@ -1048,7 +1038,7 @@ void ShelfView::UpdateSeparatorIndex() {
   const bool can_drag_view_across_separator =
       drag_view_ && CanDragAcrossSeparator(drag_view_);
 
-  for (size_t i : base::Reversed(visible_views_indices_)) {
+  for (size_t i : std::views::reverse(visible_views_indices_)) {
     const auto& item = model()->items()[i];
     if (IsItemPinned(item)) {
       // The dragged item is temporarily moved to the end of the shelf if it is
@@ -1453,10 +1443,8 @@ void ShelfView::LayoutToIdealBounds() {
   UpdateVisibleShelfItemBoundsUnion();
 
   // Notify user education features that anchor bounds have changed.
-  if (features::IsUserEducationEnabled()) {
-    views::ElementTrackerViews::GetInstance()->NotifyCustomEvent(
-        views::ViewSubregionAnchor::kAnchorBoundsChangedEvent, this);
-  }
+  views::ElementTrackerViews::GetInstance()->NotifyCustomEvent(
+      views::ViewSubregionAnchor::kAnchorBoundsChangedEvent, this);
 }
 
 bool ShelfView::IsItemPinned(const ShelfItem& item) const {
@@ -2371,7 +2359,6 @@ void ShelfView::ShelfItemChanged(int model_index, const ShelfItem& old_item) {
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
-    case TYPE_UNPINNED_BROWSER_SHORTCUT:
     case TYPE_DIALOG: {
       CHECK(views::IsViewClass<ShelfAppButton>(view));
       ShelfAppButton* button = static_cast<ShelfAppButton*>(view);
@@ -2479,10 +2466,10 @@ void ShelfView::OnShelfAlignmentChanged(aura::Window* root_window,
 }
 
 void ShelfView::OnPinnedStateChanged(aura::Window* pinned_window) {
-  // Close context menus in locked fullscreen mode to prevent users from exiting
+  // Close context menus in trusted pinned mode to prevent users from exiting
   // this mode.
   if ((GetWindowPinType(pinned_window) ==
-       chromeos::WindowPinType::kLockedFullscreen) &&
+       chromeos::WindowPinType::kTrustedPinned) &&
       IsShowingMenu()) {
     shelf_menu_model_adapter_->Cancel();
   }
@@ -2586,6 +2573,8 @@ void ShelfView::ShowMenu(std::unique_ptr<ui::SimpleMenuModel> menu_model,
     run_types |= views::MenuRunner::SEND_GESTURE_EVENTS_TO_OWNER;
   }
 
+  ShelfItemDelegate* delegate =
+      context_menu ? nullptr : model_->GetShelfItemDelegate(shelf_id);
   // UnsafeDangling triaged in https://crbug.com/1423849.
   shelf_menu_model_adapter_ = std::make_unique<ShelfMenuModelAdapter>(
       item ? item->id.app_id : std::string(), std::move(menu_model), source,
@@ -2593,7 +2582,8 @@ void ShelfView::ShowMenu(std::unique_ptr<ui::SimpleMenuModel> menu_model,
       base::BindOnce(&ShelfView::OnMenuClosed, base::Unretained(this),
                      base::UnsafeDangling(source)),
       display::Screen::Get()->InTabletMode(),
-      /*for_application_menu_items*/ !context_menu);
+      /*for_application_menu_items=*/!context_menu,
+      delegate ? delegate->GetWeakPtr() : nullptr);
   shelf_menu_model_adapter_->Run(
       GetMenuAnchorRect(*source, click_point, context_menu),
       shelf_->IsHorizontalAlignment()
@@ -2629,10 +2619,8 @@ void ShelfView::OnBoundsAnimatorProgressed(views::BoundsAnimator* animator) {
   shelf_->NotifyShelfIconPositionsChanged();
 
   // Notify user education features that anchor bounds have changed.
-  if (features::IsUserEducationEnabled()) {
-    views::ElementTrackerViews::GetInstance()->NotifyCustomEvent(
-        views::ViewSubregionAnchor::kAnchorBoundsChangedEvent, this);
-  }
+  views::ElementTrackerViews::GetInstance()->NotifyCustomEvent(
+      views::ViewSubregionAnchor::kAnchorBoundsChangedEvent, this);
 
   // Do not call PreferredSizeChanged() so that container does not re-layout
   // during the bounds animation.

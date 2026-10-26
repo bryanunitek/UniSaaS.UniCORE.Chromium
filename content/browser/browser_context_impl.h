@@ -8,14 +8,21 @@
 #include <memory>
 #include <string>
 
+#include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
 #include "content/browser/btm/btm_service_impl.h"
+#include "content/browser/site_shard.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/shared_cors_origin_access_list.h"
+#include "mojo/public/cpp/bindings/unique_receiver_set.h"
+#include "net/base/schemeful_site.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
+#include "third_party/blink/public/mojom/frame/remote_frame.mojom.h"
 
 namespace media {
 class VideoDecodePerfHistory;
@@ -36,14 +43,19 @@ class BackgroundSyncScheduler;
 class BrowserContextImpl;
 class BrowsingDataRemoverImpl;
 class DownloadManager;
-class InMemoryFederatedPermissionContext;
+class NavigationStateKeepAlive;
 class PermissionController;
+class PermissionControllerImpl;
 class PrefetchService;
 class StoragePartitionImplMap;
 
 #if BUILDFLAG(IS_ANDROID)
 class NavigationEntryScreenshotManager;
 #endif  // BUILDFLAG(IS_ANDROID)
+
+namespace webid {
+class InMemoryFederatedPermissionContext;
+}  // namespace webid
 
 // content-internal parts of BrowserContext.
 //
@@ -105,7 +117,7 @@ class CONTENT_EXPORT BrowserContextImpl {
   NavigationEntryScreenshotManager* GetNavigationEntryScreenshotManager();
 #endif  // BUILDFLAG(IS_ANDROID)
 
-  InMemoryFederatedPermissionContext* GetFederatedPermissionContext();
+  webid::InMemoryFederatedPermissionContext* GetFederatedPermissionContext();
   void ResetFederatedPermissionContext();
 
   using TraceProto = perfetto::protos::pbzero::ChromeBrowserContext;
@@ -119,6 +131,55 @@ class CONTENT_EXPORT BrowserContextImpl {
   // TODO: crbug.com/356624038 - delete this method when the BTM feature flag is
   // removed.
   void WaitForBtmCleanupForTesting();
+
+  // Store `receiver` and its corresponding `handle`. These will be kept alive
+  // as long as the remote endpoint of `receiver` is still alive on the renderer
+  // side. The receiver will be automatically deleted when the endpoint is
+  // disconnected.
+  void RegisterKeepAliveHandle(
+      mojo::PendingReceiver<blink::mojom::NavigationStateKeepAliveHandle>
+          receiver,
+      std::unique_ptr<NavigationStateKeepAlive> handle);
+
+  // Get the InitiatorNavigationState associated with `initiator_document_token`
+  // and `initiator_state_token`.
+  // See `initiator_navigation_state_map_`.
+  scoped_refptr<InitiatorNavigationState> GetInitiatorNavigationState(
+      const blink::DocumentToken& initiator_document_token,
+      const blink::InitiatorStateToken& initiator_state_token);
+
+  // Adds the InitiatorNavigationState to the InitiatorNavigationStateMap. This
+  // should be called when creating an InitiatiorNavigationState.
+  // Returns false if the map already has an entry for
+  // `initiator_navigation_state`'s `initiator_state_token` and
+  // `initiator_document_token`, in which case the existing value is not
+  // overridden.
+  bool AddInitiatorNavigationStateToMap(
+      InitiatorNavigationState* initiator_navigation_state);
+
+  // Removes the InitiatorNavigationState from the InitiatorNavigationStateMap.
+  // This should be called when the InitiatorNavigationState is destructed.
+  void RemoveInitiatorNavigationStateFromMap(
+      InitiatorNavigationState* initiator_navigation_state);
+
+  // Implements BrowserContext::SetSitesForEmbedderShard(). See the comments
+  // there.
+  void SetSitesForEmbedderShard(
+      const base::flat_set<net::SchemefulSite>& sites);
+
+  // Returns the shard that `site` belongs to in this BrowserContext, i.e.
+  // SiteShard::kEmbedderSites if `site` was passed to
+  // SetSitesForEmbedderShard(), or SiteShard::kDefault otherwise.
+  //
+  // Callers should use SiteInfo::GetShardForUrlInfo() rather than calling this
+  // directly, so that shards are computed consistently.
+  SiteShard GetShardForSite(const net::SchemefulSite& site) const;
+
+  // Returns true if any sites are assigned to a non-default shard in this
+  // BrowserContext. When this returns false, GetShardForSite() always returns
+  // SiteShard::kDefault, which allows callers to skip computing the site in the
+  // common case.
+  bool HasShards() const;
 
  private:
   // Creates the media service for storing/retrieving WebRTC encoding and
@@ -151,14 +212,15 @@ class CONTENT_EXPORT BrowserContextImpl {
       SharedCorsOriginAccessList::Create();
   std::unique_ptr<BrowsingDataRemoverImpl> browsing_data_remover_;
   std::unique_ptr<DownloadManager> download_manager_;
-  std::unique_ptr<PermissionController> permission_controller_;
+  std::unique_ptr<PermissionControllerImpl> permission_controller_;
+  std::unique_ptr<PermissionController> permission_controller_for_testing_;
   scoped_refptr<BackgroundSyncScheduler> background_sync_scheduler_;
   std::unique_ptr<PrefetchService> prefetch_service_;
 #if BUILDFLAG(IS_ANDROID)
   std::unique_ptr<NavigationEntryScreenshotManager>
       nav_entry_screenshot_manager_;
 #endif  // BUILDFLAG(IS_ANDROID)
-  std::unique_ptr<InMemoryFederatedPermissionContext>
+  std::unique_ptr<webid::InMemoryFederatedPermissionContext>
       federated_permission_context_;
 
   std::unique_ptr<media::VideoDecodePerfHistory> video_decode_perf_history_;
@@ -177,6 +239,44 @@ class CONTENT_EXPORT BrowserContextImpl {
 #if BUILDFLAG(IS_CHROMEOS)
   scoped_refptr<storage::ExternalMountPoints> external_mount_points_;
 #endif
+
+  // Maps initiator state tokens to InitiatorNavigationStates. There is exactly
+  // one InitiatorNavigationState per initiator state token and initiator
+  // document token pair. See InitiatorNavigationStateImpl for more details on
+  // the lifetime and ownership of InitiatorNavigationStates.
+  // We keep a map of initiator state token and initiator document token to
+  // InitiatorNavigationStates in BrowserContextImpl because the
+  // InitiatorNavigationState may outlive the RenderFrameHostImpl that created
+  // it, and may still need to be looked up after the RFHI destruction.
+  // Note: This member must be above `keep_alive_handles_receiver_set_`. During
+  // destruction, NavigationStateKeepAlives get removed from the receiver set.
+  // This may trigger the deletion of the InitiatorNavigationStates they had a
+  // reference on. When that happens, the InitiatorNavigationState will remove
+  // itself from `initiator_navigation_state_map_`, so this map must still be
+  // alive when that happens.
+  using TokenInitiatorNavigationStateMap = absl::flat_hash_map<
+      std::pair<blink::DocumentToken, blink::InitiatorStateToken>,
+      InitiatorNavigationState*>;
+  TokenInitiatorNavigationStateMap initiator_navigation_state_map_;
+
+  // Active keepalive handles for in-flight navigations. They are retained
+  // on `BrowserContextImpl` because, by design, they may need to outlive the
+  // `RenderFrameHostImpl` that initiated the navigation, but shouldn't be used
+  // in a different BrowserContext.
+  // Note that this set may contain in-flight navigations for different
+  // RenderFrameHosts, and furthermore, there may even be multiple in-flight
+  // navigations for a single RenderFrameHost. It is also possible that several
+  // of the NavigationStateKeepAliveHandles reference the same
+  // InitiatorNavigationState. This is in fact the likeliest option in the case
+  // of multiple navigations in the same RenderFrameHost.
+  mojo::UniqueReceiverSet<blink::mojom::NavigationStateKeepAliveHandle>
+      keep_alive_handles_receiver_set_;
+
+  // The sites in SiteShard::kEmbedderSites (see SetSitesForEmbedderShard()), or
+  // empty if no shards are configured. This is only set once, before this
+  // BrowserContext is used for navigations, so the mapping doesn't change while
+  // content is loaded.
+  base::flat_set<net::SchemefulSite> embedder_shard_sites_;
 
   // TODO: crbug.com/40169693 - BrowserContext and BrowserContextImpl both have
   // WeakPtrFactories. Remove one once the inheritance is sorted out.

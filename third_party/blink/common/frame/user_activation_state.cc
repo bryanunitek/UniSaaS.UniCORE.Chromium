@@ -39,12 +39,14 @@ void UserActivationState::Activate(
   ActivateTransientState();
 
   // Update states for UMA.
-  DCHECK(notification_type != UserActivationNotificationType::kNone);
-  if (first_notification_type_ == UserActivationNotificationType::kNone)
+  CHECK_NE(notification_type, UserActivationNotificationType::kNone);
+  if (first_notification_type_ == UserActivationNotificationType::kNone) {
     first_notification_type_ = notification_type;
+  }
   last_notification_type_ = notification_type;
-  if (notification_type == UserActivationNotificationType::kInteraction)
+  if (notification_type == UserActivationNotificationType::kInteraction) {
     transient_state_expiry_time_for_interaction_ = transient_state_expiry_time_;
+  }
 }
 
 void UserActivationState::SetHasBeenActive() {
@@ -93,8 +95,9 @@ bool UserActivationState::LastActivationWasRestricted() const {
 }
 
 void UserActivationState::RecordPreconsumptionUma() const {
-  if (!IsActiveInternal())
+  if (!IsActiveInternal()) {
     return;
+  }
   base::UmaHistogramEnumeration("Event.UserActivation.TriggerForConsuming",
                                 EffectiveNotificationType());
 }

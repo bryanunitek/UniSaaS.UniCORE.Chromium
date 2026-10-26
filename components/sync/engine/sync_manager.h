@@ -11,7 +11,6 @@
 #include <string>
 #include <vector>
 
-#include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list_types.h"
 #include "base/task/task_runner.h"
@@ -24,12 +23,10 @@
 #include "components/sync/engine/data_type_connector.h"
 #include "components/sync/engine/engine_components_factory.h"
 #include "components/sync/engine/events/protocol_event.h"
-#include "components/sync/engine/net/http_post_provider_factory.h"
 #include "components/sync/engine/sync_credentials.h"
 #include "components/sync/engine/sync_encryption_handler.h"
 #include "components/sync/engine/sync_protocol_error.h"
 #include "components/sync/engine/sync_status.h"
-#include "url/gurl.h"
 
 namespace syncer {
 
@@ -37,6 +34,7 @@ class CancelationSignal;
 class EngineComponentsFactory;
 class ExtensionsActivity;
 class ProtocolEvent;
+class SyncAccessTokenFetcher;
 class SyncCycleSnapshot;
 struct SyncStatus;
 
@@ -74,17 +72,6 @@ class SyncManager {
     InitArgs();
     ~InitArgs();
 
-    // URL of the sync server.
-    GURL service_url;
-
-    // Whether the local backend provided by the LoopbackServer should be used
-    // and the location of the local sync backend storage.
-    bool enable_local_sync_backend = false;
-    base::FilePath local_sync_backend_folder;
-
-    // Used to communicate with the sync server.
-    std::unique_ptr<HttpPostProviderFactory> post_factory;
-
     std::unique_ptr<SyncEncryptionHandler::Observer> encryption_observer_proxy;
 
     // Must outlive SyncManager.
@@ -101,6 +88,8 @@ class SyncManager {
     // Must outlive SyncManager.
     raw_ptr<CancelationSignal> cancelation_signal = nullptr;
 
+    raw_ptr<SyncAccessTokenFetcher> sync_access_token_fetcher = nullptr;
+
     // Define the polling interval. Must not be zero.
     base::TimeDelta poll_interval;
 
@@ -108,6 +97,8 @@ class SyncManager {
     std::string cache_guid;
     std::string birthday;
     std::string bag_of_chips;
+
+    std::string account_email;
   };
 
   // The state of sync the feature. If the user turned on sync explicitly, it
@@ -133,6 +124,10 @@ class SyncManager {
 
   // Clears the authentication tokens.
   virtual void InvalidateCredentials() = 0;
+
+  // Notifies that credentials have changed when access token propagation is
+  // enabled.
+  virtual void OnCredentialsChanged() = 0;
 
   // Put the syncer in normal mode ready to perform nudges and polls.
   virtual void StartSyncingNormally(base::Time last_poll_time) = 0;

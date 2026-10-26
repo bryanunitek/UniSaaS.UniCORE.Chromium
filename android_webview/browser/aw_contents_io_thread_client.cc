@@ -10,8 +10,10 @@
 #include <utility>
 
 #include "android_webview/browser/aw_settings.h"
+#include "android_webview/browser/http_headers/aw_header_interceptor_store.h"
 #include "android_webview/browser/network_service/aw_web_resource_intercept_response.h"
 #include "android_webview/browser/network_service/aw_web_resource_request.h"
+#include "android_webview/browser/network_service/net_helpers.h"
 #include "android_webview/common/aw_features.h"
 #include "android_webview/common/devtools_instrumentation.h"
 #include "base/android/callback_android.h"
@@ -45,6 +47,9 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "net/base/data_url.h"
+#include "net/http/http_request_headers.h"
+#include "net/http/http_util.h"
+#include "services/network/public/cpp/http_request_headers_update_params.h"
 #include "services/network/public/cpp/resource_request.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
@@ -53,10 +58,8 @@
 
 using base::LazyInstance;
 using base::android::AttachCurrentThread;
-using base::android::ConvertUTF8ToJavaString;
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
-using base::android::ToJavaArrayOfStrings;
 using content::BrowserThread;
 using content::RenderFrameHost;
 using content::WebContents;
@@ -334,8 +337,9 @@ ClientMapEntryUpdater::ClientMapEntryUpdater(
   DCHECK(web_contents);
   DCHECK(jdelegate);
 
-  if (web_contents->GetPrimaryMainFrame())
+  if (web_contents->GetPrimaryMainFrame()) {
     RenderFrameCreated(web_contents->GetPrimaryMainFrame());
+  }
 
   WebContentsToIoThreadClientMap::GetInstance()->Set(
       GetWebContentsKey(*web_contents), jdelegate_);
@@ -431,6 +435,10 @@ void AwContentsIoThreadClient::SubFrameCreated(
     int child_id,
     const blink::LocalFrameToken& parent_frame_token,
     const blink::LocalFrameToken& child_frame_token) {
+  if (base::FeatureList::IsEnabled(
+          features::kWebViewSubFrameCreatedDoNotUpdateClientMap)) {
+    return;
+  }
   RfhToIoThreadClientMap* map = RfhToIoThreadClientMap::GetInstance();
   std::optional<JavaObjectWeakGlobalRef> opt_delegate_weak_ref = map->Get(
       content::GlobalRenderFrameHostToken(child_id, parent_frame_token));
@@ -468,7 +476,6 @@ AwContentsIoThreadClient::CacheMode AwContentsIoThreadClient::GetCacheMode()
   return static_cast<AwContentsIoThreadClient::CacheMode>(
       Java_AwContentsIoThreadClient_getCacheMode(env, java_object_));
 }
-
 
 namespace {
 
@@ -542,6 +549,90 @@ void StartShouldInterceptRequest(
                               std::move(callback))));
 }
 
+using HeaderInterceptorUpdates =
+    std::map<std::string, std::optional<std::string>>;
+network::HttpRequestHeadersUpdateParams ParseInterceptorUpdates(
+    const HeaderInterceptorUpdates& interceptor_updates) {
+  network::HttpRequestHeadersUpdateParams interceptor_update_params;
+
+  for (const auto& [key, value] : interceptor_updates) {
+    if (!net::HttpUtil::IsValidHeaderName(key)) {
+      LOG(WARNING)
+          << "Invalid header name from embedder-provided header interceptor:"
+          << key;
+      continue;
+    }
+    if (value.has_value() && !net::HttpUtil::IsValidHeaderValue(*value)) {
+      LOG(WARNING) << "Invalid value for header from embedder-provided header "
+                      "interceptor. Header key:"
+                   << key;
+      continue;
+    }
+    // Forbid modifying unsafe headers, as defined on:
+    // https://fetch.spec.whatwg.org/#forbidden-request-header
+    if (!net::HttpUtil::IsSafeHeader(key, value.value_or(""))) {
+      LOG(WARNING)
+          << "Ignoring unsafe header from embedder-provided header interceptor:"
+          << key;
+      continue;
+    }
+
+    if (value.has_value()) {
+      interceptor_update_params.SetHeader(key, *value);
+    } else {
+      interceptor_update_params.RemoveHeader(key);
+    }
+  }
+
+  return interceptor_update_params;
+}
+
+base::expected<network::HttpRequestHeadersUpdateParams, std::string>
+StartInterceptHeaders(
+    std::vector<scoped_refptr<AwHeaderInterceptorStore::InterceptorEntry>>
+        eligible_interceptors,
+    AwWebResourceRequest request,
+    network::HttpRequestHeadersUpdateParams header_updates) {
+  TRACE_EVENT("android_webview", "StartInterceptHeaders");
+  // The app may perform blocking calls as part of synchronous
+  // interceptHeaders, so mark the rest of this scope as possibly
+  // blocking. This will ensure that the thread pool is expanded to avoid it
+  // being exhausted if all the threads end up waiting at the same time.
+  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
+                                                base::BlockingType::MAY_BLOCK);
+  JNIEnv* env = AttachCurrentThread();
+
+  net::HttpRequestHeaders initial_headers =
+      request.GetHeadersAsHttpRequestHeaders();
+
+  for (const auto& entry : eligible_interceptors) {
+    net::HttpRequestHeaders current_headers = initial_headers;
+    // Necessary for the call to Apply(), but otherwise unused since
+    // AwWebResourceRequest doesn't really support cors-exempted headers.
+    net::HttpRequestHeaders cors_exempt_headers;
+    // Apply the header updates we have computed so far to `current_headers`,
+    // and use `current_headers` to update the `request` that we pass to the
+    // interceptor.
+    header_updates.Apply(current_headers, cors_exempt_headers);
+    request.SetHeadersFromHttpRequestHeaders(current_headers);
+
+    std::optional<HeaderInterceptorUpdates> interceptor_updates =
+        Java_AwContentsIoThreadClient_interceptHeaders(env, request,
+                                                       entry->interceptor);
+
+    if (!interceptor_updates.has_value()) {
+      return base::unexpected(
+          "The embedder-provided interceptHeaders callback threw an "
+          "exception.");
+    }
+
+    header_updates.MergeFromInChain(
+        ParseInterceptorUpdates(*interceptor_updates));
+  }
+
+  return std::move(header_updates);
+}
+
 }  // namespace
 
 AwContentsIoThreadClient::InterceptResponseData::InterceptResponseData() =
@@ -580,6 +671,20 @@ void AwContentsIoThreadClient::ShouldInterceptRequestAsync(
     // We are already on the IOThread. Just call the callback directly here.
     std::move(callback).Run(NoInterceptRequest());
   }
+}
+
+void AwContentsIoThreadClient::InterceptHeadersAsync(
+    std::vector<scoped_refptr<AwHeaderInterceptorStore::InterceptorEntry>>
+        eligible_interceptors,
+    AwWebResourceRequest request,
+    network::HttpRequestHeadersUpdateParams previous_header_updates,
+    InterceptHeadersResponseCallback callback) {
+  CHECK_CURRENTLY_ON(BrowserThread::IO);
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock()},
+      base::BindOnce(&StartInterceptHeaders, std::move(eligible_interceptors),
+                     std::move(request), std::move(previous_header_updates)),
+      std::move(callback));
 }
 
 bool AwContentsIoThreadClient::ShouldBlockContentUrls() const {

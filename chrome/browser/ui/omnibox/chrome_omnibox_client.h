@@ -20,7 +20,7 @@
 #include "ui/gfx/image/image.h"
 
 class AiModeButtonService;
-class Browser;
+class BrowserWindowInterface;
 class ChromeAutocompleteSchemeClassifier;
 class GURL;
 class LocationBar;
@@ -37,7 +37,7 @@ class OmniboxPopupCloser;
 class ChromeOmniboxClient final : public OmniboxClient {
  public:
   ChromeOmniboxClient(LocationBar* location_bar,
-                      Browser* browser,
+                      BrowserWindowInterface* browser,
                       Profile* profile);
   ChromeOmniboxClient(const ChromeOmniboxClient&) = delete;
   ChromeOmniboxClient& operator=(const ChromeOmniboxClient&) = delete;
@@ -136,7 +136,7 @@ class ChromeOmniboxClient final : public OmniboxClient {
       TemplateURLRef::PostContent* post_content,
       WindowOpenDisposition disposition,
       ui::PageTransition transition,
-      AutocompleteMatchType::Type match_type,
+      omnibox::AutocompleteMatchType match_type,
       base::TimeTicks match_selection_timestamp,
       bool destination_url_entered_without_scheme,
       bool destination_url_entered_with_http_scheme,
@@ -159,12 +159,7 @@ class ChromeOmniboxClient final : public OmniboxClient {
   void MaybePrewarmForDefaultSearchEngine(PrewarmTrigger trigger) override;
   base::WeakPtr<OmniboxClient> AsWeakPtr() override;
   Profile* profile() { return profile_; }
-  Browser* browser() { return browser_; }
-
-  // Update shortcuts when a navigation succeeds.
-  static void OnSuccessfulNavigation(Profile* profile,
-                                     const std::u16string& text,
-                                     const AutocompleteMatch& match);
+  BrowserWindowInterface* browser() { return browser_; }
 
  private:
   // Performs prerendering for |match|.
@@ -175,7 +170,7 @@ class ChromeOmniboxClient final : public OmniboxClient {
 
   // Implemented by `LocationBarView` which owns `OmniboxView` which owns this.
   const raw_ptr<LocationBar> location_bar_;
-  const raw_ptr<Browser, DanglingUntriaged> browser_;
+  const raw_ptr<BrowserWindowInterface, DanglingUntriaged> browser_;
   const raw_ptr<Profile> profile_;
   std::unique_ptr<ChromeAutocompleteSchemeClassifier> scheme_classifier_;
   std::vector<BitmapFetcherService::RequestId> request_ids_;

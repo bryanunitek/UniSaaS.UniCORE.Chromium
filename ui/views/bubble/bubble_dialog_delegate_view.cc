@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/adapters.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
@@ -20,6 +21,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
+#include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
 #include "build/build_config.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -100,6 +103,14 @@ std::vector<BubbleDialogDelegate*>& GetAnchorVector(View* view) {
   return *(view->GetProperty(kAnchorVector));
 }
 
+// Tracks active BubbleDialogDelegates anchored to non-Views TrackedElements
+// (such as TrackedElementWebUI) in anchored order so GetAnchoredDialog() can
+// locate the primary focusable bubble for a TrackedElement.
+std::vector<BubbleDialogDelegate*>& GetAnchoredTrackedElementDelegates() {
+  static base::NoDestructor<std::vector<BubbleDialogDelegate*>> delegates;
+  return *delegates;
+}
+
 // Override base functionality of Widget to give bubble dialogs access to the
 // theme provider of the window they're anchored to.
 class BubbleWidget : public Widget {
@@ -177,6 +188,7 @@ Widget* CreateBubbleWidget(BubbleDialogDelegate* bubble,
   bubble_params.delegate = bubble;
   bubble_params.opacity = Widget::InitParams::WindowOpacity::kTranslucent;
   bubble_params.accept_events = bubble->accept_events();
+  bubble_params.accept_drag_drop = bubble->accept_drag_drop();
   bubble_params.remove_standard_frame = true;
   bubble_params.layer_type = bubble->layer_type();
   // TODO(crbug.com/41493925): Remove CHECK once native frame dialogs support
@@ -215,7 +227,7 @@ class BubbleDialogDelegate::AnchorViewObserver : public ViewObserver {
  public:
   AnchorViewObserver(BubbleDialogDelegate* parent, View* anchor_view)
       : parent_(parent), anchor_view_(anchor_view) {
-    anchor_view_->AddObserver(this);
+    view_observation_.Observe(anchor_view);
     scoped_notify_ = std::make_unique<
         views::View::ScopedNotifyObserversOnVisibleBoundsChanged>(*anchor_view);
     AddToAnchorVector();
@@ -226,7 +238,6 @@ class BubbleDialogDelegate::AnchorViewObserver : public ViewObserver {
 
   ~AnchorViewObserver() override {
     RemoveFromAnchorVector();
-    anchor_view_->RemoveObserver(this);
   }
 
   View* anchor_view() const { return anchor_view_; }
@@ -291,6 +302,9 @@ class BubbleDialogDelegate::AnchorViewObserver : public ViewObserver {
   const raw_ptr<View> anchor_view_;
   bool bubble_widget_visible_ = true;
   bool update_bounds_when_visible_ = false;
+
+  base::ScopedObservation<views::View, views::ViewObserver> view_observation_{
+      this};
 };
 
 // This class is responsible for observing events on a BubbleDialogDelegate's
@@ -459,7 +473,8 @@ BubbleDialogDelegate::BubbleDialogDelegate(BubbleAnchor anchor,
                                            BubbleBorder::Shadow shadow,
                                            bool autosize)
     : arrow_(arrow),
-      shadow_(shadow),
+      shadow_config_({.shadow_type = shadow}),
+      adjust_if_offscreen_(PlatformStyle::kAdjustBubbleIfOffscreen),
       autosize_(autosize),
       close_on_deactivate_pins_(std::make_unique<CloseOnDeactivatePin::Pins>()),
       bubble_created_time_(base::TimeTicks::Now()) {
@@ -545,7 +560,6 @@ Widget* BubbleDialogDelegate::CreateBubbleInternal(
 
   Widget* const bubble_widget = CreateBubbleWidget(delegate, ownership);
 
-  delegate->set_adjust_if_offscreen(PlatformStyle::kAdjustBubbleIfOffscreen);
   delegate->SizeToContents();
   delegate->bubble_widget_observer_ =
       std::make_unique<BubbleWidgetObserver>(delegate, bubble_widget);
@@ -620,10 +634,23 @@ std::unique_ptr<FrameView> BubbleDialogDelegate::CreateFrameView(
 
   frame->SetFootnoteMargins(margin.footnote);
   frame->SetFootnoteView(DisownFootnoteView());
+  frame->set_use_anchor_window_bounds(use_anchor_window_bounds_);
+  if (available_screen_bounds_callback_) {
+    frame->set_available_screen_bounds_callback(
+        available_screen_bounds_callback_);
+  }
 
   std::unique_ptr<BubbleBorder> border =
       std::make_unique<BubbleBorder>(arrow(), GetShadow());
-  border->SetColor(background_color());
+  border->set_background_color(background_color());
+  if (shadow_config_.elevation.has_value()) {
+    border->set_md_shadow_elevation(shadow_config_.elevation.value());
+  }
+  border->set_avoid_shadow_overlap(shadow_config_.avoid_overlap_shadow);
+  if (border_style_.insets.has_value()) {
+    border->set_insets(border_style_.insets.value());
+  }
+  border->set_draw_border_stroke(border_style_.draw_border_stroke);
 
   if (GetParams().round_corners) {
     border->set_rounded_corners(gfx::RoundedCornersF(GetCornerRadius()));
@@ -670,10 +697,7 @@ void BubbleDialogDelegate::OnBubbleWidgetClosing() {
   // If kAnchoredDialogKey does not point to |this|, then |this| is not on the
   // focus traversal path. Don't reset kAnchoredDialogKey or we risk detaching
   // a widget from the traversal path.
-  if (GetAnchorView() &&
-      GetAnchorView()->GetProperty(kAnchoredDialogKey) == this) {
-    GetAnchorView()->ClearProperty(kAnchoredDialogKey);
-  }
+  ClearAnchoredDialogKey();
 
   if (bubble_shown_time_.has_value()) {
     bubble_shown_duration_ += base::TimeTicks::Now() - *bubble_shown_time_;
@@ -687,6 +711,7 @@ void BubbleDialogDelegate::OnBubbleWidgetClosing() {
 }
 
 void BubbleDialogDelegate::OnAnchorWidgetDestroying() {
+  anchor_tracked_element_ = nullptr;
   SetAnchorView(nullptr);
 }
 
@@ -716,7 +741,7 @@ BubbleBorder::Shadow BubbleDialogDelegate::GetShadow() const {
   if (!Widget::IsWindowCompositingSupported()) {
     return BubbleBorder::Shadow::NO_SHADOW;
   }
-  return shadow_;
+  return shadow_config_.shadow_type;
 }
 
 View* BubbleDialogDelegate::GetAnchorView() const {
@@ -750,12 +775,16 @@ BubbleDialogDelegate::PreventCloseOnDeactivate() {
 }
 
 void BubbleDialogDelegate::SetHighlightedElement(ui::ElementIdentifier id) {
-  auto* element_tracker = ui::ElementTracker::GetElementTracker();
-
   auto* parent_widget =
       anchor_widget() ? anchor_widget()
                       : views::Widget::GetWidgetForNativeView(parent_window());
-  auto context = views::ElementTrackerViews::GetContextForWidget(parent_widget);
+  SetHighlightedElement(
+      id, views::ElementTrackerViews::GetContextForWidget(parent_widget));
+}
+
+void BubbleDialogDelegate::SetHighlightedElement(ui::ElementIdentifier id,
+                                                 ui::ElementContext context) {
+  auto* element_tracker = ui::ElementTracker::GetElementTracker();
 
   // `highlighted_button_tracker_` will deal with the hiding part.
   // Unretained is safe because `highlighted_element_shown_subscription_` owns
@@ -822,7 +851,7 @@ gfx::Rect BubbleDialogDelegate::GetAnchorRect() const {
   if (anchor_view) {
     anchor_rect_ = anchor_view->GetAnchorBoundsInScreen();
   } else if (anchor_tracked_element_) {
-    anchor_rect_ = anchor_tracked_element_->GetScreenBounds();
+    anchor_rect_ = anchor_tracked_element_.get()->GetScreenBounds();
   } else {
     return anchor_rect_.value_or(gfx::Rect());
   }
@@ -1107,6 +1136,10 @@ void BubbleDialogDelegate::SetAnchorWidget(views::Widget* anchor_widget) {
 }
 
 void BubbleDialogDelegate::SetAnchorView(View* anchor_view) {
+  ClearAnchoredDialogKey();
+  if (anchor_view) {
+    anchor_tracked_element_ = nullptr;
+  }
   if (anchor_view && anchor_view->GetWidget()) {
     anchor_widget_observer_ =
         std::make_unique<AnchorWidgetObserver>(this, anchor_view->GetWidget());
@@ -1114,9 +1147,6 @@ void BubbleDialogDelegate::SetAnchorView(View* anchor_view) {
     anchor_widget_observer_.reset();
   }
   if (GetAnchorView()) {
-    if (GetAnchorView()->GetProperty(kAnchoredDialogKey) == this) {
-      GetAnchorView()->ClearProperty(kAnchoredDialogKey);
-    }
     anchor_view_observer_.reset();
   }
 
@@ -1174,9 +1204,11 @@ void BubbleDialogDelegate::SetAnchor(BubbleAnchor anchor) {
       CHECK(widget) << "BubbleAnchor only supports TrackedElement backed by a "
                     << "Widget.";
       SetAnchorWidget(widget);
+      SetAnchoredDialogKey();
     }
   } else {
     CHECK(anchor.IsNull());
+    anchor_tracked_element_ = nullptr;
     SetAnchorView(nullptr);
     SetAnchorRect(gfx::Rect());
   }
@@ -1187,9 +1219,33 @@ BubbleAnchor BubbleDialogDelegate::GetAnchor() const {
     return BubbleAnchor(GetAnchorView());
   }
   if (anchor_tracked_element_) {
-    return BubbleAnchor(anchor_tracked_element_);
+    return BubbleAnchor(anchor_tracked_element_.get());
   }
   return BubbleAnchor();
+}
+
+// static
+BubbleDialogDelegate* BubbleDialogDelegate::GetAnchoredDialog(
+    BubbleAnchor anchor) {
+  if (ui::TrackedElement* tracked_element = anchor.GetIfElement()) {
+    if (auto* element_views = tracked_element->AsA<TrackedElementViews>()) {
+      anchor = BubbleAnchor(element_views->view());
+    }
+  }
+
+  if (View* view = anchor.GetIfView()) {
+    DialogDelegate* dialog = view->GetProperty(kAnchoredDialogKey);
+    return dialog ? dialog->AsBubbleDialogDelegate() : nullptr;
+  }
+  if (ui::TrackedElement* element = anchor.GetIfElement()) {
+    for (BubbleDialogDelegate* delegate :
+         base::Reversed(GetAnchoredTrackedElementDelegates())) {
+      if (delegate->anchor_tracked_element_.get() == element) {
+        return delegate;
+      }
+    }
+  }
+  return nullptr;
 }
 
 bool BubbleDialogDelegate::IsSameAnchor(BubbleAnchor anchor) const {
@@ -1212,8 +1268,17 @@ bool BubbleDialogDelegate::IsSameAnchor(BubbleAnchor anchor) const {
   }
 }
 
+void BubbleDialogDelegate::SetUseAnchorWindowBounds(bool use_anchor_bounds) {
+  use_anchor_window_bounds_ = use_anchor_bounds;
+  if (auto* frame_view = GetBubbleFrameView()) {
+    frame_view->set_use_anchor_window_bounds(use_anchor_bounds);
+  }
+}
+
 void BubbleDialogDelegate::SizeToContents() {
-  GetWidget()->SetBounds(GetDesiredWidgetBounds());
+  if (GetWidget() && !GetWidget()->IsClosed()) {
+    GetWidget()->SetBounds(GetDesiredWidgetBounds());
+  }
 }
 
 std::u16string BubbleDialogDelegate::GetSubtitle() const {
@@ -1260,7 +1325,7 @@ void BubbleDialogDelegate::UpdateFrameColor() {
   // contents are doing.
   const bool contents_layer_opaque =
       layer_type() != ui::LAYER_NOT_DRAWN && contents_view->layer() &&
-      contents_view->layer()->type() != ui::LAYER_NOT_DRAWN &&
+      !contents_view->layer()->AsNotDrawn() &&
       contents_view->layer()->fills_bounds_opaquely();
   if (contents_layer_opaque) {
     CHECK(contents_view->background())
@@ -1335,9 +1400,10 @@ void BubbleDialogDelegate::NotifyAnchoredBubbleIsPrimary() {
 }
 
 void BubbleDialogDelegate::SetAnchoredDialogKey() {
-  auto* anchor_view = GetAnchorView();
-  DCHECK(anchor_view);
-  if (focus_traversable_from_anchor_view_) {
+  if (!focus_traversable_from_anchor_view_) {
+    return;
+  }
+  if (auto* anchor_view = GetAnchorView()) {
     // Make sure that focus can move into here from the anchor view (but not
     // out, focus will cycle inside the dialog once it gets here).
     // It is possible that a view anchors more than one widgets,
@@ -1348,7 +1414,19 @@ void BubbleDialogDelegate::SetAnchoredDialogKey() {
     }
     anchor_view->SetProperty(kAnchoredDialogKey,
                              static_cast<DialogDelegate*>(this));
+  } else if (anchor_tracked_element_) {
+    auto& delegates = GetAnchoredTrackedElementDelegates();
+    std::erase(delegates, this);
+    delegates.push_back(this);
   }
+}
+
+void BubbleDialogDelegate::ClearAnchoredDialogKey() {
+  if (auto* anchor_view = GetAnchorView();
+      anchor_view && anchor_view->GetProperty(kAnchoredDialogKey) == this) {
+    anchor_view->ClearProperty(kAnchoredDialogKey);
+  }
+  std::erase(GetAnchoredTrackedElementDelegates(), this);
 }
 
 void BubbleDialogDelegate::UpdateHighlightedButton(bool highlighted) {

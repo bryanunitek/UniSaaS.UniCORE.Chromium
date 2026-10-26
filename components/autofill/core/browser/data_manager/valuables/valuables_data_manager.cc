@@ -18,6 +18,7 @@
 #include "base/types/optional_ref.h"
 #include "components/autofill/core/browser/data_model/valuables/loyalty_card.h"
 #include "components/autofill/core/browser/data_model/valuables/valuable_types.h"
+#include "components/autofill/core/browser/permissions/autofill_policy_service.h"
 #include "components/autofill/core/browser/ui/autofill_image_fetcher_base.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/common/autofill_prefs.h"
@@ -89,7 +90,9 @@ void ValuablesDataManager::RecordLoyaltyCardUsed(const ValuableId& id,
     return;
   }
   loyalty_card->RecordLoyaltyCardUsed(use_date);
-  webdata_service_->UpdateValuableMetadata(loyalty_card->metadata());
+  if (webdata_service_) {
+    webdata_service_->UpdateValuableMetadata(loyalty_card->metadata());
+  }
 }
 
 const gfx::Image* ValuablesDataManager::GetCachedValuableImageForUrl(
@@ -105,7 +108,12 @@ const gfx::Image* ValuablesDataManager::GetCachedValuableImageForUrl(
 }
 
 bool ValuablesDataManager::IsAutofillPaymentMethodsEnabled() const {
-  return prefs::IsAutofillPaymentMethodsEnabled(pref_service_);
+  if (!pref_service_) {
+    return false;
+  }
+  return !AutofillPolicyService::IsAutofillTypeBlockedByPolicyFromPref(
+      *pref_service_, GURL(),
+      AutofillClient::AutofillPolicyDataCategory::kPayments);
 }
 
 base::optional_ref<LoyaltyCard> ValuablesDataManager::GetMutableLoyaltyCardById(

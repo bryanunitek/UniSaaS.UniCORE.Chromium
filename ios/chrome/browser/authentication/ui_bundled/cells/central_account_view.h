@@ -9,32 +9,40 @@
 
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_item.h"
 
+@class CentralAccountView;
+
+// Delegate protocol for CentralAccountView.
+@protocol CentralAccountViewDelegate <NSObject>
+
+// Called when the user taps on the AI subscription chip view.
+- (void)centralAccountViewDidTapAISubscriptionChip:(CentralAccountView*)view;
+
+@end
+
 // View for the signed-in account, used in account settings page. Contains the
 // following subviews:
 // 1. Rounded avatarImage used for the account user picture. The value cannot be
 // nil.
-// 2. Name displayed in main label. The value can be nil.
+// 2. A ring may be added around the avatar to signal the user has a AI tier if
+// `displayedAITier` is positive.
+// 3. Name displayed in main label. The value can be nil.
 // In case the value is nil, the main label will show the email and there will
 // be no secondary label.
-// 3. Email subtitle displayed in secondary label. The value cannot be nil.
+// 4. Email subtitle displayed in secondary label. The value cannot be nil.
+// 5. The name of the AI tier if `displayedAiTier` if
+// `ios::provider::GetAITierName` returns it.
 @interface CentralAccountView : UIView
+
+// The delegate to handle interactions with the view.
+@property(nonatomic, weak) id<CentralAccountViewDelegate> delegate;
 
 - (instancetype)initWithFrame:(CGRect)frame
                   avatarImage:(UIImage*)avatarImage
+              displayedAiTier:(NSInteger)displayedAiTier
                          name:(NSString*)name
                         email:(NSString*)email
         managementDescription:(NSString*)managementDescription
               useLargeMargins:(BOOL)useLargeMargins;
-
-// Returns the view parameters.
-- (UIImage*)avatarImage;
-// The title of the view. The name if it’s set otherwise the email.
-- (NSString*)title;
-// The title of the view. The email if the name is set, otherwise nil.
-- (NSString*)subtitle;
-- (BOOL)managed;
-
-- (NSString*)managementDescription;
 
 // update the top padding.
 - (void)updateTopPadding:(CGFloat)existingPadding;

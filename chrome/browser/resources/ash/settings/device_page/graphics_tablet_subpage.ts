@@ -23,7 +23,7 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 import {cast, castExists} from '../assert_extras.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import type {PrefsState} from '../common/types.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './graphics_tablet_subpage.html.js';
@@ -81,11 +81,11 @@ export class SettingsGraphicsTabletSubpageElement extends
     };
   }
 
-  prefs: PrefsState;
-  graphicsTablets: GraphicsTablet[];
-  private currentPenChanged: boolean;
-  private currentTabletChanged: boolean;
-  private deviceId: number;
+  declare prefs: PrefsState;
+  declare graphicsTablets: GraphicsTablet[];
+  declare private currentPenChanged: boolean;
+  declare private currentTabletChanged: boolean;
+  declare private deviceId: number;
   private inputDeviceSettingsProvider: InputDeviceSettingsProviderInterface =
       getInputDeviceSettingsProvider();
 

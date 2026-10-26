@@ -16,6 +16,7 @@
 
 #include "base/containers/flat_map.h"
 #include "base/i18n/rtl.h"
+#include "base/memory/stack_allocated.h"
 #include "components/autofill/content/renderer/timing.h"
 #include "components/autofill/core/common/autofill_constants.h"
 #include "components/autofill/core/common/dense_set.h"
@@ -64,18 +65,18 @@ namespace form_util {
 // heuristics for a given form element.
 using ButtonTitlesCache = base::flat_map<FormRendererId, ButtonTitleList>;
 
-// Extract FormData from `form_element` or the unowned form if
-// `form_element.IsNull()`.
+// Extracts FormData from the form element with `form_id`, or the unowned form
+// if `form_id.is_null()`.
 //
 // The document must be the one we want to extract fields from. In other words:
-// Do not blindly pass "some" WebDocument for `document`! If `form_element` is
-// non-null, `document` must obviously be `form_element`'s document. As a rule
-// of thumb, avoid passing "the current frame's document" but instead, whenever
-// possible, pass WebForm[Control]Element::GetDocument() of the form or of the
-// field whose form that we want to extract.
+// Do not blindly pass "some" WebDocument for `document`! If `form_id` is
+// non-null, `document` must obviously be the form element's document. As a
+// rule of thumb, avoid passing "the current frame's document" but instead,
+// whenever possible, pass WebForm[Control]Element::GetDocument() of the form or
+// of the field whose form that we want to extract.
 std::optional<FormData> ExtractFormData(
     const blink::WebDocument& document,
-    const blink::WebFormElement& form_element,
+    FormRendererId form_id,
     const FieldDataManager& field_data_manager,
     const CallTimerState& timer_state,
     ButtonTitlesCache* button_titles_cache);
@@ -105,6 +106,14 @@ bool IsAutofillableElement(const blink::WebFormControlElement& element);
 std::optional<FormControlType> GetAutofillFormControlType(
     const blink::WebFormControlElement& element);
 
+// Maps a Blink FormControlTypeForAutofill() value to Autofill's
+// FormControlType. Returns std::nullopt for types that Autofill does not
+// handle. AutofillAgent::DidChangeFormRelatedElementDynamically() relies on
+// this depending on the type only; see MayBeRelevantFormControlChange() there
+// if that ever needs to change.
+std::optional<FormControlType> GetAutofillFormControlType(
+    blink::mojom::FormControlType type);
+
 // Returns true iff `element` has a "webauthn" autocomplete attribute.
 bool IsWebauthnTaggedElement(const blink::WebFormControlElement& element);
 
@@ -124,6 +133,13 @@ FieldRendererId GetFieldRendererId(const blink::WebElement& e);
 base::i18n::TextDirection GetTextDirectionForElement(
     const blink::WebFormControlElement& element);
 
+// Returns all connected form control elements
+// - owned by `form_element` if `!form_element.IsNull()`;
+// - owned by no form otherwise.
+std::vector<blink::WebFormControlElement> GetOwnedFormControls(
+    const blink::WebDocument& document,
+    const blink::WebFormElement& form_element);
+
 // Returns all connected, autofillable form control elements
 // - owned by `form_element` if `!form_element.IsNull()`;
 // - owned by no form otherwise.
@@ -131,13 +147,20 @@ std::vector<blink::WebFormControlElement> GetOwnedAutofillableFormControls(
     const blink::WebDocument& document,
     const blink::WebFormElement& form_element);
 
+struct FormAndField {
+  STACK_ALLOCATED();
+
+ public:
+  FormData form;
+  const FormFieldData& field;
+};
+
 // Extracts the FormData that represents the form of `element`. If that form
 // cannot be extracted (e.g., because it is too large), falls back to a
 // single-field form that contains `element`. If however `element` is not
 // autofillable, returns nullopt. `form_cache` can be used to optimize form
 // extractions occurring synchronously after this function call.
-std::optional<std::pair<FormData, raw_ref<const FormFieldData>>>
-FindFormAndFieldForFormControlElement(
+std::optional<FormAndField> FindFormAndFieldForFormControlElement(
     const blink::WebFormControlElement& element,
     const FieldDataManager& field_data_manager,
     const CallTimerState& timer_state,
@@ -341,7 +364,8 @@ std::u16string FindChildTextWithIgnoreListForTesting(
     const std::set<blink::WebNode>& divs_to_skip);
 std::vector<SelectOption> GetDataListOptionsForTesting(
     const blink::WebInputElement& element);
-blink::WebFormElement GetClosestAncestorFormElementForTesting(blink::WebNode n);
+blink::WebFormElement GetOutermostAncestorFormElementForTesting(
+    blink::WebNode n);
 bool IsDOMPredecessorForTesting(const blink::WebNode& x,
                                 const blink::WebNode& y,
                                 const blink::WebNode& ancestor_hint);

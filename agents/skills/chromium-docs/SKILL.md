@@ -26,8 +26,8 @@ Do **NOT** activate when:
 
 - The user asks to implement, modify, or debug code without requesting
   documentation references.
-- The user already provided an exact file path and only wants the file
-  content explained.
+- The user already provided an exact file path and only wants the file content
+  explained.
 - The request is unrelated to Chromium documentation lookup (for example,
   general programming Q&A).
 - The user asks for build/test execution only and does not need supporting docs.
@@ -37,14 +37,14 @@ Do **NOT** activate when:
 **Build the index (required before first search; rebuild after major syncs):**
 
 ```bash
-python ../../../agents/skills/chromium-docs/scripts/chromium_docs.py \
+python3 agents/skills/chromium-docs/scripts/chromium_docs.py \
   --build-index
 ```
 
 **Search documentation:**
 
 ```bash
-python ../../../agents/skills/chromium-docs/scripts/chromium_docs.py \
+python3 agents/skills/chromium-docs/scripts/chromium_docs.py \
   "your query"
 ```
 
@@ -70,24 +70,24 @@ If the search returns "index needs to be built first":
 Documents are classified into the following categories. Use these names to
 understand result groupings:
 
-| Category | Covers |
-|----------|--------|
-| android | Android-specific code and build docs |
-| ios | iOS-specific docs |
-| chromeos | ChromeOS / Ash docs |
-| gpu | Graphics, WebGL, Vulkan, OpenGL |
-| media | Audio, video, codecs |
-| security | Sandbox, site-isolation, crypto, CORS |
-| network | Net stack, QUIC, TCP, DNS, SSL/TLS |
-| testing | Unit tests, browser tests, test frameworks |
-| ui | Views, Aura, UI toolkit |
-| accessibility | a11y, screen readers |
-| build | GN, Ninja, compilation |
-| performance | Benchmarks, memory, speed |
-| api | Mojo/mojom interfaces |
-| architecture | Design documents, multi-process model |
-| development | DevTools, debugging, tools |
-| general | Everything else |
+| Category      | Covers                                     |
+| ------------- | ------------------------------------------ |
+| android       | Android-specific code and build docs       |
+| ios           | iOS-specific docs                          |
+| chromeos      | ChromeOS / Ash docs                        |
+| gpu           | Graphics, WebGL, Vulkan, OpenGL            |
+| media         | Audio, video, codecs                       |
+| security      | Sandbox, site-isolation, crypto, CORS      |
+| network       | Net stack, QUIC, TCP, DNS, SSL/TLS         |
+| testing       | Unit tests, browser tests, test frameworks |
+| ui            | Views, Aura, UI toolkit                    |
+| accessibility | a11y, screen readers                       |
+| build         | GN, Ninja, compilation                     |
+| performance   | Benchmarks, memory, speed                  |
+| api           | Mojo/mojom interfaces                      |
+| architecture  | Design documents, multi-process model      |
+| development   | DevTools, debugging, tools                 |
+| general       | Everything else                            |
 
 ## Interpreting results
 
@@ -108,23 +108,27 @@ When presenting results to the user:
 ## Examples
 
 **User asks: "How does Chromium's multi-process architecture work?"**
-> Search `"multi-process architecture"` and return the top design docs with
-> file paths and summaries.
+
+> Search `"multi-process architecture"` and return the top design docs with file
+> paths and summaries.
 
 **User asks: "Find all testing-related docs"**
+
 > Search `"testing guide"` to surface testing guides and frameworks.
 
 **User asks: "Where are the Mojo IPC docs?"**
-> Search `"mojo ipc"` and return linked paths to the Mojo binding and
-> interface documentation.
+
+> Search `"mojo ipc"` and return linked paths to the Mojo binding and interface
+> documentation.
 
 **User asks: "GPU rendering best practices"**
+
 > Search `"gpu rendering"` and present GPU-category results with excerpts.
 
 ## Resources
 
 - **Search config**:
-  `../../../agents/skills/chromium-docs/data/configs/search_config.json`
-- **README**: `../../../agents/skills/chromium-docs/README.md`
-- **Index scope**: All `.md` files matching `docs/**/*.md`,
-  `*/README.md`, and `*/docs/*.md` across the entire Chromium source tree
+  `agents/skills/chromium-docs/data/configs/search_config.json`
+- **README**: `agents/skills/chromium-docs/README.md`
+- **Index scope**: All `.md` files matching `docs/**/*.md`, `*/README.md`, and
+  `*/docs/*.md` across the entire Chromium source tree

@@ -30,9 +30,9 @@
 #include "third_party/blink/renderer/core/layout/pagination_utils.h"
 #include "third_party/blink/renderer/core/layout/relative_utils.h"
 #include "third_party/blink/renderer/core/layout/table/layout_table_cell.h"
-#include "third_party/blink/renderer/core/overscroll/overscroll_area_tracker.h"
 #include "third_party/blink/renderer/core/paint/border_shape_painter.h"
 #include "third_party/blink/renderer/core/paint/border_shape_utils.h"
+#include "third_party/blink/renderer/core/paint/box_fragment_painter.h"
 #include "third_party/blink/renderer/core/paint/inline_paint_context.h"
 #include "third_party/blink/renderer/core/paint/outline_painter.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
@@ -59,11 +59,6 @@ struct SameSizeAsPhysicalBoxFragment : PhysicalFragment {
 };
 
 ASSERT_SIZE(PhysicalBoxFragment, SameSizeAsPhysicalBoxFragment);
-
-bool HasControlClip(const PhysicalBoxFragment& self) {
-  const LayoutBox* box = DynamicTo<LayoutBox>(self.GetLayoutObject());
-  return box && box->HasControlClip();
-}
 
 bool IsFlexibleBoxWithSingleChildElement(const LayoutObject& layout_object) {
   if (!RuntimeEnabledFeatures::
@@ -92,7 +87,7 @@ bool ShouldUsePositionForPointInBlockFlowDirection(
       !IsFlexibleBoxWithSingleChildElement(layout_object)) {
     return false;
   }
-  if (layout_object.StyleRef().SpecifiesColumns()) {
+  if (layout_object.Style().SpecifiesColumns()) {
     // Columns are laid out in inline direction.
     return false;
   }
@@ -122,7 +117,7 @@ void ApplyOverflowClip(OverflowClipAxes overflow_clip_axes,
 }
 
 int MaxGapDecorationsWidth(const GapDataList<int>& width_value) {
-  const auto widths = width_value.GetGapDataList();
+  const auto& widths = width_value.GetGapDataList();
   CHECK(!widths.empty());
 
   const auto& first_width = widths[0];
@@ -219,8 +214,8 @@ const PhysicalBoxFragment* PhysicalBoxFragment::Create(
         scrollbar, padding, physical_size, writing_direction);
 
     if (FragmentItemsBuilder* items_builder = builder->ItemsBuilder()) {
-      calculator.AddItems(builder->GetLayoutObject(),
-                          items_builder->Items(physical_size));
+      items_builder->ConvertToPhysical(physical_size);
+      calculator.AddItems(builder->GetLayoutObject(), items_builder->Items());
     }
 
     for (auto& child : builder->children_) {
@@ -249,7 +244,7 @@ const PhysicalBoxFragment* PhysicalBoxFragment::Create(
   FragmentItemsBuilder* items_builder = builder->ItemsBuilder();
   bool has_fragment_items = items_builder && items_builder->Size();
 
-  size_t byte_size = AdditionalByteSize(has_fragment_items);
+  uint32_t byte_size = AdditionalByteSize(has_fragment_items);
 
   // We store the children list inline in the fragment as a flexible
   // array. Therefore, we need to make sure to allocate enough space for
@@ -268,7 +263,7 @@ const PhysicalBoxFragment* PhysicalBoxFragment::Create(
 const PhysicalBoxFragment* PhysicalBoxFragment::Clone(
     const PhysicalBoxFragment& other) {
   // The size of the new fragment shouldn't differ from the old one.
-  size_t byte_size = AdditionalByteSize(other.HasItems());
+  uint32_t byte_size = AdditionalByteSize(other.HasItems());
 
   return MakeGarbageCollected<PhysicalBoxFragment>(
       AdditionalBytes(byte_size), PassKey(), other,
@@ -277,12 +272,15 @@ const PhysicalBoxFragment* PhysicalBoxFragment::Clone(
 
 // static
 const PhysicalBoxFragment* PhysicalBoxFragment::CloneWithPostLayoutFragments(
-    const PhysicalBoxFragment& other) {
-  PhysicalRect scrollable_overflow = other.ScrollableOverflow();
-  bool has_scrollable_overflow = other.HasScrollableOverflow();
+    const PhysicalBoxFragment& other,
+    const std::optional<PhysicalRect> new_scrollable_overflow) {
+  const PhysicalRect scrollable_overflow =
+      new_scrollable_overflow.value_or(other.ScrollableOverflow());
+  const bool has_scrollable_overflow =
+      scrollable_overflow != PhysicalRect({}, other.Size());
 
   // The size of the new fragment shouldn't differ from the old one.
-  size_t byte_size = AdditionalByteSize(other.HasItems());
+  uint32_t byte_size = AdditionalByteSize(other.HasItems());
 
   const auto* cloned_fragment = MakeGarbageCollected<PhysicalBoxFragment>(
       AdditionalBytes(byte_size), PassKey(), other, has_scrollable_overflow,
@@ -341,16 +339,16 @@ const PhysicalBoxFragment* PhysicalBoxFragment::CloneWithPostLayoutFragments(
 
 namespace {
 template <typename T>
-constexpr void AccountSizeAndPadding(size_t& current_size) {
-  const size_t current_size_with_padding =
-      base::bits::AlignUp(current_size, alignof(T));
+constexpr void AccountSizeAndPadding(uint32_t& current_size) {
+  const uint32_t current_size_with_padding =
+      base::bits::AlignUp(current_size, static_cast<uint32_t>(alignof(T)));
   current_size = current_size_with_padding + sizeof(T);
 }
 }  // namespace
 
 // static
-size_t PhysicalBoxFragment::AdditionalByteSize(bool has_fragment_items) {
-  size_t additional_size = 0;
+uint32_t PhysicalBoxFragment::AdditionalByteSize(bool has_fragment_items) {
+  uint32_t additional_size = 0;
   if (has_fragment_items) {
     AccountSizeAndPadding<FragmentItems>(additional_size);
   }
@@ -379,7 +377,9 @@ PhysicalBoxFragment::PhysicalBoxFragment(
                  IsMonolithicOverflowPropagationDisabledFlag::encode(
                      builder->GetConstraintSpace()
                          .IsMonolithicOverflowPropagationDisabled()) |
-                 HasMovedChildrenFlag::encode(builder->has_moved_children_)) {
+                 HasMovedChildrenFlag::encode(builder->has_moved_children_) |
+                 IsLineClampClippedFloatFlag::encode(
+                     builder->is_line_clamp_clipped_float_)) {
   DCHECK(layout_object_);
   DCHECK(layout_object_->IsBoxModelObject());
   DCHECK(!builder->break_token_ || builder->break_token_->IsBlockType());
@@ -483,6 +483,12 @@ PhysicalBoxFragment::PhysicalBoxFragment(
     rare_data_ =
         MakeGarbageCollected<PhysicalFragmentRareData>(*other.rare_data_);
   }
+  if (has_scrollable_overflow) {
+    EnsureRareField(FieldId::kScrollableOverflow).scrollable_overflow =
+        scrollable_overflow;
+  } else if (GetRareField(FieldId::kScrollableOverflow)) {
+    rare_data_->RemoveField(FieldId::kScrollableOverflow);
+  }
 }
 
 PhysicalBoxFragment::~PhysicalBoxFragment() {
@@ -518,7 +524,8 @@ const LayoutBox* PhysicalBoxFragment::OwnerLayoutBox() const {
     }
   } else {
     // Check |this| and the |LayoutBox| that produced it are in sync.
-    DCHECK(owner_box->PhysicalFragments().Contains(*this));
+    DCHECK(std::ranges::contains(owner_box->PhysicalFragments(), this,
+                                 [](const auto& f) { return &f; }));
     DCHECK_EQ(IsFirstForNode(), this == owner_box->GetPhysicalFragment(0));
   }
 #endif
@@ -539,14 +546,15 @@ PhysicalOffset PhysicalBoxFragment::OffsetFromOwnerLayoutBox() const {
 
   const LayoutBox* owner_box = OwnerLayoutBox();
   DCHECK(owner_box);
-  DCHECK(owner_box->PhysicalFragments().Contains(*this));
+  DCHECK(std::ranges::contains(owner_box->PhysicalFragments(), this,
+                               [](const auto& f) { return &f; }));
   if (owner_box->PhysicalFragmentCount() <= 1)
     return PhysicalOffset();
 
   // When LTR, compute the offset from the first fragment. The first fragment is
   // at the left top of the |LayoutBox| regardless of the writing mode.
   const auto* containing_block = owner_box->ContainingBlock();
-  const ComputedStyle& containing_block_style = containing_block->StyleRef();
+  const ComputedStyle& containing_block_style = containing_block->Style();
   if (IsLtr(containing_block_style.Direction())) {
     DCHECK_EQ(IsFirstForNode(), this == owner_box->GetPhysicalFragment(0));
     if (IsFirstForNode())
@@ -705,19 +713,16 @@ PhysicalRect PhysicalBoxFragment::InkOverflowRect() const {
 }
 
 PhysicalRect PhysicalBoxFragment::OverflowClipRect(
-    const PhysicalOffset& location,
     OverlayScrollbarClipBehavior overlay_scrollbar_clip_behavior) const {
   DCHECK(GetLayoutObject() && GetLayoutObject()->IsBox());
   const LayoutBox* box = To<LayoutBox>(GetLayoutObject());
-  return box->OverflowClipRect(location, overlay_scrollbar_clip_behavior);
+  return box->OverflowClipRect(overlay_scrollbar_clip_behavior);
 }
 
 PhysicalRect PhysicalBoxFragment::OverflowClipRect(
-    const PhysicalOffset& location,
     const BlockBreakToken* incoming_break_token,
     OverlayScrollbarClipBehavior overlay_scrollbar_clip_behavior) const {
-  PhysicalRect clip_rect =
-      OverflowClipRect(location, overlay_scrollbar_clip_behavior);
+  PhysicalRect clip_rect = OverflowClipRect(overlay_scrollbar_clip_behavior);
   if (!incoming_break_token && !GetBreakToken()) {
     return clip_rect;
   }
@@ -730,8 +735,6 @@ PhysicalRect PhysicalBoxFragment::OverflowClipRect(
   auto writing_direction = Style().GetWritingDirection();
   const LayoutBox* box = To<LayoutBox>(GetLayoutObject());
   WritingModeConverter converter(writing_direction, box->StitchedSize());
-  // Make the clip rectangle relative to the layout box.
-  clip_rect.offset -= location;
   LogicalOffset stitched_offset;
   if (incoming_break_token)
     stitched_offset.block_offset = incoming_break_token->ConsumedBlockSize();
@@ -776,8 +779,6 @@ PhysicalRect PhysicalBoxFragment::OverflowClipRect(
 
   // Make the clip rectangle relative to the fragment.
   clip_rect.offset -= physical_fragment_rect.offset;
-  // Make the clip rectangle relative to whatever the caller wants.
-  clip_rect.offset += location;
   return clip_rect;
 }
 
@@ -790,35 +791,6 @@ bool PhysicalBoxFragment::MayIntersect(
   // TODO(kojii): (!IsCSSBox() || IsInlineBox()) is not supported yet. Implement
   // if needed. For now, just return |true| not to do early return.
   return true;
-}
-
-gfx::Vector2d PhysicalBoxFragment::PixelSnappedOverscrollContentOffset() const {
-  DCHECK(GetLayoutObject());
-  if (!IsNonOverlayOverscrollScrollContainer()) {
-    // This intentionally skips the ::-internal-overscroll-area-parents as they
-    // are self painting layers so we rely on the layer position to account
-    // for their overscroll offset.
-    return gfx::Vector2d();
-  }
-  gfx::Vector2d offset;
-  if (auto* tracker = To<Element>(GetLayoutObject()->GetNode())
-                          ->GetOverscrollAreaTracker()) {
-    for (const Element* element : tracker->DOMSortedElements()) {
-      PseudoElement* pseudo =
-          element->GetPseudoElement(kPseudoIdOverscrollAreaParent);
-      if (LayoutBox* layout_box = pseudo->GetLayoutBox()) {
-        offset += layout_box->PixelSnappedScrolledContentOffset();
-      }
-    }
-  }
-  return offset;
-}
-
-gfx::Vector2d PhysicalBoxFragment::PixelSnappedScrolledContentOffset() const {
-  DCHECK(GetLayoutObject());
-  return IsScrollContainer() ? To<LayoutBox>(*GetLayoutObject())
-                                   .PixelSnappedScrolledContentOffset()
-                             : gfx::Vector2d();
 }
 
 PhysicalSize PhysicalBoxFragment::ScrollSize() const {
@@ -1043,7 +1015,8 @@ void PhysicalBoxFragment::RecalcInkOverflow() {
   DCHECK_EQ(MutableOwnerLayoutBox(), GetMutableLayoutObject());
   LayoutBox* owner_box = To<LayoutBox>(GetMutableLayoutObject());
   DCHECK(owner_box);
-  DCHECK(owner_box->PhysicalFragments().Contains(*this));
+  DCHECK(std::ranges::contains(owner_box->PhysicalFragments(), this,
+                               [](const auto& f) { return &f; }));
   owner_box->CopyVisualOverflowFromFragments();
 }
 
@@ -1272,8 +1245,7 @@ void PhysicalBoxFragment::AddOutlineRects(
     }
   }
 
-  if (ShouldIncludeBlockInkOverflow(outline_type) && !HasNonVisibleOverflow() &&
-      !HasControlClip(*this)) {
+  if (ShouldIncludeBlockInkOverflow(outline_type) && !HasNonVisibleOverflow()) {
     // Tricky code ahead: we pass a 0,0 additional_offset to
     // AddOutlineRectsForNormalChildren, and add it in after the call.
     // This is necessary because AddOutlineRectsForNormalChildren expects
@@ -1371,7 +1343,7 @@ void PhysicalBoxFragment::AddOutlineRectsForInlineBox(
   collector.Combine(cursor_collector.get(), additional_offset);
 
   if (ShouldIncludeBlockInkOverflowForAnchorOnly(outline_type) &&
-      !HasNonVisibleOverflow() && !HasControlClip(*this)) {
+      !HasNonVisibleOverflow()) {
     for (const auto& child : container->PostLayoutChildren()) {
       if (!child->IsOutOfFlowPositioned() ||
           child->GetLayoutObject()->ContainerForAbsolutePosition() !=
@@ -1531,6 +1503,34 @@ void PhysicalBoxFragment::AddOutlineRectsForDescendant(
   }
 }
 
+namespace {
+
+// True if |position| sits in a non-editable container directly beside an
+// editable atomic inline.
+bool IsNextToNestedEditableAtomicInline(const Position& position) {
+  if (!RuntimeEnabledFeatures::CaretOutsideEditableAtomicInlineEnabled()) {
+    return false;
+  }
+  const Node* container = position.ComputeContainerNode();
+  if (!container || IsEditable(*container)) {
+    return false;
+  }
+  // The box is the node on either side of |position|.
+  for (const Node* child : {position.ComputeNodeBeforePosition(),
+                            position.ComputeNodeAfterPosition()}) {
+    if (!child || !IsEditable(*child)) {
+      continue;
+    }
+    const LayoutObject* layout_object = child->GetLayoutObject();
+    if (layout_object && layout_object->IsAtomicInline()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 PositionWithAffinity PhysicalBoxFragment::PositionForPoint(
     PhysicalOffset point) const {
   if (layout_object_->IsLayoutReplaced()) {
@@ -1538,17 +1538,21 @@ PositionWithAffinity PhysicalBoxFragment::PositionForPoint(
     return layout_object_->PositionForPoint(point);
   }
   const PhysicalOffset point_in_contents =
-      IsScrollContainer()
-          ? point + PhysicalOffset(PixelSnappedScrolledContentOffset())
-          : point;
+      point +
+      PhysicalOffset(BoxFragmentPainter(*this).PixelSnappedScrollOffset());
 
   if (!layout_object_->ChildPaintBlockedByDisplayLock()) {
     if (const FragmentItems* items = Items()) {
       InlineCursor cursor(*this, *items);
       if (const PositionWithAffinity position =
               cursor.PositionForPointInInlineFormattingContext(
-                  point_in_contents, *this))
+                  point_in_contents, *this)) {
+        // Adjusting would snap a deliberately-outside position back in.
+        if (IsNextToNestedEditableAtomicInline(position.GetPosition())) {
+          return position;
+        }
         return AdjustForEditingBoundary(position);
+      }
       return layout_object_->CreatePositionWithAffinity(0);
     }
   }
@@ -1816,7 +1820,7 @@ void PhysicalBoxFragment::CheckSameForSimplifiedLayout(
   DCHECK_EQ(type_, other.type_);
   DCHECK_EQ(sub_type_, other.sub_type_);
   DCHECK_EQ(style_variant_, other.style_variant_);
-  DCHECK_EQ(is_hidden_for_paint_, other.is_hidden_for_paint_);
+  DCHECK_EQ(is_hidden_due_to_layout_, other.is_hidden_due_to_layout_);
   DCHECK_EQ(is_opaque_, other.is_opaque_);
   DCHECK_EQ(is_block_in_inline_, other.is_block_in_inline_);
   DCHECK_EQ(is_math_fraction_, other.is_math_fraction_);

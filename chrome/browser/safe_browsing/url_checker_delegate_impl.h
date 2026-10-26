@@ -49,11 +49,18 @@ class UrlCheckerDelegateImpl : public UrlCheckerDelegate {
   void NotifySuspiciousSiteDetected(
       const base::RepeatingCallback<content::WebContents*()>&
           web_contents_getter) override;
+  void ShowSuspiciousSiteWarning(
+      const security_interstitials::UnsafeResource& resource,
+      const base::RepeatingCallback<content::WebContents*()>&
+          web_contents_getter) override;
   void SendUrlRealTimeAndHashRealTimeDiscrepancyReport(
       std::unique_ptr<safe_browsing::ClientSafeBrowsingReportRequest> report,
       const base::RepeatingCallback<content::WebContents*()>&
           web_contents_getter) override;
   bool AreBackgroundHashRealTimeSampleLookupsAllowed(
+      const base::RepeatingCallback<content::WebContents*()>&
+          web_contents_getter) override;
+  bool AreSuspiciousSiteWarningsAllowed(
       const base::RepeatingCallback<content::WebContents*()>&
           web_contents_getter) override;
   const SBThreatTypeSet& GetThreatTypes() override;

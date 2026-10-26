@@ -7,11 +7,10 @@
 #import "base/feature_list.h"
 #import "base/memory/ptr_util.h"
 #import "base/metrics/histogram_macros.h"
-#import "components/history/core/browser/features.h"
 #import "components/history/core/browser/history_constants.h"
 #import "components/history/core/browser/history_service.h"
 #import "components/history/core/browser/history_types.h"
-#import "components/keyed_service/core/service_access_type.h"
+#import "components/history/core/common/pref_names.h"
 #import "components/strings/grit/components_strings.h"
 #import "components/translate/core/common/language_detection_details.h"
 #import "ios/chrome/browser/complex_tasks/model/ios_content_record_task_id.h"
@@ -118,17 +117,11 @@ history::HistoryAddPageArgs HistoryTabHelper::CreateHistoryAddPageArgs(
           ? navigation_context->GetResponseHeaders()->response_code()
           : 0;
 
-  // If `history::kVisitedLinksOn404` is enabled, visits to
-  // reachable URLs that result in a 404 response will be saved to history. We
-  // don't want to count error navigations as visits when calculating the Most
-  // Visited, so we filter them out here.
-  const bool status_code_qualifies_for_ntp_most_visited =
-      !(base::FeatureList::IsEnabled(history::kVisitedLinksOn404) &&
-        http_response_code == 404);
-
+  // Visits to reachable URLs that result in a 404 response are saved to
+  // history. We don't want to count error navigations as visits when
+  // calculating the Most Visited, so we filter them out here.
   const bool consider_for_ntp_most_visited =
-      status_code_qualifies_for_ntp_most_visited &&
-      !content_suggestions_navigation &&
+      http_response_code != 404 && !content_suggestions_navigation &&
       referrer_url != kReadingListReferrerURL;
 
   // Hide navigations that result in an error in order to prevent the omnibox
@@ -253,16 +246,6 @@ void HistoryTabHelper::DidFinishNavigation(
     return;
   }
 
-  // If `history::kVisitedLinksOn404` is enabled, record 404s in History.
-  const bool should_record_404 =
-      base::FeatureList::IsEnabled(history::kVisitedLinksOn404);
-
-  if (navigation_context->GetResponseHeaders() &&
-      navigation_context->GetResponseHeaders()->response_code() == 404 &&
-      !should_record_404) {
-    return;
-  }
-
   if (!navigation_context->HasCommitted() ||
       !web_state_->GetNavigationManager()->GetLastCommittedItem()) {
     // Navigation was replaced or aborted.
@@ -374,6 +357,9 @@ history::HistoryService* HistoryTabHelper::GetHistoryService() {
     return nullptr;
   }
 
-  return ios::HistoryServiceFactory::GetForProfile(
-      profile, ServiceAccessType::IMPLICIT_ACCESS);
+  if (profile->GetPrefs()->GetBoolean(prefs::kSavingBrowserHistoryDisabled)) {
+    return nullptr;
+  }
+
+  return ios::HistoryServiceFactory::GetForProfile(profile);
 }

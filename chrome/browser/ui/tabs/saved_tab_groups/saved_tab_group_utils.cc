@@ -11,6 +11,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
+#include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/uuid.h"
 #include "chrome/browser/collaboration/collaboration_service_factory.h"
@@ -22,14 +23,16 @@
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_utils.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils_desktop.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_metrics.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_action_context_desktop.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_group_deletion_dialog_controller.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_group_theme.h"
@@ -57,9 +60,13 @@
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
 #include "components/tab_groups/tab_group_id.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/user_education/common/help_bubble/help_bubble_params.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "ui/base/base_window.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/range/range.h"
 #include "url/gurl.h"
 
@@ -74,13 +81,16 @@ GetSharedTabGroupRecallTypeMetric(
           SharedTabGroupRecallTypeDesktop::kOpenedFromSubmenuFromBookmarksBar;
     case tab_groups::TabGroupMenuContext::SAVED_TAB_GROUP_EVERYTHING_MENU:
       return tab_groups::saved_tab_groups::metrics::
-          SharedTabGroupRecallTypeDesktop::kOpenedFromSubmenuFromEverythingMenu;
+          SharedTabGroupRecallTypeDesktop::kOpenedFromEverythingMenu;
     case tab_groups::TabGroupMenuContext::APP_MENU:
       return tab_groups::saved_tab_groups::metrics::
           SharedTabGroupRecallTypeDesktop::kOpenedFromSubmenuFromAppMenu;
     case tab_groups::TabGroupMenuContext::MAC_SYSTEM_MENU:
       return tab_groups::saved_tab_groups::metrics::
           SharedTabGroupRecallTypeDesktop::kOpenedFromSubmenuFromMacSystemMenu;
+    case tab_groups::TabGroupMenuContext::ORGANIZER_PANEL:
+      return tab_groups::saved_tab_groups::metrics::
+          SharedTabGroupRecallTypeDesktop::kOpenedFromSubmenuFromOrganizerPanel;
   }
 }
 
@@ -100,6 +110,41 @@ GetSavedTabGroupSubmenuOpenedMetric(
     case tab_groups::TabGroupMenuContext::MAC_SYSTEM_MENU:
       return tab_groups::saved_tab_groups::metrics::
           SavedTabGroupOpenedSubmenuDesktop::kMacSystemMenu;
+    case tab_groups::TabGroupMenuContext::ORGANIZER_PANEL:
+      return tab_groups::saved_tab_groups::metrics::
+          SavedTabGroupOpenedSubmenuDesktop::kOrganizerPanel;
+  }
+}
+
+TabGroupFocusEntryPoint GetTabGroupFocusEntryPoint(
+    const tab_groups::TabGroupMenuContext& context) {
+  switch (context) {
+    case tab_groups::TabGroupMenuContext::SAVED_TAB_GROUP_BUTTON_CONTEXT_MENU:
+    case tab_groups::TabGroupMenuContext::SAVED_TAB_GROUP_EVERYTHING_MENU:
+      return TabGroupFocusEntryPoint::kBookmarksBarContextMenu;
+    case tab_groups::TabGroupMenuContext::APP_MENU:
+      return TabGroupFocusEntryPoint::kAppMenu;
+    case tab_groups::TabGroupMenuContext::ORGANIZER_PANEL:
+      return TabGroupFocusEntryPoint::kOrganizerPanel;
+    case tab_groups::TabGroupMenuContext::MAC_SYSTEM_MENU:
+      // The Mac system menu does not offer a focus option.
+      NOTREACHED();
+  }
+}
+
+TabGroupFocusExitReason GetTabGroupFocusExitReason(
+    const tab_groups::TabGroupMenuContext& context) {
+  switch (context) {
+    case tab_groups::TabGroupMenuContext::SAVED_TAB_GROUP_BUTTON_CONTEXT_MENU:
+    case tab_groups::TabGroupMenuContext::SAVED_TAB_GROUP_EVERYTHING_MENU:
+      return TabGroupFocusExitReason::kBookmarksBarContextMenu;
+    case tab_groups::TabGroupMenuContext::APP_MENU:
+      return TabGroupFocusExitReason::kAppMenu;
+    case tab_groups::TabGroupMenuContext::ORGANIZER_PANEL:
+      return TabGroupFocusExitReason::kOrganizerPanel;
+    case tab_groups::TabGroupMenuContext::MAC_SYSTEM_MENU:
+      // The Mac system menu does not offer an unfocus option.
+      NOTREACHED();
   }
 }
 
@@ -119,32 +164,22 @@ bool SavedTabGroupUtils::IsEnabledForProfile(Profile* profile) {
 
 // static
 void SavedTabGroupUtils::RemoveGroupFromTabstrip(
-    const Browser* browser,
+    BrowserWindowInterface* browser,
     const tab_groups::TabGroupId& local_group) {
-  const Browser* const browser_with_local_group_id =
+  BrowserWindowInterface* const browser_with_local_group_id =
       browser ? browser
               : SavedTabGroupUtils::GetBrowserWithTabGroupId(local_group);
-  DCHECK(browser_with_local_group_id);
+  CHECK(browser_with_local_group_id, base::NotFatalUntil::M162);
   if (!browser_with_local_group_id) {
     return;
   }
 
-  TabStripModel* const tab_strip_model =
-      browser_with_local_group_id->tab_strip_model();
-
-  const int num_tabs_in_group =
-      tab_strip_model->group_model()->GetTabGroup(local_group)->tab_count();
-  if (tab_strip_model->count() == num_tabs_in_group) {
-    // If the group about to be closed has all of the tabs in the browser, add a
-    // new tab outside the group to prevent the browser from closing.
-    tab_strip_model->delegate()->AddTabAt(GURL(), -1, true);
-  }
-
-  tab_strip_model->CloseAllTabsInGroup(local_group);
+  browser_with_local_group_id->GetTabStripModel()->CloseAllTabsInGroup(
+      local_group);
 }
 
 // static
-void SavedTabGroupUtils::UngroupSavedGroup(Browser* browser,
+void SavedTabGroupUtils::UngroupSavedGroup(BrowserWindowInterface* browser,
                                            const base::Uuid& saved_group_guid) {
   tab_groups::TabGroupSyncService* tab_group_service =
       tab_groups::TabGroupSyncServiceFactory::GetForProfile(
@@ -161,8 +196,9 @@ void SavedTabGroupUtils::UngroupSavedGroup(Browser* browser,
   }
 
   base::OnceCallback<void()> ungroup_callback = base::BindOnce(
-      [](const Browser* browser, const tab_groups::TabGroupId& local_group) {
-        TabStripModel* const model = browser->tab_strip_model();
+      [](BrowserWindowInterface* browser,
+         const tab_groups::TabGroupId& local_group) {
+        TabStripModel* const model = browser->GetTabStripModel();
         const gfx::Range tab_range =
             model->group_model()->GetTabGroup(local_group)->ListTabs();
 
@@ -180,16 +216,14 @@ void SavedTabGroupUtils::UngroupSavedGroup(Browser* browser,
   DeletionDialogController::DialogMetadata dialog_metadata(
       DeletionDialogController::DialogType::UngroupSingle,
       /*closing_group_count=*/1, closing_multiple_tabs);
-  browser->GetFeatures()
-      .tab_group_deletion_dialog_controller()
-      ->MaybeShowDialog(
-          dialog_metadata,
-          base::IgnoreArgs<DeletionDialogController::DeletionDialogTiming>(
-              std::move(ungroup_callback)));
+  tab_groups::DeletionDialogController::From(browser)->MaybeShowDialog(
+      dialog_metadata,
+      base::IgnoreArgs<DeletionDialogController::DeletionDialogTiming>(
+          std::move(ungroup_callback)));
 }
 
 // static
-void SavedTabGroupUtils::DeleteSavedGroup(Browser* browser,
+void SavedTabGroupUtils::DeleteSavedGroup(BrowserWindowInterface* browser,
                                           const base::Uuid& saved_group_guid) {
   tab_groups::TabGroupSyncService* tab_group_service =
       tab_groups::TabGroupSyncServiceFactory::GetForProfile(
@@ -220,7 +254,7 @@ void SavedTabGroupUtils::DeleteSavedGroup(Browser* browser,
   }
 
   base::OnceCallback<void()> close_callback = base::BindOnce(
-      [](Browser* browser, const base::Uuid& saved_group_guid) {
+      [](BrowserWindowInterface* browser, const base::Uuid& saved_group_guid) {
         TabGroupSyncService* tab_group_service =
             tab_groups::TabGroupSyncServiceFactory::GetForProfile(
                 browser->GetProfile());
@@ -265,16 +299,14 @@ void SavedTabGroupUtils::DeleteSavedGroup(Browser* browser,
   shared_dialog_metadata.title_of_closing_group = group->title();
 
   const bool is_group_shared = group.value().collaboration_id().has_value();
-  browser->GetFeatures()
-      .tab_group_deletion_dialog_controller()
-      ->MaybeShowDialog(
-          is_group_shared ? shared_dialog_metadata : saved_dialog_metadata,
-          base::IgnoreArgs<DeletionDialogController::DeletionDialogTiming>(
-              std::move(close_callback)));
+  tab_groups::DeletionDialogController::From(browser)->MaybeShowDialog(
+      is_group_shared ? shared_dialog_metadata : saved_dialog_metadata,
+      base::IgnoreArgs<DeletionDialogController::DeletionDialogTiming>(
+          std::move(close_callback)));
 }
 
 // static
-void SavedTabGroupUtils::LeaveSharedGroup(Browser* browser,
+void SavedTabGroupUtils::LeaveSharedGroup(BrowserWindowInterface* browser,
                                           const base::Uuid& saved_group_guid) {
   if (!tab_groups::SavedTabGroupUtils::SupportsSharedTabGroups()) {
     return;
@@ -309,7 +341,7 @@ void SavedTabGroupUtils::LeaveSharedGroup(Browser* browser,
 
 // static
 void SavedTabGroupUtils::MaybeShowSavedTabGroupDeletionDialog(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     GroupDeletionReason reason,
     base::span<const TabGroupId> group_ids,
     base::OnceCallback<void(DeletionDialogController::DeletionDialogTiming)>
@@ -331,7 +363,7 @@ void SavedTabGroupUtils::MaybeShowSavedTabGroupDeletionDialog(
   // If there's no way to show the group deletion dialog, then fallback to
   // running the callback.
   auto* const dialog_controller =
-      browser->GetFeatures().tab_group_deletion_dialog_controller();
+      tab_groups::DeletionDialogController::From(browser);
   if (!dialog_controller || !dialog_controller->CanShowDialog()) {
     std::move(callback).Run(
         DeletionDialogController::DeletionDialogTiming::Synchronous);
@@ -395,17 +427,18 @@ void SavedTabGroupUtils::MaybeShowSavedTabGroupDeletionDialog(
 }
 
 // static
-void SavedTabGroupUtils::OpenUrlInNewUngroupedTab(Browser* browser,
-                                                  const GURL& url) {
+void SavedTabGroupUtils::OpenUrlInNewUngroupedTab(
+    BrowserWindowInterface* browser,
+    const GURL& url) {
   NavigateParams params(browser, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   params.started_from_context_menu = true;
   Navigate(&params);
 }
 
 // static
 void SavedTabGroupUtils::OpenOrMoveSavedGroupToNewWindow(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const base::Uuid& saved_group_guid) {
   tab_groups::TabGroupSyncService* tab_group_service =
       tab_groups::TabGroupSyncServiceFactory::GetForProfile(
@@ -418,7 +451,7 @@ void SavedTabGroupUtils::OpenOrMoveSavedGroupToNewWindow(
   }
 
   const auto& local_group_id = save_group->local_group_id();
-  Browser* const browser_with_local_group_id =
+  BrowserWindowInterface* const browser_with_local_group_id =
       local_group_id.has_value()
           ? SavedTabGroupUtils::GetBrowserWithTabGroupId(local_group_id.value())
           : browser;
@@ -439,14 +472,14 @@ void SavedTabGroupUtils::OpenOrMoveSavedGroupToNewWindow(
   CHECK(save_group->local_group_id().has_value());
 
   // Move the open group to a new browser window.
-  browser_with_local_group_id->tab_strip_model()
+  browser_with_local_group_id->GetTabStripModel()
       ->delegate()
       ->MoveGroupToNewWindow(save_group->local_group_id().value());
 }
 
 // static
 void SavedTabGroupUtils::ToggleGroupPinState(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const base::Uuid& saved_group_guid) {
   tab_groups::TabGroupSyncService* tab_group_service =
       tab_groups::TabGroupSyncServiceFactory::GetForProfile(
@@ -475,23 +508,10 @@ SavedTabGroupUtils::OpenSavedTabGroup(BrowserWindowInterface* browser,
     }
   }
 
-  Browser* browser_ptr =
-      browser ? browser->GetBrowserForMigrationOnly() : nullptr;
-
   std::optional<LocalTabGroupID> opened_group_id =
       tab_group_service->OpenTabGroup(
           saved_group_guid, std::make_unique<TabGroupActionContextDesktop>(
-                                browser_ptr, opening_source));
-
-  if (opened_group_id.has_value() &&
-      base::FeatureList::IsEnabled(features::kTabGroupsFocusing) &&
-      features::kTabGroupsFocusingDefaultToFocused.Get()) {
-    if (browser) {
-      if (auto* model = browser->GetTabStripModel()) {
-        model->SetFocusedGroup(opened_group_id.value());
-      }
-    }
-  }
+                                browser, opening_source));
 
   return opened_group_id;
 }
@@ -501,7 +521,7 @@ SavedTabGroupTab SavedTabGroupUtils::CreateSavedTabGroupTabFromWebContents(
     content::WebContents* contents,
     base::Uuid saved_tab_group_id) {
   SavedTabGroupTab tab(
-      contents->GetVisibleURL().is_empty() ? GURL(chrome::kChromeUINewTabURL)
+      contents->GetVisibleURL().is_empty() ? chrome::ChromeUINewTabURLAsGURL()
                                            : contents->GetVisibleURL(),
       contents->GetTitle(), saved_tab_group_id, /*position=*/std::nullopt);
   return tab;
@@ -510,7 +530,7 @@ SavedTabGroupTab SavedTabGroupUtils::CreateSavedTabGroupTabFromWebContents(
 // static
 content::NavigationHandle* SavedTabGroupUtils::OpenTabInBrowser(
     const GURL& url,
-    Browser* browser,
+    BrowserWindowInterface* browser,
     Profile* profile,
     WindowOpenDisposition disposition,
     std::optional<int> tabstrip_index,
@@ -527,16 +547,16 @@ content::NavigationHandle* SavedTabGroupUtils::OpenTabInBrowser(
 }
 
 // static
-Browser* SavedTabGroupUtils::GetBrowserWithTabGroupId(
+BrowserWindowInterface* SavedTabGroupUtils::GetBrowserWithTabGroupId(
     tab_groups::TabGroupId group_id) {
-  Browser* result = nullptr;
+  BrowserWindowInterface* result = nullptr;
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [group_id, &result](BrowserWindowInterface* browser) {
         const TabStripModel* const tab_strip_model =
             browser->GetTabStripModel();
         if (tab_strip_model && tab_strip_model->SupportsTabGroups() &&
             tab_strip_model->group_model()->ContainsTabGroup(group_id)) {
-          result = browser->GetBrowserForMigrationOnly();
+          result = browser;
         }
         return !result;
       });
@@ -546,39 +566,21 @@ Browser* SavedTabGroupUtils::GetBrowserWithTabGroupId(
 // static
 TabGroup* SavedTabGroupUtils::GetTabGroupWithId(
     tab_groups::TabGroupId group_id) {
-  Browser* browser = GetBrowserWithTabGroupId(group_id);
+  BrowserWindowInterface* browser = GetBrowserWithTabGroupId(group_id);
   if (!browser) {
     return nullptr;
   }
 
-  TabGroupModel* tab_group_model = browser->tab_strip_model()->group_model();
+  TabGroupModel* tab_group_model = browser->GetTabStripModel()->group_model();
   CHECK(tab_group_model);
 
   return tab_group_model->GetTabGroup(group_id);
 }
 
 // static
-std::vector<content::WebContents*> SavedTabGroupUtils::GetWebContentsesInGroup(
-    tab_groups::TabGroupId group_id) {
-  Browser* browser = GetBrowserWithTabGroupId(group_id);
-  if (!browser) {
-    return {};
-  }
-
-  const gfx::Range local_tab_group_indices =
-      SavedTabGroupUtils::GetTabGroupWithId(group_id)->ListTabs();
-  std::vector<content::WebContents*> contentses;
-  for (size_t index = local_tab_group_indices.start();
-       index < local_tab_group_indices.end(); index++) {
-    contentses.push_back(browser->tab_strip_model()->GetWebContentsAt(index));
-  }
-  return contentses;
-}
-
-// static
 std::vector<tabs::TabInterface*> SavedTabGroupUtils::GetTabsInGroup(
     tab_groups::TabGroupId group_id) {
-  Browser* browser = GetBrowserWithTabGroupId(group_id);
+  BrowserWindowInterface* browser = GetBrowserWithTabGroupId(group_id);
   if (!browser) {
     return {};
   }
@@ -586,7 +588,7 @@ std::vector<tabs::TabInterface*> SavedTabGroupUtils::GetTabsInGroup(
   const gfx::Range local_tab_group_indices =
       SavedTabGroupUtils::GetTabGroupWithId(group_id)->ListTabs();
   std::vector<tabs::TabInterface*> local_tabs;
-  for (tabs::TabInterface* tab : browser->tab_strip_model()->GetTabsAtIndices(
+  for (tabs::TabInterface* tab : browser->GetTabStripModel()->GetTabsAtIndices(
            local_tab_group_indices.ToIntVector())) {
     local_tabs.push_back(tab);
   }
@@ -596,11 +598,11 @@ std::vector<tabs::TabInterface*> SavedTabGroupUtils::GetTabsInGroup(
 // static
 SavedTabGroup SavedTabGroupUtils::CreateSavedTabGroupFromLocalId(
     const tab_groups::LocalTabGroupID& local_id) {
-  Browser* browser = GetBrowserWithTabGroupId(local_id);
+  BrowserWindowInterface* browser = GetBrowserWithTabGroupId(local_id);
   CHECK(browser);
 
   const TabGroup* local_group =
-      browser->tab_strip_model()->group_model()->GetTabGroup(local_id);
+      browser->GetTabStripModel()->group_model()->GetTabGroup(local_id);
   tab_groups::SavedTabGroup saved_tab_group(
       local_group->visual_data()->title(), local_group->visual_data()->color(),
       {}, std::nullopt, std::nullopt, local_id);
@@ -608,12 +610,12 @@ SavedTabGroup SavedTabGroupUtils::CreateSavedTabGroupFromLocalId(
       tab_groups::SavedTabGroupUtils::ShouldAutoPinNewTabGroups(
           browser->GetProfile()));
 
-  const std::vector<content::WebContents*>& web_contentses =
-      tab_groups::SavedTabGroupUtils::GetWebContentsesInGroup(local_id);
-  for (content::WebContents* web_contents : web_contentses) {
+  const std::vector<tabs::TabInterface*>& tabs =
+      tab_groups::SavedTabGroupUtils::GetTabsInGroup(local_id);
+  for (tabs::TabInterface* tab : tabs) {
     tab_groups::SavedTabGroupTab saved_tab_group_tab =
         tab_groups::SavedTabGroupUtils::CreateSavedTabGroupTabFromWebContents(
-            web_contents, saved_tab_group.saved_guid());
+            tab->GetContents(), saved_tab_group.saved_guid());
     saved_tab_group.AddTabLocally(std::move(saved_tab_group_tab));
   }
 
@@ -623,20 +625,20 @@ SavedTabGroup SavedTabGroupUtils::CreateSavedTabGroupFromLocalId(
 // static
 void SavedTabGroupUtils::FocusFirstTabOrWindowInOpenGroup(
     tab_groups::TabGroupId local_group_id) {
-  Browser* browser_for_activation =
+  BrowserWindowInterface* browser_for_activation =
       SavedTabGroupUtils::GetBrowserWithTabGroupId(local_group_id);
 
   // Only activate the tab group's first tab, if it exists in any browser's
   // tabstrip model and it is not in the active tab in the tab group.
   CHECK(browser_for_activation);
   TabGroup* tab_group =
-      browser_for_activation->tab_strip_model()->group_model()->GetTabGroup(
+      browser_for_activation->GetTabStripModel()->group_model()->GetTabGroup(
           local_group_id);
 
   gfx::Range tab_group_index_range = tab_group->ListTabs();
   CHECK(!tab_group_index_range.is_empty());
 
-  int active_index = browser_for_activation->tab_strip_model()->active_index();
+  int active_index = browser_for_activation->GetTabStripModel()->active_index();
   CHECK_GE(active_index, 0);
 
   if (active_index >= static_cast<int>(tab_group_index_range.GetMin()) &&
@@ -645,8 +647,9 @@ void SavedTabGroupUtils::FocusFirstTabOrWindowInOpenGroup(
     return;
   }
 
-  browser_for_activation->ActivateContents(
-      tab_group->GetFirstTab()->GetContents());
+  if (auto* delegate = tab_group->GetFirstTab()->GetContents()->GetDelegate()) {
+    delegate->ActivateContents(tab_group->GetFirstTab()->GetContents());
+  }
 
   base::RecordAction(
       base::UserMetricsAction("TabGroups_SavedTabGroups_Focused"));
@@ -713,8 +716,6 @@ bool SavedTabGroupUtils::SupportsSharedTabGroups() {
 // static
 bool SavedTabGroupUtils::IsOwnerOfSharedTabGroup(Profile* profile,
                                                  const base::Uuid& sync_id) {
-  // TODO(380515575): Create a function to determine if the user is signed in or
-  // not instead of checking here.
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
 
@@ -829,16 +830,16 @@ SavedTabGroupUtils::GetRecentActivity(Profile* profile,
 // static
 tabs::TabInterface* SavedTabGroupUtils::GetGroupedTab(LocalTabGroupID group_id,
                                                       LocalTabID tab_id) {
-  const Browser* const browser =
+  BrowserWindowInterface* const browser =
       SavedTabGroupUtils::GetBrowserWithTabGroupId(group_id);
   if (!browser) {
     return nullptr;
   }
 
-  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  TabStripModel* tab_strip_model = browser->GetTabStripModel();
   const gfx::Range tab_indices =
       tab_strip_model->group_model()->GetTabGroup(group_id)->ListTabs();
-  for (tabs::TabInterface* tab : browser->tab_strip_model()->GetTabsAtIndices(
+  for (tabs::TabInterface* tab : browser->GetTabStripModel()->GetTabsAtIndices(
            tab_indices.ToIntVector())) {
     if (tab->GetHandle().raw_value() == tab_id) {
       return tab;
@@ -851,9 +852,14 @@ tabs::TabInterface* SavedTabGroupUtils::GetGroupedTab(LocalTabGroupID group_id,
 void SavedTabGroupUtils::PerformTabGroupMenuAction(
     const TabGroupMenuAction& action,
     const TabGroupMenuContext& context,
-    Browser* browser,
+    BrowserWindowInterface* browser,
     TabGroupSyncService* tab_group_service) {
   auto type = action.type;
+  if (type != TabGroupMenuAction::Type::DEFAULT) {
+    saved_tab_groups::metrics::RecordTabGroupContextMenuAction(
+        GetSavedTabGroupSubmenuOpenedMetric(context), type);
+  }
+
   if (type == TabGroupMenuAction::Type::OPEN_URL) {
     SavedTabGroupUtils::OpenUrlInNewUngroupedTab(
         browser, std::get<GURL>(action.element));
@@ -887,11 +893,66 @@ void SavedTabGroupUtils::PerformTabGroupMenuAction(
       }
       break;
     }
+    case TabGroupMenuAction::Type::CLOSE_GROUP: {
+      std::optional<tab_groups::SavedTabGroup> saved_group =
+          tab_group_service->GetGroup(uuid);
+      if (!saved_group.has_value() ||
+          !saved_group->local_group_id().has_value()) {
+        break;
+      }
+
+      base::RecordAction(base::UserMetricsAction(
+          "TabGroups_SavedTabGroups_TabGroupSubmenu_Closed"));
+
+      if (saved_group->is_shared_tab_group()) {
+        saved_tab_groups::metrics::RecordSharedTabGroupRecallType(
+            saved_tab_groups::metrics::SharedTabGroupRecallTypeDesktop::
+                kClosed);
+      }
+
+      SavedTabGroupUtils::RemoveGroupFromTabstrip(
+          /*browser=*/nullptr, saved_group->local_group_id().value());
+      break;
+    }
     case TabGroupMenuAction::Type::OPEN_OR_MOVE_TO_NEW_WINDOW:
       base::RecordAction(base::UserMetricsAction(
           "TabGroups_SavedTabGroups_MoveGroupToNewWindow"));
       SavedTabGroupUtils::OpenOrMoveSavedGroupToNewWindow(browser, uuid);
       break;
+    case TabGroupMenuAction::Type::FOCUS_OR_UNFOCUS_GROUP: {
+      std::optional<tab_groups::SavedTabGroup> saved_group =
+          tab_group_service->GetGroup(uuid);
+      if (!saved_group.has_value()) {
+        break;
+      }
+
+      std::optional<LocalTabGroupID> local_group_id =
+          saved_group->local_group_id();
+      if (!local_group_id.has_value()) {
+        local_group_id = OpenSavedTabGroup(browser, uuid,
+                                           OpeningSource::kOpenedFromRevisitUi,
+                                           tab_group_service);
+        if (!local_group_id.has_value()) {
+          break;
+        }
+      }
+
+      BrowserWindowInterface* target_browser =
+          SavedTabGroupUtils::GetBrowserWithTabGroupId(local_group_id.value());
+      if (!target_browser) {
+        break;
+      }
+
+      TabStripModel* const tab_strip_model = target_browser->GetTabStripModel();
+      if (tab_strip_model->GetFocusedGroup() == local_group_id.value()) {
+        tab_strip_model->ExitFocusMode(GetTabGroupFocusExitReason(context));
+      } else {
+        base::UmaHistogramEnumeration("TabGroups.Focus.EntryPoint",
+                                      GetTabGroupFocusEntryPoint(context));
+        tab_strip_model->EnterFocusMode(local_group_id.value());
+      }
+      break;
+    }
     case TabGroupMenuAction::Type::PIN_OR_UNPIN_GROUP:
 
       if (std::optional<tab_groups::SavedTabGroup> group =
@@ -912,12 +973,6 @@ void SavedTabGroupUtils::PerformTabGroupMenuAction(
       break;
     case TabGroupMenuAction::Type::LEAVE_GROUP:
       SavedTabGroupUtils::LeaveSharedGroup(browser, uuid);
-      break;
-    case TabGroupMenuAction::Type::CONVERT_TO_BOOKMARK:
-      if (std::optional<tab_groups::SavedTabGroup> group =
-              tab_group_service->GetGroup(uuid)) {
-        bookmarks::ShowBookmarkSavedTabGroupDialog(browser, group.value());
-      }
       break;
     case TabGroupMenuAction::Type::OPEN_URL:
     case TabGroupMenuAction::Type::DEFAULT:

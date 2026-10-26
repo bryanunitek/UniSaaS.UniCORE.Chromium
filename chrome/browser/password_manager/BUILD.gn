@@ -16,11 +16,13 @@ source_set("password_manager") {
     "password_change_delegate.h",
     "password_change_service_factory.h",
     "password_field_classification_model_handler_factory.h",
+    "password_manager_critical_action_logger.h",
   ]
 
   public_deps = [
     "//chrome/browser/actor",
     "//chrome/browser/password_manager/factories",
+    "//chrome/browser/password_manager/ode",
 
     # deps for public headers
     "//base",
@@ -31,6 +33,7 @@ source_set("password_manager") {
     "//components/autofill/core/browser",
     "//components/autofill/core/common",
     "//components/credential_management:browser",
+    "//components/critical_actions/core/browser",
     "//components/enterprise/buildflags",
     "//components/enterprise/connectors/core",
     "//components/keyed_service/content",
@@ -114,6 +117,7 @@ source_set("password_manager") {
     public += [
       # TODO(crbug.com/485620841): Make delegate not dependent on client and
       # move this back to /password_change.
+      "password_change/password_change_actuator.h",
       "password_change/password_change_from_checkup_delegate.h",
       "web_app_profile_switcher.h",
     ]
@@ -137,17 +141,16 @@ source_set("impl") {
     "chrome_webauthn_credentials_delegate_factory.cc",
     "password_change_service_factory.cc",
     "password_field_classification_model_handler_factory.cc",
+    "password_manager_critical_action_logger.cc",
   ]
 
-  public_deps = [
-    ":password_manager",
-    "//chrome/browser:browser_public_dependencies",
-  ]
+  public_deps = [ ":password_manager" ]
 
   deps = [
     "//chrome/browser/actor",
     "//chrome/browser/affiliations",
     "//chrome/browser/autofill",
+    "//chrome/browser/critical_actions",
     "//chrome/browser/device_reauth",
     "//chrome/browser/enterprise/connectors/reporting",
     "//chrome/browser/favicon",
@@ -172,6 +175,7 @@ source_set("impl") {
     "//components/autofill/core/browser",
     "//components/autofill/core/browser/integrators/password_manager",
     "//components/browsing_data/content",
+    "//components/critical_actions/core/browser",
     "//components/device_reauth",
     "//components/feature_engagement/public",
     "//components/no_state_prefetch/browser",
@@ -223,7 +227,6 @@ source_set("impl") {
       "//chrome/android:chrome_jni_headers",
       "//chrome/browser/keyboard_accessory/android",
       "//chrome/browser/password_manager/android:password_manager_android",
-      "//chrome/browser/plus_addresses",
       "//chrome/browser/touch_to_fill/password_manager:public",
       "//chrome/browser/touch_to_fill/password_manager/no_passkeys/android:public",
       "//chrome/browser/touch_to_fill/password_manager/password_generation/android",
@@ -234,19 +237,23 @@ source_set("impl") {
       "//components/password_manager/core/browser/affiliation:affiliation_fetching",
       "//components/password_manager/core/browser/form_parsing",
       "//components/password_manager/core/browser/leak_detection",
-      "//components/plus_addresses/core/browser",
       "//components/webauthn/android",
     ]
   } else {
     sources += [
       "generated_password_leak_detection_pref.cc",
       "generated_password_leak_detection_pref.h",
+      "password_change/glic_password_change_actuator.cc",
+      "password_change/glic_password_change_actuator.h",
       "password_change/password_change_from_checkup_delegate.cc",
+      "password_change/script_password_change_actuator.cc",
+      "password_change/script_password_change_actuator.h",
       "password_change_delegate_impl.cc",
       "password_change_delegate_impl.h",
       "web_app_profile_switcher.cc",
     ]
     deps += [
+      "//chrome/browser/glic/actor",
       "//chrome/browser/password_manager/password_change",
       "//chrome/browser/ui/passwords",
       "//chrome/browser/ui/passwords:impl",
@@ -260,6 +267,9 @@ source_set("impl") {
 
   if (enable_dice_support) {
     sources += [ "multi_profile_credentials_filter.cc" ]
+  }
+  if (!is_android) {
+    deps += [ "//chrome/browser/ui:browser_window_header" ]
   }
 }
 
@@ -352,7 +362,7 @@ if (!is_android) {
       "//chrome/browser/password_manager/factories",
       "//chrome/browser/profiles:profile",
       "//chrome/browser/sync:factories",
-      "//chrome/browser/ui",
+      "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/passwords",
       "//chrome/browser/ui/tabs:tab_enums",
       "//chrome/test:test_support_ui",
@@ -408,6 +418,7 @@ source_set("unit_tests") {
     "//base",
     "//base:i18n",
     "//base/test:test_support",
+    "//chrome/browser/critical_actions",
     "//chrome/browser/optimization_guide",
     "//chrome/browser/optimization_guide:test_support",
     "//chrome/browser/password_manager",
@@ -422,6 +433,8 @@ source_set("unit_tests") {
     "//chrome/browser/ui/passwords",
     "//chrome/browser/webauthn",
     "//chrome/test:test_support",
+    "//chrome/test/base:chrome_render_view_host_test_harness",
+    "//chrome/test/base:testing_browser_process",
     "//components/affiliations/core/browser:test_support",
     "//components/autofill/content/browser",
     "//components/autofill/content/browser:test_support",
@@ -431,6 +444,7 @@ source_set("unit_tests") {
     "//components/autofill/core/common",
     "//components/autofill/core/common:features",
     "//components/autofill/core/common:test_support",
+    "//components/critical_actions/core/browser",
     "//components/device_reauth",
     "//components/device_reauth:test_support",
     "//components/metrics",
@@ -482,10 +496,17 @@ source_set("unit_tests") {
   } else {
     sources += [
       "generated_password_leak_detection_pref_unittest.cc",
+      "password_change/glic_password_change_actuator_unittest.cc",
+      "password_change/password_change_from_checkup_delegate_unittest.cc",
+      "password_change/script_password_change_actuator_unittest.cc",
       "password_change_delegate_impl_unittest.cc",
+      "password_manager_critical_action_logger_unittest.cc",
     ]
     deps += [
+      "//chrome/browser/actor:test_support",
+      "//chrome/browser/affiliations",
       "//chrome/browser/extensions:test_support",
+      "//chrome/browser/glic/test_support",
       "//chrome/browser/password_manager/password_change",
       "//chrome/browser/signin",
       "//chrome/browser/signin:test_support",
@@ -494,6 +515,8 @@ source_set("unit_tests") {
       "//chrome/browser/ui/passwords:impl",
       "//chrome/browser/ui/passwords:test_support_ui",
       "//components/optimization_guide/core",
+      "//components/optimization_guide/core:model_execution_test_support",
+      "//components/password_manager/core/browser/actor_login:actor_login_service_impl",
       "//components/safe_browsing/core/common:safe_browsing_prefs",
       "//components/signin/public/identity_manager:test_support",
       "//components/tabs:test_support",
@@ -551,7 +574,6 @@ if (!is_android) {
       "//chrome/browser/profiles:profile_io_data",
       "//chrome/browser/signin",
       "//chrome/browser/sync:factories",
-      "//chrome/browser/ui",
       "//chrome/browser/ui/autofill",
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/login",
@@ -561,7 +583,9 @@ if (!is_android) {
       "//chrome/browser/ui/tabs:tab_enums",
       "//chrome/browser/ui/tabs:tab_strip",
       "//chrome/browser/ui/test:dialog",
+      "//chrome/browser/ui/views/passwords",
       "//chrome/browser/ui/views/passwords:password_bubble_view_base",
+      "//chrome/browser/ui/views/passwords/password_change:password_change_toast",
       "//chrome/common",
       "//chrome/common:constants",
       "//chrome/test:test_support",
@@ -613,7 +637,7 @@ if (!is_android) {
     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
 
     sources = []
-    deps = []
+    deps = [ "//chrome/browser/ui:browser_commands" ]
 
     if (!is_chromeos_device) {
       sources += [
@@ -634,7 +658,6 @@ if (!is_android) {
         "//chrome/browser/profiles:profile",
         "//chrome/browser/signin",
         "//chrome/browser/sync:factories",
-        "//chrome/browser/ui",
         "//chrome/browser/ui:ui_features",
         "//chrome/browser/ui/autofill",
         "//chrome/browser/ui/browser_window",
@@ -692,12 +715,13 @@ if (!is_android) {
       ":test_support_ui",
       "//base",
       "//base/test:test_support",
+      "//chrome/browser/autofill:test_support",
       "//chrome/browser/autofill:test_support_ui",
       "//chrome/browser/password_manager",
       "//chrome/browser/password_manager:impl",
       "//chrome/browser/password_manager/factories",
       "//chrome/browser/sync:factories",
-      "//chrome/browser/ui",
+      "//chrome/browser/ui:tab_dialogs",
       "//chrome/browser/ui/passwords",
       "//chrome/test:test_support",
       "//components/autofill/core/common",

@@ -11,6 +11,7 @@
 #include "ash/system/focus_mode/focus_mode_tasks_provider.h"
 #include "ash/test/ash_test_base.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -23,16 +24,17 @@
 
 namespace {
 
+constexpr int kWidgetWidth = 320;
+constexpr float kGradientWidth = 16;
+
 MATCHER_P(LabelMatcher, task, "") {
   return static_cast<views::LabelButton*>(arg)->GetText() == task;
 }
 
-std::vector<std::string> kTestTaskTitles = {"Preparing for I485 form",
-                                            "Podcast interview Script",
-                                            "Book a flight to Seoul"};
-
-constexpr int kWidgetWidth = 320;
-constexpr float kGradientWidth = 16;
+std::vector<std::string> GetTestTaskTitles() {
+  return {"Preparing for I485 form", "Podcast interview Script",
+          "Book a flight to Seoul"};
+}
 
 }  // namespace
 
@@ -119,7 +121,7 @@ TEST_F(FocusModeChipCarouselTest, ChipCarouselPopulates) {
   };
 
   validate_tasks({});
-  validate_tasks(kTestTaskTitles);
+  validate_tasks(GetTestTaskTitles());
   validate_tasks({"Only one task"});
   validate_tasks({"Maximum", "of", "five", "tasks", "populated"});
 }
@@ -154,7 +156,7 @@ TEST_F(FocusModeChipCarouselTest, GradientOnScroll) {
   EXPECT_FALSE(GetScrollView()->layer()->HasGradientMask());
 
   // Three tasks should overflow the scroll view and the gradient should appear.
-  focus_mode_chip_carousel()->SetTasks(GetTasks(kTestTaskTitles));
+  focus_mode_chip_carousel()->SetTasks(GetTasks(GetTestTaskTitles()));
   views::test::RunScheduledLayout(focus_mode_chip_carousel());
   EXPECT_TRUE(GetScrollView()->layer()->HasGradientMask());
 
@@ -195,9 +197,9 @@ TEST_F(FocusModeChipCarouselTest, GradientOnScroll) {
 
 // Tests that the gradient shows up on the correct side in RTL.
 TEST_F(FocusModeChipCarouselTest, GradientInRTL) {
-  base::i18n::SetRTLForTesting(true);
+  base::i18n::ScopedRTLForTesting scoped_rtl(true);
 
-  focus_mode_chip_carousel()->SetTasks(GetTasks(kTestTaskTitles));
+  focus_mode_chip_carousel()->SetTasks(GetTasks(GetTestTaskTitles()));
   views::test::RunScheduledLayout(focus_mode_chip_carousel());
   EXPECT_TRUE(GetScrollView()->layer()->HasGradientMask());
 

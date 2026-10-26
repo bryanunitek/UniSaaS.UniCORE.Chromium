@@ -9,6 +9,7 @@
 #import "base/memory/weak_ptr.h"
 #import "base/types/expected.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/action_target.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/action_target_java_script_feature.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/web_actor_tool.h"
 
@@ -20,34 +21,35 @@ namespace actor {
 
 class ClickToolJavaScriptFeature;
 
-class ProfileContextResolver;
-
 // Tool to click an element on a page.
 class ClickTool : public WebActorTool {
  public:
   ~ClickTool() override;
 
-  static base::expected<std::unique_ptr<ClickTool>, ToolExecutionResult> Create(
-      const optimization_guide::proto::ClickAction& action,
-      const ProfileContextResolver& profile_context_resolver);
+  static std::unique_ptr<ClickTool> Create(
+      base::WeakPtr<web::WebState> web_state,
+      const optimization_guide::proto::ClickAction& action);
 
   // ActorTool:
+  void Validate(ToolExecutionCallback callback) override;
   void Execute(ToolExecutionCallback callback) override;
   base::WeakPtr<web::WebState> GetTargetWebState() const override;
   ToolType GetToolType() const override;
+  std::string DebugString() const override;
 
  private:
   void OnTargetFrameResolved(
-      const optimization_guide::proto::ClickAction& action,
       ToolExecutionCallback callback,
       base::expected<ActionTargetJavaScriptFeature::TargetFrameResult,
                      ToolExecutionResult> result);
 
-  ClickTool(const optimization_guide::proto::ClickAction& action,
-            base::WeakPtr<web::WebState> web_state);
+  ClickTool(base::WeakPtr<web::WebState> web_state,
+            const optimization_guide::proto::ClickAction& action,
+            ActionTarget target);
 
   optimization_guide::proto::ClickAction action_;
-  base::WeakPtr<web::WebState> web_state_;
+  ActionTarget target_;
+  base::WeakPtr<web::WebState> web_state_ = nullptr;
   raw_ptr<ClickToolJavaScriptFeature> js_feature_ = nullptr;
   base::WeakPtrFactory<ClickTool> weak_ptr_factory_{this};
 };

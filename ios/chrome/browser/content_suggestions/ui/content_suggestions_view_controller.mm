@@ -4,10 +4,13 @@
 
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_view_controller.h"
 
-#import "ios/chrome/browser/content_suggestions/magic_stack/public/magic_stack_constants.h"
-#import "ios/chrome/browser/content_suggestions/magic_stack/ui/magic_stack_module_container.h"
+#import "components/ntp_tiles/constants.h"
+#import "components/ntp_tiles/features.h"
 #import "ios/chrome/browser/content_suggestions/model/content_suggestions_metrics_recorder.h"
+#import "ios/chrome/browser/content_suggestions/most_visited_tiles/public/most_visited_tiles_constants.h"
 #import "ios/chrome/browser/content_suggestions/most_visited_tiles/ui/most_visited_item.h"
+#import "ios/chrome/browser/content_suggestions/most_visited_tiles/ui/most_visited_tile_view.h"
+#import "ios/chrome/browser/content_suggestions/most_visited_tiles/ui/most_visited_tiles_collection_view.h"
 #import "ios/chrome/browser/content_suggestions/most_visited_tiles/ui/most_visited_tiles_config.h"
 #import "ios/chrome/browser/content_suggestions/public/content_suggestions_constants.h"
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_collection_utils.h"
@@ -15,35 +18,75 @@
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_view_controller_audience.h"
 #import "ios/chrome/browser/drag_and_drop/model/url_drag_drop_handler.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_constants.h"
+#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
+#import "ios/chrome/browser/ntp/ui_bundled/ntp_card_background_view.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
+#import "ios/chrome/common/ui/util/constraints_ui_util.h"
 
-@interface ContentSuggestionsViewController () <
-    UIGestureRecognizerDelegate,
-    UIScrollViewAccessibilityDelegate,
-    UIScrollViewDelegate,
-    URLDropDelegate>
+namespace {
+
+using ntp_tiles::AimButtonRefactorArm;
+using ntp_tiles::GetAimButtonRefactorArm;
+
+// Corner radius for the most visited tiles container.
+constexpr CGFloat kModuleContainerCornerRadius = 24.0;
+
+// Bottom padding for the most visited tiles container.
+constexpr CGFloat kMVTContainerBottomPadding = 10.0;
+// TODO(crbug.com/542594099): Remove "UICleanup" suffix when the NTP clean up is
+// launched.
+constexpr CGFloat kMVTContainerBottomPaddingUICleanup = 16.0;
+
+// Spacing between content suggestions modules in the stack view.
+constexpr CGFloat kStackViewSpacing = 12.0;
+
+}  // namespace
+
+@interface ContentSuggestionsViewController () <UIGestureRecognizerDelegate,
+                                                URLDropDelegate>
 
 @property(nonatomic, strong) URLDragDropHandler* dragDropHandler;
-
-// List of all UITapGestureRecognizers created for the Most Visisted tiles.
-@property(nonatomic, strong)
-    NSMutableArray<UITapGestureRecognizer*>* mostVisitedTapRecognizers;
-
-// Module Container for the Most Visited Tiles when being shown in Magic Stack.
-@property(nonatomic, strong)
-    MagicStackModuleContainer* mostVisitedModuleContainer;
 
 @end
 
 @implementation ContentSuggestionsViewController {
-  MostVisitedTilesConfig* _mostVisitedTileConfig;
+  // AIM button displayed as a module in the
+  // `_contentSuggestionsModuleStackView`.
+  UIView* _aimModuleView;
+  // Constraint setting `_aimModuleView`'s width equal to its height.
+  NSLayoutConstraint* _aimModuleWidthConstraint;
+  // Whether AI Mode is allowed.
+  BOOL _isAIMAllowed;
+  // Most Visited tiles collection view.
+  MostVisitedTilesCollectionView* _mostVisitedCollectionView;
+  // Most Visited tiles collection displayed as a module in the
+  // `_contentSuggestionsModuleStackView`.
+  UIView* _mostVisitedView;
+  // Horizontal stack view containing content suggestions modules.
+  UIStackView* _contentSuggestionsModuleStackView;
 }
 
 - (instancetype)init {
   return [super initWithNibName:nil bundle:nil];
 }
+
+#pragma mark - Public
+
+- (void)setAIMAllowed:(BOOL)isAIMAllowed {
+  CHECK_EQ(GetAimButtonRefactorArm(), AimButtonRefactorArm::kAimAsModule);
+  if (isAIMAllowed == _isAIMAllowed) {
+    return;
+  }
+  _isAIMAllowed = isAIMAllowed;
+  _aimModuleView.hidden = !isAIMAllowed;
+  _aimModuleWidthConstraint.active = isAIMAllowed;
+  _mostVisitedCollectionView.maxVisibleItems =
+      MostVisitedMaximumVisibleItemsOnScreen(/*aim_available=*/isAIMAllowed);
+}
+
+#pragma mark - UIViewController
 
 - (void)viewDidLoad {
   [super viewDidLoad];
@@ -54,8 +97,31 @@
                                 initWithDelegate:self.dragDropHandler]];
   self.view.backgroundColor = [UIColor clearColor];
   self.view.accessibilityIdentifier = kContentSuggestionsCollectionIdentifier;
-  if (_mostVisitedTileConfig.mostVisitedItems.count > 0) {
-    [self createAndInsertMostVisitedModule];
+
+  if (GetAimButtonRefactorArm() == AimButtonRefactorArm::kAimAsModule) {
+    _aimModuleView = [self createAIMModule];
+  }
+
+  _contentSuggestionsModuleStackView = [self createModuleStackView];
+  _contentSuggestionsModuleStackView.translatesAutoresizingMaskIntoConstraints =
+      NO;
+  [self.view addSubview:_contentSuggestionsModuleStackView];
+
+  [NSLayoutConstraint activateConstraints:@[
+    [_contentSuggestionsModuleStackView.leadingAnchor
+        constraintEqualToAnchor:self.view.leadingAnchor],
+    [_contentSuggestionsModuleStackView.trailingAnchor
+        constraintEqualToAnchor:self.view.trailingAnchor],
+    [_contentSuggestionsModuleStackView.topAnchor
+        constraintEqualToAnchor:self.view.topAnchor
+                       constant:content_suggestions::HeaderBottomPadding(
+                                    self.traitCollection)],
+    [_contentSuggestionsModuleStackView.bottomAnchor
+        constraintEqualToAnchor:self.view.bottomAnchor],
+  ]];
+
+  if (_mostVisitedView) {
+    [self embedViews];
   }
 }
 
@@ -87,49 +153,144 @@
 #pragma mark - ContentSuggestionsConsumer
 
 - (void)setMostVisitedTilesConfig:(MostVisitedTilesConfig*)config {
-  _mostVisitedTileConfig = config;
-  if (self.mostVisitedModuleContainer) {
-    [self.mostVisitedModuleContainer removeFromSuperview];
+  if (_mostVisitedView) {
+    [_mostVisitedView removeFromSuperview];
   }
-  self.mostVisitedModuleContainer =
-      [[MagicStackModuleContainer alloc] initWithFrame:CGRectZero noInset:YES];
-  [self.mostVisitedModuleContainer configureWithConfig:_mostVisitedTileConfig];
-  // If viewDidLoad has been called before the first valid Most Visited Tiles
-  // are available, construct the most visited tiles.
-  if (_mostVisitedTileConfig.mostVisitedItems.count > 0) {
-    [self createAndInsertMostVisitedModule];
+  if (!config) {
+    _mostVisitedCollectionView = nil;
+    _mostVisitedView = nil;
+    return;
   }
 
-  for (MostVisitedItem* item in _mostVisitedTileConfig.mostVisitedItems) {
-    [self.contentSuggestionsMetricsRecorder
-        recordMostVisitedTileShown:item
-                           atIndex:item.index];
+  MostVisitedTilesCollectionView* collectionView =
+      [[MostVisitedTilesCollectionView alloc] initWithConfig:config];
+  collectionView.maxVisibleItems =
+      MostVisitedMaximumVisibleItemsOnScreen(/*aim_available=*/_isAIMAllowed);
+  _mostVisitedCollectionView = collectionView;
+  __weak __typeof(self) weakSelf = self;
+  collectionView.onContentSizeChanged = ^(CGSize) {
+    [weakSelf.audience contentSuggestionsWasUpdated];
+  };
+
+  _mostVisitedView =
+      [self createContainerForContentSuggestionsModule:collectionView];
+
+  if (self.isViewLoaded) {
+    [self embedViews];
   }
 
-  [self.contentSuggestionsMetricsRecorder recordMostVisitedTilesShown];
+  for (MostVisitedItem* item in config.mostVisitedItems) {
+    [ContentSuggestionsMetricsRecorder recordMostVisitedTileShown:item
+                                                          atIndex:item.index];
+  }
+
+  [ContentSuggestionsMetricsRecorder recordMostVisitedTilesShown];
 }
 
 #pragma mark - Private
 
-- (void)createAndInsertMostVisitedModule {
-  [self.view addSubview:self.mostVisitedModuleContainer];
-  self.mostVisitedModuleContainer.translatesAutoresizingMaskIntoConstraints =
-      NO;
+// Embeds views in the horizontal `_contentSuggestionsModuleStackView`.
+- (void)embedViews {
+  if (!_mostVisitedView || !_contentSuggestionsModuleStackView) {
+    return;
+  }
+
+  if (GetAimButtonRefactorArm() == AimButtonRefactorArm::kAimAsModule) {
+    if (_aimModuleView) {
+      [_contentSuggestionsModuleStackView addArrangedSubview:_aimModuleView];
+    }
+  }
+  [_contentSuggestionsModuleStackView addArrangedSubview:_mostVisitedView];
+}
+
+// Creates a horizontal stack view for content suggestions modules.
+- (UIStackView*)createModuleStackView {
+  UIStackView* stackView = [[UIStackView alloc] init];
+  stackView.translatesAutoresizingMaskIntoConstraints = NO;
+  stackView.distribution = UIStackViewDistributionFill;
+  stackView.alignment = UIStackViewAlignmentFill;
+  stackView.axis = UILayoutConstraintAxisHorizontal;
+  stackView.spacing = kStackViewSpacing;
+  return stackView;
+}
+
+// Helper for `-createContainerForContentSuggestionsModule:withInsets:`
+// without custom insets.
+- (UIView*)createContainerForContentSuggestionsModule:(UIView*)moduleView {
+  return [self createContainerForContentSuggestionsModule:moduleView
+                                               withInsets:{0}];
+}
+
+// Returns a container with `insets` holding the given content suggestions
+// `moduleView`.
+- (UIView*)createContainerForContentSuggestionsModule:(UIView*)moduleView
+                                           withInsets:
+                                               (NSDirectionalEdgeInsets)insets {
+  UIView* container = [[UIView alloc] init];
+  container.translatesAutoresizingMaskIntoConstraints = NO;
+
+  UIView* backgroundView = [[NTPCardBackgroundView alloc] init];
+  backgroundView.translatesAutoresizingMaskIntoConstraints = NO;
+  container.layer.cornerRadius = kModuleContainerCornerRadius;
+  container.clipsToBounds = YES;
+
+  [container addSubview:backgroundView];
+  AddSameConstraints(container, backgroundView);
+
+  [container addSubview:moduleView];
+  CGFloat bottomPadding = IsNewTabPageUICleanupEnabled()
+                              ? kMVTContainerBottomPaddingUICleanup
+                              : kMVTContainerBottomPadding;
   [NSLayoutConstraint activateConstraints:@[
-    [self.mostVisitedModuleContainer.leadingAnchor
-        constraintEqualToAnchor:self.view.leadingAnchor],
-    [self.mostVisitedModuleContainer.trailingAnchor
-        constraintEqualToAnchor:self.view.trailingAnchor],
-    [self.mostVisitedModuleContainer.topAnchor
-        constraintEqualToAnchor:self.view.topAnchor
-                       constant:content_suggestions::HeaderBottomPadding(
-                                    self.traitCollection)],
-    [self.mostVisitedModuleContainer.bottomAnchor
-        constraintEqualToAnchor:self.view.bottomAnchor]
+    [moduleView.topAnchor constraintEqualToAnchor:container.topAnchor
+                                         constant:insets.top],
+    [moduleView.leadingAnchor constraintEqualToAnchor:container.leadingAnchor
+                                             constant:insets.leading],
+    [moduleView.trailingAnchor constraintEqualToAnchor:container.trailingAnchor
+                                              constant:insets.trailing],
+    [moduleView.bottomAnchor
+        constraintEqualToAnchor:container.bottomAnchor
+                       constant:-(insets.bottom + bottomPadding)],
   ]];
-  // Force layout to make sure the subviews correctly calculates its frame size.
-  [self.view setNeedsLayout];
-  [self.view layoutIfNeeded];
+  return container;
+}
+
+// Returns a module containing an AI Mode button.
+- (UIView*)createAIMModule {
+  // TODO(crbug.com/549012340): Add an accessibility identifier.
+  CHECK_EQ(GetAimButtonRefactorArm(), AimButtonRefactorArm::kAimAsModule);
+
+  MostVisitedTileView* aimTile =
+      [[MostVisitedTileView alloc] initWithFrame:CGRectZero];
+  [aimTile configureAsAIMTile];
+
+  aimTile.translatesAutoresizingMaskIntoConstraints = NO;
+  aimTile.isAccessibilityElement = YES;
+  aimTile.accessibilityTraits = UIAccessibilityTraitButton;
+  [aimTile addGestureRecognizer:[[UITapGestureRecognizer alloc]
+                                    initWithTarget:self
+                                            action:@selector(aimModuleTapped)]];
+  NSDirectionalEdgeInsets insets = {kMostVisitedContainerInsets.top, 0.0,
+                                    kMostVisitedContainerInsets.bottom, 0.0};
+
+  UIView* aimModuleView =
+      [self createContainerForContentSuggestionsModule:aimTile
+                                            withInsets:insets];
+  aimModuleView.hidden = !_isAIMAllowed;
+  _aimModuleWidthConstraint = [aimModuleView.widthAnchor
+      constraintEqualToAnchor:aimModuleView.heightAnchor];
+  _aimModuleWidthConstraint.active = !aimModuleView.isHidden;
+  return aimModuleView;
+}
+
+#pragma mark - Actions
+
+- (void)aimModuleTapped {
+  CHECK_EQ(GetAimButtonRefactorArm(), AimButtonRefactorArm::kAimAsModule);
+  [self.audience didTapAIMModule];
+  const GURL aimURL = GURL(ntp_tiles::kAiModeTileUrl);
+  const UrlLoadParams params = UrlLoadParams::InCurrentTab(aimURL);
+  self.urlLoadingBrowserAgent->Load(params);
 }
 
 @end

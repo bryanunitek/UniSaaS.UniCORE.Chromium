@@ -5,7 +5,7 @@
 #import "ios/chrome/browser/settings/ui_bundled/password/password_settings/password_settings_mediator.h"
 
 #import "base/rand_util.h"
-#import "base/run_loop.h"
+#import "base/test/run_until.h"
 #import "base/test/task_environment.h"
 #import "components/affiliations/core/browser/fake_affiliation_service.h"
 #import "components/keyed_service/core/service_access_type.h"
@@ -122,6 +122,11 @@ void SetSyncStatus(SyncServiceForPasswordTests* sync_service,
                      : syncer::SyncService::TransportState::DISABLED));
   ON_CALL(*sync_service, GetActiveDataTypes())
       .WillByDefault(Return(syncer::DataTypeSet({syncer::PASSWORDS})));
+  ON_CALL(*(sync_service->GetMockUserSettings()), GetSelectedTypes())
+      .WillByDefault(Return(sync_transport_active
+                                ? syncer::UserSelectableTypeSet(
+                                      {syncer::UserSelectableType::kPasswords})
+                                : syncer::UserSelectableTypeSet()));
   ON_CALL(*(sync_service->GetMockUserSettings()), GetAllEncryptedDataTypes())
       .WillByDefault(Return(syncer::DataTypeSet({syncer::PASSWORDS})));
   ON_CALL(*(sync_service->GetMockUserSettings()), GetPassphraseType())
@@ -130,7 +135,8 @@ void SetSyncStatus(SyncServiceForPasswordTests* sync_service,
 
 }  // namespace
 
-class PasswordSettingsMediatorTest : public PlatformTest {
+class PasswordSettingsMediatorTest : public PlatformTest,
+                                     public SavedPasswordsPresenter::Observer {
  protected:
   void SetUp() override {
     TestProfileIOS::Builder builder;
@@ -155,15 +161,23 @@ class PasswordSettingsMediatorTest : public PlatformTest {
                 .get()));
     presenter_ = std::make_unique<SavedPasswordsPresenter>(
         &affiliation_service_, profile_store_, /*account_store=*/nullptr);
-    trusted_vault_backend_ = std::make_unique<MockTrustedVaultClientBackend>();
+    presenter_->AddObserver(this);
+    trusted_vault_backend_ =
+        std::make_unique<testing::NiceMock<MockTrustedVaultClientBackend>>();
   }
 
   void TearDown() override {
+    presenter_->RemoveObserver(this);
     EXPECT_OCMOCK_VERIFY(consumer_);
     EXPECT_OCMOCK_VERIFY(export_handler_);
     EXPECT_OCMOCK_VERIFY(bulk_move_passwords_to_account_handler_);
     EXPECT_OCMOCK_VERIFY(reauth_module_);
     [mediator_ disconnect];
+  }
+
+  void OnSavedPasswordsChanged(
+      const password_manager::PasswordStoreChangeList& changes) override {
+    saved_passwords_changed_count_++;
   }
 
   void CreateMediator() {
@@ -188,14 +202,20 @@ class PasswordSettingsMediatorTest : public PlatformTest {
                    PasswordForm::Store store) {
     password_manager::StoredCredential cred;
     cred.username_value = u"user@gmail.com";
-    cred.password_value = password;
+    cred.password_value = password_manager::PasswordString(std::move(password));
     cred.url = GURL(url);
     cred.signon_realm = "https://www.example.com/";
     cred.in_store = store;
 
-    base::RunLoop run_loop;
-    profile_store_->AddLogin(std::move(cred), run_loop.QuitClosure());
-    run_loop.Run();
+    size_t prev_count = saved_passwords_changed_count_;
+    profile_store_->AddLogin(std::move(cred));
+    // AddLogin's completion callback only waits for the password store write,
+    // which is not sufficient because SavedPasswordsPresenter performs
+    // asynchronous affiliation grouping via AffiliationService before updating
+    // its cache and notifying observers. Wait until OnSavedPasswordsChanged
+    // fires.
+    ASSERT_TRUE(base::test::RunUntil(
+        [&]() { return saved_passwords_changed_count_ > prev_count; }));
   }
 
   void AddPasskey() {
@@ -213,6 +233,7 @@ class PasswordSettingsMediatorTest : public PlatformTest {
   web::WebTaskEnvironment task_env_;
   SyncServiceForPasswordTests sync_service_;
   affiliations::FakeAffiliationService affiliation_service_;
+  size_t saved_passwords_changed_count_ = 0;
   scoped_refptr<TestPasswordStore> profile_store_;
   std::unique_ptr<SavedPasswordsPresenter> presenter_;
   std::unique_ptr<TestProfileIOS> profile_;
@@ -223,7 +244,8 @@ class PasswordSettingsMediatorTest : public PlatformTest {
       OCMProtocolMock(@protocol(BulkMoveLocalPasswordsToAccountHandler));
   id reauth_module_ = OCMProtocolMock(@protocol(ReauthenticationProtocol));
   PasswordSettingsMediator* mediator_;
-  std::unique_ptr<MockTrustedVaultClientBackend> trusted_vault_backend_;
+  std::unique_ptr<testing::NiceMock<MockTrustedVaultClientBackend>>
+      trusted_vault_backend_;
   FakeSystemIdentity* fake_identity_ = [FakeSystemIdentity fakeIdentity1];
 };
 
@@ -269,12 +291,11 @@ TEST_F(PasswordSettingsMediatorTest,
   CreateMediator();
   ASSERT_TRUE(
       [mediator_ conformsToProtocol:@protocol(SyncObserverModelBridge)]);
-  PasswordSettingsMediator<IdentityManagerObserverBridgeDelegate>*
-      syncObserver = static_cast<
-          PasswordSettingsMediator<IdentityManagerObserverBridgeDelegate>*>(
+  PasswordSettingsMediator<IdentityManagerObserving>* syncObserver =
+      static_cast<PasswordSettingsMediator<IdentityManagerObserving>*>(
           mediator_);
   const signin::PrimaryAccountChangeEvent event;
-  [syncObserver onPrimaryAccountChanged:event];
+  [syncObserver primaryAccountDidChange:event];
   [[consumer_ verify] setOnDeviceEncryptionState:
                           PasswordSettingsOnDeviceEncryptionStateNotShown];
 }
@@ -299,6 +320,7 @@ TEST_F(PasswordSettingsMediatorTest,
 // created (has non-degraded recoverability status) and with a bootstrapped
 // device (keys being returned from the passkey trusted vault).
 TEST_F(PasswordSettingsMediatorTest, ShowsUpdateGPMPinButtonForEligibleUser) {
+  SetSyncStatus(&sync_service_, syncer::PassphraseType::kKeystorePassphrase);
   EXPECT_CALL(*trusted_vault_backend_, GetDegradedRecoverabilityStatus(
                                            fake_identity_, kPasskeysDomain, _))
       .WillOnce(WithArg<2>(
@@ -317,19 +339,21 @@ TEST_F(PasswordSettingsMediatorTest, ShowsUpdateGPMPinButtonForEligibleUser) {
 // GPM Pin created (is in degraded recoverability).
 TEST_F(PasswordSettingsMediatorTest,
        DoesNotShowChangeGPMPinButtonWithNoGPMPinCreated) {
+  SetSyncStatus(&sync_service_, syncer::PassphraseType::kKeystorePassphrase);
   EXPECT_CALL(*trusted_vault_backend_, GetDegradedRecoverabilityStatus(
                                            fake_identity_, kPasskeysDomain, _))
       .WillOnce(WithArg<2>(
           [](auto callback) { std::move(callback).Run(/*status=*/true); }));
 
   CreateMediator();
-  [[consumer_ reject] setCanChangeGPMPin:YES];
+  [[consumer_ verify] setCanChangeGPMPin:NO];
 }
 
 // Tests that update GPM Pin button is not shown for a user that has not
 // bootstrapped their device (no keys returned from the passkey trusted vault).
 TEST_F(PasswordSettingsMediatorTest,
        DoesNotShowChangeGPMPinButtonWhenNotBootstrapped) {
+  SetSyncStatus(&sync_service_, syncer::PassphraseType::kKeystorePassphrase);
   EXPECT_CALL(*trusted_vault_backend_, GetDegradedRecoverabilityStatus(
                                            fake_identity_, kPasskeysDomain, _))
       .WillOnce(WithArg<2>(
@@ -340,6 +364,39 @@ TEST_F(PasswordSettingsMediatorTest,
           [](auto callback) { std::move(callback).Run(/*shared_keys=*/{}); }));
 
   CreateMediator();
+  [[consumer_ verify] setCanChangeGPMPin:NO];
+}
+
+// Test that sync state changes update the visibility of the change GPM Pin
+// button.
+TEST_F(PasswordSettingsMediatorTest, SyncChangeUpdatesChangeGPMPinButton) {
+  SetSyncStatus(&sync_service_, syncer::PassphraseType::kKeystorePassphrase);
+  EXPECT_CALL(*trusted_vault_backend_, GetDegradedRecoverabilityStatus(
+                                           fake_identity_, kPasskeysDomain, _))
+      .WillOnce(WithArg<2>(
+          [](auto callback) { std::move(callback).Run(/*status=*/false); }));
+  EXPECT_CALL(*trusted_vault_backend_,
+              FetchKeys(fake_identity_, kPasskeysDomain, _))
+      .WillOnce(WithArg<2>([](auto callback) {
+        std::move(callback).Run(/*shared_keys=*/{{1, 2, 3}});
+      }));
+
+  CreateMediator();
+  [[consumer_ verify] setCanChangeGPMPin:YES];
+
+  ASSERT_TRUE(
+      [mediator_ conformsToProtocol:@protocol(SyncObserverModelBridge)]);
+  PasswordSettingsMediator<SyncObserverModelBridge>* syncObserver =
+      static_cast<PasswordSettingsMediator<SyncObserverModelBridge>*>(
+          mediator_);
+
+  // Turn sync transport off and verify the GPM Pin button is hidden without
+  // querying the trusted vault backend.
+  EXPECT_CALL(*trusted_vault_backend_, GetDegradedRecoverabilityStatus)
+      .Times(0);
+  SetSyncStatus(&sync_service_, syncer::PassphraseType::kKeystorePassphrase,
+                /*sync_transport_active=*/false);
+  [syncObserver onSyncStateChanged];
   [[consumer_ verify] setCanChangeGPMPin:NO];
 }
 

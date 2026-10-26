@@ -7,7 +7,9 @@ package org.chromium.chrome.browser.settings;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
+import android.os.Bundle;
 import android.view.ContextThemeWrapper;
+import android.view.LayoutInflater;
 
 import androidx.annotation.StringRes;
 import androidx.preference.PreferenceFragmentCompat;
@@ -17,7 +19,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncher;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherFactory;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.browser_ui.settings.CustomDividerFragment;
 import org.chromium.components.browser_ui.settings.EmbeddableSettingsPage;
@@ -44,20 +45,29 @@ public abstract class ChromeBaseSettingsFragment extends PreferenceFragmentCompa
 
     @Override
     public void onAttach(Context context) {
-        if (!ChromeFeatureList.sSettingsInTab.isEnabled()) {
+        // Fragments are created by the framework, so the value cannot be injected. Resolve it from
+        // the host. getActivity() is null during onAttach(), so pass the attach context.
+        if (!SettingsHostUtil.isShownInTab(this, context)) {
             super.onAttach(context);
             return;
         }
 
         // Ensure settings fragments inherit the same Chromium Settings theme used by
         // SettingsActivity, even though they are hosted in ChromeTabbedActivity.
-        mThemedContext = new ContextThemeWrapper(context, R.style.Theme_Chromium_Settings);
+        mThemedContext = new ContextThemeWrapper(context, R.style.ThemeOverlay_Chromium_Settings);
         super.onAttach(mThemedContext);
     }
 
     @Override
     public Context getContext() {
         return mThemedContext != null ? mThemedContext : assumeNonNull(super.getContext());
+    }
+
+    @Override
+    public LayoutInflater onGetLayoutInflater(@Nullable Bundle savedInstanceState) {
+        LayoutInflater inflater = super.onGetLayoutInflater(savedInstanceState);
+        // Ensure we use the themed context if available.
+        return inflater.cloneInContext(getContext());
     }
 
     /**

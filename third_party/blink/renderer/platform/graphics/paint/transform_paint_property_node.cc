@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/platform/graphics/paint/scroll_paint_property_node.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -46,8 +47,8 @@ TransformPaintPropertyNode::State::ComputeTransformChange(
                : PaintPropertyChangeType::kChangedOnlyCompositedValues;
   }
 
-  if ((direct_compositing_reasons & CompositingReason::kStickyPosition) ||
-      (direct_compositing_reasons & CompositingReason::kAnchorPosition)) {
+  if ((direct_compositing_reasons.Has(CompositingReason::kStickyPosition)) ||
+      (direct_compositing_reasons.Has(CompositingReason::kAnchorPosition))) {
     // The compositor handles sticky offset changes and anchor position
     // translation offset changes automatically.
     DCHECK(transform_and_origin.matrix.Preserves2dAxisAlignment());
@@ -175,22 +176,47 @@ bool TransformPaintPropertyNode::CanMergeForFixedPosition(
          Parent() == other.Parent();
 }
 
-bool TransformPaintPropertyNode::CanMergeForStickyPosition(
+cc::StickyPositionConstraint::CanMergeResult
+TransformPaintPropertyNode::CanMergeForStickyPosition(
     const TransformPaintPropertyNode& other) const {
   if (!RequiresCompositingForStickyPositionOnly() ||
       !other.RequiresCompositingForStickyPositionOnly() ||
       UnaliasedParent()->NearestDirectlyCompositedAncestor() !=
-          other.UnaliasedParent()->NearestDirectlyCompositedAncestor()) {
-    return false;
+          other.UnaliasedParent()->NearestDirectlyCompositedAncestor() ||
+      &NearestScrollTranslationNode() !=
+          &other.NearestScrollTranslationNode() ||
+      RootOf2dTranslation() != other.RootOf2dTranslation()) {
+    return cc::StickyPositionConstraint::CanMergeResult::kCannotMerge;
   }
 
   auto* constraint = GetStickyConstraint();
   auto* other_constraint = other.GetStickyConstraint();
   if (!constraint && !other_constraint) {
-    return true;
+    return cc::StickyPositionConstraint::CanMergeResult::kCanAlwaysMerge;
   }
-  return constraint && other_constraint &&
-         constraint->CanMerge(*other_constraint);
+  if (!constraint || !other_constraint) {
+    return cc::StickyPositionConstraint::CanMergeResult::kCannotMerge;
+  }
+  const auto* scroll_node = NearestScrollTranslationNode().ScrollNode();
+  CHECK(scroll_node);
+  auto scroll_element_id = scroll_node->GetCompositorElementId();
+  std::optional<gfx::RectF> scroll_range_f;
+  auto can_use_scroll_range = [scroll_element_id](CompositorElementId id1,
+                                                  CompositorElementId id2) {
+    return id1 == id2 && (!id1 || id1 == scroll_element_id);
+  };
+  if (can_use_scroll_range(constraint->x_scroll_ancestor_element_id,
+                           other_constraint->x_scroll_ancestor_element_id) &&
+      can_use_scroll_range(constraint->y_scroll_ancestor_element_id,
+                           other_constraint->y_scroll_ancestor_element_id)) {
+    gfx::Rect scroll_range = scroll_node->ScrollingContentsCullRect();
+    scroll_range.Intersect(scroll_node->ContentsRect());
+    scroll_range.Offset(-scroll_node->ContentsRect().OffsetFromOrigin());
+    scroll_range.set_size(scroll_range.size() -
+                          scroll_node->ContainerRect().size());
+    scroll_range_f.emplace(scroll_range);
+  }
+  return constraint->CanMerge(*other_constraint, scroll_range_f);
 }
 
 std::unique_ptr<JSONObject> TransformPaintPropertyNode::ToJSON() const {
@@ -222,22 +248,21 @@ std::unique_ptr<JSONObject> TransformPaintPropertyNode::ToJSON() const {
     json->SetString("renderingContextId",
                     String::HexNumber(state_.rendering_context_id));
   }
-  if (state_.direct_compositing_reasons != CompositingReason::kNone) {
-    json->SetString(
-        "directCompositingReasons",
-        CompositingReason::ToString(state_.direct_compositing_reasons));
+  if (!state_.direct_compositing_reasons.empty()) {
+    json->SetString("directCompositingReasons",
+                    blink::ToString(state_.direct_compositing_reasons));
   }
   if (state_.compositor_element_id) {
     json->SetString("compositorElementId",
                     String(state_.compositor_element_id.ToString()));
   }
   if (state_.scroll)
-    json->SetString("scroll", String::Format("%p", state_.scroll.Get()));
+    json->SetString("scroll", Format("{}", state_.scroll.Get()));
 
   if (state_.scroll_parent_scroll_translation) {
     json->SetString(
         "scroll_parent_scroll_translation",
-        String::Format("%p", state_.scroll_parent_scroll_translation.Get()));
+        Format("{}", state_.scroll_parent_scroll_translation.Get()));
   }
   return json;
 }

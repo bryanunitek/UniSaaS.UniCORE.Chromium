@@ -21,6 +21,8 @@ class ConfirmInfobarBannerInteractionHandler
   // InfobarBannerInteractionHandler:
   void MainButtonTapped(InfoBarIOS* infobar) override;
   void BannerVisibilityChanged(InfoBarIOS* infobar, bool visible) override;
+  void ShowModalButtonTapped(InfoBarIOS* infobar,
+                             web::WebState* web_state) override;
 
  private:
   // Returns the password delegate from `infobar`.

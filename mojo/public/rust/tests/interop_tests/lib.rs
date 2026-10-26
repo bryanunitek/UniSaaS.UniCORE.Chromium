@@ -17,6 +17,7 @@ chromium::import! {
 
 use bindings::remote::PendingRemote;
 use interop_test_mojom_rust::interop_test::TestService;
+use ordered_float::OrderedFloat;
 use parser_unittests_rust::parser_unittests::*;
 use run_loop::RunLoop;
 use system::mojo_types::UntypedHandle;
@@ -104,7 +105,7 @@ fn test_interop() {
         u1: NestedUnion::u(BaseUnion::n1(5)),
         i1: 1,
         u2: NestederUnion::u(NestedUnion::n(10)),
-        d1: 1.0,
+        d1: OrderedFloat(1.0),
         u3: BaseUnion::b1(true),
         u4: NestederUnion::b(false),
         i2: 2,
@@ -122,7 +123,7 @@ fn test_interop() {
         bool_sized: [
             true, false, true, false, true, false, true, false, true, false, true, false, true,
         ],
-        floats: vec![1.0, 2.0],
+        floats: vec![OrderedFloat(1.0), OrderedFloat(2.0)],
         enums: vec![TestEnum::Zero, TestEnum::Seven],
         unions: vec![BaseUnion::n1(1), BaseUnion::b1(true)],
         unions_nested: vec![NestedUnion::n(10)],
@@ -170,8 +171,8 @@ fn test_interop() {
         n2: Some(5),
         empty: None,
         e: Some(TestEnum::Four),
-        fourints: Some(FourInts { a: 1, b: 2, c: 3, d: 4 }),
-        f1: Some(1.0),
+        fourints: Some(Box::new(FourInts { a: 1, b: 2, c: 3, d: 4 })),
+        f1: Some(OrderedFloat(1.0)),
         f2: None,
     };
     remote.PassNullableBasics(n.clone(), move |res| {
@@ -181,7 +182,7 @@ fn test_interop() {
     // 11. Nullable Others - This is the last call, so quit the run loop in the
     //     callback.
     let n_others = NullableOthers {
-        u: Some(UnionWithNullables::str(Some("Hello".to_string()))),
+        u: Some(Box::new(UnionWithNullables::str(Some("Hello".to_string())))),
         m: Some(Default::default()),
         str: Some("World".to_string()),
     };

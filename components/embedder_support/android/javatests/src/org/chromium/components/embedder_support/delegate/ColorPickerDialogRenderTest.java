@@ -6,6 +6,7 @@ package org.chromium.components.embedder_support.delegate;
 
 import android.app.Activity;
 import android.graphics.Color;
+import android.os.Build;
 import android.view.View;
 
 import androidx.test.filters.MediumTest;
@@ -23,6 +24,8 @@ import org.chromium.base.test.params.ParameterAnnotations;
 import org.chromium.base.test.params.ParameterAnnotations.UseRunnerDelegate;
 import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
+import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
 import org.chromium.components.embedder_support.R;
 import org.chromium.ui.test.util.BlankUiTestActivity;
@@ -35,7 +38,10 @@ import java.util.List;
 /** Render tests for color picker dialog. */
 @RunWith(ParameterizedRunner.class)
 @UseRunnerDelegate(BaseJUnit4RunnerDelegate.class)
-// TODO(crbug.com/344923212): Failing when batched, batch this again.
+@DisableIf.Build(
+        sdk_is_greater_than = Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
+        message = "crbug.com/552571146")
+@Batch(Batch.PER_CLASS)
 public class ColorPickerDialogRenderTest {
     @ParameterAnnotations.ClassParameter
     private static final List<ParameterSet> sClassParams =
@@ -64,9 +70,9 @@ public class ColorPickerDialogRenderTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     Activity activity = mActivityTestRule.getActivity();
-                    ColorPickerDialogView dialog = new ColorPickerDialogView(activity);
-                    ColorPickerCoordinator colorPickerCoordinator =
-                            new ColorPickerCoordinator(activity, (i) -> {}, dialog);
+                    HtmlColorPickerDialogView dialog = new HtmlColorPickerDialogView(activity);
+                    HtmlColorPickerCoordinator colorPickerCoordinator =
+                            new HtmlColorPickerCoordinator(activity, (i) -> {}, dialog);
                     mView = dialog.getContentView();
                     mView.setBackgroundResource(R.color.default_bg_color_baseline);
                     colorPickerCoordinator.show(Color.RED);

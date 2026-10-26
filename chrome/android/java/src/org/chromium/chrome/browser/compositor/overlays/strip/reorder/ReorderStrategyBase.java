@@ -97,7 +97,7 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
             StripLayoutGroupTitle[] groupTitles,
             StripLayoutTab[] stripTabs,
             StripLayoutView reorderingView,
-            boolean toRight) {
+            boolean toLeft) {
         // Default implementation is intentionally no-op.
     }
 
@@ -339,7 +339,7 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
     protected void handleStopReorderMode(
             StripLayoutView[] stripViews,
             StripLayoutGroupTitle[] groupTitles,
-            List<StripLayoutView> interactingViews,
+            List<? extends @Nullable StripLayoutView> interactingViews,
             @Nullable StripLayoutTab tabToReattach,
             List<Animator> animationList,
             Runnable onAnimationEnd) {

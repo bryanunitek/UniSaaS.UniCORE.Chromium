@@ -4,6 +4,13 @@
 
 #include "chrome/browser/component_updater/chrome_apps_deprecation_allowlist_component_installer.h"
 
+#include <stdint.h>
+
+#include <array>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "base/files/file_util.h"
 #include "chrome/browser/apps/app_service/chrome_app_deprecation/chrome_app_deprecation.h"
 #include "chrome/browser/apps/app_service/chrome_app_deprecation/proto/chrome_app_deprecation.pb.h"
@@ -78,8 +85,7 @@ ChromeAppsDeprecationAllowlistComponentInstallerPolicy::GetRelativeInstallDir()
 
 void ChromeAppsDeprecationAllowlistComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(std::begin(kChromeAppsDeprecationAllowlistsPublicKeySHA256),
-               std::end(kChromeAppsDeprecationAllowlistsPublicKeySHA256));
+  hash->assign_range(kChromeAppsDeprecationAllowlistsPublicKeySHA256);
 }
 
 std::string ChromeAppsDeprecationAllowlistComponentInstallerPolicy::GetName()

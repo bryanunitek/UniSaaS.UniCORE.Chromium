@@ -5,13 +5,17 @@
 #define CHROME_BROWSER_CONTEXTUAL_TASKS_CONTEXTUAL_TASKS_COMPOSEBOX_HANDLER_H_
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
+#include "base/uuid.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_composebox_handler_interface.h"
 #include "chrome/browser/ui/webui/cr_components/composebox/composebox_handler.h"
+#include "components/contextual_tasks/public/contextual_tasks_service.h"
 #include "components/contextual_tasks/public/query_contextualizer.h"
 #include "components/lens/contextual_input.h"
 #include "components/lens/lens_overlay_dismissal_source.h"
@@ -19,8 +23,6 @@
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/shell_dialogs/selected_file_info.h"
 #include "ui/webui/resources/cr_components/composebox/composebox.mojom.h"
@@ -45,7 +47,8 @@ struct FileData {
 class ContextualTasksComposeboxHandler
     : public ComposeboxHandler,
       public ui::SelectFileDialog::Listener,
-      public contextual_tasks::ContextualTasksComposeboxHandlerInterface {
+      public contextual_tasks::ContextualTasksComposeboxHandlerInterface,
+      public contextual_tasks::ContextualTasksService::Observer {
  public:
   friend class ContextualTasksComposeboxHandlerTest;
   using TakeInputStateModelCallback = base::RepeatingCallback<
@@ -56,7 +59,6 @@ class ContextualTasksComposeboxHandler
       Profile* profile,
       content::WebContents* web_contents,
       mojo::PendingReceiver<composebox::mojom::PageHandler> pending_handler,
-      mojo::PendingRemote<composebox::mojom::Page> pending_page,
       mojo::PendingReceiver<searchbox::mojom::PageHandler>
           pending_searchbox_handler,
       mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page,
@@ -81,8 +83,12 @@ class ContextualTasksComposeboxHandler
                       AddFileContextCallback callback) override;
   void AddTabContext(int32_t tab_id,
                      bool delay_upload,
+                     searchbox::mojom::TabAttachmentSource source,
                      AddTabContextCallback callback) override;
   void StartPlatformVoiceRecognition() override;
+
+  void SetActiveToolMode(omnibox::ToolMode tool,
+                         bool is_set_by_server) override;
 
   // We override this method to inject an existing `InputStateModel` if one is
   // provided by the ContextualTasksUI via the `take_input_model_callback_`.
@@ -108,8 +114,10 @@ class ContextualTasksComposeboxHandler
       const std::optional<contextual_search::ContextUploadErrorType>&
           error_type) override;
 
-  void CreateAndSendQueryMessage(const std::string& query,
-                                 bool is_voice_search);
+  void CreateAndSendQueryMessage(
+      const std::string& query,
+      bool is_voice_search,
+      const std::map<std::string, std::string>& additional_cgi_params = {});
 
   void ResetInputStateModel() override;
   void UpdateStateFromUrl(const GURL& url) override;
@@ -118,6 +126,13 @@ class ContextualTasksComposeboxHandler
   void OnTaskChanged() override;
 
   std::vector<int32_t> GetSelectedTabIds() const override;
+
+  // contextual_tasks::ContextualTasksService::Observer:
+  void OnWillBeDestroyed() override;
+  void OnTaskDisassociatedFromTab(const base::Uuid& task_id,
+                                  SessionID tab_id) override;
+
+  bool HasAutoSuggestedTab();
 
   void ClearFiles(bool should_block_auto_suggested_tabs) override;
 #if !BUILDFLAG(IS_ANDROID)
@@ -166,6 +181,9 @@ class ContextualTasksComposeboxHandler
 #endif
 
  private:
+  void OnTabDisassociated(SessionID tab_session_id,
+                          std::optional<int32_t> tab_handle_id);
+
   // Returns the context ID for the active tab, if any.
   std::optional<int64_t> GetActiveTabContextId();
 
@@ -183,11 +201,8 @@ class ContextualTasksComposeboxHandler
       std::string query,
       std::optional<base::Uuid> original_task_id,
       std::optional<base::UnguessableToken> overlay_token,
-      bool is_voice_search);
-
-  // Called when side panel navigation is complete to trigger Lens overlay if
-  // it was configured to auto-trigger on navigation.
-  void MaybeTriggerLens();
+      bool is_voice_search,
+      const std::map<std::string, std::string>& additional_cgi_params = {});
 
 #if !BUILDFLAG(IS_ANDROID)
   void OnVisualSelectionAdded(
@@ -209,12 +224,33 @@ class ContextualTasksComposeboxHandler
   // Helper to send the pending query if all uploads are complete.
   void MaybeSendPendingQuery();
 
+  // Returns true if the current contextual session handle has previous turns
+  // or submitted context.
+  bool HasSubmittedContextOrTurns();
+
+  // Deactivates Smart Tab Sharing across thread state, session handle,
+  // input state model, and the WebUI page.
+  void DeactivateSmartTabSharing();
+
+  void ForwardTabContextResult(
+      const base::UnguessableToken& token,
+      AddTabContextCallback callback,
+      base::expected<base::UnguessableToken,
+                     contextual_search::ContextUploadErrorType> result);
+
+  // Updates the composebox with any submitted tabs from the session handle.
+  void CacheSubmittedTabsFromSessionHandle();
+
   TakeInputStateModelCallback take_input_model_callback_;
   raw_ptr<contextual_tasks::ContextualTasksUIInterface> web_ui_interface_;
 
   // The context controller for the current profile. The profile will outlive
   // this class.
   raw_ptr<contextual_tasks::ContextualTasksService> contextual_tasks_service_;
+
+  base::ScopedObservation<contextual_tasks::ContextualTasksService,
+                          contextual_tasks::ContextualTasksService::Observer>
+      contextual_tasks_service_observation_{this};
 
  protected:
   // Delegate handling desktop-specific operations for QueryContextualizer,

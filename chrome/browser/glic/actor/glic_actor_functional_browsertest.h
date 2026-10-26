@@ -41,8 +41,11 @@ class AsyncActionWaiter {
   std::string request_id_;
 };
 
-// Deprecated. Use the new version in new_glic_actor_functional_browsertest.h
-// instead.
+// =============================================================================
+// DEPRECATED: Do not use this test fixture for new code.
+// Please use
+// `chrome/browser/glic/actor/new_glic_actor_functional_browsertest.h` instead.
+// =============================================================================
 class GlicActorFunctionalBrowserTestBase
     : public glic::test::GlicFunctionalBrowserTestBase {
  public:
@@ -114,6 +117,10 @@ class GlicActorFunctionalBrowserTestBase
 
   // Helper to call the UninterruptActorTask TS API.
   void UninterruptActorTask(TaskId task_id);
+
+  // Helper to call the UpdateActorTaskStepProgress TS API.
+  void UpdateActorTaskStepProgress(TaskId task_id,
+                                   const std::string& step_progress);
 
   // Waits until the task reaches the `expected_state`.
   void WaitForTaskState(TaskId task_id, ActorTask::State expected_state);

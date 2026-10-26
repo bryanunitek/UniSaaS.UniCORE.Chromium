@@ -48,6 +48,7 @@
 namespace blink {
 
 class Animation;
+struct AnimationCompositingDecisionState;
 class CompositorAnimation;
 class Element;
 class KeyframeEffectModelBase;
@@ -98,7 +99,7 @@ class CORE_EXPORT CompositorAnimations {
     kObsoleteTargetHasMultipleTransformProperties = 1 << 8,
 
     // Cases relating to the properties being animated.
-    kAnimationAffectsNonCSSProperties = 1 << 9,
+    kObsoleteAnimationAffectsNonCSSProperties = 1 << 9,
     kTransformRelatedPropertyCannotBeAcceleratedOnTarget = 1 << 10,
     kFilterRelatedPropertyMayMovePixels = 1 << 12,
     kUnsupportedCSSProperty = 1 << 13,
@@ -127,6 +128,11 @@ class CORE_EXPORT CompositorAnimations {
     // other than 'replace'.
     kEffectHasNonReplaceIterationCompositeMode = 1 << 20,
 
+    // A descendant inherits the target's animated value, which the compositor
+    // cannot keep in sync with the animation. See
+    // `ElementAnimations::UnsupportedInheritedProperties()`.
+    kUnsupportedInheritance = 1 << 21,
+
     // When adding new values, update the count below *and* add a description
     // of the value to CompositorAnimationsFailureReason in
     // tools/metrics/histograms/enums.xml .
@@ -135,7 +141,11 @@ class CORE_EXPORT CompositorAnimations {
     // should increment this number but it should never be decremented because
     // the values are used in UMA histograms. It should also be noted that it
     // excludes the kNoFailure value.
-    kFailureReasonCount = 21,
+    kFailureReasonCount = 22,
+
+    // Sentinel value not affecting histograms. This is used to differentiate
+    // the case where the state is not checked.
+    kUnchecked = 1 << kFailureReasonCount,
   };
 
   static FailureReasons CheckCanStartAnimationOnCompositor(
@@ -143,10 +153,10 @@ class CORE_EXPORT CompositorAnimations {
       const Timing::NormalizedTiming&,
       const Element&,
       const Animation*,
+      AnimationCompositingDecisionState&,
       const EffectModel&,
       const PaintArtifactCompositor*,
-      double animation_playback_rate,
-      PropertyHandleSet* unsupported_properties_for_tracing = nullptr);
+      double animation_playback_rate);
   static bool CompositorPropertyAnimationsHaveNoEffect(
       const Element& target_element,
       const Animation* animation,
@@ -227,13 +237,14 @@ class CORE_EXPORT CompositorAnimations {
       const Timing::NormalizedTiming&,
       const Element&,
       const Animation*,
+      AnimationCompositingDecisionState&,
       const EffectModel&,
       const PaintArtifactCompositor*,
-      double animation_playback_rate,
-      PropertyHandleSet* unsupported_properties_for_tracing = nullptr);
+      double animation_playback_rate);
   static FailureReasons CheckCanStartElementOnCompositor(
       const Element& element,
-      const EffectModel& model);
+      const EffectModel& model,
+      AnimationCompositingDecisionState& state);
   static FailureReasons CheckCanStartSVGElementOnCompositor(const SVGElement&);
   // This doesn't include the reasons returned from the above function.
   static FailureReasons CheckCanStartTransformAnimationOnCompositorForSVG(

@@ -118,14 +118,16 @@ class FuchsiaVideoDecoder::OutputMailbox {
       gfx::GpuMemoryBufferHandle gmb_handle,
       gfx::Size& size,
       viz::SharedImageFormat& format,
-      const gfx::ColorSpace& color_space)
-      : raster_context_provider_(raster_context_provider),
-        weak_factory_(this) {
+      const gfx::ColorSpace& color_space,
+      bool allow_overlays)
+      : raster_context_provider_(raster_context_provider), weak_factory_(this) {
     gpu::SharedImageUsageSet usage = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
-                                     gpu::SHARED_IMAGE_USAGE_SCANOUT |
                                      gpu::SHARED_IMAGE_USAGE_VIDEO_DECODE |
                                      gpu::SHARED_IMAGE_USAGE_RASTER_READ |
                                      gpu::SHARED_IMAGE_USAGE_GLES2_READ;
+    if (allow_overlays) {
+      usage |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
+    }
 
     // Note that the shared image prefers external sampler.
     format.SetPrefersExternalSampler();
@@ -180,10 +182,6 @@ class FuchsiaVideoDecoder::OutputMailbox {
     // Request a fence we'll wait on before reusing the buffer.
     frame->metadata().read_lock_fences_enabled = true;
 
-    // Set the frame to have same color space as that for underlying shared
-    // image.
-    frame->set_color_space(shared_image_->color_space());
-
     return frame;
   }
 
@@ -211,10 +209,12 @@ class FuchsiaVideoDecoder::OutputMailbox {
       return;
     }
 
-    raster_context_provider_->ContextSupport()->SignalSyncToken(
-        release_sync_token_,
+    gpu::ClientSharedImage::SignalLatestSyncToken(
+        std::vector<scoped_refptr<gpu::ClientSharedImage>>{shared_image_},
+        std::vector<gpu::SyncToken>{release_sync_token_},
         base::BindPostTaskToCurrentDefault(base::BindOnce(
-            &OutputMailbox::OnSyncTokenSignaled, weak_factory_.GetWeakPtr())));
+            &OutputMailbox::OnSyncTokenSignaled, weak_factory_.GetWeakPtr())),
+        raster_context_provider_->SharedImageInterface());
   }
 
   void OnSyncTokenSignaled() {
@@ -348,7 +348,10 @@ void FuchsiaVideoDecoder::Initialize(const VideoDecoderConfig& config,
   if (!current_config_.color_space_info().IsSpecified())
     current_config_.set_color_space_info(VideoColorSpace::REC601());
 
-  std::move(done_callback).Run(DecoderStatus::Codes::kOk);
+  if (init_cb_) {
+    std::move(init_cb_).Run(DecoderStatus::Codes::kAborted);
+  }
+  init_cb_ = std::move(done_callback);
 }
 
 void FuchsiaVideoDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
@@ -469,6 +472,14 @@ void FuchsiaVideoDecoder::OnSysmemBufferStreamError() {
 void FuchsiaVideoDecoder::OnSysmemBufferStreamNoKey() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   waiting_cb_.Run(WaitingReason::kNoDecryptionKey);
+}
+
+void FuchsiaVideoDecoder::OnStreamProcessorAllocateInputBuffers(
+    const fuchsia::media::StreamBufferConstraints& stream_constraints) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (init_cb_) {
+    std::move(init_cb_).Run(DecoderStatus::Codes::kOk);
+  }
 }
 
 void FuchsiaVideoDecoder::OnStreamProcessorAllocateOutputBuffers(
@@ -599,7 +610,8 @@ void FuchsiaVideoDecoder::OnStreamProcessorOutputPacket(
     output_mailboxes_[buffer_index] = new OutputMailbox(
         raster_context_provider_,
         gfx::GpuMemoryBufferHandle(std::move(native_pixmap_handle)), coded_size,
-        si_format, current_config_.color_space_info().ToGfxColorSpace());
+        si_format, current_config_.color_space_info().ToGfxColorSpace(),
+        use_overlays_for_video_);
   } else {
     raster_context_provider_->SharedImageInterface()->UpdateSharedImage(
         gpu::SyncToken(), output_mailboxes_[buffer_index]->mailbox());
@@ -637,10 +649,6 @@ void FuchsiaVideoDecoder::OnStreamProcessorOutputPacket(
   // Mark the frame as power-efficient since (software decoders are used only in
   // tests).
   frame->metadata().power_efficient = true;
-
-  // Allow this video frame to be promoted as an overlay, because it was
-  // registered with an ImagePipe.
-  frame->metadata().allow_overlay = use_overlays_for_video_;
 
   if (protected_output_) {
     frame->metadata().protected_video = true;
@@ -712,6 +720,10 @@ void FuchsiaVideoDecoder::OnError() {
   decoder_.reset();
 
   ReleaseOutputBuffers();
+
+  if (init_cb_) {
+    std::move(init_cb_).Run(DecoderStatus::Codes::kFailedToCreateDecoder);
+  }
 
   DropInputQueue(DecoderStatus::Codes::kFailed);
 }

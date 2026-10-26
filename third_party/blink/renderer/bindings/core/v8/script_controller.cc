@@ -64,6 +64,7 @@
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -199,51 +200,23 @@ void ScriptController::SetWasmEvalErrorMessageForWorld(
       V8String(GetIsolate(), error_message));
 }
 
-namespace {
-
-Vector<const char*>& RegisteredExtensionNames() {
-  DEFINE_STATIC_LOCAL(Vector<const char*>, extension_names, ());
-  return extension_names;
-}
-
-}  // namespace
-
-void ScriptController::RegisterExtensionIfNeeded(
-    std::unique_ptr<v8::Extension> extension) {
-  for (const auto* extension_name : RegisteredExtensionNames()) {
-    if (std::string_view(extension_name) == extension->name()) {
-      return;
-    }
-  }
-  RegisteredExtensionNames().push_back(extension->name());
-  v8::RegisterExtension(std::move(extension));
-}
-
-v8::ExtensionConfiguration ScriptController::ExtensionsFor(
-    const ExecutionContext* context) {
-  if (context->ShouldInstallV8Extensions()) {
-    return v8::ExtensionConfiguration(RegisteredExtensionNames().size(),
-                                      RegisteredExtensionNames().data());
-  }
-  return v8::ExtensionConfiguration();
-}
-
 void ScriptController::UpdateDocument() {
   window_proxy_manager_->UpdateDocument();
 }
 
 void ScriptController::DiscardFrame() {
-  DCHECK(window_->GetFrame());
-  auto* previous_document_loader =
-      window_->GetFrame()->Loader().GetDocumentLoader();
+  LocalFrame* frame = window_->GetFrame();
+  DCHECK(frame);
+  auto* previous_document_loader = frame->Loader().GetDocumentLoader();
   DCHECK(previous_document_loader);
   auto params =
       previous_document_loader->CreateWebNavigationParamsToCloneDocument();
   WebNavigationParams::FillStaticResponse(params.get(), "text/html", "UTF-8",
                                           base::span<const char>());
   params->frame_load_type = WebFrameLoadType::kReplaceCurrentItem;
-  window_->GetFrame()->Loader().CommitNavigation(std::move(params), nullptr,
-                                                 CommitReason::kDiscard);
+  frame->Loader().CommitNavigation(std::move(params), nullptr,
+                                   CommitReason::kDiscard);
+  MemoryCache::Get()->EvictResources();
 }
 
 void ScriptController::ExecuteJavaScriptURL(

@@ -9,8 +9,10 @@
 #include <vector>
 
 #include "base/functional/callback_forward.h"
+#include "components/wallet/content/common/mojom/image_extractor.mojom-forward.h"
 #include "components/wallet/core/browser/data_models/wallet_barcode.h"
 #include "content/public/browser/web_contents.h"
+#include "services/shape_detection/public/mojom/barcodedetection.mojom-forward.h"
 
 namespace wallet {
 
@@ -23,9 +25,14 @@ class WalletablePassBarcodeDetector {
 
   virtual ~WalletablePassBarcodeDetector() = default;
 
-  // Detects barcodes in images on current `web_contents`.
-  virtual void Detect(content::WebContents* web_contents,
-                      WalletBarcodeDetectionDetectCallback callback) = 0;
+  // Detects barcodes in the images on the current `web_contents` that pass the
+  // caller's `extraction_options` filters. Only `barcode_formats` are decoded;
+  // an empty list decodes every format, and `UNKNOWN` is ignored.
+  virtual void Detect(
+      content::WebContents* web_contents,
+      mojom::ImageExtractionOptionsPtr extraction_options,
+      std::vector<shape_detection::mojom::BarcodeFormat> barcode_formats,
+      WalletBarcodeDetectionDetectCallback callback) = 0;
 };
 
 }  // namespace wallet

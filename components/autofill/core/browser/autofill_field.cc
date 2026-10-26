@@ -24,7 +24,6 @@
 #include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
-#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -34,7 +33,7 @@
 #include "base/types/pass_key.h"
 #include "components/autofill/core/browser/autofill_format_string.h"
 #include "components/autofill/core/browser/autofill_type.h"
-#include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/field_type_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/heuristic_source.h"
 #include "components/autofill/core/browser/proto/api_v1.pb.h"
@@ -512,11 +511,11 @@ FieldType AutofillField::heuristic_type(HeuristicSource s) const {
   // Special handling for ML model predictions.
   if (s == HeuristicSource::kAutofillMachineLearning) {
     FieldType regex_type =
-        local_type_predictions_[static_cast<size_t>(HeuristicSource::kRegexes)];
+        local_type_predictions_[std::to_underlying(HeuristicSource::kRegexes)];
     if (regex_type == FieldType::NO_SERVER_DATA) {
       regex_type = FieldType::UNKNOWN_TYPE;
     }
-    FieldType model_type = local_type_predictions_[static_cast<size_t>(
+    FieldType model_type = local_type_predictions_[std::to_underlying(
         HeuristicSource::kAutofillMachineLearning)];
     // We fall back to regex heuristics in the following cases:
     // - The regex heuristics detected a type that the model does not support
@@ -531,7 +530,7 @@ FieldType AutofillField::heuristic_type(HeuristicSource s) const {
     return model_type;
   }
 
-  FieldType type = local_type_predictions_[static_cast<size_t>(s)];
+  FieldType type = local_type_predictions_[std::to_underlying(s)];
   // Guaranteed by construction of `local_type_predictions_`.
   DCHECK(ToSafeFieldType(type).has_value());
   // `NO_SERVER_DATA` would mean that there is no heuristic type. Client code
@@ -550,14 +549,9 @@ FieldType AutofillField::server_type() const {
                    .value_or(NO_SERVER_DATA);
 }
 
-bool AutofillField::server_type_prediction_is_override() const {
-  return server_predictions_.empty() ? false
-                                     : server_predictions_[0].override();
-}
-
 void AutofillField::set_heuristic_type(HeuristicSource s, FieldType type) {
-  CHECK(ToSafeFieldType(type).has_value(), base::NotFatalUntil::M142);
-  local_type_predictions_[static_cast<size_t>(s)] = type;
+  CHECK(ToSafeFieldType(type).has_value());
+  local_type_predictions_[std::to_underlying(s)] = type;
   if (s == GetActiveHeuristicSource()) {
     overall_type_ = std::nullopt;
   }
@@ -644,8 +638,8 @@ std::optional<AutofillPredictionSource> AutofillField::PredictionSource()
   return GetOverallPredictionResult().source;
 }
 
-AutofillType AutofillField::MakeAutofillType(FieldType primary_field_type,
-                                             bool is_country_code) const {
+AutofillType AutofillField::MakeAutofillType(
+    FieldType primary_field_type) const {
   // Indicates whether `ft` may be part of the union type.
   auto is_union_type_candidate = [](FieldType ft) {
     return GroupTypeOfFieldType(ft) == FieldTypeGroup::kAutofillAi &&
@@ -675,13 +669,14 @@ AutofillType AutofillField::MakeAutofillType(FieldType primary_field_type,
         base::span(server_predictions_).first(prefix_length));
   } while (!AutofillType::TestConstraints(field_types) && prefix_length-- > 0);
   DCHECK(field_types.contains(primary_field_type));
-  return AutofillType(field_types, is_country_code);
+  return AutofillType(field_types);
 }
 
 AutofillField::PredictionResult AutofillField::GetOverallPredictionResult()
     const {
-  // Server Overrides are granted precedence unconditionally.
-  if (server_type_prediction_is_override() && server_type() != NO_SERVER_DATA) {
+  // Server overrides are granted precedence unconditionally.
+  if (!server_predictions_.empty() && server_predictions_[0].override() &&
+      server_type() != NO_SERVER_DATA) {
     return {MakeAutofillType(server_type()),
             AutofillPredictionSource::kServerOverride};
   }
@@ -728,11 +723,9 @@ AutofillField::PredictionResult AutofillField::GetComputedPredictionResult()
     // `HtmlFieldTypeToBestCorrespondingFieldType(html_type_local)` behave
     // differently (crbug.com/436013479). In all other cases, they are
     // identical, except for AutofillType::ToString().
-    // TODO(crbug.com/436013479): Remove AutofillType::is_country_code().
-    AutofillType type = MakeAutofillType(
-        HtmlFieldTypeToBestCorrespondingFieldType(html_type_local),
-        /*is_country_code=*/html_type_local == HtmlFieldType::kCountryCode);
-    return {type, AutofillPredictionSource::kAutocomplete};
+    return {MakeAutofillType(
+                HtmlFieldTypeToBestCorrespondingFieldType(html_type_local)),
+            AutofillPredictionSource::kAutocomplete};
   }
 
   // #### Handle on-device ML classifications.
@@ -815,20 +808,17 @@ bool AutofillField::ShouldSuppressSuggestionsAndFillingByDefault(
   // autocomplete attribute's value to unrecognized. This is done in order to
   // preserve the ability to swap an autofilled value for a different one.
   // See crbug.com/469057923 for details.
-  if (last_modifier() == FieldModifier::kAutofill &&
-      base::FeatureList::IsEnabled(
-          features::kShowSugesstionsOnAlreadyAutofilledUnrecognized)) {
+  if (last_modifier() == FieldModifier::kAutofill) {
     return false;
   }
 
-  // The field will not be suppressed (i.e., it will be filled/suggested) if one
-  // of the following is true:
-  // 1. The autocomplete attribute is valid type (that can be seen in the HTML
-  //    spec).
+  // Suggestions/filling will not be suppressed if one of the following is true:
+  // 1. The autocomplete attribute is valid (can be seen in the HTML spec).
   // 2. The field's type comes from a server override.
-  // 3. The field type is credit-card-related.
+  // 3. The field type has a credit-card-related classification.
   if (html_type_ != HtmlFieldType::kUnrecognized ||
-      server_type_prediction_is_override() || IsCreditCardPrediction()) {
+      PredictionSource() == AutofillPredictionSource::kServerOverride ||
+      Type().GetCreditCardType() != UNKNOWN_TYPE) {
     return false;
   }
 
@@ -868,11 +858,6 @@ void AutofillField::UpdateFieldData(const FormFieldData& field_data) {
 
   field_signature_ =
       CalculateFieldSignatureByNameAndType(name(), form_control_type());
-}
-
-bool AutofillField::IsCreditCardPrediction() const {
-  return GroupTypeOfFieldType(server_type()) == FieldTypeGroup::kCreditCard ||
-         GroupTypeOfFieldType(heuristic_type()) == FieldTypeGroup::kCreditCard;
 }
 
 void AutofillField::AppendLogEventIfNotRepeated(

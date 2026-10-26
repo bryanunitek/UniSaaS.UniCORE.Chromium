@@ -2,9 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-'''The <output> and <file> elements.
-'''
-
+'''The <output> and <file> elements.'''
 
 import copy
 import os
@@ -35,6 +33,9 @@ class FileNode(base.Node):
   def DisableLoading(self):
     self.should_load_ = False
 
+  def ShouldLoad(self):
+    return self.should_load_
+
   def MandatoryAttributes(self):
     return ['path', 'lang']
 
@@ -42,29 +43,54 @@ class FileNode(base.Node):
     if not self.should_load_:
       return
 
+    self._ParseXtb(
+      self.UberClique().GenerateXtbParserCallback(
+        self.attrs['lang'], debug=debug
+      )
+    )
+
+  def ParseXtb(self):
+    if not self.should_load_:
+      return []
+
+    clique_ids = self.UberClique().cliques_
+    matched = []
+
+    def Callback(msg_id, structures):
+      if msg_id in clique_ids:
+        matched.append((msg_id, structures))
+
+    self._ParseXtb(Callback)
+    return matched
+
+  def _ParseXtb(self, callback):
     root = self.GetRoot()
     defs = getattr(root, 'defines', {})
     target_platform = getattr(root, 'target_platform', '')
 
-    xtb_file = open(self.ToRealPath(self.GetInputPath()), 'rb')
-    try:
-      lang = xtb_reader.Parse(xtb_file,
-                              self.UberClique().GenerateXtbParserCallback(
-                                  self.attrs['lang'], debug=debug),
-                              defs=defs,
-                              target_platform=target_platform)
-    except:
-      print("Exception during parsing of %s" % self.GetInputPath())
-      raise
+    with open(self.ToRealPath(self.GetInputPath()), 'rb') as xtb_file:
+      try:
+        lang = xtb_reader.Parse(
+          xtb_file,
+          callback,
+          defs=defs,
+          target_platform=target_platform,
+        )
+      except Exception:
+        print("Exception during parsing of %s" % self.GetInputPath())
+        raise
     # Translation console uses non-standard language codes 'iw' and 'no' for
     # Hebrew and Norwegian Bokmal instead of 'he' and 'nb' used in Chrome.
     # Note that some Chrome's .grd still use 'no' instead of 'nb', but 'nb' is
     # always used for generated .pak files.
-    ALTERNATIVE_LANG_CODE_MAP = { 'he': 'iw', 'nb': 'no' }
-    assert (lang == self.attrs['lang'] or
-            lang == ALTERNATIVE_LANG_CODE_MAP[self.attrs['lang']]), (
-            'The XTB file you reference must contain messages in the language '
-            'specified\nby the \'lang\' attribute.')
+    ALTERNATIVE_LANG_CODE_MAP = {'he': 'iw', 'nb': 'no'}
+    assert (
+      lang == self.attrs['lang']
+      or lang == ALTERNATIVE_LANG_CODE_MAP[self.attrs['lang']]
+    ), (
+      'The XTB file you reference must contain messages in the language '
+      'specified\nby the \'lang\' attribute.'
+    )
 
   def GetInputPath(self):
     return os.path.expandvars(self.attrs['path'])
@@ -120,23 +146,25 @@ class OutputNode(base.Node):
     if self.GetType() == 'data_package':
       match = DATA_PACKAGE_FILENAME_RE.search(path)
       assert match is not None, f'unrecognized data_package path: {path}'
-      return path.replace(match.group(),
-                          f'{match.group(1)}_{self.GetGender()}.pak')
+      return path.replace(
+        match.group(), f'{match.group(1)}_{self.GetGender()}.pak'
+      )
     else:  # self.GetType() == 'android'
       match = ANDROID_FILENAME_RE.search(path)
       assert match is not None, f'unrecognized android path: {path}'
-      return path.replace(match.group(1),
-                          f'{match.group(1)}-{self.GetGender()}')
+      return path.replace(
+        match.group(1), f'{match.group(1)}-{self.GetGender()}'
+      )
 
   def MandatoryAttributes(self):
     return ['filename', 'type']
 
   def DefaultAttributes(self):
     return {
-      'lang' : '', # empty lang indicates all languages
-      'language_section' : 'neutral', # defines a language neutral section
-      'context' : '',
-      'fallback_to_default_layout' : 'true',
+      'lang': '',  # empty lang indicates all languages
+      'language_section': 'neutral',  # defines a language neutral section
+      'context': '',
+      'fallback_to_default_layout': 'true',
     }
 
   def GetType(self):
@@ -175,11 +203,12 @@ class OutputNode(base.Node):
   def _IsValidChild(self, child):
     return isinstance(child, EmitNode)
 
+
 class EmitNode(base.ContentNode):
-  ''' An <emit> element.'''
+  '''An <emit> element.'''
 
   def DefaultAttributes(self):
-    return { 'emit_type' : 'prepend'}
+    return {'emit_type': 'prepend'}
 
   def GetEmitType(self):
     '''Returns the emit_type for this node. Default is 'append'.'''

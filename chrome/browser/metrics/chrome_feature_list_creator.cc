@@ -4,11 +4,13 @@
 
 #include "chrome/browser/metrics/chrome_feature_list_creator.h"
 
+#include <memory>
+#include <utility>
 #include <vector>
 
+#include "base/base64.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/path_service.h"
@@ -31,9 +33,8 @@
 #include "components/prefs/json_pref_store.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
-#include "components/variations/pref_names.h"
+#include "components/variations/seed_response.h"
 #include "components/variations/service/variations_service.h"
-#include "components/variations/variations_crash_keys.h"
 #include "components/variations/variations_switches.h"
 #include "components/webui/flags/pref_service_flags_storage.h"
 #include "content/public/common/content_switch_dependent_feature_overrides.h"
@@ -41,6 +42,10 @@
 #include "services/network/public/cpp/network_switches.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/base/resource/resource_bundle.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "components/variations/android/variations_seed_bridge.h"
+#endif
 
 #if BUILDFLAG(IS_WIN)
 #include "chrome/installer/util/google_update_settings.h"
@@ -52,44 +57,6 @@
 #include "chrome/browser/ash/settings/about_flags.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-namespace {
-
-// Returns a list of extra switch-dependent feature overrides to be applied
-// during FeatureList initialization. Combines the overrides defined at the
-// content layer with additional chrome layer overrides. The overrides
-// specified in this list each cause a feature's state to be overridden based on
-// the presence of a command line switch.
-std::vector<base::FeatureList::FeatureOverrideInfo>
-GetSwitchDependentFeatureOverrides(const base::CommandLine& command_line) {
-  std::vector<base::FeatureList::FeatureOverrideInfo> overrides =
-      content::GetSwitchDependentFeatureOverrides(command_line);
-
-  // Describes a switch-dependent override. See also content layer overrides.
-  struct SwitchDependentFeatureOverrideInfo {
-    // Switch that the override depends upon. The override will be registered if
-    // this switch is present.
-    const char* switch_name;
-    // Feature to override.
-    const std::reference_wrapper<const base::Feature> feature;
-    // State to override the feature with.
-    base::FeatureList::OverrideState override_state;
-  } chrome_layer_override_info[] = {
-      // Override for --devtools-greendev-ui.
-      {switches::kEnableDevToolsGreenDevUi,
-       std::cref(features::kDevToolsGreenDevUi),
-       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
-  };
-
-  for (const auto& info : chrome_layer_override_info) {
-    if (command_line.HasSwitch(info.switch_name)) {
-      overrides.emplace_back(info.feature, info.override_state);
-    }
-  }
-  return overrides;
-}
-
-}  // namespace
 
 // static
 ChromeFeatureListCreator* ChromeFeatureListCreator::GetInstance() {
@@ -144,6 +111,18 @@ ChromeFeatureListCreator::TakeInitialPrefs() {
 }
 #endif
 
+std::unique_ptr<variations::SeedResponse>
+ChromeFeatureListCreator::TakeInitialSeed() {
+#if BUILDFLAG(IS_ANDROID)
+  std::unique_ptr<variations::SeedResponse> seed =
+      variations::android::GetVariationsFirstRunSeed();
+  variations::android::ClearJavaFirstRunPrefs();
+  return seed;
+#else
+  return std::move(initial_seed_);
+#endif
+}
+
 ChromeFeatureListCreator::ChromeFeatureListCreator() {
   CreateNetworkTimeTracker();
 }
@@ -152,10 +131,7 @@ void ChromeFeatureListCreator::CreatePrefService() {
   base::FilePath local_state_file;
   bool result =
       base::PathService::Get(chrome::FILE_LOCAL_STATE, &local_state_file);
-  DCHECK(result);
-
-  base::UmaHistogramBoolean("UMA.Startup.LocalStateFileExistence",
-                            base::PathExists(local_state_file));
+  CHECK(result, base::NotFatalUntil::M161);
 
   auto pref_registry = base::MakeRefCounted<PrefRegistrySimple>();
   RegisterLocalState(pref_registry.get());
@@ -178,8 +154,16 @@ void ChromeFeatureListCreator::CreatePrefService() {
 
   // Try and read the local state prefs, if it succeeds, use it as the
   // ManagementService's cache.
-  if (local_state_pref_store->ReadPrefs() ==
-      JsonPrefStore::PREF_READ_ERROR_NONE) {
+  const auto read_error = local_state_pref_store->ReadPrefs();
+
+  // Record whether Local State was present when ReadPrefs() attempted to load
+  // it. Deriving this from the read result avoids a separate PathExists() call
+  // on the startup critical path.
+  base::UmaHistogramBoolean(
+      "UMA.Startup.LocalStateFileExistence",
+      read_error != JsonPrefStore::PREF_READ_ERROR_NO_FILE);
+
+  if (read_error == JsonPrefStore::PREF_READ_ERROR_NONE) {
     auto* platform_management_service =
         policy::ManagementServiceFactory::GetForPlatform();
     platform_management_service->UsePrefStoreAsCache(local_state_pref_store);
@@ -216,7 +200,7 @@ void ChromeFeatureListCreator::ConvertFlagsToSwitches() {
   // Convert active flags into switches. This needs to be done before
   // ui::ResourceBundle::InitSharedInstanceWithLocale as some loaded resources
   // are affected by experiment flags (--touch-optimized-ui in particular).
-  DCHECK(!ui::ResourceBundle::HasSharedInstance());
+  CHECK(!ui::ResourceBundle::HasSharedInstance(), base::NotFatalUntil::M161);
   TRACE_EVENT0("startup", "ChromeFeatureListCreator::ConvertFlagsToSwitches");
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -274,10 +258,12 @@ void ChromeFeatureListCreator::SetUpFieldTrials() {
       metrics_services_manager_->GetVariationsService();
   variations_service->SetUpFieldTrials(
       variation_ids,
-      GetSwitchDependentFeatureOverrides(
+      content::GetSwitchDependentFeatureOverrides(
           *base::CommandLine::ForCurrentProcess()),
       std::move(feature_list), browser_field_trials_.get());
-  variations::InitCrashKeys();
+  metrics_services_manager_client_->OnFieldTrialsInitialized();
+
+  initial_seed_.reset();
 }
 
 void ChromeFeatureListCreator::CreateMetricsServices() {
@@ -308,29 +294,27 @@ void ChromeFeatureListCreator::SetupInitialPrefs() {
     return;
   }
 
-  // Store the initial VariationsService seed in local state, if it exists
-  // in master prefs. Note: The getters we call remove them from the installer
-  // master prefs, which is why both the seed and signature are retrieved here
-  // and not within the ifs below.
+  // Keep the initial VariationsService seed for the seed store, if it exists
+  // in initial prefs. Note: The getters we call remove them from the installer
+  // initial prefs, which is why both the seed and signature are retrieved here
+  // and not within the if below.
   std::string compressed_variations_seed =
       installer_initial_prefs_->GetCompressedVariationsSeed();
   std::string variations_seed_signature =
       installer_initial_prefs_->GetVariationsSeedSignature();
 
-  if (!compressed_variations_seed.empty()) {
-    local_state_->SetString(variations::prefs::kVariationsCompressedSeed,
-                            compressed_variations_seed);
-
-    if (!variations_seed_signature.empty()) {
-      local_state_->SetString(variations::prefs::kVariationsSeedSignature,
-                              variations_seed_signature);
-    }
+  std::string seed_data;
+  if (!compressed_variations_seed.empty() &&
+      base::Base64Decode(compressed_variations_seed, &seed_data)) {
+    initial_seed_ = std::make_unique<variations::SeedResponse>();
+    initial_seed_->data = std::move(seed_data);
+    initial_seed_->signature = std::move(variations_seed_signature);
     // Set the variation seed date to the current system time. If the user's
     // clock is incorrect, this may cause some field trial expiry checks to
     // not do the right thing until the next seed update from the server,
     // when this value will be updated.
-    local_state_->SetTime(variations::prefs::kVariationsSeedDate,
-                          base::Time::Now());
+    initial_seed_->date = base::Time::Now();
+    initial_seed_->is_gzip_compressed = true;
   }
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 }

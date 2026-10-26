@@ -314,6 +314,8 @@ used when committed.
 *   [Other build-related Android docs](../build/android/docs/README.md)
 *   [Chrome for Android UI](ui/android/overview.md) - Resources and best practices for
     developing UI
+*   [Android Settings Search Testing](/components/browser_ui/settings/android/settings_search_testing.md) -
+    Testing guide and parity invariants for Android Settings Search.
 
 ### Misc iOS-Specific Docs
 *   [Continuous Build and Test Infrastructure for Chromium for iOS](ios/infra.md)
@@ -439,6 +441,8 @@ used when committed.
 ### Security
 *   [The Rule Of 2](security/rule-of-2.md) - An important security rule when
     handling untrustworthy contents (like anything downloaded from the web).
+*   [SECURITY.md Guidelines](security/security_md_guidelines.md) - Guidelines for writing
+    an effective SECURITY.md for Chromium components.
 
 ### Speed
 *   [Chrome Speed](speed/README.md) - Documentation for performance measurements and regressions in Chrome.
@@ -476,8 +480,8 @@ a video series of interviews with Chromium software engineers.
 *   [WebView Policies](webview_policies.md)
 *   [Linux Profiling](linux/profiling.md) - How to profile Chromium on Linux
 *   [Linux Graphics Pipeline](linux/graphics_pipeline.md)
-*   [Linux `SUID` Sandbox](linux/suid_sandbox.md) - Sandboxing renderers using a
-    SUID binary on Linux
+*   [Linux `SUID` Sandbox](../sandbox/linux/README.md) - Sandboxing renderers
+    using a SUID binary on Linux
 *   [Linux `SUID` Sandbox Development](linux/suid_sandbox_development.md) -
     Development on the above system.
 *   [Linux PID Namespace Support](linux/pid_namespace_support.md)

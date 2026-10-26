@@ -23,6 +23,7 @@
 
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_container.h"
 
+#include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
 #include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/svg/svg_layout_info.h"
@@ -36,11 +37,7 @@
 namespace blink {
 
 LayoutSVGContainer::LayoutSVGContainer(SVGElement* node)
-    : LayoutSVGModelObject(node),
-      needs_transform_update_(true),
-      transform_uses_reference_box_(false),
-      has_non_isolated_blending_descendants_(false),
-      has_non_isolated_blending_descendants_dirty_(false) {}
+    : LayoutSVGModelObject(node) {}
 
 LayoutSVGContainer::~LayoutSVGContainer() = default;
 
@@ -85,7 +82,7 @@ SVGLayoutResult LayoutSVGContainer::UpdateSVGLayout(
   self_has_viewport_dependence_ =
       GetElement()->SelfHasRelativeLengths() ||
       (transform_uses_reference_box_ &&
-       StyleRef().TransformBox() == ETransformBox::kViewBox);
+       Style().TransformBox() == ETransformBox::kViewBox);
 
   const bool has_viewport_dependence =
       content_result.has_viewport_dependence || self_has_viewport_dependence_;
@@ -101,7 +98,10 @@ bool LayoutSVGContainer::UpdateAfterSVGLayout(
     bool bbox_changed) {
   // Invalidate all resources of this client if our reference box changed.
   if (EverHadLayout() && (SelfNeedsFullLayout() || bbox_changed)) {
-    SVGResourceInvalidator(*this).InvalidateEffects();
+    SVGResourceInvalidator resource_invalidator(*this);
+    resource_invalidator.InvalidateEffects();
+    // A <use> can be a paint-server client for context-fill or context-stroke.
+    resource_invalidator.InvalidatePaints();
   }
   if (!needs_transform_update_ && transform_uses_reference_box_) {
     if (CheckForImplicitTransformChange(layout_info, bbox_changed)) {
@@ -122,9 +122,9 @@ bool LayoutSVGContainer::UpdateAfterSVGLayout(
     for (auto* child = FirstChild(); child; child = child->NextSibling()) {
       if (child->TransformAffectsVectorEffect())
         SetTransformAffectsVectorEffect(true);
-      if (child->StyleRef().HasCurrentTransformRelatedAnimation() ||
+      if (child->Style().HasCurrentTransformRelatedAnimation() ||
           child->SVGDescendantMayHaveTransformRelatedOperations() ||
-          child->StyleRef().HasNonIdentityTransformOperation()) {
+          child->Style().HasNonIdentityTransformOperation()) {
         SetSVGDescendantMayHaveTransformRelatedOperations();
       }
     }
@@ -139,7 +139,7 @@ void LayoutSVGContainer::AddChild(LayoutObject* child,
   LayoutSVGModelObject::AddChild(child, before_child);
 
   bool should_isolate_descendants =
-      (child->IsBlendingAllowed() && child->StyleRef().HasBlendMode()) ||
+      (child->IsBlendingAllowed() && child->Style().HasBlendMode()) ||
       child->HasNonIsolatedBlendingDescendants();
   if (should_isolate_descendants)
     DescendantIsolationRequirementsChanged(kDescendantIsolationRequired);
@@ -152,7 +152,7 @@ void LayoutSVGContainer::RemoveChild(LayoutObject* child) {
   content_.MarkBoundsDirtyFromRemovedChild();
 
   bool had_non_isolated_descendants =
-      (child->IsBlendingAllowed() && child->StyleRef().HasBlendMode()) ||
+      (child->IsBlendingAllowed() && child->Style().HasBlendMode()) ||
       child->HasNonIsolatedBlendingDescendants();
   if (had_non_isolated_descendants)
     DescendantIsolationRequirementsChanged(kDescendantIsolationNeedsUpdate);
@@ -161,9 +161,11 @@ void LayoutSVGContainer::RemoveChild(LayoutObject* child) {
 void LayoutSVGContainer::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutSVGModelObject::StyleDidChange(diff, old_style, style_change_context);
+  LayoutSVGModelObject::StyleDidChange(diff, old_style, new_style,
+                                       style_change_context);
 
   if (IsSVGHiddenContainer()) {
     return;
@@ -173,7 +175,7 @@ void LayoutSVGContainer::StyleDidChange(
       old_style &&
       SVGLayoutSupport::WillIsolateBlendingDescendantsForStyle(*old_style);
   const bool will_isolate_blending_descendants =
-      SVGLayoutSupport::WillIsolateBlendingDescendantsForStyle(StyleRef());
+      SVGLayoutSupport::WillIsolateBlendingDescendantsForStyle(new_style);
   const bool isolation_changed =
       had_isolation != will_isolate_blending_descendants;
 
@@ -213,7 +215,7 @@ void LayoutSVGContainer::DescendantIsolationRequirementsChanged(
       break;
   }
   if (!IsSVGHiddenContainer() &&
-      SVGLayoutSupport::WillIsolateBlendingDescendantsForStyle(StyleRef())) {
+      SVGLayoutSupport::WillIsolateBlendingDescendantsForStyle(Style())) {
     SetNeedsPaintPropertyUpdate();
     return;
   }
@@ -232,8 +234,7 @@ bool LayoutSVGContainer::NodeAtPoint(HitTestResult& result,
                                      HitTestPhase phase) {
   NOT_DESTROYED();
   DCHECK_EQ(accumulated_offset, PhysicalOffset());
-  TransformedHitTestLocation local_location(hit_test_location,
-                                            LocalToSVGParentTransform());
+  TransformedHitTestLocation local_location(hit_test_location, *this);
   if (!local_location)
     return false;
   if (HasClipPath() && !ClipPathClipper::HitTest(*this, *local_location)) {
@@ -255,13 +256,15 @@ bool LayoutSVGContainer::NodeAtPoint(HitTestResult& result,
     // pointer-events: bounding-box makes it possible for containers to be
     // direct targets.
     if ((is_visual_overflow ||
-         StyleRef().UsedPointerEvents() == EPointerEvents::kBoundingBox) &&
+         Style().UsedPointerEvents() == EPointerEvents::kBoundingBox) &&
         local_location->Intersects(bounds)) {
       UpdateHitTestResult(result, PhysicalOffset::FromPointFRound(
                                       local_location->TransformedPoint()));
-      if (result.AddNodeToListBasedTestResult(GetElement(), *local_location) ==
-          kStopHitTesting)
+      if (result.AddNodeToListBasedTestResult(
+              GetElement(), *local_location,
+              PhysicalRect::EnclosingRect(bounds)) == kStopHitTesting) {
         return true;
+      }
     }
   }
   // 16.4: "If there are no graphics elements whose relevant graphics content is

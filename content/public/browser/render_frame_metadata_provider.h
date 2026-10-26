@@ -5,6 +5,7 @@
 #ifndef CONTENT_PUBLIC_BROWSER_RENDER_FRAME_METADATA_PROVIDER_H_
 #define CONTENT_PUBLIC_BROWSER_RENDER_FRAME_METADATA_PROVIDER_H_
 
+#include "base/observer_list_types.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "cc/trees/render_frame_metadata.h"
@@ -26,9 +27,9 @@ class CONTENT_EXPORT RenderFrameMetadataProvider {
   // also notified of all frame submissions if
   // RenderFrameMetadataProvider::ReportAllFrameSubmissionsForTesting(true) has
   // been called.
-  class Observer {
+  class Observer : public base::CheckedObserver {
    public:
-    virtual ~Observer() {}
+    ~Observer() override = default;
 
     virtual void OnRenderFrameMetadataChangedBeforeActivation(
         const cc::RenderFrameMetadata& metadata) = 0;
@@ -45,6 +46,10 @@ class CONTENT_EXPORT RenderFrameMetadataProvider {
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
     virtual void OnRootScrollOffsetChanged(
         const gfx::PointF& root_scroll_offset) {}
+#endif
+#if BUILDFLAG(IS_ANDROID)
+    virtual void OnReportScrollJankStats(uint32_t total_frames,
+                                         uint32_t janky_frames) {}
 #endif
   };
 

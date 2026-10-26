@@ -120,10 +120,13 @@ DeviceLocalAccountPolicyService::DeviceLocalAccountPolicyService(
 }
 
 DeviceLocalAccountPolicyService::~DeviceLocalAccountPolicyService() {
-  DCHECK(policy_brokers_.empty());
+  CHECK(policy_brokers_.empty(), base::NotFatalUntil::M160);
 }
 
 void DeviceLocalAccountPolicyService::Shutdown() {
+  local_accounts_subscription_ = {};
+  weak_factory_.InvalidateWeakPtrs();
+
   session_manager_client_ = nullptr;
   device_settings_service_ = nullptr;
   cros_settings_ = nullptr;
@@ -133,12 +136,19 @@ void DeviceLocalAccountPolicyService::Shutdown() {
   // may be destroyed sooner than `DeviceLocalAccountPolicyService`.
   invalidation_listener_ = nullptr;
 
-  DeleteBrokers(&policy_brokers_);
+  // Shut down extension caches without marking them as obsolete or deleting
+  // the on-disk cache directories.
+  for (auto& [user_id, broker] : policy_brokers_) {
+    if (broker->IsCacheRunning()) {
+      broker->StopCache(base::DoNothing());
+    }
+  }
+  policy_brokers_.clear();
 }
 
 void DeviceLocalAccountPolicyService::Connect(
     DeviceManagementService* device_management_service) {
-  DCHECK(!device_management_service_);
+  CHECK(!device_management_service_, base::NotFatalUntil::M160);
   device_management_service_ = device_management_service;
 
   // Connect the brokers.
@@ -191,7 +201,7 @@ bool DeviceLocalAccountPolicyService::StartExtensionCacheForAccountIfPresent(
     const std::string& account_id) {
   for (auto& [user_id, broker] : policy_brokers_) {
     if (broker->account_id() == account_id) {
-      DCHECK(!broker->IsCacheRunning());
+      CHECK(!broker->IsCacheRunning(), base::NotFatalUntil::M160);
       broker->StartCache(extension_cache_task_runner_);
       return true;
     }
@@ -200,7 +210,8 @@ bool DeviceLocalAccountPolicyService::StartExtensionCacheForAccountIfPresent(
 }
 
 void DeviceLocalAccountPolicyService::OnOrphanedExtensionCachesDeleted() {
-  DCHECK_EQ(IN_PROGRESS, orphan_extension_cache_deletion_state_);
+  CHECK_EQ(IN_PROGRESS, orphan_extension_cache_deletion_state_,
+           base::NotFatalUntil::M160);
 
   orphan_extension_cache_deletion_state_ = DONE;
   StartExtensionCachesIfPossible();
@@ -208,8 +219,9 @@ void DeviceLocalAccountPolicyService::OnOrphanedExtensionCachesDeleted() {
 
 void DeviceLocalAccountPolicyService::OnObsoleteExtensionCacheShutdown(
     const std::string& account_id) {
-  DCHECK_NE(NOT_STARTED, orphan_extension_cache_deletion_state_);
-  DCHECK(IsExtensionCacheDirectoryBusy(account_id));
+  CHECK_NE(NOT_STARTED, orphan_extension_cache_deletion_state_,
+           base::NotFatalUntil::M160);
+  CHECK(IsExtensionCacheDirectoryBusy(account_id), base::NotFatalUntil::M160);
 
   // The account with |account_id| was deleted and the broker for it has shut
   // down completely.
@@ -234,8 +246,9 @@ void DeviceLocalAccountPolicyService::OnObsoleteExtensionCacheShutdown(
 
 void DeviceLocalAccountPolicyService::OnObsoleteExtensionCacheDeleted(
     const std::string& account_id) {
-  DCHECK_EQ(DONE, orphan_extension_cache_deletion_state_);
-  DCHECK(IsExtensionCacheDirectoryBusy(account_id));
+  CHECK_EQ(DONE, orphan_extension_cache_deletion_state_,
+           base::NotFatalUntil::M160);
+  CHECK(IsExtensionCacheDirectoryBusy(account_id), base::NotFatalUntil::M160);
 
   // The cache directory for |account_id| has been deleted. The directory no
   // longer needs to be marked as busy.
@@ -333,8 +346,8 @@ void DeviceLocalAccountPolicyService::UpdateAccountList() {
   }
 
   if (orphan_extension_cache_deletion_state_ == NOT_STARTED) {
-    DCHECK(old_policy_brokers.empty());
-    DCHECK(busy_extension_cache_directories_.empty());
+    CHECK(old_policy_brokers.empty(), base::NotFatalUntil::M160);
+    CHECK(busy_extension_cache_directories_.empty(), base::NotFatalUntil::M160);
 
     // If this method is running for the first time, no extension caches have
     // been started yet. Take this opportunity to do a clean-up by removing
@@ -385,7 +398,8 @@ void DeviceLocalAccountPolicyService::UpdateAccountList() {
 void DeviceLocalAccountPolicyService::DeleteBrokers(PolicyBrokerMap* map) {
   for (auto& [user_id, broker] : *map) {
     if (broker->IsCacheRunning()) {
-      DCHECK(!IsExtensionCacheDirectoryBusy(broker->account_id()));
+      CHECK(!IsExtensionCacheDirectoryBusy(broker->account_id()),
+            base::NotFatalUntil::M160);
       busy_extension_cache_directories_.insert(broker->account_id());
       broker->StopCache(base::BindOnce(
           &DeviceLocalAccountPolicyService::OnObsoleteExtensionCacheShutdown,

@@ -49,6 +49,10 @@ class PermissionChipInterface {
 
   virtual void SetVisible(bool visible) = 0;
   virtual bool GetVisible() const = 0;
+  virtual PermissionChipTheme GetThemeForTesting() const = 0;
+  virtual std::u16string GetTooltipText() const = 0;
+  virtual std::u16string GetTextForTesting() const = 0;
+  virtual bool GetIsRequestForTesting() const = 0;
 
   // Customize the chip.
   virtual void SetChipIcon(const gfx::VectorIcon& icon) = 0;
@@ -91,10 +95,35 @@ class PermissionChipInterface {
   virtual bool IsMouseHovered() const = 0;
 
   // Set the callback invoked when the chip is pressed.
-  virtual void SetPressedCallback(base::RepeatingClosure callback) = 0;
+  virtual void SetPressedCallback(
+      base::RepeatingCallback<void(bool)> callback) = 0;
 
+  // Synchronously returns the anchor for the chip.
+  // * For native Views, this returns the anchor view.
+  // * For WebUI, this returns the tracked WebUI element if already registered,
+  // or a fallback anchor (e.g. location bar container). This is safe to use
+  // when the chip is already visible and rendered (e.g. user clicks opening
+  // PageInfo), but may fall back during initial prompt display if the WebUI
+  // element is still registering. Use WaitForAnchor() to wait for it before
+  // showing permission prompts.
   virtual views::BubbleAnchor GetAnchor() = 0;
 
+  // Runs `callback` once GetAnchor() can return the chip itself, or once it's
+  // time to stop waiting and let GetAnchor() fall back.
+  // * For native Views, this runs `callback` synchronously.
+  // * For WebUI, if the tracked element is not yet registered over Mojo, this
+  // waits for it to become available (or until a fallback timeout, or until
+  // the chip is hidden) before running `callback`. This ensures permission
+  // prompt bubbles, which look up their anchor when they're created, anchor to
+  // the correct location during initial presentation. `callback` is dropped if
+  // the chip is destroyed first. Only one call can be waiting at a time.
+  virtual void WaitForAnchor(base::OnceClosure callback) = 0;
+
   virtual void SetBubbleOwner(BubbleOwnerDelegate* owner) = 0;
+
+  virtual void ExecuteForTesting() = 0;
+
+  // Unlike ResetAnimation, will always invoke the observer animation events.
+  virtual void EndAnimationForTesting() = 0;
 };
 #endif  // CHROME_BROWSER_UI_VIEWS_PERMISSIONS_CHIP_PERMISSION_CHIP_INTERFACE_H_

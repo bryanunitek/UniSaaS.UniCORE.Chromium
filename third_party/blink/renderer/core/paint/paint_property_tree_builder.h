@@ -17,21 +17,24 @@
 
 namespace blink {
 
-namespace features {
-
-BASE_DECLARE_FEATURE(kPreventSvgFilterPaint);
-BASE_DECLARE_FEATURE_PARAM(bool, kPreventSvgFilterPaintOnLocalFrameRestricted);
-BASE_DECLARE_FEATURE_PARAM(bool, kPreventSvgFilterPaintOnRemoteFrame);
-BASE_DECLARE_FEATURE_PARAM(bool, kPreventSvgFilterPaintOnWebPlugin);
-
-}  // namespace features
-
 class FragmentData;
 class LayoutObject;
 class LocalFrameView;
 class PaintLayer;
 class PhysicalBoxFragment;
 class VisualViewport;
+
+struct LineClampFloatClipState {
+  STACK_ALLOCATED();
+
+ public:
+  LineClampFloatClipState(const TransformPaintPropertyNodeOrAlias& transform,
+                          PhysicalRect rect)
+      : transform(&transform), rect(rect) {}
+
+  const TransformPaintPropertyNodeOrAlias* transform;
+  PhysicalRect rect;
+};
 
 // The context for PaintPropertyTreeBuilder.
 // It's responsible for bookkeeping tree state in other order, for example, the
@@ -200,6 +203,8 @@ struct PaintPropertyTreeBuilderFragmentContext {
     // that are baked in PaintOffsetTranslations since we entered the
     // fragmentainer.
     PhysicalOffset paint_offset_for_oof_in_fragmentainer;
+
+    std::optional<LineClampFloatClipState> line_clamp_float_clip_state;
   };
 
   ContainingBlockContext current;
@@ -226,9 +231,13 @@ struct PaintPropertyTreeBuilderFragmentContext {
   // all non-alias effects.
   bool self_or_ancestor_participates_in_view_transition = false;
 
+  // Set to true when we visit an object with filter operations that have a
+  // tainted origin, and propagated to all its descendants.
+  bool is_in_tainted_subtree = false;
+
   // Set to true when we visit a canvas child and is propagated to all
   // descendant effects.
-  bool is_in_canvas_subtree = false;
+  bool is_in_drawable_canvas_subtree = false;
 
   // Whether newly created children should flatten their inherited transform
   // (equivalently, draw into the plane of their parent). Should generally
@@ -325,7 +334,7 @@ struct PaintPropertyTreeBuilderContext final {
 
   // This is always recalculated in PaintPropertyTreeBuilder::UpdateForSelf()
   // which overrides the inherited value.
-  CompositingReasons direct_compositing_reasons = CompositingReason::kNone;
+  CompositingReasons direct_compositing_reasons;
 };
 
 class VisualViewportPaintPropertyTreeBuilder {

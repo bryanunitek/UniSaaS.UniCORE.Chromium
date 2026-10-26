@@ -8,8 +8,6 @@ import android.app.Activity;
 import android.view.View;
 import android.widget.FrameLayout;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -25,9 +23,7 @@ import org.chromium.base.test.util.CallbackHelper;
 
 /** Tests for {@link LoadingView}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowView.class})
+@Config(shadows = {ShadowView.class})
 public class LoadingViewTest {
     static class TestObserver implements LoadingView.Observer {
         public final CallbackHelper showLoadingCallback = new CallbackHelper();
@@ -71,7 +67,6 @@ public class LoadingViewTest {
     }
 
     @Test
-    @SmallTest
     public void testLoadingFast() {
         mLoadingView.showLoadingUi();
         Assert.assertEquals(
@@ -111,7 +106,6 @@ public class LoadingViewTest {
     }
 
     @Test
-    @SmallTest
     public void testLoadingSlow() {
         mLoadingView.showLoadingUi();
         Assert.assertEquals(
@@ -168,7 +162,6 @@ public class LoadingViewTest {
     }
 
     @Test
-    @SmallTest
     public void testLoadingSkipDelay() {
         mLoadingView.showLoadingUi(/* skipDelay= */ true);
         Assert.assertEquals(
@@ -182,7 +175,6 @@ public class LoadingViewTest {
     }
 
     @Test
-    @SmallTest
     public void testHideLoadingSkipDelay() {
         mLoadingView.showLoadingUi();
         RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();

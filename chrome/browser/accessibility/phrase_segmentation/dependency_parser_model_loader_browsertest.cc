@@ -19,11 +19,11 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/model_util.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
+#include "components/optimization_guide/core/model_execution/test/fake_model_assets.h"
 #include "components/optimization_guide/proto/models.pb.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -99,8 +99,8 @@ class DependencyParserModelLoaderDisabledBrowserTest
 
 IN_PROC_BROWSER_TEST_F(DependencyParserModelLoaderDisabledBrowserTest,
                        DependencyParserModelLoaderDisabled) {
-  EXPECT_FALSE(
-      DependencyParserModelLoaderFactory::GetForProfile(browser()->profile()));
+  EXPECT_FALSE(DependencyParserModelLoaderFactory::GetForProfile(
+      browser()->GetProfile()));
 }
 
 class DependencyParserModelLoaderBrowserTest
@@ -128,7 +128,7 @@ class DependencyParserModelLoaderBrowserTest
 
   DependencyParserModelLoader* dependency_parser_model_service() {
     return DependencyParserModelLoaderFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   const GURL& english_url() const { return english_url_; }
@@ -175,7 +175,8 @@ IN_PROC_BROWSER_TEST_F(DependencyParserModelLoaderBrowserTest,
 IN_PROC_BROWSER_TEST_F(DependencyParserModelLoaderBrowserTest,
                        DependencyParserModelLoaderEnabled_OffTheRecord) {
   EXPECT_TRUE(DependencyParserModelLoaderFactory::GetForProfile(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true)));
+      browser()->GetProfile()->GetPrimaryOTRProfile(
+          /*create_if_needed=*/true)));
 }
 
 IN_PROC_BROWSER_TEST_F(DependencyParserModelLoaderBrowserTest,
@@ -184,12 +185,12 @@ IN_PROC_BROWSER_TEST_F(DependencyParserModelLoaderBrowserTest,
   base::HistogramTester histogram_tester;
   ASSERT_TRUE(dependency_parser_model_service());
 
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->OverrideTargetModelForTesting(
           optimization_guide::proto::OPTIMIZATION_TARGET_PHRASE_SEGMENTATION,
-          optimization_guide::TestModelInfoBuilder()
-              .SetModelFilePath(model_file_path())
-              .Build());
+          optimization_guide::ModelInfo{
+              .model_file_path = model_file_path(),
+          });
 
   RetryForHistogramUntilCountReached(
       &histogram_tester,
@@ -224,12 +225,12 @@ IN_PROC_BROWSER_TEST_F(DependencyParserModelLoaderBrowserTest,
       },
       run_loop.get(), dependency_parser_model_service()));
 
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->OverrideTargetModelForTesting(
           optimization_guide::proto::OPTIMIZATION_TARGET_PHRASE_SEGMENTATION,
-          optimization_guide::TestModelInfoBuilder()
-              .SetModelFilePath(model_file_path())
-              .Build());
+          optimization_guide::ModelInfo{
+              .model_file_path = model_file_path(),
+          });
 
   RetryForHistogramUntilCountReached(
       &histogram_tester,
@@ -252,15 +253,15 @@ IN_PROC_BROWSER_TEST_F(DependencyParserModelLoaderBrowserTest,
   base::ScopedAllowBlockingForTesting allow_io_for_test_setup;
   base::HistogramTester histogram_tester;
   ASSERT_TRUE(dependency_parser_model_service());
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->OverrideTargetModelForTesting(
           optimization_guide::proto::OPTIMIZATION_TARGET_PHRASE_SEGMENTATION,
-          optimization_guide::TestModelInfoBuilder()
-              .SetModelFilePath(
+          optimization_guide::ModelInfo{
+              .model_file_path =
                   base::FilePath(optimization_guide::StringToFilePath(
                                      optimization_guide::kTestAbsoluteFilePath)
-                                     .value()))
-              .Build());
+                                     .value()),
+          });
 
   RetryForHistogramUntilCountReached(
       &histogram_tester,
@@ -279,12 +280,12 @@ IN_PROC_BROWSER_TEST_F(DependencyParserModelLoaderBrowserTest,
   base::HistogramTester histogram_tester;
   ASSERT_TRUE(dependency_parser_model_service());
 
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->OverrideTargetModelForTesting(
           optimization_guide::proto::OPTIMIZATION_TARGET_PHRASE_SEGMENTATION,
-          optimization_guide::TestModelInfoBuilder()
-              .SetModelFilePath(model_file_path())
-              .Build());
+          optimization_guide::ModelInfo{
+              .model_file_path = model_file_path(),
+          });
 
   RetryForHistogramUntilCountReached(
       &histogram_tester,
@@ -296,12 +297,12 @@ IN_PROC_BROWSER_TEST_F(DependencyParserModelLoaderBrowserTest,
       "WasLoaded",
       true, 1);
 
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->OverrideTargetModelForTesting(
           optimization_guide::proto::OPTIMIZATION_TARGET_PHRASE_SEGMENTATION,
-          optimization_guide::TestModelInfoBuilder()
-              .SetModelFilePath(model_file_path())
-              .Build());
+          optimization_guide::ModelInfo{
+              .model_file_path = model_file_path(),
+          });
 
   RetryForHistogramUntilCountReached(
       &histogram_tester,

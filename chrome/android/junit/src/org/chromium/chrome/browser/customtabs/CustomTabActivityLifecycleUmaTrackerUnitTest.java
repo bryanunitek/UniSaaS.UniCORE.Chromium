@@ -4,9 +4,6 @@
 
 package org.chromium.chrome.browser.customtabs;
 
-import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.mock;
-
 import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
@@ -18,13 +15,13 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowSystemClock;
 
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.customtabs.CustomTabActivityLifecycleUmaTracker.ClientIdentifierType;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
@@ -34,7 +31,6 @@ import java.util.concurrent.TimeUnit;
 
 /** Unit test for {@link CustomTabActivityLifecycleUmaTracker}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
 @Config(shadows = {ShadowSystemClock.class})
 public class CustomTabActivityLifecycleUmaTrackerUnitTest {
     private static final String PACKAGE_A = "com.example.test.package";
@@ -151,24 +147,26 @@ public class CustomTabActivityLifecycleUmaTrackerUnitTest {
                 "IntentHandler.EXTRA_ACTIVITY_REFERRER should be used.",
                 extraActivityReferrer,
                 getReferrer(
-                        buildMockActivity(
+                        buildActivityWithReferrer(
                                 extraActivityReferrer, activityReferrer, extraReferrerName)));
         Assert.assertEquals(
                 "Activity#getReferrer should be used.",
                 activityReferrer.toString(),
-                getReferrer(buildMockActivity(null, activityReferrer, extraReferrerName)));
+                getReferrer(buildActivityWithReferrer(null, activityReferrer, extraReferrerName)));
         Assert.assertEquals(
                 "Intent.EXTRA_REFERRER should be used.",
                 extraReferrerName,
-                getReferrer(buildMockActivity(null, null, extraReferrerName)));
+                getReferrer(buildActivityWithReferrer(null, null, extraReferrerName)));
     }
 
     @Test
     public void testGetReferrer_InvalidInputs() {
         Assert.assertTrue(TextUtils.isEmpty(getReferrer(null)));
-        Assert.assertTrue(TextUtils.isEmpty(getReferrer(mock(Activity.class))));
+        Activity activityWithNoIntent = Robolectric.buildActivity(Activity.class).get();
+        activityWithNoIntent.setIntent(null);
+        Assert.assertTrue(TextUtils.isEmpty(getReferrer(activityWithNoIntent)));
 
-        Activity activityWithNoReferral = buildMockActivity(null, null, null);
+        Activity activityWithNoReferral = buildActivityWithReferrer(null, null, null);
         Assert.assertTrue(TextUtils.isEmpty(getReferrer(activityWithNoReferral)));
     }
 
@@ -205,19 +203,26 @@ public class CustomTabActivityLifecycleUmaTrackerUnitTest {
         return CustomTabActivityLifecycleUmaTracker.getReferrerUriString(activity);
     }
 
-    private Activity buildMockActivity(
+    private Activity buildActivityWithReferrer(
             String extraActivityReferrer, Uri activityReferrer, String extraReferrerName) {
-        Activity activity = mock(Activity.class);
-        Intent intent = mock(Intent.class);
+        Intent intent = new Intent();
+        intent.putExtra(IntentHandler.EXTRA_ACTIVITY_REFERRER, extraActivityReferrer);
+        intent.putExtra(Intent.EXTRA_REFERRER_NAME, extraReferrerName);
 
-        doReturn(intent).when(activity).getIntent();
-        doReturn(activityReferrer).when(activity).getReferrer();
-        doReturn(extraActivityReferrer)
-                .when(intent)
-                .getStringExtra(IntentHandler.EXTRA_ACTIVITY_REFERRER);
-        doReturn(extraReferrerName).when(intent).getStringExtra(Intent.EXTRA_REFERRER_NAME);
-
+        TestReferrerActivity activity =
+                Robolectric.buildActivity(TestReferrerActivity.class, intent).get();
+        activity.mReferrer = activityReferrer;
         return activity;
+    }
+
+    /** An Activity whose {@link Activity#getReferrer()} returns a canned value. */
+    private static class TestReferrerActivity extends Activity {
+        private Uri mReferrer;
+
+        @Override
+        public Uri getReferrer() {
+            return mReferrer;
+        }
     }
 
     @Test

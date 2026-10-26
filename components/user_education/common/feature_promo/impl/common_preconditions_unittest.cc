@@ -11,6 +11,7 @@
 #include "base/test/bind.h"
 #include "components/feature_engagement/public/configuration.h"
 #include "components/feature_engagement/test/mock_tracker.h"
+#include "components/user_education/common/anchor_element_provider.h"
 #include "components/user_education/common/feature_promo/feature_promo_lifecycle.h"
 #include "components/user_education/common/feature_promo/feature_promo_precondition.h"
 #include "components/user_education/common/feature_promo/feature_promo_result.h"
@@ -30,7 +31,7 @@
 namespace user_education {
 
 namespace {
-BASE_FEATURE(kTestFeature, "TestFeature", base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kTestFeature, base::FEATURE_ENABLED_BY_DEFAULT);
 using TestLifecycleData =
     test::ScopedTypedData<std::unique_ptr<FeaturePromoLifecycle>>;
 constexpr ui::ElementContext kTestContext =
@@ -91,8 +92,11 @@ TEST(CommonPreconditionsTest, MeetsFeatureEngagementCriteriaPrecondition) {
   UnownedTypedDataCollection data;
 
   const EventList kPassingEventList{
-      {EventConfig("event1", Comparator(ComparatorType::EQUAL, 0), 7, 7), 0},
-      {EventConfig("event2", Comparator(ComparatorType::GREATER_THAN, 1), 7, 7),
+      {EventConfig("event1", Comparator(ComparatorType::EQUAL, 0), /*window=*/7,
+                   /*storage=*/7),
+       0},
+      {EventConfig("event2", Comparator(ComparatorType::GREATER_THAN, 1),
+                   /*window=*/7, /*storage=*/7),
        2},
   };
   EXPECT_CALL(tracker, ListEvents(testing::Ref(kTestFeature)))
@@ -100,8 +104,11 @@ TEST(CommonPreconditionsTest, MeetsFeatureEngagementCriteriaPrecondition) {
   EXPECT_EQ(FeaturePromoResult::Success(), precond.CheckPrecondition(data));
 
   const EventList kFailingEventList1{
-      {EventConfig("event1", Comparator(ComparatorType::EQUAL, 0), 7, 7), 1},
-      {EventConfig("event2", Comparator(ComparatorType::GREATER_THAN, 1), 7, 7),
+      {EventConfig("event1", Comparator(ComparatorType::EQUAL, 0), /*window=*/7,
+                   /*storage=*/7),
+       1},
+      {EventConfig("event2", Comparator(ComparatorType::GREATER_THAN, 1),
+                   /*window=*/7, /*storage=*/7),
        2},
   };
   EXPECT_CALL(tracker, ListEvents(testing::Ref(kTestFeature)))
@@ -110,8 +117,11 @@ TEST(CommonPreconditionsTest, MeetsFeatureEngagementCriteriaPrecondition) {
             precond.CheckPrecondition(data));
 
   const EventList kFailingEventList2{
-      {EventConfig("event1", Comparator(ComparatorType::EQUAL, 0), 7, 7), 0},
-      {EventConfig("event2", Comparator(ComparatorType::GREATER_THAN, 1), 7, 7),
+      {EventConfig("event1", Comparator(ComparatorType::EQUAL, 0), /*window=*/7,
+                   /*storage=*/7),
+       0},
+      {EventConfig("event2", Comparator(ComparatorType::GREATER_THAN, 1),
+                   /*window=*/7, /*storage=*/7),
        0},
   };
   EXPECT_CALL(tracker, ListEvents(testing::Ref(kTestFeature)))
@@ -144,7 +154,8 @@ TEST(CommonPreconditionsTest, AnchorElementPrecondition) {
   ui::test::TestElement el(kTestId, kTestContext);
   el.Show();
   test::MockAnchorElementProvider provider;
-  AnchorElementPrecondition precond(provider, kTestContext, false);
+  AnchorElementPrecondition precond(provider, kTestContext,
+                                    AnchorElementFilter(), false);
 
   test::TestUserEducationStorageService storage_service;
   UnownedTypedDataCollection data;
@@ -155,13 +166,15 @@ TEST(CommonPreconditionsTest, AnchorElementPrecondition) {
           FeaturePromoLifecycle::PromoType::kToast,
           FeaturePromoLifecycle::PromoSubtype::kNormal, 0));
 
-  EXPECT_CALL(provider, GetAnchorElement(kTestContext, std::optional<int>()))
+  EXPECT_CALL(provider,
+              GetAnchorElement(kTestContext, testing::_, std::optional<int>()))
       .WillOnce(testing::Return(nullptr));
   EXPECT_EQ(FeaturePromoResult::kAnchorNotVisible,
             precond.CheckPrecondition(data));
   EXPECT_EQ(nullptr, data[AnchorElementPrecondition::kAnchorElement].get());
 
-  EXPECT_CALL(provider, GetAnchorElement(kTestContext, std::optional<int>()))
+  EXPECT_CALL(provider,
+              GetAnchorElement(kTestContext, testing::_, std::optional<int>()))
       .WillOnce(testing::Return(&el));
   EXPECT_EQ(FeaturePromoResult::Success(), precond.CheckPrecondition(data));
   EXPECT_EQ(&el, data[AnchorElementPrecondition::kAnchorElement].get());
@@ -171,7 +184,8 @@ TEST(CommonPreconditionsTest, AnchorElementPrecondition) {
       FeaturePromoLifecycle::PromoType::kRotating,
       FeaturePromoLifecycle::PromoSubtype::kNormal, 3);
   (*lifecycle_data)->SetPromoIndex(1);
-  EXPECT_CALL(provider, GetAnchorElement(kTestContext, std::make_optional(2)))
+  EXPECT_CALL(provider,
+              GetAnchorElement(kTestContext, testing::_, std::make_optional(2)))
       .WillOnce(testing::Return(nullptr));
   EXPECT_CALL(provider, GetNextValidIndex(1)).WillOnce(testing::Return(2));
   EXPECT_EQ(FeaturePromoResult::kAnchorNotVisible,
@@ -186,7 +200,8 @@ TEST(CommonPreconditionsTest,
   el.Show();
 
   test::MockAnchorElementProvider provider;
-  AnchorElementPrecondition precond(provider, kTestContext, false);
+  AnchorElementPrecondition precond(provider, kTestContext,
+                                    AnchorElementFilter(), false);
 
   OwnedTypedDataCollection coll;
   test::TestUserEducationStorageService storage_service;
@@ -198,7 +213,8 @@ TEST(CommonPreconditionsTest,
           FeaturePromoLifecycle::PromoType::kToast,
           FeaturePromoLifecycle::PromoSubtype::kNormal, 0));
 
-  EXPECT_CALL(provider, GetAnchorElement(kTestContext, std::optional<int>()))
+  EXPECT_CALL(provider,
+              GetAnchorElement(kTestContext, testing::_, std::optional<int>()))
       .WillOnce(testing::Return(&el));
   EXPECT_EQ(FeaturePromoResult::Success(), precond.CheckPrecondition(cd));
 
@@ -214,7 +230,8 @@ TEST(CommonPreconditionsTest,
      AnchorElementPrecondition_ExtractCachedDataReturnsNull) {
 
   test::MockAnchorElementProvider provider;
-  AnchorElementPrecondition precond(provider, kTestContext, false);
+  AnchorElementPrecondition precond(provider, kTestContext,
+                                    AnchorElementFilter(), false);
 
   OwnedTypedDataCollection coll;
   test::TestUserEducationStorageService storage_service;
@@ -226,7 +243,8 @@ TEST(CommonPreconditionsTest,
           FeaturePromoLifecycle::PromoType::kToast,
           FeaturePromoLifecycle::PromoSubtype::kNormal, 0));
 
-  EXPECT_CALL(provider, GetAnchorElement(kTestContext, std::optional<int>()))
+  EXPECT_CALL(provider,
+              GetAnchorElement(kTestContext, testing::_, std::optional<int>()))
       .WillOnce(testing::Return(nullptr));
   EXPECT_EQ(FeaturePromoResult::kAnchorNotVisible,
             precond.CheckPrecondition(cd));

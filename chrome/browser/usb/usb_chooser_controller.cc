@@ -31,6 +31,8 @@
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
 #include "third_party/blink/public/common/features_generated.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 using content::RenderFrameHost;
@@ -41,8 +43,10 @@ namespace {
 std::u16string FormatUsbDeviceName(
     const device::mojom::UsbDeviceInfo& device_info) {
   std::u16string device_name;
-  if (device_info.product_name)
-    device_name = *device_info.product_name;
+  if (device_info.product_name) {
+    // Explicitly reconstruct to trim trailing NUL bytes.
+    device_name = std::u16string(device_info.product_name->c_str());
+  }
 
   if (device_name.empty()) {
     uint16_t vendor_id = device_info.vendor_id;
@@ -206,11 +210,10 @@ void UsbChooserController::OpenHelpCenterUrl() const {
   }
 
   WebContents::FromRenderFrameHost(render_frame_host)
-      ->OpenURL(content::OpenURLParams(
-                    GURL(chrome::kChooserUsbOverviewURL), content::Referrer(),
-                    WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                    ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
-                    false /* is_renderer_initialized */),
+      ->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
+                    GURL(chrome::kChooserUsbOverviewURL),
+                    WindowOpenDisposition::kNewForegroundTab,
+                    ui::PAGE_TRANSITION_AUTO_TOPLEVEL),
                 /*navigation_handle_callback=*/{});
 }
 

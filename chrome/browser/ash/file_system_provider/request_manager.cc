@@ -24,6 +24,8 @@ RequestManager::RequestManager(
       timeout_(timeout) {}
 
 RequestManager::~RequestManager() {
+  DetachNotificationManager();
+
   // Abort all of the active requests.
   auto it = requests_.begin();
   while (it != requests_.end()) {
@@ -34,7 +36,7 @@ RequestManager::~RequestManager() {
                           OperationCompletion::kAbortedInternally);
   }
 
-  DCHECK_EQ(0u, requests_.size());
+  CHECK_EQ(0u, requests_.size(), base::NotFatalUntil::M160);
 }
 
 int RequestManager::CreateRequest(RequestType type,
@@ -127,13 +129,17 @@ std::vector<int> RequestManager::GetActiveRequestIds() const {
   return result;
 }
 
+void RequestManager::DetachNotificationManager() {
+  notification_manager_ = nullptr;
+}
+
 void RequestManager::AddObserver(Observer* observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observers_.AddObserver(observer);
 }
 
 void RequestManager::RemoveObserver(Observer* observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observers_.RemoveObserver(observer);
 }
 

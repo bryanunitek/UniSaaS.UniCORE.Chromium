@@ -50,9 +50,8 @@ class CORE_EXPORT RemoteFrameView final
     return *remote_frame_;
   }
 
-  void Dispose() override;
+  void Dispose();
   void SetFrameRect(const gfx::Rect&) override;
-  void PropagateFrameRects() override;
   void ZoomFactorChanged(float zoom_factor) override;
   void Paint(const PaintInfo&,
              const CullRect&,
@@ -65,7 +64,7 @@ class CORE_EXPORT RemoteFrameView final
 
   void UpdateIntersectionObserverStatus() override;
   void UpdateViewportIntersectionsForSubtree(
-      unsigned parent_flags,
+      IntersectionObservation::ComputeFlags parent_flags,
       ComputeIntersectionsContext&) override;
   bool HasActiveIntersectionObservations() const override;
   bool NeedsOcclusionTracking() const override;
@@ -94,11 +93,10 @@ class CORE_EXPORT RemoteFrameView final
 
   void Trace(Visitor*) const override;
 
-  void ResetFrozenSize() { frozen_size_ = std::nullopt; }
-
   mojom::blink::WebFeature SvgFilterPaintedCounter() const override;
 
  protected:
+  void PropagateFrameRectsInternal() override;
   bool NeedsViewportOffset() const override { return true; }
   // This is used to service IntersectionObservers in an OOPIF child document.
   void SetViewportIntersection(const mojom::blink::ViewportIntersectionState&
@@ -118,9 +116,6 @@ class CORE_EXPORT RemoteFrameView final
   // animations.
   gfx::Rect ComputeCompositingRect() const;
 
-  // Fetch the frozen size, if any, from the associated LayoutObject.
-  void UpdateFrozenSize();
-
   // The properties and handling of the cycle between RemoteFrame
   // and its RemoteFrameView corresponds to that between LocalFrame
   // and LocalFrameView. Please see the LocalFrameView::frame_ comment for
@@ -128,12 +123,10 @@ class CORE_EXPORT RemoteFrameView final
   Member<RemoteFrame> remote_frame_;
   mojom::blink::ViewportIntersectionState last_intersection_state_;
   gfx::Rect compositing_rect_;
-  std::optional<gfx::Size> frozen_size_;
   float compositing_scale_factor_ = 1.0f;
 
   std::optional<NaturalSizingInfo> natural_sizing_info_;
   bool needs_occlusion_tracking_ = false;
-  bool needs_frame_rect_propagation_ = false;
 };
 
 template <>

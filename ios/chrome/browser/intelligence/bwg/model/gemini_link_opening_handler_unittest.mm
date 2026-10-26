@@ -10,6 +10,7 @@
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/url_loading/model/fake_url_loading_browser_agent.h"
@@ -18,6 +19,7 @@
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
+#import "url/gurl.h"
 
 namespace {
 
@@ -40,13 +42,16 @@ class GeminiLinkOpeningHandlerTest : public PlatformTest {
     url_loader_ = FakeUrlLoadingBrowserAgent::FromUrlLoadingBrowserAgent(
         UrlLoadingBrowserAgent::FromBrowser(browser_.get()));
 
-    // Create a mock dispatcher and associate it with a mock scene commands
-    // handler.
+    // Create a mock dispatcher and associate it with mock command handlers.
     mock_dispatcher_ = OCMClassMock([CommandDispatcher class]);
     mock_scene_commands_handler_ = OCMProtocolMock(@protocol(SceneCommands));
     OCMStub(
         [mock_dispatcher_ strictCallableForProtocol:@protocol(SceneCommands)])
         .andReturn(mock_scene_commands_handler_);
+    mock_gemini_commands_handler_ = OCMProtocolMock(@protocol(GeminiCommands));
+    OCMStub(
+        [mock_dispatcher_ strictCallableForProtocol:@protocol(GeminiCommands)])
+        .andReturn(mock_gemini_commands_handler_);
 
     // Initialize the link opening handler with the fake loader and mock
     // dispatcher.
@@ -61,6 +66,7 @@ class GeminiLinkOpeningHandlerTest : public PlatformTest {
   raw_ptr<FakeUrlLoadingBrowserAgent> url_loader_;
   id mock_dispatcher_;
   id mock_scene_commands_handler_;
+  id mock_gemini_commands_handler_;
   base::UserActionTester user_action_tester_;
   GeminiLinkOpeningHandler* link_opening_handler_;
 };
@@ -132,4 +138,102 @@ TEST_F(GeminiLinkOpeningHandlerTest,
   [link_opening_handler_ closePresentedViewsAndOpenURLInNewTab:@""];
 
   [mock_scene_commands_handler_ verify];
+}
+
+// Tests that opening a URL calls minimizeGeminiIfInvoked on GeminiCommands.
+TEST_F(GeminiLinkOpeningHandlerTest, TestOpenURLCallsMinimizeGeminiIfInvoked) {
+  OCMExpect([mock_gemini_commands_handler_ minimizeGeminiIfInvoked]);
+
+  [link_opening_handler_ openURLInNewTab:@(kTestURL)];
+
+  [mock_gemini_commands_handler_ verify];
+}
+
+// Tests that opening an invalid URL does not call minimizeGeminiIfInvoked.
+TEST_F(GeminiLinkOpeningHandlerTest,
+       TestOpenInvalidURLDoesNotCallMinimizeGeminiIfInvoked) {
+  [[mock_gemini_commands_handler_ reject] minimizeGeminiIfInvoked];
+
+  [link_opening_handler_ openURLInNewTab:@""];
+
+  [mock_gemini_commands_handler_ verify];
+}
+
+// Test that openImmersiveLearningCardURLInWebModal: forwards the URL to
+// GeminiCommands.
+TEST_F(GeminiLinkOpeningHandlerTest,
+       TestOpenImmersiveLearningCardURLInWebModal) {
+  // OCMock compares C++ reference args by address, so capture the URL instead.
+  __block GURL opened_url;
+  OCMExpect([mock_gemini_commands_handler_ showGeminiWebModalForURL:GURL()])
+      .ignoringNonObjectArgs()
+      .andDo(^(NSInvocation* invocation) {
+        const GURL* url = nullptr;
+        [invocation getArgument:&url atIndex:2];
+        opened_url = *url;
+      });
+
+  [link_opening_handler_
+      openImmersiveLearningCardURLInWebModal:[NSURL URLWithString:@(kTestURL)]];
+
+  [mock_gemini_commands_handler_ verify];
+  EXPECT_EQ(GURL(kTestURL), opened_url);
+}
+
+// Test that openImmersiveLearningCardURLInWebModal: records the URL opened and
+// web modal opened user actions.
+TEST_F(GeminiLinkOpeningHandlerTest,
+       TestOpenImmersiveLearningCardURLInWebModalRecordsUserAction) {
+  [link_opening_handler_
+      openImmersiveLearningCardURLInWebModal:[NSURL URLWithString:@(kTestURL)]];
+
+  EXPECT_EQ(1, user_action_tester_.GetActionCount("MobileGeminiURLOpened"));
+  EXPECT_EQ(1, user_action_tester_.GetActionCount(
+                   "MobileGeminiImmersiveLearningCardWebModalOpened"));
+}
+
+// Test that openImmersiveLearningCardURLInWebModal: ignores a nil URL.
+TEST_F(GeminiLinkOpeningHandlerTest,
+       TestOpenImmersiveLearningCardURLInWebModalWithNilURL) {
+  [[[mock_gemini_commands_handler_ reject] ignoringNonObjectArgs]
+      showGeminiWebModalForURL:GURL()];
+
+  [link_opening_handler_ openImmersiveLearningCardURLInWebModal:nil];
+
+  [mock_gemini_commands_handler_ verify];
+  EXPECT_EQ(0, user_action_tester_.GetActionCount("MobileGeminiURLOpened"));
+  EXPECT_EQ(0, user_action_tester_.GetActionCount(
+                   "MobileGeminiImmersiveLearningCardWebModalOpened"));
+}
+
+// Test that openImmersiveLearningCardURLInWebModal: opens the URL in a new tab
+// instead of the web modal when the `gemini_quizzes_open_in_new_tab` arm is
+// enabled.
+TEST_F(GeminiLinkOpeningHandlerTest,
+       TestOpenImmersiveLearningCardURLInNewTabWhenParamEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      kGeminiQuizzes, {{kGeminiQuizzesOpenInNewTabParam, "true"}});
+  [[[mock_gemini_commands_handler_ reject] ignoringNonObjectArgs]
+      showGeminiWebModalForURL:GURL()];
+  OCMExpect([mock_gemini_commands_handler_ minimizeGeminiIfInvoked]);
+
+  [link_opening_handler_
+      openImmersiveLearningCardURLInWebModal:[NSURL URLWithString:@(kTestURL)]];
+
+  [mock_gemini_commands_handler_ verify];
+  EXPECT_EQ(GURL(kTestURL), url_loader_->last_params.web_params.url);
+  EXPECT_EQ(1, user_action_tester_.GetActionCount("MobileGeminiURLOpened"));
+}
+
+// Test that openImmersiveLearningCardURLInWebModal: does not open a new tab
+// when the `gemini_quizzes_open_in_new_tab` arm is disabled.
+TEST_F(GeminiLinkOpeningHandlerTest,
+       TestOpenImmersiveLearningCardURLDoesNotOpenNewTabByDefault) {
+  base::test::ScopedFeatureList scoped_feature_list(kGeminiQuizzes);
+
+  [link_opening_handler_
+      openImmersiveLearningCardURLInWebModal:[NSURL URLWithString:@(kTestURL)]];
+
+  EXPECT_TRUE(url_loader_->last_params.web_params.url.is_empty());
 }

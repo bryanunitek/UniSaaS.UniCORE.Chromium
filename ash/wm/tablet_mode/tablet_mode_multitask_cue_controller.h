@@ -15,7 +15,7 @@
 #include "base/timer/timer.h"
 #include "chromeos/ui/frame/multitask_menu/multitask_menu_nudge_controller.h"
 #include "ui/aura/window_observer.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/wm/public/activation_change_observer.h"
 
 namespace ash {
@@ -105,7 +105,7 @@ class ASH_EXPORT TabletModeMultitaskCueController
   chromeos::MultitaskMenuNudgeController nudge_controller_;
 
   // The solid color layer that represents the cue.
-  std::unique_ptr<ui::Layer> cue_layer_;
+  std::unique_ptr<ui::LayerSolidColor> cue_layer_;
 
   // Observes for window destruction or bounds changes.
   base::ScopedObservation<aura::Window, aura::WindowObserver>

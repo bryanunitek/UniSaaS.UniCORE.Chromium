@@ -11,6 +11,7 @@
 #import "base/memory/weak_ptr.h"
 #import "base/types/expected.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/action_target.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/action_target_java_script_feature.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/web_actor_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
@@ -23,33 +24,34 @@ namespace actor {
 
 class TypeToolJavaScriptFeature;
 
-class ProfileContextResolver;
-
 // Tool to type text into an element on a page.
 class TypeTool : public WebActorTool {
  public:
   ~TypeTool() override;
 
-  static base::expected<std::unique_ptr<TypeTool>, ToolExecutionResult> Create(
-      const optimization_guide::proto::TypeAction& action,
-      const ProfileContextResolver& profile_context_resolver);
+  static std::unique_ptr<TypeTool> Create(
+      base::WeakPtr<web::WebState> web_state,
+      const optimization_guide::proto::TypeAction& action);
 
   // ActorTool:
+  void Validate(ToolExecutionCallback callback) override;
   void Execute(ToolExecutionCallback callback) override;
   base::WeakPtr<web::WebState> GetTargetWebState() const override;
   ToolType GetToolType() const override;
+  std::string DebugString() const override;
 
  private:
-  TypeTool(const optimization_guide::proto::TypeAction& action,
-           base::WeakPtr<web::WebState> web_state);
+  TypeTool(base::WeakPtr<web::WebState> web_state,
+           const optimization_guide::proto::TypeAction& action,
+           ActionTarget target);
 
   void OnTargetFrameResolved(
-      optimization_guide::proto::TypeAction action,
       ToolExecutionCallback callback,
       base::expected<ActionTargetJavaScriptFeature::TargetFrameResult,
                      ToolExecutionResult> result);
 
   optimization_guide::proto::TypeAction action_;
+  ActionTarget target_;
   base::WeakPtr<web::WebState> web_state_;
   raw_ptr<TypeToolJavaScriptFeature> js_feature_ = nullptr;
   base::WeakPtrFactory<TypeTool> weak_ptr_factory_{this};

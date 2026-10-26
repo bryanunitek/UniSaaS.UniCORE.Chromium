@@ -31,6 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EXPORTED_WEB_SETTINGS_IMPL_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EXPORTED_WEB_SETTINGS_IMPL_H_
 
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/public/mojom/v8_cache_options.mojom-blink.h"
 #include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-blink.h"
 #include "third_party/blink/public/web/web_settings.h"
@@ -64,6 +65,7 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
   void SetAllowRunningOfInsecureContent(bool) override;
   void SetAllowScriptsToCloseWindows(bool) override;
   void SetAllowUnrestrictedWindowFocus(bool) override;
+  void SetClipboardFocusExempt(bool) override;
   void SetAllowUniversalAccessFromFileURLs(bool) override;
   void SetAlwaysShowContextMenuOnTouch(bool) override;
   void SetAntialiased2dCanvasEnabled(bool) override;
@@ -122,6 +124,7 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
   void SetMaxTouchPoints(int) override;
   void SetPictureInPictureEnabled(bool) override;
   void SetWebAppScope(const WebString&) override;
+  void SetWebAppCustomManifestUrl(const WebURL&) override;
   void SetIsInitialProfile(bool) override;
   void SetPresentationRequiresUserGesture(bool) override;
   void SetEmbeddedMediaExperienceEnabled(bool) override;
@@ -265,7 +268,7 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
   bool MockGestureTapHighlightsEnabled() const;
 
  private:
-  Settings* settings_;
+  raw_ptr<Settings, UnprotectedInRelease | DanglingUntriaged> settings_;
   Persistent<DevToolsEmulator> dev_tools_emulator_;
   bool render_v_sync_notification_enabled_;
   bool auto_zoom_focused_editable_to_legible_scale_;

@@ -11,7 +11,8 @@
 #include <string>
 
 #include "base/functional/callback.h"
-#include "components/payments/content/web_app_manifest.h"
+#include "components/payments/content/web_app_installation_info.h"
+#include "components/payments/core/web_app_manifest_section.h"
 #include "content/public/browser/document_user_data.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/installed_payment_apps_finder.h"
@@ -36,6 +37,7 @@ namespace payments {
 class CSPChecker;
 class PaymentManifestDownloader;
 class WebPaymentsWebDataService;
+class ServiceWorkerPaymentAppFinderTestApi;
 
 // Retrieves service worker payment apps.
 class ServiceWorkerPaymentAppFinder
@@ -85,28 +87,11 @@ class ServiceWorkerPaymentAppFinder
       const std::vector<mojom::PaymentMethodDataPtr>& requested_method_data,
       content::InstalledPaymentAppsFinder::PaymentApps* apps);
 
-  // Ignore the given |method|, so that no installed or installable service
-  // workers would ever be looked up in GetAllPaymentApps(). Calling this
-  // multiple times will union the new payment methods with the existing set.
-  void IgnorePaymentMethodForTest(const std::string& method);
-
  private:
   friend class content::DocumentUserData<ServiceWorkerPaymentAppFinder>;
-  friend class IframeCspTest;
-  friend class PaymentRequestPaymentAppTest;
-  friend class ServiceWorkerPaymentAppFinderBrowserTest;
-  friend class PaymentRequestPlatformBrowserTestBase;
-  friend class PaymentMethodViewControllerTest;
-  friend class PaymentHandlerMissingIconTest;
-  friend class EmptyParametersTest;
+  friend class ServiceWorkerPaymentAppFinderTestApi;
 
   explicit ServiceWorkerPaymentAppFinder(content::RenderFrameHost* rfh);
-
-  // Should be used only in tests.
-  // Should be called before every call to GetAllPaymentApps() (because the test
-  // downloader is moved into the SelfDeletingServiceWorkerPaymentAppFinder).
-  void SetDownloaderAndIgnorePortInOriginComparisonForTesting(
-      std::unique_ptr<PaymentManifestDownloader> downloader);
 
   DOCUMENT_USER_DATA_KEY_DECL();
 

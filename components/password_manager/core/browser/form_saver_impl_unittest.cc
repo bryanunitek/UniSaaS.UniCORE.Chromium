@@ -17,11 +17,13 @@
 #include "base/test/gmock_move_support.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
+#include "components/affiliations/core/browser/match_type.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
 #include "components/password_manager/core/browser/password_store/mock_password_store_interface.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -50,10 +52,10 @@ PasswordForm CreateObserved() {
 PasswordForm CreatePending(
     std::u16string_view username,
     std::u16string_view password,
-    PasswordForm::MatchType match_type = PasswordForm::MatchType::kExact) {
+    affiliations::MatchType match_type = affiliations::MatchType::kExact) {
   PasswordForm form = CreateObserved();
   form.username_value = std::u16string(username);
-  form.password_value = std::u16string(password);
+  form.password_value = PasswordString(std::u16string(password));
   form.match_type = match_type;
   return form;
 }
@@ -150,7 +152,8 @@ TEST_P(FormSaverImplSaveTest, Write_EmptyStore) {
 TEST_P(FormSaverImplSaveTest, Write_EmptyStoreWithPending) {
   PasswordForm pending = CreatePending(u"nameofuser", u"wordToP4a55");
 
-  SaveCredential(pending, {&pending} /* matches */, pending.password_value);
+  SaveCredential(pending, {&pending} /* matches */,
+                 pending.password_value.value());
 }
 
 // Pushes the credential to the store with |matches| containing the pending
@@ -159,7 +162,7 @@ TEST_P(FormSaverImplSaveTest, Write_EmptyStoreWithPendingOldPassword) {
   PasswordForm pending = CreatePending(u"nameofuser", u"old_password");
 
   SaveCredential(CreatePending(u"nameofuser", u"new_password"),
-                 {&pending} /* matches */, pending.password_value);
+                 {&pending} /* matches */, pending.password_value.value());
 }
 
 // Check that storing credentials with a non-empty username results in deleting
@@ -188,7 +191,7 @@ TEST_P(FormSaverImplSaveTest,
 
   PasswordForm no_username = pending;
   no_username.username_value.clear();
-  no_username.password_value = u"abcd";
+  no_username.password_value = PasswordString(u"abcd");
 
   EXPECT_CALL(*mock_store_, RemoveLogin).Times(0);
   SaveCredential(pending, {&no_username}, std::u16string());
@@ -216,7 +219,7 @@ TEST_P(FormSaverImplSaveTest, Write_AndDoNotDeleteEmptyUsernamePSLCredentials) {
   PasswordForm stored = pending;
   PasswordForm no_username_psl = pending;
   no_username_psl.username_value.clear();
-  no_username_psl.match_type = PasswordForm::MatchType::kPSL;
+  no_username_psl.match_type = affiliations::MatchType::kPSL;
   const std::vector<raw_ptr<const PasswordForm, VectorExperimental>> matches = {
       &stored, &no_username_psl};
 
@@ -245,7 +248,7 @@ TEST_P(FormSaverImplSaveTest, Write_AndUpdatePasswordValuesOnExactMatch) {
   duplicate.url = GURL("https://example.in/somePath");
 
   PasswordForm expected_update = duplicate;
-  expected_update.password_value = kNewPassword;
+  expected_update.password_value = PasswordString(kNewPassword);
   expected_update.date_password_modified = base::Time::Now();
 
   EXPECT_CALL(*mock_store_,
@@ -260,12 +263,12 @@ TEST_P(FormSaverImplSaveTest, Write_AndUpdatePasswordValuesOnPSLMatch) {
   constexpr char16_t kNewPassword[] = u"new_password";
 
   PasswordForm duplicate =
-      CreatePending(u"nameofuser", kOldPassword, PasswordForm::MatchType::kPSL);
+      CreatePending(u"nameofuser", kOldPassword, affiliations::MatchType::kPSL);
   duplicate.url = GURL("https://www.example.in");
   duplicate.signon_realm = duplicate.url.spec();
 
   PasswordForm expected_update = duplicate;
-  expected_update.password_value = kNewPassword;
+  expected_update.password_value = PasswordString(kNewPassword);
   expected_update.date_password_modified = base::Time::Now();
   EXPECT_CALL(*mock_store_,
               UpdateLogin(EqStoredCredential(expected_update), _));
@@ -283,12 +286,12 @@ TEST_P(FormSaverImplSaveTest, Write_UpdatePropagatesBackup) {
   pending.date_password_modified = base::Time::Now() - base::Seconds(1);
 
   PasswordForm duplicate =
-      CreatePending(u"nameofuser", kOldPassword, PasswordForm::MatchType::kPSL);
+      CreatePending(u"nameofuser", kOldPassword, affiliations::MatchType::kPSL);
   duplicate.url = GURL("https://www.example.in");
   duplicate.signon_realm = duplicate.url.spec();
 
   PasswordForm expected_update = duplicate;
-  expected_update.password_value = kNewPassword;
+  expected_update.password_value = PasswordString(kNewPassword);
   expected_update.SetPasswordBackupNote(pending.GetPasswordBackup().value());
   expected_update.date_password_modified = base::Time::Now();
   EXPECT_CALL(*mock_store_,
@@ -305,22 +308,22 @@ TEST_P(FormSaverImplSaveTest, Write_UpdateDeletesAllAffectedBackups) {
   pending.date_password_modified = base::Time::Now() - base::Seconds(1);
 
   PasswordForm match_1 =
-      CreatePending(u"nameofuser", kOldPassword, PasswordForm::MatchType::kPSL);
+      CreatePending(u"nameofuser", kOldPassword, affiliations::MatchType::kPSL);
   match_1.SetPasswordBackupNote(kBackupPassword);
   match_1.url = GURL("https://www.example.in");
   match_1.signon_realm = match_1.url.spec();
   PasswordForm match_2 =
-      CreatePending(u"nameofuser", kOldPassword, PasswordForm::MatchType::kPSL);
+      CreatePending(u"nameofuser", kOldPassword, affiliations::MatchType::kPSL);
   match_2.SetPasswordBackupNote(kBackupPassword);
   match_2.url = GURL("https://account.example.in");
   match_2.signon_realm = match_2.url.spec();
 
   PasswordForm expected_update_1 = match_1;
-  expected_update_1.password_value = kNewPassword;
+  expected_update_1.password_value = PasswordString(kNewPassword);
   expected_update_1.DeletePasswordBackupNote();
   expected_update_1.date_password_modified = base::Time::Now();
   PasswordForm expected_update_2 = match_2;
-  expected_update_2.password_value = kNewPassword;
+  expected_update_2.password_value = PasswordString(kNewPassword);
   expected_update_2.DeletePasswordBackupNote();
   expected_update_2.date_password_modified = base::Time::Now();
   EXPECT_CALL(*mock_store_,
@@ -340,12 +343,12 @@ TEST_P(FormSaverImplSaveTest, Write_UpdatePropagatesActorPermission) {
   pending.date_password_modified = base::Time::Now() - base::Seconds(1);
 
   PasswordForm duplicate =
-      CreatePending(u"nameofuser", kOldPassword, PasswordForm::MatchType::kPSL);
+      CreatePending(u"nameofuser", kOldPassword, affiliations::MatchType::kPSL);
   duplicate.url = GURL("https://www.example.in");
   duplicate.signon_realm = duplicate.url.spec();
 
   PasswordForm expected_update = duplicate;
-  expected_update.password_value = kNewPassword;
+  expected_update.password_value = PasswordString(kNewPassword);
   expected_update.actor_login_approved = true;
   expected_update.date_password_modified = base::Time::Now();
   EXPECT_CALL(*mock_store_,
@@ -362,13 +365,13 @@ TEST_P(FormSaverImplSaveTest, Write_UpdateDoesNotDeletePermission) {
   pending.date_password_modified = base::Time::Now() - base::Seconds(1);
 
   PasswordForm duplicate =
-      CreatePending(u"nameofuser", kOldPassword, PasswordForm::MatchType::kPSL);
+      CreatePending(u"nameofuser", kOldPassword, affiliations::MatchType::kPSL);
   duplicate.url = GURL("https://www.example.in");
   duplicate.signon_realm = duplicate.url.spec();
   duplicate.actor_login_approved = true;
 
   PasswordForm expected_update = duplicate;
-  expected_update.password_value = kNewPassword;
+  expected_update.password_value = PasswordString(kNewPassword);
   expected_update.date_password_modified = base::Time::Now();
   EXPECT_CALL(*mock_store_,
               UpdateLogin(EqStoredCredential(expected_update), _));
@@ -385,14 +388,14 @@ TEST_P(FormSaverImplSaveTest, Write_AndUpdatePasswordValues_IgnoreNonMatches) {
   different_username.username_value = u"someuser";
 
   PasswordForm different_password = pending;
-  different_password.password_value = u"some_password";
+  different_password.password_value = PasswordString(u"some_password");
 
   PasswordForm empty_username = pending;
   empty_username.username_value.clear();
   const std::vector<raw_ptr<const PasswordForm, VectorExperimental>> matches = {
       &different_username, &different_password, &empty_username};
 
-  pending.password_value = kNewPassword;
+  pending.password_value = PasswordString(kNewPassword);
   EXPECT_CALL(*mock_store_, UpdateLogin).Times(0);
   EXPECT_CALL(*mock_store_, UpdateLoginWithPrimaryKey).Times(0);
   SaveCredential(pending, matches, kOldPassword);
@@ -455,7 +458,7 @@ TEST_F(FormSaverImplTest, Blocklist) {
   observed.blocked_by_user = false;
   observed.username_value = u"user1";
   observed.username_element = u"user";
-  observed.password_value = u"12345";
+  observed.password_value = PasswordString(u"12345");
   observed.password_element = u"password";
   observed.all_alternative_usernames = {{AlternativeElement::Value(u"user2"),
                                          autofill::FieldRendererId(1),

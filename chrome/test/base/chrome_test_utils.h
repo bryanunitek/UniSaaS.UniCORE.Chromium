@@ -10,7 +10,6 @@
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 
-class GURL;
 class Profile;
 
 namespace content {
@@ -57,39 +56,6 @@ Profile* GetProfile(const PlatformBrowserTest* browser_test);
 // to specify the expected commit URL for URLs causing redirects.
 [[nodiscard]] bool NavigateToURL(content::WebContents* web_contents,
                                  const GURL& url);
-
-// Returns the test data path used by the embedded test server.
-base::FilePath GetChromeTestDataDir();
-
-// Overrides the path chrome::DIR_TEST_DATA. Used early in test startup so the
-// value is available in constructors and SetUp methods.
-void OverrideChromeTestDataDir();
-
-// Generate the file path for testing a particular test.
-// The file for the tests is all located in
-// test_root_directory/dir/<file>
-// The returned path is base::FilePath format.
-base::FilePath GetTestFilePath(const base::FilePath& dir,
-                               const base::FilePath& file);
-
-// Generate the URL for testing a particular test.
-// HTML for the tests is all located in
-// test_root_directory/dir/<file>
-// The returned path is GURL format.
-GURL GetTestUrl(const base::FilePath& dir, const base::FilePath& file);
-
-// This class is inherited by unit test fixtures that leverage death tests with
-// a dependency on TestingBrowserProcess. It is necessary as currently death
-// tests will incompletely initialize the test environment, see bug below.
-// TODO(crbug.com/487292986): This should be eliminated once we update chromium
-// unit tests to avoid using listeners for test setup, or all existing death
-// test clients are updated to allow for the existence of the g_browser_process,
-// at which point this can be merged up into `ChromeUnitTestSuiteInitializer`.
-class TestingBrowserProcessDeathTestMixin {
- public:
-  TestingBrowserProcessDeathTestMixin();
-  ~TestingBrowserProcessDeathTestMixin() = default;
-};
 
 }  // namespace chrome_test_utils
 

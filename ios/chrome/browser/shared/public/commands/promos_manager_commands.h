@@ -8,8 +8,10 @@
 #import <StoreKit/StoreKit.h>
 
 @class ShowSigninCommand;
+enum class CredentialProviderPromoTrigger;
 
 // Commands to show app-wide promos.
+// TODO(crbug.com/557070838): Rename this protocol, drop the "Manager".
 @protocol PromosManagerCommands <NSObject>
 
 // Displays an eligible promo (selected by the Promos Manager) if one exists.
@@ -20,9 +22,6 @@
 
 // Makes a request to Apple to present the user the App Store Rating Promo.
 - (void)showAppStoreReviewPrompt;
-
-// Asks the presenter to display the signin UI configured by `command`.
-- (void)showSignin:(ShowSigninCommand*)command;
 
 // Display WhatsNew as a promo.
 - (void)showWhatsNewPromo;
@@ -44,6 +43,10 @@
 
 // Shows the Docking promo.
 - (void)showDockingPromo;
+
+// Shows the Credential Provider Promo with `trigger`.
+- (void)showCredentialProviderPromoWithTrigger:
+    (CredentialProviderPromoTrigger)trigger;
 
 @end
 

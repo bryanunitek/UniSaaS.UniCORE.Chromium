@@ -10,6 +10,7 @@ load("@chromium-luci//builder_health_indicators.star", "health_spec")
 load("@chromium-luci//ci.star", "ci")
 load("@chromium-luci//consoles.star", "consoles")
 load("@chromium-luci//gn_args.star", "gn_args")
+load("@chromium-luci//gpu.star", shared_gpu = "gpu")
 load("@chromium-luci//targets.star", "targets")
 load("//lib/ci_constants.star", "ci_constants")
 load("//lib/gardener_rotations.star", "gardener_rotations")
@@ -20,7 +21,7 @@ load("//project.star", "settings")
 ci.defaults.set(
     executable = ci_constants.DEFAULT_EXECUTABLE,
     builder_group = "chromium.dawn",
-    pool = gpu.ci.POOL,
+    pool = shared_gpu.ci.POOL,
     gardener_rotations = gardener_rotations.DAWN,
     contact_team_email = "chrome-gpu-infra@google.com",
     execution_timeout = ci_constants.DEFAULT_EXECUTION_TIMEOUT,
@@ -70,7 +71,7 @@ consoles.console_view(
     },
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "Dawn Chromium Presubmit",
     branch_selector = [
         branches.selector.ANDROID_BRANCHES,
@@ -99,7 +100,8 @@ gpu.ci.linux_builder(
     gn_args = gn_args.config(
         configs = [
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "gpu_tests",
@@ -125,7 +127,7 @@ gpu.ci.linux_builder(
     execution_timeout = 30 * time.minute,
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "Dawn Linux x64 Builder",
     description_html = "Builds Linux x64 binaries using ToT Dawn",
     builder_spec = builder_config.builder_spec(
@@ -149,7 +151,8 @@ gpu.ci.linux_builder(
     gn_args = gn_args.config(
         configs = [
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "gpu_tests",
@@ -164,7 +167,7 @@ gpu.ci.linux_builder(
     ),
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "Dawn Linux x64 DEPS Builder",
     branch_selector = branches.selector.LINUX_BRANCHES,
     description_html = "Builds Linux x64 binaries using DEPS-ed in Dawn",
@@ -188,7 +191,8 @@ gpu.ci.linux_builder(
     gn_args = gn_args.config(
         configs = [
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "gpu_tests",
@@ -208,7 +212,7 @@ gpu.ci.linux_builder(
     cq_mirrors_console_view = "mirrors",
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "Dawn Android arm DEPS Builder",
     description_html = "Builds Android arm binaries using DEPS-ed in Dawn",
     builder_spec = builder_config.builder_spec(
@@ -235,7 +239,8 @@ gpu.ci.linux_builder(
         configs = [
             "android_builder",
             "android_fastbuild",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "gpu_tests",
@@ -249,7 +254,7 @@ gpu.ci.linux_builder(
     siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "Dawn Android arm64 DEPS Builder",
     description_html = "Builds Android arm64 binaries using DEPS-ed in Dawn",
     builder_spec = builder_config.builder_spec(
@@ -276,7 +281,8 @@ gpu.ci.linux_builder(
             "android_builder",
             "android_fastbuild",
             "arm64",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "gpu_tests",
@@ -635,6 +641,14 @@ ci.thin_tester(
         mixins = [
             "linux_nvidia_gtx_1660_stable",
         ],
+        per_test_modifications = {
+            "webgpu_cts_tests": targets.mixin(
+                # Mostly equivalent test coverage is provided by the version
+                # with backend validation enabled and the GTX 1660 fleet is
+                # overloaded. See crbug.com/559526702.
+                ci_only = True,
+            ),
+        },
     ),
     targets_settings = targets.settings(
         browser_config = targets.browser_config.RELEASE,
@@ -647,7 +661,7 @@ ci.thin_tester(
     cq_mirrors_console_view = "mirrors",
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "Dawn Android arm Builder",
     description_html = "Builds Android arm binaries using ToT Dawn",
     builder_spec = builder_config.builder_spec(
@@ -675,7 +689,8 @@ gpu.ci.linux_builder(
         configs = [
             "android_builder",
             "android_fastbuild",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "gpu_tests",
@@ -689,7 +704,7 @@ gpu.ci.linux_builder(
     siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "Dawn Android arm64 Builder",
     description_html = "Builds Android arm64 binaries using ToT Dawn",
     builder_spec = builder_config.builder_spec(
@@ -717,7 +732,8 @@ gpu.ci.linux_builder(
             "android_builder",
             "android_fastbuild",
             "arm64",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "gpu_tests",
@@ -1099,21 +1115,16 @@ ci.thin_tester(
         run_tests_serially = True,
     ),
     targets = targets.bundle(
-        # TODO(crbug.com/333424893): Enable tests.
         targets = [
-            "gpu_noop_sleep_telemetry_test",
+            "gpu_dawn_galaxy_s24_gtests",
+            "gpu_dawn_galaxy_s24_telemetry_tests",
         ],
         mixins = [
             "has_native_resultdb_integration",
             "gpu_samsung_s24_stable",
             "limited_capacity_bot",
+            "no_tombstones",
         ],
-        per_test_modifications = {
-            "noop_sleep_tests": targets.mixin(
-                # TODO(crbug.com/333424893): Enable tests.
-                experiment_percentage = 100,
-            ),
-        },
     ),
     targets_settings = targets.settings(
         browser_config = targets.browser_config.ANDROID_CHROMIUM,
@@ -1124,6 +1135,7 @@ ci.thin_tester(
         category = "ToT|Android",
         short_name = "s24",
     ),
+    execution_timeout = 6 * time.hour,
 )
 
 ci.thin_tester(
@@ -1227,10 +1239,12 @@ ci.thin_tester(
     targets = targets.bundle(
         # If the experimental configuration is the same as stable, this should
         # only be running 'gpu_noop_sleep_telemetry_test'. Otherwise, this
-        # should be running the same tests as 'Dawn LKinux x64 Release (NVIDIA
+        # should be running the same tests as 'Dawn Linux x64 Release (NVIDIA
         # GTX 1660)'.
         targets = [
-            "gpu_noop_sleep_telemetry_test",
+            "dawn_chromium_isolated_scripts",
+            "gpu_common_gtests_passthrough",
+            "gpu_dawn_compat_telemetry_tests",
         ],
         mixins = [
             "linux_nvidia_gtx_1660_experimental",
@@ -1242,10 +1256,10 @@ ci.thin_tester(
         os_type = targets.os_type.LINUX,
     ),
     # Uncomment this entry when this experimental tester is actually in use.
-    # console_view_entry = consoles.console_view_entry(
-    #     category = "ToT|Linux|Nvidia",
-    #     short_name = "exp",
-    # ),
+    console_view_entry = consoles.console_view_entry(
+        category = "ToT|Linux|Nvidia",
+        short_name = "exp",
+    ),
     list_view = "chromium.gpu.experimental",
 )
 
@@ -1400,6 +1414,14 @@ ci.thin_tester(
         mixins = [
             "linux_nvidia_gtx_1660_stable",
         ],
+        per_test_modifications = {
+            "webgpu_cts_tests": targets.mixin(
+                # Mostly equivalent test coverage is provided by the version
+                # with backend validation enabled and the GTX 1660 fleet is
+                # overloaded. See crbug.com/559526702.
+                ci_only = True,
+            ),
+        },
     ),
     targets_settings = targets.settings(
         browser_config = targets.browser_config.RELEASE,
@@ -1411,7 +1433,7 @@ ci.thin_tester(
     ),
 )
 
-gpu.ci.mac_builder(
+shared_gpu.ci.mac_builder(
     name = "Dawn Mac arm64 Builder",
     description_html = "Builds Mac arm64 binaries using ToT Dawn",
     builder_spec = builder_config.builder_spec(
@@ -1435,7 +1457,8 @@ gpu.ci.mac_builder(
     gn_args = gn_args.config(
         configs = [
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "arm64",
@@ -1450,7 +1473,7 @@ gpu.ci.mac_builder(
     ),
 )
 
-gpu.ci.mac_builder(
+shared_gpu.ci.mac_builder(
     name = "Dawn Mac arm64 DEPS Builder",
     branch_selector = branches.selector.MAC_BRANCHES,
     description_html = "Builds Mac arm64 binaries using DEPS-ed in Dawn",
@@ -1472,7 +1495,8 @@ gpu.ci.mac_builder(
     gn_args = gn_args.config(
         configs = [
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "arm64",
@@ -1563,29 +1587,26 @@ ci.thin_tester(
         # should have the same test_suites as 'Dawn Mac arm64 Release (Apple
         # M2)'.
         targets = [
-            "dawn_chromium_isolated_scripts",
-            "gpu_common_gtests_passthrough",
-            "gpu_dawn_telemetry_tests",
-            "gpu_dawn_webgpu_cts_default_features",
+            "gpu_noop_sleep_telemetry_test",
         ],
         mixins = [
             "mac_arm64_apple_m2_retina_gpu_experimental",
         ],
-        per_test_modifications = {
-            "webgpu_cts_default_features_tests": targets.mixin(
-                ci_only = True,
-            ),
-        },
+        # per_test_modifications = {
+        #     "webgpu_cts_default_features_tests": targets.mixin(
+        #         ci_only = True,
+        #     ),
+        # },
     ),
     targets_settings = targets.settings(
         browser_config = targets.browser_config.RELEASE,
         os_type = targets.os_type.MAC,
     ),
     # Uncomment this entry when this experimental tester is actually in use.
-    console_view_entry = consoles.console_view_entry(
-        category = "ToT|Mac",
-        short_name = "exp",
-    ),
+    # console_view_entry = consoles.console_view_entry(
+    #     category = "ToT|Mac",
+    #     short_name = "exp",
+    # ),
     list_view = "chromium.gpu.experimental",
 )
 
@@ -1639,7 +1660,7 @@ ci.thin_tester(
     ),
 )
 
-gpu.ci.mac_builder(
+shared_gpu.ci.mac_builder(
     name = "Dawn Mac x64 Builder",
     description_html = "Builds Mac x64 binaries using ToT Dawn",
     builder_spec = builder_config.builder_spec(
@@ -1664,7 +1685,8 @@ gpu.ci.mac_builder(
     gn_args = gn_args.config(
         configs = [
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "x64",
@@ -1679,7 +1701,7 @@ gpu.ci.mac_builder(
     ),
 )
 
-gpu.ci.mac_builder(
+shared_gpu.ci.mac_builder(
     name = "Dawn Mac x64 DEPS Builder",
     branch_selector = branches.selector.MAC_BRANCHES,
     description_html = "Builds Mac x64 binaries using DEPS-ed in Dawn",
@@ -1702,7 +1724,8 @@ gpu.ci.mac_builder(
     gn_args = gn_args.config(
         configs = [
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "x64",
@@ -2111,7 +2134,7 @@ ci.thin_tester(
     ),
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "Dawn Win10 x64 ASAN Builder",
     description_html = "Builds Windows x64 binaries with ASan enabled using ToT Dawn",
     # One build every 2 hours.
@@ -2138,7 +2161,8 @@ gpu.ci.windows_builder(
             "dawn_use_built_dxc",
             "dawn_enable_opengles",
             "asan",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "gpu_tests",
@@ -2266,6 +2290,13 @@ ci.thin_tester(
         mixins = [
             "win10_nvidia_gtx_1660_stable",
         ],
+        per_test_modifications = {
+            "webgpu_cts_tests": targets.mixin(
+                swarming = targets.swarming(
+                    shards = 24,
+                ),
+            ),
+        },
     ),
     targets_settings = targets.settings(
         browser_config = targets.browser_config.RELEASE_X64,
@@ -2283,7 +2314,7 @@ ci.thin_tester(
     execution_timeout = 4 * time.hour,
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "Dawn Win10 x64 Builder",
     description_html = "Builds Windows x64 binaries using ToT Dawn",
     builder_spec = builder_config.builder_spec(
@@ -2308,7 +2339,8 @@ gpu.ci.windows_builder(
         configs = [
             "dawn_use_built_dxc",
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "gpu_tests",
@@ -2324,7 +2356,7 @@ gpu.ci.windows_builder(
     siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CI,
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "Dawn Win10 x64 DEPS Builder",
     branch_selector = branches.selector.WINDOWS_BRANCHES,
     description_html = "Builds Windows x64 binaries using DEPS-ed in Dawn",
@@ -2347,7 +2379,8 @@ gpu.ci.windows_builder(
         configs = [
             "dawn_use_built_dxc",
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "gpu_tests",
@@ -2368,7 +2401,7 @@ gpu.ci.windows_builder(
     siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CI,
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "Dawn Win11 arm64 Builder",
     description_html = "Builds Windows arm64 binaries using ToT Dawn",
     builder_spec = builder_config.builder_spec(
@@ -2394,7 +2427,8 @@ gpu.ci.windows_builder(
             "arm64",
             "dawn_use_built_dxc",
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "gpu_tests",
@@ -2421,7 +2455,7 @@ gpu.ci.windows_builder(
     ),
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "Dawn Win11 arm64 DEPS Builder",
     branch_selector = branches.selector.WINDOWS_BRANCHES,
     description_html = "Builds Windows arm64 binaries using DEPS-ed in Dawn",
@@ -2445,7 +2479,8 @@ gpu.ci.windows_builder(
             "arm64",
             "dawn_use_built_dxc",
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "gpu_tests",
@@ -2474,6 +2509,7 @@ gpu.ci.windows_builder(
 
 ci.thin_tester(
     name = "Dawn Win11 arm64 DEPS Release (Qualcomm Snapdragon X Elite)",
+    branch_selector = branches.selector.WINDOWS_BRANCHES,
     description_html = "Runs DEPS-ed in Dawn tests on stable Windows 11/Qualcomm Snapdragon X Elite configs (Dell Latitude 7455)",
     parent = "ci/Dawn Win11 arm64 DEPS Builder",
     builder_spec = builder_config.builder_spec(
@@ -2682,6 +2718,14 @@ ci.thin_tester(
         mixins = [
             "win10_nvidia_gtx_1660_stable",
         ],
+        per_test_modifications = {
+            "webgpu_cts_tests": targets.mixin(
+                # Mostly equivalent test coverage is provided by the version
+                # with backend validation enabled and the GTX 1660 fleet is
+                # overloaded. See crbug.com/559526702.
+                ci_only = True,
+            ),
+        },
     ),
     targets_settings = targets.settings(
         browser_config = targets.browser_config.RELEASE_X64,
@@ -2913,7 +2957,18 @@ ci.thin_tester(
         targets = [
             "dawn_chromium_isolated_scripts",
             "gpu_common_gtests_passthrough",
-            "gpu_dawn_telemetry_win_x64_tests",
+            targets.bundle(
+                targets = "gpu_dawn_telemetry_win_x64_tests",
+                mixins = [
+                    targets.mixin(
+                        args = [
+                            # TODO(crbug.com/574658973): Remove this once the
+                            # driver shader cache slowdown is resolved.
+                            "--clear-system-shader-cache",
+                        ],
+                    ),
+                ],
+            ),
         ],
         mixins = [
             "limited_capacity_bot",
@@ -2974,6 +3029,12 @@ ci.thin_tester(
             "webgpu_cts_default_features_tests": targets.mixin(
                 ci_only = True,
             ),
+            "webgpu_cts_tests": targets.mixin(
+                # Mostly equivalent test coverage is provided by the version
+                # with backend validation enabled and the GTX 1660 fleet is
+                # overloaded. See crbug.com/559526702.
+                ci_only = True,
+            ),
         },
     ),
     targets_settings = targets.settings(
@@ -2988,7 +3049,7 @@ ci.thin_tester(
     execution_timeout = 4 * time.hour,
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "Dawn Win10 x86 Builder",
     description_html = "Builds Windows x86 binaries using ToT Dawn",
     builder_spec = builder_config.builder_spec(
@@ -3012,7 +3073,8 @@ gpu.ci.windows_builder(
     gn_args = gn_args.config(
         configs = [
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "x86",
@@ -3028,7 +3090,7 @@ gpu.ci.windows_builder(
     siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CI,
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "Dawn Win10 x86 DEPS Builder",
     branch_selector = branches.selector.WINDOWS_BRANCHES,
     description_html = "Builds Windows x86 binaries using DEPS-ed in Dawn",
@@ -3050,7 +3112,8 @@ gpu.ci.windows_builder(
     gn_args = gn_args.config(
         configs = [
             "dawn_enable_opengles",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "x86",
@@ -3267,7 +3330,18 @@ ci.thin_tester(
         # should be running the same test_suites as 'Dawn Win10 x86 Release
         # (NVIDIA)'.
         targets = [
-            "gpu_dawn_telemetry_tests_fxc",
+            targets.bundle(
+                targets = "gpu_dawn_telemetry_tests_fxc",
+                mixins = [
+                    targets.mixin(
+                        args = [
+                            # TODO(crbug.com/574658973): Remove this once the
+                            # driver shader cache slowdown is resolved.
+                            "--clear-system-shader-cache",
+                        ],
+                    ),
+                ],
+            ),
             "gpu_dawn_integration_gtests_passthrough",
             "gpu_dawn_isolated_scripts",
         ],

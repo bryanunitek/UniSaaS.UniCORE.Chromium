@@ -274,7 +274,7 @@ void ChromeExtensionRegistrarDelegate::DoLoadExtensionForReload(
 
   // Check the installed extensions to see if what we're reloading was already
   // installed.
-  std::optional<ExtensionInfo> installed_extension(
+  std::optional<ExtensionPrefs::InstallRecord> installed_extension(
       extension_prefs_->GetInstalledExtensionInfo(extension_id));
   if (installed_extension && installed_extension->extension_manifest.get()) {
     InstalledLoader(profile_).Load(*installed_extension, false);
@@ -594,9 +594,11 @@ void ChromeExtensionRegistrarDelegate::CheckPermissionsIncrease(
 
 void ChromeExtensionRegistrarDelegate::UpdateActiveExtensionsInCrashReporter() {
   std::set<std::string> extension_ids;
+  std::set<std::string> component_extension_names;
   for (const auto& extension : registry_->enabled_extensions()) {
-    if (!extension->is_theme() &&
-        extension->location() != ManifestLocation::kComponent) {
+    if (extension->location() == mojom::ManifestLocation::kComponent) {
+      component_extension_names.insert(extension->name());
+    } else if (!extension->is_theme()) {
       extension_ids.insert(extension->id());
     }
   }
@@ -605,6 +607,7 @@ void ChromeExtensionRegistrarDelegate::UpdateActiveExtensionsInCrashReporter() {
   // crash_keys::SetActiveExtensions is per-process. See
   // http://crbug.com/41096321.
   crash_keys::SetActiveExtensions(extension_ids);
+  crash_keys::SetActiveComponentExtensions(component_extension_names);
 }
 
 // static
@@ -641,14 +644,14 @@ void ChromeExtensionRegistrarDelegate::RecordInstallHistograms(
       UMA_HISTOGRAM_ENUMERATION("Extensions.InstallType.User",
                                 extension->GetType(), 100);
       UMA_HISTOGRAM_ENUMERATION("Extensions.InstallSource.User2",
-                                extension->location(), 100);
+                                extension->location());
       InstalledLoader::RecordPermissionMessagesHistogram(extension, "Install",
                                                          profile_);
     } else {
       UMA_HISTOGRAM_ENUMERATION("Extensions.InstallType.NonUser",
                                 extension->GetType(), 100);
       UMA_HISTOGRAM_ENUMERATION("Extensions.InstallSource.NonUser2",
-                                extension->location(), 100);
+                                extension->location());
     }
   }
 }

@@ -474,7 +474,7 @@ TEST_F(LayoutBoxTest, ControlClip) {
   LayoutBox* target = GetLayoutBoxByElementId("target");
   EXPECT_TRUE(target->HasClipRelatedProperty());
   EXPECT_TRUE(target->ShouldClipOverflowAlongEitherAxis());
-  EXPECT_EQ(PhysicalRect(2, 2, 96, 46), target->ClippingRect(PhysicalOffset()));
+  EXPECT_EQ(PhysicalRect(2, 2, 96, 46), target->ClippingRect());
 }
 
 TEST_F(LayoutBoxTest, VisualOverflowRectWithBlockChild) {
@@ -761,8 +761,7 @@ TEST_F(LayoutBoxTest, OverflowRectsContainPaint) {
   EXPECT_EQ(PhysicalRect(0, 0, 120, 220), container->VisualOverflowRect());
   EXPECT_EQ(PhysicalRect(0, 0, 120, 220), container->SelfVisualOverflowRect());
   EXPECT_CONTENTS_VISUAL_OVERFLOW(PhysicalRect(10, 10, 300, 400), container);
-  EXPECT_EQ(PhysicalRect(10, 10, 100, 200),
-            container->OverflowClipRect(PhysicalOffset()));
+  EXPECT_EQ(PhysicalRect(10, 10, 100, 200), container->OverflowClipRect());
 }
 
 TEST_F(LayoutBoxTest, OverflowRectsOverflowHidden) {
@@ -780,8 +779,7 @@ TEST_F(LayoutBoxTest, OverflowRectsOverflowHidden) {
   EXPECT_EQ(PhysicalRect(0, 0, 120, 220), container->VisualOverflowRect());
   EXPECT_EQ(PhysicalRect(0, 0, 120, 220), container->SelfVisualOverflowRect());
   EXPECT_CONTENTS_VISUAL_OVERFLOW(PhysicalRect(10, 10, 300, 400), container);
-  EXPECT_EQ(PhysicalRect(10, 10, 100, 200),
-            container->OverflowClipRect(PhysicalOffset()));
+  EXPECT_EQ(PhysicalRect(10, 10, 100, 200), container->OverflowClipRect());
 }
 
 TEST_F(LayoutBoxTest, SetTextFieldIntrinsicInlineSize) {
@@ -863,8 +861,7 @@ TEST_F(LayoutBoxTest, DelayedInvalidationLayoutViewScrolled) {
 
   // The background-image will be painted by the LayoutView. Get a reference to
   // it from there.
-  auto* background_image =
-      layout_view->StyleRef().BackgroundLayers().GetImage();
+  auto* background_image = layout_view->Style().BackgroundLayers().GetImage();
   ASSERT_TRUE(background_image);
   auto* image_resource_content = background_image->CachedImage();
   ASSERT_TRUE(image_resource_content);
@@ -1425,15 +1422,15 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsNonScrollable) {
     </div>
   )HTML");
 
-#define EXPECT_ZERO_SCROLL(box)                                            \
-  do {                                                                     \
-    EXPECT_EQ(PhysicalOffset(), box->ScrolledContentOffset());             \
-    const auto* scrollable_area = box->GetScrollableArea();                \
-    EXPECT_EQ(gfx::Vector2d(), scrollable_area->ScrollOffsetInt());        \
-    EXPECT_EQ(gfx::Point(), scrollable_area->ScrollOrigin());              \
-    EXPECT_EQ(gfx::PointF(), scrollable_area->ScrollPosition());           \
-    EXPECT_EQ(gfx::Vector2d(), scrollable_area->MaximumScrollOffsetInt()); \
-    EXPECT_EQ(gfx::Vector2d(), scrollable_area->MinimumScrollOffsetInt()); \
+#define EXPECT_ZERO_SCROLL(box)                                              \
+  do {                                                                       \
+    EXPECT_EQ(PhysicalOffset(), box->ScrolledContentOffset());               \
+    const auto* scrollable_area = box->GetScrollableArea();                  \
+    EXPECT_EQ(gfx::Vector2d(), scrollable_area->PixelSnappedScrollOffset()); \
+    EXPECT_EQ(gfx::Point(), scrollable_area->ScrollOrigin());                \
+    EXPECT_EQ(gfx::PointF(), scrollable_area->ScrollPosition());             \
+    EXPECT_EQ(gfx::Vector2d(), scrollable_area->MaximumScrollOffsetInt());   \
+    EXPECT_EQ(gfx::Vector2d(), scrollable_area->MinimumScrollOffsetInt());   \
   } while (false)
 
   const auto* normal = GetLayoutBoxByElementId("normal");
@@ -1527,7 +1524,7 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsScrollable) {
   const auto* scrollable_area = normal->GetScrollableArea();
   EXPECT_EQ(PhysicalOffset(), normal->ScrolledContentOffset());
   EXPECT_EQ(gfx::Vector2d(), normal->OriginAdjustmentForScrollbars());
-  EXPECT_EQ(gfx::Vector2d(), scrollable_area->ScrollOffsetInt());
+  EXPECT_EQ(gfx::Vector2d(), scrollable_area->PixelSnappedScrollOffset());
   EXPECT_EQ(PhysicalRect(50, 20, 2060, 1040), normal->ScrollableOverflowRect());
   EXPECT_EQ(gfx::Vector2d(1615, 716),
             scrollable_area->MaximumScrollOffsetInt());
@@ -1543,7 +1540,7 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsScrollable) {
   scrollable_area = vlr->GetScrollableArea();
   EXPECT_EQ(PhysicalOffset(), vlr->ScrolledContentOffset());
   EXPECT_EQ(gfx::Vector2d(), vlr->OriginAdjustmentForScrollbars());
-  EXPECT_EQ(gfx::Vector2d(), scrollable_area->ScrollOffsetInt());
+  EXPECT_EQ(gfx::Vector2d(), scrollable_area->PixelSnappedScrollOffset());
   EXPECT_EQ(PhysicalRect(50, 20, 2060, 1040), vlr->ScrollableOverflowRect());
   EXPECT_EQ(gfx::Vector2d(1615, 716),
             scrollable_area->MaximumScrollOffsetInt());
@@ -1559,7 +1556,7 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsScrollable) {
   scrollable_area = vrl->GetScrollableArea();
   EXPECT_EQ(PhysicalOffset(), vrl->ScrolledContentOffset());
   EXPECT_EQ(gfx::Vector2d(), vrl->OriginAdjustmentForScrollbars());
-  EXPECT_EQ(gfx::Vector2d(), scrollable_area->ScrollOffsetInt());
+  EXPECT_EQ(gfx::Vector2d(), scrollable_area->PixelSnappedScrollOffset());
   // Same as "vlr" except for flipping.
   EXPECT_EQ(PhysicalRect(-1565, 20, 2060, 1040), vrl->ScrollableOverflowRect());
   EXPECT_EQ(gfx::Vector2d(0, 716), scrollable_area->MaximumScrollOffsetInt());
@@ -1575,7 +1572,7 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsScrollable) {
   scrollable_area = rtl->GetScrollableArea();
   EXPECT_EQ(PhysicalOffset(), rtl->ScrolledContentOffset());
   EXPECT_EQ(gfx::Vector2d(15, 0), rtl->OriginAdjustmentForScrollbars());
-  EXPECT_EQ(gfx::Vector2d(), scrollable_area->ScrollOffsetInt());
+  EXPECT_EQ(gfx::Vector2d(), scrollable_area->PixelSnappedScrollOffset());
   EXPECT_EQ(PhysicalRect(-1550, 20, 2060, 1040), rtl->ScrollableOverflowRect());
   EXPECT_EQ(gfx::Vector2d(0, 716), scrollable_area->MaximumScrollOffsetInt());
   EXPECT_EQ(gfx::Vector2d(-1615, 0), scrollable_area->MinimumScrollOffsetInt());
@@ -1590,7 +1587,7 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsScrollable) {
   scrollable_area = rtl_vlr->GetScrollableArea();
   EXPECT_EQ(PhysicalOffset(), rtl_vlr->ScrolledContentOffset());
   EXPECT_EQ(gfx::Vector2d(), rtl_vlr->OriginAdjustmentForScrollbars());
-  EXPECT_EQ(gfx::Vector2d(), scrollable_area->ScrollOffsetInt());
+  EXPECT_EQ(gfx::Vector2d(), scrollable_area->PixelSnappedScrollOffset());
   EXPECT_EQ(PhysicalRect(50, -696, 2060, 1040),
             rtl_vlr->ScrollableOverflowRect());
   EXPECT_EQ(gfx::Vector2d(1615, 0), scrollable_area->MaximumScrollOffsetInt());
@@ -1606,7 +1603,7 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsScrollable) {
   scrollable_area = rtl_vrl->GetScrollableArea();
   EXPECT_EQ(PhysicalOffset(), rtl_vrl->ScrolledContentOffset());
   EXPECT_EQ(gfx::Vector2d(), rtl_vrl->OriginAdjustmentForScrollbars());
-  EXPECT_EQ(gfx::Vector2d(), scrollable_area->ScrollOffsetInt());
+  EXPECT_EQ(gfx::Vector2d(), scrollable_area->PixelSnappedScrollOffset());
   // Same as "vlr" except for flipping.
   EXPECT_EQ(PhysicalRect(-1565, -696, 2060, 1040),
             rtl_vrl->ScrollableOverflowRect());
@@ -2065,6 +2062,42 @@ TEST_F(LayoutBoxTest, ContentBoxFragmentedVrl) {
 )HTML");
   const LayoutBox* box = GetLayoutBoxByElementId("elm");
   EXPECT_EQ(box->PhysicalContentBoxRect(), PhysicalRect(24, 6, 200, 50));
+}
+
+TEST_F(LayoutBoxTest, StitchedBlockSize) {
+  SetBodyInnerHTML(R"HTML(
+<div style="columns:3; column-fill:auto; block-size:100px;">
+  <div id="outer" style="block-size:90px;">
+    <div id="middle" style="block-size:100px;">
+      <div id="inner" style="block-size:350px;"></div>
+    </div>
+  </div>
+</div>
+)HTML");
+  const LayoutBox* outer = GetLayoutBoxByElementId("outer");
+  EXPECT_EQ(outer->StitchedBlockSize(), LayoutUnit(90));
+  const LayoutBox* middle = GetLayoutBoxByElementId("middle");
+  EXPECT_EQ(middle->StitchedBlockSize(), LayoutUnit(100));
+  const LayoutBox* inner = GetLayoutBoxByElementId("inner");
+  EXPECT_EQ(inner->StitchedBlockSize(), LayoutUnit(350));
+}
+
+TEST_F(LayoutBoxTest, StitchedBlockSizeVrl) {
+  SetBodyInnerHTML(R"HTML(
+<div style="columns:3; column-fill:auto; block-size:100px; writing-mode:vertical-rl;">
+  <div id="outer" style="block-size:90px;">
+    <div id="middle" style="block-size:100px;">
+      <div id="inner" style="block-size:350px;"></div>
+    </div>
+  </div>
+</div>
+)HTML");
+  const LayoutBox* outer = GetLayoutBoxByElementId("outer");
+  EXPECT_EQ(outer->StitchedBlockSize(), LayoutUnit(90));
+  const LayoutBox* middle = GetLayoutBoxByElementId("middle");
+  EXPECT_EQ(middle->StitchedBlockSize(), LayoutUnit(100));
+  const LayoutBox* inner = GetLayoutBoxByElementId("inner");
+  EXPECT_EQ(inner->StitchedBlockSize(), LayoutUnit(350));
 }
 
 class ElasticOverscrollTestingPlatformSupport : public TestingPlatformSupport {

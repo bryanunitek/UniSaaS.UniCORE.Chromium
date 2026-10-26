@@ -125,7 +125,6 @@ CommandBufferStub::CommandBufferStub(
       active_url_(init_params.active_url),
       context_label_(init_params.label),
       initialized_(false),
-      use_virtualized_gl_context_(false),
       command_buffer_id_(command_buffer_id),
       sequence_id_(sequence_id),
       scheduler_task_runner_(
@@ -195,9 +194,7 @@ void CommandBufferStub::PollWork() {
 void CommandBufferStub::PerformWork() {
   TRACE_EVENT0("gpu", "CommandBufferStub::PerformWork");
   UpdateActiveUrl();
-  // TODO(sunnyps): Should this use ScopedCrashKey instead?
-  crash_keys::gpu_gl_context_is_virtual.Set(use_virtualized_gl_context_ ? "1"
-                                                                        : "0");
+
   if (decoder_context_.get() && !MakeCurrent())
     return;
   std::optional<gles2::ProgramCache::ScopedCacheUse> cache_use;
@@ -295,17 +292,16 @@ bool CommandBufferStub::MakeCurrent() {
 
 void CommandBufferStub::CreateCacheUse(
     std::optional<gles2::ProgramCache::ScopedCacheUse>& cache_use) {
-  cache_use.emplace(
-      channel_->gpu_channel_manager()->program_cache(),
-      base::BindRepeating(&DecoderClient::CacheBlob, base::Unretained(this),
-                          gpu::GpuDiskCacheType::kGlShaders));
+  if (auto* cache = channel_->gpu_channel_manager()->program_cache()) {
+    cache_use.emplace(
+        cache,
+        base::BindRepeating(&DecoderClient::CacheBlob, base::Unretained(this),
+                            gpu::GpuDiskCacheType::kGlShaders));
+  }
 }
 
 void CommandBufferStub::Destroy() {
   UpdateActiveUrl();
-  // TODO(sunnyps): Should this use ScopedCrashKey instead?
-  crash_keys::gpu_gl_context_is_virtual.Set(use_virtualized_gl_context_ ? "1"
-                                                                        : "0");
   if (wait_for_token_) {
     std::move(wait_for_token_->callback).Run(gpu::CommandBuffer::State());
     wait_for_token_.reset();
@@ -631,10 +627,6 @@ void CommandBufferStub::ScheduleGrContextCleanup() {
 
 void CommandBufferStub::HandleReturnData(base::span<const uint8_t> data) {
   client_->OnReturnData(std::vector<uint8_t>(data.begin(), data.end()));
-}
-
-bool CommandBufferStub::ShouldYield() {
-  return channel_->scheduler()->ShouldYield(sequence_id_);
 }
 
 void CommandBufferStub::OnConsoleMessage(int32_t id,

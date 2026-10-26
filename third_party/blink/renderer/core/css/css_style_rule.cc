@@ -21,6 +21,8 @@
 
 #include "third_party/blink/renderer/core/css/css_style_rule.h"
 
+#include <ranges>
+
 #include "third_party/blink/renderer/core/css/css_grouping_rule.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/css_rule_list.h"
@@ -35,7 +37,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/disallow_new_wrapper.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -46,6 +48,7 @@ static SelectorTextCache& GetSelectorTextCache() {
   using SelectorTextCacheHolder = DisallowNewWrapper<SelectorTextCache>;
   DEFINE_STATIC_LOCAL(Persistent<SelectorTextCacheHolder>, cache,
                       (MakeGarbageCollected<SelectorTextCacheHolder>()));
+  CHECK(IsMainThread());
   return cache->Value();
 }
 
@@ -190,8 +193,8 @@ void CSSStyleRule::Reattach(StyleRuleBase* rule) {
   if (style_rule_->ChildRules()) {
     CHECK_EQ(style_rule_->ChildRules()->size(),
              child_rule_cssom_wrappers_.size());
-    for (auto [child_rule, child_wrapper] :
-         base::zip(*style_rule_->ChildRules(), child_rule_cssom_wrappers_)) {
+    for (auto [child_rule, child_wrapper] : std::views::zip(
+             *style_rule_->ChildRules(), child_rule_cssom_wrappers_)) {
       if (child_wrapper) {
         child_wrapper->Reattach(child_rule);
       }
@@ -248,9 +251,9 @@ unsigned CSSStyleRule::insertRule(const ExecutionContext* execution_context,
     if (index > 0) {
       exception_state.ThrowDOMException(
           DOMExceptionCode::kIndexSizeError,
-          StrCat(
-              {"the index ", String::Number(index),
-               " must be less than or equal to the length of the rule list."}));
+          Format("the index {} must be less than or equal to the length of the "
+                 "rule list.",
+                 index));
       return 0;
     }
     style_rule_->EnsureChildRules();
@@ -279,8 +282,8 @@ void CSSStyleRule::deleteRule(unsigned index, ExceptionState& exception_state) {
       index >= style_rule_->ChildRules()->size()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        StrCat({"the index ", String::Number(index),
-                " is greated than the length of the rule list."}));
+        Format("the index {} is greater than the length of the rule list.",
+               index));
     return;
   }
 

@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "base/compiler_specific.h"
+#include "base/containers/flat_set.h"
 #include "base/containers/span.h"
 #include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
@@ -28,7 +29,6 @@
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "components/sync/base/data_type.h"
-#include "components/sync/base/features.h"
 #include "components/sync/base/time.h"
 #include "components/sync/engine/commit_and_get_updates_types.h"
 #include "components/sync/model/data_type_activation_request.h"
@@ -194,6 +194,31 @@ std::optional<int> SpecificsToGlicExperimentalTriggeringVersion(
   return std::nullopt;
 }
 
+base::flat_set<std::string> SpecificsToGlicExperimentalTriggeringCapabilities(
+    const DeviceInfoSpecifics& specifics) {
+  return base::flat_set<std::string>(
+      specifics.feature_fields()
+          .glic_experimental_triggering_capabilities()
+          .begin(),
+      specifics.feature_fields()
+          .glic_experimental_triggering_capabilities()
+          .end());
+}
+
+std::optional<DeviceInfo::PersonalContextInfo>
+SpecificsToPersonalContextInfo(const DeviceInfoSpecifics& specifics) {
+  if (!specifics.has_personal_context_fields() ||
+      !specifics.personal_context_fields().has_serialized_tink_keyset()) {
+    return std::nullopt;
+  }
+  const sync_pb::PersonalContextSpecificFields& fields =
+      specifics.personal_context_fields();
+  return DeviceInfo::PersonalContextInfo{
+      .serialized_tink_keyset =
+          base::ToVector(base::as_byte_span(fields.serialized_tink_keyset())),
+      .eligible_for_spii = fields.eligible_for_spii()};
+}
+
 // Converts DeviceInfoSpecifics into DeviceInfo.
 DeviceInfo SpecificsToModel(const DeviceInfoSpecifics& specifics) {
   const DeviceInfo::FormFactor device_form_factor =
@@ -224,7 +249,6 @@ DeviceInfo SpecificsToModel(const DeviceInfoSpecifics& specifics) {
       specifics.full_hardware_class(),
       ProtoTimeToTime(specifics.last_updated_timestamp()),
       GetPulseIntervalFromSpecifics(specifics),
-      specifics.feature_fields().send_tab_to_self_receiving_enabled(),
       ToDeviceInfoSendTabReceivingType(
           specifics.feature_fields().send_tab_to_self_receiving_type()),
       SpecificsToSharingInfo(specifics),
@@ -237,7 +261,9 @@ DeviceInfo SpecificsToModel(const DeviceInfoSpecifics& specifics) {
       SpecificsToDesktopToIOSPromoReceivingTypes(specifics),
       SpecificsToGlicExperimentalTriggeringState(specifics),
       SpecificsToGlicExperimentalTriggeringVersion(specifics),
-      android_os_build_fingerprint_prefix);
+      SpecificsToGlicExperimentalTriggeringCapabilities(specifics),
+      android_os_build_fingerprint_prefix,
+      SpecificsToPersonalContextInfo(specifics));
 }
 
 // Allocate a EntityData and copies |specifics| into it.
@@ -281,13 +307,11 @@ std::unique_ptr<DeviceInfoSpecifics> MakeLocalDeviceSpecifics(
   specifics->set_model(info.model_name());
 
 #if BUILDFLAG(IS_ANDROID)
-  if (base::FeatureList::IsEnabled(kSyncUploadAndroidBuildFingerprintPrefix)) {
-    const std::optional<std::string>& android_os_build_fingerprint_prefix =
-        info.android_os_build_fingerprint_prefix();
-    if (android_os_build_fingerprint_prefix.has_value()) {
-      specifics->set_android_os_build_fingerprint_prefix(
-          *android_os_build_fingerprint_prefix);
-    }
+  const std::optional<std::string>& android_os_build_fingerprint_prefix =
+      info.android_os_build_fingerprint_prefix();
+  if (android_os_build_fingerprint_prefix.has_value()) {
+    specifics->set_android_os_build_fingerprint_prefix(
+        *android_os_build_fingerprint_prefix);
   }
 #endif
 
@@ -303,8 +327,10 @@ std::unique_ptr<DeviceInfoSpecifics> MakeLocalDeviceSpecifics(
   specifics->set_pulse_interval_in_minutes(info.pulse_interval().InMinutes());
 
   FeatureSpecificFields* feature_fields = specifics->mutable_feature_fields();
-  feature_fields->set_send_tab_to_self_receiving_enabled(
-      info.send_tab_to_self_receiving_enabled());
+  // TODO(crbug.com/573435919): Stop populating
+  // `send_tab_to_self_receiving_enabled` once M157 (which still reads it with a
+  // default of `false`) passes the Sync client support horizon.
+  feature_fields->set_send_tab_to_self_receiving_enabled(true);
   feature_fields->set_send_tab_to_self_receiving_type(
       ToSendTabReceivingTypeProto(info.send_tab_to_self_receiving_type()));
 
@@ -344,6 +370,9 @@ std::unique_ptr<DeviceInfoSpecifics> MakeLocalDeviceSpecifics(
     // the synced proto.
     feature_fields->clear_glic_experimental_triggering_version();
   }
+  feature_fields->mutable_glic_experimental_triggering_capabilities()->Assign(
+      info.glic_experimental_triggering_capabilities().begin(),
+      info.glic_experimental_triggering_capabilities().end());
   const std::optional<DeviceInfo::SharingInfo>& sharing_info =
       info.sharing_info();
   if (sharing_info) {
@@ -378,6 +407,21 @@ std::unique_ptr<DeviceInfoSpecifics> MakeLocalDeviceSpecifics(
         GetSpecificsFieldNumberFromDataType(data_type));
   }
 
+  const std::optional<DeviceInfo::PersonalContextInfo>& personal_context_info =
+      info.personal_context_info();
+  if (personal_context_info &&
+      !personal_context_info->serialized_tink_keyset.empty()) {
+    sync_pb::PersonalContextSpecificFields* personal_context_fields =
+        specifics->mutable_personal_context_fields();
+    personal_context_fields->set_serialized_tink_keyset(
+        personal_context_info->serialized_tink_keyset.data(),
+        personal_context_info->serialized_tink_keyset.size());
+    personal_context_fields->set_eligible_for_spii(
+        personal_context_info->eligible_for_spii);
+  } else {
+    specifics->clear_personal_context_fields();
+  }
+
   return specifics;
 }
 
@@ -409,8 +453,6 @@ bool IsStoredLocalDeviceInfoStillAccurate(const DeviceInfo* stored,
          current->manufacturer_name() == stored->manufacturer_name() &&
          current->model_name() == stored->model_name() &&
          current->full_hardware_class() == stored->full_hardware_class() &&
-         current->send_tab_to_self_receiving_enabled() ==
-             stored->send_tab_to_self_receiving_enabled() &&
          current->send_tab_to_self_receiving_type() ==
              stored->send_tab_to_self_receiving_type() &&
          current->desktop_to_ios_promo_receiving_enabled() ==
@@ -427,7 +469,10 @@ bool IsStoredLocalDeviceInfoStillAccurate(const DeviceInfo* stored,
          current->glic_experimental_triggering_state() ==
              stored->glic_experimental_triggering_state() &&
          current->glic_experimental_triggering_version() ==
-             stored->glic_experimental_triggering_version();
+             stored->glic_experimental_triggering_version() &&
+         current->glic_experimental_triggering_capabilities() ==
+             stored->glic_experimental_triggering_capabilities() &&
+         current->personal_context_info() == stored->personal_context_info();
 }
 
 int CalculateMaxConcurrentEvents(const std::multimap<base::Time, int>& events) {
@@ -475,11 +520,7 @@ DeviceInfoSyncBridge::DeviceInfoSyncBridge(
   DCHECK(!local_device_info_provider_->GetLocalDeviceInfo());
 
   DCHECK(pulse_task_runner);
-  if (base::FeatureList::IsEnabled(kSyncDeviceInfoUseWallClockTimer)) {
-    wall_clock_pulse_timer_.SetTaskRunner(std::move(pulse_task_runner));
-  } else {
-    pulse_timer_.SetTaskRunner(std::move(pulse_task_runner));
-  }
+  pulse_timer_.SetTaskRunner(std::move(pulse_task_runner));
 
   std::move(store_factory)
       .Run(DEVICE_INFO, base::BindOnce(&DeviceInfoSyncBridge::OnStoreCreated,
@@ -686,7 +727,6 @@ void DeviceInfoSyncBridge::ApplyDisableSyncChanges(
   local_device_info_provider_->Clear();
   local_cache_guid_.clear();
   pulse_timer_.Stop();
-  wall_clock_pulse_timer_.Stop();
 
   // Remove all local data, if sync is being disabled, the user has expressed
   // their desire to not have knowledge about other devices.
@@ -730,7 +770,7 @@ bool DeviceInfoSyncBridge::IsSyncing() const {
   return change_processor()->IsTrackingMetadata() && !all_data_.empty();
 }
 
-const DeviceInfo* DeviceInfoSyncBridge::GetDeviceInfo(
+const DeviceInfo* DeviceInfoSyncBridge::GetChromeDeviceInfo(
     const std::string& client_id) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const ClientIdToDeviceInfo::const_iterator iter = all_data_.find(client_id);
@@ -785,12 +825,12 @@ bool DeviceInfoSyncBridge::IsRecentLocalCacheGuid(
 
 bool DeviceInfoSyncBridge::IsPulseTimerRunningForTest() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return pulse_timer_.IsRunning() || wall_clock_pulse_timer_.IsRunning();
+  return pulse_timer_.IsRunning();
 }
 
 void DeviceInfoSyncBridge::ForcePulseForTest() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (pulse_timer_.IsRunning() || wall_clock_pulse_timer_.IsRunning()) {
+  if (pulse_timer_.IsRunning()) {
     // FireNow() can't be used with SetTaskRunner, so re-set the timer to fire
     // with no delay, and don't return until it's done.
 
@@ -806,12 +846,7 @@ void DeviceInfoSyncBridge::ForcePulseForTest() {
     base::RunLoop run_loop;
     done_pulse_timer_callback_for_test_ = run_loop.QuitClosure();
 
-    if (wall_clock_pulse_timer_.IsRunning()) {
-      wall_clock_pulse_timer_.Start(FROM_HERE, base::Time::Now(),
-                                    std::move(timer_task));
-    } else {
-      pulse_timer_.Start(FROM_HERE, base::TimeDelta(), std::move(timer_task));
-    }
+    pulse_timer_.Start(FROM_HERE, base::Time::Now(), std::move(timer_task));
     run_loop.Run();
     return;
   }
@@ -1053,7 +1088,7 @@ bool DeviceInfoSyncBridge::ReconcileLocalAndStored() {
   if (IsStoredLocalDeviceInfoStillAccurate(&previous_device_info,
                                            current_info) &&
       !force_reupload_for_test_) {
-    if (pulse_timer_.IsRunning() || wall_clock_pulse_timer_.IsRunning()) {
+    if (pulse_timer_.IsRunning()) {
       // No need to update the |pulse_timer| since nothing has changed.
       return false;
     }
@@ -1061,16 +1096,10 @@ bool DeviceInfoSyncBridge::ReconcileLocalAndStored() {
     const base::TimeDelta pulse_delay(DeviceInfoUtil::CalculatePulseDelay(
         GetLastUpdateTime(iter->second.specifics()), Time::Now()));
     if (!pulse_delay.is_zero()) {
-      if (base::FeatureList::IsEnabled(kSyncDeviceInfoUseWallClockTimer)) {
-        wall_clock_pulse_timer_.Start(
-            FROM_HERE, base::Time::Now() + pulse_delay,
-            base::BindOnce(&DeviceInfoSyncBridge::SendLocalData,
-                           base::Unretained(this)));
-      } else {
-        pulse_timer_.Start(FROM_HERE, pulse_delay,
-                           base::BindOnce(&DeviceInfoSyncBridge::SendLocalData,
-                                          base::Unretained(this)));
-      }
+      pulse_timer_.Start(
+          FROM_HERE, base::Time::Now() + pulse_delay,
+          base::BindOnce(&DeviceInfoSyncBridge::SendLocalData,
+                         base::Unretained(this)));
       return false;
     }
   }
@@ -1114,16 +1143,10 @@ void DeviceInfoSyncBridge::SendLocalDataWithBatch(
   StoreSpecifics(std::move(*specifics), batch.get());
   CommitAndNotify(std::move(batch), /*should_notify=*/true);
 
-  if (base::FeatureList::IsEnabled(kSyncDeviceInfoUseWallClockTimer)) {
-    wall_clock_pulse_timer_.Start(
-        FROM_HERE, base::Time::Now() + DeviceInfoUtil::GetPulseInterval(),
-        base::BindOnce(&DeviceInfoSyncBridge::SendLocalData,
-                       base::Unretained(this)));
-  } else {
-    pulse_timer_.Start(FROM_HERE, DeviceInfoUtil::GetPulseInterval(),
-                       base::BindOnce(&DeviceInfoSyncBridge::SendLocalData,
-                                      base::Unretained(this)));
-  }
+  pulse_timer_.Start(
+      FROM_HERE, base::Time::Now() + DeviceInfoUtil::GetPulseInterval(),
+      base::BindOnce(&DeviceInfoSyncBridge::SendLocalData,
+                     base::Unretained(this)));
   if (done_pulse_timer_callback_for_test_) {
     std::move(done_pulse_timer_callback_for_test_).Run();
   }

@@ -9,7 +9,10 @@
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.h"
 #include "chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/tree_builder/mojo_tree_builder.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 #include "components/browser_apis/tab_strip/types/tab_states.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tab_groups/tab_group_visual_data.h"
 #include "components/tabs/public/split_tab_collection.h"
 #include "components/tabs/public/tab_collection.h"
@@ -73,9 +76,13 @@ const ui::ColorProvider& TabStripModelAdapterImpl::GetColorProvider() const {
 }
 
 void TabStripModelAdapterImpl::CloseTab(size_t tab_index) {
-  tab_strip_model_->CloseWebContentsAt(
-      tab_index, TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB |
-                     TabCloseTypes::CLOSE_USER_GESTURE);
+  if (!tab_strip_model_->ContainsIndex(tab_index)) {
+    return;
+  }
+
+  tabs::TabInterface* tab = tab_strip_model_->GetTabAtIndex(tab_index);
+  CHECK(tab);
+  tab_strip_model_->delegate()->CloseTab(tab, CloseTabSource::kFromNonUIEvent);
 }
 
 void TabStripModelAdapterImpl::CloseTabGroup(
@@ -142,8 +149,8 @@ TabStripModelAdapterImpl::MoveTab(tabs::TabHandle tab,
       to_position =
           tab_strip_model_->IndexOfFirstNonPinnedTab() + position.index();
       break;
-    // TODO(crbug.com/412709271) Callers can not move a Tab within TabStrip and
-    // SplitTab collections. This should return an error to the client.
+    // Callers can not move a Tab within TabStrip and SplitTab collections. This
+    // should return an error to the client.
     case tabs::TabCollection::Type::TABSTRIP:
     case tabs::TabCollection::Type::SPLIT:
       NOTIMPLEMENTED();
@@ -170,8 +177,8 @@ TabStripModelAdapterImpl::MoveCollection(const NodeId& id,
     case tabs::TabCollection::Type::GROUP: {
       std::optional<const tab_groups::TabGroupId> group_id =
           FindGroupIdFor(collection_handle.value());
-      // TODO(crbug.com/409086859): Invalid group id is a user supplied data and
-      // should result in API failure.
+      // Invalid group id is a user supplied data and should result in API
+      // failure.
       CHECK(group_id.has_value());
       const int to_position =
           tab_strip_model_->IndexOfFirstNonPinnedTab() + position.index();
@@ -184,8 +191,7 @@ TabStripModelAdapterImpl::MoveCollection(const NodeId& id,
       const split_tabs::SplitTabId split_id = split_collection->GetSplitTabId();
       const int to_position =
           tab_strip_model_->IndexOfFirstNonPinnedTab() + position.index();
-      // TODO(crbug.com/412709271): Currently only moves within the unpinned
-      // collection.
+      // Currently only moves within the unpinned collection.
       tab_strip_model_->MoveSplitTo(split_id, to_position, false /* pinned */,
                                     std::nullopt);
       break;

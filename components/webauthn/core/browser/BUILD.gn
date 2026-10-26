@@ -14,25 +14,25 @@ source_set("browser") {
   ]
   deps = [
     "//base",
+    "//components/device_event_log",
+    "//components/signin/public/base",
+    "//components/signin/public/identity_manager",
     "//components/sync",
     "//components/webauthn:features",
     "//crypto",
+    "//google_apis",
     "//net",
     "//services/network/public/cpp",
+    "//services/network/public/mojom",
     "//url",
   ]
 
-  if (!is_android && use_blink) {
+  if (use_blink) {
     sources += [
-      "passkey_change_quota_tracker.cc",
-      "passkey_change_quota_tracker.h",
+      "internal_authenticator.h",
       "rate_limiter_slide_window.cc",
       "rate_limiter_slide_window.h",
     ]
-  }
-
-  if (use_blink) {
-    sources += [ "internal_authenticator.h" ]
 
     deps += [
       "//third_party/blink/public/common",
@@ -42,6 +42,8 @@ source_set("browser") {
 
   if (!is_android) {
     sources += [
+      "passkey_change_quota_tracker.cc",
+      "passkey_change_quota_tracker.h",
       "passkey_sync_bridge.cc",
       "passkey_sync_bridge.h",
     ]
@@ -63,15 +65,33 @@ source_set("passkey_model") {
     "passkey_model_utils.cc",
     "passkey_model_utils.h",
   ]
+  public_deps =
+      [ "//components/webauthn/core/browser/device_authorization:types" ]
   deps = [
     "//base",
     "//components/cbor",
     "//components/keyed_service/core",
     "//components/sync/protocol",
+    "//components/webauthn/core/browser/device_authorization:features",
     "//crypto",
     "//device/fido",
   ]
   frameworks = [ "Foundation.framework" ]
+}
+
+source_set("signal_api_utils") {
+  sources = [
+    "signal_api_utils.cc",
+    "signal_api_utils.h",
+  ]
+  deps = [
+    ":browser",
+    ":passkey_model",
+    "//base",
+    "//components/device_event_log",
+    "//components/sync/protocol",
+    "//url",
+  ]
 }
 
 source_set("client_data") {
@@ -97,6 +117,7 @@ source_set("common_utils") {
   ]
   deps = [
     "//base",
+    "//components/webauthn:features",
     "//net",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
@@ -121,6 +142,8 @@ source_set("unit_tests") {
     ":browser",
     ":common_utils",
     "//base/test:test_support",
+    "//components/signin/public/identity_manager:test_support",
+    "//components/webauthn:features",
     "//services/network:test_support",
     "//services/network/public/cpp",
     "//testing/gtest",
@@ -128,7 +151,10 @@ source_set("unit_tests") {
   ]
 
   if (!is_android) {
-    sources += [ "passkey_model_utils_unittest.cc" ]
+    sources += [
+      "passkey_model_utils_unittest.cc",
+      "signal_api_utils_unittest.cc",
+    ]
     if (use_blink) {
       sources += [
         "passkey_change_quota_tracker_unittest.cc",
@@ -141,7 +167,10 @@ source_set("unit_tests") {
     }
     deps += [
       ":passkey_model",
+      ":signal_api_utils",
+      ":test_support",
       "//components/sync/protocol",
+      "//components/webauthn/core/browser/device_authorization:features",
       "//crypto",
       "//testing/gmock",
       "//testing/gtest",
@@ -165,9 +194,13 @@ static_library("test_support") {
     "fake_cmtg_device_key_provider.cc",
     "fake_cmtg_device_key_provider.h",
   ]
+  public_deps = [ "//net" ]
   deps = [
     ":browser",
     "//base",
+    "//base:i18n",
+    "//services/network/public/cpp",
+    "//url",
   ]
 
   if (use_blink) {

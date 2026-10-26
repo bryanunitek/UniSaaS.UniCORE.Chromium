@@ -10,12 +10,14 @@
 #include <algorithm>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/absl_log.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/charset.h"
 #include "absl/strings/escaping.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_replace.h"
@@ -28,9 +30,11 @@
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/io/printer.h"
 #include "google/protobuf/io/zero_copy_stream.h"
+#include "google/protobuf/json_enumvalue_options.pb.h"
 
 constexpr absl::string_view kDescriptorFile =
     "google/protobuf/descriptor.proto";
+
 constexpr absl::string_view kEmptyFile = "google/protobuf/empty.proto";
 constexpr absl::string_view kEmptyMetadataFile =
     "GPBMetadata/Google/Protobuf/GPBEmpty.php";
@@ -38,10 +42,18 @@ constexpr absl::string_view kDescriptorMetadataFile =
     "GPBMetadata/Google/Protobuf/Internal/Descriptor.php";
 constexpr absl::string_view kDescriptorPackageName =
     "Google\\Protobuf\\Internal";
+// This is for backwards compatibility. New values added to kReservedNames in
+// names.c should be added here to prevent unnecessary breaking changes, as
+// constants do not need the PB prefix.
+// @TODO: allow ALL names for constants except for "class"
+// BEGIN VALID CONSTANT NAMES
+// @see php/update_reserved_words.sh - DO NOT MODIFY THIS LIST MANUALLY
 constexpr absl::string_view kValidConstantNames[] = {
-    "int",  "float", "bool",     "string", "true", "false",
-    "null", "void",  "iterable", "parent", "self", "readonly"};
-const int kValidConstantNamesSize = 12;
+    "bool",     "false", "float",  "int",    "iterable",
+    "mixed",    "never", "null",   "object", "parent",
+    "readonly", "self",  "string", "true",   "void"};
+const int kValidConstantNamesSize = 15;
+// END VALID CONSTANT NAMES
 const int kFieldSetter = 1;
 const int kFieldGetter = 2;
 const int kFieldProperty = 3;
@@ -59,6 +71,26 @@ struct Options {
 };
 
 namespace {
+
+// Characters that could enable code injection in generated PHP code.
+constexpr absl::CharSet kBannedPhpNamespaceChars =
+    absl::CharSet(";{}()'\"`$#=<>|&[]/\n\r!?*~^%@,") |
+    absl::CharSet::Char('\0');
+
+// Validates that a PHP namespace/metadata namespace option does not contain
+// characters that could allow code injection into generated PHP code.
+bool IsValidPhpNamespace(absl::string_view ns, std::string* error) {
+  for (char c : ns) {
+    if (kBannedPhpNamespaceChars.contains(c)) {
+      *error = absl::StrCat(
+          "Invalid character in PHP namespace option: character '",
+          std::string(1, c),
+          "' is not allowed because it could enable code injection.");
+      return false;
+    }
+  }
+  return true;
+}
 
 // Forward decls.
 std::string PhpName(absl::string_view full_name, const Options& options);
@@ -219,6 +251,67 @@ std::string DefaultForField(const FieldDescriptor* field) {
   }
 }
 
+std::string DefaultForFieldWithPresence(const FieldDescriptor* field) {
+  if (field->has_default_value()) {
+    switch (field->cpp_type()) {
+      case FieldDescriptor::CPPTYPE_INT32:
+        return absl::StrCat(field->default_value_int32());
+      case FieldDescriptor::CPPTYPE_INT64:
+        return "GPBUtil::compatibleInt64(" +
+               absl::StrCat(field->default_value_int64()) + ", '" +
+               absl::StrCat(field->default_value_int64()) + "')";
+      case FieldDescriptor::CPPTYPE_UINT32:
+        return absl::StrCat(field->default_value_uint32());
+      case FieldDescriptor::CPPTYPE_UINT64:
+        return "GPBUtil::compatibleInt64(" +
+               absl::StrCat(field->default_value_uint64()) + ", '" +
+               absl::StrCat(field->default_value_uint64()) + "')";
+      case FieldDescriptor::CPPTYPE_FLOAT:
+        return absl::StrCat(field->default_value_float());
+      case FieldDescriptor::CPPTYPE_DOUBLE:
+        return absl::StrCat(field->default_value_double());
+      case FieldDescriptor::CPPTYPE_BOOL:
+        return field->default_value_bool() ? "true" : "false";
+      case FieldDescriptor::CPPTYPE_ENUM:
+        return absl::StrCat(field->default_value_enum()->number());
+      case FieldDescriptor::CPPTYPE_STRING:
+        return "'" + absl::CEscape(field->default_value_string()) + "'";
+      case FieldDescriptor::CPPTYPE_MESSAGE:
+        return "null";
+    }
+  }
+
+  switch (field->type()) {
+    case FieldDescriptor::TYPE_INT64:
+    case FieldDescriptor::TYPE_UINT64:
+    case FieldDescriptor::TYPE_SINT64:
+    case FieldDescriptor::TYPE_FIXED64:
+    case FieldDescriptor::TYPE_SFIXED64:
+      return "GPBUtil::compatibleInt64(0, '0')";
+    case FieldDescriptor::TYPE_INT32:
+    case FieldDescriptor::TYPE_UINT32:
+    case FieldDescriptor::TYPE_SINT32:
+    case FieldDescriptor::TYPE_FIXED32:
+    case FieldDescriptor::TYPE_SFIXED32:
+    case FieldDescriptor::TYPE_ENUM:
+      return "0";
+    case FieldDescriptor::TYPE_DOUBLE:
+    case FieldDescriptor::TYPE_FLOAT:
+      return "0.0";
+    case FieldDescriptor::TYPE_BOOL:
+      return "false";
+    case FieldDescriptor::TYPE_STRING:
+    case FieldDescriptor::TYPE_BYTES:
+      return "''";
+    case FieldDescriptor::TYPE_MESSAGE:
+    case FieldDescriptor::TYPE_GROUP:
+      return "null";
+    default:
+      assert(false);
+      return "";
+  }
+}
+
 std::string DeprecatedConditionalForField(const FieldDescriptor* field) {
   if (field->is_repeated()) {
     return absl::StrCat("count($this->", field->name(), ") !== 0");
@@ -333,6 +426,57 @@ std::string PhpSetterTypeName(const FieldDescriptor* field,
   if (field->is_map()) {
     return "array|\\Google\\Protobuf\\Internal\\MapField";
   }
+  if (field->is_repeated()) {
+    return "array|RepeatedField";
+  }
+  std::string type;
+  switch (field->type()) {
+    case FieldDescriptor::TYPE_INT32:
+    case FieldDescriptor::TYPE_UINT32:
+    case FieldDescriptor::TYPE_SINT32:
+    case FieldDescriptor::TYPE_FIXED32:
+    case FieldDescriptor::TYPE_SFIXED32:
+    case FieldDescriptor::TYPE_ENUM:
+      type = "int";
+      break;
+    case FieldDescriptor::TYPE_INT64:
+    case FieldDescriptor::TYPE_UINT64:
+    case FieldDescriptor::TYPE_SINT64:
+    case FieldDescriptor::TYPE_FIXED64:
+    case FieldDescriptor::TYPE_SFIXED64:
+      type = "int|string";
+      break;
+    case FieldDescriptor::TYPE_DOUBLE:
+    case FieldDescriptor::TYPE_FLOAT:
+      type = "float";
+      break;
+    case FieldDescriptor::TYPE_BOOL:
+      type = "bool";
+      break;
+    case FieldDescriptor::TYPE_STRING:
+    case FieldDescriptor::TYPE_BYTES:
+      type = "string";
+      break;
+    case FieldDescriptor::TYPE_MESSAGE:
+      type = absl::StrCat("\\", FullClassName(field->message_type(), options));
+      break;
+    case FieldDescriptor::TYPE_GROUP:
+      return "null";
+    default:
+      assert(false);
+      return "";
+  }
+  if (field->cpp_type() == FieldDescriptor::CPPTYPE_MESSAGE) {
+    return absl::StrCat(type, "|null");
+  }
+  return type;
+}
+
+std::string PhpDocSetterTypeName(const FieldDescriptor* field,
+                                 const Options& options) {
+  if (field->is_map()) {
+    return "array|\\Google\\Protobuf\\Internal\\MapField";
+  }
   std::string type;
   switch (field->type()) {
     case FieldDescriptor::TYPE_INT32:
@@ -381,15 +525,15 @@ std::string PhpSetterTypeName(const FieldDescriptor* field,
   return type;
 }
 
-std::string PhpSetterTypeName(const FieldDescriptor* field,
-                              bool is_descriptor) {
+std::string PhpDocSetterTypeName(const FieldDescriptor* field,
+                                 bool is_descriptor) {
   Options options;
   options.is_descriptor = is_descriptor;
-  return PhpSetterTypeName(field, options);
+  return PhpDocSetterTypeName(field, options);
 }
 
-std::string PhpGetterTypeName(const FieldDescriptor* field,
-                              const Options& options) {
+std::string PhpDocGetterTypeName(const FieldDescriptor* field,
+                                 const Options& options) {
   if (field->is_map()) {
     return "\\Google\\Protobuf\\Internal\\MapField";
   }
@@ -443,11 +587,11 @@ std::string PhpGetterTypeName(const FieldDescriptor* field,
   return type;
 }
 
-std::string PhpGetterTypeName(const FieldDescriptor* field,
-                              bool is_descriptor) {
+std::string PhpDocGetterTypeName(const FieldDescriptor* field,
+                                 bool is_descriptor) {
   Options options;
   options.is_descriptor = is_descriptor;
-  return PhpGetterTypeName(field, options);
+  return PhpDocGetterTypeName(field, options);
 }
 
 std::string EnumOrMessageSuffix(const FieldDescriptor* field,
@@ -623,7 +767,7 @@ void GenerateFieldAccessor(const FieldDescriptor* field, const Options& options,
         ": ^default_value^;\n"
         "}\n\n",
         "camel_name", UnderscoresToCamelCase(field->name(), true), "name",
-        field->name(), "default_value", DefaultForField(field),
+        field->name(), "default_value", DefaultForFieldWithPresence(field),
         "deprecation_trigger", deprecation_trigger_with_conditional);
   } else {
     printer->Print(
@@ -682,9 +826,10 @@ void GenerateFieldAccessor(const FieldDescriptor* field, const Options& options,
   // Generate setter.
   GenerateFieldDocComment(printer, field, options, kFieldSetter);
   printer->Print(
-      "public function set^camel_name^($var)\n"
+      "public function set^camel_name^(^php_type^ $var)\n"
       "{\n",
-      "camel_name", UnderscoresToCamelCase(field->name(), true));
+      "camel_name", UnderscoresToCamelCase(field->name(), true), "php_type",
+      PhpSetterTypeName(field, options));
 
   Indent(printer);
 
@@ -732,17 +877,17 @@ void GenerateFieldAccessor(const FieldDescriptor* field, const Options& options,
     } else {
       printer->Print(");\n");
     }
-  } else if (field->cpp_type() == FieldDescriptor::CPPTYPE_MESSAGE) {
-    printer->Print("GPBUtil::checkMessage($var, \\^class_name^::class);\n",
-                   "class_name", FullClassName(field->message_type(), options));
   } else if (field->cpp_type() == FieldDescriptor::CPPTYPE_ENUM) {
     printer->Print("GPBUtil::checkEnum($var, \\^class_name^::class);\n",
                    "class_name", FullClassName(field->enum_type(), options));
   } else if (field->cpp_type() == FieldDescriptor::CPPTYPE_STRING) {
     printer->Print(
         "GPBUtil::checkString($var, ^utf8^);\n", "utf8",
-        field->type() == FieldDescriptor::TYPE_STRING ? "True" : "False");
-  } else {
+        field->type() == FieldDescriptor::TYPE_STRING ? "true" : "false");
+  } else if (field->cpp_type() == FieldDescriptor::CPPTYPE_INT32 ||
+             field->cpp_type() == FieldDescriptor::CPPTYPE_UINT32 ||
+             field->cpp_type() == FieldDescriptor::CPPTYPE_INT64 ||
+             field->cpp_type() == FieldDescriptor::CPPTYPE_UINT64) {
     printer->Print("GPBUtil::check^type^($var);\n", "type",
                    UnderscoresToCamelCase(field->cpp_type_name(), true));
   }
@@ -777,7 +922,7 @@ void GenerateFieldAccessor(const FieldDescriptor* field, const Options& options,
         "public function set^camel_name^Unwrapped($var)\n"
         "{\n"
         "    $this->writeWrapperValue(\"^field_name^\", $var);\n"
-        "    return $this;"
+        "    return $this;\n"
         "}\n\n",
         "camel_name", UnderscoresToCamelCase(field->name(), true), "field_name",
         field->name());
@@ -793,10 +938,18 @@ void GenerateEnumToPool(const EnumDescriptor* en, io::Printer* printer) {
 
   for (int i = 0; i < en->value_count(); i++) {
     const EnumValueDescriptor* value = en->value(i);
+    std::string custom_json_name;
+    if (value->options().HasExtension(pb::enumvalue::json)) {
+      absl::string_view json_name =
+          value->options().GetExtension(pb::enumvalue::json).string();
+      custom_json_name =
+          absl::StrCat(", \"", BinaryToPhpString(std::string(json_name)), "\"");
+    }
     printer->Print(
-        "->value(\"^name^\", ^number^)\n", "name",
+        "->value(\"^name^\", ^number^^custom_json_name^)\n", "name",
         absl::StrCat(ConstantNamePrefix(value->name()), value->name()),
-        "number", IntToString(value->number()));
+        "number", IntToString(value->number()), "custom_json_name",
+        custom_json_name);
   }
   printer->Print("->finalizeToPool();\n\n");
   Outdent(printer);
@@ -877,11 +1030,47 @@ void GenerateMessageToPool(absl::string_view name_prefix,
   }
 }
 
+void CollectCustomEnumJsonNames(
+    const EnumDescriptor* en,
+    std::vector<std::pair<std::string, std::string>>* custom_names) {
+  for (int i = 0; i < en->value_count(); ++i) {
+    const EnumValueDescriptor* value = en->value(i);
+    if (value->options().HasExtension(pb::enumvalue::json)) {
+      std::string fqn = absl::StrCat(en->full_name(), ".", value->name());
+      std::string custom_name(
+          value->options().GetExtension(pb::enumvalue::json).string());
+      custom_names->push_back({std::move(fqn), std::move(custom_name)});
+    }
+  }
+}
+
+void CollectCustomEnumJsonNames(
+    const Descriptor* message,
+    std::vector<std::pair<std::string, std::string>>* custom_names) {
+  for (int i = 0; i < message->enum_type_count(); ++i) {
+    CollectCustomEnumJsonNames(message->enum_type(i), custom_names);
+  }
+  for (int i = 0; i < message->nested_type_count(); ++i) {
+    CollectCustomEnumJsonNames(message->nested_type(i), custom_names);
+  }
+}
+
+void CollectCustomEnumJsonNames(
+    const FileDescriptor* file,
+    std::vector<std::pair<std::string, std::string>>* custom_names) {
+  for (int i = 0; i < file->enum_type_count(); ++i) {
+    CollectCustomEnumJsonNames(file->enum_type(i), custom_names);
+  }
+  for (int i = 0; i < file->message_type_count(); ++i) {
+    CollectCustomEnumJsonNames(file->message_type(i), custom_names);
+  }
+}
+
 void GenerateAddFileToPool(const FileDescriptor* file, const Options& options,
                            io::Printer* printer) {
   printer->Print(
-      "public static $is_initialized = false;\n\n"
-      "public static function initOnce() {\n");
+      "public static bool $is_initialized = false;\n\n"
+      "public static function initOnce(): void {\n");
   Indent(printer);
 
   if (options.aggregate_metadata) {
@@ -934,6 +1123,12 @@ void GenerateAddFileToPool(const FileDescriptor* file, const Options& options,
         }
       }
 
+      // Clear public_dependency and weak_dependency since they contain indices
+      // into the dependency array which we just modified above. PHP handles
+      // dependency loading through initOnce() calls instead.
+      file_proto->clear_public_dependency();
+      file_proto->clear_weak_dependency();
+
       // Filter out all extensions, since we do not support extension yet.
       file_proto->clear_extension();
       RepeatedPtrField<DescriptorProto>* message_type =
@@ -945,13 +1140,27 @@ void GenerateAddFileToPool(const FileDescriptor* file, const Options& options,
       }
 
       std::string files_data;
-      files.SerializeToString(&files_data);
+      ABSL_CHECK(files.SerializeToString(&files_data));
+
+      std::vector<std::pair<std::string, std::string>> custom_json_names;
+      CollectCustomEnumJsonNames(file, &custom_json_names);
 
       printer->Print("$pool->internalAddGeneratedFile(\n");
       Indent(printer);
       printer->Print("\"^data^\"\n", "data", BinaryToPhpString(files_data));
       Outdent(printer);
-      printer->Print(", true);\n\n");
+      if (custom_json_names.empty()) {
+        printer->Print(", true);\n\n");
+      } else {
+        printer->Print(", true, [\n");
+        Indent(printer);
+        for (const auto& [fqn, custom_name] : custom_json_names) {
+          printer->Print("\"^fqn^\" => \"^custom_name^\",\n", "fqn", fqn,
+                         "custom_name", BinaryToPhpString(custom_name));
+        }
+        Outdent(printer);
+        printer->Print("]);\n\n");
+      }
     }
     printer->Print("static::$is_initialized = true;\n");
   }
@@ -1027,6 +1236,7 @@ void GenerateAddFilesToPool(const FileDescriptor* file, const Options& options,
   absl::flat_hash_map<const FileDescriptor*, int> dependency_count;
   absl::flat_hash_set<const FileDescriptor*> nodes_without_dependency;
   FileDescriptorSet sorted_file_set;
+  std::vector<const FileDescriptor*> aggregated_files;
 
   AnalyzeDependencyForFile(file, &nodes_without_dependency, &deps,
                            &dependency_count);
@@ -1046,6 +1256,7 @@ void GenerateAddFilesToPool(const FileDescriptor* file, const Options& options,
     bool needs_aggregate = NeedsUnwrapping(file_node, options);
 
     if (needs_aggregate) {
+      aggregated_files.push_back(file_node);
       auto file_proto = sorted_file_set.add_file();
       *file_proto = StripSourceRetentionOptions(*file_node);
 
@@ -1059,6 +1270,12 @@ void GenerateAddFilesToPool(const FileDescriptor* file, const Options& options,
           break;
         }
       }
+
+      // Clear public_dependency and weak_dependency since they contain indices
+      // into the dependency array which we just modified above. PHP handles
+      // dependency loading through initOnce() calls instead.
+      file_proto->clear_public_dependency();
+      file_proto->clear_weak_dependency();
 
       // Filter out all extensions, since we do not support extension yet.
       file_proto->clear_extension();
@@ -1078,13 +1295,29 @@ void GenerateAddFilesToPool(const FileDescriptor* file, const Options& options,
   }
 
   std::string files_data;
-  sorted_file_set.SerializeToString(&files_data);
+  ABSL_CHECK(sorted_file_set.SerializeToString(&files_data));
+
+  std::vector<std::pair<std::string, std::string>> custom_json_names;
+  for (const auto* file_node : aggregated_files) {
+    CollectCustomEnumJsonNames(file_node, &custom_json_names);
+  }
 
   printer->Print("$pool->internalAddGeneratedFile(\n");
   Indent(printer);
   printer->Print("\"^data^\"\n", "data", BinaryToPhpString(files_data));
   Outdent(printer);
-  printer->Print(", true);\n");
+  if (custom_json_names.empty()) {
+    printer->Print(", true);\n");
+  } else {
+    printer->Print(", true, [\n");
+    Indent(printer);
+    for (const auto& [fqn, custom_name] : custom_json_names) {
+      printer->Print("\"^fqn^\" => \"^custom_name^\",\n", "fqn", fqn,
+                     "custom_name", BinaryToPhpString(custom_name));
+    }
+    Outdent(printer);
+    printer->Print("]);\n");
+  }
 
   printer->Print("static::$is_initialized = true;\n");
 }
@@ -1357,7 +1590,7 @@ bool GenerateMessageFile(const FileDescriptor* file, const Descriptor* message,
   printer.Print("\n");
 
   GenerateMessageConstructorDocComment(&printer, message, options);
-  printer.Print("public function __construct($data = NULL) {\n");
+  printer.Print("public function __construct($data = null)\n{\n");
   Indent(&printer);
 
   std::string metadata_filename = GeneratedMetadataFileName(file, options);
@@ -1409,6 +1642,17 @@ bool GenerateMessageFile(const FileDescriptor* file, const Descriptor* message,
 
 bool GenerateFile(const FileDescriptor* file, const Options& options,
                   GeneratorContext* generator_context, std::string* error) {
+  if (file->options().has_php_namespace()) {
+    if (!IsValidPhpNamespace(file->options().php_namespace(), error)) {
+      return false;
+    }
+  }
+  if (file->options().has_php_metadata_namespace()) {
+    if (!IsValidPhpNamespace(file->options().php_metadata_namespace(), error)) {
+      return false;
+    }
+  }
+
   GenerateMetadataFile(file, options, generator_context);
 
   for (int i = 0; i < file->message_type_count(); i++) {
@@ -1554,8 +1798,8 @@ void GenerateMessageConstructorDocComment(io::Printer* printer,
   printer->Print(" *\n");
   for (int i = 0; i < message->field_count(); i++) {
     const FieldDescriptor* field = message->field(i);
-    printer->Print(" *     @type ^php_type^ $^var^\n", "php_type",
-                   PhpSetterTypeName(field, options), "var", field->name());
+    printer->Print(" *     @type ^phpdoc_type^ $^var^\n", "phpdoc_type",
+                   PhpDocSetterTypeName(field, options), "var", field->name());
     SourceLocation location;
     if (field->GetSourceLocation(&location)) {
       GenerateDocCommentBodyForLocation(printer, location, false, 10);
@@ -1580,16 +1824,33 @@ void GenerateFieldDocComment(io::Printer* printer, const FieldDescriptor* field,
   printer->Print(" * Generated from protobuf field <code>^def^</code>\n", "def",
                  EscapePhpdoc(FirstLineOf(field->DebugString())));
   if (function_type == kFieldSetter) {
-    printer->Print(" * @param ^php_type^ $var\n", "php_type",
-                   PhpSetterTypeName(field, options));
+    if (field->type() == FieldDescriptor::TYPE_ENUM) {
+      printer->Print(
+          " * @param ^phpdoc_type^ $var one of the values in {@see "
+          "^enum_class^}\n",
+          "phpdoc_type", PhpDocSetterTypeName(field, options), "enum_class",
+          absl::StrCat("\\", FullClassName(field->enum_type(), options)));
+    } else {
+      printer->Print(" * @param ^phpdoc_type^ $var\n", "phpdoc_type",
+                     PhpDocSetterTypeName(field, options));
+    }
     printer->Print(" * @return $this\n");
   } else if (function_type == kFieldGetter) {
     bool can_return_null =
         field->has_presence() &&
         field->cpp_type() == FieldDescriptor::CPPTYPE_MESSAGE;
-    printer->Print(" * @return ^php_type^^maybe_null^\n", "php_type",
-                   PhpGetterTypeName(field, options), "maybe_null",
-                   can_return_null ? "|null" : "");
+    if (field->type() == FieldDescriptor::TYPE_ENUM) {
+      printer->Print(
+          " * @return ^phpdoc_type^^maybe_null^ one of the values in {@see "
+          "^enum_class^}\n",
+          "phpdoc_type", PhpDocGetterTypeName(field, options), "maybe_null",
+          can_return_null ? "|null" : "", "enum_class",
+          absl::StrCat("\\", FullClassName(field->enum_type(), options)));
+    } else {
+      printer->Print(" * @return ^phpdoc_type^^maybe_null^\n", "phpdoc_type",
+                     PhpDocGetterTypeName(field, options), "maybe_null",
+                     can_return_null ? "|null" : "");
+    }
   }
   if (field->options().deprecated()) {
     printer->Print(" * @deprecated\n");
@@ -1610,8 +1871,8 @@ void GenerateWrapperFieldGetterDocComment(io::Printer* printer,
   GenerateDocCommentBody(printer, field);
   printer->Print(" * Generated from protobuf field <code>^def^</code>\n", "def",
                  EscapePhpdoc(FirstLineOf(field->DebugString())));
-  printer->Print(" * @return ^php_type^|null\n", "php_type",
-                 PhpGetterTypeName(primitiveField, false));
+  printer->Print(" * @return ^phpdoc_type^|null\n", "phpdoc_type",
+                 PhpDocGetterTypeName(primitiveField, false));
   printer->Print(" */\n");
 }
 
@@ -1629,8 +1890,8 @@ void GenerateWrapperFieldSetterDocComment(io::Printer* printer,
   GenerateDocCommentBody(printer, field);
   printer->Print(" * Generated from protobuf field <code>^def^</code>\n", "def",
                  EscapePhpdoc(FirstLineOf(field->DebugString())));
-  printer->Print(" * @param ^php_type^|null $var\n", "php_type",
-                 PhpSetterTypeName(primitiveField, false));
+  printer->Print(" * @param ^phpdoc_type^|null $var\n", "phpdoc_type",
+                 PhpDocSetterTypeName(primitiveField, false));
   printer->Print(" * @return $this\n");
   printer->Print(" */\n");
 }
@@ -1968,7 +2229,7 @@ void GenerateCWellKnownTypes(const std::vector<const FileDescriptor*>& files,
         absl::StrReplaceAll(metadata_classname, {{"\\", "\\\\"}});
     FileDescriptorProto file_proto = StripSourceRetentionOptions(*file);
     std::string serialized;
-    file_proto.SerializeToString(&serialized);
+    ABSL_CHECK(file_proto.SerializeToString(&serialized));
     printer.Print(
         "/* $filename$ */\n"
         "\n"

@@ -9,6 +9,7 @@
 
 #include "base/memory/raw_ref.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/common/dense_set.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -17,6 +18,8 @@ class GURL;
 class PrefService;
 
 namespace autofill {
+
+class AutofillType;
 
 // Evaluates whether Autofill is allowed for a given data category and URL,
 // combining both user settings and enterprise policies.
@@ -29,9 +32,18 @@ class AutofillPolicyService : public KeyedService {
 
   // Returns true if the specified Autofill data category is blocked by either
   // user settings or enterprise policy for the given `url`. This static method
-  // is suitable for one-off checks (e.g., at startup) as it parses the policy
+  // is used where an `AutofillPolicyService` instance or `AutofillClient` is
+  // not accessible (e.g., in data managers or at startup), parsing the policy
   // list directly from `prefs` without caching.
   [[nodiscard]] static bool IsAutofillTypeBlockedByPolicyFromPref(
+      const PrefService& prefs,
+      const GURL& url,
+      AutofillClient::AutofillPolicyDataCategory category);
+
+  // Returns true if the specified Autofill data category is disabled
+  // specifically by enterprise policy (`kAutofillTypesBlocked`) for the given
+  // `url`. This does not check user setting preferences.
+  [[nodiscard]] static bool IsAutofillTypeDisabledByEnterprisePolicy(
       const PrefService& prefs,
       const GURL& url,
       AutofillClient::AutofillPolicyDataCategory category);
@@ -40,6 +52,11 @@ class AutofillPolicyService : public KeyedService {
   [[nodiscard]] bool IsAutofillTypeBlockedByPolicy(
       const GURL& url,
       AutofillClient::AutofillPolicyDataCategory category) const;
+
+  // Returns the AutofillPolicyDataCategories that `type` matches. If `type`
+  // does not match any category (e.g. UNKNOWN_TYPE), an empty set is returned.
+  [[nodiscard]] static DenseSet<AutofillClient::AutofillPolicyDataCategory>
+  GetAutofillPolicyDataCategoriesForType(const AutofillType& type);
 
  private:
   void OnAutofillPolicyChanged();

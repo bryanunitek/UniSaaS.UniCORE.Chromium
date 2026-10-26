@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/core/layout/block_node.h"
 #include "third_party/blink/renderer/core/layout/constraint_space_builder.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
+#include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_inline.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_inline_text.h"
@@ -42,28 +43,24 @@ const LayoutSVGText* FindTextRoot(const LayoutObject* start) {
 
 }  // namespace
 
-LayoutSVGText::LayoutSVGText(Element* element)
-    : LayoutSVGBlock(element),
-      needs_update_bounding_box_(true),
-      needs_text_metrics_update_(true) {
+LayoutSVGText::LayoutSVGText(Element* element) : LayoutSVGBlock(element) {
   DCHECK(IsA<SVGTextElement>(element));
 }
 
 void LayoutSVGText::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  if (needs_text_metrics_update_ && diff.HasDifference() && old_style) {
-    diff.SetNeedsFullLayout();
-  }
-  LayoutSVGBlock::StyleDidChange(diff, old_style, style_change_context);
-  SVGResources::UpdatePaints(*this, old_style, StyleRef());
+  LayoutSVGBlock::StyleDidChange(diff, old_style, new_style,
+                                 style_change_context);
+  SVGResources::UpdatePaints(*this, old_style, new_style);
 
   if (old_style) {
-    const ComputedStyle& style = StyleRef();
     if (transform_uses_reference_box_ && !needs_transform_update_) {
-      if (TransformHelper::CheckReferenceBoxDependencies(*old_style, style)) {
+      if (TransformHelper::CheckReferenceBoxDependencies(*old_style,
+                                                         new_style)) {
         SetNeedsTransformUpdate();
         SetNeedsPaintPropertyUpdate();
       }
@@ -71,10 +68,10 @@ void LayoutSVGText::StyleDidChange(
   }
 }
 
-void LayoutSVGText::WillBeDestroyed() {
+void LayoutSVGText::WillBeDestroyed(const ComputedStyle* style) {
   NOT_DESTROYED();
-  SVGResources::ClearPaints(*this, Style());
-  LayoutSVGBlock::WillBeDestroyed();
+  SVGResources::ClearPaints(*this, style);
+  LayoutSVGBlock::WillBeDestroyed(style);
 }
 
 const char* LayoutSVGText::GetName() const {
@@ -112,36 +109,6 @@ void LayoutSVGText::RemoveChild(LayoutObject* child) {
   LayoutSVGBlock::RemoveChild(child);
 }
 
-void LayoutSVGText::InsertedIntoTree() {
-  NOT_DESTROYED();
-  LayoutSVGBlock::InsertedIntoTree();
-  bool seen_svg_root = false;
-  for (auto* ancestor = Parent(); ancestor; ancestor = ancestor->Parent()) {
-    auto* root = DynamicTo<LayoutSVGRoot>(ancestor);
-    if (!seen_svg_root && root) {
-      root->AddSvgTextDescendant(*this);
-      seen_svg_root = true;
-    } else if (auto* block = DynamicTo<LayoutBlock>(ancestor)) {
-      block->AddSvgTextDescendant(*this);
-    }
-  }
-}
-
-void LayoutSVGText::WillBeRemovedFromTree() {
-  NOT_DESTROYED();
-  bool seen_svg_root = false;
-  for (auto* ancestor = Parent(); ancestor; ancestor = ancestor->Parent()) {
-    auto* root = DynamicTo<LayoutSVGRoot>(ancestor);
-    if (!seen_svg_root && root) {
-      root->RemoveSvgTextDescendant(*this);
-      seen_svg_root = true;
-    } else if (auto* block = DynamicTo<LayoutBlock>(ancestor)) {
-      block->RemoveSvgTextDescendant(*this);
-    }
-  }
-  LayoutSVGBlock::WillBeRemovedFromTree();
-}
-
 void LayoutSVGText::SubtreeStructureChanged(
     LayoutInvalidationReasonForTracing) {
   NOT_DESTROYED();
@@ -163,7 +130,7 @@ void LayoutSVGText::UpdateFont() {
 }
 
 void LayoutSVGText::UpdateTransformAffectsVectorEffect() {
-  if (StyleRef().VectorEffect() == EVectorEffect::kNonScalingStroke) {
+  if (Style().VectorEffect() == EVectorEffect::kNonScalingStroke) {
     SetTransformAffectsVectorEffect(true);
     return;
   }
@@ -171,7 +138,7 @@ void LayoutSVGText::UpdateTransformAffectsVectorEffect() {
   SetTransformAffectsVectorEffect(false);
   for (LayoutObject* descendant = FirstChild(); descendant;
        descendant = descendant->NextInPreOrder(this)) {
-    if (descendant->IsSVGInline() && descendant->StyleRef().VectorEffect() ==
+    if (descendant->IsSVGInline() && descendant->Style().VectorEffect() ==
                                          EVectorEffect::kNonScalingStroke) {
       SetTransformAffectsVectorEffect(true);
       break;
@@ -242,7 +209,7 @@ SVGLayoutResult LayoutSVGText::UpdateSVGLayout(
 
   const gfx::RectF old_boundaries = ObjectBoundingBox();
 
-  const ComputedStyle& style = StyleRef();
+  const ComputedStyle& style = Style();
   ConstraintSpaceBuilder builder(style.GetWritingMode(),
                                  style.GetWritingDirection(),
                                  /* is_new_fc */ true);
@@ -271,9 +238,25 @@ bool LayoutSVGText::UpdateAfterSVGLayout(const SVGLayoutInfo& layout_info,
     SVGResourceInvalidator resource_invalidator(*this);
     resource_invalidator.InvalidateEffects();
     resource_invalidator.InvalidatePaints();
+
+    // SVG inline descendants can have resources that use this <text>'s
+    // bounding box as their reference box.
+    for (LayoutObject* object = FirstChild(); object;
+         object = object->NextInPreOrder(this)) {
+      auto* svg_inline = DynamicTo<LayoutSVGInline>(object);
+      if (!svg_inline) {
+        continue;
+      }
+      SVGResourceInvalidator descendant_resource_invalidator(*svg_inline);
+      descendant_resource_invalidator.InvalidateEffects();
+      descendant_resource_invalidator.InvalidatePaints();
+    }
   }
 
   UpdateTransformAffectsVectorEffect();
+  if (TransformAffectsVectorEffect()) {
+    View()->SetContainsNonScalingStroke();
+  }
   return UpdateTransformAfterLayout(layout_info, bounds_changed);
 }
 
@@ -336,7 +319,8 @@ gfx::RectF LayoutSVGText::VisualRectInLocalSVGCoordinates() const {
 void LayoutSVGText::QuadsInAncestorInternal(
     Vector<gfx::QuadF>& quads,
     const LayoutBoxModelObject* ancestor,
-    MapCoordinatesFlags mode) const {
+    MapCoordinatesFlags mode,
+    BoxQuadType) const {
   NOT_DESTROYED();
   quads.push_back(
       LocalToAncestorQuad(gfx::QuadF(DecoratedBoundingBox()), ancestor, mode));

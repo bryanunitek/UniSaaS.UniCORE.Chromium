@@ -171,9 +171,8 @@ TEST_F(LayoutShiftTrackerSimTest, SubframeWeighting) {
   EXPECT_FLOAT_EQ(0.1 * (60.0 / 400.0), layout_shift_tracker.WeightedScore());
 
   // Move subframe halfway outside the viewport.
-  GetDocument()
-      .getElementById(AtomicString("i"))
-      ->setAttribute(html_names::kStyleAttr, AtomicString("left: 600px"));
+  GetElementById("i")->setAttribute(html_names::kStyleAttr,
+                                    AtomicString("left: 600px"));
 
   div->removeAttribute(html_names::kStyleAttr);
 
@@ -399,9 +398,7 @@ void LayoutShiftTrackerPointerdownTest::RunTest(
 
   WebPointerEvent event1(WebInputEvent::Type::kPointerDown, pointer_properties,
                          5, 5);
-  event1.SetTimeStamp(base::TimeTicks::Now());
   WebPointerEvent event2(completion_type, pointer_properties, 5, 5);
-  event2.SetTimeStamp(base::TimeTicks::Now());
 
   // Coordinates inside #box.
   event1.SetPositionInWidget(50, 150);
@@ -576,13 +573,10 @@ TEST_F(LayoutShiftTrackerSimTest, TouchDraggingAction) {
 
   WebPointerEvent event1(WebInputEvent::Type::kPointerDown, pointer_properties,
                          5, 5);
-  event1.SetTimeStamp(base::TimeTicks::Now());
   WebPointerEvent event2(WebInputEvent::Type::kPointerMove, pointer_properties,
                          5, 5);
-  event2.SetTimeStamp(base::TimeTicks::Now());
   WebPointerEvent event3(WebInputEvent::Type::kPointerUp, pointer_properties, 5,
                          5);
-  event3.SetTimeStamp(base::TimeTicks::Now());
 
   // Coordinates inside #box.
   event1.SetPositionInWidget(100, 160);
@@ -766,16 +760,12 @@ TEST_F(LayoutShiftTrackerSimTest, MultiplePointerDownUps) {
 
   WebPointerEvent event1(WebInputEvent::Type::kPointerDown, pointer_properties,
                          5, 5);
-  event1.SetTimeStamp(base::TimeTicks::Now());
   WebPointerEvent event2(WebInputEvent::Type::kPointerDown, pointer_properties,
                          5, 5);
-  event2.SetTimeStamp(base::TimeTicks::Now());
   WebPointerEvent event3(WebInputEvent::Type::kPointerUp, pointer_properties, 5,
                          5);
-  event3.SetTimeStamp(base::TimeTicks::Now());
   WebPointerEvent event4(WebInputEvent::Type::kPointerUp, pointer_properties, 5,
                          5);
-  event4.SetTimeStamp(base::TimeTicks::Now());
 
   // Coordinates inside #box.
   event1.SetPositionInWidget(90, 110);

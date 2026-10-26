@@ -152,6 +152,7 @@ class ASH_EXPORT ScrollableShelfView : public views::AccessiblePaneView,
   bool IsPageFlipTimerBusyForTest() const;
 
   ShelfView* shelf_view() { return shelf_view_; }
+  const ShelfView* shelf_view() const { return shelf_view_; }
   ShelfContainerView* shelf_container_view() { return shelf_container_view_; }
   const ShelfContainerView* shelf_container_view() const {
     return shelf_container_view_;
@@ -287,8 +288,8 @@ class ASH_EXPORT ScrollableShelfView : public views::AccessiblePaneView,
   bool ShouldShowTooltipForView(const views::View* view) const override;
   bool ShouldHideTooltip(const gfx::Point& cursor_location,
                          views::View* delegate_view) const override;
-  const std::vector<aura::Window*> GetOpenWindowsForView(
-      views::View* view) override;
+  aura::Window* GetSingleOpenWindowForShelfView(
+      const views::View* view) override;
   std::u16string GetTitleForView(const views::View* view) const override;
   views::View* GetViewForEvent(const ui::Event& event) override;
 

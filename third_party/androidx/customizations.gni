@@ -48,8 +48,7 @@ template("_androidx_prebuilt") {
 
       # Manifest and proguard config have just one entry: Adding (and -keep'ing
       # android:appComponentFactory="androidx.core.app.CoreComponentFactory"
-      # Chrome does not use this feature and it causes a scary stack trace to be
-      # shown when incremental_install=true.
+      # Chrome does not use this feature.
       ignore_manifest = true
       ignore_proguard_configs = true
 
@@ -149,6 +148,12 @@ template("_androidx_prebuilt") {
         "//third_party/androidx:androidx_window_sidecar_sidecar_java",
       ]
     } else if (target_name == "androidx_webkit_webkit_java") {
+      visibility = [
+        "//android_webview/tools/system_webview_shell:*",
+        "//third_party/android_deps:*",
+        "//third_party/androidx:*",
+      ]
+    } else if (target_name == "androidx_web_web_java") {
       visibility = [
         "//android_webview/tools/system_webview_shell:*",
         "//third_party/android_deps:*",

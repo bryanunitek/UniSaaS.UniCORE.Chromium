@@ -5,25 +5,40 @@
 #import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_profile_table_view_controller.h"
 
 #import "base/apple/foundation_util.h"
+#import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
 #import "base/test/ios/wait_util.h"
 #import "base/test/metrics/histogram_tester.h"
+#import "base/test/metrics/user_action_tester.h"
 #import "base/test/scoped_feature_list.h"
 #import "base/test/with_feature_override.h"
 #import "base/uuid.h"
+#import "components/account_settings/account_settings.h"
+#import "components/account_settings/mock_account_setting_service.h"
 #import "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #import "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
 #import "components/autofill/core/browser/data_manager/personal_data_manager.h"
-#import "components/autofill/core/browser/data_manager/personal_data_manager_test_utils.h"
+#import "components/autofill/core/browser/data_manager/personal_data_manager_test_util.h"
 #import "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #import "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #import "components/autofill/core/browser/geo/alternative_state_name_map_updater.h"
-#import "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
+#import "components/autofill/core/browser/network/autofill_ai/mock_wallet_pass_access_manager.h"
+#import "components/autofill/core/browser/test_utils/entity_data_test_util.h"
 #import "components/autofill/core/common/autofill_features.h"
+#import "components/autofill/core/common/autofill_prefs.h"
+#import "components/personal_context/core/mock_personal_context_eligibility_service.h"
+#import "components/personal_context/core/personal_context_prefs.h"
+#import "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
+#import "components/signin/public/identity_manager/identity_manager.h"
+#import "components/signin/public/identity_manager/identity_test_utils.h"
 #import "components/strings/grit/components_strings.h"
 #import "components/sync/test/test_sync_service.h"
+#import "ios/chrome/browser/account_settings/model/ios_account_setting_service_factory.h"
+#import "ios/chrome/browser/autofill/model/autofill_ai_util.h"
 #import "ios/chrome/browser/autofill/model/ios_autofill_entity_data_manager_factory.h"
+#import "ios/chrome/browser/autofill/model/ios_wallet_pass_access_manager_factory.h"
 #import "ios/chrome/browser/autofill/model/personal_data_manager_factory.h"
+#import "ios/chrome/browser/personal_context/model/ios_personal_context_eligibility_service_factory.h"
 #import "ios/chrome/browser/settings/autofill/autofill_ai/ui/autofill_ai_entity_item.h"
 #import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_profile_table_view_controller+testing.h"
 #import "ios/chrome/browser/settings/ui_bundled/autofill/cells/autofill_profile_item.h"
@@ -31,6 +46,7 @@
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
+#import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_detail_icon_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_controller_test.h"
@@ -38,20 +54,49 @@
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
-#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
+#import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/signin/model/identity_test_environment_browser_state_adaptor.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/webdata_services/model/web_data_service_factory.h"
+#import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/web_task_environment.h"
+#import "testing/gmock/include/gmock/gmock.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
+#import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
 namespace {
+
+std::unique_ptr<KeyedService> CreateMockPersonalContextEligibilityService(
+    ProfileIOS* profile) {
+  auto service = std::make_unique<testing::NiceMock<
+      personal_context::MockPersonalContextEligibilityService>>();
+  ON_CALL(*service, GetEligibilityState())
+      .WillByDefault(testing::Return(
+          personal_context::PersonalContextEligibilityState::kEligible));
+  return service;
+}
+
+std::unique_ptr<KeyedService> CreateMockAccountSettingService(
+    ProfileIOS* profile) {
+  auto service = std::make_unique<
+      testing::NiceMock<account_settings::MockAccountSettingService>>();
+  ON_CALL(*service, GetBoolean(testing::_))
+      .WillByDefault(testing::Return(true));
+  return service;
+}
+
+std::unique_ptr<KeyedService> CreateMockWalletPassAccessManager(
+    ProfileIOS* profile) {
+  return std::make_unique<
+      testing::NiceMock<autofill::MockWalletPassAccessManager>>();
+}
 
 class AutofillProfileTableViewControllerTest
     : public LegacyChromeTableViewControllerTest {
@@ -66,14 +111,26 @@ class AutofillProfileTableViewControllerTest
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateTestSyncService));
     builder.AddTestingFactory(
+        IdentityManagerFactory::GetInstance(),
+        base::BindRepeating(IdentityTestEnvironmentBrowserStateAdaptor::
+                                BuildIdentityManagerForTests));
+    builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
-            std::make_unique<FakeAuthenticationServiceDelegate>()));
-    profile_ = std::move(builder).Build();
-    browser_ = std::make_unique<TestBrowser>(profile_.get());
+        AuthenticationServiceFactory::GetDefaultFactory());
+    builder.AddTestingFactory(
+        IOSPersonalContextEligibilityServiceFactory::GetInstance(),
+        base::BindRepeating(&CreateMockPersonalContextEligibilityService));
+    builder.AddTestingFactory(
+        IOSAccountSettingServiceFactory::GetInstance(),
+        base::BindRepeating(&CreateMockAccountSettingService));
+    builder.AddTestingFactory(
+        IOSWalletPassAccessManagerFactory::GetInstance(),
+        base::BindRepeating(&CreateMockWalletPassAccessManager));
+    profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
+    browser_ = std::make_unique<TestBrowser>(profile_);
 
     // Set circular SyncService dependency to null.
-    autofill::PersonalDataManagerFactory::GetForProfile(profile_.get())
+    autofill::PersonalDataManagerFactory::GetForProfile(profile_)
         ->SetSyncServiceForTest(nullptr);
   }
 
@@ -87,13 +144,18 @@ class AutofillProfileTableViewControllerTest
     feature_list_.InitWithFeatures(
         {autofill::features::kAutofillAiWithDataSchema,
          autofill::features::kAutofillAiReauthRequired},
-        /*disabled_features=*/{});
+        /*disabled_features=*/{kYourSavedInfoSettingsPageIos});
   }
 
   void TearDown() override {
     [base::apple::ObjCCastStrict<AutofillProfileTableViewController>(
         controller()) settingsWillBeDismissed];
+    // Call `LegacyChromeTableViewControllerTest::TearDown()` first to drain the
+    // autorelease pool and deallocate the controller while `browser_` and
+    // `profile_` are still valid.
     LegacyChromeTableViewControllerTest::TearDown();
+    browser_.reset();
+    profile_ = nullptr;
   }
 
   void SignIn() {
@@ -103,10 +165,24 @@ class AutofillProfileTableViewControllerTest
     FakeSystemIdentity* fake_identity = [FakeSystemIdentity fakeIdentity1];
     fake_system_identity_manager->AddIdentity(fake_identity);
 
+    auto* identity_manager = IdentityManagerFactory::GetForProfile(profile_);
+    AccountInfo account_info = signin::MakeAccountAvailable(
+        identity_manager,
+        signin::AccountAvailabilityOptionsBuilder()
+            .WithGaiaId(fake_identity.gaiaId)
+            .Build(base::SysNSStringToUTF8(fake_identity.userEmail)));
+
+    AccountInfo::Builder builder(account_info);
+    AccountCapabilities capabilities = account_info.GetAccountCapabilities();
+    AccountCapabilitiesTestMutator mutator(&capabilities);
+    mutator.set_can_use_model_execution_features(true);
+    builder.UpdateAccountCapabilitiesWith(capabilities);
+    signin::UpdateAccountInfoForAccount(identity_manager, builder.Build());
+
     ChromeAccountManagerService* account_manager_service =
-        ChromeAccountManagerServiceFactory::GetForProfile(profile_.get());
+        ChromeAccountManagerServiceFactory::GetForProfile(profile_);
     AuthenticationService* auth_service =
-        AuthenticationServiceFactory::GetForProfile(profile_.get());
+        AuthenticationServiceFactory::GetForProfile(profile_);
     auth_service->SignIn(account_manager_service->GetDefaultIdentity(),
                          signin_metrics::AccessPoint::kStartPage);
   }
@@ -116,7 +192,7 @@ class AutofillProfileTableViewControllerTest
   // which maps autofill::FieldType keys to their string values.
   void AddProfile(const std::map<autofill::FieldType, std::string>& data) {
     autofill::PersonalDataManager* personal_data_manager =
-        autofill::PersonalDataManagerFactory::GetForProfile(profile_.get());
+        autofill::PersonalDataManagerFactory::GetForProfile(profile_);
     personal_data_manager->SetSyncServiceForTest(nullptr);
     autofill::PersonalDataChangedWaiter waiter(*personal_data_manager);
 
@@ -137,7 +213,8 @@ class AutofillProfileTableViewControllerTest
   base::test::ScopedFeatureList feature_list_;
   web::WebTaskEnvironment task_environment_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
-  std::unique_ptr<TestProfileIOS> profile_;
+  TestProfileManagerIOS profile_manager_;
+  raw_ptr<TestProfileIOS> profile_;
   std::unique_ptr<Browser> browser_;
 };
 
@@ -245,8 +322,82 @@ TEST_F(AutofillProfileTableViewControllerTest,
       base::apple::ObjCCastStrict<TableViewDetailIconItem>(
           GetTableViewItem(/*section=*/1, /*item=*/0));
 
+  NSString* text =
+      l10n_util::GetNSString(IDS_SETTINGS_AUTOFILL_AI_PAGE_TITLE_V2);
+  EXPECT_NSEQ(text, item.text);
+}
+
+TEST_F(AutofillProfileTableViewControllerTest,
+       TestEnhancedAutofillMenuPresent_OldTitle) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      autofill::features::kAutofillAiOnlineModelToggleNewTitle);
+  CreateController();
+  CheckController();
+
+  TableViewDetailIconItem* item =
+      base::apple::ObjCCastStrict<TableViewDetailIconItem>(
+          GetTableViewItem(/*section=*/1, /*item=*/0));
+
   NSString* text = l10n_util::GetNSString(IDS_SETTINGS_AUTOFILL_AI_PAGE_TITLE);
   EXPECT_NSEQ(text, item.text);
+}
+
+// Tests that when `kAutofillAiUsePrivateAi` is enabled, updating
+// `kAutofillAiPrivateInferenceOptInStatus` updates the Enhanced Autofill
+// item's detail text.
+TEST_F(AutofillProfileTableViewControllerTest, TestPrivateAiPrefChange) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{autofill::features::kAutofillAiUsePrivateAi,
+                            autofill::features::kAutofillAiWithDataSchema,
+                            autofill::features::kAutofillAiReauthRequired},
+      /*disabled_features=*/{});
+  SignIn();
+
+  // Set notice shown timestamp so that opt-in state can be true.
+  profile_->GetPrefs()->SetTime(
+      autofill::prefs::kAutofillAiPrivateInferenceNoticeShownTimestamp,
+      base::Time::Now());
+  profile_->GetPrefs()->SetBoolean(
+      autofill::prefs::kAutofillAiPrivateInferenceOptInStatus, true);
+
+  CreateController();
+  CheckController();
+
+  TableViewDetailIconItem* item =
+      base::apple::ObjCCastStrict<TableViewDetailIconItem>(
+          GetTableViewItem(/*section=*/1, /*item=*/0));
+  EXPECT_NSEQ(l10n_util::GetNSString(IDS_IOS_SETTING_ON), item.detailText);
+
+  profile_->GetPrefs()->SetBoolean(
+      autofill::prefs::kAutofillAiPrivateInferenceOptInStatus, false);
+  EXPECT_NSEQ(l10n_util::GetNSString(IDS_IOS_SETTING_OFF), item.detailText);
+}
+
+// Tests that when `kAutofillAiUsePrivateAi` is disabled, updating
+// the legacy `kAutofillAiOptInStatus` updates the Enhanced Autofill
+// item's detail text.
+TEST_F(AutofillProfileTableViewControllerTest, TestLegacyPrefChange) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{autofill::features::kAutofillAiWithDataSchema,
+                            autofill::features::kAutofillAiReauthRequired},
+      /*disabled_features=*/{autofill::features::kAutofillAiUsePrivateAi});
+  SignIn();
+
+  autofill::SetEnhancedAutofillEnabled(profile_, true);
+
+  CreateController();
+  CheckController();
+
+  TableViewDetailIconItem* item =
+      base::apple::ObjCCastStrict<TableViewDetailIconItem>(
+          GetTableViewItem(/*section=*/1, /*item=*/0));
+  EXPECT_NSEQ(l10n_util::GetNSString(IDS_IOS_SETTING_ON), item.detailText);
+
+  autofill::SetEnhancedAutofillEnabled(profile_, false);
+  EXPECT_NSEQ(l10n_util::GetNSString(IDS_IOS_SETTING_OFF), item.detailText);
 }
 
 // TODO(crbug.com/496456595): Alter this test once YourSavedInfoSettingsPageIos
@@ -257,6 +408,14 @@ class AutofillProfileTableViewControllerTitleTest
  public:
   AutofillProfileTableViewControllerTitleTest()
       : base::test::WithFeatureOverride(kYourSavedInfoSettingsPageIos) {}
+
+  void SetUp() override {
+    LegacyChromeTableViewControllerTest::SetUp();
+    feature_list_.InitWithFeatures(
+        {autofill::features::kAutofillAiWithDataSchema,
+         autofill::features::kAutofillAiReauthRequired},
+        /*disabled_features=*/{});
+  }
 };
 
 // Tests the title of the view controller when the feature is enabled/disabled.
@@ -275,7 +434,7 @@ INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
 // Tests that deleting an Autofill AI entity logs the Deleted metric.
 TEST_F(AutofillProfileTableViewControllerTest, DeleteAIEntity) {
   autofill::EntityDataManager* entity_data_manager =
-      IOSAutofillEntityDataManagerFactory::GetForProfile(profile_.get());
+      IOSAutofillEntityDataManagerFactory::GetForProfile(profile_);
   autofill::EntityInstance instance =
       autofill::test::GetVehicleEntityInstance();
   entity_data_manager->AddOrUpdateEntityInstance(instance);
@@ -321,7 +480,7 @@ TEST_F(AutofillProfileTableViewControllerTest, DeleteAIEntity) {
 TEST_F(AutofillProfileTableViewControllerTest,
        TestServerWalletEntityOpacityAndInteractionInEditing) {
   autofill::EntityDataManager* entity_data_manager =
-      IOSAutofillEntityDataManagerFactory::GetForProfile(profile_.get());
+      IOSAutofillEntityDataManagerFactory::GetForProfile(profile_);
 
   // Add a server wallet vehicle entity.
   autofill::EntityInstance wallet_entity =
@@ -437,6 +596,73 @@ TEST_F(AutofillProfileTableViewControllerTest,
   }
 }
 
+// Tests that when ShouldShowPersonalContextAutofillSetting is true,
+// the suggestions from Gemini section is visible with a footer.
+TEST_F(AutofillProfileTableViewControllerTest,
+       TestSuggestionsFromGeminiSettingSectionVisible) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{autofill::features::kAutofillAmbientAutofill,
+                            autofill::features::kAutofillAiAvailableByDefault},
+      /*disabled_features=*/{kYourSavedInfoSettingsPageIos});
+  SignIn();
+
+  CreateController();
+  CheckController();
+
+  // Expect 4 sections (address toggle, suggestions from gemini, enhanced
+  // autofill, user verification).
+  EXPECT_EQ(4, NumberOfSections());
+  // The suggestions from gemini section should be index 1.
+  EXPECT_EQ(1, NumberOfItemsInSection(1));
+  CheckSectionFooterWithId(
+      IDS_IOS_PERSONAL_CONTEXT_AUTOFILL_SETTINGS_SUBPAGE_SUMMARY, 1);
+
+  TableViewDetailIconItem* item =
+      base::apple::ObjCCastStrict<TableViewDetailIconItem>(
+          GetTableViewItem(/*section=*/1, /*item=*/0));
+  EXPECT_NSEQ(
+      l10n_util::GetNSString(IDS_IOS_PERSONAL_CONTEXT_AUTOFILL_SETTINGS_TITLE),
+      item.text);
+  EXPECT_NSEQ(l10n_util::GetNSString(IDS_IOS_SETTING_ON), item.detailText);
+
+  profile_->GetPrefs()->SetBoolean(
+      personal_context::prefs::kPersonalContextInAutofillSettingsToggleStatus,
+      false);
+  EXPECT_NSEQ(l10n_util::GetNSString(IDS_IOS_SETTING_OFF), item.detailText);
+}
+
+// Tests that selecting the Suggestions from Gemini row reports the expected
+// user action.
+TEST_F(AutofillProfileTableViewControllerTest,
+       TestSelectSuggestionsFromGeminiRowReportsUserAction) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{autofill::features::kAutofillAmbientAutofill,
+                            autofill::features::kAutofillAiAvailableByDefault},
+      /*disabled_features=*/{kYourSavedInfoSettingsPageIos});
+  SignIn();
+
+  CreateController();
+  CheckController();
+
+  base::UserActionTester user_action_tester;
+
+  id mockNavigationController = OCMClassMock([UINavigationController class]);
+  AutofillProfileTableViewController* partialMockController =
+      OCMPartialMock(controller());
+  OCMStub([partialMockController navigationController])
+      .andReturn(mockNavigationController);
+
+  // The suggestions from gemini section should be index 1.
+  NSIndexPath* indexPath = [NSIndexPath indexPathForRow:0 inSection:1];
+  [partialMockController tableView:partialMockController.tableView
+           didSelectRowAtIndexPath:indexPath];
+
+  EXPECT_EQ(
+      1, user_action_tester.GetActionCount("Settings.SuggestionsFromGemini"));
+}
+
 class AutofillProfileTableViewControllerYourSavedInfoEnabledTest
     : public AutofillProfileTableViewControllerTest {
  protected:
@@ -506,7 +732,7 @@ TEST_F(AutofillProfileTableViewControllerYourSavedInfoEnabledTest,
 TEST_F(AutofillProfileTableViewControllerYourSavedInfoEnabledTest,
        TestNoEntitiesLoaded) {
   autofill::EntityDataManager* entity_data_manager =
-      IOSAutofillEntityDataManagerFactory::GetForProfile(profile_.get());
+      IOSAutofillEntityDataManagerFactory::GetForProfile(profile_);
   if (entity_data_manager) {
     autofill::EntityInstance instance =
         autofill::test::GetVehicleEntityInstance();
@@ -526,6 +752,119 @@ TEST_F(AutofillProfileTableViewControllerYourSavedInfoEnabledTest,
   // Expect only 1 section (SectionIdentifierSwitches) since no profiles are
   // added.
   EXPECT_EQ(1, NumberOfSections());
+}
+
+// Tests that vehicle disclosure details are preloaded when the view loads if
+// the feature is enabled and the user can add entities and save to Wallet.
+TEST_F(AutofillProfileTableViewControllerTest,
+       TestPreloadVehicleDetailsWhenEligibleAndFeatureEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {autofill::features::kAutofillEnableWalletDisclosureNoticePublicPass,
+       autofill::features::kAutofillAiAvailableByDefault,
+       autofill::features::kAutofillAiIgnoreGeoIp,
+       autofill::features::kAutofillAiWalletVehicleRegistration},
+      /*disabled_features=*/{kYourSavedInfoSettingsPageIos});
+  SignIn();
+
+  auto* mock_pass_manager = static_cast<autofill::MockWalletPassAccessManager*>(
+      IOSWalletPassAccessManagerFactory::GetForProfile(profile_));
+  EXPECT_CALL(*mock_pass_manager,
+              PreloadDetailsForUpsertPass(
+                  autofill::EntityType(autofill::EntityTypeName::kVehicle)));
+
+  CreateController();
+}
+
+// Tests that vehicle disclosure details are not preloaded by the initializer
+// alone, since the preload is deferred until the view loads.
+TEST_F(AutofillProfileTableViewControllerTest,
+       TestPreloadNotTriggeredBeforeViewLoads) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {autofill::features::kAutofillEnableWalletDisclosureNoticePublicPass,
+       autofill::features::kAutofillAiAvailableByDefault,
+       autofill::features::kAutofillAiIgnoreGeoIp,
+       autofill::features::kAutofillAiWalletVehicleRegistration},
+      /*disabled_features=*/{kYourSavedInfoSettingsPageIos});
+  SignIn();
+
+  auto* mock_pass_manager = static_cast<autofill::MockWalletPassAccessManager*>(
+      IOSWalletPassAccessManagerFactory::GetForProfile(profile_));
+  EXPECT_CALL(*mock_pass_manager, PreloadDetailsForUpsertPass).Times(0);
+
+  CreateControllerWithoutView();
+}
+
+// Tests that vehicle disclosure details are not preloaded when public pass
+// storage is disabled in account settings.
+TEST_F(AutofillProfileTableViewControllerTest,
+       TestPreloadNotTriggeredWhenWalletPublicPassStorageDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {autofill::features::kAutofillEnableWalletDisclosureNoticePublicPass,
+       autofill::features::kAutofillAiAvailableByDefault,
+       autofill::features::kAutofillAiIgnoreGeoIp,
+       autofill::features::kAutofillAiWalletVehicleRegistration},
+      /*disabled_features=*/{kYourSavedInfoSettingsPageIos});
+  SignIn();
+
+  auto* mock_account_service =
+      static_cast<account_settings::MockAccountSettingService*>(
+          IOSAccountSettingServiceFactory::GetForProfile(profile_));
+  ON_CALL(*mock_account_service, GetBoolean(testing::_))
+      .WillByDefault(testing::Return(false));
+
+  auto* mock_pass_manager = static_cast<autofill::MockWalletPassAccessManager*>(
+      IOSWalletPassAccessManagerFactory::GetForProfile(profile_));
+  EXPECT_CALL(*mock_pass_manager, PreloadDetailsForUpsertPass).Times(0);
+
+  CreateController();
+}
+
+// Tests that vehicle disclosure details are not preloaded when the user is
+// signed out, since they cannot save the entity to Wallet.
+TEST_F(AutofillProfileTableViewControllerTest,
+       TestPreloadNotTriggeredWhenCannotImportToWallet) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {autofill::features::kAutofillEnableWalletDisclosureNoticePublicPass,
+       autofill::features::kAutofillAiAvailableByDefault,
+       autofill::features::kAutofillAiIgnoreGeoIp,
+       autofill::features::kAutofillAiWalletVehicleRegistration},
+      /*disabled_features=*/{kYourSavedInfoSettingsPageIos});
+
+  auto* mock_pass_manager = static_cast<autofill::MockWalletPassAccessManager*>(
+      IOSWalletPassAccessManagerFactory::GetForProfile(profile_));
+  EXPECT_CALL(*mock_pass_manager, PreloadDetailsForUpsertPass).Times(0);
+
+  CreateController();
+}
+
+// Tests that vehicle disclosure details are not preloaded when entities cannot
+// be added from this page, which is the case when
+// `YourSavedInfoSettingsPageIos` is enabled.
+TEST_F(AutofillProfileTableViewControllerYourSavedInfoEnabledTest,
+       TestPreloadNotTriggeredWhenCannotAddEntities) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {autofill::features::kAutofillEnableWalletDisclosureNoticePublicPass,
+       autofill::features::kAutofillAiAvailableByDefault,
+       autofill::features::kAutofillAiIgnoreGeoIp,
+       autofill::features::kAutofillAiWalletVehicleRegistration},
+      /*disabled_features=*/{});
+  SignIn();
+
+  auto* mock_pass_manager = static_cast<autofill::MockWalletPassAccessManager*>(
+      IOSWalletPassAccessManagerFactory::GetForProfile(profile_));
+  EXPECT_CALL(*mock_pass_manager, PreloadDetailsForUpsertPass).Times(0);
+
+  CreateController();
 }
 
 }  // namespace

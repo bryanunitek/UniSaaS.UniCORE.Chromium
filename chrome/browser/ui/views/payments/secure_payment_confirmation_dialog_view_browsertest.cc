@@ -15,8 +15,9 @@
 #include "cc/test/pixel_test_utils.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_observer.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/payments/secure_payment_confirmation_views_util.h"
 #include "chrome/browser/ui/views/payments/test_secure_payment_confirmation_payment_request_delegate.h"
@@ -28,7 +29,6 @@
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/features.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/ui_base_features.h"
@@ -36,9 +36,9 @@
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
-#include "ui/views/controls/link.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/test/mock_input_event_activation_protector.h"
 #include "ui/views/window/dialog_client_view.h"
@@ -87,7 +87,7 @@ class SecurePaymentConfirmationDialogViewTest
   }
 
   content::WebContents* GetActiveWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   base::WeakPtr<SecurePaymentConfirmationDialogViewTest> GetWeakPtr() {
@@ -394,7 +394,9 @@ IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationDialogViewTest,
   // accepts all subsequent inputs.
   auto mock_input_protector =
       std::make_unique<views::MockInputEventActivationProtector>();
-  EXPECT_CALL(*mock_input_protector, IsPossiblyUnintendedInteraction)
+  EXPECT_CALL(*mock_input_protector,
+              IsPossiblyUnintendedInteraction(
+                  testing::_, /*allow_key_events=*/false, testing::_))
       .WillOnce(testing::Return(true))
       .WillRepeatedly(testing::Return(false));
   test_delegate_->dialog_view()

@@ -75,7 +75,7 @@ ci.builder(
             "x64",
             "strip_debug_info",
             "android_fastbuild",
-            "webview_trichrome",
+            "webview_debug_package_name",
             "webview_shell",
         ],
     ),
@@ -88,7 +88,6 @@ ci.builder(
             "emulator-8-cores",
             "has_native_resultdb_integration",
             "linux-jammy",
-            "x86-64",
         ],
         per_test_modifications = {
             "chrome_public_wpt": targets.mixin(
@@ -102,6 +101,7 @@ ci.builder(
     targets_settings = targets.settings(
         os_type = targets.os_type.ANDROID,
     ),
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         category = "wpt|chrome",
         short_name = "15",
@@ -142,7 +142,7 @@ ci.builder(
             "x64",
             "strip_debug_info",
             "android_fastbuild",
-            "webview_trichrome",
+            "webview_debug_package_name",
             "webview_shell",
         ],
     ),
@@ -155,7 +155,6 @@ ci.builder(
             "emulator-8-cores",
             "has_native_resultdb_integration",
             "linux-jammy",
-            "x86-64",
         ],
         per_test_modifications = {
             "android_webview_wpt_tests": targets.mixin(
@@ -173,6 +172,7 @@ ci.builder(
     targets_settings = targets.settings(
         os_type = targets.os_type.ANDROID,
     ),
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         category = "wpt|webview",
         short_name = "15",
@@ -182,6 +182,7 @@ ci.builder(
 
 ci.builder(
     name = "android-11-x86-fyi-rel",
+    description_html = "Run Chromium tests on Android 11 x86 emulators.",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -206,7 +207,7 @@ ci.builder(
             "x86",
             "strip_debug_info",
             "android_fastbuild",
-            "webview_trichrome",
+            "webview_debug_package_name",
             "webview_shell",
         ],
     ),
@@ -219,7 +220,6 @@ ci.builder(
             "emulator-4-cores",
             "has_native_resultdb_integration",
             "linux-jammy",
-            "x86-64",
         ],
         per_test_modifications = {
             "chrome_public_test_apk": targets.mixin(
@@ -249,6 +249,7 @@ ci.builder(
     targets_settings = targets.settings(
         os_type = targets.os_type.ANDROID,
     ),
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         category = "emulator|x86|rel",
         short_name = "11",
@@ -301,7 +302,6 @@ ci.builder(
             "emulator-8-cores",
             "has_native_resultdb_integration",
             "linux-jammy",
-            "x86-64",
         ],
         per_test_modifications = {
             "android_browsertests": targets.mixin(
@@ -315,6 +315,7 @@ ci.builder(
     targets_settings = targets.settings(
         os_type = targets.os_type.ANDROID,
     ),
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         category = "builder_tester|x64",
         short_name = "15T",
@@ -354,7 +355,7 @@ ci.builder(
             "x64",
             "strip_debug_info",
             "android_fastbuild",
-            "webview_trichrome",
+            "webview_debug_package_name",
             "webview_shell",
         ],
     ),
@@ -372,7 +373,6 @@ ci.builder(
             "emulator-8-cores",
             "has_native_resultdb_integration",
             "linux-jammy",
-            "x86-64",
         ],
         per_test_modifications = {
         },
@@ -380,6 +380,7 @@ ci.builder(
     targets_settings = targets.settings(
         os_type = targets.os_type.ANDROID,
     ),
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         category = "emulator|x64|rel",
         short_name = "16",
@@ -421,7 +422,7 @@ ci.builder(
             "x64",
             "strip_debug_info",
             "android_fastbuild",
-            "webview_trichrome",
+            "webview_debug_package_name",
             "webview_shell",
         ],
     ),
@@ -435,7 +436,6 @@ ci.builder(
             "emulator-8-cores",
             "has_native_resultdb_integration",
             "linux-jammy",
-            "x86-64",
         ],
         per_test_modifications = {
             "android_browsertests": targets.mixin(
@@ -471,6 +471,7 @@ ci.builder(
     targets_settings = targets.settings(
         os_type = targets.os_type.ANDROID,
     ),
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         category = "emulator|x64|rel",
         short_name = "17",
@@ -483,6 +484,7 @@ ci.builder(
 
 ci.builder(
     name = "android-annotator-rel",
+    description_html = "Runs tests for the Network Traffic Annotation Auditor on Android.",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -518,10 +520,12 @@ ci.builder(
     targets_settings = targets.settings(
         os_type = targets.os_type.ANDROID,
     ),
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         category = "network|traffic|annotations",
         short_name = "and",
     ),
+    contact_team_email = "cbe-compliance@google.com",
     notifies = ["annotator-rel"],
 )
 
@@ -556,7 +560,7 @@ ci.builder(
             "x64",
             "strip_debug_info",
             "android_fastbuild",
-            "webview_trichrome",
+            "webview_debug_package_name",
             "webview_shell",
         ],
     ),
@@ -570,9 +574,13 @@ ci.builder(
             "emulator-8-cores",
             "has_native_resultdb_integration",
             "linux-jammy",
-            "x86-64",
         ],
         per_test_modifications = {
+            "android_browsertests": targets.mixin(
+                swarming = targets.swarming(
+                    shards = 6,
+                ),
+            ),
             "telemetry_perf_unittests_android_chrome": targets.mixin(
                 # For whatever reason, automatic browser selection on this bot chooses
                 # webview instead of the full browser, so explicitly specify it here.
@@ -588,6 +596,7 @@ ci.builder(
     targets_settings = targets.settings(
         os_type = targets.os_type.ANDROID,
     ),
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         category = "emulator|x64|rel",
         short_name = "canary",
@@ -596,11 +605,16 @@ ci.builder(
     # So they need longer timeouts
     contact_team_email = "clank-engprod@google.com",
     execution_timeout = 4 * time.hour,
+    experiments = {
+        "luci.buildbucket.run_in_turboci": 100,
+        "luci.buildbucket.run_in_turboci.grpc_client": 100,
+    },
 )
 
 # TODO(crbug.com/40216047): Move to non-FYI once the tester works fine.
 ci.thin_tester(
     name = "android-webview-12-x64-dbg-tests",
+    description_html = "Run WebView tests on Android 12 x64 debug emulators.",
     parent = "Android x64 Builder (dbg)",
     builder_spec = builder_config.builder_spec(
         execution_mode = builder_config.execution_mode.TEST,
@@ -631,12 +645,12 @@ ci.thin_tester(
             "emulator-8-cores",
             "has_native_resultdb_integration",
             "linux-jammy",
-            "x86-64",
         ],
     ),
     targets_settings = targets.settings(
         os_type = targets.os_type.ANDROID,
     ),
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         category = "tester|webview",
         short_name = "12",
@@ -645,6 +659,7 @@ ci.thin_tester(
 
 ci.thin_tester(
     name = "android-webview-13-x64-dbg-tests",
+    description_html = "Run WebView CTS tests on Android 13 x64 debug emulators.",
     parent = "Android x64 Builder (dbg)",
     builder_spec = builder_config.builder_spec(
         execution_mode = builder_config.execution_mode.TEST,
@@ -676,12 +691,12 @@ ci.thin_tester(
             "emulator-8-cores",
             "has_native_resultdb_integration",
             "linux-jammy",
-            "x86-64",
         ],
     ),
     targets_settings = targets.settings(
         os_type = targets.os_type.ANDROID,
     ),
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         category = "tester|webview",
         short_name = "13",
@@ -692,6 +707,7 @@ ci.thin_tester(
 # TODO(crbug.com/40216047): Move to non-FYI once the tester works fine.
 ci.thin_tester(
     name = "android-12-x64-dbg-tests",
+    description_html = "Run Chromium tests on Android 12 x64 debug emulators.",
     parent = "Android x64 Builder (dbg)",
     builder_spec = builder_config.builder_spec(
         execution_mode = builder_config.execution_mode.TEST,
@@ -722,12 +738,12 @@ ci.thin_tester(
             "emulator-8-cores",
             "has_native_resultdb_integration",
             "linux-jammy",
-            "x86-64",
         ],
     ),
     targets_settings = targets.settings(
         os_type = targets.os_type.ANDROID,
     ),
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         category = "tester|phone",
         short_name = "12",
@@ -736,6 +752,7 @@ ci.thin_tester(
 
 ci.builder(
     name = "android-cronet-asan-x86-rel",
+    description_html = "Build and test Cronet on Android x86 release with AddressSanitizer.",
     builder_spec = builder_config.builder_spec(
         execution_mode = builder_config.execution_mode.COMPILE_AND_TEST,
         gclient_config = builder_config.gclient_config(
@@ -783,12 +800,12 @@ ci.builder(
             "emulator-4-cores",
             "has_native_resultdb_integration",
             "linux-jammy",
-            "x86-64",
         ],
     ),
     targets_settings = targets.settings(
         os_type = targets.os_type.ANDROID,
     ),
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         category = "cronet|asan",
     ),

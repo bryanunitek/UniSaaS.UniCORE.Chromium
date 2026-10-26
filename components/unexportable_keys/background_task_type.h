@@ -25,8 +25,9 @@ enum class BackgroundTaskType {
   kGenerateAttestationKey,
   kFromWrappedAttestationKey,
   kCertify,
+  kSignWithAttestationKey,
 };
-// LINT.ThenChange(//tools/metrics/histograms/metadata/net/histograms.xml:UnexportableKeysBackgroundTaskType)
+// LINT.ThenChange(//tools/metrics/histograms/metadata/crypto/histograms.xml:UnexportableKeysBackgroundTaskType)
 
 // Converts `BackgroundTaskType` to a histogram suffix string. The string is
 // prepended with "." symbol so it can be directly concatenated with a base

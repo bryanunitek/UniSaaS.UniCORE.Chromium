@@ -90,8 +90,8 @@ impl Feature {
 
 impl<'a> From<&'a Feature> for &'a ffi::Feature {
     fn from(feature: &'a Feature) -> Self {
-        // Safety: Feature is ABI-compatible with ffi::Feature (checked by static
-        // asserts above).
+        // Safety: Feature is ABI-compatible with ffi::Feature (checked by
+        // static asserts above).
         unsafe { std::mem::transmute(feature) }
     }
 }
@@ -100,6 +100,75 @@ impl<'a> From<&'a Feature> for &'a ffi::Feature {
 // thanks to the atomic cached_value.
 unsafe impl Sync for Feature {}
 
+/// A parameter for a `base::Feature`.
+///
+/// Feature parameters allow for tuning experiments from the server side via
+/// Finch.
+pub struct FeatureParam<T: 'static> {
+    pub feature: &'static Feature,
+    pub name: &'static str,
+    pub default_value: T,
+}
+
+impl<T: 'static> FeatureParam<T> {
+    /// Creates a new `FeatureParam<T>`.
+    pub const fn new(feature: &'static Feature, name: &'static str, default_value: T) -> Self {
+        Self { feature, name, default_value }
+    }
+}
+
+impl FeatureParam<bool> {
+    /// Returns the value of the parameter.
+    pub fn get(&self) -> bool {
+        ffi::get_bool_param(self.feature.into(), self.name, self.default_value)
+    }
+}
+
+impl FeatureParam<i32> {
+    /// Returns the value of the parameter.
+    pub fn get(&self) -> i32 {
+        ffi::get_int_param(self.feature.into(), self.name, self.default_value)
+    }
+}
+
+impl FeatureParam<f64> {
+    /// Returns the value of the parameter.
+    pub fn get(&self) -> f64 {
+        ffi::get_double_param(self.feature.into(), self.name, self.default_value)
+    }
+}
+
+impl FeatureParam<&'static str> {
+    /// Returns the value of the parameter.
+    pub fn get(&self) -> String {
+        ffi::get_string_param(self.feature.into(), self.name, self.default_value)
+    }
+}
+
+impl FeatureParam<String> {
+    /// Returns the value of the parameter.
+    pub fn get(&self) -> String {
+        ffi::get_string_param(self.feature.into(), self.name, &self.default_value)
+    }
+}
+
+/// TimeDelta in Rust is an alias to `std::time::Duration`.
+pub type TimeDelta = std::time::Duration;
+
+impl FeatureParam<std::time::Duration> {
+    /// Returns the value of the parameter.
+    pub fn get(&self) -> std::time::Duration {
+        let default_micros: i64 = self.default_value.as_micros().try_into().unwrap_or(i64::MAX);
+        let result_micros =
+            ffi::get_time_delta_param(self.feature.into(), self.name, default_micros);
+        if result_micros <= 0 {
+            std::time::Duration::ZERO
+        } else {
+            std::time::Duration::from_micros(result_micros as u64)
+        }
+    }
+}
+
 #[cxx::bridge(namespace = "base")]
 // Public so other crates can use the Feature type in their own cxx bridges
 #[doc(hidden)]
@@ -107,6 +176,7 @@ pub mod ffi {
     unsafe extern "C++" {
         include!("base/feature.h");
         include!("base/feature_list.h");
+        include!("base/feature_rust_shim.h");
         type Feature;
 
         #[namespace = "base"]
@@ -114,6 +184,41 @@ pub mod ffi {
 
         #[Self = "FeatureList"]
         fn IsEnabled(feature: &Feature) -> bool;
+
+        #[rust_name = "get_bool_param"]
+        fn GetFieldTrialParamByFeatureAsBoolShim(
+            feature: &Feature,
+            param_name: &str,
+            default_value: bool,
+        ) -> bool;
+
+        #[rust_name = "get_int_param"]
+        fn GetFieldTrialParamByFeatureAsIntShim(
+            feature: &Feature,
+            param_name: &str,
+            default_value: i32,
+        ) -> i32;
+
+        #[rust_name = "get_double_param"]
+        fn GetFieldTrialParamByFeatureAsDoubleShim(
+            feature: &Feature,
+            param_name: &str,
+            default_value: f64,
+        ) -> f64;
+
+        #[rust_name = "get_string_param"]
+        fn GetFieldTrialParamByFeatureAsStringShim(
+            feature: &Feature,
+            param_name: &str,
+            default_value: &str,
+        ) -> String;
+
+        #[rust_name = "get_time_delta_param"]
+        fn GetFieldTrialParamByFeatureAsTimeDeltaInMicrosecondsShim(
+            feature: &Feature,
+            param_name: &str,
+            default_value_micros: i64,
+        ) -> i64;
     }
 }
 
@@ -149,6 +254,18 @@ macro_rules! base_feature {
     ($id:ident, $default:expr) => {
         #[unsafe(no_mangle)]
         #[allow(non_upper_case_globals)]
+        // LINT.IfChange(FeatureSection)
+        #[cfg_attr(
+            any(
+                target_os = "android",
+                target_os = "linux",
+                target_os = "chromeos",
+                target_os = "fuchsia"
+            ),
+            unsafe(link_section = ".data..cr_features")
+        )]
+        #[cfg_attr(target_os = "windows", unsafe(link_section = ".data$cr_features"))]
+        // LINT.ThenChange(feature_internal.h:FeatureSection)
         pub static $id: $crate::Feature = unsafe {
             // Safety: The string constructed here is explicitly null-terminated.
             $crate::Feature::from_id(
@@ -157,5 +274,35 @@ macro_rules! base_feature {
                 $crate::internal::FeatureMacroHandshake::Secret,
             )
         };
+    };
+}
+
+/// The macro for defining base::FeatureParams in Rust is `base_feature_param!`.
+///
+/// - `$id` is the parameter's identifier.
+/// - `$name` is the string name of the parameter in Finch configurations.
+/// - `$type` is the type of the parameter (`bool`, `i32`, `f64`, `&'static
+///   str`, `String`, or `TimeDelta` / `std::time::Duration`).
+/// - `$feature` is a reference to the associated `Feature` (e.g. `&MyFeature`).
+/// - `$default` is the default value to return when the parameter is not set.
+///
+/// # Usage:
+///
+/// ```rust
+/// use feature::{base_feature, base_feature_param, FeatureState};
+///
+/// base_feature!(MyFeature, FeatureState::Disabled);
+/// base_feature_param!(MyTimeoutParam, i32, &MyFeature, "timeout_ms", 100);
+///
+/// if MyFeature.is_enabled() {
+///     let timeout = MyTimeoutParam.get();
+/// }
+/// ```
+#[macro_export]
+macro_rules! base_feature_param {
+    ($id:ident, $type:ty, $feature:expr, $name:expr, $default:expr) => {
+        #[allow(non_upper_case_globals)]
+        pub static $id: $crate::FeatureParam<$type> =
+            $crate::FeatureParam::new($feature, $name, $default);
     };
 }

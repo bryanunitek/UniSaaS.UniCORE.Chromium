@@ -137,6 +137,18 @@ void ProtocolHandlerRegistry::OnDenyRegisterProtocolHandler(
 void ProtocolHandlerRegistry::OnIgnoreRegisterProtocolHandler(
     const ProtocolHandler& handler) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  // The registered handlers are the ones allowed to handle the protocol, so a
+  // handler the user just refused must not stay among them: it would be
+  // offered in chrome://settings/handlers and be eligible for the promotion
+  // RemoveHandler() performs when the default handler goes away. The user may
+  // have accepted it first in the same bubble; removing it then hands the
+  // default back to the previous one.
+  //
+  // Remove before ignoring: RemoveHandler() short-circuits to
+  // RemoveIgnoredHandler() for handlers that are already ignored.
+  if (IsRegistered(handler)) {
+    RemoveHandler(handler, /*save=*/false);
+  }
   IgnoreProtocolHandler(handler, USER);
   Save();
   NotifyChanged();
@@ -745,6 +757,15 @@ bool ProtocolHandlerRegistry::RegisterProtocolHandler(
   // Ignore invalid handlers.
   if (!handler.IsValid())
     return false;
+
+  // Reject extension-privileged handlers that are not associated with an
+  // extension. All addition paths funnel through here (including handlers
+  // loaded from prefs), so enforcing it once drops orphaned handlers persisted
+  // by builds that predate recording the extension id, whose elevated
+  // privileges would otherwise survive the registering extension's removal.
+  if (!handler.IsAllowedExtensionHandler()) {
+    return false;
+  }
 
   // OTR invariant: this registry only stores handlers usable in incognito.
   // All addition paths funnel through here (including those loaded from prefs

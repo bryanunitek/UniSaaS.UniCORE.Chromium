@@ -281,7 +281,7 @@ suite('Basic', function() {
   test('pageVisibility affects route availability', function() {
     resetPageVisibilityForTesting({
       appearance: false,
-      autofill: false,
+      yourSavedInfo: false,
       defaultBrowser: false,
       onStartup: false,
       reset: false,
@@ -331,97 +331,12 @@ suite('Basic', function() {
     assertEquals(routes, routesLocal2);
   });
 
-  test('autofillAi route defined', function() {
-    resetPageVisibilityForTesting({
-      autofill: true,
-    });
-    loadTimeData.overrideValues({
-      enableYourSavedInfoSettingsPage: false,
-      showAutofillAiControl: true,
-    });
+  test('web app installations route path', function() {
+    loadTimeData.overrideValues({enableWebAppInstallation: true});
     resetRouterForTesting();
-    assertTrue(!!routes.AUTOFILL_AI);
-  });
-
-  test('autofillAi route not defined', function() {
-    resetPageVisibilityForTesting({
-      autofill: true,
-    });
-    loadTimeData.overrideValues({
-      showAutofillAiControl: false,
-    });
-    resetRouterForTesting();
-    assertFalse(!!routes.AUTOFILL_AI);
-  });
-
-  test('privacySandbox routes defined', function() {
-    // Case 1
-    loadTimeData.overrideValues({
-      isAdPrivacyAvailable: false,
-      isPrivacySandboxRestricted: true,
-    });
-    resetPageVisibilityForTesting();
-    resetRouterForTesting();
-
-    assertFalse(!!routes.PRIVACY_SANDBOX);
-    assertFalse(!!routes.PRIVACY_SANDBOX_TOPICS);
-    assertFalse(!!routes.PRIVACY_SANDBOX_MANAGE_TOPICS);
-    assertFalse(!!routes.PRIVACY_SANDBOX_FLEDGE);
-    assertFalse(!!routes.PRIVACY_SANDBOX_AD_MEASUREMENT);
-
-    // Case 2
-    loadTimeData.overrideValues({
-      isAdPrivacyAvailable: true,
-      isPrivacySandboxRestricted: false,
-    });
-    resetPageVisibilityForTesting();
-    resetRouterForTesting();
-
-    assertTrue(!!routes.PRIVACY_SANDBOX);
-    assertTrue(!!routes.PRIVACY_SANDBOX_TOPICS);
-    assertTrue(!!routes.PRIVACY_SANDBOX_MANAGE_TOPICS);
-    assertTrue(!!routes.PRIVACY_SANDBOX_FLEDGE);
-    assertTrue(!!routes.PRIVACY_SANDBOX_AD_MEASUREMENT);
-
-    // Case 3
-    loadTimeData.overrideValues({
-      isAdPrivacyAvailable: true,
-      isPrivacySandboxRestricted: true,
-    });
-    resetPageVisibilityForTesting();
-    resetRouterForTesting();
-
-    assertTrue(!!routes.PRIVACY_SANDBOX);
-    assertFalse(!!routes.PRIVACY_SANDBOX_TOPICS);
-    assertFalse(!!routes.PRIVACY_SANDBOX_MANAGE_TOPICS);
-    assertFalse(!!routes.PRIVACY_SANDBOX_FLEDGE);
-    assertTrue(!!routes.PRIVACY_SANDBOX_AD_MEASUREMENT);
-
-    // Case 4
-    loadTimeData.overrideValues({
-      isAdPrivacyAvailable: false,
-      isPrivacySandboxRestricted: false,
-    });
-    resetPageVisibilityForTesting();
-    resetRouterForTesting();
-
-    assertFalse(!!routes.PRIVACY_SANDBOX);
-    assertFalse(!!routes.PRIVACY_SANDBOX_TOPICS);
-    assertFalse(!!routes.PRIVACY_SANDBOX_MANAGE_TOPICS);
-    assertFalse(!!routes.PRIVACY_SANDBOX_FLEDGE);
-    assertFalse(!!routes.PRIVACY_SANDBOX_AD_MEASUREMENT);
-  });
-
-  test('Your saved info route existence', function() {
-    loadTimeData.overrideValues({enableYourSavedInfoSettingsPage: false});
-    resetPageVisibilityForTesting();
-    resetRouterForTesting();
-    assertFalse(!!routes.YOUR_SAVED_INFO);
-
-    loadTimeData.overrideValues({enableYourSavedInfoSettingsPage: true});
-    resetPageVisibilityForTesting();
-    resetRouterForTesting();
-    assertTrue(!!routes.YOUR_SAVED_INFO);
+    assertEquals(
+        'chrome://settings/content/webAppInstallations',
+        routes.SITE_SETTINGS_WEB_APP_INSTALLATION.getAbsolutePath());
   });
 
   // <if expr="not is_chromeos">

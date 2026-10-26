@@ -16,16 +16,18 @@
 #include "base/observer_list.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
+#include "build/build_config.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_view.h"
+#include "chrome/browser/ui/views/page_action/page_action_view_interface.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
@@ -33,14 +35,17 @@
 #include "components/feature_engagement/public/event_constants.h"
 #include "components/feature_engagement/public/tracker.h"
 #include "components/prefs/pref_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/webapps/browser/installable/ml_install_operation_tracker.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/interaction/element_tracker_views.h"
+#include "ui/views/view.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 
@@ -74,41 +79,12 @@ NewPageActionHighlight(content::WebContents& web_contents) {
     return std::nullopt;
   }
 
-  if (IsPageActionMigrated(PageActionIconType::kPwaInstall)) {
-    tabs::TabFeatures* tab_features = tab->GetTabFeatures();
-    CHECK(tab_features);
+  tabs::TabFeatures* tab_features = tab->GetTabFeatures();
+  CHECK(tab_features);
 
-    return tab_features->page_action_controller()->AddActivity(
-        kActionInstallPwa);
-  }
-
-  // TODO(crbug.com/425953501): We shouldn't be using this. Once
-  // `ToolbarButtonProvider` is migrated to `BrowserWindowInterface`, we can
-  // use that directly.
-  Browser* browser =
-      tab->GetBrowserWindowInterface()->GetBrowserForMigrationOnly();
-
-  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-  if (!browser_view) {
-    return std::nullopt;
-  }
-
-  ToolbarButtonProvider* toolbar_button_provider =
-      browser_view->toolbar_button_provider();
-  if (!toolbar_button_provider) {
-    return std::nullopt;
-  }
-
-  views::Button* install_icon = toolbar_button_provider->GetPageActionIconView(
-      PageActionIconType::kPwaInstall);
-
-  if (install_icon) {
-    // TODO(crbug.com/40841129): move this to dialog->SetHighlightedElement.
-    return install_icon->AddAnchorHighlight();
-  }
-
-  return std::nullopt;
+  return tab_features->page_action_controller()->AddActivity(kActionInstallPwa);
 }
+
 }  // namespace
 
 std::ostream& operator<<(std::ostream& os, InstallDialogType type) {
@@ -121,17 +97,6 @@ std::ostream& operator<<(std::ostream& os, InstallDialogType type) {
       return os << "kDiy";
   }
   return os << "Unknown";
-}
-
-std::u16string NormalizeSuggestedAppTitle(const std::u16string& title) {
-  std::u16string normalized = title;
-  if (base::StartsWith(normalized, u"https://")) {
-    normalized = normalized.substr(8);
-  }
-  if (base::StartsWith(normalized, u"http://")) {
-    normalized = normalized.substr(7);
-  }
-  return normalized;
 }
 
 MaxAllowedShrinkage GetMaxAllowedShrinkage(InstallDialogType type) {
@@ -149,12 +114,51 @@ MaxAllowedShrinkage GetMaxAllowedShrinkage(InstallDialogType type) {
 bool IsWidgetCurrentSizeSmallerThanPreferredSize(
     views::Widget* widget,
     MaxAllowedShrinkage shrinkage) {
+  CHECK(widget);
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/567218109): Remove this workaround when the
+  // MaxAllowedShrinkage-based origin visibility protection is removed.
+  // The app shim can asynchronously report this initial placeholder after the
+  // dialog is sized. It mirrors ui::kWindowSizeDeterminedLater, which cannot be
+  // included here because it requires Objective-C++.
+  if (widget->GetWindowBoundsInScreen() == gfx::Rect(0, 0, 1, 1)) {
+    return false;
+  }
+#endif
+  views::View* contents_view = widget->GetContentsView();
+  CHECK(contents_view);
+
   const gfx::Size& current_size = widget->GetSize();
-  const gfx::Size& preferred_size =
-      widget->GetContentsView()->GetPreferredSize();
+  const gfx::Size preferred_size = contents_view->GetPreferredSize();
   int min_width = preferred_size.width() - shrinkage.max_width_shrinkage;
   int min_height = preferred_size.height() - shrinkage.max_height_shrinkage;
-  return current_size.width() < min_width || current_size.height() < min_height;
+  if (current_size.width() < min_width || current_size.height() < min_height) {
+    return true;
+  }
+
+  // Ensure views layout is up to date before checking visibility bounds.
+  widget->LayoutRootViewIfNecessary();
+
+  // Check if the app origin/version label is visible within the dialog.
+  // In a small window or when scrolled/clipped, the origin label may be
+  // occluded or cut off by the scroll view viewport fold.
+  views::View* origin_view =
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          kSimpleInstallDialogAppInfoLabel,
+          views::ElementTrackerViews::GetContextForWidget(widget));
+  if (origin_view && contents_view->Contains(origin_view)) {
+    if (origin_view->IsDrawn()) {
+      if (origin_view->size().IsEmpty()) {
+        return true;
+      }
+      const gfx::Rect visible_bounds = origin_view->GetVisibleBounds();
+      if (visible_bounds != origin_view->GetLocalBounds()) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(WebAppInstallDialogDelegate,
@@ -190,7 +194,9 @@ WebAppInstallDialogDelegate::WebAppInstallDialogDelegate(
   CHECK(prefs_);
 }
 
-WebAppInstallDialogDelegate::~WebAppInstallDialogDelegate() = default;
+WebAppInstallDialogDelegate::~WebAppInstallDialogDelegate() {
+  MaybeRestoreFocusToInstallPageAction();
+}
 
 bool WebAppInstallDialogDelegate::OnOkButtonClicked() {
   OnAccept();

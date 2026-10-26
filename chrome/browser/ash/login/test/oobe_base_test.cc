@@ -6,12 +6,14 @@
 
 #include <memory>
 
+#include "ash/constants/ash_paths.h"
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/test/scoped_path_override.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/session/user_session_manager_test_api.h"
 #include "chrome/browser/ash/login/test/gaia_page_event_waiter.h"
@@ -52,6 +54,12 @@ void OobeBaseTest::RegisterAdditionalRequestHandlers() {}
 
 void OobeBaseTest::SetUp() {
   RegisterAdditionalRequestHandlers();
+  CHECK(temp_dir_.CreateUniqueTempDir());
+  token_path_override_ = std::make_unique<base::ScopedPathOverride>(
+      ash::FILE_DEVICE_REFRESH_TOKEN,
+      temp_dir_.GetPath().Append("device_refresh_token"),
+      /*is_absolute=*/true,
+      /*create=*/false);
   MixinBasedInProcessBrowserTest::SetUp();
 }
 

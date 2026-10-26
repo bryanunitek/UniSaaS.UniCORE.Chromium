@@ -7,6 +7,7 @@
 #include "chrome/browser/ui/webui/webui_toolbar/adapters/browser_controls_adapter.h"
 #include "chrome/browser/ui/webui/webui_toolbar/utils/split_tabs_utils.h"
 #include "chrome/browser/ui/webui/webui_toolbar/utils/toolbar_button_utils.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace browser_controls_api::testing {
 
@@ -25,7 +26,7 @@ class ToyBrowserControlsAdapter : public BrowserControlsAdapter {
   void Stop() override {
     toy_browser_->received_commands_.push_back(
         {.command_id = IDC_STOP,
-         .disposition = WindowOpenDisposition::CURRENT_TAB});
+         .disposition = WindowOpenDisposition::kCurrentTab});
   }
 
   void Back(WindowOpenDisposition disposition) override {

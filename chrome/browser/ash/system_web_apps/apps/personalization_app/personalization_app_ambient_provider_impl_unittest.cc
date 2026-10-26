@@ -33,12 +33,13 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/login/users/scoped_account_id_annotator.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/ambient_video_albums.h"
-#include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_metrics.h"
 #include "chrome/test/base/chrome_ash_test_base.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "components/account_id/account_id_literal.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
@@ -65,8 +66,9 @@ using ::testing::IsTrue;
 using ::testing::Pointee;
 
 constexpr char kFakeTestEmail[] = "fakeemail@example.com";
-const AccountId kFakeTestAccountId =
-    AccountId::FromUserEmailGaiaId(kFakeTestEmail, GaiaId("1111"));
+constexpr AccountId::Literal kFakeTestAccountId =
+    AccountId::Literal::FromUserEmailGaiaId(kFakeTestEmail,
+                                            GaiaId::Literal("1111"));
 
 class TestAmbientObserver
     : public ash::personalization_app::mojom::AmbientObserver {
@@ -222,6 +224,8 @@ class PersonalizationAppAmbientProviderImplTest : public ChromeAshTestBase {
     ChromeAshTestBase::SetUp();
 
     ASSERT_TRUE(profile_manager_.SetUp());
+    ash::ScopedAccountIdAnnotator annotator(profile_manager_.profile_manager(),
+                                            kFakeTestAccountId);
     profile_ = profile_manager_.CreateTestingProfile(kFakeTestEmail);
 
     ash::FakeChromeUserManager* user_manager =
@@ -558,32 +562,16 @@ TEST_F(PersonalizationAppAmbientProviderImplTest,
 
 TEST_F(PersonalizationAppAmbientProviderImplTest,
        ShouldCallOnAmbientThemeChanged) {
-  // When ambient mode is first enabled during test set up, the video theme
-  // should become active by default since the corresponding experiment flags
-  // are on. That should count as +1 in the usage metrics for the video theme.
-  histogram_tester().ExpectBucketCount(kAmbientModeAnimationThemeHistogramName,
-                                       mojom::AmbientTheme::kVideo, 1);
-  histogram_tester().ExpectBucketCount(kAmbientModeVideoHistogramName,
-                                       ash::GetDefaultAmbientVideo(), 1);
-
   SetAmbientObserver();
   FetchSettings();
   SetAmbientTheme(mojom::AmbientTheme::kSlideshow);
   EXPECT_EQ(mojom::AmbientTheme::kSlideshow, ObservedAmbientTheme());
-  histogram_tester().ExpectBucketCount(kAmbientModeAnimationThemeHistogramName,
-                                       mojom::AmbientTheme::kSlideshow, 1);
 
   SetAmbientTheme(mojom::AmbientTheme::kFeelTheBreeze);
   EXPECT_EQ(mojom::AmbientTheme::kFeelTheBreeze, ObservedAmbientTheme());
-  histogram_tester().ExpectBucketCount(kAmbientModeAnimationThemeHistogramName,
-                                       mojom::AmbientTheme::kFeelTheBreeze, 1);
 
   SetAmbientTheme(mojom::AmbientTheme::kVideo);
   EXPECT_EQ(mojom::AmbientTheme::kVideo, ObservedAmbientTheme());
-  histogram_tester().ExpectBucketCount(kAmbientModeAnimationThemeHistogramName,
-                                       mojom::AmbientTheme::kVideo, 2);
-  histogram_tester().ExpectBucketCount(kAmbientModeVideoHistogramName,
-                                       ash::GetDefaultAmbientVideo(), 2);
 }
 
 TEST_F(PersonalizationAppAmbientProviderImplTest,
@@ -594,8 +582,6 @@ TEST_F(PersonalizationAppAmbientProviderImplTest,
   SetEnabledPref(false);
   SetEnabledPref(true);
   EXPECT_EQ(mojom::AmbientTheme::kFeelTheBreeze, ObservedAmbientTheme());
-  histogram_tester().ExpectBucketCount(kAmbientModeAnimationThemeHistogramName,
-                                       mojom::AmbientTheme::kFeelTheBreeze, 2);
 }
 
 TEST_F(PersonalizationAppAmbientProviderImplTest, FetchPreviewImages) {
@@ -1032,12 +1018,6 @@ TEST_F(PersonalizationAppAmbientProviderImplTest, TestSetSelectedVideo) {
                                           Eq(new_mexico_select))))}));
   };
 
-  // When ambient mode is first enabled during test set up, the video theme
-  // should become active by default since the corresponding experiment flags
-  // are on. That should count as +1 in the usage metrics for the video theme.
-  histogram_tester().ExpectBucketCount(kAmbientModeVideoHistogramName,
-                                       ash::AmbientVideo::kNewMexico, 1);
-
   SetAmbientObserver();
   FetchSettings();
   ReplyFetchSettingsAndAlbums(/*success=*/true);
@@ -1062,26 +1042,6 @@ TEST_F(PersonalizationAppAmbientProviderImplTest, TestSetSelectedVideo) {
   SetAlbumSelected(kNewMexicoAlbumId, mojom::TopicSource::kVideo, false);
   expect_videos_selected(/*clouds_selected=*/false,
                          /*new_mexico_selected=*/true);
-
-  histogram_tester().ExpectBucketCount(kAmbientModeVideoHistogramName,
-                                       ash::AmbientVideo::kNewMexico, 2);
-  histogram_tester().ExpectBucketCount(kAmbientModeVideoHistogramName,
-                                       ash::AmbientVideo::kClouds, 1);
-}
-
-TEST_F(PersonalizationAppAmbientProviderImplTest, TestAlbumNumbersAreRecorded) {
-  FetchSettings();
-  ReplyFetchSettingsAndAlbums(/*success=*/true);
-
-  ash::personalization_app::mojom::AmbientModeAlbumPtr album =
-      ash::personalization_app::mojom::AmbientModeAlbum::New();
-  album->id = '0';
-  album->topic_source = mojom::TopicSource::kGooglePhotos;
-  SetAlbumSelected(album->id, album->topic_source, album->checked);
-  histogram_tester().ExpectTotalCount("Ash.AmbientMode.TotalNumberOfAlbums",
-                                      /*count=*/1);
-  histogram_tester().ExpectTotalCount("Ash.AmbientMode.SelectedNumberOfAlbums",
-                                      /*count=*/1);
 }
 
 TEST_F(PersonalizationAppAmbientProviderImplTest,

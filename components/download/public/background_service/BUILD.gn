@@ -41,6 +41,8 @@ component("public") {
   deps = [
     "//build:blink_buildflags",
     "//components/keyed_service/core",
+    "//services/network/public/cpp",
+    "//services/network/public/cpp:cpp_base",
     "//services/network/public/mojom:url_loader_base",
   ]
 
@@ -59,6 +61,4 @@ component("public") {
   } else {
     public_deps += [ "//components/download/public/task:task_type" ]
   }
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }

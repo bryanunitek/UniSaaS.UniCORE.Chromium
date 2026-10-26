@@ -12,7 +12,6 @@ import 'chrome://resources/ash/common/cr_elements/cr_toggle/cr_toggle.js';
 import './guest_os_shared_usb_devices_add_dialog.js';
 import './guest_os_confirmation_dialog.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {CrToggleElement} from 'chrome://resources/ash/common/cr_elements/cr_toggle/cr_toggle.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
@@ -24,7 +23,8 @@ import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {routes} from '../router.js';
 
 import type {ContainerInfo, GuestId, GuestOsBrowserProxy, GuestOsSharedUsbDevice, GuestOsType} from './guest_os_browser_proxy.js';
@@ -126,9 +126,9 @@ export class SettingsGuestOsSharedUsbDevicesElement extends
     };
   }
 
-  defaultGuestId: GuestId;
-  guestOsType: GuestOsType;
-  hasContainers: boolean;
+  declare defaultGuestId: GuestId;
+  declare guestOsType: GuestOsType;
+  declare hasContainers: boolean;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -136,13 +136,13 @@ export class SettingsGuestOsSharedUsbDevicesElement extends
     Setting.kGuestUsbPersistentPassthrough,
   ]);
 
-  private allContainers_: ContainerInfo[];
+  declare private allContainers_: ContainerInfo[];
   private browserProxy_: GuestOsBrowserProxy;
-  private reassignDevice_: GuestOsSharedUsbDevice|null;
-  private sharedUsbDevices_: SharedUsbDevice[];
-  private showAddUsbDialog_: boolean;
-  private showGuestUsbNotificationDialog_: boolean;
-  private showGuestUsbPersistentPassthroughDialog_: boolean;
+  declare private reassignDevice_: GuestOsSharedUsbDevice|null;
+  declare private sharedUsbDevices_: SharedUsbDevice[];
+  declare private showAddUsbDialog_: boolean;
+  declare private showGuestUsbNotificationDialog_: boolean;
+  declare private showGuestUsbPersistentPassthroughDialog_: boolean;
 
   constructor() {
     super();

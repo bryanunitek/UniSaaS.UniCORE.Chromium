@@ -7,13 +7,16 @@
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/clock.h"
 #include "base/time/default_tick_clock.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/media/media_engagement_service.h"  // nogncheck crbug.com/422038808
+#include "chrome/browser/media/media_engagement_service.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
 #include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
+#include "chrome/browser/picture_in_picture/auto_picture_in_picture_safe_browsing_checker_client.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_observer_helper_base.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_window_occlusion_helper_base.h"
 #include "chrome/browser/picture_in_picture/auto_pip_setting_helper.h"
@@ -23,8 +26,10 @@
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/permissions/permission_decision_auto_blocker.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/media_session_service.h"
+#include "content/public/browser/render_frame_host.h"
 #include "media/base/media_switches.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/common/features.h"
@@ -38,23 +43,56 @@
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
+#include "chrome/browser/safe_browsing/v5_get_hash_protocol_manager_factory.h"
+#include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
 #endif
 
 using OcclusionState =
     AutoPictureInPictureWindowOcclusionHelperBase::OcclusionState;
 
+DEFINE_USER_DATA(AutoPictureInPictureTabHelper);
+
+// static
+AutoPictureInPictureTabHelper* AutoPictureInPictureTabHelper::From(
+    tabs::TabInterface* tab) {
+  return tab ? Get(tab->GetUnownedUserDataHost()) : nullptr;
+}
+
+// static
+const AutoPictureInPictureTabHelper* AutoPictureInPictureTabHelper::From(
+    const tabs::TabInterface* tab) {
+  return tab ? Get(tab->GetUnownedUserDataHost()) : nullptr;
+}
+
+// static
+AutoPictureInPictureTabHelper* AutoPictureInPictureTabHelper::FromWebContents(
+    content::WebContents* web_contents) {
+  return web_contents
+             ? From(tabs::TabInterface::MaybeGetFromContents(web_contents))
+             : nullptr;
+}
+
+// static
+const AutoPictureInPictureTabHelper*
+AutoPictureInPictureTabHelper::FromWebContents(
+    const content::WebContents* web_contents) {
+  return web_contents
+             ? From(tabs::TabInterface::MaybeGetFromContents(web_contents))
+             : nullptr;
+}
+
 AutoPictureInPictureTabHelper::AutoPictureInPictureTabHelper(
+    tabs::TabInterface& tab,
     content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
-      content::WebContentsUserData<AutoPictureInPictureTabHelper>(
-          *web_contents),
       host_content_settings_map_(HostContentSettingsMapFactory::GetForProfile(
           Profile::FromBrowserContext(web_contents->GetBrowserContext()))),
       auto_blocker_(PermissionDecisionAutoBlockerFactory::GetForProfile(
           Profile::FromBrowserContext(web_contents->GetBrowserContext()))),
       media_engagement_service_(MediaEngagementService::Get(
           Profile::FromBrowserContext(web_contents->GetBrowserContext()))),
-      clock_(base::DefaultTickClock::GetInstance()) {
+      clock_(base::DefaultTickClock::GetInstance()),
+      scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {
   // `base::Unretained` is safe here since we own `tab_observer_helper_`.
   tab_observer_helper_ = AutoPictureInPictureTabObserverHelperBase::Create(
       web_contents,
@@ -117,6 +155,14 @@ bool AutoPictureInPictureTabHelper::HasAutoPictureInPictureBeenRegistered()
   }
 
   return has_ever_registered_for_auto_picture_in_picture_;
+}
+
+bool AutoPictureInPictureTabHelper::PrimaryMainFrameHasOpaqueOrigin() const {
+  if (!web_contents()) {
+    return false;
+  }
+  const content::RenderFrameHost* rfh = web_contents()->GetPrimaryMainFrame();
+  return rfh && rfh->GetLastCommittedOrigin().opaque();
 }
 
 void AutoPictureInPictureTabHelper::PrimaryPageChanged(content::Page& page) {
@@ -384,17 +430,22 @@ void AutoPictureInPictureTabHelper::MediaPictureInPictureChanged(
 
     MaybeRecordPictureInPictureChanged(true);
 
-    // If the tab is activated and unoccluded by the time auto
-    // picture-in-picture fires, we should immediately close the auto
-    // picture-in-picture.
-    if (tab_observer_helper_->IsTabActivated() &&
-        (!window_occlusion_helper_ ||
-         window_occlusion_helper_->GetOcclusionState() ==
-             OcclusionState::kVisible)) {
-      MaybeExitAutoPictureInPicture();
-    } else if (is_playing_) {
+    if (is_playing_) {
       // Media is playing, start the watch time timer.
       playing_start_time_ = clock_->NowTicks();
+    }
+
+    // If the tab is activated and unoccluded by the time auto
+    // picture-in-picture fires, we should immediately close the auto
+    // picture-in-picture. Exit asynchronously so we don't close the window
+    // while it is still in the middle of opening.
+    if (IsTabActiveAndVisible()) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              &AutoPictureInPictureTabHelper::
+                  MaybeExitAutoPictureInPictureIfTabIsActiveAndVisible,
+              weak_factory_.GetWeakPtr()));
     }
   }
 }
@@ -578,10 +629,11 @@ void AutoPictureInPictureTabHelper::MaybeScheduleAsyncTasks() {
   StopAndResetAsyncTasks();
 
   // Prevent scheduling asynchronous checks if we are already in picture in
-  // picture, picture in picture was blocked due to content setting/incognito,
-  // we are using camera or microphone, or a media session does not exist. Also
-  // prevent these checks if we are already eligible for auto picture in
-  // picture, since auto picture in picture requests will succeed anyways.
+  // picture, picture in picture was blocked due to content setting/incognito/
+  // isolated mode, we are using camera or microphone, or a media session does
+  // not exist. Also prevent these checks if we are already eligible for auto
+  // picture in picture, since auto picture in picture requests will succeed
+  // anyways.
   //
   // The `blocked_due_to_content_setting_` check is performed to prevent
   // recording duplicate entries for blocking metrics.
@@ -629,6 +681,21 @@ void AutoPictureInPictureTabHelper::MaybeExitAutoPictureInPicture() {
   PictureInPictureWindowManager::GetInstance()->ExitPictureInPicture();
 }
 
+void AutoPictureInPictureTabHelper::
+    MaybeExitAutoPictureInPictureIfTabIsActiveAndVisible() {
+  if (!is_in_auto_picture_in_picture_ || !IsTabActiveAndVisible()) {
+    return;
+  }
+  MaybeExitAutoPictureInPicture();
+}
+
+bool AutoPictureInPictureTabHelper::IsTabActiveAndVisible() const {
+  return tab_observer_helper_->IsTabActivated() &&
+         (!window_occlusion_helper_ ||
+          window_occlusion_helper_->GetOcclusionState() ==
+              OcclusionState::kVisible);
+}
+
 void AutoPictureInPictureTabHelper::MaybeStartOrStopObservers() {
   if (is_enter_auto_picture_in_picture_available_ ||
       is_in_auto_picture_in_picture_) {
@@ -651,6 +718,14 @@ bool AutoPictureInPictureTabHelper::IsEligibleForAutoPictureInPicture(
   // Don't try to autopip if picture-in-picture is currently disabled.
   if (PictureInPictureWindowManager::GetInstance()
           ->IsPictureInPictureDisabled()) {
+    return false;
+  }
+
+  if (!GetPrimaryMainRoutedFrame()) {
+    return false;
+  }
+
+  if (PrimaryMainFrameHasOpaqueOrigin()) {
     return false;
   }
 
@@ -684,9 +759,9 @@ bool AutoPictureInPictureTabHelper::IsEligibleForAutoPictureInPicture(
   CHECK(!is_in_picture_in_picture_);
 
   // The user may block autopip via a content setting. Also, if we're in an
-  // incognito window, then we should treat "ask" as "block". This should be the
-  // final check before triggering autopip since it will record metrics about
-  // why autopip has been blocked.
+  // incognito or isolated mode window, then we should treat "ask" as "block".
+  // This should be the final check before triggering autopip since it will
+  // record metrics about why autopip has been blocked.
   ContentSetting setting = GetCurrentContentSetting();
   if (setting == CONTENT_SETTING_BLOCK) {
     blocked_due_to_content_setting_ = true;
@@ -699,7 +774,7 @@ bool AutoPictureInPictureTabHelper::IsEligibleForAutoPictureInPicture(
     return false;
   } else if (setting == CONTENT_SETTING_ASK &&
              Profile::FromBrowserContext(web_contents()->GetBrowserContext())
-                 ->IsIncognitoProfile()) {
+                 ->IsPrimaryOTRProfileWithRegularParent()) {
     blocked_due_to_content_setting_ = true;
 
     if (should_record_blocking_metrics) {
@@ -740,14 +815,14 @@ bool AutoPictureInPictureTabHelper::WasRecentlyAudible() const {
 }
 
 bool AutoPictureInPictureTabHelper::MeetsMediaEngagementConditions() const {
-  // Skip checking media engagement when content setting is set to allow.
-  if (GetCurrentContentSetting() == CONTENT_SETTING_ALLOW) {
-    return true;
-  }
-
   std::optional<content::RenderFrameHost*> rfh = GetPrimaryMainRoutedFrame();
   if (!rfh) {
     return false;
+  }
+
+  // Skip checking media engagement when content setting is set to allow.
+  if (GetCurrentContentSetting() == CONTENT_SETTING_ALLOW) {
+    return true;
   }
 
   const url::Origin origin = rfh.value()->GetLastCommittedOrigin();
@@ -796,22 +871,29 @@ void AutoPictureInPictureTabHelper::OnUrlSafetyResult(bool has_safe_url) {
 }
 
 void AutoPictureInPictureTabHelper::ScheduleUrlSafetyCheck() {
-#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-  CHECK(!is_in_picture_in_picture_);
-  CHECK(g_browser_process);
-  CHECK(g_browser_process->safe_browsing_service());
-
   std::optional<content::RenderFrameHost*> rfh = GetPrimaryMainRoutedFrame();
   if (!rfh) {
     return;
   }
 
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+  CHECK(!is_in_picture_in_picture_);
+  CHECK(g_browser_process);
+  CHECK(g_browser_process->safe_browsing_service());
+
   if (!safe_browsing_checker_client_) {
     // Create the AutoPiP safe browsing checker client, which will be used for
     // determining URL safety.
+    auto* v5_manager =
+        (web_contents() && web_contents()->GetBrowserContext())
+            ? safe_browsing::V5GetHashProtocolManagerFactory::
+                  GetForBrowserContext(web_contents()->GetBrowserContext())
+            : nullptr;
     safe_browsing_checker_client_ = std::make_unique<
         AutoPictureInPictureSafeBrowsingCheckerClient>(
         g_browser_process->safe_browsing_service()->database_manager().get(),
+        v5_manager ? v5_manager->GetWeakPtr()
+                   : /*v5_get_hash_protocol_manager=*/nullptr,
         kSafeBrowsingCheckDelay,
         base::BindRepeating(&AutoPictureInPictureTabHelper::OnUrlSafetyResult,
                             async_tasks_weak_factory_.GetWeakPtr()));
@@ -948,6 +1030,19 @@ bool AutoPictureInPictureTabHelper::AreAutoPictureInPicturePreconditionsMet()
   return clock_->NowTicks() < auto_picture_in_picture_activation_time_;
 }
 
+void AutoPictureInPictureTabHelper::set_auto_blocker_for_testing(
+    permissions::PermissionDecisionAutoBlockerBase* auto_blocker) {
+  auto_blocker_ = auto_blocker;
+  // If we're clearing the auto blocker, then also drop any setting helper we
+  // have, since it might also know about it.  This is intended during test
+  // cleanup to prevent dangling raw ptrs.
+#if !BUILDFLAG(IS_ANDROID)
+  if (auto_pip_setting_helper_ && !auto_blocker) {
+    auto_pip_setting_helper_.reset();
+  }
+#endif  //! BUILDFLAG(IS_ANDROID)
+}
+
 #if !BUILDFLAG(IS_ANDROID)
 std::unique_ptr<AutoPipSettingOverlayView>
 AutoPictureInPictureTabHelper::CreateOverlayPermissionViewIfNeeded(
@@ -1059,5 +1154,3 @@ void AutoPictureInPictureTabHelper::OnTabBecameActive() {
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(AutoPictureInPictureTabHelper);

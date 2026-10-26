@@ -15,9 +15,12 @@
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
+#include "chrome/browser/personal_context/personal_context_eligibility_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/chrome_device_id_helper.h"
 #include "chrome/browser/sync/sync_invalidations_service_factory.h"
+#include "components/personal_context/core/personal_context_features.h"
+#include "components/personal_context/core/personal_context_key_manager.h"
 #include "components/sharing_message/sharing_sync_preference.h"
 #include "components/sync/invalidations/sync_invalidations_service.h"
 #include "components/sync/service/sync_prefs.h"
@@ -27,8 +30,6 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/webauthn/android/cable_module_android.h"
 #endif
-
-namespace browser_sync {
 
 DeviceInfoSyncClientImpl::DeviceInfoSyncClientImpl(Profile* profile)
     : profile_(profile) {}
@@ -47,11 +48,6 @@ std::string DeviceInfoSyncClientImpl::GetSigninScopedDeviceId() const {
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
   return GetSigninScopedDeviceIdForProfile(profile_);
-}
-
-// syncer::DeviceInfoSyncClient:
-bool DeviceInfoSyncClientImpl::GetSendTabToSelfReceivingEnabled() const {
-  return true;
 }
 
 // syncer::DeviceInfoSyncClient:
@@ -129,4 +125,22 @@ DeviceInfoSyncClientImpl::GetGlicExperimentalTriggeringVersion() const {
   return service->enabling().GetExperimentalTriggeringVersion();
 }
 
-}  // namespace browser_sync
+base::flat_set<std::string>
+DeviceInfoSyncClientImpl::GetGlicExperimentalTriggeringCapabilities() const {
+  auto* service = glic::GlicKeyedService::Get(profile_);
+  if (!service) {
+    return {};
+  }
+  return service->enabling().GetExperimentalTriggeringCapabilities();
+}
+
+syncer::DeviceInfo::PersonalContextInfo::StatusOrInfo
+DeviceInfoSyncClientImpl::GetLocalPersonalContextInfo() const {
+  const personal_context::PersonalContextEligibilityService*
+      eligibility_service =
+          PersonalContextEligibilityServiceFactory::GetForProfile(profile_);
+  CHECK(eligibility_service);
+
+  return personal_context::PersonalContextKeyManager::
+      GetLocalPersonalContextInfo(profile_->GetPrefs(), eligibility_service);
+}

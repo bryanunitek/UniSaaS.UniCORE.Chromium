@@ -13,8 +13,8 @@
 #include <type_traits>
 
 #include "base/check_op.h"
-#include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/containers/span_writer.h"
 #include "base/numerics/safe_conversions.h"
 #include "media/gpu/macros.h"
 #include "media/gpu/vaapi/vaapi_wrapper.h"
@@ -61,9 +61,10 @@ void FillQMatrix(VAQMatrixBufferJPEG* q_matrix) {
   static_assert(std::size(kZigZag8x8) == std::size(luminance.value),
                 "Luminance quantization table size mismatch.");
   q_matrix->load_lum_quantiser_matrix = 1;
-  for (size_t i = 0; i < std::size(kZigZag8x8); i++) {
-    UNSAFE_TODO(q_matrix->lum_quantiser_matrix[i]) =
-        UNSAFE_TODO(luminance.value[kZigZag8x8[i]]);
+  base::span lum_val(luminance.value);
+  for (auto [dst, zig_zag] :
+       std::views::zip(q_matrix->lum_quantiser_matrix, kZigZag8x8)) {
+    dst = lum_val[zig_zag];
   }
 
   const JpegQuantizationTable& chrominance = kDefaultQuantTable[1];
@@ -73,9 +74,10 @@ void FillQMatrix(VAQMatrixBufferJPEG* q_matrix) {
   static_assert(std::size(kZigZag8x8) == std::size(chrominance.value),
                 "Chrominance quantization table size mismatch.");
   q_matrix->load_chroma_quantiser_matrix = 1;
-  for (size_t i = 0; i < std::size(kZigZag8x8); i++) {
-    UNSAFE_TODO(q_matrix->chroma_quantiser_matrix[i]) =
-        UNSAFE_TODO(chrominance.value[kZigZag8x8[i]]);
+  base::span chroma_val(chrominance.value);
+  for (auto [dst, zig_zag] :
+       std::views::zip(q_matrix->chroma_quantiser_matrix, kZigZag8x8)) {
+    dst = chroma_val[zig_zag];
   }
 }
 
@@ -140,34 +142,29 @@ void FillSliceParameters(VAEncSliceParameterBufferJPEG* slice_param) {
 }
 
 size_t FillJpegHeader(const gfx::Size& input_size,
-                      const uint8_t* exif_buffer,
-                      size_t exif_buffer_size,
+                      base::span<const uint8_t> exif_buffer,
                       int quality,
                       base::span<uint8_t> header,
                       size_t* exif_offset) {
   unsigned int width = input_size.width();
   unsigned int height = input_size.height();
 
-  size_t idx = 0;
+  base::SpanWriter<uint8_t> writer(header);
 
   // Start Of Input.
   static const uint8_t kSOI[] = {0xFF, JPEG_SOI};
-  UNSAFE_TODO(memcpy(header.data(), kSOI, sizeof(kSOI)));
-  idx += sizeof(kSOI);
+  writer.Write(kSOI);
 
-  if (exif_buffer_size > 0) {
+  if (!exif_buffer.empty()) {
     // Application Segment for Exif data.
-    uint16_t exif_segment_size = static_cast<uint16_t>(exif_buffer_size + 2);
+    uint16_t exif_segment_size =
+        base::checked_cast<uint16_t>(exif_buffer.size() + 2);
     const uint8_t kAppSegment[] = {
         0xFF, JPEG_APP1, static_cast<uint8_t>(exif_segment_size / 256),
         static_cast<uint8_t>(exif_segment_size % 256)};
-    UNSAFE_TODO(
-        memcpy(header.subspan(idx).data(), kAppSegment, sizeof(kAppSegment)));
-    idx += sizeof(kAppSegment);
-    *exif_offset = idx;
-    UNSAFE_TODO(
-        memcpy(header.subspan(idx).data(), exif_buffer, exif_buffer_size));
-    idx += exif_buffer_size;
+    writer.Write(kAppSegment);
+    *exif_offset = writer.num_written();
+    writer.Write(exif_buffer);
   } else {
     // Application Segment - JFIF standard 1.01.
     static const uint8_t kAppSegment[] = {
@@ -189,9 +186,7 @@ size_t FillJpegHeader(const gfx::Size& input_size,
         0x00,  // Thumbnail width.
         0x00   // Thumbnail height.
     };
-    UNSAFE_TODO(
-        memcpy(header.subspan(idx).data(), kAppSegment, sizeof(kAppSegment)));
-    idx += sizeof(kAppSegment);
+    writer.Write(kAppSegment);
   }
 
   if (quality <= 0) {
@@ -205,20 +200,19 @@ size_t FillJpegHeader(const gfx::Size& input_size,
       (quality < 50) ? (5000 / quality) : (200 - (quality * 2)));
 
   // Quantization Tables.
-  for (size_t i = 0; i < 2; ++i) {
+  for (size_t i = 0;
+       const JpegQuantizationTable& quant_table : kDefaultQuantTable) {
     const uint8_t kQuantSegment[] = {
         0xFF, JPEG_DQT, 0x00,
         0x03 + kDctSize,         // Segment length:67 (2-byte).
         static_cast<uint8_t>(i)  // Precision (4-bit high) = 0,
                                  // Index (4-bit low) = i.
     };
-    UNSAFE_TODO(memcpy(header.subspan(idx).data(), kQuantSegment,
-                       sizeof(kQuantSegment)));
-    idx += sizeof(kQuantSegment);
+    writer.Write(kQuantSegment);
 
-    const JpegQuantizationTable& quant_table =
-        UNSAFE_TODO(kDefaultQuantTable[i]);
-    for (size_t j = 0; j < kDctSize; ++j) {
+    static_assert(std::size(kZigZag8x8) == kDctSize);
+    base::span quant_val(quant_table.value);
+    for (uint8_t zig_zag : kZigZag8x8) {
       // The iHD media driver shifts the quantization values
       // by 50 while encoding. We should add 50 here to
       // ensure the correctness in the packed header that is
@@ -226,14 +220,15 @@ size_t FillJpegHeader(const gfx::Size& input_size,
       // GStreamer test cases show a psnr improvement in
       // Y plane (41.27 to 48.31) with this quirk.
       const static uint32_t shift =
-          VaapiWrapper::GetImplementationType() == VAImplementation::kIntelIHD ? 50 : 0;
+          VaapiWrapper::GetImplementationType() == VAImplementation::kIntelIHD
+              ? 50
+              : 0;
       uint32_t scaled_quant_value =
-          (UNSAFE_TODO(quant_table.value[kZigZag8x8[j]]) * quality_normalized +
-           shift) /
-          100;
+          (quant_val[zig_zag] * quality_normalized + shift) / 100;
       scaled_quant_value = std::clamp(scaled_quant_value, 1u, 255u);
-      header[idx++] = static_cast<uint8_t>(scaled_quant_value);
+      writer.Write(static_cast<uint8_t>(scaled_quant_value));
     }
+    ++i;
   }
 
   // Start of Frame - Baseline.
@@ -249,9 +244,7 @@ size_t FillJpegHeader(const gfx::Size& input_size,
       static_cast<uint8_t>(width & 0xFF),
       0x03,  // Number of Components.
   };
-  UNSAFE_TODO(
-      memcpy(header.subspan(idx).data(), kStartOfFrame, sizeof(kStartOfFrame)));
-  idx += sizeof(kStartOfFrame);
+  writer.Write(kStartOfFrame);
   for (uint8_t i = 0; i < 3; ++i) {
     // These are the values for U and V planes.
     uint8_t h_sample_factor = 1;
@@ -264,11 +257,12 @@ size_t FillJpegHeader(const gfx::Size& input_size,
       quant_table_number = 0;
     }
 
-    header[idx++] = i + 1;
+    writer.Write(static_cast<uint8_t>(i + 1));
     // Horizontal Sample Factor (4-bit high),
     // Vertical Sample Factor (4-bit low).
-    header[idx++] = (h_sample_factor << 4) | v_sample_factor;
-    header[idx++] = quant_table_number;
+    writer.Write(
+        static_cast<uint8_t>((h_sample_factor << 4) | v_sample_factor));
+    writer.Write(quant_table_number);
   }
 
   static const uint8_t kDcSegment[] = {
@@ -283,32 +277,26 @@ size_t FillJpegHeader(const gfx::Size& input_size,
   // Huffman Tables.
   for (size_t i = 0; i < 2; ++i) {
     // DC Table.
-    UNSAFE_TODO(
-        memcpy(header.subspan(idx).data(), kDcSegment, sizeof(kDcSegment)));
-    idx += sizeof(kDcSegment);
+    writer.Write(kDcSegment);
 
     // Type (4-bit high) = 0:DC, Index (4-bit low).
-    header[idx++] = static_cast<uint8_t>(i);
+    writer.Write(static_cast<uint8_t>(i));
 
     const JpegHuffmanTable& dcTable = kDefaultDcTable[i];
-    for (size_t j = 0; j < kNumDcRunSizeBits; ++j)
-      header[idx++] = dcTable.code_length[j];
-    for (size_t j = 0; j < kNumDcCodeWordsHuffVal; ++j)
-      header[idx++] = dcTable.code_value[j];
+    writer.Write(base::span(dcTable.code_length).first<kNumDcRunSizeBits>());
+    writer.Write(
+        base::span(dcTable.code_value).first<kNumDcCodeWordsHuffVal>());
 
     // AC Table.
-    UNSAFE_TODO(
-        memcpy(header.subspan(idx).data(), kAcSegment, sizeof(kAcSegment)));
-    idx += sizeof(kAcSegment);
+    writer.Write(kAcSegment);
 
     // Type (4-bit high) = 1:AC, Index (4-bit low).
-    header[idx++] = 0x10 | static_cast<uint8_t>(i);
+    writer.Write(static_cast<uint8_t>(0x10 | i));
 
     const JpegHuffmanTable& acTable = kDefaultAcTable[i];
-    for (size_t j = 0; j < kNumAcRunSizeBits; ++j)
-      header[idx++] = acTable.code_length[j];
-    for (size_t j = 0; j < kNumAcCodeWordsHuffVal; ++j)
-      header[idx++] = acTable.code_value[j];
+    writer.Write(base::span(acTable.code_length).first<kNumAcRunSizeBits>());
+    writer.Write(
+        base::span(acTable.code_value).first<kNumAcCodeWordsHuffVal>());
   }
 
   // Start of Scan.
@@ -317,9 +305,7 @@ size_t FillJpegHeader(const gfx::Size& input_size,
       0x0C,  // Segment Length:12 (2-byte).
       0x03   // Number of components in scan.
   };
-  UNSAFE_TODO(
-      memcpy(header.subspan(idx).data(), kStartOfScan, sizeof(kStartOfScan)));
-  idx += sizeof(kStartOfScan);
+  writer.Write(kStartOfScan);
 
   for (uint8_t i = 0; i < 3; ++i) {
     uint8_t dc_table_number = 1;
@@ -329,15 +315,19 @@ size_t FillJpegHeader(const gfx::Size& input_size,
       ac_table_number = 0;
     }
 
-    header[idx++] = i + 1;
+    writer.Write(static_cast<uint8_t>(i + 1));
     // DC Table Selector (4-bit high), AC Table Selector (4-bit low).
-    header[idx++] = (dc_table_number << 4) | ac_table_number;
+    writer.Write(
+        static_cast<uint8_t>((dc_table_number << 4) | ac_table_number));
   }
-  header[idx++] = 0x00;  // 0 for Baseline.
-  header[idx++] = 0x3F;  // 63 for Baseline.
-  header[idx++] = 0x00;  // 0 for Baseline.
+  const uint8_t kScanTrailer[] = {
+      0x00,  // 0 for Baseline.
+      0x3F,  // 63 for Baseline.
+      0x00   // 0 for Baseline.
+  };
+  writer.Write(kScanTrailer);
 
-  return idx << 3;
+  return writer.num_written() << 3;
 }
 
 }  // namespace
@@ -355,8 +345,7 @@ size_t VaapiJpegEncoder::GetMaxCodedBufferSize(const gfx::Size& size) {
 }
 
 bool VaapiJpegEncoder::Encode(const gfx::Size& input_size,
-                              const uint8_t* exif_buffer,
-                              size_t exif_buffer_size,
+                              base::span<const uint8_t> exif_buffer,
                               int quality,
                               VASurfaceID surface_id,
                               VABufferID output_buffer_id,
@@ -389,13 +378,12 @@ bool VaapiJpegEncoder::Encode(const gfx::Size& input_size,
   }
 
   size_t jpeg_header_size =
-      exif_buffer_size > 0
-          ? kJpegDefaultHeaderSize + kJFIFApp1HeaderSize + exif_buffer_size
+      !exif_buffer.empty()
+          ? kJpegDefaultHeaderSize + kJFIFApp1HeaderSize + exif_buffer.size()
           : kJpegDefaultHeaderSize + kJFIFApp0Size;
   std::vector<uint8_t> jpeg_header(jpeg_header_size);
-  const size_t length_in_bits =
-      FillJpegHeader(input_size, exif_buffer, exif_buffer_size, quality,
-                     jpeg_header, exif_offset);
+  const size_t length_in_bits = FillJpegHeader(input_size, exif_buffer, quality,
+                                               jpeg_header, exif_offset);
 
   VAEncPackedHeaderParameterBuffer header_param = {};
   header_param.type = VAEncPackedHeaderRawData;

@@ -21,9 +21,11 @@
 #include "base/time/time.h"
 #include "content/browser/background_fetch/background_fetch_registration_id.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
+#include "content/browser/service_worker/service_worker_context_wrapper_test_api.h"
 #include "content/browser/service_worker/service_worker_registration.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/public/browser/browser_thread.h"
+#include "services/network/public/mojom/fetch_api.mojom.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/frame/policy_container.mojom.h"
@@ -94,9 +96,15 @@ BackgroundFetchTestBase::~BackgroundFetchTestBase() {
 
 void BackgroundFetchTestBase::SetUp() {
   set_up_called_ = true;
+  ServiceWorkerContextWrapperTestApi(
+      embedded_worker_test_helper_.context_wrapper())
+      .set_storage_partition(storage_partition_factory_.GetWeakPtr().get());
 }
 
 void BackgroundFetchTestBase::TearDown() {
+  ServiceWorkerContextWrapperTestApi(
+      embedded_worker_test_helper_.context_wrapper())
+      .set_storage_partition(nullptr);
   service_worker_registrations_.clear();
   tear_down_called_ = true;
 }
@@ -187,6 +195,7 @@ BackgroundFetchTestBase::CreateRequestWithProvidedResponse(
   auto request = blink::mojom::FetchAPIRequest::New();
   request->url = url;
   request->method = method;
+  request->mode = network::mojom::RequestMode::kCors;
   request->is_reload = false;
   request->referrer = blink::mojom::Referrer::New();
   request->headers = {};

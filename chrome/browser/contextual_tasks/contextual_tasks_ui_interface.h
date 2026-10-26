@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_CONTEXTUAL_TASKS_CONTEXTUAL_TASKS_UI_INTERFACE_H_
 
 #include "base/observer_list.h"
+#include "chrome/browser/contextual_tasks/aim_message_poster.h"
 #include "chrome/browser/contextual_tasks/task_info_delegate.h"
 #include "components/lens/lens_overlay_invocation_source.h"
 #include "components/omnibox/browser/searchbox.mojom.h"
@@ -28,6 +29,10 @@ namespace lens {
 class ClientToAimMessage;
 }  // namespace lens
 
+namespace contextual_tasks_toolbar::mojom {
+class Page;
+}
+
 namespace contextual_tasks {
 class ContextualTasksComposeboxHandlerInterface;
 namespace mojom {
@@ -38,7 +43,8 @@ class ContextualTasksAutoSuggestionManager;
 
 // An interface to interact with the Contextual Tasks WebUI (ContextualTasksUI)
 // from the rest of the browser process.
-class ContextualTasksUIInterface : public TaskInfoDelegate {
+class ContextualTasksUIInterface : public TaskInfoDelegate,
+                                   public AimMessagePoster {
  public:
   class Observer : public base::CheckedObserver {
    public:
@@ -67,11 +73,23 @@ class ContextualTasksUIInterface : public TaskInfoDelegate {
   // a tab.
   virtual void OnSidePanelStateChanged() = 0;
 
+  // Called when the side panel is opened to focus the composebox input.
+  virtual void FocusComposebox() {}
+
   // Called when the active tab has been changed (e.g. new page loaded or title
   // change). This is used to update the UI for both tab/side panel modes.
   // Note that a title can be updated while the page is loading, so this can
   // be called even when active tab has not changed.
   virtual void OnActiveTabContextStatusChanged() = 0;
+
+  // Re-syncs the current auto-suggested tab context to the WebUI composebox.
+  virtual void SyncAutoSuggestedTabContext() = 0;
+
+  // Resets the contextual tasks side panel UI state for an in-place fresh
+  // thread (e.g. triggered by omnibox page action on an already-open side
+  // panel).
+  virtual void ResetForNewThread(const base::Uuid& task_id,
+                                 const GURL& url) = 0;
 
   // Notifies the UI that the Lens overlay state has changed.
   virtual void OnLensOverlayStateChanged(
@@ -110,8 +128,7 @@ class ContextualTasksUIInterface : public TaskInfoDelegate {
   // Sends a message to the <webview> guest. The WebUI is responsible for
   // taking the 'message' (a serialized lens.ClientToAimMessage protobuf) and
   // using the <webview> postMessage API to send it to the guest content.
-  virtual void PostMessageToWebview(
-      const lens::ClientToAimMessage& message) = 0;
+  void PostAimMessage(const lens::ClientToAimMessage& message) override = 0;
 
   // Lazily creates and returns a reference to the owned contextual search
   // session handle.
@@ -120,6 +137,9 @@ class ContextualTasksUIInterface : public TaskInfoDelegate {
 
   // Returns the Mojo remote used to communicate with the WebUI page.
   virtual mojo::Remote<contextual_tasks::mojom::Page>& GetPageRemote() = 0;
+
+  // Returns the Mojo remote used to communicate with the Toolbar WebUI page.
+  virtual contextual_tasks_toolbar::mojom::Page* GetToolbarPageRemote() = 0;
 
   // Fetches and assumes unique ownership of the pre-configured input state
   // model attached to the WebContents for the current task. Subsequent calls

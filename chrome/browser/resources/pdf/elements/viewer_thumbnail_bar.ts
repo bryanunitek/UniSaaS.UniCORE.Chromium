@@ -8,6 +8,7 @@ import {assert} from 'chrome://resources/js/assert.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 import {FocusOutlineManager} from 'chrome://resources/js/focus_outline_manager.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {debounceEnd} from 'chrome://resources/js/util.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
@@ -25,6 +26,8 @@ export interface ThumbnailData {
   width: number;
 }
 // </if>
+
+const DEBOUNCE_DELAY_MS: number = 100;
 
 export interface ViewerThumbnailBarElement {
   $: {
@@ -50,6 +53,7 @@ export class ViewerThumbnailBarElement extends CrLitElement {
       activePage: {type: Number},
       clockwiseRotations: {type: Number},
       docLength: {type: Number},
+      sidenavCollapsed: {type: Boolean},
       isPluginActive_: {type: Boolean},
     };
   }
@@ -57,14 +61,16 @@ export class ViewerThumbnailBarElement extends CrLitElement {
   accessor activePage: number = 0;
   accessor clockwiseRotations: number = 0;
   accessor docLength: number = 0;
+  accessor sidenavCollapsed: boolean = false;
   protected accessor isPluginActive_: boolean = false;
   private intersectionObserver_: IntersectionObserver|null = null;
+  // A map of zero-based page indices to their corresponding thumbnail
+  // elements waiting to be requested from the plugin.
+  private pendingThumbnails_: Map<number, ViewerThumbnailElement> = new Map();
   private pluginController_: PluginController = PluginController.getInstance();
+  private processPendingThumbnailsDebounced_: () => void =
+      debounceEnd(() => this.processPendingThumbnails_(), DEBOUNCE_DELAY_MS);
   private tracker_: EventTracker = new EventTracker();
-
-  // TODO(dhoss): Remove `this.inTest` when implemented a mock plugin
-  // controller.
-  inTest: boolean = false;
 
   constructor() {
     super();
@@ -76,7 +82,12 @@ export class ViewerThumbnailBarElement extends CrLitElement {
     this.tracker_.add(
         this.pluginController_.getEventTarget(),
         PluginControllerEventType.IS_ACTIVE_CHANGED,
-        (e: CustomEvent<boolean>) => this.isPluginActive_ = e.detail);
+        (e: CustomEvent<boolean>) => {
+          this.isPluginActive_ = e.detail;
+          if (!this.isPluginActive_) {
+            this.pendingThumbnails_.clear();
+          }
+        });
 
     // <if expr="enable_pdf_ink2">
     this.tracker_.add(
@@ -96,8 +107,10 @@ export class ViewerThumbnailBarElement extends CrLitElement {
         new IntersectionObserver((entries: IntersectionObserverEntry[]) => {
           entries.forEach(entry => {
             const thumbnail = entry.target as ViewerThumbnailElement;
+            const pageIndex = thumbnail.pageNumber - 1;
 
             if (!entry.isIntersecting) {
+              this.pendingThumbnails_.delete(pageIndex);
               thumbnail.clearImage();
               return;
             }
@@ -107,17 +120,12 @@ export class ViewerThumbnailBarElement extends CrLitElement {
             }
             thumbnail.setPainted();
 
-            if (!this.isPluginActive_ || this.inTest) {
+            if (!this.isPluginActive_ || this.sidenavCollapsed) {
               return;
             }
 
-            // Convert to zero-based page index.
-            this.pluginController_.requestThumbnail(thumbnail.pageNumber - 1)
-                .then(response => {
-                  const array = new Uint8ClampedArray(response.imageData);
-                  const imageData = new ImageData(array, response.width);
-                  thumbnail.image = imageData;
-                });
+            this.pendingThumbnails_.set(pageIndex, thumbnail);
+            this.processPendingThumbnailsDebounced_();
           });
         }, {
           root: thumbnailsDiv,
@@ -131,6 +139,46 @@ export class ViewerThumbnailBarElement extends CrLitElement {
     FocusOutlineManager.forDocument(document);
   }
 
+  private clearPendingThumbnails_() {
+    for (const thumbnail of this.pendingThumbnails_.values()) {
+      thumbnail.clearImage();
+    }
+    this.pendingThumbnails_.clear();
+  }
+
+  private observeThumbnails_() {
+    assert(this.intersectionObserver_);
+    this.shadowRoot.querySelectorAll('viewer-thumbnail')
+        .forEach(thumbnail => this.intersectionObserver_!.observe(thumbnail));
+  }
+
+  private processPendingThumbnails_() {
+    if (!this.isPluginActive_ || this.sidenavCollapsed) {
+      this.clearPendingThumbnails_();
+      return;
+    }
+
+    // Skip thumbnails that were cleared (e.g., scrolled out or plugin
+    // deactivated) before the debounce timer fired.
+    const queue = Array.from(this.pendingThumbnails_.entries())
+                      .filter(([_, thumbnail]) => thumbnail.isPainted());
+    this.pendingThumbnails_.clear();
+
+    for (const [pageIndex, thumbnail] of queue) {
+      this.pluginController_.requestThumbnail(pageIndex).then(response => {
+        // The thumbnail may have been scrolled out of view and cleared while
+        // the asynchronous request was in flight.
+        if (thumbnail.isPainted()) {
+          const array = new Uint8ClampedArray(response.imageData);
+          const imageData = new ImageData(array, response.width);
+          thumbnail.image = imageData;
+        }
+      });
+    }
+
+    this.dispatchEvent(new CustomEvent('thumbnails-processed-for-testing'));
+  }
+
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
 
@@ -142,11 +190,15 @@ export class ViewerThumbnailBarElement extends CrLitElement {
       }
     }
 
-    if (changedProperties.has('docLength')) {
+    if (changedProperties.has('sidenavCollapsed') && this.sidenavCollapsed) {
       assert(this.intersectionObserver_);
-      // If doc length changes, we render new thumbnails.
-      this.shadowRoot.querySelectorAll('viewer-thumbnail')
-          .forEach(thumbnail => this.intersectionObserver_!.observe(thumbnail));
+      this.intersectionObserver_.disconnect();
+      this.clearPendingThumbnails_();
+    } else if (
+        !this.sidenavCollapsed &&
+        (changedProperties.has('docLength') ||
+         changedProperties.has('sidenavCollapsed'))) {
+      this.observeThumbnails_();
     }
   }
 

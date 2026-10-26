@@ -6,19 +6,19 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
 
 #include <array>
 #include <memory>
 #include <variant>
 
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "media/base/audio_buffer.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/decrypt_config.h"
 #include "media/base/encryption_pattern.h"
 #include "media/base/encryption_scheme.h"
+#include "media/base/limits.h"
 #include "media/base/sample_format.h"
 #include "media/base/test_helpers.h"
 #include "media/mojo/common/validation_utils.h"
@@ -28,9 +28,10 @@ namespace media {
 
 namespace {
 
-void CompareBytes(uint8_t* original_data, uint8_t* result_data, size_t length) {
-  EXPECT_GT(length, 0u);
-  UNSAFE_TODO(EXPECT_EQ(memcmp(original_data, result_data, length), 0));
+void CompareBytes(base::span<const uint8_t> original_data,
+                  base::span<const uint8_t> result_data) {
+  EXPECT_FALSE(original_data.empty());
+  EXPECT_EQ(original_data, result_data);
 }
 
 void CompareAudioBuffers(SampleFormat sample_format,
@@ -45,19 +46,20 @@ void CompareAudioBuffers(SampleFormat sample_format,
   EXPECT_EQ(original.end_of_stream(), result.end_of_stream());
 
   // Compare bytes in buffer.
-  int bytes_per_channel =
+  const size_t bytes_per_channel =
       original.frame_count() * SampleFormatToBytesPerChannel(sample_format);
   if (IsPlanar(sample_format)) {
     for (int i = 0; i < original.channel_count(); ++i) {
-      CompareBytes(original.channel_data()[i], result.channel_data()[i],
-                   bytes_per_channel);
+      CompareBytes(original.planar_channel(i).first(bytes_per_channel),
+                   result.planar_channel(i).first(bytes_per_channel));
     }
     return;
   }
 
   DCHECK(IsInterleaved(sample_format)) << sample_format;
-  CompareBytes(original.channel_data()[0], result.channel_data()[0],
-               bytes_per_channel * original.channel_count());
+  const size_t interleaved_bytes = bytes_per_channel * original.channel_count();
+  CompareBytes(original.interleaved_data().first(interleaved_bytes),
+               result.interleaved_data().first(interleaved_bytes));
 }
 
 }  // namespace
@@ -368,6 +370,36 @@ TEST(MediaTypeConvertersTest, RejectOOBSubsample) {
       mojo_buffer.To<scoped_refptr<DecoderBuffer>>();
 
   EXPECT_FALSE(converted_buffer);
+}
+
+TEST(MediaTypeConvertersTest, ConvertDecryptConfig_RejectsUnboundedSubsamples) {
+  media::mojom::DecryptConfigPtr mojo_decrypt_config(
+      media::mojom::DecryptConfig::New());
+  mojo_decrypt_config->key_id = "key_id";
+  mojo_decrypt_config->iv = "0123456789abcdef";
+  mojo_decrypt_config->encryption_scheme = media::EncryptionScheme::kCenc;
+  mojo_decrypt_config->subsamples.resize(
+      media::limits::kMaxSubsamplesPerBuffer + 1);
+
+  std::unique_ptr<media::DecryptConfig> decrypt_config =
+      mojo_decrypt_config.To<std::unique_ptr<media::DecryptConfig>>();
+
+  EXPECT_FALSE(decrypt_config);
+}
+
+TEST(MediaTypeConvertersTest, ConvertAudioBuffer_BitstreamEmptyData) {
+  auto ptr = mojom::AudioBuffer::New();
+  ptr->sample_format = SampleFormat::kSampleFormatAc3;
+  ptr->channel_layout_config = ChannelLayoutConfig::Stereo();
+  ptr->sample_rate = 48000;
+  ptr->frame_count = 100;
+  // Explicitly provide empty data for a bitstream buffer.
+  ptr->data = std::vector<uint8_t>();
+
+  auto result = ptr.To<scoped_refptr<AudioBuffer>>();
+  // Bitstream buffers with empty data should be replaced with EOS.
+  ASSERT_TRUE(result);
+  EXPECT_TRUE(result->end_of_stream());
 }
 
 }  // namespace media

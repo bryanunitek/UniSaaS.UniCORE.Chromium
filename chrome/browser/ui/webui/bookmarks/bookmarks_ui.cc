@@ -10,7 +10,11 @@
 #include <utility>
 
 #include "base/feature_list.h"
+#include "chrome/browser/enterprise/isolated_mode/isolated_mode_settings_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/bookmarks/bookmarks_service_feature.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/bookmarks/bookmarks_message_handler.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
@@ -18,6 +22,8 @@
 #include "chrome/browser/ui/webui/metrics_handler.h"
 #include "chrome/browser/ui/webui/page_not_available_for_guest/page_not_available_for_guest_ui.h"
 #include "chrome/browser/ui/webui/plural_string_handler.h"
+#include "chrome/browser/ui/webui/theme_source.h"
+#include "chrome/common/channel_info.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/bookmarks_resources.h"
 #include "chrome/grit/bookmarks_resources_map.h"
@@ -25,6 +31,7 @@
 #include "chrome/grit/theme_resources.h"
 #include "components/favicon_base/favicon_url_parser.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -32,6 +39,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/webui/web_ui_util.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/webui/webui_util.h"
 
 namespace {
@@ -64,7 +72,6 @@ content::WebUIDataSource* CreateAndAddBookmarksUIHTMLSource(Profile* profile) {
       {"addBookmarkTitle", IDS_BOOKMARK_MANAGER_ADD_BOOKMARK_TITLE},
       {"addFolderTitle", IDS_BOOKMARK_MANAGER_ADD_FOLDER_TITLE},
       {"accountBookmarksTitle", IDS_BOOKMARKS_ACCOUNT_BOOKMARKS},
-      {"bookmarkPromoCardTitle", IDS_BATCH_UPLOAD_PROMO_TITLE},
       {"cancel", IDS_CANCEL},
       {"clearSearch", IDS_BOOKMARK_MANAGER_CLEAR_SEARCH},
       {"close", IDS_CLOSE},
@@ -102,6 +109,9 @@ content::WebUIDataSource* CreateAndAddBookmarksUIHTMLSource(Profile* profile) {
       {"menuOpenAllIncognito", IDS_BOOKMARK_MANAGER_MENU_OPEN_ALL_INCOGNITO},
       {"menuOpenAllIncognitoWithCount",
        IDS_BOOKMARK_MANAGER_MENU_OPEN_ALL_INCOGNITO_WITH_COUNT},
+      {"menuOpenAllIsolated", IDS_BOOKMARK_MANAGER_MENU_OPEN_ALL_ISOLATED},
+      {"menuOpenAllIsolatedWithCount",
+       IDS_BOOKMARK_MANAGER_MENU_OPEN_ALL_ISOLATED_WITH_COUNT},
       {"menuOpenAllNewTabGroup",
        IDS_BOOKMARK_MANAGER_MENU_OPEN_ALL_NEW_TAB_GROUP},
       {"menuOpenAllNewTabGroupWithCount",
@@ -110,6 +120,7 @@ content::WebUIDataSource* CreateAndAddBookmarksUIHTMLSource(Profile* profile) {
       {"menuOpenNewTabGroup", IDS_BOOKMARK_MANAGER_MENU_OPEN_IN_NEW_TAB_GROUP},
       {"menuOpenNewWindow", IDS_BOOKMARK_MANAGER_MENU_OPEN_IN_NEW_WINDOW},
       {"menuOpenIncognito", IDS_BOOKMARK_MANAGER_MENU_OPEN_INCOGNITO},
+      {"menuOpenIsolated", IDS_BOOKMARK_MANAGER_MENU_OPEN_ISOLATED},
       {"menuOpenSplitView", IDS_BOOKMARK_MANAGER_MENU_OPEN_IN_SPLIT_VIEW},
       {"menuRename", IDS_BOOKMARK_MANAGER_MENU_RENAME},
       {"menuShowInFolder", IDS_BOOKMARK_MANAGER_MENU_SHOW_IN_FOLDER},
@@ -125,7 +136,6 @@ content::WebUIDataSource* CreateAndAddBookmarksUIHTMLSource(Profile* profile) {
       {"openDialogTitle", IDS_BOOKMARK_MANAGER_OPEN_DIALOG_TITLE},
       {"organizeButtonTitle", IDS_BOOKMARK_MANAGER_ORGANIZE_MENU},
       {"renameFolderTitle", IDS_BOOKMARK_MANAGER_FOLDER_RENAME_TITLE},
-      {"saveToAccount", IDS_BATCH_UPLOAD_PROMO_TITLE_OK_BUTTON_LABEL},
       {"searchPrompt", IDS_BOOKMARK_MANAGER_SEARCH_BUTTON},
       {"sidebarAxLabel", IDS_BOOKMARK_MANAGER_SIDEBAR_AX_LABEL},
       {"searchCleared", IDS_SEARCH_CLEARED},
@@ -143,6 +153,9 @@ content::WebUIDataSource* CreateAndAddBookmarksUIHTMLSource(Profile* profile) {
 
   source->AddBoolean("menuSimplification",
                      features::IsMenuSimplificationEnabled());
+  source->AddBoolean(
+      "isIsolatedModeEnabled",
+      enterprise_isolated_mode::IsolatedModeReplacesIncognito(profile));
 
   source->AddResourcePath(
       "images/batch_upload_bookmarks_promo.svg",
@@ -186,6 +199,7 @@ BookmarksUI::BookmarksUI(content::WebUI* web_ui)
   content::URLDataSource::Add(
       profile, std::make_unique<FaviconSource>(
                    profile, chrome::FaviconUrlFormat::kFavicon2));
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   auto plural_string_handler = std::make_unique<PluralStringHandler>();
   plural_string_handler->AddLocalizedString(
@@ -201,8 +215,26 @@ BookmarksUI::BookmarksUI(content::WebUI* web_ui)
 }
 
 // static
-base::RefCountedMemory* BookmarksUI::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory> BookmarksUI::GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
       IDR_BOOKMARKS_FAVICON, scale_factor);
 }
+
+BookmarksUI::~BookmarksUI() = default;
+
+void BookmarksUI::BindInterface(
+    mojo::PendingReceiver<bookmarks_api::mojom::BookmarksService> receiver) {
+  auto* tab = tabs::TabInterface::GetFromContents(web_ui()->GetWebContents());
+  if (tab) {
+    auto* browser_window = tab->GetBrowserWindowInterface();
+    if (browser_window) {
+      auto* feature = BookmarksServiceFeature::From(browser_window);
+      if (feature) {
+        feature->Accept(std::move(receiver));
+      }
+    }
+  }
+}
+
+WEB_UI_CONTROLLER_TYPE_IMPL(BookmarksUI)

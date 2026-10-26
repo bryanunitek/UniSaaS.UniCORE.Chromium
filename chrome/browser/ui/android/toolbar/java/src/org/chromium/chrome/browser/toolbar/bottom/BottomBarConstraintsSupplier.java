@@ -14,7 +14,6 @@ import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.cc.input.BrowserControlsState;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
@@ -26,11 +25,11 @@ import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
  * <p>It tracks transitions to and from the New Tab Page (NTP) by listening to {@link
  * TabObserver#onContentChanged(Tab)}.
  *
- * <p>When the current tab is on an NTP, the constraints emitted by this supplier are overridden and
- * forced to {@link BrowserControlsState#BOTH}. This is exclusively to ensure that
- * ScrollingBottomViewResourceFrameLayout allows screenshot updates, preventing stale screenshots.
- * It does not affect the physical scroll behavior of the bottom bar, which is driven by the actual
- * tab constraints.
+ * <p>When the current tab is on an NTP or other native page, the constraints emitted by this
+ * supplier are overridden and forced to {@link BrowserControlsState#BOTH}. This is exclusively to
+ * ensure that ScrollingBottomViewResourceFrameLayout allows screenshot updates, preventing stale
+ * screenshots. It does not affect the physical scroll behavior of the bottom bar, which is driven
+ * by the actual tab constraints.
  */
 @NullMarked
 public class BottomBarConstraintsSupplier
@@ -41,7 +40,7 @@ public class BottomBarConstraintsSupplier
     private final Callback<@Nullable Integer> mConstraintsObserver = this::onConstraintsChanged;
     private final Callback<@Nullable Tab> mTabObserver = this::onTabChanged;
     private final TabObserver mPageObserver =
-            new EmptyTabObserver() {
+            new TabObserver() {
                 // Triggered when a NativePage is swapped in or out (e.g., the New Tab Page).
                 // This is the primary way we detect transitions to/from the NTP.
                 @Override
@@ -122,12 +121,12 @@ public class BottomBarConstraintsSupplier
 
     @Override
     public @Nullable @BrowserControlsState Integer addObserver(
-            Callback<@Nullable Integer> obs, int behavior) {
+            Callback<? super @Nullable Integer> obs, int behavior) {
         return mSupplier.addObserver(obs, behavior);
     }
 
     @Override
-    public void removeObserver(Callback<@Nullable Integer> obs) {
+    public void removeObserver(Callback<? super @Nullable Integer> obs) {
         mSupplier.removeObserver(obs);
     }
 

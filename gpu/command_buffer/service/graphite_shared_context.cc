@@ -4,17 +4,26 @@
 
 #include "gpu/command_buffer/service/graphite_shared_context.h"
 
+#include <algorithm>
+#include <string_view>
+
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
+#include "base/strings/strcat.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "components/crash/core/common/crash_key.h"
 #include "gpu/command_buffer/common/shm_count.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
+#include "third_party/skia/include/gpu/GpuTypes.h"
+#include "third_party/skia/include/gpu/graphite/BackendSemaphore.h"
 #include "third_party/skia/include/gpu/graphite/Context.h"
 #include "third_party/skia/include/gpu/graphite/PrecompileContext.h"
+#include "third_party/skia/include/gpu/graphite/Recording.h"
 
 namespace gpu {
 
@@ -57,11 +66,23 @@ InsertRecordingStatusUma InsertRecordingStatusUma(
   NOTREACHED();
 }
 
-struct FinishedContext {
-  skgpu::graphite::GpuFinishedProc old_finished_proc;
-  skgpu::graphite::GpuFinishedContext old_context;
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner;
-};
+// LINT.IfChange(PendingCommandsRange)
+std::string_view PendingCommandsRangeSuffix(int num_pending_commands) {
+  if (num_pending_commands < 1000) {
+    return "Under1K";
+  }
+  if (num_pending_commands < 10000) {
+    return "1KTo10K";
+  }
+  if (num_pending_commands < 100000) {
+    return "10KTo100K";
+  }
+  if (num_pending_commands < 500000) {
+    return "100KTo500K";
+  }
+  return "Over500K";
+}
+// LINT.ThenChange(//tools/metrics/histograms/metadata/gpu/histograms.xml:PendingCommandsRange)
 
 std::pair<skgpu::graphite::GpuFinishedProc, skgpu::graphite::GpuFinishedContext>
 CreateFinishedProcThreadSafe(
@@ -70,6 +91,12 @@ CreateFinishedProcThreadSafe(
     scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
   DCHECK(finished_proc);
   DCHECK(task_runner);
+
+  struct FinishedContext {
+    skgpu::graphite::GpuFinishedProc old_finished_proc;
+    skgpu::graphite::GpuFinishedContext old_context;
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner;
+  };
 
   // Ensure finishedProc is called on the original thread.
   auto* context = new FinishedContext{finished_proc, finished_context,
@@ -91,15 +118,49 @@ CreateFinishedProcThreadSafe(
   return {thread_safe_finished_proc, context};
 }
 
+std::pair<skgpu::graphite::GpuFinishedProc, skgpu::graphite::GpuFinishedContext>
+CreateFinishedProcWithCleanup(
+    skgpu::graphite::GpuFinishedProc finished_proc,
+    skgpu::graphite::GpuFinishedContext finished_context,
+    base::OnceClosure cleanup_task) {
+  DCHECK(cleanup_task);
+
+  struct CleanupContext {
+    skgpu::graphite::GpuFinishedProc old_finished_proc;
+    skgpu::graphite::GpuFinishedContext old_context;
+    base::OnceClosure cleanup_task;
+  };
+
+  auto* context = new CleanupContext{finished_proc, finished_context,
+                                     std::move(cleanup_task)};
+
+  auto finished_proc_with_cleanup = [](void* ctx,
+                                       skgpu::CallbackResult result) {
+    auto context = base::WrapUnique(static_cast<CleanupContext*>(ctx));
+    if (context->old_finished_proc) {
+      context->old_finished_proc(context->old_context, result);
+    }
+    // If the submit failed then don't run cleanup as it may delete objects that
+    // are used next submit.
+    if (result == skgpu::CallbackResult::kSuccess) {
+      std::move(context->cleanup_task).Run();
+    }
+  };
+
+  return {finished_proc_with_cleanup, context};
+}
+
 struct AsyncReadContext {
   GraphiteSharedContext::SkImageReadPixelsCallback old_callback;
   SkImage::ReadPixelsContext old_context;
+  raw_ptr<GraphiteSharedContext::Delegate> delegate;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner;
 };
 
 void* CreateAsyncReadContextThreadSafe(
     GraphiteSharedContext::SkImageReadPixelsCallback old_callback,
     SkImage::ReadPixelsContext old_callbackContext,
+    GraphiteSharedContext::Delegate* delegate,
     bool is_thread_safe) {
   scoped_refptr<base::SingleThreadTaskRunner> task_runner =
       is_thread_safe && base::SingleThreadTaskRunner::HasCurrentDefault()
@@ -108,7 +169,7 @@ void* CreateAsyncReadContextThreadSafe(
 
   // Wrapped the old callback with a new thread safe callback.
   return new AsyncReadContext(std::move(old_callback), old_callbackContext,
-                              std::move(task_runner));
+                              delegate, std::move(task_runner));
 }
 
 static void ReadPixelsCallbackThreadSafe(
@@ -119,14 +180,17 @@ static void ReadPixelsCallbackThreadSafe(
     return;
   }
 
+  if (context->delegate && context->delegate->IsContextLost()) {
+    return;
+  }
+
   // Ensure callbacks are called on the original thread if only one
   // graphite::Context is created and is shared by multiple threads.
   base::SingleThreadTaskRunner* task_runner = context->task_runner.get();
   if (task_runner && !task_runner->BelongsToCurrentThread()) {
     task_runner->PostTask(
-        FROM_HERE,
-        base::BindOnce(std::move(context->old_callback), context->old_context,
-                       std::move(async_result)));
+        FROM_HERE, base::BindOnce(&ReadPixelsCallbackThreadSafe,
+                                  context.release(), std::move(async_result)));
     return;
   }
 
@@ -156,6 +220,7 @@ class AutoReset {
 // Recursive lock is permitted for locking will be skipped upon reentance.
 class SCOPED_LOCKABLE GraphiteSharedContext::AutoLock {
   STACK_ALLOCATED();
+
  public:
   explicit AutoLock(const GraphiteSharedContext* context)
       EXCLUSIVE_LOCK_FUNCTION(context->lock_);
@@ -240,18 +305,24 @@ GraphiteSharedContext::AutoLock::~AutoLock() {
   }
 }
 
+base::OnceClosure
+GraphiteSharedContext::Delegate::CreateSubmitCleanupCallback() {
+  return base::OnceClosure();
+}
+
 GraphiteSharedContext::GraphiteSharedContext(
     std::unique_ptr<skgpu::graphite::Context> graphite_context,
     GpuProcessShmCount* use_shader_cache_shm_count,
     bool is_thread_safe,
     size_t max_pending_recordings,
-    FlushCallback backend_flush_callback,
-    MarkContextLostCallback mark_context_lost_callback)
+    base::TimeDelta max_time_between_submits,
+    Delegate* delegate)
     : graphite_context_(std::move(graphite_context)),
       use_shader_cache_shm_count_(use_shader_cache_shm_count),
       max_pending_recordings_(max_pending_recordings),
-      backend_flush_callback_(std::move(backend_flush_callback)),
-      mark_context_lost_callback_(std::move(mark_context_lost_callback)) {
+      max_time_between_submits_(max_time_between_submits),
+      last_submit_time_(base::TimeTicks::Now()),
+      delegate_(delegate) {
   DCHECK(graphite_context_);
   if (is_thread_safe) {
     lock_.emplace();
@@ -259,6 +330,13 @@ GraphiteSharedContext::GraphiteSharedContext(
 }
 
 GraphiteSharedContext::~GraphiteSharedContext() = default;
+
+bool GraphiteSharedContext::IsContextLost() const {
+  if (delegate_) {
+    return delegate_->IsContextLost();
+  }
+  return false;
+}
 
 skgpu::BackendApi GraphiteSharedContext::backend() const {
   AutoLock auto_lock(this);
@@ -277,6 +355,32 @@ GraphiteSharedContext::makePrecompileContext() {
   return graphite_context_->makePrecompileContext();
 }
 
+void GraphiteSharedContext::set_simulated_insert_status(
+    skgpu::graphite::InsertStatus status) {
+  AutoLock auto_lock(this);
+  simulated_insert_status_ = status;
+}
+
+uint64_t GraphiteSharedContext::AddPendingWaitSemaphore(
+    const skgpu::graphite::BackendSemaphore& semaphore) {
+  CHECK(semaphore.isValid());
+  AutoLock auto_lock(this);
+  pending_wait_semaphores_.push_back(semaphore);
+  return submit_generation();
+}
+
+uint64_t GraphiteSharedContext::AddPendingSignalSemaphore(
+    const skgpu::graphite::BackendSemaphore& semaphore) {
+  CHECK(semaphore.isValid());
+  AutoLock auto_lock(this);
+  pending_signal_semaphores_.push_back(semaphore);
+  return submit_generation();
+}
+
+uint64_t GraphiteSharedContext::submit_generation() const {
+  return submit_generation_.load(std::memory_order_relaxed);
+}
+
 bool GraphiteSharedContext::insertRecording(
     const skgpu::graphite::InsertRecordingInfo& info) {
   AutoLock auto_lock(this);
@@ -287,38 +391,92 @@ bool GraphiteSharedContext::insertRecording(
 
   num_pending_recordings_++;
 
-  // Force submitting if there are too many pending recordings.
-  if (num_pending_recordings_ >= max_pending_recordings_) {
+  // Force submitting if there are too many pending recordings, or if nothing
+  // else has submitted for a while. The latter bounds how long recordings wait
+  // when nothing presents, e.g. a hidden window whose content keeps drawing.
+  const base::TimeDelta time_since_last_submit =
+      base::TimeTicks::Now() - last_submit_time_;
+  const bool too_many_pending_recordings =
+      num_pending_recordings_ >= max_pending_recordings_;
+  const bool too_long_since_last_submit =
+      time_since_last_submit >= max_time_between_submits_;
+  if (too_many_pending_recordings || too_long_since_last_submit) {
+    TRACE_EVENT("gpu", "GraphiteSharedContext::ForceSubmit",
+                "pending_recordings", num_pending_recordings_,
+                "time_since_last_submit_ms",
+                time_since_last_submit.InMillisecondsF());
     SubmitAndFlushBackendImpl(skgpu::graphite::SyncToCpu::kNo);
   }
 
   return true;
 }
 
+void GraphiteSharedContext::InsertSemaphoreOnlyRecording() {
+  if (!semaphore_recorder_) {
+    skgpu::graphite::RecorderOptions options;
+    options.fGpuBudgetInBytes = 0;
+    options.fRequireOrderedRecordings = false;
+    semaphore_recorder_ = graphite_context_->makeRecorder(options);
+    CHECK(semaphore_recorder_);
+  }
+
+  auto recording = semaphore_recorder_->snap();
+  CHECK(recording);
+
+  skgpu::graphite::InsertRecordingInfo info;
+  info.fRecording = recording.get();
+  InsertRecordingImpl(info);
+}
+
 bool GraphiteSharedContext::InsertRecordingImpl(
     const skgpu::graphite::InsertRecordingInfo& info) {
+  CHECK_EQ(info.fNumWaitSemaphores, 0u);
+  CHECK_EQ(info.fNumSignalSemaphores, 0u);
+  CHECK(info.fSimulatedStatus == skgpu::graphite::InsertStatus::kSuccess);
+
   scoped_refptr<base::SingleThreadTaskRunner> task_runner =
       IsThreadSafe() && base::SingleThreadTaskRunner::HasCurrentDefault()
           ? base::SingleThreadTaskRunner::GetCurrentDefault()
           : nullptr;
 
-  const skgpu::graphite::InsertRecordingInfo* info_ptr = &info;
+  std::optional<skgpu::graphite::InsertRecordingInfo> info_copy;
+
+  if (!pending_wait_semaphores_.empty() ||
+      !pending_signal_semaphores_.empty()) {
+    info_copy = info;
+    info_copy->fNumWaitSemaphores = pending_wait_semaphores_.size();
+    info_copy->fWaitSemaphores = pending_wait_semaphores_.data();
+    info_copy->fNumSignalSemaphores = pending_signal_semaphores_.size();
+    info_copy->fSignalSemaphores = pending_signal_semaphores_.data();
+  }
 
   // Ensure fFinishedProc is called on the original thread if there is only one
   // graphite::Context.
-  std::optional<skgpu::graphite::InsertRecordingInfo> info_copy;
   if (info.fFinishedProc && task_runner) {
-    info_copy = info;
+    if (!info_copy.has_value()) {
+      info_copy = info;
+    }
     std::tie(info_copy->fFinishedProc, info_copy->fFinishedContext) =
         CreateFinishedProcThreadSafe(info.fFinishedProc, info.fFinishedContext,
                                      std::move(task_runner));
-    info_ptr = &info_copy.value();
   }
 
-  auto insert_status = graphite_context_->insertRecording(*info_ptr);
-
   const bool simulating_insert_failure =
-      info_ptr->fSimulatedStatus != skgpu::graphite::InsertStatus::kSuccess;
+      simulated_insert_status_ != skgpu::graphite::InsertStatus::kSuccess;
+  if (simulating_insert_failure) {
+    if (!info_copy.has_value()) {
+      info_copy = info;
+    }
+    info_copy->fSimulatedStatus = simulated_insert_status_;
+  }
+
+  auto insert_status = graphite_context_->insertRecording(
+      info_copy.has_value() ? *info_copy : info);
+
+  if (insert_status == skgpu::graphite::InsertStatus::kSuccess) {
+    pending_wait_semaphores_.clear();
+    pending_signal_semaphores_.clear();
+  }
 
   // Crash, log, or emit UMA only if we're not simulating a failure for testing.
   if (!simulating_insert_failure) {
@@ -349,11 +507,13 @@ bool GraphiteSharedContext::InsertRecordingImpl(
     CHECK(simulating_insert_failure);
   } else if (insert_status ==
              skgpu::graphite::InsertStatus::kOutOfOrderRecording) {
-    if (mark_context_lost_callback_) {
+    if (delegate_) {
       // TODO(crbug.com/478211694): assume the reason of out of order is OOM for
       // now.
-      mark_context_lost_callback_.Run(error::kOutOfMemory);
+      delegate_->MarkContextLost(error::kOutOfMemory);
     }
+  } else if (insert_status == skgpu::graphite::InsertStatus::kSuccess) {
+    num_pending_commands_ = insert_status.numPendingCommands();
   }
 
   // All other failure modes are recoverable in the sense that future recordings
@@ -369,35 +529,109 @@ void GraphiteSharedContext::submit(skgpu::graphite::SubmitInfo submit_info) {
 }
 
 bool GraphiteSharedContext::SubmitImpl(
-    const skgpu::graphite::SubmitInfo& submit_info) {
+    skgpu::graphite::SubmitInfo submit_info) {
+  const int num_pending_commands = num_pending_commands_;
+  num_pending_commands_ = 0;
   num_pending_recordings_ = 0;
+  last_submit_time_ = base::TimeTicks::Now();
+
+  if (!pending_wait_semaphores_.empty() ||
+      !pending_signal_semaphores_.empty()) {
+    // Drain any pending semaphores before checking hasPendingGPUWork() so that
+    // enqueued semaphores are always submitted.
+    InsertSemaphoreOnlyRecording();
+  }
+
+  // Ask the backend for deferred cleanup work (e.g. VulkanFenceHelper tasks)
+  // that must wait for all previously submitted GPU work to finish.
+  base::OnceClosure cleanup_callback;
+  if (delegate_ && !IsThreadSafe()) {
+    cleanup_callback = delegate_->CreateSubmitCleanupCallback();
+  }
 
   if (submit_info.fSync == skgpu::graphite::SyncToCpu::kNo &&
-      !submit_info.fFinishedProc && !graphite_context_->hasPendingGPUWork()) {
+      !submit_info.fFinishedProc && !cleanup_callback &&
+      !graphite_context_->hasPendingGPUWork()) {
     // Skip submitting if there is no pending GPU work and no finish proc. If a
     // finish proc is provided, we must call submit() even without new work so
     // that it can be triggered when all previously submitted work completes.
     return true;
   }
 
+  max_pending_commands_ = std::max(max_pending_commands_, num_pending_commands);
+
   scoped_refptr<base::SingleThreadTaskRunner> task_runner =
       IsThreadSafe() && base::SingleThreadTaskRunner::HasCurrentDefault()
           ? base::SingleThreadTaskRunner::GetCurrentDefault()
           : nullptr;
 
-  // Ensure fFinishedProc is called on the original thread if there is only one
-  // graphite::Context.
-  if (submit_info.fFinishedProc && task_runner) {
-    auto wrapped_submit_info = submit_info;
-    std::tie(wrapped_submit_info.fFinishedProc,
-             wrapped_submit_info.fFinishedContext) =
+  const bool shoud_record_metric = base::ShouldRecordSubsampledMetric(0.01);
+  base::TimeTicks start_time;
+  if (shoud_record_metric) {
+    // Emit these before submit() so that the data is recorded even if a long
+    // submit causes the process to be killed.
+    UMA_HISTOGRAM_COUNTS_1M("GPU.Graphite.NumPendingCommands",
+                            num_pending_commands);
+    UMA_HISTOGRAM_COUNTS_1M("GPU.Graphite.MaxPendingCommands",
+                            max_pending_commands_);
+    start_time = base::TimeTicks::Now();
+  }
+
+  const bool sync_to_cpu =
+      submit_info.fSync == skgpu::graphite::SyncToCpu::kYes;
+
+  // Always submit without waiting first. If a wait is requested, it is done by
+  // a separate submit below.
+  submit_info.fSync = skgpu::graphite::SyncToCpu::kNo;
+
+  if (cleanup_callback) {
+    std::tie(submit_info.fFinishedProc, submit_info.fFinishedContext) =
+        CreateFinishedProcWithCleanup(submit_info.fFinishedProc,
+                                      submit_info.fFinishedContext,
+                                      std::move(cleanup_callback));
+  } else if (submit_info.fFinishedProc && task_runner) {
+    // Ensure fFinishedProc is called on the original thread if there is only
+    // one graphite::Context.
+    std::tie(submit_info.fFinishedProc, submit_info.fFinishedContext) =
         CreateFinishedProcThreadSafe(submit_info.fFinishedProc,
                                      submit_info.fFinishedContext,
                                      std::move(task_runner));
-    return graphite_context_->submit(wrapped_submit_info);
+  }
+  bool success = graphite_context_->submit(submit_info);
+
+  if (success) {
+    // Real submits via submit() or submitAndFlushBackend() CHECK that
+    // SubmitImpl() was successful. As a result, if a real submit happened with
+    // pending semaphores it guarantees generation was incremented.
+    submit_generation_.fetch_add(1, std::memory_order_relaxed);
+
+    if (sync_to_cpu) {
+      // Report progress between the submit and the wait to tell the GPU
+      // watchdog that we are making progress. Otherwise, a long submit followed
+      // by a long wait could be mistaken for a hang and cause the GPU process
+      // to be killed.
+      if (delegate_) {
+        delegate_->ReportProgress();
+      }
+      // Submitting without any new recording is fine. Graphite won't generate
+      // an empty command buffer in this case, it will just wait for the last
+      // submitted command buffer.
+      success = graphite_context_->submit(skgpu::graphite::SyncToCpu::kYes);
+    }
   }
 
-  return graphite_context_->submit(submit_info);
+  if (shoud_record_metric) {
+    const base::TimeDelta submit_duration = base::TimeTicks::Now() - start_time;
+    UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+        "GPU.Graphite.SubmitDurationUs", submit_duration, base::Microseconds(1),
+        base::Seconds(1), 50);
+    base::UmaHistogramCustomMicrosecondsTimes(
+        base::StrCat({"GPU.Graphite.SubmitDurationUs.PendingCommands.",
+                      PendingCommandsRangeSuffix(num_pending_commands)}),
+        submit_duration, base::Microseconds(1), base::Seconds(1), 50);
+  }
+
+  return success;
 }
 
 void GraphiteSharedContext::submitAndFlushBackend(
@@ -409,10 +643,14 @@ void GraphiteSharedContext::submitAndFlushBackend(
 
 void GraphiteSharedContext::SubmitAndFlushBackendImpl(
     const skgpu::graphite::SubmitInfo& submit_info) {
+  // Capture this before SubmitImpl() runs, since submitting clears the
+  // context's pending GPU work.
+  bool had_pending_gpu_work = graphite_context_->hasPendingGPUWork();
+
   CHECK(SubmitImpl(submit_info));
 
-  if (backend_flush_callback_) {
-    backend_flush_callback_.Run();
+  if (delegate_ && had_pending_gpu_work) {
+    delegate_->FlushBackend();
   }
 }
 
@@ -431,7 +669,7 @@ void GraphiteSharedContext::asyncRescaleAndReadPixels(
     SkImage::ReadPixelsContext callbackContext) {
   AutoLock auto_lock(this);
   auto* new_callbackContext = CreateAsyncReadContextThreadSafe(
-      std::move(callback), callbackContext, IsThreadSafe());
+      std::move(callback), callbackContext, delegate_, IsThreadSafe());
 
   return graphite_context_->asyncRescaleAndReadPixels(
       src, dstImageInfo, srcRect, rescaleGamma, rescaleMode,
@@ -448,7 +686,7 @@ void GraphiteSharedContext::asyncRescaleAndReadPixels(
     SkImage::ReadPixelsContext callbackContext) {
   AutoLock auto_lock(this);
   auto* new_callbackContext = CreateAsyncReadContextThreadSafe(
-      std::move(callback), callbackContext, IsThreadSafe());
+      std::move(callback), callbackContext, delegate_, IsThreadSafe());
 
   return graphite_context_->asyncRescaleAndReadPixels(
       src, dstImageInfo, srcRect, rescaleGamma, rescaleMode,
@@ -465,7 +703,7 @@ bool GraphiteSharedContext::asyncRescaleAndReadPixelsAndSubmit(
     SkImage::ReadPixelsContext callbackContext) {
   AutoLock auto_lock(this);
   auto* new_callbackContext = CreateAsyncReadContextThreadSafe(
-      std::move(callback), callbackContext, IsThreadSafe());
+      std::move(callback), callbackContext, delegate_, IsThreadSafe());
 
   graphite_context_->asyncRescaleAndReadPixels(
       src, dstImageInfo, srcRect, rescaleGamma, rescaleMode,
@@ -484,7 +722,7 @@ bool GraphiteSharedContext::asyncRescaleAndReadPixelsAndSubmit(
     SkImage::ReadPixelsContext callbackContext) {
   AutoLock auto_lock(this);
   auto* new_callbackContext = CreateAsyncReadContextThreadSafe(
-      std::move(callback), callbackContext, IsThreadSafe());
+      std::move(callback), callbackContext, delegate_, IsThreadSafe());
 
   graphite_context_->asyncRescaleAndReadPixels(
       src, dstImageInfo, srcRect, rescaleGamma, rescaleMode,
@@ -505,7 +743,7 @@ void GraphiteSharedContext::asyncRescaleAndReadPixelsYUV420(
     SkImage::ReadPixelsContext callbackContext) {
   AutoLock auto_lock(this);
   auto* new_callbackContext = CreateAsyncReadContextThreadSafe(
-      std::move(callback), callbackContext, IsThreadSafe());
+      std::move(callback), callbackContext, delegate_, IsThreadSafe());
 
   return graphite_context_->asyncRescaleAndReadPixelsYUV420(
       src, yuvColorSpace, dstColorSpace, srcRect, dstSize, rescaleGamma,
@@ -524,7 +762,7 @@ void GraphiteSharedContext::asyncRescaleAndReadPixelsYUV420(
     SkImage::ReadPixelsContext callbackContext) {
   AutoLock auto_lock(this);
   auto* new_callbackContext = CreateAsyncReadContextThreadSafe(
-      std::move(callback), callbackContext, IsThreadSafe());
+      std::move(callback), callbackContext, delegate_, IsThreadSafe());
 
   return graphite_context_->asyncRescaleAndReadPixelsYUV420(
       src, yuvColorSpace, dstColorSpace, srcRect, dstSize, rescaleGamma,
@@ -543,7 +781,7 @@ bool GraphiteSharedContext::asyncRescaleAndReadPixelsYUV420AndSubmit(
     SkImage::ReadPixelsContext callbackContext) {
   AutoLock auto_lock(this);
   auto* new_callbackContext = CreateAsyncReadContextThreadSafe(
-      std::move(callback), callbackContext, IsThreadSafe());
+      std::move(callback), callbackContext, delegate_, IsThreadSafe());
 
   graphite_context_->asyncRescaleAndReadPixelsYUV420(
       src, yuvColorSpace, dstColorSpace, srcRect, dstSize, rescaleGamma,
@@ -564,7 +802,7 @@ bool GraphiteSharedContext::asyncRescaleAndReadPixelsYUV420AndSubmit(
     SkImage::ReadPixelsContext callbackContext) {
   AutoLock auto_lock(this);
   auto* new_callbackContext = CreateAsyncReadContextThreadSafe(
-      std::move(callback), callbackContext, IsThreadSafe());
+      std::move(callback), callbackContext, delegate_, IsThreadSafe());
 
   graphite_context_->asyncRescaleAndReadPixelsYUV420(
       src, yuvColorSpace, dstColorSpace, srcRect, dstSize, rescaleGamma,
@@ -585,7 +823,7 @@ void GraphiteSharedContext::asyncRescaleAndReadPixelsYUVA420(
     SkImage::ReadPixelsContext callbackContext) {
   AutoLock auto_lock(this);
   auto* new_callbackContext = CreateAsyncReadContextThreadSafe(
-      std::move(callback), callbackContext, IsThreadSafe());
+      std::move(callback), callbackContext, delegate_, IsThreadSafe());
 
   return graphite_context_->asyncRescaleAndReadPixelsYUVA420(
       src, yuvColorSpace, dstColorSpace, srcRect, dstSize, rescaleGamma,
@@ -604,7 +842,7 @@ void GraphiteSharedContext::asyncRescaleAndReadPixelsYUVA420(
     SkImage::ReadPixelsContext callbackContext) {
   AutoLock auto_lock(this);
   auto* new_callbackContext = CreateAsyncReadContextThreadSafe(
-      std::move(callback), callbackContext, IsThreadSafe());
+      std::move(callback), callbackContext, delegate_, IsThreadSafe());
 
   return graphite_context_->asyncRescaleAndReadPixelsYUVA420(
       src, yuvColorSpace, dstColorSpace, srcRect, dstSize, rescaleGamma,
@@ -623,7 +861,7 @@ bool GraphiteSharedContext::asyncRescaleAndReadPixelsYUVA420AndSubmit(
     SkImage::ReadPixelsContext callbackContext) {
   AutoLock auto_lock(this);
   auto* new_callbackContext = CreateAsyncReadContextThreadSafe(
-      std::move(callback), callbackContext, IsThreadSafe());
+      std::move(callback), callbackContext, delegate_, IsThreadSafe());
 
   graphite_context_->asyncRescaleAndReadPixelsYUVA420(
       src, yuvColorSpace, dstColorSpace, srcRect, dstSize, rescaleGamma,
@@ -644,7 +882,7 @@ bool GraphiteSharedContext::asyncRescaleAndReadPixelsYUVA420AndSubmit(
     SkImage::ReadPixelsContext callbackContext) {
   AutoLock auto_lock(this);
   auto* new_callbackContext = CreateAsyncReadContextThreadSafe(
-      std::move(callback), callbackContext, IsThreadSafe());
+      std::move(callback), callbackContext, delegate_, IsThreadSafe());
 
   graphite_context_->asyncRescaleAndReadPixelsYUVA420(
       src, yuvColorSpace, dstColorSpace, srcRect, dstSize, rescaleGamma,
@@ -662,6 +900,13 @@ void GraphiteSharedContext::deleteBackendTexture(
     const skgpu::graphite::BackendTexture& texture) {
   AutoLock auto_lock(this);
   return graphite_context_->deleteBackendTexture(texture);
+}
+
+bool GraphiteSharedContext::setMutableState(
+    const skgpu::graphite::BackendTexture& texture,
+    const skgpu::MutableTextureState& state) {
+  AutoLock auto_lock(this);
+  return graphite_context_->setMutableState(texture, state);
 }
 
 void GraphiteSharedContext::freeGpuResources() {
@@ -707,17 +952,14 @@ bool GraphiteSharedContext::isDeviceLost() const {
 }
 
 int GraphiteSharedContext::maxTextureSize() const {
-  AutoLock auto_lock(this);
   return graphite_context_->maxTextureSize();
 }
 
 bool GraphiteSharedContext::supportsProtectedContent() const {
-  AutoLock auto_lock(this);
   return graphite_context_->supportsProtectedContent();
 }
 
 skgpu::GpuStatsFlags GraphiteSharedContext::supportedGpuStats() const {
-  AutoLock auto_lock(this);
   return graphite_context_->supportedGpuStats();
 }
 

@@ -30,6 +30,8 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/inline/offset_mapping.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 namespace blink {
 
@@ -60,15 +62,15 @@ LayoutTextFragment* LayoutTextFragment::Create(Node* node,
                                                   length);
 }
 
-LayoutTextFragment* LayoutTextFragment::CreateAnonymous(Document& doc,
+LayoutTextFragment* LayoutTextFragment::CreateAnonymous(Document& document,
                                                         const String& text,
                                                         unsigned start,
                                                         unsigned length) {
   LayoutTextFragment* fragment =
       LayoutTextFragment::Create(nullptr, text, start, length);
-  fragment->SetDocumentForAnonymous(&doc);
+  fragment->SetDocumentForAnonymous(document);
   if (length)
-    doc.View()->IncrementVisuallyNonEmptyCharacterCount(length);
+    document.View()->IncrementVisuallyNonEmptyCharacterCount(length);
   return fragment;
 }
 
@@ -82,12 +84,12 @@ void LayoutTextFragment::Trace(Visitor* visitor) const {
   LayoutText::Trace(visitor);
 }
 
-void LayoutTextFragment::WillBeDestroyed() {
+void LayoutTextFragment::WillBeDestroyed(const ComputedStyle* style) {
   NOT_DESTROYED();
   if (is_remaining_text_layout_object_ && first_letter_pseudo_element_)
     first_letter_pseudo_element_->ClearRemainingTextLayoutObject();
   first_letter_pseudo_element_ = nullptr;
-  LayoutText::WillBeDestroyed();
+  LayoutText::WillBeDestroyed(style);
 }
 
 String LayoutTextFragment::CompleteText() const {
@@ -155,11 +157,16 @@ void LayoutTextFragment::TransformAndSecureOriginalText() {
   }
 }
 
-UChar LayoutTextFragment::PreviousCharacter() const {
+UChar32 LayoutTextFragment::PreviousCharacter() const {
   NOT_DESTROYED();
   if (Start()) {
     String original = CompleteText();
     if (original && Start() <= original.length()) {
+      if (RuntimeEnabledFeatures::
+              CapitalizeAfterSupplementaryCharacterFixEnabled()) {
+        wtf_size_t offset = Start();
+        return original.CodePointAtAndPrevious(0, offset);
+      }
       return original[Start() - 1];
     }
   }
@@ -247,8 +254,9 @@ Position LayoutTextFragment::PositionForCaretOffset(unsigned offset) const {
   // TODO(layout-dev): Make the following DCHECK always enabled after we
   // properly support 'text-transform' changing text length.
 #if DCHECK_IS_ON()
-  if (StyleRef().TextTransform() == ETextTransform::kNone)
+  if (Style().TextTransform() == ETextTransform::kNone) {
     DCHECK_LE(offset, FragmentLength());
+  }
 #endif
   const Text* node = AssociatedTextNode();
   if (!node)

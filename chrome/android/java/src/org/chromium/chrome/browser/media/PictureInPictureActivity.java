@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.media;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.app.ActivityOptions;
 import android.app.PendingIntent;
 import android.app.PictureInPictureParams;
@@ -27,7 +28,6 @@ import android.os.Looper;
 import android.util.Rational;
 import android.util.Size;
 import android.view.View;
-import android.view.View.OnLayoutChangeListener;
 import android.view.ViewGroup;
 
 import androidx.annotation.IntDef;
@@ -522,7 +522,8 @@ public class PictureInPictureActivity extends VideoOverlayActivity {
             if (!IntentUtils.isTrustedIntentFromSelf(intent)) return;
 
             // Make sure that this intent is for our instance.
-            UnguessableToken nativeToken = intent.getParcelableExtra(NATIVE_TOKEN_KEY);
+            UnguessableToken nativeToken =
+                    IntentUtils.safeGetParcelableExtra(intent, NATIVE_TOKEN_KEY);
             if (nativeToken == null
                     || !nativeToken.equals(getNativeToken())
                     || !isNativeHandleInitialized()) {
@@ -632,31 +633,19 @@ public class PictureInPictureActivity extends VideoOverlayActivity {
         compositorView
                 .getView()
                 .addOnLayoutChangeListener(
-                        new OnLayoutChangeListener() {
-                            @Override
-                            public void onLayoutChange(
-                                    View v,
-                                    int left,
-                                    int top,
-                                    int right,
-                                    int bottom,
-                                    int oldLeft,
-                                    int oldTop,
-                                    int oldRight,
-                                    int oldBottom) {
-                                if (!isNativeHandleInitialized()) return;
-                                // We sometimes get an initial update of zero before getting
-                                // something reasonable.
-                                if (top == bottom || left == right) return;
+                        (_, left, top, right, bottom, _, _, _, _) -> {
+                            if (!isNativeHandleInitialized()) return;
+                            // We sometimes get an initial update of zero before getting
+                            // something reasonable.
+                            if (top == bottom || left == right) return;
 
-                                // On close, sometimes we get a size update that's almost the entire
-                                // display width.
-                                // Pip window's can't be that big, so ignore it.
-                                final int width = right - left;
-                                if (width > mMaxWidth) return;
+                            // On close, sometimes we get a size update that's almost the entire
+                            // display width.
+                            // Pip window's can't be that big, so ignore it.
+                            final int width = right - left;
+                            if (width > mMaxWidth) return;
 
-                                onViewSizeChanged(width, bottom - top);
-                            }
+                            onViewSizeChanged(width, bottom - top);
                         });
 
         setCompositorView(compositorView);
@@ -904,6 +893,21 @@ public class PictureInPictureActivity extends VideoOverlayActivity {
 
     /* package */ @Nullable View getViewForTesting() {
         return getCompositorView() == null ? null : getCompositorView().getView();
+    }
+
+    public boolean isPipTransitionCompleteForTesting(Activity initiatorActivity) {
+        View pipView = getViewForTesting();
+        int initiatorWidth = initiatorActivity.getWindow().getDecorView().getWidth();
+        // Wait until PictureInPictureActivity has fully transitioned into its
+        // pinned PiP task and received its smaller PiP window bounds. Closing
+        // it while WindowManager's OPEN or PIP transition is still in flight
+        // can cause the transition to misfire on the initiator activity's task.
+        return isNativeHandleInitialized()
+                && isInPictureInPictureMode()
+                && getTaskId() != initiatorActivity.getTaskId()
+                && pipView != null
+                && pipView.getWidth() > 0
+                && pipView.getWidth() < initiatorWidth;
     }
 
     public void expireQuickDismissalTimerForTesting() {

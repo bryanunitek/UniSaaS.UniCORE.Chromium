@@ -9,11 +9,17 @@
 #include <optional>
 
 #include "base/feature.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/post_delayed_memory_reduction_task.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory_coordinator/memory_consumer.h"
+#include "base/memory_coordinator/memory_limit.h"
+#include "base/memory_coordinator/utils.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "chrome/browser/glic/glic_warming_checks.h"
+#include "chrome/browser/glic/host/glic_warming_scheduler.h"
+#include "chrome/browser/profiles/profile_observer.h"
 
 class Profile;
 namespace content {
@@ -24,18 +30,14 @@ namespace glic {
 
 BASE_DECLARE_FEATURE(kGlicReloadWebContentsAfterExpiry);
 
-class WebUIContentsContainer;
+class GlicEnabling;
+class GlicWebContentsManager;
 
 // A pool for pre-warming Glic WebContents.
 // This is used to reduce the perceived latency when opening the Glic UI by
 // creating a WebContents in the background before it's actually needed.
-class GlicWebContentsWarmingPool {
+class GlicWebContentsWarmingPool : public ProfileObserver {
  public:
-  enum class ClearReason {
-    kShutdown,
-    kMemoryPressure,
-  };
-
   // LINT.IfChange(GlicContainerCreationReason)
   enum class ContainerCreationReason {
     kInitialColdWarming = 0,      // Preloaded after cold start.
@@ -44,31 +46,34 @@ class GlicWebContentsWarmingPool {
     kRefill = 2,  // Created to refill the pool after TakeContainer()
     kReloadAfterExpiry =
         3,  // Created to reload the pool after the previous container expired
-    kMaxValue = kReloadAfterExpiry,
+    kNudge = 4,                   // Preloaded when a contextual nudge is shown.
+    kIph = 5,                     // Preloaded when Gemini IPH is shown.
+    kMemoryPressureRecovery = 6,  // Preloaded when memory pressure subsides.
+    kSelectionOverlay = 7,        // Preloaded when selection overlay is shown.
+    kMaxValue = kSelectionOverlay,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/glic/enums.xml:GlicContainerCreationReason)
 
-  explicit GlicWebContentsWarmingPool(Profile* profile);
-  virtual ~GlicWebContentsWarmingPool();
+  explicit GlicWebContentsWarmingPool(Profile* profile, GlicEnabling* enabling);
+  ~GlicWebContentsWarmingPool() override;
 
-  // Retrieves a warmed WebUIContentsContainer from the pool. If no warmed
+  // Retrieves a warmed GlicWebContentsManager from the pool. If no warmed
   // container is available, one will be created and then returned. A new
   // container is then preloaded in the background to replace the taken one.
-  std::unique_ptr<WebUIContentsContainer> TakeContainer();
+  std::unique_ptr<GlicWebContentsManager> TakeContainer();
   // Checks resource constraints (e.g., memory pressure) and initiates
-  // initial cold-start pre-warming if allowed. Returns true if pre-warming
-  // proceeded, or false otherwise.
-  bool MaybeStartInitialWarming();
-  // Unconditionally ensures that a WebUIContentsContainer is preloaded. If the
-  // existing one is crashed, it will be replaced.
-  void EnsurePreload(ContainerCreationReason reason =
-                         ContainerCreationReason::kUserTriggeredColdStart);
-  // Clears the warming pool and destroys any warmed WebContents.
-  void Clear(std::optional<ClearReason> reason);
+  // pre-warming if allowed. Returns true if pre-warming proceeded, or false
+  // otherwise.
+  bool MaybeStartWarming(GlicWarmingTrigger trigger);
 
-  // Handles memory pressure notifications by clearing or statefully disabling
-  // pre-warming, depending on feature configuration.
-  void OnMemoryPressure(base::MemoryPressureLevel level);
+  // Shuts down the warming pool, destroying any warmed container instance and
+  // stopping all timers.
+  void Shutdown();
+
+  // Handles memory limit updates and memory release requests by clearing or
+  // suspending pre-warming while the system remains under critical pressure.
+  void OnUpdateMemoryLimit(base::MemoryLimit memory_limit);
+  void OnReleaseMemory();
 
   // LINT.IfChange(GlicWarmingPoolStatus)
   enum class WarmingPoolStatus {
@@ -77,7 +82,9 @@ class GlicWebContentsWarmingPool {
     kExpired = 2,
     kCrashed = 3,
     kMemoryPressure = 4,
-    kMaxValue = kMemoryPressure,
+    kPendingBackfill = 5,
+    kLoadError = 6,
+    kMaxValue = kLoadError,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/glic/enums.xml:GlicWarmingPoolStatus)
 
@@ -90,54 +97,103 @@ class GlicWebContentsWarmingPool {
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/glic/enums.xml:GlicReloadAfterExpiryStatus)
 
+  // LINT.IfChange(GlicWarmedContainerFate)
+  enum class WarmedContainerFate {
+    kUsed = 0,
+    kExpired = 1,
+    kDeletedOnChromeClosed = 2,
+    kCrashed = 3,
+    kDeletedOnMemoryPressure = 4,
+    kLoadError = 5,
+    kMaxValue = kLoadError,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/glic/enums.xml:GlicWarmedContainerFate)
+
+  struct WarmedWebContents {
+    raw_ptr<content::WebContents> webui_contents = nullptr;
+    raw_ptr<content::WebContents> guest_contents = nullptr;
+  };
+
   bool HasWarmedContainerForTesting() const;
-  base::OneShotTimer& GetDelayTimerForTesting() { return delay_timer_; }
-  WebUIContentsContainer* GetWarmedContainerForTesting() const;
-  content::WebContents* GetWarmedWebContents() const;
+  base::OneShotTimer& GetDelayTimerForTesting() {
+    return backfill_scheduler_.GetTimerForTesting();
+  }
+  GlicWarmingScheduler& GetBackfillSchedulerForTesting() {
+    return backfill_scheduler_;
+  }
+  bool IsExpiryTimerRunningForTesting() const {
+    return expiry_timer_.IsRunning();
+  }
+  GlicWebContentsManager* GetWarmedContainerForTesting() const;
+  std::optional<WarmedWebContents> GetWarmedWebContents() const;
 
  protected:
+  // Provides derived classes access to the profile when overriding
+  // CreateContainer().
+  Profile* profile() const { return profile_; }
+
+ private:
   class Metrics;
 
+  enum class ClearReason {
+    kShutdown,
+    kMemoryPressure,
+    kExpired,
+    kCrashed,
+    kLoadError,
+  };
+
+  // Clears the current warmed container instance and stops any pending or
+  // expiry timers.
+  void Clear(ClearReason reason);
+
   // Virtual for testing.
-  virtual std::unique_ptr<WebUIContentsContainer> CreateContainer();
-  void OnWarmedContentCreated(ContainerCreationReason reason);
+  virtual std::unique_ptr<GlicWebContentsManager> CreateContainer();
 
   void OnContainerExpired();
-  // Starts a timer to preload a WebContents after a delay.
+  // Discards the warmed container immediately if it fails to load or crashes.
+  void OnWarmedContainerError();
+  void DiscardFailedContainer();
+  // Unconditionally ensures that a GlicWebContentsManager is preloaded. If the
+  // existing one is crashed or failed, it will be replaced.
+  void EnsurePreload(ContainerCreationReason reason);
+  // Starts a timer or PM scenario observer to preload a WebContents after a
+  // delay or when idle.
   void EnsurePreloadDelayed(ContainerCreationReason reason);
 
-  // Returns true if pre-warming is permitted to run. When the stateful memory
-  // pressure feature (kStatefulMemoryPressure) is enabled, pre-warming is
-  // suspended while the system remains under critical memory pressure. When the
-  // feature is disabled (stateless mode), pre-warming is never blocked by
-  // memory pressure state.
-  bool IsWarmingAllowedByMemoryPressure() const;
+  // Returns true if currently under critical memory pressure.
+  bool IsUnderMemoryPressure() const;
+
+  // ProfileObserver:
+  void OnProfileWillBeDestroyed(Profile* profile) override;
 
   raw_ptr<Profile> profile_;
-  std::unique_ptr<WebUIContentsContainer> warmed_container_;
+  raw_ptr<GlicEnabling> enabling_;
+  base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
+  std::unique_ptr<GlicWebContentsManager> warmed_container_;
 
-  // Timer for delayed warming.
-  base::OneShotTimer delay_timer_;
+  // Scheduler for delayed backfill warming.
+  GlicWarmingScheduler backfill_scheduler_;
   // Timer for resource cleanup.
   base::OneShotDelayedBackgroundTimer expiry_timer_;
   std::unique_ptr<Metrics> metrics_;
   // Number of times the standby container has been reloaded after expiring.
   int reload_count_ = 0;
-  base::MemoryPressureLevel memory_pressure_level_ =
-      base::MEMORY_PRESSURE_LEVEL_NONE;
+  base::MemoryLimit memory_limit_ = base::MemoryLimit::Default();
   base::TimeDelta expiry_delay_ = base::Hours(23);
-  base::TimeDelta warming_delay_ = base::Seconds(20);
 
-  // Tracks whether the pool is active and should maintain a warmed container.
-  // Set to true when initial warming starts or when a container is consumed.
-  // Set to false when the pool is cleared permanently (e.g., on container
-  // expiry, explicit clearing, or shutdown), but remains true if cleared
-  // temporarily due to critical memory pressure.
+  // Tracks whether warming is enabled for this session and the pool should
+  // maintain a warmed container. Set to true when initial warming starts or
+  // when a container is consumed. Set to false when the pool is shut down or
+  // when a container expires without reloading (e.g. reload limit reached or
+  // feature disabled), but remains true if cleared due to critical memory
+  // pressure.
   //
-  // In stateful memory pressure mode, when memory pressure drops below
-  // CRITICAL, this flag ensures the pool only refills if it was previously
-  // active.
-  bool is_active_ = false;
+  // When memory pressure drops below CRITICAL, this flag ensures the pool only
+  // refills if it was previously active.
+  bool should_warm_when_memory_allows_ = false;
+
+  base::WeakPtrFactory<GlicWebContentsWarmingPool> weak_ptr_factory_{this};
 };
 
 }  // namespace glic

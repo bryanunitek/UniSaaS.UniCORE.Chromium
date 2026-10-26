@@ -6,7 +6,6 @@
 
 #include <variant>
 
-#include "base/memory/safe_ref.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "chrome/browser/android/android_theme_resources.h"
@@ -34,7 +33,10 @@
 #include "content/public/browser/web_contents.h"
 #include "ui/android/window_android.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -91,10 +93,9 @@ void PermissionBlockedMessageDelegate::OnLearnMoreClicked() {
   dialog_controller_->DismissDialog();
   delegate_->SetLearnMoreClicked();
   web_contents_->OpenURL(
-      content::OpenURLParams(GetNotificationBlockedLearnMoreUrl(),
-                             content::Referrer(),
-                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                             ui::PAGE_TRANSITION_LINK, false),
+      content::OpenURLParams::CreateBrowserInitiated(
+          GetNotificationBlockedLearnMoreUrl(),
+          WindowOpenDisposition::kNewForegroundTab, ui::PAGE_TRANSITION_LINK),
       /*navigation_handle_callback=*/{});
 }
 
@@ -157,7 +158,7 @@ void PermissionBlockedMessageDelegate::InitializeLoudUI() {
   message_->SetTitle(
       l10n_util::GetStringUTF16(IDS_NOTIFICATION_TITLE_MESSAGE_UI));
 
-  const std::vector<base::SafeRef<permissions::PermissionRequest>>& requests =
+  const std::vector<std::unique_ptr<permissions::PermissionRequest>>& requests =
       delegate_->permission_prompt()->Requests();
 
   std::u16string requesting_origin_string_formatted =
@@ -315,13 +316,23 @@ void PermissionBlockedMessageDelegate::HandleLoudPrimaryActionClick() {
   messages::MessageDispatcherBridge::Get()->DismissMessage(
       message_.get(), messages::DismissReason::PRIMARY_ACTION);
 
-  ResolveWithOSPrompt(GetContentSettingsType());
+  if (!delegate_->permission_prompt()) {
+    return;
+  }
+  const std::vector<std::unique_ptr<permissions::PermissionRequest>>& requests =
+      delegate_->permission_prompt()->Requests();
+  if (requests.empty()) {
+    return;
+  }
+  ResolveWithOSPrompt(GetContentSettingsType(),
+                      requests[0]->requesting_origin());
 }
 
 void PermissionBlockedMessageDelegate::ResolveWithOSPrompt(
-    ContentSettingsType content_settings_type) {
-  permissions::ResolvePermissionWithOSPrompt(web_contents_,
-                                             content_settings_type);
+    ContentSettingsType content_settings_type,
+    const GURL& requesting_origin) {
+  permissions::ResolvePermissionWithOSPrompt(
+      web_contents_, content_settings_type, requesting_origin);
 }
 
 void PermissionBlockedMessageDelegate::HandleLoudDismissCallback(

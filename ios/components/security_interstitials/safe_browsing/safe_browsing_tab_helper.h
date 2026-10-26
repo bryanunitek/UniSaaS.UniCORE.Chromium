@@ -8,18 +8,24 @@
 #include <list>
 #include <map>
 #include <optional>
+#include <vector>
 
 #include "base/containers/unique_ptr_adapters.h"
 #import "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
 #include "components/safe_browsing/core/browser/safe_browsing_url_checker_impl.h"
 #import "ios/components/security_interstitials/safe_browsing/safe_browsing_query_manager.h"
 #import "ios/web/public/navigation/web_state_policy_decider.h"
 #include "ios/web/public/web_state_observer.h"
 #import "ios/web/public/web_state_user_data.h"
 #include "url/gurl.h"
+
+namespace safe_browsing {
+class ClientSideDetectionHostBase;
+}
 
 class SafeBrowsingClient;
 @protocol SafeBrowsingTabHelperDelegate;
@@ -68,6 +74,15 @@ class SafeBrowsingTabHelper
       web::WebState* web_state,
       const security_interstitials::UnsafeResource& resource);
 
+  // Returns the redirect chain for the committed navigation, or an empty
+  // vector if there is none.
+  std::vector<GURL> GetRedirectChain() const;
+
+  // Returns the client side detection host, or nullptr if disabled.
+  safe_browsing::ClientSideDetectionHostBase* client_side_detection_host() {
+    return csd_host_.get();
+  }
+
  private:
   friend class web::WebStateUserData<SafeBrowsingTabHelper>;
 
@@ -86,10 +101,11 @@ class SafeBrowsingTabHelper
     // navigations occurred before the URL check has finished.
     bool IsQueryStale(const SafeBrowsingQueryManager::Query& query);
 
-    // Decides if a page is reloaded on commit. Used when an async check is
-    // completed while an unsafe query is in the
-    // `to_be_committed_redirect_chain_`.
-    bool ShouldReloadOnCommit();
+    // Decides if a page is reloaded on commit. Returns the URL to reload if an
+    // async check is completed while an unsafe query is in the
+    // `to_be_committed_redirect_chain_`. This also clears
+    // `reload_url_on_commit_`.
+    std::optional<GURL> TakeReloadUrlOnCommit();
 
     // Returns whether a query contained in `query_data` is still relevant. May
     // return false if navigations occurred before the URL check has finished.
@@ -99,9 +115,12 @@ class SafeBrowsingTabHelper
     // `committed_redirect_chain_`.
     void SetCommittedRedirectChain();
 
-    // Reloads the page. Used when a reload is necessary for triggering an error
-    // page.
-    void ReloadPage();
+    // Returns the redirect chain for the committed navigation.
+    std::vector<GURL> GetRedirectChain() const;
+
+    // Reloads the page with `url`. Used when a reload is necessary for
+    // triggering an error page.
+    void ReloadPage(const GURL& url);
 
     // Returns a policy decision based on query `result`.
     web::WebStatePolicyDecider::PolicyDecision CreatePolicyDecision(
@@ -202,6 +221,16 @@ class SafeBrowsingTabHelper
         RedirectChain redirect_chain,
         const SafeBrowsingQueryManager::QueryData& query_data);
 
+    // Returns whether the navigation described by `request_info` to
+    // `request_url` is a reload or back/forward load issued while Safe
+    // Browsing still has an undecided unsafe navigation for `request_url`'s
+    // origin. Such a load is the web layer re-loading the flagged document,
+    // whose URL may have been rewritten by a same-document history operation
+    // and therefore cannot be matched against the unsafe resource directly.
+    bool IsReloadWithPendingUnsafeDecision(
+        const web::WebStatePolicyDecider::RequestInfo& request_info,
+        const GURL& request_url) const;
+
     // Callback invoked when a main frame query for `url` has finished with
     // `decision` after performing a check of type `performed_check`.
     void OnMainFrameUrlQueryDecided(
@@ -290,7 +319,7 @@ class SafeBrowsingTabHelper
     // A list of queries corresponding to the redirect chain saved after
     // DidFinishNavigation() is called.
     std::list<MainFrameUrlQuery> committed_redirect_chain_;
-    bool reload_page_on_commit_ = false;
+    std::optional<GURL> reload_url_on_commit_;
   };
 
   // Helper object that observes results of URL check queries.
@@ -344,6 +373,15 @@ class SafeBrowsingTabHelper
     base::ScopedObservation<web::WebState, web::WebStateObserver>
         scoped_observation_{this};
   };
+
+  // Updates the ClientSideDetectionHost based on current Safe Browsing
+  // settings.
+  void UpdateClientSideDetectionHost();
+
+  raw_ptr<web::WebState> web_state_ = nullptr;
+  raw_ptr<SafeBrowsingClient> client_ = nullptr;
+  PrefChangeRegistrar pref_change_registrar_;
+  std::unique_ptr<safe_browsing::ClientSideDetectionHostBase> csd_host_;
 
   PolicyDecider policy_decider_;
   QueryObserver query_observer_;

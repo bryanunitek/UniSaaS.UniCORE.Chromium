@@ -8,14 +8,18 @@
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
+#include "chrome/browser/signin/dice_tab_helper.h"
+#include "chrome/browser/signin/dice_web_signin_interceptor.h"
+#include "chrome/browser/signin/dice_web_signin_interceptor_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/signin/process_dice_header_delegate_impl.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
 #include "chrome/browser/signin/signin_ui_util.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/test_support/webui_interactive_test_mixin.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "components/signin/public/base/signin_metrics.h"
@@ -121,13 +125,13 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinScreenFromPromoEntryPointInteractiveTest,
       InstrumentTab(kTabId, 0, browser()),
       // Opens a sign-in tab as the method is called with an empty account.
       Do([&]() {
-        signin_ui_util::EnableSyncFromSingleAccountPromo(
-            browser()->profile(), AccountInfo(),
+        signin_ui_util::EnableHistorySyncFromSingleAccountPromo(
+            browser()->GetProfile(), CoreAccountInfo(),
             signin_metrics::AccessPoint::kAccountMenuSwitchAccount);
       }),
       Do([&]() {
         content::WebContents* active_contents =
-            browser()->tab_strip_model()->GetWebContentsAt(0);
+            browser()->GetTabStripModel()->GetWebContentsAt(0);
         std::unique_ptr<ProcessDiceHeaderDelegateImpl>
             process_dice_header_delegate_impl =
                 ProcessDiceHeaderDelegateImpl::Create(active_contents);
@@ -138,7 +142,7 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinScreenFromPromoEntryPointInteractiveTest,
         // Mock processing an ENABLE SYNC header as part of the sign-in.
         // This also signs in the user.
         process_dice_header_delegate_impl->CompleteChromeSignInAfterGaiaSignin(
-            account_info);
+            account_info.GetCoreAccountInfo());
       }),
       WaitForShow(SigninViewController::kHistorySyncOptinViewId),
       InstrumentNonTabWebView(kHistorySyncOptinDialogContentsId,
@@ -151,7 +155,7 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinScreenFromPromoEntryPointInteractiveTest,
                    GetHistoryOptinAcceptButtonQuery()),
       WaitForHide(SigninViewController::kHistorySyncOptinViewId));
 
-  EXPECT_TRUE(SyncServiceFactory::GetForProfile(browser()->profile())
+  EXPECT_TRUE(SyncServiceFactory::GetForProfile(browser()->GetProfile())
                   ->GetUserSettings()
                   ->GetSelectedTypes()
                   .Has(syncer::UserSelectableType::kHistory));
@@ -193,9 +197,9 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinScreenFromPromoEntryPointInteractiveTest,
             *identity_test_env(), account_info, IsUnrestricted());
       }),
       InstrumentTab(kTabId, 0, browser()), Do([&]() {
-        signin_ui_util::EnableSyncFromSingleAccountPromo(
-            browser()->profile(),
-            /*account=*/account_info,
+        signin_ui_util::EnableHistorySyncFromSingleAccountPromo(
+            browser()->GetProfile(),
+            /*account=*/account_info.GetCoreAccountInfo(),
             signin_metrics::AccessPoint::kAccountMenuSwitchAccount);
       }),
       // The user is already signed-in, the history sync optin dialog should
@@ -212,7 +216,7 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinScreenFromPromoEntryPointInteractiveTest,
                    GetHistoryOptinAcceptButtonQuery()),
       WaitForHide(SigninViewController::kHistorySyncOptinViewId));
 
-  EXPECT_TRUE(SyncServiceFactory::GetForProfile(browser()->profile())
+  EXPECT_TRUE(SyncServiceFactory::GetForProfile(browser()->GetProfile())
                   ->GetUserSettings()
                   ->GetSelectedTypes()
                   .Has(syncer::UserSelectableType::kHistory));
@@ -269,9 +273,9 @@ IN_PROC_BROWSER_TEST_P(
             kMainEmail, signin::ConsentLevel::kSignin);
       }),
       InstrumentTab(kTabId, 0, browser()), Do([&]() {
-        signin_ui_util::EnableSyncFromSingleAccountPromo(
-            browser()->profile(),
-            /*account=*/account_info,
+        signin_ui_util::EnableHistorySyncFromSingleAccountPromo(
+            browser()->GetProfile(),
+            /*account=*/account_info.GetCoreAccountInfo(),
             signin_metrics::AccessPoint::kAccountMenuSwitchAccount);
       }),
       // The user is already signed-in, the history sync optin dialog should
@@ -295,7 +299,7 @@ IN_PROC_BROWSER_TEST_P(
                    GetHistoryOptinAcceptButtonQuery()),
       WaitForHide(SigninViewController::kHistorySyncOptinViewId));
 
-  EXPECT_TRUE(SyncServiceFactory::GetForProfile(browser()->profile())
+  EXPECT_TRUE(SyncServiceFactory::GetForProfile(browser()->GetProfile())
                   ->GetUserSettings()
                   ->GetSelectedTypes()
                   .Has(syncer::UserSelectableType::kHistory));
@@ -351,9 +355,9 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinScreenFromPromoEntryPointInteractiveTest,
             *identity_test_env(), account_info, IsUnrestricted());
       }),
       InstrumentTab(kTabId, 0, browser()), Do([&]() {
-        signin_ui_util::EnableSyncFromSingleAccountPromo(
-            browser()->profile(),
-            /*account=*/account_info,
+        signin_ui_util::EnableHistorySyncFromSingleAccountPromo(
+            browser()->GetProfile(),
+            /*account=*/account_info.GetCoreAccountInfo(),
             signin_metrics::AccessPoint::kAccountMenuSwitchAccount);
       }),
       // The user is already signed-in, the history sync optin dialog should
@@ -370,7 +374,7 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinScreenFromPromoEntryPointInteractiveTest,
 
       WaitForHide(SigninViewController::kHistorySyncOptinViewId));
 
-  EXPECT_FALSE(SyncServiceFactory::GetForProfile(browser()->profile())
+  EXPECT_FALSE(SyncServiceFactory::GetForProfile(browser()->GetProfile())
                    ->GetUserSettings()
                    ->GetSelectedTypes()
                    .Has(syncer::UserSelectableType::kHistory));
@@ -412,9 +416,9 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinScreenFromPromoEntryPointInteractiveTest,
             *identity_test_env(), account_info, IsUnrestricted());
       }),
       InstrumentTab(kTabId, 0, browser()), Do([&]() {
-        signin_ui_util::EnableSyncFromSingleAccountPromo(
-            browser()->profile(),
-            /*account=*/account_info,
+        signin_ui_util::EnableHistorySyncFromSingleAccountPromo(
+            browser()->GetProfile(),
+            /*account=*/account_info.GetCoreAccountInfo(),
             signin_metrics::AccessPoint::kAccountMenuSwitchAccount);
       }),
       // The user is already signed-in, the history sync optin dialog should
@@ -427,7 +431,7 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinScreenFromPromoEntryPointInteractiveTest,
                       ui::Accelerator(ui::VKEY_ESCAPE, ui::MODIFIER_NONE)),
       WaitForHide(SigninViewController::kHistorySyncOptinViewId));
 
-  EXPECT_FALSE(SyncServiceFactory::GetForProfile(browser()->profile())
+  EXPECT_FALSE(SyncServiceFactory::GetForProfile(browser()->GetProfile())
                    ->GetUserSettings()
                    ->GetSelectedTypes()
                    .Has(syncer::UserSelectableType::kHistory));
@@ -471,7 +475,7 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinScreenFromPromoEntryPointInteractiveTest,
             *identity_test_env(), account_info, IsUnrestricted());
         // Optin to syncing history, tabs & tab groups.
         auto* user_settings =
-            SyncServiceFactory::GetForProfile(browser()->profile())
+            SyncServiceFactory::GetForProfile(browser()->GetProfile())
                 ->GetUserSettings();
         user_settings->SetSelectedType(syncer::UserSelectableType::kHistory,
                                        true);
@@ -487,9 +491,9 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinScreenFromPromoEntryPointInteractiveTest,
                       "Signin_HistorySync_AlreadyOptedIn");
                 }),
       Do([&]() {
-        signin_ui_util::EnableSyncFromSingleAccountPromo(
-            browser()->profile(),
-            /*account=*/account_info,
+        signin_ui_util::EnableHistorySyncFromSingleAccountPromo(
+            browser()->GetProfile(),
+            /*account=*/account_info.GetCoreAccountInfo(),
             signin_metrics::AccessPoint::kAccountMenuSwitchAccount);
       }),
       WaitForState(kHistorySyncOptInAlreadyOptedInHistogramState, 1),
@@ -528,7 +532,8 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param ? "Unrestricted" : "Restricted";
     });
 
-class HistorySyncOptinScreenFromPromoEntryPointInteractiveTestWithTestSyncService
+class
+    HistorySyncOptinScreenFromPromoEntryPointInteractiveTestWithTestSyncService
     : public HistorySyncOptinScreenFromPromoEntryPointInteractiveTest {
  protected:
   void OnWillCreateBrowserContextServices(
@@ -538,7 +543,81 @@ class HistorySyncOptinScreenFromPromoEntryPointInteractiveTestWithTestSyncServic
     SyncServiceFactory::GetInstance()->SetTestingFactory(
         context, base::BindRepeating(&BuildTestSyncService));
   }
+
+  void TestShowsErrorDialogFromPromoSignIn(
+      signin_metrics::AccessPoint access_point,
+      syncer::UserSelectableType disabled_type) {
+    DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTabId);
+
+    // Mark the management as accepted, so that the disclaimer service
+    // progresses the flow immediately on the present profile when
+    // `EnsureManagedProfileForAccount` is invoked.
+    enterprise_util::SetUserAcceptedAccountManagement(browser()->GetProfile(),
+                                                      true);
+
+    syncer::TestSyncService* sync_service =
+        static_cast<syncer::TestSyncService*>(
+            SyncServiceFactory::GetForProfile(browser()->GetProfile()));
+    sync_service->GetUserSettings()->SetSelectedTypes(
+        /*sync_everything=*/false,
+        /*types=*/{});
+    sync_service->GetUserSettings()->SetTypeIsManagedByPolicy(disabled_type,
+                                                              /*managed=*/true);
+
+    RunTestSequence(
+        InstrumentTab(kTabId, 0, browser()), Do([&]() {
+          signin_ui_util::SignInAndEnableHistorySync(
+              browser(), browser()->GetProfile(), access_point);
+        }),
+        Do([&]() {
+          content::WebContents* active_contents =
+              browser()->GetTabStripModel()->GetActiveWebContents();
+          DiceTabHelper* tab_helper =
+              DiceTabHelper::FromWebContents(active_contents);
+          ASSERT_NE(tab_helper, nullptr);
+          EXPECT_EQ(signin_metrics::Reason::kSigninPrimaryAccount,
+                    tab_helper->signin_reason());
+          EXPECT_TRUE(tab_helper->IsChromeSigninInProgress());
+
+          std::unique_ptr<ProcessDiceHeaderDelegateImpl>
+              process_dice_header_delegate_impl =
+                  ProcessDiceHeaderDelegateImpl::Create(active_contents);
+          AccountInfo account_info =
+              identity_test_env()->MakeAccountAvailable(kMainEmail);
+          account_info = AccountInfo::Builder(account_info)
+                             .SetFullName("fullname")
+                             .SetGivenName("givenname")
+                             .SetHostedDomain("example.com")
+                             .SetLocale("en")
+                             .SetAvatarUrl("https://example.com")
+                             .Build();
+          AccountCapabilitiesTestMutator mutator(&account_info);
+          mutator.set_is_subject_to_enterprise_features(true);
+          identity_test_env()->UpdateAccountInfoForAccount(account_info);
+          SetHistorySyncOptinRestrictionModeCapability(
+              *identity_test_env(), account_info, /*is_unrestricted=*/true);
+          process_dice_header_delegate_impl->HandleTokenExchangeSuccess(
+              account_info.GetAccountId(), /*is_new_account=*/true,
+              signin::Tribool::kUnknown);
+          auto* interceptor = DiceWebSigninInterceptorFactory::GetForProfile(
+              browser()->GetProfile());
+          if (!interceptor->is_interception_in_progress()) {
+            process_dice_header_delegate_impl
+                ->CompleteChromeSignInAfterGaiaSignin(
+                    account_info.GetCoreAccountInfo());
+          }
+        }),
+        WaitForShow(signin_util::kSigninErrorDialogId),
+        WaitForShow(signin_util::kSigninErrorDialogOkButtonId),
+        PressButton(signin_util::kSigninErrorDialogOkButtonId),
+        WaitForHide(signin_util::kSigninErrorDialogOkButtonId));
+
+    histogram_tester_.ExpectBucketCount(
+        "Signin.Intercept.HeuristicOutcome",
+        SigninInterceptionHeuristicOutcome::kAbortChromeSignin, 1);
+  }
 };
+
 IN_PROC_BROWSER_TEST_F(
     HistorySyncOptinScreenFromPromoEntryPointInteractiveTestWithTestSyncService,
     ShowsErrorDialog) {
@@ -550,10 +629,11 @@ IN_PROC_BROWSER_TEST_F(
   // Mark the management as accepted, so that the disclaimer service progresses
   // the flow immediately on the present profile when
   // `EnsureManagedProfileForAccount` is invoked.
-  enterprise_util::SetUserAcceptedAccountManagement(browser()->profile(), true);
+  enterprise_util::SetUserAcceptedAccountManagement(browser()->GetProfile(),
+                                                    true);
 
   syncer::TestSyncService* sync_service = static_cast<syncer::TestSyncService*>(
-      SyncServiceFactory::GetForProfile(browser()->profile()));
+      SyncServiceFactory::GetForProfile(browser()->GetProfile()));
   sync_service->GetUserSettings()->SetSelectedTypes(
       /*sync_everything=*/false,
       /*types=*/{});
@@ -569,6 +649,20 @@ IN_PROC_BROWSER_TEST_F(
       WaitForShow(signin_util::kSigninErrorDialogOkButtonId),
       PressButton(signin_util::kSigninErrorDialogOkButtonId),
       WaitForHide(signin_util::kSigninErrorDialogOkButtonId));
+}
+
+IN_PROC_BROWSER_TEST_F(
+    HistorySyncOptinScreenFromPromoEntryPointInteractiveTestWithTestSyncService,
+    ShowsErrorDialogFromRecentTabsPromoSignIn) {
+  TestShowsErrorDialogFromPromoSignIn(signin_metrics::AccessPoint::kRecentTabs,
+                                      syncer::UserSelectableType::kTabs);
+}
+
+IN_PROC_BROWSER_TEST_F(
+    HistorySyncOptinScreenFromPromoEntryPointInteractiveTestWithTestSyncService,
+    ShowsErrorDialogFromHistoryPagePromoSignIn) {
+  TestShowsErrorDialogFromPromoSignIn(signin_metrics::AccessPoint::kHistoryPage,
+                                      syncer::UserSelectableType::kHistory);
 }
 
 }  // namespace

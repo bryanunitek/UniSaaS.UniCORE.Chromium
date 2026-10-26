@@ -32,8 +32,7 @@ import org.chromium.components.user_prefs.UserPrefs;
 public class AutofillClientProviderUtils {
     private static final String TAG = "AutofillClientProviderUtils";
 
-    private static final String AWG_COMPONENT_NAME =
-            "com.google.android.gms/com.google.android.gms.autofill.service.AutofillService";
+    private static final String AWG_PACKAGE_NAME = "com.google.android.gms";
     private static @Nullable Integer sAndroidAutofillFrameworkAvailabilityForTesting;
     private static @Nullable String sAndroidAutofillServicePackageNameForTesting;
 
@@ -62,15 +61,14 @@ public class AutofillClientProviderUtils {
     }
 
     /**
-     * Checks whether all conditions are met for using the Android Autofill framework in CCTs. It
-     * simplifies the call to {@link getAndroidAutofillFrameworkAvailability}.
+     * Checks whether Android platform Autofill (third-party Autofill mode) is available and enabled
+     * for the given profile.
      *
      * @param profile A {@link Profile} which keeps the pref enabling this feature.
-     * @return true iff CCTs should be constructed with support for Android Autofill.
+     * @return true if platform Autofill is enabled for the profile.
      */
-    public static boolean isAutofillEnabledForCct(Profile profile) {
-        return AutofillClientProviderUtils.getAndroidAutofillFrameworkAvailability(
-                        UserPrefs.get(profile))
+    public static boolean isPlatformAutofillEnabledForProfile(Profile profile) {
+        return getAndroidAutofillFrameworkAvailability(UserPrefs.get(profile))
                 == AndroidAutofillAvailabilityStatus.AVAILABLE;
     }
 
@@ -104,13 +102,22 @@ public class AutofillClientProviderUtils {
         if (autofillServicePackage == null) {
             return AndroidAutofillAvailabilityStatus.UNKNOWN_ANDROID_AUTOFILL_SERVICE;
         }
-        if (AWG_COMPONENT_NAME.equals(autofillServicePackage)) {
+        if (AWG_PACKAGE_NAME.equals(autofillServicePackage)) {
             return AndroidAutofillAvailabilityStatus.ANDROID_AUTOFILL_SERVICE_IS_GOOGLE;
         }
         // If the user explicitly chose the current Autofill Service before, use it again. The
         // browser may default to built-in Autofill while the preferred provider is unavailable.
-        if (autofillServicePackage.equals(
-                prefs.getString(Pref.AUTOFILL_THIRD_PARTY_PACKAGE_USED_FOR_PLATFORM_AUTOFILL))) {
+        String storedPackage =
+                prefs.getString(Pref.AUTOFILL_THIRD_PARTY_PACKAGE_USED_FOR_PLATFORM_AUTOFILL);
+        // The check for "/" here is to migrate old clients that used to use the component name to
+        // the new convention of using the package name.
+        if (storedPackage != null && storedPackage.contains("/")) {
+            ComponentName component = ComponentName.unflattenFromString(storedPackage);
+            storedPackage = component != null ? component.getPackageName() : "";
+            prefs.setString(
+                    Pref.AUTOFILL_THIRD_PARTY_PACKAGE_USED_FOR_PLATFORM_AUTOFILL, storedPackage);
+        }
+        if (autofillServicePackage.equals(storedPackage)) {
             return AndroidAutofillAvailabilityStatus.AVAILABLE;
         }
         // If the user used platform autofill before, keep using it — even with a new service.
@@ -150,7 +157,7 @@ public class AutofillClientProviderUtils {
         if (autofillServicePackage == null) {
             return; // No update possible.
         }
-        if (AWG_COMPONENT_NAME.equals(autofillServicePackage)) {
+        if (AWG_PACKAGE_NAME.equals(autofillServicePackage)) {
             return; // AWG can never be the preferred Autofill service.
         }
         prefs.setString(
@@ -170,7 +177,7 @@ public class AutofillClientProviderUtils {
         if (componentName == null) {
             return null; // No update possible. Should never happen.
         }
-        return componentName.flattenToString();
+        return componentName.getPackageName();
     }
 
     private AutofillClientProviderUtils() {}

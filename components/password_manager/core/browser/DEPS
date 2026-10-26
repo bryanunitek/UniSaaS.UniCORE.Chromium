@@ -21,6 +21,7 @@ include_rules = [
   "+components/sync/service",
   "+components/sync/test",
   "+components/sync_preferences",
+  "+components/trusted_vault",
   "+components/ukm",
   "+components/undo",
   "+components/url_formatter",
@@ -55,8 +56,5 @@ specific_include_rules = {
     "+components/keyed_service/content",
     "+components/policy/core/browser",
     "+components/user_prefs",
-  ],
-  ".*unit_test\\.cc": [
-    "+components/autofill/core/browser/test_utils",
   ],
 }

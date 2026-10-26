@@ -7,7 +7,7 @@
 #import "base/test/scoped_feature_list.h"
 #import "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
 #import "components/signin/public/identity_manager/account_info.h"
-#import "components/signin/public/identity_manager/identity_test_utils.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_test_utils.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
@@ -27,10 +27,10 @@ class GeminiFeatureAvailabilityTest : public PlatformTest {
 
   // Helper to create AccountInfo with specific capability.
   AccountInfo CreateAccountInfoWithCapability(bool can_use_model_execution) {
-    AccountInfo account_info;
-    account_info.account_id = CoreAccountId::FromGaiaId(GaiaId("test_gaia_id"));
-    account_info.email = "test@example.com";
-    account_info.gaia = GaiaId("test_gaia_id");
+    AccountInfo account_info =
+        AccountInfo::Builder(GaiaId("test_gaia_id"), "test@example.com")
+            .SetAccountId(CoreAccountId::FromGaiaId(GaiaId("test_gaia_id")))
+            .Build();
 
     AccountCapabilitiesTestMutator mutator(&account_info);
     mutator.set_can_use_model_execution_features(can_use_model_execution);
@@ -49,17 +49,10 @@ class GeminiFeatureAvailabilityTest : public PlatformTest {
     std::unique_ptr<TestProfileIOS> profile = std::move(builder).Build();
 
     if (can_use_model_execution.has_value()) {
-      signin::IdentityManager* identity_manager =
-          IdentityManagerFactory::GetForProfile(profile.get());
-
-      AccountInfo account_info =
-          signin::MakeAccountAvailable(identity_manager, "test@example.com");
-      signin::SetPrimaryAccount(identity_manager, "test@example.com",
-                                signin::ConsentLevel::kSignin);
-
-      AccountCapabilitiesTestMutator mutator(&account_info);
-      mutator.set_can_use_model_execution_features(*can_use_model_execution);
-      signin::UpdateAccountInfoForAccount(identity_manager, account_info);
+      gemini::test::SetUpEligibleAccount(
+          profile.get(), "test@example.com",
+          /*can_use_model_execution=*/*can_use_model_execution,
+          /*can_use_gemini_in_chrome=*/*can_use_model_execution);
     }
 
     return profile;
@@ -68,56 +61,23 @@ class GeminiFeatureAvailabilityTest : public PlatformTest {
 
 #pragma mark - Image Remix
 
-// Tests that Feature::kImageRemix is unavailable when its feature flag is
-// disabled.
-TEST_F(GeminiFeatureAvailabilityTest, ImageRemixDisabledByFlag) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({kPageActionMenu}, {kGeminiImageRemixTool});
-
-  std::unique_ptr<TestProfileIOS> profile = CreateProfile(true);
-  EXPECT_FALSE(IsFeatureAvailable(Feature::kImageRemix, profile.get()));
-}
-
-// Tests that Feature::kImageRemix is available when its feature flag is enabled
-// and updated eligibility is disabled.
-TEST_F(GeminiFeatureAvailabilityTest, ImageRemixEnabledByFlagOldEligibility) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({kGeminiImageRemixTool, kPageActionMenu},
-                                {kGeminiUpdatedEligibility});
-
-  std::unique_ptr<TestProfileIOS> profile = CreateProfile(false);
-  EXPECT_TRUE(IsFeatureAvailable(Feature::kImageRemix, profile.get()));
-}
-
-// Tests that Feature::kImageRemix is unavailable when updated eligibility is
-// enabled but the account info is empty.
-TEST_F(GeminiFeatureAvailabilityTest, ImageRemixEmptyAccountNewEligibility) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {kGeminiImageRemixTool, kPageActionMenu, kGeminiUpdatedEligibility}, {});
-
+// Tests that Feature::kImageRemix is unavailable when the account info is
+// empty.
+TEST_F(GeminiFeatureAvailabilityTest, ImageRemixEmptyAccount) {
   std::unique_ptr<TestProfileIOS> profile = CreateProfile();
   EXPECT_FALSE(IsFeatureAvailable(Feature::kImageRemix, profile.get()));
 }
 
-// Tests that Feature::kImageRemix is unavailable when updated eligibility is
-// enabled and the account lacks the required capability.
-TEST_F(GeminiFeatureAvailabilityTest, ImageRemixNoCapabilityNewEligibility) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {kGeminiImageRemixTool, kPageActionMenu, kGeminiUpdatedEligibility}, {});
-
+// Tests that Feature::kImageRemix is unavailable when the account lacks the
+// required capability.
+TEST_F(GeminiFeatureAvailabilityTest, ImageRemixNoCapability) {
   std::unique_ptr<TestProfileIOS> profile = CreateProfile(false);
   EXPECT_FALSE(IsFeatureAvailable(Feature::kImageRemix, profile.get()));
 }
 
-// Tests that Feature::kImageRemix is available when updated eligibility is
-// enabled and the account has the required capability.
-TEST_F(GeminiFeatureAvailabilityTest, ImageRemixHasCapabilityNewEligibility) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {kGeminiImageRemixTool, kPageActionMenu, kGeminiUpdatedEligibility}, {});
-
+// Tests that Feature::kImageRemix is available when the account has the
+// required capability.
+TEST_F(GeminiFeatureAvailabilityTest, ImageRemixHasCapability) {
   std::unique_ptr<TestProfileIOS> profile = CreateProfile(true);
   EXPECT_TRUE(IsFeatureAvailable(Feature::kImageRemix, profile.get()));
 }
@@ -133,45 +93,30 @@ TEST_F(GeminiFeatureAvailabilityTest, LiveDisabledByFlag) {
   EXPECT_FALSE(IsFeatureAvailable(Feature::kLive, profile.get()));
 }
 
-// Tests that Feature::kLive is available when its feature flag is enabled
-// and updated eligibility is disabled.
-TEST_F(GeminiFeatureAvailabilityTest, LiveEnabledByFlagOldEligibility) {
+// Tests that Feature::kLive is unavailable when the account info is empty.
+TEST_F(GeminiFeatureAvailabilityTest, LiveEmptyAccount) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({kGeminiLive, kPageActionMenu},
-                                {kGeminiUpdatedEligibility});
-
-  std::unique_ptr<TestProfileIOS> profile = CreateProfile(false);
-  EXPECT_TRUE(IsFeatureAvailable(Feature::kLive, profile.get()));
-}
-
-// Tests that Feature::kLive is unavailable when updated eligibility is
-// enabled but the account info is empty.
-TEST_F(GeminiFeatureAvailabilityTest, LiveEmptyAccountNewEligibility) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {kGeminiLive, kPageActionMenu, kGeminiUpdatedEligibility}, {});
+  feature_list.InitWithFeatures({kGeminiLive, kPageActionMenu}, {});
 
   std::unique_ptr<TestProfileIOS> profile = CreateProfile();
   EXPECT_FALSE(IsFeatureAvailable(Feature::kLive, profile.get()));
 }
 
-// Tests that Feature::kLive is unavailable when updated eligibility is
-// enabled and the account lacks the required capability.
-TEST_F(GeminiFeatureAvailabilityTest, LiveNoCapabilityNewEligibility) {
+// Tests that Feature::kLive is unavailable when the account lacks the required
+// capability.
+TEST_F(GeminiFeatureAvailabilityTest, LiveNoCapability) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {kGeminiLive, kPageActionMenu, kGeminiUpdatedEligibility}, {});
+  feature_list.InitWithFeatures({kGeminiLive, kPageActionMenu}, {});
 
   std::unique_ptr<TestProfileIOS> profile = CreateProfile(false);
   EXPECT_FALSE(IsFeatureAvailable(Feature::kLive, profile.get()));
 }
 
-// Tests that Feature::kLive is available when updated eligibility is
-// enabled and the account has the required capability.
-TEST_F(GeminiFeatureAvailabilityTest, LiveHasCapabilityNewEligibility) {
+// Tests that Feature::kLive is available when the account has the required
+// capability.
+TEST_F(GeminiFeatureAvailabilityTest, LiveHasCapability) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {kGeminiLive, kPageActionMenu, kGeminiUpdatedEligibility}, {});
+  feature_list.InitWithFeatures({kGeminiLive, kPageActionMenu}, {});
 
   std::unique_ptr<TestProfileIOS> profile = CreateProfile(true);
   EXPECT_TRUE(IsFeatureAvailable(Feature::kLive, profile.get()));
@@ -185,10 +130,6 @@ TEST_F(GeminiFeatureAvailabilityTest, IdentityManagerNil) {
 }
 
 TEST_F(GeminiFeatureAvailabilityTest, IdentityManagerAvailable) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {kGeminiImageRemixTool, kPageActionMenu, kGeminiUpdatedEligibility}, {});
-
   std::unique_ptr<TestProfileIOS> profile = CreateProfile(true);
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile.get());
@@ -196,10 +137,6 @@ TEST_F(GeminiFeatureAvailabilityTest, IdentityManagerAvailable) {
 }
 
 TEST_F(GeminiFeatureAvailabilityTest, IdentityManagerUnavailable) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {kGeminiImageRemixTool, kPageActionMenu, kGeminiUpdatedEligibility}, {});
-
   std::unique_ptr<TestProfileIOS> profile = CreateProfile(false);
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile.get());
@@ -214,19 +151,11 @@ TEST_F(GeminiFeatureAvailabilityTest, ProfileNil) {
 }
 
 TEST_F(GeminiFeatureAvailabilityTest, ProfileAvailable) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {kGeminiImageRemixTool, kPageActionMenu, kGeminiUpdatedEligibility}, {});
-
   std::unique_ptr<TestProfileIOS> profile = CreateProfile(true);
   EXPECT_TRUE(IsFeatureAvailable(Feature::kImageRemix, profile.get()));
 }
 
 TEST_F(GeminiFeatureAvailabilityTest, ProfileUnavailable) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {kGeminiImageRemixTool, kPageActionMenu, kGeminiUpdatedEligibility}, {});
-
   std::unique_ptr<TestProfileIOS> profile = CreateProfile(false);
   EXPECT_FALSE(IsFeatureAvailable(Feature::kImageRemix, profile.get()));
 }
@@ -240,25 +169,9 @@ TEST_F(GeminiFeatureAvailabilityTest,
   EXPECT_FALSE(HasGeminiInChromeCapability(empty_account));
 }
 
-// Tests HasGeminiInChromeCapability when updated eligibility is disabled.
+// Tests HasGeminiInChromeCapability when capability is enabled or disabled.
 TEST_F(GeminiFeatureAvailabilityTest,
-       HasGeminiInChromeCapability_LegacyEligibility) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({kPageActionMenu}, {kGeminiUpdatedEligibility});
-
-  AccountInfo account = CreateAccountInfoWithCapability(true);
-  AccountCapabilitiesTestMutator mutator(&account);
-  mutator.set_can_use_gemini_in_chrome(false);
-  EXPECT_TRUE(HasGeminiInChromeCapability(account));
-}
-
-// Tests HasGeminiInChromeCapability when updated eligibility is enabled.
-TEST_F(GeminiFeatureAvailabilityTest,
-       HasGeminiInChromeCapability_UpdatedEligibility) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({kPageActionMenu, kGeminiUpdatedEligibility},
-                                {});
-
+       HasGeminiInChromeCapability_WithCapability) {
   AccountInfo account = CreateAccountInfoWithCapability(false);
   AccountCapabilitiesTestMutator mutator(&account);
   mutator.set_can_use_gemini_in_chrome(true);

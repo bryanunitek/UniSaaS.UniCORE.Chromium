@@ -14,13 +14,14 @@
 #include "base/logging.h"
 #include "base/run_loop.h"
 #include "base/task/thread_pool.h"
-#include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "net/base/cache_type.h"
+#include "net/base/features.h"
 #include "net/disk_cache/sql/sql_async_task_manager.h"
 #include "net/disk_cache/sql/sql_backend_constants.h"
 #include "net/disk_cache/sql/sql_persistent_store.h"
 #include "net/disk_cache/sql/test_util.h"
+#include "net/test/test_with_task_environment.h"
 #include "sql/database.h"
 #include "sql/statement.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -28,8 +29,9 @@
 namespace disk_cache_sql_queries {
 
 // Defines the set of queries that are used for schema and index creation. These
-// queries are not suitable for checking plans against an already-initialized
-// database.
+// queries are executed during database initialization and do not operate on
+// existing data, so their performance is not as critical as data manipulation
+// queries.
 constexpr auto kSchemaAndIndexQueries = base::MakeFixedFlatSet<Query>({
     Query::kInitSchema_CreateTableResources,
     Query::kInitSchema_CreateTableBlobs,
@@ -39,7 +41,19 @@ constexpr auto kSchemaAndIndexQueries = base::MakeFixedFlatSet<Query>({
     Query::kIndex_BlobsResIdStart,
 });
 
-class SqlPersistentStoreQueriesTest : public testing::Test {
+class SqlPersistentStoreQueriesTest : public testing::TestWithParam<bool>,
+                                      public net::WithTaskEnvironment {
+ public:
+  SqlPersistentStoreQueriesTest() {
+    if (GetParam()) {
+      AddScopedFeatureList().InitAndEnableFeature(
+          net::features::kRendererAccessibleHttpCache);
+    } else {
+      AddScopedFeatureList().InitAndDisableFeature(
+          net::features::kRendererAccessibleHttpCache);
+    }
+  }
+
  protected:
   void SetUp() override { ASSERT_TRUE(temp_dir_.CreateUniqueTempDir()); }
 
@@ -58,7 +72,7 @@ class SqlPersistentStoreQueriesTest : public testing::Test {
         path, kDefaultMaxBytes, net::CacheType::DISK_CACHE,
         std::vector<scoped_refptr<base::SequencedTaskRunner>>(
             {background_task_runner}),
-        async_task_manager_);
+        async_task_manager_, /*cleanup_tracker=*/nullptr);
 
     base::test::TestFuture<disk_cache::SqlPersistentStore::Error> future;
     store->Initialize(future.GetCallback());
@@ -86,7 +100,6 @@ class SqlPersistentStoreQueriesTest : public testing::Test {
   base::ScopedTempDir temp_dir_;
 
  private:
-  base::test::TaskEnvironment task_environment_;
   disk_cache::SqlAsyncTaskManager async_task_manager_;
 };
 
@@ -94,7 +107,7 @@ class SqlPersistentStoreQueriesTest : public testing::Test {
 // checking their query plans. This is essential for ensuring the performance of
 // database operations. A query that performs a full table scan instead of using
 // an index can lead to significant performance degradation.
-TEST_F(SqlPersistentStoreQueriesTest, AllQueriesHaveValidPlan) {
+TEST_P(SqlPersistentStoreQueriesTest, AllQueriesHaveValidPlan) {
   CreateDatabaseInTemDir();
 
   // Defines the expected query plan for each query. An empty plan indicates
@@ -164,6 +177,9 @@ TEST_F(SqlPersistentStoreQueriesTest, AllQueriesHaveValidPlan) {
            {Query::kWriteEntryData_UpdateResource,
             "`--SEARCH resources USING "
             "INTEGER PRIMARY KEY (rowid=?)"},
+           {Query::kMoveBlobsToSharedCache_UpdateResource,
+            "`--SEARCH resources USING "
+            "INTEGER PRIMARY KEY (rowid=?)"},
            {Query::kTrimOverlappingBlobs_DeleteContained,
             "`--SEARCH blobs USING "
             "INDEX index_blobs_res_id_start "
@@ -217,10 +233,16 @@ TEST_F(SqlPersistentStoreQueriesTest, AllQueriesHaveValidPlan) {
   static_assert(kAllQueriesAndPlans.size() + kSchemaAndIndexQueries.size() ==
                 static_cast<int>(Query::kMaxValue) + 1);
   for (const auto& it : kAllQueriesAndPlans) {
-    const base::cstring_view query_string = GetQuery(it.first);
+    if (!GetParam() &&
+        it.first == Query::kMoveBlobsToSharedCache_UpdateResource) {
+      continue;
+    }
+    const base::cstring_view query_string = GetQuery(it.first, GetParam());
     SCOPED_TRACE(query_string);
     EXPECT_EQ(GetQueryPlan(query_string), it.second);
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(All, SqlPersistentStoreQueriesTest, testing::Bool());
 
 }  // namespace disk_cache_sql_queries

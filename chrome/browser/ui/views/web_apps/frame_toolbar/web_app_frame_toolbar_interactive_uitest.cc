@@ -4,11 +4,12 @@
 
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_frame_toolbar_test_helper.h"
@@ -43,14 +44,25 @@ class WebAppFrameToolbarInteractiveUITest
   void LoadAndLaunchExtension() {
     ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("simple_with_icon/")));
 
+    // Move the mouse to the center of the browser window so that a stray cursor
+    // left by an earlier test does not hover over the app window's reload
+    // button when navigation completes (which temporarily disables the reload
+    // button).
+    ASSERT_TRUE(ui_test_utils::SendMouseMoveSync(
+        BrowserView::GetBrowserViewForBrowser(browser())
+            ->GetBoundsInScreen()
+            .CenterPoint()));
+
     const GURL app_url("https://test.org");
     helper()->InstallAndLaunchWebApp(browser(), app_url);
   }
 
   auto SetUpExtensionsContainer() {
     return Do([this]() {
+      CHECK(!features::IsWebUIExtensionsContainerEnabled());
       ExtensionsToolbarDesktop* const extensions_container =
-          helper()->web_app_frame_toolbar()->GetExtensionsToolbarDesktop();
+          static_cast<ExtensionsToolbarDesktop*>(
+              helper()->web_app_frame_toolbar()->GetExtensionsContainerViews());
       views::test::ReduceAnimationDuration(extensions_container);
       views::test::WaitForAnimatingLayoutManager(extensions_container);
     });
@@ -67,8 +79,8 @@ class WebAppFrameToolbarInteractiveUITest
   // shortcuts for IDC_FOCUS_TOOLBAR is supported on Mac.
   auto FocusToolbar() {
     return Do([this]() {
-      helper()->app_browser()->command_controller()->ExecuteCommand(
-          IDC_FOCUS_TOOLBAR);
+      chrome::BrowserCommandController::From(helper()->app_browser())
+          ->ExecuteCommand(IDC_FOCUS_TOOLBAR);
     });
   }
 

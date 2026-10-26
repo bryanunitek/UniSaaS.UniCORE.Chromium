@@ -15,6 +15,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread_restrictions.h"
@@ -31,6 +32,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/loader/background_resource_fetch_histograms.h"
 #include "third_party/blink/public/mojom/navigation/renderer_eviction_reason.mojom-blink.h"
 #include "third_party/blink/public/platform/resource_load_info_notifier_wrapper.h"
 #include "third_party/blink/public/platform/web_background_resource_fetch_assets.h"
@@ -40,6 +42,7 @@
 #include "third_party/blink/renderer/platform/back_forward_cache_buffer_limit_tracker.h"
 #include "third_party/blink/renderer/platform/loader/fetch/back_forward_cache_loader_helper.h"
 #include "third_party/blink/renderer/platform/loader/fetch/background_code_cache_host.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/background_response_processor.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/url_loader_client.h"
 #include "third_party/blink/renderer/platform/loader/testing/fake_background_resource_fetch_assets.h"
@@ -48,6 +51,7 @@
 #include "third_party/blink/renderer/platform/scheduler/test/fake_task_runner.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
+#include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_base.h"
@@ -307,7 +311,8 @@ class FakeURLLoaderClient : public URLLoaderClient {
     will_follow_callbacks_.pop_front();
     return std::move(will_follow_callback).Run(new_url);
   }
-  void DidSendData(uint64_t bytesSent, uint64_t totalBytesToBeSent) override {
+  void DidSendData(uint64_t bytes_sent,
+                   uint64_t total_bytes_to_be_sent) override {
     NOTREACHED();
   }
   void DidReceiveResponse(
@@ -331,18 +336,18 @@ class FakeURLLoaderClient : public URLLoaderClient {
     DCHECK(unfreezable_task_runner_->BelongsToCurrentThread());
     transfer_size_diffs_.push_back(transfer_size_diff);
   }
-  void DidFinishLoading(base::TimeTicks finishTime,
-                        int64_t totalEncodedDataLength,
-                        uint64_t totalEncodedBodyLength,
-                        int64_t totalDecodedBodyLength) override {
+  void DidFinishLoading(base::TimeTicks finish_time,
+                        int64_t total_encoded_data_length,
+                        uint64_t total_encoded_body_length,
+                        int64_t total_decoded_body_length) override {
     DCHECK(unfreezable_task_runner_->BelongsToCurrentThread());
     did_finish_ = true;
   }
   void DidFail(const WebURLError& error,
-               base::TimeTicks finishTime,
-               int64_t totalEncodedDataLength,
-               uint64_t totalEncodedBodyLength,
-               int64_t totalDecodedBodyLength) override {
+               base::TimeTicks finish_time,
+               int64_t total_encoded_data_length,
+               uint64_t total_encoded_body_length,
+               int64_t total_decoded_body_length) override {
     DCHECK(unfreezable_task_runner_->BelongsToCurrentThread());
     EXPECT_FALSE(did_finish_);
     error_ = error;
@@ -516,6 +521,140 @@ class BackgroundResourceFecherTest : public testing::Test {
   ScopedTestingPlatformSupport<TestPlatformForRedirects> platform_;
   base::test::ScopedFeatureList feature_list_;
 };
+
+class BackgroundURLLoaderCanHandleRequestTest : public testing::Test {
+ protected:
+  void EnableWebUISupport() {
+    scoped_feature_list_.InitAndEnableFeatureWithParameters(
+        features::kBackgroundResourceFetch,
+        {{"BackgroundResourceFetchSupportsWebUI", "true"}});
+  }
+
+  void SetWebUIBundledCodeCacheURL(const GURL& url) {
+    platform_->set_webui_bundled_code_cache_url(url);
+  }
+
+ private:
+  class TestPlatform final : public TestingPlatformSupport {
+   public:
+    std::optional<int> GetWebUIBundledCodeCacheResourceId(
+        const GURL& resource_url) override {
+      return resource_url == webui_bundled_code_cache_url_
+                 ? std::optional<int>(1)
+                 : std::nullopt;
+    }
+    void set_webui_bundled_code_cache_url(const GURL& url) {
+      webui_bundled_code_cache_url_ = url;
+    }
+
+   private:
+    GURL webui_bundled_code_cache_url_;
+  };
+
+  base::test::ScopedFeatureList scoped_feature_list_;
+  base::test::TaskEnvironment task_environment_;
+  ScopedTestingPlatformSupport<TestPlatform> platform_;
+};
+
+TEST_F(BackgroundURLLoaderCanHandleRequestTest,
+       CanHandleRequestForWebUIScheme) {
+  EnableWebUISupport();
+  const char kWebUIScheme[] = "webui-test";
+  SchemeRegistry::RegisterURLSchemeAsWebUIForTest(kWebUIScheme);
+
+  base::HistogramTester histograms;
+  network::ResourceRequest request;
+  request.url = GURL(std::string(kWebUIScheme) + "://host/resource.js");
+
+  EXPECT_TRUE(BackgroundURLLoader::CanHandleRequest(
+      request, ResourceLoaderOptions(/*world=*/nullptr),
+      /*is_prefech_only_document=*/false));
+  histograms.ExpectUniqueSample(
+      kBackgroundResourceFetchSupportStatusHistogramName,
+      BackgroundResourceFetchSupportStatus::kSupported, 1);
+
+  SchemeRegistry::RemoveURLSchemeAsWebUIForTest(kWebUIScheme);
+}
+
+// WebUI support is gated behind the `BackgroundResourceFetchSupportsWebUI`
+// param. With the param disabled, WebUI scheme requests are not handled by the
+// background loader and are reported as `kUnsupportedNonHttpUrlRequest`.
+TEST_F(BackgroundURLLoaderCanHandleRequestTest,
+       CannotHandleRequestForWebUISchemeWhenParamDisabled) {
+  const char kWebUIScheme[] = "webui-test";
+  SchemeRegistry::RegisterURLSchemeAsWebUIForTest(kWebUIScheme);
+
+  base::HistogramTester histograms;
+  network::ResourceRequest request;
+  request.url = GURL(std::string(kWebUIScheme) + "://host/resource.js");
+
+  EXPECT_FALSE(BackgroundURLLoader::CanHandleRequest(
+      request, ResourceLoaderOptions(/*world=*/nullptr),
+      /*is_prefech_only_document=*/false));
+  histograms.ExpectUniqueSample(
+      kBackgroundResourceFetchSupportStatusHistogramName,
+      BackgroundResourceFetchSupportStatus::kUnsupportedNonHttpUrlRequest, 1);
+
+  SchemeRegistry::RemoveURLSchemeAsWebUIForTest(kWebUIScheme);
+}
+
+TEST_F(BackgroundURLLoaderCanHandleRequestTest,
+       CanHandleRequestForWebUIUntrustedScheme) {
+  EnableWebUISupport();
+  base::HistogramTester histograms;
+  network::ResourceRequest request;
+  request.url = GURL("chrome-untrusted://host/resource.js");
+
+  EXPECT_TRUE(BackgroundURLLoader::CanHandleRequest(
+      request, ResourceLoaderOptions(/*world=*/nullptr),
+      /*is_prefech_only_document=*/false));
+  histograms.ExpectUniqueSample(
+      kBackgroundResourceFetchSupportStatusHistogramName,
+      BackgroundResourceFetchSupportStatus::kSupported, 1);
+}
+
+TEST_F(BackgroundURLLoaderCanHandleRequestTest,
+       CannotHandleRequestForNonWebUIScheme) {
+  base::HistogramTester histograms;
+  network::ResourceRequest request;
+  request.url = GURL("ftp://host/resource.js");
+
+  EXPECT_FALSE(BackgroundURLLoader::CanHandleRequest(
+      request, ResourceLoaderOptions(/*world=*/nullptr),
+      /*is_prefech_only_document=*/false));
+  histograms.ExpectUniqueSample(
+      kBackgroundResourceFetchSupportStatusHistogramName,
+      BackgroundResourceFetchSupportStatus::kUnsupportedNonHttpUrlRequest, 1);
+}
+
+// A WebUI request that would be serviced from the WebUI bundled code cache must
+// not use the background loader: that static code cache is only serviced on the
+// main-thread loading path. Such requests are reported as
+// `kUnsupportedNonHttpUrlRequest`, matching how WebUI requests were counted
+// before WebUI schemes became supported.
+TEST_F(BackgroundURLLoaderCanHandleRequestTest,
+       CannotHandleRequestForWebUIBundledCodeCache) {
+  EnableWebUISupport();
+  const char kWebUIScheme[] = "webui-test";
+  const GURL kUrl("webui-test://host/resource.js");
+  SchemeRegistry::RegisterURLSchemeAsWebUIForTest(kWebUIScheme);
+  SchemeRegistry::RegisterURLSchemeAsWebUIBundledBytecodeForTest(kWebUIScheme);
+  SetWebUIBundledCodeCacheURL(kUrl);
+
+  base::HistogramTester histograms;
+  network::ResourceRequest request;
+  request.url = kUrl;
+
+  EXPECT_FALSE(BackgroundURLLoader::CanHandleRequest(
+      request, ResourceLoaderOptions(/*world=*/nullptr),
+      /*is_prefech_only_document=*/false));
+  histograms.ExpectUniqueSample(
+      kBackgroundResourceFetchSupportStatusHistogramName,
+      BackgroundResourceFetchSupportStatus::kUnsupportedNonHttpUrlRequest, 1);
+
+  SchemeRegistry::RemoveURLSchemeAsWebUIBundledBytecodeForTest(kWebUIScheme);
+  SchemeRegistry::RemoveURLSchemeAsWebUIForTest(kWebUIScheme);
+}
 
 TEST_F(BackgroundResourceFecherTest, SimpleRequest) {
   FakeURLLoaderClient client(unfreezable_task_runner_);

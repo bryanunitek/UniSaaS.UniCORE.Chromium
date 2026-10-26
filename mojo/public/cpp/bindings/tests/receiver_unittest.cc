@@ -21,7 +21,6 @@
 #include "base/test/bind.h"
 #include "base/threading/thread.h"
 #include "build/blink_buildflags.h"
-#include "mojo/core/embedder/embedder.h"
 #include "mojo/core/test/mojo_test_base.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/lib/validation_errors.h"
@@ -984,7 +983,7 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(MultiprocessReceiverClient,
   // terminates when the InterfaceDropper is disconnected, which happens once
   // the test is done throwing remotes at it.
   MojoHandle dropper_pipe;
-  ReadMessageWithHandles(test_pipe, &dropper_pipe, 1);
+  ReadMessageWithHandle(test_pipe, &dropper_pipe);
   base::RunLoop loop;
   InterfaceDropper dropper{PendingReceiver<mojom::InterfaceDropper>(
       MakeScopedHandle(MessagePipeHandle(dropper_pipe)))};
@@ -1008,17 +1007,11 @@ TEST_F(MultiprocessReceiverTest, MultiprocessReceiver) {
   // incoming IO thread activity, as an event to signal peer closure on the new
   // receiver may arrive on the IO thread during receiver teardown on this
   // thread.
-  if (!mojo::core::IsMojoIpczEnabled()) {
-    GTEST_SKIP() << "This is a regression test specifically for MojoIpcz. When "
-                 << "MojoIpcz is disabled, the test is flaky for unrelated "
-                 << "reasons which stem from a long-standing bug in Mojo Core "
-                 << "shutdown.";
-  }
   RunTestClient("MultiprocessReceiverClient", [&](MojoHandle client) {
     Remote<mojom::InterfaceDropper> dropper;
     MojoHandle dropper_pipe =
         dropper.BindNewPipeAndPassReceiver().PassPipe().release().value();
-    WriteMessageWithHandles(client, "", &dropper_pipe, 1);
+    WriteMessageWithHandle(client, "", dropper_pipe);
 
     constexpr size_t kNumIterations = 1000;
     constexpr size_t kNumReceiversPerIteration = 10;

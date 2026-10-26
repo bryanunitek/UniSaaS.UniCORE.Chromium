@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ssl/typed_navigation_upgrade_throttle.h"
+
 #include <algorithm>
 #include <vector>
 
@@ -17,13 +19,13 @@
 #include "chrome/browser/interstitials/security_interstitial_page_test_utils.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/ssl/https_upgrades_interceptor.h"
-#include "chrome/browser/ssl/typed_navigation_upgrade_throttle.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_tab_helper.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -179,6 +181,7 @@ class TypedNavigationUpgradeThrottleBrowserTest
     disabled_features.push_back(features::kHttpsFirstBalancedModeAutoEnable);
     disabled_features.push_back(
         features::kHttpsUpgradesTypedSchemelessNavigationNoTimeoutFallback);
+    disabled_features.push_back(features::kWebUILocationBar);
     feature_list_.InitWithFeaturesAndParameters(enabled_features,
                                                 disabled_features);
   }
@@ -384,7 +387,7 @@ class TypedNavigationUpgradeThrottleBrowserTest
   void WaitForHistoryToLoad() {
     history::HistoryService* const history_service =
         HistoryServiceFactory::GetForProfile(
-            browser()->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+            browser()->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
     ui_test_utils::WaitForHistoryToLoad(history_service);
   }
 
@@ -424,7 +427,7 @@ class TypedNavigationUpgradeThrottleBrowserTest
     CheckPopupText(url_without_scheme);
     PressEnterAndWaitForNavigations(num_expected_navigations, ctrl_enter);
 
-    ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+    ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
     content::WebContents* contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     const GURL http_url = MakeHttpURL(url_without_scheme);
@@ -496,7 +499,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
 
   histograms.ExpectTotalCount(kEventHistogram, 0);
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   EXPECT_TRUE(std::ranges::contains(enumerator.urls(), url));
 }
 
@@ -518,7 +521,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
 
   histograms.ExpectTotalCount(kEventHistogram, 0);
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   EXPECT_TRUE(std::ranges::contains(enumerator.urls(), url));
 }
 
@@ -546,7 +549,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
 
   // Broken SSL results in an interstitial and interstitial pages aren't added
   // to history.
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   EXPECT_FALSE(std::ranges::contains(enumerator.urls(), url));
 }
 
@@ -628,7 +631,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
   CheckPopupText(text);
   PressEnterAndWaitForNavigations(1, /*ctrl_key=*/true);
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   content::WebContents* contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   const GURL http_url("http://www.site-with-http.com");
@@ -660,7 +663,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
   CheckPopupText(text);
   PressEnterAndWaitForNavigations(1, /*ctrl_key=*/true);
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   content::WebContents* contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   const GURL http_url("http://www.site-with-good-https.com");
@@ -710,7 +713,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
   // with a single navigation attempt.
   PasteHostnameAndWaitForNavigations(contents, kSiteWithGoodHttps, 1);
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   const GURL http_url = MakeHttpURL(kSiteWithGoodHttps);
   const GURL https_url = MakeHttpsURL(kSiteWithGoodHttps);
 
@@ -752,7 +755,7 @@ IN_PROC_BROWSER_TEST_P(
   // attempt and one for the fallback.
   PasteHostnameAndWaitForNavigations(contents, kSiteWithBadHttps, 2);
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   const GURL http_url = MakeHttpURL(kSiteWithBadHttps);
   const GURL https_url = MakeHttpsURL(kSiteWithBadHttps);
 
@@ -796,7 +799,7 @@ IN_PROC_BROWSER_TEST_P(TypedNavigationUpgradeThrottleBrowserTest,
   model->PasteAndGo(base::UTF8ToUTF16(kSiteWithGoodHttps));
   navigation_observer.Wait();
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   const GURL http_url = MakeHttpURL(kSiteWithGoodHttps);
   const GURL https_url = MakeHttpsURL(kSiteWithGoodHttps);
 
@@ -1018,7 +1021,7 @@ class TypedNavigationUpgradeThrottleRedirectBrowserTest
     SetOmniboxText(url_without_scheme);
     PressEnterAndWaitForNavigations(1);
 
-    ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+    ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
     content::WebContents* contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     const GURL http_url =
@@ -1052,7 +1055,7 @@ class TypedNavigationUpgradeThrottleRedirectBrowserTest
     SetOmniboxText(url_without_scheme);
     PressEnterAndWaitForNavigations(2);
 
-    ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+    ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
     content::WebContents* contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     const GURL http_url =
@@ -1189,7 +1192,8 @@ IN_PROC_BROWSER_TEST_P(
 // 6. The navigation ends up showing an interstitial.
 
 // TODO(crbug.com/378576546): Re-enable this test on Linux debug builds.
-#if BUILDFLAG(IS_LINUX) && !defined(NDEBUG)
+// TODO(crbug.com/570802137): Fix flakiness on ChromeOS debug builds.
+#if (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && !defined(NDEBUG)
 #define MAYBE_UrlTypedWithoutScheme_BadHttps_Redirected_ShouldFallback \
   DISABLED_UrlTypedWithoutScheme_BadHttps_Redirected_ShouldFallback
 #else
@@ -1260,7 +1264,7 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_FALSE(chrome_browser_interstitials::IsShowingInterstitial(contents));
   metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
 
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   const GURL http_url =
       embedded_test_server()->GetURL(kSiteWithBadHttps, "/title1.html");
   const GURL https_url = MakeHttpsURL(url_without_scheme);
@@ -1284,7 +1288,8 @@ IN_PROC_BROWSER_TEST_P(
 // Same as UrlTypedWithoutScheme_BadHttps_Redirected_ShouldFallback, but the
 // redirect ends up on a net error instead of an SSL error.
 // TODO(crbug.com/402833505): Flaky on Linux.
-#if BUILDFLAG(IS_LINUX)
+// TODO(crbug.com/570812226): Flaky on ChromeOS.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_UrlTypedWithoutScheme_NetError_Redirected_ShouldFallback \
   DISABLED_UrlTypedWithoutScheme_NetError_Redirected_ShouldFallback
 #else

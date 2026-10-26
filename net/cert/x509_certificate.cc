@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -503,14 +504,14 @@ bool X509Certificate::VerifyHostname(
     // is not registry controlled, this ensures that all reference domains
     // contain at least three domain components when using wildcards.
     size_t registry_length =
-        registry_controlled_domains::GetCanonicalHostRegistryLength(
+        registry_controlled_domains::GetCanonicalHostRegistry(
             reference_name,
             registry_controlled_domains::INCLUDE_UNKNOWN_REGISTRIES,
-            registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES);
-
-    // Because |reference_name| was already canonicalized, the following
-    // should never happen.
-    CHECK_NE(std::string::npos, registry_length);
+            registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES)
+            .transform(&std::string_view::size)
+            // Because `reference_name` was already canonicalized, `.value()` is
+            // safe.
+            .value();
 
     // Account for the leading dot in |reference_domain|.
     bool is_registry_controlled =
@@ -685,9 +686,8 @@ SHA256HashValue X509Certificate::CalculateChainFingerprint256() const {
 // static
 bool X509Certificate::IsSelfSigned(CRYPTO_BUFFER* cert_buffer) {
   std::shared_ptr<const bssl::ParsedCertificate> parsed_cert =
-      bssl::ParsedCertificate::Create(
-          bssl::UpRef(cert_buffer), x509_util::DefaultParseCertificateOptions(),
-          /*errors=*/nullptr);
+      x509_util::CreateParsedCertificate(bssl::UpRef(cert_buffer),
+                                         /*errors=*/nullptr);
   if (!parsed_cert) {
     return false;
   }

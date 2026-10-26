@@ -9,7 +9,6 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/cpp/request_destination.h"
 #include "services/network/public/cpp/request_mode.h"
-#include "services/network/public/mojom/attribution.mojom-blink.h"
 #include "services/network/public/mojom/ip_address_space.mojom-blink.h"
 #include "services/network/public/mojom/trust_tokens.mojom-blink.h"
 #include "third_party/blink/public/common/blob/blob_utils.h"
@@ -35,7 +34,6 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_url_search_params.h"
 #include "third_party/blink/renderer/core/dom/abort_signal.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/core/fetch/attribution_reporting_to_mojom.h"
 #include "third_party/blink/renderer/core/fetch/blob_bytes_consumer.h"
 #include "third_party/blink/renderer/core/fetch/body_stream_buffer.h"
 #include "third_party/blink/renderer/core/fetch/fetch_manager.h"
@@ -48,6 +46,9 @@
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/forms/form_data.h"
 #include "third_party/blink/renderer/core/loader/threadable_loader.h"
+#include "third_party/blink/renderer/core/streams/readable_stream.h"
+#include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
+#include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_view.h"
 #include "third_party/blink/renderer/core/url/url_search_params.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/blob/blob_data.h"
@@ -121,8 +122,8 @@ V8RequestDestination::Enum DestinationToV8Enum(
       return V8RequestDestination::Enum::kXslt;
     case network::mojom::RequestDestination::kFencedframe:
       return V8RequestDestination::Enum::kFencedframe;
-    case network::mojom::RequestDestination::kDictionary:
-      return V8RequestDestination::Enum::kDictionary;
+    case network::mojom::RequestDestination::kCompressionDictionary:
+      return V8RequestDestination::Enum::kCompressionDictionary;
     case network::mojom::RequestDestination::kSpeculationRules:
       return V8RequestDestination::Enum::kSpeculationrules;
     case network::mojom::RequestDestination::kJson:
@@ -131,8 +132,6 @@ V8RequestDestination::Enum DestinationToV8Enum(
       return V8RequestDestination::Enum::kServiceworker;
     case network::mojom::RequestDestination::kWebBundle:
       return V8RequestDestination::Enum::kWebbundle;
-    case network::mojom::RequestDestination::kSharedStorageWorklet:
-      return V8RequestDestination::Enum::kSharedstorageworklet;
     // Requests with these destinations must be fetched from the browser
     // process.
     case network::mojom::RequestDestination::kWebIdentity:
@@ -173,9 +172,6 @@ FetchRequestData* CreateCopyOfFetchRequestDataForFetch(
   request->SetFetchPriorityHint(original->FetchPriorityHint());
   request->SetPriority(original->Priority());
   request->SetKeepalive(original->Keepalive());
-  request->SetBrowsingTopics(original->BrowsingTopics());
-  request->SetAdAuctionHeaders(original->AdAuctionHeaders());
-  request->SetSharedStorageWritable(original->SharedStorageWritable());
   request->SetIsHistoryNavigation(original->IsHistoryNavigation());
   request->SetIsReloadNavigation(original->IsReloadNavigation());
   if (original->URLLoaderFactory()) {
@@ -186,9 +182,6 @@ FetchRequestData* CreateCopyOfFetchRequestDataForFetch(
   }
   request->SetWindowId(original->WindowId());
   request->SetTrustTokenParams(original->TrustTokenParams());
-  request->SetAttributionReportingEligibility(
-      original->AttributionReportingEligibility());
-  request->SetAttributionReportingSupport(original->AttributionSupport());
   request->SetServiceWorkerRaceNetworkRequestToken(
       original->ServiceWorkerRaceNetworkRequestToken());
   if (RuntimeEnabledFeatures::FetchRetryEnabled(context) &&
@@ -215,11 +208,9 @@ static bool AreAnyMembersPresent(const RequestInit* init) {
          init->hasReferrer() || init->hasReferrerPolicy() || init->hasMode() ||
          init->hasTargetAddressSpace() || init->hasCredentials() ||
          init->hasCache() || init->hasRedirect() || init->hasIntegrity() ||
-         init->hasKeepalive() || init->hasBrowsingTopics() ||
-         init->hasAdAuctionHeaders() || init->hasSharedStorageWritable() ||
+         init->hasKeepalive() || init->hasAdAuctionHeaders() ||
          init->hasPriority() || init->hasSignal() || init->hasDuplex() ||
-         init->hasPrivateToken() || init->hasAttributionReporting() ||
-         init->hasRetryOptions();
+         init->hasPrivateToken() || init->hasRetryOptions();
 }
 
 static BodyStreamBuffer* ExtractBody(ScriptState* script_state,
@@ -685,7 +676,7 @@ Request* Request::CreateRequestWithRequestOrString(
     options.max_attempts = retry_options->maxAttempts();
     if (retry_options->hasInitialDelay()) {
       options.initial_delay =
-          base::Milliseconds(retry_options->initialDelay().value());
+          base::Milliseconds(retry_options->initialDelay());
     }
     if (retry_options->hasBackoffFactor()) {
       options.backoff_factor = retry_options->backoffFactor();
@@ -700,24 +691,6 @@ Request* Request::CreateRequestWithRequestOrString(
     request->SetRetryOptions(options);
   }
 
-  if (init->hasBrowsingTopics()) {
-    if (!execution_context->IsSecureContext()) {
-      exception_state.ThrowTypeError(
-          "browsingTopics: Topics operations are only available in secure "
-          "contexts.");
-      return nullptr;
-    }
-
-    request->SetBrowsingTopics(init->browsingTopics());
-
-    if (init->browsingTopics()) {
-      UseCounter::Count(execution_context,
-                        mojom::blink::WebFeature::kTopicsAPIFetch);
-      Deprecation::CountDeprecation(execution_context,
-                                    mojom::blink::WebFeature::kTopicsAPIAll);
-    }
-  }
-
   if (init->hasAdAuctionHeaders()) {
     if (!execution_context->IsSecureContext()) {
       exception_state.ThrowDOMException(
@@ -726,32 +699,8 @@ Request* Request::CreateRequestWithRequestOrString(
           "secure contexts.");
       return nullptr;
     }
-
-    request->SetAdAuctionHeaders(init->adAuctionHeaders());
   }
 
-  if (init->hasSharedStorageWritable()) {
-    if (!execution_context->IsSecureContext()) {
-      exception_state.ThrowTypeError(
-          "sharedStorageWritable: sharedStorage operations are only available"
-          " in secure contexts.");
-      return nullptr;
-    }
-    if (SecurityOrigin::Create(request->Url())->IsOpaque()) {
-      exception_state.ThrowTypeError(
-          "sharedStorageWritable: sharedStorage operations are not available"
-          " for opaque origins.");
-      return nullptr;
-    }
-    request->SetSharedStorageWritable(init->sharedStorageWritable());
-    if (init->sharedStorageWritable()) {
-      UseCounter::Count(
-          execution_context,
-          mojom::blink::WebFeature::kSharedStorageAPI_Fetch_Attribute);
-      Deprecation::CountDeprecation(
-          execution_context, mojom::blink::WebFeature::kSharedStorageAPIAll);
-    }
-  }
 
   // "If |init|'s method member is present, let |method| be it and run these
   // substeps:"
@@ -801,20 +750,6 @@ Request* Request::CreateRequestWithRequestOrString(
     }
 
     request->SetTrustTokenParams(std::move(params));
-  }
-
-  if (init->hasAttributionReporting()) {
-    if (!execution_context->IsSecureContext()) {
-      exception_state.ThrowTypeError(
-          "attributionReporting: Attribution Reporting operations are only "
-          "available in secure contexts.");
-      return nullptr;
-    }
-
-    request->SetAttributionReportingEligibility(
-        ConvertAttributionReportingRequestOptionsToMojom(
-            *init->attributionReporting(), *execution_context,
-            exception_state));
   }
 
   // "Let  signals  be [|signal|] if  signal  is non-null; otherwise []."
@@ -963,28 +898,28 @@ Request* Request::CreateRequestWithRequestOrString(
     return nullptr;
   }
 
-  // "Set |this|'s request's body to |body|.
+  // "Let |finalBody| be |inputOrInitBody|."
+  // "If |initBody| is null and |inputBody| is non-null, then:"
+  //   "If |inputBody| is unusable, then throw a TypeError." (checked above)
+  //   "Set |finalBody| to the result of creating a proxy for |inputBody|."
+  // Creating a proxy leaves |inputBody|'s stream in place -- same object,
+  // now locked and disturbed -- and hands the new request a new stream. Note
+  // this runs only when |init| did not supply a body; otherwise |input|'s
+  // body is left untouched. See https://github.com/whatwg/fetch/pull/959.
+  if (body && body == input_body) {
+    body = input_body->CreateProxy(exception_state);
+    if (exception_state.HadException()) {
+      return nullptr;
+    }
+  }
+
+  // "Set |this|'s request's body to |finalBody|."
   if (body)
     r->request_->SetBuffer(body, body_byte_length);
 
   // "Set |r|'s MIME type to the result of extracting a MIME type from |r|'s
   // request's header list."
   r->request_->SetMimeType(r->request_->HeaderList()->ExtractMIMEType());
-
-  // "If |input| is a Request object and |input|'s request's body is
-  // non-null, run these substeps:"
-  if (input_request && input_request->BodyBuffer()) {
-    // "Let |dummyStream| be an empty ReadableStream object."
-    auto* dummy_stream =
-        BodyStreamBuffer::Create(script_state, BytesConsumer::CreateClosed(),
-                                 nullptr, /*cached_metadata_handler=*/nullptr);
-    // "Set |input|'s request's body to a new body whose stream is
-    // |dummyStream|."
-    input_request->request_->SetBuffer(dummy_stream);
-    // "Let |reader| be the result of getting reader from |dummyStream|."
-    // "Read all bytes from |dummyStream| with |reader|."
-    input_request->BodyBuffer()->CloseAndLockAndDisturb(exception_state);
-  }
 
   // "Return |r|."
   return r;
@@ -1355,7 +1290,7 @@ mojom::blink::FetchAPIRequestPtr Request::CreateFetchAPIRequest() const {
 }
 
 String Request::MimeType() const {
-  return request_->MimeType();
+  return request_->HeaderList()->ExtractMIMEType();
 }
 
 String Request::ContentType() const {

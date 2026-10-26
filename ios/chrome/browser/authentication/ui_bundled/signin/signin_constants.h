@@ -8,6 +8,7 @@
 #import <Foundation/Foundation.h>
 
 #import "base/time/time.h"
+#import "base/types/expected.h"
 
 @class SigninCoordinator;
 @protocol SystemIdentity;
@@ -31,12 +32,16 @@ typedef NS_ENUM(NSUInteger, SigninCoordinatorResult) {
   // and when the UI is not ready to present any signin coordinator.
   SigninCoordinatorUINotAvailable,
   // Sign-in coordinator is stopped because of a change in profile.
+  // No identities are returned when the result is Switch, because, from the
+  // point of view of the view that opened the sign-in UI, no sign-in will
+  // actually occur. This is because the sign-in will be done in a differente
+  // scene, that is not known to the UI’s opener.
   SigninCoordinatorProfileSwitch,
 };
 
 namespace signin_ui {
 
-// The result of a authentiaction.
+// The result of an authentication.
 enum class CancelationReason {
   // Not canceled.
   kNotCanceled,
@@ -53,6 +58,15 @@ enum class CancelationReason {
 };
 
 }  // namespace signin_ui
+
+// Represents the result of a sign-in coordinator completion.
+// Contains:
+// - The resulting `id<SystemIdentity>` (never nil) if the operation succeeded.
+// - A `SigninCoordinatorResult` error code if sign-in did not complete
+//   (canceled, interrupted, disabled, UI not available, or profile switch).
+//   In all non-success cases, no identity is returned.
+using SigninCoordinatorResultOrIdentity =
+    base::expected<id<SystemIdentity>, SigninCoordinatorResult>;
 
 // Enum for tracking key events in the Signin Fullscreen Promo flow on iOS.
 // Used in UMA histograms.
@@ -85,13 +99,16 @@ enum class SigninFullscreenPromoEvents {
 // LINT.ThenChange(/tools/metrics/histograms/metadata/ios/enums.xml:IOSSigninFullscreenPromoEvents)
 
 // Called when the sign-in dialog is closed.
-// `coordinator` the SigninCoordinator to which this block was assigned. nil if
-// this block was not assigned to a signin coordinator. `result` is the sign-in
-// result state. `signinCompletionIdentity` the identity that was used if any.
+// `coordinator`: the SigninCoordinator to which this block was assigned (nil if
+// not assigned to a coordinator).
+// `result`: contains the signed-in `id<SystemIdentity>` on success, or a
+// `SigninCoordinatorResult` on failure / cancellation. In particular, for
+// profile switch, an error of `SigninCoordinatorProfileSwitch` is returned
+// without an identity, as sign-in will take place in the target profile's
+// scene rather than the current one.
 using SigninCoordinatorCompletionCallback =
     void (^)(SigninCoordinator* coordinator,
-             SigninCoordinatorResult result,
-             id<SystemIdentity> identity);
+             SigninCoordinatorResultOrIdentity result);
 
 // Callback called to notify whether a profile change can proceed.
 using SigninChangeProfileCallback = void (^)(BOOL canProceed);

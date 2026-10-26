@@ -6,8 +6,10 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_WEB_TEST_WEB_TEST_WEB_FRAME_WIDGET_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/test/frame_widget_test_helper.h"
 #include "third_party/blink/renderer/core/frame/web_frame_widget_impl.h"
@@ -51,6 +53,7 @@ class WebTestWebFrameWidgetImpl : public WebFrameWidgetImpl,
   // FrameWidgetTestHelper overrides.
   void Reset() override;
   content::EventSender* GetEventSender() override;
+  void SetScreenSizeForTesting(int width, int height) override;
   void SynchronouslyCompositeAfterTest(base::OnceClosure callback) override;
   void UpdateAllLifecyclePhasesAndComposite(
       base::OnceClosure completion_callback) override;
@@ -74,6 +77,12 @@ class WebTestWebFrameWidgetImpl : public WebFrameWidgetImpl,
                      const gfx::Rect& drag_obj_rect) override;
   void DidAutoResize(const gfx::Size& size) override;
 
+  // WebWidget overrides.
+  const display::ScreenInfo& GetScreenInfo() override;
+  const display::ScreenInfos& GetScreenInfos() override;
+  const display::ScreenInfo& GetOriginalScreenInfo() override;
+  const display::ScreenInfos& GetOriginalScreenInfos() override;
+
   // WidgetBaseClient overrides:
   void ScheduleAnimation(cc::BeginMainFrameReason reason, bool urgent) override;
   void WillBeginMainFrame() override;
@@ -94,13 +103,17 @@ class WebTestWebFrameWidgetImpl : public WebFrameWidgetImpl,
   // thus destroy |this| before returning.
   void SynchronouslyComposite(base::OnceClosure callback, bool do_raster);
 
+  void DidSynchronouslyComposite(base::OnceClosure callback);
+
   // Perform the synchronous composite step for a given LayerTreeHost.
   static void DoComposite(cc::LayerTreeHost* layer_tree_host,
                           bool do_raster,
                           base::OnceClosure callback);
   std::unique_ptr<content::EventSender> event_sender_;
+  std::optional<display::ScreenInfos> screen_infos_for_testing_;
 
-  content::TestRunner* const test_runner_;
+  const raw_ptr<content::TestRunner, UnprotectedInRelease | DanglingUntriaged>
+      test_runner_;
 
   // For collapsing multiple simulated ScheduleAnimation() calls.
   bool animation_scheduled_ = false;

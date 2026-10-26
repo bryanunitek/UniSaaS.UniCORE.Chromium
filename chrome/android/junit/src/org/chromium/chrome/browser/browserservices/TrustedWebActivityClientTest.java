@@ -27,7 +27,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.browserservices.permissiondelegation.InstalledWebappPermissionStore;
@@ -46,7 +45,6 @@ import java.util.concurrent.ExecutionException;
 
 /** Unit tests for {@link TrustedWebActivityClient}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TrustedWebActivityClientTest {
     private static final int SERVICE_SMALL_ICON_ID = 1;
     private static final String CLIENT_PACKAGE_NAME = "com.example.app";
@@ -157,7 +155,7 @@ public class TrustedWebActivityClientTest {
     public void createLaunchIntentForTwaNonHttpScheme() {
         assertNull(
                 mClient.createLaunchIntentForTwa(
-                        RuntimeEnvironment.application,
+                        RuntimeEnvironment.getApplication(),
                         "mailto:miranda@example.com",
                         new ArrayList<>()));
     }

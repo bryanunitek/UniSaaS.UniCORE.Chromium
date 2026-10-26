@@ -55,6 +55,7 @@ namespace content {
 class ServiceWorkerContext;
 class ServiceWorkerContextObserver;
 
+struct GlobalRenderFrameHostId;
 struct ServiceWorkerRunningInfo;
 struct StorageUsageInfo;
 
@@ -134,6 +135,12 @@ class ServiceWorkerContextObserverSynchronous : public base::CheckedObserver {
   // Called when `context` is destroyed. Observers must no longer use |context|.
   virtual void OnDestructSync(ServiceWorkerContext* context) {}
 
+  // Called after `context` wipes all stored data to recover from storage
+  // corruption. Existing registrations are deleted without
+  // `OnRegistrationDeletedSync()` notifications, and `context` is ready to
+  // accept new registrations.
+  virtual void OnStorageWipedSync(ServiceWorkerContext* context) {}
+
   // Called before the URLLoaderFactory used to fetch the worker script is
   // constructed.
   virtual void OnWillCreateURLLoaderFactorySync(const GURL& scope) {}
@@ -212,6 +219,7 @@ class CONTENT_EXPORT ServiceWorkerContext {
       const GURL& script_url,
       const blink::StorageKey& key,
       const blink::mojom::ServiceWorkerRegistrationOptions& options,
+      GlobalRenderFrameHostId requesting_frame_id,
       StatusCodeCallback callback) = 0;
 
   // Equivalent to calling ServiceWorkerRegistration#unregister on the

@@ -379,6 +379,27 @@ void ResourceLoader::DidCancelLoadingBody() {
   Cancel();
 }
 
+void ResourceLoader::WillCreateBlobFromDrainedDataPipe() {
+  CHECK(!blob_response_started_);
+  // The blob only serves to expose the body to the observer, so don't hold the
+  // load open waiting for it when nobody is looking.
+  auto* observer = fetcher_->GetResourceLoadObserver();
+  blob_response_started_ = observer && observer->InterestedInAllRequests();
+}
+
+void ResourceLoader::DidCreateBlobFromDrainedDataPipe(
+    const scoped_refptr<BlobDataHandle>& blob) {
+  if (!blob_response_started_ ||
+      scheduler_client_id_ == ResourceLoadScheduler::kInvalidClientId) {
+    return;
+  }
+  CHECK(!blob_finished_);
+  if (auto* observer = fetcher_->GetResourceLoadObserver()) {
+    observer->DidDownloadToBlob(resource_->InspectorId(), blob.get());
+  }
+  MarkBlobFinished();
+}
+
 void ResourceLoader::StartFetch() {
   DCHECK_NE(ResourceLoadScheduler::kInvalidClientId, scheduler_client_id_);
   if (resource_->Options().synchronous_policy == kRequestSynchronously &&
@@ -548,6 +569,21 @@ bool ResourceLoader::WillFollowRedirect(
     }
     FindClientHintsToRemove(Context().GetPermissionsPolicy(),
                             GURL(new_url.GetString().Utf8()), removed_headers);
+    // Strip untrusted DevTools headers once a no-cors request leaves the
+    // requestor's origin.
+    const ResourceRequestHead& original_request =
+        resource_->GetResourceRequest();
+    const SecurityOrigin* requestor_origin =
+        original_request.RequestorOrigin().get();
+    if (!original_request.GetUntrustedDevToolsHeaders().empty() &&
+        requestor_origin &&
+        !requestor_origin->IsSameOriginWith(
+            SecurityOrigin::Create(new_url).get())) {
+      for (const String& header :
+           original_request.GetUntrustedDevToolsHeaders()) {
+        removed_headers->push_back(header.Latin1());
+      }
+    }
   }
 
   if (is_cache_aware_loading_activated_) {
@@ -622,9 +658,11 @@ bool ResourceLoader::WillFollowRedirect(
                              new_request->GetRedirectInfo());
 
     if (std::optional<AdProvenance> ad_provenance =
-            Context().CalculateIfAdSubresource(
-                *new_request, /*alias_url=*/std::nullopt, resource_type,
-                options.initiator_info, /*scan_stack_for_ads=*/false)) {
+            Context()
+                .CalculateResourceAnnotations(
+                    *new_request, /*alias_url=*/std::nullopt, resource_type,
+                    options.initiator_info, /*scan_javascript_stack=*/false)
+                .ad_provenance) {
       new_request->SetIsAdResource(std::move(*ad_provenance));
     }
 
@@ -673,21 +711,6 @@ bool ResourceLoader::WillFollowRedirect(
   DCHECK_EQ(new_request->GetMode(), request_mode);
   DCHECK_EQ(new_request->GetCredentialsMode(), credentials_mode);
 
-  // If `Shared-Storage-Writable` eligibity has changed, update the headers.
-  bool previous_shared_storage_writable_eligible =
-      resource_->LastResourceRequest().GetSharedStorageWritableEligible();
-  bool new_shared_storage_writable_eligible =
-      new_request->GetSharedStorageWritableEligible();
-  if (new_shared_storage_writable_eligible !=
-      previous_shared_storage_writable_eligible) {
-    if (new_shared_storage_writable_eligible) {
-      CHECK(new_request->GetSharedStorageWritableOptedIn());
-      modified_headers.SetHeader(http_names::kSecSharedStorageWritable.Ascii(),
-                                 "?1");
-    } else if (removed_headers) {
-      removed_headers->push_back(http_names::kSecSharedStorageWritable.Ascii());
-    }
-  }
 
   if (new_request->Url() != KURL(new_url)) {
     CancelForRedirectAccessCheckError(new_request->Url(),
@@ -774,7 +797,7 @@ void ResourceLoader::DidReceiveResponse(
     // Callback is bound to a WeakPersistent, as ResourceLoader is kept alive by
     // ResourceFetcher as long as we still care about the result of the load.
     fetcher_->GetBlobRegistry()->RegisterFromStream(
-        mime_type.IsNull() ? g_empty_string : mime_type.ToAsciiLower(), "",
+        mime_type.IsNull() ? g_empty_string : mime_type.ToAsciiLower(),
         std::max(static_cast<int64_t>(0), response.ExpectedContentLength()),
         std::move(body_handle),
         progress_receiver_.BindNewEndpointAndPassRemote(GetLoadingTaskRunner()),
@@ -1117,10 +1140,9 @@ void ResourceLoader::DidFinishLoading(base::TimeTicks response_end_time,
 
   if ((response_body_loader_ && !has_seen_end_of_body_ &&
        !response_body_loader_->IsAborted()) ||
-      (resource_->GetResourceRequest().DownloadToBlob() && !blob_finished_ &&
-       blob_response_started_)) {
-    // If the body is still being loaded, we defer the completion until all the
-    // body is received.
+      (blob_response_started_ && !blob_finished_)) {
+    // If the body is still being loaded, or is still being turned into a blob,
+    // we defer the completion until all the body is received.
     deferred_finish_loading_info_ =
         DeferredFinishLoadingInfo{response_end_time};
 
@@ -1423,7 +1445,10 @@ void ResourceLoader::FinishedCreatingBlob(
     observer->DidDownloadToBlob(resource_->InspectorId(), blob.get());
   }
   resource_->DidDownloadToBlob(blob);
+  MarkBlobFinished();
+}
 
+void ResourceLoader::MarkBlobFinished() {
   blob_finished_ = true;
   if (deferred_finish_loading_info_) {
     const ResourceResponse& response = resource_->GetResponse();
@@ -1562,9 +1587,11 @@ bool ResourceLoader::ShouldBlockRequestBasedOnSubresourceFilterDnsAliasCheck(
 
     if (!resource_->GetResourceRequest().IsAdResource()) {
       if (std::optional<AdProvenance> ad_provenance =
-              Context().CalculateIfAdSubresource(
-                  resource_->GetResourceRequest(), alias_url, resource_type,
-                  options.initiator_info, /*scan_stack_for_ads=*/false)) {
+              Context()
+                  .CalculateResourceAnnotations(
+                      resource_->GetResourceRequest(), alias_url, resource_type,
+                      options.initiator_info, /*scan_javascript_stack=*/false)
+                  .ad_provenance) {
         resource_->SetIsAdResource(std::move(*ad_provenance));
         cname_alias_info_for_testing_.was_ad_tagged_based_on_alias = true;
       }

@@ -138,6 +138,8 @@ class BrowserWidget : public views::Widget,
   ui::ColorProviderKey GetColorProviderKey() const override;
 
  private:
+  const ui::ThemeProvider* GetBaseThemeProvider() const;
+
   void OnTouchUiChanged();
 
   // Callback for MenuRunner.
@@ -154,6 +156,10 @@ class BrowserWidget : public views::Widget,
 
   // Returns true if the browser instance belongs to an incognito profile.
   bool IsIncognitoBrowser() const;
+
+  // Returns true if the browser instance belongs to an enterprise isolated mode
+  // profile.
+  bool IsEnterpriseIsolatedModeBrowser() const;
 
   raw_ptr<BrowserNativeWidget> browser_native_widget_;
 

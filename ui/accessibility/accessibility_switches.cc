@@ -18,17 +18,6 @@ const char kEnableExperimentalAccessibilityAutoclick[] =
 const char kEnableExperimentalAccessibilityLabelsDebugging[] =
     "enable-experimental-accessibility-labels-debugging";
 
-
-// Enables language detection for dynamic content which is then exposed to
-// assistive technology such as screen readers.
-const char kEnableExperimentalAccessibilityLanguageDetectionDynamic[] =
-    "enable-experimental-accessibility-language-detection-dynamic";
-
-// Switches accessibility extensions to use extensions manifest v3 while the
-// migration is still in progress.
-const char kEnableExperimentalAccessibilityManifestV3[] =
-    "enable-experimental-accessibility-manifest-v3";
-
 // Enables in progress Switch Access features for text input.
 const char kEnableExperimentalAccessibilitySwitchAccessText[] =
     "enable-experimental-accessibility-switch-access-text";
@@ -41,11 +30,6 @@ const char kEnableMagnifierDebugDrawRect[] = "enable-magnifier-debug-draw-rect";
 const char kEnableMacAccessibilityAPIMigration[] =
     "enable-mac-accessibility-api-migration";
 
-
-bool IsExperimentalAccessibilityLanguageDetectionDynamicEnabled() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      ::switches::kEnableExperimentalAccessibilityLanguageDetectionDynamic);
-}
 
 bool IsExperimentalAccessibilitySwitchAccessTextEnabled() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(

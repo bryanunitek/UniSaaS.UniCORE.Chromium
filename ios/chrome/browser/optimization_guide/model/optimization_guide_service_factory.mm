@@ -4,12 +4,16 @@
 
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service_factory.h"
 
+#import <utility>
+
 #import "base/feature_list.h"
+#import "base/functional/bind.h"
+#import "base/memory/weak_ptr.h"
 #import "base/path_service.h"
 #import "components/application_locale_storage/application_locale_storage.h"
 #import "components/optimization_guide/core/delivery/prediction_manager.h"
+#import "components/optimization_guide/core/delivery/prediction_model_store.h"
 #import "components/optimization_guide/core/hints/optimization_guide_store.h"
-#import "components/optimization_guide/core/optimization_guide_constants.h"
 #import "components/optimization_guide/core/optimization_guide_features.h"
 #import "ios/chrome/browser/optimization_guide/model/ios_chrome_hints_manager.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service.h"
@@ -60,10 +64,19 @@ std::unique_ptr<KeyedService> BuildOptimizationGuideService(
 
   auto service = std::make_unique<OptimizationGuideService>(
       proto_db_provider, profile_path, profile->IsOffTheRecord(),
-      GetApplicationContext()->GetApplicationLocaleStorage()->Get(), hint_store,
-      profile->GetPrefs(), BrowserListFactory::GetForProfile(profile),
+      std::string(GetApplicationContext()
+                      ->GetApplicationLocaleStorage()
+                      ->GetTag()
+                      .tag_string()),
+      hint_store, profile->GetPrefs(),
+      BrowserListFactory::GetForProfile(profile),
       GetApplicationContext()->GetSharedURLLoaderFactory(),
-      IdentityManagerFactory::GetForProfile(profile), std::move(delegate));
+      IdentityManagerFactory::GetForProfile(profile), std::move(delegate),
+      base::BindRepeating(
+          [](base::WeakPtr<ProfileIOS> profile) {
+            return profile ? profile->GetNetworkContext() : nullptr;
+          },
+          profile->AsWeakPtr()));
 
   service->DoFinalInit(
       BackgroundDownloadServiceFactory::GetForProfile(profile));
@@ -71,20 +84,6 @@ std::unique_ptr<KeyedService> BuildOptimizationGuideService(
 }
 
 }  // namespace
-
-// static
-OptimizationGuideService* OptimizationGuideServiceFactory::GetForProfile(
-    ProfileIOS* profile) {
-  return GetInstance()->GetServiceForProfileAs<OptimizationGuideService>(
-      profile, /*create=*/true);
-}
-
-// static
-OptimizationGuideServiceFactory*
-OptimizationGuideServiceFactory::GetInstance() {
-  static base::NoDestructor<OptimizationGuideServiceFactory> instance;
-  return instance.get();
-}
 
 // static
 void OptimizationGuideServiceFactory::InitializePredictionModelStore() {
@@ -98,11 +97,13 @@ void OptimizationGuideServiceFactory::InitializePredictionModelStore() {
       .Initialize(model_downloads_dir);
 }
 
-OptimizationGuideServiceFactory::OptimizationGuideServiceFactory()
-    : ProfileKeyedServiceFactoryIOS("OptimizationGuideService",
-                                    ServiceCreation::kCreateWithProfile,
-                                    TestingCreation::kNoServiceForTests,
-                                    ProfileSelection::kOwnInstanceInIncognito) {
+OptimizationGuideServiceFactory::OptimizationGuideServiceFactory(PassKey key)
+    : TypedProfileKeyedServiceFactoryIOS(
+          std::move(key),
+          "OptimizationGuideService",
+          ServiceCreation::kCreateWithProfile,
+          TestingCreation::kNoServiceForTests,
+          ProfileSelection::kOwnInstanceInIncognito) {
   DependsOn(BackgroundDownloadServiceFactory::GetInstance());
   DependsOn(BrowserListFactory::GetInstance());
   DependsOn(IdentityManagerFactory::GetInstance());
@@ -110,8 +111,6 @@ OptimizationGuideServiceFactory::OptimizationGuideServiceFactory()
   DependsOn(PrivateAiServiceFactory::GetInstance());
 #endif
 }
-
-OptimizationGuideServiceFactory::~OptimizationGuideServiceFactory() = default;
 
 // static
 OptimizationGuideServiceFactory::TestingFactory

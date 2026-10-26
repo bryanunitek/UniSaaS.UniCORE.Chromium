@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.tabmodel;
 
+import android.util.ArraySet;
+
 import org.chromium.base.ThreadUtils.ThreadChecker;
 import org.chromium.base.TimeUtils;
 import org.chromium.build.annotations.NullMarked;
@@ -11,10 +13,10 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.Tab;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
+import java.util.Set;
 
 /**
  * Manages the logic pertaining to tracking pending tab closures for a {@link TabModelImpl}. This
@@ -40,8 +42,9 @@ public class PendingTabClosureManager {
          * Finalize the closure of a Tab.
          *
          * @param tab The tab to finalize the closure of.
+         * @param closingSource The closing source of the tab closure.
          */
-        void finalizeClosure(Tab tab);
+        void finalizeClosure(Tab tab, @TabClosingSource int closingSource);
 
         /**
          * Request to notify observers that {@code tabs} will be closed.
@@ -64,19 +67,25 @@ public class PendingTabClosureManager {
     /** Represents a set of tabs closed together. */
     static class TabClosureEvent {
         private final List<Tab> mClosingTabs;
-        private final HashSet<Tab> mUnhandledTabs;
+        private final Set<Tab> mUnhandledTabs;
         private final @Nullable Runnable mUndoRunnable;
         private final long mTimestamp;
+        private final @TabClosingSource int mTabClosingSource;
 
         /**
          * @param tabs The list of closing tabs.
          * @param undoRunnable The runnable to run if the event was undone.
+         * @param tabClosingSource The closing source of the tab closure.
          */
-        public TabClosureEvent(List<Tab> tabs, @Nullable Runnable undoRunnable) {
+        public TabClosureEvent(
+                List<Tab> tabs,
+                @Nullable Runnable undoRunnable,
+                @TabClosingSource int tabClosingSource) {
             mClosingTabs = new ArrayList<>(tabs);
-            mUnhandledTabs = new HashSet<>(mClosingTabs);
+            mUnhandledTabs = new ArraySet<>(mClosingTabs);
             mUndoRunnable = undoRunnable;
             mTimestamp = TimeUtils.currentTimeMillis();
+            mTabClosingSource = tabClosingSource;
         }
 
         /**
@@ -117,6 +126,11 @@ public class PendingTabClosureManager {
         /** Returns the timestamp (in millis) of the tab closure event. */
         public long getTimestamp() {
             return mTimestamp;
+        }
+
+        /** Returns the tab closing source. */
+        public @TabClosingSource int getTabClosingSource() {
+            return mTabClosingSource;
         }
     }
 
@@ -326,13 +340,18 @@ public class PendingTabClosureManager {
      * Creates a new closure event when pending tabs are closed.
      *
      * @param tabs The list of {@link Tab} that are closing.
+     * @param undoRunnable The runnable to run if the event was undone.
+     * @param tabClosingSource The closing source of the tab closure.
      */
-    public void addTabClosureEvent(List<Tab> tabs, @Nullable Runnable undoRunnable) {
+    public void addTabClosureEvent(
+            List<Tab> tabs,
+            @Nullable Runnable undoRunnable,
+            @TabClosingSource int tabClosingSource) {
         mThreadChecker.assertOnValidThread();
         assert !mIsCommittingAllTabClosures
                 : "Modifying mTabClosureEvents while committing all tab closures.";
 
-        mTabClosureEvents.add(new TabClosureEvent(tabs, undoRunnable));
+        mTabClosureEvents.add(new TabClosureEvent(tabs, undoRunnable, tabClosingSource));
     }
 
     /**
@@ -375,7 +394,7 @@ public class PendingTabClosureManager {
 
             if (event.allTabsHandled()) {
                 events.remove();
-                commitClosuresInternal(event.getList());
+                commitClosuresInternal(event);
             }
             break;
         }
@@ -407,7 +426,7 @@ public class PendingTabClosureManager {
                 events.remove();
                 List<Tab> closingTabs = event.getList();
                 if (!closingTabs.isEmpty()) {
-                    commitClosuresInternal(closingTabs);
+                    commitClosuresInternal(closingTabs, event.getTabClosingSource());
                 }
                 mDelegate.notifyOnCancelingTabClosure(event.getUndoRunnable());
             }
@@ -432,7 +451,7 @@ public class PendingTabClosureManager {
             events.remove();
             // This calls notifyOnFinishingMultipleTabClosure once per TabClosureEvent. This is
             // intended so that tabs closed as distinct events are recorded as such.
-            commitClosuresInternal(event.getList());
+            commitClosuresInternal(event);
         }
 
         mIsCommittingAllTabClosures = false;
@@ -473,7 +492,11 @@ public class PendingTabClosureManager {
         return event.getTimestamp();
     }
 
-    private void commitClosuresInternal(List<Tab> tabs) {
+    private void commitClosuresInternal(TabClosureEvent event) {
+        commitClosuresInternal(event.getList(), event.getTabClosingSource());
+    }
+
+    private void commitClosuresInternal(List<Tab> tabs, @TabClosingSource int closingSource) {
         // Remove tabs first to prevent additional commit attempts in response to closing e.g.
         // UndoBarController when dismissing snackbars. This avoids re-entrancy issues when
         // closing all due to checks at commitTabClosure. This requires all accesses are on the UI
@@ -485,7 +508,7 @@ public class PendingTabClosureManager {
         }
         mDelegate.notifyOnFinishingMultipleTabClosure(tabs);
         for (Tab tab : tabs) {
-            mDelegate.finalizeClosure(tab);
+            mDelegate.finalizeClosure(tab, closingSource);
         }
     }
 

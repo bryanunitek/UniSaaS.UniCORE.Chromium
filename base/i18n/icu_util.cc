@@ -4,6 +4,8 @@
 
 #include "base/i18n/icu_util.h"
 
+#include "base/i18n/icubridge/default_icu_locale.h"
+#include "base/i18n/language_tag.h"
 #include "build/build_config.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -16,18 +18,25 @@
 #include <string>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/debug/alias.h"
 #include "base/debug/crash_logging.h"
 #include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
+#include "base/functional/bind.h"
+#include "base/i18n/rtl.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/metrics_hashes.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "build/chromecast_buildflags.h"
 #include "third_party/icu/source/common/unicode/putil.h"
 #include "third_party/icu/source/common/unicode/uclean.h"
@@ -61,6 +70,9 @@
 
 namespace base::i18n {
 
+// Exposed to help debug https://crbug.com/40064988
+bool g_icu_initialized = false;
+
 namespace {
 
 #if DCHECK_IS_ON()
@@ -68,7 +80,6 @@ namespace {
 // function isn't harmful (ICU can handle it), being called twice probably
 // indicates a programming error.
 bool g_check_called_once = true;
-bool g_called_once = false;
 #endif  // DCHECK_IS_ON()
 
 #if (ICU_UTIL_DATA_IMPL == ICU_UTIL_DATA_FILE)
@@ -357,11 +368,22 @@ enum class ICUCreateInstance {
 // There are multiple exposed InitializeIcu* functions. This should be called
 // as at the end of (the last functions in the sequence of) these functions.
 bool DoCommonInitialization() {
-  // TODO(jungshik): Some callers do not care about tz at all. If necessary,
-  // add a boolean argument to this function to init the default tz only
-  // when requested.
-  InitializeIcuTimeZone();
+  UErrorCode status = U_ZERO_ERROR;
+  u_init(&status);
+  if (!U_SUCCESS(status)) {
+    LOG(FATAL) << "Failed to initialize ICU with data file: "
+               << u_errorName(status);
+  }
 
+  // This is supposed to be the first time `GetDefaultIcuLocale()` is called and
+  // therefore, its initial "en-US" locale should be returned here.
+  if (GetDefaultIcuLocale() != GetKnownLanguageTag("en-US")) {
+    LOG(FATAL) << "ICU has been initialized but the default locale is not "
+                  "en-US. The current default locale is: "
+               << GetDefaultIcuLocale();
+  }
+
+  InitializeIcuTimeZone();
   utrace_setLevel(UTRACE_VERBOSE);
   return true;
 }
@@ -373,9 +395,9 @@ bool InitializeICUWithFileDescriptor(
     PlatformFile data_fd,
     const MemoryMappedFile::Region& data_region) {
 #if DCHECK_IS_ON()
-  DCHECK(!g_check_called_once || !g_called_once);
-  g_called_once = true;
+  DCHECK(!g_check_called_once || !g_icu_initialized);
 #endif
+  g_icu_initialized = true;
   if (!InitializeICUWithFileDescriptorInternal(data_fd, data_region)) {
     return false;
   }
@@ -414,9 +436,9 @@ void SetIcuTimeZoneDataDirForTesting(const char* dir) {
 
 bool InitializeICU() {
 #if DCHECK_IS_ON()
-  DCHECK(!g_check_called_once || !g_called_once);
-  g_called_once = true;
+  DCHECK(!g_check_called_once || !g_icu_initialized);
 #endif
+  g_icu_initialized = true;
 
 #if (ICU_UTIL_DATA_IMPL == ICU_UTIL_DATA_STATIC)
   // The ICU data is statically linked.
@@ -429,6 +451,31 @@ bool InitializeICU() {
 #endif  // (ICU_UTIL_DATA_IMPL == ICU_UTIL_DATA_STATIC)
 
   return DoCommonInitialization();
+}
+
+void PreReadIcuData() {
+#if (ICU_UTIL_DATA_IMPL == ICU_UTIL_DATA_FILE) && BUILDFLAG(IS_WIN)
+  if (!g_icudtl_mapped_file || !g_icudtl_mapped_file->IsValid()) {
+    return;
+  }
+  span<const uint8_t> bytes = g_icudtl_mapped_file->bytes();
+  if (bytes.empty()) {
+    return;
+  }
+  ThreadPool::PostTask(
+      FROM_HERE, {MayBlock()},
+      BindOnce(
+          [](span<const uint8_t> bytes) {
+            ScopedBlockingCall scoped_blocking_call(FROM_HERE,
+                                                    BlockingType::MAY_BLOCK);
+            ::_WIN32_MEMORY_RANGE_ENTRY address_range = {
+                const_cast<uint8_t*>(bytes.data()), bytes.size()};
+            ::PrefetchVirtualMemory(::GetCurrentProcess(),
+                                    /*NumberOfEntries=*/1, &address_range,
+                                    /*Flags=*/0);
+          },
+          bytes));
+#endif  // (ICU_UTIL_DATA_IMPL == ICU_UTIL_DATA_FILE) && BUILDFLAG(IS_WIN)
 }
 
 void AllowMultipleInitializeCallsForTesting() {

@@ -23,7 +23,12 @@
 
 namespace crypto::hpke {
 
-enum class KemType { kX25519HkdfSha256 };
+enum class KemType {
+  kX25519HkdfSha256,
+  // ML-KEM-768 only supports Base mode (`Seal` and `Open`), not Auth mode
+  // (`AuthSeal` and `AuthOpen`).
+  kMlkem768,
+};
 enum class KdfType { kHkdfSha256 };
 enum class AeadType { kChaCha20Poly1305, kAes128Gcm, kAes256Gcm };
 
@@ -35,8 +40,9 @@ struct HpkeParams {
 
 // One-shot encryption in Auth mode.
 // Returns a vector containing the encapsulated shared secret followed by the
-// ciphertext, or nullopt on failure. See RFC 9180 section 6.1 for a
-// description of this one-shot mode.
+// ciphertext, or nullopt on failure. Note that ML-KEM (`KemType::kMlkem768`)
+// does not support Auth mode and will return nullopt. See RFC 9180 section 6.1
+// for a description of this one-shot mode.
 CRYPTO_EXPORT std::optional<std::vector<uint8_t>> AuthSeal(
     const HpkeParams& params,
     const crypto::keypair::PrivateKey& sender,
@@ -46,10 +52,11 @@ CRYPTO_EXPORT std::optional<std::vector<uint8_t>> AuthSeal(
     base::span<const uint8_t> ad);
 
 // One-shot decryption in Auth mode.
-// Returns the decrypted plaintext, or nullopt on failure.
+// Returns the decrypted plaintext, or nullopt on failure. Note that ML-KEM
+// (`KemType::kMlkem768`) does not support Auth mode and will return nullopt.
 //
-// `encrypted_data` should contain the encapsulated shared secret (32 bytes)
-// followed by the ciphertext. See RFC 9180 section 6.1.
+// `encrypted_data` should contain the encapsulated shared secret followed by
+// the ciphertext. See RFC 9180 section 6.1.
 CRYPTO_EXPORT std::optional<std::vector<uint8_t>> AuthOpen(
     const HpkeParams& params,
     const crypto::keypair::PrivateKey& receiver,
@@ -71,8 +78,8 @@ CRYPTO_EXPORT std::optional<std::vector<uint8_t>> Seal(
 // One-shot decryption in Base mode.
 // Returns the decrypted plaintext, or nullopt on failure.
 //
-// `encrypted_data` should contain the encapsulated shared secret (32 bytes)
-// followed by the ciphertext.
+// `encrypted_data` should contain the encapsulated shared secret followed by
+// the ciphertext.
 CRYPTO_EXPORT std::optional<std::vector<uint8_t>> Open(
     const HpkeParams& params,
     const crypto::keypair::PrivateKey& receiver,

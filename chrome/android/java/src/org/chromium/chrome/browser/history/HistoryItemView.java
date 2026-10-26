@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.history;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
 import android.text.TextUtils;
 import android.util.AttributeSet;
@@ -23,7 +24,7 @@ import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.history.AppFilterCoordinator.AppInfo;
+import org.chromium.chrome.browser.history.FilterSheetCoordinator.FilterItem;
 import org.chromium.chrome.browser.history.HistoryContentManager.AppInfoCache;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper.DefaultFaviconHelper;
 import org.chromium.chrome.browser.ui.favicon.FaviconUtils;
@@ -79,7 +80,7 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
         ImageViewCompat.setImageTintList(
                 mRemoveButton,
                 getContext().getColorStateList(R.color.default_icon_color_secondary_tint_list));
-        mRemoveButton.setOnClickListener(v -> remove());
+        mRemoveButton.setOnClickListener(_ -> remove());
         mRemoveButton.setScaleType(ScaleType.CENTER_INSIDE);
         mRemoveButton.setPaddingRelative(
                 getResources()
@@ -152,7 +153,7 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
                             ? R.drawable.ic_expand_less_black_24dp
                             : R.drawable.ic_expand_more_black_24dp);
             mRemoveButton.setOnClickListener(
-                    v -> {
+                    _ -> {
                         if (mClusterToggleHandler != null) mClusterToggleHandler.run();
                     });
             mRemoveButton.setContentDescription(
@@ -163,7 +164,7 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
                                             : R.string.accessibility_expand_section));
         } else {
             mRemoveButton.setImageResource(R.drawable.btn_delete_24dp);
-            mRemoveButton.setOnClickListener(v -> remove());
+            mRemoveButton.setOnClickListener(_ -> remove());
             mRemoveButton.setContentDescription(getContext().getString(R.string.remove));
         }
         updateSparkVisibility();
@@ -197,8 +198,8 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
         if (mShowSourceApp.getAsBoolean()) {
             String appId = item.getAppId();
             if (appId != null) {
-                AppInfo appInfo = mAppInfoCache.get(appId);
-                if (appInfo.isValid()) {
+                FilterItem<String> appInfo = mAppInfoCache.get(appId);
+                if (appInfo != null) {
                     var sourceApp =
                             getResources()
                                     .getString(R.string.history_app_attribution, appInfo.label);
@@ -264,7 +265,7 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
         if (item == null || item.wasBlockedVisit()) return;
         item.getLargeIconForUrl(
                 mMinIconSize,
-                (icon, fallbackColor, isFallbackColorDefault, iconType) -> {
+                (@Nullable Bitmap icon, int fallbackColor, boolean _, int _) -> {
                     // Prevent stale icons from making it through to the UI.
                     if (item != getItem()) return;
 

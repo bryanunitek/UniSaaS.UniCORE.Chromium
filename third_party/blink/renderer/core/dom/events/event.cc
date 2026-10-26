@@ -220,6 +220,7 @@ bool Event::IsClipboardEvent() const {
 }
 
 bool Event::IsBeforeTextInsertedEvent() const {
+  DCHECK(!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled());
   return false;
 }
 
@@ -236,10 +237,6 @@ bool Event::IsErrorEvent() const {
 }
 
 bool Event::IsPatchEvent() const {
-  return false;
-}
-
-bool Event::IsRouteEvent() const {
   return false;
 }
 
@@ -281,17 +278,17 @@ void Event::SetTarget(EventTarget* target) {
 
 void Event::ReceivedTarget() {}
 
-Element* Event::Retarget(Element* element) const {
-  if (!element) {
+Node* Event::Retarget(Node* node) const {
+  if (!node) {
     return nullptr;
   }
   if (EventTarget* current_target = currentTarget()) {
     if (auto* current_target_node = current_target->ToNode()) {
-      return &current_target_node->GetTreeScope().Retarget(*element);
+      return &current_target_node->GetTreeScope().Retarget(*node);
     }
   }
   // retarget against the topmost TreeScope if there isn't a current target.
-  return &element->GetDocument().Retarget(*element);
+  return &node->GetDocument().Retarget(*node);
 }
 
 void Event::SetUnderlyingEvent(const Event* ue) {
@@ -426,7 +423,7 @@ CSSPseudoElement* Event::pseudoTarget() const {
   if (!RuntimeEnabledFeatures::CSSPseudoElementInterfaceEnabled()) {
     return nullptr;
   }
-  if (!pseudo_element_target_) {
+  if (!pseudo_element_target_ || !current_target_) {
     return nullptr;
   }
 
@@ -446,7 +443,11 @@ CSSPseudoElement* Event::pseudoTarget() const {
     }
   }
 
-  return pseudo_element_target_.Get();
+  Element* originating_element = pseudo_element_target_->element();
+  if (Retarget(originating_element) == originating_element) {
+    return pseudo_element_target_.Get();
+  }
+  return nullptr;
 }
 
 }  // namespace blink

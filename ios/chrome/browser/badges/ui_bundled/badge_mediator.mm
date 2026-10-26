@@ -35,13 +35,13 @@
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter_observer_bridge.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_request_queue.h"
-#import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/reader_mode/model/reader_mode_tab_helper.h"
 #import "ios/chrome/browser/reader_mode/model/reader_mode_tab_helper_observer_bridge.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer_bridge.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/location_bar_badge_commands.h"
+#import "ios/chrome/browser/shared/public/commands/page_info_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/list_model/list_model.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
@@ -80,14 +80,15 @@ bool IsInfobarTypeSupportedInReaderMode(InfobarType infobarType,
     case InfobarType::kInfobarTypeCollaborationGroup:
     case InfobarType::kInfobarTypeCollaborationOutOfDate:
     case InfobarType::kInfobarTypeSaveCvc:
+    case InfobarType::kInfobarTypeContextualCue:
       return IsProactiveSuggestionsFrameworkEnabled();
     case InfobarType::kInfobarTypeAutofillAiSaveEntity:
-      // This infobar does not support badges.
+      // This infobar is not supported in reader mode since forms are not shown
+      // in reader mode, so the user shouldn't be able to submit a form.
       return false;
   }
 }
 
-// TODO(crbug.com/458142962): Migrate to LocationBarBadgeType.
 // Helper method to convert a `BadgeType` to a `LocationBarBadgeType. Serves as
 // a strict switch case to ensure that there's parity between both types.
 LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
@@ -492,7 +493,7 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
 }
 
 - (void)showModalForBadgeType:(BadgeType)badgeType {
-  [self addModalRequestForInfobarType:InfobarTypeForBadgeType(badgeType)];
+  [self handleActionForInfobarType:InfobarTypeForBadgeType(badgeType)];
 }
 
 #pragma mark - InfobarBadgeTabHelperDelegate
@@ -501,37 +502,7 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
   if (!self.active) {
     return NO;
   }
-  if (base::FeatureList::IsEnabled(kAutofillBadgeRemoval)) {
-    // TODO(crbug.com/440366193): Remove this ad hoc logic once we can fully
-    // cleanup the autofill and password badges code once we are done
-    // experimenting.
-    switch (infobarType) {
-      case InfobarType::kInfobarTypePasswordSave:
-      case InfobarType::kInfobarTypePasswordUpdate:
-      case InfobarType::kInfobarTypeSaveCard:
-      case InfobarType::kInfobarTypeSaveAutofillAddressProfile:
-      case InfobarType::kInfobarTypeAutofillAiSaveEntity:
-        // Special case where we dynamically want to exclude the badge for
-        // certain infobars while still keeping a badge type for the infobar
-        // in BadgeTypeForInfobarType(). This ad hoc logic is temporary the
-        // time we sunset these badges.
-        return false;
-      case InfobarType::kInfobarTypeConfirm:
-      case InfobarType::kInfobarTypeTranslate:
-      case InfobarType::kInfobarTypePermissions:
-      case InfobarType::kInfobarTypeTailoredSecurityService:
-      case InfobarType::kInfobarTypeSyncError:
-      case InfobarType::kInfobarTypeEnhancedSafeBrowsing:
-      case InfobarType::kInfobarTypeSignin:
-      case InfobarType::kInfobarTypeCollaborationGroup:
-      case InfobarType::kInfobarTypeCollaborationOutOfDate:
-      case InfobarType::kInfobarTypeSaveCvc:
-      case InfobarType::kInfobarTypeReaderMode:
-        return BadgeTypeForInfobarType(infobarType) != kBadgeTypeNone;
-    }
-  } else {
-    return BadgeTypeForInfobarType(infobarType) != kBadgeTypeNone;
-  }
+  return IsBadgeSupportedForInfobarType(infobarType);
 }
 
 - (void)updateBadgesShownForWebState:(web::WebState*)webState {
@@ -710,11 +681,21 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
   }
 }
 
-// Shows the modal UI when `button` is tapped.
+// Shows the UI when `button` is tapped.
 - (void)handleTappedBadgeButton:(BadgeButton*)button {
   InfobarType infobarType = InfobarTypeForBadgeType(button.badgeType);
-  [self addModalRequestForInfobarType:infobarType];
+  [self handleActionForInfobarType:infobarType];
   [self recordMetricsForBadgeButton:button infobarType:infobarType];
+}
+
+// Presents the UI associated with the Infobar of `infobarType`.
+- (void)handleActionForInfobarType:(InfobarType)infobarType {
+  if (infobarType == InfobarType::kInfobarTypePermissions &&
+      IsDomainLevelSitePermissionsEnabled()) {
+    [self.pageInfoHandler showPageInfo];
+    return;
+  }
+  [self addModalRequestForInfobarType:infobarType];
 }
 
 // Adds a modal request for the Infobar of `infobarType`.

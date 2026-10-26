@@ -41,7 +41,7 @@ MessagingDelegate::PolicyPermission
 ChromeMessagingDelegate::IsNativeMessagingHostAllowed(
     content::BrowserContext* browser_context,
     const std::string& native_host_name) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   PrefService* pref_service =
       Profile::FromBrowserContext(browser_context)->GetPrefs();
@@ -123,14 +123,16 @@ ChromeMessagingDelegate::CreateReceiverForNativeApp(
     const PortId& receiver_port_id,
     const std::string& native_app_name,
     bool allow_user_level,
+    const SigningCertificates& android_certificates,
     std::string* error_out) {
+  CHECK(error_out);
 #if BUILDFLAG(IS_ANDROID)
   // On Android, `native_app_name` represents the target package name.
-  return std::make_unique<NativeMessageAndroidPort>(
-      browser_context, channel_delegate, receiver_port_id, extension_id,
-      native_app_name);
+  return NativeMessageAndroidPort::Create(
+      Profile::FromBrowserContext(browser_context), channel_delegate,
+      receiver_port_id, native_app_name, extension_id, android_certificates,
+      error_out);
 #else
-  DCHECK(error_out);
   gfx::NativeView native_view =
       source ? source->GetNativeView() : gfx::NativeView();
   std::unique_ptr<NativeMessageHost> native_host =
@@ -150,7 +152,7 @@ void ChromeMessagingDelegate::QueryIncognitoConnectability(
     content::WebContents* source_contents,
     const GURL& source_url,
     base::OnceCallback<void(bool)> callback) {
-  DCHECK(context->IsOffTheRecord());
+  CHECK(context->IsOffTheRecord(), base::NotFatalUntil::M161);
   IncognitoConnectability::Get(context)->Query(
       target_extension, source_contents, source_url, std::move(callback));
 }

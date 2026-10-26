@@ -19,6 +19,7 @@
 #include "base/feature_list.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -37,13 +38,13 @@
 #include "components/autofill/core/browser/heuristic_source.h"
 #include "components/autofill/core/browser/proto/api_v1.pb.h"
 #include "components/autofill/core/browser/studies/autofill_experiments.h"
-#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_util.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/autocomplete_parsing_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/form_field_data.h"
@@ -66,6 +67,7 @@ using ::autofill::test::FormDataEq;
 using ::testing::AllOf;
 using ::testing::Each;
 using ::testing::ElementsAre;
+using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::Not;
 using ::testing::Pointee;
@@ -512,7 +514,7 @@ TEST_F(FormStructureTestImpl,
 }
 
 // Tests whether the heuristics and server predictions are run for forms with
-// fewer than 3 fields  and no autocomplete attributes.
+// fewer than 3 fields and no autocomplete attributes.
 TEST_F(FormStructureTestImpl,
        HeuristicsAndServerPredictions_SmallForm_NoAutocompleteAttribute) {
   FormData form;
@@ -531,10 +533,13 @@ TEST_F(FormStructureTestImpl,
   field.set_renderer_id(test::MakeFieldRendererId());
   test_api(form).Append(field);
 
-  EXPECT_FALSE(
-      ShouldRunHeuristics(FormStructure(form), /*ignore_small_forms=*/true));
+  EXPECT_FALSE(GetFormParsingPermissions(FormStructure(form),
+                                         /*ignore_small_forms=*/true)
+                   .contains(FormParsingPermission::kHeuristics));
 
-  EXPECT_TRUE(ShouldBeQueried(FormStructure(form)));
+  EXPECT_TRUE(GetFormParsingPermissions(FormStructure(form),
+                                        /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kServerQuery));
 
   // Default configuration.
   {
@@ -545,12 +550,12 @@ TEST_F(FormStructureTestImpl,
     regex_predictions.ApplyTo(form_structure.fields());
     form_structure.RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                 LanguageCode(""), nullptr);
-    ASSERT_EQ(2U, form_structure.field_count());
-    ASSERT_EQ(0U, AutofillCount(form_structure));
-    EXPECT_EQ(UNKNOWN_TYPE, form_structure.field(0)->heuristic_type());
-    EXPECT_EQ(UNKNOWN_TYPE, form_structure.field(1)->heuristic_type());
-    EXPECT_EQ(NO_SERVER_DATA, form_structure.field(0)->server_type());
-    EXPECT_EQ(NO_SERVER_DATA, form_structure.field(1)->server_type());
+    ASSERT_EQ(form_structure.field_count(), 2U);
+    ASSERT_EQ(AutofillCount(form_structure), 0U);
+    EXPECT_EQ(form_structure.field(0)->heuristic_type(), UNKNOWN_TYPE);
+    EXPECT_EQ(form_structure.field(1)->heuristic_type(), UNKNOWN_TYPE);
+    EXPECT_EQ(form_structure.field(0)->server_type(), NO_SERVER_DATA);
+    EXPECT_EQ(form_structure.field(1)->server_type(), NO_SERVER_DATA);
     EXPECT_FALSE(IsAutofillable(form_structure));
   }
 }
@@ -562,9 +567,12 @@ TEST_F(FormStructureTestImpl,
   FormData form = test::GetFormData(
       {.fields = {{.role = NAME_FULL}, {.role = EMAIL_ADDRESS}}});
 
-  EXPECT_TRUE(
-      ShouldRunHeuristics(FormStructure(form), /*ignore_small_forms=*/false));
-  EXPECT_TRUE(ShouldBeQueried(FormStructure(form)));
+  EXPECT_TRUE(GetFormParsingPermissions(FormStructure(form),
+                                        /*ignore_small_forms=*/false)
+                  .contains(FormParsingPermission::kHeuristics));
+  EXPECT_TRUE(GetFormParsingPermissions(FormStructure(form),
+                                        /*ignore_small_forms=*/false)
+                  .contains(FormParsingPermission::kServerQuery));
 
   FormStructure form_structure(form);
   const RegexPredictions regex_predictions = DetermineRegexTypes(
@@ -575,10 +583,10 @@ TEST_F(FormStructureTestImpl,
                                               LanguageCode(""), nullptr);
 
   // The predictions should stay since small forms were not ignored.
-  ASSERT_EQ(2U, form_structure.field_count());
-  ASSERT_EQ(2U, AutofillCount(form_structure));
-  EXPECT_EQ(NAME_FULL, form_structure.field(0)->heuristic_type());
-  EXPECT_EQ(EMAIL_ADDRESS, form_structure.field(1)->heuristic_type());
+  ASSERT_EQ(form_structure.field_count(), 2U);
+  ASSERT_EQ(AutofillCount(form_structure), 2U);
+  EXPECT_EQ(form_structure.field(0)->heuristic_type(), NAME_FULL);
+  EXPECT_EQ(form_structure.field(1)->heuristic_type(), EMAIL_ADDRESS);
   EXPECT_TRUE(IsAutofillable(form_structure));
 }
 
@@ -595,9 +603,12 @@ TEST_F(FormStructureTestImpl,
                            FormControlType::kInputText, "given-name"),
        CreateTestFormField("Last Name", "lastname", "",
                            FormControlType::kInputText, "")});
-  EXPECT_FALSE(
-      ShouldRunHeuristics(FormStructure(form), /*ignore_small_forms=*/true));
-  EXPECT_TRUE(ShouldBeQueried(FormStructure(form)));
+  EXPECT_FALSE(GetFormParsingPermissions(FormStructure(form),
+                                         /*ignore_small_forms=*/true)
+                   .contains(FormParsingPermission::kHeuristics));
+  EXPECT_TRUE(GetFormParsingPermissions(FormStructure(form),
+                                        /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kServerQuery));
 
   // As a side effect of parsing small forms, if any of the heuristics, query,
   // or upload minimums are disabled, we'll autofill fields with an
@@ -612,10 +623,10 @@ TEST_F(FormStructureTestImpl,
     regex_predictions.ApplyTo(form_structure.fields());
     form_structure.RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                 LanguageCode(""), nullptr);
-    ASSERT_EQ(1U, form_structure.field_count());
-    ASSERT_EQ(1U, AutofillCount(form_structure));
-    EXPECT_EQ(UNKNOWN_TYPE, form_structure.field(0)->heuristic_type());
-    EXPECT_EQ(NO_SERVER_DATA, form_structure.field(0)->server_type());
+    ASSERT_EQ(form_structure.field_count(), 1U);
+    ASSERT_EQ(AutofillCount(form_structure), 1U);
+    EXPECT_EQ(form_structure.field(0)->heuristic_type(), UNKNOWN_TYPE);
+    EXPECT_EQ(form_structure.field(0)->server_type(), NO_SERVER_DATA);
     EXPECT_THAT(form_structure.field(0)->Type().GetTypes(),
                 ElementsAre(NAME_FIRST));
     EXPECT_TRUE(IsAutofillable(form_structure));
@@ -636,8 +647,11 @@ TEST_F(FormStructureTestImpl, PromoCodeHeuristics_SmallForm) {
   field.set_renderer_id(test::MakeFieldRendererId());
   test_api(form).Append(field);
 
-  EXPECT_TRUE(ShouldRunHeuristicsForSingleFields(FormStructure(form)));
-  EXPECT_TRUE(ShouldRunHeuristicsForSingleFields(form));
+  EXPECT_TRUE(GetFormParsingPermissions(FormStructure(form),
+                                        /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kSingleFieldHeuristics));
+  EXPECT_TRUE(GetFormParsingPermissions(form, /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kSingleFieldHeuristics));
 
   // Default configuration.
   {
@@ -648,18 +662,18 @@ TEST_F(FormStructureTestImpl, PromoCodeHeuristics_SmallForm) {
     regex_predictions.ApplyTo(form_structure.fields());
     form_structure.RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                 LanguageCode(""), nullptr);
-    ASSERT_EQ(1U, form_structure.field_count());
-    ASSERT_EQ(1U, AutofillCount(form_structure));
-    EXPECT_EQ(MERCHANT_PROMO_CODE, form_structure.field(0)->heuristic_type());
-    EXPECT_EQ(NO_SERVER_DATA, form_structure.field(0)->server_type());
+    ASSERT_EQ(form_structure.field_count(), 1U);
+    ASSERT_EQ(AutofillCount(form_structure), 1U);
+    EXPECT_EQ(form_structure.field(0)->heuristic_type(), MERCHANT_PROMO_CODE);
+    EXPECT_EQ(form_structure.field(0)->server_type(), NO_SERVER_DATA);
     EXPECT_TRUE(IsAutofillable(form_structure));
   }
 }
 
-// Even with an 'autocomplete' attribute set, ShouldBeQueried() should
-// return true if the structure contains a password field, since there are
-// no local heuristics to depend upon in this case. Fields will still not be
-// considered autofillable though.
+// Even with an 'autocomplete' attribute set, kServerQuery should be present if
+// the structure contains a password field, since there are no local heuristics
+// to depend upon in this case. Fields will still not be considered autofillable
+// though.
 TEST_F(FormStructureTestImpl, PasswordFormShouldBeQueried) {
   FormData form;
   form.set_url(GURL("http://www.foo.com/"));
@@ -682,8 +696,12 @@ TEST_F(FormStructureTestImpl, PasswordFormShouldBeQueried) {
       std::ranges::any_of(form_structure.fields(), [](const auto& field) {
         return field->form_control_type() == FormControlType::kInputPassword;
       }));
-  EXPECT_TRUE(ShouldBeQueried(form_structure));
-  EXPECT_TRUE(ShouldBeUploaded(form_structure));
+  EXPECT_TRUE(GetFormParsingPermissions(form_structure,
+                                        /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kServerQuery));
+  EXPECT_TRUE(GetFormParsingPermissions(form_structure,
+                                        /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kServerUpload));
 }
 
 // Verify that we can correctly process a degenerate section listed in the
@@ -717,8 +735,8 @@ TEST_F(FormStructureTestImpl,
                                               LanguageCode(""), nullptr);
 
   // Expect the correct number of fields.
-  ASSERT_EQ(6U, form_structure.field_count());
-  EXPECT_EQ(2U, AutofillCount(form_structure));
+  ASSERT_EQ(form_structure.field_count(), 6U);
+  EXPECT_EQ(AutofillCount(form_structure), 2U);
 
   // All of the fields in this form should be parsed as belonging to the same
   // section.
@@ -726,7 +744,7 @@ TEST_F(FormStructureTestImpl,
   for (size_t i = 0; i < 6; ++i) {
     section_names.insert(form_structure.field(i)->section());
   }
-  EXPECT_EQ(1U, section_names.size());
+  EXPECT_EQ(section_names.size(), 1U);
 }
 
 // Verify that we can correctly process repeated sections listed in the
@@ -748,8 +766,8 @@ TEST_F(FormStructureTestImpl,
                                               LanguageCode(""), nullptr);
 
   // Expect the correct number of fields.
-  ASSERT_EQ(2U, form_structure.field_count());
-  EXPECT_EQ(2U, AutofillCount(form_structure));
+  ASSERT_EQ(form_structure.field_count(), 2U);
+  EXPECT_EQ(AutofillCount(form_structure), 2U);
 
   // All of the fields in this form should be parsed as belonging to the same
   // section.
@@ -757,7 +775,7 @@ TEST_F(FormStructureTestImpl,
   for (size_t i = 0; i < 2; ++i) {
     section_names.insert(form_structure.field(i)->section());
   }
-  EXPECT_EQ(1U, section_names.size());
+  EXPECT_EQ(section_names.size(), 1U);
 }
 
 TEST_F(FormStructureTestImpl, HeuristicsSample8) {
@@ -827,30 +845,30 @@ TEST_F(FormStructureTestImpl, HeuristicsSample8) {
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
   EXPECT_TRUE(IsAutofillable(*form_structure));
-  ASSERT_EQ(10U, form_structure->field_count());
-  ASSERT_EQ(9U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 10U);
+  ASSERT_EQ(AutofillCount(*form_structure), 9U);
 
   // First name.
-  EXPECT_EQ(NAME_FIRST, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), NAME_FIRST);
   // Last name.
-  EXPECT_EQ(NAME_LAST, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), NAME_LAST);
   // Address.
-  EXPECT_EQ(ADDRESS_HOME_LINE1, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), ADDRESS_HOME_LINE1);
   // Address.
-  EXPECT_EQ(ADDRESS_HOME_LINE2, form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(), ADDRESS_HOME_LINE2);
   // City.
-  EXPECT_EQ(ADDRESS_HOME_CITY, form_structure->field(4)->heuristic_type());
+  EXPECT_EQ(form_structure->field(4)->heuristic_type(), ADDRESS_HOME_CITY);
   // State.
-  EXPECT_EQ(ADDRESS_HOME_STATE, form_structure->field(5)->heuristic_type());
+  EXPECT_EQ(form_structure->field(5)->heuristic_type(), ADDRESS_HOME_STATE);
   // Zip.
-  EXPECT_EQ(ADDRESS_HOME_ZIP, form_structure->field(6)->heuristic_type());
+  EXPECT_EQ(form_structure->field(6)->heuristic_type(), ADDRESS_HOME_ZIP);
   // Country.
-  EXPECT_EQ(ADDRESS_HOME_COUNTRY, form_structure->field(7)->heuristic_type());
+  EXPECT_EQ(form_structure->field(7)->heuristic_type(), ADDRESS_HOME_COUNTRY);
   // Phone.
-  EXPECT_EQ(PHONE_HOME_CITY_AND_NUMBER,
-            form_structure->field(8)->heuristic_type());
+  EXPECT_EQ(form_structure->field(8)->heuristic_type(),
+            PHONE_HOME_CITY_AND_NUMBER);
   // Submit.
-  EXPECT_EQ(UNKNOWN_TYPE, form_structure->field(9)->heuristic_type());
+  EXPECT_EQ(form_structure->field(9)->heuristic_type(), UNKNOWN_TYPE);
 }
 
 TEST_F(FormStructureTestImpl, HeuristicsSample6) {
@@ -906,23 +924,23 @@ TEST_F(FormStructureTestImpl, HeuristicsSample6) {
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
   EXPECT_TRUE(IsAutofillable(*form_structure));
-  ASSERT_EQ(7U, form_structure->field_count());
-  ASSERT_EQ(6U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 7U);
+  ASSERT_EQ(AutofillCount(*form_structure), 6U);
 
   // Email.
-  EXPECT_EQ(EMAIL_ADDRESS, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), EMAIL_ADDRESS);
   // Full name.
-  EXPECT_EQ(NAME_FULL, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), NAME_FULL);
   // Company
-  EXPECT_EQ(COMPANY_NAME, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), COMPANY_NAME);
   // Address.
-  EXPECT_EQ(ADDRESS_HOME_LINE1, form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(), ADDRESS_HOME_LINE1);
   // City.
-  EXPECT_EQ(ADDRESS_HOME_CITY, form_structure->field(4)->heuristic_type());
+  EXPECT_EQ(form_structure->field(4)->heuristic_type(), ADDRESS_HOME_CITY);
   // Zip.
-  EXPECT_EQ(ADDRESS_HOME_ZIP, form_structure->field(5)->heuristic_type());
+  EXPECT_EQ(form_structure->field(5)->heuristic_type(), ADDRESS_HOME_ZIP);
   // Submit.
-  EXPECT_EQ(UNKNOWN_TYPE, form_structure->field(6)->heuristic_type());
+  EXPECT_EQ(form_structure->field(6)->heuristic_type(), UNKNOWN_TYPE);
 }
 
 // Tests a sequence of FormFields where only labels are supplied to heuristics
@@ -985,26 +1003,26 @@ TEST_F(FormStructureTestImpl, HeuristicsLabelsOnly) {
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
   EXPECT_TRUE(IsAutofillable(*form_structure));
-  ASSERT_EQ(8U, form_structure->field_count());
-  ASSERT_EQ(7U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 8U);
+  ASSERT_EQ(AutofillCount(*form_structure), 7U);
 
   // First name.
-  EXPECT_EQ(NAME_FIRST, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), NAME_FIRST);
   // Last name.
-  EXPECT_EQ(NAME_LAST, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), NAME_LAST);
   // Email.
-  EXPECT_EQ(EMAIL_ADDRESS, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), EMAIL_ADDRESS);
   // Phone.
-  EXPECT_EQ(PHONE_HOME_CITY_AND_NUMBER,
-            form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(),
+            PHONE_HOME_CITY_AND_NUMBER);
   // Address.
-  EXPECT_EQ(ADDRESS_HOME_LINE1, form_structure->field(4)->heuristic_type());
+  EXPECT_EQ(form_structure->field(4)->heuristic_type(), ADDRESS_HOME_LINE1);
   // Address Line 2.
-  EXPECT_EQ(ADDRESS_HOME_LINE2, form_structure->field(5)->heuristic_type());
+  EXPECT_EQ(form_structure->field(5)->heuristic_type(), ADDRESS_HOME_LINE2);
   // Zip.
-  EXPECT_EQ(ADDRESS_HOME_ZIP, form_structure->field(6)->heuristic_type());
+  EXPECT_EQ(form_structure->field(6)->heuristic_type(), ADDRESS_HOME_ZIP);
   // Submit.
-  EXPECT_EQ(UNKNOWN_TYPE, form_structure->field(7)->heuristic_type());
+  EXPECT_EQ(form_structure->field(7)->heuristic_type(), UNKNOWN_TYPE);
 }
 
 TEST_F(FormStructureTestImpl, HeuristicsCreditCardInfo) {
@@ -1054,23 +1072,23 @@ TEST_F(FormStructureTestImpl, HeuristicsCreditCardInfo) {
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
   EXPECT_TRUE(IsAutofillable(*form_structure));
-  ASSERT_EQ(6U, form_structure->field_count());
-  ASSERT_EQ(5U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 6U);
+  ASSERT_EQ(AutofillCount(*form_structure), 5U);
 
   // Credit card name.
-  EXPECT_EQ(CREDIT_CARD_NAME_FULL, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), CREDIT_CARD_NAME_FULL);
   // Credit card number.
-  EXPECT_EQ(CREDIT_CARD_NUMBER, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), CREDIT_CARD_NUMBER);
   // Credit card expiration month.
-  EXPECT_EQ(CREDIT_CARD_EXP_MONTH, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), CREDIT_CARD_EXP_MONTH);
   // Credit card expiration year.
-  EXPECT_EQ(CREDIT_CARD_EXP_4_DIGIT_YEAR,
-            form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(),
+            CREDIT_CARD_EXP_4_DIGIT_YEAR);
   // CVV.
-  EXPECT_EQ(CREDIT_CARD_VERIFICATION_CODE,
-            form_structure->field(4)->heuristic_type());
+  EXPECT_EQ(form_structure->field(4)->heuristic_type(),
+            CREDIT_CARD_VERIFICATION_CODE);
   // Submit.
-  EXPECT_EQ(UNKNOWN_TYPE, form_structure->field(5)->heuristic_type());
+  EXPECT_EQ(form_structure->field(5)->heuristic_type(), UNKNOWN_TYPE);
 }
 
 TEST_F(FormStructureTestImpl, HeuristicsCreditCardInfoWithUnknownCardField) {
@@ -1127,25 +1145,25 @@ TEST_F(FormStructureTestImpl, HeuristicsCreditCardInfoWithUnknownCardField) {
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
   EXPECT_TRUE(IsAutofillable(*form_structure));
-  ASSERT_EQ(7U, form_structure->field_count());
-  ASSERT_EQ(5U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 7U);
+  ASSERT_EQ(AutofillCount(*form_structure), 5U);
 
   // Credit card name.
-  EXPECT_EQ(CREDIT_CARD_NAME_FULL, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), CREDIT_CARD_NAME_FULL);
   // Credit card type.  This is an unknown type but related to the credit card.
-  EXPECT_EQ(UNKNOWN_TYPE, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), UNKNOWN_TYPE);
   // Credit card number.
-  EXPECT_EQ(CREDIT_CARD_NUMBER, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), CREDIT_CARD_NUMBER);
   // Credit card expiration month.
-  EXPECT_EQ(CREDIT_CARD_EXP_MONTH, form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(), CREDIT_CARD_EXP_MONTH);
   // Credit card expiration year.
-  EXPECT_EQ(CREDIT_CARD_EXP_4_DIGIT_YEAR,
-            form_structure->field(4)->heuristic_type());
+  EXPECT_EQ(form_structure->field(4)->heuristic_type(),
+            CREDIT_CARD_EXP_4_DIGIT_YEAR);
   // CVV.
-  EXPECT_EQ(CREDIT_CARD_VERIFICATION_CODE,
-            form_structure->field(5)->heuristic_type());
+  EXPECT_EQ(form_structure->field(5)->heuristic_type(),
+            CREDIT_CARD_VERIFICATION_CODE);
   // Submit.
-  EXPECT_EQ(UNKNOWN_TYPE, form_structure->field(6)->heuristic_type());
+  EXPECT_EQ(form_structure->field(6)->heuristic_type(), UNKNOWN_TYPE);
 }
 
 TEST_F(FormStructureTestImpl, ThreeAddressLines) {
@@ -1184,17 +1202,17 @@ TEST_F(FormStructureTestImpl, ThreeAddressLines) {
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
   EXPECT_TRUE(IsAutofillable(*form_structure));
-  ASSERT_EQ(4U, form_structure->field_count());
-  ASSERT_EQ(4U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 4U);
+  ASSERT_EQ(AutofillCount(*form_structure), 4U);
 
   // Address Line 1.
-  EXPECT_EQ(ADDRESS_HOME_LINE1, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), ADDRESS_HOME_LINE1);
   // Address Line 2.
-  EXPECT_EQ(ADDRESS_HOME_LINE2, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), ADDRESS_HOME_LINE2);
   // Address Line 3.
-  EXPECT_EQ(ADDRESS_HOME_LINE3, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), ADDRESS_HOME_LINE3);
   // City.
-  EXPECT_EQ(ADDRESS_HOME_CITY, form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(), ADDRESS_HOME_CITY);
 }
 
 // Numbered address lines after line two are ignored.
@@ -1233,17 +1251,17 @@ TEST_F(FormStructureTestImpl, SurplusAddressLinesIgnored) {
   regex_predictions.ApplyTo(form_structure->fields());
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
-  ASSERT_EQ(4U, form_structure->field_count());
-  ASSERT_EQ(3U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 4U);
+  ASSERT_EQ(AutofillCount(*form_structure), 3U);
 
   // Address Line 1.
-  EXPECT_EQ(ADDRESS_HOME_LINE1, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), ADDRESS_HOME_LINE1);
   // Address Line 2.
-  EXPECT_EQ(ADDRESS_HOME_LINE2, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), ADDRESS_HOME_LINE2);
   // Address Line 3.
-  EXPECT_EQ(ADDRESS_HOME_LINE3, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), ADDRESS_HOME_LINE3);
   // Address Line 4 (ignored).
-  EXPECT_EQ(UNKNOWN_TYPE, form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(), UNKNOWN_TYPE);
 }
 
 // This example comes from expedia.com where they used to use a "Suite" label
@@ -1287,17 +1305,17 @@ TEST_F(FormStructureTestImpl, ThreeAddressLinesExpedia) {
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
   EXPECT_TRUE(IsAutofillable(*form_structure));
-  ASSERT_EQ(4U, form_structure->field_count());
-  EXPECT_EQ(4U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 4U);
+  EXPECT_EQ(AutofillCount(*form_structure), 4U);
 
   // Address Line 1.
-  EXPECT_EQ(ADDRESS_HOME_LINE1, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), ADDRESS_HOME_LINE1);
   // Suite / Apt.
-  EXPECT_EQ(ADDRESS_HOME_LINE2, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), ADDRESS_HOME_LINE2);
   // Address Line 3.
-  EXPECT_EQ(ADDRESS_HOME_LINE3, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), ADDRESS_HOME_LINE3);
   // City.
-  EXPECT_EQ(ADDRESS_HOME_CITY, form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(), ADDRESS_HOME_CITY);
 }
 
 // This example comes from ebay.com where the word "suite" appears in the label
@@ -1334,15 +1352,15 @@ TEST_F(FormStructureTestImpl, TwoAddressLinesEbay) {
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
   EXPECT_TRUE(IsAutofillable(*form_structure));
-  ASSERT_EQ(3U, form_structure->field_count());
-  ASSERT_EQ(3U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 3U);
+  ASSERT_EQ(AutofillCount(*form_structure), 3U);
 
   // Address Line 1.
-  EXPECT_EQ(ADDRESS_HOME_LINE1, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), ADDRESS_HOME_LINE1);
   // Address Line 2.
-  EXPECT_EQ(ADDRESS_HOME_LINE2, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), ADDRESS_HOME_LINE2);
   // City.
-  EXPECT_EQ(ADDRESS_HOME_CITY, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), ADDRESS_HOME_CITY);
 }
 
 TEST_F(FormStructureTestImpl, HeuristicsStateWithProvince) {
@@ -1376,15 +1394,15 @@ TEST_F(FormStructureTestImpl, HeuristicsStateWithProvince) {
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
   EXPECT_TRUE(IsAutofillable(*form_structure));
-  ASSERT_EQ(3U, form_structure->field_count());
-  ASSERT_EQ(3U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 3U);
+  ASSERT_EQ(AutofillCount(*form_structure), 3U);
 
   // Address Line 1.
-  EXPECT_EQ(ADDRESS_HOME_LINE1, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), ADDRESS_HOME_LINE1);
   // Address Line 2.
-  EXPECT_EQ(ADDRESS_HOME_LINE2, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), ADDRESS_HOME_LINE2);
   // State.
-  EXPECT_EQ(ADDRESS_HOME_STATE, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), ADDRESS_HOME_STATE);
 }
 
 // This example comes from lego.com's checkout page.
@@ -1459,21 +1477,21 @@ TEST_F(FormStructureTestImpl, HeuristicsWithBilling) {
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
   EXPECT_TRUE(IsAutofillable(*form_structure));
-  ASSERT_EQ(11U, form_structure->field_count());
-  ASSERT_EQ(11U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 11U);
+  ASSERT_EQ(AutofillCount(*form_structure), 11U);
 
-  EXPECT_EQ(NAME_FIRST, form_structure->field(0)->heuristic_type());
-  EXPECT_EQ(NAME_LAST, form_structure->field(1)->heuristic_type());
-  EXPECT_EQ(COMPANY_NAME, form_structure->field(2)->heuristic_type());
-  EXPECT_EQ(ADDRESS_HOME_LINE1, form_structure->field(3)->heuristic_type());
-  EXPECT_EQ(ADDRESS_HOME_LINE2, form_structure->field(4)->heuristic_type());
-  EXPECT_EQ(ADDRESS_HOME_CITY, form_structure->field(5)->heuristic_type());
-  EXPECT_EQ(ADDRESS_HOME_STATE, form_structure->field(6)->heuristic_type());
-  EXPECT_EQ(ADDRESS_HOME_COUNTRY, form_structure->field(7)->heuristic_type());
-  EXPECT_EQ(ADDRESS_HOME_ZIP, form_structure->field(8)->heuristic_type());
-  EXPECT_EQ(PHONE_HOME_CITY_AND_NUMBER,
-            form_structure->field(9)->heuristic_type());
-  EXPECT_EQ(EMAIL_ADDRESS, form_structure->field(10)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), NAME_FIRST);
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), NAME_LAST);
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), COMPANY_NAME);
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(), ADDRESS_HOME_LINE1);
+  EXPECT_EQ(form_structure->field(4)->heuristic_type(), ADDRESS_HOME_LINE2);
+  EXPECT_EQ(form_structure->field(5)->heuristic_type(), ADDRESS_HOME_CITY);
+  EXPECT_EQ(form_structure->field(6)->heuristic_type(), ADDRESS_HOME_STATE);
+  EXPECT_EQ(form_structure->field(7)->heuristic_type(), ADDRESS_HOME_COUNTRY);
+  EXPECT_EQ(form_structure->field(8)->heuristic_type(), ADDRESS_HOME_ZIP);
+  EXPECT_EQ(form_structure->field(9)->heuristic_type(),
+            PHONE_HOME_CITY_AND_NUMBER);
+  EXPECT_EQ(form_structure->field(10)->heuristic_type(), EMAIL_ADDRESS);
 }
 
 TEST_F(FormStructureTestImpl, ThreePartPhoneNumber) {
@@ -1518,15 +1536,15 @@ TEST_F(FormStructureTestImpl, ThreePartPhoneNumber) {
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
   EXPECT_TRUE(IsAutofillable(*form_structure));
-  ASSERT_EQ(4U, form_structure->field_count());
-  ASSERT_EQ(4U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 4U);
+  ASSERT_EQ(AutofillCount(*form_structure), 4U);
 
-  EXPECT_EQ(PHONE_HOME_CITY_CODE, form_structure->field(0)->heuristic_type());
-  EXPECT_EQ(PHONE_HOME_NUMBER_PREFIX,
-            form_structure->field(1)->heuristic_type());
-  EXPECT_EQ(PHONE_HOME_NUMBER_SUFFIX,
-            form_structure->field(2)->heuristic_type());
-  EXPECT_EQ(PHONE_HOME_EXTENSION, form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), PHONE_HOME_CITY_CODE);
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(),
+            PHONE_HOME_NUMBER_PREFIX);
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(),
+            PHONE_HOME_NUMBER_SUFFIX);
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(), PHONE_HOME_EXTENSION);
 }
 
 TEST_F(FormStructureTestImpl, HeuristicsInfernoCC) {
@@ -1572,20 +1590,20 @@ TEST_F(FormStructureTestImpl, HeuristicsInfernoCC) {
   EXPECT_TRUE(IsAutofillable(*form_structure));
 
   // Expect the correct number of fields.
-  ASSERT_EQ(5U, form_structure->field_count());
-  EXPECT_EQ(5U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 5U);
+  EXPECT_EQ(AutofillCount(*form_structure), 5U);
 
   // Name on Card.
-  EXPECT_EQ(CREDIT_CARD_NAME_FULL, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), CREDIT_CARD_NAME_FULL);
   // Address.
-  EXPECT_EQ(ADDRESS_HOME_LINE1, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), ADDRESS_HOME_LINE1);
   // Card Number.
-  EXPECT_EQ(CREDIT_CARD_NUMBER, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), CREDIT_CARD_NUMBER);
   // Expiration Date.
-  EXPECT_EQ(CREDIT_CARD_EXP_MONTH, form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(), CREDIT_CARD_EXP_MONTH);
   // Expiration Year.
-  EXPECT_EQ(CREDIT_CARD_EXP_4_DIGIT_YEAR,
-            form_structure->field(4)->heuristic_type());
+  EXPECT_EQ(form_structure->field(4)->heuristic_type(),
+            CREDIT_CARD_EXP_4_DIGIT_YEAR);
 }
 
 // Tests that the heuristics detect split credit card names if they appear in
@@ -1638,23 +1656,23 @@ TEST_F(FormStructureTestImpl, HeuristicsInferCCNames_NamesNotFirst) {
   EXPECT_TRUE(IsAutofillable(*form_structure));
 
   // Expect the correct number of fields.
-  ASSERT_EQ(6U, form_structure->field_count());
-  ASSERT_EQ(6U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 6U);
+  ASSERT_EQ(AutofillCount(*form_structure), 6U);
 
   // Card Number.
-  EXPECT_EQ(CREDIT_CARD_NUMBER, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), CREDIT_CARD_NUMBER);
   // First name.
-  EXPECT_EQ(CREDIT_CARD_NAME_FIRST, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), CREDIT_CARD_NAME_FIRST);
   // Last name.
-  EXPECT_EQ(CREDIT_CARD_NAME_LAST, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), CREDIT_CARD_NAME_LAST);
   // Expiration Date.
-  EXPECT_EQ(CREDIT_CARD_EXP_MONTH, form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(), CREDIT_CARD_EXP_MONTH);
   // Expiration Year.
-  EXPECT_EQ(CREDIT_CARD_EXP_4_DIGIT_YEAR,
-            form_structure->field(4)->heuristic_type());
+  EXPECT_EQ(form_structure->field(4)->heuristic_type(),
+            CREDIT_CARD_EXP_4_DIGIT_YEAR);
   // CVC code.
-  EXPECT_EQ(CREDIT_CARD_VERIFICATION_CODE,
-            form_structure->field(5)->heuristic_type());
+  EXPECT_EQ(form_structure->field(5)->heuristic_type(),
+            CREDIT_CARD_VERIFICATION_CODE);
 }
 
 // Tests that the heuristics detect split credit card names if they appear at
@@ -1708,23 +1726,23 @@ TEST_F(FormStructureTestImpl, HeuristicsInferCCNames_NamesFirst) {
   EXPECT_TRUE(IsAutofillable(*form_structure));
 
   // Expect the correct number of fields.
-  ASSERT_EQ(6U, form_structure->field_count());
-  ASSERT_EQ(6U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 6U);
+  ASSERT_EQ(AutofillCount(*form_structure), 6U);
 
   // First name.
-  EXPECT_EQ(CREDIT_CARD_NAME_FIRST, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), CREDIT_CARD_NAME_FIRST);
   // Last name.
-  EXPECT_EQ(CREDIT_CARD_NAME_LAST, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), CREDIT_CARD_NAME_LAST);
   // Card Number.
-  EXPECT_EQ(CREDIT_CARD_NUMBER, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), CREDIT_CARD_NUMBER);
   // Expiration Date.
-  EXPECT_EQ(CREDIT_CARD_EXP_MONTH, form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(), CREDIT_CARD_EXP_MONTH);
   // Expiration Year.
-  EXPECT_EQ(CREDIT_CARD_EXP_4_DIGIT_YEAR,
-            form_structure->field(4)->heuristic_type());
+  EXPECT_EQ(form_structure->field(4)->heuristic_type(),
+            CREDIT_CARD_EXP_4_DIGIT_YEAR);
   // CVC code.
-  EXPECT_EQ(CREDIT_CARD_VERIFICATION_CODE,
-            form_structure->field(5)->heuristic_type());
+  EXPECT_EQ(form_structure->field(5)->heuristic_type(),
+            CREDIT_CARD_VERIFICATION_CODE);
 }
 
 TEST_F(FormStructureTestImpl, ButtonTitleType_Match) {
@@ -1785,14 +1803,6 @@ TEST_F(FormStructureTestImpl, CheckFormSignature) {
   field.set_renderer_id(test::MakeFieldRendererId());
   test_api(form).Append(field);
 
-  // Checkable fields shouldn't affect the signature.
-  field.set_label(u"Select");
-  field.set_name(u"Select");
-  field.set_form_control_type(FormControlType::kInputCheckbox);
-  field.set_check_status(FormFieldData::CheckStatus::kCheckableButUnchecked);
-  field.set_renderer_id(test::MakeFieldRendererId());
-  test_api(form).Append(field);
-
   form_structure = std::make_unique<FormStructure>(form);
 
   EXPECT_EQ(FormStructureTestImpl::Hash64Bit(std::string("://&&email&first")),
@@ -1817,7 +1827,6 @@ TEST_F(FormStructureTestImpl, CheckFormSignature) {
             form_structure->FormSignatureAsStr());
 
   // Checks how digits are removed from field names.
-  field.set_check_status(FormFieldData::CheckStatus::kNotCheckable);
   field.set_label(u"Random Field label");
   field.set_name(u"random1234");
   field.set_form_control_type(FormControlType::kInputText);
@@ -1975,7 +1984,9 @@ TEST_F(FormStructureTestImpl, OneFieldPasswordFormShouldNotBeUpload) {
   field.set_renderer_id(test::MakeFieldRendererId());
   test_api(form).Append(field);
 
-  EXPECT_FALSE(ShouldBeUploaded(FormStructure(form)));
+  EXPECT_FALSE(GetFormParsingPermissions(FormStructure(form),
+                                         /*ignore_small_forms=*/true)
+                   .contains(FormParsingPermission::kServerUpload));
 }
 
 
@@ -2029,13 +2040,13 @@ TEST_F(FormStructureTestImpl, NoAutocompleteSectionNames) {
   test_api(form_structure).AssignSections();
 
   // Assert the correct number of fields.
-  ASSERT_EQ(6U, form_structure.field_count());
-  EXPECT_EQ("fullName_0_11", form_structure.field(0)->section().ToString());
-  EXPECT_EQ("fullName_0_11", form_structure.field(1)->section().ToString());
-  EXPECT_EQ("fullName_0_11", form_structure.field(2)->section().ToString());
-  EXPECT_EQ("fullName_0_14", form_structure.field(3)->section().ToString());
-  EXPECT_EQ("fullName_0_14", form_structure.field(4)->section().ToString());
-  EXPECT_EQ("fullName_0_14", form_structure.field(5)->section().ToString());
+  ASSERT_EQ(form_structure.field_count(), 6U);
+  EXPECT_EQ(form_structure.field(0)->section().ToString(), "fullName_0_11");
+  EXPECT_EQ(form_structure.field(1)->section().ToString(), "fullName_0_11");
+  EXPECT_EQ(form_structure.field(2)->section().ToString(), "fullName_0_11");
+  EXPECT_EQ(form_structure.field(3)->section().ToString(), "fullName_0_14");
+  EXPECT_EQ(form_structure.field(4)->section().ToString(), "fullName_0_14");
+  EXPECT_EQ(form_structure.field(5)->section().ToString(), "fullName_0_14");
 }
 
 // Tests that adjacent name field types are not split into different sections.
@@ -2062,7 +2073,7 @@ TEST_F(FormStructureTestImpl, NoSplitAdjacentNameFieldType) {
   test_api(form_structure).AssignSections();
 
   // Assert the correct number of fields.
-  ASSERT_EQ(6U, form_structure.field_count());
+  ASSERT_EQ(form_structure.field_count(), 6U);
 
   EXPECT_EQ(form_structure.field(0)->section(),
             form_structure.field(1)->section());
@@ -2180,17 +2191,22 @@ TEST_F(FormStructureTestImpl, GetFormTypes_AutocompleteUnrecognized) {
 }
 
 // The test ensures that single field email forms are correctly parsed via
-// `ShouldRunHeuristicsForSingleFields()`.
+// `FormParsingPermission::kSingleFieldHeuristics`.
 TEST_F(FormStructureTestImpl, SingleFieldEmailHeuristicsBehavior) {
   FormData form = test::GetFormData({.fields = {{.role = EMAIL_ADDRESS}}});
 
   // The form has too few fields; it should not run heuristics, falling back to
   // the single field parsing.
-  EXPECT_FALSE(
-      ShouldRunHeuristics(FormStructure(form), /*ignore_small_forms=*/true));
-  EXPECT_FALSE(ShouldRunHeuristics(form, /*ignore_small_forms=*/true));
-  EXPECT_TRUE(ShouldRunHeuristicsForSingleFields(FormStructure(form)));
-  EXPECT_TRUE(ShouldRunHeuristicsForSingleFields(form));
+  EXPECT_FALSE(GetFormParsingPermissions(FormStructure(form),
+                                         /*ignore_small_forms=*/true)
+                   .contains(FormParsingPermission::kHeuristics));
+  EXPECT_FALSE(GetFormParsingPermissions(form, /*ignore_small_forms=*/true)
+                   .contains(FormParsingPermission::kHeuristics));
+  EXPECT_TRUE(GetFormParsingPermissions(FormStructure(form),
+                                        /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kSingleFieldHeuristics));
+  EXPECT_TRUE(GetFormParsingPermissions(form, /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kSingleFieldHeuristics));
 
   {
     FormStructure form_structure(form);
@@ -2200,26 +2216,32 @@ TEST_F(FormStructureTestImpl, SingleFieldEmailHeuristicsBehavior) {
     regex_predictions.ApplyTo(form_structure.fields());
     form_structure.RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                 LanguageCode(""), nullptr);
-    ASSERT_EQ(1U, form_structure.field_count());
-    ASSERT_EQ(1U, AutofillCount(form_structure));
-    EXPECT_EQ(EMAIL_ADDRESS, form_structure.field(0)->heuristic_type());
+    ASSERT_EQ(form_structure.field_count(), 1U);
+    ASSERT_EQ(AutofillCount(form_structure), 1U);
+    EXPECT_EQ(form_structure.field(0)->heuristic_type(), EMAIL_ADDRESS);
     EXPECT_TRUE(IsAutofillable(form_structure));
   }
 }
 
 // The test ensures that email fields are correctly parsed (via
-// `ShouldRunHeuristicsForSingleFields()`) on small forms with two fields.
+// `FormParsingPermission::kSingleFieldHeuristics`) on small forms with two
+// fields.
 TEST_F(FormStructureTestImpl, TwoFieldFormEmailHeuristicsBehavior) {
   FormData form = test::GetFormData(
       {.fields = {{.role = NAME_FULL}, {.role = EMAIL_ADDRESS}}});
 
   // The form has too few fields; it should not run heuristics, falling back to
   // the single field parsing.
-  EXPECT_FALSE(
-      ShouldRunHeuristics(FormStructure(form), /*ignore_small_forms=*/true));
-  EXPECT_FALSE(ShouldRunHeuristics(form, /*ignore_small_forms=*/true));
-  EXPECT_TRUE(ShouldRunHeuristicsForSingleFields(FormStructure(form)));
-  EXPECT_TRUE(ShouldRunHeuristicsForSingleFields(form));
+  EXPECT_FALSE(GetFormParsingPermissions(FormStructure(form),
+                                         /*ignore_small_forms=*/true)
+                   .contains(FormParsingPermission::kHeuristics));
+  EXPECT_FALSE(GetFormParsingPermissions(form, /*ignore_small_forms=*/true)
+                   .contains(FormParsingPermission::kHeuristics));
+  EXPECT_TRUE(GetFormParsingPermissions(FormStructure(form),
+                                        /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kSingleFieldHeuristics));
+  EXPECT_TRUE(GetFormParsingPermissions(form, /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kSingleFieldHeuristics));
 
   {
     FormStructure form_structure(form);
@@ -2229,10 +2251,10 @@ TEST_F(FormStructureTestImpl, TwoFieldFormEmailHeuristicsBehavior) {
     regex_predictions.ApplyTo(form_structure.fields());
     form_structure.RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                 LanguageCode(""), nullptr);
-    ASSERT_EQ(2U, form_structure.field_count());
-    ASSERT_EQ(1U, AutofillCount(form_structure));
-    EXPECT_EQ(UNKNOWN_TYPE, form_structure.field(0)->heuristic_type());
-    EXPECT_EQ(EMAIL_ADDRESS, form_structure.field(1)->heuristic_type());
+    ASSERT_EQ(form_structure.field_count(), 2U);
+    ASSERT_EQ(AutofillCount(form_structure), 1U);
+    EXPECT_EQ(form_structure.field(0)->heuristic_type(), UNKNOWN_TYPE);
+    EXPECT_EQ(form_structure.field(1)->heuristic_type(), EMAIL_ADDRESS);
     EXPECT_TRUE(IsAutofillable(form_structure));
   }
 }
@@ -2246,11 +2268,16 @@ TEST_F(FormStructureTestImpl,
 
   // The form has too few fields; it should not run heuristics, falling back to
   // the single field parsing.
-  EXPECT_FALSE(
-      ShouldRunHeuristics(FormStructure(form), /*ignore_small_forms=*/true));
-  EXPECT_FALSE(ShouldRunHeuristics(form, /*ignore_small_forms=*/true));
-  EXPECT_TRUE(ShouldRunHeuristicsForSingleFields(FormStructure(form)));
-  EXPECT_TRUE(ShouldRunHeuristicsForSingleFields(form));
+  EXPECT_FALSE(GetFormParsingPermissions(FormStructure(form),
+                                         /*ignore_small_forms=*/true)
+                   .contains(FormParsingPermission::kHeuristics));
+  EXPECT_FALSE(GetFormParsingPermissions(form, /*ignore_small_forms=*/true)
+                   .contains(FormParsingPermission::kHeuristics));
+  EXPECT_TRUE(GetFormParsingPermissions(FormStructure(form),
+                                        /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kSingleFieldHeuristics));
+  EXPECT_TRUE(GetFormParsingPermissions(form, /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kSingleFieldHeuristics));
 
   {
     FormStructure form_structure(form);
@@ -2260,10 +2287,10 @@ TEST_F(FormStructureTestImpl,
     regex_predictions.ApplyTo(form_structure.fields());
     form_structure.RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                 LanguageCode(""), nullptr);
-    ASSERT_EQ(2U, form_structure.field_count());
-    ASSERT_EQ(1U, AutofillCount(form_structure));
-    EXPECT_EQ(UNKNOWN_TYPE, form_structure.field(0)->heuristic_type());
-    EXPECT_EQ(EMAIL_ADDRESS, form_structure.field(1)->heuristic_type());
+    ASSERT_EQ(form_structure.field_count(), 2U);
+    ASSERT_EQ(AutofillCount(form_structure), 1U);
+    EXPECT_EQ(form_structure.field(0)->heuristic_type(), UNKNOWN_TYPE);
+    EXPECT_EQ(form_structure.field(1)->heuristic_type(), EMAIL_ADDRESS);
     EXPECT_TRUE(IsAutofillable(form_structure));
   }
 }
@@ -2277,11 +2304,16 @@ TEST_F(FormStructureTestImpl,
 
   // The form has too few fields; it should not run heuristics, falling back to
   // the single field parsing.
-  EXPECT_FALSE(
-      ShouldRunHeuristics(FormStructure(form), /*ignore_small_forms=*/true));
-  EXPECT_FALSE(ShouldRunHeuristics(form, /*ignore_small_forms=*/true));
-  EXPECT_TRUE(ShouldRunHeuristicsForSingleFields(FormStructure(form)));
-  EXPECT_TRUE(ShouldRunHeuristicsForSingleFields(form));
+  EXPECT_FALSE(GetFormParsingPermissions(FormStructure(form),
+                                         /*ignore_small_forms=*/true)
+                   .contains(FormParsingPermission::kHeuristics));
+  EXPECT_FALSE(GetFormParsingPermissions(form, /*ignore_small_forms=*/true)
+                   .contains(FormParsingPermission::kHeuristics));
+  EXPECT_TRUE(GetFormParsingPermissions(FormStructure(form),
+                                        /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kSingleFieldHeuristics));
+  EXPECT_TRUE(GetFormParsingPermissions(form, /*ignore_small_forms=*/true)
+                  .contains(FormParsingPermission::kSingleFieldHeuristics));
   {
     FormStructure form_structure(form);
     const RegexPredictions regex_predictions = DetermineRegexTypes(
@@ -2290,11 +2322,11 @@ TEST_F(FormStructureTestImpl,
     regex_predictions.ApplyTo(form_structure.fields());
     form_structure.RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                 LanguageCode(""), nullptr);
-    ASSERT_EQ(1U, form_structure.field_count());
+    ASSERT_EQ(form_structure.field_count(), 1U);
     // However, because the email field is in a form and matches the heuristics,
     // it should be autofillable when the feature is enabled.
-    ASSERT_EQ(1U, AutofillCount(form_structure));
-    EXPECT_EQ(EMAIL_ADDRESS, form_structure.field(0)->heuristic_type());
+    ASSERT_EQ(AutofillCount(form_structure), 1U);
+    EXPECT_EQ(form_structure.field(0)->heuristic_type(), EMAIL_ADDRESS);
     EXPECT_TRUE(IsAutofillable(form_structure));
   }
 }
@@ -2349,28 +2381,26 @@ TEST_F(FormStructureTestImpl, LoyaltyCardsHeuristics_BigForms) {
   form_structure->RationalizeAndAssignSections(GeoIpCountryCode(""),
                                                LanguageCode(""), nullptr);
   EXPECT_TRUE(IsAutofillable(*form_structure));
-  ASSERT_EQ(5U, form_structure->field_count());
-  ASSERT_EQ(5U, AutofillCount(*form_structure));
+  ASSERT_EQ(form_structure->field_count(), 5U);
+  ASSERT_EQ(AutofillCount(*form_structure), 5U);
 
   // First name.
-  EXPECT_EQ(NAME_FIRST, form_structure->field(0)->heuristic_type());
+  EXPECT_EQ(form_structure->field(0)->heuristic_type(), NAME_FIRST);
   // Last name.
-  EXPECT_EQ(NAME_LAST, form_structure->field(1)->heuristic_type());
+  EXPECT_EQ(form_structure->field(1)->heuristic_type(), NAME_LAST);
   // Email.
-  EXPECT_EQ(EMAIL_ADDRESS, form_structure->field(2)->heuristic_type());
+  EXPECT_EQ(form_structure->field(2)->heuristic_type(), EMAIL_ADDRESS);
   // Loyalty Card.
-  EXPECT_EQ(LOYALTY_MEMBERSHIP_ID, form_structure->field(3)->heuristic_type());
+  EXPECT_EQ(form_structure->field(3)->heuristic_type(), LOYALTY_MEMBERSHIP_ID);
   // Phone number.
-  EXPECT_EQ(PHONE_HOME_CITY_AND_NUMBER,
-            form_structure->field(4)->heuristic_type());
+  EXPECT_EQ(form_structure->field(4)->heuristic_type(),
+            PHONE_HOME_CITY_AND_NUMBER);
 }
 
 // Tests that `FormStructure::UpdateFormData()` correctly updates information of
 // `FormStructure` coming from `FormData` and leaves other information
 // unchanged.
 TEST_F(FormStructureTestImpl, UpdateFormData) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kAutofillFixFormEquality};
   FormData form = test::GetFormData(
       {.fields = {{.role = NAME_FULL, .autocomplete_attribute = "name"}},
        .name = u"form-name"});
@@ -2445,11 +2475,91 @@ TEST_F(FormStructureTestImpl, LogBuffer_FormSignatures) {
   LogBuffer buffer;
   buffer << form_structure;
 
-  std::string json;
-  EXPECT_TRUE(base::JSONWriter::Write(*buffer.RetrieveResult(), &json));
-  EXPECT_THAT(json, testing::HasSubstr("Form signature:"));
-  EXPECT_THAT(json, testing::HasSubstr("Form alternative signature:"));
-  EXPECT_THAT(json, testing::HasSubstr("Form structural signature:"));
+  std::optional<std::string> json = base::WriteJson(*buffer.RetrieveResult());
+  ASSERT_TRUE(json.has_value());
+  EXPECT_THAT(json.value(), testing::HasSubstr("Form signature:"));
+  EXPECT_THAT(json.value(), testing::HasSubstr("Form alternative signature:"));
+  EXPECT_THAT(json.value(), testing::HasSubstr("Form structural signature:"));
+}
+
+// Tests that `FormStructure`'s `LogBuffer` operator (used for
+// chrome://autofill-internals/) includes field signatures, including host form
+// signature and host form structural signature.
+TEST_F(FormStructureTestImpl, LogBuffer_FieldSignatures) {
+  FormData form;
+  form.set_url(GURL("http://foo.com"));
+  FormFieldData field;
+  field.set_name(u"field1");
+  field.set_form_control_type(FormControlType::kInputText);
+  field.set_renderer_id(test::MakeFieldRendererId());
+  field.set_host_form_signature(FormSignature(123));
+  field.set_host_form_structural_signature(FormSignature(456));
+  test_api(form).Append(field);
+
+  FormStructure form_structure(form);
+  LogBuffer buffer;
+  buffer << form_structure;
+
+  std::optional<std::string> json = base::WriteJson(*buffer.RetrieveResult());
+  ASSERT_TRUE(json.has_value());
+  EXPECT_THAT(json.value(), HasSubstr("Host form signature:"));
+  EXPECT_THAT(
+      json.value(),
+      HasSubstr(base::StrCat(
+          {base::NumberToString(123), " - ",
+           base::NumberToString(HashFormSignature(FormSignature(123)))})));
+  EXPECT_THAT(json.value(), HasSubstr("Host form structural signature:"));
+  EXPECT_THAT(
+      json.value(),
+      HasSubstr(base::StrCat(
+          {base::NumberToString(456), " - ",
+           base::NumberToString(HashFormSignature(FormSignature(456)))})));
+}
+
+// The test below validates that the `MatchInfo` structure of `AutofillField` is
+// correctly propagated during the regex parsing.
+TEST_F(FormStructureTestImpl, FieldsMatchedOnDifferentAttributes) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      features::kAutofillBetterLocalHeuristicPlaceholderSupport};
+
+  FormStructure form_structure(test::GetFormData({
+      .fields =
+          {// The label is of high quality but doesn't match. The regex
+           // should match with placeholder, which is considered low
+           // quality.
+           {.label = u"Label",
+            .placeholder = u"Full Name",
+            .label_source = FormFieldData::LabelSource::kLabelTag},
+           // The label is of high quality but doesn't match. The regexes
+           // should match with name.
+           {.label = u"Label",
+            .name = u"Address",
+            .placeholder = u"Full Name",
+            .label_source = FormFieldData::LabelSource::kLabelTag},
+           // The label is of high quality and should be matched by regexes.
+           {.label = u"Country",
+            .placeholder = u"Full Name",
+            .label_source = FormFieldData::LabelSource::kLabelTag}},
+  }));
+  const RegexPredictions regex_predictions = DetermineRegexTypes(
+      GeoIpCountryCode(""), LanguageCode(""), form_structure.ToFormData(),
+      nullptr, /*ignore_small_forms=*/true);
+  regex_predictions.ApplyTo(form_structure.fields());
+
+  EXPECT_EQ(NAME_FULL, form_structure.field(0)->heuristic_type());
+  ASSERT_TRUE(form_structure.field(0)->regex_match_info());
+  EXPECT_EQ(MatchInfo::MatchAttribute::kLowQualityLabel,
+            form_structure.field(0)->regex_match_info()->matched_attribute);
+
+  EXPECT_EQ(ADDRESS_HOME_LINE1, form_structure.field(1)->heuristic_type());
+  ASSERT_TRUE(form_structure.field(1)->regex_match_info());
+  EXPECT_EQ(MatchInfo::MatchAttribute::kName,
+            form_structure.field(1)->regex_match_info()->matched_attribute);
+
+  EXPECT_EQ(ADDRESS_HOME_COUNTRY, form_structure.field(2)->heuristic_type());
+  ASSERT_TRUE(form_structure.field(2)->regex_match_info());
+  EXPECT_EQ(MatchInfo::MatchAttribute::kHighQualityLabel,
+            form_structure.field(2)->regex_match_info()->matched_attribute);
 }
 
 }  // namespace

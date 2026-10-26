@@ -25,7 +25,6 @@
 #include "remoting/base/protobuf_http_stream_request.h"
 #include "remoting/base/service_urls.h"
 #include "remoting/signaling/corp_message_channel_strategy.h"
-#include "remoting/signaling/jingle_message_xml_converter.h"
 #include "remoting/signaling/message_channel.h"
 #include "remoting/signaling/signal_strategy.h"
 #include "remoting/signaling/signaling_address.h"
@@ -103,15 +102,13 @@ CorpMessagingClient::CorpMessagingClient(
     const std::string& username,
     const std::string& public_key,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    std::unique_ptr<net::ClientCertStore> client_cert_store,
     const SignalingAddressChangedCallback& on_signaling_address_changed)
     : username_(username),
       public_key_(public_key),
       client_(std::make_unique<ProtobufHttpClient>(
           ServiceUrls::GetInstance()->remoting_corp_endpoint(),
           /*token_getter=*/nullptr,
-          url_loader_factory,
-          std::move(client_cert_store))) {
+          url_loader_factory)) {
   auto channel_strategy = std::make_unique<CorpMessageChannelStrategy>();
   channel_strategy->Initialize(
       base::BindRepeating(&CorpMessagingClient::OpenReceiveMessagesStream,

@@ -17,10 +17,11 @@
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/autofill_driver.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
 #include "components/autofill/core/browser/foundations/test_browser_autofill_manager.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/unique_ids.h"
@@ -75,7 +76,8 @@ class ContextMenuHelperWithAfTest : public ContextMenuHelperBaseTest {
   void NotifyFormManagerAndWait(autofill::FormData form) {
     autofill::TestAutofillManagerWaiter waiter(
         autofill_manager(), {autofill::AutofillManagerEvent::kFormsSeen});
-    autofill_manager().OnFormsSeen({form}, {});
+    autofill_manager().OnFormsSeen(
+        {form}, {}, autofill::AutofillManagerTestApi::pass_key());
     ASSERT_TRUE(waiter.Wait());
   }
 

@@ -6,11 +6,14 @@
 
 #include "chrome/browser/ash/crostini/crostini_browser_test_util.h"
 #include "chrome/browser/ash/crostini/fake_crostini_features.h"
+#include "chrome/browser/ash/guest_os/guest_os_pref_names.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/system_features_disable_list_policy_handler.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -19,9 +22,11 @@
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/cros_settings_waiter.h"
 #include "components/policy/core/common/policy_pref_names.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 namespace extensions {
@@ -40,7 +45,7 @@ class TerminalPrivateBrowserTest
 
   void ExpectJsResult(const std::string& script, const std::string& expected) {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     EXPECT_EQ(
         EvalJs(web_contents, script, content::EXECUTE_SCRIPT_DEFAULT_OPTIONS,
                /*world_id=*/1),
@@ -121,17 +126,17 @@ IN_PROC_BROWSER_TEST_F(TerminalPrivateBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
                                            GURL("chrome-untrusted://crosh/")));
   content::WebContents* tab1 =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL("chrome-untrusted://crosh/"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
   content::WebContents* tab2 =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   // Verify that we have two distinct tabs.
-  ASSERT_EQ(2, browser()->tab_strip_model()->count());
+  ASSERT_EQ(2, browser()->GetTabStripModel()->count());
   ASSERT_NE(tab1, tab2);
 
   // In the second tab, register a listener for the onProcessOutput event.
@@ -166,6 +171,34 @@ IN_PROC_BROWSER_TEST_F(TerminalPrivateBrowserTest,
   // Verify that the second tab did NOT receive the output event.
   EXPECT_EQ(0, EvalJs(tab2, "window.processOutputCount",
                       content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, /*world_id=*/1));
+}
+
+IN_PROC_BROWSER_TEST_F(TerminalPrivateBrowserTest,
+                       SetPrefsRestrictedToTerminal) {
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
+  ASSERT_TRUE(
+      prefs->GetDict(guest_os::prefs::kGuestOsTerminalSettings).empty());
+
+  const std::string script = R"(new Promise((resolve) => {
+    chrome.terminalPrivate.setPrefs(
+        {'crostini.terminal_settings': {'/nassh/profile-ids': ['x']}}, () => {
+      const lastError = chrome.runtime.lastError;
+      resolve(lastError ? lastError.message : "success");
+    })}))";
+
+  // crosh must not be able to write Terminal settings.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
+                                           GURL("chrome-untrusted://crosh/")));
+  ExpectJsResult(script, "Unsupported context");
+  EXPECT_TRUE(
+      prefs->GetDict(guest_os::prefs::kGuestOsTerminalSettings).empty());
+
+  // Terminal can write its own settings.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL("chrome-untrusted://terminal/html/terminal.html")));
+  ExpectJsResult(script, "success");
+  EXPECT_FALSE(
+      prefs->GetDict(guest_os::prefs::kGuestOsTerminalSettings).empty());
 }
 
 }  // namespace extensions

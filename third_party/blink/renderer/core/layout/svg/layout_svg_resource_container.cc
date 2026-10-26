@@ -66,9 +66,7 @@ float ObjectBoundingBoxUnitToUserUnits(const Length& length,
 }  // namespace
 
 LayoutSVGResourceContainer::LayoutSVGResourceContainer(SVGElement* node)
-    : LayoutSVGHiddenContainer(node),
-      completed_invalidations_mask_(0),
-      is_invalidating_(false) {}
+    : LayoutSVGHiddenContainer(node) {}
 
 LayoutSVGResourceContainer::~LayoutSVGResourceContainer() = default;
 
@@ -188,19 +186,20 @@ void LayoutSVGResourceContainer::InvalidateClientsIfActiveResource() {
   GetDocument().ScheduleSVGResourceInvalidation(*resource);
 }
 
-void LayoutSVGResourceContainer::WillBeDestroyed() {
+void LayoutSVGResourceContainer::WillBeDestroyed(const ComputedStyle* style) {
   NOT_DESTROYED();
   // The resource is being torn down.
   InvalidateClientsIfActiveResource();
-  LayoutSVGHiddenContainer::WillBeDestroyed();
+  LayoutSVGHiddenContainer::WillBeDestroyed(style);
 }
 
 void LayoutSVGResourceContainer::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutSVGHiddenContainer::StyleDidChange(diff, old_style,
+  LayoutSVGHiddenContainer::StyleDidChange(diff, old_style, new_style,
                                            style_change_context);
   if (old_style)
     return;
@@ -215,7 +214,7 @@ bool LayoutSVGResourceContainer::FindCycle() const {
 
 static HeapVector<Member<SVGResource>> CollectResources(
     const LayoutObject& layout_object) {
-  const ComputedStyle& style = layout_object.StyleRef();
+  const ComputedStyle& style = layout_object.Style();
   HeapVector<Member<SVGResource>> resources;
   if (auto* reference_clip =
           DynamicTo<ReferenceClipPathOperation>(style.ClipPath())) {
@@ -257,8 +256,8 @@ bool LayoutSVGResourceContainer::FindCycleInResources(
       }
     }
   }
-  for (const FillLayer* layer = &layout_object.StyleRef().MaskLayers(); layer;
-       layer = layer->Next()) {
+  for (const FillLayer* layer = &layout_object.Style().MaskLayers(); layer;
+       layer = layer->NextForUsedValue()) {
     const auto* mask_source =
         DynamicTo<StyleMaskSourceImage>(layer->GetImage());
     if (!mask_source) {

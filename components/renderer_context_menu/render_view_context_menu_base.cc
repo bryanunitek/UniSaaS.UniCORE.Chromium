@@ -469,8 +469,7 @@ void RenderViewContextMenuBase::MenuClosed(ui::SimpleMenuModel* source) {
     return;
 
   source_web_contents_->SetShowingContextMenu(false);
-  source_web_contents_->NotifyContextMenuClosed(params_.link_followed,
-                                                params_.impression);
+  source_web_contents_->NotifyContextMenuClosed(params_.link_followed);
   for (auto& observer : observers_) {
     observer.OnMenuClosed();
   }
@@ -487,9 +486,10 @@ void RenderViewContextMenuBase::OpenURL(const GURL& url,
                                         const url::Origin& initiator,
                                         WindowOpenDisposition disposition,
                                         ui::PageTransition transition) {
-  OpenURLWithExtraHeaders(url, referring_url, initiator, disposition,
-                          transition, "" /* extra_headers */,
-                          true /* started_from_context_menu */);
+  OpenURLWithExtraHeaders(
+      url, referring_url, initiator, disposition, transition,
+      /*extra_headers=*/"", /*started_from_context_menu=*/true,
+      /*navigation_handle_callback=*/{});
 }
 
 void RenderViewContextMenuBase::OpenURLWithExtraHeaders(
@@ -499,13 +499,15 @@ void RenderViewContextMenuBase::OpenURLWithExtraHeaders(
     WindowOpenDisposition disposition,
     ui::PageTransition transition,
     const std::string& extra_headers,
-    bool started_from_context_menu) {
+    bool started_from_context_menu,
+    base::OnceCallback<void(content::NavigationHandle&)>
+        navigation_handle_callback) {
   content::OpenURLParams open_url_params = GetOpenURLParamsWithExtraHeaders(
       url, referring_url, initiator, disposition, transition, extra_headers,
       started_from_context_menu);
 
   source_web_contents_->OpenURL(open_url_params,
-                                /*navigation_handle_callback=*/{});
+                                std::move(navigation_handle_callback));
 }
 
 content::OpenURLParams
@@ -520,7 +522,7 @@ RenderViewContextMenuBase::GetOpenURLParamsWithExtraHeaders(
   // Do not send the referrer url to OTR windows. We still need the
   // |referring_url| to populate the |initiator_origin| below for browser UI.
   GURL referrer_url;
-  if (disposition != WindowOpenDisposition::OFF_THE_RECORD) {
+  if (disposition != WindowOpenDisposition::kOffTheRecord) {
     referrer_url = referring_url.GetAsReferrer();
   }
 
@@ -528,12 +530,12 @@ RenderViewContextMenuBase::GetOpenURLParamsWithExtraHeaders(
       url, content::Referrer(referrer_url, params_.referrer_policy));
 
   if (params_.link_url == url &&
-      disposition != WindowOpenDisposition::OFF_THE_RECORD) {
+      disposition != WindowOpenDisposition::kOffTheRecord) {
     params_.link_followed = url;
   }
 
-  OpenURLParams open_url_params(url, referrer, disposition, transition, false,
-                                started_from_context_menu);
+  OpenURLParams open_url_params = OpenURLParams::CreateBrowserInitiated(
+      url, disposition, transition, referrer, started_from_context_menu);
   if (!extra_headers.empty())
     open_url_params.extra_headers = extra_headers;
 
@@ -545,9 +547,6 @@ RenderViewContextMenuBase::GetOpenURLParamsWithExtraHeaders(
   open_url_params.initiator_origin = initiator;
 
   open_url_params.source_site_instance = site_instance_;
-
-  if (disposition != WindowOpenDisposition::OFF_THE_RECORD)
-    open_url_params.impression = params_.impression;
 
   return open_url_params;
 }

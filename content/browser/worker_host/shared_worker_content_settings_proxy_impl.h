@@ -41,8 +41,8 @@ class SharedWorkerContentSettingsProxyImpl
   void AllowIndexedDB(AllowIndexedDBCallback callback) override;
   void AllowCacheStorage(AllowCacheStorageCallback callback) override;
   void AllowWebLocks(AllowCacheStorageCallback callback) override;
-  void RequestFileSystemAccessSync(
-      RequestFileSystemAccessSyncCallback callback) override;
+  void AllowFileSystem(AllowFileSystemCallback callback) override;
+  void AllowWriteToClipboard(AllowWriteToClipboardCallback callback) override;
 
  private:
   const url::Origin origin_;

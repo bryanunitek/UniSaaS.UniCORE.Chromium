@@ -9,8 +9,6 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/strings/strcat.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/types/optional_util.h"
@@ -23,11 +21,8 @@
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
-#include "mojo/public/cpp/bindings/associated_remote.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/http/http_response_headers.h"
-#include "services/service_manager/public/cpp/interface_provider.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
@@ -1179,97 +1174,6 @@ TEST_F(PageTextObserverWithPrerenderTest, AMPRequestedOnOOPIFInPrerendering) {
 
   EXPECT_FALSE(consumer.was_called());
   EXPECT_FALSE(consumer.result());
-}
-
-class PageTextObserverFencedFramesTest : public PageTextObserverTest {
- public:
-  PageTextObserverFencedFramesTest() {
-    scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        blink::features::kFencedFrames, {{"implementation_type", "mparch"}});
-  }
-  ~PageTextObserverFencedFramesTest() override = default;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-TEST_F(PageTextObserverFencedFramesTest, AMPRequestedOnOOPIFInFencedFrame) {
-  TestConsumer consumer;
-  observer()->AddConsumer(&consumer);
-
-  consumer.PopulateRequest(
-      /*max_size=*/1024,
-      /*events=*/{mojom::TextDumpEvent::kFirstLayout},
-      /*request_amp=*/true);
-
-  FakePageTextService fake_renderer_service;
-  fake_renderer_service.SetRemoteResponsesForEvent(
-      mojom::TextDumpEvent::kFirstLayout, {
-                                              u"abc",
-                                              u"def",
-                                              std::nullopt,
-                                          });
-
-  blink::AssociatedInterfaceProvider* remote_interfaces =
-      main_rfh()->GetRemoteAssociatedInterfaces();
-  remote_interfaces->OverrideBinderForTesting(
-      mojom::PageTextService::Name_,
-      base::BindRepeating(&FakePageTextService::BindPendingReceiver,
-                          base::Unretained(&fake_renderer_service)));
-
-  content::NavigationSimulator::NavigateAndCommitFromBrowser(
-      web_contents(), GURL("http://test.com"));
-  EXPECT_TRUE(consumer.was_called());
-
-  content::RenderFrameHost* fenced_frame_rfh =
-      content::RenderFrameHostTester::For(main_rfh())->AppendFencedFrame();
-  GURL kFencedFrameUrl("http://fencedframe.com");
-  std::unique_ptr<content::NavigationSimulator> navigation_simulator =
-      content::NavigationSimulator::CreateRendererInitiated(kFencedFrameUrl,
-                                                            fenced_frame_rfh);
-  navigation_simulator->Commit();
-  fenced_frame_rfh = navigation_simulator->GetFinalRenderFrameHost();
-
-  // Add an OOPIF subframe.
-  content::RenderFrameHost* oopif_subframe =
-      content::RenderFrameHostTester::For(fenced_frame_rfh)
-          ->AppendChild("subframe");
-  observer()->SetIsOOPIF(oopif_subframe, true);
-
-  FakePageTextService subframe_fake_renderer_service;
-  blink::AssociatedInterfaceProvider* subframe_remote_interfaces =
-      oopif_subframe->GetRemoteAssociatedInterfaces();
-  subframe_remote_interfaces->OverrideBinderForTesting(
-      mojom::PageTextService::Name_,
-      base::BindRepeating(&FakePageTextService::BindPendingReceiver,
-                          base::Unretained(&subframe_fake_renderer_service)));
-  subframe_fake_renderer_service.SetRemoteResponsesForEvent(
-      mojom::TextDumpEvent::kFinishedLoad, {
-                                               u"amp",
-                                               std::nullopt,
-                                           });
-
-  observer()->RenderFrameCreated(oopif_subframe);
-  observer()->CallDidFinishLoad();
-  consumer.WaitForPageText();
-
-  EXPECT_THAT(
-      fake_renderer_service.requests(),
-      ::testing::UnorderedElementsAreArray({
-          mojom::PageTextDumpRequest(1024U, mojom::TextDumpEvent::kFirstLayout),
-      }));
-  EXPECT_TRUE(subframe_fake_renderer_service.requests().empty());
-
-  ASSERT_TRUE(consumer.result());
-  EXPECT_THAT(
-      consumer.result()->frame_results(),
-      ::testing::UnorderedElementsAreArray({
-          MakeFrameDump(
-              mojom::TextDumpEvent::kFirstLayout, main_rfh()->GetGlobalId(),
-              /*amp_frame=*/false,
-              web_contents()->GetController().GetVisibleEntry()->GetUniqueID(),
-              u"abcdef"),
-      }));
 }
 
 }  // namespace optimization_guide

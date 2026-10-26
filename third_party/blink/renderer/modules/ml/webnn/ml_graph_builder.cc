@@ -31,6 +31,7 @@
 #include "services/webnn/public/mojom/webnn_graph_builder.mojom-blink-forward.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_arraybufferallowshared_arraybufferviewallowshared.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_bigint_unrestricteddouble.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_arg_min_max_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_batch_normalization_options.h"
@@ -64,6 +65,7 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_transpose_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_triangular_options.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_util.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_view.h"
 #include "third_party/blink/renderer/modules/ml/ml_context.h"
 #include "third_party/blink/renderer/modules/ml/webnn/ml_constant_operand.h"
@@ -81,6 +83,7 @@
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_deque.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/fp16/src/include/fp16.h"
 
 namespace blink {
@@ -1475,20 +1478,17 @@ blink_mojom::GraphInfoPtr BuildWebNNGraphInfo(
           break;
         }
         case blink_mojom::Operand::Kind::kConstant: {
+          // Tensor-backed constants are not supported. The
+          // MLGraphBuilder::constant(MLTensor*) overload rejects early,
+          // so this should never happen.
+          CHECK(!operand->AsConstantOperand()->tensor());
           // Convert `mojo::Operand` for constant operand.
           webnn::OperandId operand_id = AddOperand(
               *graph_info,
               mojo::ConvertTo<blink_mojom::OperandPtr>(operand.Get()));
           // Build the map of constant operands for this graph with the id.
-          MLConstantOperand const* constant_operand =
-              operand->AsConstantOperand();
-          if (constant_operand->tensor()) {
-            graph_info->id_to_constant_tensor_operand_map.insert(
-                operand_id, constant_operand->tensor()->handle());
-          } else {
-            graph_info->constant_operand_ids_to_handles.insert(
-                operand_id, operand->AsConstantOperand()->handle());
-          }
+          graph_info->constant_operand_ids_to_handles.insert(
+              operand_id, operand->AsConstantOperand()->handle());
           operand_to_id_map.insert(operand, operand_id);
           break;
         }
@@ -1672,7 +1672,7 @@ MLOperand* MLGraphBuilder::input(ScriptState* script_state,
 
 MLOperand* MLGraphBuilder::constant(ScriptState* script_state,
                                     const MLOperandDescriptor* desc,
-                                    AllowSharedBufferSource* buffer,
+                                    const V8AllowSharedBufferSource* buffer,
                                     ExceptionState& exception_state) {
   webnn::ScopedTrace scoped_trace("MLGraphBuilder::constant");
   CHECK(buffer);
@@ -1712,12 +1712,12 @@ MLOperand* MLGraphBuilder::constant(ScriptState* script_state,
     }
   }
 
-  base::span<uint8_t> bytes = AsByteSpan(*buffer);
+  base::span<const uint8_t> bytes = AsSpan<SharedBufferPolicy::kAllow>(*buffer);
   if (descriptor.PackedByteLength() != bytes.size()) {
     exception_state.ThrowTypeError(
-        String::Format("The buffer's byte length (%zu) doesn't match the "
-                       "expected byte length (%zu).",
-                       bytes.size(), descriptor.PackedByteLength()));
+        Format("The buffer's byte length ({}) doesn't match the expected "
+               "byte length ({}).",
+               bytes.size(), descriptor.PackedByteLength()));
     return nullptr;
   }
 
@@ -1748,26 +1748,12 @@ MLOperand* MLGraphBuilder::constant(ScriptState* script_state,
                                     ExceptionState& exception_state) {
   THROW_AND_RETURN_IF_ERROR(ValidateGraphBuilderState(), nullptr);
 
-  if (tensor->context() != ml_context_) {
-    exception_state.ThrowTypeError(
-        "The tensor wasn't created with this context.");
-    return nullptr;
-  }
-
-  if (!tensor->IsValid()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kInvalidStateError,
-        "Tensor has been destroyed or context is lost.");
-    return nullptr;
-  }
-
-  if (!tensor->Usage().Has(webnn::MLTensorUsageFlags::kGraphConstant)) {
-    exception_state.ThrowTypeError(
-        "Tensor was not created by createConstantTensor.");
-    return nullptr;
-  }
-
-  return MakeGarbageCollected<MLConstantOperand>(this, tensor);
+  // TODO(crbug.com/516844144): No backend currently supports tensor-backed
+  // graph constants. Reject early until support is added.
+  exception_state.ThrowDOMException(
+      DOMExceptionCode::kNotSupportedError,
+      "Tensor-backed graph constants are not supported.");
+  return nullptr;
 }
 
 MLOperand* MLGraphBuilder::constant(
@@ -2967,10 +2953,9 @@ MLOperand* MLGraphBuilder::reshape(MLOperand* input,
   if (input->NumberOfElements() != newshape_number_of_elements) {
     exception_state.ThrowTypeError(BuildErrorMessage(
         label,
-        String::Format(
-            "The number of elements (%zu) implied by new shape doesn't match "
-            "the number of elements (%zu) in the input tensor.",
-            newshape_number_of_elements, input->NumberOfElements())));
+        Format("The number of elements ({}) implied by new shape doesn't match "
+               "the number of elements ({}) in the input tensor.",
+               newshape_number_of_elements, input->NumberOfElements())));
     return nullptr;
   }
 

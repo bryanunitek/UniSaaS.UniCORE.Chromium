@@ -18,6 +18,7 @@
 #include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "components/supervised_user/test_support/kids_chrome_management_test_utils.h"
 #include "content/public/test/browser_task_environment.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -46,7 +47,7 @@ class FamilyInfoLogSourceTest : public ::testing::Test {
     supervised_user::RegisterProfilePrefs(pref_service_.registry());
     test_list_family_members_service_ =
         std::make_unique<supervised_user::ListFamilyMembersService>(
-            identity_test_env_.identity_manager(),
+            *identity_test_env_.identity_manager(),
             base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
                 &test_url_loader_factory_),
             pref_service_);
@@ -117,8 +118,6 @@ TEST_F(FamilyInfoLogSourceTest,
 
   identity_test_env_.UpdateAccountInfoForAccount(
       WithFamilyInfoFetching(primary_account));
-
-  test_list_family_members_service_->Init();
   identity_test_env_.WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Max());
   SimulateResponseForPendingRequest();

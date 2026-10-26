@@ -7,8 +7,8 @@ module network.mojom;
 import "mojo/public/mojom/base/time.mojom";
 import "mojo/public/mojom/base/unguessable_token.mojom";
 import "services/network/public/mojom/alternate_protocol_usage.mojom";
-import "services/network/public/mojom/attribution.mojom";
 import "services/network/public/mojom/auth.mojom";
+import "services/network/public/mojom/cache_storage_side_data_writer.mojom";
 import "services/network/public/mojom/cors.mojom";
 import "services/network/public/mojom/device_bound_sessions.mojom";
 import "services/network/public/mojom/encoded_body_length.mojom";
@@ -27,7 +27,6 @@ import "services/network/public/mojom/service_worker_router_info.mojom";
 import "services/network/public/mojom/source_type.mojom";
 import "services/network/public/mojom/ssl_info.mojom";
 import "services/network/public/mojom/unencoded_digest.mojom";
-import "services/proxy_resolver/public/mojom/proxy_resolver.mojom";
 import "url/mojom/url.mojom";
 
 // Describes the navigational delivery type of the response.
@@ -37,6 +36,12 @@ import "url/mojom/url.mojom";
 enum NavigationDeliveryType {
   kDefault,
   kNavigationalPrefetch,
+};
+
+// Tag enum used to attach traits_headers for
+// CloneTraits<PendingRemote<CacheStorageSideDataWriter>>.
+enum CacheStorageSideDataWriterTag {
+  kDefault,
 };
 
 struct URLResponseHead {
@@ -187,7 +192,16 @@ struct URLResponseHead {
 
   // The cache name of the CacheStorage from where the response is served via
   // the ServiceWorker. Empty if the response isn't from the CacheStorage.
+  // Only used for DevTools inspection/reporting; not used for code caching
+  // (which uses `cache_storage_side_data_writer` instead).
   string cache_storage_cache_name;
+
+  // Direct Mojo remote to the CacheStorageCache entry from where the response
+  // is served via the ServiceWorker, used for writing code cache side data.
+  // Null if the response isn't from CacheStorage.
+  // Note: `URLResponseHead::Clone()` does NOT clone this remote; the cloned
+  // struct will have a null `cache_storage_side_data_writer`.
+  pending_remote<CacheStorageSideDataWriter>? cache_storage_side_data_writer;
 
   // Bitmask of status info of the SSL certificate. See cert_status_flags.h for
   // values.
@@ -299,6 +313,9 @@ struct URLResponseHead {
   // True if the response used a shared dictionary for decoding its body.
   bool did_use_shared_dictionary = false;
 
+  // True if this request used the pervasive/unpartitioned cache-key scope.
+  bool is_shared_resource = false;
+
   // True if the client should load the response content after setting the
   // environment's `has storage access` bit.
   bool load_with_storage_access = false;
@@ -317,13 +334,14 @@ struct URLResponseHead {
   // are returned with the locally storead headers. See crbug.com/352578800.
   bool from_synthetic_response = false;
 
-  // True when a proxy will handle the redirect checks.
-  bool bypass_redirect_checks = false;
-
   // The parsed value of the Unencoded-Digest header, if present.
   UnencodedDigests? unencoded_digests;
 
   // True if HTTP authentication was used to fetch this response. This will not
   // be set for proxy auth.
   bool did_use_server_http_auth = false;
+
+  // True if Sec-Private-Verification-Token was removed because cookies were
+  // included.
+  bool pvt_token_removed_due_to_cookies = false;
 };

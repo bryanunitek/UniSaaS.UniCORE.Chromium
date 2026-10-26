@@ -29,6 +29,7 @@
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
+#include "ui/gfx/geometry/size_conversions.h"
 
 namespace blink {
 
@@ -49,6 +50,23 @@ class DragMockChromeClient : public RenderingTestChromeClient {
   gfx::Size last_drag_image_size;
   gfx::Vector2d last_cursor_offset;
 };
+
+// PopulateDragDataTransfer() must always be called before StartDrag() because
+// StartDrag() relies on state (the drag-origin hit test result and drag
+// overlay) that PopulateDragDataTransfer() caches.
+static bool PopulateAndStartDrag(LocalFrame& frame,
+                                 DragState& drag_state,
+                                 const WebMouseEvent& mouse_event,
+                                 const gfx::Point& drag_initiation_location) {
+  DragController& drag_controller = frame.GetPage()->GetDragController();
+  if (!drag_controller.PopulateDragDataTransfer(
+          &frame, drag_state, drag_initiation_location,
+          gfx::ToFlooredPoint(mouse_event.PositionInRootFrame()))) {
+    return false;
+  }
+  return drag_controller.StartDrag(&frame, drag_state, mouse_event,
+                                   drag_initiation_location);
+}
 
 class DragControllerTest : public RenderingTest {
  protected:
@@ -79,19 +97,20 @@ class DragControllerTest : public RenderingTest {
     drag_text_area->Focus();
     UpdateAllLifecyclePhasesForTest();
     GetFrame().Selection().SelectAll();
-    GetFrame().GetPage()->GetDragController().StartDrag(
-        &GetFrame(), GetFrame().GetPage()->GetDragController().GetDragState(),
-        mouse_event,
+    const gfx::Point drag_initiation_location(
         gfx::Point(drag_text_area->OffsetLeft(), drag_text_area->OffsetTop()));
+    EXPECT_TRUE(PopulateAndStartDrag(
+        GetFrame(), GetFrame().GetPage()->GetDragController().GetDragState(),
+        mouse_event, drag_initiation_location));
     DragData data(data_object,
                   GetFrame().GetPage()->GetVisualViewport().ViewportToRootFrame(
                       drop_client_point),
                   drop_client_point,
                   static_cast<DragOperationsMask>(kDragOperationMove), false);
-    GetFrame().GetPage()->GetDragController().DragEnteredOrUpdated(&data,
+    GetFrame().GetPage()->GetDragController().DragEnteredOrUpdated(data,
                                                                    GetFrame());
     GetFrame().GetPage()->GetDragController().PerformDrop(
-        &data, GetFrame(), DragController::Operation());
+        data, GetFrame(), DragController::Operation());
   }
 
   // Injects a fully decoded 6 MP (3000x2000) image into an <img> and starts an
@@ -141,8 +160,8 @@ class DragControllerTest : public RenderingTest {
         DataObject::Create());
 
     // The drag must start regardless of the image's intrinsic size.
-    EXPECT_TRUE(GetFrame().GetPage()->GetDragController().StartDrag(
-        &GetFrame(), drag_state, mouse_event, drag_origin));
+    EXPECT_TRUE(
+        PopulateAndStartDrag(GetFrame(), drag_state, mouse_event, drag_origin));
 
     return GetChromeClient().last_drag_image_size;
   }
@@ -245,7 +264,7 @@ TEST_F(DragControllerSimTest, ThrottledDocumentHandled) {
       false);
 
   WebView().GetPage()->GetDragController().DragEnteredOrUpdated(
-      &data, *GetDocument().GetFrame());
+      data, *GetDocument().GetFrame());
 
   // Throttle updates, which prevents hit testing from yielding a node.
   WebView()
@@ -254,7 +273,7 @@ TEST_F(DragControllerSimTest, ThrottledDocumentHandled) {
       ->SetLifecycleUpdatesThrottledForTesting();
 
   WebView().GetPage()->GetDragController().PerformDrop(
-      &data, *GetDocument().GetFrame(), DragController::Operation());
+      data, *GetDocument().GetFrame(), DragController::Operation());
 
   // Test passes if we don't crash.
 }
@@ -280,7 +299,7 @@ TEST_F(DragControllerSimTest, LargeImageStartsDrag) {
   test::RunPendingTasks();
   Compositor().BeginFrame();
 
-  Element* image_element = GetDocument().getElementById(AtomicString("big"));
+  Element* image_element = GetElementById("big");
   ASSERT_TRUE(image_element);
 
   const gfx::Point drag_origin(50, 50);
@@ -297,6 +316,10 @@ TEST_F(DragControllerSimTest, LargeImageStartsDrag) {
   drag_state.drag_data_transfer_ = DataTransfer::Create(
       DataTransfer::kDragAndDrop, DataTransferAccessPolicy::kWritable,
       DataObject::Create());
+
+  EXPECT_TRUE(drag_controller.PopulateDragDataTransfer(
+      GetDocument().GetFrame(), drag_state, drag_origin,
+      gfx::ToFlooredPoint(mouse_event.PositionInRootFrame())));
 
   EXPECT_TRUE(drag_controller.StartDrag(GetDocument().GetFrame(), drag_state,
                                         mouse_event, drag_origin));
@@ -317,7 +340,7 @@ TEST_F(DragControllerSimTest, ImageDragWithEmptyUrlDoesNotStartDrag) {
   )HTML");
   Compositor().BeginFrame();
 
-  Element* image_element = GetDocument().getElementById(AtomicString("empty"));
+  Element* image_element = GetElementById("empty");
   ASSERT_TRUE(image_element);
 
   const gfx::Point drag_origin(50, 50);
@@ -334,9 +357,11 @@ TEST_F(DragControllerSimTest, ImageDragWithEmptyUrlDoesNotStartDrag) {
   drag_state.drag_data_transfer_ = DataTransfer::Create(
       DataTransfer::kDragAndDrop, DataTransferAccessPolicy::kWritable,
       DataObject::Create());
-
-  EXPECT_FALSE(drag_controller.StartDrag(GetDocument().GetFrame(), drag_state,
-                                         mouse_event, drag_origin));
+  // PopulateDragDataTransfer should fail which means StartDrag should not be
+  // called.
+  EXPECT_FALSE(drag_controller.PopulateDragDataTransfer(
+      GetDocument().GetFrame(), drag_state, drag_origin,
+      gfx::ToFlooredPoint(mouse_event.PositionInRootFrame())));
 }
 
 // Verifies that a link drag whose source `<a>` has no `href` does not start a
@@ -353,7 +378,7 @@ TEST_F(DragControllerSimTest, LinkDragWithEmptyHrefDoesNotStartDrag) {
   )HTML");
   Compositor().BeginFrame();
 
-  Element* link_element = GetDocument().getElementById(AtomicString("link"));
+  Element* link_element = GetElementById("link");
   ASSERT_TRUE(link_element);
 
   const gfx::Point drag_origin(10, 10);
@@ -371,8 +396,11 @@ TEST_F(DragControllerSimTest, LinkDragWithEmptyHrefDoesNotStartDrag) {
       DataTransfer::kDragAndDrop, DataTransferAccessPolicy::kWritable,
       DataObject::Create());
 
-  EXPECT_FALSE(drag_controller.StartDrag(GetDocument().GetFrame(), drag_state,
-                                         mouse_event, drag_origin));
+  // PopulateDragDataTransfer should fail which means StartDrag should not be
+  // called.
+  EXPECT_FALSE(drag_controller.PopulateDragDataTransfer(
+      GetDocument().GetFrame(), drag_state, drag_origin,
+      gfx::ToFlooredPoint(mouse_event.PositionInRootFrame())));
 }
 
 TEST_F(DragControllerTest, DragImageForSelectionClipsToViewport) {
@@ -642,8 +670,9 @@ TEST_F(DragControllerTest, DragImageOffsetWithPageScaleFactor) {
   drag_state.drag_data_transfer_ = DataTransfer::Create(
       DataTransfer::kDragAndDrop, DataTransferAccessPolicy::kWritable,
       DataObject::Create());
-  GetFrame().GetPage()->GetDragController().StartDrag(
-      &GetFrame(), drag_state, mouse_event, gfx::Point(5, 10));
+  const gfx::Point drag_initiation_location(5, 10);
+  EXPECT_TRUE(PopulateAndStartDrag(GetFrame(), drag_state, mouse_event,
+                                   drag_initiation_location));
 
   gfx::Size expected_image_size =
       gfx::Size(50 * page_scale_factor, 40 * page_scale_factor);
@@ -710,8 +739,9 @@ TEST_F(DragControllerTest, DragLinkWithPageScaleFactor) {
   drag_state.drag_data_transfer_ = DataTransfer::Create(
       DataTransfer::kDragAndDrop, DataTransferAccessPolicy::kWritable,
       DataObject::Create());
-  GetFrame().GetPage()->GetDragController().StartDrag(
-      &GetFrame(), drag_state, mouse_event, gfx::Point(5, 10));
+  const gfx::Point drag_initiation_location(5, 10);
+  EXPECT_TRUE(PopulateAndStartDrag(GetFrame(), drag_state, mouse_event,
+                                   drag_initiation_location));
 
   gfx::Size link_image_size = GetChromeClient().last_drag_image_size;
   // The drag link image should be a textual representation of the drag url in a

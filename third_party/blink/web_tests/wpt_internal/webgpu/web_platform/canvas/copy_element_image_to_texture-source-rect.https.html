@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html class="reftest-wait">
-  <title>WebGPU copyElementImageToTexture with source rect</title>
+  <title>WebGPU drawElementImageToTexture with source rect</title>
   <meta charset="utf-8" />
   <meta name="fuzzy" content="maxDifference=0-100; totalPixels=0-2000" />
   <link rel="help" href="https://github.com/WICG/html-in-canvas" />
@@ -31,32 +31,32 @@
     }
   </style>
 
-  <canvas layoutsubtree>
-    <div class="draw-element-wrapper box-shadow" outset="50">
+  <canvas content=drawable>
+    <div drawable class="draw-element-wrapper box-shadow" outset="50">
       <color-grid></color-grid>
     </div>
   </canvas>
 
-  <canvas layoutsubtree>
-    <div class="draw-element-wrapper outline" outset="50">
+  <canvas content=drawable>
+    <div drawable class="draw-element-wrapper outline" outset="50">
       <color-grid></color-grid>
     </div>
   </canvas>
 
-  <canvas layoutsubtree>
-    <div class="draw-element-wrapper box-shadow" outset="-20">
+  <canvas content=drawable>
+    <div drawable class="draw-element-wrapper box-shadow" outset="-20">
       <color-grid></color-grid>
     </div>
   </canvas>
 
-  <canvas layoutsubtree>
-    <div class="draw-element-wrapper outline" outset="-20">
+  <canvas content=drawable>
+    <div drawable class="draw-element-wrapper outline" outset="-20">
       <color-grid></color-grid>
     </div>
   </canvas>
 
-  <canvas layoutsubtree>
-    <div class="draw-element-wrapper outline" outset="10" xscale="2" yscale="0.5">
+  <canvas content=drawable>
+    <div drawable class="draw-element-wrapper outline" outset="10" xscale="2" yscale="0.5">
       <color-grid></color-grid>
     </div>
   </canvas>

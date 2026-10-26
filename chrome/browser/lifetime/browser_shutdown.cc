@@ -13,22 +13,22 @@
 #include "base/auto_reset.h"
 #include "base/clang_profiling_buildflags.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notimplemented.h"
+#include "base/notreached.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "build/config/compiler/compiler_buildflags.h"
-#include "chrome/browser/about_flags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/buildflags.h"
-#include "chrome/browser/lifetime/switch_utils.h"
 #include "chrome/browser/profiles/nuke_profile_directory_utils.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/crash/core/common/crash_key.h"
 #include "components/metrics/metrics_service.h"
@@ -45,6 +45,10 @@
 #if BUILDFLAG(IS_WIN)
 #include "chrome/browser/first_run/upgrade_util_win.h"
 #include "chrome/browser/win/browser_util.h"
+#include "chrome/common/chrome_features.h"
+#include "chrome/common/chrome_result_codes.h"
+#include "chrome/common/chrome_switches.h"
+#include "content/public/browser/browser_main_runner.h"
 #endif
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
@@ -55,7 +59,10 @@
 #include "chrome/browser/ash/boot_times_recorder/boot_times_recorder.h"
 #include "chrome/browser/lifetime/application_lifetime_chromeos.h"
 #include "chrome/browser/lifetime/termination_notification.h"
-#endif
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck
+#include "chrome/browser/ui/tabs/tab_strip_model.h"  // nogncheck
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(ENABLE_BACKGROUND_MODE)
 #include "chrome/browser/background/extensions/background_mode_manager.h"
@@ -79,6 +86,13 @@ bool g_trying_to_quit = false;
 base::Time* g_shutdown_started = nullptr;
 ShutdownType g_shutdown_type = ShutdownType::kNotValid;
 
+#if BUILDFLAG(IS_CHROMEOS)
+ShutdownPhase g_shutdown_phase = ShutdownPhase::kNotStarted;
+base::TimeTicks g_shutdown_phase_started;
+base::TimeTicks g_shutdown_started_ticks;
+ShutdownTrigger g_shutdown_trigger = ShutdownTrigger::kNotSet;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 const char* ToShutdownTypeString(ShutdownType type) {
   switch (type) {
     case ShutdownType::kNotValid:
@@ -97,13 +111,79 @@ const char* ToShutdownTypeString(ShutdownType type) {
   return "";
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
+const char* ToShutdownPhaseCrashKeyString(ShutdownPhase phase) {
+  switch (phase) {
+    case ShutdownPhase::kNotStarted:
+      NOTREACHED();
+    case ShutdownPhase::kClosingBrowsers:
+      return "closing-browsers";
+    case ShutdownPhase::kAshPreShell:
+      return "ash-pre-shell";
+    case ShutdownPhase::kAshShell:
+      return "ash-shell";
+    case ShutdownPhase::kBrowserProcess:
+      return "browser-process";
+    case ShutdownPhase::kAshPostProfile:
+      return "ash-post-profile";
+    case ShutdownPhase::kStoppingThreads:
+      return "stopping-threads";
+    case ShutdownPhase::kPostDestroyThreads:
+      return "post-destroy-threads";
+    case ShutdownPhase::kDone:
+      return "done";
+  }
+  NOTREACHED();
+}
+
+const char* GetShutdownPhaseHistogramName(ShutdownPhase phase) {
+  switch (phase) {
+    case ShutdownPhase::kNotStarted:
+    case ShutdownPhase::kDone:
+      return nullptr;
+    case ShutdownPhase::kClosingBrowsers:
+      return "Shutdown.ChromeOS.PhaseDuration.ClosingBrowsers";
+    case ShutdownPhase::kAshPreShell:
+      return "Shutdown.ChromeOS.PhaseDuration.AshPreShell";
+    case ShutdownPhase::kAshShell:
+      return "Shutdown.ChromeOS.PhaseDuration.AshShell";
+    case ShutdownPhase::kBrowserProcess:
+      return "Shutdown.ChromeOS.PhaseDuration.BrowserProcess";
+    case ShutdownPhase::kAshPostProfile:
+      return "Shutdown.ChromeOS.PhaseDuration.AshPostProfile";
+    case ShutdownPhase::kStoppingThreads:
+      return "Shutdown.ChromeOS.PhaseDuration.StoppingThreads";
+    case ShutdownPhase::kPostDestroyThreads:
+      return "Shutdown.ChromeOS.PhaseDuration.PostDestroyThreads";
+  }
+  NOTREACHED();
+}
+
+const char* ToShutdownTriggerCrashKeyString(ShutdownTrigger trigger) {
+  switch (trigger) {
+    case ShutdownTrigger::kNotSet:
+      NOTREACHED();
+    case ShutdownTrigger::kLogout:
+      return "logout";
+    case ShutdownTrigger::kSigterm:
+      return "sigterm";
+    case ShutdownTrigger::kRestartFlags:
+      return "restart-flags";
+    case ShutdownTrigger::kOther:
+      return "other";
+  }
+  NOTREACHED();
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 // Utility function to verify that globals are accessed on the UI/Main thread.
 void CheckAccessedOnCorrectThread() {
   // Some APIs below are accessed after UI thread has been torn down, so cater
   // for both situations here.
-  DCHECK(
-      content::BrowserThread::CurrentlyOn(content::BrowserThread::UI) ||
-      !content::BrowserThread::IsThreadInitialized(content::BrowserThread::UI));
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI) ||
+            !content::BrowserThread::IsThreadInitialized(
+                content::BrowserThread::UI),
+        base::NotFatalUntil::M161);
 }
 
 }  // namespace
@@ -122,12 +202,17 @@ void OnShutdownStarting(ShutdownType type) {
   static crash_reporter::CrashKeyString<11> shutdown_type_key("shutdown-type");
   shutdown_type_key.Set(ToShutdownTypeString(type));
 
+#if BUILDFLAG(IS_CHROMEOS)
+  SetShutdownTrigger(ShutdownTrigger::kOther);
+  SetShutdownPhase(ShutdownPhase::kClosingBrowsers);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
   g_shutdown_type = type;
   // For now, we're only counting the number of renderer processes
   // since we can't safely count the number of plugin processes from this
   // thread, and we'd really like to avoid anything which might add further
   // delays to shutdown time.
-  DCHECK(!g_shutdown_started);
+  CHECK(!g_shutdown_started, base::NotFatalUntil::M161);
   g_shutdown_started = new base::Time(base::Time::Now());
 
   // TODO(crbug.com/469788783):  Coverage builds appear to work without this. Check
@@ -146,11 +231,38 @@ void OnShutdownStarting(ShutdownType type) {
   // a no-op in some cases, so we still need to go through the normal
   // shutdown path for the ones that didn't exit here.
   if (g_browser_process) {
+#if BUILDFLAG(IS_CHROMEOS)
+    int tab_count = 0;
+    // GlobalFeatures is null in unit tests using a bare TestingBrowserProcess.
+    if (g_browser_process->GetFeatures() &&
+        GlobalBrowserCollection::GetInstance()) {
+      GlobalBrowserCollection::GetInstance()->ForEach(
+          [&tab_count](BrowserWindowInterface* browser) {
+            if (const TabStripModel* tab_strip_model =
+                    browser->GetTabStripModel()) {
+              tab_count += tab_strip_model->count();
+            }
+            return true;
+          });
+    }
+    base::UmaHistogramCounts1000("Shutdown.ChromeOS.TabsAtShutdown", tab_count);
+    int renderer_count = 0;
+#endif  // BUILDFLAG(IS_CHROMEOS)
     for (content::RenderProcessHost::iterator i(
              content::RenderProcessHost::AllHostsIterator());
          !i.IsAtEnd(); i.Advance()) {
-      i.GetCurrentValue()->FastShutdownIfPossible();
+      content::RenderProcessHost* rph = i.GetCurrentValue();
+#if BUILDFLAG(IS_CHROMEOS)
+      if (rph->IsInitializedAndNotDead()) {
+        ++renderer_count;
+      }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+      rph->FastShutdownIfPossible();
     }
+#if BUILDFLAG(IS_CHROMEOS)
+    base::UmaHistogramCounts100("Shutdown.ChromeOS.RenderersAtShutdown",
+                                renderer_count);
+#endif  // BUILDFLAG(IS_CHROMEOS)
   }
 }
 
@@ -173,6 +285,7 @@ ShutdownType GetShutdownType() {
 #if !BUILDFLAG(IS_ANDROID)
 RestartMode ShutdownPreThreadsStop() {
 #if BUILDFLAG(IS_CHROMEOS)
+  SetShutdownPhase(ShutdownPhase::kBrowserProcess);
   ash::BootTimesRecorder::Get()->AddLogoutTimeMarker("BrowserShutdownStarted",
                                                      false);
 #endif
@@ -226,7 +339,7 @@ void RecordShutdownMetrics() {
       time_metric_name = "Shutdown.OtherExit.Time2";
       break;
   }
-  DCHECK(time_metric_name);
+  CHECK(time_metric_name, base::NotFatalUntil::M161);
 
   if (g_shutdown_started) {
     base::TimeDelta shutdown_delta = base::Time::Now() - *g_shutdown_started;
@@ -281,48 +394,28 @@ void ShutdownPostThreadsStop(RestartMode restart_mode) {
 #if BUILDFLAG(IS_CHROMEOS)
     NOTIMPLEMENTED();
 #else
-    const base::CommandLine& old_cl(*base::CommandLine::ForCurrentProcess());
-    base::CommandLine new_cl(old_cl.GetProgram());
-    base::CommandLine::SwitchMap switches = old_cl.GetSwitches();
-
-    // Remove switches that shouldn't persist across any restart.
-    about_flags::RemoveFlagsSwitches(&switches);
-
-    switch (restart_mode) {
-      case RestartMode::kNoRestart:
-        NOTREACHED();
-
-      case RestartMode::kRestartInBackground:
-        new_cl.AppendSwitch(switches::kNoStartupWindow);
-        [[fallthrough]];
-
-      case RestartMode::kRestartLastSession:
-        // Relaunch the browser without any command line URLs or certain one-off
-        // switches.
-        switches::RemoveSwitchesForAutostart(&switches);
-        break;
-
-      case RestartMode::kRestartThisSession:
-        // Copy URLs and other arguments to the new command line.
-        if (const auto& old_args = old_cl.GetArgs(); !old_args.empty()) {
-          new_cl.AppendArgNative(FILE_PATH_LITERAL("--"));
-          for (const auto& arg : old_args) {
-            new_cl.AppendArgNative(arg);
-          }
-        }
-        break;
+    base::CommandLine new_cl = upgrade_util::GetRelaunchCommandLine(
+        *base::CommandLine::ForCurrentProcess(), restart_mode);
+#if BUILDFLAG(IS_WIN)
+    // An isolated browser must communicate its need for a restart to the stub
+    // via its process exit code. Select the exit code based on the flavor of
+    // restart and tell the runner to return this value so that it bubbles up
+    // and out of ChromeMain and is eventually returned from wWinMain.
+    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kIsolated)) {
+      content::BrowserMainRunner::SetOverrideResultCode(
+          restart_mode == RestartMode::kRestartInBackground
+              ? CHROME_RESULT_CODE_NORMAL_EXIT_RELAUNCH_BACKGROUND
+              : CHROME_RESULT_CODE_NORMAL_EXIT_RELAUNCH_REQUESTED);
     }
-
-    // Append the old switches to the new command line.
-    for (const auto& it : switches) {
-      new_cl.AppendSwitchNative(it.first, it.second);
-    }
-
-    if (restart_mode == RestartMode::kRestartLastSession ||
-        restart_mode == RestartMode::kRestartThisSession) {
-      new_cl.AppendSwitch(switches::kRestart);
-    }
+    const bool wait_for_parent =
+        base::FeatureList::IsEnabled(features::kRelaunchWaitForParentProcess);
+    upgrade_util::RelaunchChromeBrowser(new_cl,
+                                        /*force_breakaway_from_job=*/false,
+                                        wait_for_parent);
+#else
     upgrade_util::RelaunchChromeBrowser(new_cl);
+#endif  // BUILDFLAG(IS_WIN)
 #endif  // BUILDFLAG(IS_CHROMEOS)
   }
 
@@ -331,6 +424,64 @@ void ShutdownPostThreadsStop(RestartMode restart_mode) {
 #endif
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_CHROMEOS)
+void SetShutdownPhase(ShutdownPhase phase) {
+  CheckAccessedOnCorrectThread();
+  const base::TimeTicks now = base::TimeTicks::Now();
+  if (const char* histogram_name =
+          GetShutdownPhaseHistogramName(g_shutdown_phase)) {
+    base::UmaHistogramMediumTimes(histogram_name,
+                                  now - g_shutdown_phase_started);
+  }
+
+  g_shutdown_phase = phase;
+  g_shutdown_phase_started = now;
+
+  static crash_reporter::CrashKeyString<24> shutdown_phase_key(
+      "cros-shutdown-phase");
+  static crash_reporter::CrashKeyString<16> shutdown_elapsed_ms_key(
+      "cros-shutdown-elapsed-ms");
+  if (phase == ShutdownPhase::kNotStarted) {
+    g_shutdown_started_ticks = base::TimeTicks();
+    shutdown_phase_key.Clear();
+    shutdown_elapsed_ms_key.Clear();
+  } else {
+    if (g_shutdown_started_ticks.is_null()) {
+      g_shutdown_started_ticks = now;
+    }
+    shutdown_phase_key.Set(ToShutdownPhaseCrashKeyString(phase));
+    shutdown_elapsed_ms_key.Set(base::NumberToString(
+        (now - g_shutdown_started_ticks).InMilliseconds()));
+  }
+}
+
+ShutdownPhase GetShutdownPhaseForTesting() {
+  CheckAccessedOnCorrectThread();
+  return g_shutdown_phase;
+}
+
+void SetShutdownTrigger(ShutdownTrigger trigger) {
+  CheckAccessedOnCorrectThread();
+  static crash_reporter::CrashKeyString<16> shutdown_trigger_key(
+      "cros-shutdown-trigger");
+  if (trigger == ShutdownTrigger::kNotSet) {
+    g_shutdown_trigger = ShutdownTrigger::kNotSet;
+    shutdown_trigger_key.Clear();
+    return;
+  }
+  if (g_shutdown_trigger != ShutdownTrigger::kNotSet) {
+    return;
+  }
+  g_shutdown_trigger = trigger;
+  shutdown_trigger_key.Set(ToShutdownTriggerCrashKeyString(trigger));
+}
+
+ShutdownTrigger GetShutdownTriggerForTesting() {
+  CheckAccessedOnCorrectThread();
+  return g_shutdown_trigger;
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 void SetTryingToQuit(bool quitting) {
   CheckAccessedOnCorrectThread();
@@ -376,6 +527,11 @@ void ResetShutdownGlobalsForTesting() {
 
   g_trying_to_quit = false;
   g_shutdown_type = ShutdownType::kNotValid;
+#if BUILDFLAG(IS_CHROMEOS)
+  g_shutdown_phase = ShutdownPhase::kNotStarted;
+  SetShutdownPhase(ShutdownPhase::kNotStarted);
+  SetShutdownTrigger(ShutdownTrigger::kNotSet);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 }  // namespace browser_shutdown

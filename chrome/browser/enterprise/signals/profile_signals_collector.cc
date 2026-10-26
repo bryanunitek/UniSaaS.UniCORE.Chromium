@@ -19,6 +19,7 @@
 #include "components/device_signals/core/common/platform_utils.h"
 #include "components/enterprise/browser/identifiers/profile_id_service.h"
 #include "components/enterprise/buildflags/buildflags.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
 #include "components/policy/core/browser/url_list/policy_blocklist_service.h"
 #include "components/policy/core/common/cloud/cloud_policy_manager.h"
 #include "components/prefs/pref_service.h"
@@ -33,7 +34,7 @@ namespace device_signals {
 namespace {
 
 bool GetBuiltInDnsClientEnabled(PrefService* local_state) {
-  DCHECK(local_state);
+  CHECK(local_state, base::NotFatalUntil::M161);
   return local_state->GetBoolean(prefs::kBuiltInDnsClientEnabled);
 }
 
@@ -45,6 +46,9 @@ ProfileSignalsCollector::ProfileSignalsCollector(Profile* profile)
            base::BindRepeating(&ProfileSignalsCollector::GetProfileSignals,
                                base::Unretained(this))},
       }),
+      is_isolated_mode_(
+          enterprise_isolated_mode::IsCaaEnabledInIsolatedMode() &&
+          profile->IsEnterpriseIsolatedModeProfile()),
       policy_blocklist_service_(
           ChromePolicyBlocklistServiceFactory::GetForProfile(profile)),
       profile_prefs_(profile->GetPrefs()),
@@ -87,15 +91,15 @@ void ProfileSignalsCollector::GetProfileSignals(
   signal_response.site_isolation_enabled =
       device_signals::GetSiteIsolationEnabled();
   signal_response.profile_id = profile_id_service_->GetProfileId();
+  signal_response.is_isolated_mode = is_isolated_mode_;
 
 #if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS) || BUILDFLAG(IS_ANDROID)
   signal_response.realtime_url_check_mode =
       connectors_service_->GetAppliedRealTimeUrlCheck();
   signal_response.security_event_providers =
       connectors_service_->GetReportingServiceProviderNames();
-#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS) || BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS) && !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   signal_response.file_downloaded_providers =
       connectors_service_->GetAnalysisServiceProviderNames(
           enterprise_connectors::FILE_DOWNLOADED);
@@ -108,7 +112,8 @@ void ProfileSignalsCollector::GetProfileSignals(
   signal_response.print_providers =
       connectors_service_->GetAnalysisServiceProviderNames(
           enterprise_connectors::PRINT);
-#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS) && !BUILDFLAG(IS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
+#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS) || BUILDFLAG(IS_ANDROID)
 
   response.profile_signals_response = std::move(signal_response);
 

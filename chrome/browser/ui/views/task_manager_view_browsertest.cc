@@ -11,29 +11,37 @@
 #include "base/functional/callback.h"
 #include "base/strings/pattern.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/favicon/favicon_utils.h"
+#include "chrome/browser/preloading/preloading_features.h"
 #include "chrome/browser/task_manager/common/task_manager_features.h"
 #include "chrome/browser/task_manager/task_manager_browsertest_util.h"
+#include "chrome/browser/task_manager/task_manager_interface.h"
 #include "chrome/browser/task_manager/task_manager_tester.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/task_manager/task_manager_columns.h"
 #include "chrome/browser/ui/task_manager/task_manager_table_model.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/favicon/content/content_favicon_driver.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -43,9 +51,16 @@
 #include "content/public/test/test_utils.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/models/image_model.h"
+#include "ui/base/window_open_disposition.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/skia_util.h"
 #include "ui/views/controls/table/table_view.h"
 #include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
@@ -62,7 +77,17 @@ using browsertest_util::WaitForTaskManagerRows;
 
 class TaskManagerViewTest : public InProcessBrowserTest {
  public:
-  TaskManagerViewTest() = default;
+  TaskManagerViewTest() {
+    // TODO(crbug.com/539786691): Re-enable kPrewarm once the feature is
+    // compatible with the test.
+    webui_omnibox_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove these two Features.
+        {omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup, features::kPrewarm});
+  }
 
   TaskManagerViewTest(const TaskManagerViewTest&) = delete;
   TaskManagerViewTest& operator=(const TaskManagerViewTest&) = delete;
@@ -139,9 +164,86 @@ class TaskManagerViewTest : public InProcessBrowserTest {
     waiter.Wait();
   }
 
+  // Returns the icon the task manager holds for |tab|'s current page.
+  gfx::ImageSkia GetTaskIconForTab(content::WebContents* tab) {
+    TaskManagerInterface* const task_manager =
+        TaskManagerInterface::GetTaskManager();
+    return task_manager->GetIcon(task_manager->GetTaskIdForWebContents(tab));
+  }
+
+  // Returns the icon the task manager table shows for |tab|'s row.
+  ui::ImageModel GetIconForTab(content::WebContents* tab) {
+    const std::optional<size_t> row = FindRowForTab(tab);
+    EXPECT_TRUE(row);
+    return row ? GetView()->table_model_->GetIcon(*row) : ui::ImageModel();
+  }
+
+  // Returns a ColorProvider whose task manager table is entirely |background|,
+  // with |icon_color| as its icon color.
+  static std::unique_ptr<ui::ColorProvider> CreateTableColorProvider(
+      SkColor background,
+      SkColor icon_color) {
+    auto color_provider = std::make_unique<ui::ColorProvider>();
+    color_provider->SetColorForTesting(ui::kColorIcon, icon_color);
+    color_provider->SetColorForTesting(ui::kColorTableIconBackground,
+                                       background);
+    color_provider->SetColorForTesting(kColorTaskManagerTableBackground,
+                                       background);
+    return color_provider;
+  }
+
  private:
   base::test::ScopedFeatureList feature_list_;
+  base::test::ScopedFeatureList webui_omnibox_feature_list_;
 };
+
+IN_PROC_BROWSER_TEST_F(TaskManagerViewTest,
+                       ThemeableFaviconsAreRecoloredForTheTableTheme) {
+  chrome::ShowTaskManager(browser());
+  ASSERT_TRUE(GetView());
+  content::WebContents* const tab =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  // The NTP has a favicon of its own: a dark, monochrome one.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL(chrome::kChromeUINewTabPageURL)));
+  ASSERT_TRUE(base::test::RunUntil([tab]() {
+    return favicon::ContentFaviconDriver::FromWebContents(tab)
+        ->FaviconIsValid();
+  }));
+  const ui::ImageModel ntp_icon = GetIconForTab(tab);
+  ASSERT_TRUE(ntp_icon.IsImageGenerator());
+  // On a light table the NTP favicon is legible as designed, so the model
+  // hands out the task's icon itself.
+  const gfx::ImageSkia as_is = ntp_icon.Rasterize(
+      CreateTableColorProvider(SK_ColorWHITE, SK_ColorBLACK).get());
+  ASSERT_FALSE(as_is.isNull());
+  EXPECT_TRUE(as_is.BackedBySameObjectAs(GetTaskIconForTab(tab)));
+  // On a dark table it is recolored with the theme's icon color, the way the
+  // tab strip recolors it for a dark tab background.
+  const std::unique_ptr<ui::ColorProvider> dark_color_provider =
+      CreateTableColorProvider(SK_ColorBLACK, SK_ColorWHITE);
+  const gfx::ImageSkia recolored =
+      ntp_icon.Rasterize(dark_color_provider.get());
+  ASSERT_FALSE(recolored.isNull());
+  EXPECT_FALSE(recolored.BackedBySameObjectAs(as_is));
+  EXPECT_TRUE(gfx::BitmapsAreEqual(
+      *recolored.bitmap(),
+      *favicon::ThemeFavicon(as_is, SK_ColorWHITE, SK_ColorBLACK, SK_ColorBLACK)
+           .bitmap()));
+  // Repeated rasterization with the same theme colors reuses the cached icon.
+  const gfx::ImageSkia second_recolored =
+      ntp_icon.Rasterize(dark_color_provider.get());
+  EXPECT_TRUE(second_recolored.BackedBySameObjectAs(recolored));
+  // A page with a favicon of its own is shown as is on any table.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      embedded_test_server()->GetURL("/favicon/page_with_favicon.html")));
+  ASSERT_TRUE(base::test::RunUntil([tab]() {
+    return favicon::ContentFaviconDriver::FromWebContents(tab)
+        ->FaviconIsValid();
+  }));
+  EXPECT_TRUE(GetIconForTab(tab).IsImage());
+}
 
 // Tests that all defined columns have a corresponding string IDs for keying
 // into the user preferences dictionary.
@@ -298,7 +400,7 @@ IN_PROC_BROWSER_TEST_F(TaskManagerViewTest, InitialSelection) {
 
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), embedded_test_server()->GetURL("b.com", "/title3.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // When the task manager is initially shown, the row for the active tab should
@@ -307,15 +409,15 @@ IN_PROC_BROWSER_TEST_F(TaskManagerViewTest, InitialSelection) {
 
   EXPECT_EQ(1UL, GetTable()->selection_model().size());
   EXPECT_EQ(GetTable()->GetFirstSelectedRow(),
-            FindRowForTab(browser()->tab_strip_model()->GetWebContentsAt(1)));
+            FindRowForTab(browser()->GetTabStripModel()->GetWebContentsAt(1)));
 
   // Activate tab 0. The selection should not change.
-  browser()->tab_strip_model()->ActivateTabAt(
+  browser()->GetTabStripModel()->ActivateTabAt(
       0, TabStripUserGestureDetails(
              TabStripUserGestureDetails::GestureType::kOther));
   EXPECT_EQ(1UL, GetTable()->selection_model().size());
   EXPECT_EQ(GetTable()->GetFirstSelectedRow(),
-            FindRowForTab(browser()->tab_strip_model()->GetWebContentsAt(1)));
+            FindRowForTab(browser()->GetTabStripModel()->GetWebContentsAt(1)));
 
   // If the user re-triggers chrome::ShowTaskManager (e.g. via shift-esc), this
   // should set the TaskManager selection to the active tab.
@@ -323,7 +425,7 @@ IN_PROC_BROWSER_TEST_F(TaskManagerViewTest, InitialSelection) {
 
   EXPECT_EQ(1UL, GetTable()->selection_model().size());
   EXPECT_EQ(GetTable()->GetFirstSelectedRow(),
-            FindRowForTab(browser()->tab_strip_model()->GetWebContentsAt(0)));
+            FindRowForTab(browser()->GetTabStripModel()->GetWebContentsAt(0)));
 }
 
 // Test is flaky. https://crbug.com/41478531
@@ -337,11 +439,11 @@ IN_PROC_BROWSER_TEST_F(TaskManagerViewTest, DISABLED_SelectionConsistency) {
       browser(), embedded_test_server()->GetURL("a.com", "/title2.html")));
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), embedded_test_server()->GetURL("b.com", "/title2.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), embedded_test_server()->GetURL("c.com", "/title2.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // Wait for their titles to appear in the TaskManager. There should be three
@@ -420,7 +522,7 @@ IN_PROC_BROWSER_TEST_F(TaskManagerViewTest, DISABLED_SelectionConsistency) {
   // Focus and reload one of the sad tabs. It should reappear in the TM. The
   // other sad tab should not reappear.
   tabs[1]->GetDelegate()->ActivateContents(tabs[1]);
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows((rows += 1), pattern));
 
   // tabs[2] should still be selected.
@@ -502,7 +604,8 @@ IN_PROC_BROWSER_TEST_F(TaskManagerViewTest, AutoSelectFirstRowOnTableFocus) {
 
   views::TableView* table = GetTable();
   ASSERT_TRUE(table);
-  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, u"*"));
+  ASSERT_NO_FATAL_FAILURE(
+      WaitForTaskManagerRows(1, browsertest_util::MatchAnyTab()));
   ASSERT_GT(table->GetRowCount(), 0u);
 
   // Clear existing selection entirely, as well as the focus.
@@ -534,7 +637,7 @@ IN_PROC_BROWSER_TEST_F(TaskManagerViewTest,
       browser(), embedded_test_server()->GetURL("a.com", "/title3.html")));
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), embedded_test_server()->GetURL("b.com", "/title2.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   chrome::ShowTaskManager(browser());
@@ -572,7 +675,13 @@ IN_PROC_BROWSER_TEST_F(TaskManagerViewTest,
   table->RequestFocus();
 
   EXPECT_TRUE(table->HasFocus());
-  EXPECT_EQ(1u, table->ViewToModel(0));
+  // Sanity check that sorting actually reordered the rows, so that the
+  // expectations below verify that the first *visual* row is selected rather
+  // than simply the first model row.
+  // Note that the exact model index of the first visual row must not be
+  // hardcoded: features such as the WebUI add extra rows (e.g. "Tool: Omnibox")
+  // which shift the model indices.
+  EXPECT_NE(0u, table->ViewToModel(0));
   EXPECT_EQ(table->ViewToModel(0), table->GetFirstSelectedRow());
   EXPECT_EQ(table->ViewToModel(0), table->selection_model().active());
 }

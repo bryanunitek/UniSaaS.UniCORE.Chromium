@@ -4,13 +4,14 @@
 
 #include <memory>
 
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/accessibility/dump_accessibility_events_views_browsertest_base.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
 #include "content/public/test/browser_test.h"
 #include "ui/views/accessibility/tree/widget_ax_manager_test_api.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/menu_button_controller.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/view_utils.h"
@@ -68,6 +69,11 @@ IN_PROC_BROWSER_TEST_P(BrowserAppMenuButtonDumpAccessibilityEventsTest,
 @UIA-WIN-ALLOW:ExpandCollapseExpandCollapseState*
 @UIA-WIN-ALLOW:ToggleToggleState*
 )");
+
+  // Set a consistent accessible name so the dumped event matches the
+  // expectation file in both branded ("Chrome") and unbranded ("Chromium")
+  // builds.
+  GetAppMenuButton()->GetViewAccessibility().SetName(u"Chromium");
 
   // Flush any accessibility events generated while the browser was created so
   // only the checked-state change below is recorded.

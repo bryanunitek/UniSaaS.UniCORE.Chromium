@@ -46,14 +46,6 @@ constexpr gpu::SharedImageUsageSet kSharedImageUsage =
 
 constexpr char kSharedImageDebugLabel[] = "VideoToolboxVideoDecoder";
 
-// If enabled, adds SHARED_IMAGE_USAGE_WEBGPU_READ as a usage when creating
-// SharedImages for a WebGpu-compatible IOSurface. Intended as a killswitch
-// to guard against performance regressions.
-// TODO: crbug.com/349290188 - Clean up if no performance regressions are
-// observed.
-BASE_FEATURE(kVideoToolboxFrameConverterSpecifyWebGpuUsage,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 }  // namespace
 
 VideoToolboxFrameConverter::VideoToolboxFrameConverter(
@@ -169,8 +161,6 @@ void VideoToolboxFrameConverter::Convert(
     std::move(output_cb).Run(nullptr, std::move(metadata));
     return;
   }
-  bool allow_overlay = true;
-
   auto shared_image_interface = sis_->shared_image_interface();
   CHECK(shared_image_interface);
 
@@ -178,9 +168,7 @@ void VideoToolboxFrameConverter::Convert(
   const bool is_webgpu_compatible =
       gfx::IOSurfacePixelFormatIsWebGPUCompatible(pixel_format);
   gpu::SharedImageUsageSet shared_image_usage = kSharedImageUsage;
-  if (is_webgpu_compatible &&
-      base::FeatureList::IsEnabled(
-          kVideoToolboxFrameConverterSpecifyWebGpuUsage)) {
+  if (is_webgpu_compatible) {
     shared_image_usage |= gpu::SHARED_IMAGE_USAGE_WEBGPU_READ;
   }
 
@@ -188,10 +176,10 @@ void VideoToolboxFrameConverter::Convert(
   if (!color_space.IsValid()) {
     // Chrome and macOS do not agree on the color space; force compositing to
     // ensure a consistent result. See crbug.com/343014700.
-    allow_overlay = false;
-    // Always use limited range since we request a limited range output format.
+    shared_image_usage.RemoveAll(gpu::SHARED_IMAGE_USAGE_SCANOUT);
     color_space = metadata->color_space.GetWithMatrixAndRange(
-        metadata->color_space.GetMatrixID(), gfx::ColorSpace::RangeID::LIMITED);
+        metadata->color_space.GetMatrixID(),
+        gfx::IOSurfacePixelFormatRangeID(pixel_format));
   }
 
   auto shared_image = shared_image_interface->CreateSharedImage(
@@ -221,16 +209,14 @@ void VideoToolboxFrameConverter::Convert(
     return;
   }
 
-  frame->set_color_space(shared_image->color_space());
   frame->set_hdr_metadata(metadata->hdr_metadata);
   if (metadata->duration != kNoTimestamp && !metadata->duration.is_zero()) {
     frame->metadata().frame_duration = metadata->duration;
   }
-  frame->metadata().allow_overlay = allow_overlay;
   // Releasing |image| must happen after command buffer commands are complete
   // (not just submitted).
   frame->metadata().read_lock_fences_enabled = true;
-  frame->metadata().is_webgpu_compatible = is_webgpu_compatible;
+
   // TODO(crbug.com/40227557): VideoToolbox can report software usage, should
   // we plumb that through?
   frame->metadata().power_efficient = true;
@@ -257,7 +243,7 @@ void VideoToolboxFrameConverter::OnVideoFrameReleased(
   // Release |image|.
   stub_->channel()->scheduler()->ScheduleTask(gpu::Scheduler::Task(
       wait_sequence_id_, base::DoNothingWithBoundArgs(std::move(image)),
-      std::vector<gpu::SyncToken>({sync_token})));
+      client_shared_image->GetSyncTokensForVideoFrame(sync_token)));
 }
 
 }  // namespace media

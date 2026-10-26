@@ -38,8 +38,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -60,6 +61,7 @@
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/client_hints.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_view_host.h"
@@ -719,7 +721,8 @@ class ClientHintsBrowserTest : public policy::PolicyTest {
     web_contents->SetWebPreferences(prefs);
   }
 
-  void TestProfilesIndependent(Browser* browser_a, Browser* browser_b);
+  void TestProfilesIndependent(BrowserWindowInterface* browser_a,
+                               BrowserWindowInterface* browser_b);
   void TestSwitchWithNewProfile(const std::string& switch_value,
                                 size_t origins_stored);
 
@@ -935,7 +938,7 @@ class ClientHintsBrowserTest : public policy::PolicyTest {
 
   Profile* GenerateNewProfile() {
     ProfileManager* profile_manager = g_browser_process->profile_manager();
-    base::FilePath current_profile_path = browser()->profile()->GetPath();
+    base::FilePath current_profile_path = browser()->GetProfile()->GetPath();
 
     // Create an additional profile.
     base::FilePath new_path =
@@ -1757,7 +1760,8 @@ IN_PROC_BROWSER_TEST_F(ClientHintsBrowserTest,
             count_client_hints_headers_seen());
 
   // OTR profile should get neither.
-  Browser* otr_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* otr_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   SetClientHintExpectationsOnMainFrame(false);
   SetClientHintExpectationsOnSubresources(false);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(otr_browser,
@@ -2111,8 +2115,9 @@ IN_PROC_BROWSER_TEST_F(ClientHintsBrowserTest, MergeAcceptCH_MetaDelegate) {
   EXPECT_EQ(expected_client_hints_number, count_client_hints_headers_seen());
 }
 
-void ClientHintsBrowserTest::TestProfilesIndependent(Browser* browser_a,
-                                                     Browser* browser_b) {
+void ClientHintsBrowserTest::TestProfilesIndependent(
+    BrowserWindowInterface* browser_a,
+    BrowserWindowInterface* browser_b) {
   const GURL gurl = accept_ch_url();
 
   blink::UserAgentMetadata ua = embedder_support::GetUserAgentMetadata();
@@ -3228,7 +3233,7 @@ IN_PROC_BROWSER_TEST_F(ClientHintsBrowserTest,
   const GURL gurl = accept_ch_url();
 
   base::HistogramTester histogram_tester;
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
 
   ContentSettingsForOneType host_settings =
       HostContentSettingsMapFactory::GetForProfile(incognito->GetProfile())
@@ -3702,7 +3707,7 @@ IN_PROC_BROWSER_TEST_F(CriticalClientHintsBrowserTest,
                        CriticalClientHintWithUncachedViewport) {
   // Force an empty viewport size.
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetClientHintsControllerDelegate()
       ->ForceEmptyViewportSizeForTesting(true);
   // We should never see real sizes sent.
@@ -3716,7 +3721,7 @@ IN_PROC_BROWSER_TEST_F(CriticalClientHintsBrowserTest,
   EXPECT_EQ(observed_ch_viewport_widths_deprecated()[0], "MISSING");
   // Cleanup shim to prevent other tests from breaking.
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetClientHintsControllerDelegate()
       ->ForceEmptyViewportSizeForTesting(false);
 }
@@ -3727,7 +3732,7 @@ IN_PROC_BROWSER_TEST_F(CriticalClientHintsBrowserTest,
                        CriticalClientHintWithUncachedViewportAndCachedHints) {
   // Force an empty viewport size.
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetClientHintsControllerDelegate()
       ->ForceEmptyViewportSizeForTesting(true);
   // Add setting for the host.
@@ -3757,7 +3762,7 @@ IN_PROC_BROWSER_TEST_F(CriticalClientHintsBrowserTest,
   EXPECT_EQ(observed_ch_viewport_widths_deprecated()[0], "MISSING");
   // Cleanup shim to prevent other tests from breaking.
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetClientHintsControllerDelegate()
       ->ForceEmptyViewportSizeForTesting(false);
 }
@@ -4828,7 +4833,7 @@ void ClientHintsBrowserTest::TestSwitchWithNewProfile(
       client_hints::switches::kInitializeClientHintsStorage, switch_value);
 
   Profile* profile = GenerateNewProfile();
-  Browser* browser = CreateBrowser(profile);
+  BrowserWindowInterface* browser = CreateBrowser(profile);
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, without_accept_ch_url()));
 
@@ -4918,7 +4923,8 @@ IN_PROC_BROWSER_TEST_F(ClientHintsCommandLineSwitchBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), without_accept_ch_url()));
 
   // OTR profile should get neither.
-  Browser* otr_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* otr_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   SetClientHintExpectationsOnMainFrame(false);
   SetClientHintExpectationsOnSubresources(false);
   ASSERT_TRUE(
@@ -5050,75 +5056,4 @@ IN_PROC_BROWSER_TEST_F(QUICClientHintsTest, BasicQUICAlps) {
   histogram_tester.ExpectBucketCount(
       "ClientHints.AcceptCHFrame",
       content::AcceptCHFrameRestart::kNavigationRestarted, 1);
-}
-
-class ClientHintsBrowserTestForBlockAcceptClientHintsExperiment
-    : public ClientHintsBrowserTest,
-      public testing::WithParamInterface<bool> {
- private:
-  void SetUpScopedFeatureList(
-      base::test::ScopedFeatureList& scoped_feature_list) override {
-    // Setup kBlockAcceptClientHints experiment, based on the test parameter.
-    if (GetParam()) {
-      scoped_feature_list.InitAndEnableFeatureWithParameters(
-          network::features::kBlockAcceptClientHints,
-          {{network::features::kBlockAcceptClientHintsBlockedSite.name,
-            url::Origin::Create(accept_ch_url()).Serialize()}});
-    }
-  }
-};
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    ClientHintsBrowserTestForBlockAcceptClientHintsExperiment,
-    testing::Bool());
-
-IN_PROC_BROWSER_TEST_P(
-    ClientHintsBrowserTestForBlockAcceptClientHintsExperiment,
-    Block) {
-  base::HistogramTester histogram_tester;
-  ContentSettingsForOneType host_settings =
-      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile())
-          ->GetSettingsForOneType(ContentSettingsType::CLIENT_HINTS);
-  EXPECT_EQ(0u, host_settings.size());
-
-  // Fetching `gurl` should persist the request for client hints iff using
-  // headers without the experiment targeting the URL.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), accept_ch_url()));
-
-  const size_t expected_count = GetParam() ? 0 : 1;
-  histogram_tester.ExpectUniqueSample("ClientHints.UpdateEventCount", 1,
-                                      expected_count);
-
-  content::FetchHistogramsFromChildProcesses();
-  metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
-  base::RunLoop().RunUntilIdle();
-
-  histogram_tester.ExpectUniqueSample(
-      "ClientHints.UpdateSize", expected_client_hints_number, expected_count);
-
-  // Clients hints preferences for one origin should be persisted iff the url is
-  // not targeted as the blocked site.
-  host_settings =
-      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile())
-          ->GetSettingsForOneType(ContentSettingsType::CLIENT_HINTS);
-  EXPECT_EQ(expected_count, host_settings.size());
-
-  // Expects extra sec-ch headers attached iff the url is not targeted as the
-  // blocked site.
-  SetClientHintExpectationsOnMainFrame(expected_count);
-  SetClientHintExpectationsOnSubresources(expected_count);
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), without_accept_ch_url()));
-
-  // The user agent hint is attached to all three requests regardless of the
-  // blocked site setting.
-  EXPECT_EQ(3u, count_user_agent_hint_headers_seen());
-  EXPECT_EQ(3u, count_ua_mobile_client_hints_headers_seen());
-  EXPECT_EQ(3u, count_ua_platform_client_hints_headers_seen());
-  EXPECT_EQ(0u, count_save_data_client_hints_headers_seen());
-
-  // Expected number of specified extra hints attached to the image request, and
-  // the same number to the main frame request. The expectation must be 0 iff
-  // the url is targeted as the blocked site.
-  EXPECT_EQ(expected_client_hints_number * 2 * expected_count,
-            count_client_hints_headers_seen());
 }

@@ -14,8 +14,6 @@ import android.content.Context;
 import android.content.res.Resources;
 import android.os.Build.VERSION_CODES;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -25,6 +23,7 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.ServiceLoaderUtil;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchController.AuxiliarySearchHostType;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -56,6 +55,7 @@ public class AuxiliarySearchControllerFactoryUnitTest {
     @Before
     public void setUp() {
         ProfileManager.setLastUsedProfileForTesting(mProfile);
+        when(mContext.getApplicationContext()).thenReturn(mContext);
         when(mContext.getResources()).thenReturn(mResources);
 
         AuxiliarySearchBridgeJni.setInstanceForTesting(mMockAuxiliarySearchBridgeJni);
@@ -66,17 +66,16 @@ public class AuxiliarySearchControllerFactoryUnitTest {
         AuxiliarySearchDonor.setSkipInitializationForTesting(true);
 
         mFactory = AuxiliarySearchControllerFactory.getInstance();
-        mFactory.setHooksForTesting(mHooks);
+        ServiceLoaderUtil.setInstanceForTesting(AuxiliarySearchHooks.class, mHooks);
     }
 
     @Test
-    @SmallTest
     public void testIsEnabled() {
-        mFactory.setHooksForTesting(null);
+        ServiceLoaderUtil.setInstanceForTesting(AuxiliarySearchHooks.class, null);
         assertFalse(mFactory.isEnabled());
 
         when(mHooks.isEnabled()).thenReturn(false);
-        mFactory.setHooksForTesting(mHooks);
+        ServiceLoaderUtil.setInstanceForTesting(AuxiliarySearchHooks.class, mHooks);
         assertFalse(mFactory.isEnabled());
 
         when(mHooks.isEnabled()).thenReturn(true);
@@ -84,7 +83,15 @@ public class AuxiliarySearchControllerFactoryUnitTest {
     }
 
     @Test
-    @SmallTest
+    @Config(sdk = VERSION_CODES.R)
+    public void testCreateAuxiliarySearchController_belowS() {
+        when(mHooks.isEnabled()).thenReturn(true);
+        assertNull(
+                mFactory.createAuxiliarySearchController(
+                        mContext, mProfile, mTabModelSelector, AuxiliarySearchHostType.CTA));
+    }
+
+    @Test
     @Config(sdk = VERSION_CODES.S)
     public void testCreateAuxiliarySearchController() {
         when(mHooks.isEnabled()).thenReturn(false);
@@ -108,10 +115,35 @@ public class AuxiliarySearchControllerFactoryUnitTest {
                 mFactory.createAuxiliarySearchController(
                         mContext, mProfile, mTabModelSelector, AuxiliarySearchHostType.CTA);
         assertTrue(controller instanceof AuxiliarySearchMultiDataControllerImpl);
+
+        // Verifies CustomTab controller is not created for OffTheRecord profiles and is cached
+        // across calls for regular profiles.
+        when(mProfile.isOffTheRecord()).thenReturn(true);
+        assertNull(
+                mFactory.createAuxiliarySearchController(
+                        mContext,
+                        mProfile,
+                        /* tabModelSelector= */ null,
+                        AuxiliarySearchHostType.CUSTOM_TAB));
+
+        when(mProfile.isOffTheRecord()).thenReturn(false);
+        AuxiliarySearchController customTabController1 =
+                mFactory.createAuxiliarySearchController(
+                        mContext,
+                        mProfile,
+                        /* tabModelSelector= */ null,
+                        AuxiliarySearchHostType.CUSTOM_TAB);
+        assertTrue(customTabController1 instanceof AuxiliarySearchControllerImpl);
+        AuxiliarySearchController customTabController2 =
+                mFactory.createAuxiliarySearchController(
+                        mContext,
+                        mProfile,
+                        /* tabModelSelector= */ null,
+                        AuxiliarySearchHostType.CUSTOM_TAB);
+        assertEquals(customTabController1, customTabController2);
     }
 
     @Test
-    @SmallTest
     public void testIsMultiDataTypeEnabledOnDevice() {
         when(mHooks.isMultiDataTypeEnabledOnDevice()).thenReturn(false);
         assertFalse(mFactory.isMultiDataTypeEnabledOnDevice());
@@ -121,7 +153,6 @@ public class AuxiliarySearchControllerFactoryUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testIsSettingDefaultEnabledByOs() {
         when(mHooks.isEnabled()).thenReturn(false);
         when(mHooks.isSettingDefaultEnabledByOs()).thenReturn(true);
@@ -133,7 +164,6 @@ public class AuxiliarySearchControllerFactoryUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSetIsTablet() {
         mFactory.resetIsTabletForTesting();
         mFactory.setIsTablet(false);
@@ -148,14 +178,13 @@ public class AuxiliarySearchControllerFactoryUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testGetSupportedPackageName() {
         String packageName = "name";
         when(mHooks.getSupportedPackageName()).thenReturn(packageName);
 
         assertEquals(packageName, mFactory.getSupportedPackageName());
 
-        mFactory.setHooksForTesting(null);
+        ServiceLoaderUtil.setInstanceForTesting(AuxiliarySearchHooks.class, null);
         assertNull(mFactory.getSupportedPackageName());
     }
 }

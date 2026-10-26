@@ -32,6 +32,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_PERFORMANCE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_PERFORMANCE_H_
 
+#include <optional>
+
 #include "base/functional/callback_forward.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -44,6 +46,7 @@
 #include "third_party/blink/renderer/core/dom/dom_high_res_time_stamp.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/core/loader/frame_loader_types.h"
+#include "third_party/blink/renderer/core/performance_entry_names.h"
 #include "third_party/blink/renderer/core/timing/performance_entry.h"
 #include "third_party/blink/renderer/core/timing/performance_paint_timing.h"
 #include "third_party/blink/renderer/core/timing/performance_timeline_entry_id_generator.h"
@@ -157,6 +160,14 @@ class CORE_EXPORT Performance : public EventTarget {
   // Internal getter method for the time origin value.
   base::TimeTicks GetTimeOriginInternal() const { return time_origin_; }
 
+  PerformanceNavigationTiming* NavigationTiming() const {
+    return navigation_timing_.Get();
+  }
+
+  PerformanceEntry* FirstPaintTiming() const {
+    return first_paint_timing_.Get();
+  }
+
   // Get all performance entries of the main frame. This is kept until the one
   // with optional filtering options is enabled by default.
   PerformanceEntryVector getEntries();
@@ -197,8 +208,8 @@ class CORE_EXPORT Performance : public EventTarget {
   DEFINE_ATTRIBUTE_EVENT_LISTENER(resourcetimingbufferfull,
                                   kResourcetimingbufferfull)
 
-  virtual uint64_t NavigationId() const {
-    return PerformanceTimelineEntryIdInfo::kNoId;
+  virtual PerformanceTimelineEntryIdInfo NavigationId() const {
+    return PerformanceTimelineEntryIdInfo::kNone;
   }
 
   void AddLongTaskTiming(base::TimeTicks start_time,
@@ -246,6 +257,19 @@ class CORE_EXPORT Performance : public EventTarget {
   void clearMarks() { return clearMarks(AtomicString()); }
 
   virtual void markConditional(ScriptState*, const AtomicString& mark_name);
+  virtual void measureConditional(ScriptState*,
+                                  const AtomicString& measure_name,
+                                  const AtomicString& start_mark,
+                                  const AtomicString& end_mark);
+  void measureConditional(ScriptState* script_state,
+                          const AtomicString& measure_name,
+                          const AtomicString& start_mark) {
+    measureConditional(script_state, measure_name, start_mark, g_null_atom);
+  }
+  void measureConditional(ScriptState* script_state,
+                          const AtomicString& measure_name) {
+    measureConditional(script_state, measure_name, g_null_atom, g_null_atom);
+  }
 
   void AddBackForwardCacheRestoration(base::TimeTicks start_time,
                                       base::TimeTicks pageshow_start_time,
@@ -317,7 +341,7 @@ class CORE_EXPORT Performance : public EventTarget {
 
   bool HasObserverFor(PerformanceEntry::EntryType) const;
   // Determine whether a given Node can be exposed via a Web Perf API.
-  static bool CanExposeNode(Node*);
+  static bool CanExposeNode(Node*, const DOMWindow* source);
 
   ScriptObject toJSONForBinding(ScriptState*) const;
 
@@ -435,7 +459,8 @@ class CORE_EXPORT Performance : public EventTarget {
   PerformanceEntryVector long_animation_frame_buffer_;
   Member<PerformanceNavigationTiming> navigation_timing_;
   Member<UserTiming> user_timing_;
-  PerformanceEntryVector paint_entries_timing_;
+  Member<PerformancePaintTiming> first_paint_timing_;
+  Member<PerformancePaintTiming> first_contentful_paint_timing_;
   Member<PerformanceEventTiming> first_input_timing_;
 
   base::TimeTicks time_origin_;

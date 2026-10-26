@@ -13,7 +13,6 @@
 #include "chrome/browser/enterprise/connectors/test/fake_clipboard_request_handler.h"
 #include "chrome/browser/enterprise/connectors/test/fake_content_analysis_delegate.h"
 #include "chrome/browser/enterprise/data_protection/data_protection_clipboard_utils.h"
-#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -153,7 +152,7 @@ class PasteAllowedRequestTest : public testing::Test {
   }
 
   content::ClipboardEndpoint main_endpoint() {
-    return content::ClipboardEndpoint(
+    return content::ClipboardEndpoint::ForFrame(
         ui::DataTransferEndpoint(GURL("https://google.com")),
         base::BindLambdaForTesting([this]() -> content::BrowserContext* {
           return static_cast<content::BrowserContext*>(profile_);
@@ -172,7 +171,7 @@ class PasteAllowedRequestTest : public testing::Test {
   }
 
   content::ClipboardEndpoint child_endpoint() {
-    return content::ClipboardEndpoint(
+    return content::ClipboardEndpoint::ForFrame(
         ui::DataTransferEndpoint(GURL("https://google.com")),
         base::BindLambdaForTesting([this]() -> content::BrowserContext* {
           return static_cast<content::BrowserContext*>(profile_);
@@ -193,7 +192,7 @@ class PasteAllowedRequestTest : public testing::Test {
   }
 
   content::ClipboardEndpoint secondary_endpoint() {
-    return content::ClipboardEndpoint(
+    return content::ClipboardEndpoint::ForFrame(
         ui::DataTransferEndpoint(GURL("https://google.com")),
         base::BindLambdaForTesting([this]() -> content::BrowserContext* {
           return static_cast<content::BrowserContext*>(profile_);
@@ -496,7 +495,7 @@ TEST_F(PasteAllowedRequestTest, UnknownSource) {
 
   base::test::TestFuture<std::optional<content::ClipboardPasteData>> future;
   PasteAllowedRequest::StartPasteAllowedRequest(
-      /*source*/ content::ClipboardEndpoint(std::nullopt),
+      /*source*/ content::ClipboardEndpoint::ForOutsideChrome(std::nullopt),
       /*destination*/ main_endpoint(), {.seqno = seqno}, clipboard_paste_data,
       future.GetCallback());
 

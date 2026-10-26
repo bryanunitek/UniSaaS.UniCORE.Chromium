@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "media/media_buildflags.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 
 namespace blink {
@@ -29,21 +30,35 @@ PLATFORM_EXPORT const char* EchoCancellationModeToString(EchoCancellationMode);
 // The result of parsing media stream constraints.
 struct PLATFORM_EXPORT AudioProcessingProperties {
   enum class VoiceIsolationType {
+#if !BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
     // Voice isolation behavior selected by the system is used.
     kVoiceIsolationDefault,
+#endif
     // Voice isolation is disabled.
     kVoiceIsolationDisabled,
     // Voice isolation is enabled.
     kVoiceIsolationEnabled,
   };
 
+  static inline constexpr VoiceIsolationType kVoiceIsolationDefaultValue =
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+      VoiceIsolationType::kVoiceIsolationDisabled;
+#else
+      VoiceIsolationType::kVoiceIsolationDefault;
+#endif
+
   // Disables properties that are enabled by default.
   static const AudioProcessingProperties& Disabled();
 
-  bool HasSameReconfigurableSettings(
+  // Returns true if the session identity properties match.
+  bool HasSameSessionIdentityProperties(
       const AudioProcessingProperties& other) const;
 
-  bool HasSameNonReconfigurableSettings(
+  // Returns true if properties that are interlocked across processed sources on
+  // the same capture device match.
+  // TODO(crbug.com/558631113): Update this once interlocked properties are
+  // scoped per session rather than per device.
+  bool HasSameInterlockingProperties(
       const AudioProcessingProperties& other) const;
 
   std::string ToString() const;
@@ -52,9 +67,12 @@ struct PLATFORM_EXPORT AudioProcessingProperties {
       EchoCancellationMode::kBrowserDecides;
   bool auto_gain_control = true;
   bool noise_suppression = true;
-  VoiceIsolationType voice_isolation =
-      VoiceIsolationType::kVoiceIsolationDefault;
+  VoiceIsolationType voice_isolation = kVoiceIsolationDefaultValue;
 };
+
+inline constexpr AudioProcessingProperties::VoiceIsolationType
+    kVoiceIsolationDefaultValue =
+        AudioProcessingProperties::kVoiceIsolationDefaultValue;
 
 // Which echo canceller to run and where - based on AudioProcessingProperties.
 class PLATFORM_EXPORT EchoCanceller {

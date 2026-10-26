@@ -301,7 +301,6 @@ void GlanceablesTasksView::SelectedListChanged() {
   UpdateComboboxReplacementLabelText();
 
   weak_ptr_factory_.InvalidateWeakPtrs();
-  tasks_requested_time_ = base::TimeTicks::Now();
   tasks_list_change_count_++;
   ScheduleUpdateTasks(ListShownContext::kUserSelectedList);
 }
@@ -417,7 +416,7 @@ void GlanceablesTasksView::ScheduleUpdateTasks(ListShownContext context) {
   }
 
   SetIsLoading(true);
-  combobox_view()->GetViewAccessibility().SetDescription(u"");
+  combobox_view()->GetViewAccessibility().RemoveDescription();
 
   const auto* const active_task_list = GetActiveTaskList();
   tasks_combobox_model_->SaveLastSelectedTaskList(active_task_list->id);
@@ -528,6 +527,8 @@ void GlanceablesTasksView::UpdateTasksInTaskList(
   // arbitrary non empty value.
   task_list_sentinel_->SetPreferredSize(gfx::Size(1, 1));
   task_list_sentinel_->SetPaintToLayer(ui::LAYER_NOT_DRAWN);
+  task_list_sentinel_->layer()->SetName(
+      "GlanceablesTasksView:TaskListSentinel");
   task_list_sentinel_->layer()->SetFillsBoundsOpaquely(false);
   task_list_sentinel_->layer()->SetOpacity(0.0f);
   task_view_model_.Add(task_list_sentinel_.get(), task_view_model_.view_size());
@@ -565,17 +566,11 @@ void GlanceablesTasksView::UpdateTasksInTaskList(
   switch (context) {
     case ListShownContext::kCachedList:
       break;
-    case ListShownContext::kInitialList: {
-      auto* controller = Shell::Get()->glanceables_controller();
-      RecordTasksInitialLoadTime(
-          /*first_occurrence=*/controller->bubble_shown_count() == 1,
-          base::TimeTicks::Now() - controller->last_bubble_show_time());
+    case ListShownContext::kInitialList:
       first_task_list_shown_ = true;
       break;
-    }
     case ListShownContext::kUserSelectedList:
       RecordActiveTaskListChanged();
-      RecordTasksChangeLoadTime(base::TimeTicks::Now() - tasks_requested_time_);
       first_task_list_shown_ = true;
       break;
   }

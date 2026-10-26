@@ -5,21 +5,20 @@
 #include "chrome/browser/ui/ai_overlay_dialog/ai_overlay_dialog_controller.h"
 
 #include "base/functional/callback_forward.h"
+#include "base/notimplemented.h"
+#include "base/values.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
+#include "chrome/browser/metrics/variations/google_groups_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
-#include "chrome/browser/ui/views/interaction/browser_elements_views.h"
-#include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions.h"
-#include "chrome/browser/ui/webui/webui_embedding_context.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
-#include "components/content_settings/core/common/content_settings.h"
-#include "components/vector_icons/vector_icons.h"
-#include "content/public/browser/browser_context.h"
-#include "content/public/browser/render_widget_host_view.h"
+#include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
+#include "components/variations/service/google_groups_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/actions/actions.h"
 #include "ui/base/class_property.h"
@@ -27,9 +26,6 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "ui/menus/simple_menu_model.h"
-#include "ui/views/controls/webview/web_contents_set_background_color.h"
-#include "ui/views/controls/webview/webview.h"
-#include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
 namespace ttc {
@@ -37,6 +33,17 @@ namespace ttc {
 DEFINE_UI_CLASS_PROPERTY_KEY(bool, kActionAiOverlayActiveKey, false)
 
 DEFINE_USER_DATA(AiOverlayDialogController);
+
+// static
+bool AiOverlayDialogController::IsEnabledForProfile(Profile* profile) {
+  if (!profile) {
+    return false;
+  }
+  GoogleGroupsManager* groups_manager =
+      GoogleGroupsManagerFactory::GetForBrowserContext(profile);
+  return groups_manager &&
+         groups_manager->IsFeatureEnabledForProfile(features::kAiOverlayDialog);
+}
 
 // static
 AiOverlayDialogController* AiOverlayDialogController::From(
@@ -59,112 +66,99 @@ AiOverlayDialogController::AiOverlayDialogController(
 
 AiOverlayDialogController::~AiOverlayDialogController() = default;
 
-views::WebView* AiOverlayDialogController::GetActiveOverlayWebView() const {
-  auto* elements = BrowserElementsViews::From(browser_);
-  if (!elements) {
-    return nullptr;
-  }
-  return elements->GetViewAs<views::WebView>(kAiOverlayDialogWebViewElementId);
-}
-
-void AiOverlayDialogController::ShowOverlay() {
-  views::WebView* overlay_web_view = GetActiveOverlayWebView();
-  if (!overlay_web_view) {
-    return;
-  }
-
-  views::WebContentsSetBackgroundColor::CreateForWebContentsWithColor(
-      overlay_web_view->GetWebContents(), SK_ColorTRANSPARENT);
-
-  webui::SetBrowserWindowInterface(overlay_web_view->GetWebContents(),
-                                   browser_);
-  overlay_web_view->GetWebContents()->SetDelegate(this);
-
-  overlay_web_view->LoadInitialURL(
-      GURL(chrome::kChromeUIAiOverlayDialogUntrustedURL));
-
-  overlay_web_view->SetVisible(true);
-  overlay_web_view->InvalidateLayout();
-  overlay_web_view->parent()->InvalidateLayout();
-
-  if (overlay_web_view->GetWidget()) {
-    overlay_web_view->GetWidget()->LayoutRootViewIfNecessary();
-  }
-
-  if (auto* action_item = actions::ActionManager::Get().FindAction(
-          kActionShowAiOverlayDialog,
-          browser_->GetFeatures().GetRootActionItem())) {
-    action_item->SetImage(ui::ImageModel::FromVectorIcon(
-        features::IsRoundedIconsEnabled() ? vector_icons::kPauseFilledIcon
-                                          : vector_icons::kPauseOldIcon,
-        ui::kColorIcon, ui::SimpleMenuModel::kDefaultIconSize));
-    action_item->SetProperty(kActionAiOverlayActiveKey, true);
-  }
-
-  // Update the action state to ensure the toolbar button prevents overflow when
-  // the dialog is active.
-  if (auto* pinned_actions = browser_->GetFeatures().pinned_toolbar_actions()) {
-    pinned_actions->UpdateActionState(kActionShowAiOverlayDialog,
-                                      /*is_active=*/true);
-  }
-}
-
-void AiOverlayDialogController::HideOverlay() {
-  views::WebView* overlay_web_view = GetActiveOverlayWebView();
-  if (overlay_web_view) {
-    overlay_web_view->SetVisible(false);
-  }
-
-  if (auto* action_item = actions::ActionManager::Get().FindAction(
-          kActionShowAiOverlayDialog,
-          browser_->GetFeatures().GetRootActionItem())) {
-    action_item->SetImage(ui::ImageModel::FromVectorIcon(
-        features::IsRoundedIconsEnabled() ? vector_icons::kMicFilledIcon
-                                          : vector_icons::kMicOldIcon,
-        ui::kColorIcon, ui::SimpleMenuModel::kDefaultIconSize));
-    action_item->SetProperty(kActionAiOverlayActiveKey, false);
-  }
-
-  // Update the action state to ensure the toolbar button prevents overflow when
-  // the dialog is active.
-  if (auto* pinned_actions = browser_->GetFeatures().pinned_toolbar_actions()) {
-    pinned_actions->UpdateActionState(kActionShowAiOverlayDialog,
-                                      /*is_active=*/false);
-  }
-}
-
 void AiOverlayDialogController::ToggleOverlay() {
   if (IsOverlayShowing()) {
-    HideOverlay();
+    CloseOverlay();
   } else {
     ShowOverlay();
   }
 }
 
-bool AiOverlayDialogController::IsOverlayShowing() const {
-  views::WebView* overlay_web_view = GetActiveOverlayWebView();
-  return overlay_web_view != nullptr && overlay_web_view->GetVisible();
-}
-
-void AiOverlayDialogController::set_captions_visible(bool visible) {
-  VLOG(1) << "set_captions_visible: " << visible;
-  if (captions_visible_ == visible) {
+// TODO(crbug.com/535704548): Consider renaming SetInputCaptionsVisible /
+// SetCaptionsVisible to SetInputCaptionsEnabled / SetCaptionsEnabled to
+// differentiate from ephemeral visibility.
+void AiOverlayDialogController::SetInputCaptionsVisible(bool visible) {
+  VLOG(1) << "SetInputCaptionsVisible: " << visible;
+  if (input_captions_visible_ == visible) {
     return;
   }
-  captions_visible_ = visible;
+  input_captions_visible_ = visible;
   for (auto& observer : observers_) {
-    observer.OnCaptionsVisibleChanged(visible);
+    observer.OnInputCaptionsVisibleChanged(visible);
   }
 }
 
-void AiOverlayDialogController::set_use_persona(bool use_persona) {
-  VLOG(1) << "set_use_persona: " << use_persona;
+void AiOverlayDialogController::SetOutputCaptionsVisible(bool visible) {
+  VLOG(1) << "SetOutputCaptionsVisible: " << visible;
+  if (output_captions_visible_ == visible) {
+    return;
+  }
+  output_captions_visible_ = visible;
+  for (auto& observer : observers_) {
+    observer.OnOutputCaptionsVisibleChanged(visible);
+  }
+}
+
+void AiOverlayDialogController::SetCaptionsVisible(bool visible) {
+  SetInputCaptionsVisible(visible);
+  SetOutputCaptionsVisible(visible);
+}
+
+void AiOverlayDialogController::SetUsePersona(bool use_persona) {
+  VLOG(1) << "SetUsePersona: " << use_persona;
   if (use_persona_ == use_persona) {
     return;
   }
   use_persona_ = use_persona;
   for (auto& observer : observers_) {
     observer.OnUsePersonaChanged(use_persona);
+  }
+}
+
+// static
+void AiOverlayDialogController::RegisterProfilePrefs(
+    user_prefs::PrefRegistrySyncable* registry) {
+  registry->RegisterDictionaryPref(prefs::kAiOverlayRememberedNotes);
+}
+
+std::vector<std::pair<std::string, std::string>>
+AiOverlayDialogController::GetRememberedNotes() const {
+  std::vector<std::pair<std::string, std::string>> result;
+  if (!browser_ || !browser_->GetProfile()) {
+    return result;
+  }
+  PrefService* prefs = browser_->GetProfile()->GetPrefs();
+  if (!prefs) {
+    return result;
+  }
+  const base::DictValue& dict =
+      prefs->GetDict(prefs::kAiOverlayRememberedNotes);
+  result.reserve(dict.size());
+  for (const auto [key, value] : dict) {
+    if (value.is_string()) {
+      result.emplace_back(key, value.GetString());
+    }
+  }
+  return result;
+}
+
+void AiOverlayDialogController::SetRememberedNote(const std::string& key,
+                                                  const std::string& value) {
+  if (key.empty()) {
+    return;
+  }
+  if (!browser_ || !browser_->GetProfile()) {
+    return;
+  }
+  PrefService* prefs = browser_->GetProfile()->GetPrefs();
+  if (!prefs) {
+    return;
+  }
+  ScopedDictPrefUpdate update(prefs, prefs::kAiOverlayRememberedNotes);
+  if (value.empty()) {
+    update->Remove(key);
+  } else {
+    update->Set(key, value);
   }
 }
 
@@ -189,15 +183,6 @@ bool AiOverlayDialogController::CheckMediaAccessPermission(
     const url::Origin& security_origin,
     blink::mojom::MediaStreamType type) {
   return true;
-}
-
-void AiOverlayDialogController::ResizeDueToAutoResize(
-    content::WebContents* source,
-    const gfx::Size& new_size) {
-  views::WebView* overlay_web_view = GetActiveOverlayWebView();
-  if (overlay_web_view && overlay_web_view->GetWebContents() == source) {
-    overlay_web_view->SetPreferredSize(new_size);
-  }
 }
 
 }  // namespace ttc

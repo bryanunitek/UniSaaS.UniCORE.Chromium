@@ -5,33 +5,27 @@
 #include "chrome/browser/ui/views/omnibox/omnibox_row_view.h"
 
 #include "base/strings/string_number_conversions.h"
-#include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/browser/ui/omnibox/omnibox_controller.h"
-#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_theme.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_header_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_match_cell_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_result_view.h"
-#include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/omnibox_popup_selection.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/models/image_model.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/metadata/type_conversion.h"
-#include "ui/views/style/typography.h"
 
-DEFINE_ENUM_CONVERTERS(OmniboxPopupSelection::LineState,
-                       {OmniboxPopupSelection::NORMAL, u"NORMAL"},
-                       {OmniboxPopupSelection::KEYWORD_MODE, u"KEYWORD_MODE"},
-                       {OmniboxPopupSelection::FOCUSED_BUTTON_ACTION,
-                        u"FOCUSED_BUTTON_ACTION"},
-                       {OmniboxPopupSelection::FOCUSED_BUTTON_THUMBS_UP,
-                        u"FOCUSED_BUTTON_THUMBS_UP"},
-                       {OmniboxPopupSelection::FOCUSED_BUTTON_THUMBS_DOWN,
-                        u"FOCUSED_BUTTON_THUMBS_DOWN"},
-                       {OmniboxPopupSelection::FOCUSED_BUTTON_REMOVE_SUGGESTION,
-                        u"FOCUSED_BUTTON_REMOVE_SUGGESTION"})
+DEFINE_ENUM_CONVERTERS(
+    OmniboxPopupSelection::LineState,
+    {OmniboxPopupSelection::LineState::kNormal, u"kNormal"},
+    {OmniboxPopupSelection::LineState::kKeywordMode, u"kKeywordMode"},
+    {OmniboxPopupSelection::LineState::kFocusedButtonAction,
+     u"kFocusedButtonAction"},
+    {OmniboxPopupSelection::LineState::kFocusedButtonThumbsUp,
+     u"kFocusedButtonThumbsUp"},
+    {OmniboxPopupSelection::LineState::kFocusedButtonThumbsDown,
+     u"kFocusedButtonThumbsDown"},
+    {OmniboxPopupSelection::LineState::kFocusedButtonRemoveSuggestion,
+     u"kFocusedButtonRemoveSuggestion"})
 
 template <>
 struct ui::metadata::TypeConverter<OmniboxPopupSelection>

@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assertNonNull;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Activity;
+import android.util.LongSparseArray;
 import android.view.View;
 
 import org.jni_zero.CalledByNative;
@@ -33,9 +34,7 @@ import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /** A helper class that handles generating and dismissing context menus for {@link WebContents}. */
 @NullMarked
@@ -46,7 +45,8 @@ public class ContextMenuHelper {
     // Using ScopedJavaGlobalRef in the owning C++ object to keep the Java object alive consumes an
     // entry per instance in the finite global ref table. This scales poorly with a large number of
     // WebContents. As a workaround, use this map to keep track of the ContextMenuHelper instances.
-    private static final Map<Long, ContextMenuHelper> sContextMenuHelperMap = new HashMap<>();
+    private static final LongSparseArray<ContextMenuHelper> sContextMenuHelperMap =
+            new LongSparseArray<>();
 
     private final WebContents mWebContents;
     private long mNativeContextMenuHelper;
@@ -71,8 +71,8 @@ public class ContextMenuHelper {
     private ContextMenuHelper(long nativeContextMenuHelper, WebContents webContents) {
         mNativeContextMenuHelper = nativeContextMenuHelper;
         mWebContents = webContents;
-        var storedValue = sContextMenuHelperMap.put(nativeContextMenuHelper, this);
-        assert storedValue == null;
+        assert sContextMenuHelperMap.get(nativeContextMenuHelper) == null;
+        sContextMenuHelperMap.put(nativeContextMenuHelper, this);
     }
 
     @CalledByNative
@@ -85,7 +85,10 @@ public class ContextMenuHelper {
         dismissContextMenu();
         if (mCurrentNativeDelegate != null) mCurrentNativeDelegate.destroy();
         if (mPopulatorFactory != null) mPopulatorFactory.onDestroy();
-        var removedValue = sContextMenuHelperMap.remove(mNativeContextMenuHelper);
+        destroyContextMenuParams(mCurrentContextMenuParams);
+        mCurrentContextMenuParams = null;
+        var removedValue = sContextMenuHelperMap.get(mNativeContextMenuHelper);
+        sContextMenuHelperMap.remove(mNativeContextMenuHelper);
         assert removedValue == this;
         mNativeContextMenuHelper = 0;
     }
@@ -94,6 +97,8 @@ public class ContextMenuHelper {
     private void setPopulatorFactory(ContextMenuPopulatorFactory populatorFactory) {
         dismissContextMenu();
         if (mCurrentNativeDelegate != null) mCurrentNativeDelegate.destroy();
+        destroyContextMenuParams(mCurrentContextMenuParams);
+        mCurrentContextMenuParams = null;
         mCurrentPopulator = null;
         if (mPopulatorFactory != null) mPopulatorFactory.onDestroy();
         mPopulatorFactory = populatorFactory;
@@ -101,6 +106,7 @@ public class ContextMenuHelper {
 
     /**
      * Starts showing a context menu for {@code view} based on {@code params}.
+     *
      * @param params The {@link ContextMenuParams} that indicate what menu items to show.
      * @param renderFrameHost {@link RenderFrameHost} to get the encoded images from.
      * @param view container view for the menu.
@@ -112,7 +118,10 @@ public class ContextMenuHelper {
             RenderFrameHost renderFrameHost,
             View view,
             float topContentOffsetPx) {
-        if (params.isFile()) return;
+        if (params.isFile()) {
+            destroyContextMenuParams(params);
+            return;
+        }
 
         final WindowAndroid windowAndroid = mWebContents.getTopLevelNativeWindow();
 
@@ -124,6 +133,7 @@ public class ContextMenuHelper {
                 || mPopulatorFactory == null
                 || !mPopulatorFactory.isEnabled()
                 || mCurrentContextMenu != null) {
+            destroyContextMenuParams(params);
             return;
         }
 
@@ -162,6 +172,8 @@ public class ContextMenuHelper {
                         // Has no effect if the classification already succeeded.
                         mChipDelegate.onMenuClosed();
                     }
+                    destroyContextMenuParams(mCurrentContextMenuParams);
+                    mCurrentContextMenuParams = null;
                     if (mNativeContextMenuHelper == 0) return;
                     ContextMenuHelperJni.get().onContextMenuClosed(mNativeContextMenuHelper);
                 };
@@ -261,6 +273,12 @@ public class ContextMenuHelper {
     @CalledByNative
     private static ContextMenuHelper getJavaObject(long nativeContextMenuHelper) {
         return assertNonNull(sContextMenuHelperMap.get(nativeContextMenuHelper));
+    }
+
+    private static void destroyContextMenuParams(@Nullable ContextMenuParams params) {
+        if (params != null) {
+            params.destroy();
+        }
     }
 
     @NativeMethods

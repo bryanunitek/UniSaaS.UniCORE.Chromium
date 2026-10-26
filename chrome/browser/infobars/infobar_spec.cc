@@ -4,6 +4,13 @@
 
 #include "chrome/browser/infobars/infobar_spec.h"
 
+#include <string>
+#include <utility>
+
+#include "components/infobars/core/infobar_delegate.h"
+#include "ui/gfx/vector_icon_types.h"
+#include "url/gurl.h"
+
 namespace infobars {
 
 InfoBarSpec::Builder::Builder(
@@ -19,9 +26,39 @@ InfoBarSpec::Builder& InfoBarSpec::Builder::SetMessageText(
   return *this;
 }
 
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetMessageTextTemplate(
+    std::u16string message_text_template) {
+  spec_.message_text_template_ = std::move(message_text_template);
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetSubstitutionsCallback(
+    SubstitutionsCallback callback) {
+  spec_.substitutions_callback_ = std::move(callback);
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetInlineLinkCallback(
+    InlineLinkCallback callback) {
+  spec_.inline_link_callback_ = std::move(callback);
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetCustomViewCallback(
+    CustomViewCallback callback) {
+  spec_.custom_view_callback_ = std::move(callback);
+  return *this;
+}
+
 InfoBarSpec::Builder& InfoBarSpec::Builder::SetLinkText(
     std::u16string link_text) {
   spec_.link_text_ = std::move(link_text);
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetLinkAccessibleText(
+    std::u16string link_accessible_text) {
+  spec_.link_accessible_text_ = std::move(link_accessible_text);
   return *this;
 }
 
@@ -30,9 +67,27 @@ InfoBarSpec::Builder& InfoBarSpec::Builder::SetLinkNavigationUrl(GURL gurl) {
   return *this;
 }
 
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetShouldShowLinkBeforeButton(
+    bool should_show_link_before_button) {
+  spec_.should_show_link_before_button_ = should_show_link_before_button;
+  return *this;
+}
+
+InfoBarSpec::Builder&
+InfoBarSpec::Builder::SetLinkSpacingWhenPositionedBeforeButton(int spacing) {
+  spec_.link_spacing_when_positioned_before_button_ = spacing;
+  return *this;
+}
+
 InfoBarSpec::Builder& InfoBarSpec::Builder::SetIcon(
     const gfx::VectorIcon& icon) {
   spec_.icon_ = &icon;
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetDarkModeIcon(
+    const gfx::VectorIcon& icon) {
+  spec_.dark_mode_icon_ = &icon;
   return *this;
 }
 
@@ -47,7 +102,7 @@ InfoBarSpec::Builder& InfoBarSpec::Builder::SetScope(InfoBarScope scope) {
 }
 
 InfoBarSpec::Builder& InfoBarSpec::Builder::SetPriority(
-    InfoBarPriority priority) {
+    InfoBarDelegate::InfobarPriority priority) {
   spec_.priority_ = priority;
   return *this;
 }
@@ -61,6 +116,41 @@ InfoBarSpec::Builder& InfoBarSpec::Builder::SetExpireOnNavigation(
 InfoBarSpec::Builder& InfoBarSpec::Builder::SetShouldHideInFullscreen(
     bool should_hide_in_fullscreen) {
   spec_.should_hide_in_fullscreen_ = should_hide_in_fullscreen;
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetShouldAnimate(
+    bool should_animate) {
+  spec_.should_animate_ = should_animate;
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetIsCloseable(bool is_closeable) {
+  spec_.is_closeable_ = is_closeable;
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetAllowDuplicates(
+    bool allow_duplicates) {
+  spec_.allow_duplicates_ = allow_duplicates;
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetCloseOnAccept(
+    bool close_on_accept) {
+  spec_.close_on_accept_ = close_on_accept;
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetCloseOnCancel(
+    bool close_on_cancel) {
+  spec_.close_on_cancel_ = close_on_cancel;
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetCloseOnExtraButton(
+    bool close_on_extra_button) {
+  spec_.close_on_extra_button_ = close_on_extra_button;
   return *this;
 }
 
@@ -80,9 +170,29 @@ InfoBarSpec::Builder& InfoBarSpec::Builder::AddCancelButton(
   return *this;
 }
 
+InfoBarSpec::Builder& InfoBarSpec::Builder::AddExtraButton(
+    const std::u16string& label,
+    ActionCallback callback) {
+  spec_.extra_button_label_ = label;
+  spec_.extra_button_callback_ = std::move(callback);
+  return *this;
+}
+
 InfoBarSpec::Builder& InfoBarSpec::Builder::SetDismissAction(
     ActionCallback callback) {
   spec_.dismiss_callback_ = std::move(callback);
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetResultCallback(
+    ResultCallback callback) {
+  spec_.result_callback_ = std::move(callback);
+  return *this;
+}
+
+InfoBarSpec::Builder& InfoBarSpec::Builder::SetBrowserFilter(
+    BrowserFilter filter) {
+  spec_.browser_filter_ = std::move(filter);
   return *this;
 }
 
@@ -95,5 +205,22 @@ InfoBarSpec::InfoBarSpec(const InfoBarSpec&) = default;
 InfoBarSpec::InfoBarSpec(InfoBarSpec&&) = default;
 InfoBarSpec::~InfoBarSpec() = default;
 InfoBarSpec& InfoBarSpec::operator=(const InfoBarSpec&) = default;
+
+InfoBarButtonParams::InfoBarButtonParams() = default;
+InfoBarButtonParams::InfoBarButtonParams(InfoBarButtonParams&&) = default;
+InfoBarButtonParams& InfoBarButtonParams::operator=(InfoBarButtonParams&&) =
+    default;
+InfoBarButtonParams::InfoBarButtonParams(const InfoBarButtonParams&) = default;
+InfoBarButtonParams& InfoBarButtonParams::operator=(
+    const InfoBarButtonParams&) = default;
+InfoBarButtonParams::~InfoBarButtonParams() = default;
+
+InfoBarShowParams::InfoBarShowParams() = default;
+InfoBarShowParams::InfoBarShowParams(InfoBarShowParams&&) = default;
+InfoBarShowParams& InfoBarShowParams::operator=(InfoBarShowParams&&) = default;
+InfoBarShowParams::InfoBarShowParams(const InfoBarShowParams&) = default;
+InfoBarShowParams& InfoBarShowParams::operator=(const InfoBarShowParams&) =
+    default;
+InfoBarShowParams::~InfoBarShowParams() = default;
 
 }  // namespace infobars

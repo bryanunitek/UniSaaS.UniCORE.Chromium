@@ -40,6 +40,7 @@
 #include "third_party/blink/public/web/web_element.h"
 #include "third_party/blink/public/web/web_element_collection.h"
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_node.h"
 #include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
 #include "third_party/blink/renderer/core/dom/container_node.h"
@@ -157,6 +158,23 @@ WebNode WebNode::ParentInFlatTree() const {
   return WebNode(FlatTreeTraversal::Parent(*private_));
 }
 
+WebNode WebNode::NextInFlatTree(const WebNode& stay_within) const {
+  if (private_.IsNull() || stay_within.private_.IsNull()) {
+    return WebNode();
+  }
+  return WebNode(
+      FlatTreeTraversal::Next(*private_, stay_within.private_.Get()));
+}
+
+WebNode WebNode::NextSkippingChildrenInFlatTree(
+    const WebNode& stay_within) const {
+  if (private_.IsNull() || stay_within.private_.IsNull()) {
+    return WebNode();
+  }
+  return WebNode(FlatTreeTraversal::NextSkippingChildren(
+      *private_, stay_within.private_.Get()));
+}
+
 bool WebNode::IsInUserAgentShadowRoot() const {
   return private_->IsInUserAgentShadowRoot();
 }
@@ -239,6 +257,10 @@ v8::Local<v8::Value> WebNode::ToV8Value(v8::Isolate* isolate) {
 
 bool WebNode::IsElementNode() const {
   return private_->IsElementNode();
+}
+
+bool WebNode::IsPseudoElement() const {
+  return private_->IsPseudoElement();
 }
 
 bool WebNode::IsDocumentNode() const {
@@ -352,6 +374,10 @@ int WebNode::GetDomNodeId() const {
 }
 
 // static
+WebNode WebNode::FromV8Value(v8::Isolate* isolate, v8::Local<v8::Value> value) {
+  return WebNode(V8Node::ToWrappable(isolate, value));
+}
+
 WebNode WebNode::FromDomNodeId(int dom_node_id) {
   return WebNode(Node::FromDomNodeId(dom_node_id));
 }

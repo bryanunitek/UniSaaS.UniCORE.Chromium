@@ -20,7 +20,9 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/time_format.h"
 #include "ui/base/models/dialog_model.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
+#include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/view_class_properties.h"
 
@@ -58,8 +60,7 @@ void ShowIdleBubble(BrowserWindowInterface* bwi,
                     base::TimeDelta idle_threshold,
                     IdleDialog::ActionSet actions,
                     base::OnceClosure on_close) {
-  if (!bwi || !bwi->GetTabStripModel()->GetActiveWebContents() ||
-      GetIdleBubble(bwi)) {
+  if (!bwi || !bwi->GetActiveTabInterface() || GetIdleBubble(bwi)) {
     return;
   }
 

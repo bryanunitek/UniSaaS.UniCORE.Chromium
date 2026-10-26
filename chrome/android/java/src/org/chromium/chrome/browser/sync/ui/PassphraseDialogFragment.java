@@ -7,8 +7,6 @@ package org.chromium.chrome.browser.sync.ui;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Dialog;
-import android.content.DialogInterface;
-import android.content.DialogInterface.OnClickListener;
 import android.graphics.PorterDuff;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
@@ -22,7 +20,6 @@ import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
-import android.widget.TextView.OnEditorActionListener;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.fragment.app.DialogFragment;
@@ -34,15 +31,16 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
+import org.chromium.chrome.browser.settings.SettingsCustomTabLauncherImpl;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
-import org.chromium.chrome.browser.sync.settings.SyncSettingsUtils;
+import org.chromium.chrome.browser.sync.SyncSettingsUtils;
 import org.chromium.components.sync.SyncService;
 import org.chromium.ui.text.SpanApplier;
 import org.chromium.ui.text.SpanApplier.SpanInfo;
 
 /** Dialog to ask to user to enter their sync passphrase. */
 @NullMarked
-public class PassphraseDialogFragment extends DialogFragment implements OnClickListener {
+public class PassphraseDialogFragment extends DialogFragment {
     private static final String TAG = "Sync_UI";
 
     /** A delegate for passphrase events/dependencies. */
@@ -101,14 +99,11 @@ public class PassphraseDialogFragment extends DialogFragment implements OnClickL
 
         mPassphraseEditText = v.findViewById(R.id.passphrase);
         mPassphraseEditText.setOnEditorActionListener(
-                new OnEditorActionListener() {
-                    @Override
-                    public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
-                        if (actionId == EditorInfo.IME_ACTION_NEXT) {
-                            handleSubmit();
-                        }
-                        return false;
+                (TextView _, int actionId, KeyEvent _) -> {
+                    if (actionId == EditorInfo.IME_ACTION_NEXT) {
+                        handleSubmit();
                     }
+                    return false;
                 });
 
         // Create a new background Drawable for the passphrase EditText to use when the user has
@@ -128,41 +123,22 @@ public class PassphraseDialogFragment extends DialogFragment implements OnClickL
                         .setView(v)
                         .setPositiveButton(
                                 R.string.submit,
-                                new OnClickListener() {
-                                    @Override
-                                    public void onClick(DialogInterface d, int which) {
-                                        // We override the onclick. This is a hack to not dismiss
-                                        // the dialog after click of OK and instead dismiss it after
-                                        // confirming the passphrase is correct.
-                                    }
+                                (_, _) -> {
+                                    // We override the onclick. This is a hack to not dismiss
+                                    // the dialog after click of OK and instead dismiss it after
+                                    // confirming the passphrase is correct.
                                 })
-                        .setNegativeButton(R.string.cancel, this)
+                        .setNegativeButton(R.string.cancel, (_, _) -> handleCancel())
                         .setTitle(R.string.sync_enter_passphrase_title)
                         .create();
 
         d.getDelegate().setHandleNativeActionModesEnabled(false);
         d.setOnShowListener(
-                new DialogInterface.OnShowListener() {
-                    @Override
-                    public void onShow(DialogInterface dialog) {
-                        Button b = d.getButton(AlertDialog.BUTTON_POSITIVE);
-                        b.setOnClickListener(
-                                new View.OnClickListener() {
-                                    @Override
-                                    public void onClick(View view) {
-                                        handleSubmit();
-                                    }
-                                });
-                    }
+                _ -> {
+                    Button b = d.getButton(AlertDialog.BUTTON_POSITIVE);
+                    b.setOnClickListener(_ -> handleSubmit());
                 });
         return d;
-    }
-
-    @Override
-    public void onClick(DialogInterface dialog, int which) {
-        if (which == AlertDialog.BUTTON_NEGATIVE) {
-            handleCancel();
-        }
     }
 
     @Override
@@ -191,7 +167,8 @@ public class PassphraseDialogFragment extends DialogFragment implements OnClickL
                         new ClickableSpan() {
                             @Override
                             public void onClick(View view) {
-                                SyncSettingsUtils.openSyncDashboard(getActivity());
+                                SyncSettingsUtils.openSyncDashboard(
+                                        getContext(), new SettingsCustomTabLauncherImpl());
                             }
                         }));
     }
@@ -213,8 +190,8 @@ public class PassphraseDialogFragment extends DialogFragment implements OnClickL
 
     private Delegate getDelegate() {
         Fragment target = getTargetFragment();
-        if (target instanceof Delegate) {
-            return (Delegate) target;
+        if (target instanceof Delegate delegate) {
+            return delegate;
         }
         return (Delegate) getActivity();
     }

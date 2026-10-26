@@ -38,7 +38,6 @@ class UserSelectableTypeTest : public ::testing::Test {
     data_types.Put(APPS);
     data_types.Put(APP_SETTINGS);
     data_types.Put(WEB_APPS);
-    data_types.Put(WEB_APKS);
 
     return data_types;
   }
@@ -57,7 +56,6 @@ class UserSelectableTypeTest : public ::testing::Test {
     // selectable type or to a new one and remove it from here (unless it's
     // ambiguous).
     data_types.Put(CONTEXTUAL_TASK);
-
     return data_types;
   }
 };

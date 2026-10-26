@@ -70,8 +70,7 @@ UIImage* ConfirmationAlertImage() {
 
     // Draw the icon.
     [UIColor.whiteColor setFill];
-    UIImage* icon =
-        DefaultSymbolTemplateWithPointSize(kSquareOnSquareDashedSymbol, 0);
+    UIImage* icon = SymbolTemplateWithPointSize(SymbolSquareOnSquareDashed, 0);
     if (icon.size.width > icon.size.height) {
       CGFloat ratio = icon.size.height / icon.size.width;
       CGFloat drawingWidth = kTileSize - 2 * kIconPadding;
@@ -146,8 +145,17 @@ UIImage* ConfirmationAlertImage() {
 }
 
 - (void)stop {
+  [self stopWithCompletion:nil];
+}
+
+- (void)stopWithCompletion:(ProceduralBlock)completion {
   [super stop];
-  [_confirmationAlert dismissViewControllerAnimated:YES completion:nil];
+  if (_confirmationAlert) {
+    [_confirmationAlert dismissViewControllerAnimated:YES
+                                           completion:completion];
+  } else if (completion) {
+    completion();
+  }
 }
 
 #pragma mark - ConfirmationAlertActionHandler

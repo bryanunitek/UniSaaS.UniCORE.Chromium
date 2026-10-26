@@ -4,13 +4,17 @@
 
 #include "components/search_engines/ai_mode_button_service.h"
 
-#include <limits>
+#include <string>
 #include <string_view>
 #include <utility>
 
 #include "base/callback_list.h"
 #include "base/check.h"
+#include "base/strings/strcat.h"
+#include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
 #include "components/omnibox/common/omnibox_features.h"
+#include "components/search_engines/ai_mode_button_config.h"
 #include "components/search_engines/search_engine_type.h"
 #include "components/search_engines/search_terms_data.h"
 #include "components/search_engines/template_url.h"
@@ -18,44 +22,54 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
 
-namespace {
-
-// Verify `str` is not null, not empty, and at most `max_length`.
-bool IsValidStringPtr(const char16_t* str, size_t max_length) {
-  if (!str || str[0] == u'\0') {
-    return false;
-  }
-  return std::u16string_view(str).length() <= max_length;
+AiModeButtonUiConfig::AiModeButtonUiConfig(
+    SearchEngineType id,
+    const std::u16string& name,
+    const std::u16string& dse_name,
+    std::string_view favicon_url,
+    std::string_view navigation_url,
+    std::string_view navigation_url_empty)
+    : id(id),
+      text(name),
+      tooltip(
+          id == SearchEngineType::SEARCH_ENGINE_GOOGLE
+              ? l10n_util::GetStringFUTF16(IDS_AI_MODE_ENTRYPOINT_TOOLTIP_1P,
+                                           name,
+                                           dse_name)
+              : l10n_util::GetStringFUTF16(IDS_AI_MODE_ENTRYPOINT_TOOLTIP_3P,
+                                           name)),
+#if BUILDFLAG(IS_IOS)
+      a11y_label(
+          l10n_util::GetStringFUTF16(IDS_AI_MODE_ENTRYPOINT_ACC_LABEL, name)),
+#else
+      a11y_label(
+          l10n_util::GetStringFUTF16(IDS_AI_MODE_ENTRYPOINT_ACC_FOCUSED, name)),
+#endif
+      context_menu_label(
+          l10n_util::GetStringFUTF16(IDS_AI_MODE_ENTRYPOINT_CONTEXT_MENU_SHOW,
+                                     name)),
+      placeholder_text(
+          l10n_util::GetStringFUTF16(IDS_AI_MODE_OMNIBOX_PLACEHOLDER, name)),
+      favicon_url(favicon_url),
+      navigation_url(navigation_url),
+      navigation_url_empty(navigation_url_empty) {
 }
-
-}  // namespace
+AiModeButtonUiConfig::AiModeButtonUiConfig(const AiModeButtonUiConfig&) =
+    default;
+AiModeButtonUiConfig::AiModeButtonUiConfig(AiModeButtonUiConfig&&) = default;
+AiModeButtonUiConfig& AiModeButtonUiConfig::operator=(
+    const AiModeButtonUiConfig&) = default;
+AiModeButtonUiConfig& AiModeButtonUiConfig::operator=(AiModeButtonUiConfig&&) =
+    default;
+AiModeButtonUiConfig::~AiModeButtonUiConfig() = default;
 
 AiModeButtonService::AiModeButtonService(
-    TemplateURLService* template_url_service,
-    GoogleStrings google_strings)
-    : template_url_service_(template_url_service),
-      google_config_owned_{
-          std::move(google_strings.entrypoint_label),
-          l10n_util::GetStringUTF16(
-              IDS_STARTER_PACK_AI_MODE_ACTION_SUGGESTION_CONTENTS),
-          l10n_util::GetStringUTF16(IDS_ACC_AI_MODE_BUTTON_FOCUSED),
-          std::move(google_strings.context_menu_label),
-          l10n_util::GetStringUTF16(IDS_ACC_AI_MODE_PLACEHOLDER_TEXT)},
-      google_config_{
-          SearchEngineType::SEARCH_ENGINE_GOOGLE,
-          google_config_owned_.entrypoint_label.c_str(),
-          google_config_owned_.action_suggestion_contents.c_str(),
-          google_config_owned_.accessibility_focused_description.c_str(),
-          google_config_owned_.context_menu_label.c_str(),
-          google_config_owned_.placeholder_text.c_str(),
-          /*favicon_url=*/"",
-          /*navigation_url=*/"",
-          /*navigation_url_empty=*/""} {
-  CHECK(IsValidConfig(google_config_));
+    TemplateURLService* template_url_service)
+    : template_url_service_(template_url_service) {
   if (template_url_service_) {
     template_url_service_observer.Observe(template_url_service_);
   }
-  current_config_ = LookupCurrentConfig();
+  current_ui_config_ = BuildCurrentUiConfig();
 }
 
 AiModeButtonService::~AiModeButtonService() = default;
@@ -67,17 +81,18 @@ base::CallbackListSubscription AiModeButtonService::RegisterOnConfigChanged(
 }
 
 void AiModeButtonService::OnTemplateURLServiceChanged() {
-  auto* new_config = LookupCurrentConfig();
+  auto new_config = BuildCurrentUiConfig();
 
   // Early exit if config did not change.
-  if (!new_config && !current_config_) {
+  if (!new_config && !current_ui_config_) {
     return;
   }
-  if (new_config && current_config_ && new_config->id == current_config_->id) {
+  if (new_config && current_ui_config_ &&
+      new_config->id == current_ui_config_->id) {
     return;
   }
 
-  current_config_ = new_config;
+  current_ui_config_ = std::move(new_config);
   callbacks_.Notify(GetCurrentConfig());
 }
 
@@ -86,65 +101,73 @@ void AiModeButtonService::OnTemplateURLServiceShuttingDown() {
   template_url_service_ = nullptr;
 }
 
-const ai_mode_button_config::AiModeButtonConfig*
-AiModeButtonService::LookupCurrentConfig() const {
+std::optional<AiModeButtonUiConfig> AiModeButtonService::BuildCurrentUiConfig()
+    const {
   if (!template_url_service_) {
-    return nullptr;
+    return std::nullopt;
   }
   const TemplateURL* dse = template_url_service_->GetDefaultSearchProvider();
   if (!dse) {
-    return nullptr;
+    return std::nullopt;
   }
+  return GetUiConfigForTemplateUrl(*dse,
+                                   template_url_service_->search_terms_data());
+}
 
-  SearchEngineType type =
-      dse->GetEngineType(template_url_service_->search_terms_data());
+// static
+std::optional<AiModeButtonUiConfig>
+AiModeButtonService::GetUiConfigForTemplateUrl(
+    const TemplateURL& template_url,
+    const SearchTermsData& search_terms_data) {
+  SearchEngineType type = template_url.GetEngineType(search_terms_data);
+
   if (type == SearchEngineType::SEARCH_ENGINE_GOOGLE) {
-    return &google_config_;
+    return AiModeButtonUiConfig(
+        type, l10n_util::GetStringUTF16(IDS_AI_MODE_ENTRYPOINT_LABEL),
+        template_url.short_name(), /*favicon_url=*/"", /*navigation_url=*/"",
+        /*navigation_url_empty=*/"");
   }
 
-  const ai_mode_button_config::AiModeButtonConfig* found_config = nullptr;
-  for (const auto* config : ai_mode_button_config::kAiModeButtonConfigs) {
+  for (const auto& config : ai_mode_button_config::kAiModeButtonConfigs) {
     if (config->id == type) {
-      // `kAiModeButtonConfigs` contains a debug config to allow for manual
-      // testing. Skip it if the debug param is false.
-      bool is_debug = config == &ai_mode_button_config::google_debug;
-      if (is_debug && !omnibox::kAim3pEntrypointDebug.Get()) {
-        continue;
-      }
-
-      found_config = config;
-      break;
+      CHECK(IsValidConfig(*config));
+      return AiModeButtonUiConfig(type, config->name, template_url.short_name(),
+                                  config->favicon_url, config->navigation_url,
+                                  config->navigation_url_empty);
     }
   }
-  if (found_config) {
-    CHECK(IsValidConfig(*found_config));
-    return found_config;
+
+  if (type != SearchEngineType::SEARCH_ENGINE_OTHER &&
+      omnibox::kAim3pEntrypointDebug.Get()) {
+    std::string short_name = base::UTF16ToUTF8(template_url.short_name());
+    return AiModeButtonUiConfig(
+        type,
+        base::StrCat({u"AI Mode for ", template_url.short_name(), u" (ĄÜÔ)"}),
+        template_url.short_name(),
+        template_url.favicon_url().is_valid()
+            ? template_url.favicon_url().spec()
+            : "https://www.google.com/favicon.ico",
+        base::StrCat({"https://google.com/search?q=this opens aimode for ",
+                      short_name, " with search terms: {searchTerms}"}),
+        base::StrCat(
+            {"https://google.com/search?q=this opens aimode landing page for ",
+             short_name}));
   }
-  return nullptr;
+
+  return std::nullopt;
 }
 
 // static
 bool AiModeButtonService::IsValidConfig(
     const ai_mode_button_config::AiModeButtonConfig& config) {
-  // Don't enforce max length on Google strings because they're translated and
-  // there's no guarantee translated strings will be of expected lengths.
-  const bool is_google = config.id == SearchEngineType::SEARCH_ENGINE_GOOGLE;
-  const size_t max_text_length =
-      is_google ? std::numeric_limits<size_t>::max() : 16;
-  const size_t max_other_length =
-      is_google ? std::numeric_limits<size_t>::max() : 64;
+  // Google "AI Mode" is translated and there's no guarantee the translation
+  // will be of expected lengths. Google config also doesn't require the URL
+  // fields.
+  CHECK_NE(config.id, SearchEngineType::SEARCH_ENGINE_GOOGLE);
 
-  if (!IsValidStringPtr(config.text, max_text_length) ||
-      !IsValidStringPtr(config.tooltip, max_other_length) ||
-      !IsValidStringPtr(config.a11y_label, max_other_length) ||
-      !IsValidStringPtr(config.context_menu_label, max_other_length) ||
-      !IsValidStringPtr(config.placeholder_text, max_other_length)) {
+  if (!config.name || config.name[0] == u'\0' ||
+      std::u16string_view(config.name).length() > 16) {
     return false;
-  }
-
-  // Google config doesn't require the URL fields.
-  if (is_google) {
-    return true;
   }
 
   if (!config.favicon_url || !config.navigation_url ||

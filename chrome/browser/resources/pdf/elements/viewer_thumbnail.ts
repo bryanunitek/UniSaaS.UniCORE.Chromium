@@ -13,9 +13,9 @@ import {getHtml} from './viewer_thumbnail.html.js';
 // The maximum widths of thumbnails for each layout (px).
 // These constants should be kept in sync with `kMaxWidthPortraitPx` and
 // `kMaxWidthLandscapePx` in pdf/thumbnail.cc.
-const PORTRAIT_WIDTH: number = 108;
+export const PORTRAIT_WIDTH: number = 108;
 
-const LANDSCAPE_WIDTH: number = 140;
+export const LANDSCAPE_WIDTH: number = 140;
 
 export const PAINTED_ATTRIBUTE: string = 'painted';
 
@@ -179,7 +179,7 @@ export class ViewerThumbnailElement extends CrLitElement {
       return;
     }
 
-    const div = this.shadowRoot.querySelector<HTMLElement>('#thumbnail')!;
+    const div = this.$.thumbnail;
 
     const degreesRotated = this.clockwiseRotations * 90;
     canvas.style.transform = `rotate(${degreesRotated}deg)`;

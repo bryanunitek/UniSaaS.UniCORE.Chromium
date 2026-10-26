@@ -25,7 +25,6 @@
 #include "device/fido/enclave/constants.h"
 #include "device/fido/enclave/metrics.h"
 #include "device/fido/enclave/types.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/large_blob.h"
 #include "device/fido/public/features.h"
 #include "device/fido/public/public_key_credential_descriptor.h"
@@ -249,6 +248,7 @@ void EnclaveAuthenticator::MakeCredential(CtapMakeCredentialRequest request,
           base::as_byte_span(
               pending_make_credential_request_->request.client_data_json),
           SelectDeviceKeyForMake(std::move(ui_request_->cmtg_device_keys))),
+      EnclaveTransactionTypeForUMA::kPasskeyCreate,
       std::move(ui_request_->signing_callback),
       base::BindOnce(&EnclaveAuthenticator::ProcessMakeCredentialResponse,
                      weak_factory_.GetWeakPtr()));
@@ -277,6 +277,7 @@ void EnclaveAuthenticator::DispatchMakeCredentialWithNewUVKey(
       network_context_factory_, GetEnclaveIdentity(),
       std::move(ui_request_->access_token),
       /*reauthentication_token=*/std::nullopt, cbor::Value(std::move(requests)),
+      EnclaveTransactionTypeForUMA::kPasskeyCreate,
       std::move(ui_request_->signing_callback),
       base::BindOnce(&EnclaveAuthenticator::ProcessMakeCredentialResponse,
                      weak_factory_.GetWeakPtr()));
@@ -365,6 +366,7 @@ void EnclaveAuthenticator::DispatchGetAssertion() {
           std::move(ui_request_->wrapped_secret),
           std::move(ui_request_->secret),
           std::move(ui_request_->cmtg_device_keys)),
+      EnclaveTransactionTypeForUMA::kPasskeyAssert,
       std::move(ui_request_->signing_callback),
       base::BindOnce(&EnclaveAuthenticator::ProcessGetAssertionResponse,
                      weak_factory_.GetWeakPtr()));
@@ -392,6 +394,7 @@ void EnclaveAuthenticator::DispatchGetAssertionWithNewUVKey(
       network_context_factory_, GetEnclaveIdentity(),
       std::move(ui_request_->access_token),
       /*reauthentication_token=*/std::nullopt, cbor::Value(std::move(requests)),
+      EnclaveTransactionTypeForUMA::kPasskeyAssert,
       std::move(ui_request_->signing_callback),
       base::BindOnce(&EnclaveAuthenticator::ProcessGetAssertionResponse,
                      weak_factory_.GetWeakPtr()));

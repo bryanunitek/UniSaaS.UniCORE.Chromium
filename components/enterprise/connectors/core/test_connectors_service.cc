@@ -4,7 +4,6 @@
 
 #include "components/enterprise/connectors/core/test_connectors_service.h"
 
-#include "components/enterprise/connectors/core/analysis_service_settings_base.h"
 #include "components/enterprise/connectors/core/connectors_manager_base.h"
 #include "components/enterprise/connectors/core/connectors_prefs.h"
 #include "components/enterprise/connectors/core/service_provider_config.h"
@@ -13,32 +12,9 @@ namespace enterprise_connectors {
 
 namespace {
 
-class AnalysisServiceSettings : public AnalysisServiceSettingsBase {
- public:
-  AnalysisServiceSettings(const base::Value& settings_value,
-                          const ServiceProviderConfig& service_provider_config)
-      : AnalysisServiceSettingsBase(settings_value, service_provider_config) {}
-};
-
 class ConnectorsManager : public ConnectorsManagerBase {
  public:
   using ConnectorsManagerBase::ConnectorsManagerBase;
-
-  void CacheAnalysisConnectorPolicy(
-      AnalysisConnector connector) const override {
-    analysis_connector_settings_.erase(connector);
-
-    // Connectors with non-existing policies should not reach this code.
-    const char* pref = AnalysisConnectorPref(connector);
-    DCHECK(pref);
-
-    const base::ListValue& policy_value = prefs()->GetList(pref);
-    for (const base::Value& service_settings : policy_value) {
-      analysis_connector_settings_[connector].push_back(
-          std::make_unique<AnalysisServiceSettings>(service_settings,
-                                                    *service_provider_config_));
-    }
-  }
 
   DataRegion GetDataRegion(AnalysisConnector connector) const override {
     return DataRegion::NO_PREFERENCE;
@@ -93,6 +69,18 @@ std::optional<std::string> TestConnectorsService::GetBrowserDmToken() const {
 std::unique_ptr<ClientMetadata> TestConnectorsService::BuildClientMetadata(
     bool is_cloud) {
   return nullptr;
+}
+
+bool TestConnectorsService::IsProfileAffiliated() const {
+  return false;
+}
+
+std::string TestConnectorsService::GetProfileEmail() const {
+  return std::string();
+}
+
+std::string TestConnectorsService::GetDeviceClientId() const {
+  return std::string();
 }
 
 bool TestConnectorsService::ConnectorsEnabled() const {

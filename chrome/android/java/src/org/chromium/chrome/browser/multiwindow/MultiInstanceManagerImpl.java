@@ -22,6 +22,7 @@ import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ApplicationStatus.ActivityStateListener;
 import org.chromium.base.ResettersForTesting;
+import org.chromium.base.TriState;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.BuildConfig;
@@ -30,6 +31,8 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.ConfigurationChangedObserver;
 import org.chromium.chrome.browser.lifecycle.DestroyObserver;
@@ -79,7 +82,7 @@ public class MultiInstanceManagerImpl extends MultiInstanceManager
     protected @Nullable TabModelSelectorTabModelObserver mTabModelObserver;
     protected MultiInstanceOrchestrator mMultiInstanceOrchestrator;
 
-    private @Nullable Boolean mMergeTabsOnResume;
+    private @TriState int mMergeTabsOnResume;
 
     /**
      * Used to observe state changes to a different ChromeTabbedActivity instances to determine when
@@ -253,15 +256,16 @@ public class MultiInstanceManagerImpl extends MultiInstanceManager
             boolean inMultiWindowMode =
                     mMultiWindowModeStateDispatcher.isInMultiWindowMode()
                             || mMultiWindowModeStateDispatcher.isInMultiDisplayMode();
-            // Don't need to merge tabs when mMergeTabsOnResume is null (cold start) since they get
-            // merged when TabPersistentStore.loadState(boolean) is called from initializeState().
-            if (!inMultiWindowMode && (mMergeTabsOnResume != null && mMergeTabsOnResume)) {
+            // Don't need to merge tabs when mMergeTabsOnResume is NOT_SET (cold start) since they
+            // get merged when TabPersistentStore.loadState(boolean) is called from
+            // initializeState().
+            if (!inMultiWindowMode && mMergeTabsOnResume == TriState.TRUE) {
                 maybeMergeTabs();
-            } else if (!inMultiWindowMode && mMergeTabsOnResume == null) {
+            } else if (!inMultiWindowMode && mMergeTabsOnResume == TriState.NOT_SET) {
                 // This happens on cold start to kill any second activity that might exist.
                 killOtherTask();
             }
-            mMergeTabsOnResume = false;
+            mMergeTabsOnResume = TriState.FALSE;
         }
     }
 
@@ -303,7 +307,7 @@ public class MultiInstanceManagerImpl extends MultiInstanceManager
                     // Wait for the other ChromeTabbedActivity to pause before trying to merge
                     // tabs.
                     mOtherCTAStateObserver =
-                            (activity, newState) -> {
+                            (Activity _, int newState) -> {
                                 if (newState == ActivityState.PAUSED) {
                                     removeOtherCTAStateObserver();
                                     maybeMergeTabs();
@@ -313,7 +317,7 @@ public class MultiInstanceManagerImpl extends MultiInstanceManager
                             mOtherCTAStateObserver, otherResumedCTA);
                 }
             } else {
-                mMergeTabsOnResume = true;
+                mMergeTabsOnResume = TriState.TRUE;
             }
         }
     }
@@ -354,9 +358,30 @@ public class MultiInstanceManagerImpl extends MultiInstanceManager
             }
             return true;
         } else if (id == R.id.new_window_menu_id) {
+            TabModelOrchestrator tabModelOrchestrator = mTabModelOrchestratorSupplier.get();
+            Profile profile = null;
+            if (tabModelOrchestrator != null) {
+                TabModelSelector tabModelSelector = tabModelOrchestrator.getTabModelSelector();
+                if (tabModelSelector != null) {
+                    profile = tabModelSelector.getCurrentModel().getProfile();
+                }
+            }
+            if (profile == null
+                    && ChromeFeatureList.isEnabled(
+                            ChromeFeatureList.INCOGNITO_MODE_FORCED_ANDROID)) {
+                // If the feature flag is active and we cannot determine the profile context (e.g.
+                // rapidly triggering shortcuts during early startup before profile initialization
+                // completes),
+                // abort the request to prevent potential policy bypass.
+                // Opening a normal window could violate incognito FORCED state, but opening an
+                // incognito window would only be valid under FORCED state.
+                return true;
+            }
+
+            boolean isIncognito = profile != null && IncognitoUtils.isIncognitoModeForced(profile);
             mMultiInstanceOrchestrator.createNewWindow(
                     mActivity,
-                    /* isIncognito= */ false,
+                    isIncognito,
                     /* additionalIntentExtras= */ null,
                     /* startActivityOptions= */ null,
                     appSource);
@@ -398,7 +423,9 @@ public class MultiInstanceManagerImpl extends MultiInstanceManager
         List<ActivityManager.AppTask> appTasks = activityManager.getAppTasks();
         ActivityManager.AppTask otherActivityTask = null;
         for (ActivityManager.AppTask task : appTasks) {
-            String baseActivity = MultiWindowUtils.getActivityNameFromTask(task);
+            String baseActivity =
+                    MultiWindowUtils.getActivityNameFromTask(
+                            AndroidTaskUtils.getTaskInfoFromTask(task));
 
             if (baseActivity.equals(otherWindowActivityClass.getName())) {
                 otherActivityTask = task;

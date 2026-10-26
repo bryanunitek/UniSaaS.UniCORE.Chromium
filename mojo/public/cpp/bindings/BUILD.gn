@@ -52,6 +52,8 @@ component("bindings_base") {
     "connection_group_ref.cc",
     "connection_group_ref.h",
     "deprecated_interface_types_forward.h",
+    "deserialization_error.cc",
+    "deserialization_error.h",
     "disconnect_reason.h",
     "enum_traits.h",
     "enum_utils.h",
@@ -88,11 +90,7 @@ component("bindings_base") {
     "lib/pending_receiver_state.h",
     "lib/pending_remote_state.cc",
     "lib/pending_remote_state.h",
-    "lib/proxy_to_responder.cc",
-    "lib/proxy_to_responder.h",
     "lib/scoped_interface_endpoint_handle.cc",
-    "lib/send_message_helper.cc",
-    "lib/send_message_helper.h",
     "lib/send_validation.h",
     "lib/send_validation_serialization.h",
     "lib/send_validation_type.h",
@@ -143,9 +141,8 @@ component("bindings_base") {
     ":mojo_buildflags",
     "//base",
     "//mojo/public/cpp/system",
+    "//third_party/abseil-cpp:absl",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   if (enable_ipc_fuzzer) {
     all_dependent_configs = [ "//tools/ipc_fuzzer:ipc_fuzzer_config" ]
@@ -206,6 +203,12 @@ component("bindings") {
     "lib/native_struct_serialization.h",
     "lib/pipe_control_message_handler.cc",
     "lib/pipe_control_message_proxy.cc",
+    "lib/proxy_to_responder.cc",
+    "lib/proxy_to_responder.h",
+    "lib/responder_thunk.cc",
+    "lib/responder_thunk.h",
+    "lib/send_message_helper.cc",
+    "lib/send_message_helper.h",
     "lib/sequence_local_sync_event_watcher.cc",
     "lib/sync_call_restrictions.cc",
     "lib/sync_event_watcher.cc",
@@ -275,9 +278,10 @@ component("bindings") {
     "//mojo/public/interfaces/bindings",
   ]
 
-  deps = [ "//mojo/core/embedder" ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
+  deps = [
+    "//mojo:buildflags",
+    "//mojo/core/embedder",
+  ]
 
   defines = [ "IS_MOJO_CPP_BINDINGS_IMPL" ]
 }
@@ -322,8 +326,6 @@ if (use_blink) {
       "map_traits_wtf_hash_map.h",
       "string_traits_wtf.h",
     ]
-
-    configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
     defines = [ "IS_MOJO_CPP_BINDINGS_BASE_IMPL" ]
 

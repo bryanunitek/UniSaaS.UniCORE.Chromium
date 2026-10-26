@@ -23,7 +23,6 @@ import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -33,6 +32,7 @@ import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.search_engines.settings.common.SiteSearchProperties;
 import org.chromium.components.browser_ui.settings.SettingsCustomTabLauncher;
 import org.chromium.components.favicon.LargeIconBridgeJni;
+import org.chromium.components.search_engines.SearchEngineSettingsDataProvider;
 import org.chromium.components.search_engines.TemplateUrl;
 import org.chromium.components.search_engines.TemplateUrlCategory;
 import org.chromium.components.search_engines.TemplateUrlService;
@@ -50,12 +50,12 @@ import java.util.Collections;
 
 /** Unit tests for {@link ExtensionSearchEngineMediator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ExtensionSearchEngineMediatorUnitTest {
     @Rule public MockitoRule mockitoRule = MockitoJUnit.rule();
 
     @Mock private Profile mProfile;
     @Mock private TemplateUrlService mTemplateUrlService;
+    @Mock private SearchEngineSettingsDataProvider mSettingsDataProvider;
     @Mock private LargeIconBridgeJni mLargeIconBridgeJni;
     @Mock private TemplateUrl mTemplateUrl;
     @Mock private ModelList mModelList;
@@ -67,12 +67,12 @@ public class ExtensionSearchEngineMediatorUnitTest {
 
     @Before
     public void setUp() {
-        mContext = RuntimeEnvironment.application;
+        mContext = RuntimeEnvironment.getApplication();
         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeJni);
         ExtensionControlHandler.setFactoryForTesting(() -> mMockExtensionControlHandler);
 
-        when(mTemplateUrlService.getTemplateUrlsByCategory(TemplateUrlCategory.EXTENSION))
+        when(mSettingsDataProvider.getTemplateUrlsByCategory(TemplateUrlCategory.EXTENSION))
                 .thenReturn(Arrays.asList(mTemplateUrl));
         when(mTemplateUrl.getKeyword()).thenReturn("keyword");
         when(mTemplateUrl.getShortName()).thenReturn("extension");
@@ -89,9 +89,13 @@ public class ExtensionSearchEngineMediatorUnitTest {
 
         mMediator =
                 new ExtensionSearchEngineMediator(
-                        mContext, mModelList, mProfile, mSettingsCustomTabLauncher);
+                        mContext,
+                        mModelList,
+                        mProfile,
+                        mSettingsDataProvider,
+                        mSettingsCustomTabLauncher);
 
-        Mockito.clearInvocations(mModelList, mTemplateUrlService);
+        Mockito.clearInvocations(mModelList, mTemplateUrlService, mSettingsDataProvider);
     }
 
     @Test
@@ -99,7 +103,7 @@ public class ExtensionSearchEngineMediatorUnitTest {
         mMediator.onTemplateURLServiceChanged();
 
         verify(mModelList).clear();
-        verify(mTemplateUrlService).getTemplateUrlsByCategory(TemplateUrlCategory.EXTENSION);
+        verify(mSettingsDataProvider).getTemplateUrlsByCategory(TemplateUrlCategory.EXTENSION);
         ArgumentCaptor<ListItem> itemCaptor = ArgumentCaptor.forClass(ListItem.class);
         verify(mModelList).add(itemCaptor.capture());
 
@@ -112,13 +116,13 @@ public class ExtensionSearchEngineMediatorUnitTest {
 
     @Test
     public void testRefreshList_Empty() {
-        when(mTemplateUrlService.getTemplateUrlsByCategory(TemplateUrlCategory.EXTENSION))
+        when(mSettingsDataProvider.getTemplateUrlsByCategory(TemplateUrlCategory.EXTENSION))
                 .thenReturn(Collections.emptyList());
 
         mMediator.onTemplateURLServiceChanged();
 
         verify(mModelList).clear();
-        verify(mTemplateUrlService).getTemplateUrlsByCategory(TemplateUrlCategory.EXTENSION);
+        verify(mSettingsDataProvider).getTemplateUrlsByCategory(TemplateUrlCategory.EXTENSION);
         verify(mModelList, Mockito.never()).add(any(ListItem.class));
     }
 

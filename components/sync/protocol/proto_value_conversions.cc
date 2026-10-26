@@ -21,7 +21,6 @@
 #include "components/sync/protocol/app_setting_specifics.pb.h"
 #include "components/sync/protocol/app_specifics.pb.h"
 #include "components/sync/protocol/arc_package_specifics.pb.h"
-#include "components/sync/protocol/autofill_offer_specifics.pb.h"
 #include "components/sync/protocol/autofill_specifics.pb.h"
 #include "components/sync/protocol/bookmark_specifics.pb.h"
 #include "components/sync/protocol/collaboration_group_specifics.pb.h"
@@ -40,8 +39,6 @@
 #include "components/sync/protocol/os_priority_preference_specifics.pb.h"
 #include "components/sync/protocol/password_sharing_invitation_specifics.pb.h"
 #include "components/sync/protocol/password_specifics.pb.h"
-#include "components/sync/protocol/plus_address_setting_specifics.pb.h"
-#include "components/sync/protocol/plus_address_specifics.pb.h"
 #include "components/sync/protocol/preference_specifics.pb.h"
 #include "components/sync/protocol/printer_specifics.pb.h"
 #include "components/sync/protocol/printers_authorization_server_specifics.pb.h"
@@ -63,7 +60,6 @@
 #include "components/sync/protocol/typed_url_specifics.pb.h"
 #include "components/sync/protocol/user_consent_specifics.pb.h"
 #include "components/sync/protocol/user_event_specifics.pb.h"
-#include "components/sync/protocol/web_apk_specifics.pb.h"
 #include "components/sync/protocol/web_app_specifics.pb.h"
 #include "components/sync/protocol/webauthn_credential_specifics.pb.h"
 #include "components/sync/protocol/workspace_desk_specifics.pb.h"
@@ -349,7 +345,6 @@ IMPLEMENT_PROTO_TO_VALUE(AppListSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(AppSettingSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(AppSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(ArcPackageSpecifics)
-IMPLEMENT_PROTO_TO_VALUE(AutofillOfferSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(AutofillProfileSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(AutofillSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(AutofillValuableMetadataSpecifics)
@@ -393,8 +388,6 @@ IMPLEMENT_PROTO_TO_VALUE(PasswordSpecificsData_Notes)
 IMPLEMENT_PROTO_TO_VALUE(PasswordSpecificsData_Notes_Note)
 IMPLEMENT_PROTO_TO_VALUE(PaymentInstrument)
 IMPLEMENT_PROTO_TO_VALUE(PaymentsCustomerData)
-IMPLEMENT_PROTO_TO_VALUE(PlusAddressSettingSpecifics)
-IMPLEMENT_PROTO_TO_VALUE(PlusAddressSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(PowerBookmarkSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(PreferenceSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(PrinterPPDReference)
@@ -430,7 +423,6 @@ IMPLEMENT_PROTO_TO_VALUE(WalletCreditCardCloudTokenData)
 IMPLEMENT_PROTO_TO_VALUE(WalletMaskedCreditCard)
 IMPLEMENT_PROTO_TO_VALUE(WalletMetadataSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(WalletPostalAddress)
-IMPLEMENT_PROTO_TO_VALUE(WebApkSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(WebAppSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(WebauthnCredentialSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(WifiConfigurationSpecifics)

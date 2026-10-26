@@ -47,11 +47,11 @@ class PrefService;
 // The PrefService associated with this mediator.
 @property(nonatomic, readonly) PrefService* prefService;
 
+// Whether the Suggestions from Gemini entry point should be shown.
+@property(nonatomic, assign) BOOL shouldShowSuggestionsFromGemini;
+
 // Point size for AI entity icons.
 + (CGFloat)entityIconPointSize;
-
-- (instancetype)initWithEntityDataManager:
-    (autofill::EntityDataManager*)entityDataManager;
 
 - (instancetype)initWithEntityDataManager:(autofill::EntityDataManager*)entityDataManager
                               prefService:(PrefService*)prefService NS_DESIGNATED_INITIALIZER;
@@ -60,10 +60,6 @@ class PrefService;
 
 // Disconnects the mediator.
 - (void)disconnect NS_REQUIRES_SUPER;
-
-// Fetches the relevant entity instances, creates their corresponding items, and
-// updates the consumer.
-- (void)pushEntitiesToConsumer;
 
 @end
 

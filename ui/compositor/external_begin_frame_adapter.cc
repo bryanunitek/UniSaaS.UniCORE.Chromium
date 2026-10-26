@@ -45,9 +45,17 @@ void ExternalBeginFrameAdapter::OnBeginFrame(
                frame_time, "sequence_number", args.frame_id.sequence_number);
 
   compositor_->IssueExternalBeginFrame(
-      args, /*force=*/true,
+      args,
       base::BindOnce(&ExternalBeginFrameAdapter::OnBeginFrameAck,
                      weak_factory_.GetWeakPtr(), std::move(ack_callback)));
+}
+
+void ExternalBeginFrameAdapter::OnVSyncIntervalChanged(
+    base::TimeTicks timebase,
+    base::TimeDelta interval) {
+  TRACE_EVENT1("viz", "ExternalBeginFrameAdapter::OnVSyncIntervalChanged",
+               "interval_us", interval.InMicroseconds());
+  compositor_->SetDisplayVSyncParameters(timebase, interval);
 }
 
 mojo::PendingAssociatedRemote<viz::mojom::ExternalBeginFrameControllerClient>

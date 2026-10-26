@@ -8,10 +8,12 @@
 #include <sys/types.h>
 
 #include <string>
+#include <vector>
 
 #include "base/files/file_path.h"
 #include "base/strings/cstring_view.h"
 #include "base/types/expected.h"
+#include "build/build_config.h"
 #include "remoting/base/loggable.h"
 
 namespace remoting {
@@ -21,6 +23,11 @@ struct PasswdUserInfo {
   uid_t uid;
   gid_t gid;
   base::FilePath home_dir;
+#if BUILDFLAG(IS_LINUX)
+  std::vector<gid_t> supplementary_gids;
+  // The login shell. May be empty.
+  base::FilePath shell;
+#endif
 };
 
 base::expected<PasswdUserInfo, Loggable> GetPasswdUserInfo(

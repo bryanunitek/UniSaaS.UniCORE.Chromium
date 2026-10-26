@@ -25,6 +25,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "pdf/buildflags.h"
 
 namespace metrics {
 namespace {
@@ -48,7 +49,13 @@ class FirstWebContentsProfiler : public FirstWebContentsProfilerBase {
   void RecordNavigationFinished(base::TimeTicks navigation_start) override;
   void RecordFirstNonEmptyPaint() override;
   void RecordFirstNonEmptyPaintForOsLaunch() override;
+  void RecordFirstContentfulPaint(base::TimeTicks fcp_ticks) override;
+  void RecordLargestContentfulPaint(base::TimeTicks lcp_ticks) override;
+#if BUILDFLAG(ENABLE_PDF)
+  void RecordPdfFirstContentPaint(base::TimeTicks pdf_paint_ticks) override;
+#endif  // BUILDFLAG(ENABLE_PDF)
   bool WasStartupInterrupted() override;
+  bool ShouldObservePaintTimingMetrics() override;
 
  private:
   ~FirstWebContentsProfiler() override = default;
@@ -76,13 +83,20 @@ FirstWebContentsProfiler::FirstWebContentsProfiler(
     : FirstWebContentsProfilerBase(web_contents) {
   if (base::FeatureList::IsEnabled(features::kImprovedStartupBestEffortDelay)) {
     startup_in_progress_ref_ =
-        AfterStartupTaskUtils::RegisterStartupInProgressRef();
+        AfterStartupTaskUtils::RegisterStartupInProgressRef(
+            StartupIsCompleteReason::kFirstWebContentsProfiler);
   }
 }
 
 void FirstWebContentsProfiler::RecordFinishReason(
     StartupProfilingFinishReason finish_reason) {
   RecordFirstWebContentsFinishReason(finish_reason);
+  // Release the startup-in-progress reference now that first-web-contents
+  // profiling has reached its terminal decision (first paint recorded or
+  // abandoned). This profiler may keep observing for FCP/LCP after a successful
+  // paint, but browser startup completion (and thus BEST_EFFORT task
+  // scheduling) must not be blocked on that extended observation.
+  startup_in_progress_ref_.reset();
 }
 
 void FirstWebContentsProfiler::RecordNavigationFinished(
@@ -104,8 +118,32 @@ void FirstWebContentsProfiler::RecordFirstNonEmptyPaintForOsLaunch() {
       .RecordFirstWebContentsNonEmptyPaintForOsLaunch(base::TimeTicks::Now());
 }
 
+void FirstWebContentsProfiler::RecordFirstContentfulPaint(
+    base::TimeTicks fcp_ticks) {
+  startup_metric_utils::GetBrowser().RecordFirstWebContentsFirstContentfulPaint(
+      fcp_ticks);
+}
+
+void FirstWebContentsProfiler::RecordLargestContentfulPaint(
+    base::TimeTicks lcp_ticks) {
+  startup_metric_utils::GetBrowser()
+      .RecordFirstWebContentsLargestContentfulPaint(lcp_ticks);
+}
+
+#if BUILDFLAG(ENABLE_PDF)
+void FirstWebContentsProfiler::RecordPdfFirstContentPaint(
+    base::TimeTicks pdf_paint_ticks) {
+  startup_metric_utils::GetBrowser().RecordFirstWebContentsPdfFirstContentPaint(
+      pdf_paint_ticks);
+}
+#endif  // BUILDFLAG(ENABLE_PDF)
+
 bool FirstWebContentsProfiler::WasStartupInterrupted() {
   return startup_metric_utils::GetBrowser().WasMainWindowStartupInterrupted();
+}
+
+bool FirstWebContentsProfiler::ShouldObservePaintTimingMetrics() {
+  return true;
 }
 
 }  // namespace

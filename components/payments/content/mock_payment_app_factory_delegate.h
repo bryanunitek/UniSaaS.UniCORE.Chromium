@@ -9,7 +9,7 @@
 #include "base/memory/weak_ptr.h"
 #include "components/payments/content/payment_app_factory.h"
 #include "components/payments/content/payment_request_spec.h"
-#include "components/payments/content/web_payments_web_data_service.h"
+#include "components/payments/core/web_payments_web_data_service.h"
 #include "components/webauthn/core/browser/internal_authenticator.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_frame_host.h"
@@ -60,6 +60,7 @@ class MockPaymentAppFactoryDelegate : public PaymentAppFactory::Delegate {
   }
   MOCK_METHOD1(GetTwaPackageName, void(GetTwaPackageNameCallback));
   MOCK_METHOD0(ShowProcessingSpinner, void());
+  MOCK_METHOD0(ShowLoadingView, void());
   MOCK_CONST_METHOD0(GetPaymentRequestDelegate,
                      base::WeakPtr<ContentPaymentRequestDelegate>());
   MOCK_METHOD1(OnPaymentAppCreated, void(std::unique_ptr<PaymentApp> app));

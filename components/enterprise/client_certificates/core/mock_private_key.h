@@ -24,18 +24,16 @@ class MockPrivateKey : public PrivateKey {
       PrivateKeySource source = PrivateKeySource::kUnexportableKey,
       scoped_refptr<net::SSLPrivateKey> ssl_private_key = nullptr);
 
-  MOCK_METHOD(std::optional<std::vector<uint8_t>>,
-              SignSlowly,
-              (base::span<const uint8_t>),
+  MOCK_METHOD(void,
+              Sign,
+              (base::span<const uint8_t>,
+               base::OnceCallback<void(std::optional<std::vector<uint8_t>>)>),
               (const, override));
   MOCK_METHOD(std::vector<uint8_t>,
               GetSubjectPublicKeyInfo,
               (),
               (const, override));
-  MOCK_METHOD(crypto::SignatureVerifier::SignatureAlgorithm,
-              GetAlgorithm,
-              (),
-              (const, override));
+  MOCK_METHOD(crypto::sign::SignatureKind, GetAlgorithm, (), (const, override));
   MOCK_METHOD(client_certificates_pb::PrivateKey,
               ToProto,
               (),

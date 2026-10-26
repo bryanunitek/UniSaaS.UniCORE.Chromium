@@ -11,8 +11,11 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Bundle;
 import android.provider.Browser;
 import android.text.format.DateUtils;
+
+import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
@@ -23,6 +26,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ActivityUtils;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceManager;
 import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.components.bookmarks.BookmarkId;
@@ -40,20 +44,24 @@ public class BookmarkOpenerImpl implements BookmarkOpener {
     private final Supplier<@Nullable BookmarkModel> mBookmarkModelSupplier;
     private final Context mContext;
     private final @Nullable ComponentName mComponentName;
+    private final @Nullable MultiInstanceManager mMultiInstanceManager;
 
     /**
      * @param bookmarkModelSupplier Supplies the bookmark model, used to query for bookmark urls and
      *     type.
      * @param context The android activity context, used to build the intent to open bookmarks.
      * @param componentName The name of the parent component, can be null on tablets.
+     * @param multiInstanceManager The multi instance manager.
      */
     public BookmarkOpenerImpl(
             Supplier<@Nullable BookmarkModel> bookmarkModelSupplier,
             Context context,
-            @Nullable ComponentName componentName) {
+            @Nullable ComponentName componentName,
+            @Nullable MultiInstanceManager multiInstanceManager) {
         mBookmarkModelSupplier = bookmarkModelSupplier;
         mContext = context;
         mComponentName = componentName;
+        mMultiInstanceManager = multiInstanceManager;
     }
 
     @Override
@@ -64,8 +72,8 @@ public class BookmarkOpenerImpl implements BookmarkOpener {
         maybeMarkReadingListItemAsRead(item);
         recordMetricsForOpenBookmarkInCurrentTab(item);
 
-        Intent intent = createBasicOpenIntent(item, incognito);
-        IntentHandler.startActivityForTrustedIntent(mContext, intent);
+        Intent intent = createBasicOpenIntent(item, incognito, /* opensNewTabByDefault= */ false);
+        launchIntent(intent);
 
         return true;
     }
@@ -74,71 +82,46 @@ public class BookmarkOpenerImpl implements BookmarkOpener {
     public boolean openBookmarksInNewTabs(
             List<BookmarkId> bookmarkIds,
             boolean incognito,
-            @Nullable @TabLaunchType Integer tabLaunchType) {
-        if (bookmarkIds.size() == 0) return false;
+            @Nullable @TabLaunchType Integer tabLaunchType,
+            @Nullable Bundle extras) {
+        Intent intent = createBatchOpenIntent(bookmarkIds, incognito);
+        if (intent == null) return false;
 
-        BookmarkModel bookmarkModel = assumeNonNull(mBookmarkModelSupplier.get());
-        BookmarkItem firstItem = null;
-        ArrayList<String> additionalUrls = new ArrayList<>();
-        List<BookmarkItem> items = new ArrayList<>();
-        for (BookmarkId id : bookmarkIds) {
-            BookmarkItem item = bookmarkModel.getBookmarkById(id);
-            if (item == null) continue;
-            maybeMarkReadingListItemAsRead(item);
-
-            if (firstItem == null) {
-                firstItem = item;
-            } else {
-                additionalUrls.add(item.getUrl().getSpec());
-            }
-
-            // Collected for metrics to avoid additional JNI calls.
-            items.add(item);
-        }
-        // On the off chance no BookmarkItems were actually collected, bail early.
-        if (firstItem == null) return false;
-        recordMetricsForOpenBookmarksInNewTabs(items);
-
-        Intent intent = createBasicOpenIntent(firstItem, incognito);
-        intent.putExtra(Browser.EXTRA_CREATE_NEW_TAB, true);
-        intent.putExtra(IntentHandler.EXTRA_OPEN_NEW_INCOGNITO_TAB, incognito);
-        intent.putExtra(IntentHandler.EXTRA_ADDITIONAL_URLS, additionalUrls);
         if (tabLaunchType != null) {
             IntentHandler.setTabLaunchType(intent, tabLaunchType);
+            if (tabLaunchType == TabLaunchType.FROM_LONGPRESS_BACKGROUND_IN_GROUP) {
+                intent.putExtra(IntentHandler.EXTRA_OPEN_ADDITIONAL_URLS_IN_TAB_GROUP, true);
+            }
         }
-        IntentHandler.startActivityForTrustedIntent(mContext, intent);
+        if (extras != null) {
+            intent.putExtras(extras);
+        }
+
+        launchIntent(intent);
 
         return true;
     }
 
-    @Override
-    public boolean openBookmarksInNewWindow(List<BookmarkId> bookmarkIds, boolean incognito) {
-        if (bookmarkIds.isEmpty()) return false;
-
-        BookmarkModel bookmarkModel = assumeNonNull(mBookmarkModelSupplier.get());
-        BookmarkItem firstItem = null;
-        ArrayList<String> additionalUrls = new ArrayList<>();
-        List<BookmarkItem> items = new ArrayList<>();
-        for (BookmarkId id : bookmarkIds) {
-            BookmarkItem item = bookmarkModel.getBookmarkById(id);
-            if (item == null) continue;
-            maybeMarkReadingListItemAsRead(item);
-
-            if (firstItem == null) {
-                firstItem = item;
-            } else {
-                additionalUrls.add(item.getUrl().getSpec());
+    private void launchIntent(Intent intent) {
+        if (mMultiInstanceManager != null) {
+            int windowId = mMultiInstanceManager.getCurrentInstanceId();
+            if (windowId != MultiInstanceManager.INVALID_WINDOW_ID) {
+                intent.putExtra(IntentHandler.EXTRA_WINDOW_ID, windowId);
+                if (MultiWindowUtils.launchIntentInInstance(intent, windowId)) {
+                    return;
+                }
             }
-
-            items.add(item);
         }
-        if (firstItem == null) return false;
-        recordMetricsForOpenBookmarksInNewTabs(items);
+        IntentHandler.startActivityForTrustedIntent(mContext, intent);
+    }
 
-        Intent intent = createBasicOpenIntent(firstItem, incognito);
-        intent.putExtra(Browser.EXTRA_CREATE_NEW_TAB, true);
+    @Override
+    public boolean openBookmarksInNewWindow(
+            List<BookmarkId> bookmarkIds, boolean incognito, @Nullable Bundle extras) {
+        Intent intent = createBatchOpenIntent(bookmarkIds, incognito);
+        if (intent == null) return false;
+
         intent.putExtra(IntentHandler.EXTRA_OPEN_NEW_INCOGNITO_WINDOW, incognito);
-        intent.putExtra(IntentHandler.EXTRA_ADDITIONAL_URLS, additionalUrls);
 
         Activity activity = ContextUtils.activityFromContext(mContext);
         if (activity != null) {
@@ -154,9 +137,41 @@ public class BookmarkOpenerImpl implements BookmarkOpener {
             }
         }
 
+        if (extras != null) intent.putExtras(extras);
+
         IntentHandler.startActivityForTrustedIntent(mContext, intent);
 
         return true;
+    }
+
+    private @Nullable Intent createBatchOpenIntent(
+            List<BookmarkId> bookmarkIds, boolean incognito) {
+        if (bookmarkIds.isEmpty()) return null;
+
+        BookmarkModel bookmarkModel = assumeNonNull(mBookmarkModelSupplier.get());
+        List<BookmarkItem> bookmarksToOpen = new ArrayList<>();
+        for (BookmarkId id : bookmarkIds) {
+            BookmarkItem item = bookmarkModel.getBookmarkById(id);
+            if (item == null || item.isFolder()) continue;
+            maybeMarkReadingListItemAsRead(item);
+            bookmarksToOpen.add(item);
+        }
+        if (bookmarksToOpen.isEmpty()) return null;
+        recordMetricsForOpenBookmarksInNewTabs(bookmarksToOpen);
+
+        // Pass URLs in forward order [A, B, C]; ChromeTabCreator handles background
+        // insertion order internally without manual list reversal.
+        BookmarkItem firstItem = bookmarksToOpen.remove(0);
+        ArrayList<String> additionalUrls = new ArrayList<>();
+        for (BookmarkItem item : bookmarksToOpen) {
+            additionalUrls.add(item.getUrl().getSpec());
+        }
+
+        Intent intent =
+                createBasicOpenIntent(firstItem, incognito, /* opensNewTabByDefault= */ true);
+        intent.putExtra(IntentHandler.EXTRA_OPEN_NEW_INCOGNITO_TAB, incognito);
+        intent.putExtra(IntentHandler.EXTRA_ADDITIONAL_URLS, additionalUrls);
+        return intent;
     }
 
     @Override
@@ -170,7 +185,63 @@ public class BookmarkOpenerImpl implements BookmarkOpener {
         return MultiWindowUtils.isLinkNavigationToNewWindowSupported() || supportedPreApi31;
     }
 
-    private Intent createBasicOpenIntent(BookmarkItem item, boolean incognito) {
+    @Override
+    public boolean openBookmarksInNewTabGroup(
+            List<BookmarkId> bookmarkIds, boolean incognito, @Nullable String title) {
+        Bundle extras = new Bundle();
+        if (title != null) {
+            extras.putString(IntentHandler.EXTRA_TAB_GROUP_TITLE, title);
+        }
+        extras.putBoolean(IntentHandler.EXTRA_DISABLE_INITIALIZE_RENDERER, true);
+        extras.putBoolean(IntentHandler.EXTRA_OPEN_ADDITIONAL_URLS_IN_TAB_GROUP, true);
+        return openBookmarksInNewTabs(
+                bookmarkIds, incognito, TabLaunchType.FROM_BOOKMARK_BAR_BACKGROUND, extras);
+    }
+
+    @Override
+    public boolean openFolderBookmarksInNewTabs(
+            BookmarkId folderId,
+            boolean incognito,
+            @Nullable @TabLaunchType Integer tabLaunchType) {
+        List<BookmarkId> bookmarksToOpen = extractBookmarkChildrenFromFolder(folderId);
+        if (bookmarksToOpen.isEmpty()) return false;
+
+        Bundle extras = new Bundle();
+        extras.putBoolean(IntentHandler.EXTRA_DISABLE_INITIALIZE_RENDERER, true);
+        return openBookmarksInNewTabs(bookmarksToOpen, incognito, tabLaunchType, extras);
+    }
+
+    @Override
+    public boolean openFolderBookmarksInNewWindow(BookmarkId folderId, boolean incognito) {
+        List<BookmarkId> bookmarksToOpen = extractBookmarkChildrenFromFolder(folderId);
+        if (bookmarksToOpen.isEmpty()) return false;
+        return openBookmarksInNewWindow(bookmarksToOpen, incognito);
+    }
+
+    @Override
+    public boolean openFolderBookmarksInNewTabGroup(
+            BookmarkId folderId, boolean incognito, @Nullable String title) {
+        List<BookmarkId> bookmarksToOpen = extractBookmarkChildrenFromFolder(folderId);
+        if (bookmarksToOpen.isEmpty()) return false;
+        return openBookmarksInNewTabGroup(bookmarksToOpen, incognito, title);
+    }
+
+    @VisibleForTesting
+    List<BookmarkId> extractBookmarkChildrenFromFolder(BookmarkId folderId) {
+        BookmarkModel bookmarkModel = assumeNonNull(mBookmarkModelSupplier.get());
+        List<BookmarkId> children = bookmarkModel.getChildIds(folderId);
+        List<BookmarkId> bookmarksToOpen = new ArrayList<>();
+        for (BookmarkId childId : children) {
+            BookmarkItem child = bookmarkModel.getBookmarkById(childId);
+            if (child != null && !child.isFolder()) {
+                bookmarksToOpen.add(childId);
+            }
+        }
+        return bookmarksToOpen;
+    }
+
+    private Intent createBasicOpenIntent(
+            BookmarkItem item, boolean incognito, boolean opensNewTabByDefault) {
         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(item.getUrl().getSpec()));
         intent.putExtra(
                 Browser.EXTRA_APPLICATION_ID, mContext.getApplicationContext().getPackageName());
@@ -194,6 +265,12 @@ public class BookmarkOpenerImpl implements BookmarkOpener {
             IntentHandler.setTabLaunchType(intent, TabLaunchType.FROM_READING_LIST);
             intent.putExtra(Browser.EXTRA_CREATE_NEW_TAB, true);
             intent.putExtra(IntentHandler.EXTRA_OPEN_NEW_INCOGNITO_TAB, incognito);
+        } else if (opensNewTabByDefault) {
+            intent.putExtra(Browser.EXTRA_CREATE_NEW_TAB, true);
+        } else {
+            intent.putExtra(
+                    IntentHandler.EXTRA_TAB_OPEN_TYPE,
+                    IntentHandler.TabOpenType.CLOBBER_CURRENT_TAB);
         }
 
         IntentUtils.addTrustedIntentExtras(intent);
@@ -241,7 +318,7 @@ public class BookmarkOpenerImpl implements BookmarkOpener {
 
     private void recordTypeOpened(BookmarkItem item, String histogram) {
         RecordHistogram.recordEnumeratedHistogram(
-                histogram, item.getId().getType(), BookmarkType.LAST);
+                histogram, item.getId().getType(), BookmarkType.LAST + 1);
     }
 
     private void recordTimeSinceAdded(BookmarkItem item, String histogramPrefix) {

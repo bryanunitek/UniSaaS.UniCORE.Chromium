@@ -18,7 +18,9 @@
 #include "components/media_message_center/notification_theme.h"
 #include "components/soda/constants.h"
 #include "components/soda/soda_installer.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/views/bubble/bubble_anchor.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 
 class PrefChangeRegistrar;
@@ -50,10 +52,13 @@ class MediaDialogView : public views::BubbleDialogDelegateView,
                         public speech::SodaInstaller::Observer {
   METADATA_HEADER(MediaDialogView, views::BubbleDialogDelegateView)
  public:
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kMediaItemUIUpdatedViewElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kSaveVideoFrameButtonElementId);
+
   MediaDialogView(const MediaDialogView&) = delete;
   MediaDialogView& operator=(const MediaDialogView&) = delete;
 
-  static views::Widget* ShowDialogFromToolbar(views::View* anchor_view,
+  static views::Widget* ShowDialogFromToolbar(views::BubbleAnchor anchor,
                                               MediaNotificationService* service,
                                               Profile* profile);
   static views::Widget* ShowDialogCentered(
@@ -63,7 +68,7 @@ class MediaDialogView : public views::BubbleDialogDelegateView,
       content::WebContents* contents,
       global_media_controls::GlobalMediaControlsEntryPoint entry_point);
   static views::Widget* ShowDialog(
-      views::View* anchor_view,
+      views::BubbleAnchor anchor,
       views::BubbleBorder::Arrow anchor_position,
       MediaNotificationService* service,
       Profile* profile,
@@ -112,10 +117,11 @@ class MediaDialogView : public views::BubbleDialogDelegateView,
 
  private:
   friend class MediaDialogViewBrowserTest;
+  friend class MediaDialogViewTest;
   friend class MediaDialogViewWithRemotePlaybackTest;
 
   MediaDialogView(
-      views::View* anchor_view,
+      views::BubbleAnchor anchor,
       views::BubbleBorder::Arrow anchor_position,
       MediaNotificationService* service,
       Profile* profile,
@@ -162,6 +168,8 @@ class MediaDialogView : public views::BubbleDialogDelegateView,
 
   const raw_ptr<MediaNotificationService> service_;
 
+  // Always the original (non-OTR) profile; all prefs are read, written and
+  // observed here.
   const raw_ptr<Profile> profile_;
   std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
 

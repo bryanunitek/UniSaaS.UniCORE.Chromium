@@ -19,7 +19,7 @@ class TabGroupHeader;
 class TabGroupHighlight;
 class TabGroupUnderline;
 class TabStrip;
-class TabGroupStyle;
+class TabGroupStyleViews;
 
 // The manager of all views associated with a tab group. This handles visual
 // calculations and updates. Painting is done in TabStrip.
@@ -41,6 +41,10 @@ class TabGroupViews {
   TabGroupHighlight* highlight() const { return highlight_; }
   TabGroupUnderline* underline() const { return underline_; }
   TabGroupUnderline* drag_underline() const { return drag_underline_; }
+
+  bool IsFocusModeActive() const {
+    return tab_slot_controller_->GetFocusedGroup().has_value();
+  }
 
   // Updates bounds of all elements not explicitly positioned by the tab strip.
   // This currently includes both the underline and highlight.
@@ -68,7 +72,7 @@ class TabGroupViews {
   raw_ptr<TabGroupHighlight> highlight_;
   raw_ptr<TabGroupUnderline> underline_;
   raw_ptr<TabGroupUnderline> drag_underline_;
-  std::unique_ptr<const TabGroupStyle> style_;
+  std::unique_ptr<const TabGroupStyleViews> style_;
 
   bool InTearDown() const;
 

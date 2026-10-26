@@ -69,6 +69,7 @@
 #include "net/ssl/ssl_server_config.h"
 #include "net/storage_access_api/status.h"
 #include "net/test/embedded_test_server/create_websocket_handler.h"
+#include "net/test/embedded_test_server/default_handlers.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
@@ -87,6 +88,7 @@
 #include "net/websockets/websocket_channel.h"
 #include "net/websockets/websocket_event_interface.h"
 #include "net/websockets/websocket_handshake_response_info.h"
+#include "net/websockets/websocket_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -143,9 +145,15 @@ bool WinHttpReturnsExpectedProxy(const GURL& pac_url,
     return true;
   }
 
+  // Windows' system resolver does not support WebSocket URLs in proxy.pac
+  // (ERROR_WINHTTP_UNRECOGNIZED_SCHEME). Convert ws/wss to http/https.
+  GURL http_test_url = test_url.SchemeIsWSOrWSS()
+                           ? ChangeWebSocketSchemeToHttpScheme(test_url)
+                           : test_url;
+
   // Store wide strings in local variables to avoid dangling pointers.
   std::wstring pac_url_wide = base::ASCIIToWide(pac_url.spec());
-  std::wstring test_url_wide = base::ASCIIToWide(test_url.spec());
+  std::wstring test_url_wide = base::ASCIIToWide(http_test_url.spec());
 
   // Configure auto-proxy options with our PAC URL.
   WINHTTP_AUTOPROXY_OPTIONS auto_proxy_options = {0};
@@ -205,199 +213,6 @@ bool WinHttpReturnsExpectedProxy(const GURL& pac_url,
 }
 #endif  // BUILDFLAG(IS_WIN)
 
-// An implementation of WebSocketEventInterface that waits for and records the
-// results of the connect.
-class ConnectTestingEventInterface : public WebSocketEventInterface {
- public:
-  ConnectTestingEventInterface();
-
-  ConnectTestingEventInterface(const ConnectTestingEventInterface&) = delete;
-  ConnectTestingEventInterface& operator=(const ConnectTestingEventInterface&) =
-      delete;
-
-  void WaitForResponse() { on_response_future_.Get(); }
-
-  bool failed() const { return failed_; }
-
-  const std::unique_ptr<WebSocketHandshakeResponseInfo>& response() const {
-    return response_;
-  }
-
-  // Only set if the handshake failed, otherwise empty.
-  std::string failure_message() const;
-
-  std::string selected_subprotocol() const;
-
-  std::string extensions() const;
-
-  // Implementation of WebSocketEventInterface.
-  void OnCreateURLRequest(URLRequest* request) override {}
-
-  int OnURLRequestConnected(net::URLRequest* request,
-                            const net::TransportInfo& info,
-                            net::CompletionOnceCallback callback) override;
-
-  void OnAddChannelResponse(
-      std::unique_ptr<WebSocketHandshakeResponseInfo> response,
-      const std::string& selected_subprotocol,
-      const std::string& extensions) override;
-
-  void OnDataFrame(bool fin,
-                   WebSocketMessageType type,
-                   base::span<const char> payload) override;
-
-  bool HasPendingDataFrames() override { return false; }
-
-  void OnSendDataFrameDone() override;
-
-  void OnClosingHandshake() override;
-
-  void OnDropChannel(bool was_clean,
-                     uint16_t code,
-                     const std::string& reason) override;
-
-  void OnFailChannel(const std::string& message,
-                     int net_error,
-                     std::optional<int> response_code) override;
-
-  void OnStartOpeningHandshake(
-      std::unique_ptr<WebSocketHandshakeRequestInfo> request) override;
-
-  void OnSSLCertificateError(
-      std::unique_ptr<SSLErrorCallbacks> ssl_error_callbacks,
-      const GURL& url,
-      int net_error,
-      const SSLInfo& ssl_info,
-      bool fatal) override;
-
-  int OnAuthRequired(const AuthChallengeInfo& auth_info,
-                     scoped_refptr<HttpResponseHeaders> response_headers,
-                     const IPEndPoint& remote_endpoint,
-                     base::OnceCallback<void(const AuthCredentials*)> callback,
-                     std::optional<AuthCredentials>* credentials) override;
-
-  std::string GetDataFramePayload();
-
-  void WaitForDropChannel() { drop_channel_future_.Get(); }
-
- private:
-  void SetReceivedMessageFuture(std::string received_message);
-
-  // failed_ is true if the handshake failed (ie. OnFailChannel was called).
-  bool failed_ = false;
-  std::unique_ptr<WebSocketHandshakeResponseInfo> response_;
-  std::string selected_subprotocol_;
-  std::string extensions_;
-  std::string failure_message_;
-  std::optional<base::RunLoop> run_loop_;
-
-  base::test::TestFuture<std::string> received_message_future_;
-  base::test::TestFuture<void> drop_channel_future_;
-  base::test::TestFuture<void> on_response_future_;
-};
-
-ConnectTestingEventInterface::ConnectTestingEventInterface() = default;
-
-
-std::string ConnectTestingEventInterface::failure_message() const {
-  return failure_message_;
-}
-
-std::string ConnectTestingEventInterface::selected_subprotocol() const {
-  return selected_subprotocol_;
-}
-
-std::string ConnectTestingEventInterface::extensions() const {
-  return extensions_;
-}
-
-int ConnectTestingEventInterface::OnURLRequestConnected(
-    net::URLRequest* request,
-    const net::TransportInfo& info,
-    net::CompletionOnceCallback callback) {
-  return OK;
-}
-
-void ConnectTestingEventInterface::OnAddChannelResponse(
-    std::unique_ptr<WebSocketHandshakeResponseInfo> response,
-    const std::string& selected_subprotocol,
-    const std::string& extensions) {
-  response_ = std::move(response);
-  selected_subprotocol_ = selected_subprotocol;
-  extensions_ = extensions;
-  on_response_future_.SetValue();
-}
-
-void ConnectTestingEventInterface::OnDataFrame(bool fin,
-                                               WebSocketMessageType type,
-                                               base::span<const char> payload) {
-  DVLOG(3) << "Received WebSocket data frame with message:"
-           << std::string(payload.begin(), payload.end());
-  SetReceivedMessageFuture(std::string(base::as_string_view(payload)));
-}
-
-void ConnectTestingEventInterface::OnSendDataFrameDone() {}
-
-void ConnectTestingEventInterface::OnClosingHandshake() {
-  DVLOG(3) << "OnClosingHandeshake() invoked.";
-}
-
-void ConnectTestingEventInterface::OnDropChannel(bool was_clean,
-                                                 uint16_t code,
-                                                 const std::string& reason) {
-  DVLOG(3) << "OnDropChannel() invoked, was_clean: " << was_clean
-           << ", code: " << code << ", reason: " << reason;
-  if (was_clean) {
-    drop_channel_future_.SetValue();
-  } else {
-    DVLOG(1) << "OnDropChannel() did not receive a clean close.";
-  }
-}
-
-void ConnectTestingEventInterface::OnFailChannel(
-    const std::string& message,
-    int net_error,
-    std::optional<int> response_code) {
-  DVLOG(3) << "OnFailChannel invoked with message: " << message;
-  failed_ = true;
-  failure_message_ = message;
-  on_response_future_.SetValue();
-}
-
-void ConnectTestingEventInterface::OnStartOpeningHandshake(
-    std::unique_ptr<WebSocketHandshakeRequestInfo> request) {}
-
-void ConnectTestingEventInterface::OnSSLCertificateError(
-    std::unique_ptr<SSLErrorCallbacks> ssl_error_callbacks,
-    const GURL& url,
-    int net_error,
-    const SSLInfo& ssl_info,
-    bool fatal) {
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&SSLErrorCallbacks::CancelSSLRequest,
-                                base::Owned(ssl_error_callbacks.release()),
-                                ERR_SSL_PROTOCOL_ERROR, &ssl_info));
-}
-
-int ConnectTestingEventInterface::OnAuthRequired(
-    const AuthChallengeInfo& auth_info,
-    scoped_refptr<HttpResponseHeaders> response_headers,
-    const IPEndPoint& remote_endpoint,
-    base::OnceCallback<void(const AuthCredentials*)> callback,
-    std::optional<AuthCredentials>* credentials) {
-  *credentials = std::nullopt;
-  return OK;
-}
-
-void ConnectTestingEventInterface::SetReceivedMessageFuture(
-    std::string received_message) {
-  received_message_future_.SetValue(received_message);
-}
-
-std::string ConnectTestingEventInterface::GetDataFramePayload() {
-  return received_message_future_.Get();
-}
-
 // Addition on top of ConnectTestingEventInterface that allows for delayed
 // connections based on the response from OnURLRequestConnected.
 class DelayedOnURLConnectedEventInterface
@@ -432,6 +247,36 @@ void DelayedOnURLConnectedEventInterface::RunCallback(int net_err) {
     DVLOG(3) << "No callback to run";
   }
 }
+
+class ObserveConnectEventInterface : public ConnectTestingEventInterface {
+ public:
+  ObserveConnectEventInterface() = default;
+  ~ObserveConnectEventInterface() override = default;
+
+  [[nodiscard]] bool WaitForConnectResult() {
+    return connect_result_future_.Get();
+  }
+
+  int OnURLRequestConnected(net::URLRequest* request,
+                            const net::TransportInfo& info,
+                            net::CompletionOnceCallback callback) override {
+    connect_result_future_.SetValue(true);
+    return ConnectTestingEventInterface::OnURLRequestConnected(
+        request, info, std::move(callback));
+  }
+
+  void OnFailChannel(const std::string& message,
+                     int net_error,
+                     std::optional<int> response_code) override {
+    LOG(ERROR) << "Connection failed: " << message << " error: " << net_error;
+    connect_result_future_.SetValue(false);
+    ConnectTestingEventInterface::OnFailChannel(message, net_error,
+                                                response_code);
+  }
+
+ private:
+  base::test::TestFuture<bool> connect_result_future_;
+};
 
 // A subclass of TestNetworkDelegate that additionally implements the
 // OnResolveProxy callback and records the information passed to it.
@@ -520,7 +365,7 @@ class WebSocketEndToEndTest : public TestWithTaskEnvironment {
     channel_->SendAddChannelRequest(
         GURL(socket_url), sub_protocols_, origin, StorageAccessApiStatus::kNone,
         isolation_info, HttpRequestHeaders(), WebSocketPriorityHint::kDefault,
-        TRAFFIC_ANNOTATION_FOR_TESTS);
+        TRAFFIC_ANNOTATION_FOR_TESTS, handles::kInvalidNetworkHandle);
   }
 
   // Send the connect request to |socket_url| and wait for a response. Returns
@@ -1206,6 +1051,79 @@ TEST_F(WebSocketEndToEndTest, WebSocketDelayedConnectionResetChannelTest) {
   Connect(echo_url, std::move(event_interface));
   event_interface_ptr->WaitForConnectedEvent();
   channel_.reset();
+}
+
+TEST_F(WebSocketEndToEndTest, PartitioningByNetworkAnonymizationKey) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kPartitionConnectionsByNetworkIsolationKey);
+
+  // Set up mock host resolver to resolve our test domains to localhost.
+  auto host_resolver = std::make_unique<MockHostResolver>();
+  host_resolver->rules()->AddRule("a.test", "127.0.0.1");
+  host_resolver->rules()->AddRule("b.test", "127.0.0.1");
+  context_builder_->set_host_resolver(std::move(host_resolver));
+
+  test_server::EmbeddedTestServer embedded_test_server(
+      test_server::EmbeddedTestServer::TYPE_HTTP);
+  test_server::RegisterDefaultHandlers(&embedded_test_server);
+  test_server::InstallDefaultWebSocketHandlers(&embedded_test_server);
+  ASSERT_TRUE(embedded_test_server.Start());
+
+  InitialiseContext();
+
+  GURL hung_url =
+      test_server::GetWebSocketURL(embedded_test_server, "a.test", "/hung");
+  GURL echo_url = test_server::GetWebSocketURL(embedded_test_server, "b.test",
+                                               "/echo-with-no-extension");
+
+  // Connection 1: Hung connection with NAK 1
+  url::Origin origin1 = url::Origin::Create(GURL("http://a.test"));
+  IsolationInfo isolation_info1 =
+      IsolationInfo::Create(IsolationInfo::RequestType::kOther, origin1,
+                            origin1, SiteForCookies::FromOrigin(origin1));
+
+  std::unique_ptr<ObserveConnectEventInterface> event_interface1 =
+      std::make_unique<ObserveConnectEventInterface>();
+  ObserveConnectEventInterface* event_interface1_ptr = event_interface1.get();
+
+  auto channel1 = std::make_unique<WebSocketChannel>(
+      std::move(event_interface1), context_.get());
+
+  channel1->SendAddChannelRequest(
+      hung_url, sub_protocols_, origin1, StorageAccessApiStatus::kNone,
+      isolation_info1, HttpRequestHeaders(), WebSocketPriorityHint::kDefault,
+      TRAFFIC_ANNOTATION_FOR_TESTS, handles::kInvalidNetworkHandle);
+
+  // Wait for Connection 1 to be connected (lock acquired).
+  ASSERT_TRUE(event_interface1_ptr->WaitForConnectResult());
+
+  // Connection 2: Success connection with NAK 2.
+  // It should succeed immediately because they are partitioned by NAK.
+  url::Origin origin2 = url::Origin::Create(GURL("http://b.test"));
+  IsolationInfo isolation_info2 =
+      IsolationInfo::Create(IsolationInfo::RequestType::kOther, origin2,
+                            origin2, SiteForCookies::FromOrigin(origin2));
+
+  std::unique_ptr<ConnectTestingEventInterface> event_interface2 =
+      std::make_unique<ConnectTestingEventInterface>();
+  ConnectTestingEventInterface* event_interface2_ptr = event_interface2.get();
+
+  auto channel2 = std::make_unique<WebSocketChannel>(
+      std::move(event_interface2), context_.get());
+
+  channel2->SendAddChannelRequest(
+      echo_url, sub_protocols_, origin2, StorageAccessApiStatus::kNone,
+      isolation_info2, HttpRequestHeaders(), WebSocketPriorityHint::kDefault,
+      TRAFFIC_ANNOTATION_FOR_TESTS, handles::kInvalidNetworkHandle);
+
+  // Wait for Connection 2 response. It should succeed.
+  event_interface2_ptr->WaitForResponse();
+  EXPECT_FALSE(event_interface2_ptr->failed());
+
+  // Clean up.
+  channel2.reset();
+  channel1.reset();
 }
 
 }  // namespace

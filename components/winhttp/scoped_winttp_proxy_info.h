@@ -7,11 +7,13 @@
 
 #include <windows.h>
 
+#include <stddef.h>
 #include <winhttp.h>
 
 #include <string>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 
 namespace winhttp {
@@ -85,9 +87,10 @@ class ScopedWinHttpProxyInfo {
 
  private:
   wchar_t* GlobalAlloc(const std::wstring& str) {
-    const size_t size_in_bytes = (str.length() + 1) * sizeof(wchar_t);
+    const size_t length = str.length() + 1;
+    const size_t size_in_bytes = length * sizeof(wchar_t);
     wchar_t* string_mem =
-        reinterpret_cast<wchar_t*>(::GlobalAlloc(GPTR, size_in_bytes));
+        static_cast<wchar_t*>(::GlobalAlloc(GPTR, size_in_bytes));
 
     if (!string_mem) {
       PLOG(ERROR) << "GlobalAlloc failed to allocate " << size_in_bytes
@@ -95,7 +98,11 @@ class ScopedWinHttpProxyInfo {
       return nullptr;
     }
 
-    UNSAFE_TODO(memcpy(string_mem, str.data(), size_in_bytes));
+    // SAFETY: `string_mem` was just allocated by `::GlobalAlloc` with room for
+    // `length` wide characters.
+    base::span<wchar_t> dest = UNSAFE_BUFFERS(base::span(string_mem, length));
+    dest.copy_prefix_from(str);
+    dest.back() = L'\0';
     return string_mem;
   }
   WINHTTP_PROXY_INFO proxy_info_ = {};

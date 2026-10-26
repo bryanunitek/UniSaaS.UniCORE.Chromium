@@ -2047,7 +2047,7 @@ TEST_P(HistoryBackendDBTest, MigrateReplaceClusterVisitsTable) {
 TEST_P(HistoryBackendDBTest, MigrateKeywordSearchTerms) {
   ASSERT_NO_FATAL_FAILURE(CreateDBVersion(41));
 
-  const KeywordID keyword_id = 12;
+  const KeywordID keyword_id(12);
   const URLID url_id = 34;
   const std::u16string term = u"WEEKLY  NEWS  ";
   const std::u16string lower_term = base::i18n::ToLower(term);
@@ -2060,7 +2060,7 @@ TEST_P(HistoryBackendDBTest, MigrateKeywordSearchTerms) {
     sql::Statement insert_statement(
         db.GetUniqueStatement("INSERT INTO keyword_search_terms (keyword_id, "
                               "url_id, lower_term, term) VALUES (?,?,?,?)"));
-    insert_statement.BindInt64(0, keyword_id);
+    insert_statement.BindInt64(0, keyword_id.value());
     insert_statement.BindInt64(1, url_id);
     insert_statement.BindString16(2, lower_term);
     insert_statement.BindString16(3, term);
@@ -3109,6 +3109,45 @@ TEST_P(HistoryBackendDBTest, VerifyTestSQLFileForCurrentVersionAlreadyExists) {
   EXPECT_TRUE(CreateBackendAndDatabase());
 }
 
+TEST_P(HistoryBackendDBTest, InitJourneysTablesOnExistingDatabase) {
+  ASSERT_NO_FATAL_FAILURE(
+      CreateDBFromSQLFile("history.70_without_journeys.sql"));
+
+  // Open the old version of the DB and confirm journey tables don't exist yet.
+  {
+    sql::Database db(sql::test::kTestTag);
+    ASSERT_TRUE(db.Open(history_dir_.Append(kHistoryFilename)));
+    ASSERT_FALSE(db.DoesTableExist("journeys"));
+    ASSERT_FALSE(db.DoesTableExist("journey_history_entries"));
+    ASSERT_FALSE(db.DoesTableExist("journey_continuation_queries"));
+    ASSERT_FALSE(db.DoesTableExist("journey_collections"));
+    ASSERT_FALSE(db.DoesTableExist("journey_collection_items"));
+    ASSERT_FALSE(db.DoesTableExist("journey_sync_metadata"));
+  }
+
+  // Opening the DB triggers HistoryDatabase::Init() which idempotently creates
+  // them.
+  ASSERT_TRUE(CreateBackendAndDatabase());
+
+  // Database version should match the current version (no migration needed for
+  // journey tables, but future migrations may advance it).
+  EXPECT_EQ(GetDatabaseVersion(), HistoryDatabase::GetCurrentVersion());
+
+  DeleteBackend();
+
+  // Verify the tables now exist.
+  {
+    sql::Database db(sql::test::kTestTag);
+    ASSERT_TRUE(db.Open(history_dir_.Append(kHistoryFilename)));
+    EXPECT_TRUE(db.DoesTableExist("journeys"));
+    EXPECT_TRUE(db.DoesTableExist("journey_history_entries"));
+    EXPECT_TRUE(db.DoesTableExist("journey_continuation_queries"));
+    EXPECT_TRUE(db.DoesTableExist("journey_collections"));
+    EXPECT_TRUE(db.DoesTableExist("journey_collection_items"));
+    EXPECT_TRUE(db.DoesTableExist("journey_sync_metadata"));
+  }
+}
+
 bool FilterURL(const GURL& url) {
   return url.SchemeIsHTTPOrHTTPS();
 }
@@ -3381,23 +3420,16 @@ TEST_P(HistoryBackendDBTest, CantUseLockedDatabase) {
   ASSERT_NO_FATAL_FAILURE(
       CreateDBVersion(HistoryDatabase::GetCurrentVersion()));
 
-  // Open the database and leave it open.
+  // Open the database, acquire an exclusive lock, and leave it open.
   sql::Database db(sql::test::kTestTag);
   ASSERT_TRUE(db.Open(history_dir_.Append(kHistoryFilename)));
+  ASSERT_TRUE(db.Execute("BEGIN EXCLUSIVE"));
 
-  // The database can't be opened if it's locked. In WAL mode, the failure
-  // occurs at OPEN (journal mode change blocked); otherwise at COMMIT.
+  // The database can't be opened if it's locked.
   EXPECT_FALSE(CreateBackendAndDatabase());
-#if !BUILDFLAG(IS_FUCHSIA)
-  const auto expected_step = IsWalModeEnabled()
-                                 ? HistoryDatabase::InitStep::OPEN
-                                 : HistoryDatabase::InitStep::COMMIT;
-#else
-  const auto expected_step = HistoryDatabase::InitStep::COMMIT;
-#endif  // !BUILDFLAG(IS_FUCHSIA)
   EXPECT_THAT(
       histogram_tester.GetAllSamples("History.InitializationFailureStep"),
-      BucketsAre(Bucket(expected_step, /*count=*/1)));
+      BucketsAre(Bucket(HistoryDatabase::InitStep::OPEN, /*count=*/1)));
 }
 
 TEST_P(HistoryBackendDBTest, CantRazeOldDatabaseIfLocked) {

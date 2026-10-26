@@ -11,7 +11,7 @@
 -DistillerPageWebContentsTest.HandlesRelativeImages
 -DistillerPageWebContentsTest.HandlesRelativeLinks
 -DistillerPageWebContentsTest.HandlesRelativeVideos
--DistillerPageWebContentsTest.MarkupInfo
+-DistillerPageWebContentsTest.HandlesShadowDOM
 -DistillerPageWebContentsTest.PageDestroyedBeforeFinishDistillation
 -DistillerPageWebContentsTest.TestNoContentDoesNotCrash
 -DistillerPageWebContentsTest.UsingCurrentWebContentsNotFinishedLoadingYet
@@ -28,7 +28,6 @@
 -All/PageContentProtoProviderBrowserTestSiteIsolation.*
 -PageContentProtoProviderBrowserTest.*
 -PageContentProtoProviderBrowserTestActionableElements.AIPageContent
--PageContentProtoProviderBrowserTestFencedFrame.AIPageContentFencedFrame
 -PageContentProtoProviderBrowserTestPaidContentDisabled.PaidContentDisabled
 -ScaledPageContentProtoProviderBrowserTest.ScaleSizes
 
@@ -38,25 +37,17 @@
 
 # TODO(crbug.com/503810632): These tests have been failing since
 # https://crrev.com/c/7539316, https://crrev.com/c/7763951,
-# https://crrev.com/c/7671607, https://crrev.com/c/7863615, and
-# https://crrev.com/c/7893748 on the bot.
--SurfaceEmbedBrowserTest.Crash
--SurfaceEmbedBrowserTest.CrashEarly
--SurfaceEmbedBrowserTest.CrashThenReattach
--SurfaceEmbedBrowserTest.CrashThenReload
--SurfaceEmbedBrowserTest.CrossProcessNavigationPixelTest
--SurfaceEmbedBrowserTest.DisplayNonePropagates
--SurfaceEmbedBrowserTest.EmbedMultipleTagsCreatesMultiplePlugins
--SurfaceEmbedBrowserTest.EmbedPixelTest
--SurfaceEmbedBrowserTest.EmbedTagCreatesPlugin
--SurfaceEmbedBrowserTest.EmbedTagInvalidContentId
--SurfaceEmbedBrowserTest.EmbedTagRemovedDestroysHost
+# https://crrev.com/c/7671607, https://crrev.com/c/7863615,
+# https://crrev.com/c/7893748, https://crrev.com/c/8132523,
+# https://crrev.com/c/8161746, https://crrev.com/c/8194052, and
+# https://crrev.com/c/8267284 on the bot.
 -SurfaceEmbedBrowserTest.FocusByClick
+-SurfaceEmbedBrowserTest.FocusByShiftTabKeyNoPreviousFocusableElement
+-SurfaceEmbedBrowserTest.FocusByTabKey
+-SurfaceEmbedBrowserTest.FocusByTabKeyNoNextFocusableElement
+-SurfaceEmbedBrowserTest.FocusPreservedAfterNavigation
 -SurfaceEmbedBrowserTest.HtmlPopupOnSurfaceEmbeddedPage
--SurfaceEmbedBrowserTest.ResizeEmbedPixelTest
--SurfaceEmbedBrowserTest.VisibilityHiddenPropagates
--SurfaceEmbedBrowserTest.VisualPropertiesSync
--SurfaceEmbedBrowserTestNoHost.NoCrash
--SurfaceEmbedBrowserTest.MultilevelDisplayNonePropagates
--SurfaceEmbedBrowserTest.MultilevelVisibilityHiddenPropagates
--SurfaceEmbedAccessibilityBrowserTest.PluginSendsParentAccessibilityInfoToHost
+-SurfaceEmbedBrowserTest.FocusByShiftTabKey
+-SurfaceEmbedBrowserTest.MultilevelFocusAndInput
+-SurfaceEmbedBrowserTest.FocusAndInputWithInnerWebContents
+-SurfaceEmbedBrowserTest.IntersectionObserverIgnoresEmbedderScrollOffsetUnlikeIframe

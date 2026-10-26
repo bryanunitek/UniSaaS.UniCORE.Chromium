@@ -5,6 +5,7 @@
 #include "chrome/browser/ash/net/alwayson_vpn_pre_connect_url_allowlist_service.h"
 
 #include <memory>
+#include <string>
 
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
@@ -13,16 +14,20 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/shill/shill_service_client.h"
+#include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_handler_test_helper.h"
+#include "chromeos/ash/components/network/network_state_handler_observer.h"
+#include "chromeos/ash/components/policy/policy_blocklist_service/ash_policy_blocklist_service_factory.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "components/account_id/account_id.h"
+#include "components/policy/core/browser/url_list/policy_blocklist_service.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/test_utils.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/shill/dbus-constants.h"
@@ -34,6 +39,51 @@ constexpr char kDefaultEthernetPath[] = "/service/eth1";
 constexpr char kDefaultVpnPath[] = "/service/vpn1";
 
 constexpr char kTestUrl[] = "test.url.com";
+constexpr char kTestUrlInternalScheme[] = "chrome://print";
+
+class DefaultNetworkStateWaiter : public ash::NetworkStateHandlerObserver {
+ public:
+  DefaultNetworkStateWaiter(const std::string& expected_service_path,
+                            const std::string& expected_connection_state)
+      : expected_service_path_(expected_service_path),
+        expected_connection_state_(expected_connection_state) {
+    observation_.Observe(ash::NetworkHandler::Get()->network_state_handler());
+  }
+
+  DefaultNetworkStateWaiter(const DefaultNetworkStateWaiter&) = delete;
+  DefaultNetworkStateWaiter& operator=(const DefaultNetworkStateWaiter&) =
+      delete;
+
+  ~DefaultNetworkStateWaiter() override = default;
+
+  void Wait() {
+    if (HasExpectedDefaultNetwork()) {
+      return;
+    }
+
+    run_loop_.Run();
+  }
+
+ private:
+  void DefaultNetworkChanged(const ash::NetworkState* network) override {
+    if (HasExpectedDefaultNetwork()) {
+      run_loop_.Quit();
+    }
+  }
+
+  bool HasExpectedDefaultNetwork() const {
+    const ash::NetworkState* network =
+        ash::NetworkHandler::Get()->network_state_handler()->DefaultNetwork();
+    return network && network->path() == expected_service_path_ &&
+           network->connection_state() == expected_connection_state_;
+  }
+
+  const std::string expected_service_path_;
+  const std::string expected_connection_state_;
+  base::RunLoop run_loop_;
+  ash::NetworkStateHandlerScopedObservation observation_{this};
+};
+
 }  // namespace
 
 namespace ash {
@@ -61,7 +111,7 @@ class AlwaysOnVpnPreConnectUrlAllowlistServiceTest
         base::Value(shill::kStateIdle));
 
     browser()
-        ->profile()
+        ->GetProfile()
         ->GetProfilePolicyConnector()
         ->OverrideIsManagedForTesting(true);
 
@@ -86,6 +136,9 @@ class AlwaysOnVpnPreConnectUrlAllowlistServiceTest
 
  protected:
   void SetVpnConnectionState(bool vpn_enabled) {
+    DefaultNetworkStateWaiter default_network_waiter(
+        vpn_enabled ? kDefaultVpnPath : kDefaultEthernetPath,
+        shill::kStateOnline);
     ShillServiceClient::TestInterface* service =
         ShillServiceClient::Get()->GetTestInterface();
     service->SetServiceProperty(
@@ -94,7 +147,7 @@ class AlwaysOnVpnPreConnectUrlAllowlistServiceTest
     service->SetServiceProperty(
         kDefaultVpnPath, shill::kStateProperty,
         base::Value(vpn_enabled ? shill::kStateOnline : shill::kStateIdle));
-    base::RunLoop().RunUntilIdle();
+    default_network_waiter.Wait();
   }
 
   // The kAlwaysOnVpnPreConnectUrlAllowlist should be enfoced when the following
@@ -111,10 +164,11 @@ class AlwaysOnVpnPreConnectUrlAllowlistServiceTest
               ash::NetworkState::NetworkTechnologyType::kVPN);
     base::ListValue list;
     list.Append(kTestUrl);
-    browser()->profile()->GetPrefs()->SetList(
+    list.Append(kTestUrlInternalScheme);
+    browser()->GetProfile()->GetPrefs()->SetList(
         policy::policy_prefs::kAlwaysOnVpnPreConnectUrlAllowlist,
         std::move(list));
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         arc::prefs::kAlwaysOnVpnLockdown, true);
   }
 
@@ -150,7 +204,7 @@ IN_PROC_BROWSER_TEST_F(AlwaysOnVpnPreConnectUrlAllowlistServiceTest,
 
   // Create an incognito profile.
   Profile* incognito_profile =
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
+      browser()->GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
 
   AlwaysOnVpnPreConnectUrlAllowlistService* service =
       ash::AlwaysOnVpnPreConnectUrlAllowlistServiceFactory::GetForProfile(
@@ -186,14 +240,14 @@ IN_PROC_BROWSER_TEST_F(AlwaysOnVpnPreConnectUrlAllowlistServiceTest,
 
   // Create and set an empty list.
   base::ListValue list;
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       policy::policy_prefs::kAlwaysOnVpnPreConnectUrlAllowlist, list.Clone());
   EXPECT_FALSE(IsPreConnectListEnforced());
 
   // Set a value for the kAlwaysOnVpnPreConnectUrlAllowlist pref again and
   // verify that the pre-connect list is again enforced.
   list.Append(kTestUrl);
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       policy::policy_prefs::kAlwaysOnVpnPreConnectUrlAllowlist,
       std::move(list));
   EXPECT_TRUE(IsPreConnectListEnforced());
@@ -207,14 +261,14 @@ IN_PROC_BROWSER_TEST_F(AlwaysOnVpnPreConnectUrlAllowlistServiceTest,
   EXPECT_TRUE(IsPreConnectListEnforced());
 
   // Remove lockdown mode.
-  browser()->profile()->GetPrefs()->SetBoolean(arc::prefs::kAlwaysOnVpnLockdown,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      arc::prefs::kAlwaysOnVpnLockdown, false);
   EXPECT_FALSE(IsPreConnectListEnforced());
 
   // Set lockdown mode and verify that the pre-connect list is again
   // enforced.
-  browser()->profile()->GetPrefs()->SetBoolean(arc::prefs::kAlwaysOnVpnLockdown,
-                                               true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      arc::prefs::kAlwaysOnVpnLockdown, true);
   EXPECT_TRUE(IsPreConnectListEnforced());
 }
 
@@ -230,6 +284,44 @@ IN_PROC_BROWSER_TEST_F(AlwaysOnVpnPreConnectUrlAllowlistServiceTest,
       ash::AlwaysOnVpnPreConnectUrlAllowlistServiceFactory::GetForProfile(
           managed_profile.get())
           ->enforce_alwayson_pre_connect_url_allowlist());
+}
+
+IN_PROC_BROWSER_TEST_F(AlwaysOnVpnPreConnectUrlAllowlistServiceTest,
+                       UrlsFilterPreConnect) {
+  EXPECT_FALSE(IsPreConnectListEnforced());
+  CreatePreConnectListEnv();
+  EXPECT_TRUE(IsPreConnectListEnforced());
+  content::RunAllTasksUntilIdle();
+
+  PolicyBlocklistService* blocklist_service =
+      AshPolicyBlocklistServiceFactory::GetForBrowserContext(
+          browser()->GetProfile());
+  ASSERT_TRUE(blocklist_service);
+
+  // External URLs should be blocked.
+  EXPECT_EQ(
+      policy::URLBlocklist::URL_IN_BLOCKLIST,
+      blocklist_service->GetURLBlocklistState(GURL("http://www.google.com")));
+
+  // URLs in the allowlist policy should be allowed.
+  EXPECT_EQ(policy::URLBlocklist::URL_IN_ALLOWLIST,
+            blocklist_service->GetURLBlocklistState(
+                GURL(base::StringPrintf("http://%s", kTestUrl))));
+  EXPECT_EQ(
+      policy::URLBlocklist::URL_IN_ALLOWLIST,
+      blocklist_service->GetURLBlocklistState(GURL(kTestUrlInternalScheme)));
+
+  // Internal chrome:// URLs should be blocked by default.
+  EXPECT_EQ(policy::URLBlocklist::URL_IN_BLOCKLIST,
+            blocklist_service->GetURLBlocklistState(GURL("chrome://settings")));
+  EXPECT_EQ(
+      policy::URLBlocklist::URL_IN_BLOCKLIST,
+      blocklist_service->GetURLBlocklistState(GURL("chrome://file-manager")));
+
+  // Internal chrome-untrusted:// URLs should be blocked by default.
+  EXPECT_EQ(policy::URLBlocklist::URL_IN_BLOCKLIST,
+            blocklist_service->GetURLBlocklistState(
+                GURL("chrome-untrusted://file-manager")));
 }
 
 }  // namespace ash

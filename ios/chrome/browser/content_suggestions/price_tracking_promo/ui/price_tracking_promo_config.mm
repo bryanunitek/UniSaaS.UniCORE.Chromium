@@ -44,12 +44,11 @@ constexpr CGFloat kFallbackSymbolSize = 10;
 #pragma mark - StandaloneModuleViewConfig
 
 - (UIImage*)productImage {
-  return [UIImage imageWithData:self.productImageData
-                          scale:[UIScreen mainScreen].scale];
+  return [UIImage imageWithData:self.productImageData];
 }
 
 - (UIImage*)fallbackSymbolImage {
-  return CustomSymbolWithPointSize(kDownTrendSymbol, kFallbackSymbolSize);
+  return SymbolWithPointSize(SymbolDownTrend, kFallbackSymbolSize);
 }
 
 - (NSString*)titleText {

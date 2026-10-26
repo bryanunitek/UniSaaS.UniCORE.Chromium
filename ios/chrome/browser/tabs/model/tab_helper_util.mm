@@ -8,6 +8,8 @@
 #import "components/breadcrumbs/core/breadcrumbs_status.h"
 #import "components/commerce/ios/browser/commerce_tab_helper.h"
 #import "components/data_sharing/public/features.h"
+#import "components/enterprise/browser/reporting/reporting_features.h"
+#import "components/enterprise/net/core/features.h"
 #import "components/favicon/core/favicon_service.h"
 #import "components/favicon/ios/web_favicon_driver.h"
 #import "components/history/core/browser/top_sites.h"
@@ -17,7 +19,6 @@
 #import "components/omnibox/common/omnibox_features.h"
 #import "components/safe_browsing/core/common/features.h"
 #import "components/safe_browsing/ios/browser/safe_browsing_url_allow_list.h"
-#import "components/send_tab_to_self/features.h"
 #import "components/supervised_user/core/common/features.h"
 #import "components/ukm/ios/ukm_url_recorder.h"
 #import "components/webauthn/ios/features.h"
@@ -50,11 +51,13 @@
 #import "ios/chrome/browser/download/model/safari_download_tab_helper.h"
 #import "ios/chrome/browser/download/model/vcard_tab_helper.h"
 #import "ios/chrome/browser/drive/model/drive_tab_helper.h"
-#import "ios/chrome/browser/enterprise/connectors/device_trust/device_trust_challenge_tab_helper.h"
-#import "ios/chrome/browser/enterprise/connectors/device_trust/features.h"
+#import "ios/chrome/browser/enterprise/connectors/device_trust/model/device_trust_challenge_tab_helper.h"
+#import "ios/chrome/browser/enterprise/connectors/device_trust/model/device_trust_service_factory_ios.h"
+#import "ios/chrome/browser/enterprise/connectors/device_trust/model/device_trust_util.h"
 #import "ios/chrome/browser/enterprise/data_controls/model/data_controls_tab_helper.h"
 #import "ios/chrome/browser/enterprise/data_protection/model/data_protection_tab_helper.h"
-#import "ios/chrome/browser/enterprise/data_protection/public/features.h"
+#import "ios/chrome/browser/enterprise/proxy/model/enterprise_proxy_error_service_factory_ios.h"
+#import "ios/chrome/browser/enterprise/proxy/model/enterprise_proxy_tab_helper.h"
 #import "ios/chrome/browser/favicon/model/favicon_service_factory.h"
 #import "ios/chrome/browser/find_in_page/model/find_tab_helper.h"
 #import "ios/chrome/browser/history/model/history_service_factory.h"
@@ -71,6 +74,8 @@
 #import "ios/chrome/browser/infobars/model/overlays/translate_overlay_tab_helper.h"
 #import "ios/chrome/browser/intelligence/actor/model/actor_tab_helper.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_tab_helper.h"
+#import "ios/chrome/browser/intelligence/contextual_cueing/contextual_cueing_tab_helper.h"
+#import "ios/chrome/browser/intelligence/contextual_cueing/features.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/itunes_urls/model/itunes_urls_handler_tab_helper.h"
 #import "ios/chrome/browser/lens/model/lens_tab_helper.h"
@@ -83,7 +88,6 @@
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service_factory.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_tab_helper.h"
-#import "ios/chrome/browser/optimization_guide/model/optimization_guide_validation_tab_helper.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_request_queue.h"
 #import "ios/chrome/browser/overscroll_actions/model/overscroll_actions_tab_helper.h"
 #import "ios/chrome/browser/page_info/features/features.h"
@@ -93,9 +97,11 @@
 #import "ios/chrome/browser/passwords/model/password_controller.h"
 #import "ios/chrome/browser/passwords/model/password_tab_helper.h"
 #import "ios/chrome/browser/passwords/model/well_known_change_password_tab_helper.h"
+#import "ios/chrome/browser/payments/model/web_payments_metrics_recorder.h"
 #import "ios/chrome/browser/permissions/model/permissions_tab_helper.h"
+#import "ios/chrome/browser/policy/model/reporting/saas_usage/saas_usage_reporting_controller_factory_ios.h"
+#import "ios/chrome/browser/policy/model/reporting/saas_usage/saas_usage_tab_helper.h"
 #import "ios/chrome/browser/policy_url_blocking/model/policy_url_blocking_tab_helper.h"
-#import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/reader_mode/model/reader_mode_tab_helper.h"
 #import "ios/chrome/browser/reading_list/model/reading_list_model_factory.h"
 #import "ios/chrome/browser/reading_list/model/reading_list_web_state_observer.h"
@@ -165,10 +171,17 @@ void AttachTabHelpers(web::WebState* web_state, TabHelperFilter filter_flags) {
   // should be filtered out.
   // - kLensOverlay: Tab helpers that are required for Lens UI.
   // - kReaderMode: Tab helpers that are required for Reader Mode UI.
+  // - kGeminiWebModal: Tab helpers that are required for a web modal presented
+  // over the Gemini surface.
   //
   // When a web state is presented by the BVC, AttachTabHelpers is called to
   // attach all tab helpers. (the method is idempotent, so it is okay to call it
   // multiple times for the same WebState).
+
+  // Created first so that policy deciders attached below cannot hide requests
+  // from WebPaymentsMetricsRecorder on a short circuit cancellation.
+  attacher.CreateWhen<WebPaymentsMetricsRecorder>(
+      attacher.IsForStandardNavigation());
 
   attacher.Create<OverlayRequestQueue>();
   attacher.Create<VoiceSearchNavigationTabHelper>();
@@ -176,7 +189,7 @@ void AttachTabHelpers(web::WebState* web_state, TabHelperFilter filter_flags) {
   attacher.Create<FindTabHelper>();
 
   bool should_create_history_tab_helper =
-      !attacher.IsForReaderMode() &&
+      !attacher.IsForReaderMode() && !attacher.IsForGeminiWebModal() &&
       (!attacher.IsForLensOverlay() ||
        base::FeatureList::IsEnabled(kLensOverlayNavigationHistory));
   attacher.CreateWhen<HistoryTabHelper>(should_create_history_tab_helper);
@@ -203,12 +216,13 @@ void AttachTabHelpers(web::WebState* web_state, TabHelperFilter filter_flags) {
   attacher.CreateWhen<LensOverlayTabHelper>(attacher.IsNotInTabHelperFilter());
   attacher
       .CreateDeferredWhen<AppLauncherTabHelper>(!attacher.IsForLensOverlay() &&
-                                                !attacher.IsForPrerender())
+                                                !attacher.IsForPrerender() &&
+                                                !attacher.IsForGeminiWebModal())
       .With([&]() { return [[AppLauncherAbuseDetector alloc] init]; },
             [&]() { return attacher.IsOffTheRecord(); });
   attacher
       .CreateDeferredWhen<ReaderModeTabHelper>(
-          attacher.IsNotInTabHelperFilter() && IsReaderModeAvailable())
+          attacher.IsNotInTabHelperFilter())
       .WithFactory<DistillerServiceFactory>(profile);
 
   attacher.Create<security_interstitials::IOSBlockingPageTabHelper>();
@@ -227,33 +241,12 @@ void AttachTabHelpers(web::WebState* web_state, TabHelperFilter filter_flags) {
       breadcrumbs::IsEnabled(GetApplicationContext()->GetLocalState()));
 
   attacher.Create<AnnotationsTabHelper>();
-  attacher.CreateWhen<SendTabToSelfTabHelper>(
-      base::FeatureList::IsEnabled(
-          send_tab_to_self::kSendTabToSelfPropagateScrollPosition) ||
-      base::FeatureList::IsEnabled(
-          send_tab_to_self::kSendTabToSelfPropagateFormFields));
-
-  SafeBrowsingClient* client =
-      SafeBrowsingClientFactory::GetForProfile(profile);
-  attacher.Create<SafeBrowsingQueryManager>(client);
-  attacher.Create<SafeBrowsingTabHelper>(client);
-  attacher.Create<SafeBrowsingUrlAllowList>();
-  attacher.Create<SafeBrowsingUnsafeResourceContainer>();
-
-  attacher.Create<TailoredSecurityTabHelper>(
-      TailoredSecurityServiceFactory::GetForProfile(profile));
-  attacher.Create<PolicyUrlBlockingTabHelper>();
-
-  // Supervised user services are not supported for off-the-record.
-  attacher.CreateWhen<SupervisedUserURLFilterTabHelper>(
-      !attacher.IsOffTheRecord());
-  attacher.CreateWhen<SupervisedUserErrorContainer>(!attacher.IsOffTheRecord());
+  attacher.Create<SendTabToSelfTabHelper>();
 
   attacher.Create<ImageFetchTabHelper>();
   attacher.Create<NewTabPageTabHelper>();
   attacher.Create<ShareFileDownloadTabHelper>();
   attacher.Create<OptimizationGuideTabHelper>();
-  attacher.Create<OptimizationGuideValidationTabHelper>();
 
   attacher.Create<favicon::WebFaviconDriver>(
       ios::FaviconServiceFactory::GetForProfile(
@@ -286,14 +279,52 @@ void AttachTabHelpers(web::WebState* web_state, TabHelperFilter filter_flags) {
   // tab helpers for historical reasons. For the moment, AttachTabHelpers
   // allows to inhibit the creation of some of them.
   attacher.CreateWhen<SadTabTabHelper>(
-      !attacher.IsForLensOverlay() && !attacher.IsForPrerender(),
+      !attacher.IsForLensOverlay() && !attacher.IsForPrerender() &&
+          !attacher.IsForGeminiWebModal(),
       SadTabTabHelper::kDefaultRepeatFailureInterval);
   attacher.CreateWhen<SnapshotTabHelper>(!attacher.IsForLensOverlay() &&
-                                         !attacher.IsForPrerender());
+                                         !attacher.IsForPrerender() &&
+                                         !attacher.IsForGeminiWebModal());
   attacher.CreateWhen<SnapshotSourceTabHelper>(!attacher.IsForLensOverlay() &&
-                                               !attacher.IsForPrerender());
-  attacher.CreateWhen<PagePlaceholderTabHelper>(!attacher.IsForLensOverlay() &&
-                                                !attacher.IsForPrerender());
+                                               !attacher.IsForPrerender() &&
+                                               !attacher.IsForGeminiWebModal());
+  attacher.CreateWhen<PagePlaceholderTabHelper>(
+      !attacher.IsForLensOverlay() && !attacher.IsForPrerender() &&
+      !attacher.IsForGeminiWebModal());
+
+  // Must be attached after `SnapshotTabHelper` because `SafeBrowsingTabHelper`
+  // instantiates `ClientSideDetectionHostIOS` during construction, which
+  // requires `SnapshotTabHelper` to already be attached to `web_state`.
+  SafeBrowsingClient* client =
+      SafeBrowsingClientFactory::GetForProfile(profile);
+  attacher.Create<SafeBrowsingQueryManager>(client);
+  attacher.Create<SafeBrowsingTabHelper>(client);
+  attacher.Create<SafeBrowsingUrlAllowList>();
+  attacher.Create<SafeBrowsingUnsafeResourceContainer>();
+
+  attacher.Create<TailoredSecurityTabHelper>(
+      TailoredSecurityServiceFactory::GetForProfile(profile));
+  attacher.Create<PolicyUrlBlockingTabHelper>();
+  if (base::FeatureList::IsEnabled(enterprise_reporting::kSaasUsageReporting)) {
+    if (auto* controller = enterprise_reporting::
+            SaasUsageReportingControllerFactoryIOS::GetForProfile(profile)) {
+      attacher.Create<enterprise_reporting::SaasUsageTabHelper>(controller);
+    }
+  }
+
+  // Supervised user services are not supported for off-the-record.
+  attacher.CreateWhen<SupervisedUserURLFilterTabHelper>(
+      !attacher.IsOffTheRecord());
+  attacher.CreateWhen<SupervisedUserErrorContainer>(!attacher.IsOffTheRecord());
+
+  // Must be attached before `AutofillTabHelper` so `ChromeAutofillClientIOS`
+  // can observe `ActorTabHelper` upon construction.
+  const bool is_actor_tab_helper_enabled =
+      IsActorEnabled() && !attacher.IsForPrerender();
+  attacher.CreateWhen<ActorTabHelper>(is_actor_tab_helper_enabled);
+  attacher.CreateWhen<IOSChromeActorLoginDelegateClient>(
+      is_actor_tab_helper_enabled);
+
   attacher.CreateWhen<PasswordTabHelper>(attacher.IsNotInTabHelperFilter());
   attacher.CreateWhen<AutofillBottomSheetTabHelper>(
       attacher.IsNotInTabHelperFilter());
@@ -364,10 +395,8 @@ void AttachTabHelpers(web::WebState* web_state, TabHelperFilter filter_flags) {
 
   attacher.Create<EditMenuTabHelper>();
 
-  attacher.CreateWhen<MiniMapTabHelper>(
-      (base::FeatureList::IsEnabled(kIOSMiniMapUniversalLink) ||
-       base::FeatureList::IsEnabled(kIOSMiniMapUniversalLinkCounterfactual)) &&
-      attacher.IsNotInTabHelperFilter());
+  attacher.CreateWhen<MiniMapTabHelper>(IsMiniMapUniversalLinkEnabled() &&
+                                        attacher.IsNotInTabHelperFilter());
 
   if (IsAimCobrowseEnabled()) {
     attacher.CreateWhen<CobrowseTabHelper>(
@@ -376,49 +405,54 @@ void AttachTabHelpers(web::WebState* web_state, TabHelperFilter filter_flags) {
     attacher.CreateWhen<AssistantAimTabHelper>(attacher.IsForAssistantAim());
   }
 
-  if (IsComposeboxIOSEnabled()) {
-    attacher.CreateWhen<AimTabHelper>(!attacher.IsForPrerender() &&
-                                      !attacher.IsForReaderMode());
-  }
+  attacher.CreateWhen<AimTabHelper>(!attacher.IsForPrerender() &&
+                                    !attacher.IsForReaderMode());
 
   attacher.CreateWhen<GeminiTabHelper>(!attacher.IsOffTheRecord() &&
                                        !attacher.IsForPrerender() &&
                                        IsPageActionMenuEnabled());
 
-  const bool is_actor_tab_helper_enabled =
-      IsActorEnabled() && !attacher.IsForPrerender();
-  attacher.CreateWhen<ActorTabHelper>(is_actor_tab_helper_enabled);
-  attacher.CreateWhen<IOSChromeActorLoginDelegateClient>(
-      is_actor_tab_helper_enabled);
-
   attacher.Create<WebViewProxyTabHelper>();
 
-  attacher.CreateWhen<ChooseFileTabHelper>(
-      attacher.IsNotInTabHelperFilter() &&
-      (base::FeatureList::IsEnabled(kIOSChooseFromDrive) ||
-       base::FeatureList::IsEnabled(kIOSCustomFileUploadMenu)));
+  attacher.CreateWhen<ChooseFileTabHelper>(attacher.IsNotInTabHelperFilter());
   attacher.CreateWhen<LastTapLocationTabHelper>(
-      attacher.IsNotInTabHelperFilter() &&
-      base::FeatureList::IsEnabled(kIOSCustomFileUploadMenu));
+      attacher.IsNotInTabHelperFilter());
 
-  if (!attacher.IsOffTheRecord() && !attacher.IsForPrerender() &&
-      IsModelBasedPageClassificationEnabled()) {
-    ios::provider::AttachClassificationMetricsTabHelper(web_state);
+  if (!attacher.IsOffTheRecord() && !attacher.IsForPrerender()) {
+    if (IsModelBasedPageClassificationEnabled()) {
+      ios::provider::AttachClassificationMetricsTabHelper(web_state);
+    }
+    attacher.CreateWhen<contextual_cueing::ContextualCueingTabHelper>(
+        contextual_cueing::IsGeminiContextualSuggestionsCuesEnabled() ||
+        contextual_cueing::
+            IsGeminiContextualSuggestionsCuesOnDeviceClassifierEnabled());
   }
 
   attacher.Create<data_controls::DataControlsTabHelper>();
-  if (IsEnableScreenshotProtectionIOSEnabled()) {
-    attacher.Create<DataProtectionTabHelper>();
-  }
+  attacher.Create<DataProtectionTabHelper>();
   attacher.Create<CaptivePortalTabHelper>();
   attacher.Create<PrintTabHelper>();
   attacher.Create<BlockedPopupTabHelper>();
   attacher.Create<NetExportTabHelper>();
   attacher.Create<TranslatePDFMetricLogger>();
 
-  attacher.CreateWhen<DeviceTrustChallengeTabHelper>(
-      base::FeatureList::IsEnabled(
-          enterprise_connectors::features::kEnableIOSDeviceTrustConnector));
+  // Exclude embedded WebStates used by Lens, Reader mode, Assistant AIM and
+  // Gemini. Keep prerender WebStates because their document can start API
+  // discovery before it is promoted to a regular tab.
+  attacher
+      .CreateDeferredWhen<DeviceTrustChallengeTabHelper>(
+          attacher.IsForStandardNavigation() &&
+          ShouldRegisterDeviceTrust(profile))
+      .WithFactory<DeviceTrustServiceFactoryIOS>(profile);
+
+  // Lets `ProxyServiceController` attribute proxy auth challenges to the
+  // pending navigation. Not needed for prerendering, which is cancelled on auth
+  // challenges, nor in Incognito, where the controller doesn't exist.
+  attacher
+      .CreateDeferredWhen<EnterpriseProxyTabHelper>(
+          !attacher.IsOffTheRecord() && !attacher.IsForPrerender() &&
+          enterprise_net::IsDynamicRouteFetchingEnabled())
+      .WithFactory<EnterpriseProxyErrorServiceFactoryIOS>(profile);
 
   if (web::features::IsCobaltEnabled()) {
     ios::provider::AttachCobaltTabHelpers(attacher);

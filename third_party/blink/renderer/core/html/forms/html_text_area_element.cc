@@ -28,6 +28,8 @@
 
 #include <utility>
 
+#include "base/feature_list.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_focus_options.h"
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
@@ -43,6 +45,7 @@
 #include "third_party/blink/renderer/core/event_interface_names.h"
 #include "third_party/blink/renderer/core/events/before_text_inserted_event.h"
 #include "third_party/blink/renderer/core/events/drag_event.h"
+#include "third_party/blink/renderer/core/events/keyboard_event.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
@@ -54,6 +57,7 @@
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/core/layout/adjust_for_absolute_zoom.h"
 #include "third_party/blink/renderer/core/layout/forms/layout_text_control_multi_line.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
@@ -74,6 +78,7 @@
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
 #include "third_party/blink/renderer/platform/wtf/text/line_ending.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
@@ -151,7 +156,7 @@ HTMLTextAreaElement::HTMLTextAreaElement(Document& document)
       // default language should be fine for this purpose because most users set
       // the same family for all languages.
       FontCache::PrewarmFamily(settings->GetGenericFontFamilySettings().Fixed(
-          LayoutLocale::GetDefault().GetScript()));
+          LayoutLocale::GetDefault().GetScriptForFont()));
       g_is_default_font_prewarmed = true;
     }
   }
@@ -159,11 +164,11 @@ HTMLTextAreaElement::HTMLTextAreaElement(Document& document)
 
 void HTMLTextAreaElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
   auto* inner_editor = CreateInnerEditorElement();
-  if (RuntimeEnabledFeatures::TextAreaEmptyPlaceholderBreakEnabled()) {
-    // We need a placeholder break for an empty value in order to provide one
-    // line-height and a baseline even if this element is not editable.
-    inner_editor->AppendChild(CreatePlaceholderBreakElement());
-  }
+  // We need a placeholder break for an empty value in order to provide one
+  // line-height and a baseline even if this element is not editable.
+  auto* placeholder_break = CreatePlaceholderBreakElement();
+  placeholder_break->setAttribute(html_names::kAriaHiddenAttr, keywords::kTrue);
+  inner_editor->AppendChild(placeholder_break);
   root.AppendChild(inner_editor);
 }
 
@@ -199,8 +204,7 @@ int HTMLTextAreaElement::scrollWidth() {
     return TextControlElement::scrollWidth();
   const LayoutUnit width = editor_box->PhysicalPaddingBoxRect().Width() +
                            box->PaddingOutsets().HorizontalSum();
-  return AdjustForAbsoluteZoom::AdjustLayoutUnit(width, box->StyleRef())
-      .Round();
+  return AdjustForAbsoluteZoom::AdjustLayoutUnit(width, box->Style()).Round();
 }
 
 int HTMLTextAreaElement::scrollHeight() {
@@ -217,21 +221,18 @@ int HTMLTextAreaElement::scrollHeight() {
     return TextControlElement::scrollHeight();
   const LayoutUnit height = editor_box->PhysicalPaddingBoxRect().Height() +
                             box->PaddingOutsets().VerticalSum();
-  return AdjustForAbsoluteZoom::AdjustLayoutUnit(height, box->StyleRef())
-      .Round();
+  return AdjustForAbsoluteZoom::AdjustLayoutUnit(height, box->Style()).Round();
 }
 
 double HTMLTextAreaElement::scrollLeft() {
-  if (RuntimeEnabledFeatures::TextAreaScrollTopPreviewEnabled() &&
-      !SuggestedValue().empty()) {
+  if (!SuggestedValue().empty()) {
     return 0;
   }
   return TextControlElement::scrollLeft();
 }
 
 double HTMLTextAreaElement::scrollTop() {
-  if (RuntimeEnabledFeatures::TextAreaScrollTopPreviewEnabled() &&
-      !SuggestedValue().empty()) {
+  if (!SuggestedValue().empty()) {
     return 0;
   }
   return TextControlElement::scrollTop();
@@ -414,12 +415,26 @@ void HTMLTextAreaElement::UpdateSelectionOnFocus(
 }
 
 void HTMLTextAreaElement::DefaultEventHandler(Event& event) {
+  if (auto* keyboard_event = DynamicTo<KeyboardEvent>(event);
+      base::FeatureList::IsEnabled(
+          blink::features::kAutofillKeydownEditableElement) &&
+      keyboard_event && event.type() == event_type_names::kKeydown &&
+      IsFocused() && !IsDisabledOrReadOnly() && GetDocument().GetPage() &&
+      GetDocument()
+          .GetPage()
+          ->GetChromeClient()
+          .HandleKeyboardEventOnEditableElement(*this, *keyboard_event)) {
+    event.SetDefaultHandled();
+    return;
+  }
+
   if (GetLayoutObject() &&
       (IsA<MouseEvent>(event) || IsA<DragEvent>(event) ||
        event.HasInterface(event_interface_names::kWheelEvent) ||
        event.type() == event_type_names::kBlur)) {
     ForwardEvent(event);
-  } else if (GetLayoutObject() && event.IsBeforeTextInsertedEvent()) {
+  } else if (!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled() &&
+             GetLayoutObject() && event.IsBeforeTextInsertedEvent()) {
     HandleBeforeTextInsertedEvent(
         static_cast<BeforeTextInsertedEvent*>(&event));
   }
@@ -446,6 +461,7 @@ void HTMLTextAreaElement::SubtreeHasChanged() {
 #endif
   SetValueBeforeFirstUserEditIfNotSet();
   UpdateValue();
+  UpdatePlaceholderBreakAriaHidden(value_);
   CheckIfValueWasReverted(Value());
   SetNeedsValidityCheck();
   SetAutofillState(WebAutofillState::kNotFilled);
@@ -473,18 +489,27 @@ void HTMLTextAreaElement::SubtreeHasChanged() {
 
 void HTMLTextAreaElement::HandleBeforeTextInsertedEvent(
     BeforeTextInsertedEvent* event) {
+  DCHECK(!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled());
   DCHECK(event);
   DCHECK(GetLayoutObject());
+  event->SetText(FilterBeforeTextInserted(event->GetText()));
+}
+
+String HTMLTextAreaElement::FilterBeforeTextInserted(const String& text) {
+  if (!GetLayoutObject()) {
+    return text;
+  }
   int signed_max_length = maxLength();
-  if (signed_max_length < 0)
-    return;
+  if (signed_max_length < 0) {
+    return text;
+  }
   unsigned unsigned_max_length = static_cast<unsigned>(signed_max_length);
 
   const String& current_value = InnerEditorValue();
   unsigned current_length = ComputeLengthForAPIValue(current_value);
-  if (current_length + ComputeLengthForAPIValue(event->GetText()) <
-      unsigned_max_length)
-    return;
+  if (current_length + ComputeLengthForAPIValue(text) < unsigned_max_length) {
+    return text;
+  }
 
   // selectionLength represents the selection length of this text field to be
   // removed by this insertion.
@@ -504,29 +529,46 @@ void HTMLTextAreaElement::HandleBeforeTextInsertedEvent(
   unsigned base_length = current_length - selection_length;
   unsigned appendable_length =
       unsigned_max_length > base_length ? unsigned_max_length - base_length : 0;
-  event->SetText(SanitizeUserInputValue(event->GetText(), appendable_length));
+  String result = SanitizeUserInputValue(text, appendable_length);
 
   if (selection_length == current_length && selection_length != 0 &&
-      !event->GetText().empty()) {
+      !result.empty()) {
     GetDocument().GetPage()->GetChromeClient().DidClearValueInTextField(*this);
   }
+  return result;
 }
 
-String HTMLTextAreaElement::SanitizeUserInputValue(const String& proposed_value,
-                                                   unsigned max_length) {
+// Computes how many leading UTF-16 code units of `characters` may be kept
+// under `max_length`, collapsing CRLF pairs into a single unit as it goes.
+template <typename CharType>
+static wtf_size_t ComputeSanitizedLength(base::span<const CharType> characters,
+                                         unsigned max_length) {
   unsigned submission_length = 0;
-  unsigned i = 0;
-  for (; i < proposed_value.length(); ++i) {
-    if (proposed_value[i] == '\r' && i + 1 < proposed_value.length() &&
-        proposed_value[i + 1] == '\n')
+  wtf_size_t i = 0;
+  for (; i < characters.size(); ++i) {
+    if (characters[i] == '\r' && i + 1 < characters.size() &&
+        characters[i + 1] == '\n') {
       continue;
+    }
     ++submission_length;
     if (submission_length == max_length) {
       ++i;
       break;
     }
-    if (submission_length > max_length)
+    if (submission_length > max_length) {
       break;
+    }
+  }
+  return i;
+}
+
+String HTMLTextAreaElement::SanitizeUserInputValue(const String& proposed_value,
+                                                   unsigned max_length) {
+  wtf_size_t i = 0;
+  if (!proposed_value.empty()) {
+    i = VisitCharacters(proposed_value, [max_length](auto chars) {
+      return ComputeSanitizedLength(chars, max_length);
+    });
   }
   if (i > 0 && U16_IS_LEAD(proposed_value[i - 1]))
     --i;
@@ -584,6 +626,7 @@ void HTMLTextAreaElement::SetValueCommon(const String& new_value,
 
   // Clear the suggested value. Use the base class version to not trigger a view
   // update.
+  SetAutofillState(autofill_state);
   TextControlElement::SetSuggestedValue(String());
 
   // Return early because we don't want to trigger other side effects when the
@@ -642,7 +685,6 @@ void HTMLTextAreaElement::SetValueCommon(const String& new_value,
                       std::min(end_of_string, selection_end));
   }
 
-  SetAutofillState(autofill_state);
   NotifyFormStateChanged();
   switch (event_behavior) {
     case TextFieldEventBehavior::kDispatchChangeEvent:
@@ -688,24 +730,23 @@ void HTMLTextAreaElement::setDefaultValue(const String& default_value) {
 
 void HTMLTextAreaElement::SetSuggestedValue(const String& value) {
   String sanitized_value = value;
-  if (RuntimeEnabledFeatures::CanvasDrawElementEnabled(GetExecutionContext()) &&
-      IsInCanvasSubtree()) {
+  if (IsInCanvasSubtree()) {
     // Hide suggested values when under canvas, to prevent leaking this
     // information to javascript.
     sanitized_value = String();
   }
+  TextControlElement::SetSuggestedValue(sanitized_value);
   SetAutofillState(!sanitized_value.empty() ? WebAutofillState::kPreviewed
                                             : WebAutofillState::kNotFilled);
-  TextControlElement::SetSuggestedValue(sanitized_value);
   SetNeedsStyleRecalc(
       kSubtreeStyleChange,
       StyleChangeReasonForTracing::Create(style_change_reason::kControlValue));
 }
 
-void HTMLTextAreaElement::DidChangeIsCanvasOrInCanvasSubtree() {
-  TextControlElement::DidChangeIsCanvasOrInCanvasSubtree();
-  if (RuntimeEnabledFeatures::CanvasDrawElementEnabled(GetExecutionContext()) &&
-      IsInCanvasSubtree()) {
+void HTMLTextAreaElement::DidChangeIsInCanvasSubtree(
+    CanvasSubtreePropagation propagation_behavior) {
+  TextControlElement::DidChangeIsInCanvasSubtree(propagation_behavior);
+  if (IsInCanvasSubtree()) {
     // Hide suggested values when under canvas, to prevent leaking this
     // information to javascript.
     SetSuggestedValue(String());
@@ -903,12 +944,13 @@ String HTMLTextAreaElement::DefaultToolTip() const {
 }
 
 void HTMLTextAreaElement::SetFocused(bool is_focused,
-                                     mojom::blink::FocusType focus_type) {
+                                     mojom::blink::FocusType focus_type,
+                                     BlurEventBehavior blur_event_behavior) {
   // See comment in HTMLInputElement::SetFocused.
   if (UserHasEditedTheField()) {
     SetUserHasEditedTheFieldAndBlurred();
   }
-  TextControlElement::SetFocused(is_focused, focus_type);
+  TextControlElement::SetFocused(is_focused, focus_type, blur_event_behavior);
 }
 
 WebFormControlElement::TextInfo HTMLTextAreaElement::GetTextInfo() const {
@@ -925,9 +967,9 @@ WebFormControlElement::TextInfo HTMLTextAreaElement::GetTextInfo() const {
   }
 
   WebFormControlElement::TextInfo results;
-  results.effective_zoom = inner_layout->StyleRef().EffectiveZoom();
+  results.effective_zoom = inner_layout->Style().EffectiveZoom();
   results.primary_ascent =
-      inner_layout->StyleRef().GetFontHeight().ascent.ToFloat();
+      inner_layout->Style().GetFontHeight().ascent.ToFloat();
   for (LayoutObject* child = inner_layout->FirstChild(); child;
        child = child->NextSibling()) {
     const auto* paragraph_block = DynamicTo<LayoutBlockFlow>(child);

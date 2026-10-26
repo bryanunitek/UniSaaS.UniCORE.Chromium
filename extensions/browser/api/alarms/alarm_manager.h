@@ -39,8 +39,7 @@ class ExtensionAlarmsSchedulingTest;
 
 struct Alarm {
   Alarm();
-  Alarm(const std::string& name,
-        const api::alarms::AlarmCreateInfo& create_info,
+  Alarm(const api::alarms::AlarmCreateInfo& create_info,
         base::TimeDelta min_granularity,
         base::Time now);
 
@@ -64,6 +63,10 @@ struct Alarm {
   base::TimeDelta minimum_granularity;
 };
 
+namespace api::alarms {
+bool operator==(const api::alarms::Alarm&, const api::alarms::Alarm&);
+}  //  namespace api::alarms
+
 // Manages the currently pending alarms for every extension in a profile.
 // There is one manager per virtual Profile.
 class AlarmManager : public BrowserContextKeyedAPI,
@@ -76,7 +79,7 @@ class AlarmManager : public BrowserContextKeyedAPI,
 
   class Delegate {
    public:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
     // Called when an alarm fires.
     virtual void OnAlarm(const ExtensionId& extension_id,
                          const Alarm& alarm) = 0;
@@ -152,7 +155,14 @@ class AlarmManager : public BrowserContextKeyedAPI,
   FRIEND_TEST_ALL_PREFIXES(ExtensionAlarmsSchedulingTest,
                            RepeatingAlarmsScheduledPredictably);
   FRIEND_TEST_ALL_PREFIXES(ExtensionAlarmsSchedulingTest,
+                           PerExtensionLastPollTime);
+  FRIEND_TEST_ALL_PREFIXES(ExtensionAlarmsSchedulingTest,
                            PollFrequencyFromStoredAlarm);
+  FRIEND_TEST_ALL_PREFIXES(ExtensionAlarmsSchedulingTest,
+                           PollWritesToStorageOncePerExtension);
+  FRIEND_TEST_ALL_PREFIXES(ExtensionAlarmsSchedulingTest, ClearAll);
+  FRIEND_TEST_ALL_PREFIXES(ExtensionAlarmsCreateStateStoreWriteEfficiency,
+                           CreateAlarmStateStoreWriteEfficiency);
   FRIEND_TEST_ALL_PREFIXES(ExtensionAlarmsTest, OldPersistentAlarmFromStorage);
   friend class BrowserContextKeyedAPIFactory<AlarmManager>;
 
@@ -161,10 +171,11 @@ class AlarmManager : public BrowserContextKeyedAPI,
   using ReadyAction = base::OnceCallback<void(const std::string&)>;
   using ReadyQueue = base::queue<ReadyAction>;
   using ReadyMap = std::map<ExtensionId, ReadyQueue>;
+  using LastPollTimeMap = std::map<ExtensionId, base::Time>;
 
   // Iterator used to identify a particular alarm within the Map/List pair.
   // "Not found" is represented by <alarms_.end(), invalid_iterator>.
-  typedef std::pair<AlarmMap::iterator, AlarmList::iterator> AlarmIterator;
+  using AlarmIterator = std::pair<AlarmMap::iterator, AlarmList::iterator>;
 
   // Part of AddAlarm that is executed after alarms are loaded.
   void AddAlarmWhenReady(Alarm alarm,
@@ -199,13 +210,18 @@ class AlarmManager : public BrowserContextKeyedAPI,
   // must be valid.
   void RemoveAlarmIterator(const AlarmIterator& iter);
 
-  // Callback for when an alarm fires.
+  // Callback for when an alarm fires. Does not write to storage; the caller
+  // is responsible for calling WriteToStorage() afterwards.
   void OnAlarm(AlarmIterator iter);
 
   // Internal helper to add an alarm and start the timer with the given delay.
-  void AddAlarmImpl(const ExtensionId& extension_id, Alarm alarm);
+  // Returns true if a persistent alarm was modified (persistent alarm
+  // overwritten by a non-persistent alarm, persistent alarm updated, or
+  // persistent alarm was added).
+  bool AddAlarmImpl(const ExtensionId& extension_id, Alarm alarm);
 
   // Internal helper to remove all alarms for an extension from memory.
+  // Returns true if an extension had at least one persistent alarm.
   bool RemoveAllAlarmsInternal(const ExtensionId& extension_id);
 
   // Syncs our alarm data for the given extension to/from the state storage.
@@ -219,7 +235,7 @@ class AlarmManager : public BrowserContextKeyedAPI,
   void SetNextPollTime(const base::Time& time);
 
   // Schedules the next poll of alarms for when the next soonest alarm runs,
-  // but not more often than the minimum granularity of all alarms.
+  // but not more often than the minimum granularity for each extension.
   void ScheduleNextPoll();
 
   // Polls the alarms, running any that have elapsed. After running them and
@@ -229,6 +245,10 @@ class AlarmManager : public BrowserContextKeyedAPI,
   // Executes `action` for given extension, making sure that the extension's
   // alarm data has been synced from the storage.
   void RunWhenReady(const ExtensionId& extension_id, ReadyAction action);
+
+  // Helper function which stops internal timer and resets next poll timestamp.
+  // Caller should call this only when there are no registered alarms.
+  void StopTimer();
 
   // ExtensionRegistryObserver implementation.
   void OnExtensionLoaded(content::BrowserContext* browser_context,
@@ -263,8 +283,8 @@ class AlarmManager : public BrowserContextKeyedAPI,
   // extension.
   ReadyMap ready_actions_;
 
-  // The previous time that alarms were run.
-  base::Time last_poll_time_;
+  // The previous time that alarms were run for each extension.
+  LastPollTimeMap last_poll_times_;
 
   // Next poll's time.
   base::Time next_poll_time_;

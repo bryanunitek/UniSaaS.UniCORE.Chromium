@@ -20,8 +20,8 @@ import type {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polym
 
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import type {RouteObserverMixinInterface} from '../common/route_observer_mixin.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router} from '../router.js';
-import type {Route} from '../router.js';
 
 import type {Constructor} from './types.js';
 
@@ -78,10 +78,10 @@ export const GlobalScrollTargetMixin = dedupingMixin(
           };
         }
 
-        scrollTarget: HTMLElement;
-        subpageRoute: Route;
-        subpageScrollTarget: HTMLElement;
-        private active_: boolean;
+        declare scrollTarget: HTMLElement;
+        declare subpageRoute: Route;
+        declare subpageScrollTarget: HTMLElement;
+        declare private active_: boolean;
 
         override connectedCallback(): void {
           super.connectedCallback();

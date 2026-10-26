@@ -15,9 +15,9 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ssl/chrome_security_state_util.h"
 #include "chrome/common/url_constants.h"
 #include "components/permissions/permission_util.h"
-#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/security_state/core/security_state.h"
 #include "components/url_formatter/elide_url.h"
 #include "content/public/browser/render_frame_host.h"
@@ -81,24 +81,22 @@ UsbChooserDialogAndroid::CreateInternal(
           render_frame_host->GetMainFrame()));
   std::u16string origin_string =
       url_formatter::FormatOriginForSecurityDisplay(origin);
-  SecurityStateTabHelper* helper =
-      SecurityStateTabHelper::FromWebContents(web_contents);
-  DCHECK(helper);
 
   Profile* profile =
       Profile::FromBrowserContext(render_frame_host->GetBrowserContext());
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M162);
 
   base::android::ScopedJavaLocalRef<jobject> j_profile_android =
       profile->GetJavaObject();
-  DCHECK(!j_profile_android.is_null());
+  CHECK(!j_profile_android.is_null(), base::NotFatalUntil::M162);
 
   auto dialog = std::make_unique<UsbChooserDialogAndroid>(std::move(controller),
                                                           std::move(on_close));
 
   dialog->java_dialog_.Reset(
       std::move(create_java_dialog_callback)
-          .Run(env, window_android, origin_string, helper->GetSecurityLevel(),
+          .Run(env, window_android, origin_string,
+               chrome_security_state::GetSecurityLevel(web_contents),
                j_profile_android, reinterpret_cast<intptr_t>(dialog.get())));
   if (dialog->java_dialog_.is_null()) {
     return nullptr;
@@ -134,7 +132,7 @@ void UsbChooserDialogAndroid::OnOptionsInitialized() {
 void UsbChooserDialogAndroid::OnOptionAdded(size_t index) {
   JNIEnv* env = base::android::AttachCurrentThread();
 
-  DCHECK_LE(index, item_id_map_.size());
+  CHECK_LE(index, item_id_map_.size(), base::NotFatalUntil::M162);
   int item_id = next_item_id_++;
   std::string item_id_str = base::NumberToString(item_id);
   item_id_map_.insert(item_id_map_.begin() + index, item_id_str);
@@ -146,7 +144,7 @@ void UsbChooserDialogAndroid::OnOptionAdded(size_t index) {
 void UsbChooserDialogAndroid::OnOptionRemoved(size_t index) {
   JNIEnv* env = base::android::AttachCurrentThread();
 
-  DCHECK_LT(index, item_id_map_.size());
+  CHECK_LT(index, item_id_map_.size(), base::NotFatalUntil::M162);
   std::string item_id = item_id_map_[index];
   item_id_map_.erase(item_id_map_.begin() + index);
 

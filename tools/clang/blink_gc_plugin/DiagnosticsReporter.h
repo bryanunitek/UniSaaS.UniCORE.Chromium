@@ -109,6 +109,9 @@ class DiagnosticsReporter {
   void RawPtrOrRefNewExprUsedWithGC(const clang::Expr* expr,
                                     const clang::CXXRecordDecl* optional,
                                     const clang::CXXRecordDecl* gc_type);
+  void VariantUsedWithGC(const clang::Decl* decl,
+                         const clang::CXXRecordDecl* variant,
+                         const clang::CXXRecordDecl* gc_type);
   void VariantUsedWithGC(const clang::Expr* expr,
                          const clang::CXXRecordDecl* variant,
                          const clang::CXXRecordDecl* gc_type);
@@ -220,4 +223,4 @@ class DiagnosticsReporter {
   unsigned diag_collection_of_members_;
 };
 
-#endif // TOOLS_BLINK_GC_PLUGIN_DIAGNOSTICS_REPORTER_H_
+#endif  // TOOLS_BLINK_GC_PLUGIN_DIAGNOSTICS_REPORTER_H_

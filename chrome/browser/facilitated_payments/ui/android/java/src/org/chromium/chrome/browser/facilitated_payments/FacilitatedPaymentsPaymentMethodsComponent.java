@@ -8,11 +8,15 @@ import android.content.Context;
 import android.content.pm.ResolveInfo;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.autofill.payments.BankAccount;
 import org.chromium.components.autofill.payments.Ewallet;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.facilitated_payments.core.metrics.AccountLinkingPromptUserAction;
+import org.chromium.components.facilitated_payments.core.metrics.FacilitatedPaymentsType;
 import org.chromium.components.facilitated_payments.core.ui_utils.UiEvent;
+import org.chromium.ui.base.WindowAndroid;
 
 import java.util.List;
 
@@ -56,17 +60,19 @@ interface FacilitatedPaymentsPaymentMethodsComponent {
          */
         void onPaymentAppSelected(String packageName, String activityName);
 
-        /** Called whenever the Pix account linking prompt is accepted. */
-        void onPixAccountLinkingPromptAccepted();
+        /** Called whenever an account linking prompt is shown. */
+        void onAccountLinkingPromptShown(@FacilitatedPaymentsType int type);
 
-        /** Called whenever the Pix account linking prompt is declined. */
-        void onPixAccountLinkingPromptDeclined();
+        /** Called whenever the user acts on an account linking prompt. */
+        void onAccountLinkingPromptAction(
+                @FacilitatedPaymentsType int type, @AccountLinkingPromptUserAction int action);
     }
 
     /** Initializes the component. */
     void initialize(
             Context context,
             BottomSheetController bottomSheetController,
+            @Nullable WindowAndroid windowAndroid,
             Delegate delegate,
             Profile profile);
 
@@ -86,8 +92,8 @@ interface FacilitatedPaymentsPaymentMethodsComponent {
      */
     void showSheetForPaymentLink(List<Ewallet> eWallets, List<ResolveInfo> apps);
 
-    /** Displays a progress screen in a bottom sheet. */
-    void showProgressScreen();
+    /** Displays a progress screen in a bottom sheet of the specified type. */
+    void showProgressScreen(@ProgressScreenType int type);
 
     /** Displays an error screen in a bottom sheet. */
     void showErrorScreen();
@@ -96,8 +102,15 @@ interface FacilitatedPaymentsPaymentMethodsComponent {
     void dismiss();
 
     /** Show the Pix account linking prompt in a bottom sheet. */
-    void showPixAccountLinkingPrompt(int strikeCount);
+    void showPixAccountLinkingPrompt(int strikeCount, String accountEmail);
 
     /** Displays the Pix account linking success screen in a bottom sheet. */
     void showPixAccountLinkingSuccessScreen();
+
+    /** Show the account linking prompt in a bottom sheet. */
+    void showAccountLinkingPrompt(
+            @FacilitatedPaymentsType int fopType, String fopDisplayName, int strikeCount);
+
+    /** Show the account linking failure notification in a snackbar. */
+    void showAccountLinkingFailureNotification(@FacilitatedPaymentsType int fopType);
 }

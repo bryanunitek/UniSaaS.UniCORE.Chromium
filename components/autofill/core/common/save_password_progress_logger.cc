@@ -54,6 +54,11 @@ void SavePasswordProgressLogger::LogFormData(
       {GetStringFromID(STRING_ALTERNATIVE_FORM_SIGNATURE), ": ",
        FormSignatureToDebugString(CalculateAlternativeFormSignature(form_data)),
        "\n"});
+  base::StrAppend(
+      &message,
+      {GetStringFromID(STRING_STRUCTURAL_FORM_SIGNATURE), ": ",
+       FormSignatureToDebugString(CalculateStructuralFormSignature(form_data)),
+       "\n"});
   base::StrAppend(&message, {GetStringFromID(STRING_ORIGIN), ": ",
                              ScrubURL(form_data.url()), "\n"});
   base::StrAppend(&message, {GetStringFromID(STRING_ACTION), ": ",
@@ -351,6 +356,8 @@ std::string_view SavePasswordProgressLogger::GetStringFromID(
       return "Signature of form";
     case SavePasswordProgressLogger::STRING_ALTERNATIVE_FORM_SIGNATURE:
       return "Alternative signature of form";
+    case SavePasswordProgressLogger::STRING_STRUCTURAL_FORM_SIGNATURE:
+      return "Structural signature of form";
     case SavePasswordProgressLogger::STRING_FORM_FETCHER_STATE:
       return "FormFetcherImpl::state_";
     case SavePasswordProgressLogger::STRING_UNOWNED_INPUTS_VISIBLE:
@@ -539,15 +546,6 @@ std::string_view SavePasswordProgressLogger::GetStringFromID(
         STRING_PASSWORD_CHANGE_SUBSEQUENT_FORM_WAITING_RESULT:
       return "Is change password form detected after OPEN_FORM step";
     case SavePasswordProgressLogger::
-        STRING_PASSWORD_CHANGE_STABILITY_MONITOR_STARTED:
-      return "Automated password change: stability monitor started";
-    case SavePasswordProgressLogger::
-        STRING_PASSWORD_CHANGE_STABILITY_MONITOR_SUCCEEDED:
-      return "Automated password change: stability monitor succeeded";
-    case SavePasswordProgressLogger::
-        STRING_PASSWORD_CHANGE_STABILITY_MONITOR_TIMED_OUT:
-      return "Automated password change: stability monitor timed out";
-    case SavePasswordProgressLogger::
         STRING_AUTOMATED_PASSWORD_CHANGE_OTP_DISAPPEARED:
       return "No one-time-password received on page load";
     case SavePasswordProgressLogger::
@@ -639,6 +637,17 @@ std::string_view SavePasswordProgressLogger::GetStringFromID(
         STRING_PASSWORD_CHANGE_FROM_CHECKUP_VERIFICATION_FINISHED:
       return "Password change from checkup: verification task finished";
     case SavePasswordProgressLogger::
+        STRING_PASSWORD_CHANGE_GLIC_INSTANCE_NOT_AVAILABLE:
+      return "Automated password change: Glic instance not available";
+    case SavePasswordProgressLogger::
+        STRING_PASSWORD_CHANGE_FAILED_TO_REGISTER_EXPERIMENTAL_TRIGGERING:
+      return "Automated password change: Failed to register experimental "
+             "triggering";
+    case SavePasswordProgressLogger::STRING_PASSWORD_CHANGE_STATUS_UPDATE:
+      return "Automated password change: status update";
+    case SavePasswordProgressLogger::STRING_PASSWORD_CHANGE_WORKLOG:
+      return "Automated password change: worklog";
+    case SavePasswordProgressLogger::
         STRING_PASSWORD_CHANGE_OVERRIDDEN_BY_SWITCH:
       return "Automated password change: Overridden by switch";
     case SavePasswordProgressLogger::
@@ -651,6 +660,8 @@ std::string_view SavePasswordProgressLogger::GetStringFromID(
       return "Automated password change: Saving disabled";
     case SavePasswordProgressLogger::STRING_PASSWORD_CHANGE_DISABLED_BY_POLICY:
       return "Automated password change: Disabled by policy";
+    case SavePasswordProgressLogger::STRING_PASSWORD_CHANGE_DISABLED_BY_USER:
+      return "Automated password change: Disabled by user";
     case SavePasswordProgressLogger::
         STRING_PASSWORD_CHANGE_UNSUPPORTED_LANGUAGE:
       return "Automated password change: Unsupported language";

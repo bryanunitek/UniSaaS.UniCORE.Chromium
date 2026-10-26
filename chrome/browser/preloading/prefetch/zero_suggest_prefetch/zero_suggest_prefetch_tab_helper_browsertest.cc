@@ -12,11 +12,13 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -30,6 +32,7 @@
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace {
 
@@ -54,12 +57,23 @@ class MockAutocompleteController : public AutocompleteController {
 }  // namespace
 
 class ZeroSuggestPrefetchTabHelperBrowserTest : public InProcessBrowserTest {
+ public:
+  ZeroSuggestPrefetchTabHelperBrowserTest() {
+    webui_omnibox_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove these two Features.
+        {omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
+  }
+
  protected:
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
 
     TemplateURLService* template_url_service =
-        TemplateURLServiceFactory::GetForProfile(browser()->profile());
+        TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
     auto client_ = std::make_unique<MockAutocompleteProviderClient>();
     client_->set_template_url_service(template_url_service);
 
@@ -75,6 +89,7 @@ class ZeroSuggestPrefetchTabHelperBrowserTest : public InProcessBrowserTest {
         ->SetAutocompleteControllerForTesting(std::move(controller));
   }
 
+  base::test::ScopedFeatureList webui_omnibox_feature_list_;
   base::test::ScopedFeatureList feature_list_;
   omnibox_feature_configs::ScopedConfigForTesting<
       omnibox_feature_configs::OmniboxUrlSuggestionsOnFocus>
@@ -135,9 +150,9 @@ IN_PROC_BROWSER_TEST_F(ZeroSuggestPrefetchTabHelperBrowserTestOnNTP,
 
     EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
         browser(), chrome::ChromeUINewTabPageURLAsGURL(),
-        WindowOpenDisposition::CURRENT_TAB,
+        WindowOpenDisposition::kCurrentTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-    ASSERT_EQ(1, browser()->tab_strip_model()->count());
+    ASSERT_EQ(1, browser()->GetTabStripModel()->count());
 
     testing::Mock::VerifyAndClearExpectations(controller_);
   }
@@ -149,9 +164,9 @@ IN_PROC_BROWSER_TEST_F(ZeroSuggestPrefetchTabHelperBrowserTestOnNTP,
 
     EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
         browser(), chrome::ChromeUINewTabPageURLAsGURL(),
-        WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        WindowOpenDisposition::kNewForegroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-    ASSERT_EQ(2, browser()->tab_strip_model()->count());
+    ASSERT_EQ(2, browser()->GetTabStripModel()->count());
 
     testing::Mock::VerifyAndClearExpectations(controller_);
   }
@@ -161,7 +176,7 @@ IN_PROC_BROWSER_TEST_F(ZeroSuggestPrefetchTabHelperBrowserTestOnNTP,
         .Times(1);
     EXPECT_CALL(*controller_, Start).Times(0);
 
-    browser()->tab_strip_model()->ActivateTabAt(0);
+    browser()->GetTabStripModel()->ActivateTabAt(0);
 
     testing::Mock::VerifyAndClearExpectations(controller_);
   }
@@ -186,9 +201,9 @@ IN_PROC_BROWSER_TEST_F(ZeroSuggestPrefetchTabHelperBrowserTestOnSRP,
     EXPECT_CALL(*controller_, Start).Times(0);
 
     EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-        browser(), GURL(srp_url), WindowOpenDisposition::CURRENT_TAB,
+        browser(), GURL(srp_url), WindowOpenDisposition::kCurrentTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-    ASSERT_EQ(1, browser()->tab_strip_model()->count());
+    ASSERT_EQ(1, browser()->GetTabStripModel()->count());
 
     testing::Mock::VerifyAndClearExpectations(controller_);
   }
@@ -199,9 +214,9 @@ IN_PROC_BROWSER_TEST_F(ZeroSuggestPrefetchTabHelperBrowserTestOnSRP,
     EXPECT_CALL(*controller_, Start).Times(0);
 
     EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-        browser(), GURL(srp_url), WindowOpenDisposition::NEW_BACKGROUND_TAB,
+        browser(), GURL(srp_url), WindowOpenDisposition::kNewBackgroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-    ASSERT_EQ(2, browser()->tab_strip_model()->count());
+    ASSERT_EQ(2, browser()->GetTabStripModel()->count());
 
     testing::Mock::VerifyAndClearExpectations(controller_);
   }
@@ -212,9 +227,9 @@ IN_PROC_BROWSER_TEST_F(ZeroSuggestPrefetchTabHelperBrowserTestOnSRP,
     EXPECT_CALL(*controller_, Start).Times(0);
 
     EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-        browser(), GURL(srp_url), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        browser(), GURL(srp_url), WindowOpenDisposition::kNewForegroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-    ASSERT_EQ(3, browser()->tab_strip_model()->count());
+    ASSERT_EQ(3, browser()->GetTabStripModel()->count());
 
     testing::Mock::VerifyAndClearExpectations(controller_);
   }
@@ -223,7 +238,7 @@ IN_PROC_BROWSER_TEST_F(ZeroSuggestPrefetchTabHelperBrowserTestOnSRP,
     EXPECT_CALL(*controller_, StartPrefetch).Times(1);
     EXPECT_CALL(*controller_, Start).Times(0);
 
-    browser()->tab_strip_model()->ActivateTabAt(1);
+    browser()->GetTabStripModel()->ActivateTabAt(1);
 
     testing::Mock::VerifyAndClearExpectations(controller_);
   }
@@ -248,9 +263,9 @@ IN_PROC_BROWSER_TEST_F(ZeroSuggestPrefetchTabHelperBrowserTestOnWeb,
     EXPECT_CALL(*controller_, Start).Times(0);
 
     EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-        browser(), GURL(web_url), WindowOpenDisposition::CURRENT_TAB,
+        browser(), GURL(web_url), WindowOpenDisposition::kCurrentTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-    ASSERT_EQ(1, browser()->tab_strip_model()->count());
+    ASSERT_EQ(1, browser()->GetTabStripModel()->count());
 
     testing::Mock::VerifyAndClearExpectations(controller_);
   }
@@ -261,9 +276,9 @@ IN_PROC_BROWSER_TEST_F(ZeroSuggestPrefetchTabHelperBrowserTestOnWeb,
     EXPECT_CALL(*controller_, Start).Times(0);
 
     EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-        browser(), GURL(web_url), WindowOpenDisposition::NEW_BACKGROUND_TAB,
+        browser(), GURL(web_url), WindowOpenDisposition::kNewBackgroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-    ASSERT_EQ(2, browser()->tab_strip_model()->count());
+    ASSERT_EQ(2, browser()->GetTabStripModel()->count());
 
     testing::Mock::VerifyAndClearExpectations(controller_);
   }
@@ -274,9 +289,9 @@ IN_PROC_BROWSER_TEST_F(ZeroSuggestPrefetchTabHelperBrowserTestOnWeb,
     EXPECT_CALL(*controller_, Start).Times(0);
 
     EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-        browser(), GURL(web_url), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        browser(), GURL(web_url), WindowOpenDisposition::kNewForegroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-    ASSERT_EQ(3, browser()->tab_strip_model()->count());
+    ASSERT_EQ(3, browser()->GetTabStripModel()->count());
 
     testing::Mock::VerifyAndClearExpectations(controller_);
   }
@@ -286,7 +301,7 @@ IN_PROC_BROWSER_TEST_F(ZeroSuggestPrefetchTabHelperBrowserTestOnWeb,
         .Times(1);
     EXPECT_CALL(*controller_, Start).Times(0);
 
-    browser()->tab_strip_model()->ActivateTabAt(1);
+    browser()->GetTabStripModel()->ActivateTabAt(1);
 
     testing::Mock::VerifyAndClearExpectations(controller_);
   }

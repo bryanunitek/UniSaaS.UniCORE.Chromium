@@ -63,6 +63,9 @@ class MEDIA_EXPORT VideoEncodeAcceleratorAdapter
   // A way to force a certain way of submitting frames to VEA.
   void SetInputBufferPreferenceForTesting(InputBufferKind type);
 
+  static VideoPixelFormat GetInputPixelFormat(VideoCodecProfile profile,
+                                              const Options& options);
+
   // VideoEncoder implementation.
   void Initialize(VideoCodecProfile profile,
                   const Options& options,
@@ -128,9 +131,9 @@ class MEDIA_EXPORT VideoEncodeAcceleratorAdapter
 
   template <class T>
   T WrapCallback(T cb);
-  EncoderStatus::Or<scoped_refptr<VideoFrame>> PrepareGpuFrame(
+  base::expected<scoped_refptr<VideoFrame>, EncoderStatus> PrepareGpuFrame(
       scoped_refptr<VideoFrame> src_frame);
-  EncoderStatus::Or<scoped_refptr<VideoFrame>> PrepareCpuFrame(
+  base::expected<scoped_refptr<VideoFrame>, EncoderStatus> PrepareCpuFrame(
       scoped_refptr<VideoFrame> src_frame);
 
   scoped_refptr<ReadOnlyRegionPool> input_pool_;
@@ -206,6 +209,7 @@ class MEDIA_EXPORT VideoEncodeAcceleratorAdapter
 #else
   static constexpr VideoPixelFormat kDefaultPixelFormat = PIXEL_FORMAT_NV12;
 #endif
+  VideoPixelFormat input_pixel_format_ = kDefaultPixelFormat;
   bool supports_frame_size_change_ = false;
   bool supports_gpu_shared_images_ = false;
 

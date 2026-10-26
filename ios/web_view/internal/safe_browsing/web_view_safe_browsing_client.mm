@@ -6,12 +6,16 @@
 
 #import "base/check.h"
 #import "base/memory/weak_ptr.h"
+#import "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
 #import "ios/components/security_interstitials/safe_browsing/safe_browsing_service.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web_view/internal/app/application_context.h"
 
-WebViewSafeBrowsingClient::WebViewSafeBrowsingClient(PrefService* prefs)
-    : prefs_(prefs) {
+WebViewSafeBrowsingClient::WebViewSafeBrowsingClient(
+    PrefService* prefs,
+    safe_browsing::V5GetHashProtocolManager* v5_get_hash_protocol_manager)
+    : prefs_(prefs),
+      v5_get_hash_protocol_manager_(v5_get_hash_protocol_manager) {
   DCHECK(prefs_);
 }
 
@@ -42,6 +46,11 @@ WebViewSafeBrowsingClient::GetHashRealTimeService() {
   return nullptr;
 }
 
+safe_browsing::V5GetHashProtocolManager*
+WebViewSafeBrowsingClient::GetV5GetHashProtocolManager() {
+  return v5_get_hash_protocol_manager_;
+}
+
 variations::VariationsService*
 WebViewSafeBrowsingClient::GetVariationsService() {
   // ios/web_view does not support variations.
@@ -70,4 +79,11 @@ void WebViewSafeBrowsingClient::OnSecurityInterstitialShown(
     web::WebState* web_state,
     const security_interstitials::UnsafeResource& resource) {
   // ios/web_view does not support enterprise reporting.
+}
+
+std::unique_ptr<safe_browsing::ClientSideDetectionHostBase>
+WebViewSafeBrowsingClient::CreateClientSideDetectionHost(
+    web::WebState* web_state) {
+  // ios/web_view does not support client side detection.
+  return nullptr;
 }

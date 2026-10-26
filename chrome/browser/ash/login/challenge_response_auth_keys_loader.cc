@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/check_deref.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -20,8 +21,6 @@
 #include "base/values.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service_factory.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/login/auth/challenge_response/cert_utils.h"
@@ -47,13 +46,18 @@ namespace {
 constexpr base::TimeDelta kDefaultMaximumExtensionLoadWaitingTime =
     base::Seconds(5);
 
-base::flat_set<std::string> GetLoginScreenPolicyExtensionIds() {
-  DCHECK(BrowserContextHelper::Get()->GetSigninBrowserContext());
+Profile* GetSigninProfile() {
+  Profile* profile = Profile::FromBrowserContext(
+      BrowserContextHelper::Get()->GetSigninBrowserContext());
+  CHECK(profile, base::NotFatalUntil::M161);
+  return profile;
+}
 
-  const PrefService* const prefs =
-      ProfileHelper::GetSigninProfile()->GetPrefs();
-  DCHECK_EQ(prefs->GetAllPrefStoresInitializationStatus(),
-            PrefService::INITIALIZATION_STATUS_SUCCESS);
+base::flat_set<std::string> GetLoginScreenPolicyExtensionIds() {
+  const PrefService* const prefs = GetSigninProfile()->GetPrefs();
+  CHECK_EQ(prefs->GetAllPrefStoresInitializationStatus(),
+           PrefService::INITIALIZATION_STATUS_SUCCESS,
+           base::NotFatalUntil::M161);
 
   const PrefService::Preference* const pref =
       prefs->FindPreference(extensions::pref_names::kInstallForceList);
@@ -68,7 +72,7 @@ base::flat_set<std::string> GetLoginScreenPolicyExtensionIds() {
 }
 
 Profile* GetProfile() {
-  return ProfileHelper::GetSigninProfile()->GetOriginalProfile();
+  return GetSigninProfile()->GetOriginalProfile();
 }
 
 extensions::ExtensionRegistry* GetExtensionRegistry() {
@@ -82,11 +86,12 @@ extensions::ProcessManager* GetProcessManager() {
 // Loads the persistently stored information about the challenge-response keys
 // that can be used for authenticating the user.
 void LoadStoredChallengeResponseSpkiKeysForUser(
+    PrefService& local_state,
     const AccountId& account_id,
     std::vector<std::string>* spki_items,
     base::flat_set<std::string>* extension_ids) {
   const base::ListValue known_user_value =
-      user_manager::KnownUser(g_browser_process->local_state())
+      user_manager::KnownUser(&local_state)
           .GetChallengeResponseKeys(account_id);
   std::vector<DeserializedChallengeResponseKey>
       deserialized_challenge_response_keys;
@@ -110,7 +115,7 @@ void LoadStoredChallengeResponseSpkiKeysForUser(
 // the DeviceLoginScreenExtensions admin policy).
 chromeos::CertificateProviderService* GetCertificateProviderService() {
   return chromeos::CertificateProviderServiceFactory::GetForBrowserContext(
-      ProfileHelper::GetSigninProfile());
+      GetSigninProfile());
 }
 
 // Maps from the TLS 1.3 SignatureScheme values into the challenge-response key
@@ -212,7 +217,8 @@ class ExtensionLoadObserver final
   }
 
   void OnShutdown(extensions::ExtensionRegistry* registry) override {
-    DCHECK(extension_registry_observation_.IsObservingSource(registry));
+    CHECK(extension_registry_observation_.IsObservingSource(registry),
+          base::NotFatalUntil::M161);
     extension_registry_observation_.Reset();
     TriggerExtensionsReadyCallback();
   }
@@ -226,7 +232,8 @@ class ExtensionLoadObserver final
   }
 
   void OnProcessManagerShutdown(extensions::ProcessManager* manager) override {
-    DCHECK(process_manager_observation_.IsObservingSource(manager));
+    CHECK(process_manager_observation_.IsObservingSource(manager),
+          base::NotFatalUntil::M161);
     process_manager_observation_.Reset();
     TriggerExtensionsReadyCallback();
   }
@@ -234,7 +241,8 @@ class ExtensionLoadObserver final
   // extensions::ExtensionHostObserver
 
   void OnExtensionHostDestroyed(extensions::ExtensionHost* host) override {
-    DCHECK(extension_host_observations_.IsObservingSource(host));
+    CHECK(extension_host_observations_.IsObservingSource(host),
+          base::NotFatalUntil::M161);
     extension_host_observations_.RemoveObservation(host);
     StopWaitingOnExtension(host->extension_id());
   }
@@ -364,16 +372,20 @@ class ExtensionLoadObserver final
 
 // static
 bool ChallengeResponseAuthKeysLoader::CanAuthenticateUser(
+    PrefService& local_state,
     const AccountId& account_id) {
   std::vector<std::string> suitable_public_key_spki_items;
   base::flat_set<std::string> extension_ids_ignored;
-  LoadStoredChallengeResponseSpkiKeysForUser(
-      account_id, &suitable_public_key_spki_items, &extension_ids_ignored);
+  LoadStoredChallengeResponseSpkiKeysForUser(local_state, account_id,
+                                             &suitable_public_key_spki_items,
+                                             &extension_ids_ignored);
   return !suitable_public_key_spki_items.empty();
 }
 
-ChallengeResponseAuthKeysLoader::ChallengeResponseAuthKeysLoader()
-    : maximum_extension_load_waiting_time_(
+ChallengeResponseAuthKeysLoader::ChallengeResponseAuthKeysLoader(
+    PrefService* local_state)
+    : local_state_(CHECK_DEREF(local_state)),
+      maximum_extension_load_waiting_time_(
           kDefaultMaximumExtensionLoadWaitingTime) {
   profile_subscription_.Observe(GetProfile());
 }
@@ -392,8 +404,9 @@ void ChallengeResponseAuthKeysLoader::LoadAvailableKeys(
   // for authenticating the user.
   std::vector<std::string> suitable_public_key_spki_items;
   base::flat_set<std::string> extension_ids;
-  LoadStoredChallengeResponseSpkiKeysForUser(
-      account_id, &suitable_public_key_spki_items, &extension_ids);
+  LoadStoredChallengeResponseSpkiKeysForUser(local_state_.get(), account_id,
+                                             &suitable_public_key_spki_items,
+                                             &extension_ids);
   if (suitable_public_key_spki_items.empty()) {
     // This user's profile doesn't support challenge-response authentication.
     std::move(callback).Run(/*challenge_response_keys=*/{});
@@ -413,7 +426,8 @@ void ChallengeResponseAuthKeysLoader::LoadAvailableKeys(
 void ChallengeResponseAuthKeysLoader::OnProfileWillBeDestroyed(
     Profile* profile) {
   profile_is_destroyed_ = true;
-  DCHECK(profile_subscription_.IsObservingSource(profile));
+  CHECK(profile_subscription_.IsObservingSource(profile),
+        base::NotFatalUntil::M161);
   profile_subscription_.Reset();
 }
 

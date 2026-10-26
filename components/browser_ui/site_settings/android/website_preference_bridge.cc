@@ -499,7 +499,8 @@ JNI_WebsitePreferenceBridge_GetPermissionSettingWithEmbargo(
                      content_settings::mojom::SessionModel::ONE_TIME;
 
   return Java_PermissionSetting_Constructor(
-      env, j_geo_setting, jni_zero::ToJniType(env, c_setting), is_one_time);
+      env, j_geo_setting, jni_zero::ToJniType(env, c_setting), is_one_time,
+      static_cast<int32_t>(info.source));
 }
 
 static void JNI_WebsitePreferenceBridge_SetPermissionSettingForOrigin(
@@ -689,7 +690,7 @@ static void JNI_WebsitePreferenceBridge_GetChosenObjects(
     ScopedJavaLocalRef<jstring> jorigin = ConvertUTF8ToJavaString(env, origin);
 
     ScopedJavaLocalRef<jstring> jname = ConvertUTF16ToJavaString(
-        env, context->GetObjectDisplayName(object->value));
+        env, context->GetObjectDisplayNameForUI(object->value));
 
     std::string serialized;
     bool written = base::JSONWriter::Write(object->value, &serialized);
@@ -1066,6 +1067,7 @@ static void JNI_WebsitePreferenceBridge_SetContentSettingEnabled(
       case ContentSettingsType::GEOLOCATION:
       case ContentSettingsType::GEOLOCATION_WITH_OPTIONS:
       case ContentSettingsType::HAND_TRACKING:
+      case ContentSettingsType::HID_GUARD:
       case ContentSettingsType::IDLE_DETECTION:
       case ContentSettingsType::LOCAL_NETWORK:
       case ContentSettingsType::LOOPBACK_NETWORK:
@@ -1303,6 +1305,14 @@ JNI_WebsitePreferenceBridge_GetDefaultContentSettingProviderSource(
   return static_cast<int32_t>(GetDefaultContentSettingProviderSource(
       jbrowser_context_handle,
       static_cast<ContentSettingsType>(content_settings_type)));
+}
+
+static int32_t JNI_WebsitePreferenceBridge_GetSettingSourceFromProviderType(
+    JNIEnv* env,
+    int provider_type) {
+  return static_cast<int32_t>(
+      content_settings::GetSettingSourceFromProviderType(
+          static_cast<content_settings::ProviderType>(provider_type)));
 }
 
 static bool JNI_WebsitePreferenceBridge_GetLocationAllowedByPolicy(

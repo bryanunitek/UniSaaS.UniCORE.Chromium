@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -53,12 +54,19 @@ class CC_MOJO_EMBEDDER_EXPORT VizLayerContext
       bool frame_has_damage,
       bool is_flush,
       std::vector<ui::LatencyInfo> latency_info,
-      viz::TrackedElementRects tracked_element_rects) override;
+      viz::TrackedElementRects tracked_element_rects,
+      std::optional<viz::FrameIntervalInputs> frame_interval_inputs) override;
   void UpdateDisplayTile(PictureLayerImpl& layer,
                          const Tile& tile,
                          viz::ClientResourceProvider& resource_provider,
                          gpu::SharedImageInterface* shared_image_interface,
                          bool update_damage) override;
+  void SetUnboundedFrameSinkId(
+      const viz::FrameSinkId& frame_sink_id,
+      const viz::LocalSurfaceId& local_surface_id) override;
+  void SetUnboundedLocalSurfaceId(
+      const viz::LocalSurfaceId& local_surface_id) override;
+  void DismissUnboundedFrameSink() override;
 
   // viz::mojom::LayerContextClient:
   void OnRequestCommitForFrame(const viz::BeginFrameArgs& args) override;

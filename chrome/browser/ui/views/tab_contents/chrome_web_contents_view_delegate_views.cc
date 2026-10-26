@@ -10,7 +10,6 @@
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "chrome/browser/ui/aura/tab_contents/web_drag_bookmark_handler_aura.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/sad_tab_helper.h"
@@ -23,6 +22,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/drop_data.h"
+#include "ui/base/base_window.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/clipboard_constants.h"
 #include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
@@ -55,7 +55,7 @@ ChromeWebContentsViewFocusHelper*
 ChromeWebContentsViewDelegateViews::GetFocusHelper() const {
   ChromeWebContentsViewFocusHelper* helper =
       ChromeWebContentsViewFocusHelper::FromWebContents(web_contents_);
-  DCHECK(helper);
+  CHECK(helper, base::NotFatalUntil::M162);
   return helper;
 }
 
@@ -83,10 +83,10 @@ std::unique_ptr<RenderViewContextMenuBase>
 ChromeWebContentsViewDelegateViews::BuildMenu(
     content::RenderFrameHost& render_frame_host,
     const content::ContextMenuParams& params) {
-  std::unique_ptr<RenderViewContextMenuBase> menu(
+  std::unique_ptr<RenderViewContextMenuBase> menu =
       RenderViewContextMenuViews::Create(render_frame_host, params,
                                          is_paste_enabled_,
-                                         is_paste_and_match_style_enabled_));
+                                         is_paste_and_match_style_enabled_);
   menu->Init();
   return menu;
 }
@@ -172,7 +172,7 @@ void ChromeWebContentsViewDelegateViews::OnGetAllAvailableFormats(
 void ChromeWebContentsViewDelegateViews::ExecuteCommandForTesting(
     int command_id,
     int event_flags) {
-  DCHECK(context_menu_);
+  CHECK(context_menu_, base::NotFatalUntil::M162);
   context_menu_->ExecuteCommand(command_id, event_flags);
   context_menu_.reset();
 }

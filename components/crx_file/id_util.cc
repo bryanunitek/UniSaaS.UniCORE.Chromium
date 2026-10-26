@@ -4,10 +4,13 @@
 
 #include "components/crx_file/id_util.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
+#include <string>
 #include <string_view>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/hash/sha1.h"
 #include "base/strings/string_number_conversions.h"
@@ -38,7 +41,7 @@ static void ConvertHexadecimalToIDAlphabet(std::string* id) {
 namespace crx_file::id_util {
 
 // First 16 bytes of SHA256 hashed public key.
-const size_t kIdSize = 16;
+constexpr size_t kIdSize = 16;
 
 std::string GenerateId(std::string_view input) {
   return GenerateId(base::as_byte_span(input));
@@ -67,6 +70,10 @@ std::string GenerateIdForPath(const base::FilePath& path) {
 
 std::string HashedIdInHex(std::string_view id) {
   return base::HexEncode(base::SHA1Hash(base::as_byte_span(id)));
+}
+
+std::string HashedIdInHexSha256(std::string_view id) {
+  return base::HexEncode(crypto::hash::Sha256(base::as_byte_span(id)));
 }
 
 base::FilePath MaybeNormalizePath(const base::FilePath& path) {

@@ -203,7 +203,8 @@
             "cpu": "x86-64",
             "os": "Ubuntu-22.04"
           },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 2
         },
         "test": "blink_unittests",
         "test_id_prefix": "ninja://third_party/blink/renderer/controller:blink_unittests/"
@@ -250,7 +251,8 @@
       },
       {
         "args": [
-          "--test-launcher-print-test-stdio=always"
+          "--test-launcher-print-test-stdio=always",
+          "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
@@ -264,7 +266,7 @@
             "os": "Ubuntu-22.04"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 70
+          "shards": 119
         },
         "test": "browser_tests",
         "test_id_prefix": "ninja://chrome/test:browser_tests/"
@@ -856,7 +858,8 @@
       },
       {
         "args": [
-          "--test-launcher-print-test-stdio=always"
+          "--test-launcher-print-test-stdio=always",
+          "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
@@ -870,7 +873,7 @@
             "os": "Ubuntu-22.04"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 25
+          "shards": 43
         },
         "test": "interactive_ui_tests",
         "test_id_prefix": "ninja://chrome/test:interactive_ui_tests/"
@@ -1399,7 +1402,8 @@
       },
       {
         "args": [
-          "--test-launcher-print-test-stdio=always"
+          "--test-launcher-print-test-stdio=always",
+          "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
@@ -1493,7 +1497,8 @@
             "cpu": "x86-64",
             "os": "Ubuntu-22.04"
           },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 2
         },
         "test": "unit_tests",
         "test_id_prefix": "ninja://chrome/test:unit_tests/"

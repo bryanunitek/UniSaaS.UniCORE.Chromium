@@ -6,12 +6,13 @@
 
 #include "base/base_paths.h"
 #include "base/files/file.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
 #include "base/task/thread_pool.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/test_optimization_guide_model_provider.h"
 #include "components/safe_browsing/content/browser/notification_content_detection/mock_safe_browsing_database_manager.h"
 #include "components/safe_browsing/content/browser/notification_content_detection/notification_content_detection_constants.h"
@@ -83,7 +84,8 @@ class NotificationContentDetectionServiceTest
     } else {
       scoped_feature_list_.InitAndDisableFeature(
           kGlobalCacheListForGatingNotificationProtections);
-      database_manager_ = new MockSafeBrowsingDatabaseManager();
+      database_manager_ =
+          base::MakeRefCounted<MockSafeBrowsingDatabaseManager>();
       database_manager()->SetAllowlistLookupDetailsForUrl(GURL(kAllowlistedUrl),
                                                           /*match=*/true);
       database_manager()->SetAllowlistLookupDetailsForUrl(
@@ -114,15 +116,14 @@ class NotificationContentDetectionServiceTest
             &browser_context_);
 
     base::FilePath model_file_path = GetValidModelFile();
-    std::unique_ptr<optimization_guide::ModelInfo> model_info =
-        optimization_guide::TestModelInfoBuilder()
-            .SetVersion(1)
-            .SetModelFilePath(model_file_path)
-            .Build();
+    optimization_guide::ModelInfo model_info = {
+        .model_file_path = model_file_path,
+        .version = 1,
+    };
     test_notification_content_detection_model->OnModelUpdated(
         optimization_guide::proto::
             OPTIMIZATION_TARGET_NOTIFICATION_CONTENT_DETECTION,
-        *model_info);
+        model_info);
 
     notification_content_detection_model_ =
         test_notification_content_detection_model.get();

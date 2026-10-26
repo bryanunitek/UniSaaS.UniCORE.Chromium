@@ -80,6 +80,7 @@
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/base/features.h"
 #include "net/dns/public/dns_over_https_config.h"
+#include "net/dns/public/insecure_dns_mode.h"
 #include "net/dns/public/secure_dns_mode.h"
 #include "net/ssl/client_cert_identity.h"
 #include "services/device/public/cpp/geolocation/location_system_permission_status.h"
@@ -89,6 +90,7 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
@@ -129,8 +131,10 @@
 #endif
 
 #if BUILDFLAG(IS_IOS)
+#include "components/application_locale_storage/application_locale_storage.h"  // nogncheck
 #include "components/permissions/bluetooth_delegate_impl.h"
 #include "content/shell/browser/bluetooth/shell_bluetooth_delegate_impl_client.h"
+#include "ui/base/l10n/l10n_util_mac.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -543,25 +547,6 @@ bool ShellContentBrowserClient::ShouldUrlUseApplicationIsolationLevel(
       url::Origin::Create(url.ReplaceComponents(replacements)));
 }
 
-bool ShellContentBrowserClient::IsSharedStorageAllowed(
-    content::BrowserContext* browser_context,
-    content::RenderFrameHost* rfh,
-    const url::Origin& top_frame_origin,
-    const url::Origin& accessing_origin,
-    std::string* out_debug_message,
-    bool* out_block_is_site_setting_specific) {
-  return true;
-}
-
-bool ShellContentBrowserClient::IsSharedStorageSelectURLAllowed(
-    content::BrowserContext* browser_context,
-    const url::Origin& top_frame_origin,
-    const url::Origin& accessing_origin,
-    std::string* out_debug_message,
-    bool* out_block_is_site_setting_specific) {
-  return true;
-}
-
 GeneratedCodeCacheSettings
 ShellContentBrowserClient::GetGeneratedCodeCacheSettings(
     content::BrowserContext* context) {
@@ -573,7 +558,7 @@ ShellContentBrowserClient::GetGeneratedCodeCacheSettings(
 
 base::OnceClosure ShellContentBrowserClient::SelectClientCertificate(
     BrowserContext* browser_context,
-    int process_id,
+    ChildProcessId process_id,
     WebContents* web_contents,
     net::SSLCertRequestInfo* cert_request_info,
     net::ClientCertIdentityList client_certs,
@@ -660,17 +645,24 @@ void ShellContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
   map->Add<media::mojom::MediaFoundationPreferences>(
       &BindMediaFoundationPreferences);
 #endif  // BUILDFLAG(IS_WIN)
-  map->Add<surface_embed::mojom::SurfaceEmbedHost>(base::BindRepeating(
-      [](content::RenderFrameHost* render_frame_host,
-         mojo::PendingReceiver<surface_embed::mojom::SurfaceEmbedHost>
-             receiver) {
-        // Since ShellContentRenderClient can try to create a
-        // SurfaceEmbedWebPlugin on any page, we have to handle its binding on
-        // any page, so the renderer doesn't get killed. We don't want the
-        // operation to actually succeed in general, however, so we just let the
-        // pipe get closed by going out of scope unbound. Tests that need the
-        // functionality can override this method to provide it.
-      }));
+}
+
+void ShellContentBrowserClient::
+    RegisterAssociatedInterfaceBindersForRenderFrameHost(
+        RenderFrameHost&,
+        blink::AssociatedInterfaceRegistry& associated_registry) {
+  associated_registry.AddInterface<surface_embed::mojom::SurfaceEmbedHost>(
+      base::BindRepeating(
+          [](mojo::PendingAssociatedReceiver<
+              surface_embed::mojom::SurfaceEmbedHost> receiver) {
+            // Since ShellContentRenderClient can try to create a
+            // SurfaceEmbedWebPlugin on any page, we have to handle its binding
+            // on any page, so the renderer doesn't get killed. We don't want
+            // the operation to actually succeed in general, however, so we
+            // just let the endpoint get closed by going out of scope unbound.
+            // Tests that need the functionality can override this method to
+            // provide it.
+          }));
 }
 
 void ShellContentBrowserClient::OpenURL(
@@ -700,8 +692,14 @@ std::unique_ptr<LoginDelegate> ShellContentBrowserClient::CreateLoginDelegate(
     const GURL& url,
     scoped_refptr<net::HttpResponseHeaders> response_headers,
     bool first_auth_attempt,
+    bool do_not_prompt_for_login,
     GuestPageHolder* guest,
     LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
+  // `login_request_callback_` stands in for a login dialog, which must not be
+  // shown for requests that must not prompt for login.
+  if (do_not_prompt_for_login) {
+    return nullptr;
+  }
   if (!login_request_callback_.is_null()) {
     std::move(login_request_callback_)
         .Run(is_request_for_primary_main_frame_navigation,
@@ -803,13 +801,11 @@ void ShellContentBrowserClient::OnNetworkServiceCreated(
 #if !BUILDFLAG(IS_ANDROID)
   if (base::FeatureList::IsEnabled(net::features::kAsyncDns)) {
     network_service->ConfigureStubHostResolver(
-        /*insecure_dns_client_enabled=*/true,
+        net::InsecureDnsMode::kEnabledBuiltIn,
         base::FeatureList::IsEnabled(net::features::kHappyEyeballsV3),
-        /*secure_dns_mode=*/net::SecureDnsMode::kAutomatic,
-        net::DnsOverHttpsConfig(),
+        net::SecureDnsMode::kAutomatic, net::DnsOverHttpsConfig(),
         /*additional_dns_types_enabled=*/true,
-        /*fallback_doh_nameservers=*/{},
-        /*insecure_dns_via_platform_apis_enabled=*/false);
+        /*fallback_doh_nameservers=*/{});
   }
 #endif
 }
@@ -831,6 +827,15 @@ ShellContentBrowserClient::GetNetworkContextsParentDirectory() {
 }
 
 #if BUILDFLAG(IS_IOS)
+std::string ShellContentBrowserClient::GetApplicationLocale() {
+  if (!application_locale_storage_) {
+    application_locale_storage_ = std::make_unique<ApplicationLocaleStorage>();
+    application_locale_storage_->Set(l10n_util::GetLocaleOverride());
+  }
+
+  return application_locale_storage_->Get();
+}
+
 BluetoothDelegate* ShellContentBrowserClient::GetBluetoothDelegate() {
   if (!bluetooth_delegate_) {
     bluetooth_delegate_ = std::make_unique<permissions::BluetoothDelegateImpl>(

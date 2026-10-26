@@ -25,8 +25,6 @@ class UI_ANDROID_EXPORT EventForwarder {
    public:
     ~Observer() override = default;
 
-    virtual void OnTouchEvent(const ui::MotionEventAndroid&) {}
-
     virtual void OnMouseEvent(const ui::MotionEventAndroid&) {}
 
     virtual void OnGenericMotionEvent(const ui::MotionEventAndroid&) {}
@@ -63,7 +61,8 @@ class UI_ANDROID_EXPORT EventForwarder {
                     int64_t time_ns,
                     int32_t android_action,
                     int32_t android_changed_button,
-                    int32_t tool_type);
+                    int32_t tool_type,
+                    bool skip_dip_scale);
 
   void OnDragEvent(JNIEnv* env,
                    int32_t action,
@@ -72,7 +71,7 @@ class UI_ANDROID_EXPORT EventForwarder {
                    float screen_x,
                    float screen_y,
                    const base::android::JavaRef<jobjectArray>& j_mimeTypes,
-                   const base::android::JavaRef<jstring>& j_content,
+                   bool has_files,
                    const base::android::JavaRef<jobjectArray>& j_filenames,
                    const base::android::JavaRef<jstring>& j_text,
                    const base::android::JavaRef<jstring>& j_html,
@@ -110,11 +109,16 @@ class UI_ANDROID_EXPORT EventForwarder {
 
   void StartFling(JNIEnv* env,
                   int64_t time_ms,
+                  float x,
+                  float y,
+                  float raw_x,
+                  float raw_y,
                   float velocity_x,
                   float velocity_y,
                   bool synthetic_scroll,
                   bool prevent_boosting,
-                  bool is_touchpad_event);
+                  bool is_touchpad_event,
+                  bool target_viewport);
 
   void CancelFling(JNIEnv* env,
                    int64_t time_ms,
@@ -145,7 +149,6 @@ class UI_ANDROID_EXPORT EventForwarder {
   const raw_ptr<ViewAndroid> view_;
 
   base::ObserverList<Observer> observers_;
-  bool send_touch_moves_to_observers;
 };
 
 }  // namespace ui

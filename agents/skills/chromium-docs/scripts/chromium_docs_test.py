@@ -3,7 +3,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Basic tests for chromium_docs.py"""
-# pylint: disable=protected-access
 
 import unittest
 from pathlib import Path
@@ -81,7 +80,7 @@ class ChromiumDocsTest(unittest.TestCase):
         doc_data = {
             'title': 'Mojo IPC Guide',
             'content': 'How to use mojo for IPC.',
-            'keywords': ['mojo', 'ipc']
+            'keywords': ['mojo', 'ipc'],
         }
 
         score = docs._calculate_score(doc_data, ['mojo'])
@@ -93,7 +92,7 @@ class ChromiumDocsTest(unittest.TestCase):
         doc_data = {
             'title': 'GPU Architecture',
             'content': 'Graphics processing.',
-            'keywords': ['gpu', 'graphics']
+            'keywords': ['gpu', 'graphics'],
         }
 
         score = docs._calculate_score(doc_data, ['network', 'http'])
@@ -109,12 +108,14 @@ class ChromiumDocsTest(unittest.TestCase):
 
     def test_search_result_dataclass(self):
         """Test SearchResult dataclass."""
-        result = SearchResult(path="docs/test.md",
-                              title="Test Doc",
-                              summary="A test document.",
-                              score=5.0,
-                              category="testing",
-                              keywords=["test"])
+        result = SearchResult(
+            path="docs/test.md",
+            title="Test Doc",
+            summary="A test document.",
+            score=5.0,
+            category="testing",
+            keywords=["test"],
+        )
 
         self.assertEqual(result.path, "docs/test.md")
         self.assertEqual(result.score, 5.0)

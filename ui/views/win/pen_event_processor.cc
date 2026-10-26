@@ -8,6 +8,7 @@
 #include "base/notreached.h"
 #include "base/time/time.h"
 #include "components/stylus_handwriting/win/features.h"
+#include "ui/display/win/screen_win.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event_utils.h"
 
@@ -63,10 +64,9 @@ std::unique_ptr<ui::Event> PenEventProcessor::GenerateEvent(
   // convert pressure into a float [0, 1]. The range of the pressure is
   // [0, 1024] as specified on MSDN.
   float pressure = static_cast<float>(pointer_pen_info.pressure) / 1024;
-  int rotation_angle = static_cast<int>(pointer_pen_info.rotation) % 180;
-  if (rotation_angle < 0) {
-    rotation_angle += 180;
-  }
+  // The rotation is already normalized to [0, 359] as specified on MSDN. See
+  // https://learn.microsoft.com/windows/win32/api/winuser/ns-winuser-pointer_pen_info#members
+  int rotation_angle = static_cast<int>(pointer_pen_info.rotation);
   int tilt_x = pointer_pen_info.tiltX;
   int tilt_y = pointer_pen_info.tiltY;
 
@@ -90,17 +90,17 @@ std::unique_ptr<ui::Event> PenEventProcessor::GenerateEvent(
   // we read |send_touch_for_pen_| before we process the event as we want to
   // ensure a TouchRelease is sent appropriately at the end when the stylus is
   // no longer in contact with the digitizer.
-  bool send_touch = send_touch_for_pen_.count(pointer_id) == 0
-                        ? false
-                        : send_touch_for_pen_[pointer_id];
+  const auto it = send_touch_for_pen_.find(pointer_id);
+  bool send_touch = it == send_touch_for_pen_.end() ? false : it->second;
   if (pointer_pen_info.pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT) {
-    if (!pen_in_contact_[pointer_id]) {
+    bool& pen_in_contact = pen_in_contact_[pointer_id];
+    if (!pen_in_contact) {
       send_touch = send_touch_for_pen_[pointer_id] =
           (pointer_pen_info.pointerInfo.pointerFlags &
            (POINTER_FLAG_SECONDBUTTON | POINTER_FLAG_THIRDBUTTON |
             POINTER_FLAG_FOURTHBUTTON | POINTER_FLAG_FIFTHBUTTON)) == 0;
     }
-    pen_in_contact_[pointer_id] = true;
+    pen_in_contact = true;
   } else {
     pen_in_contact_.erase(pointer_id);
     send_touch_for_pen_.erase(pointer_id);
@@ -114,11 +114,10 @@ std::unique_ptr<ui::Event> PenEventProcessor::GenerateEvent(
   std::optional<ui::StylusHandwritingPropertiesWin> handwriting_properties;
   if (stylus_handwriting::win::IsStylusHandwritingWinEnabled() &&
       message == WM_POINTERDOWN) {
-    handwriting_properties =
-        std::make_optional<ui::StylusHandwritingPropertiesWin>();
-    handwriting_properties->handwriting_pointer_id = pointer_id;
-    handwriting_properties->handwriting_stroke_id =
-        ui::GetHandwritingStrokeId(pointer_id);
+    handwriting_properties.emplace(
+        pointer_id, ui::GetHandwritingStrokeId(pointer_id),
+        display::win::GetScreenWin()->GetPixelsPerInchForPointerDevice(
+            pointer_pen_info.pointerInfo.sourceDevice));
   }
 
   return GenerateTouchEvent(message, pointer_id, pointer_pen_info.pointerInfo,
@@ -150,7 +149,7 @@ std::unique_ptr<ui::Event> PenEventProcessor::GenerateMouseEvent(
       sent_mouse_down_[pointer_id] = true;
       break;
     case WM_POINTERUP:
-    case WM_NCPOINTERUP:
+    case WM_NCPOINTERUP: {
       event_type = ui::EventType::kMouseReleased;
       if (pointer_info.ButtonChangeType == POINTER_CHANGE_FIRSTBUTTON_UP) {
         flag |= ui::EF_LEFT_MOUSE_BUTTON;
@@ -161,12 +160,13 @@ std::unique_ptr<ui::Event> PenEventProcessor::GenerateMouseEvent(
       }
       id_generator_->ReleaseNumber(pointer_id);
       click_count = 1;
-      if (sent_mouse_down_.count(pointer_id) == 0 ||
-          !sent_mouse_down_[pointer_id]) {
+      auto it = sent_mouse_down_.find(pointer_id);
+      if (it == sent_mouse_down_.end() || !it->second) {
         return nullptr;
       }
-      sent_mouse_down_[pointer_id] = false;
+      it->second = false;
       break;
+    }
     case WM_POINTERUPDATE:
     case WM_NCPOINTERUPDATE:
       event_type = ui::EventType::kMouseDragged;
@@ -211,15 +211,16 @@ std::unique_ptr<ui::Event> PenEventProcessor::GenerateTouchEvent(
       sent_touch_start_[pointer_id] = true;
       break;
     case WM_POINTERUP:
-    case WM_NCPOINTERUP:
+    case WM_NCPOINTERUP: {
       event_type = ui::EventType::kTouchReleased;
       id_generator_->ReleaseNumber(pointer_id);
-      if (sent_touch_start_.count(pointer_id) == 0 ||
-          !sent_touch_start_[pointer_id]) {
+      auto it = sent_touch_start_.find(pointer_id);
+      if (it == sent_touch_start_.end() || !it->second) {
         return nullptr;
       }
-      sent_touch_start_[pointer_id] = false;
+      it->second = false;
       break;
+    }
     case WM_POINTERUPDATE:
     case WM_NCPOINTERUPDATE:
       event_type = ui::EventType::kTouchMoved;

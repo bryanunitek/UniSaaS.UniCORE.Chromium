@@ -13,14 +13,14 @@
 #import "ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_action_provider.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_constants.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/ui/ui_swift.h"
-#import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
-#import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
 
 namespace {
+
+NSString* const kSettingsSymbol = @"gearshape";
 
 // The number of destinations immediately visible in the carousel when the
 // overflow menu is opened.
@@ -2321,40 +2321,6 @@ TEST_F(OverflowMenuOrdererTest, LoadActionsFromPrefsWithInvalidStrings) {
   EXPECT_EQ(
       static_cast<overflow_menu::ActionType>(model.hiddenActions[1].actionType),
       clearDataAction);
-}
-
-// Tests that if prefs contain a stale Reading mode state, the state is
-// discarded when loaded.
-TEST_F(OverflowMenuOrdererTest,
-       LoadActionsFromPrefsWithInvalidReadingModeState) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(kEnableReaderModeInUS);
-  CreatePrefs();
-
-  // Add Reading mode to the previous list of shown and hidden actions.
-  base::ListValue shown_actions_list =
-      base::ListValue().Append(overflow_menu::StringNameForActionType(
-          overflow_menu::ActionType::ReaderMode));
-
-  base::ListValue hidden_actions_list =
-      base::ListValue().Append(overflow_menu::StringNameForActionType(
-          overflow_menu::ActionType::ReaderMode));
-
-  base::DictValue actions_order_dict;
-  actions_order_dict.Set("shown", std::move(shown_actions_list));
-  actions_order_dict.Set("hidden", std::move(hidden_actions_list));
-
-  prefs_->SetDict(prefs::kOverflowMenuActionsOrder,
-                  std::move(actions_order_dict));
-
-  InitializeOverflowMenuOrderer(NO);
-
-  ActionCustomizationModel* model =
-      overflow_menu_orderer_.actionCustomizationModel;
-
-  // Reading mode should be filtered since the feature is disabled.
-  ASSERT_EQ(model.shownActions.count, 0u);
-  ASSERT_EQ(model.hiddenActions.count, 0u);
 }
 
 // Tests that if `basePageActions` from the provider is not sorted by

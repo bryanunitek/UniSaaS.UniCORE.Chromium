@@ -16,6 +16,7 @@
 #include "chrome/browser/favicon/favicon_utils.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -125,7 +126,7 @@ class TabMenuBridgeTest : public ::testing::Test {
       // The way WebContentsTester updates the title avoids the usual
       // notification mechanism for TabStripModel, so manually synthesize the
       // update notification here.
-      model()->UpdateWebContentsStateAt(index, TabChangeType::kAll);
+      model()->UpdateWebContentsState(contents, TabChangeType::kAll);
     }
   }
 
@@ -134,7 +135,8 @@ class TabMenuBridgeTest : public ::testing::Test {
     int index = ModelIndexForTabNamed(old_name);
     if (index >= 0) {
       std::unique_ptr<content::WebContents> old_contents =
-          model()->DiscardWebContentsAt(index, CreateWebContents(new_name));
+          model()->DiscardWebContents(model()->GetWebContentsAt(index),
+                                      CreateWebContents(new_name));
       // Let the old WebContents be destroyed here.
     }
   }
@@ -219,9 +221,6 @@ class TabMenuBridgeTest : public ::testing::Test {
   NSMenuItem* __strong menu_root_;
   NSMenu* __strong menu_;
   tabs::TabModel::PreventFeatureInitializationForTesting prevent_;
-
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kShowTabGroupsMacSystemMenu};
 };
 
 TEST_F(TabMenuBridgeTest, CreatesBlankMenu) {
@@ -316,7 +315,8 @@ TEST_F(TabMenuBridgeTest, SwappingBridgeRecreatesMenu) {
 
   // Simulate one of the tabs in the model being updated - if the computed
   // indexes are wrong, this call will DCHECK.
-  model2->UpdateWebContentsStateAt(0, TabChangeType::kAll);
+  model2->UpdateWebContentsState(model2->GetWebContentsAt(0),
+                                 TabChangeType::kAll);
 
   model2->CloseAllTabs();
 
@@ -348,27 +348,6 @@ TEST_F(TabMenuBridgeTest, ActiveItemTracksChanges) {
   ExpectActiveMenuItemNameIs("Tab 3");
 }
 
-TEST_F(TabMenuBridgeTest, TabGroupIndicator) {
-  TabStripModel* const tab_strip_model = model();
-  TabMenuBridge bridge(menu_root());
-  bridge.SetForceRebuildMenuForTesting(true);
-  bridge.SetTabStripModel(tab_strip_model);
-
-  AddModelTabNamed("Tab 1", model());
-  ActivateModelTabNamed("Tab 1");
-
-  // Group indicator is not shown.
-  EXPECT_EQ(1, tab_strip_model->count());
-  EXPECT_EQ(nil, GetActiveMenuItem().attributedTitle);
-
-  // Add to new group. Group indicator is shown.
-  AddModelTabToGroup({0});
-  EXPECT_NE(nil, GetActiveMenuItem().attributedTitle);
-
-  // Remove from group. Group indicator is not shown.
-  RemoveModelTabFromGroup({0});
-  EXPECT_EQ(nil, GetActiveMenuItem().attributedTitle);
-}
 
 // Regression test: clicking a stale menu item after a tab has been closed
 // should not crash.

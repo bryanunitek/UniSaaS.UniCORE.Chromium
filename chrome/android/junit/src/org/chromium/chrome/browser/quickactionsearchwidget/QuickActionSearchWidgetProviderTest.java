@@ -4,10 +4,13 @@
 
 package org.chromium.chrome.browser.quickactionsearchwidget;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -15,27 +18,27 @@ import static org.mockito.Mockito.when;
 import android.appwidget.AppWidgetManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Resources;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.SizeF;
 
 import androidx.test.core.app.ApplicationProvider;
-import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLog;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.quickactionsearchwidget.QuickActionSearchWidgetProvider.QuickActionSearchWidgetProviderDino;
-import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferencesManager.SearchActivityPreferences;
+import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferences;
 import org.chromium.url.GURL;
 
 import java.util.ArrayList;
@@ -43,9 +46,7 @@ import java.util.Arrays;
 
 /** Tests for the (@link QuickActionSearchWidgetProvider}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowLog.class})
+@Config(shadows = {ShadowLog.class})
 public class QuickActionSearchWidgetProviderTest {
     private static final int WIDGET_A_ID = 123;
     private static final int WIDGET_B_ID = 987;
@@ -64,21 +65,19 @@ public class QuickActionSearchWidgetProviderTest {
 
     @Before
     public void setUp() {
-        mContext = Mockito.spy(ApplicationProvider.getApplicationContext());
+        mContext = spy(ApplicationProvider.getApplicationContext());
         mOptionsWidgetA = new Bundle();
         mOptionsWidgetB = new Bundle();
         mPreferences =
-                new SearchActivityPreferences(
-                        null,
-                        "Search Engine",
-                        new GURL("https://search.engine.com"),
-                        true,
-                        true,
-                        true);
+                new SearchActivityPreferences.Builder()
+                        .setSearchEngineName("Search Engine")
+                        .setSearchEngineUrl(new GURL("https://search.engine.com"))
+                        .setGoogleLensAvailable(true)
+                        .build();
 
         // Inflate an actual RemoteViews to avoid stubbing internal methods or making
         // any other assumptions about the class.
-        mWidgetProvider = Mockito.spy(new QuickActionSearchWidgetProviderDino());
+        mWidgetProvider = spy(new QuickActionSearchWidgetProviderDino());
         when(mContext.getSystemService(Context.APPWIDGET_SERVICE))
                 .thenReturn(mAppWidgetManagerMock);
         when(mAppWidgetManagerMock.getAppWidgetOptions(eq(WIDGET_A_ID)))
@@ -101,7 +100,6 @@ public class QuickActionSearchWidgetProviderTest {
     }
 
     @Test
-    @SmallTest
     public void testAppWidgetInstallationCreatesWidgets() {
         mIntent.setAction(AppWidgetManager.ACTION_APPWIDGET_UPDATE);
         updateReportedWidgetSizes(mOptionsWidgetA, new SizeF(80, 80), new SizeF(400, 40));
@@ -123,7 +121,6 @@ public class QuickActionSearchWidgetProviderTest {
     }
 
     @Test
-    @SmallTest
     public void testAppWidgetResizeUpdatesWidgets() {
         updateReportedWidgetSizes(mOptionsWidgetA, new SizeF(80, 80), new SizeF(400, 40));
         updateReportedWidgetSizes(mOptionsWidgetB, new SizeF(30, 10), new SizeF(100, 30));
@@ -167,7 +164,6 @@ public class QuickActionSearchWidgetProviderTest {
     }
 
     @Test
-    @SmallTest
     @Config(sdk = Build.VERSION_CODES.S)
     public void testCreateWidgetsFromFallbackValues_missingSizes() {
         updateReportedWidgetSizes(mOptionsWidgetA, new SizeF(80, 80), new SizeF(400, 40));
@@ -182,7 +178,6 @@ public class QuickActionSearchWidgetProviderTest {
     }
 
     @Test
-    @SmallTest
     @Config(sdk = Build.VERSION_CODES.S)
     public void testCreateWidgetFromFallbackValues_emptySizes() {
         updateReportedWidgetSizes(mOptionsWidgetA, new SizeF(80, 80), new SizeF(400, 40));
@@ -200,7 +195,6 @@ public class QuickActionSearchWidgetProviderTest {
     }
 
     @Test
-    @SmallTest
     @Config(sdk = Build.VERSION_CODES.S)
     public void testCreateWidgetFromSizeSpecs() {
         updateReportedWidgetSizes(mOptionsWidgetA, new SizeF(80, 80), new SizeF(400, 40));
@@ -216,7 +210,6 @@ public class QuickActionSearchWidgetProviderTest {
     }
 
     @Test
-    @SmallTest
     @Config(sdk = Build.VERSION_CODES.R)
     public void testCreateWidgetFromLegacyMeasurements() {
         updateReportedWidgetSizes(mOptionsWidgetA, new SizeF(80, 80), new SizeF(400, 40));
@@ -233,5 +226,28 @@ public class QuickActionSearchWidgetProviderTest {
         verify(mWidgetProvider).createWidget(any(), any(), eq(400), eq(40));
         verify(mWidgetProvider).createWidget(any(), any(), eq(80), eq(80));
         verify(mWidgetProvider, times(2)).createWidget(any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    public void testSearchWidgetDimensions() {
+        Resources res = mContext.getResources();
+        float density = res.getDisplayMetrics().density;
+        int minWidthDp =
+                Math.round(res.getDimension(R.dimen.quick_action_search_widget_width) / density);
+        int minHeightDp =
+                Math.round(
+                        res.getDimension(R.dimen.quick_action_search_widget_xsmall_height)
+                                / density);
+        int maxWidthDp =
+                Math.round(
+                        res.getDimension(R.dimen.quick_action_search_widget_max_width) / density);
+        int maxHeightDp =
+                Math.round(
+                        res.getDimension(R.dimen.quick_action_search_widget_max_height) / density);
+
+        assertTrue(maxWidthDp > minWidthDp);
+        assertTrue(maxHeightDp > minHeightDp);
+        assertEquals(624, maxWidthDp);
+        assertEquals(155, maxHeightDp);
     }
 }

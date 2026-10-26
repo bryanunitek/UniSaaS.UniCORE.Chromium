@@ -23,11 +23,8 @@ import {BluetoothSystemState, DeviceConnectionState} from 'chrome://resources/mo
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {RouteOriginMixin} from '../common/route_origin_mixin.js';
-import type {Route} from '../router.js';
 import {Router, routes} from '../router.js';
 
-import type {OsBluetoothDevicesSubpageBrowserProxy} from './os_bluetooth_devices_subpage_browser_proxy.js';
-import {OsBluetoothDevicesSubpageBrowserProxyImpl} from './os_bluetooth_devices_subpage_browser_proxy.js';
 import {getTemplate} from './os_bluetooth_summary.html.js';
 
 /**
@@ -99,37 +96,22 @@ export class SettingsBluetoothSummaryElement extends
     };
   }
 
-  systemProperties: BluetoothSystemProperties;
-  private browserProxy_: OsBluetoothDevicesSubpageBrowserProxy;
-  private isBluetoothToggleOn_: boolean;
-  private isSecondaryUser_: boolean;
-  private primaryUserEmail_: string;
+  declare systemProperties: BluetoothSystemProperties;
+  declare private isBluetoothToggleOn_: boolean;
+  declare private isSecondaryUser_: boolean;
+  declare private primaryUserEmail_: string;
 
   constructor() {
     super();
 
     /** RouteOriginMixin override */
     this.route = routes.BLUETOOTH;
-
-    this.browserProxy_ =
-        OsBluetoothDevicesSubpageBrowserProxyImpl.getInstance();
   }
 
   override ready(): void {
     super.ready();
 
     this.addFocusConfig(routes.BLUETOOTH_DEVICES, '.subpage-arrow');
-  }
-
-  /**
-   * RouteOriginMixinInterface override
-   */
-  override currentRouteChanged(newRoute: Route, oldRoute?: Route): void {
-    super.currentRouteChanged(newRoute, oldRoute);
-
-    if (newRoute === this.route) {
-      this.browserProxy_.showBluetoothRevampHatsSurvey();
-    }
   }
 
   private onSystemPropertiesChanged_(): void {
@@ -282,8 +264,6 @@ export class SettingsBluetoothSummaryElement extends
       this.isBluetoothToggleOn_ = !enabled;
       getHidPreservingController().tryToSetBluetoothEnabledState(
           enabled, HidWarningDialogSource.kOsSettings);
-
-    this.browserProxy_.showBluetoothRevampHatsSurvey();
   }
 
   private shouldShowPairNewDevice_(): boolean {

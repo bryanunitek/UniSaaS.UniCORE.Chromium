@@ -35,6 +35,10 @@ BASE_DECLARE_FEATURE(kAimServerEligibilitySendCoBrowseUserAgentSuffixEnabled);
 // Eligibility Service requests.
 BASE_DECLARE_FEATURE(kAimServerEligibilitySendFullVersionListEnabled);
 
+// If enabled, adds the Chrome-Search-Capabilities-Version header to all AIM
+// Eligibility Service requests.
+BASE_DECLARE_FEATURE(kAimServerEligibilitySendSearchCapabilitiesHeaderEnabled);
+
 // If enabled, uses a custom retry policy for the server request.
 BASE_DECLARE_FEATURE(kAimServerEligibilityCustomRetryPolicyEnabled);
 
@@ -58,6 +62,10 @@ extern const base::FeatureParam<bool> kRequestOnPrimaryAccountChanges;
 // PEC API response in the AIM eligibility response.
 BASE_DECLARE_FEATURE(kAimUsePecApi);
 
+// If enabled, searchbox context menus will use the dynamic icon IDs provided in
+// `SearchboxConfig` rather than legacy hardcoded client mappings.
+BASE_DECLARE_FEATURE(kAimUseSearchboxConfigIconIds);
+
 // Configures whether to include the client locale in the AIM eligibility
 // request.
 BASE_DECLARE_FEATURE(kAimServerEligibilityIncludeClientLocale);
@@ -65,6 +73,9 @@ BASE_DECLARE_FEATURE(kAimServerEligibilityIncludeClientLocale);
 // Configures whether to include the client country in the AIM eligibility
 // request.
 BASE_DECLARE_FEATURE(kAimServerEligibilityIncludeClientCountry);
+
+// Configures whether to force client country to US and append gl=us.
+BASE_DECLARE_FEATURE(kAimEligibilityForceUsCountryCode);
 
 enum class AimServerEligibilityIncludeClientLocaleMode {
   kLegacyGet,

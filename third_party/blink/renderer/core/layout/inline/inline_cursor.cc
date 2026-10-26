@@ -5,9 +5,9 @@
 #include "third_party/blink/renderer/core/layout/inline/inline_cursor.h"
 
 #include <algorithm>
+#include <ranges>
 
 #include "base/compiler_specific.h"
-#include "base/containers/adapters.h"
 #include "base/containers/span.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/position_with_affinity.h"
@@ -23,6 +23,7 @@
 #include "third_party/blink/renderer/core/layout/layout_text_combine.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/paint/inline_paint_context.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 class HTMLBRElement;
@@ -32,7 +33,7 @@ namespace {
 bool IsBidiControl(StringView string) {
   // SAFETY: length of one implies first element valid.
   return string.length() == 1 &&
-         Character::IsBidiControl(UNSAFE_BUFFERS(string[0]));
+         unicode::IsBidiControl(UNSAFE_BUFFERS(string[0]));
 }
 
 LogicalRect ExpandedSelectionRectForSoftLineBreakIfNeeded(
@@ -301,7 +302,7 @@ bool InlineCursorPosition::HasSoftWrapToNextLine() const {
 }
 
 bool InlineCursorPosition::IsInlineLeaf() const {
-  if (IsHiddenForPaint()) {
+  if (IsHiddenDueToLayout()) {
     return false;
   }
   if (IsText()) {
@@ -457,8 +458,7 @@ InlineCursorPosition::InlineItemsFor(const LayoutText& layout_text) const {
   if (!items || items->empty()) [[unlikely]] {
     return {{}, false};
   }
-  if (UsesFirstLineStyle() &&
-      RuntimeEnabledFeatures::FirstLineTextTransformEnabled()) [[unlikely]] {
+  if (UsesFirstLineStyle()) [[unlikely]] {
     if (const LayoutBlockFlow* block_flow =
             layout_text.FragmentItemsContainer()) {
       if (const InlineNodeData* node_data = block_flow->GetInlineNodeData()) {
@@ -1096,8 +1096,8 @@ void InlineCursor::MoveToLastChild() {
 
 void InlineCursor::MoveToLastLine() {
   DCHECK(HasRoot());
-  auto iter = std::ranges::find(base::Reversed(items_), FragmentItem::kLine,
-                                &FragmentItem::Type);
+  auto iter = std::ranges::find(std::views::reverse(items_),
+                                FragmentItem::kLine, &FragmentItem::Type);
   if (iter != items_.rend())
     MoveToItem(std::next(iter).base());
   else
@@ -1121,16 +1121,16 @@ void InlineCursor::MoveToLastLogicalLeaf() {
 
 void InlineCursor::MoveToLastNonPseudoLeaf() {
   // TODO(yosin): We should introduce |IsTruncated()| to avoid to use
-  // |in_hidden_for_paint|. See also |LayoutText::GetTextBoxInfo()|.
+  // |is_hidden_due_to_layout|. See also |LayoutText::GetTextBoxInfo()|.
   // When "text-overflow:ellipsis" specified, items usually are:
-  //  [i+0] original non-truncated text (IsHiddenForPaint()=true)
+  //  [i+0] original non-truncated text (IsHiddenDueToLayout()=true)
   //  [i+1] truncated text
   //  [i+2] ellipsis (IsLayoutGeneratedText())
   // But this is also possible:
   //  [i+0] atomic inline box
   //  [i+1] ellipsis (IsLayoutGeneratedText())
   InlineCursor last_leaf;
-  bool in_hidden_for_paint = false;
+  bool is_hidden_due_to_layout = false;
   for (InlineCursor cursor = *this; cursor; cursor.MoveToNext()) {
     if (cursor.Current().IsLineBox())
       continue;
@@ -1148,11 +1148,11 @@ void InlineCursor::MoveToLastNonPseudoLeaf() {
         // |cursor| is at ellipsis.
         break;
       }
-      if (in_hidden_for_paint && !cursor.Current().IsHiddenForPaint()) {
+      if (is_hidden_due_to_layout && !cursor.Current().IsHiddenDueToLayout()) {
         // |cursor| is at truncated text.
         break;
       }
-      in_hidden_for_paint = cursor.Current().IsHiddenForPaint();
+      is_hidden_due_to_layout = cursor.Current().IsHiddenDueToLayout();
       // Exclude bidi control only fragment, e.g.
       // <p dir=ltr>&#x202B;xyz ABC.&#x202C;</p> has
       //  [0] "\u202Bxyz "
@@ -1554,8 +1554,14 @@ const LayoutObject* InlineCursor::CulledInlineTraversal::Find(
       return child;
 
     if (child->IsBox()) {
-      if (!child->IsFloatingOrOutOfFlowPositioned())
+      if (!child->IsFloatingOrOutOfFlowPositioned() &&
+          // Some objects are out of the IFC although they look like in-flow
+          // (`!IsFloatingOrOutOfFlowPositioned()`), such as ruby annotations or
+          // after block-in-inline splits.
+          (!RuntimeEnabledFeatures::InlineCursorSkipNonIfcEnabled() ||
+           child->IsInLayoutNGInlineFormattingContext())) {
         return child;
+      }
       child = child->NextInPreOrderAfterChildren(layout_inline_);
       continue;
     }

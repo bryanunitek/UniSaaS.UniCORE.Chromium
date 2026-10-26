@@ -34,6 +34,8 @@ FakeEditor = class {
     this.allowDeletes_ = false;
     /** @private {string} */
     this.uncommittedText_ = '';
+    /** @private {string} */
+    this.composition_ = '';
     /** @private {?Array<number>} */
     this.extraCells_ = [];
     port.postMessage = message => this.handleMessage_(message);
@@ -129,6 +131,14 @@ FakeEditor = class {
   }
 
   /**
+   * Asserts that the current composition (preedit) text is the given text.
+   * @param {string} text
+   */
+  assertCompositionIs(text) {
+    assertEquals(text, this.composition_);
+  }
+
+  /**
    * Asserts that the input handler has added 'extra cells' for uncommitted
    * text into the braille content.
    * @param {string} cells Cells as a space-separated list of numbers.
@@ -172,8 +182,18 @@ FakeEditor = class {
    * @private
    */
   callOnDisplayContentChanged_() {
-    const content =
-        this.createValue(this.text_, this.selectionStart_, this.selectionEnd_);
+    let content;
+    if (this.composition_) {
+      // Composition (preedit) text appears in the field value at the cursor,
+      // with the cursor placed at the end of the composition.
+      const fullText = this.text_.substring(0, this.selectionStart_) +
+          this.composition_ + this.text_.substring(this.selectionEnd_);
+      const cursor = this.selectionStart_ + this.composition_.length;
+      content = this.createValue(fullText, cursor, cursor);
+    } else {
+      content = this.createValue(
+          this.text_, this.selectionStart_, this.selectionEnd_);
+    }
     const grabExtraCells = () => {
       const span = content.getSpanInstanceOf(ExtraCellsSpan);
       assertNotEquals(null, span);
@@ -239,6 +259,17 @@ FakeEditor = class {
         this.insert(this.uncommittedText_);
         this.uncommittedText_ = '';
         break;
+      case 'setComposition':
+        assertTrue(typeof msg.text === 'string');
+        this.composition_ = msg.text;
+        this.callOnDisplayContentChanged_();
+        break;
+      case 'commitComposition': {
+        const composition = this.composition_;
+        this.composition_ = '';
+        this.insert(composition);
+        break;
+      }
       default:
         throw new Error('Unexpected message to IME: ' + JSON.stringify(msg));
     }
@@ -289,6 +320,21 @@ const CONTRACTED_TABLE = [
   ['^12$', 'but'],
   ['1456', 'this'],
 ].concat(UNCONTRACTED_TABLE);
+
+/**
+ * Mapping of braille cells to Japanese hiragana, used for testing
+ * kana-to-kanji conversion. The cell patterns are arbitrary and do not
+ * reflect real Japanese braille.
+ * @const
+ */
+const TENJI_TABLE = [
+  ['0', ' '],
+  ['1', 'あ'],
+  ['12', 'い'],
+  ['145', 'て'],
+  ['1345', 'ん'],
+  ['245', 'じ'],
+];
 
 /**
  * A fake braille translator that can do back translation according
@@ -362,6 +408,77 @@ FakeTranslator = class {
   }
 };
 
+/**
+ * Regular expression that matches trailing word separators (ASCII space or
+ * ideographic space) produced by a blank braille cell, which need to be
+ * trimmed before treating the remaining text as a reading to convert.
+ */
+const MOCK_TRAILING_SEPARATOR_RE = /[ 　]+$/;
+
+/**
+ * @return {boolean} Whether `text` contains at least one hiragana character.
+ */
+function mockContainsHiragana(text) {
+  return /[ぁ-ゖ]/.test(text);
+}
+
+/** @return {string} `text` with hiragana characters converted to katakana. */
+function mockHiraganaToKatakana(text) {
+  return text.replace(
+      /[ぁ-ゖ]/g, char => String.fromCharCode(char.charCodeAt(0) + 0x60));
+}
+
+/**
+ * A small dictionary of hiragana readings to kanji candidates, ordered by
+ * (assumed) frequency. Only intended to exercise the conversion UX in tests.
+ */
+const MOCK_DICTIONARY = {
+  'あい': ['愛', '藍', '相'],
+  'あめ': ['雨', '飴'],
+  'かみ': ['紙', '神', '髪'],
+  'かわ': ['川', '革', '皮'],
+  'きょう': ['今日', '京', '強'],
+  'こうえん': ['公園', '講演', '公演', '後援'],
+  'せいかく': ['性格', '正確'],
+  'てんじ': ['点字', '展示'],
+  'にほん': ['日本', '二本'],
+  'はし': ['橋', '箸', '端'],
+  'はな': ['花', '鼻'],
+  'わたし': ['私'],
+};
+
+/**
+ * A mock CompositionCandidateProvider, used in place of a real conversion
+ * engine in these tests. Backed by MOCK_DICTIONARY; in addition to the
+ * dictionary entries, the original hiragana and its katakana form are
+ * offered as candidates, mirroring what a real IME does.
+ */
+MockKanaKanjiProvider = class {
+  /**
+   * @param {string} input
+   * @return {!Promise<!Array<string>>}
+   */
+  async getCandidates(input) {
+    const kana = input.replace(MOCK_TRAILING_SEPARATOR_RE, '');
+    if (!mockContainsHiragana(kana)) {
+      return [];
+    }
+    const kanjiCandidates = MOCK_DICTIONARY[kana];
+    if (!kanjiCandidates) {
+      return [];
+    }
+    const candidates = [...kanjiCandidates];
+    if (!candidates.includes(kana)) {
+      candidates.push(kana);
+    }
+    const katakana = mockHiraganaToKatakana(kana);
+    if (!candidates.includes(katakana)) {
+      candidates.push(katakana);
+    }
+    return candidates;
+  }
+};
+
 
 /** @extends {BrailleTranslatorManager} */
 function FakeTranslatorManager() {}
@@ -379,6 +496,11 @@ FakeTranslatorManager.prototype = {
   /** @override */
   getUncontractedTranslator() {
     return this.uncontractedTranslator;
+  },
+
+  /** @override */
+  getExpandingTranslator() {
+    return null;
   },
 
   /** @override */
@@ -443,7 +565,28 @@ ChromeVoxBrailleInputHandlerTest = class extends ChromeVoxE2ETest {
     this.inputHandler = new BrailleInputHandler();
     this.uncontractedTranslator = new FakeTranslator(UNCONTRACTED_TABLE);
     this.contractedTranslator = new FakeTranslator(CONTRACTED_TABLE, true);
+    this.tenjiTranslator = new FakeTranslator(TENJI_TABLE);
+    // Japanese input is entered as IME composition text so that it can go
+    // through kana-to-kanji conversion before being committed.
+    this.tenjiTranslator.usesCompositionInput = true;
+    // Use the in-memory mock dictionary so conversion assertions are stable
+    // and don't depend on any bundled resource.
+    this.tenjiTranslator.getCompositionCandidateProvider = () =>
+        new MockKanaKanjiProvider();
     this.keyEvents = [];
+  }
+
+  /**
+   * Creates an editor set up for Japanese (tenji) input.
+   * @return {FakeEditor}
+   */
+  createTenjiEditor() {
+    BrailleTranslatorManager.instance.setTranslators(
+        this.tenjiTranslator, null);
+    const editor = this.createEditor();
+    editor.setActive(true);
+    editor.focus('text');
+    return editor;
   }
 
   /**
@@ -478,6 +621,19 @@ ChromeVoxBrailleInputHandlerTest = class extends ChromeVoxE2ETest {
     const event = {
       command: BrailleKeyCommand.STANDARD_KEY,
       standardKeyCode: keyCode,
+    };
+    return this.inputHandler.onBrailleKeyEvent(event);
+  }
+
+  /**
+   * Sends a braille pan command to the input handler.
+   * @param {string} direction 'left' or 'right'.
+   * @return {boolean} Whether the event was handled.
+   */
+  sendPan(direction) {
+    const event = {
+      command: direction === 'left' ? BrailleKeyCommand.PAN_LEFT :
+                                      BrailleKeyCommand.PAN_RIGHT,
     };
     return this.inputHandler.onBrailleKeyEvent(event);
   }
@@ -687,3 +843,201 @@ AX_TEST_F('ChromeVoxBrailleInputHandlerTest', 'KeysImeNotActive', function() {
   assertEqualsJSON(
       [{keyCode: KeyCode.RETURN}, {keyCode: KeyCode.UP}], this.keyEvents);
 });
+
+AX_TEST_F(
+    'ChromeVoxBrailleInputHandlerTest', 'KanaKanjiConversionUnknownWord',
+    async function() {
+      const editor = this.createTenjiEditor();
+
+      // 'いあ' is not in the mock dictionary, so the input commits as-is.
+      assertTrue(this.sendCells('12 1 0'));
+      await this.inputHandler.commitRequestForTest;
+      editor.assertCompositionIs('');
+      editor.assertContentIs('いあ ', 'いあ '.length);
+
+      // No conversion is active, but the blank cell still goes through
+      // requestCommit() (any translator with a provider does), which
+      // asynchronously fetches candidates for it before committing.
+      assertTrue(this.sendCells('0'));
+      await this.inputHandler.commitRequestForTest;
+      editor.assertContentIs('いあ  ', 'いあ  '.length);
+    });
+
+AX_TEST_F(
+    'ChromeVoxBrailleInputHandlerTest',
+    'ConversionQueuesCellsUntilMenuResolves', async function() {
+      // A cell typed while a conversion is pending -- candidates being
+      // fetched, or the user still choosing one in the Panel's menu -- is
+      // queued and replayed once that settles (see queuedCellsWhilePending_
+      // in maybeStartConversion_), rather than being dropped or misapplied
+      // to the entry state that's already been committed.
+      const editor = this.createTenjiEditor();
+      editor.setAllowDeletes(true);
+      let resolveOpen;
+      const savedOpen = CandidateMenuBackground.open;
+      CandidateMenuBackground.open = () => new Promise(resolve => {
+        resolveOpen = resolve;
+      });
+
+      try {
+        // A blank cell starts conversion, which stays pending until the
+        // menu resolves.
+        assertTrue(this.sendCells('145 1345 245 0'));
+
+        // Typed while pending: queued rather than applied immediately.
+        assertTrue(this.sendCells('0'));
+        editor.assertContentIs('', 0);
+
+        // Let the candidate fetch (a microtask, no real async work in the
+        // mock provider) resolve and reach CandidateMenuBackground.open,
+        // which is what assigns resolveOpen.
+        await Promise.resolve();
+        resolveOpen('点字');
+
+        // Accepting replaces the committed kana with the candidate, then
+        // the queued blank cell replays: with no kana ahead of it, it's
+        // just its own word separator, committed as a space like any
+        // standalone blank cell (see KanaKanjiConversionUnknownWord). Both
+        // settle by the time this first commitRequestForTest resolves, since
+        // the replay's own commit is chained off of it.
+        await this.inputHandler.commitRequestForTest;
+        editor.assertContentIs('点字 ', '点字 '.length);
+      } finally {
+        CandidateMenuBackground.open = savedOpen;
+      }
+    });
+
+AX_TEST_F(
+    'ChromeVoxBrailleInputHandlerTest', 'PanAlwaysPropagatesEvenWhilePending',
+    function() {
+      // Braille pan always propagates to its usual meaning (panning the
+      // display, or once panned through, moving to the next/previous
+      // automation object) regardless of whether a conversion is pending:
+      // currentRange already tracks the Panel's focused candidate item
+      // while the menu is open, so plain object navigation is enough to
+      // move through candidates without BrailleInputHandler needing to
+      // special-case pan.
+      try {
+        this.inputHandler['conversionPending_'] = false;
+        assertFalse(this.sendPan('left'));
+        assertFalse(this.sendPan('right'));
+
+        this.inputHandler['conversionPending_'] = true;
+        assertFalse(this.sendPan('left'));
+        assertFalse(this.sendPan('right'));
+      } finally {
+        this.inputHandler['conversionPending_'] = false;
+      }
+    });
+
+AX_TEST_F(
+    'ChromeVoxBrailleInputHandlerTest',
+    'PendingConversionSurvivesImeChurnFromMenuFocus', function() {
+      // Opening (and closing) the fullscreen candidate menu blurs and
+      // refocuses the underlying field, which the IME framework reports as
+      // if focus changed elsewhere: an 'inputContext' message, sometimes a
+      // 'reset' message, and (since the IME also reconnects its port
+      // periodically on its own) a port disconnect. None of these should
+      // cancel an in-progress conversion.
+      const editor = this.createEditor();
+      const sentinelEntryState = {};
+      try {
+        this.inputHandler['conversionPending_'] = true;
+        this.inputHandler['entryState_'] = sentinelEntryState;
+
+        editor.message_(
+            {type: 'inputContext', context: {type: 'text', contextID: 99}});
+        assertTrue(this.inputHandler['conversionPending_']);
+        assertEquals(sentinelEntryState, this.inputHandler['entryState_']);
+
+        editor.message_({type: 'reset'});
+        assertTrue(this.inputHandler['conversionPending_']);
+        assertEquals(sentinelEntryState, this.inputHandler['entryState_']);
+
+        this.port.onDisconnect.getListener()(this.port);
+        assertTrue(this.inputHandler['conversionPending_']);
+        assertEquals(sentinelEntryState, this.inputHandler['entryState_']);
+      } finally {
+        this.inputHandler['conversionPending_'] = false;
+        this.inputHandler['entryState_'] = null;
+      }
+    });
+
+AX_TEST_F(
+    'ChromeVoxBrailleInputHandlerTest',
+    'ImeChurnClearsEntryStateWhenNotPending', function() {
+      // Same messages as above, but without a conversion pending: this is
+      // the ordinary case (e.g. focus moving to a different field), where
+      // they should still clear the entry state as before.
+      const editor = this.createEditor();
+      const sentinelEntryState = {};
+      this.inputHandler['conversionPending_'] = false;
+      this.inputHandler['entryState_'] = sentinelEntryState;
+
+      editor.message_(
+          {type: 'inputContext', context: {type: 'text', contextID: 99}});
+      assertEquals(null, this.inputHandler['entryState_']);
+
+      this.inputHandler['entryState_'] = sentinelEntryState;
+      editor.message_({type: 'reset'});
+      assertEquals(null, this.inputHandler['entryState_']);
+
+      this.inputHandler['entryState_'] = sentinelEntryState;
+      this.port.onDisconnect.getListener()(this.port);
+      assertEquals(null, this.inputHandler['entryState_']);
+    });
+
+AX_TEST_F(
+    'ChromeVoxBrailleInputHandlerTest',
+    'ConversionCommitsKanaThenReplacesOnAccept', async function() {
+      // The kana is committed as ordinary text before
+      // the candidate menu opens, instead of staying as an active IME
+      // composition for as long as the menu is shown. An active
+      // composition gets special, platform-level treatment for Enter (it
+      // is committed immediately, before the key can ever reach the
+      // Panel's own key handling), which broke selecting a candidate with
+      // Enter -- it always committed the kana instead of the highlighted
+      // candidate. A selected candidate now replaces the already-committed
+      // kana via 'replaceText'. See maybeStartConversion_.
+      const editor = this.createTenjiEditor();
+      // Selecting a candidate now replaces the already-committed kana by
+      // deleting it and inserting the candidate (see 'replaceText' in
+      // maybeStartConversion_), so this editor must allow deletes.
+      editor.setAllowDeletes(true);
+      const savedOpen = CandidateMenuBackground.open;
+      CandidateMenuBackground.open = () => Promise.resolve('点字');
+
+      try {
+        assertTrue(this.sendCells('145 1345 245 0'));
+        await this.inputHandler.commitRequestForTest;
+        editor.assertCompositionIs('');
+        editor.assertContentIs('点字', '点字'.length);
+      } finally {
+        CandidateMenuBackground.open = savedOpen;
+      }
+    });
+
+AX_TEST_F(
+    'ChromeVoxBrailleInputHandlerTest',
+    'ConversionCancelLeavesCommittedKanaAsIs', async function() {
+      // Cancelling (CandidateMenuBackground.open resolving null) leaves
+      // the already-committed kana as ordinary text; there is nothing left
+      // to restore, since it was never left as an uncommitted composition.
+      // The trailing word-separator (from the blank cell that triggered
+      // conversion) is retained: in Tenji orthography, spaces between words
+      // (wakachigaki) are meaningful punctuation for kana text that isn't
+      // being converted to kanji, unlike the accept path, where the
+      // separator is consumed and replaced by the kanji candidate instead.
+      const editor = this.createTenjiEditor();
+      const savedOpen = CandidateMenuBackground.open;
+      CandidateMenuBackground.open = () => Promise.resolve(null);
+
+      try {
+        assertTrue(this.sendCells('145 1345 245 0'));
+        await this.inputHandler.commitRequestForTest;
+        editor.assertCompositionIs('');
+        editor.assertContentIs('てんじ ', 'てんじ '.length);
+      } finally {
+        CandidateMenuBackground.open = savedOpen;
+      }
+    });

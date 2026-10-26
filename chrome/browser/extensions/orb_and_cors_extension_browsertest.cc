@@ -17,10 +17,10 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/test_future.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
-#include "chrome/browser/extensions/api/permissions/permissions_api.h"
 #include "chrome/browser/extensions/api/tabs/tabs_api.h"
 #include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
@@ -29,13 +29,13 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/embedder_support/switches.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
@@ -48,13 +48,16 @@
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/service_worker_context_observer.h"
 #include "content/public/browser/shared_cors_origin_access_list.h"
+#include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id_util.h"
 #include "content/public/common/content_client.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/resource_load_observer.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/url_loader_interceptor.h"
+#include "extensions/browser/api/permissions/permissions_api.h"
 #include "extensions/browser/api_test_utils.h"
 #include "extensions/browser/browsertest_util.h"
 #include "extensions/browser/disable_reason.h"
@@ -73,6 +76,7 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/controllable_http_response.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/embedded_test_server/expectation_handler.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "services/network/public/cpp/cors/origin_access_list.h"
 #include "services/network/public/cpp/features.h"
@@ -81,6 +85,8 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -440,7 +446,7 @@ class OrbAndCorsExtensionBrowserTest : public OrbAndCorsExtensionTestBase {
   // Returns the body of the response.
   std::string FetchViaBackgroundPage(const GURL& url,
                                      const Extension* extension,
-                                     Browser* browser) {
+                                     BrowserWindowInterface* browser) {
     content::WebContents* background_web_contents =
         ProcessManager::Get(browser->GetProfile())
             ->GetBackgroundHostForExtension(extension->id())
@@ -1580,7 +1586,7 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
 
   // Open an incognito window.  (The incognito-specific background host for the
   // extension will be created after creating a window.)
-  Browser* incognito_browser = nullptr;
+  BrowserWindowInterface* incognito_browser = nullptr;
   {
     ExtensionTestMessageListener listener("Ready: incognito");
     incognito_browser = CreateIncognitoBrowser();
@@ -1774,9 +1780,10 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
   content::WebContents* incognito_contents = nullptr;
   {
     GURL http_test_page = GetTestPageUrl("fetch-initiator.com");
-    Browser* incognito_browser = OpenURLOffTheRecord(profile(), http_test_page);
+    BrowserWindowInterface* incognito_browser =
+        OpenURLOffTheRecord(profile(), http_test_page);
     incognito_contents =
-        incognito_browser->tab_strip_model()->GetActiveWebContents();
+        incognito_browser->GetTabStripModel()->GetActiveWebContents();
     ASSERT_EQ(http_test_page, incognito_contents->GetLastCommittedURL());
 
     // Open an extension *subframe*.  Spanning-mode extensions cannot load in
@@ -1876,10 +1883,11 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
   // window.
   GURL extension_page = extension->GetResourceURL("page.html");
   content::WebContents* regular_contents = active_web_contents();
-  Browser* incognito_browser = OpenURLOffTheRecord(profile(), extension_page);
+  BrowserWindowInterface* incognito_browser =
+      OpenURLOffTheRecord(profile(), extension_page);
   ASSERT_TRUE(NavigateToURL(regular_contents, extension_page));
   content::WebContents* incognito_contents =
-      incognito_browser->tab_strip_model()->GetActiveWebContents();
+      incognito_browser->GetTabStripModel()->GetActiveWebContents();
   ASSERT_EQ(extension->origin(),
             regular_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   ASSERT_EQ(
@@ -2134,7 +2142,7 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
     NavigateParams nav_params(
         browser(), web_ui_url,
         ui::PageTransitionFromInt(ui::PAGE_TRANSITION_GENERATED));
-    nav_params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    nav_params.disposition = WindowOpenDisposition::kNewForegroundTab;
     content::WebContentsAddedObserver new_web_contents_observer;
     Navigate(&nav_params);
 
@@ -2319,8 +2327,9 @@ using OriginHeaderExtensionBrowserTest = OrbAndCorsExtensionBrowserTest;
 IN_PROC_BROWSER_TEST_F(OriginHeaderExtensionBrowserTest,
                        OriginHeaderInCrossOriginGetRequest) {
   const char kResourcePath[] = "/simulated-resource";
-  net::test_server::ControllableHttpResponse http_request(
-      embedded_test_server(), kResourcePath);
+  net::test_server::ExpectationHandler handler(embedded_test_server());
+  base::test::TestFuture<net::test_server::HttpRequest> request_future;
+  handler.OnRequest(kResourcePath).RespondWith().SetValue(request_future);
   ASSERT_TRUE(embedded_test_server()->Start());
   ASSERT_TRUE(InstallExtension());
 
@@ -2349,9 +2358,9 @@ IN_PROC_BROWSER_TEST_F(OriginHeaderExtensionBrowserTest,
       content::JsReplace(kScriptTemplate, cross_site_resource));
 
   // Extract the Origin header.
-  http_request.WaitForRequest();
+  const net::test_server::HttpRequest& captured_request = request_future.Get();
   std::string actual_origin_header = "<none>";
-  const auto& headers_map = http_request.http_request()->headers;
+  const auto& headers_map = captured_request.headers;
   auto it = headers_map.find("Origin");
   if (it != headers_map.end()) {
     actual_origin_header = it->second;
@@ -2752,7 +2761,7 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
   constexpr char kActiveTabHost[] = "active-tab.example";
   GURL original_document_url =
       embedded_test_server()->GetURL(kActiveTabHost, "/title1.html");
-  Browser* incognito_browser =
+  BrowserWindowInterface* incognito_browser =
       OpenURLOffTheRecord(profile(), original_document_url);
 
   // CORS exception shouldn't be initially granted based on ActiveTab.
@@ -2778,7 +2787,7 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
   // extension access to the tab's origin, but only in the incognito profile
   // (since the extension uses "split" mode).
   ExtensionActionRunner::GetForWebContents(
-      incognito_browser->tab_strip_model()->GetActiveWebContents())
+      incognito_browser->GetTabStripModel()->GetActiveWebContents())
       ->RunAction(extension, true);
   {
     SCOPED_TRACE("TEST STEP 2: After granting ActiveTab access.");
@@ -2862,7 +2871,7 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
       embedded_test_server()->GetURL(kRegularHost, "/title2.html");
   GURL regular_resource_url =
       embedded_test_server()->GetURL(kRegularHost, "/nosniff.xml");
-  Browser* incognito_browser =
+  BrowserWindowInterface* incognito_browser =
       OpenURLOffTheRecord(profile(), incognito_page_url);
   ASSERT_TRUE(NavigateToURL(active_web_contents(), regular_page_url));
 
@@ -2888,7 +2897,7 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
   // extension access to the tab's origin, but only in the incognito profile
   // (since the extension uses "split" mode).
   ExtensionActionRunner::GetForWebContents(
-      incognito_browser->tab_strip_model()->GetActiveWebContents())
+      incognito_browser->GetTabStripModel()->GetActiveWebContents())
       ->RunAction(extension, true);
   {
     SCOPED_TRACE("TEST STEP 2: After granting 'incognito' ActiveTab access.");
@@ -2939,7 +2948,7 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
   // still have no access to the `kIncognitoHost` (or, hopefully, the potential
   // leaks of permissions from the previous steps should be fixed/recovered-from
   // at this point).
-  incognito_browser->tab_strip_model()->GetActiveWebContents()->Close();
+  incognito_browser->GetTabStripModel()->GetActiveWebContents()->Close();
   {
     SCOPED_TRACE("TEST STEP 4: After closing the incognito tab.");
     {
@@ -2986,7 +2995,7 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
   constexpr char kActiveTabHost[] = "active-tab.example";
   GURL original_document_url =
       embedded_test_server()->GetURL(kActiveTabHost, "/title1.html");
-  Browser* incognito_browser =
+  BrowserWindowInterface* incognito_browser =
       OpenURLOffTheRecord(profile(), original_document_url);
 
   // CORS exception shouldn't be initially granted based on ActiveTab.
@@ -3005,7 +3014,7 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
   // Granting ActiveTab permission in the incognito window should give the
   // extension access to the tab's origin.
   ExtensionActionRunner::GetForWebContents(
-      incognito_browser->tab_strip_model()->GetActiveWebContents())
+      incognito_browser->GetTabStripModel()->GetActiveWebContents())
       ->RunAction(extension, true);
   {
     SCOPED_TRACE("TEST STEP 2: After granting ActiveTab access.");
@@ -3062,7 +3071,7 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
     NavigateParams nav_params(
         browser(), extension_resource,
         ui::PageTransitionFromInt(ui::PAGE_TRANSITION_GENERATED));
-    nav_params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    nav_params.disposition = WindowOpenDisposition::kNewForegroundTab;
     content::WebContentsAddedObserver new_web_contents_observer;
     Navigate(&nav_params);
     extension_web_contents = new_web_contents_observer.GetWebContents();
@@ -3104,6 +3113,75 @@ IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
 
   // 6b. Verify that ORB blocked the last response.
   VerifyFetchWasBlockedByOrb(other_url);
+}
+
+// Tests that process-isolated sandboxed frames do not receive extension factory
+// privileges (defense-in-depth against a compromised renderer).
+IN_PROC_BROWSER_TEST_F(OrbAndCorsExtensionBrowserTest,
+                       FromProcessIsolatedSandboxedPage_FactoryParams) {
+  static constexpr char kManifest[] =
+      R"({
+           "name": "Sandboxed Page Factory Params Test",
+           "version": "1.0",
+           "manifest_version": 3,
+           "sandbox": {
+             "pages": [ "sandboxed.html" ]
+           }
+         })";
+  dir_.WriteManifest(kManifest);
+  dir_.WriteFile(FILE_PATH_LITERAL("sandboxed.html"), "<html>Sandboxed</html>");
+  dir_.WriteFile(FILE_PATH_LITERAL("page.html"),
+                 "<html><iframe src=\"sandboxed.html\"></iframe></html>");
+  const Extension* extension = LoadExtension(dir_.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  ASSERT_TRUE(NavigateToURL(active_web_contents(),
+                            extension->GetResourceURL("page.html")));
+  content::RenderFrameHost* main_frame =
+      active_web_contents()->GetPrimaryMainFrame();
+  content::RenderFrameHost* sandboxed_frame =
+      content::ChildFrameAt(main_frame, 0);
+  ASSERT_TRUE(sandboxed_frame);
+
+  // Test factory parameters for the main extension frame.
+  network::mojom::URLLoaderFactoryParamsPtr main_frame_params =
+      network::mojom::URLLoaderFactoryParams::New();
+  main_frame_params->process_id =
+      content::ToOriginatingProcessId(main_frame->GetProcess()->GetID());
+  main_frame_params->is_trusted = false;
+  main_frame_params->unsafe_non_webby_initiator = false;
+
+  extensions::URLLoaderFactoryManager::OverrideURLLoaderFactoryParams(
+      active_web_contents()->GetBrowserContext(),
+      main_frame->GetLastCommittedOrigin(),
+      /*is_for_isolated_world=*/false,
+      /*is_for_service_worker=*/false, main_frame_params.get());
+
+  EXPECT_TRUE(main_frame_params->unsafe_non_webby_initiator);
+
+  // Test factory parameters for the manifest-sandboxed subframe.
+  network::mojom::URLLoaderFactoryParamsPtr sandboxed_params =
+      network::mojom::URLLoaderFactoryParams::New();
+  sandboxed_params->process_id =
+      content::ToOriginatingProcessId(sandboxed_frame->GetProcess()->GetID());
+  sandboxed_params->is_trusted = false;
+  sandboxed_params->unsafe_non_webby_initiator = false;
+
+  extensions::URLLoaderFactoryManager::OverrideURLLoaderFactoryParams(
+      active_web_contents()->GetBrowserContext(),
+      sandboxed_frame->GetLastCommittedOrigin(),
+      /*is_for_isolated_world=*/false,
+      /*is_for_service_worker=*/false, sandboxed_params.get());
+
+  // Under Site Isolation, verify the frame lacks extension factory privileges.
+  // Without isolation, the frame shares the process and inherits privileges.
+  if (content::SiteIsolationPolicy::AreIsolatedSandboxedIframesEnabled()) {
+    EXPECT_NE(main_frame->GetProcess(), sandboxed_frame->GetProcess());
+    EXPECT_FALSE(sandboxed_params->unsafe_non_webby_initiator);
+  } else {
+    EXPECT_EQ(main_frame->GetProcess(), sandboxed_frame->GetProcess());
+    EXPECT_TRUE(sandboxed_params->unsafe_non_webby_initiator);
+  }
 }
 
 }  // namespace extensions

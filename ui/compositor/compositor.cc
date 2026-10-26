@@ -17,6 +17,7 @@
 #include "base/dcheck_is_on.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/numerics/ranges.h"
 #include "base/observer_list.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/strings/string_number_conversions.h"
@@ -62,14 +63,14 @@
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator_collection.h"
 #include "ui/compositor/overscroll/scroll_input_handler.h"
+#include "ui/display/display.h"
 #include "ui/display/display_switches.h"
+#include "ui/display/screen.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/skia_conversions.h"
-#include "ui/gfx/icc_profile.h"
 #include "ui/gfx/presentation_feedback.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/gfx/switches.h"
-#include "ui/gl/gl_switches.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/time/time.h"
@@ -80,9 +81,8 @@ namespace ui {
 #if !BUILDFLAG(IS_IOS)
 Compositor::PendingBeginFrameArgs::PendingBeginFrameArgs(
     const viz::BeginFrameArgs& args,
-    bool force,
     base::OnceCallback<void(const viz::BeginFrameAck&)> callback)
-    : args(args), force(force), callback(std::move(callback)) {}
+    : args(args), callback(std::move(callback)) {}
 
 Compositor::PendingBeginFrameArgs::~PendingBeginFrameArgs() = default;
 #endif
@@ -92,14 +92,12 @@ Compositor::Compositor(const viz::FrameSinkId& frame_sink_id,
                        scoped_refptr<base::SingleThreadTaskRunner> task_runner,
                        bool enable_pixel_canvas,
                        bool use_external_begin_frame_control,
-                       bool force_software_compositor,
                        bool enable_compositing_based_throttling,
                        size_t memory_limit_when_visible_mb)
     : context_factory_(context_factory),
       frame_sink_id_(frame_sink_id),
       task_runner_(task_runner),
       use_external_begin_frame_control_(use_external_begin_frame_control),
-      force_software_compositor_(force_software_compositor),
       layer_animator_collection_(this),
       is_pixel_canvas_(enable_pixel_canvas),
       lock_manager_(task_runner) {
@@ -175,13 +173,11 @@ Compositor::Compositor(const viz::FrameSinkId& frame_sink_id,
   settings.initial_debug_state.SetRecordRenderingStats(
       command_line->HasSwitch(switches::kEnableGpuBenchmarking));
 
-  settings.use_zero_copy = IsUIZeroCopyEnabled() && !features::IsUsingRawDraw();
+  settings.use_zero_copy = IsUIZeroCopyEnabled();
 
   // UI compositor always uses partial raster if not using zero-copy. Zero copy
   // doesn't currently support partial raster.
-  // RawDraw doesn't support partial raster.
-  settings.use_partial_raster =
-      !(settings.use_zero_copy || features::IsUsingRawDraw());
+  settings.use_partial_raster = !settings.use_zero_copy;
 
   settings.prefer_rgba_4444 =
       command_line->HasSwitch(switches::kUIEnableRGBA4444Textures);
@@ -202,12 +198,6 @@ Compositor::Compositor(const viz::FrameSinkId& frame_sink_id,
   settings.use_gpu_memory_buffer_resources =
       features::IsDelegatedCompositingEnabled();
 #endif
-
-  // Set use_gpu_memory_buffer_resources to false to disable delegated
-  // compositing, if RawDraw is enabled.
-  if (settings.use_gpu_memory_buffer_resources && features::IsUsingRawDraw()) {
-    settings.use_gpu_memory_buffer_resources = false;
-  }
 
   settings.memory_policy.bytes_limit_when_visible =
       (memory_limit_when_visible_mb > 0 ? memory_limit_when_visible_mb : 512) *
@@ -367,7 +357,9 @@ void Compositor::SetLayerTreeFrameSink(
   // to match the Compositor's.
   if (display_private_) {
     display_private_->Resize(size());
-    display_private_->SetDisplayVisible(host_->IsVisible());
+    display_private_->SetDisplayVisible(
+        host_->IsVisible() ? viz::mojom::DisplayVisibility::kVisible
+                           : viz::mojom::DisplayVisibility::kInvisible);
     display_private_->SetDisplayColorSpaces(display_color_spaces_);
     display_private_->SetDisplayColorMatrix(
         gfx::SkM44ToTransform(display_color_matrix_));
@@ -399,7 +391,7 @@ void Compositor::SetExternalBeginFrameController(
         *pending_begin_frame_args_);
 #else
     external_begin_frame_controller_->IssueExternalBeginFrame(
-        pending_begin_frame_args_->args, pending_begin_frame_args_->force,
+        pending_begin_frame_args_->args,
         std::move(pending_begin_frame_args_->callback));
 #endif
     pending_begin_frame_args_.reset();
@@ -560,6 +552,20 @@ int64_t Compositor::display_id() const {
   return display_id_;
 }
 
+void Compositor::UpdateRefreshRate(float refresh_rate) {
+  if (refresh_rate <= 0 ||
+      base::IsApproximatelyEqual(refresh_rate_, refresh_rate,
+                                 display::Display::kRefreshRateEpsilon)) {
+    return;
+  }
+
+  refresh_rate_ = refresh_rate;
+
+  if (display_private_) {
+    display_private_->UpdateRefreshRate(refresh_rate);
+  }
+}
+
 #endif
 
 void Compositor::SetDisplayTransformHint(gfx::OverlayTransform hint) {
@@ -592,8 +598,11 @@ void Compositor::SetVisible(bool visible) {
   // Visibility is reset when the output surface is lost, so this must also be
   // updated then. We need to call this even if the visibility hasn't changed,
   // for the same reason.
-  if (display_private_)
-    display_private_->SetDisplayVisible(visible);
+  if (display_private_) {
+    display_private_->SetDisplayVisible(
+        visible ? viz::mojom::DisplayVisibility::kVisible
+                : viz::mojom::DisplayVisibility::kInvisible);
+  }
 
   if (changed) {
     observer_list_.Notify(&CompositorObserver::OnCompositorVisibilityChanged,
@@ -754,17 +763,17 @@ void Compositor::IssueExternalBeginFrameNoAck(const viz::BeginFrameArgs& args) {
 #else
 void Compositor::IssueExternalBeginFrame(
     const viz::BeginFrameArgs& args,
-    bool force,
     base::OnceCallback<void(const viz::BeginFrameAck&)> callback) {
   if (!external_begin_frame_controller_) {
-    // IssueExternalBeginFrame() shouldn't be called again before the previous
-    // begin frame is acknowledged.
-    DCHECK(!pending_begin_frame_args_);
-    pending_begin_frame_args_.emplace(args, force, std::move(callback));
+    // When wait_for_all_frame_sinks() is false, IssueExternalBeginFrame()
+    // shouldn't be called again before the previous begin frame is
+    // acknowledged.
+    DCHECK(!pending_begin_frame_args_ || !wait_for_all_frame_sinks());
+    pending_begin_frame_args_.emplace(args, std::move(callback));
     return;
   }
   external_begin_frame_controller_->IssueExternalBeginFrame(
-      args, force, std::move(callback));
+      args, std::move(callback));
 }
 #endif
 

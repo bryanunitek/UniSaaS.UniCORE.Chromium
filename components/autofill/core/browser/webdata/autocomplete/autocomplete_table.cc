@@ -19,9 +19,10 @@
 #include "base/i18n/case_conversion.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/time/time.h"
+#include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry.h"
 #include "components/autofill/core/browser/webdata/autofill_change.h"
-#include "components/autofill/core/browser/webdata/autofill_table_utils.h"
+#include "components/autofill/core/browser/webdata/autofill_table_util.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_constants.h"
 #include "components/autofill/core/common/form_field_data.h"
@@ -310,8 +311,8 @@ bool AutocompleteTable::RemoveFormElement(const std::u16string& name,
   return s.Run();
 }
 
-int AutocompleteTable::GetCountOfValuesContainedBetween(base::Time begin,
-                                                        base::Time end) {
+int64_t AutocompleteTable::GetCountOfValuesContainedBetween(base::Time begin,
+                                                            base::Time end) {
   const time_t begin_time_t = begin.ToTimeT();
   const time_t end_time_t = GetEndTime(end);
 
@@ -329,7 +330,7 @@ int AutocompleteTable::GetCountOfValuesContainedBetween(base::Time begin,
     // This might happen in case of I/O errors. See crbug.com/332263206.
     return 0;
   }
-  return s.ColumnInt(0);
+  return s.ColumnInt64(0);
 }
 
 bool AutocompleteTable::GetAllAutocompleteEntries(
@@ -348,6 +349,21 @@ bool AutocompleteTable::GetAllAutocompleteEntries(
   }
 
   return s.Succeeded();
+}
+
+AutocompleteTableStats AutocompleteTable::GetTableStats() const {
+  AutocompleteTableStats stats;
+  sql::Statement s(
+      db()->GetUniqueStatement("SELECT "
+                               "  COUNT(*), "
+                               "  COUNT(CASE WHEN count > 1 THEN 1 END) "
+                               "FROM autofill"));
+  if (s.Step()) {
+    stats.total_entries = base::checked_cast<size_t>(s.ColumnInt64(0));
+    stats.entries_with_label = 0;
+    stats.entries_reused = base::checked_cast<size_t>(s.ColumnInt64(1));
+  }
+  return stats;
 }
 
 std::optional<AutocompleteEntry> AutocompleteTable::GetAutocompleteEntry(

@@ -6,12 +6,14 @@ import 'chrome://customize-chrome-side-panel.top-chrome/shared/sp_heading.js';
 import 'chrome://resources/cr_elements/cr_auto_img/cr_auto_img.js';
 import 'chrome://resources/cr_elements/cr_grid/cr_grid.js';
 import 'chrome://resources/cr_elements/cr_toggle/cr_toggle.js';
+import 'chrome://resources/cr_elements/cr_tooltip/cr_tooltip.js';
 import './check_mark_wrapper.js';
 import '/strings.m.js';
 
 import type {SpHeadingElement} from 'chrome://customize-chrome-side-panel.top-chrome/shared/sp_heading.js';
 import {HelpBubbleMixinLit} from 'chrome://resources/cr_components/help_bubble/help_bubble_mixin_lit.js';
 import type {CrToggleElement} from 'chrome://resources/cr_elements/cr_toggle/cr_toggle.js';
+import type {CrTooltipElement} from 'chrome://resources/cr_elements/cr_tooltip/cr_tooltip.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {FocusOutlineManager} from 'chrome://resources/js/focus_outline_manager.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -19,8 +21,8 @@ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {CustomizeChromeAction, NtpImageType, recordCustomizeChromeAction, recordCustomizeChromeImageError} from './common.js';
-import type {BackgroundCollection, CollectionImage, Theme} from './customize_chrome.mojom-webui.js';
-import {CustomizeChromeApiProxy} from './customize_chrome_api_proxy.js';
+import type {BackgroundCollection, BrowserProxy, CollectionImage, Theme} from './customize_chrome.mojom-webui.js';
+import {browserProxyFactory} from './customize_chrome.mojom-webui.js';
 import {getCss} from './themes.css.js';
 import {getHtml} from './themes.html.js';
 import {WindowProxy} from './window_proxy.js';
@@ -36,6 +38,7 @@ export interface ThemesElement {
   $: {
     refreshDailyToggle: CrToggleElement,
     heading: SpHeadingElement,
+    themeTooltip: CrTooltipElement,
   };
 }
 
@@ -72,8 +75,7 @@ export class ThemesElement extends ThemesElementBase {
   private accessor theme_: Theme|undefined;
   protected accessor themes_: CollectionImage[] = [];
 
-  private apiProxy_: CustomizeChromeApiProxy =
-      CustomizeChromeApiProxy.getInstance();
+  private apiProxy_: BrowserProxy = browserProxyFactory.getInstance();
   private previewImageLoadStartEpoch_: number = -1;
   private setThemeListenerId_: number|null = null;
 
@@ -222,6 +224,25 @@ export class ThemesElement extends ThemesElementBase {
         !!this.theme_.backgroundImage &&
         this.theme_?.backgroundImage.url === url &&
         !this.isRefreshToggleChecked_;
+  }
+
+  protected onThemeFocus_(e: Event) {
+    if (!(e.target as HTMLElement).matches(':focus-visible')) {
+      return;
+    }
+    const tile = e.currentTarget as HTMLElement;
+    const index = Number(tile.dataset['index']);
+    const theme = this.themes_[index];
+    if (!theme) {
+      return;
+    }
+    this.$.themeTooltip.textContent = theme.attribution1;
+    this.$.themeTooltip.target = tile;
+    this.$.themeTooltip.show();
+  }
+
+  protected onThemeBlur_() {
+    this.$.themeTooltip.hide();
   }
 }
 

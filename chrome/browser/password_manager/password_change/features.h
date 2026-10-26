@@ -9,18 +9,14 @@
 
 namespace password_change::features {
 
-// Controls whether ChangePasswordFormWaiter checks if the new password field
-// is enabled and not readonly before considering a form a valid change
-// password form.
-BASE_DECLARE_FEATURE(kCheckFieldEnabledInChangePasswordFormWaiter);
+// All features in alphabetical order.
 
-// Controls whether ChromePasswordChangeService::GetGeneralAvailability skips
-// the check for ShouldModelExecutionBeAllowedForUser.
-BASE_DECLARE_FEATURE(kSkipModelExecutionAllowedCheckForPasswordChange);
+// Controls whether PasswordChangeDelegateImpl uses Glic for password change.
+BASE_DECLARE_FEATURE(kPasswordChangeWithGlic);
 
-// Controls whether the ModelQualityLogsUploader should log password change
-// forms.
-BASE_DECLARE_FEATURE(kRecordDiscardedFormsToModelQualityLogs);
+// Controls whether LOGIN_CHECK is executed before offering APC using Private
+// Inference.
+BASE_DECLARE_FEATURE(kPasswordChangeWithPrivateInferenceLoginCheck);
 
 }  // namespace password_change::features
 

@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/webui/top_chrome/preload_context.h"
 
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 
@@ -20,11 +20,12 @@ IN_PROC_BROWSER_TEST_F(PreloadContextTest, Basic) {
   EXPECT_EQ(brower_context.GetBrowser(), browser());
   EXPECT_EQ(brower_context.GetProfile(), nullptr);
 
-  PreloadContext profile_context = PreloadContext::From(browser()->profile());
+  PreloadContext profile_context =
+      PreloadContext::From(browser()->GetProfile());
   EXPECT_FALSE(profile_context.IsBrowser());
   EXPECT_TRUE(profile_context.IsProfile());
   EXPECT_EQ(profile_context.GetBrowser(), nullptr);
-  EXPECT_EQ(profile_context.GetProfile(), browser()->profile());
+  EXPECT_EQ(profile_context.GetProfile(), browser()->GetProfile());
 }
 
 }  // namespace webui

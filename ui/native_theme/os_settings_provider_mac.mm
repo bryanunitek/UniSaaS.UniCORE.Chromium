@@ -9,7 +9,9 @@
 
 #include <optional>
 
+#include "base/feature_list.h"
 #include "ui/base/cocoa/defaults_utils.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/native_theme/os_settings_provider_mac.h"
 
@@ -51,11 +53,13 @@ namespace ui {
 struct OsSettingsProviderMac::ObjCMembers {
   id __strong non_blinking_cursor_token;
   id __strong display_accessibility_notification_token;
+  id __strong scroller_style_notification_token;
+  id __strong system_colors_notification_token;
   EffectiveAppearanceObserver* __strong appearance_observer;
 };
 
-OsSettingsProviderMac::OsSettingsProviderMac()
-    : OsSettingsProvider(PriorityLevel::kProduction) {
+OsSettingsProviderMac::OsSettingsProviderMac(PriorityLevel priority_level)
+    : OsSettingsProvider(priority_level) {
   objc_members_ = std::make_unique<ObjCMembers>();
 
   __block auto provider = this;
@@ -81,6 +85,27 @@ OsSettingsProviderMac::OsSettingsProviderMac()
                     provider->NotifyOnSettingsChanged();
                   }];
 
+  objc_members_->scroller_style_notification_token =
+      [[NSNotificationCenter defaultCenter]
+          addObserverForName:NSPreferredScrollerStyleDidChangeNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification* notification) {
+                    provider->NotifyOnSettingsChanged();
+                  }];
+
+  objc_members_->system_colors_notification_token =
+      [[NSNotificationCenter defaultCenter]
+          addObserverForName:NSSystemColorsDidChangeNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification* notification) {
+                    if (base::FeatureList::IsEnabled(
+                            features::kThemeChangeOptimization)) {
+                      provider->NotifyOnSettingsChanged(/*force_notify=*/true);
+                    }
+                  }];
+
   objc_members_->appearance_observer =
       [[EffectiveAppearanceObserver alloc] initWithHandler:^{
         provider->NotifyOnSettingsChanged();
@@ -88,8 +113,12 @@ OsSettingsProviderMac::OsSettingsProviderMac()
 }
 
 OsSettingsProviderMac::~OsSettingsProviderMac() {
-  [NSNotificationCenter.defaultCenter
+  [NSWorkspace.sharedWorkspace.notificationCenter
       removeObserver:objc_members_->display_accessibility_notification_token];
+  [NSNotificationCenter.defaultCenter
+      removeObserver:objc_members_->scroller_style_notification_token];
+  [NSNotificationCenter.defaultCenter
+      removeObserver:objc_members_->system_colors_notification_token];
   if (@available(macOS 15.0, *)) {
     [NSNotificationCenter.defaultCenter
         removeObserver:objc_members_->non_blinking_cursor_token];
@@ -121,6 +150,10 @@ bool OsSettingsProviderMac::PrefersReducedTransparency() const {
 
 bool OsSettingsProviderMac::PrefersInvertedColors() const {
   return NSWorkspace.sharedWorkspace.accessibilityDisplayShouldInvertColors;
+}
+
+bool OsSettingsProviderMac::PrefersOverlayScrollbars() const {
+  return [NSScroller preferredScrollerStyle] == NSScrollerStyleOverlay;
 }
 
 base::TimeDelta OsSettingsProviderMac::CaretBlinkInterval() const {

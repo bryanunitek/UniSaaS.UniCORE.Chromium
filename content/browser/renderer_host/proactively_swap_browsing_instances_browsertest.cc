@@ -12,6 +12,7 @@
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/content_navigation_policy.h"
+#include "content/public/browser/site_instance_process_assignment.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
@@ -20,7 +21,6 @@
 #include "content/public/test/content_browser_test_content_browser_client.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/content_mock_cert_verifier.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/test_frame_navigation_observer.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/shell/browser/shell.h"
@@ -479,7 +479,7 @@ IN_PROC_BROWSER_TEST_P(
       SiteInstanceImpl::CreateForTesting(web_contents->GetBrowserContext(),
                                          b_url);
   RenderProcessHost* process_for_b =
-      RenderProcessHostImpl::CreateRenderProcessHost(
+      RenderProcessHostImpl::CreateRenderProcessHostForTesting(
           web_contents->GetBrowserContext(), placeholder_b_site_instance.get());
   RenderProcessHostImpl::RegisterSoleProcessHostForSite(
       process_for_b, placeholder_b_site_instance.get());
@@ -609,6 +609,8 @@ IN_PROC_BROWSER_TEST_P(ProactivelySwapBrowsingInstancesTest,
   // but have the same renderer process.
   EXPECT_FALSE(site_instance_1->IsRelatedSiteInstance(site_instance_2.get()));
   EXPECT_EQ(site_instance_1->GetProcess(), site_instance_2->GetProcess());
+  EXPECT_EQ(SiteInstanceProcessAssignment::REUSED_EXISTING_PROCESS,
+            site_instance_2->GetLastProcessAssignmentOutcome());
 }
 
 IN_PROC_BROWSER_TEST_P(ProactivelySwapBrowsingInstancesTest,
@@ -1483,6 +1485,8 @@ IN_PROC_BROWSER_TEST_P(ProactivelySwapBrowsingInstancesTest,
   // process.
   EXPECT_FALSE(site_instance_1->IsRelatedSiteInstance(site_instance_2.get()));
   EXPECT_EQ(site_instance_1->GetProcess(), site_instance_2->GetProcess());
+  EXPECT_EQ(SiteInstanceProcessAssignment::REUSED_EXISTING_PROCESS,
+            site_instance_2->GetLastProcessAssignmentOutcome());
 }
 
 // Tests that pagehide handlers of the old RFH are run during the commit
@@ -1956,12 +1960,7 @@ class ProactivelySwapBrowsingInstancesOptOutTest
     return child;
   }
 
-  test::FencedFrameTestHelper& fenced_frame_test_helper() {
-    return fenced_frame_test_helper_;
-  }
-
  private:
-  test::FencedFrameTestHelper fenced_frame_test_helper_;
   base::test::ScopedFeatureList feature_list_;
 };
 
@@ -2149,25 +2148,6 @@ IN_PROC_BROWSER_TEST_P(ProactivelySwapBrowsingInstancesOptOutTest,
         CreateAnchorAndNavigate(shell()->web_contents()->GetPrimaryMainFrame(),
                                 next_url,
                                 /*target_name=*/"", /*rel=*/"opener");
-      },
-      /*expect_opt_out_applies=*/false);
-}
-
-IN_PROC_BROWSER_TEST_P(ProactivelySwapBrowsingInstancesOptOutTest,
-                       CannotOptOutFromFencedFrame) {
-  // _unfencedTop navigations force a browsing instance swap, which should take
-  // priority over the requested opt out.
-  RunOptOutTest(
-      [this]() {
-        const GURL fenced_frame_url(
-            embedded_test_server()->GetURL("/fenced_frames/title0.html"));
-        const GURL next_url(embedded_test_server()->GetURL("/title2.html"));
-        RenderFrameHost* ff_rfh = fenced_frame_test_helper().CreateFencedFrame(
-            shell()->web_contents()->GetPrimaryMainFrame(), fenced_frame_url,
-            net::OK, blink::FencedFrame::DeprecatedFencedFrameMode::kOpaqueAds);
-        CreateAnchorAndNavigate(ff_rfh, next_url,
-                                /*target_name=*/"_unfencedTop",
-                                /*rel=*/"opener");
       },
       /*expect_opt_out_applies=*/false);
 }

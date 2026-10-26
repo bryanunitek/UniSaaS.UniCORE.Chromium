@@ -4,14 +4,13 @@
 
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_closer.h"
 
-#include "base/feature_list.h"
 #include "base/logging.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
-#include "chrome/browser/ui/view_ids.h"
+#include "chrome/browser/ui/omnibox/omnibox_popup_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
-#include "ui/views/view.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.h"
 
 namespace omnibox {
 
@@ -42,8 +41,16 @@ std::string CloseReasonToString(omnibox::PopupCloseReason reason) {
 
 }  // namespace
 
-OmniboxPopupCloser::OmniboxPopupCloser(BrowserView* browser_view)
-    : browser_view_(browser_view) {
+DEFINE_USER_DATA(OmniboxPopupCloser);
+
+// static
+OmniboxPopupCloser* OmniboxPopupCloser::From(BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
+
+OmniboxPopupCloser::OmniboxPopupCloser(BrowserView* browser_view,
+                                       ui::UnownedUserDataHost& host)
+    : browser_view_(browser_view), scoped_unowned_user_data_(host, *this) {
   // Observe UI events on `BrowserView`.
   browser_view_observation_.Observe(browser_view_);
 }
@@ -65,6 +72,17 @@ void OmniboxPopupCloser::CloseWithReason(PopupCloseReason reason) {
   VLOG(1) << "Closing omnibox popup with reason: "
           << CloseReasonToString(reason);
   auto* location_bar = browser_view_->GetLocationBar();
+  auto* popup_view = location_bar->GetOmniboxPopupView();
+  if (popup_view) {
+    if (auto* presenter = popup_view->presenter()) {
+      // Note: ESC key notifications (`PopupCloseReason::kEscapeKeyPressed`)
+      // are handled via `OmniboxPopupWebUIBaseContent::OnPreHandleEscapeKey()`.
+      if (presenter->has_active_blockers() ||
+          presenter->IsPermissionPromptPreventingClose()) {
+        return;
+      }
+    }
+  }
   // Clearing the autocomplete results closes the popup.
   location_bar->GetOmniboxController()->StopAutocomplete(
       /*clear_result=*/true);

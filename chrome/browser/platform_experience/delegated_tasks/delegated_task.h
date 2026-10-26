@@ -14,6 +14,7 @@
 namespace platform_experience {
 
 // Outcome status of executing a delegated task.
+// LINT.IfChange(DelegatedTaskStatus)
 enum class DelegatedTaskStatus {
   kSuccess = 0,
   kPehNotFound = 1,
@@ -23,12 +24,24 @@ enum class DelegatedTaskStatus {
   kWatchProcessHandleFailure = 5,
   kTaskTimeout = 6,
   kInvalidTaskType = 7,
-  kMaxValue = kInvalidTaskType,
+  kInvalidArgs = 8,
+  kPehValidationFailure = 9,
+  kUnsupportedVersion = 10,
+  kMaxValue = kUnsupportedVersion,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/windows/enums.xml:DelegatedTaskStatus)
 
+// LINT.IfChange(DelegatedTaskType)
 enum class DelegatedTaskType {
   kRegisterSearchPromotion = 0,
   kMaxValue = kRegisterSearchPromotion,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/windows/histograms.xml:PlatformExperienceDelegatedTaskName)
+
+// Standard exit codes returned by PEH.
+enum class PehExitCode {
+  kInvalidTaskType = 1,
+  kInvalidArgs = 2,
 };
 
 std::optional<DelegatedTaskType> ParseDelegatedTaskType(
@@ -48,10 +61,6 @@ class DelegatedTask {
 
   // Optionally appends task-specific command line switches. Defaults to no-op.
   virtual void AppendCommandLineSwitches(base::CommandLine& cmd_line) const;
-
-  // Maps task-specific exit codes that are not handled by the
-  // `PehDelegatedTaskRunner` to a ResultStatus.
-  virtual DelegatedTaskStatus ParseExitCode(int exit_code) const = 0;
 
   // The execution timeout for this task. Defaults to 10 seconds.
   virtual base::TimeDelta GetTimeout() const;

@@ -12,7 +12,6 @@
 #include "base/test/gtest_util.h"
 #include "base/unguessable_token.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/paint_preview/browser/compositor_utils.h"
 #include "components/paint_preview/browser/paint_preview_base_service_test_factory.h"
@@ -78,7 +77,7 @@ class PaintPreviewCompositorBrowserTest : public InProcessBrowserTest {
   void CreateServiceInstance() {
     key_ = std::make_unique<SimpleFactoryKey>(
         browser()->GetProfile()->GetPath(),
-        browser()->profile()->IsOffTheRecord());
+        browser()->GetProfile()->IsOffTheRecord());
     PaintPreviewBaseServiceTestFactory::GetInstance()->SetTestingFactory(
         key_.get(),
         base::BindRepeating(&PaintPreviewBaseServiceTestFactory::Build));

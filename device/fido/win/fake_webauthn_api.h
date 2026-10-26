@@ -92,6 +92,12 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FakeWinWebAuthnApi : public WinWebAuthnApi {
   // empty list.
   void set_simulate_rdp(bool simulate_rdp) { simulate_rdp_ = simulate_rdp; }
 
+  // If set, AuthenticatorMakeCredential() and AuthenticatorGetAssertion()
+  // succeed but return authenticator data that can't be parsed.
+  void set_corrupt_authenticator_data(bool corrupt) {
+    corrupt_authenticator_data_ = corrupt;
+  }
+
   // Returns a pointer to a copy of the last get credentials options passed to
   // the fake.
   WEBAUTHN_GET_CREDENTIALS_OPTIONS* last_get_credentials_options() {
@@ -118,9 +124,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FakeWinWebAuthnApi : public WinWebAuthnApi {
     preferred_attachment_ = preferred_attachment;
   }
 
-  const std::map<std::vector<uint8_t>,
-                 RegistrationData,
-                 fido_parsing_utils::RangeLess>&
+  const std::map<std::vector<uint8_t>, RegistrationData, std::less<>>&
   registrations() {
     return registrations_;
   }
@@ -175,6 +179,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FakeWinWebAuthnApi : public WinWebAuthnApi {
   bool large_blob_supported_ = true;
   int preferred_attachment_ = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM;
   bool simulate_rdp_ = false;
+  bool corrupt_authenticator_data_ = false;
   HRESULT result_override_ = S_OK;
 
   // Owns a copy of the last get credentials options to have been passed to the
@@ -200,9 +205,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FakeWinWebAuthnApi : public WinWebAuthnApi {
   // Owns lists of credentials returned by GetPlatformCredentialList().
   std::vector<std::unique_ptr<CredentialInfoList>> returned_credential_lists_;
 
-  std::
-      map<std::vector<uint8_t>, RegistrationData, fido_parsing_utils::RangeLess>
-          registrations_;
+  std::map<std::vector<uint8_t>, RegistrationData, std::less<>> registrations_;
 
   // A map of credential IDs to large blobs.
   base::flat_map<std::vector<uint8_t>, std::vector<uint8_t>> large_blobs_;

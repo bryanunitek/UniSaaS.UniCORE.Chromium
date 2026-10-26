@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/modules/ai/semantic_embedder.h"
 
+#include "base/check_deref.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
@@ -28,7 +29,6 @@
 #include "third_party/blink/renderer/modules/ai/exception_helpers.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/heap/self_keep_alive.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
@@ -71,17 +71,22 @@ class CreateSemanticEmbedderClient
   CreateSemanticEmbedderClient(
       ScriptState* script_state,
       ScriptPromiseResolver<SemanticEmbedder>* resolver,
-      AbortSignal* signal,
       SemanticEmbedderCreateOptions* options)
       : ExecutionContextClient(ExecutionContext::From(script_state)),
-        AIContextObserver(script_state, this, resolver, signal),
+        AIContextObserver(script_state,
+                          this,
+                          resolver,
+                          options->getSignalOr(nullptr)),
         options_(options),
-        receiver_(this, ExecutionContext::From(script_state)),
-        task_runner_(ExecutionContext::From(script_state)
-                         ->GetTaskRunner(TaskType::kInternalDefault)) {
+        receiver_(this, GetExecutionContext()),
+        task_runner_(
+            GetExecutionContext()->GetTaskRunner(TaskType::kInternalDefault)) {
+    if (!InitializeMonitor(options, task_runner_)) {
+      return;
+    }
+
     HeapMojoRemote<mojom::blink::AIManager>& ai_manager_remote =
-        AIInterfaceProxy::GetAIManagerRemote(
-            ExecutionContext::From(GetScriptState()));
+        AIInterfaceProxy::GetAIManagerRemote(GetExecutionContext());
 
     ai_manager_remote->CanCreateSemanticEmbedder(
         BindOnce(&CreateSemanticEmbedderClient::Create, WrapPersistent(this)));
@@ -101,6 +106,9 @@ class CreateSemanticEmbedderClient
       return;
     }
     if (pending_remote) {
+      if (!CompleteDownloadProgress()) {
+        return;
+      }
       GetResolver()->Resolve(MakeGarbageCollected<SemanticEmbedder>(
           GetScriptState(), task_runner_, std::move(pending_remote), options_));
     } else {
@@ -163,7 +171,8 @@ class CreateSemanticEmbedderClient
     receiver_.set_disconnect_handler(
         BindOnce(&CreateSemanticEmbedderClient::OnConnectionError,
                  WrapWeakPersistent(this)));
-    ai_manager_remote->CreateSemanticEmbedder(std::move(client_remote));
+    ai_manager_remote->CreateSemanticEmbedder(std::move(client_remote),
+                                              BindMonitorRemote());
   }
 
   Member<SemanticEmbedderCreateOptions> options_;
@@ -242,10 +251,9 @@ ScriptPromise<SemanticEmbedder> SemanticEmbedder::create(
     ThrowInvalidContextException(exception_state);
     return ScriptPromise<SemanticEmbedder>();
   }
-  CHECK(options);
 
-  AbortSignal* signal = options->hasSignal() ? options->signal() : nullptr;
-  if (HandleAbortSignal(signal, script_state, exception_state)) {
+  if (HandleAbortSignal(CHECK_DEREF(options).getSignalOr(nullptr), script_state,
+                        exception_state)) {
     return EmptyPromise();
   }
 
@@ -265,7 +273,7 @@ ScriptPromise<SemanticEmbedder> SemanticEmbedder::create(
   }
 
   MakeGarbageCollected<CreateSemanticEmbedderClient>(script_state, resolver,
-                                                     signal, options);
+                                                     options);
   return promise;
 }
 

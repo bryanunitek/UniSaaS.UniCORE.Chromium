@@ -15,7 +15,6 @@ import "mojo/public/mojom/base/file_path.mojom";
 import "mojo/public/mojom/base/time.mojom";
 import "mojo/public/mojom/base/unguessable_token.mojom";
 import "skia/public/mojom/skcolor.mojom";
-import "services/network/public/mojom/attribution.mojom";
 import "services/network/public/mojom/content_security_policy.mojom";
 import "services/network/public/mojom/url_loader.mojom";
 import "services/network/public/mojom/url_loader_completion_status.mojom";
@@ -29,9 +28,7 @@ import "third_party/blink/public/mojom/associated_interfaces/associated_interfac
 import "third_party/blink/public/mojom/blob/blob_url_store.mojom";
 import "third_party/blink/public/mojom/browser_interface_broker.mojom";
 import "third_party/blink/public/mojom/commit_result/commit_result.mojom";
-import "third_party/blink/public/mojom/conversions/conversions.mojom";
 import "third_party/blink/public/mojom/devtools/console_message.mojom";
-import "third_party/blink/public/mojom/fenced_frame/fenced_frame.mojom";
 import "third_party/blink/public/mojom/fenced_frame/fenced_frame_config.mojom";
 import "third_party/blink/public/mojom/frame/frame_owner_properties.mojom";
 import "third_party/blink/public/mojom/frame/frame_policy.mojom";
@@ -166,10 +163,6 @@ struct CreateViewParams {
   // Indicates which browsing context group the page in this view belongs to.
   mojo_base.mojom.UnguessableToken browsing_context_group_token;
 
-  // Indicates whether web or OS-level Attribution Reporting is supported. See
-  // https://github.com/WICG/attribution-reporting-api/blob/main/app_to_web.md
-  network.mojom.AttributionSupport attribution_support;
-
   // Identifies the navigation that triggered this view creation, if any. Used
   // for collecting metrics.
   mojo_base.mojom.UnguessableToken? navigation_metrics_token;
@@ -221,6 +214,11 @@ struct CreateLocalMainFrameParams {
   // `SetOriginDependentStateOfNewFrame()` and sent here so both browser and
   // renderer derive the same origin. Null if the frame is not sandboxed.
   mojo_base.mojom.UnguessableToken? sandbox_origin_token;
+
+  // A token tracking the state of the document to retrieve a corresponding
+  // InitiatorNavigationState in the browser process for navigations started
+  // from the newly created document.
+  blink.mojom.InitiatorStateToken initiator_state_token;
 
   // Null when the main frame has no policy container yet (for example, because
   // it is a speculative RenderFrameHost), and the policy container will be
@@ -347,6 +345,11 @@ struct CreateFrameParams {
   // fully-initialized frame always contains a document, even a provisional
   // frame that is not yet swapped in.
   blink.mojom.DocumentToken document_token;
+
+  // A token tracking the state of the document to retrieve a corresponding
+  // InitiatorNavigationState in the browser process for navigations started
+  // from the newly created document.
+  blink.mojom.InitiatorStateToken initiator_state_token;
 
   // The policy container for the frame to be created. This can be null if we
   // could not determine a policy container yet, for example in case of a
@@ -586,10 +589,6 @@ struct CreateNewWindowParams {
   // The window features to use for the new window.
   blink.mojom.WindowFeatures features;
 
-  // The impression associated with the navigation in the new window, if
-  // one is specified.
-  blink.mojom.Impression? impression;
-
   // Governs how downloads are handled if `target_url` results in a download.
   blink.mojom.NavigationDownloadPolicy download_policy;
 
@@ -684,6 +683,10 @@ struct CreateNewWindowReply {
   // sandbox is removed, this will only be set for truly sandboxed cases.
   mojo_base.mojom.UnguessableToken? sandbox_origin_token;
 
+  // Token used to retrieve the InitiatorNavigationState for navigations
+  // started by the main document of the new window.
+  blink.mojom.InitiatorStateToken initiator_state_token;
+
   // The policy container for the new frame that will be created by Blink in
   // response.
   blink.mojom.PolicyContainer policy_container;
@@ -736,6 +739,7 @@ interface FrameHost {
   // messages will have a corresponding mojom::FrameHost::Detach API sent when
   // the frame is detached from the DOM.
   CreateChildFrame(blink.mojom.LocalFrameToken child_frame_token,
+                   blink.mojom.InitiatorStateToken initiator_state_token,
                    pending_associated_remote<content.mojom.Frame> frame,
                    pending_receiver<blink.mojom.BrowserInterfaceBroker>
                      browser_interface_broker,
@@ -792,6 +796,13 @@ interface FrameHost {
   // document in the frame should be updated to `url` per step 12 of
   // https://whatwg.org/C/dynamic-markup-insertion.html#document-open-steps.
   DidOpenDocumentInputStream(url.mojom.Url url);
+
+  // Sent by the renderer when it replaces the frame's document with a new one
+  // without a navigation that commits in the browser: the result of a
+  // javascript: URL, of an XSLT transform, or of discarding the frame. The
+  // browser keeps its document (e.g. the DocumentToken stays the same), but
+  // must drop state that is tied to the replaced document in the renderer.
+  DidCommitDocumentReplacement();
 
   // Sent by the renderer to request a navigation.
   // |blob_url_token| should be non-null when this is a navigation to a blob:

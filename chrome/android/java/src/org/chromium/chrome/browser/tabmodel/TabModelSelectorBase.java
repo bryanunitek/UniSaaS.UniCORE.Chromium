@@ -63,7 +63,7 @@ public abstract class TabModelSelectorBase
 
     private final Callback<TabModel> mIncognitoReauthDialogDelegateCallback;
 
-    private final List<TabModelObserver> mPendingObservers = new ArrayList<>();
+    private final ArrayList<TabModelObserver> mPendingObservers = new ArrayList<>();
 
     protected @Nullable IncognitoReauthDialogDelegate mIncognitoReauthDialogDelegate;
 
@@ -108,6 +108,7 @@ public abstract class TabModelSelectorBase
             }
         }
         mPendingObservers.clear();
+        mPendingObservers.trimToSize();
 
         TabModelObserver tabModelObserver =
                 new TabModelObserver() {
@@ -117,7 +118,7 @@ public abstract class TabModelSelectorBase
                             @TabLaunchType int type,
                             @TabCreationState int creationState,
                             boolean markedForSelection) {
-                        notifyNewTabCreated(tab, creationState);
+                        notifyNewTabCreated(tab);
                     }
                 };
 
@@ -147,11 +148,8 @@ public abstract class TabModelSelectorBase
     public void onNativeLibraryReady(TabContentManager tabContentProvider) {}
 
     @Override
-    public void onTabsViewShown() {}
-
-    @Override
     public void selectModel(boolean incognito) {
-        if (mTabModelInternals.size() == 0) {
+        if (mTabModelInternals.isEmpty()) {
             mStartIncognito = incognito;
             return;
         }
@@ -161,9 +159,16 @@ public abstract class TabModelSelectorBase
 
         TabModelInternal newModel = mTabModelInternals.get(newIndex);
         TabModelInternal previousModel = (TabModelInternal) assumeNonNull(mTabModelSupplier.get());
+
+        previousModel.notifyWillActiveStateChange(/* active= */ false);
+        newModel.notifyWillActiveStateChange(/* active= */ true);
+
         previousModel.setActive(false);
         newModel.setActive(true);
         mTabModelSupplier.set(newModel);
+
+        previousModel.notifyDidActiveStateChange(/* active= */ false);
+        newModel.notifyDidActiveStateChange(/* active= */ true);
     }
 
     @Override
@@ -192,7 +197,7 @@ public abstract class TabModelSelectorBase
 
     @Override
     public TabModel getCurrentModel() {
-        if (mTabModelInternals.size() == 0) return EmptyTabModel.getInstance(false);
+        if (mTabModelInternals.isEmpty()) return EmptyTabModel.getInstance(false);
         return assumeNonNull(mTabModelSupplier.get());
     }
 
@@ -227,19 +232,19 @@ public abstract class TabModelSelectorBase
 
     @Override
     public boolean isIncognitoSelected() {
-        if (mTabModelInternals.size() == 0) return mStartIncognito;
+        if (mTabModelInternals.isEmpty()) return mStartIncognito;
         return getCurrentModel().isIncognito();
     }
 
     @Override
     public boolean isIncognitoBrandedModelSelected() {
-        if (mTabModelInternals.size() == 0) return mStartIncognito;
+        if (mTabModelInternals.isEmpty()) return mStartIncognito;
         return getCurrentModel().isIncognitoBranded();
     }
 
     @Override
     public boolean isOffTheRecordModelSelected() {
-        if (mTabModelInternals.size() == 0) return mStartIncognito;
+        if (mTabModelInternals.isEmpty()) return mStartIncognito;
         return getCurrentModel().isOffTheRecord();
     }
 
@@ -265,12 +270,12 @@ public abstract class TabModelSelectorBase
     }
 
     @Override
-    public boolean tryCloseTab(TabClosureParams tabClosureParams, boolean allowDialog) {
+    public void closeTab(TabClosureParams tabClosureParams) {
         if (tabClosureParams.tabs == null
                 || tabClosureParams.tabs.size() != 1
                 || tabClosureParams.tabCloseType != TabCloseType.SINGLE) {
-            assert false : "Invalid tab closure params received for tryCloseTab.";
-            return false;
+            assert false : "Invalid tab closure params received for closeTab.";
+            return;
         }
         Tab tab = tabClosureParams.tabs.get(0);
         boolean isClosing = tab.isClosing() && !tab.isDestroyed();
@@ -282,11 +287,11 @@ public abstract class TabModelSelectorBase
                 TabList comprehensiveModel = model.getComprehensiveModel();
                 if (comprehensiveModel.indexOf(tab) > TabList.INVALID_TAB_INDEX) {
                     model.commitTabClosure(tab.getId());
-                    return true;
+                    return;
                 }
             } else if (model.indexOf(tab) > TabList.INVALID_TAB_INDEX) {
-                model.getTabRemover().closeTabs(tabClosureParams, allowDialog);
-                return true;
+                model.getTabRemover().closeTabs(tabClosureParams, /* allowDialog= */ false);
+                return;
             }
         }
 
@@ -294,13 +299,13 @@ public abstract class TabModelSelectorBase
         // the case for navigations progressing while the tab is being moved between web clients.
         if (tab.isDetachedFromActivity()) {
             tab.setDidCloseWhileDetached();
-            return true;
+            return;
         }
 
         if (getModels().isEmpty()) {
             // Tab may be destroyed here via Tab#destroy(). It is skipped for now
             // to examine its potential side effect on crbug.com/325558929.
-            return true;
+            return;
         } else {
             assert false
                     : "Tried to close a tab that is not in any model!"
@@ -312,7 +317,6 @@ public abstract class TabModelSelectorBase
                             + tab.isDestroyed()
                             + " Is detached "
                             + tab.isDetachedFromActivity();
-            return false;
         }
     }
 
@@ -406,23 +410,12 @@ public abstract class TabModelSelectorBase
 
     /**
      * Notifies all the listeners that a new tab has been created.
-     * @param tab The tab that has been created.
-     * @param creationState How the tab was created.
-     */
-    private void notifyNewTabCreated(Tab tab, @TabCreationState int creationState) {
-        for (TabModelSelectorObserver listener : mObservers) {
-            listener.onNewTabCreated(tab, creationState);
-        }
-    }
-
-    /**
-     * Notifies all the listeners that a tab has been hidden to switch to another.
      *
-     * @param tab The tab that has been hidden.
+     * @param tab The tab that has been created.
      */
-    protected void notifyTabHidden(Tab tab) {
+    private void notifyNewTabCreated(Tab tab) {
         for (TabModelSelectorObserver listener : mObservers) {
-            listener.onTabHidden(tab);
+            listener.onNewTabCreated(tab);
         }
     }
 
@@ -499,10 +492,5 @@ public abstract class TabModelSelectorBase
         for (TabModelInternal tabModel : mTabModelInternals) {
             tabModel.removeObserver(observer);
         }
-    }
-
-    @Override
-    public void resetTabModelListForTesting() {
-        mTabModelInternals.clear();
     }
 }

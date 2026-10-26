@@ -5,7 +5,8 @@
 #ifndef CHROME_ENTERPRISE_COMPANION_TELEMETRY_LOGGER_TELEMETRY_LOGGER_H_
 #define CHROME_ENTERPRISE_COMPANION_TELEMETRY_LOGGER_TELEMETRY_LOGGER_H_
 
-#include <cstdint>
+#include <stdint.h>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -206,7 +207,7 @@ class TelemetryLogger
             .Then(std::move(callback)));
   }
 
-  bool ShouldDeleteUploadQueue(std::optional<int> http_status) const {
+  constexpr bool ShouldDeleteUploadQueue(std::optional<int> http_status) const {
     if (!http_status) {
       return false;
     }

@@ -40,7 +40,9 @@ class NotificationHandler {
     NOTIFICATIONS_MUTED = 9,
     TAILORED_SECURITY = 10,
     DEFAULT_BROWSER_CHANGED = 11,
-    MAX = DEFAULT_BROWSER_CHANGED,
+    EXTENSION_REQUEST = 12,
+    GLIC_ACTOR_TASK = 13,
+    MAX = GLIC_ACTOR_TASK,
   };
 
   virtual ~NotificationHandler();

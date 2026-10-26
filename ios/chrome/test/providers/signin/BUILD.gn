@@ -6,6 +6,8 @@ group("signin") {
   testonly = true
   deps = [
     ":choice",
+    ":device_identifier",
+    ":embedded_reauth",
     ":signin_error",
     ":signin_identity",
     ":signin_resources",
@@ -20,6 +22,28 @@ source_set("choice") {
     "//base",
     "//ios/chrome/browser/shared/coordinator/chrome_coordinator",
     "//ios/public/provider/chrome/browser/signin:choice_api",
+  ]
+  frameworks = [ "UIKit.framework" ]
+}
+
+source_set("device_identifier") {
+  testonly = true
+  sources = [
+    "test_device_identifier.h",
+    "test_device_identifier.mm",
+  ]
+  deps = [
+    "//base",
+    "//ios/public/provider/chrome/browser/signin:device_identifier_api",
+  ]
+}
+
+source_set("embedded_reauth") {
+  testonly = true
+  sources = [ "test_embedded_reauth.mm" ]
+  deps = [
+    "//base",
+    "//ios/public/provider/chrome/browser/signin:embedded_reauth_api",
   ]
   frameworks = [ "UIKit.framework" ]
 }

@@ -10,13 +10,14 @@
 #import <set>
 #import <string>
 
+#import "base/memory/raw_ptr.h"
+#import "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
 #import "ios/chrome/browser/shared/ui/list_model/list_model.h"
 
 @protocol BookmarksHomeConsumer;
 @class BookmarkTableCell;
 @protocol BookmarkTableCellTitleEditing;
 class Browser;
-typedef NS_ENUM(NSUInteger, SigninCoordinatorResult);
 @class TableViewModel;
 
 namespace bookmarks {
@@ -76,7 +77,7 @@ typedef NS_ENUM(NSInteger, BookmarksHomeItemType) {
 
 // The set of nodes currently being edited.
 @property(nonatomic, readonly, assign)
-    std::set<const bookmarks::BookmarkNode*>& selectedNodesForEditMode;
+    std::set<raw_ptr<const bookmarks::BookmarkNode>>& selectedNodesForEditMode;
 
 // If the table view showing search results.
 @property(nonatomic, assign) BOOL currentlyShowingSearchResults;
@@ -139,8 +140,8 @@ typedef NS_ENUM(NSInteger, BookmarksHomeItemType) {
 - (BOOL)shouldDisplayCloudSlashIconWithBookmarkNode:
     (const bookmarks::BookmarkNode*)bookmarkNode;
 
-// Callback for the SigninPresenter.
-- (void)signinDidCompleteWithResult:(SigninCoordinatorResult)result;
+// Callback for the Signin.
+- (void)signinDidCompleteWithResult:(SigninCoordinatorResultOrIdentity)result;
 
 @end
 

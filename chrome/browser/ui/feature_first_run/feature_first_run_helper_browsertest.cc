@@ -10,7 +10,6 @@
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -125,8 +124,8 @@ IN_PROC_BROWSER_TEST_F(FeatureFirstRunDialogHelperBrowserTest,
   const gfx::VectorIcon& icon = features::IsRoundedIconsEnabled()
                                     ? kTextAnalysisIcon
                                     : kTextAnalysisOldIcon;
-  const int radius = ChromeLayoutProvider::Get()->GetDistanceMetric(
-      DISTANCE_FEATURE_FIRST_RUN_INFO_BOX_ROUNDED_BORDER_RADIUS);
+  const int radius = ChromeLayoutProvider::Get()->GetCornerRadiusMetric(
+      kFeatureFirstRunInfoBoxRoundedBorderRadius);
 
   auto info_box_start =
       CreateInfoBoxContainer(title, description, icon, InfoBoxPosition::kStart);

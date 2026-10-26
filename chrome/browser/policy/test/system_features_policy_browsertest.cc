@@ -20,14 +20,13 @@
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/policy/system_features_disable_list_policy_handler.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/policy/core/common/system_features_disable_list_constants.h"
@@ -65,9 +64,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
  public:
   SystemFeaturesPolicyTestBase() {
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{ash::features::kEcheSWA, ash::features::kConch,
-                              chromeos::features::
-                                  kSystemFeaturesDisableListHidden},
+        /*enabled_features=*/{ash::features::kConch},
         /*disabled_features=*/{});
 
     fake_crostini_features_.set_is_allowed_now(true);
@@ -103,7 +100,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
   }
 
   void EnableExtensions(bool skip_session_components) {
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     extensions::ComponentLoader::EnableBackgroundExtensionsForTesting();
     extensions::ComponentLoader::Get(profile)->AddDefaultComponentExtensions(
         skip_session_components);
@@ -143,7 +140,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
                                apps::Readiness expected_readiness,
                                bool blocked_icon,
                                const VisibilityFlags& expected_visibility) {
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     extensions::ExtensionRegistry* registry =
         extensions::ExtensionRegistry::Get(profile);
     ASSERT_TRUE(registry->enabled_extensions().GetByID(app_id));
@@ -155,7 +152,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
                       apps::Readiness expected_readiness,
                       bool blocked_icon,
                       const VisibilityFlags& expected_visibility) {
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     auto* proxy = apps::AppServiceProxyFactory::GetForProfile(profile);
 
     bool exist = proxy->AppRegistryCache().ForOneApp(
@@ -178,7 +175,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
   }
 
   void InstallSWAs() {
-    ash::SystemWebAppManager::GetForTest(browser()->profile())
+    ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
         ->InstallSystemAppsForTesting();
   }
 
@@ -187,7 +184,7 @@ class SystemFeaturesPolicyTestBase : public MixinBasedInProcessBrowserTest {
         web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(app_url);
     web_app_info->scope = app_url.GetWithoutFilename();
     webapps::AppId installed_app_id = web_app::test::InstallWebApp(
-        browser()->profile(), std::move(web_app_info));
+        browser()->GetProfile(), std::move(web_app_info));
     EXPECT_EQ(app_id, installed_app_id);
   }
 

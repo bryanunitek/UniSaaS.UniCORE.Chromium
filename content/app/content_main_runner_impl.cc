@@ -10,6 +10,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -28,6 +29,7 @@
 #include "base/debug/stack_trace.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/icu_util.h"
 #include "base/lazy_instance.h"
@@ -46,6 +48,7 @@
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/task/execution_fence.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool/environment_config.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
@@ -59,24 +62,26 @@
 #include "components/discardable_memory/service/discardable_shared_memory_manager.h"
 #include "components/download/public/common/download_task_runner.h"
 #include "components/power_monitor/make_power_monitor_device_source.h"
+#include "components/tracing/common/tracing_switches.h"
 #include "components/variations/net/variations_command_line.h"
 #include "components/variations/variations_ids_provider.h"
 #include "content/app/mojo_ipc_support.h"
 #include "content/browser/browser_main.h"
 #include "content/browser/browser_process_io_thread.h"
 #include "content/browser/browser_thread_impl.h"
-#include "content/browser/first_party_sets/first_party_sets_handler_impl.h"
 #include "content/browser/gpu/gpu_main_thread_factory.h"
-#include "content/browser/memory_coordinator/browser_memory_coordinator.h"
+#include "content/browser/memory_coordinator/browser_memory_coordinator_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/scheduler/browser_task_executor.h"
 #include "content/browser/service_host/utility_process_host.h"
 #include "content/browser/startup_data_impl.h"
 #include "content/browser/startup_helper.h"
+#include "content/browser/tracing/background_tracing_manager_impl.h"
 #include "content/browser/tracing/memory_instrumentation_util.h"
 #include "content/child/field_trial.h"
 #include "content/child/memory_coordinator/child_memory_coordinator.h"
 #include "content/common/content_constants_internal.h"
+#include "content/common/features.h"
 #include "content/common/process_priority_tracker.h"
 #include "content/common/pseudonymization_salt.h"
 #include "content/common/url_schemes.h"
@@ -104,22 +109,24 @@
 #include "media/base/media.h"
 #include "media/media_buildflags.h"
 #include "mojo/core/embedder/embedder.h"
-#include "mojo/public/cpp/base/shared_memory_utils.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/bindings/sync_call_restrictions.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/invitation.h"
 #include "mojo/public/cpp/system/message_pipe.h"
-#include "net/first_party_sets/local_set_declaration.h"
 #include "sandbox/policy/linux/landlock_util.h"
 #include "sandbox/policy/sandbox.h"
 #include "sandbox/policy/sandbox_type.h"
 #include "sandbox/policy/switches.h"
 #include "services/network/public/cpp/features.h"
+#include "services/tracing/public/cpp/background_tracing/background_tracing_manager.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
 #include "services/tracing/public/cpp/trace_startup.h"
 #include "services/tracing/public/cpp/tracing_features.h"
+#include "services/webnn/public/cpp/webnn_sandbox_init.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "third_party/blink/public/common/origin_trials/trial_token_validator.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "third_party/tflite/buildflags.h"
 #include "tools/v8_context_snapshot/buildflags.h"
 #include "ui/base/ui_base_paths.h"
@@ -160,9 +167,13 @@
 #endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#include <fcntl.h>
+
 #include "base/environment.h"
 #include "base/files/file_path_watcher_inotify.h"
+#include "base/files/scoped_file.h"
 #include "base/native_library.h"
+#include "base/posix/eintr_wrapper.h"
 #include "base/rand_util.h"
 #include "content/public/common/zygote/sandbox_support_linux.h"
 #include "sandbox/policy/linux/sandbox_linux.h"
@@ -301,8 +312,8 @@ void AsanProcessInfoCB(const char* reason,
 #endif  // defined(ADDRESS_SANITIZER)
 
 #if BUILDFLAG(USE_ZYGOTE)
-pid_t LaunchZygoteHelper(base::CommandLine* cmd_line,
-                         base::ScopedFD* control_fd) {
+ZygoteLaunchCompletionCallback LaunchZygoteHelper(base::CommandLine* cmd_line,
+                                                  base::ScopedFD* control_fd) {
   // Append any switches from the browser process that need to be forwarded on
   // to the zygote/renderers.
   static const char* const kForwardSwitches[] = {
@@ -358,13 +369,7 @@ void InitializeZygoteSandboxForBrowserProcess(
   if (!parsed_command_line.HasSwitch(switches::kNoUnsandboxedZygote)) {
     CreateUnsandboxedZygote(base::BindOnce(LaunchZygoteHelper));
   }
-  ZygoteCommunication* generic_zygote =
-      CreateGenericZygote(base::BindOnce(LaunchZygoteHelper));
-
-  // This operation is done through the ZygoteHostImpl as a proxy because of
-  // race condition concerns.
-  ZygoteHostImpl::GetInstance()->SetRendererSandboxStatus(
-      generic_zygote->GetSandboxStatus());
+  CreateGenericZygote(base::BindOnce(LaunchZygoteHelper));
 }
 #endif  // BUILDFLAG(USE_ZYGOTE)
 
@@ -384,6 +389,35 @@ void PreloadLibraryCdms() {
   }
 }
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
+
+// The kernel starts every process with a 64-entry file descriptor table and
+// grows it in powers of two on demand (see alloc_fdtable() in fs/file.c). Once
+// the process has more than one thread, each growth goes through
+// synchronize_rcu() in expand_fdtable(), which blocks the thread allocating the
+// descriptor - and any other thread of the process that allocates a descriptor
+// in the meantime - for a full RCU grace period. That is typically 10-50 ms and
+// has been measured at over 100 ms on large, busy machines. The browser process
+// crosses 64 and 128 descriptors during startup (the first crossing has been
+// observed on the main thread, with several other threads' openat(), recvmsg()
+// and dup() calls stalled behind it), and the GPU and network processes cross
+// 64 under load.
+//
+// Zygote-forked children avoid this by growing the table right after fork(),
+// while they are still single-threaded (see Zygote::ReadArgsAndFork()). This
+// does the same for the browser process and exec'ed children before their first
+// thread is created: asking for a descriptor >= 512 makes the kernel allocate a
+// 1024-entry table (8 KiB) once, without RCU synchronization. This is purely a
+// performance optimization, so failures (e.g. a soft RLIMIT_NOFILE of 512 or
+// less) are ignored.
+void PreallocateFileDescriptorTable() {
+  base::ScopedFD dev_null(
+      HANDLE_EINTR(open("/dev/null", O_RDONLY | O_CLOEXEC)));
+  if (!dev_null.is_valid()) {
+    return;
+  }
+  base::ScopedFD high_fd(
+      HANDLE_EINTR(fcntl(dev_null.get(), F_DUPFD_CLOEXEC, 512)));
+}
 
 void PreSandboxInit() {
   // Ensure the /dev/urandom is opened.
@@ -408,6 +442,7 @@ void PreSandboxInit() {
   PreloadLibraryCdms();
 #endif
   InitializeWebRtcModuleBeforeSandbox();
+  webnn::PreSandboxWebNNInitialization(/*is_gpu_process=*/false);
 
 #if BUILDFLAG(BUILD_TFLITE_WITH_XNNPACK)
   // cpuinfo needs to parse /proc/cpuinfo, or its equivalent.
@@ -493,13 +528,26 @@ void CreateChildThreadPool(const std::string& process_type) {
   // Thread pool should only be initialized once.
   DCHECK(!base::ThreadPoolInstance::Get());
   std::string_view thread_pool_name;
-  if (process_type == switches::kGpuProcess)
+  base::ThreadPoolInstance::RecordLockContention record_lock_contention =
+      base::ThreadPoolInstance::RecordLockContention::kDisabled;
+  if (process_type == switches::kGpuProcess) {
     thread_pool_name = "GPU";
-  else if (process_type == switches::kRendererProcess)
+    record_lock_contention =
+        base::ThreadPoolInstance::RecordLockContention::kEnabled;
+  } else if (process_type == switches::kRendererProcess) {
     thread_pool_name = "Renderer";
-  else
+    record_lock_contention =
+        base::ThreadPoolInstance::RecordLockContention::kEnabled;
+  } else {
     thread_pool_name = "ContentChild";
-  base::ThreadPoolInstance::Create(thread_pool_name);
+  }
+  base::ThreadPoolInstance::Create(thread_pool_name, record_lock_contention);
+}
+
+// Indicates whether BEST_EFFORT tasks are disabled by a command line switch.
+bool HasDisableBestEffortTasksSwitch() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kDisableBestEffortTasks);
 }
 
 }  // namespace
@@ -618,6 +666,13 @@ NO_STACK_PROTECTOR int RunZygote(ContentMainDelegate* delegate) {
   }
   delegate->PostEarlyInitialization(invoked_in_child);
 
+  // The Zygote must use a local scoped fence, otherwise the scoped object
+  // would live across the fork.
+  std::optional<base::ScopedBestEffortExecutionFence> best_effort_fence;
+  if (HasDisableBestEffortTasksSwitch()) {
+    best_effort_fence.emplace();
+  }
+
   base::allocator::PartitionAllocSupport::Get()
       ->ReconfigureAfterFeatureListInit(process_type);
 
@@ -636,6 +691,7 @@ NO_STACK_PROTECTOR int RunZygote(ContentMainDelegate* delegate) {
                                           /*will_trace_thread_restart=*/true);
     } else {
       main_params.needs_startup_tracing_after_sandbox_init = true;
+      tracing::EnableEarlyTrackRegistration();
     }
 #else
     tracing::InitTracingPostFeatureList(/*enable_consumer=*/false,
@@ -806,6 +862,16 @@ int ContentMainRunnerImpl::Initialize(ContentMainParams params) {
       *base::CommandLine::ForCurrentProcess();
   std::string process_type =
       command_line.GetSwitchValueASCII(switches::kProcessType);
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  // Must run while the process is still single-threaded, i.e. before the
+  // thread pool (and, in Chrome, the stack sampling profiler) is created below.
+  // Zygotes fork their children with a right-sized copy of the table and grow
+  // it themselves after fork().
+  if (process_type != switches::kZygoteProcess) {
+    PreallocateFileDescriptorTable();
+  }
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_ANDROID)
   // Initialize the background threadpool field trial before creating the
@@ -1090,6 +1156,13 @@ NO_STACK_PROTECTOR int ContentMainRunnerImpl::Run() {
   base::debug::AsanService::GetInstance()->AddErrorCallback(AsanProcessInfoCB);
 #endif
 
+  // Returning from this function begins the shutdown phase which should start
+  // best-effort tasks running, no matter where `best_effort_fence_` is
+  // initialized.
+  absl::Cleanup remove_best_effort_fence = [this] {
+    best_effort_fence_.reset();
+  };
+
   // Run this logic on all child processes.
   bool needs_startup_tracing_after_sandbox_init = false;
   if (!process_type.empty()) {
@@ -1115,6 +1188,7 @@ NO_STACK_PROTECTOR int ContentMainRunnerImpl::Run() {
               /*will_trace_thread_restart=*/true);
         } else {
           needs_startup_tracing_after_sandbox_init = true;
+          tracing::EnableEarlyTrackRegistration();
         }
 #else
         tracing::InitTracingPostFeatureList(
@@ -1128,6 +1202,10 @@ NO_STACK_PROTECTOR int ContentMainRunnerImpl::Run() {
       }
       delegate_->PostEarlyInitialization(
           ContentMainDelegate::InvokedInChildProcess());
+
+      if (HasDisableBestEffortTasksSwitch()) {
+        best_effort_fence_.emplace();
+      }
 
       if (delegate_->ShouldReconfigurePartitionAlloc()) {
         base::allocator::PartitionAllocSupport::Get()
@@ -1159,8 +1237,9 @@ NO_STACK_PROTECTOR int ContentMainRunnerImpl::Run() {
 
   RegisterMainThreadFactories();
 
-  if (process_type.empty())
+  if (process_type.empty()) {
     return RunBrowser(std::move(main_params), start_minimal_browser);
+  }
 
   return RunOtherNamedProcessTypeMain(process_type, std::move(main_params),
                                       delegate_);
@@ -1194,7 +1273,8 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams main_params,
     }
 
     memory_pressure_listener_registry_.emplace();
-    browser_memory_coordinator_ = std::make_unique<BrowserMemoryCoordinator>();
+    browser_memory_coordinator_ =
+        std::make_unique<BrowserMemoryCoordinatorImpl>();
 
     std::optional<int> pre_browser_main_exit_code = delegate_->PreBrowserMain();
     if (pre_browser_main_exit_code.has_value())
@@ -1231,6 +1311,36 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams main_params,
     if (post_early_initialization_exit_code.has_value())
       return post_early_initialization_exit_code.value();
 
+    // The memory coordinator policies are feature-gated, so they must be
+    // initialized after the FeatureList.
+    browser_memory_coordinator_->InitializePolicies();
+
+    if (HasDisableBestEffortTasksSwitch()) {
+      best_effort_fence_.emplace();
+    }
+
+    if (!delegate_->IsInitFeatureListEarly()) {
+      // Re-evaluate feature state now that FeatureList has been initialized, as
+      // the task executor was created before FeatureList and could not access
+      // Finch configurations.
+      BrowserTaskExecutor::PostFeatureListInit();
+    }
+
+#if BUILDFLAG(USE_ZYGOTE)
+    // The zygotes, if any, were forked in Initialize(), before the
+    // FeatureList existed. Unless deferring is enabled, finish their handshake
+    // now that it does, which keeps the wait on the main thread ahead of
+    // BrowserMain.
+    if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kNoZygote) &&
+        !base::FeatureList::IsEnabled(features::kDeferZygoteHandshake)) {
+      if (GetUnsandboxedZygote()) {
+        GetUnsandboxedZygote()->EnsureLaunchFinished();
+      }
+      GetGenericZygote()->EnsureLaunchFinished();
+    }
+#endif
+
     // The hang watcher needs to be started once the feature list is available
     // but before the IO thread is started.
     if (base::HangWatcher::IsEnabled()) {
@@ -1254,6 +1364,8 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams main_params,
           /*enable_consumer=*/true, /*will_trace_thread_restart=*/false,
           base::BindRepeating(&ShouldAllowSystemTracingConsumer));
     }
+    background_tracing_manager_ =
+        CreateBackgroundTracingManagerAndInitializeScenarios();
 
     if (!delegate_->IsInitFeatureListEarly()) {
       // The FeatureList needs to be created before starting the ThreadPool.
@@ -1278,13 +1390,8 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams main_params,
     AndroidBatteryMetrics::CreateInstance();
 #endif
 
-    GetContentClient()->browser()->SetIsMinimalMode(start_minimal_browser);
     if (start_minimal_browser) {
       ForceInProcessNetworkService();
-      // Minimal browser mode doesn't initialize First-Party Sets the "usual"
-      // way, so we do it manually.
-      content::FirstPartySetsHandlerImpl::GetInstance()->Init(
-          base::FilePath(), net::LocalSetDeclaration());
     }
 
     discardable_shared_memory_manager_ =
@@ -1328,7 +1435,10 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams main_params,
   }
 
   is_browser_main_loop_started_ = true;
-  main_params.startup_data = mojo_ipc_support_->CreateBrowserStartupData();
+  auto startup_data = mojo_ipc_support_->CreateBrowserStartupData();
+  startup_data->background_tracing_manager =
+      std::move(background_tracing_manager_);
+  main_params.startup_data = std::move(startup_data);
   return RunBrowserProcessMain(std::move(main_params), delegate_);
 }
 

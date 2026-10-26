@@ -24,9 +24,9 @@
 
 namespace ui {
 
+class BeginFrameSourceWayland;
 class WaylandBufferHandle;
 class WaylandConnection;
-class WaylandFrameTimingObserver;
 class WaylandWindow;
 class WaylandSurface;
 class WaylandSubsurface;
@@ -145,13 +145,18 @@ class WaylandFrameManager {
 
   static base::TimeDelta GetPresentationFlushTimerDurationForTesting();
 
-  void AddFrameTimingObserver(WaylandFrameTimingObserver* observer);
-  void RemoveFrameTimingObserver(WaylandFrameTimingObserver* observer);
+  // Whether a frame is waiting to be committed, typically for the previous
+  // frame's wl_frame_callback.
+  bool HasFrameWaitingToCommit() const;
 
-  void RequestFrameCallback();
+  // Root surface identifier, used for tracing in the begin frame source.
+  uint32_t GetRootSurfaceId() const;
 
  private:
   friend class WaylandFrameManagerTest;
+  friend class BeginFrameSourceWaylandTest;
+
+  void CreateBeginFrameSource();
 
   void PlayBackFrame(std::unique_ptr<WaylandFrame> frame);
   void DiscardFrame(std::unique_ptr<WaylandFrame> frame);
@@ -296,11 +301,7 @@ class WaylandFrameManager {
   // occluded, as is the case in mutter.
   bool should_ack_swap_without_commit_ = false;
 
-  // Frame callback without a buffer commit, used to maintain frame pacing
-  // for the begin frame source when viz has no damage.
-  wl::Object<wl_callback> no_damage_frame_callback_;
-
-  raw_ptr<WaylandFrameTimingObserver> frame_timing_observer_ = nullptr;
+  std::unique_ptr<BeginFrameSourceWayland> begin_frame_source_;
 
   base::WeakPtrFactory<WaylandFrameManager> weak_factory_;
 };

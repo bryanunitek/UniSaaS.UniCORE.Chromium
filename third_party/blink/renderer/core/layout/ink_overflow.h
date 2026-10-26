@@ -10,6 +10,7 @@
 
 #include "base/check_op.h"
 #include "base/dcheck_is_on.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker.h"
@@ -200,12 +201,17 @@ class CORE_EXPORT InkOverflow {
 #endif
 
  private:
+  // |fragment_cursor| is used to determine where the fragment sits within its
+  // decorated run so that `text-decoration-inset` trims match painting
+  // exactly. When null, conservative bounds are computed instead (insets never
+  // shrink the bounds, and expanding insets are always applied).
   static LogicalRect ComputeAppliedDecorationOverflow(
       const ComputedStyle& style,
       const UsedFont& used_font,
       const PhysicalOffset& offset_in_container,
       const LogicalRect& ink_overflow,
       const InlinePaintContext* inline_context,
+      const InlineCursor* fragment_cursor,
       const AppliedTextDecoration* decoration_override = nullptr);
 
   // For all markers but custom highlights. i.e. those with only one
@@ -268,9 +274,11 @@ class CORE_EXPORT InkOverflow {
 
   union {
     // When only self or contents overflow.
-    SingleInkOverflow* single_;
+    // RAW_PTR_EXCLUSION: #union
+    RAW_PTR_EXCLUSION SingleInkOverflow* single_;
     // When both self and contents overflow.
-    ContainerInkOverflow* container_;
+    // RAW_PTR_EXCLUSION: #union
+    RAW_PTR_EXCLUSION ContainerInkOverflow* container_;
     // Outsets in small |LayoutUnit|s when overflow is small.
     std::array<SmallRawValue, 4> outsets_;
     static_assert(sizeof(outsets_) == sizeof(single_),

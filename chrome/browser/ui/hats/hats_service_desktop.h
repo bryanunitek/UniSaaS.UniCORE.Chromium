@@ -20,7 +20,7 @@
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "content/public/browser/web_contents_observer.h"
 
-class Browser;
+class BrowserWindowInterface;
 class PrefService;
 
 // Key-value mapping type for survey's product specific bits data.
@@ -121,6 +121,13 @@ class HatsServiceDesktop : public HatsService {
 
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
+  // Product Specific Data keys that are attached to every survey by default.
+  // These match the keys used by HaTS on Android, see
+  // HatsNextSurveyController#getProductSpecificData. Surveys should not
+  // declare fields with these keys.
+  static constexpr char kChromeChannelPsdKey[] = "chrome_channel";
+  static constexpr char kChromeVersionPsdKey[] = "chrome_version";
+
   using HatsService::LaunchSurvey;
   LaunchError LaunchSurvey(
       const std::string& trigger,
@@ -184,7 +191,15 @@ class HatsServiceDesktop : public HatsService {
 
  protected:
  private:
+  friend class HatsServiceDesktopProductSpecificDataTest;
   FRIEND_TEST_ALL_PREFIXES(HatsServiceProbabilityOne, SingleHatsNextDialog);
+
+  // Returns `product_specific_string_data` with the default Product Specific
+  // Data (Chrome channel and version) set. Survey configs can't declare the
+  // default keys (enforced by survey_config_unittest.cc), so the defaults
+  // never collide with survey-provided data.
+  static SurveyStringData AddDefaultProductSpecificData(
+      SurveyStringData product_specific_string_data);
 
   PrefService* GetPrefsForHatsMetadata() const;
 
@@ -193,7 +208,7 @@ class HatsServiceDesktop : public HatsService {
 
   // Returns the launch error for the given trigger and browser, performing all
   // checks.
-  LaunchError RunLaunchChecks(Browser* browser,
+  LaunchError RunLaunchChecks(BrowserWindowInterface* browser,
                               const std::string& trigger) const;
 
   // Helper for CanShowSurvey, performing browser-independent checks (except
@@ -202,12 +217,12 @@ class HatsServiceDesktop : public HatsService {
 
   // Returns true if the requested browser type matches the actual browser type.
   bool IsRightBrowserType(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       hats::SurveyConfig::RequestedBrowserType requested_browser_type) const;
 
   // Shows the survey after checking all conditions are met.
   LaunchError ShowSurvey(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       const std::string& trigger,
       base::OnceClosure success_callback,
       base::OnceClosure failure_callback,

@@ -79,6 +79,7 @@ namespace blink {
 class AcceleratedStaticBitmapImage;
 class CanvasNon2DResourceProvider;
 struct CanvasSnapshotInfo;
+class CanvasToneMapping;
 class EXTDisjointTimerQuery;
 class EXTDisjointTimerQueryWebGL2;
 class V8UnionElementOrElementImage;
@@ -171,6 +172,8 @@ class MODULES_EXPORT WebGLRenderingContextBase
   void setDrawingBufferColorSpace(ScriptState*,
                                   const V8PredefinedColorSpace& color_space,
                                   ExceptionState&);
+  CanvasToneMapping* drawingBufferToneMapping(
+      const CanvasToneMapping* tone_mapping = nullptr);
 
   V8PredefinedColorSpace unpackColorSpace(ScriptState*) const;
   void setUnpackColorSpace(ScriptState*,
@@ -425,11 +428,13 @@ class MODULES_EXPORT WebGLRenderingContextBase
                   ImageBitmap*,
                   ExceptionState&);
 
-  void texElementImage2D(GLenum target,
-                         GLenum internalformat,
-                         const V8UnionElementOrElementImage* element,
-                         const WebGLCopyElementImageConfig* config,
-                         ExceptionState& exception_state);
+  void texElementSubImage2D(GLenum target,
+                            GLint level,
+                            GLint xoffset,
+                            GLint yoffset,
+                            const V8UnionElementOrElementImage* element,
+                            const WebGLCopyElementImageConfig* config,
+                            ExceptionState& exception_state);
 
   void texParameterf(GLenum target, GLenum pname, GLfloat param);
   void texParameteri(GLenum target, GLenum pname, GLint param);
@@ -595,7 +600,7 @@ class MODULES_EXPORT WebGLRenderingContextBase
 
   Extensions3DUtil* ExtensionsUtil();
 
-  void Reshape(int width, int height) override;
+  void Reshape(gfx::Size old_size, gfx::Size new_size) override;
 
   void MarkLayerComposited() override;
 
@@ -656,7 +661,7 @@ class MODULES_EXPORT WebGLRenderingContextBase
   // JavaScript cannot allocate bigger ArrayBuffers anyways. Only with
   // WebAssembly it is possible to allocate bigger ArrayBuffers.
   static constexpr size_t kMaximumSupportedArrayBufferSize =
-      ::partition_alloc::internal::MaxDirectMapped();
+      ::partition_alloc::MaxAllocationSize();
 
  protected:
   // Implementation helpers.
@@ -711,7 +716,6 @@ class MODULES_EXPORT WebGLRenderingContextBase
   // CanvasRenderingContext implementation.
   bool IsComposited() const override { return true; }
   void PageVisibilityChanged() override;
-  void SizeChanged() override;
   scoped_refptr<StaticBitmapImage> PaintRenderingResultsToSnapshot(
       SourceDrawingBuffer source_buffer) override;
   void ClearMarkedCanvasDirty() override { marked_canvas_dirty_ = false; }
@@ -1842,8 +1846,6 @@ class MODULES_EXPORT WebGLRenderingContextBase
                          ConsoleDisplayPreference = kDisplayInConsole);
   void EmitGLWarning(const char* function, const char* reason);
 
-  String EnsureNotNull(const String&) const;
-
   // Enable or disable the depth and stencil test based on the user's
   // setting and whether the current FBO has a depth and stencil
   // buffer.
@@ -1999,16 +2001,19 @@ class MODULES_EXPORT WebGLRenderingContextBase
 
   void Dispose() override;
 
-  void TexElementImage2DInternal(GLenum target,
-                                 GLenum internalformat,
-                                 std::optional<GLfloat> sx,
-                                 std::optional<GLfloat> sy,
-                                 std::optional<GLfloat> swidth,
-                                 std::optional<GLfloat> sheight,
-                                 std::optional<GLsizei> width,
-                                 std::optional<GLsizei> height,
-                                 const V8UnionElementOrElementImage* element,
-                                 ExceptionState& exception_state);
+  void TexElementSubImage2DInternal(GLenum target,
+                                    std::optional<GLenum> internalformat,
+                                    GLint level,
+                                    GLint xoffset,
+                                    GLint yoffset,
+                                    std::optional<GLfloat> sx,
+                                    std::optional<GLfloat> sy,
+                                    std::optional<GLfloat> swidth,
+                                    std::optional<GLfloat> sheight,
+                                    std::optional<GLsizei> width,
+                                    std::optional<GLsizei> height,
+                                    const V8UnionElementOrElementImage* element,
+                                    ExceptionState& exception_state);
 
   // Used to provide accelerated snapshots and CanvasResources holding the
   // current content.
@@ -2053,6 +2058,7 @@ class MODULES_EXPORT WebGLRenderingContextBase
 
   PredefinedColorSpace drawing_buffer_color_space_ =
       PredefinedColorSpace::kSRGB;
+  gfx::HDRMetadata drawing_buffer_tone_mapping_hdr_metadata_;
   PredefinedColorSpace unpack_color_space_ = PredefinedColorSpace::kSRGB;
 };
 

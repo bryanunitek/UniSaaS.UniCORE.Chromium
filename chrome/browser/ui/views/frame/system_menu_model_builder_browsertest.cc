@@ -10,9 +10,9 @@
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/glic/test_support/glic_test_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
@@ -56,7 +56,7 @@ class SystemMenuModelBuilderGlicTest : public InProcessBrowserTest {
 // Check if the toggle tab search pinning option exists and has the right label
 // based on relevant prefs.
 IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderGlicTest, ToggleTabSearchPinning) {
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   ui::MenuModel* menu = BrowserView::GetBrowserViewForBrowser(browser())
                             ->browser_widget()
                             ->GetSystemMenuModel();
@@ -73,25 +73,28 @@ IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderGlicTest, ToggleTabSearchPinning) {
 // Check if the toggle glic pinning option exists and has the right label based
 // on relevant prefs.
 IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderGlicTest, ToggleGlicPinning) {
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   ui::MenuModel* menu = BrowserView::GetBrowserViewForBrowser(browser())
                             ->browser_widget()
                             ->GetSystemMenuModel();
 
   profile_prefs->SetInteger(
       optimization_guide::prefs::kGeminiSettings,
-      std::to_underlying(glic::prefs::SettingsPolicyState::kDisabled));
+      std::to_underlying(
+          optimization_guide::prefs::GeminiSettingsPolicyState::kDisabled));
   EXPECT_FALSE(ContainsCommand(menu, IDC_GLIC_TOGGLE_PIN, std::nullopt));
 
   profile_prefs->SetInteger(
       optimization_guide::prefs::kGeminiSettings,
-      std::to_underlying(glic::prefs::SettingsPolicyState::kEnabled));
+      std::to_underlying(
+          optimization_guide::prefs::GeminiSettingsPolicyState::kEnabled));
   profile_prefs->SetBoolean(glic::prefs::kGlicPinnedToTabstrip, false);
   EXPECT_TRUE(ContainsCommand(menu, IDC_GLIC_TOGGLE_PIN, IDS_GLIC_PIN));
 
   profile_prefs->SetInteger(
       optimization_guide::prefs::kGeminiSettings,
-      std::to_underlying(glic::prefs::SettingsPolicyState::kEnabled));
+      std::to_underlying(
+          optimization_guide::prefs::GeminiSettingsPolicyState::kEnabled));
   profile_prefs->SetBoolean(glic::prefs::kGlicPinnedToTabstrip, true);
   EXPECT_TRUE(ContainsCommand(menu, IDC_GLIC_TOGGLE_PIN, IDS_GLIC_UNPIN));
 }
@@ -100,13 +103,64 @@ IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderGlicTest, ToggleGlicPinning) {
 // pref.
 IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderGlicTest,
                        ExecuteTabSearchToggleCommand) {
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
 
   profile_prefs->SetBoolean(prefs::kTabSearchPinnedToTabstrip, false);
   chrome::ExecuteCommand(browser(), IDC_TAB_SEARCH_TOGGLE_PIN);
   EXPECT_TRUE(profile_prefs->GetBoolean(prefs::kTabSearchPinnedToTabstrip));
   chrome::ExecuteCommand(browser(), IDC_TAB_SEARCH_TOGGLE_PIN);
   EXPECT_FALSE(profile_prefs->GetBoolean(prefs::kTabSearchPinnedToTabstrip));
+}
+
+class SystemMenuModelBuilderTabStripUnificationTest
+    : public InProcessBrowserTest {
+ public:
+  SystemMenuModelBuilderTabStripUnificationTest() {
+    scoped_feature_list_.InitAndEnableFeature(tabs::kTabStripUnification);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Check if the toggle tab scroll buttons pinning option exists and has the
+// right label based on relevant prefs.
+// TODO(crbug.com/549762016): Flaky on Mac builds.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_ToggleTabScrollButtonsPinning \
+  DISABLED_ToggleTabScrollButtonsPinning
+#else
+#define MAYBE_ToggleTabScrollButtonsPinning ToggleTabScrollButtonsPinning
+#endif
+IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderTabStripUnificationTest,
+                       MAYBE_ToggleTabScrollButtonsPinning) {
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
+  ui::MenuModel* menu = BrowserView::GetBrowserViewForBrowser(browser())
+                            ->browser_widget()
+                            ->GetSystemMenuModel();
+
+  profile_prefs->SetBoolean(prefs::kTabScrollButtonsPinnedToTabstrip, false);
+  EXPECT_TRUE(ContainsCommand(menu, IDC_TAB_SCROLL_BUTTONS_TOGGLE_PIN,
+                              IDS_TAB_SCROLL_PIN_BUTTONS_SYSTEM_MENU));
+
+  profile_prefs->SetBoolean(prefs::kTabScrollButtonsPinnedToTabstrip, true);
+  EXPECT_TRUE(ContainsCommand(menu, IDC_TAB_SCROLL_BUTTONS_TOGGLE_PIN,
+                              IDS_TAB_SCROLL_UNPIN_BUTTONS_SYSTEM_MENU));
+}
+
+// Verify that executing the tab scroll buttons toggle command actually changes
+// the pref.
+IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderTabStripUnificationTest,
+                       ExecuteTabScrollButtonsToggleCommand) {
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
+
+  profile_prefs->SetBoolean(prefs::kTabScrollButtonsPinnedToTabstrip, false);
+  chrome::ExecuteCommand(browser(), IDC_TAB_SCROLL_BUTTONS_TOGGLE_PIN);
+  EXPECT_TRUE(
+      profile_prefs->GetBoolean(prefs::kTabScrollButtonsPinnedToTabstrip));
+  chrome::ExecuteCommand(browser(), IDC_TAB_SCROLL_BUTTONS_TOGGLE_PIN);
+  EXPECT_FALSE(
+      profile_prefs->GetBoolean(prefs::kTabScrollButtonsPinnedToTabstrip));
 }
 
 class SystemMenuModelBuilderSimplificationTest : public InProcessBrowserTest {
@@ -168,19 +222,15 @@ IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderSimplificationTest,
 }
 #endif
 
-class SystemMenuModelBuilderVerticalTabsTest : public InProcessBrowserTest {
- protected:
-  void SetUp() override {
-    scoped_feature_list_.InitWithFeatures(
-        /* enabled_features */ {tabs::kVerticalTabs,
-                                tabs::kVerticalTabsExpandOnHover},
-        /* disabled_features */ {});
-    InProcessBrowserTest::SetUp();
-  }
+using SystemMenuModelBuilderVerticalTabsTest = InProcessBrowserTest;
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
+#if BUILDFLAG(IS_MAC)
+constexpr int kSwitchToVerticalTabStringId = IDS_SWITCH_TO_VERTICAL_TAB_MAC;
+constexpr int kSwitchToHorizontalTabStringId = IDS_SWITCH_TO_HORIZONTAL_TAB_MAC;
+#else
+constexpr int kSwitchToVerticalTabStringId = IDS_SWITCH_TO_VERTICAL_TAB;
+constexpr int kSwitchToHorizontalTabStringId = IDS_SWITCH_TO_HORIZONTAL_TAB;
+#endif
 
 IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderVerticalTabsTest,
                        VerticalTabsSystemMenu) {
@@ -197,7 +247,7 @@ IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderVerticalTabsTest,
   // In horizontal tabs, we should show:
   // - IDC_TOGGLE_VERTICAL_TABS (to switch to vertical tabs)
   EXPECT_TRUE(ContainsCommand(menu, IDC_TOGGLE_VERTICAL_TABS,
-                              IDS_SWITCH_TO_VERTICAL_TAB));
+                              kSwitchToVerticalTabStringId));
   EXPECT_FALSE(ContainsCommand(menu, IDC_TOGGLE_VERTICAL_TABS_EXPAND_ON_HOVER,
                                std::nullopt));
 
@@ -211,7 +261,7 @@ IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderVerticalTabsTest,
              ->GetSystemMenuModel();
 
   EXPECT_TRUE(ContainsCommand(menu, IDC_TOGGLE_VERTICAL_TABS,
-                              IDS_SWITCH_TO_VERTICAL_TAB));
+                              kSwitchToVerticalTabStringId));
   EXPECT_FALSE(ContainsCommand(menu, IDC_TOGGLE_VERTICAL_TABS_EXPAND_ON_HOVER,
                                std::nullopt));
 
@@ -233,7 +283,7 @@ IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderVerticalTabsTest,
   // - IDC_TOGGLE_VERTICAL_TABS_COLLAPSE
   // - IDC_TOGGLE_VERTICAL_TABS_EXPAND_ON_HOVER
   EXPECT_TRUE(ContainsCommand(menu, IDC_TOGGLE_VERTICAL_TABS,
-                              IDS_SWITCH_TO_HORIZONTAL_TAB));
+                              kSwitchToHorizontalTabStringId));
   EXPECT_TRUE(ContainsCommand(menu, IDC_TOGGLE_VERTICAL_TABS_COLLAPSE,
                               IDS_COLLAPSE_VERTICAL_TABS));
   EXPECT_TRUE(ContainsCommand(menu, IDC_TOGGLE_VERTICAL_TABS_EXPAND_ON_HOVER,
@@ -249,7 +299,7 @@ IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderVerticalTabsTest,
              ->GetSystemMenuModel();
 
   EXPECT_TRUE(ContainsCommand(menu, IDC_TOGGLE_VERTICAL_TABS,
-                              IDS_SWITCH_TO_HORIZONTAL_TAB));
+                              kSwitchToHorizontalTabStringId));
   EXPECT_TRUE(ContainsCommand(menu, IDC_TOGGLE_VERTICAL_TABS_COLLAPSE,
                               IDS_COLLAPSE_VERTICAL_TABS));
   EXPECT_TRUE(ContainsCommand(menu, IDC_TOGGLE_VERTICAL_TABS_EXPAND_ON_HOVER,

@@ -14,7 +14,7 @@
 #include "components/prefs/pref_member.h"
 #include "ui/base/interaction/element_identifier.h"
 
-class Browser;
+class BrowserWindowInterface;
 class PinnedToolbarButtonStatusIndicator;
 class SplitTabMenuModel;
 
@@ -32,7 +32,7 @@ class SplitTabsToolbarButton : public ToolbarButton,
  public:
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kUpdatePinStateMenu);
 
-  explicit SplitTabsToolbarButton(Browser* browser);
+  explicit SplitTabsToolbarButton(BrowserWindowInterface* browser);
   SplitTabsToolbarButton(const SplitTabsToolbarButton&) = delete;
   SplitTabsToolbarButton& operator=(const SplitTabsToolbarButton&) = delete;
   ~SplitTabsToolbarButton() override;
@@ -59,8 +59,14 @@ class SplitTabsToolbarButton : public ToolbarButton,
   void UpdateAccessibilityRole(bool has_menu);
   void UpdateAccessibilityLabel(bool is_enabled);
 
+  // If the IPH is showing, notifies that the feature promo was used.
+  void MaybeNotifyIndirectAccessIPHUsed();
+
+  // Aborts the feature promo if we are no longer in a side-by-side split.
+  void MaybeAbortIndirectAccessIPH();
+
   BooleanPrefMember pin_state_;
-  raw_ptr<Browser> browser_;
+  raw_ptr<BrowserWindowInterface> browser_;
   raw_ptr<PinnedToolbarButtonStatusIndicator> status_indicator_;
   std::unique_ptr<SplitTabMenuModel> split_tab_menu_;
   std::unique_ptr<views::MenuModelAdapter> menu_model_adapter_;

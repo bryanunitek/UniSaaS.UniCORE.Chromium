@@ -6,7 +6,6 @@
 
 #include <array>
 
-#include "base/check_deref.h"
 #include "base/debug/crash_logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
@@ -101,7 +100,7 @@ bool IdleSpellCheckController::IsSpellCheckingEnabled() const {
 
 void IdleSpellCheckController::DisposeIdleCallback() {
   if (idle_callback_handle_ != kInvalidHandle && GetExecutionContext()) {
-    ScriptedIdleTaskController::From(*GetExecutionContext())
+    ScriptedIdleTaskController::From(GetWindow())
         .CancelCallback(idle_callback_handle_);
   }
   idle_callback_handle_ = kInvalidHandle;
@@ -114,6 +113,20 @@ void IdleSpellCheckController::Deactivate() {
   cold_mode_requester_->Deactivate();
   DisposeIdleCallback();
   spell_check_requester_->Deactivate();
+
+  // Advance the undo step sequence so that a later hot mode invocation only
+  // checks undo steps registered after the controller was reactivated.
+  if (GetExecutionContext() &&
+      RuntimeEnabledFeatures::SkipStaleUndoStepsInIdleSpellCheckEnabled()) {
+    if (const LocalFrame* frame = GetWindow().GetFrame()) {
+      const auto undo_steps = frame->GetEditor().GetUndoStack().UndoSteps();
+      if (undo_steps.begin() != undo_steps.end()) {
+        last_processed_undo_step_sequence_ =
+            std::max(last_processed_undo_step_sequence_,
+                     (*undo_steps.begin())->SequenceNumber());
+      }
+    }
+  }
 }
 
 void IdleSpellCheckController::RespondToChangedSelection() {
@@ -218,7 +231,7 @@ void IdleSpellCheckController::SetNeedsInvocation() {
   IdleRequestOptions* options = IdleRequestOptions::Create();
   options->setTimeout(kHotModeRequestTimeoutMS);
   idle_callback_handle_ =
-      ScriptedIdleTaskController::From(CHECK_DEREF(GetExecutionContext()))
+      ScriptedIdleTaskController::From(GetWindow())
           .RegisterCallback(MakeGarbageCollected<IdleCallback>(this), options);
   state_ = State::kHotModeRequested;
 }
@@ -250,7 +263,7 @@ void IdleSpellCheckController::ColdModeTimerFired() {
   }
 
   idle_callback_handle_ =
-      ScriptedIdleTaskController::From(CHECK_DEREF(GetExecutionContext()))
+      ScriptedIdleTaskController::From(GetWindow())
           .RegisterCallback(MakeGarbageCollected<IdleCallback>(this),
                             IdleRequestOptions::Create());
   state_ = State::kColdModeRequested;
@@ -320,17 +333,14 @@ void IdleSpellCheckController::Invoke(IdleDeadline* deadline) {
 
   // If focus node has canonical position null then spellcheck should not
   // be executed.
-  if (RuntimeEnabledFeatures::
-          CheckForCanonicalPositionInIdleSpellCheckEnabled()) {
-    Position selection_focus =
-        GetWindow().GetFrame()->Selection().GetSelectionInDomTree().Focus();
-    if (selection_focus) {
-      GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
-      if (CanonicalPositionOf(EphemeralRange(selection_focus).StartPosition())
-              .IsNull()) {
-        Deactivate();
-        return;
-      }
+  Position selection_focus =
+      GetWindow().GetFrame()->Selection().GetSelectionInDomTree().Focus();
+  if (selection_focus) {
+    GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
+    if (CanonicalPositionOf(EphemeralRange(selection_focus).StartPosition())
+            .IsNull()) {
+      Deactivate();
+      return;
     }
   }
 
@@ -384,7 +394,7 @@ void IdleSpellCheckController::ForceInvocationForTesting() {
     case State::kHotModeRequested:
     case State::kColdModeRequested:
       if (GetExecutionContext()) {
-        ScriptedIdleTaskController::From(*GetExecutionContext())
+        ScriptedIdleTaskController::From(GetWindow())
             .CancelCallback(idle_callback_handle_);
       }
       Invoke(deadline);
@@ -419,7 +429,7 @@ const char* IdleSpellCheckController::GetStateAsString() const {
 #undef V
   });
 
-  unsigned index = static_cast<unsigned>(state_);
+  auto index = std::to_underlying(state_);
   if (index < std::size(kTexts)) {
     return kTexts[index];
   }

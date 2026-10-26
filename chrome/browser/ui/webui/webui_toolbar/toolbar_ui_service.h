@@ -12,7 +12,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/types/expected.h"
 #include "chrome/browser/ui/webui/webui_toolbar/adapters/icon_table_fetcher.h"
-#include "chrome/browser/ui/webui/webui_toolbar/adapters/navigation_controls_state_fetcher.h"
+#include "chrome/browser/ui/webui/webui_toolbar/adapters/toolbar_state_fetcher.h"
 #include "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api.mojom.h"
 #include "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api_data_model.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -36,25 +36,48 @@ class ToolbarUIService : public toolbar_ui_api::mojom::ToolbarUIService {
     virtual void HandleContextMenu(
         toolbar_ui_api::mojom::ContextMenuType menu_type,
         const gfx::RectF& bounds_in_css_pixels,
-        ui::mojom::MenuSourceType source) = 0;
+        ui::mojom::MenuSourceType source,
+        std::optional<uint32_t> show_menu_token) = 0;
+    virtual void ShowOverflowMenu(
+        std::vector<toolbar_ui_api::mojom::OverflowMenuItemPtr> controls,
+        const gfx::RectF& bounds_in_css_pixels,
+        ui::mojom::MenuSourceType source,
+        ShowOverflowMenuCallback callback) = 0;
     virtual void ShowContentSettingsBubble(
         ::toolbar_ui_api::mojom::ContentSettingImageType type,
+        bool is_pointer_interaction,
         ShowContentSettingsBubbleCallback callback) = 0;
+    virtual void OnContentSettingImagePointerDown(
+        ::toolbar_ui_api::mojom::ContentSettingImageType type) = 0;
     virtual void OnPageActionClick(
         ::toolbar_ui_api::mojom::PageActionId action_id,
         ::toolbar_ui_api::mojom::PageActionTrigger trigger,
         OnPageActionClickCallback callback) = 0;
     virtual void OnPageActionChipShowingChanged(
         ::toolbar_ui_api::mojom::PageActionId action_id,
+        bool is_showing,
         OnPageActionChipShowingChangedCallback callback) = 0;
     virtual void OnPageInitialized() = 0;
     virtual void InvokePinnedToolbarAction(
         toolbar_ui_api::mojom::PinnedToolbarAction action_id) = 0;
+    virtual void OnLocationBarFocusWithinChanged(bool focused) = 0;
+    virtual void MovePinnedToolbarAction(
+        toolbar_ui_api::mojom::PinnedToolbarAction action_id,
+        int32_t target_index) = 0;
+    virtual void MovePinnedToolbarActionBy(
+        toolbar_ui_api::mojom::PinnedToolbarAction action_id,
+        int32_t delta) = 0;
+    virtual void MoveExtensionAction(const std::string& extension_id,
+                                     int32_t target_index) = 0;
+    virtual void MoveExtensionActionBy(const std::string& extension_id,
+                                       int32_t delta) = 0;
     virtual void OnLhsChipMousePressed(
-        toolbar_ui_api::mojom::LhsChipIdentifier identifier) = 0;
+        toolbar_ui_api::mojom::LhsChipIdentifier identifier,
+        bool is_middle_click) = 0;
     virtual void OnLhsChipClicked(
         toolbar_ui_api::mojom::LhsChipIdentifier identifier,
-        bool is_mouse_interaction) = 0;
+        bool is_mouse_interaction,
+        uint32_t state_token) = 0;
     virtual void OnLhsChipPointerEntered(
         toolbar_ui_api::mojom::LhsChipIdentifier identifier) = 0;
     virtual void OnLhsChipPointerExited(
@@ -68,6 +91,7 @@ class ToolbarUIService : public toolbar_ui_api::mojom::ToolbarUIService {
         ui::mojom::DragEventSource source) = 0;
     virtual void OnHomeButtonDropUrl(const GURL& url) = 0;
     virtual void OnHomeButtonDropFile(const gfx::PointF& drop_position) = 0;
+    virtual void OnHomeButtonDropText(const std::string& text) = 0;
     virtual void OnToolbarDropFile(const gfx::PointF& drop_position) = 0;
     virtual base::expected<std::monostate, mojo_base::mojom::ErrorPtr>
     OnOmniboxAction(toolbar_ui_api::mojom::OmniboxActionPtr action) = 0;
@@ -79,11 +103,19 @@ class ToolbarUIService : public toolbar_ui_api::mojom::ToolbarUIService {
     virtual void ExecuteExtensionAction(const std::string& extension_id) = 0;
     virtual void ShowExtensionContextMenu(const std::string& extension_id,
                                           ui::mojom::MenuSourceType source) = 0;
+    virtual base::expected<
+        toolbar_ui_api::mojom::AdjustOmniboxTextForCopyResultPtr,
+        mojo_base::mojom::ErrorPtr>
+    AdjustOmniboxTextForCopy(const std::u16string& text,
+                             int32_t selection_start) = 0;
+    virtual void OnPerformanceInterventionButtonClicked() = 0;
+    virtual void OnMediaButtonClicked() = 0;
+    virtual void OnGlicButtonClicked() = 0;
   };
 
   ToolbarUIService(
       mojo::PendingReceiver<toolbar_ui_api::mojom::ToolbarUIService> service,
-      std::unique_ptr<NavigationControlsStateFetcher> state_fetcher,
+      std::unique_ptr<ToolbarStateFetcher> state_fetcher,
       std::unique_ptr<IconTableFetcher> icon_table_fetcher,
       MetricsReporter* metrics_reporter,
       ToolbarUIServiceDelegate* delegate);
@@ -95,33 +127,60 @@ class ToolbarUIService : public toolbar_ui_api::mojom::ToolbarUIService {
 
   void SetDelegate(ToolbarUIServiceDelegate* delegate);
 
-  void OnNavigationControlsStateChanged(
-      const mojom::NavigationControlsState& state);
+  void OnToolbarStateChanged(const mojom::ToolbarState& state);
   void OnFocusRequested(toolbar_ui_api::mojom::FocusRequestTarget target);
+  void ShowSplitTabsContextMenu();
+
+  // Blocks until every ToolbarUIObserver message sent so far has been
+  // dispatched by the WebUI.
+  void FlushObserversForTesting();
 
   // toolbar_ui_api::mojom::ToolbarUIService:
   void Bind(BindCallback callback) override;
   void ShowContextMenu(toolbar_ui_api::mojom::ContextMenuType menu_type,
                        const gfx::RectF& bounds_in_css_pixels,
-                       ui::mojom::MenuSourceType source) override;
+                       ui::mojom::MenuSourceType source,
+                       std::optional<uint32_t> show_menu_token) override;
+  void ShowOverflowMenu(
+      std::vector<toolbar_ui_api::mojom::OverflowMenuItemPtr> controls,
+      const gfx::RectF& bounds_in_css_pixels,
+      ui::mojom::MenuSourceType source,
+      ShowOverflowMenuCallback callback) override;
   void OnOmniboxAction(toolbar_ui_api::mojom::OmniboxActionPtr action,
                        OnOmniboxActionCallback callback) override;
   void OnPageInitialized() override;
   void ShowContentSettingsBubble(
       ::toolbar_ui_api::mojom::ContentSettingImageType type,
+      bool is_pointer_interaction,
       ShowContentSettingsBubbleCallback callback) override;
+  void OnContentSettingImagePointerDown(
+      ::toolbar_ui_api::mojom::ContentSettingImageType type) override;
   void OnPageActionClick(::toolbar_ui_api::mojom::PageActionId action_id,
                          ::toolbar_ui_api::mojom::PageActionTrigger trigger,
                          OnPageActionClickCallback callback) override;
   void OnPageActionChipShowingChanged(
       ::toolbar_ui_api::mojom::PageActionId action_id,
+      bool is_showing,
       OnPageActionChipShowingChangedCallback callback) override;
   void InvokePinnedToolbarAction(
       toolbar_ui_api::mojom::PinnedToolbarAction action_id) override;
+  void OnLocationBarFocusWithinChanged(bool focused) override;
+  void MovePinnedToolbarAction(
+      toolbar_ui_api::mojom::PinnedToolbarAction action_id,
+      int32_t target_index) override;
+  void MovePinnedToolbarActionBy(
+      toolbar_ui_api::mojom::PinnedToolbarAction action_id,
+      int32_t delta) override;
+  void MoveExtensionAction(const std::string& extension_id,
+                           int32_t target_index) override;
+  void MoveExtensionActionBy(const std::string& extension_id,
+                             int32_t delta) override;
   void OnLhsChipMousePressed(
-      toolbar_ui_api::mojom::LhsChipIdentifier identifier) override;
+      toolbar_ui_api::mojom::LhsChipIdentifier identifier,
+      bool is_middle_click) override;
   void OnLhsChipClicked(toolbar_ui_api::mojom::LhsChipIdentifier identifier,
-                        bool is_mouse_interaction) override;
+                        bool is_mouse_interaction,
+                        uint32_t state_token) override;
   void OnLhsChipPointerEntered(
       toolbar_ui_api::mojom::LhsChipIdentifier identifier) override;
   void OnLhsChipPointerExited(
@@ -134,6 +193,7 @@ class ToolbarUIService : public toolbar_ui_api::mojom::ToolbarUIService {
                      ui::mojom::DragEventSource source) override;
   void OnHomeButtonDropUrl(const GURL& url) override;
   void OnHomeButtonDropFile(const gfx::PointF& drop_position) override;
+  void OnHomeButtonDropText(const std::string& text) override;
   void OnToolbarDropFile(const gfx::PointF& drop_position) override;
   void ShowAvatarMenu(ShowAvatarMenuCallback callback) override;
   void SetAvatarButtonHovered(bool hovered,
@@ -147,12 +207,21 @@ class ToolbarUIService : public toolbar_ui_api::mojom::ToolbarUIService {
   void ExecuteExtensionAction(const std::string& extension_id) override;
   void ShowExtensionContextMenu(const std::string& extension_id,
                                 ui::mojom::MenuSourceType source) override;
+  void AdjustOmniboxTextForCopy(
+      const std::u16string& text,
+      int32_t selection_start,
+      AdjustOmniboxTextForCopyCallback callback) override;
+  void OnPerformanceInterventionButtonClicked() override;
+  void OnMediaButtonClicked() override;
+  // Handles click events from the WebUI Glic button by forwarding them to the
+  // delegate.
+  void OnGlicButtonClicked() override;
 
  private:
   mojo::Receiver<toolbar_ui_api::mojom::ToolbarUIService> service_;
   mojo::RemoteSet<toolbar_ui_api::mojom::ToolbarUIObserver> observers_;
 
-  std::unique_ptr<NavigationControlsStateFetcher> state_fetcher_;
+  std::unique_ptr<ToolbarStateFetcher> state_fetcher_;
   std::unique_ptr<IconTableFetcher> icon_table_fetcher_;
 
   // Not owned.

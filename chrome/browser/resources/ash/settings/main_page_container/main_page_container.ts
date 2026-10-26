@@ -46,7 +46,7 @@ import type {AndroidAppsInfo} from '../os_apps_page/android_apps_browser_proxy.j
 import {AndroidAppsBrowserProxyImpl} from '../os_apps_page/android_apps_browser_proxy.js';
 import type {LanguageHelper, LanguagesModel} from '../os_languages_page/languages_types.js';
 import type {OsPageAvailability} from '../os_page_availability.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 
 import {getTemplate} from './main_page_container.html.js';
 import {MainPageMixin} from './main_page_mixin.js';
@@ -128,17 +128,17 @@ export class MainPageContainerElement extends MainPageContainerElementBase {
     };
   }
 
-  prefs: PrefsState;
-  androidAppsInfo?: AndroidAppsInfo;
-  pageAvailability: OsPageAvailability;
+  declare prefs: PrefsState;
+  declare androidAppsInfo?: AndroidAppsInfo;
+  declare pageAvailability: OsPageAvailability;
 
   // Languages data and API
-  private languages_: LanguagesModel|undefined;
-  private languageHelper_: LanguageHelper|undefined;
+  declare private languages_: LanguagesModel|undefined;
+  declare private languageHelper_: LanguageHelper|undefined;
 
-  private isShowingSubpage_: boolean;
-  private showSecondaryUserBanner_: boolean;
-  private showUpdateRequiredEolBanner_: boolean;
+  declare private isShowingSubpage_: boolean;
+  declare private showSecondaryUserBanner_: boolean;
+  declare private showUpdateRequiredEolBanner_: boolean;
 
   override ready(): void {
     super.ready();

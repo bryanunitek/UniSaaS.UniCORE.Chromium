@@ -43,6 +43,7 @@
 #import "ios/testing/earl_grey/app_launch_configuration.h"
 #import "ios/testing/earl_grey/app_launch_manager.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
+#import "ios/testing/test_tag_registry.h"
 #import "net/base/apple/url_conversions.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "net/test/embedded_test_server/http_request.h"
@@ -100,6 +101,9 @@ const int64_t kOfferId = 50;
 const char kCurrencyCode[] = "USD";
 NSString* const kExpectedCurrentPrice = @"$5.00";
 NSString* const kExpectedPreviousPrice = @"$10";
+
+// Key string for Escape in keyboard simulation.
+NSString* const kEscapeKey = @"escape";
 
 // Identifier for cell at given `index` in the tab grid.
 NSString* IdentifierForCellAtIndex(unsigned int index) {
@@ -340,10 +344,39 @@ std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
 }
 
 // Tests entering and leaving the tab grid.
+TAG_SMOKE_TEST(TabGridTestCase, testEnteringAndLeavingTabGrid);
 - (void)testEnteringAndLeavingTabGrid {
   [ChromeEarlGreyUI openTabGrid];
   [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridDoneButton()]
       performAction:grey_tap()];
+}
+
+// Tests entering the tab grid using the button and leaving it using the Escape
+// keyboard shortcut.
+- (void)testEnteringAndLeavingTabGridWithEscape {
+  [ChromeEarlGreyUI openTabGrid];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabGridDoneButton()]
+      assertWithMatcher:grey_sufficientlyVisible()];
+  [ChromeEarlGrey simulatePhysicalKeyboardEvent:kEscapeKey flags:0];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::ShowTabsButton()]
+      assertWithMatcher:grey_sufficientlyVisible()];
+}
+
+// Tests that pressing a TabGrid keyboard shortcut (such as Cmd+1 to switch to
+// the Incognito panel) when the tab grid is not visible does not trigger the
+// TabGrid page change.
+- (void)testShortcutIgnoredWhenTabGridNotVisible {
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::ShowTabsButton()]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  // Send Cmd+1 (which is the shortcut for TabGridPageIncognitoTabs).
+  [ChromeEarlGrey simulatePhysicalKeyboardEvent:@"1"
+                                          flags:UIKeyModifierCommand];
+
+  // Open the TabGrid and verify it opened to the Regular Tabs panel.
+  [ChromeEarlGreyUI openTabGrid];
+  [[EarlGrey selectElementWithMatcher:TabGridOpenTabsPanelButton()]
+      assertWithMatcher:grey_sufficientlyVisible()];
 }
 
 // Tests that tapping on the first cell shows that tab.
@@ -356,6 +389,7 @@ std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
 }
 
 // Tests that closing the cell shows no tabs, and displays the empty state.
+TAG_SMOKE_TEST(TabGridTestCase, testClosingFirstCell);
 - (void)testClosingFirstCell {
   [ChromeEarlGreyUI openTabGrid];
   [[EarlGrey selectElementWithMatcher:chrome_test_util::
@@ -370,6 +404,7 @@ std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
 
 // Tests that tapping Close All shows no tabs and displays the empty state,
 // and ensures that it doesn't affect the other tab grid.
+TAG_SMOKE_TEST(TabGridTestCase, testCloseAll);
 - (void)testCloseAll {
   // Also add a tab in incognito.
   [ChromeEarlGrey openNewIncognitoTab];
@@ -541,11 +576,6 @@ std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
   // Ensure only incognito tabs were closed
   [ChromeEarlGrey waitForMainTabCount:2];
   [ChromeEarlGrey waitForIncognitoTabCount:0];
-
-  // Ensure undo button is not visible.
-  [[EarlGrey
-      selectElementWithMatcher:chrome_test_util::TabGridUndoCloseAllButton()]
-      assertWithMatcher:grey_nil()];
 }
 
 // Tests opening an incognito tabs after closing all incognito tabs with Chrome

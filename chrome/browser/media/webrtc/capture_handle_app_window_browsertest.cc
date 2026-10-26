@@ -4,14 +4,20 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
+#include "base/process/process_handle.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "base/values.h"
+#include "chrome/browser/apps/app_service/app_service_proxy.h"
+#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/apps/intent_helper/preferred_apps_test_util.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
@@ -26,6 +32,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/permissions/permission_request_manager.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_switches.h"
@@ -37,11 +44,16 @@
 #include "third_party/blink/public/mojom/media/capture_handle_config.mojom.h"
 #include "ui/gl/gl_switches.h"
 
+#if defined(USE_AURA)
+#include "ui/aura/window.h"
+#include "ui/aura/window_observer.h"
+#endif
+
 #if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_browsertest_base.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #endif
 
 using content::WebContents;
@@ -78,10 +90,11 @@ class CaptureHandleObserver : public content::WebContentsObserver {
 
 class WindowCaptureSession {
  public:
-  WindowCaptureSession(Browser* target_b, Browser* capturer_b)
+  WindowCaptureSession(BrowserWindowInterface* target_b,
+                       BrowserWindowInterface* capturer_b)
       : target_browser_(target_b), capturer_browser_(capturer_b) {
     target_contents_ =
-        target_browser_->tab_strip_model()->GetActiveWebContents();
+        target_browser_->GetTabStripModel()->GetActiveWebContents();
   }
 
   testing::AssertionResult SetCaptureHandleConfig(
@@ -144,7 +157,7 @@ class WindowCaptureSession {
     GURL capturer_url = test_server->GetURL("/webrtc/capturing_page_main.html");
     EXPECT_TRUE(ui_test_utils::NavigateToURL(capturer_browser_, capturer_url));
     capturer_contents_ =
-        capturer_browser_->tab_strip_model()->GetActiveWebContents();
+        capturer_browser_->GetTabStripModel()->GetActiveWebContents();
     permissions::PermissionRequestManager::FromWebContents(capturer_contents_)
         ->set_auto_response_for_test(
             permissions::PermissionRequestManager::ACCEPT_ALL);
@@ -200,38 +213,91 @@ class WindowCaptureSession {
     reload_observer.Wait();
   }
 
-  Browser* target_browser() const { return target_browser_; }
+  BrowserWindowInterface* target_browser() const { return target_browser_; }
   content::WebContents* target_contents() const { return target_contents_; }
-  Browser* capturer_browser() const { return capturer_browser_; }
+  BrowserWindowInterface* capturer_browser() const { return capturer_browser_; }
   content::WebContents* capturer_contents() const { return capturer_contents_; }
 
  private:
-  raw_ptr<Browser> target_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface> target_browser_ = nullptr;
   raw_ptr<content::WebContents> target_contents_ = nullptr;
-  raw_ptr<Browser> capturer_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface> capturer_browser_ = nullptr;
   raw_ptr<content::WebContents> capturer_contents_ = nullptr;
 };
 
-const std::string& GetCapturedWindowTitle() {
-  // Because this is static, it is initialized exactly once per OS process
-  // (batch). All tests in this batch will share it, while parallel batches
-  // get unique ones.
-  static const std::string title =
-      base::StringPrintf("Capture Target - %s",
-                         base::UnguessableToken::Create().ToString().c_str());
-  return title;
+std::string GetCapturedWindowTitle() {
+  // Tests in the same OS process (batch) share the title, while parallel
+  // batches, which run in other processes, get unique ones.
+  return base::StringPrintf("Capture Target - %d",
+                            static_cast<int>(base::GetCurrentProcId()));
 }
 
-void SetTitleAndWait(content::WebContents* web_contents) {
+#if defined(USE_AURA)
+// Waits for an Aura native window's title to update asynchronously after
+// document.title changes in JavaScript. This ensures that desktop media capture
+// auto-selection by title can locate the window without timing out.
+class NativeWindowTitleWatcher : public aura::WindowObserver {
+ public:
+  NativeWindowTitleWatcher(aura::Window* window,
+                           const std::u16string& expected_title)
+      : window_(window), expected_title_(expected_title) {
+    window_->AddObserver(this);
+  }
+  ~NativeWindowTitleWatcher() override {
+    if (window_) {
+      window_->RemoveObserver(this);
+    }
+  }
+
+  void Wait() {
+    if (HasExpectedTitle()) {
+      return;
+    }
+    run_loop_.Run();
+  }
+
+  // aura::WindowObserver:
+  void OnWindowTitleChanged(aura::Window* window) override {
+    if (HasExpectedTitle()) {
+      run_loop_.Quit();
+    }
+  }
+  void OnWindowDestroyed(aura::Window* window) override {
+    window_ = nullptr;
+    run_loop_.Quit();
+  }
+
+ private:
+  bool HasExpectedTitle() const {
+    return window_ && window_->GetTitle().contains(expected_title_);
+  }
+
+  raw_ptr<aura::Window> window_ = nullptr;
+  std::u16string expected_title_;
+  base::RunLoop run_loop_;
+};
+#endif
+
+void SetTitleAndWait(BrowserWindowInterface* browser) {
+  content::WebContents* web_contents =
+      browser->GetTabStripModel()->GetActiveWebContents();
   std::u16string expected_title = base::UTF8ToUTF16(GetCapturedWindowTitle());
   content::TitleWatcher title_watcher(web_contents, expected_title);
   ASSERT_TRUE(content::ExecJs(
       web_contents, "document.title = '" + GetCapturedWindowTitle() + "';"));
   ASSERT_EQ(title_watcher.WaitAndGetTitle(), expected_title);
+#if defined(USE_AURA)
+  if (browser->GetWindow() && browser->GetWindow()->GetNativeWindow()) {
+    NativeWindowTitleWatcher watcher(browser->GetWindow()->GetNativeWindow(),
+                                     expected_title);
+    watcher.Wait();
+  }
+
+#endif
 }
 
-void SetTitleToClosedAndWait(Browser* browser) {
-  if (auto* contents = browser->tab_strip_model()->GetActiveWebContents()) {
+void SetTitleToClosedAndWait(BrowserWindowInterface* browser) {
+  if (auto* contents = browser->GetTabStripModel()->GetActiveWebContents()) {
     content::TitleWatcher title_watcher(contents, u"Closed");
     EXPECT_TRUE(content::ExecJs(contents, "document.title = 'Closed';"));
     EXPECT_EQ(u"Closed", title_watcher.WaitAndGetTitle());
@@ -254,12 +320,22 @@ class CaptureHandleWindowBrowserTest : public WebRtcTestBase {
 
   void SetUpOnMainThread() override {
     WebRtcTestBase::SetUpOnMainThread();
+#if BUILDFLAG(IS_CHROMEOS)
+    apps::AppServiceProxy* proxy =
+        apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile());
+    if (proxy) {
+      apps_util::PreferredAppsListReadyWaiter(proxy->PreferredAppsList())
+          .Wait();
+    }
+#endif
     os_integration_override_ = std::make_unique<
         web_app::OsIntegrationTestOverrideBlockingRegistration>();
     base::FilePath test_data_dir;
     ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir));
     embedded_test_server()->ServeFilesFromDirectory(test_data_dir);
     ASSERT_TRUE(embedded_test_server()->Start());
+    web_app::test::WaitUntilReady(
+        web_app::WebAppProvider::GetForTest(browser()->GetProfile()));
   }
 
   void TearDownOnMainThread() override {
@@ -270,7 +346,7 @@ class CaptureHandleWindowBrowserTest : public WebRtcTestBase {
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
-  void SafeCloseBrowser(Browser* browser) {
+  void SafeCloseBrowser(BrowserWindowInterface* browser) {
     if (session_) {
       session_.reset();
     }
@@ -278,13 +354,13 @@ class CaptureHandleWindowBrowserTest : public WebRtcTestBase {
     CloseBrowserSynchronously(browser);
   }
 
-  void SetTitleClosedAndUninstallApp(Browser* app_browser,
+  void SetTitleClosedAndUninstallApp(BrowserWindowInterface* app_browser,
                                      const webapps::AppId& app_id) {
     if (session_) {
       session_.reset();
     }
     SetTitleToClosedAndWait(app_browser);
-    web_app::test::UninstallWebApp(browser()->profile(), app_id);
+    web_app::test::UninstallWebApp(browser()->GetProfile(), app_id);
   }
 
  protected:
@@ -311,7 +387,8 @@ class CaptureHandleWindowBrowserTest : public WebRtcTestBase {
 
 IN_PROC_BROWSER_TEST_F(CaptureHandleWindowBrowserTest,
                        IgnoresHandleFromRegularBrowserWindow) {
-  Browser* target_browser = CreateBrowser(browser()->profile());
+  BrowserWindowInterface* target_browser =
+      CreateBrowser(browser()->GetProfile());
   base::ScopedClosureRunner auto_close_target(
       base::BindOnce(&CaptureHandleWindowBrowserTest::SafeCloseBrowser,
                      base::Unretained(this), target_browser));
@@ -319,7 +396,10 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleWindowBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       target_browser, embedded_test_server()->GetURL("/empty.html")));
   session_ = std::make_unique<WindowCaptureSession>(target_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  target_browser->GetWindow()->Show();
+  session_->target_contents()->WasShown();
+
+  SetTitleAndWait(target_browser);
   ASSERT_TRUE(session_->SetCaptureHandleConfig("regular-handle"));
   session_->StartCapturing(embedded_test_server());
   EXPECT_EQ("null", session_->ReadCaptureHandle());
@@ -335,17 +415,17 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleWindowBrowserTest,
       web_app::mojom::UserDisplayMode::kStandalone;
   web_app_info->is_diy_app = true;
   webapps::AppId diy_app_id = web_app::test::InstallWebApp(
-      browser()->profile(), std::move(web_app_info));
+      browser()->GetProfile(), std::move(web_app_info));
 
-  Browser* target_browser =
-      web_app::LaunchWebAppBrowserAndWait(browser()->profile(), diy_app_id);
+  BrowserWindowInterface* target_browser =
+      web_app::LaunchWebAppBrowserAndWait(browser()->GetProfile(), diy_app_id);
   ASSERT_TRUE(target_browser);
   base::ScopedClosureRunner auto_close_target(base::BindOnce(
       &CaptureHandleWindowBrowserTest::SetTitleClosedAndUninstallApp,
       base::Unretained(this), target_browser, diy_app_id));
 
   session_ = std::make_unique<WindowCaptureSession>(target_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  SetTitleAndWait(target_browser);
   ASSERT_TRUE(session_->SetCaptureHandleConfig("diy-handle"));
   session_->StartCapturing(embedded_test_server());
   EXPECT_EQ("null", session_->ReadCaptureHandle());
@@ -378,7 +458,7 @@ IN_PROC_BROWSER_TEST_P(CaptureHandlePlaceholderBrowserTest,
   install_options.fallback_app_name = GetCapturedWindowTitle();
 
   web_app::WebAppProvider* provider =
-      web_app::WebAppProvider::GetForTest(browser()->profile());
+      web_app::WebAppProvider::GetForTest(browser()->GetProfile());
   ASSERT_TRUE(provider);
 
   base::test::TestFuture<web_app::ExternallyManagedAppManager::InstallResult>
@@ -398,8 +478,8 @@ IN_PROC_BROWSER_TEST_P(CaptureHandlePlaceholderBrowserTest,
   EXPECT_TRUE(
       provider->registrar_unsafe().IsPlaceholderApp(app_id, management_type));
 
-  Browser* app_browser =
-      web_app::LaunchWebAppBrowserAndWait(browser()->profile(), app_id);
+  BrowserWindowInterface* app_browser =
+      web_app::LaunchWebAppBrowserAndWait(browser()->GetProfile(), app_id);
   ASSERT_TRUE(app_browser);
   base::ScopedClosureRunner auto_close_target(
       base::BindOnce(&CaptureHandlePlaceholderBrowserTest::SafeCloseBrowser,
@@ -411,7 +491,7 @@ IN_PROC_BROWSER_TEST_P(CaptureHandlePlaceholderBrowserTest,
       app_contents, embedded_test_server()->GetURL("/empty.html")));
 
   session_ = std::make_unique<WindowCaptureSession>(app_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  SetTitleAndWait(app_browser);
   ASSERT_TRUE(session_->SetCaptureHandleConfig(expected_handle));
 
   session_->StartCapturing(embedded_test_server());
@@ -423,10 +503,6 @@ INSTANTIATE_TEST_SUITE_P(
     CaptureHandlePlaceholderBrowserTest,
     testing::Values(web_app::WebAppManagement::Type::kKiosk,
                     web_app::WebAppManagement::Type::kPolicy));
-
-// TODO(https://crbug.com/530967723): This entire sub-suite of tests is flaky in
-// ash; disabling.
-#if !BUILDFLAG(IS_CHROMEOS)
 
 class CaptureHandlePwaBrowserTest : public CaptureHandleWindowBrowserTest {
  public:
@@ -444,7 +520,7 @@ class CaptureHandlePwaBrowserTest : public CaptureHandleWindowBrowserTest {
         web_app::mojom::UserDisplayMode::kStandalone;
     web_app_info->display_override = {
         web_app::DisplayOverride::Create(blink::mojom::DisplayMode::kTabbed)};
-    web_app_info->title = u"A Web App";
+    web_app_info->title = base::UTF8ToUTF16(GetCapturedWindowTitle());
     web_app_info->tab_strip = std::move(tab_strip);
     return web_app::test::InstallWebApp(profile, std::move(web_app_info));
   }
@@ -455,7 +531,7 @@ class CaptureHandlePwaBrowserTest : public CaptureHandleWindowBrowserTest {
     web_app_info->scope = start_url.GetWithoutFilename();
     web_app_info->user_display_mode =
         web_app::mojom::UserDisplayMode::kStandalone;
-    web_app_info->title = u"A Web App";
+    web_app_info->title = base::UTF8ToUTF16(GetCapturedWindowTitle());
     return web_app::test::InstallWebApp(profile, std::move(web_app_info));
   }
 
@@ -465,16 +541,17 @@ class CaptureHandlePwaBrowserTest : public CaptureHandleWindowBrowserTest {
 IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
                        ExtractsHandleFromPwaWindow) {
   GURL pwa_url = embedded_test_server()->GetURL("/title1.html");
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   webapps::AppId pwa_id = InstallStandalonePWA(profile, pwa_url);
-  Browser* pwa_browser = web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
+  BrowserWindowInterface* pwa_browser =
+      web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
   ASSERT_TRUE(pwa_browser);
   base::ScopedClosureRunner auto_close_pwa(base::BindOnce(
       &CaptureHandlePwaBrowserTest::SetTitleClosedAndUninstallApp,
       base::Unretained(this), pwa_browser, pwa_id));
 
   session_ = std::make_unique<WindowCaptureSession>(pwa_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  SetTitleAndWait(pwa_browser);
   ASSERT_TRUE(session_->SetCaptureHandleConfig(expected_handle_));
 
   session_->StartCapturing(embedded_test_server());
@@ -486,16 +563,17 @@ IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
 IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
                        HandlePersistsOnSameDocumentNavigation) {
   GURL pwa_url = embedded_test_server()->GetURL("/title2.html");
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   webapps::AppId pwa_id = InstallStandalonePWA(profile, pwa_url);
-  Browser* pwa_browser = web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
+  BrowserWindowInterface* pwa_browser =
+      web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
   ASSERT_TRUE(pwa_browser);
   base::ScopedClosureRunner auto_close_pwa(base::BindOnce(
       &CaptureHandlePwaBrowserTest::SetTitleClosedAndUninstallApp,
       base::Unretained(this), pwa_browser, pwa_id));
 
   session_ = std::make_unique<WindowCaptureSession>(pwa_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  SetTitleAndWait(pwa_browser);
   ASSERT_TRUE(session_->SetCaptureHandleConfig(expected_handle_));
 
   session_->StartCapturing(embedded_test_server());
@@ -510,9 +588,10 @@ IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest, IgnoresTabbedPwaWindows) {
   GURL pwa_url = embedded_test_server()->GetURL("/title3.html");
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   webapps::AppId pwa_id = InstallTabbedPWA(profile, pwa_url);
-  Browser* pwa_browser = web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
+  BrowserWindowInterface* pwa_browser =
+      web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
   ASSERT_TRUE(pwa_browser);
 
   base::ScopedClosureRunner auto_close_pwa(base::BindOnce(
@@ -520,7 +599,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest, IgnoresTabbedPwaWindows) {
       base::Unretained(this), pwa_browser, pwa_id));
 
   session_ = std::make_unique<WindowCaptureSession>(pwa_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  SetTitleAndWait(pwa_browser);
   ASSERT_TRUE(session_->SetCaptureHandleConfig(expected_handle_));
 
   session_->StartCapturing(embedded_test_server());
@@ -531,16 +610,17 @@ IN_PROC_BROWSER_TEST_F(
     CaptureHandlePwaBrowserTest,
     CrossDocumentChildPageNavigationDoesNotClearCaptureHandleConfig) {
   GURL pwa_url = embedded_test_server()->GetURL("/title1.html");
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   webapps::AppId pwa_id = InstallStandalonePWA(profile, pwa_url);
-  Browser* pwa_browser = web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
+  BrowserWindowInterface* pwa_browser =
+      web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
   ASSERT_TRUE(pwa_browser);
   base::ScopedClosureRunner auto_close_pwa(base::BindOnce(
       &CaptureHandlePwaBrowserTest::SetTitleClosedAndUninstallApp,
       base::Unretained(this), pwa_browser, pwa_id));
 
   session_ = std::make_unique<WindowCaptureSession>(pwa_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  SetTitleAndWait(pwa_browser);
   session_->AddIframe("test_subframe");
 
   ASSERT_TRUE(session_->SetCaptureHandleConfig(expected_handle_));
@@ -561,16 +641,17 @@ IN_PROC_BROWSER_TEST_F(
 
 IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest, RespectsExposeOriginFalse) {
   GURL pwa_url = embedded_test_server()->GetURL("/title1.html");
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   webapps::AppId pwa_id = InstallStandalonePWA(profile, pwa_url);
-  Browser* pwa_browser = web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
+  BrowserWindowInterface* pwa_browser =
+      web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
   ASSERT_TRUE(pwa_browser);
   base::ScopedClosureRunner auto_close_pwa(base::BindOnce(
       &CaptureHandlePwaBrowserTest::SetTitleClosedAndUninstallApp,
       base::Unretained(this), pwa_browser, pwa_id));
 
   session_ = std::make_unique<WindowCaptureSession>(pwa_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  SetTitleAndWait(pwa_browser);
 
   ASSERT_TRUE(session_->SetCaptureHandleConfig(expected_handle_,
                                                /*expose_origin=*/false,
@@ -585,16 +666,17 @@ IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest, RespectsExposeOriginFalse) {
 
 IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest, RespectsPermittedOrigins) {
   GURL pwa_url = embedded_test_server()->GetURL("/title1.html");
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   webapps::AppId pwa_id = InstallStandalonePWA(profile, pwa_url);
-  Browser* pwa_browser = web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
+  BrowserWindowInterface* pwa_browser =
+      web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
   ASSERT_TRUE(pwa_browser);
   base::ScopedClosureRunner auto_close_pwa(base::BindOnce(
       &CaptureHandlePwaBrowserTest::SetTitleClosedAndUninstallApp,
       base::Unretained(this), pwa_browser, pwa_id));
 
   session_ = std::make_unique<WindowCaptureSession>(pwa_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  SetTitleAndWait(pwa_browser);
 
   ASSERT_TRUE(session_->SetCaptureHandleConfig(
       expected_handle_,
@@ -606,9 +688,10 @@ IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest, RespectsPermittedOrigins) {
 IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
                        HandlePushesDynamicUpdatesToCapturer) {
   GURL pwa_url = embedded_test_server()->GetURL("/title1.html");
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   webapps::AppId pwa_id = InstallStandalonePWA(profile, pwa_url);
-  Browser* pwa_browser = web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
+  BrowserWindowInterface* pwa_browser =
+      web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
   ASSERT_TRUE(pwa_browser);
 
   base::ScopedClosureRunner auto_close_pwa(base::BindOnce(
@@ -616,7 +699,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
       base::Unretained(this), pwa_browser, pwa_id));
 
   session_ = std::make_unique<WindowCaptureSession>(pwa_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  SetTitleAndWait(pwa_browser);
   ASSERT_TRUE(session_->SetCaptureHandleConfig(expected_handle_));
 
   session_->StartCapturing(embedded_test_server());
@@ -635,9 +718,10 @@ IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
 IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
                        HandleClearPushedToCapturerOnPageReload) {
   GURL pwa_url = embedded_test_server()->GetURL("/title1.html");
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   webapps::AppId pwa_id = InstallStandalonePWA(profile, pwa_url);
-  Browser* pwa_browser = web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
+  BrowserWindowInterface* pwa_browser =
+      web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
   ASSERT_TRUE(pwa_browser);
 
   base::ScopedClosureRunner auto_close_pwa(base::BindOnce(
@@ -645,7 +729,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
       base::Unretained(this), pwa_browser, pwa_id));
 
   session_ = std::make_unique<WindowCaptureSession>(pwa_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  SetTitleAndWait(pwa_browser);
   ASSERT_TRUE(session_->SetCaptureHandleConfig(expected_handle_));
 
   session_->StartCapturing(embedded_test_server());
@@ -660,9 +744,10 @@ IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
 IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
                        HandleDynamicallyClearedOnNavigation) {
   GURL pwa_url = embedded_test_server()->GetURL("/title2.html");
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   webapps::AppId pwa_id = InstallStandalonePWA(profile, pwa_url);
-  Browser* pwa_browser = web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
+  BrowserWindowInterface* pwa_browser =
+      web_app::LaunchWebAppBrowserAndWait(profile, pwa_id);
   ASSERT_TRUE(pwa_browser);
 
   base::ScopedClosureRunner auto_close_pwa(base::BindOnce(
@@ -670,7 +755,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
       base::Unretained(this), pwa_browser, pwa_id));
 
   session_ = std::make_unique<WindowCaptureSession>(pwa_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  SetTitleAndWait(pwa_browser);
   ASSERT_TRUE(session_->SetCaptureHandleConfig(expected_handle_));
 
   session_->StartCapturing(embedded_test_server());
@@ -681,8 +766,6 @@ IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
   session_->NavigateTargetCrossDocumentAndWait("/title3.html");
   EXPECT_EQ(session_->ReadLastEvent(), "null");
 }
-
-#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 class CaptureHandleIwaWindowBrowserTest
     : public web_app::IsolatedWebAppBrowserTestHarness {
@@ -700,7 +783,7 @@ class CaptureHandleIwaWindowBrowserTest
     web_app::IsolatedWebAppBrowserTestHarness::TearDownOnMainThread();
   }
 
-  void SafeCloseBrowser(Browser* browser) {
+  void SafeCloseBrowser(BrowserWindowInterface* browser) {
     if (session_) {
       session_.reset();
     }
@@ -760,7 +843,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleIwaWindowBrowserTest,
                        ExtractsHandleFromIWA) {
   auto url_info = InstallIwa();
   ASSERT_TRUE(url_info.has_value());
-  Browser* iwa_browser =
+  BrowserWindowInterface* iwa_browser =
       web_app::LaunchWebAppBrowserAndWait(profile(), url_info->app_id());
   EXPECT_TRUE(iwa_browser);
   base::ScopedClosureRunner auto_close(
@@ -780,7 +863,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleIwaWindowBrowserTest,
                        HandlePersistsOnSameDocumentNavigation) {
   auto url_info = InstallIwa();
   ASSERT_TRUE(url_info.has_value());
-  Browser* iwa_browser =
+  BrowserWindowInterface* iwa_browser =
       web_app::LaunchWebAppBrowserAndWait(profile(), url_info->app_id());
   EXPECT_TRUE(iwa_browser);
   base::ScopedClosureRunner auto_close(
@@ -806,7 +889,7 @@ IN_PROC_BROWSER_TEST_F(
     CrossDocumentChildPageNavigationDoesNotClearCaptureHandleConfig) {
   auto url_info = InstallIwa();
   ASSERT_TRUE(url_info.has_value());
-  Browser* iwa_browser =
+  BrowserWindowInterface* iwa_browser =
       web_app::LaunchWebAppBrowserAndWait(profile(), url_info->app_id());
   EXPECT_TRUE(iwa_browser);
   base::ScopedClosureRunner auto_close(
@@ -841,7 +924,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleIwaWindowBrowserTest,
                        RespectsExposeOriginFalse) {
   auto url_info = InstallIwa();
   ASSERT_TRUE(url_info.has_value());
-  Browser* iwa_browser =
+  BrowserWindowInterface* iwa_browser =
       web_app::LaunchWebAppBrowserAndWait(profile(), url_info->app_id());
   EXPECT_TRUE(iwa_browser);
   base::ScopedClosureRunner auto_close(
@@ -865,7 +948,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleIwaWindowBrowserTest,
                        RespectsPermittedOrigins_Unauthorized) {
   auto url_info = InstallIwa();
   ASSERT_TRUE(url_info.has_value());
-  Browser* iwa_browser =
+  BrowserWindowInterface* iwa_browser =
       web_app::LaunchWebAppBrowserAndWait(profile(), url_info->app_id());
   EXPECT_TRUE(iwa_browser);
   base::ScopedClosureRunner auto_close(
@@ -887,7 +970,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleIwaWindowBrowserTest,
                        HandlePushesDynamicUpdatesToCapturer) {
   auto url_info = InstallIwa();
   ASSERT_TRUE(url_info.has_value());
-  Browser* iwa_browser =
+  BrowserWindowInterface* iwa_browser =
       web_app::LaunchWebAppBrowserAndWait(profile(), url_info->app_id());
   EXPECT_TRUE(iwa_browser);
 
@@ -914,7 +997,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleIwaWindowBrowserTest,
                        HandleClearPushedToCapturerOnPageReload) {
   auto url_info = InstallIwa();
   ASSERT_TRUE(url_info.has_value());
-  Browser* iwa_browser =
+  BrowserWindowInterface* iwa_browser =
       web_app::LaunchWebAppBrowserAndWait(profile(), url_info->app_id());
   EXPECT_TRUE(iwa_browser);
 
@@ -938,7 +1021,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleIwaWindowBrowserTest,
                        HandleDynamicallyClearedOnNavigation) {
   auto url_info = InstallIwa();
   ASSERT_TRUE(url_info.has_value());
-  Browser* iwa_browser =
+  BrowserWindowInterface* iwa_browser =
       web_app::LaunchWebAppBrowserAndWait(profile(), url_info->app_id());
   EXPECT_TRUE(iwa_browser);
 
@@ -981,7 +1064,7 @@ class CaptureHandleSystemWebAppBrowserTest
     ash::SystemWebAppBrowserTestBase::TearDownOnMainThread();
   }
 
-  void SafeCloseBrowser(Browser* browser) {
+  void SafeCloseBrowser(BrowserWindowInterface* browser) {
     if (session_) {
       session_.reset();
     }
@@ -1007,11 +1090,8 @@ class CaptureHandleSystemWebAppBrowserTest
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-// TODO(crbug.com/520451851): Test is increasingly timing out more often.
-// Re-enable once time out issue is addressed. Likely caused by the
-// SetTitleAndWait call.
 IN_PROC_BROWSER_TEST_F(CaptureHandleSystemWebAppBrowserTest,
-                       DISABLED_IgnoresHandleFromSystemWebApp) {
+                       IgnoresHandleFromSystemWebApp) {
   WaitForTestSystemAppInstall();
   content::WebContents* swa_contents =
       LaunchApp(ash::SystemWebAppType::SETTINGS);
@@ -1019,12 +1099,10 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleSystemWebAppBrowserTest,
   EXPECT_TRUE(content::WaitForLoadStop(swa_contents));
 
   ash::BrowserDelegate* swa_browser_delegate = ash::FindSystemWebAppBrowser(
-      browser()->profile(), ash::SystemWebAppType::SETTINGS,
+      browser()->GetProfile(), ash::SystemWebAppType::SETTINGS,
       ash::BrowserType::kApp);
-  Browser* swa_browser =
-      swa_browser_delegate
-          ? swa_browser_delegate->GetBrowser().GetBrowserForMigrationOnly()
-          : nullptr;
+  BrowserWindowInterface* swa_browser =
+      swa_browser_delegate ? &swa_browser_delegate->GetBrowser() : nullptr;
   ASSERT_TRUE(swa_browser);
 
   base::ScopedClosureRunner auto_close(
@@ -1032,7 +1110,7 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleSystemWebAppBrowserTest,
                      base::Unretained(this), swa_browser));
 
   session_ = std::make_unique<WindowCaptureSession>(swa_browser, browser());
-  SetTitleAndWait(session_->target_contents());
+  SetTitleAndWait(swa_browser);
   ASSERT_TRUE(session_->SetCaptureHandleConfig("swa-handle"));
 
   session_->StartCapturing(embedded_test_server());

@@ -25,10 +25,10 @@
 #include "components/tracing/common/tracing_switches.h"
 #include "components/variations/active_field_trials.h"
 #include "content/browser/child_process_launcher.h"
+#include "content/browser/sandboxed_process_launcher_delegate.h"
 #include "content/common/pseudonymization_salt.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_launcher_utils.h"
-#include "content/public/browser/sandboxed_process_launcher_delegate.h"
 #include "content/public/browser/tracing_support.h"
 #include "content/public/common/content_descriptors.h"
 #include "content/public/common/content_features.h"
@@ -52,7 +52,7 @@ namespace internal {
 namespace {
 
 void RecordHistogramsOnLauncherThread(base::TimeDelta launch_time) {
-  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
+  CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M160);
   // Log the launch time, separating out the first one (which will likely be
   // slower due to the rest of the browser initializing at the same time).
   static bool done_first_launch = false;
@@ -209,6 +209,7 @@ ChildProcessLauncherHelper::ChildProcessLauncherHelper(
 #if BUILDFLAG(IS_ANDROID)
     bool can_use_warm_up_connection,
     bool is_spare_renderer,
+    bool is_for_outermost_main_frame,
 #endif
     mojo::OutgoingInvitation mojo_invitation,
     const mojo::ProcessErrorCallback& process_error_callback,
@@ -231,6 +232,7 @@ ChildProcessLauncherHelper::ChildProcessLauncherHelper(
 #if BUILDFLAG(IS_ANDROID)
       can_use_warm_up_connection_(can_use_warm_up_connection),
       is_spare_renderer_(is_spare_renderer),
+      is_for_outermost_main_frame_(is_for_outermost_main_frame),
 #endif
       histogram_memory_region_(std::move(histogram_memory_region)),
       tracing_config_memory_region_(std::move(tracing_config_memory_region)),
@@ -259,7 +261,8 @@ ChildProcessLauncherHelper::~ChildProcessLauncherHelper() {
 }
 
 void ChildProcessLauncherHelper::StartLaunchOnClientThread() {
-  DCHECK(client_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(client_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M160);
 
   BeforeLaunchOnClientThread();
 
@@ -270,7 +273,7 @@ void ChildProcessLauncherHelper::StartLaunchOnClientThread() {
 }
 
 void ChildProcessLauncherHelper::LaunchOnLauncherThread() {
-  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
+  CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M160);
 
   // Record the delay in getting to the launcher thread.
   UMA_HISTOGRAM_TIMES("MPArch.ChildProcessLauncher.PreLaunchDelay",
@@ -355,6 +358,7 @@ void ChildProcessLauncherHelper::LaunchOnLauncherThread() {
         options_ptr, std::move(files_to_register),
 #if BUILDFLAG(IS_ANDROID)
         can_use_warm_up_connection_, is_spare_renderer_,
+        is_for_outermost_main_frame_,
 #endif
         &is_synchronous_launch, &launch_result);
     AfterLaunchOnLauncherThread(process, options_ptr);
@@ -410,7 +414,7 @@ void ChildProcessLauncherHelper::PostLaunchOnLauncherThread(
   if (process.process.IsValid()) {
 #if !BUILDFLAG(IS_FUCHSIA)
     if (mojo_named_channel_) {
-      DCHECK(!mojo_channel_);
+      CHECK(!mojo_channel_, base::NotFatalUntil::M160);
       mojo::OutgoingInvitation::Send(
           std::move(invitation), base::kNullProcessHandle,
           mojo_named_channel_->TakeServerEndpoint(), process_error_callback_);
@@ -418,12 +422,20 @@ void ChildProcessLauncherHelper::PostLaunchOnLauncherThread(
 #endif
     // Set up Mojo IPC to the new process.
     {
-      DCHECK(mojo_channel_);
-      DCHECK(mojo_channel_->local_endpoint().is_valid());
+      CHECK(mojo_channel_, base::NotFatalUntil::M160);
+      CHECK(mojo_channel_->local_endpoint().is_valid(),
+            base::NotFatalUntil::M160);
       mojo::OutgoingInvitation::Send(
           std::move(invitation), process.process.Handle(),
           mojo_channel_->TakeLocalEndpoint(), process_error_callback_);
     }
+
+    // Keep a launcher thread copy of the handle so that later operations on
+    // the child don't have to duplicate it on the client thread. See
+    // `child_process_`. If this fails the copy is left invalid and those
+    // operations are skipped, which at worst means the child keeps its launch
+    // priority; nothing here depends on the copy for correctness.
+    child_process_ = process.process.Duplicate();
   }
 
   client_task_runner_->PostTask(
@@ -460,6 +472,22 @@ void ChildProcessLauncherHelper::PostLaunchOnClientThread(
 
 std::string ChildProcessLauncherHelper::GetProcessType() {
   return command_line()->GetSwitchValueASCII(switches::kProcessType);
+}
+
+#if !BUILDFLAG(IS_ANDROID)
+void ChildProcessLauncherHelper::SetProcessPriorityOnLauncherThread(
+    base::Process::Priority priority) {
+  CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M160);
+  if (!child_process_.IsValid()) {
+    return;
+  }
+  ApplyProcessPriorityOnLauncherThread(child_process_, priority);
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+void ChildProcessLauncherHelper::CloseProcessOnLauncherThread() {
+  CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M160);
+  child_process_.Close();
 }
 
 // static

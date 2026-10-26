@@ -86,7 +86,15 @@ export class KeyCombinationInputDialogElement extends
       },
 
       metaKey: Object,
+
+      shortcutInput: Object,
     };
+  }
+
+  constructor() {
+    super();
+    this.isCapturing = false;
+    this.metaKey = MetaKey.kSearch;
   }
 
   static get observers(): string[] {
@@ -95,14 +103,14 @@ export class KeyCombinationInputDialogElement extends
     ];
   }
 
-  buttonRemappingList: ButtonRemapping[];
-  remappingIndex: number;
-  isOpen: boolean;
-  shortcutInput: ShortcutInputElement;
-  inputKeyEvent: KeyEvent|undefined;
-  isCapturing: boolean = false;
-  metaKey: MetaKey = MetaKey.kSearch;
-  private buttonRemapping_: ButtonRemapping;
+  declare buttonRemappingList: ButtonRemapping[];
+  declare remappingIndex: number;
+  declare isOpen: boolean;
+  declare shortcutInput: ShortcutInputElement;
+  declare inputKeyEvent: KeyEvent|undefined;
+  declare isCapturing: boolean;
+  declare metaKey: MetaKey;
+  declare private buttonRemapping_: ButtonRemapping;
   private eventTracker_: EventTracker = new EventTracker();
 
   override connectedCallback(): void {

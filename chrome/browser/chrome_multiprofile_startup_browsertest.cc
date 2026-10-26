@@ -12,12 +12,12 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_browser_main.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/profiles/profile_window.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/common/chrome_constants.h"
@@ -185,7 +185,7 @@ IN_PROC_BROWSER_TEST_P(ChromeMultiProfileStartupBrowserTestBase,
   } else {
     EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
     EXPECT_NE(base::FilePath::FromASCII(kOtherProfileDirPath),
-              browser()->profile()->GetPath().BaseName());
+              browser()->GetProfile()->GetPath().BaseName());
     EXPECT_FALSE(ProfilePicker::IsOpen());
   }
 

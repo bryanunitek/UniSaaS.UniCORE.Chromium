@@ -178,6 +178,8 @@ inline FormSubmission::FormSubmission(
     WebFrameLoadType load_type,
     LocalDOMWindow* origin_window,
     const LocalFrameToken& initiator_frame_token,
+    const InitiatorStateToken& initiator_state_token,
+    const DocumentToken& initiator_document_token,
     bool has_rel_opener,
     SourceLocation* source_location,
     mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>
@@ -196,6 +198,8 @@ inline FormSubmission::FormSubmission(
       load_type_(load_type),
       origin_window_(origin_window),
       initiator_frame_token_(initiator_frame_token),
+      initiator_state_token_(initiator_state_token),
+      initiator_document_token_(initiator_document_token),
       has_rel_opener_(has_rel_opener),
       input_start_time_(CurrentInputEvent::Get()
                             ? CurrentInputEvent::Get()->TimeStamp()
@@ -307,7 +311,7 @@ FormSubmission* FormSubmission::Create(HTMLFormElement* form,
 
   if (is_multi_part_form) {
     form_data = dom_form_data->EncodeMultiPartFormData();
-    boundary = form_data->Boundary().data();
+    boundary = form_data->Boundary();
   } else {
     form_data = dom_form_data->EncodeFormData(
         attributes.Method() == kGetMethod
@@ -345,8 +349,6 @@ FormSubmission* FormSubmission::Create(HTMLFormElement* form,
     }
   }
   LocalFrame* form_local_frame = form->GetDocument().GetFrame();
-  resource_request->SetHasUserGesture(
-      LocalFrame::HasTransientUserActivation(form_local_frame));
   resource_request->SetFormSubmission(true);
 
   mojom::blink::TriggeringEventInfo triggering_event_info;
@@ -417,6 +419,8 @@ FormSubmission* FormSubmission::Create(HTMLFormElement* form,
       event, frame_request.GetNavigationPolicy(), triggering_event_info, reason,
       std::move(resource_request), target_frame, load_type,
       form->GetDocument().domWindow(), form_local_frame->GetLocalFrameToken(),
+      form_local_frame->GetInitiatorStateToken(),
+      form_local_frame->GetDocumentToken(),
       frame_request.GetWindowFeatures().explicit_opener,
       CaptureSourceLocation(form->GetDocument().domWindow()),
       form_local_frame->IssueKeepAliveHandle());
@@ -434,6 +438,11 @@ FormSubmission* FormSubmission::Create(HTMLFormElement* form,
       }
     }
   }
+
+  form_submission->async_task_context_.Schedule(
+      form->GetExecutionContext(), "formSubmission",
+      probe::AsyncTaskContext::StackOptions::kScan);
+
   return form_submission;
 }
 
@@ -456,12 +465,16 @@ void FormSubmission::NotifyInspector() {
 }
 
 void FormSubmission::Navigate() {
+  probe::AsyncTask async_task(origin_window_.Get(), &async_task_context_);
+
   FrameLoadRequest frame_request(origin_window_.Get(), *resource_request_);
   frame_request.SetNavigationPolicy(navigation_policy_);
   frame_request.SetClientNavigationReason(reason_);
   frame_request.SetSourceElement(submitter_);
   frame_request.SetTriggeringEventInfo(triggering_event_info_);
   frame_request.SetInitiatorFrameToken(initiator_frame_token_);
+  frame_request.SetInitiatorStateToken(initiator_state_token_);
+  frame_request.SetInitiatorDocumentToken(initiator_document_token_);
   frame_request.SetInitiatorNavigationStateKeepAliveHandle(
       std::move(initiator_navigation_state_keep_alive_handle_));
   frame_request.SetSourceLocation(source_location_);

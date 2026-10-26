@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/with_feature_override.h"
@@ -390,7 +391,8 @@ TEST_F(ContentSecurityPolicyTest, NonceInline) {
 
   String context_url;
   String content;
-  OrdinalNumber context_line = OrdinalNumber::First();
+  TextPosition context_position(OrdinalNumber::First(),
+                                OrdinalNumber::BeforeFirst());
 
   // We need document for HTMLScriptElement tests.
   auto dummy = std::make_unique<DummyPageHolder>();
@@ -416,7 +418,7 @@ TEST_F(ContentSecurityPolicyTest, NonceInline) {
     EXPECT_EQ(test.allowed,
               policy->AllowInline(ContentSecurityPolicy::InlineType::kScript,
                                   element, content, String(test.nonce),
-                                  context_url, context_line));
+                                  context_url, context_position));
     EXPECT_EQ(expected_reports, policy->violation_reports_sent_.size());
 
     // Enforce 'style-src'
@@ -428,7 +430,7 @@ TEST_F(ContentSecurityPolicyTest, NonceInline) {
     EXPECT_EQ(test.allowed,
               policy->AllowInline(ContentSecurityPolicy::InlineType::kStyle,
                                   element, content, String(test.nonce),
-                                  context_url, context_line));
+                                  context_url, context_position));
     EXPECT_EQ(expected_reports, policy->violation_reports_sent_.size());
 
     // Report 'script-src'
@@ -439,7 +441,7 @@ TEST_F(ContentSecurityPolicyTest, NonceInline) {
         ContentSecurityPolicySource::kHTTP, *secure_origin));
     EXPECT_TRUE(policy->AllowInline(ContentSecurityPolicy::InlineType::kScript,
                                     element, content, String(test.nonce),
-                                    context_url, context_line));
+                                    context_url, context_position));
     EXPECT_EQ(expected_reports, policy->violation_reports_sent_.size());
 
     // Report 'style-src'
@@ -450,7 +452,7 @@ TEST_F(ContentSecurityPolicyTest, NonceInline) {
         ContentSecurityPolicySource::kHTTP, *secure_origin));
     EXPECT_TRUE(policy->AllowInline(ContentSecurityPolicy::InlineType::kStyle,
                                     element, content, String(test.nonce),
-                                    context_url, context_line));
+                                    context_url, context_position));
     EXPECT_EQ(expected_reports, policy->violation_reports_sent_.size());
   }
 }
@@ -602,7 +604,8 @@ TEST_F(ContentSecurityPolicyTest, NonceMultiplePolicy) {
 TEST_F(ContentSecurityPolicyTest, DirectiveType) {
   struct TestCase {
     CSPDirectiveName type;
-    const String& name;
+    // RAW_PTR_EXCLUSION: Stack-scoped.
+    RAW_PTR_EXCLUSION const String& name;
   } cases[] = {
       {CSPDirectiveName::BaseURI, "base-uri"},
       {CSPDirectiveName::BlockAllMixedContent, "block-all-mixed-content"},
@@ -1220,16 +1223,16 @@ TEST_F(ContentSecurityPolicyTest, EmptyCSPIsNoOp) {
   String source;
   String context_url;
   String nonce;
-  OrdinalNumber ordinal_number = OrdinalNumber::First();
+  TextPosition context_position = TextPosition::MinimumPosition();
   auto* element =
       MakeGarbageCollected<HTMLScriptElement>(*document, CreateElementFlags());
 
   EXPECT_TRUE(csp->AllowInline(ContentSecurityPolicy::InlineType::kNavigation,
                                element, source, String() /* nonce */,
-                               context_url, ordinal_number));
+                               context_url, context_position));
   EXPECT_TRUE(csp->AllowInline(
       ContentSecurityPolicy::InlineType::kScriptAttribute, element, source,
-      String() /* nonce */, context_url, ordinal_number));
+      String() /* nonce */, context_url, context_position));
   EXPECT_TRUE(csp->AllowEval(ReportingDisposition::kReport,
                              ContentSecurityPolicy::kWillNotThrowException,
                              g_empty_string));
@@ -1276,10 +1279,10 @@ TEST_F(ContentSecurityPolicyTest, EmptyCSPIsNoOp) {
             ContentSecurityPolicy::AllowTrustedTypePolicyDetails::kAllowed);
   EXPECT_TRUE(csp->AllowInline(ContentSecurityPolicy::InlineType::kScript,
                                element, source, nonce, context_url,
-                               ordinal_number));
+                               context_position));
   EXPECT_TRUE(csp->AllowInline(ContentSecurityPolicy::InlineType::kStyle,
                                element, source, nonce, context_url,
-                               ordinal_number));
+                               context_position));
   EXPECT_TRUE(csp->AllowRequest(mojom::blink::RequestContextType::SCRIPT,
                                 network::mojom::RequestDestination::kScript,
                                 network::mojom::RequestMode::kCors, example_url,
@@ -1692,9 +1695,10 @@ class SyntheticResponseContentSecurityPolicyTest
     String content;
     auto* element = MakeGarbageCollected<HTMLScriptElement>(
         *window()->document(), CreateElementFlags());
-    OrdinalNumber context_line = OrdinalNumber::First();
+    TextPosition context_position(OrdinalNumber::First(),
+                                  OrdinalNumber::BeforeFirst());
     return csp->AllowInline(type, element, content, nonce, context_url,
-                            context_line);
+                            context_position);
   }
 
   void ExpectBlockedInlineResourceTypeHistogram(InlineType type, int count) {
@@ -1972,6 +1976,46 @@ TEST_F(ContentSecurityPolicyTest, AddHashReportSanitization) {
   // This expectation will also FAIL if url is not sanitized (fragment will
   // remain).
   EXPECT_EQ("https://example.test/script.js", body->subresourceURL());
+}
+
+TEST_F(ContentSecurityPolicyTest, ReportViolationBypassingScheme) {
+  SchemeRegistry::RegisterURLSchemeAsBypassingContentSecurityPolicy(
+      "chrome-extension");
+
+  auto* policy = MakeGarbageCollected<ContentSecurityPolicy>();
+  policy->BindToDelegate(execution_context->GetContentSecurityPolicyDelegate());
+  policy->AddPolicies(ParseContentSecurityPolicies(
+      "script-src 'none'", ContentSecurityPolicyType::kEnforce,
+      ContentSecurityPolicySource::kHTTP, *secure_origin));
+
+  const KURL chrome_extension_url("chrome-extension://abcdefg/script.js");
+  SourceLocation* source_location = MakeGarbageCollected<SourceLocation>(
+      chrome_extension_url.GetString(), String(), 1, 1, nullptr);
+
+  // Trigger a CSP violation report for a chrome-extension resource in
+  // example.test. The report should be dropped.
+  execution_context->SetURL(KURL("https://example.test"));
+  policy->ReportViolation(
+      "script-src 'none'", CSPDirectiveName::ScriptSrc, "Blocked", KURL(),
+      Vector<String>(), false, "script-src 'none'",
+      ContentSecurityPolicyType::kEnforce,
+      ContentSecurityPolicyViolationType::kInlineViolation, source_location);
+
+  EXPECT_EQ(0u, policy->violation_reports_sent_.size());
+
+  // Trigger a CSP violation report for a chrome-extension resource in
+  // chrome-extension itself. Now the report should be sent.
+  execution_context->SetURL(KURL("chrome-extension://abcdefg"));
+  policy->ReportViolation(
+      "script-src 'none'", CSPDirectiveName::ScriptSrc, "Blocked", KURL(),
+      Vector<String>(), false, "script-src 'none'",
+      ContentSecurityPolicyType::kEnforce,
+      ContentSecurityPolicyViolationType::kInlineViolation, source_location);
+  EXPECT_EQ(1u, policy->violation_reports_sent_.size());
+
+  SchemeRegistry::
+      RemoveURLSchemeRegisteredAsBypassingContentSecurityPolicyForTest(
+          "chrome-extension");
 }
 
 }  // namespace blink

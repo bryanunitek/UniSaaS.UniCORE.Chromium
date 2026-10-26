@@ -26,7 +26,6 @@
 #include "base/values.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -51,8 +50,10 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "net/base/filename_util.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/resource/resource_handle.h"
+#include "ui/base/window_open_disposition.h"
 
 using content::RenderFrameHost;
 using content::WebContents;
@@ -276,7 +277,7 @@ void BaseWebUIBrowserTest::BrowsePreload(const GURL& browse_to) {
   content::TestNavigationObserver navigation_observer(web_contents);
 
   NavigateParams params(browser(), browse_to, ui::PAGE_TRANSITION_TYPED);
-  params.disposition = WindowOpenDisposition::CURRENT_TAB;
+  params.disposition = WindowOpenDisposition::kCurrentTab;
 
   Navigate(&params);
   navigation_observer.Wait();
@@ -300,9 +301,8 @@ void BaseWebUIBrowserTest::set_webui_host(const std::string& webui_host) {
 
 namespace {
 
-const GURL& DummyUrl() {
-  static GURL url(content::GetWebUIURLString("DummyURL"));
-  return url;
+GURL DummyUrl() {
+  return GURL(content::GetWebUIURLString("DummyURL"));
 }
 
 // DataSource for the dummy URL.  If no data source is provided then an error
@@ -394,7 +394,7 @@ void BaseWebUIBrowserTest::SetUpOnMainThread() {
   if (browser()) {
     // Register data sources for chrome://webui-test/ URLs
     // e.g. `chrome://webui-test/chai_assert.js`.
-    webui::CreateAndAddWebUITestDataSource(browser()->profile());
+    webui::CreateAndAddWebUITestDataSource(browser()->GetProfile());
   }
 
   test_factory_ = std::make_unique<TestChromeWebUIControllerFactory>();

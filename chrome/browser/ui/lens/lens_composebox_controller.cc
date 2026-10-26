@@ -59,15 +59,14 @@ LensComposeboxController::~LensComposeboxController() = default;
 
 void LensComposeboxController::BindComposebox(
     mojo::PendingReceiver<composebox::mojom::PageHandler> pending_handler,
-    mojo::PendingRemote<composebox::mojom::Page> pending_page,
     mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page,
     mojo::PendingReceiver<searchbox::mojom::PageHandler>
         pending_searchbox_handler) {
   composebox_handler_.reset();
   composebox_handler_ = std::make_unique<LensComposeboxHandler>(
       this, profile_, lens_search_controller_->GetTabInterface()->GetContents(),
-      std::move(pending_handler), std::move(pending_page),
-      std::move(pending_searchbox_handler), std::move(pending_searchbox_page));
+      std::move(pending_handler), std::move(pending_searchbox_handler),
+      std::move(pending_searchbox_page));
 
   // Set the visual selection context if it was already made before the
   // composebox was bound.
@@ -144,6 +143,10 @@ void LensComposeboxController::OnFocusChanged(bool focused) {
 
   // Ignore if recontextualization on focus is disabled.
   if (!lens::features::GetShouldComposeboxContextualizeOnFocus()) {
+    return;
+  }
+
+  if (!lens_search_controller_->IsCurrentTabSameOrigin()) {
     return;
   }
 
@@ -255,13 +258,13 @@ void LensComposeboxController::DeleteContext(const base::UnguessableToken& id) {
   // the overlay to clear the visual selection.
   if (vsc_image_data_ && vsc_image_data_->id == id) {
     vsc_image_data_.reset();
-    lens_search_controller_->lens_overlay_controller()->ClearAllSelections();
+    lens_search_controller_->lens_overlay_controller()->ClearRegionSelection();
   }
 }
 
 void LensComposeboxController::ClearFiles() {
   ClearVisualSelectionContext();
-  lens_search_controller_->lens_overlay_controller()->ClearAllSelections();
+  lens_search_controller_->lens_overlay_controller()->ClearRegionSelection();
 }
 
 lens::LensSessionMetricsLogger*
@@ -271,6 +274,9 @@ LensComposeboxController::GetSessionMetricsLogger() {
 
 lens::proto::LensOverlaySuggestInputs
 LensComposeboxController::GetLensSuggestInputs() const {
+  if (!lens_search_controller_->IsCurrentTabSameOrigin()) {
+    return lens::proto::LensOverlaySuggestInputs();
+  }
   if (!lens::features::GetAimSuggestionsEnabled()) {
     return lens::proto::LensOverlaySuggestInputs();
   }
@@ -330,13 +336,15 @@ lens::ClientToAimMessage LensComposeboxController::BuildSubmitQueryMessage(
   lens_image_query_data->set_search_session_id(
       query_controller->search_session_id());
 
+  const bool is_same_origin = lens_search_controller_->IsCurrentTabSameOrigin();
   const auto& primary_content_type =
-      contextualization_controller->primary_content_type();
+      is_same_origin ? contextualization_controller->primary_content_type()
+                     : lens::MimeType::kUnknown;
   const auto media_type =
       overlay_controller->HasRegionSelection()
           ? lens::LensOverlayRequestId::MEDIA_TYPE_DEFAULT_IMAGE
           : MimeTypeToMediaType(primary_content_type,
-                                /*has_viewport_screenshot=*/true);
+                                /*has_viewport_screenshot=*/is_same_origin);
   lens_image_query_data->mutable_request_id()->CopyFrom(
       *query_controller->GetNextRequestId(lens::RequestIdUpdateMode::kSearchUrl,
                                           media_type));
@@ -347,7 +355,7 @@ lens::ClientToAimMessage LensComposeboxController::BuildSubmitQueryMessage(
   std::optional<lens::LensOverlayVisualSearchInteractionData>
       visual_search_interaction_data =
           query_controller->GetVisualSearchInteractionData();
-  if (visual_search_interaction_data &&
+  if (is_same_origin && visual_search_interaction_data &&
       overlay_controller->HasRegionSelection()) {
     lens_image_query_data->mutable_visual_search_interaction_data()->CopyFrom(
         visual_search_interaction_data.value());

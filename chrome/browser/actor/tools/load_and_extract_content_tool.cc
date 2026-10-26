@@ -21,11 +21,12 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
+#include "chrome/browser/actor/actor_surface.h"
+#include "chrome/browser/actor/actor_surface_handle.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/actor/tools/observation_delay_controller.h"
 #include "chrome/browser/actor/tools/tool_callbacks.h"
 #include "chrome/browser/actor/tools/validate_url_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/actor.mojom.h"
@@ -95,6 +96,17 @@ mojom::ActionResultPtr LogIfValidationFailed(AggregatedJournal& journal,
                     .Build());
   }
   return result;
+}
+
+// Returns the tab backing `actor_surface_handle`, or null if the surface (and
+// so its tab) is gone.
+tabs::TabInterface* GetTab(ActorSurfaceHandle actor_surface_handle) {
+  ActorSurface* actor_surface = actor_surface_handle.Get();
+  if (!actor_surface) {
+    return nullptr;
+  }
+  std::optional<tabs::TabHandle> tab = actor_surface->GetTabHandle();
+  return tab ? tab->Get() : nullptr;
 }
 
 }  // namespace
@@ -205,6 +217,8 @@ void LoadAndExtractContentTool::TabObservationDelayer::DidFinishNavigation(
     return;
   }
 
+  // TODO(b/565820285): ObservationDelayController::Wait() takes a tab; it needs
+  // to wait on the page itself to support headless pages.
   tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents());
   if (!tab) {
     if (callback_) {
@@ -305,7 +319,9 @@ mojom::ActionResultCode LoadAndExtractContentTool::ToActionResultCode(
 
 struct LoadAndExtractContentTool::PerTabState {
   const GURL url;
-  tabs::TabHandle tab_handle;
+  // The actor surface (tab or headless page) used to load `url`. Null before it
+  // is opened and after it is removed from the task.
+  ActorSurfaceHandle actor_surface_handle;
   std::unique_ptr<LoadAndExtractContentTool::TabObservationDelayer>
       tab_observation_delayer;
 
@@ -334,12 +350,22 @@ LoadAndExtractContentTool::LoadAndExtractContentTool(
 }
 
 LoadAndExtractContentTool::~LoadAndExtractContentTool() {
-  // In the case of a tool being destroyed before completion, ensure we close
-  // any remaining opened tabs.
+  // In the case of a tool being destroyed before completion without Cancel()
+  // (e.g. the task itself is going away), ensure we close any remaining opened
+  // tabs.
   for (auto& per_tab_state : per_tab_state_) {
-    if (tabs::TabInterface* tab = per_tab_state.tab_handle.Get()) {
+    // TODO(b/565820285): Add support for headless.
+    if (tabs::TabInterface* tab = GetTab(per_tab_state.actor_surface_handle)) {
       tab->Close();
     }
+  }
+}
+
+void LoadAndExtractContentTool::Cancel() {
+  // The task may continue after this (e.g. it was paused, or the user took
+  // over), so remove the tabs from it as well as closing them.
+  for (auto& per_tab_state : per_tab_state_) {
+    RemoveAndCloseTab(per_tab_state);
   }
 }
 
@@ -350,6 +376,14 @@ void LoadAndExtractContentTool::Validate(ToolCallback overall_callback) {
                   "LoadAndExtractContentTool::EmptyUrlsFailedValidation", {});
     PostResponseTask(std::move(overall_callback),
                      MakeResult(mojom::ActionResultCode::kArgumentsInvalid));
+    return;
+  }
+
+  mojom::ActionResultPtr window_result = ValidateWindowId(window_id_);
+  if (!IsOk(*window_result)) {
+    journal().Log(GURL::EmptyGURL(), task_id(),
+                  "LoadAndExtractContentTool::WindowValidationFailed", {});
+    PostResponseTask(std::move(overall_callback), std::move(window_result));
     return;
   }
 
@@ -377,17 +411,16 @@ void LoadAndExtractContentTool::Invoke(ToolCallback callback) {
       GURL::EmptyGURL(), task_id(), "LoadAndExtractContentTool::Invoke",
       JournalDetailsBuilder().Add("url_count", per_tab_state_.size()).Build());
 
-  BrowserWindowInterface* browser_window_interface =
-      BrowserWindowInterface::FromSessionID(window_id_);
-
-  if (!browser_window_interface) {
+  mojom::ActionResultPtr window_result = ValidateWindowId(window_id_);
+  if (!IsOk(*window_result)) {
     journal().Log(GURL::EmptyGURL(), task_id(),
-                  "LoadAndExtractContentTool::WindowWentAway", {});
-    PostResponseTask(std::move(invoke_callback_),
-                     MakeResult(mojom::ActionResultCode::kWindowWentAway));
+                  "LoadAndExtractContentTool::WindowValidationFailed", {});
+    PostResponseTask(std::move(invoke_callback_), std::move(window_result));
     return;
   }
 
+  BrowserWindowInterface* browser_window_interface =
+      BrowserWindowInterface::FromSessionID(window_id_);
   const GURL about_blank(url::kAboutBlankURL);
   for (size_t i = 0; i < per_tab_state_.size(); ++i) {
     PerTabState& per_tab_state = per_tab_state_.at(i);
@@ -397,9 +430,10 @@ void LoadAndExtractContentTool::Invoke(ToolCallback callback) {
     // We start the tab on about:blank and ensure the tab is "controlled" before
     // performing the "real" navigation, to avoid racing with the navigation
     // itself.
+    // TODO(b/565820285): Add support for headless.
     content::WebContents* web_contents = chrome::AddAndReturnTabAt(
-        browser_window_interface->GetBrowserForMigrationOnly(), about_blank,
-        kIndexAppendToEnd, /*foreground=*/false);
+        browser_window_interface, about_blank, kIndexAppendToEnd,
+        /*foreground=*/false);
     if (!web_contents) {
       journal().Log(url, task_id(),
                     "LoadAndExtractContentTool::NewTabCreationFailed",
@@ -409,14 +443,17 @@ void LoadAndExtractContentTool::Invoke(ToolCallback callback) {
       continue;
     }
 
-    tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents);
-    tabs::TabHandle tab_handle = tab->GetHandle();
+    per_tab_state.actor_surface_handle = ActorSurfaceHandle::From(web_contents);
+    const tabs::TabHandle tab_handle =
+        tabs::TabInterface::GetFromContents(web_contents)->GetHandle();
 
     journal().Log(url, task_id(), "LoadAndExtractContentTool::TabCreated",
                   JournalDetailsBuilder().Add("url_index", i).Build());
     CHECK(page_stability_config_.has_value());
 
     TabObservation tab_observation;
+    // TODO(b/565820285): Observations identify pages by tab id. A headless page
+    // needs an id the model accepts, e.g. its surface id.
     tab_observation.set_id(tab_handle.raw_value());
 
     // This tool doesn't support screenshots, so set it to error.
@@ -424,7 +461,6 @@ void LoadAndExtractContentTool::Invoke(ToolCallback callback) {
     tab_observation.set_screenshot_result(TabObservation::SCREENSHOT_ERROR);
 
     const bool target_is_about_blank = url == about_blank;
-    per_tab_state.tab_handle = tab_handle;
     per_tab_state.tab_observation_delayer =
         std::make_unique<TabObservationDelayer>(
             web_contents, task_id(), journal(), page_stability_config_.value(),
@@ -433,9 +469,10 @@ void LoadAndExtractContentTool::Invoke(ToolCallback callback) {
                 &LoadAndExtractContentTool::OnTabObservationDelayComplete,
                 weak_ptr_factory_.GetWeakPtr(), i));
     per_tab_state.tab_observation = std::move(tab_observation);
-    tool_delegate().AddTab(tab_handle,
-                           /*stop_task_on_detach=*/false, base::DoNothing());
-    CHECK(tool_delegate().HasTab(tab_handle));
+    tool_delegate().AddActorSurface(per_tab_state.actor_surface_handle,
+                                    /*stop_task_on_detach=*/false,
+                                    base::DoNothing());
+    CHECK(tool_delegate().HasActorSurface(per_tab_state.actor_surface_handle));
 
     if (target_is_about_blank) {
       // No need to issue another navigation, since the tab is already
@@ -446,7 +483,7 @@ void LoadAndExtractContentTool::Invoke(ToolCallback callback) {
     content::NavigationController::LoadURLParams params(url);
     params.transition_type = ::ui::PAGE_TRANSITION_AUTO_TOPLEVEL;
     params.initiator_origin = url::Origin();
-    tab->GetContents()->GetController().LoadURLWithParams(params);
+    web_contents->GetController().LoadURLWithParams(params);
   }
 }
 
@@ -470,15 +507,17 @@ void LoadAndExtractContentTool::OnTabObservationDelayComplete(
   // infrastructure rather than re-implementing it here. This would require
   // extending the existing infra to support multiple tabs and to support a new
   // 'finalization' phase after observation where we can close the tabs.
-  tabs::TabInterface* tab = per_tab_state.tab_handle.Get();
-  if (!tab) {
+  ActorSurface* actor_surface = per_tab_state.actor_surface_handle.Get();
+  if (!actor_surface) {
+    // The tab is gone, but the task still holds it; remove it.
+    RemoveAndCloseTab(per_tab_state);
     per_tab_state.result_code = PerTabResultCode::kTabWentAway;
     per_url_completion_closure_.Run();
     return;
   }
 
   optimization_guide::GetAIPageContent(
-      tab->GetContents(),
+      actor_surface->GetWebContents(),
       optimization_guide::DefaultAIPageContentOptions(
           /*on_critical_path=*/true),
       base::BindOnce(&LoadAndExtractContentTool::OnGotAIPageContent,
@@ -502,7 +541,10 @@ void LoadAndExtractContentTool::OnGotAIPageContent(
   } else {
     journal().Log(GURL::EmptyGURL(), task_id(),
                   "LoadAndExtractContentTool::OnGotAIPageContentFailed",
-                  JournalDetailsBuilder().Add("url_index", index).Build());
+                  JournalDetailsBuilder()
+                      .Add("url_index", index)
+                      .AddError(result_or_error.error().message)
+                      .Build());
     tab_observation.set_annotated_page_content_result(
         TabObservation::ANNOTATED_PAGE_CONTENT_ERROR);
     result_code = PerTabResultCode::kLoadAndExtractContentExtractionFailed;
@@ -525,19 +567,35 @@ void LoadAndExtractContentTool::OnTabReadyToClose(
   }
 
   PerTabState& state = per_tab_state_.at(index);
-  if (tabs::TabInterface* tab = state.tab_handle.Get()) {
-    // Remove the tab from the set of controlled tabs before closing it, to
-    // avoid tests thinking that something went wrong.
-    tool_delegate().RemoveTab(state.tab_handle);
-    tab->Close();
-  } else if (!state.tab_observation->has_annotated_page_content()) {
+  if (!state.actor_surface_handle.Get() &&
+      !state.tab_observation->has_annotated_page_content()) {
     // Record an error code if the tab was closed before we could extract the
     // APC.
     result_code = PerTabResultCode::kTabWentAway;
   }
+  RemoveAndCloseTab(state);
 
   state.result_code = result_code;
   per_url_completion_closure_.Run();
+}
+
+void LoadAndExtractContentTool::RemoveAndCloseTab(PerTabState& state) {
+  if (state.actor_surface_handle.is_null()) {
+    // The tab was never opened, or has already been removed.
+    return;
+  }
+  // Remove the tab from the set of controlled tabs before closing it, to
+  // avoid tests thinking that something went wrong. Do this even if the tab is
+  // already gone (e.g. the user closed it): it was added with
+  // stop_task_on_detach=false, so the task would otherwise keep it. Remove it
+  // by its surface handle, which still identifies the task's entry once the tab
+  // and its surface are gone.
+  tool_delegate().RemoveActorSurface(state.actor_surface_handle);
+  // TODO(b/565820285): For a headless page, destroy its surface instead.
+  if (tabs::TabInterface* tab = GetTab(state.actor_surface_handle)) {
+    tab->Close();
+  }
+  state.actor_surface_handle = ActorSurfaceHandle::Null();
 }
 
 void LoadAndExtractContentTool::OnAllUrlsCompleted() {
@@ -631,9 +689,8 @@ LoadAndExtractContentTool::GetObservationDelayer(
   return nullptr;
 }
 
-tabs::TabHandle LoadAndExtractContentTool::GetTargetTab() const {
-  // This tool can operate on multiple tabs, so there's no single target.
-  return tabs::TabHandle::Null();
+ActorSurfaceHandle LoadAndExtractContentTool::GetTargetActorSurface() const {
+  return ActorSurfaceHandle::Null();
 }
 
 }  // namespace actor

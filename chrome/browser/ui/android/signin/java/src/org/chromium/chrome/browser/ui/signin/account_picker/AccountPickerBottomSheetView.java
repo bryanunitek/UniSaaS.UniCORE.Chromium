@@ -4,18 +4,25 @@
 
 package org.chromium.chrome.browser.ui.signin.account_picker;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
 import android.app.Activity;
 import android.content.Context;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.view.accessibility.AccessibilityEvent;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Space;
 import android.widget.TextView;
 import android.widget.ViewFlipper;
 
 import androidx.annotation.IdRes;
+import androidx.annotation.IntDef;
 import androidx.annotation.StringRes;
+import androidx.appcompat.widget.AppCompatImageButton;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -28,8 +35,17 @@ import org.chromium.chrome.browser.ui.signin.R;
 import org.chromium.chrome.browser.ui.signin.SigninUtils;
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerBottomSheetProperties.ViewState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
+import org.chromium.components.browser_ui.bottomsheet.UserCriticalFeature;
+import org.chromium.components.browser_ui.widget.DualControlLayout;
+import org.chromium.components.browser_ui.widget.DualControlLayout.ButtonType;
+import org.chromium.components.browser_ui.widget.DualControlLayout.DualControlLayoutAlignment;
 import org.chromium.ui.widget.ButtonCompat;
 import org.chromium.ui.widget.TextViewWithLeading;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.util.function.IntSupplier;
 
 /**
  * This class is the AccountPickerBottomsheet view for the web sign-in flow.
@@ -40,10 +56,19 @@ import org.chromium.ui.widget.TextViewWithLeading;
  */
 @NullMarked
 class AccountPickerBottomSheetView implements BottomSheetContent {
+    /** Presentation mode for displaying the account picker UI. */
+    @IntDef({PresentationMode.BOTTOM_SHEET, PresentationMode.MODAL_DIALOG})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface PresentationMode {
+        int BOTTOM_SHEET = 0;
+        int MODAL_DIALOG = 1;
+    }
+
     /** Listener for the back-press button. */
     interface BackPressListener {
         /**
          * Notifies when user clicks the back-press button.
+         *
          * @return true if the listener handles the back press, false if not.
          */
         boolean onBackPressed();
@@ -60,6 +85,9 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
      * The title id for each screen of the bottom sheet's view flipper, the position of each id
      * corresponds to the value of {@link ViewState}. It is used to set focus on title when the view
      * flipper moves to a new screen.
+     *
+     * <p>When a management notice is hosted, its own title is used for {@link
+     * ViewState#CONFIRM_MANAGEMENT} instead, see {@link #setManagementNoticeView}.
      */
     private static final @IdRes int[] sTitleIds =
             new int[] {
@@ -72,31 +100,69 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
                 R.id.account_picker_confirm_management_title,
             };
 
+    private static final BottomSheetType BOTTOM_SHEET_TYPE =
+            new BottomSheetType.Builder()
+                    .setUserInitiated(true)
+                    .setUserCritical(UserCriticalFeature.ACCOUNT_PICKER)
+                    .build();
+
     private final Activity mActivity;
     private final BackPressListener mBackPressListener;
+    private final @PresentationMode int mPresentationMode;
     private final View mContentView;
+    private final @Nullable AppCompatImageButton mDialogDismissButton;
     private final ViewFlipper mViewFlipper;
     private final RecyclerView mAccountListView;
     private final View mSelectedAccountView;
-    private final ButtonCompat mAccountPickerDismissButton;
+    private final ButtonCompat mBottomSheetDismissButton;
     private final Space mDismissButtonGoneMarginSpace;
+
+    /**
+     * The legacy confirm management screen. Held as a field because it is detached from {@link
+     * #mViewFlipper} when the new management notice takes its place, see {@link
+     * #setManagementNoticeView}.
+     *
+     * <p>TODO(b/553341908): Remove the legacy screen once the new management notice is launched.
+     */
+    private final View mLegacyConfirmManagementView;
+
     private final ButtonCompat mConfirmManagementCancelButton;
     private @Nullable @ViewState Integer mCurrentViewState;
+    private @Nullable View mManagementNoticeView;
+    private @Nullable View mManagementNoticeTitleView;
+    private @Nullable IntSupplier mManagementNoticeScrollOffsetSupplier;
 
     /**
      * @param activity The activity that hosts this view. Used for inflating views.
      * @param backPressListener The listener to be notified when the user taps the back button.
      */
     AccountPickerBottomSheetView(Activity activity, BackPressListener backPressListener) {
+        this(activity, backPressListener, PresentationMode.BOTTOM_SHEET);
+    }
+
+    /**
+     * @param activity The activity that hosts this view. Used for inflating views.
+     * @param backPressListener The listener to be notified when the user taps the back button.
+     * @param presentationMode Whether this view is presented as a bottom sheet or a modal dialog.
+     */
+    AccountPickerBottomSheetView(
+            Activity activity,
+            BackPressListener backPressListener,
+            @PresentationMode int presentationMode) {
         mActivity = activity;
         mBackPressListener = backPressListener;
+        mPresentationMode = presentationMode;
 
-        int contentLayoutId = R.layout.account_picker_bottom_sheet_view;
-
+        int contentLayoutId =
+                presentationMode == PresentationMode.MODAL_DIALOG
+                        ? R.layout.account_picker_dialog_view
+                        : R.layout.account_picker_bottom_sheet_view;
         mContentView = LayoutInflater.from(mActivity).inflate(contentLayoutId, null);
+        mDialogDismissButton = mContentView.findViewById(R.id.account_picker_dialog_close_button);
 
         mViewFlipper = mContentView.findViewById(R.id.account_picker_state_view_flipper);
         checkViewFlipperChildrenAndViewStateMatch(mViewFlipper);
+        applyTopPaddingToViewFlipperChildren(mViewFlipper, presentationMode);
         mAccountListView =
                 mViewFlipper
                         .getChildAt(ViewState.EXPANDED_ACCOUNT_LIST)
@@ -108,7 +174,7 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
                 mViewFlipper
                         .getChildAt(ViewState.COLLAPSED_ACCOUNT_LIST)
                         .findViewById(R.id.account_picker_selected_account);
-        mAccountPickerDismissButton =
+        mBottomSheetDismissButton =
                 mViewFlipper
                         .getChildAt(ViewState.COLLAPSED_ACCOUNT_LIST)
                         .findViewById(R.id.account_picker_dismiss_button);
@@ -116,16 +182,14 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
                 mViewFlipper
                         .getChildAt(ViewState.COLLAPSED_ACCOUNT_LIST)
                         .findViewById(R.id.account_picker_dismiss_button_gone_margin_space);
+
+        mLegacyConfirmManagementView = mViewFlipper.getChildAt(ViewState.CONFIRM_MANAGEMENT);
         mConfirmManagementCancelButton =
-                mViewFlipper
-                        .getChildAt(ViewState.CONFIRM_MANAGEMENT)
-                        .findViewById(R.id.confirm_management_cancel_button);
+                setUpConfirmManagementButtonBar(mLegacyConfirmManagementView, presentationMode);
 
         setUpContinueButton(
                 mViewFlipper.getChildAt(ViewState.NO_ACCOUNTS),
                 R.string.signin_add_account_to_device);
-        setUpContinueButton(
-                mViewFlipper.getChildAt(ViewState.CONFIRM_MANAGEMENT), R.string.continue_button);
         setUpContinueButton(
                 mViewFlipper.getChildAt(ViewState.SIGNIN_GENERAL_ERROR),
                 R.string.signin_account_picker_general_error_button);
@@ -134,6 +198,74 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
                 R.string.auth_error_card_button);
 
         getAccountListView().addItemDecoration(new AccountPickerItemDecoration());
+
+        if (mPresentationMode == PresentationMode.MODAL_DIALOG) {
+            setContinueButtonAlignedEnd(true);
+            assertNonNull(mDialogDismissButton);
+            mDialogDismissButton.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private ButtonCompat setUpConfirmManagementButtonBar(
+            View confirmManagementView, @PresentationMode int presentationMode) {
+        DualControlLayout buttonBar =
+                confirmManagementView.findViewById(
+                        R.id.account_picker_confirm_management_button_bar);
+
+        ButtonCompat continueButton =
+                (ButtonCompat)
+                        DualControlLayout.createButtonForLayout(
+                                mActivity,
+                                ButtonType.PRIMARY_FILLED,
+                                mActivity.getString(R.string.continue_button),
+                                null);
+        continueButton.setId(R.id.account_picker_continue_as_button);
+
+        ButtonCompat cancelButton =
+                (ButtonCompat)
+                        DualControlLayout.createButtonForLayout(
+                                mActivity,
+                                ButtonType.SECONDARY_TEXT,
+                                mActivity.getString(R.string.cancel),
+                                null);
+        cancelButton.setId(R.id.confirm_management_cancel_button);
+
+        // DualControlLayout automatically designates the first added child as primary
+        // and the second as secondary via onViewAdded().
+        buttonBar.addView(continueButton);
+        buttonBar.addView(cancelButton);
+        buttonBar.setAlignment(
+                presentationMode == PresentationMode.MODAL_DIALOG
+                        ? DualControlLayoutAlignment.END
+                        : DualControlLayoutAlignment.STACK);
+
+        return cancelButton;
+    }
+
+    /**
+     * Configures continue buttons to hug content and align to the end for modal dialog
+     * presentation.
+     */
+    private void setContinueButtonAlignedEnd(boolean alignEnd) {
+        if (!alignEnd) return;
+        final int[] viewStates = {
+            ViewState.NO_ACCOUNTS,
+            ViewState.COLLAPSED_ACCOUNT_LIST,
+            ViewState.SIGNIN_GENERAL_ERROR,
+            ViewState.SIGNIN_AUTH_ERROR,
+        };
+        for (int viewState : viewStates) {
+            ButtonCompat continueButton =
+                    assertNonNull(
+                            mViewFlipper
+                                    .getChildAt(viewState)
+                                    .findViewById(R.id.account_picker_continue_as_button));
+            LinearLayout.LayoutParams lp =
+                    (LinearLayout.LayoutParams) continueButton.getLayoutParams();
+            lp.width = LinearLayout.LayoutParams.WRAP_CONTENT;
+            lp.gravity = Gravity.END;
+            continueButton.setLayoutParams(lp);
+        }
     }
 
     /** The account list view is visible when the account list is expanded. */
@@ -148,18 +280,34 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
 
     /** Sets the listener of the continue button. */
     void setOnClickListenerOfContinueButton(OnClickListener listener) {
-        for (int i = 0; i < mViewFlipper.getChildCount(); ++i) {
+        final int[] viewStates = {
+            ViewState.NO_ACCOUNTS,
+            ViewState.COLLAPSED_ACCOUNT_LIST,
+            ViewState.SIGNIN_GENERAL_ERROR,
+            ViewState.SIGNIN_AUTH_ERROR,
+        };
+        for (int viewState : viewStates) {
             ButtonCompat continueButton =
-                    mViewFlipper.getChildAt(i).findViewById(R.id.account_picker_continue_as_button);
-            if (continueButton != null) {
-                continueButton.setOnClickListener(listener);
-            }
+                    assertNonNull(
+                            mViewFlipper
+                                    .getChildAt(viewState)
+                                    .findViewById(R.id.account_picker_continue_as_button));
+            continueButton.setOnClickListener(listener);
         }
+        // The legacy confirm management screen may be detached from the view flipper, see
+        // mLegacyConfirmManagementView.
+        ButtonCompat confirmManagementContinueButton =
+                assertNonNull(
+                        mLegacyConfirmManagementView.findViewById(
+                                R.id.account_picker_continue_as_button));
+        confirmManagementContinueButton.setOnClickListener(listener);
     }
 
-    /** The button to dismiss the account picker bottom sheet. */
-    ButtonCompat getAccountPickerDismissButton() {
-        return mAccountPickerDismissButton;
+    /** The button to dismiss the account picker. */
+    View getAccountPickerDismissButton() {
+        return mPresentationMode == PresentationMode.MODAL_DIALOG
+                ? assertNonNull(mDialogDismissButton)
+                : mBottomSheetDismissButton;
     }
 
     /** The button to cancel the confirm management notice. */
@@ -189,8 +337,31 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
             mViewFlipper.getChildAt(mCurrentViewState).setVisibility(View.INVISIBLE);
         }
         mCurrentViewState = state;
-        View titleView = mViewFlipper.getChildAt(state).findViewById(sTitleIds[state]);
+        View titleView =
+                state == ViewState.CONFIRM_MANAGEMENT && mManagementNoticeTitleView != null
+                        ? mManagementNoticeTitleView
+                        : mViewFlipper.getChildAt(state).findViewById(sTitleIds[state]);
         titleView.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_FOCUSED);
+    }
+
+    /**
+     * Replaces the {@link ViewState#CONFIRM_MANAGEMENT} screen with the given management notice.
+     * The notice owns its scrolling and spacing, so it is hosted as-is, without the padding applied
+     * to the other screens.
+     *
+     * @param view The root view of the management notice.
+     * @param titleView The title of the management notice, which receives accessibility focus when
+     *     the screen is displayed.
+     * @param scrollOffsetSupplier Supplies the vertical scroll offset of the management notice,
+     *     reported to the bottom sheet while the screen is displayed.
+     */
+    void setManagementNoticeView(View view, View titleView, IntSupplier scrollOffsetSupplier) {
+        // Detaches either the legacy confirm management screen or a previously hosted notice.
+        mViewFlipper.removeViewAt(ViewState.CONFIRM_MANAGEMENT);
+        mViewFlipper.addView(view, ViewState.CONFIRM_MANAGEMENT);
+        mManagementNoticeView = view;
+        mManagementNoticeTitleView = titleView;
+        mManagementNoticeScrollOffsetSupplier = scrollOffsetSupplier;
     }
 
     /**
@@ -209,8 +380,11 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
     }
 
     void updateSelectedDomain(String domain) {
+        // The legacy confirm management screen may be detached from the view flipper, see
+        // mLegacyConfirmManagementView.
         TextViewWithLeading confirmManagementDescription =
-                mViewFlipper.findViewById(R.id.account_picker_confirm_management_description);
+                mLegacyConfirmManagementView.findViewById(
+                        R.id.account_picker_confirm_management_description);
         confirmManagementDescription.setText(
                 mActivity.getString(R.string.managed_signin_with_user_policy_subtitle, domain));
     }
@@ -235,11 +409,13 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
             }
         }
 
-        if (cancelButton == null) {
-            showAccountPickerDismissButton(false);
+        if (cancelButton == null || mPresentationMode == PresentationMode.MODAL_DIALOG) {
+            // In modal dialog mode, the top-right close (X) button handles dismissal,
+            // so the bottom sheet text dismiss button is not shown.
+            showAccountPickerSheetDismissButton(false);
         } else {
-            mAccountPickerDismissButton.setText(cancelButton);
-            showAccountPickerDismissButton(true);
+            mBottomSheetDismissButton.setText(cancelButton);
+            showAccountPickerSheetDismissButton(true);
         }
     }
 
@@ -256,7 +432,23 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
 
     @Override
     public int getVerticalScrollOffset() {
-        return 0;
+        int offset = 0;
+        View displayedView = mViewFlipper.getCurrentView();
+        // Root of the new management notice view is not a scroll view so the scroll offset must be
+        // passed in a supplier.
+        if (displayedView == mManagementNoticeView
+                && mManagementNoticeScrollOffsetSupplier != null) {
+            return mManagementNoticeScrollOffsetSupplier.getAsInt();
+        }
+        if (displayedView instanceof ScrollView scrollView) {
+            offset += scrollView.getScrollY();
+        }
+        // The account list is a RecyclerView nested in the expanded screen's ScrollView, and it
+        // scrolls on its own too, so its offset needs to be taken into account as well.
+        if (displayedView == mViewFlipper.getChildAt(ViewState.EXPANDED_ACCOUNT_LIST)) {
+            offset += mAccountListView.computeVerticalScrollOffset();
+        }
+        return offset;
     }
 
     @Override
@@ -268,6 +460,11 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
     public void destroy() {}
 
     @Override
+    public BottomSheetType getSheetType() {
+        return BOTTOM_SHEET_TYPE;
+    }
+
+    @Override
     public int getPriority() {
         return ContentPriority.HIGH;
     }
@@ -275,6 +472,11 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
     @Override
     public boolean swipeToDismissEnabled() {
         return true;
+    }
+
+    @Override
+    public boolean showHandlebar() {
+        return mPresentationMode == PresentationMode.BOTTOM_SHEET;
     }
 
     @Override
@@ -322,6 +524,26 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
         continueButton.setText(buttonId);
     }
 
+    /** See styles.xml for motivation behind this function. */
+    private static void applyTopPaddingToViewFlipperChildren(
+            ViewFlipper viewFlipper, @PresentationMode int presentationMode) {
+        int paddingTop =
+                viewFlipper
+                        .getResources()
+                        .getDimensionPixelSize(
+                                presentationMode == PresentationMode.MODAL_DIALOG
+                                        ? R.dimen.account_picker_dialog_padding_top
+                                        : R.dimen.account_picker_bottom_sheet_padding_top);
+        for (int i = 0; i < viewFlipper.getChildCount(); i++) {
+            View child = viewFlipper.getChildAt(i);
+            child.setPadding(
+                    child.getPaddingLeft(),
+                    paddingTop,
+                    child.getPaddingRight(),
+                    child.getPaddingBottom());
+        }
+    }
+
     private static void checkViewFlipperChildrenAndViewStateMatch(ViewFlipper viewFlipper) {
         checkViewFlipperChildIdAndViewStateMatch(
                 viewFlipper, ViewState.NO_ACCOUNTS, R.id.account_picker_state_no_account);
@@ -347,17 +569,26 @@ class AccountPickerBottomSheetView implements BottomSheetContent {
 
     private static void checkViewFlipperChildIdAndViewStateMatch(
             ViewFlipper viewFlipper, @ViewState int viewState, @IdRes int expectedChildId) {
-        if (viewFlipper.getChildAt(viewState).getId() != expectedChildId) {
+        View child = viewFlipper.getChildAt(viewState);
+        // All view states are wrapped in a ScrollView, with a single child.
+        if (child instanceof ScrollView scrollView && scrollView.getChildCount() == 1) {
+            child = scrollView.getChildAt(0);
+        } else {
+            throw new IllegalArgumentException(
+                    "Match failed with ViewState, each view should be wrapped in a ScrollView: "
+                            + viewState);
+        }
+        if (child.getId() != expectedChildId) {
             throw new IllegalArgumentException("Match failed with ViewState:" + viewState);
         }
     }
 
-    private void showAccountPickerDismissButton(boolean shouldShow) {
+    private void showAccountPickerSheetDismissButton(boolean shouldShow) {
         if (shouldShow) {
-            mAccountPickerDismissButton.setVisibility(View.VISIBLE);
+            mBottomSheetDismissButton.setVisibility(View.VISIBLE);
             mDismissButtonGoneMarginSpace.setVisibility(View.GONE);
         } else {
-            mAccountPickerDismissButton.setVisibility(View.GONE);
+            mBottomSheetDismissButton.setVisibility(View.GONE);
             mDismissButtonGoneMarginSpace.setVisibility(View.VISIBLE);
         }
     }

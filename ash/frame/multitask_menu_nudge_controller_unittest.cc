@@ -23,6 +23,8 @@
 #include "ash/wm/tablet_mode/tablet_mode_window_manager.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/wm_event.h"
+#include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/simple_test_clock.h"
 #include "chromeos/ui/base/nudge_util.h"
@@ -32,8 +34,7 @@
 #include "chromeos/ui/frame/multitask_menu/multitask_button.h"
 #include "chromeos/ui/frame/multitask_menu/multitask_menu.h"
 #include "chromeos/ui/frame/multitask_menu/multitask_menu_view_test_api.h"
-#include "components/user_manager/fake_user_manager.h"
-#include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/user_manager.h"
 #include "ui/aura/window.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/size.h"
@@ -242,9 +243,7 @@ TEST_F(MultitaskMenuNudgeControllerTest, NudgeTimeout) {
 TEST_F(MultitaskMenuNudgeControllerTest, NoNudgeForNewUser) {
   chromeos::MultitaskMenuNudgeController::SetSuppressNudgeForTesting(false);
 
-  user_manager::TypedScopedUserManager<user_manager::FakeUserManager>
-      fake_user_manager{std::make_unique<user_manager::FakeUserManager>()};
-  fake_user_manager->SetIsCurrentUserNew(true);
+  user_manager::UserManager::Get()->SetIsCurrentUserNew(true);
 
   auto window = CreateWindowWithAppType(AppType::SYSTEM_APP, {300, 300});
   EXPECT_FALSE(GetNudgeWidgetForWindow(window.get()));
@@ -338,7 +337,7 @@ TEST_F(MultitaskMenuNudgeControllerTest, ClamshellNudgeBounds) {
   test_clock_.Advance(base::Hours(26));
 
   // Test the same thing in RTL.
-  base::i18n::SetRTLForTesting(true);
+  base::i18n::ScopedRTLForTesting scoped_rtl(true);
   window = CreateWindowWithAppType(AppType::SYSTEM_APP, {300, 300});
   WindowState::Get(window.get())->Maximize();
   nudge_widget = GetNudgeWidgetForWindow(window.get());

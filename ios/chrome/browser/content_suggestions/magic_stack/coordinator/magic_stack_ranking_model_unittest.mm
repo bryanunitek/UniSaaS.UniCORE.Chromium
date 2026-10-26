@@ -22,7 +22,6 @@
 #import "components/feature_engagement/test/mock_tracker.h"
 #import "components/history/core/browser/history_service.h"
 #import "components/image_fetcher/core/image_data_fetcher.h"
-#import "components/keyed_service/core/service_access_type.h"
 #import "components/ntp_tiles/icon_cacher.h"
 #import "components/ntp_tiles/most_visited_sites.h"
 #import "components/ntp_tiles/pref_names.h"
@@ -88,7 +87,6 @@
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/start_surface/ui_bundled/start_surface_recent_tab_browser_agent.h"
 #import "ios/chrome/browser/sync/model/mock_sync_service_utils.h"
@@ -245,8 +243,7 @@ class MagicStackRankingModelTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
-            std::make_unique<FakeAuthenticationServiceDelegate>()));
+        AuthenticationServiceFactory::GetDefaultFactory());
     builder.AddTestingFactory(ios::HistoryServiceFactory::GetInstance(),
                               ios::HistoryServiceFactory::GetDefaultFactory());
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
@@ -320,8 +317,7 @@ class MagicStackRankingModelTest : public PlatformTest {
         optimizationGuideService:nil
                  shoppingService:nil];
     history::HistoryService* history_service =
-        ios::HistoryServiceFactory::GetForProfile(
-            GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
+        ios::HistoryServiceFactory::GetForProfile(GetProfile());
     favicon::LargeIconService* large_icon_service =
         IOSChromeLargeIconServiceFactory::GetForProfile(GetProfile());
     LargeIconCache* cache =
@@ -345,7 +341,8 @@ class MagicStackRankingModelTest : public PlatformTest {
          URLLoadingBrowserAgent:url_loader_
           accountManagerService:nullptr
               engagementTracker:tracker
-              layoutGuideCenter:nil];
+              layoutGuideCenter:nil
+          aimEligibilityService:nullptr];
 
     _safetyCheckMediator = [[SafetyCheckMagicStackMediator alloc]
         initWithSafetyCheckManager:IOSChromeSafetyCheckManagerFactory::
@@ -358,13 +355,15 @@ class MagicStackRankingModelTest : public PlatformTest {
     bookmark_model_ = bookmarks::TestBookmarkClient::CreateModel();
     app_store_bundle_service_ = std::make_unique<TestAppStoreBundleService>();
 
-    _tipsMediator = [[TipsMagicStackMediator alloc]
-        initWithIdentifier:segmentation_platform::TipIdentifier::kUnknown
-        profilePrefService:GetProfile()->GetPrefs()
-           shoppingService:shopping_service_.get()
-             bookmarkModel:bookmark_model_.get()
-              imageFetcher:std::make_unique<image_fetcher::ImageDataFetcher>(
-                               GetProfile()->GetSharedURLLoaderFactory())];
+    _tipsMediator = [[TipsMagicStackMediator
+        alloc] initWithIdentifier:segmentation_platform::TipIdentifier::kUnknown
+                    profilePrefService:GetProfile()->GetPrefs()
+                       shoppingService:shopping_service_.get()
+                         bookmarkModel:bookmark_model_.get()
+                          imageFetcher:
+                              std::make_unique<image_fetcher::ImageDataFetcher>(
+                                  GetProfile()->GetSharedURLLoaderFactory())
+        backgroundCustomizationService:nullptr];
 
     _priceTrackingPromoMediator = [[PriceTrackingPromoMediator alloc]
         initWithShoppingService:commerce::ShoppingServiceFactory::GetForProfile(
@@ -381,36 +380,32 @@ class MagicStackRankingModelTest : public PlatformTest {
     [_priceTrackingPromoMediator setPriceTrackingPromoConfigForTesting:config];
 
     _magicStackRankingModel = [[MagicStackRankingModel alloc]
-        initWithSegmentationService:segmentation_platform::
-                                        SegmentationPlatformServiceFactory::
-                                            GetForProfile(GetProfile())
-                    shoppingService:commerce::ShoppingServiceFactory::
-                                        GetForProfile(GetProfile())
-                        authService:authenticationService
-                        prefService:GetProfile()->GetPrefs()
-                         localState:GetLocalState()
-                    moduleMediators:@[
-                      _shortcutsMediator,
-                      _setUpListMediator,
-                      _tabResumptionMediator,
-                      _mostVisitedTilesMediator,
-                      _safetyCheckMediator,
-                      _tipsMediator,
-                      _priceTrackingPromoMediator,
-                    ]
-                        tipsManager:TipsManagerIOSFactory::GetForProfile(
-                                        browser_->GetProfile())
-                 templateURLService:ios::TemplateURLServiceFactory::
-                                        GetForProfile(browser_->GetProfile())
-              appStoreBundleService:app_store_bundle_service_.get()
-                      bookmarkModel:bookmark_model_.get()
-                     levelUpService:LevelUpServiceFactory::GetForProfile(
-                                        GetProfile())];
-
-    metrics_recorder_ = [[ContentSuggestionsMetricsRecorder alloc] init];
-    _magicStackRankingModel.contentSuggestionsMetricsRecorder =
-        metrics_recorder_;
-    _setUpListMediator.contentSuggestionsMetricsRecorder = metrics_recorder_;
+           initWithSegmentationService:segmentation_platform::
+                                           SegmentationPlatformServiceFactory::
+                                               GetForProfile(GetProfile())
+                       shoppingService:commerce::ShoppingServiceFactory::
+                                           GetForProfile(GetProfile())
+                           authService:authenticationService
+                           prefService:GetProfile()->GetPrefs()
+                            localState:GetLocalState()
+                       moduleMediators:@[
+                         _shortcutsMediator,
+                         _setUpListMediator,
+                         _tabResumptionMediator,
+                         _mostVisitedTilesMediator,
+                         _safetyCheckMediator,
+                         _tipsMediator,
+                         _priceTrackingPromoMediator,
+                       ]
+                           tipsManager:TipsManagerIOSFactory::GetForProfile(
+                                           browser_->GetProfile())
+                    templateURLService:ios::TemplateURLServiceFactory::
+                                           GetForProfile(browser_->GetProfile())
+                 appStoreBundleService:app_store_bundle_service_.get()
+                         bookmarkModel:bookmark_model_.get()
+                        levelUpService:LevelUpServiceFactory::GetForProfile(
+                                           GetProfile())
+        backgroundCustomizationService:nullptr];
 
     histogram_tester_ = std::make_unique<base::HistogramTester>();
   }
@@ -485,7 +480,6 @@ class MagicStackRankingModelTest : public PlatformTest {
   PriceTrackingPromoMediator* _priceTrackingPromoMediator;
   MagicStackRankingModel* _magicStackRankingModel;
   id setUpListConsumer_;
-  ContentSuggestionsMetricsRecorder* metrics_recorder_;
   std::unique_ptr<base::HistogramTester> histogram_tester_;
 };
 
@@ -659,23 +653,6 @@ TEST_F(MagicStackRankingModelTest, TestTipsMediatorDelegateCallsRemoval) {
   EXPECT_OCMOCK_VERIFY(mockDelegate);
 }
 
-// Test that disabling the Magic Stack ranking model doesn't crash and doesn't
-// perform a valid fetch.
-TEST_F(MagicStackRankingModelTest, TestDisabledSegmentationRanking) {
-  scoped_feature_list_.Reset();
-  scoped_feature_list_.InitWithFeaturesAndParameters(
-      {}, {{segmentation_platform::features::
-                kSegmentationPlatformIosModuleRanker}});
-  id mockDelegate =
-      OCMStrictProtocolMock(@protocol(MagicStackRankingModelDelegate));
-  _magicStackRankingModel.delegate = mockDelegate;
-  OCMReject([mockDelegate magicStackRankingModel:[OCMArg any]
-                        didGetLatestRankingOrder:[OCMArg any]]);
-  [_magicStackRankingModel fetchLatestMagicStackRanking];
-  base::RunLoop().RunUntilIdle();
-  EXPECT_OCMOCK_VERIFY(mockDelegate);
-}
-
 // Test that fetching the ephemeral card to show in the Magic Stack returns the
 // correct card.
 TEST_F(MagicStackRankingModelTest, TestEphemeralModelDidGetCardToShow) {
@@ -731,39 +708,41 @@ TEST_F(MagicStackRankingModelTest, TestNumSubscriptions) {
   EXPECT_EQ(2, getNumPriceDrops(products));
 }
 
-// Tests that Level Up module is included in the ranking order when enabled.
+// Tests that Level Up module is included in the ranking order when opted in.
 TEST_F(MagicStackRankingModelTest, TestLevelUpModuleRanking) {
   scoped_feature_list_.Reset();
   scoped_feature_list_.InitWithFeatures({kIOSLevelUp}, {});
+  GetProfile()->GetPrefs()->SetBoolean(prefs::kLevelUpOptIn, true);
 
   std::unique_ptr<LevelUpService> level_up_service =
       std::make_unique<LevelUpService>(GetProfile()->GetPrefs());
   MagicStackRankingModel* ranking_model = [[MagicStackRankingModel alloc]
-      initWithSegmentationService:segmentation_platform::
-                                      SegmentationPlatformServiceFactory::
-                                          GetForProfile(GetProfile())
-                  shoppingService:commerce::ShoppingServiceFactory::
-                                      GetForProfile(GetProfile())
-                      authService:AuthenticationServiceFactory::GetForProfile(
-                                      GetProfile())
-                      prefService:GetProfile()->GetPrefs()
-                       localState:GetLocalState()
-                  moduleMediators:@[
-                    _shortcutsMediator,
-                    _setUpListMediator,
-                    _tabResumptionMediator,
-                    _mostVisitedTilesMediator,
-                    _safetyCheckMediator,
-                    _tipsMediator,
-                    _priceTrackingPromoMediator,
-                  ]
-                      tipsManager:TipsManagerIOSFactory::GetForProfile(
-                                      browser_->GetProfile())
-               templateURLService:ios::TemplateURLServiceFactory::GetForProfile(
-                                      browser_->GetProfile())
-            appStoreBundleService:app_store_bundle_service_.get()
-                    bookmarkModel:bookmark_model_.get()
-                   levelUpService:level_up_service.get()];
+         initWithSegmentationService:segmentation_platform::
+                                         SegmentationPlatformServiceFactory::
+                                             GetForProfile(GetProfile())
+                     shoppingService:commerce::ShoppingServiceFactory::
+                                         GetForProfile(GetProfile())
+                         authService:AuthenticationServiceFactory::
+                                         GetForProfile(GetProfile())
+                         prefService:GetProfile()->GetPrefs()
+                          localState:GetLocalState()
+                     moduleMediators:@[
+                       _shortcutsMediator,
+                       _setUpListMediator,
+                       _tabResumptionMediator,
+                       _mostVisitedTilesMediator,
+                       _safetyCheckMediator,
+                       _tipsMediator,
+                       _priceTrackingPromoMediator,
+                     ]
+                         tipsManager:TipsManagerIOSFactory::GetForProfile(
+                                         browser_->GetProfile())
+                  templateURLService:ios::TemplateURLServiceFactory::
+                                         GetForProfile(browser_->GetProfile())
+               appStoreBundleService:app_store_bundle_service_.get()
+                       bookmarkModel:bookmark_model_.get()
+                      levelUpService:level_up_service.get()
+      backgroundCustomizationService:nullptr];
 
   FakeMagicStackRankingModelDelegate* delegate_ =
       [[FakeMagicStackRankingModelDelegate alloc] init];
@@ -777,6 +756,201 @@ TEST_F(MagicStackRankingModelTest, TestLevelUpModuleRanking) {
 
   BOOL found_level_up = NO;
   for (MagicStackModule* config in delegate_.rank) {
+    if (config.type == ContentSuggestionsModuleType::kLevelUp) {
+      found_level_up = YES;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_level_up);
+}
+
+// Tests that Level Up module is not included in the ranking order when the user
+// is opted out.
+TEST_F(MagicStackRankingModelTest, TestLevelUpModuleRankingOptedOut) {
+  scoped_feature_list_.Reset();
+  scoped_feature_list_.InitWithFeatures({kIOSLevelUp}, {});
+  GetProfile()->GetPrefs()->SetBoolean(prefs::kLevelUpOptIn, false);
+
+  std::unique_ptr<LevelUpService> level_up_service =
+      std::make_unique<LevelUpService>(GetProfile()->GetPrefs());
+  MagicStackRankingModel* ranking_model = [[MagicStackRankingModel alloc]
+         initWithSegmentationService:segmentation_platform::
+                                         SegmentationPlatformServiceFactory::
+                                             GetForProfile(GetProfile())
+                     shoppingService:commerce::ShoppingServiceFactory::
+                                         GetForProfile(GetProfile())
+                         authService:AuthenticationServiceFactory::
+                                         GetForProfile(GetProfile())
+                         prefService:GetProfile()->GetPrefs()
+                          localState:GetLocalState()
+                     moduleMediators:@[
+                       _shortcutsMediator,
+                       _setUpListMediator,
+                       _tabResumptionMediator,
+                       _mostVisitedTilesMediator,
+                       _safetyCheckMediator,
+                       _tipsMediator,
+                       _priceTrackingPromoMediator,
+                     ]
+                         tipsManager:TipsManagerIOSFactory::GetForProfile(
+                                         browser_->GetProfile())
+                  templateURLService:ios::TemplateURLServiceFactory::
+                                         GetForProfile(browser_->GetProfile())
+               appStoreBundleService:app_store_bundle_service_.get()
+                       bookmarkModel:bookmark_model_.get()
+                      levelUpService:level_up_service.get()
+      backgroundCustomizationService:nullptr];
+
+  FakeMagicStackRankingModelDelegate* delegate_ =
+      [[FakeMagicStackRankingModelDelegate alloc] init];
+  ranking_model.delegate = delegate_;
+  [ranking_model fetchLatestMagicStackRanking];
+
+  EXPECT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
+      TestTimeouts::action_timeout(), true, ^bool() {
+        return [delegate_.rank count] > 0;
+      }));
+
+  BOOL found_level_up = NO;
+  for (MagicStackModule* config in delegate_.rank) {
+    if (config.type == ContentSuggestionsModuleType::kLevelUp) {
+      found_level_up = YES;
+      break;
+    }
+  }
+  EXPECT_FALSE(found_level_up);
+}
+
+// Tests that Level Up module is removed from the Magic Stack when the opt-in
+// pref is toggled to false.
+TEST_F(MagicStackRankingModelTest, TestLevelUpModuleRemovalOnOptOut) {
+  scoped_feature_list_.Reset();
+  scoped_feature_list_.InitWithFeatures({kIOSLevelUp}, {});
+  GetProfile()->GetPrefs()->SetBoolean(prefs::kLevelUpOptIn, true);
+
+  std::unique_ptr<LevelUpService> level_up_service =
+      std::make_unique<LevelUpService>(GetProfile()->GetPrefs());
+  MagicStackRankingModel* ranking_model = [[MagicStackRankingModel alloc]
+         initWithSegmentationService:segmentation_platform::
+                                         SegmentationPlatformServiceFactory::
+                                             GetForProfile(GetProfile())
+                     shoppingService:commerce::ShoppingServiceFactory::
+                                         GetForProfile(GetProfile())
+                         authService:AuthenticationServiceFactory::
+                                         GetForProfile(GetProfile())
+                         prefService:GetProfile()->GetPrefs()
+                          localState:GetLocalState()
+                     moduleMediators:@[
+                       _shortcutsMediator,
+                       _setUpListMediator,
+                       _tabResumptionMediator,
+                       _mostVisitedTilesMediator,
+                       _safetyCheckMediator,
+                       _tipsMediator,
+                       _priceTrackingPromoMediator,
+                     ]
+                         tipsManager:TipsManagerIOSFactory::GetForProfile(
+                                         browser_->GetProfile())
+                  templateURLService:ios::TemplateURLServiceFactory::
+                                         GetForProfile(browser_->GetProfile())
+               appStoreBundleService:app_store_bundle_service_.get()
+                       bookmarkModel:bookmark_model_.get()
+                      levelUpService:level_up_service.get()
+      backgroundCustomizationService:nullptr];
+
+  FakeMagicStackRankingModelDelegate* fake_delegate =
+      [[FakeMagicStackRankingModelDelegate alloc] init];
+  ranking_model.delegate = fake_delegate;
+  [ranking_model fetchLatestMagicStackRanking];
+
+  EXPECT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
+      TestTimeouts::action_timeout(), true, ^bool() {
+        return [fake_delegate.rank count] > 0;
+      }));
+
+  BOOL found_level_up = NO;
+  for (MagicStackModule* config in fake_delegate.rank) {
+    if (config.type == ContentSuggestionsModuleType::kLevelUp) {
+      found_level_up = YES;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_level_up);
+
+  GetProfile()->GetPrefs()->SetBoolean(prefs::kLevelUpOptIn, false);
+
+  found_level_up = NO;
+  for (MagicStackModule* config in fake_delegate.rank) {
+    if (config.type == ContentSuggestionsModuleType::kLevelUp) {
+      found_level_up = YES;
+      break;
+    }
+  }
+  EXPECT_FALSE(found_level_up);
+}
+
+// Tests that opting into Level Up inserts the Level Up module into the Magic
+// Stack.
+TEST_F(MagicStackRankingModelTest, TestLevelUpModuleInsertionOnOptIn) {
+  scoped_feature_list_.Reset();
+  scoped_feature_list_.InitWithFeatures({kIOSLevelUp}, {});
+
+  GetProfile()->GetPrefs()->SetBoolean(prefs::kLevelUpOptIn, false);
+
+  std::unique_ptr<LevelUpService> level_up_service =
+      std::make_unique<LevelUpService>(GetProfile()->GetPrefs());
+
+  MagicStackRankingModel* ranking_model = [[MagicStackRankingModel alloc]
+         initWithSegmentationService:segmentation_platform::
+                                         SegmentationPlatformServiceFactory::
+                                             GetForProfile(GetProfile())
+                     shoppingService:commerce::ShoppingServiceFactory::
+                                         GetForProfile(GetProfile())
+                         authService:AuthenticationServiceFactory::
+                                         GetForProfile(GetProfile())
+                         prefService:GetProfile()->GetPrefs()
+                          localState:GetLocalState()
+                     moduleMediators:@[
+                       _shortcutsMediator,
+                       _setUpListMediator,
+                       _tabResumptionMediator,
+                       _mostVisitedTilesMediator,
+                       _safetyCheckMediator,
+                       _tipsMediator,
+                       _priceTrackingPromoMediator,
+                     ]
+                         tipsManager:TipsManagerIOSFactory::GetForProfile(
+                                         browser_->GetProfile())
+                  templateURLService:ios::TemplateURLServiceFactory::
+                                         GetForProfile(browser_->GetProfile())
+               appStoreBundleService:app_store_bundle_service_.get()
+                       bookmarkModel:bookmark_model_.get()
+                      levelUpService:level_up_service.get()
+      backgroundCustomizationService:nullptr];
+
+  FakeMagicStackRankingModelDelegate* fake_delegate =
+      [[FakeMagicStackRankingModelDelegate alloc] init];
+  ranking_model.delegate = fake_delegate;
+  [ranking_model fetchLatestMagicStackRanking];
+
+  EXPECT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
+      TestTimeouts::action_timeout(), true, ^bool() {
+        return [fake_delegate.rank count] > 0;
+      }));
+
+  BOOL found_level_up = NO;
+  for (MagicStackModule* config in fake_delegate.rank) {
+    if (config.type == ContentSuggestionsModuleType::kLevelUp) {
+      found_level_up = YES;
+      break;
+    }
+  }
+  EXPECT_FALSE(found_level_up);
+
+  GetProfile()->GetPrefs()->SetBoolean(prefs::kLevelUpOptIn, true);
+
+  found_level_up = NO;
+  for (MagicStackModule* config in fake_delegate.rank) {
     if (config.type == ContentSuggestionsModuleType::kLevelUp) {
       found_level_up = YES;
       break;

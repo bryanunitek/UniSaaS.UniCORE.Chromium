@@ -9,16 +9,22 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.content.Context;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
+import android.util.DisplayMetrics;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
+
+import androidx.annotation.DimenRes;
+import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.MathUtils;
 import org.chromium.base.Token;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.tasks.tab_management.TabHoverCardView;
 import org.chromium.chrome.browser.tasks.tab_management.TabOverflowMenuCoordinator;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiThemeUtil;
 import org.chromium.components.tab_group_sync.LocalTabGroupId;
@@ -43,22 +49,13 @@ public class StripLayoutUtils {
     public static final float TAB_GROUP_BOTTOM_INDICATOR_WIDTH_OFFSET = 27f;
 
     // Tab width constants.
-    private static final float MIN_TAB_WIDTH_DESKTOP_DP = 76f;
+    public static final float MIN_TAB_WIDTH_DESKTOP_DP = 68f;
     private static final float MIN_TAB_WIDTH_TABLET_DP = 108f;
-    public static final float MIN_TAB_WIDTH_DP =
-            StyleUtils.shouldApplyDesktopDensity()
-                    ? MIN_TAB_WIDTH_DESKTOP_DP
-                    : MIN_TAB_WIDTH_TABLET_DP;
     public static final float MAX_TAB_WIDTH_DP = TabUiThemeUtil.getMaxTabStripTabWidthDp();
     public static final float TAB_OVERLAP_WIDTH_DP = 28f;
 
     // Pinned tab width.
     public static final float PINNED_TAB_WIDTH_DP = MIN_TAB_WIDTH_DESKTOP_DP;
-
-    // Button size constants.
-    public static final float BUTTON_BACKGROUND_SIZE_DP = 32f;
-    public static final float BUTTON_TOUCH_TARGET_SIZE_DP =
-            StyleUtils.shouldApplyDesktopDensity() ? BUTTON_BACKGROUND_SIZE_DP : 48f;
 
     // Animation Constants.
     public static final int ANIM_TAB_MOVE_MS = 125;
@@ -117,7 +114,7 @@ public class StripLayoutUtils {
     public static boolean isNonTrailingTabInGroup(TabModel tabModel, StripLayoutTab stripTab) {
         Tab tab = assumeNonNull(tabModel.getTabById(stripTab.getTabId()));
         if (tabModel.isTabInTabGroup(tab)) {
-            List<Tab> relatedTabs = tabModel.getRelatedTabList(tab.getId());
+            List<Tab> relatedTabs = tabModel.getTabsInGroup(tab.getTabGroupId());
             Tab lastTab = relatedTabs.get(relatedTabs.size() - 1);
             return tab.getId() != lastTab.getId();
         }
@@ -227,6 +224,33 @@ public class StripLayoutUtils {
     // ============================================================================================
     // Tab util methods
     // ============================================================================================
+
+    /** Returns the minimum tab width based on device density. */
+    public static float getMinTabWidthDp() {
+        return StyleUtils.shouldApplyDesktopDensity()
+                ? MIN_TAB_WIDTH_DESKTOP_DP
+                : MIN_TAB_WIDTH_TABLET_DP;
+    }
+
+    /** Returns the touch target size for tab strip buttons based on device density. */
+    public static float getButtonTouchTargetSizeDp(Context context) {
+        return StyleUtils.shouldApplyDesktopDensity()
+                ? getDimensionDp(context, R.dimen.tab_strip_button_bg_size)
+                : getDimensionDp(context, R.dimen.min_touch_target_size);
+    }
+
+    /**
+     * Converts a dimension resource to DP.
+     *
+     * @param context The {@link Context} to retrieve resources.
+     * @param id The dimension resource ID.
+     * @return The dimension in DP.
+     */
+    public static float getDimensionDp(Context context, @DimenRes int id) {
+        return Math.round(
+                context.getResources().getDimension(id)
+                        / context.getResources().getDisplayMetrics().density);
+    }
 
     /**
      * @param tabWidthSupplier supplies the cached tab width for non-pinned tabs
@@ -463,5 +487,79 @@ public class StripLayoutUtils {
     public static void performHapticFeedback(View view) {
         if (view == null) return;
         view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+    }
+
+    /**
+     * Get the x and y coordinates of the position of the hover card, in px.
+     *
+     * @param hoverCardView The {@link TabHoverCardView} being positioned.
+     * @param isSelectedTab Whether the tab is the selected tab, {@code true} if the hovered tab is
+     *     also the selected tab, {@code false} otherwise.
+     * @param tabX The tab x-position to compute hover card positioning.
+     * @param tabWidth The tab width to compute hover card positioning.
+     * @param height The height of the strip stack, to determine the y position of the card.
+     * @param topPadding The top padding applied to the tab strip, in dp.
+     * @return A float array specifying the x (array[0]) and y (array[1]) coordinates of the
+     *     position of the hover card, in px.
+     */
+    @VisibleForTesting
+    public static float[] getHoverCardPosition(
+            TabHoverCardView hoverCardView,
+            boolean isSelectedTab,
+            float tabX,
+            float tabWidth,
+            float height,
+            float topPadding) {
+        Context context = hoverCardView.getContext();
+        // 1. Determine the window width.
+        DisplayMetrics displayMetrics = context.getResources().getDisplayMetrics();
+        float displayDensity = displayMetrics.density;
+        float windowWidthPx = displayMetrics.widthPixels;
+        float windowWidthDp = windowWidthPx / displayDensity;
+
+        // 2. Determine the hover card width.
+        float hoverCardWidthPx = TabHoverCardView.getHoverCardWidthPx(context);
+        float hoverCardWidthDp = hoverCardWidthPx / displayDensity;
+
+        // 3. Determine the horizontal position of the hover card.
+        float hoverCardXDp =
+                LocalizationUtils.isLayoutRtl() ? (tabX - (hoverCardWidthDp - tabWidth)) : tabX;
+        // Adjust the inactive folio tab hover card to align with the tab container
+        // edge.
+        if (!isSelectedTab) {
+            hoverCardXDp +=
+                    MathUtils.flipSignIf(
+                            context.getResources()
+                                            .getDimension(R.dimen.inactive_tab_hover_card_x_offset)
+                                    / displayDensity,
+                            LocalizationUtils.isLayoutRtl());
+        }
+
+        // Adjust the card to account for the shadow length of the background drawable.
+        hoverCardXDp -=
+                context.getResources().getDimension(R.dimen.popup_menu_shadow_length)
+                        / displayDensity;
+
+        float windowHorizontalMarginDp =
+                context.getResources().getDimension(R.dimen.tab_hover_card_window_horizontal_margin)
+                        / displayDensity;
+        // Align the hover card at a minimum horizontal margin of 8dp from the window left edge.
+        if (hoverCardXDp < windowHorizontalMarginDp) {
+            hoverCardXDp = windowHorizontalMarginDp;
+        }
+        // Align the hover card at a minimum horizontal margin of 8dp from the window right edge.
+        if (hoverCardXDp + hoverCardWidthDp > windowWidthDp - windowHorizontalMarginDp) {
+            hoverCardXDp = windowWidthDp - hoverCardWidthDp - windowHorizontalMarginDp;
+        }
+
+        // 4. Determine the vertical position of the hover card.
+        float hoverCardYDp = height + topPadding;
+
+        // Adjust the card to account for the shadow length of the background drawable.
+        hoverCardYDp -=
+                context.getResources().getDimension(R.dimen.popup_menu_shadow_length)
+                        / displayDensity;
+
+        return new float[] {hoverCardXDp * displayDensity, hoverCardYDp * displayDensity};
     }
 }

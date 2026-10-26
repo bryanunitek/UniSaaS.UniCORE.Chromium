@@ -8,6 +8,7 @@ component("unexportable_keys") {
     "background_long_task_scheduler.h",
     "background_task.h",
     "background_task_impl.h",
+    "background_task_origin.cc",
     "background_task_origin.h",
     "background_task_priority.cc",
     "background_task_priority.h",
@@ -30,8 +31,6 @@ component("unexportable_keys") {
     "unexportable_key_tasks.cc",
     "unexportable_key_tasks.h",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   defines = [ "IS_UNEXPORTABLE_KEYS_IMPL" ]
 

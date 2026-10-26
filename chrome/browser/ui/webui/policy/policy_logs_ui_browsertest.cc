@@ -5,6 +5,7 @@
 #include "base/files/file_util.h"
 #include "base/test/run_until.h"
 #include "base/test/with_feature_override.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/common/webui_url_constants.h"
@@ -29,17 +30,24 @@ class PolicyUILogsPageTest : public PlatformBrowserTest,
   }
 
   void ClickRefreshLogsButton() {
-    ASSERT_TRUE(content::ExecJs(
-        web_contents(), "document.querySelector('#logs-refresh').click();"));
+    ASSERT_TRUE(
+        content::ExecJs(web_contents(),
+                        "document.querySelector('policy-logs-app').shadowRoot"
+                        ".querySelector('#logs-refresh').click();"));
   }
 
   void ClickDownloadJsonButton() {
-    ASSERT_TRUE(content::ExecJs(
-        web_contents(), "document.querySelector('#logs-dump').click();"));
+    ASSERT_TRUE(
+        content::ExecJs(web_contents(),
+                        "document.querySelector('policy-logs-app').shadowRoot"
+                        ".querySelector('#logs-dump').click();"));
   }
 
   const std::string GetPageText() {
-    return content::EvalJs(web_contents(), "document.body.textContent")
+    return content::EvalJs(
+               web_contents(),
+               "document.querySelector('policy-logs-app').shadowRoot"
+               ".textContent")
         .ExtractString();
   }
 };

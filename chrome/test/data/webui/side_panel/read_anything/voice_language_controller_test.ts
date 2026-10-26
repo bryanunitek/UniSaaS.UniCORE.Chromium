@@ -4,27 +4,27 @@
 
 import 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 
-import {AVAILABLE_GOOGLE_TTS_LOCALES, BrowserProxy, EXTENSION_RESPONSE_TIMEOUT_MS, mojoVoicePackStatusToVoicePackStatusEnum, NotificationType, PACK_MANAGER_SUPPORTED_LANGS_AND_LOCALES, SpeechBrowserProxyImpl, VoiceClientSideStatusCode, VoiceLanguageController, VoiceNotificationManager, VoicePackServerStatusErrorCode, VoicePackServerStatusSuccessCode} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
-import type {VoiceLanguageListener, VoiceNotificationListener} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import {AVAILABLE_GOOGLE_TTS_LOCALES, EXTENSION_RESPONSE_TIMEOUT_MS, mojoVoicePackStatusToVoicePackStatusEnum, NotificationType, PACK_MANAGER_SUPPORTED_LANGS_AND_LOCALES, VoiceClientSideStatusCode, VoicePackServerStatusErrorCode, VoicePackServerStatusSuccessCode} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import type {VoiceLanguageController, VoiceLanguageListener, VoiceNotificationManager} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import {assertArrayEquals, assertEquals, assertFalse, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
 import {MockTimer} from 'chrome-untrusted://webui-test/mock_timer.js';
 
-import {createAndSetVoices, createSpeechSynthesisVoice, mockMetrics, setupBasicSpeech, setVoices} from './common.js';
-import {FakeReadingMode} from './fake_reading_mode.js';
-import {TestColorUpdaterBrowserProxy} from './test_color_updater_browser_proxy.js';
+import {createAndSetVoices, createSpeechSynthesisVoice, setupBasicSpeech, setupTestEnvironment, setVoices} from './common.js';
+import type {TestAudioBrowserProxy} from './test_audio_browser_proxy.js';
 import type {TestMetricsBrowserProxy} from './test_metrics_browser_proxy.js';
-import {TestSpeechBrowserProxy} from './test_speech_browser_proxy.js';
+import type {TestSpeechBrowserProxy} from './test_speech_browser_proxy.js';
+import type {TestVisualBrowserProxy} from './test_visual_browser_proxy.js';
 
 suite('VoiceLanguageController', () => {
+  let audioBrowserProxy: TestAudioBrowserProxy;
+  let visualBrowserProxy: TestVisualBrowserProxy;
   let speech: TestSpeechBrowserProxy;
   let voiceLanguageController: VoiceLanguageController;
+  let voiceNotificationManager: VoiceNotificationManager;
   let listener: VoiceLanguageListener;
   let onEnabledLangsChange: boolean;
   let onAvailableVoicesChange: boolean;
   let onCurrentVoiceChange: boolean;
-  let installedLangs: string[];
-  let uninstalledLangs: string[];
-  let requestInfoLangs: string[];
   let notificationType: NotificationType|null;
   let metrics: TestMetricsBrowserProxy;
 
@@ -65,15 +65,13 @@ suite('VoiceLanguageController', () => {
   ];
 
   setup(() => {
-    // Clearing the DOM should always be done first.
-    document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    BrowserProxy.setInstance(new TestColorUpdaterBrowserProxy());
-    const readingMode = new FakeReadingMode();
-    chrome.readingMode = readingMode as unknown as typeof chrome.readingMode;
-    speech = new TestSpeechBrowserProxy();
-    SpeechBrowserProxyImpl.setInstance(speech);
-    metrics = mockMetrics();
-    voiceLanguageController = new VoiceLanguageController();
+    const result = setupTestEnvironment();
+    audioBrowserProxy = result.audioBrowserProxy;
+    visualBrowserProxy = result.visualBrowserProxy;
+    speech = result.speech;
+    metrics = result.metrics;
+    voiceLanguageController = result.voiceLanguageController;
+    voiceNotificationManager = result.notificationManager;
     onEnabledLangsChange = false;
     onAvailableVoicesChange = false;
     onCurrentVoiceChange = false;
@@ -89,80 +87,54 @@ suite('VoiceLanguageController', () => {
       },
     };
     voiceLanguageController.addListener(listener);
-    installedLangs = [];
-    uninstalledLangs = [];
-    requestInfoLangs = [];
-    chrome.readingMode.sendGetVoicePackInfoRequest = (lang) => {
-      requestInfoLangs.push(lang);
-    };
-    chrome.readingMode.sendInstallVoicePackRequest = (lang) => {
-      installedLangs.push(lang);
-    };
-    chrome.readingMode.sendUninstallVoiceRequest = (lang) => {
-      uninstalledLangs.push(lang);
-    };
     notificationType = null;
     const notificationListener = {
       notify(type: NotificationType, _lang?: string): void {
         notificationType = type;
       },
     };
-    VoiceNotificationManager.getInstance().addListener(notificationListener);
+    voiceNotificationManager.addListener(notificationListener);
   });
 
   suite('setLocalStatus', () => {
-    let listener: VoiceNotificationListener;
-    let listenerNotified: boolean;
-
-    setup(() => {
-      listenerNotified = false;
-      listener = {
-        notify(_type: NotificationType, _language: string): void {
-          listenerNotified = true;
-        },
-      };
-      VoiceNotificationManager.setInstance(new VoiceNotificationManager());
-      VoiceNotificationManager.getInstance().addListener(listener);
-    });
-
     test('no notification for non-Google language', () => {
       voiceLanguageController.setLocalStatus(
           'zh', VoiceClientSideStatusCode.ERROR_INSTALLING);
-      assertFalse(listenerNotified);
+      assertEquals(null, notificationType);
     });
 
     test('no notification for invalid language', () => {
       voiceLanguageController.setLocalStatus(
           'klingon', VoiceClientSideStatusCode.ERROR_INSTALLING);
-      assertFalse(listenerNotified);
+      assertEquals(null, notificationType);
     });
 
     test('no notification for same status', () => {
       voiceLanguageController.setLocalStatus(
           'pt-br', VoiceClientSideStatusCode.ERROR_INSTALLING);
-      assertTrue(listenerNotified);
-      listenerNotified = false;
+      assertEquals(NotificationType.GENERIC_ERROR, notificationType);
 
+      notificationType = null;
       voiceLanguageController.setLocalStatus(
           'pt-br', VoiceClientSideStatusCode.ERROR_INSTALLING);
 
-      assertFalse(listenerNotified);
+      assertEquals(null, notificationType);
     });
 
     test('notifies for new status with Google-supported language', () => {
       voiceLanguageController.setLocalStatus(
           'it-it', VoiceClientSideStatusCode.ERROR_INSTALLING);
-      assertTrue(listenerNotified);
+      assertEquals(NotificationType.GENERIC_ERROR, notificationType);
 
-      listenerNotified = false;
+      notificationType = null;
       voiceLanguageController.setLocalStatus(
           'it-it', VoiceClientSideStatusCode.AVAILABLE);
-      assertTrue(listenerNotified);
+      assertEquals(NotificationType.DOWNLOADED, notificationType);
 
-      listenerNotified = false;
+      notificationType = null;
       voiceLanguageController.setLocalStatus(
           'hi', VoiceClientSideStatusCode.ERROR_INSTALLING);
-      assertTrue(listenerNotified);
+      assertEquals(NotificationType.GENERIC_ERROR, notificationType);
     });
   });
 
@@ -196,7 +168,7 @@ suite('VoiceLanguageController', () => {
   test('setUserPreferredVoice', () => {
     let sentVoiceName = '';
     let sentLang = '';
-    chrome.readingMode.onVoiceChange = (name, lang) => {
+    audioBrowserProxy.onVoiceChange = (name, lang) => {
       sentVoiceName = name;
       sentLang = lang;
     };
@@ -211,19 +183,35 @@ suite('VoiceLanguageController', () => {
   });
 
   test('restoreFromPrefs removes unavailable languages from prefs', () => {
+    assertArrayEquals([], audioBrowserProxy.getLanguagesEnabledInPref());
     const previouslyAvailableLang = 'pt-pt';
-    chrome.readingMode.onLanguagePrefChange(previouslyAvailableLang, true);
-    setupBasicSpeech(speech);
+    audioBrowserProxy.onLanguagePrefChange(previouslyAvailableLang, true);
+    createAndSetVoices(speech, [
+      {lang: 'pt-br', name: 'Google Galinda'},
+    ]);
 
     voiceLanguageController.restoreFromPrefs();
 
-    assertArrayEquals([], chrome.readingMode.getLanguagesEnabledInPref());
+    assertFalse(audioBrowserProxy.getLanguagesEnabledInPref().includes(
+        previouslyAvailableLang));
+  });
+
+  test('restoreSettingsFromPrefs event triggers restoreFromPrefs', () => {
+    assertArrayEquals([], audioBrowserProxy.getLanguagesEnabledInPref());
+    const previouslyAvailableLang = 'pt-pt';
+    audioBrowserProxy.onLanguagePrefChange(previouslyAvailableLang, true);
+    setupBasicSpeech(speech);
+
+    visualBrowserProxy.restoreSettingsFromPrefs.callListeners();
+
+    assertFalse(audioBrowserProxy.getLanguagesEnabledInPref().includes(
+        previouslyAvailableLang));
   });
 
   test('restoreFromPrefs adds initially populated languages to prefs', () => {
     const previouslyAvailableLang = 'pt-pt';
     const availableLang = 'pt-br';
-    chrome.readingMode.onLanguagePrefChange(previouslyAvailableLang, true);
+    audioBrowserProxy.onLanguagePrefChange(previouslyAvailableLang, true);
     voiceLanguageController.enableLang(availableLang);
     createAndSetVoices(speech, [
       {lang: availableLang, name: 'Google Galinda'},
@@ -232,7 +220,7 @@ suite('VoiceLanguageController', () => {
     voiceLanguageController.restoreFromPrefs();
 
     assertArrayEquals(
-        [availableLang], chrome.readingMode.getLanguagesEnabledInPref());
+        [availableLang], audioBrowserProxy.getLanguagesEnabledInPref());
   });
 
   // <if expr="not is_chromeos">
@@ -240,13 +228,13 @@ suite('VoiceLanguageController', () => {
       'restoreFromPrefs adds unavailable language to prefs once available',
       () => {
         const previouslyAvailableLang = 'da-dk';
-        chrome.readingMode.onLanguagePrefChange(previouslyAvailableLang, true);
+        audioBrowserProxy.onLanguagePrefChange(previouslyAvailableLang, true);
         createAndSetVoices(speech, [
           {lang: 'en-us', name: 'Google Fiyero'},
         ]);
         voiceLanguageController.restoreFromPrefs();
 
-        assertArrayEquals([], chrome.readingMode.getLanguagesEnabledInPref());
+        assertArrayEquals([], audioBrowserProxy.getLanguagesEnabledInPref());
 
         // The previously unavailable language is now available.
         voiceLanguageController.enableLang(previouslyAvailableLang);
@@ -258,7 +246,7 @@ suite('VoiceLanguageController', () => {
 
         assertArrayEquals(
             [previouslyAvailableLang],
-            chrome.readingMode.getLanguagesEnabledInPref());
+            audioBrowserProxy.getLanguagesEnabledInPref());
       });
   // </if>
 
@@ -275,7 +263,7 @@ suite('VoiceLanguageController', () => {
     });
 
     test('with langs stored in prefs', () => {
-      chrome.readingMode.getLanguagesEnabledInPref = () => langs;
+      audioBrowserProxy.languagesEnabledInPref = new Set(langs);
 
       voiceLanguageController.restoreFromPrefs();
 
@@ -285,7 +273,7 @@ suite('VoiceLanguageController', () => {
     });
 
     test('with browser lang', () => {
-      chrome.readingMode.baseLanguageForSpeech = langs[1]!;
+      audioBrowserProxy.baseLanguageForSpeech = langs[1]!;
 
       voiceLanguageController.restoreFromPrefs();
 
@@ -297,7 +285,7 @@ suite('VoiceLanguageController', () => {
 
   test('restoreFromPrefs enables the lang for the preferred voice', () => {
     speech.setVoices(voices);
-    chrome.readingMode.getStoredVoice = () => otherVoice.name;
+    audioBrowserProxy.storedVoice = otherVoice.name;
 
     voiceLanguageController.restoreFromPrefs();
 
@@ -306,7 +294,7 @@ suite('VoiceLanguageController', () => {
 
   test('restoreFromPrefs uses the stored voice for this language', () => {
     speech.setVoices(voices);
-    chrome.readingMode.getStoredVoice = () => otherVoice.name;
+    audioBrowserProxy.storedVoice = otherVoice.name;
 
     voiceLanguageController.restoreFromPrefs();
 
@@ -318,7 +306,7 @@ suite('VoiceLanguageController', () => {
       'restoreFromPrefs uses the default voice if the stored voice is invalid',
       () => {
         speech.setVoices(voices);
-        chrome.readingMode.getStoredVoice = () => 'Matt';
+        audioBrowserProxy.storedVoice = 'Matt';
         voiceLanguageController.enableLang(langForDefaultVoice);
 
         voiceLanguageController.restoreFromPrefs();
@@ -337,7 +325,7 @@ suite('VoiceLanguageController', () => {
     voiceLanguageController.enableLang(lang3);
 
     voiceLanguageController.restoreFromPrefs();
-    assertArrayEquals([lang1], requestInfoLangs);
+    assertArrayEquals([lang1], audioBrowserProxy.requestInfoLangs);
 
     voiceLanguageController.updateLanguageStatus(lang1, 'kNotInstalled');
     voiceLanguageController.updateLanguageStatus(lang2, 'kNotInstalled');
@@ -347,7 +335,7 @@ suite('VoiceLanguageController', () => {
         voiceLanguageController.getLocalStatus(lang1));
     assertFalse(!!voiceLanguageController.getLocalStatus(lang2));
     assertFalse(!!voiceLanguageController.getLocalStatus(lang3));
-    assertArrayEquals([lang1], installedLangs);
+    assertArrayEquals([lang1], audioBrowserProxy.installedLangs);
   });
 
   test('onLanguageToggle enabled languages are added', () => {
@@ -355,13 +343,13 @@ suite('VoiceLanguageController', () => {
     voiceLanguageController.onLanguageToggle(firstLanguage);
     assertTrue(voiceLanguageController.isLangEnabled(firstLanguage));
     assertTrue(
-        chrome.readingMode.getLanguagesEnabledInPref().includes(firstLanguage));
+        audioBrowserProxy.getLanguagesEnabledInPref().includes(firstLanguage));
 
     const secondLanguage = 'fr';
     voiceLanguageController.onLanguageToggle(secondLanguage);
     assertTrue(voiceLanguageController.isLangEnabled(secondLanguage));
-    assertTrue(chrome.readingMode.getLanguagesEnabledInPref().includes(
-        secondLanguage));
+    assertTrue(
+        audioBrowserProxy.getLanguagesEnabledInPref().includes(secondLanguage));
   });
 
   test('onLanguageToggle disabled languages are removed', () => {
@@ -369,23 +357,23 @@ suite('VoiceLanguageController', () => {
     voiceLanguageController.onLanguageToggle(firstLanguage);
     assertTrue(voiceLanguageController.isLangEnabled(firstLanguage));
     assertTrue(
-        chrome.readingMode.getLanguagesEnabledInPref().includes(firstLanguage));
+        audioBrowserProxy.getLanguagesEnabledInPref().includes(firstLanguage));
 
     voiceLanguageController.onLanguageToggle(firstLanguage);
     assertFalse(voiceLanguageController.isLangEnabled(firstLanguage));
     assertFalse(
-        chrome.readingMode.getLanguagesEnabledInPref().includes(firstLanguage));
+        audioBrowserProxy.getLanguagesEnabledInPref().includes(firstLanguage));
   });
 
   test('onLanguageToggle with voice pack lang uninstalls it', () => {
     const lang = 'km';
     voiceLanguageController.onLanguageToggle(lang);
-    VoiceNotificationManager.getInstance().onVoiceStatusChange(
+    voiceNotificationManager.onVoiceStatusChange(
         lang, VoiceClientSideStatusCode.SENT_INSTALL_REQUEST, []);
 
     voiceLanguageController.onLanguageToggle(lang);
     assertEquals(NotificationType.NONE, notificationType);
-    assertArrayEquals([lang], uninstalledLangs);
+    assertArrayEquals([lang], audioBrowserProxy.uninstalledLangs);
   });
 
   test('onLanguageToggle with non voice pack lang does not uninstall', () => {
@@ -396,9 +384,9 @@ suite('VoiceLanguageController', () => {
     voiceLanguageController.onLanguageToggle(lang);
 
     assertFalse(!!notificationType);
-    assertArrayEquals([], requestInfoLangs);
-    assertArrayEquals([], uninstalledLangs);
-    assertArrayEquals([], installedLangs);
+    assertArrayEquals([], audioBrowserProxy.requestInfoLangs);
+    assertArrayEquals([], audioBrowserProxy.uninstalledLangs);
+    assertArrayEquals([], audioBrowserProxy.installedLangs);
   });
 
   test(
@@ -410,7 +398,7 @@ suite('VoiceLanguageController', () => {
 
         voiceLanguageController.onLanguageToggle(lang);
 
-        assertArrayEquals([lang], installedLangs);
+        assertArrayEquals([lang], audioBrowserProxy.installedLangs);
         assertEquals(
             voiceLanguageController.getLocalStatus(lang),
             VoiceClientSideStatusCode.SENT_INSTALL_REQUEST_ERROR_RETRY);
@@ -420,7 +408,7 @@ suite('VoiceLanguageController', () => {
       'onLanguageToggle when there is no status for lang, installs lang',
       () => {
         voiceLanguageController.onLanguageToggle('en-us');
-        assertArrayEquals(['en-us'], installedLangs);
+        assertArrayEquals(['en-us'], audioBrowserProxy.installedLangs);
       });
 
 
@@ -432,18 +420,18 @@ suite('VoiceLanguageController', () => {
 
         voiceLanguageController.onLanguageToggle(lang);
 
-        assertArrayEquals([], installedLangs);
+        assertArrayEquals([], audioBrowserProxy.installedLangs);
       });
 
   test('onVoicesChanged with auto selected voice, uses a Natural voice', () => {
-    chrome.readingMode.getStoredVoice = () => '';
+    audioBrowserProxy.storedVoice = '';
     const voice =
         createSpeechSynthesisVoice({lang: 'ja', name: 'Google Eagle'});
     const naturalVoice = createSpeechSynthesisVoice(
         {lang: 'ja', name: 'Google Horse (Natural)'});
     speech.setVoices([voice, naturalVoice]);
     voiceLanguageController.setUserPreferredVoice(voice);
-    chrome.readingMode.baseLanguageForSpeech = voice.lang;
+    audioBrowserProxy.baseLanguageForSpeech = voice.lang;
     voiceLanguageController.onPageLanguageChanged();
 
     voiceLanguageController.onVoicesChanged();
@@ -457,13 +445,13 @@ suite('VoiceLanguageController', () => {
           'Natural voice',
       () => {
         const name = 'Google Emu';
-        chrome.readingMode.getStoredVoice = () => name;
+        audioBrowserProxy.storedVoice = name;
         const voice = createSpeechSynthesisVoice({lang: 'ja', name: name});
         const naturalVoice = createSpeechSynthesisVoice(
             {lang: 'ja', name: 'Google Ostrich (Natural)'});
         speech.setVoices([voice, naturalVoice]);
         voiceLanguageController.setUserPreferredVoice(voice);
-        chrome.readingMode.baseLanguageForSpeech = voice.lang;
+        audioBrowserProxy.baseLanguageForSpeech = voice.lang;
         voiceLanguageController.onPageLanguageChanged();
 
         voiceLanguageController.onVoicesChanged();
@@ -477,16 +465,16 @@ suite('VoiceLanguageController', () => {
     const lang1 = 'en-gb';
     const lang2 = 'fr';
     const lang3 = 'bd';
-    chrome.readingMode.onLanguagePrefChange(lang1, true);
-    chrome.readingMode.onLanguagePrefChange(lang2, true);
-    chrome.readingMode.onLanguagePrefChange(lang3, true);
-    chrome.readingMode.baseLanguageForSpeech = 'en';
+    audioBrowserProxy.onLanguagePrefChange(lang1, true);
+    audioBrowserProxy.onLanguagePrefChange(lang2, true);
+    audioBrowserProxy.onLanguagePrefChange(lang3, true);
+    audioBrowserProxy.baseLanguageForSpeech = 'en';
     speech.setVoices([
       createSpeechSynthesisVoice({lang: lang1, name: 'Henry'}),
     ]);
     voiceLanguageController.restoreFromPrefs();
     assertArrayEquals([lang1], voiceLanguageController.getEnabledLangs());
-    assertArrayEquals([lang1], chrome.readingMode.getLanguagesEnabledInPref());
+    assertArrayEquals([lang1], audioBrowserProxy.getLanguagesEnabledInPref());
     onEnabledLangsChange = false;
 
     speech.setVoices([
@@ -501,7 +489,7 @@ suite('VoiceLanguageController', () => {
     assertArrayEquals(
         [lang1, lang2, lang3], voiceLanguageController.getEnabledLangs());
     assertArrayEquals(
-        [lang1, lang2, lang3], chrome.readingMode.getLanguagesEnabledInPref());
+        [lang1, lang2, lang3], audioBrowserProxy.getLanguagesEnabledInPref());
     assertTrue(voiceLanguageController.isLangEnabled(lang1));
     assertTrue(voiceLanguageController.isLangEnabled(lang2));
     assertTrue(voiceLanguageController.isLangEnabled(lang3));
@@ -517,11 +505,11 @@ suite('VoiceLanguageController', () => {
     voiceLanguageController.enableLang(lang2);
     voiceLanguageController.enableLang(lang3);
     voiceLanguageController.onTtsEngineInstalled();
-    installedLangs = [];
+    audioBrowserProxy.installedLangs = [];
 
     voiceLanguageController.onVoicesChanged();
 
-    assertArrayEquals(['bn', 'hu'], installedLangs);
+    assertArrayEquals(['bn', 'hu'], audioBrowserProxy.installedLangs);
     assertTrue(onAvailableVoicesChange);
     assertFalse(voiceLanguageController.hasAvailableVoices());
   });
@@ -530,19 +518,19 @@ suite('VoiceLanguageController', () => {
       'onVoicesChanged after new tts engine enables page language if no ' +
           'voices before install',
       () => {
-        chrome.readingMode.getStoredVoice = () => '';
+        audioBrowserProxy.storedVoice = '';
         voiceLanguageController.onTtsEngineInstalled();
         const lang = 'de';
-        chrome.readingMode.baseLanguageForSpeech = lang;
+        audioBrowserProxy.baseLanguageForSpeech = lang;
         voiceLanguageController.onVoicesChanged();
 
         // onVoicesChanged should request an install for the page language.
-        assertArrayEquals([lang], requestInfoLangs);
+        assertArrayEquals([lang], audioBrowserProxy.requestInfoLangs);
         voiceLanguageController.updateLanguageStatus(lang, 'kNotInstalled');
         assertEquals(
             VoiceClientSideStatusCode.SENT_INSTALL_REQUEST,
             voiceLanguageController.getLocalStatus(lang));
-        assertArrayEquals([lang], installedLangs);
+        assertArrayEquals([lang], audioBrowserProxy.installedLangs);
       });
 
   test('onTtsEngineInstalled installs enabled google locales', () => {
@@ -555,7 +543,7 @@ suite('VoiceLanguageController', () => {
 
     voiceLanguageController.onTtsEngineInstalled();
 
-    assertArrayEquals(['bn', 'hu'], installedLangs);
+    assertArrayEquals(['bn', 'hu'], audioBrowserProxy.installedLangs);
     assertTrue(onAvailableVoicesChange);
     assertFalse(voiceLanguageController.hasAvailableVoices());
   });
@@ -563,19 +551,19 @@ suite('VoiceLanguageController', () => {
   test(
       'onTtsEngineInstalled enables page language if no voices before install',
       () => {
-        chrome.readingMode.getStoredVoice = () => '';
+        audioBrowserProxy.storedVoice = '';
         const voice =
             createSpeechSynthesisVoice({lang: 'de-de', name: 'Google German'});
         // Change page language to de before any voices are available for it.
         const lang = 'de';
-        chrome.readingMode.baseLanguageForSpeech = lang;
+        audioBrowserProxy.baseLanguageForSpeech = lang;
         voiceLanguageController.onPageLanguageChanged();
 
         // onTtsEngineInstalled should request an install for the page language,
         // but it's not enabled yet.
         voiceLanguageController.onTtsEngineInstalled();
         assertFalse(voiceLanguageController.getEnabledLangs().includes(lang));
-        assertTrue(requestInfoLangs.includes(lang));
+        assertTrue(audioBrowserProxy.requestInfoLangs.includes(lang));
 
         // Once the status comes back as not installed, then actually request
         // the install.
@@ -583,7 +571,7 @@ suite('VoiceLanguageController', () => {
         assertEquals(
             VoiceClientSideStatusCode.SENT_INSTALL_REQUEST,
             voiceLanguageController.getLocalStatus(lang));
-        assertArrayEquals([lang], installedLangs);
+        assertArrayEquals([lang], audioBrowserProxy.installedLangs);
 
         // When the install completes, new voices for the requested language
         // should be available, and the installed status should come back. At
@@ -598,7 +586,7 @@ suite('VoiceLanguageController', () => {
     const name = 'Google Lemur';
     const voice = createSpeechSynthesisVoice({lang, name});
     speech.setVoices([voice]);
-    chrome.readingMode.getStoredVoice = () => name;
+    audioBrowserProxy.storedVoice = name;
 
     voiceLanguageController.onVoicesChanged();
 
@@ -621,7 +609,8 @@ suite('VoiceLanguageController', () => {
     voiceLanguageController.onVoicesChanged();
 
     assertTrue(onAvailableVoicesChange);
-    assertArrayEquals([lang1, lang2, lang3], requestInfoLangs);
+    assertArrayEquals(
+        [lang1, lang2, lang3], audioBrowserProxy.requestInfoLangs);
   });
 
   test('onVoicesChanged waits for engine timeout', () => {
@@ -686,7 +675,7 @@ suite('VoiceLanguageController', () => {
         speech.setVoices([defaultVoice]);
         voiceLanguageController.enableLang(voice.lang);
         voiceLanguageController.setUserPreferredVoice(voice);
-        chrome.readingMode.baseLanguageForSpeech = 'zh-CN';
+        audioBrowserProxy.baseLanguageForSpeech = 'zh-CN';
         onCurrentVoiceChange = false;
 
         voiceLanguageController.onVoicesChanged();
@@ -702,7 +691,7 @@ suite('VoiceLanguageController', () => {
     const voice2 =
         createSpeechSynthesisVoice({lang: 'id', name: 'Google Moose'});
     speech.setVoices([voice1, voice2]);
-    chrome.readingMode.getStoredVoice = () => voice1.name;
+    audioBrowserProxy.storedVoice = voice1.name;
     voiceLanguageController.enableLang(voice1.lang);
     onCurrentVoiceChange = false;
 
@@ -713,17 +702,62 @@ suite('VoiceLanguageController', () => {
     assertEquals(voice1, voiceLanguageController.getCurrentVoice());
   });
 
+
+  test('kInstalled restores stored voice with improved UI enabled', () => {
+    visualBrowserProxy.readAnythingImprovedUiEnabled = true;
+    const lang = 'en-us';
+    const systemVoice =
+        createSpeechSynthesisVoice({lang, name: 'Google US English'});
+    const naturalVoice = createSpeechSynthesisVoice(
+        {lang, name: 'Google US English 1 (Natural)'});
+    const storedVoice = createSpeechSynthesisVoice(
+        {lang, name: 'Google US English 5 (Natural)'});
+    audioBrowserProxy.baseLanguageForSpeech = 'en';
+    audioBrowserProxy.storedVoice = storedVoice.name;
+
+    // On startup, only system voices are available, so a fallback voice is
+    // selected.
+    speech.setVoices([systemVoice]);
+    voiceLanguageController.restoreFromPrefs();
+    assertEquals(systemVoice, voiceLanguageController.getCurrentVoice());
+
+    // Natural voices load and a natural voice is auto-selected.
+    speech.setVoices([systemVoice, naturalVoice, storedVoice]);
+    voiceLanguageController.onVoicesChanged();
+    assertEquals(naturalVoice, voiceLanguageController.getCurrentVoice());
+
+    // The engine reports the language as installed, so the stored voice is
+    // restored.
+    voiceLanguageController.updateLanguageStatus(lang, 'kInstalled');
+
+    assertEquals(storedVoice, voiceLanguageController.getCurrentVoice());
+  });
+
+  test('kInstalled keeps a language selected by the user', () => {
+    visualBrowserProxy.readAnythingImprovedUiEnabled = true;
+    const storedVoice = createSpeechSynthesisVoice(
+        {lang: 'en-us', name: 'Google US English 5 (Natural)'});
+    const spanishVoice = createSpeechSynthesisVoice(
+        {lang: 'es-es', name: 'Google Spanish 1 (Natural)'});
+    audioBrowserProxy.baseLanguageForSpeech = 'en';
+    audioBrowserProxy.storedVoice = storedVoice.name;
+    speech.setVoices([storedVoice, spanishVoice]);
+    voiceLanguageController.restoreFromPrefs();
+
+    // The user selects a language that doesn't match the page, so the stored
+    // voice for the page language shouldn't replace it.
+    voiceLanguageController.onLanguageSelected('es-es');
+    assertEquals(spanishVoice, voiceLanguageController.getCurrentVoice());
+
+    voiceLanguageController.updateLanguageStatus('en-us', 'kInstalled');
+
+    assertEquals(spanishVoice, voiceLanguageController.getCurrentVoice());
+  });
+
   test('stopWaitingForSpeechExtension stops waiting for engine timeout', () => {
     const lang = 'fi';
     voiceLanguageController.setServerStatus(
         lang, mojoVoicePackStatusToVoicePackStatusEnum('kInstalled'));
-    let notificationType = null;
-    const notificationListener = {
-      notify(type: NotificationType, _lang?: string): void {
-        notificationType = type;
-      },
-    };
-    VoiceNotificationManager.getInstance().addListener(notificationListener);
     const mockTimer = new MockTimer();
     mockTimer.install();
 
@@ -733,14 +767,126 @@ suite('VoiceLanguageController', () => {
     mockTimer.uninstall();
 
     // Now download the voice since the speech engine responded.
-    assertEquals(NotificationType.DOWNLOADING, notificationType);
+    assertEquals(null, notificationType);
+  });
+
+  test(
+      'first language response does not cancel speech extension timeout for ' +
+          'remaining pending languages',
+      () => {
+        const lang1 = 'fi';
+        const lang2 = 'de';
+        voiceLanguageController.setServerStatus(
+            lang1, mojoVoicePackStatusToVoicePackStatusEnum('kInstalled'));
+        voiceLanguageController.setServerStatus(
+            lang2, mojoVoicePackStatusToVoicePackStatusEnum('kInstalled'));
+        const mockTimer = new MockTimer();
+        mockTimer.install();
+
+        voiceLanguageController.onVoicesChanged();
+        assertArrayEquals([lang1, lang2], audioBrowserProxy.requestInfoLangs);
+        assertTrue(
+            voiceLanguageController.getPendingLanguageRequests().has(lang1));
+        assertTrue(
+            voiceLanguageController.getPendingLanguageRequests().has(lang2));
+
+        // Resolving only the first language request should not cancel the
+        // timeout for the remaining pending language request.
+        voiceLanguageController.updateLanguageStatus(lang1, 'kInstalled');
+        assertFalse(
+            voiceLanguageController.getPendingLanguageRequests().has(lang1));
+        assertTrue(
+            voiceLanguageController.getPendingLanguageRequests().has(lang2));
+        notificationType = null;
+        mockTimer.tick(EXTENSION_RESPONSE_TIMEOUT_MS);
+        mockTimer.uninstall();
+
+        assertEquals(
+            NotificationType.GOOGLE_VOICES_UNAVAILABLE, notificationType);
+        assertEquals(
+            0, voiceLanguageController.getPendingLanguageRequests().size);
+      });
+
+  test('all language responses cancel speech extension timeout', () => {
+    const lang1 = 'fi';
+    const lang2 = 'de';
+    voiceLanguageController.setServerStatus(
+        lang1, mojoVoicePackStatusToVoicePackStatusEnum('kInstalled'));
+    voiceLanguageController.setServerStatus(
+        lang2, mojoVoicePackStatusToVoicePackStatusEnum('kInstalled'));
+    const mockTimer = new MockTimer();
+    mockTimer.install();
+
+    voiceLanguageController.onVoicesChanged();
+    assertArrayEquals([lang1, lang2], audioBrowserProxy.requestInfoLangs);
+
+    // Resolving all pending language requests should cancel the timeout.
+    voiceLanguageController.updateLanguageStatus(lang1, 'kInstalled');
+    voiceLanguageController.updateLanguageStatus(lang2, 'kInstalled');
+    assertEquals(0, voiceLanguageController.getPendingLanguageRequests().size);
+    notificationType = null;
+    mockTimer.tick(EXTENSION_RESPONSE_TIMEOUT_MS);
+    mockTimer.uninstall();
+
+    assertEquals(null, notificationType);
+  });
+
+  test('new language request restarts speech extension timeout', () => {
+    const lang1 = 'es-es';
+    const lang2 = 'en-gb';
+    voiceLanguageController.setServerStatus(
+        lang1, mojoVoicePackStatusToVoicePackStatusEnum('kNotInstalled'));
+    voiceLanguageController.setServerStatus(
+        lang2, mojoVoicePackStatusToVoicePackStatusEnum('kNotInstalled'));
+
+    const mockTimer = new MockTimer();
+    mockTimer.install();
+
+    audioBrowserProxy.baseLanguageForSpeech = lang1;
+    voiceLanguageController.onPageLanguageChanged();
+    assertArrayEquals([lang1], audioBrowserProxy.requestInfoLangs);
+    assertTrue(voiceLanguageController.getPendingLanguageRequests().has(lang1));
+
+    // Advance time halfway through the timeout.
+    mockTimer.tick(EXTENSION_RESPONSE_TIMEOUT_MS / 2);
+    assertEquals(null, notificationType);
+
+    // Request another language; this should restart the timeout.
+    audioBrowserProxy.baseLanguageForSpeech = lang2;
+    voiceLanguageController.onPageLanguageChanged();
+    assertArrayEquals([lang1, lang2], audioBrowserProxy.requestInfoLangs);
+    assertTrue(voiceLanguageController.getPendingLanguageRequests().has(lang2));
+
+    // Advance time by another half of the timeout.
+    // Total elapsed time since the first request is
+    // EXTENSION_RESPONSE_TIMEOUT_MS, but the timeout should not fire yet
+    // because it was restarted by the second request.
+    mockTimer.tick(EXTENSION_RESPONSE_TIMEOUT_MS / 2);
+    assertEquals(null, notificationType);
+    assertEquals(2, voiceLanguageController.getPendingLanguageRequests().size);
+
+    // Advance the remaining time so the restarted timeout fires.
+    mockTimer.tick(EXTENSION_RESPONSE_TIMEOUT_MS / 2);
+    mockTimer.uninstall();
+
+    assertEquals(NotificationType.GOOGLE_VOICES_UNAVAILABLE, notificationType);
+    assertEquals(0, voiceLanguageController.getPendingLanguageRequests().size);
   });
 
   test('onPageLanguageChanged updates current language', () => {
     const lang = 'el';
-    chrome.readingMode.baseLanguageForSpeech = lang;
+    audioBrowserProxy.baseLanguageForSpeech = lang;
 
     voiceLanguageController.onPageLanguageChanged();
+
+    assertEquals(lang, voiceLanguageController.getCurrentLanguage());
+  });
+
+  test('languageChanged event triggers onPageLanguageChanged', () => {
+    const lang = 'el';
+    audioBrowserProxy.baseLanguageForSpeech = lang;
+
+    audioBrowserProxy.languageChanged.callListeners();
 
     assertEquals(lang, voiceLanguageController.getCurrentLanguage());
   });
@@ -748,7 +894,7 @@ suite('VoiceLanguageController', () => {
   test(
       'onPageLanguageChanged updates current language when natural voices unavailable',
       () => {
-        chrome.readingMode.getStoredVoice = () => '';
+        audioBrowserProxy.storedVoice = '';
         const voice1 =
             createSpeechSynthesisVoice({lang: 'en-us', name: 'Google English'});
         const voice2 =
@@ -756,7 +902,7 @@ suite('VoiceLanguageController', () => {
         speech.setVoices([voice1, voice2]);
         voiceLanguageController.onVoicesChanged();
         const lang = 'de';
-        chrome.readingMode.baseLanguageForSpeech = lang;
+        audioBrowserProxy.baseLanguageForSpeech = lang;
 
         voiceLanguageController.onPageLanguageChanged();
 
@@ -767,88 +913,88 @@ suite('VoiceLanguageController', () => {
     const lang = 'en-gb';
     voiceLanguageController.enableLang(lang);
 
-    chrome.readingMode.baseLanguageForSpeech = lang;
+    audioBrowserProxy.baseLanguageForSpeech = lang;
     voiceLanguageController.onPageLanguageChanged();
-    assertArrayEquals([lang], requestInfoLangs);
+    assertArrayEquals([lang], audioBrowserProxy.requestInfoLangs);
 
     voiceLanguageController.updateLanguageStatus(lang, 'kNotInstalled');
     assertEquals(
         VoiceClientSideStatusCode.SENT_INSTALL_REQUEST,
         voiceLanguageController.getLocalStatus(lang));
-    assertArrayEquals([lang], installedLangs);
+    assertArrayEquals([lang], audioBrowserProxy.installedLangs);
   });
 
   test('onPageLanguageChanged installs lang if not installed', () => {
     const lang = 'es-ES';
-    chrome.readingMode.baseLanguageForSpeech = lang;
+    audioBrowserProxy.baseLanguageForSpeech = lang;
     voiceLanguageController.setServerStatus(
         lang, mojoVoicePackStatusToVoicePackStatusEnum('kNotInstalled'));
 
 
     voiceLanguageController.onPageLanguageChanged();
-    assertArrayEquals([lang.toLowerCase()], requestInfoLangs);
+    assertArrayEquals([lang.toLowerCase()], audioBrowserProxy.requestInfoLangs);
 
     voiceLanguageController.updateLanguageStatus(lang, 'kNotInstalled');
     assertEquals(
         VoiceClientSideStatusCode.SENT_INSTALL_REQUEST,
         voiceLanguageController.getLocalStatus(lang));
-    assertArrayEquals([lang.toLowerCase()], installedLangs);
+    assertArrayEquals([lang.toLowerCase()], audioBrowserProxy.installedLangs);
   });
 
   test('onPageLanguageChanged when previously failed does not install', () => {
     const lang = 'es-ES';
-    chrome.readingMode.baseLanguageForSpeech = lang;
+    audioBrowserProxy.baseLanguageForSpeech = lang;
     voiceLanguageController.setServerStatus(
         lang, mojoVoicePackStatusToVoicePackStatusEnum('kOther'));
 
     voiceLanguageController.onPageLanguageChanged();
 
     assertFalse(!!voiceLanguageController.getLocalStatus(lang));
-    assertArrayEquals([], requestInfoLangs);
-    assertArrayEquals([], installedLangs);
+    assertArrayEquals([], audioBrowserProxy.requestInfoLangs);
+    assertArrayEquals([], audioBrowserProxy.installedLangs);
   });
 
   test('onPageLanguageChanged and already installing does not install', () => {
     const lang = 'es-ES';
-    chrome.readingMode.baseLanguageForSpeech = lang;
+    audioBrowserProxy.baseLanguageForSpeech = lang;
     voiceLanguageController.setServerStatus(
         lang, mojoVoicePackStatusToVoicePackStatusEnum('kInstalling'));
 
     voiceLanguageController.onPageLanguageChanged();
 
     assertFalse(!!voiceLanguageController.getLocalStatus(lang));
-    assertArrayEquals([], requestInfoLangs);
-    assertArrayEquals([], installedLangs);
+    assertArrayEquals([], audioBrowserProxy.requestInfoLangs);
+    assertArrayEquals([], audioBrowserProxy.installedLangs);
   });
 
   test('onPageLanguageChanged and already installed does not install', () => {
     const lang = 'es-ES';
-    chrome.readingMode.baseLanguageForSpeech = lang;
+    audioBrowserProxy.baseLanguageForSpeech = lang;
     voiceLanguageController.setServerStatus(
         lang, mojoVoicePackStatusToVoicePackStatusEnum('kInstalled'));
 
     voiceLanguageController.onPageLanguageChanged();
 
     assertFalse(!!voiceLanguageController.getLocalStatus(lang));
-    assertArrayEquals([], requestInfoLangs);
-    assertArrayEquals([], installedLangs);
+    assertArrayEquals([], audioBrowserProxy.requestInfoLangs);
+    assertArrayEquals([], audioBrowserProxy.installedLangs);
   });
 
   test('onPageLanguageChanged doesn\'t install unsupported language', () => {
-    chrome.readingMode.baseLanguageForSpeech = 'zh';
+    audioBrowserProxy.baseLanguageForSpeech = 'zh';
 
     voiceLanguageController.onPageLanguageChanged();
 
     // Use this check to ensure this stays updated if the supported
     // languages changes.
     assertFalse(PACK_MANAGER_SUPPORTED_LANGS_AND_LOCALES.has(
-        chrome.readingMode.baseLanguageForSpeech));
-    assertArrayEquals([], requestInfoLangs);
+        audioBrowserProxy.baseLanguageForSpeech));
+    assertArrayEquals([], audioBrowserProxy.requestInfoLangs);
   });
 
   test('onPageLanguageChanged installs without exact match', () => {
     const lang = 'bn';
-    chrome.readingMode.baseLanguageForSpeech = lang;
+    audioBrowserProxy.baseLanguageForSpeech = lang;
 
     voiceLanguageController.onPageLanguageChanged();
 
@@ -856,12 +1002,12 @@ suite('VoiceLanguageController', () => {
     // languages changes.
     assertTrue(PACK_MANAGER_SUPPORTED_LANGS_AND_LOCALES.has(lang));
     assertFalse(AVAILABLE_GOOGLE_TTS_LOCALES.has(lang));
-    assertArrayEquals([lang], requestInfoLangs);
+    assertArrayEquals([lang], audioBrowserProxy.requestInfoLangs);
   });
 
   test('onPageLanguageChanged uses the stored voice for this language', () => {
     speech.setVoices(voices);
-    chrome.readingMode.getStoredVoice = () => otherVoice.name;
+    audioBrowserProxy.storedVoice = otherVoice.name;
 
     voiceLanguageController.onPageLanguageChanged();
 
@@ -874,7 +1020,7 @@ suite('VoiceLanguageController', () => {
     const voice = createSpeechSynthesisVoice({lang, name: 'Conan'});
     speech.setVoices([voice]);
     voiceLanguageController.onVoicesChanged();
-    chrome.readingMode.baseLanguageForSpeech = lang;
+    audioBrowserProxy.baseLanguageForSpeech = lang;
 
     voiceLanguageController.onPageLanguageChanged();
 
@@ -886,7 +1032,7 @@ suite('VoiceLanguageController', () => {
       'onPageLanguageChanged uses default voice if the stored voice is invalid',
       () => {
         speech.setVoices(voices);
-        chrome.readingMode.getStoredVoice = () => 'Matt';
+        audioBrowserProxy.storedVoice = 'Matt';
         voiceLanguageController.enableLang(langForDefaultVoice);
 
         voiceLanguageController.onPageLanguageChanged();
@@ -897,7 +1043,7 @@ suite('VoiceLanguageController', () => {
 
   suite('onPageLanguageChanged with no stored voice for this language', () => {
     setup(() => {
-      chrome.readingMode.getStoredVoice = () => '';
+      audioBrowserProxy.storedVoice = '';
       speech.setVoices(voices);
       voiceLanguageController.setServerStatus(
           lang1, mojoVoicePackStatusToVoicePackStatusEnum('kOther'));
@@ -909,7 +1055,7 @@ suite('VoiceLanguageController', () => {
 
     suite('and no voices at all for this language', () => {
       setup(() => {
-        chrome.readingMode.baseLanguageForSpeech = langWithNoVoices;
+        audioBrowserProxy.baseLanguageForSpeech = langWithNoVoices;
       });
 
       test('uses the current voice if there is one', () => {
@@ -937,7 +1083,7 @@ suite('VoiceLanguageController', () => {
     });
 
     test('enables pack manager locale', () => {
-      chrome.readingMode.baseLanguageForSpeech = lang3;
+      audioBrowserProxy.baseLanguageForSpeech = lang3;
       voiceLanguageController.onVoicesChanged();
 
       voiceLanguageController.onPageLanguageChanged();
@@ -948,7 +1094,7 @@ suite('VoiceLanguageController', () => {
     });
 
     test('enables other locale if not supported by pack manager', () => {
-      chrome.readingMode.baseLanguageForSpeech = lang1;
+      audioBrowserProxy.baseLanguageForSpeech = lang1;
       voiceLanguageController.onVoicesChanged();
 
       voiceLanguageController.onPageLanguageChanged();
@@ -959,7 +1105,7 @@ suite('VoiceLanguageController', () => {
     });
 
     test('uses a natural voice for this language', () => {
-      chrome.readingMode.baseLanguageForSpeech = lang3;
+      audioBrowserProxy.baseLanguageForSpeech = lang3;
       voiceLanguageController.enableLang(lang3);
 
       voiceLanguageController.onPageLanguageChanged();
@@ -971,7 +1117,7 @@ suite('VoiceLanguageController', () => {
     test(
         'uses the default voice for this language with no natural voice',
         () => {
-          chrome.readingMode.baseLanguageForSpeech = lang1;
+          audioBrowserProxy.baseLanguageForSpeech = lang1;
           voiceLanguageController.enableLang(lang1);
 
           voiceLanguageController.onPageLanguageChanged();
@@ -983,7 +1129,7 @@ suite('VoiceLanguageController', () => {
     test(
         'uses the first listed voice for this language if there\'s no default',
         () => {
-          chrome.readingMode.baseLanguageForSpeech = lang2;
+          audioBrowserProxy.baseLanguageForSpeech = lang2;
           voiceLanguageController.enableLang(lang2);
 
           voiceLanguageController.onPageLanguageChanged();
@@ -994,7 +1140,7 @@ suite('VoiceLanguageController', () => {
 
 
     test('uses a voice in a different locale but same language', () => {
-      chrome.readingMode.baseLanguageForSpeech = 'en-US';
+      audioBrowserProxy.baseLanguageForSpeech = 'en-US';
       voiceLanguageController.enableLang('en-gb');
       const voice = createSpeechSynthesisVoice(
           {lang: 'en-GB', name: 'British', default: true});
@@ -1011,7 +1157,7 @@ suite('VoiceLanguageController', () => {
 
     test('uses a natural enabled voice if no same locale', () => {
       voiceLanguageController.enableLang(lang3);
-      chrome.readingMode.baseLanguageForSpeech = lang2;
+      audioBrowserProxy.baseLanguageForSpeech = lang2;
 
       voiceLanguageController.onPageLanguageChanged();
 
@@ -1021,7 +1167,7 @@ suite('VoiceLanguageController', () => {
 
     test('uses a default enabled voice if no natural voice', () => {
       voiceLanguageController.enableLang(lang1);
-      chrome.readingMode.baseLanguageForSpeech = lang2;
+      audioBrowserProxy.baseLanguageForSpeech = lang2;
 
       voiceLanguageController.onPageLanguageChanged();
 
@@ -1030,7 +1176,7 @@ suite('VoiceLanguageController', () => {
     });
 
     test('no voice if no enabled languages', () => {
-      chrome.readingMode.baseLanguageForSpeech = lang2;
+      audioBrowserProxy.baseLanguageForSpeech = lang2;
       for (const lang of voiceLanguageController.getEnabledLangs()) {
         voiceLanguageController.onLanguageToggle(lang);
       }
@@ -1046,20 +1192,20 @@ suite('VoiceLanguageController', () => {
 
     setup(() => {
       voiceLanguageController.enableLang(lang);
-      chrome.readingMode.onLanguagePrefChange(lang, true);
+      audioBrowserProxy.onLanguagePrefChange(lang, true);
     });
 
     test('with no lang does nothing', () => {
       voiceLanguageController.updateLanguageStatus('', 'kInstalled');
       assertEquals(null, notificationType);
-      assertArrayEquals([], installedLangs);
+      assertArrayEquals([], audioBrowserProxy.installedLangs);
     });
 
     test('with no lang and not reached status notifies of no engine', () => {
       voiceLanguageController.updateLanguageStatus('', 'kNotReached');
       assertEquals(
           NotificationType.GOOGLE_VOICES_UNAVAILABLE, notificationType);
-      assertArrayEquals([], installedLangs);
+      assertArrayEquals([], audioBrowserProxy.installedLangs);
     });
 
     test('with lang not marked for download does not install', () => {
@@ -1068,11 +1214,11 @@ suite('VoiceLanguageController', () => {
       assertEquals(
           VoiceClientSideStatusCode.NOT_INSTALLED,
           voiceLanguageController.getLocalStatus(lang));
-      assertArrayEquals([], installedLangs);
+      assertArrayEquals([], audioBrowserProxy.installedLangs);
     });
 
     test('with lang marked for download requests install', () => {
-      chrome.readingMode.baseLanguageForSpeech = lang;
+      audioBrowserProxy.baseLanguageForSpeech = lang;
       voiceLanguageController.onPageLanguageChanged();
 
       voiceLanguageController.updateLanguageStatus(lang, 'kNotInstalled');
@@ -1085,7 +1231,7 @@ suite('VoiceLanguageController', () => {
       assertEquals(
           VoicePackServerStatusSuccessCode.NOT_INSTALLED, serverStatus.code);
       assertEquals('Successful response', serverStatus.id);
-      assertArrayEquals([lang], installedLangs);
+      assertArrayEquals([lang], audioBrowserProxy.installedLangs);
     });
 
     test('with no other voices for language, disables language', () => {
@@ -1094,8 +1240,7 @@ suite('VoiceLanguageController', () => {
       voiceLanguageController.updateLanguageStatus(lang, 'kOther');
 
       assertFalse(voiceLanguageController.isLangEnabled(lang));
-      assertFalse(
-          chrome.readingMode.getLanguagesEnabledInPref().includes(lang));
+      assertFalse(audioBrowserProxy.getLanguagesEnabledInPref().includes(lang));
     });
 
     // <if expr="is_chromeos">
@@ -1104,11 +1249,11 @@ suite('VoiceLanguageController', () => {
       const lang2 = 'fr';
       const lang3 = 'yue';
       voiceLanguageController.enableLang(lang1);
-      chrome.readingMode.onLanguagePrefChange(lang1.toLowerCase(), true);
+      audioBrowserProxy.onLanguagePrefChange(lang1.toLowerCase(), true);
       voiceLanguageController.enableLang(lang2);
-      chrome.readingMode.onLanguagePrefChange(lang2, true);
+      audioBrowserProxy.onLanguagePrefChange(lang2, true);
       voiceLanguageController.enableLang(lang3);
-      chrome.readingMode.onLanguagePrefChange(lang3, true);
+      audioBrowserProxy.onLanguagePrefChange(lang3, true);
       createAndSetVoices(speech, [
         {lang: lang1, name: 'Henry'},
         {lang: lang2, name: 'Google Thomas'},
@@ -1118,7 +1263,7 @@ suite('VoiceLanguageController', () => {
       voiceLanguageController.updateLanguageStatus(lang2, 'kOther');
       voiceLanguageController.updateLanguageStatus(lang3, 'kOther');
 
-      const langsInPrefs = chrome.readingMode.getLanguagesEnabledInPref();
+      const langsInPrefs = audioBrowserProxy.getLanguagesEnabledInPref();
       assertFalse(langsInPrefs.includes(lang1.toLowerCase()));
       assertTrue(langsInPrefs.includes(lang2));
       assertFalse(langsInPrefs.includes(lang3));
@@ -1134,11 +1279,11 @@ suite('VoiceLanguageController', () => {
       const lang2 = 'fr';
       const lang3 = 'yue';
       voiceLanguageController.enableLang(lang1);
-      chrome.readingMode.onLanguagePrefChange(lang1.toLowerCase(), true);
+      audioBrowserProxy.onLanguagePrefChange(lang1.toLowerCase(), true);
       voiceLanguageController.enableLang(lang2);
-      chrome.readingMode.onLanguagePrefChange(lang2, true);
+      audioBrowserProxy.onLanguagePrefChange(lang2, true);
       voiceLanguageController.enableLang(lang3);
-      chrome.readingMode.onLanguagePrefChange(lang3, true);
+      audioBrowserProxy.onLanguagePrefChange(lang3, true);
       createAndSetVoices(speech, [
         {lang: lang1, name: 'Henry'},
         {lang: lang2, name: 'Google Thomas'},
@@ -1149,7 +1294,7 @@ suite('VoiceLanguageController', () => {
       voiceLanguageController.updateLanguageStatus(lang2, 'kOther');
       voiceLanguageController.updateLanguageStatus(lang3, 'kOther');
 
-      const langsInPrefs = chrome.readingMode.getLanguagesEnabledInPref();
+      const langsInPrefs = audioBrowserProxy.getLanguagesEnabledInPref();
       assertTrue(langsInPrefs.includes(lang1.toLowerCase()));
       assertTrue(langsInPrefs.includes(lang2));
       assertFalse(langsInPrefs.includes(lang3), 'lang3 prefs');
@@ -1170,7 +1315,7 @@ suite('VoiceLanguageController', () => {
           assertFalse(
               voiceLanguageController.isLangEnabled('it-it'), 'controller');
           assertFalse(
-              chrome.readingMode.getLanguagesEnabledInPref().includes('it-it'),
+              audioBrowserProxy.getLanguagesEnabledInPref().includes('it-it'),
               'prefs');
         });
 
@@ -1187,7 +1332,7 @@ suite('VoiceLanguageController', () => {
 
           assertFalse(voiceLanguageController.isLangEnabled('it-it'));
           assertFalse(
-              chrome.readingMode.getLanguagesEnabledInPref().includes('it-it'));
+              audioBrowserProxy.getLanguagesEnabledInPref().includes('it-it'));
         });
 
     test(
@@ -1201,7 +1346,7 @@ suite('VoiceLanguageController', () => {
 
           assertTrue(voiceLanguageController.isLangEnabled(lang), 'controller');
           assertTrue(
-              chrome.readingMode.getLanguagesEnabledInPref().includes(lang),
+              audioBrowserProxy.getLanguagesEnabledInPref().includes(lang),
               'prefs');
         });
 
@@ -1327,9 +1472,9 @@ suite('VoiceLanguageController', () => {
     test(
         'uses newly available voices if it\'s for the current language', () => {
           const lang = 'en-us';
-          chrome.readingMode.baseLanguageForSpeech = lang;
+          audioBrowserProxy.baseLanguageForSpeech = lang;
           voiceLanguageController.enableLang(lang);
-          chrome.readingMode.getStoredVoice = () => '';
+          audioBrowserProxy.storedVoice = '';
           createAndSetVoices(
               speech, [{lang: lang, name: 'Google Cow (Natural)'}]);
           voiceLanguageController.updateLanguageStatus(lang, 'kInstalled');
@@ -1345,15 +1490,15 @@ suite('VoiceLanguageController', () => {
             'current language',
         () => {
           const installedLang = 'en-us';
-          chrome.readingMode.baseLanguageForSpeech = 'pt-br';
+          audioBrowserProxy.baseLanguageForSpeech = 'pt-br';
           voiceLanguageController.enableLang(
-              chrome.readingMode.baseLanguageForSpeech);
+              audioBrowserProxy.baseLanguageForSpeech);
           const currentVoice = createSpeechSynthesisVoice({
             name: 'Portuguese voice 1',
-            lang: chrome.readingMode.baseLanguageForSpeech,
+            lang: audioBrowserProxy.baseLanguageForSpeech,
           });
           voiceLanguageController.setUserPreferredVoice(currentVoice);
-          chrome.readingMode.getStoredVoice = () => '';
+          audioBrowserProxy.storedVoice = '';
           setVoices(speech, [currentVoice]);
 
           voiceLanguageController.updateLanguageStatus(
@@ -1381,9 +1526,9 @@ suite('VoiceLanguageController', () => {
   test('onLanguageUnavailableError chooses new language', () => {
     const pageLanguage = 'es';
     const otherLanguage = 'tr';
-    chrome.readingMode.baseLanguageForSpeech = pageLanguage;
+    audioBrowserProxy.baseLanguageForSpeech = pageLanguage;
     voiceLanguageController.onPageLanguageChanged();
-    chrome.readingMode.defaultLanguageForSpeech = otherLanguage;
+    audioBrowserProxy.defaultLanguageForSpeech = otherLanguage;
     speech.setVoices([createSpeechSynthesisVoice(
         {lang: otherLanguage, name: 'Google Scorpion'})]);
     voiceLanguageController.onVoicesChanged();
@@ -1432,14 +1577,14 @@ suite('VoiceLanguageController', () => {
       });
 
   test('autoswitching does not log voice language change', () => {
-    chrome.readingMode.getStoredVoice = () => '';
+    audioBrowserProxy.storedVoice = '';
     const voice =
         createSpeechSynthesisVoice({lang: 'ja', name: 'Google Eagle'});
     const naturalVoice = createSpeechSynthesisVoice(
         {lang: 'ja', name: 'Google Horse (Natural)'});
     speech.setVoices([voice, naturalVoice]);
     voiceLanguageController.setUserPreferredVoice(voice);
-    chrome.readingMode.baseLanguageForSpeech = voice.lang;
+    audioBrowserProxy.baseLanguageForSpeech = voice.lang;
     voiceLanguageController.onPageLanguageChanged();
 
     metrics.reset();
@@ -1449,5 +1594,213 @@ suite('VoiceLanguageController', () => {
 
     assertEquals(naturalVoice, voiceLanguageController.getCurrentVoice());
     assertEquals(0, metrics.getCallCount('recordVoiceLanguageChange'));
+  });
+
+  test('updateVoicePackStatus triggers updateLanguageStatus', () => {
+    audioBrowserProxy.installedLangs = [lang3];
+    audioBrowserProxy.languagesEnabledInPref = new Set([lang3]);
+    speech.setVoices([naturalVoiceWithLang3]);
+
+    audioBrowserProxy.updateVoicePackStatus.callListeners(lang3, 'kInstalled');
+
+    assertTrue(voiceLanguageController.getEnabledLangs().includes(lang3));
+  });
+
+  test('onTtsEngineInstalled triggers onTtsEngineInstalled', () => {
+    const bn = 'bn-bd';
+    voiceLanguageController.enableLang(bn);
+    audioBrowserProxy.onTtsEngineInstalled.callListeners();
+    assertArrayEquals(['bn'], audioBrowserProxy.installedLangs);
+  });
+
+  suite('onLanguageSelected', () => {
+    function assertLowerCaseEquals(
+        expected: string, actual?: string|null): void {
+      assertEquals(expected.toLowerCase(), actual?.toLowerCase());
+    }
+
+    setup(() => {
+      visualBrowserProxy.readAnythingImprovedUiEnabled = true;
+      createAndSetVoices(speech, [
+        {lang: 'en-us', name: 'Voice US'},
+        {lang: 'en-gb', name: 'Voice GB'},
+      ]);
+      voiceLanguageController.onLanguageSelected('en-us');
+    });
+
+    test('with local voice activates and anchors state', () => {
+      voiceLanguageController.onLanguageSelected('en-gb');
+
+      assertTrue(voiceLanguageController.isLangEnabled('en-gb'));
+      assertFalse(voiceLanguageController.isLangEnabled('en-us'));
+      assertLowerCaseEquals(
+          'en-gb', voiceLanguageController.getCurrentVoice()?.lang);
+      assertLowerCaseEquals(
+          'en-gb', voiceLanguageController.getCurrentLanguage());
+      assertEquals(null, voiceLanguageController.getPendingTargetLanguage());
+      assertArrayEquals(
+          ['en-gb'], audioBrowserProxy.getLanguagesEnabledInPref());
+    });
+
+    test('with uninstalled voice defers prefs modification', () => {
+      voiceLanguageController.onLanguageSelected('es-es');
+
+      assertEquals('es-es', voiceLanguageController.getPendingTargetLanguage());
+      assertTrue(audioBrowserProxy.installedLangs.includes('es-es'));
+
+      // Deferred transactionality: preferences must NOT be modified while
+      // download is in-flight.
+      assertFalse(
+          audioBrowserProxy.getLanguagesEnabledInPref().includes('es-es'));
+      assertLowerCaseEquals(
+          'en-us', voiceLanguageController.getCurrentVoice()?.lang);
+      assertTrue(voiceLanguageController.isLangEnabled('en-us'));
+      assertFalse(voiceLanguageController.isLangEnabled('es-es'));
+    });
+
+    test('with active voice is strict no-op', () => {
+      audioBrowserProxy.reset();
+      audioBrowserProxy.installedLangs = [];
+
+      voiceLanguageController.onLanguageSelected('en-us');
+
+      assertEquals(0, audioBrowserProxy.installedLangs.length);
+      assertEquals(0, audioBrowserProxy.getCallCount('onLanguagePrefChange'));
+      assertEquals(null, voiceLanguageController.getPendingTargetLanguage());
+    });
+
+    test('with already pending voice is strict no-op', () => {
+      voiceLanguageController.onLanguageSelected('es-es');
+
+      assertEquals(1, audioBrowserProxy.installedLangs.length);
+      assertEquals('es-es', voiceLanguageController.getPendingTargetLanguage());
+
+      // Re-selecting the already pending language is a no-op.
+      voiceLanguageController.onLanguageSelected('es-es');
+
+      assertEquals(1, audioBrowserProxy.installedLangs.length);
+      assertEquals('es-es', voiceLanguageController.getPendingTargetLanguage());
+    });
+
+    test(
+        'kInstalled when voices are available activates and anchors voice',
+        () => {
+          voiceLanguageController.onLanguageSelected('es-es');
+          assertEquals(
+              'es-es', voiceLanguageController.getPendingTargetLanguage());
+
+          speech.setVoices([
+            createSpeechSynthesisVoice({lang: 'en-us', name: 'Voice US'}),
+            createSpeechSynthesisVoice({lang: 'en-gb', name: 'Voice GB'}),
+            createSpeechSynthesisVoice({lang: 'es-es', name: 'Voice ES'}),
+          ]);
+
+          voiceLanguageController.updateLanguageStatus('es-es', 'kInstalled');
+          assertTrue(voiceLanguageController.isLangEnabled('es-es'));
+          assertFalse(voiceLanguageController.isLangEnabled('en-us'));
+          assertEquals(
+              null, voiceLanguageController.getPendingTargetLanguage());
+          assertLowerCaseEquals(
+              'es-es', voiceLanguageController.getCurrentVoice()?.lang);
+          assertArrayEquals(
+              ['es-es'], audioBrowserProxy.getLanguagesEnabledInPref());
+        });
+
+    test(
+        'kInstalled defers activation until onVoicesChanged while voice loads',
+        () => {
+          // Target es-es requires download
+          voiceLanguageController.onLanguageSelected('es-es');
+
+          assertEquals(
+              'es-es', voiceLanguageController.getPendingTargetLanguage());
+
+          // Server reports kInstalled.
+          voiceLanguageController.updateLanguageStatus('es-es', 'kInstalled');
+          assertEquals(
+              'es-es', voiceLanguageController.getPendingTargetLanguage());
+          assertLowerCaseEquals(
+              'en-us', voiceLanguageController.getCurrentVoice()?.lang);
+
+          // Blink voices are loaded and onVoicesChanged fires.
+          speech.setVoices([
+            createSpeechSynthesisVoice({lang: 'en-us', name: 'Voice US'}),
+            createSpeechSynthesisVoice({lang: 'en-gb', name: 'Voice GB'}),
+            createSpeechSynthesisVoice({lang: 'es-es', name: 'Voice ES'}),
+          ]);
+          voiceLanguageController.onVoicesChanged();
+
+          // Deferred activation should now complete.
+          assertEquals(
+              null, voiceLanguageController.getPendingTargetLanguage());
+          assertTrue(voiceLanguageController.isLangEnabled('es-es'));
+          assertFalse(voiceLanguageController.isLangEnabled('en-us'));
+          assertLowerCaseEquals(
+              'es-es', voiceLanguageController.getCurrentVoice()?.lang);
+          assertArrayEquals(
+              ['es-es'], audioBrowserProxy.getLanguagesEnabledInPref());
+        });
+
+    test(
+        'stale kInstalled for superseded request does not activate voice',
+        () => {
+          // User requests es-es then pt-br
+          voiceLanguageController.onLanguageSelected('es-es');
+
+          assertEquals(
+              'es-es', voiceLanguageController.getPendingTargetLanguage());
+
+          voiceLanguageController.onLanguageSelected('pt-br');
+
+          assertEquals(
+              'pt-br', voiceLanguageController.getPendingTargetLanguage());
+
+          // Stale kInstalled comes in for superseded es-es
+          voiceLanguageController.updateLanguageStatus('es-es', 'kInstalled');
+          assertEquals(
+              'pt-br', voiceLanguageController.getPendingTargetLanguage());
+          assertFalse(voiceLanguageController.isLangEnabled('es-es'));
+          assertLowerCaseEquals(
+              'en-us', voiceLanguageController.getCurrentVoice()?.lang);
+        });
+
+    test(
+        'kOther error clears pending target and sets state to fallback voice',
+        () => {
+          voiceLanguageController.onLanguageSelected('es-es');
+
+          assertEquals(
+              'es-es', voiceLanguageController.getPendingTargetLanguage());
+
+          voiceLanguageController.updateLanguageStatus('es-es', 'kOther');
+          assertEquals(
+              null, voiceLanguageController.getPendingTargetLanguage());
+          assertTrue(voiceLanguageController.isLangEnabled('en-us'));
+          assertFalse(voiceLanguageController.isLangEnabled('es-es'));
+          assertLowerCaseEquals(
+              'en-us', voiceLanguageController.getCurrentVoice()?.lang);
+          assertArrayEquals(
+              ['en-us'], audioBrowserProxy.getLanguagesEnabledInPref());
+        });
+
+    test('empty lang disconnect clears pending target', () => {
+      voiceLanguageController.onLanguageSelected('es-es');
+
+      assertEquals('es-es', voiceLanguageController.getPendingTargetLanguage());
+
+      voiceLanguageController.updateLanguageStatus('', 'kNotReached');
+      assertEquals(null, voiceLanguageController.getPendingTargetLanguage());
+    });
+
+    test('is no-op when isReadAnythingImprovedUiEnabled is false', () => {
+      visualBrowserProxy.readAnythingImprovedUiEnabled = false;
+
+      voiceLanguageController.onLanguageSelected('en-gb');
+
+      assertTrue(voiceLanguageController.isLangEnabled('en-us'));
+      assertFalse(voiceLanguageController.isLangEnabled('en-gb'));
+      assertEquals(null, voiceLanguageController.getPendingTargetLanguage());
+      assertEquals(0, audioBrowserProxy.installedLangs.length);
+    });
   });
 });

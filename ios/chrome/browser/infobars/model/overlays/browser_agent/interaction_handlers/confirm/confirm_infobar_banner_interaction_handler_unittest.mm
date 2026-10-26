@@ -58,3 +58,5 @@ TEST_F(ConfirmInfobarBannerInteractionHandlerTest, Presentation) {
   EXPECT_CALL(mock_delegate(), InfoBarDismissed());
   handler_.BannerVisibilityChanged(infobar_, false);
 }
+
+

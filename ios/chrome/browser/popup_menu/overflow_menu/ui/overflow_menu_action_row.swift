@@ -31,6 +31,19 @@ struct OverflowMenuActionToggleStyle: ToggleStyle {
 
 /// A view that displays an action in the overflow menu.
 struct OverflowMenuActionRow: View {
+  /// `PreferenceKey` to track the highlighted action's bounds in its local coordinate space,
+  /// can be transformed to other coordinate space by geometry reader.
+  struct HighlightedActionBounds: PreferenceKey {
+    typealias Value = Anchor<CGRect>?
+    static let defaultValue: Value = nil
+    static func reduce(value: inout Value, nextValue: () -> Value) {
+      // AnchorPreference might be nil in the middle of layout.
+      if let next = nextValue() {
+        value = next
+      }
+    }
+  }
+
   /// Remove some of the default padding on the row, as it is too large by
   /// default.
   private static let rowEndPadding: CGFloat = -4
@@ -40,6 +53,12 @@ struct OverflowMenuActionRow: View {
 
   /// The size of the "N" IPH icon.
   private static let newLabelIconWidth: CGFloat = 15
+
+  /// The size of the preview image.
+  private static let previewImageSize: CGFloat = 24
+
+  /// The size of the fallback preview image.
+  private static let fallbackImageSize: CGFloat = 18
 
   // The duration that the view's highlight should persist.
   private static let highlightDuration: DispatchTimeInterval = .seconds(2)
@@ -92,6 +111,11 @@ struct OverflowMenuActionRow: View {
         view.accentColor(.textPrimary)
       }
       .listRowSeparatorTint(.overflowMenuSeparator)
+      .anchorPreference(
+        key: HighlightedActionBounds.self, value: .bounds
+      ) {
+        self.action.highlighted ? $0 : nil
+      }
   }
 
   @ViewBuilder
@@ -124,11 +148,19 @@ struct OverflowMenuActionRow: View {
         }
         Spacer()
         if let previewImage = action.previewImage {
-          CircularPreviewContainer(size: previewImage.size.height) {
+          CircularPreviewContainer(size: Self.previewImageSize) {
             Image(uiImage: previewImage)
               .resizable()
               .aspectRatio(contentMode: .fill)
           }
+        } else if let fallbackPreviewImage = action.fallbackPreviewImage {
+          Image(uiImage: fallbackPreviewImage)
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .frame(
+              width: Self.fallbackImageSize,
+              height: Self.fallbackImageSize
+            )
         }
         rowIcon?.foregroundColor(action.symbolTintColor.map { Color(uiColor: $0) })
       }

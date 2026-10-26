@@ -12,12 +12,18 @@
 #include <utility>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/debug/leak_annotations.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/platform_thread.h"
+#include "build/build_config.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/shutdown_watchdog_mac.h"
+#endif
 
 namespace {
 
@@ -42,15 +48,12 @@ void GracefulShutdownHandler(int signal) {
   RAW_CHECK(g_shutdown_pipe_write_fd != -1);
   RAW_CHECK(g_shutdown_pipe_read_fd != -1);
   RAW_CHECK(g_pipe_pid == getpid());
-  size_t bytes_written = 0;
-  do {
-    int rv = UNSAFE_TODO(HANDLE_EINTR(
-        write(g_shutdown_pipe_write_fd,
-              reinterpret_cast<const char*>(&signal) + bytes_written,
-              sizeof(signal) - bytes_written)));
-    RAW_CHECK(rv >= 0);
-    bytes_written += rv;
-  } while (bytes_written < sizeof(signal));
+  // POSIX guarantees that writes of at most PIPE_BUF bytes to a pipe are
+  // atomic, so a single write() sends the whole signal number.
+  static_assert(sizeof(signal) <= PIPE_BUF);
+  RAW_CHECK(
+      HANDLE_EINTR(write(g_shutdown_pipe_write_fd, &signal, sizeof(signal))) ==
+      static_cast<ssize_t>(sizeof(signal)));
 }
 
 void SIGHUPHandler(int signal) {
@@ -105,29 +108,34 @@ ShutdownDetector::ShutdownDetector(
 
 ShutdownDetector::~ShutdownDetector() = default;
 
-NOINLINE void ExitPosted() {
+NOINLINE void ExitPosted(int signal) {
   // Ensure function isn't optimized away.
   asm("");
+#if BUILDFLAG(IS_MAC)
+  if (signal == SIGTERM) {
+    // Bounds SIGTERM-initiated shutdowns (OS shutdown/reboot/update).
+    // Returns only when inapplicable or once shutdown completed in time.
+    shutdown_watchdog::BlockOnSigtermShutdown();
+  }
+#endif
   sleep(UINT_MAX);
 }
 
 void ShutdownDetector::ThreadMain() {
   base::PlatformThread::SetName("CrShutdownDetector");
 
-  int signal;
-  size_t bytes_read = 0;
-  ssize_t ret;
-  do {
-    ret = UNSAFE_TODO(HANDLE_EINTR(
-        read(shutdown_fd_, reinterpret_cast<char*>(&signal) + bytes_read,
-             sizeof(signal) - bytes_read)));
+  int signal = 0;
+  base::span<uint8_t> buffer = base::byte_span_from_ref(signal);
+  while (!buffer.empty()) {
+    const ssize_t ret =
+        HANDLE_EINTR(read(shutdown_fd_, buffer.data(), buffer.size()));
     if (ret < 0) {
       NOTREACHED() << "Unexpected error: " << strerror(errno);
     } else if (ret == 0) {
       NOTREACHED() << "Unexpected closure of shutdown pipe.";
     }
-    bytes_read += ret;
-  } while (bytes_read < sizeof(signal));
+    buffer = buffer.subspan(static_cast<size_t>(ret));
+  }
   VLOG(1) << "Handling shutdown for signal " << signal << ".";
 
   if (!task_runner_->PostTask(
@@ -136,25 +144,30 @@ void ShutdownDetector::ThreadMain() {
     // options. Raise the signal again. The default handler will pick it up
     // and cause an ungraceful exit.
     RAW_LOG(WARNING, "No valid task runner, exiting ungracefully.");
-    kill(getpid(), signal);
-
-    // The signal may be handled on another thread.  Give that a chance to
-    // happen.
-    sleep(3);
-
-    // We really should be dead by now.  For whatever reason, we're not. Exit
-    // immediately, with the exit status set to the signal number with bit 8
-    // set.  On the systems that we care about, this exit status is what is
-    // normally used to indicate an exit by this signal's default handler.
-    // This mechanism isn't a de jure standard, but even in the worst case, it
-    // should at least result in an immediate exit.
-    RAW_LOG(WARNING, "Still here, exiting really ungracefully.");
-    _exit(signal | (1 << 7));
+    ReraiseSignalAndExit(signal);
   }
-  ExitPosted();
+  ExitPosted(signal);
 }
 
 }  // namespace
+
+void ReraiseSignalAndExit(int signal) {
+  struct sigaction action = {};
+  action.sa_handler = SIG_DFL;
+  sigaction(signal, &action, nullptr);
+
+  sigset_t to_unblock;
+  sigemptyset(&to_unblock);
+  sigaddset(&to_unblock, signal);
+  pthread_sigmask(SIG_UNBLOCK, &to_unblock, nullptr);
+
+  // With SIG_DFL and the signal unblocked, raise() delivers to this thread
+  // before returning; for a fatal-by-default signal this does not return.
+  raise(signal);
+
+  RAW_LOG(WARNING, "Re-raised signal did not terminate; exiting ungracefully.");
+  _exit(signal | (1 << 7));
+}
 
 void InstallShutdownSignalHandlers(
     base::OnceCallback<void(int)> shutdown_callback,

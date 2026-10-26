@@ -13,14 +13,12 @@
 #include "third_party/blink/renderer/core/inspector/v8_inspector_string.h"
 #include "third_party/blink/renderer/core/script_tools/model_context_supplement.h"
 #include "third_party/blink/renderer/core/script_tools/script_tool_types.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 #include "third_party/inspector_protocol/crdtp/json.h"
 
 namespace blink {
-InspectorWebMCPAgent::InspectorWebMCPAgent(
-    InspectedFrames* inspected_frames,
-    v8_inspector::V8InspectorSession* v8_session)
+InspectorWebMCPAgent::InspectorWebMCPAgent(InspectedFrames* inspected_frames)
     : inspected_frames_(inspected_frames),
-      v8_session_(v8_session),
       enabled_(&agent_state_, /*default_value=*/false) {}
 InspectorWebMCPAgent::~InspectorWebMCPAgent() = default;
 
@@ -54,7 +52,12 @@ std::unique_ptr<protocol::Value> ParseJSON(const String& value) {
   std::vector<uint8_t> cbor;
 
   if (value.Is8Bit()) {
-    crdtp::json::ConvertJSONToCBOR(crdtp::span<uint8_t>(value.Span8()), &cbor);
+    // 8-bit Blink strings are Latin-1, while ConvertJSONToCBOR(span<uint8_t>)
+    // expects UTF-8. StringUtf8Adaptor avoids copying when the string is ASCII
+    // and transcodes Latin-1 (U+0080-U+00FF) to UTF-8 when needed.
+    StringUtf8Adaptor utf8(value);
+    crdtp::json::ConvertJSONToCBOR(
+        crdtp::span<uint8_t>(base::as_byte_span(utf8)), &cbor);
   } else {
     crdtp::json::ConvertJSONToCBOR(crdtp::span<uint16_t>(value.SpanUint16()),
                                    &cbor);
@@ -74,6 +77,8 @@ std::unique_ptr<protocol::WebMCP::Annotation> BuildAnnotations(
   if (annotations) {
     builder.setReadOnly(annotations->read_only);
     builder.setUntrustedContent(annotations->untrusted_content);
+    builder.setConsequential(annotations->consequential);
+    builder.setDebugging(annotations->debugging);
     has_annotations = true;
   }
   if (element && element->FastHasAttribute(html_names::kToolautosubmitAttr)) {
@@ -140,9 +145,12 @@ protocol::Response InspectorWebMCPAgent::disable() {
 
 protocol::Response InspectorWebMCPAgent::cancelInvocation(
     const String& invocationId) {
-  auto invocation_token =
-      base::UnguessableToken::DeserializeFromString(invocationId.Ascii());
-  if (!invocation_token) {
+  std::optional<ToolInvocationToken> invocation_id =
+      base::UnguessableToken::DeserializeFromString(invocationId.Ascii())
+          .transform([](const base::UnguessableToken& token) {
+            return ToolInvocationToken(token);
+          });
+  if (!invocation_id) {
     return protocol::Response::InvalidParams("Invalid invocation id");
   }
 
@@ -151,7 +159,7 @@ protocol::Response InspectorWebMCPAgent::cancelInvocation(
   bool cancelled = false;
   for (LocalFrame* frame : *inspected_frames_) {
     if (auto* model_context = GetModelContext(frame)) {
-      if (model_context->CancelTool(*invocation_token)) {
+      if (model_context->CancelTool(*invocation_id)) {
         cancelled = true;
         break;
       }
@@ -196,7 +204,7 @@ void InspectorWebMCPAgent::WebMCPToolExecuted(
     Document* document,
     const String& name,
     const String& input_arguments,
-    const base::UnguessableToken& invocation_id) {
+    const ToolInvocationToken& invocation_id) {
   if (!enabled_.Get()) {
     return;
   }
@@ -210,7 +218,7 @@ void InspectorWebMCPAgent::WebMCPToolExecuted(
 void InspectorWebMCPAgent::WebMCPToolResponded(
     Document* document,
     const String& result,
-    const base::UnguessableToken& invocation_id) {
+    const ToolInvocationToken& invocation_id) {
   if (!enabled_.Get()) {
     return;
   }
@@ -222,7 +230,7 @@ void InspectorWebMCPAgent::WebMCPToolResponded(
 void InspectorWebMCPAgent::WebMCPToolFailed(
     Document* document,
     const ScriptToolError& error,
-    const base::UnguessableToken& invocation_id,
+    const ToolInvocationToken& invocation_id,
     std::optional<std::pair<ScriptValue, ScriptState*>> exception) {
   if (!enabled_.Get()) {
     return;
@@ -235,7 +243,7 @@ void InspectorWebMCPAgent::WebMCPToolFailed(
   if (exception && !exception->first.IsEmpty()) {
     ScriptState* script_state = exception->second;
     ScriptState::Scope scope(script_state);
-    remote_object = v8_session_->wrapObject(script_state->GetContext(),
+    remote_object = V8Session()->wrapObject(script_state->GetContext(),
                                             exception->first.V8Value(),
                                             v8_inspector::StringView(), false);
   }

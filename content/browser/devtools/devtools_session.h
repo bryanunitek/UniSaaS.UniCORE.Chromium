@@ -38,6 +38,7 @@ namespace protocol {
 class DevToolsDomainHandler;
 class AuditsHandler;
 class DOMHandler;
+class DebuggerHandler;
 class DeviceOrientationHandler;
 class EmulationHandler;
 class InputHandler;
@@ -64,7 +65,8 @@ class DevToolsSession : public protocol::FrontendChannel,
   static CONTENT_EXPORT bool ValidateMessage(
       const std::string& expected_session_id,
       const bool expected_has_id,
-      base::span<const uint8_t> message);
+      base::span<const uint8_t> message,
+      bool expect_cbor);
 
   // For sessions attached to the Tab target, the mode is set to TabTarget.
   // For other sessions, the mode is inherited from the parent.
@@ -85,8 +87,8 @@ class DevToolsSession : public protocol::FrontendChannel,
   };
 
   // For root sessions (see also private constructor for children).
-  DevToolsSession(DevToolsAgentHostClient* client, Mode mode);
-  ~DevToolsSession() override;
+  CONTENT_EXPORT DevToolsSession(DevToolsAgentHostClient* client, Mode mode);
+  CONTENT_EXPORT ~DevToolsSession() override;
 
   void SetAgentHost(DevToolsAgentHostImpl* agent_host);
   void SetRuntimeResumeCallback(base::OnceClosure runtime_resume);
@@ -119,7 +121,12 @@ class DevToolsSession : public protocol::FrontendChannel,
   void AttachToAgent(blink::mojom::DevToolsAgent* agent,
                      bool force_using_io_session);
   void DispatchProtocolMessage(base::span<const uint8_t> message);
-  void SuspendSendingMessagesToAgent();
+  enum class SuspendMode {
+    kNone,
+    kAll,
+    kExecutionOnly,
+  };
+  void SuspendSendingMessagesToAgent(SuspendMode mode = SuspendMode::kAll);
   void ResumeSendingMessagesToAgent();
   void ClearPendingMessages(bool did_crash);
 
@@ -240,6 +247,7 @@ class DevToolsSession : public protocol::FrontendChannel,
     return std::disjunction_v<
         std::is_same<T, protocol::AuditsHandler>,
         std::is_same<T, protocol::DOMHandler>,
+        std::is_same<T, protocol::DebuggerHandler>,
         std::is_same<T, protocol::DeviceOrientationHandler>,
         std::is_same<T, protocol::EmulationHandler>,
         std::is_same<T, protocol::InputHandler>,
@@ -274,7 +282,7 @@ class DevToolsSession : public protocol::FrontendChannel,
   std::unique_ptr<protocol::UberDispatcher> dispatcher_{
       new protocol::UberDispatcher(this)};
 
-  bool suspended_sending_messages_to_agent_ = false;
+  SuspendMode suspend_mode_ = SuspendMode::kNone;
 
   // Messages that were sent to the agent or queued after suspending.
   std::list<PendingMessage> pending_messages_;

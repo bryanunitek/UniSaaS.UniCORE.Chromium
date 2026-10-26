@@ -33,6 +33,17 @@ public class ChromeContextMenuPopulatorFactory implements ContextMenuPopulatorFa
     private final List<CustomContentAction> mCustomContentActions;
     private @Nullable ContextMenuItemDelegate mItemDelegate;
 
+    /**
+     * Builds a {@link ChromeContextMenuPopulatorFactory}.
+     *
+     * @param itemDelegate The {@link ContextMenuItemDelegate} that will be notified with actions to
+     *     perform when menu items are selected.
+     * @param shareDelegate The Supplier of {@link ShareDelegate} that will be notified when a share
+     *     action is performed.
+     * @param contextMenuMode Defines the context menu mode.
+     * @param customContentActions List of {@link CustomContentAction} defined by the developer to
+     *     show in CCTs.
+     */
     public ChromeContextMenuPopulatorFactory(
             @Nullable ContextMenuItemDelegate itemDelegate,
             Supplier<@Nullable ShareDelegate> shareDelegate,

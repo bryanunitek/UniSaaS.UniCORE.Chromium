@@ -16,7 +16,6 @@
 #include "chrome/browser/sync/send_tab_to_self_sync_service_factory.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
-#include "components/send_tab_to_self/features.h"
 #include "components/send_tab_to_self/metrics_util.h"
 #include "components/send_tab_to_self/outgoing_tab_form_field_extractor.h"
 #include "components/send_tab_to_self/page_context.h"
@@ -70,21 +69,23 @@ PageContext::FormFieldInfo ExtractFormFieldsFromWebContentsInternal(
 }  // namespace
 
 std::optional<EntryPointDisplayReason> GetEntryPointDisplayReason(
-    content::WebContents* web_contents) {
+    content::WebContents* web_contents,
+    const std::optional<GURL>& url) {
   if (!web_contents) {
     return std::nullopt;
   }
 
-  send_tab_to_self::SendTabToSelfSyncService* service =
+  SendTabToSelfSyncService* service =
       SendTabToSelfSyncServiceFactory::GetForProfile(
           Profile::FromBrowserContext(web_contents->GetBrowserContext()));
-  return service ? service->GetEntryPointDisplayReason(
-                       web_contents->GetLastCommittedURL())
+  const GURL& url_to_check = url.value_or(web_contents->GetLastCommittedURL());
+  return service ? service->GetEntryPointDisplayReason(url_to_check)
                  : std::nullopt;
 }
 
-bool ShouldDisplayEntryPoint(content::WebContents* web_contents) {
-  return GetEntryPointDisplayReason(web_contents).has_value();
+bool ShouldDisplayEntryPoint(content::WebContents* web_contents,
+                             const std::optional<GURL>& url) {
+  return GetEntryPointDisplayReason(web_contents, url).has_value();
 }
 
 PageContext::FormFieldInfo ExtractFormFieldsFromWebContents(
@@ -125,8 +126,7 @@ void FillWebContents(content::WebContents* web_contents,
 
 std::optional<std::string> GetScrollPositionAsTextFragment(
     const SendTabToSelfEntry* entry) {
-  if (!base::FeatureList::IsEnabled(kSendTabToSelfPropagateScrollPosition) ||
-      !entry || entry->GetPageContext().scroll_position.IsEmpty()) {
+  if (!entry || entry->GetPageContext().scroll_position.IsEmpty()) {
     return std::nullopt;
   }
 

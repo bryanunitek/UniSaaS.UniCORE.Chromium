@@ -28,7 +28,9 @@ features:
   cloud_only: true
 supported_on:
 - chrome.*:147-
-- chrome_os:152-
+- chrome_os:157-
+- android:158-
+- ios:158-
 owners:
 - janzarzycki@google.com
 - igorruvinov@chromium.org

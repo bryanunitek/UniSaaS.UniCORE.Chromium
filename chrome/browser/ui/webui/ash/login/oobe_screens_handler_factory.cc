@@ -8,7 +8,6 @@
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/screens/ai_intro_screen.h"
 #include "chrome/browser/ash/login/screens/app_downloading_screen.h"
-#include "chrome/browser/ash/login/screens/arc_vm_data_migration_screen.h"
 #include "chrome/browser/ash/login/screens/consumer_update_screen.h"
 #include "chrome/browser/ash/login/screens/encryption_migration_screen.h"
 #include "chrome/browser/ash/login/screens/fjord_image_selection_screen.h"
@@ -20,7 +19,6 @@
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ui/webui/ash/login/ai_intro_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/app_downloading_screen_handler.h"
-#include "chrome/browser/ui/webui/ash/login/arc_vm_data_migration_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/consumer_update_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/drive_pinning_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/encryption_migration_screen_handler.h"
@@ -105,11 +103,13 @@ void OobeScreensHandlerFactory::EstablishFjordStationSetupScreenPipe(
 
 void OobeScreensHandlerFactory::EstablishFjordTouchControllerScreenPipe(
     mojo::PendingReceiver<
-        screens_common::mojom::FjordTouchControllerPageHandler> receiver) {
+        screens_common::mojom::FjordTouchControllerPageHandler> receiver,
+    EstablishFjordTouchControllerScreenPipeCallback callback) {
   FjordTouchControllerScreen* touch_controller =
       CHECK_DEREF(WizardController::default_controller())
           .GetScreen<FjordTouchControllerScreen>();
   touch_controller->BindPageHandlerReceiver(std::move(receiver));
+  touch_controller->PassPagePendingReceiverWithCallback(std::move(callback));
 }
 
 void OobeScreensHandlerFactory::EstablishFjordImageSelectionScreenPipe(
@@ -169,17 +169,6 @@ void OobeScreensHandlerFactory::EstablishPackagedLicenseScreenPipe(
   packaged_license->BindPageHandlerReceiver(std::move(receiver));
 }
 
-void OobeScreensHandlerFactory::EstablishArcVmDataMigrationScreenPipe(
-    mojo::PendingReceiver<screens_login::mojom::ArcVmDataMigrationPageHandler>
-        receiver,
-    EstablishArcVmDataMigrationScreenPipeCallback callback) {
-  ArcVmDataMigrationScreen* arc_vm_data_migration =
-      CHECK_DEREF(WizardController::default_controller())
-          .GetScreen<ArcVmDataMigrationScreen>();
-  arc_vm_data_migration->BindPageHandlerReceiver(std::move(receiver));
-  arc_vm_data_migration->PassPagePendingReceiverWithCallback(
-      std::move(callback));
-}
 
 void OobeScreensHandlerFactory::EstablishEncryptionMigrationScreenPipe(
     mojo::PendingReceiver<screens_login::mojom::EncryptionMigrationPageHandler>

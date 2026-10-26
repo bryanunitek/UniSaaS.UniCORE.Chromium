@@ -12,11 +12,14 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/check.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/raw_span.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -49,8 +52,8 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 // TODO(crbug.com/376575664): Remove this include directive when the
-// ADVANCED_MEMORY_SAFETY_CHECKS macro is removed.
-#include "base/memory/advanced_memory_safety_checks.h"
+// SANITIZED_OBJECT macro is removed.
+#include "base/memory/sanitized_object.h"
 #endif
 
 namespace cc {
@@ -118,26 +121,34 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
                            public viz::HostFrameSinkClient {
 #if BUILDFLAG(IS_CHROMEOS)
   // TODO(crbug.com/376575664): Remove this macro once the bug gets fixed.
-  ADVANCED_MEMORY_SAFETY_CHECKS();
+  SANITIZED_OBJECT();
 #endif
 
  public:
   METADATA_HEADER_BASE(Window);
 
+  using Windows = std::vector<raw_ptr<Window, VectorExperimental>>;
+
   // A helper class to ensure that the Window is not deleted while it is
   // notifying observers or doing other operations where re-entrant deletion
   // would be problematic. Attempting to delete the Window while a
-  // ScopedDeleteBlocker is active will cause a crash.
-  class ScopedDeleteBlocker {
+  // ScopedDeleteBlocker is active will cause a crash. This is no-op if
+  // if nullptr is passed.
+  class AURA_EXPORT ScopedDeleteBlocker {
    public:
-    explicit ScopedDeleteBlocker(aura::Window* window) : window_(window) {
-      window_->delete_block_count_++;
-    }
+    explicit ScopedDeleteBlocker(Window* window);
+    explicit ScopedDeleteBlocker(const Windows& windows);
     ScopedDeleteBlocker(const ScopedDeleteBlocker&) = delete;
     ScopedDeleteBlocker& operator=(const ScopedDeleteBlocker&) = delete;
-    ~ScopedDeleteBlocker() { window_->delete_block_count_--; }
-    raw_ptr<aura::Window> window_;
+    ~ScopedDeleteBlocker();
+
+   private:
+    raw_ptr<Window> window_ = nullptr;
+    base::raw_span<const raw_ptr<Window, VectorExperimental>> windows_;
   };
+
+  // Asserts that at least one `ScopedDeleteBlocker` is active on this Window.
+  void AssertDeleteBlocked() const { CHECK(delete_block_count_ > 0u); }
 
   // Initial value of id() for newly created windows.
   static constexpr int kInitialId = -1;
@@ -176,8 +187,6 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
     kMaxValue = HIDDEN,
   };
 
-  using Windows = std::vector<raw_ptr<Window, VectorExperimental>>;
-
   explicit Window(WindowDelegate* delegate,
                   client::WindowType type = client::WINDOW_TYPE_UNKNOWN);
 
@@ -211,7 +220,7 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   void SetId(int id);
 
   // ui::GestureConsumer:
-  const std::string& GetName() const override;
+  std::string_view GetName() const override;
   void SetName(const std::string& name);
 
   const std::u16string& GetTitle() const;
@@ -335,6 +344,10 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   // calculated using the current transform. If there is no animation ongoing,
   // this function returns the same value as `GetBoundsInScreen()`.
   gfx::Rect GetActualBoundsInScreen() const;
+
+  // Similar to `GetBoundsInScreen()` except that the returned value ignores
+  // any transforms.
+  gfx::Rect GetBoundsInScreenWithoutTransform() const;
 
   // Note: Must be called after initializing the window.
   void SetTransform(const gfx::Transform& transform);

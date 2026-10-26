@@ -12,8 +12,6 @@ import static org.mockito.Mockito.when;
 import android.Manifest;
 import android.app.Activity;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -21,10 +19,9 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.Robolectric;
 
-import org.chromium.base.AconfigFlaggedApiDelegate;
-import org.chromium.base.test.BaseJUnit4ClassRunner;
-import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.content_public.browser.ContactsPermissionProvider;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.WindowAndroid;
@@ -32,43 +29,31 @@ import org.chromium.ui.base.WindowAndroid;
 import java.lang.ref.WeakReference;
 
 /** Unit tests for {@link AndroidContactsPermissionProviderImpl}. */
-@RunWith(BaseJUnit4ClassRunner.class)
-@Batch(Batch.UNIT_TESTS)
+@RunWith(BaseRobolectricTestRunner.class)
 public class AndroidContactsPermissionProviderTest {
-    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private WebContents mWebContents;
     @Mock private WindowAndroid mWindowAndroid;
-    @Mock private Activity mActivity;
     @Mock private ContactsPermissionProvider.Callback mCallback;
-    @Mock private ContactsPickerFeatureMap mMockFeatureMap;
 
+    private Activity mActivity;
     private AndroidContactsPermissionProviderImpl mProvider;
 
     @Before
     public void setUp() {
+        mActivity = Robolectric.buildActivity(Activity.class).setup().get();
         when(mWebContents.getTopLevelNativeWindow()).thenReturn(mWindowAndroid);
         when(mWindowAndroid.getContext()).thenReturn(new WeakReference<>(mActivity));
         when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<>(mActivity));
-        when(mActivity.getContentResolver()).thenReturn(null); // Not used in this path
 
-        FakeAconfigFlaggedApiDelegate fakeDelegate = new FakeAconfigFlaggedApiDelegate();
-        fakeDelegate.setSystemContactsPickerEnabled(true);
-        AconfigFlaggedApiDelegate.setInstanceForTesting(fakeDelegate);
-
-        ContactsPickerFeatureMap.setInstanceForTesting(mMockFeatureMap);
+        ContactsPickerFeatureMap.setSystemContactsPickerEnabledForTesting(true);
 
         mProvider = new AndroidContactsPermissionProviderImpl();
     }
 
     @Test
-    @SmallTest
     public void testPermissionSkippedWhenSystemPickerEnabled() {
-        // Feature is enabled.
-        when(mMockFeatureMap.isEnabledInNative(
-                        ContactsPickerFeatureList.ANDROID_SYSTEM_CONTACTS_PICKER))
-                .thenReturn(true);
-
         mProvider.run(mWebContents, mCallback);
 
         // Should allow without checking or requesting permissions.
@@ -78,12 +63,8 @@ public class AndroidContactsPermissionProviderTest {
     }
 
     @Test
-    @SmallTest
     public void testPermissionRequestedWhenSystemPickerDisabled() {
-        // Feature is disabled.
-        when(mMockFeatureMap.isEnabledInNative(
-                        ContactsPickerFeatureList.ANDROID_SYSTEM_CONTACTS_PICKER))
-                .thenReturn(false);
+        ContactsPickerFeatureMap.setSystemContactsPickerEnabledForTesting(false);
         // Assume permission not granted initially.
         when(mWindowAndroid.hasPermission(Manifest.permission.READ_CONTACTS)).thenReturn(false);
         when(mWindowAndroid.canRequestPermission(Manifest.permission.READ_CONTACTS))

@@ -50,7 +50,8 @@ function showModalDialog(text: string) {
 // scrollDown() if needsScrollDown() was true.
 
 function isScrolledDown(): boolean {
-  return window.innerHeight + window.scrollY >= document.body.offsetHeight;
+  return Math.ceil(window.innerHeight + window.scrollY) >=
+      document.body.offsetHeight;
 }
 
 // Whether autoscroll is currently scrolling.
@@ -252,6 +253,8 @@ function setUpStopRecording() {
 
 interface OnLoadArgument {
   autofillAiServerModelEnabled: boolean;
+  autofillAmbientAutofillSuppressionEnabled: boolean;
+  autofillGmailOtpEnabled: boolean;
   showDomNodeIDsEnabled: boolean;
 }
 
@@ -266,12 +269,18 @@ function setUpAutofillInternals(onLoadArgument: OnLoadArgument) {
   setUpScopeCheckboxes();
   setUpSettingCheckboxes();
   setUpMarker();
+  if (onLoadArgument.autofillAmbientAutofillSuppressionEnabled) {
+    setUpClearAutofillAiEntitySuppressionsButton();
+  }
   setUpDumpAddressesButton();
   setUpSubmittedFormsJSONDataDownload();
   setUpCheckAutofillAiPermissions();
   setUpCheckAtMemoryPermissions();
   if (onLoadArgument.showDomNodeIDsEnabled) {
     setUpButtonForDomNodeIdCapture();
+  }
+  if (onLoadArgument.autofillGmailOtpEnabled) {
+    setUpClearGmailOtpOptInPrefsButton();
   }
   setUpDownload('autofill');
   if (onLoadArgument.autofillAiServerModelEnabled) {
@@ -292,6 +301,7 @@ function setUpPasswordManagerInternals() {
   setUpMarker();
   setUpDownload('password-manager');
   setUpStopRecording();
+  setUpCursorWiggle();
 
   const overrideContainer =
       getRequiredElement('password-change-override-container');
@@ -306,15 +316,82 @@ function setUpPasswordManagerInternals() {
   });
 }
 
+// Temporarily changes the cursor to the password manager logo when the user
+// wiggles the cursor rapidly.
+function setUpCursorWiggle() {
+  const kMinMoveDistance = 10;
+  const kWiggleWindowMs = 500;
+  const kMinReversals = 3;
+  const kCursorRevertDelayMs = 1000;
+
+  let lastX: number|undefined;
+  let lastY: number|undefined;
+  let lastMoveTime = 0;
+  let lastDx = 0;
+  let lastDy = 0;
+  let reversalTimestamps: number[] = [];
+  let revertTimer: number|undefined;
+
+  document.addEventListener('mousemove', (e: MouseEvent) => {
+    const now = performance.now();
+    if (lastX === undefined || lastY === undefined ||
+        now - lastMoveTime > kWiggleWindowMs) {
+      lastX = e.clientX;
+      lastY = e.clientY;
+      lastMoveTime = now;
+      lastDx = 0;
+      lastDy = 0;
+      reversalTimestamps = [];
+      return;
+    }
+
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    if (Math.hypot(dx, dy) < kMinMoveDistance) {
+      return;
+    }
+
+    if (lastDx !== 0 || lastDy !== 0) {
+      if (dx * lastDx + dy * lastDy < 0) {
+        reversalTimestamps.push(now);
+        reversalTimestamps =
+            reversalTimestamps.filter(t => now - t <= kWiggleWindowMs);
+        if (reversalTimestamps.length >= kMinReversals ||
+            document.body.classList.contains('password-manager-cursor')) {
+          document.body.classList.add('password-manager-cursor');
+          if (revertTimer !== undefined) {
+            window.clearTimeout(revertTimer);
+          }
+          revertTimer = window.setTimeout(() => {
+            document.body.classList.remove('password-manager-cursor');
+            revertTimer = undefined;
+          }, kCursorRevertDelayMs);
+        }
+      }
+    }
+
+    lastX = e.clientX;
+    lastY = e.clientY;
+    lastMoveTime = now;
+    lastDx = dx;
+    lastDy = dy;
+  });
+}
+
 function enableResetCacheButton() {
   getRequiredElement('reset-cache-fake-button').style.display = 'inline';
 }
 
 function notifyAboutIncognito(isIncognito: boolean) {
+  const scrollAfterInsert = needsScrollDown();
   document.body.dataset['incognito'] = isIncognito.toString();
+  if (scrollAfterInsert) {
+    scrollDown();
+  }
 }
 
 function notifyAboutVariations(variations: string[]) {
+  const scrollAfterInsert = needsScrollDown();
   const list = document.createElement('div');
   for (const item of variations) {
     list.appendChild(document.createTextNode(item));
@@ -323,6 +400,9 @@ function notifyAboutVariations(variations: string[]) {
   const variationsList =
       getRequiredElement<HTMLTableCellElement>('variations-list');
   variationsList.appendChild(list);
+  if (scrollAfterInsert) {
+    scrollDown();
+  }
 }
 
 // Setup a (fake) button to add visual markers
@@ -378,12 +458,6 @@ function setUpDownload(moduleName: string) {
     window.URL.revokeObjectURL(url);
     a.remove();
   });
-  // <if expr="is_ios">
-  // Hide this until downloading a file works on iOS, see
-  // https://bugs.webkit.org/show_bug.cgi?id=167341
-  // https://bugs.chromium.org/p/chromium/issues/detail?id=1252380
-  downloadFakeButton.style.display = 'none';
-  // </if>
 }
 
 interface SubmittedFormTopLevelData {
@@ -529,12 +603,6 @@ function setUpSubmittedFormsJSONDataDownload() {
     a.click();
     a.remove();
   });
-  // <if expr="is_ios">
-  // Hide this until downloading a file works on iOS, see
-  // https://bugs.webkit.org/show_bug.cgi?id=167341
-  // https://bugs.chromium.org/p/chromium/issues/detail?id=1252380
-  downloadSubmittedFormJSONDataButton.style.display = 'none';
-  // </if>
 }
 
 function setUpCheckAutofillAiPermissions() {
@@ -577,8 +645,28 @@ function setUpCheckAtMemoryPermissions() {
         value: 'kShowAutocompleteAtMemoryButton',
         text: 'Show autocomplete AtMemory button',
       },
+      {
+        value: 'kRetrievePaymentsForFilling',
+        text: 'Retrieve payments for filling',
+      },
+      {
+        value: 'kRetrieveContactInfoForFilling',
+        text: 'Retrieve contact info for filling',
+      },
+      {
+        value: 'kRetrieveIdentityDocsForFilling',
+        text: 'Retrieve identity docs for filling',
+      },
+      {
+        value: 'kRetrieveTravelDataForFilling',
+        text: 'Retrieve travel data for filling',
+      },
+      {
+        value: 'kRetrieveShoppingDataForFilling',
+        text: 'Retrieve shopping data for filling',
+      },
     ];
-    // LINT.ThenChange(/components/autofill/core/browser/at_memory/at_memory_enablement_utils.h:AtMemoryAction)
+    // LINT.ThenChange(/components/autofill/core/browser/at_memory/at_memory_enablement_util.h:AtMemoryAction)
     for (const action of actions) {
       const option = document.createElement('option');
       option.value = action.value;
@@ -675,20 +763,44 @@ function setUpScopeCheckboxes() {
 
   // Create and initialize filter checkboxes: remove/add hide-<Scope> class to
   // |logDiv| when (un)checked.
+  // LINT.IfChange(LoggingScope)
   const SCOPES: CheckboxInfo[] = [
     {id: 'Context'},
     {id: 'Parsing'},
+    {id: 'Rationalization'},
     {id: 'AbortParsing'},
     {id: 'Filling'},
     {id: 'Submission'},
     {id: 'AutofillServer'},
     {id: 'Metrics'},
     {id: 'AddressProfileFormImport'},
+    {id: 'CreditCardUploadStatus'},
+    {id: 'CardUploadDecision'},
     {id: 'WebsiteModifiedFieldValue'},
     {id: 'TouchToFill'},
     {id: 'AutofillAi'},
     {id: 'AutofillActor'},
+    {id: 'OneTimeTokens'},
+    {id: 'AtMemory'},
+    {id: 'EmailVerification'},
   ];
+  // LINT.ThenChange(
+  //     //components/autofill/core/common/autofill_internals/logging_scope.h:LoggingScope,
+  //     //components/autofill/core/browser/autofill_and_password_manager_internals/autofill_and_password_manager_internals.html:LoggingScope
+  // )
+
+  // Generate hide-<Scope> rules dynamically so every filter checkbox hides its
+  // matching log entries and the <hr> inserted immediately before each entry
+  // (inlined in <head> so HTML exports preserve active filter state).
+  const style = document.createElement('style');
+  style.textContent =
+      SCOPES
+          .map(
+              scope => `.hide-${scope.id} .log-entry[scope='${
+                  scope.id}'], .hide-${scope.id} hr:has(+ .log-entry[scope='${
+                  scope.id}']) { display: none; }`)
+          .join('\n');
+  document.head.appendChild(style);
 
   interface ScopeCheckbox {
     input: HTMLInputElement;
@@ -751,6 +863,12 @@ function setUpSettingCheckboxes() {
     const input = createCheckbox(setting);
     settingsPlaceholder.appendChild(input.parentElement!);
   }
+  getRequiredElement<HTMLInputElement>('EnableAutoscroll')
+      .addEventListener('change', (e) => {
+        if ((e.target as HTMLInputElement).checked) {
+          scrollDown();
+        }
+      });
   {
     // Add the timestamp for AutomaticallyStopRecording.
     const span = document.createElement('span');
@@ -781,12 +899,17 @@ function addTabLink(linkText: string, tabId: string) {
 function onTabShown(tabId: string) {
   if (tabId === 'tab-autofill-ai-cache') {
     chrome.send('getAutofillAiCache');
+  } else if (tabId === 'tab-autofill-ai-entities') {
+    getRequiredElement('autofill-ai-entities-content').innerText =
+        'Loading entities';
+    chrome.send('getAutofillAiEntities');
   }
 }
 
 function addAutofillTabs() {
   addTabLink('Autofill logs', 'tab-logs');
   addTabLink('AutofillAI cache', 'tab-autofill-ai-cache');
+  addTabLink('AutofillAI entities', 'tab-autofill-ai-entities');
   getRequiredElement('tab-links').style.display = 'block';
 }
 
@@ -842,6 +965,98 @@ function displayAutofillAiCache(entries: AutofillAiCacheEntry[]) {
   }
 }
 
+interface AutofillAiAttributeEntry {
+  name: string;
+  value: string;
+}
+
+interface AutofillAiEntityEntry {
+  guid: string;
+  nickname: string;
+  entityType: string;
+  recordType: string;
+  attributes: AutofillAiAttributeEntry[];
+}
+
+function displayAutofillAiLoadingStatus(status: string) {
+  const statusDiv = document.getElementById('autofill-ai-loading-status');
+  if (!statusDiv) {
+    return;
+  }
+  statusDiv.innerText = status;
+  statusDiv.style.display = status ? 'block' : 'none';
+}
+
+function displayAutofillAiEntities(entries: AutofillAiEntityEntry[]) {
+  const container = getRequiredElement('autofill-ai-entities-content');
+  if (entries.length === 0) {
+    container.innerText = 'No entities found.';
+    return;
+  }
+
+  container.innerText = '';
+  const reauthButton = document.createElement('span');
+  reauthButton.className = 'fake-button';
+  reauthButton.innerText = 'Reauth to unmask';
+  reauthButton.addEventListener('click', () => {
+    chrome.send('authenticateToRevealMaskedEntities');
+  });
+  container.appendChild(reauthButton);
+  container.appendChild(document.createElement('hr'));
+  const groupedEntities =
+      new Map<string, Map<string, AutofillAiEntityEntry[]>>();
+  for (const entry of entries) {
+    if (!groupedEntities.has(entry.entityType)) {
+      groupedEntities.set(
+          entry.entityType, new Map<string, AutofillAiEntityEntry[]>());
+    }
+    const recordTypeMap = groupedEntities.get(entry.entityType)!;
+    if (!recordTypeMap.has(entry.recordType)) {
+      recordTypeMap.set(entry.recordType, []);
+    }
+    recordTypeMap.get(entry.recordType)!.push(entry);
+  }
+
+  for (const [entityType, recordTypeMap] of groupedEntities) {
+    const typeHeader = document.createElement('h2');
+    typeHeader.innerText = `Entity type: ${entityType}`;
+    container.appendChild(typeHeader);
+
+    for (const [recordType, entityList] of recordTypeMap) {
+      const recordHeader = document.createElement('h3');
+      recordHeader.innerText = `Record type: ${recordType}`;
+      container.appendChild(recordHeader);
+
+      for (const entity of entityList) {
+        const entryTable = document.createElement('table');
+        entryTable.className = 'cache-entry';
+        const entryHeaderRow = document.createElement('tr');
+        const entryHeader = document.createElement('th');
+        entryHeader.colSpan = 2;
+        entryHeader.innerText = `GUID: ${entity.guid}`;
+        if (entity.nickname) {
+          entryHeader.innerText += `, Nickname: ${entity.nickname}`;
+        }
+        entryHeaderRow.appendChild(entryHeader);
+        entryTable.appendChild(entryHeaderRow);
+
+        for (const attribute of entity.attributes) {
+          const row = document.createElement('tr');
+          const nameCell = document.createElement('td');
+          nameCell.innerText = attribute.name;
+          const valueCell = document.createElement('td');
+          valueCell.innerText = attribute.value;
+          row.appendChild(nameCell);
+          row.appendChild(valueCell);
+          entryTable.appendChild(row);
+        }
+        container.appendChild(entryTable);
+        container.appendChild(document.createElement('hr'));
+      }
+    }
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   addWebUiListener('enable-reset-cache-button', enableResetCacheButton);
   addWebUiListener('notify-about-incognito', notifyAboutIncognito);
@@ -859,6 +1074,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   addWebUiListener('add-structured-log', addStructuredLog);
   addWebUiListener('display-autofill-ai-cache', displayAutofillAiCache);
+  addWebUiListener('display-autofill-ai-entities', displayAutofillAiEntities);
+  addWebUiListener(
+      'display-autofill-ai-loading-status', displayAutofillAiLoadingStatus);
   addWebUiListener('setup-autofill-internals', setUpAutofillInternals);
   addWebUiListener(
       'setup-password-manager-internals', setUpPasswordManagerInternals);
@@ -876,6 +1094,27 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.send('dumpAddresses');
   });
 });
+
+function setUpClearAutofillAiEntitySuppressionsButton() {
+  // <if expr="not is_ios" >
+  const button =
+      getRequiredElement('clear-autofill-ai-entity-suppressions-fake-button');
+  button.style.display = 'inline';
+  button.addEventListener('click', () => {
+    chrome.send('clearAutofillAiEntitySuppressions');
+  });
+  // </if>
+}
+
+function setUpClearGmailOtpOptInPrefsButton() {
+  // <if expr="not is_ios" >
+  const button = getRequiredElement('clear-gmail-otp-opt-in-prefs-fake-button');
+  button.style.display = 'inline';
+  button.addEventListener('click', () => {
+    chrome.send('clearGmailOtpOptInPrefs');
+  });
+  // </if>
+}
 
 function setUpDumpAddressesButton() {
   getRequiredElement('dump-addresses-fake-button').style.display = 'inline';

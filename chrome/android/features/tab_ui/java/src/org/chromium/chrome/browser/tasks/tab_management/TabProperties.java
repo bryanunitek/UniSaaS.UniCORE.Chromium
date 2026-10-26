@@ -21,15 +21,20 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.actor.ui.ActorUiTabController.UiTabState;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_ui.TabListFaviconProvider;
+import org.chromium.chrome.browser.tab_ui.ThumbnailFetcher;
 import org.chromium.chrome.browser.tasks.tab_management.TabListMediator.ShoppingPersistedTabDataFetcher;
 import org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties;
+import org.chromium.chrome.browser.tasks.tab_management.labels.TabCardLabelData;
+import org.chromium.chrome.browser.tasks.tab_management.vertical_tabs.VerticalTabItemHoverController.TabHoverListener;
 import org.chromium.components.browser_ui.util.TextResolver;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelegate;
 import org.chromium.components.tab_groups.TabGroupColorId;
+import org.chromium.components.tabs.TabAlert;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModel.ReadableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
+import org.chromium.ui.modelutil.PropertyModel.WritableIntDefPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
@@ -108,7 +113,8 @@ public class TabProperties {
     }
 
     /** The {@link TabActionState} for the view, either CLOSABLE or SELECTABLE. */
-    public static final WritableIntPropertyKey TAB_ACTION_STATE = new WritableIntPropertyKey();
+    public static final WritableIntDefPropertyKey<TabActionState> TAB_ACTION_STATE =
+            new WritableIntDefPropertyKey<>(TabActionState.UNSET);
 
     // TODO(crbug.com/415829966): Combine TAB_ID and TAB_GROUP_SYNC_ID among other identifiers like
     // tab group Token into a single value-type object that can be consolidated into one key.
@@ -124,15 +130,14 @@ public class TabProperties {
     public static final WritableObjectPropertyKey<TabActionListener> TAB_CONTEXT_CLICK_LISTENER =
             new WritableObjectPropertyKey<>();
 
-    // This will be initialized to 0, which is TabCardHighlightState.NOT_HIGHLIGHTED.
-    public static final WritableIntPropertyKey HIGHLIGHT_STATE = new WritableIntPropertyKey();
+    public static final WritableIntDefPropertyKey<TabCardHighlightState> HIGHLIGHT_STATE =
+            new WritableIntDefPropertyKey<>(TabCardHighlightState.NOT_HIGHLIGHTED);
 
     public static final WritableBooleanPropertyKey IS_PINNED = new WritableBooleanPropertyKey();
 
     public static final WritableBooleanPropertyKey IS_COLLAPSED = new WritableBooleanPropertyKey();
 
-    public static final WritableBooleanPropertyKey IS_RAIL_COLLAPSED =
-            new WritableBooleanPropertyKey();
+    public static final WritableIntPropertyKey RAIL_COLLAPSE_STATE = new WritableIntPropertyKey();
 
     public static final WritableObjectPropertyKey<Float> DRAGGING_Y =
             new WritableObjectPropertyKey<>();
@@ -170,15 +175,17 @@ public class TabProperties {
     public static final WritableObjectPropertyKey<Size> GRID_CARD_SIZE =
             new WritableObjectPropertyKey<>();
 
+    public static final WritableObjectPropertyKey<Size> PINNED_STRIP_ITEM_SIZE =
+            new WritableObjectPropertyKey<>();
+
     public static final WritableObjectPropertyKey<String> TITLE = new WritableObjectPropertyKey<>();
 
     public static final WritableBooleanPropertyKey IS_SELECTED = new WritableBooleanPropertyKey();
+    public static final WritableBooleanPropertyKey IS_MULTI_SELECTED =
+            new WritableBooleanPropertyKey();
 
     public static final WritableObjectPropertyKey<SelectionDelegate<TabListEditorItemSelectionId>>
             TAB_SELECTION_DELEGATE = new WritableObjectPropertyKey<>();
-
-    public static final WritableObjectPropertyKey<String> URL_DOMAIN =
-            new WritableObjectPropertyKey<>();
 
     public static final WritableObjectPropertyKey<AccessibilityDelegate> ACCESSIBILITY_DELEGATE =
             new WritableObjectPropertyKey<>();
@@ -230,18 +237,29 @@ public class TabProperties {
     public static final WritableObjectPropertyKey<String> TAB_GROUP_SYNC_ID =
             new WritableObjectPropertyKey<>();
 
-    /** The {@link org.chromium.chrome.browser.tab.TabImpl.MediaState} indicator of the tab. */
-    public static final WritableIntPropertyKey MEDIA_INDICATOR = new WritableIntPropertyKey();
+    /** The {@link TabAlert} state of the tab. */
+    public static final WritableIntDefPropertyKey<TabAlert> ALERT_STATE =
+            new WritableIntDefPropertyKey<>(TabAlert.NONE);
+
+    /** Whether Glic context sharing is active for the tab. */
+    public static final WritableBooleanPropertyKey IS_GLIC_ACTIVE =
+            new WritableBooleanPropertyKey();
 
     /** The {@link ActorUiTabController.UiTabState} indicator of the tab. */
     public static final WritableObjectPropertyKey<UiTabState> ACTOR_UI_STATE =
             new WritableObjectPropertyKey<>();
 
+    /** Listener for hover state changes on tabs and tab group headers. */
+    public static final WritableObjectPropertyKey<TabHoverListener> TAB_HOVER_LISTENER =
+            new WritableObjectPropertyKey<>();
+
     private static final PropertyKey[] COMMON_KEYS_TAB_AND_GROUP_GRID =
             new PropertyKey[] {
+                ALERT_STATE,
                 DRAGGING_Y,
                 IS_INCOGNITO,
                 IS_SELECTED,
+                IS_MULTI_SELECTED,
                 TAB_CLICK_LISTENER,
                 TAB_LONG_CLICK_LISTENER,
                 TAB_CONTEXT_CLICK_LISTENER,
@@ -249,13 +267,13 @@ public class TabProperties {
                 FAVICON_FETCHED,
                 FAVICON_FETCHER,
                 GRID_CARD_SIZE,
+                PINNED_STRIP_ITEM_SIZE,
                 THUMBNAIL_FETCHER,
                 SHOW_THUMBNAIL_SPINNER,
                 TITLE,
                 CARD_ALPHA,
                 CARD_ANIMATION_STATUS,
                 TAB_SELECTION_DELEGATE,
-                URL_DOMAIN,
                 ACCESSIBILITY_DELEGATE,
                 CARD_TYPE,
                 CONTENT_DESCRIPTION_TEXT_RESOLVER,
@@ -266,7 +284,7 @@ public class TabProperties {
                 VISIBILITY,
                 USE_SHRINK_CLOSE_ANIMATION,
                 ACTOR_UI_STATE,
-                IS_RAIL_COLLAPSED
+                RAIL_COLLAPSE_STATE
             };
 
     // TAB_ACTION_STATE must always be the first property as keys are iterated in order. TAB_ID must
@@ -283,10 +301,11 @@ public class TabProperties {
                         HIGHLIGHT_STATE,
                         IS_PINNED,
                         IS_COLLAPSED,
+                        IS_GLIC_ACTIVE,
                         TAB_GROUP_ID,
                         TAB_GROUP_HEADER_ID,
-                        MEDIA_INDICATOR,
-                        IS_LOADING
+                        IS_LOADING,
+                        TAB_HOVER_LISTENER
                     },
                     COMMON_KEYS_TAB_AND_GROUP_GRID);
 
@@ -326,24 +345,28 @@ public class TabProperties {
                 // go/keep-sorted start
                 ACCESSIBILITY_DELEGATE,
                 ACTION_BUTTON_DESCRIPTION_TEXT_RESOLVER,
-                ACTOR_UI_STATE,
+                ALERT_STATE,
                 CARD_TYPE,
                 CONTENT_DESCRIPTION_TEXT_RESOLVER,
                 DRAGGING_Y,
                 FAVICON_FETCHER,
                 IS_COLLAPSED,
+                IS_GLIC_ACTIVE,
                 IS_INCOGNITO,
                 IS_LOADING,
+                IS_MULTI_SELECTED,
                 IS_PINNED,
-                IS_RAIL_COLLAPSED,
                 IS_SELECTED,
-                MEDIA_INDICATOR,
+                RAIL_COLLAPSE_STATE,
                 TAB_ACTION_BUTTON_DATA,
+                TAB_ACTION_STATE,
                 TAB_CLICK_LISTENER,
                 TAB_CONTEXT_CLICK_LISTENER,
                 TAB_GROUP_CARD_COLOR,
+                TAB_GROUP_COLOR_VIEW_PROVIDER,
                 TAB_GROUP_HEADER_ID,
                 TAB_GROUP_ID,
+                TAB_HOVER_LISTENER,
                 TAB_ID,
                 TAB_LONG_CLICK_LISTENER,
                 TITLE

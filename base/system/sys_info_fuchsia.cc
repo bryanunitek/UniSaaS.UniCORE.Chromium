@@ -13,6 +13,7 @@
 
 #include "base/byte_size.h"
 #include "base/containers/flat_map.h"
+#include "base/cpu.h"
 #include "base/files/file_util.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/system_info.h"
@@ -140,7 +141,7 @@ std::optional<int64_t> SysInfo::AmountOfFreeDiskSpace(const FilePath& path) {
   // Report the actual amount of free space in |path|'s filesystem.
   int64_t available;
   if (GetDiskSpaceInfo(path, &available, nullptr)) {
-    CHECK(available >= 0, base::NotFatalUntil::M150);
+    CHECK(available >= 0);
     return available;
   }
 
@@ -163,7 +164,7 @@ std::optional<int64_t> SysInfo::AmountOfTotalDiskSpace(const FilePath& path) {
 
   // Report the actual space in |path|'s filesystem.
   if (GetDiskSpaceInfo(path, nullptr, &total_space)) {
-    CHECK(total_space >= 0, base::NotFatalUntil::M150);
+    CHECK(total_space >= 0);
     return total_space;
   }
 
@@ -193,13 +194,36 @@ std::optional<SysInfo::DiskSpaceInfo> SysInfo::AmountOfDiskSpace(
   }
 
   // Report the actual space in `path`'s filesystem.
-  int64_t available;
-  int64_t total;
-  if (!GetDiskSpaceInfo(path, &available, &total)) {
+  int64_t available_bytes;
+  int64_t total_bytes;
+  if (!GetDiskSpaceInfo(path, &available_bytes, &total_bytes)) {
     return std::nullopt;
   }
-  return DiskSpaceInfo{.total = ByteSize(static_cast<uint64_t>(total)),
-                       .available = ByteSize(static_cast<uint64_t>(available))};
+
+  // In Fuchsia, there are filesystems for which available and total values
+  // cannot be provided (e.g. memfs). Those filesystems return values of 0 bytes
+  // used and UINT64_MAX bytes available.
+  //
+  // There is a bug for creating an API that would be able to explicitly
+  // communicate this (https://fxbug.dev/293966900) but given that Chromium uses
+  // the Posix compatibility API, that might not be applicable here.
+  //
+  // In any case, in this situation cap the "available" value at some
+  // arbitrarily-chosen large value that is not the maximum. This is done only
+  // for the ByteSize versions of the calls for two reasons:
+  //
+  // 1. This is less disruptive to the existing code that calls into the
+  //    non-ByteSize functions. As the non-ByteSize functions are deprecated,
+  //    this allows slow and measured migration.
+  // 2. ByteSize does overflow checking, so it's more important to cap at a
+  //    non-maximum value to allow reasonable space calculations without
+  //    requiring every caller to handle avoidance of an overflow kill.
+
+  ByteSize available = ByteSize(std::min(static_cast<uint64_t>(available_bytes),
+                                         ByteSize::Max().InBytes() / 2));
+  ByteSize total = ByteSize(static_cast<uint64_t>(total_bytes));
+
+  return DiskSpaceInfo{.total = total, .available = available};
 }
 
 // static
@@ -244,9 +268,7 @@ std::string SysInfo::OperatingSystemArchitecture() {
 
 // static
 std::string SysInfo::CPUModelName() {
-  // TODO(crbug.com/40191727): Implement this when Fuchsia supports it.
-  NOTIMPLEMENTED_LOG_ONCE();
-  return std::string();
+  return CPU().cpu_brand();
 }
 
 // static
@@ -256,7 +278,9 @@ size_t SysInfo::VMAllocationGranularity() {
 
 // static
 int SysInfo::NumberOfEfficientProcessorsImpl() {
-  NOTIMPLEMENTED();
+  // Zircon's scheduling profiles take care of efficient-core affinity, so
+  // return 0 to allow the default thread pool behavior to function
+  // reasonably on both symmetric and asymmetric cores.
   return 0;
 }
 

@@ -8,12 +8,15 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_login_pref_names.h"
+#include "ash/constants/ash_paths.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
 #include "base/path_service.h"
 #include "base/system/sys_info.h"
 #include "base/task/thread_pool.h"
@@ -21,14 +24,12 @@
 #include "base/time/time.h"
 #include "chrome/browser/ash/drive/file_system_util.h"
 #include "chrome/browser/ash/login/login_constants.h"
-#include "chrome/browser/ash/login/onboarding_user_activity_counter.h"
 #include "chrome/browser/ash/login/oobe_configuration.h"
 #include "chrome/browser/ash/login/oobe_metrics_helper.h"
 #include "chrome/browser/ash/login/oobe_quick_start/oobe_quick_start_pref_names.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_token_provider.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/login/login_display_host_common.h"
-#include "chrome/common/chrome_paths.h"
 #include "chromeos/ash/components/dbus/oobe_config/oobe_configuration_client.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
@@ -61,7 +62,7 @@ void SaveIntegerPreferenceForced(PrefService& local_state,
 // Saves string "Local State" preference and forces its persistence to disk.
 void SaveStringPreferenceForced(PrefService& local_state,
                                 const char* pref_name,
-                                const std::string& value) {
+                                std::string_view value) {
   local_state.SetString(pref_name, value);
   local_state.CommitPendingWrite();
 }
@@ -80,7 +81,7 @@ base::FilePath GetOobeCompleteFlagPath() {
     return base::FilePath(kOobeCompleteFlagFilePath);
   } else {
     base::FilePath user_data_dir;
-    base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
+    base::PathService::Get(ash::DIR_USER_DATA, &user_data_dir);
     return user_data_dir.AppendASCII(".oobe_completed");
   }
 }
@@ -181,8 +182,6 @@ void StartupUtils::RegisterOobeProfilePrefs(PrefRegistrySimple* registry) {
   if (features::IsOobeDisplaySizeEnabled()) {
     registry->RegisterDoublePref(prefs::kOobeDisplaySizeFactorDeferred, 1.0);
   }
-
-  OnboardingUserActivityCounter::RegisterProfilePrefs(registry);
 }
 
 // static
@@ -315,18 +314,22 @@ void StartupUtils::MarkEnrollmentRecoveryRequired(PrefService& local_state) {
 }
 
 // static
-std::string StartupUtils::GetInitialLocale(const PrefService& local_state) {
+base::i18n::LanguageTag StartupUtils::GetInitialLocale(
+    const PrefService& local_state) {
   std::string locale = local_state.GetString(ash::prefs::kInitialLocale);
-  if (!l10n_util::IsValidLocaleSyntax(locale))
-    locale = "en-US";
-  return locale;
+  return base::i18n::LanguageTagConverter::GetInstance()
+      .FromString(locale)
+      .value_or(base::i18n::GetKnownLanguageTag("en-US"));
 }
 
 // static
 void StartupUtils::SetInitialLocale(PrefService& local_state,
                                     const std::string& locale) {
-  if (l10n_util::IsValidLocaleSyntax(locale)) {
-    SaveStringPreferenceForced(local_state, ash::prefs::kInitialLocale, locale);
+  if (std::optional<base::i18n::LanguageTag> language_tag =
+          base::i18n::LanguageTagConverter::GetInstance().FromString(locale);
+      language_tag) {
+    SaveStringPreferenceForced(local_state, ash::prefs::kInitialLocale,
+                               language_tag->tag_string());
   } else {
     NOTREACHED();
   }

@@ -15,6 +15,7 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
@@ -26,6 +27,10 @@
 #include "chrome/browser/browser_switcher/browser_switcher_policy_migrator.h"
 #include "chrome/browser/enterprise/util/affiliation.h"
 #include "chrome/browser/infobars/simple_alert_infobar_creator.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/infobars/browser_infobar_manager.h"
+#endif
+#include "chrome/browser/infobars/infobar_features.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
@@ -73,11 +78,11 @@
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #else
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #endif
 
 namespace policy {
@@ -129,7 +134,6 @@ class ProxiedPoliciesPropagatedWatcher : PolicyService::ProviderUpdateObserver {
       return;
     }
 
-    ReportTimeUma();
     std::move(proxied_policies_propagated_callback_).Run();
   }
 
@@ -137,22 +141,15 @@ class ProxiedPoliciesPropagatedWatcher : PolicyService::ProviderUpdateObserver {
     if (!proxied_policies_propagated_callback_)
       return;
     LOG(WARNING) << "Waiting for proxied policies to propagate timed out.";
-    ReportTimeUma();
     std::move(proxied_policies_propagated_callback_).Run();
   }
 
  private:
   static constexpr int kProxiedPoliciesPropagationTimeoutInSeconds = 5;
 
-  void ReportTimeUma() const {
-    UmaHistogramTimes("Enterprise.TimeToUnthrottlePolicyInit",
-                      base::TimeTicks::Now() - construction_time_);
-  }
-
   const raw_ptr<PolicyService> device_wide_policy_service_;
   const raw_ptr<const ProxyPolicyProvider> proxy_policy_provider_;
   const raw_ptr<const ConfigurationPolicyProvider> source_policy_provider_;
-  const base::TimeTicks construction_time_ = base::TimeTicks::Now();
   base::OnceClosure proxied_policies_propagated_callback_;
   base::OneShotTimer timeout_timer_;
 };
@@ -184,22 +181,22 @@ class LocalTestInfoBarVisibilityManager :
 #if BUILDFLAG(IS_ANDROID)
   // TabModelObserver
   void DidAddTab(TabAndroid* tab, TabModel::TabLaunchType type) override {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
     if (tab && tab->web_contents()) {
       EnsureInfobarForActiveLocalTestPolicies(tab->web_contents());
     }
   }
 
   // TabModelObserver
-  void DidSelectTab(TabAndroid* tab, TabModel::TabSelectionType type) override {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  void DidSelectTab(TabAndroid* tab) override {
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
     if (tab && tab->web_contents()) {
       EnsureInfobarForActiveLocalTestPolicies(tab->web_contents());
     }
   }
 #else
   void OnBrowserCreated(BrowserWindowInterface* browser) override {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
     CHECK(browser);
 
     // TODO(crbug.com/452120900): TabStripModel auto-unregistered by dtor
@@ -207,7 +204,7 @@ class LocalTestInfoBarVisibilityManager :
   }
 
   void OnBrowserClosed(BrowserWindowInterface* browser) override {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
     CHECK(browser);
 
     if (GlobalBrowserCollection::GetInstance()->IsEmpty()) {
@@ -219,7 +216,7 @@ class LocalTestInfoBarVisibilityManager :
       TabStripModel* tab_strip_model,
       const TabStripModelChange& change,
       const TabStripSelectionChange& selection) override {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
     if (change.type() == TabStripModelChange::kInserted) {
       for (const auto& contents : change.GetInsert()->contents) {
         EnsureInfobarForActiveLocalTestPolicies(contents.contents);
@@ -232,7 +229,7 @@ class LocalTestInfoBarVisibilityManager :
 #endif  // BUILDFLAG(IS_ANDROID)
 
   void AddInfobarsForActiveLocalTestPoliciesAllTabs() {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 #if BUILDFLAG(IS_ANDROID)
     for (TabModel* model : TabModelList::models()) {
       for (int index = 0; index < model->GetTabCount(); ++index) {
@@ -284,7 +281,7 @@ class LocalTestInfoBarVisibilityManager :
   }
 
   void DismissInfobarsForActiveLocalTestPoliciesAllTabs() {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 #if BUILDFLAG(IS_ANDROID)
     for (TabModel* model : TabModelList::models()) {
       for (int index = 0; index < model->GetTabCount(); ++index) {
@@ -330,14 +327,34 @@ class LocalTestInfoBarVisibilityManager :
 
   bool infobar_active() { return infobar_active_; }
 
+  base::WeakPtr<LocalTestInfoBarVisibilityManager> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  private:
   bool infobar_active_ = false;
 #if !BUILDFLAG(IS_ANDROID)
   base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
       browser_collection_observation_{this};
 #endif  // !BUILDFLAG(IS_ANDROID)
+  base::WeakPtrFactory<LocalTestInfoBarVisibilityManager> weak_ptr_factory_{
+      this};
 };
 }  // namespace internal
+
+namespace {
+
+// Runs a task on the UI thread, eagerly if currently on the UI thread (to
+// reduce the risk for potential race conditions), else posted to the UI thread.
+void RunNowOnOrPostToUIThread(base::OnceClosure task) {
+  if (content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+    std::move(task).Run();
+  } else {
+    content::GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(task));
+  }
+}
+
+}  // namespace
 
 #if BUILDFLAG(IS_CHROMEOS)
 namespace {
@@ -476,9 +493,9 @@ void ProfilePolicyConnector::Init(
     const CloudPolicyStore* policy_store,
     policy::ChromeBrowserPolicyConnector* connector,
     bool force_immediate_load) {
-  DCHECK(!configuration_policy_provider_);
-  DCHECK(!policy_store_);
-  DCHECK(!policy_service_);
+  CHECK(!configuration_policy_provider_, base::NotFatalUntil::M162);
+  CHECK(!policy_store_, base::NotFatalUntil::M162);
+  CHECK(!policy_service_, base::NotFatalUntil::M162);
 
   configuration_policy_provider_ = configuration_policy_provider;
   policy_store_ = policy_store;
@@ -490,7 +507,7 @@ void ProfilePolicyConnector::Init(
   auto* browser_policy_connector =
       static_cast<BrowserPolicyConnectorAsh*>(connector);
 #else
-  DCHECK_EQ(nullptr, user);
+  CHECK_EQ(nullptr, user, base::NotFatalUntil::M162);
 #endif
 
   ConfigurationPolicyProvider* platform_provider =
@@ -524,7 +541,7 @@ void ProfilePolicyConnector::Init(
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (!user) {
-    DCHECK(schema_registry);
+    CHECK(schema_registry, base::NotFatalUntil::M162);
     // This case occurs for the signin and the lock screen app profiles.
     special_user_policy_provider_ =
         std::make_unique<LoginProfilePolicyProvider>(
@@ -614,7 +631,7 @@ void ProfilePolicyConnector::Init(
 
 void ProfilePolicyConnector::InitForTesting(
     std::unique_ptr<PolicyService> service) {
-  DCHECK(!policy_service_);
+  CHECK(!policy_service_, base::NotFatalUntil::M162);
   policy_service_ = std::move(service);
   DoPostInit();
 }
@@ -690,12 +707,12 @@ void ProfilePolicyConnector::SetUserAffiliationIdsForTesting(
 }
 
 void ProfilePolicyConnector::OnPolicyServiceInitialized(PolicyDomain domain) {
-  DCHECK_EQ(domain, POLICY_DOMAIN_CHROME);
+  CHECK_EQ(domain, POLICY_DOMAIN_CHROME, base::NotFatalUntil::M162);
   RecordAffiliationMetrics();
 }
 
 void ProfilePolicyConnector::DoPostInit() {
-  DCHECK(policy_service_);
+  CHECK(policy_service_, base::NotFatalUntil::M162);
   policy_service_->AddObserver(POLICY_DOMAIN_CHROME, this);
 }
 
@@ -754,7 +771,7 @@ std::string ProfilePolicyConnector::GetTimeToFirstPolicyLoadMetricSuffix()
   }
 
 #if BUILDFLAG(IS_CHROMEOS)
-  DCHECK(user_);
+  CHECK(user_, base::NotFatalUntil::M162);
   switch (user_->GetType()) {
     case user_manager::UserType::kRegular:
       if (user_manager::UserManager::Get()->IsUserCryptohomeDataEphemeral(
@@ -788,10 +805,7 @@ void ProfilePolicyConnector::UseLocalTestPolicyProvider() {
   policy_service_->UseLocalTestPolicyProvider(local_test_policy_provider_);
   policy_service()->RefreshPolicies(base::DoNothing(),
                                     PolicyFetchReason::kTest);
-  if (!local_test_infobar_visibility_manager_->infobar_active()) {
-    local_test_infobar_visibility_manager_
-        ->AddInfobarsForActiveLocalTestPoliciesAllTabs();
-  }
+  UpdateLocalTestInfoBar(/*show=*/true);
 }
 
 void ProfilePolicyConnector::RevertUseLocalTestPolicyProvider() {
@@ -801,15 +815,51 @@ void ProfilePolicyConnector::RevertUseLocalTestPolicyProvider() {
       ->ClearPolicies();
   policy_service()->RefreshPolicies(base::DoNothing(),
                                     PolicyFetchReason::kTest);
-  if (local_test_infobar_visibility_manager_->infobar_active()) {
-    local_test_infobar_visibility_manager_
-        ->DismissInfobarsForActiveLocalTestPoliciesAllTabs();
-  }
+  UpdateLocalTestInfoBar(/*show=*/false);
 }
 
 bool ProfilePolicyConnector::IsUsingLocalTestPolicyProvider() const {
   return local_test_policy_provider_ &&
          local_test_policy_provider_->is_active();
+}
+
+void ProfilePolicyConnector::UpdateLocalTestInfoBar(bool show) {
+#if !BUILDFLAG(IS_ANDROID)
+  if (infobars::IsInfoBarMigrated(
+          infobars::InfoBarDelegate::LOCAL_TEST_POLICIES_APPLIED_INFOBAR)) {
+    RunNowOnOrPostToUIThread(base::BindOnce(
+        [](bool show) {
+          if (auto* manager =
+                  infobars::BrowserInfoBarManager::From(g_browser_process)) {
+            if (show) {
+              manager->ShowGlobally(infobars::InfoBarDelegate::
+                                        LOCAL_TEST_POLICIES_APPLIED_INFOBAR);
+            } else {
+              manager->Hide(infobars::InfoBarDelegate::
+                                LOCAL_TEST_POLICIES_APPLIED_INFOBAR);
+            }
+          }
+        },
+        show));
+    return;
+  }
+#endif
+
+  if (show) {
+    if (!local_test_infobar_visibility_manager_->infobar_active()) {
+      RunNowOnOrPostToUIThread(
+          base::BindOnce(&internal::LocalTestInfoBarVisibilityManager::
+                             AddInfobarsForActiveLocalTestPoliciesAllTabs,
+                         local_test_infobar_visibility_manager_->GetWeakPtr()));
+    }
+  } else {
+    if (local_test_infobar_visibility_manager_->infobar_active()) {
+      RunNowOnOrPostToUIThread(
+          base::BindOnce(&internal::LocalTestInfoBarVisibilityManager::
+                             DismissInfobarsForActiveLocalTestPoliciesAllTabs,
+                         local_test_infobar_visibility_manager_->GetWeakPtr()));
+    }
+  }
 }
 
 void ProfilePolicyConnector::RecordAffiliationMetrics() {
@@ -839,7 +889,7 @@ ProfilePolicyConnector::CreatePolicyServiceWithInitializationThrottled(
         policy_providers,
     std::vector<std::unique_ptr<PolicyMigrator>> migrators,
     ConfigurationPolicyProvider* user_policy_delegate) {
-  DCHECK(user_policy_delegate);
+  CHECK(user_policy_delegate, base::NotFatalUntil::M162);
 
   auto policy_service = PolicyServiceImpl::CreateWithThrottledInitialization(
       policy_providers, PolicyServiceImpl::ScopeForMetrics::kUser,

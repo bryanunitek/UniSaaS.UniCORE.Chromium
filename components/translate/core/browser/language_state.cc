@@ -7,6 +7,7 @@
 #include "base/check.h"
 #include "components/translate/core/browser/translate_driver.h"
 #include "components/translate/core/browser/translate_metrics_logger.h"
+#include "components/translate/core/common/translate_language_matcher.h"
 
 namespace translate {
 
@@ -49,6 +50,7 @@ void LanguageState::DidNavigate(bool is_same_document_navigation,
   SetIsPageTranslated(false);
 
   translation_pending_ = false;
+  ClearPendingTranslationLanguages();
   translation_error_ = false;
   translation_declined_ = false;
   translation_type_ = TranslationType::kUninitialized;
@@ -56,6 +58,7 @@ void LanguageState::DidNavigate(bool is_same_document_navigation,
   navigation_from_google_ = navigation_from_google;
 
   SetTranslateEnabled(false);
+  pdf_translatability_status_ = PdfTranslatabilityStatus::kNotChecked;
 }
 
 void LanguageState::LanguageDetermined(
@@ -123,6 +126,18 @@ void LanguageState::SetIsPageTranslated(bool value) {
   // With the translation done, the translate feature must be enabled.
   if (is_page_translated_)
     SetTranslateEnabled(true);
+}
+
+void LanguageState::SetPredefinedTargetLanguage(
+    const base::i18n::LanguageTag& language,
+    bool should_auto_translate) {
+  predefined_target_language_ = std::string(
+      GetTranslateLanguageMatcher().MatchOrDefault(language).tag_string());
+  if (should_auto_translate) {
+    should_auto_translate_to_predefined_target_language_ = language;
+  } else {
+    should_auto_translate_to_predefined_target_language_ = std::nullopt;
+  }
 }
 
 }  // namespace translate

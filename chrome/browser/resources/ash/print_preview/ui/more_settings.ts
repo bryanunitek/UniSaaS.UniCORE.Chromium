@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_hidden_style.css.js';
-import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
-import 'chrome://resources/cr_elements/cr_expand_button/cr_expand_button.js';
+import 'chrome://resources/ash/common/cr_elements/cr_hidden_style.css.js';
+import 'chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js';
+import 'chrome://resources/ash/common/cr_elements/cr_expand_button/cr_expand_button.js';
 import '/strings.m.js';
 
-import type {CrExpandButtonElement} from 'chrome://resources/cr_elements/cr_expand_button/cr_expand_button.js';
+import type {CrExpandButtonElement} from 'chrome://resources/ash/common/cr_elements/cr_expand_button/cr_expand_button.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
@@ -45,8 +45,8 @@ class PrintPreviewMoreSettingsElement extends PolymerElement {
     };
   }
 
-  settingsExpandedByUser: boolean;
-  disabled: boolean;
+  declare settingsExpandedByUser: boolean;
+  declare disabled: boolean;
   private metrics_: MetricsContext = MetricsContext.printSettingsUi();
 
   /**

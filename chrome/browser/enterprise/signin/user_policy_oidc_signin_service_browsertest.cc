@@ -36,6 +36,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/policy/core/common/cloud/mock_cloud_external_data_manager.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_store.h"
@@ -51,6 +52,7 @@
 #include "content/public/test/browser_test.h"
 #include "extensions/buildflags/buildflags.h"
 #include "google_apis/gaia/gaia_id.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_network_connection_tracker.h"
 #include "services/network/test/test_url_loader_factory.h"
@@ -145,7 +147,7 @@ class UserPolicyOidcSigninServiceTestBase
     profile_path_ = user_data_dir.AppendASCII("OidcTestProfile");
 
     // Set policy data on the main profile to prevent it from creating jobs.
-    Profile* main_profile = browser()->profile();
+    Profile* main_profile = browser()->GetProfile();
     auto policy_data = std::make_unique<enterprise_management::PolicyData>();
     policy_data->set_gaia_id(kExampleGaiaId.ToString());
     policy_data->set_command_invalidation_topic("fake-topic");
@@ -189,7 +191,7 @@ class UserPolicyOidcSigninServiceTestBase
   bool has_policy() { return has_policy_; }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   void SetPolicyData() {

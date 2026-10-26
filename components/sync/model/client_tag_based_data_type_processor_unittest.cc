@@ -199,6 +199,11 @@ class TestDataTypeSyncBridge : public FakeDataTypeSyncBridge {
   void ApplyDisableSyncChanges(std::unique_ptr<MetadataChangeList>
                                    delete_metadata_change_list) override {
     sync_started_ = false;
+    if (apply_disable_sync_changes_error_.has_value()) {
+      delete_metadata_change_list->DropAllChanges();
+      change_processor()->ReportError(*apply_disable_sync_changes_error_);
+      return;
+    }
     FakeDataTypeSyncBridge::ApplyDisableSyncChanges(
         std::move(delete_metadata_change_list));
   }
@@ -233,6 +238,10 @@ class TestDataTypeSyncBridge : public FakeDataTypeSyncBridge {
 
   void SetMergeFullSyncDataError(const ModelError& error) {
     merge_full_sync_data_error_ = error;
+  }
+
+  void SetApplyDisableSyncChangesError(const ModelError& error) {
+    apply_disable_sync_changes_error_ = error;
   }
 
   int merge_call_count() const { return merge_call_count_; }
@@ -312,6 +321,7 @@ class TestDataTypeSyncBridge : public FakeDataTypeSyncBridge {
   base::OnceCallback<void(const FailedCommitResponseDataList&)>
       on_commit_attempt_errors_callback_;
   std::optional<ModelError> merge_full_sync_data_error_;
+  std::optional<ModelError> apply_disable_sync_changes_error_;
 };
 
 }  // namespace
@@ -540,6 +550,8 @@ class ClientTagBasedDataTypeProcessorTest : public ::testing::Test {
 
   bool error_reported() const { return error_reported_; }
 
+  base::HistogramTester* histogram_tester() { return histogram_tester_.get(); }
+
  private:
   // This sets SequencedTaskRunner::CurrentDefaultHandle on the current thread,
   // which the type processor will pick up as the sync task runner.
@@ -589,32 +601,6 @@ TEST_F(ClientTagBasedDataTypeProcessorTest,
   // If sync gets started, the account should still be tracked.
   OnSyncStarting(kPersistedGaiaId);
   EXPECT_EQ(kPersistedGaiaId, type_processor()->TrackedGaiaId());
-}
-
-TEST_F(ClientTagBasedDataTypeProcessorTest,
-       ShouldExposeNewlyTrackedGaiaIdIfChanged) {
-  const GaiaId kPersistedGaiaId("PersistedGaiaId");
-
-  std::unique_ptr<MetadataBatch> metadata_batch = db()->CreateMetadataBatch();
-  sync_pb::DataTypeState data_type_state(metadata_batch->GetDataTypeState());
-  data_type_state.set_initial_sync_state(
-      sync_pb::DataTypeState_InitialSyncState_INITIAL_SYNC_DONE);
-  data_type_state.set_cache_guid(kCacheGuid);
-  data_type_state.set_authenticated_obfuscated_gaia_id(
-      kPersistedGaiaId.ToString());
-  data_type_state.mutable_progress_marker()->set_data_type_id(
-      GetSpecificsFieldNumberFromDataType(GetDataType()));
-  metadata_batch->SetDataTypeState(data_type_state);
-  type_processor()->ModelReadyToSync(std::move(metadata_batch));
-
-  // Even prior to starting sync, the account ID should already be tracked.
-  ASSERT_EQ(kPersistedGaiaId, type_processor()->TrackedGaiaId());
-
-  // If sync gets started, the new account should be tracked.
-  const GaiaId kNewGaiaId("NewGaiaId");
-  OnSyncStarting(kNewGaiaId);
-  EXPECT_TRUE(type_processor()->IsTrackingMetadata());
-  EXPECT_EQ(kNewGaiaId, type_processor()->TrackedGaiaId());
 }
 
 TEST_F(ClientTagBasedDataTypeProcessorTest,
@@ -812,6 +798,48 @@ TEST_F(ClientTagBasedDataTypeProcessorTest, ShouldReportErrorDuringActivation) {
   EXPECT_EQ(type_processor()->GetError()->location(), error.location());
   ASSERT_TRUE(received_error.has_value());
   EXPECT_EQ(received_error->location(), error.location());
+}
+
+// Test that stopping sync while connection is in flight prevents ConnectSync()
+// from connecting the worker, and does not cause a CHECK failure when
+// OnSyncStarting() is called again.
+TEST_F(ClientTagBasedDataTypeProcessorTest,
+       ShouldIgnoreConnectSyncIfStoppedWhileInFlight) {
+  InitializeToMetadataLoaded();
+
+  DataTypeActivationRequest request;
+  request.error_handler = base::BindRepeating([](const ModelError& error) {});
+  request.cache_guid = kCacheGuid;
+  request.authenticated_gaia_id = kDefaultAuthenticatedGaiaId;
+  request.sync_mode = SyncMode::kFull;
+  request.configuration_start_time = base::Time::Now();
+
+  base::RunLoop loop;
+  std::unique_ptr<syncer::DataTypeActivationResponse>
+      data_type_activation_response;
+  type_processor()->OnSyncStarting(
+      request,
+      base::BindLambdaForTesting(
+          [&](std::unique_ptr<syncer::DataTypeActivationResponse> response) {
+            data_type_activation_response = std::move(response);
+            loop.Quit();
+          }));
+  loop.Run();
+
+  ASSERT_NE(nullptr, data_type_activation_response);
+
+  // Stop sync while connection is in flight (before ConnectSync is invoked).
+  type_processor()->OnSyncStopping(KEEP_METADATA);
+
+  // Mimic the in-flight connection completing on the sync thread and posting
+  // ConnectSync back to the model thread.
+  OnReadyToConnect(std::move(data_type_activation_response));
+
+  // The processor should not be connected since sync was stopped.
+  EXPECT_FALSE(type_processor()->IsConnected());
+
+  // Starting sync again should succeed and not trigger CHECK(!IsConnected()).
+  OnSyncStarting();
 }
 
 // Test that an error during the merge is propagated to the error handler.
@@ -2687,6 +2715,70 @@ TEST_F(ClientTagBasedDataTypeProcessorTest,
 }
 
 TEST_F(ClientTagBasedDataTypeProcessorTest,
+       ShouldDeleteMetadataWhenAuthenticatedGaiaIdMismatch) {
+  // Commit item.
+  InitializeToReadyState();
+  WriteItemAndAck(kKey1, kValue1);
+  // Reset the processor to simulate a restart.
+  ResetState(/*keep_db=*/true);
+
+  // A new processor loads the metadata after changing the authenticated Gaia
+  // ID.
+  bridge()->SetInitialSyncState(sync_pb::DataTypeState::INITIAL_SYNC_DONE);
+
+  std::unique_ptr<MetadataBatch> metadata_batch = db()->CreateMetadataBatch();
+  sync_pb::DataTypeState data_type_state(metadata_batch->GetDataTypeState());
+  data_type_state.set_authenticated_obfuscated_gaia_id("WrongGaiaId");
+  metadata_batch->SetDataTypeState(data_type_state);
+
+  type_processor()->ModelReadyToSync(std::move(metadata_batch));
+  ASSERT_TRUE(type_processor()->IsModelReadyToSyncForTest());
+
+  const GaiaId kNewGaiaId("NewGaiaId");
+  OnSyncStarting(kNewGaiaId);
+
+  // Model should still be ready to sync.
+  ASSERT_TRUE(type_processor()->IsModelReadyToSyncForTest());
+  // OnSyncStarting() should have completed.
+  ASSERT_NE(nullptr, worker());
+
+  // Upon a mismatch, metadata should have been cleared.
+  EXPECT_EQ(0U, db()->metadata_count());
+  EXPECT_FALSE(type_processor()->IsTrackingMetadata());
+  EXPECT_EQ(GaiaId(), type_processor()->TrackedGaiaId());
+  // Initial update.
+  worker()->UpdateFromServer();
+  EXPECT_TRUE(type_processor()->IsTrackingMetadata());
+  EXPECT_EQ(kNewGaiaId, type_processor()->TrackedGaiaId());
+}
+
+TEST_F(ClientTagBasedDataTypeProcessorTest,
+       ShouldKeepMetadataWhenAuthenticatedGaiaIdIsEmptyForLocalSync) {
+  // Simulate initial sync and commit in local sync mode (empty Gaia ID).
+  ModelReadyToSync();
+  OnSyncStarting(/*authenticated_gaia_id=*/GaiaId());
+  worker()->UpdateFromServer();
+  WriteItemAndAck(kKey1, kValue1);
+  ASSERT_EQ(1U, db()->metadata_count());
+
+  // Reset the processor to simulate a browser restart.
+  ResetState(/*keep_db=*/true);
+
+  type_processor()->ModelReadyToSync(db()->CreateMetadataBatch());
+  ASSERT_TRUE(type_processor()->IsModelReadyToSyncForTest());
+  EXPECT_TRUE(type_processor()->IsTrackingMetadata());
+  EXPECT_EQ(GaiaId(), type_processor()->TrackedGaiaId());
+
+  // Restarting in local sync mode (empty Gaia ID) should preserve metadata.
+  OnSyncStarting(/*authenticated_gaia_id=*/GaiaId());
+  ASSERT_TRUE(type_processor()->IsModelReadyToSyncForTest());
+  EXPECT_NE(nullptr, worker());
+  EXPECT_EQ(1U, db()->metadata_count());
+  EXPECT_TRUE(type_processor()->IsTrackingMetadata());
+  EXPECT_EQ(GaiaId(), type_processor()->TrackedGaiaId());
+}
+
+TEST_F(ClientTagBasedDataTypeProcessorTest,
        ShouldDeleteMetadataWhenDataTypeIdMismatch) {
   // Commit item.
   InitializeToReadyState();
@@ -3082,6 +3174,30 @@ TEST_F(ClientTagBasedDataTypeProcessorTest, ShouldResetOnInvalidCacheGuid) {
 
   ModelReadyToSync();
   OnSyncStarting();
+  EXPECT_EQ(0U, ProcessorEntityCount());
+}
+
+// Regression test for crbug.com/450738520#comment7.
+TEST_F(ClientTagBasedDataTypeProcessorTest,
+       ShouldHandleErrorWhenResettingMetadataOnInvalidCacheGuid) {
+  ResetStateWriteItem(kKey1, kValue1);
+  InitializeToMetadataLoaded();
+  OnSyncStarting();
+  ASSERT_EQ(1U, ProcessorEntityCount());
+
+  ResetStateWriteItem(kKey1, kValue1);
+  sync_pb::DataTypeState data_type_state = db()->data_type_state();
+  data_type_state.set_cache_guid("OtherCacheGuid");
+  db()->set_data_type_state(data_type_state);
+
+  ModelReadyToSync();
+  bridge()->SetApplyDisableSyncChangesError(
+      ModelError(FROM_HERE, ModelError::Type::kGenericTestError));
+  ExpectError(ClientTagBasedDataTypeProcessor::ErrorSite::kReportedByBridge);
+  OnSyncStarting();
+  EXPECT_TRUE(error_reported());
+  EXPECT_TRUE(type_processor()->GetError().has_value());
+  EXPECT_FALSE(bridge()->sync_started());
   EXPECT_EQ(0U, ProcessorEntityCount());
 }
 

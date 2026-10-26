@@ -22,6 +22,7 @@
 #include "media/base/audio_parameters.h"
 #include "media/base/media_switches.h"
 #include "media/capture/video_capture_types.h"
+#include "media/media_buildflags.h"
 #include "media/webrtc/constants.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/mediastream/media_stream_controls.h"
@@ -63,6 +64,7 @@
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_base.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 #include "ui/gfx/geometry/size.h"
@@ -113,6 +115,15 @@ void UpdateRequestResult(UserMediaRequest* request,
     case UserMediaRequestType::kDisplayMedia:
       base::UmaHistogramEnumeration(
           "WebRTC.UserMediaRequest.GetDisplayMedia.Result4", result);
+      if (request->Audio()) {
+        base::UmaHistogramEnumeration(
+            "WebRTC.UserMediaRequest.GetDisplayMedia.AudioCapture.Result4",
+            result);
+      } else {
+        base::UmaHistogramEnumeration(
+            "WebRTC.UserMediaRequest.GetDisplayMedia.VideoOnly.Result4",
+            result);
+      }
       return;
     case UserMediaRequestType::kAllScreensMedia:
       base::UmaHistogramEnumeration(
@@ -143,26 +154,25 @@ void MaybeLogStreamDevice(const int32_t& request_id,
 std::string GetTrackLogString(int32_t request_id,
                               MediaStreamComponent* component,
                               bool is_pending) {
-  String str = String::Format(
-      "StartAudioTrack({track=[request_id = %d, id: %s, enabled: %d]}, "
-      "{is_pending=%d})",
-      request_id, component->Id().Utf8().c_str(), component->Enabled(),
-      is_pending);
+  String str = Format(
+      "StartAudioTrack({{track=[request_id = {}, id: {}, enabled: {:d}]}}, "
+      "{{is_pending={:d}}})",
+      request_id, component->Id(), component->Enabled(), is_pending);
   return str.Utf8();
 }
 
 std::string GetTrackSourceLogString(blink::MediaStreamAudioSource* source) {
   const MediaStreamDevice& device = source->device();
   StringBuilder builder;
-  builder.AppendFormat("StartAudioTrack(source: {session_id=%s}, ",
-                       device.session_id().ToString().c_str());
-  builder.AppendFormat("{is_local_source=%d}, ", source->is_local_source());
-  builder.AppendFormat("{device=[id: %s", device.id.c_str());
+  FormatTo(builder,
+           "StartAudioTrack(source: {{session_id={}}}, {{is_local_source={}}}, "
+           "{{device=[id: {}",
+           device.session_id().ToString(), source->is_local_source(),
+           device.id);
   if (device.group_id.has_value()) {
-    builder.AppendFormat(", group_id: %s", device.group_id.value().c_str());
+    FormatTo(builder, ", group_id: {}", device.group_id.value());
   }
-  builder.AppendFormat(", name: %s", device.name.c_str());
-  builder.Append("]})");
+  FormatTo(builder, ", name: {}]}})", device.name);
   return StringView(builder).Utf8();
 }
 
@@ -171,10 +181,9 @@ std::string GetOnTrackStartedLogString(
     blink::WebPlatformMediaStreamSource* source,
     MediaStreamRequestResult result) {
   const MediaStreamDevice& device = source->device();
-  String str = String::Format(
-      "OnTrackStarted({request_id = %d}, {session_id=%s}, {result=%s})",
-      request_id, device.session_id().ToString().c_str(),
-      base::ToString(result).c_str());
+  String str = Format(
+      "OnTrackStarted({{request_id = {}}}, {{session_id={}}}, {{result={}}})",
+      request_id, device.session_id().ToString(), base::ToString(result));
   return str.Utf8();
 }
 
@@ -768,6 +777,8 @@ void UserMediaProcessor::SetupAudioInput() {
       request->suppress_local_audio_playback();
 
   stream_controls->restrict_own_audio = request->restrict_own_audio();
+  stream_controls->audio_selection_preferred =
+      request->audio_selection_preferred();
 
   TrackControls& audio_controls = stream_controls->audio;
   audio_controls.stream_type =
@@ -940,13 +951,13 @@ UserMediaProcessor::DetermineExistingAudioSessionId(
     }
   }
 
-  // Return the session ID associated to the source that has the same settings
-  // that have been previously selected, if one exists.
+  // Return the session ID associated to the source that has the same session
+  // identity properties, if one exists.
   if (!matching_sources.empty()) {
     for (auto& matching_source : matching_sources) {
       auto* audio_source = static_cast<MediaStreamAudioSource*>(
           matching_source->GetPlatformSource());
-      if (audio_source->HasSameReconfigurableSettings(
+      if (audio_source->HasSameSessionIdentityProperties(
               settings.audio_processing_properties())) {
         return audio_source->device().session_id();
       }
@@ -1644,11 +1655,23 @@ void UserMediaProcessor::OnDeviceRequestStateChange(
   WebPlatformMediaStreamSource* const source_impl = source->GetPlatformSource();
   source_impl->SetSourceMuted(new_state ==
                               mojom::blink::MediaStreamStateChange::PAUSE);
-  MediaStreamVideoSource* video_source =
-      static_cast<blink::MediaStreamVideoSource*>(source_impl);
-  if (!video_source) {
+
+  // The browser process dispatches this notification for *every* device in the
+  // request whose id matches the DesktopMediaID that changed state. For tab
+  // capture with tab audio, the audio and video devices share a single
+  // DesktopMediaID, so this is reached once for the audio source and once for
+  // the video source. Only a video source can be stopped and restarted.
+  //
+  // This type check is what makes the downcast below safe -- it must not be
+  // removed. A null check on the cast result cannot substitute for it: a
+  // static_cast of a non-null pointer is never null, so the audio source would
+  // be silently reinterpreted as a video source.
+  if (source->GetType() != MediaStreamSource::kTypeVideo) {
     return;
   }
+  auto* const video_source = static_cast<MediaStreamVideoSource*>(source_impl);
+  CHECK(video_source);
+
   if (new_state == mojom::blink::MediaStreamStateChange::PAUSE) {
     if (video_source->IsRunning()) {
       video_source->StopForRestart(base::DoNothing(),
@@ -1656,8 +1679,13 @@ void UserMediaProcessor::OnDeviceRequestStateChange(
     }
   } else if (new_state == mojom::blink::MediaStreamStateChange::PLAY) {
     if (video_source->IsStoppedForRestart()) {
-      video_source->Restart(*video_source->GetCurrentFormat(),
-                            base::DoNothing());
+      // A source that is stopped for restart may not have a current format, in
+      // which case there is nothing to restart it with.
+      const std::optional<media::VideoCaptureFormat> current_format =
+          video_source->GetCurrentFormat();
+      if (current_format) {
+        video_source->Restart(*current_format, base::DoNothing());
+      }
     }
   } else {
     NOTREACHED();
@@ -1823,8 +1851,12 @@ MediaStreamSource* UserMediaProcessor::InitializeAudioSourceObject(
       auto* processed_new_source =
           ProcessedLocalAudioSource::From(audio_source.get());
       if (processed_new_source && processed_existing_source) {
-        DCHECK(audio_source->HasSameNonReconfigurableSettings(
-            audio_platform_source));
+        // When different AEC modes require separate processed sources on the
+        // same device, verify that AGC and NS remain interlocked across them.
+        // TODO(crbug.com/558631113): Remove this restriction and DCHECK once
+        // interlocked properties are scoped per session rather than per device.
+        DCHECK(
+            audio_source->HasSameInterlockingProperties(audio_platform_source));
       }
     }
   }
@@ -1836,7 +1868,15 @@ MediaStreamSource* UserMediaProcessor::InitializeAudioSourceObject(
       device_parameters.effects(), device.type);
   capabilities.auto_gain_control = {true, false};
   capabilities.noise_suppression = {true, false};
-  capabilities.voice_isolation = {true, false};
+  capabilities.voice_isolation =
+      GetSupportedVoiceIsolationValues(device_parameters.effects());
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+  // Voice isolation cannot be enabled dynamically if the source was not started
+  // with it enabled.
+  if (!IsVoiceIsolationInitiallyEnabled(audio_source.get())) {
+    capabilities.voice_isolation = {false};
+  }
+#endif
 
   if (RuntimeEnabledFeatures::RestrictOwnAudioEnabled()) {
     if (device.type == mojom::blink::MediaStreamType::DISPLAY_AUDIO_CAPTURE) {

@@ -68,7 +68,6 @@
     "oncuechange",
     "oncut",
     "ondblclick",
-    "ondismiss",
     "ondrag",
     "ondragend",
     "ondragenter",
@@ -88,6 +87,7 @@
     "ongotpointercapture",
     "onhashchange",
     "oninput",
+    "oninstallresult",
     "oninvalid",
     "onkeydown",
     "onkeypress",
@@ -136,7 +136,6 @@
     "onrepeat",
     "onreset",
     "onresize",
-    "onresolve",
     "onscroll",
     "onscrollend",
     "onscrollsnapchange",
@@ -174,5 +173,6 @@
     "onwebkitfullscreenerror",
     "onwebkittransitionend",
     "onwheel"
-  ]
+  ],
+  "removeProcessingInstructions": []
 }

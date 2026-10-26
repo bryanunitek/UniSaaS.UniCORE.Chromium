@@ -33,6 +33,7 @@
 
 #include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/public/mojom/loader/same_document_navigation_type.mojom-blink.h"
 #include "third_party/blink/renderer/core/ad_tracker/ad_tracker.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -48,7 +49,7 @@
 
 namespace blink {
 
-class GenericFontFamilySettings;
+class DevToolsEmulator;
 
 namespace probe {
 class RecalculateStyle;
@@ -69,12 +70,13 @@ enum class ResourceType : uint8_t;
 class CORE_EXPORT InspectorPageAgent final
     : public InspectorBaseAgent<protocol::Page::Metainfo> {
  public:
-  class Client {
+  class Client : public GarbageCollectedMixin {
    public:
     virtual ~Client() = default;
     virtual void PageLayoutInvalidated(bool resized) {}
     virtual void WaitForDebugger() {}
     virtual bool IsPausedForNewWindow() { return false; }
+    virtual void UpdateInputVisualizationState() {}
   };
 
   enum ResourceType {
@@ -112,7 +114,6 @@ class CORE_EXPORT InspectorPageAgent final
   InspectorPageAgent(InspectedFrames*,
                      Client*,
                      InspectorResourceContentLoader*,
-                     v8_inspector::V8InspectorSession*,
                      const String& script_to_evaluate_on_load,
                      InspectorInjectedScriptManager* injected_script_manager);
   InspectorPageAgent(const InspectorPageAgent&) = delete;
@@ -153,6 +154,9 @@ class CORE_EXPORT InspectorPageAgent final
       const String& frame_id,
       std::unique_ptr<protocol::Network::AdAncestry>* out_ad_script_ancestry)
       override;
+  protocol::Response getSpellCheckCustomDictionary(
+      const String& frame_id,
+      std::unique_ptr<protocol::Array<String>>* words) override;
   void searchInResource(const String& frame_id,
                         const String& url,
                         const String& query,
@@ -162,6 +166,10 @@ class CORE_EXPORT InspectorPageAgent final
   protocol::Response setDocumentContent(const String& frame_id,
                                         const String& html) override;
   protocol::Response setBypassCSP(bool enabled) override;
+  protocol::Response setInputVisualization(std::optional<bool> clicks) override;
+  bool IsInputVisualizationClicksEnabled() const {
+    return input_visualization_clicks_enabled_.Get();
+  }
 
   protocol::Response getPermissionsPolicyState(
       const String& frame_id,
@@ -172,13 +180,6 @@ class CORE_EXPORT InspectorPageAgent final
       const String& frame_id,
       std::unique_ptr<protocol::Array<protocol::Page::OriginTrial>>*) override;
 
-  protocol::Response startScreencast(
-      std::optional<String> format,
-      std::optional<int> quality,
-      std::optional<int> max_width,
-      std::optional<int> max_height,
-      std::optional<int> every_nth_frame) override;
-  protocol::Response stopScreencast() override;
   protocol::Response getLayoutMetrics(
       std::unique_ptr<protocol::Page::LayoutViewport>* out_layout_viewport,
       std::unique_ptr<protocol::Page::VisualViewport>* out_visual_viewport,
@@ -266,7 +267,6 @@ class CORE_EXPORT InspectorPageAgent final
 
   // Inspector Controller API
   void Restore() override;
-  bool ScreencastEnabled();
 
   void Trace(Visitor*) const override;
   void Dispose() override;
@@ -309,8 +309,9 @@ class CORE_EXPORT InspectorPageAgent final
 
   void PageLayoutInvalidated(bool resized);
 
+  DevToolsEmulator* GetDevToolsEmulator();
   protocol::Response setFontFamilies(
-      GenericFontFamilySettings& family_settings,
+      DevToolsEmulator& emulator,
       const protocol::Array<protocol::Page::ScriptFontFamilies>& forScripts);
   std::unique_ptr<protocol::Page::Frame> BuildObjectForFrame(LocalFrame*);
   std::unique_ptr<protocol::Page::FrameTree> BuildObjectForFrameTree(
@@ -335,17 +336,16 @@ class CORE_EXPORT InspectorPageAgent final
   HeapHashMap<WeakMember<LocalFrame>, Vector<IsolatedWorldRequest>>
       pending_isolated_worlds_;
   HashMap<String, AdTracker::AdScriptAncestry> frame_ad_script_ancestry_;
-  v8_inspector::V8InspectorSession* v8_session_;
-  Client* client_;
+  Member<Client> client_;
   Member<InspectorResourceContentLoader> inspector_resource_content_loader_;
   int resource_content_loader_client_id_;
   InspectorAgentState::Boolean suppress_file_chooser_;
   InspectorAgentState::Boolean cancel_file_chooser_;
   InspectorAgentState::Boolean enabled_;
   InspectorAgentState::Boolean enable_file_chooser_opened_event_;
-  InspectorAgentState::Boolean screencast_enabled_;
   InspectorAgentState::Boolean lifecycle_events_enabled_;
   InspectorAgentState::Boolean bypass_csp_enabled_;
+  InspectorAgentState::Boolean input_visualization_clicks_enabled_;
   InspectorAgentState::Integer standard_font_size_;
   InspectorAgentState::Integer fixed_font_size_;
   InspectorAgentState::Bytes script_font_families_cbor_;

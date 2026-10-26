@@ -7,12 +7,11 @@
 #include <memory>
 #include <string>
 
-#include "base/byte_count.h"
 #include "base/callback_list.h"
 #include "base/functional/bind.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/performance_controls/test_support/memory_saver_browser_test_mixin.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/tabs/public/tab_interface.h"
@@ -28,6 +27,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace {
 class MockTabUIHelperSubscriber {
@@ -96,7 +96,7 @@ IN_PROC_BROWSER_TEST_F(TabUIHelperBrowserTest, DiscardUiChangeIsNotified) {
 
 IN_PROC_BROWSER_TEST_F(TabUIHelperBrowserTest, NotifyWhenTabVisibilityChanges) {
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GetURL(), WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      browser(), GetURL(), WindowOpenDisposition::kNewBackgroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   TabStripModel* const tab_strip_model = browser()->tab_strip_model();
@@ -152,7 +152,7 @@ IN_PROC_BROWSER_TEST_F(TabUIHelperBrowserTest, NetworkStateChangeIsNotified) {
   EXPECT_CALL(*tab_ui_change_waiter, OnTabUIChange())
       .Times(testing::AnyNumber());
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GetURL(), WindowOpenDisposition::CURRENT_TAB,
+      browser(), GetURL(), WindowOpenDisposition::kCurrentTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   EXPECT_EQ(tab_ui_helper->GetTabNetworkState(), tabs::TabNetworkState::kNone);
 }
@@ -174,7 +174,7 @@ IN_PROC_BROWSER_TEST_F(TabUIHelperBrowserTest, TabCrashStateChangeIsNotified) {
 IN_PROC_BROWSER_TEST_F(TabUIHelperBrowserTest, ShouldHideThrobberIsNotified) {
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(url::kAboutBlankURL),
-      WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      WindowOpenDisposition::kNewBackgroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
   tabs::TabInterface* const tab_interface =
       browser()->GetTabStripModel()->GetTabAtIndex(1);

@@ -137,9 +137,8 @@ void MathMLElement::ParseAttribute(const AttributeModificationParams& param) {
   const AtomicString& event_name =
       HTMLElement::EventNameForAttributeName(param.name);
   if (!event_name.IsNull()) {
-    SetAttributeEventListener(
-        event_name, JSEventHandlerForContentAttribute::Create(
-                        GetExecutionContext(), param.name, param.new_value));
+    SetElementAttributeEventListenerFromScriptBody(
+        event_name, param.name, param.new_value, param.reason);
     return;
   }
 
@@ -170,8 +169,7 @@ const CSSPrimitiveValue* MathMLElement::ParseMathLength(
   // specified.
   CSSParserLocalContext local_context(
       CSSPropertyName(AtomicString(attr_name.ToString())),
-      CSSPropertyID::kInvalid,
-      /*custom_function_name=*/g_null_atom);
+      CSSPropertyID::kInvalid);
   const CSSPrimitiveValue* parsed_value = CSSParser::ParseLengthPercentage(
       value,
       StrictCSSParserContext(GetExecutionContext()->GetSecureContextMode()),

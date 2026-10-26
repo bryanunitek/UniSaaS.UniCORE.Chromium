@@ -5,13 +5,19 @@
 #ifndef CONTENT_PUBLIC_BROWSER_BACKGROUND_FETCH_DELEGATE_H_
 #define CONTENT_PUBLIC_BROWSER_BACKGROUND_FETCH_DELEGATE_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 
+#include "base/byte_size.h"
 #include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "content/common/content_export.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/mojom/data_pipe_getter.mojom-forward.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "third_party/blink/public/mojom/background_fetch/background_fetch.mojom.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -51,14 +57,33 @@ enum class BackgroundFetchPermission {
 class CONTENT_EXPORT BackgroundFetchDelegate {
  public:
   using GetIconDisplaySizeCallback = base::OnceCallback<void(const gfx::Size&)>;
-  using GetUploadDataCallback =
-      base::OnceCallback<void(blink::mojom::SerializedBlobPtr)>;
 
   // Client interface that a BackgroundFetchDelegate would use to signal the
   // progress of a background fetch.
   class Client {
    public:
     virtual ~Client() {}
+
+    // Contains request parameters that are not persisted and need to be
+    // re-provided by the client when a download is resumed after a restart.
+    struct CONTENT_EXPORT GetUploadDataResponse {
+      GetUploadDataResponse();
+      ~GetUploadDataResponse();
+      GetUploadDataResponse(const GetUploadDataResponse&) = delete;
+      GetUploadDataResponse& operator=(const GetUploadDataResponse&) = delete;
+      GetUploadDataResponse(GetUploadDataResponse&& other);
+      GetUploadDataResponse& operator=(GetUploadDataResponse&& other);
+
+      // The request body to use for the download.
+      mojo::PendingRemote<network::mojom::DataPipeGetter> data_pipe_getter;
+      base::ByteSize size;
+
+      // The custom URLLoaderFactory to use for the request.
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory;
+    };
+
+    using GetUploadDataCallback =
+        base::OnceCallback<void(GetUploadDataResponse)>;
 
     // Called when the entire download job has been cancelled by the delegate,
     // e.g. because the user clicked cancel on a notification.
@@ -101,6 +126,8 @@ class CONTENT_EXPORT BackgroundFetchDelegate {
                                GetUploadDataCallback callback) = 0;
   };
 
+  using GetUploadDataCallback = Client::GetUploadDataCallback;
+
   BackgroundFetchDelegate();
 
   virtual ~BackgroundFetchDelegate();
@@ -126,9 +153,11 @@ class CONTENT_EXPORT BackgroundFetchDelegate {
       const std::string& method,
       const GURL& url,
       ::network::mojom::CredentialsMode credentials_mode,
+      ::network::mojom::RequestMode request_mode,
       const net::NetworkTrafficAnnotationTag& traffic_annotation,
       const net::HttpRequestHeaders& headers,
-      bool has_request_body) = 0;
+      bool has_request_body,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) = 0;
 
   // Aborts any downloads associated with |job_unique_id|.
   virtual void Abort(const std::string& job_unique_id) = 0;

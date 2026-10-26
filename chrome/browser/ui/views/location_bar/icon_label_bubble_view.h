@@ -71,7 +71,7 @@ class IconLabelBubbleView : public views::InkDropObserver,
     explicit IconLabelBubbleAnimationLayoutStrategy(IconLabelBubbleView& host);
     virtual ~IconLabelBubbleAnimationLayoutStrategy();
 
-    IconLabelBubbleView* host() { return host_; }
+    IconLabelBubbleView* host() const { return host_; }
 
     virtual views::ProposedLayout CalculateProposedLayout(
         const views::SizeBounds& size_bounds,
@@ -87,6 +87,7 @@ class IconLabelBubbleView : public views::InkDropObserver,
     virtual void SetupAnimation(gfx::SlideAnimation* animation, bool show) const = 0;
     virtual void ResetAnimation(IconLabelBubbleView* host, bool show_label) = 0;
     virtual void OnAnimationEnded(IconLabelBubbleView* host) = 0;
+    virtual bool ShouldCollapse() const;
     virtual views::ImageView* GetTrailingImageView();
 
    private:
@@ -149,6 +150,7 @@ class IconLabelBubbleView : public views::InkDropObserver,
   views::ProposedLayout CalculateProposedLayout(
       const views::SizeBounds& size_bounds) const override;
   gfx::Size GetMinimumSize() const override;
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 
   // Returns true when the label should be visible.
   virtual bool ShouldShowLabel() const;
@@ -169,7 +171,7 @@ class IconLabelBubbleView : public views::InkDropObserver,
 
   void SetCrossfadeImage(const ui::ImageModel& image);
 
-  gfx::RoundedCornersF GetCornerRadii() const;
+  virtual gfx::RoundedCornersF GetCornerRadii() const;
   void SetCornerRadii(const gfx::RoundedCornersF& radii);
 
   const views::View* GetImageContainerView() const {
@@ -200,6 +202,10 @@ class IconLabelBubbleView : public views::InkDropObserver,
 
   gfx::SlideAnimation& slide_animation_for_testing() {
     return slide_animation_;
+  }
+
+  double open_state_fraction_for_testing() const {
+    return open_state_fraction_;
   }
 
  protected:
@@ -238,6 +244,11 @@ class IconLabelBubbleView : public views::InkDropObserver,
   virtual bool IsBubbleShowing() const;
 
   virtual void OnTouchUiChanged();
+
+  // Returns true if the view is painted on a solid background, or if it is
+  // intended to be transparent to the view over which it is painted. The view's
+  // background and foreground color accessors will reflect this preference.
+  virtual bool PaintedOnSolidBackground() const;
 
   // views::LabelButton:
   gfx::Size CalculatePreferredSize(
@@ -350,11 +361,6 @@ class IconLabelBubbleView : public views::InkDropObserver,
   // Gets the highlight path for ink drops and focus rings using the current
   // bounds and separator visibility.
   SkPath GetHighlightPath() const;
-
-  // Returns true if the view is painted on a solid background, or if it is
-  // intended to be transparent to the view over which it is painted. The view's
-  // background and foreground color accessors will reflect this preference.
-  bool PaintedOnSolidBackground() const;
 
   raw_ptr<Delegate, DanglingUntriaged> delegate_;
 

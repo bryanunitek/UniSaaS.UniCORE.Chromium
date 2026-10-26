@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.contextualsearch;
 
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -23,6 +25,8 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.UserDataHost;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.tab.Tab;
@@ -63,12 +67,8 @@ public class ContextualSearchTabHelperTest {
     }
 
     @After
-    public void tearDown() throws Exception {
-        java.lang.reflect.Field field =
-                ContextualSearchTabHelper.class.getDeclaredField("sNativeHelperMap");
-        field.setAccessible(true);
-        java.util.Map<?, ?> map = (java.util.Map<?, ?>) field.get(null);
-        map.clear();
+    public void tearDown() {
+        ContextualSearchTabHelper.clearNativeHelperMapForTesting();
     }
 
     @Test
@@ -137,11 +137,15 @@ public class ContextualSearchTabHelperTest {
         verify(mTabHelperJniMock, times(1)).init(mProfile);
     }
 
-    private void assertNotNull(Object object) {
-        org.junit.Assert.assertNotNull(object);
-    }
+    @Test
+    @EnableFeatures(ChromeFeatureList.CLANK_STARTUP_TAB_OPTIMIZATIONS)
+    public void testOnContentChanged_defersNativeAndTemplateUrlInit() {
+        mHelper = ContextualSearchTabHelper.from(mTab);
+        assertNotNull(mHelper);
 
-    private void assertNull(Object object) {
-        org.junit.Assert.assertNull(object);
+        mHelper.onContentChanged(mTab);
+
+        verify(mTabHelperJniMock, never()).init(any());
+        verify(mTemplateUrlService, never()).addObserver(any());
     }
 }

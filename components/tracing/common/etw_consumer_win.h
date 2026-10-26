@@ -9,9 +9,12 @@
 
 #include <atomic>
 #include <memory>
+#include <string>
 #include <unordered_map>
 
+#include "absl/container/flat_hash_map.h"
 #include "base/containers/span.h"
+#include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/process/process_handle.h"
 #include "base/sequence_checker.h"
@@ -23,6 +26,7 @@
 #include "services/tracing/public/cpp/perfetto/interning_index.h"
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/trace_writer.h"
 #include "third_party/perfetto/include/perfetto/tracing/trace_writer_base.h"
+#include "third_party/perfetto/protos/perfetto/trace/interned_data/interned_data.pbzero.h"
 
 namespace perfetto::protos::pbzero {
 class EtwTraceEvent;
@@ -47,9 +51,11 @@ class TRACING_EXPORT EtwConsumer
   // process identified by `client_pid` and emit Perfetto events via
   // `trace_writer`. If `privacy_filtering_enabled` is true, omits strings from
   // the trace.
-  EtwConsumer(base::ProcessId client_pid,
-              std::unique_ptr<perfetto::TraceWriterBase> trace_writer,
-              bool privacy_filtering_enabled);
+  EtwConsumer(
+      base::ProcessId client_pid,
+      std::unique_ptr<perfetto::TraceWriterBase> trace_writer,
+      bool privacy_filtering_enabled,
+      absl::flat_hash_map<base::FilePath, std::string> known_debug_ids = {});
   EtwConsumer(const EtwConsumer&) = delete;
   EtwConsumer& operator=(const EtwConsumer&) = delete;
   ~EtwConsumer();
@@ -118,6 +124,11 @@ class TRACING_EXPORT EtwConsumer
                           const ETW_BUFFER_CONTEXT& buffer_context,
                           size_t pointer_size,
                           base::span<const uint8_t> packet_data)
+      VALID_CONTEXT_REQUIRED(sequence_checker_);
+  void HandleImageLoadEvent(const EVENT_HEADER& header,
+                            const ETW_BUFFER_CONTEXT& buffer_context,
+                            size_t pointer_size,
+                            base::span<const uint8_t> packet_data)
       VALID_CONTEXT_REQUIRED(sequence_checker_);
   void HandleStackWalkEvent(const EVENT_HEADER& header,
                             const ETW_BUFFER_CONTEXT& buffer_context,
@@ -272,7 +283,7 @@ class TRACING_EXPORT EtwConsumer
 
   // Returns a new perfetto trace event to be emitted for an ETW event with a
   // given event header. The timestamp and cpu fields of the returned event are
-  // prepopulated.
+  // prepopulated. Clears interned data and starts a new packet first if needed.
   perfetto::protos::pbzero::EtwTraceEvent* MakeNextEvent(
       const EVENT_HEADER& header,
       const ETW_BUFFER_CONTEXT& buffer_context)
@@ -289,7 +300,7 @@ class TRACING_EXPORT EtwConsumer
 
   // Returns a new perfetto trace event to be emitted for an ETW event with a
   // given `QueryPerformanceCounter` (QPC) timestamp.
-  perfetto::protos::pbzero::EtwTraceEvent* MakeNextEventWithTimestamp(
+  perfetto::protos::pbzero::EtwTraceEvent* AppendEvent(
       uint64_t qpc_timestamp,
       const ETW_BUFFER_CONTEXT& buffer_context)
       VALID_CONTEXT_REQUIRED(sequence_checker_);
@@ -298,11 +309,13 @@ class TRACING_EXPORT EtwConsumer
   void FinalizePreviousData() VALID_CONTEXT_REQUIRED(sequence_checker_);
 
   // Finalizes previous data and starts a new packet, i.e., event bundle.
-  void StartNewPacket(uint64_t qpc_timestamp)
+  void StartNewPacket(uint64_t qpc_timestamp, uint32_t sequence_flags)
       VALID_CONTEXT_REQUIRED(sequence_checker_);
 
-  // Clears interned data.
-  void ResetEmittedState() VALID_CONTEXT_REQUIRED(sequence_checker_);
+  // If incremental state needs to be reset, clears interned data and starts a
+  // new packet. Returns whether incremental state was reset.
+  bool MaybeClearInternedDataAndStartNewPacket(uint64_t qpc_timestamp)
+      VALID_CONTEXT_REQUIRED(sequence_checker_);
 
   const ActiveProcesses& active_processes() const { return active_processes_; }
 
@@ -320,8 +333,17 @@ class TRACING_EXPORT EtwConsumer
 
   // Call stacks, each interned by a hash of the entire call stack.
   InterningIndex<TypeList<size_t>, SizeList<1024>> interned_callstacks_;
-  // Stack frames, each interned by the address on the stack.
-  InterningIndex<TypeList<uint64_t>, SizeList<1024>> interned_frames_;
+  // Stack frames, each interned by a [process ID, address] pair.
+  InterningIndex<TypeList<std::pair<uint32_t, uint64_t>>, SizeList<1024>>
+      interned_frames_;
+  // Filenames for loaded modules.
+  InterningIndex<TypeList<std::wstring>, SizeList<1024>> interned_module_names_;
+  // Debug IDs for loaded modules.
+  InterningIndex<TypeList<std::string>, SizeList<1024>>
+      interned_module_debug_ids_;
+  // Loaded modules, each interned by a [process ID, base address] pair.
+  InterningIndex<TypeList<std::pair<uint32_t, uint64_t>>, SizeList<1024>>
+      interned_modules_;
 
   // If true, interned data will be reset before the next event is processed.
   std::atomic<bool> reset_emitted_state_{true};

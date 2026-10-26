@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -52,7 +53,6 @@
 #include "chrome/browser/ash/policy/status_collector/managed_session_service.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/reporting/metric_default_utils.h"
 #include "chrome/browser/chromeos/reporting/metric_reporting_prefs.h"
 #include "chrome/browser/chromeos/reporting/network/network_bandwidth_sampler.h"
@@ -66,7 +66,6 @@
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom-shared.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/reporting/client/report_queue_configuration.h"
 #include "components/reporting/metrics/collector_base.h"
@@ -103,7 +102,6 @@ constexpr char kWebsiteTelemetry[] = "website_telemetry";
 
 // static
 BASE_FEATURE(kEnableFatalCrashEventsObserver,
-             "EnableFatalCrashEventsObserver",
              base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kEnableChromeFatalCrashEventsObserver,
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -140,9 +138,11 @@ bool MetricReportingManager::Delegate::IsAppServiceAvailableForProfile(
 
 // static
 std::unique_ptr<MetricReportingManager> MetricReportingManager::Create(
+    PrefService* local_state,
+    ::network::NetworkQualityTracker* network_quality_tracker,
     policy::ManagedSessionService* managed_session_service) {
-  auto manager = base::WrapUnique(
-      new MetricReportingManager(std::make_unique<Delegate>()));
+  auto manager = base::WrapUnique(new MetricReportingManager(
+      local_state, network_quality_tracker, std::make_unique<Delegate>()));
   manager->DelayedInit(managed_session_service);
   return manager;
 }
@@ -235,8 +235,12 @@ MetricReportingManager::GetTelemetryCollectors(MetricEventType event_type) {
 }
 
 MetricReportingManager::MetricReportingManager(
+    PrefService* local_state,
+    ::network::NetworkQualityTracker* network_quality_tracker,
     std::unique_ptr<Delegate> delegate)
-    : delegate_(std::move(delegate)) {}
+    : network_quality_tracker_(CHECK_DEREF(network_quality_tracker)),
+      local_state_reporting_settings_(local_state),
+      delegate_(std::move(delegate)) {}
 
 void MetricReportingManager::Shutdown() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -369,17 +373,14 @@ void MetricReportingManager::InitOnAffiliatedLogin(Profile* profile) {
   InitPeripheralsCollectors();
 
   // External display events observer.
-  if (base::FeatureList::IsEnabled(
-          chromeos::features::kExternalDisplayEventTelemetry)) {
-    // External display events falls under peripheral events group as well, but
-    // has to be tracked separately as graphics status events.
-    event_observer_managers_.emplace_back(delegate_->CreateEventObserverManager(
-        std::make_unique<DisplayEventsObserver>(),
-        user_event_report_queue_.get(), &reporting_settings_,
-        ::ash::kReportDeviceGraphicsStatus,
-        metrics::kReportDeviceGraphicsStatusDefaultValue,
-        /*collector_pool=*/this));
-  }
+  // External display events falls under peripheral events group as well, but
+  // has to be tracked separately as graphics status events.
+  InitEventObserverManager(
+      std::make_unique<DisplayEventsObserver>(), user_event_report_queue_.get(),
+      &reporting_settings_,
+      /*enable_setting_path=*/::ash::kReportDeviceGraphicsStatus,
+      metrics::kReportDeviceGraphicsStatusDefaultValue,
+      /*init_delay=*/base::TimeDelta());
 
   // Start observing app/website events and telemetry only if the app service is
   // available for the given profile.
@@ -562,7 +563,7 @@ void MetricReportingManager::InitNetworkCollectors(Profile* profile) {
 
   // Network bandwidth telemetry.
   auto network_bandwidth_sampler = std::make_unique<NetworkBandwidthSampler>(
-      g_browser_process->network_quality_tracker(), profile->GetWeakPtr());
+      &network_quality_tracker_.get(), profile->GetWeakPtr());
   network_bandwidth_collector_ = delegate_->CreatePeriodicCollector(
       network_bandwidth_sampler.get(), user_telemetry_report_queue_.get(),
       &reporting_settings_,

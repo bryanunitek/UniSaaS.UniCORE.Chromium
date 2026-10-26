@@ -11,6 +11,7 @@ import android.content.Intent;
 import org.jni_zero.CalledByNative;
 import org.jni_zero.NativeMethods;
 
+import org.chromium.base.IntentUtils;
 import org.chromium.base.UnguessableToken;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.supplier.OneshotSupplierImpl;
@@ -20,8 +21,8 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.init.AsyncInitializationActivity;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabUtils;
 import org.chromium.components.thinwebview.CompositorView;
 import org.chromium.content_public.browser.WebContents;
@@ -48,7 +49,7 @@ public abstract class VideoOverlayActivity extends AsyncInitializationActivity {
 
     private @Nullable CompositorView mCompositorView;
 
-    private class InitiatorTabObserver extends EmptyTabObserver {
+    private class InitiatorTabObserver implements TabObserver {
         @Override
         public void onClosingStateChanged(Tab tab, boolean closing) {
             if (closing) {
@@ -118,7 +119,7 @@ public abstract class VideoOverlayActivity extends AsyncInitializationActivity {
         super.onPreCreate();
 
         final Intent intent = getIntent();
-        UnguessableToken token = intent.getParcelableExtra(NATIVE_TOKEN_KEY);
+        UnguessableToken token = IntentUtils.safeGetParcelableExtra(intent, NATIVE_TOKEN_KEY);
         if (token == null) {
             finishOverlay(/* closeByNative= */ false);
             return;
@@ -126,7 +127,9 @@ public abstract class VideoOverlayActivity extends AsyncInitializationActivity {
 
         mNativeToken = assumeNonNull(token);
         intent.setExtrasClassLoader(WebContents.class.getClassLoader());
-        mInitiatorTab = TabUtils.fromWebContents(intent.getParcelableExtra(WEB_CONTENTS_KEY));
+        mInitiatorTab =
+                TabUtils.fromWebContents(
+                        IntentUtils.safeGetParcelableExtra(intent, WEB_CONTENTS_KEY));
         if (mInitiatorTab != null) {
             mTabObserver = new InitiatorTabObserver();
             mInitiatorTab.addObserver(mTabObserver);
@@ -140,7 +143,6 @@ public abstract class VideoOverlayActivity extends AsyncInitializationActivity {
 
         if (isInitiatorTabDestroyed()) {
             finishOverlay(/* closeByNative= */ false);
-            return;
         }
     }
 

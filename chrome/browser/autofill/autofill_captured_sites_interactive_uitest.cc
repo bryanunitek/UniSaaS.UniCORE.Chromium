@@ -48,7 +48,7 @@
 #include "components/autofill/core/browser/foundations/scoped_autofill_managers_observation.h"
 #include "components/autofill/core/browser/geo/state_names.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/autofill_debug_features.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_regexes.h"
@@ -336,7 +336,7 @@ class AutofillCapturedSitesInteractiveTest
     // Disable the Password Manager to prevent password bubbles from occurring.
     // The password bubbles could overlap with the Autofill popups, in which
     // case the Autofill popup would not be shown (crbug.com/40187831).
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         password_manager::prefs::kCredentialsEnableService, false);
     return true;
   }
@@ -370,8 +370,8 @@ class AutofillCapturedSitesInteractiveTest
     form_submission_counter_ =
         std::make_unique<FormSubmissionCounter>(GetWebContents());
 
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
-                                                 false);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
+                                                    false);
   }
 
   void TearDownOnMainThread() override {
@@ -408,15 +408,10 @@ class AutofillCapturedSitesInteractiveTest
     // elements in a form to determine if the form is ready for interaction.
     feature_list_.InitWithFeaturesAndParameters(
         /*enabled_features=*/
-        {{features::debug::kAutofillServerCommunication, {}},
-         {features::debug::kAutofillShowTypePredictions,
-          {
-              // TODO(crbug.com/410879924): Investigate why the test fails when
-              // kAutofillShowTypePredictions is enabled without parameters.
-              {features::debug::kAutofillShowTypePredictionsAsTitleParam.name,
-               "true"},
-          }},
-         {features::debug::kAutofillCapturedSiteTestsUseAutofillFlow, {}}},
+        {{features::kAutofillRequireFocusInFrameForSuggestions, {}},
+         {features::debug::kAutofillCapturedSiteTestsUseAutofillFlow, {}},
+         {features::debug::kAutofillServerCommunication, {}},
+         {features::debug::kAutofillShowTypePredictions, {}}},
         /*disabled_features=*/{});
     command_line->AppendSwitchASCII(
         variations::switches::kVariationsOverrideCountry, "us");

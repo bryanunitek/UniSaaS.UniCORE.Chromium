@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <cstdlib>
+#include <stdint.h>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -28,6 +29,7 @@
 #include "base/numerics/checked_math.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -82,6 +84,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
+#include "third_party/re2/src/re2/re2.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_LINUX)
@@ -1660,7 +1663,7 @@ TEST_F(IntegrationTest, GetUpdaterState) {
           std::vector<uint32_t> components =
               base::Version(kUpdaterVersion).components();
           const base::CheckedNumeric<uint32_t> new_version = components[0] + 1;
-          ASSERT_TRUE(new_version.AssignIfValid(&components[0]));
+          ASSERT_TRUE(new_version.AssignIfValid(components.data()));
 
           EXPECT_THAT(result.inactive_versions,
                       testing::UnorderedElementsAre(
@@ -2870,6 +2873,27 @@ TEST_F(IntegrationTest, RecoveryNoUpdater) {
   ASSERT_TRUE(WaitForUpdaterExit());
   ASSERT_NO_FATAL_FAILURE(ExpectInstalled());
   ASSERT_NO_FATAL_FAILURE(ExpectAppVersion(appid, version));
+  ASSERT_NO_FATAL_FAILURE(Uninstall());
+}
+
+TEST_F(IntegrationTest, RecoveryWithUpdater) {
+  ASSERT_NO_FATAL_FAILURE(Install());
+  ASSERT_TRUE(WaitForUpdaterExit());
+  ASSERT_NO_FATAL_FAILURE(ExpectInstalled());
+
+  const std::string appid = "test1";
+  const base::Version version("0.1");
+  ASSERT_NO_FATAL_FAILURE(RunRecoveryComponent(appid, version));
+  ASSERT_TRUE(WaitForUpdaterExit());
+  ASSERT_NO_FATAL_FAILURE(ExpectInstalled());
+  ASSERT_NO_FATAL_FAILURE(ExpectAppVersion(appid, version));
+  ASSERT_NO_FATAL_FAILURE(Uninstall());
+}
+
+TEST_F(IntegrationTest, RecoveryNoAppId) {
+  ASSERT_NO_FATAL_FAILURE(RunRecoveryComponent("", {}));
+  ASSERT_TRUE(WaitForUpdaterExit());
+  ASSERT_NO_FATAL_FAILURE(ExpectInstalled());
   ASSERT_NO_FATAL_FAILURE(Uninstall());
 }
 
@@ -4764,7 +4788,8 @@ TEST_F(IntegrationTestKSAdminFourApps, XCPathMismatchUser) {
 
 TEST_F(IntegrationTestKSAdminFourApps, KSAdminRegisterWithTaggedPkg) {
   base::FilePath tagged_pkg_path =
-      test::GetTestFilePath("tagged_pkg").AppendASCII("sample.pkg");
+      test::GetTestFilePath("tagged_pkg")
+          .AppendASCII("sample_no_notarization_trailer_brand_tagged.pkg");
 
   // Define a temp file path for the brand file, but do not populate it, so
   // "ifneeded" mode will decide a brand file is needed.
@@ -4772,7 +4797,8 @@ TEST_F(IntegrationTestKSAdminFourApps, KSAdminRegisterWithTaggedPkg) {
   ASSERT_TRUE(brand_file.Create());
   ASSERT_TRUE(base::DeleteFile(brand_file.path()));
   // `--brand-value` flag is a fallback; thus, the "WRONG" brand code should
-  // be ignored in favor of the "GGLZ" brand tagged onto `sample.pkg`.
+  // be ignored in favor of the "GGLZ" brand tagged onto
+  // `sample_no_notarization_trailer_brand_tagged.pkg`.
   ASSERT_NO_FATAL_FAILURE(ExpectKSAdminRegister(
       UpdaterScope::kUser, kUserAppID, tagged_pkg_path, brand_file.path(),
       "KSBrandID", "WRONG", "ifneeded"));
@@ -5062,7 +5088,7 @@ INSTANTIATE_TEST_SUITE_P(IntegrationLegacyAppCommandWebTestCases,
                          ::testing::ValuesIn(GetRealUpdaterVersions()));
 
 TEST_P(IntegrationLegacyAppCommandWebTest, NoUsageStats_NoPing) {
-  const char kAppId[] = "test1";
+  static constexpr char kAppId[] = "test1";
   if (GetParam().version > base::Version("137.0.0.0")) {
     ExpectInstallEvent(*test_server_, kAppId);
   }
@@ -5284,10 +5310,26 @@ TEST_F(IntegrationTest, AppLogoUrl) {
       base::ReadFileToString(test::GetTestFilePath("app_logos")
                                  .AppendUTF8(absl::StrFormat("%s.bmp", kAppId)),
                              &app_logo_bytes));
+
+  // The updater initially requests a theme-specific logo (`_dark` or `_light`).
+  // Returning HTTP 404 triggers the fallback mechanism to request the legacy
+  // logo without a theme suffix.
   test_logo_server.ExpectOnce(
       {
           request::GetPathMatcher(absl::StrFormat(
-              "%s%s.bmp\\?lang=%s", test_logo_server.app_logo_path(), kAppId,
+              "%s%s(_dark|_light)\\.bmp\\?lang=%s",
+              test_logo_server.app_logo_path(),
+              re2::RE2::QuoteMeta(base::EscapeUrlEncodedData(kAppId, false)),
+              base::WideToUTF8(GetPreferredLanguage()))),
+      },
+      "", net::HTTP_NOT_FOUND);
+
+  // Expect the fallback request for the legacy `{app_id}.bmp` logo.
+  test_logo_server.ExpectOnce(
+      {
+          request::GetPathMatcher(absl::StrFormat(
+              "%s%s\\.bmp\\?lang=%s", test_logo_server.app_logo_path(),
+              re2::RE2::QuoteMeta(base::EscapeUrlEncodedData(kAppId, false)),
               base::WideToUTF8(GetPreferredLanguage()))),
       },
       app_logo_bytes);
@@ -6486,7 +6528,7 @@ TEST_P(IntegrationInstallerResultsTest, OnDemandTestCases) {
 
   // TODO(crbug.com/382059245): remove this `if` once the older versions are
   // updated to a version that supports a success `kExitCode`.
-  if (base::StartsWith(GetTestCase().command_line_args, "INSTALLER_RESULT=4") &&
+  if (GetTestCase().command_line_args.starts_with("INSTALLER_RESULT=4") &&
       (GetSetup().version != base::Version(kUpdaterVersion))) {
     GTEST_SKIP();
   }

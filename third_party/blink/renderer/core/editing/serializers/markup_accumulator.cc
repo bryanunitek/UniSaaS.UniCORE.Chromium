@@ -25,7 +25,8 @@
  */
 #include "third_party/blink/renderer/core/editing/serializers/markup_accumulator.h"
 
-#include "base/containers/adapters.h"
+#include <ranges>
+
 #include "third_party/blink/renderer/core/dom/attr.h"
 #include "third_party/blink/renderer/core/dom/cdata_section.h"
 #include "third_party/blink/renderer/core/dom/comment.h"
@@ -47,6 +48,7 @@
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
@@ -556,7 +558,7 @@ AtomicString MarkupAccumulator::RetrievePreferredPrefixString(
   // <el1 xmlns="U1">
   //  el1.setAttributeNS(U1, 'n', 'v');
   // We should not get '' for attributes.
-  for (const auto& candidate_prefix : base::Reversed(candidate_list)) {
+  for (const auto& candidate_prefix : std::views::reverse(candidate_list)) {
     DCHECK(!candidate_prefix.empty());
     AtomicString ns_for_candidate = LookupNamespaceUri(candidate_prefix);
     if (EqualIgnoringNullity(ns_for_candidate, ns)) {
@@ -589,8 +591,7 @@ AtomicString MarkupAccumulator::GeneratePrefix(
   do {
     // 1. Let generated prefix be the concatenation of the string "ns" and the
     // current numerical value of prefix index.
-    generated_prefix =
-        AtomicString(StrCat({"ns", String::Number(prefix_index_)}));
+    generated_prefix = AtomicString(Format("ns{}", prefix_index_));
     // 2. Let the value of prefix index be incremented by one.
     ++prefix_index_;
   } while (LookupNamespaceUri(generated_prefix));
@@ -681,21 +682,18 @@ std::pair<ShadowRoot*, HTMLTemplateElement*> MarkupAccumulator::GetShadowTree(
   // The shadowrootcustomelementregistryattribute should be added unless
   //   - both document and shadow root registry are null
   //   - both document and shadow root registry are global registries
-  if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled()) {
-    auto* document_registry =
-        shadow_root->GetDocument().customElementRegistry();
-    auto* shadow_registry = shadow_root->customElementRegistry();
-    bool should_append_registry_attribute = true;
-    if (document_registry == nullptr && shadow_registry == nullptr) {
-      should_append_registry_attribute = false;
-    } else if (document_registry && document_registry->IsGlobalRegistry() &&
-               shadow_registry && shadow_registry->IsGlobalRegistry()) {
-      should_append_registry_attribute = false;
-    }
-    if (should_append_registry_attribute) {
-      template_element->SetBooleanAttribute(
-          html_names::kShadowrootcustomelementregistryAttr, true);
-    }
+  auto* document_registry = shadow_root->GetDocument().customElementRegistry();
+  auto* shadow_registry = shadow_root->customElementRegistry();
+  bool should_append_registry_attribute = true;
+  if (document_registry == nullptr && shadow_registry == nullptr) {
+    should_append_registry_attribute = false;
+  } else if (document_registry && document_registry->IsGlobalRegistry() &&
+             shadow_registry && shadow_registry->IsGlobalRegistry()) {
+    should_append_registry_attribute = false;
+  }
+  if (should_append_registry_attribute) {
+    template_element->SetBooleanAttribute(
+        html_names::kShadowrootcustomelementregistryAttr, true);
   }
   return std::pair<ShadowRoot*, HTMLTemplateElement*>(shadow_root,
                                                       template_element);

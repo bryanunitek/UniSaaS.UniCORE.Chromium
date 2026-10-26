@@ -27,7 +27,6 @@ import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Color;
 import android.util.DisplayMetrics;
-import android.view.View;
 
 import org.junit.After;
 import org.junit.Before;
@@ -40,19 +39,16 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.CallbackUtils;
 import org.chromium.base.UserDataHost;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsOffsetTagsInfo;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
 import org.chromium.chrome.browser.compositor.layouts.components.LayoutTab;
 import org.chromium.chrome.browser.compositor.scene_layer.StaticTabSceneLayer;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.layouts.animation.CompositorAnimationHandler;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
@@ -75,8 +71,6 @@ import java.util.List;
 
 /** Unit tests for {@link StaticLayout}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@EnableFeatures({ChromeFeatureList.REMOVE_TAB_FOCUS_ON_SHOWING_AND_SELECT})
 public class StaticLayoutUnitTest {
 
     private static final int TAB1_ID = 0;
@@ -115,8 +109,6 @@ public class StaticLayoutUnitTest {
 
     private final UserDataHost mUserDataHost = new UserDataHost();
     @Mock private ToolbarThemeColorProvider mToolbarThemeColorProvider;
-
-    @Mock private View mTabView;
 
     private Tab mTab1;
     private Tab mTab2;
@@ -243,6 +235,7 @@ public class StaticLayoutUnitTest {
         RenderWidgetHostView rwhv = mock(RenderWidgetHostView.class);
         doReturn(rwhv).when(webContents).getRenderWidgetHostView();
         doReturn(BACKGROUND_COLOR).when(rwhv).getBackgroundColor();
+        doReturn(BACKGROUND_COLOR).when(tab).getBackgroundColor();
         doReturn(webContents).when(tab).getWebContents();
         doReturn(true).when(tab).isInitialized();
         doReturn(TOOLBAR_BACKGROUND_COLOR).when(tab).getThemeColor();
@@ -356,8 +349,7 @@ public class StaticLayoutUnitTest {
         mModel.set(LayoutTab.BACKGROUND_COLOR, Color.WHITE);
 
         // Index 0 is the TabObserver for mTab1.
-        RenderWidgetHostView rwhv = mTab1.getWebContents().getRenderWidgetHostView();
-        doReturn(Color.RED).when(rwhv).getBackgroundColor();
+        doReturn(Color.RED).when(mTab1).getBackgroundColor();
         mTabObserverCaptor.getAllValues().get(0).onBackgroundColorChanged(mTab1, Color.RED);
 
         assertEquals(Color.RED, mModel.get(LayoutTab.BACKGROUND_COLOR));
@@ -382,28 +374,6 @@ public class StaticLayoutUnitTest {
 
         assertEquals(0.0f, mModel.get(LayoutTab.RENDER_X), 0);
         assertEquals(0.0f, mModel.get(LayoutTab.RENDER_Y), 0);
-    }
-
-    @Test
-    @Config(qualifiers = "sw320dp")
-    public void testTabGainsFocusOnPhoneOnLayoutDoneShowing() {
-        doReturn(mTabView).when(mTab1).getView();
-        doReturn(true).when(mTabView).requestFocus();
-
-        mStaticLayout.doneShowing();
-
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.REMOVE_TAB_FOCUS_ON_SHOWING_AND_SELECT)) {
-            verify(mTabView, never()).requestFocus();
-        } else {
-            verify(mTabView).requestFocus();
-        }
-    }
-
-    @Test
-    @Config(qualifiers = "sw600dp")
-    public void testTabDoesNotGainFocusOnTabletOnLayoutDoneShowing() {
-        mStaticLayout.doneShowing();
-        verify(mTabView, never()).requestFocus();
     }
 
     @Test

@@ -8,6 +8,8 @@ import static org.mockito.Mockito.verify;
 
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
 
+import org.jni_zero.JniRawPtr;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -17,7 +19,6 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.content_public.browser.WebContents;
@@ -26,7 +27,6 @@ import org.chromium.ui.base.WindowAndroid;
 
 /** Tests for {@link TouchToFillPasswordGenerationBridge} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.PER_CLASS)
 public class TouchToFillPasswordGenerationBridgeTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -40,13 +40,17 @@ public class TouchToFillPasswordGenerationBridgeTest {
     @Mock private PrefService mPrefService;
     @Mock private WindowAndroid mWindowAndroid;
 
-    private static final long sTestNativePointer = 1;
+    private JniRawPtr<
+                    TouchToFillPasswordGenerationBridge
+                            .NativeTouchToFillPasswordGenerationBridgeImpl>
+            mTestNativePointer;
 
     private TouchToFillPasswordGenerationBridge mBridge;
 
     @Before
     public void setUp() {
         TouchToFillPasswordGenerationBridgeJni.setInstanceForTesting(mBridgeJniMock);
+        mTestNativePointer = JniRawPtr.createForTesting(1L);
 
         mActivityScenarioRule
                 .getScenario()
@@ -54,7 +58,7 @@ public class TouchToFillPasswordGenerationBridgeTest {
                         activity -> {
                             mBridge =
                                     new TouchToFillPasswordGenerationBridge(
-                                            sTestNativePointer,
+                                            mTestNativePointer,
                                             mBottomSheetController,
                                             mWindowAndroid,
                                             mWebContents,
@@ -62,22 +66,27 @@ public class TouchToFillPasswordGenerationBridgeTest {
                         });
     }
 
+    @After
+    public void tearDown() {
+        mTestNativePointer.release();
+    }
+
     @Test
     public void testOnDismissed() {
         mBridge.onDismissed(/* passwordAccepted= */ false);
-        verify(mBridgeJniMock).onDismissed(sTestNativePointer, /* passwordAccepted= */ false);
+        verify(mBridgeJniMock).onDismissed(mTestNativePointer, /* passwordAccepted= */ false);
     }
 
     @Test
     public void testOnGeneratedPasswordAccepted() {
         String generatedPassword = "password";
         mBridge.onGeneratedPasswordAccepted(generatedPassword);
-        verify(mBridgeJniMock).onGeneratedPasswordAccepted(sTestNativePointer, generatedPassword);
+        verify(mBridgeJniMock).onGeneratedPasswordAccepted(mTestNativePointer, generatedPassword);
     }
 
     @Test
     public void testOnGeneratedPasswordRejected() {
         mBridge.onGeneratedPasswordRejected();
-        verify(mBridgeJniMock).onGeneratedPasswordRejected(sTestNativePointer);
+        verify(mBridgeJniMock).onGeneratedPasswordRejected(mTestNativePointer);
     }
 }

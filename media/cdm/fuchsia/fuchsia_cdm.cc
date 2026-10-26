@@ -14,6 +14,7 @@
 #include "media/base/callback_registry.h"
 #include "media/base/cdm_factory.h"
 #include "media/base/cdm_promise.h"
+#include "media/base/eme_constants.h"
 
 #define REJECT_PROMISE_AND_RETURN_IF_BAD_CDM(promise, cdm)         \
   if (!cdm) {                                                      \
@@ -26,24 +27,11 @@ namespace media {
 
 namespace {
 
-std::string GetInitDataTypeName(EmeInitDataType type) {
-  switch (type) {
-    case EmeInitDataType::WEBM:
-      return "webm";
-    case EmeInitDataType::CENC:
-      return "cenc";
-    case EmeInitDataType::KEYIDS:
-      return "keyids";
-    case EmeInitDataType::UNKNOWN:
-      return "unknown";
-  }
-}
-
 fuchsia::media::drm::LicenseInitData CreateLicenseInitData(
     EmeInitDataType type,
     const std::vector<uint8_t>& data) {
   fuchsia::media::drm::LicenseInitData init_data;
-  init_data.type = GetInitDataTypeName(type);
+  init_data.type = EmeInitDataTypeToString(type);
   init_data.data = data;
   return init_data;
 }
@@ -234,7 +222,7 @@ class FuchsiaCdm::CdmSession {
       CdmKeyInformation::KeyStatus status = ToCdmKeyStatus(key_state.status());
       has_additional_usable_key |= (status == CdmKeyInformation::USABLE);
       keys_info.emplace_back(
-          new CdmKeyInformation(key_state.key_id(), status, 0));
+          std::make_unique<CdmKeyInformation>(key_state.key_id(), status, 0));
     }
 
     session_callbacks_->keys_change_cb.Run(

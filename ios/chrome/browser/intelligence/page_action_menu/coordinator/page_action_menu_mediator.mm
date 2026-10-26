@@ -6,16 +6,17 @@
 
 #import <optional>
 
+#import "base/scoped_observation.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/content_settings/core/browser/host_content_settings_map.h"
+#import "components/content_settings/core/common/content_settings.h"
+#import "components/content_settings/core/common/content_settings_pattern.h"
 #import "components/prefs/pref_service.h"
 #import "components/search/search.h"
 #import "components/search_engines/template_url_service.h"
 #import "components/translate/core/browser/translate_download_manager.h"
 #import "components/translate/core/browser/translate_manager.h"
 #import "components/translate/core/browser/translate_prefs.h"
-#import "ios/chrome/browser/contextual_panel/model/contextual_panel_item_type.h"
-#import "ios/chrome/browser/contextual_panel/model/contextual_panel_tab_helper.h"
 #import "ios/chrome/browser/infobars/model/infobar_ios.h"
 #import "ios/chrome/browser/infobars/model/infobar_manager_impl.h"
 #import "ios/chrome/browser/infobars/model/infobar_type.h"
@@ -24,6 +25,7 @@
 #import "ios/chrome/browser/intelligence/bwg/metrics/gemini_metrics.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_service.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_tab_helper.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_availability.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/intelligence/page_action_menu/ui/page_action_menu_consumer.h"
 #import "ios/chrome/browser/intelligence/page_action_menu/ui/page_action_menu_content_entry_point.h"
@@ -32,11 +34,14 @@
 #import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_modality.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_request_queue.h"
-#import "ios/chrome/browser/price_insights/model/price_insights_model.h"
-#import "ios/chrome/browser/reader_mode/model/features.h"
+#import "ios/chrome/browser/permissions/model/permissions_metrics.h"
+#import "ios/chrome/browser/permissions/model/permissions_tab_helper.h"
+#import "ios/chrome/browser/reader_mode/model/reader_mode_browser_agent.h"
+#import "ios/chrome/browser/reader_mode/model/reader_mode_browser_agent_observer_bridge.h"
 #import "ios/chrome/browser/reader_mode/model/reader_mode_tab_helper.h"
-#import "ios/chrome/browser/shared/public/commands/contextual_sheet_commands.h"
+#import "ios/chrome/browser/reader_mode/model/reader_mode_web_state_utils.h"
 #import "ios/chrome/browser/shared/public/commands/page_action_menu_commands.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
@@ -61,9 +66,23 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
   return !auth_service->HasPrimaryIdentity() && auth_service->SigninEnabled();
 }
 
+// Returns the `IOSPermissionSetting` corresponding to `setting`.
+IOSPermissionSetting IOSPermissionSettingForPageActionMenuPermissionSetting(
+    PageActionMenuPermissionSetting setting) {
+  switch (setting) {
+    case PageActionMenuPermissionSetting::kAllowOnce:
+      return IOSPermissionSetting::kAllowOnce;
+    case PageActionMenuPermissionSetting::kAlwaysAllow:
+      return IOSPermissionSetting::kAlwaysAllow;
+    case PageActionMenuPermissionSetting::kNeverAllow:
+      return IOSPermissionSetting::kNeverAllow;
+  }
+}
+
 }  // namespace
 
-@interface PageActionMenuMediator () <CRWWebStateObserver>
+@interface PageActionMenuMediator () <CRWWebStateObserver,
+                                      ReaderModeBrowserAgentObserving>
 @end
 
 @implementation PageActionMenuMediator {
@@ -91,6 +110,13 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
   // The tab helper for Reader mode.
   raw_ptr<ReaderModeTabHelper> _readerModeTabHelper;
 
+  // The browser agent for Reader mode bridge.
+  std::unique_ptr<ReaderModeBrowserAgentObserverBridge>
+      _readerModeObserverBridge;
+  std::optional<base::ScopedObservation<ReaderModeBrowserAgent,
+                                        ReaderModeBrowserAgent::Observer>>
+      _readerModeScopedObservation;
+
   // The host content settings map for managing site permissions.
   raw_ptr<HostContentSettingsMap> _hostContentSettingsMap;
 }
@@ -102,6 +128,7 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
                    geminiService:(GeminiService*)geminiService
                  geminiTabHelper:(GeminiTabHelper*)geminiTabHelper
              readerModeTabHelper:(ReaderModeTabHelper*)readerModeTabHelper
+          readerModeBrowserAgent:(ReaderModeBrowserAgent*)readerModeBrowserAgent
           hostContentSettingsMap:
               (HostContentSettingsMap*)hostContentSettingsMap {
   self = [super init];
@@ -116,6 +143,13 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
     _hostContentSettingsMap = hostContentSettingsMap;
     _webStateObserver = std::make_unique<web::WebStateObserverBridge>(self);
     _webState->AddObserver(_webStateObserver.get());
+
+    if (readerModeBrowserAgent) {
+      _readerModeObserverBridge =
+          std::make_unique<ReaderModeBrowserAgentObserverBridge>(self);
+      _readerModeScopedObservation.emplace(_readerModeObserverBridge.get());
+      _readerModeScopedObservation->Observe(readerModeBrowserAgent);
+    }
   }
   return self;
 }
@@ -127,12 +161,25 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
 #pragma mark - Public
 
 - (void)disconnect {
+  _readerModeScopedObservation.reset();
+  _readerModeObserverBridge.reset();
   _readerModeTabHelper = nullptr;
   [self detachFromWebState];
 }
 
 - (BOOL)isLensAvailableForProfile {
   return IsLensOverlayAllowedByPolicy(_profilePrefs);
+}
+
+#pragma mark - ReaderModeBrowserAgentObserving
+
+- (void)readerModeBrowserAgent:(ReaderModeBrowserAgent*)agent
+            didHideModeContent:(BOOL)animated {
+  [self.pageActionMenuHandler dismissPageActionMenuWithCompletion:nil];
+}
+
+- (void)readerModeBrowserAgentDestroyed:(ReaderModeBrowserAgent*)agent {
+  _readerModeScopedObservation.reset();
 }
 
 #pragma mark - PageActionMenuMutator
@@ -145,14 +192,7 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
 }
 
 - (BOOL)isReaderModeActive {
-  if (!_readerModeTabHelper) {
-    return NO;
-  }
-  return _readerModeTabHelper->IsActive();
-}
-
-- (BOOL)isReaderModeAvailable {
-  return IsReaderModeAvailable();
+  return IsReaderModeActiveInWebState(_webState);
 }
 
 - (PageActionMenuContentEntryPoint*)geminiEntryPoint {
@@ -172,22 +212,22 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
     return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:YES];
   }
 
-  std::optional<gemini::IneligibilityReasons> result =
-      _geminiService->GeminiIneligibilityForProfile();
-
-  if (result.has_value()) {
-    if (result.value().chrome_enterprise) {
+  ProfileIOS* profile =
+      ProfileIOS::FromBrowserState(_webState->GetBrowserState());
+  gemini::GeminiAvailabilityResult availability =
+      gemini::IsGeminiAvailable(gemini::EntryPoint::AIHub, profile, _webState);
+  if (!availability.enabled) {
+    if (availability.ineligibility_reasons.has_value() &&
+        availability.ineligibility_reasons->chrome_enterprise) {
       return [[PageActionMenuContentEntryPoint alloc]
           initWithEnabled:NO
                footerItem:[ContentEntryPointUnavailabilityItem
                               geminiEnterprise]];
     }
-
     return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:NO];
   }
 
-  return [[PageActionMenuContentEntryPoint alloc]
-      initWithEnabled:_geminiTabHelper->IsGeminiAvailableForWebState()];
+  return [[PageActionMenuContentEntryPoint alloc] initWithEnabled:YES];
 }
 
 - (PageActionMenuContentEntryPoint*)lensEntryPointForTraitCollection:
@@ -255,16 +295,10 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
       ChromeIOSTranslateClient* translateClient = [self findTranslateClient];
       return IsTranslateActive(translateClient);
     }
-    case PageActionMenuCameraPermission: {
-      web::PermissionState state =
-          _webState->GetStateForPermission(web::PermissionCamera);
-      return state == web::PermissionStateAllowed;
-    }
-    case PageActionMenuMicrophonePermission: {
-      web::PermissionState state =
-          _webState->GetStateForPermission(web::PermissionMicrophone);
-      return state == web::PermissionStateAllowed;
-    }
+    case PageActionMenuCameraPermission:
+      return [self isPermissionRowAvailable:web::PermissionCamera];
+    case PageActionMenuMicrophonePermission:
+      return [self isPermissionRowAvailable:web::PermissionMicrophone];
     case PageActionMenuPopupBlocker: {
       if (!IsProactiveSuggestionsFrameworkPopupBlockerEnabled() ||
           !_hostContentSettingsMap) {
@@ -280,29 +314,6 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
       bool hasBlockedPopups = helper && helper->GetBlockedPopupCount() > 0;
 
       return setting == CONTENT_SETTING_BLOCK && hasBlockedPopups;
-    }
-    case PageActionMenuPriceTracking: {
-      ContextualPanelTabHelper* tabHelper =
-          ContextualPanelTabHelper::FromWebState(_webState);
-      if (!tabHelper) {
-        return NO;
-      }
-
-      std::vector<base::WeakPtr<ContextualPanelItemConfiguration>> configs =
-          tabHelper->GetCurrentCachedConfigurations();
-
-      for (const auto& config_weak : configs) {
-        if (!config_weak) {
-          continue;
-        }
-
-        ContextualPanelItemConfiguration* config = config_weak.get();
-        if (config->item_type == ContextualPanelItemType::PriceInsightsItem) {
-          return YES;
-        }
-      }
-
-      return NO;
     }
   }
 }
@@ -375,7 +386,9 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
       RecordPageActionMenuFeatureRowUsed(
           IOSPageActionMenuFeatureType::kMicrophonePermission);
       break;
-    default:
+    // Only permission rows have a toggle.
+    case PageActionMenuTranslate:
+    case PageActionMenuPopupBlocker:
       return;
   }
 
@@ -383,6 +396,44 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
     _webState->SetStateForPermission(web::PermissionStateAllowed, permission);
   } else {
     _webState->SetStateForPermission(web::PermissionStateBlocked, permission);
+  }
+}
+
+- (void)updatePermissionSetting:(PageActionMenuPermissionSetting)setting
+                     forFeature:(PageActionMenuFeatureType)featureType {
+  CHECK(IsDomainLevelSitePermissionsEnabled());
+  if (!_webState) {
+    return;
+  }
+
+  web::Permission permission;
+  switch (featureType) {
+    case PageActionMenuCameraPermission:
+      permission = web::PermissionCamera;
+      break;
+    case PageActionMenuMicrophonePermission:
+      permission = web::PermissionMicrophone;
+      break;
+    case PageActionMenuTranslate:
+    case PageActionMenuPopupBlocker:
+      // Only handle permissions with domain-level state.
+      return;
+  }
+
+  const bool settingChanged = [self permissionSettingFor:permission] != setting;
+
+  [self persistSetting:setting forPermission:permission];
+
+  web::PermissionState state =
+      setting == PageActionMenuPermissionSetting::kNeverAllow
+          ? web::PermissionStateNotAccessible
+          : web::PermissionStateAllowed;
+  _webState->SetStateForPermission(state, permission);
+
+  if (settingChanged) {
+    RecordPermissionSettingChanged(
+        IOSPermissionSettingChangeSurface::kPageActionMenu, permission,
+        IOSPermissionSettingForPageActionMenuPermissionSetting(setting));
   }
 }
 
@@ -398,8 +449,8 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
         initWithFeatureType:PageActionMenuTranslate
                       title:l10n_util::GetNSString(
                                 IDS_IOS_AI_HUB_TRANSLATE_LABEL)
-                       icon:CustomSymbolTemplateWithPointSize(
-                                kTranslateSymbol, kFeatureRowIconSize)
+                       icon:SymbolTemplateWithPointSize(SymbolTranslate,
+                                                        kFeatureRowIconSize)
                  actionType:PageActionMenuButtonAction];
     translateFeature.subtitle = [self translateLanguagePair];
     translateFeature.actionType = PageActionMenuSettingsAction;
@@ -417,8 +468,8 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
         initWithFeatureType:PageActionMenuPopupBlocker
                       title:l10n_util::GetNSString(
                                 IDS_IOS_AI_HUB_POPUP_BLOCKER_LABEL)
-                       icon:CustomSymbolWithPointSize(kPopupBadgeMinusSymbol,
-                                                      kFeatureRowIconSize)
+                       icon:SymbolWithPointSize(SymbolPopupBadgeMinus,
+                                                kFeatureRowIconSize)
                  actionType:PageActionMenuButtonAction];
 
     NSInteger blockedCount = [self blockedPopupCount];
@@ -440,12 +491,11 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
         initWithFeatureType:PageActionMenuCameraPermission
                       title:l10n_util::GetNSString(
                                 IDS_IOS_AI_HUB_CAMERA_PERMISSION_LABEL)
-                       icon:CustomSymbolWithPointSize(kCameraFillSymbol,
-                                                      kFeatureRowIconSize)
+                       icon:SymbolWithPointSize(SymbolCameraFill,
+                                                kFeatureRowIconSize)
                  actionType:PageActionMenuToggleAction];
-    web::PermissionState state =
-        _webState->GetStateForPermission(web::PermissionCamera);
-    cameraFeature.toggleState = (state == web::PermissionStateAllowed);
+    [self populatePermissionFeature:cameraFeature
+                      forPermission:web::PermissionCamera];
     [features addObject:cameraFeature];
   }
 
@@ -457,53 +507,12 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
         initWithFeatureType:PageActionMenuMicrophonePermission
                       title:l10n_util::GetNSString(
                                 IDS_IOS_AI_HUB_MICROPHONE_PERMISSION_LABEL)
-                       icon:DefaultSymbolWithPointSize(kMicrophoneFillSymbol,
-                                                       kFeatureRowIconSize)
+                       icon:SymbolWithPointSize(SymbolMicrophoneFill,
+                                                kFeatureRowIconSize)
                  actionType:PageActionMenuToggleAction];
-    web::PermissionState state =
-        _webState->GetStateForPermission(web::PermissionMicrophone);
-    micFeature.toggleState = (state == web::PermissionStateAllowed);
+    [self populatePermissionFeature:micFeature
+                      forPermission:web::PermissionMicrophone];
     [features addObject:micFeature];
-  }
-  // Price tracking feature.
-  if ([self isFeatureAvailable:PageActionMenuPriceTracking]) {
-    RecordPageActionMenuFeatureRowShown(
-        IOSPageActionMenuFeatureType::kPriceTracking);
-    PageActionMenuFeature* priceTrackingFeature = [[PageActionMenuFeature alloc]
-        initWithFeatureType:PageActionMenuPriceTracking
-                      title:l10n_util::GetNSString(
-                                IDS_IOS_AI_HUB_PRICE_TRACKING_LABEL)
-                       icon:CustomSymbolWithPointSize(kDownTrendSymbol,
-                                                      kFeatureRowIconSize)
-                 actionType:PageActionMenuButtonAction];
-    BOOL isSubscribed = NO;
-    ContextualPanelTabHelper* tabHelper =
-        ContextualPanelTabHelper::FromWebState(_webState);
-    if (tabHelper) {
-      std::vector<base::WeakPtr<ContextualPanelItemConfiguration>> configs =
-          tabHelper->GetCurrentCachedConfigurations();
-      for (const auto& config_weak : configs) {
-        if (!config_weak) {
-          continue;
-        }
-        ContextualPanelItemConfiguration* config = config_weak.get();
-        if (config->item_type == ContextualPanelItemType::PriceInsightsItem) {
-          PriceInsightsItemConfiguration* priceInsightsConfig =
-              static_cast<PriceInsightsItemConfiguration*>(config);
-          isSubscribed = priceInsightsConfig->is_subscribed;
-          break;
-        }
-      }
-    }
-
-    if (isSubscribed) {
-      priceTrackingFeature.actionText =
-          l10n_util::GetNSString(IDS_IOS_AI_HUB_PRICE_TRACKING_BUTTON_LABEL);
-    } else {
-      priceTrackingFeature.actionText = nil;
-    }
-
-    [features addObject:priceTrackingFeature];
   }
 
   return features;
@@ -531,7 +540,7 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
   // Open each blocked popup and allow future popups from this site.
   for (const auto& popup : popups) {
     web::WebState::OpenURLParams params(popup.popup_url, popup.referrer,
-                                        WindowOpenDisposition::NEW_POPUP,
+                                        WindowOpenDisposition::kNewPopup,
                                         ui::PAGE_TRANSITION_LINK, true);
     _webState->OpenURL(params);
 
@@ -570,6 +579,11 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
   [self.consumer pageLoadStatusChanged];
 }
 
+- (void)webState:(web::WebState*)webState
+    didChangeStateForPermission:(web::Permission)permission {
+  [self.consumer permissionStateChanged];
+}
+
 - (void)webStateDestroyed:(web::WebState*)webState {
   [self disconnect];
   [self.pageActionMenuHandler dismissPageActionMenuWithCompletion:nil];
@@ -587,6 +601,91 @@ bool SigninIsPossible(AuthenticationService* auth_service) {
     _webState = nullptr;
   }
   _webStateObserver.reset();
+}
+
+// Returns whether the row for `permission` should be shown.
+- (BOOL)isPermissionRowAvailable:(web::Permission)permission {
+  if (!_webState) {
+    return NO;
+  }
+  web::PermissionState state = _webState->GetStateForPermission(permission);
+  if (state == web::PermissionStateNotAccessible) {
+    return NO;
+  }
+  return state == web::PermissionStateAllowed ||
+         IsDomainLevelSitePermissionsEnabled();
+}
+
+// Populates `feature` with the current state of `permission`, either as a
+// dropdown of site permission settings or as a legacy on/off toggle.
+- (void)populatePermissionFeature:(PageActionMenuFeature*)feature
+                    forPermission:(web::Permission)permission {
+  if (!_webState) {
+    return;
+  }
+  if (IsDomainLevelSitePermissionsEnabled()) {
+    feature.actionType = PageActionMenuDropdownAction;
+    feature.permissionSetting = [self permissionSettingFor:permission];
+    return;
+  }
+  feature.toggleState = _webState->GetStateForPermission(permission) ==
+                        web::PermissionStateAllowed;
+}
+
+// Returns the setting currently in effect for `permission` on the current site.
+- (PageActionMenuPermissionSetting)permissionSettingFor:
+    (web::Permission)permission {
+  if (!_webState) {
+    return PageActionMenuPermissionSetting::kAllowOnce;
+  }
+  if (_webState->GetStateForPermission(permission) ==
+      web::PermissionStateBlocked) {
+    return PageActionMenuPermissionSetting::kNeverAllow;
+  }
+
+  GURL url = _webState->GetLastCommittedURL();
+  if (_hostContentSettingsMap && url.is_valid()) {
+    ContentSetting contentSetting = _hostContentSettingsMap->GetContentSetting(
+        url, url, ContentSettingsTypeForPermission(permission));
+    if (contentSetting == CONTENT_SETTING_ALLOW) {
+      return PageActionMenuPermissionSetting::kAlwaysAllow;
+    }
+    if (contentSetting == CONTENT_SETTING_BLOCK) {
+      return PageActionMenuPermissionSetting::kNeverAllow;
+    }
+  }
+
+  // Without a persisted decision, the access only lasts for this visit.
+  return PageActionMenuPermissionSetting::kAllowOnce;
+}
+
+// Persists `setting` for `permission` on the current site. "Allow once" clears
+// any persisted decision so that the site is asked again on the next visit.
+- (void)persistSetting:(PageActionMenuPermissionSetting)setting
+         forPermission:(web::Permission)permission {
+  if (!_webState || !_hostContentSettingsMap) {
+    return;
+  }
+  GURL url = _webState->GetLastCommittedURL();
+  if (!url.is_valid()) {
+    return;
+  }
+
+  ContentSetting contentSetting = CONTENT_SETTING_DEFAULT;
+  switch (setting) {
+    case PageActionMenuPermissionSetting::kAlwaysAllow:
+      contentSetting = CONTENT_SETTING_ALLOW;
+      break;
+    case PageActionMenuPermissionSetting::kNeverAllow:
+      contentSetting = CONTENT_SETTING_BLOCK;
+      break;
+    case PageActionMenuPermissionSetting::kAllowOnce:
+      contentSetting = CONTENT_SETTING_DEFAULT;
+      break;
+  }
+
+  _hostContentSettingsMap->SetContentSettingDefaultScope(
+      url, url, ContentSettingsTypeForPermission(permission), contentSetting);
 }
 
 // Returns true if translation is currently active for the page.
@@ -616,17 +715,6 @@ std::string GetTargetLanguageCode(ChromeIOSTranslateClient* translate_client) {
   return translate_client->GetTranslateManager()
       ->GetLanguageState()
       ->current_language();
-}
-
-- (void)openPriceInsightsPanel {
-  if (!_contextualSheetHandler) {
-    return;
-  }
-
-  RecordPageActionMenuFeatureRowSettingsOpened(
-      IOSPageActionMenuFeatureType::kPriceTracking);
-
-  [self.contextualSheetHandler openContextualSheet];
 }
 
 - (void)openTranslateOptions {
@@ -753,15 +841,18 @@ std::string GetTargetLanguageCode(ChromeIOSTranslateClient* translate_client) {
     return NO;
   }
 
-  std::optional<gemini::IneligibilityReasons> result =
-      _geminiService->GeminiIneligibilityForProfile();
+  ProfileIOS* profile =
+      ProfileIOS::FromBrowserState(_webState->GetBrowserState());
+  gemini::GeminiAvailabilityResult availability =
+      gemini::IsGeminiAvailable(gemini::EntryPoint::AIHub, profile, _webState);
 
-  if (!result.has_value()) {
+  if (!availability.ineligibility_reasons.has_value()) {
     return NO;
   }
 
-  return !result.value().chrome_enterprise &&
-         !result.value().account_capability && result.value().workspace;
+  return !availability.ineligibility_reasons->chrome_enterprise &&
+         !availability.ineligibility_reasons->account_capability &&
+         availability.ineligibility_reasons->workspace;
 }
 
 @end

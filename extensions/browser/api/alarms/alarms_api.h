@@ -39,19 +39,19 @@ class AlarmsCreateFunction : public ExtensionFunction {
 
 class AlarmsGetFunction : public ExtensionFunction {
  protected:
-  ~AlarmsGetFunction() override {}
+  ~AlarmsGetFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 
  private:
-  void Callback(const std::string& name, Alarm* alarm);
+  void Callback(Alarm* alarm);
   DECLARE_EXTENSION_FUNCTION("alarms.get", ALARMS_GET)
 };
 
 class AlarmsGetAllFunction : public ExtensionFunction {
  protected:
-  ~AlarmsGetAllFunction() override {}
+  ~AlarmsGetAllFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -63,19 +63,19 @@ class AlarmsGetAllFunction : public ExtensionFunction {
 
 class AlarmsClearFunction : public ExtensionFunction {
  protected:
-  ~AlarmsClearFunction() override {}
+  ~AlarmsClearFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 
  private:
-  void Callback(const std::string& name, bool success);
+  void Callback(bool removed);
   DECLARE_EXTENSION_FUNCTION("alarms.clear", ALARMS_CLEAR)
 };
 
 class AlarmsClearAllFunction : public ExtensionFunction {
  protected:
-  ~AlarmsClearAllFunction() override {}
+  ~AlarmsClearAllFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;

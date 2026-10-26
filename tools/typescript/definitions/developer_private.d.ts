@@ -136,6 +136,8 @@ declare global {
         parentDisabledPermissions: boolean;
         unsupportedManifestVersion: boolean;
         unsupportedDeveloperExtension: boolean;
+        disabledByAnotherExtension: boolean;
+        disabledByExtensionName?: string;
       }
 
       export interface OptionsPage {
@@ -254,6 +256,7 @@ declare global {
         pinnedToToolbar?: boolean;
         isAffectedByMV2Deprecation: boolean;
         canUploadAsAccountExtension: boolean;
+        canShowReviewPrompt: boolean;
       }
 
       export interface ProfileInfo {
@@ -474,6 +477,7 @@ declare global {
           Promise<void>;
       export function showOptions(extensionId: string): Promise<void>;
       export function showPath(extensionId: string): Promise<void>;
+      export function openReviewPage(extensionId: string): Promise<void>;
       export function updateExtensionCommand(update: ExtensionCommandUpdate):
           Promise<void>;
       export function updateExtensionConfiguration(

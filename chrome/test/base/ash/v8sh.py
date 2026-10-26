@@ -19,7 +19,7 @@ def HasSameContent(filename, content):
     try:
         with open(filename, 'rb') as file:
             return file.read() == content
-    except:
+    except:  # noqa: E722
         # Ignore all errors and fall back on a safe bet.
         return False
 
@@ -36,25 +36,37 @@ def main():
     parser.add_argument('cxxoutfile')
     parser.add_argument('jsoutfile')
     parser.add_argument('-v', '--verbose', action='store_true')
-    parser.add_argument('-n',
-                        '--impotent',
-                        action='store_true',
-                        help="don't execute; just print (as if verbose)")
-    parser.add_argument('--deps_js',
-                        action="store",
-                        help=("Path to deps.js for dependency resolution, "
-                              "optional."))
+    parser.add_argument(
+        '-n',
+        '--impotent',
+        action='store_true',
+        help="don't execute; just print (as if verbose)",
+    )
+    parser.add_argument(
+        '--deps_js',
+        action="store",
+        help=("Path to deps.js for dependency resolution, optional."),
+    )
     args = parser.parse_args()
 
     cmd = [args.v8_shell]
     arguments = [
-        args.js2webui_js, args.inputfile, args.srcrootdir, args.deps_js,
-        args.cxxoutfile, args.test_type, args.parameterized
+        args.js2webui_js,
+        args.inputfile,
+        args.srcrootdir,
+        args.deps_js,
+        args.cxxoutfile,
+        args.test_type,
+        args.parameterized,
     ]
-    cmd.extend([
-        '-e', "arguments=" + json.dumps(arguments), args.test_api_js,
-        args.js2webui_js
-    ])
+    cmd.extend(
+        [
+            '-e',
+            "arguments=" + json.dumps(arguments),
+            args.test_api_js,
+            args.js2webui_js,
+        ]
+    )
     if args.verbose or args.impotent:
         print(cmd)
     if not args.impotent:
@@ -67,7 +79,7 @@ def main():
                 with open(args.cxxoutfile, 'wb') as f:
                     f.write(p.stdout)
             shutil.copyfile(args.inputfile, args.jsoutfile)
-        except Exception as ex:
+        except Exception:
             if os.path.exists(args.cxxoutfile):
                 os.remove(args.cxxoutfile)
             if os.path.exists(args.jsoutfile):

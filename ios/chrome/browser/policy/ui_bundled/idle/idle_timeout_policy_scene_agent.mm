@@ -22,6 +22,7 @@
 #import "ios/chrome/browser/policy/ui_bundled/idle/idle_timeout_launch_screen_view_controller.h"
 #import "ios/chrome/browser/policy/ui_bundled/idle/idle_timeout_policy_utils.h"
 #import "ios/chrome/browser/scoped_ui_blocker/ui_bundled/scoped_ui_blocker.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_ui_provider.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/scene_ui_blocker_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
@@ -328,8 +329,9 @@
   // Set the pending snackbar flag for the agent that will show the dialog then
   // show then dismiss any modals and display the dialog.
   _pendingDisplayingSnackbar = YES;
-  _UIBlocker = std::make_unique<ScopedUIBlocker>(self.sceneState,
-                                                 UIBlockerExtent::kApplication);
+  SceneState* sceneState = self.sceneState;
+  _UIBlocker =
+      ScopedUIBlocker::AppScoped(sceneState, sceneState.profileState.appState);
   __weak __typeof(self) weakSelf = self;
   [_sceneHandler dismissModalDialogsWithCompletion:^{
     [weakSelf showIdleTimeoutConfirmation];

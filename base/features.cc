@@ -8,6 +8,8 @@
 
 #include "base/debug/stack_trace.h"
 #include "base/files/file_path.h"
+#include "base/message_loop/message_pump_wakeup_counter.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/task/sequence_manager/sequence_manager_impl.h"
 #include "base/task/thread_pool/job_task_source.h"
@@ -43,11 +45,10 @@ namespace base::features {
 
 namespace {
 
-// An atomic is used because this can be queried racily by a thread checking if
-// an optimization is enabled and a thread initializing this from the
-// FeatureList. All operations use std::memory_order_relaxed because there are
-// no dependent memory operations.
-std::atomic_bool g_is_reduce_ppms_enabled{false};
+// State of the `kI18nOptimizations` feature, to be updated after the feature
+// list is available. All operations use `std::memory_order_relaxed` because
+// there are no dependent memory accesses.
+std::atomic_bool g_i18n_optimizations{true};
 
 }  // namespace
 
@@ -61,6 +62,13 @@ BASE_FEATURE(kFeatureParamWithCache, FEATURE_ENABLED_BY_DEFAULT);
 // exists to ensure that the fast implementation can be disabled quickly if
 // issues are found with it.
 BASE_FEATURE(kFastFilePathIsParent, FEATURE_ENABLED_BY_DEFAULT);
+
+// Enables residency tagging in the heap profiler.
+BASE_FEATURE(kHeapProfilerIncludeResidency, FEATURE_DISABLED_BY_DEFAULT);
+
+// Enables optimizations in //base/i18n (e.g. fast-pathing TimeFormatAsIso8601
+// and avoiding ICU resource bundle lookups for TimeZone::GMT/Unknown).
+BASE_FEATURE(kI18nOptimizations, FEATURE_ENABLED_BY_DEFAULT);
 
 // Use non default low memory device threshold.
 // Value should be given via |LowMemoryDeviceThresholdMB|.
@@ -81,7 +89,18 @@ BASE_FEATURE_PARAM(int,
                    &kLowEndMemoryExperiment,
                    LOW_MEMORY_DEVICE_THRESHOLD_MB);
 
-BASE_FEATURE(kReducePPMs, FEATURE_ENABLED_BY_DEFAULT);
+// Controls whether lock acquisition times are recorded and reported by a
+// given thread.
+BASE_FEATURE(kRecordLockAcquisitionTime, FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE_PARAM(std::string,
+                   kRecordLockAcquisitionTimeAllowedThreads,
+                   &kRecordLockAcquisitionTime,
+                   "RecordLockAcquisitionTimeAllowedThreads",
+                   "CrBrowserMain,CrRendererMain,CrGpuMain,"
+                   "VizCompositor,Compositor,BrowserIO,NetworkService,"
+                   "GPU.ForegroundWorker,GPU.BackgroundWorker,"
+                   "Renderer.ForegroundWorker,Renderer.BackgroundWorker,"
+                   "Browser.ForegroundWorker,Browser.BackgroundWorker");
 
 // Apply base::ScopedBestEffortExecutionFence to registered task queues as well
 // as the thread pool.
@@ -143,8 +162,6 @@ BASE_FEATURE(kBackgroundNotPerceptibleBinding, FEATURE_ENABLED_BY_DEFAULT);
 // thread,
 BASE_FEATURE(kPostPowerMonitorBroadcastReceiverInitToBackground,
              FEATURE_ENABLED_BY_DEFAULT);
-// If enabled, getMyMemoryState IPC will be posted to background.
-BASE_FEATURE(kPostGetMyMemoryStateToBackground, FEATURE_ENABLED_BY_DEFAULT);
 
 // Use a single connection and rebindService() to manage the binding to a child
 // process service.
@@ -195,6 +212,10 @@ BASE_FEATURE_PARAM(bool,
 // failures. Otherwise, it returns TERMINATION_STATUS_OOM.
 BASE_FEATURE(kUseTerminationStatusMemoryExhaustion, FEATURE_ENABLED_BY_DEFAULT);
 
+// Optimize text decoding by using FindFirstNonASCII to find and copy ASCII
+// content.
+BASE_FEATURE(kUtfConversionAsciiFastPath, FEATURE_ENABLED_BY_DEFAULT);
+
 #if BUILDFLAG(IS_WIN)
 // When enabled, use ABOVE_NORMAL_PRIORITY_CLASS for Priority::kUserBlocking on
 // Windows.
@@ -210,6 +231,11 @@ BASE_FEATURE(kRetryCreateFileMappingOnCommitLimit, FEATURE_DISABLED_BY_DEFAULT);
 // points (such as directory junctions). This protects against TOCTOU
 // vulnerabilities and prevents deleting files outside the target directory.
 BASE_FEATURE(kPreventReparsePointTraversal, FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, FilePersistentMemoryAllocator calls ::FlushFileBuffers() on the
+// underlying file handle during synchronous flushes to commit the cache buffers
+// to physical storage.
+BASE_FEATURE(kFlushFileBuffersOnSyncFlush, FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_POSIX)
@@ -225,13 +251,14 @@ BASE_FEATURE_PARAM(int, kSpinCountArm, &kBaseLockTrySpin, "spin_count_arm", 0);
 #endif  // defined(ARCH_CPU_X86_FAMILY)
 #endif  // BUILDFLAG(IS_POSIX)
 
-bool IsReducePPMsEnabled() {
-  return g_is_reduce_ppms_enabled.load(std::memory_order_relaxed);
+bool IsI18nOptimizationsEnabled() {
+  return g_i18n_optimizations.load(std::memory_order_relaxed);
 }
 
 void Init() {
-  g_is_reduce_ppms_enabled.store(FeatureList::IsEnabled(kReducePPMs),
-                                 std::memory_order_relaxed);
+  g_i18n_optimizations.store(FeatureList::IsEnabled(kI18nOptimizations),
+                             std::memory_order_relaxed);
+  strings_internal::InitializeUtfStringConversionsFeatures();
 #if BUILDFLAG(IS_POSIX)
   base::Lock::InitializeFeatures();
 #endif  // BUILDFLAG(IS_POSIX)
@@ -242,6 +269,7 @@ void Init() {
 
   debug::StackTrace::InitializeFeatures();
   FilePath::InitializeFeatures();
+  MessagePumpWakeupCounter::InitializeFeatures();
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   MessagePumpEpoll::InitializeFeatures();

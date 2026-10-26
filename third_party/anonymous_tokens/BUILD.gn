@@ -1,3 +1,4 @@
+import("//build/config/rust.gni")
 import("//third_party/protobuf/proto_library.gni")
 
 config("anonymous_tokens_config") {
@@ -108,6 +109,7 @@ source_set("proto_utils") {
     "//third_party/abseil-cpp:absl",
   ]
 }
+
 source_set("status_utils") {
   sources = [ "src/anonymous_tokens/cpp/shared/status_utils.h" ]
 
@@ -248,6 +250,19 @@ source_set("tokens_encodings") {
   ]
 }
 
+source_set("athm_token_encodings_utils") {
+  sources = [
+    "src/anonymous_tokens/cpp/privacy_pass/athm_token_encodings_utils.cc",
+    "src/anonymous_tokens/cpp/privacy_pass/athm_token_encodings_utils.h",
+  ]
+  public_configs = [ ":anonymous_tokens_config" ]
+  deps = [ ":status_utils" ]
+  public_deps = [
+    "//third_party/abseil-cpp:absl",
+    "//third_party/boringssl",
+  ]
+}
+
 static_library("anonymous_tokens_test_support") {
   testonly = true
   sources = [
@@ -325,5 +340,33 @@ source_set("anonymous_tokens_tests") {
   ]
   if (is_ios) {
     deps += [ ":test_data" ]
+  }
+}
+
+# Anonymous Tokens with Hidden Metadata (ATHM), built from the autorolled
+# upstream mirror at src/athm. We build the `boringssl` backend so the elliptic
+# curve / hashing primitives come from Chromium's in-tree BoringSSL (via the
+# bssl_sys FFI bindings) rather than a pure-Rust crypto stack. The crate's Cargo
+# `default = ["rustcrypto"]` feature is irrelevant here: cargo_crate does not
+# run Cargo, so only the explicitly listed features are enabled.
+if (enable_rust) {
+  import("//build/rust/cargo_crate.gni")
+
+  cargo_crate("athm") {
+    crate_root = "src/athm/src/lib.rs"
+    sources = [
+      "src/athm/src/backend/boringssl.rs",
+      "src/athm/src/backend/mod.rs",
+      "src/athm/src/lib.rs",
+    ]
+    edition = "2021"
+    build_native_rust_unit_tests = false
+    allow_unsafe = true  # Raw bssl_sys FFI; reviewed per-call SAFETY blocks.
+    features = [ "boringssl" ]
+    deps = [
+      "//third_party/boringssl:bssl_sys",
+      "//third_party/rust/subtle/v2:lib",
+      "//third_party/rust/zeroize/v1:lib",
+    ]
   }
 }

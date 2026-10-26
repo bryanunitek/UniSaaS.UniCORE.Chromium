@@ -26,16 +26,35 @@ namespace {
 // Don't show errors for policies starting with that prefix.
 const char kPolicyCommentPrefix[] = "_comment";
 
+bool IsCloudOnlyPolicySource(const policy::PolicyMap::Entry& policy) {
+  return policy.source == policy::POLICY_SOURCE_CLOUD ||
+         policy.source == policy::POLICY_SOURCE_CLOUD_FROM_ASH;
+}
+
+bool IsCloudPolicySource(const policy::PolicyMap::Entry& policy) {
+  if (policy.source == policy::POLICY_SOURCE_MERGED) {
+    for (const auto& conflict : policy.conflicts) {
+      if (!IsCloudOnlyPolicySource(conflict.entry())) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return IsCloudOnlyPolicySource(policy);
+}
+
 }  // namespace
 
 ConfigurationPolicyHandlerList::ConfigurationPolicyHandlerList(
     const PopulatePolicyHandlerParametersCallback& parameters_callback,
     const GetChromePolicyDetailsCallback& details_callback,
-    bool are_future_policies_allowed_by_default)
+    bool are_future_policies_allowed_by_default,
+    bool are_cloud_only_policies_allowed)
     : parameters_callback_(parameters_callback),
       details_callback_(details_callback),
       are_future_policies_allowed_by_default_(
-          are_future_policies_allowed_by_default) {}
+          are_future_policies_allowed_by_default),
+      are_cloud_only_policies_allowed_(are_cloud_only_policies_allowed) {}
 
 ConfigurationPolicyHandlerList::~ConfigurationPolicyHandlerList() = default;
 
@@ -84,6 +103,8 @@ void ConfigurationPolicyHandlerList::ApplyPolicySettings(
     if (handler->CheckPolicySettings(filtered_policies, errors) && prefs) {
       handler->ApplyPolicySettingsWithParameters(filtered_policies, parameters,
                                                  prefs);
+    } else {
+      handler->OnPolicySettingsNotApplied();
     }
   }
 
@@ -110,6 +131,10 @@ bool ConfigurationPolicyHandlerList::IsBlockedDesktopAndroidPolicy(
 // flag needs to be removed as soon as we feel comfortable about all exist
 // Android
 #if BUILDFLAG(IS_DESKTOP_ANDROID)
+  if (!base::FeatureList::GetInstance()) {
+    return false;
+  }
+
   if (!base::FeatureList::IsEnabled(features::kDesktopAndroidPolicy)) {
     return false;
   }
@@ -164,7 +189,13 @@ bool ConfigurationPolicyHandlerList::IsPolicySupported(
   if (policy_details->source_restriction == kSourceRestrictionCloudOnly &&
       !IsCloudOnlyPolicy(entry)) {
     if (errors) {
-      errors->AddError(entry.first, IDS_POLICY_CLOUD_SOURCE_ONLY_ERROR);
+      if (!are_cloud_only_policies_allowed_ &&
+          IsCloudPolicySource(entry.second)) {
+        errors->AddError(entry.first,
+                         IDS_POLICY_CLOUD_MANAGEMENT_DISABLED_ERROR);
+      } else {
+        errors->AddError(entry.first, IDS_POLICY_CLOUD_SOURCE_ONLY_ERROR);
+      }
     }
     return false;
   }
@@ -186,17 +217,19 @@ bool ConfigurationPolicyHandlerList::IsBlockedPlatformDevicePolicy(
   return false;
 }
 
-namespace {
-
-bool IsCloudOnlyPolicySource(const policy::PolicyMap::Entry& policy) {
-  return policy.source == policy::POLICY_SOURCE_CLOUD ||
-         policy.source == policy::POLICY_SOURCE_CLOUD_FROM_ASH;
-}
-
-}  // namespace
-
 bool ConfigurationPolicyHandlerList::IsCloudOnlyPolicy(
     PolicyMap::const_reference entry) const {
+#if BUILDFLAG(IS_ANDROID)
+  // For development and testing without a policy server.
+  if (entry.second.source == POLICY_SOURCE_COMMAND_LINE) {
+    return true;
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  if (!are_cloud_only_policies_allowed_) {
+    return false;
+  }
+
   // CloudReportingEnabled was added before the cloud_only tag and historically
   // never checked the policy source. Skip enforcement for it to avoid breaking
   // existing setups.
@@ -205,35 +238,13 @@ bool ConfigurationPolicyHandlerList::IsCloudOnlyPolicy(
     return true;
   }
 
-#if BUILDFLAG(IS_ANDROID)
-  // For development and testing without a policy server.
-  if (entry.second.source == POLICY_SOURCE_COMMAND_LINE) {
-    return true;
-  }
-#endif  // BUILDFLAG(IS_ANDROID)
-
-  if (entry.second.source == POLICY_SOURCE_MERGED) {
-    for (const auto& conflict : entry.second.conflicts) {
-      if (!IsCloudOnlyPolicySource(conflict.entry())) {
-        return false;
-      }
-    }
-    return true;
-  }
-  return IsCloudOnlyPolicySource(entry.second);
+  return IsCloudPolicySource(entry.second);
 }
 
 bool ConfigurationPolicyHandlerList::IsBlockedFuturePolicy(
     const base::flat_set<std::string>& future_policies_allowed,
     const PolicyDetails& policy_details,
     PolicyMap::const_reference entry) const {
-#if BUILDFLAG(IS_DESKTOP_ANDROID)
-  if (base::FeatureList::IsEnabled(features::kFuturePoliciesOnDesktopAndroid) &&
-      policy_details.is_future) {
-    return false;
-  }
-#endif  // BUILDFLAG(IS_DESKTOP_ANDROID)
-
   return !are_future_policies_allowed_by_default_ && policy_details.is_future &&
          !future_policies_allowed.contains(entry.first);
 }

@@ -10,13 +10,11 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/ui/tabs/tab_style.h"
-#include "chrome/browser/ui/tabs/tab_types.h"
 #include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 
-class Browser;
 class BrowserWindowInterface;
 class Tab;
 class TabGroup;
@@ -197,6 +195,9 @@ class TabSlotController {
   // in the same window will redraw on top of the the favicon area of any tab.
   virtual bool CanPaintThrobberToLayer() const = 0;
 
+  // Returns true if the tab strip is painted on a glass frame.
+  virtual bool IsGlassFrame() const = 0;
+
   // Returns the color of the separator between the tabs.
   virtual SkColor GetTabSeparatorColor() const = 0;
 
@@ -233,6 +234,15 @@ class TabSlotController {
   // implementation.
   virtual bool IsGroupCollapsed(const tab_groups::TabGroupId& group) const = 0;
 
+  // Returns the currently focused tab group ID, if any.
+  virtual std::optional<tab_groups::TabGroupId> GetFocusedGroup() const = 0;
+
+  // Enters focus mode for the given tab `group`.
+  virtual void EnterFocusMode(const tab_groups::TabGroupId& group) = 0;
+
+  // Exits focus mode.
+  virtual void ExitFocusMode(std::optional<TabGroupFocusExitReason> reason) = 0;
+
   // Returns the actual painted color of the given `group`, which depends on the
   // current theme.
   virtual SkColor GetPaintedGroupColor(
@@ -243,8 +253,6 @@ class TabSlotController {
 
   // Attempts to move the specified group to the right.
   virtual void ShiftGroupRight(const tab_groups::TabGroupId& group) = 0;
-
-  virtual Browser* GetBrowser() = 0;
 
   virtual BrowserWindowInterface* GetBrowserWindowInterface() = 0;
 

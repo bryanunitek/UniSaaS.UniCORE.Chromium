@@ -58,13 +58,14 @@
 #include "third_party/blink/renderer/core/html/loading_attribute.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
+#include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/frame_load_request.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
 #include "third_party/blink/renderer/core/loader/resource_initiator_helper.h"
-#include "third_party/blink/renderer/core/loader/url_matcher.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/scrolling/root_scroller_controller.h"
+#include "third_party/blink/renderer/core/paint/object_paint_invalidator.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/timing/dom_window_performance.h"
@@ -87,14 +88,6 @@
 namespace blink {
 
 namespace {
-
-using PluginSet = HeapHashSet<Member<WebPluginContainerImpl>>;
-PluginSet& PluginsPendingDispose() {
-  using PluginSetHolder = DisallowNewWrapper<PluginSet>;
-  DEFINE_STATIC_LOCAL(Persistent<PluginSetHolder>, holder,
-                      (MakeGarbageCollected<PluginSetHolder>()));
-  return holder->Value();
-}
 
 bool DoesParentAllowLazyLoadingChildren(Document& document) {
   LocalFrame* containing_frame = document.GetFrame();
@@ -167,21 +160,6 @@ SubframeLoadingDisabler::DisabledSubtreeRoots() {
   return nodes;
 }
 
-// static
-int HTMLFrameOwnerElement::PluginDisposeSuspendScope::suspend_count_ = 0;
-
-void HTMLFrameOwnerElement::PluginDisposeSuspendScope::
-    PerformDeferredPluginDispose() {
-  DCHECK_EQ(suspend_count_, 1);
-  suspend_count_ = 0;
-
-  PluginSet dispose_set;
-  PluginsPendingDispose().swap(dispose_set);
-  for (const auto& plugin : dispose_set) {
-    plugin->Dispose();
-  }
-}
-
 HTMLFrameOwnerElement::HTMLFrameOwnerElement(const QualifiedName& tag_name,
                                              Document& document)
     : HTMLElement(tag_name, document),
@@ -239,32 +217,16 @@ Node::InsertionNotificationRequest HTMLFrameOwnerElement::InsertedInto(
   return result;
 }
 
-static void SetIsCanvasOrInCanvasSubtreeRecursively(Element& element,
-                                                    bool is_in_canvas) {
-  if (IsA<HTMLCanvasElement>(element)) {
-    is_in_canvas = true;
-  }
-  if (element.IsCanvasOrInCanvasSubtree() == is_in_canvas) {
-    return;
-  }
-  element.SetIsCanvasOrInCanvasSubtree(is_in_canvas);
-
-  if (ShadowRoot* shadow_root = element.GetShadowRoot()) {
-    for (Element& child : ElementTraversal::ChildrenOf(*shadow_root)) {
-      SetIsCanvasOrInCanvasSubtreeRecursively(child, is_in_canvas);
-    }
-  }
-  for (Element& child : ElementTraversal::ChildrenOf(element)) {
-    SetIsCanvasOrInCanvasSubtreeRecursively(child, is_in_canvas);
-  }
-}
-
-void HTMLFrameOwnerElement::DidChangeIsCanvasOrInCanvasSubtree() {
-  HTMLElement::DidChangeIsCanvasOrInCanvasSubtree();
+void HTMLFrameOwnerElement::DidChangeIsInCanvasSubtree(
+    CanvasSubtreePropagation propagation_behavior) {
+  HTMLElement::DidChangeIsInCanvasSubtree(propagation_behavior);
   if (Document* inner_document = contentDocument()) {
     if (Element* root = inner_document->documentElement()) {
-      SetIsCanvasOrInCanvasSubtreeRecursively(*root,
-                                              IsCanvasOrInCanvasSubtree());
+      root->SetIsInCanvasSubtree(IsInCanvasSubtree(), propagation_behavior);
+      if (auto* layout_view = inner_document->GetLayoutView()) {
+        layout_view->SetNeedsPaintPropertyUpdate();
+        layout_view->SetSubtreeShouldDoFullPaintInvalidation();
+      }
     }
   }
 }
@@ -428,14 +390,6 @@ FocusgroupFlags HTMLFrameOwnerElement::NativeArrowKeyAxes() const {
   // Frames (iframe/frame) and object/embed elements host content that
   // typically has its own arrow key handling.
   return FocusgroupFlags::kInline | FocusgroupFlags::kBlock;
-}
-
-void HTMLFrameOwnerElement::DisposePluginSoon(WebPluginContainerImpl* plugin) {
-  if (PluginDisposeSuspendScope::suspend_count_) {
-    PluginsPendingDispose().insert(plugin);
-    PluginDisposeSuspendScope::suspend_count_ |= 1;
-  } else
-    plugin->Dispose();
 }
 
 void HTMLFrameOwnerElement::NaturalSizingInfoChanged() {
@@ -636,13 +590,13 @@ void HTMLFrameOwnerElement::SetEmbeddedContentView(
 
   EmbeddedContentView* old_view = embedded_content_view_.Get();
   embedded_content_view_ = embedded_content_view;
-  if (old_view) {
-    if (old_view->IsAttached()) {
-      old_view->DetachFromLayout();
-      if (old_view->IsPluginView())
-        DisposePluginSoon(To<WebPluginContainerImpl>(old_view));
-      else
-        old_view->Dispose();
+  if (old_view && old_view->IsAttached()) {
+    old_view->DetachFromLayout();
+    // Dispose a plugin but not a FrameView here. FrameViews are owned and
+    // disposed by their Frame, and an <iframe> that becomes display:none keeps
+    // an active FrameView which could be reattached later.
+    if (auto* plugin = DynamicTo<WebPluginContainerImpl>(old_view)) {
+      plugin->Dispose();
     }
   }
 
@@ -776,8 +730,6 @@ bool HTMLFrameOwnerElement::LoadOrRedirectSubframe(
   KURL url_to_request = url.IsNull() ? BlankUrl() : url;
   ResourceRequestHead request(url_to_request);
   request.SetReferrerPolicy(ReferrerPolicyAttribute());
-  request.SetHasUserGesture(
-      LocalFrame::HasTransientUserActivation(GetDocument().GetFrame()));
 
   network::mojom::blink::TrustTokenParamsPtr trust_token_params =
       ConstructTrustTokenParams();

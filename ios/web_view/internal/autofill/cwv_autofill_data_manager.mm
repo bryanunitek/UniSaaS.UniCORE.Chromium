@@ -19,6 +19,7 @@
 #import "components/password_manager/core/browser/password_store/password_store_consumer.h"
 #import "components/password_manager/core/browser/password_store/password_store_interface.h"
 #import "components/password_manager/core/browser/password_store/password_store_util.h"
+#import "components/password_manager/core/browser/password_string.h"
 #import "ios/web/public/thread/web_task_traits.h"
 #import "ios/web/public/thread/web_thread.h"
 #import "ios/web_view/internal/autofill/cwv_autofill_data_manager_internal.h"
@@ -95,14 +96,15 @@ class WebViewPasswordStoreConsumer
 
   void OnGetPasswordStoreResultsOrErrorFrom(
       password_manager::PasswordStoreInterface* store,
-      password_manager::LoginsResultOrError results_or_error) override {
-    if (std::holds_alternative<password_manager::PasswordStoreBackendError>(
-            results_or_error)) {
+      base::expected<std::vector<password_manager::StoredCredential>,
+                     password_manager::PasswordStoreBackendError>
+          results_or_error) override {
+    if (!results_or_error) {
       [data_manager_ handlePasswordStoreResults:@[]];
       return;
     }
-    auto results =
-        std::get<password_manager::LoginsResult>(std::move(results_or_error));
+    std::vector<password_manager::StoredCredential> results =
+        std::move(*results_or_error);
 
     BOOL isAffiliationsEnabled = [data_manager_ isPasswordAffiliationEnabled];
 
@@ -329,7 +331,8 @@ class WebViewPasswordStoreObserver
   // Only change the password if it actually changed and not empty.
   if (newPassword && newPassword.length > 0 &&
       ![newPassword isEqualToString:password.password]) {
-    passwordForm->password_value = base::SysNSStringToUTF16(newPassword);
+    passwordForm->password_value =
+        password_manager::PasswordString(base::SysNSStringToUTF16(newPassword));
   }
 
   // Because a password's primary key depends on its username, changing the
@@ -368,7 +371,8 @@ class WebViewPasswordStoreObserver
   form.url = password_manager_util::StripAuthAndParams(url);
   form.signon_realm = form.url.DeprecatedGetOriginAsURL().spec();
   form.username_value = base::SysNSStringToUTF16(username);
-  form.password_value = base::SysNSStringToUTF16(password);
+  form.password_value =
+      password_manager::PasswordString(base::SysNSStringToUTF16(password));
   form.date_created = base::Time::FromNSDate(timestamp);
 
   _passwordStore->AddLogin(password_manager::FromPasswordForm(std::move(form)));

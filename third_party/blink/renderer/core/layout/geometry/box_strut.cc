@@ -6,16 +6,15 @@
 
 #include "third_party/blink/renderer/core/layout/geometry/logical_rect.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
 String BoxStrut::ToString() const {
-  return String::Format("Inline: (%s %s) Block: (%s %s)",
-                        inline_start.ToString().Ascii().c_str(),
-                        inline_end.ToString().Ascii().c_str(),
-                        block_start.ToString().Ascii().c_str(),
-                        block_end.ToString().Ascii().c_str());
+  return Format("Inline: ({} {}) Block: ({} {})", inline_start.ToString(),
+                inline_end.ToString(), block_start.ToString(),
+                block_end.ToString());
 }
 
 std::ostream& operator<<(std::ostream& stream, const BoxStrut& value) {
@@ -77,6 +76,13 @@ PhysicalBoxStrut::PhysicalBoxStrut(const PhysicalSize& outer_size,
       right(outer_size.width - inner_rect.Right()),
       bottom(outer_size.height - inner_rect.Bottom()),
       left(inner_rect.offset.left) {}
+
+PhysicalBoxStrut::PhysicalBoxStrut(const PhysicalRect& outer_rect,
+                                   const PhysicalRect& inner_rect)
+    : top(inner_rect.offset.top - outer_rect.offset.top),
+      right(outer_rect.Right() - inner_rect.Right()),
+      bottom(outer_rect.Bottom() - inner_rect.Bottom()),
+      left(inner_rect.offset.left - outer_rect.offset.left) {}
 
 PhysicalBoxStrut& PhysicalBoxStrut::Unite(const PhysicalBoxStrut& other) {
   top = std::max(top, other.top);

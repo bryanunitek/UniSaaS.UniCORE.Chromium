@@ -3,22 +3,18 @@
 // found in the LICENSE file.
 
 #include "base/path_service.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/picture_in_picture_browser_frame_view.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_chip.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/test/base/save_desktop_snapshot.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/permissions/permission_request_manager_test_api.h"
-#include "components/permissions/test/permission_request_observer.h"
-#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "media/base/media_switches.h"
 #include "net/dns/mock_host_resolver.h"
-#include "third_party/blink/public/common/features.h"
 #include "ui/views/widget/any_widget_observer.h"
 
 namespace {
@@ -78,7 +74,7 @@ class PermissionPromptPreviewBrowserTest : public UiBrowserTest {
 
   void ShowUi(const std::string& name) override {
     GURL url = embedded_test_server()->GetURL(kTestHtmlPage);
-    TabStripModel* tab_strip = browser()->tab_strip_model();
+    TabStripModel* tab_strip = browser()->GetTabStripModel();
     content::WebContents* embedder_contents = tab_strip->GetActiveWebContents();
     ASSERT_TRUE(embedder_contents);
     content::RenderFrameHost* render_frame_host =

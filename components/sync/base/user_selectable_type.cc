@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "base/containers/fixed_flat_map.h"
+#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
@@ -48,13 +49,7 @@ UserSelectableTypeInfo GetUserSelectableTypeInfo(
     // TODO(crbug.com/412602018): Remove this parameter once the feature is
     // launched.
     bool skip_feature_checks_if_early = false) {
-  // TODO(crbug.com/445841720): In CL #3, map AI_THREAD to an existing
-  // selectable type or to a new one. The first option should be trivial, the
-  // second requires touching UI code across platforms.
   // TODO(crbug.com/445840788): In CL #3, map CONTEXTUAL_TASK to an existing
-  // selectable type or to a new one. The first option should be trivial, the
-  // second requires touching UI code across platforms.
-  // TODO(crbug.com/476335087): In CL #3, map GEMINI_THREAD to an existing
   // selectable type or to a new one. The first option should be trivial, the
   // second requires touching UI code across platforms.
   static_assert(64 == syncer::GetNumDataTypes(),
@@ -91,7 +86,8 @@ UserSelectableTypeInfo GetUserSelectableTypeInfo(
     case UserSelectableType::kThemes:
       return {kThemesTypeName, THEMES, {THEMES, THEMES_IOS, THEMES_ANDROID}};
     case UserSelectableType::kHistory: {
-      DataTypeSet types = {HISTORY, HISTORY_DELETE_DIRECTIVES, USER_EVENTS};
+      DataTypeSet types = {HISTORY, HISTORY_DELETE_DIRECTIVES, USER_EVENTS,
+                           JOURNEY};
       // With `kSpellcheckSeparateLocalAndAccountDictionaries` enabled,
       // `DICTIONARY` is controlled by the History opt-in.
       if ((!skip_feature_checks_if_early || base::FeatureList::GetInstance()) &&
@@ -109,7 +105,7 @@ UserSelectableTypeInfo GetUserSelectableTypeInfo(
       // In Chrome OS, "Apps" is a sub-item of OS settings.
       return {kAppsTypeName, UNSPECIFIED};
 #else
-      return {kAppsTypeName, APPS, {APPS, APP_SETTINGS, WEB_APPS, WEB_APKS}};
+      return {kAppsTypeName, APPS, {APPS, APP_SETTINGS, WEB_APPS}};
 #endif
     case UserSelectableType::kReadingList:
       return {kReadingListTypeName, READING_LIST, {READING_LIST}};
@@ -119,11 +115,9 @@ UserSelectableTypeInfo GetUserSelectableTypeInfo(
               SESSIONS,
               {SESSIONS, SAVED_TAB_GROUP, SHARED_COMMENT, SHARED_TAB_GROUP_DATA,
                COLLABORATION_GROUP, SHARED_TAB_GROUP_ACCOUNT_DATA,
-               WORKSPACE_DESK, ENCRYPTED_TAB_CONTEXT_CONTAINER}};
+               WORKSPACE_DESK, NOTEBOOK}};
 #else
-      return {kTabsTypeName,
-              SESSIONS,
-              {SESSIONS, WORKSPACE_DESK, ENCRYPTED_TAB_CONTEXT_CONTAINER}};
+      return {kTabsTypeName, SESSIONS, {SESSIONS, WORKSPACE_DESK, NOTEBOOK}};
 #endif
     case UserSelectableType::kSavedTabGroups:
       // Note: Tab groups is presented as a separate type only on desktop.
@@ -138,9 +132,8 @@ UserSelectableTypeInfo GetUserSelectableTypeInfo(
       return {kPaymentsTypeName,
               AUTOFILL_WALLET_DATA,
               {AUTOFILL_WALLET_CREDENTIAL, AUTOFILL_WALLET_DATA,
-               AUTOFILL_WALLET_METADATA, AUTOFILL_WALLET_OFFER,
-               AUTOFILL_WALLET_USAGE, AUTOFILL_VALUABLE,
-               AUTOFILL_VALUABLE_METADATA}};
+               AUTOFILL_WALLET_METADATA, AUTOFILL_WALLET_USAGE,
+               AUTOFILL_VALUABLE, AUTOFILL_VALUABLE_METADATA}};
     case UserSelectableType::kProductComparison:
       return {
           kProductComparisonTypeName, PRODUCT_COMPARISON, {PRODUCT_COMPARISON}};
@@ -209,12 +202,9 @@ std::optional<UserSelectableType> GetUserSelectableTypeFromString(
 }
 
 std::string UserSelectableTypeSetToString(UserSelectableTypeSet types) {
-  std::vector<std::string> type_names;
-  type_names.reserve(types.size());
-  for (UserSelectableType type : types) {
-    type_names.push_back(GetUserSelectableTypeName(type));
-  }
-  return base::JoinString(type_names, ", ");
+  return base::JoinString(
+      base::ToVector<std::string_view>(types, &GetUserSelectableTypeName),
+      ", ");
 }
 
 DataTypeSet UserSelectableTypeToAllDataTypes(UserSelectableType type) {
@@ -273,12 +263,9 @@ const char* GetUserSelectableOsTypeName(UserSelectableOsType type) {
 }
 
 std::string UserSelectableOsTypeSetToString(UserSelectableOsTypeSet types) {
-  std::vector<std::string> type_names;
-  type_names.reserve(types.size());
-  for (UserSelectableOsType type : types) {
-    type_names.push_back(GetUserSelectableOsTypeName(type));
-  }
-  return base::JoinString(type_names, ", ");
+  return base::JoinString(
+      base::ToVector<std::string_view>(types, &GetUserSelectableOsTypeName),
+      ", ");
 }
 
 std::optional<UserSelectableOsType> GetUserSelectableOsTypeFromString(

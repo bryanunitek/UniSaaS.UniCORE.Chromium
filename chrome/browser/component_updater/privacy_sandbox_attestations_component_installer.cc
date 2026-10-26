@@ -4,8 +4,10 @@
 
 #include "chrome/browser/component_updater/privacy_sandbox_attestations_component_installer.h"
 
-#include <cstdint>
+#include <stdint.h>
+
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -44,7 +46,7 @@ constexpr uint8_t kPrivacySandboxAttestationsPublicKeySHA256[32] = {
     0xb0, 0xa1, 0x36, 0x44, 0x59, 0xf6, 0x22, 0x38, 0xa8, 0x7c, 0xc9,
     0x7b, 0x7a, 0x43, 0x2c, 0x72, 0xee, 0x04, 0x01, 0xae, 0xc0};
 
-const char kPrivacySandboxAttestationsManifestName[] =
+constexpr char kPrivacySandboxAttestationsManifestName[] =
     "Privacy Sandbox Attestations";
 
 }  // namespace
@@ -127,8 +129,7 @@ PrivacySandboxAttestationsComponentInstallerPolicy::GetRelativeInstallDir()
 
 void PrivacySandboxAttestationsComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(std::begin(kPrivacySandboxAttestationsPublicKeySHA256),
-               std::end(kPrivacySandboxAttestationsPublicKeySHA256));
+  hash->assign_range(kPrivacySandboxAttestationsPublicKeySHA256);
 }
 
 std::string PrivacySandboxAttestationsComponentInstallerPolicy::GetName()

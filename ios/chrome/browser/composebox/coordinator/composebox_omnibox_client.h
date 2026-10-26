@@ -75,6 +75,8 @@ class ComposeboxOmniboxClient final : public OmniboxClientIOS {
                        bool default_match_changed,
                        bool should_prerender,
                        const BitmapFetchedCallback& on_bitmap_fetched) override;
+  void StartPrerender(const GURL& url, ui::PageTransition transition) override;
+  void CancelPrerender() override;
   void OnTextChanged(const AutocompleteMatch& current_match,
                      bool user_input_in_progress,
                      const std::u16string& user_text,
@@ -90,7 +92,7 @@ class ComposeboxOmniboxClient final : public OmniboxClientIOS {
       TemplateURLRef::PostContent* post_content,
       WindowOpenDisposition disposition,
       ui::PageTransition transition,
-      AutocompleteMatchType::Type match_type,
+      omnibox::AutocompleteMatchType match_type,
       base::TimeTicks match_selection_timestamp,
       bool destination_url_entered_without_scheme,
       bool destination_url_entered_with_http_scheme,
@@ -106,6 +108,8 @@ class ComposeboxOmniboxClient final : public OmniboxClientIOS {
   omnibox::InputState GetInputState() const override;
 
   bool ShouldSkipZeroSuggestRequest() const override;
+
+  bool ShouldSuppressVerbatimSuggestion() const override;
 
  private:
   raw_ptr<WebLocationBar> location_bar_;

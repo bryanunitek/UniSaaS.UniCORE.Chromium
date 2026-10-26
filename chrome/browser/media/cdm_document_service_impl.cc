@@ -8,6 +8,7 @@
 
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/self_deleting.h"
 #include "build/build_config.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -37,10 +38,15 @@
 
 #include <aclapi.h>
 
+#include "base/containers/flat_set.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
+#include "base/synchronization/lock.h"
 #include "base/system/sys_info.h"
+#include "base/task/lazy_thread_pool_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/win/security_util.h"
@@ -63,10 +69,10 @@ const uint32_t kCurrentStorageIdVersion = 1;
 
 std::vector<uint8_t> GetStorageIdSaltFromProfile(
     content::RenderFrameHost* rfh) {
-  DCHECK(rfh);
+  CHECK(rfh, base::NotFatalUntil::M161);
   Profile* profile =
       Profile::FromBrowserContext(rfh->GetProcess()->GetBrowserContext());
-  return MediaStorageIdSalt::GetSalt(profile->GetPrefs());
+  return MediaStorageIdSalt::GetSalt(profile);
 }
 
 #endif  // BUILDFLAG(ENABLE_CDM_STORAGE_ID)
@@ -127,6 +133,17 @@ bool RevokeAccess(const base::FilePath& path,
   return success;
 }
 
+// Get a dedicated SequencedTaskRunner for CDM directory operations to prevent
+// race conditions when multiple frames or profiles request CDMs concurrently.
+base::LazyThreadPoolSequencedTaskRunner g_cdm_data_task_runner =
+    LAZY_THREAD_POOL_SEQUENCED_TASK_RUNNER_INITIALIZER(
+        base::TaskTraits({base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+                          base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN}));
+
+scoped_refptr<base::SequencedTaskRunner> GetCdmDataTaskRunner() {
+  return g_cdm_data_task_runner.Get();
+}
+
 bool CreateCdmStorePathRootAndGrantAccessIfNeeded(
     const base::FilePath& cdm_store_path_root) {
   if (!media::MediaFoundationCdm::IsAvailable()) {
@@ -134,6 +151,15 @@ bool CreateCdmStorePathRootAndGrantAccessIfNeeded(
                    "Windows 10.";
     return false;
   }
+
+  // To avoid revoking and regranting ACLs on every CDM request (which locks
+  // out asynchronous utility processes), only perform the ACL fix once per
+  // session per directory.
+  if (CdmDocumentServiceImpl::GetCdmStoreProcessedPaths().contains(
+          cdm_store_path_root)) {
+    return true;
+  }
+
   auto sids = base::win::Sid::FromNamedCapabilityVector(
       {sandbox::policy::kMediaFoundationCdmData});
 
@@ -168,17 +194,23 @@ bool CreateCdmStorePathRootAndGrantAccessIfNeeded(
   // propagate to existing children, leaving them inaccessible to the LPAC.
   // The ACE applied to the root itself is identical in either case; only the
   // propagation to existing children differs.
-  return base::win::GrantAccessToPath(
-      cdm_store_path_root, sids,
-      FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE,
-      CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE | INHERIT_ONLY_ACE,
-      /*recursive=*/true);
+  if (!base::win::GrantAccessToPath(
+          cdm_store_path_root, sids,
+          FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE,
+          CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE | INHERIT_ONLY_ACE,
+          /*recursive=*/true)) {
+    return false;
+  }
+
+  CdmDocumentServiceImpl::GetCdmStoreProcessedPaths().insert(
+      cdm_store_path_root);
+  return true;
 }
 
 std::unique_ptr<media::MediaFoundationCdmData>
 GetMediaFoundationCdmDataInternal(const base::FilePath profile_path,
                                   std::unique_ptr<CdmPrefData> pref_data) {
-  DCHECK(pref_data);
+  CHECK(pref_data, base::NotFatalUntil::M161);
 
   auto cdm_store_path_root = GetCdmStorePathRootForProfile(profile_path);
   if (!CreateCdmStorePathRootAndGrantAccessIfNeeded(cdm_store_path_root)) {
@@ -199,8 +231,8 @@ GetMediaFoundationCdmDataInternal(const base::FilePath profile_path,
     return nullptr;
   }
 
-  return std::make_unique<media::MediaFoundationCdmData>(
-      pref_data->origin_id(), pref_data->client_token(), cdm_store_path_root);
+  return std::make_unique<media::MediaFoundationCdmData>(pref_data->origin_id(),
+                                                         cdm_store_path_root);
 }
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -213,33 +245,32 @@ void CdmDocumentServiceImpl::Create(
 
   // PlatformVerificationFlow and the pref service requires to be run/accessed
   // on the UI thread.
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   // The object is bound to the lifetime of |render_frame_host| and the mojo
   // connection. See DocumentService for details.
-  new CdmDocumentServiceImpl(*render_frame_host, std::move(receiver));
+  base::MakeSelfDeleting<CdmDocumentServiceImpl>(*render_frame_host,
+                                                 std::move(receiver));
 }
 
 CdmDocumentServiceImpl::CdmDocumentServiceImpl(
     content::RenderFrameHost& render_frame_host,
-    mojo::PendingReceiver<media::mojom::CdmDocumentService> receiver)
-    : DocumentService(render_frame_host, std::move(receiver)) {}
+    mojo::PendingReceiver<media::mojom::CdmDocumentService> receiver,
+    base::SelfDeletingPassKey key)
+    : DocumentService(render_frame_host, std::move(receiver), key) {}
 
 CdmDocumentServiceImpl::~CdmDocumentServiceImpl() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
 void CdmDocumentServiceImpl::ChallengePlatform(
     const std::string& service_id,
     const std::string& challenge,
     ChallengePlatformCallback callback) {
   DVLOG(2) << __func__;
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
-  // TODO(crbug.com/40499115). This should be commented out at the mojom
-  // level so that it's only available for ChromeOS.
-
-#if BUILDFLAG(IS_CHROMEOS)
   bool success = platform_verification::PerformBrowserChecks(
       render_frame_host().GetMainFrame());
   if (!success) {
@@ -256,13 +287,8 @@ void CdmDocumentServiceImpl::ChallengePlatform(
       service_id, challenge,
       base::BindOnce(&CdmDocumentServiceImpl::OnPlatformChallenged,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
-#else
-  // Not supported, so return failure.
-  std::move(callback).Run(false, std::string(), std::string(), std::string());
-#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
-#if BUILDFLAG(IS_CHROMEOS)
 void CdmDocumentServiceImpl::OnPlatformChallenged(
     ChallengePlatformCallback callback,
     PlatformVerificationResult result,
@@ -270,62 +296,24 @@ void CdmDocumentServiceImpl::OnPlatformChallenged(
     const std::string& signature,
     const std::string& platform_key_certificate) {
   DVLOG(2) << __func__ << ": " << result;
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   if (result != ash::attestation::PlatformVerificationFlow::SUCCESS) {
-    DCHECK(signed_data.empty());
-    DCHECK(signature.empty());
-    DCHECK(platform_key_certificate.empty());
+    CHECK(signed_data.empty(), base::NotFatalUntil::M161);
+    CHECK(signature.empty(), base::NotFatalUntil::M161);
+    CHECK(platform_key_certificate.empty(), base::NotFatalUntil::M161);
     LOG(ERROR) << "Platform verification failed.";
     std::move(callback).Run(false, "", "", "");
     return;
   }
 
-  DCHECK(!signed_data.empty());
-  DCHECK(!signature.empty());
-  DCHECK(!platform_key_certificate.empty());
+  CHECK(!signed_data.empty(), base::NotFatalUntil::M161);
+  CHECK(!signature.empty(), base::NotFatalUntil::M161);
+  CHECK(!platform_key_certificate.empty(), base::NotFatalUntil::M161);
   std::move(callback).Run(true, signed_data, signature,
                           platform_key_certificate);
 }
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
-void CdmDocumentServiceImpl::GetStorageId(uint32_t version,
-                                          GetStorageIdCallback callback) {
-  DVLOG(2) << __func__ << " version: " << version;
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-
-  // TODO(crbug.com/40499115). This should be commented out at the mojom
-  // level so that it's only available if Storage Id is available.
-
-#if BUILDFLAG(ENABLE_CDM_STORAGE_ID)
-  // Check that the request is for a supported version.
-  if (version == kCurrentStorageIdVersion ||
-      version == kRequestLatestStorageIdVersion) {
-    ComputeStorageId(
-        GetStorageIdSaltFromProfile(&render_frame_host()), origin(),
-        base::BindOnce(&CdmDocumentServiceImpl::OnStorageIdResponse,
-                       weak_factory_.GetWeakPtr(), std::move(callback)));
-    return;
-  }
-#endif  // BUILDFLAG(ENABLE_CDM_STORAGE_ID)
-
-  // Version not supported, so no Storage Id to return.
-  DVLOG(2) << __func__ << " not supported";
-  std::move(callback).Run(version, std::vector<uint8_t>());
-}
-
-#if BUILDFLAG(ENABLE_CDM_STORAGE_ID)
-void CdmDocumentServiceImpl::OnStorageIdResponse(
-    GetStorageIdCallback callback,
-    const std::vector<uint8_t>& storage_id) {
-  DVLOG(2) << __func__ << " version: " << kCurrentStorageIdVersion
-           << ", size: " << storage_id.size();
-
-  std::move(callback).Run(kCurrentStorageIdVersion, storage_id);
-}
-#endif  // BUILDFLAG(ENABLE_CDM_STORAGE_ID)
-
-#if BUILDFLAG(IS_CHROMEOS)
 void CdmDocumentServiceImpl::IsVerifiedAccessEnabled(
     IsVerifiedAccessEnabledCallback callback) {
   // If we are in guest/incognito mode, then verified access is effectively
@@ -343,6 +331,37 @@ void CdmDocumentServiceImpl::IsVerifiedAccessEnabled(
   std::move(callback).Run(enabled_for_device);
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(ENABLE_CDM_STORAGE_ID)
+void CdmDocumentServiceImpl::GetStorageId(uint32_t version,
+                                          GetStorageIdCallback callback) {
+  DVLOG(2) << __func__ << " version: " << version;
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+
+  // Check that the request is for a supported version.
+  if (version == kCurrentStorageIdVersion ||
+      version == kRequestLatestStorageIdVersion) {
+    ComputeStorageId(
+        GetStorageIdSaltFromProfile(&render_frame_host()), origin(),
+        base::BindOnce(&CdmDocumentServiceImpl::OnStorageIdResponse,
+                       weak_factory_.GetWeakPtr(), std::move(callback)));
+    return;
+  }
+
+  // Version not supported, so no Storage Id to return.
+  DVLOG(2) << __func__ << " not supported";
+  std::move(callback).Run(version, std::vector<uint8_t>());
+}
+
+void CdmDocumentServiceImpl::OnStorageIdResponse(
+    GetStorageIdCallback callback,
+    const std::vector<uint8_t>& storage_id) {
+  DVLOG(2) << __func__ << " version: " << kCurrentStorageIdVersion
+           << ", size: " << storage_id.size();
+
+  std::move(callback).Run(kCurrentStorageIdVersion, storage_id);
+}
+#endif  // BUILDFLAG(ENABLE_CDM_STORAGE_ID)
 
 #if BUILDFLAG(IS_WIN)
 void CdmDocumentServiceImpl::GetMediaFoundationCdmData(
@@ -365,26 +384,13 @@ void CdmDocumentServiceImpl::GetMediaFoundationCdmData(
     return;
   }
 
-  // PostTask because the task is doing IO operation that can block.
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+  // PostTask to the dedicated SequencedTaskRunner to prevent concurrent
+  // directory operations from racing and corrupting the ACLs or failing.
+  GetCdmDataTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&GetMediaFoundationCdmDataInternal, profile->GetPath(),
                      std::move(pref_data)),
       std::move(callback));
-}
-
-void CdmDocumentServiceImpl::SetCdmClientToken(
-    const std::vector<uint8_t>& client_token) {
-  const url::Origin cdm_origin = origin();
-  if (cdm_origin.opaque()) {
-    mojo::ReportBadMessage("EME use is not allowed on opaque origin");
-    return;
-  }
-
-  PrefService* user_prefs =
-      Profile::FromBrowserContext(render_frame_host().GetBrowserContext())
-          ->GetPrefs();
-  CdmPrefServiceHelper::SetCdmClientToken(user_prefs, cdm_origin, client_token);
 }
 
 void CdmDocumentServiceImpl::OnCdmEvent(media::CdmEvent event,
@@ -536,11 +542,24 @@ void CdmDocumentServiceImpl::ClearCdmData(
   // from the UI thread.
   auto origin_id_mapping = CdmPrefServiceHelper::GetOriginIdMapping(user_prefs);
 
-  // PostTask because is doing IO operation that can block.
-  base::ThreadPool::PostTaskAndReply(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+  // PostTask to the dedicated SequencedTaskRunner because it does IO
+  // operations and to prevent racing with directory creations.
+  GetCdmDataTaskRunner()->PostTaskAndReply(
+      FROM_HERE,
       base::BindOnce(&DeleteMediaFoundationCdmData, profile->GetPath(),
                      std::move(origin_id_mapping), start, end, filter),
       std::move(complete_cb));
+}
+
+// static
+base::flat_set<base::FilePath>&
+CdmDocumentServiceImpl::GetCdmStoreProcessedPaths() {
+  static base::NoDestructor<base::flat_set<base::FilePath>> processed_paths;
+  return *processed_paths;
+}
+
+// static
+void CdmDocumentServiceImpl::ClearCdmStoreProcessedPathsForTesting() {
+  GetCdmStoreProcessedPaths().clear();
 }
 #endif  // BUILDFLAG(IS_WIN)

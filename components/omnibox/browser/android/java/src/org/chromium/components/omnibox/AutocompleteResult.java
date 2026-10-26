@@ -14,6 +14,7 @@ import org.jni_zero.NativeMethods;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.components.omnibox.AutocompleteProto.AutocompleteResultProto;
 import org.chromium.components.omnibox.GroupsProto.GroupsInfo;
 
 import java.lang.annotation.Retention;
@@ -50,6 +51,10 @@ public class AutocompleteResult {
 
     /** A special value indicating that action has no particular index associated. */
     public static final int NO_SUGGESTION_INDEX = -1;
+
+    /** An empty AutocompleteResult object. */
+    public static final AutocompleteResult EMPTY_RESULT =
+            AutocompleteResult.fromCache(List.of(), GroupsInfo.getDefaultInstance());
 
     private final GroupsInfo mGroupsInfo;
     private final List<AutocompleteMatch> mSuggestions;
@@ -213,15 +218,17 @@ public class AutocompleteResult {
     }
 
     /** Serialize AutocompleteResult to a protocol buffer message. */
-    public AutocompleteProto.AutocompleteResultProto serialize() {
-        var builder = AutocompleteProto.AutocompleteResultProto.newBuilder();
+    public AutocompleteResultProto serialize() {
+        var builder = AutocompleteResultProto.newBuilder();
         builder.setGroups(mGroupsInfo);
         for (var match : mSuggestions) {
-            // Note: intentionally skip clipboard suggestions from being preserved.
+            // Note: intentionally skip clipboard and cross-device tab suggestions from being
+            // preserved.
             int type = match.getType();
             if (type == OmniboxSuggestionType.CLIPBOARD_URL
                     || type == OmniboxSuggestionType.CLIPBOARD_TEXT
-                    || type == OmniboxSuggestionType.CLIPBOARD_IMAGE) {
+                    || type == OmniboxSuggestionType.CLIPBOARD_IMAGE
+                    || type == OmniboxSuggestionType.CROSS_DEVICE_TAB) {
                 continue;
             }
 
@@ -231,7 +238,7 @@ public class AutocompleteResult {
     }
 
     /** Deserialize AutocompleteResult from a protocol buffer message. */
-    public static AutocompleteResult deserialize(AutocompleteProto.AutocompleteResultProto input) {
+    public static AutocompleteResult deserialize(AutocompleteResultProto input) {
         List<AutocompleteMatch> matches = new ArrayList<>(input.getMatchList().size());
         for (var match : input.getMatchList()) {
             matches.add(AutocompleteMatch.deserialize(match));

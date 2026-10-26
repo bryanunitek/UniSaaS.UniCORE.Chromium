@@ -170,7 +170,13 @@ class CORE_EXPORT ConstraintSpace final {
     return bitfields_.is_orthogonal_writing_mode_root;
   }
 
-  bool IsHiddenForPaint() const { return bitfields_.is_hidden_for_paint; }
+  bool IsHiddenDueToLayout() const {
+    return bitfields_.is_hidden_due_to_layout;
+  }
+
+  bool IsLineClampClippedFloat() const {
+    return bitfields_.is_line_clamp_clipped_float;
+  }
 
   // The available space size.
   // See: https://drafts.csswg.org/css-sizing/#available
@@ -626,21 +632,20 @@ class CORE_EXPORT ConstraintSpace final {
   }
 
   // The amount of available space for block-start side annotation.
-  // For the first box, this is the padding-block-start value of the container.
-  // Otherwise, this comes from LayoutResult::BlockEndAnnotationSpace().
-  // If the value is negative, it's block-end annotation overflow of the
-  // previous box.
+  // - For the first line box in an IFC, this is the initial block-start
+  //   annotation space of the container (see
+  //   BlockLayoutAlgorithm::ComputeInitialBlockStartAnnotationSpace()).
+  // - For subsequent line boxes, this comes from the previous line box's
+  //   LayoutResult::BlockEndAnnotationSpace(). If the value is negative, it's
+  //   block-end annotation overflow of the previous line box.
+  // - For a block box, this comes from the previous sibling block box's
+  //   LayoutResult::BlockEndAnnotationSpace().
   LayoutUnit BlockStartAnnotationSpace() const {
     return rare_data_ ? rare_data_->BlockStartAnnotationSpace() : LayoutUnit();
   }
   // Returns true if the layout object (and its descendants) have any ruby
   // annotations or text-emphasis marks.
   bool ContainsAnnotations() const { return bitfields_.contains_annotations; }
-
-  LayoutUnit PreviousSiblingBlockEndAnnotationSpace() const {
-    return rare_data_ ? rare_data_->PreviousSiblingBlockEndAnnotationSpace()
-                      : LayoutUnit();
-  }
 
   MarginStrut GetMarginStrut() const {
     return rare_data_ ? rare_data_->GetMarginStrut() : MarginStrut();
@@ -798,8 +803,10 @@ class CORE_EXPORT ConstraintSpace final {
   }
 
   LogicalBoxSides IgnoreMarginsForStretch() const {
-    return rare_data_ ? rare_data_->ignore_margins_for_stretch
-                      : LogicalBoxSides{false, false, false, false};
+    return LogicalBoxSides(bitfields_.ignore_margins_for_stretch_inline_start,
+                           bitfields_.ignore_margins_for_stretch_inline_end,
+                           bitfields_.ignore_margins_for_stretch_block_start,
+                           bitfields_.ignore_margins_for_stretch_block_end);
   }
 
   const GridLayoutSubtree* GetGridLayoutSubtree() const {
@@ -893,13 +900,13 @@ class CORE_EXPORT ConstraintSpace final {
     RareData() {}
     RareData(const RareData& other)
         : percentage_resolution_size(other.percentage_resolution_size),
+          block_start_annotation_space(other.block_start_annotation_space),
           replaced_child_percentage_resolution_block_size(
               other.replaced_child_percentage_resolution_block_size),
           page_name(other.page_name),
           fragmentainer_block_size(other.fragmentainer_block_size),
           fragmentainer_offset(other.fragmentainer_offset),
           safe_printable_inset(other.safe_printable_inset),
-          ignore_margins_for_stretch(other.ignore_margins_for_stretch),
           data_union_type(other.data_union_type),
           is_pushed_by_floats(other.is_pushed_by_floats),
           is_restricted_block_size_table_cell(
@@ -1011,6 +1018,7 @@ class CORE_EXPORT ConstraintSpace final {
     bool MaySkipLayout(const RareData& other) const {
       if (replaced_child_percentage_resolution_block_size !=
               other.replaced_child_percentage_resolution_block_size ||
+          block_start_annotation_space != other.block_start_annotation_space ||
           data_union_type != other.data_union_type ||
           is_pushed_by_floats != other.is_pushed_by_floats ||
           is_restricted_block_size_table_cell !=
@@ -1057,10 +1065,10 @@ class CORE_EXPORT ConstraintSpace final {
               other.is_adjacent_to_paper_edge_block_start ||
           is_adjacent_to_paper_edge_block_end !=
               other.is_adjacent_to_paper_edge_block_end ||
-          ignore_margins_for_stretch != other.ignore_margins_for_stretch ||
           !base::ValuesEquivalent(line_clamp_ancestor_chain_,
                                   other.line_clamp_ancestor_chain_) ||
-          !base::ValuesEquivalent(grid_layout_subtree_, other.grid_layout_subtree_)) {
+          !base::ValuesEquivalent(grid_layout_subtree_,
+                                  other.grid_layout_subtree_)) {
         return false;
       }
 
@@ -1086,8 +1094,9 @@ class CORE_EXPORT ConstraintSpace final {
     // Must be kept in sync with members checked within |MaySkipLayout|.
     bool IsInitialForMaySkipLayout() const {
       if (replaced_child_percentage_resolution_block_size != kIndefiniteSize ||
-          page_name || fragmentainer_block_size != kIndefiniteSize ||
-          fragmentainer_offset || safe_printable_inset || is_pushed_by_floats ||
+          block_start_annotation_space || page_name ||
+          fragmentainer_block_size != kIndefiniteSize || fragmentainer_offset ||
+          safe_printable_inset || is_pushed_by_floats ||
           is_restricted_block_size_table_cell || hide_table_cell_if_empty ||
           block_direction_fragmentation_type != kFragmentNone ||
           is_block_fragmentation_forced_off ||
@@ -1108,8 +1117,7 @@ class CORE_EXPORT ConstraintSpace final {
           is_adjacent_to_paper_edge_inline_start ||
           is_adjacent_to_paper_edge_inline_end ||
           is_adjacent_to_paper_edge_block_start ||
-          is_adjacent_to_paper_edge_block_end ||
-          !ignore_margins_for_stretch.IsEmpty() || line_clamp_ancestor_chain_ ||
+          is_adjacent_to_paper_edge_block_end || line_clamp_ancestor_chain_ ||
           grid_layout_subtree_) {
         return false;
       }
@@ -1134,23 +1142,11 @@ class CORE_EXPORT ConstraintSpace final {
     }
 
     LayoutUnit BlockStartAnnotationSpace() const {
-      return GetDataUnionType() == DataUnionType::kBlockData
-                 ? block_data_.block_start_annotation_space
-                 : LayoutUnit();
+      return block_start_annotation_space;
     }
 
     void SetBlockStartAnnotationSpace(LayoutUnit space) {
-      EnsureBlockData()->block_start_annotation_space = space;
-    }
-
-    LayoutUnit PreviousSiblingBlockEndAnnotationSpace() const {
-      return GetDataUnionType() == DataUnionType::kBlockData
-                 ? block_data_.previous_sibling_block_end_annotation_space
-                 : LayoutUnit();
-    }
-
-    void SetPreviousSiblingBlockEndAnnotationSpace(LayoutUnit space) {
-      EnsureBlockData()->previous_sibling_block_end_annotation_space = space;
+      block_start_annotation_space = space;
     }
 
     MarginStrut GetMarginStrut() const {
@@ -1347,6 +1343,7 @@ class CORE_EXPORT ConstraintSpace final {
     }
 
     LogicalSize percentage_resolution_size;
+    LayoutUnit block_start_annotation_space;
 
     LayoutUnit replaced_child_percentage_resolution_block_size =
         kIndefiniteSize;
@@ -1355,7 +1352,6 @@ class CORE_EXPORT ConstraintSpace final {
     LayoutUnit fragmentainer_block_size = kIndefiniteSize;
     LayoutUnit fragmentainer_offset;
     LayoutUnit safe_printable_inset;
-    LogicalBoxSides ignore_margins_for_stretch = {false, false, false, false};
 
     unsigned data_union_type : 3 = static_cast<unsigned>(DataUnionType::kNone);
 
@@ -1400,15 +1396,11 @@ class CORE_EXPORT ConstraintSpace final {
    private:
     struct BlockData {
       bool MaySkipLayout(const BlockData& other) const {
-        return line_clamp_data == other.line_clamp_data &&
-               previous_sibling_block_end_annotation_space ==
-                   other.previous_sibling_block_end_annotation_space;
+        return line_clamp_data == other.line_clamp_data;
       }
 
       bool IsInitialForMaySkipLayout() const {
-        return line_clamp_data.state == LineClampData::kDisabled &&
-               block_start_annotation_space == LayoutUnit() &&
-               previous_sibling_block_end_annotation_space == LayoutUnit();
+        return line_clamp_data.state == LineClampData::State::kDisabled;
       }
 
       MarginStrut margin_strut;
@@ -1416,8 +1408,6 @@ class CORE_EXPORT ConstraintSpace final {
       std::optional<LayoutUnit> forced_bfc_block_offset;
       LayoutUnit clearance_offset = LayoutUnit::Min();
       LineClampData line_clamp_data;
-      LayoutUnit block_start_annotation_space;
-      LayoutUnit previous_sibling_block_end_annotation_space;
     };
 
     struct TableCellData {
@@ -1597,12 +1587,20 @@ class CORE_EXPORT ConstraintSpace final {
              is_orthogonal_writing_mode_root ==
                  other.is_orthogonal_writing_mode_root &&
              is_painted_atomically == other.is_painted_atomically &&
-             is_hidden_for_paint == other.is_hidden_for_paint &&
+             is_hidden_due_to_layout == other.is_hidden_due_to_layout &&
              use_first_line_style == other.use_first_line_style &&
              ancestor_has_clearance_past_adjoining_floats ==
                  other.ancestor_has_clearance_past_adjoining_floats &&
-             baseline_algorithm_type == other.baseline_algorithm_type &&
-             contains_annotations == other.contains_annotations;
+             contains_annotations == other.contains_annotations &&
+             ignore_margins_for_stretch_inline_start ==
+                 other.ignore_margins_for_stretch_inline_start &&
+             ignore_margins_for_stretch_inline_end ==
+                 other.ignore_margins_for_stretch_inline_end &&
+             ignore_margins_for_stretch_block_start ==
+                 other.ignore_margins_for_stretch_block_start &&
+             ignore_margins_for_stretch_block_end ==
+                 other.ignore_margins_for_stretch_block_end &&
+             baseline_algorithm_type == other.baseline_algorithm_type;
     }
 
     bool AreInlineSizeConstraintsEqual(const Bitfields& other) const {
@@ -1629,9 +1627,16 @@ class CORE_EXPORT ConstraintSpace final {
     unsigned is_orthogonal_writing_mode_root : 1 = false;
 
     unsigned is_painted_atomically : 1 = false;
-    unsigned is_hidden_for_paint : 1 = false;
+    unsigned is_hidden_due_to_layout : 1 = false;
     unsigned use_first_line_style : 1 = false;
     unsigned ancestor_has_clearance_past_adjoining_floats : 1 = false;
+
+    unsigned contains_annotations : 1 = false;
+
+    unsigned ignore_margins_for_stretch_inline_start : 1 = false;
+    unsigned ignore_margins_for_stretch_inline_end : 1 = false;
+    unsigned ignore_margins_for_stretch_block_start : 1 = false;
+    unsigned ignore_margins_for_stretch_block_end : 1 = false;
 
     unsigned baseline_algorithm_type : 1 =
         static_cast<unsigned>(BaselineAlgorithmType::kDefault);
@@ -1650,7 +1655,7 @@ class CORE_EXPORT ConstraintSpace final {
     unsigned is_table_cell_child : 1 = false;
     unsigned is_restricted_block_size_table_cell_child : 1 = false;
 
-    unsigned contains_annotations : 1 = false;
+    unsigned is_line_clamp_clipped_float : 1 = false;
   };
 
   explicit ConstraintSpace(WritingDirectionMode writing_direction)

@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
@@ -22,7 +23,6 @@
 #include "components/payments/content/payment_request_spec.h"
 #include "components/payments/content/payment_request_state.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/views/controls/throbber.h"
 #include "ui/views/widget/widget_observer.h"
 #include "ui/views/window/dialog_delegate.h"
 
@@ -34,7 +34,9 @@ class Profile;
 
 namespace payments {
 
+class PaymentAppLoadingView;
 class PaymentRequest;
+class PaymentRequestDialogViewTestApi;
 class PaymentRequestSheetController;
 
 // Maps views owned by PaymentRequestDialogView::view_stack_ to their
@@ -62,6 +64,8 @@ class PaymentRequestDialogView : public views::DialogDelegateView,
  public:
   class ObserverForTest {
    public:
+    virtual ~ObserverForTest() = default;
+
     virtual void OnDialogOpened() = 0;
 
     virtual void OnDialogClosed() = 0;
@@ -94,20 +98,25 @@ class PaymentRequestDialogView : public views::DialogDelegateView,
 
     virtual void OnProcessingSpinnerHidden() = 0;
 
+    virtual void OnLoadingViewShown() = 0;
+
+    virtual void OnLoadingViewHidden() = 0;
+
     virtual void OnPaymentHandlerWindowOpened() = 0;
 
     virtual void OnPaymentHandlerTitleSet() = 0;
+
+    virtual void OnPaymentHandlerThemeColorSet() = 0;
+
+    virtual void OnDialogSizeCheckAfterBrowserResize() = 0;
   };
 
   PaymentRequestDialogView(const PaymentRequestDialogView&) = delete;
   PaymentRequestDialogView& operator=(const PaymentRequestDialogView&) = delete;
 
-  // Build a Dialog around the PaymentRequest object. |observer| is used to
-  // be notified of dialog events as they happen (but may be NULL) and should
-  // outlive this object.
+  // Build a Dialog around the PaymentRequest object.
   static base::WeakPtr<PaymentRequestDialogView> Create(
-      base::WeakPtr<PaymentRequest> request,
-      base::WeakPtr<PaymentRequestDialogView::ObserverForTest> observer);
+      base::WeakPtr<PaymentRequest> request);
 
   // views::View
   void RequestFocus() override;
@@ -126,10 +135,9 @@ class PaymentRequestDialogView : public views::DialogDelegateView,
   bool IsInteractive() const override;
   void ShowPaymentHandlerScreen(
       const GURL& url,
+      const std::optional<gfx::Size>& preferred_web_contents_size,
       PaymentHandlerOpenWindowCallback callback) override;
   void RetryDialog() override;
-  void ConfirmPaymentForTesting() override;
-  bool ClickOptOutForTesting() override;
 
   // PaymentRequestSpec::Observer:
   void OnStartUpdating(PaymentRequestSpec::UpdateReason reason) override;
@@ -178,44 +186,55 @@ class PaymentRequestDialogView : public views::DialogDelegateView,
   // Hides the full dialog spinner with the "processing" label.
   void HideProcessingSpinner();
 
+  // Shows the full dialog overlay with the loading view for the payment app.
+  void ShowLoadingView() override;
+
+  // Hides the full dialog overlay with the loading view for the payment app.
+  void HideLoadingView();
+
   Profile* GetProfile();
-
-  // Calculates the actual payment handler dialog height based on the preferred
-  // height and current browser window size.
-  int GetActualPaymentHandlerDialogHeight() const;
-
-  // Calculates the dialog width depending on whether or not the large payment
-  // handler window is currently showing.
-  int GetActualDialogWidth() const;
 
   // Called when a PaymentHandler dialog detects a title being set from the
   // underlying WebContents.
   void OnPaymentHandlerTitleSet();
 
-  ViewStack* view_stack_for_testing() { return view_stack_; }
-  ControllerMap* controller_map_for_testing() { return &controller_map_; }
-  views::View* throbber_overlay_for_testing() { return throbber_overlay_; }
+  // Called when a PaymentHandler dialog detects a theme color being set from
+  // the underlying WebContents.
+  void OnPaymentHandlerThemeColorSet();
+
+  // Resizes the payment handler dialog so that its WebContents is, as closely
+  // as possible, `preferred_web_contents_size`. The preferred size is clamped
+  // by a minimum/maximum allowed dialog size, as well as the overall available
+  // size of the containing browser window.
+  void ResizeToFitPaymentHandlerWebContents(
+      const gfx::Size& preferred_web_contents_size);
+
+  // Returns true if the payment handler window is showing and the user can
+  // interact with it.
+  bool IsShowingInteractivePaymentHandlerWindow();
 
  private:
-  // The browsertest validates the calculated dialog size.
-  friend class PaymentHandlerWindowSizeTest;
+  friend class PaymentRequestDialogViewTestApi;
 
   PaymentRequestDialogView(
       base::WeakPtr<PaymentRequest> request,
       base::WeakPtr<PaymentRequestDialogView::ObserverForTest> observer);
   ~PaymentRequestDialogView() override;
 
+  // payments::PaymentRequestDialog:
+  void ConfirmPaymentForTesting() override;
+  bool ClickOptOutForTesting() override;
+
   void OnDialogOpened();
   void ShowInitialPaymentSheet();
-  void SetupSpinnerOverlay();
+  void RemoveLoadingView();
   void OnDialogClosed();
-  void ResizeDialogWindow();
+  void ResizeDialogWindow(const gfx::Size& size);
+  void ResizeToPaymentHandlerSize();
   void CheckIfDialogFitsInBrowserWindow();
   bool DialogFitsInBrowserWindow() const;
 
   // views::View
-  gfx::Size CalculatePreferredSize(
-      const views::SizeBounds& /*available_size*/) const override;
   void ViewHierarchyChanged(
       const views::ViewHierarchyChangedDetails& details) override;
 
@@ -225,12 +244,16 @@ class PaymentRequestDialogView : public views::DialogDelegateView,
   // The PaymentRequest object that initiated this dialog.
   base::WeakPtr<PaymentRequest> request_;
   ControllerMap controller_map_;
-  raw_ptr<ViewStack, AcrossTasksDanglingUntriaged> view_stack_;
+  raw_ptr<ViewStack> view_stack_ = nullptr;
 
   // A full dialog overlay that shows a spinner and the "processing" label. It's
   // hidden until ShowProcessingSpinner is called.
-  raw_ptr<views::View> throbber_overlay_;
-  raw_ptr<views::Throbber> throbber_;
+  raw_ptr<views::View> throbber_overlay_ = nullptr;
+
+  // A full dialog overlay that shows a loading view for a payment app. It's
+  // hidden until ShowLoadingView is called.
+  raw_ptr<PaymentAppLoadingView> loading_view_overlay_ = nullptr;
+  base::TimeTicks loading_view_shown_time_;
 
   base::WeakPtr<ObserverForTest> observer_for_testing_;
 
@@ -240,14 +263,6 @@ class PaymentRequestDialogView : public views::DialogDelegateView,
 
   // The number of initialization tasks that are not yet initialized.
   size_t number_of_initialization_tasks_ = 0;
-
-  // True when payment handler screen is shown, as it is larger than the Payment
-  // Request sheet view.
-  bool is_showing_large_payment_handler_window_ = false;
-
-  // Calculated based on the browser content size at the time of opening payment
-  // handler window.
-  int payment_handler_window_height_ = 0;
 
   // We track the size of the containing browser window in order to detect cases
   // where it becomes too small to contain the Payment Request/Handler dialog.

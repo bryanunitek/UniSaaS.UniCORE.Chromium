@@ -4,6 +4,8 @@
 
 #include "chrome/browser/browser_actuator/browser_actuator_service_factory.h"
 
+#include <memory>
+
 #include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "chrome/browser/profiles/profile.h"

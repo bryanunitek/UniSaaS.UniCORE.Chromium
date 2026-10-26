@@ -62,6 +62,10 @@
 #include "printing/print_dialog_linux_interface.h"  // nogncheck
 #endif
 
+#if defined(USE_GSETTINGS)
+#include "ui/base/glib/gsettings.h"
+#endif
+
 namespace qt {
 
 namespace {
@@ -188,11 +192,30 @@ bool IsGtkDesktop(base::Environment* env) {
          desktop_session == "pantheon";
 }
 
+// Returns true if QT must be prevented from loading GTK3 (eg. via its GTK3
+// platform theme or style plugins).
+bool ShouldPreventQtFromLoadingGtk3(ui::LinuxUiBackend backend) {
+  // GTK3 and GTK4 symbols collide, so GTK3 can't be loaded if Chrome is using
+  // GTK4.
+  if (IsGtk4Loaded()) {
+    return true;
+  }
+  // On Wayland, GDK3 aborts during initialization if the GSettings font
+  // schemas are invalid.  This is the case where GtkUi refuses to initialize,
+  // and QT is used as a fallback.  See https://crbug.com/573086583.
+#if defined(USE_GSETTINGS)
+  return backend == ui::LinuxUiBackend::kWayland &&
+         !ui::AreGdkWaylandFontSchemasValid();
+#else
+  return false;
+#endif
+}
+
 std::vector<std::unique_ptr<base::ScopedEnvironmentVariableOverride>>
-GetGtkQtCollisionPreventionOverrides() {
+GetGtkQtCollisionPreventionOverrides(ui::LinuxUiBackend backend) {
   std::vector<std::unique_ptr<base::ScopedEnvironmentVariableOverride>>
       env_overrides;
-  if (!IsGtk4Loaded()) {
+  if (!ShouldPreventQtFromLoadingGtk3(backend)) {
     return env_overrides;
   }
 
@@ -297,28 +320,31 @@ bool QtUi::Initialize() {
   // [3] https://crbug.com/396193145
   base::ScopedEnvironmentVariableOverride qt_xcb_no_xi2("QT_XCB_NO_XI2", "1");
 
-  // If Chrome is using GTK4, prevent QT from loading GTK3, otherwise
-  // the symbols from both versions will collide and crash the browser process.
-  auto env_overrides = GetGtkQtCollisionPreventionOverrides();
+  auto* delegate = ui::LinuxUiDelegate::GetInstance();
+  const auto backend =
+      delegate ? delegate->GetBackend() : ui::LinuxUiBackend::kStub;
+
+  // Prevent QT from loading GTK3 if it would crash the browser process: either
+  // because Chrome is using GTK4 and the symbols from both versions would
+  // collide, or because GDK3 would abort due to invalid GSettings schemas.
+  auto env_overrides = GetGtkQtCollisionPreventionOverrides(backend);
 
   // Set up command line.
   auto cmd_line = *base::CommandLine::ForCurrentProcess();
-  if (auto* delegate = ui::LinuxUiDelegate::GetInstance()) {
-    // Ensure QT is initialized with the same display server protocol as Chrome.
-    // In particular, when running under XWayland, make sure to use the xcb QT
-    // backend instead of the wayland backend.
-    switch (delegate->GetBackend()) {
-      case ui::LinuxUiBackend::kStub:
-        break;
-      case ui::LinuxUiBackend::kX11:
-        cmd_line.AppendArg("-platform");
-        cmd_line.AppendArg("xcb");
-        break;
-      case ui::LinuxUiBackend::kWayland:
-        cmd_line.AppendArg("-platform");
-        cmd_line.AppendArg("wayland");
-        break;
-    }
+  // Ensure QT is initialized with the same display server protocol as Chrome.
+  // In particular, when running under XWayland, make sure to use the xcb QT
+  // backend instead of the wayland backend.
+  switch (backend) {
+    case ui::LinuxUiBackend::kStub:
+      break;
+    case ui::LinuxUiBackend::kX11:
+      cmd_line.AppendArg("-platform");
+      cmd_line.AppendArg("xcb");
+      break;
+    case ui::LinuxUiBackend::kWayland:
+      cmd_line.AppendArg("-platform");
+      cmd_line.AppendArg("wayland");
+      break;
   }
   cmd_line_ = CopyCmdLine(cmd_line);
 
@@ -508,10 +534,21 @@ void QtUi::SetDarkTheme(bool dark) {
   // Qt::ColorScheme is only available in QT 6.5 and later.
 }
 
+void QtUi::SetColorScheme(std::optional<bool> prefer_dark) {
+  // Route the color scheme through the OS settings provider, which sources the
+  // web `NativeTheme::preferred_color_scheme()` via
+  // `UpdateVariablesForToolkitSettings()`.
+  os_settings_provider_->SetColorScheme(prefer_dark);
+}
+
 DISABLE_CFI_VCALL
 void QtUi::SetAccentColor(std::optional<SkColor> accent_color) {
   accent_color_ = accent_color;
-  native_theme_->NotifyOnNativeThemeUpdated();
+  // Route the accent color through the OS settings provider. This updates
+  // `NativeTheme::user_color()` (via `UpdateVariablesForToolkitSettings()`) and
+  // notifies all observing native themes, which re-runs the native color mixer
+  // above using the freshly-set `accent_color_`.
+  os_settings_provider_->SetAccentColor(accent_color);
 }
 
 DISABLE_CFI_VCALL
@@ -590,6 +627,11 @@ void QtUi::FontChanged() {
 
 void QtUi::ThemeChanged() {
   native_theme_->OnQtThemeChanged();
+  // Unlike GTK (which has settings signals), the Qt provider must be told to
+  // re-derive the toolkit color scheme when the Qt theme changes.
+  os_settings_provider_->OnThemeChanged();
+  // Animations enabled depends on the theme animation duration.
+  NotifyAnimationsEnabledChanged();
 }
 
 void QtUi::ScaleFactorMaybeChanged() {
@@ -619,15 +661,10 @@ void QtUi::AddNativeColorMixer(ui::ColorProvider* provider,
     ColorState state = ColorState::kNormal;
   } const kMaps[] = {
       // Core colors
-      {ui::kColorDisabledForeground, ColorType::kWindowFg,
-       ColorState::kDisabled},
       {ui::kColorEndpointBackground, ColorType::kEntryBg},
       {ui::kColorEndpointForeground, ColorType::kEntryFg},
       {ui::kColorMidground, ColorType::kMidground},
       {ui::kColorPrimaryBackground, ColorType::kWindowBg},
-      {ui::kColorPrimaryForeground, ColorType::kWindowFg},
-      {ui::kColorSecondaryForeground, ColorType::kWindowFg,
-       ColorState::kDisabled},
       {ui::kColorSubtleAccent, ColorType::kHighlightBg, ColorState::kInactive},
       {ui::kColorSubtleEmphasisBackground, ColorType::kWindowBg},
 
@@ -656,6 +693,22 @@ void QtUi::AddNativeColorMixer(ui::ColorProvider* provider,
   for (const auto& map : kMaps) {
     mixer[map.id] = {shim_->GetColor(map.role, map.state)};
   }
+
+  // Some palettes provide text colors with little or no contrast against their
+  // own window background (e.g. a white disabled text color on a light
+  // window). Nudge them just enough to stay legible: readable for regular and
+  // secondary text, and visible for disabled text.
+  const SkColor window_fg =
+      shim_->GetColor(ColorType::kWindowFg, ColorState::kNormal);
+  const SkColor window_fg_disabled =
+      shim_->GetColor(ColorType::kWindowFg, ColorState::kDisabled);
+  mixer[ui::kColorDisabledForeground] = ui::BlendForMinContrast(
+      window_fg_disabled, ui::kColorPrimaryBackground, std::nullopt,
+      color_utils::kMinimumVisibleContrastRatio);
+  mixer[ui::kColorPrimaryForeground] =
+      ui::BlendForMinContrast(window_fg, ui::kColorPrimaryBackground);
+  mixer[ui::kColorSecondaryForeground] =
+      ui::BlendForMinContrast(window_fg_disabled, ui::kColorPrimaryBackground);
 
   const ui::ColorId kAccentIds[] = {
       ui::kColorAccent,

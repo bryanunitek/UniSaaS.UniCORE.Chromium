@@ -67,14 +67,15 @@
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
-// TODO(crbug.com/507483993): Enable these behaviors by default and remove the
-// feature flags after monitoring for regressions.
+// TODO(crbug.com/563000235, crbug.com/507483993): Enable these behaviors by
+// default and remove the feature flags after monitoring for regressions.
 
 // Feature that prevents an extension resource (chrome-extension://...) from
 // being fetched across isolated worlds.
@@ -84,6 +85,19 @@ BASE_FEATURE(kPreventExtensionResourceFetchAcrossIsolatedWorlds,
 // Feature that prevents resources fetched via a Service Worker from being
 // reused across different script worlds.
 BASE_FEATURE(kPreventCrossWorldServiceWorkerResourceReuse,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Feature that prevents all other remaining `WorldForCsp()` mismatch cases.
+BASE_FEATURE(kPreventAllCrossWorldForCspReuse,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Feature that prevents all `TargetWorld()` mismatch cases.
+BASE_FEATURE(kPreventAllCrossTargetWorldReuse,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Feature that prevents resources from being reused if the Service Worker skip
+// policy differs between the existing and new requests.
+BASE_FEATURE(kPreventDifferentSkipServiceWorkerResourceReuse,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 String GetAsAttributeFromResourceType(ResourceType type) {
@@ -181,8 +195,8 @@ const base::Clock* g_clock_for_testing = nullptr;
 constexpr base::MemoryConsumerTraits kResourceTraits(
     // Encoded and decoded data size varies widely, can reach tens of MBs.
     base::MemoryConsumerTraits::EstimatedMemoryUsage::kMedium,
-    // Pruning destroys decoded data without traversing complex structures.
-    base::MemoryConsumerTraits::ReleaseMemoryCost::kFreesPagesWithoutTraversal,
+    // Pruning frees the decoded data buffers without reading them.
+    base::MemoryConsumerTraits::ReleaseMemoryDataAccess::kNone,
     // Data can be re-decoded from the encoded payload.
     base::MemoryConsumerTraits::InformationRetention::kLossless,
     // Pruning runs synchronously on the renderer thread.
@@ -874,37 +888,56 @@ Resource::MatchStatus Resource::CanReuse(const FetchParameters& params) const {
   // Use GetResourceRequest to get the const resource_request_.
   const ResourceRequestHead& current_request = GetResourceRequest();
 
-  // We need two distinct checks here to prevent unexpected cross-world
-  // resource reuse.
-  //
-  // 1. The extension-specific check prevents sharing of extension
-  //    resources (chrome-extension://...) across different script worlds,
-  //    even for standard network loads.
-  //    For example, if a main world page preloads a web-accessible extension
-  //    resource, reusing that cached resource in the extension's isolated
-  //    world could bypass world-specific loader checks.
-  //    This behavior is tested in
-  //    `ResourceFetcherTest.CrossWorldExtensionResourceMismatch`.
-  if (base::FeatureList::IsEnabled(
-          kPreventExtensionResourceFetchAcrossIsolatedWorlds) &&
-      CommonSchemeRegistry::IsExtensionScheme(
-          current_request.Url().Protocol().Ascii()) &&
-      options_.world_for_csp != new_options.world_for_csp) {
-    return MatchStatus::kCrossWorldExtensionResourceMismatch;
+  // MemoryCache/preloads isolation by `WorldForCsp()`.
+  if (options_.WorldForCsp() != new_options.WorldForCsp()) {
+    // We first check some subset of mismatch cases, governed by individual kill
+    // switches.
+
+    // 1. The extension-specific check prevents sharing of extension
+    //    resources (chrome-extension://...) across different script worlds,
+    //    even for standard network loads.
+    //    For example, if a main world page preloads a web-accessible extension
+    //    resource, reusing that cached resource in the extension's isolated
+    //    world could bypass world-specific loader checks.
+    //    This behavior is tested in
+    //    `ResourceFetcherTest.CrossWorldExtensionResourceMismatch`.
+    if (base::FeatureList::IsEnabled(
+            kPreventExtensionResourceFetchAcrossIsolatedWorlds) &&
+        CommonSchemeRegistry::IsExtensionScheme(
+            current_request.Url().Protocol().Ascii())) {
+      return MatchStatus::kCrossWorldExtensionResourceMismatch;
+    }
+
+    // 2. The Service Worker check prevents sharing of any resource that was
+    //    fetched via a Service Worker across different script worlds. This is
+    //    necessary because a Service Worker in one world (e.g., the main world)
+    //    could modify the response of a resource that is later loaded by an
+    //    isolated world (e.g., an extension, DevTools, or a userscript),
+    //    leading to unexpected code execution in that world. This behavior is
+    //    tested in `ResourceTest.CanReuseServiceWorkerResource`.
+    if (base::FeatureList::IsEnabled(
+            kPreventCrossWorldServiceWorkerResourceReuse) &&
+        GetResponse().WasFetchedViaServiceWorker()) {
+      return MatchStatus::kCrossWorldServiceWorkerResourceMismatch;
+    }
+
+    // Catch-all rejection of cross-`WorldForCsp()` reuse for comprehensive fix.
+    if (base::FeatureList::IsEnabled(kPreventAllCrossWorldForCspReuse)) {
+      return MatchStatus::kPreventAllCrossWorldForCspReuse;
+    }
   }
 
-  // 2. The Service Worker check prevents sharing of any resource that was
-  //    fetched via a Service Worker across different script worlds. This is
-  //    necessary because a Service Worker in one world (e.g., the main world)
-  //    could modify the response of a resource that is later loaded by an
-  //    isolated world (e.g., an extension, DevTools, or a userscript), leading
-  //    to unexpected code execution in that world.
-  //    This behavior is tested in `ResourceTest.CanReuseServiceWorkerResource`.
+  // Catch-all rejection for sharing across different target worlds.
+  if (options_.TargetWorld() != new_options.TargetWorld() &&
+      base::FeatureList::IsEnabled(kPreventAllCrossTargetWorldReuse)) {
+    return MatchStatus::kPreventAllCrossTargetWorldReuse;
+  }
+
   if (base::FeatureList::IsEnabled(
-          kPreventCrossWorldServiceWorkerResourceReuse) &&
-      GetResponse().WasFetchedViaServiceWorker() &&
-      options_.world_for_csp != new_options.world_for_csp) {
-    return MatchStatus::kCrossWorldServiceWorkerResourceMismatch;
+          kPreventDifferentSkipServiceWorkerResourceReuse) &&
+      current_request.GetSkipServiceWorker() !=
+          new_request.GetSkipServiceWorker()) {
+    return MatchStatus::kSkipServiceWorkerDoesNotMatch;
   }
 
   // If credentials mode is different from the the previous request, re-fetch
@@ -916,21 +949,6 @@ Resource::MatchStatus Resource::CanReuse(const FetchParameters& params) const {
   if (current_request.GetCredentialsMode() !=
       new_request.GetCredentialsMode()) {
     return MatchStatus::kRequestCredentialsModeDoesNotMatch;
-  }
-
-  // Certain requests (e.g., XHRs) might have manually set headers that require
-  // revalidation. In theory, this should be a Revalidate case. In practice, the
-  // MemoryCache revalidation path assumes a whole bunch of things about how
-  // revalidation works that manual headers violate, so punt to Reload instead.
-  //
-  // Similarly, a request with manually added revalidation headers can lead to a
-  // 304 response for a request that wasn't flagged as a revalidation attempt.
-  // Normally, successful revalidation will maintain the original response's
-  // status code, but for a manual revalidation the response code remains 304.
-  // In this case, the Resource likely has insufficient context to provide a
-  // useful cache hit or revalidation. See http://crbug.com/643659
-  if (new_request.IsConditional() || response_.HttpStatusCode() == 304) {
-    return MatchStatus::kUnknownFailure;
   }
 
   // Answers the question "can a separate request with different options be
@@ -975,16 +993,32 @@ Resource::MatchStatus Resource::CanReuse(const FetchParameters& params) const {
   if (!existing_origin->IsSameOriginWith(new_origin.get()))
     return MatchStatus::kUnknownFailure;
 
-  if (new_request.GetCredentialsMode() !=
-      current_request.GetCredentialsMode()) {
-    return MatchStatus::kRequestCredentialsModeDoesNotMatch;
-  }
-
   const auto new_mode = new_request.GetMode();
   const auto existing_mode = current_request.GetMode();
 
   if (new_mode != existing_mode)
     return MatchStatus::kRequestModeDoesNotMatch;
+
+  // Certain requests (e.g., XHRs) might have manually set headers that require
+  // revalidation. In theory, this should be a Revalidate case. In practice, the
+  // MemoryCache revalidation path assumes a whole bunch of things about how
+  // revalidation works that manual headers violate, so punt to Reload instead.
+  if (new_request.IsConditional()) {
+    return MatchStatus::kUnknownFailure;
+  }
+
+  // Similarly, a request with manually added revalidation headers can lead to a
+  // 304 response for a request that wasn't flagged as a revalidation attempt.
+  // Normally, successful revalidation will maintain the original response's
+  // status code, but for a manual revalidation the response code remains 304.
+  // In this case, the Resource likely has insufficient context to provide a
+  // useful cache hit or revalidation. See http://crbug.com/643659
+  // If all request invariants matched, return k304NotModified so that callers
+  // can handle preload matching appropriately without treating it as an
+  // unknown mismatch.
+  if (response_.HttpStatusCode() == 304) {
+    return MatchStatus::k304NotModified;
+  }
 
   return MatchStatus::kOk;
 }
@@ -1064,9 +1098,9 @@ void Resource::OnMemoryDump(WebMemoryDumpLevelOfDetail level_of_detail,
 }
 
 String Resource::GetMemoryDumpName() const {
-  return StrCat({"web_cache/",
-                 ResourceTypeToString(GetType(), Options().initiator_info.name),
-                 "_resources/", String::Number(InspectorId())});
+  return Format("web_cache/{}_resources/{}",
+                ResourceTypeToString(GetType(), Options().initiator_info.name),
+                InspectorId());
 }
 
 void Resource::SetCachePolicyBypassingCache() {
@@ -1256,9 +1290,6 @@ static const char* InitiatorTypeNameToString(
   if (initiator_type_name == fetch_initiator_type_names::kAudio) {
     return "Audio";
   }
-  if (initiator_type_name == fetch_initiator_type_names::kAttributionsrc) {
-    return "Attribution resource";
-  }
   if (initiator_type_name == fetch_initiator_type_names::kCSS) {
     return "CSS resource";
   }
@@ -1273,6 +1304,9 @@ static const char* InitiatorTypeNameToString(
   }
   if (initiator_type_name == fetch_initiator_type_names::kFetch) {
     return "Fetch";
+  }
+  if (initiator_type_name == fetch_initiator_type_names::kFont) {
+    return "Font";
   }
   if (initiator_type_name == fetch_initiator_type_names::kLink) {
     return "Link element resource";

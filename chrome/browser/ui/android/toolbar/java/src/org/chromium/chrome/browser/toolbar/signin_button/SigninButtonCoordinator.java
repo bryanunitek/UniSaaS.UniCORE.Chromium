@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.toolbar.signin_button;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.view.View;
 import android.view.ViewStub;
@@ -26,6 +28,7 @@ import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.device_lock.DeviceLockActivityLauncher;
+import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.ui.base.ActivityResultTracker;
 import org.chromium.ui.base.DeviceFormFactor;
@@ -115,16 +118,6 @@ public class SigninButtonCoordinator extends ToolbarChildButton implements UrlFo
     }
 
     /**
-     * Sets whether the button should always show an avatar button when signed out. If false, a text
-     * signin button can be shown instead.
-     *
-     * @param showAvatarWhenSignedOut Whether to show the avatar button when signed out.
-     */
-    public void showAvatarWhenSignedOut(boolean showAvatarWhenSignedOut) {
-        mMediator.showAvatarWhenSignedOut(showAvatarWhenSignedOut);
-    }
-
-    /**
      * Sets whether the SigninButton has space to show and inflates SigninButton view if needed.
      *
      * @param hasSpaceToShow Whether the button has space to show.
@@ -172,7 +165,7 @@ public class SigninButtonCoordinator extends ToolbarChildButton implements UrlFo
                     View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
             width = mView.getMeasuredWidth();
         } else {
-            width = mContext.getResources().getDimensionPixelSize(R.dimen.toolbar_button_width);
+            width = mContext.getResources().getDimensionPixelSize(R.dimen.signin_button_width);
         }
         setHasSpaceToShow(availableWidth >= width);
         return Math.min(availableWidth, width);
@@ -188,16 +181,28 @@ public class SigninButtonCoordinator extends ToolbarChildButton implements UrlFo
                 !DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext) && mUrlHasFocus;
         boolean showSigninButton =
                 tab != null
-                        && (mShowOnAllPages || UrlUtilities.isNtpUrl(tab.getUrl()))
                         && !tab.isOffTheRecord()
-                        && !shouldHideButtonForUrlFocus;
+                        && !shouldHideButtonForUrlFocus
+                        && (mShowOnAllPages || isNtp(tab));
 
         // Only update signin button if it does not match the intended state.
         if (showSigninButton != isShown()) {
-            mTransitionTrigger.run();
+            View view = (mView != null) ? mView : mViewStub;
+            // Only animate the transition if the view is already fully laid out.
+            // Skipping this during cold starts prevents layout overhead and ANRs.
+            if (view != null && view.isLaidOut()) {
+                mTransitionTrigger.run();
+            }
             mMediator.updateButtonVisibility(showSigninButton);
             maybeInflateView();
         }
+    }
+
+    private static boolean isNtp(Tab tab) {
+        return UrlUtilities.isNtpUrl(tab.getUrl())
+                || (tab.isNativePage()
+                        && UrlConstants.NTP_HOST.equals(
+                                assumeNonNull(tab.getNativePage()).getHost()));
     }
 
     private void maybeInflateView() {

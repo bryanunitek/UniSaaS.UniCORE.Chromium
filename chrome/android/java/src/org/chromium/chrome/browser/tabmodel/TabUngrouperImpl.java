@@ -56,8 +56,7 @@ public class TabUngrouperImpl implements TabUngrouper {
             boolean trailing,
             boolean allowDialog,
             @Nullable TabModelActionListener listener) {
-        ungroupTabsInternal(
-                (unused) -> tabs, trailing, /* isTabGroup= */ false, allowDialog, listener);
+        ungroupTabsInternal(_ -> tabs, trailing, /* isTabGroup= */ false, allowDialog, listener);
     }
 
     @Override
@@ -193,6 +192,13 @@ public class TabUngrouperImpl implements TabUngrouper {
             @Nullable TabModelActionListener listener = takeListener();
             if (listener != null) {
                 listener.willPerformActionOrShowDialog(DialogType.NONE, /* willSkipDialog= */ true);
+            }
+            if (mIsTabGroup && !newTabsToUngroup.isEmpty()) {
+                Token tabGroupId = newTabsToUngroup.get(0).getTabGroupId();
+                if (tabGroupId != null
+                        && tabModel.getTabCountForGroup(tabGroupId) == newTabsToUngroup.size()) {
+                    tabModel.notifyWillRemoveTabGroup(tabGroupId);
+                }
             }
             PassthroughTabUngrouper.doUngroupTabs(tabModel, newTabsToUngroup, mTrailing);
             if (listener != null) {

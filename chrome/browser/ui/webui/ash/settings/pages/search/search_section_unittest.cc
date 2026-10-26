@@ -20,7 +20,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/lobster/lobster_service_provider.h"
 #include "chrome/browser/ash/lobster/mock_lobster_system_state_provider.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/settings/search/search_tag_registry.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_ash_test_base.h"
@@ -32,7 +31,7 @@
 #include "chromeos/components/quick_answers/public/cpp/quick_answers_state.h"
 #include "chromeos/components/quick_answers/test/fake_quick_answers_state.h"
 #include "components/account_id/account_id.h"
-#include "components/session_manager/test/test_user_session_manager.h"
+#include "components/session_manager/test/user_session_test_environment.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user_names.h"
 #include "content/public/test/test_web_ui_data_source.h"
@@ -143,8 +142,8 @@ TEST_F(SearchSectionTest,
 class SearchSectionTestWithLobsterEnabled : public SearchSectionTest {
  public:
   void SetUp() override {
-    test_user_session_manager_ =
-        std::make_unique<ash::test::TestUserSessionManager>(
+    user_session_test_environment_ =
+        std::make_unique<ash::test::UserSessionTestEnvironment>(
             TestingBrowserProcess::GetGlobal()->local_state());
     SearchSectionTest::SetUp();
     magic_boost_state_.SetAvailability(true);
@@ -162,7 +161,7 @@ class SearchSectionTestWithLobsterEnabled : public SearchSectionTest {
   void TearDown() override {
     magic_boost_state_.RemoveObserver(search_section_.get());
     SearchSectionTest::TearDown();
-    test_user_session_manager_.reset();
+    user_session_test_environment_.reset();
   }
 
   content::TestWebUIDataSource* html_source() { return html_source_.get(); }
@@ -181,13 +180,14 @@ class SearchSectionTestWithLobsterEnabled : public SearchSectionTest {
  private:
   void AnnotateAccount() {
     const AccountId account_id = user_manager::StubAccountId();
-    ASSERT_TRUE(test_user_session_manager_->AddRegularUser(account_id));
-    test_user_session_manager_->LogIn(account_id);
+    ASSERT_TRUE(user_session_test_environment_->AddRegularUser(account_id));
+    user_session_test_environment_->LogIn(account_id);
     ash::AnnotatedAccountId::Set(profile(), account_id);
   }
 
   base::test::ScopedFeatureList feature_list_;
-  std::unique_ptr<ash::test::TestUserSessionManager> test_user_session_manager_;
+  std::unique_ptr<ash::test::UserSessionTestEnvironment>
+      user_session_test_environment_;
   std::unique_ptr<content::TestWebUIDataSource> html_source_;
   chromeos::test::FakeMagicBoostState magic_boost_state_;
 };

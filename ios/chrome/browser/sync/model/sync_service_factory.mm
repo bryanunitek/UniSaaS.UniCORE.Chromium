@@ -9,7 +9,7 @@
 #import "base/feature_list.h"
 #import "base/functional/bind.h"
 #import "base/functional/callback_helpers.h"
-#import "base/no_destructor.h"
+#import "base/memory/weak_ptr.h"
 #import "base/time/time.h"
 #import "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #import "components/browser_sync/common_controller_builder.h"
@@ -33,6 +33,7 @@
 #import "components/variations/service/google_groups_manager.h"
 #import "ios/chrome/browser/account_settings/model/ios_account_setting_service_factory.h"
 #import "ios/chrome/browser/aim/model/ios_chrome_aim_eligibility_service_factory.h"
+#import "ios/chrome/browser/autofill/model/ios_autofill_entity_suppression_manager_factory.h"
 #import "ios/chrome/browser/bookmarks/model/account_bookmark_sync_service_factory.h"
 #import "ios/chrome/browser/bookmarks/model/bookmark_model_factory.h"
 #import "ios/chrome/browser/bookmarks/model/local_or_syncable_bookmark_sync_service_factory.h"
@@ -82,6 +83,13 @@
 
 namespace {
 
+contextual_tasks::ContextualTasksService* GetContextualTasksService(
+    base::WeakPtr<ProfileIOS> profile) {
+  return profile
+             ? IOSContextualTasksServiceFactory::GetForProfile(profile.get())
+             : nullptr;
+}
+
 syncer::DataTypeController::TypeVector CreateControllers(
     ProfileIOS* profile,
     syncer::SyncService* sync_service) {
@@ -105,8 +113,10 @@ syncer::DataTypeController::TypeVector CreateControllers(
       collaboration::CollaborationServiceFactory::GetForProfile(profile));
   builder.SetAimEligibilityService(
       IOSChromeAimEligibilityServiceFactory::GetForProfile(profile));
-  builder.SetContextualTasksService(
-      IOSContextualTasksServiceFactory::GetForProfile(profile));
+  // A callback is needed here to decouple `SyncServiceFactory` from
+  // `IOSContextualTasksServiceFactory` and prevent dependency cycles.
+  builder.SetContextualTasksServiceGetter(
+      base::BindRepeating(&GetContextualTasksService, profile->AsWeakPtr()));
   builder.SetDataSharingService(
       data_sharing::DataSharingServiceFactory::GetForProfile(profile));
   builder.SetPersonalCollaborationDataService(
@@ -120,8 +130,7 @@ syncer::DataTypeController::TypeVector CreateControllers(
       profile, ServiceAccessType::IMPLICIT_ACCESS));
   builder.SetGoogleGroupsManager(
       GoogleGroupsManagerFactory::GetForProfile(profile));
-  builder.SetHistoryService(ios::HistoryServiceFactory::GetForProfile(
-      profile, ServiceAccessType::EXPLICIT_ACCESS));
+  builder.SetHistoryService(ios::HistoryServiceFactory::GetForProfile(profile));
   builder.SetIdentityManager(IdentityManagerFactory::GetForProfile(profile));
   builder.SetDataTypeStoreService(
       DataTypeStoreServiceFactory::GetForProfile(profile));
@@ -154,6 +163,9 @@ syncer::DataTypeController::TypeVector CreateControllers(
   builder.SetTemplateURLService(nullptr);
   builder.SetUserEventService(
       IOSUserEventServiceFactory::GetForProfile(profile));
+  builder.SetNotebooksService(nullptr);
+  builder.SetEntitySuppressionManager(
+      IOSAutofillEntitySuppressionManagerFactory::GetForProfile(profile));
 
   syncer::DataTypeController::TypeVector controllers = builder.Build(
       /*disabled_types=*/{}, sync_service, ::GetChannel());
@@ -199,6 +211,9 @@ std::unique_ptr<syncer::SyncClient> BuildSyncClient(ProfileIOS* profile) {
 std::unique_ptr<KeyedService> BuildSyncService(ProfileIOS* profile) {
   CHECK(profile);
   CHECK(!profile->IsOffTheRecord());
+  if (!syncer::IsSyncAllowedByFlag()) {
+    return nullptr;
+  }
 
   // Always create the GCMProfileService instance such that we can listen to
   // the profile notifications and purge the GCM store when the profile is
@@ -275,40 +290,9 @@ std::unique_ptr<KeyedService> BuildSyncService(ProfileIOS* profile) {
 }  // namespace
 
 // static
-SyncServiceFactory* SyncServiceFactory::GetInstance() {
-  static base::NoDestructor<SyncServiceFactory> instance;
-  return instance.get();
-}
-
-// static
-syncer::SyncService* SyncServiceFactory::GetForProfile(ProfileIOS* profile) {
-  if (!syncer::IsSyncAllowedByFlag()) {
-    return nullptr;
-  }
-
-  return GetInstance()->GetServiceForProfileAs<syncer::SyncService>(
-      profile, /*create*/ true);
-}
-
-// static
-syncer::SyncService* SyncServiceFactory::GetForProfileIfExists(
-    ProfileIOS* profile) {
-  if (!syncer::IsSyncAllowedByFlag()) {
-    return nullptr;
-  }
-
-  return GetInstance()->GetServiceForProfileAs<syncer::SyncService>(
-      profile, /*create*/ false);
-}
-
-// static
 syncer::SyncServiceImpl*
 SyncServiceFactory::GetForProfileAsSyncServiceImplForTesting(
     ProfileIOS* profile) {
-  if (!syncer::IsSyncAllowedByFlag()) {
-    return nullptr;
-  }
-
   return GetInstance()->GetServiceForProfileAs<syncer::SyncServiceImpl>(
       profile, /*create*/ true);
 }
@@ -332,9 +316,10 @@ SyncServiceFactory::TestingFactory SyncServiceFactory::GetDefaultFactory() {
   return base::BindOnce(&BuildSyncService);
 }
 
-SyncServiceFactory::SyncServiceFactory()
-    : ProfileKeyedServiceFactoryIOS("SyncService",
-                                    TestingCreation::kNoServiceForTests) {
+SyncServiceFactory::SyncServiceFactory(PassKey key)
+    : TypedProfileKeyedServiceFactoryIOS(std::move(key),
+                                         "SyncService",
+                                         TestingCreation::kNoServiceForTests) {
   // The SyncServiceImpl depends on various KeyedServices being around
   // when it is shut down.  Specify those dependencies here to build the proper
   // destruction order. Note that some of the dependencies are listed here but
@@ -348,8 +333,8 @@ SyncServiceFactory::SyncServiceFactory()
   DependsOn(DeviceInfoSyncServiceFactory::GetInstance());
   DependsOn(GoogleGroupsManagerFactory::GetInstance());
   DependsOn(IdentityManagerFactory::GetInstance());
+  DependsOn(IOSAutofillEntitySuppressionManagerFactory::GetInstance());
   DependsOn(IOSChromeAimEligibilityServiceFactory::GetInstance());
-  DependsOn(IOSContextualTasksServiceFactory::GetInstance());
   DependsOn(ios::AboutSigninInternalsFactory::GetInstance());
   DependsOn(ios::AccountBookmarkSyncServiceFactory::GetInstance());
   DependsOn(ios::BookmarkModelFactory::GetInstance());
@@ -375,8 +360,6 @@ SyncServiceFactory::SyncServiceFactory()
   DependsOn(tab_groups::TabGroupSyncServiceFactory::GetInstance());
   DependsOn(HomeBackgroundCustomizationServiceFactory::GetInstance());
 }
-
-SyncServiceFactory::~SyncServiceFactory() {}
 
 std::unique_ptr<KeyedService> SyncServiceFactory::BuildServiceInstanceFor(
     ProfileIOS* profile) const {

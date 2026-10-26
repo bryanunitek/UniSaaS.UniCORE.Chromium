@@ -18,11 +18,11 @@
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_restore.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/profiles/profile_ui_test_utils.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/upgrade_detector/upgrade_detector.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
@@ -39,6 +39,7 @@
 #include "components/site_engagement/content/site_engagement_score.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 
 namespace smart_restart {
@@ -136,6 +137,52 @@ class SmartRestartManagerBrowserTest : public SmartRestartManagerTestBase {
   }
 };
 
+class SmartRestartManagerPolicyBrowserTest : public policy::PolicyTest {
+ public:
+  SmartRestartManagerPolicyBrowserTest() {
+    feature_list_.InitWithFeaturesAndParameters(
+        {{features::kSmartRestart, {{"restart_delay", "1s"}}},
+         {features::kSmartRestartLockScreen, {{"lock_restart_delay", "1s"}}}},
+        {});
+  }
+
+ protected:
+  void SetUpOnMainThread() override {
+    policy::PolicyTest::SetUpOnMainThread();
+
+    // Inject our fake detector into the manager.
+    manager_ = std::make_unique<SmartRestartManager>(&fake_upgrade_detector_);
+  }
+
+  void TearDownOnMainThread() override {
+    manager_.reset();
+    policy::PolicyTest::TearDownOnMainThread();
+  }
+
+  void SetRelaunchWindowPolicy(int start_hour,
+                               int start_minute,
+                               int duration_mins) {
+    base::DictValue entry;
+    entry.SetByDottedPath("start.hour", start_hour);
+    entry.SetByDottedPath("start.minute", start_minute);
+    entry.Set("duration_mins", duration_mins);
+    base::ListValue entries;
+    entries.Append(std::move(entry));
+    base::DictValue dict;
+    dict.Set("entries", std::move(entries));
+
+    policy::PolicyMap policies;
+    policies.Set(policy::key::kRelaunchWindow, policy::POLICY_LEVEL_MANDATORY,
+                 policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
+                 base::Value(std::move(dict)), nullptr);
+    UpdateProviderPolicy(policies);
+  }
+
+  base::test::ScopedFeatureList feature_list_;
+  FakeUpgradeDetector fake_upgrade_detector_;
+  std::unique_ptr<SmartRestartManager> manager_;
+};
+
 #if BUILDFLAG(IS_MAC)
 IN_PROC_BROWSER_TEST_F(SmartRestartManagerBrowserTest,
                        TriggersRestartOnZeroWindow) {
@@ -217,7 +264,7 @@ IN_PROC_BROWSER_TEST_F(SmartRestartManagerBrowserTest,
   fake_upgrade_detector_.SetUpgradeAvailable();
 
   // 2. Action: Close all windows to start the timer.
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PrefService* local_state = g_browser_process->local_state();
 
   // Keep the process and profile alive between windows.
@@ -283,7 +330,7 @@ IN_PROC_BROWSER_TEST_F(SmartRestartManagerBrowserTest,
   ScopedKeepAlive keep_alive(KeepAliveOrigin::BROWSER,
                              KeepAliveRestartOption::DISABLED);
   ScopedProfileKeepAlive profile_keep_alive(
-      browser()->profile(), ProfileKeepAliveOrigin::kBrowserWindow);
+      browser()->GetProfile(), ProfileKeepAliveOrigin::kBrowserWindow);
 
   // 2. Setup: 1 window open and a pending update.
   fake_upgrade_detector_.SetUpgradeAvailable();
@@ -317,33 +364,6 @@ IN_PROC_BROWSER_TEST_F(SmartRestartManagerBrowserTest,
   local_state->SetBoolean(prefs::kRestartLastSessionOnShutdown, false);
   local_state->SetBoolean(prefs::kRestartInBackgroundOnShutdown, false);
 }
-
-class SmartRestartManagerPolicyBrowserTest : public policy::PolicyTest {
- public:
-  SmartRestartManagerPolicyBrowserTest() {
-    feature_list_.InitWithFeaturesAndParameters(
-        {{features::kSmartRestart, {{"restart_delay", "1s"}}},
-         {features::kSmartRestartLockScreen, {{"lock_restart_delay", "1s"}}}},
-        {});
-  }
-
- protected:
-  void SetUpOnMainThread() override {
-    policy::PolicyTest::SetUpOnMainThread();
-
-    // Inject our fake detector into the manager.
-    manager_ = std::make_unique<SmartRestartManager>(&fake_upgrade_detector_);
-  }
-
-  void TearDownOnMainThread() override {
-    manager_.reset();
-    policy::PolicyTest::TearDownOnMainThread();
-  }
-
-  base::test::ScopedFeatureList feature_list_;
-  FakeUpgradeDetector fake_upgrade_detector_;
-  std::unique_ptr<SmartRestartManager> manager_;
-};
 
 IN_PROC_BROWSER_TEST_F(SmartRestartManagerPolicyBrowserTest,
                        BlocksRestartOnZeroWindowByEnterprisePolicyDisabled) {
@@ -426,7 +446,7 @@ IN_PROC_BROWSER_TEST_F(SmartRestartManagerPolicyBrowserTest,
 IN_PROC_BROWSER_TEST_F(SmartRestartManagerBrowserTest,
                        TriggersRestartOnLockScreen) {
   base::HistogramTester histogram_tester;
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   // 1. Setup: Pending update.
   fake_upgrade_detector_.SetUpgradeAvailable();
@@ -468,11 +488,47 @@ IN_PROC_BROWSER_TEST_F(SmartRestartManagerBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(SmartRestartManagerBrowserTest,
-                       BlocksRestartOnLockScreenWhenManaged) {
+                       AllowsRestartOnLockScreenWhenManagedByDefault) {
   base::HistogramTester histogram_tester;
   policy::ScopedManagementServiceOverrideForTesting platform_management(
       policy::ManagementServiceFactory::GetForPlatform(),
       policy::EnterpriseManagementAuthority::CLOUD);
+
+  // 1. Setup: Pending update.
+  fake_upgrade_detector_.SetUpgradeAvailable();
+
+  // 2. Action: Simulate Lock.
+  PrefService* local_state = g_browser_process->local_state();
+  EXPECT_FALSE(local_state->GetBoolean(prefs::kRestartLastSessionOnShutdown));
+
+  manager_->SetLockedStateForTesting(true);
+
+  // 3. Verification: Wait for timer to execute and verify restart proceeds on
+  // managed devices when RelaunchWindow is not configured.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return local_state->GetBoolean(prefs::kRestartLastSessionOnShutdown);
+  }));
+
+  histogram_tester.ExpectUniqueSample(
+      "Session.SmartRestart.Lock.ExecutionOutcome",
+      static_cast<int>(ExtendedExecutionOutcome::kExecuted), 1);
+
+  // Cleanup.
+  browser_shutdown::SetTryingToQuit(false);
+  local_state->SetBoolean(prefs::kRestartLastSessionOnShutdown, false);
+  local_state->SetBoolean(prefs::kRestartInBackgroundOnShutdown, false);
+}
+
+IN_PROC_BROWSER_TEST_F(SmartRestartManagerPolicyBrowserTest,
+                       BlocksRestartOnLockScreenOutsideRelaunchWindow) {
+  base::HistogramTester histogram_tester;
+
+  // Set a 1-minute relaunch window 12 hours away from current local time.
+  base::Time::Exploded now_exploded;
+  base::Time::Now().LocalExplode(&now_exploded);
+  int outside_hour = (now_exploded.hour + 12) % 24;
+  SetRelaunchWindowPolicy(outside_hour, /*start_minute=*/0,
+                          /*duration_mins=*/1);
 
   // 1. Setup: Pending update.
   fake_upgrade_detector_.SetUpgradeAvailable();
@@ -495,12 +551,45 @@ IN_PROC_BROWSER_TEST_F(SmartRestartManagerBrowserTest,
   EXPECT_FALSE(local_state->GetBoolean(prefs::kRestartLastSessionOnShutdown));
 }
 
+IN_PROC_BROWSER_TEST_F(SmartRestartManagerPolicyBrowserTest,
+                       AllowsRestartOnLockScreenWithinRelaunchWindow) {
+  base::HistogramTester histogram_tester;
+
+  // Set a 24-hour (1440-minute) relaunch window so current time is guaranteed
+  // to be within the window.
+  SetRelaunchWindowPolicy(/*start_hour=*/0, /*start_minute=*/0,
+                          /*duration_mins=*/1440);
+
+  // 1. Setup: Pending update.
+  fake_upgrade_detector_.SetUpgradeAvailable();
+
+  // 2. Action: Simulate Lock.
+  PrefService* local_state = g_browser_process->local_state();
+  EXPECT_FALSE(local_state->GetBoolean(prefs::kRestartLastSessionOnShutdown));
+
+  manager_->SetLockedStateForTesting(true);
+
+  // 3. Verification: Wait for timer to execute and verify restart proceeds.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return local_state->GetBoolean(prefs::kRestartLastSessionOnShutdown);
+  }));
+
+  histogram_tester.ExpectUniqueSample(
+      "Session.SmartRestart.Lock.ExecutionOutcome",
+      static_cast<int>(ExtendedExecutionOutcome::kExecuted), 1);
+
+  // Cleanup.
+  browser_shutdown::SetTryingToQuit(false);
+  local_state->SetBoolean(prefs::kRestartLastSessionOnShutdown, false);
+  local_state->SetBoolean(prefs::kRestartInBackgroundOnShutdown, false);
+}
+
 IN_PROC_BROWSER_TEST_F(SmartRestartManagerBrowserTest,
                        BlockOnLockScreenHighDisruption) {
   base::HistogramTester histogram_tester;
   // 1. Setup: Pending update and a "High Disruption" blocker (e.g. Incognito).
   fake_upgrade_detector_.SetUpgradeAvailable();
-  CreateIncognitoBrowser(browser()->profile());
+  CreateIncognitoBrowser(browser()->GetProfile());
 
   // 2. Action: Simulate Lock.
   PrefService* local_state = g_browser_process->local_state();
@@ -574,7 +663,7 @@ IN_PROC_BROWSER_TEST_F(SmartRestartManagerConservativeBrowserTest,
   // 2. Setup Tab 2: PDF Mime Type.
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL("data:application/pdf,test"),
-      WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      WindowOpenDisposition::kNewBackgroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   fake_upgrade_detector_.SetUpgradeAvailable();

@@ -16,11 +16,11 @@
 #include <vector>
 
 #include "base/i18n/rtl.h"
+#include "base/time/time.h"
 #include "base/types/optional_ref.h"
 #include "build/build_config.h"
 #include "components/autofill/core/common/autocomplete_parsing_util.h"
 #include "components/autofill/core/common/dense_set.h"
-#include "components/autofill/core/common/html_field_types.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/signatures.h"
 #include "components/autofill/core/common/unique_ids.h"
@@ -33,6 +33,16 @@ class PickleIterator;
 }  // namespace base
 
 namespace autofill {
+
+// Represents a form field modification performed by custom JavaScript autofill.
+struct JavaScriptFieldModification {
+  FieldGlobalId field_id;
+  mojom::JavaScriptModificationType modification_type;
+  base::TimeTicks timestamp;
+
+  friend bool operator==(const JavaScriptFieldModification&,
+                         const JavaScriptFieldModification&) = default;
+};
 
 class LogBuffer;
 
@@ -103,7 +113,6 @@ LogBuffer& operator<<(LogBuffer& buffer, FormControlType type);
 // at FormData.
 class FormFieldData {
  public:
-  using CheckStatus = mojom::FormFieldData_CheckStatus;
   using RoleAttribute = mojom::FormFieldData_RoleAttribute;
   using LabelSource = mojom::FormFieldData_LabelSource;
 
@@ -368,6 +377,17 @@ class FormFieldData {
     host_form_signature_ = host_form_signature;
   }
 
+  // The structural signature of the field's renderer form, that is, the
+  // structural signature of the FormData that contained this field when it was
+  // received by the AutofillDriver.
+  FormSignature host_form_structural_signature() const {
+    return host_form_structural_signature_;
+  }
+  void set_host_form_structural_signature(
+      FormSignature host_form_structural_signature) {
+    host_form_structural_signature_ = host_form_structural_signature;
+  }
+
   // The origin of the frame that hosts the field.
   const url::Origin& origin() const { return origin_; }
   void set_origin(url::Origin origin) { origin_ = std::move(origin); }
@@ -409,10 +429,6 @@ class FormFieldData {
     is_autofilled_according_to_renderer_ = is_autofilled_according_to_renderer;
   }
 
-  CheckStatus check_status() const { return check_status_; }
-  void set_check_status(CheckStatus check_status) {
-    check_status_ = check_status;
-  }
   bool is_focusable() const { return is_focusable_; }
   void set_is_focusable(bool is_focusable) { is_focusable_ = is_focusable; }
   bool is_visible() const { return is_visible_; }
@@ -520,11 +536,11 @@ class FormFieldData {
   FieldRendererId renderer_id_;
   FormRendererId host_form_id_;
   FormSignature host_form_signature_;
+  FormSignature host_form_structural_signature_;
   url::Origin origin_;
   int32_t form_control_ax_id_ = 0;
   uint64_t max_length_ = kDefaultMaxLength;
   bool is_autofilled_according_to_renderer_ = false;
-  CheckStatus check_status_ = CheckStatus::kNotCheckable;
   bool is_focusable_ = true;
   bool is_visible_ = true;
   bool should_autocomplete_ = true;
@@ -541,7 +557,7 @@ class FormFieldData {
   std::vector<SelectOption> datalist_options_;
   bool force_override_ = false;
   // LINT.ThenChange(form_field_data.cc:IdenticalAndEquivalentDomElements,
-  // autofill_test_utils.cc:FormFieldDataEq)
+  // autofill_test_util.cc:FormFieldDataEq)
 };
 
 // Structure containing necessary information to be sent from the browser to the

@@ -39,8 +39,6 @@ source_set("impl") {
     "translate_service.cc",
   ]
 
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
-
   deps = [
     ":translate",
     "//chrome/browser:browser_process",
@@ -76,7 +74,11 @@ source_set("impl") {
 
   if (!is_android) {
     deps += [
+      "//chrome/browser/ui:browser_tabstrip",
+      "//chrome/browser/ui:browser_window_header",
       "//chrome/browser/ui/browser_window",
+      "//chrome/browser/ui/read_anything",
+      "//chrome/browser/ui/side_panel",
       "//chrome/browser/ui/tabs:tab_strip",
       "//chrome/browser/ui/toasts",
       "//chrome/browser/ui/toasts/api:toasts",
@@ -120,7 +122,6 @@ if (!is_android) {
     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
 
     sources = [
-      "chrome_translate_client_browsertest.cc",
       "translate_frame_binder_browsertest.cc",
       "translate_manager_browsertest.cc",
       "translate_manager_render_view_host_browsertest.cc",
@@ -137,12 +138,19 @@ if (!is_android) {
       "//chrome/browser/language",
       "//chrome/browser/prefs:util",
       "//chrome/browser/search_engines",
+      "//chrome/browser/ui:browser_commands",
+      "//chrome/browser/ui:browser_window_header",
+      "//chrome/browser/ui/read_anything",
+      "//chrome/browser/ui/read_anything:test_support",
       "//chrome/browser/ui/toasts",
       "//chrome/browser/ui/toasts/api:toasts",
       "//chrome/browser/ui/translate",
+      "//chrome/browser/ui/views/frame:browser_view_header",
+      "//chrome/browser/ui/views/side_panel",
       "//chrome/browser/ui/views/translate",
       "//chrome/common",
       "//chrome/test:test_support",
+      "//chrome/test/base:browser_test_waiters",
       "//components/language/core/browser",
       "//components/translate/content/browser",
       "//components/translate/core/browser",
@@ -150,6 +158,7 @@ if (!is_android) {
       "//content/public/browser",
       "//content/test:test_support",
       "//net:test_support",
+      "//pdf:buildflags",
       "//testing/gmock",
       "//testing/gtest",
       "//url",
@@ -177,8 +186,9 @@ source_set("unit_tests") {
     ":translate",
     "//base",
     "//base/test:test_support",
-    "//chrome/browser",
     "//chrome/test:test_support",
+    "//chrome/test/base:chrome_render_view_host_test_harness",
+    "//chrome/test/base:testing_browser_process",
     "//components/infobars/content",
     "//components/translate/content/browser",
     "//components/translate/core/browser",

@@ -64,6 +64,7 @@ class CastWebService : public mojom::CastWebService {
       mojom::CastWebViewParamsPtr params);
 
   content::BrowserContext* browser_context() { return browser_context_; }
+  CastWindowManager* window_manager() { return window_manager_; }
   LRURendererCache* overlay_renderer_cache() {
     return overlay_renderer_cache_.get();
   }
@@ -118,6 +119,7 @@ class CastWebService : public mojom::CastWebService {
   bool immediately_delete_webviews_ = false;
 
   std::vector<std::string> cast_webui_hosts_;
+  bool webui_factory_registered_ = false;
 
   const scoped_refptr<base::SequencedTaskRunner> task_runner_;
   base::WeakPtr<CastWebService> weak_ptr_;

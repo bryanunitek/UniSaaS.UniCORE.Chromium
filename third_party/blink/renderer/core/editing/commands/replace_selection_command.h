@@ -47,7 +47,7 @@ class CORE_EXPORT ReplaceSelectionCommand final : public CompositeEditCommand {
     kSanitizeFragment = 1 << 5
   };
 
-  typedef unsigned CommandOptions;
+  using CommandOptions = uint8_t;
 
   ReplaceSelectionCommand(Document&,
                           DocumentFragment*,
@@ -65,8 +65,8 @@ class CORE_EXPORT ReplaceSelectionCommand final : public CompositeEditCommand {
   InputEvent::InputType GetInputType() const override;
   bool IsReplaceSelectionCommand() const override;
   HTMLSpanElement* PreserveWhiteSpaceForNode(Node* node, EditingState*);
-  void HandleStyleSpansBeforeInsertion(ReplacementFragment& fragment,
-                                       const Position& insertion_pos);
+  void HandleStyleSpansBeforeInsertion(const Position& insertion_pos,
+                                       ReplacementFragment& fragment);
 
   class InsertedNodes {
     STACK_ALLOCATED();
@@ -157,7 +157,7 @@ class CORE_EXPORT ReplaceSelectionCommand final : public CompositeEditCommand {
   PasswordEchoBehavior password_echo_behavior_;
   InputEvent::InputType input_type_;
   const bool sanitize_fragment_;
-  bool should_merge_end_;
+  bool should_merge_end_ = false;
   String input_event_data_;
 
   Position start_of_inserted_range_;

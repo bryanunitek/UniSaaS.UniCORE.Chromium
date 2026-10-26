@@ -12,7 +12,6 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.spy;
@@ -33,6 +32,7 @@ import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationView
 
 import android.content.Context;
 import android.view.View;
+import android.widget.CheckBox;
 import android.widget.CompoundButton;
 
 import androidx.test.core.app.ApplicationProvider;
@@ -50,7 +50,6 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -74,7 +73,6 @@ import java.util.function.Supplier;
 
 /** Unit tests for {@link NtpCardsMediator} */
 @RunWith(BaseRobolectricTestRunner.class)
-@EnableFeatures(ChromeFeatureList.HOME_MODULE_PREF_REFACTOR)
 @DisableFeatures(ChromeFeatureList.CROSS_DEVICE_PREF_TRACKER_EXTRA_LOGS)
 public class NtpCardsMediatorUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -87,17 +85,18 @@ public class NtpCardsMediatorUnitTest {
     @Mock private PrefService mPrefService;
     @Mock private HomeModulesConfigManager mHomeModulesConfigManager;
     @Mock private ModuleRegistry mModuleRegistry;
-    @Mock private CompoundButton mCompoundButton;
     @Captor private ArgumentCaptor<View.OnClickListener> mBackPressHandlerCaptor;
 
     private Supplier<@Nullable Profile> mProfileSupplier;
     private NtpCardsMediator mNtpCardsMediator;
     private Context mContext;
+    private CompoundButton mCompoundButton;
     private ListContainerViewDelegate mListContainerViewDelegate;
 
     @Before
     public void setUp() {
         mContext = ApplicationProvider.getApplicationContext();
+        mCompoundButton = new CheckBox(mContext);
         mProfileSupplier = () -> mProfile;
         UserPrefs.setPrefServiceForTesting(mPrefService);
         HomeModulesConfigManager.setInstanceForTesting(mHomeModulesConfigManager);
@@ -196,7 +195,7 @@ public class NtpCardsMediatorUnitTest {
         // Verifies that when the feed settings bottom sheet is part of the navigation flow starting
         // from the main bottom sheet, and the back press handler should be set to
         // backPressOnCurrentBottomSheet()
-        View backButton = mock(View.class);
+        View backButton = new View(mContext);
         clearInvocations(mBottomSheetPropertyModel);
         when(mDelegate.shouldShowAlone()).thenReturn(false);
         new NtpCardsMediator(
@@ -245,15 +244,6 @@ public class NtpCardsMediatorUnitTest {
 
         // Verify that UserPrefs.setBoolean is called for the "all cards" switch.
         verify(mPrefService).setBoolean(Pref.MAGIC_STACK_HOME_MODULE_ENABLED, true);
-    }
-
-    @Test
-    @DisableFeatures(ChromeFeatureList.HOME_MODULE_PREF_REFACTOR)
-    public void updateUserPrefsTest_FeatureDisabled() {
-        mNtpCardsMediator.updateUserPrefs();
-
-        // Verify that UserPrefs.setBoolean is not called.
-        verify(mPrefService, never()).setBoolean(anyString(), anyBoolean());
     }
 
     @Test

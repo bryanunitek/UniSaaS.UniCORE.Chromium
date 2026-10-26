@@ -21,8 +21,8 @@
 #include "chrome/browser/net/stub_resolver_config_reader.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
@@ -142,7 +142,7 @@ class DnsProbeBrowserTest : public InProcessBrowserTest {
 
   // Sets the browser object that other methods apply to, and that has the
   // DnsProbeStatus messages of its currently active tab monitored.
-  void SetActiveBrowser(Browser* browser);
+  void SetActiveBrowser(BrowserWindowInterface* browser);
 
   // Sets the results the FakeHostResolver will return for the current config
   // and Google config DnsProbeRunners. Since this mocks out the NetworkContext
@@ -185,7 +185,7 @@ class DnsProbeBrowserTest : public InProcessBrowserTest {
       delaying_dns_probe_service_;
 
   // Browser that methods apply to.
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> active_browser_;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged> active_browser_;
   // Helper that current has its DnsProbeStatus messages monitored.
   raw_ptr<NetErrorTabHelper, AcrossTasksDanglingUntriaged>
       monitored_tab_helper_;
@@ -208,7 +208,7 @@ DnsProbeBrowserTest::~DnsProbeBrowserTest() {
 void DnsProbeBrowserTest::SetUpOnMainThread() {
   NetErrorTabHelper::set_state_for_testing(NetErrorTabHelper::TESTING_DEFAULT);
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       embedder_support::kAlternateErrorPagesEnabled, true);
 
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -240,10 +240,10 @@ bool DnsProbeBrowserTest::InterceptURLLoaderRequest(
   return false;
 }
 
-void DnsProbeBrowserTest::SetActiveBrowser(Browser* browser) {
+void DnsProbeBrowserTest::SetActiveBrowser(BrowserWindowInterface* browser) {
   delaying_dns_probe_service_ = static_cast<DelayingDnsProbeService*>(
       DnsProbeServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-          browser->profile(),
+          browser->GetProfile(),
           base::BindRepeating(
               &DelayingDnsProbeService::Create,
               base::BindRepeating(&DnsProbeBrowserTest::GetNetworkContext,
@@ -258,8 +258,8 @@ void DnsProbeBrowserTest::SetActiveBrowser(Browser* browser) {
         NetErrorTabHelper::DnsProbeStatusSnoopCallback());
   }
   active_browser_ = browser;
-  monitored_tab_helper_ = NetErrorTabHelper::FromWebContents(
-      active_browser_->tab_strip_model()->GetActiveWebContents());
+  monitored_tab_helper_ = NetErrorTabHelper::From(
+      active_browser_->GetTabStripModel()->GetActiveTab());
   monitored_tab_helper_->set_dns_probe_status_snoop_callback_for_testing(
       BindRepeating(&DnsProbeBrowserTest::OnDnsProbeStatusSent,
                     Unretained(this)));
@@ -436,7 +436,7 @@ class DnsProbeCurrentSecureConfigFailingProbesTest
 #if BUILDFLAG(IS_CHROMEOS)
     // On Chrome OS, the local_state is shared between all users so the user-set
     // pref is stored in the profile's pref service.
-    pref_service = browser()->profile()->GetPrefs();
+    pref_service = browser()->GetProfile()->GetPrefs();
 #endif  // BUILDFLAG(IS_CHROMEOS)
     pref_service->SetString(prefs::kDnsOverHttpsMode,
                             SecureDnsConfig::kModeSecure);
@@ -572,7 +572,7 @@ IN_PROC_BROWSER_TEST_F(DnsProbeSuccessfulProbesTest, NoProbeInSubframe) {
 // Make sure browser sends NOT_RUN properly when probes are disabled.
 IN_PROC_BROWSER_TEST_F(DnsProbeUnreachableProbesTest, ProbesDisabled) {
   // Disable probes (And corrections).
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       embedder_support::kAlternateErrorPagesEnabled, false);
 
   NavigateToDnsError();
@@ -586,7 +586,7 @@ IN_PROC_BROWSER_TEST_F(DnsProbeUnreachableProbesTest, ProbesDisabled) {
 
 // Test incognito mode. DNS probes should still be enabled.
 IN_PROC_BROWSER_TEST_F(DnsProbeFailingProbesTest, Incognito) {
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
   SetActiveBrowser(incognito);
 
   // Just one commit and one sent status, since the corrections are disabled.

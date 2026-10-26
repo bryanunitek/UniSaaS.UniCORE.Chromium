@@ -9,9 +9,11 @@
 
 #include "base/base_export.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/dcheck_is_on.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/stack_allocated.h"
+#include "base/synchronization/lock_metrics_recorder_tags.h"
 #include "base/synchronization/lock_subtle.h"
 #include "base/synchronization/synchronization_buildflags.h"
 #include "base/thread_annotations.h"
@@ -28,6 +30,7 @@
 namespace base {
 class Lock;
 class ConditionVariable;
+class LockMetricTag;
 
 namespace win {
 namespace internal {
@@ -69,8 +72,11 @@ class BASE_EXPORT LockImpl {
   // held by something else, immediately return false.
   inline bool Try();
 
-  // Take the lock, blocking until it is available if necessary.
+  // Default lock acquisition with `BaseLock` tag.
   inline void Lock();
+
+  // Takes `LockMetricTagList` for recording lock acquisition times.
+  inline void Lock(const LockMetricTagList& tags);
 
   // Release the lock.  This must only be called by the lock's holder: after
   // a successful call to Try, or a call to Lock.
@@ -93,11 +99,13 @@ class BASE_EXPORT LockImpl {
   bool TrySpin();
 #endif
 
-  void LockInternal();
+  // Must only be called after an initial `Try()` has failed under contention.
+  void LockInternal(const LockMetricTagList& tags);
   NativeHandle native_handle_;
 };
 
-void LockImpl::Lock() {
+// Takes `LockMetricTagList` for recording lock acquisition times.
+inline void LockImpl::Lock(const LockMetricTagList& tags) {
   // Try the lock first to acquire it cheaply if it's not contended. Try() is
   // cheap on platforms with futex-type locks, as it doesn't call into the
   // kernel. Not marked `[[likely]]`, as:
@@ -108,7 +116,7 @@ void LockImpl::Lock() {
     return;
   }
 
-  LockInternal();
+  LockInternal(tags);
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -124,8 +132,20 @@ void LockImpl::Unlock() {
 #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 
 #if DCHECK_IS_ON()
-BASE_EXPORT void dcheck_trylock_result(int rv);
-BASE_EXPORT void dcheck_unlock_result(int rv);
+BASE_EXPORT void LogTryLockFailure(int rv);
+BASE_EXPORT void LogUnlockFailure(int rv);
+
+ALWAYS_INLINE void dcheck_trylock_result(int rv) {
+  if (rv != 0 && rv != EBUSY) [[unlikely]] {
+    LogTryLockFailure(rv);
+  }
+}
+
+ALWAYS_INLINE void dcheck_unlock_result(int rv) {
+  if (rv != 0) [[unlikely]] {
+    LogUnlockFailure(rv);
+  }
+}
 #endif
 
 bool LockImpl::Try() {

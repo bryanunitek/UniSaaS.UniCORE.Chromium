@@ -12,14 +12,13 @@
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view_test_utils.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_web_contents_host.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/profile_deletion_observer.h"
 #include "components/signin/public/base/signin_metrics.h"
-#include "components/signin/public/base/signin_switches.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/test/browser_test.h"
@@ -128,7 +127,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerSignInProviderBrowserTest,
         signin_metrics::AccessPoint::kForYouFre,
         std::string(),
         signin_finished_callback.Get(),
-        browser()->profile()->GetPath()};
+        browser()->GetProfile()->GetPath()};
 
     EXPECT_CALL(*host(), ShowScreen(_, _, _))
         .WillOnce([&](content::WebContents* contents, const GURL& url,

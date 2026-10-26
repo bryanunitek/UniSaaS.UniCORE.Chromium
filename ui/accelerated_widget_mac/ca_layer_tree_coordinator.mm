@@ -23,6 +23,7 @@
 #include "ui/gl/scoped_make_current.h"
 
 #if BUILDFLAG(IS_MAC)
+#include "ui/display/mac/display_link_mac.h"
 #include "ui/gl/gl_context.h"
 #endif
 
@@ -32,16 +33,13 @@ CALayerTreeCoordinator::CALayerTreeCoordinator(
     bool allow_av_sample_buffer_display_layer,
     BufferPresentedCallback buffer_presented_callback,
     GLMakeCurrentCallback gl_make_current_callback,
-    id<MTLDevice> metal_device,
-    bool no_post_task_for_callback)
+    id<MTLDevice> metal_device)
     : allow_remote_layers_(ui::RemoteLayerAPISupported()),
       allow_av_sample_buffer_display_layer_(
           allow_av_sample_buffer_display_layer),
       buffer_presented_callback_(buffer_presented_callback),
       gl_make_current_callback_(gl_make_current_callback),
-      metal_device_(metal_device),
-      no_post_task_for_callback_(no_post_task_for_callback) {
-}
+      metal_device_(metal_device) {}
 
 CALayerTreeCoordinator::~CALayerTreeCoordinator() {
   // If the front frame has already been committed, its CALayer tree is active.
@@ -218,18 +216,16 @@ void CALayerTreeCoordinator::CommitPresentedFrameToCA(
   }
 
   gfx::CALayerParams params;
+  bool no_post_task_for_callback = true;
 #if BUILDFLAG(IS_MAC)
+  no_post_task_for_callback = ui::SkipPostTaskForCallbacks();
   if (has_resized_since_last_swap_) {
     // Create a new CAContext for the new size. This allows new frame update at
     // the new size to be atomic with things like resizing the NSWindow.
-    if (base::FeatureList::IsEnabled(features::kCATransactionV2) &&
+    if (base::FeatureList::IsEnabled(features::kCAContextFenceOnResize) &&
         allow_remote_layers_) {
       params.ca_context_fence_mach_port.reset([ca_context_ createFencePort]);
       [ca_context_ setFencePort:params.ca_context_fence_mach_port.get()];
-      ca_context_.layer = nil;
-      ca_context_ = nil;
-      root_ca_layer_ = nil;
-      current_tree = nullptr;
     }
     has_resized_since_last_swap_ = false;
   }
@@ -268,7 +264,7 @@ void CALayerTreeCoordinator::CommitPresentedFrameToCA(
 
     // |frame.completion_callback| will reach this function:
     // SkiaOutputDeviceBufferQueue::DoFinishSwapBuffers().
-    if (no_post_task_for_callback_) {
+    if (no_post_task_for_callback) {
       std::move(frame.completion_callback)
           .Run(gfx::SwapCompletionResult(gfx::SwapResult::SWAP_ACK,
                                          std::move(params)));
@@ -302,7 +298,7 @@ void CALayerTreeCoordinator::CommitPresentedFrameToCA(
   // viz::SkiaRenderer::DidReceiveReleasedOverlays(),
   // viz::Display::DidReceivePresentationFeedback(),
   // viz::SkiaOutputSurfaceImpl::BufferPresented().
-  if (no_post_task_for_callback_) {
+  if (no_post_task_for_callback) {
     buffer_presented_callback_.Run(std::move(frame.presentation_callback),
                                    feedback);
   } else {

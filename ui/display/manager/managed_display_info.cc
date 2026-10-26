@@ -4,8 +4,10 @@
 
 #include "ui/display/manager/managed_display_info.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 
+#include <array>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -197,13 +199,13 @@ ManagedDisplayInfo ManagedDisplayInfo::CreateFromSpecWithID(
 
     DCHECK(radii_part.size() == 1 || radii_part.size() == 4);
 
-    float radii[4];
+    std::array<float, 4> radii = {};
     int radius_in_int = 0;
     for (size_t idx = 0; idx < radii_part.size(); ++idx) {
       std::string_view radius = radii_part[idx];
       bool conversion_success = base::StringToInt(radius, &radius_in_int);
       DCHECK(conversion_success);
-      UNSAFE_TODO(radii[idx]) = static_cast<float>(radius_in_int);
+      radii[idx] = static_cast<float>(radius_in_int);
     }
 
     panel_corners_radii =
@@ -610,14 +612,15 @@ std::string ManagedDisplayInfo::ToString() const {
   int rotation_degree = static_cast<int>(GetActiveRotation()) * 90;
 
   std::string result = base::StringPrintf(
-      "ManagedDisplayInfo[%lld] port_display_id=%lld, edid_display_id=%lld, "
+      "ManagedDisplayInfo[%" PRId64 "] name=\"%s\", port_display_id=%" PRId64 ", "
+      "edid_display_id=%" PRId64 ", "
       "native bounds=%s, size=%s, refresh-rate=%f, device-scale=%g, "
       "display-zoom=%g, overscan=%s, rotation=%d, touchscreen=%s, "
       "panel_corners_radii=%s, panel_orientation=%s, detected=%s, "
       "color_space=%s",
-      static_cast<long long int>(id_),
-      static_cast<long long int>(port_display_id_),
-      static_cast<long long int>(edid_display_id_),
+      id_, name_.c_str(),
+      port_display_id_,
+      edid_display_id_,
       bounds_in_native_.ToString().c_str(), size_in_pixel_.ToString().c_str(),
       refresh_rate_, device_scale_factor_, zoom_factor_,
       overscan_insets_in_dip_.ToString().c_str(), rotation_degree,

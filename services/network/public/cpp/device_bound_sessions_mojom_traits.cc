@@ -390,6 +390,10 @@ EnumTraits<network::mojom::DeviceBoundSessionRefreshResult,
       return MojomRefreshResult::kSigningQuotaExceeded;
     case RefreshResult::kTransientSigningError:
       return MojomRefreshResult::kTransientSigningError;
+    case RefreshResult::kInScopeRefreshNotYetNeeded:
+      return MojomRefreshResult::kInScopeRefreshNotYetNeeded;
+    case RefreshResult::kCanceled:
+      return MojomRefreshResult::kCanceled;
   }
   NOTREACHED();
 }
@@ -418,6 +422,10 @@ EnumTraits<network::mojom::DeviceBoundSessionRefreshResult,
       return RefreshResult::kSigningQuotaExceeded;
     case MojomRefreshResult::kTransientSigningError:
       return RefreshResult::kTransientSigningError;
+    case MojomRefreshResult::kInScopeRefreshNotYetNeeded:
+      return RefreshResult::kInScopeRefreshNotYetNeeded;
+    case MojomRefreshResult::kCanceled:
+      return RefreshResult::kCanceled;
   }
   NOTREACHED();
 }

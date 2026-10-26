@@ -8,7 +8,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/passwords/credential_manager_dialog_controller.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
@@ -20,20 +19,14 @@
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_form.h"
-#include "components/web_modal/web_contents_modal_dialog_manager.h"
-#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
-#include "ui/base/resource/resource_bundle.h"
 #include "ui/events/event.h"
 #include "ui/gfx/geometry/insets.h"
-#include "ui/strings/grit/ui_strings.h"
 #include "ui/views/border.h"
-#include "ui/views/bubble/bubble_border.h"
-#include "ui/views/bubble/bubble_frame_view.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
@@ -46,8 +39,8 @@ AccountChooserDialogView::AccountChooserDialogView(
     CredentialManagerDialogController* controller,
     content::WebContents* web_contents)
     : controller_(controller), web_contents_(web_contents->GetWeakPtr()) {
-  DCHECK(controller);
-  DCHECK(web_contents);
+  CHECK(controller, base::NotFatalUntil::M162);
+  CHECK(web_contents, base::NotFatalUntil::M162);
   SetButtons(static_cast<int>(ui::mojom::DialogButton::kCancel));
   SetButtonLabel(
       ui::mojom::DialogButton::kOk,
@@ -81,7 +74,7 @@ void AccountChooserDialogView::ShowAccountChooser() {
   DialogModelChanged();
   InitWindow();
 
-  DCHECK(!widget_);
+  CHECK(!widget_, base::NotFatalUntil::M162);
   SetOwnershipOfNewWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   widget_ = base::WrapUnique(
       constrained_window::ShowWebModalDialogViews(this, web_contents_.get()));
@@ -112,7 +105,7 @@ void AccountChooserDialogView::WindowClosing() {
 }
 
 bool AccountChooserDialogView::Accept() {
-  DCHECK(controller_);
+  CHECK(controller_, base::NotFatalUntil::M162);
   controller_->OnSignInClicked();
   // The dialog is closed by the controller.
   return false;

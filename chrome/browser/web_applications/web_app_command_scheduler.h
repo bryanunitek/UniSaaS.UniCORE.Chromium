@@ -14,6 +14,7 @@
 #include "base/types/expected.h"
 #include "chrome/browser/web_applications/commands/fetch_manifest_and_update_result.h"
 #include "chrome/browser/web_applications/commands/internal/callback_command.h"
+#include "chrome/browser/web_applications/model/iwa_update_info.h"
 #include "chrome/browser/web_applications/model/migration_behavior.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_sub_manager.h"
 #include "chrome/browser/web_applications/scheduler/apply_manifest_migration_result.h"
@@ -52,6 +53,7 @@ class Profile;
 class BrowserWindowInterface;
 
 namespace content {
+class Page;
 class StoragePartitionConfig;
 class WebContents;
 }  // namespace content
@@ -134,7 +136,7 @@ class WebAppCommandScheduler {
                      CleanupOrphanedIsolatedWebAppsCommandError>)>;
   using WebAppIconDiagnosticResultCallback =
       base::OnceCallback<void(std::optional<WebAppIconDiagnosticResult>)>;
-  using WebInstallFromUrlCommandCallback =
+  using WebInstallFromManifestCommandCallback =
       base::OnceCallback<void(const webapps::AppId& app_id,
                               webapps::InstallResultCode code)>;
   using UninstallCallback =
@@ -274,6 +276,7 @@ class WebAppCommandScheduler {
       std::unique_ptr<ScopedKeepAlive> optional_keep_alive,
       std::unique_ptr<ScopedProfileKeepAlive> optional_profile_keep_alive,
       InstallIsolatedWebAppCallback callback,
+      std::optional<IwaUpdateInfo> optional_update_info = std::nullopt,
       const base::Location& call_location = FROM_HERE);
 
   // Finds and removes any Isolated Web App data directories on disk that are
@@ -361,12 +364,6 @@ class WebAppCommandScheduler {
                               RemoveObsoleteBundleVersionsError>)> callback,
       const base::Location& call_location = FROM_HERE);
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-  // Calculates the total browsing data size for all installed Isolated Web
-  // Apps.
-  void GetIsolatedWebAppBrowsingData(
-      base::OnceCallback<void(base::flat_map<url::Origin, uint64_t>)> callback,
-      const base::Location& call_location = FROM_HERE);
 
   // Gets the StoragePartitionConfig for a <controlledframe> within the given
   // Isolated Web App. If the partition is persistent (not `in_memory`), it is
@@ -644,16 +641,18 @@ class WebAppCommandScheduler {
       WebAppIconDiagnosticResultCallback result_callback,
       const base::Location& location = FROM_HERE);
 
-  // Implements the Web Install API (`navigator.install()`).
-  // Calls `installed_callback` with the `InstallResultCode` and the computed
-  // manifest id if successful. Used by Web Install API.
-  void InstallAppFromUrl(const GURL& install_url,
-                         const std::optional<GURL>& manifest_id,
-                         base::WeakPtr<content::WebContents> web_contents,
-                         const GURL& last_committed_url,
-                         WebAppInstallDialogCallback dialog_callback,
-                         WebInstallFromUrlCommandCallback installed_callback,
-                         const base::Location& location = FROM_HERE);
+  // Implements the Web Install API manifest_url flow
+  // (`navigator.install({manifest_url})`). Installs a web app from a
+  // pre-parsed manifest, downloading icons via the shared web contents.
+  void InstallAppFromManifest(
+      blink::mojom::ManifestPtr manifest,
+      const GURL& manifest_url,
+      base::WeakPtr<content::WebContents> initiating_web_contents,
+      base::WeakPtr<content::Page> initiating_page,
+      const GURL& requesting_page_url,
+      WebAppInstallDialogCallback dialog_callback,
+      WebInstallFromManifestCommandCallback installed_callback,
+      const base::Location& location = FROM_HERE);
 
   // Fetches the `install_url`, validates that an installable manifest with a
   // manifest ID exists and matches the given one. Then, locks the app lock for
@@ -727,10 +726,17 @@ class WebAppCommandScheduler {
       base::OnceClosure callback,
       const base::Location& location = FROM_HERE);
 
+  // Schedules revalidation for `app_id`.
+  //
+  // If `revalidate_migration_destination` is true, also schedules a separate
+  // check of the app's immediate pending migration destination. That request
+  // passes false to check only the destination app, preventing migration cycles
+  // such as A -> B -> A from continually scheduling checks for each other.
   void UpdateValidatedOriginAssociations(
       const webapps::AppId& app_id,
       base::OnceCallback<void(UpdateValidatedOriginAssociationsResult)>
           callback,
+      bool revalidate_migration_destination = true,
       const base::Location& location = FROM_HERE);
 
   // Schedules a command to install a web app from a "migrate_from" field in
@@ -759,6 +765,12 @@ class WebAppCommandScheduler {
       std::unique_ptr<ScopedKeepAlive> keep_alive,
       std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive,
       ApplyManifestMigrationResultCallback callback,
+      const base::Location& location = FROM_HERE);
+
+  // Schedules the command to run garbage collection on unused storage
+  // partitions.
+  void GarbageCollectStoragePartitions(
+      base::OnceClosure callback,
       const base::Location& location = FROM_HERE);
 
   // TODO(crbug.com/40215411): expose all commands for web app

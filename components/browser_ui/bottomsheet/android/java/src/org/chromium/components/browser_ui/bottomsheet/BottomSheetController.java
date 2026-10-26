@@ -62,6 +62,7 @@ public interface BottomSheetController {
 
     // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:BottomSheet.State)
 
+    // LINT.IfChange(StateChangeReason)
     /**
      * The different reasons that the sheet's state can change.
      *
@@ -80,6 +81,7 @@ public interface BottomSheetController {
         StateChangeReason.PROMOTE_TAB,
         StateChangeReason.OMNIBOX_FOCUS,
         StateChangeReason.INTERACTION_COMPLETE,
+        StateChangeReason.CLOSE_BUTTON,
         StateChangeReason.MAX_VALUE
     })
     @Retention(RetentionPolicy.SOURCE)
@@ -94,19 +96,26 @@ public interface BottomSheetController {
         int PROMOTE_TAB = 7;
         int OMNIBOX_FOCUS = 8;
         int INTERACTION_COMPLETE = 9;
+        int CLOSE_BUTTON = 10;
 
         // STOP: Updates here require an update in enums.xml.
-        int MAX_VALUE = INTERACTION_COMPLETE;
+        int MAX_VALUE = CLOSE_BUTTON;
     }
+    // LINT.ThenChange(//tools/metrics/histograms/enums.xml:BottomSheet.StateChangeReason)
 
     /**
      * Request that some content be shown in the bottom sheet.
+     *
+     * <p>While the sheet is between hiding one content and showing the next one, e.g. when called
+     * from {@link BottomSheetObserver#onSheetStateChanged} for {@link SheetState#HIDDEN}, the
+     * content is only queued.
      *
      * @param content The content to be shown in the bottom sheet.
      * @param animate Whether the appearance of the bottom sheet should be animated.
      * @return True if the content was shown, false if it was suppressed. Content is suppressed if
      *     higher priority content is in the sheet, the sheet is expanded beyond the peeking state,
-     *     or the browser is in a mode that does not support showing the sheet.
+     *     or the browser is in a mode that does not support showing the sheet. If the content was
+     *     only queued, returns whether it is currently next in line.
      */
     boolean requestShowContent(BottomSheetContent content, boolean animate);
 
@@ -154,7 +163,11 @@ public interface BottomSheetController {
      */
     boolean collapseSheet(boolean animate);
 
-    /** Returns the content currently showing in the bottom sheet. */
+    /**
+     * Returns the content currently showing in the bottom sheet. While observers are notified of
+     * {@link SheetState#HIDDEN}, this is still the content that was hidden. See {@link
+     * BottomSheetObserver#onSheetStateChanged}.
+     */
     @Nullable BottomSheetContent getCurrentSheetContent();
 
     /** Returns the current state of the bottom sheet. */
@@ -204,6 +217,15 @@ public interface BottomSheetController {
      *     BottomSheetContent#getFullHeightRatio()}.
      */
     int getMaxSheetWidth();
+
+    /**
+     * @return The maximum allowable height of the bottom sheet in px. This accounts for large form
+     *     factor top gaps and bottom margins. Can be used to measure content or compute height
+     *     ratios in {@link BottomSheetContent#getHalfHeightRatio()} and {@link
+     *     BottomSheetContent#getFullHeightRatio()}.
+     */
+    @Px
+    int getMaxSheetHeight();
 
     /**
      * Returns the entry point for showing and interacting with scrims. Can be used to customize the
@@ -261,6 +283,14 @@ public interface BottomSheetController {
     boolean hasBottomInset();
 
     /**
+     * @return The edge-to-edge bottom inset in pixels, or 0 if the sheet has a non-zero bottom
+     *     margin or is covered by the keyboard.
+     */
+    default @Px int getEdgeToEdgeBottomInset() {
+        return 0;
+    }
+
+    /**
      * Get the current background color for the bottom sheet. If the sheet does not have a solid
      * background color, this will return null.
      */
@@ -269,4 +299,23 @@ public interface BottomSheetController {
 
     /** Called when the sheet background color override is changed. */
     void onSheetBackgroundColorOverrideChanged();
+
+    /**
+     * @param content The content prospectively being shown in the bottom sheet.
+     * @return Whether the bottom sheet should use the large form factor UI for the given content.
+     */
+    boolean isLargeFormFactorUiEnabled(@Nullable BottomSheetContent content);
+
+    /**
+     * Content that draws its own close button should hide it when this returns true, so that the
+     * sheet never shows two close buttons or none at all. Prefer this over re-deriving the rule
+     * from {@link #isLargeFormFactorUiEnabled}, which is only half of it.
+     *
+     * @param content The content prospectively being shown in the bottom sheet.
+     * @return Whether the framework supplies a close button for the given content.
+     */
+    default boolean willShowFrameworkCloseButton(@Nullable BottomSheetContent content) {
+        return BottomSheetUtils.shouldShowFrameworkCloseButton(
+                isLargeFormFactorUiEnabled(content), content);
+    }
 }

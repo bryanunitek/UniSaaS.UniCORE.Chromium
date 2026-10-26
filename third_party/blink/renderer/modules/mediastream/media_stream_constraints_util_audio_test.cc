@@ -1438,15 +1438,14 @@ TEST_P(MediaStreamConstraintsUtilAudioTest,
 }
 
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
-// Voice Isolation is supported.
-TEST_P(MediaStreamConstraintsUtilAudioTest, VoiceIsolationControl) {
+// Tests voice isolation constraints on a device that has the
+// media::AudioParameters::VOICE_ISOLATION_SUPPORTED effect set.
+TEST_P(MediaStreamConstraintsUtilAudioTest, VoiceIsolationEnabledOnSupportedDevice) {
   if (!IsDeviceCapture()) {
     return;
   }
-#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(media::kWebRtcVoiceIsolationDenoiser);
-#endif
+
+  // Exact true: Requesting exact voice isolation enables voice isolation.
   constraint_factory_.Reset();
   constraint_factory_.basic().voice_isolation.SetExact(true);
   AudioCaptureSettings settings = SelectSettings(true, capabilities_);
@@ -1455,6 +1454,7 @@ TEST_P(MediaStreamConstraintsUtilAudioTest, VoiceIsolationControl) {
       settings.audio_processing_properties().voice_isolation,
       AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationEnabled);
 
+  // Exact false: Explicitly requesting disabled voice isolation disables it.
   constraint_factory_.Reset();
   constraint_factory_.basic().voice_isolation.SetExact(false);
   settings = SelectSettings(true, capabilities_);
@@ -1462,13 +1462,367 @@ TEST_P(MediaStreamConstraintsUtilAudioTest, VoiceIsolationControl) {
   EXPECT_EQ(
       settings.audio_processing_properties().voice_isolation,
       AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+
+  // Ideal true: Requesting ideal voice isolation enables voice isolation.
   constraint_factory_.Reset();
+  constraint_factory_.basic().voice_isolation.SetIdeal(true);
   settings = SelectSettings(true, capabilities_);
   EXPECT_TRUE(settings.HasValue());
   EXPECT_EQ(
       settings.audio_processing_properties().voice_isolation,
-      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDefault);
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationEnabled);
+
+  // Ideal false: Requesting ideal disabled voice isolation disables it.
+  constraint_factory_.Reset();
+  constraint_factory_.basic().voice_isolation.SetIdeal(false);
+  settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+
+  // Unconstrained: When no voice isolation constraint is given, default
+  // settings are used.
+  constraint_factory_.Reset();
+  settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(settings.audio_processing_properties().voice_isolation,
+            kVoiceIsolationDefaultValue);
 }
+
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+// Tests voice isolation constraints on a device that does not have the
+// media::AudioParameters::VOICE_ISOLATION_SUPPORTED effect set.
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       VoiceIsolationNotEnabledOnUnsupportedDevice) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+
+  // "system_echo_canceller_device" only has the ECHO_CANCELLER effect bit set
+  // (and does not have VOICE_ISOLATION_SUPPORTED).
+
+  // Exact true: Settings selection fails because voice isolation is
+  // unsupported on the device.
+  constraint_factory_.Reset();
+  constraint_factory_.basic().device_id.SetExact(
+      "system_echo_canceller_device");
+  constraint_factory_.basic().voice_isolation.SetExact(true);
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_FALSE(settings.HasValue());
+
+  // Exact false: Explicitly requesting disabled voice isolation succeeds.
+  constraint_factory_.Reset();
+  constraint_factory_.basic().device_id.SetExact(
+      "system_echo_canceller_device");
+  constraint_factory_.basic().voice_isolation.SetExact(false);
+  settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+
+  // Ideal true: Selection succeeds since ideal constraints are not mandatory,
+  // but voice isolation is disabled because the device lacks support.
+  constraint_factory_.Reset();
+  constraint_factory_.basic().device_id.SetExact(
+      "system_echo_canceller_device");
+  constraint_factory_.basic().voice_isolation.SetIdeal(true);
+  settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+
+  // Ideal false: Selection succeeds and voice isolation is disabled.
+  constraint_factory_.Reset();
+  constraint_factory_.basic().device_id.SetExact(
+      "system_echo_canceller_device");
+  constraint_factory_.basic().voice_isolation.SetIdeal(false);
+  settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+
+  // Unconstrained: Selection succeeds and voice isolation is disabled because
+  // the device lacks support.
+  constraint_factory_.Reset();
+  constraint_factory_.basic().device_id.SetExact(
+      "system_echo_canceller_device");
+  settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+}
+
+// --- Voice Isolation & Echo Cancellation Matrix Resolution Tests ---
+// (Refer to the 6-case resolution matrix in ProcessingBasedContainer)
+
+// Case 1: exact VI=true + exact AEC="remote-only" (OverconstrainedError)
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       IncompatibleExactVoiceIsolationAndRemoteOnlyAecRejected) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  constraint_factory_.basic().voice_isolation.SetExact(true);
+  constraint_factory_.basic().echo_cancellation.SetExactString(
+      kEchoCancellationModeRemoteOnly);
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_FALSE(settings.HasValue());
+  EXPECT_EQ(settings.failed_constraint_name(),
+            constraint_factory_.basic().voice_isolation.GetName());
+}
+
+// Case 2: exact VI=true + ideal AEC="remote-only" (VI enabled, AEC relaxes to
+// kBrowserDecides)
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       ExactVoiceIsolationRelaxesIdealRemoteOnlyAecToBrowserDecides) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  constraint_factory_.basic().voice_isolation.SetExact(true);
+  constraint_factory_.basic().echo_cancellation.SetIdealString(
+      kEchoCancellationModeRemoteOnly);
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationEnabled);
+  EXPECT_EQ(settings.audio_processing_properties().echo_cancellation_mode,
+            EchoCancellationMode::kBrowserDecides);
+}
+
+// Case 3: ideal VI=true + exact AEC="remote-only" (AEC is kRemoteOnly, VI
+// disabled)
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       ExactRemoteOnlyAecDisablesIdealVoiceIsolation) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  constraint_factory_.basic().voice_isolation.SetIdeal(true);
+  constraint_factory_.basic().echo_cancellation.SetExactString(
+      kEchoCancellationModeRemoteOnly);
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+  EXPECT_EQ(settings.audio_processing_properties().echo_cancellation_mode,
+            EchoCancellationMode::kRemoteOnly);
+}
+
+// Case 4: ideal VI=true + ideal AEC="remote-only" (VI enabled, AEC relaxes to
+// kBrowserDecides)
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       ConflictingIdealConstraintsPreferVoiceIsolationOverRemoteOnlyAec) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  constraint_factory_.basic().voice_isolation.SetIdeal(true);
+  constraint_factory_.basic().echo_cancellation.SetIdealString(
+      kEchoCancellationModeRemoteOnly);
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationEnabled);
+  EXPECT_EQ(settings.audio_processing_properties().echo_cancellation_mode,
+            EchoCancellationMode::kBrowserDecides);
+}
+
+// Case 5: ideal/exact VI=false + ideal AEC="remote-only" (VI disabled, AEC is
+// kRemoteOnly)
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       IdealRemoteOnlyAecCanBeSelectedWhenVoiceIsolationIdeallyDisabled) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  constraint_factory_.basic().voice_isolation.SetIdeal(false);
+  constraint_factory_.basic().echo_cancellation.SetIdealString(
+      kEchoCancellationModeRemoteOnly);
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+  EXPECT_EQ(settings.audio_processing_properties().echo_cancellation_mode,
+            EchoCancellationMode::kRemoteOnly);
+}
+
+// Case 6a: VI=true + exact AEC=false (Both satisfied in Audio Service)
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       VoiceIsolationCanBeEnabledWithExplicitlyDisabledAec) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  constraint_factory_.basic().voice_isolation.SetExact(true);
+  constraint_factory_.basic().echo_cancellation.SetExactBoolean(false);
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationEnabled);
+  EXPECT_EQ(settings.audio_processing_properties().echo_cancellation_mode,
+            EchoCancellationMode::kDisabled);
+}
+
+// Case 6b: VI=true + ideal AEC=false (Both satisfied in Audio Service)
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       VoiceIsolationCanBeEnabledWithIdeallyDisabledAec) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  constraint_factory_.basic().voice_isolation.SetExact(true);
+  constraint_factory_.basic().echo_cancellation.SetIdealBoolean(false);
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationEnabled);
+  EXPECT_EQ(settings.audio_processing_properties().echo_cancellation_mode,
+            EchoCancellationMode::kDisabled);
+}
+
+// Case 6c: VI=true + exact AEC="all" (Both satisfied in Audio Service)
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       VoiceIsolationCanBeEnabledWithExactAllAec) {
+  if (!IsDeviceCapture() || !media::IsSystemLoopbackAsAecReferenceEnabled()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  constraint_factory_.basic().voice_isolation.SetExact(true);
+  constraint_factory_.basic().echo_cancellation.SetExactString(
+      kEchoCancellationModeAll);
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationEnabled);
+  EXPECT_EQ(settings.audio_processing_properties().echo_cancellation_mode,
+            EchoCancellationMode::kAll);
+}
+
+// --- Advanced Constraint Sets Resolution Tests ---
+
+// Basic: exact VI=true. Advanced: exact AEC="remote-only".
+// Exact VI in basic prunes remote-only AEC, causing the incompatible advanced
+// exact AEC constraint to be skipped.
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       IncompatibleRemoteOnlyAecInAdvancedConstraintSetIsSkipped) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  constraint_factory_.basic().voice_isolation.SetExact(true);
+  constraint_factory_.AddAdvanced().echo_cancellation.SetExactString(
+      kEchoCancellationModeRemoteOnly);
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationEnabled);
+  EXPECT_EQ(settings.audio_processing_properties().echo_cancellation_mode,
+            EchoCancellationMode::kBrowserDecides);
+}
+
+// Basic: exact AEC="remote-only". Advanced: exact VI=true.
+// Exact AEC in basic prunes enabled VI, causing the incompatible advanced exact
+// VI constraint to be skipped.
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       IncompatibleVoiceIsolationInAdvancedConstraintSetIsSkipped) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  constraint_factory_.basic().echo_cancellation.SetExactString(
+      kEchoCancellationModeRemoteOnly);
+  constraint_factory_.AddAdvanced().voice_isolation.SetExact(true);
+
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(settings.audio_processing_properties().echo_cancellation_mode,
+            EchoCancellationMode::kRemoteOnly);
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+}
+
+// Basic: exact AEC="remote-only" + ideal VI=true. Advanced: exact VI=true.
+// Exact AEC in basic prunes enabled VI, causing the incompatible advanced exact
+// VI constraint to be skipped.
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       IncompatibleVoiceIsolationInAdvancedSetWithIdealVoiceIsolationSkipped) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  constraint_factory_.basic().echo_cancellation.SetExactString(
+      kEchoCancellationModeRemoteOnly);
+  constraint_factory_.basic().voice_isolation.SetIdeal(true);
+  constraint_factory_.AddAdvanced().voice_isolation.SetExact(true);
+
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(settings.audio_processing_properties().echo_cancellation_mode,
+            EchoCancellationMode::kRemoteOnly);
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+}
+
+// Basic: unconstrained. Advanced: exact VI=true + exact AEC="remote-only".
+// Mutually exclusive exact pair in the same advanced set fails
+// ApplyConstraintSet and is skipped, selecting default settings.
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       IncompatibleExactPairInAdvancedConstraintSetIsSkipped) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  auto& advanced = constraint_factory_.AddAdvanced();
+  advanced.voice_isolation.SetExact(true);
+  advanced.echo_cancellation.SetExactString(kEchoCancellationModeRemoteOnly);
+
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(settings.audio_processing_properties().echo_cancellation_mode,
+            EchoCancellationMode::kBrowserDecides);
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+}
+
+// Basic: unconstrained. Advanced[0]: exact AEC="remote-only". Advanced[1]:
+// exact VI=true. First advanced set applies remote-only AEC and prunes enabled
+// VI; second advanced set with exact VI is skipped.
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       ChainedAdvancedSetsConflictingVoiceIsolationIsSkipped) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+  constraint_factory_.Reset();
+  constraint_factory_.AddAdvanced().echo_cancellation.SetExactString(
+      kEchoCancellationModeRemoteOnly);
+  constraint_factory_.AddAdvanced().voice_isolation.SetExact(true);
+
+  AudioCaptureSettings settings = SelectSettings(true, capabilities_);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(settings.audio_processing_properties().echo_cancellation_mode,
+            EchoCancellationMode::kRemoteOnly);
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+}
+#endif
 #else
 TEST_P(MediaStreamConstraintsUtilAudioTest, VoiceIsolationControl) {
   if (!IsDeviceCapture()) {
@@ -1511,19 +1865,36 @@ TEST_P(MediaStreamConstraintsUtilAudioTest, VoiceIsolationControl) {
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
 class TestAudioSource : public blink::MediaStreamAudioSource {
  public:
-  TestAudioSource()
+  explicit TestAudioSource(bool voice_isolation_enabled = false)
       : blink::MediaStreamAudioSource(
             blink::scheduler::GetSingleThreadTaskRunnerForTesting(),
-            true /* is_local_source */) {}
+            true /* is_local_source */) {
+    initial_properties_.voice_isolation =
+        voice_isolation_enabled
+            ? AudioProcessingProperties::VoiceIsolationType::
+                  kVoiceIsolationEnabled
+            : AudioProcessingProperties::VoiceIsolationType::
+                  kVoiceIsolationDisabled;
+    audio_properties_ = initial_properties_;
+  }
 
+  std::optional<AudioProcessingProperties> GetInitialAudioProcessingProperties()
+      const override {
+    return initial_properties_;
+  }
   std::optional<AudioProcessingProperties> GetAudioProcessingProperties()
       const override {
     return audio_properties_;
   }
-  void SetAudioProcessingProperties(
-      const AudioProcessingProperties& properties) override {
-    audio_properties_ = properties;
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+  void SetVoiceIsolation(bool enabled) override {
+    audio_properties_.voice_isolation =
+        enabled ? AudioProcessingProperties::VoiceIsolationType::
+                      kVoiceIsolationEnabled
+                : AudioProcessingProperties::VoiceIsolationType::
+                      kVoiceIsolationDisabled;
   }
+#endif
   void SetFormatForTesting(const media::AudioParameters& params) {
     SetFormat(params);
   }
@@ -1531,7 +1902,8 @@ class TestAudioSource : public blink::MediaStreamAudioSource {
   void SetIsApmProcessed(bool is_processed) { is_processed_ = is_processed; }
 
  private:
-  std::optional<AudioProcessingProperties> audio_properties_;
+  AudioProcessingProperties initial_properties_;
+  AudioProcessingProperties audio_properties_;
   bool is_processed_ = false;
 };
 
@@ -1541,15 +1913,10 @@ TEST_P(MediaStreamConstraintsUtilAudioTest,
     return;
   }
 
-#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(media::kWebRtcVoiceIsolationDenoiser);
-#endif
-
-  // 1. Create a running source.
-  auto platform_source_unique = std::make_unique<TestAudioSource>();
+  // 1. Create a running source with voice isolation enabled.
+  auto platform_source_unique =
+      std::make_unique<TestAudioSource>(/*voice_isolation_enabled=*/true);
   TestAudioSource* platform_source = platform_source_unique.get();
-  platform_source->SetAudioProcessingProperties(AudioProcessingProperties());
   platform_source->SetIsApmProcessed(true);
   media::AudioParameters params(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
                                 media::ChannelLayoutConfig::Stereo(),
@@ -1613,12 +1980,74 @@ TEST_P(MediaStreamConstraintsUtilAudioTest,
       AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationEnabled);
 }
 
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+TEST_P(MediaStreamConstraintsUtilAudioTest,
+       ActiveProcessedSourceVoiceIsolationDisabledCannotReconfigureToEnabled) {
+  if (!IsDeviceCapture()) {
+    return;
+  }
+
+  // 1. Create a running processed source with voice isolation disabled.
+  auto platform_source_unique =
+      std::make_unique<TestAudioSource>(/*voice_isolation_enabled=*/false);
+  TestAudioSource* platform_source = platform_source_unique.get();
+  platform_source->SetIsApmProcessed(true);
+  media::AudioParameters params(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
+                                media::ChannelLayoutConfig::Stereo(),
+                                media::AudioParameters::kAudioCDSampleRate,
+                                1000);
+  params.set_effects(media::AudioParameters::VOICE_ISOLATION_SUPPORTED);
+  platform_source->SetFormatForTesting(params);
+  MediaStreamDevice device(mojom::blink::MediaStreamType::DEVICE_AUDIO_CAPTURE,
+                           "processed_source", "processed_source_name");
+  device.input = params;
+  platform_source->SetDevice(device);
+
+  MediaStreamSource* source = MakeGarbageCollected<MediaStreamSource>(
+      "processed_source", MediaStreamSource::kTypeAudio,
+      "processed_source_name", false /* remote */,
+      std::move(platform_source_unique));
+
+  auto platform_track =
+      std::make_unique<MediaStreamAudioTrack>(true /* is_local_track */);
+  MediaStreamComponent* component =
+      MakeGarbageCollected<MediaStreamComponentImpl>(source->Id(), source,
+                                                     std::move(platform_track));
+  EXPECT_TRUE(platform_source->ConnectToInitializedTrack(component));
+
+  AudioDeviceCaptureCapabilities capabilities = {
+      AudioDeviceCaptureCapability(platform_source)};
+
+  // 2. Applying voice isolation = true exact on an active source that was
+  // started with voice isolation disabled should FAIL.
+  constraint_factory_.Reset();
+  constraint_factory_.basic().device_id.SetExact(capabilities[0].DeviceID());
+  constraint_factory_.basic().echo_cancellation.SetExactBoolean(true);
+  constraint_factory_.basic().voice_isolation.SetExact(true);
+  AudioCaptureSettings settings = SelectSettings(false, capabilities);
+  EXPECT_FALSE(settings.HasValue());
+  EXPECT_EQ(settings.failed_constraint_name(),
+            constraint_factory_.basic().voice_isolation.GetName());
+
+  // 3. Applying voice isolation = false exact should SUCCEED.
+  constraint_factory_.Reset();
+  constraint_factory_.basic().device_id.SetExact(capabilities[0].DeviceID());
+  constraint_factory_.basic().echo_cancellation.SetExactBoolean(true);
+  constraint_factory_.basic().voice_isolation.SetExact(false);
+  settings = SelectSettings(false, capabilities);
+  EXPECT_TRUE(settings.HasValue());
+  EXPECT_EQ(
+      settings.audio_processing_properties().voice_isolation,
+      AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationDisabled);
+}
+
+#endif  // BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+
 TEST_P(MediaStreamConstraintsUtilAudioTest,
        UnprocessedRequestWithActiveProcessedSource) {
   // 1. Create a processed active source.
   auto platform_source_unique = std::make_unique<TestAudioSource>();
   TestAudioSource* platform_source = platform_source_unique.get();
-  platform_source->SetAudioProcessingProperties(AudioProcessingProperties());
   platform_source->SetIsApmProcessed(true);
   platform_source->SetFormatForTesting(
       media::AudioParameters(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,

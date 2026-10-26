@@ -5,10 +5,13 @@
 #include "components/services/storage/dom_storage/sqlite/session_storage_sqlite.h"
 
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/types/expected_macros.h"
+#include "components/services/storage/dom_storage/dom_storage_histogram_helper.h"
+#include "components/services/storage/dom_storage/session_storage_metadata.h"
 #include "components/services/storage/dom_storage/sqlite/map_entries_table.h"
 #include "components/services/storage/dom_storage/sqlite/sqlite_database_macros.h"
 #include "components/services/storage/dom_storage/sqlite/sqlite_database_utils.h"
@@ -54,13 +57,22 @@ StatusOr<DomStorageDatabase::MapMetadata> ParseMapMetadata(
       blink::StorageKey::Deserialize(statement.ColumnBlobAsString(1)),
       []() { return DbStatus::Corruption("invalid storage key"); });
 
+  std::string session_id = statement.ColumnString(0);
+  if (!IsNamespaceIdValid(session_id)) {
+    return base::unexpected(DbStatus::Corruption(kInvalidNamespaceIdError));
+  }
+
   return DomStorageDatabase::MapMetadata{
       .map_locator{
-          /*session_id=*/statement.ColumnString(0),
+          std::move(session_id),
           std::move(storage_key),
           /*map_id=*/statement.ColumnInt(2),
       },
   };
+}
+
+void OnSqlError(int error, sql::Statement*) {
+  base::UmaHistogramSparse("Storage.SessionStorage.Database.Error", error);
 }
 
 }  // namespace
@@ -88,15 +100,14 @@ DbStatus SessionStorageSqlite::Open(
 
   memory_dump_id_ = memory_dump_id;
 
-  ASSIGN_OR_RETURN(std::tie(database_, meta_table_),
-                   sqlite::OpenDatabase(
-                       database_path,
-                       database_path.empty() ? kSessionStorageTag
-                                             : kSessionStorageTagInMemory,
-                       kCurrentSchemaVersion, kCompatibleSchemaVersion,
-                       base::BindOnce(&CreateSchema),
-                       base::BindRepeating(&SessionStorageSqlite::OnSqlError,
-                                           base::Unretained(this))));
+  ASSIGN_OR_RETURN(
+      std::tie(database_, meta_table_),
+      sqlite::OpenDatabase(database_path,
+                           database_path.empty() ? kSessionStorageTag
+                                                 : kSessionStorageTagInMemory,
+                           kCurrentSchemaVersion, kCompatibleSchemaVersion,
+                           base::BindOnce(&CreateSchema),
+                           base::BindRepeating(&OnSqlError)));
 
   map_entries_table_ = std::make_unique<MapEntriesTable>(*database_);
 
@@ -105,6 +116,10 @@ DbStatus SessionStorageSqlite::Open(
           this, "SessionStorageSqlite",
           base::SequencedTaskRunner::GetCurrentDefault(),
           base::trace_event::MemoryDumpProvider::Options());
+
+  if (!database_path.empty()) {
+    RecordOnDiskSqliteVacuumMetrics("SessionStorage", *database_);
+  }
 
   return DbStatus::OK();
 }
@@ -265,6 +280,19 @@ DbStatus SessionStorageSqlite::CleanUpStaleData() {
   return DbStatus::OK();
 }
 
+void SessionStorageSqlite::Close() {
+  NOTREACHED();
+}
+
+void SessionStorageSqlite::DetachFromSequence() {
+  // The dump provider was registered on the sequence this database was opened
+  // on, which is not the one that will use it. Unregister rather than leave it
+  // bound to the wrong sequence.
+  base::trace_event::MemoryDumpManager::GetInstance()->UnregisterDumpProvider(
+      this);
+  database_->DetachFromSequence();
+}
+
 void SessionStorageSqlite::MakeAllCommitsFailForTesting() {
   should_fail_commits_for_testing_ = true;
 }
@@ -362,10 +390,6 @@ bool SessionStorageSqlite::OnMemoryDump(
       base::StringPrintf("site_storage/sessionstorage/sqlite/db_0x%" PRIXPTR,
                          reinterpret_cast<uintptr_t>(this)));
   return true;
-}
-
-void SessionStorageSqlite::OnSqlError(int error, sql::Statement* statement) {
-  base::UmaHistogramSparse("Storage.SessionStorage.Database.Error", error);
 }
 
 }  // namespace storage

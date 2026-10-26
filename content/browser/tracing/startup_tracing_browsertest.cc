@@ -98,8 +98,8 @@ class LargeTraceEventData : public base::trace_event::ConvertableToTraceFormat {
 #endif
 IN_PROC_BROWSER_TEST_F(StartupTracingInProcessTest,
                        MAYBE_TestFilledStartupBuffer) {
-  auto config = tracing::TraceStartupConfig::GetInstance()
-                    .GetDefaultBackgroundStartupConfig();
+  auto config =
+      tracing::TraceStartupConfig::GetDefaultBackgroundStartupConfig();
 
   perfetto::Tracing::SetupStartupTracingOpts opts;
   opts.timeout_ms = tracing::kStartupTracingTimeoutMs;
@@ -190,7 +190,12 @@ class StartupTracingTest
       public testing::WithParamInterface<
           std::tuple<FinishType, OutputType, OutputLocation>> {
  public:
-  StartupTracingTest() = default;
+  StartupTracingTest() {
+    // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox is
+    // enabled and then remove this.
+    scoped_feature_list_.InitFromCommandLine(
+        "", "WebUIOmniboxPopup,WebUIOmniboxAimPopup");
+  }
 
   StartupTracingTest(const StartupTracingTest&) = delete;
   StartupTracingTest& operator=(const StartupTracingTest&) = delete;
@@ -224,9 +229,6 @@ class StartupTracingTest
       tracing::StartupTracingController::OverrideDefaultBasenameForTest(
           "trace1",
           tracing::StartupTracingController::ExtensionType::kAppendAppropriate);
-    } else {
-      // Fallback to explicitly initializing it if we don't set a basename
-      tracing::TraceStartupConfig::GetInstance();
     }
   }
 

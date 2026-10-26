@@ -6,18 +6,14 @@ package org.chromium.chrome.browser.multiwindow;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.EnableFeatures;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.multiwindow.MultiWindowMetricsUtils.WindowingMode;
 
 import java.util.HashSet;
@@ -28,8 +24,6 @@ import java.util.Set;
  * global fields.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@EnableFeatures(ChromeFeatureList.MULTI_INSTANCE_SHARED_PREFS_MIGRATION)
 public class MultiInstancePersistentStoreUnitTest {
 
     @Before
@@ -187,15 +181,18 @@ public class MultiInstancePersistentStoreUnitTest {
         int modeIndex = WindowingMode.FULLSCREEN;
         long duration = 33333L;
         // Test default value.
+        assertFalse(MultiInstancePersistentStore.containsMultiWindowModeDurationMs(modeIndex));
         assertEquals(0L, MultiInstancePersistentStore.readMultiWindowModeDurationMs(modeIndex));
 
         // Verify that the value is successfully written to the store.
         MultiInstancePersistentStore.writeMultiWindowModeDurationMs(modeIndex, duration);
+        assertTrue(MultiInstancePersistentStore.containsMultiWindowModeDurationMs(modeIndex));
         assertEquals(
                 duration, MultiInstancePersistentStore.readMultiWindowModeDurationMs(modeIndex));
 
         // Verify that the value is successfully cleared.
         MultiInstancePersistentStore.removeMultiWindowModeDurationMs(modeIndex);
+        assertFalse(MultiInstancePersistentStore.containsMultiWindowModeDurationMs(modeIndex));
         assertEquals(0L, MultiInstancePersistentStore.readMultiWindowModeDurationMs(modeIndex));
     }
 
@@ -207,7 +204,7 @@ public class MultiInstancePersistentStoreUnitTest {
         activities.add("Activity2");
 
         // Test default value.
-        assertNull(MultiInstancePersistentStore.readMultiWindowModeActivities(modeIndex));
+        assertTrue(MultiInstancePersistentStore.readMultiWindowModeActivities(modeIndex).isEmpty());
 
         // Verify that the value is successfully written to the store.
         MultiInstancePersistentStore.writeMultiWindowModeActivities(modeIndex, activities);
@@ -216,6 +213,6 @@ public class MultiInstancePersistentStoreUnitTest {
 
         // Verify that the value is successfully cleared.
         MultiInstancePersistentStore.writeMultiWindowModeActivities(modeIndex, new HashSet<>());
-        assertNull(MultiInstancePersistentStore.readMultiWindowModeActivities(modeIndex));
+        assertTrue(MultiInstancePersistentStore.readMultiWindowModeActivities(modeIndex).isEmpty());
     }
 }

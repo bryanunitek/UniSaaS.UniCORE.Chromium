@@ -168,7 +168,7 @@ class SafetyCheckMediator {
                                 RecordHistogram.recordEnumeratedHistogram(
                                         "Settings.SafetyCheck.UpdatesResult",
                                         SafetyCheckProperties.updatesStateToNative(status),
-                                        UpdateStatus.MAX_VALUE);
+                                        UpdateStatus.MAX_VALUE + 1);
                                 mSafetyCheckModel.set(SafetyCheckProperties.UPDATES_STATE, status);
                             }
                         });
@@ -231,16 +231,15 @@ class SafetyCheckMediator {
                             RecordHistogram.recordEnumeratedHistogram(
                                     SAFETY_CHECK_INTERACTIONS,
                                     SafetyCheckInteractions.SAFE_BROWSING_MANAGE,
-                                    SafetyCheckInteractions.MAX_VALUE);
+                                    SafetyCheckInteractions.MAX_VALUE + 1);
                             // Open the Safe Browsing settings.
-                            Intent intent =
-                                    SettingsNavigationFactory.createSettingsNavigation()
-                                            .createSettingsIntent(
-                                                    p.getContext(),
-                                                    SafeBrowsingSettingsFragment.class,
-                                                    SafeBrowsingSettingsFragment.createArguments(
-                                                            SettingsAccessPoint.SAFETY_CHECK));
-                            p.getContext().startActivity(intent);
+                            SettingsNavigationFactory.createSettingsNavigation(p.getContext())
+                                    .startSettings(
+                                            p.getContext(),
+                                            SafeBrowsingSettingsFragment.class,
+                                            SafeBrowsingSettingsFragment.createArguments(
+                                                    SettingsAccessPoint.SAFETY_CHECK),
+                                            /* addToBackStack= */ true);
                             return true;
                         });
         // Set the listener for clicking the passwords element.
@@ -312,7 +311,7 @@ class SafetyCheckMediator {
         RecordHistogram.recordEnumeratedHistogram(
                 SAFETY_CHECK_INTERACTIONS,
                 SafetyCheckInteractions.STARTED,
-                SafetyCheckInteractions.MAX_VALUE);
+                SafetyCheckInteractions.MAX_VALUE + 1);
         // Record the start time for tracking 1 second checking delay in the UI.
         mCheckStartTime = SystemClock.elapsedRealtime();
         // Record the absolute start time for showing when the last Safety check was performed.
@@ -320,8 +319,6 @@ class SafetyCheckMediator {
         mSafetyCheckModel.set(SafetyCheckProperties.LAST_RUN_TIMESTAMP, currentTime);
         mPreferenceManager.writeLong(
                 ChromePreferenceKeys.SETTINGS_SAFETY_CHECK_LAST_RUN_TIMESTAMP, currentTime);
-        // Increment the stored number of Safety check starts.
-        mPreferenceManager.incrementInt(ChromePreferenceKeys.SETTINGS_SAFETY_CHECK_RUN_COUNTER);
         // Set the checking state for all elements.
         setPasswordsState(mPasswordsCheckAccountStorageModel, PasswordsState.CHECKING);
         setPasswordsState(mPasswordsCheckLocalStorageModel, PasswordsState.CHECKING);
@@ -384,7 +381,7 @@ class SafetyCheckMediator {
                         RecordHistogram.recordEnumeratedHistogram(
                                 "Settings.SafetyCheck.SafeBrowsingResult",
                                 status,
-                                SafeBrowsingStatus.MAX_VALUE);
+                                SafeBrowsingStatus.MAX_VALUE + 1);
                         mSafetyCheckModel.set(
                                 SafetyCheckProperties.SAFE_BROWSING_STATE,
                                 SafetyCheckProperties.safeBrowsingStateFromNative(status));
@@ -432,7 +429,7 @@ class SafetyCheckMediator {
             RecordHistogram.recordEnumeratedHistogram(
                     "Settings.SafetyCheck.PasswordsResult2",
                     passwordsStateToNative(passwordsState),
-                    PasswordsStatus.MAX_VALUE);
+                    PasswordsStatus.MAX_VALUE + 1);
         }
 
         passwordsCheckModel.set(PasswordsCheckPreferenceProperties.PASSWORDS_STATE, passwordsState);
@@ -493,7 +490,7 @@ class SafetyCheckMediator {
                         RecordHistogram.recordEnumeratedHistogram(
                                 SAFETY_CHECK_INTERACTIONS,
                                 SafetyCheckInteractions.PASSWORDS_MANAGE,
-                                SafetyCheckInteractions.MAX_VALUE);
+                                SafetyCheckInteractions.MAX_VALUE + 1);
                         // Open the Password Check UI.
                         // This UI surface was deprecated for all use-cases apart form the
                         // PhishGuard dialog. The dialog option leading to SafetyCheck, implies
@@ -576,7 +573,7 @@ class SafetyCheckMediator {
         RecordHistogram.recordEnumeratedHistogram(
                 "Settings.SafetyCheck.PasswordsResult2",
                 PasswordsCheckPreferenceProperties.passwordsStateToNative(PasswordsState.ERROR),
-                PasswordsStatus.MAX_VALUE);
+                PasswordsStatus.MAX_VALUE + 1);
         determinePasswordStateOnLoadComplete(
                 new PasswordCheckResult(new Exception(error)), passwordStorageType, isInitialLoad);
     }

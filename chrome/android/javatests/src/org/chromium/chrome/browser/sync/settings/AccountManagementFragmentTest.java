@@ -49,7 +49,7 @@ import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.browser.sync.FakeSyncServiceImpl;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.sync.SyncTestRule;
@@ -73,10 +73,7 @@ import java.util.Set;
 @DoNotBatch(reason = "TODO(crbug.com/40743432): SyncTestRule doesn't support batching.")
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 // TODO(https://crbug.com/464015738): these tests could be flaky because of AnimatedProgressBar.
-@DisableFeatures({
-    ChromeFeatureList.SETTINGS_MULTI_COLUMN,
-    ChromeFeatureList.ANDROID_ANIMATED_PROGRESS_BAR_IN_BROWSER
-})
+@DisableFeatures({ChromeFeatureList.ANDROID_ANIMATED_PROGRESS_BAR_IN_BROWSER})
 public class AccountManagementFragmentTest {
     @ClassParameter
     private static final List<ParameterSet> sClassParameters =
@@ -85,7 +82,7 @@ public class AccountManagementFragmentTest {
                     new ParameterSet().value(true).name("withIdentityManagerSource"));
 
     private final SyncTestRule mSyncTestRule = new SyncTestRule();
-    private static final int RENDER_TEST_REVISION = 3;
+    private static final int RENDER_TEST_REVISION = 4;
 
     private final boolean mIsIdentityManagerSourceOfAccounts;
 
@@ -93,8 +90,8 @@ public class AccountManagementFragmentTest {
         mIsIdentityManagerSourceOfAccounts = isIdentityManagerSourceOfAccounts;
     }
 
-    private final SettingsActivityTestRule<AccountManagementFragment> mSettingsActivityTestRule =
-            new SettingsActivityTestRule<>(AccountManagementFragment.class);
+    private final SettingsTestRule<AccountManagementFragment> mSettingsTestRule =
+            new SettingsTestRule<>(AccountManagementFragment.class);
 
     // SettingsActivity has to be finished before the outer CTA can be finished or trying to finish
     // CTA won't work (SyncTestRule extends CTARule).
@@ -116,7 +113,7 @@ public class AccountManagementFragmentTest {
     public final RuleChain mRuleChain =
             RuleChain.outerRule(mFeatureOverridesRule)
                     .around(mSyncTestRule)
-                    .around(mSettingsActivityTestRule);
+                    .around(mSettingsTestRule);
 
     @Rule
     public final ChromeRenderTestRule mRenderTestRule =
@@ -137,8 +134,8 @@ public class AccountManagementFragmentTest {
     @Feature("RenderTest")
     public void testAccountManagementFragmentView() throws Exception {
         mSyncTestRule.setUpAccountAndSignInForTesting();
-        mSettingsActivityTestRule.startSettingsActivity();
-        View view = mSettingsActivityTestRule.getFragment().getView();
+        mSettingsTestRule.startSettingsActivity();
+        View view = mSettingsTestRule.getFragment().getView();
         onViewWaiting(allOf(is(view), isDisplayed()));
         mRenderTestRule.render(view, "account_management_fragment_view");
     }
@@ -149,8 +146,8 @@ public class AccountManagementFragmentTest {
     public void testSignedInAccountShownOnTop() throws Exception {
         mSyncTestRule.getSigninTestRule().addAccount(TestAccounts.ACCOUNT1);
         mSyncTestRule.getSigninTestRule().addAccountThenSignin(TestAccounts.ACCOUNT2);
-        mSettingsActivityTestRule.startSettingsActivity();
-        View view = mSettingsActivityTestRule.getFragment().getView();
+        mSettingsTestRule.startSettingsActivity();
+        View view = mSettingsTestRule.getFragment().getView();
         onViewWaiting(allOf(is(view), isDisplayed()));
         mRenderTestRule.render(view, "account_management_fragment_signed_in_account_on_top");
     }
@@ -163,24 +160,25 @@ public class AccountManagementFragmentTest {
         AccountInfo accountInfo =
                 signinTestRule.addChildTestAccountThenWaitForSignin(
                         new AccountCapabilitiesBuilder().setCanHaveEmailAddressDisplayed(false));
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         // Force update the fragment so that NON_DISPLAYABLE_EMAIL_ACCOUNT_CAPABILITIES is
         // actually utilized. This is to replicate downstream implementation behavior, where
         // checkIfDisplayableEmailAddress() differs.
         CriteriaHelper.pollUiThread(
                 () -> {
-                    return !mSettingsActivityTestRule
+                    return !mSettingsTestRule
                             .getFragment()
                             .getProfileDataCacheForTesting()
                             .getById(accountInfo.getId())
                             .hasDisplayableEmailAddress();
                 });
-        ThreadUtils.runOnUiThreadBlocking(mSettingsActivityTestRule.getFragment()::update);
-        View view = mSettingsActivityTestRule.getFragment().getView();
+        ThreadUtils.runOnUiThreadBlocking(mSettingsTestRule.getFragment()::update);
+        View view = mSettingsTestRule.getFragment().getView();
         onViewWaiting(allOf(is(view), isDisplayed()));
         onView(
                         allOf(
+                                isDescendantOfA(withId(R.id.preferences_detail)),
                                 isDescendantOfA(withId(android.R.id.list_container)),
                                 withText(accountInfo.getFullName())))
                 .check(matches(isDisplayed()));
@@ -197,21 +195,22 @@ public class AccountManagementFragmentTest {
         signinTestRule.addAccount(accountInfo);
         // Child accounts are signed-in automatically in the background.
         signinTestRule.waitForSignin(accountInfo);
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
         CriteriaHelper.pollUiThread(
                 () -> {
-                    return !mSettingsActivityTestRule
+                    return !mSettingsTestRule
                             .getFragment()
                             .getProfileDataCacheForTesting()
                             .getById(accountInfo.getId())
                             .hasDisplayableEmailAddress();
                 });
-        ThreadUtils.runOnUiThreadBlocking(mSettingsActivityTestRule.getFragment()::update);
-        View view = mSettingsActivityTestRule.getFragment().getView();
+        ThreadUtils.runOnUiThreadBlocking(mSettingsTestRule.getFragment()::update);
+        View view = mSettingsTestRule.getFragment().getView();
         onViewWaiting(allOf(is(view), isDisplayed()));
         onView(withText(accountInfo.getEmail())).check(doesNotExist());
         onView(
                         allOf(
+                                isDescendantOfA(withId(R.id.preferences_detail)),
                                 isDescendantOfA(withId(android.R.id.list_container)),
                                 withText(R.string.default_google_account_username)))
                 .check(matches(isDisplayed()));
@@ -225,15 +224,15 @@ public class AccountManagementFragmentTest {
         CoreAccountInfo primarySupervisedAccount =
                 signinTestRule.addChildTestAccountThenWaitForSignin();
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
         CriteriaHelper.pollUiThread(
                 () -> {
-                    return mSettingsActivityTestRule
+                    return mSettingsTestRule
                             .getFragment()
                             .getProfileDataCacheForTesting()
                             .hasProfileDataForTesting(primarySupervisedAccount.getId());
                 });
-        View view = mSettingsActivityTestRule.getFragment().getView();
+        View view = mSettingsTestRule.getFragment().getView();
         onViewWaiting(allOf(is(view), isDisplayed()));
         mRenderTestRule.render(
                 view,
@@ -252,15 +251,15 @@ public class AccountManagementFragmentTest {
         signinTestRule.addAccount(TestAccounts.ACCOUNT1);
         signinTestRule.waitForSignin(primarySupervisedAccount);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
         CriteriaHelper.pollUiThread(
                 () -> {
-                    return mSettingsActivityTestRule
+                    return mSettingsTestRule
                             .getFragment()
                             .getProfileDataCacheForTesting()
                             .hasProfileDataForTesting(primarySupervisedAccount.getId());
                 });
-        View view = mSettingsActivityTestRule.getFragment().getView();
+        View view = mSettingsTestRule.getFragment().getView();
         onViewWaiting(allOf(is(view), isDisplayed()));
         mRenderTestRule.render(
                 view,
@@ -274,7 +273,7 @@ public class AccountManagementFragmentTest {
         mFakeSyncService.setTypesWithUnsyncedData(Set.of(DataType.BOOKMARKS));
 
         mSyncTestRule.setUpAccountAndSignInForTesting();
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         onView(withText(R.string.sign_out)).perform(click());
 
@@ -287,7 +286,7 @@ public class AccountManagementFragmentTest {
     @SmallTest
     public void testSignOut() {
         mSyncTestRule.setUpAccountAndSignInForTesting();
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         onView(withText(R.string.sign_out)).perform(click());
 
@@ -309,9 +308,9 @@ public class AccountManagementFragmentTest {
 
         // Sign in, enable sync and open settings.
         mSyncTestRule.setUpAccountAndSignInForTesting();
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
-        onViewWaiting(allOf(is(mSettingsActivityTestRule.getFragment().getView()), isDisplayed()));
+        onViewWaiting(allOf(is(mSettingsTestRule.getFragment().getView()), isDisplayed()));
         onView(withId(R.id.signin_settings_card)).check(doesNotExist());
         watchIdentityErrorCardShownHistogram.assertExpected();
     }

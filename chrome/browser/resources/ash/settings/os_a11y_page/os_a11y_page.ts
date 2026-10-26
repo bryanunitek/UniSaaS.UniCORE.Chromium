@@ -14,7 +14,6 @@ import '../os_settings_page/os_settings_subpage.js';
 import '../os_settings_page/settings_card.js';
 import '../settings_shared.css.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
@@ -25,7 +24,8 @@ import type {SettingsToggleButtonElement} from '../controls/settings_toggle_butt
 import {Section} from '../mojom-webui/routes.mojom-webui.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
 import type {LanguageHelper, LanguagesModel} from '../os_languages_page/languages_types.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './os_a11y_page.html.js';
@@ -104,9 +104,9 @@ export class OsSettingsA11yPageElement extends OsSettingsA11yPageElementBase {
     };
   }
 
-  currentRoute: Route;
-  languages: LanguagesModel;
-  languageHelper: LanguageHelper;
+  declare currentRoute: Route;
+  declare languages: LanguagesModel;
+  declare languageHelper: LanguageHelper;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -116,10 +116,10 @@ export class OsSettingsA11yPageElement extends OsSettingsA11yPageElementBase {
   ]);
 
   private browserProxy_: OsA11yPageBrowserProxy;
-  private hasScreenReader_: boolean;
-  private isGuest_: boolean;
-  private isKioskOldA11ySettingsRedirectionEnabled_: boolean;
-  private section_: Section;
+  declare private hasScreenReader_: boolean;
+  declare private isGuest_: boolean;
+  declare private isKioskOldA11ySettingsRedirectionEnabled_: boolean;
+  declare private section_: Section;
 
   constructor() {
     super();

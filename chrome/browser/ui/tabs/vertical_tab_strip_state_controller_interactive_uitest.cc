@@ -2,19 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+
 #include "base/feature_list.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/run_until.h"
-#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/tabs/features.h"
-#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 #include "chrome/browser/ui/toasts/api/toast_id.h"
 #include "chrome/browser/ui/toasts/toast_controller.h"
 #include "chrome/browser/ui/toasts/toast_view.h"
@@ -22,6 +21,7 @@
 #include "chrome/browser/ui/views/frame/browser_widget.h"
 #include "chrome/browser/ui/views/frame/system_menu_model_builder.h"
 #include "chrome/browser/ui/views/test/tab_strip_interactive_test_mixin.h"
+#include "chrome/browser/ui/views/toolbar/webui_test_utils.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -35,9 +35,11 @@
 #include "ui/base/test/ui_controls.h"
 #include "ui/base/unowned_user_data/user_data_factory.h"
 #include "ui/events/event_constants.h"
+#include "ui/gfx/animation/animation_test_api.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/interaction/interactive_views_test.h"
+#include "ui/views/test/widget_test.h"
 
 namespace base::test {
 
@@ -105,10 +107,6 @@ class VerticalTabStripInteractiveUiTest : public InteractiveBrowserTest {
   ~VerticalTabStripInteractiveUiTest() override = default;
 
   void SetUp() override {
-    scoped_feature_list_.InitWithFeatures(
-        /* enabled_features */ {tabs::kVerticalTabs,
-                                tabs::kVerticalTabsExpandOnHover},
-        /* disabled_features */ {});
     override_ =
         BrowserWindowFeatures::GetUserDataFactoryForTesting()
             .AddOverrideForTesting<FakeImmersiveModeController>(
@@ -118,9 +116,15 @@ class VerticalTabStripInteractiveUiTest : public InteractiveBrowserTest {
     InteractiveBrowserTest::SetUp();
   }
 
+  void SetUpOnMainThread() override {
+    InteractiveBrowserTest::SetUpOnMainThread();
+    WaitForInitialWebUIToolbar(browser());
+  }
+
   bool SystemMenuContainsStringId(int message_id) {
-    ui::MenuModel* menu_model =
-        browser()->GetBrowserView().browser_widget()->GetSystemMenuModel();
+    ui::MenuModel* menu_model = BrowserView::GetBrowserViewForBrowser(browser())
+                                    ->browser_widget()
+                                    ->GetSystemMenuModel();
     for (size_t i = 0; i < menu_model->GetItemCount(); i++) {
       if (l10n_util::GetStringUTF16(message_id) == menu_model->GetLabelAt(i)) {
         return true;
@@ -146,9 +150,16 @@ class VerticalTabStripInteractiveUiTest : public InteractiveBrowserTest {
   raw_ptr<FakeImmersiveModeController> fake_controller_ = nullptr;
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
   std::optional<ui::UserDataFactory::ScopedOverride> override_;
 };
+
+#if BUILDFLAG(IS_MAC)
+constexpr int kSwitchToVerticalTabStringId = IDS_SWITCH_TO_VERTICAL_TAB_MAC;
+constexpr int kSwitchToHorizontalTabStringId = IDS_SWITCH_TO_HORIZONTAL_TAB_MAC;
+#else
+constexpr int kSwitchToVerticalTabStringId = IDS_SWITCH_TO_VERTICAL_TAB;
+constexpr int kSwitchToHorizontalTabStringId = IDS_SWITCH_TO_HORIZONTAL_TAB;
+#endif
 
 // Unable to programmatically click System Context Menu Items in Windows.
 #if BUILDFLAG(IS_WIN)
@@ -159,7 +170,7 @@ class VerticalTabStripInteractiveUiTest : public InteractiveBrowserTest {
 // This test checks that we can click the show tabs to the side button
 IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
                        MAYBE_VerifyTabsToTheSideButton) {
-  EXPECT_TRUE(SystemMenuContainsStringId(IDS_SWITCH_TO_VERTICAL_TAB));
+  EXPECT_TRUE(SystemMenuContainsStringId(kSwitchToVerticalTabStringId));
 
   RunTestSequence(
       WaitForShow(kTabStripFrameGrabHandleElementId),
@@ -170,7 +181,7 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
       SelectMenuItem(SystemMenuModelBuilder::kToggleVerticalTabsElementId),
       WaitForShow(kVerticalTabStripCollapseButtonElementId));
 
-  EXPECT_TRUE(SystemMenuContainsStringId(IDS_SWITCH_TO_HORIZONTAL_TAB));
+  EXPECT_TRUE(SystemMenuContainsStringId(kSwitchToHorizontalTabStringId));
 }
 
 // Unable to programmatically click System Context Menu Items in Windows.
@@ -185,7 +196,7 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
   tabs::VerticalTabStripStateController::From(browser())
       ->SetVerticalTabsEnabled(true);
 
-  EXPECT_TRUE(SystemMenuContainsStringId(IDS_SWITCH_TO_HORIZONTAL_TAB));
+  EXPECT_TRUE(SystemMenuContainsStringId(kSwitchToHorizontalTabStringId));
 
   RunScheduledLayouts();
 
@@ -198,7 +209,7 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
       SelectMenuItem(SystemMenuModelBuilder::kToggleVerticalTabsElementId),
       WaitForShow(kTabStripFrameGrabHandleElementId));
 
-  EXPECT_TRUE(SystemMenuContainsStringId(IDS_SWITCH_TO_VERTICAL_TAB));
+  EXPECT_TRUE(SystemMenuContainsStringId(kSwitchToVerticalTabStringId));
 }
 
 // Unable to programmatically click System Context Menu Items in Windows.
@@ -306,30 +317,16 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
   EXPECT_TRUE(SystemMenuContainsStringId(IDS_EXPAND_VERTICAL_TABS));
 }
 
-struct VerticalTabsBadgeTestParams {
-  base::test::FeatureRef testing_feature;
-  ui::NewBadgeType expected_badge_type;
-};
-
 class VerticalTabStripMenuInteractiveUiTest
-    : public ::testing::WithParamInterface<VerticalTabsBadgeTestParams>,
-      public InteractiveFeaturePromoTest {
+    : public InteractiveFeaturePromoTest {
  public:
   VerticalTabStripMenuInteractiveUiTest()
       : InteractiveFeaturePromoTest(
-            UseDefaultTrackerAllowingPromos({GetParam().testing_feature})) {}
+            UseDefaultTrackerAllowingPromos({tabs::kVerticalTabsNewBadge})) {}
   ~VerticalTabStripMenuInteractiveUiTest() override = default;
-
-  void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(tabs::kVerticalTabs);
-    InteractiveFeaturePromoTest::SetUp();
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_P(VerticalTabStripMenuInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(VerticalTabStripMenuInteractiveUiTest,
                        ShowBadgeInContextMenuToggle) {
   BrowserWidget* const browser_widget =
       BrowserView::GetBrowserViewForBrowser(browser())->browser_widget();
@@ -345,7 +342,7 @@ IN_PROC_BROWSER_TEST_P(VerticalTabStripMenuInteractiveUiTest,
   std::optional<ui::NewBadgeType> badge_type =
       menu->GetNewBadgeTypeAt(command_index);
   ASSERT_TRUE(badge_type.has_value());
-  EXPECT_EQ(badge_type.value(), GetParam().expected_badge_type);
+  EXPECT_EQ(badge_type.value(), ui::NewBadgeType::kNew);
 
   // While using the vertical tab strip, the badge should be hidden.
   vertical_tabs_controller->SetVerticalTabsEnabled(true);
@@ -361,26 +358,54 @@ IN_PROC_BROWSER_TEST_P(VerticalTabStripMenuInteractiveUiTest,
   std::optional<ui::NewBadgeType> badge_type_in_horizontal_tabs =
       menu->GetNewBadgeTypeAt(command_index);
   ASSERT_TRUE(badge_type_in_horizontal_tabs.has_value());
-  EXPECT_EQ(badge_type_in_horizontal_tabs.value(),
-            GetParam().expected_badge_type);
+  EXPECT_EQ(badge_type_in_horizontal_tabs.value(), ui::NewBadgeType::kNew);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    ,
-    VerticalTabStripMenuInteractiveUiTest,
-    ::testing::Values(
-        VerticalTabsBadgeTestParams{
-            .testing_feature = tabs::kVerticalTabsPreviewBadge,
-            .expected_badge_type = ui::NewBadgeType::kPreview},
-        VerticalTabsBadgeTestParams{
-            .testing_feature = tabs::kVerticalTabsNewBadge,
-            .expected_badge_type = ui::NewBadgeType::kNew}),
-    [](const ::testing::TestParamInfo<
-        VerticalTabStripMenuInteractiveUiTest::ParamType>& info) {
-      return info.param.expected_badge_type == ui::NewBadgeType::kPreview
-                 ? "PreviewBadge"
-                 : "NewBadge";
-    });
+IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
+                       DeferredModeSwitchUpdatesCollapseAction) {
+  auto disable_animations = gfx::AnimationTestApi::SetRichAnimationRenderMode(
+      gfx::Animation::RichAnimationRenderMode::FORCE_DISABLED);
+  auto* controller = tabs::VerticalTabStripStateController::From(browser());
+
+  for (bool initially_collapsed : {false, true}) {
+    SCOPED_TRACE(initially_collapsed);
+    controller->SetVerticalTabsEnabled(true);
+    controller->RequestCollapse(initially_collapsed);
+    ASSERT_EQ(initially_collapsed, controller->IsCollapsed());
+    controller->SetVerticalTabsEnabled(false);
+
+    // Immersive fullscreen holds this lock until fullscreen exits.
+    auto lock = controller->GetEnableStateLock();
+    controller->SetVerticalTabsEnabled(true);
+    EXPECT_FALSE(controller->ShouldDisplayVerticalTabs());
+    EXPECT_FALSE(
+        chrome::IsCommandEnabled(browser(), IDC_TOGGLE_VERTICAL_TABS_COLLAPSE));
+
+    lock.reset();
+    ASSERT_TRUE(controller->ShouldDisplayVerticalTabs());
+    EXPECT_EQ(initially_collapsed, controller->IsCollapsed());
+    RunScheduledLayouts();
+
+    EXPECT_TRUE(
+        chrome::IsCommandEnabled(browser(), IDC_TOGGLE_VERTICAL_TABS_COLLAPSE));
+    RunTestSequence(
+        WaitForShow(kVerticalTabStripCollapseButtonElementId),
+        CheckViewProperty(kVerticalTabStripCollapseButtonElementId,
+                          &views::View::GetEnabled, true),
+        PressButton(kVerticalTabStripCollapseButtonElementId,
+                    ui::test::InteractionTestUtil::InputType::kMouse),
+        CheckResult([controller]() { return controller->IsCollapsed(); },
+                    !initially_collapsed));
+
+    lock = controller->GetEnableStateLock();
+    controller->SetVerticalTabsEnabled(false);
+    EXPECT_TRUE(controller->ShouldDisplayVerticalTabs());
+    lock.reset();
+    EXPECT_FALSE(controller->ShouldDisplayVerticalTabs());
+    EXPECT_FALSE(
+        chrome::IsCommandEnabled(browser(), IDC_TOGGLE_VERTICAL_TABS_COLLAPSE));
+  }
+}
 
 IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
                        ImmersiveFullscreenSwitchShowToast) {
@@ -390,8 +415,7 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
   fake_controller_->SetEnabled(true);
 
   // Get ToastController
-  ToastController* const toast_controller =
-      browser()->browser_window_features()->toast_controller();
+  ToastController* const toast_controller = ToastController::From(browser());
   ASSERT_NE(toast_controller, nullptr);
   EXPECT_FALSE(toast_controller->IsShowingToast());
 
@@ -413,15 +437,12 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
             ToastId::kTabStripSwitchDelayedVertical);
 
   // Click the action button on the toast to exit fullscreen.
-  RunTestSequence(
-      WaitForShow(toasts::ToastView::kToastActionButton), Do([]() {
-        base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
-        base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-            FROM_HERE, run_loop.QuitClosure(), base::Seconds(20));
-        run_loop.Run();
-      }),
-      PressButton(toasts::ToastView::kToastActionButton),
-      WaitForHide(toasts::ToastView::kToastViewId));
+  ui_test_utils::FullscreenWaiter waiter(
+      browser(), ui_test_utils::FullscreenWaiter::kNoFullscreen);
+  RunTestSequence(WaitForShow(toasts::ToastView::kToastActionButton),
+                  PressButton(toasts::ToastView::kToastActionButton),
+                  WaitForHide(toasts::ToastView::kToastViewId),
+                  Do([&waiter]() { waiter.Wait(); }));
 
   // Verify we exited fullscreen and vertical tabs are now enabled!
   fake_controller_->SetEnabled(false);
@@ -444,8 +465,7 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
   fake_controller_->SetEnabled(true);
 
   // Get ToastController
-  ToastController* const toast_controller =
-      browser()->browser_window_features()->toast_controller();
+  ToastController* const toast_controller = ToastController::From(browser());
   ASSERT_NE(toast_controller, nullptr);
   EXPECT_FALSE(toast_controller->IsShowingToast());
 
@@ -466,15 +486,12 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
             ToastId::kTabStripSwitchDelayedHorizontal);
 
   // Click action button to exit fullscreen
-  RunTestSequence(
-      WaitForShow(toasts::ToastView::kToastActionButton), Do([]() {
-        base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
-        base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-            FROM_HERE, run_loop.QuitClosure(), base::Seconds(20));
-        run_loop.Run();
-      }),
-      PressButton(toasts::ToastView::kToastActionButton),
-      WaitForHide(toasts::ToastView::kToastViewId));
+  ui_test_utils::FullscreenWaiter waiter(
+      browser(), ui_test_utils::FullscreenWaiter::kNoFullscreen);
+  RunTestSequence(WaitForShow(toasts::ToastView::kToastActionButton),
+                  PressButton(toasts::ToastView::kToastActionButton),
+                  WaitForHide(toasts::ToastView::kToastViewId),
+                  Do([&waiter]() { waiter.Wait(); }));
 
   // Verify we exited fullscreen and vertical tabs are now disabled!
   fake_controller_->SetEnabled(false);
@@ -483,15 +500,82 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
                    ->ShouldDisplayVerticalTabs());
 }
 
-#if BUILDFLAG(IS_MAC)
-// TODO(crbug.com/532797333): Re-enable this test on Mac.
-#define MAYBE_KeyboardShortcutTogglesCollapse \
-  DISABLED_KeyboardShortcutTogglesCollapse
-#else
-#define MAYBE_KeyboardShortcutTogglesCollapse KeyboardShortcutTogglesCollapse
-#endif
 IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
-                       MAYBE_KeyboardShortcutTogglesCollapse) {
+                       ImmersiveFullscreenSwitchShowHorizontalToastRepeatedly) {
+  // Enable vertical tabs first
+  tabs::VerticalTabStripStateController::From(browser())
+      ->SetVerticalTabsEnabled(true);
+  ASSERT_TRUE(tabs::VerticalTabStripStateController::From(browser())
+                  ->ShouldDisplayVerticalTabs());
+
+  // Enter immersive fullscreen
+  ui_test_utils::ToggleFullscreenModeAndWait(browser());
+  ASSERT_TRUE(browser()->GetWindow()->IsFullscreen());
+  fake_controller_->SetEnabled(true);
+
+  // Try to disable vertical tabs
+  tabs::VerticalTabStripStateController::From(browser())
+      ->SetVerticalTabsEnabled(false);
+
+  // Stop the timer so it doesn't auto-dismiss during test execution.
+  ToastController* const toast_controller = ToastController::From(browser());
+  toast_controller->GetToastCloseTimerForTesting()->Stop();
+
+  // Verify that vertical tabs are STILL enabled because state is locked
+  EXPECT_TRUE(tabs::VerticalTabStripStateController::From(browser())
+                  ->ShouldDisplayVerticalTabs());
+
+  // Verify that horizontal toast is showing
+  EXPECT_TRUE(toast_controller->IsShowingToast());
+  EXPECT_EQ(toast_controller->GetCurrentToastId(),
+            ToastId::kTabStripSwitchDelayedHorizontal);
+
+  // Dismiss toast and wait for it to hide
+  views::test::WidgetDestroyedWaiter destroyed_waiter(
+      toast_controller->GetToastWidgetForTesting());
+  RunTestSequence(WaitForShow(toasts::ToastView::kToastCloseButton),
+                  PressButton(toasts::ToastView::kToastCloseButton),
+                  WaitForHide(toasts::ToastView::kToastViewId),
+                  Do([&destroyed_waiter]() { destroyed_waiter.Wait(); }));
+  EXPECT_FALSE(toast_controller->IsShowingToast());
+
+  // Try to disable vertical tabs again
+  tabs::VerticalTabStripStateController::From(browser())
+      ->SetVerticalTabsEnabled(false);
+
+  // Stop the timer so it doesn't auto-dismiss during test execution
+  toast_controller->GetToastCloseTimerForTesting()->Stop();
+
+  // Verify that vertical tabs are STILL enabled
+  EXPECT_TRUE(tabs::VerticalTabStripStateController::From(browser())
+                  ->ShouldDisplayVerticalTabs());
+
+  // Verify that horizontal toast is showing again
+  EXPECT_TRUE(toast_controller->IsShowingToast());
+  EXPECT_EQ(toast_controller->GetCurrentToastId(),
+            ToastId::kTabStripSwitchDelayedHorizontal);
+
+  // Click action button to exit fullscreen
+  ui_test_utils::FullscreenWaiter waiter(
+      browser(), ui_test_utils::FullscreenWaiter::kNoFullscreen);
+  RunTestSequence(WaitForShow(toasts::ToastView::kToastActionButton),
+                  PressButton(toasts::ToastView::kToastActionButton),
+                  WaitForHide(toasts::ToastView::kToastViewId),
+                  Do([&waiter]() { waiter.Wait(); }));
+
+  // Verify we exited fullscreen and vertical tabs are now disabled
+  fake_controller_->SetEnabled(false);
+  EXPECT_FALSE(browser()->GetWindow()->IsFullscreen());
+  EXPECT_FALSE(tabs::VerticalTabStripStateController::From(browser())
+                   ->ShouldDisplayVerticalTabs());
+}
+
+IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
+                       KeyboardShortcutTogglesCollapse) {
+  ui::Accelerator toggle_collapse_accelerator;
+  ASSERT_TRUE(BrowserView::GetBrowserViewForBrowser(browser())->GetAccelerator(
+      IDC_TOGGLE_VERTICAL_TABS_COLLAPSE, &toggle_collapse_accelerator));
+
   base::UserActionTester user_action_tester;
   tabs::VerticalTabStripStateController* const controller =
       tabs::VerticalTabStripStateController::From(browser());
@@ -510,8 +594,7 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
       CheckResult([controller]() { return controller->IsCollapsed(); }, false),
 
       // Send the accelerator.
-      SendKeyPress(kBrowserViewElementId, ui::VKEY_L,
-                   ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR),
+      SendAccelerator(kBrowserViewElementId, toggle_collapse_accelerator),
 
       // Wait for the collapsed event.
       WaitForEvent(kTabStripRegionElementId,
@@ -528,8 +611,7 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripInteractiveUiTest,
       }),
 
       // Send the accelerator again.
-      SendKeyPress(kBrowserViewElementId, ui::VKEY_L,
-                   ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR),
+      SendAccelerator(kBrowserViewElementId, toggle_collapse_accelerator),
 
       // Wait for the expansion to complete.
       Do([controller]() {

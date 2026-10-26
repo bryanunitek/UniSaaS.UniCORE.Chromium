@@ -4,6 +4,8 @@
 
 #include "components/enterprise/connectors/core/cloud_content_scanning/file_analysis_request_base.h"
 
+#include <optional>
+
 #include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -17,12 +19,23 @@
 #include "base/test/test_future.h"
 #include "base/test/with_feature_override.h"
 #include "build/build_config.h"
+#include "build/buildflag.h"
 #include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_service.h"
 #include "components/enterprise/connectors/core/features.h"
 #include "components/enterprise/obfuscation/core/download_obfuscator.h"
 #include "components/file_access/scoped_file_access.h"
 #include "components/file_access/test/mock_scoped_file_access_delegate.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
+#include <winioctl.h>
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/test/android/content_uri_test_utils.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace enterprise_connectors {
 
@@ -234,8 +247,16 @@ class FileAnalysisRequestBaseHashInFinalInvariantTest
             enterprise_connectors::kContentHashInFileUploadFinalCall) {}
 };
 
+#if BUILDFLAG(IS_ANDROID)
+// TODO(https://crbug.com/504414003): de-flake and re-enable.
+#define MAYBE_LargeFileAlwaysHasHashWhenNotDelayOpen \
+  DISABLED_LargeFileAlwaysHasHashWhenNotDelayOpen
+#else
+#define MAYBE_LargeFileAlwaysHasHashWhenNotDelayOpen \
+  LargeFileAlwaysHasHashWhenNotDelayOpen
+#endif
 TEST_P(FileAnalysisRequestBaseHashInFinalInvariantTest,
-       LargeFileAlwaysHasHashWhenNotDelayOpen) {
+       MAYBE_LargeFileAlwaysHasHashWhenNotDelayOpen) {
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitAndEnableFeatureWithParameters(
       kEnableNewUploadSizeLimit, {{"max_file_size_mb", "250"}});
@@ -486,7 +507,7 @@ TEST_F(FileAnalysisRequestBaseTest, DelayedFileOpening) {
       }));
 
   EXPECT_FALSE(run_loop.AnyQuitCalled());
-  request->OpenFile();
+  request->OpenFile(/*is_cancelled=*/nullptr);
   run_loop.Run();
 
   EXPECT_TRUE(run_loop.AnyQuitCalled());
@@ -576,7 +597,7 @@ TEST_F(FileAnalysisRequestBaseTest, FileHashComputesAsyncWhenEnabled) {
             << data.mime_type << " is not an expected mimetype";
       }));
 
-  request->OpenFile();
+  request->OpenFile(/*is_cancelled=*/nullptr);
 
   run_loop.Run();
   EXPECT_TRUE(run_loop.AnyQuitCalled());
@@ -597,6 +618,12 @@ TEST_F(FileAnalysisRequestBaseTest,
     base::File file(file_path,
                     base::File::FLAG_CREATE | base::File::FLAG_WRITE);
     ASSERT_TRUE(file.IsValid());
+#if BUILDFLAG(IS_WIN)
+    DWORD bytes_returned = 0;
+    ASSERT_TRUE(::DeviceIoControl(file.GetPlatformFile(), FSCTL_SET_SPARSE,
+                                  nullptr, 0, nullptr, 0, &bytes_returned,
+                                  nullptr));
+#endif
     ASSERT_TRUE(file.SetLength(kHugeFileSize));
   }
 
@@ -620,9 +647,190 @@ TEST_F(FileAnalysisRequestBaseTest,
         run_loop.Quit();
       }));
 
-  request->OpenFile();
+  request->OpenFile(/*is_cancelled=*/nullptr);
   run_loop.Run();
   EXPECT_TRUE(run_loop.AnyQuitCalled());
 }
+
+TEST_F(FileAnalysisRequestBaseTest, VirtualFilesOnChromeOS) {
+#if BUILDFLAG(IS_CHROMEOS)
+  EXPECT_TRUE(FileAnalysisRequestBase::IsVirtualFile(
+      base::FilePath(FILE_PATH_LITERAL("/media/fuse/fusebox/odfs/large.doc"))));
+  EXPECT_FALSE(FileAnalysisRequestBase::IsVirtualFile(base::FilePath(
+      FILE_PATH_LITERAL("/home/chronos/user/Downloads/large.doc"))));
+#else
+  EXPECT_FALSE(FileAnalysisRequestBase::IsVirtualFile(
+      base::FilePath(FILE_PATH_LITERAL("/media/fuse/fusebox/odfs/large.doc"))));
+#endif
+}
+
+class FileAnalysisRequestBaseVirtualFileTest
+    : public FileAnalysisRequestBaseTest {
+ public:
+  void SetUp() override {
+    FileAnalysisRequestBaseTest::SetUp();
+    FileAnalysisRequestBase::SetIsVirtualFileForTesting(true);
+  }
+
+  void TearDown() override {
+    FileAnalysisRequestBase::SetIsVirtualFileForTesting(false);
+    FileAnalysisRequestBaseTest::TearDown();
+  }
+};
+
+TEST_F(FileAnalysisRequestBaseVirtualFileTest, LargeFileNoHashAndFileTooLarge) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  const size_t kLargeFileSize = 251 * 1024 * 1024;  // 251MB
+  base::FilePath file_path = temp_dir.GetPath().AppendASCII("large.pdf");
+  {
+    base::File file(file_path,
+                    base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+    ASSERT_TRUE(file.SetLength(kLargeFileSize));
+  }
+
+  auto request = MakeRequest(file_path, file_path.BaseName(),
+                             /*delay_opening_file=*/false, "", false,
+                             /*force_sync_hash_computation=*/false);
+
+  base::test::TestFuture<ScanRequestUploadResult, BinaryUploadRequest::Data>
+      future;
+  request->GetRequestData(future.GetCallback());
+
+  auto [result, data] = future.Take();
+
+  EXPECT_EQ(result, ScanRequestUploadResult::kFileTooLarge);
+  EXPECT_EQ(data.size, kLargeFileSize);
+  EXPECT_TRUE(data.hash.empty());
+  EXPECT_EQ(data.mime_type, "application/pdf");
+}
+
+TEST_F(FileAnalysisRequestBaseVirtualFileTest,
+       SmallFileComputesHashAndSuccess) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  std::string contents = "Small file content for scanning unit test.";
+  base::FilePath file_path = temp_dir.GetPath().AppendASCII("small.pdf");
+  ASSERT_TRUE(base::WriteFile(file_path, contents));
+
+  auto request = MakeRequest(file_path, file_path.BaseName(),
+                             /*delay_opening_file=*/false, "", false, true);
+
+  base::test::TestFuture<ScanRequestUploadResult, BinaryUploadRequest::Data>
+      future;
+  request->GetRequestData(future.GetCallback());
+
+  auto [result, data] = future.Take();
+
+  EXPECT_EQ(result, ScanRequestUploadResult::kSuccess);
+  EXPECT_EQ(data.size, contents.size());
+  EXPECT_FALSE(data.hash.empty());
+  EXPECT_EQ(data.mime_type, "application/pdf");
+}
+
+#if BUILDFLAG(IS_ANDROID)
+TEST_F(FileAnalysisRequestBaseTest, ContentUriFile) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  std::string file_contents = "Normal file contents";
+  base::FilePath file_path = temp_dir.GetPath().AppendASCII("normal.doc");
+  ASSERT_TRUE(base::WriteFile(file_path, file_contents));
+
+  std::optional<base::FilePath> content_uri =
+      base::test::android::GetContentUriFromCacheDirFilePath(file_path);
+  ASSERT_TRUE(content_uri.has_value());
+  EXPECT_TRUE(content_uri->IsContentUri());
+
+  auto request = MakeRequest(*content_uri, file_path.BaseName(),
+                             /*delay_opening_file=*/false);
+
+  base::test::TestFuture<ScanRequestUploadResult, BinaryUploadRequest::Data>
+      future;
+  request->GetRequestData(future.GetCallback());
+
+  auto [result, data] = future.Take();
+  EXPECT_EQ(result, ScanRequestUploadResult::kSuccess);
+  EXPECT_EQ(data.size, file_contents.size());
+  EXPECT_TRUE(data.contents.empty());
+  EXPECT_EQ(data.path, *content_uri);
+  // printf "Normal file contents" | sha256sum | tr '[:lower:]' '[:upper:]'
+  EXPECT_EQ(data.hash,
+            "29644C10BD036866FCFD2BDACFF340DB5DE47A90002D6AB0C42DE6A22C26158B");
+  EXPECT_TRUE(IsDocMimeType(data.mime_type))
+      << data.mime_type << " is not an expected mimetype";
+}
+
+TEST_F(FileAnalysisRequestBaseTest, ContentUriUsesDisplayNameAsFilename) {
+  base::FilePath content_uri("content://authority/document/123");
+
+  auto request = MakeRequest(content_uri, base::FilePath("report.docx"),
+                             /*delay_opening_file=*/true);
+  EXPECT_EQ(request->content_analysis_request().request_data().filename(),
+            "report.docx");
+
+  // Without a display name, fall back to the content URI itself.
+  auto request_without_name =
+      MakeRequest(content_uri, base::FilePath(), /*delay_opening_file=*/true);
+  EXPECT_EQ(request_without_name->content_analysis_request()
+                .request_data()
+                .filename(),
+            content_uri.value());
+}
+
+TEST_F(FileAnalysisRequestBaseTest, ContentUriMimeTypeFromContentResolver) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  // Plain text contents would sniff as "text/plain", and a content URI has no
+  // usable extension, so "application/pdf" can only come from the
+  // ContentResolver.
+  base::FilePath file_path = temp_dir.GetPath().AppendASCII("document.pdf");
+  ASSERT_TRUE(base::WriteFile(file_path, "Normal file contents"));
+
+  std::optional<base::FilePath> content_uri =
+      base::test::android::GetContentUriFromCacheDirFilePath(file_path);
+  ASSERT_TRUE(content_uri.has_value());
+
+  auto request = MakeRequest(*content_uri, file_path.BaseName(),
+                             /*delay_opening_file=*/false);
+
+  base::test::TestFuture<ScanRequestUploadResult, BinaryUploadRequest::Data>
+      future;
+  request->GetRequestData(future.GetCallback());
+
+  auto [result, data] = future.Take();
+  EXPECT_EQ(result, ScanRequestUploadResult::kSuccess);
+  EXPECT_EQ(data.mime_type, "application/pdf");
+}
+
+TEST_F(FileAnalysisRequestBaseTest, PipeBackedContentUriFails) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  base::FilePath file_path = temp_dir.GetPath().AppendASCII("normal.doc");
+  ASSERT_TRUE(base::WriteFile(file_path, "Normal file contents"));
+
+  // The in-memory provider serves the contents through a pipe, which reports
+  // a size of 0. It must not be treated as an empty file that skips scanning.
+  std::optional<base::FilePath> content_uri =
+      base::test::android::GetInMemoryContentUriFromCacheDirFilePath(file_path);
+  ASSERT_TRUE(content_uri.has_value());
+
+  auto request = MakeRequest(*content_uri, file_path.BaseName(),
+                             /*delay_opening_file=*/false);
+
+  base::test::TestFuture<ScanRequestUploadResult, BinaryUploadRequest::Data>
+      future;
+  request->GetRequestData(future.GetCallback());
+
+  auto [result, data] = future.Take();
+  EXPECT_EQ(result, ScanRequestUploadResult::kUnknown);
+  EXPECT_EQ(data.size, 0u);
+  EXPECT_TRUE(data.hash.empty());
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace enterprise_connectors

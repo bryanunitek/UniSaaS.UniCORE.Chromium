@@ -13,9 +13,8 @@
 #include "gpu/command_buffer/client/test_shared_image_interface.h"
 #include "gpu/command_buffer/common/capabilities.h"
 #include "media/base/video_frame.h"
-#include "media/renderers/video_frame_test_utils.h"
+#include "media/gfx/video_frame_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_non_2d_resource_provider.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
@@ -38,17 +37,9 @@ class AcceleratedCompositingTestPlatform
 
 class ScopedFakeGpuContext {
  public:
-  explicit ScopedFakeGpuContext(bool disable_imagebitmap) {
+  ScopedFakeGpuContext() {
     SharedGpuContext::Reset();
     test_context_provider_ = viz::TestContextProvider::CreateRaster();
-
-    if (disable_imagebitmap) {
-      // Disable CanvasNon2DResourceProvider using GPU.
-      auto& feature_info = test_context_provider_->GetWritableGpuFeatureInfo();
-      feature_info.enabled_gpu_driver_bug_workarounds.push_back(
-          DISABLE_IMAGEBITMAP_FROM_VIDEO_USING_GPU);
-    }
-
     InitializeSharedGpuContext(test_context_provider_.get());
   }
 
@@ -72,25 +63,20 @@ class ScopedFakeGpuContext {
 
 }  // namespace
 
-class VideoFrameImageUtilTest
-    : public ::testing::TestWithParam<std::tuple<bool, bool>> {
+class VideoFrameImageUtilTest : public ::testing::TestWithParam<bool> {
  protected:
   void SetUp() override {
     test_sii_ = base::MakeRefCounted<gpu::TestSharedImageInterface>();
 
     if (gpu_compositing()) {
-      fake_context_.emplace(disable_imagebitmap());
+      fake_context_.emplace();
       ASSERT_TRUE(SharedGpuContext::IsGpuCompositingEnabled());
     }
   }
 
-  bool gpu_compositing() { return std::get<0>(GetParam()); }
+  bool gpu_compositing() { return GetParam(); }
 
-  bool disable_imagebitmap() { return std::get<1>(GetParam()); }
-
-  bool expect_accelerated_images() {
-    return gpu_compositing() && !disable_imagebitmap();
-  }
+  bool expect_accelerated_images() { return gpu_compositing(); }
 
   viz::RasterContextProvider* raster_context_provider() {
     return SharedGpuContext::ContextProviderWrapper()
@@ -103,35 +89,21 @@ class VideoFrameImageUtilTest
   scoped_refptr<StaticBitmapImage> DoCreateImageFromVideoFrame(
       scoped_refptr<media::VideoFrame> frame,
       media::PaintCanvasVideoRenderer* video_renderer = nullptr,
-      bool prefer_tagged_orientation = true) {
-    const auto transform =
-        frame->metadata().transformation.value_or(media::kNoTransformation);
-    // Since we're copying, the destination is always aligned with the origin.
-    const auto& visible_rect = frame->visible_rect();
-    auto dest_rect =
-        gfx::Rect(0, 0, visible_rect.width(), visible_rect.height());
-    if (transform.rotation == media::VIDEO_ROTATION_90 ||
-        transform.rotation == media::VIDEO_ROTATION_270) {
-      dest_rect.Transpose();
-    }
-
-    auto info =
-        CreateSnapshotProviderInfoForVideoFrame(*frame, dest_rect.size());
+      VideoOrientationBehavior orientation_behavior =
+          VideoOrientationBehavior::kTagOrientation) {
+    auto info = CreateSnapshotProviderInfoForVideoFrame(*frame);
     if (ShouldCreateAcceleratedImages(raster_context_provider())) {
-      auto snapshot_provider = CanvasNon2DResourceProvider::Create(
-          info.size, info.format, info.alpha_type, info.color_space,
-          info.hdr_metadata, SharedGpuContext::ContextProviderWrapper(),
-          gpu::SHARED_IMAGE_USAGE_DISPLAY_READ);
-      if (!snapshot_provider) {
-        DLOG(ERROR) << "Failed to create CanvasNon2DResourceProvider.";
+      auto snapshot_pool = VideoFrameAcceleratedSnapshotPool::Create(info);
+      if (!snapshot_pool) {
+        DLOG(ERROR) << "Failed to create VideoFrameAcceleratedSnapshotPool.";
         return nullptr;
       }
       return CreateAcceleratedImageFromVideoFrame(
-          std::move(frame), snapshot_provider.get(), video_renderer,
-          prefer_tagged_orientation);
+          std::move(frame), snapshot_pool.get(), video_renderer,
+          orientation_behavior);
     } else {
       return CreateUnacceleratedImageFromVideoFrame(
-          std::move(frame), info, video_renderer, prefer_tagged_orientation);
+          std::move(frame), info, video_renderer, orientation_behavior);
     }
   }
 
@@ -140,11 +112,7 @@ class VideoFrameImageUtilTest
   std::optional<ScopedFakeGpuContext> fake_context_;
 };
 
-INSTANTIATE_TEST_SUITE_P(,
-                         VideoFrameImageUtilTest,
-                         ::testing::Values(std::make_tuple(false, false),
-                                           std::make_tuple(true, true),
-                                           std::make_tuple(true, false)));
+INSTANTIATE_TEST_SUITE_P(, VideoFrameImageUtilTest, ::testing::Bool());
 
 TEST_P(VideoFrameImageUtilTest, VideoTransformationToFromImageOrientation) {
   for (int i = static_cast<int>(ImageOrientationEnum::kMinValue);
@@ -169,16 +137,16 @@ TEST_P(VideoFrameImageUtilTest, CreateImageFromVideoFrameOrientation) {
 
   frame->metadata().transformation = kTestTransform;
 
-  // We expect applying transform during copy if `prefer_tagged_orientation` is
-  // false.
+  // We expect applying transform during copy if `orientation_behavior` is
+  // VideoOrientationBehavior::kHardFlip.
   auto image = DoCreateImageFromVideoFrame(frame, nullptr,
-                                           /*prefer_tagged_orientation=*/false);
+                                           VideoOrientationBehavior::kHardFlip);
   EXPECT_EQ(image->Orientation(), ImageOrientationEnum::kDefault);
 
   // We expect doing copy without transform applied and result image be tagged
   // with correct orientation.
-  image = DoCreateImageFromVideoFrame(frame, nullptr,
-                                      /*prefer_tagged_orientation=*/true);
+  image = DoCreateImageFromVideoFrame(
+      frame, nullptr, VideoOrientationBehavior::kTagOrientation);
 
   // TODO(crbug.com/40172676): Accelerated images are not tagged correctly.
   if (expect_accelerated_images()) {
@@ -252,6 +220,34 @@ TEST_P(VideoFrameImageUtilTest, AcceleratedImageIsCreated) {
 
   auto image = DoCreateImageFromVideoFrame(texture_frame);
   EXPECT_TRUE(image->IsTextureBacked());
+}
+
+TEST_P(VideoFrameImageUtilTest, CreateSnapshotProviderInfoRotatedFrame) {
+  auto frame = media::VideoFrame::CreateBlackFrame(gfx::Size(100, 200));
+  frame->metadata().transformation =
+      media::VideoTransformation(media::VIDEO_ROTATION_90);
+
+  // Without scaled_size, orthogonal rotation transposes the natural_size.
+  auto info = CreateSnapshotProviderInfoForVideoFrame(*frame);
+  EXPECT_EQ(info.size, gfx::Size(200, 100));
+
+  // With non-orthogonal rotation (e.g. 180), size is not transposed.
+  frame->metadata().transformation =
+      media::VideoTransformation(media::VIDEO_ROTATION_180);
+  info = CreateSnapshotProviderInfoForVideoFrame(*frame);
+  EXPECT_EQ(info.size, gfx::Size(100, 200));
+
+  // With explicit scaled_size, scaled_size is used as-is.
+  info = CreateSnapshotProviderInfoForVideoFrame(*frame, gfx::Size(50, 60));
+  EXPECT_EQ(info.size, gfx::Size(50, 60));
+
+  // When orientation_behavior is kTagOrientation, size is not transposed.
+  frame->metadata().transformation =
+      media::VideoTransformation(media::VIDEO_ROTATION_90);
+  info = CreateSnapshotProviderInfoForVideoFrame(
+      *frame, std::nullopt, VideoColorSpaceInterpretation::kPreserve,
+      VideoOrientationBehavior::kTagOrientation);
+  EXPECT_EQ(info.size, gfx::Size(100, 200));
 }
 
 }  // namespace blink

@@ -21,6 +21,7 @@
 #include "components/omnibox/browser/keyword_provider.h"
 #include "components/omnibox/browser/match_compare.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
+#include "components/omnibox/browser/page_classification_functions.h"
 #include "components/omnibox/browser/scoring_functor.h"
 #include "components/omnibox/browser/tab_matcher.h"
 #include "components/query_parser/query_parser.h"
@@ -55,8 +56,7 @@ int Score(const AutocompleteInput& input,
   // For Hub Search, remove both ZPS and search suggestions that involve open
   // chrome new tab pages. This is done by returning a score of 0 for all such
   // tabs.
-  if (input.current_page_classification() ==
-          ::metrics::OmniboxEventProto::ANDROID_HUB &&
+  if (omnibox::IsAndroidHubOrTabSearch(input.current_page_classification()) &&
       IsNewTabPage(tab)) {
     return 0;
   }
@@ -121,7 +121,7 @@ bool ShouldRunProvider(AutocompleteProviderClient* client,
                        const AutocompleteInput& input) {
   bool zps_or_empty = input.IsZeroSuggest() || input.text().empty();
   if (is_android) {
-    return !zps_or_empty || !client->IsIncognitoProfile();
+    return !zps_or_empty || !client->IsPrimaryOTRProfileWithRegularParent();
   } else {
     return !zps_or_empty;
   }
@@ -130,7 +130,7 @@ bool ShouldRunProvider(AutocompleteProviderClient* client,
 }  // namespace
 
 OpenTabProvider::OpenTabProvider(AutocompleteProviderClient* client)
-    : AutocompleteProvider(AutocompleteProvider::TYPE_OPEN_TAB),
+    : AutocompleteProvider(AutocompleteProvider::Type::kOpenTab),
       client_(client) {}
 
 OpenTabProvider::~OpenTabProvider() = default;
@@ -189,7 +189,7 @@ AutocompleteMatch OpenTabProvider::CreateOpenTabMatch(
   DCHECK(url.is_valid());
 
   AutocompleteMatch match(this, score, /*deletable=*/false,
-                          AutocompleteMatchType::OPEN_TAB);
+                          omnibox::AutocompleteMatchType::kOpenTab);
 
   match.destination_url = url;
   match.fill_into_edit = base::UTF8ToUTF16(url.spec());
@@ -233,8 +233,7 @@ AutocompleteMatch OpenTabProvider::CreateOpenTabMatch(
   }
 
 #if BUILDFLAG(IS_ANDROID)
-  if (input.current_page_classification() ==
-      ::metrics::OmniboxEventProto::ANDROID_HUB) {
+  if (omnibox::IsAndroidHubOrTabSearch(input.current_page_classification())) {
     match.suggestion_group_id = omnibox::GROUP_MOBILE_OPEN_TABS;
   }
 #endif
@@ -251,7 +250,7 @@ AutocompleteMatch OpenTabProvider::CreateNullResultMessageMatch(
   // no other suggestions were found. Use an arbitrary constant.
   constexpr int kRelevanceScore = 1000;
   AutocompleteMatch match(this, kRelevanceScore, /*deletable=*/false,
-                          AutocompleteMatchType::NULL_RESULT_MESSAGE);
+                          omnibox::AutocompleteMatchType::kNullResultMessage);
 
   // These fields are filled in to enable the Keyword UI when only this
   // suggestion is available.

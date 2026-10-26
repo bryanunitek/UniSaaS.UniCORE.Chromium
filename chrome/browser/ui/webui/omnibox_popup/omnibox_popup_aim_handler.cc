@@ -8,7 +8,6 @@
 #include "chrome/browser/ui/views/omnibox/omnibox_aim_popup_webui_content.h"
 #include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
 #include "components/omnibox/browser/searchbox.mojom.h"
-#include "content/public/browser/web_contents.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/gfx/geometry/point.h"
 
@@ -24,6 +23,7 @@ searchbox::mojom::SearchContextPtr ToSearchContext(
   search_context->input = context->text;
   search_context->attachments = std::move(context->file_infos);
   search_context->tool_mode = context->mode;
+  search_context->model_mode = context->model;
   return search_context;
 }
 
@@ -31,15 +31,21 @@ searchbox::mojom::SearchContextPtr ToSearchContext(
 
 OmniboxPopupAimHandler::OmniboxPopupAimHandler(
     mojo::PendingReceiver<omnibox_popup_aim::mojom::PageHandler> receiver,
-    mojo::PendingRemote<omnibox_popup_aim::mojom::Page> page,
-    content::WebContents* web_contents)
-    : receiver_(this, std::move(receiver)),
-      page_(std::move(page)),
-      web_contents_(web_contents) {}
+    mojo::PendingRemote<omnibox_popup_aim::mojom::Page> page)
+    : receiver_(this, std::move(receiver)), page_(std::move(page)) {}
 
 OmniboxPopupAimHandler::~OmniboxPopupAimHandler() = default;
 
-void OmniboxPopupAimHandler::RequestClose() {
+void OmniboxPopupAimHandler::set_embedder(
+    base::WeakPtr<TopChromeWebUIController::Embedder> embedder) {
+  embedder_ = embedder;
+  if (auto* aim_popup_content = GetAimPopupContent()) {
+    aim_popup_content->SendShow(*this);
+  }
+}
+
+void OmniboxPopupAimHandler::RequestClose(const std::string& input) {
+  cached_draft_text_ = input;
   if (auto* aim_popup_content = GetAimPopupContent()) {
     // For screen readers, focus the location bar since the user requested a
     // manual close of the popup, as opposed to the popup closing because the
@@ -70,7 +76,7 @@ void OmniboxPopupAimHandler::SetPreserveContextOnClose(
 }
 
 void OmniboxPopupAimHandler::ClearPopup(
-    base::OnceCallback<void(const std::string&)> callback) {
+    base::OnceCallback<void(const std::string&, bool)> callback) {
   page_->ClearPopup(std::move(callback));
 }
 

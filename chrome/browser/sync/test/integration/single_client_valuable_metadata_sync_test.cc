@@ -8,8 +8,8 @@
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager_test_utils.h"
-#include "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
+#include "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager_test_util.h"
+#include "components/autofill/core/browser/test_utils/entity_data_test_util.h"
 #include "components/autofill/core/browser/webdata/autofill_ai/entity_sync_util.h"
 #include "components/sync/base/features.h"
 #include "components/sync/protocol/autofill_valuable_metadata_specifics.pb.h"
@@ -71,6 +71,7 @@ class FakeServerValuableMetadataChecker
       : matcher_(matcher) {}
 
   bool IsExitConditionSatisfied(std::ostream* os) override {
+    *os << "Waiting for server valuable metadata to match: ";
     std::vector<sync_pb::AutofillValuableMetadataSpecifics> specifics;
     for (const sync_pb::SyncEntity& entity :
          fake_server()->GetSyncEntitiesByDataType(
@@ -122,12 +123,16 @@ class SingleClientValuableMetadataSyncTest
   }
 
   void InjectEntitiesToServer(const std::vector<EntityInstance>& entities) {
-    std::vector<sync_pb::SyncEntity> valuable_entities;
-    valuable_entities.reserve(entities.size());
+    GetFakeServer()->DeleteAllEntitiesForDataType(syncer::AUTOFILL_VALUABLE);
     for (const EntityInstance& entity : entities) {
-      valuable_entities.push_back(EntityInstanceToSyncEntity(entity));
+      sync_pb::SyncEntity sync_entity = EntityInstanceToSyncEntity(entity);
+      GetFakeServer()->InjectEntity(
+          syncer::PersistentUniqueClientEntity::CreateFromSpecificsForTesting(
+              /*non_unique_name=*/sync_entity.name(),
+              /*client_tag=*/sync_entity.id_string(), sync_entity.specifics(),
+              /*creation_time=*/sync_entity.ctime(),
+              /*last_modified_time=*/sync_entity.mtime()));
     }
-    GetFakeServer()->SetValuableData(valuable_entities);
   }
 
   void InjectEntityMetadataToServer(
@@ -315,7 +320,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientValuableMetadataSyncTest,
   EXPECT_THAT(GetMetadataEntries(),
               UnorderedElementsAre(vehicle1_metadata, vehicle2_metadata));
 
-  GetFakeServer()->SetValuableData({EntityInstanceToSyncEntity(vehicle2)});
+  InjectEntitiesToServer({vehicle2});
   WaitForNumberOfEntityInstances(1, edm);
 
   EXPECT_TRUE(

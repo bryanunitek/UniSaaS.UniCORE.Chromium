@@ -46,6 +46,8 @@ class RenderFrameHostAndroid : public base::SupportsUserData::Data {
 
   base::android::ScopedJavaLocalRef<jobject> GetMainFrame(JNIEnv* env);
 
+  bool IsOutermostMainFrame(JNIEnv* env) const;
+
   void GetCanonicalUrlForSharing(
       base::OnceCallback<void(const std::optional<GURL>&)> callback) const;
 
@@ -57,6 +59,8 @@ class RenderFrameHostAndroid : public base::SupportsUserData::Data {
   base::UnguessableToken GetAndroidOverlayRoutingToken(JNIEnv* env) const;
 
   void NotifyUserActivation(JNIEnv* env);
+
+  bool ConsumeTransientUserActivation(JNIEnv* env);
 
   void NotifyWebAuthnAssertionRequestSucceeded(JNIEnv* env);
 
@@ -116,6 +120,8 @@ class RenderFrameHostAndroid : public base::SupportsUserData::Data {
   void ViewSource(JNIEnv* env);
 
   RenderFrameHostImpl* render_frame_host() const { return render_frame_host_; }
+
+  bool IsCrossOriginIsolated(JNIEnv* env) const;
 
  private:
   const raw_ptr<RenderFrameHostImpl> render_frame_host_;

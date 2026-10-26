@@ -10,14 +10,13 @@
 #import "base/ios/block_types.h"
 #import "ios/chrome/browser/intelligence/bwg/utils/gemini_entry_flow_result.h"
 
-namespace signin_metrics {
-enum class AccessPoint;
-}  // namespace signin_metrics
 
 namespace gemini {
 enum class EntryPoint;
 enum class FloatyUpdateSource;
 }  // namespace gemini
+
+class GURL;
 
 @class GeminiStartupState;
 
@@ -29,10 +28,6 @@ enum class FloatyUpdateSource;
 
 // Dismiss the Gemini flow with a completion block.
 - (void)dismissGeminiFlowWithCompletion:(ProceduralBlock)completion;
-
-// Attempts to display the automatic Gemini promo depending on whether the
-// active web state is eligible. If the page is ineligible, does nothing.
-- (void)showGeminiPromoIfPageIsEligible;
 
 // Handles hiding the Gemini floaty from an update `source`. When in a hidden
 // state, the floaty still persists in memory and needs to be properly cleaned
@@ -49,10 +44,6 @@ enum class FloatyUpdateSource;
 
 // Updates the Gemini floaty with a trait collection change.
 - (void)updateFloatyWithTraitCollection:(UITraitCollection*)traitCollection;
-
-// Starts the Gemini First Run Experience flow with a completion block.
-- (void)startGeminiFirstRunWithCompletion:(void (^)(BOOL success))completion
-                           fromEntryPoint:(gemini::EntryPoint)entryPoint;
 
 // Starts the Gemini Live First Run Experience flow.
 - (void)startGeminiLiveFirstRunWithBaseViewController:
@@ -72,9 +63,6 @@ enum class FloatyUpdateSource;
 // - `startupState`: Entry point and configuration for the Gemini session.
 // - `baseViewController`: The view controller to present sign-in and
 //   account menu from.
-// - `accessPoint`: The sign-in access point used for sign-in metrics
-//   (e.g., signin_metrics::AccessPoint::kIosPageActionMenu). Only used
-//   if the user is signed out and sign-in is triggered.
 // - `showSnackbarOnCompletion`: Whether to show a snackbar when the flow
 //   completes with an ineligible state (e.g., page not eligible, account
 //   restricted).
@@ -83,10 +71,14 @@ enum class FloatyUpdateSource;
 - (void)
     startGeminiEntryFlowWithStartupState:(GeminiStartupState*)startupState
                       baseViewController:(UIViewController*)baseViewController
-                             accessPoint:
-                                 (signin_metrics::AccessPoint)accessPoint
                 showSnackbarOnCompletion:(BOOL)showSnackbar
                               completion:(GeminiEntryFlowCompletion)completion;
+
+// Minimizes the Gemini UI if currently invoked.
+- (void)minimizeGeminiIfInvoked;
+
+// Presents `URL` in a modal web view over the Gemini surface.
+- (void)showGeminiWebModalForURL:(const GURL&)URL;
 
 @end
 

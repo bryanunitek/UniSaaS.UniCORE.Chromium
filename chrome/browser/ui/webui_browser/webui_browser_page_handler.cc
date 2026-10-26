@@ -12,12 +12,13 @@
 #include "base/mac/mac_util.h"
 #endif
 #include "chrome/browser/devtools/devtools_window.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/toolbar/back_forward_menu_model.h"
 #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
@@ -29,9 +30,9 @@
 #include "chrome/browser/ui/webui_browser/webui_browser_side_panel_ui.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_ui.h"
 #include "components/browser_apis/tab_strip/types/node_id.h"
-#include "components/guest_contents/browser/guest_contents_handle.h"
 #include "components/omnibox/browser/location_bar_model.h"
 #include "components/omnibox/browser/vector_icons.h"
+#include "components/surface_embed/browser/surface_embed_handle.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/navigation_controller.h"
@@ -51,17 +52,20 @@ class WebUIBrowserGuestHandler
       content::RenderFrameHost& render_frame_host,
       mojo::PendingReceiver<webui_browser::mojom::GuestHandler> receiver,
       content::WebContents* web_contents,
-      WebUIBrowserWindow* window)
+      WebUIBrowserWindow* window,
+      base::SelfDeletingPassKey key)
       : content::DocumentService<webui_browser::mojom::GuestHandler>(
             render_frame_host,
-            std::move(receiver)),
+            std::move(receiver),
+            key),
         window_(window),
         web_contents_(web_contents->GetWeakPtr()) {}
   WebUIBrowserGuestHandler(const WebUIBrowserGuestHandler&) = delete;
   WebUIBrowserGuestHandler& operator=(const WebUIBrowserGuestHandler&) = delete;
-  ~WebUIBrowserGuestHandler() override = default;
 
  private:
+  ~WebUIBrowserGuestHandler() override = default;
+
   // webui_browser::mojom::GuestHandler
   void Navigate(const GURL& src) override {
     content::NavigationController::LoadURLParams load_url_params(src);
@@ -116,10 +120,7 @@ class WebUIBrowserGuestHandler
   }
 
   void GetSecurityIcon(GetSecurityIconCallback callback) override {
-    auto* icon = &window_->browser()
-                      ->GetFeatures()
-                      .location_bar_model()
-                      ->GetVectorIcon();
+    auto* icon = &LocationBarModel::From(window_->browser())->GetVectorIcon();
     webui_browser::mojom::SecurityIcon icon_type;
     if (icon == &(features::IsRoundedIconsEnabled()
                       ? omnibox::kInfoIcon
@@ -183,8 +184,8 @@ void WebUIBrowserPageHandler::CreateForRenderFrameHost(
     mojo::PendingReceiver<webui_browser::mojom::PageHandler> receiver,
     WebUIBrowserUI* controller) {
   // The RenderFrameHost takes ownership of this object via the DocumentService.
-  new WebUIBrowserPageHandler(render_frame_host, std::move(receiver),
-                              controller);
+  base::MakeSelfDeleting<WebUIBrowserPageHandler>(
+      render_frame_host, std::move(receiver), controller);
 }
 
 void WebUIBrowserPageHandler::GetGuestIdForTabId(
@@ -208,27 +209,28 @@ void WebUIBrowserPageHandler::GetGuestIdForTabId(
   }
 
   // The RenderFrameHost takes ownership of this object via the DocumentService.
-  new WebUIBrowserGuestHandler(render_frame_host(), std::move(receiver),
-                               tab_contents, GetBrowserWindow());
+  base::MakeSelfDeleting<WebUIBrowserGuestHandler>(
+      render_frame_host(), std::move(receiver), tab_contents,
+      GetBrowserWindow());
 
-  guest_contents::GuestContentsHandle::CreateForWebContents(tab_contents);
-  auto* guest_handle =
-      guest_contents::GuestContentsHandle::FromWebContents(tab_contents);
-  std::move(callback).Run(guest_handle->id());
+  surface_embed::SurfaceEmbedHandle::CreateForWebContents(tab_contents);
+  auto* embedded_handle =
+      surface_embed::SurfaceEmbedHandle::FromWebContents(tab_contents);
+  std::move(callback).Run(embedded_handle->id());
 }
 
 void WebUIBrowserPageHandler::LoadTabSearch(LoadTabSearchCallback callback) {
-  content::WebContents::CreateParams params(GetBrowser()->profile());
+  content::WebContents::CreateParams params(GetBrowser()->GetProfile());
   tab_search_contents_ = content::WebContents::Create(params);
   tab_search_contents_->SetColorProviderSource(GetBrowserWindow());
   content::NavigationController::LoadURLParams url_params{
       GURL(chrome::kChromeUITabSearchURL)};
   tab_search_contents_->GetController().LoadURLWithParams(url_params);
-  guest_contents::GuestContentsHandle::CreateForWebContents(
+  surface_embed::SurfaceEmbedHandle::CreateForWebContents(
       tab_search_contents_.get());
-  auto* guest_handle = guest_contents::GuestContentsHandle::FromWebContents(
+  auto* embedded_handle = surface_embed::SurfaceEmbedHandle::FromWebContents(
       tab_search_contents_.get());
-  std::move(callback).Run(guest_handle->id());
+  std::move(callback).Run(embedded_handle->id());
 }
 
 void WebUIBrowserPageHandler::ShowTabSearchBubble(
@@ -257,8 +259,9 @@ void WebUIBrowserPageHandler::OpenAppMenu() {
 }
 
 void WebUIBrowserPageHandler::OpenProfileMenu() {
-  GetBrowser()->GetFeatures().profile_menu_coordinator()->Show(
-      /*is_source_accelerator=*/false);
+  ProfileMenuCoordinator::From(GetBrowser())
+      ->Show(
+          /*is_source_accelerator=*/false);
 }
 
 void WebUIBrowserPageHandler::LaunchDevToolsForBrowser() {
@@ -294,7 +297,7 @@ void WebUIBrowserPageHandler::ShowBackForwardMenu(bool is_back) {
   back_forward_menu_model_.reset();
 
   content::WebContents* web_contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   if (!web_contents) {
     return;
   }
@@ -320,28 +323,33 @@ void WebUIBrowserPageHandler::ShowBackForwardMenu(bool is_back) {
       views::MenuAnchorPosition::kTopLeft, ui::mojom::MenuSourceType::kMouse);
 }
 
+// static
+int WebUIBrowserPageHandler::GetTabStripInsetWidth() {
+#if BUILDFLAG(IS_MAC)
+  // Values from BrowserFrameViewMac::GetCaptionButtonBounds()
+  return (base::mac::MacOSVersion() >= 26'00'00) ? 76 : 82;
+#else
+  return 0;
+#endif
+}
+
 void WebUIBrowserPageHandler::GetTabStripInset(
     GetTabStripInsetCallback callback) {
-  std::move(callback).Run(
-#if BUILDFLAG(IS_MAC)
-      // Values from BrowserFrameViewMac::GetCaptionButtonBounds()
-      (base::mac::MacOSVersion() >= 26'00'00) ? 76 : 82
-#else
-      0
-#endif
-  );
+  std::move(callback).Run(GetTabStripInsetWidth());
 }
 
 WebUIBrowserPageHandler::WebUIBrowserPageHandler(
     content::RenderFrameHost& render_frame_host,
     mojo::PendingReceiver<webui_browser::mojom::PageHandler> receiver,
-    WebUIBrowserUI* controller)
+    WebUIBrowserUI* controller,
+    base::SelfDeletingPassKey key)
     : content::DocumentService<webui_browser::mojom::PageHandler>(
           render_frame_host,
-          std::move(receiver)),
+          std::move(receiver),
+          key),
       controller_(controller->GetWeakPtr()) {}
 
-Browser* WebUIBrowserPageHandler::GetBrowser() {
+BrowserWindowInterface* WebUIBrowserPageHandler::GetBrowser() {
   if (!controller_) {
     return nullptr;
   }

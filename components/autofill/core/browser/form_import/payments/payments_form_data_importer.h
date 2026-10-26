@@ -158,7 +158,8 @@ class PaymentsFormDataImporter {
   // Tries to initiate the saving of the `extracted_credit_card` if applicable.
   // `submitted_form` is the form from which the card was
   // imported. `is_credit_card_upstream_enabled` indicates if server card
-  // storage is enabled. Returns true if a save is initiated.
+  // storage is enabled. Returns `true` if a mandatory re-auth, VCN enrollment,
+  // or card (or CVC) save prompt was initiated.
   bool ProcessExtractedCreditCard(
       const FormStructure& submitted_form,
       const std::optional<CreditCard>& extracted_credit_card,
@@ -179,8 +180,11 @@ class PaymentsFormDataImporter {
   //   `candidate`, if one exists.
   // - If `candidate` compares with a masked server card, this function returns
   //   an existing masked server card which has the same last four digits and
-  //   the same expiration date as `candidate`, if one exists.
-  // additionally, set `credit_card_import_type_` set to `kServerCard`.
+  //   the same expiration date as `candidate`, if one exists, with the
+  //   user-entered CVC and valid cardholder name (if missing on the server
+  //   card) copied from `candidate`, and sets `credit_card_import_type_` to
+  //   `kServerCard` (or `kDuplicateLocalServerCard` if a local card was also
+  //   extracted).
   // Or returns the `candidate`:
   // - If there is no matching existing server card.
   // or returns nullopt:

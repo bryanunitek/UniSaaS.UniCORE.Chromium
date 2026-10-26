@@ -2,8 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// TODO(crbug.com/537846713): Migrate this test suite to GlicBrowserTest.
+
 #include "chrome/browser/actor/actor_test_util.h"
-#include "chrome/browser/actor/tools/history_tool_request.h"
 #include "chrome/browser/glic/host/glic_actor_interactive_uitest_common.h"
 #include "content/public/test/browser_test.h"
 
@@ -13,17 +14,20 @@ namespace {
 
 using optimization_guide::proto::NavigateAction;
 
-using HistoryDirection = ::actor::HistoryToolRequest::Direction;
+enum class HistoryDirection {
+  kBack,
+  kForward,
+};
 using MultiStep = GlicActorUiTest::MultiStep;
 
 class GlicActorNavigationUiTest : public GlicActorUiTest {
  public:
-  MultiStep HistoryAction(actor::HistoryToolRequest::Direction direction,
+  MultiStep HistoryAction(HistoryDirection direction,
                           actor::TaskId& task_id,
                           tabs::TabHandle& tab_handle,
                           ExpectedErrorResult expected_result = {});
 
-  MultiStep HistoryAction(actor::HistoryToolRequest::Direction direction,
+  MultiStep HistoryAction(HistoryDirection direction,
                           ExpectedErrorResult expected_result = {});
 };
 
@@ -54,10 +58,10 @@ MultiStep GlicActorNavigationUiTest::HistoryAction(
 IN_PROC_BROWSER_TEST_F(GlicActorNavigationUiTest,
                        UsesExistingActorTabOnSubsequentNavigate) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/page_with_clickable_element.html");
-  const GURL second_navigate_url =
-      embedded_test_server()->GetURL("/actor/blank.html?second");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/page_with_clickable_element.html");
+  const GURL second_navigate_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/blank.html?second");
 
   RunTestSequence(InitializeWithOpenGlicWindow(),
                   StartActorTaskInNewTab(task_url, kNewActorTabId),
@@ -69,8 +73,10 @@ IN_PROC_BROWSER_TEST_F(GlicActorNavigationUiTest,
 
 IN_PROC_BROWSER_TEST_F(GlicActorNavigationUiTest, HistoryTool) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL url_1 = embedded_test_server()->GetURL("/actor/blank.html?1");
-  const GURL url_2 = embedded_test_server()->GetURL("/actor/blank.html?2");
+  const GURL url_1 =
+      embedded_https_test_server().GetURL("example.com", "/actor/blank.html?1");
+  const GURL url_2 =
+      embedded_https_test_server().GetURL("example.com", "/actor/blank.html?2");
   RunTestSequence(
       // clang-format off
     InitializeWithOpenGlicWindow(),

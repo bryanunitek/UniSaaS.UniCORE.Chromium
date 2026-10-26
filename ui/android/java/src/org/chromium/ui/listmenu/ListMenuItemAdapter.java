@@ -30,13 +30,13 @@ public class ListMenuItemAdapter extends ModelListAdapter {
     private final Collection<Integer> mDisabledTypes;
     private final @Nullable Delegate mDelegate;
 
-    /** Returns a {@link ListMenuItemAdapter} for a list containing {@param data}. */
+    /** Returns a {@link ListMenuItemAdapter} for a list containing {@code data}. */
     public ListMenuItemAdapter(ModelList data) {
         this(data, Set.of(), /* delegate= */ null);
     }
 
     /**
-     * Returns a {@link ListMenuItemAdapter} for a list containing {@param data}. {@param
+     * Returns a {@link ListMenuItemAdapter} for a list containing {@code data}. {@param
      * disabledTypes} contains the type enums which should be disabled in the adapter (i.e. not
      * keyboard-focusable or interactable).
      *
@@ -67,7 +67,11 @@ public class ListMenuItemAdapter extends ModelListAdapter {
     @Override
     public boolean isEnabled(int position) {
         int type = getItemViewType(position);
-        return type != ListItemType.DIVIDER && !mDisabledTypes.contains(type);
+        if (type == ListItemType.DIVIDER || mDisabledTypes.contains(type)) {
+            return false;
+        }
+        ListItem item = (ListItem) getItem(position);
+        return !item.model.containsKey(ENABLED) || item.model.get(ENABLED);
     }
 
     @Override

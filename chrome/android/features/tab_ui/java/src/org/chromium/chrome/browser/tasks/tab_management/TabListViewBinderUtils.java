@@ -8,6 +8,8 @@ import android.graphics.drawable.Drawable;
 import android.view.View;
 import android.widget.ImageView;
 
+import androidx.annotation.StringRes;
+
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.actor.ui.ActorUiTabController.UiTabState;
@@ -17,6 +19,7 @@ import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.browser_ui.util.TextResolver;
 import org.chromium.components.browser_ui.util.motion.MotionEventInfo;
 import org.chromium.components.browser_ui.util.motion.OnPeripheralClickListener;
+import org.chromium.components.tabs.TabAlert;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /**
@@ -120,8 +123,9 @@ public class TabListViewBinderUtils {
     public static void setNullableContextClickListener(
             @Nullable TabActionListener listener, View view, PropertyModel propertyModel) {
         if (listener == null) {
-            view.setContextClickable(false);
+            // setOnContextClickListener() makes the view context-clickable, so call it first.
             view.setOnContextClickListener(null);
+            view.setContextClickable(false);
         } else {
             view.setContextClickable(true);
             view.setOnContextClickListener(
@@ -237,6 +241,11 @@ public class TabListViewBinderUtils {
         }
     }
 
+    /** Returns whether an actor indicator is active for the given UI state. */
+    public static boolean isActorActive(@Nullable UiTabState state) {
+        return state != null && state.tabIndicator != TabIndicatorStatus.NONE;
+    }
+
     /**
      * Resolves the ACTOR_UI_STATE and updates the accessibility content description.
      *
@@ -246,20 +255,66 @@ public class TabListViewBinderUtils {
      */
     public static boolean setupActorIndicator(PropertyModel model, View view) {
         @Nullable UiTabState state = model.get(TabProperties.ACTOR_UI_STATE);
-        boolean shouldBeVisible =
-                state != null
-                        && (state.tabIndicator == TabIndicatorStatus.DYNAMIC
-                                || state.tabIndicator == TabIndicatorStatus.STATIC);
+        boolean shouldBeVisible = isActorActive(state);
+        updateIndicatorAccessibilityDescription(model, view);
+        return shouldBeVisible;
+    }
 
-        if (shouldBeVisible) {
+    private static void updateIndicatorAccessibilityDescription(PropertyModel model, View view) {
+        @Nullable UiTabState actorState = model.get(TabProperties.ACTOR_UI_STATE);
+        boolean isActorActive = isActorActive(actorState);
+
+        if (isActorActive) {
             String title = model.get(TabProperties.TITLE);
             String accessibilityDesc =
                     view.getResources().getString(R.string.tab_ax_label_actor_accessing, title);
             view.setContentDescription(accessibilityDesc);
         } else {
-            updateContentDescription(model, view);
+            if (model.containsKey(TabProperties.CONTENT_DESCRIPTION_TEXT_RESOLVER)
+                    && model.get(TabProperties.CONTENT_DESCRIPTION_TEXT_RESOLVER) != null) {
+                updateContentDescription(model, view);
+            } else if (model.containsKey(TabProperties.TITLE)) {
+                view.setContentDescription(model.get(TabProperties.TITLE));
+            }
         }
+    }
 
-        return shouldBeVisible;
+    /**
+     * Resolves the string template resource for the tab's accessibility description based on pinned
+     * state and alert state.
+     *
+     * @param isPinned Whether the tab is pinned.
+     * @param alertState The {@link TabAlert} state of the tab.
+     * @return The string resource ID for the accessibility description.
+     */
+    // TODO(crbug.com/456216687): Refactor a11y labels.
+    public static @StringRes int getTabContentDescriptionStringId(
+            boolean isPinned, @TabAlert int alertState) {
+        return switch (alertState) {
+            case TabAlert.AUDIO_MUTING ->
+                    isPinned
+                            ? R.string.accessibility_tabstrip_tab_pinned_muted
+                            : R.string.accessibility_tabstrip_tab_muted;
+            case TabAlert.AUDIO_PLAYING ->
+                    isPinned
+                            ? R.string.accessibility_tabstrip_tab_pinned_audible
+                            : R.string.accessibility_tabstrip_tab_audible;
+            case TabAlert.AUDIO_RECORDING, TabAlert.MEDIA_RECORDING, TabAlert.VIDEO_RECORDING ->
+                    isPinned
+                            ? R.string.accessibility_tabstrip_tab_pinned_recording
+                            : R.string.accessibility_tabstrip_tab_recording;
+            case TabAlert.TAB_CAPTURING, TabAlert.DESKTOP_CAPTURING ->
+                    isPinned
+                            ? R.string.accessibility_tabstrip_tab_pinned_sharing
+                            : R.string.accessibility_tabstrip_tab_sharing;
+            case TabAlert.PIP_PLAYING ->
+                    isPinned
+                            ? R.string.accessibility_tabstrip_tab_pinned_picture_in_picture
+                            : R.string.accessibility_tabstrip_tab_picture_in_picture;
+            default ->
+                    isPinned
+                            ? R.string.accessibility_tabstrip_tab_pinned
+                            : R.string.accessibility_tabstrip_tab;
+        };
     }
 }

@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "content/browser/browser_context_impl.h"
 #include "content/browser/renderer_host/initiator_navigation_state_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/site_instance_group.h"
@@ -16,10 +17,8 @@
 namespace content {
 
 NavigationStateKeepAlive::NavigationStateKeepAlive(
-    scoped_refptr<InitiatorNavigationState> initiator_navigation_state,
-    StoragePartitionImpl* storage_partition)
-    : storage_partition_(storage_partition),
-      initiator_navigation_state_(std::move(initiator_navigation_state)) {
+    scoped_refptr<InitiatorNavigationState> initiator_navigation_state)
+    : initiator_navigation_state_(std::move(initiator_navigation_state)) {
   CHECK(initiator_navigation_state_);
   SiteInstanceGroup* group = static_cast<InitiatorNavigationStateImpl*>(
                                  initiator_navigation_state_.get())
@@ -53,13 +52,6 @@ NavigationStateKeepAlive::~NavigationStateKeepAlive() {
         ->group()
         ->DecrementKeepAliveCount();
   }
-
-  // There are two pointers to `this` in StoragePartition. One in the
-  // ReceiverSet, which owns `this`, and another in the
-  // NavigationStateKeepAliveMap. When `this`  gets removed from the
-  // ReceiverSet, also remove the map entry to avoid dangling pointers.
-  storage_partition_->RemoveKeepAliveHandleFromMap(
-      initiator_navigation_state_impl->frame_token(), this);
 }
 
 }  // namespace content

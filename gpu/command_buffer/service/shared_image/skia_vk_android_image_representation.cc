@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include "components/viz/common/gpu/vulkan_context_provider.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
@@ -14,12 +13,14 @@
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
 #include "gpu/command_buffer/service/shared_image/skia_gl_image_representation.h"
 #include "gpu/command_buffer/service/texture_manager.h"
+#include "gpu/command_buffer/service/vulkan_context_provider.h"
 #include "gpu/vulkan/vulkan_device_queue.h"
 #include "gpu/vulkan/vulkan_fence_helper.h"
 #include "gpu/vulkan/vulkan_function_pointers.h"
 #include "gpu/vulkan/vulkan_image.h"
 #include "gpu/vulkan/vulkan_implementation.h"
 #include "gpu/vulkan/vulkan_util.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/core/SkColorType.h"
 #include "third_party/skia/include/core/SkSurface.h"
@@ -72,14 +73,14 @@ SkiaVkAndroidImageRepresentation::BeginWriteAccess(
   DCHECK_EQ(mode_, RepresentationAccessMode::kNone);
   DCHECK(promise_texture_);
 
-  if (!BeginAccess(/*readonly=*/false, begin_semaphores, end_semaphores,
-                   base::ScopedFD())) {
-    return {};
-  }
-
   auto* gr_context = context_state_->gr_context();
   if (gr_context->abandoned()) {
     LOG(ERROR) << "GrContext is abandoned.";
+    return {};
+  }
+
+  if (!BeginAccess(/*readonly=*/false, begin_semaphores, end_semaphores,
+                   base::ScopedFD())) {
     return {};
   }
 
@@ -92,15 +93,13 @@ SkiaVkAndroidImageRepresentation::BeginWriteAccess(
         &surface_props);
     if (!surface_) {
       LOG(ERROR) << "MakeFromBackendTexture() failed.";
+      EndAccess(/*readonly=*/false);
       return {};
     }
     surface_msaa_count_ = final_msaa_count;
   }
 
   *end_state = GetEndAccessState();
-
-  if (!surface_)
-    return {};
   return {surface_};
 }
 
@@ -119,8 +118,10 @@ SkiaVkAndroidImageRepresentation::BeginWriteAccess(
 
   *end_state = GetEndAccessState();
 
-  if (!promise_texture_)
+  if (!promise_texture_) {
+    EndAccess(/*readonly=*/false);
     return {};
+  }
   return {promise_texture_};
 }
 
@@ -154,8 +155,10 @@ SkiaVkAndroidImageRepresentation::BeginReadAccess(
 
   *end_state = GetEndAccessState();
 
-  if (!promise_texture_)
+  if (!promise_texture_) {
+    EndAccess(/*readonly=*/true);
     return {};
+  }
   return {promise_texture_};
 }
 
@@ -207,6 +210,15 @@ bool SkiaVkAndroidImageRepresentation::BeginAccess(
       return false;
   }
 
+  // Ensure any failure after BeginRead/BeginWrite unwinds the backing state.
+  absl::Cleanup end_access_helper = [this, readonly]() {
+    if (readonly) {
+      android_backing()->EndRead(this, base::ScopedFD());
+    } else {
+      android_backing()->EndWrite(base::ScopedFD());
+    }
+  };
+
   sync_fd = gl::MergeFDs(std::move(sync_fd), std::move(init_read_fence));
   DCHECK(begin_access_semaphore_ == VK_NULL_HANDLE);
   if (sync_fd.is_valid()) {
@@ -244,6 +256,7 @@ bool SkiaVkAndroidImageRepresentation::BeginAccess(
         GrBackendSemaphores::MakeVk(end_access_semaphore_));
   }
 
+  std::move(end_access_helper).Cancel();
   mode_ = readonly ? RepresentationAccessMode::kRead
                    : RepresentationAccessMode::kWrite;
   return true;
@@ -264,7 +277,7 @@ void SkiaVkAndroidImageRepresentation::EndAccess(bool readonly) {
     android_backing()->EndWrite(std::move(sync_fd));
   }
 
-  std::vector<VkSemaphore> semaphores;
+  std::vector<base::RawPtrIfPtrT<VkSemaphore, DanglingUntriaged>> semaphores;
   semaphores.reserve(2);
   if (begin_access_semaphore_ != VK_NULL_HANDLE) {
     semaphores.emplace_back(begin_access_semaphore_);

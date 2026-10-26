@@ -10,10 +10,11 @@
 #include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/platform_browser_test.h"
 #include "components/browsing_data/content/browsing_data_model.h"
 #include "components/signin/public/base/signin_buildflags.h"
+
+class BrowserWindowInterface;
 
 namespace network::mojom {
 
@@ -61,7 +62,7 @@ class BrowsingDataRemoverBrowserTestBase : public PlatformBrowserTest {
 #if BUILDFLAG(IS_ANDROID)
   bool IsIncognito() { return false; }
 #else
-  Browser* GetBrowser() const;
+  BrowserWindowInterface* GetBrowser() const;
   void UseIncognitoBrowser();
   void RestartIncognitoBrowser();
   bool IsIncognito() { return incognito_browser_ != nullptr; }
@@ -74,7 +75,7 @@ class BrowsingDataRemoverBrowserTestBase : public PlatformBrowserTest {
   content::WebContents* GetActiveWebContents();
 
 #if !BUILDFLAG(IS_ANDROID)
-  content::WebContents* GetActiveWebContents(Browser* browser);
+  content::WebContents* GetActiveWebContents(BrowserWindowInterface* browser);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
   // Returns the active Profile. On desktop this is in the first browser
@@ -112,7 +113,8 @@ class BrowsingDataRemoverBrowserTestBase : public PlatformBrowserTest {
  private:
   base::test::ScopedFeatureList feature_list_;
 #if !BUILDFLAG(IS_ANDROID)
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> incognito_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged>
+      incognito_browser_ = nullptr;
 #endif
 };
 

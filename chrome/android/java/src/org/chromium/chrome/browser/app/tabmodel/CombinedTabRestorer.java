@@ -18,6 +18,7 @@ import org.chromium.chrome.browser.tab.StorageLoadedData.LoadedTabState;
 import org.chromium.chrome.browser.tab.TabId;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+import org.chromium.chrome.browser.tabmodel.TabOrchestratorType;
 
 import java.util.function.Supplier;
 
@@ -56,8 +57,9 @@ class CombinedTabRestorer {
         default void onRestoreFinished() {}
 
         /**
-         * Called when the details of a tab have been read {@see
-         * TabPersistentStoreObserver#onDetailsRead}.
+         * Called when the details of a tab have been read.
+         *
+         * @see TabPersistentStoreObserver#onDetailsRead
          */
         default void onDetailsRead(
                 int index,
@@ -69,6 +71,7 @@ class CombinedTabRestorer {
                 boolean fromMerge) {}
     }
 
+    private final CombinedTabRestorerDelegate mCombinedDelegate;
     private final TabRestorerDelegate mDelegate;
     private final @Nullable TabRestorer mRegularTabRestorer;
     private final @Nullable TabRestorer mIncognitoTabRestorer;
@@ -143,9 +146,9 @@ class CombinedTabRestorer {
 
             if (mRegularState.isLoadFinished() && mIncognitoState.isLoadFinished()) {
                 if (mLoadStartTime != INVALID_TIME) {
-                long duration = SystemClock.elapsedRealtime() - mLoadStartTime;
-                RecordHistogram.recordTimesHistogram(
-                        "Tabs.TabStateStore.LoadAllTabsDuration", duration);
+                    long duration = SystemClock.elapsedRealtime() - mLoadStartTime;
+                    RecordHistogram.recordTimesHistogram(
+                            "Tabs.TabStateStore.LoadAllTabsDuration", duration);
                 }
                 mOrchestratorDelegate.onLoadFinished(mRestoredTabCount);
             }
@@ -220,6 +223,7 @@ class CombinedTabRestorer {
     }
 
     /**
+     * @param orchestratorType The orchestrator type for this restorer.
      * @param restoreIncognitoTabs Whether to restore incognito tabs.
      * @param restoreRegularTabs Whether to restore regular tabs.
      * @param delegate The delegate to be notified of events from the tab restorers.
@@ -228,8 +232,10 @@ class CombinedTabRestorer {
      * @param tabModelSelector The tab model selector.
      * @param logRestoreDuration Whether to log the restore duration.
      * @param isFromRecreating Whether the current activity is launched from recreating.
+     * @param isAuthoritative Whether this restorer is authoritative.
      */
     CombinedTabRestorer(
+            @TabOrchestratorType int orchestratorType,
             boolean restoreIncognitoTabs,
             boolean restoreRegularTabs,
             CombinedTabRestorerDelegate delegate,
@@ -237,27 +243,33 @@ class CombinedTabRestorer {
             Supplier<ScopedStorageBatch> batchFactory,
             TabModelSelector tabModelSelector,
             boolean logRestoreDuration,
-            boolean isFromRecreating) {
+            boolean isFromRecreating,
+            boolean isAuthoritative) {
+        mCombinedDelegate = delegate;
         mDelegate = new TabRestorerDelegateImpl(delegate, restoreIncognitoTabs, restoreRegularTabs);
         mRegularTabRestorer =
                 restoreRegularTabs
                         ? new TabRestorer(
+                                orchestratorType,
                                 /* incognito= */ false,
                                 mDelegate,
                                 tabCreatorManager.getTabCreator(/* incognito= */ false),
                                 batchFactory,
                                 tabModelSelector,
-                                isFromRecreating)
+                                isFromRecreating,
+                                isAuthoritative)
                         : null;
         mIncognitoTabRestorer =
                 restoreIncognitoTabs
                         ? new TabRestorer(
+                                orchestratorType,
                                 /* incognito= */ true,
                                 mDelegate,
                                 tabCreatorManager.getTabCreator(/* incognito= */ true),
                                 batchFactory,
                                 tabModelSelector,
-                                isFromRecreating)
+                                isFromRecreating,
+                                isAuthoritative)
                         : null;
         mLoadStartTime = logRestoreDuration ? SystemClock.elapsedRealtime() : INVALID_TIME;
     }
@@ -291,20 +303,24 @@ class CombinedTabRestorer {
     }
 
     /**
-     * Starts the restoration of the currently selected model. The other model will be started once
-     * the selected model has finished loading. These operations can be cancelled together or
-     * separately.
+     * Starts the restoration of the currently selected model (or the available model if only one
+     * exists). The other model will be started once the first model has finished loading. If
+     * neither model has tabs to restore, notifies the delegate immediately that restoration is
+     * finished. These operations can be cancelled together or separately.
      *
-     * @param isIncognitoSelected Whether the incognito tab restorer should be started.
+     * @param isIncognitoSelected Whether the incognito tab model is currently selected and should
+     *     be restored first if available.
      * @param restoreActiveTabImmediately Whether the active tab should be restored immediately. If
      *     false another tab may have already been created and activated so this should just restore
      *     the active tab as if it were any other tab.
      */
     void start(boolean isIncognitoSelected, boolean restoreActiveTabImmediately) {
-        if (isIncognitoSelected && mIncognitoTabRestorer != null) {
+        if (mIncognitoTabRestorer != null && (isIncognitoSelected || mRegularTabRestorer == null)) {
             mIncognitoTabRestorer.start(restoreActiveTabImmediately);
         } else if (mRegularTabRestorer != null) {
             mRegularTabRestorer.start(restoreActiveTabImmediately);
+        } else {
+            mCombinedDelegate.onRestoreFinished();
         }
     }
 

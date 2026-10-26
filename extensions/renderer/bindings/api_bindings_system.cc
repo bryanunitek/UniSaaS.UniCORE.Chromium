@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/containers/map_util.h"
 #include "base/functional/bind.h"
 #include "base/values.h"
 #include "extensions/common/mojom/event_dispatcher.mojom.h"
@@ -53,12 +54,13 @@ APIBindingsSystem::APIBindingsSystem(
 APIBindingsSystem::~APIBindingsSystem() = default;
 
 v8::Local<v8::Object> APIBindingsSystem::CreateAPIInstance(
-    const std::string& api_name,
+    std::string_view api_name,
     v8::Local<v8::Context> context,
     APIBindingHooks** hooks_out) {
-  std::unique_ptr<APIBinding>& binding = api_bindings_[api_name];
+  std::unique_ptr<APIBinding>& binding =
+      base::GetOrCreate(api_bindings_, api_name);
   if (!binding)
-    binding = CreateNewAPIBinding(api_name);
+    binding = CreateNewAPIBinding(std::string(api_name));
   if (hooks_out)
     *hooks_out = binding->hooks();
   return binding->CreateInstance(context);

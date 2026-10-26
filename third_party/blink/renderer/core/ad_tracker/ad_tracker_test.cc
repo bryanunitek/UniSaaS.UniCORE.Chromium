@@ -15,6 +15,7 @@
 #include "components/subresource_filter/core/mojom/subresource_filter.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -28,6 +29,7 @@
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wshorten-64-to-32"
@@ -144,7 +146,8 @@ class FixedSubresourceFilterWebFrameClient
 
 class TestAdTracker : public AdTracker {
  public:
-  explicit TestAdTracker(LocalFrame* frame) : AdTracker(frame) {}
+  explicit TestAdTracker(LocalFrame* frame, ScriptInitiationMonitor* monitor)
+      : AdTracker(frame, monitor) {}
   ~TestAdTracker() override {}
 
   bool RequestWithUrlTaggedAsAd(const String& url) const {
@@ -187,6 +190,20 @@ class TestAdTracker : public AdTracker {
     return result;
   }
 
+  void DidCreateFrame(LocalFrame* frame, LazyStackTrace& stack_trace) override {
+    AdTracker::DidCreateFrame(frame, stack_trace);
+    if (sim_test_) {
+      V8ScriptId initiating_script_id = GetInitiatingScriptId(frame);
+      if (initiating_script_id.value() > 0) {
+        last_ad_script_ancestry_ = GetAncestry(initiating_script_id);
+        last_is_ad_script_in_stack_result_ = true;
+        return;
+      }
+      last_ad_script_ancestry_ = AdScriptAncestry();
+      last_is_ad_script_in_stack_result_ = false;
+    }
+  }
+
   const AdScriptAncestry& last_ad_script_ancestry() const {
     return last_ad_script_ancestry_;
   }
@@ -202,11 +219,11 @@ class TestAdTracker : public AdTracker {
       ResourceType resource_type,
       const FetchInitiatorInfo& initiator_info,
       std::optional<AdProvenance> known_ad_provenance,
-      bool scan_stack_for_ads) override {
+      bool scan_javascript_stack) override {
     std::optional<AdProvenance> observed_ad_provenance =
         AdTracker::CalculateIfAdSubresource(
             execution_context, request_url, resource_type, initiator_info,
-            std::move(known_ad_provenance), scan_stack_for_ads);
+            std::move(known_ad_provenance), scan_javascript_stack);
 
     String resource_url = request_url.GetString();
     is_ad_.insert(resource_url, observed_ad_provenance.has_value());
@@ -272,7 +289,9 @@ class AdTrackerSimTest : public SimTest {
         "https://example.com/test.html", "text/html");
 
     LoadURL("https://example.com/test.html");
-    ad_tracker_ = MakeGarbageCollected<TestAdTracker>(GetDocument().GetFrame());
+    ad_tracker_ = MakeGarbageCollected<TestAdTracker>(
+        GetDocument().GetFrame(),
+        GetDocument().GetFrame()->GetOrCreateScriptInitiationMonitor());
     ad_tracker_->SetSimTest();
     GetDocument().GetFrame()->SetAdTrackerForTesting(ad_tracker_);
   }
@@ -509,7 +528,9 @@ TEST_F(AdTrackerSimTest, DISABLED_InlineAdScriptRunningInNonAdContext) {
 TEST_F(AdTrackerSimTest, ImageLoadedWhileExecutingAdScriptAsyncEnabled) {
   // Reset the AdTracker so that it gets the latest base::Feature value on
   // construction.
-  ad_tracker_ = MakeGarbageCollected<TestAdTracker>(GetDocument().GetFrame());
+  ad_tracker_ = MakeGarbageCollected<TestAdTracker>(
+      GetDocument().GetFrame(),
+      GetDocument().GetFrame()->GetOrCreateScriptInitiationMonitor());
   GetDocument().GetFrame()->SetAdTrackerForTesting(ad_tracker_);
 
   const char kAdUrl[] = "https://example.com/ad_script.js";
@@ -1117,14 +1138,14 @@ TEST_P(AdTrackerVanillaOrAdSimTest, StyleTagAddedByScript) {
 
   main_resource_->Complete(IsAdRun() ? kPageWithAdScript
                                      : kPageWithVanillaScript);
-  script.Complete(UNSAFE_TODO(String::Format(
+  script.Complete(Format(
       R"SCRIPT(
         let style = document.createElement("style");
-        let text = document.createTextNode(`%s`);
+        let text = document.createTextNode(`{}`);
         style.appendChild(text);
         document.head.appendChild(style);
       )SCRIPT",
-      kStylesheetWithVanillaResources)));
+      kStylesheetWithVanillaResources));
 
   // Wait for stylesheet to fetch resources.
   ad_tracker_->WaitForSubresource(vanilla_font_url);
@@ -3175,6 +3196,45 @@ TEST_F(AdTrackerSimTest, IgnoreMonkeyPatchHeuristic_FirstProxiedCall_IsNotAd) {
   EXPECT_FALSE(ad_tracker_->last_is_ad_script_in_stack_result());
 }
 
+// Tests that the heuristic correctly ignores the first call to a monkeypatched
+// API from a non-ad script when using an ES6 Proxy. This prevents
+// misattributing the call to the ad script, which is likely acting only as a
+// proxy.
+TEST_F(AdTrackerSimTest, IgnoreMonkeyPatchHeuristic_Proxy_IsNotAd) {
+  String ad_script_url = "https://example.com/script.js?ad=true";
+  String vanilla_script_url = "https://example.com/script.js";
+  SimSubresourceRequest ad_script(ad_script_url, "text/javascript");
+  SimSubresourceRequest vanilla_script(vanilla_script_url, "text/javascript");
+
+  main_resource_->Complete(R"HTML(
+    <body><script src="script.js?ad=true"></script>
+          <script src="script.js"></script></body>
+  )HTML");
+
+  // The ad script monkeypatches history.pushState using a Proxy.
+  ad_script.Complete(R"SCRIPT(
+    const proxyHandler = {
+      apply: function(target, thisArg, argumentsList) {
+        return target.apply(thisArg, argumentsList);
+      }
+    };
+    window.history.pushState = new Proxy(window.history.pushState, proxyHandler);
+  )SCRIPT");
+
+  // The vanilla script calls the now-monkeypatched API. The call stack will
+  // have the ad script's wrapper at the top.
+  vanilla_script.Complete(R"SCRIPT(
+    window.history.pushState({}, '', '/new-url');
+  )SCRIPT");
+
+  base::RunLoop().RunUntilIdle();
+
+  // The IsAdScriptInStack check is triggered by the pushState implementation.
+  // The heuristic identifies the monkeypatch and, for this first call, assumes
+  // the ad script is a proxy and returns false.
+  EXPECT_FALSE(ad_tracker_->last_is_ad_script_in_stack_result());
+}
+
 // Tests that the monkey-patch heuristic correctly distinguishes between the
 // actual monkey-patched API function and a different function that happens
 // to share the same internal name and script ID.
@@ -3312,7 +3372,7 @@ TEST_F(
 // falls beyond the 5th frame.
 TEST_F(
     AdTrackerSimTest,
-    IgnoreMonkeyPatchHeuristic_AdScriptCallsDeepNonAdPatch_ExceedsLimit_IsNotAd) {
+    IgnoreMonkeyPatchHeuristic_AdScriptCallsDeepNonAdPatch_ExceedsLimit_FalseNegative) {
   String vanilla_patch_url = "https://example.com/patch.js";
   String ad_caller_url = "https://example.com/caller.js?ad=true";
   SimSubresourceRequest vanilla_patch(vanilla_patch_url, "text/javascript");
@@ -3360,16 +3420,66 @@ TEST_F(
   EXPECT_FALSE(ad_tracker_->last_is_ad_script_in_stack_result());
 }
 
-// Tests that the monkey-patch heuristic incorrectly identifies an ad when a
+// Tests that the heuristic produces a false negative when an ad script caches
+// a non-ad patch, patches the API again, and calls the cached non-ad patch.
+// Because the stack inspector searches for the current global API function
+// (which is missing from the stack), it fails to find it and considers the
+// call to be from a non-ad script.
+TEST_F(AdTrackerSimTest,
+       IgnoreMonkeyPatchHeuristic_AdScriptCallsCachedNonAdPatch_FalseNegative) {
+  String vanilla_patch_url = "https://example.com/patch.js";
+  String ad_caller_url = "https://example.com/caller.js?ad=true";
+  SimSubresourceRequest vanilla_patch(vanilla_patch_url, "text/javascript");
+  SimSubresourceRequest ad_caller(ad_caller_url, "text/javascript");
+
+  main_resource_->Complete(R"HTML(
+    <body><script src="patch.js"></script>
+          <script src="caller.js?ad=true"></script></body>
+  )HTML");
+
+  // The non-ad script monkey-patches history.pushState.
+  vanilla_patch.Complete(R"SCRIPT(
+    const originalPushState = window.history.pushState;
+    window.history.pushState = function(...args) {
+      originalPushState.apply(window.history, args);
+    };
+  )SCRIPT");
+
+  // The ad script caches the patched API, then a new patch is applied,
+  // then the ad script calls the cached patch.
+  ad_caller.Complete(R"SCRIPT(
+    const cachedPushState = window.history.pushState;
+
+    // Patch it again, taking the global API away from cachedPushState.
+    const originalPushState2 = window.history.pushState;
+    window.history.pushState = function(...args) {
+      originalPushState2.apply(window.history, args);
+    };
+
+    // The ad script calls the cached patch.
+    cachedPushState.call(window.history, {}, '', '/new-url');
+  )SCRIPT");
+
+  base::RunLoop().RunUntilIdle();
+
+  // The true caller was the ad script. However, the stack is:
+  // 1. Native PushState
+  // 2. originalPushState wrapper (from the vanilla patch)
+  // 3. Ad script (caller.js)
+  //
+  // Since `window.history.pushState` now points to the `originalPushState2`
+  // wrapper, the stack inspector fails to find the global API in the stack.
+  // Thus, the heuristic concludes it is a non-ad call.
+  EXPECT_FALSE(ad_tracker_->last_is_ad_script_in_stack_result());
+}
+
+// Tests that the monkey-patch heuristic correctly ignores an ad script when a
 // non-ad script calls an API that has been monkey-patched by a non-ad script,
 // which in turn wraps an ad monkey patch.
 //
 // Flow: Non-Ad Caller -> Non-Ad Patch (Global API) -> Ad Patch -> Native API
-//
-// TODO(crbug.com/484065170): This is a regression test for a known false
-// positive.
 TEST_F(AdTrackerSimTest,
-       IgnoreMonkeyPatchHeuristic_NonAdCallsNonAdPatchOnAdPatch_FalsePositive) {
+       IgnoreMonkeyPatchHeuristic_NonAdCallsNonAdPatchOnAdPatch) {
   String ad_patch_url = "https://example.com/patch.js?ad=true";
   String vanilla_patch_url = "https://example.com/patch.js";
   String vanilla_caller_url = "https://example.com/caller.js";
@@ -3410,26 +3520,18 @@ TEST_F(AdTrackerSimTest,
 
   base::RunLoop().RunUntilIdle();
 
-  // The AdTracker heuristic inspects the stack above the top-most non-ad script
-  // and sees `ad_patch` executing. It compares the ScriptID of
-  // `ad_patch` against the current Global API's ScriptID (`vanilla_patch`).
-  //
-  // Because the IDs do not match, the heuristic incorrectly assumes the
-  // executing function is NOT the API we are tracking. We assert TRUE here to
-  // document the current broken behavior.
-  EXPECT_TRUE(ad_tracker_->last_is_ad_script_in_stack_result());
+  // The AdTracker heuristic inspects the stack and finds the API function.
+  // It identifies the true caller as `vanilla_caller`, which is non-ad.
+  EXPECT_FALSE(ad_tracker_->last_is_ad_script_in_stack_result());
 }
 
-// Tests that the monkey-patch heuristic fails to identify an ad when an ad
+// Tests that the monkey-patch heuristic correctly identifies an ad when an ad
 // script calls an API that has been monkey-patched by an ad script, which in
 // turn wraps a non-ad monkey patch.
 //
 // Flow: Ad Caller -> Ad Patch (Global API) -> Non-Ad Patch -> Native API
-//
-// TODO(crbug.com/484065170): This is a regression test for a known false
-// negative.
 TEST_F(AdTrackerSimTest,
-       IgnoreMonkeyPatchHeuristic_AdCallsAdPatchOnNonAdPatch_FalseNegative) {
+       IgnoreMonkeyPatchHeuristic_AdCallsAdPatchOnNonAdPatch) {
   String vanilla_patch_url = "https://example.com/patch.js";
   String ad_patch_url = "https://example.com/patch.js?ad=true";
   String ad_caller_url = "https://example.com/caller.js?ad=true";
@@ -3469,14 +3571,9 @@ TEST_F(AdTrackerSimTest,
 
   base::RunLoop().RunUntilIdle();
 
-  // The AdTracker heuristic inspects the stack above the top-most ad script
-  // and sees `vanilla_patch` executing. It compares the ScriptID of
-  // `vanilla_patch` against the current Global API's ScriptID (`ad_patch`).
-  //
-  // Because the IDs do not match, the heuristic incorrectly assumes the
-  // executing function is NOT the API we are tracking. We assert FALSE here to
-  // document the current broken behavior.
-  EXPECT_FALSE(ad_tracker_->last_is_ad_script_in_stack_result());
+  // The AdTracker heuristic finds the API function in the stack and identifies
+  // the true caller as `ad_caller`, which is an ad script.
+  EXPECT_TRUE(ad_tracker_->last_is_ad_script_in_stack_result());
 }
 
 // Test that an iframe is not tagged as an ad if non-ads script created it via
@@ -3978,6 +4075,55 @@ TEST_F(AdTrackerDisabledSimTest, VerifyAdTrackingDisabled) {
   EXPECT_FALSE(GetDocument().GetFrame()->IsAdFrame());
 }
 
+TEST_F(AdTrackerSimTest, RegressionTest_AsyncStackExternalScriptMonkeyPatch) {
+  String ad_script_url = "https://example.com/ad_script.js?ad=true";
+  String vanilla_script_url = "https://example.com/vanilla_script.js";
+  String target_script_url = "https://example.com/target_script.js";
+
+  SimSubresourceRequest ad_script(ad_script_url, "text/javascript");
+  SimSubresourceRequest vanilla_script(vanilla_script_url, "text/javascript");
+  SimSubresourceRequest target_script(target_script_url, "text/javascript");
+  SimSubresourceRequest target_image("https://example.com/target_image.png",
+                                     "image/png");
+
+  main_resource_->Complete(R"HTML(
+    <body>
+      <script src="ad_script.js?ad=true"></script>
+      <script src="vanilla_script.js"></script>
+    </body>
+  )HTML");
+
+  ad_script.Complete(R"SCRIPT(
+    const originalAppendChild = Node.prototype.appendChild;
+    Node.prototype.appendChild = function(...args) {
+      return originalAppendChild.apply(this, args);
+    };
+  )SCRIPT");
+
+  vanilla_script.Complete(R"SCRIPT(
+    const script = document.createElement("script");
+    script.src = "target_script.js";
+    document.body.appendChild(script);
+  )SCRIPT");
+
+  ad_tracker_->WaitForSubresource(target_script_url);
+  target_script.Complete(R"SCRIPT(
+    const img = document.createElement('img');
+    img.src = 'target_image.png';
+    document.body.appendChild(img);
+  )SCRIPT");
+
+  ad_tracker_->WaitForSubresource("https://example.com/target_image.png");
+  target_image.Complete("data");
+
+  EXPECT_TRUE(ad_tracker_->RequestWithUrlTaggedAsAd(ad_script_url));
+  EXPECT_FALSE(ad_tracker_->RequestWithUrlTaggedAsAd(vanilla_script_url));
+
+  EXPECT_FALSE(ad_tracker_->RequestWithUrlTaggedAsAd(target_script_url));
+  EXPECT_FALSE(ad_tracker_->RequestWithUrlTaggedAsAd(
+      "https://example.com/target_image.png"));
+}
+
 INSTANTIATE_TEST_SUITE_P(All,
                          AdTrackerVanillaOrAdSimTest,
                          ::testing::Values(true, false));
@@ -4145,7 +4291,7 @@ TEST_F(AdTrackerSimTest, AdScriptAncestry_AttributeScript) {
   base::RunLoop().RunUntilIdle();
 
   // Click the div to trigger the event handler.
-  Element* div = GetDocument().getElementById(AtomicString("test_div"));
+  Element* div = GetElementById("test_div");
   div->DispatchSimulatedClick(nullptr);
   base::RunLoop().RunUntilIdle();
 
@@ -4159,6 +4305,42 @@ TEST_F(AdTrackerSimTest, AdScriptAncestry_AttributeScript) {
   // Verify that the ad script itself is known.
   EXPECT_TRUE(
       IsKnownAdScript(GetDocument().GetExecutionContext(), ad_script_url));
+}
+
+TEST_F(AdTrackerSimTest, AdEventHandlerTriggeredByNonAdScript) {
+  SimRequest ad_script_resource("https://example.com/ad_script.js",
+                                "application/javascript");
+  SimRequest vanilla_script_resource("https://example.com/script.js",
+                                     "application/javascript");
+  SimRequest image_resource("https://example.com/foo.png", "image/png");
+
+  main_resource_->Complete(R"HTML(
+    <body>
+    <script src="https://example.com/ad_script.js"></script>
+    <script src="https://example.com/script.js"></script>
+    </body>
+  )HTML");
+
+  // Ad script sets an inline event handler on a dynamically created element.
+  ad_script_resource.Complete(R"JS(
+    let btn = document.createElement("button");
+    btn.id = "target";
+    btn.setAttribute("onclick", "let img = document.createElement('img'); img.src = 'foo.png';");
+    document.body.appendChild(btn);
+  )JS");
+
+  // Non-ad script triggers the event handler synchronously.
+  vanilla_script_resource.Complete(R"JS(
+    document.getElementById('target').click();
+  )JS");
+
+  base::RunLoop().RunUntilIdle();
+
+  image_resource.Complete("data");
+
+  // Verify that the subsequent image request is correctly tagged as an ad.
+  EXPECT_TRUE(
+      ad_tracker_->RequestWithUrlTaggedAsAd("https://example.com/foo.png"));
 }
 
 // Tests that an event handler added via document.write by an ad script is
@@ -4183,7 +4365,7 @@ TEST_F(AdTrackerSimTest, AdScriptAncestry_DocumentWriteAttributeScript) {
   base::RunLoop().RunUntilIdle();
 
   // Click the div to trigger the event handler.
-  Element* div = GetDocument().getElementById(AtomicString("test_div"));
+  Element* div = GetElementById("test_div");
   ASSERT_TRUE(div);
   div->DispatchSimulatedClick(nullptr);
   base::RunLoop().RunUntilIdle();
@@ -4219,7 +4401,7 @@ TEST_F(AdTrackerSimTest, AdScriptAncestry_InnerHTMLAttributeScript) {
   base::RunLoop().RunUntilIdle();
 
   // Click the div to trigger the event handler.
-  Element* div = GetDocument().getElementById(AtomicString("test_div"));
+  Element* div = GetElementById("test_div");
   ASSERT_TRUE(div);
   div->DispatchSimulatedClick(nullptr);
   base::RunLoop().RunUntilIdle();
@@ -4301,7 +4483,7 @@ TEST_F(AdTrackerSimTest, AdScriptAncestry_SetAttributeNodeAttributeScript) {
   base::RunLoop().RunUntilIdle();
 
   // Click the div to trigger the event handler.
-  Element* div = GetDocument().getElementById(AtomicString("test_div"));
+  Element* div = GetElementById("test_div");
   ASSERT_TRUE(div);
   div->DispatchSimulatedClick(nullptr);
   base::RunLoop().RunUntilIdle();
@@ -4357,38 +4539,38 @@ TEST(AdTrackerTest, AdScriptAncestry_ScriptIdFromDifferentTracker) {
   auto page_holder_b = std::make_unique<DummyPageHolder>();
 
   AdTracker* ad_tracker_a = MakeGarbageCollected<AdTracker>(
-      &page_holder_a->GetFrame().LocalFrameRoot());
+      &page_holder_a->GetFrame().LocalFrameRoot(),
+      page_holder_a->GetFrame()
+          .LocalFrameRoot()
+          .GetOrCreateScriptInitiationMonitor());
   AdTracker* ad_tracker_b = MakeGarbageCollected<AdTracker>(
-      &page_holder_b->GetFrame().LocalFrameRoot());
+      &page_holder_b->GetFrame().LocalFrameRoot(),
+      page_holder_b->GetFrame()
+          .LocalFrameRoot()
+          .GetOrCreateScriptInitiationMonitor());
 
   V8ScriptId script_id_a(1001);
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::HandleScope scope(isolate);
 
-  // Register `script_id_a` in `ad_tracker_a`, which is the only tracker to
-  // learn about this script id.
-  ad_tracker_a->RegisterAdScript(
-      page_holder_a->GetFrame().DomWindow()->GetIsolate()->GetCurrentContext(),
-      script_id_a, std::nullopt);
-
-  // Get the `script_a` identifier.
-  AdScriptIdentifier id_a(v8_inspector::V8DebuggerId(), script_id_a,
-                          "script_a");
-
-  // In `ad_tracker_b`, register `script_id_b` with `id_a` as parent.
-  // `ad_tracker_b` doesn't actually know about `id_a` though.
+  {
+    v8::Context::Scope context_scope(
+        ToScriptStateForMainWorld(&page_holder_a->GetFrame())->GetContext());
+    // Register `script_id_a` in `ad_tracker_a`, which is the only tracker to
+    // learn about this script id.
+    ad_tracker_a->RegisterScript(script_id_a, std::nullopt);
+  }
   V8ScriptId script_id_b(2001);
-  ad_tracker_b->RegisterAdScript(
-      page_holder_b->GetFrame().DomWindow()->GetIsolate()->GetCurrentContext(),
-      script_id_b, id_a);
-
-  // Register `script_id_c` with `script_id_b` as parent in `ad_tracker_b`.
   V8ScriptId script_id_c(3001);
-  AdScriptIdentifier id_b(v8_inspector::V8DebuggerId(), script_id_b,
-                          "script_b");
-  ad_tracker_b->RegisterAdScript(
-      page_holder_b->GetFrame().DomWindow()->GetIsolate()->GetCurrentContext(),
-      script_id_c, id_b);
+  {
+    v8::Context::Scope context_scope(
+        ToScriptStateForMainWorld(&page_holder_b->GetFrame())->GetContext());
+    // In `ad_tracker_b`, register `script_id_b` with `script_id_a` as parent.
+    // `ad_tracker_b` doesn't actually know about `script_id_a` though.
+    ad_tracker_b->RegisterScript(script_id_b, script_id_a);
+    // Register `script_id_c` with `script_id_b` as parent in `ad_tracker_b`.
+    ad_tracker_b->RegisterScript(script_id_c, script_id_b);
+  }
 
   // `ad_tracker_b` knows `script_id_c` and `script_id_b`, but not
   // `script_id_a`. `GetAncestry(script_id_c)` should return a chain of length 2
@@ -4429,7 +4611,7 @@ TEST_F(AdTrackerSimTest, JavascriptUrlDetected) {
   base::RunLoop().RunUntilIdle();
 
   // Verify that the second iframe (test) is created.
-  Element* test_element = GetDocument().getElementById(AtomicString("test"));
+  Element* test_element = GetElementById("test");
   ASSERT_TRUE(test_element);
 
   auto* test_frame = To<HTMLFrameOwnerElement>(test_element)->ContentFrame();
@@ -4467,7 +4649,7 @@ TEST_F(AdTrackerSimTest, JavascriptUrlAnchorDetected) {
   base::RunLoop().RunUntilIdle();
 
   // Verify that the iframe (test) is created.
-  Element* test_element = GetDocument().getElementById(AtomicString("test"));
+  Element* test_element = GetElementById("test");
   ASSERT_TRUE(test_element);
 
   auto* test_frame = To<HTMLFrameOwnerElement>(test_element)->ContentFrame();
@@ -4505,7 +4687,7 @@ TEST_F(AdTrackerSimTest, JavascriptUrlFormDetected) {
   base::RunLoop().RunUntilIdle();
 
   // Verify that the iframe (test) is created.
-  Element* test_element = GetDocument().getElementById(AtomicString("test"));
+  Element* test_element = GetElementById("test");
   ASSERT_TRUE(test_element);
 
   auto* test_frame = To<HTMLFrameOwnerElement>(test_element)->ContentFrame();
@@ -4668,6 +4850,228 @@ TEST_F(AdTrackerSimTest, NoScriptExecutionDuringAdTrackerMonkeyPatchCheck) {
   // stack (via the monkey-patched appendChild), the frame should be correctly
   // flagged as an ad frame.
   EXPECT_TRUE(child_frame->IsFrameCreatedByAdScript());
+}
+
+// Regression test for https://crbug.com/566156384.
+//
+// Verifies that AdTracker's monkey-patch check does not invoke native Blink
+// built-in functions installed as Proxy traps or property getters.
+TEST_F(AdTrackerSimTest,
+       NoNativeBuiltinExecutionDuringAdTrackerMonkeyPatchCheck) {
+  String ad_script_url = "https://example.com/script.js?ad=true";
+  String vanilla_script_url = "https://example.com/script.js";
+  SimSubresourceRequest ad_script(ad_script_url, "text/javascript");
+  SimSubresourceRequest vanilla_script(vanilla_script_url, "text/javascript");
+
+  main_resource_->Complete(R"HTML(
+    <body>
+      <div id="proxy_target"></div>
+      <div id="getter_target"></div>
+      <script src="script.js?ad=true"></script>
+      <script src="script.js"></script>
+    </body>
+  )HTML");
+
+  ad_script.Complete(R"SCRIPT(
+    const originalNode = window.Node;
+    window.originalAppendChild = originalNode.prototype.appendChild;
+    originalNode.prototype.appendChild = function(child) {
+      return window.originalAppendChild.call(this, child);
+    };
+  )SCRIPT");
+
+  vanilla_script.Complete(R"SCRIPT(
+    // 1. Install a native built-in (appendChild) as a Proxy `get` trap on
+    //    `window.Node`. Invoking it would move `#proxy_target` after
+    //    `#getter_target`.
+    const proxyTarget = document.getElementById("proxy_target");
+    document.body.get = window.originalAppendChild;
+    window.Node = new Proxy(proxyTarget, document.body);
+
+    // Inserting a <video> via the patched appendChild runs the check.
+    const video1 = document.createElement("video");
+    document.body.appendChild(video1);
+
+    // 2. Install a native built-in (Element.prototype.remove) as a getter on
+    //    `window.Node.prototype`. Invoking it would remove `#getter_target`.
+    const getterTarget = document.getElementById("getter_target");
+    Object.defineProperty(getterTarget, "prototype", {
+      configurable: true,
+      get: Element.prototype.remove
+    });
+    window.Node = getterTarget;
+
+    const fragment = document.createDocumentFragment();
+    const video2 = document.createElement("video");
+    const iframe = document.createElement("iframe");
+    fragment.appendChild(video2);
+    fragment.appendChild(iframe);
+    document.body.appendChild(fragment);
+  )SCRIPT");
+
+  test::RunPendingTasks();
+
+  Element* proxy_target =
+      GetDocument().getElementById(AtomicString("proxy_target"));
+  Element* getter_target =
+      GetDocument().getElementById(AtomicString("getter_target"));
+  ASSERT_TRUE(proxy_target);
+  EXPECT_EQ(GetDocument().body()->firstElementChild(), proxy_target);
+  EXPECT_TRUE(getter_target);
+
+  // The check bails out, so attribution falls back to the stack, where the ad
+  // script is on top (via the patched appendChild).
+  auto* child_frame =
+      To<LocalFrame>(GetDocument().GetFrame()->Tree().FirstChild());
+  ASSERT_TRUE(child_frame);
+  EXPECT_TRUE(child_frame->IsFrameCreatedByAdScript());
+}
+
+TEST_F(AdTrackerSimTest, NonScriptCreatedAdFrameDoesNotReportCreatedByScript) {
+  main_resource_->Complete(R"HTML(
+    <iframe id="child" src="about:blank"></iframe>
+  )HTML");
+
+  auto* child_frame =
+      To<LocalFrame>(GetDocument().GetFrame()->Tree().FirstChild());
+  ASSERT_TRUE(child_frame);
+
+  EXPECT_FALSE(child_frame->IsAdFrame());
+  EXPECT_FALSE(child_frame->IsFrameCreatedByAdScript());
+
+  // Tag frame as an ad via URL filter list match (not created by ad script).
+  SetIsAdFrame(child_frame, /*created_by_ad_script=*/false);
+
+  EXPECT_TRUE(child_frame->IsAdFrame());
+  EXPECT_FALSE(child_frame->IsFrameCreatedByAdScript());
+}
+
+TEST_F(AdTrackerSimTest,
+       HtmlParsedChildOfAdFrame_DoesNotReportCreatedByScript) {
+  SimRequest child_resource("https://example.com/child.html", "text/html");
+  main_resource_->Complete(R"HTML(
+    <iframe id="child" src="https://example.com/child.html"></iframe>
+  )HTML");
+
+  auto* child_frame =
+      To<LocalFrame>(GetDocument().GetFrame()->Tree().FirstChild());
+  ASSERT_TRUE(child_frame);
+
+  // Tag child frame as an ad via URL filter list match (not created by ad
+  // script).
+  SetIsAdFrame(child_frame, /*created_by_ad_script=*/false);
+  EXPECT_TRUE(child_frame->IsAdFrame());
+  EXPECT_FALSE(child_frame->IsFrameCreatedByAdScript());
+
+  // Now the child frame parses its own HTML, which has a sub-iframe.
+  // This sub-iframe is parsed from HTML, NOT created by script.
+  child_resource.Complete(R"HTML(
+    <iframe id="subchild" src="about:blank"></iframe>
+  )HTML");
+
+  auto* subchild_frame = To<LocalFrame>(child_frame->Tree().FirstChild());
+  ASSERT_TRUE(subchild_frame);
+
+  // Because the subchild frame is parsed from HTML and not created by script,
+  // and the parent ad frame was also not created by ad script, it should not
+  // report being created by ad script.
+  EXPECT_FALSE(subchild_frame->IsFrameCreatedByAdScript());
+}
+
+TEST_F(AdTrackerSimTest, MetaRefreshInjectedByAdScript_IsAd) {
+  String ad_script_url = "https://example.com/script.js?ad=true";
+  SimSubresourceRequest ad_script(ad_script_url, "text/javascript");
+  SimRequest dest_resource("https://example.com/dest.html", "text/html");
+
+  main_resource_->Complete(R"HTML(
+    <head></head>
+    <body><script src="script.js?ad=true"></script></body>
+  )HTML");
+
+  ad_script.Complete(R"SCRIPT(
+    const meta = document.createElement('meta');
+    meta.httpEquiv = 'refresh';
+    meta.content = '0;url=https://example.com/dest.html';
+    document.head.appendChild(meta);
+  )SCRIPT");
+
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(ad_tracker_->last_is_ad_script_in_stack_result());
+
+  // Clean up for SimTest expectations.
+  dest_resource.Complete("<body></body>");
+}
+
+TEST_F(AdTrackerSimTest, MetaRefreshInjectedByVanillaScript_IsNotAd) {
+  String vanilla_script_url = "https://example.com/script.js";
+  SimSubresourceRequest vanilla_script(vanilla_script_url, "text/javascript");
+  SimRequest dest_resource("https://example.com/dest.html", "text/html");
+
+  main_resource_->Complete(R"HTML(
+    <head></head>
+    <body><script src="script.js"></script></body>
+  )HTML");
+
+  vanilla_script.Complete(R"SCRIPT(
+    const meta = document.createElement('meta');
+    meta.httpEquiv = 'refresh';
+    meta.content = '0;url=https://example.com/dest.html';
+    document.head.appendChild(meta);
+  )SCRIPT");
+
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_FALSE(ad_tracker_->last_is_ad_script_in_stack_result());
+
+  // Clean up for SimTest expectations.
+  dest_resource.Complete("<body></body>");
+}
+
+TEST_F(AdTrackerSimTest, FormSubmissionTriggeredByAdScript_IsAd) {
+  String ad_script_url = "https://example.com/script.js?ad=true";
+  SimSubresourceRequest ad_script(ad_script_url, "text/javascript");
+  SimRequest dest_resource("https://example.com/dest.html", "text/html");
+
+  main_resource_->Complete(R"HTML(
+    <head></head>
+    <body>
+      <form id="f" method="POST" action="https://example.com/dest.html"></form>
+      <script src="https://example.com/script.js?ad=true"></script>
+    </body>
+  )HTML");
+
+  ad_script.Complete("document.getElementById('f').submit();");
+
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(ad_tracker_->last_is_ad_script_in_stack_result());
+
+  // Clean up for SimTest expectations.
+  dest_resource.Complete("<body></body>");
+}
+
+TEST_F(AdTrackerSimTest, FormSubmissionTriggeredByVanillaScript_IsNotAd) {
+  String vanilla_script_url = "https://example.com/script.js";
+  SimSubresourceRequest vanilla_script(vanilla_script_url, "text/javascript");
+  SimRequest dest_resource("https://example.com/dest.html", "text/html");
+
+  main_resource_->Complete(R"HTML(
+    <head></head>
+    <body>
+      <form id="f" method="POST" action="https://example.com/dest.html"></form>
+      <script src="https://example.com/script.js"></script>
+    </body>
+  )HTML");
+
+  vanilla_script.Complete("document.getElementById('f').submit();");
+
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_FALSE(ad_tracker_->last_is_ad_script_in_stack_result());
+
+  // Clean up for SimTest expectations.
+  dest_resource.Complete("<body></body>");
 }
 
 }  // namespace blink

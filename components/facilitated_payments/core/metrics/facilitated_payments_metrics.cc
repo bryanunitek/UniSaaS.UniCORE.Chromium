@@ -5,12 +5,11 @@
 #include "components/facilitated_payments/core/metrics/facilitated_payments_metrics.h"
 
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/time/time.h"
-#include "components/facilitated_payments/core/mojom/pix_code_validator.mojom.h"
 #include "components/facilitated_payments/core/utils/facilitated_payments_utils.h"
 #include "components/facilitated_payments/core/validation/payment_link_validator.h"
-#include "components/facilitated_payments/core/validation/pix_code_validator.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 
 namespace payments::facilitated {
@@ -78,16 +77,17 @@ std::string PaymentLinkFopSelectorTypesToString(
   }
 }
 
-std::string PixCodeValidationResultToString(PixCodeValidationResult result) {
-  switch (result) {
-    case PixCodeValidationResult::kDynamic:
-      return "DynamicCode";
-    case PixCodeValidationResult::kStatic:
-      return "StaticCode";
-    case PixCodeValidationResult::kInvalid:
-      return "InvalidCode";
-    case PixCodeValidationResult::kValidatorFailed:
-      return "ValidatorFailed";
+std::string AccountLinkingPromptUserActionToString(
+    AccountLinkingPromptUserAction user_action) {
+  switch (user_action) {
+    case AccountLinkingPromptUserAction::kAccepted:
+      return "Accepted";
+    case AccountLinkingPromptUserAction::kDeclined:
+      return "Declined";
+    case AccountLinkingPromptUserAction::kDismissed:
+      return "Dismissed";
+    case AccountLinkingPromptUserAction::kShown:
+      NOTREACHED();
   }
 }
 
@@ -221,38 +221,6 @@ void LogPaymentCodeRustValidationResult(
     PixCodeRustValidationResult rust_result) {
   base::UmaHistogramEnumeration(
       "FacilitatedPayments.Pix.PaymentCodeValidation.RustResult", rust_result);
-}
-
-void LogPaymentCodeValidationResultAndLatency(
-    PixCodeValidationResult result,
-    std::optional<PixCodeRustValidationResult> rust_validation_result,
-    base::TimeDelta duration) {
-  base::UmaHistogramEnumeration(
-      "FacilitatedPayments.Pix.PaymentCodeValidation.Result", result);
-  PixCodeValidationResult translated_rust_result = [&] {
-    if (!rust_validation_result) {
-      return PixCodeValidationResult::kInvalid;
-    }
-    switch (*rust_validation_result) {
-      case PixCodeRustValidationResult::kDynamic:
-        return PixCodeValidationResult::kDynamic;
-      case PixCodeRustValidationResult::kStatic:
-        return PixCodeValidationResult::kStatic;
-      case PixCodeRustValidationResult::kNonPixMerchantPresentedCode:
-      case PixCodeRustValidationResult::kEmptyAdditionalDataFieldTemplate:
-      case PixCodeRustValidationResult::kNonFinalCrc:
-      case PixCodeRustValidationResult::kUnknownPixCodeType:
-        return PixCodeValidationResult::kInvalid;
-    }
-  }();
-  base::UmaHistogramEnumeration(
-      base::StrCat({"FacilitatedPayments.Pix.PaymentCodeValidation.",
-                    PixCodeValidationResultToString(result), ".ResultVsRust"}),
-      translated_rust_result);
-  base::UmaHistogramLongTimes(
-      base::StrCat({"FacilitatedPayments.Pix.PaymentCodeValidation.",
-                    PixCodeValidationResultToString(result), ".Latency"}),
-      duration);
 }
 
 void LogApiAvailabilityCheckResultAndLatency(
@@ -559,10 +527,35 @@ void LogInvokePaymentAppResultAndLatency(
   }
 }
 
-void LogPixAccountLinkingPromptAccepted() {
+void LogAccountLinkingPromptUserAction(
+    FacilitatedPaymentsType payment_type,
+    AccountLinkingPromptUserAction user_action) {
+  base::UmaHistogramEnumeration(
+      base::StrCat({"FacilitatedPayments.", PaymentTypeToString(payment_type),
+                    ".AccountLinking.PromptUserAction"}),
+      user_action);
+}
+
+void LogAccountLinkingPromptFailedToShow(FacilitatedPaymentsType payment_type) {
   base::UmaHistogramBoolean(
-      base::StrCat({kPixAccountLinkingHistogramPrefix, "PromptAccepted"}),
+      base::StrCat({"FacilitatedPayments.", PaymentTypeToString(payment_type),
+                    ".AccountLinking.PromptFailedToShow"}),
       /*sample=*/true);
+}
+
+void LogAccountLinkingPromptInteractionDuration(
+    FacilitatedPaymentsType payment_type,
+    AccountLinkingPromptUserAction user_action,
+    base::TimeDelta duration) {
+  base::UmaHistogramLongTimes(
+      base::StrCat({"FacilitatedPayments.", PaymentTypeToString(payment_type),
+                    ".AccountLinking.PromptInteractionDuration"}),
+      duration);
+  base::UmaHistogramLongTimes(
+      base::StrCat({"FacilitatedPayments.", PaymentTypeToString(payment_type),
+                    ".AccountLinking.PromptInteractionDuration.",
+                    AccountLinkingPromptUserActionToString(user_action)}),
+      duration);
 }
 
 void LogPixAccountLinkingPromptShown() {
@@ -604,6 +597,12 @@ void LogAccountLinkingFlowExitedReason(std::string_view fop_suffix,
       base::StrCat({"FacilitatedPayments.", fop_suffix,
                     ".AccountLinking.FlowExitedReason"}),
       reason);
+}
+
+void LogAccountLinkingResult(std::string_view fop_suffix, bool is_successful) {
+  base::UmaHistogramBoolean(base::StrCat({"FacilitatedPayments.", fop_suffix,
+                                          ".AccountLinking.Result"}),
+                            is_successful);
 }
 
 }  // namespace payments::facilitated

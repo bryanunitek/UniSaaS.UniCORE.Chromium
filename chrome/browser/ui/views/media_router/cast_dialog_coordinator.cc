@@ -19,6 +19,7 @@
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "components/media_router/browser/media_router_metrics.h"
 #include "ui/actions/actions.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/view.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget.h"
@@ -62,7 +63,8 @@ void CastDialogCoordinator::OnBubbleAnchorVisible(
   }
   if (anchor.has_value()) {
     auto* action_item = actions::ActionManager::Get().FindAction(
-        kActionRouteMedia, browser->GetActions()->root_action_item());
+        kActionRouteMedia,
+        BrowserActions::From(browser.get())->root_action_item());
     Show(anchor.value(), views::BubbleBorder::TOP_RIGHT, controller.get(),
          browser->GetProfile(), start_time, activation_location, action_item,
          std::move(after_shown_callback));
@@ -126,7 +128,7 @@ void CastDialogCoordinator::Show(
     MediaRouterDialogActivationLocation activation_location,
     actions::ActionItem* action_item,
     AfterShownCallback after_shown_callback) {
-  DCHECK(!start_time.is_null());
+  CHECK(!start_time.is_null(), base::NotFatalUntil::M162);
   // Hide the previous dialog instance if it exists, since there can only be one
   // instance at a time.
   Hide();

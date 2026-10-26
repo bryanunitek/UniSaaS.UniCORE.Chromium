@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 #include "base/numerics/clamped_math.h"
@@ -83,8 +84,7 @@ void ParseMargin(const String& margin_parameter,
                  Vector<Length>& margin,
                  ExceptionState& exception_state,
                  const char* margin_name) {
-  // TODO(szager): Make sure this exact syntax and behavior is spec-ed
-  // somewhere.
+  // https://w3c.github.io/IntersectionObserver/#parse-a-margin
 
   // The root margin argument accepts syntax similar to that for CSS margin:
   //
@@ -106,14 +106,18 @@ void ParseMargin(const String& margin_parameter,
     if (token.GetType() == kPercentageToken) {
       margin.push_back(Length::Percent(token.NumericValue()));
     } else if (token.GetType() == kDimensionToken &&
-               token.GetUnitType() == CSSPrimitiveValue::UnitType::kPixels) {
-      margin.push_back(
-          Length::Fixed(static_cast<int>(floor(token.NumericValue()))));
+               CSSPrimitiveValue::IsAbsoluteLengthUnit(token.GetUnitType())) {
+      const double pixels =
+          token.NumericValue() *
+          CSSPrimitiveValue::ConversionToCanonicalUnitsScaleFactor(
+              token.GetUnitType());
+      margin.push_back(Length::Fixed(static_cast<int>(floor(pixels))));
     } else {
       exception_state.ThrowDOMException(
           DOMExceptionCode::kSyntaxError,
-          StrCat(
-              {margin_name, "Margin must be specified in pixels or percent."}));
+          StrCat({margin_name,
+                  "Margin must be specified in absolute length units or "
+                  "percent."}));
       break;
     }
     stream.ConsumeIncludingWhitespace();
@@ -232,7 +236,7 @@ void IntersectionObserver::SetThrottleDelayEnabledForTesting(bool enabled) {
 IntersectionObserver* IntersectionObserver::Create(
     const IntersectionObserverInit* observer_init,
     IntersectionObserverDelegate& delegate,
-    std::optional<LocalFrameUkmAggregator::MetricId> ukm_metric_id,
+    std::optional<LocalFrameMetricsAggregator::MetricId> ukm_metric_id,
     ExceptionState& exception_state) {
   Node* root = nullptr;
   if (observer_init->root()) {
@@ -298,14 +302,14 @@ IntersectionObserver* IntersectionObserver::Create(
                       WebFeature::kIntersectionObserverV2);
   }
   return Create(observer_init, *delegate,
-                LocalFrameUkmAggregator::kJavascriptIntersectionObserver,
+                LocalFrameMetricsAggregator::kJavascriptIntersectionObserver,
                 exception_state);
 }
 
 IntersectionObserver* IntersectionObserver::Create(
     const Document& document,
     EventCallback callback,
-    std::optional<LocalFrameUkmAggregator::MetricId> ukm_metric_id,
+    std::optional<LocalFrameMetricsAggregator::MetricId> ukm_metric_id,
     Params&& params) {
   IntersectionObserverDelegateImpl* intersection_observer_delegate =
       MakeGarbageCollected<IntersectionObserverDelegateImpl>(
@@ -316,7 +320,7 @@ IntersectionObserver* IntersectionObserver::Create(
 
 IntersectionObserver::IntersectionObserver(
     IntersectionObserverDelegate& delegate,
-    std::optional<LocalFrameUkmAggregator::MetricId> ukm_metric_id,
+    std::optional<LocalFrameMetricsAggregator::MetricId> ukm_metric_id,
     Params&& params)
     : ActiveScriptWrappable<IntersectionObserver>({}),
       ExecutionContextClient(delegate.GetExecutionContext()),
@@ -333,7 +337,8 @@ IntersectionObserver::IntersectionObserver(
       track_fraction_of_root_(params.semantics == kFractionOfRoot),
       always_report_root_bounds_(params.always_report_root_bounds),
       use_overflow_clip_edge_(params.use_overflow_clip_edge),
-      expose_occluder_id_(params.expose_occluder_id) {
+      expose_occluder_id_(params.expose_occluder_id),
+      hit_node_cb_(std::move(params.hit_node_cb)) {
   if (params.root) {
     if (params.root->IsDocumentNode()) {
       To<Document>(params.root)
@@ -345,6 +350,10 @@ IntersectionObserver::IntersectionObserver(
           ->EnsureIntersectionObserverData()
           .AddObserver(*this);
     }
+  }
+  if (params.hit_node_cb) {
+    DCHECK(track_visibility_);
+    DCHECK(!hit_node_cb_->is_null());
   }
 }
 
@@ -448,7 +457,7 @@ base::TimeDelta IntersectionObserver::GetEffectiveDelay() const {
 bool IntersectionObserver::IsInternal() const {
   return !GetUkmMetricId() ||
          GetUkmMetricId() !=
-             LocalFrameUkmAggregator::kJavascriptIntersectionObserver;
+             LocalFrameMetricsAggregator::kJavascriptIntersectionObserver;
 }
 
 void IntersectionObserver::ReportUpdates(IntersectionObservation& observation) {

@@ -40,6 +40,7 @@ source_set("web") {
     "//ios/third_party/webkit",
     "//ios/web/common",
     "//ios/web/download",
+    "//ios/web/extension",
     "//ios/web/favicon",
     "//ios/web/init",
     "//ios/web/js_image_transcoder",
@@ -47,6 +48,7 @@ source_set("web") {
     "//ios/web/navigation:proto_util",
     "//ios/web/navigation:wk_navigation_util",
     "//ios/web/net",
+    "//ios/web/proxy",
     "//ios/web/public",
     "//ios/web/public/init",
     "//ios/web/public/js_messaging:gcrweb_js",
@@ -73,6 +75,7 @@ source_set("web") {
     "browser_state_utils.mm",
     "browser_url_rewriter_impl.h",
     "browser_url_rewriter_impl.mm",
+    "content_type_util.cc",
     "network_context_owner.cc",
     "web_client.mm",
   ]
@@ -157,6 +160,7 @@ bundle_data("ios_web_unittests_bundle_data") {
   testonly = true
   sources = [
     "test/data/chrome.html",
+    "test/data/dummy_extension/manifest.json",
     "test/data/testbadpass.pkpass",
     "test/data/testfavicon.png",
     "test/data/testpass.pkpass",
@@ -183,6 +187,8 @@ test("ios_web_unittests") {
     "//ios/web/browsing_data:browsing_data_unittests",
     "//ios/web/common:unittests",
     "//ios/web/download:download_unittests",
+    "//ios/web/extension:unittests",
+    "//ios/web/extension/gpc_web_extension:unittests",
     "//ios/web/favicon:unittests",
     "//ios/web/find_in_page:find_in_page_unittests",
     "//ios/web/js_features/clipboard:unittests",
@@ -192,6 +198,7 @@ test("ios_web_unittests") {
     "//ios/web/js_features/window_error:unittests",
     "//ios/web/js_image_transcoder:unittests",
     "//ios/web/js_messaging:unittests",
+    "//ios/web/proxy:unittests",
     "//ios/web/public/js_messaging:unittests",
     "//ios/web/public/session/proto:unittests",
     "//ios/web/public/web_view_only:unittests",
@@ -237,6 +244,7 @@ source_set("ios_web_general_unittests") {
 
   sources = [
     "browser_state_unittest.mm",
+    "content_type_util_unittest.cc",
     "history_state_util_unittest.mm",
     "network_context_owner_unittest.cc",
     "test/web_test_unittest.mm",
@@ -415,7 +423,9 @@ source_set("ios_web_web_state_unittests") {
   ]
 
   sources = [
+    "web_state/crw_input_view_suppressor_unittest.mm",
     "web_state/crw_web_view_data_controls_unittest.mm",
+    "web_state/crw_web_view_unittest.mm",
     "web_state/data_controls_protocol_smoke_unittest.mm",
     "web_state/policy_decision_state_tracker_unittest.mm",
     "web_state/web_state_context_menu_bridge_unittest.mm",
@@ -441,17 +451,23 @@ source_set("ios_web_web_state_ui_unittests") {
     "//ios/testing:ocmock_support",
     "//ios/web/common",
     "//ios/web/common:uikit",
+    "//ios/web/extension",
     "//ios/web/js_features/context_menu",
     "//ios/web/js_messaging",
     "//ios/web/js_messaging:web_view_js_utils",
     "//ios/web/navigation",
     "//ios/web/navigation:block_universal_links_buildflags",
     "//ios/web/navigation:core",
+    "//ios/web/navigation:wk_navigation_util",
     "//ios/web/public",
     "//ios/web/public/download",
+    "//ios/web/public/extension",
     "//ios/web/public/js_messaging",
     "//ios/web/public/session",
     "//ios/web/public/test",
+    "//ios/web/public/test:test_fixture",
+    "//ios/web/public/test/fakes",
+    "//ios/web/public/webui",
     "//ios/web/security",
     "//ios/web/test:mojo_bindings",
     "//ios/web/test:test_constants",
@@ -471,6 +487,8 @@ source_set("ios_web_web_state_ui_unittests") {
 
   sources = [
     "web_state/ui/crw_html_element_fetch_request_unittest.mm",
+    "web_state/ui/crw_permission_request_unittest.mm",
+    "web_state/ui/crw_viewport_insets_animator_unittest.mm",
     "web_state/ui/crw_web_controller_unittest.mm",
     "web_state/ui/crw_web_view_content_view_unittest.mm",
     "web_state/ui/crw_web_view_proxy_impl_unittest.mm",
@@ -521,6 +539,7 @@ test("ios_web_inttests") {
   deps = [
     ":web",
     "//base/test:test_support",
+    "//components/enterprise/net/core",
     "//components/sessions:session_id",
     "//crypto:test_support",
     "//ios/net",
@@ -533,6 +552,7 @@ test("ios_web_inttests") {
     "//ios/web/common:uikit",
     "//ios/web/common:web_view_creation_util",
     "//ios/web/download:download_inttests",
+    "//ios/web/extension:inttests",
     "//ios/web/favicon:inttests",
     "//ios/web/find_in_page",
     "//ios/web/js_features/context_menu",
@@ -589,9 +609,11 @@ test("ios_web_inttests") {
     "web_state/client_cert_auth_inttest.mm",
     "web_state/error_page_inttest.mm",
     "web_state/http_auth_inttest.mm",
+    "web_state/http_proxy_auth_inttest.mm",
     "web_state/keep_render_process_alive_inttest.mm",
     "web_state/permissions_inttest.mm",
     "web_state/ui/crw_context_menu_element_fetcher_inttest.mm",
+    "web_state/web_state_impl_inttest.mm",
     "web_state/web_state_observer_inttest.mm",
     "webui/web_ui_inttest.mm",
     "webui/web_ui_mojo_inttest.mm",
@@ -611,6 +633,14 @@ bundle_data("navigation_resources") {
 
 grit("resources") {
   source = "ios_web_resources.grd"
+
+  inputs = [
+    "${root_gen_dir}/mojo/public/js/mojo_bindings.js",
+    "${root_gen_dir}/ui/webui/resources/tsc/mojo/url/mojom/url.mojom-webui.js",
+    "${root_gen_dir}/ui/webui/resources/tsc/mojo/url/mojom/origin.mojom-webui.js",
+    "${root_gen_dir}/ui/webui/resources/tsc/mojo/ui/base/mojom/window_open_disposition.mojom-webui.js",
+    "${root_gen_dir}/ui/webui/resources/tsc/mojo/ui/base/mojom/ui_base_types.mojom-webui.js",
+  ]
 
   outputs = [
     "grit/ios_web_resources.h",

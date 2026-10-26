@@ -14,10 +14,7 @@ source_set("app_service") {
     "web_apps.h",
   ]
 
-  allow_circular_includes_from = []
-
   public_deps = [
-    "//chrome/browser:browser_public_dependencies",
     "//chrome/browser/badging",
     "//chrome/browser/media/webrtc",
     "//chrome/browser/notifications",
@@ -45,7 +42,6 @@ source_set("app_service") {
     deps += [
       "//ash/public/cpp",
       "//ash/strings",
-      "//ash/webui/projector_app/public/cpp",
       "//chrome/browser/apps/almanac_api_client",
       "//chrome/browser/apps/browser_instance",
       "//chrome/browser/ash/file_manager",
@@ -60,7 +56,6 @@ source_set("app_service") {
       "//components/services/app_service/public/cpp:instance_update",
       "//extensions/browser/api/file_handlers",
     ]
-    allow_circular_includes_from += [ "//chrome/browser/apps/browser_instance" ]
   }
 }
 

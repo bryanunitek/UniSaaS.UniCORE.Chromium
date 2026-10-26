@@ -19,6 +19,7 @@ import android.view.ViewStub;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.lifetime.LifetimeAssert;
 import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
@@ -89,6 +90,11 @@ public class ExtensionsToolbarCoordinatorImpl
                 public void showManageExtensionsIPH() {
                     showIphInternal();
                 }
+
+                @Override
+                public void showPinnedByDefaultIPH(String extensionId) {
+                    showPinnedByDefaultIphInternal(extensionId);
+                }
             };
     private final MenuButtonPinningDelegate mMenuButtonPinningDelegate =
             new MenuButtonPinningDelegate();
@@ -102,6 +108,7 @@ public class ExtensionsToolbarCoordinatorImpl
     private int mLastDensityDpi;
     private int mLastIconWidthPx;
     private @Nullable Runnable mOnFeatureRemoved;
+    private boolean mIsWebApp;
 
     @Override
     public void initializeWithNative(
@@ -118,7 +125,10 @@ public class ExtensionsToolbarCoordinatorImpl
             @Nullable SelectionDropdownMenuDelegate selectionDropdownMenuDelegate,
             TabModelSelector tabModelSelector,
             ModalDialogManager modalDialogManager,
-            @Nullable Runnable onFeatureRemoved) {
+            @Nullable Runnable onFeatureRemoved,
+            Runnable clearOmniboxFocus,
+            boolean isWebApp) {
+        mIsWebApp = isWebApp;
         mBridge = new ExtensionActionsBridge(task, profile);
         mWindowAndroid = windowAndroid;
         mProfile = profile;
@@ -146,7 +156,8 @@ public class ExtensionsToolbarCoordinatorImpl
                         contextMenuPopulatorFactory,
                         selectionDropdownMenuDelegate,
                         tabModelSelector,
-                        modalDialogManager);
+                        modalDialogManager,
+                        clearOmniboxFocus);
         mToolbarModel = new PropertyModel.Builder(ExtensionsToolbarProperties.ALL_KEYS).build();
         mMenuButtonChangeProcessor =
                 PropertyModelChangeProcessor.create(
@@ -166,7 +177,9 @@ public class ExtensionsToolbarCoordinatorImpl
                         tabCreator,
                         mExtensionsToolbarBridge,
                         mMenuButtonPinningDelegate,
-                        modalDialogManager);
+                        modalDialogManager,
+                        clearOmniboxFocus,
+                        mIsWebApp);
 
         mExtensionAccessControlButtonCoordinator =
                 new ExtensionAccessControlButtonCoordinator(
@@ -174,10 +187,11 @@ public class ExtensionsToolbarCoordinatorImpl
                         currentTabSupplier,
                         mExtensionsToolbarBridge,
                         (TextView) mContainer.findViewById(R.id.extensions_request_access_button),
-                        (v) -> {},
+                        CallbackUtils.emptyCallback(),
                         () ->
                                 mContainer.getResources().getConfiguration().screenWidthDp
-                                        < COMPACT_WINDOW_THRESHOLD_DP);
+                                        < COMPACT_WINDOW_THRESHOLD_DP,
+                        clearOmniboxFocus);
         mPrefChangeRegistrar = PrefServiceUtil.createFor(profile);
         mPrefChangeRegistrar.addObserver(
                 Pref.PIN_EXTENSIONS_MENU_BUTTON, this::updateMenuButtonPinState);
@@ -189,6 +203,7 @@ public class ExtensionsToolbarCoordinatorImpl
         mLastIconWidthPx =
                 context.getResources()
                         .getDimensionPixelSize(R.dimen.extension_action_icon_canvas_width);
+        updateMenuIconVisibility();
     }
 
     @Override
@@ -310,7 +325,6 @@ public class ExtensionsToolbarCoordinatorImpl
         // Post to click after the layout pass.
         extensionsMenuButton.post(
                 () -> {
-                    mShowExtensionsMenuPending = false;
                     extensionsMenuButton.performClick();
                 });
     }
@@ -375,6 +389,70 @@ public class ExtensionsToolbarCoordinatorImpl
                         .build());
     }
 
+    private void showPinnedByDefaultIphInternal(String extensionId) {
+        if (mProfile.shutdownStarted()) {
+            return;
+        }
+
+        Activity activity = mWindowAndroid.getActivity().get();
+        if (activity == null) {
+            return;
+        }
+
+        View anchorView = mExtensionActionListCoordinator.getButtonViewForId(extensionId);
+        if (anchorView == null) {
+            return;
+        }
+
+        Handler handler = new Handler(Looper.getMainLooper());
+
+        if (anchorView.isShown()) {
+            showPinnedByDefaultIphInternalHelper(activity, anchorView, handler);
+        } else {
+            // Wait for it to be laid out and visible.
+            final View finalAnchor = anchorView;
+            anchorView.addOnLayoutChangeListener(
+                    new View.OnLayoutChangeListener() {
+                        @Override
+                        public void onLayoutChange(
+                                View v,
+                                int left,
+                                int top,
+                                int right,
+                                int bottom,
+                                int oldLeft,
+                                int oldTop,
+                                int oldRight,
+                                int oldBottom) {
+                            if (v.isShown()) {
+                                v.removeOnLayoutChangeListener(this);
+                                showPinnedByDefaultIphInternalHelper(
+                                        activity, finalAnchor, handler);
+                            }
+                        }
+                    });
+        }
+    }
+
+    private void showPinnedByDefaultIphInternalHelper(
+            Activity activity, View anchorView, Handler handler) {
+        UserEducationHelper userEducationHelper =
+                new UserEducationHelper(activity, mProfile, handler);
+
+        userEducationHelper.requestShowIph(
+                new IphCommandBuilder(
+                                anchorView.getContext().getResources(),
+                                FeatureConstants.IPH_EXTENSIONS_PINNED_BY_DEFAULT_FEATURE,
+                                R.string.extensions_pinned_by_default_iph_body,
+                                R.string.extensions_pinned_by_default_iph_body)
+                        .setAnchorView(anchorView)
+                        .setPreferredHorizontalOrientation(
+                                HorizontalOrientation.MAX_AVAILABLE_SPACE)
+                        .setHorizontalOverlapAnchor(true)
+                        .setInsetRect(new Rect())
+                        .build());
+    }
+
     private void saveMenuButtonPinState(boolean pinned) {
         mPrefService.setBoolean(Pref.PIN_EXTENSIONS_MENU_BUTTON, pinned);
         updateMenuButtonPinState();
@@ -391,6 +469,9 @@ public class ExtensionsToolbarCoordinatorImpl
     }
 
     private boolean isMenuButtonPinned() {
+        if (mIsWebApp) {
+            return false;
+        }
         if (mProfile.shutdownStarted()) {
             // TODO(crbug.com/459079170): This is to prevent tests from breaking. {@code
             // ExtensionsToolbarCoordinatorImpl} should ideally be destroyed following {@code
@@ -421,6 +502,8 @@ public class ExtensionsToolbarCoordinatorImpl
         }
 
         void requestLayoutWithViewUtils() {
+            mShowExtensionsMenuPending = false;
+            updateMenuIconVisibility();
             // Trigger layout and wait for the toolbar to provide us with width allocation.
             ViewUtils.requestLayout(
                     mContainer, "ExtensionsToolbarCoordinatorImpl.requestLayoutWithViewUtils()");
@@ -428,7 +511,7 @@ public class ExtensionsToolbarCoordinatorImpl
     }
 
     @Override
-    public PoppedOutActionWidthConsumer getPoppedOutActionWidthConsumer() {
+    public ToolbarWidthConsumer getPoppedOutActionWidthConsumer() {
         return mPoppedOutActionWidthConsumer;
     }
 

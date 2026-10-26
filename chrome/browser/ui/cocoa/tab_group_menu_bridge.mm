@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/cocoa/tab_group_menu_bridge.h"
 
+#include <vector>
+
 #include "base/apple/foundation_util.h"
 #include "base/metrics/user_metrics.h"
 #include "base/strings/sys_string_conversions.h"
@@ -12,9 +14,6 @@
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/favicon/favicon_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_command_controller.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
@@ -29,6 +28,7 @@
 #include "components/favicon_base/favicon_types.h"
 #include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/public/saved_tab_group.h"
+#import "ui/base/cocoa/macos27_sdk.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_provider.h"
@@ -146,12 +146,19 @@ void TabGroupMenuBridge::BuildMenu() {
                                           : kTabGroupOldIcon,
         gfx::kFaviconSize, color_provider.GetColor(color_id));
     item.image = NSImageFromImageSkia(group_icon);
+    if (@available(macOS 27, *)) {
+      item.preferredImageVisibility = NSMenuItemImageVisibilityVisible;
+    }
 
     NSMenu* submenu = [[NSMenu alloc] init];
-    // Add static menu items for submenu.
     [submenu addItem:CreateStaticSubmenuItem(
-                         IDS_OPEN_GROUP_IN_BROWSER_MENU,
-                         TabGroupMenuAction::Type::OPEN_IN_BROWSER, uuid)];
+                         group->local_group_id().has_value()
+                             ? IDS_TAB_GROUP_HEADER_CXMENU_CLOSE_GROUP
+                             : IDS_OPEN_GROUP_IN_BROWSER_MENU,
+                         group->local_group_id().has_value()
+                             ? TabGroupMenuAction::Type::CLOSE_GROUP
+                             : TabGroupMenuAction::Type::OPEN_IN_BROWSER,
+                         uuid)];
     [submenu
         addItem:CreateStaticSubmenuItem(
                     group->local_group_id().has_value()
@@ -159,13 +166,11 @@ void TabGroupMenuBridge::BuildMenu() {
                         : IDS_TAB_GROUP_HEADER_CXMENU_OPEN_GROUP_IN_NEW_WINDOW,
                     TabGroupMenuAction::Type::OPEN_OR_MOVE_TO_NEW_WINDOW,
                     uuid)];
-    if (!tab_groups::IsProjectsPanelFeatureEnabled()) {
-      [submenu addItem:CreateStaticSubmenuItem(
-                           group->is_pinned()
-                               ? IDS_TAB_GROUP_HEADER_CXMENU_UNPIN_GROUP
-                               : IDS_TAB_GROUP_HEADER_CXMENU_PIN_GROUP,
-                           TabGroupMenuAction::Type::PIN_OR_UNPIN_GROUP, uuid)];
-    }
+    [submenu
+        addItem:CreateStaticSubmenuItem(
+                    group->is_pinned() ? IDS_TAB_GROUP_HEADER_CXMENU_UNPIN_GROUP
+                                       : IDS_TAB_GROUP_HEADER_CXMENU_PIN_GROUP,
+                    TabGroupMenuAction::Type::PIN_OR_UNPIN_GROUP, uuid)];
     bool is_owner =
         tab_groups::SavedTabGroupUtils::IsOwnerOfSharedTabGroup(profile_, uuid);
     [submenu addItem:CreateStaticSubmenuItem(
@@ -190,6 +195,10 @@ void TabGroupMenuBridge::BuildMenu() {
           GetTabGroupBookmarkColorId(group->color()));
       tab_menu_item.image =
           NSImageFromImageSkia(image.Rasterize(&color_provider));
+      if (@available(macOS 27, *)) {
+        tab_menu_item.preferredImageVisibility =
+            NSMenuItemImageVisibilityVisible;
+      }
 
       if (favicon_service_) {
         favicon_service_->GetFaviconImageForPageURL(
@@ -219,6 +228,9 @@ void TabGroupMenuBridge::OnFaviconReady(
     const favicon_base::FaviconImageResult& result) {
   if (!result.image.IsEmpty()) {
     menu_item.image = result.image.ToNSImage();
+    if (@available(macOS 27, *)) {
+      menu_item.preferredImageVisibility = NSMenuItemImageVisibilityVisible;
+    }
   }
 }
 
@@ -256,8 +268,8 @@ void TabGroupMenuBridge::OnMenuItem(NSMenuItem* item) {
 
   tab_groups::TabGroupMenuAction action = it->second;
   tab_groups::SavedTabGroupUtils::PerformTabGroupMenuAction(
-      action, tab_groups::TabGroupMenuContext::MAC_SYSTEM_MENU,
-      browser->GetBrowserForMigrationOnly(), tab_group_service_);
+      action, tab_groups::TabGroupMenuContext::MAC_SYSTEM_MENU, browser,
+      tab_group_service_);
 }
 
 NSMenuItem* TabGroupMenuBridge::CreateStaticSubmenuItem(

@@ -20,7 +20,6 @@ import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-import androidx.recyclerview.widget.RecyclerView.ItemAnimator;
 
 import org.chromium.base.Callback;
 import org.chromium.base.supplier.NonNullObservableSupplier;
@@ -114,8 +113,12 @@ public class TabListRecyclerView extends RecyclerView
      *
      * @param blockTouchInput Whether the touch inputs should be blocked.
      */
-    void setBlockTouchInput(boolean blockTouchInput) {
+    public void setBlockTouchInput(boolean blockTouchInput) {
         mBlockTouchInput = blockTouchInput;
+    }
+
+    boolean isTouchInputBlockedForTesting() {
+        return mBlockTouchInput;
     }
 
     void setDisableItemAnimations(boolean disable) {
@@ -151,6 +154,10 @@ public class TabListRecyclerView extends RecyclerView
         mKeyPageListenerCallback = callback;
     }
 
+    @Nullable Callback<TabKeyEventData> getPageKeyListenerCallbackForTesting() {
+        return mKeyPageListenerCallback;
+    }
+
     /**
      * Returns a boolean indicating whether any animator in {@link TabListItemAnimator} is running.
      */
@@ -160,15 +167,13 @@ public class TabListRecyclerView extends RecyclerView
 
     /**
      * @param tabIndex The index in the RecyclerView of the tab.
-     * @param tabId The tab ID of the tab.
      * @return The {@link Rect} of the thumbnail of the tab in global coordinates.
      */
-    Rect getRectOfTabThumbnail(int tabIndex, int tabId) {
+    Rect getRectOfTabThumbnail(int tabIndex) {
         SimpleRecyclerViewAdapter.ViewHolder holder =
                 (SimpleRecyclerViewAdapter.ViewHolder) findViewHolderForAdapterPosition(tabIndex);
         Rect rect = new Rect();
         if (holder == null || tabIndex == TabModel.INVALID_TAB_INDEX) return rect;
-        assert assumeNonNull(holder.model).get(TabProperties.TAB_ID) == tabId;
         ViewLookupCachingFrameLayout root = (ViewLookupCachingFrameLayout) holder.itemView;
         View v = root.fastFindViewById(R.id.tab_thumbnail);
         if (v != null) v.getGlobalVisibleRect(rect);
@@ -177,17 +182,14 @@ public class TabListRecyclerView extends RecyclerView
 
     /**
      * @param selectedTabIndex The index in the RecyclerView of the selected tab.
-     * @param selectedTabId The tab ID of the selected tab.
-     * @return The {@link Rect} of the thumbnail of the current tab, relative to the
-     *         {@link TabListRecyclerView} coordinates.
+     * @return The {@link Rect} of the thumbnail of the current tab, relative to the {@link
+     *     TabListRecyclerView} coordinates.
      */
-    @Nullable
-    Rect getRectOfCurrentThumbnail(int selectedTabIndex, int selectedTabId) {
+    @Nullable Rect getRectOfCurrentThumbnail(int selectedTabIndex) {
         SimpleRecyclerViewAdapter.ViewHolder holder =
                 (SimpleRecyclerViewAdapter.ViewHolder)
                         findViewHolderForAdapterPosition(selectedTabIndex);
         if (holder == null || selectedTabIndex == TabModel.INVALID_TAB_INDEX) return null;
-        assert assumeNonNull(holder.model).get(TabProperties.TAB_ID) == selectedTabId;
         ViewLookupCachingFrameLayout root = (ViewLookupCachingFrameLayout) holder.itemView;
         return getRectOfComponent(root.fastFindViewById(R.id.tab_thumbnail));
     }
@@ -295,9 +297,11 @@ public class TabListRecyclerView extends RecyclerView
         if (position == -1) {
             return actions;
         }
-        GridLayoutManager layoutManager = (GridLayoutManager) getLayoutManager();
-        assumeNonNull(layoutManager);
-        int spanCount = layoutManager.getSpanCount();
+        LayoutManager layoutManager = getLayoutManager();
+        if (layoutManager == null) {
+            return actions;
+        }
+        int spanCount = (layoutManager instanceof GridLayoutManager glm) ? glm.getSpanCount() : 1;
         Context context = getContext();
 
         AccessibilityAction leftAction =
@@ -322,7 +326,8 @@ public class TabListRecyclerView extends RecyclerView
         // Decide whether the tab can be moved left/right based on current index and span count.
         if (position % spanCount == 0) {
             actions.remove(leftAction);
-        } else if (position % spanCount == spanCount - 1) {
+        }
+        if (position % spanCount == spanCount - 1) {
             actions.remove(rightAction);
         }
         // Cannot move up if the tab is in the first row.
@@ -342,10 +347,12 @@ public class TabListRecyclerView extends RecyclerView
 
     private int getSwappableItemCount() {
         int count = 0;
-        RecyclerView.Adapter adapter = getAdapter();
+        RecyclerView.Adapter<?> adapter = getAdapter();
         assumeNonNull(adapter);
         for (int i = 0; i < adapter.getItemCount(); i++) {
-            if (adapter.getItemViewType(i) == TabProperties.UiType.TAB) count++;
+            if (UiTypeHelper.isTabOrTabGroup(adapter.getItemViewType(i))) {
+                count++;
+            }
         }
         return count;
     }
@@ -365,9 +372,11 @@ public class TabListRecyclerView extends RecyclerView
     @Override
     public Pair<Integer, Integer> getPositionsOfReorderAction(View view, int action) {
         int currentPosition = getChildAdapterPosition(view);
-        GridLayoutManager layoutManager = (GridLayoutManager) getLayoutManager();
-        assumeNonNull(layoutManager);
-        int spanCount = layoutManager.getSpanCount();
+        if (currentPosition == RecyclerView.NO_POSITION) {
+            return new Pair<>(currentPosition, -1);
+        }
+        LayoutManager layoutManager = getLayoutManager();
+        int spanCount = (layoutManager instanceof GridLayoutManager glm) ? glm.getSpanCount() : 1;
         int targetPosition = -1;
 
         if (action == R.id.move_tab_left) {
@@ -400,5 +409,9 @@ public class TabListRecyclerView extends RecyclerView
 
     public void setSmoothScrolling(boolean isSmoothScrolling) {
         mIsSmoothScrolling = isSmoothScrolling;
+    }
+
+    boolean isSmoothScrollingForTesting() {
+        return mIsSmoothScrolling;
     }
 }

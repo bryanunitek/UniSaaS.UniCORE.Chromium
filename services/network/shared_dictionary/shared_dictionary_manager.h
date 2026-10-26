@@ -7,14 +7,19 @@
 
 #include <map>
 #include <memory>
+#include <optional>
+#include <string_view>
 
+#include "base/byte_size.h"
 #include "base/component_export.h"
 #include "base/containers/lru_cache.h"
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/functional/callback.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/memory_coordinator/async_memory_consumer_registration.h"
+#include "base/memory_coordinator/memory_consumer.h"
+#include "base/memory_coordinator/traits.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "net/disk_cache/disk_cache.h"
@@ -57,12 +62,12 @@ enum class SharedDictionaryStorageEvictionReason {
 // This class is attached to NetworkContext and manages the dictionaries for
 // CompressionDictionaryTransport feature.
 class COMPONENT_EXPORT(NETWORK_SERVICE) SharedDictionaryManager
-    : public base::MemoryPressureListener {
+    : public base::MemoryConsumer {
  public:
   // Returns a SharedDictionaryManager which keeps the whole dictionary
   // information in memory.
   static std::unique_ptr<SharedDictionaryManager> CreateInMemory(
-      uint64_t cache_max_size,
+      std::optional<base::ByteSize> cache_max_size,
       uint64_t cache_max_count);
 
   // Returns a SharedDictionaryManager which keeps the dictionary information
@@ -70,7 +75,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) SharedDictionaryManager
   static std::unique_ptr<SharedDictionaryManager> CreateOnDisk(
       const base::FilePath& database_path,
       const base::FilePath& cache_directory_path,
-      uint64_t cache_max_size,
+      std::optional<base::ByteSize> cache_max_size,
       uint64_t cache_max_count,
 #if BUILDFLAG(IS_ANDROID)
       disk_cache::ApplicationStatusListenerGetter app_status_listener_getter,
@@ -87,12 +92,16 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) SharedDictionaryManager
   scoped_refptr<SharedDictionaryStorage> GetStorage(
       const net::SharedDictionaryIsolationKey& isolation_key);
 
+  // Returns the unpartitioned pervasive SharedDictionaryStorage instance.
+  scoped_refptr<SharedDictionaryStorage> GetPervasiveStorage();
+
   // Called when the SharedDictionaryStorage for the `isolation_key` is
   // deleted.
   void OnStorageDeleted(const net::SharedDictionaryIsolationKey& isolation_key);
 
   // Sets the max size of shared dictionary cache.
-  virtual void SetCacheMaxSize(uint64_t cache_max_size) = 0;
+  virtual void SetCacheMaxSize(
+      std::optional<base::ByteSize> cache_max_size) = 0;
   virtual void ClearData(base::Time start_time,
                          base::Time end_time,
                          base::RepeatingCallback<bool(const GURL&)> url_matcher,
@@ -111,8 +120,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) SharedDictionaryManager
       base::Time start_time,
       base::Time end_time,
       base::OnceCallback<void(const std::vector<url::Origin>&)> callback) = 0;
-  virtual void HandleMemoryPressure(
-      base::MemoryPressureLevel memory_pressure_level) = 0;
 
   net::SharedDictionaryGetter MaybeCreateSharedDictionaryGetter(
       int request_load_flags,
@@ -125,7 +132,12 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) SharedDictionaryManager
   bool HasPreloadedSharedDictionaryInfo() const;
 
  protected:
-  SharedDictionaryManager();
+  SharedDictionaryManager(std::string_view consumer_name,
+                          const base::MemoryConsumerTraits& traits);
+
+  // base::MemoryConsumer:
+  void OnReleaseMemory() override;
+  void OnUpdateMemoryLimit() override;
 
   // Called to create a SharedDictionaryStorage for the `isolation_key`. This is
   // called only when there is no matching storage in `storages_`.
@@ -145,24 +157,24 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) SharedDictionaryManager
     return storages_;
   }
 
+  SharedDictionaryStorage* pervasive_storage() const {
+    return pervasive_storage_.get();
+  }
+
  private:
   friend class cors::CorsURLLoaderSharedDictionaryTest;
   class PreloadedDictionaries;
 
   size_t GetStorageCountForTesting();
 
-  void OnMemoryPressure(base::MemoryPressureLevel level) override;
-
   void DeletePreloadedDictionaries(
       PreloadedDictionaries* preloaded_dictionaries);
+
+  scoped_refptr<SharedDictionaryStorage> pervasive_storage_;
 
   base::LRUCache<net::SharedDictionaryIsolationKey,
                  scoped_refptr<SharedDictionaryStorage>>
       cached_storages_;
-  std::unique_ptr<base::AsyncMemoryPressureListenerRegistration>
-      memory_pressure_listener_registration_;
-  base::MemoryPressureLevel memory_pressure_level_ =
-      base::MEMORY_PRESSURE_LEVEL_NONE;
 
   std::map<net::SharedDictionaryIsolationKey, raw_ptr<SharedDictionaryStorage>>
       storages_;
@@ -172,6 +184,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) SharedDictionaryManager
   std::map<net::SharedDictionaryIsolationKey,
            SharedDictionaryStorageEvictionReason>
       previously_evicted_keys_;
+
+  base::AsyncMemoryConsumerRegistration memory_consumer_registration_;
 
   base::WeakPtrFactory<SharedDictionaryManager> weak_factory_{this};
 };

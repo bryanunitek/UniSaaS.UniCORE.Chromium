@@ -24,6 +24,7 @@ import androidx.annotation.IntDef;
 import androidx.annotation.StyleRes;
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.ObserverList;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordUserAction;
@@ -31,6 +32,8 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.R;
 import org.chromium.ui.base.LocalizationUtils;
+import org.chromium.ui.theme.FillInContextThemeWrapper;
+import org.chromium.ui.util.AttrUtils;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -42,9 +45,6 @@ import java.util.function.Supplier;
  */
 @NullMarked
 public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observer {
-    private static final int MIN_TOUCHABLE_HEIGHT_DIP = 50; // 48dp touch target plus 1dp margin.
-    private static final int MIN_TOUCHABLE_WIDTH_DIP = 50; // 48dp touch target plus 1dp margin.
-
     private static @Nullable Runnable sShowHookForTesting;
 
     /** An observer that is notified of AnchoredPopupWindow layout changes. */
@@ -166,7 +166,7 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
     /** Provides the {@link Rect} to anchor the popup to in screen space. */
     private final RectProvider mRectProvider;
 
-    private final Supplier<View> mContentViewCreator;
+    private final ViewBuilder mViewBuilder;
 
     private final Runnable mDismissRunnable =
             new Runnable() {
@@ -195,6 +195,7 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
 
                     mRectProvider.stopObserving();
                     mViewportRectProvider.stopObserving();
+                    mContentView = null;
                 }
             };
 
@@ -214,6 +215,12 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
      * The maximum width of the popup. This width is used as long as the popup still fits on screen.
      */
     private int mMaxWidthPx;
+
+    /**
+     * The maximum height of the popup. This height is used as long as the popup still fits on
+     * screen.
+     */
+    private int mMaxHeightPx;
 
     /** The desired width for the content. */
     private int mDesiredContentWidth;
@@ -251,11 +258,32 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
     private boolean mDismissOnScreenSizeChange;
     private @Nullable WindowBoundsChangeDetector mWindowBoundsChangeDetector;
 
+    /**
+     * Functional interface to build a content view on demand with the given themed context.
+     *
+     * <p>Implementations should return a freshly inflated or constructed view using the supplied
+     * context. This ensures the view reads the latest color palette, theme styling, and resource
+     * qualifiers from the popup window's current context across re-displays.
+     */
+    @FunctionalInterface
+    public interface ViewBuilder {
+        /**
+         * Builds the content view.
+         *
+         * <p>Construct a fresh view instance using the provided themed {@code context} so theme
+         * styling, colors, and configuration updates apply properly.
+         *
+         * @param context The themed context associated with the popup window.
+         * @return The newly built content view.
+         */
+        View build(Context context);
+    }
+
     /** A builder for {@link AnchoredPopupWindow} instances. */
     public static class Builder {
         private final Context mContext;
         private final View mRootView;
-        private final Supplier<View> mContentViewCreator;
+        private final ViewBuilder mViewBuilder;
         private final RectProvider mAnchorRectProvider;
         private final Drawable mBackground;
 
@@ -267,6 +295,7 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
 
         private int mMarginPx;
         private int mMaxWidthPx;
+        private int mMaxHeightPx;
         private int mDesiredContentWidthPx;
         private int mDesiredContentHeightPx;
 
@@ -286,6 +315,8 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
         private @StyleRes int mAnimationStyleId;
         private boolean mAnimateFromAnchor;
         private boolean mFocusable;
+        private @Nullable Integer mInputMethodMode;
+        private @Nullable Integer mSoftInputMode;
         private boolean mTouchable;
         private boolean mIsTouchableSet;
         private float mElevation;
@@ -302,8 +333,8 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
          * @param context Context to draw resources from.
          * @param rootView The {@link View} to use for size calculations and for display.
          * @param background The background {@link Drawable} to use for the popup.
-         * @param contentViewCreator The supplier for the content view to set on the popup. The view
-         *     is expected to be a {@link ViewGroup}.
+         * @param viewBuilder The {@link ViewBuilder} to construct the content view with the themed
+         *     context. The view is expected to be a {@link ViewGroup}.
          * @param anchorRectProvider The {@link RectProvider} that will provide the {@link Rect}
          *     this popup attaches and orients to. The coordinates in the {@link Rect} are expected
          *     to be screen coordinates.
@@ -312,13 +343,34 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
                 Context context,
                 View rootView,
                 Drawable background,
-                Supplier<View> contentViewCreator,
+                ViewBuilder viewBuilder,
                 RectProvider anchorRectProvider) {
             mContext = context;
             mRootView = rootView;
             mBackground = background;
-            mContentViewCreator = contentViewCreator;
+            mViewBuilder = viewBuilder;
             mAnchorRectProvider = anchorRectProvider;
+        }
+
+        /**
+         * Constructs an {@link AnchoredPopupWindow} instance using a legacy {@link Supplier}.
+         *
+         * @deprecated Use {@link #Builder(Context, View, Drawable, ViewBuilder, RectProvider)}
+         *     instead to allow on-demand building with the themed context.
+         */
+        @Deprecated
+        public Builder(
+                Context context,
+                View rootView,
+                Drawable background,
+                Supplier<View> contentViewCreator,
+                RectProvider anchorRectProvider) {
+            this(
+                    context,
+                    rootView,
+                    background,
+                    (ViewBuilder) (unused) -> contentViewCreator.get(),
+                    anchorRectProvider);
         }
 
         /**
@@ -375,6 +427,14 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
          */
         public Builder setMaxWidth(int maxWidth) {
             mMaxWidthPx = maxWidth;
+            return this;
+        }
+
+        /**
+         * @param maxHeight The max height for the popup.
+         */
+        public Builder setMaxHeight(int maxHeight) {
+            mMaxHeightPx = maxHeight;
             return this;
         }
 
@@ -502,6 +562,24 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
         }
 
         /**
+         * @param mode The input method mode for the popup. See {@link
+         *     PopupWindow#setInputMethodMode(int)}.
+         */
+        public Builder setInputMethodMode(int mode) {
+            mInputMethodMode = mode;
+            return this;
+        }
+
+        /**
+         * @param mode The soft input mode for the popup. See {@link
+         *     PopupWindow#setSoftInputMode(int)}.
+         */
+        public Builder setSoftInputMode(int mode) {
+            mSoftInputMode = mode;
+            return this;
+        }
+
+        /**
          * @param touchable True if the popup is touchable, false otherwise.
          */
         public Builder setTouchable(boolean touchable) {
@@ -561,14 +639,34 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
     }
 
     private AnchoredPopupWindow(Builder builder) {
-        this(
-                builder.mContext,
-                builder.mRootView,
-                builder.mBackground,
-                builder.mContentViewCreator,
-                builder.mAnchorRectProvider,
-                builder.mViewportRectProvider,
-                builder.mSpecCalculator);
+        // Fill in missing theme attributes (such as R.attr.minInteractTargetSize) with adaptive
+        // density defaults in case the context theme does not define them (e.g. in WebView).
+        mContext =
+                new FillInContextThemeWrapper(
+                        builder.mContext, R.style.ThemeOverlay_UI_AdaptiveDensityDefaults);
+        mRootView = builder.mRootView.getRootView();
+        mViewBuilder = builder.mViewBuilder;
+        mViewportRectProvider =
+                builder.mViewportRectProvider != null
+                        ? builder.mViewportRectProvider
+                        : new RootViewRectProvider(mRootView);
+        mSpecCalculator =
+                builder.mSpecCalculator != null
+                        ? builder.mSpecCalculator
+                        : new PopupSpecCalculator();
+        mPopupWindow = UiWidgetFactory.getInstance().createPopupWindow(mContext);
+        mHandler = new Handler();
+        mRectProvider = builder.mAnchorRectProvider;
+        mPopupSpec =
+                new PopupSpec(
+                        new Rect(), new PopupPositionParams(0, 0, false, false, false, false));
+
+        mPopupWindow.setWidth(ViewGroup.LayoutParams.WRAP_CONTENT);
+        mPopupWindow.setHeight(ViewGroup.LayoutParams.WRAP_CONTENT);
+        mPopupWindow.setBackgroundDrawable(builder.mBackground);
+
+        mPopupWindow.setTouchInterceptor(this);
+        mPopupWindow.setOnDismissListener(mDismissListener);
 
         if (builder.mOnDismissListener != null) {
             addOnDismissListener(builder.mOnDismissListener);
@@ -577,6 +675,7 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
         setLayoutObserver(builder.mLayoutObserver);
         setMargin(builder.mMarginPx);
         if (builder.mMaxWidthPx > 0) setMaxWidth(builder.mMaxWidthPx);
+        if (builder.mMaxHeightPx > 0) setMaxHeight(builder.mMaxHeightPx);
         if (builder.mDesiredContentWidthPx != 0 || builder.mDesiredContentHeightPx != 0) {
             updateDesiredContentSize(
                     builder.mDesiredContentWidthPx, builder.mDesiredContentHeightPx, false);
@@ -595,6 +694,12 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
         }
         setAnimateFromAnchor(builder.mAnimateFromAnchor);
         setFocusable(builder.mFocusable);
+        if (builder.mInputMethodMode != null) {
+            mPopupWindow.setInputMethodMode(builder.mInputMethodMode);
+        }
+        if (builder.mSoftInputMode != null) {
+            mPopupWindow.setSoftInputMode(builder.mSoftInputMode);
+        }
         if (builder.mIsTouchableSet) {
             mPopupWindow.setTouchable(builder.mTouchable);
         }
@@ -607,112 +712,6 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
             setWindowLayoutType(builder.mWindowLayoutType);
         }
         setAllowOverlapCaptionBar(builder.mAllowOverlapCaptionBar);
-    }
-
-    /**
-     * Constructs an {@link AnchoredPopupWindow} instance.
-     *
-     * @param context Context to draw resources from.
-     * @param rootView The {@link View} to use for size calculations and for display.
-     * @param background The background {@link Drawable} to use for the popup.
-     * @param contentView The content view to set on the popup. Expected to be a {@link ViewGroup}.
-     * @param anchorRectProvider The {@link RectProvider} that will provide the {@link Rect} this
-     *     popup attaches and orients to. The coordinates in the {@link Rect} are expected to be
-     *     screen coordinates.
-     * @deprecated Use the {@link Builder} to create the popup instead.
-     */
-    @Deprecated
-    public AnchoredPopupWindow(
-            Context context,
-            View rootView,
-            Drawable background,
-            View contentView,
-            RectProvider anchorRectProvider) {
-        this(context, rootView, background, () -> contentView, anchorRectProvider, null, null);
-    }
-
-    /**
-     * Constructs an {@link AnchoredPopupWindow} instance.
-     *
-     * @param context Context to draw resources from.
-     * @param rootView The {@link View} to use for size calculations and for display.
-     * @param background The background {@link Drawable} to use for the popup.
-     * @param contentViewCreator The supplier for the content view to set on the popup. The view is
-     *     expected to be a {@link ViewGroup}.
-     * @param anchorRectProvider The {@link RectProvider} that will provide the {@link Rect} this
-     *     popup attaches and orients to. The coordinates in the {@link Rect} are expected to be
-     *     screen coordinates.
-     * @param viewportRectProvider The {@link RectProvider} that provides the {@link Rect} for the
-     *     visible viewpoint. If null, the window coordinates of the root view will be used.
-     * @deprecated Use the {@link Builder} to create the popup instead.
-     */
-    @Deprecated
-    public AnchoredPopupWindow(
-            Context context,
-            View rootView,
-            @Nullable Drawable background,
-            Supplier<View> contentViewCreator,
-            RectProvider anchorRectProvider,
-            @Nullable RectProvider viewportRectProvider) {
-        this(
-                context,
-                rootView,
-                background,
-                contentViewCreator,
-                anchorRectProvider,
-                viewportRectProvider,
-                null);
-    }
-
-    /**
-     * Constructs an {@link AnchoredPopupWindow} instance.
-     *
-     * @param context Context to draw resources from.
-     * @param rootView The {@link View} to use for size calculations and for display.
-     * @param background The background {@link Drawable} to use for the popup.
-     * @param contentViewCreator The supplier for the content view to set on the popup. The view is
-     *     expected to be a {@link ViewGroup}.
-     * @param anchorRectProvider The {@link RectProvider} that will provide the {@link Rect} this
-     *     popup attaches and orients to. The coordinates in the {@link Rect} are expected to be
-     *     screen coordinates.
-     * @param viewportRectProvider The {@link RectProvider} that provides the {@link Rect} for the
-     *     visible viewpoint. If null, the window coordinates of the root view will be used.
-     * @param calculator The {@link SpecCalculator} that can customize the positioning behavior.
-     * @deprecated Use the {@link Builder} to create the popup instead.
-     */
-    @Deprecated
-    public AnchoredPopupWindow(
-            Context context,
-            View rootView,
-            @Nullable Drawable background,
-            Supplier<View> contentViewCreator,
-            RectProvider anchorRectProvider,
-            @Nullable RectProvider viewportRectProvider,
-            @Nullable SpecCalculator calculator) {
-        mContext = context;
-        mRootView = rootView.getRootView();
-        mContentViewCreator = contentViewCreator;
-        mViewportRectProvider =
-                viewportRectProvider != null
-                        ? viewportRectProvider
-                        : new RootViewRectProvider(mRootView);
-        if (calculator == null) {
-            calculator = new PopupSpecCalculator();
-        }
-        mSpecCalculator = calculator;
-        mPopupWindow = UiWidgetFactory.getInstance().createPopupWindow(mContext);
-        mHandler = new Handler();
-        mRectProvider = anchorRectProvider;
-        mPopupSpec =
-                new PopupSpec(
-                        new Rect(), new PopupPositionParams(0, 0, false, false, false, false));
-
-        mPopupWindow.setWidth(ViewGroup.LayoutParams.WRAP_CONTENT);
-        mPopupWindow.setHeight(ViewGroup.LayoutParams.WRAP_CONTENT);
-        mPopupWindow.setBackgroundDrawable(background);
-
-        mPopupWindow.setTouchInterceptor(this);
-        mPopupWindow.setOnDismissListener(mDismissListener);
     }
 
     /** Shows the popup. Will have no effect if the popup is already showing. */
@@ -741,6 +740,9 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
             mWindowBoundsChangeDetector = null;
         }
         mPopupWindow.dismiss();
+        if (!mIgnoreDismissal) {
+            mContentView = null;
+        }
     }
 
     /** Used for testing only. Explicitly trigger dismiss listeners. */
@@ -918,6 +920,41 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
     @Deprecated
     public void setFocusable(boolean focusable) {
         mPopupWindow.setFocusable(focusable);
+        if (mPopupWindow.isShowing()) {
+            mPopupWindow.update();
+        }
+    }
+
+    /**
+     * Sets the input method mode for the popup. See {@link PopupWindow#setInputMethodMode(int)}.
+     *
+     * <p>Use {@link PopupWindow#INPUT_METHOD_NOT_NEEDED} to keep the popup focusable (so it remains
+     * reachable by accessibility and key navigation) while preventing it from taking input-method
+     * focus. This keeps any soft keyboard shown by the anchor's window visible instead of hiding it
+     * when the popup appears. See crbug.com/544573787.
+     *
+     * @param inputMethodMode One of {@link PopupWindow#INPUT_METHOD_FROM_FOCUSABLE}, {@link
+     *     PopupWindow#INPUT_METHOD_NEEDED} or {@link PopupWindow#INPUT_METHOD_NOT_NEEDED}.
+     */
+    public void setInputMethodMode(int inputMethodMode) {
+        mPopupWindow.setInputMethodMode(inputMethodMode);
+    }
+
+    /**
+     * Sets the soft input mode for the popup. See {@link PopupWindow#setSoftInputMode(int)}.
+     *
+     * @param softInputMode The soft input mode to set.
+     */
+    public void setSoftInputMode(int softInputMode) {
+        mPopupWindow.setSoftInputMode(softInputMode);
+        if (mPopupWindow.isShowing()) {
+            mPopupWindow.update();
+        }
+    }
+
+    /** Returns the soft input mode of the underlying popup window for testing. */
+    public int getSoftInputModeForTesting() {
+        return mPopupWindow.getSoftInputMode();
     }
 
     /**
@@ -962,8 +999,18 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
      */
     @Deprecated
     public void setMaxWidth(int maxWidth) {
-        final float density = mRootView.getResources().getDisplayMetrics().density;
-        mMaxWidthPx = Math.max(maxWidth, (int) Math.ceil(density * MIN_TOUCHABLE_WIDTH_DIP));
+        mMaxWidthPx = Math.max(maxWidth, getMinInteractSizePx());
+    }
+
+    /**
+     * Sets the max height for the popup. This should be called before the popup is shown.
+     *
+     * @param maxHeight The max height for the popup.
+     * @deprecated Use the {@link Builder} to set this value during construction.
+     */
+    @Deprecated
+    public void setMaxHeight(int maxHeight) {
+        mMaxHeightPx = Math.max(maxHeight, getMinInteractSizePx());
     }
 
     /**
@@ -1156,11 +1203,13 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
                         mViewportRectProvider.getRect(),
                         anchorRect,
                         getOrCreateContentView(),
-                        mRootView.getWidth(),
+                        mViewportRectProvider.getRect().width(),
+                        mViewportRectProvider.getRect().height(),
                         paddingX,
                         paddingY,
                         mMarginPx,
                         mMaxWidthPx,
+                        mMaxHeightPx,
                         mDesiredContentWidth,
                         mDesiredContentHeight,
                         mPreferredHorizontalOrientation,
@@ -1207,7 +1256,11 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
 
     private View getOrCreateContentView() {
         if (mContentView == null) {
-            mContentView = mContentViewCreator.get();
+            mContentView = mViewBuilder.build(mContext);
+            assert ContextUtils.activityFromContext(mContext) == null
+                            || ContextUtils.activityFromContext(mContentView.getContext()) == null
+                            || ContextUtils.isSameActivity(mContentView.getContext(), mContext)
+                    : "Popup contentView context is not from the same Activity as popup context.";
         }
         return mContentView;
     }
@@ -1221,12 +1274,28 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
         return mContentView;
     }
 
+    private int getMinInteractSizePx() {
+        // Use mContext instead of mRootView because mRootView's context belongs to the host app
+        // and not Chrome. Now that mContext is wrapped with FillInContextThemeWrapper,
+        // R.attr.minInteractTargetSize will always resolve correctly.
+        final float density = mContext.getResources().getDisplayMetrics().density;
+        int minInteractSizePx =
+                AttrUtils.getDimensionPixelSize(mContext, R.attr.minInteractTargetSize);
+        if (minInteractSizePx == -1) {
+            minInteractSizePx =
+                    mContext.getResources().getDimensionPixelSize(R.dimen.min_touch_target_size);
+        }
+        // Add 1dp margin on each side
+        int marginPx = (int) Math.ceil(density);
+        return minInteractSizePx + 2 * marginPx;
+    }
+
     /**
      * Checks if the popup spec meets the minimal size requirements.
      *
      * <p>By default, this method ensures that the size is sufficient for users to see what they are
      * tapping. Popups can be very narrow (e.g. in landscape) and still be interactive. Use {@link
-     * #setRequireTouchableSize(boolean)} to disable this check.
+     * #setAllowNonTouchableSize(boolean)} to disable this check.
      *
      * @return True if the popup is large enough to be safely shown to users.
      */
@@ -1235,9 +1304,9 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
             return true;
         }
 
-        final float density = mRootView.getResources().getDisplayMetrics().density;
-        return mPopupSpec.popupRect.height() >= density * MIN_TOUCHABLE_HEIGHT_DIP
-                && mPopupSpec.popupRect.width() >= density * MIN_TOUCHABLE_WIDTH_DIP;
+        int minInteractSizePx = getMinInteractSizePx();
+        return mPopupSpec.popupRect.height() >= minInteractSizePx
+                && mPopupSpec.popupRect.width() >= minInteractSizePx;
     }
 
     private Point compensateForRootViewOrigin(int x, int y) {
@@ -1323,11 +1392,14 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
          * @param anchorRect The rect that popup anchored to in the window.
          * @param contentView The content view of popup window. Expected to be a {@link ViewGroup}.
          * @param rootViewWidth The width of root view.
+         * @param rootViewHeight The height of root view.
          * @param paddingX The padding on the X axis of popup window.
          * @param paddingY The padding on the Y axis of popup window.
          * @param marginPx Value set by {@link #setMargin(int)}.
          * @param maxWidthPx Value set by {@link #setMaxWidth(int)}.
+         * @param maxHeightPx Value set by {@link #setMaxHeight(int)}.
          * @param desiredContentWidth Value set by {@link #setDesiredContentWidth(int)}.
+         * @param desiredContentHeight Value set by {@link #setDesiredContentHeight(int)}.
          * @param preferredHorizontalOrientation Value set by {@link
          *     #setPreferredHorizontalOrientation(int)}.
          * @param preferredVerticalOrientation Value set by {@link
@@ -1349,10 +1421,12 @@ public class AnchoredPopupWindow implements OnTouchListener, RectProvider.Observ
                 Rect anchorRect,
                 View contentView,
                 int rootViewWidth,
+                int rootViewHeight,
                 int paddingX,
                 int paddingY,
                 int marginPx,
                 int maxWidthPx,
+                int maxHeightPx,
                 int desiredContentWidth,
                 int desiredContentHeight,
                 @HorizontalOrientation int preferredHorizontalOrientation,

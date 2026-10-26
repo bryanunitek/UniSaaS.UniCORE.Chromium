@@ -643,7 +643,10 @@ display::VariableRefreshRateState GetVariableRefreshRateState(
   if (!IsVrrCapable(drm, info->connector())) {
     return display::VariableRefreshRateState::kVrrNotCapable;
   }
-  if (!info->edid_parser()->vsync_rate_min().has_value() ||
+  // Reading the EDID can fail, in which case the minimum vsync rate is unknown
+  // and VRR cannot be used.
+  if (!info->edid_parser().has_value() ||
+      !info->edid_parser()->vsync_rate_min().has_value() ||
       info->edid_parser()->vsync_rate_min().value() == 0) {
     return display::VariableRefreshRateState::kVrrNotCapable;
   }
@@ -1046,6 +1049,16 @@ int GetFourCCFormatForOpaqueFramebuffer(viz::SharedImageFormat format) {
   }
   if (format == viz::MultiPlaneFormat::kP010) {
     return DRM_FORMAT_P010;
+  }
+  if (format == viz::SinglePlaneFormat::kRGBA_F16) {
+    return DRM_FORMAT_XBGR16161616F;
+  }
+  // R and RG formats are opaque by definition.
+  if (format == viz::SinglePlaneFormat::kR_8) {
+    return DRM_FORMAT_R8;
+  }
+  if (format == viz::SinglePlaneFormat::kRG_88) {
+    return DRM_FORMAT_GR88;
   }
   NOTREACHED();
 }

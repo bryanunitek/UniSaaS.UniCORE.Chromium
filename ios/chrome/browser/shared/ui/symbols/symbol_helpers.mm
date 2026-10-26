@@ -8,11 +8,15 @@
 #import "base/strings/sys_string_conversions.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbol_configurations.h"
-#import "ios/chrome/browser/shared/ui/symbols/symbol_names.h"
+#import "ios/chrome/browser/shared/ui/symbols/symbol_info.h"
 
 namespace {
 
+// The size of the what's new icon image.
+const CGFloat kIconImageWhatsNewSize = 16;
+
 constexpr CGFloat kCloseSymbolSize = 22;
+constexpr CGFloat kDoneSymbolSize = 22;
 
 // Returns the default configuration with the given `point_size`.
 UIImageConfiguration* DefaultSymbolConfigurationWithPointSize(
@@ -23,24 +27,26 @@ UIImageConfiguration* DefaultSymbolConfigurationWithPointSize(
                            scale:UIImageSymbolScaleMedium];
 }
 
-// Returns a symbol named `symbol_name` configured with the given
-// `configuration`. `system_symbol` is used to specify if it is a SFSymbol or a
-// custom symbol.
-UIImage* SymbolWithConfiguration(NSString* symbol_name,
-                                 UIImageConfiguration* configuration,
-                                 BOOL system_symbol) {
-  UIImage* symbol;
-  if (system_symbol) {
-    symbol = [UIImage systemImageNamed:symbol_name
-                     withConfiguration:configuration];
-  } else {
-    symbol = [UIImage imageNamed:symbol_name
-                        inBundle:nil
-               withConfiguration:configuration];
+// Returns a symbol named `symbol.name` configured with the given
+// `configuration`. `symbol.type` is used to specify if it is a system symbol or
+// a custom symbol.
+UIImage* SymbolWithConfiguration(SymbolInfo symbol,
+                                 UIImageConfiguration* configuration) {
+  UIImage* image;
+  switch (symbol.type) {
+    case SymbolType::kSystem:
+      image = [UIImage systemImageNamed:symbol.name
+                      withConfiguration:configuration];
+      break;
+    case SymbolType::kCustom:
+      image = [UIImage imageNamed:symbol.name
+                         inBundle:nil
+                withConfiguration:configuration];
+      break;
   }
-  DCHECK(symbol) << " symbol_name: " << base::SysNSStringToUTF8(symbol_name)
-                 << " is_system_symbol: " << system_symbol;
-  return symbol;
+  DCHECK(image) << " symbol_name: " << base::SysNSStringToUTF8(symbol.name)
+                << " type: " << static_cast<int>(symbol.type);
+  return image;
 }
 
 }  // namespace
@@ -52,39 +58,15 @@ UIImage* DefaultCloseButtonForToolbar() {
       configurationWithPointSize:kCloseSymbolSize
                           weight:UIImageSymbolWeightRegular
                            scale:UIImageSymbolScaleMedium];
-  return DefaultSymbolWithConfiguration(kXMarkSymbol, configuration);
+  return SymbolWithConfiguration(SymbolXMark, configuration);
 }
 
-UIImage* DefaultSymbolWithConfiguration(NSString* symbol_name,
-                                        UIImageConfiguration* configuration) {
-  return SymbolWithConfiguration(symbol_name, configuration, true);
-}
-
-UIImage* CustomSymbolWithConfiguration(NSString* symbol_name,
-                                       UIImageConfiguration* configuration) {
-  return SymbolWithConfiguration(symbol_name, configuration, false);
-}
-
-UIImage* DefaultSymbolWithPointSize(NSString* symbol_name, CGFloat point_size) {
-  return DefaultSymbolWithConfiguration(
-      symbol_name, DefaultSymbolConfigurationWithPointSize(point_size));
-}
-
-UIImage* CustomSymbolWithPointSize(NSString* symbol_name, CGFloat point_size) {
-  return CustomSymbolWithConfiguration(
-      symbol_name, DefaultSymbolConfigurationWithPointSize(point_size));
-}
-
-UIImage* DefaultSymbolTemplateWithPointSize(NSString* symbol_name,
-                                            CGFloat point_size) {
-  return [DefaultSymbolWithPointSize(symbol_name, point_size)
-      imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-}
-
-UIImage* CustomSymbolTemplateWithPointSize(NSString* symbol_name,
-                                           CGFloat point_size) {
-  return [CustomSymbolWithPointSize(symbol_name, point_size)
-      imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+UIImage* DefaultDoneButtonForToolbar() {
+  UIImageConfiguration* configuration = [UIImageSymbolConfiguration
+      configurationWithPointSize:kDoneSymbolSize
+                          weight:UIImageSymbolWeightRegular
+                           scale:UIImageSymbolScaleMedium];
+  return SymbolWithConfiguration(SymbolCheckmark, configuration);
 }
 
 UIImage* MakeSymbolMonochrome(UIImage* symbol) {
@@ -105,28 +87,47 @@ UIImage* SymbolWithPalette(UIImage* symbol, NSArray<UIColor*>* colors) {
           [UIImageSymbolConfiguration configurationWithPaletteColors:colors]];
 }
 
-UIImage* DefaultSettingsRootSymbol(NSString* symbol_name) {
-  return DefaultSymbolWithPointSize(symbol_name,
-                                    kSettingsRootSymbolImagePointSize);
+UIImage* DefaultAccessorySymbolConfigurationWithRegularWeight(Symbol symbol) {
+  return SymbolWithConfiguration(
+      symbol, [UIImageSymbolConfiguration
+                  configurationWithPointSize:kSymbolAccessoryPointSize
+                                      weight:UIImageSymbolWeightRegular
+                                       scale:UIImageSymbolScaleMedium]);
 }
 
-UIImage* CustomSettingsRootSymbol(NSString* symbol_name) {
-  return CustomSymbolWithPointSize(symbol_name,
-                                   kSettingsRootSymbolImagePointSize);
+UIImage* SymbolWithConfiguration(Symbol symbol,
+                                 UIImageConfiguration* configuration) {
+  return SymbolWithConfiguration(InfoForSymbol(symbol), configuration);
 }
 
-UIImage* CustomSettingsRootMulticolorSymbol(NSString* symbol_name) {
-  return MakeSymbolMulticolor(CustomSymbolWithPointSize(
-      symbol_name, kSettingsRootSymbolImagePointSize));
+UIImage* SymbolWithPointSize(Symbol symbol, CGFloat point_size) {
+  return SymbolWithConfiguration(
+      symbol, DefaultSymbolConfigurationWithPointSize(point_size));
 }
 
-UIImage* DefaultAccessorySymbolConfigurationWithRegularWeight(
-    NSString* symbol_name) {
-  return DefaultSymbolWithConfiguration(
-      symbol_name, [UIImageSymbolConfiguration
-                       configurationWithPointSize:kSymbolAccessoryPointSize
-                                           weight:UIImageSymbolWeightRegular
-                                            scale:UIImageSymbolScaleMedium]);
+UIImage* SymbolTemplateWithPointSize(Symbol symbol, CGFloat point_size) {
+  return [SymbolWithPointSize(symbol, point_size)
+      imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+}
+
+UIImage* SettingsRootSymbol(Symbol symbol) {
+  return SymbolWithPointSize(symbol, kSettingsRootSymbolImagePointSize);
+}
+
+UIImage* SettingsRootMulticolorSymbol(Symbol symbol) {
+  return MakeSymbolMulticolor(SettingsRootSymbol(symbol));
+}
+
+UIImage* WhatsNewSymbolHelper(NSString* symbol_name,
+                              bool is_system,
+                              bool is_multicolor) {
+  UIImage* symbol = SymbolWithConfiguration(
+      {symbol_name, is_system ? SymbolType::kSystem : SymbolType::kCustom},
+      DefaultSymbolConfigurationWithPointSize(kIconImageWhatsNewSize));
+  if (!is_system && is_multicolor) {
+    return MakeSymbolMulticolor(symbol);
+  }
+  return [symbol imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
 }
 
 }  // extern "C"

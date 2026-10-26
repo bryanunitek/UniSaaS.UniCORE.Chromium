@@ -58,6 +58,7 @@
 #include "components/enterprise/browser/controller/browser_dm_token_storage.h"
 #include "components/enterprise/browser/controller/chrome_browser_cloud_management_controller.h"
 #include "components/enterprise/browser/reporting/common_pref_names.h"
+#include "components/enterprise/browser/reporting/saas_usage/saas_usage_report_scheduler.h"
 #include "components/policy/core/browser/configuration_policy_handler_list.h"
 #include "components/policy/core/browser/policy_conversions.h"
 #include "components/policy/core/browser/webui/json_generation.h"
@@ -125,7 +126,8 @@ constexpr char kExtensionsKey[] = "extensions";
 
 }  // namespace
 
-PolicyUIHandler::PolicyUIHandler(Profile* profile) : profile_(*profile) {}
+PolicyUIHandler::PolicyUIHandler(Profile* profile)
+    : PolicyUIHandler(mojo::NullReceiver(), mojo::NullRemote(), profile) {}
 
 PolicyUIHandler::PolicyUIHandler(
     mojo::PendingReceiver<policy::mojom::PolicyPageHandler> receiver,
@@ -134,8 +136,17 @@ PolicyUIHandler::PolicyUIHandler(
     : receiver_(this, std::move(receiver)),
       client_(std::move(client)),
       profile_(*profile) {
+  auto update_callback(base::BindRepeating(&PolicyUIHandler::SendStatus,
+                                           base::Unretained(this)));
+  pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
+  pref_change_registrar_->Init(g_browser_process->local_state());
+  pref_change_registrar_->Add(
+      enterprise_reporting::kLastUploadSucceededTimestamp, update_callback);
+
   policy_value_and_status_aggregator_ = policy::PolicyValueAndStatusAggregator::
       CreateDefaultPolicyValueAndStatusAggregator(&profile_.get());
+  policy_value_and_status_observation_.Observe(
+      policy_value_and_status_aggregator_.get());
 }
 
 PolicyUIHandler::~PolicyUIHandler() {
@@ -173,7 +184,6 @@ void PolicyUIHandler::AddCommonLocalizedStringsToSource(
       {"restartRequired", IDS_POLICY_RESTART_REQUIRED},
       {"scopeDevice", IDS_POLICY_SCOPE_DEVICE},
       {"scopeUser", IDS_POLICY_SCOPE_USER},
-      {"scopeAllUsers", IDS_POLICY_SCOPE_ALL_USERS},
       {"title", IDS_POLICY_TITLE},
       {"unknown", IDS_POLICY_UNKNOWN},
       {"unset", IDS_POLICY_UNSET},
@@ -197,18 +207,6 @@ void PolicyUIHandler::AddCommonLocalizedStringsToSource(
 }
 
 void PolicyUIHandler::RegisterMessages() {
-  auto update_callback(base::BindRepeating(&PolicyUIHandler::SendStatus,
-                                           base::Unretained(this)));
-  pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
-  pref_change_registrar_->Init(g_browser_process->local_state());
-  pref_change_registrar_->Add(
-      enterprise_reporting::kLastUploadSucceededTimestamp, update_callback);
-
-  policy_value_and_status_aggregator_ = policy::PolicyValueAndStatusAggregator::
-      CreateDefaultPolicyValueAndStatusAggregator(&profile_.get());
-  policy_value_and_status_observation_.Observe(
-      policy_value_and_status_aggregator_.get());
-
   const auto* policy_schema_registry_service =
       profile_->GetPolicySchemaRegistryService();
   // In case web_ui() represents an OffTheRecordProfileImpl object (like in a
@@ -221,7 +219,7 @@ void PolicyUIHandler::RegisterMessages() {
 
   web_ui()->RegisterMessageCallback(
       "listenPoliciesUpdates",
-      base::BindRepeating(&PolicyUIHandler::HandleListenPoliciesUpdates,
+      base::BindRepeating(&PolicyUIHandler::SendInitialState,
                           base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "reloadPolicies",
@@ -301,9 +299,10 @@ void PolicyUIHandler::SendSchema() {
   FireWebUIListener("schema-updated", PolicyUI::GetSchema(&profile_.get()));
 }
 
-void PolicyUIHandler::HandleListenPoliciesUpdates(const base::ListValue& args) {
-  // Send initial policy values and status to UI page.
-  AllowJavascript();
+void PolicyUIHandler::SendInitialState(const base::ListValue&) {
+  if (!IsMojoMigrationEnabled()) {
+    AllowJavascript();
+  }
   SendSchema();
   SendPolicies();
   SendStatus();
@@ -460,27 +459,53 @@ const std::string& PolicyUIHandler::GetAppliedTestPoliciesImpl() {
 }
 
 void PolicyUIHandler::HandleGetPolicyLogs(const base::ListValue& args) {
+  CHECK_EQ(args.size(), 1u);
   AllowJavascript();
-  ResolveJavascriptCallback(args[0],
-                            policy::PolicyLogger::GetInstance()->GetAsList());
+  policy::PolicyLogger::GetInstance()->GetAsList(
+      base::BindOnce(&PolicyUIHandler::OnGetPolicyLogs,
+                     weak_factory_.GetWeakPtr(), args[0].Clone()));
+}
+
+void PolicyUIHandler::OnGetPolicyLogs(base::Value callback_id,
+                                      base::ListValue logs) {
+  ResolveJavascriptCallback(callback_id, logs);
 }
 
 void PolicyUIHandler::GetPolicyLogs(GetPolicyLogsCallback callback) {
-  std::move(callback).Run(policy::PolicyLogger::GetInstance()->GetAsMojoList());
+  policy::PolicyLogger::GetInstance()->GetAsMojoList(std::move(callback));
 }
 
 #if !BUILDFLAG(IS_CHROMEOS)
 void PolicyUIHandler::HandleUploadReport(const base::ListValue& args) {
   upload_report_count_ += 1;
-  DCHECK_EQ(1u, args.size());
+  CHECK_EQ(1u, args.size(), base::NotFatalUntil::M162);
   const std::string& callback_id = args[0].GetString();
-  auto* report_scheduler = g_browser_process->browser_policy_connector()
-                               ->chrome_browser_cloud_management_controller()
-                               ->report_scheduler();
 
+  auto* browser_controller = g_browser_process->browser_policy_connector()
+                                 ->chrome_browser_cloud_management_controller();
   auto* cloud_profile_reporting_service =
       enterprise_reporting::CloudProfileReportingServiceFactory::GetForProfile(
           Profile::FromWebUI(web_ui()));
+
+  // Upload SaaS usage reports.
+  auto* browser_saas_scheduler =
+      browser_controller ? browser_controller->saas_usage_report_scheduler()
+                         : nullptr;
+  auto* profile_saas_scheduler =
+      cloud_profile_reporting_service
+          ? cloud_profile_reporting_service->saas_usage_report_scheduler()
+          : nullptr;
+
+  if (browser_saas_scheduler) {
+    browser_saas_scheduler->TriggerReport();
+  }
+  if (profile_saas_scheduler) {
+    profile_saas_scheduler->TriggerReport();
+  }
+
+  // Upload browser and profile reports.
+  auto* report_scheduler =
+      browser_controller ? browser_controller->report_scheduler() : nullptr;
   auto* profile_report_scheduler =
       cloud_profile_reporting_service
           ? cloud_profile_reporting_service->report_scheduler()
@@ -517,15 +542,21 @@ void PolicyUIHandler::HandleUploadReport(const base::ListValue& args) {
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
 void PolicyUIHandler::SendPolicies() {
-  if (!IsJavascriptAllowed()) {
-    return;
+  if (IsMojoMigrationEnabled()) {
+    client_->PoliciesUpdated(
+        policy_value_and_status_aggregator_->GetAggregatedPolicyNamesMojo(),
+        policy_value_and_status_aggregator_->GetAggregatedPolicyValuesMojo());
+  } else {
+    if (!IsJavascriptAllowed()) {
+      return;
+    }
+    FireWebUIListener(
+        "policies-updated",
+        base::Value(
+            policy_value_and_status_aggregator_->GetAggregatedPolicyNames()),
+        base::Value(
+            policy_value_and_status_aggregator_->GetAggregatedPolicyValues()));
   }
-  FireWebUIListener(
-      "policies-updated",
-      base::Value(
-          policy_value_and_status_aggregator_->GetAggregatedPolicyNames()),
-      base::Value(
-          policy_value_and_status_aggregator_->GetAggregatedPolicyValues()));
 }
 
 void PolicyUIHandler::SendStatus() {

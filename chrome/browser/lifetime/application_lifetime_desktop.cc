@@ -14,6 +14,7 @@
 #include "base/no_destructor.h"
 #include "base/process/process.h"
 #include "base/threading/hang_watcher.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/types/strong_alias.h"
 #include "base/values.h"
@@ -22,6 +23,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/download/download_core_service.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/lifetime/browser_close_manager.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
@@ -33,12 +35,14 @@
 #include "chrome/browser/sessions/exit_type_service.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "chrome/browser/sessions/session_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_controller.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/unload_controller.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_features.h"
@@ -55,12 +59,17 @@
 #include "chrome/browser/lifetime/application_lifetime_chromeos.h"
 #include "chromeos/ash/components/login/session/session_termination_manager.h"
 #else  // !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/sessions/profile_diff_after_restart_recorder.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/win_util.h"
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/shutdown_watchdog_mac.h"
+#endif  // BUILDFLAG(IS_MAC)
 
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
 #include "chrome/browser/sessions/session_data_service.h"
@@ -87,6 +96,19 @@ void SavePreRestartTabWindowCounts() {
     return;
   }
 
+#if !BUILDFLAG(IS_CHROMEOS)
+  // Number of profiles with at least one normal (`TYPE_NORMAL`) or app
+  // (`TYPE_APP`) window open before restart, saved to
+  // `kPreSmartRestartProfileCounts` and read by
+  // ProfileDiffAfterRestartRecorder::OnStartupLaunchesStarting() in
+  // chrome/browser/sessions/profile_diff_after_restart_recorder.cc. These
+  // counts are not collected on ChromeOS because restarts there end the user
+  // session rather than relaunching into it, and startup ignores
+  // `WasRestarted()` after the next login, so the recorder is never enabled.
+  size_t normal_profiles = 0;
+  size_t app_profiles = 0;
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
   for (Profile* profile :
        g_browser_process->profile_manager()->GetLoadedProfiles()) {
     // Skip incognito profiles since they won't be restored.
@@ -101,11 +123,18 @@ void SavePreRestartTabWindowCounts() {
             return true;
           }
           // Skip windows that are explicitly not restored.
-          if (browser->GetBrowserForMigrationOnly()
-                  ->omit_from_session_restore()) {
+          if (BrowserInitState::From(browser)->omit_from_session_restore()) {
             return true;
           }
 
+          // Record open normal (`TYPE_NORMAL`) and app (`TYPE_APP`) window and
+          // tab counts in `counts`. This window-type classification must match
+          // SessionRestoreImpl::ProcessSessionWindows() in
+          // chrome/browser/sessions/session_restore.cc, which counts the
+          // windows restored on the next startup. If the two diverge,
+          // SessionRestore.{Tab,Window,Profile}DiffAfterRestart.{Normal,App}
+          // will compare mismatched window sets and report false gains or
+          // losses.
           BrowserWindowInterface::Type type = browser->GetType();
           if (type == BrowserWindowInterface::Type::TYPE_NORMAL) {
             counts.normal_tabs += browser->GetTabStripModel()->count();
@@ -132,7 +161,21 @@ void SavePreRestartTabWindowCounts() {
       profile->GetPrefs()->SetDict(prefs::kPreSmartRestartSessionState,
                                    std::move(dict));
     }
+
+#if !BUILDFLAG(IS_CHROMEOS)
+    if (counts.normal_windows > 0) {
+      normal_profiles++;
+    }
+    if (counts.app_windows > 0) {
+      app_profiles++;
+    }
+#endif  // !BUILDFLAG(IS_CHROMEOS)
   }
+
+#if !BUILDFLAG(IS_CHROMEOS)
+  ProfileDiffAfterRestartRecorder::GetInstance().SavePreRestartCounts(
+      g_browser_process->local_state(), normal_profiles, app_profiles);
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 }
 
 // Forward declaration.
@@ -168,8 +211,7 @@ void PostTryToCloseBrowsersForProfile(
                                    original_profile
                              : browser->GetProfile() == original_profile;
           if (matches) {
-            UnloadController::From(browser->GetBrowserForMigrationOnly())
-                ->ResetTryToCloseWindow();
+            UnloadController::From(browser)->ResetBeforeUnloadForShutdown();
           }
           return true;
         });
@@ -200,13 +242,12 @@ void TryToCloseBrowsersForProfile(
         if (!matches_profile(browser)) {
           return true;
         }
-        if (UnloadController::From(browser->GetBrowserForMigrationOnly())
-                ->TryToCloseWindow(
-                    skip_beforeunload,
-                    base::BindRepeating(
-                        &PostTryToCloseBrowsersForProfile, original_profile,
-                        match_original_profile, on_close_success,
-                        on_close_aborted, profile_path, skip_beforeunload))) {
+        if (UnloadController::From(browser)->RunBeforeUnloadForShutdown(
+                skip_beforeunload,
+                base::BindRepeating(&PostTryToCloseBrowsersForProfile,
+                                    original_profile, match_original_profile,
+                                    on_close_success, on_close_aborted,
+                                    profile_path, skip_beforeunload))) {
           waiting_for_close = true;
           return false;
         }
@@ -262,9 +303,11 @@ void AttemptRestartInternal(IgnoreUnloadHandlers ignore_unload_handlers,
   KeepAliveRegistry::GetInstance()->SetRestarting();
 
 #if BUILDFLAG(IS_CHROMEOS)
-  DCHECK(
-      !ash::SessionTerminationManager::IsSendingStopRequestToSessionManager());
+  CHECK(!ash::SessionTerminationManager::IsSendingStopRequestToSessionManager(),
+        base::NotFatalUntil::M161);
 
+  browser_shutdown::SetShutdownTrigger(
+      browser_shutdown::ShutdownTrigger::kRestartFlags);
   ash::BootTimesRecorder::Get()->set_restart_requested();
   ash::SessionTerminationManager::SetSendStopRequestToSessionManager(false);
 
@@ -304,6 +347,12 @@ void ShutdownIfNoBrowsers() {
       glic::GlicBackgroundModeManager::GetInstance();
   if (glic_background_mode_manager) {
     glic_background_mode_manager->ExitBackgroundMode();
+  }
+
+  auto* browser_features =
+      g_browser_process ? g_browser_process->GetFeatures() : nullptr;
+  if (browser_features && browser_features->omnibox_everywhere_controller()) {
+    browser_features->omnibox_everywhere_controller()->ExitBackgroundMode();
   }
 
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
@@ -375,6 +424,14 @@ void SessionEnding() {
     return;
   }
   already_ended = true;
+
+#if BUILDFLAG(IS_MAC)
+  // Hand off from the graceful-path emergency watchdog (armed at SIGTERM
+  // receipt with the same 10s budget EndSession()'s rundown wait uses, which
+  // would otherwise fire mid-critical-writes) to a strict bound covering
+  // SessionEnding itself. See shutdown_watchdog_mac.h.
+  shutdown_watchdog::ArmForSessionEnding();
+#endif
 
   // ~ShutdownWatcherHelper uses IO (it joins a thread). We'll only trigger that
   // if Terminate() fails, which leaves us in a weird state, or the OS is going

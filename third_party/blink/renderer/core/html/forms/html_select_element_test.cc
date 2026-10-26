@@ -11,6 +11,7 @@
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/scroll_marker_group_data.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
@@ -21,11 +22,14 @@
 #include "third_party/blink/renderer/core/html/forms/html_opt_group_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_option_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_options_collection.h"
+#include "third_party/blink/renderer/core/html/forms/html_selected_content_element.h"
 #include "third_party/blink/renderer/core/html/forms/select_type.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
 #include "third_party/blink/renderer/core/html/html_hr_element.h"
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
+#include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/layout/layout_theme.h"
+#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_compositor.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
@@ -33,6 +37,8 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
@@ -102,6 +108,178 @@ TEST_F(HTMLSelectElementTest, SetAutofillValuePreservesEditedState) {
   select->SetUserHasEditedTheField();
   select->SetAutofillValue("111", WebAutofillState::kAutofilled);
   EXPECT_EQ(select->UserHasEditedTheField(), true);
+}
+
+
+TEST_F(HTMLSelectElementTest, ListBoxSuggestedOptionScrollTargetGroup) {
+  StringBuilder html;
+  html.Append(
+      "<!DOCTYPE HTML>"
+      "<style>nav { scroll-target-group: auto }</style>"
+      "<select id='sel' size='4'>");
+  for (int i = 0; i < 20; ++i) {
+    FormatTo(html, "<option id='o{}' value='v{}'>o{}</option>", i, i, i);
+  }
+  html.Append("</select><nav id='nav'>");
+  for (int i = 0; i < 20; ++i) {
+    FormatTo(html, "<a id='a{}' href='#o{}'></a>", i, i);
+  }
+  html.Append("</nav>");
+  SetHtmlInnerHTML(html.Utf8());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* select = To<HTMLSelectElement>(GetElementById("sel"));
+  Element* nav = GetElementById("nav");
+  Element* first_anchor = GetElementById("a0");
+  ScrollMarkerGroupData* group = nav->GetScrollTargetGroupData();
+  ASSERT_TRUE(group);
+  ASSERT_EQ(group->Selected(), first_anchor);
+
+  // Setting the suggested option displays a popover preview overlay without
+  // scrolling the listbox, so the selected scroll marker is unchanged.
+  select->SetSuggestedValue("v15");
+  ASSERT_TRUE(select->IsPreviewed());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(group->Selected(), first_anchor);
+
+  // Once the suggestion is cleared and a value is committed, the selected
+  // option is scrolled into view and the scroll marker tracks it.
+  select->setValueForBinding("v15");
+  ASSERT_FALSE(select->IsPreviewed());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_NE(group->Selected(), first_anchor);
+}
+
+TEST_F(HTMLSelectElementTest,
+       ListBoxAutofillPreviewDoesNotScrollOrResetScroll) {
+  StringBuilder html;
+  html.Append("<!DOCTYPE HTML><select id='sel' size='4'>");
+  for (int i = 0; i < 20; ++i) {
+    FormatTo(html, "<option id='o{}' value='v{}'>option {}</option>", i, i, i);
+  }
+  html.Append("</select>");
+  SetHtmlInnerHTML(html.Utf8());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* select = To<HTMLSelectElement>(GetElementById("sel"));
+
+  // When enabled, listbox supports implicit anchor for autofill popover.
+  EXPECT_TRUE(select->MayBeImplicitAnchor());
+
+  // 1. Initial preview does not scroll the listbox.
+  EXPECT_EQ(0.0, select->scrollTop());
+  select->SetSuggestedValue("v15");
+  ASSERT_TRUE(select->IsPreviewed());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(0.0, select->scrollTop());
+
+  // 2. Clear preview.
+  select->SetSuggestedValue("");
+  ASSERT_FALSE(select->IsPreviewed());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(0.0, select->scrollTop());
+
+  // 3. User scrolls the listbox.
+  select->setScrollTop(50);
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+  double scrolled_top = select->scrollTop();
+  EXPECT_GT(scrolled_top, 0.0);
+
+  // 4. Setting a suggested value does not alter the listbox scroll position or
+  // mask scrollTop().
+  select->SetSuggestedValue("v15");
+  ASSERT_TRUE(select->IsPreviewed());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(scrolled_top, select->scrollTop());
+
+  // 5. Clearing the suggested value preserves the user's scroll position.
+  select->SetSuggestedValue("");
+  ASSERT_FALSE(select->IsPreviewed());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(scrolled_top, select->scrollTop());
+}
+
+TEST_F(HTMLSelectElementTest,
+       ListBoxAutofillPreviewPreservesGeometryAndOverflow) {
+  StringBuilder html;
+  html.Append("<!DOCTYPE HTML><select id='sel' size='4'>");
+  for (int i = 0; i < 20; ++i) {
+    FormatTo(html, "<option id='o{}' value='v{}'>option {}</option>", i, i, i);
+  }
+  html.Append("</select>");
+  SetHtmlInnerHTML(html.Utf8());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* select = To<HTMLSelectElement>(GetElementById("sel"));
+  int initial_client_width = select->clientWidth();
+  EXPECT_GT(initial_client_width, 0);
+
+  auto* scrollable_area = select->GetLayoutBox()->GetScrollableArea();
+  ASSERT_NE(nullptr, scrollable_area);
+  EXPECT_TRUE(scrollable_area->HasVerticalScrollbar());
+  EXPECT_NE(nullptr, scrollable_area->VerticalScrollbar());
+  EXPECT_GT(scrollable_area->MaximumScrollOffset().y(), 0);
+
+  select->SetSuggestedValue("v15");
+  ASSERT_TRUE(select->IsPreviewed());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+
+  // Scrollbar and clientWidth should remain invariant when autofill preview is
+  // shown.
+  EXPECT_TRUE(scrollable_area->HasVerticalScrollbar());
+  EXPECT_NE(nullptr, scrollable_area->VerticalScrollbar());
+  EXPECT_GT(scrollable_area->MaximumScrollOffset().y(), 0);
+  EXPECT_EQ(initial_client_width, select->clientWidth());
+
+  // Clearing the suggested value should preserve scrollbars and clientWidth.
+  select->SetSuggestedValue("");
+  ASSERT_FALSE(select->IsPreviewed());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(scrollable_area->HasVerticalScrollbar());
+  EXPECT_NE(nullptr, scrollable_area->VerticalScrollbar());
+  EXPECT_EQ(initial_client_width, select->clientWidth());
+}
+
+TEST_F(HTMLSelectElementTest,
+       OptionRemovalClearsSuggestedOptionUnconditionally) {
+  SetHtmlInnerHTML(R"HTML(
+    <!DOCTYPE HTML>
+    <select id='sel' size='4'>
+      <option id='o0' value='v0'>o0</option>
+      <option id='o1' value='v1'>o1</option>
+      <option id='o2' value='v2'>o2</option>
+    </select>
+  )HTML");
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* select = To<HTMLSelectElement>(GetElementById("sel"));
+  auto* opt0 = To<HTMLOptionElement>(GetElementById("o0"));
+
+  select->SetSuggestedValue("v2");
+  ASSERT_TRUE(select->IsPreviewed());
+  EXPECT_EQ("v2", select->SuggestedValue());
+  EXPECT_TRUE(select->matches(AtomicString(":autofill"), ASSERT_NO_EXCEPTION));
+
+  // Removing a non-previewed option must still tear down the autofill preview
+  // so that page scripts cannot probe which option is previewed by removing
+  // options one by one and observing when :autofill stops matching.
+  opt0->remove();
+  EXPECT_FALSE(select->IsPreviewed());
+  EXPECT_EQ("", select->SuggestedValue());
+  EXPECT_FALSE(select->matches(AtomicString(":autofill"), ASSERT_NO_EXCEPTION));
 }
 
 TEST_F(HTMLSelectElementTest, SaveRestoreSelectSingleFormControlState) {
@@ -224,6 +402,36 @@ TEST_F(HTMLSelectElementTest, PopupIsVisible) {
   EXPECT_TRUE(select->PopupIsVisible());
   GetDocument().Shutdown();
   EXPECT_FALSE(select->PopupIsVisible());
+}
+
+// crbug.com/40774159: while the native popup is showing, hover updates on
+// the owner document must not clear the select's :hover state. Otherwise the
+// hover style flickers depending on whether the mouse re-enters the popup
+// window or the owner window.
+TEST_F(HTMLSelectElementTest, KeepsHoverWhileNativePopupIsVisible) {
+  SetHtmlInnerHTML("<select><option>o1</option></select>");
+  auto* select = To<HTMLSelectElement>(GetDocument().body()->firstChild());
+  ASSERT_NE(select, nullptr);
+
+  // Simulate the mouse hovering the select.
+  GetDocument().UpdateHoverActiveState(/*is_active=*/false,
+                                       /*update_active_chain=*/true, select);
+  EXPECT_TRUE(select->IsHovered());
+
+  select->ShowPopup();
+  ASSERT_TRUE(select->PopupIsVisible());
+
+  // The mouse moves off the select (over the owner window next to the popup).
+  GetDocument().UpdateHoverActiveState(/*is_active=*/false,
+                                       /*update_active_chain=*/true,
+                                       GetDocument().body());
+  EXPECT_TRUE(select->IsHovered());
+
+  // Once the popup hides, the hover state re-syncs with the document's hover
+  // chain, which no longer contains the select.
+  select->PopupDidHide();
+  EXPECT_FALSE(select->PopupIsVisible());
+  EXPECT_FALSE(select->IsHovered());
 }
 
 TEST_F(HTMLSelectElementTest, FirstSelectableOption) {
@@ -1154,7 +1362,7 @@ TEST_F(HTMLSelectElementTest, DescendantCounters) {
   };
   auto options_slot = [select]() {
     return select->GetShadowRoot()->getElementById(
-        shadow_element_names::kPseudoSelectOptionsSlot);
+        shadow_element_names::kSelectOptions);
   };
 
   EXPECT_FALSE(select->ChildrenDescendantCounts().Contains(c1));
@@ -1298,8 +1506,7 @@ TEST_F(HTMLSelectElementSimTest, DialogModeBaseSelectAddAllowedButton) {
   test::RunPendingTasks();
   Compositor().BeginFrame();
 
-  auto* select = To<HTMLSelectElement>(
-      GetDocument().getElementById(AtomicString("target")));
+  auto* select = To<HTMLSelectElement>(GetElementById("target"));
   ASSERT_FALSE(select->IsInDialogMode());
 
   auto* button = MakeGarbageCollected<HTMLButtonElement>(GetDocument());
@@ -1335,11 +1542,10 @@ TEST_F(HTMLSelectElementSimTest, DialogModeBaseSelectRemoveDisallowedButton) {
   test::RunPendingTasks();
   Compositor().BeginFrame();
 
-  auto* select = To<HTMLSelectElement>(
-      GetDocument().getElementById(AtomicString("target")));
+  auto* select = To<HTMLSelectElement>(GetElementById("target"));
   ASSERT_TRUE(select->IsInDialogMode());
 
-  auto* button = GetDocument().getElementById(AtomicString("target-button"));
+  auto* button = GetElementById("target-button");
   select->removeChild(button);
 
   test::RunPendingTasks();
@@ -1368,15 +1574,13 @@ TEST_F(HTMLSelectElementSimTest, DialogModeBaseSelectNestedButton) {
   test::RunPendingTasks();
   Compositor().BeginFrame();
 
-  auto* select = To<HTMLSelectElement>(
-      GetDocument().getElementById(AtomicString("target")));
+  auto* select = To<HTMLSelectElement>(GetElementById("target"));
   ASSERT_FALSE(select->IsInDialogMode());
 
   auto* div = MakeGarbageCollected<HTMLDivElement>(GetDocument());
   auto* first_button = MakeGarbageCollected<HTMLButtonElement>(GetDocument());
   auto* second_button = MakeGarbageCollected<HTMLButtonElement>(GetDocument());
-  auto* option = To<HTMLOptionElement>(
-      GetDocument().getElementById(AtomicString("option")));
+  auto* option = To<HTMLOptionElement>(GetElementById("option"));
 
   div->appendChild(first_button);
   option->appendChild(div);
@@ -1416,6 +1620,85 @@ TEST_F(HTMLSelectElementTest,
   EXPECT_FALSE(HasDescendantsObserver(*select));
 
   test::RunPendingTasks();
+}
+
+// Autofilling or suggesting an option which is not associated with the select
+// must be a no-op. This mimics autofill holding on to an option element across
+// script execution which removes it from the select: selecting such an option
+// would mark a detached option as selected while SelectedOption() returns
+// nullptr. Regression test for crbug.com/535975677.
+TEST_F(HTMLSelectElementTest, AutofillingUnownedOptionIsIgnored) {
+  SetHtmlInnerHTML(R"HTML(
+    <select id=main>
+      <option id=o1 value=first>First</option>
+      <option id=o2 value=second>Second</option>
+    </select>
+    <select id=other>
+      <option id=foreign value=foreign>Foreign</option>
+    </select>
+  )HTML");
+  auto* select = To<HTMLSelectElement>(GetElementById("main"));
+  auto* option1 = To<HTMLOptionElement>(GetElementById("o1"));
+  auto* option2 = To<HTMLOptionElement>(GetElementById("o2"));
+  auto* foreign_option = To<HTMLOptionElement>(GetElementById("foreign"));
+  ASSERT_EQ(select->SelectedOption(), option1);
+
+  // Autofilling an option which was removed from the select is ignored.
+  option2->remove();
+  select->SetAutofillOption(option2, WebAutofillState::kAutofilled);
+  EXPECT_FALSE(option2->Selected());
+  EXPECT_EQ(select->SelectedOption(), option1);
+  EXPECT_FALSE(select->IsAutofilled());
+
+  // Autofilling an option which belongs to another select is ignored: both
+  // selects keep their selection. Note that `foreign_option` is its own
+  // select's default-selected option.
+  auto* other_select = To<HTMLSelectElement>(GetElementById("other"));
+  ASSERT_EQ(other_select->SelectedOption(), foreign_option);
+  select->SetAutofillOption(foreign_option, WebAutofillState::kAutofilled);
+  EXPECT_EQ(select->SelectedOption(), option1);
+  EXPECT_EQ(other_select->SelectedOption(), foreign_option);
+  EXPECT_FALSE(select->IsAutofilled());
+
+  // Suggesting (previewing) such options is ignored, too.
+  select->SetSuggestedOption(option2);
+  EXPECT_EQ(select->SuggestedValue(), "");
+  select->SetSuggestedOption(foreign_option);
+  EXPECT_EQ(select->SuggestedValue(), "");
+
+  // Re-inserting the option makes it autofillable again.
+  select->AppendChild(option2);
+  select->SetAutofillOption(option2, WebAutofillState::kAutofilled);
+  EXPECT_TRUE(option2->Selected());
+  EXPECT_EQ(select->SelectedOption(), option2);
+  EXPECT_TRUE(select->IsAutofilled());
+}
+
+// CloneContentsFromOptionElement() must tolerate an option element which has
+// no owner select, e.g. an option which a caller resolved and script then
+// removed from its select. Regression test for crbug.com/535975677.
+TEST_F(HTMLSelectElementTest, SelectedcontentClonesFromUnownedOption) {
+  SetHtmlInnerHTML(R"HTML(
+    <select id=main>
+      <button><selectedcontent id=sc></selectedcontent></button>
+      <option id=o1>First</option>
+    </select>
+  )HTML");
+  auto* selectedcontent = To<HTMLSelectedContentElement>(GetElementById("sc"));
+  auto* option = To<HTMLOptionElement>(GetElementById("o1"));
+  ASSERT_FALSE(selectedcontent->IsDisabled());
+
+  // The contents of the default-selected option were cloned on insertion.
+  EXPECT_EQ(selectedcontent->textContent(), "First");
+
+  // Removing the option from the select clears the option's owner select.
+  option->remove();
+  ASSERT_EQ(option->OwnerSelectElement(), nullptr);
+  option->setTextContent("Second");
+
+  // Cloning directly from the now-unowned option must not crash.
+  selectedcontent->CloneContentsFromOptionElement(option);
+  EXPECT_EQ(selectedcontent->textContent(), "Second");
 }
 
 }  // namespace blink

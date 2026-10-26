@@ -16,6 +16,8 @@
 #import "components/password_manager/core/browser/password_form.h"
 #import "components/password_manager/core/common/password_manager_pref_names.h"
 #import "components/password_manager/ios/password_manager_ios_util.h"
+#import "components/pref_registry/pref_registry_syncable.h"
+#import "components/prefs/pref_service.h"
 #import "ios/web_view/internal/app/application_context.h"
 #import "ios/web_view/internal/metrics/web_view_profile_metrics_service_factory.h"
 #import "ios/web_view/internal/passwords/web_view_account_password_store_factory.h"
@@ -33,7 +35,27 @@ using password_manager::PasswordFormManagerForUI;
 using password_manager::PasswordManagerMetricsRecorder;
 using password_manager::PasswordStoreInterface;
 
+namespace {
+
+// Deprecated 10/2026.
+constexpr char kPasswordManagerSafeLifecycleEnabled[] =
+    "cwv.password_manager.safe_lifecycle_enabled";
+
+}  // namespace
+
 namespace ios_web_view {
+
+void RegisterWebViewPasswordManagerPrefs(PrefRegistrySimple* pref_registry) {
+  // Deprecated 10/2026. Registered only so that
+  // `MigrateObsoleteWebViewPasswordManagerPrefs` can clear persisted values.
+  pref_registry->RegisterBooleanPref(kPasswordManagerSafeLifecycleEnabled,
+                                     false);
+}
+
+void MigrateObsoleteWebViewPasswordManagerPrefs(PrefService* prefs) {
+  // Added 10/2026.
+  prefs->ClearPref(kPasswordManagerSafeLifecycleEnabled);
+}
 
 // static
 std::unique_ptr<WebViewPasswordManagerClient>
@@ -90,6 +112,7 @@ WebViewPasswordManagerClient::WebViewPasswordManagerClient(
       helper_(this) {
   saving_passwords_enabled_.Init(
       password_manager::prefs::kCredentialsEnableService, GetPrefs());
+  scoped_observation_.Observe(web_state_);
 }
 
 WebViewPasswordManagerClient::~WebViewPasswordManagerClient() = default;
@@ -156,7 +179,7 @@ void WebViewPasswordManagerClient::PromptUserToEnableAutosignin() {
 }
 
 bool WebViewPasswordManagerClient::IsOffTheRecord() const {
-  return web_state_->GetBrowserState()->IsOffTheRecord();
+  return !web_state_ || web_state_->GetBrowserState()->IsOffTheRecord();
 }
 
 const password_manager::PasswordManager*
@@ -179,6 +202,9 @@ PrefService* WebViewPasswordManagerClient::GetLocalStatePrefs() const {
 
 metrics::ProfileMetricsService*
 WebViewPasswordManagerClient::GetProfileMetricsService() {
+  if (!web_state_) {
+    return nullptr;
+  }
   return WebViewProfileMetricsServiceFactory::GetForBrowserState(
       static_cast<WebViewBrowserState*>(web_state_->GetBrowserState()));
 }
@@ -266,7 +292,8 @@ bool WebViewPasswordManagerClient::IsSavingAndFillingEnabled(
 }
 
 bool WebViewPasswordManagerClient::IsCommittedMainFrameSecure() const {
-  return password_manager::WebStateContentIsSecureHtml(web_state_);
+  return web_state_ &&
+         password_manager::WebStateContentIsSecureHtml(web_state_);
 }
 
 const GURL& WebViewPasswordManagerClient::GetLastCommittedURL() const {
@@ -312,6 +339,9 @@ WebViewPasswordManagerClient::GetIdentityManager() const {
 
 scoped_refptr<network::SharedURLLoaderFactory>
 WebViewPasswordManagerClient::GetURLLoaderFactory() {
+  if (!web_state_) {
+    return nullptr;
+  }
   return web_state_->GetBrowserState()->GetSharedURLLoaderFactory();
 }
 
@@ -332,6 +362,12 @@ safe_browsing::PasswordProtectionService*
 WebViewPasswordManagerClient::GetPasswordProtectionService() const {
   // TODO(crbug.com/40731177): Enable PhishGuard in web_view.
   return nullptr;
+}
+
+void WebViewPasswordManagerClient::WebStateDestroyed(web::WebState* web_state) {
+  DCHECK_EQ(web_state_, web_state);
+  scoped_observation_.Reset();
+  web_state_ = nullptr;
 }
 
 }  // namespace ios_web_view

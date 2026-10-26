@@ -64,17 +64,15 @@ class KeyboardAccessoryProperties {
             new ReadableBooleanPropertyKey("skip_all_animations_for_testing");
     static final WritableObjectPropertyKey<KeyboardAccessoryStyle> STYLE =
             new WritableObjectPropertyKey<>("style");
-    static final WritableObjectPropertyKey<Callback<Integer>> OBFUSCATED_CHILD_AT_CALLBACK =
-            new WritableObjectPropertyKey<>("obfuscated_child_at_callback");
     static final PropertyModel.WritableObjectPropertyKey<Callback<Boolean>>
             ON_TOUCH_EVENT_CALLBACK =
                     new PropertyModel.WritableObjectPropertyKey<>("on_touch_event_handler");
-    static final WritableBooleanPropertyKey SHOW_SWIPING_IPH =
-            new WritableBooleanPropertyKey("show_swiping_iph");
     static final WritableBooleanPropertyKey HAS_SUGGESTIONS =
             new WritableBooleanPropertyKey("has_suggestions");
     static final WritableBooleanPropertyKey HAS_STICKY_LAST_ITEM =
             new WritableBooleanPropertyKey("has_sticky_last_item");
+    static final WritableObjectPropertyKey<@Nullable Integer> SELECTED_SUGGESTION_INDEX =
+            new WritableObjectPropertyKey<>("selected_suggestion_index");
     static final WritableBooleanPropertyKey ANIMATE_SUGGESTIONS_FROM_TOP =
             new WritableBooleanPropertyKey("animate_suggestions_from_top");
 
@@ -91,11 +89,10 @@ class KeyboardAccessoryProperties {
                         STYLE,
                         SHEET_OPENER_ITEM,
                         DISMISS_ITEM,
-                        OBFUSCATED_CHILD_AT_CALLBACK,
                         ON_TOUCH_EVENT_CALLBACK,
-                        SHOW_SWIPING_IPH,
                         HAS_SUGGESTIONS,
                         HAS_STICKY_LAST_ITEM,
+                        SELECTED_SUGGESTION_INDEX,
                         ANIMATE_SUGGESTIONS_FROM_TOP,
                         ANIMATION_LISTENER)
                 .with(BAR_ITEMS_FIXED, new ListModel<>())
@@ -103,8 +100,8 @@ class KeyboardAccessoryProperties {
                 .with(VISIBLE, false)
                 .with(SKIP_CLOSING_ANIMATION, false)
                 .with(DISABLE_ANIMATIONS_FOR_TESTING, false)
-                .with(SHOW_SWIPING_IPH, false)
                 .with(HAS_SUGGESTIONS, false)
+                .with(SELECTED_SUGGESTION_INDEX, null)
                 .with(ANIMATE_SUGGESTIONS_FROM_TOP, false);
     }
 
@@ -157,11 +154,18 @@ class KeyboardAccessoryProperties {
         }
 
         /**
-         * Updates the state of this item when a suggestion is selected.
+         * Updates the state of this item when a suggestion is accepted.
          *
-         * @param clickedSuggestion The suggestion that was clicked, or null if none.
+         * @param acceptedSuggestion The suggestion that was accepted, or null if none.
          */
-        void updateStateOnItemSelection(@Nullable AutofillSuggestion clickedSuggestion) {}
+        void updateStateOnItemAcceptance(@Nullable AutofillSuggestion acceptedSuggestion) {}
+
+        /**
+         * Updates the selection state of this item.
+         *
+         * @param selectedIndex The ground-truth index of the selected suggestion, or null.
+         */
+        void setSelectedSuggestion(@Nullable Integer selectedIndex) {}
 
         /**
          * If this {@link BarItem} is a instance of {@link ActionBarItem}, returns itself in a list.
@@ -183,9 +187,16 @@ class KeyboardAccessoryProperties {
         }
 
         @Override
-        void updateStateOnItemSelection(@Nullable AutofillSuggestion clickedSuggestion) {
+        void updateStateOnItemAcceptance(@Nullable AutofillSuggestion acceptedSuggestion) {
             for (ActionBarItem item : mActionBarItems) {
-                item.updateStateOnItemSelection(clickedSuggestion);
+                item.updateStateOnItemAcceptance(acceptedSuggestion);
+            }
+        }
+
+        @Override
+        void setSelectedSuggestion(@Nullable Integer selectedIndex) {
+            for (ActionBarItem item : mActionBarItems) {
+                item.setSelectedSuggestion(selectedIndex);
             }
         }
 
@@ -200,17 +211,9 @@ class KeyboardAccessoryProperties {
      * hold an {@link Action}s that defines a callback and a recording type.
      */
     static class ActionBarItem extends BarItem {
-        @IntDef({ViewState.ENABLED, ViewState.LOADING, ViewState.DEACTIVATED})
-        @Retention(RetentionPolicy.SOURCE)
-        @interface ViewState {
-            int ENABLED = 0;
-            int LOADING = 1;
-            int DEACTIVATED = 2;
-        }
-
         private final @Nullable Action mAction;
         private final @StringRes int mCaptionId;
-        private @ViewState int mViewState = ViewState.ENABLED;
+        private boolean mIsEnabled = true;
 
         /**
          * Creates a new item. An action item must have a type and can have an action.
@@ -225,20 +228,12 @@ class KeyboardAccessoryProperties {
             mCaptionId = captionId;
         }
 
-        @Override
-        void updateStateOnItemSelection(@Nullable AutofillSuggestion clickedSuggestion) {
-            setViewState(ViewState.DEACTIVATED);
+        boolean isEnabled() {
+            return mIsEnabled;
         }
 
-        /** Sets the transient interactive state of the view. */
-        void setViewState(@ViewState int viewState) {
-            mViewState = viewState;
-        }
-
-        /** Returns the transient interactive state of the view. */
-        @ViewState
-        int getViewState() {
-            return mViewState;
+        void setEnabled(boolean isEnabled) {
+            mIsEnabled = isEnabled;
         }
 
         @Override
@@ -296,6 +291,8 @@ class KeyboardAccessoryProperties {
     static class AutofillBarItem extends ActionBarItem {
         private final AutofillSuggestion mSuggestion;
         private @Nullable String mFeature;
+        private boolean mIsLoading;
+        private boolean mIsSelected;
 
         /**
          * Creates a new autofill item with a suggestion for the view's representation and an action
@@ -310,10 +307,37 @@ class KeyboardAccessoryProperties {
             mSuggestion = suggestion;
         }
 
+        /**
+         * Returns the ground-truth index of this suggestion in the original backend suggestions
+         * list. This index remains stable even when suggestions are filtered, grouped, or reordered
+         * in the accessory bar.
+         *
+         * @return The index in the native suggestion list.
+         */
+        int getOriginalIndex() {
+            return mSuggestion.getOriginalIndex();
+        }
+
+        boolean isSelected() {
+            return mIsSelected;
+        }
+
         @Override
-        void updateStateOnItemSelection(@Nullable AutofillSuggestion clickedSuggestion) {
-            boolean isClicked = clickedSuggestion != null && mSuggestion.equals(clickedSuggestion);
-            setViewState(isClicked ? ViewState.LOADING : ViewState.DEACTIVATED);
+        void setSelectedSuggestion(@Nullable Integer selectedIndex) {
+            mIsSelected = selectedIndex != null && selectedIndex == getOriginalIndex();
+        }
+
+        @Override
+        boolean isEnabled() {
+            return mSuggestion.isSelectable() && super.isEnabled();
+        }
+
+        boolean isLoading() {
+            return mSuggestion.isLoading() || mIsLoading;
+        }
+
+        void setLoading(boolean isLoading) {
+            mIsLoading = isLoading;
         }
 
         AutofillSuggestion getSuggestion() {
@@ -407,7 +431,7 @@ class KeyboardAccessoryProperties {
                     Type.DISMISS_CHIP,
                     new Action(
                             AccessoryAction.DISMISS,
-                            unused -> {
+                            wasObscured -> {
                                 ManualFillingMetricsRecorder.recordActionSelected(
                                         AccessoryAction.DISMISS);
                                 dismissRunnable.run();

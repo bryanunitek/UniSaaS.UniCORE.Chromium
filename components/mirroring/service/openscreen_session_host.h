@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_MIRRORING_SERVICE_OPENSCREEN_SESSION_HOST_H_
 #define COMPONENTS_MIRRORING_SERVICE_OPENSCREEN_SESSION_HOST_H_
 
+#include <algorithm>
 #include <optional>
 #include <vector>
 
@@ -15,6 +16,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/timer/timer.h"
 #include "base/unguessable_token.h"
 #include "components/mirroring/mojom/cast_message_channel.mojom.h"
 #include "components/mirroring/mojom/resource_provider.mojom.h"
@@ -38,14 +40,10 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/socket_factory.mojom.h"
 #include "third_party/openscreen/src/cast/streaming/public/sender_session.h"
 
 using openscreen::cast::capture_recommendations::Recommendations;
-
-namespace base {
-class OneShotTimer;
-}
 
 namespace media {
 class AudioInputDevice;
@@ -67,8 +65,9 @@ class VideoCaptureClient;
 // Minimum required bitrate used for calculating bandwidth.
 inline constexpr int kMinRequiredBitrate = 384 << 10;  // 384 kbps
 
-// Default bitrate used before we have a calculation.
-inline constexpr int kDefaultBitrate = 5000000;  // 5 mbps
+// Default bitrate used before we have a calculation. The initial usable
+// bandwidth is this value, or the maximum video bitrate if that is lower.
+inline constexpr int kDefaultBitrate = 10000000;  // 10 mbps
 
 // Hosts a streaming session by hosting an `openscreen::cast::SenderSession` and
 // doing all of the necessary interfacing for audio and video capture, switching
@@ -153,8 +152,6 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
 
  private:
   friend class OpenscreenSessionHostTest;
-  FRIEND_TEST_ALL_PREFIXES(OpenscreenSessionHostTest, ChangeTargetPlayoutDelay);
-  FRIEND_TEST_ALL_PREFIXES(OpenscreenSessionHostTest, UpdateBandwidthEstimate);
 
   using SupportedProfiles = media::VideoEncodeAccelerator::SupportedProfiles;
 
@@ -217,6 +214,7 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
 
   // Called periodically to update the `bandwidth_estimate_`.
   void UpdateBandwidthEstimate();
+  void UpdateBandwidthEstimate(int bandwidth_estimate);
 
   // Create and send OFFER message.
   void Negotiate();
@@ -248,7 +246,7 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
   bool TryResumeCapturingVideo();
 
   // Called to provide Open Screen with access to this host's network proxy.
-  network::mojom::NetworkContext* GetNetworkContext();
+  network::mojom::SocketFactory* GetSocketFactory();
 
   // Called to disable the given hardware codec for the remainder of the
   // session, if it has not already been disabled.
@@ -312,9 +310,9 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
   // negotiation.
   std::unique_ptr<openscreen::cast::SenderSession> session_;
 
-  // Used to provide access to UDP sockets and URL loading.
-  mojo::Remote<network::mojom::NetworkContext> network_context_;
-  bool set_network_context_proxy_ = false;
+  // Used to provide access to UDP sockets.
+  mojo::Remote<network::mojom::SocketFactory> socket_factory_;
+  bool set_socket_factory_proxy_ = false;
 
   // Stored as part of generating an OFFER.
   // NOTE: currently we only support Opus audio, but may provide a variety of
@@ -402,14 +400,16 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) OpenscreenSessionHost final
   // Used to periodically update the currently used bandwidth estimate.
   base::RepeatingTimer bandwidth_update_timer_;
 
-  // Used to override getting the bandwidth from the session. Setting to a
-  // positive value causes the session's bandwidth estimation to not be called.
-  int forced_bandwidth_estimate_for_testing_ = 0;
-
   // The portion of the bandwidth estimate that is currently available for use.
   // Note that the actual bandwidth will be effectively capped at the sum of the
   // current video and audio bitrates.
-  uint32_t usable_bandwidth_ = kDefaultBitrate;
+  uint32_t usable_bandwidth_ =
+      std::min<uint32_t>(kDefaultBitrate, MirrorSettings::GetMaxVideoBitrate());
+
+  // Tracks the number of dropped video frames observed at the last bandwidth
+  // update so downward bandwidth estimates during idle/static screen periods
+  // (where no frames are dropped) do not falsely crush the target bitrate.
+  int num_video_frames_dropped_ = 0;
 
   // Indicate whether we're in the middle of switching tab sources.
   bool switching_tab_source_ = false;

@@ -73,14 +73,6 @@ class GeolocationProviderTest : public testing::Test {
     position2.longitude = 34;
     position2.accuracy = 56;
     position2.timestamp = base::Time::Now();
-
-    feature_list_.InitWithFeatures(/*enabled_features=*/
-                                   {
-#if BUILDFLAG(IS_WIN)
-                                       features::kWinSystemLocationPermission,
-#endif  // BUILDFLAG(IS_WIN)
-                                   },
-                                   /*disabled_features=*/{});
   }
 
   GeolocationProviderTest(const GeolocationProviderTest&) = delete;
@@ -147,8 +139,6 @@ class GeolocationProviderTest : public testing::Test {
 
   // True if |location_provider_manager_| is started.
   bool is_started_;
-
-  base::test::ScopedFeatureList feature_list_;
 };
 
 class GeolocationProviderApproxGeoTest : public GeolocationProviderTest {
@@ -806,6 +796,11 @@ TEST_F(GeolocationProviderTest, StartProviderAfterSystemPermissionGranted) {
 }
 
 TEST_F(GeolocationProviderTest, AddCallbackWhenSystemPermissionDenied) {
+  // Unlike `AddCallbackWhenInitializedWithSystemPermissionDenied`, calling
+  // `SetFakeLocationProviderManager()` first instantiates `provider()` while
+  // system permission is `kNotDetermined`, so the subsequent
+  // `SetSystemPermission(kDenied)` triggers `OnSystemPermissionUpdated()` to
+  // cache the permission denied error before any callback is registered.
   SetFakeLocationProviderManager();
 
   // Set system permission state from kUndetermined to kDenied.
@@ -828,6 +823,32 @@ TEST_F(GeolocationProviderTest, AddCallbackWhenSystemPermissionDenied) {
 
   // Verify that callback should be invoked with permission denied error and
   // provider is not started.
+  EXPECT_EQ(future.Take()->get_error(), error_result_->get_error());
+  EXPECT_FALSE(ProvidersStarted());
+}
+
+TEST_F(GeolocationProviderTest,
+       AddCallbackWhenInitializedWithSystemPermissionDenied) {
+  // Set system permission to kDenied BEFORE `provider()` is first instantiated,
+  // so `GeolocationProviderImpl` initializes with `system_permission_status_`
+  // already set to `kDenied` (and without `OnSystemPermissionUpdated()` having
+  // been called on it).
+  SetSystemPermission(LocationSystemPermissionStatus::kDenied);
+  SetFakeLocationProviderManager();
+
+  base::MockCallback<GeolocationProviderImpl::LocationUpdateCallback>
+      mock_callback;
+  TestFuture<mojom::GeopositionResultPtr> future;
+
+  EXPECT_CALL(mock_callback, Run)
+      .WillOnce([&](const mojom::GeopositionResult& result) {
+        future.SetValue(result.Clone());
+      });
+
+  base::CallbackListSubscription subscription =
+      provider()->AddLocationUpdateCallback(mock_callback.Get(),
+                                            /*enable_high_accuracy=*/true);
+
   EXPECT_EQ(future.Take()->get_error(), error_result_->get_error());
   EXPECT_FALSE(ProvidersStarted());
 }

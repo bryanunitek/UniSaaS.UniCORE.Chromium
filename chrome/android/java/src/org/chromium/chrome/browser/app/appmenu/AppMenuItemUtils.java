@@ -20,6 +20,7 @@ import org.chromium.base.supplier.LazyOneshotSupplierImpl;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.KeyboardShortcuts;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties;
@@ -91,7 +92,8 @@ public class AppMenuItemUtils {
                         theme.shouldShowBadgeOnMenuItemIcon(id))
                 .with(AppMenuItemProperties.MENU_ICON_AT_START, isMenuIconAtStart)
                 .with(AppMenuItemProperties.TITLE_CONDENSED, theme.getContentDescription(id))
-                .with(AppMenuItemProperties.MANAGED, theme.isMenuItemManaged(id));
+                .with(AppMenuItemProperties.MANAGED, theme.isMenuItemManaged(id))
+                .with(AppMenuItemProperties.SHORTCUT_TEXT, KeyboardShortcuts.getShortcutText(id));
     }
 
     /**
@@ -267,36 +269,6 @@ public class AppMenuItemUtils {
         Drawable icon = iconResId != 0 ? AppCompatResources.getDrawable(context, iconResId) : null;
         return buildModelForMenuItemWithSubmenu(
                 context, theme, id, title, icon, submenuItemProvider, isMenuIconAtStart);
-    }
-
-    /**
-     * Build a property model for a menu item with submenu.
-     *
-     * @param context The Context used to resolve resources.
-     * @param theme The AppMenuItemTheme handling theming aspects.
-     * @param id The id of the menu item.
-     * @param titleId The resource id of the title to be displayed.
-     * @param icon The icon to be displayed (or null for no icon).
-     * @param submenuItemProvider The provider of {@code ListItem}s in the submenu.
-     * @param isMenuIconAtStart Whether the menu icon should be placed at the start.
-     * @return The property model for this item.
-     */
-    public static PropertyModel buildModelForMenuItemWithSubmenu(
-            Context context,
-            AppMenuItemTheme theme,
-            @IdRes int id,
-            @StringRes int titleId,
-            @Nullable Drawable icon,
-            Supplier<List<ListItem>> submenuItemProvider,
-            boolean isMenuIconAtStart) {
-        return buildModelForMenuItemWithSubmenu(
-                context,
-                theme,
-                id,
-                context.getString(titleId),
-                icon,
-                submenuItemProvider,
-                isMenuIconAtStart);
     }
 
     /**
@@ -499,11 +471,7 @@ public class AppMenuItemUtils {
                 AppMenuHandler.AppMenuItemType.EMPTY,
                 new PropertyModel.Builder(AppMenuItemProperties.ALL_KEYS)
                         .with(AppMenuItemProperties.MENU_ITEM_ID, R.id.empty_item_menu_id)
-                        // Keep enabled for keyboard navigation; disabled visual styling is handled
-                        // by the layout. Keyboard navigation becomes problematic when a submenu
-                        // contains only one item and that item is disabled. Currently the "empty"
-                        // item is the only case when that can happen.
-                        .with(AppMenuItemProperties.ENABLED, true)
+                        .with(AppMenuItemProperties.ENABLED, false)
                         .build());
     }
 
@@ -557,18 +525,17 @@ public class AppMenuItemUtils {
                 }
 
                 FaviconHelper.FaviconImageCallback faviconCallback =
-                        (image, iconUrl) -> {
-                            set(
-                                    createInsetFaviconDrawable(
-                                            context,
-                                            FaviconUtils.getIconDrawableWithFilter(
-                                                    image,
-                                                    faviconUrl,
-                                                    roundedIconGenerator,
-                                                    defaultFaviconHelper,
-                                                    context,
-                                                    faviconDisplaySize)));
-                        };
+                        (image, _) ->
+                                set(
+                                        createInsetFaviconDrawable(
+                                                context,
+                                                FaviconUtils.getIconDrawableWithFilter(
+                                                        image,
+                                                        faviconUrl,
+                                                        roundedIconGenerator,
+                                                        defaultFaviconHelper,
+                                                        context,
+                                                        faviconDisplaySize)));
 
                 if (tabGroupId != null && !isOffTheRecord) {
                     faviconHelper.getForeignFaviconImageForURL(

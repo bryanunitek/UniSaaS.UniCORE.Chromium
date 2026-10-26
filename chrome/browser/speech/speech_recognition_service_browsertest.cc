@@ -22,7 +22,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/speech/chrome_speech_recognition_service.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/services/speech/soda/soda_test_paths.h"
 #include "chrome/services/speech/speech_recognition_recognizer_impl.h"
@@ -47,12 +47,6 @@
 #include "sandbox/policy/switches.h"
 #include "services/audio/public/cpp/fake_stream_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
-
-#if BUILDFLAG(IS_WIN)
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
 
 using testing::StrictMock;
 
@@ -165,6 +159,7 @@ class SpeechRecognitionServiceTest
 #endif
 
  protected:
+  void SetUpOnMainThread() override;
   void CloseCaptionBubble() {
     is_client_requesting_speech_recognition_ = false;
   }
@@ -176,6 +171,7 @@ class SpeechRecognitionServiceTest
                       size_t kMaxChunkSize);
   void WaitForRecognitionResult(const std::string& expected_result);
   void WaitForRecognitionEventAfterBubbleClosed();
+  void ResetRecognizerAndWaitForDisconnect();
 
   // The root directory for test files.
   base::FilePath test_data_dir_;
@@ -204,6 +200,9 @@ class SpeechRecognitionServiceTest
   // after the caption bubble is closed).
   bool has_stopped_requesting_recognition_ = false;
 
+  // Tracks whether the speech recognition service has stopped.
+  bool has_speech_recognition_stopped_ = false;
+
   std::unique_ptr<base::RunLoop> run_loop_;
   std::string expected_recognition_result_;
 };
@@ -212,6 +211,16 @@ void SpeechRecognitionServiceTest::SetUp() {
   ASSERT_TRUE(
       base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &test_data_dir_));
   InProcessBrowserTest::SetUp();
+}
+
+void SpeechRecognitionServiceTest::SetUpOnMainThread() {
+  InProcessBrowserTest::SetUpOnMainThread();
+#if BUILDFLAG(IS_MAC) && defined(ARCH_CPU_ARM64)
+  // TODO(crbug.com/40753481): Enable test once arm64 macOS binary is available
+  // in CIPD.
+  GTEST_SKIP()
+      << "SODA test binary for arm64 macOS is currently being rolled in CIPD.";
+#endif
 }
 
 void SpeechRecognitionServiceTest::TearDownOnMainThread() {
@@ -254,18 +263,45 @@ void SpeechRecognitionServiceTest::WaitForRecognitionEventAfterBubbleClosed() {
 
 void SpeechRecognitionServiceTest::WaitForRecognitionResult(
     const std::string& expected_result) {
-  if (!recognition_results_.empty() &&
-      recognition_results_.back().find(expected_result) != std::string::npos) {
+  auto contains_expected = [&]() {
+    return std::ranges::any_of(
+        recognition_results_, [&expected_result](const std::string& result) {
+          return result.find(expected_result) != std::string::npos;
+        });
+  };
+
+  if (has_speech_recognition_stopped_ || contains_expected()) {
+    ASSERT_TRUE(contains_expected())
+        << "Speech recognition stopped before receiving: " << expected_result;
     return;
   }
   expected_recognition_result_ = expected_result;
   run_loop_ = std::make_unique<base::RunLoop>();
   run_loop_->Run();
   run_loop_.reset();
+  ASSERT_TRUE(contains_expected())
+      << "Finished waiting, but expected result not found: " << expected_result;
 }
 
 void SpeechRecognitionServiceTest::OnSpeechRecognitionStopped() {
-  NOTREACHED();
+  has_speech_recognition_stopped_ = true;
+  if (run_loop_) {
+    run_loop_->Quit();
+  }
+}
+
+void SpeechRecognitionServiceTest::ResetRecognizerAndWaitForDisconnect() {
+  if (!speech_recognition_client_receiver_.is_bound()) {
+    speech_recognition_recognizer_.reset();
+    return;
+  }
+
+  base::RunLoop disconnect_run_loop;
+  speech_recognition_client_receiver_.set_disconnect_handler(
+      disconnect_run_loop.QuitClosure());
+  speech_recognition_recognizer_.reset();
+  disconnect_run_loop.Run();
+  speech_recognition_client_receiver_.reset();
 }
 
 void SpeechRecognitionServiceTest::OnSpeechRecognitionError() {
@@ -368,32 +404,23 @@ void SpeechRecognitionServiceTest::SendAudioChunk(
     const std::vector<int16_t>& audio_data,
     media::WavAudioHandler* handler,
     size_t kMaxChunkSize) {
-  int chunk_start = 0;
+  size_t chunk_start = 0;
   // Upload chunks of 1024 frames at a time.
-  while (chunk_start < static_cast<int>(audio_data.size())) {
-    int chunk_size = kMaxChunkSize < audio_data.size() - chunk_start
-                         ? kMaxChunkSize
-                         : audio_data.size() - chunk_start;
+  while (chunk_start < audio_data.size()) {
+    size_t chunk_size =
+        std::min(kMaxChunkSize, audio_data.size() - chunk_start);
 
     auto signed_buffer = media::mojom::AudioDataS16::New();
     signed_buffer->channel_count = kExpectedChannelCount;
     signed_buffer->frame_count = chunk_size;
     signed_buffer->sample_rate = handler->GetSampleRate();
-    for (int i = 0; i < chunk_size; i++) {
+    for (size_t i = 0; i < chunk_size; i++) {
       signed_buffer->data.push_back(audio_data[chunk_start + i]);
     }
 
     speech_recognition_recognizer_->SendAudioToSpeechRecognitionService(
         std::move(signed_buffer), std::nullopt);
     chunk_start += chunk_size;
-
-    // Sleep for 20ms to simulate real-time audio. SODA requires audio
-    // streaming in order to return events.
-#if BUILDFLAG(IS_WIN)
-    ::Sleep(20);
-#else
-    usleep(20000);
-#endif
   }
 }
 
@@ -431,10 +458,10 @@ IN_PROC_BROWSER_TEST_F(SpeechRecognitionServiceTest, RecognizePhrase) {
     SendAudioChunk(audio_data, handler.get(), kMaxChunkSize);
   }
 
+  speech_recognition_recognizer_->MarkDone();
   WaitForRecognitionResult("Hey Google Hey Google");
 
-  speech_recognition_recognizer_.reset();
-  base::RunLoop().RunUntilIdle();
+  ResetRecognizerAndWaitForDisconnect();
 
   ASSERT_GT(static_cast<int>(recognition_results_.size()), kReplayAudioCount);
   EXPECT_EQ(recognition_results_.back(), "Hey Google Hey Google");
@@ -477,12 +504,9 @@ IN_PROC_BROWSER_TEST_F(SpeechRecognitionServiceTest,
   bus->ToInterleaved<media::SignedInt16SampleTypeTraits>(audio_data);
   constexpr size_t kMaxChunkSize = 1024;
 
-  // Send an audio chunk to the service. It will output "Hey Google". When the
-  // client receives the result, it responds to the service with `success =
-  // true`, informing the speech recognition service that it still wants
-  // transcriptions.
+  // Send an audio chunk to the service while the caption bubble is open.
   SendAudioChunk(audio_data, handler.get(), kMaxChunkSize);
-  WaitForRecognitionResult("Hey Google");
+  speech_recognition_recognizer_.FlushForTesting();
 
   // Close caption bubble. This means that the next time the client receives a
   // transcription, it will respond to the speech service with `success =
@@ -495,11 +519,12 @@ IN_PROC_BROWSER_TEST_F(SpeechRecognitionServiceTest,
   // false`, informing the speech recognition service that it is no longer
   // requesting speech recognition.
   SendAudioChunk(audio_data, handler.get(), kMaxChunkSize);
+  speech_recognition_recognizer_->MarkDone();
   WaitForRecognitionEventAfterBubbleClosed();
 
-  // Flush the mojo pipe to ensure the `success = false` reply has been
-  // received and processed by the speech recognition service.
-  speech_recognition_recognizer_.FlushForTesting();
+  // Flush the client receiver pipe to ensure the `success = false` reply has
+  // been received and processed by the speech recognition service.
+  speech_recognition_client_receiver_.FlushForTesting();
 
   size_t results_size_before_third_chunk = recognition_results_.size();
 
@@ -509,8 +534,7 @@ IN_PROC_BROWSER_TEST_F(SpeechRecognitionServiceTest,
   // Flush again to ensure the third chunk is processed by the service.
   speech_recognition_recognizer_.FlushForTesting();
 
-  speech_recognition_recognizer_.reset();
-  base::RunLoop().RunUntilIdle();
+  ResetRecognizerAndWaitForDisconnect();
 
   EXPECT_EQ(results_size_before_third_chunk, recognition_results_.size());
 

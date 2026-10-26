@@ -3,10 +3,12 @@
 // found in the LICENSE file.
 
 #include <string>
+#include <string_view>
+#include <utility>
 
-#include "base/containers/flat_map.h"
 #include "base/test/gmock_expected_support.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
@@ -24,8 +26,9 @@
 
 namespace {
 
-base::flat_map</*error code*/ net::Error, /*error message*/ std::string>
-    kTestCases{
+constexpr std::pair</*error code*/ net::Error,
+                    /*error message*/ std::string_view>
+    kTestCases[]{
         {net::ERR_INVALID_WEB_BUNDLE, "This application is missing or damaged"},
         {net::ERR_CONNECTION_REFUSED,
          "The development server for this application cannot be reached"},
@@ -39,9 +42,10 @@ namespace web_app {
 class IsolatedWebAppErrorPageTest : public IsolatedWebAppBrowserTestHarness {
  protected:
   // Navigates IWA and fails with error
-  Browser* LaunchIwaAndFailWithError(const webapps::AppId& app_id,
-                                     const url::Origin& iwa_origin,
-                                     net::Error error_code) {
+  BrowserWindowInterface* LaunchIwaAndFailWithError(
+      const webapps::AppId& app_id,
+      const url::Origin& iwa_origin,
+      net::Error error_code) {
     GURL starting_url = iwa_origin.GetURL().Resolve("/");
 
     std::unique_ptr<content::URLLoaderInterceptor> interceptor =
@@ -56,10 +60,10 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppErrorPageTest, UsesWebAppErrorPage) {
       IsolatedWebAppBuilder(ManifestBuilder()).BuildBundle();
   ASSERT_OK_AND_ASSIGN(IsolatedWebAppUrlInfo url_info, app->Install(profile()));
 
-  Browser* browser = LaunchIwaAndFailWithError(
+  BrowserWindowInterface* browser = LaunchIwaAndFailWithError(
       url_info.app_id(), url_info.origin(), net::ERR_INTERNET_DISCONNECTED);
   content::WebContents* web_contents =
-      browser->tab_strip_model()->GetActiveWebContents();
+      browser->GetTabStripModel()->GetActiveWebContents();
 
   // Expect that the error page is showing.
   EXPECT_TRUE(EvalJs(web_contents,
@@ -76,17 +80,17 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppErrorPageTest,
       IsolatedWebAppBuilder(ManifestBuilder()).BuildBundle();
   ASSERT_OK_AND_ASSIGN(IsolatedWebAppUrlInfo url_info, app->Install(profile()));
 
-  for (auto& test_case : kTestCases) {
+  for (const auto& test_case : kTestCases) {
     net::Error error_code = test_case.first;
-    const std::string& expected_message = test_case.second;
+    std::string_view expected_message = test_case.second;
     SCOPED_TRACE(testing::Message()
                  << "error_code: " << error_code
                  << ", expected_message: " << expected_message);
 
-    Browser* browser = LaunchIwaAndFailWithError(url_info.app_id(),
-                                                 url_info.origin(), error_code);
+    BrowserWindowInterface* browser = LaunchIwaAndFailWithError(
+        url_info.app_id(), url_info.origin(), error_code);
     content::WebContents* web_contents =
-        browser->tab_strip_model()->GetActiveWebContents();
+        browser->GetTabStripModel()->GetActiveWebContents();
 
     EXPECT_EQ(
         expected_message,

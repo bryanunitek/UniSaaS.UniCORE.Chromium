@@ -94,16 +94,21 @@ bool ExtractRedemptionRecordsFromHeader(
     return false;
   }
 
-  for (auto& issuer_and_params : *maybe_list) {
-    net::structured_headers::Item& issuer_item =
-        issuer_and_params.member.front().item;
-    if (!issuer_item.is_string()) {
+  for (const auto& issuer_and_params : *maybe_list) {
+    const net::structured_headers::ParameterizedItem* item =
+        issuer_and_params.GetIfItem();
+    if (!item) {
+      *error_out = "Non-item in the RR header's list";
+      return false;
+    }
+
+    const std::string* issuer_string = item->item.GetIfString();
+    if (!issuer_string) {
       *error_out = "Non-string item in the RR header's list";
       return false;
     }
 
-    const net::structured_headers::Parameters& params_for_issuer =
-        issuer_and_params.params;
+    const net::structured_headers::Parameters& params_for_issuer = item->params;
     if (params_for_issuer.size() != 1) {
       *error_out =
           base::StrCat({"Unexpected number of parameters for RR header list "
@@ -118,23 +123,22 @@ bool ExtractRedemptionRecordsFromHeader(
       return false;
     }
 
-    const net::structured_headers::Item& redemption_record_item =
-        params_for_issuer.front().second;
-    if (!redemption_record_item.is_string()) {
+    const std::string* redemption_record_string =
+        params_for_issuer.front().second.GetIfString();
+    if (!redemption_record_string) {
       *error_out = "Unexpected parameter value type for RR header list item";
       return false;
     }
 
     std::optional<SuitableTrustTokenOrigin> maybe_issuer =
-        SuitableTrustTokenOrigin::Create(GURL(issuer_item.GetString()));
+        SuitableTrustTokenOrigin::Create(GURL(*issuer_string));
     if (!maybe_issuer) {
       *error_out = "Unsuitable Trust Tokens issuer origin in RR header item";
       return false;
     }
 
-    // GetString also gets a byte sequence.
-    redemption_records_per_issuer_out->emplace(
-        std::move(*maybe_issuer), redemption_record_item.GetString());
+    redemption_records_per_issuer_out->emplace(std::move(*maybe_issuer),
+                                               *redemption_record_string);
   }
   return true;
 }

@@ -7,6 +7,7 @@
 
 #include "base/check_op.h"
 #include "base/dcheck_is_on.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/dom/attribute.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html/parser/literal_buffer.h"
@@ -95,7 +96,10 @@ class HTMLAttributesRanges {
 
  private:
   AttributeList attributes_;
-  Attribute* current_attribute_ = nullptr;
+  // UnprotectedInReleaseForPerformance: Based on analysis of Speedometer 3
+  // (Editor-TipTap).
+  raw_ptr<Attribute, UnprotectedInReleaseForPerformance | DanglingUntriaged>
+      current_attribute_ = nullptr;
 };
 
 }  // namespace blink

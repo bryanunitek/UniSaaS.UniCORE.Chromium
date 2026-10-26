@@ -44,13 +44,11 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/login/login_display_host_webui.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/signin_fatal_error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/welcome_screen_handler.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/fake_gaia_mixin.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
@@ -334,7 +332,7 @@ void TestSystemTrayIsVisible() {
 // the -login-user flag indicating that the user is already logged in.
 // This profile should NOT be an OTR profile.
 IN_PROC_BROWSER_TEST_F(LoginUserTest, UserPassed) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   std::string profile_base_name =
       BrowserContextHelper::GetUserBrowserContextDirName("hash");
   EXPECT_EQ(profile_base_name, profile->GetBaseName().value());
@@ -345,7 +343,7 @@ IN_PROC_BROWSER_TEST_F(LoginUserTest, UserPassed) {
 
 // After a guest login, we should get the OTR default profile.
 IN_PROC_BROWSER_TEST_F(LoginGuestTest, GuestIsOTR) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   EXPECT_TRUE(profile->IsOffTheRecord());
   // Ensure there's extension service for this profile.
   EXPECT_TRUE(extensions::ExtensionSystem::Get(profile)->extension_service());

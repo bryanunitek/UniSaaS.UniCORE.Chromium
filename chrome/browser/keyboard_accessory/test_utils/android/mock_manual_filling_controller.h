@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_KEYBOARD_ACCESSORY_TEST_UTILS_ANDROID_MOCK_MANUAL_FILLING_CONTROLLER_H_
 #define CHROME_BROWSER_KEYBOARD_ACCESSORY_TEST_UTILS_ANDROID_MOCK_MANUAL_FILLING_CONTROLLER_H_
 
+#include <optional>
+
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_enums.h"
 #include "chrome/browser/keyboard_accessory/android/manual_filling_controller.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -40,6 +42,9 @@ class MockManualFillingController : public ManualFillingController {
               ShowAccessorySheetTab,
               (const autofill::AccessoryTabType&),
               (override));
+  MOCK_METHOD((void), SetSelectedSuggestion, (std::optional<int>), (override));
+  MOCK_METHOD((bool), Navigate, (autofill::NavigationAction), (override));
+  MOCK_METHOD(bool, AcceptFallback, (), (override));
   MOCK_METHOD((void),
               OnFillingTriggered,
               (autofill::AccessoryTabType type,
@@ -64,7 +69,6 @@ class MockManualFillingController : public ManualFillingController {
                base::OnceCallback<void(autofill::AccessorySheetData)>),
               (override));
   MOCK_METHOD((gfx::NativeView), container_view, (), (const, override));
-  MOCK_METHOD(bool, IsLargeFormFactor, (), (const, override));
 
   base::WeakPtr<MockManualFillingController> AsWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();

@@ -6,6 +6,9 @@
 
 #include "third_party/blink/renderer/core/css/parser/css_tokenizer.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
+
 namespace blink {
 
 namespace {
@@ -61,6 +64,7 @@ StyleEnvironmentVariables::StyleEnvironmentVariables() : parent_(nullptr) {
 StyleEnvironmentVariables& StyleEnvironmentVariables::GetRootInstance() {
   DEFINE_STATIC_LOCAL(Persistent<StyleEnvironmentVariables>, instance,
                       (MakeGarbageCollected<StyleEnvironmentVariables>()));
+  CHECK(IsMainThread());
   return *instance;
 }
 
@@ -274,11 +278,11 @@ void StyleEnvironmentVariables::DetachFromParent() {
 }
 
 String StyleEnvironmentVariables::FormatFloatPx(float value) {
-  return String::Format("%gpx", value);
+  return Format("{:g}px", value);
 }
 
 String StyleEnvironmentVariables::FormatPx(int value) {
-  return String::Format("%dpx", value);
+  return Format("{}px", value);
 }
 
 const FeatureContext* StyleEnvironmentVariables::GetFeatureContext() const {

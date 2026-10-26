@@ -6,14 +6,13 @@ module blink.mojom;
 
 import "services/on_device_model/public/mojom/download_observer.mojom";
 import "third_party/blink/public/mojom/ai/ai_common.mojom";
+import "third_party/blink/public/mojom/ai/ai_decision_model.mojom";
 import "third_party/blink/public/mojom/ai/ai_semantic_embedder.mojom";
 import "third_party/blink/public/mojom/ai/ai_language_model.mojom";
 import "third_party/blink/public/mojom/ai/ai_proofreader.mojom";
 import "third_party/blink/public/mojom/ai/ai_rewriter.mojom";
 import "third_party/blink/public/mojom/ai/ai_summarizer.mojom";
 import "third_party/blink/public/mojom/ai/ai_writer.mojom";
-import "third_party/blink/public/mojom/ai/ai_classifier.mojom";
-import "third_party/blink/public/mojom/ai/ai_semantic_embedder.mojom";
 
 // LINT.IfChange(ModelAvailabilityCheckResult)
 enum ModelAvailabilityCheckResult {
@@ -76,6 +75,9 @@ enum ModelAvailabilityCheckResult {
   // The specified options are not supported with the requested performance
   // preference.
   kUnavailableIncompatiblePreferenceOptions = 21,
+  // The device does not have sufficient disk space to build caches for the
+  // on-device model.
+  kUnavailableInsufficientDiskSpaceForCaches = 22,
 
   // Append new line here
 };
@@ -85,7 +87,7 @@ enum ModelAvailabilityCheckResult {
 interface AIManagerCreateWriterClient {
   // Called with a created writer's mojo interface as a result for the
   // CreateWriter() method of the AIManager.
-  OnResult(pending_remote<blink.mojom.AIWriter> writer);
+  OnResult(pending_remote<blink.mojom.AIWriter> writer, uint64 context_window);
 
   // Called when the manager cannot create an AIWriter.
   // `quota_error_info` may provide additional info for kInitialInputTooLarge.
@@ -96,7 +98,8 @@ interface AIManagerCreateWriterClient {
 interface AIManagerCreateRewriterClient {
   // Called with a created rewriter's mojo interface as a result for the
   // CreateRewriter() method of the AIManager.
-  OnResult(pending_remote<blink.mojom.AIRewriter> rewriter);
+  OnResult(pending_remote<blink.mojom.AIRewriter> rewriter,
+           uint64 context_window);
 
   // Called when the manager cannot create an AIRewriter.
   // `quota_error_info` may provide additional info for kInitialInputTooLarge.
@@ -107,7 +110,8 @@ interface AIManagerCreateRewriterClient {
 interface AIManagerCreateSummarizerClient {
   // Called with a created summarizer's mojo interface as a result for the
   // CreateSummarizer() method of the AIManager.
-  OnResult(pending_remote<blink.mojom.AISummarizer> summarizer);
+  OnResult(pending_remote<blink.mojom.AISummarizer> summarizer,
+           uint64 context_window);
 
   // Called when the manager cannot create an AISummarizer.
   // `quota_error_info` may provide additional info for kInitialInputTooLarge.
@@ -118,20 +122,10 @@ interface AIManagerCreateSummarizerClient {
 interface AIManagerCreateProofreaderClient {
   // Called with a created proofreader's mojo interface as a result for the
   // CreateProofreader() method of the AIManager.
-  OnResult(pending_remote<blink.mojom.AIProofreader> proofreader);
+  OnResult(pending_remote<blink.mojom.AIProofreader> proofreader,
+           uint64 context_window);
 
   // Called when the manager cannot create an AIProofreader.
-  // `quota_error_info` may provide additional info for kInitialInputTooLarge.
-  OnError(AIManagerCreateClientError error, QuotaErrorInfo? quota_error_info);
-};
-
-// The client interface that receives an AIClassifier from an AIManager.
-interface AIManagerCreateClassifierClient {
-  // Called with a created classifier's mojo interface as a result for the
-  // CreateClassifier() method of the AIManager.
-  OnResult(pending_remote<blink.mojom.AIClassifier> classifier);
-
-  // Called when the manager cannot create an AIClassifier.
   // `quota_error_info` may provide additional info for kInitialInputTooLarge.
   OnError(AIManagerCreateClientError error, QuotaErrorInfo? quota_error_info);
 };
@@ -145,6 +139,17 @@ interface AIManagerCreateSemanticEmbedderClient {
 
   // Called when the manager cannot create an AISemanticEmbedder.
   OnError(AIManagerCreateClientError error);
+};
+
+// The client interface that receives an AIDecisionModel from an AIManager.
+interface AIManagerCreateDecisionModelClient {
+  // Called with a created decision model's mojo interface as a result for the
+  // CreateDecisionModel() method of the AIManager.
+  OnSessionCreated(pending_remote<blink.mojom.AIDecisionModel> decision_model);
+
+  // Called when the manager cannot create an AIDecisionModel.
+  // `quota_error_info` may provide additional info for kInitialInputTooLarge.
+  OnError(AIManagerCreateClientError error, QuotaErrorInfo? quota_error_info);
 };
 
 // The manager that could create a new session for the model.
@@ -206,20 +211,27 @@ interface AIManager {
   CreateProofreader(pending_remote<AIManagerCreateProofreaderClient> client,
                     AIProofreaderCreateOptions options,
                     pending_remote<on_device_model.mojom.DownloadObserver>? monitor);
-  // Returns classifier model availability info from the underlying service.
-  CanCreateClassifier(AIClassifierCreateOptions options) =>
-      (ModelAvailabilityCheckResult result);
-  // Creates a new classifier, passing the result or error to the client.
-  // Creation will be aborted if the client is disconnected.
-  CreateClassifier(pending_remote<AIManagerCreateClassifierClient> client,
-                   AIClassifierCreateOptions options,
-                   pending_remote<on_device_model.mojom.DownloadObserver>? monitor);
-
   // Returns embedder model availability info from the underlying service.
   CanCreateSemanticEmbedder() => (ModelAvailabilityCheckResult result);
 
   // Creates an embedder, passing the result or error to the client.
   // Creation will be aborted if the client is disconnected.
   CreateSemanticEmbedder(
-      pending_remote<AIManagerCreateSemanticEmbedderClient> client);
+    pending_remote<AIManagerCreateSemanticEmbedderClient> client,
+    // If `monitor` is provided, the client will receive download progress
+    // updates if the model needs to be downloaded. If it is not provided, the
+    // download will still proceed if necessary, but the client will only be
+    // notified upon completion or failure via the `client` interface.
+    pending_remote<on_device_model.mojom.DownloadObserver>? monitor
+  );
+
+  // Returns decision model availability info from the underlying service.
+  CanCreateDecisionModel(AIDecisionModelCreateOptions options) =>
+      (ModelAvailabilityCheckResult result);
+  // Creates a decision model session, passing the result or error to the
+  // client. Creation will be aborted if the client is disconnected.
+  CreateDecisionModel(
+      pending_remote<AIManagerCreateDecisionModelClient> client,
+      AIDecisionModelCreateOptions options,
+      pending_remote<on_device_model.mojom.DownloadObserver>? monitor);
 };

@@ -10,7 +10,7 @@
 #import "base/metrics/user_metrics_action.h"
 #import "base/strings/sys_string_conversions.h"
 #import "ios/chrome/browser/keyboard/ui_bundled/UIKeyCommand+Chrome.h"
-#import "ios/chrome/browser/shared/coordinator/scene/state/layout_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
@@ -24,7 +24,6 @@
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
-#import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util.h"
 
 namespace {
@@ -55,7 +54,7 @@ CGFloat CompactButtonHorizontalPadding() {
 
 }  // namespace
 
-@interface TabGridBottomToolbar () <LayoutStateObserver>
+@interface TabGridBottomToolbar () <SceneLayoutStateObserver>
 @end
 
 @implementation TabGridBottomToolbar {
@@ -69,9 +68,11 @@ CGFloat CompactButtonHorizontalPadding() {
   BOOL _scrolledToEdge;
   TabGridToolbarBackground* _backgroundView;
   TabGridToolbarScrollingBackground* _scrollBackgroundView;
-  // Configures the responder following the receiver in the responder chain.
-  UIResponder* _followingNextResponder;
   NSLayoutConstraint* _viewTopConstraint;
+  // Required constraints keeping a minimum inset between the
+  // `_largeNewTabButton` and the bottom/trailing edges.
+  NSLayoutConstraint* _largeButtonBottomInsetConstraint;
+  NSLayoutConstraint* _largeButtonTrailingInsetConstraint;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -215,9 +216,9 @@ CGFloat CompactButtonHorizontalPadding() {
   _addToButton.enabled = enabled;
 }
 
-#pragma mark - LayoutStateObserver
+#pragma mark - SceneLayoutStateObserver
 
-- (void)layoutState:(LayoutState*)layoutState
+- (void)layoutState:(SceneLayoutState*)layoutState
     didChangeAppBarPosition:(AppBarPosition)appBarPosition {
   [self updateLayout];
 }
@@ -326,14 +327,11 @@ CGFloat CompactButtonHorizontalPadding() {
 
 // Constraints for the floating mode.
 - (NSArray<NSLayoutConstraint*>*)constraintsForFloatingMode {
-  CGFloat largeButtonHorizontalInset =
-      ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET
-          ? kTabGridFloatingButtonInsetIPad
-          : kTabGridFloatingButtonInset;
-  CGFloat largeButtonVerticalInset =
-      ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET
-          ? kTabGridFloatingButtonInsetIPad
-          : kTabGridFloatingButtonInset;
+  _largeButtonBottomInsetConstraint = [_largeNewTabButton.bottomAnchor
+      constraintLessThanOrEqualToAnchor:self.bottomAnchor];
+  _largeButtonTrailingInsetConstraint = [_largeNewTabButton.trailingAnchor
+      constraintLessThanOrEqualToAnchor:self.trailingAnchor];
+  [self updateFloatingButtonInsets];
 
   NSLayoutConstraint* largeButtonTrailingSafeAreaConstraint =
       [_largeNewTabButton.trailingAnchor
@@ -341,23 +339,30 @@ CGFloat CompactButtonHorizontalPadding() {
   largeButtonTrailingSafeAreaConstraint.priority = UILayoutPriorityDefaultHigh;
   NSLayoutConstraint* largeButtonBottomSafeAreaConstraint =
       [_largeNewTabButton.bottomAnchor
-          constraintEqualToAnchor:self.bottomAnchor];
+          constraintEqualToAnchor:self.safeAreaLayoutGuide.bottomAnchor];
   largeButtonBottomSafeAreaConstraint.priority = UILayoutPriorityDefaultHigh;
 
-  NSMutableArray<NSLayoutConstraint*>* constraints =
-      [NSMutableArray arrayWithArray:@[
-        // Vertical layout:
-        [_largeNewTabButton.bottomAnchor
-            constraintLessThanOrEqualToAnchor:self.bottomAnchor
-                                     constant:-largeButtonVerticalInset],
-        largeButtonBottomSafeAreaConstraint,
-        // Horizontal layout:
-        [_largeNewTabButton.trailingAnchor
-            constraintLessThanOrEqualToAnchor:self.trailingAnchor
-                                     constant:-largeButtonHorizontalInset],
-        largeButtonTrailingSafeAreaConstraint,
-      ]];
-  return constraints;
+  return @[
+    // Vertical layout:
+    _largeButtonBottomInsetConstraint,
+    largeButtonBottomSafeAreaConstraint,
+    // Horizontal layout:
+    _largeButtonTrailingInsetConstraint,
+    largeButtonTrailingSafeAreaConstraint,
+  ];
+}
+
+// Updates the minimum insets of the `_largeNewTabButton` based on the size
+// class.
+- (void)updateFloatingButtonInsets {
+  BOOL isRegularRegular =
+      self.traitCollection.horizontalSizeClass ==
+          UIUserInterfaceSizeClassRegular &&
+      self.traitCollection.verticalSizeClass == UIUserInterfaceSizeClassRegular;
+  CGFloat inset = isRegularRegular ? kTabGridFloatingButtonInsetIPad
+                                   : kTabGridFloatingButtonInset;
+  _largeButtonBottomInsetConstraint.constant = -inset;
+  _largeButtonTrailingInsetConstraint.constant = -inset;
 }
 
 // Setup container toolbar, buttons and constraints.
@@ -380,7 +385,7 @@ CGFloat CompactButtonHorizontalPadding() {
                       image:nil
              targetSelector:@selector(doneButtonTapped:)];
   _doneButton.role = UIButtonRolePrimary;
-  _doneButton.accessibilityIdentifier = kTabGridDoneButtonIdentifier;
+  _doneButton.accessibilityIdentifier = kTabGridExitTabGridButtonIdentifier;
   _doneButton.titleLabel.font = [UIFont boldSystemFontOfSize:kButtonFontSize];
   [_containerToolbar addSubview:_doneButton];
 
@@ -414,8 +419,8 @@ CGFloat CompactButtonHorizontalPadding() {
   // Share button.
   _shareButton =
       [self createButtonWithTitle:nil
-                            image:DefaultSymbolWithPointSize(
-                                      kShareSymbol, kSymbolActionPointSize)
+                            image:SymbolWithPointSize(SymbolShare,
+                                                      kSymbolActionPointSize)
                    targetSelector:@selector(shareSelectedTabs:)];
   _shareButton.accessibilityIdentifier = kTabGridEditShareButtonIdentifier;
   [_containerToolbar addSubview:_shareButton];
@@ -458,6 +463,7 @@ CGFloat CompactButtonHorizontalPadding() {
   // Search mode doesn't have bottom toolbar or floating buttons, Handle it and
   // return early in that case.
   [self hideAllButtons];
+  [self updateFloatingButtonInsets];
 
   BOOL useCompactLayout = [self shouldUseCompactLayout];
   BOOL hideToolbar;
@@ -550,17 +556,15 @@ CGFloat CompactButtonHorizontalPadding() {
     _scrollBackgroundView = [[TabGridToolbarScrollingBackground alloc] init];
     _scrollBackgroundView.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_scrollBackgroundView];
-    AddSameConstraintsToSides(
-        self, _scrollBackgroundView,
-        LayoutSides::kLeading | LayoutSides::kTop | LayoutSides::kTrailing);
+    AddSameConstraintsToSides(self, _scrollBackgroundView,
+                              LayoutSides::kTop | LayoutSides::kHorizontal);
   } else {
     _backgroundView =
         [[TabGridToolbarBackground alloc] initWithFrame:self.frame];
     _backgroundView.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_backgroundView];
-    AddSameConstraintsToSides(
-        self, _backgroundView,
-        LayoutSides::kLeading | LayoutSides::kTop | LayoutSides::kTrailing);
+    AddSameConstraintsToSides(self, _backgroundView,
+                              LayoutSides::kTop | LayoutSides::kHorizontal);
   }
 }
 
@@ -594,17 +598,7 @@ CGFloat CompactButtonHorizontalPadding() {
   _largeNewTabButton.hidden = YES;
 }
 
-#pragma mark - Public
-
-- (void)respondBeforeResponder:(UIResponder*)nextResponder {
-  _followingNextResponder = nextResponder;
-}
-
 #pragma mark - UIResponder
-
-- (UIResponder*)nextResponder {
-  return _followingNextResponder;
-}
 
 - (NSArray<UIKeyCommand*>*)keyCommands {
   return @[ UIKeyCommand.cr_closeAll, UIKeyCommand.cr_close ];
@@ -634,7 +628,7 @@ CGFloat CompactButtonHorizontalPadding() {
 
 - (void)doneButtonTapped:(id)sender {
   if (_doneButton.enabled) {
-    [self.buttonsDelegate doneButtonTapped:sender];
+    [self.buttonsDelegate exitTabGridButtonTapped:sender];
   }
 }
 
@@ -666,7 +660,7 @@ CGFloat CompactButtonHorizontalPadding() {
   [self updateBackgroundVisibility];
 }
 
-- (void)setLayoutState:(LayoutState*)layoutState {
+- (void)setLayoutState:(SceneLayoutState*)layoutState {
   if (_layoutState == layoutState) {
     return;
   }

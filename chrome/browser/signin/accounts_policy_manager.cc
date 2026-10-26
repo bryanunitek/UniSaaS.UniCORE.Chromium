@@ -7,7 +7,6 @@
 #include <string>
 
 #include "base/auto_reset.h"
-#include "base/debug/stack_trace.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -24,7 +23,6 @@
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -68,8 +66,8 @@ class AccountsPolicyManager::DeleteProfileDialogManager
   void PresentDialogOnAllBrowserWindows(
       Profile* profile,
       bool auto_confirm_profile_deletion_for_testing) {
-    DCHECK(profile);
-    DCHECK(profile_path_.empty());
+    CHECK(profile, base::NotFatalUntil::M162);
+    CHECK(profile_path_.empty(), base::NotFatalUntil::M162);
     profile_path_ = profile->GetPath();
 
     if (auto_confirm_profile_deletion_for_testing) {
@@ -94,7 +92,7 @@ class AccountsPolicyManager::DeleteProfileDialogManager
   }
 
   void OnBrowserActivated(BrowserWindowInterface* browser) override {
-    DCHECK(!profile_path_.empty());
+    CHECK(!profile_path_.empty(), base::NotFatalUntil::M162);
     if (profile_path_ != browser->GetProfile()->GetPath()) {
       return;
     }
@@ -152,7 +150,8 @@ class AccountsPolicyManager::DeleteProfileDialogManager
     }
 
     // Show the dialog.
-    DCHECK(active_browser_->GetWindow()->GetNativeWindow());
+    CHECK(active_browser_->GetWindow()->GetNativeWindow(),
+          base::NotFatalUntil::M162);
     chrome::MessageBoxResult result = chrome::ShowWarningMessageBoxSync(
         active_browser_->GetWindow()->GetNativeWindow(),
         l10n_util::GetStringUTF16(IDS_PROFILE_WILL_BE_DELETED_DIALOG_TITLE),
@@ -201,8 +200,8 @@ class AccountsPolicyManager::DeleteProfileDialogManager
 
 AccountsPolicyManager::AccountsPolicyManager(Profile* profile)
     : profile_(profile) {
-  DCHECK(profile_);
-  DCHECK(!profile_->IsOffTheRecord());
+  CHECK(profile_, base::NotFatalUntil::M162);
+  CHECK(!profile_->IsOffTheRecord(), base::NotFatalUntil::M162);
   Initialize();
 }
 
@@ -324,7 +323,6 @@ void AccountsPolicyManager::EnsurePrimaryAccountAllowedForProfile(
           << profile->GetPrefs()->IsManagedPreference(prefs::kSigninAllowed)
           << "), SigninLevel=" << signin_level << ", ProfileType="
           << static_cast<int>(profile_metrics::GetBrowserProfileType(profile));
-      LOG(WARNING) << base::debug::StackTrace().ToString();
     }
 
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -351,10 +349,11 @@ void AccountsPolicyManager::ShowDeleteProfileDialog(Profile* profile,
 void AccountsPolicyManager::OnUserConfirmedProfileDeletion(
     DeleteProfileDialogManager* dialog_manager,
     base::FilePath profile_path) {
-  DCHECK_EQ(delete_profile_dialog_manager_.get(), dialog_manager);
+  CHECK_EQ(delete_profile_dialog_manager_.get(), dialog_manager,
+           base::NotFatalUntil::M162);
   delete_profile_dialog_manager_.reset();
 
-  DCHECK(profiles::IsMultipleProfilesEnabled());
+  CHECK(profiles::IsMultipleProfilesEnabled(), base::NotFatalUntil::M162);
 
   g_browser_process->profile_manager()
       ->GetDeleteProfileHelper()
@@ -388,10 +387,10 @@ void AccountsPolicyManager::RemoveUnallowedAccounts() {
   auto* accounts_mutator = identity_manager->GetAccountsMutator();
   for (const auto& account : accounts) {
     if (!signin_util::IsAccountExemptedFromEnterpriseProfileSeparation(
-            profile_, account.email) &&
-        account.account_id != primary_account_id) {
+            profile_, account.GetEmail()) &&
+        account.GetAccountId() != primary_account_id) {
       accounts_mutator->RemoveAccount(
-          account.account_id,
+          account.GetAccountId(),
           signin_metrics::SourceForRefreshTokenOperation::
               kEnterprisePolicy_AccountNotAllowedInContentArea);
     }

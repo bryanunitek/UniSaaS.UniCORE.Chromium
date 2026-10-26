@@ -6,6 +6,7 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/ui/ash/account_manager/fake_account_manager_dialog.h"
@@ -31,13 +32,11 @@ account_manager::Account FakeAccount() {
   return {account_manager::AccountKey::FromGaiaId(kFakeGaiaId), kFakeEmail};
 }
 
-void Increment(int* value) {
-  ++*value;
-}
-
 class AccountManagerDialogCoordinatorTest : public testing::Test {
  public:
-  AccountManagerDialogCoordinatorTest() = default;
+  AccountManagerDialogCoordinatorTest()
+      : coordinator_(base::BindLambdaForTesting(
+            [this]() { ++dialog_flow_finished_calls_; })) {}
   AccountManagerDialogCoordinatorTest(
       const AccountManagerDialogCoordinatorTest&) = delete;
   AccountManagerDialogCoordinatorTest& operator=(
@@ -65,7 +64,10 @@ class AccountManagerDialogCoordinatorTest : public testing::Test {
 
   AccountManagerDialogCoordinator& coordinator() { return coordinator_; }
 
+  int dialog_flow_finished_calls() const { return dialog_flow_finished_calls_; }
+
  private:
+  int dialog_flow_finished_calls_ = 0;
   AccountManagerDialogCoordinator coordinator_;
   test::FakeAccountManagerDialog fake_account_manager_dialog_;
   base::ScopedClosureRunner reset_dialog_callbacks_;
@@ -76,10 +78,9 @@ TEST_F(AccountManagerDialogCoordinatorTest,
   account_manager::AccountAdditionOptions options;
   options.is_available_in_arc = true;
   options.show_arc_availability_picker = true;
-  base::test::TestFuture<const account_manager::AccountUpsertionResult&> future;
 
   coordinator().ShowAddAccountDialog(kTestAddAccountSource, options,
-                                     future.GetCallback());
+                                     base::DoNothing());
 
   EXPECT_EQ(1,
             fake_account_manager_dialog().show_account_addition_dialog_calls());
@@ -92,21 +93,27 @@ TEST_F(AccountManagerDialogCoordinatorTest,
                   ->show_arc_availability_picker);
 
   fake_account_manager_dialog().CloseDialog();
-  EXPECT_EQ(account_manager::AccountUpsertionResult::Status::kCancelledByUser,
-            future.Take().status());
 }
 
 TEST_F(AccountManagerDialogCoordinatorTest,
        ShowReauthAccountDialogOpensDialogAndPassesEmail) {
-  base::test::TestFuture<const account_manager::AccountUpsertionResult&> future;
-
   coordinator().ShowReauthAccountDialog(kTestReauthAccountSource, kFakeEmail,
-                                        future.GetCallback());
+                                        base::DoNothing());
 
   EXPECT_EQ(1, fake_account_manager_dialog()
                    .show_account_reauthentication_dialog_calls());
   ASSERT_TRUE(fake_account_manager_dialog().last_reauth_email());
   EXPECT_EQ(kFakeEmail, *fake_account_manager_dialog().last_reauth_email());
+
+  fake_account_manager_dialog().CloseDialog();
+}
+
+TEST_F(AccountManagerDialogCoordinatorTest,
+       ClosingDialogReturnsCancelledByUser) {
+  base::test::TestFuture<const account_manager::AccountUpsertionResult&> future;
+  coordinator().ShowAddAccountDialog(kTestAddAccountSource,
+                                     account_manager::AccountAdditionOptions{},
+                                     future.GetCallback());
 
   fake_account_manager_dialog().CloseDialog();
   EXPECT_EQ(account_manager::AccountUpsertionResult::Status::kCancelledByUser,
@@ -115,10 +122,9 @@ TEST_F(AccountManagerDialogCoordinatorTest,
 
 TEST_F(AccountManagerDialogCoordinatorTest,
        DuplicateAddAccountDialogReturnsAlreadyInProgress) {
-  base::test::TestFuture<const account_manager::AccountUpsertionResult&> future;
   coordinator().ShowAddAccountDialog(kTestAddAccountSource,
                                      account_manager::AccountAdditionOptions{},
-                                     future.GetCallback());
+                                     base::DoNothing());
 
   base::test::TestFuture<const account_manager::AccountUpsertionResult&>
       duplicate_future;
@@ -132,15 +138,12 @@ TEST_F(AccountManagerDialogCoordinatorTest,
             fake_account_manager_dialog().show_account_addition_dialog_calls());
 
   fake_account_manager_dialog().CloseDialog();
-  EXPECT_EQ(account_manager::AccountUpsertionResult::Status::kCancelledByUser,
-            future.Take().status());
 }
 
 TEST_F(AccountManagerDialogCoordinatorTest,
        DuplicateReauthAccountDialogReturnsAlreadyInProgress) {
-  base::test::TestFuture<const account_manager::AccountUpsertionResult&> future;
   coordinator().ShowReauthAccountDialog(kTestReauthAccountSource, kFakeEmail,
-                                        future.GetCallback());
+                                        base::DoNothing());
 
   base::test::TestFuture<const account_manager::AccountUpsertionResult&>
       duplicate_future;
@@ -153,8 +156,6 @@ TEST_F(AccountManagerDialogCoordinatorTest,
                    .show_account_reauthentication_dialog_calls());
 
   fake_account_manager_dialog().CloseDialog();
-  EXPECT_EQ(account_manager::AccountUpsertionResult::Status::kCancelledByUser,
-            future.Take().status());
 }
 
 TEST_F(AccountManagerDialogCoordinatorTest,
@@ -181,34 +182,25 @@ TEST_F(AccountManagerDialogCoordinatorTest,
 TEST_F(AccountManagerDialogCoordinatorTest,
        AddAccountDialogRecordsSourceAndResultUMA) {
   base::HistogramTester histogram_tester;
-  base::test::TestFuture<const account_manager::AccountUpsertionResult&> future;
-  int dialog_flow_finished_calls = 0;
-  coordinator().SetDialogFlowFinishedCallback(
-      base::BindRepeating(&Increment, &dialog_flow_finished_calls));
 
   coordinator().ShowAddAccountDialog(
       account_manager::AccountAdditionSource::kArc,
-      account_manager::AccountAdditionOptions{}, future.GetCallback());
+      account_manager::AccountAdditionOptions{}, base::DoNothing());
 
   fake_account_manager_dialog().CloseDialog();
-  EXPECT_EQ(account_manager::AccountUpsertionResult::Status::kCancelledByUser,
-            future.Take().status());
   histogram_tester.ExpectUniqueSample(
       account_manager::kAccountAdditionSourceHistogramName,
       account_manager::AccountAdditionSource::kArc, 1);
   histogram_tester.ExpectUniqueSample(
       account_manager::kAccountUpsertionResultStatusHistogramName,
       account_manager::AccountUpsertionResult::Status::kCancelledByUser, 1);
-  EXPECT_EQ(1, dialog_flow_finished_calls);
+  EXPECT_EQ(1, dialog_flow_finished_calls());
 }
 
 TEST_F(AccountManagerDialogCoordinatorTest,
        ReauthAccountDialogRecordsSourceAndResultUMA) {
   base::HistogramTester histogram_tester;
   base::test::TestFuture<const account_manager::AccountUpsertionResult&> future;
-  int dialog_flow_finished_calls = 0;
-  coordinator().SetDialogFlowFinishedCallback(
-      base::BindRepeating(&Increment, &dialog_flow_finished_calls));
 
   coordinator().ShowReauthAccountDialog(
       account_manager::AccountAdditionSource::kChromeOSProjectorAppReauth,
@@ -226,7 +218,7 @@ TEST_F(AccountManagerDialogCoordinatorTest,
   histogram_tester.ExpectUniqueSample(
       account_manager::kAccountUpsertionResultStatusHistogramName,
       account_manager::AccountUpsertionResult::Status::kSuccess, 1);
-  EXPECT_EQ(1, dialog_flow_finished_calls);
+  EXPECT_EQ(1, dialog_flow_finished_calls());
 }
 
 TEST_F(AccountManagerDialogCoordinatorTest,
@@ -242,15 +234,11 @@ TEST_F(AccountManagerDialogCoordinatorTest,
             first_future.Take().status());
   fake_account_manager_dialog().CloseDialog();
 
-  base::test::TestFuture<const account_manager::AccountUpsertionResult&>
-      second_future;
   coordinator().ShowAddAccountDialog(kTestAddAccountSource,
                                      account_manager::AccountAdditionOptions{},
-                                     second_future.GetCallback());
+                                     base::DoNothing());
   fake_account_manager_dialog().CloseDialog();
 
-  EXPECT_EQ(account_manager::AccountUpsertionResult::Status::kCancelledByUser,
-            second_future.Take().status());
   EXPECT_EQ(2,
             fake_account_manager_dialog().show_account_addition_dialog_calls());
 }

@@ -22,7 +22,7 @@
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_network_interface.h"
 #include "components/autofill/core/browser/payments/test_payments_network_interface.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/ui/payments/card_unmask_prompt_options.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
@@ -80,11 +80,11 @@ class MockUIDelegate : public FullCardRequest::UIDelegate {
               (PaymentsRpcResult),
               (override));
 #if BUILDFLAG(IS_ANDROID)
-  MOCK_METHOD(bool, ShouldOfferFidoAuth, (), (const override));
+  MOCK_METHOD(bool, ShouldOfferFidoAuth, (), (const, override));
   MOCK_METHOD(bool,
               UserOptedInToFidoFromSettingsPageOnMobile,
               (),
-              (const override));
+              (const, override));
 #endif
 
   base::WeakPtr<MockUIDelegate> AsWeakPtr() {
@@ -208,8 +208,8 @@ class FullCardRequestTest : public testing::Test {
   variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
       variations::VariationsIdsProvider::Mode::kUseSignedInState};
   syncer::TestSyncService sync_service_;
-  MockResultDelegate result_delegate_;
-  MockUIDelegate ui_delegate_;
+  testing::NiceMock<MockResultDelegate> result_delegate_;
+  testing::NiceMock<MockUIDelegate> ui_delegate_;
   TestAutofillClient autofill_client_;
   network::TestURLLoaderFactory test_url_loader_factory_;
   scoped_refptr<network::SharedURLLoaderFactory> test_shared_loader_factory_;

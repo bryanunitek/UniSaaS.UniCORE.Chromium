@@ -4,11 +4,13 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 #include <utility>
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -32,8 +34,8 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -83,14 +85,14 @@ struct TestAccountInfo {
 };
 
 // Accounts for multi profile test.
-static const TestAccountInfo kTestAccounts[] = {
+constexpr auto kTestAccounts = std::to_array<TestAccountInfo>({
     {"__dummy__@invalid.domain", GaiaId::Literal("10000"), "hashdummy",
      "Dummy Account"},
     {"alice@invalid.domain", GaiaId::Literal("10001"), "hashalice", "Alice"},
     {"bob@invalid.domain", GaiaId::Literal("10002"), "hashbobbo", "Bob"},
     {"charlie@invalid.domain", GaiaId::Literal("10003"), "hashcharl",
      "Charlie"},
-};
+});
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 class TestChromeDownloadManagerDelegate : public ChromeDownloadManagerDelegate {
@@ -308,7 +310,8 @@ class DownloadNotificationTestBase : public InProcessBrowserTest {
   }
 
  protected:
-  content::DownloadManager* GetDownloadManager(Browser* browser) {
+  content::DownloadManager* GetDownloadManager(
+      BrowserWindowInterface* browser) {
     return browser->GetProfile()->GetDownloadManager();
   }
 
@@ -341,7 +344,7 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
   ~DownloadNotificationTest() override = default;
 
   void SetUpOnMainThread() override {
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
 
     std::unique_ptr<TestChromeDownloadManagerDelegate> test_delegate;
     test_delegate =
@@ -379,7 +382,7 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
 
   TestChromeDownloadManagerDelegate* GetIncognitoDownloadManagerDelegate()
       const {
-    Profile* incognito_profile = incognito_browser()->profile();
+    Profile* incognito_profile = incognito_browser()->GetProfile();
     return static_cast<TestChromeDownloadManagerDelegate*>(
         DownloadCoreServiceFactory::GetForBrowserContext(incognito_profile)
             ->GetDownloadManagerDelegate());
@@ -390,21 +393,22 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
         browser(), GURL(SlowDownloadInterceptor::kKnownSizeUrl));
   }
 
-  // Returns the correct display service for the given Browser. If |browser| is
-  // null, returns the service for browser().
+  // Returns the correct display service for the given browser window. If
+  // |browser| is null, returns the service for browser().
   NotificationDisplayServiceTester* GetDisplayServiceForBrowser(
-      Browser* browser) {
+      BrowserWindowInterface* browser) {
     return (browser && browser == DownloadNotificationTest::incognito_browser())
                ? incognito_display_service_.get()
                : display_service_.get();
   }
 
-  void WaitForDownloadNotification(Browser* browser = nullptr) {
+  void WaitForDownloadNotification(BrowserWindowInterface* browser = nullptr) {
     WaitForDownloadNotificationForDisplayService(
         GetDisplayServiceForBrowser(browser));
   }
 
-  void CreateDownloadForBrowserAndURL(Browser* browser, GURL url) {
+  void CreateDownloadForBrowserAndURL(BrowserWindowInterface* browser,
+                                      GURL url) {
     // Starts a download.
     content::DownloadTestObserverInProgress download_in_progress_observer(
         GetDownloadManager(browser), /*wait_count=*/1u);
@@ -423,7 +427,7 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
     CacheNotification(browser);
   }
 
-  void CacheNotification(Browser* browser) {
+  void CacheNotification(BrowserWindowInterface* browser) {
     ASSERT_FALSE(notification());
     ASSERT_TRUE(notification_id_.empty());
 
@@ -474,7 +478,9 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
   std::optional<message_center::Notification> notification() const {
     return GetNotification(notification_id_);
   }
-  Browser* incognito_browser() const { return incognito_browser_; }
+  BrowserWindowInterface* incognito_browser() const {
+    return incognito_browser_;
+  }
   base::FilePath GetDownloadPath() {
     return DownloadPrefs::FromDownloadManager(GetDownloadManager(browser()))
         ->DownloadPath();
@@ -486,7 +492,8 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
 
  private:
   raw_ptr<download::DownloadItem, DanglingUntriaged> download_item_ = nullptr;
-  raw_ptr<Browser, DanglingUntriaged> incognito_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface, DanglingUntriaged> incognito_browser_ =
+      nullptr;
   std::string notification_id_;
 };
 
@@ -1065,15 +1072,15 @@ class MultiProfileDownloadNotificationTest
     DownloadNotificationTestBase::SetUpOnMainThread();
 
     // Add all users, except the first one, which is already logged in.
-    for (size_t i = 1; i < std::size(kTestAccounts); ++i) {
-      AddUser(UNSAFE_TODO(kTestAccounts[i]));
+    for (const auto& account : base::span(kTestAccounts).subspan(1u)) {
+      AddUser(account);
     }
   }
 
   Profile* GetProfileByIndex(int index) {
     return g_browser_process->profile_manager()->GetProfileByPath(
         ash::ProfileHelper::GetProfilePathByUserIdHash(
-            UNSAFE_TODO(kTestAccounts[index]).hash));
+            kTestAccounts[index].hash));
   }
 
   // Adds a new user for testing to the current session.
@@ -1108,8 +1115,8 @@ IN_PROC_BROWSER_TEST_F(MultiProfileDownloadNotificationTest,
 
   Profile* profile1 = GetProfileByIndex(1);
   Profile* profile2 = GetProfileByIndex(2);
-  Browser* browser1 = CreateBrowser(profile1);
-  Browser* browser2 = CreateBrowser(profile2);
+  BrowserWindowInterface* browser1 = CreateBrowser(profile1);
+  BrowserWindowInterface* browser2 = CreateBrowser(profile2);
   EXPECT_NE(browser1, browser2);
 
   display_service1_ =

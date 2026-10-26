@@ -11,7 +11,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -183,7 +183,7 @@ class RecordLanguagesMetricsBrowserTest : public InProcessBrowserTest {
       const std::vector<std::string>& accept_languages) {
     std::unique_ptr<language::LanguagePrefs> language_prefs =
         std::make_unique<language::LanguagePrefs>(
-            browser()->profile()->GetPrefs());
+            browser()->GetProfile()->GetPrefs());
     language_prefs->SetUserSelectedLanguagesList(accept_languages);
   }
 

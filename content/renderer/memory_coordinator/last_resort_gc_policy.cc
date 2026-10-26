@@ -4,7 +4,6 @@
 
 #include "content/renderer/memory_coordinator/last_resort_gc_policy.h"
 
-#include <optional>
 #include <string>
 #include <string_view>
 
@@ -39,13 +38,12 @@ LastResortGCPolicy::LastResortGCPolicy(MemoryCoordinatorPolicyManager& manager)
     : PredicateMemoryCoordinatorPolicy(
           manager,
           base::BindRepeating([](uint32_t consumer_id,
-                                 std::optional<base::MemoryConsumerTraits>
-                                     traits,
+                                 std::string_view consumer_name,
+                                 base::MemoryConsumerTraits traits,
                                  ProcessType process_type,
                                  ChildProcessId child_process_id) {
-            return traits.has_value() &&
-                   traits->release_gc_references ==
-                       base::MemoryConsumerTraits::ReleaseGCReferences::kYes;
+            return traits.release_gc_references ==
+                   base::MemoryConsumerTraits::ReleaseGCReferences::kYes;
           })),
       policy_registration_(manager, *this) {
   CHECK(!g_instance);
@@ -60,7 +58,7 @@ LastResortGCPolicy::~LastResortGCPolicy() {
 void LastResortGCPolicy::OnV8HeapLastResortGC() {
   // The V8 heap is full and can't free enough memory. To help the impending GC,
   // notify consumers that retain references to the v8 heap.
-  SetLimit(0, /*release_memory=*/true);
+  SetLimit(base::MemoryLimit::FromPercent(0), /*release_memory=*/true);
 
   // Immediately restore the limit if there is no delay.
   if (kRestoreLimitSeconds.Get() == 0) {
@@ -74,8 +72,7 @@ void LastResortGCPolicy::OnV8HeapLastResortGC() {
 }
 
 void LastResortGCPolicy::OnRestoreLimitTimerFired() {
-  SetLimit(base::MemoryConsumer::kDefaultMemoryLimit,
-           /*release_memory=*/false);
+  SetLimit(base::MemoryLimit::Default(), /*release_memory=*/false);
 }
 
 }  // namespace content

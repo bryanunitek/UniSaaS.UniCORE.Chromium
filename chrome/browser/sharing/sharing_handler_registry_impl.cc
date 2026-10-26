@@ -8,10 +8,12 @@
 #include "build/build_config.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/sharing/browser_actuator/browser_actuator_message_handler.h"
 #include "chrome/browser/sharing/glic_experimental_triggering/glic_experimental_triggering_message_handler.h"
 #include "chrome/browser/sharing/one_time_tokens/one_time_token_sharing_handler.h"
 #include "chrome/browser/sharing/optimization_guide/optimization_guide_message_handler.h"
 #include "chrome/common/chrome_features.h"
+#include "components/browser_actuator/public/features.h"
 #include "components/one_time_tokens/core/browser/gmail_otp_backend.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/sharing_message/ack_message_handler.h"
@@ -22,14 +24,30 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/sharing/sms/sms_fetch_request_handler.h"
-#else
-#include "chrome/browser/sharing/shared_clipboard/shared_clipboard_message_handler_desktop.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/sharing/shared_clipboard/remote_copy_message_handler.h"
 #endif
+
+namespace {
+
+std::set<components_sharing_message::SharingMessage::PayloadCase>
+GetBrowserActuatorPayloads() {
+  std::set<components_sharing_message::SharingMessage::PayloadCase> payloads;
+  if (!base::FeatureList::IsEnabled(browser_actuator::kBrowserActuator)) {
+    return payloads;
+  }
+
+  // Generic transport messages always go to BrowserActuatorMessageHandler.
+  payloads.insert(
+      components_sharing_message::SharingMessage::kActuatorDownstreamMessage);
+
+  return payloads;
+}
+
+}  // namespace
 
 SharingHandlerRegistryImpl::SharingHandlerRegistryImpl(
     Profile* profile,
@@ -61,18 +79,6 @@ SharingHandlerRegistryImpl::SharingHandlerRegistryImpl(
                            kOptimizationGuidePushNotification});
   }
 
-#if !BUILDFLAG(IS_ANDROID)
-  if (sharing_device_registration->IsSharedClipboardSupported()) {
-    std::unique_ptr<SharingMessageHandler> shared_clipboard_message_handler;
-    shared_clipboard_message_handler =
-        std::make_unique<SharedClipboardMessageHandlerDesktop>(device_source,
-                                                               profile);
-    AddSharingHandler(
-        std::move(shared_clipboard_message_handler),
-        {components_sharing_message::SharingMessage::kSharedClipboardMessage});
-  }
-#endif  // !BUILDFLAG(IS_ANDROID)
-
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
   if (sharing_device_registration->IsRemoteCopySupported()) {
@@ -100,6 +106,13 @@ SharingHandlerRegistryImpl::SharingHandlerRegistryImpl(
             profile, message_sender),
         {components_sharing_message::SharingMessage::
              kGlicExperimentalTriggering});
+  }
+
+  std::set<components_sharing_message::SharingMessage::PayloadCase>
+      browser_actuator_payloads = GetBrowserActuatorPayloads();
+  if (!browser_actuator_payloads.empty()) {
+    AddSharingHandler(std::make_unique<BrowserActuatorMessageHandler>(profile),
+                      browser_actuator_payloads);
   }
 }
 
@@ -141,7 +154,7 @@ void SharingHandlerRegistryImpl::RegisterSharingHandler(
     std::unique_ptr<SharingMessageHandler> handler,
     components_sharing_message::SharingMessage::PayloadCase payload_case) {
   DCHECK(handler) << "Received request to add null handler";
-  DCHECK(!GetSharingHandler(payload_case));
+  CHECK(!GetSharingHandler(payload_case), base::NotFatalUntil::M162);
   DCHECK(payload_case !=
          components_sharing_message::SharingMessage::PAYLOAD_NOT_SET)
       << "Incorrect payload type specified for handler";

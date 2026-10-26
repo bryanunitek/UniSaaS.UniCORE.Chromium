@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {getFaviconUrl} from '//resources/js/icon.js';
+import {getFaviconUrl, isFaviconUrl} from '//resources/js/icon.js';
 import {loadTimeData} from '//resources/js/load_time_data.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import type {AutocompleteMatch} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import {SecondaryTextPlacement} from '//resources/mojo/components/omnibox/browser/suggest_template_info.mojom-webui.js';
 
 import {getCss} from './searchbox_icon.css.js';
 import {getHtml} from './searchbox_icon.html.js';
@@ -17,6 +18,36 @@ const FEATURED_ENTERPRISE_SEARCH: string = 'featured-enterprise-search';
 const HISTORY_CLUSTER_MATCH_TYPE: string = 'history-cluster';
 const PEDAL: string = 'pedal';
 const STARTER_PACK: string = 'starter-pack';
+
+const NON_FAVICON_MATCH_TYPES: Set<string> = new Set([
+  DOCUMENT_MATCH_TYPE,
+  FEATURED_ENTERPRISE_SEARCH,
+  HISTORY_CLUSTER_MATCH_TYPE,
+  PEDAL,
+  STARTER_PACK,
+]);
+
+// The following icons should not use the GM3 foreground color.
+// TODO(niharm): Refactor logic in C++ and send via mojom in
+// "chrome/browser/ui/webui/searchbox/searchbox_handler.cc".
+const THEMED_ICONS: Set<string> = new Set([
+  '//resources/cr_components/searchbox/icons/calendar.svg',
+  '//resources/cr_components/searchbox/icons/drive_docs.svg',
+  '//resources/cr_components/searchbox/icons/drive_folder.svg',
+  '//resources/cr_components/searchbox/icons/drive_form.svg',
+  '//resources/cr_components/searchbox/icons/drive_image.svg',
+  '//resources/cr_components/searchbox/icons/drive_logo.svg',
+  '//resources/cr_components/searchbox/icons/drive_pdf.svg',
+  '//resources/cr_components/searchbox/icons/drive_sheets.svg',
+  '//resources/cr_components/searchbox/icons/drive_slides.svg',
+  '//resources/cr_components/searchbox/icons/drive_video.svg',
+  '//resources/cr_components/searchbox/icons/google_agentspace_logo.svg',
+  '//resources/cr_components/searchbox/icons/google_agentspace_logo_25.svg',
+  '//resources/cr_components/searchbox/icons/google_g.svg',
+  '//resources/cr_components/searchbox/icons/google_g_gradient.svg',
+  '//resources/cr_components/searchbox/icons/note.svg',
+  '//resources/cr_components/searchbox/icons/sites.svg',
+]);
 
 export interface SearchboxIconElement {
   $: {
@@ -73,46 +104,20 @@ export class SearchboxIconElement extends CrLitElement {
       },
 
       /**
-       * Whether icon belongs to an answer or not. Used to prevent
-       * the match image from taking size of container.
+       * Whether icon is in keyword mode. Used in searchbox input to show
+       * the generic search loupe icon instead of match favicons when the
+       * keyword does not have its own custom icon.
        */
-      isAnswer: {
+      inKeywordMode: {
         type: Boolean,
         reflect: true,
       },
 
       /**
-       * Whether icon belongs to a starter pack match.
+       * Whether icon belongs to a featured search match (starter pack or
+       * featured enterprise search).
        */
-      isStarterPack: {
-        type: Boolean,
-        reflect: true,
-      },
-
-      /**
-       * Whether icon belongs to a featured enterprise search match.
-       */
-      isFeaturedEnterpriseSearch: {
-        type: Boolean,
-        reflect: true,
-      },
-
-      /**
-       * Whether suggestion answer is of answer type weather. Weather answers
-       * don't have the same background as other suggestion answers.
-       */
-      isWeatherAnswer: {
-        type: Boolean,
-        reflect: true,
-      },
-
-      /**
-       * Whether suggestion is an enterprise search aggregator people
-       * suggestion. Enterprise search aggregator people suggestions should not
-       * use a set background color when image is missing, unlike other rich
-       * suggestion answers.
-       */
-      isEnterpriseSearchAggregatorPeopleType: {
+      isFeaturedSearch: {
         type: Boolean,
         reflect: true,
       },
@@ -122,6 +127,13 @@ export class SearchboxIconElement extends CrLitElement {
         type: String,
         reflect: true,
       },
+
+      /**
+       * The URL of the current webpage when focused in the searchbox before
+       * typing, used to load the page's favicon. Empty when typing, on the NTP,
+       * or for consumers that do not provide a page URL.
+       */
+      pageUrl: {type: String},
 
       match: {type: Object},
 
@@ -210,14 +222,12 @@ export class SearchboxIconElement extends CrLitElement {
 
   accessor defaultIcon: string = '';
   accessor hasIconContainerBackground: boolean = false;
+  accessor inKeywordMode: boolean = false;
   accessor inSearchbox: boolean = false;
-  accessor isAnswer: boolean = false;
-  accessor isStarterPack = false;
-  accessor isFeaturedEnterpriseSearch = false;
-  accessor isWeatherAnswer: boolean = false;
-  accessor isEnterpriseSearchAggregatorPeopleType: boolean = false;
+  accessor isFeaturedSearch: boolean = false;
   accessor maskImage: string = '';
   accessor match: AutocompleteMatch|null = null;
+  accessor pageUrl: string = '';
   protected accessor faviconImage_: string = '';
   protected accessor faviconImageSrcSet_: string = '';
   protected accessor hasImage_: boolean = false;
@@ -239,69 +249,68 @@ export class SearchboxIconElement extends CrLitElement {
   override willUpdate(changedProperties: PropertyValues<this>) {
     super.willUpdate(changedProperties);
 
-    if (changedProperties.has('match')) {
-      this.iconSrc_ = this.computeIconSrc_();
-      this.imageSrc_ = this.computeImageSrc_();
-      this.isAnswer = this.computeIsAnswer_();
-      this.isEnterpriseSearchAggregatorPeopleType =
-          this.computeIsEnterpriseSearchAggregatorPeopleType_();
-      this.isStarterPack = this.computeIsStarterPack_();
-      this.isFeaturedEnterpriseSearch =
-          this.computeIsFeaturedEnterpriseSearch();
-      this.isWeatherAnswer = this.computeIsWeatherAnswer_();
-      this.hasImage_ = this.computeHasImage_();
-      this.maskImage = this.computeMaskImage_();
-    }
+    const changedPrivateProperties =
+        changedProperties as Map<PropertyKey, unknown>;
 
-    if (changedProperties.has('match') ||
-        changedProperties.has('isWeatherAnswer')) {
+    if (changedProperties.has('match')) {
+      // In Lit, setting properties synchronously within `willUpdate()` does not
+      // add them to `changedProperties` for the current update cycle. Track
+      // loading state transitions directly when computed URLs change.
+      const oldIconSrc = this.iconSrc_;
+      this.iconSrc_ = this.computeIconSrc_();
+      if (this.iconSrc_ !== oldIconSrc) {
+        // If `iconSrc_` changes to a new truthy value, a new icon is being
+        // loaded.
+        this.iconLoading_ = !!this.iconSrc_;
+      }
+
+      const oldImageSrc = this.imageSrc_;
+      this.imageSrc_ = this.computeImageSrc_();
+      if (this.imageSrc_ !== oldImageSrc) {
+        // If imageSrc_ changes to a new truthy value, a new image is being
+        // loaded.
+        this.imageLoading_ = !!this.imageSrc_;
+        this.imageError_ = false;
+      }
+      this.isFeaturedSearch = this.computeIsFeaturedSearch_();
+      this.hasImage_ = this.computeHasImage_();
       this.hasIconContainerBackground =
           this.computeHasIconContainerBackground_();
     }
 
-    const changedPrivateProperties =
-        changedProperties as Map<PropertyKey, unknown>;
-
-    if (changedProperties.has('match') ||
+    if (changedProperties.has('match') || changedProperties.has('pageUrl') ||
         changedProperties.has('defaultIcon') ||
-        changedPrivateProperties.has('isTopChromeSearchbox_')) {
-      this.faviconImage_ = this.computeFaviconImage_();
+        changedProperties.has('inKeywordMode') ||
+        changedProperties.has('inSearchbox')) {
+      this.maskImage = this.computeMaskImage_();
     }
 
-    if (changedProperties.has('match') ||
-        changedPrivateProperties.has('faviconImage_') ||
-        changedPrivateProperties.has('isTopChromeSearchbox_')) {
-      this.faviconImageSrcSet_ = this.computeFaviconImageSrcSet_();
-    }
-
-    if (changedPrivateProperties.has('faviconImage_')) {
-      // If `faviconImage_` changes to a new truthy value, a new favicon is
-      // being loaded.
-      this.faviconLoading_ = !!this.faviconImage_;
-      this.faviconError_ = false;
-    }
-
-    if (changedProperties.has('match') ||
+    if (changedProperties.has('match') || changedProperties.has('pageUrl') ||
+        changedProperties.has('defaultIcon') ||
+        changedProperties.has('inKeywordMode') ||
+        changedProperties.has('inSearchbox') ||
         changedPrivateProperties.has('isLensSearchbox_') ||
-        changedPrivateProperties.has('faviconImage_') ||
+        changedPrivateProperties.has('isTopChromeSearchbox_')) {
+      const oldFaviconImage = this.faviconImage_;
+      this.faviconImage_ = this.computeFaviconImage_();
+      if (this.faviconImage_ !== oldFaviconImage) {
+        // If `faviconImage_` changes to a new truthy value, a new favicon is
+        // being loaded.
+        this.faviconLoading_ = !!this.faviconImage_;
+        this.faviconError_ = false;
+      }
+      this.faviconImageSrcSet_ = this.computeFaviconImageSrcSet_();
+      this.showFaviconImage_ = this.computeShowFaviconImage_();
+    }
+
+    if (changedPrivateProperties.has('faviconImage_') ||
         changedPrivateProperties.has('faviconLoading_') ||
         changedPrivateProperties.has('faviconError_')) {
       this.showFaviconImage_ = this.computeShowFaviconImage_();
     }
 
-    if (changedPrivateProperties.has('iconSrc_')) {
-      // If iconSrc_ changes to a new truthy value, a new icon is being loaded.
-      this.iconLoading_ = !!this.iconSrc_;
-    }
-
-    if (changedPrivateProperties.has('imageSrc_')) {
-      // If imageSrc_ changes to a new truthy value, a new image is being
-      // loaded.
-      this.imageLoading_ = !!this.imageSrc_;
-      this.imageError_ = false;
-    }
-
-    if (changedPrivateProperties.has('imageSrc_') ||
+    if (changedProperties.has('match') ||
+        changedPrivateProperties.has('imageSrc_') ||
         changedPrivateProperties.has('imageError_')) {
       this.showImage_ = this.computeShowImage_();
     }
@@ -318,12 +327,13 @@ export class SearchboxIconElement extends CrLitElement {
   //============================================================================
 
   private computeFaviconUrl_(scaleFactor: number): string {
-    if (!this.match?.destinationUrl) {
+    const url = this.match?.destinationUrl || this.pageUrl;
+    if (!url) {
       return '';
     }
 
     return getFaviconUrl(
-        /* url= */ this.match.destinationUrl, {
+        /* url= */ url, {
           forceLightMode: !this.isTopChromeSearchbox_,
           forceEmptyDefaultFavicon: true,
           scaleFactor: `${scaleFactor}x`,
@@ -331,57 +341,61 @@ export class SearchboxIconElement extends CrLitElement {
   }
 
   private computeFaviconImageSrcSet_(): string {
-    if (!this.faviconImage_.startsWith('chrome://favicon2/')) {
+    if (!isFaviconUrl(this.faviconImage_)) {
       return '';
     }
 
-    return [
-      `${this.computeFaviconUrl_(/* scaleFactor= */ 1)} 1x`,
-      `${this.computeFaviconUrl_(/* scaleFactor= */ 2)} 2x`,
-    ].join(', ');
+    // `this.faviconImage_` is computed prior to `this.faviconImageSrcSet_` in
+    // `willUpdate()`, so it already contains the 1x URL (for match
+    // destinations, unedited page URLs, or default search providers). Derive
+    // the 2x URL by updating its scaleFactor query parameter.
+    const url2x = new URL(this.faviconImage_);
+    url2x.searchParams.set('scaleFactor', '2x');
+    return `${this.faviconImage_} 1x, ${url2x.toString()} 2x`;
   }
 
   private computeFaviconImage_(): string {
+    if (this.inSearchbox && this.inKeywordMode) {
+      return '';
+    }
+
     if (this.match && !this.match.isSearchType) {
-      if (this.match.type === DOCUMENT_MATCH_TYPE ||
-          this.match.type === PEDAL ||
-          this.match.isEnterpriseSearchAggregatorPeopleType) {
+      if (THEMED_ICONS.has(this.match.iconPath)) {
         return this.match.iconPath;
       }
 
-      // Featured enterprise search suggestions have the icon set match.iconUrl.
-      if (this.match.type !== HISTORY_CLUSTER_MATCH_TYPE &&
-          this.match.type !== FEATURED_ENTERPRISE_SEARCH) {
+      // Navigation suggestions should use the favicon image, except for Lens
+      // searchboxes and match types that prefer the vector mask icon or
+      // `match.iconUrl`.
+      if (!this.isLensSearchbox_ &&
+          !NON_FAVICON_MATCH_TYPES.has(this.match.type) &&
+          !this.match.isEnterpriseSearchAggregatorPeopleType) {
         return this.computeFaviconUrl_(/* scaleFactor= */ 1);
       }
+
+      return '';
     }
 
-    if (this.defaultIcon ===
-            '//resources/cr_components/searchbox/icons/google_g.svg' ||
-        this.defaultIcon ===
-            '//resources/cr_components/searchbox/icons/google_g_gradient.svg') {
-      // The google_g.svg is a fully colored icon, so it needs to be displayed
-      // as a favicon image as mask images will mask the colors.
+    // When in the searchbox with an unedited page URL and no match selected,
+    // fetch the current page's favicon.
+    if (this.inSearchbox && this.isTopChromeSearchbox_ && this.pageUrl &&
+        !this.match) {
+      return this.computeFaviconUrl_(/* scaleFactor= */ 1);
+    }
+
+    if (THEMED_ICONS.has(this.defaultIcon) ||
+        (this.inSearchbox && this.isTopChromeSearchbox_ &&
+         isFaviconUrl(this.defaultIcon))) {
+      // These colored icons need to be displayed as a favicon image as mask
+      // images will mask the colors.
       return this.defaultIcon;
     }
 
     return '';
   }
 
-  private computeIsAnswer_(): boolean {
-    return !!this.match && !!this.match.answer;
-  }
-
-  private computeIsWeatherAnswer_(): boolean {
-    return this.match?.isWeatherAnswerSuggestion || false;
-  }
-
   private computeHasImage_(): boolean {
-    return !!this.match && !!this.match.imageUrl;
-  }
-
-  private computeIsEnterpriseSearchAggregatorPeopleType_(): boolean {
-    return this.match?.isEnterpriseSearchAggregatorPeopleType || false;
+    return !!this.match && !!this.match.suggestTemplate.image?.url;
   }
 
   private computeShowIconImg_(): boolean {
@@ -391,72 +405,47 @@ export class SearchboxIconElement extends CrLitElement {
   }
 
   private computeMaskImage_(): string {
+    // In keyword mode, show the custom keyword vector icon if present,
+    // otherwise fall back to search_cr23.svg in the searchbox.
+    if (this.inSearchbox && this.inKeywordMode) {
+      if (this.defaultIcon) {
+        return `url(${this.defaultIcon})`;
+      }
+      return 'url(//resources/cr_components/searchbox/icons/search_cr23.svg)';
+    }
+
     // Lens searchboxes should always have the Google G in the searchbox.
     if (this.isLensSearchbox_ && this.inSearchbox) {
       return `url(${this.defaultIcon})`;
     }
-    // Enterprise search aggregator people and starter pack/featured enterprise
-    // search suggestions should show icon even in searchbox.
+    // Enterprise search aggregator people, top-chrome searchbox (WebUI
+    // Omnibox), and suggestions whose secondary text isn't placed below the
+    // primary text should show icon even in searchbox.
     if (this.match &&
-        (!this.match.isRichSuggestion || this.match.type === STARTER_PACK ||
-         this.match.type === FEATURED_ENTERPRISE_SEARCH ||
+        (this.match.suggestTemplate.secondaryTextPlacement !==
+             SecondaryTextPlacement.kBelowPrimaryText ||
          this.match.isEnterpriseSearchAggregatorPeopleType ||
-         !this.inSearchbox)) {
+         this.isTopChromeSearchbox_ || !this.inSearchbox)) {
       return `url(${this.match.iconPath})`;
-    } else {
-      return `url(${this.defaultIcon})`;
-    }
-  }
-
-  // Controls whether the favicon image should be used instead of the mask
-  // image.
-  private computeShowFaviconImage_(): boolean {
-    if (!this.faviconImage_) {
-      return false;
     }
 
-    // If the favicon resource is still loading or there was an error, then
-    // fall back to rendering the default vector icon (generic globe icon).
-    if (this.faviconLoading_ || this.faviconError_) {
-      return false;
-    }
-
-    // Navigation suggestions should always use the background image, except for
-    // Lens searchboxes and pedal/starter pack suggestions, which prefer to use
-    // the default icon in the mask image.
-    if (!this.isLensSearchbox_ && this.match && !this.match.isSearchType &&
-        this.match.type !== STARTER_PACK && this.match.type !== PEDAL) {
-      return true;
-    }
-
-    // The following icons should not use the GM3 foreground color.
-    // TODO(niharm): Refactor logic in C++ and send via mojom in
-    // "chrome/browser/ui/webui/searchbox/searchbox_handler.cc".
-    const themedIcons = [
-      'calendar',
-      'drive_docs',
-      'drive_folder',
-      'drive_form',
-      'drive_image',
-      'drive_logo',
-      'drive_pdf',
-      'drive_sheets',
-      'drive_slides',
-      'drive_video',
-      'google_agentspace_logo',
-      'google_agentspace_logo_25',
-      'google_g',
-      'google_g_gradient',
-      'note',
-      'sites',
-    ];
-    for (const icon of themedIcons) {
-      if (this.faviconImage_ ===
-          '//resources/cr_components/searchbox/icons/' + icon + '.svg') {
-        return true;
+    if (this.inSearchbox && this.isTopChromeSearchbox_) {
+      // When focused on an unedited webpage URL without an active match,
+      // fall back to the generic globe icon (page_cr23.svg).
+      if (this.pageUrl && !this.match) {
+        return 'url(//resources/cr_components/searchbox/icons/page_cr23.svg)';
+      }
+      if (isFaviconUrl(this.defaultIcon)) {
+        return 'url(//resources/cr_components/searchbox/icons/search_cr23.svg)';
       }
     }
-    return false;
+    return `url(${this.defaultIcon})`;
+  }
+
+  // Controls whether the favicon image should be rendered instead of the mask
+  // image.
+  private computeShowFaviconImage_(): boolean {
+    return !!this.faviconImage_ && !this.faviconLoading_ && !this.faviconError_;
   }
 
   private computeSrc_(url: string|undefined): string {
@@ -482,17 +471,17 @@ export class SearchboxIconElement extends CrLitElement {
   }
 
   private computeImageSrc_(): string {
-    return this.computeSrc_(this.match?.imageUrl);
+    return this.computeSrc_(this.match?.suggestTemplate.image?.url);
   }
 
   protected getContainerBgColor_(): string {
     // If the match has an image dominant color, show that color in place of the
     // image until it loads. This helps the image appear to load more smoothly.
-    return ((this.imageLoading_ || this.imageError_) &&
-            this.match?.imageDominantColor) ?
+    const dominantColor = this.match?.suggestTemplate.image?.dominantColor;
+    return ((this.imageLoading_ || this.imageError_) && dominantColor) ?
         // .25 opacity matching c/b/u/views/omnibox/omnibox_match_cell_view.cc.
-        (this.match.imageDominantColor ?
-             `${this.match.imageDominantColor}40` :
+        (dominantColor ?
+             `${dominantColor}40` :
              'var(--cr-searchbox-match-icon-container-background-fallback)') :
         'transparent';
   }
@@ -530,19 +519,14 @@ export class SearchboxIconElement extends CrLitElement {
     if (this.match) {
       return this.match.type === PEDAL ||
           this.match.type === HISTORY_CLUSTER_MATCH_TYPE ||
-          this.match.type === CALCULATOR || this.match.type === STARTER_PACK ||
-          this.match.type === FEATURED_ENTERPRISE_SEARCH ||
-          (!!this.match.answer && !this.isWeatherAnswer);
+          this.match.type === CALCULATOR || this.isFeaturedSearch;
     }
     return false;
   }
 
-  private computeIsStarterPack_(): boolean {
-    return this.match?.type === STARTER_PACK;
-  }
-
-  private computeIsFeaturedEnterpriseSearch(): boolean {
-    return this.match?.type === FEATURED_ENTERPRISE_SEARCH;
+  private computeIsFeaturedSearch_(): boolean {
+    return this.match?.type === STARTER_PACK ||
+        this.match?.type === FEATURED_ENTERPRISE_SEARCH;
   }
 }
 

@@ -17,10 +17,11 @@
 #include "base/version.h"
 #include "chrome/browser/devtools/devtools_window_testing.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/hats/hats_service_desktop.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/mock_hats_service.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/hats/hats_next_web_dialog.h"
@@ -32,6 +33,7 @@
 #include "components/ukm/test_ukm_recorder.h"
 #include "components/version_info/version_info.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/test_navigation_observer.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "ui/views/test/views_test_utils.h"
@@ -41,12 +43,13 @@ namespace {
 
 // The product specific data expected by the test survey. The boolean values are
 // checked in hats_next_mock.html.
-const SurveyBitsData kHatsNextTestSurveyProductSpecificBitsData{
-    {"Test Field 1", true},
-    {"Test Field 2", false}};
+SurveyBitsData GetHatsNextTestSurveyProductSpecificBitsData() {
+  return {{"Test Field 1", true}, {"Test Field 2", false}};
+}
 
-const SurveyStringData kHatsNextTestSurveyProductSpecificStringData{
-    {"Test Field 3", "Test value"}};
+SurveyStringData GetHatsNextTestSurveyProductSpecificStringData() {
+  return {{"Test Field 3", "Test value"}};
+}
 
 // The locale expected by the test survey. This value is checked in
 // hats_next_mock.html for tests that expect a loaded response.
@@ -106,7 +109,7 @@ class HatsNextWebDialogBrowserTest : public InProcessBrowserTest {
  public:
   void SetUpOnMainThread() override {
     HatsServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-        browser()->profile(), base::BindRepeating(&BuildMockHatsService));
+        browser()->GetProfile(), base::BindRepeating(&BuildMockHatsService));
   }
 
   // Open a blank tab in the main browser, inspect it, and return the devtools
@@ -122,7 +125,7 @@ class HatsNextWebDialogBrowserTest : public InProcessBrowserTest {
 
   MockHatsService* hats_service() {
     return static_cast<MockHatsService*>(HatsServiceFactory::GetForProfile(
-        browser()->profile(), /*create_if_necessary=*/false));
+        browser()->GetProfile(), /*create_if_necessary=*/false));
   }
 
   base::OnceClosure GetSuccessClosure() {
@@ -154,13 +157,14 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, SurveyLoaded) {
       browser(), kHatsNextSurveyTriggerIDTesting, std::nullopt, std::nullopt,
       embedded_test_server()->GetURL("/hats/hats_next_mock.html"),
       base::Seconds(100), GetSuccessClosure(), GetFailureClosure(),
-      kHatsNextTestSurveyProductSpecificBitsData,
-      kHatsNextTestSurveyProductSpecificStringData);
+      GetHatsNextTestSurveyProductSpecificBitsData(),
+      GetHatsNextTestSurveyProductSpecificStringData());
 
   // Check that no record of a survey being shown is present.
   {
     const base::DictValue& pref_data =
-        browser()->profile()->GetPrefs()->GetDict(prefs::kHatsSurveyMetadata);
+        browser()->GetProfile()->GetPrefs()->GetDict(
+            prefs::kHatsSurveyMetadata);
     std::optional<base::Time> last_survey_started_time =
         base::ValueToTime(pref_data.FindByDottedPath(kLastSurveyStartedTime));
     std::optional<int> last_major_version =
@@ -184,7 +188,8 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, SurveyLoaded) {
   // Check that a record of the survey being shown has been recorded.
   {
     const base::DictValue& pref_data =
-        browser()->profile()->GetPrefs()->GetDict(prefs::kHatsSurveyMetadata);
+        browser()->GetProfile()->GetPrefs()->GetDict(
+            prefs::kHatsSurveyMetadata);
     std::optional<base::Time> last_survey_started_time =
         base::ValueToTime(pref_data.FindByDottedPath(kLastSurveyStartedTime));
     std::optional<int> last_major_version =
@@ -212,13 +217,14 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest,
       browser(), kHatsNextSurveyTriggerIDTesting, kTestHistogramName,
       std::nullopt, embedded_test_server()->GetURL("/hats/hats_next_mock.html"),
       base::Seconds(100), GetSuccessClosure(), GetFailureClosure(),
-      kHatsNextTestSurveyProductSpecificBitsData,
-      kHatsNextTestSurveyProductSpecificStringData);
+      GetHatsNextTestSurveyProductSpecificBitsData(),
+      GetHatsNextTestSurveyProductSpecificStringData());
 
   // Check that no record of a survey being shown is present.
   {
     const base::DictValue& pref_data =
-        browser()->profile()->GetPrefs()->GetDict(prefs::kHatsSurveyMetadata);
+        browser()->GetProfile()->GetPrefs()->GetDict(
+            prefs::kHatsSurveyMetadata);
     std::optional<base::Time> last_survey_started_time =
         base::ValueToTime(pref_data.FindByDottedPath(kLastSurveyStartedTime));
     std::optional<int> last_major_version =
@@ -242,7 +248,8 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest,
   // Check that a record of the survey being shown has been recorded.
   {
     const base::DictValue& pref_data =
-        browser()->profile()->GetPrefs()->GetDict(prefs::kHatsSurveyMetadata);
+        browser()->GetProfile()->GetPrefs()->GetDict(
+            prefs::kHatsSurveyMetadata);
     std::optional<base::Time> last_survey_started_time =
         base::ValueToTime(pref_data.FindByDottedPath(kLastSurveyStartedTime));
     std::optional<int> last_major_version =
@@ -297,8 +304,8 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, SurveyLoadedThenClosed) {
       browser(), kHatsNextSurveyTriggerIDTesting, std::nullopt, std::nullopt,
       embedded_test_server()->GetURL("/hats/hats_next_mock.html"),
       base::Seconds(100), GetSuccessClosure(), GetFailureClosure(),
-      kHatsNextTestSurveyProductSpecificBitsData,
-      kHatsNextTestSurveyProductSpecificStringData);
+      GetHatsNextTestSurveyProductSpecificBitsData(),
+      GetHatsNextTestSurveyProductSpecificStringData());
   dialog->WaitForClose();
 
   EXPECT_EQ(1, success_count);
@@ -350,6 +357,10 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, UnknownURLFragment) {
 IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, NewWebContents) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
+  content::TestNavigationObserver navigation_observer(nullptr);
+  navigation_observer.set_expected_initial_url(GURL("http://foo.com"));
+  navigation_observer.StartWatchingNewWebContents();
+
   auto* dialog = new MockHatsNextWebDialog(
       browser(), "open_new_web_contents_for_testing", std::nullopt,
       std::nullopt, embedded_test_server()->GetURL("/hats/hats_next_mock.html"),
@@ -361,10 +372,15 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, NewWebContents) {
   dialog->WaitForClose();
 
   // Check that a tab with http://foo.com (defined in hats_next_mock.html) has
-  // been opened in the regular browser and is active.
+  // been opened in the regular browser and is active, with an opaque initiator
+  // origin.
   EXPECT_EQ(
       GURL("http://foo.com"),
-      browser()->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+      browser()->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL());
+
+  navigation_observer.WaitForNavigationFinished();
+  ASSERT_TRUE(navigation_observer.last_initiator_origin().has_value());
+  EXPECT_TRUE(navigation_observer.last_initiator_origin()->opaque());
 }
 
 // The devtools browser for undocked devtools has no tab strip and can't open
@@ -374,6 +390,10 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest,
   ASSERT_TRUE(embedded_test_server()->Start());
 
   BrowserWindowInterface* devtools_browser = OpenUndockedDevToolsWindow();
+
+  content::TestNavigationObserver navigation_observer(nullptr);
+  navigation_observer.set_expected_initial_url(GURL("http://foo.com"));
+  navigation_observer.StartWatchingNewWebContents();
 
   auto* dialog = new MockHatsNextWebDialog(
       devtools_browser, "open_new_web_contents_for_testing", std::nullopt,
@@ -386,10 +406,39 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest,
   dialog->WaitForClose();
 
   // Check that a tab with http://foo.com (defined in hats_next_mock.html) has
-  // been opened in the regular browser and is active.
+  // been opened in the regular browser and is active, with an opaque initiator
+  // origin.
   EXPECT_EQ(
       GURL("http://foo.com"),
-      browser()->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+      browser()->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL());
+
+  navigation_observer.WaitForNavigationFinished();
+  ASSERT_TRUE(navigation_observer.last_initiator_origin().has_value());
+  EXPECT_TRUE(navigation_observer.last_initiator_origin()->opaque());
+}
+
+IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest,
+                       NewWebContentsBlocksDataUrl) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  content::TestNavigationObserver navigation_observer(
+      GURL("data:text/html,<h1>blocked</h1>"), /*quit_mode=*/{},
+      /*ignore_uncommitted_navigations=*/false);
+  navigation_observer.StartWatchingNewWebContents();
+
+  auto* dialog = new MockHatsNextWebDialog(
+      browser(), "open_data_url_for_testing", std::nullopt, std::nullopt,
+      embedded_test_server()->GetURL("/hats/hats_next_mock.html"),
+      base::Seconds(100), base::DoNothing(), base::DoNothing(), {}, {});
+
+  EXPECT_CALL(*hats_service(), HatsNextDialogClosed);
+  dialog->WaitForClose();
+  navigation_observer.WaitForNavigationFinished();
+
+  // Top-level data: URL navigations initiated by a renderer are blocked by
+  // BlockedSchemeNavigationThrottle.
+  EXPECT_FALSE(navigation_observer.last_navigation_succeeded());
+  EXPECT_EQ(net::ERR_ABORTED, navigation_observer.last_net_error_code());
 }
 
 IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, DialogResize) {
@@ -429,7 +478,7 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, MaximumSize) {
 
 IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, ZoomLevel) {
   // Ensure that the dialog correctly resets the zoom level to default.
-  browser()->profile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(
+  browser()->GetProfile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(
       blink::ZoomFactorToZoomLevel(5.0f));
 
   ScopedBrowserLocale browser_locale(kTestLocale);
@@ -439,8 +488,8 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, ZoomLevel) {
       browser(), kHatsNextSurveyTriggerIDTesting, std::nullopt, std::nullopt,
       embedded_test_server()->GetURL("/hats/hats_next_mock.html"),
       base::Seconds(100), GetSuccessClosure(), GetFailureClosure(),
-      kHatsNextTestSurveyProductSpecificBitsData,
-      kHatsNextTestSurveyProductSpecificStringData);
+      GetHatsNextTestSurveyProductSpecificBitsData(),
+      GetHatsNextTestSurveyProductSpecificStringData());
 
   // Allow the dialog to open before checking the zoom level of the contents.
   base::RunLoop run_loop;

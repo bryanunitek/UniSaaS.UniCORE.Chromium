@@ -9,7 +9,6 @@ import android.content.ComponentName;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.ChildBindingState;
 import org.chromium.base.FeatureOverrides;
@@ -25,7 +24,6 @@ import org.chromium.content_public.browser.ContentFeatureList;
 
 /** Unit tests for ChildProessRanking */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ChildProcessRankingTest {
     private TestChildProcessConnection createConnection() {
         TestChildProcessConnection connection =
@@ -74,12 +72,6 @@ public class ChildProcessRankingTest {
             Assert.assertTrue(c.getImportanceInGroup() > importanceSoFar);
             importanceSoFar = c.getImportanceInGroup();
         }
-    }
-
-    @Test
-    public void testRanking() {
-        ChildProcessRanking ranking = new ChildProcessRanking(10);
-        doTestRanking(ranking, false);
     }
 
     @Test
@@ -181,7 +173,7 @@ public class ChildProcessRankingTest {
         ChildProcessConnection c6 = createConnection();
         ChildProcessConnection c7 = createConnection();
 
-        ChildProcessRanking ranking = new ChildProcessRanking(7);
+        ChildProcessRanking ranking = new ChildProcessRanking();
         ranking.enableServiceGroupImportance();
 
         // Insert in lowest ranked to highest ranked order.
@@ -250,7 +242,7 @@ public class ChildProcessRankingTest {
         ChildProcessConnection c3 = createConnection();
         ChildProcessConnection c4 = createConnection();
 
-        ChildProcessRanking ranking = new ChildProcessRanking(4);
+        ChildProcessRanking ranking = new ChildProcessRanking();
         ranking.enableServiceGroupImportance();
 
         // c1,2 are in one tab, and c3,4 are in second tab.
@@ -325,7 +317,7 @@ public class ChildProcessRankingTest {
         ChildProcessConnection c2 = createConnection();
         ChildProcessConnection c3 = createConnection();
 
-        ChildProcessRanking ranking = new ChildProcessRanking(4);
+        ChildProcessRanking ranking = new ChildProcessRanking();
         ranking.enableServiceGroupImportance();
 
         // Insert in lowest ranked to highest ranked order.
@@ -388,43 +380,6 @@ public class ChildProcessRankingTest {
                 ChildProcessImportance.NORMAL);
 
         assertRankingAndRemoveAll(ranking, new ChildProcessConnection[] {c2, c3, c1});
-    }
-
-    @Test
-    public void testThrowExceptionWhenGoingOverLimit() {
-        ChildProcessRanking ranking = new ChildProcessRanking(2);
-
-        ChildProcessConnection c1 = createConnection();
-        ChildProcessConnection c2 = createConnection();
-        ChildProcessConnection c3 = createConnection();
-
-        ranking.addConnection(
-                c1,
-                /* visible= */ true,
-                /* frameDepth= */ 1,
-                /* intersectsViewport= */ false,
-                /* isSpareRenderer= */ false,
-                ChildProcessImportance.NORMAL);
-        ranking.addConnection(
-                c2,
-                /* visible= */ true,
-                /* frameDepth= */ 1,
-                /* intersectsViewport= */ true,
-                /* isSpareRenderer= */ false,
-                ChildProcessImportance.NORMAL);
-        boolean exceptionThrown = false;
-        try {
-            ranking.addConnection(
-                    c3,
-                    /* visible= */ true,
-                    /* frameDepth= */ 1,
-                    /* intersectsViewport= */ true,
-                    /* isSpareRenderer= */ false,
-                    ChildProcessImportance.NORMAL);
-        } catch (Throwable e) {
-            exceptionThrown = true;
-        }
-        Assert.assertTrue(exceptionThrown);
     }
 
     @Test

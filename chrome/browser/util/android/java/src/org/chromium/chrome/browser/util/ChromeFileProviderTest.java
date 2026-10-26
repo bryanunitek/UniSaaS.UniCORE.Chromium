@@ -7,13 +7,9 @@ package org.chromium.chrome.browser.util;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
 
-import androidx.test.filters.LargeTest;
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
@@ -29,7 +25,6 @@ import java.io.FileNotFoundException;
  * does not work correctly.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ChromeFileProviderTest {
     private ParcelFileDescriptor openFileFromProvider(Uri uri) {
         ChromeFileProvider provider = new ChromeFileProvider();
@@ -43,7 +38,6 @@ public class ChromeFileProviderTest {
     }
 
     @Test
-    @SmallTest
     public void testOpenFileWhenReady() {
         Uri uri = ChromeFileProvider.generateUriAndBlockAccess();
         Uri fileUri = new Uri.Builder().path("1").build();
@@ -53,7 +47,6 @@ public class ChromeFileProviderTest {
     }
 
     @Test
-    @LargeTest
     public void testOpenOnAsyncNotify() {
         final Uri uri = ChromeFileProvider.generateUriAndBlockAccess();
         PostTask.postTask(
@@ -73,7 +66,6 @@ public class ChromeFileProviderTest {
     }
 
     @Test
-    @LargeTest
     public void testFileChanged() {
         Uri uri1 = ChromeFileProvider.generateUriAndBlockAccess();
         final Uri uri2 = ChromeFileProvider.generateUriAndBlockAccess();

@@ -38,7 +38,6 @@ include_rules = [
   "+chrome/browser/ash/ownership",
   "+chrome/browser/ash/phonehub",
   "+chrome/browser/ash/platform_keys",
-  "+chrome/browser/ash/plugin_vm",
   "+chrome/browser/ash/policy/core",
   "+chrome/browser/ash/printing",
   "+chrome/browser/ash/remote_apps",
@@ -57,7 +56,5 @@ include_rules = [
   "+chrome/browser/ui/ash/glanceables",
   "+chrome/browser/ui/ash/global_media_controls",
   "+chrome/browser/ui/ash/holding_space",
-  "+chrome/browser/ui/webui/ash/settings/services/hats",
   "+chrome/browser/ui/webui/ash/settings/services/settings_manager",
-  "+chromeos/ash/components/policy/policy_blocklist_service",
 ]

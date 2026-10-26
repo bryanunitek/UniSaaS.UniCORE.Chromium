@@ -30,7 +30,6 @@ import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.actor.ui.ActorUiTabController;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsVisibilityManager;
 import org.chromium.chrome.browser.dom_distiller.TabDistillabilityProvider.DistillabilityObserver;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.fullscreen.BrowserControlsManager;
 import org.chromium.chrome.browser.fullscreen.BrowserControlsManagerSupplier;
@@ -38,9 +37,9 @@ import org.chromium.chrome.browser.fullscreen.FullscreenManager;
 import org.chromium.chrome.browser.night_mode.GlobalNightModeStateProviderHolder;
 import org.chromium.chrome.browser.night_mode.NightModeStateProvider;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab.TabUtils;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
@@ -79,8 +78,7 @@ import java.util.function.Supplier;
  * loading.
  */
 @NullMarked
-public class ReaderModeManager extends EmptyTabObserver
-        implements UserData, NightModeStateProvider.Observer {
+public class ReaderModeManager implements TabObserver, UserData, NightModeStateProvider.Observer {
 
     // LINT.IfChange(DomDistillerEntryPoint)
 
@@ -150,7 +148,7 @@ public class ReaderModeManager extends EmptyTabObserver
         int STARTED = 2;
     }
 
-    /** The key to access this object from a {@Tab}. */
+    /** The key to access this object from a {@link Tab}. */
     public static final Class<ReaderModeManager> USER_DATA_KEY = ReaderModeManager.class;
 
     /** Histogram name for the state of the reader mode accessibility setting. */
@@ -160,12 +158,6 @@ public class ReaderModeManager extends EmptyTabObserver
     /** Histogram name for the end distillability result. */
     public static final String PAGE_DISTILLATION_RESULT_HISTOGRAM =
             "DomDistiller.Android.OnDistillableResult.PageDistillationResult";
-
-    /**
-     * Field param for MTB-CCT indicating that the fallback UI for reader mode is overflow menu. If
-     * false, the fallback UI will be Message.
-     */
-    public static final String CPA_FALLBACK_MENU_PARAM = "reader_mode_fallback_menu";
 
     /** The url of the last page visited if the last page was reader mode page. Otherwise null. */
     private @Nullable GURL mReaderModePageUrl;
@@ -562,7 +554,7 @@ public class ReaderModeManager extends EmptyTabObserver
     }
 
     private boolean shouldSuppressForCpa() {
-        if (mTab.isCustomTab() && ChromeFeatureList.sCctAdaptiveButton.isEnabled()) {
+        if (mTab.isCustomTab()) {
             // If the manager hasn't been notified of the CPA yet, don't show the prompt for now.
             // Later it will be shown if CPA is determined to be hidden.
             if (!mHasBeenNotifiedOfCpa) {
@@ -570,13 +562,8 @@ public class ReaderModeManager extends EmptyTabObserver
                 return true;
             }
 
-            // Do not proceed to show Message UI if CPA is shown, or the fallback UI will be in
-            // the overflow menu.
-            if (mIsReaderModeButtonShowingOnToolbar
-                    || ChromeFeatureList.getFieldTrialParamByFeatureAsBoolean(
-                            ChromeFeatureList.CCT_ADAPTIVE_BUTTON,
-                            CPA_FALLBACK_MENU_PARAM,
-                            false)) {
+            // Do not proceed to show Message UI if CPA is shown.
+            if (mIsReaderModeButtonShowingOnToolbar) {
                 return true;
             }
         }
@@ -661,18 +648,11 @@ public class ReaderModeManager extends EmptyTabObserver
 
                     navigateToReaderMode();
                     RecordUserAction.record("MobileReaderModeActivated");
-                    boolean isCpaFallbackMessage =
-                            !ChromeFeatureList.getFieldTrialParamByFeatureAsBoolean(
-                                    ChromeFeatureList.CCT_ADAPTIVE_BUTTON,
-                                    CPA_FALLBACK_MENU_PARAM,
-                                    false);
-                    if (mHasBeenNotifiedOfCpa
-                            && !mIsReaderModeButtonShowingOnToolbar
-                            && isCpaFallbackMessage) {
+                    if (mHasBeenNotifiedOfCpa && !mIsReaderModeButtonShowingOnToolbar) {
                         RecordHistogram.recordEnumeratedHistogram(
                                 "CustomTab.AdaptiveToolbarButton.FallbackUi",
                                 AdaptiveToolbarButtonVariant.READER_MODE,
-                                AdaptiveToolbarButtonVariant.MAX_VALUE);
+                                AdaptiveToolbarButtonVariant.MAX_VALUE + 1);
                     }
                     recordEntryPointMetric(entryPoint);
                 };
@@ -853,8 +833,8 @@ public class ReaderModeManager extends EmptyTabObserver
      * @param isDistillable Whether the tab is considered distillable.
      * @param isMobileOptimized Whether the tab is considered optimized for mobile.
      * @param isLast Whether this is the last signal we'll get for the tab.
-     * @returns A pair which contains: pair.first - Whether distillability has been fully
-     *     determined. pair.second - The current distillation status.
+     * @return A pair which contains: pair.first - Whether distillability has been fully determined.
+     *     pair.second - The current distillation status.
      */
     public static Pair<Boolean, Integer> computeDistillationStatus(
             Tab tab, boolean isDistillable, boolean isMobileOptimized, boolean isLast) {
@@ -916,12 +896,10 @@ public class ReaderModeManager extends EmptyTabObserver
      * @return Whether Reader mode and its new UI are enabled.
      */
     public static boolean isEnabled() {
-        boolean enabled =
-                CommandLine.getInstance().hasSwitch(ChromeSwitches.ENABLE_DOM_DISTILLER)
-                        && !CommandLine.getInstance()
-                                .hasSwitch(ChromeSwitches.DISABLE_READER_MODE_BOTTOM_BAR)
-                        && DomDistillerTabUtils.isDistillerHeuristicsEnabled();
-        return enabled;
+        return CommandLine.getInstance().hasSwitch(ChromeSwitches.ENABLE_DOM_DISTILLER)
+                && !CommandLine.getInstance()
+                        .hasSwitch(ChromeSwitches.DISABLE_READER_MODE_BOTTOM_BAR)
+                && DomDistillerTabUtils.isDistillerHeuristicsEnabled();
     }
 
     /**
@@ -934,11 +912,11 @@ public class ReaderModeManager extends EmptyTabObserver
      */
     public void onContextualPageActionShown(
             OneshotSupplier<Boolean> showCpaButton, boolean isReaderMode) {
-        // If the feature is enabled and the tab is a custom tab, the manager should be aware if the
-        // displayed contextual page action is the reader one. Once determined, #tryShowingPrompt
-        // can successfully decide between showing a message prompt or suppressing it in favor of
-        // the contextual page action's UI.
-        if (ChromeFeatureList.sCctAdaptiveButton.isEnabled() && mTab.isCustomTab()) {
+        // If the tab is a custom tab, the manager should be aware if the displayed contextual page
+        // action is the reader one. Once determined, #tryShowingPrompt can successfully decide
+        // between showing a message prompt or suppressing it in favor of the contextual page
+        // action's UI.
+        if (mTab.isCustomTab()) {
             mHasBeenNotifiedOfCpa = true;
             showCpaButton.runSyncOrOnAvailable(
                     show -> {

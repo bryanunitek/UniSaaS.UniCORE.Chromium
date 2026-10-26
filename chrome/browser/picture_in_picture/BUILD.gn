@@ -18,6 +18,7 @@ source_set("picture_in_picture") {
   sources = [
     "picture_in_picture_bounds_cache.h",
     "picture_in_picture_window_manager.h",
+    "video_overlay_window.h",
 
     # Common Auto Picture-in-Picture files
     "auto_picture_in_picture_safe_browsing_checker_client.h",
@@ -30,10 +31,11 @@ source_set("picture_in_picture") {
     "//base",
     "//chrome/browser/profiles:profile",
     "//components/safe_browsing/core/browser/db:database_manager",
+    "//components/safe_browsing/core/browser/db:sb_protocol_manager_util",
     "//components/safe_browsing/core/browser/db:util",
-    "//components/safe_browsing/core/browser/db:v4_protocol_manager_util",
     "//content/public/browser",
     "//third_party/blink/public/common",
+    "//ui/base/unowned_user_data",
     "//ui/gfx/geometry",
     "//url",
   ]
@@ -99,6 +101,7 @@ source_set("impl") {
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/content_settings:content_settings_factory",
+    "//chrome/browser/media",
     "//chrome/browser/media/webrtc",
     "//chrome/browser/permissions",
     "//chrome/browser/profiles:profile",
@@ -108,6 +111,8 @@ source_set("impl") {
     "//components/content_settings/browser",
     "//components/content_settings/core/browser",
     "//components/permissions",
+    "//components/safe_browsing/core/browser/db:v5_get_hash_protocol_manager",
+    "//components/tabs:public",
     "//content/public/browser",
     "//content/public/common",
     "//extensions/buildflags",
@@ -127,6 +132,7 @@ source_set("impl") {
       "auto_picture_in_picture_tab_model_observer_helper.cc",
       "document_picture_in_picture_bridge_android.cc",
       "picture_in_picture_bounds_cache_bridge.cc",
+      "picture_in_picture_window_manager_bridge.cc",
     ]
     deps += [
       "//chrome/android:chrome_jni_headers",
@@ -170,6 +176,7 @@ source_set("impl") {
         [ "auto_picture_in_picture_window_occlusion_helper_web_contents.cc" ]
   }
   if (use_widget_occlusion_helper) {
+    deps += [ "//chrome/browser/ui:browser_window_header" ]
     sources += [ "auto_picture_in_picture_window_occlusion_helper_widget.cc" ]
   }
   if (use_stub_occlusion_helper) {
@@ -181,7 +188,10 @@ source_set("impl") {
   }
 
   if (!is_android) {
-    deps += [ "//chrome/browser/ui:browser_tab_strip_tracker" ]
+    deps += [
+      "//chrome/browser/ui:browser_tab_strip_tracker",
+      "//chrome/browser/ui/views/frame:browser_view_header",
+    ]
   }
 }
 
@@ -197,6 +207,7 @@ source_set("unit_tests") {
     "//base",
     "//base/test:test_support",
     "//chrome/test:test_support",
+    "//chrome/test/base:chrome_render_view_host_test_harness",
     "//content/public/browser",
     "//content/test:test_support",
     "//extensions/buildflags",
@@ -221,9 +232,9 @@ source_set("unit_tests") {
       "picture_in_picture_window_manager_uma_helper_unittest.cc",
     ]
     deps += [
-      "//chrome/browser",
       "//chrome/browser/ui/hats:test_support",
       "//chrome/browser/ui/safety_hub:test_support",
+      "//components/safe_browsing/core/browser/db:v5_get_hash_protocol_manager",
       "//components/unified_consent",
       "//ui/events:test_support",
     ]
@@ -264,20 +275,27 @@ if (!is_android) {
       "//chrome/browser:chrome_content_browser_client",
       "//chrome/browser/content_settings:content_settings_factory",
       "//chrome/browser/devtools:test_support",
+      "//chrome/browser/media/webrtc:webrtc_browser_tests_base",
       "//chrome/browser/preloading:test_support",
       "//chrome/browser/profiles:profile",
-      "//chrome/browser/ui",
+      "//chrome/browser/ui:browser_commands",
+      "//chrome/browser/ui:browser_window_header",
+      "//chrome/browser/ui:bubble_anchor_util",
       "//chrome/browser/ui:recently_audible_helper",
       "//chrome/browser/ui:ui_features",
+      "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/hats:test_support",
+      "//chrome/browser/ui/views/frame:browser_view_header",
+      "//chrome/browser/ui/views/frame:picture_in_picture_browser_frame_view",
       "//chrome/browser/ui/views/overlay",
       "//chrome/browser/ui/views/page_info",
       "//chrome/browser/ui/views/picture_in_picture",
+      "//chrome/browser/ui/views/tabs/tab",
       "//chrome/browser/ui/web_applications",
       "//chrome/browser/web_applications",
       "//chrome/test:test_support",
-      "//chrome/test:webrtc_browser_tests_base",
       "//components/content_settings/core/browser",
+      "//components/enterprise/isolated_mode",
       "//components/metrics:content",
       "//components/permissions",
       "//components/viz/common",
@@ -302,6 +320,15 @@ if (!is_android) {
       "//url",
     ]
 
+    if (enable_extensions_core) {
+      deps += [
+        "//chrome/browser/extensions",
+        "//components/sessions",
+        "//extensions/browser",
+        "//extensions/common",
+      ]
+    }
+
     if (is_chromeos) {
       deps += [
         "//chromeos/ui/base",
@@ -325,7 +352,8 @@ if (!is_android) {
       ":picture_in_picture",
       ":test_support_ui",
       "//base/test:test_support",
-      "//chrome/browser/ui",
+      "//chrome/browser/ui:browser_window_header",
+      "//chrome/browser/ui/browser_window",
       "//testing/gtest",
     ]
   }
@@ -343,7 +371,7 @@ if (!is_android) {
       "//ui/gfx/geometry",
     ]
     deps = [
-      "//chrome/browser/ui",
+      "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/tabs:tab_strip",
       "//content/public/browser",
       "//content/test:test_support",

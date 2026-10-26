@@ -12,7 +12,6 @@
 #import "base/test/test_future.h"
 #import "base/test/test_timeouts.h"
 #import "components/autofill/core/common/autofill_features.h"
-#import "components/autofill/ios/common/features.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/web/model/chrome_web_client.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
@@ -175,9 +174,7 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms) {
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
         @"should_autocomplete" : @true,
-        @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"First Name",
         @"renderer_id" : @"2"
@@ -193,9 +190,7 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms) {
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
         @"should_autocomplete" : @true,
-        @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"Last Name",
         @"renderer_id" : @"3"
@@ -211,9 +206,7 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms) {
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
         @"should_autocomplete" : @true,
-        @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"",
         @"renderer_id" : @"4"
@@ -274,9 +267,7 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms2) {
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
         @"should_autocomplete" : @true,
-        @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"First Name",
         @"renderer_id" : @"2"
@@ -292,9 +283,7 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms2) {
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
         @"should_autocomplete" : @true,
-        @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"Last Name",
         @"renderer_id" : @"3"
@@ -310,9 +299,7 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms2) {
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
         @"should_autocomplete" : @true,
-        @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"",
         @"renderer_id" : @"4"
@@ -591,6 +578,34 @@ TEST_F(AutofillJavaScriptFeatureTest, FillFormUsingRendererIDs) {
                 feature());
         return [has_attribute isEqual:@YES];
       }));
+
+  // Simulate site reformatting the autofilled value with spaces (e.g. credit
+  // card number formatting) and verify that re-filling with the unformatted
+  // value is skipped.
+  ExecuteJavaScript(
+      @"document.getElementById('firstname').value = 'Cool   User';");
+
+  base::DictValue refillData;
+  refillData.Set("formName", "testform");
+  refillData.Set("formRendererID", 1);
+
+  base::DictValue refillFieldsData;
+  base::DictValue refillFirstFieldData;
+  refillFirstFieldData.Set("name", "firstname");
+  refillFirstFieldData.Set("identifier", "firstname");
+  refillFirstFieldData.Set("value", "CoolUser");
+  refillFirstFieldData.Set("isAutofilled", YES);
+  refillFieldsData.Set("2", std::move(refillFirstFieldData));
+  refillData.Set("fields", std::move(refillFieldsData));
+
+  base::test::TestFuture<NSString*> refill_future;
+  feature()->FillForm(main_web_frame(), std::move(refillData),
+                      refill_future.GetCallback());
+  EXPECT_TRUE(refill_future.Wait());
+  EXPECT_NSEQ(@"{}", refill_future.Get());
+  EXPECT_NSEQ(
+      @"Cool   User",
+      ExecuteJavaScript(@"document.getElementById('firstname').value;"));
 }
 
 // Tests that the undo autofill can clear the value and the chrome-autofilled
@@ -673,58 +688,6 @@ TEST_F(AutofillJavaScriptFeatureTest, UndoForm) {
 
   EXPECT_NSEQ(@"",
               ExecuteJavaScript(@"document.getElementById('firstname').value"));
-}
-
-// Tests form clearing (clearAutofilledFieldsForForm:formUniqueID:
-// fieldUniqueID:inFrame:completionHandler:) method.
-TEST_F(AutofillJavaScriptFeatureTest, ClearForm) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(kAutofillUndoIos);
-
-  LoadHtml(@"<html><body><form name='testform' method='post'>"
-            "<input type='text' id='firstname' name='firstname'/>"
-            "<input type='email' id='email' name='email'/>"
-            "</form></body></html>");
-  RunFormsSearch();
-
-  std::vector<std::pair<NSString*, int>> field_ids = {{@"firstname", 2},
-                                                      {@"email", 3}};
-  // Fill form fields.
-  for (auto& field_data : field_ids) {
-    NSString* getFieldScript =
-        [NSString stringWithFormat:@"document.getElementsByName('%@')[0]",
-                                   field_data.first];
-    NSString* focusScript =
-        [NSString stringWithFormat:@"%@.focus()", getFieldScript];
-    ExecuteJavaScript(focusScript);
-    base::DictValue data;
-    data.Set("renderer_id", field_data.second);
-    data.Set("value", "testvalue");
-
-    __block BOOL success = NO;
-    feature()->FillActiveFormField(main_web_frame(), std::move(data),
-                                   base::BindOnce(^(BOOL result) {
-                                     success = result;
-                                   }));
-    EXPECT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
-        base::test::ios::kWaitForActionTimeout, ^bool() {
-          return success;
-        }));
-  }
-
-  __block NSString* clearing_result = nil;
-  __block BOOL block_was_called = NO;
-  feature()->ClearAutofilledFieldsForForm(main_web_frame(), FormRendererId(1),
-                                          FieldRendererId(2),
-                                          base::BindOnce(^(NSString* result) {
-                                            clearing_result = [result copy];
-                                            block_was_called = YES;
-                                          }));
-  EXPECT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
-      base::test::ios::kWaitForActionTimeout, ^bool() {
-        return block_was_called;
-      }));
-  EXPECT_NSEQ(@"[\"2\",\"3\"]", clearing_result);
 }
 
 }  // namespace

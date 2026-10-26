@@ -11,9 +11,9 @@
 #include <utility>
 
 #include "base/base_export.h"
-#include "base/memory/singleton.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
 #include "base/types/pass_key.h"
 
 class AppShimController;
@@ -40,7 +40,7 @@ class BASE_EXPORT FieldTrialParamAssociator {
   // Sets parameters for the given field trial name and group.
   bool AssociateFieldTrialParams(const std::string& trial_name,
                                  const std::string& group_name,
-                                 const FieldTrialParams& params);
+                                 FieldTrialParams params);
 
   // Gets the parameters for a field trial and its chosen group. If not found in
   // field_trial_params_, then tries to looks it up in shared memory. Returns
@@ -73,15 +73,14 @@ class BASE_EXPORT FieldTrialParamAssociator {
   void ClearAllCachedParams(PassKey<AppShimController>);
 
  private:
-  friend struct DefaultSingletonTraits<FieldTrialParamAssociator>;
-
   // (field_trial_name, field_trial_group)
   using FieldTrialKey = std::pair<std::string, std::string>;
   // The following type can be used for lookups without needing to copy strings.
   using FieldTrialRefKey = std::pair<const std::string&, const std::string&>;
 
   Lock lock_;
-  std::map<FieldTrialKey, FieldTrialParams, std::less<>> field_trial_params_;
+  std::map<FieldTrialKey, FieldTrialParams, std::less<>> field_trial_params_
+      GUARDED_BY(lock_);
 };
 
 }  // namespace base

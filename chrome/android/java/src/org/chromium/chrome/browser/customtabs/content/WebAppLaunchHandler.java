@@ -9,48 +9,56 @@ import static androidx.browser.trusted.LaunchHandlerClientMode.FOCUS_EXISTING;
 import static androidx.browser.trusted.LaunchHandlerClientMode.NAVIGATE_EXISTING;
 import static androidx.browser.trusted.LaunchHandlerClientMode.NAVIGATE_NEW;
 import static androidx.browser.trusted.TrustedWebActivityIntentBuilder.EXTRA_FILE_HANDLING_DATA;
+import static androidx.browser.trusted.TrustedWebActivityIntentBuilder.EXTRA_SHARE_DATA;
 
 import static org.chromium.build.NullUtil.assertNonNull;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.ComponentCaller;
 import android.content.ActivityNotFoundException;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
+import android.os.Process;
 import android.text.TextUtils;
 
 import androidx.browser.trusted.FileHandlingData;
 import androidx.browser.trusted.LaunchHandlerClientMode.ClientMode;
+import androidx.browser.trusted.sharing.ShareData;
 
 import org.jni_zero.JNINamespace;
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
-import org.chromium.base.ContextUtils;
+import org.chromium.base.ContentUriUtils;
+import org.chromium.base.IntentUtils;
 import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ShortcutHelper;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
 import org.chromium.chrome.browser.browserservices.ui.controller.CurrentPageVerifier;
 import org.chromium.chrome.browser.browserservices.ui.controller.Verifier;
+import org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider;
 import org.chromium.chrome.browser.customtabs.CustomTabsConnection;
 import org.chromium.chrome.browser.customtabs.content.WebAppLaunchHandlerHistogram.ClientModeAction;
 import org.chromium.chrome.browser.customtabs.content.WebAppLaunchHandlerHistogram.FailureReasonAction;
 import org.chromium.chrome.browser.customtabs.content.WebAppLaunchHandlerHistogram.FileHandlingAction;
+import org.chromium.chrome.browser.flags.ActivityType;
+import org.chromium.chrome.browser.renderer_host.ChromeNavigationUiData;
+import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.content_public.browser.LoadUrlParams;
-import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.WebContents;
-import org.chromium.content_public.browser.WebContentsObserver;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * Manages web application launch configurations based on client mode. Provides methods to process
@@ -58,7 +66,7 @@ import java.util.Locale;
  */
 @NullMarked
 @JNINamespace("webapps")
-public class WebAppLaunchHandler extends WebContentsObserver {
+public class WebAppLaunchHandler {
     private static final String TAG = "WebAppLaunchHandler";
     private static final @ClientMode int DEFAULT_CLIENT_MODE = NAVIGATE_EXISTING;
     private final WebContents mWebContents;
@@ -66,12 +74,9 @@ public class WebAppLaunchHandler extends WebContentsObserver {
     private final Verifier mVerifier;
     private final CurrentPageVerifier mCurrentPageVerifier;
     private final Activity mActivity;
+    private final CustomTabActivityTabProvider mTabProvider;
 
-    // Tracks the WebContents top-level frame loading state to resolve a race condition between URL
-    // verification and navigation completion. LaunchParams are stashed if verification finishes
-    // before the page has loaded. They are dispatched to the JS LaunchQueue once loading is
-    // complete.
-    private boolean mIsPageLoading;
+    private static long sNextLaunchToken;
 
     /**
      * Retrieves the ClientMode enum value from a given AndroidX enum. Defaults to
@@ -105,10 +110,16 @@ public class WebAppLaunchHandler extends WebContentsObserver {
             CurrentPageVerifier currentPageVerifier,
             CustomTabActivityNavigationController navigationController,
             WebContents webContents,
-            Activity activity) {
+            Activity activity,
+            CustomTabActivityTabProvider tabProvider) {
 
         return new WebAppLaunchHandler(
-                verifier, currentPageVerifier, navigationController, webContents, activity);
+                verifier,
+                currentPageVerifier,
+                navigationController,
+                webContents,
+                activity,
+                tabProvider);
     }
 
     private WebAppLaunchHandler(
@@ -116,25 +127,26 @@ public class WebAppLaunchHandler extends WebContentsObserver {
             CurrentPageVerifier currentPageVerifier,
             CustomTabActivityNavigationController navigationController,
             WebContents webContents,
-            Activity activity) {
+            Activity activity,
+            CustomTabActivityTabProvider tabProvider) {
         mWebContents = webContents;
         mNavigationController = navigationController;
         mVerifier = verifier;
         mCurrentPageVerifier = currentPageVerifier;
         mActivity = activity;
+        mTabProvider = tabProvider;
     }
 
     private boolean isValidFileHandlingData(FileHandlingData fileHandlingData) {
-        String packageName = ContextUtils.getApplicationContext().getPackageName();
         for (Uri uri : fileHandlingData.uris) {
-            if (!isValidLaunchUri(uri, packageName)) {
+            if (!isValidLaunchUri(uri)) {
                 return false;
             }
         }
         return true;
     }
 
-    private static boolean isValidLaunchUri(Uri uri, String packageName) {
+    public static boolean isValidLaunchUri(Uri uri) {
         if (uri == null) return false;
 
         // Only content URIs are allowed. Legitimate file launching on Android should
@@ -144,14 +156,8 @@ public class WebAppLaunchHandler extends WebContentsObserver {
         }
 
         // Block Chrome's own Content URIs.
-        String authority = uri.getAuthority();
-        if (authority != null) {
-            String chromeAuthorityPrefix = packageName + ".";
-            if (authority
-                    .toLowerCase(Locale.US)
-                    .startsWith(chromeAuthorityPrefix.toLowerCase(Locale.US))) {
-                return false;
-            }
+        if (ContentUriUtils.isUriFromThisApp(uri)) {
+            return false;
         }
 
         return true;
@@ -170,7 +176,10 @@ public class WebAppLaunchHandler extends WebContentsObserver {
             boolean newNavigationStarted,
             String targetUrl,
             String packageName,
-            @Nullable FileHandlingData fileHandlingData) {
+            @Nullable FileHandlingData fileHandlingData,
+            @Nullable SessionHolder session,
+            @Nullable Intent intent,
+            @Nullable Object caller) {
         List<Uri> fileUris = null;
         @FileHandlingAction int action = FileHandlingAction.NO_FILES;
 
@@ -185,43 +194,91 @@ public class WebAppLaunchHandler extends WebContentsObserver {
         }
 
         WebAppLaunchHandlerHistogram.logFileHandling(action);
-        return new WebAppLaunchParams(newNavigationStarted, targetUrl, packageName, fileUris);
+        boolean[] canWrite = null;
+        if (fileUris != null) {
+            if (intent != null) {
+                canWrite =
+                        intent.getBooleanArrayExtra(
+                                CustomTabIntentDataProvider.EXTRA_VERIFIED_FILE_CAN_WRITE);
+            }
+            if (canWrite == null || canWrite.length != fileUris.size()) {
+                canWrite = new boolean[fileUris.size()];
+                for (int i = 0; i < fileUris.size(); i++) {
+                    canWrite[i] =
+                            doesCallerHavePermissionForUri(
+                                    mActivity,
+                                    caller,
+                                    session,
+                                    fileUris.get(i),
+                                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                }
+            }
+        } else {
+            canWrite = new boolean[0];
+        }
+        return new WebAppLaunchParams(
+                newNavigationStarted, targetUrl, packageName, fileUris, canWrite);
     }
 
     /**
-     * Handles an intent that triggers a TWA creation. It doesn't trigger a url loading because in
-     * the case of initial intent it has been triggered earlier. Passes launch params to a launch
-     * queue. Always uses startNewNavigation = true because opening new custom tab is always url
-     * loading. In case if the target url provided in the intentDataProvider is out of scope of the
-     * TWA a launch queue will not be notified.
+     * Handles an intent that triggers a TWA creation (cold start). It doesn't trigger a url loading
+     * because the initial navigation is initiated elsewhere in CCT startup. Generates a token to
+     * correlate this launch with C++ navigation events.
      *
-     * @param intentDataProvider Provides incoming intent with Custom Tabs specific customization
-     *     data.
+     * <p>Detects if this launch reused a speculative navigation (started via mayLaunchUrl) and
+     * passes this status to C++.
+     *
+     * @param intentDataProvider Provides incoming intent data.
+     * @return The launch token if a navigation correlation is needed, or null if the launch was
+     *     invalid or did not require navigation.
      */
-    public void handleInitialIntent(BrowserServicesIntentDataProvider intentDataProvider) {
+    public @Nullable Long handleInitialIntent(
+            BrowserServicesIntentDataProvider intentDataProvider) {
         WebAppLaunchHandlerHistogram.logClientMode(ClientModeAction.INITIAL_INTENT);
 
-        FileHandlingData filteredData = filterFileHandlingData(intentDataProvider);
+        Object caller = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            try {
+                caller = mActivity.getInitialCaller();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to get initial caller. Falling back.", e);
+            }
+        }
+
+        FileHandlingData filteredData = filterFileHandlingData(intentDataProvider, caller);
+        String urlToLoad = assertNonNull(intentDataProvider.getUrlToLoad());
         WebAppLaunchParams launchParams =
                 getLaunchParams(
                         /* newNavigationStarted= */ true,
-                        assertNonNull(intentDataProvider.getUrlToLoad()),
+                        urlToLoad,
                         assertNonNull(intentDataProvider.getClientPackageName()),
-                        filteredData);
+                        filteredData,
+                        intentDataProvider.getSession(),
+                        intentDataProvider.getIntent(),
+                        caller);
 
-        maybeNotifyLaunchQueue(launchParams);
+        boolean isHidden = mTabProvider.getInitialTabCreationMode() == TabCreationMode.HIDDEN;
+        boolean hasSpeculativeNavigation = false;
+        if (isHidden) {
+            String speculatedUrl = mTabProvider.getSpeculatedUrl();
+            hasSpeculativeNavigation = TextUtils.equals(speculatedUrl, urlToLoad);
+        }
+
+        return maybeNotifyLaunchQueue(launchParams, hasSpeculativeNavigation);
     }
 
     /**
-     * Handles an intent that comes after a TWA creation. It triggers a url loading in case of
-     * navigate-existing mode. It opens a new TWA in a new task in a case of navigate-new mode. It
-     * Passes launch params to a launch queue. In case if the target url provided in the
-     * intentDataProvider is out of scope of the TWA a launch queue will not be notified. If
-     * currently open page is out of scope of the TWA and it's not going to be reloaded a launch
-     * queue will not be notified as well.
+     * Handles an intent that comes after TWA creation (warm start, reusing existing tab).
      *
-     * @param intentDataProvider Provides incoming intent with Custom Tabs specific customization
-     *     data.
+     * <p>Triggers a navigation in the existing tab if the client mode is NAVIGATE_EXISTING, or if
+     * it is FOCUS_EXISTING but the current page is out of scope (fallback to navigate-existing
+     * behavior). Otherwise, delivers the parameters directly to the current page without
+     * navigating.
+     *
+     * <p>Detects if there is a speculative navigation in progress in the existing tab (via
+     * mayLaunchUrl) and passes this status to C++.
+     *
+     * @param intentDataProvider Provides incoming intent data.
      */
     public void handleNewIntent(BrowserServicesIntentDataProvider intentDataProvider) {
         @ClientMode int clientModeFromIntent = intentDataProvider.getLaunchHandlerClientMode();
@@ -232,28 +289,63 @@ public class WebAppLaunchHandler extends WebContentsObserver {
         assert urlToLoad != null;
         String packageName = intentDataProvider.getClientPackageName();
 
-        FileHandlingData filteredData = filterFileHandlingData(intentDataProvider);
+        Object caller = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            try {
+                caller = mActivity.getCurrentCaller();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to get current caller. Falling back.", e);
+            }
+        }
+
+        FileHandlingData filteredData = filterFileHandlingData(intentDataProvider, caller);
 
         CurrentPageVerifier.VerificationState state = mCurrentPageVerifier.getState();
+        // If the current page is not fully verified (including if verification is still PENDING),
+        // we fallback to starting a new navigation. We choose not to wait for PENDING verification
+        // here to keep intent delivery simple and avoid stashing intents. Since the page is
+        // already loaded, verification should usually be complete and cached; if it is still
+        // pending, navigating is the safer fallback.
         if (clientMode == NAVIGATE_NEW
                 || state == null
                 || state.status != CurrentPageVerifier.VerificationStatus.SUCCESS) {
             launchNewIntent(urlToLoad, packageName, filteredData);
         } else {
-            boolean startNavigation =
-                    clientMode == NAVIGATE_EXISTING && !TextUtils.isEmpty(urlToLoad);
+            String currentUrl = mWebContents.getLastCommittedUrl().getSpec();
+            String scopeUrl = getScopeUrl(urlToLoad);
+            boolean isInScope = UrlUtilities.isUrlWithinScope(currentUrl, scopeUrl);
 
-            if (startNavigation) {
-                LoadUrlParams params = new LoadUrlParams(urlToLoad);
-                mNavigationController.navigate(
-                        params, assumeNonNull(intentDataProvider.getIntent()));
-            }
+            // Note: This models the default behavior for Android, which is to default to
+            // navigate-existing rather than navigate-new when launching an app with a url.
+            // This behavior might change in the future.
+            boolean startNavigation =
+                    (clientMode == NAVIGATE_EXISTING
+                                    || (clientMode == FOCUS_EXISTING && !isInScope))
+                            && !TextUtils.isEmpty(urlToLoad);
 
             assert packageName != null;
             WebAppLaunchParams launchParams =
-                    getLaunchParams(startNavigation, urlToLoad, packageName, filteredData);
+                    getLaunchParams(
+                            startNavigation,
+                            urlToLoad,
+                            packageName,
+                            filteredData,
+                            intentDataProvider.getSession(),
+                            intentDataProvider.getIntent(),
+                            caller);
 
-            maybeNotifyLaunchQueue(launchParams);
+            String speculatedUrl = mTabProvider.getSpeculatedUrl();
+            boolean hasSpeculativeNavigation = TextUtils.equals(speculatedUrl, urlToLoad);
+            Long token = maybeNotifyLaunchQueue(launchParams, hasSpeculativeNavigation);
+
+            if (startNavigation) {
+                LoadUrlParams params = new LoadUrlParams(urlToLoad);
+                if (token != null) {
+                    ChromeNavigationUiData.getOrCreate(params).setTwaLaunchToken(token);
+                }
+                mNavigationController.navigate(
+                        params, assumeNonNull(intentDataProvider.getIntent()));
+            }
         }
     }
 
@@ -313,41 +405,59 @@ public class WebAppLaunchHandler extends WebContentsObserver {
         }
     }
 
-    private void maybeNotifyLaunchQueue(WebAppLaunchParams launchParams) {
+    private @Nullable Long maybeNotifyLaunchQueue(
+            WebAppLaunchParams launchParams, boolean hasSpeculativeNavigation) {
+        // Asynchronous lifecycle events can destroy the WebContents before the intent
+        // is fully processed and delivered to the launch queue.
+        if (mWebContents.isDestroyed()) {
+            return null;
+        }
+        String scopeUrl = getScopeUrl(launchParams.targetUrl);
 
         if (!launchParams.newNavigationStarted) {
-            // Check if the URL of the current page is in the web app scope.
-            // Launch params should not be sent to a not verified origin.
             CurrentPageVerifier.VerificationState state = mCurrentPageVerifier.getState();
             if (state == null || state.status != CurrentPageVerifier.VerificationStatus.SUCCESS) {
                 WebAppLaunchHandlerHistogram.logFailureReason(
                         FailureReasonAction.CURRENT_PAGE_VERIFICATION_FAILED);
                 Log.w(TAG, "Current page verification has been failed.");
-                return;
+                return null;
             }
 
+            // We cannot guarantee that another navigation won't occur between this
+            // Java-side verification check and the actual delivery in C++. As a
+            // safeguard, C++ will perform a final scope check against the last
+            // committed URL before enqueuing.
             WebAppLaunchHandlerJni.get()
-                    .notifyLaunchQueue(
+                    .enqueueNonNavigating(
                             mWebContents,
-                            false,
                             launchParams.targetUrl,
                             launchParams.packageName,
-                            launchParams.fileUris);
-            return;
+                            launchParams.fileUris,
+                            launchParams.canWrite,
+                            scopeUrl);
+            return null;
         }
 
-        observe(mWebContents);
+        long token = ++sNextLaunchToken;
+        WebAppLaunchHandlerJni.get()
+                .prepareForLaunch(
+                        mWebContents,
+                        token,
+                        launchParams.targetUrl,
+                        launchParams.packageName,
+                        launchParams.fileUris,
+                        launchParams.canWrite,
+                        scopeUrl,
+                        hasSpeculativeNavigation);
+
         mVerifier
                 .verify(launchParams.targetUrl)
                 .then(
                         (verified) -> {
-                            observe(null);
-
                             if (!verified) {
                                 WebAppLaunchHandlerHistogram.logFailureReason(
                                         FailureReasonAction.TARGET_URL_VERIFICATION_FAILED);
                                 Log.w(TAG, "Target url verification has been failed.");
-                                return;
                             }
 
                             if (mWebContents == null || mWebContents.isDestroyed()) {
@@ -356,23 +466,9 @@ public class WebAppLaunchHandler extends WebContentsObserver {
                             }
 
                             WebAppLaunchHandlerJni.get()
-                                    .notifyLaunchQueue(
-                                            mWebContents,
-                                            mIsPageLoading,
-                                            launchParams.targetUrl,
-                                            launchParams.packageName,
-                                            launchParams.fileUris);
+                                    .onLaunchVerified(mWebContents, token, verified);
                         });
-    }
-
-    @Override
-    public void didStartNavigationInPrimaryMainFrame(NavigationHandle navigationHandle) {
-        mIsPageLoading = true;
-    }
-
-    @Override
-    public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigationHandle) {
-        mIsPageLoading = false;
+        return token;
     }
 
     /**
@@ -384,7 +480,21 @@ public class WebAppLaunchHandler extends WebContentsObserver {
      *     were denied or no file data was provided.
      */
     private @Nullable FileHandlingData filterFileHandlingData(
-            BrowserServicesIntentDataProvider intentDataProvider) {
+            BrowserServicesIntentDataProvider intentDataProvider, @Nullable Object caller) {
+        Intent intent = intentDataProvider.getIntent();
+        if (intent != null) {
+            Bundle verifiedBundle =
+                    IntentUtils.safeGetBundleExtra(
+                            intent, CustomTabIntentDataProvider.EXTRA_VERIFIED_FILE_HANDLING_DATA);
+            if (verifiedBundle != null) {
+                try {
+                    return FileHandlingData.fromBundle(verifiedBundle);
+                } catch (Throwable e) {
+                    Log.w(TAG, "Failed to unparcel verified file handling data", e);
+                }
+            }
+        }
+
         FileHandlingData fileHandlingData = intentDataProvider.getFileHandlingData();
         if (fileHandlingData == null || fileHandlingData.uris.isEmpty()) {
             return null;
@@ -392,11 +502,20 @@ public class WebAppLaunchHandler extends WebContentsObserver {
 
         List<Uri> filteredUris = new ArrayList<>();
         for (Uri uri : fileHandlingData.uris) {
-            if (doesCallerHavePermissionForUri(intentDataProvider.getSession(), uri)) {
-                filteredUris.add(uri);
-            } else {
-                Log.w(TAG, "Caller does not have permission for URI: " + uri);
+            if (!isValidLaunchUri(uri)) {
+                Log.w(TAG, "Invalid launch URI: " + uri);
+                continue;
             }
+            if (!doesCallerHavePermissionForUri(
+                    mActivity,
+                    caller,
+                    intentDataProvider.getSession(),
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
+                Log.w(TAG, "Caller does not have read permission for URI: " + uri);
+                continue;
+            }
+            filteredUris.add(uri);
         }
 
         if (filteredUris.isEmpty()) {
@@ -411,59 +530,449 @@ public class WebAppLaunchHandler extends WebContentsObserver {
     /**
      * Verifies whether the calling application holds read permission for the specified URI.
      *
-     * <p>On Android 15+ (API 35+), checks caller identity via {@link Activity#getCurrentCaller()}.
-     * On older Android versions, falls back to verifying URI permissions against the session UID.
+     * <p>On Android 15+ (API 35+), checks caller identity via {@link ComponentCaller}. On older
+     * Android versions or when ComponentCaller is unavailable, falls back to verifying URI
+     * permissions against the client UID.
      *
-     * @param session The session holder associated with the launching client app.
+     * @param activity The activity context.
+     * @param caller The caller object (ComponentCaller on Android 15+).
+     * @param clientUid The UID of the launching client application (-1 if unknown).
+     * @param clientPid The PID of the launching client application (0 if unknown).
      * @param uri The Content URI to verify.
-     * @return True if the caller has explicit read permission for uri, false otherwise.
+     * @param requestedPermission The permission flag (e.g. FLAG_GRANT_READ_URI_PERMISSION).
+     * @return True if the caller has permission for uri, false otherwise.
      */
     @SuppressLint("NewApi")
-    private boolean doesCallerHavePermissionForUri(@Nullable SessionHolder<?> session, Uri uri) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+    public static boolean doesCallerHavePermissionForUri(
+            Activity activity,
+            @Nullable Object caller,
+            int clientUid,
+            int clientPid,
+            Uri uri,
+            int requestedPermission) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM && caller != null) {
             try {
-                var caller = mActivity.getCurrentCaller();
-                if (caller != null) {
-                    return caller.checkContentUriPermission(
-                                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                ComponentCaller componentCaller = (ComponentCaller) caller;
+                if (componentCaller.getUid() == Process.myUid()) {
+                    Log.d(
+                            TAG,
+                            "Caller is ourselves (trampoline launch). Falling back to UID check.");
+                } else {
+                    return componentCaller.checkContentUriPermission(uri, requestedPermission)
                             == PackageManager.PERMISSION_GRANTED;
                 }
             } catch (Exception e) {
-                Log.w(TAG, "Failed to check caller's permission via getCurrentCaller.", e);
-                return false;
+                Log.w(
+                        TAG,
+                        "Failed to check caller's permission via ComponentCaller. Falling back.",
+                        e);
             }
         }
 
-        // Fallback for Android versions prior to Android 15 (API < 35) or when getCurrentCaller()
-        // is unavailable. We check URI read permissions against the client UID and PID recorded
-        // when the TWA session was established.
-        if (session != null) {
-            int uid = CustomTabsConnection.getInstance().getClientUidForSession(session);
-            int pid = CustomTabsConnection.getInstance().getClientPidForSession(session);
-            if (uid != -1) {
-                try {
-                    return mActivity.checkUriPermission(
-                                    uri, pid, uid, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            == PackageManager.PERMISSION_GRANTED;
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed to check URI permission for UID: " + uid, e);
-                }
+        if (clientUid != -1) {
+            try {
+                return activity.checkUriPermission(uri, clientPid, clientUid, requestedPermission)
+                        == PackageManager.PERMISSION_GRANTED;
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to check URI permission for UID: " + clientUid, e);
             }
         }
         return false;
     }
 
     /**
+     * Convenience overload of {@link #doesCallerHavePermissionForUri(Activity, Object, int, int,
+     * Uri, int)} for callers with a {@link SessionHolder}. Resolves the client UID and PID from the
+     * session.
+     *
+     * @param activity The activity context.
+     * @param caller The caller object (ComponentCaller on Android 15+).
+     * @param session The session holder associated with the launching client app.
+     * @param uri The Content URI to verify.
+     * @param requestedPermission The permission flag (e.g. FLAG_GRANT_READ_URI_PERMISSION).
+     * @return True if the caller has permission for uri, false otherwise.
+     */
+    @SuppressLint("NewApi")
+    public static boolean doesCallerHavePermissionForUri(
+            Activity activity,
+            @Nullable Object caller,
+            @Nullable SessionHolder session,
+            Uri uri,
+            int requestedPermission) {
+        int uid = -1;
+        int pid = 0;
+        if (session != null) {
+            uid = CustomTabsConnection.getInstance().getClientUidForSession(session);
+            pid = CustomTabsConnection.getInstance().getClientPidForSession(session);
+        }
+        return doesCallerHavePermissionForUri(activity, caller, uid, pid, uri, requestedPermission);
+    }
+
+    /**
+     * Checks caller permissions for any file URIs in sourceIntent and stashes the verified results
+     * in targetIntent.
+     *
+     * @param activity The launcher activity.
+     * @param sourceIntent The incoming intent containing client extras.
+     * @param targetIntent The launch intent being prepared for CustomTabActivity.
+     */
+    public static void copyFilePermissions(
+            Activity activity, Intent sourceIntent, Intent targetIntent) {
+        // Strip EXTRA_VERIFIED_FILE_HANDLING_DATA/EXTRA_VERIFIED_FILE_CAN_WRITE if present on
+        // targetIntent so that they cannot be set by external client apps.
+        IntentUtils.safeRemoveExtra(
+                targetIntent, CustomTabIntentDataProvider.EXTRA_VERIFIED_FILE_HANDLING_DATA);
+        IntentUtils.safeRemoveExtra(
+                targetIntent, CustomTabIntentDataProvider.EXTRA_VERIFIED_FILE_CAN_WRITE);
+
+        Bundle fileHandlingBundle =
+                IntentUtils.safeGetBundleExtra(sourceIntent, EXTRA_FILE_HANDLING_DATA);
+        if (fileHandlingBundle == null) {
+            return;
+        }
+
+        FileHandlingData fileHandlingData;
+        try {
+            fileHandlingData = FileHandlingData.fromBundle(fileHandlingBundle);
+        } catch (Throwable e) {
+            Log.w(TAG, "Failed to parse file handling data", e);
+            return;
+        }
+        if (fileHandlingData == null || fileHandlingData.uris.isEmpty()) {
+            return;
+        }
+
+        Object caller = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            try {
+                caller = activity.getInitialCaller();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to get initial caller. Falling back.", e);
+            }
+        }
+
+        SessionHolder session = SessionHolder.getSessionHolderFromIntent(sourceIntent);
+        List<Uri> verifiedUris = new ArrayList<>();
+        List<Boolean> canWriteList = new ArrayList<>();
+        for (Uri uri : fileHandlingData.uris) {
+            if (!isValidLaunchUri(uri)) {
+                Log.w(TAG, "Invalid launch URI: " + uri);
+                continue;
+            }
+            if (!doesCallerHavePermissionForUri(
+                    activity, caller, session, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
+                Log.w(TAG, "Caller does not have read permission for URI: " + uri);
+                continue;
+            }
+            verifiedUris.add(uri);
+            boolean canWrite =
+                    doesCallerHavePermissionForUri(
+                            activity, caller, session, uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            canWriteList.add(canWrite);
+        }
+
+        if (verifiedUris.isEmpty()) {
+            // All filtered out, put empty data to indicate we checked but none allowed.
+            FileHandlingData verifiedData = new FileHandlingData(new ArrayList<>());
+            targetIntent.putExtra(
+                    CustomTabIntentDataProvider.EXTRA_VERIFIED_FILE_HANDLING_DATA,
+                    verifiedData.toBundle());
+            return;
+        }
+
+        FileHandlingData verifiedData = new FileHandlingData(verifiedUris);
+        targetIntent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_VERIFIED_FILE_HANDLING_DATA,
+                verifiedData.toBundle());
+        boolean[] canWriteArray = new boolean[canWriteList.size()];
+        for (int i = 0; i < canWriteList.size(); i++) {
+            canWriteArray[i] = canWriteList.get(i);
+        }
+        targetIntent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_VERIFIED_FILE_CAN_WRITE, canWriteArray);
+    }
+
+    /**
+     * Checks caller permissions for any file URIs in sourceIntent's share data and stashes the
+     * verified results in targetIntent.
+     *
+     * @param activity The launcher activity.
+     * @param sourceIntent The incoming intent containing client extras.
+     * @param targetIntent The launch intent being prepared for CustomTabActivity.
+     */
+    public static void copyShareDataPermissions(
+            Activity activity, Intent sourceIntent, Intent targetIntent) {
+        // Strip EXTRA_VERIFIED_SHARE_DATA if present on targetIntent so that it cannot be set
+        // by external client apps.
+        IntentUtils.safeRemoveExtra(
+                targetIntent, CustomTabIntentDataProvider.EXTRA_VERIFIED_SHARE_DATA);
+
+        Bundle shareDataBundle = IntentUtils.safeGetBundleExtra(sourceIntent, EXTRA_SHARE_DATA);
+        if (shareDataBundle == null) {
+            return;
+        }
+
+        ShareData shareData;
+        try {
+            shareData = ShareData.fromBundle(shareDataBundle);
+        } catch (Throwable e) {
+            Log.w(TAG, "Failed to parse share data", e);
+            return;
+        }
+        if (shareData == null) {
+            return;
+        }
+        if (shareData.uris == null || shareData.uris.isEmpty()) {
+            targetIntent.putExtra(
+                    CustomTabIntentDataProvider.EXTRA_VERIFIED_SHARE_DATA, shareData.toBundle());
+            return;
+        }
+
+        Object caller = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            try {
+                caller = activity.getInitialCaller();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to get initial caller. Falling back.", e);
+            }
+        }
+
+        SessionHolder session = SessionHolder.getSessionHolderFromIntent(sourceIntent);
+        List<Uri> verifiedUris = new ArrayList<>();
+        for (Uri uri : shareData.uris) {
+            if (!isValidLaunchUri(uri)) {
+                Log.w(TAG, "Invalid launch URI: " + uri);
+                continue;
+            }
+            if (!doesCallerHavePermissionForUri(
+                    activity, caller, session, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
+                Log.w(TAG, "Caller does not have read permission for share URI: " + uri);
+                continue;
+            }
+            verifiedUris.add(uri);
+        }
+
+        ShareData verifiedShareData = new ShareData(shareData.title, shareData.text, verifiedUris);
+        targetIntent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_VERIFIED_SHARE_DATA,
+                verifiedShareData.toBundle());
+    }
+
+    /**
+     * Checks caller permissions for any file URIs in a WebAPK share intent and stashes the verified
+     * results in targetIntent.
+     *
+     * @param activity The launcher activity.
+     * @param sourceIntent The incoming intent containing client extras.
+     * @param targetIntent The launch intent being prepared for WebappActivity.
+     * @param webApkPackageName The package name of the WebAPK.
+     */
+    @SuppressLint("NewApi")
+    public static void copyShareDataPermissionsForWebApk(
+            Activity activity,
+            Intent sourceIntent,
+            Intent targetIntent,
+            @Nullable String webApkPackageName) {
+        // Strip EXTRA_VERIFIED_SHARE_DATA if present on targetIntent so that it cannot be set
+        // by external client apps.
+        IntentUtils.safeRemoveExtra(
+                targetIntent, CustomTabIntentDataProvider.EXTRA_VERIFIED_SHARE_DATA);
+
+        ShareData shareData = extractWebApkShareData(sourceIntent);
+        if (shareData == null) {
+            return;
+        }
+
+        if (shareData.uris == null || shareData.uris.isEmpty()) {
+            targetIntent.putExtra(
+                    CustomTabIntentDataProvider.EXTRA_VERIFIED_SHARE_DATA, shareData.toBundle());
+            return;
+        }
+
+        Object caller = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            try {
+                caller = activity.getInitialCaller();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to get initial caller. Falling back.", e);
+            }
+        }
+
+        int webApkUid = -1;
+        if (!TextUtils.isEmpty(webApkPackageName)) {
+            try {
+                webApkUid = activity.getPackageManager().getPackageUid(webApkPackageName, 0);
+            } catch (PackageManager.NameNotFoundException e) {
+                Log.w(TAG, "WebAPK package not found: " + webApkPackageName, e);
+            }
+        }
+
+        List<Uri> verifiedUris = new ArrayList<>();
+        for (Uri uri : shareData.uris) {
+            if (!isValidLaunchUri(uri)) {
+                Log.w(TAG, "Invalid launch URI: " + uri);
+                continue;
+            }
+            if (!doesCallerHavePermissionForUri(
+                    activity,
+                    caller,
+                    webApkUid,
+                    /* clientPid= */ 0,
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
+                Log.w(TAG, "Caller does not have read permission for share URI: " + uri);
+                continue;
+            }
+            verifiedUris.add(uri);
+        }
+
+        ShareData verifiedShareData = new ShareData(shareData.title, shareData.text, verifiedUris);
+        targetIntent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_VERIFIED_SHARE_DATA,
+                verifiedShareData.toBundle());
+    }
+
+    private static @Nullable ShareData extractWebApkShareData(Intent intent) {
+        String subject = IntentUtils.safeGetStringExtra(intent, Intent.EXTRA_SUBJECT);
+        String text = IntentUtils.safeGetStringExtra(intent, Intent.EXTRA_TEXT);
+        List<Uri> files = IntentUtils.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM);
+        if (files == null) {
+            Uri file = IntentUtils.safeGetParcelableExtra(intent, Intent.EXTRA_STREAM);
+            if (file != null) {
+                files = new ArrayList<>();
+                files.add(file);
+            }
+        }
+        if (subject == null && text == null && files == null) {
+            return null;
+        }
+        return new ShareData(subject, text, files);
+    }
+
+    /**
+     * Filters incoming share data to retain only URIs that the launching client app has permission
+     * to access.
+     *
+     * @param intentDataProvider Provides incoming intent and session customization data.
+     * @param activity The activity context, if available.
+     * @param caller The caller object (e.g. ComponentCaller on Android 15+), if available.
+     * @return The filtered ShareData object containing authorized URIs, or null if input was null.
+     */
+    public static @Nullable ShareData filterShareData(
+            BrowserServicesIntentDataProvider intentDataProvider,
+            @Nullable Activity activity,
+            @Nullable Object caller) {
+        Intent intent = intentDataProvider.getIntent();
+        if (intent != null) {
+            Bundle verifiedBundle =
+                    IntentUtils.safeGetBundleExtra(
+                            intent, CustomTabIntentDataProvider.EXTRA_VERIFIED_SHARE_DATA);
+            if (verifiedBundle != null) {
+                try {
+                    return ShareData.fromBundle(verifiedBundle);
+                } catch (Throwable e) {
+                    Log.w(TAG, "Failed to unparcel verified share data", e);
+                }
+            }
+        }
+
+        ShareData shareData = intentDataProvider.getShareData();
+        if (shareData == null || shareData.uris == null || shareData.uris.isEmpty()) {
+            return shareData;
+        }
+
+        if (activity == null) {
+            return new ShareData(shareData.title, shareData.text, new ArrayList<>());
+        }
+
+        // Resolve client UID: from CCT session for TWAs, or from WebAPK package for WebAPKs.
+        // For WebAPKs, this is a defense-in-depth fallback for cases where
+        // EXTRA_VERIFIED_SHARE_DATA was not stashed by WebappLauncherActivity.
+        // Note: caller is null when invoked by TwaSharingController, so on Android 15+ this falls
+        // back to checkUriPermission against clientUid.
+        int clientUid = -1;
+        int clientPid = 0;
+        SessionHolder session = intentDataProvider.getSession();
+        if (session != null) {
+            clientUid = CustomTabsConnection.getInstance().getClientUidForSession(session);
+            clientPid = CustomTabsConnection.getInstance().getClientPidForSession(session);
+        } else if (intentDataProvider.getActivityType() == ActivityType.WEB_APK
+                && intentDataProvider.getWebApkExtras() != null) {
+            String webApkPackage = intentDataProvider.getWebApkExtras().webApkPackageName;
+            if (webApkPackage != null) {
+                try {
+                    clientUid = activity.getPackageManager().getPackageUid(webApkPackage, 0);
+                } catch (PackageManager.NameNotFoundException e) {
+                    Log.w(TAG, "WebAPK package not found: " + webApkPackage, e);
+                }
+            }
+        }
+
+        List<Uri> filteredUris = new ArrayList<>();
+        for (Uri uri : shareData.uris) {
+            if (!isValidLaunchUri(uri)) {
+                Log.w(TAG, "Invalid launch URI: " + uri);
+                continue;
+            }
+            if (!doesCallerHavePermissionForUri(
+                    activity,
+                    caller,
+                    clientUid,
+                    clientPid,
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
+                Log.w(TAG, "Caller does not have read permission for share URI: " + uri);
+                continue;
+            }
+            filteredUris.add(uri);
+        }
+
+        return new ShareData(shareData.title, shareData.text, filteredUris);
+    }
+
+    private String getScopeUrl(String url) {
+        String scopeUrl = ShortcutHelper.getScopeFromUrl(url);
+        if (TextUtils.isEmpty(scopeUrl)) {
+            scopeUrl =
+                    Uri.parse(url)
+                            .buildUpon()
+                            .path("")
+                            .clearQuery()
+                            .fragment(null)
+                            .build()
+                            .toString();
+        }
+        return scopeUrl;
+    }
+
+    /**
      * Takes the WebContents object of the tab that is being launched and notifies the launch queue
-     * with this object and associated launch parameters.
+     * with this object and associated launch parameters. WebContents parameters must not be null.
+     * Callers must ensure they are valid.
      */
     @NativeMethods
     public interface Natives {
-        void notifyLaunchQueue(
+        void prepareForLaunch(
                 @JniType("content::WebContents*") WebContents webContents,
-                @JniType("bool") boolean startNewNavigation,
+                long launchToken,
                 @JniType("std::string") String startUrl,
                 @JniType("std::string") String packageName,
-                @JniType("std::vector<std::string>") String[] fileUris);
+                @JniType("std::vector<std::string>") String[] fileUris,
+                @JniType("std::vector<bool>") boolean[] canWrite,
+                @JniType("std::string") String scopeUrl,
+                boolean hasSpeculativeNavigation);
+
+        void onLaunchVerified(
+                @JniType("content::WebContents*") WebContents webContents,
+                long launchToken,
+                boolean success);
+
+        void enqueueNonNavigating(
+                @JniType("content::WebContents*") WebContents webContents,
+                @JniType("std::string") String startUrl,
+                @JniType("std::string") String packageName,
+                @JniType("std::vector<std::string>") String[] fileUris,
+                @JniType("std::vector<bool>") boolean[] canWrite,
+                @JniType("std::string") String scopeUrl);
     }
 }

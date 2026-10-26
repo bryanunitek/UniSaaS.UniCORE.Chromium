@@ -57,6 +57,14 @@ void ArcActivationNecessityChecker::Check(CheckCallback callback) {
     return;
   }
 
+  // Activate ARC if Auto-Launch apps are configured by policy.
+  // AutoLaunchAndroidAppsPolicyHandler validates and filters entries,
+  // so any entry in the pref is a valid package name.
+  if (!profile_->GetPrefs()->GetList(prefs::kArcAutoLaunchApps).empty()) {
+    OnChecked(std::move(callback), true);
+    return;
+  }
+
   // Activate ARC if Coral feature is enabled, since it depends on the on-device
   // safety service which is powered inside arc.
   if (ash::features::IsCoralFeatureEnabled()) {
@@ -93,7 +101,7 @@ void ArcActivationNecessityChecker::OnChecked(CheckCallback callback,
                                               bool result) {
   // Check if the user installed any apps and the last launch time if any.
   ArcAppListPrefs* app_list = ArcAppListPrefs::Get(profile_);
-  DCHECK(app_list);
+  CHECK(app_list, base::NotFatalUntil::M160);
   std::optional<base::Time> last_launch;
   bool is_app_installed = false;
   const auto app_ids = app_list->GetAppIds();
@@ -123,7 +131,7 @@ void ArcActivationNecessityChecker::OnChecked(CheckCallback callback,
     is_app_recently_launched = last_launch.has_value();
   } else if (last_launch.has_value()) {
     base::ByteSize ram_size = base::SysInfo::AmountOfTotalPhysicalMemory();
-    bool is_4gb_device = ram_size < base::GiBU(4.5);
+    bool is_4gb_device = ram_size < base::GiB(4.5);
 
     base::TimeDelta inactive_interval =
         is_4gb_device ? kArcOnDemandInactiveIntervalFor4GiB.Get()

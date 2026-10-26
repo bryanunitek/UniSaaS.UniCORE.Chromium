@@ -9,12 +9,12 @@ import android.view.LayoutInflater;
 import android.view.View;
 
 import androidx.annotation.ColorInt;
-import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JniType;
 
 import org.chromium.base.CallbackUtils;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
@@ -24,12 +24,8 @@ import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpener;
 import org.chromium.chrome.browser.bookmarks.BookmarkModel;
 import org.chromium.chrome.browser.bookmarks.BookmarkUtils;
 import org.chromium.chrome.browser.context_sharing.R;
-import org.chromium.chrome.browser.contextual_tasks.fusebox.ContextualTasksFusebox;
-import org.chromium.chrome.browser.contextual_tasks.fusebox.ContextualTasksFusebox.ContextualTasksFuseboxConfig;
-import org.chromium.chrome.browser.contextual_tasks.fusebox.ContextualTasksFuseboxManager;
 import org.chromium.chrome.browser.ephemeraltab.EphemeralTabCoordinator;
 import org.chromium.chrome.browser.ephemeraltab.EphemeralTabCoordinatorSupplier;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManager;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -52,10 +48,8 @@ import org.chromium.url.Origin;
 public class CoBrowseViewFactory {
 
     private final Activity mActivity;
-    private final ContextualTasksFuseboxConfig mFuseboxConfig;
     private final WindowAndroid mWindowAndroid;
     private final NonNullObservableSupplier<Profile> mProfileSupplier;
-    private final ActivityLifecycleDispatcher mLifecycleDispatcher;
     private final SnackbarManager mSnackbarManager;
     private final ContextMenuPopulatorFactory mContextMenuPopulatorFactory;
     private final SelectionDropdownMenuDelegate mSelectionDropdownMenuDelegate;
@@ -68,7 +62,6 @@ public class CoBrowseViewFactory {
      * Factory responsible for creating co-browse content.
      *
      * @param activity The current {@link Activity} instance.
-     * @param fuseboxConfig The configuration for the fusebox.
      * @param profileSupplier A supplier for the current {@link Profile}.
      * @param windowAndroid The {@link WindowAndroid} for managing window-level operations.
      * @param lifecycleDispatcher The {@link ActivityLifecycleDispatcher} for managing activity
@@ -85,7 +78,6 @@ public class CoBrowseViewFactory {
      */
     public CoBrowseViewFactory(
             Activity activity,
-            ContextualTasksFuseboxConfig fuseboxConfig,
             NonNullObservableSupplier<Profile> profileSupplier,
             WindowAndroid windowAndroid,
             ActivityLifecycleDispatcher lifecycleDispatcher,
@@ -97,10 +89,8 @@ public class CoBrowseViewFactory {
             PriceDropNotificationManager priceDropNotificationManager,
             BookmarkManagerOpener bookmarkManagerOpener) {
         mActivity = activity;
-        mFuseboxConfig = fuseboxConfig;
         mProfileSupplier = profileSupplier;
         mWindowAndroid = windowAndroid;
-        mLifecycleDispatcher = lifecycleDispatcher;
         mSnackbarManager = snackbarManager;
         mContextMenuPopulatorFactory = contextMenuPopulatorFactory;
         mSelectionDropdownMenuDelegate = selectionDropdownMenuDelegate;
@@ -123,154 +113,186 @@ public class CoBrowseViewFactory {
      *
      * @param webContents The {@link WebContents} to be displayed in the thin web view.
      * @param backgroundColor The background color for the content.
+     * @param placeholderElemColor The element color for placeholder skeleton items.
      * @param clientType The client using coBrowseViews.
      * @param containerType The type of container hosting the views.
+     * @param requestFocus Whether focus should be requested for the web contents.
      * @return The {@link CoBrowseViews} instance.
      */
     CoBrowseViews buildCoBrowseViews(
             @Nullable WebContents webContents,
             @ColorInt int backgroundColor,
+            @ColorInt int placeholderElemColor,
             @TabBottomSheetClientType int clientType,
             @CoBrowseContainerType int containerType,
+            boolean requestFocus,
             @Nullable CoBrowseComponentProvider bottomSheetContentProvider) {
         View containerView =
                 LayoutInflater.from(mActivity).inflate(R.layout.tab_bottom_sheet, null);
+
         TabBottomSheetWebUi webUi =
-                new TabBottomSheetWebUi(
-                        mActivity,
+                createWebUi(
                         containerView,
-                        mWindowAndroid,
-                        mContextMenuPopulatorFactory,
-                        mSelectionDropdownMenuDelegate,
                         backgroundColor,
+                        placeholderElemColor,
+                        clientType,
                         containerType,
-                        // Passes a callback to the components layer to open ephemeral tabs,
-                        // avoiding a circular dependency since the components layer cannot depend
-                        // on chrome/ UI coordinators directly.
-                        (GURL url, String title) -> {
-                            var ephemeralTabCoordinatorSupplier =
-                                    EphemeralTabCoordinatorSupplier.from(mWindowAndroid);
-                            if (ephemeralTabCoordinatorSupplier == null) return;
-                            EphemeralTabCoordinator coordinator =
-                                    ephemeralTabCoordinatorSupplier.get();
-                            if (coordinator == null) return;
-
-                            Profile profile = mProfileSupplier.get();
-                            if (profile == null) return;
-
-                            Origin initiatorOrigin = null;
-                            if (webContents != null && webContents.getMainFrame() != null) {
-                                initiatorOrigin =
-                                        webContents.getMainFrame().getLastCommittedOrigin();
-                            }
-
-                            coordinator.requestOpenSheet(
-                                    url,
-                                    /* fullPageUrl= */ null,
-                                    title,
-                                    profile,
-                                    /* canPromoteToNewTab= */ true,
-                                    /* shouldHaveContextMenu= */ true,
-                                    initiatorOrigin,
-                                    /* requestDeniedCallback= */ () -> {});
-                        },
-                        (GURL url, String title) -> {
-                            Profile profile = mProfileSupplier.get();
-                            if (profile == null) return;
-                            BookmarkModel bookmarkModel = BookmarkModel.getForProfile(profile);
-                            bookmarkModel.finishLoadingBookmarkModel(
-                                    () -> {
-                                        BottomSheetController bottomSheetController =
-                                                BottomSheetControllerProvider.from(mWindowAndroid);
-                                        if (bottomSheetController == null) return;
-                                        BookmarkUtils.addToReadingList(
-                                                mActivity,
-                                                bookmarkModel,
-                                                title,
-                                                url,
-                                                mSnackbarManager,
-                                                profile,
-                                                bottomSheetController,
-                                                mBookmarkManagerOpener,
-                                                mPriceDropNotificationManager);
-                                    });
-                        });
-        ContextualTasksFusebox fusebox = null;
-        if (clientType == TabBottomSheetClientType.CONTEXTUAL_TASKS
-                && ChromeFeatureList.isEnabled(ChromeFeatureList.CONTEXTUAL_TASKS_JAVA_FUSEBOX)) {
-            // TaskState retrieval from Manager.
-            ContextualTasksFuseboxManager manager =
-                    ContextualTasksFuseboxManager.from(mWindowAndroid);
-            if (manager != null) {
-                // TODO(crbug.com/491504815): Get task ID from native and ensure the session is
-                // initialized for this task and WebContents.
-                fusebox =
-                        new ContextualTasksFusebox(
-                                mActivity,
-                                mFuseboxConfig.contentView,
-                                mFuseboxConfig,
-                                mProfileSupplier,
-                                mWindowAndroid,
-                                mLifecycleDispatcher,
-                                /* loadUrlCallback= */ CallbackUtils.emptyCallback(),
-                                mSnackbarManager,
-                                manager.getFuseboxDataProvider());
-            }
-        }
-
-        webUi.setWebContents(webContents, false);
-
-        PeekViewManager peekViewManager = null;
-        TabBottomSheetManager manager = TabBottomSheetUtils.getManagerFromWindow(mWindowAndroid);
-        if (bottomSheetContentProvider != null && manager != null) {
-            peekViewManager =
-                    bottomSheetContentProvider.createPeekViewManager(
-                            manager,
-                            mProfileSupplier,
-                            mActivityTabProvider,
-                            (tabId) -> {
-                                TabModelSelector selector = mTabModelSelectorSupplier.get();
-                                if (selector != null) {
-                                    TabModelUtils.selectTabById(
-                                            selector, tabId, TabSelectionType.FROM_USER);
-                                }
-                            });
-        }
+                        webContents,
+                        bottomSheetContentProvider);
+        webUi.setWebContents(webContents, requestFocus);
 
         return new CoBrowseViews(
                 containerView,
                 clientType,
                 containerType,
                 webUi,
-                fusebox,
                 backgroundColor,
                 bottomSheetContentProvider,
-                peekViewManager);
+                () -> createPeekViewManagerIfNeeded(bottomSheetContentProvider));
     }
 
+    /**
+     * Builds {@link CoBrowseViews} from native JNI.
+     *
+     * @param windowAndroid The {@link WindowAndroid} hosting the views.
+     * @param webContents The {@link WebContents} to display, or null.
+     * @param backgroundColor The background color for the content.
+     * @param placeholderElemColor The element color for placeholder skeleton items.
+     * @param clientType The client using coBrowseViews.
+     * @param containerType The type of container hosting the views.
+     * @param requestFocus Whether focus should be requested for the web contents.
+     * @param bottomSheetContentProvider The provider for bottom sheet content, or null.
+     * @return The {@link CoBrowseViews} instance, or null if the factory is unavailable.
+     */
     @CalledByNative
-    @VisibleForTesting
     public static @Nullable CoBrowseViews buildCoBrowseViews(
             @JniType("ui::WindowAndroid*") WindowAndroid windowAndroid,
             @Nullable @JniType("content::WebContents*") WebContents webContents,
+            @ColorInt int backgroundColor,
+            @ColorInt int placeholderElemColor,
             @TabBottomSheetClientType int clientType,
             @CoBrowseContainerType int containerType,
+            boolean requestFocus,
             @Nullable CoBrowseComponentProvider bottomSheetContentProvider) {
-        CoBrowseViewFactory factory = TabBottomSheetUtils.getFactoryFromWindow(windowAndroid);
+        ThreadUtils.assertOnUiThread();
+        @Nullable CoBrowseViewFactory factory =
+                TabBottomSheetUtils.getFactoryFromWindow(windowAndroid);
         if (factory == null) {
             return null;
         }
 
-        @ColorInt
-        int backgroundColor =
-                clientType == TabBottomSheetClientType.GLIC
-                        ? factory.mActivity.getColor(R.color.tab_bottom_sheet_glic_bg)
-                        : factory.mActivity.getColor(R.color.tab_bottom_sheet_base_bg);
         return factory.buildCoBrowseViews(
                 webContents,
                 backgroundColor,
+                placeholderElemColor,
                 clientType,
                 containerType,
+                requestFocus,
                 bottomSheetContentProvider);
+    }
+
+    /**
+     * Creates a {@link TabBottomSheetWebUi} instance.
+     *
+     * @param containerView The container view.
+     * @param backgroundColor The background color of the sheet.
+     * @param placeholderElemColor The element color of placeholder skeleton items.
+     * @param clientType The client type for the tab bottom sheet.
+     * @param containerType The type of container hosting the sheet.
+     * @param webContents The web contents to display, or null.
+     * @param bottomSheetContentProvider The provider for bottom sheet content, or null.
+     * @return A new {@link TabBottomSheetWebUi} instance.
+     */
+    private TabBottomSheetWebUi createWebUi(
+            View containerView,
+            @ColorInt int backgroundColor,
+            @ColorInt int placeholderElemColor,
+            @TabBottomSheetClientType int clientType,
+            @CoBrowseContainerType int containerType,
+            @Nullable WebContents webContents,
+            @Nullable CoBrowseComponentProvider bottomSheetContentProvider) {
+        return new TabBottomSheetWebUi(
+                mActivity,
+                containerView,
+                mWindowAndroid,
+                BottomSheetControllerProvider.from(mWindowAndroid),
+                mContextMenuPopulatorFactory,
+                mSelectionDropdownMenuDelegate,
+                backgroundColor,
+                placeholderElemColor,
+                clientType,
+                containerType,
+                // Passes a callback to the components layer to open ephemeral tabs,
+                // avoiding a circular dependency since the components layer cannot depend
+                // on chrome/ UI coordinators directly.
+                (GURL url, String title) -> openInEphemeralTab(url, title, webContents),
+                this::addToReadingList,
+                bottomSheetContentProvider);
+    }
+
+    private void openInEphemeralTab(GURL url, String title, @Nullable WebContents webContents) {
+        var ephemeralTabCoordinatorSupplier = EphemeralTabCoordinatorSupplier.from(mWindowAndroid);
+        if (ephemeralTabCoordinatorSupplier == null) return;
+        EphemeralTabCoordinator coordinator = ephemeralTabCoordinatorSupplier.get();
+        if (coordinator == null) return;
+
+        Profile profile = mProfileSupplier.get();
+        if (profile == null) return;
+
+        Origin initiatorOrigin = null;
+        if (webContents != null && webContents.getMainFrame() != null) {
+            initiatorOrigin = webContents.getMainFrame().getLastCommittedOrigin();
+        }
+
+        coordinator.requestOpenSheet(
+                url,
+                /* fullPageUrl= */ null,
+                title,
+                profile,
+                /* canPromoteToNewTab= */ true,
+                /* shouldHaveContextMenu= */ true,
+                initiatorOrigin,
+                /* additionalNavigationParams= */ null,
+                /* requestDeniedCallback= */ CallbackUtils.emptyRunnable());
+    }
+
+    private void addToReadingList(GURL url, String title) {
+        Profile profile = mProfileSupplier.get();
+        if (profile == null) return;
+        BookmarkModel bookmarkModel = BookmarkModel.getForProfile(profile);
+        bookmarkModel.finishLoadingBookmarkModel(
+                () -> {
+                    BottomSheetController bottomSheetController =
+                            BottomSheetControllerProvider.from(mWindowAndroid);
+                    if (bottomSheetController == null) return;
+                    BookmarkUtils.addToReadingList(
+                            mActivity,
+                            bookmarkModel,
+                            title,
+                            url,
+                            mSnackbarManager,
+                            profile,
+                            bottomSheetController,
+                            mBookmarkManagerOpener,
+                            mPriceDropNotificationManager);
+                });
+    }
+
+    private @Nullable PeekViewManager createPeekViewManagerIfNeeded(
+            @Nullable CoBrowseComponentProvider bottomSheetContentProvider) {
+        TabBottomSheetManager manager = TabBottomSheetUtils.getManagerFromWindow(mWindowAndroid);
+        assert bottomSheetContentProvider != null;
+        assert manager != null;
+
+        return bottomSheetContentProvider.createPeekViewManager(
+                manager,
+                mProfileSupplier,
+                mActivityTabProvider,
+                (tabId) -> {
+                    TabModelSelector selector = mTabModelSelectorSupplier.get();
+                    if (selector != null) {
+                        TabModelUtils.selectTabById(selector, tabId, TabSelectionType.FROM_USER);
+                    }
+                });
     }
 }

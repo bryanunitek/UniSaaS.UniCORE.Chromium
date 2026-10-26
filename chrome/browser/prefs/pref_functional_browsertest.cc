@@ -13,9 +13,9 @@
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/preloading/preloading_prefs.h"
 #include "chrome/browser/ui/bookmarks/bookmark_bar_controller.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -40,7 +40,8 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "base/test/test_reg_util_win.h"
-#include "chrome/browser/win/isolated_browser_support.h"
+#include "chrome/browser/win/isolated_browser/isolated_browser_support.h"
+#include "chrome/common/chrome_paths_internal.h"
 #include "chrome/install_static/test/scoped_install_details.h"
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -52,10 +53,10 @@ class PrefsFunctionalTest : public InProcessBrowserTest {
   // Create a DownloadTestObserverTerminal that will wait for the
   // specified number of downloads to finish.
   std::unique_ptr<content::DownloadTestObserver> CreateWaiter(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       int num_downloads) {
     DownloadManager* download_manager =
-        browser->profile()->GetDownloadManager();
+        browser->GetProfile()->GetDownloadManager();
 
     content::DownloadTestObserver* downloads_observer =
          new content::DownloadTestObserverTerminal(
@@ -69,13 +70,14 @@ class PrefsFunctionalTest : public InProcessBrowserTest {
 IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestDownloadDirPref) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
-  base::FilePath new_download_dir =
-      DownloadPrefs(browser()->profile()).DownloadPath().AppendASCII("subdir");
+  base::FilePath new_download_dir = DownloadPrefs(browser()->GetProfile())
+                                        .DownloadPath()
+                                        .AppendASCII("subdir");
   base::FilePath downloaded_pkg =
       new_download_dir.AppendASCII("a_zip_file.zip");
 
   // Set pref to download in new_download_dir.
-  browser()->profile()->GetPrefs()->SetFilePath(
+  browser()->GetProfile()->GetPrefs()->SetFilePath(
       prefs::kDownloadDefaultDirectory, new_download_dir);
 
   // Create a downloads observer.
@@ -109,9 +111,9 @@ IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestImageContentSettings) {
       "});";
   EXPECT_EQ(true,
             content::EvalJs(
-                browser()->tab_strip_model()->GetActiveWebContents(), script));
+                browser()->GetTabStripModel()->GetActiveWebContents(), script));
 
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       content_settings::WebsiteSettingsRegistry::GetInstance()
           ->Get(ContentSettingsType::IMAGES)
           ->default_value_pref_name(),
@@ -122,25 +124,25 @@ IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestImageContentSettings) {
 
   EXPECT_EQ(false,
             content::EvalJs(
-                browser()->tab_strip_model()->GetActiveWebContents(), script));
+                browser()->GetTabStripModel()->GetActiveWebContents(), script));
 }
 
 // Verify that enabling/disabling Javascript in prefs works.
 IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestJavascriptEnableDisable) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
-  EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kWebKitJavascriptEnabled));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("/javaScriptTitle.html")));
   EXPECT_EQ(u"Title from script javascript enabled",
-            browser()->tab_strip_model()->GetActiveWebContents()->GetTitle());
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kWebKitJavascriptEnabled,
-                                               false);
+            browser()->GetTabStripModel()->GetActiveWebContents()->GetTitle());
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      prefs::kWebKitJavascriptEnabled, false);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("/javaScriptTitle.html")));
   EXPECT_EQ(u"This is html title",
-            browser()->tab_strip_model()->GetActiveWebContents()->GetTitle());
+            browser()->GetTabStripModel()->GetActiveWebContents()->GetTitle());
 }
 
 class LegacyBookmarkBarPrefsTest : public PrefsFunctionalTest {
@@ -157,14 +159,14 @@ class LegacyBookmarkBarPrefsTest : public PrefsFunctionalTest {
 // Verify restore for bookmark bar visibility.
 IN_PROC_BROWSER_TEST_F(LegacyBookmarkBarPrefsTest,
                        TestSessionRestoreShowBookmarkBar) {
-  EXPECT_FALSE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       bookmarks::prefs::kShowBookmarkBar));
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       bookmarks::prefs::kShowBookmarkBar, true);
-  EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       bookmarks::prefs::kShowBookmarkBar));
 
-  EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       bookmarks::prefs::kShowBookmarkBar));
   EXPECT_EQ(BookmarkBar::SHOW,
             BookmarkBarController::From(browser())->bookmark_bar_state());
@@ -183,7 +185,7 @@ class SimplifiedBookmarkBarPrefsTest : public PrefsFunctionalTest {
 
 IN_PROC_BROWSER_TEST_F(SimplifiedBookmarkBarPrefsTest,
                        TestSimplifiedBookmarkBarVisibilityState) {
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
 
   prefs->SetInteger(
       bookmarks::prefs::kBookmarkBarVisibilityState,
@@ -204,7 +206,7 @@ IN_PROC_BROWSER_TEST_F(SimplifiedBookmarkBarPrefsTest,
 IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestImagesNotBlockedInIncognito) {
   ASSERT_TRUE(embedded_test_server()->Start());
   GURL url = embedded_test_server()->GetURL("/settings/image_page.html");
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito_browser, url));
 
   std::string script =
@@ -219,19 +221,19 @@ IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestImagesNotBlockedInIncognito) {
       "});";
   EXPECT_EQ(true,
             content::EvalJs(
-                incognito_browser->tab_strip_model()->GetActiveWebContents(),
+                incognito_browser->GetTabStripModel()->GetActiveWebContents(),
                 script));
 }
 
 // Verify setting homepage preference to newtabpage across restarts. Part1
 IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, PRE_TestHomepageNewTabpagePrefs) {
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kHomePageIsNewTabPage,
-                                               true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kHomePageIsNewTabPage,
+                                                  true);
 }
 
 // Verify setting homepage preference to newtabpage across restarts. Part2
 IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestHomepageNewTabpagePrefs) {
-  EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kHomePageIsNewTabPage));
 }
 
@@ -239,7 +241,7 @@ IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestHomepageNewTabpagePrefs) {
 IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, PRE_TestHomepagePrefs) {
   GURL home_page_url("http://www.google.com");
 
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetBoolean(prefs::kHomePageIsNewTabPage, false);
   const PrefService::Preference* pref =
       prefs->FindPreference(prefs::kHomePage);
@@ -252,14 +254,14 @@ IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, PRE_TestHomepagePrefs) {
 IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestHomepagePrefs) {
   GURL home_page_url("http://www.google.com");
 
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   EXPECT_FALSE(prefs->GetBoolean(prefs::kHomePageIsNewTabPage));
   EXPECT_EQ(home_page_url.spec(), prefs->GetString(prefs::kHomePage));
 }
 
 // Verify the security preference under privacy across restarts. Part1
 IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, PRE_TestPrivacySecurityPrefs) {
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
 
   static_assert(prefetch::NetworkPredictionOptions::kDefault !=
                     prefetch::NetworkPredictionOptions::kDisabled,
@@ -282,7 +284,7 @@ IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, PRE_TestPrivacySecurityPrefs) {
 
 // Verify the security preference under privacy across restarts. Part2
 IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestPrivacySecurityPrefs) {
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
 
   EXPECT_EQ(prefetch::PreloadPagesState::kNoPreloading,
             prefetch::GetPreloadPagesState(*prefs));
@@ -307,6 +309,7 @@ IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestProcessIsolationPref) {
   rom.OverrideRegistry(HKEY_CURRENT_USER);
   install_static::ScopedInstallDetails scoped_install_details(
       /*system_level=*/true);
+  chrome::SetUsingDefaultUserDataDirectoryForTesting(true);
 
   PrefService* local_state = g_browser_process->local_state();
 
@@ -322,5 +325,6 @@ IN_PROC_BROWSER_TEST_F(PrefsFunctionalTest, TestProcessIsolationPref) {
 
   EXPECT_TRUE(
       base::test::RunUntil([&]() { return chrome::IsIsolationEnabled(); }));
+  chrome::SetUsingDefaultUserDataDirectoryForTesting(std::nullopt);
 }
 #endif  // BUILDFLAG(IS_WIN)

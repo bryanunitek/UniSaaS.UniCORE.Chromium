@@ -48,13 +48,10 @@ class PipeToEngine::PipeToReadRequest final : public ReadRequest {
   void ChunkSteps(ScriptState* script_state,
                   v8::Local<v8::Value> chunk,
                   ExceptionState&) const override {
-    scoped_refptr<scheduler::EventLoop> event_loop =
-        ExecutionContext::From(script_state)->GetAgent()->event_loop();
     v8::Global<v8::Value> value(script_state->GetIsolate(), chunk);
-    event_loop->EnqueueMicrotask(
+    script_state->EnqueueMicrotask(
         BindOnce(&PipeToEngine::ReadRequestChunkStepsBody,
-                 WrapPersistent(instance_.Get()), WrapPersistent(script_state),
-                 std::move(value)));
+                 WrapPersistent(instance_.Get()), std::move(value)));
   }
 
   void CloseSteps(ScriptState* script_state) const override {
@@ -184,6 +181,7 @@ ScriptPromise<IDLUndefined> PipeToEngine::Start(
   DCHECK(!exception_state.HadException());
 
   // 11. Set source.[[disturbed]] to true.
+  readable->is_disturbed_ = true;
 
   // 12. Let shuttingDown be false.
   DCHECK(!is_shutting_down_);
@@ -364,12 +362,12 @@ void PipeToEngine::HandleNextEvent() {
       PassThroughException(script_state_->GetIsolate()));
 }
 
-void PipeToEngine::ReadRequestChunkStepsBody(ScriptState* script_state,
-                                             v8::Global<v8::Value> chunk) {
-  // This is needed because this method runs as an enqueued microtask, so the
-  // isolate needs a current context.
-  ScriptState::Scope scope(script_state);
+void PipeToEngine::ReadRequestChunkStepsBody(v8::Global<v8::Value> chunk,
+                                             ScriptState* script_state) {
   is_reading_ = false;
+  if (is_shutting_down_) {
+    return;
+  }
   const auto write = WritableStreamDefaultWriter::Write(
       script_state, writer_, chunk.Get(script_state->GetIsolate()),
       PassThroughException(script_state_->GetIsolate()));

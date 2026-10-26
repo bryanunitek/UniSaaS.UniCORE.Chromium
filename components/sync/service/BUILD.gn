@@ -114,8 +114,8 @@ static_library("service") {
     "//components/keyed_service/core",
     "//components/metrics",
     "//components/network_time",
-    "//components/os_crypt/async/browser",
-    "//components/os_crypt/async/common",
+    "//components/os_crypt/browser",
+    "//components/os_crypt/common",
     "//components/policy:generated",
     "//components/policy/core/browser",
     "//components/prefs",
@@ -141,6 +141,4 @@ static_library("service") {
       "//components/password_manager/core/browser:split_stores_and_local_upm",
     ]
   }
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }

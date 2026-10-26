@@ -21,7 +21,6 @@
 #include "chrome/browser/sync_file_system/local/local_file_sync_service.h"
 #include "chrome/browser/sync_file_system/sync_file_system_service.h"
 #include "chrome/browser/sync_file_system/sync_file_system_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "components/drive/service/fake_drive_service.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -29,6 +28,7 @@
 #include "content/public/test/browser_test.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "storage/browser/quota/quota_manager.h"
 #include "third_party/leveldatabase/leveldb_chrome.h"
 

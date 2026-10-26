@@ -18,14 +18,12 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.content_public.browser.selection.SelectionUtils;
 
 /** Unit tests for {@link SelectionUtils}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SelectionUtilsTest {
 
     @Test
@@ -37,8 +35,19 @@ public class SelectionUtilsTest {
     }
 
     @Test
+    public void testSanitizeTextForMenu() {
+        assertEquals("", SelectionUtils.sanitizeTextForMenu(null));
+        assertEquals("", SelectionUtils.sanitizeTextForMenu(""));
+        assertEquals("hello world", SelectionUtils.sanitizeTextForMenu("  hello   world  "));
+        assertEquals("line 1 line 2", SelectionUtils.sanitizeTextForMenu("line 1\nline 2"));
+        assertEquals(
+                "um.[59] ^ XVIII In the United Kingdom",
+                SelectionUtils.sanitizeTextForMenu("um.[59] ^\nXVIII In the United Kingdom"));
+    }
+
+    @Test
     public void testShare() {
-        Context context = RuntimeEnvironment.application;
+        Context context = RuntimeEnvironment.getApplication();
         SelectionUtils.share(context, "test share");
         Intent intent =
                 Shadows.shadowOf((android.app.Application) context).getNextStartedActivity();
@@ -48,18 +57,31 @@ public class SelectionUtilsTest {
 
     @Test
     public void testWebSearch() {
-        Context context = RuntimeEnvironment.application;
+        Context context = RuntimeEnvironment.getApplication();
         SelectionUtils.webSearch(context, "test search");
         Intent intent = Shadows.shadowOf((Application) context).getNextStartedActivity();
         assertNotNull(intent);
         assertEquals(Intent.ACTION_WEB_SEARCH, intent.getAction());
+        assertNull(intent.getPackage());
+        assertTrue(intent.getBooleanExtra(Browser.EXTRA_CREATE_NEW_TAB, false));
+        assertTrue((intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0);
+    }
+
+    @Test
+    public void testWebSearchWithSetPackage() {
+        Context context = RuntimeEnvironment.getApplication();
+        SelectionUtils.webSearch(context, "test search", /* setPackage= */ true);
+        Intent intent = Shadows.shadowOf((Application) context).getNextStartedActivity();
+        assertNotNull(intent);
+        assertEquals(Intent.ACTION_WEB_SEARCH, intent.getAction());
+        assertEquals(context.getPackageName(), intent.getPackage());
         assertTrue(intent.getBooleanExtra(Browser.EXTRA_CREATE_NEW_TAB, false));
         assertTrue((intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0);
     }
 
     @Test
     public void testTranslate() {
-        Context context = RuntimeEnvironment.application;
+        Context context = RuntimeEnvironment.getApplication();
         SelectionUtils.translate(context, "test translate");
         Intent intent = Shadows.shadowOf((Application) context).getNextStartedActivity();
         assertNotNull(intent);

@@ -12,7 +12,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/feedback/show_feedback_page.h"
 #include "chrome/browser/flag_descriptions.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_model.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
@@ -37,7 +37,7 @@
 
 namespace {
 
-void ShowFeedbackPage(Browser* browser,
+void ShowFeedbackPage(BrowserWindowInterface* browser,
                       std::string feedback_category_name,
                       std::u16string visible_name) {
   chrome::ShowFeedbackPage(
@@ -70,7 +70,8 @@ class LabsComboboxModel : public ui::ComboboxModel {
   // this, the same changes must be made in
   // flags_ui::FeatureEntry::DescriptionForOption(..).
   std::u16string GetItemAt(size_t index) const override {
-    DCHECK_LT(index, static_cast<size_t>(feature_entry_->NumOptions()));
+    CHECK_LT(index, static_cast<size_t>(feature_entry_->NumOptions()),
+             base::NotFatalUntil::M162);
     int description_translation_id = IDS_CHROMELABS_DEFAULT;
     if (feature_entry_->type ==
         flags_ui::FeatureEntry::FEATURE_WITH_PARAMS_VALUE) {
@@ -115,7 +116,7 @@ ChromeLabsItemView::ChromeLabsItemView(
     const flags_ui::FeatureEntry* feature_entry,
     base::RepeatingCallback<void(ChromeLabsItemView* item_view)>
         combobox_callback,
-    Browser* browser)
+    BrowserWindowInterface* browser)
     : feature_entry_(feature_entry) {
   SetLayoutManager(std::make_unique<views::FlexLayout>())
       ->SetOrientation(views::LayoutOrientation::kVertical);

@@ -6,11 +6,11 @@
 
 #import "base/functional/bind.h"
 #import "base/memory/raw_ptr.h"
+#import "base/test/scoped_feature_list.h"
 #import "base/time/time.h"
 #import "components/feature_engagement/test/mock_tracker.h"
 #import "components/history/core/browser/history_service.h"
 #import "components/history/core/test/history_service_test_util.h"
-#import "components/keyed_service/core/service_access_type.h"
 #import "components/ntp_tiles/icon_cacher.h"
 #import "components/ntp_tiles/most_visited_sites.h"
 #import "components/ntp_tiles/ntp_tile.h"
@@ -21,6 +21,7 @@
 #import "ios/chrome/browser/content_suggestions/most_visited_tiles/ui/most_visited_tile_view.h"
 #import "ios/chrome/browser/content_suggestions/most_visited_tiles/ui/most_visited_tiles_config.h"
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_actions_provider.h"
+#import "ios/chrome/browser/content_suggestions/ui/content_suggestions_consumer.h"
 #import "ios/chrome/browser/favicon/model/ios_chrome_large_icon_cache_factory.h"
 #import "ios/chrome/browser/favicon/model/ios_chrome_large_icon_service_factory.h"
 #import "ios/chrome/browser/history/model/history_service_factory.h"
@@ -43,6 +44,7 @@
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
+#import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 #import "url/gurl.h"
 
@@ -117,8 +119,7 @@ class MostVisitedTilesMediatorTest : public PlatformTest {
     profile_ = std::move(test_profile_builder).Build();
 
     history::HistoryService* history_service =
-        ios::HistoryServiceFactory::GetForProfile(
-            profile_.get(), ServiceAccessType::EXPLICIT_ACCESS);
+        ios::HistoryServiceFactory::GetForProfile(profile_.get());
     favicon::LargeIconService* large_icon_service =
         IOSChromeLargeIconServiceFactory::GetForProfile(profile_.get());
     LargeIconCache* cache =
@@ -154,11 +155,10 @@ class MostVisitedTilesMediatorTest : public PlatformTest {
          URLLoadingBrowserAgent:url_loader_
           accountManagerService:nullptr
               engagementTracker:tracker_.get()
-              layoutGuideCenter:nil];
+              layoutGuideCenter:nil
+          aimEligibilityService:nullptr];
 
-    metrics_recorder_ = [[ContentSuggestionsMetricsRecorder alloc] init];
     mediator_.actionFactory = mock_action_factory();
-    mediator_.contentSuggestionsMetricsRecorder = metrics_recorder_;
     delegate_ = OCMProtocolMock(@protocol(NewTabPageActionsDelegate));
     mediator_.NTPActionsDelegate = delegate_;
   }
@@ -223,7 +223,6 @@ class MostVisitedTilesMediatorTest : public PlatformTest {
   raw_ptr<FakeUrlLoadingBrowserAgent> url_loader_;
   MostVisitedTilesMediator* mediator_;
   id<NewTabPageActionsDelegate> delegate_;
-  ContentSuggestionsMetricsRecorder* metrics_recorder_;
   // The captured observer, ready to be used in tests
   raw_ptr<ntp_tiles::MostVisitedSites::Observer> captured_observer_;
 };
@@ -261,8 +260,7 @@ TEST_F(MostVisitedTilesMediatorTest, TestPinSiteInProductHelpCondition) {
   // Setup the URL and history service.
   GURL kUrl("https://www.chromium.org/");
   history::HistoryService* history_service =
-      ios::HistoryServiceFactory::GetForProfile(
-          profile_.get(), ServiceAccessType::EXPLICIT_ACCESS);
+      ios::HistoryServiceFactory::GetForProfile(profile_.get());
 
   // Fake two recent visits, and one for more than a week ago, in chronological
   // order.
@@ -407,4 +405,31 @@ TEST_F(MostVisitedTilesMediatorTest, TestAccessibilityCustomActionsMove) {
   }
   EXPECT_TRUE(foundMoveLeft);
   EXPECT_FALSE(foundMoveRight);
+}
+
+// Tests that setConsumer delivers cached config when NTP Redesign is enabled.
+TEST_F(MostVisitedTilesMediatorTest,
+       TestSetConsumerDeliversConfigWhenNTPRedesignEnabled) {
+  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
+    return;
+  }
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kNewTabPageRedesign);
+
+  ntp_tiles::NTPTilesVector tiles_vector;
+  ntp_tiles::NTPTile tile;
+  tile.url = GURL("http://chromium.org");
+  tile.title = u"Chromium";
+  tiles_vector.push_back(tile);
+  std::map<ntp_tiles::SectionType, ntp_tiles::NTPTilesVector> sections;
+  sections[ntp_tiles::SectionType::PERSONALIZED] = tiles_vector;
+  captured_observer_->OnURLsAvailable(/*is_user_triggered=*/true, sections);
+
+  id mock_consumer = OCMProtocolMock(@protocol(ContentSuggestionsConsumer));
+  OCMExpect([mock_consumer setMostVisitedTilesConfig:[OCMArg any]]);
+
+  mediator_.consumer = mock_consumer;
+
+  EXPECT_OCMOCK_VERIFY(mock_consumer);
 }

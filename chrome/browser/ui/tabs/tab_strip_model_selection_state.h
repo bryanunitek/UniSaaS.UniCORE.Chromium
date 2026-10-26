@@ -5,11 +5,13 @@
 #ifndef CHROME_BROWSER_UI_TABS_TAB_STRIP_MODEL_SELECTION_STATE_H_
 #define CHROME_BROWSER_UI_TABS_TAB_STRIP_MODEL_SELECTION_STATE_H_
 
+#include <optional>
 #include <unordered_set>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/types/pass_key.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "ui/base/models/list_selection_model.h"
 
 class TabStripModel;
@@ -28,10 +30,17 @@ class TabStripModelSelectionState final {
   TabStripModelSelectionState(
       std::unordered_set<raw_ptr<TabInterface>> selected_tabs,
       raw_ptr<TabInterface> active_tab,
-      raw_ptr<TabInterface> anchor_tab);
+      raw_ptr<TabInterface> anchor_tab,
+      std::optional<tab_groups::TabGroupId> focused_group = std::nullopt);
   TabStripModelSelectionState(const TabStripModelSelectionState&);
   TabStripModelSelectionState& operator=(const TabStripModelSelectionState&);
   ~TabStripModelSelectionState();
+
+  // Returns true if the given tab is in the given focused group or if the
+  // tab is pinned.
+  static bool IsTabValidInFocusedGroup(
+      const TabInterface* tab,
+      std::optional<tab_groups::TabGroupId> focused_group);
 
   bool operator==(const TabStripModelSelectionState& other) const;
 
@@ -39,6 +48,12 @@ class TabStripModelSelectionState final {
   TabInterface* anchor_tab() const { return anchor_tab_; }
   const std::unordered_set<raw_ptr<TabInterface>>& selected_tabs() const {
     return selected_tabs_;
+  }
+  std::optional<tab_groups::TabGroupId> focused_group() const {
+    return focused_group_;
+  }
+  void set_focused_group(std::optional<tab_groups::TabGroupId> focused_group) {
+    focused_group_ = focused_group;
   }
 
   void Clear();
@@ -75,18 +90,23 @@ class TabStripModelSelectionState final {
                        TabInterface* anchor_tab = nullptr);
 
   // Returns true if the selection model has at least 1 selected tab, an anchor
-  // and an active tab. Otherwise returns false.
+  // and an active tab, and if focused_group is set, all selected tabs belong
+  // to that group. Otherwise returns false.
   bool Valid() const;
 
   // Access the current object as a ListSelectionModel. Requires the
-  // |model_| member to be non null.
+  // `model_` member to be non null.
   const ui::ListSelectionModel& GetListSelectionModel() const;
 
-  // Helper functions to update the |list_selection_model_| member,
+  // Helper functions to update the `list_selection_model_` member,
   // which is a ListSelectionModel representation of the current
-  // selection model. Requires |model_| to be non null.
+  // selection model. Requires `model_` to be non null.
   void InvalidateListSelectionModel(base::PassKey<TabStripModel>) const;
   void UpdateListSelectionModel(base::PassKey<TabStripModel>) const;
+
+  // Key used to store and restore the focused tab group ID in
+  // SessionWindow::extra_data.
+  static constexpr char kFocusedTabGroupIdKey[] = "focused_tab_group_id";
 
  private:
   void UpdateListSelectionModel() const;
@@ -102,7 +122,10 @@ class TabStripModelSelectionState final {
   // The anchor tab for selection.
   raw_ptr<TabInterface> anchor_tab_ = nullptr;
 
-  // If |model_| is non-null, this member represents a ListSelectionModel that
+  // The focused tab group, if any.
+  std::optional<tab_groups::TabGroupId> focused_group_ = std::nullopt;
+
+  // If `model_` is non-null, this member represents a ListSelectionModel that
   // represents the current selection model. Otherwise it is a nullopt. The
   // value of this member is cached and generated only on access, if
   // necessary.

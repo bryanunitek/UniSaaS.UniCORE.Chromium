@@ -29,6 +29,7 @@ import org.chromium.ui.base.DeviceFormFactor;
 // NOTE: Disable online detection so we we'll default to online on test bots with no network.
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @EnableFeatures(ChromeFeatureList.CONTEXTUAL_SEARCH_DISABLE_ONLINE_DETECTION)
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // explicitly not supported.
 @Batch(Batch.PER_CLASS)
 public class ContextualSearchObserverTest extends ContextualSearchInstrumentationBase {
     @Override
@@ -145,6 +146,8 @@ public class ContextualSearchObserverTest extends ContextualSearchInstrumentatio
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
+    // TODO(crbug.com/572829701): Re-enable once flake is fixed.
+    @DisabledTest(message = "https://crbug.com/572829701")
     public void testNotifyObserversOnClearSelectionAfterLongpress() throws Exception {
         TestContextualSearchObserver observer = new TestContextualSearchObserver();
         ThreadUtils.runOnUiThreadBlocking(() -> mManager.addObserver(observer));
@@ -170,7 +173,8 @@ public class ContextualSearchObserverTest extends ContextualSearchInstrumentatio
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511288060
+    // TODO(crbug.com/571163328): Re-enable this test.
+    @DisabledTest(message = "https://crbug.com/571163328")
     public void testNotifyObserversOnExpandSelection() throws Exception {
         mPolicy.overrideDecidedStateForTesting(true);
         TestContextualSearchObserver observer = new TestContextualSearchObserver();

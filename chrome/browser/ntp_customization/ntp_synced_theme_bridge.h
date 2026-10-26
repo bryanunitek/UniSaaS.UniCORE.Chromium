@@ -10,10 +10,11 @@
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/profiles/profile.h"
 #include "components/themes/ntp_custom_background_service_observer.h"
 
+class GURL;
 class NtpAndroidCustomBackgroundService;
+class Profile;
 
 using base::android::JavaRef;
 
@@ -31,8 +32,7 @@ class NtpSyncedThemeBridge : public NtpCustomBackgroundServiceObserver {
   NtpSyncedThemeBridge(const NtpSyncedThemeBridge&) = delete;
   NtpSyncedThemeBridge& operator=(const NtpSyncedThemeBridge&) = delete;
 
-  // Called by the Java counterpart to destroy this object.
-  void Destroy(JNIEnv* env);
+  ~NtpSyncedThemeBridge() override;
 
   // Fetches the next image for a theme collection with daily refresh enabled.
   void FetchNextThemeCollectionImage(JNIEnv* env);
@@ -42,13 +42,48 @@ class NtpSyncedThemeBridge : public NtpCustomBackgroundServiceObserver {
   base::android::ScopedJavaLocalRef<jobject> GetCustomBackgroundInfo(
       JNIEnv* env);
 
- private:
-  ~NtpSyncedThemeBridge() override;
+  // Exposes whether the underlying service is processing a sync update.
+  bool IsProcessingSyncUpdate(JNIEnv* env);
+
+  // Sets the Chrome color ID on NtpAndroidCustomBackgroundService.
+  void SetChromeColor(JNIEnv* env, int color_id);
+
+  // Resets the custom background on NtpAndroidCustomBackgroundService.
+  void ResetCustomBackgroundInfo(JNIEnv* env);
+
+  // Marks custom background as local to device on
+  // NtpAndroidCustomBackgroundService.
+  void SelectLocalBackgroundImage(JNIEnv* env);
+
+  // Updates the theme collection background with collection ID, attributions,
+  // attribution action URL, primary color, and daily refresh state, and
+  // notifies the sync bridge.
+  void UpdateCustomBackgroundPrefsWithColor(
+      const GURL& url,
+      const std::string& collection_id,
+      const std::string& attribution_line_1,
+      const std::string& attribution_line_2,
+      const GURL& attribution_action_url,
+      int32_t primary_color,
+      bool is_daily_refresh);
+
+  // Called when a Chrome color is synced from Chrome Sync.
+  virtual void OnChromeColorSynced(int color_id);
+
+  // Called when the default theme is restored from Chrome Sync.
+  virtual void OnDefaultThemeSynced();
+
+  // Disconnects from the custom background service when the service is
+  // destroyed.
+  void DisconnectCustomBackgroundService();
 
   // NtpCustomBackgroundServiceObserver:
   void OnCustomBackgroundImageUpdated() override;
 
-  raw_ptr<Profile> profile_;
+ protected:
+  NtpSyncedThemeBridge();
+
+ private:
   raw_ptr<NtpAndroidCustomBackgroundService> ntp_custom_background_service_;
   base::android::ScopedJavaGlobalRef<jobject> j_java_obj_;
 };

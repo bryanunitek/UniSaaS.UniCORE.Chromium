@@ -5,9 +5,9 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
@@ -44,13 +44,13 @@ class WebUIWebAppBrowserTest : public WebAppBrowserTestBase {
   struct App {
     webapps::AppId id;
     std::string start_url;
-    raw_ptr<Browser> browser;
+    raw_ptr<BrowserWindowInterface> browser;
     raw_ptr<BrowserView> browser_view;
     raw_ptr<content::WebContents> web_contents;
   };
 
   App InstallAndLaunch() {
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
     std::string start_url = base::StrCat(
         {kWebUIScheme, password_manager::kChromeUIPasswordManagerHost});
 
@@ -60,10 +60,11 @@ class WebUIWebAppBrowserTest : public WebAppBrowserTestBase {
     webapps::AppId app_id =
         test::InstallWebApp(profile, std::move(web_app_info));
 
-    Browser* app_browser = ::web_app::LaunchWebAppBrowser(profile, app_id);
+    BrowserWindowInterface* app_browser =
+        ::web_app::LaunchWebAppBrowser(profile, app_id);
     return App{app_id, start_url, app_browser,
                BrowserView::GetBrowserViewForBrowser(app_browser),
-               app_browser->tab_strip_model()->GetActiveWebContents()};
+               app_browser->GetTabStripModel()->GetActiveWebContents()};
   }
 
  private:

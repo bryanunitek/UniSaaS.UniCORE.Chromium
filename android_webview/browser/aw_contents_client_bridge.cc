@@ -32,6 +32,7 @@
 #include "net/ssl/ssl_cert_request_info.h"
 #include "net/ssl/ssl_platform_key_android.h"
 #include "net/ssl/ssl_private_key.h"
+#include "third_party/jni_zero/default_conversions.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
 
@@ -39,13 +40,9 @@
 #include "android_webview/browser_jni_headers/AwContentsClientBridge_jni.h"
 
 using base::android::AttachCurrentThread;
-using base::android::ConvertJavaStringToUTF16;
-using base::android::ConvertUTF8ToJavaString;
-using base::android::ConvertUTF16ToJavaString;
 using base::android::HasException;
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
-using base::android::ToJavaArrayOfStrings;
 using content::BrowserThread;
 using content::WebContents;
 using std::vector;
@@ -62,8 +59,9 @@ class UserData : public base::SupportsUserData::Data {
  public:
   static AwContentsClientBridge* GetContents(
       content::WebContents* web_contents) {
-    if (!web_contents)
+    if (!web_contents) {
       return nullptr;
+    }
     UserData* data = static_cast<UserData*>(
         web_contents->GetUserData(kAwContentsClientBridge));
     return data ? data->contents_.get() : nullptr;
@@ -140,8 +138,9 @@ void AwContentsClientBridge::AllowCertificateError(int cert_error,
   JNIEnv* env = AttachCurrentThread();
 
   ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj)
+  if (!obj) {
     return;
+  }
 
   std::string_view der_string =
       net::x509_util::CryptoBufferAsStringPiece(cert->cert_buffer());
@@ -159,9 +158,7 @@ void AwContentsClientBridge::AllowCertificateError(int cert_error,
   }
 }
 
-void AwContentsClientBridge::ProceedSslError(JNIEnv* env,
-                                             bool proceed,
-                                             int32_t id) {
+void AwContentsClientBridge::ProceedSslError(bool proceed, int32_t id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   CertErrorCallback* callback = pending_cert_error_callbacks_.Lookup(id);
   if (!callback || callback->is_null()) {
@@ -184,8 +181,9 @@ void AwContentsClientBridge::SelectClientCertificate(
 
   JNIEnv* env = base::android::AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj)
+  if (!obj) {
     return;
+  }
 
   // Build the |key_types| JNI parameter, as a String[]
   std::vector<std::string> key_types = net::SignatureAlgorithmsToJavaKeyTypes(
@@ -342,8 +340,9 @@ bool AwContentsClientBridge::ShouldOverrideUrlLoading(
   *ignore_navigation = false;
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj)
+  if (!obj) {
     return true;
+  }
   devtools_instrumentation::ScopedEmbedderCallbackTask embedder_callback(
       "shouldOverrideUrlLoading");
 
@@ -370,8 +369,9 @@ bool AwContentsClientBridge::ShouldOverrideUrlLoading(
 bool AwContentsClientBridge::SendBrowseIntent(const std::u16string& url) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj)
+  if (!obj) {
     return false;
+  }
   return Java_AwContentsClientBridge_sendBrowseIntent(env, obj, url);
 }
 
@@ -383,8 +383,9 @@ void AwContentsClientBridge::NewDownload(const GURL& url,
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj)
+  if (!obj) {
     return;
+  }
 
   Java_AwContentsClientBridge_newDownload(env, obj, url.spec(), user_agent,
                                           content_disposition, mime_type,
@@ -397,8 +398,9 @@ void AwContentsClientBridge::NewLoginRequest(const std::string& realm,
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj)
+  if (!obj) {
     return;
+  }
   // The API expects nullptr rather than empty string if account is missing.
   const std::string* account_or_null = account.empty() ? nullptr : &account;
   Java_AwContentsClientBridge_newLoginRequest(env, obj, realm, account_or_null,
@@ -414,8 +416,9 @@ void AwContentsClientBridge::OnReceivedError(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj)
+  if (!obj) {
     return;
+  }
 
   Java_AwContentsClientBridge_onReceivedError(
       env, obj, request, request.is_renderer_initiated.value_or(false),
@@ -433,8 +436,9 @@ void AwContentsClientBridge::OnSafeBrowsingHit(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj)
+  if (!obj) {
     return;
+  }
 
   Java_AwContentsClientBridge_onSafeBrowsingHit(
       env, obj, request, static_cast<int>(threat_type), request_id);
@@ -446,8 +450,9 @@ void AwContentsClientBridge::OnReceivedHttpError(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj)
+  if (!obj) {
     return;
+  }
 
   Java_AwContentsClientBridge_onReceivedHttpError(
       env, obj, request, http_error_info->mime_type, http_error_info->encoding,
@@ -479,7 +484,6 @@ AwContentsClientBridge::ExtractHttpErrorInfo(
 }
 
 void AwContentsClientBridge::ConfirmJsResult(
-    JNIEnv* env,
     int id,
     std::optional<std::u16string> prompt) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -493,8 +497,7 @@ void AwContentsClientBridge::ConfirmJsResult(
   pending_js_dialog_callbacks_.Remove(id);
 }
 
-void AwContentsClientBridge::TakeSafeBrowsingAction(JNIEnv*,
-                                                    int action,
+void AwContentsClientBridge::TakeSafeBrowsingAction(int action,
                                                     bool reporting,
                                                     int request_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -509,7 +512,7 @@ void AwContentsClientBridge::TakeSafeBrowsingAction(JNIEnv*,
   safe_browsing_callbacks_.Remove(request_id);
 }
 
-void AwContentsClientBridge::CancelJsResult(JNIEnv*, int id) {
+void AwContentsClientBridge::CancelJsResult(int id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   content::JavaScriptDialogManager::DialogClosedCallback* callback =
       pending_js_dialog_callbacks_.Lookup(id);

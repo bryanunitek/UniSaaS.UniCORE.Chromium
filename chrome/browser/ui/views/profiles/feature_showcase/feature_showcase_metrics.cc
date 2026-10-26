@@ -6,9 +6,8 @@
 
 #include <string_view>
 
-#include "base/containers/flat_map.h"
+#include "base/containers/fixed_flat_map.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/ui/views/profiles/feature_showcase/feature_showcase_constants.h"
@@ -23,6 +22,9 @@ void RecordStepUserAction(FeatureShowcaseStep step,
   switch (step) {
     case FeatureShowcaseStep::kDefaultBrowser:
       suffix = "DefaultBrowser";
+      break;
+    case FeatureShowcaseStep::kGemini:
+      suffix = "Gemini";
       break;
     case FeatureShowcaseStep::kGoogleLens:
       suffix = "GoogleLens";
@@ -41,9 +43,8 @@ void RecordStepUserAction(FeatureShowcaseStep step,
 }
 
 FeatureShowcaseStep GetFeatureShowcaseStep(std::string_view step_id) {
-  static const base::NoDestructor<
-      base::flat_map<std::string_view, FeatureShowcaseStep>>
-      kStepMap({
+  static constexpr auto kStepMap =
+      base::MakeFixedFlatMap<std::string_view, FeatureShowcaseStep>({
           {kFeatureShowcaseDefaultBrowserStepIdentifier,
            FeatureShowcaseStep::kDefaultBrowser},
           {kFeatureShowcaseGoogleLensStepIdentifier,
@@ -52,8 +53,9 @@ FeatureShowcaseStep GetFeatureShowcaseStep(std::string_view step_id) {
            FeatureShowcaseStep::kPasswordManager},
           {kFeatureShowcaseThemesAndCustomizationStepIdentifier,
            FeatureShowcaseStep::kThemesAndCustomization},
+          {kFeatureShowcaseGeminiStepIdentifier, FeatureShowcaseStep::kGemini},
       });
-  if (const auto it = kStepMap->find(step_id); it != kStepMap->end()) {
+  if (const auto it = kStepMap.find(step_id); it != kStepMap.end()) {
     return it->second;
   }
   NOTREACHED();

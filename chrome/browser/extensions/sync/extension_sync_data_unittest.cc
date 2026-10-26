@@ -29,6 +29,7 @@ const char kValidId[] = "abcdefghijklmnopabcdefghijklmnop";
 const char kVersion[] = "1.0.0.1";
 const char kValidUpdateUrl[] =
     "https://clients2.google.com/service/update2/crx";
+const char kNonWebstoreUpdateUrl[] = "https://example.com/updates.xml";
 const int kValidDisableReasons = disable_reason::DISABLE_USER_ACTION;
 
 // Serializes a protobuf structure (entity specifics) into an ExtensionSyncData
@@ -53,6 +54,11 @@ void ProtobufToSyncDataEqual(const sync_pb::EntitySpecifics& entity) {
   EXPECT_EQ(input.enabled(), output.enabled());
   EXPECT_EQ(input.incognito_enabled(), output.incognito_enabled());
   EXPECT_EQ(input.remote_install(), output.remote_install());
+  EXPECT_EQ(input.has_withhold_permissions(),
+            output.has_withhold_permissions());
+  if (input.has_withhold_permissions()) {
+    EXPECT_EQ(input.withhold_permissions(), output.withhold_permissions());
+  }
   EXPECT_EQ(input.disable_reasons(), output.disable_reasons());
 
   EXPECT_EQ(input.disable_reasons_list_size(),
@@ -75,6 +81,7 @@ void SyncDataToProtobufEqual(const ExtensionSyncData& input) {
   EXPECT_EQ(input.enabled(), output->enabled());
   EXPECT_EQ(input.incognito_enabled(), output->incognito_enabled());
   EXPECT_EQ(input.remote_install(), output->remote_install());
+  EXPECT_EQ(input.withhold_permissions(), output->withhold_permissions());
   EXPECT_EQ(input.version(), output->version());
   EXPECT_EQ(input.update_url(), output->update_url());
   EXPECT_EQ(input.name(), output->name());
@@ -94,6 +101,7 @@ TEST_F(ExtensionSyncDataTest, ExtensionSyncDataForExtension) {
   extension_specifics->set_enabled(false);
   extension_specifics->set_incognito_enabled(true);
   extension_specifics->set_remote_install(false);
+  extension_specifics->set_withhold_permissions(true);
   extension_specifics->set_version(kVersion);
 
   // Populate disable reasons (biflag and the list).
@@ -118,6 +126,7 @@ TEST_F(ExtensionSyncDataTest, ExtensionSyncDataForExtension) {
   EXPECT_FALSE(extension_sync_data.enabled());
   EXPECT_EQ(true, extension_sync_data.incognito_enabled());
   EXPECT_FALSE(extension_sync_data.remote_install());
+  EXPECT_EQ(true, extension_sync_data.withhold_permissions());
   EXPECT_EQ(base::Version(kVersion), extension_sync_data.version());
   EXPECT_THAT(
       extension_sync_data.disable_reasons(),
@@ -128,11 +137,21 @@ TEST_F(ExtensionSyncDataTest, ExtensionSyncDataForExtension) {
 
   // Flip a bit and verify the result is correct.
   extension_specifics->set_incognito_enabled(false);
+  extension_specifics->set_withhold_permissions(false);
   ProtobufToSyncDataEqual(entity);
 
   extension_sync_data.PopulateFromExtensionSpecifics(*extension_specifics);
   EXPECT_FALSE(extension_sync_data.incognito_enabled());
+  EXPECT_EQ(false, extension_sync_data.withhold_permissions());
 
+  SyncDataToProtobufEqual(extension_sync_data);
+  ProtobufToSyncDataEqual(entity);
+
+  // Clear `withhold_permissions` to simulate legacy sync data and verify it is
+  // deserialized as std::nullopt.
+  extension_specifics->clear_withhold_permissions();
+  extension_sync_data.PopulateFromExtensionSpecifics(*extension_specifics);
+  EXPECT_EQ(std::nullopt, extension_sync_data.withhold_permissions());
   SyncDataToProtobufEqual(extension_sync_data);
   ProtobufToSyncDataEqual(entity);
 }
@@ -198,6 +217,60 @@ TEST_F(ExtensionSyncDataTest, DisableReasonsDeserialization) {
                     disable_reason::DISABLE_GREYLIST,
                     disable_reason::DISABLE_UNSUPPORTED_DEVELOPER_EXTENSION));
   }
+}
+
+// Tests that only Web Store (or empty) update URLs are accepted from incoming
+// sync data. Syncable extensions never have a non-gallery update URL, so any
+// other value would only be produced by a misbehaving client.
+TEST_F(ExtensionSyncDataTest, RejectsNonWebstoreUpdateUrl) {
+  sync_pb::EntitySpecifics entity;
+  sync_pb::ExtensionSpecifics* extension_specifics = entity.mutable_extension();
+  extension_specifics->set_id(kValidId);
+  extension_specifics->set_version(kVersion);
+  extension_specifics->set_enabled(true);
+
+  auto create = [](const sync_pb::EntitySpecifics& entity) {
+    syncer::SyncData sync_data = syncer::SyncData::CreateLocalData(
+        "sync_tag", "non_unique_title", entity);
+    return ExtensionSyncData::CreateFromSyncData(sync_data);
+  };
+
+  {
+    // A non-webstore update URL should be rejected.
+    extension_specifics->set_update_url(kNonWebstoreUpdateUrl);
+    EXPECT_FALSE(create(entity)) << "Non-webstore update URL was accepted.";
+  }
+
+  {
+    // The Web Store update URL should be accepted.
+    extension_specifics->set_update_url(kValidUpdateUrl);
+    std::unique_ptr<ExtensionSyncData> data = create(entity);
+    ASSERT_TRUE(data);
+    EXPECT_EQ(GURL(kValidUpdateUrl), data->update_url());
+  }
+
+  {
+    // An empty update URL should be accepted.
+    extension_specifics->clear_update_url();
+    std::unique_ptr<ExtensionSyncData> data = create(entity);
+    ASSERT_TRUE(data);
+    EXPECT_TRUE(data->update_url().is_empty());
+  }
+}
+
+// Tests that a non-webstore update URL is also rejected for AppSpecifics.
+TEST_F(ExtensionSyncDataTest, AppRejectsNonWebstoreUpdateUrl) {
+  sync_pb::EntitySpecifics entity;
+  sync_pb::AppSpecifics* app_specifics = entity.mutable_app();
+  sync_pb::ExtensionSpecifics* extension_specifics =
+      app_specifics->mutable_extension();
+  extension_specifics->set_id(kValidId);
+  extension_specifics->set_version(kVersion);
+  extension_specifics->set_update_url(kNonWebstoreUpdateUrl);
+
+  syncer::SyncData sync_data =
+      syncer::SyncData::CreateLocalData("sync_tag", "non_unique_title", entity);
+  EXPECT_FALSE(ExtensionSyncData::CreateFromSyncData(sync_data));
 }
 
 class AppSyncDataTest : public testing::Test {

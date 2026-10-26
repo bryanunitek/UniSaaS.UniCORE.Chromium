@@ -76,24 +76,25 @@ public class UiAutomatorUtils {
 
     /**
      * Launch application.
+     *
      * @param packageName Package name of the application.
      */
     public void launchApplication(String packageName) {
-        Log.d(TAG, "Launching " + packageName);
+        Log.d(TAG, "Launching %s", packageName);
         launchApplication(packageName, LAUNCH_TIMEOUT_MS);
     }
 
     /**
      * Stops the application.
+     *
      * @param packageName Package name of the application to stop.
      */
     public void stopApplication(String packageName) {
-        Log.d(TAG, "Stopping " + packageName);
+        Log.d(TAG, "Stopping %s", packageName);
         try {
             executeShellCommand("am force-stop " + packageName);
         } catch (IOException e) {
-            Log.d(TAG, "Failed to stop " + packageName);
-            e.printStackTrace();
+            Log.d(TAG, "Failed to stop %s", packageName, e);
         }
     }
 
@@ -111,11 +112,12 @@ public class UiAutomatorUtils {
 
     /**
      * Takes device screenshot and saves it to screenShotFile.
+     *
      * @param screenShotFile Where the screenshot should be saved.
      */
     public void takeScreenShot(@NonNull File screenShotFile) {
         if (mDevice.takeScreenshot(screenShotFile)) {
-            Log.d(TAG, "Screenshot successfully saved to " + screenShotFile.getAbsolutePath());
+            Log.d(TAG, "Screenshot successfully saved to %s", screenShotFile.getAbsolutePath());
         } else {
             Log.e(TAG, "Screenshot unsuccessful " + screenShotFile.getAbsolutePath());
         }
@@ -131,14 +133,11 @@ public class UiAutomatorUtils {
         Rect bounds = getBounds(locator);
         Log.d(
                 TAG,
-                "Clicking outside of bounds with Bottom:"
-                        + bounds.bottom
-                        + " Top:"
-                        + bounds.top
-                        + " Left:"
-                        + bounds.left
-                        + " Right:"
-                        + bounds.right);
+                "Clicking outside of bounds with Bottom: %d Top: %d Left: %d Right: %d",
+                bounds.bottom,
+                bounds.top,
+                bounds.left,
+                bounds.right);
         clickOutsideOfArea(bounds.left, bounds.top, bounds.right, bounds.bottom);
     }
 
@@ -315,7 +314,63 @@ public class UiAutomatorUtils {
     }
 
     /**
+     * Dumps crash logs (native tombstones, crash buffer logcat, and filtered system crash logs) to
+     * logcat.
+     */
+    public void dumpCrashLogs() {
+        // 1. Dump native tombstones from /data/tombstones/
+        try {
+            String tombstoneList = executeShellCommand("ls -t /data/tombstones");
+            if (tombstoneList != null && !tombstoneList.trim().isEmpty()) {
+                String[] files = tombstoneList.split("\\s+");
+                if (files.length > 0 && !files[0].trim().isEmpty()) {
+                    String latestTombstone = files[0].trim();
+                    if (latestTombstone.startsWith("tombstone")) {
+                        Log.e(TAG, "=== CRASH TOMBSTONE: " + latestTombstone + " ===");
+                        String tombstoneContent =
+                                executeShellCommand("cat /data/tombstones/" + latestTombstone);
+                        for (String line : tombstoneContent.split("\n")) {
+                            Log.e(TAG, line);
+                        }
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            Log.e(TAG, "Failed to extract tombstone from /data/tombstones", ex);
+        }
+
+        // 2. Dump the Android crash buffer (native debuggerd & Java uncaught exceptions)
+        try {
+            String crashLog = executeShellCommand("logcat -d -b crash");
+            if (crashLog != null && !crashLog.trim().isEmpty()) {
+                Log.e(TAG, "=== LOGCAT CRASH BUFFER ===");
+                for (String line : crashLog.split("\n")) {
+                    Log.e(TAG, line);
+                }
+            }
+        } catch (Exception ex) {
+            Log.e(TAG, "Failed to dump logcat crash buffer", ex);
+        }
+
+        // 3. Dump recent fatal signals/logs from DEBUG and AndroidRuntime tags
+        try {
+            String debugLog =
+                    executeShellCommand(
+                            "logcat -d -s DEBUG:V AndroidRuntime:E chromium:E cr_*:E -t 200");
+            if (debugLog != null && !debugLog.trim().isEmpty()) {
+                Log.e(TAG, "=== FILTERED SYSTEM CRASH LOGS ===");
+                for (String line : debugLog.split("\n")) {
+                    Log.e(TAG, line);
+                }
+            }
+        } catch (Exception ex) {
+            Log.e(TAG, "Failed to dump filtered debug logcat", ex);
+        }
+    }
+
+    /**
      * Prints the UiAutomator window hierarchy to logcat.
+     *
      * @param message A leading message for the debug log.
      */
     public void printWindowHierarchy(String message) {
@@ -476,9 +531,7 @@ public class UiAutomatorUtils {
                         (DEFAULT_SWIPE_SECONDS_PER_PAGE
                                 * Math.abs(fractionOfScreen)
                                 * SWIPE_STEPS_PER_SECOND);
-        Log.d(
-                TAG,
-                "Swiping vertically from " + stopY + " to " + startY + " in " + steps + " steps");
+        Log.d(TAG, "Swiping vertically from %d to %d in %d steps", stopY, startY, steps);
         mDevice.swipe(x, stopY, x, startY, steps);
     }
 
@@ -508,8 +561,8 @@ public class UiAutomatorUtils {
 
     private File getTempFile(String prefix, String suffix) throws IOException {
         File cacheDir = Environment.getExternalStorageDirectory();
-        Log.d(TAG, "Create temp file in: " + cacheDir);
-        Log.d(TAG, "My user id: " + Process.myUid());
+        Log.d(TAG, "Create temp file in: %s", cacheDir);
+        Log.d(TAG, "My user id: %d", Process.myUid());
         return File.createTempFile(prefix, suffix, cacheDir);
     }
 
@@ -532,9 +585,7 @@ public class UiAutomatorUtils {
                 strings.add(line);
             }
         }
-        Log.d(
-                TAG,
-                "readAllFromFile read " + strings.size() + " lines from " + file.getAbsolutePath());
+        Log.d(TAG, "readAllFromFile read %d lines from %s", strings.size(), file.getAbsolutePath());
         return strings;
     }
 }

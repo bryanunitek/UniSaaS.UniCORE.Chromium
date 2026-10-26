@@ -9,7 +9,6 @@
 #include <variant>
 
 #include "ash/ash_element_identifiers.h"
-#include "ash/constants/ash_features.h"
 #include "ash/quick_insert/quick_insert_search_result.h"
 #include "ash/quick_insert/views/quick_insert_emoji_bar_view_delegate.h"
 #include "ash/quick_insert/views/quick_insert_emoji_item_view.h"
@@ -22,7 +21,7 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/icon_button.h"
 #include "ash/style/style_util.h"
-#include "ash/style/system_shadow.h"
+#include "ash/style/system_decoration.h"
 #include "ash/style/typography.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
@@ -180,12 +179,10 @@ class GifsButton : public views::LabelButton {
     UpdateBackground();
     SetProperty(views::kElementIdentifierKey, kQuickInsertGifElementId);
 
-    if (base::FeatureList::IsEnabled(features::kPickerGifs)) {
-      SetMinSize(gfx::Size(0, kGifsButtonHeight));
-      SetMaxSize(gfx::Size(0, kGifsButtonHeight));
-      GetViewAccessibility().SetRole(ax::mojom::Role::kToggleButton);
-      GetViewAccessibility().SetCheckedState(ax::mojom::CheckedState::kFalse);
-    }
+    SetMinSize(gfx::Size(0, kGifsButtonHeight));
+    SetMaxSize(gfx::Size(0, kGifsButtonHeight));
+    GetViewAccessibility().SetRole(ax::mojom::Role::kToggleButton);
+    GetViewAccessibility().SetCheckedState(ax::mojom::CheckedState::kFalse);
   }
   GifsButton(const GifsButton&) = delete;
   GifsButton& operator=(const GifsButton&) = delete;
@@ -197,9 +194,6 @@ class GifsButton : public views::LabelButton {
     UpdateBackground();
   }
   gfx::Size GetMaximumSize() const override {
-    if (!base::FeatureList::IsEnabled(features::kPickerGifs)) {
-      return GetPreferredSize();
-    }
     const int max_height = views::LabelButton::GetMaximumSize().height();
     return gfx::Size(
         GetPreferredSize().width() +
@@ -232,10 +226,6 @@ class GifsButton : public views::LabelButton {
 
   // Returns whether the GIFs button is checked or not after the button press.
   bool OnButtonPressed() {
-    if (!base::FeatureList::IsEnabled(features::kPickerGifs)) {
-      return false;
-    }
-
     is_checked_ = !is_checked_;
     SetImageModel(
         views::Button::ButtonState::STATE_NORMAL,
@@ -276,9 +266,10 @@ QuickInsertEmojiBarView::QuickInsertEmojiBarView(
   SetBorder(std::make_unique<views::HighlightBorder>(
       kQuickInsertContainerBorderRadius,
       views::HighlightBorder::Type::kHighlightBorderOnShadow));
-  shadow_ = SystemShadow::CreateShadowOnNinePatchLayerForView(
+  shadow_ = SystemDecoration::CreateShadowOnNinePatchLayerForView(
       this, kQuickInsertContainerShadowType);
-  shadow_->SetRoundedCornerRadius(kQuickInsertContainerBorderRadius);
+  shadow_->SetRoundedCorners(
+      gfx::RoundedCornersF(kQuickInsertContainerBorderRadius));
 
   auto* row =
       AddChildView(views::Builder<views::BoxLayoutView>()

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/tabs/groups/recent_activity_bubble_dialog_view.h"
+
 #include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/data_sharing/data_sharing_service_factory.h"
@@ -9,7 +11,6 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/views/tabs/groups/recent_activity_bubble_dialog_view.h"
 #include "chrome/browser/ui/views/tabs/tab_group_header.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/test/tab_strip_interactive_test_mixin.h"
@@ -27,6 +28,7 @@
 #include "net/test/embedded_test_server/http_connection.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/image/image_unittest_util.h"
@@ -154,10 +156,10 @@ class RecentActivityBubbleDialogViewInteractiveUiTest
   GURL GetAvatarURL() { return embedded_test_server()->GetURL(avatar_url_); }
 
   tabs::TabInterface* CreateTab() {
-    auto index = browser()->tab_strip_model()->count();
+    auto index = browser()->GetTabStripModel()->count();
     CHECK(AddTabAtIndex(index, GURL(chrome::kChromeUINewTabPageURL),
                         ui::PAGE_TRANSITION_TYPED));
-    auto* tab = browser()->tab_strip_model()->GetTabAtIndex(index);
+    auto* tab = browser()->GetTabStripModel()->GetTabAtIndex(index);
     CHECK(tab);
     return tab;
   }
@@ -170,9 +172,9 @@ class RecentActivityBubbleDialogViewInteractiveUiTest
     std::vector<int> tab_indices = {};
     for (auto* tab : tabs) {
       tab_indices.emplace_back(
-          browser()->tab_strip_model()->GetIndexOfTab(tab));
+          browser()->GetTabStripModel()->GetIndexOfTab(tab));
     }
-    return browser()->tab_strip_model()->AddToNewGroup(tab_indices);
+    return browser()->GetTabStripModel()->AddToNewGroup(tab_indices);
   }
 
   SavedTabGroup ShareTabGroup(TabGroupId group_id,
@@ -193,8 +195,8 @@ class RecentActivityBubbleDialogViewInteractiveUiTest
     return WithView(kTabStripElementId, [&, activity_log](TabStrip* tab_strip) {
       BubbleCoordinator()->Show(
           views::BubbleAnchor(tab_strip),
-          browser()->tab_strip_model()->GetWebContentsAt(0), activity_log,
-          browser()->profile());
+          browser()->GetTabStripModel()->GetWebContentsAt(0), activity_log,
+          browser()->GetProfile());
     });
   }
 
@@ -203,8 +205,8 @@ class RecentActivityBubbleDialogViewInteractiveUiTest
     return WithView(kTabStripElementId, [&, activity_log](TabStrip* tab_strip) {
       BubbleCoordinator()->ShowForCurrentTab(
           views::BubbleAnchor(tab_strip),
-          browser()->tab_strip_model()->GetWebContentsAt(0), {}, activity_log,
-          browser()->profile());
+          browser()->GetTabStripModel()->GetWebContentsAt(0), {}, activity_log,
+          browser()->GetProfile());
     });
   }
 

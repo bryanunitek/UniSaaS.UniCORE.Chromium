@@ -54,6 +54,7 @@ source_set("unit_tests") {
     "backend/accelerator_layout_table_unittest.cc",
     "backend/search/search_concept_registry_unittest.cc",
     "backend/search/search_handler_unittest.cc",
+    "backend/text_accelerator_part_unittest.cc",
     "shortcuts_app_manager_unittest.cc",
   ]
 
@@ -67,7 +68,6 @@ source_set("unit_tests") {
     "//ash/webui/shortcut_customization_ui/backend/search:mojo_bindings",
     "//ash/webui/shortcut_customization_ui/mojom",
     "//base/test:test_support",
-    "//chromeos/ash/components:test_support",
     "//chromeos/ash/components/local_search_service/public/cpp",
     "//chromeos/ash/components/local_search_service/public/mojom",
     "//chromeos/ash/services/assistant/public/cpp",

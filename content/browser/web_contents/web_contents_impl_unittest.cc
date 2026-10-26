@@ -9,8 +9,6 @@
 
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/span.h"
-#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
@@ -19,6 +17,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/gtest_util.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
@@ -36,6 +35,7 @@
 #include "content/browser/site_instance_impl.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/common/content_navigation_policy.h"
+#include "content/common/features.h"
 #include "content/common/frame.mojom.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/content_browser_client.h"
@@ -45,6 +45,7 @@
 #include "content/public/browser/javascript_dialog_manager.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/renderer_preferences_util.h"
 #include "content/public/browser/security_principal.h"
 #include "content/public/browser/ssl_host_state_delegate.h"
 #include "content/public/browser/storage_partition.h"
@@ -80,7 +81,6 @@
 #include "net/test/test_data_directory.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
-#include "services/network/public/mojom/attribution.mojom.h"
 #include "services/network/test/test_network_context.h"
 #include "skia/ext/skia_utils_base.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -88,17 +88,22 @@
 #include "third_party/blink/public/common/chrome_debug_urls.h"
 #include "third_party/blink/public/common/input/synthetic_web_input_event_builders.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
+#include "third_party/blink/public/common/scheme_registry.h"
 #include "third_party/blink/public/common/security/protocol_handler_security_level.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
 #include "third_party/blink/public/mojom/image_downloader/image_downloader.mojom.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 #include "third_party/blink/public/mojom/page/page_visibility_state.mojom.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/gfx/font_render_params.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/native_theme/native_theme.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
+#include "url/url_util.h"
 
 namespace content {
 namespace {
@@ -1851,7 +1856,8 @@ TEST_F(WebContentsImplTest,
   // fullscreen will fail.
   main_test_rfh()->EnterFullscreen(blink::mojom::FullscreenOptions::New(),
                                    base::BindOnce(&ExpectFalse));
-  EXPECT_TRUE(contents()->IsTransientActivationRequiredForHtmlFullscreen());
+  EXPECT_TRUE(contents()->IsTransientActivationRequiredForHtmlFullscreen(
+      main_test_rfh(), /*is_xr_overlay=*/false));
   EXPECT_FALSE(
       main_test_rfh()->frame_tree_node()->HasTransientUserActivation());
   EXPECT_FALSE(contents()->IsFullscreen());
@@ -2042,12 +2048,13 @@ TEST_F(WebContentsImplTest, UpdateWebContentsVisibility) {
       main_test_rfh()->GetRenderViewHost()->GetWidget()->GetView());
   TestWebContentsObserver observer(contents());
 
-  EXPECT_FALSE(view->is_showing());
+  // Test WebContents always start visible.
+  EXPECT_TRUE(view->is_showing());
   EXPECT_FALSE(view->is_occluded());
 
-  // WebContents must be made visible once before it can be hidden.
+  // WebContents must be made visible once before its visibility can be changed.
   contents()->UpdateWebContentsVisibility(Visibility::HIDDEN);
-  EXPECT_FALSE(view->is_showing());
+  EXPECT_TRUE(view->is_showing());
   EXPECT_FALSE(view->is_occluded());
   EXPECT_EQ(Visibility::VISIBLE, contents()->GetVisibility());
 
@@ -2085,6 +2092,25 @@ TEST_F(WebContentsImplTest, UpdateWebContentsVisibility) {
   contents()->UpdateWebContentsVisibility(Visibility::HIDDEN);
   EXPECT_FALSE(view->is_showing());
   EXPECT_EQ(Visibility::HIDDEN, contents()->GetVisibility());
+}
+
+TEST_F(WebContentsImplTest, InitiallyHiddenButPainting) {
+  WebContents::CreateParams params(browser_context());
+  params.initially_hidden_but_painting = true;
+  std::unique_ptr<TestWebContents> web_contents(
+      TestWebContents::Create(params));
+
+  EXPECT_EQ(Visibility::HIDDEN, web_contents->GetVisibility());
+  EXPECT_EQ(PageVisibilityState::kHiddenButPainting,
+            web_contents->GetPageVisibilityState());
+
+  web_contents->UpdateWebContentsVisibility(Visibility::VISIBLE);
+  EXPECT_EQ(PageVisibilityState::kVisible,
+            web_contents->GetPageVisibilityState());
+
+  web_contents->UpdateWebContentsVisibility(Visibility::HIDDEN);
+  EXPECT_EQ(PageVisibilityState::kHidden,
+            web_contents->GetPageVisibilityState());
 }
 
 TEST_F(WebContentsImplTest, VideoPictureInPictureStaysVisibleIfHidden) {
@@ -2164,7 +2190,7 @@ TEST_F(WebContentsImplTest, CreateNewWindowBlockedBySystem) {
   contents()->SetDelegate(&delegate);
 
   mojom::CreateNewWindowParams params;
-  params.disposition = WindowOpenDisposition::NEW_PICTURE_IN_PICTURE;
+  params.disposition = WindowOpenDisposition::kNewPictureInPicture;
 
   FrameTree* result =
       static_cast<WebContentsImpl*>(contents())
@@ -2185,9 +2211,10 @@ void HideOrOccludeWithCapturerTest(WebContentsImpl* contents,
   TestRenderWidgetHostView* view = static_cast<TestRenderWidgetHostView*>(
       contents->GetRenderWidgetHostView());
 
-  EXPECT_FALSE(view->is_showing());
+  // Test WebContents always start visible.
+  EXPECT_TRUE(view->is_showing());
 
-  // WebContents must be made visible once before it can be hidden.
+  // WebContents must be made visible once before its visibility can be changed.
   contents->UpdateWebContentsVisibility(Visibility::VISIBLE);
   EXPECT_TRUE(view->is_showing());
   EXPECT_FALSE(view->is_occluded());
@@ -2255,7 +2282,8 @@ TEST_F(WebContentsImplTest, KeepVisibleUntilFirstVisuallyNonEmptyPaint) {
   TestRenderWidgetHostView* view = static_cast<TestRenderWidgetHostView*>(
       contents()->GetRenderWidgetHostView());
 
-  EXPECT_FALSE(view->is_showing());
+  // Test WebContents always start visible.
+  EXPECT_TRUE(view->is_showing());
 
   WebUIConfigMap::GetInstance().AddWebUIConfig(
       std::make_unique<KeepVisibleWebUIConfig>());
@@ -2263,6 +2291,7 @@ TEST_F(WebContentsImplTest, KeepVisibleUntilFirstVisuallyNonEmptyPaint) {
   const GURL kGURL("chrome://keep-visible/");
   NavigationSimulator::NavigateAndCommitFromBrowser(contents(), kGURL);
 
+  // WebContents must be made visible once before its visibility can be changed.
   contents()->UpdateWebContentsVisibility(Visibility::VISIBLE);
   EXPECT_TRUE(view->is_showing());
   EXPECT_FALSE(view->is_occluded());
@@ -3122,6 +3151,26 @@ TEST_F(WebContentsImplTest, StartingSandboxFlags) {
   EXPECT_EQ(effective_flags, expected_flags);
 }
 
+TEST_F(WebContentsImplTest, PrivilegedParams) {
+  // Unset by default: an ordinary WebContents carries no privileged
+  // declaration.
+  EXPECT_FALSE(contents()->privileged_params().has_value());
+
+  WebContents::CreateParams params(browser_context());
+  WebContents::PrivilegedParams privileged_params;
+  privileged_params.feature_id = 7;
+  privileged_params.disallow_service_worker_control = true;
+  privileged_params.disallow_shared_workers = true;
+  params.privileged_params = privileged_params;
+  std::unique_ptr<WebContentsImpl> new_contents(
+      WebContentsImpl::CreateWithOpener(params, nullptr));
+  ASSERT_TRUE(new_contents->privileged_params().has_value());
+  EXPECT_EQ(new_contents->privileged_params()->feature_id, 7);
+  EXPECT_TRUE(
+      new_contents->privileged_params()->disallow_service_worker_control);
+  EXPECT_TRUE(new_contents->privileged_params()->disallow_shared_workers);
+}
+
 TEST_F(WebContentsImplTest, DidFirstVisuallyNonEmptyPaint) {
   TestWebContentsObserver observer(contents());
 
@@ -3230,6 +3279,98 @@ TEST_F(WebContentsImplTest, RegisterProtocolHandlerDataURL) {
     contents()->RegisterProtocolHandler(main_test_rfh(), "mailto", data_handler,
                                         /*user_gesture=*/true);
   }
+
+  contents()->SetDelegate(nullptr);
+}
+
+// Test suite for registering protocol handlers with an extension scheme.
+// A dedicated fixture is needed because `scoped_registry_` must outlive the
+// test harness teardown (`RenderViewHostTestHarness::TearDown()`), ensuring the
+// scheme remains registered while `WebContents` is destroyed and pending
+// IPC/Mojo messages are drained.
+//
+// This is a bit unusual, because we're (kind of) injecting knowledge of
+// extensions into the //content layer, which is normally a code smell. However,
+// in this case, the handling code lives in web_contents_impl.cc, so it makes
+// sense to have the test be coincident with that code.
+class WebContentsImplExtensionSchemeTest : public WebContentsImplTest {
+ public:
+  WebContentsImplExtensionSchemeTest() {
+    url::AddStandardScheme("chrome-extension", url::SCHEME_WITH_HOST);
+    url::AddSecureScheme("chrome-extension");
+    blink::CommonSchemeRegistry::RegisterURLSchemeAsExtension(
+        "chrome-extension");
+  }
+
+  ~WebContentsImplExtensionSchemeTest() override {
+    blink::CommonSchemeRegistry::RemoveURLSchemeAsExtensionForTest(
+        "chrome-extension");
+  }
+
+ private:
+  url::ScopedSchemeRegistryForTests scoped_registry_;
+};
+
+// Exercises schemes with increased protocol handler security levels registering
+// cross-origin handlers.
+TEST_F(WebContentsImplExtensionSchemeTest,
+       RegisterProtocolHandlerExtensionScheme) {
+  MockWebContentsDelegate delegate(
+      blink::ProtocolHandlerSecurityLevel::kExtensionFeatures);
+  contents()->SetDelegate(&delegate);
+
+  GURL extension_url("chrome-extension://ext-id-1/page.html");
+  GURL same_extension_handler("chrome-extension://ext-id-1/handler/%s");
+  GURL other_extension_handler("chrome-extension://ext-id-2/handler/%s");
+  GURL https_handler("https://www.example.com/handler/%s");
+
+  contents()->NavigateAndCommit(extension_url);
+
+  // A same-origin extension handler is allowed.
+  EXPECT_CALL(delegate, RegisterProtocolHandler(main_test_rfh(), "mailto",
+                                                same_extension_handler, true))
+      .Times(1);
+  // An extension may register a cross-origin HTTPS handler under
+  // kExtensionFeatures.
+  EXPECT_CALL(delegate, RegisterProtocolHandler(main_test_rfh(), "mailto",
+                                                https_handler, true))
+      .Times(1);
+  // A cross-origin extension handler must be rejected.
+  EXPECT_CALL(delegate, RegisterProtocolHandler(main_test_rfh(), "mailto",
+                                                other_extension_handler, true))
+      .Times(0);
+
+  contents()->RegisterProtocolHandler(main_test_rfh(), "mailto",
+                                      same_extension_handler,
+                                      /*user_gesture=*/true);
+  contents()->RegisterProtocolHandler(main_test_rfh(), "mailto", https_handler,
+                                      /*user_gesture=*/true);
+  contents()->RegisterProtocolHandler(main_test_rfh(), "mailto",
+                                      other_extension_handler,
+                                      /*user_gesture=*/true);
+
+  contents()->SetDelegate(nullptr);
+}
+
+TEST_F(WebContentsImplTest, RegisterProtocolHandlerOpaqueOrigin) {
+  MockWebContentsDelegate delegate(
+      blink::ProtocolHandlerSecurityLevel::kUntrustedOrigins);
+  contents()->SetDelegate(&delegate);
+
+  GURL data_url("data:text/html,<html><body>hello</body></html>");
+  GURL handler_url("https://www.google.com/handler/%s");
+
+  contents()->NavigateAndCommit(data_url);
+  EXPECT_TRUE(main_test_rfh()->GetLastCommittedOrigin().opaque());
+
+  // An opaque requesting origin must not be allowed to register a protocol
+  // handler, even at elevated security levels (kUntrustedOrigins).
+  EXPECT_CALL(delegate, RegisterProtocolHandler(main_test_rfh(), "mailto",
+                                                handler_url, true))
+      .Times(0);
+
+  contents()->RegisterProtocolHandler(main_test_rfh(), "mailto", handler_url,
+                                      /*user_gesture=*/true);
 
   contents()->SetDelegate(nullptr);
 }
@@ -3767,29 +3908,78 @@ TEST_F(WebContentsImplTest, OnColorProviderChangedTriggersPageBroadcast) {
   testing::NiceMock<MockPageBroadcast> mock_page_broadcast(
       broadcast_remote.BindNewEndpointAndPassDedicatedReceiver());
   contents()->GetRenderViewHost()->BindPageBroadcast(broadcast_remote.Unbind());
-  blink::ColorProviderColorMaps color_maps =
-      contents()->GetColorProviderColorMaps();
-  mock_page_broadcast.FlushForTesting();
 
-  // Set a new source, which should broadcast a change.
-  color_maps.light_colors_map = color_provider_source.GetRendererColorMap(
-      ui::ColorProviderKey::ColorMode::kLight,
-      ui::ColorProviderKey::ForcedColors::kNone);
-  color_maps.dark_colors_map = color_provider_source.GetRendererColorMap(
-      ui::ColorProviderKey::ColorMode::kDark,
-      ui::ColorProviderKey::ForcedColors::kNone);
-  EXPECT_CALL(mock_page_broadcast, UpdateColorProviders(color_maps));
+  blink::ColorProviderColorMaps expected_color_maps{
+      color_provider_source.GetRendererColorMap(
+          ui::ColorProviderKey::ColorMode::kLight,
+          ui::ColorProviderKey::ForcedColors::kNone),
+      color_provider_source.GetRendererColorMap(
+          ui::ColorProviderKey::ColorMode::kDark,
+          ui::ColorProviderKey::ForcedColors::kNone),
+      contents()->GetColorProviderColorMaps().forced_colors_map};
+
+  // Setting a new source should broadcast a change.
+  base::test::TestFuture<blink::ColorProviderColorMaps> setup_future;
+  EXPECT_CALL(mock_page_broadcast, UpdateColorProviders(::testing::_))
+      .WillOnce([&](const blink::ColorProviderColorMaps& maps) {
+        setup_future.SetValue(maps);
+      });
   contents()->SetColorProviderSource(&color_provider_source);
-  mock_page_broadcast.FlushForTesting();
+  EXPECT_EQ(setup_future.Take(), expected_color_maps);
   ::testing::Mock::VerifyAndClearExpectations(&mock_page_broadcast);
 
   // Change something, then notify, which should broadcast another change. (If
   // nothing has changed, the broadcast won't occur.)
-  color_maps.light_colors_map.swap(color_maps.dark_colors_map);
-  EXPECT_CALL(mock_page_broadcast, UpdateColorProviders(color_maps));
+  expected_color_maps.light_colors_map.swap(
+      expected_color_maps.dark_colors_map);
+  base::test::TestFuture<blink::ColorProviderColorMaps> run_future;
+  EXPECT_CALL(mock_page_broadcast, UpdateColorProviders(::testing::_))
+      .WillOnce([&](const blink::ColorProviderColorMaps& maps) {
+        run_future.SetValue(maps);
+      });
   color_provider_source.SwapMaps();
   color_provider_source.NotifyColorProviderChanged();
+  EXPECT_EQ(run_future.Take(), expected_color_maps);
+}
+
+TEST_F(WebContentsImplTest, ColorRelatedStateChangesCoalesced) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(features::kThemeChangeOptimization);
+
+  TestColorProviderSource color_provider_source;
+  mojo::AssociatedRemote<blink::mojom::PageBroadcast> broadcast_remote;
+  testing::NiceMock<MockPageBroadcast> mock_page_broadcast(
+      broadcast_remote.BindNewEndpointAndPassDedicatedReceiver());
+  contents()->GetRenderViewHost()->BindPageBroadcast(broadcast_remote.Unbind());
+
+  base::RunLoop setup_run_loop;
+  EXPECT_CALL(mock_page_broadcast, UpdateColorProviders(::testing::_))
+      .WillOnce(
+          [&](const blink::ColorProviderColorMaps&) { setup_run_loop.Quit(); });
+  contents()->SetColorProviderSource(&color_provider_source);
+  setup_run_loop.Run();
   mock_page_broadcast.FlushForTesting();
+  ::testing::Mock::VerifyAndClearExpectations(&mock_page_broadcast);
+
+  blink::ColorProviderColorMaps color_maps =
+      contents()->GetColorProviderColorMaps();
+  color_maps.light_colors_map.swap(color_maps.dark_colors_map);
+
+  // Expect exactly one broadcast call despite multiple rapid notifications.
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_page_broadcast, UpdateColorProviders(color_maps))
+      .WillOnce([&](const blink::ColorProviderColorMaps&) { run_loop.Quit(); });
+
+  color_provider_source.SwapMaps();
+  // Fire multiple notifications in the same task cycle.
+  color_provider_source.NotifyColorProviderChanged();
+  contents()->OnNativeThemeUpdated(ui::NativeTheme::GetInstanceForWeb());
+  color_provider_source.NotifyColorProviderChanged();
+
+  // Run the event loop until the single coalesced scheduled update executes.
+  run_loop.Run();
+  mock_page_broadcast.FlushForTesting();
+  ::testing::Mock::VerifyAndClearExpectations(&mock_page_broadcast);
 }
 
 // Regression test: a re-entrant OnColorProviderChanged() during teardown must
@@ -3962,8 +4152,6 @@ TEST_F(WebContentsImplTest, OnKeepAliveRequestCreated) {
   TestRenderFrameHost* rfh = main_test_rfh();
   network::ResourceRequest request;
   request.url = GURL("https://example.com");
-  request.attribution_reporting_eligibility =
-      network::mojom::AttributionReportingEligibility::kEmpty;
   request.keepalive = true;
   request.keepalive_token = base::UnguessableToken::Create();
 
@@ -3973,6 +4161,68 @@ TEST_F(WebContentsImplTest, OnKeepAliveRequestCreated) {
   EXPECT_EQ(request.keepalive, observer.fetch_keepalive_request().keepalive);
   EXPECT_EQ(request.keepalive_token,
             observer.fetch_keepalive_request().keepalive_token);
+}
+
+TEST_F(WebContentsImplTest, RegisterFocusSelectionBoundsChanged) {
+  TextInputManager* text_input_manager = contents()->GetTextInputManager();
+  ASSERT_TRUE(text_input_manager);
+  EXPECT_FALSE(text_input_manager->HasObserver(contents()));
+
+  int call_count = 0;
+  base::CallbackListSubscription subscription =
+      contents()->RegisterFocusSelectionBoundsChanged(
+          base::BindLambdaForTesting(
+              [&call_count](RenderWidgetHostView* view) { call_count++; }));
+
+  EXPECT_TRUE(text_input_manager->HasObserver(contents()));
+  EXPECT_EQ(0, call_count);
+
+  contents()->OnSelectionBoundsChanged(text_input_manager, nullptr);
+  EXPECT_EQ(1, call_count);
+
+  subscription = base::CallbackListSubscription();
+  EXPECT_FALSE(text_input_manager->HasObserver(contents()));
+}
+
+// The renderer-supplied selection bounding box is stored unclamped, but
+// GetTextSelectionBounds() is used to position UI, so the rect it returns must
+// lie inside the view even when the reported selection does not.
+TEST_F(WebContentsImplTest, GetTextSelectionBoundsIsClampedToView) {
+  TestRenderFrameHost* rfh = main_test_rfh();
+  auto* view = static_cast<RenderWidgetHostViewBase*>(rfh->GetView());
+  ASSERT_TRUE(view);
+  view->SetBounds(gfx::Rect(0, 0, 800, 600));
+
+  // Fetching the manager through the view is what registers the view with it.
+  TextInputManager* text_input_manager = view->GetTextInputManager();
+  ASSERT_TRUE(text_input_manager);
+  ASSERT_EQ(text_input_manager, contents()->GetTextInputManager());
+
+  ui::mojom::TextInputState state;
+  state.type = ui::TEXT_INPUT_TYPE_TEXT;
+  text_input_manager->UpdateTextInputState(view, state);
+
+  // A bounding box whose large negative y places it above the top of the view.
+  const gfx::Rect anchor_rect(8, 16, 0, 19);
+  const gfx::Rect out_of_view_bounding_box(200, -120, 40, 20);
+  text_input_manager->SelectionBoundsChanged(
+      view, anchor_rect, base::i18n::LEFT_TO_RIGHT, anchor_rect,
+      base::i18n::LEFT_TO_RIGHT, out_of_view_bounding_box,
+      /*is_anchor_first=*/true);
+
+  // The stored region keeps the unclamped extent.
+  const TextInputManager::SelectionRegion* region =
+      text_input_manager->GetSelectionRegion(view);
+  ASSERT_TRUE(region);
+  EXPECT_EQ(region->bounding_box, out_of_view_bounding_box);
+
+  // The bounds handed to callers are clamped into the view, then offset into
+  // screen coordinates.
+  const std::optional<gfx::Rect> bounds =
+      contents()->GetTextSelectionBounds(rfh);
+  ASSERT_TRUE(bounds.has_value());
+  const gfx::Vector2d offset = view->GetViewBounds().OffsetFromOrigin();
+  EXPECT_EQ(*bounds, gfx::Rect(gfx::Point(200, 0) + offset, gfx::Size(40, 20)));
 }
 
 class WebContentsImplTestKeyboardEvents
@@ -4057,7 +4307,7 @@ TEST_F(WebContentsImplTest, IsLoadingExcludingAdFrames) {
                   .root()
                   ->child_at(0)
                   ->current_frame_host();
-  child_rfh->UpdateIsAdFrame(/*is_ad_frame=*/true);
+  child_rfh->UpdateToAdFrame();
 
   // Start the navigation again for the ad frame.
   auto ad_frame_navigation =
@@ -4114,85 +4364,178 @@ TEST_F(WebContentsImplTest, SetIgnoreZoomGestures) {
   EXPECT_FALSE(contents()->PreHandleGestureEvent(scroll_event));
 }
 
-TEST_F(WebContentsImplTest, DragProvenanceLifecycle) {
-  DropData drop_data;
-  drop_data.file_contents =
-      base::ToVector(base::byte_span_from_cstring("test content"));
-  drop_data.file_contents_filename_extension = FILE_PATH_LITERAL("txt");
-  drop_data.file_contents_source_url = GURL("https://example.com/file.txt");
+namespace {
+
+// Records what observers see when a drag starts.
+class DragStartObserver : public WebContentsObserver {
+ public:
+  explicit DragStartObserver(WebContents* web_contents)
+      : WebContentsObserver(web_contents) {}
+
+  void DidStartDrag(RenderFrameHost* source_rfh,
+                    const DropData& drop_data) override {
+    ++call_count_;
+    observed_drag_id_ = drop_data.drag_id;
+    observed_rfh_token_ = source_rfh->GetGlobalFrameToken();
+  }
+
+  int call_count() const { return call_count_; }
+  const std::optional<base::UnguessableToken>& observed_drag_id() const {
+    return observed_drag_id_;
+  }
+  const GlobalRenderFrameHostToken& observed_rfh_token() const {
+    return observed_rfh_token_;
+  }
+
+ private:
+  int call_count_ = 0;
+  std::optional<base::UnguessableToken> observed_drag_id_;
+  GlobalRenderFrameHostToken observed_rfh_token_;
+};
+
+}  // namespace
+
+TEST_F(WebContentsImplTest, ObserverNotifiedOnDragStartWithDragId) {
+  DragStartObserver observer(contents());
 
   GlobalRenderFrameHostToken source_rfh_token =
       main_test_rfh()->GetGlobalFrameToken();
 
-  // 1. Verify stashing on drag start.
-  GURL page_url("https://example.com/page.html");
-  NavigationSimulator::NavigateAndCommitFromBrowser(contents(), page_url);
-  const std::u16string page_title = u"Test Page";
-  contents()->UpdateTitleForEntry(
-      contents()->GetController().GetLastCommittedEntry(), page_title);
-
+  DropData drop_data;
   contents()->OnStartDragging(&drop_data, source_rfh_token);
 
-  auto it = drop_data.custom_data.find(u"chromium/x-drag-id");
-  ASSERT_NE(it, drop_data.custom_data.end())
-      << "drag_id should be added to custom_data when file_contents is "
-         "present.";
+  // Observers key drag-start state on `drag_id`, so it must already be
+  // assigned by the time the notification fires.
+  EXPECT_EQ(observer.call_count(), 1);
+  ASSERT_TRUE(drop_data.drag_id.has_value());
+  EXPECT_FALSE(drop_data.drag_id->is_empty());
+  EXPECT_TRUE(drop_data.custom_data.empty())
+      << "custom_data must remain untouched so internal drag tokens never leak "
+         "to web renderers via DataTransfer.";
+  EXPECT_EQ(observer.observed_drag_id(), drop_data.drag_id);
+  EXPECT_EQ(observer.observed_rfh_token(), source_rfh_token);
 
-  std::string drag_id_str = base::UTF16ToASCII(it->second);
-  std::optional<base::UnguessableToken> drag_id =
-      base::UnguessableToken::DeserializeFromString(drag_id_str);
-  ASSERT_TRUE(drag_id.has_value());
-
-  // 2. Verify global lookup works.
-  EXPECT_EQ(WebContents::FromDragId(contents()->GetBrowserContext(),
-                                    WebContents::DragId(*drag_id)),
-            contents());
-
-  // 3. Verify drag id is NOT cleaned up on drag end (due to async race
-  // conditions, especially on Mac).
-  contents()->OnDragSourceEnded();
-  EXPECT_EQ(WebContents::FromDragId(contents()->GetBrowserContext(),
-                                    WebContents::DragId(*drag_id)),
-            contents());
+  DropData second_drop_data;
+  contents()->OnStartDragging(&second_drop_data, source_rfh_token);
+  ASSERT_TRUE(second_drop_data.drag_id.has_value());
+  EXPECT_NE(*drop_data.drag_id, *second_drop_data.drag_id);
 }
 
-TEST_F(WebContentsImplTest, NoStashIfNoFileContents) {
-  DropData drop_data;
-  // Intentionally leaving file_contents empty.
+TEST_F(WebContentsImplTest, ObserverNotNotifiedIfInvalidSourceFrame) {
+  DragStartObserver observer(contents());
 
+  DropData drop_data;
   contents()->OnStartDragging(&drop_data, GlobalRenderFrameHostToken());
 
-  EXPECT_EQ(drop_data.custom_data.find(u"chromium/x-drag-id"),
-            drop_data.custom_data.end())
-      << "No drag_id should be created if file_contents is empty.";
+  EXPECT_EQ(observer.call_count(), 0);
+  EXPECT_FALSE(drop_data.drag_id.has_value());
+  EXPECT_TRUE(drop_data.custom_data.empty());
 }
 
-TEST_F(WebContentsImplTest, MultipleDragProvenancesAreIsolated) {
-  // Simulate two separate drags (though only one is typically active).
-  GlobalRenderFrameHostToken source_rfh_token =
-      main_test_rfh()->GetGlobalFrameToken();
+TEST_F(WebContentsImplTest, ConstrainPopupBounds) {
+  TestRenderWidgetHostView* view = static_cast<TestRenderWidgetHostView*>(
+      contents()->GetRenderWidgetHostView());
+  const int kLineOfDeath = 150;
+  view->SetBounds(gfx::Rect(50, kLineOfDeath, 800, 600));
 
-  DropData data1;
-  data1.file_contents =
-      base::ToVector(base::byte_span_from_cstring("content 1"));
-  contents()->OnStartDragging(&data1, source_rfh_token);
-  base::UnguessableToken id1 = *base::UnguessableToken::DeserializeFromString(
-      base::UTF16ToASCII(data1.custom_data[u"chromium/x-drag-id"]));
+  // A popup whose top is above the line of death is clamped to the line of
+  // death.
+  gfx::Rect above_line_of_death(100, 50, 200, 100);
+  EXPECT_EQ(contents()->ConstrainPopupBounds(above_line_of_death),
+            gfx::Rect(100, kLineOfDeath, 200, 100));
 
-  DropData data2;
-  data2.file_contents =
-      base::ToVector(base::byte_span_from_cstring("content 2"));
-  contents()->OnStartDragging(&data2, source_rfh_token);
-  base::UnguessableToken id2 = *base::UnguessableToken::DeserializeFromString(
-      base::UTF16ToASCII(data2.custom_data[u"chromium/x-drag-id"]));
+  // A popup whose top is exactly at the line of death is unchanged.
+  gfx::Rect at_line_of_death(100, kLineOfDeath, 200, 100);
+  EXPECT_EQ(contents()->ConstrainPopupBounds(at_line_of_death),
+            at_line_of_death);
 
-  EXPECT_NE(id1, id2);
-  EXPECT_EQ(WebContents::FromDragId(contents()->GetBrowserContext(),
-                                    WebContents::DragId(id1)),
-            contents());
-  EXPECT_EQ(WebContents::FromDragId(contents()->GetBrowserContext(),
-                                    WebContents::DragId(id2)),
-            contents());
+  // A popup whose top is below the line of death is unchanged.
+  gfx::Rect below_line_of_death(100, 200, 200, 100);
+  EXPECT_EQ(contents()->ConstrainPopupBounds(below_line_of_death),
+            below_line_of_death);
+
+  // If the line of death moves, clamping respects the new line of death.
+  const int kNewLineOfDeath = 250;
+  view->SetBounds(gfx::Rect(50, kNewLineOfDeath, 800, 600));
+  EXPECT_EQ(contents()->ConstrainPopupBounds(above_line_of_death),
+            gfx::Rect(100, kNewLineOfDeath, 200, 100));
+
+  // When the feature is disabled, popups above the line of death are not
+  // clamped.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kLimitPopupWidgetHostPosition);
+  EXPECT_EQ(contents()->ConstrainPopupBounds(above_line_of_death),
+            above_line_of_death);
+}
+
+TEST_F(WebContentsImplTest, DestroyWebContentsWithFrameSinkIdOwnerView) {
+  std::unique_ptr<WebContents> web_contents = CreateTestWebContents();
+  auto* web_contents_impl = static_cast<WebContentsImpl*>(web_contents.get());
+  RenderWidgetHostImpl* rwh =
+      web_contents_impl->GetPrimaryMainFrame()->GetRenderWidgetHost();
+  ASSERT_TRUE(rwh);
+  EXPECT_EQ(rwh->delegate(), web_contents_impl);
+
+  RenderWidgetHostViewBase* view = rwh->GetView();
+  ASSERT_TRUE(view);
+  view->SetIsFrameSinkIdOwner(true);
+
+  // Destroy WebContents. Its destructor must detach the delegate from
+  // the main frame widget so that subsequent FrameTree destruction does
+  // not dereference a dead delegate in DestroyOrDefer().
+  web_contents.reset();
+}
+
+TEST_F(WebContentsImplTest,
+       InitializesFontRendererPreferencesFromSystemSettings) {
+  blink::RendererPreferences expected_prefs;
+  UpdateFontRendererPreferencesFromSystemSettings(&expected_prefs);
+
+  const blink::RendererPreferences* actual_prefs =
+      contents()->GetMutableRendererPrefs();
+  EXPECT_EQ(actual_prefs->should_antialias_text,
+            expected_prefs.should_antialias_text);
+  EXPECT_EQ(actual_prefs->use_subpixel_positioning,
+            expected_prefs.use_subpixel_positioning);
+  EXPECT_EQ(actual_prefs->hinting, expected_prefs.hinting);
+  EXPECT_EQ(actual_prefs->use_autohinter, expected_prefs.use_autohinter);
+  EXPECT_EQ(actual_prefs->use_bitmaps, expected_prefs.use_bitmaps);
+  EXPECT_EQ(actual_prefs->subpixel_rendering,
+            expected_prefs.subpixel_rendering);
+  EXPECT_EQ(actual_prefs->text_contrast, expected_prefs.text_contrast);
+  EXPECT_EQ(actual_prefs->text_gamma, expected_prefs.text_gamma);
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  const float original_dsf = gfx::GetFontRenderParamsDeviceScaleFactor();
+  gfx::SetFontRenderParamsDeviceScaleFactor(1.25f);
+
+  blink::RendererPreferences updated_prefs;
+  UpdateFontRendererPreferencesFromSystemSettings(&updated_prefs);
+  EXPECT_TRUE(updated_prefs.use_subpixel_positioning);
+
+  // Check that we don't update the preferences when the content client says we
+  // shouldn't.
+  class SkipFontPrefsBrowserClient : public TestContentBrowserClient {
+   public:
+    bool ShouldUpdateFontRendererPreferencesFromSystemSettings()
+        const override {
+      return false;
+    }
+  };
+  SkipFontPrefsBrowserClient test_client;
+  ContentBrowserClient* old_client = SetBrowserClientForTesting(&test_client);
+
+  std::unique_ptr<WebContents> skipped_contents = CreateTestWebContents();
+  const blink::RendererPreferences* skipped_prefs =
+      skipped_contents->GetMutableRendererPrefs();
+  blink::RendererPreferences default_prefs;
+  EXPECT_FALSE(skipped_prefs->use_subpixel_positioning);
+  EXPECT_EQ(skipped_prefs->use_subpixel_positioning,
+            default_prefs.use_subpixel_positioning);
+
+  SetBrowserClientForTesting(old_client);
+  gfx::SetFontRenderParamsDeviceScaleFactor(original_dsf);
+#endif
 }
 
 }  // namespace content

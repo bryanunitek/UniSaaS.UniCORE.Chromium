@@ -19,11 +19,11 @@
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_group_deletion_dialog_controller.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
@@ -99,14 +99,14 @@ class TabStripModelPreventCloseTest : public PreventCloseTestBase,
               (override));
 
  protected:
-  void ObserveBrowser(Browser* browser) {
+  void ObserveBrowser(BrowserWindowInterface* browser) {
     browser_did_close_subscription_ =
         browser->RegisterBrowserDidClose(base::BindRepeating(
             [](TabStripModelPreventCloseTest* self, BrowserWindowInterface*) {
               self->observer_.Reset();
             },
             base::Unretained(this)));
-    observer_.Observe(browser->tab_strip_model());
+    observer_.Observe(browser->GetTabStripModel());
   }
 
   web_app::OsIntegrationTestOverrideBlockingRegistration faked_os_integration_;
@@ -121,13 +121,13 @@ IN_PROC_BROWSER_TEST_F(TabStripModelPreventCloseTest,
   SetPoliciesAndWaitUntilInstalled(ash::kCalculatorAppId,
                                    kPreventCloseEnabledForCalculator,
                                    kCalculatorForceInstalled);
-  Browser* const browser =
+  BrowserWindowInterface* const browser =
       LaunchPWA(ash::kCalculatorAppId, /*launch_in_window=*/true);
   ASSERT_TRUE(browser);
 
   ObserveBrowser(browser);
 
-  TabStripModel* const tab_strip_model = browser->tab_strip_model();
+  TabStripModel* const tab_strip_model = browser->GetTabStripModel();
   EXPECT_EQ(1, tab_strip_model->count());
   EXPECT_EQ(!kShouldPreventClose,
             tab_strip_model->IsTabClosable(tab_strip_model->GetActiveTab()));
@@ -162,13 +162,13 @@ IN_PROC_BROWSER_TEST_F(
   SetPoliciesAndWaitUntilInstalled(ash::kCalculatorAppId,
                                    kPreventCloseEnabledForCalculator,
                                    kCalculatorForceInstalled);
-  Browser* const browser =
+  BrowserWindowInterface* const browser =
       LaunchPWA(ash::kCalculatorAppId, /*launch_in_window=*/false);
   ASSERT_TRUE(browser);
 
   ObserveBrowser(browser);
 
-  TabStripModel* const tab_strip_model = browser->tab_strip_model();
+  TabStripModel* const tab_strip_model = browser->GetTabStripModel();
   EXPECT_NE(0, tab_strip_model->count());
   EXPECT_TRUE(tab_strip_model->IsTabClosable(tab_strip_model->GetActiveTab()));
 
@@ -328,7 +328,7 @@ IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest,
 
   // Make sure the dialog is shown, and fake clicking the button.
   tab_groups::DeletionDialogController* deletion_dialog_controller =
-      browser()->GetFeatures().tab_group_deletion_dialog_controller();
+      tab_groups::DeletionDialogController::From(browser());
   EXPECT_TRUE(deletion_dialog_controller->IsShowingDialog());
 
   // Pull the dialog state and call the OnDialogOk method.
@@ -394,7 +394,7 @@ IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest,
 
   // Make sure the dialog is shown, and fake clicking the button.
   tab_groups::DeletionDialogController* deletion_dialog_controller =
-      browser()->GetFeatures().tab_group_deletion_dialog_controller();
+      tab_groups::DeletionDialogController::From(browser());
   EXPECT_TRUE(deletion_dialog_controller->IsShowingDialog());
 
   // Pull the dialog state and call the OnDialogOk method.
@@ -485,6 +485,11 @@ IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest, CommandDuplicateSelected) {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING) && BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_TestCloseTabDuringMoveOperation \
   DISABLED_TestCloseTabDuringMoveOperation
+// TODO(crbug.com/542347163): Re-enable test.
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
+#define MAYBE_TestCloseTabDuringMoveOperation \
+  DISABLED_TestCloseTabDuringMoveOperation
 #else
 #define MAYBE_TestCloseTabDuringMoveOperation TestCloseTabDuringMoveOperation
 #endif
@@ -523,20 +528,7 @@ IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest,
   tab_strip_model->RemoveObserver(&close_tab_observer);
 }
 
-class TabStripModelTestTabGroupEntryPointsEnabled
-    : public TabStripModelBrowserTest {
- public:
-  TabStripModelTestTabGroupEntryPointsEnabled() {
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kTabGroupMenuMoreEntryPoints);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(TabStripModelTestTabGroupEntryPointsEnabled,
-                       TestMostRecentlyUsedGroup) {
+IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest, TestMostRecentlyUsedGroup) {
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
   TabGroupModel* tab_group_model = tab_strip_model->group_model();
   ASSERT_TRUE(tab_strip_model->SupportsTabGroups());

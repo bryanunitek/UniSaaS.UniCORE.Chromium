@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.init;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
@@ -19,6 +21,7 @@ import android.view.WindowManager;
 import androidx.annotation.CallSuper;
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.base.AconfigFlaggedApiDelegate;
 import org.chromium.base.Log;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.SysUtils;
@@ -119,7 +122,6 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
     private boolean mFirstDrawComplete;
 
     private @Nullable Runnable mOnInflationCompleteCallback;
-    private boolean mInitialLayoutInflationComplete;
 
     // See enableHardwareAcceleration()
     private boolean mSetWindowHWA;
@@ -284,11 +286,10 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
             assert getProfileProviderSupplier().get() != null;
             getProfileProviderSupplier()
                     .runSyncOrOnAvailable(
-                            (profileProvider) -> {
-                                WarmupManager.getInstance()
-                                        .maybePreconnectUrlAndSubResources(
-                                                profileProvider.getOriginalProfile(), url);
-                            });
+                            (ProfileProvider profileProvider) ->
+                                    WarmupManager.getInstance()
+                                            .maybePreconnectUrlAndSubResources(
+                                                    profileProvider.getOriginalProfile(), url));
         } finally {
             TraceEvent.end("maybePreconnect");
         }
@@ -306,22 +307,7 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
         // Set up the initial orientation of the device.
         checkOrientation();
         findViewById(android.R.id.content)
-                .addOnLayoutChangeListener(
-                        new View.OnLayoutChangeListener() {
-                            @Override
-                            public void onLayoutChange(
-                                    View v,
-                                    int left,
-                                    int top,
-                                    int right,
-                                    int bottom,
-                                    int oldLeft,
-                                    int oldTop,
-                                    int oldRight,
-                                    int oldBottom) {
-                                checkOrientation();
-                            }
-                        });
+                .addOnLayoutChangeListener((_, _, _, _, _, _, _, _, _) -> checkOrientation());
         mNativeInitializationController.onNativeInitializationComplete();
         mLifecycleDispatcher.dispatchNativeInitializationFinished();
     }
@@ -585,7 +571,7 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
      * @return The timestamp for OnPause event before activity restarts due to unfolding in ms.
      */
     protected long getOnPauseBeforeFoldRecreateTimestampMs() {
-        try (TraceEvent e =
+        try (TraceEvent _ =
                 TraceEvent.scoped(
                         "AsyncInit.getOnPauseBeforeFoldRecreateTimestampMs",
                         Long.toString(mOnPauseBeforeFoldRecreateTimestampMs))) {
@@ -594,7 +580,7 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
     }
 
     protected void setOnPauseBeforeFoldRecreateTimestampMs() {
-        try (TraceEvent e =
+        try (TraceEvent _ =
                 TraceEvent.scoped(
                         "AsyncInit.setOnPauseBeforeFoldRecreateTimestampMs",
                         Long.toString(mOnPauseTimestampMs))) {
@@ -662,13 +648,23 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
 
     @EnsuresNonNullIf("mWindowAndroid")
     private boolean isSelfOcclusionTrackingEnabled() {
-        return mWindowAndroid != null
-                && mWindowAndroid.isOcclusionTrackingAllowed()
-                && UiAndroidFeatureList.sAndroidWindowOcclusion.isEnabled()
-                && "self_occlusion"
-                        .equals(
-                                UiAndroidFeatureList.sAndroidWindowOcclusionTrackingMode
-                                        .getValue());
+        if (mWindowAndroid == null
+                || !mWindowAndroid.isOcclusionTrackingAllowed()
+                || !UiAndroidFeatureList.sAndroidWindowOcclusion.isEnabled()) {
+            return false;
+        }
+
+        String mode = UiAndroidFeatureList.sAndroidWindowOcclusionTrackingMode.getValue();
+        if ("self_occlusion".equals(mode)) {
+            return true;
+        }
+
+        if ("auto".equals(mode)) {
+            AconfigFlaggedApiDelegate delegate = AconfigFlaggedApiDelegate.getInstance();
+            return delegate == null || !delegate.isStrictOcclusionAvailable();
+        }
+
+        return false;
     }
 
     @CallSuper
@@ -839,6 +835,12 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
         return mProfileProviderSupplier;
     }
 
+    /** Convenience wrapper. */
+    public Profile getOriginalProfile() {
+        var profileProvider = assumeNonNull(mProfileProviderSupplier).get();
+        return assumeNonNull(profileProvider).getOriginalProfile();
+    }
+
     /**
      * This will handle passing {@link Intent} results back to the {@link WindowAndroid}. It will
      * return whether or not the {@link WindowAndroid} has consumed the event or not.
@@ -981,12 +983,6 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
         if (mOnInflationCompleteCallback == null) return;
         mOnInflationCompleteCallback.run();
         mOnInflationCompleteCallback = null;
-        mInitialLayoutInflationComplete = true;
-    }
-
-    /** Returns whether initial inflation is complete. */
-    public boolean isInitialLayoutInflationComplete() {
-        return mInitialLayoutInflationComplete;
     }
 
     /**

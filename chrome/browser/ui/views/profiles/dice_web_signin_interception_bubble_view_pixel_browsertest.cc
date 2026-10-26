@@ -2,8 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
 #include <string>
 
+#include "base/no_destructor.h"
 #include "base/scoped_environment_variable_override.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
@@ -13,8 +15,9 @@
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/web_signin_interceptor.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/profiles/profile_colors_util.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -72,7 +75,6 @@ struct TestParam {
   SkColor4f primary_profile_color = SkColors::kBlue;
   NameFormat name_format = NameFormat::Regular;
   bool use_right_to_left_language = false;
-  bool use_primary_and_tonal_buttons_for_promos = false;
   bool enable_v2_profile_switch = false;
   std::string avatar_url;
 };
@@ -86,7 +88,7 @@ std::string ParamToTestSuffix(const ::testing::TestParamInfo<TestParam>& info) {
 }
 
 // Permutations of supported bubbles.
-const TestParam kTestParams[] = {
+const base::NoDestructor kTestParams(std::to_array<TestParam>({
     // Common consumer user case: regular account signing in to a profile having
     // a regular account on a non-managed device.
     {
@@ -103,15 +105,6 @@ const TestParam kTestParams[] = {
             WebSigninInterceptor::SigninInterceptionType::kMultiUser,
         .use_dark_theme = true,
         .intercepted_profile_color = SkColors::kMagenta,
-    },
-
-    // Ditto, with primary and tonal buttons for promos.
-    {
-        .test_suffix = "ConsumerSimpleExplicitBrowserSigninPrimaryAndTonalButto"
-                       "nsForPromos",
-        .interception_type =
-            WebSigninInterceptor::SigninInterceptionType::kMultiUser,
-        .use_primary_and_tonal_buttons_for_promos = true,
     },
 
     // Regular account signing in to a profile having a regular account on a
@@ -244,18 +237,6 @@ const TestParam kTestParams[] = {
         .enable_v2_profile_switch = true,
         .avatar_url = "chrome://theme/IDR_PROFILE_AVATAR_30",
     },
-
-    // Profile switch bubble: the account used for signing in is already
-    // associated with another profile, with primary and tonal buttons for
-    // promos.
-    {
-        .test_suffix = "ProfileSwitchExplicitBrowserSigninPrimaryAndTonalButto"
-                       "nsForPromos",
-        .interception_type =
-            WebSigninInterceptor::SigninInterceptionType::kProfileSwitch,
-        .use_primary_and_tonal_buttons_for_promos = true,
-    },
-
     // Supervised user sign-in intercept bubble, no accounts in chrome.
     {
         .test_suffix = "ChromeSignInSupervisedUserIntercepted",
@@ -316,7 +297,7 @@ const TestParam kTestParams[] = {
             ManagedAccountState::kSupervisedAccount,
         .use_right_to_left_language = true,
     },
-};
+}));
 
 }  // namespace
 
@@ -328,18 +309,17 @@ class DiceWebSigninInterceptionBubblePixelTest
     std::vector<base::test::FeatureRef> enabled_features;
     std::vector<base::test::FeatureRef> disabled_features;
 
-    if (GetParam().use_primary_and_tonal_buttons_for_promos) {
-      enabled_features.push_back(switches::kUsePrimaryAndTonalButtonsForPromos);
-    } else {
-      disabled_features.push_back(
-          switches::kUsePrimaryAndTonalButtonsForPromos);
-    }
 
     if (GetParam().enable_v2_profile_switch) {
       enabled_features.push_back(switches::kSigninInterceptGraphicUpdate);
     } else {
       disabled_features.push_back(switches::kSigninInterceptGraphicUpdate);
     }
+
+    // TODO(crbug.com/452061489): Remove this and fix the test failures while
+    // WebUI Omnibox is enabled.
+    disabled_features.push_back(omnibox::internal::kWebUIOmniboxPopup);
+    disabled_features.push_back(omnibox::internal::kWebUIOmniboxAimPopup);
 
     scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
   }
@@ -403,7 +383,7 @@ class DiceWebSigninInterceptionBubblePixelTest
         views::test::AnyWidgetTestPasskey{},
         "DiceWebSigninInterceptionBubbleView");
 
-    bubble_handle_ = DiceWebSigninInterceptionBubbleView::CreateBubble(
+    DiceWebSigninInterceptionBubbleView::CreateBubble(
         browser(),
         BrowserView::GetBrowserViewForBrowser(browser())
             ->toolbar_button_provider()
@@ -492,17 +472,17 @@ class DiceWebSigninInterceptionBubblePixelTest
             show_managed_disclaimer};
   }
 
-  std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle> bubble_handle_;
   std::unique_ptr<base::ScopedEnvironmentVariableOverride> scoped_env_override_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_P(DiceWebSigninInterceptionBubblePixelTest,
                        InvokeUi_default) {
+  set_baseline("8481376");
   ShowAndVerifyUi();
 }
 
 INSTANTIATE_TEST_SUITE_P(All,
                          DiceWebSigninInterceptionBubblePixelTest,
-                         testing::ValuesIn(kTestParams),
+                         testing::ValuesIn(*kTestParams),
                          &ParamToTestSuffix);

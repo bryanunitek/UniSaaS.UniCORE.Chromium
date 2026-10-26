@@ -7,8 +7,9 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
+#include "base/numerics/safe_conversions.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "storage/browser/file_system/file_system_backend.h"
@@ -33,6 +34,10 @@ BufferingFileStreamReader::~BufferingFileStreamReader() = default;
 int BufferingFileStreamReader::Read(net::IOBuffer* buffer,
                                     int buffer_length,
                                     net::CompletionOnceCallback callback) {
+  if (!buffer || (buffer_length < 0)) {
+    return net::ERR_INVALID_ARGUMENT;
+  }
+
   // Return as much as available in the internal buffer. It may be less than
   // |buffer_length|, what is valid.
   const int bytes_read =
@@ -47,7 +52,7 @@ int BufferingFileStreamReader::Read(net::IOBuffer* buffer,
         buffer, buffer_length,
         base::BindOnce(&BufferingFileStreamReader::OnReadCompleted,
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-    DCHECK_EQ(result, net::ERR_IO_PENDING);
+    CHECK_EQ(result, net::ERR_IO_PENDING, base::NotFatalUntil::M160);
     return result;
   }
 
@@ -65,7 +70,7 @@ int BufferingFileStreamReader::Read(net::IOBuffer* buffer,
 
 int64_t BufferingFileStreamReader::GetLength(GetLengthCallback callback) {
   const int64_t result = file_stream_reader_->GetLength(std::move(callback));
-  DCHECK_EQ(net::ERR_IO_PENDING, result);
+  CHECK_EQ(net::ERR_IO_PENDING, result, base::NotFatalUntil::M160);
 
   return result;
 }
@@ -73,15 +78,19 @@ int64_t BufferingFileStreamReader::GetLength(GetLengthCallback callback) {
 int BufferingFileStreamReader::CopyFromPreloadingBuffer(
     scoped_refptr<net::IOBuffer> buffer,
     int buffer_length) {
-  const int read_bytes = std::min(buffer_length, preloaded_bytes_);
+  const size_t buffer_length_size = base::checked_cast<size_t>(buffer_length);
+  CHECK_LE(buffer_length_size, buffer->span().size(),
+           base::NotFatalUntil::M160);
+  const size_t read_bytes = std::min(buffer_length_size, preloaded_bytes_);
 
-  UNSAFE_TODO(memcpy(buffer->data(),
-                     preloading_buffer_->data() + preloading_buffer_offset_,
-                     read_bytes));
+  buffer->span()
+      .first(read_bytes)
+      .copy_prefix_from(preloading_buffer_->span().subspan(
+          preloading_buffer_offset_, read_bytes));
   preloading_buffer_offset_ += read_bytes;
   preloaded_bytes_ -= read_bytes;
 
-  return read_bytes;
+  return base::checked_cast<int>(read_bytes);
 }
 
 void BufferingFileStreamReader::Preload(net::CompletionOnceCallback callback) {
@@ -91,7 +100,7 @@ void BufferingFileStreamReader::Preload(net::CompletionOnceCallback callback) {
 
   const int result = file_stream_reader_->Read(
       preloading_buffer_.get(), preload_bytes, std::move(callback));
-  DCHECK_EQ(result, net::ERR_IO_PENDING);
+  CHECK_EQ(result, net::ERR_IO_PENDING, base::NotFatalUntil::M160);
 }
 
 void BufferingFileStreamReader::OnPreloadCompleted(
@@ -105,7 +114,7 @@ void BufferingFileStreamReader::OnPreloadCompleted(
   }
 
   preloading_buffer_offset_ = 0;
-  preloaded_bytes_ = result;
+  preloaded_bytes_ = base::checked_cast<size_t>(result);
 
   std::move(callback).Run(CopyFromPreloadingBuffer(buffer, buffer_length));
 }
@@ -127,7 +136,7 @@ void BufferingFileStreamReader::OnReadCompleted(
   }
 
   bytes_read_ += result;
-  DCHECK_LE(bytes_read_, max_bytes_to_read_);
+  CHECK_LE(bytes_read_, max_bytes_to_read_, base::NotFatalUntil::M160);
 
   std::move(callback).Run(result);
 }

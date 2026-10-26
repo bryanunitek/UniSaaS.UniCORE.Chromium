@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import unittest
 
 import mojom.generate.check as check
 from mojom_bindings_generator import LoadChecks, _Generate
@@ -10,8 +9,7 @@ from mojom_parser_test_case import MojomParserTestCase
 
 # Mojoms that we will use in multiple tests.
 basic_mojoms = {
-    'level.mojom':
-    """
+  'level.mojom': """
   module level;
   enum Level {
     kHighest,
@@ -19,8 +17,7 @@ basic_mojoms = {
     kLowest,
   };
   """,
-    'interfaces.mojom':
-    """
+  'interfaces.mojom': """
   module interfaces;
   import "level.mojom";
   struct Foo {int32 bar;};
@@ -36,7 +33,7 @@ basic_mojoms = {
   interface Low {
     DoFoo(Foo foo);
   };
-  """
+  """,
 }
 
 
@@ -44,8 +41,8 @@ class FakeArgs:
   """Fakes args to _Generate - intention is to do just enough to run checks"""
 
   def __init__(self, tester, files=None):
-    """ `tester` is MojomParserTestCase for paths.
-        `files` will have tester path added."""
+    """`tester` is MojomParserTestCase for paths.
+    `files` will have tester path added."""
     self.checks_string = 'restrictions'
     self.depth = tester.GetPath('')
     self.filelist = None
@@ -80,7 +77,8 @@ class MojoBindingsCheckTest(MojomParserTestCase):
 
     a = 'a.mojom'
     self.WriteFile(
-        a, """
+      a,
+      """
       module a;
       import "level.mojom";
       import "interfaces.mojom";
@@ -115,7 +113,8 @@ class MojoBindingsCheckTest(MojomParserTestCase):
       interface PassesPassesHigh {
         DoPass(pending_receiver<PassesHigh> hiho);
       };
-    """)
+    """,
+    )
     mojoms.append(a)
     self._ParseAndGenerate(mojoms)
 
@@ -151,8 +150,11 @@ class MojoBindingsCheckTest(MojomParserTestCase):
         DoHigh(pending_receiver<interfaces.High> hi);
       };
     """
-    self._testThrows('b.mojom', contents,
-                     'RequireContext=.*?kHighest > AllowedContext=.*?kMiddle')
+    self._testThrows(
+      'b.mojom',
+      contents,
+      'RequireContext=.*?kHighest > AllowedContext=.*?kMiddle',
+    )
 
   def testWrongEnumInAllow(self):
     contents = """
@@ -227,8 +229,11 @@ class MojoBindingsCheckTest(MojomParserTestCase):
         );
       };
     """
-    self._testThrows('b.mojom', contents,
-                     'RequireContext=.*?kHighest > AllowedContext=.*?kMiddle')
+    self._testThrows(
+      'b.mojom',
+      contents,
+      'RequireContext=.*?kHighest > AllowedContext=.*?kMiddle',
+    )
 
   def testMultipleInterfacesAllowed(self):
     """Multiple interfaces can be passed, all satisfy the level."""
@@ -236,7 +241,8 @@ class MojoBindingsCheckTest(MojomParserTestCase):
 
     b = "b.mojom"
     self.WriteFile(
-        b, """
+      b,
+      """
       module b;
       import "level.mojom";
       import "interfaces.mojom";
@@ -249,6 +255,7 @@ class MojoBindingsCheckTest(MojomParserTestCase):
           One one
         );
       };
-    """)
+    """,
+    )
     mojoms.append(b)
     self._ParseAndGenerate(mojoms)

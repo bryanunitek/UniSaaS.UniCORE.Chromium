@@ -13,7 +13,6 @@ blink_modules_sources("ml") {
     "ml_context.h",
     "navigator_ml.cc",
     "navigator_ml.h",
-    "webnn/allow_shared_buffer_source_util.h",
     "webnn/ml_constant_operand.cc",
     "webnn/ml_constant_operand.h",
     "webnn/ml_error.cc",
@@ -49,12 +48,15 @@ blink_modules_sources("ml") {
   ]
 
   deps = [
+    "//gpu/command_buffer/client:webgpu_interface",
     "//services/webnn/public/cpp",
     "//services/webnn/public/cpp:buildflags",
     "//services/webnn/public/cpp:in_process_context_provider",
     "//services/webnn/public/mojom:mojom_blink",
     "//third_party/blink/public/mojom/webnn:webnn_blink",
     "//third_party/blink/renderer/modules/webgpu",
+    "//third_party/dawn/include/dawn:headers",
+    "//third_party/dawn/src/dawn/wire:headers",
   ]
 
   if (webnn_enable_graph_dump) {

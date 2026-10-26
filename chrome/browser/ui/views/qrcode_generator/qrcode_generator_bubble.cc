@@ -4,26 +4,21 @@
 
 #include "chrome/browser/ui/views/qrcode_generator/qrcode_generator_bubble.h"
 
-#include "base/base64.h"
 #include "base/containers/span.h"
 #include "base/metrics/user_metrics.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
-#include "chrome/browser/ui/qrcode_generator/qrcode_generator_bubble_controller.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/sharing_hub/sharing_hub_bubble_util.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/qr_code_generator/bitmap_generator.h"
-#include "components/sharing_message/features.h"
 #include "components/url_formatter/url_formatter.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/download_request_utils.h"
@@ -41,7 +36,6 @@
 #include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/image/image_skia_source.h"
 #include "ui/native_theme/native_theme.h"
-#include "ui/resources/grit/ui_resources.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/bubble/bubble_frame_view.h"
@@ -89,7 +83,7 @@ QRCodeGeneratorBubble::QRCodeGeneratorBubble(
       on_closing_(std::move(on_closing)),
       on_back_button_pressed_(std::move(on_back_button_pressed)),
       web_contents_(web_contents) {
-  DCHECK(on_closing_);
+  CHECK(on_closing_, base::NotFatalUntil::M162);
 
   SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   SetTitle(IDS_BROWSER_SHARING_QR_CODE_DIALOG_TITLE);
@@ -114,7 +108,7 @@ void QRCodeGeneratorBubble::Show() {
     qrcode_action_item_ =
         actions::ActionManager::Get()
             .FindAction(kActionQrCodeGenerator,
-                        browser->GetActions()->root_action_item())
+                        BrowserActions::From(browser)->root_action_item())
             ->GetAsWeakPtr();
     qrcode_action_item_.get()->SetIsShowingBubble(true);
   }
@@ -128,19 +122,6 @@ void QRCodeGeneratorBubble::Hide() {
   if (qrcode_action_item_.get()) {
     qrcode_action_item_.get()->SetIsShowingBubble(false);
   }
-}
-
-void QRCodeGeneratorBubble::OnThemeChanged() {
-  LocationBarBubbleDelegateView::OnThemeChanged();
-
-  const int border_radius = views::LayoutProvider::Get()->GetCornerRadiusMetric(
-      views::Emphasis::kHigh);
-  const auto* color_provider = GetColorProvider();
-  qr_code_image_->SetBorder(views::CreateRoundedRectBorder(
-      /*thickness=*/2, border_radius,
-      color_provider->GetColor(kColorQrCodeBorder)));
-  qr_code_image_->SetBackground(views::CreateRoundedRectBackground(
-      color_provider->GetColor(kColorQrCodeBackground), border_radius, 2));
 }
 
 void QRCodeGeneratorBubble::UpdateQRContent() {
@@ -259,6 +240,10 @@ void QRCodeGeneratorBubble::Init() {
                              views::LayoutAlignment::kCenter);
 
   qr_code_image_ = AddChildView(std::move(qr_code_image));
+  qr_code_image_->SetBorder(views::CreateRoundedRectBorder(
+      /*thickness=*/2, border_radius, kColorQrCodeBorder));
+  qr_code_image_->SetBackground(views::CreateRoundedRectBackground(
+      kColorQrCodeBackground, border_radius, /*for_border_thickness=*/2));
 
   // Center error message.
   auto center_error_label = std::make_unique<views::Label>(
@@ -379,7 +364,7 @@ void QRCodeGeneratorBubble::AddedToWidget() {
 void QRCodeGeneratorBubble::ContentsChanged(
     views::Textfield* sender,
     const std::u16string& new_contents) {
-  DCHECK_EQ(sender, textfield_url_);
+  CHECK_EQ(sender, textfield_url_, base::NotFatalUntil::M162);
   if (sender == textfield_url_) {
     url_ = GURL(base::UTF16ToUTF8(new_contents));
     UpdateQRContent();
@@ -481,7 +466,7 @@ void QRCodeGeneratorBubble::DownloadButtonPressed() {
 void QRCodeGeneratorBubble::BackButtonPressed() {
   Hide();
 
-  DCHECK(on_back_button_pressed_);
+  CHECK(on_back_button_pressed_, base::NotFatalUntil::M162);
   std::move(on_back_button_pressed_).Run();
 }
 

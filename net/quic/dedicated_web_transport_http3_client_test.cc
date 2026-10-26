@@ -4,7 +4,10 @@
 
 #include "net/quic/dedicated_web_transport_http3_client.h"
 
+#include <array>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 #include "base/memory/raw_ptr.h"
@@ -22,7 +25,11 @@
 #include "net/quic/quic_context.h"
 #include "net/test/test_data_directory.h"
 #include "net/test/test_with_task_environment.h"
+#include "net/third_party/quiche/src/quiche/quic/core/http/http_constants.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_constants.h"
 #include "net/third_party/quiche/src/quiche/quic/test_tools/crypto_test_utils.h"
+#include "net/third_party/quiche/src/quiche/quic/test_tools/quic_dispatcher_peer.h"
+#include "net/third_party/quiche/src/quiche/quic/test_tools/quic_session_peer.h"
 #include "net/third_party/quiche/src/quiche/quic/test_tools/quic_test_backend.h"
 #include "net/tools/quic/quic_simple_server.h"
 #include "net/tools/quic/quic_simple_server_socket.h"
@@ -43,6 +50,37 @@ using ::testing::DoAll;
 using ::testing::Optional;
 using ::testing::SaveArg;
 
+TEST(DedicatedWebTransportHttp3ClientTest, SerializeExporterContext) {
+  constexpr std::array<uint8_t, 3> label = {'f', 0, 0xff};
+  constexpr std::array<uint8_t, 3> context = {'b', 'a', 'r'};
+  std::string expected("\x01\x02\x03\x04\x05\x06\x07\x08", 8);
+  expected.push_back(3);
+  expected.push_back('f');
+  expected.push_back('\0');
+  expected.push_back('\xff');
+  expected.push_back(3);
+  expected.append("bar");
+
+  EXPECT_THAT(
+      DedicatedWebTransportHttp3Client::SerializeExporterContextForTesting(
+          0x0102030405060708, label, context),
+      Optional(expected));
+}
+
+TEST(DedicatedWebTransportHttp3ClientTest, ExporterContextInputLengthLimit) {
+  const std::vector<uint8_t> max_length_input(255, 'a');
+  const std::vector<uint8_t> over_length_input(256, 'b');
+  EXPECT_TRUE(
+      DedicatedWebTransportHttp3Client::SerializeExporterContextForTesting(
+          0, max_length_input, max_length_input));
+  EXPECT_FALSE(
+      DedicatedWebTransportHttp3Client::SerializeExporterContextForTesting(
+          0, over_length_input, {}));
+  EXPECT_FALSE(
+      DedicatedWebTransportHttp3Client::SerializeExporterContextForTesting(
+          0, {}, over_length_input));
+}
+
 class MockVisitor : public WebTransportClientVisitor {
  public:
   MOCK_METHOD(void,
@@ -62,6 +100,7 @@ class MockVisitor : public WebTransportClientVisitor {
               (const std::optional<WebTransportCloseInfo>&),
               (override));
   MOCK_METHOD(void, OnError, (const WebTransportError&), (override));
+  MOCK_METHOD(void, OnDraining, (), (override));
 
   MOCK_METHOD0(OnIncomingBidirectionalStreamAvailable, void());
   MOCK_METHOD0(OnIncomingUnidirectionalStreamAvailable, void());
@@ -174,12 +213,18 @@ class DedicatedWebTransportHttp3Test : public TestWithTaskEnvironment {
   }
 
   void StartServer(std::unique_ptr<quic::ProofSource> proof_source = nullptr) {
+    StartServerWithConfig(quic::QuicConfig(), std::move(proof_source));
+  }
+
+  void StartServerWithConfig(
+      quic::QuicConfig config,
+      std::unique_ptr<quic::ProofSource> proof_source = nullptr) {
     if (proof_source == nullptr) {
       proof_source = quic::test::crypto_test_utils::ProofSourceForTesting();
     }
     backend_.set_enable_webtransport(true);
     server_ = std::make_unique<QuicSimpleServer>(
-        std::move(proof_source), quic::QuicConfig(),
+        std::move(proof_source), std::move(config),
         quic::QuicCryptoServerConfig::ConfigOptions(),
         AllSupportedQuicVersions(), &backend_);
     ASSERT_TRUE(server_->CreateUDPSocketAndListen(
@@ -215,8 +260,94 @@ class DedicatedWebTransportHttp3Test : public TestWithTaskEnvironment {
   NetworkAnonymizationKey anonymization_key_;
 };
 
+struct AnticipatedIncomingStreamsTestCase {
+  const char* name;
+  std::optional<uint16_t> unidirectional_hint;
+  std::optional<uint16_t> bidirectional_hint;
+  uint32_t expected_unidirectional_streams;
+  uint32_t expected_bidirectional_streams;
+};
+
+class DedicatedWebTransportHttp3IncomingStreamsTest
+    : public DedicatedWebTransportHttp3Test,
+      public testing::WithParamInterface<AnticipatedIncomingStreamsTestCase> {};
+
+TEST_P(DedicatedWebTransportHttp3IncomingStreamsTest,
+       AdvertisesRequiredStreamLimits) {
+  const AnticipatedIncomingStreamsTestCase& test_case = GetParam();
+  StartServer();
+  WebTransportParameters parameters;
+  parameters.anticipated_concurrent_incoming_unidirectional_streams =
+      test_case.unidirectional_hint;
+  parameters.anticipated_concurrent_incoming_bidirectional_streams =
+      test_case.bidirectional_hint;
+  client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), parameters);
+
+  EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
+  client_->Connect();
+  Run();
+
+  quic::QuicSession* server_session =
+      quic::test::QuicDispatcherPeer::GetFirstSessionIfAny(
+          server_->dispatcher());
+  ASSERT_TRUE(server_session);
+  quic::UberQuicStreamIdManager* stream_id_manager =
+      quic::test::QuicSessionPeer::ietf_streamid_manager(server_session);
+  EXPECT_EQ(test_case.expected_unidirectional_streams +
+                quic::kHttp3StaticUnidirectionalStreamCount,
+            stream_id_manager->max_outgoing_unidirectional_streams());
+  EXPECT_EQ(test_case.expected_bidirectional_streams,
+            stream_id_manager->max_outgoing_bidirectional_streams());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    DedicatedWebTransportHttp3IncomingStreamsTest,
+    testing::Values(
+        AnticipatedIncomingStreamsTestCase{
+            "Unset", std::nullopt, std::nullopt,
+            quic::kDefaultMaxStreamsPerConnection,
+            quic::kDefaultMaxStreamsPerConnection},
+        AnticipatedIncomingStreamsTestCase{"UnidirectionalBelowMinimum", 99,
+                                           101, 100, 101},
+        AnticipatedIncomingStreamsTestCase{"BidirectionalBelowMinimum", 101, 99,
+                                           101, 100},
+        AnticipatedIncomingStreamsTestCase{"MaxUint16AndZero", 65535, 0, 65535,
+                                           100}),
+    [](const testing::TestParamInfo<AnticipatedIncomingStreamsTestCase>& info) {
+      return info.param.name;
+    });
+
 TEST_F(DedicatedWebTransportHttp3Test, Connect) {
   StartServer();
+  client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
+  EXPECT_EQ(client_->GetMaxDatagramSize(), std::nullopt);
+
+  EXPECT_CALL(visitor_, OnBeforeConnect);
+  EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
+  client_->Connect();
+  Run();
+  ASSERT_TRUE(client_->session() != nullptr);
+  const auto max_datagram_size = client_->GetMaxDatagramSize();
+  ASSERT_TRUE(max_datagram_size);
+  EXPECT_GT(*max_datagram_size, 0u);
+
+  client_->Close(std::nullopt);
+  EXPECT_CALL(visitor_, OnClosed(_)).WillOnce(StopRunning());
+  Run();
+}
+
+TEST_F(DedicatedWebTransportHttp3Test,
+       ZeroQuicDatagramLimitReturnsZeroMaxDatagramSize) {
+  // Zero is the transport parameter default, so QUICHE omits it. This emulates
+  // a peer that advertises HTTP Datagrams without QUIC Datagram capacity.
+  quic::QuicConfig config;
+  config.SetMaxDatagramFrameSizeToSend(0);
+  StartServerWithConfig(std::move(config));
   client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
       GetURL("/echo"), origin_, &visitor_, anonymization_key_,
       handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
@@ -226,6 +357,32 @@ TEST_F(DedicatedWebTransportHttp3Test, Connect) {
   client_->Connect();
   Run();
   ASSERT_TRUE(client_->session() != nullptr);
+  // The regression signal is also the absence of QUICHE's QUIC_BUG in
+  // DCHECK-enabled builds.
+  EXPECT_THAT(client_->GetMaxDatagramSize(), Optional(0u));
+
+  client_->Close(std::nullopt);
+  EXPECT_CALL(visitor_, OnClosed(_)).WillOnce(StopRunning());
+  Run();
+}
+
+TEST_F(DedicatedWebTransportHttp3Test,
+       TinyQuicDatagramLimitUsesActualStreamIdPrefix) {
+  quic::QuicConfig config;
+  config.SetMaxDatagramFrameSizeToSend(3);
+  StartServerWithConfig(std::move(config));
+  client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
+
+  EXPECT_CALL(visitor_, OnBeforeConnect);
+  EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
+  client_->Connect();
+  Run();
+  ASSERT_TRUE(client_->session() != nullptr);
+  // Three bytes minus the QUIC DATAGRAM frame type and one-byte Quarter
+  // Stream ID leaves one byte for the WebTransport payload.
+  EXPECT_THAT(client_->GetMaxDatagramSize(), Optional(1u));
 
   client_->Close(std::nullopt);
   EXPECT_CALL(visitor_, OnClosed(_)).WillOnce(StopRunning());
@@ -329,6 +486,48 @@ TEST_F(DedicatedWebTransportHttp3Test, CloseReason) {
   EXPECT_THAT(received_close_info, Optional(close_info));
 }
 
+TEST_F(DedicatedWebTransportHttp3Test, SessionDraining) {
+  StartServer();
+  client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
+      GetURL("/session-close"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
+
+  EXPECT_CALL(visitor_, OnBeforeConnect);
+  EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
+  EXPECT_CALL(visitor_, OnClosed(_)).Times(0);
+  EXPECT_CALL(visitor_, OnDraining()).WillOnce(StopRunning());
+  client_->Connect();
+  Run();
+  ASSERT_TRUE(client_->session() != nullptr);
+
+  // The "/session-close" endpoint sends a DRAIN_WEBTRANSPORT_SESSION capsule
+  // when it receives the string "DRAIN" on a stream.
+  quic::WebTransportStream* stream =
+      client_->session()->OpenOutgoingUnidirectionalStream();
+  ASSERT_TRUE(stream != nullptr);
+  EXPECT_TRUE(stream->Write("DRAIN"));
+  EXPECT_TRUE(stream->SendFin());
+
+  Run();
+}
+
+TEST_F(DedicatedWebTransportHttp3Test,
+       DrainingAfterConnectionFailureIsIgnored) {
+  StartServer();
+  client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
+      GetURL("/not-found"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), WebTransportParameters());
+
+  EXPECT_CALL(visitor_, OnBeforeConnect);
+  EXPECT_CALL(visitor_, OnConnectionFailed).WillOnce(StopRunning());
+  EXPECT_CALL(visitor_, OnDraining()).Times(0);
+  client_->Connect();
+  Run();
+  ASSERT_EQ(client_->state(), WebTransportState::FAILED);
+
+  client_->OnSessionDraining();
+}
+
 // Test negotiation of the application protocol via
 // https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-12.html#name-application-protocol-negoti
 TEST_F(DedicatedWebTransportHttp3Test, SubprotocolHeader) {
@@ -364,6 +563,87 @@ TEST_F(DedicatedWebTransportHttp3Test, SubprotocolHeader) {
   webtransport::Stream::ReadResult read_result = stream->Read(&read_buffer);
   ASSERT_TRUE(read_result.fin);
   EXPECT_EQ(read_buffer, "first");
+}
+
+// Test backend that captures request headers for inspection.
+class HeaderCapturingBackend : public quic::test::QuicTestBackend {
+ public:
+  quic::QuicSimpleServerBackend::WebTransportResponse
+  ProcessWebTransportRequest(const quiche::HttpHeaderBlock& request_headers,
+                             quic::WebTransportSession* session) override {
+    for (const auto& [name, value] : request_headers) {
+      captured_headers_.emplace_back(std::string(name), std::string(value));
+    }
+    return QuicTestBackend::ProcessWebTransportRequest(request_headers,
+                                                       session);
+  }
+
+  const std::vector<std::pair<std::string, std::string>>& captured_headers()
+      const {
+    return captured_headers_;
+  }
+
+ private:
+  std::vector<std::pair<std::string, std::string>> captured_headers_;
+};
+
+class DedicatedWebTransportHttp3HeadersTest
+    : public DedicatedWebTransportHttp3Test {
+ public:
+  ~DedicatedWebTransportHttp3HeadersTest() override {
+    if (server_ != nullptr) {
+      server_->Shutdown();
+      server_.reset();
+    }
+  }
+
+  void StartServerWithCapture() {
+    capturing_backend_.set_enable_webtransport(true);
+    server_ = std::make_unique<QuicSimpleServer>(
+        quic::test::crypto_test_utils::ProofSourceForTesting(),
+        quic::QuicConfig(), quic::QuicCryptoServerConfig::ConfigOptions(),
+        AllSupportedQuicVersions(), &capturing_backend_);
+    ASSERT_TRUE(server_->CreateUDPSocketAndListen(
+        quic::QuicSocketAddress(quiche::QuicheIpAddress::Any6(), /*port=*/0)));
+    port_ = server_->server_address().port();
+  }
+
+ protected:
+  HeaderCapturingBackend capturing_backend_;
+};
+
+// Verify that additional_headers with mixed casing are lowercased and that
+// duplicate names (differing only in case) have their values combined.
+TEST_F(DedicatedWebTransportHttp3HeadersTest,
+       AdditionalHeadersCasingAndDuplicates) {
+  StartServerWithCapture();
+  WebTransportParameters parameters;
+  parameters.additional_headers = {
+      {"X-Custom", "first"},
+      {"x-custom", "second"},
+  };
+  client_ = std::make_unique<DedicatedWebTransportHttp3Client>(
+      GetURL("/echo"), origin_, &visitor_, anonymization_key_,
+      handles::kInvalidNetworkHandle, context_.get(), parameters);
+
+  EXPECT_CALL(visitor_, OnBeforeConnect);
+  EXPECT_CALL(visitor_, OnConnected).WillOnce(StopRunning());
+  client_->Connect();
+  Run();
+  ASSERT_TRUE(client_->session() != nullptr);
+
+  // Find x-custom in the captured headers. With AppendValueOrAddHeader, both
+  // values are combined with a null separator (quiche's internal format).
+  // With operator[], only "second" would be present.
+  std::string custom_value;
+  for (const auto& [name, value] : capturing_backend_.captured_headers()) {
+    if (name == "x-custom") {
+      custom_value = value;
+      break;
+    }
+  }
+  EXPECT_THAT(custom_value, ::testing::HasSubstr("first"));
+  EXPECT_THAT(custom_value, ::testing::HasSubstr("second"));
 }
 
 }  // namespace

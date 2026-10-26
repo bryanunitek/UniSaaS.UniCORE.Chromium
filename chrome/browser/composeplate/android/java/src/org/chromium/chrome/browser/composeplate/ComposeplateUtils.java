@@ -21,6 +21,7 @@ import org.chromium.base.DeviceInfo;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
@@ -29,7 +30,7 @@ import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 @NullMarked
 public class ComposeplateUtils {
 
-    private static boolean sIsEnabledForTesting;
+    private static @Nullable Boolean sIsEnabledForTesting;
 
     /**
      * Returns whether the composeplate can be enabled.
@@ -37,18 +38,37 @@ public class ComposeplateUtils {
      * @param profile The current profile.
      */
     public static boolean isComposeplateEnabled(Profile profile) {
-        if (sIsEnabledForTesting) return true;
+        if (sIsEnabledForTesting != null) {
+            return sIsEnabledForTesting;
+        }
 
         return ComposeplateUtilsJni.get().isAimEntrypointEligible(profile);
     }
 
     /**
-     * Returns whether the composeplate button can be shown on NTPs.
+     * Returns whether the composeplate button can be shown on NTPs when the AI Mode entry point is
+     * limited to Google.
      *
      * @param profile The current profile.
      */
     public static boolean canShowComposeplateButtonOnNtp(Profile profile) {
-        return !DeviceInfo.isDesktop() && isComposeplateEnabled(profile);
+        return canShowComposeplateButtonOnDevice() && isComposeplateEnabled(profile);
+    }
+
+    /**
+     * Returns whether the composeplate button can be shown on NTPs when the AI Mode entry point is
+     * allowed for third party search engines.
+     *
+     * @param hasAiModeButtonUiConfig Whether the default search engine provides an {@code
+     *     AiModeButtonUiConfig}.
+     */
+    public static boolean canShowComposeplateButtonOnNtp(boolean hasAiModeButtonUiConfig) {
+        return hasAiModeButtonUiConfig && canShowComposeplateButtonOnDevice();
+    }
+
+    /** Returns whether the composeplate button can be shown on the device type. */
+    public static boolean canShowComposeplateButtonOnDevice() {
+        return !DeviceInfo.isDesktop();
     }
 
     /**
@@ -58,6 +78,72 @@ public class ComposeplateUtils {
      */
     public static boolean isEnabledByPolicy(Profile profile) {
         return ComposeplateUtilsJni.get().isEnabledByPolicy(profile);
+    }
+
+    /**
+     * Applies the appropriate background drawable for the Search Box.
+     *
+     * @param context Used to get resources.
+     * @param view The search box view instance to update.
+     * @param applyWhiteBackground Whether to apply a white background.
+     */
+    public static void applySearchBoxBackground(
+            Context context, View view, boolean applyWhiteBackground) {
+        if (applyWhiteBackground) {
+            if (NewTabPageUtils.isNtpAuroraEnabled()) {
+                // When Aurora is enabled on customized image theme, use white mixed with 2% primary
+                // tint.
+                view.setBackground(
+                        context.getDrawable(
+                                R.drawable.fake_search_box_white_with_primary_color_alpha_2));
+                return;
+            }
+            // When Aurora is disabled on customized image theme, use pure white.
+            applyWhiteBackground(context, view, /* apply= */ true);
+            return;
+        }
+
+        // Default theme without customized image theme:
+        if (NewTabPageUtils.isNtpAuroraEnabled()) {
+            view.setBackground(context.getDrawable(R.drawable.fake_search_box_background));
+            return;
+        }
+
+        // Default theme with Aurora disabled:
+        applyWhiteBackground(context, view, /* apply= */ false);
+    }
+
+    /**
+     * Applies the appropriate background drawable for Composeplate buttons.
+     *
+     * @param context Used to get resources.
+     * @param view The composeplate button view instance to update.
+     * @param applyWhiteBackground Whether to apply a white background.
+     */
+    public static void applyComposeplateBackground(
+            Context context, View view, boolean applyWhiteBackground) {
+        if (applyWhiteBackground) {
+            if (NewTabPageUtils.isNtpAuroraButtonColorEnabled()) {
+                // When Aurora button color is enabled on customized image theme, use tinted
+                // background.
+                view.setBackground(
+                        context.getDrawable(
+                                R.drawable.fake_search_box_white_with_primary_color_alpha_2));
+                return;
+            }
+            // When Aurora button color is disabled on customized image theme, use pure white.
+            applyWhiteBackground(context, view, /* apply= */ true);
+            return;
+        }
+
+        // Default theme without customized image theme:
+        if (NewTabPageUtils.isNtpAuroraButtonColorEnabled()) {
+            view.setBackground(context.getDrawable(R.drawable.composeplate_button_background));
+            return;
+        }
+
+        // Default theme with Aurora button color disabled:
+        applyWhiteBackground(context, view, /* apply= */ false);
     }
 
     /**
@@ -80,12 +166,12 @@ public class ComposeplateUtils {
             return;
         }
 
-        // Rests to the default background drawable.
+        // Resets to the default background drawable.
         view.setBackground(background);
     }
 
-    public static void setIsEnabledForTesting(boolean isEnabledForTesting) {
-        boolean oldValue = sIsEnabledForTesting;
+    public static void setIsEnabledForTesting(@Nullable Boolean isEnabledForTesting) {
+        @Nullable Boolean oldValue = sIsEnabledForTesting;
         sIsEnabledForTesting = isEnabledForTesting;
         ResettersForTesting.register(() -> sIsEnabledForTesting = oldValue);
     }

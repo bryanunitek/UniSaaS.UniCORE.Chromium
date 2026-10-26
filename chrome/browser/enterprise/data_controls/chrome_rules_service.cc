@@ -5,11 +5,13 @@
 #include "chrome/browser/enterprise/data_controls/chrome_rules_service.h"
 
 #include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
+#include "base/numerics/safe_conversions.h"
+#include "chrome/browser/enterprise/data_protection/data_protection_clipboard_utils.h"
+#include "chrome/browser/glic/host/guest_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
-
-#include "chrome/browser/glic/host/guest_util.h"
 
 namespace data_controls {
 
@@ -33,10 +35,22 @@ Verdict ChromeRulesService::GetPrintVerdict(
 
 Verdict ChromeRulesService::GetPasteVerdict(
     const content::ClipboardEndpoint& source,
-    const content::ClipboardEndpoint& destination) const {
+    const content::ClipboardEndpoint& destination,
+    const ui::ClipboardMetadata& metadata) const {
+  return GetPasteVerdict(
+      enterprise_data_protection::CacheBasicPasteSource(source), destination,
+      metadata);
+}
+
+Verdict ChromeRulesService::GetPasteVerdict(
+    const enterprise_data_protection::BasicPasteSource& source,
+    const content::ClipboardEndpoint& destination,
+    const ui::ClipboardMetadata& metadata) const {
+  base::ScopedUmaHistogramTimer timer(
+      "Enterprise.DataControls.Paste.EvaluationLatency");
   return GetVerdict(Rule::Restriction::kClipboard,
                     {
-                        .source = GetAsActionSource(source),
+                        .source = GetAsActionSource(source, metadata),
                         .destination = GetAsActionDestination(destination),
                     });
 }
@@ -46,12 +60,20 @@ bool ChromeRulesService::incognito_profile() const {
 }
 
 ActionSource ChromeRulesService::GetAsActionSource(
-    const content::ClipboardEndpoint& endpoint) const {
-  if (!endpoint.browser_context()) {
-    return {.os_clipboard = true};
+    const enterprise_data_protection::BasicPasteSource& source,
+    const ui::ClipboardMetadata& metadata) const {
+  ActionSource action;
+  if (!source.browser_context) {
+    action.os_clipboard = true;
+  } else {
+    action = ExtractPasteActionContextSource(source);
   }
 
-  return ExtractPasteActionContext<ActionSource>(endpoint);
+  if (metadata.size.has_value()) {
+    action.content_size = base::saturated_cast<int64_t>(*metadata.size);
+  }
+
+  return action;
 }
 
 ActionDestination ChromeRulesService::GetAsActionDestination(
@@ -59,6 +81,7 @@ ActionDestination ChromeRulesService::GetAsActionDestination(
   return ExtractPasteActionContext<ActionDestination>(endpoint);
 }
 
+// LINT.IfChange(ExtractPasteActionContext)
 template <typename ActionSourceOrDestination>
 ActionSourceOrDestination ChromeRulesService::ExtractPasteActionContext(
     const content::ClipboardEndpoint& endpoint) const {
@@ -79,6 +102,28 @@ ActionSourceOrDestination ChromeRulesService::ExtractPasteActionContext(
   }
   return action;
 }
+// LINT.ThenChange(/chrome/browser/enterprise/data_controls/chrome_rules_service.cc:ExtractPasteActionContextSource)
+
+// LINT.IfChange(ExtractPasteActionContextSource)
+ActionSource ChromeRulesService::ExtractPasteActionContextSource(
+    const enterprise_data_protection::BasicPasteSource& source) const {
+  ActionSource action;
+  if (source.data_transfer_endpoint &&
+      source.data_transfer_endpoint->IsUrlType() &&
+      source.data_transfer_endpoint->GetURL()) {
+    action.url = *source.data_transfer_endpoint->GetURL();
+  }
+  if (source.browser_context) {
+    action.incognito = Profile::FromBrowserContext(source.browser_context.get())
+                           ->IsIncognitoProfile();
+    action.other_profile = source.browser_context.get() != profile_;
+  }
+  if (source.gemini_in_chrome) {
+    action.gemini_in_chrome = true;
+  }
+  return action;
+}
+// LINT.ThenChange(/chrome/browser/enterprise/data_controls/chrome_rules_service.cc:ExtractPasteActionContext)
 
 // ----------------------------------------
 // ChromeRulesServiceFactory implementation

@@ -5,7 +5,8 @@
 #include "chrome/browser/page_load_metrics/observers/tab_strip_page_load_metrics_observer.h"
 
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
@@ -38,7 +39,7 @@ IN_PROC_BROWSER_TEST_F(TabStripPageLoadMetricsObserverTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), url, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   histogram_tester.ExpectTotalCount(internal::kTabsPageLoadTimeSinceActive, 2);
@@ -54,22 +55,22 @@ IN_PROC_BROWSER_TEST_F(TabStripPageLoadMetricsObserverTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url, WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      browser(), url, WindowOpenDisposition::kNewBackgroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url, WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      browser(), url, WindowOpenDisposition::kNewBackgroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url, WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      browser(), url, WindowOpenDisposition::kNewBackgroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url, WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      browser(), url, WindowOpenDisposition::kNewBackgroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
-  browser()->tab_strip_model()->ActivateTabAt(
+  browser()->GetTabStripModel()->ActivateTabAt(
       2, TabStripUserGestureDetails(
              TabStripUserGestureDetails::GestureType::kOther));
 

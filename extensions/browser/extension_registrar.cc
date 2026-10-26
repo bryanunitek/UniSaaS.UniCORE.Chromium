@@ -56,8 +56,6 @@ namespace {
 BASE_FEATURE(kExtensionUpdatesImmediatelyUnregisterWorker,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-bool g_disable_lazy_context_spinup_for_test = false;
-
 // The browser version at the time a component extension was last added.
 // Component extensions are packaged with the browser, so their code can
 // change whenever the browser updates, even if the version in their manifest
@@ -351,8 +349,9 @@ void ExtensionRegistrar::EnableExtension(const ExtensionId& extension_id) {
 
   // If the extension is currently reloading, it will be enabled once the reload
   // is complete.
-  if (reloading_extensions_.count(extension_id) > 0)
+  if (reloading_extensions_.contains(extension_id)) {
     return;
+  }
 
   // First, check that the extension can be enabled.
   if (IsExtensionEnabled(extension_id) ||
@@ -377,6 +376,7 @@ void ExtensionRegistrar::EnableExtension(const ExtensionId& extension_id) {
   registry_->AddEnabled(extension);
   registry_->RemoveDisabled(extension->id());
   ActivateExtension(extension, false);
+  registry_->TriggerOnEnabled(extension);
 }
 
 void ExtensionRegistrar::DisableExtension(
@@ -478,7 +478,8 @@ void ExtensionRegistrar::DisableExtensionWithSource(
     disable_reason::DisableReason disable_reason) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(disable_reason == disable_reason::DISABLE_USER_ACTION ||
-         disable_reason == disable_reason::DISABLE_BLOCKED_BY_POLICY);
+         disable_reason == disable_reason::DISABLE_BLOCKED_BY_POLICY ||
+         disable_reason == disable_reason::DISABLE_BY_ANOTHER_EXTENSION);
   if (disable_reason == disable_reason::DISABLE_BLOCKED_BY_POLICY) {
     DCHECK(Manifest::IsPolicyLocation(source_extension->location()) ||
            Manifest::IsComponentLocation(source_extension->location()));
@@ -488,7 +489,16 @@ void ExtensionRegistrar::DisableExtensionWithSource(
       registry_->GetExtensionById(extension_id, ExtensionRegistry::EVERYTHING);
   CHECK(extension_system_->management_policy()->ExtensionMayModifySettings(
       source_extension, extension, nullptr));
+
   DisableExtension(extension_id, {disable_reason});
+
+  // Always update the disabling extension to the latest one, as it's simpler
+  // and reflects the most recent attempt to disable.
+  if (disable_reason == disable_reason::DISABLE_BY_ANOTHER_EXTENSION &&
+      extension_prefs_->HasDisableReason(extension_id, disable_reason)) {
+    extension_prefs_->SetStringPref(extension_id, kDisableReasonByExtensionId,
+                                    source_extension->id());
+  }
 }
 
 void ExtensionRegistrar::EnabledReloadableExtensions() {
@@ -998,12 +1008,6 @@ void ExtensionRegistrar::GreylistExtensionForTest(
   }
 }
 
-// static
-base::AutoReset<bool> ExtensionRegistrar::DisableLazyContextSpinupForTest() {
-  CHECK_IS_TEST();
-  return base::AutoReset<bool>(&g_disable_lazy_context_spinup_for_test, true);
-}
-
 void ExtensionRegistrar::OnUnpackedExtensionReloadFailed(
     const base::FilePath& path) {
   failed_to_reload_unpacked_extensions_.insert(path);
@@ -1011,6 +1015,12 @@ void ExtensionRegistrar::OnUnpackedExtensionReloadFailed(
 
 void ExtensionRegistrar::GrantPermissionsAndEnableExtension(
     const Extension& extension) {
+  // Only proceed when the requested input extension still matches the installed
+  // version; otherwise, reject early.
+  const Extension* installed = registry_->GetInstalledExtension(extension.id());
+  if (!installed || installed->version() != extension.version()) {
+    return;
+  }
   delegate_->GrantActivePermissions(&extension);
   EnableExtension(extension.id());
 }
@@ -1169,7 +1179,7 @@ void ExtensionRegistrar::DoReloadExtension(
     // If an unpacked extension previously failed to reload, it will still be
     // marked as disabled, but we can try to reload it again - the developer
     // may have fixed the issue.
-    if (failed_to_reload_unpacked_extensions_.count(path) == 0) {
+    if (!failed_to_reload_unpacked_extensions_.contains(path)) {
       return;
     }
     failed_to_reload_unpacked_extensions_.erase(path);
@@ -1329,6 +1339,7 @@ bool ExtensionRegistrar::ReplaceReloadedExtension(
   CHECK(registry_->AddEnabled(extension));
 
   ActivateExtension(extension.get(), false);
+  registry_->TriggerOnReloaded(extension.get());
 
   return true;
 }
@@ -1336,10 +1347,6 @@ bool ExtensionRegistrar::ReplaceReloadedExtension(
 void ExtensionRegistrar::MaybeSpinUpLazyContext(const Extension* extension,
                                                 bool is_newly_added) {
   DCHECK(BackgroundInfo::HasLazyContext(extension));
-
-  if (g_disable_lazy_context_spinup_for_test) {
-    return;
-  }
 
   // For orphaned devtools, we will reconnect devtools to it later in
   // DidCreateMainFrameForBackgroundPage().
@@ -1350,19 +1357,6 @@ void ExtensionRegistrar::MaybeSpinUpLazyContext(const Extension* extension,
   // background page.
   bool is_component_extension =
       Manifest::IsComponentLocation(extension->location());
-
-  // TODO(crbug.com/40107353): This is either a workaround or something
-  // that will be part of the permanent solution for service worker-
-  // based extensions.
-  // We spin up extensions with the webRequest permission so their
-  // listeners are reconstructed on load.
-  // Event page-based extension cannot have the webRequest permission, but
-  // a bug allowed them to specify it in optional permissions, so filter
-  // out those extensions. See crbug.com/40912377.
-  bool needs_spinup_for_web_request =
-      extension->permissions_data()->HasAPIPermission(
-          mojom::APIPermissionID::kWebRequest) &&
-      BackgroundInfo::IsServiceWorkerBased(extension);
 
   // It's possible that the worker has been registered but hasn't fully run yet,
   // as in the case where a service worker may have been interrupted during it's
@@ -1377,23 +1371,17 @@ void ExtensionRegistrar::MaybeSpinUpLazyContext(const Extension* extension,
 
   // If there aren't any special cases, we're done.
   if (!has_orphaned_dev_tools && !is_component_extension &&
-      !needs_spinup_for_web_request && !needs_spinup_because_hasnt_started) {
-    return;
-  }
-
-  // If the extension's not being reloaded (`is_newly_added` == true),
-  // only wake it up if it has the webRequest permission or hasn't fully
-  // started.
-  if (is_newly_added && !needs_spinup_for_web_request &&
       !needs_spinup_because_hasnt_started) {
     return;
   }
 
-  // Wake up the extension by posting a no-op task. In the case of a service
-  // worker-based extension with the webRequest permission that's being newly
-  // installed, this will result in a no-op task that's not necessary, since
-  // this is really only needed for a previously-installed extension. However,
-  // that cost is minimal, since the worker is already active.
+  // If the extension's not being reloaded (`is_newly_added` == true),
+  // only wake it up if it hasn't fully started.
+  if (is_newly_added && !needs_spinup_because_hasnt_started) {
+    return;
+  }
+
+  // Wake up the extension by posting a no-op task.
   const auto context_id =
       LazyContextId::ForExtension(browser_context_, extension);
   context_id.GetTaskQueue()->AddPendingTask(context_id, base::DoNothing());
@@ -1415,7 +1403,7 @@ bool ExtensionRegistrar::CanAddExtension(const Extension* extension) const {
   if (!extensions_enabled() &&
       !Manifest::ShouldAlwaysLoadExtension(extension->location(),
                                            extension->is_theme()) &&
-      disable_flag_exempted_extensions_.count(extension->id()) == 0) {
+      !disable_flag_exempted_extensions_.contains(extension->id())) {
     return false;
   }
   return true;

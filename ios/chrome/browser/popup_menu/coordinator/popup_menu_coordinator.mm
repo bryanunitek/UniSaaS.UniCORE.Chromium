@@ -5,12 +5,14 @@
 #import "ios/chrome/browser/popup_menu/coordinator/popup_menu_coordinator.h"
 
 #import "base/check.h"
+#import "base/ios/block_types.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/metrics/histogram_macros.h"
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
 #import "components/feature_engagement/public/event_constants.h"
 #import "components/feature_engagement/public/tracker.h"
+#import "components/image_fetcher/core/image_fetcher_service.h"
 #import "components/send_tab_to_self/features.h"
 #import "ios/chrome/browser/assistant/coordinator/assistant_container_commands.h"
 #import "ios/chrome/browser/assistant/ui/assistant_container_detent.h"
@@ -20,10 +22,11 @@
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_view_controller_presenter.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/home_customization/model/home_background_customization_service_factory.h"
+#import "ios/chrome/browser/home_customization/model/user_uploaded_image_manager_factory.h"
+#import "ios/chrome/browser/image_fetcher/model/image_fetcher_service_factory.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_util.h"
-#import "ios/chrome/browser/ntp/model/ntp_background_image_cache_service_factory.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter.h"
 #import "ios/chrome/browser/policy/model/browser_management_service_factory.h"
 #import "ios/chrome/browser/popup_menu/coordinator/popup_menu_help_coordinator.h"
@@ -36,7 +39,6 @@
 #import "ios/chrome/browser/popup_menu/public/popup_menu_metrics_handler.h"
 #import "ios/chrome/browser/presenters/ui_bundled/contained_presenter_delegate.h"
 #import "ios/chrome/browser/promos_manager/model/promos_manager_factory.h"
-#import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/reading_list/model/reading_list_browser_agent.h"
 #import "ios/chrome/browser/reading_list/model/reading_list_model_factory.h"
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
@@ -45,6 +47,8 @@
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/browser/browser_provider.h"
+#import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/activity_service_commands.h"
@@ -54,6 +58,7 @@
 #import "ios/chrome/browser/shared/public/commands/cobalt_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/find_in_page_commands.h"
+#import "ios/chrome/browser/shared/public/commands/fullscreen_commands.h"
 #import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/lens_commands.h"
@@ -63,6 +68,7 @@
 #import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
 #import "ios/chrome/browser/shared/public/commands/overflow_menu_customization_commands.h"
 #import "ios/chrome/browser/shared/public/commands/page_info_commands.h"
+#import "ios/chrome/browser/shared/public/commands/picture_in_picture_commands.h"
 #import "ios/chrome/browser/shared/public/commands/popup_menu_commands.h"
 #import "ios/chrome/browser/shared/public/commands/price_tracked_items_commands.h"
 #import "ios/chrome/browser/shared/public/commands/qr_scanner_commands.h"
@@ -83,6 +89,7 @@
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/subscription_eligibility/model/subscription_eligibility_service_factory.h"
 #import "ios/chrome/browser/supervised_user/model/supervised_user_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
@@ -112,7 +119,6 @@ NSString* const kPreferredContentSizeKey = @"preferredContentSize";
 // Mediator to that alerts the main `mediator` when the web content area
 // is blocked by an overlay.
 @property(nonatomic, strong) BrowserContentMediator* contentBlockerMediator;
-
 // Time when the tools menu opened.
 @property(nonatomic, assign) NSTimeInterval toolsMenuOpenTime;
 // Whether the tools menu was scrolled vertically while it was open.
@@ -162,10 +168,10 @@ NSString* const kPreferredContentSizeKey = @"preferredContentSize";
 #pragma mark - ChromeCoordinator
 
 - (void)start {
-  [self.browser->GetCommandDispatcher()
-      startDispatchingToTarget:self
-                   forProtocol:@protocol(PopupMenuCommands)];
-  [self.browser->GetCommandDispatcher()
+  CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
+  [dispatcher startDispatchingToTarget:self
+                           forProtocol:@protocol(PopupMenuCommands)];
+  [dispatcher
       startDispatchingToTarget:self
                    forProtocol:@protocol(OverflowMenuCustomizationCommands)];
   NSNotificationCenter* defaultCenter = [NSNotificationCenter defaultCenter];
@@ -302,10 +308,12 @@ NSString* const kPreferredContentSizeKey = @"preferredContentSize";
       HandlerForProtocol(dispatcher, BrowserCoordinatorCommands);
   mediator.findInPageHandler =
       HandlerForProtocol(dispatcher, FindInPageCommands);
-  if (IsReaderModeAvailable()) {
-    mediator.readerModeHandler =
-        HandlerForProtocol(dispatcher, ReaderModeCommands);
+  if (IsFullscreenRefactoringEnabled()) {
+    mediator.fullscreenHandler =
+        HandlerForProtocol(dispatcher, FullscreenCommands);
   }
+  mediator.readerModeHandler =
+      HandlerForProtocol(dispatcher, ReaderModeCommands);
   mediator.helpHandler = HandlerForProtocol(dispatcher, HelpCommands);
   mediator.overflowMenuCustomizationHandler =
       HandlerForProtocol(dispatcher, OverflowMenuCustomizationCommands);
@@ -320,11 +328,15 @@ NSString* const kPreferredContentSizeKey = @"preferredContentSize";
       HandlerForProtocol(dispatcher, QuickDeleteCommands);
   mediator.whatsNewHandler = HandlerForProtocol(dispatcher, WhatsNewCommands);
   mediator.levelUpHandler = HandlerForProtocol(dispatcher, LevelUpCommands);
-  if (IsOverflowMenuHomeCustomizationEntrypointEnabled()) {
-    mediator.NTPCommandHandler =
-        HandlerForProtocol(dispatcher, NewTabPageCommands);
-  }
+  // Only the main browser may start PiP.
+  Browser* mainBrowser =
+      browser->GetSceneState()
+          .browserProviderInterface.mainBrowserProvider.browser;
+  CHECK(mainBrowser);
+  mediator.pictureInPictureHandler = HandlerForProtocol(
+      mainBrowser->GetCommandDispatcher(), PictureInPictureCommands);
   mediator.webStateList = browser->GetWebStateList();
+  mediator.sceneState = sceneState;
   mediator.navigationAgent = WebNavigationBrowserAgent::FromBrowser(browser);
   mediator.baseViewController = self.baseViewController;
   mediator.bookmarkModel = ios::BookmarkModelFactory::GetForProfile(profile);
@@ -335,11 +347,17 @@ NSString* const kPreferredContentSizeKey = @"preferredContentSize";
   mediator.browserPolicyConnector =
       GetApplicationContext()->GetBrowserPolicyConnector();
   mediator.syncService = SyncServiceFactory::GetForProfile(profile);
-  if (IsOverflowMenuHomeCustomizationEntrypointEnabled()) {
+  if (IsOverflowMenuHomeCustomizationEntrypointEnabled() && !incognito) {
+    mediator.NTPCommandHandler =
+        HandlerForProtocol(dispatcher, NewTabPageCommands);
     mediator.backgroundCustomizationService =
         HomeBackgroundCustomizationServiceFactory::GetForProfile(profile);
-    mediator.backgroundImageCacheService =
-        NTPBackgroundImageCacheServiceFactory::GetForProfile(profile);
+    mediator.userUploadedImageManager =
+        UserUploadedImageManagerFactory::GetForProfile(profile);
+    image_fetcher::ImageFetcherService* imageFetcherService =
+        ImageFetcherServiceFactory::GetForProfile(profile);
+    mediator.imageFetcher = imageFetcherService->GetImageFetcher(
+        image_fetcher::ImageFetcherConfig::kReducedMode);
   }
   mediator.templateURLService =
       ios::TemplateURLServiceFactory::GetForProfile(profile);
@@ -356,25 +374,21 @@ NSString* const kPreferredContentSizeKey = @"preferredContentSize";
       IdentityManagerFactory::GetForProfile(profile->GetOriginalProfile());
   mediator.identityAvatarProvider =
       GetApplicationContext()->GetIdentityAvatarProvider();
+  mediator.subscriptionEligibilityService =
+      SubscriptionEligibilityServiceFactory::GetForProfile(profile);
   mediator.tabBasedIPHBrowserAgent =
       TabBasedIPHBrowserAgent::FromBrowser(browser);
   mediator.hasSettingsBlueDot =
       [self.popupMenuHelpCoordinator hasBlueDotForOverflowMenu];
   self.contentBlockerMediator.consumer = mediator;
 
-  NSInteger highlightDestination =
-      [self.popupMenuHelpCoordinator highlightDestination] == nil
-          ? -1
-          : [[self.popupMenuHelpCoordinator highlightDestination] integerValue];
-
   UITraitCollection* traits = self.baseViewController.traitCollection;
-  OverflowMenuUIConfiguration* uiConfiguration = [[OverflowMenuUIConfiguration
-      alloc]
-      initWithPresentingViewControllerHorizontalSizeClass:
-          traits.horizontalSizeClass
-                presentingViewControllerVerticalSizeClass:traits
-                                                              .verticalSizeClass
-                                     highlightDestination:highlightDestination];
+  OverflowMenuUIConfiguration* uiConfiguration =
+      [[OverflowMenuUIConfiguration alloc]
+          initWithPresentingViewControllerHorizontalSizeClass:
+              traits.horizontalSizeClass
+                    presentingViewControllerVerticalSizeClass:
+                        traits.verticalSizeClass];
 
   self.popupMenuHelpCoordinator.uiConfiguration = uiConfiguration;
 
@@ -384,6 +398,7 @@ NSString* const kPreferredContentSizeKey = @"preferredContentSize";
   _overflowMenuOrderer.model = _overflowMenuModel;
   mediator.model = _overflowMenuModel;
   self.popupMenuHelpCoordinator.actionProvider = mediator;
+  [self.popupMenuHelpCoordinator prepareToShowIPHInOverflowMenu];
 
   self.overflowMenuMediator = mediator;
 
@@ -441,6 +456,11 @@ NSString* const kPreferredContentSizeKey = @"preferredContentSize";
 }
 
 - (void)dismissPopupMenuAnimated:(BOOL)animated {
+  [self dismissPopupMenuAnimated:animated completion:nil];
+}
+
+- (void)dismissPopupMenuAnimated:(BOOL)animated
+                      completion:(ProceduralBlock)completion {
   if (self.toolsMenuOpenTime != 0) {
     OverflowMenuVisitedEvent event;
     base::TimeDelta elapsed = base::Seconds(
@@ -523,7 +543,7 @@ NSString* const kPreferredContentSizeKey = @"preferredContentSize";
       _menu = nil;
     }
     [self.baseViewController dismissViewControllerAnimated:animated
-                                                completion:nil];
+                                                completion:completion];
     _overflowMenuModel = nil;
     [_overflowMenuOrderer updateForMenuDisappearance];
     [_overflowMenuOrderer disconnect];
@@ -532,6 +552,8 @@ NSString* const kPreferredContentSizeKey = @"preferredContentSize";
     self.overflowMenuMediator = nil;
     self.contentBlockerMediator.consumer = nil;
     self.contentBlockerMediator = nil;
+  } else if (completion) {
+    completion();
   }
 }
 
@@ -568,6 +590,18 @@ NSString* const kPreferredContentSizeKey = @"preferredContentSize";
   CHECK(send_tab_to_self::AreIOSTabRemindersEnabled());
 
   [self.popupMenuHelpCoordinator displayPopupMenuTabRemindersIPH];
+}
+
+- (void)showLevelUpPasswordCheckupWalkthroughIPH {
+  [self.popupMenuHelpCoordinator showLevelUpPasswordCheckupWalkthroughIPH];
+}
+
+- (void)showLevelUpPaymentMethodsWalkthroughIPH {
+  [self.popupMenuHelpCoordinator showLevelUpPaymentMethodsWalkthroughIPH];
+}
+
+- (void)showLevelUpQuickDeleteWalkthroughIPH {
+  [self.popupMenuHelpCoordinator showLevelUpQuickDeleteWalkthroughIPH];
 }
 
 #pragma mark - OverflowMenuCustomizationCommands

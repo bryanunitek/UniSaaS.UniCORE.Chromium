@@ -35,14 +35,16 @@ import org.chromium.components.tab_groups.TabGroupColorId;
 import org.chromium.components.tab_groups.TabGroupColorPickerUtils;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.widget.ButtonCompat;
-import org.chromium.ui.widget.ChromeImageView;
 
 /** Toolbar used in the tab grid dialog see {@link TabGridDialogCoordinator}. */
 @NullMarked
 public class TabGridDialogToolbarView extends FrameLayout {
-    private ChromeImageView mNewTabButton;
-    private ChromeImageView mBackButton;
-    private ChromeImageView mMenuButton;
+    // This is equal to the animation duration of toolbar menu hiding.
+    private static final int SHOW_KEYBOARD_DELAY_MS = 150;
+
+    private ImageView mNewTabButton;
+    private ImageView mBackButton;
+    private ImageView mMenuButton;
     private EditText mTitleTextView;
     private LinearLayout mMainContent;
     private FrameLayout mColorIconContainer;
@@ -50,6 +52,22 @@ public class TabGridDialogToolbarView extends FrameLayout {
     private @MonotonicNonNull FrameLayout mShareButtonContainer;
     private @MonotonicNonNull ButtonCompat mShareButton;
     private @Nullable FrameLayout mImageTilesContainer;
+    private boolean mNeedsKeyboardShow;
+    private boolean mNeedsFocus;
+
+    private final Runnable mShowKeyboardRunnable =
+            () -> {
+                if (!mTitleTextView.isFocused() && !mNeedsFocus) return;
+                if (hasWindowFocus()) {
+                    mNeedsKeyboardShow = false;
+                    KeyboardVisibilityDelegate delegate = KeyboardVisibilityDelegate.getInstance();
+                    if (!delegate.isKeyboardShowing(mTitleTextView)) {
+                        delegate.showKeyboard(mTitleTextView);
+                    }
+                } else {
+                    mNeedsKeyboardShow = true;
+                }
+            };
 
     public TabGridDialogToolbarView(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -119,6 +137,7 @@ public class TabGridDialogToolbarView extends FrameLayout {
     }
 
     void updateTitleTextFocus(boolean shouldFocus) {
+        mNeedsFocus = shouldFocus && !hasWindowFocus();
         if (mTitleTextView.isFocused() == shouldFocus) return;
         if (shouldFocus) {
             mTitleTextView.requestFocus();
@@ -127,27 +146,36 @@ public class TabGridDialogToolbarView extends FrameLayout {
         }
     }
 
+    @Override
+    public void onWindowFocusChanged(boolean hasWindowFocus) {
+        super.onWindowFocusChanged(hasWindowFocus);
+        if (hasWindowFocus) {
+            if (mNeedsFocus) {
+                mNeedsFocus = false;
+                mTitleTextView.requestFocus();
+            }
+            if (mNeedsKeyboardShow) {
+                mNeedsKeyboardShow = false;
+                removeCallbacks(mShowKeyboardRunnable);
+                post(mShowKeyboardRunnable);
+            }
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        removeCallbacks(mShowKeyboardRunnable);
+        mNeedsKeyboardShow = false;
+        mNeedsFocus = false;
+    }
+
     void updateKeyboardVisibility(boolean shouldShow) {
-        // This is equal to the animation duration of toolbar menu hiding.
-        int showKeyboardDelay = 150;
+        removeCallbacks(mShowKeyboardRunnable);
         if (shouldShow) {
-            // TODO(crbug.com/40144823) Figure out why a call to show keyboard without delay still
-            // won't work when the window gets focus in onWindowFocusChanged call.
-            // Wait until the current window has focus to show the keyboard. This is to deal with
-            // the case where the keyboard showing is caused by toolbar menu. In this case, we need
-            // to wait for the menu window to hide and current window to gain focus so that we can
-            // show the keyboard.
-            KeyboardVisibilityDelegate delegate = KeyboardVisibilityDelegate.getInstance();
-            postDelayed(
-                    new Runnable() {
-                        @Override
-                        public void run() {
-                            assert hasWindowFocus();
-                            delegate.showKeyboard(mTitleTextView);
-                        }
-                    },
-                    showKeyboardDelay);
+            postDelayed(mShowKeyboardRunnable, SHOW_KEYBOARD_DELAY_MS);
         } else {
+            mNeedsKeyboardShow = false;
             hideKeyboard();
         }
     }

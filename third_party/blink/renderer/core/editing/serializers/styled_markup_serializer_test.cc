@@ -6,6 +6,8 @@
 
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
+#include "third_party/blink/renderer/core/mathml_names.h"
+#include "third_party/blink/renderer/core/svg_names.h"
 
 namespace blink {
 
@@ -128,6 +130,63 @@ TEST_F(StyledMarkupSerializerTest, InlineFormatting) {
   SetBodyContent(body_content);
   EXPECT_EQ(body_content, Serialize<EditingStrategy>());
   EXPECT_EQ(body_content, Serialize<EditingInFlatTreeStrategy>());
+}
+
+// Copying the whole "Hello World" keeps the space between the two spans
+// breaking: it is inside the selection, not at an edge, so it is not
+// converted to nbsp.
+TEST_F(StyledMarkupSerializerTest, SpaceInsideSelectionNotConvertedToNbsp) {
+  SetBodyContent("<span>Hello</span> <span>World</span>");
+  EXPECT_EQ(std::string::npos,
+            Serialize<EditingStrategy>(ShouldAnnotateOptions())
+                .find("<span>\u00A0</span>"));
+  EXPECT_EQ(std::string::npos,
+            Serialize<EditingInFlatTreeStrategy>(ShouldAnnotateOptions())
+                .find("<span>\u00A0</span>"));
+}
+
+// Copying only "Hello " ends the selection right after the space, so the
+// trailing space is at the fragment edge and is preserved as nbsp, so it
+// survives re-parsing.
+TEST_F(StyledMarkupSerializerTest, TrailingSpaceAtSelectionEndConvertedToNbsp) {
+  SetBodyContent("<div id='d'>Hello <b>World</b></div>");
+  Element* div = GetDocument().getElementById(AtomicString("d"));
+  auto* hello = To<Text>(div->firstChild());
+
+  Position start_dom(hello, 0);
+  Position end_dom(hello, 6);
+  EXPECT_NE(std::string::npos, SerializePart<EditingStrategy>(
+                                   start_dom, end_dom, ShouldAnnotateOptions())
+                                   .find("<span>\u00A0</span>"));
+
+  PositionInFlatTree start_ict(hello, 0);
+  PositionInFlatTree end_ict(hello, 6);
+  EXPECT_NE(std::string::npos, SerializePart<EditingInFlatTreeStrategy>(
+                                   start_ict, end_ict, ShouldAnnotateOptions())
+                                   .find("<span>\u00A0</span>"));
+}
+
+// A selection whose boundaries are anchored on an Element node (rather than on
+// a Text node) does not resolve to a text edge, so the selection-edge logic
+// leaves spaces untouched. The leading space of "<div> Hello</div>" is also
+// collapsed away by rendering, so the serialized markup is just "Hello" with no
+// non-breaking space either way. This guards against the patch unintentionally
+// changing behavior for element-anchored boundaries.
+TEST_F(StyledMarkupSerializerTest, ElementAnchoredBoundaryNotConvertedToNbsp) {
+  SetBodyContent("<div id='d'> Hello</div>");
+  Element* div = GetDocument().getElementById(AtomicString("d"));
+
+  Position start_dom(div, 0);
+  Position end_dom = Position::LastPositionInNode(*div);
+  EXPECT_EQ(std::string::npos, SerializePart<EditingStrategy>(
+                                   start_dom, end_dom, ShouldAnnotateOptions())
+                                   .find("<span>\u00A0</span>"));
+
+  PositionInFlatTree start_ict(div, 0);
+  PositionInFlatTree end_ict = PositionInFlatTree::LastPositionInNode(*div);
+  EXPECT_EQ(std::string::npos, SerializePart<EditingInFlatTreeStrategy>(
+                                   start_ict, end_ict, ShouldAnnotateOptions())
+                                   .find("<span>\u00A0</span>"));
 }
 
 TEST_F(StyledMarkupSerializerTest, Mixed) {
@@ -498,6 +557,150 @@ TEST_F(StyledMarkupSerializerTest,
   EXPECT_EQ(open_mrow, close_mrow)
       << "Unbalanced <mrow> tags. Opens: " << open_mrow
       << ", Closes: " << close_mrow << "\nFull output: " << serialized;
+}
+
+TEST_F(StyledMarkupSerializerTest,
+       MathMLNoInterchangeSpaceSpanInForeignContent) {
+  SetBodyContent(
+      "<math><mrow><mark id='mark' style='display: inline'>a  b"
+      "<iframe srcdoc='hello'></iframe></mark><mi id='end'>c</mi></mrow>"
+      "</math>");
+
+  Element* mark = GetElementById("mark");
+  Element* end_mi = GetElementById("end");
+  ASSERT_TRUE(mark);
+  ASSERT_TRUE(end_mi);
+
+  Position start_pos(mark->firstChild(), 1);
+  Position end_pos(end_mi->firstChild(), 1);
+
+  std::string serialized = SerializePart<EditingStrategy>(
+      start_pos, end_pos,
+      CreateMarkupOptions::Builder()
+          .SetShouldAnnotateForInterchange(true)
+          .SetIgnoresCssTextTransformsForRenderedText(true)
+          .Build());
+
+  EXPECT_FALSE(serialized.contains("<span>\u00A0</span>")) << serialized;
+  EXPECT_FALSE(serialized.contains("<span")) << serialized;
+
+  SetBodyContent(serialized);
+  Element* iframe = QuerySelector("iframe");
+  ASSERT_TRUE(iframe);
+  EXPECT_EQ(mathml_names::kNamespaceURI, iframe->namespaceURI());
+}
+
+TEST_F(StyledMarkupSerializerTest,
+       MathMLInterchangeNewlinePlacedBeforeMathRoot) {
+  SetBodyContent(
+      "<div id='p1'>Paragraph 1</div>"
+      "<math><mrow><mi id='x'>x</mi><iframe srcdoc='hello'></iframe>"
+      "<mi id='y'>y</mi></mrow></math>");
+
+  Element* p1 = GetElementById("p1");
+  Element* y = GetElementById("y");
+  ASSERT_TRUE(p1);
+  ASSERT_TRUE(y);
+
+  Node* p1_text = p1->firstChild();
+  Node* y_text = y->firstChild();
+  ASSERT_TRUE(p1_text);
+  ASSERT_TRUE(y_text);
+
+  Position start_pos(p1_text, 11);
+  Position end_pos(y_text, 1);
+
+  std::string serialized = SerializePart<EditingStrategy>(
+      start_pos, end_pos, ShouldAnnotateOptions());
+
+  SetBodyContent(serialized);
+  Element* math = QuerySelector("math");
+  ASSERT_TRUE(math);
+  EXPECT_EQ(nullptr, QuerySelector("math br"));
+  Element* iframe = QuerySelector("iframe");
+  ASSERT_TRUE(iframe);
+  EXPECT_EQ(mathml_names::kNamespaceURI, iframe->namespaceURI());
+}
+
+TEST_F(StyledMarkupSerializerTest,
+       ForeignContentSkipsInlineWrappingStyleInMathAndSvg) {
+  SetBodyContent(
+      "<div style='color: red'>"
+      "<math><mrow style='display: inline'><mi id='m_start'>a</mi>"
+      "<iframe srcdoc='hello'></iframe><mi id='m_end'>b</mi></mrow></math>"
+      "</div>");
+
+  Element* m_start = GetElementById("m_start");
+  Element* m_end = GetElementById("m_end");
+  ASSERT_TRUE(m_start);
+  ASSERT_TRUE(m_end);
+
+  std::string math_serialized = SerializePart<EditingStrategy>(
+      Position(m_start->firstChild(), 0), Position(m_end->firstChild(), 1),
+      ShouldAnnotateOptions());
+  EXPECT_FALSE(math_serialized.contains("<span")) << math_serialized;
+
+  SetBodyContent(math_serialized);
+  Element* iframe = QuerySelector("iframe");
+  ASSERT_TRUE(iframe);
+  EXPECT_EQ(mathml_names::kNamespaceURI, iframe->namespaceURI());
+
+  SetBodyContent(
+      "<div style='color: red'>"
+      "<svg><text id='s_start'>a</text><style>body { color: blue; }</style>"
+      "<text id='s_end'>b</text></svg>"
+      "</div>");
+
+  Element* s_start = GetElementById("s_start");
+  Element* s_end = GetElementById("s_end");
+  ASSERT_TRUE(s_start);
+  ASSERT_TRUE(s_end);
+
+  std::string svg_serialized = SerializePart<EditingStrategy>(
+      Position(s_start->firstChild(), 0), Position(s_end->firstChild(), 1),
+      ShouldAnnotateOptions());
+  EXPECT_FALSE(svg_serialized.contains("<span")) << svg_serialized;
+}
+
+TEST_F(StyledMarkupSerializerTest, MathMLBlockAndTableAncestorsWrapToMathRoot) {
+  SetBodyContent(
+      "<math display='block'><mtable><mtr><mtd>"
+      "<mi id='start'>a</mi><iframe srcdoc='hello'></iframe>"
+      "<mi id='end'>b</mi></mtd></mtr></mtable></math>");
+
+  Element* start_mi = GetElementById("start");
+  Element* end_mi = GetElementById("end");
+  ASSERT_TRUE(start_mi);
+  ASSERT_TRUE(end_mi);
+
+  std::string table_serialized = SerializePart<EditingStrategy>(
+      Position(start_mi->firstChild(), 0), Position(end_mi->firstChild(), 1),
+      ShouldAnnotateOptions());
+
+  SetBodyContent(table_serialized);
+  Element* table_iframe = QuerySelector("iframe");
+  ASSERT_TRUE(table_iframe);
+  EXPECT_EQ(mathml_names::kNamespaceURI, table_iframe->namespaceURI());
+  EXPECT_NE(nullptr, QuerySelector("mtr"));
+
+  SetBodyContent(
+      "<math><mrow style='display: block'>"
+      "<mi id='b_start'>a</mi><iframe srcdoc='hello'></iframe>"
+      "<mi id='b_end'>b</mi></mrow></math>");
+
+  Element* b_start = GetElementById("b_start");
+  Element* b_end = GetElementById("b_end");
+  ASSERT_TRUE(b_start);
+  ASSERT_TRUE(b_end);
+
+  std::string block_serialized = SerializePart<EditingStrategy>(
+      Position(b_start->firstChild(), 0), Position(b_end->firstChild(), 1),
+      ShouldAnnotateOptions());
+
+  SetBodyContent(block_serialized);
+  Element* block_iframe = QuerySelector("iframe");
+  ASSERT_TRUE(block_iframe);
+  EXPECT_EQ(mathml_names::kNamespaceURI, block_iframe->namespaceURI());
 }
 
 }  // namespace blink

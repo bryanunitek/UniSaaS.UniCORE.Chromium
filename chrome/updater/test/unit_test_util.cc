@@ -4,7 +4,10 @@
 
 #include "chrome/updater/test/unit_test_util.h"
 
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -33,8 +36,7 @@
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/task_runner.h"
 #include "base/task/task_traits.h"
@@ -43,6 +45,7 @@
 #include "base/test/multiprocess_test.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "base/version.h"
@@ -254,7 +257,7 @@ bool DeleteFileAndEmptyParentDirectories(
 }
 
 base::FilePath GetLogDestinationDir() {
-  const char* var = std::getenv("ISOLATED_OUTDIR");
+  const char* var = getenv("ISOLATED_OUTDIR");
   return var ? base::FilePath::FromUTF8Unsafe(var) : base::FilePath();
 }
 
@@ -319,9 +322,11 @@ base::FilePath StartProcmonLogging() {
   const base::FilePath pmc_path(GetTestFilePath("ProcmonConfiguration.pmc"));
   CHECK(base::PathExists(pmc_path));
 
-  const base::FilePath pml_file(
-      dest_dir.Append(base::UTF8ToWide(base::UnlocalizedTimeFormatWithPattern(
-          base::Time::Now(), "yyMMdd-HHmmss.'PML'"))));
+  base::Time::Exploded exploded;
+  base::Time::Now().LocalExplode(&exploded);
+  const base::FilePath pml_file(dest_dir.AppendASCII(base::StringPrintf(
+      "%02d%02d%02d-%02d%02d%02d.PML", exploded.year % 100, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second)));
 
   const std::wstring& cmdline = base::StrCat(
       {kProcmonPath, L" /AcceptEula /LoadConfig ",
@@ -450,7 +455,7 @@ void SetupFakeUpdaterVersion(UpdaterScope scope,
   std::vector<uint32_t> components = base_version.components();
   base::CheckedNumeric<uint32_t> new_version = components[0];
   new_version += major_version_offset;
-  ASSERT_TRUE(new_version.AssignIfValid(&components[0]));
+  ASSERT_TRUE(new_version.AssignIfValid(components.data()));
   SetupFakeUpdater(scope, base::Version(std::move(components)),
                    should_create_updater_executable);
 }

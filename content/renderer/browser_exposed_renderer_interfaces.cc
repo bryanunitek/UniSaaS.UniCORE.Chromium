@@ -19,6 +19,7 @@
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
+#include "components/vrp_flags/buildflags.h"
 #include "content/common/features.h"
 #include "content/common/frame.mojom.h"
 #include "content/public/common/content_client.h"
@@ -28,12 +29,19 @@
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/service_worker/embedded_worker_instance_client_impl.h"
 #include "content/renderer/worker/shared_worker_factory_impl.h"
-#include "content/services/auction_worklet/auction_worklet_service_impl.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "v8/include/cppgc/heap-statistics.h"
+#include "v8/include/v8-cppgc.h"
 #include "v8/include/v8-isolate.h"
 #include "v8/include/v8-statistics.h"
+
+#if BUILDFLAG(ENABLE_VRP_FLAGS)
+#include "components/vrp_flags/vrp_flags.h"        // nogncheck
+#include "components/vrp_flags/vrp_flags.mojom.h"  // nogncheck
+#include "components/vrp_flags/vrp_flags_impl.h"   // nogncheck
+#endif
 
 namespace content {
 
@@ -57,21 +65,35 @@ class ResourceUsageReporterImpl : public content::mojom::ResourceUsageReporter {
       base::WeakPtr<ResourceUsageReporterImpl> impl) {
     size_t total_bytes = 0;
     size_t used_bytes = 0;
+    size_t cppgc_allocated_bytes = 0;
+    size_t cppgc_used_bytes = 0;
     v8::Isolate* isolate = v8::Isolate::GetCurrent();
     if (isolate) {
       v8::HeapStatistics heap_stats;
       isolate->GetHeapStatistics(&heap_stats);
       total_bytes = heap_stats.total_heap_size();
       used_bytes = heap_stats.used_heap_size();
+      if (v8::CppHeap* cpp_heap = isolate->GetCppHeap()) {
+        cppgc::HeapStatistics cppgc_stats =
+            cpp_heap->CollectStatistics(cppgc::HeapStatistics::kBrief);
+        cppgc_allocated_bytes = cppgc_stats.committed_size_bytes;
+        cppgc_used_bytes = cppgc_stats.used_size_bytes;
+      }
     }
     master->PostTask(FROM_HERE,
                      base::BindOnce(&ResourceUsageReporterImpl::ReceiveStats,
-                                    impl, total_bytes, used_bytes));
+                                    impl, total_bytes, used_bytes,
+                                    cppgc_allocated_bytes, cppgc_used_bytes));
   }
 
-  void ReceiveStats(size_t total_bytes, size_t used_bytes) {
+  void ReceiveStats(size_t total_bytes,
+                    size_t used_bytes,
+                    size_t cppgc_allocated_bytes,
+                    size_t cppgc_used_bytes) {
     usage_data_->v8_bytes_allocated += total_bytes;
     usage_data_->v8_bytes_used += used_bytes;
+    usage_data_->cppgc_bytes_allocated += cppgc_allocated_bytes;
+    usage_data_->cppgc_bytes_used += cppgc_used_bytes;
     workers_to_go_--;
     if (!workers_to_go_)
       SendResults();
@@ -90,6 +112,7 @@ class ResourceUsageReporterImpl : public content::mojom::ResourceUsageReporter {
     weak_factory_.InvalidateWeakPtrs();
     usage_data_ = mojom::ResourceUsageData::New();
     usage_data_->reports_v8_stats = true;
+    usage_data_->reports_cppgc_stats = true;
     callback_ = std::move(callback);
 
     // Since it is not safe to call any Blink or V8 functions until Blink has
@@ -110,6 +133,12 @@ class ResourceUsageReporterImpl : public content::mojom::ResourceUsageReporter {
       isolate->GetHeapStatistics(&heap_stats);
       usage_data_->v8_bytes_allocated = heap_stats.total_heap_size();
       usage_data_->v8_bytes_used = heap_stats.used_heap_size();
+      if (v8::CppHeap* cpp_heap = isolate->GetCppHeap()) {
+        cppgc::HeapStatistics cppgc_stats =
+            cpp_heap->CollectStatistics(cppgc::HeapStatistics::kBrief);
+        usage_data_->cppgc_bytes_allocated = cppgc_stats.committed_size_bytes;
+        usage_data_->cppgc_bytes_used = cppgc_stats.used_size_bytes;
+      }
     }
     base::RepeatingClosure collect =
         base::BindRepeating(&ResourceUsageReporterImpl::CollectOnWorkerThread,
@@ -192,12 +221,6 @@ void ExposeRendererInterfacesToBrowser(
   binders->Add<mojom::ResourceUsageReporter>(
       base::BindRepeating(&CreateResourceUsageReporter, render_thread),
       base::SingleThreadTaskRunner::GetCurrentDefault());
-#if BUILDFLAG(IS_ANDROID)
-  binders->Add<auction_worklet::mojom::AuctionWorkletService>(
-
-      &auction_worklet::AuctionWorkletServiceImpl::CreateForRenderer,
-      base::SingleThreadTaskRunner::GetCurrentDefault());
-#endif
 
   auto task_runner_for_service_worker_startup =
       base::ThreadPool::CreateSingleThreadTaskRunner(
@@ -227,6 +250,17 @@ void ExposeRendererInterfacesToBrowser(
                             render_thread),
         base::SingleThreadTaskRunner::GetCurrentDefault());
   }
+
+#if BUILDFLAG(ENABLE_VRP_FLAGS)
+  if (vrp_flags::IsEnabled()) {
+    binders->Add<vrp_flags::mojom::VrpFlags>(
+        base::BindRepeating(
+            [](mojo::PendingReceiver<vrp_flags::mojom::VrpFlags> receiver) {
+              vrp_flags::VrpFlagsImpl::GetInstance()->Bind(std::move(receiver));
+            }),
+        base::SingleThreadTaskRunner::GetCurrentDefault());
+  }
+#endif
 
   GetContentClient()->renderer()->ExposeInterfacesToBrowser(binders);
 }

@@ -19,6 +19,8 @@ import android.text.format.DateUtils;
 import androidx.annotation.IntDef;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.TriState;
+import org.chromium.base.TriStateUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -31,7 +33,6 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.intents.BrowserIntentUtils;
 import org.chromium.chrome.browser.metrics.SimpleStartupForegroundSessionDetector;
 import org.chromium.chrome.browser.page_load_metrics.PageLoadMetrics;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.Tab.LoadUrlResult;
 import org.chromium.chrome.browser.tab.TabHidingType;
@@ -51,9 +52,9 @@ import java.util.List;
 
 /** A {@link TabObserver} that also handles custom tabs specific logging and messaging. */
 @NullMarked
-public class CustomTabObserver extends EmptyTabObserver {
+public class CustomTabObserver implements TabObserver {
     private final @Nullable CustomTabsConnection mCustomTabsConnection;
-    private final @Nullable SessionHolder<?> mSession;
+    private final @Nullable SessionHolder mSession;
 
     private final NavigationInfoCaptureTrigger mNavigationInfoCaptureTrigger =
             new NavigationInfoCaptureTrigger(this::captureNavigationInfo);
@@ -68,9 +69,9 @@ public class CustomTabObserver extends EmptyTabObserver {
     private long mLaunchedForSpeculationRealtimeMillis;
     private long mLaunchedForSpeculationUptimeMillis;
 
-    // true/false if the mayLaunchUrl API was used and the speculation was used/not used. null if
-    // the API was not used.
-    private @Nullable Boolean mUsedHiddenTabSpeculation;
+    // TriState indicating if the mayLaunchUrl API was used and the speculation was used/not used
+    // (TriState.TRUE / TriState.FALSE). TriState.NOT_SET if the API was not used.
+    private @TriState int mUsedHiddenTabSpeculation;
 
     // The time of the first navigation commit in the most recent Custom Tab launch.
     private long mFirstCommitRealtimeMillis;
@@ -162,7 +163,7 @@ public class CustomTabObserver extends EmptyTabObserver {
         }
     }
 
-    public CustomTabObserver(boolean openedByChrome, @Nullable SessionHolder<?> token) {
+    public CustomTabObserver(boolean openedByChrome, @Nullable SessionHolder token) {
         mCustomTabsConnection = openedByChrome ? null : CustomTabsConnection.getInstance();
         mSession = token;
         if (mCustomTabsConnection != null
@@ -220,7 +221,7 @@ public class CustomTabObserver extends EmptyTabObserver {
         // If page load is already being tracked, it must have been an early nav - nothing to do
         // here.
         if (mIntentReceivedRealtimeMillis != 0) return;
-        mUsedHiddenTabSpeculation = usedSpeculation;
+        mUsedHiddenTabSpeculation = TriStateUtils.from(usedSpeculation);
         mLaunchedForSpeculationRealtimeMillis =
                 BrowserIntentUtils.getLaunchedRealtimeMillis(sourceIntent);
         mLaunchedForSpeculationUptimeMillis =
@@ -322,8 +323,8 @@ public class CustomTabObserver extends EmptyTabObserver {
         String suffix = null;
         long duration = 0;
         // Note that this will exclude Webapp launches in all cases due to either
-        // mUsedHiddenTabSpeculation being null, or mIntentReceivedTimestamp being 0.
-        if (mUsedHiddenTabSpeculation != null && mUsedHiddenTabSpeculation) {
+        // mUsedHiddenTabSpeculation being TriState.NOT_SET, or mIntentReceivedTimestamp being 0.
+        if (mUsedHiddenTabSpeculation == TriState.TRUE) {
             duration = mFirstCommitRealtimeMillis - mLaunchedForSpeculationRealtimeMillis;
             suffix = ".Speculated";
         } else if (mIntentReceivedRealtimeMillis > 0) {
@@ -400,8 +401,8 @@ public class CustomTabObserver extends EmptyTabObserver {
         String suffix = null;
         long duration = 0;
         // Note that this will exclude Webapp launches in all cases due to either
-        // mUsedHiddenTabSpeculation being null, or mIntentReceivedTimestamp being 0.
-        if (mUsedHiddenTabSpeculation != null && mUsedHiddenTabSpeculation) {
+        // mUsedHiddenTabSpeculation being TriState.NOT_SET, or mIntentReceivedTimestamp being 0.
+        if (mUsedHiddenTabSpeculation == TriState.TRUE) {
             duration = paintUptimeMillis - mLaunchedForSpeculationUptimeMillis;
             suffix = ".Speculated";
         } else if (mIntentReceivedRealtimeMillis > 0) {
@@ -502,12 +503,12 @@ public class CustomTabObserver extends EmptyTabObserver {
                     webContents,
                     mContentBitmapWidth,
                     mContentBitmapHeight,
-                    (@Nullable Uri snapshotPath) -> {
-                        mCustomTabsConnection.sendNavigationInfo(
-                                mSession, urlString, title, snapshotPath);
-                    });
+                    (@Nullable Uri snapshotPath) ->
+                            mCustomTabsConnection.sendNavigationInfo(
+                                    mSession, urlString, title, snapshotPath));
         } else {
-            mCustomTabsConnection.sendNavigationInfo(mSession, urlString, title, /* snapshotPath= */ null);
+            mCustomTabsConnection.sendNavigationInfo(
+                    mSession, urlString, title, /* snapshotPath= */ null);
         }
     }
 

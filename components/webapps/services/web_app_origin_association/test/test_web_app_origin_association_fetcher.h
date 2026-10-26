@@ -9,10 +9,6 @@
 
 #include "components/webapps/services/web_app_origin_association/web_app_origin_association_fetcher.h"
 
-namespace network {
-class SharedURLLoaderFactory;
-}  // namespace network
-
 namespace webapps {
 
 class TestWebAppOriginAssociationFetcher
@@ -28,8 +24,10 @@ class TestWebAppOriginAssociationFetcher
   // WebAppOriginAssociationFetcher:
   void FetchWebAppOriginAssociationFile(
       const url::Origin& origin,
-      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+      network::mojom::IPAddressSpace initiator_address_space,
       FetchFileCallback callback) override;
+  void FetchWebAppOriginAssociationFile(const url::Origin& origin,
+                                        FetchFileCallback callback) override;
 
   void SetData(std::map<url::Origin, std::string> data);
 

@@ -24,6 +24,8 @@
 
 using ::testing::_;
 
+using read_anything::mojom::ReadAnythingOpenTrigger;
+
 namespace {
 constexpr base::TimeDelta kMinSessionDuration = base::Seconds(10);
 constexpr base::TimeDelta kUsageHistoryWindow = base::Days(14);
@@ -56,9 +58,8 @@ class ReadAnythingHatsSurveyControllerUnitTest : public testing::Test {
 
     side_panel_registry_ = std::make_unique<SidePanelRegistry>(mock_tab_.get());
 
-    scoped_feature_list_.InitWithFeatures(
-        {features::kImmersiveReadAnything, features::kHatsReadingModeSurvey},
-        {});
+    scoped_feature_list_.InitWithFeatures({features::kHatsReadingModeSurvey},
+                                          {});
 
     controller_ = std::make_unique<ReadAnythingController>(
         mock_tab_.get(), side_panel_registry_.get());
@@ -98,7 +99,7 @@ class ReadAnythingHatsSurveyControllerUnitTest : public testing::Test {
 TEST_F(ReadAnythingHatsSurveyControllerUnitTest, UsageRecordedOnSessionEnd) {
   PrefService* prefs = testing_profile_->GetPrefs();
 
-  survey_controller_->Activate(false, std::nullopt,
+  survey_controller_->Activate(false, ReadAnythingOpenTrigger::kUnknown,
                                kMinSessionDuration + base::Seconds(1));
 
   const base::ListValue& usages =
@@ -114,7 +115,7 @@ TEST_F(ReadAnythingHatsSurveyControllerUnitTest, UsagePrunedOlderThan14Days) {
   prefs->SetList(prefs::kAccessibilityReadAnythingRecentUsagesStartTimes,
                  std::move(usages));
 
-  survey_controller_->Activate(false, std::nullopt,
+  survey_controller_->Activate(false, ReadAnythingOpenTrigger::kUnknown,
                                kMinSessionDuration + base::Seconds(1));
 
   const base::ListValue& final_usages =
@@ -132,7 +133,7 @@ TEST_F(ReadAnythingHatsSurveyControllerUnitTest, UsageListCappedAtThree) {
   prefs->SetList(prefs::kAccessibilityReadAnythingRecentUsagesStartTimes,
                  std::move(usages));
 
-  survey_controller_->Activate(false, std::nullopt,
+  survey_controller_->Activate(false, ReadAnythingOpenTrigger::kUnknown,
                                kMinSessionDuration + base::Seconds(1));
 
   const base::ListValue& final_usages =
@@ -146,7 +147,8 @@ TEST_F(ReadAnythingHatsSurveyControllerUnitTest,
               LaunchDelayedSurveyForWebContents(_, _, _, _, _, _, _, _, _, _))
       .Times(0);
 
-  survey_controller_->Activate(false, std::nullopt, base::Seconds(5));
+  survey_controller_->Activate(false, ReadAnythingOpenTrigger::kUnknown,
+                               base::Seconds(5));
 }
 
 TEST_F(ReadAnythingHatsSurveyControllerUnitTest,
@@ -156,7 +158,8 @@ TEST_F(ReadAnythingHatsSurveyControllerUnitTest,
       .Times(0);
 
   // Passing std::nullopt simulates a presentation transition or early close.
-  survey_controller_->Activate(false, std::nullopt, std::nullopt);
+  survey_controller_->Activate(false, ReadAnythingOpenTrigger::kUnknown,
+                               std::nullopt);
 
   // Verify usage wasn't recorded either.
   PrefService* prefs = testing_profile_->GetPrefs();
@@ -178,7 +181,7 @@ TEST_F(ReadAnythingHatsSurveyControllerUnitTest,
               LaunchDelayedSurveyForWebContents(_, _, _, _, _, _, _, _, _, _))
       .Times(0);
 
-  survey_controller_->Activate(false, std::nullopt,
+  survey_controller_->Activate(false, ReadAnythingOpenTrigger::kUnknown,
                                kMinSessionDuration + base::Seconds(1));
 }
 
@@ -197,6 +200,6 @@ TEST_F(ReadAnythingHatsSurveyControllerUnitTest, SurveyShownIfConditionsMet) {
       .Times(1)
       .WillOnce(testing::Return(HatsService::LaunchError::kNone));
 
-  survey_controller_->Activate(false, std::nullopt,
+  survey_controller_->Activate(false, ReadAnythingOpenTrigger::kUnknown,
                                kMinSessionDuration + base::Seconds(1));
 }

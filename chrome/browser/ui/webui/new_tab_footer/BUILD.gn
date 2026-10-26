@@ -37,10 +37,10 @@ source_set("impl") {
     "new_tab_footer_helper.cc",
     "new_tab_footer_ui.cc",
   ]
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
   deps = [
     ":new_tab_footer",
     "//chrome/browser:browser_process",
+    "//chrome/browser/enterprise",
     "//chrome/browser/enterprise/browser_management:management_identity",
     "//chrome/browser/extensions",
     "//chrome/browser/new_tab_page",
@@ -49,9 +49,11 @@ source_set("impl") {
     "//chrome/browser/resources/new_tab_shared:resources_grit",
     "//chrome/browser/search",
     "//chrome/browser/ui:browser_actions",
+    "//chrome/browser/ui:managed_ui",
     "//chrome/browser/ui/browser_window",
-    "//chrome/browser/ui/side_panel:side_panel_views_dependent",
+    "//chrome/browser/ui/side_panel",
     "//chrome/browser/ui/views/side_panel",
+    "//chrome/browser/ui/views/side_panel/customize_chrome",
     "//chrome/browser/ui/webui:webui_util",
     "//chrome/browser/ui/webui/customize_buttons",
     "//chrome/browser/ui/webui/new_tab_page_third_party",
@@ -89,6 +91,7 @@ source_set("browser_tests") {
   ]
   deps = [
     ":test_support",
+    "//chrome/browser/ui:browser_actions",
     "//chrome/browser/ui/webui:webui_util",
     "//chrome/browser/ui/webui/top_chrome:test_support",
     "//mojo/public/cpp/test_support:test_utils",
@@ -102,6 +105,8 @@ source_set("unit_tests") {
     ":test_support",
     "//chrome/browser/enterprise/browser_management:management_identity",
     "//chrome/browser/ui/webui:webui_util",
+    "//chrome/browser/ui/webui/util",
+    "//chrome/test/base:testing_browser_process",
     "//components/themes",
   ]
 }

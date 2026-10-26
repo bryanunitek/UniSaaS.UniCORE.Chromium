@@ -27,7 +27,9 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/sequence_checker.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_split_win.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
@@ -143,6 +145,60 @@ PACKAGE_VERSION GetMinPackageVersion(const std::string& ep_name) {
       .Build = base::checked_cast<USHORT>(components[2]),
       .Revision = base::checked_cast<USHORT>(components[3]),
   };
+}
+
+using TestingEp = std::pair<std::string, mojom::EpPackageInfoPtr>;
+
+// Parses the `kWebNNOrtEpLibraryPathForTesting` switch and returns the EP names
+// and fabricated `EpPackageInfo`s with an empty `family_name` (so that
+// `Environment::Create()` skips `InitializePackageDependency` for them).
+// Returns an empty vector if the switch is absent or any entry is invalid.
+std::vector<TestingEp> ParseTestingEpLibraryPathSwitch(
+    const base::CommandLine& command_line) {
+  std::wstring value = command_line.GetSwitchValueNative(
+      switches::kWebNNOrtEpLibraryPathForTesting);
+  if (value.empty()) {
+    return {};
+  }
+
+  std::vector<TestingEp> testing_eps;
+  for (const std::wstring& entry : base::SplitString(
+           value, L",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL)) {
+    std::vector<std::wstring> parts = base::SplitString(
+        entry, L"?", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
+    if (parts.size() != 2 || parts[0].empty() || parts[1].empty()) {
+      LOG(WARNING) << "[WebNN] Invalid value of the switch "
+                   << switches::kWebNNOrtEpLibraryPathForTesting
+                   << ": Invalid entry [" << base::WideToUTF8(entry)
+                   << "]. Each entry should be in the format of "
+                      "<ep_name>?<ep_library_path> and entries should be "
+                      "separated by \",\". The switch will be ignored.";
+      return {};
+    }
+
+    std::string ep_name = base::WideToUTF8(parts[0]);
+    if (!kKnownEPs.contains(ep_name)) {
+      LOG(WARNING) << "[WebNN] Invalid value of the switch "
+                   << switches::kWebNNOrtEpLibraryPathForTesting
+                   << ": The specified EP name [" << ep_name
+                   << "] is not recognized. The switch will be ignored.";
+      return {};
+    }
+    if (std::ranges::contains(testing_eps, ep_name, &TestingEp::first)) {
+      LOG(WARNING) << "[WebNN] Invalid value of the switch "
+                   << switches::kWebNNOrtEpLibraryPathForTesting
+                   << ": The EP name [" << ep_name
+                   << "] is specified more than once. The switch will be "
+                      "ignored.";
+      return {};
+    }
+    testing_eps.emplace_back(std::move(ep_name),
+                             mojom::EpPackageInfo::New(
+                                 /*family_name=*/std::wstring(),
+                                 /*version=*/PACKAGE_VERSION{},
+                                 /*library_path=*/base::FilePath(parts[1])));
+  }
+  return testing_eps;
 }
 
 auto CloneMap(const EpPackageInfoMap& map) {
@@ -523,6 +579,9 @@ class ExecutionProviderInitializer {
 
     state_ = State::kEpsEnsured;
 
+    AddTestingEpsFromCommandLine(*base::CommandLine::ForCurrentProcess(),
+                                 ep_package_info_map_);
+
     while (!pending_callbacks_.empty()) {
       std::move(pending_callbacks_.front()).Run(CloneMap(ep_package_info_map_));
       pending_callbacks_.pop();
@@ -556,6 +615,15 @@ class ExecutionProviderInitializer {
 };
 
 }  // namespace
+
+void AddTestingEpsFromCommandLine(const base::CommandLine& command_line,
+                                  EpPackageInfoMap& ep_package_info_map) {
+  for (auto& [ep_name, package_info] :
+       ParseTestingEpLibraryPathSwitch(command_line)) {
+    ep_package_info_map.insert_or_assign(std::move(ep_name),
+                                         std::move(package_info));
+  }
+}
 
 void EnsureExecutionProvidersReady(
     base::OnceCallback<void(EpPackageInfoMap)> callback) {

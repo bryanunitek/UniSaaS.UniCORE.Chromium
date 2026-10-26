@@ -7,7 +7,10 @@
 #include <functional>
 #include <list>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "base/auto_reset.h"
 #include "base/functional/callback_helpers.h"
@@ -15,6 +18,9 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
@@ -789,6 +795,356 @@ TEST_F(InteractiveTestTest, EnsurePresentFails) {
     EXPECT_FALSE(RunTestSequenceInContext(
         kTestContext2, InAnyContext(EnsurePresent(kTestId2))));
   });
+}
+
+TEST_F(InteractiveTestTest, WaitForElementCount_FromBelow) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1);
+
+  // These elements should be irrelevant.
+  TestElement e4(kTestId1, kTestContext2);
+  TestElement e5(kTestId2, kTestContext1);
+  e4.Show();
+  e5.Show();
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Show(); }, [&e2] { e2.Show(); }, [&e2] { e2.Hide(); },
+               [&e2] { e2.Show(); },
+               [&e3, &expect_done] {
+                 expect_done = true;
+                 e3.Show();
+               });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      WithoutDelay(WaitForElementCount(kTestId1, 3U),
+                   Check([&expect_done] { return expect_done; })));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementCount_FromAbove) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1);
+  e1.Show();
+  e2.Show();
+  e3.Show();
+
+  // These elements should be irrelevant.
+  TestElement e4(kTestId1, kTestContext2);
+  TestElement e5(kTestId2, kTestContext1);
+  e4.Show();
+  e5.Show();
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Hide(); }, [&e1] { e1.Show(); }, [&e2] { e2.Hide(); },
+               [&e1, &expect_done] {
+                 expect_done = true;
+                 e1.Hide();
+               });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      WithoutDelay(WaitForElementCount(kTestId1, 1U),
+                   Check([&expect_done] { return expect_done; })));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementCount_InAnyContext_FromBelow) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext2);
+  TestElement e3(kTestId1, kTestContext2);
+
+  // This element should be irrelevant.
+  TestElement e4(kTestId2, kTestContext1);
+  e4.Show();
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Show(); }, [&e2] { e2.Show(); }, [&e2] { e2.Hide(); },
+               [&e2] { e2.Show(); },
+               [&e3, &expect_done] {
+                 expect_done = true;
+                 e3.Show();
+               });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      InAnyContext(WithoutDelay(WaitForElementCount(kTestId1, 3U)),
+                   Check([&expect_done] { return expect_done; })));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementCount_InAnyContext_FromAbove) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext2);
+  TestElement e3(kTestId1, kTestContext2);
+  e1.Show();
+  e2.Show();
+  e3.Show();
+
+  // This element should be irrelevant.
+  TestElement e4(kTestId2, kTestContext1);
+  e4.Show();
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions([&e2] { e2.Hide(); }, [&e2] { e2.Show(); }, [&e1] { e1.Hide(); },
+               [&e2, &expect_done] {
+                 expect_done = true;
+                 e2.Hide();
+               });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      InAnyContext(WithoutDelay(WaitForElementCount(kTestId1, 1U)),
+                   Check([&expect_done] { return expect_done; })));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementMatching_Poll) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1);
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Show(); }, [&e2] { e2.Show(); },
+               [&e3, &expect_done] {
+                 expect_done = true;
+                 e3.Show();
+               });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      WithoutDelay(
+          WaitForElementMatching(
+              kTestId1, [&e3](const TrackedElement* el) { return el == &e3; }),
+          Check([&expect_done] { return expect_done; })));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementMatching_NoPoll) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1);
+
+  std::set<const TestElement*> elements;
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions(
+      [&e1] { e1.Show(); }, [&e2] { e2.Show(); },
+      // This should not trigger since we only transition on elements appearing.
+      [&] { elements.insert(&e1); },
+      [&] {
+        elements.insert(&e3);
+        expect_done = true;
+        e3.Show();
+      });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      WithoutDelay(WaitForElementMatching(
+                       kTestId1,
+                       [&](const TrackedElement* el) {
+                         return elements.contains(el->AsA<TestElement>());
+                       },
+                       /*poll=*/false),
+                   Check([&expect_done] { return expect_done; })));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementMatching_InAnyContext_Poll) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext2);
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Show(); }, [&e2] { e2.Show(); },
+               [&e3, &expect_done] {
+                 expect_done = true;
+                 e3.Show();
+               });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      InAnyContext(WithoutDelay(
+          WaitForElementMatching(
+              kTestId1, [&e3](const TrackedElement* el) { return el == &e3; }),
+          Check([&expect_done] { return expect_done; }))));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementMatching_InAnyContext_NoPoll) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext2);
+
+  std::set<const TestElement*> elements;
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions(
+      [&e1] { e1.Show(); }, [&e2] { e2.Show(); },
+      // This should not trigger since we only transition on elements appearing.
+      [&] { elements.insert(&e1); },
+      [&] {
+        elements.insert(&e3);
+        expect_done = true;
+        e3.Show();
+      });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      InAnyContext(
+          WithoutDelay(WaitForElementMatching(
+                           kTestId1,
+                           [&](const TrackedElement* el) {
+                             return elements.contains(el->AsA<TestElement>());
+                           },
+                           /*poll=*/false),
+                       Check([&expect_done] { return expect_done; }))));
+}
+
+TEST_F(InteractiveTestTest, NameElementMatching) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1);
+  e1.Show();
+  e2.Show();
+  e3.Show();
+
+  constexpr std::string_view kName = "name";
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      NameElementMatching(kTestId1, kName,
+                          [&](const TrackedElement* el) { return el == &e2; }),
+      CheckElement(kName, [](ui::TrackedElement* el) { return el; }, &e2));
+}
+
+TEST_F(InteractiveTestTest, NameElementMatching_InAnyContext) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext2);
+  TestElement e3(kTestId1, kTestContext1);
+  e1.Show();
+  e2.Show();
+  e3.Show();
+
+  constexpr std::string_view kName = "name";
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      InAnyContext(
+          NameElementMatching(
+              kTestId1, kName,
+              [&](const TrackedElement* el) { return el == &e2; }),
+          CheckElement(kName, [](ui::TrackedElement* el) { return el; }, &e2)));
+}
+
+TEST_F(InteractiveTestTest, NameElementWithSecondaryId_NoWait) {
+  constexpr std::string_view kSecondaryId = "secondary-id";
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1, kSecondaryId);
+  e1.Show();
+  e2.Show();
+  e3.Show();
+
+  constexpr std::string_view kName = "name";
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      NameElementWithSecondaryId(kTestId1, kSecondaryId, kName,
+                                 /*wait_for_present=*/false),
+      CheckElement(kName, [](ui::TrackedElement* el) { return el; }, &e3));
+}
+
+TEST_F(InteractiveTestTest, NameElementWithSecondaryId_NoWait_InAnyContext) {
+  constexpr std::string_view kSecondaryId = "secondary-id";
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext2, kSecondaryId);
+  TestElement e3(kTestId1, kTestContext1);
+  e1.Show();
+  e2.Show();
+  e3.Show();
+
+  constexpr std::string_view kName = "name";
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      InAnyContext(
+          NameElementWithSecondaryId(kTestId1, kSecondaryId, kName,
+                                     /*wait_for_present=*/false),
+          CheckElement(kName, [](ui::TrackedElement* el) { return el; }, &e2)));
+}
+
+TEST_F(InteractiveTestTest, NameElementWithSecondaryId_Wait) {
+  constexpr std::string_view kSecondaryId = "secondary-id";
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1, kSecondaryId);
+
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Show(); }, [&e2] { e2.Show(); },
+               [&e3, &expect_done] {
+                 expect_done = true;
+                 e3.Show();
+               });
+
+  constexpr std::string_view kName = "name";
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      InAnyContext(WithoutDelay(
+          NameElementWithSecondaryId(kTestId1, kSecondaryId, kName),
+          Check([&expect_done] { return expect_done; }))));
+}
+
+TEST_F(InteractiveTestTest, NameElementWithSecondaryId_Wait_InAnyContext) {
+  constexpr std::string_view kSecondaryId = "secondary-id";
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext2, kSecondaryId);
+
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Show(); }, [&e2] { e2.Show(); },
+               [&e3, &expect_done] {
+                 expect_done = true;
+                 e3.Show();
+               });
+
+  constexpr std::string_view kName = "name";
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      InAnyContext(WithoutDelay(
+          NameElementWithSecondaryId(kTestId1, kSecondaryId, kName),
+          Check([&expect_done] { return expect_done; }))));
 }
 
 TEST_F(InteractiveTestTest, NameElementWithPointer) {
@@ -2099,5 +2455,317 @@ TEST_F(InteractiveTestTest, TwoAdditionalContexts) {
         return private_test_impl().GetAdditionalContext().empty();
       }));
 }
+
+namespace {
+
+struct ExpectedFrame {
+  std::string container;
+  std::optional<int> step_number;
+  std::string child;
+
+  std::string Format(size_t frame_index) const {
+    std::string result;
+    if (step_number.has_value() && *step_number > 0) {
+      if (!container.empty()) {
+        result = base::StringPrintf("  #%zu: In %s, step %d", frame_index,
+                                    container.c_str(), *step_number);
+      } else {
+        result =
+            base::StringPrintf("  #%zu: step %d", frame_index, *step_number);
+      }
+    } else if (!container.empty()) {
+      result =
+          base::StringPrintf("  #%zu: In %s", frame_index, container.c_str());
+    }
+    if (!child.empty()) {
+      base::StringAppendF(&result, ": %s", child.c_str());
+    }
+    return result;
+  }
+};
+
+ExpectedFrame Frame(std::string container, int step_number, std::string child) {
+  return ExpectedFrame{std::move(container), step_number, std::move(child)};
+}
+
+ExpectedFrame Frame(std::string container, std::string child) {
+  return ExpectedFrame{std::move(container), std::nullopt, std::move(child)};
+}
+
+std::vector<std::string> ExtractNestedStepLines(const std::string& text) {
+  std::vector<std::string> lines;
+  constexpr std::string_view kHeader = "Nested steps (outermost to innermost):";
+  const size_t pos = text.find(kHeader);
+  if (pos == std::string::npos) {
+    return lines;
+  }
+  const std::vector<std::string> all_lines =
+      base::SplitString(text.substr(pos + kHeader.length()), "\n",
+                        base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
+  for (const auto& line : all_lines) {
+    if (base::StartsWith(line, "  #")) {
+      lines.push_back(line);
+    } else if (!lines.empty() && !line.empty()) {
+      break;
+    }
+  }
+  return lines;
+}
+
+MATCHER_P(MatchesStepStack, expected_frames, "") {
+  const std::string text = testing::PrintToString(arg);
+  const std::vector<std::string> actual_lines = ExtractNestedStepLines(text);
+  std::vector<std::string> expected_lines;
+  expected_lines.reserve(expected_frames.size());
+  for (size_t i = 0; i < expected_frames.size(); ++i) {
+    expected_lines.push_back(expected_frames[i].Format(i));
+  }
+
+  if (actual_lines != expected_lines) {
+    *result_listener << "\n  Actual step stack lines (" << actual_lines.size()
+                     << "):\n";
+    for (const auto& line : actual_lines) {
+      *result_listener << "    " << line << "\n";
+    }
+    *result_listener << "  Expected step stack lines (" << expected_lines.size()
+                     << "):\n";
+    for (const auto& line : expected_lines) {
+      *result_listener << "    " << line << "\n";
+    }
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+class StepStackParameterizedTest;
+
+namespace {
+
+struct StepStackTestCase {
+  const char* test_name;
+  base::RepeatingCallback<bool(StepStackParameterizedTest&)> run_sequence;
+  std::vector<ExpectedFrame> expected_stack;
+};
+
+}  // namespace
+
+class StepStackParameterizedTest
+    : public InteractiveTestTest,
+      public testing::WithParamInterface<StepStackTestCase> {
+ public:
+  static auto FailTest() {
+    return Check([]() { return false; }, "Fail");
+  }
+
+  static std::vector<StepStackTestCase> GetTestCases() {
+    return {
+        StepStackTestCase{
+            .test_name = "SingleStep",
+            .run_sequence =
+                base::BindRepeating([](StepStackParameterizedTest& test) {
+                  return test.RunTestSequenceInContext(kTestContext1,
+                                                       FailTest());
+                }),
+            .expected_stack =
+                {
+                    Frame("test", 1, "Check(\"Fail\")"),
+                },
+        },
+        StepStackTestCase{
+            .test_name = "SingleBuiltStep",
+            .run_sequence =
+                base::BindRepeating([](StepStackParameterizedTest& test) {
+                  return test.RunTestSequenceInContext(kTestContext1,
+                                                       FailTest().Build());
+                }),
+            .expected_stack =
+                {
+                    Frame("test", 1, "Check(\"Fail\")"),
+                },
+        },
+        StepStackTestCase{
+            .test_name = "SingleMultiStep",
+            .run_sequence =
+                base::BindRepeating([](StepStackParameterizedTest& test) {
+                  auto custom_multistep = []() {
+                    auto steps = Steps(Do([]() {}), FailTest());
+                    AddDescriptionPrefix(steps, "CustomMultiStep");
+                    return steps;
+                  };
+                  return test.RunTestSequenceInContext(kTestContext1,
+                                                       custom_multistep());
+                }),
+            .expected_stack =
+                {
+                    Frame("test", 1, "CustomMultiStep"),
+                    Frame("CustomMultiStep", 2, "Check(\"Fail\")"),
+                },
+        },
+        StepStackTestCase{
+            .test_name = "AnonymousMultiStep",
+            .run_sequence =
+                base::BindRepeating([](StepStackParameterizedTest& test) {
+                  auto anonymous_multistep = []() {
+                    return Steps(Do([]() {}), FailTest());
+                  };
+                  return test.RunTestSequenceInContext(kTestContext1,
+                                                       anonymous_multistep());
+                }),
+            .expected_stack =
+                {
+                    Frame("test", 1, ""),
+                    Frame("", 2, "Check(\"Fail\")"),
+                },
+        },
+        StepStackTestCase{
+            .test_name = "NestedMultiSteps",
+            .run_sequence =
+                base::BindRepeating([](StepStackParameterizedTest& test) {
+                  auto inner_multistep = []() {
+                    auto steps = Steps(FailTest());
+                    AddDescriptionPrefix(steps, "InnerMultiStep");
+                    return steps;
+                  };
+                  auto outer_multistep = [&inner_multistep]() {
+                    auto steps = Steps(inner_multistep());
+                    AddDescriptionPrefix(steps, "OuterMultiStep");
+                    return steps;
+                  };
+                  return test.RunTestSequenceInContext(kTestContext1,
+                                                       outer_multistep());
+                }),
+            .expected_stack =
+                {
+                    Frame("test", 1, "OuterMultiStep"),
+                    Frame("OuterMultiStep", 1, "InnerMultiStep"),
+                    Frame("InnerMultiStep", 1, "Check(\"Fail\")"),
+                },
+        },
+        StepStackTestCase{
+            .test_name = "IfThen",
+            .run_sequence =
+                base::BindRepeating([](StepStackParameterizedTest& test) {
+                  return test.RunTestSequenceInContext(
+                      kTestContext1, If([]() { return true; }, Then(FailTest()),
+                                        Else(Do([]() {}))));
+                }),
+            .expected_stack =
+                {
+                    Frame("test", 1, "If()"),
+                    Frame("If()", ""),
+                    Frame("", 1, "Check(\"Fail\")"),
+                },
+        },
+        StepStackTestCase{
+            .test_name = "IfElse",
+            .run_sequence =
+                base::BindRepeating([](StepStackParameterizedTest& test) {
+                  return test.RunTestSequenceInContext(
+                      kTestContext1, If([]() { return false; },
+                                        Then(Do([]() {})), Else(FailTest())));
+                }),
+            .expected_stack =
+                {
+                    Frame("test", 1, "If()"),
+                    Frame("If()", ""),
+                    Frame("", 1, "Check(\"Fail\")"),
+                },
+        },
+        StepStackTestCase{
+            .test_name = "InParallel",
+            .run_sequence =
+                base::BindRepeating([](StepStackParameterizedTest& test) {
+                  return test.RunTestSequenceInContext(
+                      kTestContext1, InParallel(RunSubsequence(FailTest()),
+                                                RunSubsequence(Do([]() {}))));
+                }),
+            .expected_stack =
+                {
+                    Frame("test", 1, "InParallel()"),
+                    Frame("InParallel()", ""),
+                    Frame("", 1, "Check(\"Fail\")"),
+                },
+        },
+        StepStackTestCase{
+            .test_name = "ConcatenatedMultiStepWithStepBuilder",
+            .run_sequence =
+                base::BindRepeating([](StepStackParameterizedTest& test) {
+                  auto multi = Steps(Do([]() {}));
+                  multi += FailTest();
+                  return test.RunTestSequenceInContext(kTestContext1,
+                                                       std::move(multi));
+                }),
+            .expected_stack =
+                {
+                    Frame("test", 1, ""),
+                    Frame("", 2, "Check(\"Fail\")"),
+                },
+        },
+        StepStackTestCase{
+            .test_name = "ConcatenatedMultiStepWithMultiStep",
+            .run_sequence =
+                base::BindRepeating([](StepStackParameterizedTest& test) {
+                  auto multi = Steps(Do([]() {}));
+                  auto multi2 = Steps(FailTest());
+                  multi += std::move(multi2);
+                  return test.RunTestSequenceInContext(kTestContext1,
+                                                       std::move(multi));
+                }),
+            .expected_stack =
+                {
+                    Frame("test", 1, ""),
+                    Frame("", 2, "Check(\"Fail\")"),
+                },
+        },
+        StepStackTestCase{
+            .test_name = "ConcatenatedMultiStepWithNamedMultiStep",
+            .run_sequence =
+                base::BindRepeating([](StepStackParameterizedTest& test) {
+                  auto multi = Steps(Do([]() {}));
+                  auto multi2 = Steps(FailTest());
+                  AddDescriptionPrefix(multi2, "CustomVerb");
+                  multi += std::move(multi2);
+                  return test.RunTestSequenceInContext(kTestContext1,
+                                                       std::move(multi));
+                }),
+            .expected_stack =
+                {
+                    Frame("test", 1, ""),
+                    Frame("", 2, "CustomVerb"),
+                    Frame("CustomVerb", 1, "Check(\"Fail\")"),
+                },
+        },
+    };
+  }
+};
+
+TEST_P(StepStackParameterizedTest, StackMatches) {
+  const auto& param = GetParam();
+
+  InteractionSequence::AbortedData aborted_data;
+  private_test_impl().set_aborted_callback_for_testing(
+      base::BindLambdaForTesting(
+          [&](const InteractionSequence::AbortedData& data) {
+            aborted_data = data;
+          }));
+
+  EXPECT_FALSE(param.run_sequence.Run(*this));
+
+  EXPECT_TRUE(aborted_data.aborted_reason ==
+                  InteractionSequence::AbortedReason::kFailedForTesting ||
+              aborted_data.aborted_reason ==
+                  InteractionSequence::AbortedReason::kSubsequenceFailed);
+  EXPECT_THAT(aborted_data, MatchesStepStack(param.expected_stack));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    StepStackParameterizedTest,
+    testing::ValuesIn(StepStackParameterizedTest::GetTestCases()),
+    [](const testing::TestParamInfo<StepStackTestCase>& info) {
+      return info.param.test_name;
+    });
 
 }  // namespace ui::test

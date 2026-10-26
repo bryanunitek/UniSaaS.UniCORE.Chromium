@@ -20,6 +20,7 @@
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/chrome_signin_client_test_util.h"
 #include "chrome/browser/supervised_user/supervised_user_test_util.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
@@ -72,7 +73,7 @@ TEST(SearchURLsTest, MatchesOriginAndPath) {
 
 class SearchTest : public MixinBasedInProcessBrowserTest {
  public:
-  Profile* profile() const { return browser()->profile(); }
+  Profile* profile() const { return browser()->GetProfile(); }
 
  protected:
   void SetUpOnMainThread() override {

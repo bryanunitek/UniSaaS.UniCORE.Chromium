@@ -14,6 +14,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/timer/timer.h"
 #include "base/unguessable_token.h"
 #include "components/media_message_center/media_notification_item.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -88,9 +89,15 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaSessionNotificationItem
       const std::optional<media_session::MediaPosition>& position) override;
 
   // Called when a media session item is associated with a presentation request
-  // to show the origin associated with the request rather than that for the
-  // top frame.
-  void UpdatePresentationRequestOrigin(const url::Origin& origin);
+  // to show the origin associated with the request rather than that for the top
+  // frame.
+  void UpdatePresentationRequestOrigin(
+      const std::optional<url::Origin>& origin);
+
+  const std::optional<url::Origin>& optional_presentation_request_origin()
+      const {
+    return optional_presentation_request_origin_;
+  }
 
   // Called during the creation of the footer view to show / set sink name if
   // there is an active casting session associated with `this` media item.

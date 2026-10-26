@@ -11,8 +11,6 @@ import static org.mockito.Mockito.verify;
 
 import android.app.Activity;
 import android.content.Context;
-import android.view.View;
-import android.widget.RadioButton;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -21,10 +19,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.R;
+import org.chromium.components.embedder_support.delegate.WebContentsDelegateAndroid.ImmersivePlaybackConfirmationCallback;
 import org.chromium.content_public.browser.ImmersivePlaybackConfirmationStatus;
 import org.chromium.content_public.browser.ImmersiveProjectionType;
 import org.chromium.content_public.browser.ImmersiveStereoMode;
@@ -35,7 +33,6 @@ import org.chromium.ui.modelutil.PropertyModel;
 
 /** Tests for {@link ImmersiveVideoFormatSelectionDialog}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ImmersiveVideoFormatSelectionDialogTest {
     @Mock private ModalDialogManager mModalDialogManager;
     @Mock private ImmersivePlaybackConfirmationCallback mCallback;
@@ -47,7 +44,10 @@ public class ImmersiveVideoFormatSelectionDialogTest {
     public void setUp() {
         MockitoAnnotations.openMocks(this);
         mContext = Robolectric.buildActivity(Activity.class).get();
-        mDialog = new ImmersiveVideoFormatSelectionDialog(mContext, mModalDialogManager, mCallback);
+        mContext.setTheme(R.style.Theme_BrowserUI_DayNight);
+        mDialog =
+                new ImmersiveVideoFormatSelectionDialog(
+                        mContext, mModalDialogManager, mCallback::onResult);
     }
 
     @Test
@@ -84,7 +84,8 @@ public class ImmersiveVideoFormatSelectionDialogTest {
                 .onResult(
                         ImmersivePlaybackConfirmationStatus.CONFIRMED,
                         ImmersiveStereoMode.MONO,
-                        ImmersiveProjectionType.QUAD);
+                        ImmersiveProjectionType.QUAD,
+                        false);
     }
 
     @Test
@@ -104,13 +105,8 @@ public class ImmersiveVideoFormatSelectionDialogTest {
         assertNotNull(radioGroup);
 
         // Change selection to 180° stereoscopic
-        RadioButton radioButton =
-                getRadioButtonForFormat(
-                        radioGroup,
-                        ImmersiveStereoMode.SIDE_BY_SIDE,
-                        ImmersiveProjectionType.HEMISPHERE);
-        assertNotNull(radioButton);
-        radioButton.setChecked(true);
+        radioGroup.checkOption(
+                ImmersiveStereoMode.SIDE_BY_SIDE, ImmersiveProjectionType.HEMISPHERE);
 
         // Dismiss with positive button click
         model.get(ModalDialogProperties.CONTROLLER)
@@ -121,7 +117,8 @@ public class ImmersiveVideoFormatSelectionDialogTest {
                 .onResult(
                         ImmersivePlaybackConfirmationStatus.CONFIRMED,
                         ImmersiveStereoMode.SIDE_BY_SIDE,
-                        ImmersiveProjectionType.HEMISPHERE);
+                        ImmersiveProjectionType.HEMISPHERE,
+                        false);
     }
 
     @Test
@@ -143,7 +140,8 @@ public class ImmersiveVideoFormatSelectionDialogTest {
                 .onResult(
                         ImmersivePlaybackConfirmationStatus.DECLINED,
                         ImmersiveStereoMode.MONO,
-                        ImmersiveProjectionType.QUAD);
+                        ImmersiveProjectionType.QUAD,
+                        false);
     }
 
     @Test
@@ -165,24 +163,7 @@ public class ImmersiveVideoFormatSelectionDialogTest {
                 .onResult(
                         ImmersivePlaybackConfirmationStatus.CANCELED,
                         ImmersiveStereoMode.MONO,
-                        ImmersiveProjectionType.QUAD);
-    }
-
-    private @Nullable RadioButton getRadioButtonForFormat(
-            ImmersiveVideoFormatRadioGroup radioGroup,
-            @ImmersiveStereoMode int stereoMode,
-            @ImmersiveProjectionType int projectionType) {
-        for (int i = 0; i < radioGroup.getChildCount(); i++) {
-            View child = radioGroup.getChildAt(i);
-            if (child instanceof RadioButton) {
-                RadioButton radioButton = (RadioButton) child;
-                ImmersiveVideoFormatRadioGroup.FormatOption option =
-                        (ImmersiveVideoFormatRadioGroup.FormatOption) radioButton.getTag();
-                if (option.stereoMode == stereoMode && option.projectionType == projectionType) {
-                    return radioButton;
-                }
-            }
-        }
-        return null;
+                        ImmersiveProjectionType.QUAD,
+                        false);
     }
 }

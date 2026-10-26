@@ -13,7 +13,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/profiles/batch_upload_ui_delegate.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
@@ -45,7 +45,7 @@ class BatchUploadBrowserTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     BatchUploadService* batch_upload_service =
-        BatchUploadServiceFactory::GetForProfile(browser()->profile());
+        BatchUploadServiceFactory::GetForProfile(browser()->GetProfile());
     ASSERT_TRUE(batch_upload_service);
     batch_upload_ = batch_upload_service;
   }
@@ -58,7 +58,8 @@ class BatchUploadBrowserTest : public InProcessBrowserTest {
   // Opens the batch upload dialog using the service from the profile in
   // `browser`. Waits for the batch upload url to load if opening the view was
   // successful and `wait_for_url_load`.
-  bool OpenBatchUpload(Browser* browser, bool wait_for_url_load = true) {
+  bool OpenBatchUpload(BrowserWindowInterface* browser,
+                       bool wait_for_url_load = true) {
     content::TestNavigationObserver observer{
         GURL(chrome::kChromeUIBatchUploadURL)};
     observer.StartWatchingNewWebContents();
@@ -80,7 +81,7 @@ class BatchUploadBrowserTest : public InProcessBrowserTest {
   void SigninWithFullInfo(
       signin::ConsentLevel consent_level = signin::ConsentLevel::kSignin) {
     signin::IdentityManager* identity_manager =
-        IdentityManagerFactory::GetForProfile(browser()->profile());
+        IdentityManagerFactory::GetForProfile(browser()->GetProfile());
     AccountInfo account_info = signin::MakePrimaryAccountAvailable(
         identity_manager, "test@gmail.com", consent_level);
     ASSERT_FALSE(account_info.IsEmpty());
@@ -127,8 +128,8 @@ IN_PROC_BROWSER_TEST_F(
   SigninWithFullInfo();
   test_helper().SetReturnDescriptions(syncer::DataType::PASSWORDS, 1);
 
-  Profile* profile = browser()->profile();
-  Browser* browser_2 = CreateBrowser(profile);
+  Profile* profile = browser()->GetProfile();
+  BrowserWindowInterface* browser_2 = CreateBrowser(profile);
 
   // Second browser opens dialog.
   EXPECT_TRUE(OpenBatchUpload(browser_2));
@@ -153,7 +154,7 @@ IN_PROC_BROWSER_TEST_F(BatchUploadBrowserTest, OpenedDialogThenSigninPending) {
   test_helper().SetReturnDescriptions(syncer::DataType::PASSWORDS, 1);
 
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   CoreAccountInfo primary_account =
       identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
   ASSERT_FALSE(primary_account.IsEmpty());
@@ -188,7 +189,7 @@ IN_PROC_BROWSER_TEST_F(BatchUploadBrowserTest, OpenedDialogThenSignout) {
   test_helper().SetReturnDescriptions(syncer::DataType::PASSWORDS, 1);
 
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   CoreAccountInfo primary_account =
       identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
   ASSERT_FALSE(primary_account.IsEmpty());
@@ -247,7 +248,7 @@ class BatchUploadDelegateFake : public BatchUploadDelegate {
  private:
   // BatchUploadDelegate:
   void ShowBatchUploadDialog(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       std::vector<syncer::LocalDataDescription> local_data_description_list,
       BatchUploadService::EntryPoint entry_point,
       BatchUploadSelectedDataTypeItemsCallback complete_callback) override {
@@ -265,7 +266,7 @@ class BatchUploadWithFakeDelegateBrowserTest : public BatchUploadBrowserTest {
 
   // The fake delegate will never show the actual content, so we should not wait
   // for the url to load.
-  bool OpenBatchUploadWithFakeDelegate(Browser* browser) {
+  bool OpenBatchUploadWithFakeDelegate(BrowserWindowInterface* browser) {
     return OpenBatchUpload(browser,
                            /*wait_for_url_load=*/false);
   }
@@ -281,8 +282,7 @@ class BatchUploadWithFakeDelegateBrowserTest : public BatchUploadBrowserTest {
     auto fake_delegate = std::make_unique<BatchUploadDelegateFake>();
     fake_delegate_ptr_ = fake_delegate.get();
     test_helper().SetupBatchUploadTestingFactoryInProfile(
-        profile, IdentityManagerFactory::GetForProfile(profile),
-        std::move(fake_delegate));
+        profile, std::move(fake_delegate));
   }
 
   raw_ptr<BatchUploadDelegateFake> fake_delegate_ptr_ = nullptr;
@@ -368,7 +368,7 @@ class BatchUploadServiceFactorySyncServiceUnavailableTest
 // Regression test for crbug.com/502567799.
 IN_PROC_BROWSER_TEST_F(BatchUploadServiceFactorySyncServiceUnavailableTest,
                        ReturnsNullWhenSyncServiceIsUnavailable) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   ASSERT_EQ(nullptr, SyncServiceFactory::GetForProfile(profile));
 

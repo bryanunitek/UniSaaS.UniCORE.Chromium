@@ -16,14 +16,18 @@
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "content/browser/hid/hid_test_utils.h"
 #include "content/browser/service_worker/embedded_worker_test_helper.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
+#include "content/browser/worker_host/dedicated_worker_host.h"
+#include "content/browser/worker_host/dedicated_worker_service_impl.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/hid_delegate.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/content_features.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_browser_context.h"
@@ -40,8 +44,11 @@
 #include "services/device/public/cpp/test/fake_hid_manager.h"
 #include "services/device/public/cpp/test/hid_test_util.h"
 #include "services/device/public/cpp/test/test_report_descriptors.h"
+#include "services/network/public/cpp/constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/hid/hid.mojom.h"
 
 namespace content {
@@ -50,15 +57,18 @@ namespace {
 
 using ::base::test::InvokeFuture;
 using ::base::test::RunClosure;
+using ::base::test::RunOnceClosure;
 using ::base::test::TestFuture;
 using ::testing::_;
 using ::testing::ByMove;
 using ::testing::ElementsAre;
 using ::testing::Expectation;
+using ::testing::Ref;
 using ::testing::Return;
 
 enum HidServiceCreationType {
   kCreateUsingRenderFrameHost,
+  kCreateUsingDedicatedWorker,
   kCreateUsingServiceWorkerContextCore,
 };
 
@@ -73,6 +83,8 @@ std::string HidServiceCreationTypeToString(HidServiceCreationType type) {
   switch (type) {
     case kCreateUsingRenderFrameHost:
       return "CreateUsingRenderFrameHost";
+    case kCreateUsingDedicatedWorker:
+      return "CreateUsingDedicatedWorker";
     case kCreateUsingServiceWorkerContextCore:
       return "CreateUsingServiceWorkerContextCore";
   }
@@ -200,6 +212,24 @@ class HidServiceTestHelper {
         device::TestReportDescriptors::FidoU2fHid());
   }
 
+  device::mojom::HidDeviceInfoPtr CreateNestedFidoDevice() {
+    return device::CreateDeviceFromReportDescriptor(
+        /*vendor_id=*/0x1234, /*product_id=*/0xabcd,
+        device::TestReportDescriptors::VendorWithNestedFido());
+  }
+
+  device::mojom::HidDeviceInfoPtr CreateNestedKeyboardDevice() {
+    return device::CreateDeviceFromReportDescriptor(
+        /*vendor_id=*/0x1234, /*product_id=*/0xabcd,
+        device::TestReportDescriptors::VendorWithNestedKeyboard());
+  }
+
+  device::mojom::HidDeviceInfoPtr CreateBootMouseDevice() {
+    return device::CreateDeviceFromReportDescriptor(
+        /*vendor_id=*/0x1234, /*product_id=*/0xabcd,
+        device::TestReportDescriptors::Mouse());
+  }
+
   device::mojom::HidDeviceInfoPtr CreateTitanFidoDevice() {
     return device::CreateDeviceFromReportDescriptor(
         kVendorGoogle, kProductTitan,
@@ -234,7 +264,17 @@ class HidServiceTestHelper {
 
 class HidServiceBaseTest : public testing::Test, public HidServiceTestHelper {
  public:
-  HidServiceBaseTest() = default;
+  HidServiceBaseTest() {
+    feature_list_.InitWithFeatures(
+        /*enabled_features=*/
+        {
+            blink::features::kWebHID,
+#if BUILDFLAG(IS_ANDROID)
+            features::kWebHidOnDesktopAndroidServiceWorkers,
+#endif  // BUILDFLAG(IS_ANDROID)
+        },
+        /*disabled_features=*/{});
+  }
   HidServiceBaseTest(HidServiceBaseTest&) = delete;
   HidServiceBaseTest& operator=(HidServiceBaseTest&) = delete;
   ~HidServiceBaseTest() override = default;
@@ -251,6 +291,29 @@ class HidServiceBaseTest : public testing::Test, public HidServiceTestHelper {
             ->GetPrimaryMainFrame()
             ->GetHidService(service_.BindNewPipeAndPassReceiver());
         break;
+      case kCreateUsingDedicatedWorker: {
+        web_contents_ =
+            web_contents_factory_.CreateWebContents(&browser_context_);
+        static_cast<TestWebContents*>(web_contents_)
+            ->NavigateAndCommit(GURL(kTestUrl));
+        auto* rfh =
+            static_cast<TestWebContents*>(web_contents_)->GetPrimaryMainFrame();
+        dedicated_worker_host_ = std::make_unique<DedicatedWorkerHost>(
+            &dedicated_worker_service_, blink::DedicatedWorkerToken(),
+            rfh->GetProcess(), rfh->GetGlobalId(), rfh->GetWeakDocumentPtr(),
+            rfh->GetStorageKey().origin(), rfh->GetStorageKey(),
+            rfh->GetStorageKey().origin(),
+            rfh->GetIsolationInfoForSubresources(),
+            rfh->BuildClientSecurityState(),
+            rfh->policy_container_host()->policies(),
+            /*creator_coep_reporter=*/nullptr,
+            network::GetTestNetworkRestrictionsId(),
+            mojo::PendingReceiver<blink::mojom::DedicatedWorkerHost>(),
+            net::StorageAccessApiStatus::kNone);
+        dedicated_worker_host_->BindHidService(
+            service_.BindNewPipeAndPassReceiver());
+        break;
+      }
       case kCreateUsingServiceWorkerContextCore: {
         auto scope = GURL(kTestUrl);
         auto origin = url::Origin::Create(scope);
@@ -288,6 +351,7 @@ class HidServiceBaseTest : public testing::Test, public HidServiceTestHelper {
   BrowserContext* GetBrowserContext(HidServiceCreationType type) {
     switch (type) {
       case kCreateUsingRenderFrameHost:
+      case kCreateUsingDedicatedWorker:
         return &browser_context_;
       case kCreateUsingServiceWorkerContextCore:
         if (embedded_worker_test_helper_->context()) {
@@ -302,7 +366,8 @@ class HidServiceBaseTest : public testing::Test, public HidServiceTestHelper {
 
   void CheckHidServiceConnectedState(HidServiceCreationType type,
                                      bool expected_state) {
-    if (type == kCreateUsingRenderFrameHost) {
+    if (type == kCreateUsingRenderFrameHost ||
+        type == kCreateUsingDedicatedWorker) {
       ASSERT_EQ(
           web_contents_->IsCapabilityActive(WebContentsCapabilityType::kHID),
           expected_state);
@@ -334,13 +399,26 @@ class HidServiceBaseTest : public testing::Test, public HidServiceTestHelper {
   raw_ptr<WebContents> web_contents_;  // Owned by |web_contents_factory_|.
   MockHidManagerClient hid_manager_client_;
 
+  // For create hid service using dedicated worker.
+  DedicatedWorkerServiceImpl dedicated_worker_service_;
+  std::unique_ptr<DedicatedWorkerHost> dedicated_worker_host_;
+
   // For create hid service using service worker.
   std::unique_ptr<EmbeddedWorkerTestHelper> embedded_worker_test_helper_;
   scoped_refptr<content::ServiceWorkerVersion> worker_version_;
+  base::test::ScopedFeatureList feature_list_;
 };
 
 class HidServiceRenderFrameHostTest : public RenderViewHostImplTestHarness,
-                                      public HidServiceTestHelper {};
+                                      public HidServiceTestHelper {
+ public:
+  HidServiceRenderFrameHostTest() {
+    scoped_feature_list_.InitAndEnableFeature(blink::features::kWebHID);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
 
 class HidServiceTest
     : public HidServiceBaseTest,
@@ -353,7 +431,11 @@ class HidServiceFidoTest : public HidServiceBaseTest,
  public:
   void SetUp() override {
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kSecurityKeyHidInterfacesAreFido},
+        /*enabled_features=*/
+        {
+            features::kWebHidRecursiveFiltering,
+            features::kSecurityKeyHidInterfacesAreFido,
+        },
         /*disabled_features=*/{});
   }
 
@@ -430,6 +512,9 @@ TEST_P(HidServiceTest, RequestDevice) {
   ConnectDevice(*device_info);
 
   if (service_creation_type == kCreateUsingRenderFrameHost) {
+    static_cast<TestWebContents*>(web_contents_)
+        ->GetPrimaryMainFrame()
+        ->SimulateUserActivation();
     EXPECT_CALL(hid_delegate(), CanRequestDevicePermission)
         .WillOnce(Return(true));
     EXPECT_CALL(hid_delegate(), RunChooserInternal)
@@ -453,6 +538,53 @@ TEST_P(HidServiceTest, RequestDevice) {
   } else {
     EXPECT_EQ(0u, chosen_devices.size());
   }
+}
+
+TEST_P(HidServiceTest, RequestDeviceWithoutUserActivation) {
+  const auto& service = GetService(GetParam());
+
+  ON_CALL(hid_delegate(), CanRequestDevicePermission)
+      .WillByDefault(Return(true));
+  EXPECT_CALL(hid_delegate(), RunChooserInternal).Times(0);
+
+  base::RunLoop run_loop;
+  std::vector<device::mojom::HidDeviceInfoPtr> chosen_devices;
+  service->RequestDevice(
+      std::vector<blink::mojom::HidDeviceFilterPtr>(),
+      std::vector<blink::mojom::HidDeviceFilterPtr>(),
+      base::BindLambdaForTesting(
+          [&run_loop,
+           &chosen_devices](std::vector<device::mojom::HidDeviceInfoPtr> d) {
+            chosen_devices = std::move(d);
+            run_loop.Quit();
+          }));
+  run_loop.Run();
+  EXPECT_EQ(0u, chosen_devices.size());
+}
+
+TEST_P(HidServiceTest, RequestDeviceWhenInactive) {
+  if (GetParam() != kCreateUsingRenderFrameHost) {
+    return;
+  }
+  const auto& service = GetService(GetParam());
+
+  auto* rfh =
+      static_cast<TestWebContents*>(web_contents_)->GetPrimaryMainFrame();
+  rfh->SimulateUserActivation();
+
+  static_cast<RenderFrameHostImpl*>(rfh)->SetLifecycleState(
+      RenderFrameHostLifecycleStateImpl::kRunningUnloadHandlers);
+  EXPECT_FALSE(rfh->IsActive());
+
+  ON_CALL(hid_delegate(), CanRequestDevicePermission)
+      .WillByDefault(Return(true));
+  EXPECT_CALL(hid_delegate(), RunChooserInternal).Times(0);
+
+  TestFuture<std::vector<device::mojom::HidDeviceInfoPtr>> future;
+  service->RequestDevice(std::vector<blink::mojom::HidDeviceFilterPtr>(),
+                         std::vector<blink::mojom::HidDeviceFilterPtr>(),
+                         future.GetCallback());
+  EXPECT_EQ(0u, future.Get().size());
 }
 
 TEST_P(HidServiceTest, OpenAndCloseHidConnection) {
@@ -1053,6 +1185,111 @@ TEST_P(HidServiceTest, OpenDevicesThenRevokePermission) {
   }
 }
 
+TEST_P(HidServiceTest, RevokeDevicePermissionWithNullDeviceInfo) {
+  auto service_creation_type = GetParam();
+  const auto& service = GetService(service_creation_type);
+
+  EXPECT_CALL(hid_delegate(), HasDevicePermission).WillRepeatedly(Return(true));
+
+  auto device_info = device::mojom::HidDeviceInfo::New();
+  device_info->guid = kTestGuid;
+  ConnectDevice(*device_info);
+  CheckHidServiceConnectedState(service_creation_type, false);
+
+  FakeHidConnectionClient connection_client;
+  EXPECT_CALL(hid_delegate(), IncrementConnectionCount);
+  EXPECT_CALL(hid_delegate(), GetDeviceInfo)
+      .WillOnce(Return(device_info.get()));
+  auto connection = OpenDevice(service, device_info, connection_client);
+  CheckHidServiceConnectedState(service_creation_type, true);
+
+  // Configure GetDeviceInfo to return nullptr, simulating unavailable device
+  // info or null BrowserContext during permission revocation.
+  EXPECT_CALL(hid_delegate(), GetDeviceInfo(_, kTestGuid))
+      .WillOnce(Return(nullptr));
+
+  TestFuture<void> disconnect_future;
+  connection.set_disconnect_handler(disconnect_future.GetCallback());
+
+  TestFuture<void> decrement_future;
+  url::Origin origin = url::Origin::Create(GURL(kTestUrl));
+  EXPECT_CALL(hid_delegate(),
+              DecrementConnectionCount(GetBrowserContext(service_creation_type),
+                                       origin))
+      .WillOnce(RunOnceClosure(decrement_future.GetCallback()));
+
+  hid_delegate().OnPermissionRevoked(origin);
+
+  EXPECT_TRUE(decrement_future.Wait());
+  EXPECT_TRUE(disconnect_future.Wait());
+  CheckHidServiceConnectedState(service_creation_type, false);
+  EXPECT_FALSE(connection.is_connected());
+}
+
+TEST_P(HidServiceTest, RevokeDevicePermissionPartialMultiDevice) {
+  auto service_creation_type = GetParam();
+  const auto& service = GetService(service_creation_type);
+
+  EXPECT_CALL(hid_delegate(), HasDevicePermission).WillRepeatedly(Return(true));
+
+  const std::string kGuid1 = "guid-1";
+  const std::string kGuid2 = "guid-2";
+
+  auto device_info1 = device::mojom::HidDeviceInfo::New();
+  device_info1->guid = kGuid1;
+  ConnectDevice(*device_info1);
+
+  auto device_info2 = device::mojom::HidDeviceInfo::New();
+  device_info2->guid = kGuid2;
+  ConnectDevice(*device_info2);
+
+  CheckHidServiceConnectedState(service_creation_type, false);
+
+  FakeHidConnectionClient connection_client1;
+  FakeHidConnectionClient connection_client2;
+
+  EXPECT_CALL(hid_delegate(), IncrementConnectionCount).Times(2);
+  EXPECT_CALL(hid_delegate(), GetDeviceInfo)
+      .WillOnce(Return(device_info1.get()))
+      .WillOnce(Return(device_info2.get()));
+
+  auto connection1 = OpenDevice(service, device_info1, connection_client1);
+  auto connection2 = OpenDevice(service, device_info2, connection_client2);
+  CheckHidServiceConnectedState(service_creation_type, true);
+
+  // Device 1 returns nullptr for GetDeviceInfo, while Device 2 returns valid
+  // info and retains permission.
+  EXPECT_CALL(hid_delegate(), GetDeviceInfo(_, kGuid1))
+      .WillOnce(Return(nullptr));
+  EXPECT_CALL(hid_delegate(), GetDeviceInfo(_, kGuid2))
+      .WillOnce(Return(device_info2.get()));
+  EXPECT_CALL(hid_delegate(), HasDevicePermission(_, _, _, Ref(*device_info2)))
+      .WillOnce(Return(true));
+
+  TestFuture<void> disconnect_future1;
+  connection1.set_disconnect_handler(disconnect_future1.GetCallback());
+
+  TestFuture<void> decrement_future;
+  url::Origin origin = url::Origin::Create(GURL(kTestUrl));
+  EXPECT_CALL(hid_delegate(), DecrementConnectionCount(_, origin))
+      .WillRepeatedly(Return());
+  EXPECT_CALL(hid_delegate(),
+              DecrementConnectionCount(GetBrowserContext(service_creation_type),
+                                       origin))
+      .WillOnce(RunOnceClosure(decrement_future.GetCallback()))
+      .RetiresOnSaturation();
+
+  hid_delegate().OnPermissionRevoked(origin);
+
+  EXPECT_TRUE(decrement_future.Wait());
+  EXPECT_TRUE(disconnect_future1.Wait());
+
+  // Device 1 was severed and disconnected, but Device 2 remains connected.
+  EXPECT_FALSE(connection1.is_connected());
+  EXPECT_TRUE(connection2.is_connected());
+  CheckHidServiceConnectedState(service_creation_type, true);
+}
+
 TEST_P(HidServiceTest, OpenDevicesThenHidServiceReset) {
   auto service_creation_type = GetParam();
   auto& service = GetService(service_creation_type);
@@ -1376,21 +1613,256 @@ TEST_P(HidServiceFidoTest, TitanDeviceAllowedWithPrivilegedOrigin) {
   }
 }
 
+TEST_P(HidServiceFidoTest, NestedFidoDeviceAllowedWithPrivilegedOrigin) {
+  auto service_creation_type = std::get<0>(GetParam());
+  const auto& service = GetService(service_creation_type);
+  const bool is_fido_allowed = std::get<1>(GetParam());
+
+  url::Origin origin = url::Origin::Create(GURL(kTestUrl));
+  EXPECT_CALL(hid_delegate(), IsFidoAllowedForOrigin(_, origin))
+      .WillRepeatedly(Return(is_fido_allowed));
+  EXPECT_CALL(hid_delegate(), HasDevicePermission).WillRepeatedly(Return(true));
+
+  TestFuture<std::vector<device::mojom::HidDeviceInfoPtr>> get_devices_future;
+  service->GetDevices(get_devices_future.GetCallback());
+  EXPECT_TRUE(get_devices_future.Get().empty());
+
+  auto device_info = CreateNestedFidoDevice();
+  ASSERT_EQ(device_info->collections.size(), 1u);
+  EXPECT_EQ(device_info->collections[0]->usage->usage_page,
+            device::mojom::kPageVendor);
+  ASSERT_EQ(device_info->collections[0]->children.size(), 1u);
+  EXPECT_EQ(device_info->collections[0]->children[0]->usage->usage_page,
+            device::mojom::kPageFido);
+
+  TestFuture<device::mojom::HidDeviceInfoPtr> device_added_future;
+  if (is_fido_allowed) {
+    EXPECT_CALL(hid_manager_client(), DeviceAdded)
+        .WillOnce(InvokeFuture(device_added_future));
+  } else {
+    EXPECT_CALL(hid_manager_client(), DeviceAdded).Times(0);
+  }
+  ConnectDevice(*device_info);
+  if (is_fido_allowed) {
+    const auto& d = *device_added_future.Get();
+    ASSERT_EQ(d.collections.size(), 1u);
+    ASSERT_EQ(d.collections[0]->children.size(), 1u);
+    EXPECT_EQ(d.collections[0]->children[0]->input_reports.size(), 1u);
+    EXPECT_EQ(d.collections[0]->children[0]->output_reports.size(), 1u);
+  } else {
+    FlushHidServicePipe(service_);
+  }
+
+  TestFuture<device::mojom::HidDeviceInfoPtr> device_changed_future;
+  EXPECT_CALL(hid_manager_client(), DeviceChanged)
+      .WillOnce(InvokeFuture(device_changed_future));
+
+  auto joystick = device::mojom::HidCollectionInfo::New();
+  joystick->usage = device::mojom::HidUsageAndPage::New(
+      device::mojom::kGenericDesktopJoystick,
+      device::mojom::kPageGenericDesktop);
+  joystick->collection_type = device::mojom::kHIDCollectionTypeApplication;
+  joystick->feature_reports.push_back(
+      device::mojom::HidReportDescription::New());
+
+  auto updated_device_info = device_info.Clone();
+  updated_device_info->collections.push_back(std::move(joystick));
+  UpdateDevice(*updated_device_info);
+  const auto& changed_d = *device_changed_future.Get();
+  if (is_fido_allowed) {
+    ASSERT_EQ(changed_d.collections.size(), 2u);
+    EXPECT_EQ(changed_d.collections[0]->usage->usage_page,
+              device::mojom::kPageVendor);
+    ASSERT_EQ(changed_d.collections[0]->children.size(), 1u);
+    EXPECT_EQ(changed_d.collections[1]->usage->usage_page,
+              device::mojom::kPageGenericDesktop);
+    EXPECT_EQ(changed_d.collections[1]->usage->usage,
+              device::mojom::kGenericDesktopJoystick);
+  } else {
+    ASSERT_EQ(changed_d.collections.size(), 1u);
+    EXPECT_EQ(changed_d.collections[0]->usage->usage_page,
+              device::mojom::kPageGenericDesktop);
+    EXPECT_EQ(changed_d.collections[0]->usage->usage,
+              device::mojom::kGenericDesktopJoystick);
+  }
+
+  TestFuture<device::mojom::HidDeviceInfoPtr> device_removed_future;
+  EXPECT_CALL(hid_manager_client(), DeviceRemoved)
+      .WillOnce(InvokeFuture(device_removed_future));
+  DisconnectDevice(*updated_device_info);
+  const auto& removed_d = *device_removed_future.Get();
+  if (is_fido_allowed) {
+    EXPECT_EQ(removed_d.collections.size(), 2u);
+  } else {
+    EXPECT_EQ(removed_d.collections.size(), 1u);
+  }
+}
+
+TEST_P(HidServiceTest, NestedKeyboardDeviceBlocked) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kWebHidRecursiveFiltering);
+
+  auto service_creation_type = GetParam();
+  GetService(service_creation_type);
+
+  // Set up global expectations for the delegate.
+  EXPECT_CALL(hid_delegate(), HasDevicePermission).WillRepeatedly(Return(true));
+
+  auto device_info = CreateNestedKeyboardDevice();
+  ASSERT_EQ(device_info->collections.size(), 1u);
+  EXPECT_EQ(device_info->collections[0]->usage->usage_page,
+            device::mojom::kPageVendor);
+  ASSERT_EQ(device_info->collections[0]->children.size(), 1u);
+  EXPECT_EQ(device_info->collections[0]->children[0]->usage->usage_page,
+            device::mojom::kPageGenericDesktop);
+  EXPECT_EQ(device_info->collections[0]->children[0]->usage->usage,
+            device::mojom::kGenericDesktopKeyboard);
+
+  EXPECT_CALL(hid_manager_client(), DeviceAdded).Times(0);
+  ConnectDevice(*device_info);
+  FlushHidServicePipe(service_);
+
+  base::RunLoop device_changed_loop;
+  EXPECT_CALL(hid_manager_client(), DeviceChanged).WillOnce([&](auto d) {
+    EXPECT_EQ(d->collections.size(), 1u);
+    EXPECT_EQ(d->collections[0]->usage->usage_page,
+              device::mojom::kPageGenericDesktop);
+    EXPECT_EQ(d->collections[0]->usage->usage,
+              device::mojom::kGenericDesktopJoystick);
+    device_changed_loop.Quit();
+  });
+
+  auto joystick = device::mojom::HidCollectionInfo::New();
+  joystick->usage = device::mojom::HidUsageAndPage::New(
+      device::mojom::kGenericDesktopJoystick,
+      device::mojom::kPageGenericDesktop);
+  joystick->collection_type = device::mojom::kHIDCollectionTypeApplication;
+  joystick->feature_reports.push_back(
+      device::mojom::HidReportDescription::New());
+
+  auto updated_device_info = device_info.Clone();
+  updated_device_info->collections.push_back(std::move(joystick));
+  UpdateDevice(*updated_device_info);
+  device_changed_loop.Run();
+
+  base::RunLoop device_removed_loop;
+  EXPECT_CALL(hid_manager_client(), DeviceRemoved).WillOnce([&](auto d) {
+    EXPECT_EQ(d->collections.size(), 1u);
+    device_removed_loop.Quit();
+  });
+  DisconnectDevice(*updated_device_info);
+  device_removed_loop.Run();
+}
+
+TEST_P(HidServiceTest, BootMouseDeviceBlocked) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kWebHidRecursiveFiltering);
+
+  auto service_creation_type = GetParam();
+  const auto& service = GetService(service_creation_type);
+
+  EXPECT_CALL(hid_delegate(), HasDevicePermission).WillRepeatedly(Return(true));
+
+  auto device_info = CreateBootMouseDevice();
+  ASSERT_EQ(device_info->collections.size(), 1u);
+  EXPECT_EQ(device_info->collections[0]->usage->usage_page,
+            device::mojom::kPageGenericDesktop);
+  EXPECT_EQ(device_info->collections[0]->usage->usage,
+            device::mojom::kGenericDesktopMouse);
+  EXPECT_EQ(device_info->collections[0]->collection_type,
+            device::mojom::kHIDCollectionTypeApplication);
+  ASSERT_EQ(device_info->collections[0]->children.size(), 1u);
+  EXPECT_EQ(device_info->collections[0]->children[0]->usage->usage_page,
+            device::mojom::kPageGenericDesktop);
+  EXPECT_EQ(device_info->collections[0]->children[0]->usage->usage,
+            device::mojom::kGenericDesktopPointer);
+  EXPECT_EQ(device_info->collections[0]->children[0]->collection_type,
+            device::mojom::kHIDCollectionTypePhysical);
+
+  // Directly verify RemoveProtectedReports prunes both child and TLC.
+  auto cloned_device_info = device_info.Clone();
+  HidService::RemoveProtectedReports(*cloned_device_info,
+                                     /*is_known_security_key=*/false,
+                                     /*is_fido_allowed=*/false);
+  EXPECT_TRUE(cloned_device_info->collections.empty());
+
+  EXPECT_CALL(hid_manager_client(), DeviceAdded).Times(0);
+  ConnectDevice(*device_info);
+  FlushHidServicePipe(service);
+
+  TestFuture<std::vector<device::mojom::HidDeviceInfoPtr>> devices_future;
+  service->GetDevices(devices_future.GetCallback());
+  EXPECT_TRUE(devices_future.Get().empty());
+}
+
+TEST_P(HidServiceTest, CompositeDeviceWithMousePruned) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kWebHidRecursiveFiltering);
+
+  auto service_creation_type = GetParam();
+  const auto& service = GetService(service_creation_type);
+
+  EXPECT_CALL(hid_delegate(), HasDevicePermission).WillRepeatedly(Return(true));
+
+  auto device_info = CreateBootMouseDevice();
+  // Append a non-protected joystick TLC.
+  auto joystick = device::mojom::HidCollectionInfo::New();
+  joystick->usage = device::mojom::HidUsageAndPage::New(
+      device::mojom::kGenericDesktopJoystick,
+      device::mojom::kPageGenericDesktop);
+  joystick->collection_type = device::mojom::kHIDCollectionTypeApplication;
+  joystick->feature_reports.push_back(
+      device::mojom::HidReportDescription::New());
+  device_info->collections.push_back(std::move(joystick));
+  ASSERT_EQ(device_info->collections.size(), 2u);
+
+  TestFuture<device::mojom::HidDeviceInfoPtr> device_added_future;
+  EXPECT_CALL(hid_manager_client(), DeviceAdded)
+      .WillOnce(InvokeFuture(device_added_future));
+  ConnectDevice(*device_info);
+
+  // Only the joystick collection should survive; the mouse TLC and its nested
+  // physical collection should be completely pruned.
+  const auto& added_device = *device_added_future.Get();
+  ASSERT_EQ(added_device.collections.size(), 1u);
+  EXPECT_EQ(added_device.collections[0]->usage->usage_page,
+            device::mojom::kPageGenericDesktop);
+  EXPECT_EQ(added_device.collections[0]->usage->usage,
+            device::mojom::kGenericDesktopJoystick);
+  EXPECT_TRUE(added_device.collections[0]->children.empty());
+
+  TestFuture<std::vector<device::mojom::HidDeviceInfoPtr>> devices_future;
+  service->GetDevices(devices_future.GetCallback());
+  const auto& devices = devices_future.Get();
+  ASSERT_EQ(devices.size(), 1u);
+  ASSERT_EQ(devices[0]->collections.size(), 1u);
+  EXPECT_EQ(devices[0]->collections[0]->usage->usage,
+            device::mojom::kGenericDesktopJoystick);
+}
+
+const HidServiceCreationType kServiceCreationTypes[]{
+    kCreateUsingRenderFrameHost,
+    kCreateUsingDedicatedWorker,
+    kCreateUsingServiceWorkerContextCore,
+};
+
 INSTANTIATE_TEST_SUITE_P(
     HidServiceTests,
     HidServiceTest,
-    testing::Values(kCreateUsingRenderFrameHost,
-                    kCreateUsingServiceWorkerContextCore),
+    testing::ValuesIn(kServiceCreationTypes),
     [](const ::testing::TestParamInfo<HidServiceCreationType>& info) {
       return HidServiceCreationTypeToString(info.param);
     });
 
-const bool kIsFidoAllowed[]{true, false};
+const bool kIsFidoAllowed[]{
+    false,
+    true,
+};
+
 INSTANTIATE_TEST_SUITE_P(
     HidServiceFidoTests,
     HidServiceFidoTest,
-    testing::Combine(testing::Values(kCreateUsingRenderFrameHost,
-                                     kCreateUsingServiceWorkerContextCore),
+    testing::Combine(testing::ValuesIn(kServiceCreationTypes),
                      testing::ValuesIn(kIsFidoAllowed)),
     [](const ::testing::TestParamInfo<std::tuple<HidServiceCreationType, bool>>&
            info) {
@@ -1459,6 +1931,20 @@ TEST_F(HidServiceServiceWorkerBrowserContextDestroyedTest, RejectOpaqueOrigin) {
 
   EXPECT_EQ(bad_message_observer.WaitForBadMessage(),
             "WebHID is not allowed from an opaque origin.");
+}
+
+TEST_F(HidServiceBaseTest, CreateBlockedWhenHidNotAllowedForFrame) {
+  EXPECT_CALL(hid_delegate(), IsHidAllowedForFrame(_)).WillOnce(Return(false));
+  mojo::Remote<blink::mojom::HidService> service;
+  auto* web_contents = static_cast<TestWebContents*>(
+      web_contents_factory_.CreateWebContents(&browser_context_));
+  web_contents->NavigateAndCommit(GURL("https://example.com/"));
+  TestFuture<void> disconnect_future;
+  web_contents->GetPrimaryMainFrame()->GetHidService(
+      service.BindNewPipeAndPassReceiver());
+  service.set_disconnect_handler(disconnect_future.GetCallback());
+  ASSERT_TRUE(disconnect_future.Wait());
+  EXPECT_FALSE(service.is_connected());
 }
 
 TEST_P(HidServiceTest, ConnectionFailedWithoutPermission) {

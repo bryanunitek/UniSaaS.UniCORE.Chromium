@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/auto_reset.h"
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
@@ -22,10 +23,11 @@
 #include "chrome/common/buildflags.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/ui/post_save_compromised_helper.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_user_data.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 namespace base {
 class TimeDelta;
@@ -33,6 +35,10 @@ class TimeDelta;
 
 namespace content {
 class WebContents;
+}
+
+namespace tabs {
+class TabInterface;
 }
 
 namespace password_manager {
@@ -66,18 +72,25 @@ class ManagePasswordsAutoSigninToastDelegate;
 // Per-tab class to control the Omnibox password icon and bubble.
 class ManagePasswordsUIController
     : public content::WebContentsObserver,
-      public content::WebContentsUserData<ManagePasswordsUIController>,
       public password_manager::PasswordStoreInterface::Observer,
       public PasswordsLeakDialogDelegate,
       public PasswordsModelDelegate,
       public PasswordsClientUIDelegate,
       public autofill::BubbleControllerBase {
  public:
+  DECLARE_USER_DATA(ManagePasswordsUIController);
+
+  ManagePasswordsUIController(tabs::TabInterface& tab,
+                              content::WebContents* web_contents);
   ManagePasswordsUIController(const ManagePasswordsUIController&) = delete;
   ManagePasswordsUIController& operator=(const ManagePasswordsUIController&) =
       delete;
 
   ~ManagePasswordsUIController() override;
+
+  static ManagePasswordsUIController* From(tabs::TabInterface* tab);
+  static ManagePasswordsUIController* FromWebContents(
+      content::WebContents* web_contents);
 
   // PasswordsClientUIDelegate:
   void OnPasswordSubmitted(
@@ -142,10 +155,6 @@ class ManagePasswordsUIController
       password_manager::PasswordStoreInterface* store,
       password_manager::ActionableError new_state) override;
 
-  // Called if the password change flow finishes successfully. It ensures the
-  // correct state after the flow.
-  void OnPasswordChangeFinishedSuccessfully();
-
   // True iff the bubble is to be opened automatically.
   bool IsAutomaticallyOpeningBubble() const {
     return bubble_status_ == BubbleStatus::SHOULD_POP_UP;
@@ -191,7 +200,7 @@ class ManagePasswordsUIController
   void OnNotNowClicked() override;
   void OnPasswordsRevealed() override;
   void SavePassword(const std::u16string& username,
-                    const std::u16string& password) override;
+                    const password_manager::PasswordString& password) override;
   void MovePasswordToAccountStore() override;
   void MovePendingPasswordToAccountStoreUsingHelper(
       const password_manager::PasswordForm& form,
@@ -251,16 +260,17 @@ class ManagePasswordsUIController
   bool IsMouseHovered() const override;
   base::WeakPtr<BubbleControllerBase> GetBubbleControllerBaseWeakPtr() override;
 
-  // Opens change password bubble and passes `username` and `new_password` that
-  // should be displayed on it.
+  // PasswordsLeakDialogDelegate:
+  void NavigateToPasswordCheckup(
+      password_manager::PasswordCheckReferrer referrer) override;
+  void OnLeakDialogHidden() override;
+  void OnPasswordChangeFinishedSuccessfully() override;
   void ShowChangePasswordBubble(const std::u16string& username,
-                                const std::u16string& new_password);
+                                const std::u16string& new_password) override;
 
   void ShowAutoSignInToast();
 
  protected:
-  explicit ManagePasswordsUIController(content::WebContents* web_contents);
-
   // Called when a PasswordForm is autofilled, when a new PasswordForm is
   // submitted, or when a navigation occurs to update the visibility of the
   // manage passwords icon and bubble.
@@ -277,8 +287,8 @@ class ManagePasswordsUIController
   virtual std::unique_ptr<AccountChooserPrompt> CreateAccountChooser(
       CredentialManagerDialogController* controller);
 
-  // Called to create the account chooser dialog. Mocked in tests.
-  virtual AutoSigninFirstRunPrompt* CreateAutoSigninPrompt(
+  // Called to create the auto sign-in prompt dialog. Mocked in tests.
+  virtual std::unique_ptr<AutoSigninFirstRunPrompt> CreateAutoSigninPrompt(
       CredentialManagerDialogController* controller);
 
   // Called to create the credentials leaked dialog.
@@ -308,14 +318,7 @@ class ManagePasswordsUIController
   PasswordsLeakDialogDelegate* GetPasswordsLeakDialogDelegate() override;
 
  private:
-  friend class content::WebContentsUserData<ManagePasswordsUIController>;
-
   void OnReauthCompleted();
-
-  // PasswordsLeakDialogDelegate:
-  void NavigateToPasswordCheckup(
-      password_manager::PasswordCheckReferrer referrer) override;
-  void OnLeakDialogHidden() override;
 
   enum class BubbleStatus {
     NOT_SHOWN,
@@ -350,6 +353,11 @@ class ManagePasswordsUIController
   // Returns whether the current site is explicitly blocklisted.
   bool IsExplicitlyBlocklisted() const;
 
+  // Returns whether the specified store is used for saving the pending
+  // credentials.
+  bool IsStoreUsedForSavingPendingCredentials(
+      password_manager::PasswordStoreInterface* store) const;
+
   // Returns the timeout for the manual save fallback.
   static base::TimeDelta GetTimeoutForSaveFallback();
 
@@ -366,6 +374,7 @@ class ManagePasswordsUIController
 
   // content::WebContentsObserver:
   void WebContentsDestroyed() override;
+  void Cleanup();
 
   void OnTriggerPostSaveCompromisedBubble(
       password_manager::PostSaveCompromisedHelper::BubbleType type,
@@ -393,7 +402,7 @@ class ManagePasswordsUIController
   // because otherwise we cannot tell if the credentials were modified manually.
   void HandlePasswordRecoveryFinished(
       const std::u16string& username,
-      const std::u16string& password,
+      const password_manager::PasswordString& password,
       const std::u16string& password_backup) const;
 
   // Returns true if there exists a password manager bubble yet to be shown in
@@ -457,6 +466,11 @@ class ManagePasswordsUIController
   bool was_biometric_authentication_for_filling_promo_shown_ = false;
 #endif
 
+  base::CallbackListSubscription tab_will_detach_subscription_;
+
+  ui::ScopedUnownedUserData<ManagePasswordsUIController>
+      scoped_unowned_user_data_;
+
   // The bubbles of different types can pop up unpredictably superseding each
   // other. However, closing the bubble may affect the state of
   // ManagePasswordsUIController internally. This is undesired if
@@ -467,8 +481,6 @@ class ManagePasswordsUIController
   // with the old bubble.
   // Invalidating all the weak pointers will detach the current bubble.
   base::WeakPtrFactory<ManagePasswordsUIController> weak_ptr_factory_{this};
-
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
 #endif  // CHROME_BROWSER_UI_PASSWORDS_MANAGE_PASSWORDS_UI_CONTROLLER_H_

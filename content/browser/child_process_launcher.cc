@@ -21,10 +21,10 @@
 #include "base/types/expected.h"
 #include "base/types/optional_util.h"
 #include "build/build_config.h"
+#include "content/browser/sandboxed_process_launcher_delegate.h"
 #include "content/common/features.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_launcher_utils.h"
-#include "content/public/browser/sandboxed_process_launcher_delegate.h"
 #include "content/public/browser/tracing_support.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
@@ -98,6 +98,10 @@ bool ChildProcessLauncher::Client::CanUseWarmUpConnection() {
 bool ChildProcessLauncher::Client::HasSpareRendererPriority() {
   return false;
 }
+
+bool ChildProcessLauncher::Client::IsForOutermostMainFrame() {
+  return false;
+}
 #endif
 
 ChildProcessLauncher::ChildProcessLauncher(
@@ -124,7 +128,7 @@ ChildProcessLauncher::ChildProcessLauncher(
       terminate_child_on_shutdown_(true)
 #endif
 {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   TRACE_EVENT_BEGIN("startup", "ChildProcessLauncher",
                     CreateTracingTrackUnderChildProcess(
                         child_process_id, "ChildProcessLauncher"));
@@ -137,6 +141,7 @@ ChildProcessLauncher::ChildProcessLauncher(
       weak_factory_.GetWeakPtr(), terminate_child_on_shutdown_,
 #if BUILDFLAG(IS_ANDROID)
       client_->CanUseWarmUpConnection(), client_->HasSpareRendererPriority(),
+      client_->IsForOutermostMainFrame(),
 #endif
       std::move(mojo_invitation), process_error_callback, std::move(file_data),
       std::move(histogram_memory_region),
@@ -146,7 +151,7 @@ ChildProcessLauncher::ChildProcessLauncher(
 }
 
 ChildProcessLauncher::~ChildProcessLauncher() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (process_.process.IsValid() && terminate_child_on_shutdown_) {
     // Client has gone away, so just kill the process.
     ChildProcessLauncherHelper::ForceNormalProcessTerminationAsync(
@@ -157,18 +162,17 @@ ChildProcessLauncher::~ChildProcessLauncher() {
 #if BUILDFLAG(IS_ANDROID)
 void ChildProcessLauncher::SetRenderProcessPriority(
     const RenderProcessPriority& priority) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  base::Process to_pass = process_.process.Duplicate();
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   GetProcessLauncherTaskRunner()->PostTask(
       FROM_HERE,
       base::BindOnce(
           &ChildProcessLauncherHelper::SetRenderProcessPriorityOnLauncherThread,
-          helper_, std::move(to_pass), priority, base::TimeTicks::Now()));
+          helper_, priority, base::TimeTicks::Now()));
 }
 #else   // !BUILDFLAG(IS_ANDROID)
 void ChildProcessLauncher::SetProcessPriority(
     base::Process::Priority priority) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (priority == priority_) {
     return;
@@ -183,7 +187,7 @@ void ChildProcessLauncher::Notify(ChildProcessLauncherHelper::Process process,
                                   DWORD last_error,
 #endif
                                   int error_code) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   // Corresponds to the TRACE_EVENT_BEGIN in ChildProcessLauncher.
   TRACE_EVENT_END("startup",
                   CreateTracingTrackUnderChildProcess(
@@ -247,29 +251,28 @@ void ChildProcessLauncher::OnReceivedTaskPort(
 void ChildProcessLauncher::SetProcessPriorityImpl(
     base::Process::Priority priority) {
   priority_ = priority;
-  base::Process to_pass = process_.process.Duplicate();
   GetProcessLauncherTaskRunner()->PostTask(
       FROM_HERE,
       base::BindOnce(
           &ChildProcessLauncherHelper::SetProcessPriorityOnLauncherThread,
-          helper_, std::move(to_pass), priority));
+          helper_, priority));
 }
 #endif
 
 bool ChildProcessLauncher::IsStarting() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   return starting_;
 }
 
 const base::Process& ChildProcessLauncher::GetProcess() const {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(!starting_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(!starting_, base::NotFatalUntil::M160);
   return process_.process;
 }
 
 ChildProcessTerminationInfo ChildProcessLauncher::GetChildTerminationInfo(
     bool known_dead) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (!process_.process.IsValid()) {
     // Make sure to avoid using the default termination status if the process
@@ -303,8 +306,14 @@ ChildProcessTerminationInfo ChildProcessLauncher::GetChildTerminationInfo(
   // still running), we'll need to Terminate via ProcessWatcher. So we can't
   // close the handle here.
   if (termination_info_.status != base::TERMINATION_STATUS_STILL_RUNNING) {
-    process_.process.Exited(termination_info_.exit_code);
     process_.process.Close();
+    // Release the launcher thread's copy of the handle as well, so that it
+    // doesn't keep the process object alive now that the child has exited.
+    GetProcessLauncherTaskRunner()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            &ChildProcessLauncherHelper::CloseProcessOnLauncherThread,
+            helper_));
   }
 
   return termination_info_;
@@ -329,10 +338,9 @@ ChildProcessLauncher::GetEffectiveChildBindingState() {
 }
 
 void ChildProcessLauncher::DumpProcessStack() {
-  base::Process to_pass = process_.process.Duplicate();
   GetProcessLauncherTaskRunner()->PostTask(
-      FROM_HERE, base::BindOnce(&ChildProcessLauncherHelper::DumpProcessStack,
-                                helper_, std::move(to_pass)));
+      FROM_HERE,
+      base::BindOnce(&ChildProcessLauncherHelper::DumpProcessStack, helper_));
 }
 
 void ChildProcessLauncher::OnSpareRendererPriorityGraduated(bool is_alive) {
@@ -356,6 +364,7 @@ RenderProcessPriority::RenderProcessPriority(bool visible,
                                              bool boost_for_pending_views,
                                              bool boost_for_loading,
                                              bool boost_for_discard,
+                                             bool boost_for_background_execution,
 #if BUILDFLAG(IS_ANDROID)
                                              bool is_spare_renderer,
                                              ChildProcessImportance importance
@@ -369,6 +378,7 @@ RenderProcessPriority::RenderProcessPriority(bool visible,
       has_media_stream(has_media_stream),
       has_immersive_xr_session(has_immersive_xr_session),
       has_foreground_service_worker(has_foreground_service_worker),
+      boost_for_background_execution(boost_for_background_execution),
       frame_depth(frame_depth),
       intersects_viewport(intersects_viewport),
       boost_for_pending_views(boost_for_pending_views),
@@ -400,14 +410,24 @@ bool RenderProcessPriority::is_background() const {
       return false;
     }
     // TODO(351953350): Migrate this logic to the performance manager.
-    if (boost_for_loading || boost_for_discard) {
+    // A foreground service worker (e.g. a starting extension service worker,
+    // which has no performance manager worker node / vote yet) exposes its
+    // foreground signal only through this flag. Honor it even when a priority
+    // override is present; otherwise the process stays at the overridden
+    // background priority and the worker can starve and miss its start
+    // timeout (crbug.com/484218883).
+    if (boost_for_loading || boost_for_discard ||
+        boost_for_background_execution ||
+        has_foreground_service_worker) {
       return false;
     }
+
     return *priority_override == base::Process::Priority::kBestEffort;
   }
 #endif
   return !visible && !has_media_stream && !has_immersive_xr_session &&
          !boost_for_pending_views && !has_foreground_service_worker &&
+         !boost_for_background_execution &&
          !boost_for_loading && !boost_for_discard;
 }
 
@@ -421,7 +441,13 @@ base::Process::Priority RenderProcessPriority::GetProcessPriority() const {
       return base::Process::Priority::kUserBlocking;
     }
     // TODO(351953350): Migrate this logic to the performance manager.
-    if (boost_for_loading || boost_for_discard) {
+    // See is_background(): a foreground service worker (including a starting
+    // extension service worker) must not be left at the overridden background
+    // priority, or it can starve and miss its start timeout
+    // (crbug.com/484218883).
+    if (boost_for_loading || boost_for_discard ||
+        boost_for_background_execution ||
+        has_foreground_service_worker) {
       return base::Process::Priority::kUserBlocking;
     }
     return *priority_override;

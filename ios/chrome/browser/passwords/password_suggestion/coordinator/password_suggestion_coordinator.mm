@@ -24,10 +24,11 @@
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
-#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
+#import "ios/chrome/browser/shared/public/commands/password_suggestion_commands.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/common/ui/confirmation_alert/confirmation_alert_action_handler.h"
+#import "ios/chrome/common/ui/util/ui_util.h"
 #import "ios/web/public/js_messaging/web_frame.h"
 #import "ios/web/public/js_messaging/web_frames_manager.h"
 #import "ios/web/public/web_state.h"
@@ -60,6 +61,9 @@ constexpr char kUmaActionPrefix[] =
 
   // Frame from which the bottom sheet for password genration was triggered.
   base::WeakPtr<web::WebFrame> _frame;
+
+  // Registration for size-class trait changes on `baseViewController`.
+  id<UITraitChangeRegistration> _traitChangeRegistration;
 }
 
 - (instancetype)initWithBaseViewController:(UIViewController*)baseViewController
@@ -104,6 +108,18 @@ constexpr char kUmaActionPrefix[] =
 
   presentationController.preferredCornerRadius = preferredCornerRadius;
 
+  __weak __typeof(self) weakSelf = self;
+  _traitChangeRegistration = [self.baseViewController
+      registerForTraitChanges:
+          @[ UITraitHorizontalSizeClass.class, UITraitVerticalSizeClass.class ]
+                  withHandler:^(id<UITraitEnvironment> traitEnvironment,
+                                UITraitCollection* previousCollection) {
+                    if (IsRegularXRegularSizeClass(traitEnvironment) !=
+                        IsRegularXRegularSizeClass(previousCollection)) {
+                      [weakSelf updateSheetDetents];
+                    }
+                  }];
+
   // Immediately dismiss the keyboard (only on tablet) because the
   // PasswordSuggestion view controller is incorrectly being displayed behind
   // the keyboard. This issue does not happen on mobile devices.
@@ -122,24 +138,31 @@ constexpr char kUmaActionPrefix[] =
   // controller for the bottom sheet could really be presented as the completion
   // block is only called when presentation really happens, and we can't get any
   // error message or signal. Based on what we could test, we know that
-  // presentingViewController is only set if the view controller can be
+  // `presentingViewController` is only set if the view controller can be
   // presented, where it is left to nil if the presentation is rejected for
   // various reasons (having another view controller already presented is one of
   // them). One should not think they can know all the reasons why the
   // presentation fails.
   //
-  // Keep this line at the end of -start because the
-  // delegate will likely -stop the coordinator when closing suggestions, so the
-  // coordinator should be in the most up to date state where it can be safely
-  // stopped.
+  // This check is performed after presentation is attempted because
+  // `closePasswordSuggestion` will stop the coordinator, so the coordinator
+  // must be in a state where it can be safely stopped.
   if (!self.viewController.presentingViewController) {
-    [self.delegate closePasswordSuggestion];
+    [self closePasswordSuggestion];
+    return;
   }
 
   [self recordAction:"Present"];
 }
 
 - (void)stop {
+  if (_traitChangeRegistration) {
+    [self.baseViewController
+        unregisterForTraitChanges:_traitChangeRegistration];
+    _traitChangeRegistration = nil;
+  }
+  // Dismiss the view controller if -stop is called directly without
+  // going through -dismissWithRefocus:.
   [self.viewController.presentingViewController
       dismissViewControllerAnimated:YES
                          completion:nil];
@@ -156,7 +179,7 @@ constexpr char kUmaActionPrefix[] =
 - (void)confirmationAlertPrimaryAction {
   [self recordAction:"Accept"];
   [self handleDecision:YES];
-  [self.delegate closePasswordSuggestion];
+  [self closePasswordSuggestion];
 }
 
 #pragma mark - UIAdaptivePresentationControllerDelegate
@@ -179,10 +202,33 @@ constexpr char kUmaActionPrefix[] =
 - (void)dismissWithRefocus:(BOOL)refocus {
   [self handleDecision:NO];
   [self incrementDismissCount];
+
+  UIViewController* presentingViewController =
+      self.viewController.presentingViewController;
+
+  // Dismiss the bottom sheet view controller first before refocusing.
+  // Note: When tapping "Use Keyboard", this dismissal executes prior to -stop.
+  // UIKit does not allow WKWebView to become the first responder or present
+  // the software keyboard while a modal view controller is actively presented
+  // on top of it.
+  __weak PasswordSuggestionCoordinator* weakSelf = self;
+  void (^completionBlock)(void) = ^{
+    [weakSelf finishDismissalWithRefocus:refocus];
+  };
+
+  if (presentingViewController) {
+    [presentingViewController dismissViewControllerAnimated:YES
+                                                 completion:completionBlock];
+  } else {
+    completionBlock();
+  }
+}
+
+- (void)finishDismissalWithRefocus:(BOOL)refocus {
   if (refocus) {
     [self refocusIfNeeded];
   }
-  [self.delegate closePasswordSuggestion];
+  [self closePasswordSuggestion];
 }
 
 - (void)recordAction:(std::string_view)name {
@@ -332,12 +378,13 @@ constexpr char kUmaActionPrefix[] =
                         resolver:resolver];
 }
 
+// Returns the sheet presentation controller detents for the current size class.
 - (NSArray<UISheetPresentationControllerDetent*>*)detents {
   // Custom sized detents for modals are available from iOS 16.
-  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
-    // As of iOS 18, the modal on iPad no longer appears near the bottom
-    // edge and should not be expandable (i.e. large detent should not
-    // be an option).
+  if (IsRegularXRegularSizeClass(self.baseViewController)) {
+    // As of iOS 18, the modal in regular-x-regular layouts no longer appears
+    // near the bottom edge and should not be expandable (i.e. large detent
+    // should not be an option).
     return @[ [self preferredHeightDetent] ];
   }
   // Having the large detent as an option makes the modal expandable to
@@ -346,6 +393,12 @@ constexpr char kUmaActionPrefix[] =
     [self preferredHeightDetent],
     [UISheetPresentationControllerDetent largeDetent]
   ];
+}
+
+// Updates the sheet presentation controller's detents for the current size
+// class.
+- (void)updateSheetDetents {
+  self.viewController.sheetPresentationController.detents = [self detents];
 }
 
 - (BOOL)isEdgeAttachedInCompactHeight {
@@ -369,11 +422,18 @@ constexpr char kUmaActionPrefix[] =
   }
 
   if (AutofillBottomSheetTabHelper* tabHelper =
-          AutofillBottomSheetTabHelper::FromWebState(webState);
-      tabHelper && _frame) {
+          AutofillBottomSheetTabHelper::FromWebState(webState)) {
     [self recordAction:"Refocus"];
-    tabHelper->RefocusElementIfNeeded(_frame->GetFrameId());
+    std::string frameId = _frame ? _frame->GetFrameId() : "";
+    tabHelper->RefocusElementIfNeeded(frameId);
   }
+}
+
+// Closes the password suggestion.
+- (void)closePasswordSuggestion {
+  id<PasswordSuggestionCommands> handler = HandlerForProtocol(
+      self.browser->GetCommandDispatcher(), PasswordSuggestionCommands);
+  [handler closePasswordSuggestion];
 }
 
 @end

@@ -34,6 +34,20 @@ COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
 extern const char kChromeSuggestionsSettings[];
 COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
 extern const char kGeminiSettings[];
+COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
+extern const char kFindAndFillWithGeminiSettings[];
+
+// Values for the `kGeminiSettings` pref. Integer pref that determines
+// the Gemini enabling state for this user profile. This is controlled by
+// enterprise policy.
+enum class GeminiSettingsPolicyState {
+  kMinValue = 0,
+
+  kEnabled = kMinValue,
+  kDisabled = 1,
+
+  kMaxValue = kDisabled
+};
 }  // namespace prefs
 
 namespace features {
@@ -59,6 +73,7 @@ COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
 BASE_DECLARE_FEATURE(kFindsMqlsLogging);
 }  // namespace features
 
+COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
 void RegisterGenAiFeatures(PrefRegistrySimple* registry);
 
 }  // namespace optimization_guide

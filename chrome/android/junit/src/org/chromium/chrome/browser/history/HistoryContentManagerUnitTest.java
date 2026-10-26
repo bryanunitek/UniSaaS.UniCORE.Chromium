@@ -4,12 +4,16 @@
 
 package org.chromium.chrome.browser.history;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.app.Activity;
+import android.os.Build.VERSION_CODES;
+import android.view.View;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -27,6 +31,8 @@ import org.chromium.base.FeatureOverrides;
 import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.util.Features;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.glic.GlicEnabling;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProviderJni;
 import org.chromium.chrome.browser.signin.services.SigninManager;
@@ -60,8 +66,6 @@ import java.util.function.Supplier;
  * MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS launch.
  */
 @RunWith(ParameterizedRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@Features.EnableFeatures(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)
 public class HistoryContentManagerUnitTest {
 
     @Rule(order = Rule.DEFAULT_ORDER - 1)
@@ -96,6 +100,7 @@ public class HistoryContentManagerUnitTest {
     @Mock private SyncService mSyncService;
     @Mock private UserPrefsJni mUserPrefsJni;
     @Mock private PrefChangeRegistrarJni mPrefChangeRegistrarJni;
+    @Mock private BrowsingHistoryBridge.Natives mBrowsingHistoryBridgeJni;
     private final boolean mIsIdentityManagerSourceOfAccounts;
 
     private HistoryContentManager mHistoryContentManager;
@@ -117,6 +122,9 @@ public class HistoryContentManagerUnitTest {
         IdentityServicesProviderJni.setInstanceForTesting(mIdentityServicesProviderJni);
         UserPrefsJni.setInstanceForTesting(mUserPrefsJni);
         PrefChangeRegistrarJni.setInstanceForTesting(mPrefChangeRegistrarJni);
+        BrowsingHistoryBridgeJni.setInstanceForTesting(mBrowsingHistoryBridgeJni);
+        // The actor filter consults GlicEnabling; keep it off so no native call is made.
+        GlicEnabling.setEnabledForTesting(false);
 
         mHistoryContentManager =
                 HistoryContentManager.create(
@@ -185,5 +193,60 @@ public class HistoryContentManagerUnitTest {
                 /* createNewTab= */ true,
                 /* runCallback= */ false);
         verify(mIncognitoAsyncTabLauncher).launchNewTab(any(), anyInt(), any());
+    }
+
+    @Test
+    @Config(sdk = VERSION_CODES.UPSIDE_DOWN_CAKE)
+    @Features.EnableFeatures({
+        ChromeFeatureList.APP_SPECIFIC_HISTORY,
+        ChromeFeatureList.BROWSING_HISTORY_FILTER_BY_ACTOR,
+        ChromeFeatureList.BROWSING_HISTORY_FILTER_BY_DOMAIN
+    })
+    public void testCreateForPageInfo_FilterChipsDisabled() {
+        when(mBrowsingHistoryBridgeJni.isBrowsingHistoryFilterByDeviceEnabled()).thenReturn(true);
+        HistoryContentManager pageInfoContentManager =
+                HistoryContentManager.createForPageInfo(
+                        mActivity,
+                        mObserver,
+                        mProfile,
+                        "www.example.com",
+                        mTabSupplier,
+                        mUmaRecorder,
+                        mHistoryProvider,
+                        mRegularAsyncTabLauncher,
+                        mIncognitoAsyncTabLauncher);
+        pageInfoContentManager.startLoadingItems();
+
+        assertFalse(pageInfoContentManager.showAppFilter());
+        assertFalse(pageInfoContentManager.showHostFilter());
+        assertFalse(pageInfoContentManager.showClientFilter());
+        assertFalse(pageInfoContentManager.showActorFilter());
+        assertFalse(pageInfoContentManager.hasFilterList());
+        assertEquals("www.example.com", pageInfoContentManager.getAdapter().getHostNameForTest());
+        assertFalse(pageInfoContentManager.getAdapter().hasListHeader());
+        assertEquals(
+                View.GONE,
+                pageInfoContentManager
+                        .getAppFilterForTesting()
+                        .getChipViewForTesting()
+                        .getVisibility());
+        assertEquals(
+                View.GONE,
+                pageInfoContentManager
+                        .getHostFilterForTesting()
+                        .getChipViewForTesting()
+                        .getVisibility());
+        assertEquals(
+                View.GONE,
+                pageInfoContentManager
+                        .getClientFilterForTesting()
+                        .getChipViewForTesting()
+                        .getVisibility());
+        assertEquals(
+                View.GONE,
+                pageInfoContentManager
+                        .getActorFilterForTesting()
+                        .getChipViewForTesting()
+                        .getVisibility());
     }
 }

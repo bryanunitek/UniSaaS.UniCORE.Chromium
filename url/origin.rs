@@ -13,10 +13,13 @@ pub mod ffi {
     unsafe extern "C++" {
         include!("url/origin.h");
         include!("url/scheme_host_port.h");
+        include!("url/gurl.h");
         include!("url/origin_shim.h");
 
         #[namespace = "url"]
         pub type Origin;
+
+        type GURL = crate::gurl::ffi::GURL;
 
         #[namespace = "url"]
         type SchemeHostPort;
@@ -41,9 +44,53 @@ pub mod ffi {
         fn SchemeHostPortHost(tuple: &SchemeHostPort) -> &str;
 
         fn port(self: &SchemeHostPort) -> u16;
+
+        #[namespace = "url"]
+        #[rust_name = "clone_origin"]
+        fn CloneOrigin(origin: &Origin) -> UniquePtr<Origin>;
+
+        #[namespace = "url"]
+        #[rust_name = "create_origin_from_gurl"]
+        fn CreateOriginFromGURL(url: &GURL) -> UniquePtr<Origin>;
+
+        #[namespace = "url"]
+        #[rust_name = "origin_serialize"]
+        fn OriginSerialize(origin: &Origin) -> String;
     }
 
     impl UniquePtr<Origin> {}
+}
+
+impl ffi::SchemeHostPort {
+    pub fn scheme(&self) -> &str {
+        ffi::scheme(self)
+    }
+
+    pub fn host(&self) -> &str {
+        ffi::host(self)
+    }
+}
+
+impl ffi::Origin {
+    pub fn scheme(&self) -> &str {
+        if self.opaque() {
+            ""
+        } else {
+            self.get_tuple_or_precursor_tuple_if_opaque().scheme()
+        }
+    }
+
+    pub fn host(&self) -> &str {
+        if self.opaque() {
+            ""
+        } else {
+            self.get_tuple_or_precursor_tuple_if_opaque().host()
+        }
+    }
+
+    pub fn serialize(&self) -> String {
+        ffi::origin_serialize(self)
+    }
 }
 
 // SAFETY: `Origin` does not utilize shared or thread-bound data so moving it
@@ -80,8 +127,8 @@ impl Debug for ffi::Origin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let tuple = self.get_tuple_or_precursor_tuple_if_opaque();
         f.debug_struct("Origin")
-            .field("scheme", &ffi::scheme(tuple))
-            .field("host", &ffi::host(tuple))
+            .field("scheme", &tuple.scheme())
+            .field("host", &tuple.host())
             .field("port", &tuple.port())
             .field("opaque", &self.opaque())
             .finish()

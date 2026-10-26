@@ -19,9 +19,24 @@ extern const char kAllowLegacyExtensionManifests[];
 // Adds the given extension ID to all the permission allowlists.
 extern const char kAllowlistedExtensionID[];
 
+// Test-only. Allows built-in (kComponent) extensions to load scripts from
+// chrome://webui-test, which only exists in browser tests. This does not change
+// any other browser behavior. ExtensionMochaBrowserTest appends it.
+//
+// This switch is specific to extensions. WebUI pages do not need it: their CSP
+// always allows chrome://webui-test, and that host is only registered in
+// tests. Component extensions are gated anyway, as defense in depth, because
+// they are the most privileged extensions. This is not a precedent for gating
+// chrome://webui-test in WebUI.
+extern const char kAllowWebUITestInComponentExtensions[];
+
 // Whether to disable app content verification when testing changes locally on
 // Chromebox for Meetings hardware.
 extern const char kDisableAppContentVerification[];
+
+// Disables crashing on JavaScript errors in component extensions. Used for
+// development.
+extern const char kDisableCrashOnComponentExtensionJsError[];
 
 // Disable checking for user opt-in for extensions that want to inject script
 // into file URLs (ie, always allow it). This is used during automated testing.

@@ -6,6 +6,7 @@
 
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -16,7 +17,6 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_blob.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_exception.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_clipboard_read_options.h"
 #include "third_party/blink/renderer/core/clipboard/paste_mode.h"
 #include "third_party/blink/renderer/core/clipboard/system_clipboard.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
@@ -28,42 +28,24 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/page/focus_controller.h"
+#include "third_party/blink/renderer/core/page/scoped_page_pauser.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
+#include "third_party/blink/renderer/core/workers/worker_thread_test_helper.h"
 #include "third_party/blink/renderer/modules/clipboard/clipboard_item.h"
 #include "third_party/blink/renderer/modules/clipboard/clipboard_promise.h"
 #include "third_party/blink/renderer/modules/clipboard/mock_clipboard_permission_service.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "ui/base/clipboard/clipboard_constants.h"
 
 namespace blink {
 
 using ::testing::WithArg;
-
-// Helper class that validates ClipboardItem types match expected format list.
-class ClipboardItemTypesValidator final
-    : public ThenCallable<IDLSequence<ClipboardItem>,
-                          ClipboardItemTypesValidator,
-                          IDLBoolean> {
- public:
-  explicit ClipboardItemTypesValidator(const Vector<String>& expected_types)
-      : expected_types_(expected_types) {}
-
-  bool React(ScriptState* script_state,
-             HeapVector<Member<ClipboardItem>> clipboard_items) {
-    if (clipboard_items.empty()) {
-      return expected_types_.empty();
-    }
-    auto& clipboard_item = clipboard_items[0];
-    Vector<String> available_types = clipboard_item->types();
-    std::sort(available_types.begin(), available_types.end(),
-              CodeUnitCompareLessThan);
-    return available_types == expected_types_;
-  }
-
- private:
-  Vector<String> expected_types_;
-};
 
 class ClipboardItemGetType final
     : public ThenCallable<IDLSequence<ClipboardItem>,
@@ -208,22 +190,23 @@ TEST_F(ClipboardTest, ClipboardPromiseReadText) {
       mojom::blink::PermissionService::Name_, {});
 }
 
-// Tests reading specific clipboard formats using ClipboardReadOptions.
-// Verifies that only requested formats are returned when clipboard contains
-// multiple formats.
-TEST_F(ClipboardTest, SelectiveClipboardFormatRead) {
+// Focus is validated synchronously when readText() is invoked, but the document
+// can lose focus during the asynchronous permission round-trip, before the
+// clipboard is actually read. The read must be rejected in that case rather
+// than leaking clipboard contents copied while the page was unfocused.
+TEST_F(ClipboardTest, ReadTextRejectedWhenFocusLostBeforePermissionResponse) {
   V8TestingScope scope;
   ExecutionContext* executionContext = GetFrame().DomWindow();
-  String testing_string = "TestStringForClipboardTesting";
-  String html_to_paste = "<p>TestHtmlForClipboardTesting</p>";
-  WritePlainTextToClipboard(testing_string);
-  WriteHtmlToClipboard(html_to_paste);
+  WritePlainTextToClipboard("SensitiveClipboardData");
 
-  // Async read clipboard API requires the clipboard read permission.
+  // Grant permission, but drop the document's focus while the permission
+  // request is being handled -- i.e. after the synchronous precondition check
+  // in ValidatePreconditions() but before the read continuation runs.
   EXPECT_CALL(permission_service_, RequestPermission)
       .WillOnce(WithArg<1>(
-          [](mojom::blink::PermissionService::RequestPermissionCallback
-                 callback) {
+          [this](mojom::blink::PermissionService::RequestPermissionCallback
+                     callback) {
+            SetPageFocus(false);
             std::move(callback).Run(
                 mojom::blink::PermissionStatusWithDetails::New(
                     mojom::blink::PermissionStatus::GRANTED, nullptr));
@@ -231,70 +214,21 @@ TEST_F(ClipboardTest, SelectiveClipboardFormatRead) {
   BindMockPermissionService(executionContext);
 
   SetSecureOrigin(executionContext);
-  SetPageFocus(true);
-  // Create ClipboardReadOptions to filter for specific formats only.
-  ClipboardReadOptions* options = ClipboardReadOptions::Create();
-  Vector<String> requested_types;
-  requested_types.emplace_back("text/plain");
-  options->setTypes(requested_types);
-
-  ScriptPromise<IDLSequence<ClipboardItem>> promise =
-      ClipboardPromise::CreateForRead(executionContext, scope.GetScriptState(),
-                                      options, scope.GetExceptionState());
-  Vector<String> expected_types_in_result;
-  expected_types_in_result.emplace_back("text/plain");
-  // Validate that only plain text format is returned by the clipboard read.
-  auto chained_promise = promise.Then(
-      scope.GetScriptState(), MakeGarbageCollected<ClipboardItemTypesValidator>(
-                                  expected_types_in_result));
-  ScriptPromiseTester promise_tester(scope.GetScriptState(), chained_promise);
-  promise_tester.WaitUntilSettled();
-  EXPECT_TRUE(promise_tester.IsFulfilled());
-  String validation_result;
-  promise_tester.Value().ToString(validation_result);
-  EXPECT_EQ(validation_result, "true");
-}
-
-// Verifies that all formats are returned when no specific types are requested.
-TEST_F(ClipboardTest, ReadAllClipboardFormats) {
-  V8TestingScope scope;
-  ExecutionContext* executionContext = GetFrame().DomWindow();
-  String testing_string = "TestStringForClipboardTesting";
-  String html_to_paste = "<p>TestHtmlForClipboardTesting</p>";
-  WritePlainTextToClipboard(testing_string);
-  WriteHtmlToClipboard(html_to_paste);
-
-  // Async read clipboard API requires the clipboard read permission.
-  EXPECT_CALL(permission_service_, RequestPermission)
-      .WillOnce(WithArg<1>(
-          [](mojom::blink::PermissionService::RequestPermissionCallback
-                 callback) {
-            std::move(callback).Run(
-                mojom::blink::PermissionStatusWithDetails::New(
-                    mojom::blink::PermissionStatus::GRANTED, nullptr));
-          }));
-  BindMockPermissionService(executionContext);
-
-  SetSecureOrigin(executionContext);
+  // Focused at invocation time so ValidatePreconditions() passes.
   SetPageFocus(true);
 
-  // Pass nullptr for options to read all available clipboard formats without
-  // filtering.
-  ScriptPromise<IDLSequence<ClipboardItem>> promise =
-      ClipboardPromise::CreateForRead(executionContext, scope.GetScriptState(),
-                                      nullptr, scope.GetExceptionState());
-  Vector<String> expected_types_in_result;
-  expected_types_in_result.emplace_back("text/html");
-  expected_types_in_result.emplace_back("text/plain");
-  auto chained_promise = promise.Then(
-      scope.GetScriptState(), MakeGarbageCollected<ClipboardItemTypesValidator>(
-                                  expected_types_in_result));
-  ScriptPromiseTester promise_tester(scope.GetScriptState(), chained_promise);
-  promise_tester.WaitUntilSettled();
-  EXPECT_TRUE(promise_tester.IsFulfilled());
-  String validation_result;
-  promise_tester.Value().ToString(validation_result);
-  EXPECT_EQ(validation_result, "true");
+  ScriptPromise<IDLString> promise = ClipboardPromise::CreateForReadText(
+      executionContext, scope.GetScriptState(), scope.GetExceptionState());
+  ScriptPromiseTester promise_tester(scope.GetScriptState(), promise);
+  promise_tester.WaitUntilSettled();  // Runs a nested event loop.
+
+  EXPECT_TRUE(promise_tester.IsRejected())
+      << "resolved with " << promise_tester.ValueAsString().Utf8();
+  EXPECT_EQ(promise_tester.ValueAsString(),
+            "NotAllowedError: Document is not focused.");
+
+  executionContext->GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::blink::PermissionService::Name_, {});
 }
 
 // Test verifies that CreateForRead performs lazy loading by directly checking
@@ -898,6 +832,26 @@ TEST_F(ClipboardTest, ClipboardChangeDuringReadRejectsGetType) {
       mojom::blink::PermissionService::Name_, {});
 }
 
+// Lets a test hold on to a promise created inside a paste event listener so it
+// can be awaited after the event has finished dispatching, the way a real
+// page's non-awaiting handler behaves.
+template <typename IDLType>
+class PromiseHolder final : public GarbageCollected<PromiseHolder<IDLType>> {
+ public:
+  void Set(v8::Isolate* isolate, ScriptPromise<IDLType> promise) {
+    promise_ = MemberScriptPromise<IDLType>(isolate, promise.V8Promise());
+  }
+  ScriptPromise<IDLType> Get() const { return promise_.Unwrap(); }
+  bool IsEmpty() const { return promise_.IsEmpty(); }
+  void Trace(Visitor* visitor) const { visitor->Trace(promise_); }
+
+ private:
+  MemberScriptPromise<IDLType> promise_;
+};
+
+using ReadTextPromiseHolder = PromiseHolder<IDLString>;
+using ReadPromiseHolder = PromiseHolder<IDLSequence<ClipboardItem>>;
+
 class ClipboardPasteTestListener final : public NativeEventListener {
  public:
   explicit ClipboardPasteTestListener(base::OnceCallback<void(Event*)> callback)
@@ -921,6 +875,9 @@ TEST_F(ClipboardTest, PasteEventUninterruptedReadText) {
   String initial_string = "InitialStringForClipboardTesting";
   WritePlainTextToClipboard(initial_string);
   GetFrame().GetSystemClipboard()->CommitWrite();
+  // Let the write reach the clipboard host before the paste starts, so that
+  // the sequence number captured at paste time reflects the written contents.
+  test::RunPendingTasks();
 
   SetSecureOrigin(executionContext);
   SetPageFocus(true);
@@ -964,6 +921,9 @@ TEST_F(ClipboardTest, PasteEventInterruptedReadTextRejected) {
   String initial_string = "InitialStringForClipboardTesting";
   WritePlainTextToClipboard(initial_string);
   GetFrame().GetSystemClipboard()->CommitWrite();
+  // Let the write reach the clipboard host before the paste starts, so that
+  // the sequence number captured at paste time reflects the written contents.
+  test::RunPendingTasks();
 
   SetSecureOrigin(executionContext);
   SetPageFocus(true);
@@ -1016,6 +976,9 @@ TEST_F(ClipboardTest, PasteEventInterruptedReadRejected) {
   String initial_string = "InitialStringForClipboardTesting";
   WritePlainTextToClipboard(initial_string);
   GetFrame().GetSystemClipboard()->CommitWrite();
+  // Let the write reach the clipboard host before the paste starts, so that
+  // the sequence number captured at paste time reflects the written contents.
+  test::RunPendingTasks();
 
   SetSecureOrigin(executionContext);
   SetPageFocus(true);
@@ -1060,6 +1023,318 @@ TEST_F(ClipboardTest, PasteEventInterruptedReadRejected) {
   EXPECT_TRUE(listener_called);
   GetFrame().GetDocument()->body()->removeEventListener(
       event_type_names::kPaste, listener, /*use_capture=*/false);
+}
+
+// Same as PasteEventReadTextPausedAfterCallRejected, but for read(), which
+// takes the format-enumeration path rather than the plain-text path.
+TEST_F(ClipboardTest, PasteEventReadPausedAfterCallRejected) {
+  V8TestingScope scope;
+  ExecutionContext* executionContext = GetFrame().DomWindow();
+  WritePlainTextToClipboard("InitialStringForClipboardTesting");
+  GetFrame().GetSystemClipboard()->CommitWrite();
+  // Let the write reach the clipboard host before the paste starts, so that
+  // the sequence number captured at paste time reflects the written contents.
+  test::RunPendingTasks();
+
+  SetSecureOrigin(executionContext);
+  SetPageFocus(true);
+
+  bool listener_called = false;
+  auto* holder = MakeGarbageCollected<ReadPromiseHolder>();
+  auto* listener =
+      MakeGarbageCollected<ClipboardPasteTestListener>(base::BindOnce(
+          [](ExecutionContext* executionContext, ScriptState* script_state,
+             SystemClipboard* system_clipboard, bool* listener_called,
+             ReadPromiseHolder* holder, Event* event) {
+            *listener_called = true;
+            absl::uint128 initial_sequence = system_clipboard->SequenceNumber();
+
+            DummyExceptionStateForTesting exception_state;
+            holder->Set(
+                script_state->GetIsolate(),
+                ClipboardPromise::CreateForRead(executionContext, script_state,
+                                                nullptr, exception_state));
+
+            // Simulate alert(): the page's pausable task queues, including
+            // TaskType::kClipboard, are frozen while the user copies new data.
+            {
+              ScopedPagePauser pauser;
+              system_clipboard->WritePlainText("SecretExploitString");
+              system_clipboard->CommitWrite();
+              EXPECT_TRUE(base::test::RunUntil([&]() {
+                return system_clipboard->SequenceNumber() != initial_sequence;
+              }));
+            }
+          },
+          WrapPersistent(executionContext),
+          WrapPersistent(scope.GetScriptState()),
+          WrapPersistent(GetFrame().GetSystemClipboard()),
+          Unretained(&listener_called), WrapPersistent(holder)));
+
+  GetFrame().GetDocument()->body()->addEventListener(event_type_names::kPaste,
+                                                     listener);
+
+  ClipboardCommands::DispatchPasteEvent(GetFrame(), PasteMode::kAllMimeTypes,
+                                        EditorCommandSource::kMenuOrKeyBinding);
+
+  EXPECT_TRUE(listener_called);
+  ASSERT_FALSE(holder->IsEmpty());
+  ScriptState::Scope script_scope(scope.GetScriptState());
+  ScriptPromiseTester promise_tester(scope.GetScriptState(), holder->Get());
+  promise_tester.WaitUntilSettled();
+  EXPECT_TRUE(promise_tester.IsRejected())
+      << "resolved with " << promise_tester.ValueAsString().Utf8();
+  EXPECT_EQ(promise_tester.ValueAsString(),
+            "DataError: Clipboard contents changed since paste event started.");
+
+  GetFrame().GetDocument()->body()->removeEventListener(
+      event_type_names::kPaste, listener, /*use_capture=*/false);
+}
+
+// readText() is called first (so the synchronous freshness
+// check in ValidatePreconditions() passes) and only afterwards does the page
+// open a modal dialog, which pauses TaskType::kClipboard while the user copies
+// new data. The deferred read must still be rejected.
+TEST_F(ClipboardTest, PasteEventReadTextPausedAfterCallRejected) {
+  V8TestingScope scope;
+  ExecutionContext* executionContext = GetFrame().DomWindow();
+  WritePlainTextToClipboard("InitialStringForClipboardTesting");
+  GetFrame().GetSystemClipboard()->CommitWrite();
+  // Let the write reach the clipboard host before the paste starts, so that
+  // the sequence number captured at paste time reflects the written contents.
+  test::RunPendingTasks();
+
+  SetSecureOrigin(executionContext);
+  SetPageFocus(true);
+
+  bool listener_called = false;
+  auto* holder = MakeGarbageCollected<ReadTextPromiseHolder>();
+  auto* listener =
+      MakeGarbageCollected<ClipboardPasteTestListener>(base::BindOnce(
+          [](ExecutionContext* executionContext, ScriptState* script_state,
+             SystemClipboard* system_clipboard, bool* listener_called,
+             ReadTextPromiseHolder* holder, Event* event) {
+            *listener_called = true;
+            absl::uint128 initial_sequence = system_clipboard->SequenceNumber();
+
+            DummyExceptionStateForTesting exception_state;
+            holder->Set(script_state->GetIsolate(),
+                        ClipboardPromise::CreateForReadText(
+                            executionContext, script_state, exception_state));
+
+            // Simulate alert(): the page's pausable task queues, including
+            // TaskType::kClipboard, are frozen while the user copies new data.
+            {
+              ScopedPagePauser pauser;
+              system_clipboard->WritePlainText("SecretExploitString");
+              system_clipboard->CommitWrite();
+              EXPECT_TRUE(base::test::RunUntil([&]() {
+                return system_clipboard->SequenceNumber() != initial_sequence;
+              }));
+            }
+            // The handler then returns without awaiting, as a real page's
+            // would, so the deferred read runs once the paste event has
+            // finished dispatching.
+          },
+          WrapPersistent(executionContext),
+          WrapPersistent(scope.GetScriptState()),
+          WrapPersistent(GetFrame().GetSystemClipboard()),
+          Unretained(&listener_called), WrapPersistent(holder)));
+
+  GetFrame().GetDocument()->body()->addEventListener(event_type_names::kPaste,
+                                                     listener);
+
+  ClipboardCommands::DispatchPasteEvent(GetFrame(), PasteMode::kAllMimeTypes,
+                                        EditorCommandSource::kMenuOrKeyBinding);
+
+  EXPECT_TRUE(listener_called);
+  ASSERT_FALSE(holder->IsEmpty());
+  ScriptState::Scope script_scope(scope.GetScriptState());
+  ScriptPromiseTester promise_tester(scope.GetScriptState(), holder->Get());
+  promise_tester.WaitUntilSettled();
+  EXPECT_TRUE(promise_tester.IsRejected())
+      << "resolved with " << promise_tester.ValueAsString().Utf8();
+  EXPECT_EQ(promise_tester.ValueAsString(),
+            "DataError: Clipboard contents changed since paste event started.");
+
+  GetFrame().GetDocument()->body()->removeEventListener(
+      event_type_names::kPaste, listener, /*use_capture=*/false);
+}
+
+// A paste event dispatched with the selection buffer active (middle-click
+// on Linux) must not implicitly grant readText(); the request falls through to
+// the permission service. A middle-click paste runs with SystemClipboard in
+// selection mode, so the sequence number captured at paste start belongs to the
+// kSelection buffer. ExecutePasteGlobalSelection() restores the mode as soon as
+// the paste event returns, so any freshness check that runs later sees
+// kStandard and must not compare the two. Read permission is granted here so
+// the deferred read path is actually reached.
+TEST_F(ClipboardTest, GlobalSelectionPasteEventGrantedReadTextResolves) {
+  V8TestingScope scope;
+  ExecutionContext* executionContext = GetFrame().DomWindow();
+  WritePlainTextToClipboard("StandardBufferText");
+  GetFrame().GetSystemClipboard()->CommitWrite();
+  test::RunPendingTasks();
+
+  EXPECT_CALL(permission_service_, RequestPermission)
+      .WillOnce(WithArg<1>(
+          [](mojom::blink::PermissionService::RequestPermissionCallback
+                 callback) {
+            std::move(callback).Run(
+                mojom::blink::PermissionStatusWithDetails::New(
+                    mojom::blink::PermissionStatus::GRANTED, nullptr));
+          }));
+  BindMockPermissionService(executionContext);
+
+  SetSecureOrigin(executionContext);
+  SetPageFocus(true);
+
+  bool listener_called = false;
+  auto* holder = MakeGarbageCollected<ReadTextPromiseHolder>();
+  auto* listener =
+      MakeGarbageCollected<ClipboardPasteTestListener>(base::BindOnce(
+          [](ExecutionContext* executionContext, ScriptState* script_state,
+             bool* listener_called, ReadTextPromiseHolder* holder,
+             Event* event) {
+            *listener_called = true;
+            DummyExceptionStateForTesting exception_state;
+            // The handler returns without awaiting, as a real page's would, so
+            // the deferred read runs after the paste event has finished
+            // dispatching and after ExecutePasteGlobalSelection() has restored
+            // the clipboard buffer.
+            holder->Set(script_state->GetIsolate(),
+                        ClipboardPromise::CreateForReadText(
+                            executionContext, script_state, exception_state));
+          },
+          WrapPersistent(executionContext),
+          WrapPersistent(scope.GetScriptState()), Unretained(&listener_called),
+          WrapPersistent(holder)));
+
+  GetFrame().GetDocument()->body()->addEventListener(event_type_names::kPaste,
+                                                     listener);
+
+  GetFrame().GetSystemClipboard()->SetSelectionMode(true);
+  ClipboardCommands::DispatchPasteEvent(GetFrame(), PasteMode::kAllMimeTypes,
+                                        EditorCommandSource::kMenuOrKeyBinding);
+  GetFrame().GetSystemClipboard()->SetSelectionMode(false);
+
+  EXPECT_TRUE(listener_called);
+  ASSERT_FALSE(holder->IsEmpty());
+  ScriptState::Scope script_scope(scope.GetScriptState());
+  ScriptPromiseTester promise_tester(scope.GetScriptState(), holder->Get());
+  promise_tester.WaitUntilSettled();
+  EXPECT_TRUE(promise_tester.IsFulfilled())
+      << promise_tester.ValueAsString().Utf8();
+  String promise_returned_string;
+  promise_tester.Value().ToString(promise_returned_string);
+  EXPECT_EQ(promise_returned_string, "StandardBufferText");
+
+  GetFrame().GetDocument()->body()->removeEventListener(
+      event_type_names::kPaste, listener, /*use_capture=*/false);
+
+  executionContext->GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::blink::PermissionService::Name_, {});
+}
+
+TEST_F(ClipboardTest, GlobalSelectionPasteEventReadTextRequiresPermission) {
+  V8TestingScope scope;
+  ExecutionContext* executionContext = GetFrame().DomWindow();
+  WritePlainTextToClipboard("StandardBufferText");
+  GetFrame().GetSystemClipboard()->CommitWrite();
+
+  EXPECT_CALL(permission_service_, RequestPermission)
+      .WillOnce(WithArg<1>(
+          [](mojom::blink::PermissionService::RequestPermissionCallback
+                 callback) {
+            std::move(callback).Run(
+                mojom::blink::PermissionStatusWithDetails::New(
+                    mojom::blink::PermissionStatus::DENIED, nullptr));
+          }));
+  BindMockPermissionService(executionContext);
+
+  SetSecureOrigin(executionContext);
+  SetPageFocus(true);
+
+  bool listener_called = false;
+  auto* listener =
+      MakeGarbageCollected<ClipboardPasteTestListener>(base::BindOnce(
+          [](ExecutionContext* executionContext, ScriptState* script_state,
+             bool* listener_called, Event* event) {
+            *listener_called = true;
+            DummyExceptionStateForTesting exception_state;
+            ScriptPromise<IDLString> promise =
+                ClipboardPromise::CreateForReadText(
+                    executionContext, script_state, exception_state);
+            ScriptPromiseTester promise_tester(script_state, promise);
+            promise_tester.WaitUntilSettled();
+            EXPECT_TRUE(promise_tester.IsRejected());
+            EXPECT_EQ(promise_tester.ValueAsString(),
+                      "NotAllowedError: Read permission denied.");
+          },
+          WrapPersistent(executionContext),
+          WrapPersistent(scope.GetScriptState()),
+          Unretained(&listener_called)));
+
+  GetFrame().GetDocument()->body()->addEventListener(event_type_names::kPaste,
+                                                     listener);
+
+  GetFrame().GetSystemClipboard()->SetSelectionMode(true);
+  ClipboardCommands::DispatchPasteEvent(GetFrame(), PasteMode::kAllMimeTypes,
+                                        EditorCommandSource::kMenuOrKeyBinding);
+  GetFrame().GetSystemClipboard()->SetSelectionMode(false);
+
+  EXPECT_TRUE(listener_called);
+  GetFrame().GetDocument()->body()->removeEventListener(
+      event_type_names::kPaste, listener, /*use_capture=*/false);
+
+  executionContext->GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::blink::PermissionService::Name_, {});
+}
+
+// ClipboardItem::supports() reports what write() will actually accept. A worker
+// cannot write html or svg, because building either runs a DOMParser on the
+// main thread, so supports() has to say no there even though the spec says it
+// returns true for html.
+TEST_F(ClipboardTest, SupportsRejectsHtmlAndSvgInWorkers) {
+  ExecutionContext* window_context = GetFrame().DomWindow();
+  EXPECT_TRUE(ClipboardItem::supports(window_context, ui::kMimeTypeHtml));
+  EXPECT_TRUE(ClipboardItem::supports(window_context, ui::kMimeTypeSvg));
+
+  MockWorkerReportingProxy proxy;
+  EXPECT_CALL(proxy,
+              DidEvaluateTopLevelScriptMock(/*success=*/true, testing::_));
+  WorkerThreadForTest worker_thread(proxy);
+  const KURL worker_url("https://example.com/worker.js");
+  // The test window's opaque origin is incompatible with this script URL.
+  scoped_refptr<SecurityOrigin> worker_origin =
+      SecurityOrigin::Create(worker_url);
+  worker_thread.StartWithSourceCode(worker_origin.get(),
+                                    "/* no worker script */", worker_url);
+  proxy.WaitUntilDidEvaluateTopLevelScript();
+
+  scoped_refptr<base::SingleThreadTaskRunner> worker_task_runner =
+      worker_thread.GetWorkerBackingThread().BackingThread().GetTaskRunner();
+  PostCrossThreadTask(
+      *worker_task_runner, FROM_HERE,
+      CrossThreadBindOnce(
+          [](WorkerThread* worker_thread) {
+            ExecutionContext* context = worker_thread->GlobalScope();
+            EXPECT_FALSE(ClipboardItem::supports(context, ui::kMimeTypeHtml));
+            EXPECT_FALSE(ClipboardItem::supports(context, ui::kMimeTypeSvg));
+            EXPECT_TRUE(
+                ClipboardItem::supports(context, ui::kMimeTypePlainText));
+            EXPECT_TRUE(ClipboardItem::supports(context, ui::kMimeTypePng));
+          },
+          CrossThreadUnretained(&worker_thread)));
+
+  base::WaitableEvent done;
+  PostCrossThreadTask(*worker_task_runner, FROM_HERE,
+                      CrossThreadBindOnce(&base::WaitableEvent::Signal,
+                                          CrossThreadUnretained(&done)));
+  done.Wait();
+
+  worker_thread.Terminate();
+  worker_thread.WaitForShutdownForTesting();
 }
 
 }  // namespace blink

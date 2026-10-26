@@ -9,7 +9,8 @@
 #include "base/test/test_future.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
@@ -50,8 +51,8 @@ class SharedDictionaryPolicyTest : public PolicyTest {
     // The CompressionDictionaryTransportEnabled policy doesn't support dynamic
     // refresh. So we are using an incognito mode browser for testing the
     // policy.
-    Browser* incognito_browser =
-        OpenURLOffTheRecord(browser()->profile(), GURL("about:blank"));
+    BrowserWindowInterface* incognito_browser =
+        OpenURLOffTheRecord(browser()->GetProfile(), GURL("about:blank"));
     ASSERT_TRUE(ui_test_utils::NavigateToURL(
         incognito_browser,
         embedded_test_server()->GetURL("/shared_dictionary/blank.html")));
@@ -72,7 +73,7 @@ class SharedDictionaryPolicyTest : public PolicyTest {
 
  private:
   std::vector<net::SharedDictionaryUsageInfo> GetSharedDictionaryUsageInfo(
-      Browser* browser) {
+      BrowserWindowInterface* browser) {
     base::test::TestFuture<const std::vector<net::SharedDictionaryUsageInfo>&>
         result;
     browser->tab_strip_model()

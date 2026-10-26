@@ -32,6 +32,16 @@ struct WDKeywordsResult {
 
   KeywordTable::Keywords keywords;
 
+  // At least one row with a positive prepopulate_id was rejected because its
+  // hash could not be decrypted. Reconcile the regional built-in engine set
+  // from authoritative data, even when the keyword metadata is current.
+  bool had_prepopulated_decryption_failure = false;
+
+  // At least one row with a positive starter_pack_id was rejected because its
+  // hash could not be decrypted, regardless of prepopulate_id. Reconcile the
+  // starter pack engine set even when its metadata is current.
+  bool had_starter_pack_decryption_failure = false;
+
   // Context qualifying the built-in keywords and starter pack engines data.
   struct Metadata {
     // Version number of the most recent prepopulate data that has been merged
@@ -43,7 +53,8 @@ struct WDKeywordsResult {
     std::optional<regional_capabilities::CountryIdHolder>
         builtin_keyword_country;
 
-    bool prepopulated_engines_migration_enabled = false;
+    KeywordTable::PrepopulatedEngineMigrationSet
+        prepopulated_engines_migration_state;
 
     // Version number of the most recent starter pack data that has been merged
     // into the current keyword data.
@@ -58,7 +69,7 @@ struct WDKeywordsResult {
     bool HasBuiltinKeywordData() const {
       return builtin_keyword_data_version != 0 ||
              builtin_keyword_country.has_value() ||
-             prepopulated_engines_migration_enabled;
+             !prepopulated_engines_migration_state.empty();
     }
 
     // Whether any metadata associated with the starter pack bundle is set.
@@ -130,7 +141,8 @@ class KeywordWebDataService : public WebDataServiceBase {
   // Sets the version of the starter pack keywords.
   void SetStarterPackKeywordVersion(int version);
 
-  void SetPrepopulatedEnginesMigrationEnabled(bool is_migration_enabled);
+  void SetPrepopulatedEnginesMigrationState(
+      KeywordTable::PrepopulatedEngineMigrationSet migration_state);
 
   // WebDataServiceBase:
   void ShutdownOnUISequence() override;

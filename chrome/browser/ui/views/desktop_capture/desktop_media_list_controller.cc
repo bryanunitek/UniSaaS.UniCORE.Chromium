@@ -56,8 +56,8 @@ DesktopMediaListController::DesktopMediaListController(
               switches::kThisTabCaptureAutoReject)),
       auto_reject_capture_(base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kCaptureAutoReject)) {
-  DCHECK(dialog_);
-  DCHECK(media_list_);
+  CHECK(dialog_, base::NotFatalUntil::M162);
+  CHECK(media_list_, base::NotFatalUntil::M162);
 }
 
 DesktopMediaListController::~DesktopMediaListController() = default;
@@ -67,11 +67,11 @@ std::unique_ptr<views::View> DesktopMediaListController::CreateView(
     DesktopMediaSourceViewStyle single_style,
     const std::u16string& accessible_name,
     DesktopMediaList::Type type) {
-  DCHECK(!view_);
+  CHECK(!view_, base::NotFatalUntil::M162);
 
 #if BUILDFLAG(IS_MAC)
   if (media_list_->IsSourceListDelegated()) {
-    DCHECK(!view_);
+    CHECK(!view_, base::NotFatalUntil::M162);
     auto view = std::make_unique<DesktopMediaDelegatedSourceListView>(
         weak_factory_.GetWeakPtr(), accessible_name, type);
     view_ = view.get();
@@ -89,7 +89,7 @@ std::unique_ptr<views::View> DesktopMediaListController::CreateView(
 
 std::unique_ptr<views::View> DesktopMediaListController::CreateTabListView(
     const std::u16string& accessible_name) {
-  DCHECK(!view_);
+  CHECK(!view_, base::NotFatalUntil::M162);
 
   auto view = std::make_unique<DesktopMediaTabList>(this, accessible_name);
   view_ = view.get();
@@ -111,6 +111,18 @@ void DesktopMediaListController::StartUpdatingInternal() {
   is_updating_ = true;
   media_list_->SetViewDialogWindowId(dialog_window_id_);
   media_list_->StartUpdating(this);
+}
+
+void DesktopMediaListController::OnAudioShareToggled(bool audio_shared) {
+#if BUILDFLAG(IS_MAC)
+  // For delegated source lists on macOS (such as SCContentSharingPicker), the
+  // action button to launch the system picker is drawn within the delegated
+  // list view itself. We propagate the audio-shared state to dynamically update
+  // this button's label in sync with the user's toggle choice.
+  if (view_ && media_list_->IsSourceListDelegated()) {
+    view_->SetAudioShared(audio_shared);
+  }
+#endif
 }
 
 void DesktopMediaListController::FocusView() {
@@ -171,6 +183,7 @@ DesktopMediaListController::GetSelection() const {
 }
 
 void DesktopMediaListController::ClearSelection() {
+  selected_source_sharing_blocked_ = std::nullopt;
   if (view_) {
     view_->ClearSelection();
   }
@@ -181,6 +194,11 @@ void DesktopMediaListController::OnSourceListLayoutChanged() {
 }
 
 void DesktopMediaListController::OnSourceSelectionChanged() {
+  if (std::optional<content::DesktopMediaID> selection = GetSelection()) {
+    selected_source_sharing_blocked_ = IsSourceSharingBlocked(*selection);
+  } else {
+    selected_source_sharing_blocked_ = std::nullopt;
+  }
   dialog_->OnSelectionChanged();
 }
 
@@ -206,6 +224,17 @@ size_t DesktopMediaListController::GetSourceCount() const {
 const DesktopMediaList::Source& DesktopMediaListController::GetSource(
     size_t index) const {
   return media_list_->GetSource(index);
+}
+
+bool DesktopMediaListController::IsSourceSharingBlocked(
+    const content::DesktopMediaID& id) const {
+  for (size_t i = 0; i < GetSourceCount(); ++i) {
+    const DesktopMediaList::Source& source = GetSource(i);
+    if (source.id == id) {
+      return source.is_sharing_blocked;
+    }
+  }
+  return false;
 }
 
 void DesktopMediaListController::SetThumbnailSize(const gfx::Size& size) {
@@ -268,6 +297,12 @@ void DesktopMediaListController::OnSourceThumbnailChanged(int index) {
   if (view_) {
     view_->GetSourceListListener()->OnSourceThumbnailChanged(
         base::checked_cast<size_t>(index));
+    const DesktopMediaList::Source& source = GetSource(index);
+    if (GetSelection() == source.id &&
+        selected_source_sharing_blocked_ != source.is_sharing_blocked) {
+      selected_source_sharing_blocked_ = source.is_sharing_blocked;
+      dialog_->OnSelectionChanged();
+    }
   }
 }
 
@@ -278,7 +313,7 @@ void DesktopMediaListController::OnSourcePreviewChanged(size_t index) {
 }
 
 void DesktopMediaListController::OnDelegatedSourceListSelection() {
-  DCHECK(media_list_->IsSourceListDelegated());
+  CHECK(media_list_->IsSourceListDelegated(), base::NotFatalUntil::M162);
   if (view_) {
     view_->GetSourceListListener()->OnDelegatedSourceListSelection();
   }
@@ -287,7 +322,7 @@ void DesktopMediaListController::OnDelegatedSourceListSelection() {
 }
 
 void DesktopMediaListController::OnDelegatedSourceListDismissed() {
-  DCHECK(media_list_->IsSourceListDelegated());
+  CHECK(media_list_->IsSourceListDelegated(), base::NotFatalUntil::M162);
   dialog_->OnDelegatedSourceListDismissed();
 }
 

@@ -11,12 +11,11 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "components/optimization_guide/core/model_execution/feature_keys.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/model_execution/remote_model_executor.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/proto/model_execution.pb.h"
 #include "components/optimization_guide/proto/model_quality_service.pb.h"
-#include "url/gurl.h"
 
 class OptimizationGuideLogger;
 
@@ -31,6 +30,7 @@ class IdentityManager;
 namespace optimization_guide {
 
 class ModelExecutionFetcher;
+class ModelQualityLogsUploaderService;
 
 class ModelExecutionManager final {
  public:
@@ -105,9 +105,6 @@ class ModelExecutionManager final {
 
   // Owned by OptimizationGuideKeyedService and outlives `this`.
   raw_ptr<OptimizationGuideLogger> optimization_guide_logger_;
-
-  // The endpoint for the model execution service.
-  const GURL model_execution_service_url_;
 
   // Provides alternative fetcher implementations.
   std::unique_ptr<Delegate> delegate_;

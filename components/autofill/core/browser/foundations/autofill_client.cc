@@ -6,7 +6,6 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -28,24 +27,32 @@
 #include "components/autofill/core/browser/integrators/identity_credential/identity_credential_delegate.h"
 #include "components/autofill/core/browser/integrators/password_form_classification.h"
 #include "components/autofill/core/browser/integrators/password_manager/password_manager_delegate.h"
+#include "components/autofill/core/browser/integrators/touch_to_fill/touch_to_fill_autofill_delegate.h"
 #include "components/autofill/core/browser/payments/credit_card_access_manager.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/studies/autofill_ablation_study.h"
 #include "components/autofill/core/browser/studies/autofill_experiments.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/ui/popup_open_enums.h"
 #include "components/autofill/core/common/aliases.h"
 #include "components/autofill/core/common/unique_ids.h"
+#include "components/device_reauth/device_authenticator.h"
 #include "components/optimization_guide/core/model_execution/remote_model_executor.h"
 #include "components/personal_context/core/personal_context_types.h"
 #include "components/profile_metrics/browser_profile_type.h"
-#include "net/base/schemeful_site.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "url/origin.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "components/autofill/core/browser/ui/autofill_tapjacking_protector.h"
+#endif
 
 namespace autofill {
 
 AutofillClient::PopupOpenArgs::PopupOpenArgs() = default;
 AutofillClient::PopupOpenArgs::PopupOpenArgs(
-    LocalFrameToken frame_token,
+    FormGlobalId form_id,
+    FieldGlobalId field_id,
     const gfx::RectF& element_bounds,
     base::i18n::TextDirection text_direction,
     std::vector<Suggestion> suggestions,
@@ -53,8 +60,10 @@ AutofillClient::PopupOpenArgs::PopupOpenArgs(
     int32_t form_control_ax_id,
     PopupAnchorType anchor_type,
     bool show_tabbed_popup,
-    bool prefer_prev_arrow_side_on_suggestions_update)
-    : frame_token(std::move(frame_token)),
+    bool prefer_prev_arrow_side_on_suggestions_update,
+    std::u16string search_bar_initial_value)
+    : form_id(std::move(form_id)),
+      field_id(std::move(field_id)),
       element_bounds(element_bounds),
       text_direction(text_direction),
       suggestions(std::move(suggestions)),
@@ -63,7 +72,8 @@ AutofillClient::PopupOpenArgs::PopupOpenArgs(
       anchor_type(anchor_type),
       show_tabbed_popup(show_tabbed_popup),
       prefer_prev_arrow_side_on_suggestions_update(
-          prefer_prev_arrow_side_on_suggestions_update) {}
+          prefer_prev_arrow_side_on_suggestions_update),
+      search_bar_initial_value(std::move(search_bar_initial_value)) {}
 AutofillClient::PopupOpenArgs::PopupOpenArgs(
     const AutofillClient::PopupOpenArgs&) = default;
 AutofillClient::PopupOpenArgs::PopupOpenArgs(AutofillClient::PopupOpenArgs&&) =
@@ -122,17 +132,14 @@ AutofillClient::GetPasswordManagerFieldClassificationModelHandler() {
   return nullptr;
 }
 
-bool AutofillClient::ShouldShowPersonalContextAmbientAutofillNotice() const {
-  return false;
+affiliations::AffiliationService* AutofillClient::GetAffiliationService() {
+  return nullptr;
 }
 
-void AutofillClient::MarkPersonalContextAmbientAutofillNoticeAsAcknowledged() {}
-
-bool AutofillClient::ShouldShowPersonalContextAtMemoryNotice() const {
-  return false;
+personal_context::PersonalContextFirstRunService*
+AutofillClient::GetPersonalContextFirstRunService() {
+  return nullptr;
 }
-
-void AutofillClient::MarkPersonalContextAtMemoryNoticeAsAcknowledged() {}
 
 AutofillComposeDelegate* AutofillClient::GetComposeDelegate() {
   return nullptr;
@@ -143,6 +150,14 @@ const AutofillComposeDelegate* AutofillClient::GetComposeDelegate() const {
 
 AtMemoryQueryService* AutofillClient::GetAtMemoryQueryService() {
   return nullptr;
+}
+
+AtMemoryManager* AutofillClient::GetAtMemoryManager() {
+  return nullptr;
+}
+
+const AtMemoryManager* AutofillClient::GetAtMemoryManager() const {
+  return const_cast<AutofillClient*>(this)->GetAtMemoryManager();
 }
 
 personal_context::PersonalContextEligibilityState
@@ -186,6 +201,15 @@ AutofillClient::GetAutofillAiPersonalContextAccessManager() const {
       ->GetAutofillAiPersonalContextAccessManager();
 }
 
+EntitySuppressionManager* AutofillClient::GetEntitySuppressionManager() {
+  return nullptr;
+}
+
+const EntitySuppressionManager* AutofillClient::GetEntitySuppressionManager()
+    const {
+  return const_cast<AutofillClient*>(this)->GetEntitySuppressionManager();
+}
+
 AutofillAiModelCache* AutofillClient::GetAutofillAiModelCache() {
   return nullptr;
 }
@@ -227,6 +251,19 @@ AutofillClient::GetPaymentsAutofillClient() const {
   return const_cast<AutofillClient*>(this)->GetPaymentsAutofillClient();
 }
 
+payments::WalletReminderNoticeManager*
+AutofillClient::GetWalletReminderNoticeManager() {
+  payments::PaymentsAutofillClient* payments_client =
+      GetPaymentsAutofillClient();
+  return payments_client ? payments_client->GetWalletReminderNoticeManager()
+                         : nullptr;
+}
+
+const payments::WalletReminderNoticeManager*
+AutofillClient::GetWalletReminderNoticeManager() const {
+  return const_cast<AutofillClient*>(this)->GetWalletReminderNoticeManager();
+}
+
 GeoIpCountryCode AutofillClient::GetVariationConfigCountryCode() const {
   return GeoIpCountryCode(std::string());
 }
@@ -254,43 +291,58 @@ const AutofillAblationStudy& AutofillClient::GetAblationStudy() const {
   return AutofillAblationStudy::disabled_study();
 }
 
-bool AutofillClient::IsAndroidLargeFormFactor() const {
+#if BUILDFLAG(IS_ANDROID)
+bool AutofillClient::ShowAmbientAutofillNotice(
+    base::WeakPtr<TouchToFillAutofillDelegate> delegate) {
   return false;
 }
 
-#if BUILDFLAG(IS_ANDROID)
-void AutofillClient::ShowAtMemoryBottomSheet(
-    base::span<const Suggestion> suggestions,
-    base::WeakPtr<AutofillSuggestionDelegate> delegate) {}
+bool AutofillClient::ShowPrivateInferenceNoticeBottomSheet(
+    base::WeakPtr<TouchToFillAutofillDelegate> delegate) {
+  return false;
+}
+
+void AutofillClient::HideTouchToFillAutofillNotice() {}
 
 AutofillSnackbarControllerImpl*
 AutofillClient::GetAutofillSnackbarController() {
   return nullptr;
 }
-#endif
 
-void AutofillClient::TriggerUserPerceptionOfAutofillSurvey(
-    FillingProduct filling_product,
-    const std::map<std::string, std::string>& field_filling_stats_data) {
+void AutofillClient::ShowAutofillAiLoadingDialog() {
   NOTIMPLEMENTED();
 }
+
+void AutofillClient::DismissAutofillAiLoadingDialog() {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::ShowTapjackingProtector(
+    AutofillTapjackingProtector::AuthorizationType authorization_type,
+    AutofillTapjackingProtector::AuthorizationCallback callback) {
+  NOTIMPLEMENTED();
+}
+#endif
 
 void AutofillClient::TriggerDeclinedSaveAddressReasonSurvey() {
   NOTIMPLEMENTED();
 }
 
-void AutofillClient::TriggerAutofillAiFillingJourneySurvey(
-    bool suggestion_accepted,
-    EntityType entity_type,
-    const base::flat_set<EntityTypeName>& saved_entities,
-    const FieldTypeSet& triggering_field_types) {
+void AutofillClient::TriggerPersonalizationAndTrustSurveys(
+    FillingProduct filling_product,
+    const HatsSurveyStringData& field_filling_stats_data) {
   NOTIMPLEMENTED();
 }
 
-void AutofillClient::TriggerAutofillAiSavePromptSurvey(
-    bool prompt_accepted,
-    EntityType entity_type,
-    const base::flat_set<EntityTypeName>& saved_entities) {
+void AutofillClient::TriggerAtMemoryPersonalizationAndTrustSurvey(
+    bool is_dismissed,
+    const HatsSurveyStringData& product_specific_data) {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::
+    TriggerOneTimePasswordDismissalPersonalizationAndTrustSurvey(
+        const HatsSurveyStringData& product_specific_data) {
   NOTIMPLEMENTED();
 }
 
@@ -298,25 +350,17 @@ bool AutofillClient::IsTabInActorMode() const {
   return false;
 }
 
-ActorKeyMetricsRecorder* AutofillClient::GetActorKeyMetricsRecorder() {
+ActorAutofillManager* AutofillClient::GetActorAutofillManager() {
   return nullptr;
 }
 
-std::unique_ptr<device_reauth::DeviceAuthenticator>
-AutofillClient::GetDeviceAuthenticator(std::string histogram) const {
-  return nullptr;
+int64_t AutofillClient::GetNavigationId() const {
+  return 0;
 }
 
 std::unique_ptr<device_reauth::DeviceAuthenticator>
 AutofillClient::GetDeviceAuthenticator() const {
   return GetDeviceAuthenticator("");
-}
-
-bool AutofillClient::SupportsDeviceReauth() const {
-  std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator =
-      GetDeviceAuthenticator();
-  return authenticator &&
-         authenticator->CanAuthenticateWithBiometricOrScreenLock();
 }
 
 bool AutofillClient::ShowAutofillFieldIphForFeature(
@@ -391,6 +435,7 @@ void AutofillClient::ShowEntityImportBubble(
     EntityInstance new_entity,
     std::optional<EntityInstance> old_entity,
     bool save_is_synchronous,
+    LegalMessageLines public_passes_notice,
     EntityImportPromptResultCallback prompt_closed_callback) {}
 
 void AutofillClient::CloseEntityImportBubble() {
@@ -405,7 +450,12 @@ void AutofillClient::ShowAutofillAiSaveToWalletFailureNotification() {
   NOTIMPLEMENTED();
 }
 
-void AutofillClient::ShowAutofillAiFetchFromWalletFailureNotification() {
+void AutofillClient::ShowAutofillAiFetchEntityFailureNotification() {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::ShowAtMemoryFetchFailureNotification(
+    std::optional<std::u16string> message_override) {
   NOTIMPLEMENTED();
 }
 
@@ -417,19 +467,57 @@ void AutofillClient::ShowAutofillAiPrivateInferenceNotice() {
   NOTIMPLEMENTED();
 }
 
-void AutofillClient::ShowEmailVerifiedToast(const GURL& issuer) {
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+void AutofillClient::ShowAutofillAiSuppressionConfirmationDialog(
+    const EntityInstance& entity,
+    base::OnceCallback<void(bool)> callback) {
+  NOTIMPLEMENTED();
+}
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
+void AutofillClient::ShowAutofillAiSuggestionRemovedNotification(
+    const EntityInstance& entity,
+    base::OnceClosure on_undo_clicked) {
   NOTIMPLEMENTED();
 }
 
 void AutofillClient::ShowEmailVerificationPopup(
     const gfx::RectF& element_bounds,
-    const net::SchemefulSite& issuer_site,
+    const url::Origin& issuer_origin,
     const std::u16string& email,
-    base::OnceCallback<void(EmailVerificationPermissionUiResult)> callback) {
-  std::move(callback).Run(EmailVerificationPermissionUiResult::kIgnored);
+    base::OnceCallback<void(EmailVerificationPermissionUiStatus)> callback) {
+  NOTIMPLEMENTED();
+  std::move(callback).Run(EmailVerificationPermissionUiStatus::kOther);
+}
+
+void AutofillClient::HideEmailVerificationPopup() {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::ShowEmailVerificationLoadingToast(
+    base::OnceClosure cancel_callback) {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::ShowEmailVerifiedToast(const GURL& issuer) {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::ShowEmailVerificationErrorToast() {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::ShowGmailOtpOptInBubble(
+    const std::u16string& account_email,
+    base::OnceCallback<void(GmailOtpOptInResult)> callback) {
+  NOTIMPLEMENTED();
 }
 
 OtpFieldDetector* AutofillClient::GetOtpFieldDetector() {
+  return nullptr;
+}
+
+OtpMetricsTracker* AutofillClient::GetOtpMetricsTracker() {
   return nullptr;
 }
 
@@ -437,8 +525,11 @@ FormPredictionsTracker* AutofillClient::GetFormPredictionsTracker() {
   return nullptr;
 }
 
-one_time_tokens::OneTimeTokenService* AutofillClient::GetOneTimeTokenService()
-    const {
+one_time_tokens::SmsOtpService* AutofillClient::GetSmsOtpService() const {
+  return nullptr;
+}
+
+one_time_tokens::GmailOtpBackend* AutofillClient::GetGmailOtpBackend() const {
   return nullptr;
 }
 
@@ -459,12 +550,18 @@ OtpPhishGuardDelegate* AutofillClient::GetOtpPhishGuardDelegate() {
   return nullptr;
 }
 
+void AutofillClient::OpenGmailForOtps() {}
+
 void AutofillClient::OpenGeminiInSidebar(const std::u16string& prompt) {
   // TODO(crbug.com/493824736): Implement opening Gemini in the sidebar.
   NOTIMPLEMENTED();
 }
 
 bool AutofillClient::IsGlicEnabled() const {
+  return false;
+}
+
+bool AutofillClient::IsGlicConsented() const {
   return false;
 }
 

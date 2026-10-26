@@ -19,6 +19,7 @@
 #include "chrome/browser/lens/core/mojom/overlay_object.mojom.h"
 #include "chrome/browser/lens/core/mojom/text.mojom.h"
 #include "chrome/browser/ui/lens/lens_overlay_gen204_controller.h"
+#include "chrome/browser/ui/lens/lens_overlay_query_controller_types.h"
 #include "components/endpoint_fetcher/endpoint_fetcher.h"
 #include "components/lens/lens_overlay_invocation_source.h"
 #include "components/lens/lens_overlay_mime_type.h"
@@ -29,7 +30,6 @@
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "third_party/lens_server_proto/lens_overlay_client_context.pb.h"
 #include "third_party/lens_server_proto/lens_overlay_cluster_info.pb.h"
-#include "third_party/lens_server_proto/lens_overlay_selection_type.pb.h"
 #include "third_party/lens_server_proto/lens_overlay_server.pb.h"
 #include "third_party/lens_server_proto/lens_overlay_service_deps.pb.h"
 #include "third_party/lens_server_proto/lens_overlay_visual_search_interaction_data.pb.h"
@@ -51,39 +51,8 @@ namespace lens {
 class ImageCrop;
 class ImageData;
 class LensComposeboxController;
+enum LensOverlaySelectionType : int;
 struct ImageCropAndBitmap;
-
-// Data struct representing content data to be sent to the Lens server.
-struct PageContent {
-  PageContent();
-  PageContent(std::vector<uint8_t> bytes, lens::MimeType content_type);
-  PageContent(const PageContent& other);
-  ~PageContent();
-
- public:
-  std::vector<uint8_t> bytes_;
-  lens::MimeType content_type_;
-};
-
-// Callback type alias for the lens overlay full image response.
-using LensOverlayFullImageResponseCallback =
-    base::RepeatingCallback<void(std::vector<lens::mojom::OverlayObjectPtr>,
-                                 lens::mojom::TextPtr,
-                                 bool)>;
-// Callback type alias for the lens overlay url response.
-using LensOverlayUrlResponseCallback =
-    base::RepeatingCallback<void(lens::proto::LensOverlayUrlResponse)>;
-// Callback type alias for the lens overlay interaction response.
-using LensOverlayInteractionResponseCallback =
-    base::RepeatingCallback<void(lens::mojom::TextPtr)>;
-// Callback type alias for the thumbnail image creation.
-using LensOverlayThumbnailCreatedCallback =
-    base::RepeatingCallback<void(const std::string&, const SkBitmap&)>;
-// Callback type alias for the OAuth headers created.
-using OAuthHeadersCreatedCallback =
-    base::OnceCallback<void(std::vector<std::string>)>;
-using UploadProgressCallback =
-    base::RepeatingCallback<void(uint64_t position, uint64_t total)>;
 
 // Manages queries on behalf of a Lens overlay.
 class LensOverlayQueryController : public lens::LensUploadChunker::Delegate {
@@ -219,9 +188,7 @@ class LensOverlayQueryController : public lens::LensUploadChunker::Delegate {
   uint64_t gen204_id() const { return gen204_id_; }
 
   // Returns the search session id for the current query flow.
-  std::string search_session_id() const {
-    return cluster_info_->search_session_id();
-  }
+  virtual std::string search_session_id() const;
 
   // Testing method to reset the cluster info state.
   void ResetRequestClusterInfoStateForTesting();
@@ -234,10 +201,15 @@ class LensOverlayQueryController : public lens::LensUploadChunker::Delegate {
   // Returns the latest visual search interaction data sent to the server.
   // This does not take into account whether the selection was cleared by the
   // user.
-  std::optional<lens::LensOverlayVisualSearchInteractionData>
-  GetVisualSearchInteractionData() {
-    return visual_search_interaction_data_;
-  }
+  virtual std::optional<lens::LensOverlayVisualSearchInteractionData>
+  GetVisualSearchInteractionData();
+
+  // Updates the request id based on the given update mode and returns the
+  // request id proto. Also updates the suggest signals with the new request id
+  // and runs the suggest inputs callback.
+  virtual std::unique_ptr<lens::LensOverlayRequestId> GetNextRequestId(
+      lens::RequestIdUpdateMode update_mode,
+      lens::LensOverlayRequestId::MediaType media_type);
 
   // After this is called, for the remainder of the current session, requests do
   // not need to check prefs for whether the user has granted permissions
@@ -302,13 +274,6 @@ class LensOverlayQueryController : public lens::LensUploadChunker::Delegate {
   virtual void SendSemanticEventGen204IfEnabled(
       lens::mojom::SemanticEvent event,
       std::optional<lens::LensOverlayRequestId> request_id);
-
-  // Updates the request id based on the given update mode and returns the
-  // request id proto. Also updates the suggest signals with the new request id
-  // and runs the suggest inputs callback.
-  std::unique_ptr<lens::LensOverlayRequestId> GetNextRequestId(
-      lens::RequestIdUpdateMode update_mode,
-      lens::LensOverlayRequestId::MediaType media_type);
 
   // Updates the suggest inputs with the feature params and latest cluster info
   // response, then runs the callback. The request id in the suggest inputs will
@@ -977,18 +942,9 @@ class LensOverlayQueryController : public lens::LensUploadChunker::Delegate {
   // permanently.
   bool has_permission_for_session_ = false;
 
-  // True if the session began without permanent permissions in a flow requiring
-  // restricted initial uploads (e.g. image context menu search).
+  // True if the session is in a flow requiring restricted uploads (e.g. image
+  // context menu search).
   bool initial_query_restricted_ = false;
-
-  // True if the initial page content upload was blocked because the user
-  // performed a context menu image search but had not granted permissions
-  // permanently.
-  bool initial_page_content_blocked_ = false;
-
-  // True if the full screenshot and page context have been sent after the
-  // initial query of the non-blocking image context menu search flow.
-  bool deferred_screenshot_and_page_context_sent_ = false;
 
   base::WeakPtrFactory<LensOverlayQueryController> weak_ptr_factory_{this};
 };

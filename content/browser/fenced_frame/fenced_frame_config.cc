@@ -13,40 +13,13 @@
 #include "services/network/public/cpp/permissions_policy/fenced_frame_permissions_policies.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
-#include "third_party/blink/public/common/interest_group/ad_auction_constants.h"
+#include "third_party/blink/public/common/fenced_frame/fenced_frame_utils.h"
 
 namespace content {
 
 GURL GenerateUrnUuid() {
   return GURL(kUrnUuidPrefix +
               base::Uuid::GenerateRandomV4().AsLowercaseString());
-}
-
-std::string SubstituteMappedStrings(
-    const std::string& input,
-    const std::vector<std::pair<std::string, std::string>>& substitutions) {
-  std::vector<std::string> output_vec;
-  size_t input_idx = 0;
-  while (input_idx < input.size()) {
-    size_t replace_idx = input.size();
-    size_t replace_end_idx = input.size();
-    std::pair<std::string, std::string> const* next_replacement = nullptr;
-    for (const auto& substitution : substitutions) {
-      size_t found_idx = input.find(substitution.first, input_idx);
-      if (found_idx < replace_idx) {
-        replace_idx = found_idx;
-        replace_end_idx = found_idx + substitution.first.size();
-        next_replacement = &substitution;
-      }
-    }
-    output_vec.push_back(input.substr(input_idx, replace_idx - input_idx));
-    if (replace_idx < input.size()) {
-      output_vec.push_back(next_replacement->second);
-    }
-    // move input index to after what we replaced (or end of string).
-    input_idx = replace_end_idx;
-  }
-  return base::StrCat(output_vec);
 }
 
 namespace {
@@ -112,27 +85,6 @@ FencedFrameConfig::FencedFrameConfig(
   is_ad_component_ = is_ad_component;
 }
 
-FencedFrameConfig::FencedFrameConfig(
-    const GURL& urn_uuid,
-    const GURL& mapped_url,
-    const SharedStorageBudgetMetadata& shared_storage_budget_metadata,
-    scoped_refptr<FencedFrameReporter> fenced_frame_reporter)
-    : urn_uuid_(urn_uuid),
-      mapped_url_(std::in_place,
-                  mapped_url,
-                  VisibilityToEmbedder::kOpaque,
-                  VisibilityToContent::kTransparent),
-      deprecated_should_freeze_initial_size_(std::in_place,
-                                             false,
-                                             VisibilityToEmbedder::kTransparent,
-                                             VisibilityToContent::kOpaque),
-      shared_storage_budget_metadata_(std::in_place,
-                                      shared_storage_budget_metadata,
-                                      VisibilityToEmbedder::kOpaque,
-                                      VisibilityToContent::kOpaque),
-      fenced_frame_reporter_(std::move(fenced_frame_reporter)),
-      mode_(DeprecatedFencedFrameMode::kOpaqueAds) {}
-
 FencedFrameConfig::FencedFrameConfig(const FencedFrameConfig&) = default;
 FencedFrameConfig::FencedFrameConfig(FencedFrameConfig&&) = default;
 FencedFrameConfig::~FencedFrameConfig() = default;
@@ -172,9 +124,6 @@ blink::FencedFrame::RedactedFencedFrameConfig FencedFrameConfig::RedactFor(
     }
   }
 
-  RedactProperty(shared_storage_budget_metadata_, entity,
-                 redacted_config.shared_storage_budget_metadata_);
-
   // The mode never needs to be redacted, because it is a function of which API
   // was called to generate the config, rather than any cross-site data.
   redacted_config.mode_ = mode_;
@@ -190,8 +139,6 @@ blink::FencedFrame::RedactedFencedFrameConfig FencedFrameConfig::RedactFor(
 FencedFrameProperties::FencedFrameProperties()
     : ad_auction_data_(std::nullopt),
       nested_urn_config_pairs_(std::nullopt),
-      shared_storage_budget_metadata_(std::nullopt),
-      embedder_shared_storage_context_(std::nullopt),
       partition_nonce_(std::in_place,
                        base::UnguessableToken::Create(),
                        VisibilityToEmbedder::kOpaque,
@@ -217,8 +164,6 @@ FencedFrameProperties::FencedFrameProperties(const FencedFrameConfig& config)
       ad_auction_data_(config.ad_auction_data_),
       on_navigate_callback_(config.on_navigate_callback_),
       nested_urn_config_pairs_(std::nullopt),
-      shared_storage_budget_metadata_(std::nullopt),
-      embedder_shared_storage_context_(std::nullopt),
       fenced_frame_reporter_(config.fenced_frame_reporter_),
       partition_nonce_(std::in_place,
                        base::UnguessableToken::Create(),
@@ -229,12 +174,6 @@ FencedFrameProperties::FencedFrameProperties(const FencedFrameConfig& config)
       is_ad_component_(config.is_ad_component_),
       effective_enabled_permissions_(config.effective_enabled_permissions_),
       parent_permissions_info_(config.parent_permissions_info_) {
-  if (config.shared_storage_budget_metadata_) {
-    shared_storage_budget_metadata_.emplace(
-        &config.shared_storage_budget_metadata_->GetValueIgnoringVisibility(),
-        config.shared_storage_budget_metadata_->visibility_to_embedder_,
-        config.shared_storage_budget_metadata_->visibility_to_content_);
-  }
   if (config.nested_configs_) {
     nested_urn_config_pairs_.emplace(
         GenerateURNConfigVectorForConfigs(
@@ -284,18 +223,6 @@ FencedFrameProperties::RedactFor(FencedFrameEntity entity) const {
       redacted_properties.nested_urn_config_pairs_.emplace(std::nullopt);
     }
   }
-  if (shared_storage_budget_metadata_.has_value()) {
-    std::optional<raw_ptr<const SharedStorageBudgetMetadata>>
-        potentially_opaque_ptr =
-            shared_storage_budget_metadata_->GetValueForEntity(entity);
-    if (potentially_opaque_ptr.has_value()) {
-      redacted_properties.shared_storage_budget_metadata_ =
-          blink::FencedFrame::RedactedFencedFrameProperty(
-              std::make_optional(*potentially_opaque_ptr.value()));
-    } else {
-      redacted_properties.shared_storage_budget_metadata_.emplace(std::nullopt);
-    }
-  }
 
   // The mode never needs to be redacted, because it is a function of which API
   // was called to generate the config, rather than any cross-site data.
@@ -323,8 +250,9 @@ std::vector<std::pair<GURL, FencedFrameConfig>>
 FencedFrameProperties::GenerateURNConfigVectorForConfigs(
     const std::vector<FencedFrameConfig>& nested_configs) {
   std::vector<std::pair<GURL, FencedFrameConfig>> nested_urn_config_pairs;
-  const size_t kMaxAdAuctionAdComponents = blink::MaxAdAuctionAdComponents();
-  DCHECK_LE(nested_configs.size(), kMaxAdAuctionAdComponents);
+  const size_t kMaxAdAuctionAdComponents = blink::kMaxAdAuctionAdComponents;
+  CHECK_LE(nested_configs.size(), kMaxAdAuctionAdComponents,
+           base::NotFatalUntil::M160);
   for (const FencedFrameConfig& config : nested_configs) {
     // Give each config its own urn:uuid. This ensures that if the same config
     // is loaded into multiple fenced frames, they will not share the same
@@ -335,7 +263,7 @@ FencedFrameProperties::GenerateURNConfigVectorForConfigs(
     nested_urn_config_pairs.emplace_back(urn_uuid, config_with_urn);
   }
 
-  // Pad `component_ads_` to contain exactly MaxAdAuctionAdComponents() ads, to
+  // Pad `component_ads_` to contain exactly kMaxAdAuctionAdComponents ads, to
   // avoid leaking any data to the fenced frame the component ads array is
   // exposed to.
   while (nested_urn_config_pairs.size() < kMaxAdAuctionAdComponents) {

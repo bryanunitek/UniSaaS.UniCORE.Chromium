@@ -15,7 +15,6 @@
 #include "media/capture/video/video_capture_buffer_pool_impl.h"
 #include "media/capture/video/video_capture_buffer_pool_util.h"
 #include "media/capture/video/video_capture_buffer_tracker_factory_impl.h"
-#include "media/capture/video/video_capture_metrics.h"
 #include "media/capture/video/video_frame_receiver_on_task_runner.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "services/video_capture/public/cpp/receiver_mojo_to_media_adapter.h"
@@ -145,8 +144,11 @@ void DeviceMediaToMojoAdapter::StartInternal(
   if (requested_settings.buffer_type !=
           media::VideoCaptureBufferType::kSharedMemory &&
       requested_settings.buffer_type !=
-          media::VideoCaptureBufferType::kGpuMemoryBuffer) {
-    // Buffer types other than shared memory are not supported.
+          media::VideoCaptureBufferType::kGpuMemoryBuffer &&
+      requested_settings.buffer_type !=
+          media::VideoCaptureBufferType::kSharedImage) {
+    // Only shared memory, GpuMemoryBuffer and shared image buffers are
+    // supported.
     media_receiver->OnError(
         media::VideoCaptureError::
             kDeviceMediaToMojoAdapterEncounteredUnsupportedBufferType);
@@ -187,10 +189,6 @@ void DeviceMediaToMojoAdapter::StartInternal(
 
   device_->AllocateAndStart(requested_settings, std::move(device_client));
   device_started_ = true;
-
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
-  device_->GetPhotoState(base::BindOnce(&media::LogCaptureDeviceEffects));
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 }
 
 void DeviceMediaToMojoAdapter::StopInProcess() {
@@ -246,6 +244,11 @@ void DeviceMediaToMojoAdapter::ProcessFeedback(
 
 void DeviceMediaToMojoAdapter::RequestRefreshFrame() {
   device_->RequestRefreshFrame();
+}
+
+void DeviceMediaToMojoAdapter::InvalidateBuffers() {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  device_->InvalidateBuffers();
 }
 
 void DeviceMediaToMojoAdapter::Stop() {

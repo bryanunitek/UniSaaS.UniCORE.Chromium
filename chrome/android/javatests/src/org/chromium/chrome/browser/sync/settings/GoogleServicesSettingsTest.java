@@ -29,9 +29,9 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.R;
@@ -45,9 +45,10 @@ import org.chromium.chrome.browser.price_tracking.PriceTrackingUtilities;
 import org.chromium.chrome.browser.privacy.settings.PrivacyPreferencesManagerImpl;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.SnackbarManageable;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
@@ -60,24 +61,27 @@ import org.chromium.components.user_prefs.UserPrefs;
 
 /** Tests for GoogleServicesSettings. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@DoNotBatch(reason = "A subset of tests requires adding a new account that could fail if batched.")
+@Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 public class GoogleServicesSettingsTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Rule public final SigninTestRule mSigninTestRule = new SigninTestRule();
+    public final SigninTestRule mSigninTestRule = SigninTestRule.createWithCleanups();
 
     public final FreshCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.freshChromeTabbedActivityRule();
 
-    public final SettingsActivityTestRule<GoogleServicesSettings> mSettingsActivityTestRule =
-            new SettingsActivityTestRule<>(GoogleServicesSettings.class);
+    public final SettingsTestRule<GoogleServicesSettings> mSettingsTestRule =
+            new SettingsTestRule<>(GoogleServicesSettings.class);
 
     // SettingsActivity has to be finished before the outer CTA can be finished or trying to finish
-    // CTA won't work.
+    // CTA won't work. SigninTestRule is the outer rule so accounts and sign-in state are torn down
+    // after all activities finish.
     @Rule
     public final RuleChain mRuleChain =
-            RuleChain.outerRule(mActivityTestRule).around(mSettingsActivityTestRule);
+            RuleChain.outerRule(mSigninTestRule)
+                    .around(mActivityTestRule)
+                    .around(mSettingsTestRule);
 
     @Mock private PasswordManagerUtilBridge.Natives mMockPasswordManagerUtilBridgeJni;
     @Mock private PrivacyPreferencesManagerImpl mMockPrivacyPreferencesManager;
@@ -107,6 +111,7 @@ public class GoogleServicesSettingsTest {
                     PrefService prefService =
                             UserPrefs.get(ProfileManager.getLastUsedRegularProfile());
                     prefService.clearPref(Pref.SIGNIN_ALLOWED);
+                    prefService.clearPref(Pref.USAGE_STATS_ENABLED);
                 });
     }
 
@@ -146,7 +151,8 @@ public class GoogleServicesSettingsTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     SnackbarManager snackbarManager =
-                            mSettingsActivityTestRule.getActivity().getSnackbarManager();
+                            ((SnackbarManageable) mSettingsTestRule.getActivity())
+                                    .getSnackbarManager();
                     Assert.assertTrue(snackbarManager.isShowing());
                     Snackbar currentSnackbar = snackbarManager.getCurrentSnackbarForTesting();
                     Assert.assertEquals(
@@ -322,7 +328,7 @@ public class GoogleServicesSettingsTest {
     }
 
     private GoogleServicesSettings startGoogleServicesSettings() {
-        mSettingsActivityTestRule.startSettingsActivity();
-        return mSettingsActivityTestRule.getFragment();
+        mSettingsTestRule.startSettingsActivity();
+        return mSettingsTestRule.getFragment();
     }
 }

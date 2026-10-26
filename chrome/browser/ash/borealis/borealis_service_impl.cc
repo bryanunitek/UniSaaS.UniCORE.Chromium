@@ -4,19 +4,25 @@
 
 #include "chrome/browser/ash/borealis/borealis_service_impl.h"
 
+#include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
+#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/profiles/profile.h"
+
 namespace borealis {
 
 BorealisServiceImpl::BorealisServiceImpl(Profile* profile)
     : profile_(profile),
       app_launcher_(profile_),
       app_uninstaller_(profile_),
-      context_manager_(profile),
+      disk_cleanup_manager_(
+          ash::ProfileHelper::GetUserIdHashFromProfile(profile_),
+          profile_->GetPrefs(),
+          guest_os::GuestOsRegistryServiceFactory::GetForProfile(profile_)),
       features_(profile_),
       installer_(profile_),
       launch_options_(profile_),
       shutdown_monitor_(profile_),
-      window_manager_(profile_),
-      survey_handler_(profile_, &window_manager_) {}
+      window_manager_(profile_) {}
 
 BorealisServiceImpl::~BorealisServiceImpl() = default;
 
@@ -28,8 +34,8 @@ BorealisAppUninstaller& BorealisServiceImpl::AppUninstaller() {
   return app_uninstaller_;
 }
 
-BorealisContextManager& BorealisServiceImpl::ContextManager() {
-  return context_manager_;
+BorealisDiskCleanupManager& BorealisServiceImpl::DiskCleanupManager() {
+  return disk_cleanup_manager_;
 }
 
 BorealisFeatures& BorealisServiceImpl::Features() {
@@ -50,10 +56,6 @@ BorealisShutdownMonitor& BorealisServiceImpl::ShutdownMonitor() {
 
 BorealisWindowManager& BorealisServiceImpl::WindowManager() {
   return window_manager_;
-}
-
-BorealisSurveyHandler& BorealisServiceImpl::SurveyHandler() {
-  return survey_handler_;
 }
 
 }  // namespace borealis

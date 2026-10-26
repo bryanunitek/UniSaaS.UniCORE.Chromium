@@ -21,16 +21,18 @@
 #include "chrome/browser/media/webrtc/webrtc_browsertest_common.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/sessions/tab_restore_service_load_waiter.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tab_sharing/tab_sharing_infobar_delegate.h"
+#include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/infobars/content/content_infobar_manager.h"
+#include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
 #include "components/infobars/core/infobar_manager.h"
 #include "content/public/browser/browser_thread.h"
@@ -45,8 +47,8 @@
 namespace {
 static const char kMainWebrtcTestHtmlPage[] = "/webrtc/webrtc_jsep01_test.html";
 
-content::WebContents* GetWebContents(Browser* browser, int tab) {
-  return browser->tab_strip_model()->GetWebContentsAt(tab);
+content::WebContents* GetWebContents(BrowserWindowInterface* browser, int tab) {
+  return browser->GetTabStripModel()->GetWebContentsAt(tab);
 }
 
 content::DesktopMediaID GetDesktopMediaIDForScreen() {
@@ -54,7 +56,8 @@ content::DesktopMediaID GetDesktopMediaIDForScreen() {
                                  content::DesktopMediaID::kFakeId);
 }
 
-content::DesktopMediaID GetDesktopMediaIDForTab(Browser* browser, int tab) {
+content::DesktopMediaID GetDesktopMediaIDForTab(BrowserWindowInterface* browser,
+                                                int tab) {
   content::RenderFrameHost* main_frame =
       GetWebContents(browser, tab)->GetPrimaryMainFrame();
   return content::DesktopMediaID(
@@ -65,7 +68,9 @@ content::DesktopMediaID GetDesktopMediaIDForTab(Browser* browser, int tab) {
           main_frame->GetRoutingID()));
 }
 
-infobars::ContentInfoBarManager* GetInfoBarManager(Browser* browser, int tab) {
+infobars::ContentInfoBarManager* GetInfoBarManager(
+    BrowserWindowInterface* browser,
+    int tab) {
   return infobars::ContentInfoBarManager::FromWebContents(
       GetWebContents(browser, tab));
 }
@@ -75,22 +80,34 @@ infobars::ContentInfoBarManager* GetInfoBarManager(
   return infobars::ContentInfoBarManager::FromWebContents(contents);
 }
 
-TabSharingInfoBarDelegate* GetDelegate(Browser* browser, int tab) {
-  return static_cast<TabSharingInfoBarDelegate*>(
-      GetInfoBarManager(browser, tab)->infobars()[0]->delegate());
+// The tab sharing infobar is a TabSharingInfoBarDelegate, unless the
+// centralized infobar framework shows it (MigratedTabSharing). Then it is a
+// ConfirmInfoBarDelegate whose cancel button is "Share this tab instead".
+void ClickShareThisTabInsteadButton(BrowserWindowInterface* browser, int tab) {
+  infobars::InfoBarDelegate* delegate =
+      GetInfoBarManager(browser, tab)->infobars()[0]->delegate();
+  CHECK_EQ(delegate->GetIdentifier(),
+           infobars::InfoBarDelegate::TAB_SHARING_INFOBAR_DELEGATE);
+  if (ConfirmInfoBarDelegate* confirm_delegate =
+          delegate->AsConfirmInfoBarDelegate()) {
+    confirm_delegate->Cancel();
+    return;
+  }
+  static_cast<TabSharingInfoBarDelegate*>(delegate)->ShareThisTabInstead();
 }
 
 class InfobarUIChangeObserver : public TabStripModelObserver {
  public:
-  explicit InfobarUIChangeObserver(Browser* browser) : browser_{browser} {
-    for (int tab = 0; tab < browser_->tab_strip_model()->count(); ++tab) {
-      auto* contents = browser_->tab_strip_model()->GetWebContentsAt(tab);
+  explicit InfobarUIChangeObserver(BrowserWindowInterface* browser)
+      : browser_{browser} {
+    for (int tab = 0; tab < browser_->GetTabStripModel()->count(); ++tab) {
+      auto* contents = browser_->GetTabStripModel()->GetWebContentsAt(tab);
       observers_[contents] =
           std::make_unique<InfoBarChangeObserver>(base::BindOnce(
               &InfobarUIChangeObserver::EraseObserver, base::Unretained(this)));
       GetInfoBarManager(contents)->AddObserver(observers_[contents].get());
     }
-    browser_->tab_strip_model()->AddObserver(this);
+    browser_->GetTabStripModel()->AddObserver(this);
   }
 
   ~InfobarUIChangeObserver() override {
@@ -100,7 +117,7 @@ class InfobarUIChangeObserver : public TabStripModelObserver {
 
       GetInfoBarManager(contents)->RemoveObserver(observer);
     }
-    browser_->tab_strip_model()->RemoveObserver(this);
+    browser_->GetTabStripModel()->RemoveObserver(this);
     observers_.clear();
   }
 
@@ -136,7 +153,6 @@ class InfobarUIChangeObserver : public TabStripModelObserver {
     }
   }
   void OnTabChangedAt(tabs::TabInterface* tab,
-                      int index,
                       TabChangeType change_type) override {
     if (observers_.find(tab->GetContents()) == observers_.end()) {
       observers_[tab->GetContents()] =
@@ -205,7 +221,7 @@ class InfobarUIChangeObserver : public TabStripModelObserver {
   std::unique_ptr<base::RunLoop> run_loop_;
   std::map<content::WebContents*, std::unique_ptr<InfoBarChangeObserver>>
       observers_;
-  raw_ptr<Browser> browser_;
+  raw_ptr<BrowserWindowInterface> browser_;
   base::RepeatingClosure barrier_closure_;
 };
 
@@ -376,10 +392,10 @@ IN_PROC_BROWSER_TEST_F(WebRtcDesktopCaptureBrowserTest,
   ASSERT_GE(average_fps, kFps / 3);
 }
 
-// TODO(crbug.com/40915051): Fails on Linux ASan, LSan and MSan builders.
-#if BUILDFLAG(IS_LINUX) &&                                      \
-    ((defined(ADDRESS_SANITIZER) && defined(LEAK_SANITIZER)) || \
-     defined(MEMORY_SANITIZER))
+// TODO(crbug.com/40915051): Fails on Linux ASan/LSan and MSan builders.
+#if (BUILDFLAG(IS_LINUX) && defined(ADDRESS_SANITIZER) && \
+     defined(LEAK_SANITIZER)) ||                          \
+    defined(MEMORY_SANITIZER)
 #define MAYBE_TabCaptureProvides0HzWith0MinFpsConstraintAndStaticContent \
   DISABLED_TabCaptureProvides0HzWith0MinFpsConstraintAndStaticContent
 #else
@@ -448,13 +464,13 @@ IN_PROC_BROWSER_TEST_F(WebRtcDesktopCaptureBrowserTest,
   // Should delete 3 infobars and create 3 new!
   observer.ExpectCalls(6);
   // Switch shared tab from 2 to 0.
-  GetDelegate(browser(), 0)->ShareThisTabInstead();
+  ClickShareThisTabInsteadButton(browser(), 0);
   observer.Wait();
 
   // Should delete 3 infobars and create 3 new!
   observer.ExpectCalls(6);
   // Switch shared tab from 0 to 2.
-  GetDelegate(browser(), 2)->ShareThisTabInstead();
+  ClickShareThisTabInsteadButton(browser(), 2);
   observer.Wait();
 }
 

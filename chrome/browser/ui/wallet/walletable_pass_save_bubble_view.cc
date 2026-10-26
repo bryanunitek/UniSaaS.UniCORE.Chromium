@@ -42,10 +42,10 @@ std::unique_ptr<views::BoxLayoutView> GetAttributesContainer() {
 }  // namespace
 
 WalletablePassSaveBubbleView::WalletablePassSaveBubbleView(
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     content::WebContents* web_contents,
     WalletablePassSaveBubbleController* controller)
-    : WalletablePassBubbleViewBase(anchor_view, web_contents, controller),
+    : WalletablePassBubbleViewBase(anchor, web_contents, controller),
       controller_(controller->GetWeakPtr()) {
   set_fixed_width(autofill::kAutofillAiBubbleWidth);
   SetLayoutManager(std::make_unique<views::FlexLayout>())
@@ -228,7 +228,8 @@ void WalletablePassSaveBubbleView::AddedToWidget() {
 
   // Set title view
   GetBubbleFrameView()->SetTitleView(autofill::CreateWalletBubbleTitleView(
-      l10n_util::GetStringUTF16(GetDialogTitleResourceId())));
+      l10n_util::GetStringUTF16(GetDialogTitleResourceId()),
+      /*is_branding_2026=*/false));
 }
 
 std::unique_ptr<views::StyledLabel>

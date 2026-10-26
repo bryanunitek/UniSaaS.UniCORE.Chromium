@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -27,12 +28,20 @@
 #include "base/logging.h"
 #include "base/mac/scoped_mach_msg_destroy.h"
 #include "base/message_loop/message_pump_for_io.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/numerics/byte_conversions.h"
+#include "base/rand_util.h"
 #include "base/task/current_thread.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/thread_annotations.h"
+#include "base/time/time.h"
 #include "base/trace_event/typed_macros.h"
+#include "build/build_config.h"
 #include "mojo/core/ipcz_driver/envelope.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/process_requirement.h"
+#endif
 
 namespace mojo::core {
 
@@ -50,6 +59,17 @@ constexpr mach_msg_id_t kChannelMacHandshakeMsgId = 'mjhs';
 constexpr mach_msg_id_t kChannelMacInlineMsgId = 'MOJO';
 constexpr mach_msg_id_t kChannelMacOOLMsgId = 'MOJ+';
 
+#if BUILDFLAG(IS_MAC)
+// When a peer process requirement is set, the peer must authenticate itself
+// within this interval after the channel starts. The security decision is the
+// audit-token check itself; this is only a liveness backstop so that a peer
+// that completes the channel handshake but never sends a qualifying message
+// (for example, a process squatting the bootstrap name that stalls on purpose)
+// cannot hold this channel's outbound messages indefinitely. It is deliberately
+// generous so a slow-but-legitimate server is not disconnected.
+constexpr base::TimeDelta kPeerValidationTimeout = base::Seconds(10);
+#endif  // BUILDFLAG(IS_MAC)
+
 class ChannelMac : public Channel,
                    public base::CurrentThread::DestructionObserver,
                    public base::MessagePumpKqueue::MachPortWatcher {
@@ -62,8 +82,16 @@ class ChannelMac : public Channel,
         self_(this),
         io_task_runner_(io_task_runner),
         watch_controller_(FROM_HERE) {
-    PlatformHandle channel_handle =
-        connection_params.TakeEndpoint().TakePlatformHandle();
+    PlatformChannelEndpoint endpoint = connection_params.TakeEndpoint();
+
+#if BUILDFLAG(IS_MAC)
+    // If the consumer attached a server process requirement, the peer
+    // (server) must satisfy it before it is trusted. Attaching a requirement
+    // is the consumer's decision; this channel honors whatever was set.
+    peer_process_requirement_ = endpoint.TakePeerProcessRequirement();
+#endif
+
+    PlatformHandle channel_handle = endpoint.TakePlatformHandle();
     if (channel_handle.is_mach_send()) {
       send_port_ = channel_handle.TakeMachSendRight();
     } else if (channel_handle.is_mach_receive()) {
@@ -89,26 +117,33 @@ class ChannelMac : public Channel,
   void Write(MessagePtr message) override {
     RecordSentMessageMetricsSubsampled(message->data_num_bytes());
 
+    base::TimeTicks creation_time;
+    if (base::ShouldRecordSubsampledMetric(
+            Channel::kMetricSubsamplingProbability)) {
+      creation_time = base::TimeTicks::Now();
+    }
+
     base::AutoLock lock(write_lock_);
     if (reject_writes_) {
       return;
     }
 
-    // If the channel is not fully established, queue pending messages.
-    if (!handshake_done_) {
-      pending_messages_.push_back(std::move(message));
+    // Queue pending messages until the channel is fully established, or until
+    // the peer has been authenticated against `peer_process_requirement_`.
+    if (!handshake_done_ || IsAwaitingPeerValidationLocked()) {
+      pending_messages_.emplace_back(std::move(message), creation_time);
       return;
     }
 
     // If messages are being queued, enqueue |message| and try to flush
     // the queue.
     if (send_buffer_contains_message_ || !pending_messages_.empty()) {
-      pending_messages_.push_back(std::move(message));
+      pending_messages_.emplace_back(std::move(message), creation_time);
       SendPendingMessagesLocked();
       return;
     }
 
-    SendMessageLocked(std::move(message));
+    SendMessageLocked(std::move(message), creation_time);
   }
 
   void LeakHandle() override {
@@ -180,6 +215,11 @@ class ChannelMac : public Channel,
   }
 
  private:
+  struct PendingMessage {
+    MessagePtr message;
+    base::TimeTicks creation_time;
+  };
+
   ~ChannelMac() override = default;
 
   void StartOnIOThread() {
@@ -232,6 +272,18 @@ class ChannelMac : public Channel,
     base::CurrentThread::Get()->AddDestructionObserver(this);
     base::CurrentIOThread::Get()->WatchMachReceivePort(
         receive_port_.get(), &watch_controller_, this);
+
+#if BUILDFLAG(IS_MAC)
+    // If the peer must satisfy a process requirement, it has to authenticate
+    // itself within kPeerValidationTimeout. Failing closed converts a peer that
+    // stalls without ever sending a qualifying message into a clean connection
+    // error instead of an indefinite hold on outbound messages.
+    if (peer_process_requirement_) {
+      io_task_runner_->PostDelayedTask(
+          FROM_HERE, base::BindOnce(&ChannelMac::OnPeerValidationTimeout, this),
+          kPeerValidationTimeout);
+    }
+#endif
   }
 
   void ShutDownOnIOThread() {
@@ -242,6 +294,7 @@ class ChannelMac : public Channel,
     {
       base::AutoLock lock(write_lock_);
       send_buffer_.reset();
+      send_buffer_creation_time_ = base::TimeTicks();
       reject_writes_ = true;
     }
     receive_buffer_.reset();
@@ -335,18 +388,55 @@ class ChannelMac : public Channel,
     // Record the audit token of the sender. All messages received by the
     // channel must be from this same sender.
     auto* trailer = buffer.Object<mach_msg_audit_trailer_t>();
-    peer_audit_token_ = std::make_unique<audit_token_t>();
-    UNSAFE_TODO(memcpy(peer_audit_token_.get(), &trailer->msgh_audit,
-                       sizeof(audit_token_t)));
+    audit_token_t audit_token;
+    UNSAFE_TODO(
+        memcpy(&audit_token, &trailer->msgh_audit, sizeof(audit_token_t)));
+
+#if BUILDFLAG(IS_MAC)
+    // If a requirement was supplied, the handshake sender is the peer that must
+    // satisfy it before any of its messages are trusted.
+    if (peer_process_requirement_ &&
+        !peer_process_requirement_->ValidateProcess(audit_token)) {
+      send_port_.reset();
+      LOG(ERROR) << "Rejecting peer that does not meet the process requirement";
+      OnError(Error::kConnectionFailed);
+      return false;
+    }
+#endif
+
+    peer_audit_token_ = std::make_unique<audit_token_t>(audit_token);
 
     base::AutoLock lock(write_lock_);
+    peer_validated_ = true;
     handshake_done_ = true;
     SendPendingMessagesLocked();
 
     return true;
   }
 
+  // Whether outbound messages must be held because the peer has not yet been
+  // authenticated against `peer_process_requirement_`.
+  bool IsAwaitingPeerValidationLocked() const
+      EXCLUSIVE_LOCKS_REQUIRED(write_lock_) {
+#if BUILDFLAG(IS_MAC)
+    return peer_process_requirement_ && !peer_validated_;
+#else
+    return false;
+#endif
+  }
+
   void SendPendingMessagesLocked() EXCLUSIVE_LOCKS_REQUIRED(write_lock_) {
+    if (!send_buffer_.address()) {
+      return;
+    }
+
+    // Hold all outbound messages until the peer has been authenticated against
+    // `peer_process_requirement_`. The receive path flushes them once
+    // validation succeeds.
+    if (IsAwaitingPeerValidationLocked()) {
+      return;
+    }
+
     // If a previous send failed due to the receiver's kernel message queue
     // being full, attempt to send that failed message first.
     if (send_buffer_contains_message_ && !reject_writes_) {
@@ -362,7 +452,9 @@ class ChannelMac : public Channel,
 
     // Try and send any other pending messages that were queued.
     while (!pending_messages_.empty() && !reject_writes_) {
-      bool did_send = SendMessageLocked(std::move(pending_messages_.front()));
+      PendingMessage& pending = pending_messages_.front();
+      bool did_send =
+          SendMessageLocked(std::move(pending.message), pending.creation_time);
       // If the message failed to send because the kernel message queue is
       // full, the message will have been fully serialized and
       // |send_buffer_contains_message_| will be set to true. The Mojo message
@@ -374,8 +466,12 @@ class ChannelMac : public Channel,
     }
   }
 
-  bool SendMessageLocked(MessagePtr message)
+  bool SendMessageLocked(MessagePtr message, base::TimeTicks creation_time)
       EXCLUSIVE_LOCKS_REQUIRED(write_lock_) {
+    if (!send_buffer_.address()) {
+      return false;
+    }
+
     DCHECK(!send_buffer_contains_message_);
     base::BufferIterator<char> UNSAFE_TODO(buffer(
         reinterpret_cast<char*>(send_buffer_.address()), send_buffer_.size()));
@@ -470,6 +566,7 @@ class ChannelMac : public Channel,
     }
 
     header->msgh_size = round_msg(buffer.position());
+    send_buffer_creation_time_ = creation_time;
     return MachMessageSendLocked(header);
   }
 
@@ -497,6 +594,7 @@ class ChannelMac : public Channel,
       } else {
         // If the message failed to send for other reasons, destroy it.
         send_buffer_contains_message_ = false;
+        send_buffer_creation_time_ = base::TimeTicks();
         mach_msg_destroy(header);
         if (kr != MACH_SEND_INVALID_DEST) {
           // If the message failed to send because the receiver is a dead-name,
@@ -512,6 +610,14 @@ class ChannelMac : public Channel,
       return false;
     }
 
+    if (!send_buffer_creation_time_.is_null()) {
+      base::TimeDelta latency =
+          base::TimeTicks::Now() - send_buffer_creation_time_;
+      UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES("Mojo.Channel.WriteLatencyUs",
+                                              latency, base::Microseconds(1),
+                                              base::Seconds(1), 100);
+      send_buffer_creation_time_ = base::TimeTicks();
+    }
     send_buffer_contains_message_ = false;
     return true;
   }
@@ -521,6 +627,25 @@ class ChannelMac : public Channel,
     is_retry_scheduled_ = false;
     SendPendingMessagesLocked();
   }
+
+#if BUILDFLAG(IS_MAC)
+  // Called kPeerValidationTimeout after StartOnIOThread() when a peer process
+  // requirement is set. If the peer still has not been authenticated, the
+  // channel is torn down so callers observe a connection failure instead of an
+  // indefinite stall.
+  void OnPeerValidationTimeout() {
+    {
+      base::AutoLock lock(write_lock_);
+      // Already authenticated, or the channel is already shutting down.
+      if (peer_validated_ || reject_writes_) {
+        return;
+      }
+    }
+    LOG(ERROR) << "Peer did not satisfy the process requirement within the "
+                  "validation timeout";
+    OnError(Error::kConnectionFailed);
+  }
+#endif  // BUILDFLAG(IS_MAC)
 
   // base::CurrentThread::DestructionObserver:
   void WillDestroyCurrentMessageLoop() override {
@@ -535,6 +660,10 @@ class ChannelMac : public Channel,
     TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("toplevel.ipc"), "Mojo read message");
 
     DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+
+    if (!receive_buffer_.address()) {
+      return;
+    }
 
     base::BufferIterator<char> UNSAFE_TODO(
         buffer(reinterpret_cast<char*>(receive_buffer_.address()),
@@ -610,7 +739,34 @@ class ChannelMac : public Channel,
       return;
     }
 
+#if BUILDFLAG(IS_MAC)
+    // On a channel created from a bootstrap name lookup, the first message
+    // received from the peer (server) is used to authenticate it against
+    // `peer_process_requirement_`. Outbound messages are held until this
+    // succeeds (see Write() and SendPendingMessagesLocked()).
+    if (peer_process_requirement_ && !peer_audit_token_) {
+      buffer.Seek(header->msgh_size);
+      auto* trailer = buffer.Object<mach_msg_audit_trailer_t>();
+      audit_token_t audit_token;
+      UNSAFE_TODO(
+          memcpy(&audit_token, &trailer->msgh_audit, sizeof(audit_token_t)));
+      if (!peer_process_requirement_->ValidateProcess(audit_token)) {
+        LOG(ERROR)
+            << "Rejecting server that does not meet the process requirement";
+        OnError(Error::kConnectionFailed);
+        return;
+      }
+      peer_audit_token_ = std::make_unique<audit_token_t>(audit_token);
+      {
+        base::AutoLock lock(write_lock_);
+        peer_validated_ = true;
+        SendPendingMessagesLocked();
+      }
+      buffer.Seek(sizeof(*header));
+    } else if (peer_audit_token_) {
+#else
     if (peer_audit_token_) {
+#endif  // BUILDFLAG(IS_MAC)
       buffer.Seek(header->msgh_size);
       auto* trailer = buffer.Object<mach_msg_audit_trailer_t>();
       if (UNSAFE_TODO(memcmp(&trailer->msgh_audit, peer_audit_token_.get(),
@@ -756,6 +912,13 @@ class ChannelMac : public Channel,
   // from that sender.
   std::unique_ptr<audit_token_t> peer_audit_token_;
 
+#if BUILDFLAG(IS_MAC)
+  // If non-null, the requirement the peer must satisfy before this channel
+  // trusts any message from it or flushes queued messages to it. Set from the
+  // endpoint at construction (a bootstrap name lookup on the client side).
+  std::optional<base::mac::ProcessRequirement> peer_process_requirement_;
+#endif
+
   // IO buffer for receiving Mach messages. Only accessed on |io_task_runner_|.
   base::apple::ScopedMachVM receive_buffer_;
 
@@ -783,9 +946,17 @@ class ChannelMac : public Channel,
   // a task to RetrySendPendingMessages() has been posted. There should only be
   // one retry task in-flight at once.
   bool is_retry_scheduled_ GUARDED_BY(write_lock_) = false;
+  // Creation timestamp of the message currently serialized in `send_buffer_`,
+  // or null if not subsampled for latency metrics.
+  base::TimeTicks send_buffer_creation_time_ GUARDED_BY(write_lock_);
+  // Whether the peer has been authenticated against
+  // |peer_process_requirement_|. Until true, outbound messages are held in
+  // |pending_messages_|. Always true when no requirement was supplied.
+  bool peer_validated_ GUARDED_BY(write_lock_) = false;
   // When |handshake_done_| is false or |send_buffer_contains_message_| is true,
   // calls to Write() will enqueue messages here.
-  base::circular_deque<MessagePtr> pending_messages_ GUARDED_BY(write_lock_);
+  base::circular_deque<PendingMessage> pending_messages_
+      GUARDED_BY(write_lock_);
 };
 
 }  // namespace

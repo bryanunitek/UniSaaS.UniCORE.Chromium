@@ -13,7 +13,7 @@
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -162,6 +162,15 @@ TEST_F(SaveAddressProfileViewTest, CancelInvokesTheController) {
                      Property(&profile_ref::has_value, false)));
   CreateViewAndShow(std::move(controller));
   view()->CancelDialog();
+}
+
+TEST_F(SaveAddressProfileViewTest, AcceptAfterHideDoesNotCrash) {
+  std::unique_ptr<MockSaveAddressBubbleController> controller =
+      CreateViewController();
+  EXPECT_CALL(*controller, OnUserDecision).Times(0);
+  CreateViewAndShow(std::move(controller));
+  view()->Hide();
+  view()->AcceptDialog();
 }
 
 }  // namespace autofill

@@ -9,14 +9,19 @@ import android.content.Context;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Token;
+import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
+import org.chromium.chrome.browser.tabmodel.TabGroupUtils;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.tab_group_sync.TabGroupSyncService;
+import org.chromium.components.tab_group_sync.TabGroupUiActionHandler;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 
 import java.util.List;
@@ -28,6 +33,8 @@ public class TabGroupMenuActionHandler {
     private final TabModel mTabModel;
     private final BottomSheetController mBottomSheetController;
     private final ModalDialogManager mModalDialogManager;
+    private final @Nullable TabGroupUiActionHandler mTabGroupUiActionHandler;
+    private final @Nullable TabGroupSyncService mTabGroupSyncService;
     private final Profile mProfile;
     private final TabGroupListBottomSheetCoordinatorFactory mFactory;
 
@@ -39,6 +46,7 @@ public class TabGroupMenuActionHandler {
      * @param tabModel Used to interact with tab groups.
      * @param bottomSheetController For interacting with the bottom sheet.
      * @param modalDialogManager For showing the tab group creation dialog.
+     * @param uiActionHandler For UI actions on tab groups.
      * @param profile The current profile.
      */
     public TabGroupMenuActionHandler(
@@ -46,12 +54,15 @@ public class TabGroupMenuActionHandler {
             TabModel tabModel,
             BottomSheetController bottomSheetController,
             ModalDialogManager modalDialogManager,
+            @Nullable TabGroupUiActionHandler uiActionHandler,
             Profile profile) {
         this(
                 context,
                 tabModel,
                 bottomSheetController,
                 modalDialogManager,
+                uiActionHandler,
+                profile.isOffTheRecord() ? null : TabGroupSyncServiceFactory.getForProfile(profile),
                 profile,
                 TabGroupListBottomSheetCoordinator::new);
     }
@@ -62,12 +73,16 @@ public class TabGroupMenuActionHandler {
             TabModel tabModel,
             BottomSheetController bottomSheetController,
             ModalDialogManager modalDialogManager,
+            @Nullable TabGroupUiActionHandler uiActionHandler,
+            @Nullable TabGroupSyncService syncService,
             Profile profile,
             TabGroupListBottomSheetCoordinatorFactory factory) {
         mContext = context;
         mTabModel = tabModel;
         mBottomSheetController = bottomSheetController;
         mModalDialogManager = modalDialogManager;
+        mTabGroupUiActionHandler = uiActionHandler;
+        mTabGroupSyncService = syncService;
         mProfile = profile;
         mFactory = factory;
     }
@@ -81,14 +96,19 @@ public class TabGroupMenuActionHandler {
      * or create a new one.
      *
      * @param tab The tab to be added to a group.
+     * @return Whether existing groups were present and a bottom sheet was shown (true), or false if
+     *     no other groups were present and a new group was created directly.
      */
-    public void handleAddToGroupAction(Tab tab) {
-        if (mTabModel.getTabGroupCount() == 0) {
-            mTabModel.createSingleTabGroup(tab);
-            @Nullable Token groupId = tab.getTabGroupId();
-            if (groupId != null) {
-                onTabGroupCreation(groupId);
-            }
+    public boolean handleAddToGroupAction(Tab tab) {
+        GroupWindowChecker windowChecker =
+                new GroupWindowChecker(mContext, mTabGroupSyncService, mTabModel);
+        if (!windowChecker.hasOtherGroups(tab.getTabGroupId())) {
+            TabGroupUtils.createNewGroupForTabs(
+                    List.of(tab),
+                    mTabModel,
+                    /* tabMovedCallback= */ null,
+                    this::onTabGroupCreation);
+            return false;
         } else {
             TabGroupListBottomSheetCoordinator tabGroupListBottomSheetCoordinator =
                     mFactory.create(
@@ -98,10 +118,13 @@ public class TabGroupMenuActionHandler {
                             /* tabMovedCallback= */ null,
                             mTabModel,
                             mBottomSheetController,
-                            true,
-                            true);
+                            /* supportsShowNewGroup= */ true,
+                            /* destroyOnHide= */ true,
+                            tab.getWindowAndroid(),
+                            mTabGroupUiActionHandler);
             mTabGroupListBottomSheetCoordinatorSupplier.set(tabGroupListBottomSheetCoordinator);
             tabGroupListBottomSheetCoordinator.showBottomSheet(List.of(tab));
+            return true;
         }
     }
 
@@ -113,5 +136,35 @@ public class TabGroupMenuActionHandler {
         TabGroupCreationDialogManager manager =
                 new TabGroupCreationDialogManager(mContext, mModalDialogManager, null);
         manager.showDialog(tabGroupId, mTabModel);
+    }
+
+    /**
+     * Handles the "Add to existing group" action for the given tab and group ID.
+     *
+     * @param tab The tab to be added to an existing group.
+     * @param groupId The target tab group ID.
+     * @param syncGroupId The target sync group ID for remote groups.
+     * @return Whether the action was handled.
+     */
+    public boolean handleAddToExistingGroupAction(
+            Tab tab, @Nullable Token groupId, @Nullable String syncGroupId) {
+        RecordUserAction.record("MobileMenuAddToExistingGroup");
+        GroupWindowInfo destinationGroup =
+                TabGroupUiUtils.getGroupWindowInfo(
+                        mContext, mTabModel, mTabGroupSyncService, groupId, syncGroupId);
+        if (!TabGroupUiUtils.isValidDestination(
+                destinationGroup, mTabGroupSyncService, mTabGroupUiActionHandler)) {
+            return false;
+        }
+
+        TabGroupUiUtils.addTabsToGroup(
+                mTabModel,
+                List.of(tab),
+                destinationGroup,
+                mTabGroupSyncService,
+                mTabGroupUiActionHandler,
+                /* tabMovedCallback= */ null,
+                /* bringToFront= */ true);
+        return true;
     }
 }

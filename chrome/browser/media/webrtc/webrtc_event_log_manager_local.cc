@@ -7,7 +7,6 @@
 #include "base/files/file_util.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
-#include "base/i18n/time_formatting.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -44,12 +43,12 @@ struct WebRtcLocalEventLogManager::LogFiles {
 WebRtcLocalEventLogManager::WebRtcLocalEventLogManager(
     WebRtcLocalEventLogsObserver* observer)
     : observer_(observer), clock_for_testing_(nullptr) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   DETACH_FROM_SEQUENCE(io_task_sequence_checker_);
 }
 
 WebRtcLocalEventLogManager::~WebRtcLocalEventLogManager() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 }
 
 bool WebRtcLocalEventLogManager::OnPeerConnectionAdded(
@@ -203,6 +202,10 @@ void WebRtcLocalEventLogManager::RenderProcessHostExitedDestroyed(
     int render_process_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(io_task_sequence_checker_);
   StopLogging(render_process_id, StopLoggingAction::kStore, base::DoNothing());
+  // Remove all of the peer connections associated with this render process.
+  std::erase_if(log_files_, [render_process_id](const auto& entry) {
+    return entry.first.render_process_id == render_process_id;
+  });
 }
 
 void WebRtcLocalEventLogManager::StopLogging(int render_process_id,
@@ -210,7 +213,9 @@ void WebRtcLocalEventLogManager::StopLogging(int render_process_id,
                                              base::OnceClosure callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(io_task_sequence_checker_);
 
-  for (auto it = log_files_.begin(); it != log_files_.end();) {
+  // The peer connections are kept, as in the remote manager. They are removed
+  // by OnPeerConnectionRemoved() or RenderProcessHostExitedDestroyed().
+  for (auto it = log_files_.begin(); it != log_files_.end(); ++it) {
     if (it->first.render_process_id == render_process_id) {
       if (action == StopLoggingAction::kDelete) {
         if (it->second.event_log) {
@@ -222,9 +227,6 @@ void WebRtcLocalEventLogManager::StopLogging(int render_process_id,
       }
       StopEventLogFileIfStarted(it);
       StopDataChannelLogFileIfStarted(it);
-      it = log_files_.erase(it);
-    } else {
-      ++it;
     }
   }
 
@@ -353,7 +355,8 @@ base::FilePath WebRtcLocalEventLogManager::GetFilePath(
   base::Time::Exploded exploded;
   now.LocalExplode(&exploded);
   const std::string timestamp =
-      base::UnlocalizedTimeFormatWithPattern(now, "yyyyMMdd_HHmm");
+      base::StringPrintf("%04d%02d%02d_%02d%02d", exploded.year, exploded.month,
+                         exploded.day_of_month, exploded.hour, exploded.minute);
   return base_path.InsertBeforeExtension(FILE_PATH_LITERAL("_"))
       .AddExtension(log_file_writer_factory_.Extension())
       .InsertBeforeExtensionASCII(base::StringPrintf(

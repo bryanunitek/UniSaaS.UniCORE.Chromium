@@ -11,35 +11,40 @@ export function getHtml(this: ComposeboxVoiceSearchElement) {
   // clang-format off
   return html`
     <div id="container"
-        class="${this.shouldShowErrorScrim_() ? 'has-error' : ''}">
-      <div id="error-container" ?hidden="${!this.shouldShowErrorScrim_()}">
+        class="${this.isInError_() ? 'has-error' : ''}">
+      <div id="error-container" ?hidden="${!this.isInError_()}">
         <span id="error-message">${this.errorMessage_}</span>
-        ${this.detailedError_ === VoiceSearchError.NO_MATCH ?
+        ${this.detailedError === VoiceSearchError.NO_MATCH ?
             html`<a id="tryAgainLink" href="#"
                 @click="${this.onTryAgainClick_}"
               >${this.i18n('tryAgain')}
             </a>`
-        : ''}
-        <a id="details" part="voice-details-link" target="_blank"
+        : html`<a id="details" part="voice-details-link" target="_blank"
             href="${this.detailsUrl_}"
             @click="${this.onLinkClick_}"
           >${this.i18n('voiceDetails')}
-        </a>
+        </a>`}
       </div>
       ${this.isPermissionPromptOpen ? html`
-          <textarea id="input"
-              class="${this.shouldShowErrorScrim_() ? 'hidden' : ''}"
-              placeholder="${this.i18n('voiceWaiting')}" disabled
-          ></textarea>`
+          <div id="input"
+              class="${this.isInError_() ? 'hidden' : ''}"
+          >
+            <span>${this.i18n('voiceWaiting')}</span>
+          </div>`
       : ''}
-      ${this.liveTranscriptEnabled && !this.isPermissionPromptOpen ?
-          html`<textarea id="input"
-              .value="${this.transcript_}"
-              placeholder="${this.listeningPlaceholder_}"
-              class="${this.shouldShowErrorScrim_() ? 'hidden' : ''}" disabled
-          ></textarea>`
+      ${(this.liveTranscriptEnabled || this.helperTextEnabled) &&
+          !this.isPermissionPromptOpen ?
+          html`<div id="input"
+              class="${this.isInError_() ? 'hidden' : ''} ${
+                  (!this.transcript_ || !this.liveTranscriptEnabled) ?
+                      'empty' : ''}"
+          >
+            <span id="transcript-text"
+            >${(this.liveTranscriptEnabled && this.transcript_) ||
+                this.listeningPlaceholder_}</span>
+          </div>`
       : ''}
-      ${!this.submitStopButtonsEnabled || this.shouldShowErrorScrim_() ?
+      ${!this.submitStopButtonsEnabled || this.isInError_() ?
           html`<cr-icon-button id="closeButton" class="icon-clear"
               part="voice-close-button"
               title="${this.i18n('voiceClose')}" @click="${this.onCloseClick_}"
@@ -47,10 +52,12 @@ export function getHtml(this: ComposeboxVoiceSearchElement) {
       : ''}
       ${this.submitStopButtonsEnabled ?
           html`<div id="bottomActions"
-              class="${this.shouldShowErrorScrim_() ? 'hidden' : ''}">
+              class="${this.isInError_() ? 'hidden' : ''}">
             <cr-icon-button id="stopButton" part="voice-stop-button"
-                iron-icon="composebox:stop"
-                 title="${this.i18n('voiceStop')}"
+                iron-icon="composebox:stop-filled"
+                title="${this.i18n('voiceStop')}"
+                aria-label="${this.i18n('voiceStop')}"
+                tabindex="0"
                 @click="${this.onStopClick_}"
             ></cr-icon-button>
             <cr-composebox-submit id="submitButton"
@@ -59,7 +66,6 @@ export function getHtml(this: ComposeboxVoiceSearchElement) {
                 .iconType="${this.submitButtonIconType}"
                 .submitButtonTitle="${this.i18n('composeboxSubmitButtonTitle')}"
                 @submit-click="${this.onSubmitClick_}"
-                ?disabled="${!(this.finalResult_ || this.interimResult_)}"
             ></cr-composebox-submit>
           </div>`
       : ''}

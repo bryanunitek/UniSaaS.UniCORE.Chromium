@@ -7,16 +7,13 @@
 
 #import "ios/chrome/app/profile/first_run_profile_agent.h"
 
-enum class GuidedTourStep;
-
 @interface FirstRunProfileAgent (Testing)
 
-- (void)dismissGuidedTourPromo;
-- (void)guidedTourNTPStepCompleted;
 - (void)showSyncedSetUp;
 - (void)showFirstRunUI;
-- (void)startGuidedTour;
+- (void)showGuidedTourPrompt;
 - (void)performNextPostFirstRunAction;
+- (void)maybePresentPostFREPromos;
 
 @end
 

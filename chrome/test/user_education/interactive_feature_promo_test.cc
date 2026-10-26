@@ -51,21 +51,22 @@ InteractiveFeaturePromoTestApi::InteractiveFeaturePromoTestApi(
 InteractiveFeaturePromoTestApi::~InteractiveFeaturePromoTestApi() = default;
 
 InteractiveFeaturePromoTestApi::MockTracker*
-InteractiveFeaturePromoTestApi::GetMockTrackerFor(Browser* browser) {
+InteractiveFeaturePromoTestApi::GetMockTrackerFor(
+    BrowserWindowInterface* browser) {
   return test_impl_->GetMockTrackerFor(browser);
 }
 
 void InteractiveFeaturePromoTestApi::RegisterTestFeature(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     user_education::FeaturePromoSpecification spec) {
-  UserEducationServiceFactory::GetForBrowserContext(browser->profile())
+  UserEducationServiceFactory::GetForBrowserContext(browser->GetProfile())
       ->feature_promo_registry()
       .RegisterFeature(std::move(spec));
 }
 
 InteractiveFeaturePromoTestApi::MultiStep
 InteractiveFeaturePromoTestApi::WaitForFeatureEngagementReady() {
-  INTERACTIVE_TEST_TEMPORARY_VALUE(raw_ptr<Browser>, kBrowser);
+  INTERACTIVE_TEST_TEMPORARY_VALUE(raw_ptr<BrowserWindowInterface>, kBrowser);
   auto steps = Steps(
       // Ensure that the correct tracker for the current context is used.
       WithView(kBrowserViewElementId,
@@ -255,7 +256,7 @@ InteractiveFeaturePromoTestApi::CheckPromoImpl(const base::Feature& iph_feature,
   return std::move(
       WithElement(
           kBrowserViewElementId,
-          [&iph_feature, requested, include_queued](
+          [this, &iph_feature, requested, include_queued](
               ui::InteractionSequence* seq, ui::TrackedElement* browser_el) {
             bool actual = false;
             if (seq->IsCurrentStepInAnyContextForTesting()) {

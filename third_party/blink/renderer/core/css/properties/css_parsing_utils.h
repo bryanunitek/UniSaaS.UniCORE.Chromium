@@ -7,6 +7,7 @@
 
 #include <array>
 #include <optional>
+#include <utility>
 
 #include "base/compiler_specific.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -26,6 +27,7 @@
 #include "third_party/blink/renderer/core/style/grid_area.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -267,6 +269,9 @@ CORE_EXPORT CSSValue* ConsumeAbsoluteColor(CSSParserTokenStream&,
                                            const CSSParserContext&,
                                            CSSParserLocalContext&);
 
+CORE_EXPORT bool IsAllowedColorValue(const CSSValue*,
+                                     const ColorParserContext&);
+
 CSSValue* ConsumeLineWidth(CSSParserTokenStream&,
                            const CSSParserContext&,
                            CSSParserLocalContext&,
@@ -493,7 +498,6 @@ bool ConsumeTimelineTriggerShorthand(
 
 CSSValue* GetImpliedRangeEnd(const CSSValue* start_range);
 
-void AddBackgroundValue(CSSValue*& list, const CSSValue*);
 CSSValue* ConsumeBackgroundAttachment(CSSParserTokenStream&);
 CSSValue* ConsumeBackgroundBlendMode(CSSParserTokenStream&);
 CSSValue* ConsumeBackgroundBox(CSSParserTokenStream&);
@@ -662,7 +666,6 @@ CSSValue* ConsumeFontFeatureSettings(CSSParserTokenStream&,
 CSSValue* ConsumeFontVariationSettings(CSSParserTokenStream&,
                                        const CSSParserContext&,
                                        CSSParserLocalContext&);
-CSSValue* ConsumeFontLanguageOverrideString(CSSParserTokenStream&);
 CSSValue* ConsumeFontLanguageOverride(CSSParserTokenStream&,
                                       const CSSParserContext&);
 CSSIdentifierValue* ConsumeFontVariantCSS21(CSSParserTokenStream&);
@@ -717,9 +720,9 @@ CSSValue* ParseGridLanesTemplateAreasValue(
     bool is_for_columns);
 CSSValue* ParseGridLanesDirection(CSSParserTokenStream&);
 
-CSSValue* ConsumeFlowTolerance(CSSParserTokenStream&,
-                               const CSSParserContext&,
-                               CSSParserLocalContext&);
+CSSValue* ConsumeFitTolerance(CSSParserTokenStream&,
+                              const CSSParserContext&,
+                              CSSParserLocalContext&);
 
 bool ConsumeGapDecorationsRuleInsetCapJunctionShorthand(
     bool important,
@@ -810,6 +813,11 @@ bool ConsumeRadii(std::array<CSSValue*, 4>& horizontal_radii,
                   CSSParserTokenStream& stream,
                   const CSSParserContext& context,
                   CSSParserLocalContext& local_context);
+// Returns the pair (first radius, second radius) on success.
+std::optional<std::pair<CSSValue*, CSSValue*>>
+ConsumeBorderRadiusCornerShorthand(CSSParserTokenStream& stream,
+                                   const CSSParserContext& context,
+                                   CSSParserLocalContext& local_context);
 
 CSSValue* ConsumeTextDecorationLine(CSSParserTokenStream&);
 CSSValue* ConsumeTextDecorationSkipSpaces(CSSParserTokenStream&);
@@ -865,6 +873,9 @@ CSSCustomIdentValue* ConsumeCounterStyleName(CSSParserTokenStream&,
                                              const CSSParserContext&);
 AtomicString ConsumeCounterStyleNameInPrelude(CSSParserTokenStream&,
                                               const CSSParserContext&);
+
+// https://drafts.csswg.org/css-counter-styles-3/#symbols-function
+CSSValue* ConsumeCounterStyleSymbolsFunction(CSSParserTokenStream&);
 
 CSSValue* ConsumeFontSizeAdjust(CSSParserTokenStream&,
                                 const CSSParserContext&,
@@ -962,7 +973,7 @@ CSSValueList* ConsumeCommaSeparatedList(Func callback,
                                         Args&&... args) {
   CSSValueList* list = CSSValueList::CreateCommaSeparated();
   do {
-    CSSValue* value = callback(stream, std::forward<Args>(args)...);
+    CSSValue* value = callback(stream, args...);
     if (!value) {
       return nullptr;
     }
@@ -978,7 +989,7 @@ CSSValueList* ConsumeSpaceSeparatedList(Func callback,
                                         Args&&... args) {
   CSSValueList* list = CSSValueList::CreateSpaceSeparated();
   do {
-    CSSValue* value = callback(stream, std::forward<Args>(args)...);
+    CSSValue* value = callback(stream, args...);
     if (!value) {
       return list->length() > 0 ? list : nullptr;
     }

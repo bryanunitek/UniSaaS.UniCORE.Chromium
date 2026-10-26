@@ -34,8 +34,11 @@ class SearchBoxViewBinder
                     model.get(SearchBoxProperties.AI_CHIP_VISIBILITY) ? View.VISIBLE : View.GONE);
         } else if (SearchBoxProperties.ALPHA == propertyKey) {
             view.setAlpha(model.get(SearchBoxProperties.ALPHA));
-        } else if (SearchBoxProperties.APPLY_WHITE_BACKGROUND == propertyKey) {
-            view.applyWhiteBackground(model.get(SearchBoxProperties.APPLY_WHITE_BACKGROUND));
+        } else if (SearchBoxProperties.APPLY_ELEVATION == propertyKey) {
+            view.applyElevation(model.get(SearchBoxProperties.APPLY_ELEVATION));
+        } else if (SearchBoxProperties.APPLY_WHITE_BACKGROUND_AND_SHADOW == propertyKey) {
+            view.applyWhiteBackgroundAndShadow(
+                    model.get(SearchBoxProperties.APPLY_WHITE_BACKGROUND_AND_SHADOW));
         } else if (SearchBoxProperties.DSE_ICON_DRAWABLE == propertyKey) {
             view.setDseIconDrawable(model.get(SearchBoxProperties.DSE_ICON_DRAWABLE));
         } else if (SearchBoxProperties.DSE_ICON_TINT == propertyKey) {
@@ -43,6 +46,8 @@ class SearchBoxViewBinder
         } else if (SearchBoxProperties.ENABLE_SEARCH_BOX_EDIT_TEXT == propertyKey) {
             view.mHintTextView.setEnabled(
                     model.get(SearchBoxProperties.ENABLE_SEARCH_BOX_EDIT_TEXT));
+        } else if (SearchBoxProperties.HINT_TEXT_ALPHA == propertyKey) {
+            view.mHintTextView.setAlpha(model.get(SearchBoxProperties.HINT_TEXT_ALPHA));
         } else if (SearchBoxProperties.LENS_CLICK_CALLBACK == propertyKey) {
             view.mLensButton.setOnClickListener(model.get(SearchBoxProperties.LENS_CLICK_CALLBACK));
         } else if (SearchBoxProperties.LENS_VISIBILITY == propertyKey) {
@@ -51,6 +56,11 @@ class SearchBoxViewBinder
         } else if (SearchBoxProperties.PLUS_BUTTON_CLICK_CALLBACK == propertyKey) {
             view.setPlusButtonClickListener(
                     model.get(SearchBoxProperties.PLUS_BUTTON_CLICK_CALLBACK));
+        } else if (SearchBoxProperties.PLUS_BUTTON_ROTATION == propertyKey) {
+            view.mPlusButton.setRotation(model.get(SearchBoxProperties.PLUS_BUTTON_ROTATION));
+        } else if (SearchBoxProperties.PLUS_BUTTON_TINT == propertyKey) {
+            ImageViewCompat.setImageTintList(
+                    view.mPlusButton, model.get(SearchBoxProperties.PLUS_BUTTON_TINT));
         } else if (SearchBoxProperties.PLUS_BUTTON_VISIBILITY == propertyKey) {
             boolean visible = model.get(SearchBoxProperties.PLUS_BUTTON_VISIBILITY);
             view.updateStartIconVisibility(visible);
@@ -77,9 +87,9 @@ class SearchBoxViewBinder
                     model.get(SearchBoxProperties.SEARCH_BOX_END_PADDING),
                     view.getPaddingBottom());
         } else if (SearchBoxProperties.SEARCH_BOX_HEIGHT == propertyKey) {
-            ViewGroup.LayoutParams lp = view.getLayoutParams();
+            ViewGroup.LayoutParams lp = view.mSearchBoxView.getLayoutParams();
             lp.height = model.get(SearchBoxProperties.SEARCH_BOX_HEIGHT);
-            view.setLayoutParams(lp);
+            view.mSearchBoxView.setLayoutParams(lp);
         } else if (SearchBoxProperties.SEARCH_BOX_HINT_TEXT == propertyKey) {
             view.mHintTextView.setHint(model.get(SearchBoxProperties.SEARCH_BOX_HINT_TEXT));
         } else if (SearchBoxProperties.SEARCH_BOX_TEXT_STYLE_RES_ID == propertyKey) {
@@ -100,12 +110,6 @@ class SearchBoxViewBinder
         } else if (SearchBoxProperties.SEARCH_BOX_TOP_MARGIN == propertyKey) {
             MarginLayoutParams marginLayoutParams = (MarginLayoutParams) view.getLayoutParams();
             marginLayoutParams.topMargin = model.get(SearchBoxProperties.SEARCH_BOX_TOP_MARGIN);
-        } else if (SearchBoxProperties.SEARCH_HINT_VISIBILITY == propertyKey) {
-            boolean isHintVisible = model.get(SearchBoxProperties.SEARCH_HINT_VISIBILITY);
-            view.mHintTextView.setHint(
-                    isHintVisible
-                            ? view.getContext().getString(R.string.omnibox_empty_hint)
-                            : null);
         } else if (SearchBoxProperties.SEARCH_TEXT == propertyKey) {
             view.mHintTextView.setText(model.get(SearchBoxProperties.SEARCH_TEXT));
         } else if (SearchBoxProperties.VOICE_SEARCH_CLICK_CALLBACK == propertyKey) {
@@ -115,7 +119,6 @@ class SearchBoxViewBinder
             ColorStateList tint = model.get(SearchBoxProperties.VOICE_SEARCH_COLOR_STATE_LIST);
             ImageViewCompat.setImageTintList(view.mVoiceSearchButton, tint);
             ImageViewCompat.setImageTintList(view.mLensButton, tint);
-            ImageViewCompat.setImageTintList(view.mPlusButton, tint);
         } else if (SearchBoxProperties.VOICE_SEARCH_VISIBILITY == propertyKey) {
             view.mVoiceSearchButton.setVisibility(
                     model.get(SearchBoxProperties.VOICE_SEARCH_VISIBILITY)

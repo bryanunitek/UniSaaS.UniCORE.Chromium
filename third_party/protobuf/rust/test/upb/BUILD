@@ -30,6 +30,7 @@ rust_test(
     aliases = {
         "//rust:protobuf_upb_export": "protobuf",
     },
+    edition = "2024",
     deps = [
         "//rust:protobuf_upb_export",
         "//rust/test:unittest_proto3_upb_rust_proto",
@@ -42,6 +43,7 @@ rust_test(
 rust_test(
     name = "debug_string_test",
     srcs = ["debug_string_test.rs"],
+    edition = "2024",
     deps = [
         "//rust:protobuf_upb",
         "//rust/test:map_unittest_upb_rust_proto",
@@ -56,6 +58,7 @@ rust_test(
     aliases = {
         "//rust:protobuf_upb_export": "protobuf",
     },
+    edition = "2024",
     deps = [
         "//rust:protobuf_upb_export",
         "//rust/test:unittest_upb_rust_proto",
@@ -69,8 +72,24 @@ rust_test(
     aliases = {
         "//rust:protobuf_upb_export": "protobuf",
     },
+    edition = "2024",
     deps = [
         "//rust:protobuf_upb_export",
+        "//rust/test:unittest_upb_rust_proto",
+        "@crate_index//:googletest",
+    ],
+)
+
+rust_test(
+    name = "generated_descriptors_test",
+    srcs = ["generated_descriptors_test.rs"],
+    aliases = {
+        "//rust:protobuf_upb_export": "protobuf",
+    },
+    edition = "2024",
+    deps = [
+        "//rust:protobuf_upb_export",
+        "//rust/test:descriptor_upb_rust_proto",
         "//rust/test:unittest_upb_rust_proto",
         "@crate_index//:googletest",
     ],

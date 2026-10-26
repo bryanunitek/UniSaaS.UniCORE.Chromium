@@ -6,20 +6,23 @@ package org.chromium.chrome.browser.omnibox;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.lenient;
 
 import android.app.Activity;
+import android.content.Context;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.InsetDrawable;
 import android.graphics.drawable.LayerDrawable;
 import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.View.MeasureSpec;
+import android.view.ViewGroup;
 import android.view.ViewGroup.LayoutParams;
 import android.view.ViewGroup.MarginLayoutParams;
 import android.view.ViewOutlineProvider;
@@ -35,6 +38,7 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 import org.robolectric.Robolectric;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
@@ -46,40 +50,96 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxLayoutMode;
-import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxState;
+import org.chromium.chrome.browser.omnibox.LocationBarBackgroundDrawable.HairlineBehavior;
+import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.FuseboxLayoutMode;
+import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.FuseboxState;
 import org.chromium.chrome.browser.omnibox.status.StatusCoordinator;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.util.motion.MotionEventTestUtils;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.omnibox.OmniboxFeatureList;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.display.DisplayAndroid;
 import org.chromium.ui.display.DisplayUtil;
 import org.chromium.ui.widget.ToastManager;
+import org.chromium.url.JUnitTestGURLs;
+
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Unit tests for LocationBarTablet. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
 public class LocationBarTabletUnitTest {
+    private static class TestLocationBarTablet extends LocationBarTablet {
+        private Integer mUrlBarTextWidth;
+        private Integer mActivationChipCompactWidthDelta;
+        private Integer mUrlBarWidth;
+        private Boolean mIsActivationChipCompact;
+
+        TestLocationBarTablet(Context context) {
+            super(context, null);
+        }
+
+        void setOverflowTestParams(
+                int urlBarTextWidth,
+                int activationChipCompactWidthDelta,
+                int urlBarWidth,
+                boolean isActivationChipCompact) {
+            mUrlBarTextWidth = urlBarTextWidth;
+            mActivationChipCompactWidthDelta = activationChipCompactWidthDelta;
+            mUrlBarWidth = urlBarWidth;
+            mIsActivationChipCompact = isActivationChipCompact;
+        }
+
+        @Override
+        int getUrlBarTextWidth() {
+            return mUrlBarTextWidth != null ? mUrlBarTextWidth : super.getUrlBarTextWidth();
+        }
+
+        @Override
+        int getActivationChipCompactWidthDelta() {
+            return mActivationChipCompactWidthDelta != null
+                    ? mActivationChipCompactWidthDelta
+                    : super.getActivationChipCompactWidthDelta();
+        }
+
+        @Override
+        int getUrlBarWidth() {
+            return mUrlBarWidth != null ? mUrlBarWidth : super.getUrlBarWidth();
+        }
+
+        @Override
+        boolean isActivationChipCompact() {
+            return mIsActivationChipCompact != null
+                    ? mIsActivationChipCompact
+                    : super.isActivationChipCompact();
+        }
+    }
 
     private static final float DIP_SCALE = 2.0f;
+    private static final int POPUP_INSET_DP = 8;
+    private static final int MIN_TABLET_WIDTH_DP = 504;
 
-    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
-    private @Mock WindowAndroid mWindowAndroid;
-    private @Mock DisplayAndroid mDisplay;
-    private @Mock UrlBarCoordinator mUrlBarCoordinator;
-    private @Mock AutocompleteCoordinator mAutocompleteCoordinator;
-    private @Mock StatusCoordinator mStatusCoordinator;
-    private @Mock LocationBarDataProvider mLocationBarDataProvider;
-    private @Mock ViewOutlineProvider mOutlineProvider;
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
+
+    @Mock private WindowAndroid mWindowAndroid;
+    @Mock private DisplayAndroid mDisplay;
+    @Mock private UrlBarCoordinator mUrlBarCoordinator;
+    @Mock private AutocompleteCoordinator mAutocompleteCoordinator;
+    @Mock private StatusCoordinator mStatusCoordinator;
+    @Mock private LocationBarDataProvider mLocationBarDataProvider;
+    @Mock private ViewOutlineProvider mOutlineProvider;
 
     private Activity mActivity;
-    private LocationBarTablet mLocationBarTablet;
+    private TestLocationBarTablet mLocationBarTablet;
+    private OmniboxResourceProvider mResourceProvider;
     private FrameLayout mHolderView;
+    private View mContainerView;
 
     @Before
     public void doBeforeEachTest() {
@@ -87,7 +147,7 @@ public class LocationBarTabletUnitTest {
         mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
         LinearLayout contentView = new LinearLayout(mActivity);
         mHolderView = new FrameLayout(mActivity);
-        mLocationBarTablet = new LocationBarTablet(mActivity, null);
+        mLocationBarTablet = new TestLocationBarTablet(mActivity);
         mLocationBarTablet.setBackgroundResource(
                 R.drawable.modern_toolbar_tablet_text_box_background);
         LayoutParams params =
@@ -98,18 +158,26 @@ public class LocationBarTabletUnitTest {
                 new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
         contentView.addView(mHolderView, parentParams);
         mActivity.setContentView(contentView, parentParams);
-        doReturn(mDisplay).when(mWindowAndroid).getDisplay();
-        doReturn(DIP_SCALE).when(mDisplay).getDipScale();
-        doReturn(ChromeColors.getDefaultThemeColor(mActivity, /* isIncognito= */ false))
+        lenient().doReturn(mDisplay).when(mWindowAndroid).getDisplay();
+        lenient().doReturn(DIP_SCALE).when(mDisplay).getDipScale();
+        lenient()
+                .doReturn(ChromeColors.getDefaultThemeColor(mActivity, /* isIncognito= */ false))
                 .when(mLocationBarDataProvider)
                 .getPrimaryColor();
-        mLocationBarTablet.setHolder(mHolderView);
+        mLocationBarTablet.setHolderAndContainer(mHolderView, null);
+        mResourceProvider = new OmniboxResourceProvider(mActivity, BrandedColorScheme.APP_DEFAULT);
         mLocationBarTablet.initialize(
                 mAutocompleteCoordinator,
                 mUrlBarCoordinator,
                 mStatusCoordinator,
                 mLocationBarDataProvider,
-                mWindowAndroid);
+                mWindowAndroid,
+                mResourceProvider);
+    }
+
+    private void updateVisualsForState(@BrandedColorScheme int brandedColorScheme) {
+        mResourceProvider.setBrandedColorScheme(brandedColorScheme);
+        mLocationBarTablet.updateVisualsForState();
     }
 
     @Test
@@ -122,9 +190,7 @@ public class LocationBarTabletUnitTest {
     @Config(qualifiers = "w600dp-xhdpi")
     public void testFuseboxStateChange() {
         int prefocusWidth = 400;
-        mLocationBarTablet.measure(
-                MeasureSpec.makeMeasureSpec(prefocusWidth, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY));
+        measureHolder(prefocusWidth);
         mLocationBarTablet.setOutlineProvider(mOutlineProvider);
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
         int expansionPx =
@@ -138,9 +204,11 @@ public class LocationBarTabletUnitTest {
         LinearLayout.LayoutParams layoutParams =
                 (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
         assertEquals(LayoutParams.WRAP_CONTENT, layoutParams.height);
-        int expectedMargin = -((minWidthPx - prefocusWidth) / 2);
-        assertEquals(expectedMargin, layoutParams.leftMargin);
-        assertEquals(expectedMargin, layoutParams.rightMargin);
+        // When flush on the left (x = 0), hard-clamping to screen bounds [0, availableWidth]
+        // prevents expanding offscreen to the left (leftMargin = 0), directing all expansion
+        // to the right margin.
+        assertEquals(0, layoutParams.leftMargin);
+        assertEquals(-(minWidthPx - prefocusWidth), layoutParams.rightMargin);
         assertEquals(-expansionPx, layoutParams.topMargin);
         assertEquals(Gravity.TOP, layoutParams.gravity);
         assertEquals(expansionPx, mLocationBarTablet.getPaddingLeft());
@@ -173,9 +241,7 @@ public class LocationBarTabletUnitTest {
     public void testFuseboxStateChange_marginCalcs() {
         // Below minimum width, expand by delta between min width and current width
         int prefocusWidth = 400;
-        mLocationBarTablet.measure(
-                MeasureSpec.makeMeasureSpec(prefocusWidth, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY));
+        measureHolder(prefocusWidth);
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
         int minWidthPx =
                 mLocationBarTablet
@@ -183,31 +249,34 @@ public class LocationBarTabletUnitTest {
                         .getDimensionPixelSize(R.dimen.fusebox_min_tablet_width);
         LinearLayout.LayoutParams layoutParams =
                 (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
-        int expectedMargin = -((minWidthPx - prefocusWidth) / 2);
-        assertEquals(expectedMargin, layoutParams.leftMargin);
-        assertEquals(expectedMargin, layoutParams.rightMargin);
+        // Below minimum width when aligned at x = 0: leftMargin is clamped to 0 to prevent
+        // offscreen expansion; rightMargin expands by the full delta to reach minWidthPx.
+        assertEquals(0, layoutParams.leftMargin);
+        assertEquals(-(minWidthPx - prefocusWidth), layoutParams.rightMargin);
 
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.DISABLED);
 
-        // Above minimum width, only expand by 12 dp inset on either side
+        // Above minimum width, only expand by 8 dp inset on either side
         prefocusWidth = 1100;
-        mLocationBarTablet.measure(
-                MeasureSpec.makeMeasureSpec(prefocusWidth, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY));
+        measureHolder(prefocusWidth);
         int expansionPx =
                 mLocationBarTablet
                         .getResources()
                         .getDimensionPixelSize(R.dimen.location_bar_tablet_fusebox_popup_inset);
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
         layoutParams = (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
-        expectedMargin = -expansionPx;
-        assertEquals(expectedMargin, layoutParams.leftMargin);
-        assertEquals(expectedMargin, layoutParams.rightMargin);
+        int expectedMargin = -expansionPx;
+        // Above minimum width when aligned at x = 0: leftMargin is clamped to 0 and rightMargin
+        // expands by 2 * expansionPx.
+        assertEquals(0, layoutParams.leftMargin);
+        assertEquals(-2 * expansionPx, layoutParams.rightMargin);
 
         // Above minimum width, relatively centered. Adjust margins to center within parent.
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.DISABLED);
-        int currentLeft = 300;
-        mLocationBarTablet.setLeft(currentLeft);
+        // Set currentLeft within the 16dp centering threshold around 250px (250px +/- 32px)
+        // to test centering adjustments for a centered layout.
+        int currentLeft = 260;
+        mHolderView.setLeft(currentLeft);
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.COMPACT);
         int windowWidth =
                 DisplayUtil.dpToPx(
@@ -220,21 +289,222 @@ public class LocationBarTabletUnitTest {
         assertEquals(expectedMargin + delta, layoutParams.rightMargin, MathUtils.EPSILON);
 
         // Update width + position to reflect the newly expanded view
-        mLocationBarTablet.measure(
-                MeasureSpec.makeMeasureSpec(
-                        prefocusWidth - layoutParams.leftMargin, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY));
-        mLocationBarTablet.setLeft(currentLeft + layoutParams.leftMargin);
+        measureHolder(prefocusWidth - layoutParams.leftMargin);
+        mHolderView.setLeft(currentLeft + layoutParams.leftMargin);
+
+        int initialLeftMargin = layoutParams.leftMargin;
+        int initialRightMargin = layoutParams.rightMargin;
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
+        int recomputedPrefocusWidth = prefocusWidth - initialLeftMargin;
+        int recomputedUnexpandedWidth =
+                recomputedPrefocusWidth + initialLeftMargin + initialRightMargin;
+        int recomputedUnexpandedLeft = currentLeft;
+        int recomputedTargetWidth = recomputedUnexpandedWidth + 2 * expansionPx;
+        int recomputedCenteredLeft = (windowWidth - recomputedTargetWidth) / 2;
+        assertEquals(
+                recomputedCenteredLeft - recomputedUnexpandedLeft,
+                layoutParams.leftMargin,
+                MathUtils.EPSILON);
+        assertEquals(
+                -((recomputedCenteredLeft + recomputedTargetWidth)
+                        - (recomputedUnexpandedLeft + recomputedUnexpandedWidth)),
+                layoutParams.rightMargin,
+                MathUtils.EPSILON);
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
+    @Config(qualifiers = "w800dp-xhdpi")
+    public void testFuseboxStateChange_clampsToContainerWidth() {
+        int containerWidthDp = 400;
+        int prefocusWidthDp = 150;
+        int leftPositionDp = 0;
+        setupContainerAndMeasure(
+                toPx(containerWidthDp), toPx(prefocusWidthDp), toPx(leftPositionDp));
 
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
-        assertEquals(expectedMargin - delta, layoutParams.leftMargin, MathUtils.EPSILON);
-        assertEquals(expectedMargin + delta, layoutParams.rightMargin, MathUtils.EPSILON);
+        LinearLayout.LayoutParams layoutParams =
+                (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
+
+        // Ensure the margins force expansion to the clamped maximum spanning container edges.
+        assertEquals(0, layoutParams.leftMargin);
+        assertEquals(
+                toPx(-(containerWidthDp - prefocusWidthDp - leftPositionDp)),
+                layoutParams.rightMargin);
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
+    @Config(qualifiers = "w800dp-xhdpi")
+    public void testFuseboxStateChange_respectsContainerRightMargin() {
+        int windowWidthDp = 500;
+        int captionRightMarginDp = 100;
+        int containerWidthDp = windowWidthDp - captionRightMarginDp;
+        int prefocusWidthDp = 150;
+        int leftPositionDp = 0;
+
+        setupContainerAndMeasure(
+                toPx(containerWidthDp), toPx(prefocusWidthDp), toPx(leftPositionDp));
+        mLocationBarTablet.setIsFullWidthExpansionAllowedSupplier(() -> false);
+
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
+        LinearLayout.LayoutParams layoutParams =
+                (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
+
+        // Expands to container width, leaving the right margin intact.
+        assertEquals(0, layoutParams.leftMargin);
+        assertEquals(
+                toPx(-(containerWidthDp - prefocusWidthDp - leftPositionDp)),
+                layoutParams.rightMargin);
+
+        int expandedRightEdgeDp =
+                leftPositionDp + prefocusWidthDp + (-layoutParams.rightMargin / (int) DIP_SCALE);
+        assertEquals(containerWidthDp, expandedRightEdgeDp);
+        assertTrue(expandedRightEdgeDp <= windowWidthDp - captionRightMarginDp);
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
+    @Config(qualifiers = "w500dp-xhdpi")
+    public void testFuseboxStateChange_phoneWidthScreen_whenFullWidthExpansionAllowed() {
+        int containerWidthDp = 400;
+        int prefocusWidthDp = 150;
+        int leftPositionDp = 50;
+
+        setupContainerAndMeasure(
+                toPx(containerWidthDp), toPx(prefocusWidthDp), toPx(leftPositionDp));
+        mLocationBarTablet.setIsFullWidthExpansionAllowedSupplier(() -> true);
+
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
+        LinearLayout.LayoutParams layoutParams =
+                (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
+
+        // Expands to fill available width when on phone-width screen and full-width expansion is
+        // allowed.
+        assertEquals(-toPx(leftPositionDp), layoutParams.leftMargin);
+        assertEquals(
+                toPx(-(containerWidthDp - prefocusWidthDp - leftPositionDp)),
+                layoutParams.rightMargin);
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
+    @Config(qualifiers = "w800dp-xhdpi")
+    public void testFuseboxStateChange_clampsToContainerWidthAndShiftsLeft() {
+        int containerWidthDp = 400;
+        int prefocusWidthDp = 225;
+        int leftPositionDp = 25;
+        setupContainerAndMeasure(
+                toPx(containerWidthDp), toPx(prefocusWidthDp), toPx(leftPositionDp));
+
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
+        LinearLayout.LayoutParams layoutParams =
+                (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
+
+        assertEquals(toPx(-leftPositionDp), layoutParams.leftMargin);
+        assertEquals(
+                toPx(-(containerWidthDp - prefocusWidthDp - leftPositionDp)),
+                layoutParams.rightMargin);
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
+    @Config(qualifiers = "w800dp-xhdpi")
+    public void testFuseboxStateChange_centersWiderLayouts() {
+        int containerWidthDp = 750;
+        int prefocusWidthDp = 550;
+        int leftPositionDp = 110; // Leans 10dp to the right of center
+        setupContainerAndMeasure(
+                toPx(containerWidthDp), toPx(prefocusWidthDp), toPx(leftPositionDp));
+
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
+        LinearLayout.LayoutParams layoutParams =
+                (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
+
+        // Target expanded width: 550dp + 2 * 8dp inset = 566dp.
+        // Target centered left: (750dp - 566dp) / 2 = 92dp.
+        int targetWidthDp = prefocusWidthDp + 2 * POPUP_INSET_DP;
+        int targetLeftDp = (containerWidthDp - targetWidthDp) / 2;
+        int expectedLeftMarginDp = targetLeftDp - leftPositionDp; // 92 - 110 = -18dp (-36px)
+        int expectedRightMarginDp =
+                (targetLeftDp + targetWidthDp)
+                        - (leftPositionDp + prefocusWidthDp); // 658 - 660 = -2dp (+4px)
+
+        assertEquals(toPx(expectedLeftMarginDp), layoutParams.leftMargin);
+        assertEquals(toPx(-expectedRightMarginDp), layoutParams.rightMargin);
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
+    @Config(qualifiers = "w800dp-xhdpi")
+    public void testFuseboxStateChange_boundsSymmetricExpansionToContainer() {
+        int containerWidthDp = 600;
+        int prefocusWidthDp = 300;
+        int leftPositionDp = 5; // The center threshold is 150dp +/- 16dp
+        setupContainerAndMeasure(
+                toPx(containerWidthDp), toPx(prefocusWidthDp), toPx(leftPositionDp));
+
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
+        LinearLayout.LayoutParams layoutParams =
+                (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
+
+        // Both sides should attempt to expand to meet the minimum width on tablets, which fits
+        // within the container width, but the left side has very limited space. The right side
+        // will need to compensate.
+        int expansionDp = MIN_TABLET_WIDTH_DP - prefocusWidthDp;
+        int expectedRightMarginDp = -(expansionDp - leftPositionDp);
+
+        assertEquals(toPx(-leftPositionDp), layoutParams.leftMargin);
+        assertEquals(toPx(expectedRightMarginDp), layoutParams.rightMargin);
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
+    @Config(qualifiers = "w800dp-xhdpi")
+    public void testFuseboxStateChange_topMarginClamping() {
+        int containerWidth = toPx(800);
+        int prefocusWidth = toPx(400);
+        FrameLayout container = new FrameLayout(mActivity);
+        container.measure(
+                MeasureSpec.makeMeasureSpec(containerWidth, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(toPx(200), MeasureSpec.EXACTLY));
+        container.layout(0, 0, containerWidth, toPx(200));
+
+        ((ViewGroup) mHolderView.getParent()).removeView(mHolderView);
+        LinearLayout toolbar = new LinearLayout(mActivity);
+        toolbar.addView(
+                mHolderView,
+                new LinearLayout.LayoutParams(
+                        LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT));
+        container.addView(toolbar);
+
+        int expansionPx =
+                mLocationBarTablet
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.location_bar_tablet_fusebox_popup_inset);
+
+        // Vertical Tabs: Toolbar is flush at the top of the container (y = 0).
+        toolbar.layout(0, 0, containerWidth, toPx(56));
+        mLocationBarTablet.setHolderAndContainer(mHolderView, container);
+        measureHolder(prefocusWidth);
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
+        LinearLayout.LayoutParams layoutParams =
+                (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
+        assertEquals(0, layoutParams.topMargin);
+
+        // Horizontal Tabs: Toolbar starts below tab strip (e.g. y = 40dp).
+        toolbar.layout(0, toPx(40), containerWidth, toPx(96));
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.DISABLED);
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
+        layoutParams = (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
+        assertEquals(-expansionPx, layoutParams.topMargin);
     }
 
     @Test
     @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
     @Config(qualifiers = "w800dp-xhdpi")
     public void testFuseboxStateChange_popoverLayoutMode() {
+        OmniboxCapabilities.setIsDesktopPlatformForTesting(true);
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
         mLocationBarTablet.setFuseboxLayoutMode(FuseboxLayoutMode.SUGGESTIONS_POPOVER);
         mLocationBarTablet.setReparentedToPopover(true);
@@ -242,11 +512,16 @@ public class LocationBarTabletUnitTest {
                 (GradientDrawable)
                         ((LayerDrawable) mLocationBarTablet.getBackground())
                                 .findDrawableByLayerId(R.id.focused_popup_bg);
+        GradientDrawable innerRect =
+                (GradientDrawable)
+                        ((LayerDrawable) mLocationBarTablet.getBackground())
+                                .findDrawableByLayerId(R.id.focused_popup_inner_bg);
         @ColorInt
         int expectedOuterRectColor =
-                OmniboxResourceProvider.getStandardSuggestionBackgroundColor(
-                        mActivity, BrandedColorScheme.APP_DEFAULT);
+                mResourceProvider.getSuggestionBackgroundColor(
+                        FuseboxLayoutMode.SUGGESTIONS_POPOVER, /* isDropdownContainer= */ true);
         assertEquals(expectedOuterRectColor, outerRect.getColor().getDefaultColor());
+        assertEquals(expectedOuterRectColor, innerRect.getColor().getDefaultColor());
         assertNull(mLocationBarTablet.getForeground());
 
         doReturn(true).when(mUrlBarCoordinator).hasFocus();
@@ -262,25 +537,113 @@ public class LocationBarTabletUnitTest {
                         MotionEvent.TOOL_TYPE_MOUSE));
         assertNull(mLocationBarTablet.getForeground());
 
-        LayerDrawable background = (LayerDrawable) mLocationBarTablet.getBackground();
-        int glifLayerIndex = background.findIndexByLayerId(R.id.glif_border_layer);
-        assertEquals(0, background.getLayerInsetBottom(glifLayerIndex));
-        assertEquals(0, background.getLayerInsetTop(glifLayerIndex));
-        assertEquals(0, background.getLayerInsetLeft(glifLayerIndex));
-        assertEquals(0, background.getLayerInsetRight(glifLayerIndex));
-
-        mLocationBarTablet.onSpecializedFuseboxModeActivated(true);
+        mLocationBarTablet.onSpecializedFuseboxModeActivated(/* isSpecializedRequestType= */ true);
+        assertNull(mLocationBarTablet.getForeground());
         GlifStrokeDrawable glifStrokeDrawable =
-                (GlifStrokeDrawable) background.getDrawable(glifLayerIndex);
+                (GlifStrokeDrawable) ((FrameLayout) mLocationBarTablet.getParent()).getForeground();
         float radius =
                 mLocationBarTablet
                         .getResources()
                         .getDimension(R.dimen.omnibox_suggestion_dropdown_round_corner_radius);
         assertEquals(radius, glifStrokeDrawable.getCornerRadiusForTesting(), MathUtils.EPSILON);
+        assertFalse(glifStrokeDrawable.isRunning());
+
+        mLocationBarTablet.layout(0, 0, 500, 100);
+        assertTrue(glifStrokeDrawable.isRunning());
 
         LinearLayout.LayoutParams layoutParams =
                 (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
         assertEquals(0, layoutParams.topMargin);
+        assertEquals(0, mLocationBarTablet.getPaddingLeft());
+        assertEquals(0, mLocationBarTablet.getPaddingRight());
+        assertEquals(
+                mLocationBarTablet
+                        .getResources()
+                        .getDimensionPixelSize(
+                                R.dimen.location_bar_tablet_fusebox_popover_top_padding),
+                mLocationBarTablet.getPaddingTop());
+        assertEquals(0, urlBar.getTranslationY(), MathUtils.EPSILON);
+
+        mLocationBarTablet.onSpecializedFuseboxModeActivated(/* isSpecializedRequestType= */ false);
+        assertNull(((FrameLayout) mLocationBarTablet.getParent()).getForeground());
+        assertFalse(glifStrokeDrawable.isRunning());
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
+    public void testSpecializedFuseboxModeActivated_toolbarMode() {
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
+        mLocationBarTablet.setFuseboxLayoutMode(FuseboxLayoutMode.TOOLBAR);
+
+        mLocationBarTablet.onSpecializedFuseboxModeActivated(true);
+        GlifStrokeDrawable glif = (GlifStrokeDrawable) mLocationBarTablet.getForeground();
+        assertNotNull(glif);
+        assertFalse(glif.isRunning());
+
+        mLocationBarTablet.layout(0, 0, 500, 100);
+        assertTrue(glif.isRunning());
+
+        mLocationBarTablet.onSpecializedFuseboxModeActivated(false);
+        assertNull(mLocationBarTablet.getForeground());
+        assertFalse(glif.isRunning());
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
+    public void testSpecializedFuseboxMode_preservedWhileFuseboxActive() {
+        OmniboxCapabilities.setIsDesktopPlatformForTesting(true);
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
+        mLocationBarTablet.setFuseboxLayoutMode(FuseboxLayoutMode.SUGGESTIONS_POPOVER);
+        mLocationBarTablet.setReparentedToPopover(true);
+        doReturn(true).when(mUrlBarCoordinator).hasFocus();
+
+        mLocationBarTablet.onSpecializedFuseboxModeActivated(true);
+        GlifStrokeDrawable glif =
+                (GlifStrokeDrawable) ((FrameLayout) mLocationBarTablet.getParent()).getForeground();
+        assertNotNull(glif);
+        assertFalse(glif.isRunning());
+
+        mLocationBarTablet.layout(0, 0, 500, 100);
+        assertTrue(glif.isRunning());
+
+        // Suggestions update triggers updateLayoutAndBackground(), but animation continues
+        // because fusebox is still active.
+        mLocationBarTablet.onSuggestionsChanged(/* hasSuggestions= */ true);
+        assertTrue(glif.isRunning());
+        assertEquals(glif, ((FrameLayout) mLocationBarTablet.getParent()).getForeground());
+
+        // Disabling fusebox resets GLIF state and animation.
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.DISABLED);
+        assertFalse(glif.isRunning());
+        assertNull(((FrameLayout) mLocationBarTablet.getParent()).getForeground());
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
+    public void testSpecializedFuseboxMode_popoverMode_losesFocus_stopsGlif() {
+        OmniboxCapabilities.setIsDesktopPlatformForTesting(true);
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
+        mLocationBarTablet.setFuseboxLayoutMode(FuseboxLayoutMode.SUGGESTIONS_POPOVER);
+        mLocationBarTablet.setReparentedToPopover(true);
+        doReturn(true).when(mUrlBarCoordinator).hasFocus();
+
+        mLocationBarTablet.onSpecializedFuseboxModeActivated(true);
+        GlifStrokeDrawable glif =
+                (GlifStrokeDrawable) ((FrameLayout) mLocationBarTablet.getParent()).getForeground();
+        assertNotNull(glif);
+        assertFalse(glif.isRunning());
+
+        mLocationBarTablet.layout(0, 0, 500, 100);
+        assertTrue(glif.isRunning());
+
+        // Losing URL bar focus stops GLIF in popover mode.
+        doReturn(false).when(mUrlBarCoordinator).hasFocus();
+        mLocationBarTablet.setUrlFocusChangePercent(
+                /* ntpSearchBoxScrollFraction= */ 0f,
+                /* urlFocusChangeFraction= */ 0f,
+                /* isUrlFocusChangeInProgress= */ false);
+        assertFalse(glif.isRunning());
+        assertNull(((FrameLayout) mLocationBarTablet.getParent()).getForeground());
     }
 
     @Test
@@ -288,11 +651,9 @@ public class LocationBarTabletUnitTest {
     @Config(qualifiers = "w800dp-xhdpi")
     public void testFuseboxBackground_noSuggestions() {
         int prefocusWidth = 400;
-        mLocationBarTablet.measure(
-                MeasureSpec.makeMeasureSpec(prefocusWidth, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY));
+        measureHolder(prefocusWidth);
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
-        mLocationBarTablet.onSuggestionsChanged(false);
+        mLocationBarTablet.onSuggestionsChanged(/* hasSuggestions= */ false);
 
         int expansionPx =
                 mLocationBarTablet
@@ -311,10 +672,8 @@ public class LocationBarTabletUnitTest {
                 mLocationBarTablet
                         .getResources()
                         .getDimensionPixelSize(R.dimen.location_bar_tablet_fusebox_popup_inset);
-        int glifLayerIndex = background.findIndexByLayerId(R.id.glif_border_layer);
         assertEquals(cornerRadius, outerRect.getCornerRadius(), MathUtils.EPSILON);
         assertEquals(inset, background.getLayerInsetBottom(1));
-        assertEquals(inset, background.getLayerInsetBottom(glifLayerIndex));
         assertEquals(inset, mLocationBarTablet.getPaddingBottom());
 
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.DISABLED);
@@ -324,7 +683,6 @@ public class LocationBarTabletUnitTest {
                 outerRect.getCornerRadii(),
                 MathUtils.EPSILON);
         assertEquals(0, background.getLayerInsetBottom(1));
-        assertEquals(0, background.getLayerInsetBottom(glifLayerIndex));
         assertEquals(0, mLocationBarTablet.getPaddingBottom());
     }
 
@@ -333,9 +691,7 @@ public class LocationBarTabletUnitTest {
     @Config(qualifiers = "w800dp-xhdpi")
     public void testFuseboxBackground_listScrolled() {
         int prefocusWidth = 400;
-        mLocationBarTablet.measure(
-                MeasureSpec.makeMeasureSpec(prefocusWidth, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY));
+        measureHolder(prefocusWidth);
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
         int expansionPx =
                 mLocationBarTablet
@@ -356,10 +712,8 @@ public class LocationBarTabletUnitTest {
                 mLocationBarTablet
                         .getResources()
                         .getDimensionPixelSize(R.dimen.location_bar_tablet_fusebox_popup_inset);
-        int glifLayerIndex = background.findIndexByLayerId(R.id.glif_border_layer);
         assertEquals(cornerRadius, outerRect.getCornerRadius(), MathUtils.EPSILON);
         assertEquals(inset, background.getLayerInsetBottom(1));
-        assertEquals(inset, background.getLayerInsetBottom(glifLayerIndex));
         assertEquals(inset, mLocationBarTablet.getPaddingBottom());
     }
 
@@ -368,9 +722,7 @@ public class LocationBarTabletUnitTest {
     @Config(qualifiers = "w800dp-xhdpi")
     public void testHoverDrawable() {
         int prefocusWidth = 400;
-        mLocationBarTablet.measure(
-                MeasureSpec.makeMeasureSpec(prefocusWidth, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY));
+        measureHolder(prefocusWidth);
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
         int inset =
                 mLocationBarTablet
@@ -424,24 +776,22 @@ public class LocationBarTabletUnitTest {
     @Config(qualifiers = "w800dp-mdpi")
     public void testWindowWidthChangedMarginCalcs() {
         int prefocusWidth = 400;
-        mLocationBarTablet.measure(
-                MeasureSpec.makeMeasureSpec(prefocusWidth, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY));
+        measureHolder(prefocusWidth);
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
         int minWidthPx =
                 mLocationBarTablet
                         .getResources()
                         .getDimensionPixelSize(R.dimen.fusebox_min_tablet_width);
+
         LinearLayout.LayoutParams layoutParams =
                 (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
         int expectedMargin = -((minWidthPx - prefocusWidth) / 2);
-        assertEquals(expectedMargin, layoutParams.leftMargin);
-        assertEquals(expectedMargin, layoutParams.rightMargin);
+        assertEquals(0, layoutParams.leftMargin);
+        assertEquals(-(minWidthPx - prefocusWidth), layoutParams.rightMargin);
 
+        int initialRightMargin = layoutParams.rightMargin;
         RuntimeEnvironment.setQualifiers("w599dp-mdpi");
-        mLocationBarTablet.measure(
-                MeasureSpec.makeMeasureSpec(prefocusWidth, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY));
+        measureHolder(prefocusWidth);
         mLocationBarTablet.layout(
                 0,
                 0,
@@ -449,9 +799,11 @@ public class LocationBarTabletUnitTest {
                 mLocationBarTablet.getMeasuredHeight());
         ShadowLooper.idleMainLooper();
         layoutParams = (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
-        assertEquals(expectedMargin, layoutParams.leftMargin);
+        int availableWidthPx = DisplayUtil.dpToPx(mDisplay, 599);
+        int unexpandedRightPx = mHolderView.getMeasuredWidth() + initialRightMargin;
+        assertEquals(0, layoutParams.leftMargin);
         assertEquals(
-                expectedMargin - (599 * DIP_SCALE - mLocationBarTablet.getMeasuredWidth()),
+                -(availableWidthPx - unexpandedRightPx),
                 layoutParams.rightMargin,
                 MathUtils.EPSILON);
     }
@@ -468,25 +820,21 @@ public class LocationBarTabletUnitTest {
     @Test
     public void testUpdateVisualsForState_unfocused() {
         // TODO(https://crbug.com/495794043): Replace with a render test.
-        mLocationBarTablet.updateVisualsForState(BrandedColorScheme.INCOGNITO);
+        updateVisualsForState(BrandedColorScheme.INCOGNITO);
 
-        LayerDrawable background = (LayerDrawable) mLocationBarTablet.getBackground();
-        GradientDrawable unfocusedRect =
-                (GradientDrawable) background.findDrawableByLayerId(R.id.unfocused_bg);
+        LocationBarBackgroundDrawable background =
+                (LocationBarBackgroundDrawable) mLocationBarTablet.getBackground();
+        GradientDrawable unfocusedRect = background.getBackgroundGradient();
 
         @ColorInt
-        int expectedIncognitoColor =
-                OmniboxResourceProvider.getTabletToolbarTextBoxBackgroundColor(
-                        mActivity, BrandedColorScheme.INCOGNITO);
+        int expectedIncognitoColor = mResourceProvider.getTabletToolbarTextBoxBackgroundColor();
         assertEquals(expectedIncognitoColor, unfocusedRect.getColor().getDefaultColor());
 
-        mLocationBarTablet.updateVisualsForState(BrandedColorScheme.APP_DEFAULT);
-        background = (LayerDrawable) mLocationBarTablet.getBackground();
-        unfocusedRect = (GradientDrawable) background.findDrawableByLayerId(R.id.unfocused_bg);
+        updateVisualsForState(BrandedColorScheme.APP_DEFAULT);
+        background = (LocationBarBackgroundDrawable) mLocationBarTablet.getBackground();
+        unfocusedRect = background.getBackgroundGradient();
         @ColorInt
-        int expectedAppDefaultColor =
-                OmniboxResourceProvider.getTabletToolbarTextBoxBackgroundColor(
-                        mActivity, BrandedColorScheme.APP_DEFAULT);
+        int expectedAppDefaultColor = mResourceProvider.getTabletToolbarTextBoxBackgroundColor();
         assertEquals(expectedAppDefaultColor, unfocusedRect.getColor().getDefaultColor());
     }
 
@@ -495,7 +843,7 @@ public class LocationBarTabletUnitTest {
     public void testUpdateVisualsForState_focused() {
         // TODO(https://crbug.com/495794043): Replace with a render test.
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
-        mLocationBarTablet.updateVisualsForState(BrandedColorScheme.INCOGNITO);
+        updateVisualsForState(BrandedColorScheme.INCOGNITO);
 
         LayerDrawable background = (LayerDrawable) mLocationBarTablet.getBackground();
         GradientDrawable outerRect =
@@ -515,7 +863,7 @@ public class LocationBarTabletUnitTest {
                         mActivity, BrandedColorScheme.INCOGNITO);
         assertEquals(expectedIncognitoInnerColor, innerRect.getColor().getDefaultColor());
 
-        mLocationBarTablet.updateVisualsForState(BrandedColorScheme.APP_DEFAULT);
+        updateVisualsForState(BrandedColorScheme.APP_DEFAULT);
 
         @ColorInt
         int expectedAppDefaultOuterColor =
@@ -533,50 +881,325 @@ public class LocationBarTabletUnitTest {
     @Test
     public void testSetIsInStandby() {
         assertNull(mLocationBarTablet.getForeground());
-        mLocationBarTablet.updateVisualsForState(BrandedColorScheme.APP_DEFAULT);
-        LayerDrawable background = (LayerDrawable) mLocationBarTablet.getBackground();
-        GradientDrawable unfocusedRect =
-                (GradientDrawable) background.findDrawableByLayerId(R.id.unfocused_bg);
+        updateVisualsForState(BrandedColorScheme.APP_DEFAULT);
+        LocationBarBackgroundDrawable background =
+                (LocationBarBackgroundDrawable) mLocationBarTablet.getBackground();
+        GradientDrawable unfocusedRect = background.getBackgroundGradient();
 
-        mLocationBarTablet.setShowStandbyRing(true);
+        mLocationBarTablet.setShowFocusRing(true);
 
-        // Verify the InsetDrawable border was applied to the foreground.
-        assertNotNull(mLocationBarTablet.getForeground());
-        assertTrue(mLocationBarTablet.getForeground() instanceof InsetDrawable);
+        // Verify the background hairline is in standby mode.
+        assertEquals(HairlineBehavior.SOLID, background.getHairlineBehaviorForTesting());
+        assertNull(mLocationBarTablet.getForeground());
 
         @ColorInt
         int expectedStandbyColor =
-                OmniboxResourceProvider.getTabletToolbarTextBoxStandbyBackgroundColor(
-                        mActivity, BrandedColorScheme.APP_DEFAULT);
+                mResourceProvider.getTabletToolbarTextBoxStandbyBackgroundColor();
         assertEquals(expectedStandbyColor, unfocusedRect.getColor().getDefaultColor());
 
-        mLocationBarTablet.setShowStandbyRing(false);
-        mLocationBarTablet.updateVisualsForState(BrandedColorScheme.INCOGNITO);
-        mLocationBarTablet.setShowStandbyRing(true);
+        mLocationBarTablet.setShowFocusRing(false);
+        assertEquals(HairlineBehavior.NONE, background.getHairlineBehaviorForTesting());
+        updateVisualsForState(BrandedColorScheme.INCOGNITO);
+        mLocationBarTablet.setShowFocusRing(true);
+        assertEquals(HairlineBehavior.SOLID, background.getHairlineBehaviorForTesting());
         @ColorInt
         int expectedIncognitoStandbyColor =
-                OmniboxResourceProvider.getTabletToolbarTextBoxStandbyBackgroundColor(
-                        mActivity, BrandedColorScheme.INCOGNITO);
+                mResourceProvider.getTabletToolbarTextBoxStandbyBackgroundColor();
         assertEquals(expectedIncognitoStandbyColor, unfocusedRect.getColor().getDefaultColor());
 
         mLocationBarTablet.onFuseboxStateChanged(FuseboxState.COMPACT);
         // Standby mode should override the fusebox state when deciding if to expand.
-        var layoutParams = (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
+        LinearLayout.LayoutParams layoutParams =
+                (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
         assertEquals(0, layoutParams.leftMargin);
         assertEquals(0, layoutParams.rightMargin);
         assertEquals(0, layoutParams.topMargin);
+        assertEquals(0, mLocationBarTablet.getPaddingBottom());
+
+        FrameLayout.LayoutParams tabletLayoutParams =
+                (FrameLayout.LayoutParams) mLocationBarTablet.getLayoutParams();
+        assertEquals(0, tabletLayoutParams.bottomMargin);
 
         View urlBar = mLocationBarTablet.findViewById(R.id.url_bar);
         View statusView = mLocationBarTablet.findViewById(R.id.location_bar_status);
         assertEquals(0, urlBar.getTranslationY(), MathUtils.EPSILON);
         assertEquals(0, statusView.getTranslationY(), MathUtils.EPSILON);
 
-        mLocationBarTablet.setShowStandbyRing(false);
+        mLocationBarTablet.setShowFocusRing(false);
         assertNull(mLocationBarTablet.getForeground());
         @ColorInt
-        int expectedNormalColor =
-                OmniboxResourceProvider.getTabletToolbarTextBoxBackgroundColor(
-                        mActivity, BrandedColorScheme.INCOGNITO);
+        int expectedNormalColor = mResourceProvider.getTabletToolbarTextBoxBackgroundColor();
         assertEquals(expectedNormalColor, unfocusedRect.getColor().getDefaultColor());
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
+    @Config(qualifiers = "w800dp-xhdpi")
+    public void testPopoverMarginsAppliedOnceAcrossReparenting() {
+        int prefocusWidth = 400;
+        measureHolder(prefocusWidth);
+        mLocationBarTablet.setFuseboxLayoutMode(FuseboxLayoutMode.SUGGESTIONS_POPOVER);
+
+        LinearLayout.LayoutParams popoverLayoutParams =
+                (LinearLayout.LayoutParams) mHolderView.getLayoutParams();
+
+        mLocationBarTablet.onFuseboxStateChanged(FuseboxState.EXPANDED);
+        assertEquals(0, popoverLayoutParams.leftMargin);
+        assertEquals(0, popoverLayoutParams.rightMargin);
+
+        mLocationBarTablet.setReparentedToPopover(true);
+
+        // In popover mode, margins remain 0 and target popover geometry is published via getters.
+        assertEquals(0, popoverLayoutParams.leftMargin);
+        assertEquals(0, popoverLayoutParams.rightMargin);
+        int minWidthPx =
+                mLocationBarTablet
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.fusebox_min_tablet_width);
+        int popoverAdditionalWidth =
+                mLocationBarTablet
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.omnibox_suggestion_popover_shift);
+        assertEquals(
+                minWidthPx + 2 * popoverAdditionalWidth,
+                mLocationBarTablet.getAlignmentViewTargetWidth());
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-xhdpi")
+    public void testPopoverAlignmentMargins() {
+        View statusView = mLocationBarTablet.findViewById(R.id.location_bar_status);
+        View activationChip = mLocationBarTablet.findViewById(R.id.fusebox_activation_chip);
+        mLocationBarTablet.setFuseboxLayoutMode(FuseboxLayoutMode.SUGGESTIONS_POPOVER);
+        int popoverAdditionalWidth =
+                mLocationBarTablet
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.omnibox_suggestion_popover_shift);
+        int aiChipMarginEnd =
+                mLocationBarTablet
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.location_bar_desktop_popover_margin_end);
+
+        mLocationBarTablet.setReparentedToPopover(true);
+        MarginLayoutParams statusParams = (MarginLayoutParams) statusView.getLayoutParams();
+        MarginLayoutParams chipParams = (MarginLayoutParams) activationChip.getLayoutParams();
+        assertEquals(popoverAdditionalWidth, statusParams.getMarginStart());
+        assertEquals(aiChipMarginEnd, chipParams.getMarginEnd());
+
+        mLocationBarTablet.setReparentedToPopover(false);
+        assertEquals(0, statusParams.getMarginStart());
+        assertEquals(0, chipParams.getMarginEnd());
+    }
+
+    @Test
+    public void isTooNarrowForExpandedActivationChip_atThreshold() {
+        View container = new View(mActivity);
+        container.layout(0, 0, mLocationBarTablet.mMinWidthForExpandedActivationChip, 100);
+        mLocationBarTablet.setHolderAndContainer(mHolderView, container);
+
+        assertTrue(mLocationBarTablet.isTooNarrowForExpandedActivationChip());
+    }
+
+    @Test
+    public void isTooNarrowForExpandedActivationChip_aboveThreshold() {
+        View container = new View(mActivity);
+        container.layout(0, 0, mLocationBarTablet.mMinWidthForExpandedActivationChip + 1, 100);
+        mLocationBarTablet.setHolderAndContainer(mHolderView, container);
+
+        assertFalse(mLocationBarTablet.isTooNarrowForExpandedActivationChip());
+    }
+
+    @Test
+    public void isUrlBarTextOverflowing_overflowsWhenExpanded() {
+        mLocationBarTablet.setOverflowTestParams(
+                /* urlBarTextWidth= */ 150,
+                /* activationChipCompactWidthDelta= */ 50,
+                /* urlBarWidth= */ 100,
+                /* isActivationChipCompact= */ false);
+
+        assertTrue(mLocationBarTablet.isUrlBarTextOverflowing());
+    }
+
+    @Test
+    public void isUrlBarTextOverflowing_doesNotOverflowWhenTextFits() {
+        mLocationBarTablet.setOverflowTestParams(
+                /* urlBarTextWidth= */ 50,
+                /* activationChipCompactWidthDelta= */ 50,
+                /* urlBarWidth= */ 150,
+                /* isActivationChipCompact= */ false);
+
+        assertFalse(mLocationBarTablet.isUrlBarTextOverflowing());
+    }
+
+    @Test
+    public void isUrlBarTextOverflowing_safeAgainstOscillationWhenCompact() {
+        // When compact, url bar width grew to 150 because chip shrank by 50.
+        // Effective expanded baseline is 150 - 50 = 100 < 120 text width -> still overflowing.
+        mLocationBarTablet.setOverflowTestParams(
+                /* urlBarTextWidth= */ 120,
+                /* activationChipCompactWidthDelta= */ 50,
+                /* urlBarWidth= */ 150,
+                /* isActivationChipCompact= */ true);
+
+        assertTrue(mLocationBarTablet.isUrlBarTextOverflowing());
+    }
+
+    // The class-level @Restriction does not configure Robolectric's screen size; without a
+    // tablet qualifier DeviceFormFactor resolves this context as a phone.
+    @Config(qualifiers = "sw600dp")
+    @Test
+    public void urlBarIsNotTranslated_duringNtpFocusAnimation() {
+        // Establish the exact conditions under which a *phone* translates the URL bar to follow
+        // the NTP fake search box, leaving form factor as the only reason translation stays at 0.
+        doReturn(true).when(mStatusCoordinator).isSearchEngineStatusIconVisible();
+        doReturn(JUnitTestGURLs.NTP_URL).when(mLocationBarDataProvider).getCurrentGurl();
+        View urlBar = mLocationBarTablet.findViewById(R.id.url_bar);
+
+        assertUrlBarUntranslated(
+                urlBar,
+                /* ntpSearchBoxScrollFraction= */ 0,
+                /* urlFocusChangeFraction= */ MathUtils.EPSILON,
+                /* isUrlFocusChangeInProgress= */ true);
+        assertUrlBarUntranslated(urlBar, 0.5f, 0.5f, /* isUrlFocusChangeInProgress= */ false);
+        assertUrlBarUntranslated(urlBar, 1.0f, 1.0f, /* isUrlFocusChangeInProgress= */ false);
+    }
+
+    /**
+     * Drives the focus animation to the given progress and asserts the URL bar is neither
+     * translated nor re-margined: unlike phones, tablets widen the omnibox by relayout only.
+     */
+    private void assertUrlBarUntranslated(
+            View urlBar,
+            float ntpSearchBoxScrollFraction,
+            float urlFocusChangeFraction,
+            boolean isUrlFocusChangeInProgress) {
+        mLocationBarTablet.setUrlFocusChangePercent(
+                ntpSearchBoxScrollFraction, urlFocusChangeFraction, isUrlFocusChangeInProgress);
+
+        assertEquals(0, ((MarginLayoutParams) urlBar.getLayoutParams()).getMarginStart());
+        assertEquals(0f, urlBar.getTranslationX(), MathUtils.EPSILON);
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-xhdpi")
+    public void testOnTouchEvent_routesToClosestVisibleActionButton() {
+        mLocationBarTablet.setLayoutParams(new FrameLayout.LayoutParams(1000, 300));
+        mActivity
+                .getWindowManager()
+                .addView(
+                        mActivity.getWindow().getDecorView(),
+                        mActivity.getWindow().getAttributes());
+        View deleteButton = mLocationBarTablet.findViewById(R.id.delete_button);
+        View micButton = mLocationBarTablet.findViewById(R.id.mic_button);
+
+        mLocationBarTablet.setDeleteButtonVisibility(true);
+        mLocationBarTablet.setMicButtonVisibility(true);
+        ShadowLooper.idleMainLooper();
+
+        deleteButton.layout(910, 10, 950, 50);
+        micButton.layout(910, 240, 950, 280);
+
+        AtomicBoolean deleteClicked = new AtomicBoolean();
+        AtomicBoolean micClicked = new AtomicBoolean();
+        deleteButton.setOnClickListener(_ -> deleteClicked.set(true));
+        micButton.setOnClickListener(_ -> micClicked.set(true));
+
+        // Include ACTION_MOVE so View#pointInView verifies target-local coordinates.
+        MotionEvent downEvent = obtainDownEvent(/* x= */ 930f, /* y= */ 285f);
+        MotionEvent moveEvent = obtainMoveEvent(/* x= */ 930f, /* y= */ 285f);
+        MotionEvent upEvent = obtainUpEvent(/* x= */ 930f, /* y= */ 285f);
+        assertTrue(mLocationBarTablet.onTouchEvent(downEvent));
+        assertTrue(mLocationBarTablet.onTouchEvent(moveEvent));
+        assertEquals(20f, moveEvent.getX(), MathUtils.EPSILON);
+        assertEquals(40f, moveEvent.getY(), MathUtils.EPSILON);
+        assertTrue(mLocationBarTablet.onTouchEvent(upEvent));
+        ShadowLooper.idleMainLooper();
+        downEvent.recycle();
+        moveEvent.recycle();
+        upEvent.recycle();
+
+        assertTrue(micClicked.get());
+        assertFalse(deleteClicked.get());
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-xhdpi")
+    public void testOnTouchEvent_ignoresDistantActionButtonsInEmptySpace() {
+        mLocationBarTablet.setLayoutParams(new FrameLayout.LayoutParams(1000, 300));
+        mActivity
+                .getWindowManager()
+                .addView(
+                        mActivity.getWindow().getDecorView(),
+                        mActivity.getWindow().getAttributes());
+        View deleteButton = mLocationBarTablet.findViewById(R.id.delete_button);
+        View micButton = mLocationBarTablet.findViewById(R.id.mic_button);
+
+        mLocationBarTablet.setDeleteButtonVisibility(true);
+        mLocationBarTablet.setMicButtonVisibility(true);
+        ShadowLooper.idleMainLooper();
+
+        deleteButton.layout(910, 10, 950, 50);
+        micButton.layout(910, 240, 950, 280);
+
+        AtomicBoolean deleteClicked = new AtomicBoolean();
+        AtomicBoolean micClicked = new AtomicBoolean();
+        deleteButton.setOnClickListener(_ -> deleteClicked.set(true));
+        micButton.setOnClickListener(_ -> micClicked.set(true));
+
+        // Touch at (750, 260) in the empty middle of the bottom bar is outside the 48dp minimum
+        // touch target bounds of micButton and deleteButton and must not trigger either button.
+        MotionEvent downEvent = obtainDownEvent(/* x= */ 750f, /* y= */ 260f);
+        MotionEvent upEvent = obtainUpEvent(/* x= */ 750f, /* y= */ 260f);
+        assertFalse(mLocationBarTablet.onTouchEvent(downEvent));
+        assertFalse(mLocationBarTablet.onTouchEvent(upEvent));
+        ShadowLooper.idleMainLooper();
+        downEvent.recycle();
+        upEvent.recycle();
+
+        assertFalse(micClicked.get());
+        assertFalse(deleteClicked.get());
+    }
+
+    private static MotionEvent obtainDownEvent(float x, float y) {
+        return obtainMotionEvent(MotionEvent.ACTION_DOWN, x, y);
+    }
+
+    private static MotionEvent obtainMoveEvent(float x, float y) {
+        return obtainMotionEvent(MotionEvent.ACTION_MOVE, x, y);
+    }
+
+    private static MotionEvent obtainUpEvent(float x, float y) {
+        return obtainMotionEvent(MotionEvent.ACTION_UP, x, y);
+    }
+
+    private static MotionEvent obtainMotionEvent(int action, float x, float y) {
+        return MotionEvent.obtain(
+                /* downTime= */ 0L, /* eventTime= */ 0L, action, x, y, /* metaState= */ 0);
+    }
+
+    private void setupContainerAndMeasure(int containerWidth, int prefocusWidth, int leftPosition) {
+        mContainerView = new View(mActivity);
+        mContainerView.measure(
+                MeasureSpec.makeMeasureSpec(containerWidth, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY));
+        mContainerView.layout(0, 0, containerWidth, 100);
+
+        mLocationBarTablet.setHolderAndContainer(mHolderView, mContainerView);
+        measureHolder(prefocusWidth);
+
+        mLocationBarTablet.setOutlineProvider(mOutlineProvider);
+
+        mHolderView.setLeft(leftPosition);
+    }
+
+    // Measuring mHolderView (FrameLayout) automatically measures child mLocationBarTablet.
+    private void measureHolder(int width) {
+        int widthSpec = MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY);
+        int heightSpec = MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY);
+        mHolderView.measure(widthSpec, heightSpec);
+    }
+
+    private int toPx(int dp) {
+        return (int) (dp * DIP_SCALE);
     }
 }

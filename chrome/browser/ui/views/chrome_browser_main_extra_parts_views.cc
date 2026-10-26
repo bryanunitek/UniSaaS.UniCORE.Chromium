@@ -9,15 +9,14 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/path_service.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
+#include "build/buildflag.h"
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service.h"
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/infobars/browser_infobar_manager.h"
-#include "chrome/browser/infobars/infobar_features.h"
-#include "chrome/browser/infobars/infobar_spec.h"
 #include "chrome/browser/net/system_network_context_manager.h"
-#include "chrome/browser/ui/page_info/chrome_page_info_delegate.h"
+#include "chrome/browser/ui/infobars/browser_infobar_registry.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_account_storage_move_dialog.h"
 #include "chrome/browser/ui/views/chrome_constrained_window_views_client.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -72,12 +71,12 @@ ChromeBrowserMainExtraPartsViews* g_main_parts_views = nullptr;
 }  // namespace
 
 ChromeBrowserMainExtraPartsViews::ChromeBrowserMainExtraPartsViews() {
-  DCHECK(!g_main_parts_views);
+  CHECK(!g_main_parts_views, base::NotFatalUntil::M162);
   g_main_parts_views = this;
 }
 
 ChromeBrowserMainExtraPartsViews::~ChromeBrowserMainExtraPartsViews() {
-  DCHECK_EQ(g_main_parts_views, this);
+  CHECK_EQ(g_main_parts_views, this, base::NotFatalUntil::M162);
   g_main_parts_views = nullptr;
   constrained_window::SetConstrainedWindowViewsClient(nullptr);
 }
@@ -117,18 +116,19 @@ void ChromeBrowserMainExtraPartsViews::PreCreateThreads() {
 }
 
 void ChromeBrowserMainExtraPartsViews::PreProfileInit() {
+  infobars::RegisterPreProfileInitInfoBars();
   if (ui_devtools::UiDevToolsServer::IsUiDevToolsEnabled(
           ui_devtools::switches::kEnableUiDevTools)) {
     base::FilePath output_dir;
     bool result = base::PathService::Get(chrome::DIR_USER_DATA, &output_dir);
-    DCHECK(result);
+    CHECK(result, base::NotFatalUntil::M162);
 
     ui_devtools::ServerHolder::GetInstance()->CreateUiDevTools(output_dir);
   }
 
   media_router::MediaRouterDialogController::SetGetOrCreate(
       base::BindRepeating([](content::WebContents* web_contents) {
-        DCHECK(web_contents);
+        CHECK(web_contents, base::NotFatalUntil::M162);
         media_router::MediaRouterDialogController* controller = nullptr;
         // This call does nothing if the controller already exists.
         media_router::MediaRouterDialogControllerViews::CreateForWebContents(
@@ -182,49 +182,11 @@ void ChromeBrowserMainExtraPartsViews::PostProfileInit(
   auto* service = BookmarkMergedSurfaceServiceFactory::GetForProfile(profile);
   if (service) {
     service->SetShowMoveStorageDialogCallback(base::BindRepeating(
-        [](Browser* browser, const bookmarks::BookmarkNode* node,
+        [](BrowserWindowInterface* browser, const bookmarks::BookmarkNode* node,
            const bookmarks::BookmarkNode* target_folder, size_t index) {
           ShowBookmarkAccountStorageMoveDialog(browser, node, target_folder,
                                                index);
         }));
-  }
-}
-
-void ChromeBrowserMainExtraPartsViews::
-    RegisterInfobars() {
-  if (infobars::IsInfoBarMigrated(
-          infobars::InfoBarDelegate::COLLECTED_COOKIES_INFOBAR_DELEGATE)) {
-    auto* browser_infobar_manager =
-        infobars::BrowserInfoBarManager::From(g_browser_process);
-    CHECK(browser_infobar_manager);
-    auto spec =
-        infobars::InfoBarSpec::Builder(
-            infobars::InfoBarDelegate::COLLECTED_COOKIES_INFOBAR_DELEGATE)
-            .SetMessageText(l10n_util::GetStringUTF16(
-                IDS_COLLECTED_COOKIES_INFOBAR_MESSAGE))
-            .SetIcon(features::IsRoundedIconsEnabled()
-                         ? vector_icons::kSettingsIcon
-                         : vector_icons::kSettingsChromeRefreshOldIcon)
-            .SetScope(infobars::InfoBarScope::kTab)
-            .AddOkButton(
-                l10n_util::GetStringUTF16(IDS_COLLECTED_COOKIES_INFOBAR_BUTTON),
-                base::BindRepeating([](content::WebContents* web_contents) {
-                  if (web_contents) {
-                    web_contents->GetController().Reload(
-                        content::ReloadType::NORMAL, true);
-                  }
-                }))
-            .Build();
-    browser_infobar_manager->Register(std::move(spec));
-  }
-
-  if (infobars::IsInfoBarMigrated(
-          infobars::InfoBarDelegate::PAGE_INFO_INFOBAR_DELEGATE)) {
-    auto* browser_infobar_manager =
-        infobars::BrowserInfoBarManager::From(g_browser_process);
-    if (browser_infobar_manager) {
-      ChromePageInfoDelegate::RegisterPageInfoInfoBar(browser_infobar_manager);
-    }
   }
 }
 
@@ -233,7 +195,7 @@ void ChromeBrowserMainExtraPartsViews::PostBrowserStart() {
       std::make_unique<RelaunchNotificationController>(
           UpgradeDetector::GetInstance());
 
-  RegisterInfobars();
+  infobars::RegisterInfoBars();
 }
 
 void ChromeBrowserMainExtraPartsViews::PostMainMessageLoopRun() {

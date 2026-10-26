@@ -9,11 +9,13 @@ import("//device/vr/buildflags/buildflags.gni")
 import("//extensions/buildflags/buildflags.gni")
 import("//printing/buildflags/buildflags.gni")
 import("//third_party/protobuf/proto_library.gni")
+import("//ui/webui/webui_features.gni")
 
 source_set("tabs_public") {
   public = [
     "tab_android.h",
     "tab_android_data_provider.h",
+    "tab_android_user_data.h",
     "tab_favicon.h",
     "tab_features.h",
   ]
@@ -24,12 +26,126 @@ source_set("tabs_public") {
     "//chrome/browser/ui/side_panel:side_panel_views_dependent",
     "//chrome/common:buildflags",
     "//components/favicon/core",
+    "//components/safe_browsing:buildflags",
     "//components/sessions:session_id",
+    "//components/site_engagement/content",
     "//components/split_tabs",
     "//components/tab_groups",
     "//components/tabs:public",
+    "//content/public/browser",
+    "//extensions/buildflags",
     "//skia",
     "//ui/base/unowned_user_data",
+    "//ui/webui:buildflags",
+  ]
+}
+
+source_set("oom_intervention") {
+  sources = [
+    "oom_intervention/near_oom_reduction_message_delegate.cc",
+    "oom_intervention/near_oom_reduction_message_delegate.h",
+    "oom_intervention/oom_intervention_config.cc",
+    "oom_intervention/oom_intervention_config.h",
+    "oom_intervention/oom_intervention_decider.cc",
+    "oom_intervention/oom_intervention_decider.h",
+    "oom_intervention/oom_intervention_tab_helper.cc",
+    "oom_intervention/oom_intervention_tab_helper.h",
+  ]
+  public_deps = [
+    "//base",
+    "//chrome/browser/ui/interventions",
+    "//components/crash/content/browser",
+    "//components/messages/android",
+    "//content/public/browser",
+    "//content/public/common",
+    "//mojo/public/cpp/bindings",
+    "//services/service_manager/public/cpp",
+    "//third_party/blink/public/mojom:android_mojo_bindings_blink",
+  ]
+  deps = [
+    ":resource_mapper",
+    "//chrome/app:generated_resources",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/profiles:profile",
+    "//chrome/common:chrome_features",
+    "//components/messages/android:feature_flags",
+    "//components/metrics",
+    "//components/pref_registry",
+    "//components/prefs",
+    "//components/strings:components_strings",
+    "//components/subresource_filter/core/common",
+    "//third_party/blink/public/common",
+    "//ui/base",
+  ]
+}
+
+source_set("policy_auditor_bridge") {
+  sources = [
+    "policy/policy_auditor_bridge.cc",
+    "policy/policy_auditor_bridge.h",
+  ]
+  public_deps = [
+    "//base",
+    "//content/public/browser",
+    "//url",
+  ]
+  deps = [ "//chrome/android:chrome_jni_headers" ]
+}
+
+source_set("media_state_observer") {
+  sources = [
+    "media_state_observer.cc",
+    "media_state_observer.h",
+  ]
+  public_deps = [
+    "//base",
+    "//chrome/browser/media/webrtc",
+    "//chrome/browser/tab",
+    "//content/public/browser",
+  ]
+  deps = [
+    ":tabs_public",
+    "//chrome/browser/ui:recently_audible_helper",
+  ]
+}
+
+source_set("persisted_tab_data") {
+  sources = [
+    "persisted_tab_data/language_persisted_tab_data_android.cc",
+    "persisted_tab_data/language_persisted_tab_data_android.h",
+    "persisted_tab_data/leveldb_persisted_tab_data_storage_android.cc",
+    "persisted_tab_data/leveldb_persisted_tab_data_storage_android.h",
+    "persisted_tab_data/leveldb_persisted_tab_data_storage_android_factory.cc",
+    "persisted_tab_data/leveldb_persisted_tab_data_storage_android_factory.h",
+    "persisted_tab_data/persisted_tab_data_android.cc",
+    "persisted_tab_data/persisted_tab_data_android.h",
+    "persisted_tab_data/persisted_tab_data_config_android.cc",
+    "persisted_tab_data/persisted_tab_data_config_android.h",
+    "persisted_tab_data/persisted_tab_data_storage_android.h",
+    "persisted_tab_data/sensitivity_persisted_tab_data_android.cc",
+    "persisted_tab_data/sensitivity_persisted_tab_data_android.h",
+  ]
+  public_deps = [
+    ":tabs_public",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/commerce/core:persisted_state_db_content_proto",
+    "//components/keyed_service/core",
+    "//components/page_content_annotations/core",
+    "//components/session_proto_db",
+    "//components/translate/core/browser",
+    "//content/public/browser",
+  ]
+  deps = [
+    ":language_data_proto",
+    ":sensitivity_data_proto",
+    "//chrome/browser/persisted_state_db",
+    "//chrome/browser/profiles",
+    "//chrome/browser/tab:jni_headers",
+    "//chrome/browser/ui/android/tab_model",
+    "//components/content_capture/browser",
+    "//components/translate/core/common",
+    "//url",
   ]
 }
 
@@ -39,30 +155,160 @@ source_set("tabs_impl") {
   sources = [ "tab_features.cc" ]
 
   deps = [
+    ":media_state_observer",
+    ":oom_intervention",
+    ":persisted_tab_data",
+    ":policy_auditor_bridge",
     ":tabs_public",
+    "//chrome/browser:browser_process",
+    "//chrome/browser:chained_back_navigation_tracker",
     "//chrome/browser/actor",
     "//chrome/browser/actor/android",
+    "//chrome/browser/banners",
+    "//chrome/browser/breadcrumbs",
+    "//chrome/browser/commerce",
+    "//chrome/browser/complex_tasks",
+    "//chrome/browser/content_settings",
+    "//chrome/browser/content_settings:content_settings_factory",
     "//chrome/browser/contextual_search",
     "//chrome/browser/contextual_tasks",
     "//chrome/browser/enterprise",
+    "//chrome/browser/external_protocol",
+    "//chrome/browser/facilitated_payments",
+    "//chrome/browser/favicon",
+    "//chrome/browser/file_system_access",
+    "//chrome/browser/finds",
+    "//chrome/browser/finds/core",
     "//chrome/browser/glic",
+    "//chrome/browser/history",
+    "//chrome/browser/history_clusters",
+    "//chrome/browser/history_embeddings",
+    "//chrome/browser/loader",
+    "//chrome/browser/login_detection",
+    "//chrome/browser/lookalikes",
+    "//chrome/browser/media",
+    "//chrome/browser/navigation_predictor",
     "//chrome/browser/net",
+    "//chrome/browser/offline_pages",
+    "//chrome/browser/optimization_guide",
+    "//chrome/browser/page_content_annotations",
+    "//chrome/browser/page_content_annotations:extraction_service",
+    "//chrome/browser/page_content_annotations:fetcher",
+    "//chrome/browser/page_info",
+    "//chrome/browser/page_load_metrics",
+    "//chrome/browser/password_manager",
+    "//chrome/browser/payments",
+    "//chrome/browser/permissions",
+    "//chrome/browser/picture_in_picture",
+    "//chrome/browser/plugins",
+    "//chrome/browser/predictors",
     "//chrome/browser/preloading/new_tab_page_preload",
+    "//chrome/browser/preloading/prefetch/no_state_prefetch",
+    "//chrome/browser/profiles",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/resource_coordinator",
+    "//chrome/browser/safe_browsing",
+    "//chrome/browser/search_engines",
+    "//chrome/browser/sessions",
+    "//chrome/browser/site_protection",
+    "//chrome/browser/ssl",
+    "//chrome/browser/storage_access_api",
+    "//chrome/browser/subresource_filter",
+    "//chrome/browser/supervised_user",
     "//chrome/browser/sync",
+    "//chrome/browser/sync_tab_context",
+    "//chrome/browser/tab_contents",
+    "//chrome/browser/task_manager",
+    "//chrome/browser/task_manager/common",
+    "//chrome/browser/translate",
+    "//chrome/browser/trusted_vault",
+    "//chrome/browser/ui:recently_audible_helper",
+    "//chrome/browser/ui/android:context_menu_helper",
+    "//chrome/browser/ui/autofill",
     "//chrome/browser/ui/contextual_search",
+    "//chrome/browser/ui/find_bar",
+    "//chrome/browser/ui/javascript_dialogs",
+    "//chrome/browser/ui/prefs",
+    "//chrome/browser/ui/safety_hub",
+    "//chrome/browser/ui/search_engines",
+    "//chrome/browser/ui/side_panel",
     "//chrome/browser/ui/side_panel/android",
+    "//chrome/browser/ui/tab_contents",
+    "//chrome/browser/ui/tabs:page_context_eligibility_helper",
     "//chrome/browser/ui/webui:webui_util",
+    "//chrome/browser/v8_compile_hints",
+    "//chrome/browser/vr",
+    "//chrome/common",
 
-    # TODO(crbug.com/489548570): Remove "side_panel_container/internal:android"
-    # since it's for the tab-scoped dev feature.
-    "//chrome/browser/ui/side_panel_container/internal:android",
+    # TODO(crbug.com/489548570): Remove "side_panel/internal/android:dev"
+    # from release builds. We need it in tests.
+    "//chrome/browser/ui/side_panel/internal/android:dev",
+    "//components/autofill/content/browser",
+    "//components/blocked_content",
+    "//components/breadcrumbs/core",
+    "//components/breadcrumbs/core:status",
+    "//components/client_hints/browser",
+    "//components/commerce/content/browser",
+    "//components/content_capture/common",
+    "//components/content_settings/browser",
+    "//components/download/content/factory",
+    "//components/download/content/public",
     "//components/external_intents/android",
     "//components/favicon/content",
+    "//components/history/content/browser",
+    "//components/history/core/browser",
+    "//components/infobars/content",
+    "//components/javascript_dialogs",
     "//components/lens",
     "//components/metrics:content",
+    "//components/metrics_services_manager",
+    "//components/optimization_guide/core:features",
+    "//components/page_content_annotations/content",
+    "//components/page_content_annotations/core",
+    "//components/payments/core",
+    "//components/performance_manager",
+    "//components/permissions",
+    "//components/safe_browsing:buildflags",
+    "//components/safe_browsing/content/browser",
+    "//components/safe_browsing/core/common:features",
+    "//components/search",
+    "//components/sensitive_content",
+    "//components/sensitive_content:features",
+    "//components/site_engagement/content",
     "//components/tabs:public",
+    "//components/ukm/content",
+    "//components/webapps/browser",
+    "//components/zoom",
     "//content/public/browser",
+    "//extensions/buildflags",
+    "//media",
+    "//printing/buildflags",
+    "//ui/base",
   ]
+  if (enable_webui_ntp) {
+    deps += [
+      "//chrome/browser/ui/customize_chrome:customize_chrome_base",
+      "//chrome/browser/ui/search",
+    ]
+  }
+  if (enable_extensions_core) {
+    deps += [
+      "//chrome/browser/extensions",
+      "//chrome/browser/extensions/api/web_navigation",
+      "//chrome/browser/ui/extensions",
+      "//extensions/browser",
+      "//extensions/common:mojom",
+    ]
+  }
+  if (safe_browsing_mode != 0) {
+    deps += [
+      "//components/safe_browsing/content/browser:client_side_detection",
+      "//components/safe_browsing/content/browser:safe_browsing_blocking_page",
+    ]
+  }
+  if (enable_printing) {
+    deps += [ "//chrome/browser/printing" ]
+  }
 }
 
 source_set("resource_mapper") {
@@ -123,6 +369,18 @@ if (is_android) {
     ]
   }
 
+  # A leaf target so that it can be used by targets that ":android" itself
+  # depends on (see //chrome/browser/android/thin_webview:initializer).
+  source_set("web_contents_theme_client") {
+    sources = [ "web_contents_theme_client.cc" ]
+    public = [ "web_contents_theme_client.h" ]
+    public_deps = [ "//content/public/browser" ]
+    deps = [
+      "//base",
+      "//chrome/browser/ui/android/night_mode:jni_headers",
+    ]
+  }
+
   source_set("android") {
     sources = [
       "background_sync_launcher_android.cc",
@@ -140,6 +398,8 @@ if (is_android) {
       "browsing_data/browsing_data_bridge.cc",
       "browsing_data/browsing_data_counter_bridge.cc",
       "browsing_data/browsing_data_counter_bridge.h",
+      "browsing_data/browsing_data_model_android_holder.cc",
+      "browsing_data/browsing_data_model_android_holder.h",
       "browsing_data/url_filter_bridge.cc",
       "browsing_data/url_filter_bridge.h",
       "chrome_startup_flags.cc",
@@ -187,6 +447,8 @@ if (is_android) {
       "compositor/scene_layer/contextual_search_scene_layer.h",
       "compositor/scene_layer/edge_to_edge_bottom_chin_scene_layer.cc",
       "compositor/scene_layer/edge_to_edge_bottom_chin_scene_layer.h",
+      "compositor/scene_layer/edge_to_edge_top_scalp_scene_layer.cc",
+      "compositor/scene_layer/edge_to_edge_top_scalp_scene_layer.h",
       "compositor/scene_layer/overscroll_scene_layer.cc",
       "compositor/scene_layer/overscroll_scene_layer.h",
       "compositor/scene_layer/readaloud_mini_player_scene_layer.cc",
@@ -205,10 +467,10 @@ if (is_android) {
       "compositor/scene_layer/toolbar_swipe_scene_layer.h",
       "compositor/scene_layer/top_toolbar_scene_layer.cc",
       "compositor/scene_layer/top_toolbar_scene_layer.h",
-      "compositor/strip_tab_underline_manager.cc",
-      "compositor/strip_tab_underline_manager.h",
       "compositor/tab_content_manager.cc",
       "compositor/tab_content_manager.h",
+      "compositor/tab_underline_manager.cc",
+      "compositor/tab_underline_manager.h",
       "content/content_utils.cc",
       "content/web_contents_factory.cc",
       "content/web_contents_factory_data_deleter.cc",
@@ -272,8 +534,6 @@ if (is_android) {
       "initialize_feature_list_android.h",
       "intent_handler.cc",
       "media/media_capture_devices_dispatcher_android.cc",
-      "media_state_observer.cc",
-      "media_state_observer.h",
       "messages_resource_mapper_initializer.cc",
       "metrics/android_atoms_logger.cc",
       "metrics/android_atoms_logger.h",
@@ -303,38 +563,20 @@ if (is_android) {
       "omnibox/chrome_omnibox_navigation_observer_android.h",
       "omnibox/composebox_query_controller_bridge.cc",
       "omnibox/composebox_query_controller_bridge.h",
+      "omnibox/drive_disclaimer_bridge.cc",
       "omnibox/omnibox_prerender.cc",
       "omnibox/omnibox_prerender.h",
+      "omnibox/search_engine_service_android.cc",
+      "omnibox/search_engine_service_android.h",
+      "omnibox/suggestions_omt_input_anchor.cc",
+      "omnibox/suggestions_omt_input_anchor.h",
       "omnibox/tab_context_capture_request.cc",
       "omnibox/tab_context_capture_request.h",
-      "oom_intervention/near_oom_reduction_message_delegate.cc",
-      "oom_intervention/near_oom_reduction_message_delegate.h",
-      "oom_intervention/oom_intervention_config.cc",
-      "oom_intervention/oom_intervention_config.h",
-      "oom_intervention/oom_intervention_decider.cc",
-      "oom_intervention/oom_intervention_decider.h",
-      "oom_intervention/oom_intervention_tab_helper.cc",
-      "oom_intervention/oom_intervention_tab_helper.h",
       "overlay_panel/overlay_panel_content.cc",
       "overlay_panel/overlay_panel_content.h",
       "partner_browser_customizations.cc",
       "partner_browser_customizations.h",
-      "persisted_tab_data/language_persisted_tab_data_android.cc",
-      "persisted_tab_data/language_persisted_tab_data_android.h",
-      "persisted_tab_data/leveldb_persisted_tab_data_storage_android.cc",
-      "persisted_tab_data/leveldb_persisted_tab_data_storage_android.h",
-      "persisted_tab_data/leveldb_persisted_tab_data_storage_android_factory.cc",
-      "persisted_tab_data/leveldb_persisted_tab_data_storage_android_factory.h",
-      "persisted_tab_data/persisted_tab_data_android.cc",
-      "persisted_tab_data/persisted_tab_data_android.h",
-      "persisted_tab_data/persisted_tab_data_config_android.cc",
-      "persisted_tab_data/persisted_tab_data_config_android.h",
-      "persisted_tab_data/persisted_tab_data_storage_android.h",
-      "persisted_tab_data/sensitivity_persisted_tab_data_android.cc",
-      "persisted_tab_data/sensitivity_persisted_tab_data_android.h",
       "policy/policy_auditor.cc",
-      "policy/policy_auditor_bridge.cc",
-      "policy/policy_auditor_bridge.h",
       "preferences/about_settings_bridge.cc",
       "preferences/autofill/autofill_payment_methods_delegate.cc",
       "preferences/autofill/autofill_payment_methods_delegate.h",
@@ -380,9 +622,6 @@ if (is_android) {
       "storage_restore_orchestrator_factory_android.cc",
       "storage_restore_orchestrator_factory_android.h",
       "tab_android.cc",  # TODO(crbug.com/486820940): Move to tabs_impl.
-      "tab_android_conversions.cc",
-      "tab_android_conversions.h",
-      "tab_android_user_data.h",
       "tab_browser_controls_constraints_helper.cc",
       "tab_favicon.cc",
       "tab_group_android.cc",
@@ -391,8 +630,6 @@ if (is_android) {
       "tab_group_collection_data_android.h",
       "tab_group_features.cc",
       "tab_group_features.h",
-      "tab_interface_android.cc",
-      "tab_interface_android.h",
       "tab_state_storage_service_android.cc",
       "tab_state_storage_service_android.h",
       "tab_state_storage_service_factory.cc",
@@ -401,8 +638,10 @@ if (is_android) {
       "tab_storage_packager_android.h",
       "tab_web_contents_delegate_android.cc",
       "tab_web_contents_delegate_android.h",
-      "thin_webview/chrome_thin_webview_initializer.cc",
-      "thin_webview/chrome_thin_webview_initializer.h",
+      "tab_web_contents_destroyer.cc",
+      "tab_web_contents_destroyer.h",
+      "tabbed_startup_window_policy_delegate_bridge.cc",
+      "tabbed_startup_window_policy_delegate_bridge.h",
       "trusted_cdn.cc",
       "trusted_cdn.h",
       "usage_stats/usage_stats_bridge.cc",
@@ -411,12 +650,6 @@ if (is_android) {
       "usage_stats/usage_stats_database.h",
       "warmup_manager.cc",
       "web_contents_printer.cc",
-      "web_contents_theme_client.cc",
-      "web_contents_theme_client.h",
-      "webapk/pwa_restore_bottom_sheet_mediator.cc",
-      "webapk/pwa_restore_bottom_sheet_mediator.h",
-      "webapk/webapk_database.cc",
-      "webapk/webapk_database.h",
       "webapk/webapk_install_service.cc",
       "webapk/webapk_install_service_factory.cc",
       "webapk/webapk_install_service_factory.h",
@@ -427,15 +660,6 @@ if (is_android) {
       "webapk/webapk_restore_task.h",
       "webapk/webapk_restore_web_contents_manager.cc",
       "webapk/webapk_restore_web_contents_manager.h",
-      "webapk/webapk_specifics_fetcher.cc",
-      "webapk/webapk_specifics_fetcher.h",
-      "webapk/webapk_sync_bridge.cc",
-      "webapk/webapk_sync_bridge.h",
-      "webapk/webapk_sync_service.cc",
-      "webapk/webapk_sync_service.h",
-      "webapk/webapk_sync_service_factory.cc",
-      "webapk/webapk_sync_service_factory.h",
-      "webapk/webapk_sync_service_jni.cc",
       "webapk/webapk_update_manager.cc",
       "webapps/twa_launch_navigation_handle_user_data.cc",
       "webapps/twa_launch_navigation_handle_user_data.h",
@@ -449,24 +673,31 @@ if (is_android) {
     ]
 
     public_deps = [
-      "//chrome/browser:browser_public_dependencies",
+      ":persisted_tab_data",
       "//chrome/browser/accessibility/accessibility_prefs",
       "//chrome/browser/android/webapk:webapk_sources",
+      "//chrome/browser/glic/browser_ui",
+      "//chrome/browser/ui/tabs/alert:tab_alert",
     ]
 
     deps = [
       ":delta_file_proto",
       ":language_data_proto",
+      ":media_state_observer",
+      ":oom_intervention",
+      ":policy_auditor_bridge",
+      ":profile_key_startup_accessor",
       ":profile_token",
       ":sensitivity_data_proto",
       ":shortcut_helper",
       ":tabs_impl",
       ":tabs_public",
       ":usage_stats_proto",
+      ":web_contents_theme_client",
       "//cc/slim",
       "//chrome/android:jni_headers",
       "//chrome/app:command_ids",
-      "//chrome/browser:profile_key_startup_accessor",
+      "//chrome/browser:global_features",
       "//chrome/browser/accessibility/settings",
       "//chrome/browser/android/content:jni_headers",
       "//chrome/browser/android/extensions:android",
@@ -475,6 +706,7 @@ if (is_android) {
       "//chrome/browser/android/httpclient:jni_headers",
       "//chrome/browser/android/locale",
       "//chrome/browser/android/messages:jni_headers",
+      "//chrome/browser/android/metrics:base_jni_headers",
       "//chrome/browser/android/metrics:jni_headers",
       "//chrome/browser/android/omnibox",
       "//chrome/browser/android/omnibox:impl",
@@ -507,6 +739,7 @@ if (is_android) {
       "//chrome/browser/gesturenav/android:impl",
       "//chrome/browser/glic/android",
       "//chrome/browser/glic/android:jni_headers",
+      "//chrome/browser/glic/browser_ui:impl",
       "//chrome/browser/keyboard_accessory/android",
       "//chrome/browser/keyboard_accessory/android:impl",
       "//chrome/browser/language/android:jni_headers",
@@ -515,6 +748,7 @@ if (is_android) {
       "//chrome/browser/lifetime/android:jni_headers",
       "//chrome/browser/long_screenshots",
       "//chrome/browser/mandatory_reauth/android:mandatory_reauth",
+      "//chrome/browser/media",
       "//chrome/browser/notifications:jni_headers",
       "//chrome/browser/notifications/chime/android",
       "//chrome/browser/ntp_customization",
@@ -524,6 +758,7 @@ if (is_android) {
       "//chrome/browser/page_content_annotations:factory_jni_headers",
       "//chrome/browser/page_image_service/android",
       "//chrome/browser/page_image_service/android:jni_headers",
+      "//chrome/browser/page_load_metrics",
       "//chrome/browser/partnerbookmarks:android",
       "//chrome/browser/partnerbookmarks:android_impl",
       "//chrome/browser/partnercustomizations:jni_headers",
@@ -551,9 +786,9 @@ if (is_android) {
       "//chrome/browser/serial/android:jni_headers",
       "//chrome/browser/signin/services/android:jni_headers",
       "//chrome/browser/ssl/android:jni_headers",
+      "//chrome/browser/supervised_user:android_parental_controls_bridge_jni_headers",
       "//chrome/browser/supervised_user:extension_parent_approval_jni_headers",
       "//chrome/browser/supervised_user:supervised_extension_approval_result_java_enum_srcjar",
-      "//chrome/browser/supervised_user:supervised_user_service_bridge_jni_headers",
       "//chrome/browser/supervised_user:supervised_user_service_platform_delegate_jni_headers",
       "//chrome/browser/supervised_user:website_parent_approval_jni_headers",
       "//chrome/browser/sync/android:jni_headers",
@@ -586,13 +821,17 @@ if (is_android) {
       "//chrome/browser/ui/android/layouts:android",
       "//chrome/browser/ui/android/lens",
       "//chrome/browser/ui/android/logo",
-      "//chrome/browser/ui/android/night_mode:jni_headers",
+      "//chrome/browser/ui/android/omnibox:jni_headers",
       "//chrome/browser/ui/android/pdf:pdf_jni_headers",
       "//chrome/browser/ui/android/webid",
       "//chrome/browser/ui/browser_window:create_browser_window",
       "//chrome/browser/ui/digital_credentials",
+      "//chrome/browser/ui/tabs:page_context_eligibility_helper",
+      "//chrome/browser/ui/tabs/alert:impl",
+      "//chrome/browser/ui/tabs/alert:tab_alert",
       "//chrome/browser/ui/webui/notifications_internals",
       "//chrome/browser/ui/webui/notifications_internals:impl",
+      "//chrome/browser/universal_optout",
       "//chrome/browser/wallet/android:wallet_android",
       "//chrome/browser/webapps:android",
       "//chrome/browser/webapps:android_impl",
@@ -602,9 +841,9 @@ if (is_android) {
       "//chrome/browser/webauthn:webauthn_request_delegate_android",
       "//chrome/browser/webauthn:webauthn_request_delegate_android_impl",
       "//chrome/common:non_code_constants",
-      "//chrome/services/media_gallery_util/public/cpp",
       "//components/android_autofill/browser:android",
       "//components/android_autofill/browser:features",
+      "//components/application_locale_storage",
       "//components/autofill/android:keyboard_suppressor",
       "//components/background_sync",
       "//components/bookmarks/common/android",
@@ -631,6 +870,7 @@ if (is_android) {
       "//components/component_updater/android:native_background_task_update_scheduler",
       "//components/content_capture/android",
       "//components/content_settings/android",
+      "//components/content_settings/browser",
       "//components/contextual_search:jni_headers",
       "//components/crash/android:crash_android",
       "//components/credential_management/android:features",
@@ -657,11 +897,13 @@ if (is_android) {
       "//components/javascript_dialogs/android:jni_headers",
       "//components/language/android:language_bridge",
       "//components/location/android:settings",
+      "//components/media_gallery_util",
       "//components/messages/android",
       "//components/messages/android:feature_flags",
       "//components/module_installer/android:native",
       "//components/offline_pages/task",
       "//components/omnibox/browser",
+      "//components/optimization_guide/core:features",
       "//components/page_info/android",
       "//components/page_info/core:proto",
       "//components/page_load_metrics/browser",
@@ -685,6 +927,7 @@ if (is_android) {
       "//components/safe_browsing/core/browser/password_protection:password_protection_metrics_util",
       "//components/safe_browsing/core/browser/utils",
       "//components/saved_tab_groups/public:conversion_utils",
+      "//components/search_engines/android:jni_headers",
       "//components/security_state/content/android",
       "//components/send_tab_to_self",
       "//components/sensitive_content:features",
@@ -696,12 +939,12 @@ if (is_android) {
       "//components/supervised_user/core/browser",
       "//components/supervised_user/core/browser:fetcher",
       "//components/supervised_user/core/browser/android",
+      "//components/sync_device_info",
       "//components/sync_preferences/synced_set_up/android",
       "//components/sync_preferences/synced_set_up/android:jni_headers",
       "//components/tabs:impl",
       "//components/tabs:public",
       "//components/themes",
-      "//components/thin_webview/internal",
       "//components/translate/content/android",
       "//components/translate/core/browser",
       "//components/translate/core/common",
@@ -709,13 +952,13 @@ if (is_android) {
       "//components/trusted_vault/android",
       "//components/ukm/android:ukm_recorder",
       "//components/ukm/content",
+      "//components/universal_optout",
       "//components/user_data_importer/common",
       "//components/user_data_importer/content",
       "//components/user_prefs/android:jni_cc",
       "//components/visited_url_ranking/public",
       "//components/viz/common",
       "//components/webapk:proto",
-      "//components/webapps/browser/android:pwa_restore_bottom_sheet_mediator_jni_headers",
       "//components/webauthn/android",
       "//content/public/browser",
       "//device/fido:cablev2_registration",
@@ -739,6 +982,7 @@ if (is_android) {
       "//ui/accessibility",
       "//ui/base/unowned_user_data",
       "//ui/menus",
+      "//ui/webui:buildflags",
       "//url",
 
       # TODO(crbug.com/372647115): When c/b/android/oom_intervention gets
@@ -773,6 +1017,7 @@ if (is_android) {
       "//chrome/browser/glic:impl",
       "//chrome/browser/glic/browser_ui:glow",
       "//chrome/browser/glic/common",
+      "//chrome/browser/history",
       "//chrome/browser/history:impl",
       "//chrome/browser/image_decoder",
       "//chrome/browser/metrics:impl",
@@ -780,6 +1025,7 @@ if (is_android) {
       "//chrome/browser/notifications:impl",
       "//chrome/browser/offline_pages",
       "//chrome/browser/omnibox",
+      "//chrome/browser/optimization_guide",
       "//chrome/browser/optimization_guide:impl",
       "//chrome/browser/page_content_annotations:extraction_service",
       "//chrome/browser/password_manager:impl",
@@ -788,6 +1034,7 @@ if (is_android) {
       "//chrome/browser/predictors",
       "//chrome/browser/prefs",
       "//chrome/browser/prefs:impl",
+      "//chrome/browser/prefs:util",
       "//chrome/browser/preloading",
       "//chrome/browser/preloading:prefs",
       "//chrome/browser/preloading/new_tab_page_preload",
@@ -799,15 +1046,16 @@ if (is_android) {
       "//chrome/browser/profiles:misc",
       "//chrome/browser/profiles:profiles_extra_parts_impl",
       "//chrome/browser/push_messaging:impl",
+      "//chrome/browser/renderer_host",
       "//chrome/browser/resource_coordinator",
       "//chrome/browser/safe_browsing",
       "//chrome/browser/search_engines",
       "//chrome/browser/sessions",
       "//chrome/browser/signin:impl",
+      "//chrome/browser/subresource_filter",
       "//chrome/browser/sync",
       "//chrome/browser/task_manager:impl",
       "//chrome/browser/thumbnail/cc",
-      "//chrome/browser/ui",
       "//chrome/browser/ui:ui_features",
       "//chrome/browser/ui/android/tab_model",
       "//chrome/browser/ui/android/tab_model:impl",
@@ -829,7 +1077,11 @@ if (is_android) {
       "//components/content_relationship_verification",
       "//components/contextual_search:public",
       "//components/contextual_search:types",
+      "//components/contextual_search/consent_kit",
+      "//components/contextual_search/footprints/internal",
+      "//components/contextual_search/footprints/public",
       "//components/contextual_search/internal",
+      "//components/contextual_tasks/public",
       "//components/contextual_tasks/public:feature_list",
       "//components/contextual_tasks/public:query_contextualizer",
       "//components/crash/content/browser",
@@ -858,41 +1110,19 @@ if (is_android) {
       # TODO(crbug.com/504985497): Remove this circular dependency.
       "//chrome/browser/keyboard_accessory/android:impl",
 
-      "//chrome/browser/feed:impl",
-
-      # TODO(crbug.com/335257259): Resolve circular deps caused by including
-      # `IdentityManagerFactory` in facilitated payments.
-      "//chrome/browser/facilitated_payments",
-
-      "//chrome/browser/partnerbookmarks:android_impl",
-      "//chrome/browser/bookmarks/android:impl",
-
       # TODO(crbug.com/40261269): Remove when password_manager/android/
       # grouped_affiliations headers get componentized.
       "//chrome/browser/touch_to_fill/autofill/android:impl",
-      "//chrome/browser/touch_to_fill/password_manager:impl",
-
-      # TODO(crbug.com/353332589): Remove this circular dependency when
-      # c/b/language/language_model_manager_factory.h gets componentized.
-      "//chrome/browser/translate/android:android_impl",
-
-      # TODO(crbug.com/353332589): Remove this circular dependency when
-      # c/b/net/qwac_web_contents_observer.h gets modularized.
-      ":tabs_impl",
 
       # TODO(crbug.com/353332589): Remove this circular dependency when the
       # following Android browser headers get modularized.
       # - c/b/android/tab_web_contents_delegate_android.h
       # - c/b/android/webapk/webapk_install_service_factory.h
       "//chrome/browser/webapps:android_impl",
-      "//chrome/browser/webapps/installable:impl",
 
       # TODO(crbug.com/413572035): Remove once c/b/tab_android* sources get
       # modularized.
       "//chrome/browser/ui/android/tab_model:impl",
-      "//chrome/browser/glic/common",
-
-      "//chrome/browser/ui/webui/notifications_internals:impl",
 
       # TODO(crbug.com/441537619): Remove this circular dependency when the
       # following headers get componentized:
@@ -901,33 +1131,10 @@ if (is_android) {
       # - c/b/ntp_tiles/chrome_most_visited_sites_factory.h
       "//chrome/browser/auxiliary_search:impl",
 
-      # TODO(crbug.com/353332589): Remove this circular dependency when the
-      # following headers get componentized:
-      # - c/b/android/tab_android.h
-      "//chrome/browser/dom_distiller:impl",
-
-      # TODO(crbug.com/353332589): Remove this circular dependency when the
-      # following headers get componentized:
-      # - c/b/android/tab_android.h
-      "//chrome/browser/complex_tasks:impl",
-
       # TODO(crbug.com/353332589): Remove this circular dependencies when the
       # following headers get componentized:
       # - c/b/android/service_tab_launcher.h
       "//chrome/browser/content_index:impl",
-
-      # TODO(crbug.com/): Remove this circular dependency when the following
-      # headers get componentized:
-      # c/b/net/dns_probe_runner.h
-      # c/b/net/secure_dns_util.h
-      # c/b/net/secure_dns_config.h
-      # c/b/net/stub_resolver_config_reader.h
-      # c/b/net/system_network_context_manager.h
-      "//chrome/browser/privacy:secure_dns_bridge",
-
-      # //chrome/browser/lens:impl includes chrome/browser/browser_process.h
-      # which is part of the //chrome/browser monolith.
-      "//chrome/browser/lens:impl",
 
       # Android-specific headers in :browser are included by these targets
       # under #if BUILDFLAG(IS_ANDROID) guards. These were modularized
@@ -937,23 +1144,17 @@ if (is_android) {
       "//chrome/browser/browsing_data:impl",
       "//chrome/browser/devtools",
       "//chrome/browser/download:impl",
-      "//chrome/browser/glic:impl",
       "//chrome/browser/history:impl",
       "//chrome/browser/metrics:impl",
       "//chrome/browser/notifications:impl",
-      "//chrome/browser/optimization_guide:impl",
       "//chrome/browser/password_manager:impl",
       "//chrome/browser/permissions",
       "//chrome/browser/prefs:impl",
       "//chrome/browser/privacy_sandbox:impl",
-      "//chrome/browser/profiles:misc",
       "//chrome/browser/profiles:profiles_extra_parts_impl",
-      "//chrome/browser/push_messaging:impl",
       "//chrome/browser/safe_browsing",
       "//chrome/browser/signin:impl",
       "//chrome/browser/sync",
-      "//chrome/browser/task_manager:impl",
-      "//chrome/browser/ui",
       "//chrome/browser/ui/autofill:impl",
       "//chrome/browser/ui/autofill/payments:impl",
       "//chrome/browser/ui/blocked_content:impl",
@@ -998,5 +1199,189 @@ if (is_android) {
         ]
       }
     }
+
+    if (enable_webui_tabstrip_ntb) {
+      sources += [
+        "compositor/tab_strip_ntb_webui_host.cc",
+        "compositor/tab_strip_ntb_webui_host.h",
+      ]
+      deps += [
+        "//chrome/browser/ui/tabs/tab_strip_api/android_tab_model_impl",
+        "//chrome/browser/ui/webui/tabstrip_ntb",
+        "//components/browser_apis/tab_strip:service",
+      ]
+    } else {
+      sources += [ "compositor/tab_strip_ntb_webui_host_stub.cc" ]
+    }
   }
+}
+
+# Header-only target so downstream targets can include
+# profile_key_startup_accessor.h without depending on :android.
+# The .cc file remains in :android.
+source_set("profile_key_startup_accessor") {
+  public = [ "profile_key_startup_accessor.h" ]
+  deps = [ "//base" ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [
+    "backup/dict_pref_backup_serializer_unittest.cc",
+    "compositor/compositor_view_unittest.cc",
+    "compositor/retry_strategy_unittest.cc",
+    "compositor/tab_content_manager_unittest.cc",
+    "customtabs/detached_resource_request_unittest.cc",
+    "customtabs/tab_interaction_recorder_android_unittest.cc",
+    "foreign_session_helper_unittest.cc",
+    "framebust_intervention/framebust_blocked_delegate_android_unittest.cc",
+    "history/browsing_history_bridge_unittest.cc",
+    "history/history_deletion_bridge_unittest.cc",
+    "metrics/android_atoms_logger_unittest.cc",
+    "metrics/android_session_durations_service_unittest.cc",
+    "ntp/new_tab_page_url_handler_unittest.cc",
+    "omnibox/autocomplete_controller_android_unittest.cc",
+    "omnibox/chrome_omnibox_navigation_observer_android_unittest.cc",
+    "omnibox/suggestions_omt_input_anchor_unittest.cc",
+    "omnibox/tab_context_capture_request_unittest.cc",
+    "oom_intervention/near_oom_reduction_message_delegate_unittest.cc",
+    "oom_intervention/oom_intervention_decider_unittest.cc",
+    "persisted_tab_data/leveldb_persisted_tab_data_storage_android_factory_unittest.cc",
+    "recently_closed_tabs_bridge_unittest.cc",
+    "search_permissions/search_permissions_service_unittest.cc",
+    "selection/chrome_selection_dropdown_menu_delegate_unittest.cc",
+    "tab_android_unittest.cc",
+    "tab_web_contents_destroyer_unittest.cc",
+    "tabbed_startup_window_policy_delegate_bridge_unittest.cc",
+    "usage_stats/usage_stats_database_unittest.cc",
+    "webapps/twa_launch_queue_delegate_unittest.cc",
+    "webapps/twa_launch_queue_tab_helper_unittest.cc",
+  ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+  deps = [
+    ":android",
+    ":oom_intervention",
+    ":tabs_public",
+    ":usage_stats_proto",
+    "//base/test:test_support",
+    "//cc/slim",
+    "//chrome/android:chrome_jni_headers",
+    "//chrome/browser:chrome_content_browser_client",
+    "//chrome/browser/actor",
+    "//chrome/browser/actor:test_support",
+    "//chrome/browser/actor/ui:test_support",
+    "//chrome/browser/autocomplete",
+    "//chrome/browser/content_settings:content_settings_factory",
+    "//chrome/browser/flags:flags_android",
+    "//chrome/browser/history",
+    "//chrome/browser/keyboard_accessory/android:impl",
+    "//chrome/browser/password_manager/factories",
+    "//chrome/browser/permissions",
+    "//chrome/browser/persisted_state_db",
+    "//chrome/browser/prefs:util",
+    "//chrome/browser/renderer_host",
+    "//chrome/browser/search_engines",
+    "//chrome/browser/sessions",
+    "//chrome/browser/ui/android/tab_model",
+    "//chrome/browser/ui/contextual_search",
+    "//chrome/browser/ui/javascript_dialogs",
+    "//chrome/browser/ui/tabs:page_context_eligibility_helper_unit_tests",
+    "//chrome/browser/ui/webui:webui_util",
+    "//chrome/test:test_support",
+    "//chrome/test/base:chrome_render_view_host_test_harness",
+    "//chrome/test/base:testing_browser_process",
+    "//components/actor/core",
+    "//components/autofill/content/browser",
+    "//components/autofill/content/browser:test_support",
+    "//components/autofill/core/browser:test_support",
+    "//components/autofill/core/common",
+    "//components/blocked_content",
+    "//components/content_settings/browser",
+    "//components/content_settings/browser:test_support",
+    "//components/history/core/browser",
+    "//components/javascript_dialogs",
+    "//components/lens",
+    "//components/leveldb_proto:test_support",
+    "//components/messages/android:test_support",
+    "//components/omnibox/browser",
+    "//components/omnibox/browser:test_support",
+    "//components/omnibox/common",
+    "//components/os_crypt/async/browser",
+    "//components/os_crypt/async/browser:test_support",
+    "//components/password_manager/content/browser",
+    "//components/password_manager/core/browser:test_support",
+    "//components/password_manager/core/browser/password_store:test_support",
+    "//components/pdf/common:constants",
+    "//components/search_engines",
+    "//components/sessions",
+    "//components/sessions:session_id",
+    "//components/sync_sessions",
+    "//components/tab_groups",
+    "//components/tabs:public",
+    "//components/tabs:test_support",
+    "//components/webapps/browser",
+    "//content/test:test_support",
+    "//net",
+    "//net:test_support",
+    "//services/network/public/mojom",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//third_party/blink/public/common:headers",
+    "//third_party/metrics_proto",
+    "//third_party/omnibox_proto",
+    "//ui/android",
+    "//ui/base",
+    "//ui/base:features",
+    "//ui/menus",
+    "//url",
+  ]
+
+  if (enable_webui_tabstrip_ntb) {
+    sources += [ "compositor/tab_strip_ntb_webui_host_unittest.cc" ]
+    deps += [
+      "//chrome/browser/profiles:profile_manager",
+      "//chrome/browser/ui/android/tab_model:test_support",
+    ]
+  }
+}
+
+source_set("android_browsertests") {
+  testonly = true
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+
+  sources = [
+    "customtabs/custom_tabs_browsertest.cc",
+    "customtabs/tab_interaction_recorder_browsertest.cc",
+    "historical_tab_saver_browsertest.cc",
+    "persisted_tab_data/persisted_tab_data_android_browsertest.cc",
+    "persisted_tab_data/sensitivity_persisted_tab_data_android_browsertest.cc",
+    "webview_renderer_extension_browsertest.cc",
+  ]
+  deps = [
+    ":android",
+    ":tabs_public",
+    "//base/test:test_support",
+    "//chrome/browser/android/persisted_tab_data/test:test_support",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/tab",
+    "//chrome/test/base:android_browser_test",
+    "//chrome/test/base:chrome_test_utils",
+    "//components/autofill/content/browser",
+    "//components/autofill/content/browser:test_support",
+    "//components/autofill/core/browser",
+    "//components/autofill/core/browser:test_support",
+    "//components/back_forward_cache",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//net:test_support",
+    "//testing/gtest",
+    "//url",
+  ]
 }

@@ -9,20 +9,16 @@
 
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/uuid.h"
 #include "base/values.h"
 #include "chrome/browser/chromeos/extensions/wm/wm_desks_private_feature_ash.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/extensions/api/wm_desks_private.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chromeos/ash/experiences/extensions/common/api/wm_desks_private.h"
 
 namespace extensions {
 
 namespace {
-constexpr char kApiLaunchDeskResult[] = "Ash.DeskApi.LaunchDesk.Result";
-constexpr char kApiRemoveDeskResult[] = "Ash.DeskApi.RemoveDesk.Result";
-constexpr char kApiSwitchDeskResult[] = "Ash.DeskApi.SwitchDesk.Result";
-constexpr char kApiAllDeskResult[] = "Ash.DeskApi.AllDesk.Result";
 constexpr char kInvalidIdError[] = "InvalidIdError";
 constexpr char kStorageError[] = "StorageError";
 }  // namespace
@@ -98,6 +94,13 @@ WmDesksPrivateLaunchDeskFunction::WmDesksPrivateLaunchDeskFunction() = default;
 WmDesksPrivateLaunchDeskFunction::~WmDesksPrivateLaunchDeskFunction() = default;
 
 ExtensionFunction::ResponseAction WmDesksPrivateLaunchDeskFunction::Run() {
+  Profile* profile = Profile::FromBrowserContext(browser_context());
+  // Ensure the calling profile is the active user's profile to prevent
+  // cross-profile desk manipulation.
+  if (profile != ProfileManager::GetActiveUserProfile()) {
+    return RespondNow(
+        Error("The Desk API is only available to the active user profile."));
+  }
   std::optional<api::wm_desks_private::LaunchDesk::Params> params =
       api::wm_desks_private::LaunchDesk::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
@@ -113,11 +116,9 @@ void WmDesksPrivateLaunchDeskFunction::OnLaunchDesk(
     std::string error,
     const base::Uuid& desk_uuid) {
   if (!error.empty()) {
-    base::UmaHistogramBoolean(kApiLaunchDeskResult, false);
     Respond(Error(std::move(error)));
     return;
   }
-  base::UmaHistogramBoolean(kApiLaunchDeskResult, true);
   Respond(ArgumentList(api::wm_desks_private::LaunchDesk::Results::Create(
       desk_uuid.AsLowercaseString())));
 }
@@ -126,6 +127,13 @@ WmDesksPrivateRemoveDeskFunction::WmDesksPrivateRemoveDeskFunction() = default;
 WmDesksPrivateRemoveDeskFunction::~WmDesksPrivateRemoveDeskFunction() = default;
 
 ExtensionFunction::ResponseAction WmDesksPrivateRemoveDeskFunction::Run() {
+  Profile* profile = Profile::FromBrowserContext(browser_context());
+  // Ensure the calling profile is the active user's profile to prevent
+  // cross-profile desk manipulation.
+  if (profile != ProfileManager::GetActiveUserProfile()) {
+    return RespondNow(
+        Error("The Desk API is only available to the active user profile."));
+  }
   std::optional<api::wm_desks_private::RemoveDesk::Params> params =
       api::wm_desks_private::RemoveDesk::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
@@ -138,7 +146,6 @@ ExtensionFunction::ResponseAction WmDesksPrivateRemoveDeskFunction::Run() {
           : false;
   base::Uuid uuid = base::Uuid::ParseCaseInsensitive(params->desk_id);
   if (!uuid.is_valid()) {
-    base::UmaHistogramBoolean(kApiRemoveDeskResult, false);
     return RespondNow(Error(kInvalidIdError));
   }
   WMDesksPrivateFeatureAsh().RemoveDesk(
@@ -149,12 +156,9 @@ ExtensionFunction::ResponseAction WmDesksPrivateRemoveDeskFunction::Run() {
 
 void WmDesksPrivateRemoveDeskFunction::OnRemoveDesk(std::string error) {
   if (!error.empty()) {
-    base::UmaHistogramBoolean(kApiRemoveDeskResult, false);
-
     Respond(Error(std::move(error)));
     return;
   }
-  base::UmaHistogramBoolean(kApiRemoveDeskResult, true);
 
   Respond(NoArguments());
 }
@@ -202,11 +206,9 @@ WmDesksPrivateSetWindowPropertiesFunction::Run() {
 void WmDesksPrivateSetWindowPropertiesFunction::OnSetWindowProperties(
     std::string error_string) {
   if (!error_string.empty()) {
-    base::UmaHistogramBoolean(kApiAllDeskResult, false);
     Respond(Error(std::move(error_string)));
     return;
   }
-  base::UmaHistogramBoolean(kApiAllDeskResult, true);
   Respond(NoArguments());
 }
 
@@ -299,6 +301,13 @@ WmDesksPrivateGetActiveDeskFunction::~WmDesksPrivateGetActiveDeskFunction() =
     default;
 
 ExtensionFunction::ResponseAction WmDesksPrivateGetActiveDeskFunction::Run() {
+  Profile* profile = Profile::FromBrowserContext(browser_context());
+  // Ensure the calling profile is the active user's profile to prevent
+  // cross-profile desk manipulation.
+  if (profile != ProfileManager::GetActiveUserProfile()) {
+    return RespondNow(
+        Error("The Desk API is only available to the active user profile."));
+  }
   WMDesksPrivateFeatureAsh().GetActiveDesk(base::BindOnce(
       &WmDesksPrivateGetActiveDeskFunction::OnGetActiveDesk, this));
   return did_respond() ? AlreadyResponded() : RespondLater();
@@ -320,12 +329,18 @@ WmDesksPrivateSwitchDeskFunction::WmDesksPrivateSwitchDeskFunction() = default;
 WmDesksPrivateSwitchDeskFunction::~WmDesksPrivateSwitchDeskFunction() = default;
 
 ExtensionFunction::ResponseAction WmDesksPrivateSwitchDeskFunction::Run() {
+  Profile* profile = Profile::FromBrowserContext(browser_context());
+  // Ensure the calling profile is the active user's profile to prevent
+  // cross-profile desk manipulation.
+  if (profile != ProfileManager::GetActiveUserProfile()) {
+    return RespondNow(
+        Error("The Desk API is only available to the active user profile."));
+  }
   std::optional<api::wm_desks_private::SwitchDesk::Params> params =
       api::wm_desks_private::SwitchDesk::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
   base::Uuid uuid = base::Uuid::ParseCaseInsensitive(params->desk_uuid);
   if (!uuid.is_valid()) {
-    base::UmaHistogramBoolean(kApiSwitchDeskResult, false);
     return RespondNow(Error(kInvalidIdError));
   }
   WMDesksPrivateFeatureAsh().SwitchDesk(
@@ -336,11 +351,9 @@ ExtensionFunction::ResponseAction WmDesksPrivateSwitchDeskFunction::Run() {
 
 void WmDesksPrivateSwitchDeskFunction::OnSwitchDesk(std::string error_string) {
   if (!error_string.empty()) {
-    base::UmaHistogramBoolean(kApiSwitchDeskResult, false);
     Respond(Error(std::move(error_string)));
     return;
   }
-  base::UmaHistogramBoolean(kApiSwitchDeskResult, true);
   Respond(NoArguments());
 }
 
@@ -350,6 +363,13 @@ WmDesksPrivateGetDeskByIDFunction::~WmDesksPrivateGetDeskByIDFunction() =
     default;
 
 ExtensionFunction::ResponseAction WmDesksPrivateGetDeskByIDFunction::Run() {
+  Profile* profile = Profile::FromBrowserContext(browser_context());
+  // Ensure the calling profile is the active user's profile to prevent
+  // cross-profile desk manipulation.
+  if (profile != ProfileManager::GetActiveUserProfile()) {
+    return RespondNow(
+        Error("The Desk API is only available to the active user profile."));
+  }
   auto params = api::wm_desks_private::GetDeskByID::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
   base::Uuid uuid = base::Uuid::ParseCaseInsensitive(params->desk_uuid);

@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 #include "content/browser/cache_storage/cache_storage_control_wrapper.h"
+
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 
 namespace content {
@@ -16,7 +18,7 @@ CacheStorageControlWrapper::CacheStorageControlWrapper(
     mojo::PendingRemote<storage::mojom::BlobStorageContext>
         blob_storage_context) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(quota_manager_proxy);
+  CHECK(quota_manager_proxy, base::NotFatalUntil::M158);
 
   // QuotaManagerProxy::RegisterClient() must be called during construction
   // until crbug.com/1182630 is fixed.
@@ -37,7 +39,8 @@ CacheStorageControlWrapper::CacheStorageControlWrapper(
       storage::QuotaClientType::kBackgroundFetch);
 
   cache_storage_context_ = base::SequenceBound<CacheStorageContextImpl>(
-      CacheStorageContextImpl::CreateSchedulerTaskRunner(),
+      base::ThreadPool::CreateSequencedTaskRunner(
+          base::TaskPriority::USER_BLOCKING),
       std::move(quota_manager_proxy));
   cache_storage_context_.AsyncCall(&CacheStorageContextImpl::Init)
       .WithArgs(cache_storage_control_.BindNewPipeAndPassReceiver(),

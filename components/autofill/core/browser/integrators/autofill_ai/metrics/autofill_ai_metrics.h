@@ -31,6 +31,42 @@ enum class AutofillAiOptInFunnelEvents {
 
 void LogOptInFunnelEvent(AutofillAiOptInFunnelEvents event);
 
+// Funnel events for fetching and displaying the Google Wallet public pass
+// legal disclosure notice during the save prompt.
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.autofill.autofill_ai
+// LINT.IfChange(AutofillAiWalletNoticeFunnelEvents)
+enum class AutofillAiWalletNoticeFunnelEvents {
+  kFetchingUpsertDetails = 0,
+  kUpsertDetailsFetchSuccess = 1,
+  kUpsertDetailsFetchError = 2,
+  kLegalMessageShown = 3,
+  kLinkClicked = 4,
+  kEntitySaved = 5,
+  kEntityNotSaved = 6,
+  kMaxValue = kEntityNotSaved,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/enums.xml:AutofillAiWalletNoticeFunnelEvents)
+
+void LogWalletNoticeFunnelEvent(AutofillAiWalletNoticeFunnelEvents event,
+                                bool in_settings = false);
+
+// Status of the preloaded upsert details cache when synchronously extracting
+// details for an entity addition in settings.
+// LINT.IfChange(AutofillAiUpsertDetailsCacheStatus)
+enum class AutofillAiUpsertDetailsCacheStatus {
+  // A valid cached response was available and consumed.
+  kHit = 0,
+  // Cache missed because the background preload request was still in flight.
+  kMissRequestInFlight = 1,
+  // Cache missed and no preload request was in flight (e.g. failed or never
+  // started), or the cached response was invalid.
+  kMissNoRequestInFlight = 2,
+  kMaxValue = kMissNoRequestInFlight,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/enums.xml:AutofillAiUpsertDetailsCacheStatus)
+
+void LogUpsertDetailsCacheStatus(AutofillAiUpsertDetailsCacheStatus status);
+
 void LogLocalEntitiesDeduplicationMetrics(
     const base::flat_map<EntityType, size_t>&
         local_entities_considered_for_deduplication_per_type,
@@ -64,6 +100,23 @@ std::string_view EntityPromptTypeToMetricsString(
 // emitted.
 int GetBucketForAutofillAiReauthResultByFieldType(FieldType field_type,
                                                   bool auth_succeeded);
+
+// LINT.IfChange(AutofillAiUnmaskResult)
+enum class AutofillAiUnmaskResult {
+  kSuccess = 0,
+  kCacheHit = 1,
+  kReauthFailed = 2,
+  kNetworkError = 3,
+  kEmptyResponse = 4,
+  kParsingError = 5,
+  kDecryptionFailed = 6,
+  kMaxValue = kDecryptionFailed,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/enums.xml:AutofillAiUnmaskResult)
+
+// Logs the outcome of unmasking a sensitive Autofill AI suggestion.
+void LogUnmaskResult(EntityInstance::RecordType record_type,
+                     AutofillAiUnmaskResult result);
 
 // Logs the result of the reauthentication flow per field type.
 void LogReauthToFillResultPerFieldType(const FieldTypeSet& ai_field_types,

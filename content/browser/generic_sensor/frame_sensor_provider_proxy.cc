@@ -12,6 +12,7 @@
 #include "base/notreached.h"
 #include "components/content_settings/core/common/features.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
@@ -75,13 +76,6 @@ FrameSensorProviderProxy::FrameSensorProviderProxy(
 }
 
 FrameSensorProviderProxy::~FrameSensorProviderProxy() {
-  if (permission_subscription_id_) {
-    auto* permission_controller =
-        render_frame_host().GetBrowserContext()->GetPermissionController();
-    permission_controller->UnsubscribeFromPermissionResultChange(
-        permission_subscription_id_);
-  }
-
   // Notify the delegate for each active connection that is being cleared.
   auto* delegate = GetContentClient()->browser()->GetSensorDelegate();
   if (delegate) {
@@ -166,8 +160,8 @@ void FrameSensorProviderProxy::GetSensor(device::mojom::SensorType type,
   bool initially_suspended = false;
 
   if (ShouldTrackSensorConnection()) {
-    if (!permission_subscription_id_) {
-      permission_subscription_id_ =
+    if (!permission_subscription_) {
+      permission_subscription_ =
           permission_controller->SubscribeToPermissionResultChange(
               content::PermissionDescriptorUtil::
                   CreatePermissionDescriptorForPermissionType(
@@ -189,14 +183,12 @@ void FrameSensorProviderProxy::GetSensor(device::mojom::SensorType type,
   web_contents_sensor_provider->GetSensor(
       type, std::move(controller_receiver), initially_suspended,
       base::BindOnce(&FrameSensorProviderProxy::OnHardwareCheckCompleted,
-                     weak_factory_.GetWeakPtr(), type, permission_status,
-                     has_valid_gesture, std::move(controller),
-                     std::move(callback)));
+                     weak_factory_.GetWeakPtr(), type, has_valid_gesture,
+                     std::move(controller), std::move(callback)));
 }
 
 void FrameSensorProviderProxy::OnHardwareCheckCompleted(
     device::mojom::SensorType type,
-    blink::mojom::PermissionStatus permission_status,
     bool user_gesture,
     mojo::PendingRemote<device::mojom::SensorClientController> controller,
     GetSensorCallback callback,
@@ -212,28 +204,39 @@ void FrameSensorProviderProxy::OnHardwareCheckCompleted(
     return;
   }
 
+  auto* permission_controller =
+      render_frame_host().GetBrowserContext()->GetPermissionController();
+  auto permission_status =
+      permission_controller->GetPermissionStatusForCurrentDocument(
+          content::PermissionDescriptorUtil::
+              CreatePermissionDescriptorForPermissionType(
+                  blink::PermissionType::SENSORS),
+          &render_frame_host());
+
   if (permission_status == blink::mojom::PermissionStatus::GRANTED) {
     FinalizeSensorConnection(std::move(controller));
     std::move(callback).Run(result, std::move(params));
     return;
   }
 
-  CHECK_EQ(permission_status, blink::mojom::PermissionStatus::ASK);
-  CHECK(user_gesture);
+  if (permission_status == blink::mojom::PermissionStatus::ASK &&
+      user_gesture) {
+    auto permission_descriptor = content::PermissionDescriptorUtil::
+        CreatePermissionDescriptorForPermissionType(
+            blink::PermissionType::SENSORS);
 
-  auto* permission_controller =
-      render_frame_host().GetBrowserContext()->GetPermissionController();
-  auto permission_descriptor = content::PermissionDescriptorUtil::
-      CreatePermissionDescriptorForPermissionType(
-          blink::PermissionType::SENSORS);
+    permission_controller->RequestPermissionFromCurrentDocument(
+        &render_frame_host(),
+        PermissionRequestDescription(std::move(permission_descriptor),
+                                     user_gesture),
+        base::BindOnce(&FrameSensorProviderProxy::OnPermissionRequestCompleted,
+                       weak_factory_.GetWeakPtr(), std::move(params),
+                       std::move(callback), std::move(controller)));
+    return;
+  }
 
-  permission_controller->RequestPermissionFromCurrentDocument(
-      &render_frame_host(),
-      PermissionRequestDescription(std::move(permission_descriptor),
-                                   user_gesture),
-      base::BindOnce(&FrameSensorProviderProxy::OnPermissionRequestCompleted,
-                     weak_factory_.GetWeakPtr(), std::move(params),
-                     std::move(callback), std::move(controller)));
+  std::move(callback).Run(
+      device::mojom::SensorCreationResult::ERROR_NOT_ALLOWED, nullptr);
 }
 
 void FrameSensorProviderProxy::OnHardwareCheckForBlockedSensor(
@@ -305,9 +308,65 @@ void FrameSensorProviderProxy::RenderFrameHostStateChanged(
   }
 }
 
+void FrameSensorProviderProxy::OnWebContentsFocused(
+    RenderWidgetHost* render_widget_host) {
+  if (!render_widget_host) {
+    return;
+  }
+  if (render_widget_host ==
+      render_frame_host().GetMainFrame()->GetRenderWidgetHost()) {
+    UpdateSensorSessionControllers();
+  }
+}
+
+void FrameSensorProviderProxy::OnWebContentsLostFocus(
+    RenderWidgetHost* render_widget_host) {
+  if (!render_widget_host) {
+    return;
+  }
+  if (render_widget_host ==
+      render_frame_host().GetMainFrame()->GetRenderWidgetHost()) {
+    UpdateSensorSessionControllers();
+  }
+}
+
+void FrameSensorProviderProxy::OnFocusChangedInPage(
+    const FocusedNodeDetails& details) {
+  UpdateSensorSessionControllers();
+}
+
 bool FrameSensorProviderProxy::ShouldSuspendSensors() const {
-  return !web_contents() || !render_frame_host().IsActive() ||
-         web_contents()->GetVisibility() == content::Visibility::HIDDEN;
+  if (!web_contents() || !render_frame_host().IsActive()) {
+    return true;
+  }
+
+  // Suspend hardware sensors if not strictly visible (covers HIDDEN and
+  // OCCLUDED).
+  if (web_contents()->GetVisibility() != content::Visibility::VISIBLE) {
+    return true;
+  }
+
+  // Determine top-level window focus using the primary main frame's widget.
+  // OOPIF widgets do not track OS-level window focus.
+  RenderWidgetHostImpl* main_rwh = static_cast<RenderWidgetHostImpl*>(
+      render_frame_host().GetMainFrame()->GetRenderWidgetHost());
+  bool window_has_focus = main_rwh && main_rwh->is_focused();
+
+  if (!window_has_focus) {
+    return true;
+  }
+
+  RenderFrameHost* focused_frame = web_contents()->GetFocusedFrame();
+  if (!focused_frame) {
+    return false;
+  }
+
+  if (&render_frame_host() == focused_frame) {
+    return false;
+  }
+
+  return !render_frame_host().GetLastCommittedOrigin().IsSameOriginWith(
+      focused_frame->GetLastCommittedOrigin());
 }
 
 void FrameSensorProviderProxy::UpdateSensorSessionControllers() {
@@ -337,7 +396,11 @@ void FrameSensorProviderProxy::FinalizeSensorConnection(
   SensorDelegate* delegate = GetContentClient()->browser()->GetSensorDelegate();
   bool bound_controller = false;
   if (ShouldTrackSensorConnection() && controller.is_valid()) {
-    client_controllers_.Add(std::move(controller));
+    mojo::RemoteSetElementId id =
+        client_controllers_.Add(std::move(controller));
+    if (is_suspended_.value_or(ShouldSuspendSensors())) {
+      client_controllers_.Get(id)->Suspend();
+    }
     bound_controller = true;
   }
 

@@ -11,13 +11,10 @@
 #include "base/memory/scoped_refptr.h"
 #include "components/private_ai/private_ai_service.h"
 #include "components/private_ai/testing/test_blind_sign_auth_factory.h"
+#include "services/network/public/cpp/network_context_getter.h"
 
 namespace network {
 class SharedURLLoaderFactory;
-}
-
-namespace network::mojom {
-class NetworkContext;
 }
 
 namespace signin {
@@ -40,14 +37,15 @@ class TestPrivateAiService : public PrivateAiService {
   TestPrivateAiService(
       signin::IdentityManager* identity_manager,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      network::mojom::NetworkContext* network_context,
+      network::NetworkContextGetter network_context_getter,
       const std::string& url,
       const std::string& api_key,
       const std::string& proxy_url,
       bool use_token_attestation,
       std::unique_ptr<PrivateAiNetworkDriver> network_driver,
       std::unique_ptr<PrivateAiOakSessionDriver> oak_session_driver,
-      std::unique_ptr<TestBlindSignAuthFactory> test_bsa_factory);
+      std::unique_ptr<TestBlindSignAuthFactory> test_bsa_factory,
+      version_info::Channel channel);
 
   ~TestPrivateAiService() override;
 

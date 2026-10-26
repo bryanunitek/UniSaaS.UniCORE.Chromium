@@ -17,7 +17,7 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {castExists} from '../assert_extras.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './customize_tablet_buttons_subpage.html.js';
@@ -52,7 +52,17 @@ export class SettingsCustomizeTabletButtonsSubpageElement extends
        * Use metaKey to decide which meta key icon to display.
        */
       metaKey_: Object,
+
+      buttonActionList_: {
+        type: Array,
+        value: () => [],
+      },
     };
+  }
+
+  constructor() {
+    super();
+    this.metaKey_ = MetaKey.kSearch;
   }
 
   static get observers(): string[] {
@@ -61,14 +71,14 @@ export class SettingsCustomizeTabletButtonsSubpageElement extends
     ];
   }
 
-  selectedTablet: GraphicsTablet;
-  graphicsTablets: GraphicsTablet[];
-  private buttonActionList_: ActionChoice[];
+  declare selectedTablet: GraphicsTablet;
+  declare graphicsTablets: GraphicsTablet[];
+  declare private buttonActionList_: ActionChoice[];
   private inputDeviceSettingsProvider_: InputDeviceSettingsProviderInterface =
       getInputDeviceSettingsProvider();
   private previousRoute_: Route|null = null;
   private isInitialized_: boolean = false;
-  private metaKey_: MetaKey = MetaKey.kSearch;
+  declare private metaKey_: MetaKey;
 
   override async connectedCallback(): Promise<void> {
     super.connectedCallback();

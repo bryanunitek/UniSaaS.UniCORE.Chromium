@@ -62,9 +62,6 @@ const char kExceptionMessageInvalidTopK[] =
     "The topK value provided is invalid.";
 const char kExceptionMessageInvalidTemperature[] =
     "The temperature value provided is invalid.";
-const char kExceptionMessageSamplingModeAndParamsConflict[] =
-    "Cannot provide both 'samplingMode' and raw sampling parameters "
-    "('temperature' or 'topK').";
 const char kExceptionMessageUnableToCreateSession[] =
     "The device is unable to create a session to run the model. "
     "Please check the result of availability() first.";
@@ -320,7 +317,8 @@ String ConvertModelAvailabilityCheckResultToDebugString(
       return "The GPU is blocked.";
     case mojom::blink::ModelAvailabilityCheckResult::
         kUnavailableTooManyRecentCrashes:
-      return "The model process crashed too many times for this version.";
+      return "The model process crashed too many times for this version. Check "
+             "chrome://crashes for additional information.";
     case mojom::blink::ModelAvailabilityCheckResult::
         kUnavailableSafetyModelNotAvailable:
       return "The safety model was required but not available.";
@@ -349,7 +347,11 @@ String ConvertModelAvailabilityCheckResultToDebugString(
     case mojom::blink::ModelAvailabilityCheckResult::
         kUnavailableInsufficientDiskSpace:
       return "The device does not have enough space for downloading the "
-             "on-device model";
+             "on-device model.";
+    case mojom::blink::ModelAvailabilityCheckResult::
+        kUnavailableInsufficientDiskSpaceForCaches:
+      return "The device does not have enough disk space to initialize "
+             "the on-device model.";
     case mojom::blink::ModelAvailabilityCheckResult::
         kUnavailableTranslationNotEligible:
       return "The on-device translation is not available.";

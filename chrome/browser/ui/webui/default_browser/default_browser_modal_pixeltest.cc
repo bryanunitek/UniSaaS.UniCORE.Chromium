@@ -6,8 +6,8 @@
 
 #include "chrome/browser/default_browser/default_browser_features.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/default_browser/default_browser_modal_dialog_delegate.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
@@ -15,6 +15,10 @@
 #include "ui/views/controls/webview/web_dialog_view.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/widget/widget.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "base/test/scoped_os_info_override_win.h"
+#endif
 
 namespace default_browser {
 
@@ -43,13 +47,18 @@ class DefaultBrowserModalPixelTest : public InteractiveBrowserTest {
     dialog_widget_ =
         ::default_browser::Show(browser()->GetProfile(),
                                 browser()
-                                    ->tab_strip_model()
+                                    ->GetTabStripModel()
                                     ->GetActiveWebContents()
                                     ->GetTopLevelNativeWindow(),
-                                use_settings_illustration, can_pin_to_taskbar);
+                                use_settings_illustration, can_pin_to_taskbar,
+                                /*activate_on_show=*/true);
   }
 
  private:
+#if BUILDFLAG(IS_WIN)
+  base::test::ScopedOSInfoOverride win11_os_{
+      base::test::ScopedOSInfoOverride::Type::kWin11Pro};
+#endif
   base::test::ScopedFeatureList feature_list_;
 
   std::unique_ptr<views::Widget> dialog_widget_;

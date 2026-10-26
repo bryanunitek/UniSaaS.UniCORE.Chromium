@@ -27,9 +27,13 @@ namespace http://www.w3.org/1999/xhtml
     property activeViewTransition
     property addEventListener
     property after
+    property afterHTML
+    property afterHTMLUnsafe
     property animate
     property append
     property appendChild
+    property appendHTML
+    property appendHTMLUnsafe
     property ariaActionsElements
     property ariaActiveDescendantElement
     property ariaAtomic
@@ -88,9 +92,12 @@ namespace http://www.w3.org/1999/xhtml
     property attributeStyleMap
     property attributes
     property autocapitalize
+    property autocorrect
     property autofocus
     property baseURI
     property before
+    property beforeHTML
+    property beforeHTMLUnsafe
     property blur
     property checkVisibility
     property childElementCount
@@ -301,6 +308,8 @@ namespace http://www.w3.org/1999/xhtml
     property popover
     property prefix
     property prepend
+    property prependHTML
+    property prependHTMLUnsafe
     property previousElementSibling
     property previousSibling
     property pseudo
@@ -316,6 +325,8 @@ namespace http://www.w3.org/1999/xhtml
     property replaceChild
     property replaceChildren
     property replaceWith
+    property replaceWithHTML
+    property replaceWithHTMLUnsafe
     property requestFullscreen
     property requestPointerLock
     property role
@@ -340,6 +351,18 @@ namespace http://www.w3.org/1999/xhtml
     property slot
     property spellcheck
     property startViewTransition
+    property streamAfterHTML
+    property streamAfterHTMLUnsafe
+    property streamAppendHTML
+    property streamAppendHTMLUnsafe
+    property streamBeforeHTML
+    property streamBeforeHTMLUnsafe
+    property streamHTML
+    property streamHTMLUnsafe
+    property streamPrependHTML
+    property streamPrependHTMLUnsafe
+    property streamReplaceWithHTML
+    property streamReplaceWithHTMLUnsafe
     property style
     property tabIndex
     property tagName
@@ -527,13 +550,27 @@ html element button
     property validity
     property value
     property willValidate
+html element camera
+    property error
+    property ontrack
+    property setConstraints
+    property track
 html element canvas
+    property captureElementImage
     property captureStream
+    property clearElementGeometry
+    property content
     property getContext
+    property getElementImageDefaultSize
+    property getElementTransform
     property height
+    property onelementgeometryupdate
+    property onpaint
+    property requestPaint
     property toBlob
     property toDataURL
     property transferControlToOffscreen
+    property updateElementGeometry
     property width
 html element caption
     property align
@@ -728,7 +765,6 @@ html element iframe
     property referrerPolicy
     property sandbox
     property scrolling
-    property sharedStorageWritable
     property src
     property srcdoc
     property width
@@ -754,7 +790,6 @@ html element img
     property naturalHeight
     property naturalWidth
     property referrerPolicy
-    property sharedStorageWritable
     property sizes
     property src
     property srcset
@@ -770,6 +805,7 @@ html element input
     property autocomplete
     property checkValidity
     property checked
+    property createValueRange
     property defaultChecked
     property defaultValue
     property dirName
@@ -896,6 +932,11 @@ html element meter
     property min
     property optimum
     property value
+html element microphone
+    property error
+    property ontrack
+    property setConstraints
+    property track
 html element nav
 html element nobr
 html element noembed
@@ -1110,11 +1151,14 @@ html element template
     property shadowRootCustomElementRegistry
     property shadowRootDelegatesFocus
     property shadowRootMode
+    property shadowRootReferenceTarget
     property shadowRootSerializable
+    property shadowRootSlotAssignment
 html element textarea
     property autocomplete
     property checkValidity
     property cols
+    property createValueRange
     property defaultValue
     property dirName
     property disabled
@@ -1308,9 +1352,13 @@ namespace http://www.w3.org/2000/svg
     property activeViewTransition
     property addEventListener
     property after
+    property afterHTML
+    property afterHTMLUnsafe
     property animate
     property append
     property appendChild
+    property appendHTML
+    property appendHTMLUnsafe
     property ariaActionsElements
     property ariaActiveDescendantElement
     property ariaAtomic
@@ -1370,6 +1418,8 @@ namespace http://www.w3.org/2000/svg
     property autofocus
     property baseURI
     property before
+    property beforeHTML
+    property beforeHTMLUnsafe
     property blur
     property checkVisibility
     property childElementCount
@@ -1561,6 +1611,8 @@ namespace http://www.w3.org/2000/svg
     property part
     property prefix
     property prepend
+    property prependHTML
+    property prependHTMLUnsafe
     property previousElementSibling
     property previousSibling
     property pseudo
@@ -1576,6 +1628,8 @@ namespace http://www.w3.org/2000/svg
     property replaceChild
     property replaceChildren
     property replaceWith
+    property replaceWithHTML
+    property replaceWithHTMLUnsafe
     property requestFullscreen
     property requestPointerLock
     property role
@@ -1598,6 +1652,18 @@ namespace http://www.w3.org/2000/svg
     property shadowRoot
     property slot
     property startViewTransition
+    property streamAfterHTML
+    property streamAfterHTMLUnsafe
+    property streamAppendHTML
+    property streamAppendHTMLUnsafe
+    property streamBeforeHTML
+    property streamBeforeHTMLUnsafe
+    property streamHTML
+    property streamHTMLUnsafe
+    property streamPrependHTML
+    property streamPrependHTMLUnsafe
+    property streamReplaceWithHTML
+    property streamReplaceWithHTMLUnsafe
     property style
     property tabIndex
     property tagName
@@ -2337,6 +2403,9 @@ svg element textPath
     property TEXTPATH_METHODTYPE_ALIGN
     property TEXTPATH_METHODTYPE_STRETCH
     property TEXTPATH_METHODTYPE_UNKNOWN
+    property TEXTPATH_SIDETYPE_LEFT
+    property TEXTPATH_SIDETYPE_RIGHT
+    property TEXTPATH_SIDETYPE_UNKNOWN
     property TEXTPATH_SPACINGTYPE_AUTO
     property TEXTPATH_SPACINGTYPE_EXACT
     property TEXTPATH_SPACINGTYPE_UNKNOWN
@@ -2358,6 +2427,7 @@ svg element textPath
     property nearestViewportElement
     property requiredExtensions
     property selectSubString
+    property side
     property spacing
     property startOffset
     property systemLanguage

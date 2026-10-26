@@ -16,10 +16,14 @@
 #include "chrome/browser/ui/webui/favicon_source.h"
 #include "chrome/browser/ui/webui/metrics_reporter/metrics_reporter_service.h"
 #include "chrome/browser/ui/webui/plural_string_handler.h"
+#include "chrome/browser/ui/webui/tab_search/search_handler.h"
 #include "chrome/browser/ui/webui/tab_search/tab_search_page_handler.h"
 #include "chrome/browser/ui/webui/tab_search/tab_search_sync_handler.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/grit/tab_group_shared_resources.h"
+#include "chrome/grit/tab_group_shared_resources_map.h"
 #include "chrome/grit/tab_search_resources.h"
 #include "chrome/grit/tab_search_resources_map.h"
 #include "components/favicon_base/favicon_url_parser.h"
@@ -68,10 +72,14 @@ TabSearchUI::TabSearchUI(content::WebUI* web_ui)
       {"a11yFoundTabFor", IDS_TAB_SEARCH_A11Y_FOUND_TAB_FOR},
       {"a11yFoundTabs", IDS_TAB_SEARCH_A11Y_FOUND_TABS},
       {"a11yFoundTabsFor", IDS_TAB_SEARCH_A11Y_FOUND_TABS_FOR},
+      {"a11yOpenSplitView", IDS_TAB_SEARCH_A11Y_OPEN_SPLIT_VIEW},
       {"a11yOpenTab", IDS_TAB_SEARCH_A11Y_OPEN_TAB},
+      {"a11yRecentlyClosedSplitView",
+       IDS_TAB_SEARCH_A11Y_RECENTLY_CLOSED_SPLIT_VIEW},
       {"a11yRecentlyClosedTab", IDS_TAB_SEARCH_A11Y_RECENTLY_CLOSED_TAB},
       {"a11yRecentlyClosedTabGroup",
        IDS_TAB_SEARCH_A11Y_RECENTLY_CLOSED_TAB_GROUP},
+      {"a11ySplitView", IDS_TAB_SEARCH_A11Y_SPLIT_VIEW},
       {"audioMuting", IDS_TAB_AX_LABEL_AUDIO_MUTING_FORMAT},
       {"audioPlaying", IDS_TAB_AX_LABEL_AUDIO_PLAYING_FORMAT},
       {"blobUrlSource", IDS_HOVER_CARD_BLOB_URL_SOURCE},
@@ -106,11 +114,12 @@ TabSearchUI::TabSearchUI(content::WebUI* web_ui)
   source->AddBoolean("useRipples", views::PlatformStyle::kUseRipples);
   source->AddBoolean("useTabGroupColorRefresh",
                      features::IsTabGroupColorRefreshEnabled());
-  source->AddBoolean("splitViewTabRestoreEnabled",
-                     base::FeatureList::IsEnabled(tabs::kSplitViewTabRestore));
   source->AddBoolean(
       "cjkWordBoundaryEnabled",
       base::FeatureList::IsEnabled(tabs::kTabSearchCjkWordBoundary));
+  source->AddBoolean(
+      "tabSearchPerformanceImprovements",
+      base::FeatureList::IsEnabled(tabs::kTabSearchPerformanceImprovements));
 
   source->AddLocalizedString("close", IDS_CLOSE);
 
@@ -127,10 +136,12 @@ TabSearchUI::TabSearchUI(content::WebUI* web_ui)
 
   webui::SetupWebUIDataSource(source, kTabSearchResources,
                               IDR_TAB_SEARCH_TAB_SEARCH_HTML);
+  source->AddResourcePaths(kTabGroupSharedResources);
 
   content::URLDataSource::Add(
       profile, std::make_unique<FaviconSource>(
                    profile, chrome::FaviconUrlFormat::kFavicon2));
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   auto plural_string_handler = std::make_unique<PluralStringHandler>();
   web_ui->AddMessageHandler(std::move(plural_string_handler));
@@ -152,6 +163,11 @@ void TabSearchUI::BindInterface(
   page_factory_receiver_.Bind(std::move(receiver));
 }
 
+void TabSearchUI::BindInterface(
+    mojo::PendingReceiver<tab_search::mojom::SearchHandler> receiver) {
+  search_handler_ = std::make_unique<SearchHandler>(std::move(receiver));
+}
+
 void TabSearchUI::BeforeBubbleWidgetShowed() {
   if (page_handler_) {
     // Notify the page handler that tab search bubble widget is shown.
@@ -163,11 +179,11 @@ void TabSearchUI::BeforeBubbleWidgetShowed() {
 void TabSearchUI::CreatePageHandler(
     mojo::PendingRemote<tab_search::mojom::Page> page,
     mojo::PendingReceiver<tab_search::mojom::PageHandler> receiver) {
-  DCHECK(page);
+  CHECK(page, base::NotFatalUntil::M162);
 
   // CreatePageHandler() can be called multiple times if reusing the same
   // WebUIController. For eg refreshing the page will create new PageHandler but
-  // reuse TabSearchUI. Check to make sure |page_handler_timer_| is valid before
+  // reuse TabSearchUI. Check to make sure `page_handler_timer_` is valid before
   // logging metrics.
   if (page_handler_timer_.has_value()) {
     TRACE_EVENT_END("browser", perfetto::Track::FromPointer(this));

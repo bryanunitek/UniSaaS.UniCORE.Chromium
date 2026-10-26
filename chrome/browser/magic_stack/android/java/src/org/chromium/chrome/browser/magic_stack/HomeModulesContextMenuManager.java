@@ -86,12 +86,13 @@ public class HomeModulesContextMenuManager {
         if (menu == null) return;
 
         mPopupWindow =
-                new AnchoredPopupWindow(
-                        view.getContext(),
-                        view,
-                        new ColorDrawable(Color.TRANSPARENT),
-                        menu.getContentView(),
-                        new RectProvider(getAnchorRectangle(view)));
+                new AnchoredPopupWindow.Builder(
+                                view.getContext(),
+                                view,
+                                new ColorDrawable(Color.TRANSPARENT),
+                                menu::getContentView,
+                                new RectProvider(getAnchorRectangle(view)))
+                        .build();
 
         showContextMenu(menu, view);
         notifyContextMenuShown(moduleProvider);
@@ -135,7 +136,7 @@ public class HomeModulesContextMenuManager {
         if (!hasItems) return null;
 
         ListMenu.Delegate delegate =
-                (model, unusedView) -> {
+                (model, _) -> {
                     switch (model.get(ListMenuItemProperties.MENU_ITEM_ID)) {
                         case ContextMenuItemId.HIDE_MODULE:
                             moduleDelegate.removeModuleAndDisable(moduleProvider.getModuleType());

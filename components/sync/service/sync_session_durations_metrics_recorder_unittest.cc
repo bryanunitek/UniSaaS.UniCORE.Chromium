@@ -44,7 +44,7 @@ class SyncSessionDurationsMetricsRecorderTest : public testing::Test {
   void SignIn(signin::ConsentLevel consent_level) {
     AccountInfo account_info = identity_test_env_.MakePrimaryAccountAvailable(
         "foo@gmail.com", consent_level);
-    sync_service_.SetSignedIn(consent_level, account_info);
+    sync_service_.SetSignedIn(consent_level, account_info.GetCoreAccountInfo());
     sync_service_.FireStateChanged();
   }
 
@@ -297,7 +297,7 @@ TEST_F(SyncSessionDurationsMetricsRecorderTest,
   AccountInfo account =
       identity_test_env_.MakeAccountAvailable("foo@gmail.com");
   identity_test_env_.UpdatePersistentErrorOfRefreshTokenForAccount(
-      account.account_id,
+      account.GetAccountId(),
       GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
           GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
 

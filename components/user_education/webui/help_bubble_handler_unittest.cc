@@ -10,8 +10,10 @@
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
+#include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/task_environment.h"
 #include "components/user_education/common/help_bubble/help_bubble_factory_registry.h"
 #include "components/user_education/common/help_bubble/help_bubble_params.h"
 #include "components/user_education/test/test_help_bubble.h"
@@ -26,6 +28,7 @@
 #include "ui/base/interaction/expect_call_in_scope.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
+#include "ui/webui/resources/js/tracked_element/tracked_element.mojom-forward.h"
 #include "ui/webui/resources/js/tracked_element/tracked_element.mojom.h"
 #include "ui/webui/tracked_element/tracked_element_handler.h"
 #include "ui/webui/tracked_element/tracked_element_web_ui.h"
@@ -53,15 +56,15 @@ class MockHelpBubbleClient : public help_bubble::mojom::HelpBubbleClient {
               (override));
   MOCK_METHOD(void,
               ToggleFocusForAccessibility,
-              (const std::string& native_identifier),
+              (tracked_element::mojom::TrackedElementIdentifierPtr),
               (override));
   MOCK_METHOD(void,
               HideHelpBubble,
-              (const std::string& native_identifier),
+              (tracked_element::mojom::TrackedElementIdentifierPtr),
               (override));
   MOCK_METHOD(void,
               ExternalHelpBubbleUpdated,
-              (const std::string& native_identifier, bool shown),
+              (tracked_element::mojom::TrackedElementIdentifierPtr, bool shown),
               (override));
 };
 
@@ -99,13 +102,20 @@ class TestHelpBubbleHandler : public HelpBubbleHandlerBase {
   };
 };
 
+MATCHER_P2(MatchesTrackedElementIdentifier, p, s, "") {
+  EXPECT_EQ(p.GetName(), arg->native_identifier);
+  EXPECT_EQ(s, arg->secondary_identifier);
+  return true;
+}
+
 MATCHER_P(MatchesHelpBubbleParams, expected, "") {
+  EXPECT_EQ(expected->id->native_identifier, arg->id->native_identifier);
+  EXPECT_EQ(expected->id->secondary_identifier, arg->id->secondary_identifier);
   EXPECT_EQ(expected->body_text, arg->body_text);
   EXPECT_EQ(expected->close_button_alt_text, arg->close_button_alt_text);
   EXPECT_EQ(expected->timeout, arg->timeout);
   EXPECT_EQ(expected->body_icon_name, arg->body_icon_name);
   EXPECT_EQ(expected->body_icon_alt_text, arg->body_icon_alt_text);
-  EXPECT_EQ(expected->native_identifier, arg->native_identifier);
   EXPECT_EQ(expected->position, arg->position);
   EXPECT_EQ(expected->title_text, arg->title_text);
   EXPECT_EQ(!!expected->progress, !!arg->progress);
@@ -311,7 +321,7 @@ TEST_F(HelpBubbleHandlerTest, ShowHelpBubble) {
   // Check the parameters passed to the ShowHelpBubble mojo method.
   help_bubble::mojom::HelpBubbleParamsPtr expected =
       help_bubble::mojom::HelpBubbleParams::New();
-  expected->native_identifier = element->identifier().GetName();
+  expected->id = GetId(kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1);
   expected->body_text = base::UTF16ToUTF8(params.body_text);
   expected->close_button_alt_text =
       base::UTF16ToUTF8(params.close_button_alt_text);
@@ -329,9 +339,9 @@ TEST_F(HelpBubbleHandlerTest, ShowHelpBubble) {
   EXPECT_TRUE(help_bubble);
   EXPECT_TRUE(help_bubble->is_open());
 
-  EXPECT_CALL(
-      test_handler_->mock(),
-      HideHelpBubble(kHelpBubbleHandlerTestElementIdentifier.GetName()));
+  EXPECT_CALL(test_handler_->mock(),
+              HideHelpBubble(MatchesTrackedElementIdentifier(
+                  kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1)));
   EXPECT_TRUE(
       help_bubble->Close(HelpBubble::CloseReason::kProgrammaticallyClosed));
   EXPECT_CALL(test_handler_->mock(), HideHelpBubble).Times(0);
@@ -401,7 +411,7 @@ TEST_F(HelpBubbleHandlerTest, ShowHelpBubbleWithButtonsAndProgress) {
   // Check the parameters passed to the ShowHelpBubble mojo method.
   help_bubble::mojom::HelpBubbleParamsPtr expected =
       help_bubble::mojom::HelpBubbleParams::New();
-  expected->native_identifier = element->identifier().GetName();
+  expected->id = GetId(kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1);
   expected->body_text = base::UTF16ToUTF8(params.body_text);
   expected->close_button_alt_text =
       base::UTF16ToUTF8(params.close_button_alt_text);
@@ -427,9 +437,9 @@ TEST_F(HelpBubbleHandlerTest, ShowHelpBubbleWithButtonsAndProgress) {
   EXPECT_TRUE(help_bubble);
   EXPECT_TRUE(help_bubble->is_open());
 
-  EXPECT_CALL(
-      test_handler_->mock(),
-      HideHelpBubble(kHelpBubbleHandlerTestElementIdentifier.GetName()));
+  EXPECT_CALL(test_handler_->mock(),
+              HideHelpBubble(MatchesTrackedElementIdentifier(
+                  kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1)));
   EXPECT_TRUE(
       help_bubble->Close(HelpBubble::CloseReason::kProgrammaticallyClosed));
 
@@ -453,15 +463,15 @@ TEST_F(HelpBubbleHandlerTest, FocusHelpBubble) {
       element, std::move(params));
 
   EXPECT_CALL(test_handler_->mock(),
-              ToggleFocusForAccessibility(
-                  kHelpBubbleHandlerTestElementIdentifier.GetName()));
+              ToggleFocusForAccessibility(MatchesTrackedElementIdentifier(
+                  kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1)));
   help_bubble_factory_registry_.ToggleFocusForAccessibility(
       test_handler_->context());
   EXPECT_CALL(test_handler_->mock(), ToggleFocusForAccessibility).Times(0);
 
-  EXPECT_CALL(
-      test_handler_->mock(),
-      HideHelpBubble(kHelpBubbleHandlerTestElementIdentifier.GetName()));
+  EXPECT_CALL(test_handler_->mock(),
+              HideHelpBubble(MatchesTrackedElementIdentifier(
+                  kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1)));
   EXPECT_TRUE(
       help_bubble->Close(HelpBubble::CloseReason::kProgrammaticallyClosed));
 }
@@ -490,15 +500,20 @@ TEST_F(HelpBubbleHandlerTest, ExternalHelpBubbleUpdated) {
   // Call the floating help bubble created method and ensure that the correct
   // message is sent over to the client.
   EXPECT_CALL(test_handler_->mock(),
-              ExternalHelpBubbleUpdated(element->identifier().GetName(), true));
+              ExternalHelpBubbleUpdated(
+                  MatchesTrackedElementIdentifier(
+                      kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1),
+                  true));
   test_handler_->OnFloatingHelpBubbleCreated(
       element->AsA<ui::TrackedElementWebUI>(), help_bubble.get());
 
   // Close the bubble and verify that the correct message is sent, this that
   // there is no longer a bubble.
-  EXPECT_CALL(
-      test_handler_->mock(),
-      ExternalHelpBubbleUpdated(element->identifier().GetName(), false));
+  EXPECT_CALL(test_handler_->mock(),
+              ExternalHelpBubbleUpdated(
+                  MatchesTrackedElementIdentifier(
+                      kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1),
+                  false));
   EXPECT_TRUE(
       help_bubble->Close(HelpBubble::CloseReason::kProgrammaticallyClosed));
 }
@@ -574,7 +589,7 @@ TEST_F(HelpBubbleHandlerTest, HelpBubbleClosedWhenClosedRemotely) {
       Run(help_bubble.get(), HelpBubble::CloseReason::kProgrammaticallyClosed),
       closed, Run(HelpBubble::CloseReason::kProgrammaticallyClosed),
       handler()->HelpBubbleClosed(
-          kHelpBubbleHandlerTestElementIdentifier.GetName(),
+          GetId(kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1),
           help_bubble::mojom::HelpBubbleClosedReason::kPageChanged));
   EXPECT_FALSE(help_bubble->is_open());
   EXPECT_FALSE(
@@ -617,9 +632,9 @@ TEST_F(HelpBubbleHandlerTest, DestroyBubbleWrapperClosesHelpBubble) {
   auto subscription1 = help_bubble->AddOnClosingCallback(closing.Get());
   auto subscription2 = help_bubble->AddOnClosedCallback(closed.Get());
 
-  EXPECT_CALL(
-      test_handler_->mock(),
-      HideHelpBubble(kHelpBubbleHandlerTestElementIdentifier.GetName()));
+  EXPECT_CALL(test_handler_->mock(),
+              HideHelpBubble(MatchesTrackedElementIdentifier(
+                  kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1)));
   EXPECT_CALLS_IN_SCOPE_2(
       closing,
       Run(help_bubble.get(), HelpBubble::CloseReason::kBubbleDestroyed), closed,
@@ -650,7 +665,7 @@ TEST_F(HelpBubbleHandlerTest, HelpBubbleClosedWhenClosedByUserCallsDismiss) {
   EXPECT_CALL_IN_SCOPE(
       dismissed, Run,
       handler()->HelpBubbleClosed(
-          kHelpBubbleHandlerTestElementIdentifier.GetName(),
+          GetId(kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1),
           help_bubble::mojom::HelpBubbleClosedReason::kDismissedByUser));
   EXPECT_FALSE(help_bubble->is_open());
   EXPECT_FALSE(
@@ -694,7 +709,7 @@ TEST_F(HelpBubbleHandlerTest, ButtonPressedCallsCallback) {
   EXPECT_CALL_IN_SCOPE(
       button2_pressed, Run,
       handler()->HelpBubbleButtonPressed(
-          kHelpBubbleHandlerTestElementIdentifier.GetName(), 1));
+          GetId(kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1), 1));
   EXPECT_FALSE(help_bubble->is_open());
   EXPECT_FALSE(
       test_handler_->IsHelpBubbleShowingForTesting(element->identifier()));
@@ -739,9 +754,9 @@ TEST_F(HelpBubbleHandlerTest, ShowMultipleBubblesAndCloseOneViaVisibility) {
   EXPECT_TRUE(help_bubble2->is_open());
 
   // Close one bubble without closing the other.
-  EXPECT_CALL(
-      test_handler_->mock(),
-      HideHelpBubble(kHelpBubbleHandlerTestElementIdentifier.GetName()));
+  EXPECT_CALL(test_handler_->mock(),
+              HideHelpBubble(MatchesTrackedElementIdentifier(
+                  kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1)));
   tracked_element_handler()->TrackedElementVisibilityChanged(
       GetId(kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1), false,
       gfx::RectF());
@@ -754,9 +769,9 @@ TEST_F(HelpBubbleHandlerTest, ShowMultipleBubblesAndCloseOneViaVisibility) {
 
   // When the second bubble goes away, it will attempt to close the bubble on
   // the remote.
-  EXPECT_CALL(
-      test_handler_->mock(),
-      HideHelpBubble(kHelpBubbleHandlerTestElementIdentifier2.GetName()));
+  EXPECT_CALL(test_handler_->mock(),
+              HideHelpBubble(MatchesTrackedElementIdentifier(
+                  kHelpBubbleHandlerTestElementIdentifier2, kSecondaryId2)));
 }
 
 TEST_F(HelpBubbleHandlerTest, ShowMultipleBubblesAndCloseOneViaCallback) {
@@ -799,7 +814,7 @@ TEST_F(HelpBubbleHandlerTest, ShowMultipleBubblesAndCloseOneViaCallback) {
 
   // Close one bubble without closing the other.
   handler()->HelpBubbleClosed(
-      kHelpBubbleHandlerTestElementIdentifier.GetName(),
+      GetId(kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1),
       help_bubble::mojom::HelpBubbleClosedReason::kPageChanged);
   EXPECT_FALSE(help_bubble->is_open());
   EXPECT_TRUE(help_bubble2->is_open());
@@ -810,9 +825,9 @@ TEST_F(HelpBubbleHandlerTest, ShowMultipleBubblesAndCloseOneViaCallback) {
 
   // When the second bubble goes away, it will attempt to close the bubble on
   // the remote.
-  EXPECT_CALL(
-      test_handler_->mock(),
-      HideHelpBubble(kHelpBubbleHandlerTestElementIdentifier2.GetName()));
+  EXPECT_CALL(test_handler_->mock(),
+              HideHelpBubble(MatchesTrackedElementIdentifier(
+                  kHelpBubbleHandlerTestElementIdentifier2, kSecondaryId2)));
 }
 
 // The following tests check that the WebContents visibility logic.
@@ -950,6 +965,122 @@ TEST_F(HelpBubbleHandlerTest,
   EXPECT_CALL_IN_SCOPE(
       element_hidden, Run,
       help_bubble->Close(HelpBubble::CloseReason::kProgrammaticallyClosed));
+}
+
+// Verifies that unlike embedded WebUI help bubbles (`CreateHelpBubble`),
+// floating help bubbles (`OnFloatingHelpBubbleCreated`, used for non-tab WebUI
+// such as the WebUI toolbar or side panels) do NOT lock the anchor element's
+// visibility when the hosting WebContents becomes hidden.
+TEST_F(HelpBubbleHandlerTest,
+       FloatingHelpBubbleDoesNotPreventHideWhenVisibilityChanges) {
+  UNCALLED_MOCK_CALLBACK(ui::ElementTracker::Callback, element_hidden);
+
+  tracked_element_handler()->TrackedElementVisibilityChanged(
+      GetId(kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1), true,
+      kElementBounds);
+  auto* const element =
+      ui::ElementTracker::GetElementTracker()->GetUniqueElement(
+          kHelpBubbleHandlerTestElementIdentifier, test_handler_->context());
+  ASSERT_NE(nullptr, element);
+
+  HelpBubbleParams params;
+  params.body_text = u"Help bubble body.";
+  std::unique_ptr<HelpBubble> help_bubble =
+      std::make_unique<test::TestHelpBubble>(element, std::move(params));
+
+  EXPECT_CALL(test_handler_->mock(),
+              ExternalHelpBubbleUpdated(
+                  MatchesTrackedElementIdentifier(
+                      kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1),
+                  true));
+  test_handler_->OnFloatingHelpBubbleCreated(
+      element->AsA<ui::TrackedElementWebUI>(), help_bubble.get());
+
+  // Simulate HelpBubbleViews::OnElementHidden closing the floating bubble when
+  // the anchor element reports hidden.
+  const auto subscription =
+      ui::ElementTracker::GetElementTracker()->AddElementHiddenCallback(
+          element->identifier(), element->context(),
+          base::BindLambdaForTesting([&](ui::TrackedElement* el) {
+            element_hidden.Get().Run(el);
+            help_bubble->Close(HelpBubble::CloseReason::kAnchorHidden);
+          }));
+
+  // Hiding the WebContents should immediately hide the anchor element and close
+  // the floating help bubble.
+  EXPECT_CALL(test_handler_->mock(),
+              ExternalHelpBubbleUpdated(
+                  MatchesTrackedElementIdentifier(
+                      kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1),
+                  false));
+  EXPECT_CALL_IN_SCOPE(element_hidden, Run(element),
+                       tracked_element_handler()->OnVisibilityChanged(
+                           content::Visibility::HIDDEN));
+  EXPECT_FALSE(help_bubble->is_open());
+}
+
+// Regression test for crbug.com/543464750: releasing a
+// `TrackedElementVisibilityLock` from inside a `HelpBubble` closing callback
+// (`AddOnClosingCallback`) while its WebContents is hidden must defer notifying
+// `ElementTracker` via `PostTask`. Otherwise, element-hidden callbacks (e.g.
+// `TutorialService` or `InteractionSequence` aborting and resetting the
+// `HelpBubble`) would destroy the `HelpBubble` synchronously while
+// `HelpBubble::BeginClose()` is still iterating over `on_closing_callbacks_`,
+// triggering a `CHECK(!iterating_)` crash in `~CallbackListBase()`.
+TEST_F(
+    HelpBubbleHandlerTest,
+    CloseWebUIHelpBubbleWhileWebContentsHiddenDoesNotCrashWhenCallbackDestroysBubble) {
+  base::test::SingleThreadTaskEnvironment task_environment;
+
+  tracked_element_handler()->TrackedElementVisibilityChanged(
+      GetId(kHelpBubbleHandlerTestElementIdentifier, kSecondaryId1), true,
+      kElementBounds);
+  auto* const element =
+      ui::ElementTracker::GetElementTracker()->GetUniqueElement(
+          kHelpBubbleHandlerTestElementIdentifier, test_handler_->context());
+  ASSERT_NE(nullptr, element);
+  auto* const webui_element = element->AsA<ui::TrackedElementWebUI>();
+  ASSERT_NE(nullptr, webui_element);
+
+  auto visibility_lock = webui_element->LockVisible();
+
+  HelpBubbleParams params;
+  params.body_text = u"Help bubble body.";
+  std::unique_ptr<HelpBubble> help_bubble =
+      std::make_unique<test::TestHelpBubble>(element, std::move(params));
+
+  // Release the visibility lock from inside `on_closing_callbacks_` (which runs
+  // during `HelpBubble::BeginClose()`).
+  const auto closing_subscription =
+      help_bubble->AddOnClosingCallback(base::BindLambdaForTesting(
+          [&](const HelpBubble*, HelpBubble::CloseReason) {
+            visibility_lock.reset();
+          }));
+
+  // Hide WebContents. Because `visibility_lock` is held on `webui_element`, the
+  // element remains effectively visible until the lock is released.
+  tracked_element_handler()->OnVisibilityChanged(content::Visibility::HIDDEN);
+  EXPECT_TRUE(ui::ElementTracker::GetElementTracker()->IsElementVisible(
+      kHelpBubbleHandlerTestElementIdentifier, test_handler_->context()));
+
+  // Simulate TutorialService / InteractionSequence behavior: when the element
+  // hidden notification fires, destroy `help_bubble`.
+  base::RunLoop run_loop;
+  const auto hidden_subscription =
+      ui::ElementTracker::GetElementTracker()->AddElementHiddenCallback(
+          element->identifier(), element->context(),
+          base::BindLambdaForTesting([&](ui::TrackedElement*) {
+            help_bubble.reset();
+            run_loop.Quit();
+          }));
+
+  help_bubble->Close(HelpBubble::CloseReason::kProgrammaticallyClosed);
+
+  // The visibility lock release is posted to the task runner; running tasks
+  // should fire the hidden callback and destroy `help_bubble` cleanly after
+  // `HelpBubble::BeginClose()` has finished iterating `on_closing_callbacks_`.
+  run_loop.Run();
+  EXPECT_EQ(nullptr, help_bubble);
 }
 
 }  // namespace user_education

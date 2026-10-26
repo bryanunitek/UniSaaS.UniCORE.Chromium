@@ -63,12 +63,7 @@ public class ServiceWorkerPaymentAppBridge {
         if (!PaymentFeatureList.isEnabled(PaymentFeatureList.SERVICE_WORKER_PAYMENT_APPS)) {
             PostTask.postTask(
                     TaskTraits.UI_DEFAULT,
-                    new Runnable() {
-                        @Override
-                        public void run() {
-                            callback.onHasServiceWorkerPaymentAppsResponse(false);
-                        }
-                    });
+                    () -> callback.onHasServiceWorkerPaymentAppsResponse(false));
             return;
         }
         ServiceWorkerPaymentAppBridgeJni.get().hasServiceWorkerPaymentApps(profile, callback);
@@ -87,12 +82,7 @@ public class ServiceWorkerPaymentAppBridge {
         if (!PaymentFeatureList.isEnabled(PaymentFeatureList.SERVICE_WORKER_PAYMENT_APPS)) {
             PostTask.postTask(
                     TaskTraits.UI_DEFAULT,
-                    new Runnable() {
-                        @Override
-                        public void run() {
-                            callback.onGetServiceWorkerPaymentAppsInfo(new HashMap<>());
-                        }
-                    });
+                    () -> callback.onGetServiceWorkerPaymentAppsInfo(new HashMap<>()));
             return;
         }
         ServiceWorkerPaymentAppBridgeJni.get().getServiceWorkerPaymentAppsInfo(profile, callback);
@@ -121,6 +111,7 @@ public class ServiceWorkerPaymentAppBridge {
     public static void onOpeningPaymentAppWindow(
             WebContents paymentRequestWebContents, WebContents paymentHandlerWebContents) {
         if (paymentRequestWebContents == null || paymentRequestWebContents.isDestroyed()) return;
+        if (paymentHandlerWebContents == null || paymentHandlerWebContents.isDestroyed()) return;
         ServiceWorkerPaymentAppBridgeJni.get()
                 .onOpeningPaymentAppWindow(
                         /* paymentRequestWebContents= */ paymentRequestWebContents,
@@ -176,11 +167,14 @@ public class ServiceWorkerPaymentAppBridge {
                 @JniType("Profile*") Profile profile,
                 GetServiceWorkerPaymentAppsInfoCallback callback);
 
-        void onClosingPaymentAppWindow(WebContents paymentRequestWebContents, int reason);
+        void onClosingPaymentAppWindow(
+                @JniType("content::WebContents*") WebContents paymentRequestWebContents,
+                int reason);
 
         void onOpeningPaymentAppWindow(
-                WebContents paymentRequestWebContents, WebContents paymentHandlerWebContents);
+                @JniType("content::WebContents*") WebContents paymentRequestWebContents,
+                @JniType("content::WebContents*") WebContents paymentHandlerWebContents);
 
-        long getSourceIdForPaymentAppFromScope(GURL swScope);
+        long getSourceIdForPaymentAppFromScope(@JniType("GURL") GURL swScope);
     }
 }

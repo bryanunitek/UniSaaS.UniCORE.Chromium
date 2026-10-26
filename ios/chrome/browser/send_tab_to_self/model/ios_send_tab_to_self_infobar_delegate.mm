@@ -6,34 +6,24 @@
 
 #import <Foundation/Foundation.h>
 
-#import "base/feature_list.h"
+#import "base/check.h"
 #import "base/memory/ptr_util.h"
-#import "base/metrics/histogram_macros.h"
-#import "base/strings/sys_string_conversions.h"
+#import "base/not_fatal_until.h"
 #import "base/strings/utf_string_conversions.h"
 #import "components/infobars/core/infobar.h"
-#import "components/send_tab_to_self/features.h"
 #import "components/send_tab_to_self/metrics_util.h"
 #import "components/send_tab_to_self/page_context.h"
 #import "components/send_tab_to_self/send_tab_to_self_entry.h"
 #import "components/send_tab_to_self/send_tab_to_self_model.h"
-#import "components/shared_highlighting/core/common/text_fragment.h"
 #import "ios/chrome/browser/send_tab_to_self/model/send_tab_to_self_tab_card_label_data.h"
-#import "ios/chrome/browser/send_tab_to_self/model/send_tab_to_self_util.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
-#import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/grit/ios_theme_resources.h"
 #import "ios/web/public/web_state.h"
 #import "ui/base/l10n/l10n_util.h"
-#import "ui/base/window_open_disposition.h"
 
 namespace {
-
-NSString* const kSendTabToSendConclusionNotification =
-    @"SendTabToSendConclusionNotification";
 
 // Returns the index of the WebState in `web_state_list` belonging to the most
 // recently received Send Tab to Self batch, ignoring previously received tabs.
@@ -71,19 +61,15 @@ namespace send_tab_to_self {
 // static
 std::unique_ptr<IOSSendTabToSelfInfoBarDelegate>
 IOSSendTabToSelfInfoBarDelegate::Create(const SendTabToSelfEntry* entry,
+                                        size_t opened_tab_count,
                                         SendTabToSelfModel* model,
                                         id<SceneCommands> scene_handler,
                                         WebStateList* web_state_list) {
   return std::make_unique<IOSSendTabToSelfInfoBarDelegate>(
-      entry, model, scene_handler, web_state_list);
+      entry, opened_tab_count, model, scene_handler, web_state_list);
 }
 
-IOSSendTabToSelfInfoBarDelegate::~IOSSendTabToSelfInfoBarDelegate() {
-  [[NSNotificationCenter defaultCenter]
-      removeObserver:registration_
-                name:kSendTabToSendConclusionNotification
-              object:nil];
-}
+IOSSendTabToSelfInfoBarDelegate::~IOSSendTabToSelfInfoBarDelegate() = default;
 
 const std::string& IOSSendTabToSelfInfoBarDelegate::GetGUID() const {
   return guid_;
@@ -91,45 +77,19 @@ const std::string& IOSSendTabToSelfInfoBarDelegate::GetGUID() const {
 
 IOSSendTabToSelfInfoBarDelegate::IOSSendTabToSelfInfoBarDelegate(
     const SendTabToSelfEntry* entry,
+    size_t opened_tab_count,
     SendTabToSelfModel* model,
     id<SceneCommands> scene_handler,
     WebStateList* web_state_list)
     : model_(model),
+      opened_tab_count_(opened_tab_count),
       scene_handler_(scene_handler),
       web_state_list_(web_state_list),
-      guid_(entry->GetGUID()),
-      weak_ptr_factory_(this) {
-  DCHECK(entry);
-  DCHECK(model);
-  DCHECK(scene_handler);
-  DCHECK(web_state_list_);
-
-  base::WeakPtr<IOSSendTabToSelfInfoBarDelegate> weakPtr =
-      weak_ptr_factory_.GetWeakPtr();
-  // Observe for conclusion notification from other instances.
-  registration_ = [[NSNotificationCenter defaultCenter]
-      addObserverForName:kSendTabToSendConclusionNotification
-                  object:nil
-                   queue:nil
-              usingBlock:^(NSNotification* note) {
-                if (!weakPtr) {
-                  return;
-                }
-
-                // Ignore the notification if it was sent by `weakPtr` (i.e. the
-                // instance that responded first to the send to self infobar)
-                if (note.object == weakPtr->registration_) {
-                  return;
-                }
-
-                infobars::InfoBar* infobar = weakPtr->infobar();
-                infobars::InfoBarManager* owner = infobar->owner();
-                if (!owner) {
-                  return;
-                }
-
-                owner->RemoveInfoBar(infobar);
-              }];
+      guid_(entry->GetGUID()) {
+  CHECK(entry, base::NotFatalUntil::M158);
+  CHECK(model, base::NotFatalUntil::M158);
+  CHECK(scene_handler, base::NotFatalUntil::M158);
+  CHECK(web_state_list_, base::NotFatalUntil::M158);
 }
 
 infobars::InfoBarDelegate::InfoBarIdentifier
@@ -151,32 +111,28 @@ int IOSSendTabToSelfInfoBarDelegate::GetIconId() const {
 }
 
 void IOSSendTabToSelfInfoBarDelegate::InfoBarDismissed() {
-  send_tab_to_self::RecordNotificationDismissed();
+  send_tab_to_self::RecordNotificationStatus(
+      send_tab_to_self::NotificationStatus::kDismissed);
   Cancel();
 }
 
 std::u16string IOSSendTabToSelfInfoBarDelegate::GetTitleText() const {
-  if (base::FeatureList::IsEnabled(send_tab_to_self::kSendTabToSelfAutoOpen)) {
-    return l10n_util::GetStringUTF16(
-        IDS_SEND_TAB_TO_SELF_INFOBAR_AUTO_OPEN_TITLE);
-  }
-  return std::u16string();
+  return l10n_util::GetPluralStringFUTF16(
+      IDS_SEND_TAB_TO_SELF_INFOBAR_AUTO_OPEN_TITLE,
+      static_cast<int>(opened_tab_count_));
 }
 
 std::u16string IOSSendTabToSelfInfoBarDelegate::GetMessageText() const {
-  if (base::FeatureList::IsEnabled(send_tab_to_self::kSendTabToSelfAutoOpen)) {
-    const SendTabToSelfEntry* entry = model_->GetEntryByGUID(guid_);
-    return entry ? l10n_util::GetStringFUTF16(
-                       IDS_SEND_TAB_TO_SELF_INFOBAR_AUTO_OPEN_SUBTITLE,
-                       base::UTF8ToUTF16(entry->GetDeviceName()))
-                 : std::u16string();
-  }
-  return l10n_util::GetStringUTF16(IDS_SEND_TAB_TO_SELF_INFOBAR_MESSAGE);
+  const SendTabToSelfEntry* entry = model_->GetEntryByGUID(guid_);
+  return entry ? l10n_util::GetStringFUTF16(
+                     IDS_SEND_TAB_TO_SELF_INFOBAR_AUTO_OPEN_SUBTITLE,
+                     base::UTF8ToUTF16(entry->GetDeviceName()))
+               : std::u16string();
 }
 
 bool IOSSendTabToSelfInfoBarDelegate::Accept() {
-  send_tab_to_self::RecordNotificationOpened();
-  SendConclusionNotification();
+  send_tab_to_self::RecordNotificationStatus(
+      send_tab_to_self::NotificationStatus::kOpened);
 
   const SendTabToSelfEntry* entry = model_->GetEntryByGUID(guid_);
 
@@ -184,16 +140,16 @@ bool IOSSendTabToSelfInfoBarDelegate::Accept() {
     return true;
   }
 
-  if (!base::FeatureList::IsEnabled(send_tab_to_self::kSendTabToSelfAutoOpen)) {
-    // Open the tab directly in foreground when auto-open feature is disabled.
-    [scene_handler_
-        openURLInNewTab:send_tab_to_self::CreateOpenNewTabCommand(entry)];
-    model_->MarkEntryOpened(guid_);
-    return true;
-  }
-
-  int received_tab_index = GetMostRecentReceivedWebStateIndex(web_state_list_);
+  const int received_tab_index =
+      GetMostRecentReceivedWebStateIndex(web_state_list_);
   if (received_tab_index != WebStateList::kInvalidIndex) {
+    // Remove the label data before activation so that `WasShown` does not log
+    // `ShareActivatedEntryPoint::kTabStrip`.
+    SendTabToSelfTabCardLabelData::RemoveFromWebState(
+        web_state_list_->GetWebStateAt(received_tab_index));
+    model_->MarkEntryActivated(
+        guid_,
+        send_tab_to_self::ShareActivatedEntryPoint::kMobileMessageBanner);
     // Directly activate the most recently received tab in the foreground.
     web_state_list_->ActivateWebStateAt(received_tab_index);
   } else {
@@ -205,16 +161,8 @@ bool IOSSendTabToSelfInfoBarDelegate::Accept() {
 }
 
 bool IOSSendTabToSelfInfoBarDelegate::Cancel() {
-  model_->DismissEntry(guid_);
-  SendConclusionNotification();
+  model_->DismissEntryNotification(guid_);
   return true;
-}
-
-void IOSSendTabToSelfInfoBarDelegate::SendConclusionNotification() {
-  [[NSNotificationCenter defaultCenter]
-      postNotificationName:kSendTabToSendConclusionNotification
-                    object:registration_
-                  userInfo:nil];
 }
 
 }  // namespace send_tab_to_self

@@ -10,8 +10,11 @@ import static androidx.test.espresso.matcher.ViewMatchers.hasDescendant;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
+import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
@@ -31,25 +34,32 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.bookmarks.BookmarkFolderPickerMetrics.BookmarkFolderPickerOutcome;
 import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpener;
 import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpenerImpl;
 import org.chromium.chrome.browser.bookmarks.BookmarkModel;
 import org.chromium.chrome.browser.bookmarks.BookmarkModelObserver;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.ProfileManager;
+import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.ReusedCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.BookmarkTestUtil;
 import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.components.bookmarks.BookmarkItem;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.url.GURL;
 
 import java.util.List;
@@ -57,9 +67,10 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 /** Tests functionality in {@link BookmarkFolderPickerActivity}. */
-@RunWith(BaseJUnit4ClassRunner.class)
+@RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Batch(Batch.PER_CLASS)
+@DisableIf.Device(DeviceFormFactor.AUTOMOTIVE) // crbug.com/462590301
 public class BookmarkFolderPickerActivityTest {
     @Rule
     public ReusedCtaTransitTestRule<WebPageStation> mActivityTestRule =
@@ -106,6 +117,7 @@ public class BookmarkFolderPickerActivityTest {
     public void tearDown() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
+                    mBookmarkModel.removeObserver(mBookmarkModelObserver);
                     mBookmarkModel.removeAllUserBookmarks();
                 });
     }
@@ -114,6 +126,12 @@ public class BookmarkFolderPickerActivityTest {
     @MediumTest
     @Feature({"Bookmark"})
     public void testMoveBookmark() throws ExecutionException, TimeoutException, Exception {
+        var histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Bookmarks.FolderPicker.Outcome", BookmarkFolderPickerOutcome.MOVED)
+                        .build();
+
         BookmarkId bookmark =
                 addBookmark(mMobileFolderId, 0, "bookmark", new GURL("https://google.com"));
         BookmarkId folder = addFolder(mMobileFolderId, 1, "folder");
@@ -122,16 +140,19 @@ public class BookmarkFolderPickerActivityTest {
 
         ThreadUtils.runOnUiThreadBlocking(() -> mBookmarkModel.addObserver(mBookmarkModelObserver));
 
-        onView(withText("Mobile bookmarks")).perform(click());
-        onView(withText("folder")).perform(click());
+        onView(withText(startsWith("Mobile bookmarks"))).perform(click());
+        onView(withText(startsWith("folder"))).perform(click());
         onView(withText("Move here")).perform(click());
 
         BookmarkItem oldParent = getBookmarkItem(mMobileFolderId);
         BookmarkItem newParent = getBookmarkItem(folder);
+        verify(mBookmarkModelObserver).bookmarkFolderViewed(mMobileFolderId);
+        verify(mBookmarkModelObserver, times(2)).bookmarkFolderViewed(folder);
         verifyBookmarkMoved(oldParent, 0, newParent, 0);
         verifyNoMoreInteractions(mBookmarkModelObserver);
 
         CriteriaHelper.pollUiThread(() -> mActivity.isFinishing());
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -139,6 +160,12 @@ public class BookmarkFolderPickerActivityTest {
     @Feature({"Bookmark"})
     public void testMoveBookmarkToReadingList()
             throws ExecutionException, TimeoutException, Exception {
+        var histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Bookmarks.FolderPicker.Outcome", BookmarkFolderPickerOutcome.MOVED)
+                        .build();
+
         String title = "bookmark";
         GURL url = new GURL("https://google.com");
 
@@ -148,23 +175,35 @@ public class BookmarkFolderPickerActivityTest {
         ThreadUtils.runOnUiThreadBlocking(() -> mBookmarkModel.addObserver(mBookmarkModelObserver));
 
         onView(withId(R.id.folder_recycler_view))
-                .perform(RecyclerViewActions.scrollTo(hasDescendant(withText("Reading list"))));
-        onView(withText("Reading list")).perform(click());
+                .perform(
+                        RecyclerViewActions.scrollTo(
+                                hasDescendant(withText(startsWith("Reading list")))));
+        onView(withText(startsWith("Reading list"))).perform(click());
         onView(withText("Move here")).perform(click());
 
         BookmarkItem oldParent = getBookmarkItem(mMobileFolderId);
         BookmarkItem newParent = getBookmarkItem(mLocalOrSyncableReadingListFolder);
+        verify(mBookmarkModelObserver).bookmarkFolderViewed(mLocalOrSyncableReadingListFolder);
         verifyBookmarkMoved(oldParent, 0, newParent, 0);
         verifyNoMoreInteractions(mBookmarkModelObserver);
 
         CriteriaHelper.pollUiThread(() -> mActivity.isFinishing());
+        histogramWatcher.assertExpected();
     }
 
     @Test
     @MediumTest
     @Feature({"Bookmark"})
+    @DisableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_DIALOG)
     public void testCancelButton()
             throws ExecutionException, TimeoutException, InterruptedException {
+        var histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Bookmarks.FolderPicker.Outcome",
+                                BookmarkFolderPickerOutcome.CLOSED)
+                        .build();
+
         BookmarkId bookmark =
                 addBookmark(mMobileFolderId, 0, "bookmark", new GURL("https://google.com"));
         startFolderPickerActivity(bookmark);
@@ -172,6 +211,63 @@ public class BookmarkFolderPickerActivityTest {
         onView(withText("Cancel")).perform(click());
 
         CriteriaHelper.pollUiThread(() -> mActivity.isFinishing());
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"Bookmark"})
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_DIALOG)
+    public void testCloseButton_Desktop()
+            throws ExecutionException, TimeoutException, InterruptedException {
+        var histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Bookmarks.FolderPicker.Outcome",
+                                BookmarkFolderPickerOutcome.CLOSED)
+                        .build();
+
+        BookmarkId bookmark =
+                addBookmark(mMobileFolderId, 0, "bookmark", new GURL("https://google.com"));
+        startFolderPickerActivity(bookmark);
+
+        onView(withId(R.id.close_button)).perform(click());
+
+        CriteriaHelper.pollUiThread(() -> mActivity.isFinishing());
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"Bookmark"})
+    @DisableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_DIALOG)
+    public void testBackPress() throws ExecutionException {
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Bookmarks.FolderPicker.Outcome",
+                                BookmarkFolderPickerOutcome.DISMISSED)
+                        .build();
+
+        BookmarkId bookmark =
+                addBookmark(mMobileFolderId, 0, "bookmark", new GURL("https://google.com"));
+        startFolderPickerActivity(bookmark);
+
+        onView(withText(startsWith("Mobile bookmarks"))).perform(click());
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mActivity.getOnBackPressedDispatcher().onBackPressed();
+                    assertFalse(mActivity.isFinishing());
+                });
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mActivity.getOnBackPressedDispatcher().onBackPressed();
+                });
+
+        CriteriaHelper.pollUiThread(() -> mActivity.isFinishing());
+        histogramWatcher.assertExpected();
     }
 
     private BookmarkItem getBookmarkItem(BookmarkId bookmarkId) throws ExecutionException {

@@ -211,7 +211,6 @@ static_library("backend_cdp_bindings") {
   sources = get_target_outputs(":protocol_sources")
   visibility = [ ":headless_browser" ]
   configs += [
-    "//build/config/compiler:wexit_time_destructors",
     ":headless_defines_config",
     ":inside_headless_component",
   ]
@@ -227,7 +226,6 @@ source_set("headless_common") {
   ]
   deps = [ "//base" ]
   configs += [
-    "//build/config/compiler:wexit_time_destructors",
     ":inside_headless_component",
     ":headless_defines_config",
   ]
@@ -266,7 +264,6 @@ source_set("headless_renderer") {
     ]
   }
   configs += [
-    "//build/config/compiler:wexit_time_destructors",
     ":inside_headless_component",
     ":headless_defines_config",
   ]
@@ -295,7 +292,6 @@ source_set("headless_utility") {
   configs += [
     ":headless_defines_config",
     ":inside_headless_component",
-    "//build/config/compiler:wexit_time_destructors",
   ]
 }
 
@@ -388,7 +384,7 @@ source_set("headless_browser") {
     "//components/optimization_guide/proto:optimization_guide_proto",
     "//components/origin_trials:browser",
     "//components/origin_trials:common",
-    "//components/os_crypt/async/browser",
+    "//components/os_crypt/browser",
     "//components/profile_metrics",
     "//components/security_state/content",
     "//components/security_state/core",
@@ -397,6 +393,7 @@ source_set("headless_browser") {
     "//content/public/browser",
     "//content/public/common",
     "//printing/buildflags",
+    "//sandbox/policy",
     "//services/cert_verifier/public/mojom",
     "//services/device/public/cpp/geolocation",
     "//services/service_manager/public/cpp",
@@ -449,7 +446,6 @@ source_set("headless_browser") {
   }
 
   configs += [
-    "//build/config/compiler:wexit_time_destructors",
     ":inside_headless_component",
     ":headless_defines_config",
   ]
@@ -496,7 +492,7 @@ source_set("headless_browser") {
   }
 
   if (is_win) {
-    deps += [ "//components/os_crypt/async/browser:dpapi_key_provider" ]
+    deps += [ "//components/os_crypt/browser:dpapi_key_provider" ]
   }
 
   if (is_linux || is_chromeos) {
@@ -512,15 +508,15 @@ source_set("headless_browser") {
   }
   if (is_linux && use_dbus) {
     deps += [
-      "//components/os_crypt/async/browser:freedesktop_secret_key_provider",
+      "//components/os_crypt/browser:freedesktop_secret_key_provider",
       "//components/password_manager/core/browser:password_switches",
     ]
   }
 
   if (is_apple) {
-    deps += [ "//components/os_crypt/async/browser:keychain_key_provider" ]
+    deps += [ "//components/os_crypt/browser:keychain_key_provider" ]
   } else if (is_posix) {
-    deps += [ "//components/os_crypt/async/browser:posix_key_provider" ]
+    deps += [ "//components/os_crypt/browser:posix_key_provider" ]
   }
 
   # Normally set to false (see build/args/headless.gn), but we can optionally
@@ -610,10 +606,7 @@ if (is_mac) {
 }
 
 test("headless_browsertests") {
-  configs += [
-    "//net:net_test_config",
-    "//v8:external_startup_data",
-  ]
+  configs += [ "//v8:external_startup_data" ]
   sources = [
     "test/headless_browser_browsertest.cc",
     "test/headless_browser_context_browsertest.cc",
@@ -802,13 +795,13 @@ component("headless_shell_lib") {
     "//components/headless/command_handler",
     "//components/policy/content",
     "//components/security_state/content",
-    "//content",
     "//content/public/app",
     "//content/public/browser",
     "//content/public/child",
     "//content/public/common",
     "//content/public/utility",
     "//printing/buildflags",
+    "//sandbox/policy",
     "//v8",
   ]
 
@@ -827,7 +820,6 @@ component("headless_shell_lib") {
   configs += [
     ":headless_defines_config",
     ":inside_headless_component",
-    "//build/config/compiler:wexit_time_destructors",
   ]
 
   if (use_ozone) {
@@ -943,8 +935,5 @@ executable("headless_shell") {
     deps += [ "//components/crash/core/app" ]
   }
 
-  configs += [
-    ":headless_defines_config",
-    "//build/config/compiler:wexit_time_destructors",
-  ]
+  configs += [ ":headless_defines_config" ]
 }

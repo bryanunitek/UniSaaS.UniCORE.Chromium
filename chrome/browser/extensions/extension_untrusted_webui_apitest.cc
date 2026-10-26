@@ -9,8 +9,8 @@
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
@@ -63,7 +63,7 @@ class ExtensionUntrustedWebUITest : public ExtensionApiTest {
         browser(), GURL("chrome-untrusted://api-test/title1.html")));
 
     content::RenderFrameHost* render_frame_host = browser()
-                                                      ->tab_strip_model()
+                                                      ->GetTabStripModel()
                                                       ->GetActiveWebContents()
                                                       ->GetPrimaryMainFrame();
     ASSERT_TRUE(render_frame_host);
@@ -98,7 +98,7 @@ class ExtensionUntrustedWebUITest : public ExtensionApiTest {
     EXPECT_TRUE(ui_test_utils::NavigateToURL(
         browser(), GURL(chrome::kChromeUIUntrustedReadAnythingSidePanelURL)));
     // Get the side panel entry registry.
-    auto* side_panel_ui = browser()->GetFeatures().side_panel_ui();
+    auto* side_panel_ui = SidePanelUI::From(browser());
     auto* side_panel_web_contents =
         side_panel_ui->GetWebContentsForTest(SidePanelEntryId::kReadAnything);
 

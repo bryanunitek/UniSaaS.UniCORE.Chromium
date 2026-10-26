@@ -25,10 +25,8 @@ namespace user_education {
 namespace {
 
 BASE_FEATURE(kNewBadgeTestFeature,
-             "NewBadgeTestFeature",
              base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kOtherTestFeature,
-             "OtherTestFeature",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Mock for testing `NewBadgeController` without a live `NewBadgePolicy`.
@@ -97,7 +95,7 @@ class NewBadgeControllerTest : public testing::Test {
     }
     auto policy = std::make_unique<TestNewBadgePolicy>(
         kMaxShows, kMaxUsed, kShowWindow, kGracePeriod);
-    controller_ = std::make_unique<NewBadgeController>(
+    controller_ = std::make_unique<NewBadgeControllerImpl>(
         registry_, storage_service_, std::move(policy));
     controller_->InitData();
   }
@@ -108,7 +106,7 @@ class NewBadgeControllerTest : public testing::Test {
     }
     auto policy = std::make_unique<testing::StrictMock<MockNewBadgePolicy>>();
     mock_policy_ = policy.get();
-    controller_ = std::make_unique<NewBadgeController>(
+    controller_ = std::make_unique<NewBadgeControllerImpl>(
         registry_, storage_service_, std::move(policy));
     controller_->InitData();
   }

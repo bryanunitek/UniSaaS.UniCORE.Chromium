@@ -6,18 +6,19 @@
 
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/metrics_hashes.h"
+#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/contextual_cueing/contextual_cueing_enums.h"
 #include "chrome/browser/contextual_cueing/cue_target.h"
 #include "chrome/browser/contextual_cueing/features.h"
 #include "chrome/browser/private_insights/private_insights_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/channel_info.h"
-#include "components/metrics/private_metrics/private_insights/contextual_cue_log_event_helpers.h"
-#include "components/metrics/private_metrics/private_insights/events/contextual_cue_log_event.pb.h"
-#include "components/metrics/private_metrics/private_insights/private_insights_features.h"
-#include "components/metrics/private_metrics/private_insights/private_insights_service.h"
+#include "components/contextual_cueing/contextual_cueing_enums.h"
+#include "components/private_insights/contextual_cue_log_event_helpers.h"
+#include "components/private_insights/events/contextual_cue_log_event.pb.h"
+#include "components/private_insights/private_insights_features.h"
+#include "components/private_insights/private_insights_service.h"
 #include "components/variations/service/variations_service.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/web_contents.h"
@@ -48,9 +49,8 @@ int BucketTabCount(int raw_count) {
 }
 
 void PopulateSystemProfile(
-    private_insights::events::ContextualCueLogEvent::SystemProfile* profile) {
-  profile->set_chrome_version(version_info::GetVersionNumber());
-  profile->set_milestone(version_info::GetMajorVersionNumber());
+    private_insights::events::CoarseSystemProfile* profile) {
+  private_insights::PopulateCommonSystemProfile(profile);
   profile->set_chrome_channel(
       std::string(version_info::GetChannelString(chrome::GetChannel())));
   if (g_browser_process) {
@@ -59,11 +59,6 @@ void PopulateSystemProfile(
       profile->set_country(variations_service->GetStoredPermanentCountry());
     }
   }
-}
-
-std::optional<std::pair<std::string, std::string>> ExtractFromProtoTab(
-    const optimization_guide::proto::Tab& tab) {
-  return std::make_pair(tab.url(), tab.title());
 }
 
 std::optional<std::pair<std::string, std::string>> ExtractFromTabHandle(
@@ -79,46 +74,39 @@ std::optional<std::pair<std::string, std::string>> ExtractFromTabHandle(
 
 namespace internal {
 
-private_insights::events::ContextualCueLogEvent CreateContextualCueShownEvent(
+private_insights::events::ContextualCueLogEvent CreateContextualCueLogEvent(
+    private_insights::events::ContextualCueLogEvent::EventType event_type,
     const std::string& cue_id,
     CueTargetType cue_type,
     const optimization_guide::proto::ContextualCue& cue,
     tabs::TabInterface* active_tab,
     const std::vector<tabs::TabHandle>& tabs_to_show,
-    const std::vector<optimization_guide::proto::Tab>& background_tabs) {
+    const std::vector<optimization_guide::proto::Tab>& background_tabs,
+    const std::string& cuj) {
   private_insights::events::ContextualCueLogEvent event;
   event.set_cue_id(cue_id);
-  event.set_event_type(private_insights::events::ContextualCueLogEvent::SHOWN);
+  event.set_event_type(event_type);
   event.set_event_timestamp_ms(
       base::Time::Now().InMillisecondsSinceUnixEpoch());
 
   PopulateSystemProfile(event.mutable_system_profile());
 
   if (active_tab) {
-    event.mutable_cue_context()->mutable_active_page()->set_url(
-        active_tab->GetURL().spec());
-    event.mutable_cue_context()->mutable_active_page()->set_title(
-        base::UTF16ToUTF8(active_tab->GetTitle()));
+    private_insights::PopulateActivePage(
+        active_tab->GetURL(), base::UTF16ToUTF8(active_tab->GetTitle()),
+        event.mutable_cue_context()->mutable_active_page());
   }
 
   event.mutable_cue_context()->set_recent_pages(
-      private_insights::SerializeCollectionToPageInfoJson(background_tabs,
-                                                          ExtractFromProtoTab));
+      private_insights::SerializeCollectionToPageInfoJson(
+          background_tabs, private_insights::ExtractFromProtoTab));
 
   event.mutable_cue_context()->set_tabs_shown(
       private_insights::SerializeCollectionToPageInfoJson(
           tabs_to_show, ExtractFromTabHandle));
 
-  event.mutable_cue_details()->set_cuj_type(cue.suggested_cuj());
-  event.mutable_cue_details()->set_suggestion_text(
-      cue.anchored_message_cue().anchored_message_text());
-  event.mutable_cue_details()->set_promoted_feature(GetName(cue_type));
-  event.mutable_cue_details()->set_button_text(
-      cue.anchored_message_cue().action_text());
-  if (cue.has_gemini_in_chrome_surface()) {
-    event.mutable_cue_details()->set_prompt(
-        cue.gemini_in_chrome_surface().prompt());
-  }
+  private_insights::PopulateCueDetails(cue, cuj, GetName(cue_type),
+                                       event.mutable_cue_details());
 
   return event;
 }
@@ -128,9 +116,14 @@ private_insights::events::ContextualCueLogEvent CreateContextualCueShownEvent(
 void RecordCueShownMetrics(ukm::SourceId source_id,
                            std::string_view cuj,
                            const CueTabMetrics& tab_metrics,
-                           base::TimeDelta latency) {
+                           base::TimeDelta latency,
+                           bool is_pdf) {
   base::UmaHistogramSparse("ContextualCueing.V2.CueShown",
                            base::HashMetricName(cuj));
+  if (is_pdf) {
+    base::UmaHistogramSparse("ContextualCueing.V2.CueShown.PageType.Pdf",
+                             base::HashMetricName(cuj));
+  }
   base::UmaHistogramTimes("ContextualCueing.V2.CueShownLatency", latency);
 
   auto* ukm_recorder = ukm::UkmRecorder::Get();
@@ -150,9 +143,15 @@ void RecordContextualCueingInteraction(
     ContextualCueingInteraction contextual_cueing_interaction,
     const std::string& cuj,
     ukm::SourceId source_id,
-    base::TimeDelta shown_duration) {
+    base::TimeDelta shown_duration,
+    bool is_pdf) {
   base::UmaHistogramEnumeration("ContextualCueing.V2.CueInteraction",
                                 contextual_cueing_interaction);
+  if (is_pdf) {
+    base::UmaHistogramEnumeration(
+        "ContextualCueing.V2.CueInteraction.PageType.Pdf",
+        contextual_cueing_interaction);
+  }
 
   std::string histogram_name =
       "ContextualCueing.V2.CueInteraction." +
@@ -185,14 +184,27 @@ void RecordContextualCueingDecision(
   }
 }
 
-void RecordCueFormFactorShown(CueFormFactor form_factor) {
+void RecordCueFormFactorShown(std::string_view cuj, CueFormFactor form_factor) {
   base::UmaHistogramEnumeration("ContextualCueing.V2.CueFormFactor.Shown",
                                 form_factor);
+  if (!cuj.empty()) {
+    base::UmaHistogramSparse(
+        base::StrCat(
+            {"ContextualCueing.V2.CueFormFactor.Shown.", GetName(form_factor)}),
+        base::HashMetricName(cuj));
+  }
 }
 
-void RecordCueFormFactorHidden(CueFormFactor form_factor) {
+void RecordCueFormFactorHidden(std::string_view cuj,
+                               CueFormFactor form_factor) {
   base::UmaHistogramEnumeration("ContextualCueing.V2.CueFormFactor.Hidden",
                                 form_factor);
+  if (!cuj.empty()) {
+    base::UmaHistogramSparse(
+        base::StrCat({"ContextualCueing.V2.CueFormFactor.Hidden.",
+                      GetName(form_factor)}),
+        base::HashMetricName(cuj));
+  }
 }
 
 void RecordChipClickedCollapsedDuration(base::TimeDelta collapsed_duration) {
@@ -207,7 +219,8 @@ void RecordCueShownToPrivateInsights(
     const optimization_guide::proto::ContextualCue& cue,
     tabs::TabInterface* active_tab,
     const std::vector<tabs::TabHandle>& tabs_to_show,
-    const std::vector<optimization_guide::proto::Tab>& background_tabs) {
+    const std::vector<optimization_guide::proto::Tab>& background_tabs,
+    const std::string& cuj) {
   if (!kEnablePrivateInsightsLogging.Get()) {
     return;
   }
@@ -217,8 +230,9 @@ void RecordCueShownToPrivateInsights(
     return;
   }
 
-  auto event = internal::CreateContextualCueShownEvent(
-      cue_id, cue_type, cue, active_tab, tabs_to_show, background_tabs);
+  auto event = internal::CreateContextualCueLogEvent(
+      private_insights::events::ContextualCueLogEvent::SHOWN, cue_id, cue_type,
+      cue, active_tab, tabs_to_show, background_tabs, cuj);
 
   private_insights_service->LogContextualCueEvent(std::move(event));
 }
@@ -226,6 +240,11 @@ void RecordCueShownToPrivateInsights(
 void RecordCueingInteractionToPrivateInsights(
     Profile* profile,
     const std::string& cue_id,
+    CueTargetType cue_type,
+    const optimization_guide::proto::ContextualCue& cue,
+    tabs::TabInterface* active_tab,
+    const std::vector<tabs::TabHandle>& tabs_to_show,
+    const std::vector<optimization_guide::proto::Tab>& background_tabs,
     ContextualCueingInteraction interaction_type,
     const std::string& cuj) {
   if (!kEnablePrivateInsightsLogging.Get()) {
@@ -237,33 +256,26 @@ void RecordCueingInteractionToPrivateInsights(
     return;
   }
 
-  private_insights::events::ContextualCueLogEvent event;
-  event.set_cue_id(cue_id);
-  event.set_event_timestamp_ms(
-      base::Time::Now().InMillisecondsSinceUnixEpoch());
-  PopulateSystemProfile(event.mutable_system_profile());
-
-  // Map interaction_type to event_type
+  private_insights::events::ContextualCueLogEvent::EventType event_type;
   switch (interaction_type) {
     case ContextualCueingInteraction::kCueClicked:
-      event.set_event_type(
-          private_insights::events::ContextualCueLogEvent::CLICKED);
+      event_type = private_insights::events::ContextualCueLogEvent::CLICKED;
       break;
     case ContextualCueingInteraction::kCueDismissed:
-      event.set_event_type(
-          private_insights::events::ContextualCueLogEvent::DISMISSED);
+      event_type = private_insights::events::ContextualCueLogEvent::DISMISSED;
       break;
     case ContextualCueingInteraction::kCueSuggestionsSettings:
-      event.set_event_type(
-          private_insights::events::ContextualCueLogEvent::CLICKED_SETTINGS);
+      event_type =
+          private_insights::events::ContextualCueLogEvent::CLICKED_SETTINGS;
       break;
     case ContextualCueingInteraction::kCueEditPrompt:
-      event.set_event_type(
-          private_insights::events::ContextualCueLogEvent::EDIT_PROMPT);
+      event_type = private_insights::events::ContextualCueLogEvent::EDIT_PROMPT;
       break;
   }
 
-  event.mutable_cue_details()->set_cuj_type(cuj);
+  auto event = internal::CreateContextualCueLogEvent(
+      event_type, cue_id, cue_type, cue, active_tab, tabs_to_show,
+      background_tabs, cuj);
 
   private_insights_service->LogContextualCueEvent(std::move(event));
 }

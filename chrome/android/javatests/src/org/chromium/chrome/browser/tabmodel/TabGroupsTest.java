@@ -55,9 +55,6 @@ import java.util.List;
 @Restriction({DeviceFormFactor.PHONE})
 @Batch(Batch.PER_CLASS)
 public class TabGroupsTest {
-    private static final int OTHER_ROOT_ID_1 = 11;
-    private static final int OTHER_ROOT_ID_2 = 22;
-
     @Rule
     public AutoResetCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.fastAutoResetCtaActivityRule();
@@ -199,7 +196,9 @@ public class TabGroupsTest {
                     mTabModel
                             .getTabRemover()
                             .closeTabs(
-                                    TabClosureParams.closeAllTabs().build(),
+                                    TabClosureParams.closeAllTabs()
+                                            .tabClosingSource(TabClosingSource.GRID_TAB_SWITCHER)
+                                            .build(),
                                     /* allowDialog= */ false);
                 });
 

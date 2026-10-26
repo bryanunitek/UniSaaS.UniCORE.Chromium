@@ -103,8 +103,8 @@ void MediaStreamDevicesController::RequestPermissions(
     // Check if web contents has allowlisted capability to ignore the denied
     // status and denied reason.
     bool web_contents_has_allowlisted_permission =
-        permissions::PermissionsClient::
-            AllowEmbeddedPermissionPromptForAllowlistedSurfaces() &&
+        permissions::PermissionsClient::AllowEmbeddedPermissionPromptForSurface(
+            web_contents) &&
         permissions::PermissionsClient::Get()
             ->IsPrivilegedInternalWebUIOrNewTabPage(
                 web_contents, request.url_origin.GetURL(),
@@ -223,6 +223,14 @@ MediaStreamDevicesController::MediaStreamDevicesController(
                                      request, &denial_reason_);
   video_setting_ = GetContentSetting(blink::PermissionType::VIDEO_CAPTURE,
                                      request, &denial_reason_);
+
+#if BUILDFLAG(IS_ANDROID)
+  content::RenderFrameHost* initial_rfh = content::RenderFrameHost::FromID(
+      request_.render_process_id, request_.render_frame_id);
+  if (initial_rfh && initial_rfh == web_contents_->GetPrimaryMainFrame()) {
+    request_main_frame_url_ = initial_rfh->GetLastCommittedURL();
+  }
+#endif
 }
 
 bool MediaStreamDevicesController::ShouldRequestAudio() const {
@@ -244,6 +252,8 @@ blink::mojom::StreamDevicesSetPtr MediaStreamDevicesController::GetDevices(
   if (!audio_allowed && !video_allowed)
     return nullptr;
 
+  content::BrowserContext* browser_context = web_contents_->GetBrowserContext();
+
   // TODO(crbug.com/40216442): Generalize to multiple streams.
   stream_devices_set->stream_devices.emplace_back(
       blink::mojom::StreamDevices::New());
@@ -261,8 +271,7 @@ blink::mojom::StreamDevicesSetPtr MediaStreamDevicesController::GetDevices(
                   request_.video_type);
         devices.audio_device =
             enumerator_->GetPreferredAudioDeviceForBrowserContext(
-                web_contents_->GetBrowserContext(),
-                request_.requested_audio_device_ids);
+                browser_context, request_.requested_audio_device_ids);
       } else if (video_allowed &&
                  request_.video_type ==
                      blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE) {
@@ -271,8 +280,7 @@ blink::mojom::StreamDevicesSetPtr MediaStreamDevicesController::GetDevices(
         // Pepper API opens only one device at a time.
         devices.video_device =
             enumerator_->GetPreferredVideoDeviceForBrowserContext(
-                web_contents_->GetBrowserContext(),
-                request_.requested_video_device_ids);
+                browser_context, request_.requested_video_device_ids);
       }
       break;
     }
@@ -281,14 +289,12 @@ blink::mojom::StreamDevicesSetPtr MediaStreamDevicesController::GetDevices(
       if (audio_allowed && !request_.requested_audio_device_ids.empty()) {
         devices.audio_device =
             enumerator_->GetPreferredAudioDeviceForBrowserContext(
-                web_contents_->GetBrowserContext(),
-                request_.requested_audio_device_ids);
+                browser_context, request_.requested_audio_device_ids);
       }
       if (video_allowed && !request_.requested_video_device_ids.empty()) {
         devices.video_device =
             enumerator_->GetPreferredVideoDeviceForBrowserContext(
-                web_contents_->GetBrowserContext(),
-                request_.requested_video_device_ids);
+                browser_context, request_.requested_video_device_ids);
       }
 
       break;
@@ -307,7 +313,7 @@ blink::mojom::StreamDevicesSetPtr MediaStreamDevicesController::GetDevices(
         CHECK(request_.requested_audio_device_ids.empty());
         devices.audio_device =
             enumerator_->GetPreferredAudioDeviceForBrowserContext(
-                web_contents_->GetBrowserContext(), {});
+                browser_context, {});
       }
       // MEDIA_DEVICE_ACCESS is only used for speech recognition, so it never
       // requests video access.
@@ -434,12 +440,39 @@ bool MediaStreamDevicesController::IsUserAcceptAllowedOnAndroid(
 }
 #endif
 
+content::RenderFrameHost*
+MediaStreamDevicesController::GetTargetRenderFrameHost() const {
+  content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(
+      request_.render_process_id, request_.render_frame_id);
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, presenting the OS-level permission dialog can pause/resume the
+  // activity and invalidate or replace the original RenderFrameHost. If the
+  // request originally came from the primary main frame, ensure the frame is
+  // active and has not navigated away. If the original RenderFrameHost is no
+  // longer active, fall back to the active primary main frame if the URL has
+  // not changed.
+  if (request_main_frame_url_.has_value() && web_contents_) {
+    content::RenderFrameHost* main_rfh = web_contents_->GetPrimaryMainFrame();
+    if (rfh && rfh->IsActive() && rfh == main_rfh) {
+      return (rfh->GetLastCommittedURL() == *request_main_frame_url_) ? rfh
+                                                                      : nullptr;
+    }
+    if (main_rfh && main_rfh->IsActive() &&
+        main_rfh->GetLastCommittedURL() == *request_main_frame_url_) {
+      return main_rfh;
+    }
+    return nullptr;
+  }
+#endif
+  return rfh;
+}
+
 bool MediaStreamDevicesController::PermissionIsBlockedForReason(
     blink::PermissionType permission,
     content::PermissionStatusSource reason) const {
-  content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(
-      request_.render_process_id, request_.render_frame_id);
-  if (rfh->GetLastCommittedOrigin().GetURL() != request_.security_origin) {
+  content::RenderFrameHost* rfh = GetTargetRenderFrameHost();
+  if (!rfh ||
+      rfh->GetLastCommittedOrigin().GetURL() != request_.security_origin) {
     return false;
   }
 
@@ -461,8 +494,8 @@ bool MediaStreamDevicesController::PermissionIsBlockedForReason(
 
 void MediaStreamDevicesController::PromptAnsweredGroupedRequest(
     const std::vector<content::PermissionResult>& permission_result) {
-  if (content::RenderFrameHost::FromID(request_.render_process_id,
-                                       request_.render_frame_id) == nullptr) {
+  content::RenderFrameHost* rfh = GetTargetRenderFrameHost();
+  if (!rfh) {
     // The frame requesting media devices was removed while we were waiting for
     // a user response on permissions. Nothing more to do.
     return;

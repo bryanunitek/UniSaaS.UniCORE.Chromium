@@ -33,6 +33,7 @@ import org.junit.runner.RunWith;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.R;
@@ -54,6 +55,7 @@ import org.chromium.ui.test.util.DeviceRestriction;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Batch(Batch.PER_CLASS)
 @EnableFeatures(ChromeFeatureList.BOOKMARK_PANE_ANDROID)
+@DisabledTest(message = "crbug.com/444494388")
 public class BookmarkPaneTest {
     @Rule
     public AutoResetCtaTransitTestRule mCtaTestRule =
@@ -70,9 +72,7 @@ public class BookmarkPaneTest {
     public void tearDown() {
         ChromeTabbedActivity cta = mCtaTestRule.getActivity();
         runOnUiThreadBlocking(
-                () -> {
-                    clearBookmarks(cta.getProfileProviderSupplier().get().getOriginalProfile());
-                });
+                () -> clearBookmarks(cta.getProfileProviderSupplier().get().getOriginalProfile()));
     }
 
     @Test

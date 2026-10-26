@@ -12,12 +12,15 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/paint/paint_invalidator.h"
 #include "third_party/blink/renderer/core/paint/paint_property_tree_builder.h"
+#include "third_party/blink/renderer/core/paint/pre_paint_subtree_walk_reasons.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
+class ContainerTimingPaintAttributionTracker;
+class Element;
 class LayoutObject;
 class LocalFrameView;
 class Node;
@@ -51,19 +54,27 @@ class CORE_EXPORT PrePaintTreeWalk final {
     PrePaintTreeWalkContextBase(const PrePaintTreeWalkContextBase&) = default;
 
    public:
-    // Reset fragmentation when entering something that shouldn't be affected by
-    // the current fragmentation context(s).
-    void ResetFragmentation() {
+    // Resets state that must not carry across a frame boundary, before walking
+    // a new frame.
+    void ResetForNewFrame() {
+      // Block fragmentation doesn't cross frame boundaries.
       current_container = {};
       absolute_positioned_container = {};
       fixed_positioned_container = {};
-    }
 
-    void ResetSoftNavigationContext() {
-      soft_navigation_context_changed = false;
+      // For soft navigation.
       soft_navigation_context_container_root = nullptr;
-      soft_navigation_text_aggregation_node = nullptr;
       soft_navigation_paint_attribution_tracker = nullptr;
+
+      // For container timing.
+      container_timing_context_root = nullptr;
+      container_timing_paint_attribution_tracker = nullptr;
+
+      subtree_walk_reasons =
+          CrossFramePrePaintSubtreeWalkReasons(subtree_walk_reasons);
+
+      // Both for soft navigation and container timing.
+      paint_timing_text_aggregation_node = nullptr;
     }
 
     PaintInvalidatorContext paint_invalidator_context;
@@ -71,35 +82,32 @@ class CORE_EXPORT PrePaintTreeWalk final {
     // Whether there is a blocking touch event handler on any ancestor.
     bool inside_blocking_touch_event_handler = false;
 
-    // When the effective allowed touch action changes on an ancestor, the
-    // entire subtree may need to update.
-    bool effective_allowed_touch_action_changed = false;
-
     // Whether there is a blocking wheel event handler on any ancestor.
     bool inside_blocking_wheel_event_handler = false;
 
-    // When the blocking wheel event handlers change on an ancestor, the entire
-    // subtree may need to update.
-    bool blocking_wheel_event_handler_changed = false;
-
-    // When the `SoftNavigationContext` of a node changes on an ancestor, the
-    // entire subtree may need to update.
-    bool soft_navigation_context_changed = false;
+    PrePaintSubtreeWalkReasons subtree_walk_reasons;
 
     // The nearest ancestor `Node` associated with a `SoftNavigationContext`, if
     // any. `SoftNavigationContext` is set for roots appended to the DOM, and
     // this context gets propagated to descendants through this node.
     Node* soft_navigation_context_container_root = nullptr;
 
-    // Paint tracking aggregates text into the nearest non-anonymous, non-inline
-    // ancestor node.
-    Node* soft_navigation_text_aggregation_node = nullptr;
+    // Paint timing aggregates text into the nearest non-anonymous, non-inline
+    // ancestor node. Used by both SoftNavigation and ContainerTiming trackers.
+    Node* paint_timing_text_aggregation_node = nullptr;
 
     // The `SoftNavigationPaintAttributionTracker` associated with the current
     // document being walked. This will be null for iframes or if the
     // experimental feature is disabled.
     SoftNavigationPaintAttributionTracker*
         soft_navigation_paint_attribution_tracker = nullptr;
+
+    // The nearest ancestor element with "containertiming" attribute, or null.
+    Element* container_timing_context_root = nullptr;
+
+    // The ContainerTimingPaintAttributionTracker for the current document.
+    ContainerTimingPaintAttributionTracker*
+        container_timing_paint_attribution_tracker = nullptr;
 
     // True if we're visiting the parent for the first time, i.e. when we're in
     // the first fragmentainer where the parent occurs (or if we're not
@@ -264,6 +272,9 @@ class CORE_EXPORT PrePaintTreeWalk final {
 
   void UpdateSoftNavigationContext(const LayoutObject&,
                                    PrePaintTreeWalkContext&);
+
+  void UpdateContainerTimingContext(const LayoutObject&,
+                                    PrePaintTreeWalkContext&);
 
   PaintInvalidator paint_invalidator_;
 

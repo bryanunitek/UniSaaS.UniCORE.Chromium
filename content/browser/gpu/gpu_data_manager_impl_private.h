@@ -29,7 +29,6 @@
 #include "media/base/supported_video_decoder_config.h"
 #include "media/video/video_encode_accelerator.h"
 #include "ui/display/display_observer.h"
-#include "ui/gl/gpu_preference.h"
 
 namespace base {
 class CommandLine;
@@ -67,6 +66,9 @@ class CONTENT_EXPORT GpuDataManagerImplPrivate {
   void DisableHardwareAcceleration();
   bool HardwareAccelerationEnabled() const;
   bool IsGpuRasterizationForUIEnabled() const;
+  bool supports_gpu_mode_hardware_gl() const {
+    return supports_gpu_mode_hardware_gl_;
+  }
 
   void UpdateGpuInfo(
       const gpu::GPUInfo& gpu_info,
@@ -120,8 +122,6 @@ class CONTENT_EXPORT GpuDataManagerImplPrivate {
   void ProcessCrashed();
 
   base::ListValue GetLogMessages() const;
-
-  void HandleGpuSwitch();
 
   void BlockDomainsFrom3DAPIs(const std::set<GURL>& urls,
                               gpu::DomainGuilt guilt);
@@ -266,6 +266,8 @@ class CONTENT_EXPORT GpuDataManagerImplPrivate {
   bool is_gpu_compositing_disabled_for_hardware_gpu_ = false;
   bool gpu_access_allowed_for_hardware_gpu_ = true;
   std::string gpu_access_blocked_reason_for_hardware_gpu_;
+
+  const bool supports_gpu_mode_hardware_gl_;
 
   gfx::GpuExtraInfo gpu_extra_info_;
 

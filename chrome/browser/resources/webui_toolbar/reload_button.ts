@@ -7,21 +7,25 @@ import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import '//resources/cr_elements/icons.html.js';
 import '/strings.m.js';
 
+import type {CrIconButtonElement} from '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
+import {TrackedElementManager} from '//resources/js/tracked_element/tracked_element_manager.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import type {MenuSourceType} from '//resources/mojo/ui/base/mojom/menu_source_type.mojom-webui.js';
 import {ReloadInputType} from '/shared/browser_controls_api.mojom-webui.js';
 import type {ReloadInteractionMetadata} from '/shared/browser_controls_api.mojom-webui.js';
+import {TimerHelper} from '/shared/timer_helper.js';
+import {BUTTON_LEFT, getContextMenuPosition, getEventDispositionFlags, HelpBubbleAnchorMixin, playIconAnimation, PressHandler, roundedIconsEnabled} from '/shared/toolbar_button.js';
+import {ContextMenuType} from '/shared/toolbar_ui_api_data_model.mojom-webui.js';
+import type {ReloadControlState} from '/shared/toolbar_ui_api_data_model.mojom-webui.js';
 import {ColorChangeUpdater} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 
-import {BrowserProxyImpl, ContextMenuType} from './browser_proxy.js';
-import type {BrowserProxy, ReloadControlState} from './browser_proxy.js';
-import {MetricsRecorder} from './metrics_recorder.js';
+import {BrowserProxyImpl} from './browser_proxy.js';
+import type {BrowserProxy} from './browser_proxy.js';
+import {ReloadButtonInputType} from './metrics_recorder.js';
 import {getCss} from './reload_button.css.js';
 import {getHtml} from './reload_button.html.js';
-import {TimerHelper} from './timer_helper.js';
-import {BUTTON_LEFT, BUTTON_RIGHT, getContextMenuPosition, getEventDispositionFlags, HelpBubbleAnchorMixin, PressHandler, roundedIconsEnabled} from './toolbar_button.js';
 
 // go/keep-sorted start
 const RELOAD_BUTTON_ACC_NAME_RELOAD = 'reloadButtonAccNameReload';
@@ -30,8 +34,15 @@ const RELOAD_BUTTON_TOOLTIP_RELOAD_WITH_MENU =
     'reloadButtonTooltipReloadWithMenu';
 const RELOAD_BUTTON_TOOLTIP_STOP = 'reloadButtonTooltipStop';
 // go/keep-sorted end
+const INPUT_COUNT_HISTOGRAM = 'InitialWebUI.ReloadButton.InputCount';
 
 const ReloadButtonElementBase = HelpBubbleAnchorMixin(CrLitElement);
+
+export interface ReloadButtonElement {
+  $: {
+    button: CrIconButtonElement,
+  };
+}
 
 export class ReloadButtonElement extends ReloadButtonElementBase {
   static get is() {
@@ -55,6 +66,7 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
       showStopIcon: {type: Boolean, reflect: true},
       isDisabled: {type: Boolean, reflect: true},
       touchUi: {type: Boolean},
+      glowUpEnabled: {type: Boolean},
     };
   }
 
@@ -79,11 +91,31 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
   // while one of the "debounce" timers is running.
   protected accessor showStopIcon: boolean = false;
 
-  // Whether the reload button should be disabled. True only while the
-  // `disableStopIconTimer_` is running.
+  // Whether the reload button should be disabled. True while the
+  // `disableStopIconTimer_` is running, or when the button is temporarily
+  // disabled during Glow Up animations to prevent interruption.
   protected accessor isDisabled: boolean = false;
 
   accessor touchUi: boolean = false;
+  accessor glowUpEnabled: boolean =
+      loadTimeData.getBoolean('enableReloadGlowUp');
+
+  // True if state transitions (e.g. Reload <-> Stop) should be animated.
+  // This is set to true on user click and reset to false after the animation
+  // is triggered, ensuring we only animate user-initiated actions.
+  private animateTransitions_ = false;
+
+  // Represents the currently playing animation state.
+  // - 'start': Transitioning from Reload to Stop.
+  // - 'end': Transitioning from Stop to Reload.
+  // - 'none': No animation is active.
+  private activeAnimation_: 'start'|'end'|'none' = 'none';
+
+  // Represents the next animation state to play after the current one
+  // completes.
+  // - 'end': Queue transition back to Reload after 'start' finishes.
+  // - 'none': No pending animation.
+  private pendingAnimation_: 'end'|'none' = 'none';
 
   // Timer started when the reload button is pressed while showing the reload
   // icon. While running, the reload icon will continue to be displayed instead
@@ -104,25 +136,49 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
   private disableStopIconTimer_: TimerHelper = new TimerHelper();
 
   private browserProxy_: BrowserProxy;
-  private metricsRecorder_: MetricsRecorder;
 
   constructor() {
     super();
     this.browserProxy_ = BrowserProxyImpl.getInstance();
-    this.metricsRecorder_ = new MetricsRecorder(this.browserProxy_);
     this.pressHandler_ = new PressHandler(
         this.onLongPress_.bind(this), this.onShortPress_.bind(this));
     ColorChangeUpdater.forDocument().start();
   }
 
+  // We listen to 'pointerleave' on the host element instead of the internal
+  // button. When the button is disabled, it gets 'pointer-events: none',
+  // which triggers an artificial 'pointerleave' event even if the mouse is
+  // still hovering. Listening on the host (which is never disabled) and
+  // checking host hover state in updateState_ allows us to ignore these
+  // fake pointerleave events (which can propagate to the host on some platforms
+  // like Mac).
+  private boundOnPointerleave_ = this.onPointerleave_.bind(this);
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.addEventListener('pointerleave', this.boundOnPointerleave_);
+  }
+
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    this.removeEventListener('pointerleave', this.boundOnPointerleave_);
+  }
+
   private onLongPress_(source: MenuSourceType) {
     if (this.state.canShowMenu) {
       this.browserProxy_.toolbarUIHandler.showContextMenu(
-          ContextMenuType.kReload, getContextMenuPosition(this), source);
+          ContextMenuType.kReload, getContextMenuPosition(this), source,
+          /*showMenuToken=*/ null);
     }
   }
 
-  private onShortPress_(e: MouseEvent) {
+  private onShortPress_(e: PointerEvent) {
+    // Ignore clicks if the button is disabled (e.g. during hover protection).
+    // This is also necessary to block programmatically dispatched events in
+    // tests that bypass the HTML disabled state.
+    if (this.isDisabled) {
+      return;
+    }
     const isLeftClick = e.button === BUTTON_LEFT;
     // Handle the visible state changes only for left-click.
     if (isLeftClick && !e.metaKey) {
@@ -130,11 +186,15 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
       if (this.doubleClickReloadIconTimer_.isRunning()) {
         return;
       }
-
-      this.metricsRecorder_.onChangeVisibleMode(
-          MetricsRecorder.getVisibleMode(this.state.isNavigationLoading),
-          MetricsRecorder.getVisibleMode(!this.state.isNavigationLoading));
     }
+
+    TrackedElementManager.getInstance().notifyElementActivated(this);
+
+    const isKeyboard = e.type === 'click';
+    const recordedInputType = isKeyboard ? ReloadButtonInputType.KEY_PRESS :
+                                           ReloadButtonInputType.MOUSE_RELEASE;
+    this.browserProxy_.recordInHistogram(
+        INPUT_COUNT_HISTOGRAM, recordedInputType, ReloadButtonInputType.COUNT);
 
     if (this.state.isNavigationLoading) {
       this.browserProxy_.browserControlsHandler.stopLoad();
@@ -150,6 +210,7 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
     }
 
     if (isLeftClick && !e.metaKey) {
+      this.animateTransitions_ = true;
       // Update the renderer in advance to avoid the delay.
       this.state.isNavigationLoading = !this.state.isNavigationLoading;
 
@@ -172,12 +233,12 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
    * Reconstructs the relative timestamp offset and determines the input
    * modality.
    */
-  private getReloadMetadata_(e: MouseEvent): ReloadInteractionMetadata|null {
+  private getReloadMetadata_(e: PointerEvent): ReloadInteractionMetadata|null {
     const sourceCapabilities =
         (e as unknown as {
           sourceCapabilities?: {firesTouchEvents?: boolean},
         }).sourceCapabilities;
-    const isTouch = (e instanceof PointerEvent && e.pointerType === 'touch') ||
+    const isTouch = e.pointerType === 'touch' ||
         (!!sourceCapabilities && sourceCapabilities.firesTouchEvents);
     if (isTouch) {
       return null;
@@ -192,7 +253,7 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
     };
   }
 
-  protected onClick_(e: MouseEvent) {
+  protected onClick_(e: PointerEvent) {
     // Only keyboard `click` (Enter/Space) are handled here, which triggers a
     // left-click equivalent. Keyboard 'click' has detail === 0.
     if (e.detail === 0) {
@@ -201,11 +262,23 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
   }
 
   private updateState_(force: boolean) {
+    // If the navigation finishes while we are still animating the transition
+    // to the Stop state (activeAnimation_ is 'start'), temporarily disable the
+    // button to prevent clicks, and wait for the animation to complete before
+    // transitioning back to Reload. This matches the Views behavior of not
+    // interrupting the animation abruptly and keeping the button disabled,
+    // adapted to WebUI's simplified animation chaining model.
+    if (this.glowUpEnabled && !force && this.activeAnimation_ === 'start') {
+      if (!this.state.isNavigationLoading) {
+        this.isDisabled = true;
+      }
+      return;
+    }
+
     // If `force` was not passed in, and the pointer is hovering over the
     // reload button, need to decide if can update the button immediately or
     // not.
-    if (!force &&
-        this.renderRoot.querySelector('cr-icon-button')?.matches(':hover')) {
+    if (!force && this.matches(':hover')) {
       if (this.state.isNavigationLoading) {
         // If the navigation is loading, and thus we want to be displaying the
         // stop button, and we're still in the double-click period for clicking
@@ -243,28 +316,54 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
     this.doubleClickReloadIconTimer_.clearTimeout();
     this.disableStopIconTimer_.clearTimeout();
     this.isDisabled = false;
+    const oldShowStopIcon = this.showStopIcon;
     this.showStopIcon = this.state.isNavigationLoading;
+
+    // Determine if we should play animation
+    // Normal transition if state changed.
+    let playAnimation = this.glowUpEnabled && this.animateTransitions_ &&
+        oldShowStopIcon !== this.showStopIcon;
+
+    // Double animation if we clicked reload but stayed in reload (fast load).
+    const playDoubleAnimation = this.glowUpEnabled &&
+        this.animateTransitions_ && !this.showStopIcon && !oldShowStopIcon &&
+        this.activeAnimation_ === 'none';
+
+    if (playDoubleAnimation) {
+      playAnimation = true;
+    }
+
+    if (playAnimation) {
+      if (playDoubleAnimation) {
+        this.activeAnimation_ = 'start';
+        this.pendingAnimation_ = 'end';
+      } else {
+        this.activeAnimation_ = this.showStopIcon ? 'start' : 'end';
+      }
+    } else {
+      // Only reset to 'none' if we are not currently in the middle of that
+      // animation. This prevents force-stopping a running animation if
+      // updateState_ is called with the same target state (e.g. on pointer
+      // leave).
+      if (!((this.activeAnimation_ === 'start' &&
+             (this.showStopIcon || this.pendingAnimation_ === 'end')) ||
+            (this.activeAnimation_ === 'end' && !this.showStopIcon))) {
+        this.activeAnimation_ = 'none';
+        this.pendingAnimation_ = 'none';
+      }
+    }
+
+    if (!this.showStopIcon && !playAnimation) {
+      // Reset flag when transitioning to reload (matching C++ case
+      // Mode::kReload)
+      this.animateTransitions_ = false;
+    }
+
+    if (playAnimation && this.hasUpdated) {
+      this.playAnimation_();
+    }
   }
 
-  /**
-   * Sets up event listeners and the PerformanceObserver when the element is
-   * added to the DOM.
-   */
-  override connectedCallback() {
-    super.connectedCallback();
-
-    this.metricsRecorder_.startObserving();
-  }
-
-  /**
-   * Cleans up event listeners and the PerformanceObserver when the element is
-   * removed from the DOM.
-   */
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-
-    this.metricsRecorder_.stopObserving();
-  }
 
   override willUpdate(changedProperties: PropertyValues<this>): void {
     super.willUpdate(changedProperties);
@@ -276,11 +375,6 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
       const previousState =
           changedPrivateProperties.get('state') as ReloadControlState |
           undefined;
-      if (previousState) {
-        this.metricsRecorder_.onChangeVisibleMode(
-            MetricsRecorder.getVisibleMode(previousState.isNavigationLoading),
-            MetricsRecorder.getVisibleMode(this.state.isNavigationLoading));
-      }
       this.updateTooltip_();
       this.updateState_(/*force=*/ !previousState ||
                         this.state.stateToken !== previousState.stateToken);
@@ -300,6 +394,15 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
   }
 
   protected getIronIcon_(): string {
+    if (this.glowUpEnabled) {
+      if (this.activeAnimation_ === 'start') {
+        return 'webui-toolbar:reload_start_glow_up';
+      }
+      if (this.activeAnimation_ === 'end') {
+        return 'webui-toolbar:reload_end_glow_up';
+      }
+    }
+
     if (this.showStopIcon) {
       if (roundedIconsEnabled()) {
         return 'webui-toolbar:close';
@@ -317,12 +420,91 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
     }
   }
 
+  private playAnimation_() {
+    const isStart = this.activeAnimation_ === 'start';
+    this.updateComplete.then(() => {
+      playIconAnimation(this.$.button);
+      this.listenToAnimationEnd_(isStart);
+    });
+  }
+
+  /**
+   * Listens to the SMIL animation end event on the SVG element.
+   * Resets animation states once the animation finishes.
+   * @param isStart True if we are listening to the 'start' (Reload->Stop)
+   *     animation.
+   */
+  private listenToAnimationEnd_(isStart: boolean) {
+    const animate =
+        this.$.button.shadowRoot.querySelector('cr-icon')
+            ?.shadowRoot?.querySelector('animate[begin="indefinite"]');
+    if (!animate) {
+      this.activeAnimation_ = 'none';
+      this.pendingAnimation_ = 'none';
+      return;
+    }
+    const handler = () => {
+      animate.removeEventListener('endEvent', handler);
+      if (isStart) {
+        this.onStartAnimationEnd_();
+      } else {
+        this.onEndAnimationEnd_();
+      }
+    };
+    animate.addEventListener('endEvent', handler);
+  }
+
+  /**
+   * Called when the 'start' animation (Reload -> Stop transition) completes.
+   * Handles starting the pending 'end' animation if the load has already
+   * finished, or resetting the animation state.
+   */
+  private onStartAnimationEnd_() {
+    if (this.activeAnimation_ !== 'start') {
+      return;
+    }
+    if (this.pendingAnimation_ === 'end') {
+      this.pendingAnimation_ = 'none';
+      if (!this.state.isNavigationLoading) {
+        this.activeAnimation_ = 'end';
+        this.requestUpdate();
+        this.playAnimation_();
+        return;
+      }
+    }
+
+    this.activeAnimation_ = 'none';
+    this.requestUpdate();
+
+    if (!this.state.isNavigationLoading) {
+      this.updateState_(/*force=*/ false);
+    }
+  }
+
+  private onEndAnimationEnd_() {
+    if (this.activeAnimation_ !== 'end') {
+      return;
+    }
+    this.activeAnimation_ = 'none';
+    this.pendingAnimation_ = 'none';
+    this.animateTransitions_ = false;
+    this.requestUpdate();
+    this.updateState_(/*force=*/ false);
+  }
+
   /**
    * See `onPointerup_` for the click event handling logic.
    * @param e the PointerEvent associated with the click.
    * @returns
    */
   protected onPointerdown_(e: PointerEvent) {
+    // Ignore pointer events if the button is disabled (e.g. during hover
+    // protection). Natively, disabled elements still receive pointer events
+    // (unlike click events), so we must manually block them here to prevent
+    // capturing pointer events or triggering long-press menu while disabled.
+    if (this.isDisabled) {
+      return;
+    }
     this.pressHandler_.onPointerdown(e, this.state.isNavigationLoading);
   }
 
@@ -334,10 +516,19 @@ export class ReloadButtonElement extends ReloadButtonElementBase {
    * @returns
    */
   protected onPointerup_(e: PointerEvent) {
-    if (e.button !== BUTTON_RIGHT) {
-      this.metricsRecorder_.onButtonPressedStart(e);
-    }
     this.pressHandler_.onPointerup(e);
+  }
+
+  /**
+   * Handles pointer leave. If the context menu is not showing, it triggers an
+   * immediate update to transition back to the reload state if loading has
+   * finished, bypassing the hover protection delay. This matches the C++ Views
+   * `OnMouseExited` behavior.
+   */
+  private onPointerleave_() {
+    if (!this.state.isContextMenuVisible) {
+      this.updateState_(/*force=*/ false);
+    }
   }
 }
 

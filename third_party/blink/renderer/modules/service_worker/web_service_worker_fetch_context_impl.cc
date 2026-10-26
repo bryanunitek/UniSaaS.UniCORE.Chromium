@@ -14,6 +14,7 @@
 #include "net/cookies/site_for_cookies.h"
 #include "services/network/public/cpp/wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
+#include "third_party/blink/public/common/global_privacy_control/global_privacy_control_util.h"
 #include "third_party/blink/public/common/loader/loader_constants.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/url_loader_throttle_provider.h"
@@ -83,7 +84,7 @@ WebServiceWorkerFetchContextImpl::WebServiceWorkerFetchContextImpl(
         pending_subresource_loader_updater,
     Vector<String> cors_exempt_header_list,
     const bool is_third_party_context)
-    : renderer_preferences_(renderer_preferences),
+    : WebServiceWorkerFetchContext(renderer_preferences),
       worker_script_url_(worker_script_url),
       pending_url_loader_factory_(std::move(pending_url_loader_factory)),
       pending_script_loader_factory_(std::move(pending_script_loader_factory)),
@@ -149,6 +150,12 @@ URLLoaderFactory* WebServiceWorkerFetchContextImpl::GetScriptLoaderFactory() {
 void WebServiceWorkerFetchContextImpl::FinalizeRequest(WebURLRequest& request) {
   if (renderer_preferences_.enable_do_not_track) {
     request.SetHttpHeaderField(WebString::FromUtf8(kDoNotTrackHeader), "1");
+  }
+  if (IsGlobalPrivacyControlFeatureAndSettingEnabled(renderer_preferences_)) {
+    request.SetHttpHeaderField(WebString::FromUtf8(kGlobalPrivacyControlHeader),
+                               "1");
+    blink::MaybeRecordGlobalPrivacyControlSourceMetric(
+        blink::GPCSignalSourceType::kWorkerSubresourceFetch);
   }
   auto url_request_extra_data = base::MakeRefCounted<WebURLRequestExtraData>();
   url_request_extra_data->set_originated_from_service_worker(true);

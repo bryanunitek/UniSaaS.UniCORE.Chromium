@@ -28,7 +28,6 @@
 #include "chrome/browser/segmentation_platform/segmentation_platform_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
@@ -57,6 +56,7 @@
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/proto/features/compose.pb.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/unified_consent/pref_names.h"
 #include "components/unified_consent/url_keyed_data_collection_consent_helper.h"
 #include "content/public/browser/browser_thread.h"
@@ -65,7 +65,6 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_user_data.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
@@ -164,9 +163,16 @@ void ChromeComposeClient::FieldChangeObserver::SetSkipSuggestionTypeForTest(
   skip_suggestion_type_for_test_ = skip_suggestion_type;
 }
 
+DEFINE_USER_DATA(ChromeComposeClient);
+
+ChromeComposeClient::ChromeComposeClient(tabs::TabInterface& tab,
+                                         content::WebContents* web_contents)
+    : ChromeComposeClient(web_contents) {
+  scoped_unowned_user_data_.emplace(tab.GetUnownedUserDataHost(), *this);
+}
+
 ChromeComposeClient::ChromeComposeClient(content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
-      content::WebContentsUserData<ChromeComposeClient>(*web_contents),
       profile_(
           Profile::FromBrowserContext(GetWebContents().GetBrowserContext())),
       nudge_tracker_(segmentation_platform::SegmentationPlatformServiceFactory::
@@ -207,6 +213,20 @@ ChromeComposeClient::~ChromeComposeClient() {
   // Let's ensure that happens before destroying anything else.
   sessions_.clear();
   debug_session_.reset();
+}
+
+// static
+ChromeComposeClient* ChromeComposeClient::From(tabs::TabInterface* tab) {
+  return tab ? Get(tab->GetUnownedUserDataHost()) : nullptr;
+}
+
+// static
+ChromeComposeClient* ChromeComposeClient::FromWebContents(
+    content::WebContents* web_contents) {
+  if (!web_contents) {
+    return nullptr;
+  }
+  return From(tabs::TabInterface::MaybeGetFromContents(web_contents));
 }
 
 void ChromeComposeClient::BindComposeDialog(
@@ -299,7 +319,7 @@ void ChromeComposeClient::ShowComposeDialog(
         GetWebContents().GetContainerBounds().OffsetFromOrigin());
 
     show_dialog_start_ = base::TimeTicks::Now();
-    DCHECK(active_compose_ids_.has_value());
+    CHECK(active_compose_ids_.has_value(), base::NotFatalUntil::M161);
     compose_dialog_controller_ = chrome::ShowComposeDialog(
         GetWebContents(), bounds_in_screen, active_compose_ids_.value());
   }
@@ -402,8 +422,7 @@ void ChromeComposeClient::OpenComposeSettings() {
 
   base::RecordAction(
       base::UserMetricsAction("Compose.SessionPaused.MSBBSettingsShown"));
-  ShowPromoInPage::Start(browser->GetBrowserForMigrationOnly(),
-                         std::move(params));
+  ShowPromoInPage::Start(browser, std::move(params));
 
   open_settings_requested_ = true;
 }
@@ -1036,5 +1055,3 @@ compose::ComposeHintMetadata ChromeComposeClient::GetComposeHintMetadata() {
 
   return compose::ComposeHintMetadata::default_instance();
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(ChromeComposeClient);

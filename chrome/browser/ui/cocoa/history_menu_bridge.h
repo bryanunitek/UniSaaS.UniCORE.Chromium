@@ -82,8 +82,6 @@ class HistoryMenuBridge : public sessions::TabRestoreServiceObserver,
     // Favicon for the URL.
     NSImage* __strong icon;
 
-    std::optional<tab_groups::TabGroupColorId> tab_group_color_id;
-
     // If the icon is being requested from the FaviconService, |icon_requested|
     // will be true and |icon_task_id| will be valid. If this is false, then
     // |icon_task_id| will be
@@ -111,7 +109,7 @@ class HistoryMenuBridge : public sessions::TabRestoreServiceObserver,
     // that this is a list of weak references. The |menu_item_map_| is the owner
     // of all items. If it is not a window, then the entry is a single page and
     // the vector will be empty.
-    std::vector<HistoryItem*> tabs;
+    std::vector<raw_ptr<HistoryItem, DanglingUntriaged>> tabs;
 
    private:
     // Copying is explicitly allowed, but assignment is not.

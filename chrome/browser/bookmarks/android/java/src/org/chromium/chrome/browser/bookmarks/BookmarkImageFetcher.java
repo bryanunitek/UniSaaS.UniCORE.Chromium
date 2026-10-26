@@ -10,6 +10,8 @@ import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.util.Pair;
 
+import org.jni_zero.JniType;
+
 import org.chromium.base.Callback;
 import org.chromium.base.CallbackController;
 import org.chromium.build.annotations.NullMarked;
@@ -22,6 +24,7 @@ import org.chromium.chrome.browser.ui.favicon.FaviconUtils;
 import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.components.bookmarks.BookmarkItem;
 import org.chromium.components.browser_ui.widget.RoundedIconGenerator;
+import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.image_fetcher.ImageFetcher;
 import org.chromium.components.power_bookmarks.PowerBookmarkMeta;
 import org.chromium.page_image_service.mojom.ClientId;
@@ -148,16 +151,17 @@ public class BookmarkImageFetcher {
         GURL faviconUrl = item.getUrl();
         int faviconDisplaySize = BookmarkViewUtils.getFaviconDisplaySize(mContext.getResources());
         FaviconHelper.FaviconImageCallback faviconCallback =
-                (image, iconUrl) -> {
-                    callback.onResult(
-                            FaviconUtils.getIconDrawableWithFilter(
-                                    image,
-                                    faviconUrl,
-                                    mRoundedIconGenerator,
-                                    mDefaultFaviconHelper,
-                                    mContext,
-                                    faviconDisplaySize));
-                };
+                (Bitmap image,
+                        @JniType("GURL")
+                        GURL _) ->
+                        callback.onResult(
+                                FaviconUtils.getIconDrawableWithFilter(
+                                        image,
+                                        faviconUrl,
+                                        mRoundedIconGenerator,
+                                        mDefaultFaviconHelper,
+                                        mContext,
+                                        faviconDisplaySize));
 
         if (item.isAccountBookmark()) {
             mFaviconHelper.getForeignFaviconImageForURL(
@@ -192,14 +196,21 @@ public class BookmarkImageFetcher {
         // when it's available because the coverage is much higher.
         PowerBookmarkMeta meta = mBookmarkModel.getPowerBookmarkMeta(item.getId());
         if (meta != null && meta.hasShoppingSpecifics() && meta.hasLeadImage()) {
-            mImageFetcher.fetchImage(
-                    ImageFetcher.Params.create(
-                            meta.getLeadImage().getUrl(),
-                            ImageFetcher.POWER_BOOKMARKS_CLIENT_NAME,
-                            imageSize,
-                            imageSize),
-                    imageCallback);
-            return;
+            // The lead image url originates from sync data, which is not trustworthy. Restrict the
+            // fetch to https urls so that a malicious peer can't make the browser process issue
+            // requests to arbitrary endpoints (e.g. on the local network).
+            GURL leadImageUrl = new GURL(meta.getLeadImage().getUrl());
+            if (leadImageUrl.isValid()
+                    && UrlConstants.HTTPS_SCHEME.equals(leadImageUrl.getScheme())) {
+                mImageFetcher.fetchImage(
+                        ImageFetcher.Params.create(
+                                leadImageUrl,
+                                ImageFetcher.POWER_BOOKMARKS_CLIENT_NAME,
+                                imageSize,
+                                imageSize),
+                        imageCallback);
+                return;
+            }
         }
 
         // This call may invoke the callback immediately if the url is cached.

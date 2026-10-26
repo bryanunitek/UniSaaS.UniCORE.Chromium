@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -46,6 +47,7 @@
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/web/web_print_page_description.h"
 #include "third_party/blink/renderer/bindings/core/v8/isolated_world_csp.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_evaluation_result.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_tester.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
@@ -65,6 +67,7 @@
 #include "third_party/blink/renderer/core/dom/document_fragment.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/dom/dom_implementation.h"
+#include "third_party/blink/renderer/core/dom/events/simulated_click_options.h"
 #include "third_party/blink/renderer/core/dom/focus_params.h"
 #include "third_party/blink/renderer/core/dom/node_with_index.h"
 #include "third_party/blink/renderer/core/dom/range.h"
@@ -74,6 +77,8 @@
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/frame/permissions_policy_violation_report_body.h"
+#include "third_party/blink/renderer/core/frame/report.h"
 #include "third_party/blink/renderer/core/frame/reporting_context.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/viewport_data.h"
@@ -85,12 +90,15 @@
 #include "third_party/blink/renderer/core/html/html_head_element.h"
 #include "third_party/blink/renderer/core/html/html_iframe_element.h"
 #include "third_party/blink/renderer/core/html/html_link_element.h"
+#include "third_party/blink/renderer/core/html/html_unknown_element.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/page_animator.h"
 #include "third_party/blink/renderer/core/page/validation_message_client.h"
+#include "third_party/blink/renderer/core/script/classic_script.h"
+#include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/core/testing/color_scheme_helper.h"
 #include "third_party/blink/renderer/core/testing/mock_policy_container_host.h"
 #include "third_party/blink/renderer/core/testing/null_execution_context.h"
@@ -459,7 +467,7 @@ TEST_F(DocumentTest, StyleVersion) {
   EXPECT_NE(previous_style_version, GetDocument().StyleVersion());
 }
 
-// This tests that meta-theme-color can be found correctly
+// This tests that meta-theme-color can be found correctly.
 TEST_F(DocumentTest, ThemeColor) {
   {
     SetHtmlInnerHTML(
@@ -512,58 +520,6 @@ TEST_F(DocumentTest, ValidationMessageCleanup) {
   EXPECT_FALSE(mock_client->show_validation_message_was_called);
 
   GetPage().SetValidationMessageClientForTesting(original_client);
-}
-
-// Verifies that calling EnsurePaintLocationDataValidForNode cleans compositor
-// inputs only when necessary. We generally want to avoid cleaning the inputs,
-// as it is more expensive than just doing layout.
-TEST_F(DocumentTest,
-       EnsurePaintLocationDataValidForNodeCompositingInputsOnlyWhenNecessary) {
-  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
-    <div id='ancestor'>
-      <div id='sticky' style='position:sticky;'>
-        <div id='stickyChild'></div>
-      </div>
-      <div id='nonSticky'></div>
-    </div>
-  )HTML");
-  GetDocument().UpdateStyleAndLayoutTree();
-  EXPECT_EQ(DocumentLifecycle::kStyleClean,
-            GetDocument().Lifecycle().GetState());
-
-  // Asking for any element that is not affected by a sticky element should only
-  // advance the lifecycle to layout clean.
-  GetDocument().EnsurePaintLocationDataValidForNode(
-      GetDocument().getElementById(AtomicString("ancestor")),
-      DocumentUpdateReason::kTest);
-  EXPECT_EQ(DocumentLifecycle::kLayoutClean,
-            GetDocument().Lifecycle().GetState());
-
-  GetDocument().EnsurePaintLocationDataValidForNode(
-      GetDocument().getElementById(AtomicString("nonSticky")),
-      DocumentUpdateReason::kTest);
-  EXPECT_EQ(DocumentLifecycle::kLayoutClean,
-            GetDocument().Lifecycle().GetState());
-
-  // However, asking for either the sticky element or it's descendents should
-  // clean compositing inputs as well.
-  GetDocument().EnsurePaintLocationDataValidForNode(
-      GetDocument().getElementById(AtomicString("sticky")),
-      DocumentUpdateReason::kTest);
-  EXPECT_EQ(DocumentLifecycle::kLayoutClean,
-            GetDocument().Lifecycle().GetState());
-
-  // Dirty layout.
-  GetDocument().body()->setAttribute(html_names::kStyleAttr,
-                                     AtomicString("background: red;"));
-  EXPECT_EQ(DocumentLifecycle::kVisualUpdatePending,
-            GetDocument().Lifecycle().GetState());
-
-  GetDocument().EnsurePaintLocationDataValidForNode(
-      GetDocument().getElementById(AtomicString("stickyChild")),
-      DocumentUpdateReason::kTest);
-  EXPECT_EQ(DocumentLifecycle::kLayoutClean,
-            GetDocument().Lifecycle().GetState());
 }
 
 // Tests that the difference in computed style of direction on the html and body
@@ -1386,11 +1342,20 @@ class MockReportingContext final : public ReportingContext {
  public:
   explicit MockReportingContext(ExecutionContext& ec) : ReportingContext(ec) {}
 
-  void QueueReport(Report* report, const Vector<String>& endpoint) override {
+  void QueueReport(Report* report, const Vector<String>& endpoints) override {
     report_count++;
+    last_report = report;
+    last_endpoints = endpoints;
+  }
+
+  void Trace(Visitor* visitor) const override {
+    visitor->Trace(last_report);
+    ReportingContext::Trace(visitor);
   }
 
   unsigned report_count = 0;
+  Member<Report> last_report;
+  Vector<String> last_endpoints;
 };
 
 }  // namespace
@@ -1683,7 +1648,7 @@ TEST_F(UnassociatedListedElementTest,
   EXPECT_EQ(0u, listed_elements.size());
 }
 
-class TopLevelFormsListTest : public DocumentTest {
+class OutermostFormsListTest : public DocumentTest {
  public:
   HTMLFormElement* GetFormElement(const char* id) {
     return DynamicTo<HTMLFormElement>(GetElementById(id));
@@ -1694,8 +1659,8 @@ class TopLevelFormsListTest : public DocumentTest {
   }
 };
 
-// Tests that `GetTopLevelForms` correctly lists forms in the light DOM.
-TEST_F(TopLevelFormsListTest, FormsInLightDom) {
+// Tests that `GetOutermostForms` correctly lists forms in the light DOM.
+TEST_F(OutermostFormsListTest, FormsInLightDom) {
   SetHtmlInnerHTML(R"HTML(
     <form id="f1">
       <input type="text">
@@ -1706,16 +1671,16 @@ TEST_F(TopLevelFormsListTest, FormsInLightDom) {
       </form>
     </div>
   )HTML");
-  EXPECT_THAT(GetDocument().GetTopLevelForms(),
+  EXPECT_THAT(GetDocument().GetOutermostForms(),
               ElementsAre(GetFormElement("f1"), GetFormElement("f2")));
   // A second call has the same result.
-  EXPECT_THAT(GetDocument().GetTopLevelForms(),
+  EXPECT_THAT(GetDocument().GetOutermostForms(),
               ElementsAre(GetFormElement("f1"), GetFormElement("f2")));
 }
 
-// Tests that `GetTopLevelForms` functions correctly after dynamic form element
+// Tests that `GetOutermostForms` functions correctly after dynamic form element
 // insertion and removal.
-TEST_F(TopLevelFormsListTest, FormsInLightDomInsertionAndRemoval) {
+TEST_F(OutermostFormsListTest, FormsInLightDomInsertionAndRemoval) {
   SetHtmlInnerHTML(R"HTML(
     <form id="f1">
       <input type="text">
@@ -1726,28 +1691,28 @@ TEST_F(TopLevelFormsListTest, FormsInLightDomInsertionAndRemoval) {
       </form>
     </div>
   )HTML");
-  EXPECT_THAT(GetDocument().GetTopLevelForms(),
+  EXPECT_THAT(GetDocument().GetOutermostForms(),
               ElementsAre(GetFormElement("f1"), GetFormElement("f2")));
 
   // Adding a new form element invalidates the cache.
   Element* new_form = CreateElement(AtomicString("form"));
   new_form->SetIdAttribute(AtomicString("f3"));
-  EXPECT_THAT(GetDocument().GetTopLevelForms(),
+  EXPECT_THAT(GetDocument().GetOutermostForms(),
               ElementsAre(GetFormElement("f1"), GetFormElement("f2")));
   GetDocument().body()->AppendChild(new_form);
-  EXPECT_THAT(GetDocument().GetTopLevelForms(),
+  EXPECT_THAT(GetDocument().GetOutermostForms(),
               ElementsAre(GetFormElement("f1"), GetFormElement("f3"),
                           GetFormElement("f2")));
 
   // Removing a form element invalidates the cache.
   GetFormElement("f2")->remove();
-  EXPECT_THAT(GetDocument().GetTopLevelForms(),
+  EXPECT_THAT(GetDocument().GetOutermostForms(),
               ElementsAre(GetFormElement("f1"), GetFormElement("f3")));
 }
 
-// Tests that top level forms inside shadow DOM are listed correctly and
+// Tests that outermost forms inside shadow DOM are listed correctly and
 // insertion and removal updates the cache.
-TEST_F(TopLevelFormsListTest, FormsInShadowDomInsertionAndRemoval) {
+TEST_F(OutermostFormsListTest, FormsInShadowDomInsertionAndRemoval) {
   GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
     <form id="f1">
       <input type="text">
@@ -1762,20 +1727,20 @@ TEST_F(TopLevelFormsListTest, FormsInShadowDomInsertionAndRemoval) {
   )HTML");
   HTMLFormElement* f2 =
       GetFormElement("f2", *GetElementById("d")->GetShadowRoot());
-  EXPECT_THAT(GetDocument().GetTopLevelForms(),
+  EXPECT_THAT(GetDocument().GetOutermostForms(),
               ElementsAre(GetFormElement("f1"), f2));
 
   // Removing f1 updates the cache.
   GetFormElement("f1")->remove();
-  EXPECT_THAT(GetDocument().GetTopLevelForms(), ElementsAre(f2));
+  EXPECT_THAT(GetDocument().GetOutermostForms(), ElementsAre(f2));
 
   // Removing f2 also updates the cache.
   f2->remove();
-  EXPECT_THAT(GetDocument().GetTopLevelForms(), IsEmpty());
+  EXPECT_THAT(GetDocument().GetOutermostForms(), IsEmpty());
 }
 
-// Tests that nested forms across shadow DOM are ignored by `GetTopLevelForms`.
-TEST_F(TopLevelFormsListTest, GetTopLevelFormsIgnoresNestedChildren) {
+// Tests that nested forms across shadow DOM are ignored by `GetOutermostForms`.
+TEST_F(OutermostFormsListTest, GetOutermostFormsIgnoresNestedChildren) {
   GetDocument().body()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
     <form id="f1">
       <input type="text">
@@ -1788,7 +1753,7 @@ TEST_F(TopLevelFormsListTest, GetTopLevelFormsIgnoresNestedChildren) {
       </div>
     </form>
   )HTML");
-  EXPECT_THAT(GetDocument().GetTopLevelForms(),
+  EXPECT_THAT(GetDocument().GetOutermostForms(),
               ElementsAre(GetFormElement("f1")));
 }
 
@@ -1837,7 +1802,8 @@ class DocumentURLCacheTest : public DocumentTest {
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
-  Document::URLCache* cache_ = nullptr;
+  raw_ptr<Document::URLCache, UnprotectedInRelease | DanglingUntriaged> cache_ =
+      nullptr;
 };
 
 TEST_F(DocumentURLCacheTest, Get) {
@@ -1980,7 +1946,7 @@ TEST_F(DocumentTest,
   )HTML");
   Document& document = GetDocument();
 
-  document.GetTopLevelForms();
+  document.GetOutermostForms();
 
   EXPECT_TRUE(document.IsUseCounted(
       blink::mojom::WebFeature::kAutofillMaybeSyntheticSelect));
@@ -1999,7 +1965,7 @@ TEST_F(DocumentTest,
   )HTML");
   Document& document = GetDocument();
 
-  document.GetTopLevelForms();
+  document.GetOutermostForms();
 
   EXPECT_FALSE(document.IsUseCounted(
       blink::mojom::WebFeature::kAutofillMaybeSyntheticSelect));
@@ -2026,7 +1992,7 @@ TEST_P(ParametrizedSyntheticSelectTest, MetricsAreReported_WhenSelectIsInForm) {
   SetHtmlInnerHTML(html);
   Document& document = GetDocument();
 
-  document.GetTopLevelForms();
+  document.GetOutermostForms();
 
   EXPECT_EQ(document.IsUseCounted(
                 blink::mojom::WebFeature::kAutofillMaybeSyntheticSelect),
@@ -2042,7 +2008,7 @@ TEST_P(ParametrizedSyntheticSelectTest,
   SetHtmlInnerHTML(test_case.html);
   Document& document = GetDocument();
 
-  document.GetTopLevelForms();
+  document.GetOutermostForms();
 
   EXPECT_FALSE(document.IsUseCounted(
       blink::mojom::WebFeature::kAutofillMaybeSyntheticSelect));
@@ -2348,6 +2314,16 @@ class DocumentFocusUseCounterTest : public DocumentSimTest {
   }
 
   Document* ChildDocument() { return ChildFrame()->GetDocument(); }
+
+  Element* AddLabel() {
+    Element* container = GetDocument().CreateRawElement(html_names::kDivTag);
+    container->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+      <input id="label-target">
+      <label id="label" for="label-target">Label</label>
+    )HTML");
+    GetDocument().body()->AppendChild(container);
+    return GetElementById("label");
+  }
 };
 
 TEST_F(DocumentFocusUseCounterTest, Blocked) {
@@ -2426,6 +2402,73 @@ TEST_F(DocumentFocusUseCounterTest, NotFiredWithFeatureDisabled) {
       WebFeature::kFocusWithoutUserActivationBlocked));
 }
 
+TEST_F(DocumentFocusUseCounterTest, LabelFocusUsesInitiator) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(true);
+  SetUpChildFrame("focus-without-user-activation 'none'");
+  Element* label = AddLabel();
+  ASSERT_TRUE(label);
+  ASSERT_FALSE(GetDocument().FocusedElement());
+
+  FocusParams params;
+  params.initiator_frame = ChildFrame();
+  label->Focus(params);
+  EXPECT_FALSE(GetDocument().FocusedElement());
+}
+
+TEST_F(DocumentFocusUseCounterTest, LabelFocusAllowedWithFeatureDisabled) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(false);
+  SetUpChildFrame("focus-without-user-activation 'none'");
+  Element* label = AddLabel();
+  ASSERT_TRUE(label);
+  Element* target = GetElementById("label-target");
+  ASSERT_TRUE(target);
+  ASSERT_FALSE(GetDocument().FocusedElement());
+
+  FocusParams params;
+  params.initiator_frame = ChildFrame();
+  label->Focus(params);
+  EXPECT_EQ(target, GetDocument().FocusedElement());
+}
+
+TEST_F(DocumentFocusUseCounterTest, LabelClickAllowedWithFeatureDisabled) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(false);
+  SetUpChildFrame("focus-without-user-activation 'none'");
+  ASSERT_TRUE(AddLabel());
+  Element* target = GetElementById("label-target");
+  ASSERT_TRUE(target);
+  ASSERT_FALSE(GetDocument().FocusedElement());
+
+  ChildFrame()->GetSettings()->SetScriptEnabled(true);
+  v8::HandleScope handle_scope(ChildFrame()->DomWindow()->GetIsolate());
+  ASSERT_EQ(ScriptEvaluationResult::ResultType::kSuccess,
+            ClassicScript::CreateUnspecifiedScript(
+                "parent.document.getElementById('label').click()")
+                ->RunScriptAndReturnValue(ChildFrame()->DomWindow())
+                .GetResultType());
+
+  EXPECT_EQ(target, GetDocument().FocusedElement());
+}
+
+TEST_F(DocumentFocusUseCounterTest,
+       TrustedLabelActivationIgnoresScriptContext) {
+  ScopedBlockingFocusWithoutUserActivationForTest feature(true);
+  SetUpChildFrame("focus-without-user-activation 'none'");
+  Element* label = AddLabel();
+  ASSERT_TRUE(label);
+  Element* target = GetElementById("label-target");
+  ASSERT_TRUE(target);
+
+  ScriptState::Scope script_scope(ToScriptStateForMainWorld(ChildFrame()));
+  for (auto creation_scope :
+       {SimulatedClickCreationScope::kFromUserAgent,
+        SimulatedClickCreationScope::kFromAccessibility}) {
+    GetDocument().ClearFocusedElement();
+    ASSERT_FALSE(GetDocument().FocusedElement());
+    label->DispatchSimulatedClick(nullptr, creation_scope);
+    EXPECT_EQ(target, GetDocument().FocusedElement());
+  }
+}
+
 TEST_F(DocumentFocusUseCounterTest, PolicySetViaAllow) {
   ScopedBlockingFocusWithoutUserActivationForTest feature(true);
   SetUpChildFrame("focus-without-user-activation 'none'");
@@ -2494,6 +2537,7 @@ TEST_F(DocumentFocusUseCounterTest,
 
   EXPECT_TRUE(GetDocument().IsUseCounted(
       WebFeature::kFocusWithoutUserActivationBlocked));
+  EXPECT_THAT(ConsoleMessages(), IsEmpty());
 }
 
 // Regression coverage for the activated-target variant of crbug.com/513330788:
@@ -2520,6 +2564,206 @@ TEST_F(DocumentFocusUseCounterTest,
 
   EXPECT_TRUE(GetDocument().IsUseCounted(
       WebFeature::kFocusWithoutUserActivationBlocked));
+}
+
+class DocumentFocusReportingTest : public DocumentFocusUseCounterTest,
+                                   public testing::WithParamInterface<bool> {
+ protected:
+  void SetUp() override {
+    DocumentFocusUseCounterTest::SetUp();
+    SetUpChildFrameWithHeader(
+        nullptr,
+        IsReportOnly()
+            ? nullptr
+            : "focus-without-user-activation=();report-to=enforcing-endpoint",
+        "focus-without-user-activation=();report-to=report-only-endpoint");
+  }
+
+  bool IsReportOnly() const { return GetParam(); }
+
+  MockReportingContext* CaptureReports(LocalFrame& frame) {
+    auto* window = frame.DomWindow();
+    auto* reporting_context =
+        MakeGarbageCollected<MockReportingContext>(*window);
+    Supplement<ExecutionContext>::ProvideTo(*window, reporting_context);
+    return reporting_context;
+  }
+
+ private:
+  ScopedBlockingFocusWithoutUserActivationForTest feature_{true};
+};
+
+TEST_P(DocumentFocusReportingTest, ReportsViolationOnInitiator) {
+  auto* initiator_reports = CaptureReports(*ChildFrame());
+  auto* target_reports = CaptureReports(*GetDocument().GetFrame());
+
+  EXPECT_EQ(IsReportOnly(),
+            GetDocument().IsFocusAllowed(FocusTrigger::kScript, *ChildFrame()));
+
+  EXPECT_EQ(initiator_reports->report_count, 1u);
+  EXPECT_EQ(target_reports->report_count, 0u);
+  ASSERT_TRUE(initiator_reports->last_report);
+  EXPECT_EQ(initiator_reports->last_report->url(),
+            ChildDocument()->Url().GetString());
+  ASSERT_EQ(initiator_reports->last_report->type(),
+            ReportType::kPermissionsPolicyViolation);
+  const auto* body = static_cast<PermissionsPolicyViolationReportBody*>(
+      initiator_reports->last_report->body());
+  EXPECT_EQ(body->featureId(), "focus-without-user-activation");
+  EXPECT_EQ(body->disposition(), IsReportOnly() ? "report" : "enforce");
+  EXPECT_THAT(initiator_reports->last_endpoints,
+              ElementsAre(IsReportOnly() ? "report-only-endpoint"
+                                         : "enforcing-endpoint"));
+}
+
+TEST_P(DocumentFocusReportingTest, FocusedFrameDoesNotReport) {
+  auto* reports = CaptureReports(*ChildFrame());
+  ChildDocument()->GetPage()->GetFocusController().SetFocusedFrame(
+      ChildFrame());
+
+  EXPECT_TRUE(
+      ChildDocument()->IsFocusAllowed(FocusTrigger::kScript, *ChildFrame()));
+
+  EXPECT_EQ(reports->report_count, 0u);
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByPolicy));
+  EXPECT_TRUE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByDescendant));
+}
+
+TEST_P(DocumentFocusReportingTest, FocusedDescendantDoesNotReport) {
+  ChildDocument()->body()->SetInnerHTMLWithoutTrustedTypes("<iframe></iframe>");
+  auto* descendant = To<LocalFrame>(ChildFrame()->FirstChild());
+  ASSERT_TRUE(descendant);
+  auto* reports = CaptureReports(*ChildFrame());
+  ChildDocument()->GetPage()->GetFocusController().SetFocusedFrame(descendant);
+
+  EXPECT_TRUE(
+      ChildDocument()->IsFocusAllowed(FocusTrigger::kScript, *ChildFrame()));
+
+  EXPECT_EQ(reports->report_count, 0u);
+  EXPECT_FALSE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByPolicy));
+  EXPECT_TRUE(ChildDocument()->IsUseCounted(
+      WebFeature::kFocusWithoutUserActivationAllowedByDescendant));
+}
+
+TEST_P(DocumentFocusReportingTest, UserActivationDoesNotReport) {
+  auto* reports = CaptureReports(*ChildFrame());
+  LocalFrame::NotifyUserActivation(
+      ChildFrame(), mojom::blink::UserActivationNotificationType::kTest);
+  ASSERT_TRUE(LocalFrame::HasTransientUserActivation(ChildFrame()));
+
+  EXPECT_TRUE(
+      ChildDocument()->IsFocusAllowed(FocusTrigger::kScript, *ChildFrame()));
+
+  EXPECT_EQ(reports->report_count, 0u);
+}
+
+TEST_P(DocumentFocusReportingTest, UserGestureDoesNotReport) {
+  auto* reports = CaptureReports(*ChildFrame());
+
+  EXPECT_TRUE(ChildDocument()->IsFocusAllowed(FocusTrigger::kUserGesture,
+                                              *ChildFrame()));
+
+  EXPECT_EQ(reports->report_count, 0u);
+}
+
+TEST_P(DocumentFocusReportingTest, DisabledFeatureDoesNotReport) {
+  ScopedBlockingFocusWithoutUserActivationForTest disabled(false);
+  auto* reports = CaptureReports(*ChildFrame());
+
+  EXPECT_TRUE(
+      ChildDocument()->IsFocusAllowed(FocusTrigger::kScript, *ChildFrame()));
+
+  EXPECT_EQ(reports->report_count, 0u);
+}
+
+INSTANTIATE_TEST_SUITE_P(All, DocumentFocusReportingTest, testing::Bool());
+
+TEST_F(DocumentTest, CreateElementFastPath) {
+  // 1. Standard HTML elements hit the fast path in CreateElementForBinding.
+  {
+    DummyExceptionStateForTesting exception_state;
+    Element* div = GetDocument().CreateElementForBinding(AtomicString("div"),
+                                                         exception_state);
+    EXPECT_FALSE(exception_state.HadException());
+    ASSERT_TRUE(div);
+    EXPECT_TRUE(IsA<HTMLDivElement>(div));
+    EXPECT_EQ(div->tagName(), "DIV");
+    EXPECT_EQ(div->namespaceURI(), html_names::xhtmlNamespaceURI);
+    EXPECT_EQ(div->prefix(), g_null_atom);
+  }
+
+  // 2. Uppercase names fall through to the slow path, convert to lowercase,
+  // and construct the same element type.
+  {
+    DummyExceptionStateForTesting exception_state;
+    Element* div_upper = GetDocument().CreateElementForBinding(
+        AtomicString("DIV"), exception_state);
+    EXPECT_FALSE(exception_state.HadException());
+    ASSERT_TRUE(div_upper);
+    EXPECT_TRUE(IsA<HTMLDivElement>(div_upper));
+    EXPECT_EQ(div_upper->tagName(), "DIV");
+  }
+
+  // 3. Invalid tag names fail validation in the slow path and throw.
+  {
+    DummyExceptionStateForTesting exception_state;
+    Element* invalid_element = GetDocument().CreateElementForBinding(
+        AtomicString("123 invalid"), exception_state);
+    EXPECT_TRUE(exception_state.HadException());
+    EXPECT_EQ(exception_state.CodeAs<DOMExceptionCode>(),
+              DOMExceptionCode::kInvalidCharacterError);
+    EXPECT_FALSE(invalid_element);
+  }
+
+  // 4. createElementNS fast path: prefix-less SVG elements in SVG namespace.
+  {
+    DummyExceptionStateForTesting exception_state;
+    Element* svg_path = GetDocument().createElementNS(
+        svg_names::kNamespaceURI, AtomicString("path"), exception_state);
+    EXPECT_FALSE(exception_state.HadException());
+    ASSERT_TRUE(svg_path);
+    EXPECT_EQ(svg_path->namespaceURI(), svg_names::kNamespaceURI);
+    EXPECT_EQ(svg_path->prefix(), g_null_atom);
+    EXPECT_EQ(svg_path->localName(), "path");
+  }
+
+  // 5. createElementNS slow path: prefixed SVG elements fall through to
+  // CreateQualifiedName and properly preserve the prefix.
+  {
+    DummyExceptionStateForTesting exception_state;
+    Element* svg_prefixed = GetDocument().createElementNS(
+        svg_names::kNamespaceURI, AtomicString("svg:path"), exception_state);
+    EXPECT_FALSE(exception_state.HadException());
+    ASSERT_TRUE(svg_prefixed);
+    EXPECT_EQ(svg_prefixed->namespaceURI(), svg_names::kNamespaceURI);
+    EXPECT_EQ(svg_prefixed->prefix(), "svg");
+    EXPECT_EQ(svg_prefixed->localName(), "path");
+  }
+
+  // 6. createElementNS slow path: uppercase HTML in XHTML namespace returns
+  // HTMLUnknownElement because createElementNS is case-sensitive.
+  {
+    DummyExceptionStateForTesting exception_state;
+    Element* html_upper = GetDocument().createElementNS(
+        html_names::xhtmlNamespaceURI, AtomicString("DIV"), exception_state);
+    EXPECT_FALSE(exception_state.HadException());
+    ASSERT_TRUE(html_upper);
+    EXPECT_TRUE(IsA<HTMLUnknownElement>(html_upper));
+  }
+
+  // 7. createElementNS invalid qualified name throws.
+  {
+    DummyExceptionStateForTesting exception_state;
+    Element* invalid_ns = GetDocument().createElementNS(
+        svg_names::kNamespaceURI, AtomicString("123 invalid"), exception_state);
+    EXPECT_TRUE(exception_state.HadException());
+    EXPECT_EQ(exception_state.CodeAs<DOMExceptionCode>(),
+              DOMExceptionCode::kInvalidCharacterError);
+    EXPECT_FALSE(invalid_ns);
+  }
 }
 
 }  // namespace blink

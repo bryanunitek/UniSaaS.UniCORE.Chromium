@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 #include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/buildflag.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/extensions/extension_settings_test_base.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/webui_url_constants.h"
@@ -64,16 +66,10 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsTest, HostPermissionsToggleList) {
   RunTest("extensions/host_permissions_toggle_list_test.js", "mocha.run()");
 }
 
-#if BUILDFLAG(IS_MAC)
-#define MAYBE(test) DISABLED_##test
-#else
-#define MAYBE(test) test
-#endif
-
 // V2 is not supported on desktop android, so tests are disabled.
 #if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(CrExtensionsTest,
-                       MAYBE(ExtensionsMV2DeprecationPanelUnsupportedStage)) {
+                       ExtensionsMV2DeprecationPanelUnsupportedStage) {
   RunTest("extensions/mv2_deprecation_panel_unsupported_test.js",
           "mocha.run()");
 }
@@ -128,6 +124,10 @@ class CrExtensionsSidebarTest : public ExtensionsBrowserTest {
                            testCase.c_str()));
   }
 };
+
+IN_PROC_BROWSER_TEST_F(CrExtensionsSidebarTest, DeveloperPromo) {
+  RunTestCase("DeveloperPromo");
+}
 
 IN_PROC_BROWSER_TEST_F(CrExtensionsSidebarTest, HrefVerification) {
   RunTestCase("HrefVerification");
@@ -210,6 +210,10 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsItemsTest, FailedReloadFiresLoadError) {
   RunTestCase("FailedReloadFiresLoadError");
 }
 
+IN_PROC_BROWSER_TEST_F(CrExtensionsItemsTest, Description) {
+  RunTestCase("Description");
+}
+
 IN_PROC_BROWSER_TEST_F(CrExtensionsItemsTest, Warnings) {
   RunTestCase("Warnings");
 }
@@ -217,6 +221,11 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsItemsTest, Warnings) {
 IN_PROC_BROWSER_TEST_F(CrExtensionsItemsTest,
                        UnsupportedDeveloperExtensionWarning) {
   RunTestCase("UnsupportedDeveloperExtensionWarning");
+}
+
+IN_PROC_BROWSER_TEST_F(CrExtensionsItemsTest,
+                       DisabledByAnotherExtensionWarning) {
+  RunTestCase("DisabledByAnotherExtensionWarning");
 }
 
 IN_PROC_BROWSER_TEST_F(CrExtensionsItemsTest, SourceIndicator) {
@@ -254,6 +263,10 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsItemsTest, CanUploadAsAccountExtension) {
 
 IN_PROC_BROWSER_TEST_F(CrExtensionsItemsTest, ShowErrorAsWarningsButtonLabel) {
   RunTestCase("ShowErrorAsWarningsButtonLabel");
+}
+
+IN_PROC_BROWSER_TEST_F(CrExtensionsItemsTest, RateExtensionLinkVisibility) {
+  RunTestCase("RateExtensionLinkVisibility");
 }
 
 class CrExtensionsDetailViewTest : public ExtensionsBrowserTest {
@@ -362,10 +375,25 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest, UserScripts) {
   RunTestCase("UserScripts");
 }
 
+IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest,
+                       RateExtensionLinkVisibility) {
+  RunTestCase("RateExtensionLinkVisibility");
+}
+
+IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest, RateExtensionLinkClick) {
+  RunTestCase("RateExtensionLinkClick");
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Extension Item List Tests
 
 class CrExtensionsItemListTest : public ExtensionsBrowserTest {
+ public:
+  CrExtensionsItemListTest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kExtensionsPinnedByDefault);
+  }
+
  protected:
   void RunTestCase(const std::string& testCase) {
     ExtensionsBrowserTest::RunTest(
@@ -373,6 +401,9 @@ class CrExtensionsItemListTest : public ExtensionsBrowserTest {
         base::StringPrintf("runMochaTest('ExtensionItemListTest', '%s');",
                            testCase.c_str()));
   }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest, Filtering) {
@@ -667,6 +698,11 @@ class CrExtensionsServiceUnitTest : public ExtensionsBrowserTest {
 IN_PROC_BROWSER_TEST_F(CrExtensionsServiceUnitTest,
                        CallingSetEnabledDoesNotGenerateARuntimeError) {
   RunTestCase("Calling setEnabled() does not cause a runtime error");
+}
+
+IN_PROC_BROWSER_TEST_F(CrExtensionsServiceUnitTest,
+                       CallingOpenReviewPageDoesNotGenerateARuntimeError) {
+  RunTestCase("Calling openReviewPage() does not cause a runtime error");
 }
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -18,12 +18,12 @@
 #include "gpu/config/gpu_feature_info.h"
 #include "gpu/config/gpu_info.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "mojo/public/cpp/bindings/shared_remote.h"
-#include "services/viz/privileged/mojom/gl/gpu_host.mojom.h"
 #include "services/webnn/buildflags.h"
 #include "services/webnn/public/cpp/webnn_trace.h"
+#include "services/webnn/public/mojom/webnn_browser_host.mojom.h"
 #include "services/webnn/public/mojom/webnn_compiler_context.mojom.h"
 #include "services/webnn/public/mojom/webnn_context.mojom.h"
 #include "services/webnn/public/mojom/webnn_context_provider.mojom.h"
@@ -33,6 +33,10 @@
 #if BUILDFLAG(IS_WIN)
 #include "base/types/expected.h"
 #include "services/webnn/public/cpp/ep_device_info.h"
+#endif
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
+#include "services/webnn/public/mojom/webnn_model_loader.mojom.h"
 #endif
 
 namespace gpu {
@@ -45,7 +49,6 @@ class GpuTaskScheduler;
 
 #if BUILDFLAG(IS_WIN)
 namespace ort {
-class DispatchContextImplOrt;
 class Environment;
 }
 #endif
@@ -74,7 +77,7 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextProviderImpl
       LoseAllContextsCallback lose_all_contexts_callback,
       scoped_refptr<base::SingleThreadTaskRunner> main_thread_task_runner,
       gpu::Scheduler* scheduler,
-      mojo::SharedRemote<viz::mojom::GpuHost> gpu_host);
+      mojo::PendingRemote<mojom::WebNNBrowserHost> webnn_browser_host);
 
   struct WebNNReceiversParams {
     // Indicates whether the provider is operating in incognito mode.
@@ -92,9 +95,14 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextProviderImpl
   void SetDisconnectHandlerForTesting(base::RepeatingClosure handler);
 
   size_t GetContextCountForTesting() const;
+  std::vector<std::string_view> GetContextBackendNamesForTesting() const;
 
   void BindWebNNServiceIntrospection(
       mojo::PendingReceiver<mojom::WebNNServiceIntrospection> receiver);
+
+  mojo::Remote<mojom::WebNNBrowserHost>& webnn_browser_host() {
+    return webnn_browser_host_;
+  }
 
   enum class WebNNStatus {
     kWebNNGpuDisabled = 0,
@@ -138,17 +146,19 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextProviderImpl
 
   void CreateWeightsFile(base::OnceCallback<void(base::File)> callback);
 
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
   // Called when a renderer requests a new CompilerContext for an existing
   // context (e.g. after a Compiler process crash or idle shutdown).
   void ReconnectCompilerContext(
       mojom::CreateContextOptionsPtr options,
       ContextProperties properties,
+#if BUILDFLAG(IS_WIN)
       EpDeviceInfo target_device,
+#endif
       mojo::PendingReceiver<mojom::WebNNCompilerContext>
           compiler_context_receiver,
       mojo::PendingRemote<mojom::WebNNModelLoader> model_loader_remote);
-#endif  // BUILDFLAG(IS_WIN)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
 
   static void SetBackendForTesting(BackendForTesting* backend_for_testing);
   static bool HasBackendForTesting();
@@ -162,7 +172,7 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextProviderImpl
       LoseAllContextsCallback lose_all_contexts_callback,
       scoped_refptr<base::SingleThreadTaskRunner> main_thread_task_runner,
       gpu::Scheduler* scheduler,
-      mojo::SharedRemote<viz::mojom::GpuHost> gpu_host);
+      mojo::PendingRemote<mojom::WebNNBrowserHost> webnn_browser_host);
 
   // mojom::WebNNContextProvider
   void CreateWebNNContext(mojom::CreateContextOptionsPtr options,
@@ -192,55 +202,30 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextProviderImpl
   // This associates the context with this provider on the specified sequence.
   void OnCreateWebNNContextImpl(
       CreateWebNNContextCallback callback,
-      mojo::PendingRemote<::webnn::mojom::WebNNContext> remote,
+      mojo::PendingRemote<mojom::WebNNContext> remote,
       mojo::ScopedDataPipeProducerHandle write_tensor_producer,
       mojo::ScopedDataPipeConsumerHandle read_tensor_consumer,
       gpu::SequenceId sequence_id,
       gpu::CommandBufferId command_buffer_id,
+      mojo::PendingRemote<mojom::WebNNCompilerContext> compiler_context_remote,
       WebNNContextImplPtr context_impl);
 
-#if BUILDFLAG(IS_WIN)
-  // Called when a DispatchContextImplOrt is created with the Compiler process
-  // enabled. Launches the compiler and requests a CompilerContext before
-  // completing context creation.
-  void OnDispatchContextCreated(
-      CreateWebNNContextCallback callback,
-      mojo::PendingRemote<mojom::WebNNContext> remote,
-      mojo::ScopedDataPipeProducerHandle write_tensor_producer,
-      mojo::ScopedDataPipeConsumerHandle read_tensor_consumer,
-      gpu::SequenceId sequence_id,
-      WebNNContextImplPtr context_impl);
-#endif  // BUILDFLAG(IS_WIN)
-
-#if BUILDFLAG(WEBNN_USE_TFLITE)
-  void CreateTFLiteContext(
-      ScopedTrace scoped_trace,
-      mojom::CreateContextOptionsPtr options,
-      mojo::ScopedDataPipeProducerHandle write_tensor_producer,
-      mojo::ScopedDataPipeConsumerHandle write_tensor_consumer,
-      mojo::ScopedDataPipeProducerHandle read_tensor_producer,
-      mojo::ScopedDataPipeConsumerHandle read_tensor_consumer,
-      std::unique_ptr<GpuTaskScheduler> gpu_task_scheduler,
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-      mojo::PendingReceiver<mojom::WebNNContext> receiver,
-      mojo::PendingRemote<mojom::WebNNContext> remote,
-      CreateWebNNContextCallback callback,
-      bool is_incognito,
-      scoped_refptr<gpu::MemoryTracker> memory_tracker);
-#endif  // BUILDFLAG(WEBNN_USE_TFLITE)
+  void FallbackToTFLite(ScopedTrace scoped_trace,
+                        mojom::CreateContextOptionsPtr options,
+                        std::unique_ptr<GpuTaskScheduler> gpu_task_scheduler,
+                        scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+                        CreateWebNNContextCallback callback,
+                        bool is_incognito,
+                        scoped_refptr<gpu::MemoryTracker> memory_tracker,
+                        gpu::SequenceId sequence_id,
+                        gpu::CommandBufferId command_buffer_id);
 
 #if BUILDFLAG(WEBNN_USE_LITERT)
   void CreateLiteRtContext(
       ScopedTrace scoped_trace,
       mojom::CreateContextOptionsPtr options,
-      mojo::ScopedDataPipeProducerHandle write_tensor_producer,
-      mojo::ScopedDataPipeConsumerHandle write_tensor_consumer,
-      mojo::ScopedDataPipeProducerHandle read_tensor_producer,
-      mojo::ScopedDataPipeConsumerHandle read_tensor_consumer,
       std::unique_ptr<GpuTaskScheduler> gpu_task_scheduler,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-      mojo::PendingReceiver<mojom::WebNNContext> receiver,
-      mojo::PendingRemote<mojom::WebNNContext> remote,
       CreateWebNNContextCallback callback,
       bool is_incognito,
       scoped_refptr<gpu::MemoryTracker> memory_tracker);
@@ -249,31 +234,46 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextProviderImpl
 #if BUILDFLAG(IS_WIN)
   void OnOrtEnvCreated(ScopedTrace scoped_trace,
                        mojom::CreateContextOptionsPtr options,
-                       mojo::ScopedDataPipeProducerHandle write_tensor_producer,
-                       mojo::ScopedDataPipeConsumerHandle write_tensor_consumer,
-                       mojo::ScopedDataPipeProducerHandle read_tensor_producer,
-                       mojo::ScopedDataPipeConsumerHandle read_tensor_consumer,
                        std::unique_ptr<GpuTaskScheduler> gpu_task_scheduler,
                        scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-                       mojo::PendingReceiver<mojom::WebNNContext> receiver,
-                       mojo::PendingRemote<mojom::WebNNContext> remote,
                        CreateWebNNContextCallback callback,
                        bool is_incognito,
                        scoped_refptr<gpu::MemoryTracker> memory_tracker,
                        base::expected<scoped_refptr<ort::Environment>,
                                       std::string> env_creation_results);
 
+  void OnCompilerContextRequested(
+      ScopedTrace scoped_trace,
+      mojom::CreateContextOptionsPtr options,
+      std::unique_ptr<GpuTaskScheduler> gpu_task_scheduler,
+      scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+      CreateWebNNContextCallback callback,
+      bool is_incognito,
+      scoped_refptr<gpu::MemoryTracker> memory_tracker,
+      scoped_refptr<ort::Environment> env,
+      EpDeviceInfo target_device,
+      mojo::PendingRemote<mojom::WebNNCompilerContext> compiler_context_remote,
+      mojo::PendingReceiver<mojom::WebNNModelLoader> model_loader_receiver,
+      gpu::SequenceId sequence_id,
+      gpu::CommandBufferId command_buffer_id,
+      bool success);
+
+  void OnDispatchContextCreated(
+      ScopedTrace scoped_trace,
+      CreateWebNNContextCallback callback,
+      mojo::PendingRemote<mojom::WebNNContext> remote,
+      mojo::ScopedDataPipeProducerHandle write_tensor_producer,
+      mojo::ScopedDataPipeConsumerHandle read_tensor_consumer,
+      gpu::SequenceId sequence_id,
+      gpu::CommandBufferId command_buffer_id,
+      mojo::PendingRemote<mojom::WebNNCompilerContext> compiler_context_remote,
+      WebNNContextImplPtr context_impl);
+
   void DidEnsureWebNNExecutionProvidersReady(
       ScopedTrace scoped_trace,
       mojom::CreateContextOptionsPtr options,
-      mojo::ScopedDataPipeProducerHandle write_tensor_producer,
-      mojo::ScopedDataPipeConsumerHandle write_tensor_consumer,
-      mojo::ScopedDataPipeProducerHandle read_tensor_producer,
-      mojo::ScopedDataPipeConsumerHandle read_tensor_consumer,
       std::unique_ptr<GpuTaskScheduler> gpu_task_scheduler,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-      mojo::PendingReceiver<mojom::WebNNContext> receiver,
-      mojo::PendingRemote<mojom::WebNNContext> remote,
       CreateWebNNContextCallback callback,
       bool is_incognito,
       scoped_refptr<gpu::MemoryTracker> memory_tracker,
@@ -292,6 +292,22 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextProviderImpl
   void ForceOrtEnvironmentCreationForIntrospection(
       ForceOrtEnvironmentCreationForIntrospectionCallback callback) override;
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_APPLE)
+  void OnCoreMLCompilerContextRequested(
+      ScopedTrace scoped_trace,
+      mojom::CreateContextOptionsPtr options,
+      std::unique_ptr<GpuTaskScheduler> gpu_task_scheduler,
+      scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+      CreateWebNNContextCallback callback,
+      bool is_incognito,
+      scoped_refptr<gpu::MemoryTracker> memory_tracker,
+      gpu::SequenceId sequence_id,
+      gpu::CommandBufferId command_buffer_id,
+      mojo::PendingRemote<mojom::WebNNCompilerContext> compiler_context_remote,
+      mojo::PendingReceiver<mojom::WebNNModelLoader> model_loader_receiver,
+      bool success) API_AVAILABLE(macos(14.4));
+#endif  // BUILDFLAG(IS_APPLE)
 
   const gpu::GpuFeatureInfo gpu_feature_info_;
   const gpu::GPUInfo gpu_info_;
@@ -351,7 +367,10 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextProviderImpl
 
   const scoped_refptr<gpu::MemoryTracker::Observer> peak_memory_monitor_;
 
-  mojo::SharedRemote<viz::mojom::GpuHost> gpu_host_;
+  // Interface to the browser process for WebNN operations brokered by the
+  // browser (see webnn::mojom::WebNNBrowserHost). Bound on the main sequence
+  // and only used from it, so a plain Remote suffices.
+  mojo::Remote<mojom::WebNNBrowserHost> webnn_browser_host_;
 
   // SequenceChecker for WebNNContextProviderImpl. It attaches to the sequence
   // on which this object is constructed. All message dispatches and any access

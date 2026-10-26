@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/win/scoped_bstr.h"
@@ -159,6 +161,42 @@ TEST_F(ViewAXPlatformNodeDelegateWinTest, TextfieldAccessibility) {
   ASSERT_EQ(S_OK,
             textfield_accessible->put_accValue(childid_self, new_value.Get()));
   EXPECT_EQ(u"New value", textfield->GetText());
+}
+
+TEST_F(ViewAXPlatformNodeDelegateWinTest,
+       TextfieldCharacterNavigationIgnoresAnnotations) {
+  auto widget = std::make_unique<Widget>();
+  Widget::InitParams init_params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_POPUP);
+  widget->Init(std::move(init_params));
+
+  View* content = widget->SetContentsView(std::make_unique<View>());
+  Textfield* textfield = content->AddChildView(std::make_unique<Textfield>());
+  textfield->SetText(u"hello world");
+
+  ComPtr<IRawElementProviderSimple> textfield_provider =
+      GetIRawElementProviderSimple(textfield);
+  ComPtr<ITextProvider> text_provider;
+  ASSERT_HRESULT_SUCCEEDED(textfield_provider->GetPatternProvider(
+      UIA_TextPatternId, &text_provider));
+
+  ComPtr<ITextRangeProvider> text_range_provider;
+  ASSERT_HRESULT_SUCCEEDED(
+      text_provider->get_DocumentRange(&text_range_provider));
+
+  ScopedVariant annotation_types;
+  ASSERT_HRESULT_SUCCEEDED(text_range_provider->GetAttributeValue(
+      UIA_AnnotationTypesAttributeId, annotation_types.Receive()));
+  EXPECT_EQ(VT_EMPTY, annotation_types.type());
+
+  int units_moved = 0;
+  ASSERT_HRESULT_SUCCEEDED(text_range_provider->MoveEndpointByUnit(
+      TextPatternRangeEndpoint_End, TextUnit_Character, -10, &units_moved));
+  EXPECT_EQ(-10, units_moved);
+
+  ScopedBstr text;
+  ASSERT_HRESULT_SUCCEEDED(text_range_provider->GetText(-1, text.Receive()));
+  EXPECT_STREQ(L"h", text.Get());
 }
 
 TEST_F(ViewAXPlatformNodeDelegateWinTest, TextfieldAssociatedLabel) {
@@ -607,9 +645,9 @@ class TestTableModel : public ui::TableModel {
   TestTableModel& operator=(const TestTableModel&) = delete;
 
   // ui::TableModel:
-  size_t RowCount() override { return 3; }
+  size_t RowCount() const override { return 3; }
 
-  std::u16string GetText(size_t row, int column_id) override {
+  std::u16string GetText(size_t row, int column_id) const override {
     constexpr std::array<std::array<const char* const, 5>, 3> cells = {{
         {{"Australia", "24,584,620", "1,323,421,072,479"}},
         {{"Spain", "46,647,428", "1,314,314,164,402"}},
@@ -1042,7 +1080,7 @@ TEST_F(ViewAXPlatformNodeDelegateWinInnerTextRangeTest, Textfield_RTL) {
   constexpr gfx::Range kRange5 = gfx::Range(4, 5);
   constexpr gfx::Range kRange6 = gfx::Range(0, 5);
 
-  base::i18n::SetRTLForTesting(true);
+  base::i18n::ScopedRTLForTesting scoped_rtl(true);
 
   constexpr int kGlyphWidth = 5;
   gfx::Rect textfield_bounds = gfx::Rect(0, 0, 15 * kGlyphWidth, 100);
@@ -1139,7 +1177,7 @@ TEST_F(ViewAXPlatformNodeDelegateWinInnerTextRangeTest, Label_RTL) {
   constexpr gfx::Range kRange5 = gfx::Range(4, 5);
   constexpr gfx::Range kRange6 = gfx::Range(0, 5);
 
-  base::i18n::SetRTLForTesting(true);
+  base::i18n::ScopedRTLForTesting scoped_rtl(true);
 
   label_->SetText(kText);
   label_->SetBoundsRect(gfx::Rect(0, 0, 10 * kGlyphWidth, 100));
@@ -1255,7 +1293,7 @@ TEST_F(ViewAXPlatformNodeDelegateWinInnerTextRangeTest,
   ui::AXOffscreenResult offscreen_result;
   gfx::Rect bounds;
 
-  base::i18n::SetRTLForTesting(false);
+  base::i18n::ScopedRTLForTesting scoped_rtl(false);
 
   constexpr int kGlyphWidth = 5;
 

@@ -8,7 +8,7 @@
 #include "base/values.h"
 #include "chrome/browser/headless/test/headless_browser_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
@@ -22,7 +22,7 @@ HeadlessModeDevTooledBrowserTest::~HeadlessModeDevTooledBrowserTest() = default;
 void HeadlessModeDevTooledBrowserTest::RunTest() {
   browser_devtools_client_.AttachToBrowser();
 
-  content::BrowserContext* browser_context = browser()->profile();
+  content::BrowserContext* browser_context = browser()->GetProfile();
   DCHECK(browser_context);
 
   content::WebContents::CreateParams create_params(browser_context);

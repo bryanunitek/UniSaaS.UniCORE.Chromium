@@ -168,10 +168,11 @@ enum FieldType {
   ADDRESS_HOME_CITY = 33,
   ADDRESS_HOME_STATE = 34,
   ADDRESS_HOME_ZIP = 35,
-  // TODO(crbug.com/40264633): Autofill stores country codes. When
-  // ADDRESS_HOME_COUNTRY is accessed through `AutofillProfile::GetRawInfo()`, a
-  // country code is returned. When retrieved using
-  // `AutofillProfile::GetInfo()`, the country name is returned.
+  // Internally, Autofill uses ISO 3166-1 country codes.
+  // `AutofillProfile::GetRawInfo(ADDRESS_HOME_COUNTRY)` returns
+  // the profile's country code while
+  // `AutofillProfile::GetInfo(ADDRESS_HOME_COUNTRY)` returns the localized
+  // country name for filling.
   ADDRESS_HOME_COUNTRY = 36,
 
   // ADDRESS_BILLING values [37, 43] are deprecated.
@@ -553,10 +554,8 @@ enum FieldType {
   FLIGHT_RESERVATION_FLIGHT_NUMBER = 198,
   FLIGHT_RESERVATION_CONFIRMATION_CODE = 199,
   FLIGHT_RESERVATION_TICKET_NUMBER = 200,
-  // The following two types were never predicted by the Autofill server.
-  // The numeric values may therefore be recycled:
-  // FLIGHT_RESERVATION_DEPARTURE_AIRPORT = 204,
-  // FLIGHT_RESERVATION_ARRIVAL_AIRPORT = 205,
+  FLIGHT_RESERVATION_DEPARTURE_AIRPORT = 204,
+  FLIGHT_RESERVATION_ARRIVAL_AIRPORT = 205,
   FLIGHT_RESERVATION_DEPARTURE_DATE = 206,
 
   // Combination of types ADDRESS_HOME_ZIP and ADDRESS_HOME_CITY.
@@ -600,23 +599,25 @@ enum FieldType {
 };
 // LINT.ThenChange(//chrome/common/extensions/api/autofill_private.idl)
 
+// This enum must stay in sync with the server. Existing enum values may not be
+// changed or reassigned.
 enum class FieldTypeGroup {
-  kNoGroup,
-  kName,
-  kEmail,
-  kCompany,
-  kAddress,
-  kPhone,
-  kCreditCard,
-  kPasswordField,
-  kTransaction,
-  kUsernameField,
-  kUnfillable,
-  kIban,
-  kStandaloneCvcField,
-  kAutofillAi,
-  kLoyaltyCard,
-  kOneTimePassword,
+  kNoGroup = 0,
+  kName = 1,
+  kEmail = 2,
+  kCompany = 3,
+  kAddress = 4,
+  kPhone = 5,
+  kCreditCard = 6,
+  kPasswordField = 7,
+  kTransaction = 8,
+  kUsernameField = 9,
+  kUnfillable = 10,
+  kIban = 11,
+  kStandaloneCvcField = 12,
+  kAutofillAi = 13,
+  kLoyaltyCard = 14,
+  kOneTimePassword = 15,
   kMaxValue = kOneTimePassword,
 };
 
@@ -736,8 +737,7 @@ constexpr std::optional<FieldType> ToSafeFieldType(
            // Unused Forms AI types: These types were never predicted by the
            // Autofill server and never used. They may be recycled in the
            // future.
-           (204 <= t && t <= 205) || (211 <= t && t <= 214) ||
-           (215 <= t && t <= 217) || t == 219;
+           (211 <= t && t <= 214) || (215 <= t && t <= 217) || t == 219;
   };
   if (is_invalid(raw_value)) {
     return std::nullopt;
@@ -880,6 +880,8 @@ constexpr FieldTypeGroup GroupTypeOfFieldType(FieldType field_type) {
     case FLIGHT_RESERVATION_FLIGHT_NUMBER:
     case FLIGHT_RESERVATION_TICKET_NUMBER:
     case FLIGHT_RESERVATION_CONFIRMATION_CODE:
+    case FLIGHT_RESERVATION_DEPARTURE_AIRPORT:
+    case FLIGHT_RESERVATION_ARRIVAL_AIRPORT:
     case FLIGHT_RESERVATION_DEPARTURE_DATE:
     case ORDER_ID:
     case ORDER_DATE:

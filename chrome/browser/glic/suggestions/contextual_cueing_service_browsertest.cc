@@ -17,11 +17,10 @@
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/optimization_guide/browser_test_util.h"
 #include "chrome/browser/optimization_guide/mock_optimization_guide_keyed_service.h"
-#include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_features.h"
@@ -61,7 +60,7 @@ class ContextualCueingServiceBrowserTestZSSFlag
             {kGlicZeroStateSuggestions,
              {{"ZSSAllowContextualSuggestionsForSearchResultsPages", "false"}}},
         },
-        {{kZeroStateSuggestionsUsePrivateAi}});
+        {});
     // Initialize `scoped_prewarm_feature_list_` after the
     // `scoped_feature_list_` that will be removed in the parent class's
     // destructor, so that these instances are destroyed in the reversed order.
@@ -71,7 +70,7 @@ class ContextualCueingServiceBrowserTestZSSFlag
   }
 
   void SetUpOnMainThread() override {
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         glic::prefs::kGlicTabContextEnabled, true);
   }
 
@@ -352,11 +351,11 @@ class ContextualCueingServiceBrowserTestAllowZSSForSrp
         {{kGlicZeroStateSuggestions,
           {{"ZSSAllowContextualSuggestionsForSearchResultsPages", "true"}}},
          {features::kGlic, {}}},
-        {{kZeroStateSuggestionsUsePrivateAi}});
+        {});
   }
 
   void SetUpOnMainThread() override {
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         glic::prefs::kGlicTabContextEnabled, true);
   }
 

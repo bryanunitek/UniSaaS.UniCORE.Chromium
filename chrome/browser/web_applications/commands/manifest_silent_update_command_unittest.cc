@@ -4,16 +4,22 @@
 
 #include "chrome/browser/web_applications/commands/manifest_silent_update_command.h"
 
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/i18n/language_tag.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/web_applications/external_install_options.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom-shared.h"
@@ -37,6 +43,7 @@
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/sync/protocol/web_app_specifics.equal.h"
 #include "components/sync/protocol/web_app_specifics.ostream.h"
 #include "components/sync/protocol/web_app_specifics.pb.h"
@@ -71,7 +78,7 @@ class ManifestSilentUpdateCommandTest : public WebAppTest {
     WebAppTest::SetUp();
     FakeWebAppProvider* provider = FakeWebAppProvider::Get(profile());
     provider->SetOriginAssociationManager(
-        std::make_unique<FakeWebAppOriginAssociationManager>());
+        std::make_unique<FakeWebAppOriginAssociationManager>(*profile()));
     provider->StartWithSubsystems();
     test::WaitUntilWebAppProviderAndSubsystemsReady(provider);
 
@@ -211,6 +218,138 @@ TEST_F(ManifestSilentUpdateCommandTest, AppNotInstalledNotSilentlyUpdated) {
               BucketsAre(base::Bucket(
                   ManifestSilentUpdateCheckResult::kAppNotAllowedToUpdate,
                   /*count=*/1)));
+}
+
+// Regression test for crbug.com/553479924. Verifies that ManifestUpdateJob
+// fails gracefully, instead of CHECK-failing, when the manifest has no square
+// icon and therefore no trusted icon can be selected.
+//
+// Note: FakeWebContentsManager does not run InstallableEvaluator, so this
+// manifest reaches ManifestUpdateJob here. In production,
+// ManifestSilentUpdateCommand rejects it earlier with kInvalidManifest
+// (MANIFEST_MISSING_SUITABLE_ICON). This test covers the ManifestUpdateJob
+// guard directly, which still matters for callers that don't run
+// InstallableEvaluator (e.g. FetchManifestAndUpdateCommand).
+TEST_F(ManifestSilentUpdateCommandTest,
+       NonSquareManifestIconsFailGracefullyInUpdateJob) {
+  SetupBasicInstallablePageState();
+  webapps::AppId app_id = test::InstallForWebContents(
+      profile(), web_contents(),
+      webapps::WebappInstallSource::OMNIBOX_INSTALL_ICON);
+
+  const GURL kNonSquareIconUrl("https://example.com/path/non_square.png");
+  blink::Manifest::ImageResource non_square_icon;
+  non_square_icon.src = kNonSquareIconUrl;
+  non_square_icon.sizes = {{192, 144}};
+  non_square_icon.purpose = {blink::mojom::ManifestImageResource_Purpose::ANY};
+  GetPageManifest()->icons = {non_square_icon};
+  web_contents_manager().GetOrCreateIconState(kNonSquareIconUrl).bitmaps = {
+      gfx::test::CreateBitmap(192, 144, SK_ColorRED)};
+
+  EXPECT_EQ(RunManifestUpdateAndGetResult(),
+            ManifestSilentUpdateCheckResult::kManifestToWebAppInstallInfoError);
+  EXPECT_FALSE(AppHasPendingUpdateInfo(app_id));
+
+  // No update happened.
+  EXPECT_EQ(provider().registrar_unsafe().GetAppIconInfos(app_id).begin()->url,
+            kDefaultIconUrl);
+  EXPECT_THAT(
+      histogram_tester_.GetAllSamples(
+          "Webapp.Update.ManifestSilentUpdateCheckResult"),
+      BucketsAre(base::Bucket(
+          ManifestSilentUpdateCheckResult::kManifestToWebAppInstallInfoError,
+          /*count=*/1)));
+}
+
+// The manifest declares a square icon but serves a non-square bitmap. The
+// bitmap is padded to the declared size, so the icon change is staged as a
+// pending security update instead of being dropped.
+TEST_F(ManifestSilentUpdateCommandTest,
+       SquareManifestIconWithNonSquareBitmapIsPadded) {
+  SetupBasicInstallablePageState();
+  webapps::AppId app_id = test::InstallForWebContents(
+      profile(), web_contents(),
+      webapps::WebappInstallSource::OMNIBOX_INSTALL_ICON);
+
+  const GURL kIconUrl("https://example.com/path/non_square_bitmap.png");
+  blink::Manifest::ImageResource icon;
+  icon.src = kIconUrl;
+  icon.sizes = {{192, 192}};
+  icon.purpose = {blink::mojom::ManifestImageResource_Purpose::ANY};
+  GetPageManifest()->icons = {icon};
+  web_contents_manager().GetOrCreateIconState(kIconUrl).bitmaps = {
+      gfx::test::CreateBitmap(192, 144, SK_ColorRED)};
+
+  EXPECT_EQ(RunManifestUpdateAndGetResult(),
+            ManifestSilentUpdateCheckResult::kAppOnlyHasSecurityUpdate);
+
+  const WebApp* app = provider().registrar_unsafe().GetAppById(app_id);
+  ASSERT_TRUE(app);
+  ASSERT_TRUE(app->pending_update_info().has_value());
+  const proto::PendingUpdateInfo& pending = *app->pending_update_info();
+  ASSERT_EQ(pending.trusted_icons_size(), 1);
+  EXPECT_EQ(pending.trusted_icons(0).url(), kIconUrl.spec());
+  EXPECT_THAT(pending.downloaded_trusted_icons(),
+              testing::Contains(testing::AllOf(
+                  testing::Property(&proto::DownloadedIconSizeInfo::purpose,
+                                    sync_pb::WebAppIconInfo_Purpose_ANY),
+                  testing::Property(&proto::DownloadedIconSizeInfo::icon_sizes,
+                                    testing::Contains(192)))));
+
+  // Installed icons stay unchanged until the pending update is applied.
+  ASSERT_FALSE(app->trusted_icons().empty());
+  EXPECT_EQ(app->trusted_icons().front().url, kDefaultIconUrl);
+  EXPECT_EQ(provider().registrar_unsafe().GetAppIconInfos(app_id).begin()->url,
+            kDefaultIconUrl);
+  EXPECT_THAT(histogram_tester_.GetAllSamples(
+                  "Webapp.Update.ManifestSilentUpdateCheckResult"),
+              BucketsAre(base::Bucket(
+                  ManifestSilentUpdateCheckResult::kAppOnlyHasSecurityUpdate,
+                  /*count=*/1)));
+}
+
+// Regression test for crbug.com/553479924. InstallableEvaluator only inspects
+// `manifest.icons`, but ManifestToWebAppInstallInfoJob prefers
+// `manifest.icons_localized` for the current locale. If the localized icons
+// contain no square icon, trusted icons are empty and the update must fail
+// gracefully instead of crashing.
+TEST_F(ManifestSilentUpdateCommandTest,
+       LocalizedIconsWithoutSquareIconDoNotCrash) {
+  SetupBasicInstallablePageState();
+  webapps::AppId app_id = test::InstallForWebContents(
+      profile(), web_contents(),
+      webapps::WebappInstallSource::OMNIBOX_INSTALL_ICON);
+
+  ApplicationLocaleStorage* locale_storage =
+      g_browser_process->GetFeatures()->application_locale_storage();
+  base::ScopedClosureRunner restore_locale(
+      base::BindOnce([](ApplicationLocaleStorage* storage,
+                        std::string locale) { storage->Set(locale); },
+                     locale_storage, locale_storage->Get()));
+  locale_storage->Set("en-US");
+
+  // `manifest.icons` still contains the valid square icon from
+  // SetupBasicInstallablePageState(), but the localized icons for the current
+  // locale are non-square only.
+  const GURL kLocalizedIconUrl("https://example.com/path/localized.png");
+  blink::Manifest::ImageResource localized_icon;
+  localized_icon.src = kLocalizedIconUrl;
+  localized_icon.sizes = {{192, 144}};
+  localized_icon.purpose = {blink::mojom::ManifestImageResource_Purpose::ANY};
+  std::vector<blink::Manifest::ImageResource> localized_icons = {
+      localized_icon};
+  GetPageManifest()->icons_localized.emplace();
+  GetPageManifest()->icons_localized->insert(
+      {base::i18n::GetKnownLanguageTag("en-US"), localized_icons});
+  web_contents_manager().GetOrCreateIconState(kLocalizedIconUrl).bitmaps = {
+      gfx::test::CreateBitmap(192, 144, SK_ColorRED)};
+
+  EXPECT_EQ(RunManifestUpdateAndGetResult(),
+            ManifestSilentUpdateCheckResult::kManifestToWebAppInstallInfoError);
+  EXPECT_FALSE(AppHasPendingUpdateInfo(app_id));
+  // No update happened.
+  EXPECT_EQ(provider().registrar_unsafe().GetAppIconInfos(app_id).begin()->url,
+            kDefaultIconUrl);
 }
 
 TEST_F(ManifestSilentUpdateCommandTest, StartUrlUpdatedSilently) {
@@ -555,13 +694,6 @@ TEST_F(ManifestSilentUpdateCommandTest, FileHandlersUpdatedSilently) {
     handler->action = GURL("http://example.com/open-files");
     handler->accept[u"image/png"].push_back(u".png");
     handler->name = u"Images";
-    {
-      blink::Manifest::ImageResource icon;
-      icon.src = GURL("fav1.png");
-      icon.purpose = {blink::mojom::ManifestImageResource_Purpose::ANY,
-                      blink::mojom::ManifestImageResource_Purpose::MASKABLE};
-      handler->icons.push_back(icon);
-    }
     new_manifest->file_handlers.push_back(std::move(handler));
   }
 

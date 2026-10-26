@@ -83,10 +83,10 @@ class ClipboardWriter : public GarbageCollected<ClipboardWriter>,
  protected:
   ClipboardWriter(SystemClipboard* system_clipboard, ClipboardPromise* promise);
 
-  // SystemClipboard is bound to LocalFrame, so the bound LocalFrame must still
-  // be valid by the time it's used.
+  // SystemClipboard is bound to ExecutionContext, so the bound ExecutionContext
+  // must still be valid by the time it's used.
   SystemClipboard* system_clipboard() {
-    DCHECK(promise_->GetLocalFrame());
+    DCHECK(promise_->GetExecutionContext());
     return system_clipboard_.Get();
   }
 
@@ -113,7 +113,7 @@ class ClipboardWriter : public GarbageCollected<ClipboardWriter>,
   Member<SystemClipboard> system_clipboard_;
   // Oilpan: ClipboardWriter must remain alive until Member<T>::Clear() is
   // called, to keep the FileReaderLoader alive and avoid unexpected UaPs.
-  SelfKeepAlive<ClipboardWriter> self_keep_alive_{this};
+  SelfKeepAlive<ClipboardWriter> self_keep_alive_{{}, this};
 };
 
 }  // namespace blink

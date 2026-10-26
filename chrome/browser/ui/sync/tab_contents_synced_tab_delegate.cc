@@ -13,6 +13,7 @@
 #include "components/sync_sessions/sync_sessions_client.h"
 #include "components/sync_sessions/synced_window_delegate.h"
 #include "components/sync_sessions/synced_window_delegates_getter.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -94,7 +95,7 @@ int TabContentsSyncedTabDelegate::GetEntryCount() const {
 }
 
 GURL TabContentsSyncedTabDelegate::GetVirtualURLAtIndex(int i) const {
-  DCHECK(web_contents_);
+  CHECK(web_contents_, base::NotFatalUntil::M162);
   NavigationEntry* entry = GetPossiblyPendingEntryAtIndex(web_contents_, i);
   return entry ? entry->GetVirtualURL() : GURL();
 }
@@ -102,7 +103,7 @@ GURL TabContentsSyncedTabDelegate::GetVirtualURLAtIndex(int i) const {
 void TabContentsSyncedTabDelegate::GetSerializedNavigationAtIndex(
     int i,
     sessions::SerializedNavigationEntry* serialized_entry) const {
-  DCHECK(web_contents_);
+  CHECK(web_contents_, base::NotFatalUntil::M162);
   NavigationEntry* entry = GetPossiblyPendingEntryAtIndex(web_contents_, i);
   if (entry) {
     // Explicitly exclude page state when serializing the navigation entry.
@@ -122,8 +123,10 @@ bool TabContentsSyncedTabDelegate::ProfileHasChildAccount() const {
 
 const std::vector<std::unique_ptr<const sessions::SerializedNavigationEntry>>*
 TabContentsSyncedTabDelegate::GetBlockedNavigations() const {
+  tabs::TabInterface* const tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents_);
   SupervisedUserNavigationObserver* navigation_observer =
-      SupervisedUserNavigationObserver::FromWebContents(web_contents_);
+      tab ? SupervisedUserNavigationObserver::From(tab) : nullptr;
 #if BUILDFLAG(IS_ANDROID)
   // TabHelpers::AttachTabHelpers() will not be called for a placeholder tab's
   // WebContents that is temporarily created from a serialized state in
@@ -133,7 +136,7 @@ TabContentsSyncedTabDelegate::GetBlockedNavigations() const {
     return nullptr;
   }
 #endif  // BUILDFLAG(IS_ANDROID)
-  DCHECK(navigation_observer);
+  CHECK(navigation_observer, base::NotFatalUntil::M162);
 
   return &navigation_observer->blocked_navigations();
 }
@@ -227,5 +230,6 @@ const tasks::TaskTabHelper* TabContentsSyncedTabDelegate::task_tab_helper()
   if (web_contents_ == nullptr) {
     return nullptr;
   }
-  return tasks::TaskTabHelper::FromWebContents(web_contents_);
+  return tasks::TaskTabHelper::From(
+      tabs::TabInterface::MaybeGetFromContents(web_contents_));
 }

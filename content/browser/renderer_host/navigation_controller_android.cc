@@ -15,12 +15,16 @@
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
-#include "content/browser/android/additional_navigation_params_utils.h"
+#include "content/browser/android/additional_navigation_params.h"
+#include "content/browser/renderer_host/frame_tree.h"
+#include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/navigation_controller_impl.h"
 #include "content/browser/renderer_host/navigation_entry_impl.h"
+#include "content/browser/renderer_host/navigation_request.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/initiator_navigation_state.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/ssl_host_state_delegate.h"
 #include "content/public/common/referrer.h"
@@ -34,6 +38,7 @@
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "content/public/android/content_jni_headers/NavigationControllerImpl_jni.h"
+#include "content/public/android/content_jni_headers/NavigationResult_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertJavaStringToUTF16;
@@ -52,7 +57,7 @@ JNI_NavigationControllerImpl_CreateJavaNavigationEntry(
     JNIEnv* env,
     content::NavigationEntry* entry,
     int index) {
-  DCHECK(entry);
+  CHECK(entry, base::NotFatalUntil::M158);
 
   // Get the details of the current entry
   ScopedJavaLocalRef<jobject> j_url(
@@ -238,7 +243,7 @@ base::android::ScopedJavaLocalRef<jobject> NavigationControllerAndroid::LoadUrl(
     bool is_pdf,
     bool remove_extra_headers_on_cross_origin_redirect,
     const JavaRef<jstring>& internal_scroll_to_text_fragment) {
-  DCHECK(url);
+  CHECK(url, base::NotFatalUntil::M158);
   NavigationController::LoadURLParams params(
       GURL(ConvertJavaStringToUTF8(env, url)));
   // Wrap the raw pointer in case on an early return.
@@ -266,16 +271,9 @@ base::android::ScopedJavaLocalRef<jobject> NavigationControllerAndroid::LoadUrl(
     params.initiator_process_id =
         GetInitiatorProcessIdFromJavaAdditionalNavigationParams(
             env, j_additional_navigation_params);
-
-    // If the attribution src token exists, then an impression exists with this
-    // navigation.
-    if (std::optional<blink::AttributionSrcToken> attribution_src_token =
-            GetAttributionSrcTokenFromJavaAdditionalNavigationParams(
-                env, j_additional_navigation_params)) {
-      params.impression = blink::Impression{
-          .attribution_src_token = *attribution_src_token,
-      };
-    }
+    params.initiator_navigation_state =
+        TakeNativeStateFromJavaAdditionalNavigationParams(
+            env, j_additional_navigation_params);
   }
 
   if (extra_headers)
@@ -298,13 +296,14 @@ base::android::ScopedJavaLocalRef<jobject> NavigationControllerAndroid::LoadUrl(
     // field. Note that kMaxURLChars is only enforced when serializing URLs
     // for IPC.
     GURL data_url = GURL(ConvertJavaStringToUTF8(env, data_url_as_string));
-    DCHECK(data_url.SchemeIs(url::kDataScheme));
-    DCHECK(params.url.SchemeIs(url::kDataScheme));
+    CHECK(data_url.SchemeIs(url::kDataScheme), base::NotFatalUntil::M158);
+    CHECK(params.url.SchemeIs(url::kDataScheme), base::NotFatalUntil::M158);
 #if DCHECK_IS_ON()
     {
       std::string mime_type, charset, data;
-      DCHECK(net::DataURL::Parse(params.url, &mime_type, &charset, &data));
-      DCHECK(data.empty());
+      CHECK(net::DataURL::Parse(params.url, &mime_type, &charset, &data),
+            base::NotFatalUntil::M158);
+      CHECK(data.empty(), base::NotFatalUntil::M158);
     }
 #endif
     std::string s = data_url.spec();
@@ -321,6 +320,15 @@ base::android::ScopedJavaLocalRef<jobject> NavigationControllerAndroid::LoadUrl(
   if (j_initiator_origin) {
     params.initiator_origin =
         url::Origin::FromJavaObject(env, j_initiator_origin);
+  } else if (params.is_renderer_initiated) {
+    // All renderer-initiated navigations must have an initiator origin (see the
+    // DCHECK in
+    // NavigationControllerImpl::CreateNavigationRequestFromLoadParams() /
+    // LoadURLWithParams()). Every Java caller is expected to supply an
+    // initiator, so report the bug but fail closed with an opaque origin rather
+    // than letting the navigation through with none.
+    base::debug::DumpWithoutCrashing();
+    params.initiator_origin = url::Origin();
   }
 
   if (input_start != 0)
@@ -333,15 +341,37 @@ base::android::ScopedJavaLocalRef<jobject> NavigationControllerAndroid::LoadUrl(
         ConvertJavaStringToUTF8(env, internal_scroll_to_text_fragment);
   }
 
-  base::WeakPtr<NavigationHandle> handle =
-      navigation_controller_->LoadURLWithParams(params);
+  base::expected<base::WeakPtr<NavigationHandle>, NavigationNotStartedReason>
+      result = navigation_controller_->LoadURLWithParamsForResult(params);
 
-  if (!handle) {
-    return nullptr;
+  if (!result.has_value()) {
+    if (result.error() ==
+        NavigationNotStartedReason::kDuplicateNavigationIgnored) {
+      FrameTreeNode* root_node = navigation_controller_->frame_tree().root();
+      CHECK(root_node);
+      NavigationRequest* ongoing_request = root_node->navigation_request();
+      CHECK(ongoing_request);
+      CHECK_GT(ongoing_request->GetIgnoredDuplicateNavigationCount(), 0u);
+      return Java_NavigationResult_createDuplicateIgnored(
+          env, base::android::ScopedJavaLocalRef<jobject>(
+                   ongoing_request->GetJavaNavigationHandle()));
+    }
+    return Java_NavigationResult_createFailure(
+        env, static_cast<int32_t>(result.error()));
   }
 
-  return base::android::ScopedJavaLocalRef<jobject>(
-      handle->GetJavaNavigationHandle());
+  base::WeakPtr<NavigationHandle> handle = result.value();
+  if (!handle) {
+    // Navigation was cancelled synchronously during start before a handle could
+    // be returned.
+    return Java_NavigationResult_createFailure(
+        env, static_cast<int32_t>(
+                 NavigationNotStartedReason::kCancelledDuringStart));
+  }
+
+  return Java_NavigationResult_createSuccess(
+      env, base::android::ScopedJavaLocalRef<jobject>(
+               handle->GetJavaNavigationHandle()));
 }
 
 void NavigationControllerAndroid::ClearHistory(JNIEnv* env) {

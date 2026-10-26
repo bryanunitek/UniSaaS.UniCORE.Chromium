@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <optional>
 #include <ostream>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -18,6 +19,7 @@
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/containers/fixed_flat_set.h"
+#include "base/containers/span.h"
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/notreached.h"
@@ -26,12 +28,11 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/types/zip.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_i18n_parsing_expression_components.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_normalization_utils.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_utils.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_normalization_util.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "third_party/re2/src/re2/re2.h"
@@ -155,7 +156,7 @@ void AddressComponent::CopyFrom(const AddressComponent& other) {
   CHECK_EQ(other.subcomponents_.size(), subcomponents_.size())
       << GetStorageTypeName();
   for (auto [subcomponent, other_subcomponent] :
-       base::zip(subcomponents_, other.subcomponents_)) {
+       std::views::zip(subcomponents_, other.subcomponents_)) {
     subcomponent->CopyFrom(*other_subcomponent);
   }
 
@@ -180,7 +181,7 @@ bool AddressComponent::SameAs(const AddressComponent& other) const {
     return false;
   }
   for (auto [subcomponent, other_subcomponent] :
-       base::zip(subcomponents_, other.subcomponents_)) {
+       std::views::zip(subcomponents_, other.subcomponents_)) {
     if (!subcomponent->SameAs(*other_subcomponent)) {
       return false;
     }
@@ -586,7 +587,7 @@ bool AddressComponent::IsValueCompatibleWithDescendants(
   }
 
   return std::ranges::all_of(
-      Subcomponents(), [value](const AddressComponent* c) {
+      Subcomponents(), [&value](const AddressComponent* c) {
         return c->IsValueCompatibleWithDescendants(value);
       });
 }
@@ -618,25 +619,22 @@ void AddressComponent::ParseValueAndAssignSubcomponentsByFallbackMethod() {
   std::vector<std::u16string> space_separated_tokens = base::SplitString(
       GetValue(), u" ", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
 
-  auto token_iterator = space_separated_tokens.begin();
   auto subcomponent_types = GetSubcomponentTypes();
 
   // Assign one space-separated token each to all but the last subcomponent.
   for (size_t i = 0; (i + 1) < subcomponent_types.size(); ++i) {
     // If there are no tokens left, parsing is done.
-    if (token_iterator == space_separated_tokens.end()) {
+    if (i == space_separated_tokens.size()) {
       return;
     }
-    // Set the current token to the type and advance the token iterator. By
-    // design, this should never fail.
-    CHECK(SetValueForType(subcomponent_types[i], *token_iterator,
+    // Set the current token to the type. By design, this should never fail.
+    CHECK(SetValueForType(subcomponent_types[i], space_separated_tokens[i],
                           VerificationStatus::kParsed));
-    token_iterator++;
   }
 
   // Collect all remaining tokens in the last subcomponent.
   std::u16string remaining_tokens = base::JoinString(
-      std::vector<std::u16string>(token_iterator, space_separated_tokens.end()),
+      base::span(space_separated_tokens).subspan(subcomponent_types.size() - 1),
       u" ");
   // By design, it should be possible to assign the value unless the regular
   // expression is wrong.
@@ -970,7 +968,7 @@ void AddressComponent::MergeVerificationStatuses(
   CHECK_EQ(newer_component.subcomponents_.size(), subcomponents_.size())
       << GetStorageTypeName();
   for (auto [subcomponent, newer_subcomponent] :
-       base::zip(subcomponents_, newer_component.subcomponents_)) {
+       std::views::zip(subcomponents_, newer_component.subcomponents_)) {
     subcomponent->MergeVerificationStatuses(*newer_subcomponent);
   }
 }
@@ -1074,7 +1072,7 @@ bool AddressComponent::IsMergeableWithComponent(
       return false;
     }
     return std::ranges::all_of(
-        base::zip(subcomponents_, newer_component.subcomponents_),
+        std::views::zip(subcomponents_, newer_component.subcomponents_),
         [](const auto& p) {
           auto [subcomponent, newer_subcomponent] = p;
           return subcomponent->IsMergeableWithComponent(*newer_subcomponent);
@@ -1235,7 +1233,7 @@ bool AddressComponent::MergeWithComponent(
   // the child tokens. Reformat this nodes from its children after the merge.
   if (merge_mode_ & kMergeChildrenAndReformatIfNeeded) {
     if (std::ranges::any_of(
-            base::zip(subcomponents_, newer_component.subcomponents_),
+            std::views::zip(subcomponents_, newer_component.subcomponents_),
             [&](const auto& p) {
               auto [subcomponent, newer_subcomponent] = p;
               return !subcomponent->MergeWithComponent(
@@ -1333,7 +1331,7 @@ bool AddressComponent::MergeTokenEquivalentComponent(
     // Otherwise, replace this subtree with the other one if this subtree is
     // empty.
     for (auto [subcomponent, other_subcomponent] :
-         base::zip(subcomponents_, other_subcomponents)) {
+         std::views::zip(subcomponents_, other_subcomponents)) {
       subcomponent->CopyFrom(*other_subcomponent);
     }
     return true;

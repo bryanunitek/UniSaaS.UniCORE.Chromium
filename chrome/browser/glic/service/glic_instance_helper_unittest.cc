@@ -27,6 +27,7 @@ class FakeGlicInstance : public GlicInstanceHelper::Instance {
     return "test_conversation_title";
   }
   std::optional<int> task_id() const override { return std::nullopt; }
+  bool IsShowing() const override { return false; }
 
  private:
   InstanceId id_;
@@ -38,6 +39,8 @@ class GlicInstanceHelperTest : public testing::Test {
   ~GlicInstanceHelperTest() override = default;
 
   void SetUp() override {
+    EXPECT_CALL(mock_tab_, GetProfile())
+        .WillRepeatedly(testing::Return(nullptr));
     EXPECT_CALL(mock_tab_, GetUnownedUserDataHost())
         .WillRepeatedly(testing::ReturnRef(unowned_user_data_host_));
     EXPECT_CALL(mock_tab_, GetContents())
@@ -80,6 +83,10 @@ TEST_F(GlicInstanceHelperTest, LogsBindCount) {
     helper.SetBoundInstance(nullptr);
   }
   histogram_tester_.ExpectUniqueSample("Glic.Tab.InstanceBindCount", 2, 1);
+  histogram_tester_.ExpectUniqueSample("Glic.Consumer.Tab.InstanceBindCount", 2,
+                                       1);
+  histogram_tester_.ExpectTotalCount("Glic.Enterprise.Tab.InstanceBindCount",
+                                     0);
 }
 
 TEST_F(GlicInstanceHelperTest, LogsPinCount) {
@@ -92,6 +99,9 @@ TEST_F(GlicInstanceHelperTest, LogsPinCount) {
     helper.OnUnpinnedByInstance(&instance);
   }
   histogram_tester_.ExpectUniqueSample("Glic.Tab.InstancePinCount", 1, 1);
+  histogram_tester_.ExpectUniqueSample("Glic.Consumer.Tab.InstancePinCount", 1,
+                                       1);
+  histogram_tester_.ExpectTotalCount("Glic.Enterprise.Tab.InstancePinCount", 0);
 }
 
 TEST_F(GlicInstanceHelperTest, GettersWork) {

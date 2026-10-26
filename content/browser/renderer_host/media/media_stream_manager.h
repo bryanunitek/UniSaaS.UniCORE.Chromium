@@ -43,6 +43,7 @@
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_result.h"
 #include "content/public/common/buildflags.h"
+#include "content/public/common/child_process_id.h"
 #include "media/base/video_facing.h"
 #include "media/capture/mojom/video_capture.mojom.h"
 #include "mojo/public/cpp/bindings/unique_receiver_set.h"
@@ -362,7 +363,8 @@ class CONTENT_EXPORT MediaStreamManager
 
   // Returns true if the renderer process identified with |render_process_id|
   // is allowed to access |origin|.
-  static bool IsOriginAllowed(int render_process_id, const url::Origin& origin);
+  static bool IsOriginAllowed(ChildProcessId render_process_id,
+                              const url::Origin& origin);
 
   // Returns internal single instance of PreferredAudioOutputDeviceManager
   // object instance. The client should not take ownership of the returned
@@ -480,8 +482,7 @@ class CONTENT_EXPORT MediaStreamManager
       mojo::PendingReceiver<media::mojom::VideoCaptureHost> receiver);
   size_t num_video_capture_hosts() const { return video_capture_hosts_.size(); }
 
-  std::optional<url::Origin> GetOriginByVideoSessionId(
-      const base::UnguessableToken& session_id);
+  bool IsSessionAllowedOnLockScreen(const base::UnguessableToken& session_id);
 
   // Validates that the renderer-supplied `session_id` is authorized for use by
   // the calling `render_frame_host_id`.
@@ -514,6 +515,10 @@ class CONTENT_EXPORT MediaStreamManager
   FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest, DesktopCaptureDeviceChanged);
   FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest,
                            DesktopCaptureDeviceChangeDeniedThenCancel);
+  FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest,
+                           DesktopCaptureCancelDuringPendingChangeSource);
+  FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest,
+                           DesktopCaptureStopDeviceDuringPendingChangeSource);
   FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest,
                            MultiCaptureOnMediaStreamUIWindowId);
   FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest,
@@ -555,7 +560,8 @@ class CONTENT_EXPORT MediaStreamManager
       const std::string& label,
       const media::AudioParameters& output_parameters,
       const blink::mojom::StreamDevicesSet& stream_devices_set,
-      blink::mojom::MediaStreamRequestResult result);
+      blink::mojom::MediaStreamRequestResult result,
+      bool is_allowed_while_screen_locked = false);
   void HandleChangeSourceRequestResponse(
       const std::string& label,
       DeviceRequest* request,

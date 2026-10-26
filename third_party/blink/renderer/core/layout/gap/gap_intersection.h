@@ -27,12 +27,12 @@ enum class OverlapWindowState {
 };
 
 // Extra state carried by a `GapIntersection` in unaligned layout modes (e.g.
-// flexbox). In these modes, items across adjacent lines are not always aligned,
-// so cross gaps from different sides of a main gap may have different sizes and
-// overlap non-uniformly. These overlapping regions are called "overlap
-// windows". The `OverlapWindowState` marks the open and close boundaries of
-// these windows and is used to generate the right intersection start and end
-// points for painting.
+// flexbox, grid-lanes). In these modes, items across adjacent lines are not
+// always aligned, so cross gaps from different sides of a main gap may have
+// different sizes and overlap non-uniformly. These overlapping regions are
+// called "overlap windows". The `OverlapWindowState` marks the open and close
+// boundaries of these windows and is used to generate the right intersection
+// start and end points for painting.
 //
 // The `is_above_main_gap` flag tracks which side of the main gap (above or
 // below) the intersection originated from. This flag is used even for
@@ -46,8 +46,9 @@ struct ExtraIntersectionState {
   // intersection is not part of an overlap window.
   OverlapWindowState overlap_state = OverlapWindowState::kNone;
 
-  // For flex cross gap intersections, the index of the associated main gap.
-  // Absent (`std::nullopt`) for edge intersections that border the container.
+  // For flex and grid-lanes cross gap intersections, the index of the
+  // associated main gap. Absent (`std::nullopt`) for edge intersections that
+  // border the container.
   std::optional<wtf_size_t> main_gap_index;
 };
 
@@ -63,6 +64,13 @@ class CORE_EXPORT GapIntersection {
 
   GapIntersection(LayoutUnit offset, GapSegmentState segment_state)
       : offset_(offset), segment_state_(segment_state) {}
+
+  GapIntersection(LayoutUnit offset,
+                  GapSegmentState segment_state,
+                  OverlapWindowState overlap_state)
+      : offset_(offset),
+        extra_state_(ExtraIntersectionState{.overlap_state = overlap_state}),
+        segment_state_(segment_state) {}
 
   GapIntersection(LayoutUnit offset,
                   OverlapWindowState state,
@@ -130,16 +138,21 @@ class CORE_EXPORT GapIntersection {
   }
 
   const GapSegmentState& SegmentState() const { return segment_state_; }
+  void SetSegmentState(GapSegmentState state) { segment_state_ = state; }
 
  private:
   LayoutUnit offset_;
 
-  // Present only for unaligned layout modes (e.g. flex). Tracks which side of
-  // the main gap this intersection originated from and optional overlap window
-  // state. Absent for aligned modes such as grid and multicol.
+  // Present only for unaligned layout modes (e.g. flex, grid-lanes). Tracks
+  // which side of the main gap this intersection originated from and optional
+  // overlap window state. Absent for aligned modes such as grid and multicol.
   std::optional<ExtraIntersectionState> extra_state_;
 
-  // Tracks whether this segment is blocked by a spanning item.
+  // State of the segment between this intersection and the next.
+  // At a grid-lanes overlap-window opening, kBlocked means a spanner blocks
+  // at least one segment inside the window. This helps decide whether rule
+  // segments can be joined across the window. The states before and after
+  // the window are stored on the preceding and closing intersections.
   GapSegmentState segment_state_{GapSegmentState::kNone};
 };
 

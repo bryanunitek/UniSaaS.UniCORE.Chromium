@@ -14,9 +14,11 @@
 #include <utility>
 
 #include "base/base64.h"
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -34,7 +36,9 @@
 #include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
+#include "base/test/run_until.h"
 #include "base/test/thread_test_helper.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -44,7 +48,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/chrome_ping_manager_factory.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/safe_browsing/v5_get_hash_protocol_manager_factory.h"
+#include "chrome/browser/safe_browsing/v5_search_hashes_cache_factory.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
@@ -62,14 +68,17 @@
 #include "components/safe_browsing/content/browser/ui_manager.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "components/safe_browsing/core/browser/db/sb_database.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/db/sb_test_util.h"
 #include "components/safe_browsing/core/browser/db/test_database_manager.h"
 #include "components/safe_browsing/core/browser/db/util.h"
 #include "components/safe_browsing/core/browser/db/v4_get_hash_protocol_manager.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
-#include "components/safe_browsing/core/browser/db/v4_test_util.h"
+#include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
+#include "components/safe_browsing/core/browser/db/v5_search_hashes_cache.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#include "components/safe_browsing/core/common/safebrowsing_constants.h"
 #include "components/security_interstitials/content/security_interstitial_tab_helper.h"
 #include "components/security_interstitials/core/controller_client.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -100,6 +109,7 @@
 #include "sql/statement.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 #include "url/url_canon.h"
 
@@ -162,8 +172,9 @@ class QuasiWebSocketHttpResponse : public net::test_server::HttpResponse {
 
 std::unique_ptr<net::test_server::HttpResponse> HandleWebSocketRequests(
     const net::test_server::HttpRequest& request) {
-  if (request.relative_url != kMalwareWebSocketPath)
+  if (request.relative_url != kMalwareWebSocketPath) {
     return nullptr;
+  }
 
   return std::make_unique<QuasiWebSocketHttpResponse>(request);
 }
@@ -244,11 +255,12 @@ GURL ConstructJsRequestURL(const GURL& base_url, JsRequestType request_type) {
 // Navigate |browser| to |url| and wait for the title to change to "NOT BLOCKED"
 // or "ERROR". This is specific to the tests using malware_js_request.html.
 // Returns the new title.
-std::string JsRequestTestNavigateAndWaitForTitle(Browser* browser,
-                                                 const GURL& url) {
+std::string JsRequestTestNavigateAndWaitForTitle(
+    BrowserWindowInterface* browser,
+    const GURL& url) {
   std::u16string expected_title = u"ERROR";
   content::TitleWatcher title_watcher(
-      browser->tab_strip_model()->GetActiveWebContents(), expected_title);
+      browser->GetTabStripModel()->GetActiveWebContents(), expected_title);
   title_watcher.AlsoWaitForTitle(u"NOT BLOCKED");
 
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser, url));
@@ -303,13 +315,22 @@ class ServiceEnabledHelper : public base::ThreadTestHelper {
 class TestSBClient : public base::RefCountedThreadSafe<TestSBClient>,
                      public SafeBrowsingDatabaseManager::Client {
  public:
-  TestSBClient()
+  TestSBClient() : TestSBClient(base::WeakPtr<V5GetHashProtocolManager>()) {}
+
+  explicit TestSBClient(
+      base::WeakPtr<V5GetHashProtocolManager> v5_protocol_manager)
       : SafeBrowsingDatabaseManager::Client(GetPassKeyForTesting()),
         threat_type_(SB_THREAT_TYPE_SAFE),
-        safe_browsing_service_(g_browser_process->safe_browsing_service()) {}
+        safe_browsing_service_(g_browser_process->safe_browsing_service()),
+        v5_protocol_manager_(v5_protocol_manager) {}
 
   TestSBClient(const TestSBClient&) = delete;
   TestSBClient& operator=(const TestSBClient&) = delete;
+
+  base::WeakPtr<V5GetHashProtocolManager> GetV5GetHashProtocolManager()
+      override {
+    return v5_protocol_manager_;
+  }
 
   SBThreatType GetThreatType() const { return threat_type_; }
 
@@ -337,8 +358,7 @@ class TestSBClient : public base::RefCountedThreadSafe<TestSBClient>,
     // safe signal, handle it right away.
     bool synchronous_safe_signal =
         safe_browsing_service_->database_manager()->CheckBrowseUrl(
-            url, threat_types, this,
-            CheckBrowseUrlType::kHashDatabase);
+            url, threat_types, this, CheckBrowseUrlType::kHashDatabase);
     if (synchronous_safe_signal) {
       threat_type_ = SB_THREAT_TYPE_SAFE;
       content::GetUIThreadTaskRunner({})->PostTask(
@@ -379,24 +399,41 @@ class TestSBClient : public base::RefCountedThreadSafe<TestSBClient>,
   SBThreatType threat_type_;
   raw_ptr<SafeBrowsingService> safe_browsing_service_;
   base::OnceClosure quit_closure_;
+  base::WeakPtr<V5GetHashProtocolManager> v5_protocol_manager_;
 };
 
 }  // namespace
 
-// TODO(crbug.com/362791941): Handle v4 references.
 // Tests the safe browsing blocking page in a browser.
-class V4SafeBrowsingServiceTest : public InProcessBrowserTest {
+// Base class for SafeBrowsingService tests supporting both v4 and v5 lists.
+class SBSafeBrowsingServiceTestBase : public InProcessBrowserTest {
  public:
-  V4SafeBrowsingServiceTest() {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{safe_browsing::
-                                  kCreateWarningShownClientSafeBrowsingReports},
-        /*disabled_features=*/{});
+  explicit SBSafeBrowsingServiceTestBase(bool use_v5,
+                                         bool enable_warning_shown_reports)
+      : use_v5_(use_v5) {
+    std::vector<base::test::FeatureRef> enabled_features;
+    std::vector<base::test::FeatureRef> disabled_features;
+    if (use_v5_) {
+      enabled_features.push_back(safe_browsing::kLocalListsUseSBv5);
+    } else {
+      disabled_features.push_back(safe_browsing::kLocalListsUseSBv5);
+    }
+    if (enable_warning_shown_reports) {
+      enabled_features.push_back(
+          safe_browsing::kCreateWarningShownClientSafeBrowsingReports);
+    } else {
+      disabled_features.push_back(
+          safe_browsing::kCreateWarningShownClientSafeBrowsingReports);
+    }
+    scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
   }
 
-  V4SafeBrowsingServiceTest(const V4SafeBrowsingServiceTest&) = delete;
-  V4SafeBrowsingServiceTest& operator=(const V4SafeBrowsingServiceTest&) =
-      delete;
+  SBSafeBrowsingServiceTestBase(const SBSafeBrowsingServiceTestBase&) = delete;
+  SBSafeBrowsingServiceTestBase& operator=(
+      const SBSafeBrowsingServiceTestBase&) = delete;
+
+  // Returns whether v5 local lists are enabled for this test.
+  bool use_v5() const { return use_v5_; }
 
   void SetUp() override {
     sb_factory_ = std::make_unique<TestSafeBrowsingServiceFactory>();
@@ -404,7 +441,7 @@ class V4SafeBrowsingServiceTest : public InProcessBrowserTest {
     sb_factory_->UseSBLocalDatabaseManager();
     SafeBrowsingService::RegisterFactory(sb_factory_.get());
 
-    store_factory_ = new TestV4StoreFactory();
+    store_factory_ = new TestSBStoreFactory();
     SBDatabase::RegisterStoreFactoryForTest(
         base::WrapUnique(store_factory_.get()));
 
@@ -412,9 +449,11 @@ class V4SafeBrowsingServiceTest : public InProcessBrowserTest {
     SBDatabase::RegisterDatabaseFactoryForTest(
         base::WrapUnique(sb_db_factory_.get()));
 
-    v4_get_hash_factory_ = new TestV4GetHashProtocolManagerFactory();
-    V4GetHashProtocolManager::RegisterFactory(
-        base::WrapUnique(v4_get_hash_factory_.get()));
+    if (!use_v5_) {
+      v4_get_hash_factory_ = new TestV4GetHashProtocolManagerFactory();
+      V4GetHashProtocolManager::RegisterFactory(
+          base::WrapUnique(v4_get_hash_factory_.get()));
+    }
 
     InProcessBrowserTest::SetUp();
   }
@@ -424,52 +463,87 @@ class V4SafeBrowsingServiceTest : public InProcessBrowserTest {
 
     // Unregister test factories after InProcessBrowserTest::TearDown
     // (which destructs SafeBrowsingService).
-    V4GetHashProtocolManager::RegisterFactory(nullptr);
+    if (!use_v5_) {
+      V4GetHashProtocolManager::RegisterFactory(nullptr);
+    }
     SBDatabase::RegisterDatabaseFactoryForTest(nullptr);
     SBDatabase::RegisterStoreFactoryForTest(nullptr);
     SafeBrowsingService::RegisterFactory(nullptr);
   }
 
-  void MarkUrlForListIdUnexpired(const GURL& bad_url,
-                                 const ListIdentifier& list_id) {
-    ThreatMetadata metadata;
-    FullHashInfo full_hash_info =
-        GetFullHashInfoWithMetadata(bad_url, list_id, metadata);
-    while (!sb_db_factory_->IsReady()) {
-      content::RunAllTasksUntilIdle();
+  base::WeakPtr<V5GetHashProtocolManager> GetV5ProtocolManager() {
+    if (!use_v5_) {
+      return nullptr;
     }
-    sb_db_factory_->MarkPrefixAsBad(list_id, full_hash_info.full_hash);
-    v4_get_hash_factory_->AddToFullHashCache(full_hash_info);
+    return V5GetHashProtocolManagerFactory::GetForProfile(
+               browser()->GetProfile())
+        ->GetWeakPtr();
+  }
+
+  scoped_refptr<TestSBClient> CreateTestSBClient() {
+    return new TestSBClient(GetV5ProtocolManager());
+  }
+
+  void MarkUrlForListIdUnexpired(const GURL& bad_url,
+                                 const ListIdentifier& list_id,
+                                 V5::ThreatType threat_type) {
+    if (use_v5_) {
+      FullHashStr full_hash = SBProtocolManagerUtil::GetFullHash(bad_url);
+      while (!sb_db_factory_->IsReady()) {
+        content::RunAllTasksUntilIdle();
+      }
+      sb_db_factory_->MarkPrefixAsBad(list_id, full_hash);
+
+      auto* cache =
+          V5SearchHashesCacheFactory::GetForProfile(browser()->GetProfile());
+      CHECK(cache);
+      cache->CacheArtificialV5SearchHashesLookupVerdict(bad_url, threat_type,
+                                                        /*is_warn_only=*/false);
+    } else {
+      ThreatMetadata metadata;
+      FullHashInfo full_hash_info =
+          GetFullHashInfoWithMetadata(bad_url, list_id, metadata);
+      while (!sb_db_factory_->IsReady()) {
+        content::RunAllTasksUntilIdle();
+      }
+      sb_db_factory_->MarkPrefixAsBad(list_id, full_hash_info.full_hash);
+      v4_get_hash_factory_->AddToFullHashCache(full_hash_info);
+    }
   }
 
   // Sets up the prefix database and the full hash cache to match one of the
   // prefixes for the given URL and metadata.
   void MarkUrlForMalwareUnexpired(const GURL& bad_url) {
-    MarkUrlForListIdUnexpired(bad_url, GetUrlMalwareId());
+    MarkUrlForListIdUnexpired(bad_url, GetUrlMalwareId(),
+                              V5::ThreatType::MALWARE);
   }
 
   // Sets up the prefix database and the full hash cache to match one of the
   // prefixes for the given URL in the UwS store.
   void MarkUrlForUwsUnexpired(const GURL& bad_url) {
-    MarkUrlForListIdUnexpired(bad_url, GetUrlUwsId());
+    MarkUrlForListIdUnexpired(bad_url, GetUrlUwsId(),
+                              V5::ThreatType::UNWANTED_SOFTWARE);
   }
 
   // Sets up the prefix database and the full hash cache to match one of the
   // prefixes for the given URL in the phishing store.
   void MarkUrlForPhishingUnexpired(const GURL& bad_url) {
-    MarkUrlForListIdUnexpired(bad_url, GetUrlSocEngId());
+    MarkUrlForListIdUnexpired(bad_url, GetUrlSocEngId(),
+                              V5::ThreatType::SOCIAL_ENGINEERING);
   }
 
   // Sets up the prefix database and the full hash cache to match one of the
   // prefixes for the given URL in the malware binary store.
   void MarkUrlForMalwareBinaryUnexpired(const GURL& bad_url) {
-    MarkUrlForListIdUnexpired(bad_url, GetUrlMalBinId());
+    MarkUrlForListIdUnexpired(bad_url, GetUrlMalBinId(),
+                              V5::ThreatType::MALICIOUS_BINARY);
   }
 
   // Sets up the prefix database and the full hash cache to match one of the
   // prefixes for the given URL in the Billing store.
   void MarkUrlForBillingUnexpired(const GURL& bad_url) {
-    MarkUrlForListIdUnexpired(bad_url, GetUrlBillingId());
+    MarkUrlForListIdUnexpired(bad_url, GetUrlBillingId(),
+                              V5::ThreatType::TRICK_TO_BILL);
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -488,8 +562,8 @@ class V4SafeBrowsingServiceTest : public InProcessBrowserTest {
     ASSERT_TRUE(embedded_test_server()->Start());
   }
 
-  bool ShowingInterstitialPage(Browser* browser) {
-    WebContents* contents = browser->tab_strip_model()->GetActiveWebContents();
+  bool ShowingInterstitialPage(BrowserWindowInterface* browser) {
+    WebContents* contents = browser->GetTabStripModel()->GetActiveWebContents();
     return chrome_browser_interstitials::IsShowingInterstitial(contents);
   }
 
@@ -497,7 +571,7 @@ class V4SafeBrowsingServiceTest : public InProcessBrowserTest {
 
   void SetUpSendingNotificationsAcceptedCSBRR() {
     // Enable enhanced safe browsing for the profile.
-    PrefService* prefs = browser()->profile()->GetPrefs();
+    PrefService* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(prefs::kSafeBrowsingEnabled, true);
     prefs->SetBoolean(prefs::kSafeBrowsingEnhanced, true);
     ASSERT_TRUE(IsExtendedReportingEnabled(*prefs));
@@ -528,14 +602,17 @@ class V4SafeBrowsingServiceTest : public InProcessBrowserTest {
   using enum SBThreatType;
 
  private:
+  // Whether this test is running with v5 safe browsing lists enabled.
+  const bool use_v5_;
+
   std::unique_ptr<TestSafeBrowsingServiceFactory> sb_factory_;
   // Owned by the SBDatabase.
   raw_ptr<TestSBDatabaseFactory, AcrossTasksDanglingUntriaged> sb_db_factory_;
   // Owned by the V4GetHashProtocolManager.
   raw_ptr<TestV4GetHashProtocolManagerFactory, AcrossTasksDanglingUntriaged>
-      v4_get_hash_factory_;
+      v4_get_hash_factory_ = nullptr;
   // Owned by the SBDatabase.
-  raw_ptr<TestV4StoreFactory, AcrossTasksDanglingUntriaged> store_factory_;
+  raw_ptr<TestSBStoreFactory, AcrossTasksDanglingUntriaged> store_factory_;
   base::test::ScopedFeatureList scoped_feature_list_;
 
 #if defined(ADDRESS_SANITIZER)
@@ -545,9 +622,96 @@ class V4SafeBrowsingServiceTest : public InProcessBrowserTest {
 #endif
 };
 
+// Parameterized fixture for testing startup cleanup of unused Safe Browsing
+// store files.
+class SBSafeBrowsingServiceCleanupTest
+    : public SBSafeBrowsingServiceTestBase,
+      public ::testing::WithParamInterface<bool> {
+ public:
+  SBSafeBrowsingServiceCleanupTest()
+      : SBSafeBrowsingServiceTestBase(/*use_v5=*/GetParam(),
+                                      /*enable_warning_shown_reports=*/true) {}
+
+  // Initializes the user data directory with dummy and active store files
+  // before the browser and SafeBrowsingService start.
+  bool SetUpUserDataDirectory() override {
+    base::FilePath user_data_dir;
+    CHECK(base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir));
+    base::FilePath sb_dir =
+        user_data_dir.Append(safe_browsing::kSafeBrowsingBaseFilename);
+    CHECK(base::CreateDirectory(sb_dir));
+
+    active_store_ = sb_dir.AppendASCII(use_v5() ? "UrlMalware_v5.store"
+                                                : "UrlMalware.store");
+    deprecated_store_ = sb_dir.AppendASCII("CertCsdDownloadAllowlist.store");
+    deprecated_store_hash_ =
+        sb_dir.AppendASCII("CertCsdDownloadAllowlist.store.0");
+    ip_malware_store_ = sb_dir.AppendASCII("IpMalware.store");
+    stale_hash_ = sb_dir.AppendASCII(use_v5() ? "UrlMalware_v5.store.stale"
+                                              : "UrlMalware.store.stale");
+    unrelated_file_ = sb_dir.AppendASCII("unrelated.txt");
+
+    CHECK(base::WriteFile(active_store_, "active"));
+    CHECK(base::WriteFile(deprecated_store_, "deprecated"));
+    CHECK(base::WriteFile(deprecated_store_hash_, "deprecated_hash"));
+    CHECK(base::WriteFile(ip_malware_store_, "ip_malware"));
+    CHECK(base::WriteFile(stale_hash_, "stale_hash"));
+    CHECK(base::WriteFile(unrelated_file_, "unrelated"));
+
+    return SBSafeBrowsingServiceTestBase::SetUpUserDataDirectory();
+  }
+
+ protected:
+  // File path for an active store that should be preserved.
+  base::FilePath active_store_;
+  // File path for a deprecated store that should be deleted.
+  base::FilePath deprecated_store_;
+  // File path for a deprecated store hash file that should be deleted.
+  base::FilePath deprecated_store_hash_;
+  // File path for another deprecated store that should be deleted.
+  base::FilePath ip_malware_store_;
+  // File path for a stale hash file that should be deleted.
+  base::FilePath stale_hash_;
+  // File path for an unrelated file that should be preserved.
+  base::FilePath unrelated_file_;
+};
+
+IN_PROC_BROWSER_TEST_P(SBSafeBrowsingServiceCleanupTest,
+                       DeleteUnusedStoreFilesOnStartup) {
+  // Wait for the database to complete startup initialization (which includes
+  // the cleanup pass).
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return safe_browsing_service()->database_manager()->IsDatabaseReady();
+  }));
+
+  // Required for `base::PathExists` calls below.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  // Confirm dummy / deprecated and stale store files are gone.
+  EXPECT_FALSE(base::PathExists(deprecated_store_));
+  EXPECT_FALSE(base::PathExists(deprecated_store_hash_));
+  EXPECT_FALSE(base::PathExists(ip_malware_store_));
+  EXPECT_FALSE(base::PathExists(stale_hash_));
+
+  // Confirm active store files and unrelated files are still present.
+  EXPECT_TRUE(base::PathExists(active_store_));
+  EXPECT_TRUE(base::PathExists(unrelated_file_));
+}
+
+// Parameterized fixture for SafeBrowsingService tests running with v4 and v5
+// lists.
+class SBSafeBrowsingServiceTest : public SBSafeBrowsingServiceTestBase,
+                                  public ::testing::WithParamInterface<bool> {
+ public:
+  // Constructs the parameterized test fixture.
+  SBSafeBrowsingServiceTest()
+      : SBSafeBrowsingServiceTestBase(GetParam(),
+                                      /*enable_warning_shown_reports=*/true) {}
+};
+
 // Proceeding through an interstitial should cause it to get allowlisted for
 // that user.
-IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, MalwareWithAllowlist) {
+IN_PROC_BROWSER_TEST_P(SBSafeBrowsingServiceTest, MalwareWithAllowlist) {
   GURL url = embedded_test_server()->GetURL(kEmptyPage);
 
   // After adding the URL to SafeBrowsing database and full hash cache, we
@@ -556,7 +720,7 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, MalwareWithAllowlist) {
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   // There should be an InterstitialPage.
-  WebContents* contents = browser()->tab_strip_model()->GetActiveWebContents();
+  WebContents* contents = browser()->GetTabStripModel()->GetActiveWebContents();
 
   security_interstitials::SecurityInterstitialTabHelper* helper =
       security_interstitials::SecurityInterstitialTabHelper::FromWebContents(
@@ -578,7 +742,7 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, MalwareWithAllowlist) {
 
 // This test confirms that prefetches don't themselves get the interstitial
 // treatment.
-IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, Prefetch) {
+IN_PROC_BROWSER_TEST_P(SBSafeBrowsingServiceTest, Prefetch) {
   GURL url = embedded_test_server()->GetURL(kPrefetchMalwarePage);
   GURL malware_url = embedded_test_server()->GetURL(kMalwarePage);
 
@@ -599,7 +763,7 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, Prefetch) {
 }
 
 // Ensure that the referrer information is preserved in the hit report.
-IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, MainFrameHitWithReferrer) {
+IN_PROC_BROWSER_TEST_P(SBSafeBrowsingServiceTest, MainFrameHitWithReferrer) {
   GURL first_url = embedded_test_server()->GetURL(kEmptyPage);
   GURL bad_url = embedded_test_server()->GetURL(kMalwarePage);
 
@@ -627,11 +791,11 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, MainFrameHitWithReferrer) {
 // START: These tests use SafeBrowsingService::Client to directly interact with
 // SafeBrowsingService.
 ///////////////////////////////////////////////////////////////////////////////
-IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckDownloadUrl) {
+IN_PROC_BROWSER_TEST_P(SBSafeBrowsingServiceTest, CheckDownloadUrl) {
   GURL badbin_url = embedded_test_server()->GetURL(kMalwareFile);
   std::vector<GURL> badbin_urls(1, badbin_url);
 
-  scoped_refptr<TestSBClient> client(new TestSBClient);
+  scoped_refptr<TestSBClient> client(CreateTestSBClient());
   client->CheckDownloadUrl(badbin_urls);
 
   // Since badbin_url is not in database, it is considered to be safe.
@@ -645,10 +809,10 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckDownloadUrl) {
   EXPECT_EQ(SB_THREAT_TYPE_URL_BINARY_MALWARE, client->GetThreatType());
 }
 
-IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckUnwantedSoftwareUrl) {
+IN_PROC_BROWSER_TEST_P(SBSafeBrowsingServiceTest, CheckUnwantedSoftwareUrl) {
   const GURL bad_url = embedded_test_server()->GetURL(kMalwareFile);
   {
-    scoped_refptr<TestSBClient> client(new TestSBClient);
+    scoped_refptr<TestSBClient> client(CreateTestSBClient());
 
     // Since bad_url is not in database, it is considered to be
     // safe.
@@ -665,14 +829,14 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckUnwantedSoftwareUrl) {
 
   // The unwantedness should survive across multiple clients.
   {
-    scoped_refptr<TestSBClient> client(new TestSBClient);
+    scoped_refptr<TestSBClient> client(CreateTestSBClient());
     client->CheckBrowseUrl(bad_url);
     EXPECT_EQ(SB_THREAT_TYPE_URL_UNWANTED, client->GetThreatType());
   }
 
   // An unwanted URL also marked as malware should be flagged as malware.
   {
-    scoped_refptr<TestSBClient> client(new TestSBClient);
+    scoped_refptr<TestSBClient> client(CreateTestSBClient());
 
     MarkUrlForMalwareUnexpired(bad_url);
 
@@ -681,10 +845,10 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckUnwantedSoftwareUrl) {
   }
 }
 
-IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckBrowseUrl) {
+IN_PROC_BROWSER_TEST_P(SBSafeBrowsingServiceTest, CheckBrowseUrl) {
   const GURL bad_url = embedded_test_server()->GetURL(kMalwareFile);
   {
-    scoped_refptr<TestSBClient> client(new TestSBClient);
+    scoped_refptr<TestSBClient> client(CreateTestSBClient());
 
     // Since bad_url is not in database, it is considered to be
     // safe.
@@ -701,7 +865,7 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckBrowseUrl) {
 
   // The unwantedness should survive across multiple clients.
   {
-    scoped_refptr<TestSBClient> client(new TestSBClient);
+    scoped_refptr<TestSBClient> client(CreateTestSBClient());
     client->CheckBrowseUrl(bad_url);
     EXPECT_EQ(SB_THREAT_TYPE_URL_MALWARE, client->GetThreatType());
   }
@@ -709,7 +873,7 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckBrowseUrl) {
   // Adding the unwanted state to an existing malware URL should have no impact
   // (i.e. a malware hit should still prevail).
   {
-    scoped_refptr<TestSBClient> client(new TestSBClient);
+    scoped_refptr<TestSBClient> client(CreateTestSBClient());
 
     MarkUrlForUwsUnexpired(bad_url);
 
@@ -718,10 +882,10 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckBrowseUrl) {
   }
 }
 
-IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckBrowseUrlForBilling) {
+IN_PROC_BROWSER_TEST_P(SBSafeBrowsingServiceTest, CheckBrowseUrlForBilling) {
   const GURL bad_url = embedded_test_server()->GetURL(kBillingInterstitialPage);
   {
-    scoped_refptr<TestSBClient> client(new TestSBClient);
+    scoped_refptr<TestSBClient> client(CreateTestSBClient());
 
     // Since the feature isn't enabled and the URL isn't in the database, it is
     // considered to be safe.
@@ -741,45 +905,45 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckBrowseUrlForBilling) {
   }
 }
 
-class V4SafeBrowsingServiceWithAutoReloadTest
-    : public V4SafeBrowsingServiceTest {
+// Parameterized fixture for auto reload tests across v4 and v5 lists.
+class SafeBrowsingServiceWithAutoReloadTest : public SBSafeBrowsingServiceTest {
  public:
-  V4SafeBrowsingServiceWithAutoReloadTest() = default;
+  SafeBrowsingServiceWithAutoReloadTest() = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kEnableAutoReload);
-    V4SafeBrowsingServiceTest::SetUpCommandLine(command_line);
+    SBSafeBrowsingServiceTest::SetUpCommandLine(command_line);
   }
 };
 
 // SafeBrowsing interstitials should disable autoreload timer.
-IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceWithAutoReloadTest,
+IN_PROC_BROWSER_TEST_P(SafeBrowsingServiceWithAutoReloadTest,
                        AutoReloadDisabled) {
   GURL url = embedded_test_server()->GetURL(kEmptyPage);
   MarkUrlForMalwareUnexpired(url);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   EXPECT_TRUE(ShowingInterstitialPage());
-  WebContents* contents = browser()->tab_strip_model()->GetActiveWebContents();
+  WebContents* contents = browser()->GetTabStripModel()->GetActiveWebContents();
   auto* reloader = error_page::NetErrorAutoReloader::FromWebContents(contents);
   const std::optional<base::OneShotTimer>& timer =
       reloader->next_reload_timer_for_testing();
   EXPECT_EQ(std::nullopt, timer);
 }
 
-class V4SafeBrowsingServiceWarningShownCSBRRsDisabled
-    : public V4SafeBrowsingServiceTest {
+// Parameterized fixture for warning shown reports disabled across v4 and v5
+// lists.
+class SafeBrowsingServiceWarningShownCSBRRsDisabled
+    : public SBSafeBrowsingServiceTestBase,
+      public ::testing::WithParamInterface<bool> {
  public:
-  V4SafeBrowsingServiceWarningShownCSBRRsDisabled() {
-    scoped_feature_list_.InitAndDisableFeature(
-        safe_browsing::kCreateWarningShownClientSafeBrowsingReports);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
+  // Constructs the test fixture with warning shown reports disabled.
+  SafeBrowsingServiceWarningShownCSBRRsDisabled()
+      : SBSafeBrowsingServiceTestBase(GetParam(),
+                                      /*enable_warning_shown_reports=*/false) {}
 };
 
-IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceWarningShownCSBRRsDisabled,
+IN_PROC_BROWSER_TEST_P(SafeBrowsingServiceWarningShownCSBRRsDisabled,
                        CheckWarningShownReportNotSent) {
   GURL bad_url = embedded_test_server()->GetURL(kMalwarePage);
   MarkUrlForMalwareUnexpired(bad_url);
@@ -791,15 +955,22 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceWarningShownCSBRRsDisabled,
 }
 
 // Parameterised fixture to permit running the same test for Window and Worker
-// scopes.
-class V4SafeBrowsingServiceJsRequestNoInterstitialTest
-    : public ::testing::WithParamInterface<JsRequestTestParam>,
-      public V4SafeBrowsingServiceTest {};
+// scopes across v4 and v5 lists.
+class SafeBrowsingServiceJsRequestNoInterstitialTest
+    : public SBSafeBrowsingServiceTestBase,
+      public ::testing::WithParamInterface<
+          std::tuple<JsRequestTestParam, bool>> {
+ public:
+  // Constructs the parameterized test fixture.
+  SafeBrowsingServiceJsRequestNoInterstitialTest()
+      : SBSafeBrowsingServiceTestBase(std::get<1>(GetParam()),
+                                      /*enable_warning_shown_reports=*/true) {}
+};
 
-IN_PROC_BROWSER_TEST_P(V4SafeBrowsingServiceJsRequestNoInterstitialTest,
+IN_PROC_BROWSER_TEST_P(SafeBrowsingServiceJsRequestNoInterstitialTest,
                        MalwareNotBlocked) {
   GURL base_url = embedded_test_server()->GetURL(kMalwareJsRequestPage);
-  JsRequestTestParam param = GetParam();
+  JsRequestTestParam param = std::get<0>(GetParam());
   MarkUrlForMalwareUnexpired(
       ConstructJsRequestURL(base_url, param.request_type));
 
@@ -814,21 +985,24 @@ IN_PROC_BROWSER_TEST_P(V4SafeBrowsingServiceJsRequestNoInterstitialTest,
 
 INSTANTIATE_TEST_SUITE_P(
     All,
-    V4SafeBrowsingServiceJsRequestNoInterstitialTest,
-    ::testing::Values(
-        JsRequestTestParam(ContextType::kWindow, JsRequestType::kWebSocket),
-        JsRequestTestParam(ContextType::kWorker, JsRequestType::kWebSocket),
-        JsRequestTestParam(ContextType::kSharedWorker,
-                           JsRequestType::kWebSocket),
-        JsRequestTestParam(ContextType::kServiceWorker,
-                           JsRequestType::kWebSocket),
-        JsRequestTestParam(ContextType::kWindow, JsRequestType::kFetch),
-        JsRequestTestParam(ContextType::kWorker, JsRequestType::kFetch),
-        JsRequestTestParam(ContextType::kSharedWorker, JsRequestType::kFetch),
-        JsRequestTestParam(ContextType::kServiceWorker,
-                           JsRequestType::kFetch)));
+    SafeBrowsingServiceJsRequestNoInterstitialTest,
+    ::testing::Combine(
+        ::testing::Values(
+            JsRequestTestParam(ContextType::kWindow, JsRequestType::kWebSocket),
+            JsRequestTestParam(ContextType::kWorker, JsRequestType::kWebSocket),
+            JsRequestTestParam(ContextType::kSharedWorker,
+                               JsRequestType::kWebSocket),
+            JsRequestTestParam(ContextType::kServiceWorker,
+                               JsRequestType::kWebSocket),
+            JsRequestTestParam(ContextType::kWindow, JsRequestType::kFetch),
+            JsRequestTestParam(ContextType::kWorker, JsRequestType::kFetch),
+            JsRequestTestParam(ContextType::kSharedWorker,
+                               JsRequestType::kFetch),
+            JsRequestTestParam(ContextType::kServiceWorker,
+                               JsRequestType::kFetch)),
+        ::testing::Bool()));
 
-IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckDownloadUrlRedirects) {
+IN_PROC_BROWSER_TEST_P(SBSafeBrowsingServiceTest, CheckDownloadUrlRedirects) {
   GURL original_url = embedded_test_server()->GetURL(kEmptyPage);
   GURL badbin_url = embedded_test_server()->GetURL(kMalwareFile);
   GURL final_url = embedded_test_server()->GetURL(kEmptyPage);
@@ -837,7 +1011,7 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckDownloadUrlRedirects) {
   badbin_urls.push_back(badbin_url);
   badbin_urls.push_back(final_url);
 
-  scoped_refptr<TestSBClient> client(new TestSBClient);
+  scoped_refptr<TestSBClient> client(CreateTestSBClient());
   client->CheckDownloadUrl(badbin_urls);
 
   // Since badbin_url is not in database, it is considered to be safe.
@@ -851,7 +1025,7 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest, CheckDownloadUrlRedirects) {
   EXPECT_EQ(SB_THREAT_TYPE_URL_BINARY_MALWARE, client->GetThreatType());
 }
 
-IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest,
+IN_PROC_BROWSER_TEST_P(SBSafeBrowsingServiceTest,
                        NotificationsAcceptedReportSentWithCorrectOrigins) {
   SetUpSendingNotificationsAcceptedCSBRR();
   network::TestURLLoaderFactory test_url_loader_factory;
@@ -903,7 +1077,7 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest,
       << "Report was not sent or not verified by the interceptor";
 }
 
-IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest,
+IN_PROC_BROWSER_TEST_P(SBSafeBrowsingServiceTest,
                        NotificationsAcceptedReportSentWithReferrerChain) {
   SetUpSendingNotificationsAcceptedCSBRR();
   network::TestURLLoaderFactory test_url_loader_factory;
@@ -923,7 +1097,7 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest,
 
   // Perform navigations to establish a referrer chain.
   WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), referrer_gurl));
 
   // Navigate from referrer_gurl to landing_page_gurl to create a referrer.
@@ -986,7 +1160,20 @@ IN_PROC_BROWSER_TEST_F(V4SafeBrowsingServiceTest,
 // SafeBrowsingService.
 ///////////////////////////////////////////////////////////////////////////////
 
-// TODO(vakh): Add test for UnwantedMainFrame.
+INSTANTIATE_TEST_SUITE_P(All,
+                         SBSafeBrowsingServiceCleanupTest,
+                         ::testing::Bool());
 
+INSTANTIATE_TEST_SUITE_P(All, SBSafeBrowsingServiceTest, ::testing::Bool());
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         SafeBrowsingServiceWithAutoReloadTest,
+                         ::testing::Bool());
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         SafeBrowsingServiceWarningShownCSBRRsDisabled,
+                         ::testing::Bool());
+
+// TODO(vakh): Add test for UnwantedMainFrame.
 
 }  // namespace safe_browsing

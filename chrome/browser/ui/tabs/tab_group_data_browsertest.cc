@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/tabs/tab_group_data.h"
 
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -17,6 +16,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
@@ -104,7 +104,7 @@ IN_PROC_BROWSER_TEST_F(TabGroupDataBrowserTest, NotifyOnTabRemovedFromGroup) {
 IN_PROC_BROWSER_TEST_F(TabGroupDataBrowserTest, NotifyOnTabMovedInGroup) {
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
       browser(), embedded_test_server()->GetURL("example.com", "/title1.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
 
   TabStripModel* const tab_strip_model = browser()->tab_strip_model();

@@ -13,7 +13,6 @@
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
@@ -45,7 +44,7 @@ BrowserCleanupHandler::BrowserCleanupHandler() = default;
 BrowserCleanupHandler::~BrowserCleanupHandler() = default;
 
 void BrowserCleanupHandler::Cleanup(CleanupHandlerCallback callback) {
-  DCHECK(callback_.is_null());
+  CHECK(callback_.is_null(), base::NotFatalUntil::M161);
 
   profile_ = ProfileManager::GetActiveUserProfile();
   if (!profile_) {

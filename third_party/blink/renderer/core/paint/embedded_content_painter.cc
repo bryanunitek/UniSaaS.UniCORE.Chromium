@@ -10,6 +10,7 @@
 #include "base/metrics/field_trial_params.h"
 #include "cc/layers/view_transition_content_layer.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/embedded_content_view.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
@@ -25,8 +26,12 @@
 #include "third_party/blink/renderer/platform/geometry/physical_offset.h"
 #include "third_party/blink/renderer/platform/graphics/paint/display_item_cache_skipper.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
+#include "third_party/blink/renderer/platform/graphics/paint/effect_paint_property_node.h"
 #include "third_party/blink/renderer/platform/graphics/paint/foreign_layer_display_item.h"
+#include "third_party/blink/renderer/platform/graphics/paint/paint_controller.h"
 #include "third_party/blink/renderer/platform/graphics/paint/scoped_paint_chunk_properties.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "ui/gfx/geometry/point.h"
 
 namespace blink {
 
@@ -65,18 +70,27 @@ void EmbeddedContentPainter::PaintReplaced(const PaintInfo& paint_info,
       RemoveSvgFilterPaint(layout_embedded_content_, paint_info);
 
   // Apply the translation to offset the content within the object's border-box
-  // only if we're not using a transform node for this. If the frame size is
-  // frozen then |ReplacedContentTransform| is used instead.
-  gfx::Point paint_location;
-  if (!layout_embedded_content_.FrozenFrameSize().has_value()) {
-    paint_location = ToRoundedPoint(
-        paint_offset + layout_embedded_content_.ReplacedContentRect().offset);
-  }
+  // only if we're not using a transform node for this.
+  // LINT.IfChange(FramePixelSnapping)
+  gfx::Point paint_location = ToRoundedPoint(
+      paint_offset + layout_embedded_content_.ReplacedContentRect().offset);
+  // LINT.ThenChange(../layout/layout_embedded_content.cc:FramePixelSnapping)
 
-  gfx::Vector2d view_paint_offset =
-      paint_location - embedded_content_view->FrameRect().origin();
-  CullRect adjusted_cull_rect = paint_info.GetCullRect();
-  adjusted_cull_rect.Move(-view_paint_offset);
+  gfx::Vector2d view_paint_offset = paint_location.OffsetFromOrigin();
+  CullRect adjusted_cull_rect;
+  if (RuntimeEnabledFeatures::AvoidEmbeddedContentViewLocationEnabled()) {
+    if (!paint_info.IntersectsCullRect(
+            PhysicalRect(gfx::Rect(embedded_content_view->Size())),
+            PhysicalOffset(view_paint_offset))) {
+      return;
+    }
+    // `adjusted_cull_rect` won't be used in Paint().
+  } else {
+    view_paint_offset -=
+        embedded_content_view->DeprecatedLocation().OffsetFromOrigin();
+    adjusted_cull_rect = paint_info.GetCullRect();
+    adjusted_cull_rect.Move(-view_paint_offset);
+  }
   embedded_content_view->Paint(paint_info, adjusted_cull_rect,
                                view_paint_offset);
 
@@ -95,11 +109,15 @@ void EmbeddedContentPainter::PaintReplaced(const PaintInfo& paint_info,
   if (auto layer =
           GetSubframeSnapshotLayer(*embedded_content_view, paint_info.phase)) {
     GraphicsContext& context = paint_info.context;
-    layer->SetBounds(embedded_content_view->FrameRect().size());
+    layer->SetBounds(embedded_content_view->Size());
     layer->SetIsDrawable(true);
+    PropertyTreeStateOrAlias properties =
+        context.GetPaintController().CurrentPaintChunkProperties();
+    properties.SetEffect(EffectForViewTransitionContent(
+        properties.Effect(), layout_embedded_content_.GetDocument()));
     RecordForeignLayer(context, layout_embedded_content_,
                        DisplayItem::kForeignLayerViewTransitionContent,
-                       std::move(layer), paint_location);
+                       std::move(layer), paint_location, &properties);
   }
 }
 
@@ -108,38 +126,36 @@ std::optional<ScopedPaintChunkProperties>
 EmbeddedContentPainter::RemoveSvgFilterPaint(
     const LayoutEmbeddedContent& layout_embedded_content,
     const PaintInfo& paint_info) {
-  // First, we gate the removal of the reference filter paint behind a feature
-  // flag. This is differentiated per-type of embedded content.
+  // First, we differentiate per-type of embedded content.
   const EmbeddedContentView* embedded_content_view =
       layout_embedded_content.GetEmbeddedContentView();
-  if (!embedded_content_view ||
-      !base::FeatureList::IsEnabled(features::kPreventSvgFilterPaint)) {
+  if (!embedded_content_view) {
     return std::nullopt;
   }
   DisplayItem::Type display_item_type = DisplayItem::kUninitializedType;
   switch (embedded_content_view->SvgFilterPaintedCounter()) {
     case mojom::blink::WebFeature::kSvgFilterPaintedOnLocalFrame:
       // We only care about restricted local frames.
-      if (!features::kPreventSvgFilterPaintOnLocalFrameRestricted.Get() ||
-          !To<LocalFrameView>(embedded_content_view)
+      if (!To<LocalFrameView>(embedded_content_view)
                ->GetFrame()
                .IsCrossOriginToParentOrOuterDocument()) {
         return std::nullopt;
       }
-      // We cannot remove the filter here as that must be done during pre-paint
-      // in PaintPropertyTreeBuilder::SetupContextForFrame, but we still want to
-      // call CountDeprecation below, so we keep kUninitializedType as the type.
+      // For in-process cross-origin frames (`LocalFrameView`), each descendant
+      // LayoutObject paints using its own `LocalBorderBoxProperties()`, so the
+      // filter cannot be removed via `ScopedPaintChunkProperties` here and was
+      // already stripped during PrePaint in
+      // `PaintPropertyTreeBuilder::SetupContextForFrame`. However, we still
+      // fall through with `kUninitializedType` to record `CountDeprecation`
+      // below when the frame is actually painted.
       break;
     case mojom::blink::WebFeature::kSvgFilterPaintedOnRemoteFrame:
-      if (!features::kPreventSvgFilterPaintOnRemoteFrame.Get()) {
-        return std::nullopt;
-      }
+      // Out-of-process frames (`RemoteFrameView`) are not walked by PrePaint
+      // and instead emit a single `kForeignLayerRemoteFrame` display item using
+      // the parent's current paint chunk properties, which we override below.
       display_item_type = DisplayItem::kForeignLayerRemoteFrame;
       break;
     case mojom::blink::WebFeature::kSvgFilterPaintedOnWebPlugin:
-      if (!features::kPreventSvgFilterPaintOnWebPlugin.Get()) {
-        return std::nullopt;
-      }
       display_item_type = DisplayItem::kWebPlugin;
       break;
     default:
@@ -169,6 +185,25 @@ EmbeddedContentPainter::RemoveSvgFilterPaint(
   return std::optional<ScopedPaintChunkProperties>{
       std::in_place, paint_info.context.GetPaintController(), *candidate_effect,
       layout_embedded_content, display_item_type};
+}
+
+// static
+const EffectPaintPropertyNodeOrAlias&
+EmbeddedContentPainter::EffectForViewTransitionContent(
+    const EffectPaintPropertyNodeOrAlias& effect,
+    Document& document) {
+  if (!RuntimeEnabledFeatures::ViewTransitionPreventSvgFilterPaintEnabled()) {
+    return effect;
+  }
+  const EffectPaintPropertyNode* candidate_effect =
+      PaintPropertyTreeBuilder::GetFirstParentEffectWithoutReferenceFilter(
+          &effect);
+  if (!candidate_effect) {
+    return effect;
+  }
+  document.CountDeprecation(
+      mojom::blink::WebFeature::kViewTransitionPreventSvgFilterPaint);
+  return *candidate_effect;
 }
 
 }  // namespace blink

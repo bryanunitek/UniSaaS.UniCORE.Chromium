@@ -6,6 +6,7 @@
 
 #include <random>
 
+#include "base/functional/bind.h"
 #include "base/json/values_util.h"
 #include "base/rand_util.h"
 #include "base/time/default_tick_clock.h"
@@ -14,10 +15,11 @@
 #include "chrome/browser/apps/browser_instance/web_contents_instance_id_utils.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/prefs/pref_service.h"
@@ -60,7 +62,7 @@ bool IsAppBrowser(BrowserWindowInterface* browser) {
     return false;
   }
   return !web_app::GetAppIdFromApplicationName(
-              browser->GetBrowserForMigrationOnly()->app_name())
+              BrowserInitState::From(browser)->create_params().app_name)
               .empty();
 }
 
@@ -136,7 +138,24 @@ void WebsiteMetrics::ActiveTabWebContentsObserver::OnPrimaryPageChanged() {
   // In some test cases, AppBannerManager might be null.
   if (app_banner_manager) {
     app_banner_manager_observer_.Observe(app_banner_manager);
+    // The manager's lifetime is tied to the tab, which can end before this
+    // observer's WebContents. Detach when the tab goes away; the
+    // drag-to-another-window path re-attaches via OnPrimaryPageChanged.
+    tabs::TabInterface* tab =
+        tabs::TabInterface::MaybeGetFromContents(web_contents());
+    if (tab) {
+      tab_will_detach_subscription_ = tab->RegisterWillDetach(
+          base::BindRepeating(&ActiveTabWebContentsObserver::OnTabWillDetach,
+                              base::Unretained(this)));
+    }
   }
+}
+
+void WebsiteMetrics::ActiveTabWebContentsObserver::OnTabWillDetach(
+    tabs::TabInterface* tab,
+    tabs::TabInterface::DetachReason reason) {
+  app_banner_manager_observer_.Reset();
+  tab_will_detach_subscription_ = {};
 }
 
 void WebsiteMetrics::ActiveTabWebContentsObserver::PrimaryPageChanged(
@@ -224,7 +243,7 @@ void WebsiteMetrics::OnTabStripModelChanged(
     TabStripModel* tab_strip_model,
     const TabStripModelChange& change,
     const TabStripSelectionChange& selection) {
-  DCHECK(tab_strip_model);
+  CHECK(tab_strip_model, base::NotFatalUntil::M161);
   auto* window = GetWindowWithTabStripModel(tab_strip_model);
   if (!window || !window_to_web_contents_.contains(window)) {
     // Skip the app browser window.
@@ -287,7 +306,8 @@ void WebsiteMetrics::OnWindowDestroying(aura::Window* window) {
 
 void WebsiteMetrics::HistoryServiceBeingDeleted(
     history::HistoryService* history_service) {
-  DCHECK(history_observation_.IsObservingSource(history_service));
+  CHECK(history_observation_.IsObservingSource(history_service),
+        base::NotFatalUntil::M161);
   history_observation_.Reset();
 }
 
@@ -624,7 +644,7 @@ void WebsiteMetrics::SetTabInActivated(content::WebContents* web_contents) {
   }
 
   const auto current_time = tick_clock_->NowTicks();
-  DCHECK_GE(current_time, it->second.start_time);
+  CHECK_GE(current_time, it->second.start_time, base::NotFatalUntil::M161);
   it->second.running_time_in_five_minutes +=
       current_time - it->second.start_time;
   it->second.is_activated = false;
@@ -636,7 +656,7 @@ void WebsiteMetrics::SaveUsageTime() {
     if (it.second.is_activated) {
       // Continued usage of active web content.
       const auto current_time = tick_clock_->NowTicks();
-      DCHECK_GE(current_time, it.second.start_time);
+      CHECK_GE(current_time, it.second.start_time, base::NotFatalUntil::M161);
       it.second.running_time_in_five_minutes +=
           current_time - it.second.start_time;
       it.second.start_time = current_time;

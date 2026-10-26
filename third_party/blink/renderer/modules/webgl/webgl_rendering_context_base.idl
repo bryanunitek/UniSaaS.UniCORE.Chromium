@@ -469,6 +469,7 @@ interface mixin WebGLRenderingContextBase {
     readonly attribute GLsizei drawingBufferHeight;
     [RuntimeEnabled=WebGLDrawingBufferStorage] readonly attribute GLenum drawingBufferFormat;
     [CallWith=ScriptState, RaisesException=Setter] attribute PredefinedColorSpace drawingBufferColorSpace;
+    [RuntimeEnabled=WebGLToneMapping] CanvasToneMapping drawingBufferToneMapping(optional CanvasToneMapping toneMapping);
     [CallWith=ScriptState, RaisesException=Setter] attribute PredefinedColorSpace unpackColorSpace;
 
     void activeTexture(GLenum texture);
@@ -646,7 +647,8 @@ interface mixin WebGLRenderingContextBase {
         GLenum format, GLenum type, VideoFrame frame);
 
     [RuntimeEnabled=CanvasDrawElement, RaisesException, MeasureAs=HTMLInCanvas]
-    void texElementImage2D(GLenum target, GLenum internalformat,
+    void texElementSubImage2D(GLenum target, GLint level,
+                           GLint xoffset, GLint yoffset,
                            (Element or ElementImage) element,
                            optional WebGLCopyElementImageConfig config = {});
 

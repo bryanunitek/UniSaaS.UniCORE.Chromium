@@ -9,13 +9,14 @@
 
 #include "base/memory/raw_ref.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 class BrowserWindowInterface;
 class GURL;
 class Profile;
 class HistoryClustersSidePanelUI;
+class SidePanelEntry;
 class SidePanelEntryScope;
-class SidePanelRegistry;
 
 namespace views {
 class View;
@@ -25,16 +26,20 @@ class View;
 // the history clusters SidePanelEntry.
 class HistoryClustersSidePanelCoordinator {
  public:
+  DECLARE_USER_DATA(HistoryClustersSidePanelCoordinator);
+
   HistoryClustersSidePanelCoordinator(BrowserWindowInterface* browser,
                                       Profile* profile);
+
+  // Returns the coordinator for `browser`, or null if it does not have one.
+  static HistoryClustersSidePanelCoordinator* From(
+      BrowserWindowInterface* browser);
   ~HistoryClustersSidePanelCoordinator();
 
   // Returns whether HistoryClustersSidePanelCoordinator is supported for
   // `profile`. If this returns false, it should not be registered with the side
   // panel registry.
   static bool IsSupported(Profile* profile);
-
-  void CreateAndRegisterEntry(SidePanelRegistry* global_registry);
 
   // Shows the Journeys side panel with `query` pre-populated. Returns true if
   // this was successful.
@@ -49,6 +54,10 @@ class HistoryClustersSidePanelCoordinator {
   void OnHistoryClustersPreferenceChanged();
 
  private:
+  ui::ScopedUnownedUserData<HistoryClustersSidePanelCoordinator>
+      scoped_unowned_user_data_;
+
+  std::unique_ptr<SidePanelEntry> CreateEntry();
   std::unique_ptr<views::View> CreateHistoryClustersWebView(
       SidePanelEntryScope& scope);
 

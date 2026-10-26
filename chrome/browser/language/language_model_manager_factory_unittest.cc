@@ -4,8 +4,11 @@
 
 #include "chrome/browser/language/language_model_manager_factory.h"
 
+#include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/language/core/browser/language_model_manager.h"
+#include "components/language/core/common/language_experiments.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -43,12 +46,33 @@ TEST(LanguageModelManagerFactoryTest, GetLanguageModels) {
   // Must wait for task posted in PrepareLanguageModels to complete.
   task_environment.RunUntilIdle();
 
-  // The test manager should be initially populated with a primary model and a
-  // ULPLanguageModel.
+  // The test manager should be initially populated with a primary model, and
+  // without a ULPLanguageModel since GmsCoreUlp is disabled by default.
   EXPECT_THAT(manager->GetPrimaryModel(), Not(IsNull()));
 #if BUILDFLAG(IS_ANDROID)
   EXPECT_THAT(
       manager->GetLanguageModel(language::LanguageModelManager::ModelType::ULP),
-      Not(IsNull()));
+      IsNull());
 #endif
 }
+
+#if BUILDFLAG(IS_ANDROID)
+TEST(LanguageModelManagerFactoryTest, GetLanguageModelsWithGmsCoreUlpEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(language::kGmsCoreUlp);
+
+  content::BrowserTaskEnvironment task_environment;
+
+  TestingProfile profile;
+  const language::LanguageModelManager* const manager =
+      LanguageModelManagerFactory::GetForBrowserContext(&profile);
+  EXPECT_THAT(manager, Not(IsNull()));
+
+  task_environment.RunUntilIdle();
+
+  // With feature enabled, ULP language model is created.
+  EXPECT_THAT(
+      manager->GetLanguageModel(language::LanguageModelManager::ModelType::ULP),
+      Not(IsNull()));
+}
+#endif

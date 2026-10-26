@@ -28,7 +28,7 @@
 #include "components/account_id/account_id.h"
 #include "components/account_manager_core/account.h"
 #include "components/account_manager_core/chromeos/account_manager.h"
-#include "components/account_manager_core/pref_names.h"
+#include "components/policy/core/common/policy_pref_names.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
@@ -95,16 +95,17 @@ class AccountManagerPolicyControllerTest : public InProcessBrowserTest {
         identity_test_env->MakePrimaryAccountAvailable(
             kFakePrimaryUsername, signin::ConsentLevel::kSignin);
     ASSERT_EQ(account_id,
-              AccountId::FromUserEmailGaiaId(primary_account_info.email,
-                                             primary_account_info.gaia));
+              AccountId::FromUserEmailGaiaId(primary_account_info.GetEmail(),
+                                             primary_account_info.GetGaiaId()));
 
     // Add accounts in Account Manager.
     auto* account_manager =
         ash::AccountManagerFactory::Get()->GetAccountManager(
             profile_->GetPath().value());
     account_manager->UpsertAccount(
-        ::account_manager::AccountKey::FromGaiaId(primary_account_info.gaia),
-        primary_account_info.email,
+        ::account_manager::AccountKey::FromGaiaId(
+            primary_account_info.GetGaiaId()),
+        primary_account_info.GetEmail(),
         account_manager::AccountManager::kInvalidToken);
     account_manager->UpsertAccount(
         ::account_manager::AccountKey::FromGaiaId(kFakeSecondaryGaiaId),
@@ -157,7 +158,7 @@ IN_PROC_BROWSER_TEST_F(AccountManagerPolicyControllerTest,
   // Use default policy value for |kSecondaryGoogleAccountSigninAllowed|
   // (|true|).
   profile()->GetPrefs()->SetBoolean(
-      ::account_manager::prefs::kSecondaryGoogleAccountSigninAllowed, true);
+      policy::policy_prefs::kSecondaryGoogleAccountSigninAllowed, true);
   ChildAccountTypeChangedUserData::GetForProfile(profile())->SetValue(false);
 
   base::RunLoop().RunUntilIdle();
@@ -177,7 +178,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // Disallow secondary account sign-ins.
   profile()->GetPrefs()->SetBoolean(
-      ::account_manager::prefs::kSecondaryGoogleAccountSigninAllowed, false);
+      policy::policy_prefs::kSecondaryGoogleAccountSigninAllowed, false);
 
   base::RunLoop().RunUntilIdle();
 

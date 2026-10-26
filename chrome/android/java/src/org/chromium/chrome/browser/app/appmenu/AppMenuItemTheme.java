@@ -17,7 +17,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.sync.settings.SyncSettingsUtils;
+import org.chromium.chrome.browser.sync.SyncSettingsUtils;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.components.sync.UserActionableError;
 
@@ -36,8 +36,9 @@ public class AppMenuItemTheme {
     public boolean isMenuItemManaged(@IdRes int itemId) {
         if (itemId == R.id.new_incognito_tab_menu_id
                 || itemId == R.id.new_incognito_window_menu_id) {
-            return IncognitoUtils.isIncognitoModeManaged(
-                    assumeNonNull(mTabModelSelector.getCurrentModel().getProfile()));
+            Profile profile = assumeNonNull(mTabModelSelector.getCurrentModel().getProfile());
+            return IncognitoUtils.isIncognitoModeManaged(profile)
+                    && !IncognitoUtils.isIncognitoModeEnabled(profile);
         }
         return false;
     }

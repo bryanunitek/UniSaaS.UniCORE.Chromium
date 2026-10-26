@@ -48,7 +48,9 @@
 #include "third_party/abseil-cpp/absl/strings/ascii.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/webui/resource_path.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 #include "chrome/browser/ui/navigator/browser_navigator.h"
@@ -73,7 +75,7 @@ namespace {
 
 user_education::TutorialService* GetTutorialService(Profile* profile) {
   auto* service = UserEducationServiceFactory::GetForBrowserContext(profile);
-  return service ? &service->tutorial_service() : nullptr;
+  return service ? service->tutorial_service() : nullptr;
 }
 
 user_education::FeaturePromoRegistry* GetFeaturePromoRegistry(
@@ -388,6 +390,9 @@ auto GetNtpPromoData(
       storage.ReadNtpPromoData(id).value_or(user_education::NtpPromoData());
   std::vector<FeaturePromoDemoPageDataPtr> result;
   std::string eligibility = [&]() {
+    if (!context || !context->IsValid()) {
+      return "Not Eligible";
+    }
     switch (spec.eligibility_callback().Run(context)) {
       case user_education::NtpPromoSpecification::Eligibility::kEligible:
         return "Eligible";
@@ -848,6 +853,9 @@ void UserEducationInternalsPageHandlerImpl::GetNewBadges(
   auto* const storage_service = GetStorageService(profile_);
   if (registry) {
     for (const auto& [feature, spec] : registry->feature_data()) {
+      if (!base::FeatureList::IsEnabled(*feature)) {
+        continue;
+      }
       info_list.emplace_back(FeaturePromoDemoPageInfo::New(
           RemovePrefixAndCamelCase(feature->name, ""),
           spec.metadata.additional_description, feature->name, "\"New\" Badge",
@@ -915,6 +923,7 @@ void UserEducationInternalsPageHandlerImpl::ClearNewBadgeData(
   }
 
   auto data = storage_service->ReadNewBadgeData(*feature);
+  data.feature_enabled_time = base::Time::Now();
   data.show_count = 0;
   data.used_count = 0;
   storage_service->SaveNewBadgeData(*feature, data);
@@ -938,7 +947,7 @@ void UserEducationInternalsPageHandlerImpl::LaunchWhatsNewStaging() {
   GURL url = net::AppendQueryParameter(GURL(chrome::kChromeUIWhatsNewURL),
                                        "staging", "true");
   NavigateParams params(profile_, url, ui::PAGE_TRANSITION_TYPED);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   params.browser = GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
       web_ui_->GetWebContents());
   Navigate(&params);

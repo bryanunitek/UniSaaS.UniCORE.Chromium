@@ -87,7 +87,7 @@ public class NtpCustomizationPolicyManager {
         if (mIsNtpCustomBackgroundEnabled) return;
 
         // Removes all NTP custom background related info if disabled by policy.
-        NtpCustomizationUtils.resetNtpCustomBackgroundData();
+        NtpCustomizationUtils.resetNtpCustomBackgroundDataForPolicy();
     }
 
     /** Returns whether New Tab Page customization is allowed by enterprise policy. */
@@ -102,6 +102,7 @@ public class NtpCustomizationPolicyManager {
     public void destroy() {
         if (mPrefChangeRegistrar != null) {
             mPrefChangeRegistrar.removeObserver(Pref.NTP_CUSTOM_BACKGROUND_DICT);
+            mPrefChangeRegistrar.destroy();
             mPrefChangeRegistrar = null;
         }
         mProfile = null;

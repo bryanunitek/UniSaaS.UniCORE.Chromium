@@ -12,19 +12,25 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/types/expected.h"
 #include "base/types/optional_ref.h"
-#include "components/services/storage/shared_storage/shared_storage_manager.h"
 #include "content/browser/devtools/protocol/devtools_domain_handler.h"
 #include "content/browser/devtools/protocol/storage.h"
-#include "content/browser/interest_group/devtools_enums.h"
-#include "content/browser/interest_group/interest_group_manager_impl.h"
-#include "content/browser/shared_storage/shared_storage_runtime_manager.h"
 #include "content/public/browser/global_routing_id.h"
 #include "storage/browser/quota/quota_manager.h"
-#include "third_party/blink/public/common/shared_storage/shared_storage_utils.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "url/origin.h"
+
+namespace net {
+class CanonicalCookie;
+}
 
 namespace storage {
 class QuotaOverrideHandle;
+}
+
+namespace url {
+class Origin;
 }
 
 namespace content {
@@ -35,12 +41,7 @@ class StoragePartition;
 
 namespace protocol {
 
-class StorageHandler
-    : public DevToolsDomainHandler,
-      public Storage::Backend,
-      public content::InterestGroupManagerImpl::InterestGroupObserver,
-      public content::SharedStorageRuntimeManager::
-          SharedStorageObserverInterface {
+class StorageHandler : public DevToolsDomainHandler, public Storage::Backend {
  public:
   explicit StorageHandler(DevToolsAgentHostImpl* host,
                           DevToolsAgentHostClient* client);
@@ -57,10 +58,6 @@ class StorageHandler
   void SetRenderer(int process_host_id,
                    RenderFrameHostImpl* frame_host) override;
   Response Disable() override;
-
-  bool interest_group_auction_tracking_enabled() const {
-    return interest_group_auction_tracking_enabled_;
-  }
 
   // content::protocol::storage::Backend
   Response GetStorageKeyForFrame(const std::string& frame_id,
@@ -100,8 +97,6 @@ class StorageHandler
                     std::unique_ptr<Storage::Backend::ClearCookiesCallback>
                         callback) override;
 
-  bool CanAccessCookie(const net::CanonicalCookie& cookie) const;
-
   // Ignores all double calls to track an origin.
   Response TrackCacheStorageForOrigin(const std::string& origin) override;
   Response TrackCacheStorageForStorageKey(
@@ -121,36 +116,6 @@ class StorageHandler
       const std::string& issuerOrigin,
       std::unique_ptr<ClearTrustTokensCallback> callback) override;
 
-  void GetInterestGroupDetails(
-      const std::string& owner_origin_string,
-      const std::string& name,
-      std::unique_ptr<GetInterestGroupDetailsCallback> callback) override;
-  Response SetInterestGroupTracking(bool enable) override;
-  Response SetInterestGroupAuctionTracking(bool enable) override;
-
-  void GetSharedStorageMetadata(
-      const std::string& owner_origin_string,
-      std::unique_ptr<GetSharedStorageMetadataCallback> callback) override;
-  void GetSharedStorageEntries(
-      const std::string& owner_origin_string,
-      std::unique_ptr<GetSharedStorageEntriesCallback> callback) override;
-  void SetSharedStorageEntry(
-      const std::string& owner_origin_string,
-      const std::string& key,
-      const std::string& value,
-      std::optional<bool> ignore_if_present,
-      std::unique_ptr<SetSharedStorageEntryCallback> callback) override;
-  void DeleteSharedStorageEntry(
-      const std::string& owner_origin_string,
-      const std::string& key,
-      std::unique_ptr<DeleteSharedStorageEntryCallback> callback) override;
-  void ClearSharedStorageEntries(
-      const std::string& owner_origin_string,
-      std::unique_ptr<ClearSharedStorageEntriesCallback> callback) override;
-  Response SetSharedStorageTracking(bool enable) override;
-  void ResetSharedStorageBudget(
-      const std::string& owner_origin_string,
-      std::unique_ptr<ResetSharedStorageBudgetCallback> callback) override;
 
   DispatchResponse SetStorageBucketTracking(
       const std::string& serialized_storage_key,
@@ -159,74 +124,17 @@ class StorageHandler
   DispatchResponse DeleteStorageBucket(
       std::unique_ptr<protocol::Storage::StorageBucket> bucket) override;
 
-  void NotifyInterestGroupAuctionEventOccurred(
-      base::Time event_time,
-      content::InterestGroupAuctionEventType type,
-      const std::string& unique_auction_id,
-      base::optional_ref<const std::string> parent_auction_id,
-      const base::DictValue& auction_config);
-
-  void NotifyInterestGroupAuctionNetworkRequestCreated(
-      content::InterestGroupAuctionFetchType type,
-      const std::string& request_id,
-      const std::vector<std::string>& devtools_auction_ids);
-
-  Response SetProtectedAudienceKAnonymity(
-      const std::string& in_owner_origin,
-      const std::string& in_group_name,
-      std::unique_ptr<std::vector<Binary>> in_hashes) override;
-
  private:
   // See definition for lifetime information.
   class CacheStorageObserver;
   class IndexedDBObserver;
-  class InterestGroupObserver;
-  class SharedStorageObserver;
   class QuotaManagerObserver;
 
   // Not thread safe.
   CacheStorageObserver* GetCacheStorageObserver();
   IndexedDBObserver* GetIndexedDBObserver();
 
-  SharedStorageRuntimeManager* GetSharedStorageRuntimeManager();
-  std::variant<protocol::Response, storage::SharedStorageManager*>
-  GetSharedStorageManager();
   storage::QuotaManagerProxy* GetQuotaManagerProxy();
-
-  // content::InterestGroupManagerImpl::InterestGroupObserver
-  void OnInterestGroupAccessed(
-      base::optional_ref<const std::string> auction_id,
-      base::Time access_time,
-      InterestGroupManagerImpl::InterestGroupObserver::AccessType type,
-      const url::Origin& owner_origin,
-      const std::string& name,
-      base::optional_ref<const url::Origin> component_seller_origin,
-      std::optional<double> bid,
-      base::optional_ref<const std::string> bid_currency) override;
-
-  // content::SharedStorageRuntimeManager::SharedStorageObserverInterface
-  GlobalRenderFrameHostId AssociatedFrameHostId() const override;
-  bool ShouldReceiveAllSharedStorageReports() const override;
-  void OnSharedStorageAccessed(
-      base::Time access_time,
-      blink::SharedStorageAccessScope scope,
-      SharedStorageRuntimeManager::SharedStorageObserverInterface::AccessMethod
-          method,
-      GlobalRenderFrameHostId main_frame_id,
-      const std::string& owner_origin,
-      const SharedStorageEventParams& params) override;
-  void OnSharedStorageSelectUrlUrnUuidGenerated(const GURL& urn_uuid) override;
-  void OnSharedStorageSelectUrlConfigPopulated(
-      const std::optional<FencedFrameConfig>& config) override;
-  void OnSharedStorageWorkletOperationExecutionFinished(
-      base::Time finished_time,
-      base::TimeDelta execution_time,
-      SharedStorageRuntimeManager::SharedStorageObserverInterface::AccessMethod
-          method,
-      int operation_id,
-      const base::UnguessableToken& worklet_devtools_token,
-      GlobalRenderFrameHostId main_frame_id,
-      const std::string& owner_origin) override;
 
   void NotifyCacheStorageListChanged(
       const storage::BucketLocator& bucket_locator);
@@ -247,13 +155,15 @@ class StorageHandler
   Response GetStorageKeyForFrameInternal(const std::string& frame_id,
                                          std::string* serialized_storage_key);
 
-  // This doesn't update `interest_group_auction_tracking_enabled_` and does not
-  // have to work on `storage_partition_`, unlike the public version.
-  Response SetInterestGroupTrackingInternal(StoragePartition* storage_partition,
-                                            bool enable);
   void GotAllCookies(
       std::unique_ptr<Storage::Backend::GetCookiesCallback> callback,
       const std::vector<net::CanonicalCookie>& cookies);
+
+  bool CanAccessOrigin(const url::Origin& origin) const;
+  base::expected<url::Origin, Response> GetOriginIfAccessible(
+      const std::string& origin_string) const;
+  base::expected<blink::StorageKey, Response> GetStorageKeyIfAccessible(
+      const std::string& storage_key_string) const;
 
   const raw_ptr<DevToolsAgentHostImpl> host_;
 
@@ -267,14 +177,6 @@ class StorageHandler
   // Exposes the API for managing storage quota overrides.
   std::unique_ptr<storage::QuotaOverrideHandle> quota_override_handle_;
   raw_ptr<DevToolsAgentHostClient> client_;
-
-  bool interest_group_tracking_enabled_ = false;
-  bool interest_group_auction_tracking_enabled_ = false;
-
-  base::ScopedObservation<
-      content::SharedStorageRuntimeManager,
-      content::SharedStorageRuntimeManager::SharedStorageObserverInterface>
-      shared_storage_observation_{this};
 
   base::WeakPtrFactory<StorageHandler> weak_ptr_factory_{this};
 };

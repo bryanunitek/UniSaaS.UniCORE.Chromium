@@ -20,9 +20,6 @@ extern const char kHistogramPrerenderActivationToLargestContentfulPaint2[];
 extern const char kHistogramPrerenderFirstInputDelay4[];
 extern const char kHistogramPrerenderCumulativeShiftScore[];
 extern const char kHistogramPrerenderCumulativeShiftScoreMainFrame[];
-extern const char
-    kHistogramPrerenderMaxCumulativeShiftScoreSessionWindowGap1000msMax5000ms2
-        [];
 
 // Responsiveness metrics.
 extern const char
@@ -68,7 +65,9 @@ class PrerenderPageLoadMetricsObserver
       const page_load_metrics::mojom::PageLoadTiming& timing) override;
   void OnFirstContentfulPaintInPage(
       const page_load_metrics::mojom::PageLoadTiming& timing) override;
-  void OnSoftNavigation() override;
+  void OnSoftNavigationFirstContentfulPaint(
+      const page_load_metrics::mojom::SoftNavigationMetrics&
+          soft_navigation_metrics) override;
   void OnFirstInputInPage(
       const page_load_metrics::mojom::PageLoadTiming& timing) override;
   void OnComplete(

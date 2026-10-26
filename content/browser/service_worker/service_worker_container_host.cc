@@ -9,31 +9,44 @@
 
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
+#include "base/feature.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/service_worker/service_worker_client.h"
 #include "content/browser/service_worker/service_worker_consts.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/browser/service_worker/service_worker_host.h"
+#include "content/browser/service_worker/service_worker_metrics.h"
 #include "content/browser/service_worker/service_worker_object_host.h"
 #include "content/browser/service_worker/service_worker_registration_object_host.h"
 #include "content/browser/service_worker/service_worker_security_utils.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/common/features.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/origin_util.h"
 #include "ipc/constants.mojom.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "service_worker_container_host.h"
+#include "services/network/public/mojom/web_sandbox_flags.mojom-shared.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/service_worker/embedded_worker_status.h"
+#include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration_options.mojom.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace content {
+
+// Kill-switch for dropping the binding in CloneControllerServiceWorker.
+BASE_FEATURE(kAvoidBindingStoppedServiceWorkerClone,
+             base::FeatureState::FEATURE_ENABLED_BY_DEFAULT);
 
 namespace {
 
@@ -68,7 +81,7 @@ ServiceWorkerContainerHostForServiceWorker::
       url_(url),
       key_(storage_key),
       top_frame_origin_(url::Origin::Create(key_.top_level_site().GetURL())) {
-  DCHECK(context_);
+  CHECK(context_, base::NotFatalUntil::M159);
   CHECK(!url_.has_ref());
   service_worker_security_utils::CheckOnUpdateUrls(url_, key_);
 }
@@ -120,6 +133,21 @@ void ServiceWorkerContainerHostForClient::Register(
     RegisterCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (!IsClientValidForCall(service_worker_client())) {
+    mojo::ReportBadMessage(
+        ServiceWorkerConsts::kBadMessageFromUnsupportedClient);
+    std::move(callback).Run(blink::mojom::ServiceWorkerErrorType::kUnknown,
+                            std::string(), nullptr);
+    return;
+  }
+
+  if (!HasValidSandboxFlags()) {
+    mojo::ReportBadMessage(ServiceWorkerConsts::kBadMessageFromSandboxedClient);
+    std::move(callback).Run(blink::mojom::ServiceWorkerErrorType::kUnknown,
+                            std::string(), nullptr);
+    return;
+  }
+
   if (!CanServeContainerHostMethods(
           &callback, options->scope, script_url,
           base::StringPrintf(
@@ -127,14 +155,6 @@ void ServiceWorkerContainerHostForClient::Register(
               options->scope.spec().c_str(), script_url.spec().c_str())
               .c_str(),
           nullptr)) {
-    return;
-  }
-
-  if (!IsClientValidForCall(service_worker_client())) {
-    mojo::ReportBadMessage(
-        ServiceWorkerConsts::kBadMessageFromUnsupportedClient);
-    std::move(callback).Run(blink::mojom::ServiceWorkerErrorType::kUnknown,
-                            std::string(), nullptr);
     return;
   }
 
@@ -193,8 +213,9 @@ void ServiceWorkerContainerHostForClient::Register(
     // TODO(crbug.com/40364838): Validate that it is acceptable to have an
     // invalid global_frame_id for worker cases.
     global_frame_id = service_worker_client().GetRenderFrameHostId();
-    DCHECK(global_frame_id.child_id);
-    DCHECK(global_frame_id.frame_routing_id != IPC::mojom::kRoutingIdNone);
+    CHECK(global_frame_id.child_id, base::NotFatalUntil::M159);
+    CHECK(global_frame_id.frame_routing_id != IPC::mojom::kRoutingIdNone,
+          base::NotFatalUntil::M159);
   }
 
   // Registrations could come from different origins when "disable-web-security"
@@ -210,7 +231,8 @@ void ServiceWorkerContainerHostForClient::Register(
                      weak_ptr_factory_.GetWeakPtr(), GURL(script_url),
                      GURL(options->scope), std::move(wrapped_callback),
                      trace_id, mojo::GetBadMessageCallback()),
-      global_frame_id, policy_container_policies_);
+      global_frame_id, policy_container_policies_,
+      service_worker_client().ancestor_frame_type());
 }
 
 void ServiceWorkerContainerHostForClient::GetRegistration(
@@ -302,7 +324,7 @@ void ServiceWorkerContainerHostForClient::GetRegistrationForReady(
   TRACE_EVENT_INSTANT(
       "ServiceWorker", "ServiceWorkerContainerHost::GetRegistrationForReady",
       perfetto::Flow::FromPointer(this, "GetRegistrationForReady"));
-  DCHECK(!get_ready_callback_);
+  CHECK(!get_ready_callback_, base::NotFatalUntil::M159);
   get_ready_callback_ =
       std::make_unique<GetRegistrationForReadyCallback>(std::move(callback));
   ReturnRegistrationForReadyIfNeeded();
@@ -312,6 +334,11 @@ void ServiceWorkerContainerHostForClient::EnsureControllerServiceWorker(
     mojo::PendingReceiver<blink::mojom::ControllerServiceWorker> receiver,
     blink::mojom::ControllerServiceWorkerPurpose purpose) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!HasValidSandboxFlags()) {
+    mojo::ReportBadMessage(ServiceWorkerConsts::kBadMessageFromSandboxedClient);
+    return;
+  }
 
   // TODO(kinuko): Log the reasons we drop the request.
   if (!context() || !controller()) {
@@ -331,8 +358,22 @@ void ServiceWorkerContainerHost::CloneContainerHost(
   additional_receivers_.Add(this, std::move(receiver));
 }
 
+void ServiceWorkerContainerHostForClient::CloneContainerHost(
+    mojo::PendingReceiver<blink::mojom::ServiceWorkerContainerHost> receiver) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!HasValidSandboxFlags()) {
+    mojo::ReportBadMessage(ServiceWorkerConsts::kBadMessageFromSandboxedClient);
+    return;
+  }
+  ServiceWorkerContainerHost::CloneContainerHost(std::move(receiver));
+}
+
 void ServiceWorkerContainerHostForClient::HintToUpdateServiceWorker() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!HasValidSandboxFlags()) {
+    mojo::ReportBadMessage(ServiceWorkerConsts::kBadMessageFromSandboxedClient);
+    return;
+  }
   service_worker_client().HintToUpdateServiceWorker();
 }
 
@@ -340,11 +381,20 @@ void ServiceWorkerContainerHostForClient::EnsureFileAccess(
     const std::vector<base::FilePath>& file_paths,
     EnsureFileAccessCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!HasValidSandboxFlags()) {
+    mojo::ReportBadMessage(ServiceWorkerConsts::kBadMessageFromSandboxedClient);
+    std::move(callback).Run();
+    return;
+  }
   service_worker_client().EnsureFileAccess(file_paths, std::move(callback));
 }
 
 void ServiceWorkerContainerHostForClient::OnExecutionReady() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!HasValidSandboxFlags()) {
+    mojo::ReportBadMessage(ServiceWorkerConsts::kBadMessageFromSandboxedClient);
+    return;
+  }
   service_worker_client().OnExecutionReady();
 }
 
@@ -433,6 +483,27 @@ void ServiceWorkerContainerHostForClient::PostMessageToClient(
     blink::TransferableMessage message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(service_worker_client().is_execution_ready());
+
+  if (message.delegated_capability ==
+      blink::mojom::DelegatedCapability::kPopup) {
+    if (base::FeatureList::IsEnabled(
+            blink::features::kCapabilityDelegationPopup) &&
+        version.HasPendingWindowInteractionEvent() &&
+        service_worker_client().IsContainerForWindowClient()) {
+      GlobalRenderFrameHostId rfh_id =
+          service_worker_client().GetRenderFrameHostId();
+      if (auto* rfh = RenderFrameHostImpl::FromID(rfh_id)) {
+        rfh->AllowPopupThroughCapabilityDelegation();
+      }
+    } else {
+      message.delegated_capability = blink::mojom::DelegatedCapability::kNone;
+    }
+  } else if (message.delegated_capability !=
+             blink::mojom::DelegatedCapability::kNone) {
+    mojo::ReportBadMessage(
+        "Service workers can only delegate the popup capability.");
+    return;
+  }
 
   blink::mojom::ServiceWorkerObjectInfoPtr info;
   if (base::WeakPtr<ServiceWorkerObjectHost> object_host =
@@ -539,7 +610,10 @@ void ServiceWorkerContainerHostForClient::SendSetController(
     return;
   }
 
-  DCHECK(service_worker_client().controller_registration());
+  CHECK(service_worker_client().controller_registration(),
+        base::NotFatalUntil::M159);
+  // TODO(crbug.com/571334917): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK_EQ(service_worker_client().controller_registration()->active_version(),
             controller());
 
@@ -606,6 +680,8 @@ ServiceWorkerRegistrationObjectManager::CreateInfo(
 void ServiceWorkerRegistrationObjectManager::RemoveHost(
     int64_t registration_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // TODO(crbug.com/562865789): CHECK-exclusion: Convert to a CHECK once we
+  // are confident it won't be triggered.
   DCHECK(registration_object_hosts_.contains(registration_id));
   // This is a workaround for a really unfavorable ownership structure of
   // service worker content code. This boils down to the following ownership
@@ -678,7 +754,8 @@ ServiceWorkerObjectManager::GetOrCreateHost(
 
 void ServiceWorkerObjectManager::RemoveHost(int64_t version_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(service_worker_object_hosts_.contains(version_id));
+  CHECK(service_worker_object_hosts_.contains(version_id),
+        base::NotFatalUntil::M159);
 
   // ServiceWorkerObjectHost to be deleted may have the last reference to
   // ServiceWorkerVersion that indirectly owns this ServiceWorkerContainerHost.
@@ -688,7 +765,7 @@ void ServiceWorkerObjectManager::RemoveHost(int64_t version_id) {
   // from the map. See https://crbug.com/1056598 for details.
   std::unique_ptr<ServiceWorkerObjectHost> to_be_deleted =
       std::move(service_worker_object_hosts_[version_id]);
-  DCHECK(to_be_deleted);
+  CHECK(to_be_deleted, base::NotFatalUntil::M159);
   service_worker_object_hosts_.erase(version_id);
 }
 
@@ -696,11 +773,23 @@ mojo::PendingRemote<blink::mojom::ControllerServiceWorker>
 ServiceWorkerContainerHostForClient::GetRemoteControllerServiceWorker() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  DCHECK(controller());
+  CHECK(controller(), base::NotFatalUntil::M159);
   CHECK(service_worker_client().is_response_committed());
   if (controller()->fetch_handler_existence() ==
       ServiceWorkerVersion::FetchHandlerExistence::DOES_NOT_EXIST) {
     return mojo::PendingRemote<blink::mojom::ControllerServiceWorker>();
+  }
+
+  if (base::FeatureList::IsEnabled(kAvoidBindingStoppedServiceWorkerClone)) {
+    if (controller()->running_status() ==
+            blink::EmbeddedWorkerStatus::kStopped ||
+        controller()->running_status() ==
+            blink::EmbeddedWorkerStatus::kStopping) {
+      // If the worker is not running, simply return an unbound controller. This
+      // will trigger a restart of the worker by the client if it needs a
+      // started client.
+      return mojo::NullRemote();
+    }
   }
 
   mojo::PendingRemote<blink::mojom::ControllerServiceWorker> remote_controller;
@@ -720,13 +809,34 @@ bool ServiceWorkerContainerHostForClient::AllowServiceWorker(
     const GURL& scope,
     const GURL& script_url) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(context());
+  CHECK(context(), base::NotFatalUntil::M159);
   auto* browser_context = context()->wrapper()->browser_context();
   // Check that the browser context is not nullptr.  It becomes nullptr
   // when the service worker process manager is being shutdown.
   if (!browser_context) {
     return false;
   }
+
+  // A WebContents created with PrivilegedParams may forbid service worker
+  // control of the pages it hosts. Every container-host method (register,
+  // getRegistration(s), and the registration-object methods) funnels through
+  // here, so denying access closes all of them: such a page can neither
+  // register a service worker nor reach an existing registration.
+  if (service_worker_client().IsContainerForWindowClient()) {
+    auto* rfh = RenderFrameHostImpl::FromID(
+        service_worker_client().GetRenderFrameHostId());
+    auto* web_contents =
+        static_cast<WebContentsImpl*>(WebContents::FromRenderFrameHost(rfh));
+    if (web_contents) {
+      const std::optional<WebContents::PrivilegedParams>& privileged_params =
+          web_contents->privileged_params();
+      if (privileged_params &&
+          privileged_params->disallow_service_worker_control) {
+        return false;
+      }
+    }
+  }
+
   auto start_time = base::TimeTicks::Now();
   AllowServiceWorkerResult allowed =
       GetContentClient()->browser()->AllowServiceWorker(
@@ -754,7 +864,7 @@ bool ServiceWorkerContainerHostForServiceWorker::AllowServiceWorker(
     const GURL& scope,
     const GURL& script_url) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(context());
+  CHECK(context(), base::NotFatalUntil::M159);
   auto* browser_context = context()->wrapper()->browser_context();
   // Check that the browser context is not nullptr.  It becomes nullptr
   // when the service worker process manager is being shutdown.
@@ -859,7 +969,8 @@ void ServiceWorkerContainerHostForClient::StartControllerComplete(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (status == blink::ServiceWorkerStatusCode::kOk) {
-    DCHECK(service_worker_client().is_response_committed());
+    CHECK(service_worker_client().is_response_committed(),
+          base::NotFatalUntil::M159);
     CloneControllerServiceWorker(std::move(receiver));
   }
 }
@@ -923,7 +1034,7 @@ void ServiceWorkerContainerHostForClient::RegistrationComplete(
       context()->GetLiveRegistration(registration_id);
   // ServiceWorkerRegisterJob calls its completion callback, which results in
   // this function being called, while the registration is live.
-  DCHECK(registration);
+  CHECK(registration, base::NotFatalUntil::M159);
 
   std::move(callback).Run(
       blink::mojom::ServiceWorkerErrorType::kNone, std::nullopt,
@@ -970,7 +1081,8 @@ void ServiceWorkerContainerHostForClient::GetRegistrationComplete(
     return;
   }
 
-  DCHECK(status != blink::ServiceWorkerStatusCode::kOk || registration);
+  CHECK(status != blink::ServiceWorkerStatusCode::kOk || registration,
+        base::NotFatalUntil::M159);
   blink::mojom::ServiceWorkerRegistrationObjectInfoPtr info;
   if (status == blink::ServiceWorkerStatusCode::kOk &&
       !registration->is_uninstalling()) {
@@ -1022,7 +1134,7 @@ void ServiceWorkerContainerHostForClient::GetRegistrationsComplete(
       object_infos;
 
   for (const auto& registration : registrations) {
-    DCHECK(registration.get());
+    CHECK(registration.get(), base::NotFatalUntil::M159);
     SCOPED_CRASH_KEY_STRING256(
         "SWCH_GRC", "client_origin",
         service_worker_client().key().origin().Serialize());
@@ -1054,12 +1166,23 @@ void ServiceWorkerContainerHostForClient::GetRegistrationsComplete(
                           std::nullopt, std::move(object_infos));
 }
 
+bool ServiceWorkerContainerHostForClient::HasValidSandboxFlags() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return (policy_container_policies_.sandbox_flags &
+          network::mojom::WebSandboxFlags::kOrigin) !=
+         network::mojom::WebSandboxFlags::kOrigin;
+}
+
 bool ServiceWorkerContainerHostForClient::IsValidGetRegistrationMessage(
     const GURL& client_url,
     std::string* out_error) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!IsClientValidForCall(service_worker_client())) {
     *out_error = ServiceWorkerConsts::kBadMessageFromUnsupportedClient;
+    return false;
+  }
+  if (!HasValidSandboxFlags()) {
+    *out_error = ServiceWorkerConsts::kBadMessageFromSandboxedClient;
     return false;
   }
   if (!client_url.is_valid()) {
@@ -1083,6 +1206,10 @@ bool ServiceWorkerContainerHostForClient::IsValidGetRegistrationsMessage(
     *out_error = ServiceWorkerConsts::kBadMessageFromUnsupportedClient;
     return false;
   }
+  if (!HasValidSandboxFlags()) {
+    *out_error = ServiceWorkerConsts::kBadMessageFromSandboxedClient;
+    return false;
+  }
   if (!OriginCanAccessServiceWorkers(url_for_access_check())) {
     *out_error = ServiceWorkerConsts::kBadMessageImproperOrigins;
     return false;
@@ -1096,6 +1223,10 @@ bool ServiceWorkerContainerHostForClient::IsValidGetRegistrationForReadyMessage(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!IsClientValidForCall(service_worker_client())) {
     *out_error = ServiceWorkerConsts::kBadMessageFromUnsupportedClient;
+    return false;
+  }
+  if (!HasValidSandboxFlags()) {
+    *out_error = ServiceWorkerConsts::kBadMessageFromSandboxedClient;
     return false;
   }
 
@@ -1229,7 +1360,8 @@ bool PrepareExtendableMessageEventFromClient(
   if (!context) {
     return false;
   }
-  DCHECK(source_client_info && !source_client_info->client_uuid.empty());
+  CHECK(source_client_info && !source_client_info->client_uuid.empty(),
+        base::NotFatalUntil::M159);
   (*event)->source_info_for_client = std::move(source_client_info);
   // Hide the client url if the client has a unique origin.
   if ((*event)->source_origin.opaque()) {
@@ -1333,6 +1465,19 @@ void ServiceWorkerContainerHostForServiceWorker::DispatchExtendableMessageEvent(
     scoped_refptr<ServiceWorkerVersion> version,
     ::blink::TransferableMessage message,
     StatusCallback callback) {
+  bool is_allowed = AllowServiceWorker(version->scope(), version->script_url());
+  ServiceWorkerMetrics::RecordMessageDispatchContextValidationResult(
+      is_allowed
+          ? ServiceWorkerMessageDispatchContextValidationResult::kAllowed
+          : ServiceWorkerMessageDispatchContextValidationResult::kDisallowed);
+  if (base::FeatureList::IsEnabled(
+          features::kServiceWorkerStrictContextValidation)) {
+    if (!is_allowed) {
+      std::move(callback).Run(blink::ServiceWorkerStatusCode::kErrorDisallowed);
+      return;
+    }
+  }
+
   // Clamp timeout to the sending worker's remaining timeout, to prevent
   // postMessage from keeping workers alive forever.
   base::TimeDelta timeout =
@@ -1350,6 +1495,26 @@ void ServiceWorkerContainerHostForClient::DispatchExtendableMessageEvent(
     scoped_refptr<ServiceWorkerVersion> version,
     ::blink::TransferableMessage message,
     StatusCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!HasValidSandboxFlags()) {
+    mojo::ReportBadMessage(ServiceWorkerConsts::kBadMessageFromSandboxedClient);
+    std::move(callback).Run(blink::ServiceWorkerStatusCode::kErrorDisallowed);
+    return;
+  }
+
+  bool is_allowed = AllowServiceWorker(version->scope(), version->script_url());
+  ServiceWorkerMetrics::RecordMessageDispatchContextValidationResult(
+      is_allowed
+          ? ServiceWorkerMessageDispatchContextValidationResult::kAllowed
+          : ServiceWorkerMessageDispatchContextValidationResult::kDisallowed);
+  if (base::FeatureList::IsEnabled(
+          features::kServiceWorkerStrictContextValidation)) {
+    if (!is_allowed) {
+      std::move(callback).Run(blink::ServiceWorkerStatusCode::kErrorDisallowed);
+      return;
+    }
+  }
+
   if (IsClientValidForCall(service_worker_client())) {
     service_worker_client_utils::GetClient(
         &service_worker_client(),
@@ -1368,6 +1533,13 @@ void ServiceWorkerContainerHostForClient::Update(
         outside_fetch_client_settings_object,
     blink::mojom::ServiceWorkerRegistrationObjectHost::UpdateCallback
         callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!HasValidSandboxFlags()) {
+    mojo::ReportBadMessage(ServiceWorkerConsts::kBadMessageFromSandboxedClient);
+    std::move(callback).Run(blink::mojom::ServiceWorkerErrorType::kUnknown,
+                            std::string());
+    return;
+  }
   // Don't delay update() if called by non-ServiceWorkers.
   registration->ExecuteUpdate(std::move(outside_fetch_client_settings_object),
                               std::move(callback));
@@ -1380,7 +1552,7 @@ void ServiceWorkerContainerHostForServiceWorker::Update(
     blink::mojom::ServiceWorkerRegistrationObjectHost::UpdateCallback
         callback) {
   ServiceWorkerVersion* version = service_worker_host()->version();
-  DCHECK(version);
+  CHECK(version, base::NotFatalUntil::M159);
   registration->DelayUpdate(*version,
                             std::move(outside_fetch_client_settings_object),
                             std::move(callback));

@@ -8,15 +8,21 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/signin/chrome_signin_client_factory.h"
+#include "chrome/browser/signin/chrome_signin_client_test_util.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/browser/ui/side_panel/mock_side_panel_ui.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/side_panel/side_panel_registry.h"
+#include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/contextual_tasks/public/features.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -44,7 +50,12 @@ class MockContextualTasksPanelHostObserver
 class ContextualTasksPanelHostDesktopTest : public testing::Test {
  public:
   void SetUp() override {
-    profile_ = std::make_unique<TestingProfile>();
+    TestingProfile::Builder builder;
+    builder.AddTestingFactory(
+        ChromeSigninClientFactory::GetInstance(),
+        base::BindRepeating(&BuildChromeSigninClientWithURLLoader,
+                            &test_url_loader_factory_));
+    profile_ = builder.Build();
     browser_window_ = std::make_unique<NiceMock<MockBrowserWindowInterface>>();
 
     ON_CALL(*browser_window_, GetProfile())
@@ -73,6 +84,7 @@ class ContextualTasksPanelHostDesktopTest : public testing::Test {
  protected:
   content::BrowserTaskEnvironment task_environment_;
   content::RenderViewHostTestEnabler rvh_test_enabler_;
+  network::TestURLLoaderFactory test_url_loader_factory_;
   std::unique_ptr<TestingProfile> profile_;
   BrowserWindowFeatures browser_window_features_;
   std::unique_ptr<NiceMock<MockBrowserWindowInterface>> browser_window_;
@@ -228,6 +240,47 @@ TEST_F(ContextualTasksPanelHostDesktopTest, IsPanelInitialized) {
   std::unique_ptr<views::View> view =
       panel_host_->CreateSidePanelView(*side_panel_registry_);
   EXPECT_TRUE(panel_host_->IsPanelInitialized());
+}
+
+TEST_F(ContextualTasksPanelHostDesktopTest,
+       GetToolbarWebContentsRearchitectureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(kContextualTasksSidePanelRearchitecture);
+
+  std::unique_ptr<views::View> view =
+      panel_host_->CreateSidePanelView(*side_panel_registry_);
+  std::unique_ptr<content::WebContents> web_contents =
+      content::WebContentsTester::CreateTestWebContents(profile_.get(),
+                                                        nullptr);
+  panel_host_->SetWebContents(web_contents.get());
+  EXPECT_EQ(panel_host_->GetToolbarWebContents(), web_contents.get());
+}
+
+TEST_F(ContextualTasksPanelHostDesktopTest,
+       GetToolbarWebContentsRearchitectureEnabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kContextualTasksSidePanelRearchitecture);
+
+  std::unique_ptr<views::View> view =
+      panel_host_->CreateSidePanelView(*side_panel_registry_);
+  content::WebContents* toolbar_contents = panel_host_->GetToolbarWebContents();
+  ASSERT_TRUE(toolbar_contents);
+  EXPECT_EQ(webui::GetBrowserWindowInterface(toolbar_contents),
+            browser_window_.get());
+
+  // Simulate hiding the side panel on tab switch (which destroys the view) and
+  // reopening it when switching back. The toolbar WebContents should persist
+  // without being recreated or losing its BrowserWindowInterface association.
+  view.reset();
+  EXPECT_EQ(panel_host_->GetToolbarWebContents(), toolbar_contents);
+  EXPECT_EQ(webui::GetBrowserWindowInterface(toolbar_contents),
+            browser_window_.get());
+
+  std::unique_ptr<views::View> recreated_view =
+      panel_host_->CreateSidePanelView(*side_panel_registry_);
+  EXPECT_EQ(panel_host_->GetToolbarWebContents(), toolbar_contents);
+  EXPECT_EQ(webui::GetBrowserWindowInterface(toolbar_contents),
+            browser_window_.get());
 }
 
 }  // namespace contextual_tasks

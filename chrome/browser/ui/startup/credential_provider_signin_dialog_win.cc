@@ -33,7 +33,9 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "net/base/url_util.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/controls/webview/web_dialog_view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/web_dialogs/web_dialog_delegate.h"
@@ -98,7 +100,7 @@ void HandleSigninCompleteForGcpwLogin(
     base::DictValue signin_result,
     const std::string& additional_mdm_oauth_scopes,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
-  DCHECK(!signin_result.empty());
+  CHECK(!signin_result.empty(), base::NotFatalUntil::M162);
   int exit_code = *signin_result.FindInt(credential_provider::kKeyExitCode);
 
   // If there is an error code, write out the signin results directly.
@@ -115,7 +117,8 @@ void HandleSigninCompleteForGcpwLogin(
         *signin_result.FindString(credential_provider::kKeyAccessToken);
     std::string refresh_token =
         *signin_result.FindString(credential_provider::kKeyRefreshToken);
-    DCHECK(!access_token.empty() && !refresh_token.empty());
+    CHECK(!access_token.empty() && !refresh_token.empty(),
+          base::NotFatalUntil::M162);
 
     // Create the fetcher and pass it to the callback so that it can be
     // deleted once it is finished.
@@ -182,7 +185,7 @@ class CredentialProviderWebUIMessageHandler
 
  private:
   base::DictValue ParseArgs(const base::ListValue& args, int* out_exit_code) {
-    DCHECK(out_exit_code);
+    CHECK(out_exit_code, base::NotFatalUntil::M162);
 
     if (args.empty()) {
       *out_exit_code = credential_provider::kUiecMissingSigninData;
@@ -341,7 +344,7 @@ class CredentialProviderWebDialogDelegate : public ui::WebDialogDelegate {
   void GetWebUIMessageHandlers(
       std::vector<content::WebUIMessageHandler*>* handlers) override {
     // The WebDialogUI will own and delete this message handler.
-    DCHECK(!handler_);
+    CHECK(!handler_, base::NotFatalUntil::M162);
     handler_ = new CredentialProviderWebUIMessageHandler(
         std::move(signin_callback_), additional_mdm_oauth_scopes);
     handlers->push_back(handler_);
@@ -499,7 +502,8 @@ class CredentialProviderWebDialogView : public views::WebDialogView {
       WindowOpenDisposition disposition,
       const blink::mojom::WindowFeatures& window_features,
       const content::StoragePartitionConfig& partition_config,
-      content::SessionStorageNamespace* session_storage_namespace) override {
+      content::SessionStorageNamespaceHandle* session_storage_namespace)
+      override {
     VLOG(0) << "Suppressed window creation for  " << target_url.GetHost()
             << target_url.GetPath();
     return nullptr;
@@ -510,7 +514,7 @@ views::WebDialogView* ShowCredentialProviderSigninDialog(
     const base::CommandLine& command_line,
     content::BrowserContext* context,
     HandleGcpwSigninCompleteResult signin_complete_handler) {
-  DCHECK(signin_complete_handler);
+  CHECK(signin_complete_handler, base::NotFatalUntil::M162);
 
   // Open a frameless window whose entire surface displays a gaia sign in web
   // page.

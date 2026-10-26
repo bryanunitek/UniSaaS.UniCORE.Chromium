@@ -10,6 +10,7 @@
 #import <string>
 #import <vector>
 
+#import "base/callback_list.h"
 #import "base/memory/raw_ptr.h"
 #import "base/memory/weak_ptr.h"
 #import "components/autofill/core/browser/country_type.h"
@@ -38,8 +39,27 @@
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 
+@protocol AtMemoryCommands;
 @protocol AutofillCommands;
+@protocol FormInputAccessoryCommands;
 @class UIViewController;
+
+class IOSDeviceAuthAvailabilityChecker;
+class IOSDeviceAuthenticator;
+
+namespace affiliations {
+class AffiliationService;
+}
+
+namespace personal_context {
+enum class PersonalContextEligibilityState;
+class PersonalContextEligibilityService;
+class PersonalContextFirstRunService;
+}  // namespace personal_context
+
+namespace subscription_eligibility {
+class SubscriptionEligibilityService;
+}  // namespace subscription_eligibility
 
 namespace web {
 class WebState;
@@ -47,10 +67,14 @@ class WebState;
 
 namespace autofill {
 
+class AtMemoryManager;
+class AtMemoryQueryService;
 class AutofillAiSaveEntityInfoBarDelegateIOS;
 class AutofillSuggestionDelegate;
 class LogRouter;
 class AutofillAiPersonalContextAccessManager;
+class EntitySuppressionManager;
+class FormPredictionsTracker;
 
 enum class SuggestionType;
 
@@ -84,6 +108,20 @@ class ChromeAutofillClientIOS : public AutofillClientIOS {
   }
   id<AutofillCommands> commands_handler() const { return commands_handler_; }
 
+  void set_at_memory_handler(id<AtMemoryCommands> at_memory_handler) {
+    at_memory_handler_ = at_memory_handler;
+  }
+  id<AtMemoryCommands> at_memory_handler() const { return at_memory_handler_; }
+
+  void set_form_input_accessory_commands_handler(
+      id<FormInputAccessoryCommands> form_input_accessory_commands_handler) {
+    form_input_accessory_commands_handler_ =
+        form_input_accessory_commands_handler;
+  }
+  id<FormInputAccessoryCommands> form_input_accessory_commands_handler() const {
+    return form_input_accessory_commands_handler_;
+  }
+
   // AutofillClient:
   base::WeakPtr<AutofillClient> GetWeakPtr() override;
   const std::string& GetAppLocale() const override;
@@ -95,12 +133,15 @@ class ChromeAutofillClientIOS : public AutofillClientIOS {
   PersonalDataManager& GetPersonalDataManager() override;
   ValuablesDataManager* GetValuablesDataManager() override;
   EntityDataManager* GetEntityDataManager() override;
+  EntitySuppressionManager* GetEntitySuppressionManager() override;
   WalletPassAccessManager* GetWalletPassAccessManager() override;
   FieldClassificationModelHandler*
   GetAutofillFieldClassificationModelHandler() override;
   FieldClassificationModelHandler*
   GetPasswordManagerFieldClassificationModelHandler() override;
   SingleFieldFillRouter& GetSingleFieldFillRouter() override;
+  personal_context::PersonalContextFirstRunService*
+  GetPersonalContextFirstRunService() override;
   AutocompleteHistoryManager* GetAutocompleteHistoryManager() override;
   void GetAiPageContent(GetAiPageContentCallback callback) override;
   AutofillAiManager* GetAutofillAiManager() override;
@@ -108,16 +149,24 @@ class ChromeAutofillClientIOS : public AutofillClientIOS {
   GetAutofillAiPersonalContextAccessManager() override;
   AutofillAiModelCache* GetAutofillAiModelCache() override;
   AutofillAiModelExecutor* GetAutofillAiModelExecutor() override;
-  optimization_guide::RemoteModelExecutor* GetRemoteModelExecutor() override;
   consent_auditor::ConsentAuditor* GetConsentAuditor() final;
+  optimization_guide::RemoteModelExecutor* GetRemoteModelExecutor() override;
+  AtMemoryQueryService* GetAtMemoryQueryService() override;
+  AtMemoryManager* GetAtMemoryManager() override;
+  personal_context::PersonalContextEligibilityState
+  GetPersonalContextEligibilityState() const override;
+  personal_context::PersonalContextEligibilityService*
+  GetPersonalContextEligibilityService() const override;
   PrefService* GetPrefs() override;
   const PrefService* GetPrefs() const override;
   syncer::SyncService* GetSyncService() override;
   signin::IdentityManager* GetIdentityManager() override;
   const signin::IdentityManager* GetIdentityManager() const override;
   metrics::ProfileMetricsService* GetProfileMetricsService() override;
+  affiliations::AffiliationService* GetAffiliationService() override;
   const GoogleGroupsManager* GetGoogleGroupsManager() const override;
   FormDataImporter* GetFormDataImporter() override;
+  FormPredictionsTracker* GetFormPredictionsTracker() override;
   payments::IOSChromePaymentsAutofillClient* GetPaymentsAutofillClient()
       override;
   strike_database::StrikeDatabase* GetStrikeDatabase() final;
@@ -129,17 +178,28 @@ class ChromeAutofillClientIOS : public AutofillClientIOS {
   const translate::LanguageState* GetLanguageState() override;
   translate::TranslateDriver* GetTranslateDriver() override;
   GeoIpCountryCode GetVariationConfigCountryCode() const override;
+  const subscription_eligibility::SubscriptionEligibilityService*
+  GetSubscriptionEligibilityService() const override;
   void ShowAutofillSettings(SuggestionType suggestion_type) override;
   void ConfirmSaveAddressProfile(
       const AutofillProfile& profile,
       const AutofillProfile* original_profile,
       AutofillClient::SaveAddressBubbleType save_address_bubble_type,
       AddressProfileSavePromptCallback callback) override;
+  void UpdateAutofillDataListValues(
+      const LocalFrameToken& frame_token,
+      base::span<const SelectOption> datalist) override;
+  std::optional<SuggestionUiSessionId>
+  GetSessionIdForCurrentAutofillSuggestions() const override;
+  base::span<const Suggestion> GetAutofillSuggestions() const override;
   SuggestionUiSessionId ShowAutofillSuggestions(
       const PopupOpenArgs& open_args,
       base::WeakPtr<AutofillSuggestionDelegate> delegate) override;
-  void UpdateAutofillDataListValues(
-      base::span<const SelectOption> datalist) override;
+  void UpdateAutofillSuggestions(
+      const std::vector<Suggestion>& suggestions,
+      FillingProduct main_filling_product,
+      AutofillSuggestionTriggerSource trigger_source,
+      AutofillSuggestionsIgnoreFocusLoss ignore_focus_loss) override;
   void HideSuggestions(SuggestionHidingReason reason,
                        std::optional<FillingProduct> product) override;
   bool IsAutofillEnabled() const override;
@@ -150,17 +210,22 @@ class ChromeAutofillClientIOS : public AutofillClientIOS {
   bool IsWalletPublicPassStorageEnabled() const override;
   bool IsAutocompleteEnabled() const override;
   bool IsPasswordManagerEnabled() const override;
+  bool UsesPlatformAutofill() const override;
+  bool IsGlicEnabled() const override;
   bool IsContextSecure() const override;
   LogManager* GetCurrentLogManager() override;
   autofill_metrics::FormInteractionsUkmLogger& GetFormInteractionsUkmLogger()
       override;
   const AutofillAblationStudy& GetAblationStudy() const override;
   bool IsLastQueriedField(FieldGlobalId field_id) override;
+  bool IsTabInActorMode() const override;
   bool ShouldFormatForLargeKeyboardAccessory() const override;
   // Returns a pointer to a DeviceAuthenticator. Might be nullptr if the given
   // platform is not supported.
   std::unique_ptr<device_reauth::DeviceAuthenticator> GetDeviceAuthenticator(
       std::string histogram) const override;
+  std::unique_ptr<device_reauth::DeviceAuthAvailabilityChecker>
+  GetDeviceAuthAvailabilityChecker() const override;
   PasswordFormClassification ClassifyAsPasswordForm(
       AutofillManager& manager,
       FormGlobalId form_id,
@@ -169,12 +234,14 @@ class ChromeAutofillClientIOS : public AutofillClientIOS {
       EntityInstance new_entity,
       std::optional<EntityInstance> old_entity,
       bool save_is_synchronous,
+      LegalMessageLines public_passes_notice,
       EntityImportPromptResultCallback prompt_result_callback) override;
   void CloseEntityImportBubble() override;
   void ShowAutofillAiLocalSaveNotification() override;
   void ShowAutofillAiSaveToWalletFailureNotification() override;
-  void ShowAutofillAiFetchFromWalletFailureNotification() override;
+  void ShowAutofillAiFetchEntityFailureNotification() override;
   void ShowAutofillAiPreFetchFailureNotification() override;
+  void ShowAutofillAiPrivateInferenceNotice() override;
 
   // Searches infobars managed by the infobar_manager_ for infobar of the type
   // AutofillSaveCardInfoBarDelegateIOS and returns it if found else returns a
@@ -196,8 +263,19 @@ class ChromeAutofillClientIOS : public AutofillClientIOS {
   AutofillAiSaveEntityInfoBarDelegateIOS*
   GetAutofillAiSaveEntityInfoBarDelegateIOS();
 
+  // Returns an `IOSDeviceAuthAvailabilityChecker` for the profile.
+  std::unique_ptr<IOSDeviceAuthAvailabilityChecker>
+  GetIOSDeviceAuthAvailabilityChecker() const;
+
+  // Returns an `IOSDeviceAuthenticator` for the profile.
+  std::unique_ptr<IOSDeviceAuthenticator> GetIOSDeviceAuthenticator(
+      std::string histogram) const;
+
   // Shows the detailed save/update UI for Autofill AI entities.
   void ShowAutofillAiSaveUpdateUI();
+
+  // Invoked when the actuation state for the associated WebState changes.
+  void OnActorTaskStateChange(bool is_actuating);
 
   raw_ptr<PrefService, DanglingUntriaged> pref_service_;
   raw_ptr<syncer::SyncService, DanglingUntriaged> sync_service_;
@@ -218,7 +296,9 @@ class ChromeAutofillClientIOS : public AutofillClientIOS {
       this};
   const AutofillAblationStudy ablation_study_;
   std::unique_ptr<AutofillAiManager> autofill_ai_manager_;
+  std::unique_ptr<FormPredictionsTracker> form_predictions_tracker_;
   PageContextWrapper* page_context_wrapper_;
+  std::unique_ptr<AtMemoryManager> at_memory_manager_;
 
   // Order matters for this initialization. This initialization must happen
   // after all of the members passed into the constructor of
@@ -234,13 +314,35 @@ class ChromeAutofillClientIOS : public AutofillClientIOS {
 
   __weak id<AutofillCommands> commands_handler_;
 
+  __weak id<AtMemoryCommands> at_memory_handler_;
+
+  __weak id<FormInputAccessoryCommands> form_input_accessory_commands_handler_;
+
   // Holds a weak reference to the delegate driving the active suggestions
   // popup.
   base::WeakPtr<AutofillSuggestionDelegate> active_suggestion_delegate_;
 
+  // Generates the IDs of suggestion UI sessions. The IDs only need to be
+  // unique within this client, as they are only compared against
+  // `current_session_id_`.
+  SuggestionUiSessionId::Generator session_id_generator_;
+
+  // Session ID and suggestions currently displayed.
+  std::optional<SuggestionUiSessionId> current_session_id_;
+  std::vector<Suggestion> current_suggestions_;
+
+  // The form and field the active popup was opened for. Retained because
+  // suggestion updates don't carry `PopupOpenArgs`, yet the bridge needs
+  // these IDs to route suggestion acceptance back to the triggering field.
+  FormGlobalId current_form_id_;
+  FieldGlobalId current_field_id_;
+
   // If this is true, we consider the form to be secure.
   // Only use this for testing purposes!
   bool consider_as_secure_for_testing_ = false;
+
+  // Subscription that tracks changes in tab actuation state.
+  base::CallbackListSubscription actor_actuation_state_subscription_;
 
   base::WeakPtrFactory<ChromeAutofillClientIOS> weak_ptr_factory_{this};
 };

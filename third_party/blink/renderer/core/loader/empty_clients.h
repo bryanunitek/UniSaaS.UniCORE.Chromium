@@ -31,6 +31,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
 #include "cc/paint/paint_canvas.h"
@@ -273,6 +274,9 @@ class CORE_EXPORT EmptyChromeClient : public ChromeClient {
 
 class EmptyWebWorkerFetchContext : public WebWorkerFetchContext {
  public:
+  explicit EmptyWebWorkerFetchContext()
+      : WebWorkerFetchContext(RendererPreferences()) {}
+
   void SetTerminateSyncLoadEvent(base::WaitableEvent*) override {}
   void InitializeOnWorkerThread(AcceptLanguagesWatcher*) override {}
   URLLoaderFactory* GetURLLoaderFactory() override { return nullptr; }
@@ -363,15 +367,17 @@ class CORE_EXPORT EmptyLocalFrameClient : public LocalFrameClient {
       base::TimeTicks,
       base::TimeTicks,
       const String&,
-      const std::optional<Impression>&,
       const LocalFrameToken* initiator_frame_token,
+      const InitiatorStateToken& initiator_state_token,
+      const DocumentToken& initiator_document_token,
       SourceLocation*,
       mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>,
       bool is_container_initiated,
       bool has_rel_opener,
       mojo::PendingReceiver<
           mojom::blink::NavigationResumeDeferredCommitListener>,
-      std::optional<base::UnguessableToken> script_tool_invocation_id) override;
+      std::optional<ToolInvocationToken> script_tool_invocation_id,
+      const String& script_injector_host) override;
 
   void DispatchWillSendSubmitEvent(HTMLFormElement*) override;
 
@@ -401,11 +407,6 @@ class CORE_EXPORT EmptyLocalFrameClient : public LocalFrameClient {
                             const Vector<String>&) override {}
   LocalFrame* CreateFrame(const AtomicString&, HTMLFrameOwnerElement*) override;
 
-  RemoteFrame* CreateFencedFrame(
-      HTMLFencedFrameElement*,
-      mojo::PendingAssociatedReceiver<mojom::blink::FencedFrameOwnerHost>)
-      override;
-
   WebPluginContainerImpl* CreatePlugin(HTMLPlugInElement&,
                                        const KURL&,
                                        const Vector<String>&,
@@ -429,7 +430,6 @@ class CORE_EXPORT EmptyLocalFrameClient : public LocalFrameClient {
                               int32_t world_id) override {}
   void WillReleaseScriptContext(v8::Local<v8::Context>,
                                 int32_t world_id) override {}
-  bool AllowScriptExtensions() override { return false; }
 
   AssociatedInterfaceProvider* GetRemoteNavigationAssociatedInterfaces()
       override;
@@ -489,10 +489,12 @@ class CORE_EXPORT EmptyLocalFrameClient : public LocalFrameClient {
   }
 
   bool IsDomStorageDisabled() const override { return false; }
+  bool AreDedicatedWorkersDisabled() const override { return false; }
 
  protected:
   // Not owned
-  WebTextCheckClient* text_check_client_;
+  raw_ptr<WebTextCheckClient, UnprotectedInRelease | DanglingUntriaged>
+      text_check_client_;
 
   std::unique_ptr<AssociatedInterfaceProvider> associated_interface_provider_;
 };

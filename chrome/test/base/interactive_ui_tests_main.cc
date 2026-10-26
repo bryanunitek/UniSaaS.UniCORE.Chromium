@@ -7,10 +7,12 @@
 #include "base/command_line.h"
 #include "base/memory/discardable_memory_allocator.h"
 #include "base/test/launcher/test_launcher.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_discardable_memory_allocator.h"
 #include "base/test/test_switches.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/preloading/preloading_features.h"
 #include "chrome/browser/ssl/https_upgrades_navigation_throttle.h"
 #include "chrome/test/base/chrome_test_launcher.h"
 #include "chrome/test/base/chrome_test_suite.h"
@@ -21,6 +23,10 @@
 #include "ui/base/interaction/interactive_test_internal.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/compositor/compositor_switches.h"
+
+#if BUILDFLAG(IS_LINUX)
+#include "ui/linux/display_server_utils.h"
+#endif
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/test/ui_controls_ash.h"
@@ -34,9 +40,12 @@
 #endif  // defined(USE_AURA) && BUILDFLAG(IS_OZONE)
 
 #if BUILDFLAG(IS_WIN)
+#include "base/functional/bind.h"
 #include "base/win/scoped_com_initializer.h"
 #include "base/win/win_util.h"
 #include "chrome/test/base/always_on_top_window_killer_win.h"
+#include "ui/base/test/ui_controls_internal_win.h"
+#include "ui/views/widget/desktop_aura/desktop_drag_drop_client_win.h"
 #endif
 
 class InteractiveUITestSuite : public ChromeTestSuite {
@@ -54,10 +63,17 @@ class InteractiveUITestSuite : public ChromeTestSuite {
 #elif BUILDFLAG(IS_WIN)
     com_initializer_ = std::make_unique<base::win::ScopedCOMInitializer>();
     aura::test::EnableUIControlsAuraWin();
+    views::DesktopDragDropClientWin::SetOnDragStartedCallbackForTesting(
+        base::BindRepeating(&ui_controls::internal::QueueDragUnblockNudge));
 #elif BUILDFLAG(IS_OZONE)
     // Notifies the platform that test config is needed. For Wayland, for
     // example, makes it possible to use emulated input.
     ui::test::EnableTestConfigForPlatformWindows();
+
+#if BUILDFLAG(IS_LINUX)
+    ui::SetOzonePlatformForLinuxIfNeeded(
+        *base::CommandLine::ForCurrentProcess());
+#endif
 
     ui::OzonePlatform::InitParams params;
     params.single_process = true;
@@ -78,12 +94,19 @@ class InteractiveUITestSuite : public ChromeTestSuite {
     HttpsUpgradesNavigationThrottle::set_timeout_for_testing(base::TimeDelta());
 #endif
 
+    // Prewarming the default search engine background page causes significant
+    // latency and timeouts in interactive UI tests (especially on Mac due to
+    // Cocoa event queue processing). Disable it for interactive_ui_tests.
+    scoped_feature_list_.InitAndDisableFeature(features::kPrewarm);
+
     base::DiscardableMemoryAllocator::SetInstance(
         &discardable_memory_allocator_);
   }
 
   void Shutdown() override {
 #if BUILDFLAG(IS_WIN)
+    views::DesktopDragDropClientWin::SetOnDragStartedCallbackForTesting(
+        base::NullCallback());
     com_initializer_.reset();
 #endif
   }
@@ -93,6 +116,7 @@ class InteractiveUITestSuite : public ChromeTestSuite {
   std::unique_ptr<base::win::ScopedCOMInitializer> com_initializer_;
 #endif
   base::TestDiscardableMemoryAllocator discardable_memory_allocator_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 class InteractiveUITestLauncherDelegate : public ChromeTestLauncherDelegate {

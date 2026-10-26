@@ -12,7 +12,9 @@
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/browser_sync/browser_sync_switches.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/passphrase_enums.h"
 #include "components/sync/model/crypto/key_derivation_params.h"
 #include "components/sync/model/crypto/nigori.h"
@@ -40,6 +42,7 @@ using syncer::DataTypeSet;
 using syncer::GetEncryptedBookmarkEntitySpecifics;
 using syncer::InitCustomPassphraseCryptographerFromNigori;
 using syncer::KeyParamsForTesting;
+using syncer::KeystoreKeyParamsForTesting;
 using syncer::LoopbackServerEntity;
 using syncer::PassphraseType;
 using syncer::Pbkdf2PassphraseKeyParamsForTesting;
@@ -93,8 +96,10 @@ class SingleClientCustomPassphraseSyncTest
  public:
   SingleClientCustomPassphraseSyncTest() : SyncTest(SINGLE_CLIENT) {
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
-      scoped_feature_list_.InitAndEnableFeature(
-          syncer::kReplaceSyncPromosWithSignInPromos);
+      scoped_feature_list_.InitWithFeatures(
+          {syncer::kReplaceSyncPromosWithSignInPromos,
+           switches::kSyncEnableBookmarksInTransportMode},
+          {});
     }
   }
 
@@ -379,7 +384,10 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_TRUE(SetupSync());
   const KeyParamsForTesting kKeyParams =
       ScryptPassphraseKeyParamsForTesting("hunter2");
-  SetNigoriInFakeServer(BuildCustomPassphraseNigoriSpecifics(kKeyParams),
+  SetNigoriInFakeServer(BuildCustomPassphraseNigoriSpecifics(
+                            kKeyParams,
+                            /*old_key_params=*/KeystoreKeyParamsForTesting(
+                                GetFakeServer()->GetKeystoreKeys().back())),
                         GetFakeServer());
   ASSERT_TRUE(WaitForPassphraseRequired());
   ASSERT_TRUE(GetSyncService()->GetUserSettings()->SetDecryptionPassphrase(

@@ -22,14 +22,15 @@
 #include "chrome/browser/signin/e2e_tests/sign_in_test_observer.h"
 #include "chrome/browser/signin/e2e_tests/signin_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/lens/lens_overlay_controller.h"
 #include "chrome/browser/ui/lens/lens_overlay_side_panel_coordinator.h"
 #include "chrome/browser/ui/lens/lens_search_controller.h"
 #include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/lens/lens_features.h"
@@ -49,8 +50,11 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "net/dns/mock_host_resolver.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/compositor/compositor_switches.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
+#include "ui/views/controls/webview/webview.h"
 
 namespace lens {
 
@@ -132,7 +136,7 @@ class LensOverlayLiveTest : public base::test::WithFeatureOverride,
 
     // Permits sharing the page screenshot by default. This disables the
     // permission dialog.
-    PrefService* prefs = browser()->profile()->GetPrefs();
+    PrefService* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(lens::prefs::kLensSharingPageScreenshotEnabled, true);
 
     // Set the default timeout for our run loops.
@@ -159,14 +163,14 @@ class LensOverlayLiveTest : public base::test::WithFeatureOverride,
   }
 
   bool IsLensOverlaySidePanelShowing() {
-    return browser()->GetFeatures().side_panel_ui()->IsSidePanelEntryShowing(
+    return SidePanelUI::From(browser())->IsSidePanelEntryShowing(
         SidePanelEntryKey(SidePanelEntryId::kLensOverlayResults));
   }
 
   signin::test::SignInFunctions sign_in_functions =
       signin::test::SignInFunctions(
           base::BindLambdaForTesting(
-              [this]() -> Browser* { return this->browser(); }),
+              [this]() -> BrowserWindowInterface* { return this->browser(); }),
           base::BindLambdaForTesting(
               [this](int index,
                      const GURL& url,
@@ -175,12 +179,12 @@ class LensOverlayLiveTest : public base::test::WithFeatureOverride,
               }));
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   content::WebContents* GetOverlayWebContents() {
     auto* controller = browser()
-                           ->tab_strip_model()
+                           ->GetTabStripModel()
                            ->GetActiveTab()
                            ->GetTabFeatures()
                            ->lens_overlay_controller();
@@ -215,13 +219,13 @@ class LensOverlayLiveTest : public base::test::WithFeatureOverride,
   // the current tab.
   void WaitForPaint(
       std::string_view url,
-      WindowOpenDisposition disposition = WindowOpenDisposition::CURRENT_TAB,
+      WindowOpenDisposition disposition = WindowOpenDisposition::kCurrentTab,
       int browser_test_flags = ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP) {
     ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
         browser(), GURL(url), disposition, browser_test_flags));
     ASSERT_TRUE(base::test::RunUntil([&]() {
       return browser()
-          ->tab_strip_model()
+          ->GetTabStripModel()
           ->GetActiveTab()
           ->GetContents()
           ->CompletedFirstVisuallyNonEmptyPaint();
@@ -231,7 +235,7 @@ class LensOverlayLiveTest : public base::test::WithFeatureOverride,
   // Verifies the side panel opened and loaded a search URL in its iframe.
   void VerifySidePanelLoaded() {
     auto* controller = browser()
-                           ->tab_strip_model()
+                           ->GetTabStripModel()
                            ->GetActiveTab()
                            ->GetTabFeatures()
                            ->lens_overlay_controller();
@@ -288,7 +292,7 @@ IN_PROC_BROWSER_TEST_P(LensOverlayLiveTest,
 
   // State should start in off.
   auto* controller = browser()
-                         ->tab_strip_model()
+                         ->GetTabStripModel()
                          ->GetActiveTab()
                          ->GetTabFeatures()
                          ->lens_overlay_controller();
@@ -336,7 +340,7 @@ IN_PROC_BROWSER_TEST_P(LensOverlayLiveTest, ClickObject_SignedInOnWebOnly) {
 
   // State should start in off.
   auto* controller = browser()
-                         ->tab_strip_model()
+                         ->GetTabStripModel()
                          ->GetActiveTab()
                          ->GetTabFeatures()
                          ->lens_overlay_controller();
@@ -376,7 +380,7 @@ IN_PROC_BROWSER_TEST_P(LensOverlayLiveTest, ClickObject_SignedOut) {
 
   // State should start in off.
   auto* controller = browser()
-                         ->tab_strip_model()
+                         ->GetTabStripModel()
                          ->GetActiveTab()
                          ->GetTabFeatures()
                          ->lens_overlay_controller();

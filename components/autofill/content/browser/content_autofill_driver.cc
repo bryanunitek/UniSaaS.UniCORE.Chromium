@@ -15,6 +15,7 @@
 #include "base/logging.h"
 #include "components/autofill/content/browser/bad_message.h"
 #include "components/autofill/content/browser/content_autofill_driver_factory.h"
+#include "components/autofill/content/browser/renderer_data_validation.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/foundations/autofill_driver_router.h"
@@ -26,7 +27,6 @@
 #include "components/autofill/core/common/signatures.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "content/public/browser/render_process_host.h"
-#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
@@ -34,6 +34,7 @@
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
+#include "ui/gfx/geometry/rect_conversions.h"
 #include "url/origin.h"
 
 namespace autofill {
@@ -45,6 +46,10 @@ struct ContentAutofillDriverAttorney {
   static const mojo::AssociatedRemote<mojom::AutofillAgent>& GetAutofillAgent(
       ContentAutofillDriver& driver) {
     return driver.GetAutofillAgent();
+  }
+
+  static AutofillManager::RendererEventPassKey autofill_manager_pass_key() {
+    return ContentAutofillDriver::autofill_manager_pass_key();
   }
 };
 
@@ -74,20 +79,12 @@ T&& Lift(ContentAutofillDriver& source, T&& x) {
   return std::forward<T>(x);
 }
 
-gfx::Rect Lift(ContentAutofillDriver& source, gfx::Rect r) {
-  if (content::RenderWidgetHostView* view =
-          source.render_frame_host()->GetView()) {
-    r.set_origin(view->TransformPointToRootCoordSpace(r.origin()));
-  }
-  return r;
+gfx::RectF Lift(ContentAutofillDriver& source, gfx::RectF r) {
+  return TransformToRootCoordinates(*source.render_frame_host(), r);
 }
 
-gfx::RectF Lift(ContentAutofillDriver& source, gfx::RectF r) {
-  if (content::RenderWidgetHostView* view =
-          source.render_frame_host()->GetView()) {
-    r.set_origin(view->TransformPointToRootCoordSpaceF(r.origin()));
-  }
-  return r;
+gfx::Rect Lift(ContentAutofillDriver& source, gfx::Rect r) {
+  return gfx::ToRoundedRect(Lift(source, gfx::RectF(r)));
 }
 
 FormData Lift(ContentAutofillDriver& source, FormData form) {
@@ -106,12 +103,15 @@ FormData Lift(ContentAutofillDriver& source, FormData form) {
   form.set_full_url(StripAuth(unstripped_url));
 
   // The form signature must be calculated after setting FormData::url.
-  FormSignature signature = CalculateFormSignature(form);
+  const FormSignature signature = CalculateFormSignature(form);
+  const FormSignature structural_signature =
+      CalculateStructuralFormSignature(form);
   std::vector<FormFieldData> fields = form.ExtractFields();
   for (FormFieldData& field : fields) {
     field.set_host_frame(form.host_frame());
     field.set_host_form_id(form.renderer_id());
     field.set_host_form_signature(signature);
+    field.set_host_form_structural_signature(structural_signature);
     field.set_origin(rfh.GetLastCommittedOrigin());
     field.set_bounds(Lift(source, field.bounds()));
   }
@@ -125,6 +125,16 @@ FormGlobalId Lift(ContentAutofillDriver& source, FormRendererId id) {
 
 FieldGlobalId Lift(ContentAutofillDriver& source, FieldRendererId id) {
   return FieldGlobalId(source.GetFrameToken(), id);
+}
+
+JavaScriptFieldModification Lift(
+    ContentAutofillDriver& source,
+    const mojom::JavaScriptFieldModificationPtr& mod) {
+  return JavaScriptFieldModification{
+      .field_id = Lift(source, mod->field_id),
+      .modification_type = mod->modification_type,
+      .timestamp = mod->timestamp,
+  };
 }
 
 PasswordSuggestionRequest Lift(ContentAutofillDriver& source,
@@ -188,7 +198,8 @@ template <typename T>
                  gfx::Rect,
                  std::u16string,
                  std::vector<FormGlobalId>,
-                 std::vector<FieldGlobalId>>)
+                 std::vector<FieldGlobalId>,
+                 std::vector<JavaScriptFieldModification>>)
 T&& WithNewVersion(T&& x) {
   return std::forward<T>(x);
 }
@@ -276,14 +287,16 @@ R RouteToAgent(AutofillDriverRouter& router,
 template <typename... RouterArgs,
           typename... ManagerArgs,
           typename... ActualArgs>
-void RouteToManager(ContentAutofillDriver& source,
-                    AutofillDriverRouter& router,
-                    void (AutofillDriverRouter::*router_fun)(
-                        AutofillDriverRouter::RoutedCallback<ManagerArgs...>,
-                        autofill::AutofillDriver& source,
-                        RouterArgs...),
-                    void (AutofillManager::*manager_fun)(ManagerArgs...),
-                    ActualArgs&&... args) {
+void RouteToManager(
+    ContentAutofillDriver& source,
+    AutofillDriverRouter& router,
+    void (AutofillDriverRouter::*router_fun)(
+        AutofillDriverRouter::RoutedCallback<ManagerArgs...>,
+        autofill::AutofillDriver& source,
+        RouterArgs...),
+    void (AutofillManager::*manager_fun)(ManagerArgs...,
+                                         AutofillManager::RendererEventPassKey),
+    ActualArgs&&... args) {
   if (!bad_message::CheckArgs(args...) ||
       !bad_message::CheckFrameNotPrerendering(source.render_frame_host())) {
     return;
@@ -291,8 +304,9 @@ void RouteToManager(ContentAutofillDriver& source,
   return (router.*router_fun)(
       [&manager_fun](autofill::AutofillDriver& target, ManagerArgs... args) {
         AutofillManager& manager = target.GetAutofillManager();
-        (manager.*
-         manager_fun)(WithNewVersion(std::forward<ManagerArgs>(args))...);
+        (manager.*manager_fun)(
+            WithNewVersion(std::forward<ManagerArgs>(args))...,
+            ContentAutofillDriverAttorney::autofill_manager_pass_key());
       },
       source, Lift(source, std::forward<ActualArgs>(args))...);
 }
@@ -348,6 +362,25 @@ void ContentAutofillDriver::TriggerFormExtractionInAllFrames(
     driver->GetAutofillAgent()->TriggerFormExtractionWithResponse(
         barrier_callback);
   }
+}
+
+void ContentAutofillDriver::ClearFormCacheInAllFrames() {
+  render_frame_host()->GetMainFrame()->ForEachRenderFrameHost(
+      [](content::RenderFrameHost* rfh) {
+        if (rfh->IsActive()) {
+          if (auto* driver = GetForRenderFrameHost(rfh)) {
+            driver->GetAutofillAgent()->ClearFormCache();
+          }
+        }
+      });
+}
+
+void ContentAutofillDriver::ObserveFieldVisibility(
+    const FieldGlobalId& field_id,
+    mojo::PendingRemote<mojom::AutofillVisibilityObserver> observer) {
+  RouteToAgent(router(), &AutofillDriverRouter::ObserveFieldVisibility,
+               &mojom::AutofillAgent::ObserveFieldVisibility, field_id,
+               std::move(observer));
 }
 
 void ContentAutofillDriver::GetFourDigitCombinationsFromDom(
@@ -455,7 +488,7 @@ std::optional<LocalFrameToken> ContentAutofillDriver::Resolve(
 
 ukm::SourceId ContentAutofillDriver::GetPageUkmSourceId() const {
   CHECK(!render_frame_host_->IsInLifecycleState(
-          content::RenderFrameHost::LifecycleState::kPrerendering));
+      content::RenderFrameHost::LifecycleState::kPrerendering));
   return render_frame_host_->GetPageUkmSourceId();
 }
 
@@ -493,8 +526,7 @@ base::flat_set<FieldGlobalId> ContentAutofillDriver::ApplyFormAction(
     const FillId& fill_id,
     bool supports_refill,
     const url::Origin& triggered_origin,
-    const absl::flat_hash_map<FieldGlobalId, FieldType>& field_type_map,
-    const Section& section_for_clear_form_on_ios) {
+    const absl::flat_hash_map<FieldGlobalId, FieldType>& field_type_map) {
   // If this driver is active, then its main frame is identical to the main
   // frame at the time the form was received from a renderer and their origins
   // are the same.
@@ -590,22 +622,21 @@ void ContentAutofillDriver::RendererShouldSetSuggestionAvailability(
                suggestion_availability);
 }
 
+void ContentAutofillDriver::GetNonceForEmailVerification(
+    FieldGlobalId email_field_id,
+    base::OnceCallback<void(const std::optional<std::string>&)> callback) {
+  RouteToAgent(router(), &AutofillDriverRouter::GetNonceForEmailVerification,
+               &mojom::AutofillAgent::GetNonceForEmailVerification,
+               email_field_id, std::move(callback));
+}
+
 void ContentAutofillDriver::SendEmailVerificationToken(
     FieldGlobalId email_field_id,
     const std::string& email,
-    FieldGlobalId token_field_id,
     const std::string& token) {
   RouteToAgent(router(), &AutofillDriverRouter::SendEmailVerificationToken,
                &mojom::AutofillAgent::SendEmailVerificationToken,
-               email_field_id, email, token_field_id, token);
-}
-
-void ContentAutofillDriver::UpdateEmailVerificationState(
-    const FieldGlobalId& email_field_id,
-    mojom::EmailVerificationState state) {
-  RouteToAgent(router(), &AutofillDriverRouter::UpdateEmailVerificationState,
-               &mojom::AutofillAgent::UpdateEmailVerificationState,
-               email_field_id, state);
+               email_field_id, email, token);
 }
 
 void ContentAutofillDriver::FormsSeen(
@@ -688,7 +719,8 @@ void ContentAutofillDriver::RequestRefill(const FillId& fill_id) {
 void ContentAutofillDriver::FocusOnFormField(const FormData& form,
                                              FieldRendererId field_id) {
   auto focus_no_longer_on_form = [](autofill::AutofillDriver& target) {
-    target.GetAutofillManager().OnFocusOnNonFormField();
+    target.GetAutofillManager().OnFocusOnNonFormField(
+        /*pass_key=*/{});
   };
   RouteToManager(
       *this, router(), &AutofillDriverRouter::FocusOnFormField,
@@ -726,21 +758,22 @@ void ContentAutofillDriver::JavaScriptChangedAutofilledValue(
 
 void ContentAutofillDriver::FormWithEmailVerificationTokenSubmitted(
     const FormData& form,
-    FieldRendererId field_id) {
+    FieldRendererId email_field_id) {
   RouteToManager(*this, router(),
                  &AutofillDriverRouter::FormWithEmailVerificationTokenSubmitted,
                  &AutofillManager::OnFormWithEmailVerificationTokenSubmitted,
-                 form, field_id);
+                 form, email_field_id);
 }
 
 void ContentAutofillDriver::DidDetectJavaScriptAutofill(
     const FormData& form,
     FieldRendererId trigger_field_id,
-    const std::vector<FieldRendererId>& field_ids) {
-  RouteToManager(*this, router(),
-                 &AutofillDriverRouter::DidDetectJavaScriptAutofill,
-                 &AutofillManager::OnDidDetectJavaScriptAutofill, form,
-                 trigger_field_id, field_ids);
+    std::vector<mojom::JavaScriptFieldModificationPtr> field_modifications,
+    base::TimeTicks detection_start_timestamp) {
+  RouteToManager(
+      *this, router(), &AutofillDriverRouter::DidDetectJavaScriptAutofill,
+      &AutofillManager::OnDidDetectJavaScriptAutofill, form, trigger_field_id,
+      field_modifications, detection_start_timestamp);
 }
 
 const mojo::AssociatedRemote<mojom::AutofillAgent>&

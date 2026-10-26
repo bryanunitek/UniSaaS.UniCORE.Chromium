@@ -12,13 +12,12 @@
 
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
-#include "third_party/khronos/EGL/egl.h"
+#include "third_party/angle/include/EGL/egl.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/extension_set.h"
 #include "ui/gfx/linux/drm_util_linux.h"
@@ -190,15 +189,14 @@ class GLOzoneEGLGbm : public GLOzoneEGL {
  private:
   std::unique_ptr<NativePixmapGLBinding> ImportNativePixmap(
       scoped_refptr<gfx::NativePixmap> pixmap,
-      viz::SharedImageFormat plane_format,
+      viz::SharedImageFormat format,
       std::optional<int> plane_index,
-      gfx::Size plane_size,
+      gfx::Size size,
       const gfx::ColorSpace& color_space,
       GLenum target,
       GLuint texture_id) override {
-    return NativePixmapEGLBinding::Create(pixmap, plane_format, plane_index,
-                                          plane_size, color_space, target,
-                                          texture_id);
+    return NativePixmapEGLBinding::Create(pixmap, format, plane_index, size,
+                                          color_space, target, texture_id);
   }
 
   raw_ptr<GbmSurfaceFactory> surface_factory_;
@@ -414,8 +412,21 @@ GbmSurfaceFactory::CreateNativePixmapFromHandle(
   // valid and can be further importer by standard means.
   if (!get_protected_native_pixmap_callback_.is_null()) {
     auto protected_pixmap = get_protected_native_pixmap_callback_.Run(handle);
-    if (protected_pixmap)
+    if (protected_pixmap) {
+      // The substituted pixmap is used in place of the supplied handle, so it
+      // must match the geometry the caller will use to bind it.
+      // See https://crbug.com/501762862
+      if (protected_pixmap->GetBufferSize() != size ||
+          protected_pixmap->GetSharedImageFormat() != format) {
+        LOG(ERROR) << "Protected pixmap ("
+                   << protected_pixmap->GetBufferSize().ToString() << ", "
+                   << protected_pixmap->GetSharedImageFormat().ToString()
+                   << ") does not match requested geometry (" << size.ToString()
+                   << ", " << format.ToString() << ")";
+        return nullptr;
+      }
       return protected_pixmap;
+    }
   }
 
   return CreateNativePixmapFromHandleInternal(widget, size, format,
@@ -486,8 +497,6 @@ bool GbmSurfaceFactory::IsFormatSupportedForTexturing(
           GbmDeviceAndFile(std::move(dev_path_file), std::move(device)));
     }
     gbm_devices_initialized_ = true;
-    base::UmaHistogramCounts100("Ozone.Drm.GbmDeviceCount",
-                                gbm_devices_.size());
   }
 
   for (const auto& device_and_file : gbm_devices_) {

@@ -27,12 +27,15 @@ static base::LazyInstance<SandboxedPageInfo>::DestructorAtExit
     g_empty_sandboxed_info = LAZY_INSTANCE_INITIALIZER;
 
 const SandboxedPageInfo& GetSandboxedPageInfo(const Extension* extension) {
-  const SandboxedPageInfo* info = static_cast<const SandboxedPageInfo*>(
-      extension->GetManifestData(keys::kSandboxedPages));
+  const SandboxedPageInfo* info =
+      extension->GetManifestData<SandboxedPageInfo>();
   return info ? *info : g_empty_sandboxed_info.Get();
 }
 
 }  // namespace
+
+// static
+const char* SandboxedPageInfo::kManifestDataKey = keys::kSandboxedPages;
 
 SandboxedPageInfo::SandboxedPageInfo() = default;
 SandboxedPageInfo::~SandboxedPageInfo() = default;
@@ -42,8 +45,9 @@ const URLPatternSet& SandboxedPageInfo::GetPages(const Extension* extension) {
 }
 
 bool SandboxedPageInfo::IsSandboxedPage(const Extension* extension,
-                                    const std::string& relative_path) {
-  return extension->ResourceMatches(GetPages(extension), relative_path);
+                                        const std::string& relative_path) {
+  return extension->ResourceMatches(GetPages(extension), relative_path,
+                                    /*case_sensitive=*/false);
 }
 
 SandboxedPageHandler::SandboxedPageHandler() = default;
@@ -79,7 +83,7 @@ bool SandboxedPageHandler::Parse(Extension* extension, std::u16string* error) {
     sandboxed_info->pages.AddPattern(pattern);
   }
 
-  extension->SetManifestData(keys::kSandboxedPages, std::move(sandboxed_info));
+  extension->SetManifestData(std::move(sandboxed_info));
   return true;
 }
 

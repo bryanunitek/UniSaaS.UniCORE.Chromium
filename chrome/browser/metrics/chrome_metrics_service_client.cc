@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/check_is_test.h"
 #include "base/check_op.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -29,6 +30,7 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/glic/glic_metrics_provider.h"
 #include "chrome/browser/google/google_brand.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -38,6 +40,7 @@
 #include "chrome/browser/metrics/chrome_metrics_extensions_helper.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/metrics/chrome_metrics_services_manager_client.h"
+#include "chrome/browser/metrics/cpu_performance_metrics_provider.h"
 #include "chrome/browser/metrics/desktop_platform_features_metrics_provider.h"
 #include "chrome/browser/metrics/desktop_session_duration/desktop_profile_session_durations_service_factory.h"
 #include "chrome/browser/metrics/desktop_session_duration/desktop_session_metrics_provider.h"
@@ -46,7 +49,9 @@
 #include "chrome/browser/metrics/network_quality_estimator_provider_impl.h"
 #include "chrome/browser/metrics/usertype_by_devicetype_metrics_provider.h"
 #include "chrome/browser/performance_manager/metrics/metrics_provider_common.h"
+#include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profile_selections.h"
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/regional_capabilities/regional_capabilities_metrics_provider.h"
 #include "chrome/browser/regional_capabilities/regional_capabilities_service_factory.h"
@@ -96,19 +101,22 @@
 #include "components/metrics/stability_metrics_helper.h"
 #include "components/metrics/structured/structured_metrics_features.h"  // nogncheck
 #include "components/metrics/structured/structured_metrics_service.h"  // nogncheck
+#include "components/metrics/system_profile_user_stream.h"
 #include "components/metrics/ui/form_factor_metrics_provider.h"
 #include "components/metrics/ui/screen_info_metrics_provider.h"
 #include "components/metrics/version_utils.h"
 #include "components/network_time/network_time_tracker.h"
 #include "components/omnibox/browser/omnibox_metrics_provider.h"
+#include "components/policy/core/common/enterprise_management_metrics_provider.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/regional_capabilities/regional_capabilities_country_id.h"
 #include "components/regional_capabilities/regional_capabilities_service.h"
-#include "components/regional_capabilities/regional_capabilities_switches.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/core/common/features.h"
+#include "components/site_token_provider/features.h"
+#include "components/site_token_provider/site_token_provider_metrics_provider.h"
 #include "components/sync/service/passphrase_type_metrics_provider.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync_device_info/device_count_metrics_provider.h"
@@ -156,7 +164,6 @@
 #include "chrome/browser/ash/printing/printer_metrics_provider.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
-#include "chrome/browser/ash/system_web_apps/apps/personalization_app/keyboard_backlight_color_metrics_provider.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_theme_metrics_provider.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/wallpaper_metrics_provider.h"
 #include "chrome/browser/metrics/ambient_mode_metrics_provider.h"
@@ -198,6 +205,7 @@
 #if BUILDFLAG(IS_MAC)
 #include "chrome/browser/metrics/google_update_metrics_provider_mac.h"
 #include "chrome/browser/metrics/power/power_metrics_provider_mac.h"
+#include "chrome/browser/metrics/task_info_metrics_provider_mac.h"
 #endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
@@ -461,6 +469,11 @@ class ChromeComponentMetricsProviderDelegate
   ~ChromeComponentMetricsProviderDelegate() override = default;
 
   std::vector<component_updater::ComponentInfo> GetComponents() override {
+    if (!component_updater_service_) {
+      // `component_updater_service_` can be null in tests.
+      CHECK_IS_TEST();
+      return {};
+    }
     return component_updater_service_->GetComponents();
   }
 
@@ -488,6 +501,45 @@ void UpdateMetricsServicesForPerUser(bool enabled) {
   g_browser_process->GetMetricsServicesManager()->UpdateUploadPermissions();
 }
 #endif
+
+std::vector<policy::EnterpriseManagementMetricsProvider::ProfileState>
+GetEnterpriseManagementProfileStates() {
+  std::vector<policy::EnterpriseManagementMetricsProvider::ProfileState> states;
+  if (g_browser_process && g_browser_process->profile_manager()) {
+    ProfileSelections selections = ProfileSelections::BuildForRegularProfile();
+    for (Profile* profile :
+         g_browser_process->profile_manager()->GetLoadedProfiles()) {
+      Profile* target_profile = selections.ApplyProfileSelection(profile);
+      if (!target_profile) {
+        continue;
+      }
+      policy::ProfilePolicyConnector* connector =
+          target_profile->GetProfilePolicyConnector();
+      states.push_back({
+          policy::ManagementServiceFactory::GetForProfile(target_profile),
+          connector ? connector->policy_service() : nullptr
+      });
+    }
+  }
+  return states;
+}
+
+// Returns the prefs of all loaded regular profiles, excluding Guest, System,
+// and off-the-record profiles.
+std::vector<const PrefService*> GetSiteTokenProviderProfilePrefs() {
+  std::vector<const PrefService*> profile_prefs;
+  if (g_browser_process && g_browser_process->profile_manager()) {
+    ProfileSelections selections = ProfileSelections::BuildForRegularProfile();
+    for (Profile* profile :
+         g_browser_process->profile_manager()->GetLoadedProfiles()) {
+      if (Profile* regular_profile =
+              selections.ApplyProfileSelection(profile)) {
+        profile_prefs.push_back(regular_profile->GetPrefs());
+      }
+    }
+  }
+  return profile_prefs;
+}
 
 }  // namespace
 
@@ -636,12 +688,19 @@ std::string ChromeMetricsServiceClient::GetVersionString() {
 }
 
 void ChromeMetricsServiceClient::OnEnvironmentUpdate(std::string* environment) {
-  // TODO(https://bugs.chromium.org/p/crashpad/issues/detail?id=135): call this
-  // on Mac when the Crashpad API supports it.
+  // Updates the environment (system profile) for the crash reporter. Note that
+  // there is a window from startup to this point during which crash reports
+  // will not have an environment set.
+  if (base::FeatureList::IsEnabled(
+          metrics::features::kSharedMemorySystemProfileMinidump)) {
+    metrics::SystemProfileUserStream::Get().WritePayload(*environment);
+    return;
+  }
+
+  // TODO(crbug.com/514425492): The old SystemProfile to crashpad sharing
+  // flow is deprecated and will be removed once
+  // `kSharedMemorySystemProfileMinidump` is fully launched.
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
-  // Register the environment with the crash reporter. Note that there is a
-  // window from startup to this point during which crash reports will not have
-  // an environment set.
   GetCrashReporter().OnEnvironmentUpdate(*environment);
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
 }
@@ -876,6 +935,9 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<performance_manager::MetricsProviderCommon>());
 
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<metrics::CpuPerformanceMetricsProvider>());
+
 #if BUILDFLAG(IS_WIN)
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<GoogleUpdateMetricsProviderWin>());
@@ -896,6 +958,10 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
 #if BUILDFLAG(IS_MAC)
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<GoogleUpdateMetricsProviderMac>());
+  if (base::FeatureList::IsEnabled(features::kTaskInfoMetricsMac)) {
+    metrics_service_->RegisterMetricsProvider(
+        std::make_unique<TaskInfoMetricsProviderMac>());
+  }
 #endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
@@ -947,8 +1013,6 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<UserTypeByDeviceTypeMetricsProvider>());
 
-  metrics_service_->RegisterMetricsProvider(
-      std::make_unique<KeyboardBacklightColorMetricsProvider>());
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<PersonalizationAppThemeMetricsProvider>());
   metrics_service_->RegisterMetricsProvider(
@@ -1018,18 +1082,25 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<glic::GlicMetricsProvider>());
 
-  // Only register the RegionalCapabilitiesMetricsProvider if the dynamic
-  // profile country feature is enabled. This is because that feature
-  // significantly changes the cases under which the "Mixed" bucket is emitted.
-  if (base::FeatureList::IsEnabled(switches::kDynamicProfileCountry)) {
-    metrics_service_->RegisterMetricsProvider(
-        std::make_unique<
-            regional_capabilities::RegionalCapabilitiesMetricsProvider>());
-  }
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<
+          regional_capabilities::RegionalCapabilitiesMetricsProvider>());
 
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<
           subscription_eligibility::SubscriptionEligibilityMetricsProvider>());
+
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<policy::EnterpriseManagementMetricsProvider>(
+          policy::ManagementServiceFactory::GetForPlatform(),
+          base::BindRepeating(&GetEnterpriseManagementProfileStates)));
+
+  if (base::FeatureList::IsEnabled(
+          site_token_provider::features::kSiteTokenProviderEnabled)) {
+    metrics_service_->RegisterMetricsProvider(
+        std::make_unique<site_token_provider::SiteTokenProviderMetricsProvider>(
+            base::BindRepeating(&GetSiteTokenProviderProfilePrefs)));
+  }
 }
 
 void ChromeMetricsServiceClient::RegisterUKMProviders() {
@@ -1082,6 +1153,13 @@ void ChromeMetricsServiceClient::RegisterUKMProviders() {
       std::make_unique<ChromeAndroidMetricsProvider>(local_state));
 #endif  // BUILDFLAG(IS_ANDROID)
 
+  if (base::FeatureList::IsEnabled(
+          site_token_provider::features::kSiteTokenProviderEnabled)) {
+    ukm_service_->RegisterMetricsProvider(
+        std::make_unique<site_token_provider::SiteTokenProviderMetricsProvider>(
+            base::BindRepeating(&GetSiteTokenProviderProfilePrefs)));
+  }
+
   // LINT.ThenChange(/ios/chrome/browser/metrics/model/ios_chrome_metrics_service_client.mm:UkmProviders)
 }
 
@@ -1097,7 +1175,7 @@ void ChromeMetricsServiceClient::CollectFinalHistograms() {
   // finished, it will call OnMemoryDetailCollectionDone. That will in turn
   // call HistogramSynchronization to collect histograms from all renderers and
   // then call OnHistogramSynchronizationDone to continue processing.
-  DCHECK(!waiting_for_collect_final_metrics_step_);
+  CHECK(!waiting_for_collect_final_metrics_step_, base::NotFatalUntil::M161);
   waiting_for_collect_final_metrics_step_ = true;
 
   base::OnceClosure callback =
@@ -1114,7 +1192,7 @@ void ChromeMetricsServiceClient::OnMemoryDetailCollectionDone() {
 
   // This function should only be called as the callback from an ansynchronous
   // step.
-  DCHECK(waiting_for_collect_final_metrics_step_);
+  CHECK(waiting_for_collect_final_metrics_step_, base::NotFatalUntil::M161);
 
   // Create a callback_task for OnHistogramSynchronizationDone.
   base::RepeatingClosure callback = base::BindRepeating(
@@ -1124,7 +1202,8 @@ void ChromeMetricsServiceClient::OnMemoryDetailCollectionDone() {
   base::TimeDelta timeout =
       base::Milliseconds(kMaxHistogramGatheringWaitDuration);
 
-  DCHECK_EQ(num_async_histogram_fetches_in_progress_, 0);
+  CHECK_EQ(num_async_histogram_fetches_in_progress_, 0,
+           base::NotFatalUntil::M161);
   // `callback` is used 2 times below.
   num_async_histogram_fetches_in_progress_ = 2;
 
@@ -1147,8 +1226,9 @@ void ChromeMetricsServiceClient::OnHistogramSynchronizationDone() {
 
   // This function should only be called as the callback from an ansynchronous
   // step.
-  DCHECK(waiting_for_collect_final_metrics_step_);
-  DCHECK_GT(num_async_histogram_fetches_in_progress_, 0);
+  CHECK(waiting_for_collect_final_metrics_step_, base::NotFatalUntil::M161);
+  CHECK_GT(num_async_histogram_fetches_in_progress_, 0,
+           base::NotFatalUntil::M161);
 
   // Check if all expected requests finished.
   if (--num_async_histogram_fetches_in_progress_ > 0) {
@@ -1191,7 +1271,7 @@ bool ChromeMetricsServiceClient::RegisterForProfileEvents(Profile* profile) {
   // Guest Off the record status are not checked in this method for UKM consent.
   // The equivalent check is done in this method
   // `MetricsServicesManager::UpdateUkmService()`
-  DCHECK(!profile->IsOffTheRecord());
+  CHECK(!profile->IsOffTheRecord(), base::NotFatalUntil::M161);
 
   // Non-Regular Profiles consent information are not expected to be
   // observed or checked, therefore they are whitelisted for the UKM
@@ -1209,7 +1289,9 @@ bool ChromeMetricsServiceClient::RegisterForProfileEvents(Profile* profile) {
     if (!sync) {
       return false;
     }
+    profile_observations_.AddObservation(profile);
     StartObserving(sync, profile->GetPrefs());
+    MonitorAdvancedReportingPref(profile->GetPrefs());
     return true;
   }
 #endif
@@ -1234,7 +1316,9 @@ bool ChromeMetricsServiceClient::RegisterForProfileEvents(Profile* profile) {
   if (!sync) {
     return false;
   }
+  profile_observations_.AddObservation(profile);
   StartObserving(sync, profile->GetPrefs());
+  MonitorAdvancedReportingPref(profile->GetPrefs());
   return true;
 }
 
@@ -1246,6 +1330,36 @@ void ChromeMetricsServiceClient::OnProfileAdded(Profile* profile) {
     observers_active_ = false;
     UpdateRunningServices();
   }
+}
+
+void ChromeMetricsServiceClient::OnProfileWillBeDestroyed(Profile* profile) {
+  profile_observations_.RemoveObservation(profile);
+  StopMonitoringAdvancedReportingPref(profile->GetPrefs());
+}
+
+void ChromeMetricsServiceClient::
+    OnAdvancedReportingEnabledForAllProfilesChanged(bool enabled,
+                                                    bool reset_client_state) {
+  if (!metrics::MetricsReportingChoiceService::
+          ShouldUseMetricsConsentRestructure()) {
+    return;
+  }
+
+  if (ukm_service_) {
+    if (reset_client_state) {
+      ukm_service_->Purge();
+      ukm_service_->ResetClientState(
+          ukm::ResetReason::kOnUkmAllowedStateChanged);
+    }
+
+    ukm_service_->OnUkmAllowedStateChanged(enabled);
+  }
+
+  if (dwa_service_ && reset_client_state) {
+    dwa_service_->Purge();
+  }
+
+  UpdateRunningServices();
 }
 
 void ChromeMetricsServiceClient::OnProfileManagerDestroying() {
@@ -1280,6 +1394,10 @@ void ChromeMetricsServiceClient::OnHistoryDeleted() {
 void ChromeMetricsServiceClient::OnUkmAllowedStateChanged(
     bool total_purge,
     ukm::UkmConsentState previous_consent_state) {
+  if (metrics::MetricsReportingChoiceService::
+          ShouldUseMetricsConsentRestructure()) {
+    return;
+  }
   const ukm::UkmConsentState consent_state = GetUkmConsentState();
   // Apply UKM consent changes to UKM service.
   if (ukm_service_) {
@@ -1357,7 +1475,7 @@ void ChromeMetricsServiceClient::RenderProcessHostDestroyed(
 
 #if BUILDFLAG(IS_CHROMEOS)
 void ChromeMetricsServiceClient::AsyncInitSystemProfileProvider() {
-  DCHECK(cros_system_profile_provider_);
+  CHECK(cros_system_profile_provider_, base::NotFatalUntil::M161);
   cros_system_profile_provider_->AsyncInit(base::BindOnce([]() {
     // Structured metrics needs to know when the SystemProfile is
     // available since events should have SystemProfile populated.
@@ -1375,10 +1493,10 @@ bool ChromeMetricsServiceClient::IsWebstoreExtension(std::string_view id) {
   // profiles that know the extension say it was from the web-store.
   bool matched = false;
   ProfileManager* profile_manager = g_browser_process->profile_manager();
-  DCHECK(profile_manager);
+  CHECK(profile_manager, base::NotFatalUntil::M161);
   auto profiles = profile_manager->GetLoadedProfiles();
   for (Profile* profile : profiles) {
-    DCHECK(profile);
+    CHECK(profile, base::NotFatalUntil::M161);
     extensions::ExtensionRegistry* registry =
         extensions::ExtensionRegistry::Get(profile);
     if (!registry) {
@@ -1428,10 +1546,18 @@ void ChromeMetricsServiceClient::SetIsProcessRunningForTesting(
 }
 
 bool ChromeMetricsServiceClient::IsUkmAllowedForAllProfiles() {
+  if (metrics::MetricsReportingChoiceService::
+          ShouldUseMetricsConsentRestructure()) {
+    return IsAdvancedReportingEnabledForAllProfiles();
+  }
   return UkmConsentStateObserver::IsUkmAllowedForAllProfiles();
 }
 
 bool ChromeMetricsServiceClient::IsDwaAllowedForAllProfiles() {
+  if (metrics::MetricsReportingChoiceService::
+          ShouldUseMetricsConsentRestructure()) {
+    return IsAdvancedReportingEnabledForAllProfiles();
+  }
   return UkmConsentStateObserver::IsDwaAllowedForAllProfiles();
 }
 
@@ -1478,10 +1604,11 @@ bool ChromeMetricsServiceClient::ShouldUploadMetricsForUserId(
   // Metrics logs with user ids should be stored in a user cryptohome so this
   // function should only be called after a user logins.
   // |per_user_state_manager_| is initialized before a user can login.
-  DCHECK(per_user_state_manager_);
+  CHECK(per_user_state_manager_, base::NotFatalUntil::M161);
 
   // This function should only be called if reporting is enabled.
-  DCHECK(ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled());
+  CHECK(ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled(),
+        base::NotFatalUntil::M161);
 
   auto current_user_id = per_user_state_manager_->GetCurrentUserId();
 
@@ -1502,7 +1629,7 @@ bool ChromeMetricsServiceClient::ShouldUploadMetricsForUserId(
 
 void ChromeMetricsServiceClient::UpdateCurrentUserMetricsChoice(
     bool user_choice) {
-  DCHECK(per_user_state_manager_);
+  CHECK(per_user_state_manager_, base::NotFatalUntil::M161);
   per_user_state_manager_->SetCurrentUserMetricsChoice(user_choice);
 }
 

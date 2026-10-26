@@ -16,7 +16,9 @@ namespace extensions {
 
 // Stores Chrome URL overrides specified in extensions' manifests.
 struct URLOverrides : public Extension::ManifestData {
-  typedef std::map<const std::string, GURL> URLOverrideMap;
+  static const char* kManifestDataKey;
+
+  using URLOverrideMap = std::map<const std::string, GURL>;
 
   URLOverrides();
   ~URLOverrides() override;

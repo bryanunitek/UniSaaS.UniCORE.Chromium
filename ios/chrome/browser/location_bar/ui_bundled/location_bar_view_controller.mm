@@ -32,12 +32,13 @@
 #import "ios/chrome/browser/location_bar/ui_bundled/fakebox_buttons_snapshot_provider.h"
 #import "ios/chrome/browser/location_bar/ui_bundled/highlight_utils.h"
 #import "ios/chrome/browser/location_bar/ui_bundled/location_bar_constants.h"
+#import "ios/chrome/browser/location_bar/ui_bundled/location_bar_content_size_delegate.h"
 #import "ios/chrome/browser/location_bar/ui_bundled/location_bar_metrics.h"
 #import "ios/chrome/browser/location_bar/ui_bundled/location_bar_mutator.h"
 #import "ios/chrome/browser/location_bar/ui_bundled/location_bar_placeholder_type.h"
 #import "ios/chrome/browser/location_bar/ui_bundled/location_bar_steady_view.h"
+#import "ios/chrome/browser/menu/public/menu_histograms.h"
 #import "ios/chrome/browser/menu/ui_bundled/action_factory.h"
-#import "ios/chrome/browser/menu/ui_bundled/menu_histograms.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_constants.h"
 #import "ios/chrome/browser/omnibox/ui/text_field_view_containing.h"
 #import "ios/chrome/browser/orchestrator/ui_bundled/location_bar_offset_provider.h"
@@ -45,6 +46,7 @@
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/commands/activity_service_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
+#import "ios/chrome/browser/shared/public/commands/custom_leading_view_type.h"
 #import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/lens_commands.h"
@@ -64,6 +66,7 @@
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/pointer_interaction_util.h"
+#import "ios/chrome/common/ui/util/ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/public/provider/chrome/browser/lens/lens_api.h"
 #import "ui/base/l10n/l10n_util.h"
@@ -117,7 +120,8 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
 }
 @end
 
-@interface LocationBarViewController () <UIContextMenuInteractionDelegate,
+@interface LocationBarViewController () <LocationBarContentSizeDelegate,
+                                         UIContextMenuInteractionDelegate,
                                          UIIndirectScribbleInteractionDelegate>
 // The injected edit view.
 @property(nonatomic, strong) UIView<TextFieldViewContaining>* editView;
@@ -181,6 +185,7 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
 @implementation LocationBarViewController {
   BOOL _isNTP;
   BOOL _active;
+  BOOL _textOnly;
   // Stores a snapshot of the fakebox buttons that is overlaid on the Location
   // Bar and anchored to the trailing edge during focus transitions (when it is
   // faded out) and defocus transitions (when it is faded in).
@@ -197,16 +202,38 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
 
   // The placeholder view that holds the DSE icon.
   UIImageView* _defaultSearchEngineIconView;
+
+  // The current fullscreen progress, ranging from 1.0 (toolbar fully visible)
+  // to 0.0 (toolbar fully collapsed / fullscreen).
+  CGFloat _fullscreenProgress;
+
+  // The type of custom leading view to display.
+  CustomLeadingViewType _customLeadingViewType;
+
+  // Cached share icon image with balanced vertical padding.
+  UIImage* _cachedPaddedShareImage;
 }
 
 #pragma mark - public
 
-- (instancetype)init {
-  self = [super init];
+- (instancetype)initWithTextOnly:(BOOL)textOnly {
+  self = [super initWithNibName:nil bundle:nil];
   if (self) {
-    _locationBarSteadyView = [[LocationBarSteadyView alloc] init];
+    _textOnly = textOnly;
+    _locationBarSteadyView =
+        [[LocationBarSteadyView alloc] initWithTextOnly:textOnly];
+    _locationBarSteadyView.contentSizeDelegate = self;
+    if (!_textOnly && IsGlassToolbarEnabled()) {
+      _steadyViewLayoutGuide = [[UILayoutGuide alloc] init];
+    }
+    _fullscreenProgress = 1.0;
+    _customLeadingViewType = CustomLeadingViewType::kNone;
   }
   return self;
+}
+
+- (instancetype)init {
+  return [self initWithTextOnly:NO];
 }
 
 - (void)setEditView:(UIView<TextFieldViewContaining>*)editView {
@@ -279,10 +306,23 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
 }
 
 - (void)updateTrailingButtonState {
-  BOOL shouldShowVoiceSearch =
-      self.traitCollection.horizontalSizeClass ==
-          UIUserInterfaceSizeClassRegular ||
-      self.traitCollection.verticalSizeClass == UIUserInterfaceSizeClassCompact;
+  if (IsFiveButtonAppBarLayoutEnabled()) {
+    BOOL shouldShowVoiceSearch =
+        IsRegularXRegularSizeClass(self) || IsCompactHeight(self);
+    self.trailingButtonState =
+        shouldShowVoiceSearch ? kVoiceSearchButton : kNoButton;
+    return;
+  }
+
+  if (IsChromeNextIaEnabled() && !IsNextOldDesignEnabled()) {
+    BOOL shouldShowVoiceSearch = IsCompactHeight(self);
+
+    self.trailingButtonState =
+        shouldShowVoiceSearch ? kVoiceSearchButton : kShareButton;
+    return;
+  }
+
+  BOOL shouldShowVoiceSearch = !IsCompactWidth(self) || IsCompactHeight(self);
 
   self.trailingButtonState =
       shouldShowVoiceSearch ? kVoiceSearchButton : kShareButton;
@@ -328,8 +368,10 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
     [self.locationBarSteadyView setIncognitoBadgeView:self.incognitoBadgeView];
   }
 
-  DCHECK(self.badgeView) << "The badge view must be set at this point";
-  [self.locationBarSteadyView setBadgeView:self.badgeView];
+  if (!_textOnly) {
+    DCHECK(self.badgeView) << "The badge view must be set at this point";
+    [self.locationBarSteadyView setBadgeView:self.badgeView];
+  }
   if (self.readerModeChipView) {
     [self.locationBarSteadyView setReaderModeChipView:self.readerModeChipView];
   }
@@ -366,26 +408,24 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
       [[UIIndirectScribbleInteraction alloc] initWithDelegate:self];
   [_locationBarSteadyView addInteraction:scribbleInteraction];
 
-  if (!IsComposeboxIOSEnabled()) {
-    DCHECK(self.editView) << "The edit view must be set at this point";
-
-    [self.view addSubview:self.editView];
-    self.editView.translatesAutoresizingMaskIntoConstraints = NO;
-    AddSameConstraints(self.editView, self.view);
-  }
 
   [self.view addSubview:self.locationBarSteadyView];
   self.locationBarSteadyView.translatesAutoresizingMaskIntoConstraints = NO;
   AddSameConstraints(self.locationBarSteadyView, self.view);
 
+  if (self.steadyViewLayoutGuide) {
+    [self.view addLayoutGuide:self.steadyViewLayoutGuide];
+    AddSameConstraints(self.steadyViewLayoutGuide, self.locationBarSteadyView);
+  }
+
   if (IsGeminiLiveEnabled()) {
     // Use the Gemini Live symbol.
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
-    UIImage* image = CustomSymbolWithPointSize(kGeminiLiveLogoSymbol,
-                                               kGeminiLiveSymbolPointSize);
+    UIImage* image =
+        SymbolWithPointSize(SymbolGeminiLiveLogo, kGeminiLiveSymbolPointSize);
 #else
     UIImage* image =
-        DefaultSymbolWithPointSize(kWaveformSymbol, kGeminiLiveSymbolPointSize);
+        SymbolWithPointSize(SymbolWaveform, kGeminiLiveSymbolPointSize);
 #endif
 
     // Create the round container view.
@@ -471,11 +511,8 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
 #pragma mark - FullscreenUIElement
 
 - (void)updateForFullscreenProgress:(CGFloat)progress {
+  _fullscreenProgress = progress;
   CGFloat alphaValue = fmax((progress - 0.85) / 0.15, 0);
-  CGFloat scaleValue =
-      IsChromeNextIaEnabled()
-          ? kFullscreenScaleFactor + (1 - kFullscreenScaleFactor) * progress
-          : 0.79 + 0.21 * progress;
   self.locationBarSteadyView.trailingButton.alpha = alphaValue;
   self.locationBarSteadyView.badgesContainerView.placeholderView.alpha =
       alphaValue;
@@ -486,8 +523,15 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
   BOOL badgeViewShouldCollapse = progress <= kFullscreenProgressThreshold;
   [self.locationBarSteadyView
       setFullScreenCollapsedMode:badgeViewShouldCollapse];
-  self.locationBarSteadyView.transform =
-      CGAffineTransformMakeScale(scaleValue, scaleValue);
+  if (!IsGlassToolbarEnabled()) {
+    CGFloat scaleValue =
+        IsChromeNextIaEnabled()
+            ? kFullscreenScaleFactor + (1 - kFullscreenScaleFactor) * progress
+            : (0.79 + 0.21 * progress);
+    self.locationBarSteadyView.transform =
+        CGAffineTransformMakeScale(scaleValue, scaleValue);
+  }
+  [self updateCustomLeadingViewVisibilityAnimated:YES];
 }
 
 - (void)updateForFullscreenEnabled:(BOOL)enabled {
@@ -531,6 +575,14 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
   }
 }
 
+#pragma mark - LocationBarContentSizeDelegate
+
+- (void)locationBarContentSizeDidChange {
+  // Received from the steady view; re-publish it to the owner of this location
+  // bar, which is the only one able to react to a width change.
+  [self.contentSizeDelegate locationBarContentSizeDidChange];
+}
+
 #pragma mark - LocationBarSteadyViewConsumer
 
 - (void)updateLocationText:(NSString*)string clipTail:(BOOL)clipTail {
@@ -559,12 +611,7 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
   _shareButtonEnabled = enabled;
   if (self.trailingButtonState == kShareButton) {
     [self.locationBarSteadyView enableTrailingButton:enabled];
-
-    if (_shareButtonEnabled) {
-      [self.layoutGuideCenter
-          referenceView:self.locationBarSteadyView.trailingButton
-              underName:kShareButtonGuide];
-    }
+    [self updateShareButtonGuide];
   }
 }
 
@@ -801,39 +848,14 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
                     action:@selector(shareButtonPressed)
           forControlEvents:UIControlEventTouchUpInside];
 
-      // The system share image has uneven vertical padding. Add a small bottom
-      // padding to balance it.
-      UIImage* shareImage =
-          DefaultSymbolWithPointSize(kShareSymbol, kSymbolImagePointSize);
-
-      UIGraphicsImageRendererFormat* format =
-          [UIGraphicsImageRendererFormat preferredFormat];
-      format.scale = 0.0;
-      format.opaque = NO;
-      UIGraphicsImageRenderer* renderer = [[UIGraphicsImageRenderer alloc]
-          initWithSize:CGSizeMake(shareImage.size.width,
-                                  shareImage.size.height +
-                                      kShareIconBalancingHeightPadding)
-                format:format];
-      UIImage* paddedShareImage = [renderer
-          imageWithActions:^(UIGraphicsImageRendererContext* context) {
-            [shareImage drawInRect:CGRectMake(0, 0, shareImage.size.width,
-                                              shareImage.size.height)];
-          }];
-
-      [self.locationBarSteadyView.trailingButton setImage:paddedShareImage
-                                                 forState:UIControlStateNormal];
+      [self.locationBarSteadyView.trailingButton
+          setImage:[self paddedShareImage]
+          forState:UIControlStateNormal];
       self.locationBarSteadyView.trailingButton.accessibilityLabel =
           l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_SHARE);
       self.locationBarSteadyView.trailingButton.accessibilityIdentifier =
           kOmniboxShareButtonIdentifier;
       [self.locationBarSteadyView enableTrailingButton:self.shareButtonEnabled];
-
-      if (self.shareButtonEnabled) {
-        [self.layoutGuideCenter
-            referenceView:self.locationBarSteadyView.trailingButton
-                underName:kShareButtonGuide];
-      }
       break;
     };
     case kVoiceSearchButton: {
@@ -847,7 +869,7 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
           forControlEvents:UIControlEventTouchUpInside];
 
       UIImage* micImage =
-          DefaultSymbolWithPointSize(kMicrophoneSymbol, kSymbolImagePointSize);
+          SymbolWithPointSize(SymbolMicrophone, kSymbolImagePointSize);
       [self.locationBarSteadyView.trailingButton setImage:micImage
                                                  forState:UIControlStateNormal];
       self.locationBarSteadyView.trailingButton.accessibilityLabel =
@@ -861,21 +883,41 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
       [self.locationBarSteadyView enableTrailingButton:self.voiceSearchEnabled];
     }
   }
+  [self updateShareButtonGuide];
+}
+
+// Returns the share icon image with balanced vertical padding, caching the
+// rasterized image when `kLocationBarPerformanceImprovements` is enabled.
+- (UIImage*)paddedShareImage {
+  if (IsLocationBarPerformanceImprovementsEnabled() &&
+      _cachedPaddedShareImage) {
+    return _cachedPaddedShareImage;
+  }
+  // The system share image has uneven vertical padding. Add a small bottom
+  // padding to balance it.
+  UIImage* shareImage = SymbolWithPointSize(SymbolShare, kSymbolImagePointSize);
+
+  UIGraphicsImageRendererFormat* format =
+      [UIGraphicsImageRendererFormat preferredFormat];
+  format.scale = 0.0;
+  format.opaque = NO;
+  UIGraphicsImageRenderer* renderer = [[UIGraphicsImageRenderer alloc]
+      initWithSize:CGSizeMake(shareImage.size.width,
+                              shareImage.size.height +
+                                  kShareIconBalancingHeightPadding)
+            format:format];
+  UIImage* paddedShareImage =
+      [renderer imageWithActions:^(UIGraphicsImageRendererContext* context) {
+        [shareImage drawInRect:CGRectMake(0, 0, shareImage.size.width,
+                                          shareImage.size.height)];
+      }];
+  if (IsLocationBarPerformanceImprovementsEnabled()) {
+    _cachedPaddedShareImage = paddedShareImage;
+  }
+  return paddedShareImage;
 }
 
 - (void)setTrailingButtonState:(TrailingButtonState)state {
-  // This is dirty, but this is experiment-only and will be removed in one
-  // milestone.
-  if (base::FeatureList::IsEnabled(kDisableShareButton) &&
-      state == kShareButton) {
-    state = kNoButton;
-  }
-
-  if (IsChromeNextIaEnabled() && !IsChromeNextIaShareIconVisible() &&
-      state == kShareButton) {
-    state = kNoButton;
-  }
-
   if (_trailingButtonState == state) {
     return;
   }
@@ -920,10 +962,12 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
 }
 
 - (void)createAIMPlusButton {
+  if (_plusButton) {
+    return;
+  }
   _plusButton = [ExtendedTouchTargetButton buttonWithType:UIButtonTypeSystem];
-  [_plusButton
-      setImage:DefaultSymbolWithPointSize(kPlusSymbol, kSymbolActionPointSize)
-      forState:UIControlStateNormal];
+  [_plusButton setImage:SymbolWithPointSize(SymbolPlus, kSymbolActionPointSize)
+               forState:UIControlStateNormal];
   _plusButton.translatesAutoresizingMaskIntoConstraints = NO;
   _plusButton.imageView.contentMode = UIViewContentModeScaleAspectFit;
   _plusButton.tintColor = [UIColor colorNamed:kToolbarButtonColor];
@@ -939,12 +983,36 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
         forControlEvents:UIControlEventTouchUpInside];
 }
 
-// Updates the layout guides to point to the entrypoints in this toolbar.
-- (void)updateLayoutGuides {
-  if (!self.isViewLoaded) {
+// Updates `kShareButtonGuide` to reference the trailing button when this
+// location bar is active and displaying an enabled Share button.
+- (void)updateShareButtonGuide {
+  if (!self.isViewLoaded || _textOnly) {
     return;
   }
-  if (_active) {
+  BOOL isActive = _active || !IsChromeNextIaEnabled();
+  BOOL isShareButtonActive =
+      isActive && self.trailingButtonState == kShareButton &&
+      !self.hideShareButtonWhileOnIncognitoNTP && self.shareButtonEnabled;
+  UIView* trailingButton = self.locationBarSteadyView.trailingButton;
+  if (isShareButtonActive) {
+    [self.layoutGuideCenter referenceView:trailingButton
+                                underName:kShareButtonGuide];
+  } else if ([self.layoutGuideCenter
+                 referencedViewUnderName:kShareButtonGuide] == trailingButton) {
+    [self.layoutGuideCenter referenceView:nil underName:kShareButtonGuide];
+  }
+}
+
+// Updates the layout guides to point to the entrypoints in this toolbar.
+- (void)updateLayoutGuides {
+  if (!self.isViewLoaded || _textOnly) {
+    return;
+  }
+  [self updateShareButtonGuide];
+  // The _active flag is only used when NextIA is enabled. When it is disabled,
+  // the location bar should always be treated as active for layout guides.
+  BOOL isActive = _active || !IsChromeNextIaEnabled();
+  if (isActive) {
     if (self.readerModeChipView) {
       [self.layoutGuideCenter referenceView:self.readerModeChipView
                                   underName:kReaderModeOptionsEntrypointGuide];
@@ -988,35 +1056,9 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
   NSMutableArray<UIMenuElement*>* menuElements = [[NSMutableArray alloc] init];
   __weak __typeof__(self) weakSelf = self;
 
-  if ((base::FeatureList::IsEnabled(kShareInOmniboxLongPress) ||
-       (IsChromeNextIaEnabled() && !IsChromeNextIaShareIconVisible())) &&
-      self.shareButtonEnabled) {
-    base::UmaHistogramEnumeration("Mobile.ShareThisPage.Shown",
-                                  ShareThisPageLocation::kOmniboxLongPress);
-    UIImage* image =
-        DefaultSymbolWithPointSize(kShareSymbol, kSymbolImagePointSize);
-
-    UIAction* shareThisPageAction =
-        [UIAction actionWithTitle:l10n_util::GetNSString(
-                                      IDS_IOS_TOOLS_MENU_SHARE_THIS_PAGE)
-                            image:image
-                       identifier:nil
-                          handler:^(UIAction* action) {
-                            [weakSelf shareThisPage];
-                          }];
-
-    UIMenu* divider = [UIMenu menuWithTitle:@""
-                                      image:nil
-                                 identifier:nil
-                                    options:UIMenuOptionsDisplayInline
-                                   children:@[ shareThisPageAction ]];
-    [menuElements addObject:divider];
-  }
-
   UIImage* pasteImage = nil;
   if (IsBottomOmniboxAvailable()) {
-    pasteImage =
-        DefaultSymbolWithPointSize(kPasteActionSymbol, kSymbolActionPointSize);
+    pasteImage = SymbolWithPointSize(SymbolPasteAction, kSymbolActionPointSize);
 
     // Copy link action.
     BOOL canShowCopyLinkAction = NO;
@@ -1030,8 +1072,8 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
     if (canShowCopyLinkAction) {
       UIAction* copyAction = [UIAction
           actionWithTitle:l10n_util::GetNSString(IDS_IOS_COPY_LINK_ACTION_TITLE)
-                    image:DefaultSymbolWithPointSize(kCopyActionSymbol,
-                                                     kSymbolActionPointSize)
+                    image:SymbolWithPointSize(SymbolCopyAction,
+                                              kSymbolActionPointSize)
                identifier:nil
                   handler:^(UIAction* action) {
                     [weakSelf.delegate locationBarCopyTapped];
@@ -1115,8 +1157,8 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
   if (IsAssistantContainerDebugEnabled()) {
     UIAction* assistantAction = [UIAction
         actionWithTitle:l10n_util::GetNSString(IDS_IOS_APP_BAR_ASK_GEMINI)
-                  image:DefaultSymbolWithPointSize(kMagicStackSymbol,
-                                                   kSymbolActionPointSize)
+                  image:SymbolWithPointSize(SymbolMagicStack,
+                                            kSymbolActionPointSize)
              identifier:nil
                 handler:^(UIAction* action) {
                   [weakSelf.dispatcher showAssistant];
@@ -1140,13 +1182,13 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
     if (GetApplicationContext()->GetLocalState()->GetBoolean(
             omnibox::kIsOmniboxInBottomPosition)) {
       title = l10n_util::GetNSString(IDS_IOS_TOOLBAR_MENU_TOP_OMNIBOX);
-      image = DefaultSymbolWithPointSize(kMovePlatterToTopPhoneSymbol,
-                                         kSymbolActionPointSize);
+      image = SymbolWithPointSize(SymbolMovePlatterToTopPhone,
+                                  kSymbolActionPointSize);
       targetToolbarType = ToolbarType::kPrimary;
     } else {
       title = l10n_util::GetNSString(IDS_IOS_TOOLBAR_MENU_BOTTOM_OMNIBOX);
-      image = DefaultSymbolWithPointSize(kMovePlatterToBottomPhoneSymbol,
-                                         kSymbolActionPointSize);
+      image = SymbolWithPointSize(SymbolMovePlatterToBottomPhone,
+                                  kSymbolActionPointSize);
       targetToolbarType = ToolbarType::kSecondary;
     }
     UIAction* moveAddressBarAction = [UIAction
@@ -1165,13 +1207,12 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
     [menuElements addObject:divider];
   }
 
-  if (base::FeatureList::IsEnabled(kHideToolbarsInOverflowMenu)) {
-    UIImage* image =
-        DefaultSymbolWithPointSize(kExpandSymbol, kSymbolActionPointSize);
+  if (IsHideToolbarEnabled()) {
+    UIImage* image = SymbolWithPointSize(SymbolExpand, kSymbolActionPointSize);
 
     UIAction* hideAddressBarAction =
         [UIAction actionWithTitle:l10n_util::GetNSString(
-                                      IDS_IOS_OVERFLOW_MENU_HIDE_TOOLBARS)
+                                      IDS_IOS_TOOLBAR_MENU_HIDE_TOOLBAR)
                             image:image
                        identifier:nil
                           handler:^(UIAction* action) {
@@ -1225,10 +1266,11 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
     willDisplayMenuForConfiguration:(UIContextMenuConfiguration*)configuration
                            animator:
                                (id<UIContextMenuInteractionAnimating>)animator {
-
-  [self.geminiHandler
-      hideFloatyIfInvokedAnimated:YES
-                       fromSource:gemini::FloatyUpdateSource::ContextMenu];
+  if (IsPageActionMenuEnabled()) {
+    [self.geminiHandler
+        hideFloatyIfInvokedAnimated:YES
+                         fromSource:gemini::FloatyUpdateSource::ContextMenu];
+  }
 }
 
 - (void)contextMenuInteraction:(UIContextMenuInteraction*)interaction
@@ -1236,6 +1278,16 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
                       animator:(id<UIContextMenuInteractionAnimating>)animator {
   self.activeContextMenuAnimator = animator;
   __weak LocationBarViewController* weakSelf = self;
+
+  if (IsPageActionMenuEnabled()) {
+    [animator addAnimations:^{
+      [weakSelf.geminiHandler
+          updateFloatyVisibilityIfEligibleAnimated:NO
+                                        fromSource:gemini::FloatyUpdateSource::
+                                                       ContextMenu];
+    }];
+  }
+
   [animator addCompletion:^{
     weakSelf.activeContextMenuAnimator = nil;
   }];
@@ -1301,12 +1353,6 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
       }));
 }
 
-/// Shows the Share this page sheet.
-- (void)shareThisPage {
-  base::UmaHistogramEnumeration("Mobile.ShareThisPage.Used",
-                                ShareThisPageLocation::kOmniboxLongPress);
-  [self.dispatcher showShareSheetFromShareButton:_locationBarSteadyView];
-}
 
 /// Set the preferred omnibox position to `toolbarType`.
 - (void)moveOmniboxToToolbarType:(ToolbarType)toolbarType {
@@ -1324,13 +1370,14 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
 }
 
 - (void)hideToolbars {
+  RecordAction(UserMetricsAction("Mobile.OmniboxContextMenu.HideToolbar"));
   [self.delegate locationBarHideToolbarTapped];
 }
 
 - (void)handlePlusButtonPressed {
   RecordAction(UserMetricsAction("MobileToolbarPlusButtonTap"));
   TriggerHapticFeedbackForSelectionChange();
-  [self.dispatcher showMultimodalActionsMenu];
+  [self.delegate locationBarDidTapPlusButton];
 }
 
 - (void)handleLensEntrypointPressed {
@@ -1350,9 +1397,12 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
   }
   if (IsDirectBWGEntryPoint()) {
     [self.geminiHandler
-        startGeminiFlowWithStartupState:
+        startGeminiEntryFlowWithStartupState:
             [[GeminiStartupState alloc]
-                initWithEntryPoint:gemini::EntryPoint::DirectOmniboxBadge]];
+                initWithEntryPoint:gemini::EntryPoint::DirectOmniboxBadge]
+                          baseViewController:self
+                    showSnackbarOnCompletion:YES
+                                  completion:nil];
   } else {
     RecordAIHubIconTapped();
     [self.pageActionMenuHandler showPageActionMenu];
@@ -1465,16 +1515,31 @@ const CGFloat kGeminiLiveCircleSize = 20.0;
   return copyView;
 }
 
-- (void)setCustomLeadingViewVisible:(BOOL)visible animated:(BOOL)animated {
-  [self.locationBarSteadyView updateCustomLeadingViewVisibility:visible
-                                                       animated:animated];
+- (void)setCustomLeadingViewType:(CustomLeadingViewType)type {
+  if (_customLeadingViewType == type) {
+    return;
+  }
+  _customLeadingViewType = type;
+  [self updateCustomLeadingViewVisibilityAnimated:YES];
 }
 
-- (CGFloat)locationBarTextWidth {
-  if (!IsToolbarGlassPrototypeEnabled()) {
-    return 0.0;
-  }
-  return [self.locationBarSteadyView.locationLabel intrinsicContentSize].width;
+- (void)setPlusButtonMenu:(UIMenu*)menu {
+  [self createAIMPlusButton];
+  _plusButton.menu = menu;
+  _plusButton.showsMenuAsPrimaryAction = YES;
+  _plusButton.preferredMenuElementOrder =
+      UIContextMenuConfigurationElementOrderFixed;
+  [_plusButton addTarget:self.delegate
+                  action:@selector(locationBarDidTapPlusButton)
+        forControlEvents:UIControlEventMenuActionTriggered];
+}
+
+- (void)updateCustomLeadingViewVisibilityAnimated:(BOOL)animated {
+  // Only show the custom leading view when the location bar is in fullscreen.
+  BOOL visible = (_customLeadingViewType != CustomLeadingViewType::kNone) &&
+                 (_fullscreenProgress < 0.1);
+  [self.locationBarSteadyView updateCustomLeadingViewVisibility:visible
+                                                       animated:animated];
 }
 
 @end

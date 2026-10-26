@@ -28,9 +28,7 @@ class InspectorCSSAgent;
 class CORE_EXPORT InspectorAnimationAgent final
     : public InspectorBaseAgent<protocol::Animation::Metainfo> {
  public:
-  InspectorAnimationAgent(InspectedFrames*,
-                          InspectorCSSAgent*,
-                          v8_inspector::V8InspectorSession*);
+  InspectorAnimationAgent(InspectedFrames*, InspectorCSSAgent*);
   InspectorAnimationAgent(const InspectorAnimationAgent&) = delete;
   InspectorAnimationAgent& operator=(const InspectorAnimationAgent&) = delete;
 
@@ -53,7 +51,8 @@ class CORE_EXPORT InspectorAnimationAgent final
                                double delay) override;
   protocol::Response seekAnimations(
       std::unique_ptr<protocol::Array<String>> animations,
-      double current_time) override;
+      std::optional<double> current_time,
+      std::unique_ptr<protocol::Array<double>> current_times) override;
   protocol::Response releaseAnimations(
       std::unique_ptr<protocol::Array<String>> animations) override;
   protocol::Response resolveAnimation(
@@ -114,7 +113,6 @@ class CORE_EXPORT InspectorAnimationAgent final
 
   Member<InspectedFrames> inspected_frames_;
   Member<InspectorCSSAgent> css_agent_;
-  v8_inspector::V8InspectorSession* v8_session_;
   // Keeps track of the snapshot of animations that are sent to the frontend.
   // The snapshots are used to check whether to send an `animationUpdated` event
   // when a blink::Animation instance is updated.

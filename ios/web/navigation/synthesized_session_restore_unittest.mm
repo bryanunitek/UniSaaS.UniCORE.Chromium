@@ -7,7 +7,7 @@
 #import "base/ios/ios_util.h"
 #import "base/strings/stringprintf.h"
 #import "base/strings/utf_string_conversions.h"
-#import "ios/web/public/test/web_test.h"
+#import "ios/web/public/test/web_test_with_web_state.h"
 #import "ios/web/web_state/web_state_impl.h"
 #import "testing/gtest/include/gtest/gtest.h"
 
@@ -17,9 +17,9 @@ namespace {
 
 // Creates a vector with given number of navigation items. All items will
 // have distinct titles, URLs, and referrers
-void CreateTestNavigationItems(
-    size_t count,
-    std::vector<std::unique_ptr<NavigationItem>>& items) {
+std::vector<std::unique_ptr<NavigationItemImpl>> CreateTestNavigationItems(
+    size_t count) {
+  std::vector<std::unique_ptr<NavigationItemImpl>> items;
   for (size_t i = 0; i < count; i++) {
     auto item = std::make_unique<NavigationItemImpl>();
     item->SetURL(GURL(base::StringPrintf("http://www.%zu.com", i)));
@@ -32,35 +32,25 @@ void CreateTestNavigationItems(
     }
     items.push_back(std::move(item));
   }
+  return items;
 }
 
 }  // namespace
 
-class SynthesizedSessionRestoreTest : public web::WebTest {
- protected:
-  SynthesizedSessionRestoreTest() {}
-
-  void SetUp() override {
-    web::WebTest::SetUp();
-    web::WebState::CreateParams params(GetBrowserState());
-    web_state_ = std::make_unique<web::WebStateImpl>(params);
-  }
-
-  std::unique_ptr<WebStateImpl> web_state_;
-};
+using SynthesizedSessionRestoreTest = web::WebTestWithWebState;
 
 // Test that the synthetic session data blob can be successfully loaded
 // by WebStateImpl and correctly restores the session.
 TEST_F(SynthesizedSessionRestoreTest, TestRestore) {
-  std::vector<std::unique_ptr<NavigationItem>> items;
-  CreateTestNavigationItems(100, items);
+  std::vector<std::unique_ptr<NavigationItemImpl>> items =
+      CreateTestNavigationItems(100);
 
   NSData* synthesized_data = SynthesizedSessionRestore(
       /*last_committed_item_index=*/0, items, /*off_the_record=*/false);
   EXPECT_GT(synthesized_data.length, 0u);
 
-  EXPECT_TRUE(web_state_->SetSessionStateData(synthesized_data));
-  EXPECT_EQ(web_state_->GetNavigationItemCount(), 100);
+  EXPECT_TRUE(web_state()->SetSessionStateData(synthesized_data));
+  EXPECT_EQ(web_state()->GetNavigationItemCount(), 100);
 }
 
 }  // namespace web

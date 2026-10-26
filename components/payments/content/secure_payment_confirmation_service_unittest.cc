@@ -19,8 +19,8 @@
 #include "components/payments/content/browser_binding/fake_browser_bound_key_store.h"
 #include "components/payments/content/browser_binding/mock_browser_bound_key_store.h"
 #include "components/payments/content/mock_web_payments_web_data_service.h"
-#include "components/payments/content/web_payments_web_data_service.h"
 #include "components/payments/core/features.h"
+#include "components/payments/core/web_payments_web_data_service.h"
 #include "components/webauthn/core/browser/internal_authenticator.h"
 #include "components/webauthn/core/browser/mock_internal_authenticator.h"
 #include "content/public/common/content_features.h"
@@ -93,7 +93,7 @@ class SecurePaymentConfirmationServiceTestBase {
     // during RunLoop execution.
     spc_service_ = std::unique_ptr<SecurePaymentConfirmationService,
                                    SecurePaymentConfirmationServiceDeleter>(
-        new SecurePaymentConfirmationService(
+        base::MakeSelfDeleting<SecurePaymentConfirmationService>(
             *web_contents_->GetPrimaryMainFrame(),
             /*receiver=*/std::move(receiver), mock_web_data_service_,
             with_authenticator ? CreateMockInternalAuthenticator() : nullptr,
@@ -135,10 +135,13 @@ class SecurePaymentConfirmationServiceTest
       public ::testing::Test {
  public:
   SecurePaymentConfirmationServiceTest() {
-    feature_list_.InitWithFeatures(
+    feature_list_.InitWithFeaturesAndParameters(
         /*enabled_features=*/
-        {::features::kSecurePaymentConfirmation,
-         features::kSecurePaymentConfirmationUseCredentialStoreAPIs},
+        {{::features::kSecurePaymentConfirmation, {}},
+         {features::kSecurePaymentConfirmationCredentialDiscoveryMode,
+          {{"mode", features::CredentialDiscoveryModeToString(
+                        features::CredentialDiscoveryMode::kOsOnly)}}},
+         {features::kSecurePaymentConfirmationStoreCredentialsInOS, {}}},
         /*disabled_features=*/{});
   }
 
@@ -225,7 +228,7 @@ TEST_F(
       remote.InitWithNewPipeAndPassReceiver();
   spc_service_ = std::unique_ptr<SecurePaymentConfirmationService,
                                  SecurePaymentConfirmationServiceDeleter>(
-      new SecurePaymentConfirmationService(
+      base::MakeSelfDeleting<SecurePaymentConfirmationService>(
           *web_contents_->GetPrimaryMainFrame(),
           /*receiver=*/std::move(receiver), mock_web_data_service_,
           CreateMockInternalAuthenticator(),
@@ -341,7 +344,7 @@ class SecurePaymentConfirmationServiceFeatureDisabledTest
         /*enabled_features=*/{},
         /*disabled_features=*/{
             ::features::kSecurePaymentConfirmation,
-            features::kSecurePaymentConfirmationUseCredentialStoreAPIs});
+            features::kSecurePaymentConfirmationStoreCredentialsInOS});
   }
 
  private:
@@ -496,7 +499,7 @@ TEST_P(SecurePaymentConfirmationServiceCredentialTest,
       remote.InitWithNewPipeAndPassReceiver();
   spc_service_ = std::unique_ptr<SecurePaymentConfirmationService,
                                  SecurePaymentConfirmationServiceDeleter>(
-      new SecurePaymentConfirmationService(
+      base::MakeSelfDeleting<SecurePaymentConfirmationService>(
           *web_contents_->GetPrimaryMainFrame(),
           /*receiver=*/std::move(receiver), mock_web_data_service_,
           CreateMockInternalAuthenticator(),

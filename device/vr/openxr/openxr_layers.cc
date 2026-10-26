@@ -21,7 +21,7 @@ void FillSubImage(XrLayerDataType& xr_layer,
   const gfx::Rect info = layer.GetSubImageViewport(eye);
 
   xr_layer.subImage.swapchain = layer.color_swapchain();
-  xr_layer.subImage.imageArrayIndex = 0;
+  xr_layer.subImage.imageArrayIndex = layer.GetSubImageArrayIndex(eye);
   xr_layer.subImage.imageRect.offset = {
       .x = info.x(),
       .y = info.y(),
@@ -263,8 +263,8 @@ void OpenXrLayers::AddCompositionLayer(
     const OpenXrCompositionLayer& layer,
     std::vector<XrCompositionLayerProjectionView> projection_views,
     const void* xr_next_struct) {
-  // The layer has no content to show.
-  if (layer.needs_redraw()) {
+  // The layer has no rendered content for this frame.
+  if (!layer.is_rendered()) {
     return;
   }
 

@@ -45,10 +45,9 @@ LoadingPredictorPageLoadMetricsObserver::
         predictors::ResourcePrefetchPredictor* predictor,
         predictors::LoadingPredictorTabHelper* predictor_tab_helper)
     : predictor_(predictor),
-      predictor_tab_helper_(predictor_tab_helper),
       record_histogram_preconnectable_(false) {
-  DCHECK(predictor_);
-  DCHECK(predictor_tab_helper_);
+  CHECK(predictor_, base::NotFatalUntil::M161);
+  CHECK(predictor_tab_helper, base::NotFatalUntil::M161);
 }
 
 LoadingPredictorPageLoadMetricsObserver::
@@ -104,8 +103,7 @@ void LoadingPredictorPageLoadMetricsObserver::OnFirstContentfulPaintInPage(
   if (record_histogram_preconnectable_) {
     base::TimeDelta corrected =
         page_load_metrics::CorrectEventAsNavigationOrActivationOrigined(
-            GetDelegate(), timing,
-            timing.paint_timing->first_contentful_paint.value());
+            GetDelegate(), timing.paint_timing->first_contentful_paint.value());
     PAGE_LOAD_HISTOGRAM(
         internal::kHistogramLoadingPredictorFirstContentfulPaintPreconnectable,
         corrected);
@@ -118,8 +116,7 @@ void LoadingPredictorPageLoadMetricsObserver::
   if (record_histogram_preconnectable_) {
     base::TimeDelta corrected =
         page_load_metrics::CorrectEventAsNavigationOrActivationOrigined(
-            GetDelegate(), timing,
-            timing.paint_timing->first_meaningful_paint.value());
+            GetDelegate(), timing.paint_timing->first_meaningful_paint.value());
     PAGE_LOAD_HISTOGRAM(
         internal::kHistogramLoadingPredictorFirstMeaningfulPaintPreconnectable,
         corrected);

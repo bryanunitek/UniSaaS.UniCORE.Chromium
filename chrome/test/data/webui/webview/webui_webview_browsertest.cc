@@ -21,13 +21,12 @@
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/base/web_ui_mocha_browser_test.h"
@@ -52,6 +51,8 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/install_default_websocket_handlers.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 // Turn these tests off on Mac while we collect data on windows server crashes
 // on mac chromium builders.
@@ -66,26 +67,27 @@ const char* kTestWebViewURL = chrome::kChromeUIChromeSigninURL;
 const char* kTestWebViewHost = chrome::kChromeUIChromeSigninHost;
 
 // A simple WebUI controller that serves a blank page with a <webview> tag, and
-// supports loading files through the chrome://webui-test/ URL.
-// Responds with a content of "%DIR_TEST_DATA%/webui/<filename>" if the request
-// path has "/test/<filename>" format.
-class TestWebUIController : public content::WebUIController {
+// supports loading files through the chrome://webui-test/ URL (or as
+// chrome-untrusted). Responds with a content of
+// "%DIR_TEST_DATA%/webui/<filename>" if the request path has "/test/<filename>"
+// format.
+class TestWebUIControllerBase : public content::WebUIController {
  public:
-  explicit TestWebUIController(content::WebUI* web_ui)
+  TestWebUIControllerBase(content::WebUI* web_ui,
+                          const std::string& source_name,
+                          const std::string& script_src_csp)
       : content::WebUIController(web_ui) {
-    web_ui->SetBindings(
-        content::BindingsPolicySet({content::BindingsPolicyValue::kWebUi}));
     content::WebContents* web_contents = web_ui->GetWebContents();
     // Necessary for web view to be allowed.
     extensions::TabHelper::CreateForWebContents(web_contents);
     content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-        web_contents->GetBrowserContext(), kTestWebViewHost);
+        web_contents->GetBrowserContext(), source_name);
     source->SetRequestFilter(
-        base::BindRepeating(&TestWebUIController::ShouldHandleRequestCallback),
-        base::BindRepeating(&TestWebUIController::HandleRequestCallback));
+        base::BindRepeating(
+            &TestWebUIControllerBase::ShouldHandleRequestCallback),
+        base::BindRepeating(&TestWebUIControllerBase::HandleRequestCallback));
     source->OverrideContentSecurityPolicy(
-        network::mojom::CSPDirectiveName::ScriptSrc,
-        "script-src chrome://webui-test;");
+        network::mojom::CSPDirectiveName::ScriptSrc, script_src_csp);
   }
 
  private:
@@ -116,7 +118,7 @@ class TestWebUIController : public content::WebUIController {
       content::WebUIDataSource::GotDataCallback callback) {
     if (path.empty()) {
       // Main document.
-      std::move(callback).Run(new base::RefCountedString(R"(
+      std::move(callback).Run(base::MakeRefCounted<base::RefCountedString>(R"(
           <!DOCTYPE html>
           <html>
             <body>
@@ -141,9 +143,19 @@ class TestWebUIController : public content::WebUIController {
         test_data_dir.AppendASCII("webui").AppendASCII(url_substr[1]),
         &contents));
 
-    base::RefCountedString* ref_contents = new base::RefCountedString();
-    ref_contents->as_string() = contents;
-    std::move(callback).Run(ref_contents);
+    std::move(callback).Run(
+        base::MakeRefCounted<base::RefCountedString>(std::move(contents)));
+  }
+};
+
+class TestWebUIController : public TestWebUIControllerBase {
+ public:
+  explicit TestWebUIController(content::WebUI* web_ui)
+      : TestWebUIControllerBase(web_ui,
+                                kTestWebViewHost,
+                                "script-src chrome://webui-test;") {
+    web_ui->SetBindings(
+        content::BindingsPolicySet({content::BindingsPolicyValue::kWebUi}));
   }
 
   WEB_UI_CONTROLLER_TYPE_DECL();
@@ -416,11 +428,13 @@ IN_PROC_BROWSER_TEST_F(WebUIWebViewBrowserTest, AddAndRemoveContentScripts) {
                                        GetTestUrl("empty.html").spec()));
 }
 
-#if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_CHROMEOS) && \
-                          (!defined(NDEBUG) || defined(ADDRESS_SANITIZER)))
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || \
+    (BUILDFLAG(IS_CHROMEOS) &&                  \
+     (!defined(NDEBUG) || defined(ADDRESS_SANITIZER)))
 // TODO(crbug.com/40583245) Fails on CrOS dbg with --enable-features=Mash.
 // TODO(crbug.com/41419648) Flaky on CrOS ASan LSan
 // TODO(crbug.com/454729976): Fails on chromium/ci/win11-arm64-rel-tests.
+// TODO(crbug.com/40287440): Flaky on Linux.
 #define MAYBE_AddContentScriptsWithNewWindowAPI \
   DISABLED_AddContentScriptsWithNewWindowAPI
 #else
@@ -475,9 +489,9 @@ IN_PROC_BROWSER_TEST_F(WebUIWebViewBrowserTest,
   g_browser_process->local_state()->SetBoolean(
       chrome_urls::kInternalOnlyUisEnabled, true);
   content::WebContents* target_webui_window = browser()->OpenURL(
-      content::OpenURLParams(
-          GURL(chrome::kChromeUIWebUIJsErrorURL), content::Referrer(),
-          WindowOpenDisposition::NEW_WINDOW, ui::PAGE_TRANSITION_TYPED, false),
+      content::OpenURLParams::CreateBrowserInitiated(
+          GURL(chrome::kChromeUIWebUIJsErrorURL),
+          WindowOpenDisposition::kNewWindow, ui::PAGE_TRANSITION_TYPED),
       /*navigation_handle_callback=*/{});
   content::WaitForLoadStop(target_webui_window);
 

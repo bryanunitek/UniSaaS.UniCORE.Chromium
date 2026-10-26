@@ -12,18 +12,24 @@
 #include "base/thread_annotations.h"
 #include "build/build_config.h"
 
-#if DCHECK_IS_ON()
+#if EXPENSIVE_DCHECKS_ARE_ON()
 #include "base/compiler_specific.h"
 #include "base/threading/platform_thread_ref.h"
 #endif
 
 namespace base {
 
+class LockMetricTag;
+class LockMetricTagList;
+
 // A convenient wrapper for an OS specific critical section.  The only real
 // intelligence in this class is in debug mode for the support for the
 // AssertAcquired() method.
 class LOCKABLE BASE_EXPORT Lock {
  public:
+  static const LockMetricTag& GetBaseLockMetricTag();
+  static const LockMetricTagList& GetBaseLockMetricTagList();
+
   Lock() = default;
 
   Lock(const Lock&) = delete;
@@ -35,14 +41,32 @@ class LOCKABLE BASE_EXPORT Lock {
   Lock& operator!();
 #endif
 
-#if !DCHECK_IS_ON()
+#if !EXPENSIVE_DCHECKS_ARE_ON()
   ~Lock() = default;
 
   void Acquire(subtle::LockTracking tracking = subtle::LockTracking::kDisabled)
       EXCLUSIVE_LOCK_FUNCTION() {
-    lock_.Lock();
+    Acquire(GetBaseLockMetricTagList(), tracking);
   }
-  void Release() UNLOCK_FUNCTION() { lock_.Unlock(); }
+
+  void Acquire(const LockMetricTagList& tags,
+               subtle::LockTracking tracking = subtle::LockTracking::kDisabled)
+      EXCLUSIVE_LOCK_FUNCTION() {
+    lock_.Lock(tags);
+#if DCHECK_IS_ON()
+    if (tracking == subtle::LockTracking::kEnabled) [[unlikely]] {
+      AddToLocksHeldOnCurrentThread();
+    }
+#endif
+  }
+  void Release() UNLOCK_FUNCTION() {
+#if DCHECK_IS_ON()
+    if (in_tracked_locks_held_by_current_thread_) [[unlikely]] {
+      RemoveFromLocksHeldOnCurrentThread();
+    }
+#endif
+    lock_.Unlock();
+  }
 
   // If the lock is not held, take it and return true. If the lock is already
   // held by another thread, immediately return false. This must not be called
@@ -50,7 +74,13 @@ class LOCKABLE BASE_EXPORT Lock {
   // assertion may fail).
   bool Try(subtle::LockTracking tracking = subtle::LockTracking::kDisabled)
       EXCLUSIVE_TRYLOCK_FUNCTION(true) {
-    return lock_.Try();
+    const bool rv = lock_.Try();
+#if DCHECK_IS_ON()
+    if (rv && tracking == subtle::LockTracking::kEnabled) [[unlikely]] {
+      AddToLocksHeldOnCurrentThread();
+    }
+#endif
+    return rv;
   }
 
   // Null implementation if not debug.
@@ -63,13 +93,16 @@ class LOCKABLE BASE_EXPORT Lock {
   // supported and results in a CHECK() failure.
   void Acquire(subtle::LockTracking tracking = subtle::LockTracking::kDisabled)
       EXCLUSIVE_LOCK_FUNCTION();
+  void Acquire(const LockMetricTagList& tags,
+               subtle::LockTracking tracking = subtle::LockTracking::kDisabled)
+      EXCLUSIVE_LOCK_FUNCTION();
   void Release() UNLOCK_FUNCTION();
   bool Try(subtle::LockTracking tracking = subtle::LockTracking::kDisabled)
       EXCLUSIVE_TRYLOCK_FUNCTION(true);
 
   void AssertAcquired() const ASSERT_EXCLUSIVE_LOCK();
   void AssertNotHeld() const;
-#endif  // DCHECK_IS_ON()
+#endif  // EXPENSIVE_DCHECKS_ARE_ON()
 
   // Whether Lock mitigates priority inversion when used from different thread
   // priorities.
@@ -104,19 +137,21 @@ class LOCKABLE BASE_EXPORT Lock {
   friend class ConditionVariable;
 
  private:
-#if DCHECK_IS_ON()
+#if EXPENSIVE_DCHECKS_ARE_ON()
   // Check that `owning_thread_ref_` refers to the current thread and unset it.
   void CheckHeldAndUnmark();
   // Check that `owning_thread_ref_` is null and set it to the current thread.
   void CheckUnheldAndMark();
 
+  // Reference to the thread holding the lock. Protected by `lock_`.
+  base::PlatformThreadRef owning_thread_ref_;
+#endif  // EXPENSIVE_DCHECKS_ARE_ON()
+
+#if DCHECK_IS_ON()
   // Adds/removes this lock to/from the thread-local list returned by
   // `subtle::GetLocksHeldByCurrentThread()`, unless tracking is disabled.
   void AddToLocksHeldOnCurrentThread();
   void RemoveFromLocksHeldOnCurrentThread();
-
-  // Reference to the thread holding the lock. Protected by `lock_`.
-  base::PlatformThreadRef owning_thread_ref_;
 
   // Whether the lock is currently in the list of locks held by a thread. When
   // true, the lock is removed from the list upon `Release()`.
@@ -126,6 +161,14 @@ class LOCKABLE BASE_EXPORT Lock {
   // Platform specific underlying lock implementation.
   internal::LockImpl lock_;
 };
+
+// Out-of-line definition for the zero-argument `LockImpl::Lock()`.
+// This is defined here in `lock.h` rather than `lock_impl.h` because it
+// references `Lock::GetBaseLockMetricTagList()`, which requires `class Lock`
+// to be fully defined.
+inline void internal::LockImpl::Lock() {
+  Lock(Lock::GetBaseLockMetricTagList());
+}
 
 // A helper class that acquires the given Lock while the AutoLock is in scope.
 using AutoLock = internal::BasicAutoLock<Lock>;

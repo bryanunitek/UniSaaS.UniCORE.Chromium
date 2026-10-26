@@ -11,7 +11,6 @@ import static org.chromium.base.test.util.ApplicationTestUtils.finishActivity;
 import static org.chromium.chrome.browser.keyboard_accessory.AccessoryAction.AUTOFILL_SUGGESTION;
 import static org.chromium.chrome.browser.keyboard_accessory.AccessoryAction.CREDMAN_CONDITIONAL_UI_REENTRY;
 import static org.chromium.chrome.browser.keyboard_accessory.AccessoryAction.GENERATE_PASSWORD_AUTOMATIC;
-import static org.chromium.ui.base.LocalizationUtils.setRtlForTesting;
 
 import android.app.Activity;
 import android.graphics.Color;
@@ -51,7 +50,7 @@ import org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAcce
 import org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryProperties.DismissBarItem;
 import org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryViewBinder.BarItemViewHolder;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.Action;
-import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.TestProfile;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.components.autofill.AutofillProfilePayload;
@@ -102,20 +101,22 @@ public class KeyboardAccessoryChipViewRenderTest {
     public final RenderTestRule mRenderTestRule =
             RenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(Component.UI_BROWSER_AUTOFILL)
-                    .setRevision(7)
+                    .setRevision(8)
                     .build();
 
-    @Mock private KeyboardAccessoryView mKeyboardAccessoryView;
+    private final TestProfile mProfile = TestProfile.createRegular();
+
     @Mock private AutofillImageFetcher mMockImageFetcher;
     @Mock private FillingProductBridgeJni mMockFillingProductBridgeJni;
-    @Mock private Profile mMockProfile;
     @Mock private PersonalDataManager mMockPersonalDataManager;
 
+    private KeyboardAccessoryView mKeyboardAccessoryView;
+    private final boolean mUseRtlLayout;
     private ViewGroup mContentView;
     private KeyboardAccessoryViewBinder.UiConfiguration mUiConfiguration;
 
     public KeyboardAccessoryChipViewRenderTest(boolean nightModeEnabled, boolean useRtlLayout) {
-        setRtlForTesting(useRtlLayout);
+        mUseRtlLayout = useRtlLayout;
         NightModeTestUtils.setUpNightModeForBlankUiTestActivity(nightModeEnabled);
         mRenderTestRule.setNightModeEnabled(nightModeEnabled);
         mRenderTestRule.setVariantPrefix(useRtlLayout ? "RTL" : "LTR");
@@ -143,11 +144,16 @@ public class KeyboardAccessoryChipViewRenderTest {
                             LinearLayout contentView = new LinearLayout(activity);
                             contentView.setOrientation(LinearLayout.VERTICAL);
                             contentView.setBackgroundColor(Color.WHITE);
+                            if (mUseRtlLayout) {
+                                contentView.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+                            }
 
                             activity.setContentView(
                                     contentView,
                                     new LayoutParams(
                                             LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+                            mKeyboardAccessoryView =
+                                    new KeyboardAccessoryView(activity, /* attrs= */ null);
                             return contentView;
                         });
         mUiConfiguration =
@@ -157,7 +163,6 @@ public class KeyboardAccessoryChipViewRenderTest {
     @After
     public void tearDown() throws Exception {
         runOnUiThreadBlocking(NightModeTestUtils::tearDownNightModeForBlankUiTestActivity);
-        setRtlForTesting(false);
         try {
             finishActivity(mActivityTestRule.getActivity());
         } catch (Exception e) {
@@ -171,10 +176,7 @@ public class KeyboardAccessoryChipViewRenderTest {
     public void renderTwoLineSuggestions() throws Exception {
         // All suggestion types are rendered in the same test to minimize the number of render
         // tests.
-        runOnUiThreadBlocking(
-                () -> {
-                    layoutViews();
-                });
+        runOnUiThreadBlocking(this::layoutViews);
         mRenderTestRule.render(mContentView, "keyboard_accessory_two_line_suggestions");
     }
 
@@ -191,8 +193,7 @@ public class KeyboardAccessoryChipViewRenderTest {
                                     .setSuggestionType(SuggestionType.ADDRESS_ENTRY)
                                     .build();
                     mContentView.addView(
-                            createChipViewFromSuggestion(
-                                    suggestion, ActionBarItem.ViewState.DEACTIVATED));
+                            createChipViewFromSuggestion(suggestion, /* enabled= */ false));
                 });
         mRenderTestRule.render(mContentView, "keyboard_accessory_deactivated_suggestion");
     }
@@ -291,18 +292,17 @@ public class KeyboardAccessoryChipViewRenderTest {
 
     // KeyboardAccessoryViewBinder.create() returns a raw BarItemViewHolder.
     @SuppressWarnings("unchecked")
-    private ChipView createChipViewFromSuggestion(
-            AutofillSuggestion suggestion, @ActionBarItem.ViewState int viewState) {
-        Action action = new Action(AUTOFILL_SUGGESTION, unused -> {});
+    private ChipView createChipViewFromSuggestion(AutofillSuggestion suggestion, boolean enabled) {
+        Action action = new Action(AUTOFILL_SUGGESTION, wasObscured -> {});
         BarItemViewHolder<AutofillBarItem, ChipView> viewHolder =
                 KeyboardAccessoryViewBinder.create(
                         mKeyboardAccessoryView,
                         mUiConfiguration,
                         mContentView,
-                        AutofillBarItem.getBarItemType(suggestion, mMockProfile));
+                        AutofillBarItem.getBarItemType(suggestion, mProfile));
         ChipView chipView = (ChipView) viewHolder.itemView;
-        AutofillBarItem item = new AutofillBarItem(suggestion, action, mMockProfile);
-        item.setViewState(viewState);
+        AutofillBarItem item = new AutofillBarItem(suggestion, action, mProfile);
+        item.setEnabled(enabled);
         viewHolder.bind(item, chipView);
         chipView.setLayoutParams(
                 new ViewGroup.LayoutParams(
@@ -313,7 +313,7 @@ public class KeyboardAccessoryChipViewRenderTest {
     // KeyboardAccessoryViewBinder.create() returns a raw BarItemViewHolder.
     @SuppressWarnings("unchecked")
     private ChipView createCredmanEntry() {
-        Action credmanAction = new Action(CREDMAN_CONDITIONAL_UI_REENTRY, unused -> {});
+        Action credmanAction = new Action(CREDMAN_CONDITIONAL_UI_REENTRY, wasObscured -> {});
         BarItemViewHolder<BarItem, ChipView> viewHolder =
                 KeyboardAccessoryViewBinder.create(
                         mKeyboardAccessoryView,
@@ -333,7 +333,7 @@ public class KeyboardAccessoryChipViewRenderTest {
     // KeyboardAccessoryViewBinder.create() returns a raw BarItemViewHolder.
     @SuppressWarnings("unchecked")
     private View createGeneratePassword() {
-        Action generatePasswordAction = new Action(GENERATE_PASSWORD_AUTOMATIC, unused -> {});
+        Action generatePasswordAction = new Action(GENERATE_PASSWORD_AUTOMATIC, wasObscured -> {});
         // TODO: crbug.com/385172647 - Use generics parameters once 2 line chips are rolled out.
         BarItemViewHolder viewHolder =
                 KeyboardAccessoryViewBinder.create(
@@ -375,7 +375,7 @@ public class KeyboardAccessoryChipViewRenderTest {
     private List<View> createKeyboardAccessoryItemsToRender() {
         List<View> items = new ArrayList<>();
         for (AutofillSuggestion suggestion : createSuggestionsToRender()) {
-            items.add(createChipViewFromSuggestion(suggestion, ActionBarItem.ViewState.ENABLED));
+            items.add(createChipViewFromSuggestion(suggestion, /* enabled= */ true));
         }
         items.add(createCredmanEntry());
         items.add(createGeneratePassword());

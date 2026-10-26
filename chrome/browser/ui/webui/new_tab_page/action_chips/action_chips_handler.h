@@ -8,6 +8,7 @@
 #include <optional>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -16,9 +17,9 @@
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/action_chips_generator.h"
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/tab_id_generator.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
+#include "components/omnibox/browser/searchbox.mojom.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_ui.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -32,6 +33,10 @@ namespace base {
 class TimeTicks;
 }
 
+namespace contextual_search {
+class ContextualSearchSessionHandle;
+}
+
 class Profile;
 
 class ActionChipsHandler : public action_chips::mojom::ActionChipsHandler
@@ -41,19 +46,27 @@ class ActionChipsHandler : public action_chips::mojom::ActionChipsHandler
 #endif
 {
  public:
+  using GetSessionHandleCallback = base::RepeatingCallback<
+      contextual_search::ContextualSearchSessionHandle*()>;
+
   ActionChipsHandler(
       mojo::PendingReceiver<action_chips::mojom::ActionChipsHandler> receiver,
       mojo::PendingRemote<action_chips::mojom::Page> page,
       Profile* profile,
-      content::WebUI* web_ui,
-      std::unique_ptr<ActionChipsGenerator> action_chips_generator);
+      content::WebContents* web_contents,
+      std::unique_ptr<ActionChipsGenerator> action_chips_generator,
+      GetSessionHandleCallback get_session_handle_callback);
   ActionChipsHandler(const ActionChipsHandler&) = delete;
   ActionChipsHandler& operator=(const ActionChipsHandler&) = delete;
   ~ActionChipsHandler() override;
 
+  // action_chips::mojom::ActionChipsHandler:
   void StartActionChipsRetrieval() override;
   void ActivateMetricsFunnel(const std::string& funnel_name) override;
   void SetActionChipsVisibility(bool is_visible) override;
+  void NavigateToAim(const std::string& query_text,
+                     uint8_t mouse_button,
+                     searchbox::mojom::ActionModifiersPtr modifiers) override;
 
 #if !BUILDFLAG(IS_ANDROID)
   void OnTabStripModelChanged(
@@ -74,12 +87,22 @@ class ActionChipsHandler : public action_chips::mojom::ActionChipsHandler
   bool ShouldThrottleRetrieval(const GURL& current_url);
   void OnVisibilityChanged();
 
+#if !BUILDFLAG(IS_ANDROID)
+  bool UpdateTabStripModelObservation();
+  void OnBrowserWindowInterfaceChanged();
+#endif
+
   mojo::Receiver<action_chips::mojom::ActionChipsHandler> receiver_;
   mojo::Remote<action_chips::mojom::Page> page_;
   raw_ptr<Profile> profile_;
-  raw_ptr<content::WebUI> web_ui_;
+  raw_ptr<content::WebContents> web_contents_;
   std::unique_ptr<ActionChipsGenerator> action_chips_generator_;
+  GetSessionHandleCallback get_session_handle_callback_;
   PrefChangeRegistrar pref_change_registrar_;
+
+#if !BUILDFLAG(IS_ANDROID)
+  base::CallbackListSubscription browser_window_interface_subscription_;
+#endif
 
   std::optional<GURL> last_processed_url_;
   bool has_recorded_any_shown_ = false;

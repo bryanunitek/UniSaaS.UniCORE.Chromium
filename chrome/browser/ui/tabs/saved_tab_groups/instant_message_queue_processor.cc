@@ -11,7 +11,6 @@
 #include "chrome/browser/data_sharing/data_sharing_service_factory.h"
 #include "chrome/browser/image_fetcher/image_fetcher_service_factory.h"
 #include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
@@ -20,6 +19,7 @@
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toasts/api/toast_id.h"
+#include "chrome/browser/ui/toasts/toast_controller.h"
 #include "chrome/browser/ui/toasts/toast_features.h"
 #include "chrome/browser/ui/toasts/toast_view.h"
 #include "components/collaboration/public/messaging/message.h"
@@ -27,6 +27,7 @@
 #include "components/image_fetcher/core/image_fetcher_service.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/signin/public/base/avatar_icon_util.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_group.h"
 
 namespace tab_groups {
@@ -184,7 +185,7 @@ void InstantMessageQueueProcessor::MaybeShowInstantMessage() {
       FROM_HERE,
       base::BindOnce(
           &InstantMessageQueueProcessor::ProcessQueueAfterMessageShown,
-          base::Unretained(this)),
+          weak_factory_.GetWeakPtr()),
       GetMessageInterval());
 }
 
@@ -235,7 +236,7 @@ bool InstantMessageQueueProcessor::MaybeShowToastInBrowser(
     return false;
   }
 
-  ToastController* toast_controller = browser->GetFeatures().toast_controller();
+  ToastController* toast_controller = ToastController::From(browser);
   if (!toast_controller) {
     // Encountered an issue with the toast controller for this browser.
     return false;
@@ -282,15 +283,13 @@ base::TimeDelta InstantMessageQueueProcessor::GetMessageInterval() {
   // Take the maximum time a toast can show and add a second to ensure
   // that we wait until a message has completely timed out before trying
   // to show the next message.
-  // TODO(crbug.com/390814333): Determine the correct heuristic for
-  // time-between-messages.
   return base::Seconds(1) + std::max(ToastController::kToastDefaultTimeout,
                                      ToastController::kToastWithActionTimeout);
 }
 
 void InstantMessageQueueProcessor::ProcessQueueAfterMessageShown() {
   // This function is only entered if a toast was successfully shown and is
-  // solely responsible for resetting the |is_showing_instant_message_| bool.
+  // solely responsible for resetting the `is_showing_instant_message_` bool.
   CHECK(IsMessageShowing());
   is_showing_instant_message_ = false;
   ProceedToNextQueueMessage();

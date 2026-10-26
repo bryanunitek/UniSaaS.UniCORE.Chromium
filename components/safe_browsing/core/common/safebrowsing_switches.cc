@@ -44,6 +44,10 @@ const char kSkipHighConfidenceAllowlist[] =
 // Alternate URL to use for ChromeEnterpriseRealTimeUrlLookupService real-time
 // lookups.
 const char kUrlFilteringEndpointFlag[] = "url-filtering-endpoint";
+// Command-line flag that reduces the initial delay for Safe Browsing database
+// updates for manual testing purposes.
+const char kSbFastInitialListsUpdate[] =
+    "safebrowsing-fast-initial-lists-update";
 
 //
 // Client side detection switches
@@ -96,10 +100,7 @@ const char kSbEnableEnhancedProtection[] =
     "safebrowsing-enable-enhanced-protection";
 const char kForceTreatUserAsAdvancedProtection[] =
     "safe-browsing-treat-user-as-advanced-protection";
-
-// Enable the keyboard lock trigger of Scam Detection via command line for
-// easier testing.
-const char kScamDetectionKeyboardLockTriggerAndroid[] =
-    "scam-detection-keyboard-lock-trigger-android";
+const char kSafeBrowsingNoProtectionDurationSeconds[] =
+    "safe-browsing-no-protection-duration-seconds";
 
 }  // namespace safe_browsing::switches

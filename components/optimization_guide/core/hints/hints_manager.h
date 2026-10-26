@@ -51,7 +51,6 @@ class HintsFetcherFactory;
 class OptimizationFilter;
 class OptimizationGuideStore;
 class OptimizationMetadata;
-enum class OptimizationTypeDecision;
 class StoreUpdateData;
 class TabUrlProvider;
 class TopHostProvider;
@@ -62,11 +61,8 @@ class TopHostProvider;
 BASE_DECLARE_FEATURE(kHintsBatchUpdateForActiveTabsAndTopHosts);
 
 // The max number of concurrent fetches to the remote Optimization Guide
-// Service that should be allowed for batch updates
-// TODO: crbug.com/421924837 - This is only a param because some tests are
-// hardcoded to a assume a value that doesn't match the real one. Fix that and
-// remove this.
-BASE_DECLARE_FEATURE_PARAM(size_t, kHintsMaxConcurrentBatchUpdateFetches);
+// Service that should be allowed for batch updates.
+inline constexpr size_t kMaxConcurrentBatchUpdateFetches = 20;
 
 // The max number of concurrent fetches to the remote Optimization Guide
 // Service that should be allowed for navigations
@@ -403,8 +399,8 @@ class HintsManager : public OptimizationHintsComponentObserver,
   // what is contained in |response|.
   void ProcessAndInvokeOnDemandHintsCallbacks(
       std::unique_ptr<proto::GetHintsResponse> response,
-      const base::flat_set<GURL> requested_urls,
-      const base::flat_set<proto::OptimizationType> optimization_types,
+      const base::flat_set<GURL>& requested_urls,
+      const base::flat_set<proto::OptimizationType>& optimization_types,
       OnDemandOptimizationGuideDecisionRepeatingCallback callback);
 
   // Called when the hints for a navigation have been fetched from the remote
@@ -529,19 +525,21 @@ class HintsManager : public OptimizationHintsComponentObserver,
   // Should only be read and modified on the UI thread.
   base::flat_set<proto::OptimizationType> registered_optimization_types_;
 
-  // The set of optimization types that the component specified by
-  // |component_info_| has optimization filters for.
-  base::flat_set<proto::OptimizationType> optimization_types_with_filter_;
+  struct OptimizationFilterState {
+    OptimizationFilterState();
+    OptimizationFilterState(OptimizationFilterState&&);
+    OptimizationFilterState& operator=(OptimizationFilterState&&);
+    ~OptimizationFilterState();
 
-  // A map from optimization type to the host filter that holds the allowlist
-  // for that type.
-  base::flat_map<proto::OptimizationType, std::unique_ptr<OptimizationFilter>>
-      allowlist_optimization_filters_;
+    std::unique_ptr<OptimizationFilter> filter;
+    bool is_allowlist = false;
+  };
 
-  // A map from optimization type to the host filter that holds the blocklist
-  // for that type.
-  base::flat_map<proto::OptimizationType, std::unique_ptr<OptimizationFilter>>
-      blocklist_optimization_filters_;
+  // A map from optimization type that the component specified by
+  // |component_info_| has optimization filters for to its loaded filter state
+  // (if registered and successfully parsed).
+  base::flat_map<proto::OptimizationType, OptimizationFilterState>
+      optimization_filters_;
 
   // A map from URL to a map of callbacks keyed by their optimization type.
   base::flat_map<GURL,
@@ -654,6 +652,35 @@ class HintsManager : public OptimizationHintsComponentObserver,
       HintsFetchedCallback hints_fetched_callback,
       const std::string& access_token);
 };
+
+// Overrides the Hints Protobuf that would come from the component updater. If
+// the value of this switch is invalid, regular hint processing is used.
+// The value of this switch should be a base64 encoding of a binary
+// Configuration message, found in optimization_guide's hints.proto. Providing a
+// valid value to this switch causes Chrome startup to block on hints parsing.
+inline constexpr char kHintsProtoOverrideSwitch[] =
+    "optimization_guide_hints_override";
+
+// Overrides the hints fetch scheduling and delay, causing a hints fetch
+// immediately on start up using the TopHostProvider. This is meant for testing.
+inline constexpr char kFetchHintsOverrideTimerSwitch[] =
+    "optimization-guide-fetch-hints-override-timer";
+
+// Purges the store of all hints before loading any new hints on start up.
+inline constexpr char kPurgeHintsStoreSwitch[] =
+    "purge-optimization-guide-store";
+
+// Disables fetching of hints in real-time at the time of navigation start.
+// Meant for testing only.
+inline constexpr char
+    kDisableFetchingHintsAtNavigationStartForTestingSwitch[] =
+        "disable-fetching-hints-at-navigation-start";
+
+// Attempts to parse a base64 encoded Optimization Guide Configuration proto
+// from the command line. If no proto is given or if it is encoded incorrectly,
+// nullptr is returned.
+std::unique_ptr<proto::Configuration>
+ParseComponentConfigFromCommandLine();
 
 }  // namespace optimization_guide
 

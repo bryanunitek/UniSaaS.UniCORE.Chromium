@@ -20,9 +20,11 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/sequenced_task_runner.h"
 #include "net/http/http_util.h"
 #include "pdf/loader/result_codes.h"
 #include "pdf/loader/url_loader.h"
@@ -31,9 +33,6 @@
 namespace chrome_pdf {
 
 namespace {
-
-// We should read with delay to prevent block UI thread, and reduce CPU usage.
-constexpr base::TimeDelta kReadDelayMs = base::Milliseconds(2);
 
 constexpr std::string_view kBytes = "bytes";
 
@@ -59,20 +58,20 @@ UrlRequest MakeRangeRequest(const std::string& url,
 
 std::optional<gfx::Range> GetByteRangeFromStr(
     std::string_view content_range_str) {
-  if (!base::StartsWith(content_range_str, kBytes,
-                        base::CompareCase::INSENSITIVE_ASCII)) {
+  int64_t first_byte_position = -1;
+  int64_t last_byte_position = -1;
+  int64_t instance_length = -1;
+  if (!net::HttpUtil::ParseContentRangeHeaderFor206(
+          content_range_str, &first_byte_position, &last_byte_position,
+          &instance_length)) {
     return std::nullopt;
   }
-
-  std::string range(content_range_str.substr(kBytes.size()));
-  std::string::size_type pos = range.find('-');
-  std::string range_end;
-  if (pos != std::string::npos) {
-    range_end = range.substr(pos + 1);
+  // TODO(crbug.com/540801224): Support byte ranges > 4 GiB.
+  if (!base::IsValueInRangeForNumericType<uint32_t>(first_byte_position) ||
+      !base::IsValueInRangeForNumericType<uint32_t>(last_byte_position)) {
+    return std::nullopt;
   }
-  base::TrimWhitespaceASCII(range, base::TRIM_LEADING, &range);
-  base::TrimWhitespaceASCII(range_end, base::TRIM_LEADING, &range_end);
-  return gfx::Range(atoi(range.c_str()), atoi(range_end.c_str()));
+  return gfx::Range(first_byte_position, last_byte_position);
 }
 
 // If the headers have a byte-range response, and at least the start position
@@ -144,7 +143,7 @@ bool URLLoaderWrapperImpl::GetByteRangeStart(int* start) const {
 
 void URLLoaderWrapperImpl::Close() {
   url_loader_->Close();
-  read_starter_.Stop();
+  read_starter_.Cancel();
 }
 
 void URLLoaderWrapperImpl::OpenRange(const std::string& url,
@@ -162,10 +161,11 @@ void URLLoaderWrapperImpl::ReadResponseBody(
     base::span<uint8_t> buffer,
     base::OnceCallback<void(int)> callback) {
   buffer_ = buffer;
-  read_starter_.Start(
-      FROM_HERE, kReadDelayMs,
+  read_starter_.Reset(
       base::BindOnce(&URLLoaderWrapperImpl::ReadResponseBodyImpl,
                      base::Unretained(this), std::move(callback)));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, read_starter_.callback());
 }
 
 void URLLoaderWrapperImpl::ReadResponseBodyImpl(

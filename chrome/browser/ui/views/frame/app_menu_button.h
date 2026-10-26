@@ -19,7 +19,6 @@ class AppMenu;
 class ActionAppMenu;
 class AppMenuButtonObserver;
 class AppMenuModel;
-class Browser;
 class BrowserWindowInterface;
 
 namespace views {
@@ -47,13 +46,18 @@ class AppMenuButton : public ToolbarButton, public AppMenuControl {
   views::DialogDelegate* GetDialogDelegate() override;
   void CloseMenu() override;
   void ShowMenu() override;
+  void ShowMenuWithFlags(int run_types) override = 0;
+  views::MenuItemView* GetRootMenuItemViewForTesting() override;
+  ActionAppMenu* GetActionAppMenuForTesting() override;
+  void ExecuteCommandForTesting(int command_id, int mouse_event_flags) override;
+  void SetMenuTimerForTesting(base::ElapsedTimer timer) override;
   void AddObserver(AppMenuButtonObserver* observer) override;
   void RemoveObserver(AppMenuButtonObserver* observer) override;
   bool HasFocus() const override;
   void Focus(views::AccessiblePaneView* pane) override;
   void SetTypeAndSeverity(
       AppMenuIconController::TypeAndSeverity type_and_severity) override;
-  void SetTrailingMargin(int margin) override;
+  void SetIsMaximizedOrFullscreen(bool maximized_or_fullscreen) override;
   views::View* GetFocusablePaneView() override;
 
   views::MenuButtonController* menu_button_controller() const {
@@ -63,15 +67,13 @@ class AppMenuButton : public ToolbarButton, public AppMenuControl {
   // Called by the app menu when it closes.
   virtual void OnMenuClosed();
 
-  void SetMenuTimerForTesting(base::ElapsedTimer timer);
-
   AppMenu* app_menu() { return menu_.get(); }
   AppMenuModel* app_menu_model() { return menu_model_.get(); }
   ActionAppMenu* action_app_menu() { return action_menu_.get(); }
 
  protected:
   void RunMenu(std::unique_ptr<AppMenuModel> menu_model,
-               Browser* browser,
+               BrowserWindowInterface* browser,
                int run_flags);
   // Not using an AppMenuModel because the new Block Style menu hierarchy
   // is managed by the Actions framework.

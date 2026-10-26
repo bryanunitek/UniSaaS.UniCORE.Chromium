@@ -6,7 +6,6 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CONTAINER_SELECTOR_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/dom/tree_scope.h"
 #include "third_party/blink/renderer/core/layout/geometry/axis.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/text/writing_mode.h"
@@ -81,7 +80,7 @@ class CORE_EXPORT ContainerSelector {
            (has_anchored_query_ == o.has_anchored_query_);
   }
 
-  unsigned GetHash() const;
+  uint32_t GetHash() const;
 
   const AtomicString& Name() const { return name_; }
 
@@ -137,61 +136,10 @@ class CORE_EXPORT ContainerSelector {
   bool has_unknown_feature_{false};
 };
 
-class CORE_EXPORT ScopedContainerSelector
-    : public GarbageCollected<ScopedContainerSelector> {
- public:
-  ScopedContainerSelector(ContainerSelector selector,
-                          const TreeScope* tree_scope)
-      : selector_(selector), tree_scope_(tree_scope) {}
-
-  unsigned GetHash() const {
-    unsigned hash = selector_.GetHash();
-    blink::AddIntToHash(hash, blink::GetHash(tree_scope_.Get()));
-    return hash;
-  }
-
-  bool operator==(const ScopedContainerSelector& other) const {
-    return selector_ == other.selector_ && tree_scope_ == other.tree_scope_;
-  }
-
-  void Trace(Visitor* visitor) const;
-
- private:
-  ContainerSelector selector_;
-  WeakMember<const TreeScope> tree_scope_;
-};
-
-struct ScopedContainerSelectorHashTraits
-    : MemberHashTraits<ScopedContainerSelector> {
-  static unsigned GetHash(
-      const Member<ScopedContainerSelector>& scoped_selector) {
-    return scoped_selector->GetHash();
-  }
-  static bool Equal(const Member<ScopedContainerSelector>& a,
-                    const Member<ScopedContainerSelector>& b) {
-    return *a == *b;
-  }
-  static constexpr bool kSafeToCompareToEmptyOrDeleted = false;
-};
-
-// Helper needed to allow calling Find() with a ScopedContainerSelector instead
-// of Member<ScopedContainerSelector>
-struct ScopedContainerSelectorHashTranslator {
-  STATIC_ONLY(ScopedContainerSelectorHashTranslator);
-
-  static unsigned GetHash(const ScopedContainerSelector& selector) {
-    return selector.GetHash();
-  }
-  static bool Equal(const Member<ScopedContainerSelector>& a,
-                    const ScopedContainerSelector& b) {
-    return a && *a == b;
-  }
-};
-
 template <>
 struct HashTraits<blink::ContainerSelector>
     : SimpleClassHashTraits<blink::ContainerSelector> {
-  static unsigned GetHash(const blink::ContainerSelector& selector) {
+  static uint32_t GetHash(const blink::ContainerSelector& selector) {
     return selector.GetHash();
   }
   static constexpr bool kSafeToCompareToEmptyOrDeleted =
@@ -199,9 +147,7 @@ struct HashTraits<blink::ContainerSelector>
   static const bool kEmptyValueIsZero = false;
 };
 
-using ContainerSelectorCache = HeapHashMap<Member<ScopedContainerSelector>,
-                                           Member<Element>,
-                                           ScopedContainerSelectorHashTraits>;
+using ContainerSelectorCache = HeapHashMap<ContainerSelector, Member<Element>>;
 
 }  // namespace blink
 

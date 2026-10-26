@@ -4,8 +4,6 @@
 
 package org.chromium.chrome.browser.language;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -14,7 +12,6 @@ import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 
@@ -23,7 +20,6 @@ import java.util.List;
 
 /** Tests for the AppLocalUtils class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
 // Fails on SDK 33+ because AppLocaleUtils uses system-managed locales (Android 13+).
 @Config(sdk = {BaseRobolectricTestRunner.MIN_SDK, 32})
 public class AppLocaleUtilsTest {
@@ -35,14 +31,12 @@ public class AppLocaleUtilsTest {
     // Reset the application override language after each test.
     @After
     public void tearDown() {
-        LanguageTestUtils.clearResourceBundleForTesting();
         ChromeSharedPreferences.getInstance()
                 .writeString(ChromePreferenceKeys.APPLICATION_OVERRIDE_LANGUAGE, null);
     }
 
     // Test getAppLanguagePref.
     @Test
-    @SmallTest
     public void testGetAppLanguagePref() {
         String lang = AppLocaleUtils.getAppLanguagePref();
         Assert.assertEquals(null, lang);
@@ -54,7 +48,6 @@ public class AppLocaleUtilsTest {
 
     // Test setAppLanguagePref.
     @Test
-    @SmallTest
     public void testSetAppLanguagePref() {
         assertLanguagePrefEquals(null);
 
@@ -67,7 +60,6 @@ public class AppLocaleUtilsTest {
 
     // Test isAppLanguagePref.
     @Test
-    @SmallTest
     public void testIsAppLanguagePref() {
         Assert.assertFalse(AppLocaleUtils.isAppLanguagePref("en"));
 
@@ -78,7 +70,6 @@ public class AppLocaleUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testIsFollowSystemLanguage() {
         Assert.assertTrue(AppLocaleUtils.isFollowSystemLanguage(null));
         Assert.assertTrue(
@@ -88,7 +79,6 @@ public class AppLocaleUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testIsAvailableBaseUiLanguage() {
         // Base languages that there are no UI translations for.
         List<String> notAvailableBaseLanguages =
@@ -118,7 +108,6 @@ public class AppLocaleUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testIsAvailableExactUiLanguage() {
         // Languages for which there is no exact matching UI language.
         List<String> notAvailableExactLanguages =

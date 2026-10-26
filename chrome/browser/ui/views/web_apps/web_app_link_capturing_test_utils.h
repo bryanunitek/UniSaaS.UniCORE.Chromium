@@ -7,20 +7,14 @@
 
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/intent_picker_bubble_view.h"
-#include "chrome/browser/ui/views/location_bar/intent_chip_button.h"
-#include "chrome/browser/ui/views/location_bar/omnibox_chip_button.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_accessor.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace views {
 class Button;
 }  // namespace views
-
-namespace content {
-class WebContents;
-}  // namespace content
-
-class BrowserWindowInterface;
 
 namespace web_app {
 
@@ -28,12 +22,12 @@ namespace web_app {
 // `kPwaNavigationCapturing` flag to be set on Windows, Mac and Linux. On
 // ChromeOS, this will work by default. Without these flags set on their
 // respective platforms, the tests will CHECK fail.
-IntentChipButton* GetIntentPickerIcon(BrowserWindowInterface* browser);
 
 // This test function handles the the case where intent picker migration is
 // enabled to use the PageActionView of the intent picker from the
 // IntentChipButton.
-views::Button* GetIntentPickerButton(BrowserWindowInterface* browser);
+page_actions::PageActionTestAccessor GetIntentPickerButton(
+    BrowserWindowInterface* browser);
 
 IntentPickerBubbleView* intent_picker_bubble();
 
@@ -50,27 +44,6 @@ testing::AssertionResult ClickIntentPickerAndWaitForBubble(
 
 views::Button* GetIntentPickerButtonAtIndex(size_t index);
 
-// Testing utility to wait for the IntentChipButton to be visible. The correct
-// usage for this class is: apps::IntentChipVisibilityObserver
-// visibility_observer(intent_chip); <Do something to make the chip visible>
-// visibility_observer.WaitForChipToBeVisible();
-class IntentChipVisibilityObserver : public OmniboxChipButton::Observer {
- public:
-  explicit IntentChipVisibilityObserver(IntentChipButton* intent_chip);
-  ~IntentChipVisibilityObserver() override;
-
-  IntentChipVisibilityObserver(const IntentChipVisibilityObserver&) = delete;
-  IntentChipVisibilityObserver& operator=(const IntentChipVisibilityObserver&) =
-      delete;
-
-  void WaitForChipToBeVisible();
-
- private:
-  void OnChipVisibilityChanged(bool is_visible) override;
-  base::ScopedObservation<IntentChipButton, OmniboxChipButton::Observer>
-      observation_{this};
-  base::RunLoop run_loop_;
-};
 
 }  // namespace web_app
 

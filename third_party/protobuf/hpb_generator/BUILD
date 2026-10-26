@@ -6,7 +6,7 @@
 # https://developers.google.com/open-source/licenses/bsd
 
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
-load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//bazel/toolchains:proto_lang_toolchain.bzl", "proto_lang_toolchain")
 
 package(default_applicable_licenses = ["//:license"])
@@ -59,7 +59,7 @@ cc_library(
     hdrs = [
         "generator.h",
     ],
-    visibility = ["//visibility:private"],
+    visibility = ["//hpb_generator:__subpackages__"],
     deps = [
         ":context",
         ":gen_utils",
@@ -69,6 +69,7 @@ cc_library(
         "//src/google/protobuf/compiler:code_generator",
         "//src/google/protobuf/compiler:code_generator_lite",
         "//src/google/protobuf/compiler:plugin",
+        "//src/google/protobuf/io:printer",
         "//upb_generator:common",
         "//upb_generator:file_layout",
         "//upb_generator/c:names",
@@ -108,7 +109,7 @@ cc_library(
     name = "names",
     srcs = ["names.cc"],
     hdrs = ["names.h"],
-    visibility = ["//visibility:private"],
+    visibility = ["//hpb_generator:__subpackages__"],
     deps = [
         ":context",
         ":keywords",

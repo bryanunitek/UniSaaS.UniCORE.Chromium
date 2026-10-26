@@ -230,7 +230,7 @@ class OnDemandUpdater {
   friend class OnDemandTester;
   friend class policy::ComponentUpdaterPolicyTest;
   friend class ::ComponentsHandler;
-  friend class OptimizationGuideOnDeviceModelInstallerPolicy;
+  friend class OnDeviceModelUpdater;
   friend class ::PluginObserver;
   friend class SwReporterOnDemandFetcher;
   friend class SodaComponentInstallerPolicy;
@@ -245,6 +245,8 @@ class OnDemandUpdater {
 #endif  // BUILDFLAG(IS_CHROMEOS)
   friend class IwaKeyDistributionComponentInstallerPolicy;
   friend class PlatformRuntimeComponentInstallerPolicy;
+  friend void UpdateAIEmbeddingsComponentOnDemand(Priority priority,
+                                                  Callback callback);
 
   // Triggers an update check for a component. |id| is a value
   // returned by GetCrxComponentID(). If an update for this component is already
@@ -257,11 +259,14 @@ class OnDemandUpdater {
                               Callback callback) = 0;
 };
 
-// Creates the component updater.
+// Creates the component updater. If `update_checks_disabled` is true,
+// components can be registered but are never checked for updates, neither
+// periodically nor on demand.
 std::unique_ptr<ComponentUpdateService> ComponentUpdateServiceFactory(
     scoped_refptr<Configurator> config,
     std::unique_ptr<UpdateScheduler> scheduler,
-    const std::string& brand);
+    const std::string& brand,
+    bool update_checks_disabled = false);
 
 // Register prefs required by the component update service.
 void RegisterComponentUpdateServicePrefs(PrefRegistrySimple* registry);

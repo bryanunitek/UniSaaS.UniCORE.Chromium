@@ -26,8 +26,11 @@
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/test/fake_web_history_service.h"
 #include "components/history/core/test/history_service_test_util.h"
+#include "components/sync/base/user_selectable_type.h"
 #include "components/sync/service/sync_service_observer.h"
 #include "components/sync/test/mock_sync_service.h"
+#include "components/sync_device_info/fake_device_info_tracker.h"
+#include "components/sync_device_info/test_device_info_builder.h"
 #include "net/http/http_status_code.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -38,6 +41,7 @@ using base::Time;
 namespace history {
 
 using HistoryEntry = BrowsingHistoryService::HistoryEntry;
+using ClientGroup = BrowsingHistoryService::ClientGroup;
 
 void PrintTo(const HistoryEntry& entry, std::ostream* os) {
   *os << "{url: " << entry.url << ", time: " << entry.time
@@ -55,9 +59,11 @@ void PrintTo(const BrowsingHistoryService::QueryResultsInfo& info,
 namespace {
 
 using ::testing::AllOf;
+using ::testing::Each;
 using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::IsEmpty;
+using ::testing::UnorderedElementsAre;
 
 const char kUrl1[] = "http://www.one.com";
 const char kUrl2[] = "http://www.two.com";
@@ -79,19 +85,38 @@ Time OffsetToTimeWithBaseline(base::Time baseline_time, int64_t hour_offset) {
 }
 
 struct TestResult {
+  TestResult(std::string url,
+             int64_t hour_offset,
+             HistoryEntry::EntryType type = HistoryEntry::LOCAL_ENTRY,
+             std::string remote_icon_url_for_uma = "",
+             VisitSource visit_source = VisitSource::SOURCE_BROWSED,
+             bool is_actor_visit = false,
+             std::string client_id = "")
+      : url(std::move(url)),
+        hour_offset(hour_offset),
+        type(type),
+        remote_icon_url_for_uma(std::move(remote_icon_url_for_uma)),
+        visit_source(visit_source),
+        is_actor_visit(is_actor_visit),
+        client_id(client_id.empty() && type == HistoryEntry::REMOTE_ENTRY
+                      ? FakeWebHistoryService::kDefaultClientId
+                      : std::move(client_id)) {}
+
   std::string url;
   int64_t hour_offset;  // Visit time in hours past the baseline time.
   HistoryEntry::EntryType type;
   std::string remote_icon_url_for_uma;
   VisitSource visit_source = VisitSource::SOURCE_BROWSED;
   bool is_actor_visit = false;
+  std::string client_id;
 };
 
 void PrintTo(const TestResult& result, std::ostream* os) {
   *os << "{url: " << result.url << ", hour_offset: " << result.hour_offset
       << ", type: " << result.type
       << ", remote_icon_url_for_uma: " << result.remote_icon_url_for_uma
-      << ", visit_source: " << static_cast<int>(result.visit_source) << "}";
+      << ", visit_source: " << static_cast<int>(result.visit_source)
+      << ", client_id: " << result.client_id << "}";
 }
 
 MATCHER_P2(MatchesHistory, baseline_time, expected, "") {
@@ -102,7 +127,8 @@ MATCHER_P2(MatchesHistory, baseline_time, expected, "") {
          arg.remote_icon_url_for_uma ==
              GURL(expected.remote_icon_url_for_uma) &&
          arg.is_actor_visit ==
-             (expected.visit_source == VisitSource::SOURCE_ACTOR);
+             (expected.visit_source == VisitSource::SOURCE_ACTOR) &&
+         arg.client_id == expected.client_id;
 }
 
 MATCHER_P3(MatchesQueryResult,
@@ -132,18 +158,18 @@ MATCHER_P3(MatchesQueryResult,
 
 class TestBrowsingHistoryDriver : public BrowsingHistoryDriver {
  public:
-  explicit TestBrowsingHistoryDriver(WebHistoryService* web_history)
-      : web_history_(web_history) {}
-
-  void SetWebHistory(WebHistoryService* web_history) {
-    web_history_ = web_history;
-  }
+  TestBrowsingHistoryDriver() = default;
 
   using QueryResult = std::pair<std::vector<HistoryEntry>,
                                 BrowsingHistoryService::QueryResultsInfo>;
   std::vector<QueryResult> GetQueryResults() { return query_results_; }
 
   int GetHistoryDeletedCount() { return history_deleted_count_; }
+
+  const std::vector<ExpireHistoryArgs>& GetExpireHistoryArgs() const {
+    return expire_list_;
+  }
+  void ClearExpireHistoryArgs() { expire_list_.clear(); }
 
   void RunContinuation() {
     EXPECT_TRUE(continuation_closure_);
@@ -162,22 +188,23 @@ class TestBrowsingHistoryDriver : public BrowsingHistoryDriver {
   void OnRemoveVisitsComplete() override {}
   void OnRemoveVisitsFailed() override {}
   void OnRemoveVisits(
-      const std::vector<ExpireHistoryArgs>& expire_list) override {}
+      const std::vector<ExpireHistoryArgs>& expire_list) override {
+    expire_list_ = expire_list;
+  }
   void HistoryDeleted() override { history_deleted_count_++; }
   void HasOtherFormsOfBrowsingHistory(bool has_other_forms,
                                       bool has_synced_results) override {}
   bool AllowHistoryDeletions() override { return true; }
   bool ShouldHideWebHistoryUrl(const GURL& url) override { return false; }
-  WebHistoryService* GetWebHistoryService() override { return web_history_; }
   void ShouldShowNoticeAboutOtherFormsOfBrowsingHistory(
       const syncer::SyncService* sync_service,
       WebHistoryService* local_history,
       base::OnceCallback<void(bool)> callback) override {}
 
   int history_deleted_count_ = 0;
+  std::vector<ExpireHistoryArgs> expire_list_;
   std::vector<QueryResult> query_results_;
   base::OnceClosure continuation_closure_;
-  raw_ptr<WebHistoryService> web_history_;
 };
 
 class TestWebHistoryService : public FakeWebHistoryService {
@@ -188,6 +215,8 @@ class TestWebHistoryService : public FakeWebHistoryService {
     TestRequest request;
     ExpireHistoryCompletionCallback(base::DoNothing(), &request, true);
   }
+
+  void SetIsEnabled(bool enabled) { is_enabled_ = enabled; }
 
  protected:
   class TestRequest : public WebHistoryService::Request {
@@ -212,9 +241,10 @@ class ReversedWebHistoryService : public TestWebHistoryService {
       base::Time begin,
       base::Time end,
       size_t count,
+      const std::vector<std::string>& client_ids,
       bool* more_results_left) override {
-    auto result = FakeWebHistoryService::GetVisitsBetween(begin, end, count,
-                                                          more_results_left);
+    auto result = FakeWebHistoryService::GetVisitsBetween(
+        begin, end, count, client_ids, more_results_left);
     std::ranges::reverse(result);
     return result;
   }
@@ -236,12 +266,16 @@ class TestBrowsingHistoryService : public BrowsingHistoryService {
  public:
   TestBrowsingHistoryService(BrowsingHistoryDriver* driver,
                              HistoryService* local_history,
+                             WebHistoryService* web_history,
                              syncer::SyncService* sync_service,
-                             std::unique_ptr<base::OneShotTimer> timer)
+                             std::unique_ptr<base::OneShotTimer> timer,
+                             syncer::DeviceInfoTracker* device_info_tracker)
       : BrowsingHistoryService(driver,
                                local_history,
+                               web_history,
                                sync_service,
-                               std::move(timer)) {}
+                               std::move(timer),
+                               device_info_tracker) {}
 };
 
 class BrowsingHistoryServiceTest : public ::testing::Test {
@@ -252,21 +286,24 @@ class BrowsingHistoryServiceTest : public ::testing::Test {
   // before Time::UnixEpoch() that cannot be represented. By adding 1 day we
   // ensure all test data is after Time::UnixEpoch().
   BrowsingHistoryServiceTest()
-      : baseline_time_(Time::UnixEpoch().LocalMidnight() + base::Days(1)),
-        driver_(&web_history_) {
+      : baseline_time_(Time::UnixEpoch().LocalMidnight() + base::Days(1)) {
     EXPECT_TRUE(history_dir_.CreateUniqueTempDir());
     local_history_ = CreateHistoryService(history_dir_.GetPath(), true);
-    ResetService(driver(), local_history(), sync());
+    ResetService(driver(), local_history(), web_history(), sync(),
+                 device_info_tracker());
   }
 
   void ResetService(BrowsingHistoryDriver* driver,
                     HistoryService* local_history,
-                    syncer::SyncService* sync_service) {
+                    WebHistoryService* web_history,
+                    syncer::SyncService* sync_service,
+                    syncer::DeviceInfoTracker* device_info_tracker) {
     std::unique_ptr<base::MockOneShotTimer> timer =
         std::make_unique<base::MockOneShotTimer>();
     timer_ = timer.get();
     browsing_history_service_ = std::make_unique<TestBrowsingHistoryService>(
-        driver, local_history, sync_service, std::move(timer));
+        driver, local_history, web_history, sync_service, std::move(timer),
+        device_info_tracker);
   }
 
   void BlockUntilHistoryProcessesPendingRequests() {
@@ -287,7 +324,8 @@ class BrowsingHistoryServiceTest : public ::testing::Test {
                                  OffsetToTime(entry.hour_offset), source);
       } else if (entry.type == kRemote) {
         web_history->AddSyncedVisit(entry.url, OffsetToTime(entry.hour_offset),
-                                    entry.remote_icon_url_for_uma);
+                                    entry.remote_icon_url_for_uma,
+                                    entry.client_id);
       } else {
         NOTREACHED();
       }
@@ -344,6 +382,9 @@ class BrowsingHistoryServiceTest : public ::testing::Test {
   HistoryService* local_history() { return local_history_.get(); }
   TestWebHistoryService* web_history() { return &web_history_; }
   syncer::MockSyncService* sync() { return &sync_service_; }
+  syncer::FakeDeviceInfoTracker* device_info_tracker() {
+    return &device_info_tracker_;
+  }
   TestBrowsingHistoryDriver* driver() { return &driver_; }
   base::MockOneShotTimer* timer() { return timer_; }
   TestBrowsingHistoryService* service() {
@@ -362,17 +403,13 @@ class BrowsingHistoryServiceTest : public ::testing::Test {
   std::unique_ptr<HistoryService> local_history_;
   TestWebHistoryService web_history_;
   syncer::MockSyncService sync_service_;
+  syncer::FakeDeviceInfoTracker device_info_tracker_;
   TestBrowsingHistoryDriver driver_;
-  raw_ptr<base::MockOneShotTimer, DanglingUntriaged> timer_;
   std::unique_ptr<TestBrowsingHistoryService> browsing_history_service_;
+  raw_ptr<base::MockOneShotTimer> timer_;
 };
 
-
-TEST_F(BrowsingHistoryServiceTest, QueryHistoryExcludes404s) {
-  // Allow saving 404 visits to History.
-  base::test::ScopedFeatureList scoped_featurelist;
-  scoped_featurelist.InitAndEnableFeature(history::kVisitedLinksOn404);
-
+TEST_F(BrowsingHistoryServiceTest, QueryHistoryIncludes404s) {
   // Add a non-404 visit.
   AddHistory({{kUrl1, 1, kLocal}});
 
@@ -385,31 +422,32 @@ TEST_F(BrowsingHistoryServiceTest, QueryHistoryExcludes404s) {
 
   BlockUntilHistoryProcessesPendingRequests();
 
-  // 404s should be excluded from query results.
+  // 404s should be included in the query results by default.
   EXPECT_THAT(QueryHistory(),
               MatchesQueryResult(baseline_time_, /*reached_beginning*/ true,
-                                 std::vector<TestResult>{{kUrl1, 1, kLocal}}));
+                                 std::vector<TestResult>{{kUrl2, 2, kLocal},
+                                                         {kUrl1, 1, kLocal}}));
 }
 
 TEST_F(BrowsingHistoryServiceTest, QueryHistoryNoSources) {
-  driver()->SetWebHistory(nullptr);
-  ResetService(driver(), nullptr, nullptr);
+  ResetService(driver(), /*local_history=*/nullptr, /*web_history=*/nullptr,
+               /*sync_service=*/nullptr, device_info_tracker());
   EXPECT_THAT(QueryHistory(), MatchesQueryResult(baseline_time_,
                                                  /*reached_beginning*/ true,
                                                  std::vector<TestResult>{}));
 }
 
 TEST_F(BrowsingHistoryServiceTest, EmptyQueryHistoryJustLocal) {
-  driver()->SetWebHistory(nullptr);
-  ResetService(driver(), local_history(), nullptr);
+  ResetService(driver(), local_history(), /*web_history=*/nullptr,
+               /*sync_service=*/nullptr, device_info_tracker());
   EXPECT_THAT(QueryHistory(), MatchesQueryResult(baseline_time_,
                                                  /*reached_beginning*/ true,
                                                  std::vector<TestResult>{}));
 }
 
 TEST_F(BrowsingHistoryServiceTest, QueryHistoryJustLocal) {
-  driver()->SetWebHistory(nullptr);
-  ResetService(driver(), local_history(), nullptr);
+  ResetService(driver(), local_history(), /*web_history=*/nullptr,
+               /*sync_service=*/nullptr, device_info_tracker());
   AddHistory({{kUrl1, 1, kLocal}});
   EXPECT_THAT(QueryHistory(),
               MatchesQueryResult(baseline_time_, /*reached_beginning*/ true,
@@ -417,7 +455,8 @@ TEST_F(BrowsingHistoryServiceTest, QueryHistoryJustLocal) {
 }
 
 TEST_F(BrowsingHistoryServiceTest, QueryHistoryWithAppIdFilter) {
-  ResetService(driver(), local_history(), sync());
+  ResetService(driver(), local_history(), web_history(), sync(),
+               device_info_tracker());
   AddHistory({{kUrl1, 1, kLocal}});
 
   QueryOptions options;
@@ -428,24 +467,53 @@ TEST_F(BrowsingHistoryServiceTest, QueryHistoryWithAppIdFilter) {
                                  std::vector<TestResult>{}));
 }
 
+TEST_F(BrowsingHistoryServiceTest, QueryHistoryWithClientIdFilter) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kWebHistoryUseNewApi);
+
+  ResetService(driver(), /*local_history=*/nullptr, web_history(), sync(),
+               device_info_tracker());
+  AddHistory({{kUrl1, 1, kRemote, "", VisitSource::SOURCE_BROWSED, false,
+               "client_1"},
+              {kUrl2, 2, kRemote, "", VisitSource::SOURCE_BROWSED, false,
+               "client_2"},
+              {kUrl3, 3, kRemote, "", VisitSource::SOURCE_BROWSED, false,
+               "client_1"}});
+
+  QueryOptions options;
+  options.client_ids = {"client_1"};
+
+  EXPECT_THAT(QueryHistory(options),
+              MatchesQueryResult(
+                  baseline_time_, /*reached_beginning*/ true,
+                  std::vector<TestResult>{
+                      {kUrl3, 3, kRemote, "", VisitSource::SOURCE_BROWSED,
+                       false, "client_1"},
+                      {kUrl1, 1, kRemote, "", VisitSource::SOURCE_BROWSED,
+                       false, "client_1"}}));
+}
+
 TEST_F(BrowsingHistoryServiceTest, EmptyQueryHistoryJustWeb) {
-  ResetService(driver(), nullptr, nullptr);
+  ResetService(driver(), /*local_history=*/nullptr, web_history(),
+               /*sync_service=*/nullptr, device_info_tracker());
   EXPECT_THAT(QueryHistory(), MatchesQueryResult(baseline_time_,
                                                  /*reached_beginning*/ true,
                                                  std::vector<TestResult>{}));
 }
 
 TEST_F(BrowsingHistoryServiceTest, EmptyQueryHistoryDelayedWeb) {
-  driver()->SetWebHistory(nullptr);
-  ResetService(driver(), nullptr, sync());
-  driver()->SetWebHistory(web_history());
+  web_history()->SetIsEnabled(false);
+  ResetService(driver(), /*local_history=*/nullptr, web_history(), sync(),
+               device_info_tracker());
+  web_history()->SetIsEnabled(true);
   EXPECT_THAT(QueryHistory(), MatchesQueryResult(baseline_time_,
                                                  /*reached_beginning*/ true,
                                                  std::vector<TestResult>{}));
 }
 
 TEST_F(BrowsingHistoryServiceTest, QueryHistoryJustWeb) {
-  ResetService(driver(), nullptr, sync());
+  ResetService(driver(), /*local_history=*/nullptr, web_history(), sync(),
+               device_info_tracker());
   AddHistory({{kUrl1, 1, kRemote}});
   EXPECT_THAT(QueryHistory(),
               MatchesQueryResult(baseline_time_, /*reached_beginning*/ true,
@@ -453,14 +521,16 @@ TEST_F(BrowsingHistoryServiceTest, QueryHistoryJustWeb) {
 }
 
 TEST_F(BrowsingHistoryServiceTest, EmptyQueryHistoryBothSources) {
-  ResetService(driver(), local_history(), sync());
+  ResetService(driver(), local_history(), web_history(), sync(),
+               device_info_tracker());
   EXPECT_THAT(QueryHistory(), MatchesQueryResult(baseline_time_,
                                                  /*reached_beginning*/ true,
                                                  std::vector<TestResult>{}));
 }
 
 TEST_F(BrowsingHistoryServiceTest, QueryHistoryAllSources) {
-  ResetService(driver(), local_history(), sync());
+  ResetService(driver(), local_history(), web_history(), sync(),
+               device_info_tracker());
   AddHistory({{kUrl1, 1, kRemote},
               {kUrl2, 2, kRemote},
               {kUrl3, 3, kLocal},
@@ -518,7 +588,6 @@ TEST_F(BrowsingHistoryServiceTest, QueryHistoryHostOnlyRemote) {
 
   QueryOptions options;
   options.max_count = 0;
-  options.host_only = false;
   EXPECT_THAT(QueryHistory(u"eight.com", options),
               MatchesQueryResult(baseline_time_,
                                  /*reached_beginning*/ true,
@@ -527,12 +596,62 @@ TEST_F(BrowsingHistoryServiceTest, QueryHistoryHostOnlyRemote) {
                                      {kUrl9, 2, kRemote},
                                      {kUrl8, 1, kRemote},
                                  }));
-  options.host_only = true;
-  EXPECT_THAT(QueryHistory(u"eight.com", options),
+  options.hostname_suffix = "eight.com";
+  EXPECT_THAT(QueryHistory(u"", options),
               MatchesQueryResult(baseline_time_, /*reached_beginning*/ true,
                                  std::vector<TestResult>{
                                      {kUrl8, 1, kRemote},
                                  }));
+}
+
+TEST_F(BrowsingHistoryServiceTest, QueryHistoryHostOnlyRemoteSuffixMatching) {
+  const char kSubdomainUrl[] = "http://sub.eight.com";
+  AddHistory({{kUrl8, 1, kRemote}, {kSubdomainUrl, 2, kRemote}});
+
+  QueryOptions options;
+  options.max_count = 0;
+  options.hostname_suffix = "eight.com";
+
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(
+        kBrowsingHistoryImprovedHostnameSuffixMatching);
+
+    // With feature enabled, both sub.eight.com and eight.com match, and
+    // matching is case-insensitive.
+    EXPECT_THAT(QueryHistory(u"", options),
+                MatchesQueryResult(baseline_time_, /*reached_beginning*/ true,
+                                   std::vector<TestResult>{
+                                       {kSubdomainUrl, 2, kRemote},
+                                       {kUrl8, 1, kRemote},
+                                   }));
+    options.hostname_suffix = "EiGhT.cOm";
+    EXPECT_THAT(QueryHistory(u"", options),
+                MatchesQueryResult(baseline_time_, /*reached_beginning*/ true,
+                                   std::vector<TestResult>{
+                                       {kSubdomainUrl, 2, kRemote},
+                                       {kUrl8, 1, kRemote},
+                                   }));
+  }
+
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(
+        kBrowsingHistoryImprovedHostnameSuffixMatching);
+
+    // With feature disabled, only exact host eight.com matches, and matching
+    // is case-sensitive.
+    options.hostname_suffix = "eight.com";
+    EXPECT_THAT(QueryHistory(u"", options),
+                MatchesQueryResult(baseline_time_, /*reached_beginning*/ true,
+                                   std::vector<TestResult>{
+                                       {kUrl8, 1, kRemote},
+                                   }));
+    options.hostname_suffix = "EiGhT.cOm";
+    EXPECT_THAT(QueryHistory(u"", options),
+                MatchesQueryResult(baseline_time_, /*reached_beginning*/ true,
+                                   std::vector<TestResult>{}));
+  }
 }
 
 TEST_F(BrowsingHistoryServiceTest, QueryHistoryLocalPagingPartial) {
@@ -555,14 +674,13 @@ TEST_F(BrowsingHistoryServiceTest, QueryHistoryLocalPagingFull) {
   AddHistory({{kUrl1, 1, kLocal}, {kUrl2, 2, kLocal}, {kUrl3, 3, kLocal}});
   // The first query doesn't reach the beginning, since there were just enough
   // local results to fulfill the request and remote hasn't been queried yet.
-  EXPECT_THAT(QueryHistory(3),
-              MatchesQueryResult(baseline_time_,
-                                 /*reached_beginning*/ false,
-                                 std::vector<TestResult>{
-                                     {kUrl3, 3, kLocal},
-                                     {kUrl2, 2, kLocal},
-                                     {kUrl1, 1, kLocal},
-                                 }));
+  EXPECT_THAT(QueryHistory(3), MatchesQueryResult(baseline_time_,
+                                                  /*reached_beginning*/ false,
+                                                  std::vector<TestResult>{
+                                                      {kUrl3, 3, kLocal},
+                                                      {kUrl2, 2, kLocal},
+                                                      {kUrl1, 1, kLocal},
+                                                  }));
 
   EXPECT_THAT(ContinueQuery(), MatchesQueryResult(baseline_time_,
                                                   /*reached_beginning*/ true,
@@ -718,7 +836,6 @@ TEST_F(BrowsingHistoryServiceTest, QueryHistoryPending) {
                                                   }));
 }
 
-
 TEST_F(BrowsingHistoryServiceTest, RetryOnRemoteFailureEmpty) {
   web_history()->SetupFakeResponse(false, 0);
   EXPECT_THAT(QueryHistory(), MatchesQueryResult(baseline_time_,
@@ -772,8 +889,8 @@ TEST_F(BrowsingHistoryServiceTest, RetryOnRemoteFailurePagingLocal) {
 
 TEST_F(BrowsingHistoryServiceTest, WebHistoryTimeout) {
   TimeoutWebHistoryService timeout;
-  driver()->SetWebHistory(&timeout);
-  ResetService(driver(), local_history(), sync());
+  ResetService(driver(), local_history(), /*web_history=*/&timeout, sync(),
+               device_info_tracker());
   EXPECT_EQ(0U, driver()->GetQueryResults().size());
   service()->QueryHistory(std::u16string(), QueryOptions());
   EXPECT_EQ(0U, driver()->GetQueryResults().size());
@@ -786,47 +903,14 @@ TEST_F(BrowsingHistoryServiceTest, WebHistoryTimeout) {
   // WebHistoryService will DCHECK if we destroy it before the observer in
   // BrowsingHistoryService is removed, so reset our first
   // BrowsingHistoryService before `timeout` goes out of scope.
-  driver()->SetWebHistory(nullptr);
-  ResetService(driver(), nullptr, nullptr);
+  ResetService(driver(), /*local_history=*/nullptr, /*web_history=*/nullptr,
+               /*sync_service=*/nullptr, device_info_tracker());
 }
 
 TEST_F(BrowsingHistoryServiceTest, ObservingWebHistory) {
-  // No need to observe SyncService since we have a WebHistory already.
-  EXPECT_CALL(*sync(), AddObserver).Times(0);
-  EXPECT_CALL(*sync(), RemoveObserver).Times(0);
+  ResetService(driver(), /*local_history=*/nullptr, web_history(), sync(),
+               device_info_tracker());
 
-  ResetService(driver(), nullptr, sync());
-
-  web_history()->TriggerOnWebHistoryDeleted();
-  EXPECT_EQ(1, driver()->GetHistoryDeletedCount());
-}
-
-TEST_F(BrowsingHistoryServiceTest, ObservingWebHistoryDelayedWeb) {
-  // Since there's no WebHistory, observations should be set up on Sync.
-  EXPECT_CALL(*sync(), AddObserver);
-  EXPECT_CALL(*sync(), RemoveObserver).Times(0);
-
-  driver()->SetWebHistory(nullptr);
-  ResetService(driver(), nullptr, sync());
-
-  // OnStateChanged() is a no-op if WebHistory is still inaccessible.
-  service()->OnStateChanged(sync());
-
-  driver()->SetWebHistory(web_history());
-  // Since WebHistory is currently not being observed, triggering a history
-  // deletion will not be propagated to the driver.
-  web_history()->TriggerOnWebHistoryDeleted();
-  EXPECT_EQ(0, driver()->GetHistoryDeletedCount());
-
-  // Once OnStateChanged() gets called, the BrowsingHistoryService switches from
-  // observing SyncService to WebHistoryService. As such, RemoveObserver should
-  // have been called on SyncService, so lets verify.
-  testing::Mock::VerifyAndClearExpectations(sync());
-  EXPECT_CALL(*sync(), AddObserver).Times(0);
-  EXPECT_CALL(*sync(), RemoveObserver);
-  service()->OnStateChanged(sync());
-
-  // Only now should deletion should be propagated through.
   web_history()->TriggerOnWebHistoryDeleted();
   EXPECT_EQ(1, driver()->GetHistoryDeletedCount());
 }
@@ -835,8 +919,8 @@ TEST_F(BrowsingHistoryServiceTest, IncorrectlyOrderedRemoteResults) {
   // Created from crbug.com/787928, where suspected MergeDuplicateResults did
   // not start with sorted data. This case originally hit a NOTREACHED.
   ReversedWebHistoryService reversed;
-  driver()->SetWebHistory(&reversed);
-  ResetService(driver(), local_history(), sync());
+  ResetService(driver(), local_history(), /*web_history=*/&reversed, sync(),
+               device_info_tracker());
   AddHistory({{kUrl1, 1, kRemote},
               {kUrl3, 2, kRemote},
               {kUrl3, 3, kLocal},
@@ -862,8 +946,8 @@ TEST_F(BrowsingHistoryServiceTest, IncorrectlyOrderedRemoteResults) {
   // WebHistoryService will DCHECK if we destroy it before the observer in
   // BrowsingHistoryService is removed, so reset our first
   // BrowsingHistoryService before `reversed` goes out of scope.
-  driver()->SetWebHistory(nullptr);
-  ResetService(driver(), nullptr, nullptr);
+  ResetService(driver(), /*local_history=*/nullptr, /*web_history=*/nullptr,
+               /*sync_service=*/nullptr, device_info_tracker());
 }
 
 TEST_F(BrowsingHistoryServiceTest, MultipleSubsequentQueries) {
@@ -920,7 +1004,7 @@ TEST_F(BrowsingHistoryServiceTest, RemoveVisitsMetric) {
 
   {
     // Simulate that history sync is disabled, so `WebHistoryService` is null.
-    driver()->SetWebHistory(nullptr);
+    web_history()->SetIsEnabled(false);
 
     base::HistogramTester histograms;
 
@@ -930,6 +1014,50 @@ TEST_F(BrowsingHistoryServiceTest, RemoveVisitsMetric) {
     histograms.ExpectTotalCount("History.RemoveVisitsFromWebHistory.EntryCount",
                                 0);
   }
+}
+
+TEST_F(BrowsingHistoryServiceTest, RemoveVisitsDeduplicatedEntries) {
+  std::vector<HistoryEntry> entries;
+
+  {
+    HistoryEntry entry;
+    entry.url = GURL("http://www.a.com");
+    entry.all_timestamps[GURL("http://www.a.com")] = {
+        OffsetToTime(1), OffsetToTime(2), OffsetToTime(3)};
+    entry.all_timestamps[GURL("http://www.a.com/1")] = {OffsetToTime(4),
+                                                        OffsetToTime(5)};
+    entry.all_timestamps[GURL("http://www.a.com/2")] = {OffsetToTime(6)};
+    entries.push_back(std::move(entry));
+  }
+  {
+    HistoryEntry entry;
+    entry.url = GURL("http://www.b.com");
+    entry.all_timestamps[GURL("http://www.b.com")] = {OffsetToTime(1)};
+    entry.all_timestamps[GURL("http://www.b.com/2")] = {
+        OffsetToTime(2), OffsetToTime(3), OffsetToTime(4)};
+    entries.push_back(std::move(entry));
+  }
+
+  service()->RemoveVisits(entries);
+
+  std::vector<ExpireHistoryArgs> expire_list = driver()->GetExpireHistoryArgs();
+  EXPECT_EQ(2u, expire_list.size());
+
+  // Each entry's ExpireHistoryArgs should contain all unique URLs from
+  // `all_timestamps`.
+  EXPECT_THAT(expire_list,
+              ElementsAre(Field(&ExpireHistoryArgs::urls,
+                                ElementsAre(GURL("http://www.a.com"),
+                                            GURL("http://www.a.com/1"),
+                                            GURL("http://www.a.com/2"))),
+                          Field(&ExpireHistoryArgs::urls,
+                                ElementsAre(GURL("http://www.b.com"),
+                                            GURL("http://www.b.com/2")))));
+
+  EXPECT_THAT(expire_list,
+              Each(AllOf(Field(&ExpireHistoryArgs::begin_time, baseline_time_),
+                         Field(&ExpireHistoryArgs::end_time,
+                               baseline_time_ + base::Days(1)))));
 }
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
@@ -1008,7 +1136,7 @@ TEST_F(BrowsingHistoryServiceTest, GroupSimilarVisits) {
   HistoryAddPageArgs page2;
   page2.url = GURL("http://www.b.com/1");
   page2.time = OffsetToTime(3);
-  page2.title = u"Title B";
+  page2.title = u"Title A";
   local_history()->AddPage(page2);
 
   // Add a remote page with a different URL but the same domain and title as
@@ -1037,21 +1165,16 @@ TEST_F(BrowsingHistoryServiceTest, GroupSimilarVisits) {
 
   BlockUntilHistoryProcessesPendingRequests();
 
-  EXPECT_THAT(
-      QueryHistory(),
-      MatchesQueryResult(baseline_time_, /*reached_beginning=*/true,
-                         std::vector<TestResult>{
-                             {"http://www.a.com/1", 5, kLocal},
-                             {"http://www.b.com/1", 3, kLocal},
-                             {"http://www.a.com/3", 1, kLocal},
-                         }));
+  EXPECT_THAT(QueryHistory(),
+              MatchesQueryResult(baseline_time_, /*reached_beginning=*/true,
+                                 std::vector<TestResult>{
+                                     {"http://www.a.com/1", 5, kLocal},
+                                     {"http://www.b.com/1", 3, kLocal},
+                                     {"http://www.a.com/3", 1, kLocal},
+                                 }));
 }
 
 TEST_F(BrowsingHistoryServiceTest, ShouldQueryActorVisitsOnly) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      history::kBrowsingHistoryActorIntegrationM3);
-
   AddHistory({{kUrl1, 1, kRemote, ""},
               {kUrl2, 2, kLocal, "", VisitSource::SOURCE_BROWSED,
                true /*is_actor_visit*/}});
@@ -1076,6 +1199,166 @@ TEST_F(BrowsingHistoryServiceTest, ShouldQueryActorVisitsOnly) {
 }
 
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
+TEST_F(BrowsingHistoryServiceTest, QueryDurationHistogram) {
+  base::HistogramTester histogram_tester;
+
+  AddHistory({{kUrl1, 1, kLocal}, {kUrl2, 2, kLocal}, {kUrl3, 3, kLocal}});
+
+  histogram_tester.ExpectTotalCount("History.BrowsingHistory.QueryDuration", 0);
+
+  // Initial query with max_count = 2 to leave remaining entries for
+  // continuation.
+  QueryHistory(2);
+  histogram_tester.ExpectTotalCount("History.BrowsingHistory.QueryDuration", 1);
+
+  // Continuation query to fetch the remaining history entry.
+  ContinueQuery();
+  histogram_tester.ExpectTotalCount("History.BrowsingHistory.QueryDuration", 2);
+}
+
+TEST_F(BrowsingHistoryServiceTest, NoSyncedDevicesWhenFeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kWebHistoryUseNewApi},
+                                {kBrowsingHistoryFilterByDevice});
+
+  EXPECT_CALL(*sync()->GetMockUserSettings(), GetSelectedTypes())
+      .WillRepeatedly(testing::Return(
+          syncer::UserSelectableTypeSet{syncer::UserSelectableType::kHistory}));
+
+  device_info_tracker()->Add(syncer::TestDeviceInfoBuilder()
+                                 .WithGuid("guid1")
+                                 .WithClientName("Device A")
+                                 .Build());
+  device_info_tracker()->Add(syncer::TestDeviceInfoBuilder()
+                                 .WithGuid("guid2")
+                                 .WithClientName("Device B")
+                                 .Build());
+
+  EXPECT_THAT(service()->GetSyncedDevicesForFiltering(), IsEmpty());
+}
+
+TEST_F(BrowsingHistoryServiceTest,
+       NoSyncedDevicesWhenWebHistoryNewApiDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kBrowsingHistoryFilterByDevice},
+                                {kWebHistoryUseNewApi});
+
+  EXPECT_CALL(*sync()->GetMockUserSettings(), GetSelectedTypes())
+      .WillRepeatedly(testing::Return(
+          syncer::UserSelectableTypeSet{syncer::UserSelectableType::kHistory}));
+
+  device_info_tracker()->Add(syncer::TestDeviceInfoBuilder()
+                                 .WithGuid("guid1")
+                                 .WithClientName("Device A")
+                                 .Build());
+
+  EXPECT_THAT(service()->GetSyncedDevicesForFiltering(), IsEmpty());
+}
+
+TEST_F(BrowsingHistoryServiceTest, NoSyncedDevicesWhenHistorySyncIsOff) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {kWebHistoryUseNewApi, kBrowsingHistoryFilterByDevice}, {});
+
+  EXPECT_CALL(*sync()->GetMockUserSettings(), GetSelectedTypes())
+      .WillRepeatedly(testing::Return(syncer::UserSelectableTypeSet{}));
+
+  device_info_tracker()->Add(syncer::TestDeviceInfoBuilder()
+                                 .WithGuid("guid1")
+                                 .WithClientName("Device A")
+                                 .Build());
+  device_info_tracker()->Add(syncer::TestDeviceInfoBuilder()
+                                 .WithGuid("guid2")
+                                 .WithClientName("Device B")
+                                 .Build());
+
+  EXPECT_THAT(service()->GetSyncedDevicesForFiltering(), IsEmpty());
+}
+
+TEST_F(BrowsingHistoryServiceTest, NoSyncedDevicesWhenTrackerIsNull) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {kWebHistoryUseNewApi, kBrowsingHistoryFilterByDevice}, {});
+
+  EXPECT_CALL(*sync()->GetMockUserSettings(), GetSelectedTypes())
+      .WillRepeatedly(testing::Return(
+          syncer::UserSelectableTypeSet{syncer::UserSelectableType::kHistory}));
+
+  ResetService(driver(), local_history(), web_history(), sync(),
+               /*device_info_tracker=*/nullptr);
+
+  EXPECT_THAT(service()->GetSyncedDevicesForFiltering(), IsEmpty());
+}
+
+TEST_F(BrowsingHistoryServiceTest,
+       SyncedDevicesAreDeduplicatedByNameAndIsLocalStatus) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {kWebHistoryUseNewApi, kBrowsingHistoryFilterByDevice}, {});
+
+  EXPECT_CALL(*sync()->GetMockUserSettings(), GetSelectedTypes())
+      .WillRepeatedly(testing::Return(
+          syncer::UserSelectableTypeSet{syncer::UserSelectableType::kHistory}));
+
+  device_info_tracker()->Add(syncer::TestDeviceInfoBuilder()
+                                 .WithGuid("guid1")
+                                 .WithClientName("Device A")
+                                 .Build());
+  device_info_tracker()->Add(syncer::TestDeviceInfoBuilder()
+                                 .WithGuid("guid2")
+                                 .WithClientName("Device A")
+                                 .Build());
+  device_info_tracker()->Add(syncer::TestDeviceInfoBuilder()
+                                 .WithGuid("guid3")
+                                 .WithClientName("Device B")
+                                 .Build());
+  device_info_tracker()->Add(syncer::TestDeviceInfoBuilder()
+                                 .WithGuid("guid4")
+                                 .WithClientName("Device B")
+                                 .Build());
+  device_info_tracker()->Add(syncer::TestDeviceInfoBuilder()
+                                 .WithGuid("guid5")
+                                 .WithClientName("Device C")
+                                 .Build());
+
+  // When the local device shares a name with another device ("Device A"),
+  // "(this browser)" is appended to disambiguate it.
+  device_info_tracker()->SetLocalCacheGuid("guid1");
+
+  EXPECT_THAT(
+      service()->GetSyncedDevicesForFiltering(),
+      UnorderedElementsAre(
+          AllOf(Field(&ClientGroup::name, "Device A (this browser)"),
+                Field(&ClientGroup::is_local_device, true),
+                Field(&ClientGroup::client_ids, ElementsAre("guid1"))),
+          AllOf(Field(&ClientGroup::name, "Device A"),
+                Field(&ClientGroup::is_local_device, false),
+                Field(&ClientGroup::client_ids, ElementsAre("guid2"))),
+          AllOf(Field(&ClientGroup::name, "Device B"),
+                Field(&ClientGroup::is_local_device, false),
+                Field(&ClientGroup::client_ids, ElementsAre("guid3", "guid4"))),
+          AllOf(Field(&ClientGroup::name, "Device C"),
+                Field(&ClientGroup::is_local_device, false),
+                Field(&ClientGroup::client_ids, ElementsAre("guid5")))));
+
+  // When the local device has a unique name ("Device C"), "(this browser)" is
+  // not appended.
+  device_info_tracker()->SetLocalCacheGuid("guid5");
+
+  EXPECT_THAT(
+      service()->GetSyncedDevicesForFiltering(),
+      UnorderedElementsAre(
+          AllOf(Field(&ClientGroup::name, "Device A"),
+                Field(&ClientGroup::is_local_device, false),
+                Field(&ClientGroup::client_ids, ElementsAre("guid1", "guid2"))),
+          AllOf(Field(&ClientGroup::name, "Device B"),
+                Field(&ClientGroup::is_local_device, false),
+                Field(&ClientGroup::client_ids, ElementsAre("guid3", "guid4"))),
+          AllOf(Field(&ClientGroup::name, "Device C"),
+                Field(&ClientGroup::is_local_device, true),
+                Field(&ClientGroup::client_ids, ElementsAre("guid5")))));
+}
 
 }  // namespace
 

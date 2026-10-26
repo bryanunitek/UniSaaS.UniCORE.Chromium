@@ -12,10 +12,9 @@ import org.jni_zero.CalledByNative;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.autofill.settings.HomeOfTransactionsFragment.AutofillSettingsReferrer;
+import org.chromium.chrome.browser.autofill.settings.AutofillAndPasswordsFragment.AutofillSettingsReferrer;
 import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFragment;
-import org.chromium.chrome.browser.autofill.settings.personal_context.AutofillPersonalContextFragment;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsReferrer;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.WindowAndroid;
@@ -27,21 +26,20 @@ public class SettingsNavigationHelper {
      * Tries showing the Autofill and passwords settings page.
      *
      * @param context The {@link Context} required to start the settings page. Noop without it.
-     * @return True if the context is valid, feature enabled and `startSettings` was called.
+     * @return True if the context is valid and `startSettings` was called.
      */
     public static boolean showAutofillAndPasswordsSettings(@Nullable Context context) {
-        if (context == null
-                || !ChromeFeatureList.isEnabled(
-                        ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)) {
+        if (context == null) {
             return false;
         }
 
         RecordUserAction.record("AutofillYourSavedInfoViewed");
         Bundle fragmentArgs = new Bundle();
         fragmentArgs.putInt(
-                HomeOfTransactionsFragment.EXTRA_REFERRER, AutofillSettingsReferrer.SETTINGS_MENU);
-        SettingsNavigationFactory.createSettingsNavigation()
-                .startSettings(context, HomeOfTransactionsFragment.class, fragmentArgs);
+                AutofillAndPasswordsFragment.EXTRA_REFERRER,
+                AutofillSettingsReferrer.SETTINGS_MENU);
+        SettingsNavigationFactory.createSettingsNavigation(context)
+                .startSettings(context, AutofillAndPasswordsFragment.class, fragmentArgs);
         return true;
     }
 
@@ -55,7 +53,7 @@ public class SettingsNavigationHelper {
         if (context == null) {
             return false;
         }
-        SettingsNavigationFactory.createSettingsNavigation()
+        SettingsNavigationFactory.createSettingsNavigation(context)
                 .startSettings(
                         context,
                         AutofillIdentityDocsFragment.class,
@@ -74,7 +72,7 @@ public class SettingsNavigationHelper {
         if (context == null) {
             return false;
         }
-        SettingsNavigationFactory.createSettingsNavigation()
+        SettingsNavigationFactory.createSettingsNavigation(context)
                 .startSettings(
                         context,
                         AutofillShoppingFragment.class,
@@ -90,16 +88,7 @@ public class SettingsNavigationHelper {
      * @return True if the context is valid and `startSettings` was called.
      */
     public static boolean showAutofillPersonalContextSettings(@Nullable Context context) {
-        if (context == null) {
-            return false;
-        }
-        SettingsNavigationFactory.createSettingsNavigation()
-                .startSettings(
-                        context,
-                        AutofillPersonalContextFragment.class,
-                        /* fragmentArgs= */ null,
-                        /* addToBackStack= */ true);
-        return true;
+        return PersonalContextSettingsLauncher.showPersonalContextSettings(context);
     }
 
     /**
@@ -112,7 +101,7 @@ public class SettingsNavigationHelper {
         if (context == null) {
             return false;
         }
-        SettingsNavigationFactory.createSettingsNavigation()
+        SettingsNavigationFactory.createSettingsNavigation(context)
                 .startSettings(
                         context,
                         AutofillTravelFragment.class,
@@ -131,13 +120,12 @@ public class SettingsNavigationHelper {
         if (context == null) {
             return false;
         }
-        SettingsNavigationFactory.createSettingsNavigation()
+        SettingsNavigationFactory.createSettingsNavigation(context)
                 .startSettings(
                         context,
                         AutofillOptionsFragment.class,
                         AutofillOptionsFragment.createRequiredArgs(
-                                AutofillOptionsFragment.AutofillOptionsReferrer
-                                        .PRIVATE_INFERENCE_NOTICE),
+                                AutofillOptionsReferrer.PRIVATE_INFERENCE_NOTICE),
                         /* addToBackStack= */ true);
         return true;
     }
@@ -166,7 +154,7 @@ public class SettingsNavigationHelper {
         }
         RecordUserAction.record("AutofillAddressesViewed");
 
-        SettingsNavigationFactory.createSettingsNavigation()
+        SettingsNavigationFactory.createSettingsNavigation(context)
                 .startSettings(
                         context,
                         AutofillProfilesFragment.class,
@@ -200,7 +188,7 @@ public class SettingsNavigationHelper {
         }
         RecordUserAction.record("AutofillCreditCardsViewed");
 
-        SettingsNavigationFactory.createSettingsNavigation()
+        SettingsNavigationFactory.createSettingsNavigation(context)
                 .startSettings(
                         context,
                         AutofillPaymentMethodsFragment.class,
@@ -242,6 +230,13 @@ public class SettingsNavigationHelper {
         WindowAndroid windowAndroid = webContents.getTopLevelNativeWindow();
         if (windowAndroid == null) return;
         showAutofillShoppingSettings(windowAndroid.getActivity().get());
+    }
+
+    @CalledByNative
+    private static void showAutofillPersonalContextSettings(WebContents webContents) {
+        WindowAndroid windowAndroid = webContents.getTopLevelNativeWindow();
+        if (windowAndroid == null) return;
+        showAutofillPersonalContextSettings(windowAndroid.getActivity().get());
     }
 
     @CalledByNative

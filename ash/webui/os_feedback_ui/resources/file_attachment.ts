@@ -41,6 +41,18 @@ export class FileAttachmentElement extends FileAttachmentElementBase {
 
   static get properties() {
     return {
+      selectedFile: {
+        type: Object,
+        value: null,
+      },
+      selectedFileName: {
+        type: String,
+        value: '',
+      },
+      selectedImageUrl: {
+        type: String,
+        value: '',
+      },
       hasSelectedAFile: {
         type: Boolean,
         computed: 'computeHasSelectedFile(selectedFile)',
@@ -49,24 +61,19 @@ export class FileAttachmentElement extends FileAttachmentElementBase {
   }
 
   /**  The file selected if any to be attached to the report. */
-  private selectedFile: File|null = null;
+  declare private selectedFile: File|null;
 
   /**  The name of the file selected. */
-  protected selectedFileName: string;
+  declare protected selectedFileName: string;
 
   /**  Url of the selected image. */
-  protected selectedImageUrl: string;
+  declare protected selectedImageUrl: string;
 
   /**  True when there is a file selected. */
-  protected hasSelectedAFile: boolean;
+  declare protected hasSelectedAFile: boolean;
 
-  private feedbackServiceProvider: FeedbackServiceProviderInterface;
-
-  constructor() {
-    super();
-
-    this.feedbackServiceProvider = getFeedbackServiceProvider();
-  }
+  private feedbackServiceProvider: FeedbackServiceProviderInterface =
+      getFeedbackServiceProvider();
 
   override ready() {
     super.ready();

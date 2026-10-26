@@ -8,9 +8,12 @@
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/test/run_until.h"
+#include "base/values.h"
 #include "chrome/browser/dictation/dictation_keyed_service.h"
 #include "chrome/browser/dictation/dictation_multiplexer.h"
 #include "chrome/browser/dictation/features.h"
+#include "chrome/browser/dictation/hotkey_manager.h"
 #include "chrome/browser/dictation/listener_stream_provider.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/profiles/profile.h"
@@ -20,25 +23,39 @@
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/browsertest_util.h"
 #include "extensions/browser/extension_registry_test_helper.h"
-#include "third_party/blink/public/common/features.h"
 
 namespace dictation {
 
-content::GlobalDOMNodeId EmptyTargetId() {
-  return content::GlobalDOMNodeId();
+TargetDetails EmptyTarget() {
+  return TargetDetails(content::GlobalDOMNodeId(), /*richly_editable=*/false);
 }
 
-content::GlobalDOMNodeId DefaultInPageTargetId(
-    content::WebContents* web_contents) {
-  return content::GlobalDOMNodeId{
-      web_contents->GetPrimaryMainFrame()->GetWeakDocumentPtr()};
+TargetDetails DefaultInPageTarget(content::WebContents* web_contents) {
+  return TargetDetails(
+      content::GlobalDOMNodeId{
+          web_contents->GetPrimaryMainFrame()->GetWeakDocumentPtr()},
+      /*richly_editable=*/false);
 }
 
 base::test::ScopedFeatureList CreateEnablingFeatureList() {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeaturesAndParameters(
-      {{kDictation, {{"use_component_extension", "false"}}},
-       {blink::features::kPopulateDOMNodeIdInFocusedNodeDetails, {}}},
+      {{kDictation,
+        {{"use_component_extension", "false"},
+         {"auto_session_end_delay", "0ms"}}}},
+      {});
+  return feature_list;
+}
+
+base::test::ScopedFeatureList CreateEnablingFeatureList(
+    bool session_ends_on_stream_end) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeaturesAndParameters(
+      {{kDictation,
+        {{"use_component_extension", "false"},
+         {"session_ends_on_stream_end",
+          session_ends_on_stream_end ? "true" : "false"},
+         {"auto_session_end_delay", "0ms"}}}},
       {});
   return feature_list;
 }
@@ -103,22 +120,27 @@ void ExtensionSendTranscriptUpdate(
 void ExtensionSendStreamStateUpdate(
     Profile* profile,
     DictationMultiplexer::StreamId stream_id,
-    extensions::api::dictation_private::StreamState state) {
+    extensions::api::dictation_private::StreamState state,
+    std::optional<int> error_code) {
+  base::DictValue details;
+  details.Set("streamId", stream_id.value());
+  details.Set("state", extensions::api::dictation_private::ToString(state));
+  if (error_code.has_value()) {
+    details.Set("errorCode", *error_code);
+  }
+
   std::string script = content::JsReplace(
       R"JS(
     (async function() {
       try {
-        await chrome.dictationPrivate.setStreamState({
-            streamId: $1,
-            state: $2
-        });
+        await chrome.dictationPrivate.setStreamState($1);
         chrome.test.sendScriptResult('success');
       } catch (e) {
         chrome.test.sendScriptResult('error: ' + e.message);
       }
     })();
       )JS",
-      stream_id.value(), extensions::api::dictation_private::ToString(state));
+      std::move(details));
 
   base::Value result =
       extensions::browsertest_util::ExecuteScriptInBackgroundPage(
@@ -133,6 +155,27 @@ void ExtensionWaitForStreamStart(Profile* profile,
     (async function() {
       try {
         await globalThis.waitForStreamStart($1);
+        chrome.test.sendScriptResult('success');
+      } catch (e) {
+        chrome.test.sendScriptResult('error: ' + e.message);
+      }
+    })();
+      )JS",
+      stream_id.value());
+
+  base::Value result =
+      extensions::browsertest_util::ExecuteScriptInBackgroundPage(
+          profile, std::string(kDictationTestExtensionId), script);
+  CHECK_EQ("success", result.GetString());
+}
+
+void ExtensionWaitForStreamEnd(Profile* profile,
+                               DictationMultiplexer::StreamId stream_id) {
+  std::string script = content::JsReplace(
+      R"JS(
+    (async function() {
+      try {
+        await globalThis.waitForStreamEnd($1);
         chrome.test.sendScriptResult('success');
       } catch (e) {
         chrome.test.sendScriptResult('error: ' + e.message);
@@ -277,6 +320,24 @@ DictationContext ExtensionGetUpdatedContext(
   return std::move(*context);
 }
 
+std::string GetEditableExpectedText(content::RenderFrameHost* render_frame_host,
+                                    std::string_view selector,
+                                    std::string_view expected) {
+  std::string last_seen_string;
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    last_seen_string =
+        content::EvalJs(render_frame_host,
+                        content::JsReplace(
+                            "const el = document.querySelector($1);"
+                            "el.isContentEditable ? el.innerText : el.value;",
+                            selector))
+            .ExtractString();
+    return last_seen_string == expected;
+  }));
+
+  return last_seen_string;
+}
+
 using ::testing::_;
 
 MockStreamProvider::MockStreamProvider() = default;
@@ -305,7 +366,55 @@ std::unique_ptr<StreamProvider> MockDictationKeyedService::CreateStreamProvider(
 }
 std::unique_ptr<SessionUi> MockDictationKeyedService::CreateUi(
     SessionController& controller) const {
-  return std::make_unique<testing::NiceMock<MockSessionUi>>();
+  auto mock_ui = std::make_unique<testing::NiceMock<MockSessionUi>>();
+  mock_ui->set_show_reviewing_page_status(ConsumeShowReviewingPageStatus());
+  return mock_ui;
+}
+
+FakeGlobalAcceleratorListener::FakeGlobalAcceleratorListener() = default;
+FakeGlobalAcceleratorListener::~FakeGlobalAcceleratorListener() = default;
+
+void FakeGlobalAcceleratorListener::Press(const ui::Accelerator& accelerator) {
+  NotifyKeyPressed(accelerator);
+}
+
+bool FakeGlobalAcceleratorListener::IsListeningFor(
+    const ui::Accelerator& accelerator) const {
+  return listening_.contains(accelerator);
+}
+
+bool FakeGlobalAcceleratorListener::IsRegistrationHandledExternally() const {
+  return handled_externally_;
+}
+
+void FakeGlobalAcceleratorListener::StartListening() {}
+
+void FakeGlobalAcceleratorListener::StopListening() {}
+
+bool FakeGlobalAcceleratorListener::StartListeningForAccelerator(
+    const ui::Accelerator& accelerator) {
+  if (fail_registration_) {
+    return false;
+  }
+  listening_.insert(accelerator);
+  return true;
+}
+
+void FakeGlobalAcceleratorListener::StopListeningForAccelerator(
+    const ui::Accelerator& accelerator) {
+  listening_.erase(accelerator);
+}
+
+ScopedFakeGlobalAcceleratorListener::ScopedFakeGlobalAcceleratorListener(
+    DictationKeyedService& service)
+    : service_(service),
+      listener_override_(
+          HotkeyManager::SetGlobalAcceleratorListenerForTesting(&listener_)) {}
+
+ScopedFakeGlobalAcceleratorListener::~ScopedFakeGlobalAcceleratorListener() {
+  // End the session first so that nothing remains registered with
+  // `listener_` once the default listener is restored.
+  service_->EndSession();
 }
 
 }  // namespace dictation

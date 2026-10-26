@@ -5,17 +5,20 @@
 #include "chrome/browser/indigo/indigo_image_replacement_manager.h"
 
 #include "base/check.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/user_metrics.h"
 #include "chrome/browser/indigo/api_client.h"
 #include "chrome/browser/indigo/indigo_image_replacement.h"
+#include "chrome/browser/indigo/indigo_metrics.h"
 #include "chrome/browser/indigo/indigo_page_action_controller.h"
 #include "chrome/browser/indigo/indigo_service.h"
 #include "chrome/browser/indigo/indigo_service_factory.h"
+#include "chrome/browser/indigo/resources/grit/indigo_strings.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/api/indigo_private.h"
 #include "components/page_content_annotations/core/tracked_element_feature.h"
@@ -31,9 +34,15 @@
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/mojom/event_dispatcher.mojom.h"
+#include "net/base/data_url.h"
+#include "services/data_decoder/public/cpp/decode_image.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "url/url_constants.h"
 
 namespace indigo {
 
@@ -51,6 +60,18 @@ IndigoImageReplacementManager::IndigoImageReplacementManager(
   receivers_.set_disconnect_handler(base::BindRepeating(
       &IndigoImageReplacementManager::OnReceiverDisconnected,
       base::Unretained(this)));
+
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(&page.GetMainDocument());
+  if (web_contents) {
+    Profile* profile =
+        Profile::FromBrowserContext(web_contents->GetBrowserContext());
+    if (auto* service = IndigoServiceFactory::GetForProfile(profile)) {
+      photo_changed_subscription_ = service->RegisterPhotoChangedCallback(
+          base::BindRepeating(&IndigoImageReplacementManager::OnPhotoChanged,
+                              base::Unretained(this)));
+    }
+  }
 }
 
 IndigoImageReplacementManager::~IndigoImageReplacementManager() = default;
@@ -105,14 +126,71 @@ IndigoImageReplacementManager::GetImageReplacementForFrame(
   return nullptr;
 }
 
+void IndigoImageReplacementManager::GetReplacementImageForExport(
+    const content::RenderFrameHost& rfh,
+    base::OnceCallback<void(const SkBitmap&)> callback) {
+  auto* replacement = GetImageReplacementForFrame(rfh);
+  if (!replacement) {
+    std::move(callback).Run(SkBitmap());
+    return;
+  }
+
+  const GURL& image_url = replacement->GetReplacementImageURL();
+  if (!image_url.is_valid() || !image_url.SchemeIs(url::kDataScheme)) {
+    std::move(callback).Run(SkBitmap());
+    return;
+  }
+
+  std::string mime_type;
+  std::string charset;
+  std::string image_data;
+  if (!net::DataURL::Parse(image_url, &mime_type, &charset, &image_data)) {
+    std::move(callback).Run(SkBitmap());
+    return;
+  }
+
+  data_decoder::DecodeImageIsolated(
+      base::as_byte_span(image_data), data_decoder::mojom::ImageCodec::kDefault,
+      /*shrink_to_fit=*/false, data_decoder::kDefaultMaxSizeInBytes,
+      /*desired_image_frame_size=*/gfx::Size(), std::move(callback));
+}
+
+bool IndigoImageReplacementManager::HasCachedImage() const {
+  return base::FeatureList::IsEnabled(features::kIndigoGeneratedImageCache) &&
+         !generated_image_url_.is_empty() &&
+         cached_input_image_hash_.has_value();
+}
+
+void IndigoImageReplacementManager::ClearCachedImage() {
+  cached_input_image_hash_ = std::nullopt;
+  generated_image_url_ = GURL();
+  cache_expiration_timer_.Stop();
+}
+
+void IndigoImageReplacementManager::OnPhotoChanged() {
+  photo_changed_since_last_generate_ = true;
+  cached_input_image_hash_ = std::nullopt;
+  cache_expiration_timer_.Stop();
+}
+
 void IndigoImageReplacementManager::ResetAllReplacements(
     base::PassKey<IndigoPageActionController>) {
   receivers_.Clear();
   primary_receiver_id_ = std::nullopt;
   primary_original_image_webp_bytes_.clear();
-  generated_image_url_ = GURL();
   active_invocation_id_ = std::nullopt;
   CancelActiveRequest();
+
+  if (HasCachedImage()) {
+    if (!cache_expiration_timer_.IsRunning()) {
+      cache_expiration_timer_.Start(
+          FROM_HERE, features::kIndigoGeneratedImageCacheLifetime.Get(),
+          base::BindOnce(&IndigoImageReplacementManager::ClearCachedImage,
+                         base::Unretained(this)));
+    }
+  } else {
+    generated_image_url_ = GURL();
+  }
 }
 
 bool IndigoImageReplacementManager::RegenerateImage() {
@@ -123,17 +201,19 @@ bool IndigoImageReplacementManager::RegenerateImage() {
 
   CHECK(!primary_original_image_webp_bytes_.empty());
 
-  // Reset generated image URL so subsequent getReplacementImage() requests
-  // wait.
-  generated_image_url_ = GURL();
+  // Invalidate previous cached generated image so subsequent
+  // getReplacementImage() requests wait for the new generated image.
+  ClearCachedImage();
 
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(&page().GetMainDocument());
   content::BrowserContext* browser_context = web_contents->GetBrowserContext();
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>(
+      extensions::api::indigo_private::OnRegenerateStarted::Create());
   auto event = std::make_unique<extensions::Event>(
       extensions::events::INDIGO_PRIVATE_ON_REGENERATE_STARTED,
       extensions::api::indigo_private::OnRegenerateStarted::kEventName,
-      extensions::api::indigo_private::OnRegenerateStarted::Create());
+      std::move(event_args));
 
   // Enable browser-side filtering by populating EventFilteringInfo with
   // instance_id (set to invocation_id).
@@ -202,6 +282,12 @@ void IndigoImageReplacementManager::ReplacementFrameAttached(
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(&page().GetMainDocument());
 
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents->GetBrowserContext());
+  IndigoService* service = IndigoServiceFactory::GetForProfile(profile);
+  CHECK(service);
+  service->EnsureComponentExtensionRegistered();
+
   content::NavigationController::LoadURLParams params{
       extensions::Extension::GetResourceURL(
           extensions::Extension::GetBaseURLFromExtensionId(
@@ -217,6 +303,14 @@ void IndigoImageReplacementManager::ReplacementFrameAttached(
     return;
   }
 
+  if (auto* controller = GetIndigoPageActionController()) {
+    if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(
+            controller->tab().GetBrowserWindowInterface())) {
+      browser_view->GetViewAccessibility().AnnouncePolitely(
+          l10n_util::GetStringUTF16(IDS_INDIGO_GENERATION_STARTED));
+    }
+  }
+
   // Cache a copy of the primary replacement's original image bytes to use for
   // regeneration.
   if (replacement_data->original_image) {
@@ -224,6 +318,17 @@ void IndigoImageReplacementManager::ReplacementFrameAttached(
         replacement_data->original_image->webp_bytes);
   }
 
+  if (HasCachedImage()) {
+    const auto input_hash =
+        crypto::SHA256Hash(primary_original_image_webp_bytes_);
+    if (cached_input_image_hash_ == input_hash) {
+      cache_expiration_timer_.Stop();
+      NotifyReplacementsReady(/*is_cache_hit=*/true);
+      return;
+    }
+  }
+
+  ClearCachedImage();
   GenerateReplacementImage();
 }
 
@@ -245,6 +350,8 @@ void IndigoImageReplacementManager::GenerateReplacementImage() {
   CHECK(!primary_original_image_webp_bytes_.empty());
 
   CancelActiveRequest();
+  photo_changed_since_last_generate_ = false;
+  generate_start_time_ = base::TimeTicks::Now();
 
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(&page().GetMainDocument());
@@ -271,8 +378,7 @@ void IndigoImageReplacementManager::OnReplacementImageGenerated(
 
   if (!result.has_value()) {
     DVLOG(1) << "Generate image failed: " << result.error().message;
-    base::RecordAction(
-        base::UserMetricsAction("Indigo.Transformation.Failure"));
+    ClearCachedImage();
     Reset(ResetType::kResetReplacementsAndContentScript);
     ShowErrorToast(IndigoTransformationResult::kGenerateImageError);
     return;
@@ -281,20 +387,39 @@ void IndigoImageReplacementManager::OnReplacementImageGenerated(
   CHECK(result->image_url.is_valid());
   generated_image_url_ = result->image_url;
 
-  base::UmaHistogramEnumeration("Indigo.Transformation.Result",
-                                IndigoTransformationResult::kSuccess);
-  base::RecordAction(base::UserMetricsAction("Indigo.Transformation.Success"));
+  if (base::FeatureList::IsEnabled(features::kIndigoGeneratedImageCache) &&
+      !photo_changed_since_last_generate_) {
+    cached_input_image_hash_ =
+        crypto::SHA256Hash(primary_original_image_webp_bytes_);
+    cache_expiration_timer_.Stop();
+  }
+
+  NotifyReplacementsReady(/*is_cache_hit=*/false);
+}
+
+void IndigoImageReplacementManager::NotifyReplacementsReady(bool is_cache_hit) {
+  base::UmaHistogramBoolean("Indigo.Transformation.IsCacheHit", is_cache_hit);
+  RecordTransformationResult(IndigoTransformationResult::kSuccess);
 
   for (auto& [_, image_replacement] : receivers_.GetAllContexts()) {
     image_replacement->ReplacementImageURLReady();
   }
 
+  RecordImageDisplayed();
+
   if (auto* controller = GetIndigoPageActionController()) {
     controller->ShowToolbar();
+
+    if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(
+            controller->tab().GetBrowserWindowInterface())) {
+      browser_view->GetViewAccessibility().AnnouncePolitely(
+          l10n_util::GetStringUTF16(IDS_INDIGO_GENERATION_COMPLETED));
+    }
   }
 }
 
 void IndigoImageReplacementManager::CancelActiveRequest() {
+  generate_start_time_ = base::TimeTicks();
   generate_weak_ptr_factory_.InvalidateWeakPtrs();
   if (cancel_active_request_) {
     std::move(cancel_active_request_).Run();
@@ -314,6 +439,7 @@ void IndigoImageReplacementManager::OnReceiverDisconnected() {
 }
 
 void IndigoImageReplacementManager::Reset(ResetType reset_type) {
+  generate_start_time_ = base::TimeTicks();
   if (auto* controller = GetIndigoPageActionController()) {
     controller->Reset(reset_type);
   }
@@ -323,6 +449,15 @@ void IndigoImageReplacementManager::ShowErrorToast(
     IndigoTransformationResult result) {
   if (auto* controller = GetIndigoPageActionController()) {
     controller->ShowInvocationErrorToast(result);
+  }
+}
+
+void IndigoImageReplacementManager::RecordImageDisplayed() {
+  if (!generate_start_time_.is_null()) {
+    base::UmaHistogramMediumTimes(
+        "Indigo.ImageReplacement.TotalDuration",
+        base::TimeTicks::Now() - generate_start_time_);
+    generate_start_time_ = base::TimeTicks();
   }
 }
 

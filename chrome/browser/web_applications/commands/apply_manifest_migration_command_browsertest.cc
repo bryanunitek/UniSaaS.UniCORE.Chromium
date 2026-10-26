@@ -5,8 +5,8 @@
 #include "chrome/browser/web_applications/commands/apply_manifest_migration_command.h"
 
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
@@ -22,7 +22,6 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/features.h"
 #include "ui/views/test/dialog_test.h"
 #include "ui/views/widget/any_widget_observer.h"
 
@@ -44,7 +43,8 @@ class ApplyManifestMigrationCommandBrowserTest : public WebAppBrowserTestBase {
   ApplyManifestMigrationCommandBrowserTest() = default;
   ~ApplyManifestMigrationCommandBrowserTest() override = default;
 
-  testing::AssertionResult WaitForAndApproveMigration(Browser* app_browser) {
+  testing::AssertionResult WaitForAndApproveMigration(
+      BrowserWindowInterface* app_browser) {
     auto app_menu_model = std::make_unique<WebAppMenuModel>(
         /*provider=*/nullptr, app_browser);
     app_menu_model->Init();
@@ -73,15 +73,12 @@ class ApplyManifestMigrationCommandBrowserTest : public WebAppBrowserTestBase {
     return testing::AssertionSuccess();
   }
 
-  base::test::ScopedFeatureList scoped_feature_list_{
-      blink::features::kWebAppMigrationApi};
-
   base::HistogramTester histogram_tester_;
 };
 
 IN_PROC_BROWSER_TEST_F(ApplyManifestMigrationCommandBrowserTest,
                        MigrateFromSuggestedLaunchSuccess) {
-  Browser* app_browser = InstallWebAppFromPageGetBrowser(
+  BrowserWindowInterface* app_browser = InstallWebAppFromPageGetBrowser(
       browser(), embedded_https_test_server().GetURL(kMigrateFromInstallUrl));
 
   // This should register the migration:
@@ -101,7 +98,7 @@ IN_PROC_BROWSER_TEST_F(ApplyManifestMigrationCommandBrowserTest,
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   ASSERT_TRUE(WaitForAndApproveMigration(app_browser));
   browser_destroyed_observer.Wait();
-  Browser* new_app_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* new_app_browser = browser_created_observer.Wait();
 
   EXPECT_TRUE(AppBrowserController::IsWebApp(new_app_browser));
 

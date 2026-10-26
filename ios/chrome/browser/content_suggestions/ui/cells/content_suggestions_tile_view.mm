@@ -28,6 +28,10 @@ const CGFloat kCornerRadius = 8.0;
 
 @implementation ContentSuggestionsTileView {
   ContentSuggestionsTileType _type;
+  NSLayoutConstraint* _imageBackgroundWidthConstraint;
+  // Constraint for the spacing between the tile's icon and title for a tile
+  // with type `kAction`.
+  NSLayoutConstraint* _titleSpacingConstraint;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame
@@ -64,21 +68,30 @@ const CGFloat kCornerRadius = 8.0;
       [self addSubview:backgroundView];
       [self addSubview:_imageContainerView];
 
+      _imageBackgroundWidthConstraint = [backgroundView.widthAnchor
+          constraintEqualToConstant:kMagicStackIconSize];
       [NSLayoutConstraint activateConstraints:@[
-        [backgroundView.widthAnchor
-            constraintEqualToConstant:kMagicStackIconSize],
+        _imageBackgroundWidthConstraint,
         [backgroundView.heightAnchor
             constraintEqualToAnchor:backgroundView.widthAnchor],
         [backgroundView.centerXAnchor
-            constraintEqualToAnchor:_titleLabel.centerXAnchor],
+            constraintEqualToAnchor:_titleLabel.centerXAnchor]
       ]];
+
       AddSameCenterConstraints(_imageContainerView, backgroundView);
       UIView* containerView = backgroundView;
 
-      ApplyVisualConstraintsWithMetrics(
-          @[ @"V:|[container]-(space)-[title]|", @"H:|[title]|" ],
-          @{@"container" : containerView, @"title" : _titleLabel},
-          @{@"space" : @(kSpaceIconTitle)});
+      _titleSpacingConstraint = [_titleLabel.topAnchor
+          constraintEqualToAnchor:containerView.bottomAnchor
+                         constant:kSpaceIconTitle];
+      [NSLayoutConstraint activateConstraints:@[
+        [containerView.topAnchor constraintEqualToAnchor:self.topAnchor],
+        [_titleLabel.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+        [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+        [_titleLabel.trailingAnchor
+            constraintEqualToAnchor:self.trailingAnchor],
+        _titleSpacingConstraint,
+      ]];
 
       _imageBackgroundView = backgroundView;
     }
@@ -103,6 +116,19 @@ const CGFloat kCornerRadius = 8.0;
       UIFontTextStyleCaption1,
       self.traitCollection.preferredContentSizeCategory,
       UIContentSizeCategoryAccessibilityLarge);
+}
+
+- (void)setImageBackgroundSize:(CGFloat)size {
+  if (size == _imageBackgroundWidthConstraint.constant) {
+    return;
+  }
+  _imageBackgroundWidthConstraint.constant = size;
+}
+
+- (void)setTitleSpacing:(CGFloat)spacing {
+  if (_type == ContentSuggestionsTileType::kAction) {
+    _titleSpacingConstraint.constant = spacing;
+  }
 }
 
 #pragma mark - UIPointerInteractionDelegate

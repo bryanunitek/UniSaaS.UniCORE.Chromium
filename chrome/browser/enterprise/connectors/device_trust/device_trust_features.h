@@ -23,6 +23,22 @@ BASE_DECLARE_FEATURE(kDTCKeyUploadedBySharedAPIEnabled);
 // Return true if a shared API is used for uploading the public key.
 bool IsDTCKeyUploadedBySharedAPI();
 
+// Controls whether the Device Trust Connector flow is enabled on Android.
+BASE_DECLARE_FEATURE(kDeviceTrustConnectorAndroid);
+
+// Returns true if the Device Trust Connector is enabled on Android. Always
+// returns false on desktop form factors, where it is not supported yet.
+bool IsDeviceTrustConnectorAndroidEnabled();
+
+// Controls whether the Device Trust Connector on Android binds challenge
+// responses to attestation tokens. When disabled, Android challenge responses
+// are left unsigned.
+BASE_DECLARE_FEATURE(kDeviceTrustAndroidAttestationTokens);
+
+// Returns true if attestation tokens are enabled for the Device Trust Connector
+// on Android.
+bool IsDeviceTrustAndroidAttestationTokensEnabled();
+
 }  // namespace enterprise_connectors
 
 #endif  // CHROME_BROWSER_ENTERPRISE_CONNECTORS_DEVICE_TRUST_DEVICE_TRUST_FEATURES_H_

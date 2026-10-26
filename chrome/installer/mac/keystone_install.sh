@@ -22,6 +22,11 @@
 # GOOGLE_CHROME_UPDATER_TEST_ENROLLMENT_PATH
 #   When set to a non-empty value, the installer will search for an enrollment
 #   ticket at this path. Otherwise, the default path will be used.
+# GOOGLE_CHROME_UPDATER_TEST_DUPLICATE_ERR_PATH
+#   When set to a non-empty value, error messages will be appended to the file
+#   at this path in addition to being written to stderr.  This allows tests
+#   that deliberately close the script's stderr to still observe the errors it
+#   reports.
 #
 # Exit codes:
 #  0  Happiness
@@ -38,6 +43,7 @@
 # 12  Deprecated: dirpatcher failed for versioned directory
 # 13  Deprecated: dirpatcher failed for outer .app bundle
 # 14  The update is incompatible with the system (presently unused)
+# 99  Testing configuration could not be used
 #
 # The following exit codes were formerly used and shouldn't be reassigned:
 #  4  Update driven by user ticket when a system ticket is also present
@@ -68,6 +74,8 @@ export -n SHELLOPTS
 set -o pipefail
 shopt -s nullglob
 
+trap '' PIPE
+
 ME="$(basename "${0}")"
 readonly ME
 
@@ -80,6 +88,7 @@ readonly KS_CHANNEL_KEY="KSChannelID"
 : ${GOOGLE_CHROME_UPDATER_DEBUG:=}
 : ${GOOGLE_CHROME_UPDATER_TEST_PATH:=}
 : ${GOOGLE_CHROME_UPDATER_TEST_ENROLLMENT_PATH:=}
+: ${GOOGLE_CHROME_UPDATER_TEST_DUPLICATE_ERR_PATH:=}
 
 err() {
   local error="${1}"
@@ -89,7 +98,13 @@ err() {
     id=": ${$} $(date "+%Y-%m-%d %H:%M:%S %z")"
   fi
 
-  echo "${ME}${id}: ${error}" >& 2
+  local msg="${ME}${id}: ${error}"
+  (echo "${msg}" >&2) || true
+
+  if [[ -n "${GOOGLE_CHROME_UPDATER_TEST_DUPLICATE_ERR_PATH}" ]]; then
+    echo "${msg}" >> "${GOOGLE_CHROME_UPDATER_TEST_DUPLICATE_ERR_PATH}" ||
+        exit 99
+  fi
 }
 
 note() {
@@ -100,39 +115,45 @@ note() {
   fi
 }
 
-g_temp_dir=
-cleanup() {
-  local status=${?}
+readonly exit_signals=("HUP" "INT" "QUIT" "TERM")
+handle_exit() {
+  local status="${?}"
 
-  trap - EXIT
-  trap '' HUP INT QUIT TERM
+  set +e
 
-  if [[ ${status} -ge 128 ]]; then
-    err "Caught signal $((${status} - 128))"
+  trap '' "${exit_signals[@]}"
+
+  if [[ ${status} -gt 128 && ${status} -lt 160 ]]; then
+    local sig=$((status - 128))
+    err "Child exited because of signal ${sig} ($(kill -l "${sig}"))"
   fi
 
-  if [[ -n "${g_temp_dir}" ]]; then
-    rm -rf "${g_temp_dir}"
+  # main() clears this trap immediately before it returns, so reaching this
+  # point at all means the script is terminating before it finished its work.
+  # A zero status here is therefore always wrong, and reporting it would tell
+  # the updater that a half-applied update succeeded. This can occur because
+  # bash 3.2 contains a bug where, under `set -eu`, an EXIT trap observes
+  # `$?` to be 0 when the script aborts due to an undefined variable. Since
+  # bash ignores the return value of traps, this function must explicitly
+  # re-exit with a corrected status code.
+  if [[ ${status} -eq 0 ]]; then
+    err "exiting without completing the update; reporting unknown failure"
+    exit 1
   fi
-
-  exit ${status}
 }
 
-ensure_temp_dir() {
-  if [[ -z "${g_temp_dir}" ]]; then
-    # Choose a template that won't be a dot directory.  Make it safe by
-    # removing leading hyphens, too.
-    local template="${ME}"
-    if [[ "${template}" =~ ^[-.]+(.*)$ ]]; then
-      template="${BASH_REMATCH[1]}"
-    fi
-    if [[ -z "${template}" ]]; then
-      template="keystone_install"
-    fi
+handle_signal() {
+  local signal="${1}"
 
-    g_temp_dir="$(mktemp -d -t "${template}")"
-    note "g_temp_dir = ${g_temp_dir}"
-  fi
+  set +e
+
+  trap - EXIT
+  trap '' "${exit_signals[@]}"
+
+  err "Received signal ${signal}"
+
+  trap - "${signal}"
+  kill -s "${signal}" "${$}"
 }
 
 # Returns 0 (true) if |symlink| exists, is a symbolic link, and appears
@@ -486,8 +507,10 @@ main() {
 
   # Early steps are critical.  Don't continue past any failure.
   set -e
-
-  trap cleanup EXIT HUP INT QUIT TERM
+  trap handle_exit EXIT
+  for exit_signal in "${exit_signals[@]}"; do
+    trap "handle_signal \"${exit_signal}\"" "${exit_signal}"
+  done
 
   readonly APP_DIR_NAMES=( "Google Chrome.app" "Google Chrome Beta.app"
                            "Google Chrome Dev.app" "Google Chrome Canary.app" )
@@ -839,24 +862,40 @@ main() {
   # ${VERSIONS_DIR_NEW} or ${VERSIONS_DIR_OLD} are included to copy their mode
   # bits and timestamps, but their contents are excluded, having already been
   # installed above. The ${VERSIONS_DIR_NEW}/Current symbolic link is updated
-  # or created in this step, however.
+  # or created in this step, however. The top-level Info.plist file is deferred
+  # until after all other copies have succeeded so a version checker will not
+  # regard Chrome as successfully updated when it is broken due to a crash
+  # in the middle of this step.
   note "rsyncing app directory"
-  if ! rsync ${RSYNC_FLAGS} --delete-after \
-       --include="/${VERSIONS_DIR_NEW}/Current" \
-       --exclude="/${VERSIONS_DIR_NEW}/*" --exclude="/${VERSIONS_DIR_OLD}/*" \
-       "${update_app}/" "${installed_app}"; then
-    err "rsync of app directory failed, status ${PIPESTATUS[0]}"
-    exit 8
-  fi
+
+  # Defer "please exit" signals while performing the stage of copying that, if
+  # performed incompletely, prevents Chrome from launching. We would still be
+  # sad to lose the remaining install steps, but it would have less impact
+  # on the user. The OS sends SIGTERM during shutdown, but it follows up with
+  # SIGKILL if the process does not terminate quickly enough, so this script
+  # obeys the "please exit" signals as soon as it is safe to do so.
+  (
+    trap '' "${exit_signals[@]}"
+    if ! rsync ${RSYNC_FLAGS} --delete-after \
+          --include="/${VERSIONS_DIR_NEW}/Current" \
+          --exclude="/${VERSIONS_DIR_NEW}/*" \
+          --exclude="/${VERSIONS_DIR_OLD}/*" \
+          --exclude="/Contents/Info.plist" \
+          "${update_app}/" "${installed_app}"; then
+      err "rsync of app directory failed, status ${PIPESTATUS[0]}"
+      exit 8
+    fi
+
+    note "rsyncing top-level Info.plist"
+    if ! rsync ${RSYNC_FLAGS} \
+          "${update_app}/Contents/Info.plist" \
+          "${installed_app}/Contents" &> /dev/null; then
+      err "rsync of Info.plist failed, status ${PIPESTATUS[0]}"
+      exit 8
+    fi
+  )
 
   note "rsyncs complete"
-
-  if [[ -n "${g_temp_dir}" ]]; then
-    # The temporary directory, if any, is no longer needed.
-    rm -rf "${g_temp_dir}" 2> /dev/null || true
-    g_temp_dir=
-    note "g_temp_dir = ${g_temp_dir}"
-  fi
 
   # If necessary, touch the outermost .app so that it appears to the outside
   # world that something was done to the bundle.  This will cause

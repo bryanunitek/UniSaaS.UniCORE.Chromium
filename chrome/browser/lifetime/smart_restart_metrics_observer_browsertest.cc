@@ -14,9 +14,9 @@
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/upgrade_detector/upgrade_detector.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -92,7 +92,7 @@ IN_PROC_BROWSER_TEST_P(SmartRestartMetricsObserverBrowserTest,
   }
 
   // Close the default browser window the test starts with.
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   // Keep the process and profile alive between windows.
   ScopedKeepAlive keep_alive(KeepAliveOrigin::BROWSER,

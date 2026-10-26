@@ -3,21 +3,21 @@
 // found in the LICENSE file.
 
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
+
 import type {ManagedUserProfileNoticeDisclosureRefreshElement} from './managed_user_profile_notice_disclosure_refresh.js';
 
-export function getHtml(this: ManagedUserProfileNoticeDisclosureRefreshElement) {
+export function getHtml(
+    this: ManagedUserProfileNoticeDisclosureRefreshElement) {
   return html`<!--_html_template_start_-->
 <main>
   <div id="headerContainer">
     ${this.shouldShowAnimations_() ? html`
-      <cr-lottie id="avatarAnimation"
-          animation-url="${this.getAnimationUrl_()}"
-          single-loop
-          ?autoplay="${!this.disableAnimations_}">
+      <cr-lottie id="avatarAnimation" animation-url="${this.getAnimationUrl_()}"
+          single-loop ?autoplay="${!this.disableAnimations_}">
       </cr-lottie>
     ` : ''}
-    <div id="avatarContainer">
-      <img id="avatar" alt="$i18n{avatarAccessibilityLabel}"
+    <div id="avatarContainer" class="avatar-container">
+      <img id="avatar" class="avatar" alt="$i18n{avatarAccessibilityLabel}"
           src="${this.pictureUrl}">
       ${this.showEnterpriseBadge ? html`
         <div class="work-badge">
@@ -28,18 +28,22 @@ export function getHtml(this: ManagedUserProfileNoticeDisclosureRefreshElement) 
       ` : ''}
     </div>
   </div>
-  <div id="textContainer">
+  <div id="textContainer" class="text-container">
     <h1 id="title" class="title" tabindex="-1">${this.title}</h1>
     <p id="subtitle" class="subtitle">${this.subtitle}</p>
   </div>
   <div class="disclaimer-container">
     <section class="disclaimer">
-      <cr-icon class="icon" icon="signin:person-outline"></cr-icon>
+      <cr-icon class="icon"
+          icon="${this.webuiRoundedIconsEnabled_ ?
+              'signin:person' :
+              'signin:person-outline-old'}">
+      </cr-icon>
       <h2>$i18n{profileInformationTitle}</h2>
       <p>$i18n{profileInformationDetails}</p>
     </section>
     <section class="disclaimer">
-      <cr-icon class="icon" icon="cr:phonelink"></cr-icon>
+      <cr-icon class="icon" icon="cr:devices"></cr-icon>
       <h2>$i18n{deviceInformationTitle}</h2>
       <p>$i18n{deviceInformationDetails}</p>
     </section>

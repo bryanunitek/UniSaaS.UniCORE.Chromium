@@ -30,6 +30,7 @@
 #include <iosfwd>
 
 #include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_selector_list.h"
 #include "third_party/blink/renderer/core/dom/element.h"
@@ -201,7 +202,13 @@ class CORE_EXPORT SelectorQuery : public GarbageCollected<SelectorQuery> {
                                                // attr_case_insensitive.
     bool legacy_case_insensitive;  // Used to calculate attr_case_insensitive.
 
-    unsigned nth_child = 0;  // If 0, no :nth-child() will be tested.
+    // Represents a plain :nth-child(An + B) (or an equivalent such as
+    // :first-child) that must be tested against the element's 1-based sibling
+    // index. If has_nth_child is false, no :nth-child() will be tested; when it
+    // is true, nth_a and nth_b hold the A and B coefficients respectively.
+    bool has_nth_child = false;
+    int nth_a = 0;
+    int nth_b = 0;
 
     // Used to quickly reject large parse of the tree; if an element
     // doesn't contain this in its subtree Bloom filter, we can stop
@@ -279,9 +286,12 @@ class CORE_EXPORT SelectorQuery : public GarbageCollected<SelectorQuery> {
     //
     // We do not store an explicit edge for (sibling, mismatch), since it's
     // always the same compound.
-    const Compound* next_compound_for_children_on_match = nullptr;
-    const Compound* next_compound_for_siblings_on_match = nullptr;
-    const Compound* next_compound_for_children_on_mismatch = nullptr;
+    raw_ptr<const Compound, UnprotectedInRelease | DanglingUntriaged>
+        next_compound_for_children_on_match = nullptr;
+    raw_ptr<const Compound, UnprotectedInRelease | DanglingUntriaged>
+        next_compound_for_siblings_on_match = nullptr;
+    raw_ptr<const Compound, UnprotectedInRelease | DanglingUntriaged>
+        next_compound_for_children_on_mismatch = nullptr;
   };
 
   // See if we have compounds above our root that we must skip;

@@ -19,6 +19,12 @@
 namespace blink {
 class LayoutObject;
 
+enum class LineClampFloatState {
+  kShow,
+  kHide,
+  kClip,
+};
+
 struct LineClampData {
   DISALLOW_NEW();
 
@@ -28,7 +34,7 @@ struct LineClampData {
 
   CORE_EXPORT LineClampData& operator=(const LineClampData&);
 
-  enum State {
+  enum class State : uint8_t {
     kDisabled,
 
     // Clamps after a given number of lines.
@@ -52,22 +58,24 @@ struct LineClampData {
     kClampByLinesWithBfcOffset,
   };
 
-  bool IsLineClampContext() const { return state != kDisabled; }
+  bool IsLineClampContext() const { return state != State::kDisabled; }
 
   // Returns true if we're clamping after a given number of lines.
   bool IsClampByLines() const {
-    return state == kClampByLines || state == kClampByLinesWithBfcOffset;
+    return state == State::kClampByLines ||
+           state == State::kClampByLinesWithBfcOffset;
   }
 
   // Returns true if we're measuring the BFC offset to relayout there.
   bool IsMeasureUntilBfcOffset() const {
-    return state == kMeasureLinesUntilBfcOffset ||
-           state == kClampByLinesWithBfcOffset;
+    return state == State::kMeasureLinesUntilBfcOffset ||
+           state == State::kClampByLinesWithBfcOffset;
   }
 
   // Returns true if we're counting the number of lines in this box upwards.
   bool IsCountLines() const {
-    return state == kMeasureLinesUntilBfcOffset || state == kCountLines;
+    return state == State::kMeasureLinesUntilBfcOffset ||
+           state == State::kCountLines;
   }
 
   // If we're clamping by lines, returns the number of lines until clamp.
@@ -88,8 +96,20 @@ struct LineClampData {
     return IsClampByLines() && lines_until_clamp <= 0;
   }
 
-  bool ShouldHideForPaint() const {
+  bool IsHidden() const {
     return RuntimeEnabledFeatures::CSSLineClampEnabled() && IsPastClampPoint();
+  }
+
+  // Floats inside a line-clamp container can be hidden, or they can be clipped
+  // to the container's bottom-end content edge.
+  LineClampFloatState FloatState() const {
+    if (IsHidden()) {
+      return LineClampFloatState::kHide;
+    }
+    if (RuntimeEnabledFeatures::CSSLineClampEnabled() && IsLineClampContext()) {
+      return LineClampFloatState::kClip;
+    }
+    return LineClampFloatState::kShow;
   }
 
   bool operator==(const LineClampData& other) const {
@@ -97,13 +117,13 @@ struct LineClampData {
       return false;
     }
     switch (state) {
-      case kClampByLines:
-      case kCountLines:
+      case State::kClampByLines:
+      case State::kCountLines:
         return lines_until_clamp == other.lines_until_clamp;
-      case kClampAfterLayoutObject:
+      case State::kClampAfterLayoutObject:
         return clamp_after_layout_object == other.clamp_after_layout_object;
-      case kMeasureLinesUntilBfcOffset:
-      case kClampByLinesWithBfcOffset:
+      case State::kMeasureLinesUntilBfcOffset:
+      case State::kClampByLinesWithBfcOffset:
         return lines_until_clamp == other.lines_until_clamp &&
                clamp_bfc_offset == other.clamp_bfc_offset;
       default:
@@ -136,7 +156,7 @@ struct LineClampData {
   // Only valid when `state == kClampAfterLayoutObject`.
   UntracedMember<const LayoutObject> clamp_after_layout_object;
 
-  State state = kDisabled;
+  State state = State::kDisabled;
 
   // When the `CSSLineClamp` runtime flag is disabled, whether to ellipsize the
   // line before clamp. When that flag is enabled, use the `block-ellipsis`
@@ -151,13 +171,6 @@ struct LineClampData {
 // represents the data for the line-clamp container. Otherwise, it represents
 // the data for one of its descendent block boxes, and `parent` points to its
 // parent's data.
-//
-// An instance of this class might be created when the corresponding block box's
-// BFC offset hasn't been resolved yet. To deal with this, the `bfc_offset`
-// field is mutable. If the BFC offset isn't known, calling `ResolveBfcOffset`
-// will update that field with the resolved value for this node and its
-// ancestors in the chain. (If it *is* known, calling `ResolveBfcOffset` will
-// DCHECK that the passed offset is correct.)
 class CORE_EXPORT LineClampAncestorChain final
     : public GarbageCollected<LineClampAncestorChain> {
  public:
@@ -166,7 +179,7 @@ class CORE_EXPORT LineClampAncestorChain final
         end_border_padding_(end_border_padding),
         block_min_max_sizes_(
             {.min_size = LayoutUnit(), .max_size = LayoutUnit::Max()}) {}
-  LineClampAncestorChain(std::optional<LayoutUnit> bfc_offset,
+  LineClampAncestorChain(LayoutUnit bfc_offset,
                          LayoutUnit end_border_padding,
                          LayoutUnit end_margin,
                          MinMaxSizes block_size_constraints,
@@ -179,29 +192,11 @@ class CORE_EXPORT LineClampAncestorChain final
     DCHECK(parent);
   }
 
-  bool HasBfcOffset() const { return bfc_offset_.has_value(); }
-
-  const LineClampAncestorChain* WithResolvedBfcOffset(
-      LayoutUnit new_bfc_offset) const {
-    if (bfc_offset_.has_value()) {
-      DCHECK_EQ(*bfc_offset_, new_bfc_offset);
-      return this;
-    } else {
-      return MakeGarbageCollected<LineClampAncestorChain>(
-          new_bfc_offset, end_border_padding_, end_margin_,
-          block_min_max_sizes_, parent_);
-    }
-  }
-
   // Computes the block size that the line-clamp container would have for a
   // clamp point directly contained in the block box corresponding to this node,
   // with the passed inflow block offset and margin strut.
   LayoutUnit FinalLineClampBlockSize(LayoutUnit inflow_block_offset,
-                                     MarginStrut margin_strut) const {
-    DCHECK(bfc_offset_);
-    return InnerFinalLineClampBlockSize(*bfc_offset_, inflow_block_offset,
-                                        margin_strut);
-  }
+                                     MarginStrut margin_strut) const;
 
   void Trace(Visitor*) const;
 
@@ -212,11 +207,8 @@ class CORE_EXPORT LineClampAncestorChain final
   }
 
  private:
-  LayoutUnit InnerFinalLineClampBlockSize(LayoutUnit bfc_offset_override,
-                                          LayoutUnit inflow_block_offset,
-                                          MarginStrut margin_strut) const;
-
-  const std::optional<LayoutUnit> bfc_offset_;
+  // The BFC offset might be optimistic, but we'll relayout if it's wrong.
+  const LayoutUnit bfc_offset_;
   const LayoutUnit end_border_padding_;
   const LayoutUnit end_margin_;
   const MinMaxSizes block_min_max_sizes_;

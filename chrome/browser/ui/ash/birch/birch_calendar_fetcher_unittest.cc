@@ -19,6 +19,7 @@
 #include "google_apis/common/test_util.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/test/test_shared_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -46,7 +47,9 @@ class BirchCalendarFetcherTest : public testing::Test {
     ASSERT_TRUE(test_server_.Start());
 
     profile_ = std::make_unique<TestingProfile>();
-    fetcher_ = std::make_unique<BirchCalendarFetcher>(profile_.get());
+    fetcher_ = std::make_unique<BirchCalendarFetcher>(
+        profile_->GetURLLoaderFactory(),
+        IdentityManagerFactory::GetForProfile(profile_.get()));
 
     // Configure the fetcher to use the test server.
     fetcher_->SetSenderForTest(MakeRequestSender());

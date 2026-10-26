@@ -26,6 +26,7 @@
 #include "chrome/browser/web_applications/isolated_web_apps/commands/install_isolated_web_app_command.h"
 #include "chrome/browser/web_applications/isolated_web_apps/install/isolated_web_app_install_source.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
+#include "chrome/browser/web_applications/model/iwa_update_info.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test.h"
@@ -44,7 +45,6 @@
 #include "content/public/common/content_features.h"
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
-#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -84,6 +84,7 @@ class FakeWebAppCommandScheduler : public WebAppCommandScheduler {
       std::unique_ptr<ScopedKeepAlive> keep_alive,
       std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive,
       WebAppCommandScheduler::InstallIsolatedWebAppCallback callback,
+      std::optional<IwaUpdateInfo> optional_update_info,
       const base::Location& call_location) override {
     // This test is only interested in IsolatedWebAppDevInstallManager
     // behavior, so stub out the install command to avoid needing to
@@ -162,7 +163,6 @@ class IsolatedWebAppDevInstallManagerTest : public WebAppTest {
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
-  data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
 };
 
 TEST_F(IsolatedWebAppDevInstallManagerTest, NoInstallationWhenFeatureDisabled) {

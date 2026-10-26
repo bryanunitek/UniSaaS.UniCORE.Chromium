@@ -8,8 +8,7 @@
 
 #import "base/check.h"
 #import "base/strings/sys_string_conversions.h"
-#import "components/autofill/core/browser/autofill_type.h"
-#import "ios/chrome/browser/autofill/model/message/save_card_message_with_links.h"
+#import "ios/chrome/browser/autofill/model/message/autofill_legal_message_line.h"
 #import "ios/chrome/browser/autofill/ui_bundled/autofill_credit_card_ui_type.h"
 #import "ios/chrome/browser/autofill/ui_bundled/autofill_credit_card_ui_type_util.h"
 #import "ios/chrome/browser/net/model/crurl.h"
@@ -152,7 +151,7 @@
 }
 
 + (UITextView*)createTextViewForLegalMessage:
-    (SaveCardMessageWithLinks*)legalMessage {
+    (AutofillLegalMessageLine*)legalMessage {
   UITextView* textView = CreateUITextViewWithTextKit1();
   textView.scrollEnabled = NO;
   textView.editable = NO;
@@ -177,8 +176,7 @@
     autofillCreditCardUIType:(AutofillCreditCardUIType)autofillCreditCardUIType
                     appLocal:(const std::string&)appLocal {
   creditCard->SetInfo(
-      autofill::AutofillType(
-          AutofillTypeFromAutofillUITypeForCard(autofillCreditCardUIType)),
+      AutofillTypeFromAutofillUITypeForCard(autofillCreditCardUIType),
       base::SysNSStringToUTF16(cardValue), appLocal);
 }
 

@@ -29,10 +29,9 @@
 #include "chrome/browser/ash/policy/core/device_cloud_policy_store_ash.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/login/user_adding_screen.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/webui_url_constants.h"
@@ -563,7 +562,7 @@ class SystemTrayClientShowVideoConferenceTest
     ASSERT_TRUE(browser_);
   }
 
-  raw_ptr<Browser, DanglingUntriaged> browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface, DanglingUntriaged> browser_ = nullptr;
 };
 
 IN_PROC_BROWSER_TEST_F(SystemTrayClientShowVideoConferenceTest,
@@ -575,7 +574,7 @@ IN_PROC_BROWSER_TEST_F(SystemTrayClientShowVideoConferenceTest,
 
   EXPECT_EQ(
       GURL(kVideoConferenceUrl),
-      browser_->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+      browser_->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL());
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -589,7 +588,7 @@ IN_PROC_BROWSER_TEST_F(
 
   EXPECT_EQ(
       GURL(kVideoConferenceUrl),
-      browser_->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+      browser_->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL());
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -609,7 +608,7 @@ IN_PROC_BROWSER_TEST_F(
   // Expect the url not to have opened in the browser.
   EXPECT_NE(
       GURL(kVideoConferenceUrl),
-      browser_->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+      browser_->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL());
 }
 
 IN_PROC_BROWSER_TEST_F(SystemTrayClientShowVideoConferenceTest,
@@ -621,7 +620,7 @@ IN_PROC_BROWSER_TEST_F(SystemTrayClientShowVideoConferenceTest,
 
   EXPECT_EQ(
       GURL(kVideoConferenceUrl),
-      browser_->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+      browser_->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL());
 }
 
 IN_PROC_BROWSER_TEST_F(SystemTrayClientShowVideoConferenceTest,
@@ -634,7 +633,7 @@ IN_PROC_BROWSER_TEST_F(SystemTrayClientShowVideoConferenceTest,
   // The active tab should NOT be the privileged URL.
   EXPECT_NE(
       kPrivilegedUrl,
-      browser_->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+      browser_->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL());
 }
 
 class SystemTrayClientShowChannelInfoGiveFeedbackTest

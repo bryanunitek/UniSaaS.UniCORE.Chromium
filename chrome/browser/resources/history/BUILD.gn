@@ -4,6 +4,9 @@
 
 import("//extensions/buildflags/buildflags.gni")
 import("//ui/webui/resources/tools/build_webui.gni")
+import("//ui/webui/webui_features.gni")
+
+assert(enable_webui_history)
 
 build_webui("build") {
   grd_prefix = "history"
@@ -17,6 +20,7 @@ build_webui("build") {
     "images/history_embeddings_promo.svg",
     "images/history_embeddings_promo_dark.svg",
     "images/list.svg",
+    "images/list_old.svg",
     "images/sign_in_promo.svg",
     "images/sign_in_promo_dark.svg",
     "images/sync_history_promo.svg",
@@ -28,7 +32,6 @@ build_webui("build") {
     "app.ts",
     "browser_proxy.ts",
     "constants.ts",
-    "externs.ts",
     "history_filter_chips.html.ts",
     "history_filter_chips.ts",
     "history.ts",

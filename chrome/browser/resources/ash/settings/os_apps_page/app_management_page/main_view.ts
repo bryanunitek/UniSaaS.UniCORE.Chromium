@@ -18,7 +18,7 @@ import type {AppMap} from '../../common/app_management/store.js';
 import {AppManagementStore} from '../../common/app_management/store.js';
 import {AppManagementStoreMixin} from '../../common/app_management/store_mixin.js';
 import {RouteObserverMixin} from '../../common/route_observer_mixin.js';
-import type {Route} from '../../router.js';
+import type {Route} from '../../os_settings_routes.js';
 import {routes} from '../../router.js';
 
 import {getTemplate} from './main_view.html.js';
@@ -54,9 +54,9 @@ export class AppManagementMainViewElement extends
     };
   }
 
-  searchTerm: string;
-  private appList_: App[];
-  private apps_: AppMap|undefined;
+  declare searchTerm: string;
+  declare private appList_: App[];
+  declare private apps_: AppMap|undefined;
 
   override connectedCallback(): void {
     super.connectedCallback();

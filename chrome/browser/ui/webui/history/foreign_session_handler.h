@@ -14,7 +14,6 @@
 #include "base/gtest_prod_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/browser/sessions/session_service.h"
 #include "components/sync_sessions/open_tabs_ui_delegate.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -25,7 +24,8 @@
 
 namespace sessions {
 struct SessionTab;
-}
+struct SessionWindow;
+}  // namespace sessions
 
 namespace content {
 class WebContents;
@@ -35,8 +35,8 @@ namespace user_prefs {
 class PrefRegistrySyncable;
 }
 
+class Profile;
 class TabsFromOtherDevicesSidePanelUI;
-
 namespace browser_sync {
 
 // Keep in sync with //chrome/browser/resources/history/constants.js.
@@ -77,7 +77,7 @@ class ForeignSessionHandler : public history::mojom::ForeignSessionPageHandler {
       content::WebContents* web_contents,
       RestoreForeignSessionTabCallback restore_tab_callback,
       RestoreForeignSessionWindowsCallback restore_windows_callback,
-      TabsFromOtherDevicesSidePanelUI* side_panel_ui);
+      TabsFromOtherDevicesSidePanelUI* side_panel_ui = nullptr);
 
   ForeignSessionHandler(const ForeignSessionHandler&) = delete;
   ForeignSessionHandler& operator=(const ForeignSessionHandler&) = delete;

@@ -26,10 +26,7 @@ static_library("public") {
     "types.h",
   ]
 
-  public_deps = [
-    "//chrome/browser:browser_public_dependencies",
-    "//chrome/browser/extensions/api/terminal:startup_status",
-  ]
+  public_deps = [ "//chrome/browser/extensions/api/terminal:startup_status" ]
 
   deps = [
     "//base",
@@ -44,14 +41,13 @@ static_library("public") {
     "//chromeos/ash/components/dbus/concierge",
     "//chromeos/ash/components/dbus/concierge:concierge_proto",
     "//chromeos/ash/components/disks",
+    "//chromeos/ash/components/trash_service/public/cpp",
     "//components/exo",
     "//components/exo/server",
     "//components/keyed_service/core",
     "//content/public/browser",
     "//storage/browser",
   ]
-
-  allow_circular_includes_from = [ "//chrome/browser/ash/borealis" ]
 }
 
 source_set("unit_tests") {
@@ -73,6 +69,7 @@ source_set("unit_tests") {
     "//chrome/browser/ash/guest_os:test_support",
     "//chrome/test:test_support",
     "//chrome/test:test_support_unit",
+    "//chrome/test/base:testing_browser_process",
     "//chromeos/ash/components/dbus:vm_wl_proto",
     "//chromeos/ash/components/dbus/cros_disks",
     "//chromeos/ash/components/disks",

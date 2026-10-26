@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include "base/check.h"
 #include "base/run_loop.h"
 #include "testing/libfuzzer/proto/lpm_interface.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
@@ -18,6 +19,7 @@
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/modules/webcodecs/encoded_audio_chunk.h"
 #include "third_party/blink/renderer/modules/webcodecs/fuzzer_inputs.pb.h"
+#include "third_party/blink/renderer/modules/webcodecs/fuzzer_inputs_fuzzable.pb.h"
 #include "third_party/blink/renderer/modules/webcodecs/fuzzer_utils.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
@@ -30,7 +32,16 @@
 namespace blink {
 
 DEFINE_TEXT_PROTO_FUZZER(
-    const wc_fuzzer::AudioDecoderApiInvocationSequence& proto) {
+    const fuzzable::wc_fuzzer::AudioDecoderApiInvocationSequence&
+        fuzzable_proto) {
+  std::string serialized;
+  CHECK(fuzzable_proto.SerializeToString(&serialized));
+  wc_fuzzer::AudioDecoderApiInvocationSequence proto;
+  // Recursion limits can cause parsing to fail.
+  if (!proto.ParseFromString(serialized)) {
+    return;
+  }
+
   if (proto.invocations().size() > kMaxFuzzerProtoLength) {
     return;
   }
@@ -94,7 +105,7 @@ DEFINE_TEXT_PROTO_FUZZER(
         case wc_fuzzer::AudioDecoderApiInvocation::kFlush: {
           // TODO(https://crbug.com/1119253): Fuzz whether to await resolution
           // of the flush promise.
-          audio_decoder->flush(IGNORE_EXCEPTION_FOR_TESTING);
+          audio_decoder->flush(script_state, IGNORE_EXCEPTION_FOR_TESTING);
           break;
         }
         case wc_fuzzer::AudioDecoderApiInvocation::kReset:

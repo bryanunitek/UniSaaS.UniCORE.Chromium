@@ -4,10 +4,15 @@
 
 package org.chromium.ui.base;
 
+import android.app.jank.AppJankStats;
+import android.app.jank.RelativeFrameTimeHistogram;
 import android.content.ClipData;
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Process;
+import android.text.TextUtils;
 import android.util.SparseArray;
 import android.view.MotionEvent;
 import android.view.PointerIcon;
@@ -22,6 +27,7 @@ import android.view.inputmethod.InputConnection;
 import androidx.annotation.CallSuper;
 import androidx.annotation.VisibleForTesting;
 import androidx.core.view.MarginLayoutParamsCompat;
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
@@ -567,11 +573,17 @@ public class ViewAndroidDelegate {
     private void requestUnbufferedDispatch(MotionEvent event) {
         ViewGroup container = getContainerViewGroup();
         if (container != null) {
-            for (int i = 0; i < event.getPointerCount(); i++) {
-                // This is a workaround for crbug.com/1064161.
-                // TODO(smaier) remove this if LG fixes the stylus bug.
-                if (event.getToolType(i) == MotionEvent.TOOL_TYPE_STYLUS) {
-                    return;
+            // This is a workaround for crbug.com/1064161.
+            // It's difficult to tell exactly which devices, and on which builds of Android, had
+            // this bug. So, we are restricting down to only the exact class of devices we know we
+            // saw this problem on.
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R
+                    && ("lge".equalsIgnoreCase(Build.MANUFACTURER)
+                            || "lg".equalsIgnoreCase(Build.MANUFACTURER))) {
+                for (int i = 0; i < event.getPointerCount(); i++) {
+                    if (event.getToolType(i) == MotionEvent.TOOL_TYPE_STYLUS) {
+                        return;
+                    }
                 }
             }
             container.requestUnbufferedDispatch(event);
@@ -594,6 +606,41 @@ public class ViewAndroidDelegate {
     private void setTooltipText(@JniType("std::u16string") String text) {
         View container = getContainerView();
         if (container != null) container.setTooltipText(text);
+    }
+
+    @CalledByNative
+    private void setTooltipFromKeyboard(
+            @JniType("std::u16string") String text,
+            int unusedX,
+            int unusedY,
+            int unusedWidth,
+            int unusedHeight) {
+        // Exit early in case of empty or null tooltip Strings.
+        if (TextUtils.isEmpty(text) || text.trim().isEmpty()) {
+            clearTooltipFromKeyboard();
+            return;
+        }
+
+        // Bounds are unused because Android system API has no way to provide them to accessibility
+        // APIs
+        View container = getContainerView();
+        if (container == null) return;
+
+        // Forward to Android system-default accessibility handler.
+        container.setTooltipText(text);
+        container.performAccessibilityAction(
+                AccessibilityActionCompat.ACTION_SHOW_TOOLTIP.getId(), null);
+    }
+
+    @CalledByNative
+    private void clearTooltipFromKeyboard() {
+        View container = getContainerView();
+        if (container == null) return;
+
+        // Forward to Android system-default accessibility handler.
+        container.setTooltipText("");
+        container.performAccessibilityAction(
+                AccessibilityActionCompat.ACTION_HIDE_TOOLTIP.getId(), null);
     }
 
     /**
@@ -669,5 +716,23 @@ public class ViewAndroidDelegate {
     private static @Nullable View getView(long nativeScopedAnchorViewPtr) {
         WeakReference<View> viewRef = sNativeViewMap.get(nativeScopedAnchorViewPtr);
         return viewRef == null ? null : viewRef.get();
+    }
+
+    @CalledByNative
+    private void reportScrollJankStats(long totalFrames, long jankyFrames) {
+        View view = getContainerView();
+        if (view == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA) {
+            return;
+        }
+        view.reportAppJankStats(
+                new AppJankStats(
+                        Process.myUid(),
+                        /* widgetId= */ "chromium_web_contents",
+                        /* navigationComponent= */ null,
+                        AppJankStats.WIDGET_CATEGORY_SCROLL,
+                        AppJankStats.WIDGET_STATE_SCROLLING,
+                        totalFrames,
+                        jankyFrames,
+                        new RelativeFrameTimeHistogram()));
     }
 }

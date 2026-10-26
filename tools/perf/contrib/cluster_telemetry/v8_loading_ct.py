@@ -6,7 +6,6 @@ from contrib.cluster_telemetry import loading_base_ct
 from telemetry.web_perf import timeline_based_measurement
 
 
-# pylint: disable=protected-access
 class V8LoadingClusterTelemetry(loading_base_ct._LoadingBaseClusterTelemetry):
   @classmethod
   def Name(cls):
@@ -14,6 +13,7 @@ class V8LoadingClusterTelemetry(loading_base_ct._LoadingBaseClusterTelemetry):
 
   def CreateCoreTimelineBasedMeasurementOptions(self):
     options = timeline_based_measurement.Options()
-    v8_helper.AugmentOptionsForV8Metrics(options,
-                                         enable_runtime_call_stats=False)
+    v8_helper.AugmentOptionsForV8Metrics(
+      options, enable_runtime_call_stats=False
+    )
     return options

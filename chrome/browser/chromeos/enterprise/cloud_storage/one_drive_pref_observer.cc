@@ -18,8 +18,7 @@
 #include "chrome/browser/chromeos/upload_office_to_cloud/upload_office_to_cloud.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_selections.h"
-#include "chrome/common/extensions/api/odfs_config_private.h"
-#include "chromeos/constants/chromeos_features.h"
+#include "chromeos/ash/experiences/extensions/common/api/odfs_config_private.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/services/app_service/public/cpp/app_types.h"
@@ -178,9 +177,6 @@ OneDrivePrefObserverFactory::OneDrivePrefObserverFactory()
           "OneDrivePrefObserverFactory",
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kOriginalOnly)
-              // TODO(crbug.com/41488885): Check if this service is needed for
-              // Ash Internals.
-              .WithAshInternals(ProfileSelection::kOriginalOnly)
               .Build()) {
   DependsOn(extensions::ExtensionRegistryFactory::GetInstance());
   DependsOn(extensions::EventRouterFactory::GetInstance());
@@ -193,11 +189,6 @@ OneDrivePrefObserverFactory::~OneDrivePrefObserverFactory() = default;
 std::unique_ptr<KeyedService>
 OneDrivePrefObserverFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  if (!features::IsUploadOfficeToCloudEnabled() ||
-      !features::IsMicrosoftOneDriveIntegrationForEnterpriseEnabled()) {
-    return nullptr;
-  }
-
   Profile* profile = Profile::FromBrowserContext(context);
   return OneDrivePrefObserver::Create(profile);
 }
@@ -215,12 +206,13 @@ void OneDrivePrefObserver::BroadcastModeChanged(Mount mode) {
   MountInfo metadata;
   metadata.mode = mode;
 
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>(
+      extensions::api::odfs_config_private::OnMountChanged::Create(
+          std::move(metadata)));
   auto event = std::make_unique<extensions::Event>(
       extensions::events::ODFS_CONFIG_PRIVATE_MOUNT_CHANGED,
       extensions::api::odfs_config_private::OnMountChanged::kEventName,
-      extensions::api::odfs_config_private::OnMountChanged::Create(
-          std::move(metadata)),
-      profile_);
+      std::move(event_args), profile_);
 
   event_router_->BroadcastEvent(std::move(event));
 }
@@ -242,13 +234,14 @@ void OneDrivePrefObserver::BroadcastAccountRestrictionsChanged(
   AccountRestrictionsInfo event_data;
   event_data.restrictions = std::move(restrictions_vector);
 
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>(
+      extensions::api::odfs_config_private::OnAccountRestrictionsChanged::
+          Create(event_data));
   auto event = std::make_unique<extensions::Event>(
       extensions::events::ODFS_CONFIG_PRIVATE_ACCOUNT_RESTRICTIONS_CHANGED,
       extensions::api::odfs_config_private::OnAccountRestrictionsChanged::
           kEventName,
-      extensions::api::odfs_config_private::OnAccountRestrictionsChanged::
-          Create(event_data),
-      profile_);
+      std::move(event_args), profile_);
 
   event_router_->BroadcastEvent(std::move(event));
 }

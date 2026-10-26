@@ -31,6 +31,7 @@ class UrlCheckerDelegate;
 
 class RealTimeUrlLookupServiceBase;
 class HashRealTimeService;
+class V5GetHashProtocolManager;
 
 // UrlCheckerHolder handles calling methods on SafeBrowsingUrlCheckerImpl.
 class UrlCheckerHolder final {
@@ -86,7 +87,9 @@ class UrlCheckerHolder final {
       bool is_async_check,
       bool check_allowlist_before_hash_database,
       SessionID tab_id,
-      std::optional<internal::ReferringAppInfo> referring_app_info);
+      std::optional<internal::ReferringAppInfo> referring_app_info,
+      base::WeakPtr<V5GetHashProtocolManager> v5_get_hash_protocol_manager,
+      bool prioritize_navigation_callbacks);
 
   ~UrlCheckerHolder();
 
@@ -152,6 +155,10 @@ class UrlCheckerHolder final {
   bool check_allowlist_before_hash_database_ = false;
   SessionID tab_id_;
   std::optional<internal::ReferringAppInfo> referring_app_info_;
+  base::WeakPtr<V5GetHashProtocolManager> v5_get_hash_protocol_manager_;
+  // Whether callbacks for this checker should run on the high-priority
+  // `kNavigationNetworkResponse` UI task runner.
+  bool prioritize_navigation_callbacks_ = false;
   base::WeakPtrFactory<UrlCheckerHolder> weak_factory_{this};
 };
 

@@ -9,7 +9,6 @@
 #include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/apps/icon_standardizer.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/web_apps/web_app_install_flow_dialog_delegate.h"
 #include "chrome/browser/web_applications/icons/icon_masker.h"
@@ -17,6 +16,7 @@
 #include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/url_formatter/elide_url.h"
+#include "components/vector_icons/vector_icons.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -25,6 +25,7 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/image/icon_standardizer.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_operations.h"
@@ -76,7 +77,7 @@ gfx::ImageSkia GetStandardizedIcon(const gfx::ImageSkia& image,
     return image;
   }
   image.EnsureRepsForSupportedScales();
-  return apps::CreateStandardIconImage(image);
+  return gfx::CreateStandardAppIconImage(image);
 }
 
 gfx::ImageSkia ApplyShadowToIcon(const gfx::ImageSkia& image) {
@@ -189,7 +190,7 @@ WebAppInstallOptionsView::WebAppInstallOptionsView(OptionsData options_data) {
                   views::Builder<views::ImageView>()
                       .SetImage(ui::ImageModel::FromVectorIcon(
                           features::IsRoundedIconsEnabled()
-                              ? kArrowForwardIcon
+                              ? vector_icons::kArrowForwardIcon
                               : kArrowForwardOldIcon,
                           ui::kColorIcon))
                       .SetPreferredSize(

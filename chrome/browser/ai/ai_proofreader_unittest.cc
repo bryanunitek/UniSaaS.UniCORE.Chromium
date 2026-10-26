@@ -19,10 +19,10 @@
 #include "chrome/browser/ai/ai_test_utils.h"
 #include "chrome/browser/ai/features.h"
 #include "chrome/browser/optimization_guide/mock_optimization_guide_keyed_service.h"
+#include "components/optimization_guide/core/model_execution/configs/substitution_builder.h"
+#include "components/optimization_guide/core/model_execution/test/feature_config_builder.h"
 #include "components/optimization_guide/core/model_execution/test/mock_on_device_capability.h"
-#include "components/optimization_guide/core/model_execution/test/substitution_builder.h"
 #include "components/optimization_guide/core/optimization_guide_proto_util.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/optimization_guide/proto/features/proofreader_api.pb.h"
 #include "components/optimization_guide/proto/string_value.pb.h"
@@ -37,13 +37,14 @@
 
 namespace {
 
+namespace proto = ::optimization_guide::proto;
+
 using ::base::test::ErrorIs;
 using ::base::test::TestFuture;
 using ::blink::mojom::AILanguageCode;
 using ::blink::mojom::AILanguageCodePtr;
 using ::on_device_model::mojom::PerformanceClass;
 using ::optimization_guide::FieldSubstitution;
-using ::optimization_guide::ForbidUnsafe;
 using ::optimization_guide::ProtoField;
 using ::optimization_guide::StringValueField;
 using ::optimization_guide::proto::ProofreaderApiRequest;
@@ -73,8 +74,9 @@ class TestCreateProofreaderClient
     return receiver_.BindNewPipeAndPassRemote();
   }
 
-  void OnResult(
-      mojo::PendingRemote<::blink::mojom::AIProofreader> proofreader) override {
+  void OnResult(mojo::PendingRemote<::blink::mojom::AIProofreader> proofreader,
+                uint64_t context_window) override {
+    context_window_ = context_window;
     result_.SetValue(std::move(proofreader));
   }
 
@@ -84,9 +86,11 @@ class TestCreateProofreaderClient
   }
 
   TestFuture<CreateProofreaderResult>& result() { return result_; }
+  uint64_t context_window() const { return context_window_; }
 
  private:
   TestFuture<CreateProofreaderResult> result_;
+  uint64_t context_window_ = 0;
   mojo::Receiver<blink::mojom::AIManagerCreateProofreaderClient> receiver_{
       this};
 };
@@ -99,31 +103,6 @@ blink::mojom::AIProofreaderCreateOptionsPtr GetDefaultOptions() {
       /*expected_input_languages=*/std::vector<AILanguageCodePtr>());
 }
 
-optimization_guide::proto::FeatureTextSafetyConfiguration CreateSafetyConfig() {
-  optimization_guide::proto::FeatureTextSafetyConfiguration safety_config;
-  safety_config.set_feature(
-      optimization_guide::proto::MODEL_EXECUTION_FEATURE_PROOFREADER_API);
-  safety_config.mutable_safety_category_thresholds()->Add(ForbidUnsafe());
-
-  {
-    auto* check = safety_config.add_request_check();
-    check->mutable_input_template()->Add(FieldSubstitution(
-        "%s", ProtoField({ProofreaderApiRequest::kTextFieldNumber})));
-  }
-  {
-    auto* check = safety_config.add_request_check();
-    check->mutable_input_template()->Add(FieldSubstitution(
-        "%s", ProtoField({ProofreaderApiRequest::kCorrectedTextFieldNumber})));
-  }
-  {
-    auto* check = safety_config.add_request_check();
-    check->mutable_input_template()->Add(FieldSubstitution(
-        "%s", ProtoField({ProofreaderApiRequest::kCorrectionFieldNumber})));
-  }
-
-  return safety_config;
-}
-
 class AIProofreaderTest : public AITestUtils::AITestBase {
  public:
   AIProofreaderTest() {
@@ -132,15 +111,15 @@ class AIProofreaderTest : public AITestUtils::AITestBase {
   }
 
  protected:
-  optimization_guide::proto::OnDeviceModelExecutionFeatureConfig CreateConfig()
-      override {
-    optimization_guide::proto::OnDeviceModelExecutionFeatureConfig config;
-    config.set_can_skip_text_safety(true);
-    config.set_feature(optimization_guide::proto::ModelExecutionFeature::
+  proto::SolutionConfig CreateSolution() override {
+    proto::OnDeviceModelExecutionFeatureConfig config;
+    config.set_feature(proto::ModelExecutionFeature::
                            MODEL_EXECUTION_FEATURE_PROOFREADER_API);
 
     auto& input_config = *config.mutable_input_config();
     input_config.set_request_base_name(ProofreaderApiRequest().GetTypeName());
+    input_config.set_max_execute_tokens(
+        blink::mojom::kTinyModelMaxInputTokenSize);
 
     *input_config.add_execute_substitutions() = FieldSubstitution(
         "%s", ProtoField({ProofreaderApiRequest::kTextFieldNumber}));
@@ -153,14 +132,9 @@ class AIProofreaderTest : public AITestUtils::AITestBase {
     output_config.set_proto_type(ProofreaderApiResponse().GetTypeName());
     *output_config.mutable_proto_field() = StringValueField();
 
-    return config;
-  }
-
-  optimization_guide::proto::OnDeviceModelExecutionFeatureConfig
-  CreateSafeConfig() {
-    auto config = CreateConfig();
-    config.set_can_skip_text_safety(false);
-    return config;
+    proto::SolutionConfig solution_config;
+    *solution_config.mutable_feature() = config;
+    return solution_config;
   }
 
   mojo::Remote<blink::mojom::AIProofreader> GetAIProofreaderRemote(
@@ -266,6 +240,41 @@ TEST_F(AIProofreaderTest, CanCreateDefaultOptions) {
   }
 }
 
+TEST_F(AIProofreaderTest, ContextWindowUsesContextLimit) {
+  TestCreateProofreaderClient client;
+  GetAIManagerRemote()->CreateProofreader(client.BindNewPipeAndPassRemote(),
+                                          GetDefaultOptions(),
+                                          /*monitor=*/mojo::NullRemote());
+  CreateProofreaderResult result = client.result().Take();
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(client.context_window(), blink::mojom::kTinyModelMaxInputTokenSize);
+}
+
+TEST_F(AIProofreaderTest, CustomInputContextLimit) {
+  constexpr uint32_t kCustomMaxTokens = 2000;
+  SetModelInputContextLimit(kCustomMaxTokens);
+
+  TestCreateProofreaderClient client;
+  GetAIManagerRemote()->CreateProofreader(client.BindNewPipeAndPassRemote(),
+                                          GetDefaultOptions(),
+                                          /*monitor=*/mojo::NullRemote());
+  CreateProofreaderResult result = client.result().Take();
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(client.context_window(), kCustomMaxTokens);
+
+  mojo::Remote<blink::mojom::AIProofreader> proofreader_remote(
+      std::move(result.value()));
+  SetSizeInTokens(kCustomMaxTokens + 1);
+
+  AITestUtils::TestStreamingResponder responder;
+  proofreader_remote->Proofread(kInputString, responder.BindRemote());
+  EXPECT_FALSE(responder.WaitForCompletion());
+  EXPECT_EQ(responder.error_status(),
+            blink::mojom::ModelStreamingResponseStatus::kErrorInputTooLarge);
+  ASSERT_EQ(responder.quota_error_info().requested, kCustomMaxTokens + 1);
+  ASSERT_EQ(responder.quota_error_info().quota, kCustomMaxTokens);
+}
+
 TEST_F(AIProofreaderTest, CanCreateIsLanguagesSupported) {
   EnsureModelIsReady();
 
@@ -300,8 +309,8 @@ TEST_F(AIProofreaderTest, CreateProofreaderModelNotEligible) {
         {{"compatible_on_device_performance_classes", "3,4,5,6"}}}},
       {{on_device_model::features::kOnDeviceModelCpuBackend}});
 
-  fake_broker_->service_settings().performance_class =
-      PerformanceClass::kVeryLow;
+  fake_broker_->settings().performance_class =
+      on_device_model::mojom::PerformanceClass::kVeryLow;
 
   TestCreateProofreaderClient create_proofreader_client;
   GetAIManagerRemote()->CreateProofreader(
@@ -314,90 +323,22 @@ TEST_F(AIProofreaderTest, CreateProofreaderModelNotEligible) {
           blink::mojom::AIManagerCreateClientError::kUnableToCreateSession));
 }
 
-TEST_F(AIProofreaderTest, CreateProofreaderWaitsForBaseModel) {
-  fake_broker_->InstallBaseModel(nullptr);
-
-  TestCreateProofreaderClient create_proofreader_client;
-  GetAIManagerRemote()->CreateProofreader(
-      create_proofreader_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
-      mojo::NullRemote());
-
-  TestFuture<CreateProofreaderResult>& future =
-      create_proofreader_client.result();
-  task_environment()->FastForwardBy(base::Hours(1));
-  EXPECT_FALSE(future.IsReady());
-
-  fake_broker_->InstallBaseModel(
-      std::make_unique<optimization_guide::FakeBaseModelAsset>());
-
-  EXPECT_OK(future.Take());
-}
-
-TEST_F(AIProofreaderTest, CreateProofreaderWaitsForModelAdaptation) {
-  fake_broker_->model_provider().RemoveModel(
-      optimization_guide::proto::
-          OPTIMIZATION_TARGET_MODEL_EXECUTION_FEATURE_PROOFREADER_API);
-
-  TestCreateProofreaderClient create_proofreader_client;
-  GetAIManagerRemote()->CreateProofreader(
-      create_proofreader_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
-      mojo::NullRemote());
-
-  TestFuture<CreateProofreaderResult>& future =
-      create_proofreader_client.result();
-  task_environment()->FastForwardBy(base::Hours(1));
-  EXPECT_FALSE(future.IsReady());
-
-  optimization_guide::FakeAdaptationAsset fake_asset(
-      {.config = CreateConfig()});
-  fake_broker_->UpdateModelAdaptation(fake_asset);
-
-  EXPECT_OK(future.Take());
-}
-
-TEST_F(AIProofreaderTest, CreateProofreaderWaitsForTextSafetyModel) {
-  optimization_guide::FakeAdaptationAsset fake_asset(
-      {.config = CreateSafeConfig()});
-  fake_broker_->UpdateModelAdaptation(fake_asset);
-
-  TestCreateProofreaderClient create_proofreader_client;
-  GetAIManagerRemote()->CreateProofreader(
-      create_proofreader_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
-      mojo::NullRemote());
-
-  TestFuture<CreateProofreaderResult>& future =
-      create_proofreader_client.result();
-  task_environment()->FastForwardBy(base::Hours(1));
-  EXPECT_FALSE(future.IsReady());
-
-  optimization_guide::FakeSafetyModelAsset safety_asset(CreateSafetyConfig());
-  fake_broker_->UpdateSafetyModel(safety_asset);
-
-  EXPECT_OK(future.Take());
-}
-
-TEST_F(AIProofreaderTest, CreateProofreaderSafetyConfigNotAvailable) {
-  optimization_guide::FakeAdaptationAsset fake_asset(
-      {.config = CreateSafeConfig()});
-  fake_broker_->UpdateModelAdaptation(fake_asset);
-  // Provide a safety asset that does not support proofreader.
-  optimization_guide::FakeSafetyModelAsset safety_asset([] {
-    auto safety_config = CreateSafetyConfig();
-    safety_config.set_feature(
-        optimization_guide::proto::MODEL_EXECUTION_FEATURE_TEST);
-    return safety_config;
+TEST_F(AIProofreaderTest, ProofreadUnableToCalculateTokenSize) {
+  SetSolutionConfig([&]() {
+    auto solution_config = CreateSolution();
+    solution_config.mutable_feature()
+        ->mutable_input_config()
+        ->set_request_base_name("InvalidRequestBaseName");
+    return solution_config;
   }());
-  fake_broker_->UpdateSafetyModel(safety_asset);
 
-  TestCreateProofreaderClient create_proofreader_client;
-  GetAIManagerRemote()->CreateProofreader(
-      create_proofreader_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
-      mojo::NullRemote());
-
-  EXPECT_THAT(
-      create_proofreader_client.result().Take(),
-      ErrorIs(
-          blink::mojom::AIManagerCreateClientError::kUnableToCreateSession));
+  auto proofreader_remote = GetAIProofreaderRemote();
+  AITestUtils::TestStreamingResponder responder;
+  proofreader_remote->Proofread(kInputString, responder.BindRemote());
+  EXPECT_FALSE(responder.WaitForCompletion());
+  EXPECT_EQ(
+      responder.error_status(),
+      blink::mojom::ModelStreamingResponseStatus::kErrorFailedToCountTokens);
 }
 
 TEST_F(AIProofreaderTest, ProofreadDefault) {
@@ -489,79 +430,15 @@ TEST_F(AIProofreaderTest, Priority) {
   EXPECT_THAT(Proofread(*proofreader_remote, kInputString), ElementsAre("hi"));
 }
 
-TEST_F(AIProofreaderTest, TextSafetyInput) {
-  optimization_guide::FakeAdaptationAsset fake_asset(
-      {.config = CreateSafeConfig()});
-  fake_broker_->UpdateModelAdaptation(fake_asset);
-  optimization_guide::FakeSafetyModelAsset safety_asset(CreateSafetyConfig());
-  fake_broker_->UpdateSafetyModel(safety_asset);
-
-  fake_broker_->settings().set_execute_result({"hi"});
-  auto proofreader_remote = GetAIProofreaderRemote();
-  EXPECT_THAT(Proofread(*proofreader_remote, kInputString), ElementsAre("hi"));
-
-  AITestUtils::TestStreamingResponder responder;
-  proofreader_remote->Proofread("unsafe", responder.BindRemote());
-  EXPECT_FALSE(responder.WaitForCompletion());
-  EXPECT_EQ(responder.error_status(),
-            blink::mojom::ModelStreamingResponseStatus::kErrorFiltered);
-}
-
-TEST_F(AIProofreaderTest, TextSafetyOutput) {
-  optimization_guide::FakeAdaptationAsset fake_asset(
-      {.config = CreateSafeConfig()});
-  fake_broker_->UpdateModelAdaptation(fake_asset);
-  optimization_guide::FakeSafetyModelAsset safety_asset([] {
-    auto safety_config = CreateSafetyConfig();
-    safety_config.mutable_partial_output_checks()->set_minimum_tokens(1000);
-    return safety_config;
-  }());
-  fake_broker_->UpdateSafetyModel(safety_asset);
-
-  // Fake text safety checker looks for the string "unsafe".
-  fake_broker_->settings().set_execute_result(
-      {"a", "b", "c", "d", "e", "f", "g", "unsafe", "h"});
-  auto proofreader_remote = GetAIProofreaderRemote();
-  AITestUtils::TestStreamingResponder responder;
-  proofreader_remote->Proofread(kInputString, responder.BindRemote());
-  EXPECT_FALSE(responder.WaitForCompletion());
-  EXPECT_EQ(responder.error_status(),
-            blink::mojom::ModelStreamingResponseStatus::kErrorFiltered);
-  EXPECT_TRUE(responder.responses().empty());
-}
-
-TEST_F(AIProofreaderTest, TextSafetyOutputPartial) {
-  optimization_guide::FakeAdaptationAsset fake_asset(
-      {.config = CreateSafeConfig()});
-  fake_broker_->UpdateModelAdaptation(fake_asset);
-  optimization_guide::FakeSafetyModelAsset safety_asset([] {
-    auto safety_config = CreateSafetyConfig();
-    safety_config.mutable_partial_output_checks()->set_minimum_tokens(3);
-    safety_config.mutable_partial_output_checks()->set_token_interval(2);
-    return safety_config;
-  }());
-  fake_broker_->UpdateSafetyModel(safety_asset);
-
-  // Fake text safety checker looks for the string "unsafe".
-  fake_broker_->settings().set_execute_result(
-      {"a", "b", "c", "d", "e", "f", "g", "unsafe", "h"});
-  auto proofreader_remote = GetAIProofreaderRemote();
-  AITestUtils::TestStreamingResponder responder;
-  proofreader_remote->Proofread(kInputString, responder.BindRemote());
-  EXPECT_FALSE(responder.WaitForCompletion());
-  EXPECT_EQ(responder.error_status(),
-            blink::mojom::ModelStreamingResponseStatus::kErrorFiltered);
-  // Partial checks should still allow some output to stream.
-  EXPECT_THAT(responder.responses(), ElementsAre("abc", "de", "fg"));
-}
-
 TEST_F(AIProofreaderTest, ServiceCrash) {
   fake_broker_->settings().set_execute_result({"hi"});
 
   auto proofreader_remote = GetAIProofreaderRemote();
+  EXPECT_THAT(Proofread(*proofreader_remote, kInputString), ElementsAre("hi"));
+
   AITestUtils::TestStreamingResponder responder;
   proofreader_remote->Proofread(kInputString, responder.BindRemote());
-  fake_broker_->CrashService();
+  fake_broker_->launcher().CrashService();
 
   EXPECT_FALSE(responder.WaitForCompletion());
   // TODO(crbug.com/494980521): Crashes should be yield kErrorSessionDestroyed.
@@ -574,22 +451,19 @@ TEST_F(AIProofreaderTest, ServiceCrash) {
 }
 
 TEST_F(AIProofreaderTest, DynamicConstraints) {
-  optimization_guide::proto::OnDeviceModelExecutionFeatureConfig config =
-      CreateConfig();
+  SetSolutionConfig([&]() {
+    auto solution_config = CreateSolution();
+    proto::ProofreaderApiMetadata metadata;
+    metadata.mutable_constraints()->mutable_label_mode_constraint()->set_regex(
+        "^Correction type.*");
 
-  optimization_guide::proto::ProofreaderApiMetadata metadata;
-  metadata.mutable_constraints()->mutable_label_mode_constraint()->set_regex(
-      "^Correction type.*");
+    *solution_config.mutable_feature()->mutable_feature_metadata() =
+        optimization_guide::AnyWrapProto(metadata);
+    return solution_config;
+  }());
 
-  auto* feature_metadata = config.mutable_feature_metadata();
-  feature_metadata->set_type_url(
-      "type.googleapis.com/optimization_guide.proto.ProofreaderApiMetadata");
-  feature_metadata->set_value(metadata.SerializeAsString());
-
-  optimization_guide::FakeAdaptationAsset fake_asset({.config = config});
-  fake_broker_->UpdateModelAdaptation(fake_asset);
-
-  fake_broker_->settings().set_execute_result({"Correction type: Spelling"});
+  fake_broker_->settings().set_execute_result(
+      {"Correction type: Spelling"});
 
   auto options = GetDefaultOptions();
   options->include_correction_types = true;
@@ -607,20 +481,17 @@ TEST_F(AIProofreaderTest, DynamicConstraints) {
 }
 
 TEST_F(AIProofreaderTest, NoConstraints) {
-  optimization_guide::proto::OnDeviceModelExecutionFeatureConfig config =
-      CreateConfig();
+  SetSolutionConfig([&]() {
+    auto solution_config = CreateSolution();
+    proto::ProofreaderApiMetadata metadata;
 
-  optimization_guide::proto::ProofreaderApiMetadata metadata;
+    *solution_config.mutable_feature()->mutable_feature_metadata() =
+        optimization_guide::AnyWrapProto(metadata);
+    return solution_config;
+  }());
 
-  auto* feature_metadata = config.mutable_feature_metadata();
-  feature_metadata->set_type_url(
-      "type.googleapis.com/optimization_guide.proto.ProofreaderApiMetadata");
-  feature_metadata->set_value(metadata.SerializeAsString());
-
-  optimization_guide::FakeAdaptationAsset fake_asset({.config = config});
-  fake_broker_->UpdateModelAdaptation(fake_asset);
-
-  fake_broker_->settings().set_execute_result({"Correction type: Spelling"});
+  fake_broker_->settings().set_execute_result(
+      {"Correction type: Spelling"});
 
   auto options = GetDefaultOptions();
   options->include_correction_types = true;
@@ -636,13 +507,12 @@ TEST_F(AIProofreaderTest, NoConstraints) {
 }
 
 TEST_F(AIProofreaderTest, NoMetadata) {
-  optimization_guide::proto::OnDeviceModelExecutionFeatureConfig config =
-      CreateConfig();
+  SetSolutionConfig([&]() {
+    return CreateSolution();
+  }());
 
-  optimization_guide::FakeAdaptationAsset fake_asset({.config = config});
-  fake_broker_->UpdateModelAdaptation(fake_asset);
-
-  fake_broker_->settings().set_execute_result({"Correction type: Spelling"});
+  fake_broker_->settings().set_execute_result(
+      {"Correction type: Spelling"});
 
   auto options = GetDefaultOptions();
   options->include_correction_types = true;

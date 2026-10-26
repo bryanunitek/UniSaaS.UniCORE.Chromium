@@ -8,6 +8,7 @@
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "components/fcm/crypto/fcm_decryption_result.h"
 
 namespace gcm {
 
@@ -72,24 +73,7 @@ void FakeGCMDriver::SendImpl(const std::string& app_id,
 }
 
 void FakeGCMDriver::RecordDecryptionFailure(const std::string& app_id,
-                                            GCMDecryptionResult result) {}
-
-void FakeGCMDriver::SetAccountTokens(
-    const std::vector<GCMClient::AccountTokenInfo>& account_tokens) {
-}
-
-void FakeGCMDriver::UpdateAccountMapping(
-    const AccountMapping& account_mapping) {
-}
-
-void FakeGCMDriver::RemoveAccountMapping(const CoreAccountId& account_id) {}
-
-base::Time FakeGCMDriver::GetLastTokenFetchTime() {
-  return base::Time();
-}
-
-void FakeGCMDriver::SetLastTokenFetchTime(const base::Time& time) {
-}
+                                            fcm::FcmDecryptionResult result) {}
 
 InstanceIDHandler* FakeGCMDriver::GetInstanceIDHandlerInternal() {
   return nullptr;

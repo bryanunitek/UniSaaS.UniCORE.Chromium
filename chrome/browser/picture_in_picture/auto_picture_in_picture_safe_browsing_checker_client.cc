@@ -4,17 +4,22 @@
 
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_safe_browsing_checker_client.h"
 
+#include "base/metrics/histogram_functions.h"
 #include "components/safe_browsing/buildflags.h"
+#include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
 #include "content/public/browser/browser_thread.h"
 
 AutoPictureInPictureSafeBrowsingCheckerClient::
     AutoPictureInPictureSafeBrowsingCheckerClient(
         scoped_refptr<safe_browsing::SafeBrowsingDatabaseManager>
             database_manager,
+        base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+            v5_get_hash_protocol_manager,
         base::TimeDelta safe_browsing_check_delay,
         ReportUrlSafetyCb report_url_safety_cb)
     : safe_browsing::SafeBrowsingDatabaseManager::Client(GetPassKey()),
       database_manager_(database_manager),
+      v5_get_hash_protocol_manager_(v5_get_hash_protocol_manager),
       safe_browsing_check_delay_(safe_browsing_check_delay),
       report_url_safety_cb_(std::move(report_url_safety_cb)),
       threat_types_(safe_browsing::CreateSBThreatTypeSet(
@@ -29,21 +34,22 @@ AutoPictureInPictureSafeBrowsingCheckerClient::
            safe_browsing::SBThreatType::SB_THREAT_TYPE_SUSPICIOUS_SITE,
 #endif  // !BUILDFLAG(IS_ANDROID)
            safe_browsing::SBThreatType::SB_THREAT_TYPE_BILLING})) {
-  DCHECK_GE(safe_browsing_check_delay_, kMinimumCheckDelay);
+  CHECK_GE(safe_browsing_check_delay_, kMinimumCheckDelay,
+           base::NotFatalUntil::M162);
 }
 
 AutoPictureInPictureSafeBrowsingCheckerClient::
     ~AutoPictureInPictureSafeBrowsingCheckerClient() {
   if (timer_.IsRunning()) {
-    DCHECK(database_manager_);
+    CHECK(database_manager_, base::NotFatalUntil::M162);
     database_manager_->CancelCheck(this);
     timer_.Stop();
   }
 }
 
 void AutoPictureInPictureSafeBrowsingCheckerClient::CheckUrlSafety(GURL url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(database_manager_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(database_manager_, base::NotFatalUntil::M162);
 
   if (timer_.IsRunning()) {
     database_manager_->CancelCheck(this);
@@ -61,7 +67,7 @@ void AutoPictureInPictureSafeBrowsingCheckerClient::CheckUrlSafety(GURL url) {
                std::move(timeout_callback));
 
   // Check the Safe Browsing blocklists.
-  DCHECK(database_manager_);
+  CHECK(database_manager_, base::NotFatalUntil::M162);
   bool is_safe_synchronously = database_manager_->CheckBrowseUrl(
       url, threat_types_, this,
       safe_browsing::CheckBrowseUrlType::kHashDatabase);
@@ -74,6 +80,7 @@ void AutoPictureInPictureSafeBrowsingCheckerClient::CheckUrlSafety(GURL url) {
   // not called.
   if (is_safe_synchronously) {
     timer_.Stop();
+    LogCheckResult(CheckResult::kSafe);
     report_url_safety_cb_.Run(true);
   }
 }
@@ -81,24 +88,38 @@ void AutoPictureInPictureSafeBrowsingCheckerClient::CheckUrlSafety(GURL url) {
 void AutoPictureInPictureSafeBrowsingCheckerClient::OnCheckBrowseUrlResult(
     const GURL& url,
     safe_browsing::SBThreatType threat_type) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   // Stop the timer to avoid calling `OnCheckBlocklistTimeout`, since we got a
   // blocklist check result in time.
   timer_.Stop();
 
   if (threat_types_.contains(threat_type)) {
+    LogCheckResult(CheckResult::kUnsafe);
     report_url_safety_cb_.Run(false);
     return;
   }
 
+  LogCheckResult(CheckResult::kSafe);
   report_url_safety_cb_.Run(true);
 }
 
 void AutoPictureInPictureSafeBrowsingCheckerClient::OnCheckBlocklistTimeout() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(database_manager_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(database_manager_, base::NotFatalUntil::M162);
 
   database_manager_->CancelCheck(this);
+  LogCheckResult(CheckResult::kTimeout);
   report_url_safety_cb_.Run(false);
+}
+
+void AutoPictureInPictureSafeBrowsingCheckerClient::LogCheckResult(
+    CheckResult result) {
+  base::UmaHistogramEnumeration(
+      "Media.AutoPictureInPicture.SafeBrowsingCheckResult", result);
+}
+
+base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+AutoPictureInPictureSafeBrowsingCheckerClient::GetV5GetHashProtocolManager() {
+  return v5_get_hash_protocol_manager_;
 }

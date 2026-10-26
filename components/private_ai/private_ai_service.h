@@ -18,11 +18,8 @@
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "google_apis/gaia/google_service_auth_error.h"
+#include "services/network/public/cpp/network_context_getter.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-
-namespace network::mojom {
-class NetworkContext;
-}
 
 namespace signin {
 class PrimaryAccountAccessTokenFetcher;
@@ -60,11 +57,12 @@ class PrivateAiService : public KeyedService,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       std::unique_ptr<PrivateAiNetworkDriver> network_driver,
       std::unique_ptr<PrivateAiOakSessionDriver> oak_session_driver,
-      network::mojom::NetworkContext* network_context,
+      network::NetworkContextGetter network_context_getter,
       const std::string& url,
       const std::string& api_key,
       const std::string& proxy_url,
-      bool use_token_attestation);
+      bool use_token_attestation,
+      version_info::Channel channel);
   ~PrivateAiService() override;
 
   PrivateAiService(const PrivateAiService&) = delete;

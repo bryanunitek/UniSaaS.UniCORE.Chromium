@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import unittest
 
 import mojom.generate.check as check
 from mojom_bindings_generator import LoadChecks, _Generate
@@ -13,8 +12,8 @@ class FakeArgs:
   """Fakes args to _Generate - intention is to do just enough to run checks"""
 
   def __init__(self, tester, files=None):
-    """ `tester` is MojomParserTestCase for paths.
-        `files` will have tester path added."""
+    """`tester` is MojomParserTestCase for paths.
+    `files` will have tester path added."""
     self.checks_string = 'attributes'
     self.depth = tester.GetPath('')
     self.filelist = None
@@ -53,7 +52,8 @@ class MojoBindingsCheckTest(MojomParserTestCase):
   def testNoAnnotations(self):
     # Undecorated mojom should be fine.
     self._testValid(
-        "a.mojom", """
+      "a.mojom",
+      """
       module a;
       struct Bar { int32 a; };
       enum Hello { kValue };
@@ -61,13 +61,15 @@ class MojoBindingsCheckTest(MojomParserTestCase):
       interface Foo {
         Foo(int32 a, Hello hi, Thingy t) => (Bar b);
       };
-    """)
+    """,
+    )
 
   def testValidAnnotations(self):
     # Obviously this is meaningless and won't generate, but it should pass
     # the attribute check's validation.
     self._testValid(
-        "a.mojom", """
+      "a.mojom",
+      """
       [JavaConstantsClassName="FakeClass",JavaPackage="org.chromium.Fake",
       IncludeSendValidation]
       module mojo.test;
@@ -108,7 +110,8 @@ class MojoBindingsCheckTest(MojomParserTestCase):
       interface InterfaceWithVendorSpecifiedStringAttribute {
         Method();
       };
-    """)
+    """,
+    )
 
   def testWrongModuleStable(self):
     contents = """
@@ -124,8 +127,9 @@ class MojoBindingsCheckTest(MojomParserTestCase):
         Bar(int32 b, Structure? s) => (bool c);
       };
     """
-    self._testThrows('b.mojom', contents,
-                     'attribute Stable not allowed on module')
+    self._testThrows(
+      'b.mojom', contents, 'attribute Stable not allowed on module'
+    )
 
   def testWrongEnumDefault(self):
     contents = """
@@ -141,8 +145,9 @@ class MojoBindingsCheckTest(MojomParserTestCase):
         Bar(int32 b, Structure? s) => (bool c);
       };
     """
-    self._testThrows('b.mojom', contents,
-                     'attribute Default not allowed on enum')
+    self._testThrows(
+      'b.mojom', contents, 'attribute Default not allowed on enum'
+    )
 
   def testWrongStructMinVersion(self):
     contents = """
@@ -158,8 +163,9 @@ class MojoBindingsCheckTest(MojomParserTestCase):
         Bar(int32 b, Structure? s) => (bool c);
       };
     """
-    self._testThrows('b.mojom', contents,
-                     'attribute MinVersion not allowed on struct')
+    self._testThrows(
+      'b.mojom', contents, 'attribute MinVersion not allowed on struct'
+    )
 
   def testWrongMethodRequireContext(self):
     contents = """
@@ -175,10 +181,11 @@ class MojoBindingsCheckTest(MojomParserTestCase):
         Bar(int32 b, Structure? s) => (bool c);
       };
     """
-    self._testThrows('b.mojom', contents,
-                     'RequireContext not allowed on method')
+    self._testThrows(
+      'b.mojom', contents, 'RequireContext not allowed on method'
+    )
 
-  def testWrongMethodRequireContext(self):
+  def testWrongMethodRequireContext(self):  # noqa: F811
     # crbug.com/1230122
     contents = """
       module a;
@@ -188,8 +195,9 @@ class MojoBindingsCheckTest(MojomParserTestCase):
         Foo(int32 a) => (int32 b);
       };
     """
-    self._testThrows('b.mojom', contents,
-                     'attribute sync not allowed.*Did you mean: Sync')
+    self._testThrows(
+      'b.mojom', contents, 'attribute sync not allowed.*Did you mean: Sync'
+    )
 
   def testStableExtensibleEnum(self):
     # crbug.com/1193875
@@ -201,5 +209,6 @@ class MojoBindingsCheckTest(MojomParserTestCase):
         kOtherVal = 2,
       };
     """
-    self._testThrows('a.mojom', contents,
-                     'Extensible.*?required.*?Stable.*?enum')
+    self._testThrows(
+      'a.mojom', contents, 'Extensible.*?required.*?Stable.*?enum'
+    )

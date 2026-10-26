@@ -7,7 +7,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_tab_state.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -18,12 +17,15 @@
 #include "components/saved_tab_groups/public/saved_tab_group.h"
 #include "components/saved_tab_groups/public/saved_tab_group_tab.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
 
 namespace {
 
@@ -154,7 +156,7 @@ class ListenerDeferredTest : public InProcessBrowserTest {
   base::test::ScopedFeatureList features_;
 
   TabStripModel* tab_strip_model() { return browser()->tab_strip_model(); }
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
   tab_groups::SavedTabGroupModel* saved_tab_group_model() {
     tab_groups::TabGroupSyncService* service =
         tab_groups::TabGroupSyncServiceFactory::GetForProfile(profile());

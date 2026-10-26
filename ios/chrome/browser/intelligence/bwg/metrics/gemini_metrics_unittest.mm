@@ -6,6 +6,7 @@
 
 #import "base/test/metrics/histogram_tester.h"
 #import "base/test/metrics/user_action_tester.h"
+#import "components/contextual_cueing/contextual_cueing_enums.h"
 #import "components/optimization_guide/core/hints/optimization_guide_decision.h"
 #import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
 #import "testing/platform_test.h"
@@ -38,6 +39,9 @@ const char kImageActionButtonTapped[] = "MobileGeminiImageActionButtonTapped";
 const char kInputPlateAttachmentOptionTapped[] =
     "MobileGeminiInputPlateAttachmentOptionTapped";
 const char kEntryPointAvailable[] = "MobileGeminiEntryPointAvailable";
+const char kEntryPointDisabledByQuota[] =
+    "MobileGeminiEntryPointDisabledByQuota";
+const char kQuotaReached[] = "MobileGeminiQuotaReached";
 }  // namespace
 
 class GeminiMetricsTest : public PlatformTest {
@@ -170,34 +174,41 @@ TEST_F(GeminiMetricsTest, RecordGeminiCameraFlowGoToOSSettingsAlertResult) {
 }
 
 // Tests that response latency is recorded to the correct histograms based on
-// page context and generated image presence.
+// page context, generated image presence, and multi-tab usage.
 TEST_F(GeminiMetricsTest, TestResponseLatencyMetrics) {
   base::TimeDelta latency = base::Milliseconds(100);
 
-  // Case 1: Page context present & generated image present.
-  RecordResponseLatency(latency, true, true);
+  // Case 1: Page context present & generated image present & multi-tab not
+  // used.
+  RecordResponseLatency(latency, true, true, false);
   histogram_tester_.ExpectTimeBucketCount(kResponseLatencyWithContextHistogram,
                                           latency, 1);
   histogram_tester_.ExpectTimeBucketCount(
       kResponseLatencyWithGeneratedImageHistogram, latency, 1);
+  histogram_tester_.ExpectTimeBucketCount(
+      kResponseLatencyMultiTabNotUsedHistogram, latency, 1);
+  histogram_tester_.ExpectTotalCount(kResponseLatencyMultiTabUsedHistogram, 0);
   histogram_tester_.ExpectTotalCount(kResponseLatencyWithoutContextHistogram,
                                      0);
   histogram_tester_.ExpectTotalCount(
       kResponseLatencyWithoutGeneratedImageHistogram, 0);
 
-  // Case 2: Page context present & generated image absent.
-  RecordResponseLatency(latency, true, false);
+  // Case 2: Page context present & generated image absent & multi-tab not used.
+  RecordResponseLatency(latency, true, false, false);
   histogram_tester_.ExpectTimeBucketCount(kResponseLatencyWithContextHistogram,
                                           latency, 2);
   histogram_tester_.ExpectTimeBucketCount(
       kResponseLatencyWithoutGeneratedImageHistogram, latency, 1);
+  histogram_tester_.ExpectTimeBucketCount(
+      kResponseLatencyMultiTabNotUsedHistogram, latency, 2);
+  histogram_tester_.ExpectTotalCount(kResponseLatencyMultiTabUsedHistogram, 0);
   histogram_tester_.ExpectTotalCount(kResponseLatencyWithoutContextHistogram,
                                      0);
   histogram_tester_.ExpectTimeBucketCount(
       kResponseLatencyWithGeneratedImageHistogram, latency, 1);
 
-  // Case 3: Page context absent, generated image present.
-  RecordResponseLatency(latency, false, true);
+  // Case 3: Page context absent, generated image present & multi-tab not used.
+  RecordResponseLatency(latency, false, true, false);
   histogram_tester_.ExpectTimeBucketCount(kResponseLatencyWithContextHistogram,
                                           latency, 2);
   histogram_tester_.ExpectTimeBucketCount(
@@ -206,9 +217,12 @@ TEST_F(GeminiMetricsTest, TestResponseLatencyMetrics) {
       kResponseLatencyWithGeneratedImageHistogram, latency, 2);
   histogram_tester_.ExpectTimeBucketCount(
       kResponseLatencyWithoutGeneratedImageHistogram, latency, 1);
+  histogram_tester_.ExpectTimeBucketCount(
+      kResponseLatencyMultiTabNotUsedHistogram, latency, 3);
+  histogram_tester_.ExpectTotalCount(kResponseLatencyMultiTabUsedHistogram, 0);
 
-  // Case 4: Page context absent, generated image absent.
-  RecordResponseLatency(latency, false, false);
+  // Case 4: Page context absent, generated image absent & multi-tab used.
+  RecordResponseLatency(latency, false, false, true);
   histogram_tester_.ExpectTimeBucketCount(kResponseLatencyWithContextHistogram,
                                           latency, 2);
   histogram_tester_.ExpectTimeBucketCount(
@@ -217,6 +231,10 @@ TEST_F(GeminiMetricsTest, TestResponseLatencyMetrics) {
       kResponseLatencyWithGeneratedImageHistogram, latency, 2);
   histogram_tester_.ExpectTimeBucketCount(
       kResponseLatencyWithoutGeneratedImageHistogram, latency, 2);
+  histogram_tester_.ExpectTimeBucketCount(
+      kResponseLatencyMultiTabNotUsedHistogram, latency, 3);
+  histogram_tester_.ExpectTimeBucketCount(kResponseLatencyMultiTabUsedHistogram,
+                                          latency, 1);
 }
 
 TEST_F(GeminiMetricsTest, RecordGeminiCameraFlowBegan) {
@@ -396,6 +414,21 @@ TEST_F(GeminiMetricsTest, RecordGeminiEntryPointAvailable) {
   EXPECT_EQ(1, user_action_tester_.GetActionCount(kEntryPointAvailable));
 }
 
+// Tests that the Gemini entry point disabled by quota metric is recorded
+// correctly.
+TEST_F(GeminiMetricsTest, TestRecordGeminiEntryPointDisabledByQuota) {
+  RecordGeminiEntryPointDisabledByQuota(gemini::EntryPoint::ImageContextMenu);
+  histogram_tester_.ExpectUniqueSample(kEntryPointDisabledByQuotaHistogram,
+                                       gemini::EntryPoint::ImageContextMenu, 1);
+  EXPECT_EQ(1, user_action_tester_.GetActionCount(kEntryPointDisabledByQuota));
+}
+
+// Tests that the Gemini quota reached metric is recorded correctly.
+TEST_F(GeminiMetricsTest, TestRecordGeminiQuotaReached) {
+  RecordGeminiQuotaReached();
+  EXPECT_EQ(1, user_action_tester_.GetActionCount(kQuotaReached));
+}
+
 TEST_F(GeminiMetricsTest, RecordGeminiPageAvailability) {
   RecordGeminiPageAvailability(IOSGeminiPageAvailability::kAvailable);
   histogram_tester_.ExpectUniqueSample(kGeminiPageAvailabilityHistogram,
@@ -425,4 +458,133 @@ TEST_F(GeminiMetricsTest, RecordGeminiGlicContextualCueDecision) {
   histogram_tester_.ExpectBucketCount(
       kGlicContextualCueDecisionHistogram,
       optimization_guide::OptimizationGuideDecision::kFalse, 1);
+}
+
+TEST_F(GeminiMetricsTest, RecordContextualCueingDecision) {
+  RecordContextualCueingDecision(
+      contextual_cueing::ContextualCueingDecision::kSuccess);
+  histogram_tester_.ExpectBucketCount(
+      kContextualCueingDecisionHistogram,
+      contextual_cueing::ContextualCueingDecision::kSuccess, 1);
+
+  RecordContextualCueingDecision(
+      contextual_cueing::ContextualCueingDecision::kHistorySyncOff);
+  histogram_tester_.ExpectBucketCount(
+      kContextualCueingDecisionHistogram,
+      contextual_cueing::ContextualCueingDecision::kHistorySyncOff, 1);
+}
+
+// Tests that Chat prompt metrics (including context attachment) are recorded
+// correctly.
+TEST_F(GeminiMetricsTest, TestRecordGeminiPromptSent) {
+  RecordGeminiPromptSent(/*is_nano_banana_enabled=*/true,
+                         /*images_attached_count=*/2,
+                         /*long_press_image_included=*/true,
+                         /*has_page_context=*/true,
+                         /*tabs_attached_count=*/1,
+                         /*was_multi_tab_used=*/false);
+
+  histogram_tester_.ExpectUniqueSample(kPromptImageRemixEnabledHistogram, true,
+                                       1);
+  histogram_tester_.ExpectUniqueSample(kPromptImagesAttachedCountHistogram, 2,
+                                       1);
+  histogram_tester_.ExpectUniqueSample(kPromptLongPressImageIncludedHistogram,
+                                       true, 1);
+  histogram_tester_.ExpectUniqueSample(kPromptContextAttachmentHistogram, true,
+                                       1);
+  histogram_tester_.ExpectUniqueSample(kPromptChatContextAttachmentHistogram,
+                                       true, 1);
+  histogram_tester_.ExpectTotalCount(kPromptLiveContextAttachmentHistogram, 0);
+  histogram_tester_.ExpectUniqueSample(kPromptTabsAttachedCountHistogram, 1, 1);
+  histogram_tester_.ExpectUniqueSample(kPromptMultiTabUsedHistogram, false, 1);
+  EXPECT_EQ(1, user_action_tester_.GetActionCount("MobileGeminiPromptSent"));
+  EXPECT_EQ(1,
+            user_action_tester_.GetActionCount("MobileGeminiChatPromptSent"));
+  EXPECT_EQ(0,
+            user_action_tester_.GetActionCount("MobileGeminiLivePromptSent"));
+
+  RecordGeminiPromptSent(/*is_nano_banana_enabled=*/false,
+                         /*images_attached_count=*/0,
+                         /*long_press_image_included=*/false,
+                         /*has_page_context=*/false,
+                         /*tabs_attached_count=*/0,
+                         /*was_multi_tab_used=*/false);
+
+  histogram_tester_.ExpectBucketCount(kPromptContextAttachmentHistogram, false,
+                                      1);
+  histogram_tester_.ExpectBucketCount(kPromptChatContextAttachmentHistogram,
+                                      false, 1);
+  histogram_tester_.ExpectTotalCount(kPromptContextAttachmentHistogram, 2);
+  histogram_tester_.ExpectTotalCount(kPromptChatContextAttachmentHistogram, 2);
+  histogram_tester_.ExpectTotalCount(kPromptLiveContextAttachmentHistogram, 0);
+  EXPECT_EQ(2, user_action_tester_.GetActionCount("MobileGeminiPromptSent"));
+  EXPECT_EQ(2,
+            user_action_tester_.GetActionCount("MobileGeminiChatPromptSent"));
+  EXPECT_EQ(0,
+            user_action_tester_.GetActionCount("MobileGeminiLivePromptSent"));
+}
+
+// Tests that Live prompt context attachment metrics are recorded correctly.
+TEST_F(GeminiMetricsTest, TestRecordGeminiLivePromptSent) {
+  RecordGeminiLivePromptSent(/*has_page_context=*/true);
+
+  histogram_tester_.ExpectUniqueSample(kPromptContextAttachmentHistogram, true,
+                                       1);
+  histogram_tester_.ExpectUniqueSample(kPromptLiveContextAttachmentHistogram,
+                                       true, 1);
+  histogram_tester_.ExpectTotalCount(kPromptChatContextAttachmentHistogram, 0);
+  EXPECT_EQ(1, user_action_tester_.GetActionCount("MobileGeminiPromptSent"));
+  EXPECT_EQ(0,
+            user_action_tester_.GetActionCount("MobileGeminiChatPromptSent"));
+  EXPECT_EQ(1,
+            user_action_tester_.GetActionCount("MobileGeminiLivePromptSent"));
+
+  RecordGeminiLivePromptSent(/*has_page_context=*/false);
+
+  histogram_tester_.ExpectBucketCount(kPromptContextAttachmentHistogram, false,
+                                      1);
+  histogram_tester_.ExpectBucketCount(kPromptLiveContextAttachmentHistogram,
+                                      false, 1);
+  histogram_tester_.ExpectTotalCount(kPromptChatContextAttachmentHistogram, 0);
+  EXPECT_EQ(2, user_action_tester_.GetActionCount("MobileGeminiPromptSent"));
+  EXPECT_EQ(0,
+            user_action_tester_.GetActionCount("MobileGeminiChatPromptSent"));
+  EXPECT_EQ(2,
+            user_action_tester_.GetActionCount("MobileGeminiLivePromptSent"));
+}
+// Tests that RecordGeminiAppSwitcherAccountStatus records to the correct
+// histogram.
+TEST_F(GeminiMetricsTest, TestRecordGeminiAppSwitcherAccountStatus) {
+  RecordGeminiAppSwitcherAccountStatus(
+      GeminiAppSwitcherAccountStatus::kMatching);
+  histogram_tester_.ExpectBucketCount(
+      "IOS.Gemini.AISummarization.AccountStatus",
+      GeminiAppSwitcherAccountStatus::kMatching, 1);
+
+  RecordGeminiAppSwitcherAccountStatus(
+      GeminiAppSwitcherAccountStatus::kMismatched);
+  histogram_tester_.ExpectBucketCount(
+      "IOS.Gemini.AISummarization.AccountStatus",
+      GeminiAppSwitcherAccountStatus::kMismatched, 1);
+
+  RecordGeminiAppSwitcherAccountStatus(
+      GeminiAppSwitcherAccountStatus::kExternalAppOnlySignedIn);
+  histogram_tester_.ExpectBucketCount(
+      "IOS.Gemini.AISummarization.AccountStatus",
+      GeminiAppSwitcherAccountStatus::kExternalAppOnlySignedIn, 1);
+
+  RecordGeminiAppSwitcherAccountStatus(
+      GeminiAppSwitcherAccountStatus::kClientAppOnlySignedIn);
+  histogram_tester_.ExpectBucketCount(
+      "IOS.Gemini.AISummarization.AccountStatus",
+      GeminiAppSwitcherAccountStatus::kClientAppOnlySignedIn, 1);
+
+  RecordGeminiAppSwitcherAccountStatus(
+      GeminiAppSwitcherAccountStatus::kBothSignedOut);
+  histogram_tester_.ExpectBucketCount(
+      "IOS.Gemini.AISummarization.AccountStatus",
+      GeminiAppSwitcherAccountStatus::kBothSignedOut, 1);
+
+  histogram_tester_.ExpectTotalCount("IOS.Gemini.AISummarization.AccountStatus",
+                                     5);
 }

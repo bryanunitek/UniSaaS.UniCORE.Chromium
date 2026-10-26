@@ -11,6 +11,7 @@
 #include "components/viz/common/features.h"
 #include "components/viz/common/resources/returned_resource.h"
 #include "gpu/command_buffer/client/client_shared_image.h"
+#include "ui/gfx/tone_map_util.h"
 
 namespace viz {
 
@@ -78,6 +79,17 @@ std::vector<ReturnedResourceViz> TransferableResource::ReturnResourcesViz(
   return out;
 }
 
+gfx::ContentColorUsage TransferableResource::GetContentColorUsage() const {
+  if (!shared_image_) {
+    return gfx::ContentColorUsage::kSRGB;
+  }
+  const gfx::ColorSpace& color_space = shared_image_->color_space();
+  if (gfx::ToneMapUtil::IsHDR(color_space, hdr_metadata)) {
+    return gfx::ContentColorUsage::kHDR;
+  }
+  return color_space.GetContentColorUsage();
+}
+
 void TransferableResource::AsValueInto(
     base::trace_event::TracedValue* value) const {
   // Skip |id| because it's different between client and viz.
@@ -90,7 +102,6 @@ void TransferableResource::AsValueInto(
   value->SetString("color_space", GetColorSpace().ToString());
   value->SetString("hdr_metadata", hdr_metadata.ToString());
   value->SetBoolean("is_overlay_candidate", GetIsOverlayCandidate());
-  value->SetBoolean("is_low_latency_rendering", is_low_latency_rendering);
   value->SetInteger("synchronization_type",
                     static_cast<int>(synchronization_type));
 #if BUILDFLAG(IS_ANDROID)

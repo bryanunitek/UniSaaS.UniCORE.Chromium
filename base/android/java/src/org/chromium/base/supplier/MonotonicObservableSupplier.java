@@ -22,32 +22,45 @@ public interface MonotonicObservableSupplier<T> extends NullableObservableSuppli
         int NONE = 0;
         int NOTIFY_ON_ADD = 1;
         int POST_ON_ADD = 1 << 1;
+        int ALLOW_NULL_ON_ADD = 1 << 2;
     }
 
     @SuppressWarnings("NullAway") // Changing nullness of Callback<T>
     @Override
-    @Nullable T addObserver(Callback<T> obs, @NotifyBehavior int behavior);
+    @Nullable T addObserver(Callback<? super T> obs, @NotifyBehavior int behavior);
 
     @SuppressWarnings("NullAway") // Changing nullness of Callback<T>
     @Override
-    void removeObserver(Callback<T> obs);
+    void removeObserver(Callback<? super T> obs);
 
     @SuppressWarnings("NullAway") // Changing nullness of Callback<T>
     @Override
-    default @Nullable T addSyncObserver(Callback<T> obs) {
+    default @Nullable T addSyncObserver(Callback<? super T> obs) {
         return addObserver(obs, NotifyBehavior.NONE);
     }
 
     @SuppressWarnings("NullAway") // Changing nullness of Callback<T>
     @Override
-    default @Nullable T addSyncObserverAndCallIfNonNull(Callback<T> obs) {
+    default @Nullable T addSyncObserverAndCallIfNonNull(Callback<? super T> obs) {
         return addObserver(obs, NotifyBehavior.NOTIFY_ON_ADD);
     }
 
     @SuppressWarnings("NullAway") // Changing nullness of Callback<T>
     @Override
-    default @Nullable T addSyncObserverAndPostIfNonNull(Callback<T> obs) {
+    default @Nullable T addSyncObserverAndPostIfNonNull(Callback<? super T> obs) {
         return addObserver(obs, NotifyBehavior.NOTIFY_ON_ADD | NotifyBehavior.POST_ON_ADD);
+    }
+
+    @SuppressWarnings("NullAway") // Changing nullness of Callback<T>
+    @Override
+    default @Nullable T addSyncObserverAndCall(Callback<? super T> obs) {
+        return NullableObservableSupplier.super.addSyncObserverAndCall(obs);
+    }
+
+    @SuppressWarnings("NullAway") // Changing nullness of Callback<T>
+    @Override
+    default @Nullable T addSyncObserverAndPost(Callback<? super T> obs) {
+        return NullableObservableSupplier.super.addSyncObserverAndPost(obs);
     }
 
     /**
@@ -56,7 +69,7 @@ public interface MonotonicObservableSupplier<T> extends NullableObservableSuppli
     @SuppressWarnings("unchecked")
     default NonNullObservableSupplier<T> asNonNull() {
         // Cast from monotonic non-null -> non-null.
-        assert !Boolean.TRUE.equals(BaseObservableSupplierImpl.allowsSetToNull(this))
+        assert !BaseObservableSupplierImpl.allowsSetToNull(this)
                 : "Cannot cast a non-monotonic supplier to a NonNull one.";
         assert get() != null : "Supplier is monotonic, but does not yet have a value.";
         return (NonNullObservableSupplier<T>) this;

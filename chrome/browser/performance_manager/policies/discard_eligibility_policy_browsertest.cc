@@ -16,7 +16,6 @@
 #include "chrome/browser/performance_manager/policies/cannot_discard_reason.h"
 #include "chrome/browser/performance_manager/test_support/page_discarding_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
@@ -28,12 +27,14 @@
 #include "components/performance_manager/public/graph/page_node.h"
 #include "components/performance_manager/public/performance_manager.h"
 #include "components/webapps/common/web_app_id.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/no_renderer_crashes_assertion.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/chrome_debug_urls.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 namespace performance_manager::policies {
@@ -207,15 +208,6 @@ INSTANTIATE_TEST_SUITE_P(
                       apps::test::LinkCapturingFeatureVersion::kV2DefaultOn),
     apps::test::LinkCapturingVersionToString);
 
-void SimulateRendererCrash(content::WebContents* contents) {
-  content::RenderProcessHostWatcher crash_observer(
-      contents, content::RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
-  contents->GetController().LoadURL(GURL(blink::kChromeUICrashURL),
-                                    content::Referrer(),
-                                    ui::PAGE_TRANSITION_TYPED, std::string());
-  crash_observer.Wait();
-}
-
 class DiscardEligibilityPolicyCrashBrowserTest
     : public DiscardEligibilityPolicyBrowserTest {
  private:
@@ -245,12 +237,14 @@ IN_PROC_BROWSER_TEST_F(DiscardEligibilityPolicyCrashBrowserTest,
   ExpectCanDiscardEligibleAllReasons(page_node1,
                                      /*ignore_recent_visibility=*/true);
 
-  SimulateRendererCrash(contents1);
+  content::CrashTab(contents1);
 
   ExpectCanDiscardDisallowedAllReasons(page_node1,
                                        CannotDiscardReason::kNoMainFrame);
 
+  ui_test_utils::UrlLoadObserver url_observer((GetTestingURL()));
   contents1->GetController().Reload(content::ReloadType::NORMAL, false);
+  url_observer.Wait();
 
   ExpectCanDiscardEligibleAllReasons(page_node1,
                                      /*ignore_recent_visibility=*/true);

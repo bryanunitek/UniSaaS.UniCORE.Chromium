@@ -66,6 +66,7 @@ source_set("model") {
     "//components/leveldb_proto",
     "//components/optimization_guide/core:model_execution",
     "//components/personal_context/core",
+    "//components/personal_context/first_run",
     "//components/prefs",
     "//components/strings:components_strings__strings_grit",
     "//components/subscription_eligibility",
@@ -74,9 +75,12 @@ source_set("model") {
     "//components/wallet/core/browser",
     "//ios/chrome/app/strings",
     "//ios/chrome/browser/account_settings/model",
+    "//ios/chrome/browser/autofill/atmemory/public",
     "//ios/chrome/browser/autofill/autofill_ai/public",
     "//ios/chrome/browser/autofill/resources",
     "//ios/chrome/browser/history/model",
+    "//ios/chrome/browser/intelligence/bwg/utils:constants",
+    "//ios/chrome/browser/intelligence/bwg/utils:prefs",
     "//ios/chrome/browser/metrics/model:google_groups_updater",
     "//ios/chrome/browser/optimization_guide/model",
     "//ios/chrome/browser/personal_context/model",
@@ -92,6 +96,7 @@ source_set("model") {
     "//ios/chrome/browser/subscription_eligibility/model",
     "//ios/chrome/browser/sync/model",
     "//ios/chrome/browser/sync/model:data_type_store_service_factory",
+    "//ios/chrome/browser/sync/model:device_info_sync_service_factory",
     "//ios/chrome/browser/webdata_services/model",
     "//ios/chrome/common/ui/colors",
     "//ios/web/common",
@@ -106,9 +111,29 @@ source_set("model") {
   ]
   public_deps = [
     ":constants",
+    ":entity_suppression_manager_factory",
     "//components/keyed_service/ios",
   ]
   frameworks = [ "QuartzCore.framework" ]
+}
+
+source_set("entity_suppression_manager_factory") {
+  sources = [
+    "ios_autofill_entity_suppression_manager_factory.h",
+    "ios_autofill_entity_suppression_manager_factory.mm",
+  ]
+  deps = [
+    "//base",
+    "//components/autofill/core/browser",
+    "//components/autofill/core/common",
+    "//components/sync/base",
+    "//components/sync/model",
+    "//ios/chrome/browser/shared/model/application_context",
+    "//ios/chrome/browser/shared/model/profile",
+    "//ios/chrome/browser/shared/model/profile:profile_keyed_service_factory",
+    "//ios/chrome/browser/sync/model:data_type_store_service_factory",
+    "//ios/chrome/common",
+  ]
 }
 
 source_set("autofill_agent_delegate") {
@@ -119,6 +144,7 @@ source_set("autofill_agent_delegate") {
   deps = [
     "//base",
     "//components/autofill/ios/browser",
+    "//ios/chrome/browser/autofill/atmemory/public",
     "//ios/chrome/browser/shared/public/commands",
   ]
 }
@@ -249,6 +275,7 @@ source_set("unit_tests") {
     "//components/password_manager/core/browser:test_support",
     "//components/password_manager/ios",
     "//components/personal_context/core:features",
+    "//components/prefs:test_support",
     "//components/security_state/ios",
     "//components/strings:components_strings__strings_grit",
     "//components/sync_user_events:test_support",
@@ -265,6 +292,7 @@ source_set("unit_tests") {
     "//ios/chrome/browser/autofill/ui_bundled:coordinator",
     "//ios/chrome/browser/infobars/model",
     "//ios/chrome/browser/passwords/model",
+    "//ios/chrome/browser/personal_context/model",
     "//ios/chrome/browser/settings/ui_bundled:test_support",
     "//ios/chrome/browser/shared/coordinator/chrome_coordinator",
     "//ios/chrome/browser/shared/model/application_context",
@@ -283,6 +311,7 @@ source_set("unit_tests") {
     "//ios/web/public/js_messaging",
     "//ios/web/public/test",
     "//ios/web/public/test:javascript_test",
+    "//net:test_support",
     "//testing/data_driven_testing",
     "//testing/gtest",
     "//third_party/leveldatabase",

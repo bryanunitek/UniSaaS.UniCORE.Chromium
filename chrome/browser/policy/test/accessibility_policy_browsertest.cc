@@ -7,6 +7,7 @@
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
+#include "content/public/browser/browser_accessibility_state.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -17,7 +18,6 @@
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
 #include "chrome/browser/ash/accessibility/magnifier_type.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
-#include "chrome/browser/ui/browser.h"
 #include "components/prefs/pref_service.h"
 #endif
 
@@ -305,7 +305,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityPolicyTest, DictationEnabled) {
   // Verifies that the dictation accessibility feature can be
   // controlled through policy.
   AccessibilityManager* accessibility_manager = AccessibilityManager::Get();
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
 
   // Verify that the dictation is initially disabled
   EXPECT_FALSE(accessibility_manager->IsDictationEnabled());
@@ -529,7 +529,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityPolicyTest, ColorCorrectionEnabled) {
 // policy.
 IN_PROC_BROWSER_TEST_F(AccessibilityPolicyTest, FaceGazeForcedOff) {
   AccessibilityManager* accessibility_manager = AccessibilityManager::Get();
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
 
   // Verify that FaceGaze is initially disabled.
   EXPECT_FALSE(accessibility_manager->IsFaceGazeEnabled());
@@ -561,5 +561,31 @@ IN_PROC_BROWSER_TEST_F(AccessibilityPolicyTest, FaceGazeForcedOn) {
   EXPECT_TRUE(accessibility_manager->IsFaceGazeEnabled());
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+IN_PROC_BROWSER_TEST_F(PolicyTest, RendererAccessibilityEnabled) {
+  content::BrowserAccessibilityState* accessibility_state =
+      content::BrowserAccessibilityState::GetInstance();
+
+  // Verify default state is enabled (AX mode changes allowed).
+  EXPECT_TRUE(accessibility_state->IsAXModeChangeAllowed());
+
+  // Disable renderer accessibility via policy.
+  PolicyMap policies;
+  policies.Set(key::kRendererAccessibilityEnabled, POLICY_LEVEL_MANDATORY,
+               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(false),
+               nullptr);
+  UpdateProviderPolicy(policies);
+
+  // Verify that policy disabled AX mode changes.
+  EXPECT_FALSE(accessibility_state->IsAXModeChangeAllowed());
+
+  // Re-enable policy dynamically (dynamic_refresh test).
+  policies.Set(key::kRendererAccessibilityEnabled, POLICY_LEVEL_MANDATORY,
+               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(true),
+               nullptr);
+  UpdateProviderPolicy(policies);
+
+  EXPECT_TRUE(accessibility_state->IsAXModeChangeAllowed());
+}
 
 }  // namespace policy

@@ -95,10 +95,12 @@ class TabStrip : public views::View,
 
   // Returns the size needed for the specified views. This is invoked during
   // drag and drop to calculate offsets and positioning.
-  static int GetSizeNeededForViews(const std::vector<TabSlotView*>& views);
+  static int GetSizeNeededForViews(const std::vector<views::View*>& views);
 
   // Sets the observer to be notified of changes within this TabStrip.
   void SetTabStripObserver(TabStripObserver* observer);
+
+  void SetIsGlassFrame(bool is_glass);
 
   // Returns true if the specified rect (in TabStrip coordinates) intersects
   // the window caption area of the browser window.
@@ -211,6 +213,7 @@ class TabStrip : public views::View,
   int GetModelCount() const;
 
   TabStripController* controller() const { return controller_.get(); }
+  TabContainer* tab_container_for_testing() { return tab_container_; }
 
   TabDragContext* GetDragContext();
 
@@ -296,6 +299,7 @@ class TabStrip : public views::View,
   void HideHover(Tab* tab, TabStyle::HideHoverStyle style) override;
   int GetStrokeThickness() const override;
   bool CanPaintThrobberToLayer() const override;
+  bool IsGlassFrame() const override;
   SkColor GetTabSeparatorColor() const override;
   std::u16string GetAccessibleTabName(const Tab* tab) const override;
   float GetHoverOpacityForTab(float range_parameter) const override;
@@ -310,7 +314,8 @@ class TabStrip : public views::View,
       const tab_groups::TabGroupColorId& color_id) const override;
   void ShiftGroupLeft(const tab_groups::TabGroupId& group) override;
   void ShiftGroupRight(const tab_groups::TabGroupId& group) override;
-  Browser* GetBrowser() override;
+  void EnterFocusMode(const tab_groups::TabGroupId& group) override;
+  void ExitFocusMode(std::optional<TabGroupFocusExitReason> reason) override;
   BrowserWindowInterface* GetBrowserWindowInterface() override;
 
   // views::View:
@@ -332,7 +337,7 @@ class TabStrip : public views::View,
   views::View* GetViewForDrop() override;
 
   void DisableTabStripEditingForTesting();
-  TabHoverCardController* hover_card_controller_for_testing() {
+  TabHoverCardController* hover_card_controller() {
     return hover_card_controller_.get();
   }
 
@@ -373,7 +378,7 @@ class TabStrip : public views::View,
   const Tab* GetLastVisibleTab() const;
 
   // Closes the tab at `model_index`.
-  void CloseTabInternal(int model_index, CloseTabSource source);
+  void CloseTabInternal(CloseTabSource source);
 
   // Computes and stores values derived from contrast ratios.
   void UpdateContrastRatioValues();
@@ -460,6 +465,8 @@ class TabStrip : public views::View,
 
   // If false simulates a non-editable tab strip for testing.
   bool tab_strip_editable_for_testing_ = true;
+
+  bool is_glass_ = false;
 
   base::CallbackListSubscription paint_as_active_subscription_;
 

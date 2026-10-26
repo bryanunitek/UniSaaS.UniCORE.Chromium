@@ -62,6 +62,10 @@ export function highlight(node: Node, ranges: Range[]): HTMLElement {
 
   const wrapper = document.createElement('span');
   wrapper.classList.add(WRAPPER_CSS_CLASS);
+  // Ensure hit-testing resolves to the enclosing element (e.g., an <a> link)
+  // rather than the decorative highlight spans, preventing settings toggles
+  // from inadvertently switching when a highlighted link is clicked.
+  wrapper.style.pointerEvents = 'none';
   // Use existing node as placeholder to determine where to insert the
   // replacement content.
   assert(node.parentNode);
@@ -100,6 +104,7 @@ export function highlight(node: Node, ranges: Range[]): HTMLElement {
           'var(--search-highlight-hit-background-color, #ffeb3b)';
       // Defaults to the color associated with --google-grey-900.
       hitSpan.style.color = 'var(--search-highlight-hit-color, #202124)';
+      hitSpan.style.fontWeight = 'var(--search-highlight-hit-font-weight)';
       hitSpan.textContent = tokens[i]!;
       wrapper.appendChild(hitSpan);
     }

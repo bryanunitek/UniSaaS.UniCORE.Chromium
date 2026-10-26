@@ -4,8 +4,6 @@
 
 package org.chromium.chrome.browser.tasks.tab_management;
 
-import static org.chromium.build.NullUtil.assumeNonNull;
-
 import android.content.Context;
 import android.view.InputDevice;
 import android.view.MotionEvent;
@@ -28,8 +26,6 @@ import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
 import org.chromium.ui.recyclerview.widget.ItemTouchHelper2;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.function.Supplier;
 
 /**
@@ -61,6 +57,7 @@ public abstract class TabListItemTouchHelperCallback extends ItemTouchHelper2.Si
 
     // Orchestrates long-press vs drag timings for touch events to trigger context menus.
     protected @Nullable TabGridItemLongPressOrchestrator mTabGridItemLongPressOrchestrator;
+    protected @Nullable PropertyModel mSelectedModel;
 
     /**
      * Constructs a new base touch helper callback.
@@ -198,8 +195,9 @@ public abstract class TabListItemTouchHelperCallback extends ItemTouchHelper2.Si
     protected boolean hasTabPropertiesModel(RecyclerView.@Nullable ViewHolder viewHolder) {
         if (viewHolder instanceof SimpleRecyclerViewAdapter.ViewHolder simpleViewHolder) {
             PropertyModel model = simpleViewHolder.model;
-            assumeNonNull(model);
-            return TabProperties.isTabOrTabGroup(model);
+            if (model != null) {
+                return TabProperties.isTabOrTabGroup(model);
+            }
         }
         return false;
     }
@@ -230,25 +228,13 @@ public abstract class TabListItemTouchHelperCallback extends ItemTouchHelper2.Si
     protected boolean hasCollaboration(RecyclerView.@Nullable ViewHolder viewHolder) {
         if (viewHolder instanceof SimpleRecyclerViewAdapter.ViewHolder simpleViewHolder) {
             PropertyModel model = simpleViewHolder.model;
-            assumeNonNull(model);
-            if (TabProperties.isTabOrTabGroup(model)) {
+            if (model != null && TabProperties.isTabOrTabGroup(model)) {
                 @Nullable TabGroupColorViewProvider provider =
                         model.get(TabProperties.TAB_GROUP_COLOR_VIEW_PROVIDER);
                 return provider != null && provider.hasCollaborationId();
             }
         }
         return false;
-    }
-
-    /**
-     * Returns the list of all tabs in the same group as the given tab ID.
-     *
-     * @param id The ID of the representative tab.
-     * @return The list of related tabs.
-     */
-    protected List<Tab> getRelatedTabsForId(int id) {
-        TabModel tabModel = mCurrentTabModelSupplier.get();
-        return tabModel == null ? new ArrayList<>() : tabModel.getRelatedTabList(id);
     }
 
     /**
@@ -376,10 +362,30 @@ public abstract class TabListItemTouchHelperCallback extends ItemTouchHelper2.Si
         return mTabGridItemLongPressOrchestrator;
     }
 
+    /**
+     * Resolves the current index of the selected card to deselect in the model. If the tab has
+     * moved (e.g. pinned/unpinned/reordered), resolves by model identity if possible.
+     */
+    protected int getSelectedCardIndexForDeselect() {
+        if (mSelectedModel != null) {
+            int index = mModel.indexFromModel(mSelectedModel);
+            if (index != TabModel.INVALID_TAB_INDEX) {
+                return index;
+            }
+        }
+        return mSelectedTabIndex;
+    }
+
     void setSelectedTabIndexForTesting(int index) {
         var oldValue = mSelectedTabIndex;
         mSelectedTabIndex = index;
         ResettersForTesting.register(() -> mSelectedTabIndex = oldValue);
+    }
+
+    void setSelectedModelForTesting(@Nullable PropertyModel model) {
+        var oldValue = mSelectedModel;
+        mSelectedModel = model;
+        ResettersForTesting.register(() -> mSelectedModel = oldValue);
     }
 
     void setCurrentActionStateForTesting(int actionState) {

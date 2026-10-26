@@ -29,8 +29,6 @@ component("kcer") {
     "helpers/pkcs12_validator.h",
     "kcer.cc",
     "kcer.h",
-    "kcer_histograms.cc",
-    "kcer_histograms.h",
     "kcer_impl.cc",
     "kcer_impl.h",
     "kcer_notifier_net.cc",
@@ -59,8 +57,8 @@ component("kcer") {
     "//chromeos/ash/components/chaps_util",
     "//chromeos/ash/components/dbus/chaps",
     "//chromeos/constants",
-    "//chromeos/crosapi/mojom",
     "//content/public/browser",
+    "//crypto",
     "//net",
   ]
 }
@@ -126,7 +124,6 @@ source_set("unit_tests") {
     "//base/test:test_support",
     "//chromeos/ash/components/dbus/chaps",
     "//chromeos/constants",
-    "//chromeos/crosapi/mojom",
     "//content/public/browser",
     "//content/test:test_support",
     "//crypto:test_support",

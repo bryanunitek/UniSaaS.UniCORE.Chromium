@@ -257,6 +257,20 @@ bool IsStringASCII(std::wstring_view str) {
 }
 #endif
 
+size_t FindFirstNonASCII(std::string_view str) {
+  return internal::FindFirstNonASCII(str.data(), str.length());
+}
+
+size_t FindFirstNonASCII(std::u16string_view str) {
+  return internal::FindFirstNonASCII(str.data(), str.length());
+}
+
+#if defined(WCHAR_T_IS_32_BIT)
+size_t FindFirstNonASCII(std::wstring_view str) {
+  return internal::FindFirstNonASCII(str.data(), str.length());
+}
+#endif
+
 bool IsStringUTF8(std::string_view str) {
   return internal::DoIsStringUTF8<IsValidCharacter>(str);
 }
@@ -458,6 +472,22 @@ size_t u16cstrlcpy(char16_t* dst, const char16_t* src, size_t dst_size) {
 size_t wcslcpy(wchar_t* dst, const wchar_t* src, size_t dst_size) {
   return internal::lcpyT(UNSAFE_TODO(base::span(dst, dst_size)),
                          std::wstring_view(src));
+}
+
+bool EqualsCaseInsensitiveASCII(std::string_view a, std::string_view b) {
+  return internal::EqualsCaseInsensitiveASCIIT(a, b);
+}
+
+bool EqualsCaseInsensitiveASCII(std::u16string_view a, std::u16string_view b) {
+  return internal::EqualsCaseInsensitiveASCIIT(a, b);
+}
+
+bool EqualsCaseInsensitiveASCII(std::u16string_view a, std::string_view b) {
+  return internal::EqualsCaseInsensitiveASCIIT(a, b);
+}
+
+bool EqualsCaseInsensitiveASCII(std::string_view a, std::u16string_view b) {
+  return internal::EqualsCaseInsensitiveASCIIT(a, b);
 }
 
 }  // namespace base

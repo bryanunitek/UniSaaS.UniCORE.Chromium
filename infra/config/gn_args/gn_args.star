@@ -54,10 +54,25 @@ gn_args.config(
 # android:debuggable="true" causes ART to run more slowly, so tests run
 # faster without it. https://crbug.com/1276429
 gn_args.config(
-    name = "android_builder_without_codecs",
-    configs = ["android"],
+    name = "android_non_debuggable",
     args = {
         "debuggable_apks": False,
+    },
+)
+
+gn_args.config(
+    name = "android_builder_without_codecs",
+    configs = [
+        "android",
+        "android_non_debuggable",
+    ],
+)
+
+# For builds requiring debuggable_apks.
+gn_args.config(
+    name = "debuggable_apks",
+    args = {
+        "debuggable_apks": True,
     },
 )
 
@@ -410,6 +425,7 @@ gn_args.config(
     },
     configs = [
         "clang",
+        "enable_rust_clippy",
     ],
 )
 
@@ -545,13 +561,6 @@ gn_args.config(
 )
 
 gn_args.config(
-    name = "devtools_do_typecheck",
-    args = {
-        "devtools_skip_typecheck": False,
-    },
-)
-
-gn_args.config(
     name = "disable_seed_corpus",
     args = {
         "archive_seed_corpus": False,
@@ -661,13 +670,6 @@ gn_args.config(
     name = "enable_vulkan",
     args = {
         "enable_vulkan": True,
-    },
-)
-
-gn_args.config(
-    name = "enterprise_companion",
-    args = {
-        "enable_enterprise_companion": True,
     },
 )
 
@@ -783,13 +785,6 @@ gn_args.config(
     name = "hwasan",
     args = {
         "is_hwasan": True,
-    },
-)
-
-gn_args.config(
-    name = "reclient",
-    args = {
-        "use_reclient": True,
     },
 )
 
@@ -910,6 +905,20 @@ gn_args.config(
     name = "linux",
     args = {
         "target_os": "linux",
+    },
+)
+
+gn_args.config(
+    name = "linux_native_wayland",
+    configs = [
+        "linux",
+    ],
+    args = {
+        "ozone_auto_platforms": False,
+        "ozone_platform_wayland": True,
+        "ozone_platform": "wayland",
+        "use_bundled_weston": False,
+        "use_bundled_mutter": False,
     },
 )
 
@@ -1053,13 +1062,6 @@ gn_args.config(
 )
 
 gn_args.config(
-    name = "no_reclient",
-    args = {
-        "use_reclient": False,
-    },
-)
-
-gn_args.config(
     name = "no_remoteexec",
     args = {
         "use_remoteexec": False,
@@ -1187,9 +1189,6 @@ gn_args.config(
     args = {
         "chrome_pgo_phase": 1,
     },
-    configs = [
-        "v8_release_branch",
-    ],
 )
 
 gn_args.config(
@@ -1225,6 +1224,9 @@ gn_args.config(
 
 gn_args.config(
     name = "release_try_builder",
+    args = {
+        "enable_expensive_dchecks": False,
+    },
     configs = [
         "release_builder",
         "try_builder",
@@ -1335,6 +1337,14 @@ gn_args.config(
     name = "thin_lto",
     args = {
         "use_thin_lto": True,
+    },
+)
+
+gn_args.config(
+    name = "tint_mesa_fuzz",
+    args = {
+        "tint_build_mesa": True,
+        "tint_build_fuzzer_vulkan_support": True,
     },
 )
 
@@ -1487,14 +1497,6 @@ gn_args.config(
     ],
 )
 
-# V8 flag that disables v8_enable_runtime_call_stats on release branches.
-gn_args.config(
-    name = "v8_release_branch",
-    args = {
-        "v8_is_on_release_branch": True,
-    },
-)
-
 gn_args.config(
     name = "v8_sandbox_testing",
     args = {
@@ -1552,7 +1554,7 @@ gn_args.config(
 
 # For Android >=Q, only userdebug/eng
 gn_args.config(
-    name = "webview_trichrome",
+    name = "webview_debug_package_name",
     args = {
         "system_webview_package_name": "com.google.android.webview.debug",
     },
@@ -1618,20 +1620,13 @@ gn_args.config(
 )
 
 gn_args.config(
-    name = "high_end_fuzzer_targets",
-    args = {
-        "high_end_fuzzer_targets": True,
-    },
-)
-
-gn_args.config(
     name = "enable_swift_cxx_interop",
     args = {"enable_swift_cxx_interop": True},
 )
 
 gn_args.config(
-    name = "use_typescript_go",
+    name = "separate_renderer",
     args = {
-        "use_typescript_go": True,
+        "enable_separate_renderer_binary": True,
     },
 )

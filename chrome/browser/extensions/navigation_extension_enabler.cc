@@ -11,6 +11,7 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/buildflags/buildflags.h"
@@ -21,8 +22,7 @@ namespace extensions {
 
 NavigationExtensionEnabler::NavigationExtensionEnabler(
     content::WebContents* web_contents)
-    : content::WebContentsObserver(web_contents),
-      content::WebContentsUserData<NavigationExtensionEnabler>(*web_contents) {
+    : content::WebContentsObserver(web_contents) {
   extension_registry_observation_.Observe(
       ExtensionRegistry::Get(web_contents->GetBrowserContext()));
 }
@@ -73,23 +73,24 @@ void NavigationExtensionEnabler::PromptToEnableExtensionIfNecessary(
   // OnInstallPromptDone.
   in_progress_prompt_extension_id_ = extension->id();
 
-  extension_install_prompt_ =
-      std::make_unique<ExtensionInstallPrompt>(web_contents());
   InstallPromptData::PromptType type =
       ExtensionInstallPrompt::GetReEnablePromptTypeForExtension(
           web_contents()->GetBrowserContext(), extension);
+  extension_install_prompt_ = std::make_unique<ExtensionInstallPrompt>(
+      web_contents(), std::make_unique<InstallPromptData>(type));
   extension_install_prompt_->ShowDialog(
       base::BindRepeating(&NavigationExtensionEnabler::OnInstallPromptDone,
                           weak_factory_.GetWeakPtr()),
-      extension, nullptr, std::make_unique<InstallPromptData>(type),
+      extension, nullptr,
       ExtensionInstallPrompt::GetDefaultShowDialogCallback());
 }
 
 void NavigationExtensionEnabler::OnInstallPromptDone(
     ExtensionInstallPrompt::DoneCallbackPayload payload) {
   // This dialog doesn't support the "withhold permissions" checkbox.
-  DCHECK_NE(payload.result,
-            ExtensionInstallPrompt::Result::ACCEPTED_WITH_WITHHELD_PERMISSIONS);
+  CHECK_NE(payload.result,
+           ExtensionInstallPrompt::Result::ACCEPTED_WITH_WITHHELD_PERMISSIONS,
+           base::NotFatalUntil::M161);
 
   // The extension was already uninstalled.
   if (in_progress_prompt_extension_id_.empty()) {
@@ -126,7 +127,5 @@ void NavigationExtensionEnabler::OnExtensionUninstalled(
   in_progress_prompt_extension_id_ = std::string();
   extension_install_prompt_.reset();
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(NavigationExtensionEnabler);
 
 }  // namespace extensions

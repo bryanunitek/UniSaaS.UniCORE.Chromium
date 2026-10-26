@@ -18,7 +18,6 @@ import android.net.NetworkInfo;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.policy.PolicyServiceFactory;
@@ -31,7 +30,6 @@ import org.chromium.components.policy.PolicyService;
  * preferences.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class PrivacyPreferencesManagerImplTest {
     // Parameters to simulate user- and network-permission state.
     private static final boolean CONNECTED = true;
@@ -179,11 +177,36 @@ public class PrivacyPreferencesManagerImplTest {
         PrivacyPreferencesManagerImpl preferenceManager =
                 new TestPrivacyPreferencesManager(context);
 
+        // 1. Test when native is NOT initialized: returns value from SharedPreferences
+        preferenceManager.setNativeInitializedForTesting(false);
         writeBoolean(ChromePreferenceKeys.PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE, true);
         assertTrue(preferenceManager.shouldUseMetricsChoiceRestructure());
 
         writeBoolean(ChromePreferenceKeys.PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE, false);
         assertFalse(preferenceManager.shouldUseMetricsChoiceRestructure());
+
+        // 2. Test when native IS initialized: calls JNI and updates cache
+        preferenceManager.setNativeInitializedForTesting(true);
+
+        // JNI returns true
+        when(mNativeMock.shouldUseMetricsChoiceRestructure()).thenReturn(true);
+        assertTrue(preferenceManager.shouldUseMetricsChoiceRestructure());
+        // Verify the cache has been updated to true
+        assertTrue(
+                ChromeSharedPreferences.getInstance()
+                        .readBoolean(
+                                ChromePreferenceKeys.PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE,
+                                false));
+
+        // JNI returns false
+        when(mNativeMock.shouldUseMetricsChoiceRestructure()).thenReturn(false);
+        assertFalse(preferenceManager.shouldUseMetricsChoiceRestructure());
+        // Verify the cache has been updated to false
+        assertFalse(
+                ChromeSharedPreferences.getInstance()
+                        .readBoolean(
+                                ChromePreferenceKeys.PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE,
+                                true));
     }
 
     private void runTest(

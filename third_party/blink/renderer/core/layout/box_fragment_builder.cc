@@ -373,9 +373,6 @@ void BoxFragmentBuilder::AddChild(
   PropagateFromFragment(child, child_offset, *relative_offset,
                         inline_container);
   AddChildInternal(&child, child_offset + *relative_offset);
-
-  // We have got some content, so follow normal breaking rules from now on.
-  SetRequiresContentBeforeBreaking(false);
 }
 
 void BoxFragmentBuilder::AddBreakToken(const BreakToken* token,
@@ -502,8 +499,8 @@ void BoxFragmentBuilder::PropagateBreakInfo(
       child_box_fragment ? child_box_fragment->GetBreakToken() : nullptr;
 
   // Figure out if this child break is in the same flow as this parent. If it's
-  // an out-of-flow positioned box, it's not. If it's in a parallel flow, it's
-  // also not.
+  // a floating or out-of-flow positioned box, it's not. If it's in a parallel
+  // flow, it's also not.
   bool child_is_in_same_flow =
       ((!token || !token->IsAtBlockEnd()) &&
        !child_fragment.IsFloatingOrOutOfFlowPositioned()) ||
@@ -569,11 +566,13 @@ void BoxFragmentBuilder::PropagateBreakInfo(
       has_inflow_child_break_inside_ = true;
     }
 
-    // Downgrade the appeal of breaking inside this container, if the break
-    // inside the child is less appealing than what we've found so far.
-    BreakAppeal appeal_inside =
-        CalculateBreakAppealInside(GetConstraintSpace(), child_layout_result);
-    ClampBreakAppeal(appeal_inside);
+    if (!child_fragment.IsOutOfFlowPositioned()) {
+      // Downgrade the appeal of breaking inside this container, if the break
+      // inside the child is less appealing than what we've found so far.
+      BreakAppeal appeal_inside =
+          CalculateBreakAppealInside(GetConstraintSpace(), child_layout_result);
+      ClampBreakAppeal(appeal_inside);
+    }
   }
 
   if (GetConstraintSpace().IsInitialColumnBalancingPass()) {
@@ -587,6 +586,11 @@ void BoxFragmentBuilder::PropagateBreakInfo(
     PropagateSpaceShortage(child_layout_result.MinimalSpaceShortage());
   }
 
+  if (!child_fragment.IsOutOfFlowPositioned()) {
+    // We have got some content, so follow normal breaking rules from now on.
+    SetRequiresContentBeforeBreaking(false);
+  }
+
   if (!child_box_fragment) {
     return;
   }
@@ -596,12 +600,12 @@ void BoxFragmentBuilder::PropagateBreakInfo(
   if (GetConstraintSpace().IsInColumnBfc()) [[unlikely]] {
     if (const auto* child_spanner_path =
             child_layout_result.GetColumnSpannerPath()) {
-      DCHECK(HasInflowChildBreakInside() ||
-             !child_layout_result.GetPhysicalFragment().IsBox());
       const auto* spanner_path =
           MakeGarbageCollected<ColumnSpannerPath>(Node(), child_spanner_path);
-      SetColumnSpannerPath(spanner_path);
+      SetColumnSpannerPath(*spanner_path);
       SetIsEmptySpannerParent(child_layout_result.IsEmptySpannerParent());
+      DCHECK(HasInflowChildBreakInside() ||
+             !child_layout_result.GetPhysicalFragment().IsBox());
     }
   } else {
     DCHECK(!child_layout_result.GetColumnSpannerPath());
@@ -664,7 +668,7 @@ void BoxFragmentBuilder::HandleOofsAndSpecialDescendants() {
   // we've found so far.
   PropagateSizeDependentData();
 
-  OutOfFlowLayoutPart(this).Run();
+  OutOfFlowLayoutPart::Run(this);
   if (!Style().ScrollMarkerGroupNone() && !GetConstraintSpace().IsAnonymous()) {
     Node().HandleScrollMarkerGroup();
   }
@@ -706,8 +710,9 @@ const LayoutResult* BoxFragmentBuilder::ToBoxFragment(
     if (!break_token_) {
       if (last_inline_break_token_)
         child_break_tokens_.push_back(std::move(last_inline_break_token_));
-      if (DidBreakSelf() || ShouldBreakInside())
+      if (ShouldBreak()) {
         break_token_ = BlockBreakToken::Create(this);
+      }
     }
 
     if (break_token_ && !is_at_block_end_ && space.IsInsideBalancedColumns() &&
@@ -846,7 +851,7 @@ void BoxFragmentBuilder::AdjustFixedposContainingBlockForInnerMulticols() {
 #if DCHECK_IS_ON()
 
 void BoxFragmentBuilder::CheckNoBlockFragmentation() const {
-  DCHECK(!ShouldBreakInside());
+  DCHECK(!ShouldBreakInsideForContent());
   DCHECK(!HasInflowChildBreakInside());
   DCHECK(!DidBreakSelf());
   DCHECK(!has_forced_break_);

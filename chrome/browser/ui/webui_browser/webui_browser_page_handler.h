@@ -18,7 +18,7 @@
 class AppMenu;
 class AppMenuModel;
 class BackForwardMenuModel;
-class Browser;
+class BrowserWindowInterface;
 
 namespace views {
 class MenuModelAdapter;
@@ -30,9 +30,13 @@ class WebUIBrowserUI;
 class WebUIBrowserPageHandler
     : public content::DocumentService<webui_browser::mojom::PageHandler> {
  public:
+  WebUIBrowserPageHandler(
+      content::RenderFrameHost& render_frame_host,
+      mojo::PendingReceiver<webui_browser::mojom::PageHandler> receiver,
+      WebUIBrowserUI* controller,
+      base::SelfDeletingPassKey key);
   WebUIBrowserPageHandler(const WebUIBrowserPageHandler&) = delete;
   WebUIBrowserPageHandler& operator=(const WebUIBrowserPageHandler&) = delete;
-  ~WebUIBrowserPageHandler() override;
 
   static void CreateForRenderFrameHost(
       content::RenderFrameHost& render_frame_host,
@@ -57,13 +61,12 @@ class WebUIBrowserPageHandler
   void ShowBackForwardMenu(bool is_back) override;
   void GetTabStripInset(GetTabStripInsetCallback callback) override;
 
- private:
-  WebUIBrowserPageHandler(
-      content::RenderFrameHost& render_frame_host,
-      mojo::PendingReceiver<webui_browser::mojom::PageHandler> receiver,
-      WebUIBrowserUI* controller);
+  static int GetTabStripInsetWidth();
 
-  Browser* GetBrowser();
+ private:
+  ~WebUIBrowserPageHandler() override;
+
+  BrowserWindowInterface* GetBrowser();
   WebUIBrowserWindow* GetBrowserWindow();
 
   std::unique_ptr<AppMenuModel> menu_model_;

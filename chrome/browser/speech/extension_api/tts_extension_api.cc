@@ -10,6 +10,8 @@
 #include <string>
 #include <utility>
 
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
 #include "base/lazy_instance.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
@@ -155,8 +157,8 @@ class TtsExtensionEventHandler : public content::UtteranceEventDelegate {
     details.Set(constants::kSrcIdKey, utterance->GetSrcId());
     details.Set(constants::kIsFinalEventKey, utterance->IsFinished());
 
-    base::ListValue arguments;
-    arguments.Append(std::move(details));
+    auto arguments = base::MakeRefCounted<extensions::EventArgs>();
+    arguments->data.Append(std::move(details));
 
     auto event = std::make_unique<extensions::Event>(
         ::extensions::events::TTS_ON_EVENT, ::events::kOnEvent,
@@ -197,7 +199,9 @@ ExtensionFunction::ResponseAction TtsSpeakFunction::Run() {
     EXTENSION_FUNCTION_VALIDATE(lang_value->is_string());
     lang = lang_value->GetString();
   }
-  if (!lang.empty() && !l10n_util::IsValidLocaleSyntax(lang)) {
+  if (!lang.empty() && !base::i18n::LanguageTagConverter::GetInstance()
+                            .FromString(lang)
+                            .has_value()) {
     return RespondNow(Error(constants::kErrorInvalidLang));
   }
 
@@ -419,8 +423,7 @@ void TtsAPI::OnVoicesChanged() {
     return;
   }
   auto event = std::make_unique<extensions::Event>(
-      events::TTS_ON_VOICES_CHANGED, ::events::kOnVoicesChanged,
-      base::ListValue());
+      events::TTS_ON_VOICES_CHANGED, ::events::kOnVoicesChanged, nullptr);
   event_router_->BroadcastEvent(std::move(event));
 }
 

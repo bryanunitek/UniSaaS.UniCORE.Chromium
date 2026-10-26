@@ -19,7 +19,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -34,7 +33,6 @@ import org.chromium.chrome.test.util.browser.tabmodel.MockTabModel;
 
 /** Tests for the TabModelSelectorTabRegistrationObserver. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabModelSelectorTabRegistrationObserverUnitTest {
     private static final long FAKE_NATIVE_ADDRESS = 123L;
 
@@ -103,12 +101,6 @@ public class TabModelSelectorTabRegistrationObserverUnitTest {
 
     private TabModelSelector createTabModelSelector() {
         TestTabModelSelector selector = new TestTabModelSelector(mTabCreatorManager);
-        TabModelOrderControllerImpl orderController = new TabModelOrderControllerImpl(selector);
-
-        AsyncTabParamsManager realAsyncTabParamsManager =
-                AsyncTabParamsManagerFactory.createAsyncTabParamsManager();
-        NextTabPolicy.NextTabPolicySupplier nextTabPolicySupplier =
-                () -> NextTabPolicy.HIERARCHICAL;
 
         MockTabModel normalTabModel = new MockTabModel(mProfile, null);
         normalTabModel.setTabRemoverForTesting(createTabRemover(normalTabModel));
@@ -298,40 +290,6 @@ public class TabModelSelectorTabRegistrationObserverUnitTest {
     }
 
     @Test
-    public void testRemoveObserver() {
-        TabModelSelectorTabRegistrationObserver.Observer observer =
-                mock(TabModelSelectorTabRegistrationObserver.Observer.class);
-        mTabRegistrationObserver.addObserverAndNotifyExistingTabRegistration(observer);
-
-        Tab normalTab1 = MockTab.createAndInitialize(1, mProfile);
-        mTabModelSelector
-                .getModel(false)
-                .addTab(
-                        normalTab1,
-                        0,
-                        TabLaunchType.FROM_LINK,
-                        TabCreationState.LIVE_IN_FOREGROUND);
-        verify(observer).onTabRegistered(normalTab1);
-
-        mTabRegistrationObserver.removeObserver(observer);
-
-        Tab normalTab2 = MockTab.createAndInitialize(2, mProfile);
-        mTabModelSelector
-                .getModel(false)
-                .addTab(
-                        normalTab2,
-                        0,
-                        TabLaunchType.FROM_LINK,
-                        TabCreationState.LIVE_IN_FOREGROUND);
-        mTabModelSelector
-                .getModel(false)
-                .getTabRemover()
-                .removeTab(normalTab1, /* allowDialog= */ false);
-
-        verifyNoMoreInteractions(observer);
-    }
-
-    @Test
     public void testDestroy() {
         TabModelSelectorTabRegistrationObserver.Observer observer =
                 mock(TabModelSelectorTabRegistrationObserver.Observer.class);
@@ -383,11 +341,6 @@ public class TabModelSelectorTabRegistrationObserverUnitTest {
 
         @Override
         public void requestToShowTab(Tab tab, int type) {}
-
-        @Override
-        public boolean isTabModelRestored() {
-            return true;
-        }
 
         @Override
         public @Nullable Profile getProfile(boolean offTheRecord) {

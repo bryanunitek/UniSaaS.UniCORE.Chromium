@@ -16,6 +16,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "content/public/browser/tts_controller.h"
 
@@ -24,26 +26,28 @@ namespace {
 constexpr int kNoLength = -1;
 constexpr char kNoError[] = "";
 
-std::vector<content::VoiceData>& VoicesRef() {
-  static base::NoDestructor<std::vector<content::VoiceData>> voices([]() {
-    [NSNotificationCenter.defaultCenter
-        addObserverForName:NSApplicationWillBecomeActiveNotification
-                    object:nil
-                     queue:nil
-                usingBlock:^(NSNotification* notification) {
-                  // The user might have switched to Settings or some other app
-                  // to change voices or locale settings. Avoid a stale cache by
-                  // forcing a rebuild of the voices vector after the app
-                  // becomes active.
-                  VoicesRef().clear();
-                }];
-    return std::vector<content::VoiceData>();
-  }());
-
-  return *voices;
+AVSpeechUtterance* MakeUtterance(int utterance_id,
+                                 const std::string& utterance_string) {
+  AVSpeechUtterance* utterance = [AVSpeechUtterance
+      speechUtteranceWithString:base::SysUTF8ToNSString(utterance_string)];
+  objc_setAssociatedObject(utterance, @selector(identifier), @(utterance_id),
+                           OBJC_ASSOCIATION_RETAIN);
+  return utterance;
 }
 
-AVSpeechSynthesisVoice* GetSystemDefaultVoice() {
+int GetUtteranceId(AVSpeechUtterance* utterance) {
+  NSNumber* identifier = base::apple::ObjCCast<NSNumber>(
+      objc_getAssociatedObject(utterance, @selector(identifier)));
+  if (identifier) {
+    return identifier.intValue;
+  }
+  return TtsPlatformImplMac::kInvalidUtteranceId;
+}
+
+}  // namespace
+
+AVSpeechSynthesisVoice*
+TtsPlatformImplMacBackgroundWorker::GetSystemDefaultVoice() {
   // This should be
   //
   //   [AVSpeechSynthesisVoice voiceWithLanguage:nil]
@@ -107,17 +111,33 @@ AVSpeechSynthesisVoice* GetSystemDefaultVoice() {
   return voice;
 }
 
-std::vector<content::VoiceData>& Voices() {
-  std::vector<content::VoiceData>& voices = VoicesRef();
-  if (!voices.empty()) {
-    return voices;
+std::string
+TtsPlatformImplMacBackgroundWorker::GetSystemDefaultVoiceIdentifier() {
+  AVSpeechSynthesisVoice* default_voice = GetSystemDefaultVoice();
+  return default_voice ? base::SysNSStringToUTF8(default_voice.identifier)
+                       : std::string();
+}
+
+TtsPlatformImplMacBackgroundWorker::Voices::Voices() = default;
+TtsPlatformImplMacBackgroundWorker::Voices::Voices(Voices&&) = default;
+TtsPlatformImplMacBackgroundWorker::Voices&
+TtsPlatformImplMacBackgroundWorker::Voices::operator=(Voices&&) = default;
+TtsPlatformImplMacBackgroundWorker::Voices::~Voices() = default;
+
+TtsPlatformImplMacBackgroundWorker::Voices
+TtsPlatformImplMacBackgroundWorker::LoadVoices() {
+  Voices result;
+
+  AVSpeechSynthesisVoice* default_voice = GetSystemDefaultVoice();
+  if (default_voice) {
+    result.default_voice_identifier =
+        base::SysNSStringToUTF8(default_voice.identifier);
   }
 
   NSMutableArray* av_speech_voices =
       [[AVSpeechSynthesisVoice.speechVoices sortedArrayUsingDescriptors:@[
         [NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES]
       ]] mutableCopy];
-  AVSpeechSynthesisVoice* default_voice = GetSystemDefaultVoice();
   if (default_voice) {
     [av_speech_voices removeObject:default_voice];
     [av_speech_voices insertObject:default_voice atIndex:0];
@@ -147,7 +167,7 @@ std::vector<content::VoiceData>& Voices() {
     }
   }
 
-  voices.reserve(av_speech_voices.count);
+  result.voices.reserve(av_speech_voices.count);
   for (AVSpeechSynthesisVoice* av_speech_voice in av_speech_voices) {
     NSString* voice_name = av_speech_voice.name;
     if (!voice_name) {
@@ -157,8 +177,8 @@ std::vector<content::VoiceData>& Voices() {
       continue;
     }
 
-    voices.emplace_back();
-    content::VoiceData& data = voices.back();
+    result.voices.emplace_back();
+    content::VoiceData& data = result.voices.back();
 
     if (name_counts[voice_name].intValue > 1) {
       // The language property on a voice is a BCP 47 code (i.e. "en-US") while
@@ -184,42 +204,28 @@ std::vector<content::VoiceData>& Voices() {
     data.events.insert(content::TTS_EVENT_RESUME);
   }
 
-  return voices;
+  return result;
 }
-
-AVSpeechUtterance* MakeUtterance(int utterance_id,
-                                 const std::string& utterance_string) {
-  AVSpeechUtterance* utterance = [AVSpeechUtterance
-      speechUtteranceWithString:base::SysUTF8ToNSString(utterance_string)];
-  objc_setAssociatedObject(utterance, @selector(identifier), @(utterance_id),
-                           OBJC_ASSOCIATION_RETAIN);
-  return utterance;
-}
-
-int GetUtteranceId(AVSpeechUtterance* utterance) {
-  NSNumber* identifier = base::apple::ObjCCast<NSNumber>(
-      objc_getAssociatedObject(utterance, @selector(identifier)));
-  if (identifier) {
-    return identifier.intValue;
-  }
-  return TtsPlatformImplMac::kInvalidUtteranceId;
-}
-
-}  // namespace
 
 // static
 content::TtsPlatformImpl* content::TtsPlatformImpl::GetInstance() {
   return TtsPlatformImplMac::GetInstance();
 }
 
-TtsPlatformImplMac::~TtsPlatformImplMac() = default;
+TtsPlatformImplMac::~TtsPlatformImplMac() {
+  if (application_active_observer_) {
+    [NSNotificationCenter.defaultCenter
+        removeObserver:application_active_observer_];
+  }
+}
 
 bool TtsPlatformImplMac::PlatformImplSupported() {
   return true;
 }
 
 bool TtsPlatformImplMac::PlatformImplInitialized() {
-  return true;
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return voices_loaded_;
 }
 
 void TtsPlatformImplMac::Speak(
@@ -229,6 +235,8 @@ void TtsPlatformImplMac::Speak(
     const content::VoiceData& voice,
     const content::UtteranceContinuousParameters& params,
     base::OnceCallback<void(bool)> on_speak_finished) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  received_voices_request_ = true;
   // Parse SSML and process speech. TODO(crbug.com/40273591):
   // AVSpeechUtterance has an initializer -initWithSSMLRepresentation:. Should
   // that be used instead?
@@ -245,6 +253,7 @@ void TtsPlatformImplMac::ProcessSpeech(
     const content::UtteranceContinuousParameters& params,
     base::OnceCallback<void(bool)> on_speak_finished,
     const std::string& parsed_utterance) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   utterance_ = parsed_utterance;
   paused_ = false;
   utterance_id_ = utterance_id;
@@ -326,12 +335,14 @@ void TtsPlatformImplMac::ProcessSpeech(
 }
 
 bool TtsPlatformImplMac::StopSpeaking() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   [speech_synthesizer_ stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
   paused_ = false;
   return true;
 }
 
 void TtsPlatformImplMac::Pause() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!paused_) {
     [speech_synthesizer_ pauseSpeakingAtBoundary:AVSpeechBoundaryImmediate];
     paused_ = true;
@@ -342,6 +353,7 @@ void TtsPlatformImplMac::Pause() {
 }
 
 void TtsPlatformImplMac::Resume() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (paused_) {
     [speech_synthesizer_ continueSpeaking];
     paused_ = false;
@@ -352,11 +364,84 @@ void TtsPlatformImplMac::Resume() {
 }
 
 bool TtsPlatformImplMac::IsSpeaking() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return speech_synthesizer_.speaking;
 }
 
 void TtsPlatformImplMac::GetVoices(std::vector<content::VoiceData>* outVoices) {
-  *outVoices = Voices();
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  received_voices_request_ = true;
+  *outVoices = voices_;
+}
+
+void TtsPlatformImplMac::RefreshVoices() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  received_voices_request_ = true;
+  LoadVoices();
+}
+
+void TtsPlatformImplMac::LoadVoices() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (is_loading_voices_) {
+    needs_reload_voices_ = true;
+    return;
+  }
+  is_loading_voices_ = true;
+
+  GetBackgroundWorker()
+      .AsyncCall(&TtsPlatformImplMacBackgroundWorker::LoadVoices)
+      .Then(base::BindOnce(&TtsPlatformImplMac::OnVoicesLoaded,
+                           base::Unretained(this)));
+}
+
+void TtsPlatformImplMac::OnVoicesLoaded(
+    TtsPlatformImplMacBackgroundWorker::Voices voices) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  is_loading_voices_ = false;
+  default_voice_identifier_ = std::move(voices.default_voice_identifier);
+  voices_ = std::move(voices.voices);
+  voices_loaded_ = true;
+
+  // Tells pages (voiceschanged) and other delegates about the new list, and
+  // speaks anything TtsController queued while the first load was pending.
+  content::TtsController::GetInstance()->VoicesChanged();
+
+  if (needs_reload_voices_) {
+    needs_reload_voices_ = false;
+    LoadVoices();
+  }
+}
+
+void TtsPlatformImplMac::UpdateSystemDefaultVoice() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // A load in flight fetches the default voice anyway.
+  if (is_loading_voices_ || is_updating_default_voice_) {
+    return;
+  }
+  is_updating_default_voice_ = true;
+
+  GetBackgroundWorker()
+      .AsyncCall(
+          &TtsPlatformImplMacBackgroundWorker::GetSystemDefaultVoiceIdentifier)
+      .Then(base::BindOnce(&TtsPlatformImplMac::OnGotDefaultVoiceIdentifier,
+                           base::Unretained(this)));
+}
+
+void TtsPlatformImplMac::OnGotDefaultVoiceIdentifier(
+    std::string default_voice_identifier) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  is_updating_default_voice_ = false;
+  if (default_voice_identifier != default_voice_identifier_) {
+    LoadVoices();
+  }
+}
+
+void TtsPlatformImplMac::OnApplicationWillBecomeActive() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!received_voices_request_) {
+    return;
+  }
+  UpdateSystemDefaultVoice();
 }
 
 void TtsPlatformImplMac::OnSpeechEvent(int utterance_id,
@@ -364,6 +449,7 @@ void TtsPlatformImplMac::OnSpeechEvent(int utterance_id,
                                        int char_index,
                                        int char_length,
                                        const std::string& error_message) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // Don't send events from an utterance that's already completed.
   if (utterance_id != utterance_id_) {
     return;
@@ -382,6 +468,18 @@ TtsPlatformImplMac::TtsPlatformImplMac()
     : speech_synthesizer_([[AVSpeechSynthesizer alloc] init]),
       delegate_([[ChromeTtsDelegate alloc] initWithPlatformImplMac:this]) {
   speech_synthesizer_.delegate = delegate_;
+  application_active_observer_ = [NSNotificationCenter.defaultCenter
+      addObserverForName:NSApplicationWillBecomeActiveNotification
+                  object:nil
+                   queue:NSOperationQueue.mainQueue
+              usingBlock:^(NSNotification* notification) {
+                // The user might have switched to Settings or some other app
+                // to change the default voice. Check for that when the app
+                // becomes active again and rebuild the voices vector if so.
+                TtsPlatformImplMac::GetInstance()
+                    ->OnApplicationWillBecomeActive();
+              }];
+  LoadVoices();
 }
 
 // static
@@ -391,8 +489,13 @@ TtsPlatformImplMac* TtsPlatformImplMac::GetInstance() {
 }
 
 // static
-std::vector<content::VoiceData>& TtsPlatformImplMac::VoicesRefForTesting() {
-  return VoicesRef();
+base::SequenceBound<TtsPlatformImplMacBackgroundWorker>&
+TtsPlatformImplMac::GetBackgroundWorker() {
+  static base::NoDestructor<
+      base::SequenceBound<TtsPlatformImplMacBackgroundWorker>>
+      worker(base::ThreadPool::CreateSequencedTaskRunner(
+          {base::MayBlock(), base::TaskPriority::USER_VISIBLE}));
+  return *worker;
 }
 
 @implementation ChromeTtsDelegate {

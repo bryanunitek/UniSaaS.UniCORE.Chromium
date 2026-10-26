@@ -19,7 +19,6 @@
 #include "components/lens/lens_overlay_side_panel_menu_option.h"
 #include "components/lens/lens_overlay_side_panel_result.h"
 #include "components/lens/lens_permission_user_action.h"
-#include "net/base/net_errors.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 
 namespace lens {
@@ -190,6 +189,27 @@ void RecordUKMSessionEndMetrics(
     std::optional<base::TimeDelta> session_foreground_duration = std::nullopt,
     std::optional<int> generated_tab_count = std::nullopt);
 
+// LINT.IfChange(LensOverlayClusterInfoStatus)
+enum class LensOverlayClusterInfoStatus {
+  // The cluster info was fetched and parsed successfully.
+  kSuccess = 0,
+
+  // The request failed with an HTTP error.
+  kHttpError = 1,
+
+  // The response failed to parse as proto.
+  kProtoParseError = 2,
+
+  kMaxValue = kProtoParseError,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/lens/enums.xml:LensOverlayClusterInfoStatus)
+
+// Records the status of a Lens Overlay cluster info fetch request.
+void RecordClusterInfoFetchStatus(LensOverlayClusterInfoStatus status);
+
+// Records the response time of a Lens Overlay cluster info fetch request.
+void RecordClusterInfoResponseTime(base::TimeDelta response_time);
+
 // Records the duration between the time a lens request is started and the time
 // a response is generated.
 void RecordLensResponseTime(base::TimeDelta response_time);
@@ -235,9 +255,6 @@ void RecordSidePanelMenuOptionSelected(
 // Records the result of handling a text directive in the Lens Overlay.
 void RecordHandleTextDirectiveResult(
     lens::LensOverlayTextDirectiveResult result);
-
-// Records the load status of the side panel iframe.
-void RecordIframeLoadStatus(bool is_error_page, net::Error net_error_code);
 
 // Records the time it takes to close the side panel
 void RecordTimeToCloseOpenedSidePanel(base::TimeDelta duration);

@@ -16,7 +16,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/fake_gaia_mixin.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chromeos/ash/components/policy/device_policy/cached_device_policy_updater.h"
@@ -108,19 +108,19 @@ IN_PROC_BROWSER_TEST_P(FamilyUserMetricsProviderTest, UserCategory) {
 
   logged_in_user_mixin_.LogInUser();
   signin::WaitForRefreshTokensLoaded(
-      IdentityManagerFactory::GetForProfile(browser()->profile()));
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile()));
 
   if (GetFamilyUserLogSegment() ==
       FamilyUserMetricsProvider::FamilyUserLogSegment::kSupervisedStudent) {
     // Add a secondary EDU account.
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
     ASSERT_TRUE(profile);
     signin::IdentityManager* identity_manager =
         IdentityManagerFactory::GetForProfile(profile);
     AccountInfo account_info =
         signin::MakeAccountAvailable(identity_manager, kSecondaryEDUEmail);
-    EXPECT_TRUE(
-        identity_manager->HasAccountWithRefreshToken(account_info.account_id));
+    EXPECT_TRUE(identity_manager->HasAccountWithRefreshToken(
+        account_info.GetAccountId()));
   }
 
   // Simulate calling ProvideHistograms() after logging in.
@@ -196,7 +196,7 @@ class FamilyUserMetricsProviderEphemeralUserTest
     MixinBasedInProcessBrowserTest::SetUpOnMainThread();
     logged_in_user_mixin_.LogInUser();
     signin::WaitForRefreshTokensLoaded(
-        IdentityManagerFactory::GetForProfile(browser()->profile()));
+        IdentityManagerFactory::GetForProfile(browser()->GetProfile()));
   }
 
   ash::DeviceStateMixin device_state_{

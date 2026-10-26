@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "chrome/browser/mac/auth_session_request.h"
 
 #import <AuthenticationServices/AuthenticationServices.h>
@@ -20,16 +15,20 @@
 #include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/apple/url_conversions.h"
+#include "ui/base/base_window.h"
+#include "ui/base/page_transition_types.h"
 #include "url/url_canon.h"
 
 namespace {
@@ -46,7 +45,7 @@ class AuthNavigationThrottle : public content::NavigationThrottle {
       : content::NavigationThrottle(registry),
         matching_scheme_(matching_scheme),
         matching_url_found_(std::move(matching_url_found)) {
-    DCHECK(!matching_url_found_.is_null());
+    CHECK(!matching_url_found_.is_null(), base::NotFatalUntil::M161);
   }
   AuthNavigationThrottle(content::NavigationThrottleRegistry& registry,
                          ASWebAuthenticationSessionCallback* matcher_callback,
@@ -55,7 +54,7 @@ class AuthNavigationThrottle : public content::NavigationThrottle {
       : content::NavigationThrottle(registry),
         matcher_callback_(matcher_callback),
         matching_url_found_(std::move(matching_url_found)) {
-    DCHECK(!matching_url_found_.is_null());
+    CHECK(!matching_url_found_.is_null(), base::NotFatalUntil::M161);
   }
   ~AuthNavigationThrottle() override = default;
 
@@ -69,7 +68,8 @@ class AuthNavigationThrottle : public content::NavigationThrottle {
   ThrottleCheckResult HandleRequest() {
     // Cancel any prerendering.
     if (!navigation_handle()->IsInPrimaryMainFrame()) {
-      DCHECK(navigation_handle()->IsInPrerenderedMainFrame());
+      CHECK(navigation_handle()->IsInPrerenderedMainFrame(),
+            base::NotFatalUntil::M161);
       return CANCEL_AND_IGNORE;
     }
 
@@ -148,7 +148,7 @@ void AuthSessionRequest::StartNewAuthSession(
   }
 
   // Create a Browser with an empty tab.
-  Browser* browser = nil;
+  BrowserWindowInterface* browser = nil;
   if (!error_string) {
     browser = CreateBrowser(request, profile);
     if (!browser) {
@@ -176,7 +176,7 @@ void AuthSessionRequest::StartNewAuthSession(
   // Then create the auth session that owns that browser and will intercept
   // navigation requests.
   content::WebContents* contents =
-      browser->tab_strip_model()->GetActiveWebContents();
+      browser->GetTabStripModel()->GetActiveWebContents();
   AuthSessionRequest::CreateForWebContents(contents, browser, request,
                                            matching_scheme);
 
@@ -203,7 +203,7 @@ void AuthSessionRequest::CancelAuthSession(
 
 // static
 std::optional<std::string> AuthSessionRequest::CanonicalizeScheme(
-    std::string scheme) {
+    std::string_view scheme) {
   url::RawCanonOutputT<char> canon_output;
   url::Component component;
   bool result = url::CanonicalizeScheme(scheme, &canon_output, &component);
@@ -211,7 +211,7 @@ std::optional<std::string> AuthSessionRequest::CanonicalizeScheme(
     return std::nullopt;
   }
 
-  return std::string(canon_output.data() + component.begin, component.len);
+  return std::string(component.AsViewOn(canon_output.view()));
 }
 
 void AuthSessionRequest::CreateAndAddNavigationThrottle(
@@ -242,7 +242,7 @@ void AuthSessionRequest::CreateAndAddNavigationThrottle(
 
 AuthSessionRequest::AuthSessionRequest(
     content::WebContents* web_contents,
-    Browser* browser,
+    BrowserWindowInterface* browser,
     ASWebAuthenticationSessionRequest* request,
     const std::string& matching_scheme)
     : content::WebContentsObserver(web_contents),
@@ -255,7 +255,7 @@ AuthSessionRequest::AuthSessionRequest(
 }
 
 // static
-Browser* AuthSessionRequest::CreateBrowser(
+BrowserWindowInterface* AuthSessionRequest::CreateBrowser(
     ASWebAuthenticationSessionRequest* request,
     Profile* profile) {
   if (!profile) {
@@ -263,7 +263,7 @@ Browser* AuthSessionRequest::CreateBrowser(
   }
 
   bool ephemeral_sessions_allowed_by_policy =
-      IncognitoModePrefs::GetAvailability(profile->GetPrefs()) !=
+      IncognitoModePrefs::GetAvailability(profile) !=
       policy::IncognitoModeAvailability::kDisabled;
 
   // As per the documentation for `shouldUseEphemeralSession`: "Whether the
@@ -284,8 +284,8 @@ Browser* AuthSessionRequest::CreateBrowser(
 
   // Check if browser creation is possible before attempting to create it.
   // This prevents crashes when the profile is in an unsuitable state.
-  if (Browser::GetCreationStatusForProfile(profile) !=
-      Browser::CreationStatus::kOk) {
+  if (GetBrowserWindowCreationStatusForProfile(*profile) !=
+      BrowserWindowInterface::CreationStatus::kOk) {
     return nullptr;
   }
 
@@ -311,9 +311,10 @@ Browser* AuthSessionRequest::CreateBrowser(
   // this code; if it were restored it would not have the AuthSessionRequest and
   // would not behave correctly.
 
-  Browser::CreateParams params(Browser::TYPE_POPUP, profile, true);
+  BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_POPUP, profile,
+                                   /*from_user_gesture=*/true);
   params.omit_from_session_restore = true;
-  Browser* browser = Browser::Create(params);
+  BrowserWindowInterface* browser = CreateBrowserWindow(std::move(params));
   chrome::AddTabAt(browser, GURL("about:blank"), -1, true);
   browser->GetWindow()->Show();
 
@@ -333,7 +334,7 @@ void AuthSessionRequest::DestroyWebContents() {
   // has no tabs left. Close the tab this way (as opposed to, say,
   // TabStripModel::CloseWebContentsAt) so that the web page will no longer be
   // able to show any dialogs, particularly a `beforeunload` one.
-  browser_->tab_strip_model()->DetachAndDeleteWebContentsAt(0);
+  browser_->GetTabStripModel()->DetachAndDeleteWebContentsAt(0);
   // The destruction of the WebContents triggers a call to
   // WebContentsDestroyed() below.
 }
@@ -377,8 +378,6 @@ void AuthSessionRequest::WebContentsDestroyed() {
   //   triggered above in `CancelAuthSession()`.
   //
   // In both cancellation cases, the OS must receive a cancellation callback.
-  // (This is an undocumented requirement in the case that the OS asked for the
-  // cancellation; see https://crbug.com/40250389.)
 
   if (perform_cancellation_callback_) {
     NSError* error = [NSError

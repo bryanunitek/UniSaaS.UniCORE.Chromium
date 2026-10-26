@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -16,7 +17,9 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/facilitated_payments/core/browser/account_linking_params.h"
 #include "components/facilitated_payments/core/browser/facilitated_payments_api_client.h"
+#include "components/strike_database/strike_database_integrator_base.h"
 
 namespace payments::facilitated {
 
@@ -39,25 +42,57 @@ class NativeAccountLinkingHandler {
   // Starts fetching the client token from GMSCore.
   void FetchClientToken();
 
-  // Non-virtual callback invoked when the client token is received.
-  // Handles latency/validity checks and calls DoOnClientTokenReceived.
-  void OnClientTokenReceived(base::TimeTicks start_time,
-                             std::vector<uint8_t> client_token);
-
-  // Non-virtual helper to handle standard linking completion logic. Calls the
-  // DoOnAccountLinkingResult virtual method.
-  void OnAccountLinkingResult(AccountLinkingResult result);
+  // Checks if the user preference is enabled, if the strike database allows
+  // prompting, and if screenlock/biometrics are set up. Handles nullptr strike
+  // database gracefully (e.g., in Incognito).
+  bool CanPromptUser();
 
   // Called when the user accepts the account linking prompt.
-  void OnAccepted();
+  virtual void OnAccepted();
 
   // Called when the user declines the account linking prompt.
-  void OnDeclined();
+  virtual void OnDeclined();
+
+  // Called if the user dismisses the prompt (e.g., swiping down or tapping the
+  // scrim).
+  virtual void OnDismissed();
+
+  // Resets the handler state, including the cached API client and action token.
+  void Reset();
+
+  // Dismisses the prompt UI.
+  virtual void DismissPrompt();
+
+  // Transitions the UI to the account linking loading spinner state.
+  virtual void ShowAccountLinkingLoadingScreen();
 
  protected:
+  // Hook to get the strike database. Should return nullptr in Incognito.
+  virtual strike_database::StrikeDatabaseIntegratorBase*
+  GetStrikeDatabase() = 0;
+
+  // Hook to check if the user preference for this FOP is enabled.
+  virtual bool IsUserPrefEnabled() const = 0;
+  // Virtual hook for subclasses to provide specific prompt configuration data.
+  // Return std::nullopt to prevent the generic prompt from showing (useful
+  // for subclasses that manage their own UI flows entirely).
+  virtual std::optional<AccountLinkingParams> CreateAccountLinkingParams() = 0;
+
+  // Concrete helper to show the prompt. Fetches params and binds base
+  // callbacks.
+  void ShowAccountLinkingPrompt();
   // Virtual hook to handle subclass-specific timing/logic on token reception.
   virtual void DoOnClientTokenReceived(
       const std::vector<uint8_t>& client_token) = 0;
+
+  // Virtual hook to handle subclass-specific logic when GDCPI response is
+  // received.
+  virtual void DoOnGetDetailsForCreatePaymentInstrumentResponse(
+      bool is_eligible) = 0;
+
+  // Virtual hooks for subclass-specific prompt acceptance and decline
+  // side-effects.
+  virtual void DoOnAccepted() {}
 
   // Virtual hook to handle subclass-specific UI updates on completion.
   virtual void DoOnAccountLinkingResult(AccountLinkingResult result) = 0;
@@ -69,11 +104,6 @@ class NativeAccountLinkingHandler {
   // Virtual hook to get the FOP-specific prefix/suffix for histogram names.
   virtual std::string_view GetHistogramSuffix() const = 0;
 
-  FacilitatedPaymentsClient* client() { return &*client_; }
-
-  // Instantiates/retrieves the FacilitatedPaymentsApiClient.
-  FacilitatedPaymentsApiClient* GetApiClient();
-
   // Initiates the GDCPI network call to check eligibility and/or retrieve
   // the action token using the client token.
   void InitiateAccountLinkingNetworkCall(
@@ -83,14 +113,40 @@ class NativeAccountLinkingHandler {
   void InvokeInstrumentManager(CoreAccountInfo primary_account,
                                const std::vector<uint8_t>& action_token);
 
-  // Dismisses the prompt UI.
-  void DismissPrompt();
+  // Non-virtual helper to handle standard linking completion logic. Calls the
+  // DoOnAccountLinkingResult virtual method.
+  void OnAccountLinkingResult(AccountLinkingResult result);
 
-  // Track if the prompt UI is showing. Subclasses are responsible for updating
-  // this state when they show the prompt.
-  bool is_prompt_showing_ = false;
+  FacilitatedPaymentsClient* client() const { return &*client_; }
+
+  // Instantiates/retrieves the FacilitatedPaymentsApiClient.
+  FacilitatedPaymentsApiClient* GetApiClient();
+
+  enum class UiState {
+    kHidden,
+    kPrompt,
+    kProgressScreen,
+    kSuccessScreen,
+  };
+
+  // Tracks the current state of the UI managed by this handler.
+  UiState ui_state_ = UiState::kHidden;
+
+  // Helper for test APIs to set the cached action token.
+  void SetActionTokenForTesting(std::vector<uint8_t> action_token) {
+    action_token_ = std::move(action_token);
+  }
+
+  // Subclasses must provide a WeakPtr to the base class since a WeakPtrFactory
+  // can only exist on the leaf descendant class.
+  virtual base::WeakPtr<NativeAccountLinkingHandler> GetWeakPtr() = 0;
 
  private:
+  // Callback invoked when the client token is received.
+  // Handles latency/validity checks and calls DoOnClientTokenReceived.
+  void OnClientTokenReceived(base::TimeTicks start_time,
+                             std::vector<uint8_t> client_token);
+
   // Callback for when the network request completes.
   void OnGetDetailsForCreatePaymentInstrumentResponseReceived(
       base::TimeTicks start_time,
@@ -108,8 +164,6 @@ class NativeAccountLinkingHandler {
 
   // Cached action token used for invoking the instrument manager GMSCore API.
   std::vector<uint8_t> action_token_;
-
-  base::WeakPtrFactory<NativeAccountLinkingHandler> weak_ptr_factory_{this};
 };
 
 }  // namespace payments::facilitated

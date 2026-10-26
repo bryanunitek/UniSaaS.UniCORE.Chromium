@@ -6,12 +6,11 @@
 
 #import <Foundation/Foundation.h>
 
+#import "base/apple/foundation_util.h"
+#import "base/strings/sys_string_conversions.h"
 #import "ios/chrome/common/app_group/app_group_constants.h"
 
 namespace {
-
-NSString* const kConfirmationButtonSwapOrderKey =
-    @"ConfirmationButtonSwapOrderKey";
 
 NSString* const kFieldTrialValueKey = @"FieldTrialValue";
 
@@ -63,31 +62,33 @@ NSString* UserDefaultsStringForKey(NSString* key, NSString* default_value) {
   return string ?: default_value;
 }
 
-BOOL IsConfirmationButtonSwapOrderEnabled() {
+bool IsShareExtensionCommandURL(NSURL* url) {
+  if (!url || [url.scheme isEqualToString:@"http"] ||
+      [url.scheme isEqualToString:@"https"]) {
+    return false;
+  }
+
+  if (![url.host isEqualToString:@"x-callback-url"]) {
+    return false;
+  }
+
+  NSString* expected_path = [NSString
+      stringWithFormat:@"/%s", app_group::kChromeAppGroupXCallbackCommand];
+  if (![url.path isEqualToString:expected_path]) {
+    return false;
+  }
+
+  // An attacker app or webpage cannot write to Chrome's App Group sandbox.
   NSUserDefaults* shared_defaults = app_group::GetGroupUserDefaults();
-
-  NSDictionary* field_trial_values = [shared_defaults
-      dictionaryForKey:app_group::kChromeExtensionFieldTrialPreference];
-  if (!field_trial_values ||
-      ![field_trial_values isKindOfClass:[NSDictionary class]]) {
-    return NO;
-  }
-
-  NSDictionary* confirmation_button_pref =
-      field_trial_values[kConfirmationButtonSwapOrderKey];
-  if (!confirmation_button_pref ||
-      ![confirmation_button_pref isKindOfClass:[NSDictionary class]]) {
-    return NO;
-  }
-
-  NSNumber* confirmation_button_value =
-      confirmation_button_pref[kFieldTrialValueKey];
-  if (!confirmation_button_value ||
-      ![confirmation_button_value isKindOfClass:[NSNumber class]]) {
-    return NO;
-  }
-
-  return [confirmation_button_value boolValue];
+  NSDictionary* command_dict = [shared_defaults
+      dictionaryForKey:base::SysUTF8ToNSString(
+                           app_group::kChromeAppGroupCommandPreference)];
+  NSString* command_time_pref =
+      base::SysUTF8ToNSString(app_group::kChromeAppGroupCommandTimePreference);
+  NSDate* command_time =
+      base::apple::ObjCCast<NSDate>(command_dict[command_time_pref]);
+  return command_time && [[NSDate date] timeIntervalSinceDate:command_time] <=
+                             app_group::kAppGroupCommandTimeout;
 }
 
 }  // namespace app_group

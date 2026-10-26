@@ -6,16 +6,18 @@
 
 #include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/browsertest_util.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
@@ -24,6 +26,7 @@
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -41,31 +44,9 @@
 
 namespace {
 
-const char kUninstallUrl[] = "https://www.google.com/";
-
-const char kReportAbuseUrl[] =
-    "https://chromewebstore.google.com/detail/cmcgleglgippmgippjjlefdmbndaebde/"
-    "report?utm_source=chrome-remove-extension-dialog";
-
-// A preference key storing the url loaded when an extension is uninstalled.
-const char kUninstallUrlPrefKey[] = "uninstall_url";
-
 scoped_refptr<const extensions::Extension> BuildTestExtension(
     const char* extension_name = "foo") {
   return extensions::ExtensionBuilder(extension_name).Build();
-}
-
-std::string GetActiveUrl(Browser* browser) {
-  return browser->tab_strip_model()
-      ->GetActiveWebContents()
-      ->GetLastCommittedURL()
-      .spec();
-}
-
-void SetUninstallURL(extensions::ExtensionPrefs* prefs,
-                     const std::string& extension_id) {
-  prefs->UpdateExtensionPref(extension_id, kUninstallUrlPrefKey,
-                             base::Value(kUninstallUrl));
 }
 
 void CloseUninstallDialog(views::Widget* const bubble_widget) {
@@ -228,7 +209,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionUninstallDialogImplBrowserTest,
       web_app::mojom::UserDisplayMode::kStandalone;
   webapps::AppId app_id = web_app::test::InstallWebApp(browser()->GetProfile(),
                                                        std::move(web_app_info));
-  Browser* app_browser =
+  BrowserWindowInterface* app_browser =
       web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
 
   TestExtensionUninstallDialogDelegate delegate{base::DoNothing()};
@@ -236,7 +217,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionUninstallDialogImplBrowserTest,
   {
     base::RunLoop run_loop;
     dialog = extensions::ExtensionUninstallDialog::Create(
-        app_browser->profile(), app_browser->GetWindow()->GetNativeWindow(),
+        app_browser->GetProfile(), app_browser->GetWindow()->GetNativeWindow(),
         &delegate);
     run_loop.RunUntilIdle();
   }
@@ -255,120 +236,25 @@ IN_PROC_BROWSER_TEST_F(ExtensionUninstallDialogImplBrowserTest,
   }
 }
 
-class ParameterizedExtensionUninstallDialogImplBrowserTest
-    : public InProcessBrowserTest,
-      public testing::WithParamInterface<extensions::UninstallReason> {};
+// Test fixture for tests that exercise the Views-based extensions container
+// (ExtensionsToolbarDesktop). ToolbarView does not create that container when
+// features::kWebUIExtensionsContainer is enabled, so disable the feature here.
+class ExtensionUninstallDialogImplViewsContainerBrowserTest
+    : public ExtensionUninstallDialogImplBrowserTest {
+ public:
+  ExtensionUninstallDialogImplViewsContainerBrowserTest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kWebUIExtensionsContainer);
+  }
 
-// Test that when the user clicks Uninstall on the ExtensionUninstallDialog the
-// extension's uninstall url (when it is specified) should open and be the
-// active tab.
-IN_PROC_BROWSER_TEST_P(ParameterizedExtensionUninstallDialogImplBrowserTest,
-                       EnsureExtensionUninstallURLIsActiveTabAfterUninstall) {
-  scoped_refptr<const extensions::Extension> extension(BuildTestExtension());
-  extensions::ExtensionRegistrar::Get(browser()->GetProfile())
-      ->AddExtension(extension.get());
-  SetUninstallURL(extensions::ExtensionPrefs::Get(browser()->GetProfile()),
-                  extension->id());
-
-  // Auto-confirm the uninstall dialog.
-  extensions::ScopedTestDialogAutoConfirm auto_confirm(
-      extensions::ScopedTestDialogAutoConfirm::ACCEPT);
-
-  base::RunLoop run_loop;
-  TestExtensionUninstallDialogDelegate delegate(run_loop.QuitClosure());
-  std::unique_ptr<extensions::ExtensionUninstallDialog> dialog(
-      extensions::ExtensionUninstallDialog::Create(
-          browser()->GetProfile(), browser()->GetWindow()->GetNativeWindow(),
-          &delegate));
-  content::RunAllPendingInMessageLoop();
-
-  extensions::UninstallReason uninstall_reason = GetParam();
-  dialog->ConfirmUninstall(extension, uninstall_reason,
-                           extensions::UNINSTALL_SOURCE_FOR_TESTING);
-
-  content::RunAllPendingInMessageLoop();
-
-  // There should be 2 tabs open: chrome://about and the extension's uninstall
-  // url.
-  EXPECT_EQ(2, browser()->tab_strip_model()->count());
-  // This navigation can fail, since the uninstall url isn't hooked up to the
-  // test server. That's fine, since we only care about the intended target,
-  // which is valid.
-  content::WaitForLoadStop(
-      browser()->tab_strip_model()->GetActiveWebContents());
-  // Verifying that the extension's uninstall url is the active tab.
-  EXPECT_EQ(kUninstallUrl, GetActiveUrl(browser()));
-
-  run_loop.Run();
-  // The delegate should not be canceled because the user chose to uninstall
-  // the extension, which should be successful.
-  EXPECT_TRUE(!delegate.canceled());
-}
-
-// Test that when the user clicks the Report Abuse checkbox and clicks Uninstall
-// on the ExtensionUninstallDialog, the extension's uninstall url (when it is
-// specified) and the CWS Report Abuse survey are opened in the browser, also
-// testing that the CWS survey is the active tab.
-IN_PROC_BROWSER_TEST_F(ExtensionUninstallDialogImplBrowserTest,
-                       EnsureCWSReportAbusePageIsActiveTabAfterUninstall) {
-  scoped_refptr<const extensions::Extension> extension(BuildTestExtension());
-  extensions::ExtensionRegistrar::Get(browser()->GetProfile())
-      ->AddExtension(extension.get());
-  SetUninstallURL(extensions::ExtensionPrefs::Get(browser()->GetProfile()),
-                  extension->id());
-
-  // Auto-confirm the uninstall dialog.
-  extensions::ScopedTestDialogAutoConfirm auto_confirm(
-      extensions::ScopedTestDialogAutoConfirm::ACCEPT_AND_OPTION);
-
-  base::RunLoop run_loop;
-  TestExtensionUninstallDialogDelegate delegate(run_loop.QuitClosure());
-  std::unique_ptr<extensions::ExtensionUninstallDialog> dialog(
-      extensions::ExtensionUninstallDialog::Create(
-          browser()->GetProfile(), browser()->GetWindow()->GetNativeWindow(),
-          &delegate));
-  content::RunAllPendingInMessageLoop();
-
-  dialog->ConfirmUninstall(extension,
-                           // UNINSTALL_REASON_USER_INITIATED is used to trigger
-                           // complete uninstallation.
-                           extensions::UNINSTALL_REASON_USER_INITIATED,
-                           extensions::UNINSTALL_SOURCE_FOR_TESTING);
-
-  content::RunAllPendingInMessageLoop();
-  // There should be 3 tabs open: chrome://about, the extension's uninstall url,
-  // and the CWS Report Abuse survey.
-  EXPECT_EQ(3, browser()->tab_strip_model()->count());
-  // This navigation can fail, since the webstore report abuse url isn't hooked
-  // up to the test server. That's fine, since we only care about the intended
-  // target, which is valid.
-  content::WaitForLoadStop(
-      browser()->tab_strip_model()->GetActiveWebContents());
-  // The CWS Report Abuse survey should be the active tab. We test this with the
-  // actual string for the current "Report Abuse" page for the webstore, to be
-  // explicit about what URL we are opening.
-  EXPECT_EQ(kReportAbuseUrl, GetActiveUrl(browser()));
-  // Similar to the scenario above, this navigation can fail. The uninstall url
-  // isn't hooked up to our test server.
-  content::WaitForLoadStop(browser()->tab_strip_model()->GetWebContentsAt(1));
-  // Verifying that the extension's uninstall url was opened. It should not be
-  // the active tab.
-  EXPECT_EQ(kUninstallUrl, browser()
-                               ->tab_strip_model()
-                               ->GetWebContentsAt(1)
-                               ->GetLastCommittedURL()
-                               .spec());
-
-  run_loop.Run();
-  // The delegate should not be canceled because the user chose to uninstall the
-  // extension, which should be successful.
-  EXPECT_TRUE(!delegate.canceled());
-}
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
 
 // Tests the dialog is anchored in the correct place based on whether the
 // extensions container is visible.
 // Regression test for crbug.com/40227690.
-IN_PROC_BROWSER_TEST_F(ExtensionUninstallDialogImplBrowserTest,
+IN_PROC_BROWSER_TEST_F(ExtensionUninstallDialogImplViewsContainerBrowserTest,
                        DialogAnchoredInCorrectPlace) {
   extensions::ExtensionRegistrar* extension_registrar =
       extensions::ExtensionRegistrar::Get(browser()->GetProfile());
@@ -383,7 +269,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionUninstallDialogImplBrowserTest,
   // Extensions container should be visible since there are enabled
   // extensions.
   ExtensionsToolbarDesktop* const container =
-      browser()->GetBrowserView().toolbar()->extensions_container();
+      BrowserView::GetBrowserViewForBrowser(browser())
+          ->toolbar()
+          ->extensions_container_for_testing();
   ASSERT_TRUE(container->GetVisible());
   ASSERT_TRUE(container->GetViewForId(extensionA->id()));
 
@@ -484,6 +372,12 @@ class ExtensionUninstallDialogImplInteractiveBrowserTest
     EXTENSION_FROM_WEBSTORE,
   };
   void ShowUi(const std::string& name) override {
+    if (features::IsWebUIExtensionsContainerEnabled()) {
+      // Dialogs anchored via the WebUI extensions container are positioned
+      // asynchronously, so their bounds may not yet be final when verified.
+      set_should_verify_dialog_bounds(false);
+    }
+
     extensions::ExtensionBuilder extension_builder("ExtensionForRemoval");
     if (extension_origin_ == EXTENSION_FROM_WEBSTORE) {
       extension_builder.SetManifestKey(
@@ -593,9 +487,3 @@ IN_PROC_BROWSER_TEST_F(ExtensionUninstallDialogImplInteractiveBrowserTest,
                        MAYBE_InvokeUi_UninstallByExtensionShowReportAbuse) {
   RunTest(UNINSTALL_BY_EXTENSION, EXTENSION_FROM_WEBSTORE);
 }
-
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    ParameterizedExtensionUninstallDialogImplBrowserTest,
-    testing::Values(extensions::UNINSTALL_REASON_USER_INITIATED,
-                    extensions::UNINSTALL_REASON_CHROME_WEBSTORE));

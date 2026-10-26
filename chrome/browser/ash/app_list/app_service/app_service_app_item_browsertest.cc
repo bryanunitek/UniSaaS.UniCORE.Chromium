@@ -24,7 +24,6 @@
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_process.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -265,7 +264,7 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppItemBrowserTest,
 using AppServiceSystemWebAppItemBrowserTest = AppServiceAppItemBrowserTest;
 
 IN_PROC_BROWSER_TEST_F(AppServiceSystemWebAppItemBrowserTest, Activate) {
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
   ash::SystemWebAppManager::GetForTest(profile)->InstallSystemAppsForTesting();
   const webapps::AppId app_id = ash::kHelpAppId;
 

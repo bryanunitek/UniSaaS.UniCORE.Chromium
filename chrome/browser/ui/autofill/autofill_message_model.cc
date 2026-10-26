@@ -7,9 +7,11 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "chrome/browser/android/android_theme_resources.h"
-#include "chrome/browser/android/preferences/autofill/settings_navigation_helper.h"
 #include "chrome/browser/android/resource_mapper.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/autofill/core/browser/ui/payments/save_payment_method_and_virtual_card_enroll_confirmation_ui_params.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/grit/components_scaled_resources.h"
@@ -19,6 +21,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "url/gurl.h"
 
 namespace autofill {
 
@@ -107,7 +110,9 @@ AutofillMessageModel::CreateForPersonalContextFetchingFailure() {
 
 std::unique_ptr<AutofillMessageModel>
 AutofillMessageModel::CreateForPrivateInferenceNotice(
-    content::WebContents* web_contents) {
+    base::OnceClosure action_callback,
+    messages::MessageWrapper::DismissCallback dismiss_callback,
+    base::RepeatingClosure secondary_action_callback) {
   std::unique_ptr<messages::MessageWrapper> message =
       std::make_unique<messages::MessageWrapper>(
           messages::MessageIdentifier::PRIVATE_INFERENCE_NOTICE);
@@ -121,13 +126,85 @@ AutofillMessageModel::CreateForPrivateInferenceNotice(
       IDR_ANDROID_AUTOFILL_ID_CHROME_PRODUCT));
   message->SetSecondaryIconResourceId(
       ResourceMapper::MapToJavaDrawableId(IDR_ANDROID_MESSAGE_SETTINGS));
-  // TODO(crbug.com/530174611): Record user consent when the positive button is
-  // clicked.
-  message->SetSecondaryActionCallback(
-      base::BindRepeating(&ShowAutofillSettings, web_contents));
+  message->SetSecondaryActionCallback(std::move(secondary_action_callback));
 
   return base::WrapUnique(new AutofillMessageModel(
-      std::move(message), Type::kPrivateInferenceNotice));
+      std::move(message), Type::kPrivateInferenceNotice,
+      std::move(action_callback), std::move(dismiss_callback)));
+}
+
+std::unique_ptr<AutofillMessageModel>
+AutofillMessageModel::CreateForEmailVerificationLoading(
+    messages::MessageWrapper::DismissCallback dismiss_callback) {
+  std::unique_ptr<messages::MessageWrapper> message =
+      std::make_unique<messages::MessageWrapper>(
+          messages::MessageIdentifier::EMAIL_VERIFICATION_LOADING);
+  message->SetTitle(l10n_util::GetStringUTF16(IDS_EMAIL_VERIFICATION_LOADING));
+  message->SetIconResourceId(
+      ResourceMapper::MapToJavaDrawableId(IDR_ANDROID_AUTOFILL_EMAIL_VERIFIED));
+  message->SetPrimaryWidgetAppearance(
+      messages::PrimaryWidgetAppearance::PROGRESS_SPINNER);
+  // Keep the loading banner visible while token retrieval is in flight until it
+  // is explicitly replaced by the verified or error banner.
+  constexpr base::TimeDelta kEmailVerificationLoadingDuration =
+      base::Seconds(60);
+  message->SetDuration(kEmailVerificationLoadingDuration.InMilliseconds());
+
+  return std::make_unique<AutofillMessageModel>(
+      std::move(message), Type::kEmailVerificationLoading, base::DoNothing(),
+      std::move(dismiss_callback));
+}
+
+std::unique_ptr<AutofillMessageModel>
+AutofillMessageModel::CreateForEmailVerified(
+    const GURL& issuer,
+    base::OnceClosure action_callback) {
+  std::unique_ptr<messages::MessageWrapper> message =
+      std::make_unique<messages::MessageWrapper>(
+          messages::MessageIdentifier::EMAIL_VERIFIED);
+  message->SetTitle(l10n_util::GetStringFUTF16(
+      IDS_EMAIL_VERIFIED, base::UTF8ToUTF16(issuer.host())));
+  message->SetPrimaryButtonText(l10n_util::GetStringUTF16(IDS_MANAGE));
+  message->SetIconResourceId(
+      ResourceMapper::MapToJavaDrawableId(IDR_ANDROID_AUTOFILL_EMAIL_VERIFIED));
+
+  return base::WrapUnique(
+      new AutofillMessageModel(std::move(message), Type::kEmailVerified,
+                               std::move(action_callback), base::DoNothing()));
+}
+
+std::unique_ptr<AutofillMessageModel>
+AutofillMessageModel::CreateForEmailVerificationError() {
+  std::unique_ptr<messages::MessageWrapper> message =
+      std::make_unique<messages::MessageWrapper>(
+          messages::MessageIdentifier::EMAIL_VERIFICATION_ERROR);
+  message->SetTitle(l10n_util::GetStringUTF16(IDS_EMAIL_VERIFICATION_ERROR));
+  message->SetIconResourceId(
+      ResourceMapper::MapToJavaDrawableId(IDR_ANDROID_IC_ERROR));
+
+  return std::make_unique<AutofillMessageModel>(std::move(message),
+                                                Type::kEmailVerificationError);
+}
+
+std::unique_ptr<AutofillMessageModel>
+AutofillMessageModel::CreateForResurrectChurnedUsers(
+    base::OnceClosure action_callback,
+    messages::MessageWrapper::DismissCallback dismiss_callback) {
+  std::unique_ptr<messages::MessageWrapper> message =
+      std::make_unique<messages::MessageWrapper>(
+          messages::MessageIdentifier::RESURRECT_CHURNED_USERS);
+  message->SetTitle(
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_CHURNED_USERS_MESSAGE_TITLE));
+  message->SetDescription(l10n_util::GetStringUTF16(
+      IDS_AUTOFILL_CHURNED_USERS_MESSAGE_DESCRIPTION));
+  message->SetPrimaryButtonText(l10n_util::GetStringUTF16(
+      IDS_AUTOFILL_CHURNED_USERS_BUBBLE_ACCEPT_BUTTON_LABEL));
+  message->SetIconResourceId(ResourceMapper::MapToJavaDrawableId(
+      IDR_ANDROID_AUTOFILL_ID_CHROME_PRODUCT));
+
+  return base::WrapUnique(new AutofillMessageModel(
+      std::move(message), Type::kResurrectChurnedUsers,
+      std::move(action_callback), std::move(dismiss_callback)));
 }
 
 std::string_view AutofillMessageModel::TypeToString(Type message_type) {
@@ -146,6 +223,14 @@ std::string_view AutofillMessageModel::TypeToString(Type message_type) {
       return "PersonalContextFetchingFailure";
     case Type::kPrivateInferenceNotice:
       return "PrivateInferenceNotice";
+    case Type::kEmailVerified:
+      return "EmailVerified";
+    case Type::kResurrectChurnedUsers:
+      return "ResurrectChurnedUsers";
+    case Type::kEmailVerificationError:
+      return "EmailVerificationError";
+    case Type::kEmailVerificationLoading:
+      return "EmailVerificationLoading";
   }
 }
 

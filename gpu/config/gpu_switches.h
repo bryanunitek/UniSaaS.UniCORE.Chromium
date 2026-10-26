@@ -9,6 +9,7 @@
 
 namespace switches {
 
+GPU_CONFIG_EXPORT extern const char kGpuRecentCrashCount[];
 GPU_CONFIG_EXPORT extern const char kDisableGpuRasterization[];
 GPU_CONFIG_EXPORT extern const char kDisableMipmapGeneration[];
 GPU_CONFIG_EXPORT extern const char kEnableGpuRasterization[];
@@ -37,7 +38,6 @@ GPU_CONFIG_EXPORT extern const char kGpuDeviceId[];
 GPU_CONFIG_EXPORT extern const char kGpuSubSystemId[];
 GPU_CONFIG_EXPORT extern const char kGpuRevision[];
 GPU_CONFIG_EXPORT extern const char kGpuDriverVersion[];
-GPU_CONFIG_EXPORT extern const char kWebViewDrawFunctorUsesVulkan[];
 GPU_CONFIG_EXPORT extern const char kEnableVulkanProtectedMemory[];
 GPU_CONFIG_EXPORT extern const char kDisableVulkanFallbackToGLForTesting[];
 GPU_CONFIG_EXPORT extern const char kVulkanHeapMemoryLimitMb[];
@@ -52,6 +52,7 @@ GPU_CONFIG_EXPORT extern const char kSkiaGraphiteDawnBackendMetal[];
 GPU_CONFIG_EXPORT extern const char kSkiaGraphiteDawnBackendOpenGLES[];
 GPU_CONFIG_EXPORT extern const char kSkiaGraphiteDawnBackendSwiftshader[];
 GPU_CONFIG_EXPORT extern const char kSkiaGraphiteDawnBackendVulkan[];
+GPU_CONFIG_EXPORT extern const char kSkiaGraphiteVulkanBackend[];
 GPU_CONFIG_EXPORT extern const char kDisableSkiaGraphite[];
 GPU_CONFIG_EXPORT extern const char kEnableSkiaGraphite[];
 GPU_CONFIG_EXPORT extern const char kDisableSkiaGraphitePrecompilation[];

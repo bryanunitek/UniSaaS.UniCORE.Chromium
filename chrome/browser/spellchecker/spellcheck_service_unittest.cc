@@ -7,12 +7,22 @@
 #include <algorithm>
 #include <optional>
 #include <ostream>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
+#include "base/process/kill.h"
+#include "base/run_loop.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/supports_user_data.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/spellchecker/spellcheck_factory.h"
@@ -23,9 +33,13 @@
 #include "components/prefs/testing_pref_service.h"
 #include "components/spellcheck/browser/pref_names.h"
 #include "components/spellcheck/browser/spellcheck_platform.h"
+#include "components/spellcheck/common/spellcheck.mojom.h"
 #include "components/spellcheck/common/spellcheck_features.h"
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/mock_render_process_host.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/receiver_set.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 struct TestCase {
@@ -173,6 +187,137 @@ TEST_P(SpellcheckServiceUnitTest, GetDictionaries) {
   EXPECT_EQ(GetParam().expected_dictionaries, dictionaries);
 }
 
+// Observes the SpellChecker interface for a single renderer. A unit test has no
+// real renderers, so the MockRenderProcessHost below is the only host
+// InitForAllRenderers() can find, which makes an Initialize() call
+// unambiguously attributable to it.
+class SpellcheckServiceRendererInitUnitTest
+    : public SpellcheckServiceUnitTestBase,
+      public spellcheck::mojom::SpellChecker {
+ public:
+  SpellcheckServiceRendererInitUnitTest() = default;
+
+  SpellcheckServiceRendererInitUnitTest(
+      const SpellcheckServiceRendererInitUnitTest&) = delete;
+  SpellcheckServiceRendererInitUnitTest& operator=(
+      const SpellcheckServiceRendererInitUnitTest&) = delete;
+
+ protected:
+  void SetUp() override {
+    SpellcheckServiceUnitTestBase::SetUp();
+    SpellcheckService::OverrideBinderForTesting(base::BindRepeating(
+        &SpellcheckServiceRendererInitUnitTest::Bind, base::Unretained(this)));
+    renderer_ = std::make_unique<content::MockRenderProcessHost>(&profile_);
+    renderer_->Init();
+  }
+
+  void TearDown() override {
+    receivers_.Clear();
+    renderer_.reset();
+    SpellcheckService::OverrideBinderForTesting(base::NullCallback());
+  }
+
+  content::MockRenderProcessHost* renderer() { return renderer_.get(); }
+
+  // Waits until at least `count` Initialize() calls have arrived. Returns
+  // false on timeout.
+  [[nodiscard]] bool WaitForInitializeCount(int count) {
+    return base::test::RunUntil(
+        [this, count]() { return initialize_count_ >= count; });
+  }
+
+ private:
+  void Bind(mojo::PendingReceiver<spellcheck::mojom::SpellChecker> receiver) {
+    // A ReceiverSet, not a single Receiver: InitForAllRenderers() may reach
+    // several hosts, and rebinding a single Receiver would close the earlier
+    // pipe before its Initialize() call was delivered, silently losing it.
+    receivers_.Add(this, std::move(receiver));
+  }
+
+  // spellcheck::mojom::SpellChecker:
+  void Initialize(
+      std::vector<spellcheck::mojom::SpellCheckBDictLanguagePtr> dictionaries,
+      const std::vector<std::string>& custom_words,
+      bool enable) override {
+    ++initialize_count_;
+  }
+  void CustomDictionaryChanged(
+      const std::vector<std::string>& words_added,
+      const std::vector<std::string>& words_removed) override {}
+
+  std::unique_ptr<content::MockRenderProcessHost> renderer_;
+  mojo::ReceiverSet<spellcheck::mojom::SpellChecker> receivers_;
+  int initialize_count_ = 0;
+
+#if BUILDFLAG(IS_WIN)
+  // This test assumes the Hunspell code path.
+  spellcheck::ScopedDisableBrowserSpellCheckerForTesting
+      disable_browser_spell_checker_;
+#endif  // BUILDFLAG(IS_WIN)
+};
+
+// A renderer that has been initialized but whose process is still launching has
+// no process handle yet. It must still be initialized, because
+// InitForAllRenderers() is the only path that delivers spellcheck state to a
+// renderer that was contacted before its dictionaries were ready.
+TEST_F(SpellcheckServiceRendererInitUnitTest, ReachesStillLaunchingRenderer) {
+  // Reproduce the window between RenderProcessHostImpl::Init() and
+  // OnProcessLaunched().
+  renderer()->SimulateProcessStillLaunchingForTesting(true);
+  ASSERT_FALSE(renderer()->GetProcess().Handle());
+  ASSERT_TRUE(renderer()->IsInitializedAndNotDead());
+
+  // Flipping the pref runs InitForAllRenderers().
+  prefs()->SetBoolean(spellcheck::prefs::kSpellCheckEnable, false);
+
+  EXPECT_TRUE(WaitForInitializeCount(1))
+      << "a still-launching renderer was never initialized";
+}
+
+#if !BUILDFLAG(IS_MAC)
+// On Windows, Linux and ChromeOS, SpellcheckCustomDictionary::
+// WaitUntilReadyToSync() gates the syncer::DICTIONARY data type, and
+// BEST_EFFORT UI tasks are held until browser startup completes. The custom
+// dictionary load must therefore be handed to the ThreadPool directly from the
+// SpellcheckService constructor rather than from a BEST_EFFORT UI task.
+//
+// BrowserTaskEnvironment marks startup as complete, so a deferred load would
+// still finish eventually. Instead, this test checks that the load completes
+// without running any UI task other than the ThreadPool reply that was already
+// queued when the constructor returned.
+TEST(SpellcheckServiceCustomDictionaryTest, LoadIsNotDeferredOnStartup) {
+  content::BrowserTaskEnvironment task_environment;
+  TestingProfile profile;
+
+  SpellcheckService service(&profile);
+  SpellcheckCustomDictionary* custom_dict = service.GetCustomDictionary();
+  ASSERT_TRUE(custom_dict);
+
+  // If Load() ran in the constructor, the file read is already on the
+  // ThreadPool; flushing it completes the read and queues OnLoaded() on the UI
+  // thread's default task runner.
+  base::ThreadPoolInstance::Get()->FlushForTesting();
+
+  // Run UI tasks only up to a sentinel posted on that same task runner. No UI
+  // task has run yet, so any Load() triggered by a UI task (whatever its
+  // priority) would enqueue its OnLoaded() reply after the sentinel, and that
+  // reply cannot run before Run() returns. Only a reply queued by the
+  // constructor's own Load() can precede the sentinel.
+  base::RunLoop run_loop;
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, run_loop.QuitClosure());
+  run_loop.Run();
+
+  EXPECT_TRUE(custom_dict->IsLoaded());
+
+  // This is what the DICTIONARY data type controller waits on; it must run the
+  // callback synchronously now.
+  base::RunLoop ready_to_sync;
+  custom_dict->WaitUntilReadyToSync(ready_to_sync.QuitClosure());
+  EXPECT_TRUE(ready_to_sync.AnyQuitCalled());
+}
+#endif  // !BUILDFLAG(IS_MAC)
+
 #if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 class SpellcheckServiceHybridUnitTestBase
     : public SpellcheckServiceUnitTestBase {
@@ -212,8 +357,7 @@ class SpellcheckServiceHybridUnitTestBase
       const std::string expected_tag_passed_to_spellcheck_generic);
 
   // Used for faking the presence of Windows spellcheck dictionaries.
-  static const std::vector<std::string>
-      windows_spellcheck_languages_for_testing_;
+  static std::vector<std::string> GetWindowsSpellcheckLanguagesForTesting();
 
   raw_ptr<SpellcheckService> spellcheck_service_;
 };
@@ -235,7 +379,7 @@ void SpellcheckServiceHybridUnitTestBase::RunGetDictionariesTest(
   // expected that spellchecking will be disabled for that language.
   SpellcheckService::EnableFirstUserLanguageForSpellcheck(prefs());
 
-  InitializeSpellcheckService(windows_spellcheck_languages_for_testing_);
+  InitializeSpellcheckService(GetWindowsSpellcheckLanguagesForTesting());
 
   std::vector<SpellcheckService::Dictionary> dictionaries;
   SpellcheckService::GetDictionaries(browser_context(), &dictionaries);
@@ -300,91 +444,91 @@ void SpellcheckServiceHybridUnitTestBase::RunDictionaryMappingTest(
 }
 
 // static
-const std::vector<std::string> SpellcheckServiceHybridUnitTestBase::
-    windows_spellcheck_languages_for_testing_ = {
-        "fr-FR",   // Has both Windows and Hunspell support.
-        "es-MX",   // Has both Windows and Hunspell support, but for Hunspell
-                   // maps to es-ES.
-        "gl-ES",   // (Galician) Has only Windows support, no Hunspell
-                   // dictionary.
-        "fi-FI",   // (Finnish) Has only Windows support, no Hunspell
-                   // dictionary.
-        "it-IT",   // Has both Windows and Hunspell support.
-        "pt-BR",   // Has both Windows and Hunspell support.
-        "haw-US",  // (Hawaiian) No Hunspell dictionary. Note that first two
-                   // letters of language code are "ha," the same as Hausa.
-        "ast",     // (Asturian) Has only Windows support, no Hunspell
-                   // dictionary. Note that last two letters of language
-                   // code are "st," the same as Sesotho.
-        "kok-Deva-IN",       // Konkani (Devanagari, India)--note presence of
-                             // script subtag.
-        "sr-Cyrl-ME",        // Serbian (Cyrillic, Montenegro)--note presence of
-                             // script subtag.
-        "sr-Latn-ME",        // Serbian (Latin, Montenegro)--note presence of
-                             // script subtag.
-        "ja-Latn-JP-x-ext",  // Japanese with Latin script--note presence of
-                             // private use subtag. Ignore private use
-                             // dictionaries.
-};
+std::vector<std::string>
+SpellcheckServiceHybridUnitTestBase::GetWindowsSpellcheckLanguagesForTesting() {
+  return {
+      "fr-FR",        // Has both Windows and Hunspell support.
+      "es-MX",        // Has both Windows and Hunspell support, but for Hunspell
+                      // maps to es-ES.
+      "gl-ES",        // (Galician) Has only Windows support, no Hunspell
+                      // dictionary.
+      "fi-FI",        // (Finnish) Has only Windows support, no Hunspell
+                      // dictionary.
+      "it-IT",        // Has both Windows and Hunspell support.
+      "pt-BR",        // Has both Windows and Hunspell support.
+      "haw-US",       // (Hawaiian) No Hunspell dictionary. Note that first two
+                      // letters of language code are "ha," the same as Hausa.
+      "ast",          // (Asturian) Has only Windows support, no Hunspell
+                      // dictionary. Note that last two letters of language
+                      // code are "st," the same as Sesotho.
+      "kok-Deva-IN",  // Konkani (Devanagari, India)--note presence of
+                      // script subtag.
+      "sr-Cyrl-ME",   // Serbian (Cyrillic, Montenegro)--note presence of
+                      // script subtag.
+      "sr-Latn-ME",   // Serbian (Latin, Montenegro)--note presence of
+                      // script subtag.
+      "ja-Latn-JP-x-ext",  // Japanese with Latin script--note presence of
+                           // private use subtag. Ignore private use
+                           // dictionaries.
+  };
+}
 
-static const TestCase kHybridGetDictionariesParams[] = {
-    // Galician (gl) has only Windows support, no Hunspell dictionary. Croatian
-    // (hr) has only Hunspell support, no local Windows dictionary. First
-    // language is supported by windows and should be spellchecked.
-    TestCase("gl", {}, {"gl"}, {"gl"}),
-    TestCase("gl", {"gl"}, {"gl"}, {"gl"}),
-    TestCase("gl,hr", {}, {"gl", "hr"}, {"gl"}),
-    TestCase("gl,hr", {"gl"}, {"gl", "hr"}, {"gl"}),
-    TestCase("gl,hr", {"hr"}, {"gl", "hr"}, {"gl", "hr"}),
-    TestCase("gl,hr", {"gl", "hr"}, {"gl", "hr"}, {"gl", "hr"}),
-    TestCase("hr", {}, {"hr"}, {"hr"}),
-    TestCase("hr", {"hr"}, {"hr"}, {"hr"}),
-    TestCase("hr,gl", {"hr"}, {"hr", "gl"}, {"hr"}),
-    // Cebuano (ceb) is a language with neither Windows or Hunspell support,
-    // should be unset if was enabled during simulated "first run" scenario.
-    TestCase("ceb", {}, {}, {}),
-    TestCase("ceb,gl,hr", {"gl", "hr"}, {"gl", "hr"}, {"gl", "hr"}),
-    // Finnish has only "fi" in hard-coded list of accept languages.
-    TestCase("fi-FI,fi,en-US,en",
-             {"en-US"},
-             {"fi", "en-US", "en"},
-             {"fi", "en-US"}),
-    // First language is supported by Windows but private use dictionaries
-    // are ignored.
-    TestCase("ja,gl", {"gl"}, {"gl"}, {"gl"}),
-    // (Basque) No Hunspell support, has Windows support but
-    // language pack not present.
-    TestCase("eu", {"eu"}, {}, {}),
-    TestCase("es-419,es-MX",
-             {"es-419", "es-MX"},
-             {"es-419", "es-MX"},
-             {"es-419", "es-MX"}),
-    TestCase("fr-FR,es-MX,gl,pt-BR,hr,it",
-             {"fr-FR", "gl", "pt-BR", "it"},
-             {"fr-FR", "es-MX", "gl", "pt-BR", "hr", "it"},
-             {"fr-FR", "gl", "pt-BR", "it"}),
-    // Hausa with Hawaiian language pack (ha/haw string in string).
-    TestCase("ha", {"ha"}, {}, {}),
-    // Sesotho with Asturian language pack (st/ast string in string).
-    TestCase("st", {"st"}, {}, {}),
-    // User chose generic Serbian in languages preferences (which uses
-    // Cyrillic script).
-    TestCase("sr,sr-Latn-RS", {"sr", "sr-Latn-RS"}, {"sr"}, {"sr"}),
-    // If there is platform spellcheck support for a regional variation of
-    // a language, the generic version should also be toggleable in spellcheck
-    // settings. There is no Hunspell dictionary for generic Portuguese (pt);
-    // there is Hunspell support for generic Italian (it) but the platform
-    // dictionary should be used instead.
-    TestCase("pt,pt-BR", {"pt", "pt-BR"}, {"pt", "pt-BR"}, {"pt", "pt-BR"}),
-    TestCase("it,it-IT", {"it", "it-IT"}, {"it", "it-IT"}, {"it", "it-IT"}),
-};
+std::vector<TestCase> GetHybridGetDictionariesParams() {
+  return {
+      // Galician (gl) has only Windows support, no Hunspell dictionary.
+      // Croatian
+      // (hr) has only Hunspell support, no local Windows dictionary. First
+      // language is supported by windows and should be spellchecked.
+      TestCase("gl", {}, {"gl"}, {"gl"}),
+      TestCase("gl", {"gl"}, {"gl"}, {"gl"}),
+      TestCase("gl,hr", {}, {"gl", "hr"}, {"gl"}),
+      TestCase("gl,hr", {"gl"}, {"gl", "hr"}, {"gl"}),
+      TestCase("gl,hr", {"hr"}, {"gl", "hr"}, {"gl", "hr"}),
+      TestCase("gl,hr", {"gl", "hr"}, {"gl", "hr"}, {"gl", "hr"}),
+      TestCase("hr", {}, {"hr"}, {"hr"}),
+      TestCase("hr", {"hr"}, {"hr"}, {"hr"}),
+      TestCase("hr,gl", {"hr"}, {"hr", "gl"}, {"hr"}),
+      // Cebuano (ceb) is a language with neither Windows or Hunspell support,
+      // should be unset if was enabled during simulated "first run" scenario.
+      TestCase("ceb", {}, {}, {}),
+      TestCase("ceb,gl,hr", {"gl", "hr"}, {"gl", "hr"}, {"gl", "hr"}),
+      // Finnish has only "fi" in hard-coded list of accept languages.
+      TestCase("fi-FI,fi,en-US,en", {"en-US"}, {"fi", "en-US", "en"},
+               {"fi", "en-US"}),
+      // First language is supported by Windows but private use dictionaries
+      // are ignored.
+      TestCase("ja,gl", {"gl"}, {"gl"}, {"gl"}),
+      // (Basque) No Hunspell support, has Windows support but
+      // language pack not present.
+      TestCase("eu", {"eu"}, {}, {}),
+      TestCase("es-419,es-MX", {"es-419", "es-MX"}, {"es-419", "es-MX"},
+               {"es-419", "es-MX"}),
+      TestCase("fr-FR,es-MX,gl,pt-BR,hr,it", {"fr-FR", "gl", "pt-BR", "it"},
+               {"fr-FR", "es-MX", "gl", "pt-BR", "hr", "it"},
+               {"fr-FR", "gl", "pt-BR", "it"}),
+      // Hausa with Hawaiian language pack (ha/haw string in string).
+      TestCase("ha", {"ha"}, {}, {}),
+      // Sesotho with Asturian language pack (st/ast string in string).
+      TestCase("st", {"st"}, {}, {}),
+      // User chose generic Serbian in languages preferences (which uses
+      // Cyrillic script).
+      TestCase("sr,sr-Latn-RS", {"sr", "sr-Latn-RS"}, {"sr"}, {"sr"}),
+      // If there is platform spellcheck support for a regional variation of
+      // a language, the generic version should also be toggleable in spellcheck
+      // settings. There is no Hunspell dictionary for generic Portuguese (pt);
+      // there is Hunspell support for generic Italian (it) but the platform
+      // dictionary should be used instead.
+      TestCase("pt,pt-BR", {"pt", "pt-BR"}, {"pt", "pt-BR"}, {"pt", "pt-BR"}),
+      TestCase("it,it-IT", {"it", "it-IT"}, {"it", "it-IT"}, {"it", "it-IT"}),
+  };
+}
 
 struct DictionaryMappingTestCase {
-  std::string full_tag;
-  std::string expected_accept_language;
-  std::string expected_tag_passed_to_spellcheck;
-  std::string expected_accept_language_generic;
-  std::string expected_tag_passed_to_spellcheck_generic;
+  std::string_view full_tag;
+  std::string_view expected_accept_language;
+  std::string_view expected_tag_passed_to_spellcheck;
+  std::string_view expected_accept_language_generic;
+  std::string_view expected_tag_passed_to_spellcheck_generic;
 };
 
 std::ostream& operator<<(std::ostream& out,
@@ -401,7 +545,7 @@ std::ostream& operator<<(std::ostream& out,
   return out;
 }
 
-static const DictionaryMappingTestCase kHybridDictionaryMappingsParams[] = {
+constexpr DictionaryMappingTestCase kHybridDictionaryMappingsParams[] = {
     DictionaryMappingTestCase({"en-CA", "en-CA", "en-CA", "en", "en"}),
     DictionaryMappingTestCase({"en-PH", "en", "en", "", ""}),
     DictionaryMappingTestCase({"es-MX", "es-MX", "es-MX", "es", "es"}),
@@ -481,7 +625,7 @@ class SpellcheckServiceHybridUnitTestDelayInit
 
 INSTANTIATE_TEST_SUITE_P(TestCases,
                          SpellcheckServiceHybridUnitTestDelayInit,
-                         testing::ValuesIn(kHybridGetDictionariesParams));
+                         testing::ValuesIn(GetHybridGetDictionariesParams()));
 
 TEST_P(SpellcheckServiceHybridUnitTestDelayInit, GetDictionaries) {
   RunGetDictionariesTest(GetParam().accept_languages,
@@ -501,9 +645,10 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_P(SpellcheckServiceWindowsDictionaryMappingUnitTestDelayInit,
        CheckMappings) {
   RunDictionaryMappingTest(
-      GetParam().full_tag, GetParam().expected_accept_language,
-      GetParam().expected_tag_passed_to_spellcheck,
-      GetParam().expected_accept_language_generic,
-      GetParam().expected_tag_passed_to_spellcheck_generic);
+      std::string(GetParam().full_tag),
+      std::string(GetParam().expected_accept_language),
+      std::string(GetParam().expected_tag_passed_to_spellcheck),
+      std::string(GetParam().expected_accept_language_generic),
+      std::string(GetParam().expected_tag_passed_to_spellcheck_generic));
 }
 #endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)

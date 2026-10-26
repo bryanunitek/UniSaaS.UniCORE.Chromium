@@ -10,16 +10,21 @@
 #include "base/memory/raw_ptr.h"
 #include "base/test/test_switches.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/startup/buildflags.h"
+#include "chrome/browser/ui/startup/credential_provider_signin_dialog_view_with_modal.h"
 #include "chrome/browser/ui/startup/credential_provider_signin_dialog_win_test_data.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/credential_provider/common/gcp_strings.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
+#include "components/web_modal/modal_dialog_host.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/window_container_type.mojom-shared.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/views/controls/webview/web_dialog_view.h"
 #include "ui/views/test/widget_test.h"
 
@@ -187,8 +192,8 @@ IN_PROC_BROWSER_TEST_F(CredentialProviderSigninDialogWinDialogTest,
   ShowSigninDialog(command_line);
   WaitForDialogToLoad();
 
-  EXPECT_TRUE(web_view_->GetDialogContentURL().has_query());
-  std::string query_parameters = web_view_->GetDialogContentURL().GetQuery();
+  EXPECT_TRUE(web_contents()->GetVisibleURL().has_query());
+  std::string query_parameters = web_contents()->GetVisibleURL().GetQuery();
   EXPECT_TRUE(query_parameters.find("show_tos=1") != std::string::npos);
 
   web_view_->GetWidget()->CloseWithReason(
@@ -232,6 +237,57 @@ IN_PROC_BROWSER_TEST_F(CredentialProviderSigninDialogWinDialogTest,
       views::Widget::ClosedReason::kEscKeyPressed);
   base::RunLoop run_loop;
   run_loop.RunUntilIdle();
+}
+
+namespace {
+
+class TestModalDialogHostObserver : public web_modal::ModalDialogHostObserver {
+ public:
+  void OnPositionRequiresUpdate() override { position_update_count_++; }
+  void OnHostDestroying() override { host_destroying_called_ = true; }
+
+  int position_update_count_ = 0;
+  bool host_destroying_called_ = false;
+};
+
+}  // namespace
+
+IN_PROC_BROWSER_TEST_F(CredentialProviderSigninDialogWinDialogTest,
+                       ModalDialogHostLifecycleAndObservers) {
+  base::CommandLine command_line(base::CommandLine::NoProgram::NO_PROGRAM);
+  command_line.AppendSwitch(credential_provider::kEnableGcpwModalDialog);
+  ShowSigninDialog(command_line);
+  WaitForDialogToLoad();
+
+  auto* manager =
+      web_modal::WebContentsModalDialogManager::FromWebContents(web_contents());
+  ASSERT_NE(manager, nullptr);
+
+  auto* dialog_view =
+      static_cast<CredentialProviderWebDialogViewWithModal*>(web_view_);
+  EXPECT_EQ(manager->delegate(), dialog_view);
+
+  TestModalDialogHostObserver observer;
+  TestModalDialogHostObserver removed_observer;
+  dialog_view->AddObserver(&observer);
+  dialog_view->AddObserver(&removed_observer);
+
+  dialog_view->RemoveObserver(&removed_observer);
+
+  dialog_view->SetBounds(0, 0, 800, 600);
+  EXPECT_GT(observer.position_update_count_, 0);
+  EXPECT_EQ(removed_observer.position_update_count_, 0);
+
+  int count_before = observer.position_update_count_;
+  dialog_view->NotifyPositionRequiresUpdate();
+  EXPECT_EQ(observer.position_update_count_, count_before + 1);
+  EXPECT_EQ(removed_observer.position_update_count_, 0);
+
+  views::Widget* widget = dialog_view->GetWidget();
+  widget->CloseNow();
+
+  EXPECT_TRUE(observer.host_destroying_called_);
+  EXPECT_FALSE(removed_observer.host_destroying_called_);
 }
 
 IN_PROC_BROWSER_TEST_F(CredentialProviderSigninDialogWinDialogTest,
@@ -530,7 +586,7 @@ IN_PROC_BROWSER_TEST_F(
     CredentialProviderSigninDialogWinIntegrationDialogDisplayTest,
     ShowDialogOnlyTest) {
   WaitForDialogToLoad();
-  EXPECT_TRUE(reinterpret_cast<Profile*>(web_contents_->GetBrowserContext())
+  EXPECT_TRUE(Profile::FromBrowserContext(web_contents_->GetBrowserContext())
                   ->IsIncognitoProfile());
   views::Widget::Widgets all_widgets = views::test::WidgetTest::GetAllWidgets();
   (*all_widgets.begin())->Close();
@@ -546,6 +602,32 @@ IN_PROC_BROWSER_TEST_F(
                                 ui::KeyboardCode::VKEY_ESCAPE,
                                 ui::DomCode::ESCAPE, 0);
   (*all_widgets.begin())->OnKeyEvent(&escape_key_event);
+  RunUntilBrowserProcessQuits();
+}
+
+class CredentialProviderSigninDialogWinIsolatedModeTest
+    : public CredentialProviderSigninDialogWinIntegrationDialogDisplayTest {
+ public:
+  CredentialProviderSigninDialogWinIsolatedModeTest() = default;
+  ~CredentialProviderSigninDialogWinIsolatedModeTest() override = default;
+
+ protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    CredentialProviderSigninDialogWinIntegrationDialogDisplayTest::
+        SetUpCommandLine(command_line);
+    command_line->AppendSwitch(
+        enterprise_isolated_mode::switches::
+            kForceEnterpriseIsolatedModeReplacesIncognito);
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(CredentialProviderSigninDialogWinIsolatedModeTest,
+                       LoadsWithEnterpriseIsolatedModeFlag) {
+  WaitForDialogToLoad();
+  EXPECT_TRUE(Profile::FromBrowserContext(web_contents_->GetBrowserContext())
+                  ->IsEnterpriseIsolatedModeProfile());
+  views::Widget::Widgets all_widgets = views::test::WidgetTest::GetAllWidgets();
+  (*all_widgets.begin())->Close();
   RunUntilBrowserProcessQuits();
 }
 

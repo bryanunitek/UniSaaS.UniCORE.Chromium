@@ -15,6 +15,7 @@
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/flags/android/chrome_session_state.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/test/browser_test_utils.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
@@ -94,6 +95,9 @@ class TestTabModel : public TabModel {
   tabs::TabInterface* OpenTab(const GURL& url,
                               int index,
                               bool foreground) override;
+  tabs::TabInterface* OpenTab(const GURL& url,
+                              int index,
+                              TabLaunchType launch_type) override;
   void SetOpenerForTab(tabs::TabHandle target, tabs::TabHandle opener) override;
   tabs::TabInterface* GetOpenerForTab(tabs::TabHandle target) override;
   tabs::TabInterface* InsertWebContentsAt(
@@ -114,11 +118,17 @@ class TestTabModel : public TabModel {
   void UnpinTab(tabs::TabHandle tab) override;
   bool ContainsTabGroup(tab_groups::TabGroupId group_id) override;
   std::vector<tab_groups::TabGroupId> ListTabGroups() override;
+  std::set<split_tabs::SplitTabId> ListSplits() override;
   std::optional<tab_groups::TabGroupVisualData> GetTabGroupVisualData(
       tab_groups::TabGroupId group_id) override;
+  std::optional<split_tabs::SplitTabVisualData> GetSplitTabVisualData(
+      split_tabs::SplitTabId split_id) override;
   gfx::Range GetTabGroupTabIndices(tab_groups::TabGroupId group_id) override;
   std::optional<tab_groups::TabGroupId> CreateTabGroup(
       const std::vector<tabs::TabHandle>& tabs) override;
+  std::optional<split_tabs::SplitTabId> CreateSplit(
+      const std::vector<tabs::TabHandle>& tabs,
+      const split_tabs::SplitTabVisualData& visual_data) override;
   void SetTabGroupVisualData(
       tab_groups::TabGroupId group_id,
       const tab_groups::TabGroupVisualData& visual_data) override;
@@ -126,6 +136,7 @@ class TestTabModel : public TabModel {
       std::optional<tab_groups::TabGroupId> group_id,
       const std::set<tabs::TabHandle>& tabs) override;
   void Ungroup(const std::set<tabs::TabHandle>& tabs) override;
+  void Unsplit(split_tabs::SplitTabId split_id) override;
   void MoveGroupTo(tab_groups::TabGroupId group_id, int index) override;
   void MoveTabToWindow(tabs::TabHandle tab,
                        SessionID destination_window_id,
@@ -186,6 +197,7 @@ class OwningTestTabModel : public TabModel {
   void SetActiveIndex(int index) override;
   void ForceCloseAllTabs() override;
   void CloseTabAt(int index) override;
+  void CloseTabsAt(const std::vector<int>& indices);
   std::unique_ptr<content::WebContents> DetachWebContents(
       tabs::TabHandle tab) override;
   tabs::TabInterface* CreateTab(
@@ -239,6 +251,9 @@ class OwningTestTabModel : public TabModel {
   tabs::TabInterface* OpenTab(const GURL& url,
                               int index,
                               bool foreground) override;
+  tabs::TabInterface* OpenTab(const GURL& url,
+                              int index,
+                              TabLaunchType launch_type) override;
   void SetOpenerForTab(tabs::TabHandle target, tabs::TabHandle opener) override;
   tabs::TabInterface* GetOpenerForTab(tabs::TabHandle target) override;
   tabs::TabInterface* InsertWebContentsAt(
@@ -259,11 +274,17 @@ class OwningTestTabModel : public TabModel {
   void UnpinTab(tabs::TabHandle tab) override;
   bool ContainsTabGroup(tab_groups::TabGroupId group_id) override;
   std::vector<tab_groups::TabGroupId> ListTabGroups() override;
+  std::set<split_tabs::SplitTabId> ListSplits() override;
   std::optional<tab_groups::TabGroupVisualData> GetTabGroupVisualData(
       tab_groups::TabGroupId group_id) override;
+  std::optional<split_tabs::SplitTabVisualData> GetSplitTabVisualData(
+      split_tabs::SplitTabId split_id) override;
   gfx::Range GetTabGroupTabIndices(tab_groups::TabGroupId group_id) override;
   std::optional<tab_groups::TabGroupId> CreateTabGroup(
       const std::vector<tabs::TabHandle>& tabs) override;
+  std::optional<split_tabs::SplitTabId> CreateSplit(
+      const std::vector<tabs::TabHandle>& tabs,
+      const split_tabs::SplitTabVisualData& visual_data) override;
   void SetTabGroupVisualData(
       tab_groups::TabGroupId group_id,
       const tab_groups::TabGroupVisualData& visual_data) override;
@@ -271,6 +292,7 @@ class OwningTestTabModel : public TabModel {
       std::optional<tab_groups::TabGroupId> group_id,
       const std::set<tabs::TabHandle>& tabs) override;
   void Ungroup(const std::set<tabs::TabHandle>& tabs) override;
+  void Unsplit(split_tabs::SplitTabId split_id) override;
   void MoveGroupTo(tab_groups::TabGroupId group_id, int index) override;
   void MoveTabToWindow(tabs::TabHandle tab,
                        SessionID destination_window_id,
@@ -282,7 +304,7 @@ class OwningTestTabModel : public TabModel {
   bool IsClosingAllTabs() override;
 
  private:
-  void SelectTab(TabAndroid* tab, TabModel::TabSelectionType selection_type);
+  void SelectTab(TabAndroid* tab);
 
   SEQUENCE_CHECKER(sequence_checker_);
 

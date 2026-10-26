@@ -30,6 +30,7 @@
 #include "extensions/browser/management_policy.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
 #include "ui/display/scoped_display_for_new_windows.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -79,8 +80,7 @@ void ExtensionShelfContextMenu::GetMenuModel(GetMenuModelCallback callback) {
       AddContextMenuOption(menu_model.get(), ash::MENU_CLOSE,
                            IDS_SHELF_CONTEXT_MENU_CLOSE);
     }
-  } else if (item().type == ash::TYPE_BROWSER_SHORTCUT ||
-             item().type == ash::TYPE_UNPINNED_BROWSER_SHORTCUT) {
+  } else if (item().type == ash::TYPE_BROWSER_SHORTCUT) {
     AddContextMenuOption(menu_model.get(), ash::APP_CONTEXT_MENU_NEW_WINDOW,
                          IDS_APP_LIST_NEW_WINDOW);
     if (!profile->IsGuestSession()) {
@@ -167,11 +167,11 @@ bool ExtensionShelfContextMenu::IsCommandIdEnabled(int command_id) const {
       return UninstallAllowed(item().id.app_id, profile);
     case ash::APP_CONTEXT_MENU_NEW_WINDOW:
       // "Normal" windows are not allowed when incognito is enforced.
-      return IncognitoModePrefs::GetAvailability(profile->GetPrefs()) !=
+      return IncognitoModePrefs::GetAvailability(profile) !=
              policy::IncognitoModeAvailability::kForced;
     case ash::APP_CONTEXT_MENU_NEW_INCOGNITO_WINDOW:
       // Incognito windows are not allowed when incognito is disabled.
-      return IncognitoModePrefs::GetAvailability(profile->GetPrefs()) !=
+      return IncognitoModePrefs::GetAvailability(profile) !=
              policy::IncognitoModeAvailability::kDisabled;
     default:
       if (command_id < ash::COMMAND_ID_COUNT) {

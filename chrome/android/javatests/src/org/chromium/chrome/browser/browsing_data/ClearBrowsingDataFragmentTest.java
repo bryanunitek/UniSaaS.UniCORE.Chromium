@@ -9,10 +9,13 @@ import static androidx.test.espresso.action.ViewActions.click;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.RootMatchers.isDialog;
+import static androidx.test.espresso.matcher.ViewMatchers.hasDescendant;
+import static androidx.test.espresso.matcher.ViewMatchers.isDescendantOfA;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
+import static org.hamcrest.Matchers.allOf;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -23,11 +26,16 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.app.Activity;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
 import android.text.Spanned;
 import android.text.style.ClickableSpan;
 import android.view.View;
@@ -52,7 +60,9 @@ import androidx.test.filters.MediumTest;
 
 import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;
+import org.junit.After;
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -62,17 +72,19 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.mockito.stubbing.Answer;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
-import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.base.test.util.PayloadCallbackHelper;
+import org.chromium.base.test.util.UserActionTester;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.browsing_data.BrowsingDataBridge.OnClearBrowsingDataListener;
@@ -83,11 +95,22 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.notifications.channels.SiteChannelsManager;
+import org.chromium.chrome.browser.password_manager.CredentialManagerLauncherFactory;
+import org.chromium.chrome.browser.password_manager.FakeCredentialManagerLauncherFactoryImpl;
+import org.chromium.chrome.browser.password_manager.FakePasswordCheckupClientHelperFactoryImpl;
+import org.chromium.chrome.browser.password_manager.FakePasswordManagerBackendSupportHelper;
+import org.chromium.chrome.browser.password_manager.PasswordCheckupClientHelperFactory;
+import org.chromium.chrome.browser.password_manager.PasswordManagerBackendSupportHelper;
+import org.chromium.chrome.browser.privacy.settings.PrivacySettings;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
+import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.searchwidget.SearchActivity;
 import org.chromium.chrome.browser.settings.SettingsActivity;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsActivityInterface;
+import org.chromium.chrome.browser.settings.SettingsInTab;
+import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.sync.FakeSyncServiceImpl;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
@@ -96,32 +119,37 @@ import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
-import org.chromium.components.browser_ui.settings.ExpandablePreferenceGroup;
+import org.chromium.components.browser_ui.settings.SettingsCustomTabLauncher;
+import org.chromium.components.browser_ui.settings.SettingsNavigation;
 import org.chromium.components.browser_ui.settings.SpinnerPreference;
 import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
 import org.chromium.components.browsing_data.DeleteBrowsingDataAction;
+import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.components.search_engines.TemplateUrl;
+import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.components.sync.DataType;
 import org.chromium.ui.test.util.ViewUtils;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 
 /** Tests for ClearBrowsingDataFragment interaction with underlying data model. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@DoNotBatch(reason = "Manages sign-in state, which is global.")
-@DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
+@Batch(Batch.PER_CLASS)
 public class ClearBrowsingDataFragmentTest {
-    @Rule
+    @Rule(order = 0)
+    public final SigninTestRule mSigninTestRule = SigninTestRule.createWithCleanups();
+
+    @Rule(order = 1)
     public FreshCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.freshChromeTabbedActivityRule();
 
-    @Rule
-    public SettingsActivityTestRule<ClearBrowsingDataFragment> mSettingsActivityTestRule =
-            new SettingsActivityTestRule<>(ClearBrowsingDataFragment.class);
-
-    @Rule public final SigninTestRule mSigninTestRule = new SigninTestRule();
+    @Rule(order = 2)
+    public SettingsTestRule<ClearBrowsingDataFragment> mSettingsActivityTestRule =
+            new SettingsTestRule<>(ClearBrowsingDataFragment.class);
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -130,6 +158,16 @@ public class ClearBrowsingDataFragmentTest {
     @Mock private HelpAndFeedbackLauncher mHelpAndFeedbackLauncher;
 
     @Mock private SettingsIndexData mSearchIndexDataMock;
+
+    @Mock private SettingsCustomTabLauncher mCustomTabLauncherMock;
+
+    @Mock private TemplateUrlService mTemplateUrlServiceMock;
+
+    @Mock private TemplateUrl mTemplateUrlMock;
+
+    @Mock private SettingsNavigation mSettingsNavigationMock;
+
+    private UserActionTester mUserActionTester;
 
     private final CallbackHelper mCallbackHelper = new CallbackHelper();
 
@@ -155,7 +193,11 @@ public class ClearBrowsingDataFragmentTest {
         when(mBrowsingDataBridgeMock.getBrowsingDataDeletionTimePeriod(any()))
                 .thenReturn(DEFAULT_TIME_PERIOD);
 
+        TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlServiceMock);
+        doReturn(true).when(mTemplateUrlServiceMock).isDefaultSearchEngineGoogle();
+
         mActivityTestRule.startOnBlankPage();
+        mUserActionTester = new UserActionTester();
 
         // There can be some left-over notification channels from other tests.
         // TODO(crbug.com/41452182): Find a general solution to avoid leaking channels between
@@ -165,6 +207,13 @@ public class ClearBrowsingDataFragmentTest {
                     SiteChannelsManager manager = SiteChannelsManager.getInstance();
                     manager.deleteAllSiteChannels();
                 });
+    }
+
+    @After
+    public void tearDown() {
+        if (mUserActionTester != null) {
+            mUserActionTester.tearDown();
+        }
     }
 
     /** Waits for the progress dialog to disappear from the given CBD preference. */
@@ -187,8 +236,8 @@ public class ClearBrowsingDataFragmentTest {
         clearButton.callOnClick();
     }
 
-    private SettingsActivity startPreferences() {
-        SettingsActivity settingsActivity =
+    private SettingsActivityInterface startPreferences() {
+        SettingsActivityInterface settingsActivity =
                 mSettingsActivityTestRule.startSettingsActivity(
                         ClearBrowsingDataFragment.createFragmentArgs(
                                 mActivityTestRule.getActivity().getClass().getName()));
@@ -207,9 +256,12 @@ public class ClearBrowsingDataFragmentTest {
         mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
         final ClearBrowsingDataFragment preferences =
                 (ClearBrowsingDataFragment) startPreferences().getMainFragment();
-        ViewUtils.waitForVisibleView(withId(R.id.menu_id_targeted_help));
+        if (!SettingsInTab.shouldOpenSettingsInTab()) {
+            ViewUtils.waitForVisibleView(withId(R.id.menu_id_targeted_help));
+        }
 
-        onView(withId(R.id.recycler_view)).perform(RecyclerViewActions.scrollToLastPosition());
+        onView(allOf(withId(R.id.recycler_view), isDescendantOfA(withId(R.id.preferences_detail))))
+                .perform(RecyclerViewActions.scrollToLastPosition());
         onView(withText(preferences.buildSignOutOfChromeText().toString()))
                 .perform(clickOnSignOutLink());
 
@@ -239,9 +291,12 @@ public class ClearBrowsingDataFragmentTest {
         mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
         final ClearBrowsingDataFragment preferences =
                 (ClearBrowsingDataFragment) startPreferences().getMainFragment();
-        ViewUtils.waitForVisibleView(withId(R.id.menu_id_targeted_help));
+        if (!SettingsInTab.shouldOpenSettingsInTab()) {
+            ViewUtils.waitForVisibleView(withId(R.id.menu_id_targeted_help));
+        }
 
-        onView(withId(R.id.recycler_view)).perform(RecyclerViewActions.scrollToLastPosition());
+        onView(allOf(withId(R.id.recycler_view), isDescendantOfA(withId(R.id.preferences_detail))))
+                .perform(RecyclerViewActions.scrollToLastPosition());
         onView(withText(preferences.buildSignOutOfChromeText().toString()))
                 .perform(clickOnSignOutLink());
 
@@ -307,18 +362,20 @@ public class ClearBrowsingDataFragmentTest {
                 .clearBrowsingData(
                         eq(expectedProfile),
                         any(),
-                        eq(getAllDataTypes()),
+                        eq(getAllDataTypes(preferences)),
                         eq(DEFAULT_TIME_PERIOD),
                         any(),
                         any());
     }
 
-    private static int[] getAllDataTypes() {
-        Set<Integer> dialogTypes = ClearBrowsingDataFragment.getAllOptions();
+    private static int[] getAllDataTypes(ClearBrowsingDataFragment fragment) {
+        List<Integer> dialogTypes =
+                ClearBrowsingDataFragment.getDialogOptions(fragment.getArguments());
 
         int[] datatypes = new int[dialogTypes.size()];
-        for (int i = 0; i < datatypes.length; i++) {
-            datatypes[i] = ClearBrowsingDataFragment.getDataType(i);
+        int i = 0;
+        for (Integer type : dialogTypes) {
+            datatypes[i++] = ClearBrowsingDataFragment.getDataType(type);
         }
 
         Arrays.sort(datatypes);
@@ -366,6 +423,28 @@ public class ClearBrowsingDataFragmentTest {
     }
 
     /**
+     * Tests that the page names Privacy as the page to return to once the deletion completes, so
+     * that it does not depend on navigation history the deletion itself may have removed.
+     */
+    @Test
+    @MediumTest
+    public void testDeletionFinishesToPrivacySettings() throws Exception {
+        setDataTypesToClear(DialogOption.CLEAR_CACHE);
+
+        final ClearBrowsingDataFragment preferences =
+                (ClearBrowsingDataFragment) startPreferences().getMainFragment();
+        SettingsNavigationFactory.setInstanceForTesting(mSettingsNavigationMock);
+
+        ThreadUtils.runOnUiThreadBlocking(() -> clickClearButton(preferences));
+
+        waitForProgressToComplete(preferences);
+        mCallbackHelper.waitForOnly();
+
+        verify(mSettingsNavigationMock)
+                .finishCurrentSettings(preferences, PrivacySettings.class, /* parentArgs= */ null);
+    }
+
+    /**
      * Tests that changing the time interval for a deletion does not change the option prefs of
      * Clear Browsing Data if the deletion doesn't go through.
      */
@@ -409,7 +488,10 @@ public class ClearBrowsingDataFragmentTest {
     @Test
     @MediumTest
     public void testHelpButtonClicked() {
-        SettingsActivity activity = startPreferences();
+        // Settings in a tab doesn't have a help button or menu.
+        Assume.assumeTrue(!SettingsInTab.shouldOpenSettingsInTab());
+
+        startPreferences();
         ClearBrowsingDataFragment fragment = mSettingsActivityTestRule.getFragment();
 
         HelpAndFeedbackLauncherFactory.setInstanceForTesting(mHelpAndFeedbackLauncher);
@@ -418,7 +500,7 @@ public class ClearBrowsingDataFragmentTest {
                 () -> {
                     verify(mHelpAndFeedbackLauncher)
                             .show(
-                                    activity,
+                                    mSettingsActivityTestRule.getActivity(),
                                     fragment.getString(R.string.help_context_clear_browsing_data),
                                     null);
                 });
@@ -428,8 +510,11 @@ public class ClearBrowsingDataFragmentTest {
     @MediumTest
     public void testTitleShown() {
         startPreferences();
-        ViewUtils.waitForVisibleView(withId(R.id.menu_id_targeted_help));
-        onView(withText(R.string.clear_browsing_data_title)).check(matches(isDisplayed()));
+        if (!SettingsInTab.shouldOpenSettingsInTab()) {
+            ViewUtils.waitForVisibleView(withId(R.id.menu_id_targeted_help));
+        }
+        ViewUtils.waitForVisibleView(
+                allOf(withText(R.string.clear_browsing_data_title), isDisplayed()));
     }
 
     @Test
@@ -442,6 +527,31 @@ public class ClearBrowsingDataFragmentTest {
                 .removeEntry(
                         indexProvider.getUniqueId(
                                 ClearBrowsingDataFragment.PREF_SIGN_OUT_OF_CHROME_TEXT));
+    }
+
+    @Test
+    @MediumTest
+    public void testSearchableIndex_ManageOtherGoogleData_AlwaysRemoved() {
+        var indexProvider = ClearBrowsingDataFragment.SEARCH_INDEX_DATA_PROVIDER;
+        indexProvider.updateDynamicPreferences(
+                mActivityTestRule.getActivity(), mSearchIndexDataMock, null);
+        verify(mSearchIndexDataMock)
+                .removeEntry(
+                        indexProvider.getUniqueId(
+                                ClearBrowsingDataFragment
+                                        .PREF_MANAGE_OTHER_GOOGLE_DATA_EXPANDABLE));
+        verify(mSearchIndexDataMock)
+                .removeEntry(
+                        indexProvider.getUniqueId(
+                                ClearBrowsingDataFragment.PREF_MY_ACTIVITY_LINK_OUT));
+        verify(mSearchIndexDataMock)
+                .removeEntry(
+                        indexProvider.getUniqueId(
+                                ClearBrowsingDataFragment.PREF_SEARCH_HISTORY_LINK_OUT));
+        verify(mSearchIndexDataMock)
+                .removeEntry(
+                        indexProvider.getUniqueId(
+                                ClearBrowsingDataFragment.PREF_PASSWORD_MANAGER_LINK_OUT));
     }
 
     @Test
@@ -463,7 +573,7 @@ public class ClearBrowsingDataFragmentTest {
      * fragment and clicks the "Clear" button.
      */
     static class OpenPreferencesEnableDialogAndClickClearRunnable implements Runnable {
-        final SettingsActivity mSettingsActivity;
+        final SettingsActivityInterface mSettingsActivity;
 
         /**
          * Instantiates this OpenPreferencesEnableDialogAndClickClearRunnable.
@@ -471,7 +581,7 @@ public class ClearBrowsingDataFragmentTest {
          * @param settingsActivity A Settings activity containing ClearBrowsingDataFragment
          *     fragment.
          */
-        public OpenPreferencesEnableDialogAndClickClearRunnable(SettingsActivity settingsActivity) {
+        public OpenPreferencesEnableDialogAndClickClearRunnable(SettingsActivityInterface settingsActivity) {
             mSettingsActivity = settingsActivity;
         }
 
@@ -493,7 +603,7 @@ public class ClearBrowsingDataFragmentTest {
      * activity is closed.
      */
     static class PreferenceScreenClosedCriterion implements Runnable {
-        final SettingsActivity mSettingsActivity;
+        final SettingsActivityInterface mSettingsActivity;
 
         /**
          * Instantiates this PreferenceScreenClosedCriterion.
@@ -501,15 +611,19 @@ public class ClearBrowsingDataFragmentTest {
          * @param settingsActivity A Settings activity containing ClearBrowsingDataFragment
          *     fragment.
          */
-        public PreferenceScreenClosedCriterion(SettingsActivity settingsActivity) {
+        public PreferenceScreenClosedCriterion(SettingsActivityInterface settingsActivity) {
             mSettingsActivity = settingsActivity;
         }
 
         @Override
         public void run() {
-            ClearBrowsingDataFragment fragment =
-                    (ClearBrowsingDataFragment) mSettingsActivity.getMainFragment();
-            if (fragment == null) return;
+            // Once the fragment is closed, settings in a tab shows another fragment (such as
+            // PrivacySettings) in its place, while SettingsActivity keeps it as the main
+            // fragment but hidden.
+            if (!(mSettingsActivity.getMainFragment()
+                    instanceof ClearBrowsingDataFragment fragment)) {
+                return;
+            }
             Criteria.checkThat(fragment.isVisible(), Matchers.is(false));
         }
     }
@@ -529,7 +643,7 @@ public class ClearBrowsingDataFragmentTest {
         // History is not selected. We still need to select some other datatype, otherwise the
         // "Clear" button won't be enabled.
         setDataTypesToClear(DialogOption.CLEAR_CACHE);
-        final SettingsActivity settingsActivity1 = startPreferences();
+        final SettingsActivityInterface settingsActivity1 = startPreferences();
         ThreadUtils.runOnUiThreadBlocking(
                 new OpenPreferencesEnableDialogAndClickClearRunnable(settingsActivity1));
         mCallbackHelper.waitForCallback(0);
@@ -541,7 +655,7 @@ public class ClearBrowsingDataFragmentTest {
         CriteriaHelper.pollUiThread(new PreferenceScreenClosedCriterion(settingsActivity1));
         // Reopen Clear Browsing Data preferences, this time with history selected for clearing.
         setDataTypesToClear(DialogOption.CLEAR_HISTORY);
-        final SettingsActivity settingsActivity2 = startPreferences();
+        final SettingsActivityInterface settingsActivity2 = startPreferences();
         ThreadUtils.runOnUiThreadBlocking(
                 new OpenPreferencesEnableDialogAndClickClearRunnable(settingsActivity2));
 
@@ -574,7 +688,7 @@ public class ClearBrowsingDataFragmentTest {
 
         // Reopen Clear Browsing Data preferences and clear history once again.
         setDataTypesToClear(DialogOption.CLEAR_HISTORY);
-        final SettingsActivity settingsActivity3 = startPreferences();
+        final SettingsActivityInterface settingsActivity3 = startPreferences();
         final Profile expectedProfile = mSettingsActivityTestRule.getFragment().getProfile();
         ThreadUtils.runOnUiThreadBlocking(
                 new OpenPreferencesEnableDialogAndClickClearRunnable(settingsActivity3));
@@ -714,7 +828,7 @@ public class ClearBrowsingDataFragmentTest {
         markOriginsAsImportant(importantOrigins);
         setDataTypesToClear(DialogOption.CLEAR_HISTORY, DialogOption.CLEAR_CACHE);
 
-        SettingsActivity settingsActivity = startPreferences();
+        SettingsActivityInterface settingsActivity = startPreferences();
         ClearBrowsingDataFragment fragment =
                 (ClearBrowsingDataFragment) settingsActivity.getMainFragment();
         Profile expectedProfile = fragment.getProfile();
@@ -724,7 +838,7 @@ public class ClearBrowsingDataFragmentTest {
         // Press the cancel button.
         ThreadUtils.runOnUiThreadBlocking(
                 getPressButtonInImportantDialogRunnable(fragment, AlertDialog.BUTTON_NEGATIVE));
-        settingsActivity.finish();
+        mSettingsActivityTestRule.getActivity().finish();
 
         // Nothing was cleared.
         verify(mBrowsingDataBridgeMock, never())
@@ -752,7 +866,7 @@ public class ClearBrowsingDataFragmentTest {
 
         setDataTypesToClear(DialogOption.CLEAR_HISTORY, DialogOption.CLEAR_CACHE);
 
-        final SettingsActivity settingsActivity = startPreferences();
+        final SettingsActivityInterface settingsActivity = startPreferences();
         final ClearBrowsingDataFragment fragment =
                 (ClearBrowsingDataFragment) settingsActivity.getMainFragment();
         final Profile expectedProfile = fragment.getProfile();
@@ -917,63 +1031,215 @@ public class ClearBrowsingDataFragmentTest {
     @Test
     @MediumTest
     @EnableFeatures(ChromeFeatureList.DBD_PASSWORD_REMOVAL_ON_ANDROID)
-    public void testManageOtherGoogleDataSection() {
-        ClearBrowsingDataFragment preferences =
+    public void testMyActivityLinkOut() {
+        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
+
+        ClearBrowsingDataFragment fragment =
                 (ClearBrowsingDataFragment) startPreferences().getMainFragment();
+        fragment.setCustomTabLauncher(mCustomTabLauncherMock);
 
-        ClearBrowsingDataExpandablePreferenceCategory expandablePreference =
-                preferences.findPreference(
-                        ClearBrowsingDataFragment.PREF_MANAGE_OTHER_GOOGLE_DATA_EXPANDABLE);
-
-        assertNotNull(expandablePreference);
-
-        // Manage Other Google Data section is collapsed by default.
-        assertManageOtherGoogleDataSectionState(
-                preferences, expandablePreference, /* isExpanded= */ false);
-
-        clickOnExpandableSection();
-
-        assertManageOtherGoogleDataSectionState(
-                preferences, expandablePreference, /* isExpanded= */ true);
-    }
-
-    private void clickOnExpandableSection() {
-        ClearBrowsingDataFragment fragment = mSettingsActivityTestRule.getFragment();
-        String title =
+        clickOnPrefWithTitle(
                 fragment.getString(
-                        R.string.clear_browsing_data_manage_other_google_data_expandable_title);
-        onView(withId(R.id.recycler_view)).perform(RecyclerViewActions.scrollToLastPosition());
-        onView(withText(title)).perform(click());
+                        R.string.clear_browsing_data_manage_other_google_data_expandable_title));
+
+        verifyPrefWithTextVisible(fragment.getString(R.string.my_activity_link_out_title));
+        clickOnPrefWithTitle(fragment.getString(R.string.my_activity_link_out_title));
+        verify(mCustomTabLauncherMock).openUrlInCct(any(), eq(UrlConstants.MY_ACTIVITY_URL_IN_CBD));
+        assertEquals(
+                1,
+                mUserActionTester.getActionCount(
+                        "Settings.DeleteBrowsingData.MyActivityLinkClick"));
     }
 
-    private void assertManageOtherGoogleDataSectionState(
-            ClearBrowsingDataFragment fragment,
-            ExpandablePreferenceGroup section,
-            boolean isExpanded) {
-        assertEquals(isExpanded, section.isExpanded());
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.DBD_PASSWORD_REMOVAL_ON_ANDROID)
+    public void testSearchHistoryLinkOut_GoogleDSE() {
+        doReturn(true).when(mTemplateUrlServiceMock).isDefaultSearchEngineGoogle();
+        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
 
-        Preference passwordManagerPref =
-                fragment.findPreference(ClearBrowsingDataFragment.PREF_PASSWORD_MANAGER_LINK_OUT);
+        ClearBrowsingDataFragment fragment =
+                (ClearBrowsingDataFragment) startPreferences().getMainFragment();
+        fragment.setCustomTabLauncher(mCustomTabLauncherMock);
+
+        clickOnPrefWithTitle(
+                fragment.getString(
+                        R.string.clear_browsing_data_manage_other_google_data_expandable_title));
+
         Preference searchHistoryPref =
                 fragment.findPreference(ClearBrowsingDataFragment.PREF_SEARCH_HISTORY_LINK_OUT);
-        Preference myActivityPref =
-                fragment.findPreference(ClearBrowsingDataFragment.PREF_MY_ACTIVITY_LINK_OUT);
-
-        assertNotNull(passwordManagerPref);
         assertNotNull(searchHistoryPref);
-        assertNotNull(myActivityPref);
+        verifyPrefWithTextVisible(searchHistoryPref.getTitle().toString());
 
-        assertEquals(isExpanded, passwordManagerPref.isVisible());
-        assertEquals(isExpanded, searchHistoryPref.isVisible());
-        assertEquals(isExpanded, myActivityPref.isVisible());
+        Preference searchHistoryPrefOtherDse =
+                fragment.findPreference(
+                        ClearBrowsingDataFragment.PREF_SEARCH_HISTORY_LINK_OUT_OTHER_DSE);
+        assertNotNull(searchHistoryPrefOtherDse);
+        assertFalse(searchHistoryPrefOtherDse.isVisible());
+
+        assertEquals(
+                fragment.getString(R.string.my_activity_link_out_description),
+                searchHistoryPref.getSummary().toString());
+
+        clickOnPrefWithTitle(searchHistoryPref.getTitle().toString());
+        verify(mCustomTabLauncherMock)
+                .openUrlInCct(any(), eq(UrlConstants.GOOGLE_SEARCH_HISTORY_URL_IN_CBD));
+        assertEquals(
+                1,
+                mUserActionTester.getActionCount(
+                        "Settings.DeleteBrowsingData.GoogleSearchHistoryLinkClick"));
     }
 
-    /** Wait for the snackbar to show on the main activity post deletion. */
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.DBD_PASSWORD_REMOVAL_ON_ANDROID)
+    public void testSearchHistoryLinkOut_OtherDSE() {
+        doReturn(false).when(mTemplateUrlServiceMock).isDefaultSearchEngineGoogle();
+        doReturn(mTemplateUrlMock)
+                .when(mTemplateUrlServiceMock)
+                .getDefaultSearchEngineTemplateUrl();
+        doReturn("DuckDuckGo").when(mTemplateUrlMock).getShortName();
+
+        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
+
+        ClearBrowsingDataFragment fragment =
+                (ClearBrowsingDataFragment) startPreferences().getMainFragment();
+
+        clickOnPrefWithTitle(
+                fragment.getString(
+                        R.string.clear_browsing_data_manage_other_google_data_expandable_title));
+
+        Preference searchHistoryPref =
+                fragment.findPreference(ClearBrowsingDataFragment.PREF_SEARCH_HISTORY_LINK_OUT);
+        assertNotNull(searchHistoryPref);
+        assertFalse(searchHistoryPref.isVisible());
+
+        Preference searchHistoryOtherDsePref =
+                fragment.findPreference(
+                        ClearBrowsingDataFragment.PREF_SEARCH_HISTORY_LINK_OUT_OTHER_DSE);
+        assertNotNull(searchHistoryOtherDsePref);
+        assertFalse(searchHistoryOtherDsePref.isSelectable());
+
+        String summary =
+                fragment.getString(
+                        R.string.search_history_link_out_description_other_dse, "DuckDuckGo");
+        assertEquals(summary, searchHistoryOtherDsePref.getSummary().toString());
+        verifyPrefWithTextVisible(summary);
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.DBD_PASSWORD_REMOVAL_ON_ANDROID)
+    public void testPasswordManagerLinkOut() {
+        DeviceInfo.setGmsVersionCodeForTest("250000000");
+        FakeCredentialManagerLauncherFactoryImpl fakeLauncherFactory =
+                new FakeCredentialManagerLauncherFactoryImpl();
+        CredentialManagerLauncherFactory.setFactoryForTesting(fakeLauncherFactory);
+        PasswordCheckupClientHelperFactory.setFactoryForTesting(
+                new FakePasswordCheckupClientHelperFactoryImpl());
+        FakePasswordManagerBackendSupportHelper fakeBackendHelper =
+                new FakePasswordManagerBackendSupportHelper();
+        fakeBackendHelper.setBackendPresent(true);
+        PasswordManagerBackendSupportHelper.setInstanceForTesting(fakeBackendHelper);
+        PayloadCallbackHelper<PendingIntent> successCallbackHelper = new PayloadCallbackHelper<>();
+        fakeLauncherFactory.setSuccessCallback(successCallbackHelper::notifyCalled);
+
+        Context context = ApplicationProvider.getApplicationContext();
+        fakeLauncherFactory.setIntent(
+                PendingIntent.getActivity(
+                        context,
+                        123,
+                        new Intent(context, SettingsActivity.class),
+                        PendingIntent.FLAG_IMMUTABLE));
+
+        ClearBrowsingDataFragment fragment =
+                (ClearBrowsingDataFragment) startPreferences().getMainFragment();
+
+        clickOnPrefWithTitle(
+                fragment.getString(
+                        R.string.clear_browsing_data_manage_other_google_data_expandable_title));
+
+        String title = fragment.getString(R.string.password_manager_link_out_title);
+        verifyPrefWithTextVisible(title);
+        clickOnPrefWithTitle(title);
+
+        assertNotNull(successCallbackHelper.getOnlyPayloadBlocking());
+        assertEquals(
+                1,
+                mUserActionTester.getActionCount(
+                        "Settings.DeleteBrowsingData.PasswordManagerLinkClick"));
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.DBD_PASSWORD_REMOVAL_ON_ANDROID)
+    public void testManageOtherGoogleDataSection() {
+        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
+
+        ClearBrowsingDataFragment fragment =
+                (ClearBrowsingDataFragment) startPreferences().getMainFragment();
+
+        String manageOtherGoogleDataSectionTitle =
+                fragment.getString(
+                        R.string.clear_browsing_data_manage_other_google_data_expandable_title);
+
+        String passwordManagerLinkOutTitle =
+                fragment.getString(R.string.password_manager_link_out_title);
+        String searchHistoryLinkOutTitle =
+                fragment.getString(R.string.search_history_link_out_title);
+        String myActivityLinkOutTitle = fragment.getString(R.string.my_activity_link_out_title);
+
+        verifyPrefWithTextVisible(manageOtherGoogleDataSectionTitle);
+
+        // "Manage other Google data" is initially collapsed.
+        verifyPrefWithTextHidden(passwordManagerLinkOutTitle);
+        verifyPrefWithTextHidden(searchHistoryLinkOutTitle);
+        verifyPrefWithTextHidden(myActivityLinkOutTitle);
+
+        // Expand the "Manage other Google data" section and verify content is visible.
+        clickOnPrefWithTitle(manageOtherGoogleDataSectionTitle);
+
+        verifyPrefWithTextVisible(passwordManagerLinkOutTitle);
+        verifyPrefWithTextVisible(searchHistoryLinkOutTitle);
+        verifyPrefWithTextVisible(myActivityLinkOutTitle);
+
+        // After signing out, only the password manager link out must be visible.
+        mSigninTestRule.signOut();
+
+        verifyPrefWithTextVisible(passwordManagerLinkOutTitle);
+        verifyPrefWithTextHidden(searchHistoryLinkOutTitle);
+        verifyPrefWithTextHidden(myActivityLinkOutTitle);
+    }
+
+    private void clickOnPrefWithTitle(String title) {
+        onView(allOf(withId(R.id.recycler_view), isDescendantOfA(withId(R.id.preferences_detail))))
+                .perform(RecyclerViewActions.actionOnItem(hasDescendant(withText(title)), click()));
+    }
+
+    private void verifyPrefWithTextVisible(String text) {
+        onView(allOf(withId(R.id.recycler_view), isDescendantOfA(withId(R.id.preferences_detail))))
+                .perform(RecyclerViewActions.scrollTo(hasDescendant(withText(text))));
+        onView(withText(text)).check(matches(isDisplayed()));
+    }
+
+    private void verifyPrefWithTextHidden(String text) {
+        onView(withText(text)).check(doesNotExist());
+    }
+
+    /**
+     * Wait for the snackbar to show post deletion. SettingsActivity finishes after deleting, so the
+     * snackbar shows on the main activity. Settings in a tab stays open on the parent settings page
+     * instead, so the snackbar shows on the settings host activity.
+     */
     private void waitForSnackbar(String expectedSnackbarMessage) {
-        ChromeTabbedActivity activity = mActivityTestRule.getActivity();
+        Activity activity =
+                SettingsInTab.shouldOpenSettingsInTab()
+                        ? mSettingsActivityTestRule.getActivity()
+                        : mActivityTestRule.getActivity();
         CriteriaHelper.pollUiThread(
                 () -> {
-                    SnackbarManager snackbarManager = activity.getSnackbarManager();
+                    SnackbarManager snackbarManager =
+                            ((SnackbarManager.SnackbarManageable) activity).getSnackbarManager();
                     Criteria.checkThat(snackbarManager.isShowing(), Matchers.is(true));
                     TextView snackbarMessage = activity.findViewById(R.id.snackbar_message);
                     Criteria.checkThat(snackbarMessage, Matchers.notNullValue());

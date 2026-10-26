@@ -18,7 +18,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
-#include "chrome/browser/privacy_sandbox/notice/desktop_entrypoint_handlers_helper.h"
 #include "chrome/browser/profile_resetter/triggered_profile_resetter.h"
 #include "chrome/browser/profile_resetter/triggered_profile_resetter_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -27,7 +26,6 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/chrome_pages.h"
@@ -160,7 +158,8 @@ StartupTabs StartupTabProviderImpl::GetCommandLineTabs(
 
     // `ParseTabFromCommandLineArg()` shouldn't return
     // CommandLineTabsPresent::kUnknown when a profile is provided.
-    DCHECK_NE(parsed_arg.tab_parsed, CommandLineTabsPresent::kUnknown);
+    CHECK_NE(parsed_arg.tab_parsed, CommandLineTabsPresent::kUnknown,
+             base::NotFatalUntil::M162);
 
     if (parsed_arg.tab_parsed == CommandLineTabsPresent::kYes) {
       result.emplace_back(std::move(parsed_arg.tab_url),

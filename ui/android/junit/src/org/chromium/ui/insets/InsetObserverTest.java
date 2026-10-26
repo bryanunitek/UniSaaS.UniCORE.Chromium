@@ -4,13 +4,19 @@
 
 package org.chromium.ui.insets;
 
+import static androidx.core.view.WindowInsetsCompat.Type.statusBars;
+import static androidx.core.view.WindowInsetsCompat.Type.systemBars;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -18,6 +24,7 @@ import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import android.app.Activity;
 import android.content.Context;
 import android.graphics.Rect;
 import android.os.Build;
@@ -31,20 +38,26 @@ import androidx.core.view.DisplayCutoutCompat;
 import androidx.core.view.WindowInsetsAnimationCompat;
 import androidx.core.view.WindowInsetsAnimationCompat.BoundsCompat;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.ui.base.ImmutableWeakReference;
+import org.chromium.ui.base.UiAndroidFeatures;
 import org.chromium.ui.insets.InsetObserver.WindowInsetsAnimationListener;
 import org.chromium.ui.insets.InsetObserver.WindowInsetsConsumer;
 import org.chromium.ui.insets.InsetObserver.WindowInsetsConsumer.InsetConsumerSource;
@@ -53,8 +66,31 @@ import java.util.Collections;
 
 /** Tests for {@link InsetObserver} class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class InsetObserverTest {
+    private static class TestContentView extends LinearLayout {
+        private boolean mHasWindowFocus = true;
+
+        TestContentView() {
+            super(ContextUtils.getApplicationContext());
+        }
+
+        // Prevents re-entry into InsetObserver#onApplyWindowInsets() via fitSystemWindows(), which
+        // happens because tests call it directly rather than via dispatchApplyWindowInsets().
+        @Override
+        public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+            return WindowInsetsCompat.CONSUMED.toWindowInsets();
+        }
+
+        @Override
+        public boolean hasWindowFocus() {
+            return mHasWindowFocus;
+        }
+
+        void setHasWindowFocus(boolean hasWindowFocus) {
+            mHasWindowFocus = hasWindowFocus;
+        }
+    }
+
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     /** The rect values if the display cutout is present. */
@@ -88,6 +124,9 @@ public class InsetObserverTest {
     private static final Insets NAVIGATION_BAR_INSETS = Insets.of(0, 0, 0, 1);
     private static final Insets NAVIGATION_BAR_INSETS_MODIFIED = Insets.of(0, 0, 0, 2);
 
+    private static final int STATUS_BAR_HEIGHT = 77;
+    private static final int CUTOUT_SAFE_INSET_TOP = 80;
+
     @Mock private InsetObserver.WindowInsetObserver mObserver;
 
     @Mock private Context mContext;
@@ -98,8 +137,9 @@ public class InsetObserverTest {
     @Mock private WindowInsetsConsumer mInsetsConsumer1;
     @Mock private WindowInsetsConsumer mInsetsConsumer2;
     @Mock private WindowInsetsAnimationListener mInsetsAnimationListener;
-    @Mock private LinearLayout mContentView;
+    @Captor private ArgumentCaptor<WindowInsetsCompat> mInsetsCaptor;
 
+    private TestContentView mContentView;
     private InsetObserver mInsetObserver;
 
     private void setCutout(boolean hasCutout) {
@@ -113,14 +153,9 @@ public class InsetObserverTest {
 
     @Before
     public void setUp() {
+        mContentView = new TestContentView();
         doReturn(mNonCompatInsets).when(mInsets).toWindowInsets();
         doReturn(mModifiedNonCompatInsets).when(mModifiedInsets).toWindowInsets();
-        doReturn(WindowInsetsCompat.CONSUMED.toWindowInsets())
-                .when(mContentView)
-                .onApplyWindowInsets(mNonCompatInsets);
-        doReturn(WindowInsetsCompat.CONSUMED.toWindowInsets())
-                .when(mContentView)
-                .onApplyWindowInsets(mModifiedNonCompatInsets);
 
         doReturn(SYSTEM_BAR_INSETS).when(mInsets).getInsets(WindowInsetsCompat.Type.systemBars());
         doReturn(NAVIGATION_BAR_INSETS)
@@ -164,7 +199,6 @@ public class InsetObserverTest {
 
     /** Test that applying new insets notifies observers. */
     @Test
-    @SmallTest
     public void applyInsets_NotifiesObservers() {
         mInsetObserver.onApplyWindowInsets(mContentView, mInsets);
         verify(mObserver, times(1)).onInsetChanged();
@@ -195,7 +229,6 @@ public class InsetObserverTest {
     }
 
     @Test
-    @SmallTest
     public void applyInsets_withInsetConsumer() {
         mInsetObserver.addInsetsConsumer(mInsetsConsumer1, InsetConsumerSource.TEST_SOURCE);
 
@@ -211,7 +244,6 @@ public class InsetObserverTest {
 
     /** Test that consumed insets do not trigger observers. */
     @Test
-    @SmallTest
     public void applyInsets_retriggerOnApplyWindowInsets() {
         mInsetObserver.onApplyWindowInsets(mContentView, mInsets);
         verify(mObserver, times(1)).onInsetChanged();
@@ -226,7 +258,6 @@ public class InsetObserverTest {
     }
 
     @Test
-    @SmallTest
     public void applyInsets_withMultipleInsetConsumers() {
         // Add consumers in reverse order of priority.
         mInsetObserver.addInsetsConsumer(
@@ -253,7 +284,6 @@ public class InsetObserverTest {
     }
 
     @Test
-    @SmallTest
     public void isKeyboardInOverlayMode() {
         mInsetObserver.setKeyboardInOverlayMode(true);
         assertTrue(mInsetObserver.isKeyboardInOverlayMode());
@@ -263,7 +293,6 @@ public class InsetObserverTest {
     }
 
     @Test
-    @SmallTest
     public void insetAnimation() {
         mInsetObserver.addWindowInsetsAnimationListener(mInsetsAnimationListener);
         WindowInsetsAnimationCompat.Callback callback =
@@ -288,7 +317,6 @@ public class InsetObserverTest {
 
     /** Test that applying new insets does not notify the observer. */
     @Test
-    @SmallTest
     @RequiresApi(Build.VERSION_CODES.P)
     public void applyInsets() {
         setCutout(false);
@@ -298,7 +326,6 @@ public class InsetObserverTest {
 
     /** Test that applying new insets with a cutout notifies the observer. */
     @Test
-    @SmallTest
     @RequiresApi(Build.VERSION_CODES.P)
     public void applyInsets_WithCutout_WithSystemInsets() {
         setCutout(true);
@@ -317,7 +344,6 @@ public class InsetObserverTest {
 
     /** Test applying new insets with a cutout and then remove the cutout. */
     @Test
-    @SmallTest
     @RequiresApi(Build.VERSION_CODES.P)
     public void applyInsets_WithCutout_ChangeWindowInsets() {
         setCutout(true);
@@ -344,7 +370,6 @@ public class InsetObserverTest {
 
     /** Test that applying new insets with a cutout but no observer is a no-op. */
     @Test
-    @SmallTest
     @RequiresApi(Build.VERSION_CODES.P)
     public void applyInsets_WithCutout_NoListener() {
         setCutout(true);
@@ -354,7 +379,6 @@ public class InsetObserverTest {
 
     /** Test that applying new insets with no observer is a no-op. */
     @Test
-    @SmallTest
     @RequiresApi(Build.VERSION_CODES.P)
     public void applyInsets_NoListener() {
         setCutout(false);
@@ -424,7 +448,10 @@ public class InsetObserverTest {
     @Test
     @Config(sdk = VERSION_CODES.R)
     public void initializeWithLastSeenRawWindowInsets() {
-        doReturn(mNonCompatInsets).when(mContentView).getRootWindowInsets();
+        Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        activity.setContentView(mContentView);
+        WindowInsets rootWindowInsets = mContentView.getRootWindowInsets();
+        assertNotNull(rootWindowInsets);
         mInsetObserver =
                 new InsetObserver(
                         new ImmutableWeakReference<>(mContentView),
@@ -433,12 +460,11 @@ public class InsetObserverTest {
                         /* enableExtraEdgeToEdgeLogging= */ false);
         assertEquals(
                 "WindowInsets is different.",
-                WindowInsetsCompat.toWindowInsetsCompat(mNonCompatInsets),
+                WindowInsetsCompat.toWindowInsetsCompat(rootWindowInsets),
                 mInsetObserver.getLastRawWindowInsets());
     }
 
     @Test
-    @SmallTest
     public void verifyInsets_gestureNav_recordsAppropriateHistograms() {
         mInsetObserver =
                 new InsetObserver(
@@ -510,7 +536,6 @@ public class InsetObserverTest {
     }
 
     @Test
-    @SmallTest
     public void verifyInsets_tappableNav_recordsAppropriateHistograms() {
         mInsetObserver =
                 new InsetObserver(
@@ -582,7 +607,6 @@ public class InsetObserverTest {
     }
 
     @Test
-    @SmallTest
     public void verifyInsets_bothNav_recordsAppropriateHistograms() {
         mInsetObserver =
                 new InsetObserver(
@@ -654,7 +678,6 @@ public class InsetObserverTest {
     }
 
     @Test
-    @SmallTest
     public void verifyInsets_neitherNav_recordsAppropriateHistograms() {
         mInsetObserver =
                 new InsetObserver(
@@ -723,5 +746,156 @@ public class InsetObserverTest {
         // Ensure duplicate calls don't result in multiple histograms.
         mInsetObserver.verifyInsetsForEdgeToEdge(zeroNavbarInsets);
         histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.R)
+    @EnableFeatures(UiAndroidFeatures.ANDROID_PRESERVE_STATUS_BAR_INSETS_WHEN_UNFOCUSED)
+    public void applyWindowInsets_PreserveStatusBarsWhenUnfocused() {
+        setUpPassThroughInsetsConsumer();
+        WindowInsetsCompat visibleStatusBarsInsets = buildStatusBarsInsets(/* visible= */ true);
+        WindowInsetsCompat hiddenStatusBarsInsets = buildStatusBarsInsets(/* visible= */ false);
+
+        // 1. Focused window with visible status bars.
+        mContentView.setHasWindowFocus(true);
+        WindowInsetsCompat consumerInsets =
+                captureConsumerInsets(() -> applyWindowInsets(visibleStatusBarsInsets));
+        assertStatusBarsVisible(consumerInsets);
+        assertEquals(visibleStatusBarsInsets, mInsetObserver.getLastRawWindowInsets());
+
+        // 2. Window loses focus to a translucent overlay activity (e.g. ChooserActivity) that hides
+        // the status bars. Consumers should still see the status bars, while the raw insets are
+        // left untouched.
+        mContentView.setHasWindowFocus(false);
+        consumerInsets = captureConsumerInsets(() -> applyWindowInsets(hiddenStatusBarsInsets));
+        assertStatusBarsVisible(consumerInsets);
+        assertEquals(STATUS_BAR_HEIGHT, consumerInsets.getInsets(systemBars()).top);
+        WindowInsetsCompat rawInsets = mInsetObserver.getLastRawWindowInsets();
+        assertEquals(hiddenStatusBarsInsets, rawInsets);
+        assertStatusBarsHidden(rawInsets);
+
+        // 3. When focused, if Chrome itself hides the status bars (e.g. fullscreen mode), status
+        // bar insets should become 0 and remain 0 even if window focus is subsequently lost.
+        mContentView.setHasWindowFocus(true);
+        consumerInsets = captureConsumerInsets(() -> applyWindowInsets(hiddenStatusBarsInsets));
+        assertStatusBarsHidden(consumerInsets);
+
+        mContentView.setHasWindowFocus(false);
+        consumerInsets = captureConsumerInsets(() -> applyWindowInsets(hiddenStatusBarsInsets));
+        assertStatusBarsHidden(consumerInsets);
+
+        // 4. If the status bars become visible while unfocused (e.g. Chrome exits fullscreen
+        // during onStop()), a subsequent unfocused hidden status bar inset is preserved again.
+        applyWindowInsets(visibleStatusBarsInsets);
+        consumerInsets = captureConsumerInsets(() -> applyWindowInsets(hiddenStatusBarsInsets));
+        assertStatusBarsVisible(consumerInsets);
+        assertEquals(STATUS_BAR_HEIGHT, consumerInsets.getInsets(systemBars()).top);
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.R)
+    @DisableFeatures(UiAndroidFeatures.ANDROID_PRESERVE_STATUS_BAR_INSETS_WHEN_UNFOCUSED)
+    public void applyWindowInsets_FeatureDisabled_DoesNotPreserveStatusBarsWhenUnfocused() {
+        setUpPassThroughInsetsConsumer();
+        Rect expectedSafeArea = new Rect(0, CUTOUT_SAFE_INSET_TOP - STATUS_BAR_HEIGHT, 0, 0);
+        mContentView.setHasWindowFocus(true);
+        applyWindowInsets(buildStatusBarsInsets(/* visible= */ true));
+        assertEquals(expectedSafeArea, mInsetObserver.getCurrentSafeArea());
+
+        // With the kill switch disabled, the hidden status bars are forwarded as-is while
+        // unfocused.
+        mContentView.setHasWindowFocus(false);
+        WindowInsetsCompat hiddenStatusBarsInsets = buildStatusBarsInsets(/* visible= */ false);
+        WindowInsetsCompat consumerInsets =
+                captureConsumerInsets(() -> applyWindowInsets(hiddenStatusBarsInsets));
+        assertEquals(hiddenStatusBarsInsets, consumerInsets);
+        assertStatusBarsHidden(consumerInsets);
+        assertEquals(0, consumerInsets.getInsets(systemBars()).top);
+        assertEquals(hiddenStatusBarsInsets, mInsetObserver.getLastRawWindowInsets());
+        assertEquals(new Rect(0, CUTOUT_SAFE_INSET_TOP, 0, 0), mInsetObserver.getCurrentSafeArea());
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.R)
+    @EnableFeatures(UiAndroidFeatures.ANDROID_PRESERVE_STATUS_BAR_INSETS_WHEN_UNFOCUSED)
+    public void retriggerOnApplyWindowInsets_ReevaluatesStatusBarsPreservation() {
+        setUpPassThroughInsetsConsumer();
+        mContentView.setHasWindowFocus(true);
+        applyWindowInsets(buildStatusBarsInsets(/* visible= */ true));
+        mContentView.setHasWindowFocus(false);
+        applyWindowInsets(buildStatusBarsInsets(/* visible= */ false));
+
+        // Replaying the raw insets while still unfocused keeps preserving the status bars.
+        WindowInsetsCompat consumerInsets =
+                captureConsumerInsets(mInsetObserver::retriggerOnApplyWindowInsets);
+        assertStatusBarsVisible(consumerInsets);
+
+        // Once Chrome has focus, replaying the raw insets reflects the actually hidden status bars.
+        mContentView.setHasWindowFocus(true);
+        consumerInsets = captureConsumerInsets(mInsetObserver::retriggerOnApplyWindowInsets);
+        assertStatusBarsHidden(consumerInsets);
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.R)
+    @EnableFeatures(UiAndroidFeatures.ANDROID_PRESERVE_STATUS_BAR_INSETS_WHEN_UNFOCUSED)
+    public void applyWindowInsets_PreserveStatusBarsWhenUnfocused_SafeAreaUnchanged() {
+        Rect expectedSafeArea = new Rect(0, CUTOUT_SAFE_INSET_TOP - STATUS_BAR_HEIGHT, 0, 0);
+        mContentView.setHasWindowFocus(true);
+        applyWindowInsets(buildStatusBarsInsets(/* visible= */ true));
+        assertEquals(expectedSafeArea, mInsetObserver.getCurrentSafeArea());
+        clearInvocations(mObserver);
+
+        // The display cutout is still covered by the preserved status bars, so the safe area
+        // should not change while unfocused.
+        mContentView.setHasWindowFocus(false);
+        applyWindowInsets(buildStatusBarsInsets(/* visible= */ false));
+        verify(mObserver, never()).onSafeAreaChanged(any());
+        assertEquals(expectedSafeArea, mInsetObserver.getCurrentSafeArea());
+
+        // Safe area updates outside of onApplyWindowInsets() also use the preserved status bars.
+        mInsetObserver.updateBottomInsetForEdgeToEdge(EDGE_TO_EDGE_BOTTOM_INSET);
+        expectedSafeArea.bottom = EDGE_TO_EDGE_BOTTOM_INSET;
+        assertEquals(expectedSafeArea, mInsetObserver.getCurrentSafeArea());
+    }
+
+    private static WindowInsetsCompat buildStatusBarsInsets(boolean visible) {
+        Insets statusBarInsets = Insets.of(0, STATUS_BAR_HEIGHT, 0, 0);
+        return new WindowInsetsCompat.Builder()
+                .setInsets(statusBars(), visible ? statusBarInsets : Insets.NONE)
+                .setInsetsIgnoringVisibility(statusBars(), statusBarInsets)
+                .setVisible(statusBars(), visible)
+                .setDisplayCutout(
+                        new DisplayCutoutCompat(new Rect(0, CUTOUT_SAFE_INSET_TOP, 0, 0), null))
+                .build();
+    }
+
+    private static void assertStatusBarsVisible(WindowInsetsCompat insets) {
+        assertEquals(STATUS_BAR_HEIGHT, insets.getInsets(statusBars()).top);
+        assertTrue(insets.isVisible(statusBars()));
+    }
+
+    private static void assertStatusBarsHidden(WindowInsetsCompat insets) {
+        assertEquals(0, insets.getInsets(statusBars()).top);
+        assertFalse(insets.isVisible(statusBars()));
+    }
+
+    private void setUpPassThroughInsetsConsumer() {
+        mInsetObserver.addInsetsConsumer(mInsetsConsumer1, InsetConsumerSource.TEST_SOURCE);
+        doAnswer(invocation -> invocation.getArgument(1))
+                .when(mInsetsConsumer1)
+                .onApplyWindowInsets(any(), any());
+    }
+
+    private void applyWindowInsets(WindowInsetsCompat insets) {
+        mInsetObserver.onApplyWindowInsets(mContentView, insets);
+    }
+
+    /** Runs {@code action} and returns the insets it caused to be forwarded to the consumer. */
+    private WindowInsetsCompat captureConsumerInsets(Runnable action) {
+        clearInvocations(mInsetsConsumer1);
+        action.run();
+        verify(mInsetsConsumer1).onApplyWindowInsets(eq(mContentView), mInsetsCaptor.capture());
+        return mInsetsCaptor.getValue();
     }
 }

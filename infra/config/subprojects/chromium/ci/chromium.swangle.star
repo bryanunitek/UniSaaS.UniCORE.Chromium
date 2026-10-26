@@ -8,6 +8,7 @@ load("@chromium-luci//builder_health_indicators.star", "health_spec")
 load("@chromium-luci//ci.star", "ci")
 load("@chromium-luci//consoles.star", "consoles")
 load("@chromium-luci//gn_args.star", "gn_args")
+load("@chromium-luci//gpu.star", shared_gpu = "gpu")
 load("@chromium-luci//targets.star", "targets")
 load("//lib/ci_constants.star", "ci_constants")
 load("//lib/gardener_rotations.star", "gardener_rotations")
@@ -17,7 +18,7 @@ load("//lib/siso.star", "siso")
 ci.defaults.set(
     executable = "recipe:angle_chromium",
     builder_group = "chromium.swangle",
-    pool = gpu.ci.POOL,
+    pool = shared_gpu.ci.POOL,
     gardener_rotations = gardener_rotations.CHROMIUM_GPU,
     contact_team_email = "chrome-gpu-infra@google.com",
     execution_timeout = ci_constants.DEFAULT_EXECUTION_TIMEOUT,
@@ -53,8 +54,9 @@ consoles.console_view(
     },
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "linux-swangle-chromium-x64",
+    description_html = "Builds and runs Chromium GPU tests with Tip-of-Tree ANGLE and SwiftShader (SwANGLE) on Linux x64.",
     executable = ci_constants.DEFAULT_EXECUTABLE,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -78,7 +80,8 @@ gpu.ci.linux_builder(
     gn_args = gn_args.config(
         configs = [
             "gpu_tests",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "linux",
@@ -105,8 +108,9 @@ gpu.ci.linux_builder(
     siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "linux-swangle-chromium-x64-exp",
+    description_html = "Experimental builder that runs Chromium GPU tests with Tip-of-Tree ANGLE and SwiftShader (SwANGLE) on Linux x64.",
     executable = ci_constants.DEFAULT_EXECUTABLE,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -130,7 +134,8 @@ gpu.ci.linux_builder(
     gn_args = gn_args.config(
         configs = [
             "gpu_tests",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "linux",
@@ -156,8 +161,9 @@ gpu.ci.linux_builder(
     siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "linux-swangle-tot-swiftshader-x64",
+    description_html = "Builds and runs ANGLE dEQP tests with Tip-of-Tree SwiftShader (SwANGLE) on Linux x64.",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -208,8 +214,9 @@ gpu.ci.linux_builder(
     siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "linux-swangle-x64",
+    description_html = "Builds and runs ANGLE dEQP tests with pinned DEPS SwiftShader (SwANGLE) on Linux x64.",
     executable = ci_constants.DEFAULT_EXECUTABLE,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -258,8 +265,9 @@ gpu.ci.linux_builder(
     siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "linux-swangle-x64-exp",
+    description_html = "Experimental builder that runs ANGLE dEQP tests with pinned DEPS SwiftShader (SwANGLE) on Linux x64.",
     executable = ci_constants.DEFAULT_EXECUTABLE,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -307,8 +315,9 @@ gpu.ci.linux_builder(
     siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
 )
 
-gpu.ci.mac_builder(
+shared_gpu.ci.mac_builder(
     name = "mac-swangle-chromium-x64",
+    description_html = "Builds and runs Chromium GPU tests with Tip-of-Tree ANGLE and SwiftShader (SwANGLE) on Mac x64.",
     executable = ci_constants.DEFAULT_EXECUTABLE,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -332,7 +341,8 @@ gpu.ci.mac_builder(
     gn_args = gn_args.config(
         configs = [
             "gpu_tests",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "mac",
@@ -357,8 +367,9 @@ gpu.ci.mac_builder(
     ),
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "win-swangle-chromium-x86",
+    description_html = "Builds and runs Chromium GPU tests with Tip-of-Tree ANGLE and SwiftShader (SwANGLE) on Windows x86.",
     executable = ci_constants.DEFAULT_EXECUTABLE,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -382,7 +393,8 @@ gpu.ci.windows_builder(
     gn_args = gn_args.config(
         configs = [
             "gpu_tests",
-            "release_try_builder",
+            "release_builder",
+            "dcheck_always_on",
             "minimal_symbols",
             "remoteexec",
             "x86",
@@ -409,8 +421,9 @@ gpu.ci.windows_builder(
     siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CI,
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "win-swangle-tot-swiftshader-x64",
+    description_html = "Builds and runs ANGLE dEQP tests with Tip-of-Tree SwiftShader (SwANGLE) on Windows x64.",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -460,8 +473,9 @@ gpu.ci.windows_builder(
     siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CI,
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "win-swangle-tot-swiftshader-x86",
+    description_html = "Builds and runs ANGLE dEQP tests with Tip-of-Tree SwiftShader (SwANGLE) on Windows x86.",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -511,8 +525,9 @@ gpu.ci.windows_builder(
     siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CI,
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "win-swangle-x64",
+    description_html = "Builds and runs ANGLE dEQP tests with pinned DEPS SwiftShader (SwANGLE) on Windows x64.",
     executable = ci_constants.DEFAULT_EXECUTABLE,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -560,8 +575,9 @@ gpu.ci.windows_builder(
     siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CI,
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "win-swangle-x86",
+    description_html = "Builds and runs ANGLE dEQP tests with pinned DEPS SwiftShader (SwANGLE) on Windows x86.",
     executable = ci_constants.DEFAULT_EXECUTABLE,
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(

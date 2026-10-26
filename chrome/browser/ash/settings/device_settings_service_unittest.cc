@@ -10,8 +10,8 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
-#include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/ownership/owner_key_loader.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash.h"
@@ -20,6 +20,7 @@
 #include "chrome/browser/net/fake_nss_service.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/enterprise_metrics.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
@@ -485,7 +486,7 @@ TEST_F(DeviceSettingsServiceTest, IsCurrentUserOwnerAsyncWithLoadedCerts) {
   service->IsOwnerAsync(base::BindOnce(&DeviceSettingsServiceTest::OnIsOwner,
                                        base::Unretained(this)));
   // The callback should be called immediately.
-  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(base::test::RunUntil([&] { return is_owner_set_; }));
 
   EXPECT_TRUE(device_settings_service_->HasPrivateOwnerKey());
   ASSERT_TRUE(device_settings_service_->GetPublicKey().get());

@@ -13,7 +13,6 @@ import 'chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js';
 import '../controls/settings_slider.js';
 import '../controls/settings_toggle_button.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -21,7 +20,8 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {routes} from '../router.js';
 
 import {getTemplate} from './facegaze_cursor_card.html.js';
@@ -134,21 +134,23 @@ export class FaceGazeCursorCardElement extends FaceGazeCursorCardElementBase {
     ];
   }
 
-  cursorSpeedTicks: number[];
-  maxCursorSpeed: number;
-  maxCursorTuning: number;
-  minCursorSpeed: number;
-  minCursorTuning: number;
-  velocityThresholdTicks: number[];
-  private readonly precisionClickSpeedFactorOptions_:
+  declare cursorSpeedTicks: number[];
+  declare maxCursorSpeed: number;
+  declare maxCursorTuning: number;
+  declare minCursorSpeed: number;
+  declare minCursorTuning: number;
+  declare velocityThresholdTicks: number[];
+  declare private readonly precisionClickSpeedFactorOptions_:
       Array<{value: number, name: string}>;
-  private syntheticCombinedCursorSpeedPref_:
+  declare private syntheticCombinedCursorSpeedPref_:
       chrome.settingsPrivate.PrefObject<number>;
-  private shouldAnnounceA11yCursorSettingsReset_ = false;
-  private resetAlert_ = '';
+  declare private shouldAnnounceA11yCursorSettingsReset_: boolean;
+  declare private resetAlert_: string;
 
   constructor() {
     super();
+    this.shouldAnnounceA11yCursorSettingsReset_ = false;
+    this.resetAlert_ = '';
   }
 
   override ready(): void {

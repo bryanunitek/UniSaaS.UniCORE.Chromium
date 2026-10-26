@@ -84,7 +84,7 @@ class PLATFORM_EXPORT SchemeRegistry {
   static void RegisterURLSchemeAsNotAllowingJavascriptURLs(
       const String& scheme);
   static void RemoveURLSchemeAsNotAllowingJavascriptURLsForTest(
-      const String& schemeForTest);
+      const String& scheme_for_test);
   static bool ShouldTreatURLSchemeAsNotAllowingJavascriptURLs(
       const String& scheme);
 
@@ -196,9 +196,16 @@ class PLATFORM_EXPORT SchemeRegistry {
   // WebUI Schemes that can use bundled resource bytecode retrieved from the
   // static resource bundle.
   static void RegisterURLSchemeAsWebUIBundledBytecode(const String& scheme);
+  static void RegisterURLSchemeAsWebUIBundledBytecodeForTest(
+      const String& scheme);
   static void RemoveURLSchemeAsWebUIBundledBytecodeForTest(
       const String& scheme);
   static bool SchemeSupportsWebUIBundledBytecode(const String& scheme);
+
+  // Schemes used for direct launch targeting the current browser instance.
+  static void RegisterURLSchemeAsDirectLaunch(const String& scheme);
+  static void RemoveURLSchemeAsDirectLaunchForTest(const String& scheme);
+  static bool IsDirectLaunchScheme(const String& scheme);
 
  private:
   static const URLSchemesSet& LocalSchemes();

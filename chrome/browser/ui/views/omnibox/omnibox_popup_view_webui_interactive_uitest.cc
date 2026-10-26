@@ -2,31 +2,31 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/feature_list.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_popup_view_webui.h"
+
 #include "base/run_loop.h"
-#include "base/task/thread_pool.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/test_future.h"
-#include "base/threading/platform_thread.h"
-#include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
 #include "chrome/browser/themes/test/theme_service_changed_waiter.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/omnibox/omnibox_popup_state_manager.h"
 #include "chrome/browser/ui/omnibox/omnibox_tab_helper.h"
+#include "chrome/browser/ui/permission_bubble/permission_prompt.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/omnibox/full_webui_omnibox_frame.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_full_popup_webui_content.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_popup_full_presenter.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter.h"
-#include "chrome/browser/ui/views/omnibox/omnibox_popup_view_webui.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_webui_base_content.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_webui_content.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
@@ -37,20 +37,26 @@
 #include "chrome/browser/ui/webui/searchbox/webui_omnibox_handler.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/omnibox/browser/autocomplete_match.h"
+#include "chrome/test/permissions/permission_request_manager_test_api.h"
 #include "components/omnibox/browser/autocomplete_result.h"
 #include "components/omnibox/browser/omnibox_popup_selection.h"
 #include "components/omnibox/browser/omnibox_triggered_feature_service.h"
-#include "components/omnibox/common/omnibox_features.h"
+#include "components/permissions/embedded_permission_prompt_flow_model.h"
+#include "components/permissions/test/mock_permission_request.h"
+#if BUILDFLAG(IS_MAC)
+#include "components/viz/common/features.h"
+#endif
+#include "content/public/browser/visibility.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "ui/base/interaction/expect_call_in_scope.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/native_theme/mock_os_settings_provider.h"
 #include "ui/views/controls/webview/webview.h"
+#include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_observer.h"
 
 #if BUILDFLAG(IS_LINUX)
 #include "ui/linux/linux_ui.h"
@@ -88,11 +94,18 @@ class OmniboxPopupViewWebUITest : public InProcessBrowserTest {
 
   void CreatePopupForTestQuery();
 
-  LocationBarView* location_bar() {
+  LocationBar* location_bar() {
+    auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+    return browser_view->GetLocationBar();
+  }
+  LocationBarView* location_bar_view() {
     auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
     return browser_view->toolbar()->location_bar_view();
   }
-  OmniboxViewViews* omnibox_view() { return location_bar()->omnibox_view(); }
+  OmniboxView* omnibox_view() { return location_bar()->GetOmniboxView(); }
+  OmniboxViewViews* omnibox_view_views() {
+    return location_bar_view() ? location_bar_view()->omnibox_view() : nullptr;
+  }
   OmniboxController* controller() {
     return location_bar()->GetOmniboxController();
   }
@@ -100,13 +113,13 @@ class OmniboxPopupViewWebUITest : public InProcessBrowserTest {
     return location_bar()->GetOmniboxController()->edit_model();
   }
 
-  SkColor GetSelectedColor(Browser* browser) {
+  SkColor GetSelectedColor(BrowserWindowInterface* browser) {
     return BrowserView::GetBrowserViewForBrowser(browser)
         ->GetColorProvider()
         ->GetColor(kColorOmniboxResultsBackgroundSelected);
   }
 
-  SkColor GetNormalColor(Browser* browser) {
+  SkColor GetNormalColor(BrowserWindowInterface* browser) {
     return BrowserView::GetBrowserViewForBrowser(browser)
         ->GetColorProvider()
         ->GetColor(kColorOmniboxResultsBackground);
@@ -129,7 +142,9 @@ class OmniboxPopupViewWebUITest : public InProcessBrowserTest {
   base::test::ScopedFeatureList feature_list_;
 };
 
-OmniboxPopupViewWebUITest::OmniboxPopupViewWebUITest() = default;
+OmniboxPopupViewWebUITest::OmniboxPopupViewWebUITest() {
+  feature_list_.InitAndEnableFeature(omnibox::internal::kWebUIOmniboxPopup);
+}
 OmniboxPopupViewWebUITest::~OmniboxPopupViewWebUITest() = default;
 
 OmniboxPopupViewWebUITest::ThemeChangeWaiter::~ThemeChangeWaiter() {
@@ -158,7 +173,7 @@ void OmniboxPopupViewWebUITest::CreatePopupForTestQuery() {
         edit_model()->SetUserText(u"foo");
         AutocompleteInput input(
             u"foo", metrics::OmniboxEventProto::BLANK,
-            ChromeAutocompleteSchemeClassifier(browser()->profile()));
+            ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
         input.set_omit_asynchronous_matches(true);
         autocomplete_controller->Start(input);
 
@@ -180,7 +195,7 @@ void OmniboxPopupViewWebUITest::UseDefaultTheme() {
   ui::NativeTheme::GetInstanceForNativeUi()->NotifyOnNativeThemeUpdated();
 
   ThemeService* theme_service =
-      ThemeServiceFactory::GetForProfile(browser()->profile());
+      ThemeServiceFactory::GetForProfile(browser()->GetProfile());
   if (!theme_service->UsingDefaultTheme()) {
     ThemeChangeWaiter wait(theme_service);
     theme_service->UseDefaultTheme();
@@ -190,7 +205,6 @@ void OmniboxPopupViewWebUITest::UseDefaultTheme() {
 }
 
 void OmniboxPopupViewWebUITest::SetUp() {
-  feature_list_.InitAndEnableFeature(omnibox::internal::kWebUIOmniboxPopup);
   InProcessBrowserTest::SetUp();
 }
 
@@ -201,34 +215,39 @@ void OmniboxPopupViewWebUITest::SetUp() {
 // color.
 IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUITest,
                        PopupMatchesLocationBarBackground) {
+  if (!location_bar_view()) {
+    GTEST_SKIP() << "Not applicable when WebUILocationBar is enabled.";
+  }
+
   // In dark mode the omnibox focused and unfocused colors are the same, which
   // makes this test fail; see comments below.
   ui::MockOsSettingsProvider os_settings_provider;  // Forces light mode.
 
   // Start with the Omnibox unfocused.
-  omnibox_view()->GetFocusManager()->ClearFocus();
+  omnibox_view_views()->GetFocusManager()->ClearFocus();
   const SkColor color_before_focus =
-      location_bar()->GetBackgroundColorForTesting();
-  EXPECT_EQ(color_before_focus, omnibox_view()->GetBackgroundColor());
+      location_bar_view()->GetBackgroundColorForTesting();
+  EXPECT_EQ(color_before_focus, omnibox_view_views()->GetBackgroundColor());
 
   // Give the Omnibox focus and get its focused color.
-  omnibox_view()->RequestFocus();
+  omnibox_view_views()->RequestFocus();
   const SkColor color_after_focus =
-      location_bar()->GetBackgroundColorForTesting();
+      location_bar_view()->GetBackgroundColorForTesting();
 
-  EXPECT_EQ(color_after_focus, omnibox_view()->GetBackgroundColor());
+  EXPECT_EQ(color_after_focus, omnibox_view_views()->GetBackgroundColor());
 
   // The background is hosted in the view that contains the results area.
   CreatePopupForTestQuery();
-  LocationBarView* background_host = location_bar();
+  LocationBarView* background_host = location_bar_view();
   EXPECT_EQ(color_after_focus, background_host->GetBackgroundColorForTesting());
 
-  omnibox_view()->GetFocusManager()->ClearFocus();
+  omnibox_view_views()->GetFocusManager()->ClearFocus();
 
   // Blurring the Omnibox w/ in-progress input (e.g. "foo") should result in
   // the on-focus colors.
-  EXPECT_EQ(color_after_focus, location_bar()->GetBackgroundColorForTesting());
-  EXPECT_EQ(color_after_focus, omnibox_view()->GetBackgroundColor());
+  EXPECT_EQ(color_after_focus,
+            location_bar_view()->GetBackgroundColorForTesting());
+  EXPECT_EQ(color_after_focus, omnibox_view_views()->GetBackgroundColor());
 }
 
 IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUITest, PopupLoadsAndAcceptsCalls) {
@@ -249,13 +268,10 @@ class OmniboxPopupViewWebUIFullV2Test : public OmniboxPopupViewWebUITest {
     // Unset it here as this test does not strictly require the window to be in
     // front to verify state isolation.
     set_global_browser_set_up_function(nullptr);
-  }
-  void SetUp() override {
     feature_list_full_v2_.InitWithFeatures(
         {omnibox::internal::kWebUIOmniboxPopup,
-         omnibox::kWebUIOmniboxFullPopup},
+         omnibox::internal::kWebUIOmniboxFullPopup},
         {});
-    InProcessBrowserTest::SetUp();
   }
 
  private:
@@ -264,10 +280,10 @@ class OmniboxPopupViewWebUIFullV2Test : public OmniboxPopupViewWebUITest {
 
 IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUIFullV2Test, TabSwitchStateSync) {
   // Create a new tab.
-  int initial_tab_index = browser()->tab_strip_model()->active_index();
+  int initial_tab_index = browser()->GetTabStripModel()->active_index();
   chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
-  ASSERT_EQ(2, browser()->tab_strip_model()->count());
-  int new_tab_index = browser()->tab_strip_model()->active_index();
+  ASSERT_EQ(2, browser()->GetTabStripModel()->count());
+  int new_tab_index = browser()->GetTabStripModel()->active_index();
   ASSERT_NE(initial_tab_index, new_tab_index);
   // Type text in the omnibox of the active tab (new tab) and select it.
   omnibox_view()->SetUserText(u"test query");
@@ -289,11 +305,11 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUIFullV2Test, TabSwitchStateSync) {
   }
 
   // Switch to another tab (initial tab).
-  browser()->tab_strip_model()->ActivateTabAt(initial_tab_index);
+  browser()->GetTabStripModel()->ActivateTabAt(initial_tab_index);
   // Verify the text is isolated (not the typed text) in the other tab.
   EXPECT_NE(u"test query", omnibox_view()->GetText());
   // Switch back to the original tab (new tab).
-  browser()->tab_strip_model()->ActivateTabAt(new_tab_index);
+  browser()->GetTabStripModel()->ActivateTabAt(new_tab_index);
   // Verify the text and selection are restored.
   EXPECT_EQ(u"test query", omnibox_view()->GetText());
   auto* popup_view_check = static_cast<OmniboxPopupViewWebUI*>(
@@ -309,11 +325,13 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUIFullV2Test, TabSwitchStateSync) {
   }
 }
 
-IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUIFullV2Test, TabSwitchNoSavedState) {
+// TODO(crbug.com/536046012): Re-enable this test.
+IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUIFullV2Test,
+                       DISABLED_TabSwitchNoSavedState) {
   // Create a new tab.
-  int initial_tab_index = browser()->tab_strip_model()->active_index();
+  int initial_tab_index = browser()->GetTabStripModel()->active_index();
   chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
-  ASSERT_EQ(2, browser()->tab_strip_model()->count());
+  ASSERT_EQ(2, browser()->GetTabStripModel()->count());
 
   // Focus the location bar to ensure the Omnibox has active focus.
   location_bar()->FocusLocation(/*is_user_initiated=*/true,
@@ -340,11 +358,11 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUIFullV2Test, TabSwitchNoSavedState) {
 
   // Clear any saved omnibox state from the initial tab.
   content::WebContents* initial_contents =
-      browser()->tab_strip_model()->GetWebContentsAt(initial_tab_index);
+      browser()->GetTabStripModel()->GetWebContentsAt(initial_tab_index);
   initial_contents->RemoveUserData(OmniboxTabHelper::kOmniboxStateKey);
 
   // Switch back to the initial tab.
-  browser()->tab_strip_model()->ActivateTabAt(initial_tab_index);
+  browser()->GetTabStripModel()->ActivateTabAt(initial_tab_index);
 
   // Verify the selection matches the focus state when activating a tab with
   // no saved state.
@@ -363,16 +381,66 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUIFullV2Test, TabSwitchNoSavedState) {
     auto* popup_ui_check = static_cast<OmniboxPopupUI*>(webui_controller_check);
     auto* popup_handler_check =
         popup_ui_check ? popup_ui_check->popup_handler() : nullptr;
-    const bool has_focus = controller()->edit_model()->has_focus();
-    const gfx::Range expected_selection =
-        has_focus ? gfx::Range(0, controller()
-                                      ->edit_model()
-                                      ->GetPermanentDisplayText()
-                                      .length())
-                  : gfx::Range(0, 0);
+    const gfx::Range expected_selection = gfx::Range(0, 0);
     return popup_handler_check &&
            popup_handler_check->latest_selection() == expected_selection;
   }));
+}
+
+// Verifies that the Full WebUI popup widget excludes the bottom shadow margin
+// when collapsed and includes it when expanded.
+IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUIFullV2Test,
+                       CollapsedAndExpandedShadowMarginBounds) {
+  auto* popup_view = static_cast<OmniboxPopupViewWebUI*>(
+      location_bar()->GetOmniboxPopupView());
+  ASSERT_TRUE(popup_view);
+  auto* presenter = popup_view->presenter();
+  ASSERT_TRUE(presenter);
+
+  presenter->Show();
+  views::Widget* widget = presenter->GetWidget();
+  ASSERT_TRUE(widget);
+
+  const gfx::Rect location_bar_bounds = location_bar()->BoundsInScreen();
+  const gfx::Insets alignment_insets =
+      FullWebUIOmniboxFrame::GetLocationBarAlignmentInsets();
+  const gfx::Insets full_shadow_insets =
+      RoundedOmniboxResultsFrame::GetShadowInsets();
+  gfx::Insets collapsed_shadow_insets = full_shadow_insets;
+  collapsed_shadow_insets.set_bottom(0);
+
+  gfx::Rect expected_collapsed_bounds = location_bar_bounds;
+  expected_collapsed_bounds.Inset(-alignment_insets);
+  const int collapsed_content_height = expected_collapsed_bounds.height();
+  expected_collapsed_bounds.Inset(-collapsed_shadow_insets);
+
+  // When the page paints the shadow, the height it reports always includes its
+  // full vertical shadow padding.
+  const int reported_shadow_height =
+      presenter->ShouldDrawShadowInWebUI() ? full_shadow_insets.height() : 0;
+
+  // Collapsed state: widget bounds exclude the bottom shadow margin.
+  presenter->OnContentHeightChanged(collapsed_content_height +
+                                    reported_shadow_height);
+  EXPECT_EQ(widget->GetWindowBoundsInScreen(), expected_collapsed_bounds);
+
+  // Expanded state: widget bounds include the bottom shadow margin.
+  constexpr int kDropdownHeight = 200;
+  presenter->OnContentHeightChanged(collapsed_content_height + kDropdownHeight +
+                                    reported_shadow_height);
+  gfx::Rect expected_expanded_bounds = location_bar_bounds;
+  expected_expanded_bounds.Inset(-alignment_insets);
+  expected_expanded_bounds.set_height(collapsed_content_height +
+                                      kDropdownHeight);
+  expected_expanded_bounds.Inset(-full_shadow_insets);
+  EXPECT_EQ(widget->GetWindowBoundsInScreen(), expected_expanded_bounds);
+
+  // Collapsing again excludes the bottom shadow margin.
+  presenter->OnContentHeightChanged(collapsed_content_height +
+                                    reported_shadow_height);
+  EXPECT_EQ(widget->GetWindowBoundsInScreen(), expected_collapsed_bounds);
+
+  presenter->Hide();
 }
 
 class OmniboxPopupDimensionsTest : public OmniboxPopupViewWebUITest,
@@ -401,11 +469,11 @@ IN_PROC_BROWSER_TEST_P(OmniboxPopupDimensionsTest, DimensionsAndAnchoring) {
   auto* presenter = popup_view->presenter();
   ASSERT_TRUE(presenter);
 
-  views::Widget* widget = presenter->get_widget_for_testing();
+  views::Widget* widget = presenter->GetWidget();
   ASSERT_TRUE(widget);
 
   gfx::Rect widget_bounds = widget->GetWindowBoundsInScreen();
-  gfx::Rect location_bar_bounds = location_bar()->GetBoundsInScreen();
+  gfx::Rect location_bar_bounds = location_bar()->BoundsInScreen();
 
   gfx::Rect expected_bounds = location_bar_bounds;
   expected_bounds.Inset(
@@ -437,7 +505,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUITest, MAYBE_PopupResizeWindow) {
       location_bar()->GetOmniboxPopupView());
   ASSERT_TRUE(popup_view);
 
-  views::Widget* widget = popup_view->presenter()->get_widget_for_testing();
+  views::Widget* widget = popup_view->presenter()->GetWidget();
   ASSERT_TRUE(widget);
 
   // Resize window smaller.
@@ -453,7 +521,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUITest, MAYBE_PopupResizeWindow) {
   }));
 
   gfx::Rect new_widget_bounds = widget->GetWindowBoundsInScreen();
-  gfx::Rect location_bar_bounds = location_bar()->GetBoundsInScreen();
+  gfx::Rect location_bar_bounds = location_bar()->BoundsInScreen();
   gfx::Rect expected_bounds = location_bar_bounds;
   expected_bounds.Inset(
       -RoundedOmniboxResultsFrame::GetLocationBarAlignmentInsets());
@@ -472,7 +540,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUITest, MAYBE_PopupResizeWindow) {
   }));
 
   new_widget_bounds = widget->GetWindowBoundsInScreen();
-  location_bar_bounds = location_bar()->GetBoundsInScreen();
+  location_bar_bounds = location_bar()->BoundsInScreen();
   expected_bounds = location_bar_bounds;
   expected_bounds.Inset(
       -RoundedOmniboxResultsFrame::GetLocationBarAlignmentInsets());
@@ -481,5 +549,225 @@ IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUITest, MAYBE_PopupResizeWindow) {
   EXPECT_EQ(new_widget_bounds.width(), expected_bounds.width());
   EXPECT_EQ(new_widget_bounds.x(), expected_bounds.x());
 }
+
+namespace {
+
+class TestPermissionPromptDelegate
+    : public permissions::PermissionPrompt::Delegate {
+ public:
+  explicit TestPermissionPromptDelegate(content::WebContents* web_contents)
+      : web_contents_(web_contents),
+        embedded_prompt_flow_model_(web_contents, this) {
+    request_list_.push_back(
+        std::make_unique<permissions::MockPermissionRequest>(
+            permissions::RequestType::kMicStream,
+            permissions::PermissionRequestGestureType::GESTURE));
+    embedded_prompt_flow_model_.set_prompt_variant(
+        permissions::EmbeddedPermissionPromptFlowModel::Variant::kAsk);
+  }
+
+  const std::vector<std::unique_ptr<permissions::PermissionRequest>>& Requests()
+      const override {
+    return request_list_;
+  }
+  GURL GetRequestingOrigin() const override {
+    return GURL(permissions::MockPermissionRequest::kDefaultOrigin);
+  }
+  GURL GetEmbeddingOrigin() const override {
+    return GURL(permissions::MockPermissionRequest::kDefaultOrigin);
+  }
+  void Accept(const PromptOptions& prompt_options) override {}
+  void AcceptThisTime(const PromptOptions& prompt_options) override {}
+  void Deny(const PromptOptions& prompt_options) override {}
+  void Dismiss(const PromptOptions& prompt_options) override {}
+  void Ignore(const PromptOptions& prompt_options) override {}
+  void SwitchToLoudPrompt() override {}
+  GeolocationAccuracy GetInitialGeolocationAccuracySelection() const override {
+    return GeolocationAccuracy::kPrecise;
+  }
+  std::optional<permissions::GeolocationPromptType> GetGeolocationPromptType()
+      const override {
+    return std::nullopt;
+  }
+  void FinalizeCurrentRequests() override {}
+  void OpenHelpCenterLink(const ui::Event&) override {}
+  void PreIgnoreQuietPrompt() override {}
+  void SetManageClicked() override {}
+  void SetLearnMoreClicked() override {}
+  void SetHatsShownCallback(base::OnceCallback<void()> callback) override {}
+  std::optional<permissions::PermissionUiSelector::QuietUiReason>
+  ReasonForUsingQuietUi() const override {
+    return std::nullopt;
+  }
+  bool ShouldCurrentRequestUseQuietUI() const override { return false; }
+  bool ShouldDropCurrentRequestIfCannotShowQuietly() const override {
+    return false;
+  }
+  bool WasCurrentRequestAlreadyDisplayed() override { return false; }
+  void SetDismissOnTabClose() override {}
+  void SetPromptShown() override {}
+  void SetDecisionTime() override {}
+  bool RecreateView() override { return false; }
+  const permissions::PermissionPrompt* GetCurrentPrompt() const override {
+    return nullptr;
+  }
+  permissions::EmbeddedPermissionPromptFlowModel* GetEmbeddedPromptFlowModel()
+      const override {
+    return const_cast<permissions::EmbeddedPermissionPromptFlowModel*>(
+        &embedded_prompt_flow_model_);
+  }
+  base::WeakPtr<permissions::PermissionPrompt::Delegate> GetWeakPtr() override {
+    return weak_factory_.GetWeakPtr();
+  }
+  content::WebContents* GetAssociatedWebContents() override {
+    return web_contents_;
+  }
+
+ private:
+  raw_ptr<content::WebContents> web_contents_;
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> request_list_;
+  permissions::EmbeddedPermissionPromptFlowModel embedded_prompt_flow_model_;
+  base::WeakPtrFactory<TestPermissionPromptDelegate> weak_factory_{this};
+};
+
+}  // namespace
+
+// Verifies that when the regular WebUI Omnibox popup is open, creating a
+// permission prompt via `PermissionPromptFactory` notifies the presenter
+// synchronously and prevents the popup from closing.
+IN_PROC_BROWSER_TEST_F(OmniboxPopupViewWebUITest,
+                       PermissionPromptCreationLocksRegularWebUIPresenter) {
+  if (!location_bar_view()) {
+    GTEST_SKIP() << "Not applicable when WebUILocationBar is enabled.";
+  }
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL(chrome::kChromeUINewTabPageURL)));
+
+  CreatePopupForTestQuery();
+
+  auto* popup_view = static_cast<OmniboxPopupViewWebUI*>(
+      location_bar()->GetOmniboxPopupView());
+  ASSERT_TRUE(popup_view);
+  auto* presenter = popup_view->presenter();
+  ASSERT_TRUE(presenter);
+  EXPECT_TRUE(presenter->IsShown());
+
+  // Initially, before `PermissionPromptFactory` runs, presenter is NOT locked.
+  // (Verifies `PermissionRequestManager` did NOT set it).
+  EXPECT_FALSE(presenter->IsPermissionPromptPreventingClose());
+
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
+  TestPermissionPromptDelegate test_delegate(web_contents);
+
+  // Directly call `PermissionPromptFactory::CreatePermissionPrompt`
+  // synchronously.
+  auto prompt = CreatePermissionPrompt(web_contents, &test_delegate);
+
+  // Regular WebUI popup presenter MUST be locked synchronously by
+  // `PermissionPromptFactory`.
+  EXPECT_TRUE(presenter->IsPermissionPromptPreventingClose());
+}
+
+#if BUILDFLAG(IS_MAC)
+class OmniboxPopupViewWebUIFrameCacheTest
+    : public OmniboxPopupViewWebUITest,
+      public testing::WithParamInterface<bool> {
+  // TODO(crbug.com/538294830): Use base/test/with_feature_override.h instead.
+ public:
+  OmniboxPopupViewWebUIFrameCacheTest() {
+    if (GetParam()) {
+      feature_list_.InitWithFeatures(
+          {omnibox::kOmniboxWebUIPopupMarkAsHidden,
+           ::features::kHideDelegatedFrameHostMac},
+          {omnibox::kOmniboxWebUIDeferShowUntilVisualStateReady,
+           omnibox::kOmniboxWebUIDetachWebContentsOnHide});
+    } else {
+      feature_list_.InitWithFeatures(
+          {omnibox::kOmniboxWebUIPopupMarkAsHidden},
+          {omnibox::kOmniboxWebUIDeferShowUntilVisualStateReady,
+           omnibox::kOmniboxWebUIDetachWebContentsOnHide,
+           ::features::kHideDelegatedFrameHostMac});
+    }
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         OmniboxPopupViewWebUIFrameCacheTest,
+                         testing::Bool());
+
+IN_PROC_BROWSER_TEST_P(OmniboxPopupViewWebUIFrameCacheTest, FrameCacheUsage) {
+  // During browser startup, other WebUIs (or the initial NTP view) might have
+  // generated their own unlocked frames that are cached in memory. Purging
+  // ensures the baseline is 0.
+  content::PurgeUnlockedCompositorFrames();
+  EXPECT_EQ(0u, content::GetUnlockedCompositorFrameCount());
+
+  auto* popup_view = static_cast<OmniboxPopupViewWebUI*>(
+      location_bar()->GetOmniboxPopupView());
+  popup_view->presenter()->Show();
+  popup_view->UpdatePopupAppearance();
+
+  popup_view->presenter()->Hide();
+
+  // Verify that the frame is correctly unlocked when the feature fix is
+  // enabled.
+  if (GetParam()) {
+    EXPECT_EQ(1u, content::GetUnlockedCompositorFrameCount());
+  } else {
+    EXPECT_EQ(0u, content::GetUnlockedCompositorFrameCount());
+  }
+}
+
+// Occluding a window must not unlock the frame of its visible tab. Otherwise
+// the frame can be evicted, and the window shows up grey when it becomes
+// visible again.
+IN_PROC_BROWSER_TEST_P(OmniboxPopupViewWebUIFrameCacheTest,
+                       OccludedTabKeepsFrameLocked) {
+  content::WebContents* web_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  // Ensure the tab has embedded a surface, so its frame is tracked by the
+  // FrameEvictionManager.
+  content::WaitForCopyableViewInWebContents(web_contents);
+
+  content::PurgeUnlockedCompositorFrames();
+  ASSERT_EQ(0u, content::GetUnlockedCompositorFrameCount());
+
+  web_contents->WasOccluded();
+  ASSERT_EQ(content::Visibility::OCCLUDED, web_contents->GetVisibility());
+  EXPECT_EQ(0u, content::GetUnlockedCompositorFrameCount());
+
+  web_contents->WasShown();
+}
+
+// A tab that is occluded and then hidden must still unlock its frame, even
+// though the occlusion already marked its RenderWidgetHost as hidden.
+IN_PROC_BROWSER_TEST_P(OmniboxPopupViewWebUIFrameCacheTest,
+                       OccludedThenHiddenTabUnlocksFrame) {
+  content::WebContents* web_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  content::WaitForCopyableViewInWebContents(web_contents);
+
+  content::PurgeUnlockedCompositorFrames();
+  ASSERT_EQ(0u, content::GetUnlockedCompositorFrameCount());
+
+  web_contents->WasOccluded();
+  ASSERT_EQ(content::Visibility::OCCLUDED, web_contents->GetVisibility());
+  EXPECT_EQ(0u, content::GetUnlockedCompositorFrameCount());
+
+  web_contents->WasHidden();
+  ASSERT_EQ(content::Visibility::HIDDEN, web_contents->GetVisibility());
+  if (GetParam()) {
+    EXPECT_EQ(1u, content::GetUnlockedCompositorFrameCount());
+  } else {
+    EXPECT_EQ(0u, content::GetUnlockedCompositorFrameCount());
+  }
+
+  web_contents->WasShown();
+}
+#endif
 
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)

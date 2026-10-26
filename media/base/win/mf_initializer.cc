@@ -17,7 +17,6 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/win/delayload_helpers.h"
 #include "base/win/scoped_handle.h"
-#include "media/base/media_switches.h"
 #include "media/base/win/media_foundation_package_runtime_locator.h"
 
 class ScopedAllowBlockingForMediaFoundation : public base::ScopedAllowBlocking {
@@ -62,16 +61,6 @@ bool LoadMediaFoundationLibraries() {
                << ": AC4 decoder loaded from MediaFoundation codec package";
     }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
-
-#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
-    if (base::FeatureList::IsEnabled(media::kAllowClearDolbyVisionViaMFT) &&
-        media::LoadMediaFoundationPackageDecoder(
-            media::VideoCodec::kDolbyVision)) {
-      DVLOG(2)
-          << __func__
-          << ": DolbyVision decoder loaded from MediaFoundation codec package";
-    }
-#endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
 
     return true;
   }();
@@ -134,15 +123,11 @@ class MediaFoundationSession {
     // the imports could lead to hard faults to page in the DLLs.
     SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
 
-    // LoadAllImportsForDll() makes a case-sensitive comparison to the module
-    // names in the dll's delayloaded dependent module list.
-    // LINT.IfChange
     static constexpr base::cstring_view kDlls[] = {"MF.dll", "MFPlat.DLL"};
-    // LINT.ThenChange(//chrome/common/win/delay_load_failure_hook.cc)
     for (const auto& mfdll : kDlls) {
       // In tests the DLLs might not be direct deps of this module, so only
       // report errors encountered when the DLLs are found but not loaded.
-      auto loaded = base::win::LoadAllImportsForDll(mfdll);
+      auto loaded = base::win::LoadAllImportsForDllUnchecked(mfdll);
       if (!loaded.has_value()) {
         // Set error for PLOG.
         ::SetLastError(HRESULT_CODE(loaded.error()));

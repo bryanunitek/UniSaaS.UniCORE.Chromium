@@ -10,6 +10,7 @@
 #import "ios/chrome/browser/infobars/model/overlays/browser_agent/interaction_handlers/autofill_address_profile/save_address_profile_infobar_banner_interaction_handler.h"
 #import "ios/chrome/browser/infobars/model/overlays/browser_agent/interaction_handlers/autofill_address_profile/save_address_profile_infobar_modal_interaction_handler.h"
 #import "ios/chrome/browser/infobars/model/overlays/browser_agent/interaction_handlers/confirm/confirm_infobar_banner_interaction_handler.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
 
 void AttachInfobarOverlayBrowserAgent(Browser* browser) {
   InfobarOverlayBrowserAgent::CreateForBrowser(browser);
@@ -60,6 +61,13 @@ void AttachInfobarOverlayBrowserAgent(Browser* browser) {
           InfobarType::kInfobarTypeAutofillAiSaveEntity,
           std::make_unique<ConfirmInfobarBannerInteractionHandler>(
               InfobarType::kInfobarTypeAutofillAiSaveEntity),
+          /*modal_handler=*/nullptr));
+
+  browser_agent->AddInfobarInteractionHandler(
+      std::make_unique<InfobarInteractionHandler>(
+          InfobarType::kInfobarTypeContextualCue,
+          std::make_unique<ConfirmInfobarBannerInteractionHandler>(
+              InfobarType::kInfobarTypeContextualCue),
           /*modal_handler=*/nullptr));
 
   browser_agent->AddInfobarInteractionHandler(std::make_unique<

@@ -32,6 +32,7 @@
 
 #include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/timer/elapsed_timer.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -387,7 +388,9 @@ class MultiResourcePacker : public GarbageCollected<MultiResourcePacker> {
   // This hashset is only used for de-duplicating resources to be serialized.
   HashSet<KURL> resource_urls_;
   Deque<ResourceEntry> resources_;
-  WebFrameSerializer::MHTMLPartsGenerationDelegate* web_delegate_;
+  raw_ptr<WebFrameSerializer::MHTMLPartsGenerationDelegate,
+          UnprotectedInRelease | DanglingUntriaged>
+      web_delegate_;
   // Whether `Finish()` has been called.
   bool finished_ = false;
   // Number of `ResourceWaiter`s that have completed.
@@ -499,7 +502,7 @@ class SerializerMarkupAccumulator : public MarkupAccumulator {
     }
 
     // The z-index should be greater than the threshold.
-    if (box->StyleRef().EffectiveZIndex() < kPopupOverlayZIndexThreshold) {
+    if (box->Style().EffectiveZIndex() < kPopupOverlayZIndexThreshold) {
       return false;
     }
 
@@ -1317,7 +1320,12 @@ function main(metadata) {
       case CSSRule::kFunctionRule:
       case CSSRule::kCustomMediaRule:
       case CSSRule::kContentsMixinRule:
-      case CSSRule::kRouteRule:
+      case CSSRule::kLocationRule:
+        break;
+
+      case CSSRule::kPrivateRule:
+        // TODO(crbug.com/549892110): Ensure resources referenced through
+        // @private variables are included in serialization.
         break;
 
       // FIXME(sesse): We can reference external resources in a @contents
@@ -1345,10 +1353,10 @@ function main(metadata) {
   void RetrieveResourcesForCSSValue(const CSSValue& css_value,
                                     Document& document) {
     if (const auto* image_value = DynamicTo<CSSImageValue>(css_value)) {
-      if (image_value->IsCachePending()) {
+      if (image_value->IsCachePending(document.Fetcher())) {
         return;
       }
-      StyleImage* style_image = image_value->CachedImage();
+      StyleImage* style_image = image_value->CachedImage(document.Fetcher());
       if (!style_image || !style_image->IsImageResource()) {
         return;
       }
@@ -1452,9 +1460,7 @@ String FrameSerializer::MarkOfTheWebDeclaration(const KURL& url) {
     builder.Append(ch);
   }
   std::string escaped_url = builder.ToString().Ascii();
-  return String::Format("saved from url=(%04d)%s",
-                        static_cast<int>(escaped_url.length()),
-                        escaped_url.c_str());
+  return Format("saved from url=({:04}){}", escaped_url.length(), escaped_url);
 }
 
 // static

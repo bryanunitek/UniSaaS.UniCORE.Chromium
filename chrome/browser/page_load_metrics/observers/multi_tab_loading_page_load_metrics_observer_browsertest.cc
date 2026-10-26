@@ -7,7 +7,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
 #include "chrome/browser/page_load_metrics/observers/histogram_suffixes.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -15,6 +15,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
 
 class MultiTabLoadingPageLoadMetricsBrowserTest : public InProcessBrowserTest {
  public:
@@ -26,7 +27,7 @@ class MultiTabLoadingPageLoadMetricsBrowserTest : public InProcessBrowserTest {
 
   void NavigateToURLWithoutWaiting(GURL url) {
     ui_test_utils::NavigateToURLWithDisposition(
-        browser(), url, WindowOpenDisposition::CURRENT_TAB,
+        browser(), url, WindowOpenDisposition::kCurrentTab,
         ui_test_utils::BROWSER_TEST_NO_WAIT);
   }
 
@@ -71,7 +72,7 @@ IN_PROC_BROWSER_TEST_F(MultiTabLoadingPageLoadMetricsBrowserTest,
 
   // Open a new foreground tab.
   ui_test_utils::NavigateToURLWithDispositionBlockUntilNavigationsComplete(
-      browser(), GetTestURL(), 1, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), GetTestURL(), 1, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // Navigate away to force the histogram recording.
@@ -94,11 +95,11 @@ IN_PROC_BROWSER_TEST_F(MultiTabLoadingPageLoadMetricsBrowserTest,
 
   // Open a tab in the background.
   ui_test_utils::NavigateToURLWithDispositionBlockUntilNavigationsComplete(
-      browser(), GetTestURL(), 1, WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      browser(), GetTestURL(), 1, WindowOpenDisposition::kNewBackgroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // Close the foreground tab.
-  TabStripModel* tab_strip_model = browser()->tab_strip_model();
+  TabStripModel* tab_strip_model = browser()->GetTabStripModel();
   content::WebContentsDestroyedWatcher destroyed_watcher(
       tab_strip_model->GetWebContentsAt(0));
   int previous_tab_count = tab_strip_model->count();

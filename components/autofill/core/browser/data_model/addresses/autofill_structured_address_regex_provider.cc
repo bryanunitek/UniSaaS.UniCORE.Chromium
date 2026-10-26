@@ -8,12 +8,13 @@
 #include <string>
 #include <utility>
 
+#include "base/containers/map_util.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/synchronization/lock.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_constants.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_utils.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "third_party/re2/src/re2/re2.h"
 
@@ -538,15 +539,12 @@ const RE2* StructuredAddressesRegExProvider::GetRegEx(
     RegEx expression_identifier,
     const std::string& country_code) {
   base::AutoLock lock(lock_);
-  auto it = cached_expressions_.find(expression_identifier);
-  if (it == cached_expressions_.end()) {
-    std::unique_ptr<const RE2> expression =
-        BuildRegExFromPattern(GetPattern(expression_identifier, country_code));
-    const RE2* expresstion_ptr = expression.get();
-    cached_expressions_.emplace(expression_identifier, std::move(expression));
-    return expresstion_ptr;
-  }
-  return it->second.get();
+  return base::GetOrCreate(cached_expressions_, expression_identifier,
+                           [&] {
+                             return BuildRegExFromPattern(GetPattern(
+                                 expression_identifier, country_code));
+                           })
+      .get();
 }
 
 }  // namespace autofill

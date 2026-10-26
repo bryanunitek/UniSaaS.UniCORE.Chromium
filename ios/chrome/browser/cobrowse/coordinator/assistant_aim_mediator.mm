@@ -7,7 +7,9 @@
 #import <algorithm>
 
 #import "base/check.h"
+#import "base/functional/bind.h"
 #import "base/logging.h"
+#import "base/memory/raw_ptr.h"
 #import "base/strings/string_number_conversions.h"
 #import "base/strings/string_util.h"
 #import "base/strings/sys_string_conversions.h"
@@ -26,13 +28,15 @@
 #import "ios/chrome/browser/cobrowse/model/assistant_aim_tab_helper.h"
 #import "ios/chrome/browser/cobrowse/model/cobrowse_browser_agent.h"
 #import "ios/chrome/browser/cobrowse/model/cobrowse_context.h"
+#import "ios/chrome/browser/cobrowse/shared/metrics/assistant_aim_metrics_constants.h"
+#import "ios/chrome/browser/cobrowse/shared/metrics/assistant_aim_metrics_recorder.h"
 #import "ios/chrome/browser/cobrowse/ui/assistant_aim_consumer.h"
 #import "ios/chrome/browser/cobrowse/ui/assistant_aim_history_item.h"
 #import "ios/chrome/browser/cobrowse/ui/assistant_aim_ui_constants.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_url_utils.h"
+#import "ios/chrome/browser/net/model/network_change_observer_bridge.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
-#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/system_identity.h"
@@ -40,21 +44,26 @@
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/web/public/js_messaging/web_frame.h"
 #import "ios/web/public/js_messaging/web_frames_manager_observer_bridge.h"
+#import "ios/web/public/navigation/navigation_context.h"
 #import "ios/web/public/navigation/navigation_manager.h"
 #import "ios/web/public/navigation/web_state_policy_decider_bridge.h"
 #import "ios/web/public/web_client.h"
 #import "ios/web/public/web_state.h"
+#import "ios/web/public/web_state_delegate.h"
 #import "ios/web/public/web_state_delegate_bridge.h"
 #import "ios/web/public/web_state_observer_bridge.h"
 #import "net/base/apple/url_conversions.h"
+#import "net/base/network_change_notifier.h"
 #import "third_party/lens_server_proto/aim_communication.pb.h"
 #import "ui/base/l10n/l10n_util.h"
+#import "ui/base/page_transition_types.h"
 #import "url/gurl.h"
 
 @interface AssistantAIMMediator () <CRWWebFramesManagerObserver,
                                     CRWWebStateDelegate,
                                     CRWWebStateObserver,
-                                    CRWWebStatePolicyDecider>
+                                    CRWWebStatePolicyDecider,
+                                    NetworkChangeObserving>
 @end
 
 @implementation AssistantAIMMediator {
@@ -62,6 +71,9 @@
   std::unique_ptr<web::WebStatePolicyDeciderBridge> _policyDeciderBridge;
   std::unique_ptr<web::WebStateDelegateBridge> _webStateDelegateBridge;
   std::unique_ptr<web::WebStateObserverBridge> _webStateObserverBridge;
+  // Bridge to observe network changes and reload the page on reconnect.
+  std::unique_ptr<NetworkChangeObserverBridge> _networkChangeObserver;
+  raw_ptr<web::WebStateDelegate> _browserWebStateDelegate;
   __weak id<AssistantAIMConsumer> _consumer;
   CobrowseContext* _context;
   id<AssistantContainerCommands> _containerHandler;
@@ -84,11 +96,16 @@
   // Whether the initial context library has been processed for the current
   // thread.
   BOOL _hasProcessedInitialContextLibrary;
+  // Whether dark mode is currently active.
+  BOOL _isDarkMode;
+  // Whether the last page load failed.
+  BOOL _pageLoadFailed;
 }
 
 @synthesize consumer = _consumer;
 
 - (instancetype)initWithWebState:(std::unique_ptr<web::WebState>)webState
+         browserWebStateDelegate:(web::WebStateDelegate*)browserWebStateDelegate
             cobrowseBrowserAgent:(CobrowseBrowserAgent*)cobrowseBrowserAgent
                 containerHandler:
                     (id<AssistantContainerCommands>)containerHandler
@@ -101,6 +118,7 @@
     DCHECK(webState);
     DCHECK(!webState->GetDelegate());
     _webState = std::move(webState);
+    _browserWebStateDelegate = browserWebStateDelegate;
     _policyDeciderBridge = std::make_unique<web::WebStatePolicyDeciderBridge>(
         _webState.get(), self);
     _webState->SetUserAgentOverride(
@@ -112,16 +130,22 @@
     _webStateDelegateBridge =
         std::make_unique<web::WebStateDelegateBridge>(self);
     _webState->SetDelegate(_webStateDelegateBridge.get());
+    _networkChangeObserver =
+        std::make_unique<NetworkChangeObserverBridge>(self);
     _cobrowseBrowserAgent = cobrowseBrowserAgent;
     if (_cobrowseBrowserAgent) {
       _context = _cobrowseBrowserAgent->GetCobrowseContext();
     }
     if (!_context) {
       _context = [CobrowseContext defaultContext];
+      _context.entrypoint = AssistantAimEntrypoint::kLocationBarAction;
       if (_cobrowseBrowserAgent) {
         _cobrowseBrowserAgent->SetCobrowseContext(_context);
       }
     }
+    _isDarkMode =
+        (UITraitCollection.currentTraitCollection.userInterfaceStyle ==
+         UIUserInterfaceStyleDark);
     _containerHandler = containerHandler;
     _contextualTasksService = contextualTasksService;
     _urlLoader = URLLoader;
@@ -155,15 +179,11 @@
   return _webState ? _webState->GetLastCommittedURL() : GURL();
 }
 
-- (void)loadURL:(const GURL&)url {
+- (void)loadDebugURL:(const GURL&)url {
   if (!experimental_flags::IsOmniboxDebuggingEnabled()) {
     return;
   }
-  if (!_webState) {
-    return;
-  }
-  web::NavigationManager::WebLoadParams params(url);
-  _webState->GetNavigationManager()->LoadURLWithParams(params);
+  [self loadURL:url];
 }
 
 - (void)setConsumer:(id<AssistantAIMConsumer>)consumer {
@@ -176,8 +196,21 @@
     [self loadAIMURL];
   }
 }
+- (void)updateContext {
+  if (_cobrowseBrowserAgent) {
+    CobrowseContext* newContext = _cobrowseBrowserAgent->GetCobrowseContext();
+    if (newContext && ![_context isEqual:newContext]) {
+      BOOL urlChanged = (!_context || newContext.url != _context.url);
+      _context = newContext;
+      if (urlChanged && _context.url.is_valid()) {
+        [self loadAIMURL];
+      }
+    }
+  }
+}
 
 - (void)disconnect {
+  _networkChangeObserver.reset();
   _policyDeciderBridge.reset();
   _handshakeTimer.Stop();
   if (_webFramesManagerObserverBridge) {
@@ -190,9 +223,9 @@
     _webState->RemoveObserver(_webStateObserverBridge.get());
   }
   _webState.reset();
+  _browserWebStateDelegate = nullptr;
   _urlLoader = nullptr;
   _context = nil;
-  [self endSession];
   _cobrowseBrowserAgent = nullptr;
   _capabilities = std::nullopt;
   _logger = nil;
@@ -231,10 +264,12 @@
   // the main browser instead.
   if (requestInfo.target_frame_is_main) {
     decisionHandler(web::WebStatePolicyDecider::PolicyDecision::Cancel());
-    // Filter out about:blank initialization navigations to prevent spawning
-    // empty tabs in the main browser upon loading the Assistant AIM sheet.
-    if (URL.is_valid() && !URL.IsAboutBlank()) {
+    // Only replay valid HTTP or HTTPS URLs in the main browser.
+    if (URL.is_valid() && URL.SchemeIsHTTPOrHTTPS()) {
+      [self.metricsRecorder recordLinkClicked];
       UrlLoadParams params = UrlLoadParams::InNewTab(URL);
+      params.web_params.is_renderer_initiated = true;
+      params.web_params.transition_type = ui::PAGE_TRANSITION_LINK;
       _urlLoader->Load(params);
       [_containerHandler
           animateAssistantContainerToDetent:AssistantContainerDetent::kMinimized
@@ -252,11 +287,11 @@
     createNewWebStateForURL:(const GURL&)URL
                   openerURL:(const GURL&)openerURL
             initiatedByUser:(BOOL)initiatedByUser {
+  [self.metricsRecorder recordLinkClicked];
   // Cobrowse is not supported in incognito, so new tabs are always opened in
   // regular mode.
   OpenNewTabCommand* command = [OpenNewTabCommand commandWithURLFromChrome:URL
                                                                inIncognito:NO];
-  command.openerWebState = webState->GetWeakPtr();
 
   [self.sceneHandler openURLInNewTab:command];
 
@@ -268,21 +303,47 @@
   return nullptr;
 }
 
+- (void)loadIfNecessary {
+  if (_webState && _webState->GetNavigationManager()) {
+    _webState->GetNavigationManager()->LoadIfNecessary();
+  }
+}
+
+- (void)webState:(web::WebState*)webState
+    didRequestProxyAuthForProtectionSpace:(NSURLProtectionSpace*)protectionSpace
+                       proposedCredential:(NSURLCredential*)proposedCredential
+                          failureResponse:(NSURLResponse*)failureResponse
+                        completionHandler:(void (^)(NSString* username,
+                                                    NSString* password,
+                                                    NSError* error))handler
+    API_AVAILABLE(ios(18.1)) {
+  if (!handler) {
+    return;
+  }
+  if (!_browserWebStateDelegate) {
+    handler(nil, nil, nil);
+    return;
+  }
+  _browserWebStateDelegate->OnProxyAuthChallenge(
+      webState, protectionSpace, proposedCredential, failureResponse,
+      base::BindOnce(handler));
+}
+
 #pragma mark - Private helpers
 
 // Loads the URL defined in the cobrowse context.
 - (void)loadAIMURL {
-  AssistantContainerDetent detent;
-  if (IsAssistantAimMinimizedStateEnabled()) {
-    detent = AssistantContainerDetent::kMinimized;
-  } else {
-    detent = AssistantContainerDetent::kMedium;
+  if (!_context || !_context.url.is_valid()) {
+    return;
   }
-  [_containerHandler
-      animateAssistantContainerToDetent:detent
-                               duration:kSheetDetentAnimationDuration
-                                  curve:UIViewAnimationCurveEaseInOut];
-  web::NavigationManager::WebLoadParams params(_context.url);
+  GURL baseContextURL = _context.url;
+  GURL urlWithTheme = net::AppendOrReplaceQueryParameter(
+      baseContextURL, "cs", _isDarkMode ? "1" : "0");
+  web::NavigationManager::WebLoadParams params(urlWithTheme);
+  // Clear the failure flag synchronously, as WebKit calls
+  // `webState:didStartNavigation:` asynchronously. Otherwise, a network
+  // reconnection in between would trigger a redundant reload.
+  _pageLoadFailed = NO;
   _webState->GetNavigationManager()->LoadURLWithParams(params);
 }
 
@@ -382,10 +443,18 @@
 #pragma mark - AssistantAIMMutator
 
 - (void)didTapHistory {
+  // History is bound to the account, so there is nothing to fetch when the
+  // user is signed out.
+  if (!_authenticationService ||
+      !_authenticationService->HasPrimaryIdentity()) {
+    [self.consumer displayHistoryWithItems:{} signedIn:NO];
+    return;
+  }
+
   __weak AssistantAIMMediator* weakSelf = self;
   [self fetchHistoryItemsWithCompletion:^(
             const std::vector<AssistantAIMHistoryItem>& items) {
-    [weakSelf.consumer displayHistoryWithItems:items];
+    [weakSelf.consumer displayHistoryWithItems:items signedIn:YES];
   }];
 }
 
@@ -428,6 +497,14 @@
   [_delegate assistantAIMMediatorDidFocusFromMinimized:self];
 }
 
+- (void)updateDarkModeState:(BOOL)isDarkMode {
+  if (_isDarkMode == isDarkMode) {
+    return;
+  }
+  _isDarkMode = isDarkMode;
+  [self loadAIMURL];
+}
+
 #pragma mark - CRWWebFramesManagerObserver
 
 - (void)webFramesManager:(web::WebFramesManager*)webFramesManager
@@ -458,6 +535,14 @@
 }
 
 #pragma mark - Private
+
+- (void)loadURL:(const GURL&)url {
+  if (!_webState) {
+    return;
+  }
+  web::NavigationManager::WebLoadParams params(url);
+  _webState->GetNavigationManager()->LoadURLWithParams(params);
+}
 
 - (void)sendHandshakePing {
   if (!_webState) {
@@ -519,8 +604,10 @@
     VLOG(1) << "AimCobrowse: Received RestoreInput";
   } else if (message.has_enter_basic_mode()) {
     VLOG(1) << "AimCobrowse: Received EnterBasicMode";
+    [_consumer setInputPlateForceHidden:YES];
   } else if (message.has_exit_basic_mode()) {
     VLOG(1) << "AimCobrowse: Received ExitBasicMode";
+    [_consumer setInputPlateForceHidden:NO];
   } else if (message.has_update_thread_context_library()) {
     VLOG(1) << "AimCobrowse: Received UpdateThreadContextLibrary";
     if (!_hasProcessedInitialContextLibrary) {
@@ -556,6 +643,15 @@
     VLOG(1) << "AimCobrowse: Received UnlockInput";
   } else if (message.has_lock_input()) {
     VLOG(1) << "AimCobrowse: Received LockInput";
+  } else if (message.has_open_link_in_side_panel_mode()) {
+    VLOG(1) << "AimCobrowse: Received OpenLinkInSidePanelMode";
+    // Some anchor links arrive as client messages and require an explicit
+    // action to open.
+    GURL target_url(message.open_link_in_side_panel_mode().url());
+    // Only accept valid URLs that are HTTP or HTTPS.
+    if (target_url.is_valid() && target_url.SchemeIsHTTPOrHTTPS()) {
+      [self loadURL:target_url];
+    }
   }
 }
 
@@ -571,17 +667,51 @@
   return _capabilities;
 }
 
+#pragma mark - NetworkChangeObserving
+
+// Reloads the page if the network reconnected after a failed page load.
+- (void)onNetworkChanged:(net::NetworkChangeNotifier::ConnectionType)type {
+  if (type == net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE ||
+      !_pageLoadFailed || !_webState) {
+    return;
+  }
+  _pageLoadFailed = NO;
+  [self loadAIMURL];
+}
+
 #pragma mark - CRWWebStateObserver
 
 - (void)webState:(web::WebState*)webState
+    didStartNavigation:(web::NavigationContext*)navigationContext {
+  // Reset `_pageLoadFailed` when a new non-error document navigation starts so
+  // that a network reconnection while this navigation is in-flight does not
+  // trigger a redundant reload.
+  if (!navigationContext->IsSameDocument() && !navigationContext->GetError()) {
+    _pageLoadFailed = NO;
+  }
+}
+
+- (void)webState:(web::WebState*)webState
     didFinishNavigation:(web::NavigationContext*)navigationContext {
-  CobrowseContext* context =
-      [[CobrowseContext alloc] initWithURL:webState->GetVisibleURL()];
+  GURL url = webState->GetVisibleURL();
+  CobrowseContext* context = [[CobrowseContext alloc] initWithURL:url];
+
+  if (IsAimURL(url) || IsAimZeroStateURL(url)) {
+    _context = context;
+    if (_cobrowseBrowserAgent) {
+      _cobrowseBrowserAgent->SetCobrowseContext(_context);
+    }
+  }
+
   if (context.searchQuery) {
     [_consumer setHeaderTitle:context.searchQuery];
   } else {
     [_consumer setHeaderTitle:@""];
   }
+}
+
+- (void)webState:(web::WebState*)webState didLoadPageWithSuccess:(BOOL)success {
+  _pageLoadFailed = !success;
 }
 
 - (void)webStateDestroyed:(web::WebState*)webState {
@@ -590,6 +720,7 @@
     _webState.reset();
   }
   _webStateObserverBridge.reset();
+  _networkChangeObserver.reset();
 }
 
 @end

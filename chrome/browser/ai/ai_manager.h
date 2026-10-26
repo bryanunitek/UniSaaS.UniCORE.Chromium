@@ -14,7 +14,9 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/supports_user_data.h"
+#include "base/types/expected.h"
 #include "base/types/pass_key.h"
+#include "build/build_config.h"
 #include "chrome/browser/ai/ai_context_bound_object_set.h"
 #include "chrome/browser/ai/ai_language_model.h"
 #include "chrome/browser/ai/ai_proofreader.h"
@@ -28,29 +30,30 @@
 #include "mojo/public/cpp/base/proto_wrapper.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
-#include "mojo/public/cpp/bindings/remote_set.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
 #include "services/on_device_model/public/mojom/download_observer.mojom-forward.h"
 #include "third_party/blink/public/mojom/ai/ai_common.mojom-forward.h"
+#include "third_party/blink/public/mojom/ai/ai_decision_model.mojom-forward.h"
 #include "third_party/blink/public/mojom/ai/ai_language_model.mojom-forward.h"
 #include "third_party/blink/public/mojom/ai/ai_manager.mojom.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-forward.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ai/decision_model_schema_compiler.h"
+#endif
 
 namespace base {
 class SupportsUserData;
 }  // namespace base
 
-// Feature flag for enabling foundational models in the AI API, requires the
-// field param kModelVersionParam to specify the model version. Example:
-// --enable-features=AIApiFoundationalModel:model_version/v4
-BASE_DECLARE_FEATURE(kAIApiFoundationalModel);
-extern const char kModelVersionParam[];
-
 namespace content {
 class RenderFrameHost;
 }  // namespace content
 
-using blink::mojom::AILanguageCodePtr;
+// Feature flag for enabling foundational models in the AI API, requires the
+// field param kModelVersionParam to specify the model version. Example:
+// --enable-features=AIApiFoundationalModel:model_version/v4
+BASE_DECLARE_FEATURE(kAIApiFoundationalModel);
 
 // Owned by the host of the document / service worker via `SupportUserData`.
 // The browser-side implementation of `blink::mojom::AIManager`.
@@ -58,6 +61,10 @@ class AIManager : public base::SupportsUserData::Data,
                   public blink::mojom::AIManager,
                   public content::RenderWidgetHostObserver {
  public:
+#if !BUILDFLAG(IS_ANDROID)
+  using DecisionModelBackend = blink::mojom::AIDecisionModelBackend;
+#endif
+
   using AILanguageModelOrCreationError =
       base::expected<std::unique_ptr<AILanguageModel>,
                      blink::mojom::AIManagerCreateClientError>;
@@ -122,18 +129,22 @@ class AIManager : public base::SupportsUserData::Data,
       blink::mojom::AIProofreaderCreateOptionsPtr options,
       mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
       override;
-  void CanCreateClassifier(blink::mojom::AIClassifierCreateOptionsPtr options,
-                           CanCreateClassifierCallback callback) override;
-  void CreateClassifier(
-      mojo::PendingRemote<blink::mojom::AIManagerCreateClassifierClient> client,
-      blink::mojom::AIClassifierCreateOptionsPtr options,
-      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
-      override;
   void CanCreateSemanticEmbedder(
       CanCreateSemanticEmbedderCallback callback) override;
   void CreateSemanticEmbedder(
       mojo::PendingRemote<blink::mojom::AIManagerCreateSemanticEmbedderClient>
-          client) override;
+          client,
+      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
+      override;
+  void CanCreateDecisionModel(
+      blink::mojom::AIDecisionModelCreateOptionsPtr options,
+      CanCreateDecisionModelCallback callback) override;
+  void CreateDecisionModel(
+      mojo::PendingRemote<blink::mojom::AIManagerCreateDecisionModelClient>
+          client,
+      blink::mojom::AIDecisionModelCreateOptionsPtr options,
+      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
+      override;
 
   // Check whether optimization guide supports the feature matching `capability`
   // and modalities specified by `capabilities`; yields a result to `callback`.
@@ -192,12 +203,37 @@ class AIManager : public base::SupportsUserData::Data,
   bool IsBlocked(std::optional<network::mojom::PermissionsPolicyFeature>
                      feature = std::nullopt);
 
-  void OnModelPathValidationComplete(const base::FilePath& model_path,
-                                     bool is_valid_path);
+  void OnSemanticEmbedderModelReady(
+      mojo::PendingRemote<blink::mojom::AIManagerCreateSemanticEmbedderClient>
+          client);
 
-  // Validates the overridden on-device model path if one is configured via
-  // switch.
-  void StartModelPathValidationIfOverrideSet();
+#if !BUILDFLAG(IS_ANDROID)
+  base::expected<DecisionModelSchemaCompiler::CompiledSchema,
+                 blink::mojom::ModelAvailabilityCheckResult>
+  CheckDecisionModelOptions(
+      blink::mojom::AIDecisionModelCreateOptionsPtr& options,
+      bool require_questions);
+
+  // Creates an `AILanguageModelDecisionModel` on the Prompt API's foundation
+  // model, once its assets are ready.
+  void CreateLanguageModelDecisionModel(
+      mojo::PendingRemote<blink::mojom::AIManagerCreateDecisionModelClient>
+          client,
+      DecisionModelSchemaCompiler::CompiledSchema schema,
+      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor);
+  // Creates the model on `model_client`, or replies with an error if the
+  // foundation model isn't available.
+  void OnDecisionModelLanguageModelReady(
+      mojo::PendingRemote<blink::mojom::AIManagerCreateDecisionModelClient>
+          client,
+      DecisionModelSchemaCompiler::CompiledSchema schema,
+      base::WeakPtr<optimization_guide::ModelClient> model_client);
+
+  void OnDecisionModelEmbedderReady(
+      mojo::PendingRemote<blink::mojom::AIManagerCreateDecisionModelClient>
+          client,
+      DecisionModelSchemaCompiler::CompiledSchema schema);
+#endif
 
   // Creates an `AILanguageModel`, as a new session. Clones are created
   // internally within the `AILanguageModel` object.
@@ -245,9 +281,20 @@ class AIManager : public base::SupportsUserData::Data,
             typename CreateOptionsPtrType>
   void OnGotExecutionInputSizeInTokens(
       CreateOptionsPtrType options,
+      optimization_guide::MultimodalMessage initial_request,
       mojo::Remote<ClientRemoteInterface> client_remote,
       std::unique_ptr<optimization_guide::OnDeviceSession> session,
       std::optional<uint32_t> result);
+
+  template <typename ContextBoundObjectType,
+            typename ContextBoundObjectReceiverInterface,
+            typename ClientRemoteInterface,
+            typename CreateOptionsPtrType>
+  void OnInitialInputSet(
+      CreateOptionsPtrType options,
+      mojo::Remote<ClientRemoteInterface> client_remote,
+      std::unique_ptr<optimization_guide::OnDeviceSession> session,
+      base::expected<size_t, optimization_guide::OnDeviceError> result);
 
   // Eagerly initializes a broad set of features.
   void MaybeTryEagerInit();
@@ -262,6 +309,7 @@ class AIManager : public base::SupportsUserData::Data,
       const std::string_view api_name,
       const base::flat_set<std::string>& default_supported_languages);
   void MaybeLogSpeedPreferenceMarkdownWarning();
+  void MaybeLogOnDeviceAiSettingsDisabledWarning();
 
   // |model_broker_client_| is keeping |CanCreateLanguageModel| callbacks alive
   // until it is destroyed, so we need to ensure those callbacks are safely
@@ -284,6 +332,7 @@ class AIManager : public base::SupportsUserData::Data,
   bool did_log_unsupported_language_error_ = false;
   bool did_log_experimental_language_warning_ = false;
   bool did_log_speed_preference_markdown_warning_ = false;
+  bool did_log_on_device_ai_settings_disabled_warning_ = false;
 
   // Features that have attempted initialization in this session.
   base::flat_set<optimization_guide::mojom::OnDeviceFeature> tried_init_;

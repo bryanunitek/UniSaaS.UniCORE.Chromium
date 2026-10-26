@@ -3,16 +3,21 @@
 // found in the LICENSE file.
 
 #import "base/ios/ios_util.h"
+#import "base/strings/strcat.h"
 #import "base/strings/stringprintf.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
+#import "base/time/time.h"
 #import "components/feature_engagement/public/feature_constants.h"
 #import "components/omnibox/browser/omnibox_pref_names.h"
+#import "components/strings/grit/components_strings.h"
+#import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_constants.h"
 #import "ios/chrome/browser/bubble/ui_bundled/gesture_iph/gesture_in_product_help_view_egtest_utils.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/toolbar/ui/toolbar_constants.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
@@ -20,9 +25,11 @@
 #import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/chrome/test/earl_grey/test_switches.h"
 #import "ios/chrome/test/scoped_eg_synchronization_disabler.h"
+#import "ios/testing/earl_grey/app_launch_manager.h"
 #import "ios/testing/earl_grey/base_earl_grey_test_case_app_interface.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
+#import "ui/base/l10n/l10n_util_mac.h"
 #import "url/gurl.h"
 
 namespace {
@@ -103,15 +110,23 @@ void ReloadFromOmnibox() {
 
   // Enable lens overlay flag to test the IPH.
   if ([self
-          isRunningTest:@selector
-          (testLensOverlayEntrypointTipDismissedWhenOmniboxPositionChanged)]) {
+          isRunningTest:
+              @selector(
+                  testLensOverlayEntrypointTipDismissedWhenOmniboxPositionChanged)]) {
     config.features_enabled.push_back(kGeminiKillSwitch);
     config.features_disabled.push_back(kPageActionMenu);
     config.iph_feature_enabled = "IPH_iOSLensOverlayEntrypointTip";
-    config.features_enabled_and_params.push_back(
-        {kChromeNextIa, {{"chrome_next_ia_lens_icon_visible", "true"}}});
+    config.features_disabled.push_back(kChromeNextIa);
   } else {
     config.features_enabled.push_back(kChromeNextIa);
+  }
+
+  if ([self isRunningTest:@selector(testSendTabToSelfOmniboxIPH)]) {
+    config.additional_args.push_back(base::StrCat({
+      "-", test_switches::kAddFakeIdentitiesAtStartup, "=",
+          [FakeSystemIdentity
+              encodeIdentitiesToBase64:@[ [FakeSystemIdentity fakeIdentity1] ]],
+    }));
   }
 
   return config;
@@ -670,6 +685,73 @@ void ReloadFromOmnibox() {
   // changed.
   [ChromeEarlGrey waitForUIElementToDisappearWithMatcher:
                       grey_accessibilityID(kBubbleViewArrowViewIdentifier)];
+}
+
+// Test that the Send Tab to Self omnibox IPH is displayed on startup when a
+// suitable page is already loaded.
+- (void)testSendTabToSelfOmniboxIPH {
+  if ([ChromeEarlGrey isIPadIdiom]) {
+    EARL_GREY_TEST_SKIPPED(@"Skipped for iPad (IPH is iPhone only)");
+  }
+
+  GREYAssertTrue(self.testServer->Start(), @"Server did not start.");
+  const GURL destinationUrl = self.testServer->GetURL("/pony.html");
+  [ChromeEarlGrey loadURL:destinationUrl];
+
+  [ChromeEarlGrey addFakeSyncServerDeviceInfo:@"My other device"
+                         lastUpdatedTimestamp:base::Time::Now()];
+  [SigninEarlGrey signinWithFakeIdentity:[FakeSystemIdentity fakeIdentity1]];
+
+  // Persist the tab session, fake sync server data, and user preferences so
+  // that the loaded page and signed-in state survive the app relaunch.
+  [ChromeEarlGrey saveSessionImmediately];
+  [ChromeEarlGrey flushFakeSyncServerToDisk];
+  [ChromeEarlGrey commitPendingUserPrefsWrite];
+
+  [self relaunchWithIPHFeature:@"IPH_SendTabToSelfOmnibox" safariSwitcher:NO];
+  [BaseEarlGreyTestCaseAppInterface disableFastAnimation];
+
+  [ChromeEarlGrey
+      waitForUIElementToAppearWithMatcher:
+          chrome_test_util::StaticTextWithAccessibilityLabel(
+              l10n_util::GetNSString(IDS_SEND_TAB_TO_SELF_OMNIBOX_IPH_TEXT))];
+}
+
+// Tests that presenting the swipe back/forward gesture IPH while the
+// application is in the background does not crash.
+// Regression test for crbug.com/573369036.
+- (void)testSwipeBackForwardIPHInBackground {
+  [self relaunchWithIPHFeature:@"IPH_iOSSwipeBackForward" safariSwitcher:NO];
+
+  GREYAssertTrue(self.testServer->Start(), @"Server did not start.");
+
+  // Use the built-in `/slow?5` default handler so the back navigation takes 5
+  // seconds to complete, giving the test time to background the application
+  // before `DidFinishNavigation` triggers the swipe back/forward gesture IPH.
+  // Note: If the `isLoadingInWindowWithNumber:0` check below ever flakes on a
+  // slow bot where `backgroundApplication` takes > 5 seconds, increase the
+  // `/slow?N` delay.
+  const GURL destinationUrl1 = self.testServer->GetURL("/slow?5");
+  const GURL destinationUrl2 =
+      self.testServer->GetURL("/chromium_logo_page.html");
+  [ChromeEarlGrey loadURL:destinationUrl1];
+  [ChromeEarlGrey loadURL:destinationUrl2];
+
+  // Purge WKWebView's in-memory back-forward cache so tapping the back button
+  // re-fetches `destinationUrl1` from `self.testServer` instead of restoring it
+  // synchronously from memory.
+  [ChromeEarlGrey purgeCachedWebViewPages];
+
+  {
+    ScopedSynchronizationDisabler syncDisabler;
+    [[EarlGrey selectElementWithMatcher:BackButton()] performAction:grey_tap()];
+    [[AppLaunchManager sharedManager] backgroundApplication];
+    GREYAssertTrue(
+        [ChromeEarlGrey isLoadingInWindowWithNumber:0],
+        @"Page should still be loading when the app enters the background.");
+    [ChromeEarlGrey waitForPageToFinishLoadingInWindowWithNumber:0];
+  }
+  [[[XCUIApplication alloc] init] activate];
 }
 
 @end

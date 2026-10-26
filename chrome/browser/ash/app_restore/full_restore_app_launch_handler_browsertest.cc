@@ -12,6 +12,7 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/autotest_desks_api.h"
+#include "ash/public/cpp/notification_utils.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/split_view_test_api.h"
 #include "ash/public/cpp/tablet_mode.h"
@@ -27,6 +28,7 @@
 #include "ash/wm/window_restore/window_restore_util.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/wm_event.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
@@ -34,6 +36,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/uuid.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/chrome_app_deprecation/chrome_app_deprecation.h"
@@ -51,23 +54,22 @@
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_integration_test.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/desks/desks_client.h"
 #include "chrome/browser/ui/ash/device_scheduled_reboot/reboot_notification_controller.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/app_constants/constants.h"
 #include "components/app_restore/app_launch_info.h"
@@ -85,7 +87,8 @@
 #include "components/prefs/pref_service.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/app_types.h"
-#include "components/strings/grit/components_strings.h"
+#include "components/sessions/core/session_id.h"
+#include "components/user_manager/user.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -93,13 +96,13 @@
 #include "extensions/browser/app_window/native_app_window.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
-#include "ui/base/l10n/l10n_util.h"
+#include "ui/base/base_window.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/display/types/display_constants.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
-#include "ui/message_center/public/cpp/notification.h"
+#include "ui/message_center/message_center.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/wm/core/window_util.h"
 
@@ -120,10 +123,14 @@ constexpr char kRestoreIdPrefName[] = "browser_restore_id";
 // Test values for a test WindowInfo object.
 constexpr int kActivationIndex = 2;
 constexpr int kDeskId = 2;
-const base::Uuid kDeskUuid = base::Uuid::GenerateRandomV4();
+constexpr char kDeskUuidString[] = "9b7e0b8a-1a2b-4c3d-8e5f-6a7b8c9d0e1f";
 constexpr gfx::Rect kCurrentBounds(500, 200);
 constexpr chromeos::WindowStateType kWindowStateType =
     chromeos::WindowStateType::kPrimarySnapped;
+
+base::Uuid GetDeskUuid() {
+  return base::Uuid::ParseLowercase(kDeskUuidString);
+}
 
 void RemoveInactiveDesks() {
   // Removes all the inactive desks and waits for their async operations to
@@ -232,7 +239,7 @@ void CreateAndSaveWindowInfo(
 void CreateAndSaveWindowInfo(aura::Window* window,
                              uint32_t activation_index,
                              chromeos::WindowStateType window_state_type) {
-  CreateAndSaveWindowInfo(window, activation_index, kDeskId, kDeskUuid,
+  CreateAndSaveWindowInfo(window, activation_index, kDeskId, GetDeskUuid(),
                           kCurrentBounds, window_state_type,
                           /*pre_minimized_show_state=*/std::nullopt,
                           /*snap_percentage=*/std::nullopt);
@@ -308,8 +315,6 @@ class FullRestoreAppLaunchHandlerTestBase
 
   void SetUpOnMainThread() override {
     extensions::PlatformAppBrowserTest::SetUpOnMainThread();
-    display_service_ =
-        std::make_unique<NotificationDisplayServiceTester>(profile());
     Shell::Get()
         ->login_unlock_throughput_recorder()
         ->SetLoginFinishedReportedForTesting();
@@ -341,7 +346,7 @@ class FullRestoreAppLaunchHandlerTestBase
         profile()->GetPath(),
         std::make_unique<::app_restore::AppLaunchInfo>(
             kAppId, kWindowId2, apps::LaunchContainer::kLaunchContainerWindow,
-            WindowOpenDisposition::NEW_WINDOW, display::kDefaultDisplayId,
+            WindowOpenDisposition::kNewWindow, display::kDefaultDisplayId,
             std::vector<base::FilePath>{}, nullptr));
   }
 
@@ -361,7 +366,7 @@ class FullRestoreAppLaunchHandlerTestBase
         profile()->GetPath(),
         std::make_unique<::app_restore::AppLaunchInfo>(
             app_id, apps::LaunchContainer::kLaunchContainerWindow,
-            WindowOpenDisposition::NEW_WINDOW, display::kDefaultDisplayId,
+            WindowOpenDisposition::kNewWindow, display::kDefaultDisplayId,
             std::vector<base::FilePath>{}, nullptr));
   }
 
@@ -377,18 +382,12 @@ class FullRestoreAppLaunchHandlerTestBase
     return read_handler->GetWindowInfo(window);
   }
 
-  bool HasNotificationFor(const std::string& notification_id) const {
-    std::optional<message_center::Notification> message_center_notification =
-        display_service_->GetNotification(notification_id);
-    return message_center_notification.has_value();
-  }
-
-  void VerifyPostRebootNotificationTitle(const std::string& notification_id) {
-    std::optional<message_center::Notification> message_center_notification =
-        display_service_->GetNotification(notification_id);
-    ASSERT_TRUE(message_center_notification.has_value());
-    EXPECT_EQ(message_center_notification.value().title(),
-              l10n_util::GetStringUTF16(IDS_POLICY_DEVICE_POST_REBOOT_TITLE));
+  bool HasNotificationFor(const std::string& notification_id) {
+    const user_manager::User& user = CHECK_DEREF(
+        BrowserContextHelper::Get()->GetUserByBrowserContext(profile()));
+    return message_center::MessageCenter::Get()->FindNotificationById(
+               CreateUserScopedNotificationId(notification_id,
+                                              user.username_hash())) != nullptr;
   }
 
   void ResetRestoreForTesting() { scoped_restore_for_testing_.reset(); }
@@ -396,7 +395,6 @@ class FullRestoreAppLaunchHandlerTestBase
  protected:
   gfx::ScopedAnimationDurationScaleMode faster_animations_;
   std::unique_ptr<ScopedRestoreForTesting> scoped_restore_for_testing_;
-  std::unique_ptr<NotificationDisplayServiceTester> display_service_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
@@ -462,7 +460,7 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerBrowserTest,
                        PreMinimizedState) {
   // Add app launch info.
   SaveDefaultAppLaunchInfo();
-  CreateAndSaveWindowInfo(kWindowId2, kDeskId, kDeskUuid, kCurrentBounds,
+  CreateAndSaveWindowInfo(kWindowId2, kDeskId, GetDeskUuid(), kCurrentBounds,
                           chromeos::WindowStateType::kMinimized,
                           ui::mojom::WindowShowState::kMaximized,
                           /*snap_percentage=*/std::nullopt);
@@ -753,7 +751,7 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerBrowserTest,
   SaveBrowserAppLaunchInfo(kWindowId1);
   constexpr uint32_t kSnapPercentage = 75;
   CreateAndSaveWindowInfo(
-      kWindowId1, kDeskId, kDeskUuid, kCurrentBounds, kWindowStateType,
+      kWindowId1, kDeskId, GetDeskUuid(), kCurrentBounds, kWindowStateType,
       /*pre_minimized_show_state=*/std::nullopt, kSnapPercentage);
   AppLaunchInfoSaveWaiter::Wait();
 
@@ -770,7 +768,7 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerBrowserTest,
   window->SetProperty(::app_restore::kRestoreWindowIdKey, kWindowId1);
   auto stored_window_info = GetWindowInfo(window.get());
   EXPECT_EQ(kDeskId, *stored_window_info->desk_id);
-  EXPECT_EQ(kDeskUuid, stored_window_info->desk_guid);
+  EXPECT_EQ(GetDeskUuid(), stored_window_info->desk_guid);
   EXPECT_EQ(kCurrentBounds, *stored_window_info->current_bounds);
   EXPECT_EQ(kWindowStateType, *stored_window_info->window_state_type);
   EXPECT_EQ(kSnapPercentage, *stored_window_info->snap_percentage);
@@ -782,11 +780,12 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerBrowserTest,
                        PRE_FullRestoreOverridesSessionRestoreTest) {
   // Create a browser and create a tab for it. Its bounds should not equal
   // |kCurrentBounds|.
-  Browser* browser = Browser::Create(Browser::CreateParams(profile(), true));
+  BrowserWindowInterface* browser = CreateBrowserWindow(
+      BrowserWindowCreateParams(profile(), /*from_user_gesture=*/true));
   PrefService* local_state = g_browser_process->local_state();
   static_cast<PrefRegistrySimple*>(local_state->DeprecatedGetPrefRegistry())
       ->RegisterIntegerPref(kRestoreIdPrefName, 0);
-  local_state->SetInteger(kRestoreIdPrefName, browser->session_id().id());
+  local_state->SetInteger(kRestoreIdPrefName, browser->GetSessionID().id());
   AddBlankTabAndShow(browser);
   aura::Window* window = browser->GetWindow()->GetNativeWindow();
   ASSERT_NE(kCurrentBounds, window->bounds());
@@ -820,7 +819,7 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerBrowserTest,
   // Create Full Restore launch data before launching any browser, simulating
   // Full Restore data being saved prior to restart.
   SaveBrowserAppLaunchInfo(previous_browser_id);
-  CreateAndSaveWindowInfo(previous_browser_id, kDeskId, kDeskUuid,
+  CreateAndSaveWindowInfo(previous_browser_id, kDeskId, GetDeskUuid(),
                           kCurrentBounds, chromeos::WindowStateType::kNormal,
                           /*pre_minimized_show_state=*/std::nullopt,
                           /*snap_percentage=*/std::nullopt);
@@ -872,8 +871,9 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerBrowserTest,
   const gfx::Rect expected_bounds(10, 10, 500, 300);
   const GURL expected_url("https://example.org");
 
-  Browser* new_browser = Browser::Create(
-      Browser::CreateParams(Browser::TYPE_NORMAL, profile(), false));
+  BrowserWindowInterface* new_browser = CreateBrowserWindow(
+      BrowserWindowCreateParams(BrowserWindowInterface::TYPE_NORMAL, profile(),
+                                /*from_user_gesture=*/false));
 
   content::TestNavigationObserver navigation_observer(expected_url);
   navigation_observer.StartWatchingNewWebContents();
@@ -954,11 +954,16 @@ class FullRestoreAppLaunchHandlerChromeAppBrowserTest
         std::make_unique<ScopedLaunchBrowserForTesting>());
     scoped_feature_list_.InitAndEnableFeature(
         apps::chrome_app_deprecation::kAllowUserInstalledChromeApps);
+    // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox is
+    // enabled and then remove this.
+    webui_omnibox_feature_list_.InitFromCommandLine(
+        "", "WebUIOmniboxPopup,WebUIOmniboxAimPopup");
   }
   ~FullRestoreAppLaunchHandlerChromeAppBrowserTest() override = default;
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
+  base::test::ScopedFeatureList webui_omnibox_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerChromeAppBrowserTest,
@@ -991,9 +996,11 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerChromeAppBrowserTest,
   AppLaunchInfoSaveWaiter::Wait();
 
   // Create a non-restored window in the restored window's desk container.
-  Browser::CreateParams non_restored_params(profile(), true);
+  BrowserWindowCreateParams non_restored_params(profile(),
+                                                /*from_user_gesture=*/true);
   non_restored_params.initial_workspace = "2";
-  Browser* non_restored_browser = Browser::Create(non_restored_params);
+  BrowserWindowInterface* non_restored_browser =
+      CreateBrowserWindow(std::move(non_restored_params));
   AddBlankTabAndShow(non_restored_browser);
   aura::Window* non_restored_window =
       non_restored_browser->GetWindow()->GetNativeWindow();

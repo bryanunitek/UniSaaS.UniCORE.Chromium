@@ -324,7 +324,8 @@ class GpuMemoryBufferHandleHolder : public BufferHandleHolder,
 
     // Since this is the first time we create the `shared_image_`, we need to
     // guarantee that the shared image is created before it is used.
-    shared_image_sync_token_ = shared_image_interface->GenVerifiedSyncToken();
+    shared_image_sync_token_ = shared_image_->creation_sync_token();
+    shared_image_interface->VerifySyncToken(shared_image_sync_token_);
 
     should_create_shared_image_ = false;
     return true;
@@ -375,8 +376,6 @@ class GpuMemoryBufferHandleHolder : public BufferHandleHolder,
     // If format is not multiplanar it must be used for testing.
     CHECK(format.is_multi_plane() || g_force_use_gpu_memory_buffer_for_test);
 
-    frame->set_color_space(shared_image_->color_space());
-    frame->metadata().allow_overlay = true;
     frame->metadata().read_lock_fences_enabled = true;
     frame->metadata().MergeMetadataFrom(frame_info->metadata);
 

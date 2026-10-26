@@ -14,6 +14,8 @@
 #include "components/commerce/core/commerce_constants.h"
 #include "components/history_clusters/history_clusters_internals/webui/url_constants.h"
 #include "components/optimization_guide/optimization_guide_internals/webui/url_constants.h"
+#include "components/private_ai/private_ai_internals/webui/url_constants.h"
+#include "components/webui/regional_capabilities_internals/constants.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/common/buildflags.h"
@@ -37,10 +39,9 @@ bool IsWebUiHostInDevUiDfm(const std::string& host) {
          host == chrome::kChromeUIActorInternalsHost ||
          host == chrome::kChromeUIAutofillInternalsHost ||
          host == chrome::kChromeUIBluetoothInternalsHost ||
-         host == chrome::kChromeUIBrowsingTopicsInternalsHost ||
          host == chrome::kChromeUIChromeFindsInternalsHost ||
          host == chrome::kChromeUIComponentsHost ||
-         host == chrome::kChromeUICrashesHost ||
+         host == chrome::kChromeUIConnectorsInternalsHost ||
          host == chrome::kChromeUIDeviceLogHost ||
          host == chrome::kChromeUIContextHubHost ||
          host == chrome::kChromeUIDownloadInternalsHost ||
@@ -50,32 +51,29 @@ bool IsWebUiHostInDevUiDfm(const std::string& host) {
          host == chrome::kChromeUIInterstitialHost ||
          host == chrome::kChromeUILocalStateHost ||
          host == chrome::kChromeUIMediaEngagementHost ||
-         host == chrome::kChromeUIMemoryInternalsHost ||
          host == chrome::kChromeUIMetricsInternalsHost ||
          host == chrome::kChromeUINTPTilesInternalsHost ||
          host == chrome::kChromeUINetExportHost ||
          host == chrome::kChromeUINetInternalsHost ||
-         host == chrome::kChromeUIOmniboxHost ||
+         host == chrome::kChromeUIOmniboxInternalsHost ||
          host == chrome::kChromeUIPasswordManagerInternalsHost ||
-         host == chrome::kChromeUIPersonalContextInternalsHost ||
          host == chrome::kChromeUIPolicyHost ||
          host == chrome::kChromeUIPredictorsHost ||
          host == chrome::kChromeUISandboxHost ||
+         host == chrome::kChromeUISegmentationInternalsHost ||
          host == chrome::kChromeUISignInInternalsHost ||
          host == chrome::kChromeUISiteEngagementHost ||
          host == chrome::kChromeUISnippetsInternalsHost ||
+         host == chrome::kChromeUISubresourceFilterInternalsHost ||
+         host == chrome::kChromeUISuggestInternalsHost ||
          host == chrome::kChromeUISyncInternalsHost ||
          host == chrome::kChromeUITranslateInternalsHost ||
          host == chrome::kChromeUIUsbInternalsHost ||
-         host == chrome::kChromeUIUserActionsHost ||
          host == chrome::kChromeUIWebApksHost ||
          host == chrome::kChromeUIWebRtcLogsHost ||
          host == commerce::kChromeUICommerceInternalsHost ||
-         host == content::kChromeUIPrivateAggregationInternalsHost ||
-         host == content::kChromeUIAttributionInternalsHost ||
          host == content::kChromeUIBlobInternalsHost ||
          host == content::kChromeUIGpuHost ||
-         host == content::kChromeUIHistogramHost ||
          host == content::kChromeUIIndexedDBInternalsHost ||
          host == content::kChromeUIMediaInternalsHost ||
          host == content::kChromeUINetworkErrorsListingHost ||
@@ -90,7 +88,10 @@ bool IsWebUiHostInDevUiDfm(const std::string& host) {
          host == history_clusters_internals::
                      kChromeUIHistoryClustersInternalsHost ||
          host == optimization_guide_internals::
-                     kChromeUIOptimizationGuideInternalsHost;
+                     kChromeUIOptimizationGuideInternalsHost ||
+         host == private_ai_internals::kChromeUIPrivateAiInternalsHost ||
+         host ==
+             regional_capabilities::kChromeUIRegionalCapabilitiesInternalsHost;
 }
 
 }  // namespace
@@ -111,7 +112,7 @@ bool DevUiLoaderThrottle::ShouldInstallDevUiDfm(const GURL& url) {
 // static
 void DevUiLoaderThrottle::MaybeCreateAndAdd(
     content::NavigationThrottleRegistry& registry) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   auto& handle = registry.GetNavigationHandle();
   if (!handle.IsInPrimaryMainFrame()) {
     return;

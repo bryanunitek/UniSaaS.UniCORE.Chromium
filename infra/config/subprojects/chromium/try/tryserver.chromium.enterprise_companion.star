@@ -6,7 +6,6 @@
 load("@chromium-luci//builders.star", "cpu", "os")
 load("@chromium-luci//consoles.star", "consoles")
 load("@chromium-luci//gn_args.star", "gn_args")
-load("@chromium-luci//html.star", "linkify")
 load("@chromium-luci//try.star", "try_")
 load("//lib/siso.star", "siso")
 load("//lib/try_constants.star", "try_constants")
@@ -19,6 +18,7 @@ try_.defaults.set(
     execution_timeout = try_constants.DEFAULT_EXECUTION_TIMEOUT,
     experiments = {
         "chromium_tests.resultdb_module": 100,
+        "luci.buildbucket.run_in_turboci": 100,
     },
     service_account = try_constants.DEFAULT_SERVICE_ACCOUNT,
     siso_keep_going = siso.KEEP_GOING,
@@ -31,7 +31,9 @@ consoles.list_view(
 )
 
 def enterprise_companion_linux_builder(*, name, **kwargs):
+    kwargs.setdefault("cores", 8)
     kwargs.setdefault("os", os.LINUX_DEFAULT)
+    kwargs.setdefault("ssd", True)
     kwargs.setdefault("siso_project", siso.project.DEFAULT_UNTRUSTED)
     kwargs.setdefault("siso_remote_jobs", siso.remote_jobs.LOW_JOBS_FOR_CQ)
     return try_.builder(
@@ -59,7 +61,6 @@ def enterprise_companion_windows_builder(*, name, **kwargs):
 
 enterprise_companion_linux_builder(
     name = "linux-enterprise-companion-try-builder-dbg",
-    description_html = "Compiles and runs " + linkify("https://source.chromium.org/chromium/chromium/src/+/main:chrome/enterprise_companion/README.md", "Chrome Enterprise Companion App") + " Linux Debug tests.",
     mirrors = [
         "ci/linux-enterprise-companion-builder-dbg",
         "ci/linux-enterprise-companion-tester-dbg",
@@ -79,7 +80,6 @@ enterprise_companion_linux_builder(
 
 enterprise_companion_linux_builder(
     name = "linux-enterprise-companion-try-builder-rel",
-    description_html = "Compiles and runs " + linkify("https://source.chromium.org/chromium/chromium/src/+/main:chrome/enterprise_companion/README.md", "Chrome Enterprise Companion App") + " Linux Release tests.",
     mirrors = [
         "ci/linux-enterprise-companion-builder-rel",
         "ci/linux-enterprise-companion-tester-rel",
@@ -100,7 +100,6 @@ enterprise_companion_linux_builder(
 
 enterprise_companion_mac_builder(
     name = "mac-enterprise-companion-try-builder-dbg",
-    description_html = "Compiles and runs " + linkify("https://source.chromium.org/chromium/chromium/src/+/main:chrome/enterprise_companion/README.md", "Chrome Enterprise Companion App") + " Mac Debug tests.",
     mirrors = [
         "ci/mac-enterprise-companion-builder-arm64-dbg",
         "ci/mac13-arm64-enterprise-companion-tester-dbg",
@@ -121,7 +120,6 @@ enterprise_companion_mac_builder(
 
 enterprise_companion_mac_builder(
     name = "mac-enterprise-companion-try-builder-rel",
-    description_html = "Compiles and runs " + linkify("https://source.chromium.org/chromium/chromium/src/+/main:chrome/enterprise_companion/README.md", "Chrome Enterprise Companion App") + " Mac Release tests.",
     mirrors = [
         "ci/mac-enterprise-companion-builder-rel",
         "ci/mac13-x64-enterprise-companion-tester-rel",
@@ -143,7 +141,6 @@ enterprise_companion_mac_builder(
 
 enterprise_companion_windows_builder(
     name = "win-enterprise-companion-try-builder-dbg",
-    description_html = "Compiles and runs " + linkify("https://source.chromium.org/chromium/chromium/src/+/main:chrome/enterprise_companion/README.md", "Chrome Enterprise Companion App") + " Windows Debug tests.",
     mirrors = [
         "ci/win-enterprise-companion-builder-dbg",
         "ci/win10-enterprise-companion-tester-dbg",
@@ -163,7 +160,6 @@ enterprise_companion_windows_builder(
 
 enterprise_companion_windows_builder(
     name = "win-enterprise-companion-try-builder-rel",
-    description_html = "Compiles and runs " + linkify("https://source.chromium.org/chromium/chromium/src/+/main:chrome/enterprise_companion/README.md", "Chrome Enterprise Companion App") + " Windows Release tests.",
     mirrors = [
         "ci/win-enterprise-companion-builder-rel",
         "ci/win10-enterprise-companion-tester-rel",

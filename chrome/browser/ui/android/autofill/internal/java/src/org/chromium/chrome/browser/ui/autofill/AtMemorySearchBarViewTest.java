@@ -5,14 +5,19 @@
 package org.chromium.chrome.browser.ui.autofill;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.verify;
 
 import android.content.Context;
+import android.content.res.Configuration;
 import android.view.ContextThemeWrapper;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.view.View.MeasureSpec;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 
 import androidx.test.core.app.ApplicationProvider;
@@ -82,11 +87,14 @@ public class AtMemorySearchBarViewTest {
         assertEquals(View.GONE, mClearButton.getVisibility());
 
         mSearchEditText.setText("hello");
+        mSearchEditText.clearFocus();
+        assertFalse(mSearchEditText.hasFocus());
         assertEquals(View.VISIBLE, mClearButton.getVisibility());
 
         mClearButton.performClick();
         assertEquals("", mSearchEditText.getText().toString());
         assertEquals(View.GONE, mClearButton.getVisibility());
+        assertTrue(mSearchEditText.hasFocus());
     }
 
     @Test
@@ -114,5 +122,34 @@ public class AtMemorySearchBarViewTest {
         mView.setDelegate(mMockDelegate);
         mSearchEditText.setText("abc");
         verify(mMockDelegate).onQueryTextChanged("abc");
+    }
+
+    @Test
+    public void testLargeFontScaleDoesNotClipSearchText() {
+        Configuration config = new Configuration(mContext.getResources().getConfiguration());
+        config.fontScale = 2.0f;
+        Context largeFontContext =
+                new ContextThemeWrapper(
+                        mContext.createConfigurationContext(config),
+                        R.style.Theme_BrowserUI_DayNight);
+
+        FrameLayout parent = new FrameLayout(largeFontContext);
+        AtMemorySearchBarView searchBarView =
+                (AtMemorySearchBarView)
+                        LayoutInflater.from(largeFontContext)
+                                .inflate(R.layout.at_memory_search_bar, parent, false);
+        parent.addView(searchBarView);
+
+        parent.measure(
+                MeasureSpec.makeMeasureSpec(1000, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(1000, MeasureSpec.AT_MOST));
+        parent.layout(0, 0, parent.getMeasuredWidth(), parent.getMeasuredHeight());
+
+        EditText editText = searchBarView.findViewById(R.id.search_query_input);
+        int minExpectedEditTextHeight =
+                editText.getLineHeight() + editText.getPaddingTop() + editText.getPaddingBottom();
+        assertTrue(editText.getMeasuredHeight() >= minExpectedEditTextHeight);
+        assertTrue(searchBarView.getMeasuredHeight() >= editText.getMeasuredHeight());
+        assertTrue(searchBarView.getMeasuredHeight() >= searchBarView.getMinimumHeight());
     }
 }

@@ -118,10 +118,23 @@ RequestTypeForUma PermissionUtil::GetUmaValueForRequest(
                                    request.GetGeolocationPromptType());
 }
 
+RequestTypeForUma PermissionUtil::GetUmaValueForRequests(
+    const std::vector<std::unique_ptr<PermissionRequest>>& requests) {
+  CHECK(!requests.empty());
+  if (requests.size() == 1) {
+    return GetUmaValueForRequest(*requests[0]);
+  }
+  return GetUmaValueForMultipleRequests(requests[0]->request_type());
+}
+
 RequestTypeForUma PermissionUtil::GetUmaValueForRequestType(
     RequestType request_type,
     std::optional<GeolocationPromptType> geolocation_prompt_type) {
   switch (request_type) {
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+    case RequestType::kAmbientLogin:
+      return RequestTypeForUma::PERMISSION_AMBIENT_LOGIN;
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
     case RequestType::kArSession:
       return RequestTypeForUma::PERMISSION_AR;
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
@@ -387,11 +400,15 @@ bool PermissionUtil::IsLowPriorityPermissionRequest(
   return request->request_type() == RequestType::kNotifications ||
          request->request_type() == RequestType::kGeolocation;
 }
+
 bool PermissionUtil::ShouldCurrentRequestUsePermissionElementSecondaryUI(
-    PermissionPrompt::Delegate* delegate,
+    const PermissionPrompt::Delegate* delegate,
     content::WebContents* web_contents) {
-  if (permissions::PermissionsClient::
-          AllowEmbeddedPermissionPromptForAllowlistedSurfaces() &&
+  if (delegate->Requests().empty()) {
+    return false;
+  }
+  if (permissions::PermissionsClient::AllowEmbeddedPermissionPromptForSurface(
+          web_contents) &&
       permissions::PermissionsClient::Get()
           ->IsPrivilegedInternalWebUIOrNewTabPage(
               web_contents, delegate->GetRequestingOrigin(),
@@ -400,8 +417,13 @@ bool PermissionUtil::ShouldCurrentRequestUsePermissionElementSecondaryUI(
   }
   return ShouldCurrentRequestUsePermissionElementSecondaryUI(delegate);
 }
+
 bool PermissionUtil::ShouldCurrentRequestUsePermissionElementSecondaryUI(
-    PermissionPrompt::Delegate* delegate) {
+    const PermissionPrompt::Delegate* delegate) {
+  if (delegate->Requests().empty()) {
+    return false;
+  }
+
   if (!base::FeatureList::IsEnabled(blink::features::kGeolocationElement) &&
       !base::FeatureList::IsEnabled(blink::features::kUserMediaElement) &&
       !base::FeatureList::IsEnabled(blink::features::kWebAppInstallation)) {
@@ -453,9 +475,9 @@ GURL PermissionUtil::GetLastCommittedOriginAsURL(
     content::RenderFrameHost* render_frame_host) {
   CHECK(render_frame_host);
 
+#if BUILDFLAG(IS_ANDROID)
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(render_frame_host);
-#if BUILDFLAG(IS_ANDROID)
   // If `allow_universal_access_from_file_urls` flag is enabled, a file:/// can
   // change its url via history.pushState/replaceState to any other url,
   // including about:blank. To avoid user confusion we should always use a
@@ -470,13 +492,14 @@ GURL PermissionUtil::GetLastCommittedOriginAsURL(
   }
 #endif
 
-  GURL origin = render_frame_host->GetLastCommittedOrigin().GetURL();
-  if (origin.is_empty() && render_frame_host->IsInPrimaryMainFrame()) {
-    if (!web_contents->GetVisibleURL().is_empty()) {
-      origin = web_contents->GetVisibleURL();
-    }
+  const url::Origin& origin = render_frame_host->GetLastCommittedOrigin();
+  if (origin.opaque() && render_frame_host->IsInPrimaryMainFrame()) {
+    // For historical reasons we are supporting permission grants to sandboxed
+    // documents.
+    // TODO(https://crbug.com/571135408): Revisit this logic.
+    return origin.GetTupleOrPrecursorTupleIfOpaque().GetURL();
   }
-  return origin;
+  return origin.GetURL();
 }
 
 ContentSettingsType PermissionUtil::PermissionTypeToContentSettingsTypeSafe(
@@ -708,11 +731,11 @@ bool PermissionUtil::CanPermissionRequestIgnoreStatus(
     content::PermissionStatusSource source,
     blink::mojom::PermissionStatus status,
     content::WebContents* web_contents) {
-  // Support requests from side panels/omnibox popup/NTP to be shown still, even
-  // if the permission status is denied. These requests will use the embedded
-  // permission prompt.
-  if (permissions::PermissionsClient::
-          AllowEmbeddedPermissionPromptForAllowlistedSurfaces() &&
+  // Support requests from side panels/omnibox popup/omnibox everywhere/NTP to
+  // be shown still, even if the permission status is denied. These requests
+  // will use the embedded permission prompt.
+  if (permissions::PermissionsClient::AllowEmbeddedPermissionPromptForSurface(
+          web_contents) &&
       permissions::PermissionsClient::Get()
           ->IsPrivilegedInternalWebUIOrNewTabPage(
               web_contents, request->requesting_origin,

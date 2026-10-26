@@ -10,8 +10,8 @@
 #include "base/functional/bind.h"
 #include "base/i18n/number_formatting.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
@@ -19,6 +19,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/sync/base/features.h"
 #include "components/sync_bookmarks/constants.h"
+#include "extensions/buildflags/buildflags.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
 
@@ -183,11 +184,11 @@ bool HasAccountExtensions(Profile* profile) {
 SignoutConfirmationHandler::SignoutConfirmationHandler(
     mojo::PendingReceiver<signout_confirmation::mojom::PageHandler> receiver,
     mojo::PendingRemote<signout_confirmation::mojom::Page> page,
-    Browser* browser,
+    BrowserWindowInterface* browser,
     ChromeSignoutConfirmationPromptVariant variant,
     size_t unsynced_data_count,
     SignoutConfirmationCallback callback)
-    : browser_(browser ? browser->AsWeakPtr() : nullptr),
+    : browser_(browser ? browser->GetWeakPtr() : nullptr),
       variant_(variant),
       unsynced_data_count_(unsynced_data_count),
       completion_callback_(std::move(callback)),
@@ -204,8 +205,7 @@ SignoutConfirmationHandler::~SignoutConfirmationHandler() = default;
 
 void SignoutConfirmationHandler::UpdateViewHeight(uint32_t height) {
   if (browser_) {
-    browser_->GetFeatures().signin_view_controller()->SetModalSigninHeight(
-        height);
+    SigninViewController::From(browser_.get())->SetModalSigninHeight(height);
   }
 }
 
@@ -234,14 +234,14 @@ void SignoutConfirmationHandler::FinishAndCloseDialog(
     bool uninstall_account_extensions) {
   RecordChromeSignoutConfirmationPromptMetrics(variant_, choice);
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  if (browser_ && HasAccountExtensions(browser_->profile())) {
+  if (browser_ && HasAccountExtensions(browser_->GetProfile())) {
     RecordAccountExtensionsSignoutChoice(choice, !uninstall_account_extensions);
   }
 #endif
 
   std::move(completion_callback_).Run(choice, uninstall_account_extensions);
   if (browser_) {
-    browser_->GetFeatures().signin_view_controller()->CloseModalSignin();
+    SigninViewController::From(browser_.get())->CloseModalSignin();
   }
 }
 
@@ -265,7 +265,7 @@ void SignoutConfirmationHandler::ComputeAccountExtensions() {
   }
 
   extensions::AccountExtensionTracker* tracker =
-      extensions::AccountExtensionTracker::Get(browser_->profile());
+      extensions::AccountExtensionTracker::Get(browser_->GetProfile());
   std::vector<const extensions::Extension*> account_extensions =
       tracker->GetSignedInAccountExtensions();
   if (account_extensions.empty()) {
@@ -280,7 +280,7 @@ void SignoutConfirmationHandler::ComputeAccountExtensions() {
           &SignoutConfirmationHandler::ComputeAndSendSignoutConfirmationData,
           weak_ptr_factory_.GetWeakPtr()));
 
-  auto* image_loader = extensions::ImageLoader::Get(browser_->profile());
+  auto* image_loader = extensions::ImageLoader::Get(browser_->GetProfile());
 
   for (const extensions::Extension* extension : account_extensions) {
     extensions::ExtensionResource icon = extensions::IconsInfo::GetIconResource(

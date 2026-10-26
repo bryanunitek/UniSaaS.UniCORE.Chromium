@@ -4,24 +4,26 @@
 
 #include "base/feature_list.h"
 #include "base/strings/stringprintf.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/permissions/quiet_notification_permission_ui_config.h"
-#include "chrome/browser/permissions/quiet_notification_permission_ui_state.h"
 #include "chrome/browser/permissions/system/system_permission_settings.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
-#include "chrome/browser/ui/tabs/features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+#include "chrome/browser/ui/views/location_bar/webui_location_bar.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_controller.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/browser/ui/views/toolbar/webui_test_utils.h"
+#include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/permissions/permission_request_manager_test_api.h"
@@ -37,8 +39,12 @@
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "ui/base/interaction/element_tracker.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/gfx/animation/animation_test_api.h"
+#include "ui/views/controls/webview/webview.h"
+#include "ui/views/interaction/element_tracker_views.h"
+#include "ui/webui/tracked_element/tracked_element_web_ui.h"
 #include "url/gurl.h"
 
 namespace {
@@ -92,8 +98,6 @@ class LHSIndicatorsInteractiveUITest : public UiBrowserTest {
   enum class TargetViewToVerify { kLocationBar, kPageInfo };
 
   LHSIndicatorsInteractiveUITest() {
-    scoped_features_.InitWithFeatures(
-        {content_settings::features::kLeftHandSideActivityIndicators}, {});
     https_server_ = std::make_unique<net::EmbeddedTestServer>(
         net::EmbeddedTestServer::TYPE_HTTPS);
   }
@@ -123,11 +127,7 @@ class LHSIndicatorsInteractiveUITest : public UiBrowserTest {
   }
 
   void TearDownOnMainThread() override {
-    // Restore the original LocationBarModel if it was overridden.
-    if (original_location_bar_model_) {
-      browser()->GetFeatures().swap_location_bar_models(
-          &original_location_bar_model_);
-    }
+    test_location_bar_model_.reset();
     UiBrowserTest::TearDownOnMainThread();
   }
 
@@ -139,22 +139,68 @@ class LHSIndicatorsInteractiveUITest : public UiBrowserTest {
   }
 
   void OverrideVisibleUrlInLocationBar(const std::u16string& text) {
-    OmniboxView* omnibox_view = GetLocationBarView(browser())->GetOmniboxView();
+    OmniboxView* omnibox_view = BrowserView::GetBrowserViewForBrowser(browser())
+                                    ->GetLocationBar()
+                                    ->GetOmniboxView();
 
     // The pixel tests are sensitive to the URL displayed in the omnibox, as the
     // port number of the test server varies. To prevent flakiness, we override
     // the LocationBarModel with a TestLocationBarModel that returns a static
-    // URL. We preserve the original model to restore it during teardown.
-    auto test_location_bar_model = std::make_unique<TestLocationBarModel>();
-    test_location_bar_model->set_formatted_full_url(text);
-    test_location_bar_model->set_url_for_display(text);
-
-    std::unique_ptr<LocationBarModel> new_model_for_swap =
-        std::move(test_location_bar_model);
-    browser()->GetFeatures().swap_location_bar_models(&new_model_for_swap);
-    original_location_bar_model_ = std::move(new_model_for_swap);
+    // URL.
+    test_location_bar_model_ = std::make_unique<TestLocationBarModel>(
+        browser()->GetUnownedUserDataHost());
+    test_location_bar_model_->set_formatted_full_url(text);
+    test_location_bar_model_->set_url_for_display(text);
 
     omnibox_view->Update();
+  }
+
+  void FinishWebUIAnimations() {
+    if (!features::IsWebUILocationBarEnabled()) {
+      return;
+    }
+
+    auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+    auto* webui_view = browser_view->toolbar_button_provider()
+                           ->GetWebUIToolbarViewForTesting();
+    if (!webui_view || !webui_view->GetWebViewForTesting()) {
+      return;
+    }
+    content::WebContents* contents =
+        webui_view->GetWebViewForTesting()->GetWebContents();
+    if (!contents) {
+      return;
+    }
+
+    const bool expected_bubble_showing =
+        GetChipController() && GetChipController()->IsBubbleShowing();
+
+    const std::string wait_script = base::StringPrintf(
+        R"(for (let i = 0; i < %d; ++i) {
+             const reqChip =
+                 findDeep(document.body, 'permission-chip#request-chip');
+             if (reqChip) {
+               await reqChip.updateComplete;
+             }
+
+             const indChip =
+                 findDeep(document.body, 'permission-chip#indicator-chip');
+             if (indChip) {
+               await indChip.updateComplete;
+             }
+
+             if (%s) {
+               if (reqChip && reqChip.hasAttribute('anchor-highlighted')) {
+                 break;
+               }
+             } else {
+               break;
+             }
+             await new Promise(resolve => requestAnimationFrame(resolve));
+           })",
+        kMaxWebUIWaitFrames, expected_bubble_showing ? "true" : "false");
+
+    EXPECT_TRUE(::FinishWebUIAnimations(contents, wait_script));
   }
 
   // UiBrowserTest:
@@ -162,15 +208,36 @@ class LHSIndicatorsInteractiveUITest : public UiBrowserTest {
 
   bool VerifyUi() override {
     views::View* view_to_verify = nullptr;
+    ScreenshotOptions screenshot_options;
     if (target_ == TargetViewToVerify::kLocationBar) {
-      view_to_verify = GetLocationBarView(browser());
+      if (features::IsWebUILocationBarEnabled()) {
+        FinishWebUIAnimations();
+        view_to_verify = BrowserView::GetBrowserViewForBrowser(browser())
+                             ->toolbar_button_provider()
+                             ->GetWebUIToolbarViewForTesting();
+        ui::ElementContext context =
+            views::ElementTrackerViews::GetContextForView(view_to_verify);
+        ui::TrackedElement* const element =
+            ui::ElementTracker::GetElementTracker()->GetUniqueElement(
+                kLocationBarElementId, context);
+        if (element) {
+          if (auto* const webui_el = element->AsA<ui::TrackedElementWebUI>()) {
+            screenshot_options.region = webui_el->GetBoundsInWebContents();
+          }
+        }
+      } else {
+        view_to_verify = BrowserView::GetBrowserViewForBrowser(browser())
+                             ->toolbar()
+                             ->location_bar_view();
+      }
     } else if (target_ == TargetViewToVerify::kPageInfo) {
       view_to_verify = GetDashboardController()->page_info_for_testing();
     }
 
     const auto* const test_info =
         testing::UnitTest::GetInstance()->current_test_info();
-    return VerifyPixelUi(view_to_verify, test_info->test_suite_name(),
+    return VerifyPixelUi(view_to_verify, screenshot_options,
+                         test_info->test_suite_name(),
                          test_info->name()) != ui::test::ActionResult::kFailed;
   }
 
@@ -186,12 +253,6 @@ class LHSIndicatorsInteractiveUITest : public UiBrowserTest {
     observer.Wait();
   }
 
-  LocationBarView* GetLocationBarView(Browser* browser) {
-    return BrowserView::GetBrowserViewForBrowser(browser)
-        ->toolbar()
-        ->location_bar_view();
-  }
-
   net::EmbeddedTestServer* https_server() { return https_server_.get(); }
 
   GURL GetURL() {
@@ -200,7 +261,7 @@ class LHSIndicatorsInteractiveUITest : public UiBrowserTest {
 
   void SetPermission(ContentSettingsType type, ContentSetting setting) {
     HostContentSettingsMap* map =
-        HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+        HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
 
     map->SetContentSettingDefaultScope(GetURL(), GetURL(), type, setting);
   }
@@ -266,18 +327,24 @@ class LHSIndicatorsInteractiveUITest : public UiBrowserTest {
     EXPECT_FALSE(GetDashboardController()->is_verbose());
   }
 
-  PermissionChipView* GetIndicatorChip() {
-    return GetLocationBarView(browser())
-        ->permission_dashboard_view()
-        ->GetIndicatorChip();
+  PermissionChipInterface* GetIndicatorChip() {
+    return GetDashboardController()->permission_dashboard()->GetIndicatorChip();
   }
 
   PermissionDashboardController* GetDashboardController() {
-    return GetLocationBarView(browser())->permission_dashboard_controller();
+    return BrowserView::GetBrowserViewForBrowser(browser())
+        ->GetLocationBar()
+        ->GetPermissionDashboardController();
+  }
+
+  ChipController* GetChipController() {
+    return BrowserView::GetBrowserViewForBrowser(browser())
+        ->GetLocationBar()
+        ->GetChipController();
   }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   using QuietUiReason = permissions::PermissionUiSelector::QuietUiReason;
@@ -299,10 +366,9 @@ class LHSIndicatorsInteractiveUITest : public UiBrowserTest {
   const gfx::AnimationTestApi::RenderModeResetter disable_rich_animations_ =
       gfx::AnimationTestApi::SetRichAnimationRenderMode(
           gfx::Animation::RichAnimationRenderMode::FORCE_DISABLED);
-  base::test::ScopedFeatureList scoped_features_;
   std::unique_ptr<net::EmbeddedTestServer> https_server_;
   std::unique_ptr<test::PermissionRequestManagerTestApi> test_api_;
-  std::unique_ptr<LocationBarModel> original_location_bar_model_;
+  std::unique_ptr<TestLocationBarModel> test_location_bar_model_;
 };
 
 IN_PROC_BROWSER_TEST_F(LHSIndicatorsInteractiveUITest, InvokeUi_camera) {
@@ -538,13 +604,11 @@ IN_PROC_BROWSER_TEST_F(LHSIndicatorsInteractiveUITest,
 IN_PROC_BROWSER_TEST_F(LHSIndicatorsInteractiveUITest,
                        InvokeUi_NotificationsRequest_Loud_Confirmation) {
   RequestPermission(permissions::RequestType::kNotifications);
-  GetLocationBarView(browser())->GetChipController()->DoNotCollapseForTesting();
+  GetChipController()->DoNotCollapseForTesting();
 
   test_api()->manager()->Accept(/*prompt_options=*/std::monostate());
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(GetLocationBarView(browser())
-                  ->GetChipController()
-                  ->is_confirmation_showing());
+  EXPECT_TRUE(GetChipController()->is_confirmation_showing());
 
   ShowAndVerifyUi();
 }
@@ -565,13 +629,11 @@ IN_PROC_BROWSER_TEST_F(
       Decision::UseQuietUi(QuietUiReason::kServicePredictedVeryUnlikelyGrant,
                            Decision::ShowNoWarning()));
   RequestPermission(permissions::RequestType::kNotifications);
-  GetLocationBarView(browser())->GetChipController()->DoNotCollapseForTesting();
+  GetChipController()->DoNotCollapseForTesting();
 
   test_api()->manager()->Accept(/*prompt_options=*/std::monostate());
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(GetLocationBarView(browser())
-                  ->GetChipController()
-                  ->is_confirmation_showing());
+  EXPECT_TRUE(GetChipController()->is_confirmation_showing());
 
   ShowAndVerifyUi();
 }
@@ -592,13 +654,11 @@ IN_PROC_BROWSER_TEST_F(
       Decision::UseQuietUi(QuietUiReason::kTriggeredDueToAbusiveRequests,
                            Decision::ShowNoWarning()));
   RequestPermission(permissions::RequestType::kNotifications);
-  GetLocationBarView(browser())->GetChipController()->DoNotCollapseForTesting();
+  GetChipController()->DoNotCollapseForTesting();
 
   test_api()->manager()->Accept(/*prompt_options=*/std::monostate());
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(GetLocationBarView(browser())
-                  ->GetChipController()
-                  ->is_confirmation_showing());
+  EXPECT_TRUE(GetChipController()->is_confirmation_showing());
 
   ShowAndVerifyUi();
 }
@@ -617,13 +677,11 @@ IN_PROC_BROWSER_TEST_F(
   SetCannedUiDecision(Decision::UseQuietUi(QuietUiReason::kEnabledInPrefs,
                                            Decision::ShowNoWarning()));
   RequestPermission(permissions::RequestType::kNotifications);
-  GetLocationBarView(browser())->GetChipController()->DoNotCollapseForTesting();
+  GetChipController()->DoNotCollapseForTesting();
 
   test_api()->manager()->Accept(/*prompt_options=*/std::monostate());
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(GetLocationBarView(browser())
-                  ->GetChipController()
-                  ->is_confirmation_showing());
+  EXPECT_TRUE(GetChipController()->is_confirmation_showing());
 
   ShowAndVerifyUi();
 }
@@ -637,7 +695,7 @@ IN_PROC_BROWSER_TEST_F(LHSIndicatorsInteractiveUITest,
 IN_PROC_BROWSER_TEST_F(LHSIndicatorsInteractiveUITest,
                        InvokeUi_GeolocationRequest_Loud_Confirmation) {
   RequestPermission(permissions::RequestType::kGeolocation);
-  GetLocationBarView(browser())->GetChipController()->DoNotCollapseForTesting();
+  GetChipController()->DoNotCollapseForTesting();
 
   PromptOptions prompt_options =
       base::FeatureList::IsEnabled(
@@ -647,9 +705,7 @@ IN_PROC_BROWSER_TEST_F(LHSIndicatorsInteractiveUITest,
           : std::monostate();
   test_api()->manager()->Accept(prompt_options);
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(GetLocationBarView(browser())
-                  ->GetChipController()
-                  ->is_confirmation_showing());
+  EXPECT_TRUE(GetChipController()->is_confirmation_showing());
 
   ShowAndVerifyUi();
 }

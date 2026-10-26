@@ -12,7 +12,7 @@
 #include "build/build_config.h"
 #include "components/signin/public/identity_manager/account_capabilities.h"
 
-struct AccountInfo;
+class AccountInfo;
 
 // Support class that allows callers to modify internal capability state
 // mappings used for tests.
@@ -34,9 +34,7 @@ class AccountCapabilitiesTestMutator {
 #if !BUILDFLAG(IS_ANDROID)
   void set_can_make_chrome_search_engine_choice_screen_choice(bool value);
 #endif
-#if !BUILDFLAG(IS_IOS)
-  void set_can_run_chrome_privacy_sandbox_trials(bool value);
-#endif
+  void set_can_override_account_info(bool value);
   void set_can_show_history_sync_opt_ins_without_minor_mode_restrictions(
       bool value);
 #if BUILDFLAG(IS_IOS)
@@ -71,10 +69,10 @@ class AccountCapabilitiesTestMutator {
   void set_is_allowed_for_machine_learning(bool value);
   void set_is_opted_in_to_parental_supervision(bool value);
   void set_is_subject_to_account_level_enterprise_policies(bool value);
-  void set_is_subject_to_chrome_privacy_sandbox_restricted_measurement_notice(
-      bool value);
   void set_is_subject_to_enterprise_features(bool value);
   void set_is_subject_to_parental_controls(bool value);
+  void set_is_subject_to_parental_controls_via_bundle(bool value);
+  void set_is_subject_to_universal_opt_out(bool value);
 #if BUILDFLAG(IS_IOS)
   void set_must_fetch_apple_age_range_in_chrome(bool value);
 #endif

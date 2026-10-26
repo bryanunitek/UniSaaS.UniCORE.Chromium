@@ -15,10 +15,7 @@ source_set("features") {
   public = [ "features.h" ]
   public_deps = [ "//base" ]
 
-  configs += [
-    "//build/config/compiler:wexit_time_destructors",
-    "//build/config/compiler:wglobal_constructors",
-  ]
+  configs += [ "//build/config/compiler:wglobal_constructors" ]
 }
 
 source_set("browser") {
@@ -56,10 +53,7 @@ source_set("browser") {
 
   public_deps = [ "//url" ]
 
-  configs += [
-    "//build/config/compiler:wexit_time_destructors",
-    "//build/config/compiler:wglobal_constructors",
-  ]
+  configs += [ "//build/config/compiler:wglobal_constructors" ]
 
   deps = [
     ":features",
@@ -72,6 +66,7 @@ source_set("browser") {
     "//components/prefs",
     "//components/strings",
     "//components/url_matcher",
+    "//third_party/re2",
     "//ui/base/clipboard",
     "//ui/base/clipboard:clipboard_types",
   ]
@@ -115,6 +110,7 @@ source_set("unit_tests") {
     "conditions/attributes_condition_unittest.cc",
     "conditions/not_condition_unittest.cc",
     "conditions/or_condition_unittest.cc",
+    "data_controls_policy_handler_unittest.cc",
     "rule_unittest.cc",
     "rules_service_base_unittest.cc",
     "verdict_unittest.cc",
@@ -122,9 +118,12 @@ source_set("unit_tests") {
 
   deps = [
     ":browser",
+    ":features",
     ":test_support",
     "//base",
     "//base/test:test_support",
+    "//components/enterprise/buildflags",
+    "//components/policy/core/browser",
     "//components/prefs:test_support",
     "//testing/gtest",
   ]

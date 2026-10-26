@@ -17,6 +17,7 @@
 #include "chrome/browser/vr/test/conditional_skipping.h"
 #include "chrome/test/base/platform_browser_test.h"
 #include "device/vr/public/cpp/features.h"
+#include "net/cert/test_root_certs.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "url/gurl.h"
 
@@ -52,9 +53,6 @@ class XrBrowserTestBase : public PlatformBrowserTest {
       "chrome/test/data/xr/e2e_test_files/html/";
   static constexpr char kSwitchIgnoreRuntimeRequirements[] =
       "ignore-runtime-requirements";
-  static const std::vector<std::string> kRequiredTestSwitches;
-  static const std::vector<std::pair<std::string, std::string>>
-      kRequiredTestSwitchesWithValues;
   enum class TestStatus {
     STATUS_RUNNING = 0,
     STATUS_PASSED = 1,
@@ -226,6 +224,7 @@ class XrBrowserTestBase : public PlatformBrowserTest {
   net::EmbeddedTestServer* GetEmbeddedServer();
 
   std::unique_ptr<net::EmbeddedTestServer> server_;
+  net::ScopedTestRoot scoped_test_root_;
   base::test::ScopedFeatureList scoped_feature_list_;
   bool test_skipped_at_startup_ = false;
   bool javascript_failed_ = false;

@@ -1,12 +1,13 @@
 // Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 #include "third_party/blink/renderer/core/paint/timing/paint_timing_detector.h"
 
 #include "base/check_deref.h"
+#include "base/check_op.h"
 #include "base/metrics/histogram_functions.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/performance/largest_contentful_paint_type.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -23,14 +24,15 @@
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
+#include "third_party/blink/renderer/core/paint/timing/element_timing.h"
 #include "third_party/blink/renderer/core/paint/timing/image_paint_timing_detector.h"
-#include "third_party/blink/renderer/core/paint/timing/largest_contentful_paint_calculator.h"
+#include "third_party/blink/renderer/core/paint/timing/largest_contentful_paint_manager.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing.h"
+#include "third_party/blink/renderer/core/paint/timing/paint_timing_utils.h"
 #include "third_party/blink/renderer/core/paint/timing/text_paint_timing_detector.h"
 #include "third_party/blink/renderer/core/style/style_fetched_image.h"
 #include "third_party/blink/renderer/core/svg/graphics/svg_image.h"
 #include "third_party/blink/renderer/core/timing/dom_window_performance.h"
-#include "third_party/blink/renderer/core/timing/performance_timing_for_reporting.h"
 #include "third_party/blink/renderer/core/timing/soft_navigation_heuristics.h"
 #include "third_party/blink/renderer/core/timing/window_performance.h"
 #include "third_party/blink/renderer/platform/graphics/bitmap_image.h"
@@ -53,23 +55,6 @@
 namespace blink {
 
 namespace {
-
-// In the context of FCP++, we define contentful background image as one that
-// satisfies all of the following conditions:
-// * has image reources attached to style of the object, i.e.,
-//  { background-image: url('example.gif') }
-// * not attached to <body> or <html>
-// This function contains the above heuristics.
-bool IsBackgroundImageContentful(const LayoutObject& object,
-                                 const Image& image) {
-  // Background images attached to <body> or <html> are likely for background
-  // purpose, so we rule them out.
-  if (IsA<LayoutView>(object) || object.IsBody() ||
-      object.IsDocumentElement()) {
-    return false;
-  }
-  return true;
-}
 
 void ReportImagePixelInaccuracy(HTMLImageElement* image_element) {
   DCHECK(image_element);
@@ -131,23 +116,6 @@ void ReportImagePixelInaccuracy(HTMLImageElement* image_element) {
   }
 }
 
-const char* ScrollTypeToString(mojom::blink::ScrollType scroll_type) {
-  switch (scroll_type) {
-    case mojom::blink::ScrollType::kUser:
-      return "user";
-    case mojom::blink::ScrollType::kProgrammatic:
-      return "programmatic";
-    case mojom::blink::ScrollType::kClamping:
-      return "clamping";
-    case mojom::blink::ScrollType::kCompositor:
-      return "compositor";
-    case mojom::blink::ScrollType::kAnchoring:
-      return "anchoring";
-    case mojom::blink::ScrollType::kScrollStart:
-      return "scrollstart";
-  }
-}
-
 }  // namespace
 
 PaintTimingDetector::PaintTimingDetector(PaintTiming* paint_timing)
@@ -178,43 +146,44 @@ PaintTimingDetector& PaintTimingDetector::From(Document& document) {
 }
 
 // static
-bool PaintTimingDetector::NotifyBackgroundImagePaint(
-    const Node& node,
+void PaintTimingDetector::NotifyBackgroundImagePaint(
+    const LayoutObject& image_layout_object,
     const Image& image,
     const StyleImage& style_image,
     const PropertyTreeStateOrAlias& current_paint_chunk_properties,
     const gfx::Rect& image_border) {
-  LayoutObject* object = node.GetLayoutObject();
-  if (!object) {
-    return false;
-  }
-
-  if (!IsBackgroundImageContentful(*object, image)) {
-    return false;
-  }
+  auto& paint_timing = PaintTiming::From(image_layout_object.GetDocument());
+  paint_timing.GetElementTiming()->NotifyBackgroundImagePaint(
+      image_layout_object, style_image, current_paint_chunk_properties,
+      image_border);
 
   ImageResourceContent* cached_image = style_image.CachedImage();
   DCHECK(cached_image);
   // TODO(yoav): |image| and |cached_image.GetImage()| are not the same here in
   // the case of SVGs. Figure out why and if we can remove this footgun.
-  return PaintTimingDetector::From(object->GetDocument())
+  paint_timing.GetPaintTimingDetector()
       .GetImagePaintTimingDetector()
-      .RecordImage(*object, image.Size(), *cached_image,
+      .RecordImage(image_layout_object, image.Size(), *cached_image,
                    current_paint_chunk_properties, &style_image, image_border);
 }
 
 // static
-bool PaintTimingDetector::NotifyImagePaint(
-    const LayoutObject& object,
+void PaintTimingDetector::NotifyImagePaint(
+    const LayoutObject& image_layout_object,
     const gfx::Size& intrinsic_size,
     const MediaTiming& media_timing,
     const PropertyTreeStateOrAlias& current_paint_chunk_properties,
     const gfx::Rect& image_border) {
+  auto& paint_timing = PaintTiming::From(image_layout_object.GetDocument());
+  paint_timing.GetElementTiming()->NotifyImagePaint(
+      image_layout_object, media_timing, current_paint_chunk_properties,
+      image_border);
+
   if (IgnorePaintTimingScope::ShouldIgnore()) {
-    return false;
+    return;
   }
 
-  Node* image_node = object.GetNode();
+  Node* image_node = image_layout_object.GetNode();
   HTMLImageElement* element = DynamicTo<HTMLImageElement>(image_node);
 
   if (element) {
@@ -222,9 +191,9 @@ bool PaintTimingDetector::NotifyImagePaint(
     ReportImagePixelInaccuracy(element);
   }
 
-  return PaintTimingDetector::From(object.GetDocument())
+  paint_timing.GetPaintTimingDetector()
       .GetImagePaintTimingDetector()
-      .RecordImage(object, intrinsic_size, media_timing,
+      .RecordImage(image_layout_object, intrinsic_size, media_timing,
                    current_paint_chunk_properties, nullptr, image_border);
 }
 
@@ -235,21 +204,13 @@ void PaintTimingDetector::NotifyFirstVideoFrame(
     const MediaTiming& media_timing,
     const PropertyTreeStateOrAlias& current_paint_chunk_properties,
     const gfx::Rect& image_border) {
-  if (NotifyImagePaint(object, intrinsic_size, media_timing,
-                       current_paint_chunk_properties, image_border)) {
-    // crbug.com/434659231: Recording this as an LCP candidate and setting the
-    // presentation time (without ReportFirstFrameTimeAsRenderTime) depends on
-    // the next main frame, which we request here. This is flag-guarded for hard
-    // LCP, since it might move metrics; for soft navs, do this unconditionally
-    // since this is still experimental and we want accurate behavior for origin
-    // trial along with attributing video src changes (crbug.com/434215966).
-    if (RuntimeEnabledFeatures::RequestMainFrameAfterFirstVideoFrameEnabled() ||
-        !PaintTimingDetector::From(object.GetDocument())
-             .GetImagePaintTimingDetector()
-             .IsRecordingLargestImagePaint()) {
-      object.GetFrameView()->ScheduleAnimation();
-    }
-  }
+  NotifyImagePaint(object, intrinsic_size, media_timing,
+                   current_paint_chunk_properties, image_border);
+  // crbug.com/434659231: Paint timing callbacks happen as part of paint, and
+  // since the first video frame notification happens outside of paint, this
+  // `media_timing` will not be considered until the next frame. Request a
+  // frame now to prevent delays in timing.
+  object.GetFrameView()->ScheduleAnimation();
 }
 
 // static
@@ -262,10 +223,12 @@ void PaintTimingDetector::NotifyInteractionTriggeredVideoSrcChange(
 
 void PaintTimingDetector::NotifyImageFinished(const LayoutObject& object,
                                               const MediaTiming* media_timing) {
-  if (IgnorePaintTimingScope::ShouldIgnore()) {
-    return;
-  }
   image_paint_timing_detector_->NotifyImageFinished(object, media_timing);
+}
+
+void PaintTimingDetector::NotifyBackgroundImageFinished(
+    const StyleFetchedImage* image) {
+  image_paint_timing_detector_->NotifyBackgroundImageFinished(image);
 }
 
 void PaintTimingDetector::NotifyImageRemoved(
@@ -274,104 +237,9 @@ void PaintTimingDetector::NotifyImageRemoved(
   image_paint_timing_detector_->NotifyImageRemoved(object, cached_image);
 }
 
-void PaintTimingDetector::OnInputOrScroll() {
-  LocalDOMWindow* window = DomWindow();
-  if (SoftNavigationHeuristics* heuristics =
-          window ? window->GetSoftNavigationHeuristics() : nullptr) {
-    heuristics->OnInputOrScroll();
-  }
-
-  if (did_notify_first_input_or_scroll_) {
-    return;
-  }
-  did_notify_first_input_or_scroll_ = true;
-
-  // TextPaintTimingDetector is used for both Largest Contentful Paint and for
-  // Element Timing. Therefore, here we only want to stop recording Largest
-  // Contentful Paint.
-  text_paint_timing_detector_->StopRecordingLargestTextPaint();
-  // ImagePaintTimingDetector is currently only being used for
-  // LargestContentfulPaint.
-  image_paint_timing_detector_->StopRecordEntries();
-  image_paint_timing_detector_->StopRecordingLargestImagePaint();
-  largest_contentful_paint_calculator_ = nullptr;
-
-  if (!window) {
-    return;
-  }
-
-  DOMWindowPerformance::performance(*window)
-      ->timingForReporting()
-      ->SetFirstInputOrScrollNotifiedTimestamp(base::TimeTicks::Now());
-  DidChangePerformanceTiming();
-}
-
-void PaintTimingDetector::NotifyInputEvent(WebInputEvent::Type type) {
-  // A single keyup event should be ignored. It could be caused by user actions
-  // such as refreshing via Ctrl+R.
-  if (type == WebInputEvent::Type::kMouseMove ||
-      type == WebInputEvent::Type::kMouseEnter ||
-      type == WebInputEvent::Type::kMouseLeave ||
-      type == WebInputEvent::Type::kKeyUp ||
-      WebInputEvent::IsPinchGestureEventType(type)) {
-    return;
-  }
-  OnInputOrScroll();
-}
-
-void PaintTimingDetector::NotifyScroll(mojom::blink::ScrollType scroll_type) {
-  // TODO(crbug.com/330709851): Remove once we're sure scroll restoration is
-  // handled properly for soft navs.
-  TRACE_EVENT("loading", "PaintTimingDetector::NotifyScroll", "type",
-              ScrollTypeToString(scroll_type));
-  if (scroll_type != mojom::blink::ScrollType::kUser &&
-      scroll_type != mojom::blink::ScrollType::kCompositor) {
-    return;
-  }
-  OnInputOrScroll();
-}
-
-LargestContentfulPaintCalculator*
-PaintTimingDetector::GetLargestContentfulPaintCalculator() {
-  // Do not create an LCP calculator once we stop measuring hard LCP.
-  if (did_notify_first_input_or_scroll_) {
-    return nullptr;
-  }
-  if (largest_contentful_paint_calculator_) {
-    return largest_contentful_paint_calculator_.Get();
-  }
-
-  auto* dom_window = DomWindow();
-  if (!dom_window) {
-    return nullptr;
-  }
-
-  largest_contentful_paint_calculator_ =
-      MakeGarbageCollected<LargestContentfulPaintCalculator>(
-          DOMWindowPerformance::performance(*dom_window), this);
-  return largest_contentful_paint_calculator_.Get();
-}
-
-void PaintTimingDetector::OnLcpMetricsForReportingChanged() {
-  // The DidChangePerformanceTiming method which triggers the reporting of
-  // metrics LCP would not be called when we are not recording metrics LCP.
-  if (did_notify_first_input_or_scroll_) {
-    return;
-  }
-
-  DOMWindowPerformance::performance(CHECK_DEREF(DomWindow()))
-      ->timingForReporting()
-      ->SetLargestContentfulPaintDetailsForMetrics(
-          GetLargestContentfulPaintCalculator()->LatestLcpDetails());
-  DidChangePerformanceTiming();
-}
-
 void PaintTimingDetector::DidChangePerformanceTiming() {
-  DocumentLoader* loader = paint_timing_->GetDocument()->Loader();
-  if (!loader) {
-    return;
-  }
-  loader->DidChangePerformanceTiming();
+  paint_timing::NotifyLoaderPerformanceTimingChanged(
+      paint_timing_->GetDocument());
 }
 
 gfx::RectF PaintTimingDetector::BlinkSpaceToDIPs(const gfx::RectF& rect) const {
@@ -421,31 +289,20 @@ gfx::RectF PaintTimingDetector::CalculateVisualRect(
   return BlinkSpaceToDIPs(gfx::RectF(layout_visual_rect));
 }
 
-void PaintTimingDetector::OnFramePresented(
-    const HeapVector<Member<ImageRecord>>& image_records,
-    const HeapVector<Member<TextRecord>>& text_records) {
-  auto* lcp_calculator = GetLargestContentfulPaintCalculator();
-  if (!lcp_calculator) {
-    return;
-  }
-  lcp_calculator->OnFramePresented(image_records, text_records);
+void PaintTimingDetector::NotifyWillPaint() {
+  ReportIgnoredContent();
 }
 
 void PaintTimingDetector::ReportIgnoredContent() {
+  auto* manager = paint_timing_->GetLargestContentfulPaintManager();
+  if (!manager || !manager->MaybeHasIgnoredContent()) {
+    return;
+  }
+  if (paint_timing::IsDocumentElementInvisible(*paint_timing_->GetDocument())) {
+    return;
+  }
   text_paint_timing_detector_->ReportLargestIgnoredText();
   image_paint_timing_detector_->ReportLargestIgnoredImage();
-}
-
-void PaintTimingDetector::EmitLcpPerformanceEntry(
-    const DOMPaintTimingInfo& paint_timing_info,
-    uint64_t paint_size,
-    base::TimeTicks load_time,
-    const AtomicString& id,
-    const String& url,
-    Element* element) {
-  DOMWindowPerformance::performance(CHECK_DEREF(DomWindow()))
-      ->OnLargestContentfulPaintUpdated(paint_timing_info, paint_size,
-                                        load_time, id, url, element);
 }
 
 ScopedPaintTimingDetectorBlockPaintHook*
@@ -503,7 +360,6 @@ ScopedPaintTimingDetectorBlockPaintHook::
 void PaintTimingDetector::Trace(Visitor* visitor) const {
   visitor->Trace(text_paint_timing_detector_);
   visitor->Trace(image_paint_timing_detector_);
-  visitor->Trace(largest_contentful_paint_calculator_);
   visitor->Trace(paint_timing_);
 }
 

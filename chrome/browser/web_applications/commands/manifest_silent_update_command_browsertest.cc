@@ -16,8 +16,9 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/toolbar/app_menu_control.h"
@@ -53,12 +54,12 @@ namespace web_app {
 
 namespace {
 
-const base::FilePath kBlueIcon{
-    FILE_PATH_LITERAL("chrome/test/data/web_apps/updating/blue-192.png")};
-const base::FilePath kBlueRedIcon{
-    FILE_PATH_LITERAL("chrome/test/data/web_apps/updating/blue-red-192.png")};
-const base::FilePath kBlueWhiteIcon{
-    FILE_PATH_LITERAL("chrome/test/data/web_apps/updating/blue-white-192.png")};
+constexpr base::FilePath::CharType kBlueIcon[] =
+    FILE_PATH_LITERAL("chrome/test/data/web_apps/updating/blue-192.png");
+constexpr base::FilePath::CharType kBlueRedIcon[] =
+    FILE_PATH_LITERAL("chrome/test/data/web_apps/updating/blue-red-192.png");
+constexpr base::FilePath::CharType kBlueWhiteIcon[] =
+    FILE_PATH_LITERAL("chrome/test/data/web_apps/updating/blue-white-192.png");
 
 constexpr int kIconSizeToTest = 192;
 
@@ -94,7 +95,7 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest, SilentUpdate) {
   const GURL app_url =
       embedded_https_test_server().GetURL("/web_apps/updating/index.html");
   const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
-  Browser* app_browser = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
   // navigation.
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
@@ -104,7 +105,7 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest, SilentUpdate) {
       views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
           kToolbarAppMenuButtonElementId,
           views::ElementTrackerViews::GetContextForView(
-              &app_browser->GetBrowserView())));
+              BrowserView::GetBrowserViewForBrowser(app_browser))));
   EXPECT_FALSE(menu_button->IsLabelPresentAndVisible());
 
   EXPECT_EQ(
@@ -137,7 +138,7 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest, PendingUpdate) {
   const GURL app_url =
       embedded_https_test_server().GetURL("/web_apps/updating/index.html");
   const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
-  Browser* app_browser = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
   // navigation.
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
@@ -147,7 +148,7 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest, PendingUpdate) {
       views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
           kToolbarAppMenuButtonElementId,
           views::ElementTrackerViews::GetContextForView(
-              &app_browser->GetBrowserView())));
+              BrowserView::GetBrowserViewForBrowser(app_browser))));
   EXPECT_FALSE(menu_button->IsLabelPresentAndVisible());
 
   EXPECT_EQ(
@@ -184,7 +185,7 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
   const GURL app_url =
       embedded_https_test_server().GetURL("/web_apps/scope_updating/page.html");
   const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
-  Browser* app_browser = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
   // navigation.
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
@@ -197,7 +198,7 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
 
   {
     UpdateAwaiter awaiter(
-        WebAppProvider::GetForTest(browser()->profile())->install_manager());
+        WebAppProvider::GetForTest(browser()->GetProfile())->install_manager());
     ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, update_url));
     awaiter.AwaitUpdate();
   }
@@ -223,14 +224,15 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
       embedded_https_test_server().GetURL("/web_apps/updating/index_blue.html");
   const webapps::AppId app_id =
       InstallWebAppInNewTabAndClose(browser(), app_url);
-  Browser* app_browser = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
   // navigation.
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
   EXPECT_TRUE(
       provider().registrar_unsafe().GetInstallState(app_id).has_value());
   EXPECT_TRUE(gfx::test::AreBitmapsClose(
-      web_app::test::LoadTestImageFromDisk(kBlueIcon).AsBitmap(),
+      web_app::test::LoadTestImageFromDisk(base::FilePath(kBlueIcon))
+          .AsBitmap(),
       GetBitmapForInstalledAppOnDisk(app_id, provider().icon_manager()),
       /*max_deviation=*/3));
 
@@ -249,7 +251,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
       provider().registrar_unsafe().GetAppById(app_id)->manifest_update_time(),
       clock_->Now());
   EXPECT_TRUE(gfx::test::AreBitmapsClose(
-      web_app::test::LoadTestImageFromDisk(kBlueWhiteIcon).AsBitmap(),
+      web_app::test::LoadTestImageFromDisk(base::FilePath(kBlueWhiteIcon))
+          .AsBitmap(),
       GetBitmapForInstalledAppOnDisk(app_id, provider().icon_manager()),
       /*max_deviation=*/3));
 
@@ -279,7 +282,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
   // The app icons on the disk have not been updated, so assert that the old
   // icons still remain.
   EXPECT_TRUE(gfx::test::AreBitmapsClose(
-      web_app::test::LoadTestImageFromDisk(kBlueWhiteIcon).AsBitmap(),
+      web_app::test::LoadTestImageFromDisk(base::FilePath(kBlueWhiteIcon))
+          .AsBitmap(),
       GetBitmapForInstalledAppOnDisk(app_id, provider().icon_manager()),
       /*max_deviation=*/3));
 
@@ -300,14 +304,15 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
       embedded_https_test_server().GetURL("/web_apps/updating/index_blue.html");
   const webapps::AppId app_id =
       InstallWebAppInNewTabAndClose(browser(), app_url);
-  Browser* app_browser = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
   // navigation.
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
   EXPECT_TRUE(
       provider().registrar_unsafe().GetInstallState(app_id).has_value());
   EXPECT_TRUE(gfx::test::AreBitmapsClose(
-      web_app::test::LoadTestImageFromDisk(kBlueIcon).AsBitmap(),
+      web_app::test::LoadTestImageFromDisk(base::FilePath(kBlueIcon))
+          .AsBitmap(),
       GetBitmapForInstalledAppOnDisk(app_id, provider().icon_manager()),
       /*max_deviation=*/3));
 
@@ -326,7 +331,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
       provider().registrar_unsafe().GetAppById(app_id)->manifest_update_time(),
       clock_->Now());
   EXPECT_TRUE(gfx::test::AreBitmapsClose(
-      web_app::test::LoadTestImageFromDisk(kBlueWhiteIcon).AsBitmap(),
+      web_app::test::LoadTestImageFromDisk(base::FilePath(kBlueWhiteIcon))
+          .AsBitmap(),
       GetBitmapForInstalledAppOnDisk(app_id, provider().icon_manager()),
       /*max_deviation=*/3));
 
@@ -349,7 +355,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
 
   // The app icons on the disk should be updated now.
   EXPECT_TRUE(gfx::test::AreBitmapsClose(
-      web_app::test::LoadTestImageFromDisk(kBlueRedIcon).AsBitmap(),
+      web_app::test::LoadTestImageFromDisk(base::FilePath(kBlueRedIcon))
+          .AsBitmap(),
       GetBitmapForInstalledAppOnDisk(app_id, provider().icon_manager()),
       /*max_deviation=*/3));
 
@@ -367,7 +374,7 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
       embedded_https_test_server().GetURL("/web_apps/updating/index.html");
   const webapps::AppId app_id =
       InstallWebAppInNewTabAndClose(browser(), app_url);
-  Browser* app_browser = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
   // navigation.
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
@@ -377,7 +384,7 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
       views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
           kToolbarAppMenuButtonElementId,
           views::ElementTrackerViews::GetContextForView(
-              &app_browser->GetBrowserView())));
+              BrowserView::GetBrowserViewForBrowser(app_browser))));
   EXPECT_FALSE(menu_button->IsLabelPresentAndVisible());
   EXPECT_EQ(app_url, provider().registrar_unsafe().GetAppStartUrl(app_id));
 
@@ -477,13 +484,13 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
 
   // Fourth, launch the app, and wait for any commands to complete. The menu
   // button should not be updated.
-  Browser* app_browser = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowser(app_id);
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
   WebAppMenuButton* const menu_button = views::AsViewClass<WebAppMenuButton>(
       views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
           kToolbarAppMenuButtonElementId,
           views::ElementTrackerViews::GetContextForView(
-              &app_browser->GetBrowserView())));
+              BrowserView::GetBrowserViewForBrowser(app_browser))));
   EXPECT_FALSE(menu_button->IsLabelPresentAndVisible());
 }
 
@@ -573,14 +580,15 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandLineTests,
       embedded_https_test_server().GetURL("/web_apps/updating/index_blue.html");
   const webapps::AppId app_id =
       InstallWebAppInNewTabAndClose(browser(), app_url);
-  Browser* app_browser = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
   // navigation.
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
   EXPECT_TRUE(
       provider().registrar_unsafe().GetInstallState(app_id).has_value());
   EXPECT_TRUE(gfx::test::AreBitmapsClose(
-      web_app::test::LoadTestImageFromDisk(kBlueIcon).AsBitmap(),
+      web_app::test::LoadTestImageFromDisk(base::FilePath(kBlueIcon))
+          .AsBitmap(),
       GetBitmapForInstalledAppOnDisk(app_id, provider().icon_manager()),
       /*max_deviation=*/3));
 
@@ -599,7 +607,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandLineTests,
       provider().registrar_unsafe().GetAppById(app_id)->manifest_update_time(),
       clock_->Now());
   EXPECT_TRUE(gfx::test::AreBitmapsClose(
-      web_app::test::LoadTestImageFromDisk(kBlueWhiteIcon).AsBitmap(),
+      web_app::test::LoadTestImageFromDisk(base::FilePath(kBlueWhiteIcon))
+          .AsBitmap(),
       GetBitmapForInstalledAppOnDisk(app_id, provider().icon_manager()),
       /*max_deviation=*/3));
 
@@ -622,7 +631,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandLineTests,
 
   // The app icons on the disk should be updated now.
   EXPECT_TRUE(gfx::test::AreBitmapsClose(
-      web_app::test::LoadTestImageFromDisk(kBlueRedIcon).AsBitmap(),
+      web_app::test::LoadTestImageFromDisk(base::FilePath(kBlueRedIcon))
+          .AsBitmap(),
       GetBitmapForInstalledAppOnDisk(app_id, provider().icon_manager()),
       /*max_deviation=*/3));
 

@@ -11,7 +11,6 @@
 <translation id="1253734725326687145">টাচ টার্গেট একদম উপরে ডানদিকে নিয়ে যাওয়া হয়েছে। এখানে ট্যাপ করুন।</translation>
 <translation id="1266864766717917324"><ph name="CONTENT_TYPE" /> শেয়ার করা যায়নি</translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">টেক্সটটি ছোট ছোট ভাগে ভাগ করে পাঠানোর চেষ্টা করুন।</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">বাঁ থেকে ডান</translation>
 <translation id="1383876407941801731">খুঁজুন</translation>
@@ -38,7 +37,6 @@
 <translation id="1901303067676059328">&amp;সকল বেছে নিন</translation>
 <translation id="19085484004813472">এটি একটি নতুন ফিচার</translation>
 <translation id="2006524834898217237">এই ডিভাইস ইন্টারনেটে কানেক্ট করা আছে কিনা দেখে নিন।</translation>
-<translation id="208586643495776849">আবার চেষ্টা করুন</translation>
 <translation id="2111134541987263231"><ph name="BEGIN_BOLD" />ছদ্মবেশী মোডে অনুমতি দিন<ph name="END_BOLD" /> বিকল্প চালু করুন</translation>
 <translation id="2141853158323869627">{DAYS,plural, =1{১ দিন}one{# দিন}other{# দিন}}</translation>
 <translation id="2148716181193084225">আজ</translation>
@@ -85,7 +83,6 @@
 <translation id="3306688585798492231">আগে থেকেই তৈরি করা আভ্যন্তরীণ ডিসপ্লে</translation>
 <translation id="335581015389089642">স্পিচ</translation>
 <translation id="3372635229069101468"><ph name="BEGIN_BOLD" />বিবরণ<ph name="END_BOLD" /> বিকল্পে ক্লিক করুন</translation>
-<translation id="3389286852084373014">টেক্সটটি অনেক বড়</translation>
 <translation id="3406306243914553062">HTML কন্টেন্ট</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{১ দিন বাকি}one{# দিন বাকি}other{# দিন বাকি}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> ফাইল</translation>
@@ -128,7 +125,6 @@
 <translation id="5046499563572181734">এখানে আলতো চাপুন</translation>
 <translation id="5076340679995252485">&amp;পেস্ট করুন</translation>
 <translation id="520299402983819650"><ph name="QUANTITY" /> PB</translation>
-<translation id="5278860589123563674">পাঠানো যায়নি</translation>
 <translation id="5283101102242354279">ছদ্মবেশী মোডে এক্সটেনশনটি চালু করুন:</translation>
 <translation id="528468243742722775">শেষ</translation>
 <translation id="5329858601952122676">&amp;মুছুন</translation>

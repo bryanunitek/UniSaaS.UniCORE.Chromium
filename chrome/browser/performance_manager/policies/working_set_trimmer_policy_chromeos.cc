@@ -136,7 +136,7 @@ WorkingSetTrimmerPolicyChromeOS::~WorkingSetTrimmerPolicyChromeOS() = default;
 // have been backgrounded for some period of time and have not been trimmed for
 // at least the backoff period.
 void WorkingSetTrimmerPolicyChromeOS::OnReleaseMemory() {
-  if (memory_limit() >= base::kNoMemoryPressureThreshold) {
+  if (memory_limit() >= base::MemoryLimit::NoPressureThreshold()) {
     return;
   }
 
@@ -181,7 +181,7 @@ void WorkingSetTrimmerPolicyChromeOS::OnReleaseMemory() {
     if (!last_arcvm_trim_ || (base::TimeTicks::Now() - *last_arcvm_trim_ >
                               params_.arcvm_trim_backoff_time)) {
       const bool is_critical =
-          memory_limit() <= base::kCriticalMemoryPressureThreshold;
+          memory_limit() <= base::MemoryLimit::CriticalPressureThreshold();
       TrimArcVmProcesses(is_critical);
     }
   }
@@ -207,7 +207,7 @@ void WorkingSetTrimmerPolicyChromeOS::TrimNodesOnGraph() {
         // now.
 
         // Check that we have a main frame.
-        const FrameNode* frame_node = page_node->GetMainFrameNode();
+        const FrameNode* frame_node = page_node->GetPrimaryMainFrameNode();
         if (!frame_node) {
           continue;
         }
@@ -514,8 +514,10 @@ void WorkingSetTrimmerPolicyChromeOS::OnPassedToGraph(Graph* graph) {
   constexpr base::MemoryConsumerTraits traits(
       // Trimming renderers and ARCVM can save hundreds of MBs.
       base::MemoryConsumerTraits::EstimatedMemoryUsage::kLarge,
-      // Requires walking the graph to find eligible nodes.
-      base::MemoryConsumerTraits::ReleaseMemoryCost::kRequiresTraversal,
+      // The trimmed memory isn't read. Only the performance manager graph is
+      // walked to pick which processes to trim, and many components access it
+      // frequently, so it's unlikely to be swapped out.
+      base::MemoryConsumerTraits::ReleaseMemoryDataAccess::kNone,
       // Trimming working sets does not lose user state.
       base::MemoryConsumerTraits::InformationRetention::kLossless,
       // Trimming processes is an asynchronous OS/VM operation.
@@ -524,7 +526,9 @@ void WorkingSetTrimmerPolicyChromeOS::OnPassedToGraph(Graph* graph) {
       // persists.
       base::MemoryConsumerTraits::IsStateful::kNo,
       // Frees memory in external processes, not in the Browser process.
-      base::MemoryConsumerTraits::InProcess::kNo);
+      base::MemoryConsumerTraits::InProcess::kNo,
+      // The OS compresses the trimmed pages into zram.
+      base::MemoryConsumerTraits::ReleaseMemoryCpuCost::kExpensive);
 
   memory_consumer_registration_.emplace("WorkingSetTrimmerPolicyChromeOS",
                                         traits, this);

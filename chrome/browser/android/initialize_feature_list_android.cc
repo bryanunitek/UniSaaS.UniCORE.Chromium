@@ -30,7 +30,8 @@ static void JNI_InitializeFeatureList_InitializeFeatureList(JNIEnv* env) {
   // The ThreadGroupProfiler client must be set before thread pool is created.
   base::ThreadGroupProfiler::SetClient(
       std::make_unique<ChromeThreadGroupProfilerClient>());
-  base::ThreadPoolInstance::Create("Browser");
+  base::ThreadPoolInstance::Create(
+      "Browser", base::ThreadPoolInstance::RecordLockContention::kEnabled);
   // No specified process type means this is the Browser process.
   base::allocator::PartitionAllocSupport::Get()->ReconfigureEarlyish("");
   // Register the TaskExecutor for posting task to the BrowserThreads. It is
@@ -45,6 +46,11 @@ static void JNI_InitializeFeatureList_InitializeFeatureList(JNIEnv* env) {
       std::make_unique<variations::VariationsNetworkClock>(
           chrome_feature_list_creator->network_time_tracker()));
   chrome_feature_list_creator->CreateFeatureList();
+
+  // Re-evaluate feature state now that FeatureList has been initialized, as
+  // the task executor was created before FeatureList and could not access
+  // Finch/field trial configurations.
+  content::PostFeatureListInit();
 
   // The FeatureList needs to be created before starting the ThreadPool.
   content::StartThreadPool();

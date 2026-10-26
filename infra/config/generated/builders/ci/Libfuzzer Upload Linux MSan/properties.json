@@ -27,6 +27,9 @@
                 "target_platform": "linux"
               },
               "legacy_gclient_config": {
+                "apply_configs": [
+                  "checkout_instrumented_libraries"
+                ],
                 "config": "chromium"
               }
             }
@@ -61,6 +64,7 @@
       "v.test_suite"
     ]
   },
+  "archive_path": "linux-release-msan/libfuzzer-linux-release",
   "archive_schema_version": 1,
   "builder_group": "chromium.fuzz",
   "gardener_rotations": [
@@ -70,6 +74,5 @@
   "sheriff_rotations": [
     "chromium"
   ],
-  "upload_bucket": "chromium-browser-libfuzzer",
-  "upload_directory": "msan"
+  "upload_bucket": "chromium-browser-libfuzzer"
 }

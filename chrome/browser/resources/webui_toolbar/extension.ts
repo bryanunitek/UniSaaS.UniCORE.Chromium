@@ -5,16 +5,42 @@
 import '//resources/cr_elements/cr_button/cr_button.js';
 import '/shared/icon_from_table.js';
 
+import type {CrButtonElement} from '//resources/cr_elements/cr_button/cr_button.js';
+import {TrackedElementManager} from '//resources/js/tracked_element/tracked_element_manager.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import type {ExtensionActionInfo} from '/shared/extensions_bar_data_model.mojom-webui.js';
+import {getContextMenuSourceType, setHasHelpBubble} from '/shared/toolbar_button.js';
+import type {OverflowMenuItem} from '/shared/toolbar_ui_api.mojom-webui.js';
 
 import {BrowserProxyImpl} from './browser_proxy.js';
+import {getCss} from './extension.css.js';
 import {getHtml} from './extension.html.js';
-import {getCss} from './toolbar_button.css.js';
-import {getContextMenuSourceType, HelpBubbleAnchorMixin, setHasHelpBubble} from './toolbar_button.js';
+import {OverflowableToolbarActionMixin} from './overflowable_toolbar_action_mixin.js';
+import {ToolbarActionMixin} from './toolbar_action_mixin.js';
 
-const ExtensionElementBase = HelpBubbleAnchorMixin(CrLitElement);
+const initialState: ExtensionActionInfo = {
+  id: '',
+  accessibleName: '',
+  tooltip: '',
+  isVisible: false,
+  forceVisible: false,
+  icon: {handleId: 0n},
+  isPinnedByDefaultIphAnchor: false,
+};
+
+// Help bubble anchor for the "extension pinned by default" IPH. Registered in
+// addition to the primary element ID, only while the browser requests it.
+const PINNED_BY_DEFAULT_IPH_ELEMENT_ID = 'kExtensionsPinnedByDefaultElementId';
+
+const ExtensionElementBase = OverflowableToolbarActionMixin(
+    ToolbarActionMixin(CrLitElement, initialState));
+
+export interface ExtensionElement {
+  $: {
+    button: CrButtonElement,
+  };
+}
 
 export class ExtensionElement extends ExtensionElementBase {
   static get is() {
@@ -29,91 +55,95 @@ export class ExtensionElement extends ExtensionElementBase {
     return getHtml.bind(this)();
   }
 
-  static override get properties() {
-    return {
-      ...super.properties,
-      state: {type: Object},
-      trackedHighlighted: {type: Boolean},
-    };
-  }
-
-  accessor state: ExtensionActionInfo = {
-    id: '',
-    accessibleName: '',
-    tooltip: '',
-    isVisible: false,
-    icon: {handleId: 0n},
-  };
-
   private browserProxy_ = BrowserProxyImpl.getInstance();
-  private registerHelpBubbleController_: AbortController|null = null;
+  private isPinnedByDefaultIphAnchorRegistered_: boolean = false;
 
-  protected accessor trackedHighlighted: boolean = false;
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    if (this.registerHelpBubbleController_) {
-      this.registerHelpBubbleController_.abort();
-      this.registerHelpBubbleController_ = null;
+  override connectedCallback() {
+    super.connectedCallback();
+    // On the first connection, updated() registers the anchor after the initial
+    // render. On later reconnections (e.g. after being moved in the DOM), there
+    // may be no update, so re-register here.
+    if (this.hasUpdated) {
+      this.updatePinnedByDefaultIphAnchorRegistration_();
     }
   }
 
-  private getElementId(id: string): string {
-    return id === '' ? 'kExtensionsMenuButtonElementId' :
-                       'kToolbarActionViewElementId';
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    // HelpBubbleMixin unregisters all help bubbles on disconnect.
+    this.isPinnedByDefaultIphAnchorRegistered_ = false;
+  }
+
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
+
+    if (changedProperties.has('state') ||
+        changedProperties.has('trackedHighlighted')) {
+      // Actions the browser forces to be visible (see
+      // ExtensionActionInfo::force_visible), e.g., the extensions menu button,
+      // popped out actions, the pinned-by-default IPH anchor, and actions with
+      // open context menus or anchored bubbles, must not be hidden due to
+      // overflow, since the browser may be waiting for them to be shown so it
+      // can anchor something to them. Highlighted actions (e.g., for an IPH
+      // anchored to the button itself) also shouldn't be hidden.
+      this.preventOverflow = this.state.forceVisible || this.trackedHighlighted;
+    }
   }
 
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
-
     if (changedProperties.has('state')) {
-      const oldState = changedProperties.get('state');
-      if (oldState?.id !== this.state.id) {
-        if (this.registerHelpBubbleController_) {
-          this.registerHelpBubbleController_.abort();
-          this.registerHelpBubbleController_ = null;
-        }
-        if (oldState !== undefined) {
-          this.unregisterHelpBubble(this.getElementId(oldState.id));
-        }
-        this.registerHelpBubble_(this.getElementId(this.state.id));
-      }
+      this.updatePinnedByDefaultIphAnchorRegistration_();
+    }
+    if (changedProperties.has('hasHelpBubble')) {
+      // The pulsing highlight in help_bubble_anchor.css is keyed off of the
+      // host having the help-anchor-highlight class. HelpBubbleController only
+      // adds that class to the anchor element, which for the pinned-by-default
+      // IPH is the inner button, so mirror it onto the host.
+      this.classList.toggle('help-anchor-highlight', this.hasHelpBubble);
     }
   }
 
-  private async registerHelpBubble_(newId: string) {
-    this.registerHelpBubbleController_ = new AbortController();
-    const signal = this.registerHelpBubbleController_.signal;
-
-    const animations = this.getAnimations().filter(anim => {
-      const timing = anim.effect?.getTiming();
-      // Ignore infinite animations (e.g. pulsing for IPH).
-      return timing?.iterations !== Infinity && timing?.duration !== Infinity;
-    });
-
-    // Wait for any animations to complete, so button is in final location.
-    if (animations.length > 0) {
-      try {
-        await Promise.all(animations.map(a => a.finished));
-      } catch (e) {
-        // Ignore animation cancellation.
-      }
+  private updatePinnedByDefaultIphAnchorRegistration_() {
+    const shouldRegister =
+        this.isConnected && this.state.isPinnedByDefaultIphAnchor;
+    if (shouldRegister === this.isPinnedByDefaultIphAnchorRegistered_) {
+      return;
     }
-
-    if (!signal.aborted) {
-      this.registerHelpBubble(newId, this, {
-        secondaryId: 'ext:' + this.state.id,
-        onHighlightChanged: (highlighted: boolean) => {
-          this.trackedHighlighted = highlighted;
-        },
+    if (shouldRegister) {
+      // TrackedElementManager tracks a single identifier per element, and this
+      // element is already tracked as kToolbarActionViewElementId, so anchor to
+      // the inner button instead.
+      this.registerHelpBubble(PINNED_BY_DEFAULT_IPH_ELEMENT_ID, this.$.button, {
+        secondaryId: this.getSecondaryElementId(),
         onHelpBubbleShown: () => setHasHelpBubble(this, true),
         onHelpBubbleHidden: () => setHasHelpBubble(this, false),
       });
-      this.registerHelpBubbleController_ = null;
+    } else {
+      this.unregisterHelpBubble(PINNED_BY_DEFAULT_IPH_ELEMENT_ID);
     }
+    this.isPinnedByDefaultIphAnchorRegistered_ = shouldRegister;
   }
 
-  protected onClick_() {
+  // Extensions are hidden on overflow, but not added to the overflow menu.
+  override getOverflowMenuItem(): OverflowMenuItem|null {
+    return null;
+  }
+
+  override getElementId(state: ExtensionActionInfo): string {
+    return state.id === '' ? 'kExtensionsMenuButtonElementId' :
+                             'kToolbarActionViewElementId';
+  }
+
+  override getSecondaryElementId(): string {
+    return 'ext:' + this.state.id;
+  }
+
+  protected onClick_(e: PointerEvent) {
+    if (this.highlightTracker.shouldSkipClick(e)) {
+      return;
+    }
+    TrackedElementManager.getInstance().notifyElementActivated(this);
     this.browserProxy_.toolbarUIHandler.executeExtensionAction(this.state.id);
   }
 
@@ -121,6 +151,23 @@ export class ExtensionElement extends ExtensionElementBase {
     e.preventDefault();
     this.browserProxy_.toolbarUIHandler.showExtensionContextMenu(
         this.state.id, getContextMenuSourceType(e));
+  }
+
+  override getMimeType() {
+    return 'application/x-webui-extension-action';
+  }
+
+  override getItemId() {
+    return this.state.id;
+  }
+
+  override isDraggable() {
+    return this.state.id !== '';
+  }
+
+  override moveItemBy(delta: number) {
+    this.browserProxy_.toolbarUIHandler.moveExtensionActionBy(
+        this.state.id, delta);
   }
 }
 

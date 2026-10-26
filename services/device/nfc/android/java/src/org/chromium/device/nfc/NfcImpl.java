@@ -116,10 +116,14 @@ public class NfcImpl implements Nfc {
     /** Last time in milliseconds when a Tag was discovered. */
     private long mTagDiscoveredLastTimeMs = -1;
 
-    public NfcImpl(int hostId, NfcDelegate delegate, InterfaceRequest<Nfc> request) {
+    public NfcImpl(
+            int hostId,
+            NfcDelegate delegate,
+            InterfaceRequest<Nfc> request,
+            boolean operationsSuspended) {
         mHostId = hostId;
         mDelegate = delegate;
-        mOperationsSuspended = false;
+        mOperationsSuspended = operationsSuspended;
 
         // |request| may be null in tests.
         if (request != null) {
@@ -326,7 +330,7 @@ public class NfcImpl implements Nfc {
     @Override
     public void cancelWatch(int id) {
         if (mWatchIds.contains(id)) {
-            mWatchIds.remove(mWatchIds.indexOf(id));
+            mWatchIds.remove(/* element */ Integer.valueOf(id));
             disableReaderModeIfNeeded();
         }
     }
@@ -430,6 +434,9 @@ public class NfcImpl implements Nfc {
      * Implementation of android.nfc.NfcAdapter.ReaderCallback. Callback is called when NFC tag is
      * discovered, Tag object is delegated to mojo service implementation method
      * NfcImpl.onTagDiscovered().
+     *
+     * <p>This is used by the background thread, we must ensure that requests are routed back to the
+     * UI thread.
      */
     private static class ReaderCallbackHandler implements ReaderCallback {
         private final NfcImpl mNfcImpl;
@@ -440,7 +447,12 @@ public class NfcImpl implements Nfc {
 
         @Override
         public void onTagDiscovered(Tag tag) {
-            mNfcImpl.onTagDiscovered(tag);
+            // Route back to UI thread.
+            PostTask.postTask(
+                    TaskTraits.UI_DEFAULT,
+                    () -> {
+                        mNfcImpl.onTagDiscovered(tag);
+                    });
         }
     }
 
@@ -455,10 +467,16 @@ public class NfcImpl implements Nfc {
 
     /**
      * Enables reader mode, allowing NFC device to read / write / make read-only NFC tags.
+     *
      * @see android.nfc.NfcAdapter#enableReaderMode
      */
     private void enableReaderModeIfNeeded() {
-        if (mReaderCallbackHandler != null || mActivity == null || mNfcAdapter == null) return;
+        if (mOperationsSuspended
+                || mReaderCallbackHandler != null
+                || mActivity == null
+                || mNfcAdapter == null) {
+            return;
+        }
 
         if (!hasActiveOperations()) return;
 
@@ -731,5 +749,9 @@ public class NfcImpl implements Nfc {
         processPendingWatchOperations();
         processPendingPushOperation();
         processPendingMakeReadOnlyOperation();
+    }
+
+    boolean isOperationsSuspendedForTesting() {
+        return mOperationsSuspended;
     }
 }

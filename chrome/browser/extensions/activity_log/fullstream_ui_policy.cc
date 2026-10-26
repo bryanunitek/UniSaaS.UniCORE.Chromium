@@ -26,6 +26,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
+#include "content/public/browser/browser_thread.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/dom_action_types.h"
 #include "extensions/common/extension.h"
@@ -189,8 +190,7 @@ std::unique_ptr<Action::ActionVector> FullStreamUIPolicy::DoReadFilteredData(
   // Execute the query and get results.
   while (query.is_valid() && query.Step()) {
     auto action = base::MakeRefCounted<Action>(
-        query.ColumnString(0),
-        base::Time::FromInternalValue(query.ColumnInt64(1)),
+        query.ColumnString(0), query.ColumnTime(1),
         static_cast<Action::ActionType>(query.ColumnInt(2)),
         query.ColumnString(3), query.ColumnInt64(9));
 
@@ -350,19 +350,15 @@ void FullStreamUIPolicy::DoDeleteDatabase() {
 
   // Not wrapped in a transaction because the deletion should happen even if
   // the vacuuming fails.
-  sql::Statement statement(
-      db->GetCachedStatement(SQL_FROM_HERE, "DELETE FROM activitylog_full"));
-  if (!statement.Run()) {
+  if (sql::Statement statement(db->GetCachedStatement(
+          SQL_FROM_HERE, "DELETE FROM activitylog_full"));
+      !statement.Run()) {
     LOG(ERROR) << "Deleting the database failed: "
                << statement.GetSQLStatement();
     return;
   }
-  statement.Clear();
-  statement.Assign(db->GetCachedStatement(sql::StatementID(SQL_FROM_HERE),
-                                          "VACUUM"));
-  if (!statement.Run()) {
-    LOG(ERROR) << "Vacuuming the database failed: "
-               << statement.GetSQLStatement();
+  if (!db->Vacuum()) {
+    LOG(ERROR) << "Vacuuming the database failed.";
   }
 }
 

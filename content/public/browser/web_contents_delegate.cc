@@ -122,15 +122,21 @@ KeyboardEventProcessingResult WebContentsDelegate::PreHandleKeyboardEvent(
   return KeyboardEventProcessingResult::NOT_HANDLED;
 }
 
-bool WebContentsDelegate::HandleKeyboardEvent(
+bool WebContentsDelegate::PreHandleMouseEvent(
     WebContents* source,
-    const input::NativeWebKeyboardEvent& event) {
+    const blink::WebMouseEvent& event) {
   return false;
 }
 
 bool WebContentsDelegate::PreHandleGestureEvent(
     WebContents* source,
     const blink::WebGestureEvent& event) {
+  return false;
+}
+
+bool WebContentsDelegate::HandleKeyboardEvent(
+    WebContents* source,
+    const input::NativeWebKeyboardEvent& event) {
   return false;
 }
 
@@ -165,7 +171,7 @@ WebContents* WebContentsDelegate::CreateCustomWebContents(
     WindowOpenDisposition disposition,
     const blink::mojom::WindowFeatures& window_features,
     const StoragePartitionConfig& partition_config,
-    SessionStorageNamespace* session_storage_namespace) {
+    SessionStorageNamespaceHandle* session_storage_namespace) {
   return nullptr;
 }
 
@@ -182,6 +188,10 @@ void WebContentsDelegate::CreateSmsPrompt(
     base::OnceCallback<void()> on_cancel) {}
 
 bool WebContentsDelegate::GetCanResize() {
+  return false;
+}
+
+bool WebContentsDelegate::GetIsAlwaysOnTopPopup() {
   return false;
 }
 
@@ -220,6 +230,11 @@ bool WebContentsDelegate::CanEnterFullscreenModeForTab(
 blink::mojom::DisplayMode WebContentsDelegate::GetDisplayMode(
     const WebContents* web_contents) {
   return blink::mojom::DisplayMode::kBrowser;
+}
+
+blink::mojom::ApplicationContext WebContentsDelegate::GetApplicationContext(
+    const WebContents* web_contents) {
+  return blink::mojom::ApplicationContext::kNone;
 }
 
 blink::ProtocolHandlerSecurityLevel
@@ -336,13 +351,18 @@ WebContentsDelegate::~WebContentsDelegate() {
   DCHECK(attached_contents_.empty());
 }
 
+void WebContentsDelegate::OnAttached(WebContents* contents) {}
+void WebContentsDelegate::OnDetaching(WebContents* contents) {}
+
 void WebContentsDelegate::Attach(WebContents* web_contents) {
   DCHECK(!attached_contents_.contains(web_contents));
   attached_contents_.insert(web_contents);
+  OnAttached(web_contents);
 }
 
 void WebContentsDelegate::Detach(WebContents* web_contents) {
   DCHECK(attached_contents_.contains(web_contents));
+  OnDetaching(web_contents);
   attached_contents_.erase(web_contents);
 }
 
@@ -472,8 +492,10 @@ bool WebContentsDelegate::MaybeCopyContentAreaAsBitmap(
 void WebContentsDelegate::GetAIPageContent(
     WebContents* web_contents,
     bool include_actionable_elements,
-    base::OnceCallback<void(const std::string&)> callback) {
-  std::move(callback).Run(std::string());
+    base::OnceCallback<void(base::expected<std::string, std::string>)>
+        callback) {
+  std::move(callback).Run(base::unexpected(
+      "Annotated page content is not available for this browser target."));
 }
 
 bool WebContentsDelegate::IsWaitingForPointerLockPrompt(

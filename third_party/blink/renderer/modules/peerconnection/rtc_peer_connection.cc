@@ -31,40 +31,50 @@
 #include "third_party/blink/renderer/modules/peerconnection/rtc_peer_connection.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
-#include "base/compiler_specific.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/containers/to_vector.h"
-#include "base/feature_list.h"
 #include "base/lazy_instance.h"
-#include "base/memory/ptr_util.h"
+#include "base/location.h"
+#include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/buildflag.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/network/public/cpp/connection_allowlist.h"
-#include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
+#include "third_party/blink/public/platform/web_crypto_algorithm.h"
 #include "third_party/blink/public/platform/web_crypto_algorithm_params.h"
+#include "third_party/blink/public/web/web_frame.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/core/v8/dictionary.h"
+#include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_connection_allowlist_disposition.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_object_string.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_string_stringsequence.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_void_function.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_media_stream_track.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_answer_options.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_bundle_policy.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_certificate.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_configuration.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_data_channel_init.h"
@@ -73,26 +83,34 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_connection_state.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_gathering_state.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_server.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_transport_policy.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_offer_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_peer_connection_error_callback.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_peer_connection_state.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_rtcp_mux_policy.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_rtp_header_encryption_policy.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_rtp_transceiver_direction.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_rtp_transceiver_init.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_sdp_type.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_session_description_callback.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_session_description_init.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_signaling_state.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_typedefs.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_union_mediastreamtrack_string.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/dom/dom_time_stamp.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/frame/connection_allowlist_violation_report_body.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
-#include "third_party/blink/renderer/modules/crypto/crypto_result_impl.h"
+#include "third_party/blink/renderer/modules/crypto/normalize_algorithm.h"
 #include "third_party/blink/renderer/modules/mediastream/media_constraints_impl.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_event.h"
@@ -120,32 +138,61 @@
 #include "third_party/blink/renderer/modules/peerconnection/rtc_track_event.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_void_request_impl.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_void_request_promise_impl.h"
+#include "third_party/blink/renderer/modules/peerconnection/rtp_contributing_source_cache.h"
 #include "third_party/blink/renderer/modules/peerconnection/web_rtc_stats_report_callback_resolver.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/bindings/v8_throw_exception.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/cross_thread_persistent.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/instrumentation/instance_counters.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_component.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_descriptor.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_answer_options_platform.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_ice_candidate_platform.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_offer_options_platform.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_peer_connection_handler_client.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_receiver_platform.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_sender_platform.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_transceiver_platform.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_session_description_request.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_stats.h"
-#include "third_party/blink/renderer/platform/peerconnection/rtc_void_request.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/public/event_loop.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cancellable_task.h"
 #include "third_party/blink/renderer/platform/scheduler/public/scheduling_policy.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
+#include "third_party/blink/renderer/platform/weborigin/reporting_disposition.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_view.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
+#include "third_party/webrtc/api/crypto/crypto_options.h"
 #include "third_party/webrtc/api/data_channel_interface.h"
 #include "third_party/webrtc/api/dtls_transport_interface.h"
-#include "third_party/webrtc/api/jsep.h"
+#include "third_party/webrtc/api/media_stream_interface.h"
 #include "third_party/webrtc/api/peer_connection_interface.h"
 #include "third_party/webrtc/api/priority.h"
+#include "third_party/webrtc/api/rtc_error.h"
+#include "third_party/webrtc/api/rtp_transceiver_interface.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
+#include "third_party/webrtc/api/transport/enums.h"
+#include "third_party/webrtc/rtc_base/rtc_certificate.h"
 #include "third_party/webrtc/rtc_base/ssl_identity.h"
+#include "v8/include/v8-local-handle.h"
+#include "v8/include/v8-value.h"
 
 namespace blink {
 
@@ -283,6 +330,23 @@ bool IsValidTurnURL(const KURL& url) {
   return true;
 }
 
+// Determines if the current context disallows WebRTC. Corresponds to the
+// algorithm in https://www.w3.org/TR/CSP3/#should-block-rtc-connection.
+bool AreIceCandidatesAdministrativelyProhibited(ExecutionContext* context) {
+  const network::ConnectionAllowlists& connection_allowlists =
+      context->GetPolicyContainer()->GetPolicies().connection_allowlists;
+
+  bool blocked_by_connection_allowlist =
+      connection_allowlists.enforced.has_value() &&
+      connection_allowlists.enforced->webrtc_behavior ==
+          network::ConnectionAllowlist::WebRtcBehavior::kBlock;
+  if (blocked_by_connection_allowlist) {
+    return true;
+  }
+
+  return false;
+}
+
 webrtc::PeerConnectionInterface::RTCConfiguration ParseConfiguration(
     ExecutionContext* context,
     const RTCConfiguration* configuration,
@@ -338,65 +402,70 @@ webrtc::PeerConnectionInterface::RTCConfiguration ParseConfiguration(
     }
   }
 
-  std::vector<webrtc::PeerConnectionInterface::IceServer>& ice_servers =
-      web_configuration.servers;
-  for (const RTCIceServer* ice_server : configuration->iceServers()) {
-    Vector<String> url_strings;
-    std::vector<std::string> converted_urls;
-    if (ice_server->hasUrls()) {
-      UseCounter::Count(context, WebFeature::kRTCIceServerURLs);
-      switch (ice_server->urls()->GetContentType()) {
-        case V8UnionStringOrStringSequence::ContentType::kString:
-          url_strings.push_back(ice_server->urls()->GetAsString());
-          break;
-        case V8UnionStringOrStringSequence::ContentType::kStringSequence:
-          url_strings = ice_server->urls()->GetAsStringSequence();
-          break;
-      }
-    } else if (ice_server->hasUrl()) {
-      UseCounter::Count(context, WebFeature::kRTCIceServerURL);
-      url_strings.push_back(ice_server->url());
-    } else {
-      exception_state->ThrowTypeError("Malformed RTCIceServer");
-      return {};
-    }
-
-    for (const String& url_string : url_strings) {
-      KURL url(NullUrl(), url_string);
-      if (!url.IsValid()) {
-        exception_state->ThrowDOMException(
-            DOMExceptionCode::kSyntaxError,
-            StrCat({"'", url_string, "' is not a valid URL."}));
+  // If RTC connections are blocked globally, communication with all ICE servers
+  // should be also blocked. The simplest way to accomplish this is to filter
+  // them all out before they reach the native layer.
+  if (!AreIceCandidatesAdministrativelyProhibited(context)) {
+    std::vector<webrtc::PeerConnectionInterface::IceServer>& ice_servers =
+        web_configuration.servers;
+    for (const RTCIceServer* ice_server : configuration->iceServers()) {
+      Vector<String> url_strings;
+      std::vector<std::string> converted_urls;
+      if (ice_server->hasUrls()) {
+        UseCounter::Count(context, WebFeature::kRTCIceServerURLs);
+        switch (ice_server->urls()->GetContentType()) {
+          case V8UnionStringOrStringSequence::ContentType::kString:
+            url_strings.push_back(ice_server->urls()->GetAsString());
+            break;
+          case V8UnionStringOrStringSequence::ContentType::kStringSequence:
+            url_strings = ice_server->urls()->GetAsStringSequence();
+            break;
+        }
+      } else if (ice_server->hasUrl()) {
+        UseCounter::Count(context, WebFeature::kRTCIceServerURL);
+        url_strings.push_back(ice_server->url());
+      } else {
+        exception_state->ThrowTypeError("Malformed RTCIceServer");
         return {};
       }
-      bool is_valid_turn = IsValidTurnURL(url);
-      if (!is_valid_turn && !IsValidStunURL(url)) {
-        exception_state->ThrowDOMException(
-            DOMExceptionCode::kSyntaxError,
-            StrCat({"'", url_string, "' is not a valid stun or turn URL."}));
-        return {};
-      }
-      if (is_valid_turn &&
-          (!ice_server->hasUsername() || !ice_server->hasCredential())) {
-        exception_state->ThrowDOMException(
-            DOMExceptionCode::kInvalidAccessError,
-            "Both username and credential are "
-            "required when the URL scheme is "
-            "\"turn\" or \"turns\".");
+
+      for (const String& url_string : url_strings) {
+        KURL url(NullUrl(), url_string);
+        if (!url.IsValid()) {
+          exception_state->ThrowDOMException(
+              DOMExceptionCode::kSyntaxError,
+              StrCat({"'", url_string, "' is not a valid URL."}));
+          return {};
+        }
+        bool is_valid_turn = IsValidTurnURL(url);
+        if (!is_valid_turn && !IsValidStunURL(url)) {
+          exception_state->ThrowDOMException(
+              DOMExceptionCode::kSyntaxError,
+              StrCat({"'", url_string, "' is not a valid stun or turn URL."}));
+          return {};
+        }
+        if (is_valid_turn &&
+            (!ice_server->hasUsername() || !ice_server->hasCredential())) {
+          exception_state->ThrowDOMException(
+              DOMExceptionCode::kInvalidAccessError,
+              "Both username and credential are "
+              "required when the URL scheme is "
+              "\"turn\" or \"turns\".");
+        }
+
+        converted_urls.push_back(String(url).Utf8());
       }
 
-      converted_urls.push_back(String(url).Utf8());
+      auto converted_ice_server = webrtc::PeerConnectionInterface::IceServer();
+      converted_ice_server.urls = std::move(converted_urls);
+      if (ice_server->hasUsername()) {
+        converted_ice_server.username = ice_server->username().Utf8();
+      }
+      if (ice_server->hasCredential()) {
+        converted_ice_server.password = ice_server->credential().Utf8();
+      }
+      ice_servers.emplace_back(std::move(converted_ice_server));
     }
-
-    auto converted_ice_server = webrtc::PeerConnectionInterface::IceServer();
-    converted_ice_server.urls = std::move(converted_urls);
-    if (ice_server->hasUsername()) {
-      converted_ice_server.username = ice_server->username().Utf8();
-    }
-    if (ice_server->hasCredential()) {
-      converted_ice_server.password = ice_server->credential().Utf8();
-    }
-    ice_servers.emplace_back(std::move(converted_ice_server));
   }
 
   web_configuration.certificates = base::ToVector(
@@ -562,8 +631,7 @@ void MeasureGenerateCertificateKeyType(
     }
   }
   UMA_HISTOGRAM_ENUMERATION(
-      "WebRTC.PeerConnection.GenerateCertificate.Algorithms", bucket,
-      GenerateCertificateAlgorithms::kMaxValue);
+      "WebRTC.PeerConnection.GenerateCertificate.Algorithms", bucket);
 }
 
 bool IsSignalingStateAllowedForType(
@@ -703,6 +771,11 @@ RTCPeerConnection::RTCPeerConnection(
       encoded_insertable_streams_(encoded_insertable_streams) {
   LocalDOMWindow* window = To<LocalDOMWindow>(context);
 
+  if (AreIceCandidatesAdministrativelyProhibited(context)) {
+    are_ice_candidates_administratively_prohibited_ = true;
+  }
+  MaybeReportConnectionAllowlistViolation(context);
+
   InstanceCounters::IncrementCounter(
       InstanceCounters::kRTCPeerConnectionCounter);
   // If we fail, set |m_closed| and |m_stopped| to true, to avoid hitting the
@@ -728,42 +801,12 @@ RTCPeerConnection::RTCPeerConnection(
     return;
   }
 
-  // WebRTC peer connections are not allowed in documents when blocked by the
-  // Connection-Allowlist header.
-  const auto& policy_container_policies =
-      context->GetPolicyContainer()->GetPolicies();
-
-  bool blocked_by_connection_allowlist_report_only =
-      policy_container_policies.connection_allowlists.report_only.has_value() &&
-      policy_container_policies.connection_allowlists.report_only
-              ->webrtc_behavior ==
-          network::ConnectionAllowlist::WebRtcBehavior::kBlock;
-  if (blocked_by_connection_allowlist_report_only) {
-    ConnectionAllowlistViolationReportBody::QueueWebRTCReport(
-        V8ConnectionAllowlistDisposition::Enum::kReport, *context);
-  }
-
-  bool blocked_by_connection_allowlist =
-      policy_container_policies.connection_allowlists.enforced.has_value() &&
-      policy_container_policies.connection_allowlists.enforced
-              ->webrtc_behavior ==
-          network::ConnectionAllowlist::WebRtcBehavior::kBlock;
-  if (blocked_by_connection_allowlist) {
-    base::UmaHistogramBoolean(
-        "WebRTC.PeerConnection.BlockedByConnectionAllowlist", true);
-    ConnectionAllowlistViolationReportBody::QueueWebRTCReport(
-        V8ConnectionAllowlistDisposition::Enum::kEnforce, *context);
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kNotAllowedError,
-        "RTCPeerConnection construction is disallowed by the "
-        "\"Connection-Allowlist\" header.");
-    return;
-  }
-
   // Tests might need a custom RtcPeerConnectionHandler implementation.
   PeerConnectionDependencyFactory& dependency_factory =
       PeerConnectionDependencyFactory::From(*context);
-  if (!g_create_rpc_peer_connection_handler_callback_.Get().is_null()) {
+  bool is_test_path =
+      !g_create_rpc_peer_connection_handler_callback_.Get().is_null();
+  if (is_test_path) {
     peer_handler_ =
         std::move(g_create_rpc_peer_connection_handler_callback_.Get()).Run();
   } else {
@@ -787,15 +830,17 @@ RTCPeerConnection::RTCPeerConnection(
     return;
   }
   // After Initialize() with a real `peer_handler_`, WebRTC threads exist.
-  scoped_refptr<base::SingleThreadTaskRunner> worker_thread =
-      dependency_factory.GetWebRtcWorkerTaskRunner();
-  if (!worker_thread) {
+  scoped_refptr<base::SingleThreadTaskRunner> signaling_thread;
+  if (is_test_path) {
     // This path is only used in some unit test environments with a fake
     // `peer_handler_` that does not ensure WebRTC threads exist.
-    worker_thread =
+    signaling_thread =
         base::ThreadPool::CreateSingleThreadTaskRunner({base::MayBlock()});
+  } else {
+    signaling_thread = dependency_factory.GetWebRtcSignalingTaskRunner();
+    CHECK(signaling_thread);
   }
-  rtp_contributing_source_cache_.emplace(this, std::move(worker_thread));
+  rtp_contributing_source_cache_.emplace(this, std::move(signaling_thread));
   // The RTCPeerConnection was successfully constructed.
   closed_ = false;
   peer_handler_unregistered_ = false;
@@ -1444,14 +1489,14 @@ RTCConfiguration* RTCPeerConnection::getConfiguration(
     url_vector.reserve(
         base::checked_cast<wtf_size_t>(webrtc_server.urls.size()));
     for (const auto& url : webrtc_server.urls) {
-      url_vector.emplace_back(url.c_str());
+      url_vector.emplace_back(url);
     }
     auto* urls = MakeGarbageCollected<V8UnionStringOrStringSequence>(
         std::move(url_vector));
 
     ice_server->setUrls(urls);
-    ice_server->setUsername(webrtc_server.username.c_str());
-    ice_server->setCredential(webrtc_server.password.c_str());
+    ice_server->setUsername(String(webrtc_server.username));
+    ice_server->setCredential(String(webrtc_server.password));
     ice_servers.push_back(ice_server);
   }
   result->setIceServers(ice_servers);
@@ -1711,6 +1756,12 @@ ScriptPromise<IDLUndefined> RTCPeerConnection::addIceCandidate(
 
   DisableBackForwardCache(GetExecutionContext());
 
+  // If WebRTC is blocked globally, all candidates are "administratively
+  // prohibited" per spec, so we skip adding them.
+  if (are_ice_candidates_administratively_prohibited_) {
+    return EmptyPromise();
+  }
+
   auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
       script_state, exception_state.GetContext());
   auto promise = resolver->Promise();
@@ -1870,7 +1921,7 @@ std::optional<bool> RTCPeerConnection::canTrickleIceCandidates() const {
 }
 
 void RTCPeerConnection::restartIce() {
-  if (closed_) {
+  if (closed_ || are_ice_candidates_administratively_prohibited_) {
     return;
   }
   peer_handler_->RestartIce();
@@ -2213,7 +2264,7 @@ RTCDataChannel* RTCPeerConnection::createDataChannel(
   }
   init.protocol = data_channel_dict->protocol().Utf8();
   init.negotiated = data_channel_dict->negotiated();
-  if (data_channel_dict->hasId()) {
+  if (init.negotiated && data_channel_dict->hasId()) {
     init.id = data_channel_dict->id();
   }
   if (data_channel_dict->hasPriority()) {
@@ -2768,10 +2819,9 @@ void RTCPeerConnection::DidModifyTransceivers(
 
   // Fire "pc.ontrack" synchronously.
   for (auto& transceiver : track_events) {
-    auto* track_event = MakeGarbageCollected<RTCTrackEvent>(
+    MaybeDispatchEvent(MakeGarbageCollected<RTCTrackEvent>(
         transceiver->receiver(), transceiver->receiver()->track(),
-        transceiver->receiver()->streams(), transceiver);
-    MaybeDispatchEvent(track_event);
+        transceiver->receiver()->streams(), transceiver));
   }
 
   // Transceiver modifications can cause changes in the set of ICE
@@ -2965,7 +3015,8 @@ RTCPeerConnection::ComputeIceConnectionState() {
   if (closed_) {
     return webrtc::PeerConnectionInterface::kIceConnectionClosed;
   }
-  if (HasAnyFailedIceTransport()) {
+  if (are_ice_candidates_administratively_prohibited_ ||
+      HasAnyFailedIceTransport()) {
     return webrtc::PeerConnectionInterface::kIceConnectionFailed;
   }
   if (HasAnyDisconnectedIceTransport()) {
@@ -3049,6 +3100,12 @@ bool RTCPeerConnection::HasAllConnectedCompletedOrClosedIceTransports() const {
 void RTCPeerConnection::ChangePeerConnectionState(
     webrtc::PeerConnectionInterface::PeerConnectionState
         peer_connection_state) {
+  if (are_ice_candidates_administratively_prohibited_ &&
+      peer_connection_state !=
+          webrtc::PeerConnectionInterface::PeerConnectionState::kClosed) {
+    peer_connection_state =
+        webrtc::PeerConnectionInterface::PeerConnectionState::kFailed;
+  }
   if (peer_connection_state_ !=
       webrtc::PeerConnectionInterface::PeerConnectionState::kClosed) {
     ScheduleDispatchEvent(
@@ -3102,8 +3159,8 @@ void RTCPeerConnection::CloseInternal() {
   if (sctp_transport_) {
     sctp_transport_->Close();
   }
-  // Since Close() can trigger JS-level callbacks, iterate over a copy
-  // of the transports list.
+  // Closing a transport can invalidate its weak map entry, so iterate over a
+  // copy of the transports list.
   auto dtls_transports_copy = dtls_transports_by_native_transport_;
   for (auto& dtls_transport_iter : dtls_transports_copy) {
     // Since "value" is a WeakPtr, check if it's still valid.
@@ -3238,6 +3295,28 @@ void RTCPeerConnection::DisableBackForwardCache(ExecutionContext* context) {
   window->GetFrame()->GetFrameScheduler()->RegisterStickyFeature(
       SchedulingPolicy::Feature::kWebRTCSticky,
       SchedulingPolicy{SchedulingPolicy::DisableBackForwardCache()});
+}
+
+void RTCPeerConnection::MaybeReportConnectionAllowlistViolation(
+    ExecutionContext* context) {
+  const network::ConnectionAllowlists& connection_allowlists =
+      context->GetPolicyContainer()->GetPolicies().connection_allowlists;
+
+  bool blocked_by_connection_allowlist_report_only =
+      connection_allowlists.report_only.has_value() &&
+      connection_allowlists.report_only->webrtc_behavior ==
+          network::ConnectionAllowlist::WebRtcBehavior::kBlock;
+  if (blocked_by_connection_allowlist_report_only) {
+    ConnectionAllowlistViolationReportBody::QueueWebRTCReport(
+        V8ConnectionAllowlistDisposition::Enum::kReport, *context);
+  }
+
+  if (are_ice_candidates_administratively_prohibited_) {
+    ConnectionAllowlistViolationReportBody::QueueWebRTCReport(
+        V8ConnectionAllowlistDisposition::Enum::kEnforce, *context);
+    base::UmaHistogramBoolean(
+        "WebRTC.PeerConnection.BlockedByConnectionAllowlist", true);
+  }
 }
 
 }  // namespace blink

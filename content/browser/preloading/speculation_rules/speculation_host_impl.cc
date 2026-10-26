@@ -73,6 +73,29 @@ bool CandidatesAreValid(
   return true;
 }
 
+// A renderer-selected candidate may only be enacted when the feature behind the
+// selecting `heuristic` is enabled, mirroring the browser-side gating in
+// AnchorElementInteractionHostImpl and PreloadingDecider. This stops a
+// compromised renderer from enacting via a disabled heuristic.
+bool HeuristicMayEnact(blink::mojom::SpeculationHeuristic heuristic) {
+  switch (heuristic) {
+    case blink::mojom::SpeculationHeuristic::kPointerDown:
+    case blink::mojom::SpeculationHeuristic::kPointerHover:
+      return true;
+    case blink::mojom::SpeculationHeuristic::kViewportModerate:
+      // The param mirrors
+      // PreloadingDecider::OnModerateViewportHeuristicTriggered, which only
+      // enacts candidates when it is set.
+      return base::FeatureList::IsEnabled(
+                 blink::features::kPreloadingModerateViewportHeuristics) &&
+             blink::features::
+                 kPreloadingModerateViewportHeuristicsEnactCandidates.Get();
+    case blink::mojom::SpeculationHeuristic::kViewportEager:
+      return base::FeatureList::IsEnabled(
+          blink::features::kPreloadingEagerViewportHeuristics);
+  }
+}
+
 }  // namespace
 
 // static
@@ -81,13 +104,14 @@ void SpeculationHostImpl::Bind(
     mojo::PendingReceiver<blink::mojom::SpeculationHost> receiver) {
   CHECK(frame_host);
   // DocumentService will destroy this on pipe closure or frame destruction.
-  new SpeculationHostImpl(*frame_host, std::move(receiver));
+  base::MakeSelfDeleting<SpeculationHostImpl>(*frame_host, std::move(receiver));
 }
 
 SpeculationHostImpl::SpeculationHostImpl(
     RenderFrameHost& frame_host,
-    mojo::PendingReceiver<blink::mojom::SpeculationHost> receiver)
-    : DocumentService(frame_host, std::move(receiver)) {}
+    mojo::PendingReceiver<blink::mojom::SpeculationHost> receiver,
+    base::SelfDeletingPassKey key)
+    : DocumentService(frame_host, std::move(receiver), key) {}
 
 SpeculationHostImpl::~SpeculationHostImpl() = default;
 
@@ -126,6 +150,54 @@ void SpeculationHostImpl::UpdateSpeculationCandidates(
       PreloadingDecider::GetOrCreateForCurrentDocument(&render_frame_host());
   preloading_decider->UpdateSpeculationCandidates(
       candidates, enable_cross_origin_prerender_iframes);
+}
+
+void SpeculationHostImpl::EnactCandidate(
+    blink::mojom::SpeculationCandidatePtr candidate,
+    blink::mojom::SpeculationHeuristic heuristic) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  // The heuristic that selected the candidate must have its browser-side
+  // feature (and enactment param) enabled.
+  if (!HeuristicMayEnact(heuristic)) {
+    mojo::ReportBadMessage("SH_ENACT_CANDIDATE_HEURISTIC_DISABLED");
+    return;
+  }
+
+  // Validate the candidate the same way as UpdateSpeculationCandidates. A
+  // compromised renderer must not be able to enact an invalid candidate.
+  std::vector<blink::mojom::SpeculationCandidatePtr> singleton;
+  singleton.push_back(std::move(candidate));
+  if (!CandidatesAreValid(singleton)) {
+    return;
+  }
+
+  // A pointer-hover selection must target a "moderate" or "eager" candidate
+  // (matching PreloadingDecider::OnPointerHover). A compromised renderer must
+  // not be able to enact a candidate with a different eagerness via the hover
+  // heuristic.
+  if (heuristic == blink::mojom::SpeculationHeuristic::kPointerHover) {
+    const blink::mojom::SpeculationEagerness eagerness =
+        singleton.front()->eagerness;
+    if (eagerness != blink::mojom::SpeculationEagerness::kModerate &&
+        eagerness != blink::mojom::SpeculationEagerness::kEager) {
+      mojo::ReportBadMessage("SH_ENACT_CANDIDATE_INVALID_HOVER_EAGERNESS");
+      return;
+    }
+  }
+
+  // Only handle messages from an active main frame.
+  // TODO(crbug.com/489033320): Validate with ValidateFrameState().
+  if (!render_frame_host().IsActive()) {
+    return;
+  }
+  if (render_frame_host().GetParent()) {
+    return;
+  }
+
+  auto* preloading_decider =
+      PreloadingDecider::GetOrCreateForCurrentDocument(&render_frame_host());
+  preloading_decider->EnactRendererSelectedCandidate(
+      std::move(singleton.front()), heuristic);
 }
 
 void SpeculationHostImpl::OnLCPPredicted() {

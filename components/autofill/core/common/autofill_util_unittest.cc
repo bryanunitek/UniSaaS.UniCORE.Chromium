@@ -10,7 +10,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace autofill {
@@ -148,6 +148,11 @@ TEST_F(AutofillUtilSelectTest, FindShortestSubstringMatchInSelect) {
   // Case 7: No match (not present)
   EXPECT_EQ(std::nullopt, FindShortestSubstringMatchInSelect(u"Canadia", true,
                                                              field.options()));
+}
+
+TEST(AutofillUtilTriggerSourceTest, IsAtMemoryTriggerSource) {
+  EXPECT_FALSE(IsAtMemoryTriggerSource(
+      AutofillSuggestionTriggerSource::kGmailOneTimePasswordAvailable));
 }
 
 }  // namespace autofill

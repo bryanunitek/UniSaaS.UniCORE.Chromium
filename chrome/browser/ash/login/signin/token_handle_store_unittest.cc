@@ -2,21 +2,31 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ash/login/signin/token_handle_store.h"
+
 #include <memory>
+#include <optional>
+#include <string>
 
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/json/values_util.h"
+#include "base/location.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_mock_clock_override.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
-#include "chrome/browser/ash/login/signin/token_handle_store_impl.h"
 #include "chrome/browser/ui/webui/signin/ash/signin_helper.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
+#include "components/account_id/account_id.h"
+#include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/user_manager/fake_user_manager_delegate.h"
@@ -26,6 +36,7 @@
 #include "components/user_manager/user_manager_impl.h"
 #include "crypto/obsolete/sha1.h"
 #include "google_apis/gaia/gaia_urls.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -96,6 +107,10 @@ void AssertLastCheckedTimestampWithinTolerance(
               tolerance.InMilliseconds());
 }
 
+TestingPrefServiceSimple* local_state() {
+  return TestingBrowserProcess::GetGlobal()->GetTestingLocalState();
+}
+
 }  // namespace
 
 class TokenHandleStoreTest : public ::testing::Test {
@@ -106,11 +121,6 @@ class TokenHandleStoreTest : public ::testing::Test {
   TokenHandleStoreTest() = default;
   ~TokenHandleStoreTest() override = default;
 
-  void SetUp() override {
-    user_manager::UserManagerImpl::RegisterPrefs(local_state_.registry());
-    local_state_.registry()->RegisterDictionaryPref(kTokenHandlePref);
-  }
-
   std::unique_ptr<TokenHandleStore> CreateTokenHandleStore(
       std::unique_ptr<user_manager::KnownUser> known_user,
       bool user_has_gaia_password = true) {
@@ -120,19 +130,28 @@ class TokenHandleStoreTest : public ::testing::Test {
             base::OnceCallback<void(std::optional<bool>)> continuation) {
           std::move(continuation).Run(user_has_gaia_password);
         };
-    return std::make_unique<TokenHandleStoreImpl>(
+    return std::make_unique<TokenHandleStore>(
         std::move(known_user),
         base::BindLambdaForTesting(std::move(does_user_have_gaia_password)));
   }
 
- protected:
-  TestingPrefServiceSimple local_state_;
-  std::unique_ptr<user_manager::UserManager> user_manager_;
+  std::unique_ptr<TokenHandleStore> CreateTokenHandleStoreWithAsyncGaiaPassword(
+      std::unique_ptr<user_manager::KnownUser> known_user) {
+    auto does_user_have_gaia_password =
+        [](const AccountId& account_id,
+           base::OnceCallback<void(std::optional<bool>)> continuation) {
+          base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+              FROM_HERE, base::BindOnce(std::move(continuation), true));
+        };
+    return std::make_unique<TokenHandleStore>(
+        std::move(known_user),
+        base::BindLambdaForTesting(std::move(does_user_have_gaia_password)));
+  }
 };
 
 TEST_F(TokenHandleStoreTest, HasTokenReturnsTrueWhenTokenIsOnDisk) {
   AccountId account_id = AccountId::FromUserEmail(kFakeEmail);
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   known_user->SetStringPref(account_id, kTokenHandlePref, kFakeToken);
   std::unique_ptr<TokenHandleStore> token_handle_store =
       CreateTokenHandleStore(std::move(known_user));
@@ -144,7 +163,7 @@ TEST_F(TokenHandleStoreTest, HasTokenReturnsTrueWhenTokenIsOnDisk) {
 
 TEST_F(TokenHandleStoreTest, HasTokenReturnsFalseWhenTokenIsEmpty) {
   AccountId account_id = AccountId::FromUserEmail(kFakeEmail);
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   known_user->SetStringPref(account_id, kTokenHandlePref, std::string());
   std::unique_ptr<TokenHandleStore> token_handle_store =
       CreateTokenHandleStore(std::move(known_user));
@@ -156,7 +175,7 @@ TEST_F(TokenHandleStoreTest, HasTokenReturnsFalseWhenTokenIsEmpty) {
 
 TEST_F(TokenHandleStoreTest, HasTokenReturnsFalseWhenNoTokenOnDisk) {
   AccountId account_id = AccountId::FromUserEmail(kFakeEmail);
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   std::unique_ptr<TokenHandleStore> token_handle_store =
       CreateTokenHandleStore(std::move(known_user));
 
@@ -168,7 +187,7 @@ TEST_F(TokenHandleStoreTest, HasTokenReturnsFalseWhenNoTokenOnDisk) {
 TEST_F(TokenHandleStoreTest,
        ShouldObtainHandleReturnsTrueIfTokenExsitsAndIsInvalid) {
   AccountId account_id = AccountId::FromUserEmail(kFakeEmail);
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   known_user->SetStringPref(account_id, kTokenHandlePref, kFakeToken);
   known_user->SetStringPref(account_id, kTokenHandleStatusPref,
                             kTokenHandleStatusInvalid);
@@ -181,9 +200,25 @@ TEST_F(TokenHandleStoreTest,
   EXPECT_EQ(should_obtain_handle, true);
 }
 
+TEST_F(TokenHandleStoreTest,
+       ShouldObtainHandleReturnsTrueIfTokenExistsAndIsStale) {
+  AccountId account_id = AccountId::FromUserEmail(kFakeEmail);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
+  known_user->SetStringPref(account_id, kTokenHandlePref, kFakeToken);
+  known_user->SetStringPref(account_id, kTokenHandleStatusPref,
+                            kTokenHandleStatusStale);
+  std::unique_ptr<TokenHandleStore> token_handle_store =
+      CreateTokenHandleStore(std::move(known_user));
+
+  bool should_obtain_handle =
+      token_handle_store->ShouldObtainHandle(account_id);
+
+  EXPECT_EQ(should_obtain_handle, true);
+}
+
 TEST_F(TokenHandleStoreTest, ShouldObtainHandleReturnsTrueIfTokenDoesNotExist) {
   AccountId account_id = AccountId::FromUserEmail(kFakeEmail);
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   std::unique_ptr<TokenHandleStore> token_handle_store =
       CreateTokenHandleStore(std::move(known_user));
 
@@ -196,7 +231,7 @@ TEST_F(TokenHandleStoreTest, ShouldObtainHandleReturnsTrueIfTokenDoesNotExist) {
 TEST_F(TokenHandleStoreTest,
        ShouldObtainHandleReturnsFalseIfTokenExistsAndIsValid) {
   AccountId account_id = AccountId::FromUserEmail(kFakeEmail);
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   known_user->SetStringPref(account_id, kTokenHandlePref, kFakeToken);
   known_user->SetStringPref(account_id, kTokenHandleStatusPref,
                             kTokenHandleStatusValid);
@@ -211,7 +246,7 @@ TEST_F(TokenHandleStoreTest,
 
 TEST_F(TokenHandleStoreTest, IsRecentlyCheckedReturnsFalseIfNeverChecked) {
   AccountId account_id = AccountId::FromUserEmail(kFakeEmail);
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   std::unique_ptr<TokenHandleStore> token_handle_store =
       CreateTokenHandleStore(std::move(known_user));
 
@@ -223,7 +258,7 @@ TEST_F(TokenHandleStoreTest, IsRecentlyCheckedReturnsFalseIfNeverChecked) {
 TEST_F(TokenHandleStoreTest,
        IsRecentlyCheckedReturnsTrueIfWithinCacheStatusTime) {
   AccountId account_id = AccountId::FromUserEmail(kFakeEmail);
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   base::ScopedMockClockOverride mock_clock;
   known_user->SetPath(account_id, kTokenHandleLastCheckedPref,
                       base::TimeToValue(base::Time::Now()));
@@ -239,7 +274,7 @@ TEST_F(TokenHandleStoreTest,
 TEST_F(TokenHandleStoreTest,
        IsRecentlyCheckedReturnsFalseIfNotWithinCacheStatusTime) {
   AccountId account_id = AccountId::FromUserEmail(kFakeEmail);
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   base::ScopedMockClockOverride mock_clock;
   known_user->SetPath(account_id, kTokenHandleLastCheckedPref,
                       base::TimeToValue(base::Time::Now()));
@@ -256,7 +291,7 @@ TEST_F(TokenHandleStoreTest,
        TokenHandleIsStoredWithCorrectStatusAndLastCheckedTime) {
   AccountId account_id = AccountId::FromUserEmail(kFakeEmail);
   auto injected_known_user =
-      std::make_unique<user_manager::KnownUser>(&local_state_);
+      std::make_unique<user_manager::KnownUser>(local_state());
   base::ScopedMockClockOverride mock_clock;
   base::Time previous_last_checked = base::Time::Now();
   injected_known_user->SetPath(account_id, kTokenHandleLastCheckedPref,
@@ -268,7 +303,7 @@ TEST_F(TokenHandleStoreTest,
 
   token_handle_store->StoreTokenHandle(account_id, kFakeToken);
 
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   EXPECT_EQ(kFakeToken,
             *known_user->FindStringPath(account_id, kTokenHandlePref));
   EXPECT_EQ(kTokenHandleStatusValid,
@@ -288,16 +323,15 @@ class TokenHandleStoreIsReauthRequiredTest : public TokenHandleStoreTest {
     account_id_ = AccountId::FromUserEmailGaiaId(kFakeEmail, kFakeGaiaId);
     other_account_id_ =
         AccountId::FromUserEmailGaiaId(kFakeOtherEmail, kFakeOtherGaiaId);
-    user_manager::UserManagerImpl::RegisterPrefs(local_state_.registry());
-    user_manager::TestHelper::RegisterPersistedUser(local_state_, account_id_);
-    user_manager::TestHelper::RegisterPersistedUser(local_state_,
+    user_manager::TestHelper::RegisterPersistedUser(*local_state(),
+                                                    account_id_);
+    user_manager::TestHelper::RegisterPersistedUser(*local_state(),
                                                     other_account_id_);
-    local_state_.registry()->RegisterDictionaryPref(kTokenHandlePref);
 
     cros_settings_ = std::make_unique<ash::CrosSettings>();
     user_manager_ = std::make_unique<user_manager::UserManagerImpl>(
         std::make_unique<user_manager::FakeUserManagerDelegate>(),
-        &local_state_, cros_settings_.get());
+        local_state(), cros_settings_.get());
 
     user_manager_->Initialize();
   }
@@ -353,7 +387,7 @@ class TokenHandleStoreIsReauthRequiredTest : public TokenHandleStoreTest {
 
 TEST_F(TokenHandleStoreIsReauthRequiredTest,
        IsReauthRequiredReturnsFalseIfTokenDoesNotExist) {
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   std::unique_ptr<TokenHandleStore> token_handle_store =
       CreateTokenHandleStore(std::move(known_user));
   TokenValidationFuture future;
@@ -368,7 +402,7 @@ TEST_F(TokenHandleStoreIsReauthRequiredTest,
 
 TEST_F(TokenHandleStoreIsReauthRequiredTest,
        IsReauthRequiredReturnsTrueIfTokenExistsAndInvalid) {
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
   AddFakeCheckResponseForStatus(TokenHandleChecker::Status::kInvalid);
   std::unique_ptr<TokenHandleStore> token_handle_store =
@@ -385,7 +419,7 @@ TEST_F(TokenHandleStoreIsReauthRequiredTest,
 
 TEST_F(TokenHandleStoreIsReauthRequiredTest,
        IsReauthRequiredReturnsFalseIfTokenExistsAndValid) {
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
   known_user->SetStringPref(account_id_, kTokenHandleStatusPref,
                             kTokenHandleStatusValid);
@@ -404,7 +438,7 @@ TEST_F(TokenHandleStoreIsReauthRequiredTest,
 
 TEST_F(TokenHandleStoreIsReauthRequiredTest,
        IsReauthRequiredReturnsFalseIfTokenExistsAndStatusUnknown) {
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
   known_user->SetStringPref(account_id_, kTokenHandleStatusPref,
                             kTokenHandleStatusValid);
@@ -424,7 +458,7 @@ TEST_F(TokenHandleStoreIsReauthRequiredTest,
 TEST_F(
     TokenHandleStoreIsReauthRequiredTest,
     IsReauthRequiredReturnsTrueIfUserHasGaiaPasswordAndTokenExistsAndExpired) {
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
   known_user->SetStringPref(account_id_, kTokenHandleStatusPref,
                             kTokenHandleStatusValid);
@@ -444,7 +478,7 @@ TEST_F(
 TEST_F(
     TokenHandleStoreIsReauthRequiredTest,
     IsReauthRequiredReturnsFalseIfUserHasNoGaiaPasswordAndTokenExistsAndExpired) {
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
   known_user->SetStringPref(account_id_, kTokenHandleStatusPref,
                             kTokenHandleStatusValid);
@@ -465,7 +499,7 @@ TEST_F(
 TEST_F(TokenHandleStoreIsReauthRequiredTest,
        IsReauthRequiredSetsStatusPrefToInvalidWhenTokenInvalid) {
   auto injected_known_user =
-      std::make_unique<user_manager::KnownUser>(&local_state_);
+      std::make_unique<user_manager::KnownUser>(local_state());
   injected_known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
   injected_known_user->SetStringPref(account_id_, kTokenHandleStatusPref,
                                      kTokenHandleStatusValid);
@@ -477,7 +511,7 @@ TEST_F(TokenHandleStoreIsReauthRequiredTest,
   token_handle_store->IsReauthRequired(account_id_, GetSharedURLLoaderFactory(),
                                        future.GetCallback());
 
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   EXPECT_TRUE(future.Wait());
   EXPECT_EQ(kTokenHandleStatusInvalid,
             *known_user->FindStringPath(account_id_, kTokenHandleStatusPref));
@@ -487,7 +521,7 @@ TEST_F(
     TokenHandleStoreIsReauthRequiredTest,
     IsReauthRequiredSetsStatusPrefToInvalidWhenTokenExpiredAndUserHasGaiaPassword) {
   auto injected_known_user =
-      std::make_unique<user_manager::KnownUser>(&local_state_);
+      std::make_unique<user_manager::KnownUser>(local_state());
   injected_known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
   injected_known_user->SetStringPref(account_id_, kTokenHandleStatusPref,
                                      kTokenHandleStatusValid);
@@ -499,7 +533,7 @@ TEST_F(
   token_handle_store->IsReauthRequired(account_id_, GetSharedURLLoaderFactory(),
                                        future.GetCallback());
 
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   EXPECT_TRUE(future.Wait());
   EXPECT_EQ(kTokenHandleStatusInvalid,
             *known_user->FindStringPath(account_id_, kTokenHandleStatusPref));
@@ -512,7 +546,7 @@ TEST_F(TokenHandleStoreIsReauthRequiredTest,
   base::TimeDelta delta = base::Seconds(1);
   mock_clock.Advance(delta);
   auto injected_known_user =
-      std::make_unique<user_manager::KnownUser>(&local_state_);
+      std::make_unique<user_manager::KnownUser>(local_state());
   injected_known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
   injected_known_user->SetStringPref(account_id_, kTokenHandleStatusPref,
                                      kTokenHandleStatusValid);
@@ -526,7 +560,7 @@ TEST_F(TokenHandleStoreIsReauthRequiredTest,
 
   EXPECT_TRUE(future.Wait());
   AssertLastCheckedTimestampWithinTolerance(
-      std::make_unique<user_manager::KnownUser>(&local_state_), account_id_,
+      std::make_unique<user_manager::KnownUser>(local_state()), account_id_,
       /*expected_last_checked_timestamp=*/previous_last_checked + delta,
       /*tolerance=*/delta / 2);
 }
@@ -534,7 +568,7 @@ TEST_F(TokenHandleStoreIsReauthRequiredTest,
 TEST_F(TokenHandleStoreIsReauthRequiredTest,
        ConcurrentIsReauthRequiredRequestsForTheSameAccountIdGetPooled) {
   auto injected_known_user =
-      std::make_unique<user_manager::KnownUser>(&local_state_);
+      std::make_unique<user_manager::KnownUser>(local_state());
   injected_known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
   injected_known_user->SetStringPref(account_id_, kTokenHandleStatusPref,
                                      kTokenHandleStatusValid);
@@ -569,7 +603,7 @@ TEST_F(TokenHandleStoreIsReauthRequiredTest,
 TEST_F(TokenHandleStoreIsReauthRequiredTest,
        ConcurrentIsReauthRequiredRequestsForDifferentAccountIdsDoNotGetPooled) {
   auto injected_known_user =
-      std::make_unique<user_manager::KnownUser>(&local_state_);
+      std::make_unique<user_manager::KnownUser>(local_state());
   injected_known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
   injected_known_user->SetStringPref(account_id_, kTokenHandleStatusPref,
                                      kTokenHandleStatusValid);
@@ -600,6 +634,53 @@ TEST_F(TokenHandleStoreIsReauthRequiredTest,
   EXPECT_FALSE(future1.IsReady());
 }
 
+TEST_F(TokenHandleStoreIsReauthRequiredTest,
+       ReentrantIsReauthRequiredDoesNotDropTheNewlyQueuedCallback) {
+  auto injected_known_user =
+      std::make_unique<user_manager::KnownUser>(local_state());
+  injected_known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
+  injected_known_user->SetStringPref(account_id_, kTokenHandleStatusPref,
+                                     kTokenHandleStatusValid);
+  std::unique_ptr<TokenHandleStore> token_handle_store =
+      CreateTokenHandleStoreWithAsyncGaiaPassword(
+          std::move(injected_known_user));
+  const GURL& url = GaiaUrls::GetInstance()->oauth2_token_info_url();
+
+  int outer_reply_count = 0;
+  TokenValidationFuture reentrant_future;
+
+  token_handle_store->IsReauthRequired(
+      account_id_, GetSharedURLLoaderFactory(),
+      base::BindLambdaForTesting([&](const AccountId& account_id,
+                                     const std::string& token,
+                                     bool reauth_required) {
+        ++outer_reply_count;
+        token_handle_store->IsReauthRequired(account_id_,
+                                             GetSharedURLLoaderFactory(),
+                                             reentrant_future.GetCallback());
+      }));
+
+  url_loader_factory_.WaitForRequest(url);
+  url_loader_factory_.SimulateResponseForPendingRequest(
+      url.spec(), GetValidTokenInfoResponse(kFakeEmail, /*expires_in=*/1000),
+      net::HTTP_OK, network::TestURLLoaderFactory::kMostRecentMatch);
+  ASSERT_TRUE(base::test::RunUntil([&]() { return outer_reply_count == 1; }));
+  EXPECT_FALSE(reentrant_future.IsReady());
+
+  // Simulate the network response for the re-entrant check. Its checker should
+  // remain alive and pending rather than being deleted by the first check.
+  url_loader_factory_.WaitForRequest(url);
+  url_loader_factory_.SimulateResponseForPendingRequest(
+      url.spec(), GetValidTokenInfoResponse(kFakeEmail, /*expires_in=*/1000),
+      net::HTTP_OK, network::TestURLLoaderFactory::kMostRecentMatch);
+
+  EXPECT_TRUE(reentrant_future.Wait());
+  EXPECT_EQ(account_id_, reentrant_future.Get<AccountId>());
+  EXPECT_EQ(kFakeToken, reentrant_future.Get<std::string>());
+  EXPECT_FALSE(reentrant_future.Get<bool>());
+  EXPECT_EQ(1, outer_reply_count);
+}
+
 class TokenHandleStoreMaybeFetchTokenHandleTest
     : public TokenHandleStoreIsReauthRequiredTest {
  public:
@@ -619,7 +700,7 @@ class TokenHandleStoreMaybeFetchTokenHandleTest
 TEST_F(TokenHandleStoreMaybeFetchTokenHandleTest,
        MaybeFetchTokenHandleExecutesFetchForUserIfTokenHandleDoesNotExist) {
   auto injected_known_user =
-      std::make_unique<user_manager::KnownUser>(&local_state_);
+      std::make_unique<user_manager::KnownUser>(local_state());
   std::unique_ptr<TokenHandleStore> token_handle_store =
       CreateTokenHandleStore(std::move(injected_known_user));
   AddFakeResponse(GetTokenInfoFetchResponse(kFakeEmail, kFakeOtherToken),
@@ -628,9 +709,9 @@ TEST_F(TokenHandleStoreMaybeFetchTokenHandleTest,
   token_handle_store->MaybeFetchTokenHandle(
       &token_handle_mapping_store_, GetSharedURLLoaderFactory(), account_id_,
       kFakeAccessToken, kFakeRefreshTokenHash);
-  local_state_.user_prefs_store()->WaitUntilValueChanges(kKnownUsersPref);
+  local_state()->user_prefs_store()->WaitUntilValueChanges(kKnownUsersPref);
 
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   EXPECT_EQ(kFakeOtherToken,
             *known_user->FindStringPath(account_id_, kTokenHandlePref));
   EXPECT_EQ(kTokenHandleStatusValid,
@@ -640,7 +721,7 @@ TEST_F(TokenHandleStoreMaybeFetchTokenHandleTest,
 TEST_F(TokenHandleStoreMaybeFetchTokenHandleTest,
        MaybeFetchTokenHandleExecutesFetchForUserIfTokenHandleIsStale) {
   auto injected_known_user =
-      std::make_unique<user_manager::KnownUser>(&local_state_);
+      std::make_unique<user_manager::KnownUser>(local_state());
   injected_known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
   injected_known_user->SetStringPref(account_id_, kTokenHandleStatusPref,
                                      kTokenHandleStatusStale);
@@ -652,13 +733,55 @@ TEST_F(TokenHandleStoreMaybeFetchTokenHandleTest,
   token_handle_store->MaybeFetchTokenHandle(
       &token_handle_mapping_store_, GetSharedURLLoaderFactory(), account_id_,
       kFakeAccessToken, kFakeRefreshTokenHash);
-  local_state_.user_prefs_store()->WaitUntilValueChanges(kKnownUsersPref);
+  local_state()->user_prefs_store()->WaitUntilValueChanges(kKnownUsersPref);
 
-  auto known_user = std::make_unique<user_manager::KnownUser>(&local_state_);
+  auto known_user = std::make_unique<user_manager::KnownUser>(local_state());
   EXPECT_EQ(kFakeOtherToken,
             *known_user->FindStringPath(account_id_, kTokenHandlePref));
   EXPECT_EQ(kTokenHandleStatusValid,
             *known_user->FindStringPath(account_id_, kTokenHandleStatusPref));
+}
+
+TEST_F(TokenHandleStoreMaybeFetchTokenHandleTest,
+       StaleTokenHandleDefersPendingCheckUntilNewHandleIsFetched) {
+  auto injected_known_user =
+      std::make_unique<user_manager::KnownUser>(local_state());
+  injected_known_user->SetStringPref(account_id_, kTokenHandlePref, kFakeToken);
+  injected_known_user->SetStringPref(account_id_, kTokenHandleStatusPref,
+                                     kTokenHandleStatusStale);
+  std::unique_ptr<TokenHandleStore> token_handle_store =
+      CreateTokenHandleStore(std::move(injected_known_user));
+  const GURL& url = GaiaUrls::GetInstance()->oauth2_token_info_url();
+
+  int reply_count = 0;
+  std::string replied_token;
+  bool replied_reauth_required = true;
+  token_handle_store->IsReauthRequired(
+      account_id_, GetSharedURLLoaderFactory(),
+      base::BindLambdaForTesting([&](const AccountId& account_id,
+                                     const std::string& token,
+                                     bool reauth_required) {
+        ++reply_count;
+        replied_token = token;
+        replied_reauth_required = reauth_required;
+      }));
+
+  url_loader_factory_.WaitForRequest(url);
+  url_loader_factory_.SimulateResponseForPendingRequest(
+      url.spec(), GetValidTokenInfoResponse(kFakeEmail, /*expires_in=*/1000),
+      net::HTTP_OK, network::TestURLLoaderFactory::kMostRecentMatch);
+
+  token_handle_store->MaybeFetchTokenHandle(
+      &token_handle_mapping_store_, GetSharedURLLoaderFactory(), account_id_,
+      kFakeAccessToken, kFakeRefreshTokenHash);
+  url_loader_factory_.WaitForRequest(url);
+  url_loader_factory_.SimulateResponseForPendingRequest(
+      url.spec(), GetTokenInfoFetchResponse(kFakeEmail, kFakeOtherToken),
+      net::HTTP_OK, network::TestURLLoaderFactory::kMostRecentMatch);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() { return reply_count == 1; }));
+  EXPECT_EQ(kFakeOtherToken, replied_token);
+  EXPECT_FALSE(replied_reauth_required);
 }
 
 class TokenHandleStoreHistogramTest
@@ -666,19 +789,22 @@ class TokenHandleStoreHistogramTest
  public:
   void SetUp() override {
     TokenHandleStoreMaybeFetchTokenHandleTest::SetUp();
-    account_manager::AccountManager::RegisterPrefs(local_state_.registry());
+    user_prefs_.registry()->RegisterBooleanPref(
+        policy::policy_prefs::kSecondaryGoogleAccountSigninAllowed, true);
   }
 
   void CreateAndInitializeAccountManager() {
     account_manager_ = std::make_unique<account_manager::AccountManager>();
     EXPECT_TRUE(tmp_dir_.CreateUniqueTempDir());
+    base::test::TestFuture<void> initialization_future;
     account_manager_->Initialize(
         tmp_dir_.GetPath(), GetSharedURLLoaderFactory(),
         base::BindRepeating([](base::OnceClosure closure) -> void {
           std::move(closure).Run();
-        }));
-    account_manager_->SetPrefService(&local_state_);
-    task_environment_.RunUntilIdle();
+        }),
+        initialization_future.GetCallback());
+    account_manager_->SetPrefService(&user_prefs_);
+    EXPECT_TRUE(initialization_future.Wait());
     EXPECT_TRUE(account_manager_->IsInitialized());
   }
 
@@ -691,6 +817,7 @@ class TokenHandleStoreHistogramTest
  protected:
   const ::account_manager::AccountKey kGaiaAccountKey = {
       "fake-gaia-id", ::account_manager::AccountType::kGaia};
+  TestingPrefServiceSimple user_prefs_;
   std::unique_ptr<account_manager::AccountManager> account_manager_;
   base::ScopedTempDir tmp_dir_;
 };
@@ -699,7 +826,7 @@ TEST_F(TokenHandleStoreHistogramTest,
        DiagnoseTokenHandleMappingRecordsTrueWhenHashesMatch) {
   base::HistogramTester histogram_tester;
   std::unique_ptr<TokenHandleStore> token_handle_store = CreateTokenHandleStore(
-      std::make_unique<user_manager::KnownUser>(&local_state_));
+      std::make_unique<user_manager::KnownUser>(local_state()));
 
   CreateAndInitializeAccountManager();
   account_manager_->UpsertAccount(kGaiaAccountKey, kFakeEmail, kFakeToken);
@@ -721,7 +848,7 @@ TEST_F(TokenHandleStoreHistogramTest,
        DiagnoseTokenHandleMappingRecordsFlaseWhenHashesDontMatch) {
   base::HistogramTester histogram_tester;
   std::unique_ptr<TokenHandleStore> token_handle_store = CreateTokenHandleStore(
-      std::make_unique<user_manager::KnownUser>(&local_state_));
+      std::make_unique<user_manager::KnownUser>(local_state()));
 
   CreateAndInitializeAccountManager();
   account_manager_->UpsertAccount(kGaiaAccountKey, kFakeEmail, kFakeToken);

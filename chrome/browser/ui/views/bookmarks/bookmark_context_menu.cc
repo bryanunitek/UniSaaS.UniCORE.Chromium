@@ -44,7 +44,7 @@ BookmarkContextMenuObserver::~BookmarkContextMenuObserver() = default;
 
 BookmarkContextMenu::BookmarkContextMenu(
     views::Widget* parent_widget,
-    Browser* browser,
+    BrowserWindowInterface* browser,
     Profile* profile,
     BookmarkLaunchLocation opened_from,
     const std::vector<raw_ptr<const BookmarkNode, VectorExperimental>>&
@@ -90,7 +90,7 @@ BookmarkContextMenu::BookmarkContextMenu(
 BookmarkContextMenu::~BookmarkContextMenu() = default;
 
 void BookmarkContextMenu::InstallPreRunCallback(base::OnceClosure callback) {
-  DCHECK(PreRunCallback().is_null());
+  CHECK(PreRunCallback().is_null(), base::NotFatalUntil::M162);
   PreRunCallback() = std::move(callback);
 }
 

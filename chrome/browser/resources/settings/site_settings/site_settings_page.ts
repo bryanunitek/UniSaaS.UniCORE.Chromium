@@ -22,7 +22,7 @@ import '../settings_shared.css.js';
 import './recent_site_permissions.js';
 import './site_settings_list.js';
 
-import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
+import {WebUiListenerMixin} from '/shared/settings/web_ui_listener_mixin.js';
 import {PluralStringProxyImpl} from 'chrome://resources/js/plural_string_proxy.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
@@ -83,7 +83,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       route: routes.SITE_SETTINGS_AUTOMATIC_DOWNLOADS,
       id: Id.AUTOMATIC_DOWNLOADS,
       label: 'siteSettingsAutomaticDownloads',
-      icon: 'cr:file-download',
+      icon: 'cr:download',
       enabledLabel: 'siteSettingsAutomaticDownloadsAsk',
       disabledLabel: 'siteSettingsAutomaticDownloadsBlocked',
     },
@@ -123,7 +123,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       route: routes.SITE_SETTINGS_BLUETOOTH_SCANNING,
       id: Id.BLUETOOTH_SCANNING,
       label: 'siteSettingsBluetoothScanning',
-      icon: 'settings:bluetooth-scanning',
+      icon: 'settings:bluetooth-searching',
       enabledLabel: 'siteSettingsBluetoothScanningAsk',
       disabledLabel: 'siteSettingsBluetoothScanningBlock',
       shouldShow: () =>
@@ -215,16 +215,6 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       disabledLabel: 'siteSettingsImagesBlocked',
     },
     {
-      route: routes.SITE_SETTINGS_INLINE_CUE_MENU,
-      id: Id.INLINE_CUE_MENU,
-      label: 'siteSettingsInlineCueMenu',
-      icon: 'settings20:text-analysis',
-      enabledLabel: 'siteSettingsInlineCueMenuAllowed',
-      disabledLabel: 'siteSettingsInlineCueMenuBlocked',
-      shouldShow: () =>
-          loadTimeData.getBoolean('enableInlineCueMenuContentSetting'),
-    },
-    {
       route: routes.SITE_SETTINGS_JAVASCRIPT,
       id: Id.JAVASCRIPT,
       label: 'siteSettingsJavascript',
@@ -312,7 +302,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       route: routes.OFFER_WRITING_HELP,
       id: Id.OFFER_WRITING_HELP,
       label: 'siteSettingsOfferWritingHelp',
-      icon: 'settings:compose',
+      icon: 'settings:pen-spark',
       shouldShow: () => loadTimeData.getBoolean('enableComposeProactiveNudge'),
     },
     {
@@ -337,7 +327,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       route: routes.PERFORMANCE,
       id: Id.PERFORMANCE,
       label: 'siteSettingsPerformance',
-      icon: 'settings:performance',
+      icon: 'settings:speed',
       enabledLabel: 'siteSettingsPerformanceSublabel',
       disabledLabel: 'siteSettingsPerformanceSublabel',
     },
@@ -404,7 +394,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       route: routes.SITE_SETTINGS_WEB_PRINTING,
       id: Id.WEB_PRINTING,
       label: 'siteSettingsWebPrinting',
-      icon: 'settings:printer',
+      icon: 'settings:print',
       enabledLabel: 'siteSettingsWebPrintingAsk',
       disabledLabel: 'siteSettingsWebPrintingBlock',
       shouldShow: () =>
@@ -423,7 +413,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       route: routes.SITE_SETTINGS_STORAGE_ACCESS,
       id: Id.STORAGE_ACCESS,
       label: 'siteSettingsStorageAccess',
-      icon: 'privacy:storage-access',
+      icon: 'privacy:vr180-create2d',
       enabledLabel: 'storageAccessAsk',
       disabledLabel: 'storageAccessBlocked',
     },
@@ -512,14 +502,6 @@ export class SettingsSiteSettingsPageElement extends
 
   static get properties() {
     return {
-      /**
-       * Preferences state.
-       */
-      prefs: {
-        type: Object,
-        notify: true,
-      },
-
       lists_: {
         type: Object,
         value: function() {
@@ -582,7 +564,6 @@ export class SettingsSiteSettingsPageElement extends
               Id.JAVASCRIPT_OPTIMIZER,
               Id.AUTOMATIC_FULLSCREEN,
               Id.OFFER_WRITING_HELP,
-              Id.INLINE_CUE_MENU,
             ]),
           };
         },
@@ -615,7 +596,6 @@ export class SettingsSiteSettingsPageElement extends
             this.onUnusedSitePermissionListChanged_(sites));
   }
 
-  declare prefs: Object;
   declare private permissionsExpanded_: boolean;
   declare private contentExpanded_: boolean;
   declare private noRecentSitePermissions_: boolean;

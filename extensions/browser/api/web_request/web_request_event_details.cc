@@ -12,7 +12,9 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -53,6 +55,8 @@ void EraseHeadersIf(
   });
 }
 
+// NOTE: Keep in sync with `filterSecurityInfo()` in
+// //extensions/renderer/resources/web_request_event.js.
 void FilterSecurityInfo(base::DictValue& result, int extra_info_spec) {
   if (!(extra_info_spec & ExtraInfoSpec::SECURITY_INFO)) {
     result.Remove(keys::kSecurityInfoKey);
@@ -88,6 +92,17 @@ std::string StringifyCertificateFingerprintBytes(
   }
 
   return fingerprint_str;
+}
+
+// The status line's reason phrase consists of arbitrary bytes sent by the
+// server, so it isn't guaranteed to be valid UTF-8. base::Value requires valid
+// UTF-8 strings, and `statusLine` is exposed to extensions as a string, so
+// replace any invalid sequences with U+FFFD.
+std::string SanitizeStatusLine(std::string status_line) {
+  if (base::IsStringUTF8AllowingNoncharacters(status_line)) {
+    return status_line;
+  }
+  return base::UTF16ToUTF8(base::UTF8ToUTF16(status_line));
 }
 
 }  // namespace
@@ -174,7 +189,8 @@ void WebRequestEventDetails::SetResponseHeaders(
     dict_.Set(keys::kStatusLineKey, "");
   } else {
     dict_.Set(keys::kStatusCodeKey, response_headers->response_code());
-    dict_.Set(keys::kStatusLineKey, response_headers->GetStatusLine());
+    dict_.Set(keys::kStatusLineKey,
+              SanitizeStatusLine(response_headers->GetStatusLine()));
   }
 
   if (extra_info_spec_ & ExtraInfoSpec::RESPONSE_HEADERS) {
@@ -242,6 +258,8 @@ void WebRequestEventDetails::SetResponseSource(const WebRequestInfo& request) {
   }
 }
 
+// NOTE: Keep in sync with `getFilteredDetails()` in
+// //extensions/renderer/resources/web_request_event.js.
 base::DictValue WebRequestEventDetails::GetFilteredDict(
     int extra_info_spec,
     PermissionHelper* permission_helper,

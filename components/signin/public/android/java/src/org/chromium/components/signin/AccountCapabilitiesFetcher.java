@@ -39,10 +39,10 @@ public class AccountCapabilitiesFetcher {
         mCoreAccountInfo = coreAccountInfo;
         mNativeCallback = nativeCallback;
     }
-    ;
 
     @CalledByNative
     public void startFetchingAccountCapabilities() {
+        // TODO(crbug.com/569918576): Execute onCapabilitiesFetchComplete instantly if fulfilled
         AccountManagerFacadeProvider.getInstance()
                 .getAccountCapabilities(mCoreAccountInfo)
                 .then(

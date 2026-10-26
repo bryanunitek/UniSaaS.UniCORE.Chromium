@@ -17,6 +17,8 @@
 
 namespace blink {
 
+class ContainerTimingPaintAttributionTracker;
+
 // ContainerTiming is responsible for aggregating the text and image element
 // timing events for a given window.
 class CORE_EXPORT ContainerTiming final
@@ -31,14 +33,17 @@ class CORE_EXPORT ContainerTiming final
 
   static ContainerTiming& From(LocalDOMWindow&);
 
-  static inline bool ContributesToContainerTiming(const Element* element) {
-    return element && !element->IsInShadowTree() &&
-           element->SelfOrAncestorHasContainerTiming();
-  }
+  // The container-timing decision is made via the paint attribution tracker,
+  // populated during the pre-paint walk.
+  static bool ContributesToContainerTiming(Element* element);
 
   bool CanReportToContainerTiming() const;
   void MaybeUpdateContainerRootIdentifier(Element* element,
                                           const AtomicString& new_value);
+
+  ContainerTimingPaintAttributionTracker* PaintAttributionTracker() {
+    return paint_attribution_tracker_.Get();
+  }
 
   void EmitPerformanceEntries();
 
@@ -49,8 +54,6 @@ class CORE_EXPORT ContainerTiming final
   void Trace(Visitor* visitor) const override;
 
  private:
-  static Element* GetContainerRoot(Element*);
-  static Element* GetParentContainerRoot(Element*);
   class Record final : public GarbageCollected<Record> {
    public:
     Record(const DOMPaintTimingInfo& paint_timing_info,
@@ -61,9 +64,7 @@ class CORE_EXPORT ContainerTiming final
     const AtomicString& identifier() const { return identifier_; }
 
     void MaybeUpdateLastNewPaintedArea(
-        ContainerTiming* container_timing,
         const DOMPaintTimingInfo& paint_timing_info,
-        Element* container_root,
         Element* element,
         const gfx::Rect& enclosing_rect);
 
@@ -75,7 +76,10 @@ class CORE_EXPORT ContainerTiming final
     const DOMPaintTimingInfo first_paint_timing_info_;
     const AtomicString identifier_;
     DOMPaintTimingInfo last_new_painted_area_paint_timing_info_;
-    WeakMember<Element> last_new_painted_area_element_;
+    // The largest element, by its own clipped area, painted since the last
+    // entry was emitted, and that area. Both reset on emission.
+    WeakMember<Element> largest_painted_area_element_;
+    uint64_t largest_painted_area_ = 0;
     cc::Region painted_region_;
     bool has_pending_changes_ = false;
   };
@@ -84,6 +88,10 @@ class CORE_EXPORT ContainerTiming final
 
   Member<WindowPerformance> performance_;
   HeapHashMap<WeakMember<Element>, Member<Record>> container_root_records_;
+  // Never null: created in the constructor, which CHECKs that container timing
+  // is enabled, and never reassigned.
+  const Member<ContainerTimingPaintAttributionTracker>
+      paint_attribution_tracker_;
 };
 
 }  // namespace blink

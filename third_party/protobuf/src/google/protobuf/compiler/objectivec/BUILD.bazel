@@ -2,9 +2,20 @@
 # Protocol Buffers Compiler - ObjC code generator
 ################################################################################
 
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 load("@rules_pkg//pkg:mappings.bzl", "pkg_files", "strip_prefix")
 load("//build_defs:cpp_opts.bzl", "COPTS")
+
+cc_binary(
+    name = "protoc-gen-objectivec",
+    srcs = ["plugin_main.cc"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":objectivec",
+        "//src/google/protobuf/compiler:plugin",
+    ],
+)
 
 cc_library(
     name = "names",
@@ -14,18 +25,6 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":names_internal",
-    ],
-)
-
-cc_library(
-    name = "generator_headers",
-    hdrs = ["generator.h"],
-    copts = COPTS,
-    strip_include_prefix = "/src",
-    visibility = ["//pkg:__pkg__"],
-    deps = [
-        "//src/google/protobuf",
-        "//src/google/protobuf/compiler:code_generator",
     ],
 )
 
@@ -176,13 +175,6 @@ exports_files(
 ################################################################################
 # Distribution packaging
 ################################################################################
-
-pkg_files(
-    name = "dist_files",
-    srcs = glob(["**/*"]),
-    strip_prefix = strip_prefix.from_root(""),
-    visibility = ["//src:__pkg__"],
-)
 
 filegroup(
     name = "test_srcs",

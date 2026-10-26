@@ -8,11 +8,14 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/storage_pressure_bubble.h"
 #include "chrome/common/chrome_switches.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/storage_pressure_bubble.h"
+#endif
 
 namespace {
 
@@ -36,7 +39,8 @@ const base::TimeDelta GetThrottlingInterval() {
 
 StoragePressureNotificationCallback
 StorageNotificationServiceImpl::CreateThreadSafePressureNotificationCallback() {
-  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M162);
   auto thread_unsafe_callback = base::BindRepeating(
       &StorageNotificationServiceImpl::MaybeShowStoragePressureNotification,
       weak_ptr_factory_.GetWeakPtr());
@@ -53,14 +57,15 @@ StorageNotificationServiceImpl::CreateThreadSafePressureNotificationCallback() {
 
 void StorageNotificationServiceImpl::MaybeShowStoragePressureNotification(
     const blink::StorageKey& storage_key) {
-  auto origin = storage_key.origin();
   if (!disk_pressure_notification_last_sent_at_.is_null() &&
       base::TimeTicks::Now() - disk_pressure_notification_last_sent_at_ <
           GetThrottlingInterval()) {
     return;
   }
 
-  ShowStoragePressureBubble(origin);
+#if !BUILDFLAG(IS_ANDROID)
+  ShowStoragePressureBubble(storage_key.origin());
+#endif
   disk_pressure_notification_last_sent_at_ = base::TimeTicks::Now();
 }
 

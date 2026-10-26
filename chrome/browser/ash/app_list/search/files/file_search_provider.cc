@@ -8,6 +8,7 @@
 #include <cmath>
 #include <utility>
 
+#include "base/check_deref.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/span.h"
 #include "base/files/file_enumerator.h"
@@ -143,17 +144,19 @@ std::vector<FileSearchProvider::FileInfo> SearchFilesByPattern(
 }  // namespace
 
 FileSearchProvider::FileSearchProvider(
+    const PrefService* local_state,
     Profile* profile,
     int file_type,
     std::vector<std::string> allowed_extensions)
     : SearchProvider(SearchCategory::kFiles),
+      local_state_(CHECK_DEREF(local_state)),
       profile_(profile),
       thumbnail_loader_(profile),
       root_path_(file_manager::util::GetMyFilesFolderForProfile(profile)),
       file_type_(file_type),
       allowed_extensions_(std::move(allowed_extensions)) {
-  DCHECK(profile_);
-  DCHECK(!root_path_.empty());
+  CHECK(profile_, base::NotFatalUntil::M160);
+  CHECK(!root_path_.empty(), base::NotFatalUntil::M160);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
@@ -187,7 +190,8 @@ void FileSearchProvider::Start(const std::u16string& query) {
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
       base::BindOnce(SearchFilesByPattern, root_path_, query, query_start_time_,
-                     (file_manager::trash::IsTrashEnabledForProfile(profile_)
+                     (file_manager::trash::IsTrashEnabledForProfile(
+                          local_state_.get(), profile_)
                           ? trash_paths_
                           : std::vector<base::FilePath>()),
                      file_type_, allowed_extensions_),
@@ -210,7 +214,7 @@ void FileSearchProvider::OnSearchComplete(
   for (const auto& path : paths) {
     double relevance = FileResult::CalculateRelevance(
         last_tokenized_query_, path.path, path.last_accessed);
-    DCHECK((relevance >= 0.0) && (relevance <= 1.0));
+    CHECK((relevance >= 0.0) && (relevance <= 1.0), base::NotFatalUntil::M160);
     results.push_back(MakeResult(path, relevance));
   }
 

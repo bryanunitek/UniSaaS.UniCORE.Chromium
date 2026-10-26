@@ -8,7 +8,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -16,6 +15,7 @@ import static org.chromium.build.NullUtil.assertNonNull;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
@@ -24,17 +24,16 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.UserDataHost;
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -51,7 +50,6 @@ import org.chromium.url.JUnitTestGURLs;
 
 /** Unit tests for {@link CustomTabOpenInAppEntryPoint}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class CustomTabOpenInAppEntryPointUnitTest {
     private static final String LABEL = "Label";
     private static final String PACKAGE = "com.example.package";
@@ -69,9 +67,9 @@ public class CustomTabOpenInAppEntryPointUnitTest {
     @Mock private Drawable mIcon;
     @Mock private ActivityInfo mActivityInfo;
     @Mock private PackageManager mPackageManager;
-    @Spy private Context mContext;
     @Mock private TabModelSelector mTabModelSelector;
 
+    private Context mContext;
     private SettableNullableObservableSupplier<Tab> mTabSupplier;
     private CustomTabOpenInAppEntryPoint mEntryPoint;
     private UserDataHost mUserDataHost;
@@ -80,7 +78,13 @@ public class CustomTabOpenInAppEntryPointUnitTest {
 
     @Before
     public void setUp() throws PackageManager.NameNotFoundException {
-        mContext = spy(Robolectric.buildActivity(Activity.class).setup().get());
+        mContext =
+                new ContextWrapper(Robolectric.buildActivity(Activity.class).get()) {
+                    @Override
+                    public PackageManager getPackageManager() {
+                        return mPackageManager;
+                    }
+                };
         mTabSupplier = ObservableSuppliers.createNullable();
         mUserDataHost = new UserDataHost();
         TabModelSelectorSupplier.setInstanceForTesting(mTabModelSelector);
@@ -89,7 +93,6 @@ public class CustomTabOpenInAppEntryPointUnitTest {
         when(mPackageManager.getApplicationInfo(any(), anyInt())).thenReturn(new ApplicationInfo());
         when(mPackageManager.getApplicationLogo(any(ApplicationInfo.class))).thenReturn(mIcon);
         when(mPackageManager.getApplicationLabel(any(ApplicationInfo.class))).thenReturn(LABEL);
-        when(mContext.getPackageManager()).thenReturn(mPackageManager);
 
         mResolveInfo.filter = mIntentFilter;
         mActivityInfo.packageName = PACKAGE;
@@ -100,6 +103,11 @@ public class CustomTabOpenInAppEntryPointUnitTest {
 
         mEntryPoint = new CustomTabOpenInAppEntryPoint(mTabSupplier, mContext);
         mTabSupplier.set(mTab);
+    }
+
+    @After
+    public void tearDown() {
+        mEntryPoint.destroy();
     }
 
     @Test

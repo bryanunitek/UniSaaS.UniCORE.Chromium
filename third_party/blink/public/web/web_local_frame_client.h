@@ -57,13 +57,13 @@
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/mojom/browser_interface_broker.mojom-shared.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-forward.h"
-#include "third_party/blink/public/mojom/fenced_frame/fenced_frame.mojom-shared.h"
 #include "third_party/blink/public/mojom/frame/blocked_navigation_types.mojom-shared.h"
 #include "third_party/blink/public/mojom/frame/lifecycle.mojom-shared.h"
 #include "third_party/blink/public/mojom/frame/triggering_event_info.mojom-shared.h"
 #include "third_party/blink/public/mojom/frame/user_activation_update_types.mojom-shared.h"
 #include "third_party/blink/public/mojom/loader/same_document_navigation_type.mojom-shared.h"
 #include "third_party/blink/public/mojom/media/renderer_audio_input_stream_factory.mojom-shared.h"
+#include "third_party/blink/public/mojom/scroll/scroll_enums.mojom-shared.h"
 #include "third_party/blink/public/platform/child_url_loader_factory_bundle.h"
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_provider.h"
@@ -148,7 +148,6 @@ class WebURLRequest;
 class WebURLResponse;
 class WebView;
 struct FramePolicy;
-struct Impression;
 struct JavaScriptFrameworkDetectionResult;
 struct WebConsoleMessage;
 struct ContextMenuData;
@@ -275,6 +274,7 @@ class BLINK_EXPORT WebLocalFrameClient {
   using FinishChildFrameCreationFn = base::FunctionRef<void(
       WebLocalFrame*,
       const DocumentToken&,
+      const InitiatorStateToken& initiator_state_token,
       CrossVariantMojoRemote<mojom::BrowserInterfaceBrokerInterfaceBase>,
       std::unique_ptr<base::UnguessableToken> sandbox_origin_token)>;
   virtual WebLocalFrame* CreateChildFrame(
@@ -289,9 +289,6 @@ class BLINK_EXPORT WebLocalFrameClient {
       FinishChildFrameCreationFn complete_creation) {
     return nullptr;
   }
-
-  // Notification a new fenced frame was created.
-  virtual void DidCreateFencedFrame(const blink::RemoteFrameToken& token) {}
 
   // Called when Blink cannot find a frame with the given name in the frame's
   // browsing instance.  This gives the embedder a chance to return a frame
@@ -616,7 +613,8 @@ class BLINK_EXPORT WebLocalFrameClient {
       base::TimeTicks max_event_processing_start,
       base::TimeTicks max_event_commit_finish,
       base::TimeTicks max_event_end,
-      uint64_t interaction_offset) {}
+      uint64_t interaction_offset,
+      uint64_t performance_timeline_navigation_id) {}
 
   // The first scroll delay, which measures the time between the user's first
   // scrolling and the resultant display update, has been observed.
@@ -656,14 +654,21 @@ class BLINK_EXPORT WebLocalFrameClient {
   virtual void DidObserveSoftNavigation(
       SoftNavigationMetricsForReporting metrics) {}
 
+  // A new First Contentful Paint was observed for a soft navigation.
+  virtual void DidObserveSoftNavigationFirstContentfulPaint(
+      uint64_t performance_timeline_navigation_id,
+      base::TimeDelta first_contentful_paint) {}
+
   // A new largest contentful paint candidate relating to the most recent
   // soft navigation was observed. Also see DidObserveSoftNavigation().
   virtual void DidObserveSoftLargestContentfulPaint(
       const LargestContentfulPaintDetailsForReporting& lcp) {}
 
   // Reports that visible elements in the frame shifted (bit.ly/lsm-explainer).
-  virtual void DidObserveLayoutShift(double score, bool after_input_or_scroll) {
-  }
+  virtual void DidObserveLayoutShift(
+      double score,
+      bool after_input_or_scroll,
+      uint64_t performance_timeline_navigation_id) {}
 
   // Script notifications ------------------------------------------------
 
@@ -680,7 +685,7 @@ class BLINK_EXPORT WebLocalFrameClient {
   // Geometry notifications ----------------------------------------------
 
   // The main frame scrolled.
-  virtual void DidChangeScrollOffset() {}
+  virtual void DidChangeScrollOffset(mojom::ScrollType) {}
 
   // MediaStream -----------------------------------------------------
 
@@ -787,6 +792,9 @@ class BLINK_EXPORT WebLocalFrameClient {
   // and sessionStorage.
   virtual bool IsDomStorageDisabled() const { return false; }
 
+  // Specifies whether to disable dedicated workers.
+  virtual bool AreDedicatedWorkersDisabled() const { return false; }
+
   // Returns a scriptable object for the given plugin element. This is used for
   // having an external handler implement certain customized APIs for the
   // plugin element (e.g., to expose postMessage).
@@ -882,7 +890,6 @@ class BLINK_EXPORT WebLocalFrameClient {
       network::mojom::WebSandboxFlags,
       const SessionStorageNamespaceId& session_storage_namespace_id,
       bool& consumed_user_gesture,
-      const std::optional<Impression>&,
       const std::optional<WebPictureInPictureWindowOptions>& pip_options,
       const WebURL& base_url) {
     return nullptr;

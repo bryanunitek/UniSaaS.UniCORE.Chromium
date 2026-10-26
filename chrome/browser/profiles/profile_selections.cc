@@ -13,11 +13,13 @@
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 bool AreKeyedServicesDisabledForProfileByDefault(const Profile* profile) {
-  // By default disable all services for System Profile.
-  // Even though having no services is also the default value for Guest Profile,
-  // this is not really the case in practice because a lot of Service Factories
-  // override the default value for the `ProfileSelection` of the Guest Profile.
-  if (profile && profile->IsSystemProfile()) {
+  // By default disable all services for System Profile and Top Chrome WebUI
+  // Profile. Even though having no services is also the default value for Guest
+  // Profile, this is not really the case in practice because a lot of Service
+  // Factories override the default value for the `ProfileSelection` of the
+  // Guest Profile.
+  if (profile &&
+      (profile->IsSystemProfile() || profile->IsTopChromeWebUIProfile())) {
     return true;
   }
 
@@ -44,6 +46,18 @@ ProfileSelections::Builder& ProfileSelections::Builder::WithGuest(
 ProfileSelections::Builder& ProfileSelections::Builder::WithSystem(
     ProfileSelection selection) {
   selections_->SetProfileSelectionForSystem(selection);
+  return *this;
+}
+
+ProfileSelections::Builder& ProfileSelections::Builder::WithIsolatedMode(
+    ProfileSelection selection) {
+  CHECK(selection == ProfileSelection::kNone ||
+        selection == ProfileSelection::kOwnInstance ||
+        selection == ProfileSelection::kRedirectedToOriginal)
+      << "Isolated Mode profile selection must be one of kNone, kOwnInstance "
+         "or kRedirectedToOriginal.";
+
+  selections_->SetProfileSelectionForIsolatedMode(selection);
   return *this;
 }
 
@@ -123,6 +137,14 @@ Profile* ProfileSelections::ApplyProfileSelection(Profile* profile) const {
 
 ProfileSelection ProfileSelections::GetProfileSelection(
     Profile* profile) const {
+  // The Top Chrome WebUI Profile only hosts Top Chrome WebUIs, so no profile
+  // selection applies to it. Its KeyedServices are also disabled by default in
+  // BrowserContextDependencyManager. On ChromeOS, it is not a user browser
+  // context either, so this has to be checked before the internal ASH profiles.
+  if (profile->IsTopChromeWebUIProfile()) {
+    return ProfileSelection::kNone;
+  }
+
 #if BUILDFLAG(IS_CHROMEOS)
   // This check has to be performed before the check on
   // `profile->IsRegularProfile()` because profiles that are internal ASH
@@ -131,6 +153,13 @@ ProfileSelection ProfileSelections::GetProfileSelection(
     return ash_internals_profile_selection_;
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+  // Isolated Mode uses the same ProfileSelection as Incognito,
+  // unless explicitly configured to behave differently.
+  if (profile->IsEnterpriseIsolatedModeProfile()) {
+    return isolated_mode_profile_selection_.value_or(
+        regular_profile_selection_);
+  }
 
   // Treat other off the record profiles as Incognito (primary otr) Profiles.
   if (profile->IsRegularProfile() || profile->IsIncognitoProfile() ||
@@ -163,6 +192,11 @@ void ProfileSelections::SetProfileSelectionForGuest(
 void ProfileSelections::SetProfileSelectionForSystem(
     ProfileSelection selection) {
   system_profile_selection_ = selection;
+}
+
+void ProfileSelections::SetProfileSelectionForIsolatedMode(
+    ProfileSelection selection) {
+  isolated_mode_profile_selection_ = selection;
 }
 
 void ProfileSelections::SetProfileSelectionForAshInternals(

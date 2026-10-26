@@ -9,7 +9,6 @@
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/autofill/bubble_controller_base.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
-#include "components/autofill/core/common/autofill_features.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "ui/actions/action_id.h"
@@ -22,17 +21,6 @@ namespace autofill {
 
 class AutofillBubbleBase;
 
-// Enum for the current showing state of the bubble.
-// TODO(crbug.com/445901842): Investigate if this can be removed.
-enum class BubbleState {
-  // The bubble and the omnibox icon should be hidden.
-  kHidden = 0,
-  // Only the omnibox icon should be visible.
-  kShowingIcon = 1,
-  // The bubble and the omnibox icon should be both visible.
-  kShowingIconAndBubble = 2,
-};
-
 // Interface that exposes controller functionality to all autofill bubbles.
 class AutofillBubbleControllerBase : public BubbleControllerBase,
                                      public content::WebContentsObserver {
@@ -40,8 +28,8 @@ class AutofillBubbleControllerBase : public BubbleControllerBase,
   explicit AutofillBubbleControllerBase(content::WebContents* web_contents);
   ~AutofillBubbleControllerBase() override;
 
-  // Calls the bubble manager to show the bubble if bubble manager is enabled.
-  // Otherwise just shows the bubble.
+  // Calls the bubble manager to show the bubble on desktop. On Android, just
+  // shows the bubble.
   // `force_show` indicates to the bubble manager to show this bubble
   // irrespective of its priority.
   void QueueOrShowBubble(bool force_show = false);
@@ -92,14 +80,7 @@ class AutofillBubbleControllerBase : public BubbleControllerBase,
     return DoNotShowNextQueuedBubbleGuard(this, {});
   }
 
-  bool IsBubbleManagerEnabled() const {
-#if !BUILDFLAG(IS_ANDROID)
-    return base::FeatureList::IsEnabled(
-        features::kAutofillShowBubblesBasedOnPriorities);
-#else
-    return false;
-#endif  // !BUILDFLAG(IS_ANDROID)
-  }
+  bool IsBubbleManagerEnabled() const;
 
   // Migrated page action bubble controller subclasses should override this
   // method to supply their page action's `ActionId`.
@@ -126,8 +107,7 @@ class AutofillBubbleControllerBase : public BubbleControllerBase,
   // custom tooltip text.
   virtual std::optional<std::u16string> GetPageActionTooltipText();
 
-  // If the BubbleManager feature is enabled, this returns `false` if a bubble
-  // is already queued to be shown.
+  // Returns `false` if a bubble is already queued to be shown.
   [[nodiscard]] bool MaySetUpBubble();
 
   // Setter for `bubble_view`.

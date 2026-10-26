@@ -6,8 +6,6 @@ package org.chromium.components.autofill;
 
 import android.text.TextUtils;
 
-import androidx.annotation.VisibleForTesting;
-
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.url.GURL;
@@ -15,10 +13,21 @@ import org.chromium.url.GURL;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /** A container representing a single entry in an Autofill UI (e.g. keyboard accessory). */
 @NullMarked
 public class AutofillSuggestion {
+    // LINT.IfChange(UnacceptableSuggestionTypes)
+    private static final Set<Integer> UNACCEPTABLE_SUGGESTION_TYPES =
+            Set.of(
+                    SuggestionType.SEPARATOR,
+                    SuggestionType.INSECURE_CONTEXT_PAYMENT_DISABLED_MESSAGE,
+                    SuggestionType.TITLE,
+                    SuggestionType.AT_MEMORY_SOURCE_ATTRIBUTION,
+                    SuggestionType.AUTOFILL_AI_SOURCE_ATTRIBUTION);
+    // LINT.ThenChange(/components/autofill/core/browser/suggestions/suggestion.cc:UnacceptableSuggestionTypes)
+
     private final @Nullable String mLabel;
     private final @Nullable String mSecondaryLabel;
     private final String mSublabel;
@@ -34,9 +43,11 @@ public class AutofillSuggestion {
     private final @Nullable GURL mCustomIconUrl;
     private final @Nullable Payload mPayload;
     private final List<AutofillSuggestion> mChildren;
+    private final @Acceptability int mAcceptability;
+    private final int mOriginalIndex;
 
     public sealed interface Payload
-            permits AutofillAiPayload, AutofillProfilePayload, PaymentsPayload {}
+            permits AtMemoryPayload, AutofillAiPayload, AutofillProfilePayload, PaymentsPayload {}
 
     /**
      * Constructs a Autofill suggestion container. Use the {@link AutofillSuggestion.Builder}
@@ -58,9 +69,11 @@ public class AutofillSuggestion {
      *     (e.g., if it requires a fetch from the server).
      * @param payload Additional data passed with the suggestion.
      * @param children The list of children suggestions.
+     * @param acceptability The acceptability state of the suggestion.
+     * @param originalIndex The index of the suggestion in the list provided by the C++
+     *     AutofillKeyboardAccessoryController.
      */
-    @VisibleForTesting
-    public AutofillSuggestion(
+    private AutofillSuggestion(
             @Nullable String label,
             @Nullable String secondaryLabel,
             String sublabel,
@@ -75,7 +88,9 @@ public class AutofillSuggestion {
             @Nullable String iphDescriptionText,
             @Nullable GURL customIconUrl,
             @Nullable Payload payload,
-            List<AutofillSuggestion> children) {
+            List<AutofillSuggestion> children,
+            @Acceptability int acceptability,
+            int originalIndex) {
         mLabel = label;
         mSecondaryLabel = secondaryLabel;
         mSublabel = sublabel;
@@ -91,6 +106,8 @@ public class AutofillSuggestion {
         mCustomIconUrl = customIconUrl;
         mPayload = payload;
         mChildren = children;
+        mAcceptability = acceptability;
+        mOriginalIndex = originalIndex;
     }
 
     public @Nullable String getLabel() {
@@ -159,6 +176,13 @@ public class AutofillSuggestion {
         return aiPayload != null && aiPayload.requiresServerFetch();
     }
 
+    public @Nullable AtMemoryPayload getAtMemoryPayload() {
+        if (mPayload instanceof AtMemoryPayload) {
+            return (AtMemoryPayload) mPayload;
+        }
+        return null;
+    }
+
     public @Nullable AutofillAiPayload getAutofillAiPayload() {
         if (mPayload instanceof AutofillAiPayload) {
             return (AutofillAiPayload) mPayload;
@@ -184,6 +208,37 @@ public class AutofillSuggestion {
         return mChildren;
     }
 
+    public boolean isSelectable() {
+        switch (mAcceptability) {
+            case Acceptability.SELECTABLE_AND_ACCEPTABLE:
+            case Acceptability.SELECTABLE_BUT_UNACCEPTABLE:
+                return true;
+            case Acceptability.UNSELECTABLE_AND_UNACCEPTABLE:
+                return false;
+        }
+        assert false : "Unhandled acceptability value: " + mAcceptability;
+        return false;
+    }
+
+    public boolean isAcceptable() {
+        if (UNACCEPTABLE_SUGGESTION_TYPES.contains(mSuggestionType)) {
+            return false;
+        }
+        switch (mAcceptability) {
+            case Acceptability.SELECTABLE_AND_ACCEPTABLE:
+                return true;
+            case Acceptability.SELECTABLE_BUT_UNACCEPTABLE:
+            case Acceptability.UNSELECTABLE_AND_UNACCEPTABLE:
+                return false;
+        }
+        assert false : "Unhandled acceptability value: " + mAcceptability;
+        return false;
+    }
+
+    public int getOriginalIndex() {
+        return mOriginalIndex;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -205,7 +260,9 @@ public class AutofillSuggestion {
                 && Objects.equals(this.mIphDescriptionText, other.mIphDescriptionText)
                 && Objects.equals(this.mCustomIconUrl, other.mCustomIconUrl)
                 && Objects.equals(this.mPayload, other.mPayload)
-                && Objects.equals(this.mChildren, other.mChildren);
+                && Objects.equals(this.mChildren, other.mChildren)
+                && this.mAcceptability == other.mAcceptability
+                && this.mOriginalIndex == other.mOriginalIndex;
     }
 
     @Override
@@ -224,7 +281,9 @@ public class AutofillSuggestion {
                 this.mIphDescriptionText,
                 this.mCustomIconUrl,
                 this.mPayload,
-                this.mChildren);
+                this.mChildren,
+                this.mAcceptability,
+                this.mOriginalIndex);
     }
 
     /** Builder for the {@link AutofillSuggestion}. */
@@ -244,6 +303,8 @@ public class AutofillSuggestion {
         private int mSuggestionType;
         private @Nullable Payload mPayload;
         private List<AutofillSuggestion> mChildren = Collections.emptyList();
+        private @Acceptability int mAcceptability;
+        private int mOriginalIndex;
 
         public Builder setIconId(int iconId) {
             this.mIconId = iconId;
@@ -310,7 +371,7 @@ public class AutofillSuggestion {
             return this;
         }
 
-        public Builder setPayload(Payload payload) {
+        public Builder setPayload(@Nullable Payload payload) {
             this.mPayload = payload;
             return this;
         }
@@ -320,9 +381,24 @@ public class AutofillSuggestion {
             return this;
         }
 
+        public Builder setAcceptability(@Acceptability int acceptability) {
+            this.mAcceptability = acceptability;
+            return this;
+        }
+
+        public Builder setOriginalIndex(int originalIndex) {
+            this.mOriginalIndex = originalIndex;
+            return this;
+        }
+
         public AutofillSuggestion build() {
-            assert mSuggestionType == SuggestionType.SEPARATOR || !TextUtils.isEmpty(mLabel)
-                    : "Only separators may have an empty label.";
+            assert mSuggestionType == SuggestionType.SEPARATOR
+                            || mSuggestionType == SuggestionType.PERSONAL_CONTEXT_NOTICE
+                            || mSuggestionType == SuggestionType.AT_MEMORY_AI_DISCLOSURE
+                            || mSuggestionType
+                                    == SuggestionType.AUTOFILL_AI_PRIVATE_INFERENCE_NOTICE
+                            || !TextUtils.isEmpty(mLabel)
+                    : "Only separators and personal context notices may have an empty label.";
             assert (mSubLabel != null)
                     : "The AutofillSuggestion sublabel can be empty but never null.";
             return new AutofillSuggestion(
@@ -340,7 +416,9 @@ public class AutofillSuggestion {
                     mIphDescriptionText,
                     mCustomIconUrl,
                     mPayload,
-                    mChildren);
+                    mChildren,
+                    mAcceptability,
+                    mOriginalIndex);
         }
     }
 }

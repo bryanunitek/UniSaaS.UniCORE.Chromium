@@ -5,6 +5,7 @@
 #import "components/remote_cocoa/app_shim/native_widget_mac_nswindow.h"
 
 #include <memory>
+#include <ranges>
 
 #include "base/apple/foundation_util.h"
 #include "base/auto_reset.h"
@@ -17,12 +18,14 @@
 #include "base/trace_event/trace_event.h"
 #include "components/crash/core/common/crash_key.h"
 #import "components/remote_cocoa/app_shim/features.h"
+#import "components/remote_cocoa/app_shim/immersive_mode_controller_cocoa.h"
 #import "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #include "components/remote_cocoa/app_shim/native_widget_ns_window_host_helper.h"
 #import "components/remote_cocoa/app_shim/views_nswindow_delegate.h"
 #import "components/remote_cocoa/app_shim/window_touch_bar_delegate.h"
 #include "components/remote_cocoa/common/native_widget_ns_window_host.mojom.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
+#import "ui/base/cocoa/default_command_dispatcher_delegate.h"
 #import "ui/base/cocoa/user_interface_item_command_handler.h"
 #import "ui/base/cocoa/window_size_constants.h"
 #include "ui/base/ui_base_features.h"
@@ -123,6 +126,11 @@ void OrderChildWindow(NSWindow* child_window,
 - (BOOL)_isConsideredOpenForPersistentState;
 - (void)_zoomToScreenEdge:(NSUInteger)edge;
 - (void)_removeFromGroups:(NSWindow*)window;
+- (void)_setFrame:(NSRect)frameRect
+    fromAdjustmentToScreen:(NSScreen*)screen
+            anchorIfNeeded:(const CGPoint*)anchor
+                   animate:(BOOL)animate;
+- (void)_setFrameAfterMove:(NSRect)frameRect;
 - (BOOL)_isNonactivatingPanel;
 @end
 
@@ -206,6 +214,7 @@ struct NSEdgeAndCornerThicknesses {
 @implementation NativeWidgetMacNSWindow {
  @private
   CommandDispatcher* __strong _commandDispatcher;
+  DefaultCommandDispatcherDelegate* __strong _defaultCommandDispatcherDelegate;
   id<UserInterfaceItemCommandHandler> __strong _commandHandler;
   id<WindowTouchBarDelegate> __weak _touchBarDelegate;
   NSData* __strong _lastSavedRestorableState;
@@ -219,6 +228,7 @@ struct NSEdgeAndCornerThicknesses {
   BOOL _isTooltip;
   BOOL _isShufflingForOrdering;
   BOOL _miniaturizationInProgress;
+  BOOL _inSetFrameFromAdjustment;
   std::unique_ptr<NativeWidgetMacNSWindowHeadlessInfo> _headless_info;
 }
 @synthesize bridgedNativeWidgetId = _bridgedNativeWidgetId;
@@ -240,6 +250,9 @@ struct NSEdgeAndCornerThicknesses {
                                  backing:bufferingType
                                    defer:deferCreation])) {
     _commandDispatcher = [[CommandDispatcher alloc] initWithOwner:self];
+    _defaultCommandDispatcherDelegate =
+        [[DefaultCommandDispatcherDelegate alloc] init];
+    [_commandDispatcher setDelegate:_defaultCommandDispatcherDelegate];
     self.releasedWhenClosed = NO;
   }
   return self;
@@ -428,6 +441,83 @@ struct NSEdgeAndCornerThicknesses {
   return [super frameViewClassForStyleMask:windowStyle];
 }
 
+// Constrains the frame rect during an active window move loop so that the top
+// of the window does not exceed the menu bar / visible top of the display,
+// while allowing smooth unrestricted dragging across display boundaries without
+// AppKit snapping the window to screen edges.
+- (NSRect)constrainFrameRectForMoveLoop:(NSRect)frameRect {
+  NSArray<NSScreen*>* screens = [NSScreen screens];
+  if (screens.count == 0) {
+    return frameRect;
+  }
+
+  NSPoint mouse_location = [NSEvent mouseLocation];
+  NSScreen* target_screen = nil;
+
+  // First, prefer the screen containing the mouse cursor.
+  for (NSScreen* screen in screens) {
+    if (NSPointInRect(mouse_location, screen.frame)) {
+      target_screen = screen;
+      break;
+    }
+  }
+
+  // If the mouse is not inside any screen, find the screen with the largest
+  // intersection with the window frame.
+  if (!target_screen) {
+    CGFloat max_intersection_area = 0;
+    for (NSScreen* screen in screens) {
+      NSRect intersection = NSIntersectionRect(frameRect, screen.frame);
+      CGFloat area = intersection.size.width * intersection.size.height;
+      if (area > max_intersection_area) {
+        max_intersection_area = area;
+        target_screen = screen;
+      }
+    }
+  }
+
+  // Fallback to mainScreen or the first screen.
+  if (!target_screen) {
+    target_screen = [NSScreen mainScreen] ?: screens.firstObject;
+  }
+
+  if (!target_screen) {
+    return frameRect;
+  }
+
+  // Check if there is another screen positioned directly above target_screen
+  // covering the window's horizontal span, allowing the window to cross upward.
+  BOOL has_screen_above = NO;
+  for (NSScreen* other_screen in screens) {
+    if (other_screen == target_screen) {
+      continue;
+    }
+    if (NSMinY(other_screen.frame) >= NSMaxY(target_screen.frame) - 1.0 &&
+        NSMinX(other_screen.frame) < NSMaxX(frameRect) &&
+        NSMaxX(other_screen.frame) > NSMinX(frameRect)) {
+      has_screen_above = YES;
+      break;
+    }
+  }
+
+  NSRect constrained = frameRect;
+
+  // If there is no screen above, constrain the top of the window to the visible
+  // frame (below the menu bar).
+  if (!has_screen_above) {
+    CGFloat max_top = NSMaxY(target_screen.visibleFrame);
+    if (NSMaxY(constrained) > max_top) {
+      constrained.origin.y = max_top - constrained.size.height;
+    }
+  }
+
+  return constrained;
+}
+
+// AppKit calls constrainFrameRect:toScreen: to clamp window frames to screen
+// boundaries. When a window move loop is active, constrain the top edge to
+// respect the menu bar while avoiding AppKit's horizontal snapping across
+// display boundaries.
 - (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen*)screen {
   if (self.isHeadless || self.parentWindow) {
     // AppKit's default implementation moves child windows down to avoid
@@ -438,7 +528,62 @@ struct NSEdgeAndCornerThicknesses {
     return frameRect;
   }
 
+  if (base::FeatureList::IsEnabled(
+          remote_cocoa::features::
+              kSuppressAppKitFrameAdjustmentsDuringMoveLoop) &&
+      _bridge && _bridge->window_move_loop()) {
+    return [self constrainFrameRectForMoveLoop:frameRect];
+  }
+
   return [super constrainFrameRect:frameRect toScreen:screen];
+}
+
+// AppKit's internal screen layout manager invokes
+// _setFrame:fromAdjustmentToScreen: and _setFrameAfterMove: asynchronously
+// during screen layout changes or display boundary transitions to adjust the
+// window origin. In headless mode or while CocoaWindowMoveLoop manually drives
+// window positioning during a tab drag, suppress these callbacks so that
+// headless window positioning is not constrained to physical display bounds
+// and stale AppKit callbacks do not overwrite the move loop's calculated
+// position.
+- (void)_setFrame:(NSRect)frameRect
+    fromAdjustmentToScreen:(NSScreen*)screen
+            anchorIfNeeded:(const CGPoint*)anchor
+                   animate:(BOOL)animate {
+  if (self.isHeadless ||
+      (base::FeatureList::IsEnabled(
+           remote_cocoa::features::
+               kSuppressAppKitFrameAdjustmentsDuringMoveLoop) &&
+       _bridge && _bridge->window_move_loop())) {
+    return;
+  }
+  if (_inSetFrameFromAdjustment) {
+    return;
+  }
+  base::AutoReset<BOOL> resetter(&_inSetFrameFromAdjustment, YES);
+  if ([NSWindow instancesRespondToSelector:_cmd]) {
+    [super _setFrame:frameRect
+        fromAdjustmentToScreen:screen
+                anchorIfNeeded:anchor
+                       animate:animate];
+  }
+}
+
+- (void)_setFrameAfterMove:(NSRect)frameRect {
+  if (self.isHeadless ||
+      (base::FeatureList::IsEnabled(
+           remote_cocoa::features::
+               kSuppressAppKitFrameAdjustmentsDuringMoveLoop) &&
+       _bridge && _bridge->window_move_loop())) {
+    return;
+  }
+  if (_inSetFrameFromAdjustment) {
+    return;
+  }
+  base::AutoReset<BOOL> resetter(&_inSetFrameFromAdjustment, YES);
+  if ([NSWindow instancesRespondToSelector:_cmd]) {
+    [super _setFrameAfterMove:frameRect];
+  }
 }
 
 - (NSWindow*)topmostVisibleChildModalWindow {
@@ -447,7 +592,7 @@ struct NSEdgeAndCornerThicknesses {
   }
 
   for (remote_cocoa::NativeWidgetNSWindowBridge* child_bridge :
-       base::Reversed(_bridge->child_windows())) {
+       std::views::reverse(_bridge->child_windows())) {
     if (child_bridge->modal_type() == ui::mojom::ModalType::kNone) {
       continue;
     }
@@ -795,10 +940,21 @@ struct NSEdgeAndCornerThicknesses {
 // responder. When AppKit calls |-encodeRestorableStateWithCoder:|, it
 // accomplishes the same thing by passing a custom coder.
 - (id)archiver:(NSKeyedArchiver*)archiver willEncodeObject:(id)object {
-  if (object == self)
+  if (object == self) {
     return nil;
-  if ([object isKindOfClass:[NSView class]])
+  }
+  if ([object isKindOfClass:[NSView class]]) {
     return nil;
+  }
+  // In fullscreen, NSToolbarFullScreenWindow is a child window that shares
+  // this window's first responder. When a view that is its first responder is
+  // removed, AppKit calls -[NSToolbarFullScreenWindow makeFirstResponder:self],
+  // which is forwarded to this window, leaving the NSToolbarFullScreenWindow
+  // itself as this window's first responder. It does not adopt
+  // NSSecureCoding, so archiving it throws. See https://crbug.com/566904500.
+  if (remote_cocoa::IsNSToolbarFullScreenWindow(object)) {
+    return nil;
+  }
   return object;
 }
 
@@ -893,13 +1049,6 @@ struct NSEdgeAndCornerThicknesses {
   return ![self immersiveFullscreen];
 }
 
-- (BOOL)isOpaque {
-  if (features::IsGlassFrameEnabled()) {
-    return NO;
-  }
-  return [super isOpaque];
-}
-
 - (BOOL)respondsToSelector:(SEL)aSelector {
   // If this window or its parent does not handle commands, remove it from the
   // chain.
@@ -909,6 +1058,14 @@ struct NSEdgeAndCornerThicknesses {
   if (isCommandDispatch && _commandHandler == nil &&
       self.commandDispatchParent == nil) {
     return NO;
+  }
+
+  // Private AppKit frame adjustment methods should only be advertised if the
+  // superclass implements them on this macOS version.
+  if (aSelector ==
+          @selector(_setFrame:fromAdjustmentToScreen:anchorIfNeeded:animate:) ||
+      aSelector == @selector(_setFrameAfterMove:)) {
+    return [NSWindow instancesRespondToSelector:aSelector];
   }
 
   return [super respondsToSelector:aSelector];

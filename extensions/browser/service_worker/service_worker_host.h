@@ -11,11 +11,13 @@
 #include "base/auto_reset.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/supports_user_data.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host_observer.h"
 #include "content/public/common/child_process_id.h"
 #include "extensions/browser/service_worker/worker_id.h"
+#include "extensions/common/api/messaging/signing_certificate.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/message_port.mojom.h"
 #include "extensions/common/mojom/service_worker.mojom.h"
@@ -108,6 +110,9 @@ class ServiceWorkerHost :
           port_host) override;
   void OpenChannelToNativeApp(
       const std::string& native_app_name,
+#if BUILDFLAG(IS_ANDROID)
+      const MojomSigningCertificates& android_certificates,
+#endif
       const PortId& port_id,
       mojo::PendingAssociatedRemote<extensions::mojom::MessagePort> port,
       mojo::PendingAssociatedReceiver<extensions::mojom::MessagePortHost>
@@ -161,6 +166,10 @@ class ServiceWorkerHost :
   mojo::AssociatedReceiver<mojom::ServiceWorkerHost> receiver_{this};
   mojo::AssociatedRemote<mojom::ServiceWorker> remote_;
   WorkerId worker_id_;
+
+  base::ScopedObservation<content::RenderProcessHost,
+                          content::RenderProcessHostObserver>
+      render_process_host_observation_{this};
 };
 
 }  // namespace extensions

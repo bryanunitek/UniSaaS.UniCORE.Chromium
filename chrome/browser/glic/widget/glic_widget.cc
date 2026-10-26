@@ -43,8 +43,6 @@
 #endif
 
 #if BUILDFLAG(IS_WIN)
-#include "chrome/installer/util/install_util.h"
-#include "chrome/installer/util/shell_util.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/win/hwnd_metrics.h"
@@ -100,7 +98,7 @@ class GlicClientView : public views::ClientView {
       const gfx::RoundedCornersF& window_radii) override {
     // For ChromeOS, we have to manually round the contents of `ClientView`.
     glic_view()->SetBackgroundRoundedCorners(window_radii);
-    glic_view()->holder()->SetCornerRadii(window_radii);
+    glic_view()->holder()->SetNativeViewCornerRadii(window_radii);
   }
 #endif
 
@@ -130,7 +128,8 @@ class GlicFrameView : public views::NativeFrameView {
 #elif BUILDFLAG(IS_LINUX)
     int resize_border = OpaqueBrowserFrameViewLayout::kFrameBorderThickness;
 #endif
-    const bool can_resize = GetWidget()->widget_delegate()->CanResize();
+    const bool can_resize = GetWidget()->widget_delegate() &&
+                            GetWidget()->widget_delegate()->CanResize();
 
     // Same value as used in `BrowserFrameViewWin::NonClientHitTest()` and `
     // OpaqueBrowserFrameView::NonClientHitTest`.
@@ -429,11 +428,7 @@ std::unique_ptr<GlicWidget> GlicWidget::Create(views::WidgetDelegate* delegate,
   }
 #endif  // BUILDFLAG(IS_OZONE)
 #if BUILDFLAG(IS_WIN)
-  // If floaty won't be always on top, it should appear in the taskbar and
-  // alt tab list.
-  if (!base::FeatureList::IsEnabled(features::kGlicZOrderChanges)) {
-    params.dont_show_in_taskbar = true;
-  }
+  params.dont_show_in_taskbar = true;
 #endif  // BUILDFLAG(IS_WIN)
 #if BUILDFLAG(IS_MAC)
   params.animation_enabled = true;
@@ -467,10 +462,6 @@ std::unique_ptr<GlicWidget> GlicWidget::Create(views::WidgetDelegate* delegate,
   HWND hwnd = widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget();
   if (hwnd != nullptr) {
     ui::win::PreventWindowFromPinning(hwnd);
-    if (base::FeatureList::IsEnabled(features::kGlicZOrderChanges)) {
-      ui::win::SetAppIdForWindow(
-          ShellUtil::GetBrowserModelId(InstallUtil::IsPerUserInstall()), hwnd);
-    }
   }
 #endif  // BUILDFLAG(IS_WIN)
   return widget;
@@ -499,14 +490,14 @@ gfx::Size GlicWidget::GetMinimumSize() const {
 }
 
 gfx::Rect GlicWidget::VisibleToWidgetBounds(gfx::Rect visible_bounds) {
-  if (widget_delegate()->CanResize()) {
+  if (widget_delegate() && widget_delegate()->CanResize()) {
     visible_bounds.Outset(GetTargetOutsets(visible_bounds));
   }
   return visible_bounds;
 }
 
 gfx::Rect GlicWidget::WidgetToVisibleBounds(gfx::Rect widget_bounds) {
-  if (widget_delegate()->CanResize()) {
+  if (widget_delegate() && widget_delegate()->CanResize()) {
     widget_bounds.Inset(-GetTargetOutsets(widget_bounds).ToInsets());
   }
   return widget_bounds;

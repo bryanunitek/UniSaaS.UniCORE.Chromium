@@ -29,8 +29,6 @@ namespace {
 
 const char kEmail[] = "user@test";
 
-const PolicyNamespace kChromeNamespace(POLICY_DOMAIN_CHROME, std::string());
-
 PolicyMap GetExpectedRestrictedPolicies() {
   PolicyMap policy_map;
   policy_map.Set(key::kArcEnabled, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
@@ -53,10 +51,6 @@ PolicyMap GetExpectedRestrictedPolicies() {
                  POLICY_SOURCE_RESTRICTED_MANAGED_GUEST_SESSION_OVERRIDE,
                  base::Value(false), nullptr);
   policy_map.Set(key::kUserBorealisAllowed, POLICY_LEVEL_MANDATORY,
-                 POLICY_SCOPE_USER,
-                 POLICY_SOURCE_RESTRICTED_MANAGED_GUEST_SESSION_OVERRIDE,
-                 base::Value(false), nullptr);
-  policy_map.Set(key::kUserPluginVmAllowed, POLICY_LEVEL_MANDATORY,
                  POLICY_SCOPE_USER,
                  POLICY_SOURCE_RESTRICTED_MANAGED_GUEST_SESSION_OVERRIDE,
                  base::Value(false), nullptr);
@@ -130,7 +124,7 @@ class RestrictedMGSPolicyProviderAshBrowserTest
     auto* profile = ProfileManager::GetPrimaryUserProfile();
     auto* policy_connector = profile->GetProfilePolicyConnector();
     return policy_connector->policy_service()
-        ->GetPolicies(kChromeNamespace)
+        ->GetPolicies(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()))
         .Clone();
   }
 

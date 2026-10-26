@@ -7,7 +7,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/search_engines/template_url_service.h"
@@ -36,8 +35,8 @@ class RemoveSuggestionBubbleDialogDelegateView
                                         views::BubbleBorder::TOP_RIGHT),
         match_(match),
         remove_closure_(std::move(remove_closure)) {
-    DCHECK(template_url_service);
-    DCHECK(match_.SupportsDeletion());
+    CHECK(template_url_service, base::NotFatalUntil::M162);
+    CHECK(match_.SupportsDeletion(), base::NotFatalUntil::M162);
 
     SetButtonLabel(ui::mojom::DialogButton::kOk,
                    l10n_util::GetStringUTF16(IDS_REMOVE));

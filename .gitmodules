@@ -87,9 +87,6 @@
 [submodule "third_party/anonymous_tokens/src"]
 	path = third_party/anonymous_tokens/src
 	url = https://chromium.googlesource.com/external/github.com/google/anonymous-tokens
-[submodule "third_party/aria-practices/src"]
-	path = third_party/aria-practices/src
-	url = https://chromium.googlesource.com/external/github.com/w3c/aria-practices
 [submodule "third_party/readability/src"]
 	path = third_party/readability/src
 	url = https://chromium.googlesource.com/external/github.com/mozilla/readability
@@ -178,6 +175,9 @@
 [submodule "third_party/dom_distiller_js/dist"]
 	path = third_party/dom_distiller_js/dist
 	url = https://chromium.googlesource.com/chromium/dom-distiller/dist
+[submodule "third_party/ds_store/src"]
+	path = third_party/ds_store/src
+	url = https://chromium.googlesource.com/external/github.com/dmgbuild/ds_store
 [submodule "third_party/dragonbox/src"]
 	path = third_party/dragonbox/src
 	url = https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox
@@ -330,6 +330,10 @@
 	path = third_party/jetstream/v2.2
 	url = https://chromium.googlesource.com/external/github.com/WebKit/JetStream
 	gclient-condition = checkout_press_benchmarks
+[submodule "third_party/jetstream/v3.0"]
+	path = third_party/jetstream/v3.0
+	url = https://chromium.googlesource.com/external/github.com/WebKit/JetStream
+	gclient-condition = checkout_press_benchmarks
 [submodule "third_party/speedometer/main"]
 	path = third_party/speedometer/main
 	url = https://chromium.googlesource.com/external/github.com/WebKit/Speedometer
@@ -395,8 +399,8 @@
 [submodule "third_party/libsrtp"]
 	path = third_party/libsrtp
 	url = https://chromium.googlesource.com/chromium/deps/libsrtp
-[submodule "third_party/libsync/src"]
-	path = third_party/libsync/src
+[submodule "third_party/libsync/upstream"]
+	path = third_party/libsync/upstream
 	url = https://chromium.googlesource.com/aosp/platform/system/core/libsync
 	gclient-condition = checkout_linux or checkout_android
 [submodule "third_party/libunwindstack"]
@@ -422,12 +426,19 @@
 	path = third_party/lss
 	url = https://chromium.googlesource.com/linux-syscall-support
 	gclient-condition = checkout_android or checkout_linux
+[submodule "third_party/mac_alias/src"]
+	path = third_party/mac_alias/src
+	url = https://chromium.googlesource.com/external/github.com/dmgbuild/mac_alias
 [submodule "third_party/material_color_utilities/src"]
 	path = third_party/material_color_utilities/src
 	url = https://chromium.googlesource.com/external/github.com/material-foundation/material-color-utilities
 [submodule "third_party/microsoft_dxheaders/src"]
 	path = third_party/microsoft_dxheaders/src
 	url = https://chromium.googlesource.com/external/github.com/microsoft/DirectX-Headers
+	gclient-condition = checkout_win
+[submodule "third_party/microsoft_multimedia_redirection/src"]
+	path = third_party/microsoft_multimedia_redirection/src
+	url = https://chromium.googlesource.com/external/github.com/microsoft/multimedia-redirection
 	gclient-condition = checkout_win
 [submodule "third_party/microsoft_webauthn/src"]
 	path = third_party/microsoft_webauthn/src
@@ -441,6 +452,10 @@
 	path = third_party/mutter/src
 	url = https://chromium.googlesource.com/external/gitlab.gnome.org/GNOME/mutter
 	gclient-condition = checkout_linux and checkout_mutter
+[submodule "third_party/pipewire/src"]
+	path = third_party/pipewire/src
+	url = https://chromium.googlesource.com/external/gitlab.freedesktop.org/pipewire/pipewire
+	gclient-condition = checkout_linux
 [submodule "third_party/nasm"]
 	path = third_party/nasm
 	url = https://chromium.googlesource.com/chromium/deps/nasm
@@ -458,6 +473,9 @@
 [submodule "third_party/openh264/src"]
 	path = third_party/openh264/src
 	url = https://chromium.googlesource.com/external/github.com/cisco/openh264
+[submodule "third_party/openh264rs/src"]
+	path = third_party/openh264rs/src
+	url = https://chromium.googlesource.com/chromium/third_party/openh264rs
 [submodule "third_party/openscreen/src"]
 	path = third_party/openscreen/src
 	url = https://chromium.googlesource.com/openscreen
@@ -535,6 +553,9 @@
 [submodule "third_party/litert/src"]
 	path = third_party/litert/src
 	url = https://chromium.googlesource.com/external/github.com/google-ai-edge/LiteRT
+[submodule "third_party/ml_drift/src"]
+	path = third_party/ml_drift/src
+	url = https://chromium.googlesource.com/external/github.com/google-ai-edge/ml-drift
 [submodule "third_party/vulkan-deps"]
 	path = third_party/vulkan-deps
 	url = https://chromium.googlesource.com/vulkan-deps
@@ -694,6 +715,10 @@
 	path = chrome/browser/nearby_sharing/internal
 	url = https://chrome-internal.googlesource.com/chrome/browser/nearby_sharing/internal
 	gclient-condition = checkout_src_internal
+[submodule "chrome/browser/payments/internal"]
+	path = chrome/browser/payments/internal
+	url = https://chrome-internal.googlesource.com/chrome/payments
+	gclient-condition = checkout_src_internal
 [submodule "chrome/browser/platform_experience/win"]
 	path = chrome/browser/platform_experience/win
 	url = https://chrome-internal.googlesource.com/chrome/browser/platform_experience/win
@@ -817,10 +842,6 @@
 [submodule "components/personal_context/core/resources/internal"]
 	path = components/personal_context/core/resources/internal
 	url = https://chrome-internal.googlesource.com/chrome/components/personal_context/core/resources/internal
-	gclient-condition = checkout_src_internal
-[submodule "components/plus_addresses/core/browser/resources/internal"]
-	path = components/plus_addresses/core/browser/resources/internal
-	url = https://chrome-internal.googlesource.com/chrome/components/plus_addresses/resources
 	gclient-condition = checkout_src_internal
 [submodule "components/record_replay/internal"]
 	path = components/record_replay/internal

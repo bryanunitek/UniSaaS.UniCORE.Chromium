@@ -87,7 +87,6 @@ void BrowserPolicyConnectorIOS::MaybeApplyLocalTestPolicies(
 void BrowserPolicyConnectorIOS::Init(
     PrefService* local_state,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
-  policy::PolicyLogger::GetInstance()->EnableLogDeletion();
   std::unique_ptr<policy::DeviceManagementService::Configuration> configuration(
       new policy::DeviceManagementServiceConfigurationIOS(
           GetDeviceManagementUrl(), GetRealtimeReportingUrl(),
@@ -96,6 +95,11 @@ void BrowserPolicyConnectorIOS::Init(
       new policy::DeviceManagementService(std::move(configuration)));
   device_management_service->ScheduleInitialization(
       kServiceInitializationStartupDelay);
+
+  policy::PolicyLogger::GetInstance()->EnableLogCompression(
+      base::ThreadPool::CreateSequencedTaskRunner(
+          {base::TaskPriority::USER_VISIBLE,
+           base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN}));
 
   InitInternal(local_state, std::move(device_management_service));
   MaybeApplyLocalTestPolicies(local_state);

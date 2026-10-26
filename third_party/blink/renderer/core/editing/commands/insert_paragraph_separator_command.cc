@@ -282,8 +282,7 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
       IsEditableRootPhrasingContent(insertion_position) ||
       IsDisplayInlineType(list_child) || IsTableCell(start_block) ||
       IsA<HTMLFormElement>(*start_block) ||
-      (RuntimeEnabledFeatures::FixLinebreakForPreTagEnabled() &&
-       start_block->HasTagName(html_names::kPreTag)) ||
+      start_block->HasTagName(html_names::kPreTag) ||
       // FIXME: If the node is hidden, we don't have a canonical position so we
       // will do the wrong thing for tables and <hr>.
       // https://bugs.webkit.org/show_bug.cgi?id=40342
@@ -567,9 +566,8 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
   // causing the newline to be turned into a nbsp.
   if (leading_whitespace.IsNotNull()) {
     if (auto* text_node = DynamicTo<Text>(leading_whitespace.AnchorNode())) {
-      DCHECK(
-          !text_node->GetLayoutObject() ||
-          text_node->GetLayoutObject()->StyleRef().ShouldCollapseWhiteSpaces())
+      DCHECK(!text_node->GetLayoutObject() ||
+             text_node->GetLayoutObject()->Style().ShouldCollapseWhiteSpaces())
           << text_node;
       ReplaceTextInNode(text_node,
                         leading_whitespace.ComputeOffsetInContainerNode(), 1,
@@ -584,8 +582,8 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
   if (insertion_position.IsOffsetInAnchor()) {
     if (auto* text_node =
             DynamicTo<Text>(insertion_position.ComputeContainerNode())) {
-      int text_offset = insertion_position.OffsetInContainerNode();
-      bool at_end = static_cast<unsigned>(text_offset) >= text_node->length();
+      wtf_size_t text_offset = insertion_position.OffsetInContainerNode();
+      bool at_end = text_offset >= text_node->length();
       if (text_offset > 0 && !at_end) {
         SplitTextNode(text_node, text_offset);
         GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
@@ -672,7 +670,7 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
       DCHECK(!position_after_split.ComputeContainerNode()->GetLayoutObject() ||
              position_after_split.ComputeContainerNode()
                  ->GetLayoutObject()
-                 ->StyleRef()
+                 ->Style()
                  .ShouldCollapseWhiteSpaces())
           << position_after_split;
       DeleteInsignificantTextDownstream(position_after_split);

@@ -16,7 +16,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/device_trust_constants.h"
+#include "components/enterprise/device_trust/core/device_trust_constants.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -97,7 +97,7 @@ void LogNetError(int net_error) {
 MojoKeyNetworkDelegate::MojoKeyNetworkDelegate(
     scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory)
     : shared_url_loader_factory_(std::move(shared_url_loader_factory)) {
-  DCHECK(shared_url_loader_factory_);
+  CHECK(shared_url_loader_factory_, base::NotFatalUntil::M161);
 }
 
 MojoKeyNetworkDelegate::~MojoKeyNetworkDelegate() = default;

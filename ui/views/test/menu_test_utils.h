@@ -19,9 +19,6 @@
 #include "ui/views/view.h"
 
 namespace views {
-
-class MenuController;
-
 namespace test {
 
 // Test implementation of MenuDelegate that tracks calls to MenuDelegate, along
@@ -53,6 +50,9 @@ class TestMenuDelegate : public MenuDelegate {
   void set_should_close_on_drag_complete(bool val) {
     should_close_on_drag_complete_ = val;
   }
+  void set_should_drag_activate_child_buttons(bool val) {
+    should_drag_activate_child_buttons_ = val;
+  }
 
   // `ShowContextMenu()` will return false for the provided `command_id`.
   void DisableContextMenuForCommandId(int command_id);
@@ -76,6 +76,7 @@ class TestMenuDelegate : public MenuDelegate {
   bool ShouldExecuteCommandWithoutClosingMenu(int id,
                                               const ui::Event& e) override;
   bool ShouldCloseOnDragDropCompleted() override;
+  bool ShouldDragActivateChildButtons() const override;
 
  private:
   // Performs the drop operation and updates |output_drag_op| accordingly.
@@ -101,6 +102,8 @@ class TestMenuDelegate : public MenuDelegate {
   // The number of times WillHideMenu was called.
   int will_hide_menu_count_ = 0;
 
+  bool should_drag_activate_child_buttons_ = false;
+
   // The value of the last call to WillHideMenu.
   raw_ptr<MenuItemView, DanglingUntriaged> will_hide_menu_ = nullptr;
 
@@ -114,41 +117,9 @@ class TestMenuDelegate : public MenuDelegate {
   base::flat_set<int> checked_commands_;
 };
 
-// Test api which caches the currently active MenuController. Can be used to
-// toggle visibility, and to clear seletion states, without performing full
-// shutdown. This is used to simulate menus with varing states, such as during
-// drags, without performing the entire operation. Used to test strange shutdown
-// ordering.
-class MenuControllerTestApi {
- public:
-  MenuControllerTestApi();
-
-  MenuControllerTestApi(const MenuControllerTestApi&) = delete;
-  MenuControllerTestApi& operator=(const MenuControllerTestApi&) = delete;
-
-  ~MenuControllerTestApi();
-
-  MenuController* controller() { return controller_.get(); }
-
-  // Clears out the current and pending states, without notifying the associated
-  // menu items.
-  void ClearState();
-
-  // Toggles the internal showing state of |controller_| without attempting
-  // to change associated Widgets.
-  void SetShowing(bool showing);
-
- private:
-  base::WeakPtr<MenuController> controller_;
-};
-
-// On platforms which have menu closure animations, these functions are
-// necessary to:
-//   1) Disable those animations (make them take zero time) to avoid slowing
-//      down tests;
-//   2) Wait for maybe-asynchronous menu closure to finish.
+// On platforms which have menu closure animations, this function is necessary
+// to wait for maybe-asynchronous menu closure to finish.
 // On platforms without menu closure animations, these do nothing.
-void DisableMenuClosureAnimations();
 void WaitForMenuClosureAnimation();
 
 // An implementation of TestViewsDelegate which overrides ReleaseRef in order to

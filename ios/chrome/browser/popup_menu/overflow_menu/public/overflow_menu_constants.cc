@@ -58,6 +58,10 @@ void RecordUmaActionForDestinationOnNtp(Destination destination) {
     case overflow_menu::Destination::LevelUp:
       // No need to log metrics yet.
       break;
+    case Destination::DefaultBrowser:
+      base::RecordAction(
+          base::UserMetricsAction("MobileMenuDefaultBrowserOnNTP"));
+      break;
   }
 }
 }  // namespace
@@ -92,6 +96,8 @@ std::optional<Destination> DestinationForStringName(std::string destination) {
     return overflow_menu::Destination::Cobalt;
   } else if (destination == "overflow_menu::Destination::LevelUp") {
     return overflow_menu::Destination::LevelUp;
+  } else if (destination == "overflow_menu::Destination::DefaultBrowser") {
+    return overflow_menu::Destination::DefaultBrowser;
   } else {
     return std::nullopt;
   }
@@ -129,6 +135,8 @@ std::string StringNameForDestination(Destination destination) {
       return "overflow_menu::Destination::Cobalt";
     case overflow_menu::Destination::LevelUp:
       return "overflow_menu::Destination::LevelUp";
+    case overflow_menu::Destination::DefaultBrowser:
+      return "overflow_menu::Destination::DefaultBrowser";
   }
 }
 // LINT.ThenChange(:stringToDestination)
@@ -177,14 +185,12 @@ std::optional<ActionType> ActionTypeForStringName(std::string action) {
     return overflow_menu::ActionType::ReaderMode;
   } else if (action == "AskBWG") {
     return overflow_menu::ActionType::AskBWG;
-  } else if (action == "HideToolbars") {
-    return overflow_menu::ActionType::HideToolbars;
-  } else if (action == "ShareThisPage") {
-    return overflow_menu::ActionType::ShareThisPage;
   } else if (action == "Identity") {
     return overflow_menu::ActionType::Identity;
   } else if (action == "CustomizeHomePage") {
     return overflow_menu::ActionType::CustomizeHomePage;
+  } else if (action == "DefaultBrowser") {
+    return overflow_menu::ActionType::DefaultBrowser;
   } else {
     return std::nullopt;
   }
@@ -234,18 +240,12 @@ std::string StringNameForActionType(ActionType action) {
       return "ReaderMode";
     case overflow_menu::ActionType::AskBWG:
       return "AskBWG";
-    case overflow_menu::ActionType::HideToolbars:
-      return "HideToolbars";
-    case overflow_menu::ActionType::TabGroupDeprecated:
-      NOTREACHED();
-    case overflow_menu::ActionType::ShareThisPage:
-      return "ShareThisPage";
-    case overflow_menu::ActionType::SigninDeprecated:
-      NOTREACHED();
     case overflow_menu::ActionType::Identity:
       return "Identity";
     case overflow_menu::ActionType::CustomizeHomePage:
       return "CustomizeHomePage";
+    case overflow_menu::ActionType::DefaultBrowser:
+      return "DefaultBrowser";
   }
 }
 // LINT.ThenChange(/ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_constants.cc:stringToActionType)
@@ -298,6 +298,9 @@ void RecordUmaActionForDestination(Destination destination, bool on_ntp) {
       break;
     case overflow_menu::Destination::LevelUp:
       // No need to log metrics yet.
+      break;
+    case Destination::DefaultBrowser:
+      base::RecordAction(base::UserMetricsAction("MobileMenuDefaultBrowser"));
       break;
   }
 }

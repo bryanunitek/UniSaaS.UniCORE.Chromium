@@ -21,6 +21,7 @@
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/layout/layout_shift_tracker.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_root.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/svg/animation/smil_time_container.h"
 #include "third_party/blink/renderer/core/svg/graphics/svg_image_chrome_client.h"
@@ -516,6 +517,49 @@ TEST_F(SVGImageTest, NestedSVGWithSmilAnimationIsAnimated) {
   EXPECT_TRUE(GetImage().MaybeAnimated());
 }
 
+TEST_F(SVGImageTest, ContainerScaleChangeNoLayoutWithoutNSS) {
+  const bool kShouldPause = true;
+  Load(base::span_from_cstring(R"SVG(
+         <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <g>
+             <rect width="10" height="10"/>
+           </g>
+         </svg>)SVG"),
+       kShouldPause);
+  auto* local_frame =
+      To<LocalFrame>(GetImage().GetPageForTesting()->MainFrame());
+  auto* svg_root = DynamicTo<LayoutSVGRoot>(
+      local_frame->View()->GetLayoutView()->FirstChild());
+  ASSERT_TRUE(svg_root);
+  ASSERT_EQ(svg_root->GetContainerScale(), gfx::Vector2dF(1, 1));
+  svg_root->SetContainerScale(gfx::Vector2dF(2, 2));
+  // Since the document does not have an non-scaling-stroke content, layout
+  // should not be triggered.
+  ASSERT_FALSE(svg_root->NeedsLayout());
+}
+
+TEST_F(SVGImageTest, ContainerScaleChangeLayoutWithNSS) {
+  const bool kShouldPause = true;
+  Load(base::span_from_cstring(R"SVG(
+         <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <g>
+             <rect width="10" height="10" stroke="blue"
+                   vector-effect="non-scaling-stroke"/>
+           </g>
+         </svg>)SVG"),
+       kShouldPause);
+  auto* local_frame =
+      To<LocalFrame>(GetImage().GetPageForTesting()->MainFrame());
+  auto* svg_root = DynamicTo<LayoutSVGRoot>(
+      local_frame->View()->GetLayoutView()->FirstChild());
+  ASSERT_TRUE(svg_root);
+  ASSERT_EQ(svg_root->GetContainerScale(), gfx::Vector2dF(1, 1));
+  svg_root->SetContainerScale(gfx::Vector2dF(2, 2));
+  // Since the document has non-scaling-stroke content, layout should be
+  // triggered.
+  ASSERT_TRUE(svg_root->NeedsLayout());
+}
+
 class SVGImageSimTest : public SimTest, private ScopedMockOverlayScrollbars {
  public:
   static void WaitForTimer(TimerBase& timer) {
@@ -537,7 +581,7 @@ TEST_F(SVGImageSimTest, PageVisibilityHiddenToVisible) {
   Compositor().BeginFrame();
   test::RunPendingTasks();
 
-  Element* element = GetDocument().getElementById(AtomicString("image"));
+  Element* element = GetElementById("image");
   ASSERT_TRUE(IsA<HTMLImageElement>(element));
 
   ImageResourceContent* image_content =
@@ -601,7 +645,7 @@ TEST_F(SVGImageSimTest, AnimationsPausedWhenImageScrolledOutOfView) {
   Compositor().BeginFrame();
   test::RunPendingTasks();
 
-  Element* element = GetDocument().getElementById(AtomicString("image"));
+  Element* element = GetElementById("image");
   ASSERT_TRUE(IsA<HTMLImageElement>(element));
 
   ImageResourceContent* image_content =
@@ -673,7 +717,7 @@ TEST_F(SVGImageSimTest, AnimationsResumedWhenImageScrolledIntoView) {
 
   Compositor().BeginFrame();
 
-  Element* element = GetDocument().getElementById(AtomicString("image"));
+  Element* element = GetElementById("image");
   ASSERT_TRUE(IsA<HTMLImageElement>(element));
 
   ImageResourceContent* image_content =
@@ -756,8 +800,7 @@ TEST_F(SVGImageSimTest, CachedFiniteCssAnimationResetWhileDetached) {
   Compositor().BeginFrame();
   test::RunPendingTasks();
 
-  Element* visible_element =
-      GetDocument().getElementById(AtomicString("visible"));
+  Element* visible_element = GetElementById("visible");
   ASSERT_TRUE(IsA<HTMLImageElement>(visible_element));
   ImageResourceContent* visible_image_content =
       To<HTMLImageElement>(*visible_element).CachedImage();
@@ -782,8 +825,7 @@ TEST_F(SVGImageSimTest, CachedFiniteCssAnimationResetWhileDetached) {
   Compositor().BeginFrame();
   test::RunPendingTasks();
 
-  Element* hidden_element =
-      GetDocument().getElementById(AtomicString("hidden"));
+  Element* hidden_element = GetElementById("hidden");
   ASSERT_TRUE(IsA<HTMLImageElement>(hidden_element));
   EXPECT_FALSE(hidden_element->GetLayoutObject());
   hidden_element->setAttribute(html_names::kSrcAttr, AtomicString("image.svg"));
@@ -919,7 +961,7 @@ TEST_F(SVGImageSimTest, SpriteSheetCulling) {
 
   // Adjust the height so one green circle and three blue circles are visible,
   // and ensure four circles are recorded.
-  Element* div = GetDocument().getElementById(AtomicString("div"));
+  Element* div = GetElementById("div");
   div->setAttribute(html_names::kStyleAttr, AtomicString("height: 200px;"));
   Compositor().BeginFrame();
   record = GetDocument().View()->GetPaintRecord();
@@ -972,7 +1014,7 @@ TEST_F(SVGImageSimTest, SpriteSheetCullingBorderRadius) {
 
   // Adjust the height so one green circle and three blue circles are visible,
   // and ensure four circles are recorded.
-  Element* div = GetDocument().getElementById(AtomicString("div"));
+  Element* div = GetElementById("div");
   div->setAttribute(html_names::kStyleAttr, AtomicString("height: 200px;"));
   Compositor().BeginFrame();
   record = GetDocument().View()->GetPaintRecord();
@@ -1023,7 +1065,7 @@ TEST_F(SVGImageSimTest, ClippedAbsoluteImageSpriteSheetCulling) {
 
   // Adjust the div's height so one green circle and three blue circles are
   // visible, and ensure four circles are recorded.
-  Element* div_element = GetDocument().getElementById(AtomicString("div"));
+  Element* div_element = GetElementById("div");
   div_element->setAttribute(html_names::kStyleAttr,
                             AtomicString("height: 200px;"));
   Compositor().BeginFrame();
@@ -1032,7 +1074,7 @@ TEST_F(SVGImageSimTest, ClippedAbsoluteImageSpriteSheetCulling) {
 
   // Adjust the image's position so only the three blue circles are visible,
   // and ensure three circles are recorded.
-  Element* image_element = GetDocument().getElementById(AtomicString("image"));
+  Element* image_element = GetElementById("image");
   image_element->setAttribute(html_names::kStyleAttr,
                               AtomicString("top: -200px;"));
   Compositor().BeginFrame();
@@ -1082,7 +1124,7 @@ TEST_F(SVGImageSimTest, ClippedStaticImageSpriteSheetCulling) {
 
   // Adjust the div's height so one green circle and three blue circles are
   // visible, and ensure four circles are recorded.
-  Element* div_element = GetDocument().getElementById(AtomicString("div"));
+  Element* div_element = GetElementById("div");
   div_element->setAttribute(html_names::kStyleAttr,
                             AtomicString("height: 200px;"));
   Compositor().BeginFrame();
@@ -1091,7 +1133,7 @@ TEST_F(SVGImageSimTest, ClippedStaticImageSpriteSheetCulling) {
 
   // Adjust the image's position so only the three blue circles are visible,
   // and ensure three circles are recorded.
-  Element* image_element = GetDocument().getElementById(AtomicString("image"));
+  Element* image_element = GetElementById("image");
   image_element->setAttribute(html_names::kStyleAttr,
                               AtomicString("margin-top: -200px;"));
   Compositor().BeginFrame();
@@ -1152,7 +1194,7 @@ TEST_F(SVGImageSimTest, InterestRectDoesNotCullImageSpriteSheet) {
 
   // Adjust the div's width and height so that it creates a cull rect that clips
   // to just a single circle, and ensure just one circle is recorded.
-  Element* div_element = GetDocument().getElementById(AtomicString("div"));
+  Element* div_element = GetElementById("div");
   div_element->setAttribute(html_names::kStyleAttr,
                             AtomicString("width: 100px; height: 200px;"));
   Compositor().BeginFrame();

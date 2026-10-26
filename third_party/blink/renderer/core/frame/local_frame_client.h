@@ -50,9 +50,9 @@
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/devtools/devtools_agent.mojom-blink-forward.h"
-#include "third_party/blink/public/mojom/fenced_frame/fenced_frame.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/remote_frame.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/triggering_event_info.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/scroll/scroll_enums.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/scheduler/web_scoped_virtual_time_pauser.h"
 #include "third_party/blink/public/platform/web_background_resource_fetch_assets.h"
 #include "third_party/blink/public/platform/web_content_settings_client.h"
@@ -71,6 +71,7 @@
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/frame_loader_types.h"
 #include "third_party/blink/renderer/core/loader/navigation_policy.h"
+#include "third_party/blink/renderer/core/timing/performance_timeline_entry_id_generator.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_priority.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
 #include "third_party/blink/renderer/platform/network/content_security_policy_parsers.h"
@@ -88,7 +89,6 @@ namespace blink {
 class AssociatedInterfaceProvider;
 class ChildURLLoaderFactoryBundle;
 class DocumentLoader;
-class HTMLFencedFrameElement;
 class HTMLFormElement;
 class HTMLFrameOwnerElement;
 class HTMLMediaElement;
@@ -97,7 +97,6 @@ class HistoryItem;
 class KURL;
 class LocalDOMWindow;
 class LocalFrame;
-class RemoteFrame;
 class RemotePlaybackClient;
 class ResourceError;
 class ResourceRequest;
@@ -116,7 +115,6 @@ class WebTextCheckClient;
 class URLLoader;
 class ResourceLoadInfoNotifierWrapper;
 enum class SyncCondition;
-struct Impression;
 struct JavaScriptFrameworkDetectionResult;
 
 namespace scheduler {
@@ -196,8 +194,9 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
       base::TimeTicks input_start_time,
       base::TimeTicks actual_navigation_start,
       const String& href_translate,
-      const std::optional<Impression>& impression,
       const LocalFrameToken* initiator_frame_token,
+      const InitiatorStateToken& initiator_state_token,
+      const DocumentToken& initiator_document_token,
       SourceLocation* source_location,
       mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>
           initiator_navigation_state_keep_alive_handle,
@@ -206,7 +205,8 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
       mojo::PendingReceiver<
           mojom::blink::NavigationResumeDeferredCommitListener>
           resume_defer_commit_listener,
-      std::optional<base::UnguessableToken> script_tool_invocation_id) = 0;
+      std::optional<ToolInvocationToken> script_tool_invocation_id,
+      const String& script_injector_host) = 0;
 
   virtual void DispatchWillSendSubmitEvent(HTMLFormElement*) = 0;
 
@@ -230,7 +230,8 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
       base::TimeTicks max_event_processing_start,
       base::TimeTicks max_event_commit_finish,
       base::TimeTicks max_event_end,
-      uint64_t interaction_offset) {}
+      PerformanceTimelineEntryIdInfo interaction_id,
+      PerformanceTimelineEntryIdInfo navigation_id) {}
 
   // Will be called when |CpuTiming| events are updated
   virtual void DidChangeCpuTiming(base::TimeDelta time) {}
@@ -255,14 +256,21 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
   virtual void DidObserveSoftNavigation(
       SoftNavigationMetricsForReporting metrics) {}
 
+  // A new First Contentful Paint was observed for a soft navigation.
+  virtual void DidObserveSoftNavigationFirstContentfulPaint(
+      uint64_t performance_timeline_navigation_id,
+      base::TimeDelta first_contentful_paint) {}
+
   // A new largest contentful paint candidate relating to the most recent
   // soft navigation was observed. Also see DidObserveSoftNavigation().
   virtual void DidObserveSoftLargestContentfulPaint(
       const LargestContentfulPaintDetailsForReporting& lcp) {}
 
   // Reports that visible elements in the frame shifted (bit.ly/lsm-explainer).
-  virtual void DidObserveLayoutShift(double score, bool after_input_or_scroll) {
-  }
+  virtual void DidObserveLayoutShift(
+      double score,
+      bool after_input_or_scroll,
+      PerformanceTimelineEntryIdInfo navigation_id) {}
 
   // Transmits the change in the set of watched CSS selectors property that
   // match any element on the frame.
@@ -282,12 +290,6 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
 
   virtual LocalFrame* CreateFrame(const AtomicString& name,
                                   HTMLFrameOwnerElement*) = 0;
-
-  // Creates a remote fenced frame hosted by an MPArch frame tree for the
-  // |HTMLFencedFrameElement|.
-  virtual RemoteFrame* CreateFencedFrame(
-      HTMLFencedFrameElement*,
-      mojo::PendingAssociatedReceiver<mojom::blink::FencedFrameOwnerHost>) = 0;
 
   // TODO(crbug.com/40511450): Remove `load_manually` once PPAPI is gone.
   virtual WebPluginContainerImpl* CreatePlugin(HTMLPlugInElement&,
@@ -315,9 +317,8 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
                                       int32_t world_id) = 0;
   virtual void WillReleaseScriptContext(v8::Local<v8::Context>,
                                         int32_t world_id) = 0;
-  virtual bool AllowScriptExtensions() = 0;
 
-  virtual void DidChangeScrollOffset() {}
+  virtual void DidChangeScrollOffset(mojom::blink::ScrollType) {}
 
   // Immediately notifies the browser of a change in the current HistoryItem.
   // Prefer DidUpdateCurrentHistoryItem().
@@ -437,6 +438,9 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
   // Specifies whether to disable DOM storage interfaces such as localStorage
   // and sessionStorage.
   virtual bool IsDomStorageDisabled() const { return false; }
+
+  // Specifies whether to disable dedicated workers.
+  virtual bool AreDedicatedWorkersDisabled() const { return false; }
 
   // Debugging -----------------------------------------------------------
   virtual void BindDevToolsAgent(

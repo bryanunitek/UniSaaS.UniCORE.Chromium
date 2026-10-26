@@ -176,6 +176,10 @@ class PermissionManager : public KeyedService,
       const GURL& embedding_origin,
       bool should_include_device_status);
 
+  base::OnceCallback<void(content::PermissionResult)> CreatePermissionCallback(
+      ContentSettingsType permission,
+      std::unique_ptr<PermissionResponseCallback> response_callback);
+
   raw_ptr<content::BrowserContext> browser_context_;
 
   PendingRequestsMap pending_requests_;
@@ -201,6 +205,13 @@ class PermissionManager : public KeyedService,
     GURL embedding_origin;
     base::RepeatingCallback<void(const PermissionSetting&)> callback;
     PermissionSetting last_setting;
+
+    base::WeakPtr<ContentSettingsTypeSubscription> GetWeakPtr() {
+      return weak_factory_.GetWeakPtr();
+    }
+
+   private:
+    base::WeakPtrFactory<ContentSettingsTypeSubscription> weak_factory_{this};
   };
 
   base::IDMap<std::unique_ptr<ContentSettingsTypeSubscription>,

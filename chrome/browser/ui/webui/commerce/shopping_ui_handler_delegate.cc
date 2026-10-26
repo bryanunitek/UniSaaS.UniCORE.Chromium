@@ -12,12 +12,11 @@
 #include "chrome/browser/signin/signin_ui_util.h"
 #include "chrome/browser/ui/bookmarks/bookmark_editor.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/url_constants.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/commerce/core/commerce_feature_list.h"
@@ -33,6 +32,7 @@
 #include "shopping_ui_handler_delegate.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace commerce {
 
@@ -141,7 +141,7 @@ ukm::SourceId ShoppingUiHandlerDelegate::GetCurrentTabUkmSourceId() {
 
 void ShoppingUiHandlerDelegate::NavigateToUrl(BrowserWindowInterface* browser,
                                               const GURL& url) {
-  browser->OpenGURL(url, WindowOpenDisposition::NEW_FOREGROUND_TAB);
+  browser->OpenGURL(url, WindowOpenDisposition::kNewForegroundTab);
 }
 
 }  // namespace commerce

@@ -7,6 +7,7 @@
 
 #include "base/component_export.h"
 #include "base/containers/queue.h"
+#include "base/memory/ref_counted_memory.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
 #include "storage/browser/blob/blob_data_handle.h"
@@ -51,11 +52,10 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobBuilderFromStream {
       base::OnceCallback<void(BlobBuilderFromStream*,
                               std::unique_ptr<BlobDataHandle>)>;
 
-  BlobBuilderFromStream(
-      base::WeakPtr<BlobStorageContext> context,
-      std::string content_type,
-      std::string content_disposition,
-      ResultCallback callback);
+  BlobBuilderFromStream(base::WeakPtr<BlobStorageContext> context,
+                        std::string content_type,
+                        ResultCallback callback,
+                        scoped_refptr<base::RefCountedString> creator_identity);
   ~BlobBuilderFromStream();
 
   // This may call |callback| synchronously when |length_hint| is larger than
@@ -126,7 +126,6 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobBuilderFromStream {
 
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
-  // LINT.IfChange(BlobBuildFromStreamResult)
   enum class Result {
     kSuccess = 0,
     kAborted = 1,
@@ -135,11 +134,9 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobBuilderFromStream {
     kFileWriteFailed = 4,
     kMaxValue = kFileWriteFailed
   };
-  // LINT.ThenChange(//tools/metrics/histograms/metadata/storage/enums.xml:BlobBuildFromStreamResult)
 
   void OnError(Result result);
   void OnSuccess();
-  void RecordResult(Result result);
 
   bool ShouldStoreNextBlockOnDisk(uint64_t length_hint);
 
@@ -160,7 +157,9 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobBuilderFromStream {
   ResultCallback callback_;
 
   std::string content_type_;
-  std::string content_disposition_;
+
+  // Identity of the blob creator. Used for tracking memory usage per creator.
+  const scoped_refptr<base::RefCountedString> creator_identity_;
 
   std::vector<scoped_refptr<ShareableBlobDataItem>> items_;
   uint64_t current_total_size_ = 0;

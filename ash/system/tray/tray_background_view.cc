@@ -50,7 +50,7 @@
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_id.h"
 #include "ui/compositor/animation_throughput_reporter.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_utils.h"
@@ -666,14 +666,15 @@ void TrayBackgroundView::UpdateBackground() {
   if (chromeos::features::IsSystemBlurEnabled()) {
     layer()->SetBackgroundBlur(
         ShelfConfig::Get()->GetShelfControlButtonBlurRadius());
-    layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+    layer()->SetBackdropFilterQuality(StyleUtil::kBackgroundBlurQuality);
   }
 
   layer()->SetClipRect(GetBackgroundBounds());
 
   const views::Widget* widget = GetWidget();
   if (widget) {
-    layer()->SetColor(ShelfConfig::Get()->GetShelfControlButtonColor(widget));
+    layer()->AsSolidColor()->SetColor(SkColor4f::FromColor(
+        ShelfConfig::Get()->GetShelfControlButtonColor(widget)));
   }
   UpdateBackgroundColor(is_active_);
 }
@@ -1065,15 +1066,17 @@ void TrayBackgroundView::UpdateBackgroundColor(bool active) {
       (is_shelf_opaque || !chromeos::features::IsSystemBlurEnabled())
           ? cros_tokens::kCrosSysSystemOnBase
           : cros_tokens::kCrosSysSystemBaseElevated;
-  layer()->SetColor(widget->GetColorProvider()->GetColor(
-      active ? cros_tokens::kCrosSysSystemPrimaryContainer
-             : non_active_color_id));
+  layer()->AsSolidColor()->SetColor(
+      SkColor4f::FromColor(widget->GetColorProvider()->GetColor(
+          active ? cros_tokens::kCrosSysSystemPrimaryContainer
+                 : non_active_color_id)));
 }
 
 void TrayBackgroundView::AddRippleLayer() {
-  ripple_layer_ = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
-  ripple_layer_->SetColor(
-      GetColorProvider()->GetColor(cros_tokens::kCrosSysOnPrimaryContainer));
+  ripple_layer_ = std::make_unique<ui::LayerSolidColor>();
+  ripple_layer_->SetName("TrayBackgroundView:Ripple");
+  ripple_layer_->SetColor(SkColor4f::FromColor(
+      GetColorProvider()->GetColor(cros_tokens::kCrosSysOnPrimaryContainer)));
   layer()->parent()->Add(ripple_layer_.get());
 }
 

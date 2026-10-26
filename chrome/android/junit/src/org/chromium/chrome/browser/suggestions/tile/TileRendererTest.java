@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.suggestions.tile;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.robolectric.Shadows.shadowOf;
@@ -15,8 +16,7 @@ import android.app.Activity;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
-
-import androidx.test.filters.SmallTest;
+import android.view.View;
 
 import org.junit.After;
 import org.junit.Assert;
@@ -30,13 +30,14 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.android.controller.ActivityController;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowDrawable;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.suggestions.ImageFetcher;
@@ -52,7 +53,6 @@ import org.chromium.url.JUnitTestGURLs;
 
 /** A simple test for {@link TileRenderer} using real {@link android.view.View} objects. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TileRendererTest {
     private static final int TITLE_LINES = 1;
     private static final GURL TEST_URL = JUnitTestGURLs.EXAMPLE_URL;
@@ -128,7 +128,6 @@ public class TileRendererTest {
     }
 
     @Test
-    @SmallTest
     public void testBuildTestView_Modern_noDecoration() {
         buildTileView(TileStyle.MODERN, TITLE_LINES);
         // Expect no callbacks: we don't have any icon to offer there.
@@ -137,7 +136,6 @@ public class TileRendererTest {
     }
 
     @Test
-    @SmallTest
     public void testBuildTileView_ModernCondensed_noDecoration() {
         buildTileView(TileStyle.MODERN_CONDENSED, TITLE_LINES);
         // Expect no callbacks: we don't have any icon to offer there.
@@ -146,7 +144,6 @@ public class TileRendererTest {
     }
 
     @Test
-    @SmallTest
     public void testBuildTileView_ModernCondensed_fallbackColor() {
         buildTileView(TileStyle.MODERN_CONDENSED, TITLE_LINES);
         // Expect no callbacks: we don't have any icon to offer there.
@@ -168,7 +165,6 @@ public class TileRendererTest {
     }
 
     @Test
-    @SmallTest
     public void testBuildTileView_ModernCondensed_favicon() {
         buildTileView(TileStyle.MODERN_CONDENSED, TITLE_LINES);
         // Expect no callbacks: we don't have any icon to offer there.
@@ -189,7 +185,6 @@ public class TileRendererTest {
     }
 
     @Test
-    @SmallTest
     public void testBuildTestView_ModernSearch() {
         doReturn(true)
                 .when(mMockTemplateUrlService)
@@ -210,14 +205,12 @@ public class TileRendererTest {
     }
 
     @Test
-    @SmallTest
     public void testBuildTileView_TopSites_ContentDescription() {
         SuggestionsTileView tileView = buildTileView(TileStyle.MODERN, TITLE_LINES);
         Assert.assertEquals("Example: www.example.com", tileView.getContentDescription());
     }
 
     @Test
-    @SmallTest
     public void testBuildTileView_CustomLinks_ContentDescription() {
         mTileSource = TileSource.CUSTOM_LINKS;
         SuggestionsTileView tileView = buildTileView(TileStyle.MODERN, TITLE_LINES);
@@ -226,7 +219,31 @@ public class TileRendererTest {
     }
 
     @Test
-    @SmallTest
+    public void testBuildTileView_AiMode_ContentDescription() {
+        mTileSource = TileSource.AI_MODE;
+        doReturn("AI Mode shortcut").when(mTileSetupDelegate).getAiModeTileContentDescription();
+        SuggestionsTileView tileView = buildTileView(TileStyle.MODERN, TITLE_LINES);
+        Assert.assertEquals("AI Mode shortcut", tileView.getContentDescription());
+    }
+
+    @Test
+    public void testBuildTileView_AiMode_Icon() {
+        mTileSource = TileSource.AI_MODE;
+        doReturn(R.drawable.search_spark_white_24dp)
+                .when(mTileSetupDelegate)
+                .getAiModeTileIconDrawableId();
+        buildTileView(TileStyle.MODERN, TITLE_LINES);
+
+        verify(mTileSetupCallback, never()).run();
+        RobolectricUtil.runAllBackgroundAndUi();
+        verify(mTileSetupCallback).run();
+
+        ShadowDrawable shadowDrawable = shadowOf(mTile.getIcon());
+        Assert.assertEquals(
+                R.drawable.search_spark_white_24dp, shadowDrawable.getCreatedFromResId());
+    }
+
+    @Test
     public void testTileTitle_multiLineSearch() {
         doReturn(true)
                 .when(mMockTemplateUrlService)
@@ -236,7 +253,6 @@ public class TileRendererTest {
     }
 
     @Test
-    @SmallTest
     public void testTileTitle_multiLineURL() {
         doReturn(false)
                 .when(mMockTemplateUrlService)
@@ -246,7 +262,6 @@ public class TileRendererTest {
     }
 
     @Test
-    @SmallTest
     public void testTileTitle_singleLineSearch() {
         doReturn(true)
                 .when(mMockTemplateUrlService)
@@ -256,12 +271,22 @@ public class TileRendererTest {
     }
 
     @Test
-    @SmallTest
     public void testTileTitle_singleLineURL() {
         doReturn(false)
                 .when(mMockTemplateUrlService)
                 .isSearchResultsPageFromDefaultSearchProvider(any());
         SuggestionsTileView tileView = buildTileView(TileStyle.MODERN, 1);
         Assert.assertEquals(1, tileView.getTitleView().getMaxLines());
+    }
+
+    @Test
+    @EnableFeatures({
+        ChromeFeatureList.NTP_AURORA,
+        ChromeFeatureList.NTP_AURORA_V2 + ":layout_type/1"
+    })
+    public void testIconBackgroundHidden_BesideMvtEnabled() {
+        SuggestionsTileView tileView = buildTileView(TileStyle.MODERN, TITLE_LINES);
+        View iconBackground = tileView.findViewById(R.id.tile_view_icon_background);
+        Assert.assertEquals(View.GONE, iconBackground.getVisibility());
     }
 }

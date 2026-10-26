@@ -7,15 +7,14 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/url_formatter/url_formatter.h"
 #include "extensions/common/extension_urls.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "ui/base/mojom/window_open_disposition.mojom.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
@@ -69,7 +68,7 @@ void ZeroStatePromoPageHandler::LaunchWebStoreLink(
 
   NavigateParams params(profile_, url_with_utm,
                         ::ui::PAGE_TRANSITION_AUTO_BOOKMARK);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   Navigate(&params);
   base::UmaHistogramEnumeration(
       "Extensions.ZeroStatePromo.IphActionChromeWebStoreLink", link);

@@ -4,17 +4,14 @@
 
 #include "chrome/browser/platform_experience/delegated_tasks/delegated_task_runner.h"
 
-#include <windows.h>
-
 #include <memory>
 #include <utility>
-#include <vector>
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/functional/callback_helpers.h"
 #include "base/process/launch.h"
 #include "base/process/process.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/multiprocess_test.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
@@ -34,6 +31,13 @@ namespace platform_experience {
 
 namespace {
 
+constexpr int kTaskSuccessExitCode = 0;
+constexpr int kTaskTimeoutSeconds = 5;
+
+constexpr char kTaskName[] = "TestTask";
+constexpr char kTaskCustomSwitchKey[] = "post-install-url";
+constexpr char kTaskCustomSwitchValue[] = "https://example.com";
+
 const base::FilePath::CharType kFakeBinaryPath[] =
     FILE_PATH_LITERAL("C:\\path\\to\\fake_binary.exe");
 
@@ -45,20 +49,15 @@ class TestDelegatedTask : public DelegatedTask {
   DelegatedTaskType GetTaskType() const override {
     return DelegatedTaskType::kRegisterSearchPromotion;
   }
-  base::TimeDelta GetTimeout() const override { return base::Seconds(5); }
-
-  DelegatedTaskStatus ParseExitCode(int exit_code) const override {
-    if (exit_code == -1) {
-      return DelegatedTaskStatus::kSuccess;
-    }
-    return DelegatedTaskStatus::kInvalidExitCode;
+  base::TimeDelta GetTimeout() const override {
+    return base::Seconds(kTaskTimeoutSeconds);
   }
 
   void AppendCommandLineSwitches(base::CommandLine& cmd_line) const override {
-    cmd_line.AppendSwitchASCII("post-install-url", "https://example.com");
+    cmd_line.AppendSwitchASCII(kTaskCustomSwitchKey, kTaskCustomSwitchValue);
   }
 
-  std::string_view GetTaskName() const override { return "TestTask"; }
+  std::string_view GetTaskName() const override { return kTaskName; }
 };
 
 class DelegatedTaskRunnerTest : public base::MultiProcessTest {
@@ -73,60 +72,111 @@ class DelegatedTaskRunnerMockTimeTest : public base::MultiProcessTest {
 };
 
 MULTIPROCESS_TEST_MAIN(SuccessProcess) {
-  return 0;
+  return kTaskSuccessExitCode;
 }
 
 MULTIPROCESS_TEST_MAIN(InvalidTaskProcess) {
-  return 1;
+  return static_cast<int>(PehExitCode::kInvalidTaskType);
 }
 
-MULTIPROCESS_TEST_MAIN(TaskCustomExitCodeProcess) {
-  return -1;
+MULTIPROCESS_TEST_MAIN(InvalidArgsProcess) {
+  return static_cast<int>(PehExitCode::kInvalidArgs);
 }
 
 MULTIPROCESS_TEST_MAIN(TimeoutProcess) {
-  // Sleep for longer than the task timeout (5 seconds).
-  base::PlatformThread::Sleep(base::Seconds(10));
-  return 0;
+  // Sleep for longer than the task timeout.
+  base::PlatformThread::Sleep(base::Seconds(kTaskTimeoutSeconds * 2));
+  return kTaskSuccessExitCode;
+}
+
+MULTIPROCESS_TEST_MAIN(CustomExitCodeProcess) {
+  return 42;
+}
+
+std::unique_ptr<testing::NiceMock<MockPehLauncher>>
+CreateDefaultMockLauncher() {
+  auto mock_launcher = std::make_unique<testing::NiceMock<MockPehLauncher>>();
+  ON_CALL(*mock_launcher, GetBinaryPath())
+      .WillByDefault(Return(base::FilePath(kFakeBinaryPath)));
+  ON_CALL(*mock_launcher, GetBinaryVersion(_))
+      .WillByDefault(Return(base::Version("1.0.0.0")));
+  return mock_launcher;
 }
 
 }  // namespace
 
 TEST_F(DelegatedTaskRunnerTest, BinaryNotFound) {
+  base::HistogramTester histogram_tester;
   auto mock_launcher = std::make_unique<MockPehLauncher>();
   EXPECT_CALL(*mock_launcher, GetBinaryPath())
       .WillOnce(Return(base::FilePath()));
   EXPECT_CALL(*mock_launcher, LaunchProcess(_, _)).Times(0);
 
-  DelegatedTaskRunner runner(std::move(mock_launcher));
-  std::unique_ptr<DelegatedTask> task = std::make_unique<TestDelegatedTask>();
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
   base::test::TestFuture<DelegatedTaskResult> future;
 
-  runner.Run(std::move(task), future.GetCallback());
+  runner->Run(std::move(task), "0.0.0.0", future.GetCallback());
 
-  EXPECT_EQ(future.Get().status, DelegatedTaskStatus::kPehNotFound);
+  auto result = future.Get();
+  EXPECT_FALSE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.error(),
+            DelegatedTaskStatus::kPehNotFound);
+
+  histogram_tester.ExpectUniqueSample(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Status",
+      DelegatedTaskStatus::kPehNotFound, 1);
+  histogram_tester.ExpectTotalCount(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Duration", 1);
 }
 
 TEST_F(DelegatedTaskRunnerTest, ProcessLaunchFailure) {
-  auto mock_launcher = std::make_unique<MockPehLauncher>();
-  EXPECT_CALL(*mock_launcher, GetBinaryPath())
-      .WillOnce(Return(base::FilePath(kFakeBinaryPath)));
+  auto mock_launcher = CreateDefaultMockLauncher();
+
   EXPECT_CALL(*mock_launcher, LaunchProcess(_, _))
       .WillOnce(Return(base::Process()));
 
-  DelegatedTaskRunner runner(std::move(mock_launcher));
-  std::unique_ptr<DelegatedTask> task = std::make_unique<TestDelegatedTask>();
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
   base::test::TestFuture<DelegatedTaskResult> future;
 
-  runner.Run(std::move(task), future.GetCallback());
+  runner->Run(std::move(task), "0.0.0.0", future.GetCallback());
 
-  EXPECT_EQ(future.Get().status, DelegatedTaskStatus::kProcessLaunchFailure);
+  auto result = future.Get();
+  EXPECT_FALSE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.error(),
+            DelegatedTaskStatus::kProcessLaunchFailure);
 }
 
-TEST_F(DelegatedTaskRunnerTest, SuccessAndCommandLineVerification) {
+TEST_F(DelegatedTaskRunnerTest, PehValidationFailure) {
+  base::HistogramTester histogram_tester;
   auto mock_launcher = std::make_unique<MockPehLauncher>();
   EXPECT_CALL(*mock_launcher, GetBinaryPath())
       .WillOnce(Return(base::FilePath(kFakeBinaryPath)));
+  EXPECT_CALL(*mock_launcher, IsBinaryVerified(_)).WillOnce(Return(false));
+  EXPECT_CALL(*mock_launcher, LaunchProcess(_, _)).Times(0);
+
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
+  base::test::TestFuture<DelegatedTaskResult> future;
+
+  runner->Run(std::move(task), "0.0.0.0", future.GetCallback());
+
+  auto result = future.Get();
+  EXPECT_FALSE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.error(),
+            DelegatedTaskStatus::kPehValidationFailure);
+
+  histogram_tester.ExpectUniqueSample(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Status",
+      DelegatedTaskStatus::kPehValidationFailure, 1);
+  histogram_tester.ExpectTotalCount(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Duration", 1);
+}
+
+TEST_F(DelegatedTaskRunnerTest, SuccessAndCommandLineVerification) {
+  base::HistogramTester histogram_tester;
+  auto mock_launcher = CreateDefaultMockLauncher();
 
   base::CommandLine launched_cmd_line(base::CommandLine::NO_PROGRAM);
   EXPECT_CALL(*mock_launcher, LaunchProcess(_, _))
@@ -138,28 +188,32 @@ TEST_F(DelegatedTaskRunnerTest, SuccessAndCommandLineVerification) {
             options);
       });
 
-  DelegatedTaskRunner runner(std::move(mock_launcher));
-  std::unique_ptr<DelegatedTask> task = std::make_unique<TestDelegatedTask>();
-
-  std::string expected_task_name(task->GetTaskName());
-
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
   base::test::TestFuture<DelegatedTaskResult> future;
-  runner.Run(std::move(task), future.GetCallback());
 
-  EXPECT_EQ(future.Get().status, DelegatedTaskStatus::kSuccess);
+  runner->Run(std::move(task), "0.0.0.0", future.GetCallback());
+
+  auto result = future.Get();
+  EXPECT_TRUE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.value(), kTaskSuccessExitCode);
 
   EXPECT_EQ(launched_cmd_line.GetProgram(), base::FilePath(kFakeBinaryPath));
   EXPECT_EQ(launched_cmd_line.GetSwitchValueASCII(kDelegatedTasksSwitch),
-            expected_task_name);
+            kTaskName);
 
-  EXPECT_EQ(launched_cmd_line.GetSwitchValueASCII("post-install-url"),
-            "https://example.com");
+  EXPECT_EQ(launched_cmd_line.GetSwitchValueASCII(kTaskCustomSwitchKey),
+            kTaskCustomSwitchValue);
+
+  histogram_tester.ExpectUniqueSample(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Status",
+      DelegatedTaskStatus::kSuccess, 1);
+  histogram_tester.ExpectTotalCount(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Duration", 1);
 }
 
 TEST_F(DelegatedTaskRunnerTest, InvalidTask) {
-  auto mock_launcher = std::make_unique<MockPehLauncher>();
-  EXPECT_CALL(*mock_launcher, GetBinaryPath())
-      .WillOnce(Return(base::FilePath(kFakeBinaryPath)));
+  auto mock_launcher = CreateDefaultMockLauncher();
 
   EXPECT_CALL(*mock_launcher, LaunchProcess(_, _))
       .WillOnce([&](const base::CommandLine& cmd_line,
@@ -169,41 +223,90 @@ TEST_F(DelegatedTaskRunnerTest, InvalidTask) {
             base::GetMultiProcessTestChildBaseCommandLine(), options);
       });
 
-  DelegatedTaskRunner runner(std::move(mock_launcher));
-  std::unique_ptr<DelegatedTask> task = std::make_unique<TestDelegatedTask>();
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
   base::test::TestFuture<DelegatedTaskResult> future;
 
-  runner.Run(std::move(task), future.GetCallback());
+  runner->Run(std::move(task), "0.0.0.0", future.GetCallback());
 
-  EXPECT_EQ(future.Get().status, DelegatedTaskStatus::kInvalidTaskType);
+  auto result = future.Get();
+  EXPECT_FALSE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.error(),
+            DelegatedTaskStatus::kInvalidTaskType);
 }
 
-TEST_F(DelegatedTaskRunnerTest, CustomExitCode) {
-  auto mock_launcher = std::make_unique<MockPehLauncher>();
-  EXPECT_CALL(*mock_launcher, GetBinaryPath())
-      .WillOnce(Return(base::FilePath(kFakeBinaryPath)));
+TEST_F(DelegatedTaskRunnerTest, InvalidArgs) {
+  auto mock_launcher = CreateDefaultMockLauncher();
 
   EXPECT_CALL(*mock_launcher, LaunchProcess(_, _))
       .WillOnce([&](const base::CommandLine& cmd_line,
                     const base::LaunchOptions& options) {
         return base::SpawnMultiProcessTestChild(
-            "TaskCustomExitCodeProcess",
+            "InvalidArgsProcess",
             base::GetMultiProcessTestChildBaseCommandLine(), options);
       });
 
-  DelegatedTaskRunner runner(std::move(mock_launcher));
-  std::unique_ptr<DelegatedTask> task = std::make_unique<TestDelegatedTask>();
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
   base::test::TestFuture<DelegatedTaskResult> future;
 
-  runner.Run(std::move(task), future.GetCallback());
+  runner->Run(std::move(task), "0.0.0.0", future.GetCallback());
 
-  EXPECT_EQ(future.Get().status, DelegatedTaskStatus::kSuccess);
+  auto result = future.Get();
+  EXPECT_FALSE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.error(),
+            DelegatedTaskStatus::kInvalidArgs);
+}
+
+TEST_F(DelegatedTaskRunnerTest, InvalidMinVersion) {
+  base::HistogramTester histogram_tester;
+  auto mock_launcher = std::make_unique<MockPehLauncher>();
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+
+  auto task = std::make_unique<TestDelegatedTask>();
+  base::test::TestFuture<DelegatedTaskResult> future;
+
+  // Passing an empty or invalid version string fails immediately.
+  runner->Run(std::move(task), "", future.GetCallback());
+
+  auto result = future.Get();
+  EXPECT_FALSE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.error(),
+            DelegatedTaskStatus::kUnsupportedVersion);
+}
+
+TEST_F(DelegatedTaskRunnerTest, CustomExitCodeLogsSuccess) {
+  base::HistogramTester histogram_tester;
+  auto mock_launcher = CreateDefaultMockLauncher();
+
+  EXPECT_CALL(*mock_launcher, LaunchProcess(_, _))
+      .WillOnce([&](const base::CommandLine& cmd_line,
+                    const base::LaunchOptions& options) {
+        return base::SpawnMultiProcessTestChild(
+            "CustomExitCodeProcess",
+            base::GetMultiProcessTestChildBaseCommandLine(), options);
+      });
+
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
+  base::test::TestFuture<DelegatedTaskResult> future;
+
+  runner->Run(std::move(task), "0.0.0.0", future.GetCallback());
+
+  auto result = future.Get();
+  EXPECT_TRUE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.value(), 42);
+
+  histogram_tester.ExpectUniqueSample(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Status",
+      DelegatedTaskStatus::kSuccess, 1);
+  histogram_tester.ExpectTotalCount(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Duration", 1);
 }
 
 TEST_F(DelegatedTaskRunnerMockTimeTest, Timeout) {
-  auto mock_launcher = std::make_unique<MockPehLauncher>();
-  EXPECT_CALL(*mock_launcher, GetBinaryPath())
-      .WillOnce(Return(base::FilePath(kFakeBinaryPath)));
+  base::HistogramTester histogram_tester;
+  auto mock_launcher = CreateDefaultMockLauncher();
 
   EXPECT_CALL(*mock_launcher, LaunchProcess(_, _))
       .WillOnce([&](const base::CommandLine& cmd_line,
@@ -213,42 +316,153 @@ TEST_F(DelegatedTaskRunnerMockTimeTest, Timeout) {
             options);
       });
 
-  DelegatedTaskRunner runner(std::move(mock_launcher));
-  std::unique_ptr<DelegatedTask> task = std::make_unique<TestDelegatedTask>();
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
   base::test::TestFuture<DelegatedTaskResult> future;
 
-  runner.Run(std::move(task), future.GetCallback());
+  runner->Run(std::move(task), "0.0.0.0", future.GetCallback());
 
   // Fast-forward mock time to trigger the timeout.
-  task_environment_.FastForwardBy(base::Seconds(10));
+  task_environment_.FastForwardBy(base::Seconds(kTaskTimeoutSeconds + 1));
 
-  EXPECT_EQ(future.Get().status, DelegatedTaskStatus::kTaskTimeout);
+  auto result = future.Get();
+  EXPECT_FALSE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.error(),
+            DelegatedTaskStatus::kTaskTimeout);
+
+  histogram_tester.ExpectUniqueSample(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Status",
+      DelegatedTaskStatus::kTaskTimeout, 1);
+  histogram_tester.ExpectTotalCount(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Duration", 1);
 }
 
 TEST_F(DelegatedTaskRunnerTest, RunnerDestroyedBeforeTaskCompletion) {
-  auto mock_launcher = std::make_unique<MockPehLauncher>();
-  EXPECT_CALL(*mock_launcher, GetBinaryPath())
-      .WillOnce(Return(base::FilePath(kFakeBinaryPath)));
+  auto mock_launcher = CreateDefaultMockLauncher();
+
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
+  base::test::TestFuture<DelegatedTaskResult> future;
+
+  runner->Run(std::move(task), "0.0.0.0", future.GetCallback());
+  runner.reset();
+
+  auto result = future.Get();
+  EXPECT_FALSE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.error(),
+            DelegatedTaskStatus::kRunnerDestroyedBeforeTaskCompletion);
+}
+
+TEST_F(DelegatedTaskRunnerTest, RunnerDestroyedWhileProcessLaunchInFlight) {
+  auto mock_launcher = CreateDefaultMockLauncher();
+
+  base::RunLoop run_loop;
+
+  EXPECT_CALL(*mock_launcher, LaunchProcess(_, _))
+      .WillOnce([quit_closure = run_loop.QuitClosure()](
+                    const base::CommandLine& cmd_line,
+                    const base::LaunchOptions& options) {
+        quit_closure.Run();
+        return base::Process();
+      });
+
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
+  base::test::TestFuture<DelegatedTaskResult> future;
+
+  runner->Run(std::move(task), "0.0.0.0", future.GetCallback());
+
+  // Process main thread tasks until LaunchProcess is invoked.
+  run_loop.Run();
+
+  // Destroy the runner while LaunchProcess completion is in-flight.
+  runner.reset();
+
+  auto result = future.Get();
+  EXPECT_FALSE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.error(),
+            DelegatedTaskStatus::kRunnerDestroyedBeforeTaskCompletion);
+}
+
+TEST_F(DelegatedTaskRunnerTest, UnsupportedVersion) {
+  base::HistogramTester histogram_tester;
+  auto mock_launcher = CreateDefaultMockLauncher();
+
+  EXPECT_CALL(*mock_launcher, GetBinaryVersion(_))
+      .WillOnce(Return(base::Version("151.0.0.0")));
+
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
+  base::test::TestFuture<DelegatedTaskResult> future;
+
+  runner->Run(std::move(task), "152.0.0.0", future.GetCallback());
+
+  auto result = future.Get();
+  EXPECT_FALSE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.error(),
+            DelegatedTaskStatus::kUnsupportedVersion);
+
+  histogram_tester.ExpectUniqueSample(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Status",
+      DelegatedTaskStatus::kUnsupportedVersion, 1);
+  histogram_tester.ExpectTotalCount(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Duration", 1);
+}
+
+TEST_F(DelegatedTaskRunnerTest, SupportedVersion) {
+  base::HistogramTester histogram_tester;
+  auto mock_launcher = CreateDefaultMockLauncher();
+
+  EXPECT_CALL(*mock_launcher, GetBinaryVersion(_))
+      .WillOnce(Return(base::Version("153.0.0.0")));
 
   EXPECT_CALL(*mock_launcher, LaunchProcess(_, _))
       .WillOnce([&](const base::CommandLine& cmd_line,
                     const base::LaunchOptions& options) {
         return base::SpawnMultiProcessTestChild(
-            "TimeoutProcess", base::GetMultiProcessTestChildBaseCommandLine(),
+            "SuccessProcess", base::GetMultiProcessTestChildBaseCommandLine(),
             options);
       });
 
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
   base::test::TestFuture<DelegatedTaskResult> future;
 
-  {
-    DelegatedTaskRunner runner(std::move(mock_launcher));
-    std::unique_ptr<DelegatedTask> task = std::make_unique<TestDelegatedTask>();
+  runner->Run(std::move(task), "152.0.0.0", future.GetCallback());
 
-    runner.Run(std::move(task), future.GetCallback());
-  }
+  auto result = future.Get();
+  EXPECT_TRUE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.value(), kTaskSuccessExitCode);
 
-  EXPECT_EQ(future.Get().status,
-            DelegatedTaskStatus::kRunnerDestroyedBeforeTaskCompletion);
+  histogram_tester.ExpectUniqueSample(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Status",
+      DelegatedTaskStatus::kSuccess, 1);
+  histogram_tester.ExpectTotalCount(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Duration", 1);
+}
+
+TEST_F(DelegatedTaskRunnerTest, InvalidBinaryVersion) {
+  base::HistogramTester histogram_tester;
+  auto mock_launcher = CreateDefaultMockLauncher();
+
+  // Return an invalid version (e.g. if the file lacks VERSIONINFO).
+  EXPECT_CALL(*mock_launcher, GetBinaryVersion(_))
+      .WillOnce(Return(base::Version()));
+
+  auto runner = std::make_unique<DelegatedTaskRunner>(std::move(mock_launcher));
+  auto task = std::make_unique<TestDelegatedTask>();
+  base::test::TestFuture<DelegatedTaskResult> future;
+
+  runner->Run(std::move(task), "152.0.0.0", future.GetCallback());
+
+  auto result = future.Get();
+  EXPECT_FALSE(result.exit_code_or_status.has_value());
+  EXPECT_EQ(result.exit_code_or_status.error(),
+            DelegatedTaskStatus::kUnsupportedVersion);
+
+  histogram_tester.ExpectUniqueSample(
+      "Windows.PlatformExperienceHelper.DelegatedTasks.TestTask.Status",
+      DelegatedTaskStatus::kUnsupportedVersion, 1);
 }
 
 }  // namespace platform_experience

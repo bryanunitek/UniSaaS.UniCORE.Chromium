@@ -11,7 +11,6 @@
 <translation id="1253734725326687145">Հպման թիրախը տեղափոխվեց վերևի աջ անկյուն։ Հպեք այստեղ։</translation>
 <translation id="1266864766717917324">Չհաջողվեց ուղարկել բովանդակությունը (<ph name="CONTENT_TYPE" />)</translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Փորձեք ուղարկել տեքստը մաս-մաս։</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Ձախից աջ</translation>
 <translation id="1383876407941801731">Որոնում</translation>
@@ -38,7 +37,6 @@
 <translation id="1901303067676059328">Ընտրել &amp;բոլորը</translation>
 <translation id="19085484004813472">Սա նոր գործառույթ է</translation>
 <translation id="2006524834898217237">Համոզվեք, որ սարքը միացված է ինտերնետին։</translation>
-<translation id="208586643495776849">Նորից փորձեք</translation>
 <translation id="2111134541987263231">Միացրեք <ph name="BEGIN_BOLD" />Թույլ տալ ինկոգնիտո ռեժիմում<ph name="END_BOLD" /> կարգավորումը</translation>
 <translation id="2141853158323869627">{DAYS,plural, =1{1 օր}one{# օր}other{# օր}}</translation>
 <translation id="2148716181193084225">Այսօր</translation>
@@ -85,7 +83,6 @@
 <translation id="3306688585798492231">Ներ­կա­­ռուց­ված էկրան</translation>
 <translation id="335581015389089642">Speech</translation>
 <translation id="3372635229069101468">Սեղմեք <ph name="BEGIN_BOLD" />Մանրամասներ<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Տեքստը չափազանց մեծ է</translation>
 <translation id="3406306243914553062">HTML բովանդակություն</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{Մնացել է 1 օր}one{Մնացել է # օր}other{Մնացել է # օր}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> Ֆայլ</translation>
@@ -128,7 +125,6 @@
 <translation id="5046499563572181734">Հպեք այստեղ</translation>
 <translation id="5076340679995252485">&amp;Տեղադրել</translation>
 <translation id="520299402983819650"><ph name="QUANTITY" /> ՊԲ</translation>
-<translation id="5278860589123563674">Չհաջողվեց ուղարկել</translation>
 <translation id="5283101102242354279">Միացրեք ընդլայնումը ինկոգնիտո ռեժիմում՝</translation>
 <translation id="528468243742722775">Վերջ</translation>
 <translation id="5329858601952122676">&amp;Ջնջել</translation>

@@ -74,7 +74,7 @@ public class TwaVerifier implements Verifier, DestroyObserver {
         Promise<Boolean> promise = new Promise<>();
         if (getPendingOrigins().contains(origin)) {
             mOriginVerifier.start(
-                    (packageName, unused, verified, online) -> {
+                    (packageName, _, verified, online) -> {
                         if (mDestroyed) return;
 
                         getPendingOrigins().remove(origin);
@@ -92,9 +92,11 @@ public class TwaVerifier implements Verifier, DestroyObserver {
     }
 
     @Override
-    public @Nullable String getVerifiedScope(String url) {
+    public String getVerifiedScope(String url) {
         Origin origin = Origin.create(url);
-        if (origin == null) return null;
+        // Origin.create() only supports HTTP(S). For other schemes, return the URL itself so it
+        // does not match any verified origin scope.
+        if (origin == null) return url;
         return origin.toString();
     }
 

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/containers/id_map.h"
+#include "base/feature.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -65,7 +66,7 @@ struct CONTENT_EXPORT PreresolveJob {
       mojo::PendingRemote<network::mojom::ConnectionChangeObserverClient>
           connection_change_observer_client,
       PreresolveInfo* info,
-      const base::UnguessableToken& network_restrictions_id);
+      base::UnguessableToken network_restrictions_id);
 
   PreresolveJob(const PreresolveJob&) = delete;
   PreresolveJob& operator=(const PreresolveJob&) = delete;

@@ -490,7 +490,7 @@ TEST_F(TextOffsetMappingTest, RangeWithSelect1) {
       "pseudo=\"-internal-select-inner-element\"></div>"
       "<slot pseudo=\"-internal-select-button-slot\"></slot>"
       "<div popover=\"auto\" pseudo=\"picker(select)\">"
-      "<slot id=\"-internal-select-options-slot\"></slot>"
+      "<slot id=\"select-options\"></slot>"
       "</div>"
       "<div popover=\"manual\" pseudo=\"-internal-select-autofill-preview\">"
       "<div pseudo=\"-internal-select-autofill-preview-text\"></div>"
@@ -502,7 +502,7 @@ TEST_F(TextOffsetMappingTest, RangeWithSelect1) {
       "pseudo=\"-internal-select-inner-element\">^|</div>"
       "<slot pseudo=\"-internal-select-button-slot\"></slot>"
       "<div popover=\"auto\" pseudo=\"picker(select)\">"
-      "<slot id=\"-internal-select-options-slot\"></slot>"
+      "<slot id=\"select-options\"></slot>"
       "</div>"
       "<div popover=\"manual\" pseudo=\"-internal-select-autofill-preview\">"
       "<div pseudo=\"-internal-select-autofill-preview-text\"></div>"
@@ -522,7 +522,7 @@ TEST_F(TextOffsetMappingTest, RangeWithSelect2) {
       "pseudo=\"-internal-select-inner-element\"></div>"
       "<slot pseudo=\"-internal-select-button-slot\"></slot>"
       "<div popover=\"auto\" pseudo=\"picker(select)\">"
-      "<slot id=\"-internal-select-options-slot\">bar</slot>"
+      "<slot id=\"select-options\">bar</slot>"
       "</div>"
       "<div popover=\"manual\" pseudo=\"-internal-select-autofill-preview\">"
       "<div pseudo=\"-internal-select-autofill-preview-text\"></div>"
@@ -534,7 +534,7 @@ TEST_F(TextOffsetMappingTest, RangeWithSelect2) {
       "pseudo=\"-internal-select-inner-element\">^|</div>"
       "<slot pseudo=\"-internal-select-button-slot\"></slot>"
       "<div popover=\"auto\" pseudo=\"picker(select)\">"
-      "<slot id=\"-internal-select-options-slot\">bar</slot>"
+      "<slot id=\"select-options\">bar</slot>"
       "</div>"
       "<div popover=\"manual\" pseudo=\"-internal-select-autofill-preview\">"
       "<div pseudo=\"-internal-select-autofill-preview-text\"></div>"
@@ -639,7 +639,7 @@ TEST_F(TextOffsetMappingTest, ComputeTextOffsetWithBrokenImage) {
         TextOffsetMapping::FindBackwardInlineContents(position)}) {
     const TextOffsetMapping mapping(inline_contents);
     const String text = mapping.GetText();
-    const unsigned offset = mapping.ComputeTextOffset(position);
+    const wtf_size_t offset = mapping.ComputeTextOffset(position);
     EXPECT_LE(offset, text.length());
     EXPECT_EQ("A,B", text);
     EXPECT_EQ(2u, offset);

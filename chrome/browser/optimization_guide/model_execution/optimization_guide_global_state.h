@@ -12,13 +12,13 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/version_info/channel.h"
 #include "chrome/browser/optimization_guide/prediction/chrome_profile_download_service_tracker.h"
 #include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/delivery/prediction_manager.h"
 #include "components/optimization_guide/core/delivery/prediction_model_component_update_listener.h"
 #include "components/optimization_guide/core/delivery/prediction_model_store.h"
 #include "components/optimization_guide/core/model_execution/on_device_capability.h"
-#include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "services/on_device_model/public/cpp/buildflags.h"
 #include "services/on_device_model/public/mojom/on_device_model_service.mojom.h"
 
@@ -26,12 +26,28 @@
 #include "components/optimization_guide/core/model_execution/android/model_broker_android.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
+class PrefService;
+
 namespace optimization_guide {
 
 BASE_DECLARE_FEATURE(kOptimizationGuideManifestBroker);
 
-class ChromeModelComponentStateManagerObserver;
-class ModelBrokerState;
+#if BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
+// Overrides the default On-Device AI user setting (chrome://settings/ai) to
+// enabled on pre-Stable channels and custom developer builds.
+BASE_DECLARE_FEATURE(kOnDeviceAiDefaultEnabled);
+
+// Computes the default value for `localstate::kOnDeviceAiUserSettingsEnabled`
+// based on the release `channel`, whether this is an official branded build,
+// feature/switch overrides, and whether an on-device model is already
+// installed in `local_state`.
+bool ShouldEnableOnDeviceAiByDefault(const PrefService& local_state,
+                                     version_info::Channel channel,
+                                     bool is_official_branded_build);
+bool ShouldEnableOnDeviceAiByDefault(const PrefService& local_state,
+                                     version_info::Channel channel);
+#endif  // BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
+
 class OptimizationGuideGlobalFeature;
 class OptimizationGuideGlobalStateTest;
 
@@ -59,8 +75,8 @@ class ChromePredictionManager {
   ChromeProfileDownloadServiceTracker profile_download_service_tracker_;
 };
 
-// This holds the ModelBrokerState and other common objects shared between
-// profiles. Since some of the membersit hold raw_ptr to browser process level
+// This holds the ManifestBrokerState and other common objects shared between
+// profiles. Since some of the members hold raw_ptr to browser process level
 // objects, such as local state prefs, profile manager, it must not outlive the
 // browser process, so each profile holds a ref to it in
 // OptimizationGuideKeyedService to keep it alive until all profiles are
@@ -70,12 +86,6 @@ class OptimizationGuideGlobalState final
  public:
   // Retrieves or creates the instance.
   static scoped_refptr<OptimizationGuideGlobalState> CreateOrGet();
-
-#if BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
-  // This accessor is mainly for the chrome://on-device-internals page and
-  // tests.
-  ModelBrokerState* model_broker_state();
-#endif  // BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
 
   OnDeviceCapability& on_device_capability() { return *on_device_capability_; }
 
@@ -123,10 +133,6 @@ class OptimizationGuideGlobalState final
               base::BindRepeating(&RegisterPredictionModelComponent));
 
   std::unique_ptr<OnDeviceCapability> on_device_capability_;
-#if BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
-  std::unique_ptr<ChromeModelComponentStateManagerObserver>
-      component_state_manager_observer_;
-#endif  // BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
 
   base::WeakPtrFactory<OptimizationGuideGlobalState> weak_ptr_factory_{this};
 };

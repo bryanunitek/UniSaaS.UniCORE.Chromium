@@ -85,20 +85,12 @@ COMPONENT_EXPORT(NETWORK_CPP)
 bool IsCorsEnabledRequestMode(mojom::RequestMode mode);
 
 // Checks safelisted request parameters.
-//
-// `is_ad_auction_trusted_signals_request` should only be true for Protected
-// Audiences trusted signals requests, which allow the
-// "message/ad-auction-trusted-signals-request" Content-Type without a
-// preflight. This parameter is slated to be removed when the Protect Audiences
-// code is. It is always assumed to be false  by IsCorsSafelistedContentType().
 COMPONENT_EXPORT(NETWORK_CPP)
 bool IsCorsSafelistedMethod(const std::string& method);
 COMPONENT_EXPORT(NETWORK_CPP)
 bool IsCorsSafelistedContentType(const std::string& name);
 COMPONENT_EXPORT(NETWORK_CPP)
-bool IsCorsSafelistedHeader(const std::string& name,
-                            const std::string& value,
-                            bool is_ad_auction_trusted_signals_request = false);
+bool IsCorsSafelistedHeader(const std::string& name, const std::string& value);
 COMPONENT_EXPORT(NETWORK_CPP)
 bool IsNoCorsSafelistedHeaderName(const std::string& name);
 COMPONENT_EXPORT(NETWORK_CPP)
@@ -106,6 +98,12 @@ bool IsPrivilegedNoCorsHeaderName(const std::string& name);
 COMPONENT_EXPORT(NETWORK_CPP)
 bool IsNoCorsSafelistedHeader(const std::string& name,
                               const std::string& value);
+
+// Returns true if `name` is a CORS-safelisted response header name.
+// The match is case-insensitive.
+// https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name
+COMPONENT_EXPORT(NETWORK_CPP)
+bool IsCorsSafelistedResponseHeaderName(std::string_view name);
 
 // https://fetch.spec.whatwg.org/#cors-unsafe-request-header-names
 // |headers| must not contain multiple headers for the same name.

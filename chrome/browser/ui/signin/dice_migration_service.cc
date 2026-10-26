@@ -10,7 +10,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
@@ -66,8 +65,7 @@ bool MaybeMigrateUser(Profile* profile) {
 }
 
 bool MaybeShowToast(BrowserWindowInterface* browser) {
-  ToastController* const toast_controller =
-      browser->GetFeatures().toast_controller();
+  ToastController* const toast_controller = ToastController::From(browser);
   if (!toast_controller) {
     return false;
   }
@@ -143,9 +141,8 @@ bool DiceMigrationService::ForceMigrateUserIfEligible() {
       // toast.
       // This object deletes itself when done.
       new profiles::BrowserAddedForProfileObserver(
-          profile, base::BindOnce([](Browser* b) {
-            MaybeShowToast(b);
-          }));
+          profile,
+          base::BindOnce([](BrowserWindowInterface* b) { MaybeShowToast(b); }));
     }
   };
   CHECK(!toast_trigger_timer_.IsRunning());

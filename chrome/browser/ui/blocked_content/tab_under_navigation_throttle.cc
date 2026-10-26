@@ -21,6 +21,7 @@
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/visibility.h"
@@ -91,8 +92,8 @@ TabUnderNavigationThrottle::TabUnderNavigationThrottle(
 bool TabUnderNavigationThrottle::IsSuspiciousClientRedirect() const {
   // This throttle is only created for primary main frame navigations. See
   // MaybeCreate().
-  DCHECK(navigation_handle()->IsInPrimaryMainFrame());
-  DCHECK(!navigation_handle()->HasCommitted());
+  CHECK(navigation_handle()->IsInPrimaryMainFrame(), base::NotFatalUntil::M162);
+  CHECK(!navigation_handle()->HasCommitted(), base::NotFatalUntil::M162);
 
   // Some browser initiated navigations have HasUserGesture set to false. This
   // should eventually be fixed in crbug.com/41257523. In the meantime, just
@@ -160,14 +161,18 @@ void TabUnderNavigationThrottle::ShowUI() {
               web_contents);
   framebust_blocked_message_delegate->ShowMessage(
       url, navigation_handle()->GetInitiatorOrigin(),
+      navigation_handle()->GetInitiatorNavigationState(),
       HostContentSettingsMapFactory::GetForProfile(
           web_contents->GetBrowserContext()),
       base::NullCallback());
 #else
-  if (auto* tab_helper =
-          FramebustBlockTabHelper::FromWebContents(web_contents)) {
-    tab_helper->AddBlockedUrl(url, navigation_handle()->GetInitiatorOrigin(),
-                              base::NullCallback());
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents);
+  if (auto* tab_helper = tab ? FramebustBlockTabHelper::From(tab) : nullptr) {
+    tab_helper->AddBlockedUrl(
+        url, navigation_handle()->GetInitiatorOrigin(),
+        navigation_handle()->GetInitiatorNavigationState(),
+        base::NullCallback());
   }
 #endif
 }

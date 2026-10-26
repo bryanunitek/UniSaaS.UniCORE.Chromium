@@ -14,10 +14,6 @@
 // content.
 BASE_DECLARE_FEATURE(kAutofillAllowDefaultPreventedSubmission);
 
-// Enables correctly setting the is_user_edited_deprecated bit in the parsed
-// form fields instead of using true by default.
-BASE_DECLARE_FEATURE(kAutofillCorrectUserEditedBitInParsedField);
-
 // Record form submissions events that are detected in the renderer before they
 // are processed. Act as a killswitch where the feature is enabled by default.
 BASE_DECLARE_FEATURE(kAutofillCountFormSubmissionInRenderer);
@@ -43,6 +39,12 @@ BASE_DECLARE_FEATURE(kAutofillExtractFullUrlOnIOs);
 // propagated.
 BASE_DECLARE_FEATURE(kAutofillFormSubmissionEventsInCaptureMode);
 
+// Ignores the `tabindex` attribute when determining whether a form field is
+// focusable, aligning iOS with Blink's Element::IsFocusable(). A negative
+// `tabindex` only removes an element from the sequential focus order; it stays
+// programmatically focusable and fillable.
+BASE_DECLARE_FEATURE(kAutofillIgnoreTabIndexForFocusabilityIos);
+
 // Detaches the listeners for the payments suggestion bottom sheet when the
 // listeners are invalidated (i.e. the field type is no longer a credit card
 // field). This can be used in combination with kAutofillPaymentsSheetV3Ios.
@@ -63,10 +65,6 @@ BASE_DECLARE_FEATURE(kAutofillPaymentsSheetV2Ios);
 // the FormSuggestionController.
 BASE_DECLARE_FEATURE(kAutofillPaymentsSheetV3Ios);
 
-// Enables Undo for Autofill operations on iOS. This will replace the Clear form
-// button with the Undo autofill button in the keyboard accessory.
-BASE_DECLARE_FEATURE(kAutofillUndoIos);
-
 // Rejects form submission events if they lack user gesture.
 BASE_DECLARE_FEATURE(kAutofillRejectFormSubmissionsWithoutUserGesture);
 
@@ -80,8 +78,11 @@ BASE_DECLARE_FEATURE(kAutofillReportFormSubmissionErrors);
 // timeout but will be dismissed once navigating from an explicit user gesture.
 BASE_DECLARE_FEATURE(kAutofillStickyInfobarIos);
 
+// Enables support for contenteditable elements in Autofill on iOS.
+BASE_DECLARE_FEATURE(kAutofillSupportContentEditableIos);
+
 // Enables support for <input type="date"> fields in Autofill.
-BASE_DECLARE_FEATURE(kAutofillSupportDateInput);
+BASE_DECLARE_FEATURE_WITH_COUNTRY_RESTRICTIONS(kAutofillSupportDateInput);
 
 // Throttles the document form scanning done for taking recurrent snapshots of
 // the forms in the renderer by using scheduled batches. This doesn't throttle

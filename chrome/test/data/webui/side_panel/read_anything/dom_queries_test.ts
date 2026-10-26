@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {getNearestTextBoundaryPoint, getRectIndexAtY, getRectsForSegments, getTextNodeOffsets, ReadAloudNode} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import {getNearestTextBoundaryPoint, getRectsForSegments, getTextNodeOffsets, ReadAloudNode} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import {assertEquals, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
 
 suite('DomQueries', () => {
@@ -212,40 +212,6 @@ suite('DomQueries', () => {
     });
   });
 
-  suite('getRectIndexAtY', () => {
-    const rect1 = {bottom: 30} as DOMRect;
-    const rect2 = {bottom: 60} as DOMRect;
-    const rects = [rect1, rect2];
-
-    test('Y matches first rect returns 0', () => {
-      assertEquals(0, getRectIndexAtY(15, rects, true));
-      assertEquals(0, getRectIndexAtY(15, rects, false));
-    });
-
-    test('Y matches second rect returns 1', () => {
-      assertEquals(1, getRectIndexAtY(45, rects, true));
-      assertEquals(0, getRectIndexAtY(45, rects, false));
-    });
-
-    test('Y in between rects with isForward=true returns current', () => {
-      assertEquals(1, getRectIndexAtY(35, rects, true));
-    });
-
-    test('Y in between rects with isForward=false returns previous', () => {
-      assertEquals(0, getRectIndexAtY(35, rects, false));
-    });
-
-    test('Y before all rects returns first index', () => {
-      assertEquals(0, getRectIndexAtY(0, rects, true));
-      assertEquals(0, getRectIndexAtY(0, rects, false));
-    });
-
-    test('Y past all rects returns last index', () => {
-      assertEquals(1, getRectIndexAtY(65, rects, true));
-      assertEquals(1, getRectIndexAtY(65, rects, false));
-    });
-  });
-
   suite('getNearestTextBoundaryPoint', () => {
     test('returns same node and offset if inside a text node', () => {
       const textNode = document.createTextNode('Hello world');
@@ -319,6 +285,52 @@ suite('DomQueries', () => {
 
           const result = getNearestTextBoundaryPoint(root, 2, root, true);
           assertEquals(child2Text, result.node);
+          assertEquals(5, result.offset);
+        });
+
+    test(
+        'shifts start boundary forward skipping unmapped and whitespace nodes',
+        () => {
+          const root = document.createElement('div');
+          const child1 = document.createTextNode('hello');
+          const spacer1 = document.createTextNode('   \n');
+          const spacer2 = document.createTextNode(' ');
+          const child2 = document.createTextNode('world');
+          root.appendChild(child1);
+          root.appendChild(spacer1);
+          root.appendChild(spacer2);
+          root.appendChild(child2);
+          document.body.appendChild(root);
+
+          const mappedNodes = new Set<Node>([child1, child2]);
+          const isValidTarget = (node: Node) => mappedNodes.has(node);
+
+          const result = getNearestTextBoundaryPoint(
+              child1, 5, root, /*isStart=*/ true, isValidTarget);
+          assertEquals(child2, result.node);
+          assertEquals(0, result.offset);
+        });
+
+    test(
+        'shifts end boundary backward skipping unmapped and whitespace nodes',
+        () => {
+          const root = document.createElement('div');
+          const child1 = document.createTextNode('hello');
+          const spacer1 = document.createTextNode('\n  ');
+          const spacer2 = document.createTextNode(' ');
+          const child2 = document.createTextNode('world');
+          root.appendChild(child1);
+          root.appendChild(spacer1);
+          root.appendChild(spacer2);
+          root.appendChild(child2);
+          document.body.appendChild(root);
+
+          const mappedNodes = new Set<Node>([child1, child2]);
+          const isValidTarget = (node: Node) => mappedNodes.has(node);
+
+          const result = getNearestTextBoundaryPoint(
+              child2, 0, root, /*isStart=*/ false, isValidTarget);
+          assertEquals(child1, result.node);
           assertEquals(5, result.offset);
         });
   });

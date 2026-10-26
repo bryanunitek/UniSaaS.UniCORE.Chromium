@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
 
 #include "chrome/test/base/chrome_test_suite.h"
 
@@ -17,9 +13,12 @@
 #endif
 
 #include "base/command_line.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/syslog_logging.h"
 #include "chrome/app/chrome_main_delegate.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
@@ -27,6 +26,7 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
+#include "components/contextual_search/internal/composebox_query_controller.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "content/public/test/test_launcher.h"
 #include "extensions/common/constants.h"
@@ -50,14 +50,11 @@ namespace {
 
 bool IsCrosPythonProcess() {
 #if BUILDFLAG(IS_CHROMEOS)
-  char buf[80];
-  int num_read = readlink(base::kProcSelfExe, buf, sizeof(buf) - 1);
-  if (num_read == -1) {
+  base::FilePath target;
+  if (!base::ReadSymbolicLink(base::FilePath(base::kProcSelfExe), &target)) {
     return false;
   }
-  buf[num_read] = 0;
-  const char kPythonPrefix[] = "/python";
-  return !strncmp(strrchr(buf, '/'), kPythonPrefix, sizeof(kPythonPrefix) - 1);
+  return target.BaseName().value().starts_with("python");
 #else
   return false;
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -106,6 +103,11 @@ void ChromeTestSuite::Initialize() {
   // values for DIR_EXE and DIR_MODULE.
   content::ContentTestSuiteBase::Initialize();
 
+  // Disable writing SYSLOG messages to the system event log (Windows
+  // Application Event Log or POSIX syslog) during tests, and avoid symbolizing
+  // stack traces on SYSLOG(ERROR) on Windows.
+  logging::SetSyslogLoggingForTesting(false);
+
   ContentSettingsPattern::SetNonWildcardDomainNonPortSchemes(
       ChromeMainDelegate::GetNonWildcardDomainNonPortSchemes());
 
@@ -118,6 +120,8 @@ void ChromeTestSuite::Initialize() {
   // Chrome API keys. Ignore this requirement to get a better test coverage.
   ignore_non_official_keys_reset_ =
       signin::SetIgnoreNonOfficialApiKeysForTesting();
+  ignore_non_official_composebox_keys_reset_ =
+      ComposeboxQueryController::SetIgnoreNonOfficialApiKeysForTesting();
 
 #if BUILDFLAG(IS_MAC)
   // Look in the framework bundle for resources.
@@ -132,6 +136,8 @@ void ChromeTestSuite::Shutdown() {
 #if BUILDFLAG(IS_MAC)
   base::apple::SetOverrideFrameworkBundlePath({});
 #endif
+
+  logging::SetSyslogLoggingForTesting(true);
 
   content::ContentTestSuiteBase::Shutdown();
 }

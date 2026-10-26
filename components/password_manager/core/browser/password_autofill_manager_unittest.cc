@@ -14,17 +14,22 @@
 #include "base/base64.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/i18n/rtl.h"
+#include "base/location.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
+#include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/task/cancelable_task_tracker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/gmock_move_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/with_feature_override.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/types/expected.h"
 #include "build/build_config.h"
@@ -36,7 +41,7 @@
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
 #include "components/autofill/core/browser/suggestions/suggestion_test_helpers.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/ui/autofill_suggestion_delegate.h"
 #include "components/autofill/core/common/aliases.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom.h"
@@ -44,6 +49,7 @@
 #include "components/autofill/core/common/password_generation_util.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/device_reauth/device_authenticator.h"
+#include "components/device_reauth/mock_device_auth_availability_checker.h"
 #include "components/device_reauth/mock_device_authenticator.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon/core/test/mock_favicon_service.h"
@@ -177,14 +183,9 @@ class MockPasswordManagerDriver : public StubPasswordManagerDriver {
        autofill::mojom::AutofillSuggestionAvailability suggestion_availability),
       (override));
   MOCK_METHOD(PasswordManager*, GetPasswordManager, (), (override));
-  MOCK_METHOD(bool, CanShowAutofillUi, (), (const override));
+  MOCK_METHOD(bool, CanShowAutofillUi, (), (const, override));
   MOCK_METHOD(bool, HasValidURL, (bool), (override));
   MOCK_METHOD(bool, IsRenderFrameHostSupported, (), (override));
-
-  gfx::RectF TransformToRootCoordinates(
-      const gfx::RectF& bounds_in_frame_coordinates) override {
-    return bounds_in_frame_coordinates;  // No transformation in tests.
-  }
 };
 
 class TestPasswordManagerClient : public StubPasswordManagerClient {
@@ -234,7 +235,15 @@ class TestPasswordManagerClient : public StubPasswordManagerClient {
               (override));
   MOCK_METHOD(bool,
               IsReauthBeforeFillingRequired,
+              (device_reauth::DeviceAuthAvailabilityChecker*),
+              (override));
+  MOCK_METHOD(bool,
+              IsReauthBeforeFillingRequiredLegacy,
               (device_reauth::DeviceAuthenticator*),
+              (override));
+  MOCK_METHOD(std::unique_ptr<device_reauth::DeviceAuthAvailabilityChecker>,
+              GetDeviceAuthAvailabilityChecker,
+              (),
               (override));
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || \
     BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID)
@@ -355,8 +364,10 @@ class PasswordAutofillManagerTest : public testing::Test {
                                          MockAutofillClient* autofill_client) {
     password_autofill_manager_ = std::make_unique<PasswordAutofillManager>(
         client->mock_driver(), autofill_client, client);
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
     password_autofill_manager_->SetManualFallbackFlowForTest(
         std::make_unique<NiceMock<MockPasswordSuggestionFlow>>());
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
     favicon::MockFaviconService favicon_service;
     EXPECT_CALL(*client, GetFaviconService())
         .WillOnce(Return(&favicon_service));
@@ -403,10 +414,12 @@ class PasswordAutofillManagerTest : public testing::Test {
     EXPECT_CALL(*authenticator, AuthenticateWithMessage);
   }
 
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   MockPasswordSuggestionFlow& manual_fallback_flow() {
     return *static_cast<MockPasswordSuggestionFlow*>(
         password_autofill_manager_->manual_fallback_flow());
   }
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
   PasskeyCredential MakeTestPasskeyCredential() {
     return PasskeyCredential(PasskeyCredential::Source::kAndroidPhone,
@@ -462,11 +475,70 @@ TEST_F(PasswordAutofillManagerTest, NoFillingOnNavigation) {
   InitializePasswordAutofillManager(&client, &autofill_client);
 
   EXPECT_CALL(*client.mock_driver(), FillSuggestion).Times(0);
-  password_autofill_manager_->DidNavigateMainFrame();
+  password_autofill_manager_->DidNavigateFrame();
   password_autofill_manager_->DidAcceptSuggestion(
       autofill::test::CreateAutofillSuggestion(
           autofill::SuggestionType::kPasswordEntry, test_username_),
       SuggestionPosition{.multi_index = {0}});
+}
+
+// Tests that a navigation hides the suggestions shown by the manager.
+TEST_F(PasswordAutofillManagerTest, NavigationHidesOwnSuggestions) {
+  TestPasswordManagerClient client;
+  NiceMock<MockAutofillClient> autofill_client;
+  InitializePasswordAutofillManager(&client, &autofill_client);
+  AutofillClient::PopupOpenArgs open_args;
+  EXPECT_CALL(autofill_client, ShowAutofillSuggestions)
+      .WillOnce(
+          SavePopupOpenArgsAndShowSuggestions(autofill_client, open_args));
+  password_autofill_manager_->ShowSuggestions(kTriggeringField);
+
+  EXPECT_CALL(autofill_client,
+              HideSuggestions(autofill::SuggestionHidingReason::kStaleData,
+                              std::optional(FillingProduct::kPassword)));
+  password_autofill_manager_->DidNavigateFrame();
+}
+
+// Tests that a navigation doesn't hide suggestions that weren't shown by the
+// manager, e.g. suggestions shown for another frame.
+TEST_F(PasswordAutofillManagerTest, NavigationDoesNotHideOtherSuggestions) {
+  TestPasswordManagerClient client;
+  NiceMock<MockAutofillClient> autofill_client;
+  InitializePasswordAutofillManager(&client, &autofill_client);
+  AutofillClient::PopupOpenArgs open_args;
+  EXPECT_CALL(autofill_client, ShowAutofillSuggestions)
+      .WillOnce(
+          SavePopupOpenArgsAndShowSuggestions(autofill_client, open_args));
+  password_autofill_manager_->ShowSuggestions(kTriggeringField);
+  // Simulate that another delegate replaced the suggestions.
+  autofill_client.TestAutofillClient::ShowAutofillSuggestions(
+      open_args, /*delegate=*/nullptr);
+
+  EXPECT_CALL(autofill_client, HideSuggestions).Times(0);
+  password_autofill_manager_->DidNavigateFrame();
+}
+
+// Tests that the fill data that was posted for the previous document (see
+// `ContentPasswordManagerDriver::PropagateFillDataOnParsingCompletion()`) is
+// dropped on navigation.
+TEST_F(PasswordAutofillManagerTest, NavigationDropsPendingFillData) {
+  TestPasswordManagerClient client;
+  InitializePasswordAutofillManager(&client, /*autofill_client=*/nullptr);
+
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&PasswordAutofillManager::OnAddPasswordFillData,
+                     password_autofill_manager_->GetWeakPtr(), fill_data()));
+  password_autofill_manager_->DidNavigateFrame();
+  // Tasks run in posting order, so the task above is processed before the run
+  // loop quits.
+  base::RunLoop run_loop;
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, run_loop.QuitClosure());
+  run_loop.Run();
+
+  EXPECT_FALSE(
+      password_autofill_manager_->PreviewSuggestionForTest(test_username_));
 }
 
 TEST_F(PasswordAutofillManagerTest, PreviewSuggestion) {
@@ -484,20 +556,20 @@ TEST_F(PasswordAutofillManagerTest, PreviewSuggestion) {
   EXPECT_FALSE(
       password_autofill_manager_->PreviewSuggestionForTest(kInvalidUsername));
 
-  password_autofill_manager_->DidNavigateMainFrame();
+  password_autofill_manager_->DidNavigateFrame();
   EXPECT_FALSE(
       password_autofill_manager_->PreviewSuggestionForTest(test_username_));
 }
 
-TEST_F(PasswordAutofillManagerTest, PreviewGroupedSuggestion) {
+TEST_F(PasswordAutofillManagerTest, DoNotPreviewGroupedSuggestion) {
   fill_data().preferred_login.is_grouped_affiliation = true;
   TestPasswordManagerClient client;
   InitializePasswordAutofillManager(&client, nullptr);
 
-  // Grouped suggestions should be masked using an 8-character long mask.
-  EXPECT_CALL(*client.mock_driver(),
-              PreviewSuggestion(test_username_, std::u16string(8, '*')));
-  EXPECT_TRUE(
+  // Grouped suggestions should not be previewed to avoid leaking data to the
+  // renderer without user confirmation.
+  EXPECT_CALL(*client.mock_driver(), PreviewSuggestion).Times(0);
+  EXPECT_FALSE(
       password_autofill_manager_->PreviewSuggestionForTest(test_username_));
 }
 
@@ -1164,7 +1236,17 @@ TEST_F(PasswordAutofillManagerTest, DisplayAccountSuggestionsIndicatorIcon) {
             autofill::AutofillSuggestionTriggerSource::kPasswordManager);
 }
 
-TEST_F(PasswordAutofillManagerTest, FillsSuggestionIfAuthNotAvailable) {
+class PasswordAutofillManagerReauthTest
+    : public base::test::WithFeatureOverride,
+      public PasswordAutofillManagerTest {
+ public:
+  PasswordAutofillManagerReauthTest()
+      : base::test::WithFeatureOverride(features::kDeviceReauthRefactor) {}
+
+  bool IsRefactorEnabled() const { return IsParamFeatureEnabled(); }
+};
+
+TEST_P(PasswordAutofillManagerReauthTest, FillsSuggestionIfAuthNotAvailable) {
   TestPasswordManagerClient client;
   NiceMock<MockAutofillClient> autofill_client;
 
@@ -1192,9 +1274,13 @@ TEST_F(PasswordAutofillManagerTest, FillsSuggestionIfAuthNotAvailable) {
   EXPECT_CALL(*client.mock_driver(),
               FillSuggestion(test_username_, test_password_, _));
 
-  EXPECT_CALL(client, IsReauthBeforeFillingRequired).WillOnce(Return(false));
-  EXPECT_CALL(client, GetDeviceAuthenticator)
-      .WillOnce(Return(testing::ByMove(std::move(authenticator))));
+  ON_CALL(client, IsReauthBeforeFillingRequired).WillByDefault(Return(false));
+  ON_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .WillByDefault(Return(false));
+  EXPECT_CALL(client, IsReauthBeforeFillingRequired)
+      .Times(IsRefactorEnabled() ? 1 : 0);
+  EXPECT_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .Times(IsRefactorEnabled() ? 0 : 1);
 
   // Accept the suggestion to start the filing process which tries to
   // reauthenticate the user if possible.
@@ -1204,7 +1290,7 @@ TEST_F(PasswordAutofillManagerTest, FillsSuggestionIfAuthNotAvailable) {
       SuggestionPosition{.multi_index = {1}});
 }
 
-TEST_F(PasswordAutofillManagerTest, FillsSuggestionIfAuthSuccessful) {
+TEST_P(PasswordAutofillManagerReauthTest, FillsSuggestionIfAuthSuccessful) {
   TestPasswordManagerClient client;
   NiceMock<MockAutofillClient> autofill_client;
   InitializePasswordAutofillManager(&client, &autofill_client);
@@ -1237,7 +1323,13 @@ TEST_F(PasswordAutofillManagerTest, FillsSuggestionIfAuthSuccessful) {
       std::make_unique<device_reauth::MockDeviceAuthenticator>();
 
   // The authenticator exists and is available.
-  EXPECT_CALL(client, IsReauthBeforeFillingRequired).WillOnce(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequired).WillByDefault(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .WillByDefault(Return(true));
+  EXPECT_CALL(client, IsReauthBeforeFillingRequired)
+      .Times(IsRefactorEnabled() ? 1 : 0);
+  EXPECT_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .Times(IsRefactorEnabled() ? 0 : 1);
   EXPECT_CALL(*authenticator, AuthenticateWithMessage)
       .WillOnce(RunOnceCallback<1>(/*auth_succeeded=*/true));
 
@@ -1252,7 +1344,7 @@ TEST_F(PasswordAutofillManagerTest, FillsSuggestionIfAuthSuccessful) {
       SuggestionPosition{.multi_index = {1}});
 }
 
-TEST_F(PasswordAutofillManagerTest, DoesntFillSuggestionIfAuthFailed) {
+TEST_P(PasswordAutofillManagerReauthTest, DoesntFillSuggestionIfAuthFailed) {
   TestPasswordManagerClient client;
   NiceMock<MockAutofillClient> autofill_client;
   auto authenticator =
@@ -1285,7 +1377,13 @@ TEST_F(PasswordAutofillManagerTest, DoesntFillSuggestionIfAuthFailed) {
                       std::optional(FillingProduct::kPassword)));
 
   // The authenticator exists and is available.
-  EXPECT_CALL(client, IsReauthBeforeFillingRequired).WillOnce(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequired).WillByDefault(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .WillByDefault(Return(true));
+  EXPECT_CALL(client, IsReauthBeforeFillingRequired)
+      .Times(IsRefactorEnabled() ? 1 : 0);
+  EXPECT_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .Times(IsRefactorEnabled() ? 0 : 1);
   EXPECT_CALL(*authenticator, AuthenticateWithMessage)
       .WillOnce(RunOnceCallback<1>(/*auth_succeeded=*/false));
 
@@ -1300,7 +1398,8 @@ TEST_F(PasswordAutofillManagerTest, DoesntFillSuggestionIfAuthFailed) {
       SuggestionPosition{.multi_index = {1}});
 }
 
-TEST_F(PasswordAutofillManagerTest, CancelsOngoingBiometricAuthOnDestroy) {
+TEST_P(PasswordAutofillManagerReauthTest,
+       CancelsOngoingBiometricAuthOnDestroy) {
   TestPasswordManagerClient client;
   NiceMock<MockAutofillClient> autofill_client;
   auto authenticator =
@@ -1327,7 +1426,13 @@ TEST_F(PasswordAutofillManagerTest, CancelsOngoingBiometricAuthOnDestroy) {
       .Times(0);
 
   // The authenticator exists and is available.
-  EXPECT_CALL(client, IsReauthBeforeFillingRequired).WillOnce(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequired).WillByDefault(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .WillByDefault(Return(true));
+  EXPECT_CALL(client, IsReauthBeforeFillingRequired)
+      .Times(IsRefactorEnabled() ? 1 : 0);
+  EXPECT_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .Times(IsRefactorEnabled() ? 0 : 1);
   EXPECT_CALL(*authenticator, AuthenticateWithMessage);
 
   EXPECT_CALL(client, GetDeviceAuthenticator)
@@ -1343,7 +1448,7 @@ TEST_F(PasswordAutofillManagerTest, CancelsOngoingBiometricAuthOnDestroy) {
   EXPECT_CALL(*authenticator_ptr, Cancel());
 }
 
-TEST_F(PasswordAutofillManagerTest,
+TEST_P(PasswordAutofillManagerReauthTest,
        CancelsOngoingBiometricAuthOnDeleteFillData) {
   TestPasswordManagerClient client;
   NiceMock<MockAutofillClient> autofill_client;
@@ -1371,7 +1476,13 @@ TEST_F(PasswordAutofillManagerTest,
       .Times(0);
 
   // The authenticator exists and is available.
-  EXPECT_CALL(client, IsReauthBeforeFillingRequired).WillOnce(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequired).WillByDefault(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .WillByDefault(Return(true));
+  EXPECT_CALL(client, IsReauthBeforeFillingRequired)
+      .Times(IsRefactorEnabled() ? 1 : 0);
+  EXPECT_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .Times(IsRefactorEnabled() ? 0 : 1);
   EXPECT_CALL(*authenticator, AuthenticateWithMessage);
 
   EXPECT_CALL(client, GetDeviceAuthenticator)
@@ -1388,7 +1499,7 @@ TEST_F(PasswordAutofillManagerTest,
   password_autofill_manager_->DeleteFillData();
 }
 
-TEST_F(PasswordAutofillManagerTest,
+TEST_P(PasswordAutofillManagerReauthTest,
        CancelsOngoingBiometricAuthOnFillDataChange) {
   TestPasswordManagerClient client;
   NiceMock<MockAutofillClient> autofill_client;
@@ -1416,7 +1527,13 @@ TEST_F(PasswordAutofillManagerTest,
       .Times(0);
 
   // The authenticator exists and is available.
-  EXPECT_CALL(client, IsReauthBeforeFillingRequired).WillOnce(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequired).WillByDefault(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .WillByDefault(Return(true));
+  EXPECT_CALL(client, IsReauthBeforeFillingRequired)
+      .Times(IsRefactorEnabled() ? 1 : 0);
+  EXPECT_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .Times(IsRefactorEnabled() ? 0 : 1);
   EXPECT_CALL(*authenticator, AuthenticateWithMessage);
 
   EXPECT_CALL(client, GetDeviceAuthenticator)
@@ -1433,7 +1550,8 @@ TEST_F(PasswordAutofillManagerTest,
   password_autofill_manager_->OnAddPasswordFillData(CreateTestFormFillData());
 }
 
-TEST_F(PasswordAutofillManagerTest, CancelsOngoingBiometricAuthOnNewRequest) {
+TEST_P(PasswordAutofillManagerReauthTest,
+       CancelsOngoingBiometricAuthOnNewRequest) {
   TestPasswordManagerClient client;
   NiceMock<MockAutofillClient> autofill_client;
   auto authenticator =
@@ -1442,7 +1560,13 @@ TEST_F(PasswordAutofillManagerTest, CancelsOngoingBiometricAuthOnNewRequest) {
 
   InitializePasswordAutofillManager(&client, &autofill_client);
   password_autofill_manager_->ShowSuggestions(kTriggeringField);
-  EXPECT_CALL(client, IsReauthBeforeFillingRequired).WillOnce(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequired).WillByDefault(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .WillByDefault(Return(true));
+  EXPECT_CALL(client, IsReauthBeforeFillingRequired)
+      .Times(IsRefactorEnabled() ? 1 : 0);
+  EXPECT_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .Times(IsRefactorEnabled() ? 0 : 1);
   EXPECT_CALL(*authenticator_ptr, AuthenticateWithMessage);
 
   EXPECT_CALL(client, GetDeviceAuthenticator)
@@ -1459,7 +1583,10 @@ TEST_F(PasswordAutofillManagerTest, CancelsOngoingBiometricAuthOnNewRequest) {
 
   // Triggering new authentication should cancel ongoing authentication.
   EXPECT_CALL(*authenticator_ptr, Cancel());
-  EXPECT_CALL(client, IsReauthBeforeFillingRequired).WillOnce(Return(true));
+  EXPECT_CALL(client, IsReauthBeforeFillingRequired)
+      .Times(IsRefactorEnabled() ? 1 : 0);
+  EXPECT_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .Times(IsRefactorEnabled() ? 0 : 1);
   EXPECT_CALL(*authenticator_ptr2, AuthenticateWithMessage);
 
   EXPECT_CALL(client, GetDeviceAuthenticator)
@@ -1474,7 +1601,7 @@ TEST_F(PasswordAutofillManagerTest, CancelsOngoingBiometricAuthOnNewRequest) {
   EXPECT_CALL(*authenticator_ptr2, Cancel());
 }
 
-TEST_F(PasswordAutofillManagerTest, MetricsRecordedForBiometricAuth) {
+TEST_P(PasswordAutofillManagerReauthTest, MetricsRecordedForBiometricAuth) {
   base::ScopedMockElapsedTimersForTest mock_elapsed_timers_;
   base::HistogramTester histograms;
   TestPasswordManagerClient client;
@@ -1492,7 +1619,13 @@ TEST_F(PasswordAutofillManagerTest, MetricsRecordedForBiometricAuth) {
   EXPECT_CALL(*authenticator, AuthenticateWithMessage)
       .WillOnce(MoveArg<1>(&auth_callback));
 
-  EXPECT_CALL(client, IsReauthBeforeFillingRequired).WillOnce(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequired).WillByDefault(Return(true));
+  ON_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .WillByDefault(Return(true));
+  EXPECT_CALL(client, IsReauthBeforeFillingRequired)
+      .Times(IsRefactorEnabled() ? 1 : 0);
+  EXPECT_CALL(client, IsReauthBeforeFillingRequiredLegacy)
+      .Times(IsRefactorEnabled() ? 0 : 1);
   EXPECT_CALL(client, GetDeviceAuthenticator)
       .WillOnce(Return(testing::ByMove(std::move(authenticator))));
 
@@ -1517,6 +1650,8 @@ TEST_F(PasswordAutofillManagerTest, MetricsRecordedForBiometricAuth) {
       "PasswordManager.PasswordFilling.AuthenticationTime2", kMockElapsedTime,
       1);
 }
+
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PasswordAutofillManagerReauthTest);
 
 TEST_F(PasswordAutofillManagerTest,
        ShowsWebAuthnSuggestionsWhenUsePasskeyOnAnotherDeviceInAutofill) {
@@ -2033,6 +2168,29 @@ TEST_F(PasswordAutofillManagerTest, WebAuthnSuggestionsLogMetrics) {
   }
 }
 
+TEST_F(PasswordAutofillManagerTest,
+       ShowingPasskeyQrCodeSuggestionNotifiesCredentialsDelegate) {
+  TestPasswordManagerClient client;
+  NiceMock<MockAutofillClient> autofill_client;
+  InitializePasswordAutofillManager(&client, &autofill_client);
+
+  // A dropdown that does not contain the QR code suggestion is not reported.
+  EXPECT_CALL(*webauthn_credentials_delegate_, OnPasskeyQrCodeSuggestionShown)
+      .Times(0);
+  std::vector<Suggestion> suggestions = {
+      Suggestion(autofill::SuggestionType::kPasswordEntry)};
+  password_autofill_manager_->OnSuggestionsShown(suggestions,
+                                                 /*metadata=*/{});
+  testing::Mock::VerifyAndClearExpectations(
+      webauthn_credentials_delegate_.get());
+
+  // A dropdown that does contain it is reported once, when it is shown.
+  EXPECT_CALL(*webauthn_credentials_delegate_, OnPasskeyQrCodeSuggestionShown);
+  suggestions.emplace_back(autofill::SuggestionType::kWebauthnPasskeyQrCode);
+  password_autofill_manager_->OnSuggestionsShown(suggestions,
+                                                 /*metadata=*/{});
+}
+
 // Test that the AutofillSuggestionAvailability is set according to the popup
 // availability.
 TEST_F(PasswordAutofillManagerTest,
@@ -2085,6 +2243,7 @@ TEST_F(PasswordAutofillManagerTest, NoPreviewSuggestionWithAuthBeforeFilling) {
   testing::Mock::VerifyAndClearExpectations(client.mock_driver());
 }
 
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 TEST_F(PasswordAutofillManagerTest, ManualFallback_InvokesFlow) {
   base::test::ScopedFeatureList security_checks_feature_list{
       features::kPasswordManualFallbackSecurityChecks};
@@ -2165,10 +2324,11 @@ TEST_F(PasswordAutofillManagerTest, ManualFallback_FlowResetOnNavigation) {
       autofill::AutofillSuggestionTriggerSource::kManualFallbackPasswords;
   password_autofill_manager_->ShowSuggestions(field);
   EXPECT_TRUE(password_autofill_manager_->manual_fallback_flow());
-  password_autofill_manager_->DidNavigateMainFrame();
+  password_autofill_manager_->DidNavigateFrame();
 
   EXPECT_FALSE(password_autofill_manager_->manual_fallback_flow());
 }
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
 TEST_F(PasswordAutofillManagerTest,
        WebAuthnCredentialSuggestionsPersistLoadingStateUntilHidePopup) {
@@ -2208,7 +2368,7 @@ TEST_F(PasswordAutofillManagerTest,
   // Since a passkey is selected, the popup will be updated:
   EXPECT_TRUE(updatedSuggestions[0].is_loading);
   EXPECT_FALSE(updatedSuggestions[0].IsAcceptable());
-  EXPECT_TRUE(updatedSuggestions[1].HasDeactivatedStyle());
+  EXPECT_FALSE(updatedSuggestions[1].IsSelectable());
   EXPECT_FALSE(updatedSuggestions[1].IsAcceptable());
 
   // Show suggestions again.
@@ -2222,7 +2382,7 @@ TEST_F(PasswordAutofillManagerTest,
   // Verify that the loading state persisted.
   EXPECT_TRUE(open_args.suggestions[0].is_loading);
   EXPECT_FALSE(open_args.suggestions[0].IsAcceptable());
-  EXPECT_TRUE(open_args.suggestions[1].HasDeactivatedStyle());
+  EXPECT_FALSE(open_args.suggestions[1].IsSelectable());
   EXPECT_FALSE(open_args.suggestions[1].IsAcceptable());
 
   // After calling hide callback the loading state is not persisted anymore:
@@ -2238,7 +2398,7 @@ TEST_F(PasswordAutofillManagerTest,
 
   EXPECT_FALSE(open_args.suggestions[0].is_loading);
   EXPECT_TRUE(open_args.suggestions[0].IsAcceptable());
-  EXPECT_FALSE(open_args.suggestions[1].HasDeactivatedStyle());
+  EXPECT_TRUE(open_args.suggestions[1].IsSelectable());
   EXPECT_TRUE(open_args.suggestions[1].IsAcceptable());
 }
 
@@ -2249,7 +2409,7 @@ TEST_F(PasswordAutofillManagerTest,
                                     /*autofill_client=*/nullptr);
 
   base::HistogramTester histograms;
-  password_autofill_manager_->DidNavigateMainFrame();
+  password_autofill_manager_->DidNavigateFrame();
 
   EXPECT_THAT(histograms.GetTotalCountsForPrefix("Autofill.Funnel."),
               ::testing::IsEmpty());
@@ -2272,6 +2432,36 @@ TEST_F(PasswordAutofillManagerTest, ShowCrossDomainConfirmationPopup) {
           autofill::SuggestionType::kPasswordEntry,
           cross_domain_fill_data.preferred_login.username_value),
       SuggestionPosition{.multi_index = {0}});
+}
+
+TEST_F(PasswordAutofillManagerTest,
+       CrossDomainConfirmationPopupAcceptedAfterDeleteFillData) {
+  TestPasswordManagerClient client;
+  NiceMock<MockAutofillClient> autofill_client;
+  InitializePasswordAutofillManager(&client, &autofill_client);
+  autofill::PasswordFormFillData cross_domain_fill_data =
+      CreateTestFormFillData();
+  cross_domain_fill_data.preferred_login.is_grouped_affiliation = true;
+  password_autofill_manager_->OnAddPasswordFillData(cross_domain_fill_data);
+
+  base::OnceClosure confirmation_callback;
+  EXPECT_CALL(client, ShowCrossDomainConfirmationPopup)
+      .WillOnce(testing::WithArg<5>([&](base::OnceClosure callback) {
+        confirmation_callback = std::move(callback);
+        return nullptr;
+      }));
+
+  password_autofill_manager_->DidAcceptSuggestion(
+      autofill::test::CreateAutofillSuggestion(
+          autofill::SuggestionType::kPasswordEntry,
+          cross_domain_fill_data.preferred_login.username_value),
+      SuggestionPosition{.multi_index = {0}});
+
+  password_autofill_manager_->DeleteFillData();
+
+  EXPECT_CALL(*client.mock_driver(),
+              FillSuggestion(test_username_, test_password_, _));
+  std::move(confirmation_callback).Run();
 }
 
 TEST_F(PasswordAutofillManagerTest, EmitUMAIfAtLeastOneGroupedCredential) {
@@ -2507,7 +2697,7 @@ TEST_F(PasswordAutofillManagerTest,
 }
 
 TEST_F(PasswordAutofillManagerTest,
-       PasswordRecoveryFlow_PreviewGroupedBackupSuggestion) {
+       PasswordRecoveryFlow_DoNotPreviewGroupedBackupSuggestion) {
   TestPasswordManagerClient client;
   InitializePasswordAutofillManager(&client, nullptr);
   const Suggestion::PasswordSuggestionDetails payload(
@@ -2516,9 +2706,9 @@ TEST_F(PasswordAutofillManagerTest,
   const Suggestion suggestion = autofill::test::CreateAutofillSuggestion(
       autofill::SuggestionType::kBackupPasswordEntry, test_username_, payload);
 
-  // Grouped backup suggestions should be masked using an 8-character long mask.
-  EXPECT_CALL(*client.mock_driver(),
-              PreviewSuggestion(test_username_, std::u16string(8, '*')));
+  // Grouped backup suggestions should not be previewed to avoid leaking data
+  // without user confirmation.
+  EXPECT_CALL(*client.mock_driver(), PreviewSuggestion).Times(0);
   password_autofill_manager_->DidSelectSuggestion(suggestion);
   testing::Mock::VerifyAndClearExpectations(client.mock_driver());
 

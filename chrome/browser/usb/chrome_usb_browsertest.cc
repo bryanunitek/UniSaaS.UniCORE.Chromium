@@ -20,6 +20,7 @@
 #include "chrome/browser/device_notifications/device_status_icon_renderer.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
@@ -59,12 +60,12 @@
 #include "services/device/public/mojom/usb_enumeration_options.mojom.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "third_party/blink/public/mojom/usb/web_usb_service.mojom.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/app/chrome_command_ids.h"  // nogncheck
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/chooser_bubble_testapi.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
@@ -517,7 +518,7 @@ IN_PROC_BROWSER_TEST_F(ChromeWebUsbTest, ShowChooserInBackgroundTab) {
   GURL url = embedded_test_server()->GetURL("localhost", "/simple_page.html");
   NavigateParams params(GetBrowserWindowInterface(), url,
                         ui::PAGE_TRANSITION_LINK);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   Navigate(&params);
   content::WaitForLoadStop(params.navigated_or_inserted_contents);
 
@@ -574,7 +575,7 @@ class ChromeWebUsbAppTest : public extensions::ExtensionBrowserTest {
 
  protected:
   UsbChooserContext* GetChooserContext() {
-    return UsbChooserContextFactory::GetForProfile(browser()->profile());
+    return UsbChooserContextFactory::GetForProfile(browser()->GetProfile());
   }
 
   device::FakeUsbDeviceManager& device_manager() { return device_manager_; }

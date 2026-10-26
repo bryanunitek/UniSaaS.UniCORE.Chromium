@@ -13,8 +13,9 @@ chromium::import! {
 }
 
 use crate::message_header::*;
-use system::message::{
-    BadMessageError, FullyReadableWithHandlesMessage, ReadableBytesOnlyMessage, WritableMessage,
+pub use system::message::{
+    BadMessageError, ReadableBytesOnlyMessage, ReadableWithHandlesMessage, SendableMessage,
+    WritableMessage,
 };
 use system::mojo_types::UntypedHandle;
 
@@ -31,8 +32,7 @@ pub struct MojomMessage {
     pub header: MessageHeader,
     pub payload: Vec<u8>,
     pub handles: Vec<UntypedHandle>,
-    // This field should only be set for messages that came in across the wire;
-    // we keep the raw handle around so we can report a bad message later if
+    // we keep the original message handle around so we can report a bad message later if
     // necessary.
     pub raw_message_handle: Option<ReadableBytesOnlyMessage>,
 }
@@ -42,7 +42,7 @@ impl MojomMessage {
     ///
     /// If parsing fails, this will return `None` and report the original
     /// message as malformed.
-    pub fn parse_raw_or_report_bad_message(msg: FullyReadableWithHandlesMessage) -> Option<Self> {
+    pub fn parse_raw_or_report_bad_message(msg: ReadableWithHandlesMessage) -> Option<Self> {
         let (handles, mut msg_bytes_only) = msg.read_data().unwrap();
 
         let raw_bytes = msg_bytes_only.read_bytes().unwrap();
@@ -60,7 +60,7 @@ impl MojomMessage {
         Some(MojomMessage { header, payload, handles, raw_message_handle: Some(msg_bytes_only) })
     }
 
-    /// Parse the given raw message into a structured representation.
+    /// Report this (incoming) message as malformed.
     pub fn report_bad_message(&mut self, error_msg: &str) -> Result<(), BadMessageError> {
         match &mut self.raw_message_handle {
             Some(raw_msg) => raw_msg.report_bad_message(error_msg),
@@ -68,6 +68,26 @@ impl MojomMessage {
             // they didn't receive, which means they created it themselves.
             None => panic!("Cannot report a bad message that doesn't have an underlying handle"),
         }
+    }
+
+    /// Extract any associated interface IDs serialized into this message's
+    /// payload.
+    ///
+    /// This function is meant to be called for outgoing messages only, in
+    /// order to close any contained associated interfaces if the message
+    /// fails to send. The associated interface IDs for incoming messages
+    /// will be handled by the normal deserialization process.
+    /// TODO(crbug.com/540355135): We should handle associated interfaces
+    /// better, maybe track them in the type instead of re-reading them each
+    /// time.
+    pub fn associated_interface_ids(&self) -> Vec<u32> {
+        let Ok((_, ids)) = mojom_value_parser::extract_interface_ids(
+            &self.payload,
+            self.header.interface_ids_offset(),
+        ) else {
+            unreachable!("Outgoing messages should always be well-formed.")
+        };
+        ids.into_iter().map(|id| id.get()).collect()
     }
 
     /// Serialize this message into its binary equivalent, and return the
@@ -79,10 +99,15 @@ impl MojomMessage {
     }
 }
 
-impl From<MojomMessage> for WritableMessage {
+impl From<MojomMessage> for SendableMessage {
     fn from(msg: MojomMessage) -> Self {
+        // This is more of a sanity check. There is nothing stopping us from
+        // re-sending a message given that the handle is there, but we
+        // should never end up in that situation, hence a technical bug
+        // somewhere.
+        assert!(msg.raw_message_handle.is_none(), "Cannot re-send an incoming message");
         let (payload, handles) = msg.into_data();
         // This can only fail if we're out of memory
-        WritableMessage::new_with_data(&payload, handles).unwrap()
+        WritableMessage::new_with_data(&payload, handles).unwrap().into()
     }
 }

@@ -5,6 +5,8 @@
 #include "chrome/browser/ui/webui/password_manager/notification_cards/move_passwords_promo.h"
 
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate.h"
+#include "chrome/browser/profiles/batch_upload/batch_upload_service.h"
+#include "chrome/browser/profiles/batch_upload/batch_upload_service_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
@@ -16,8 +18,6 @@ constexpr base::TimeDelta kMovePasswordsPromoPeriod = base::Days(7);
 
 using extensions::api::passwords_private::CredentialGroup;
 using extensions::api::passwords_private::PasswordUiEntry;
-
-constexpr char kMovePasswordsId[] = "move_passwords_promo";
 
 syncer::SyncService* GetSyncService(Profile* profile) {
   return SyncServiceFactory::IsSyncAllowed(profile)
@@ -56,24 +56,24 @@ int GetLocalPasswordsCount(extensions::PasswordsPrivateDelegate* delegate) {
 MovePasswordsPromo::MovePasswordsPromo(
     Profile* profile,
     extensions::PasswordsPrivateDelegate* delegate)
-    : password_manager::PasswordPromoCardBase(kMovePasswordsId,
-                                              profile->GetPrefs()),
-      profile_(profile) {
+    : profile_(profile) {
   CHECK(delegate);
   delegate_ = delegate->AsWeakPtr();
 }
 
 MovePasswordsPromo::~MovePasswordsPromo() = default;
 
-std::string MovePasswordsPromo::GetPromoID() const {
-  return kMovePasswordsId;
+std::string MovePasswordsPromo::GetCardID() const {
+  return password_manager::kMovePasswordsPromoId;
 }
 
-password_manager::PromoCardType MovePasswordsPromo::GetPromoCardType() const {
-  return password_manager::PromoCardType::kMovePasswords;
+password_manager::NotificationCardType
+MovePasswordsPromo::GetNotificationCardType() const {
+  return password_manager::NotificationCardType::kMovePasswords;
 }
 
-bool MovePasswordsPromo::ShouldShowPromo() const {
+bool MovePasswordsPromo::ShouldShowCard(
+    const password_manager::NotificationCardPrefState& pref_state) const {
   CHECK(profile_);
   syncer::SyncService* sync_service = GetSyncService(profile_);
   if (!sync_service ||
@@ -82,15 +82,23 @@ bool MovePasswordsPromo::ShouldShowPromo() const {
     return false;
   }
 
-  // If promo card was dismissed or shown already for
+  BatchUploadService* batch_upload_service =
+      BatchUploadServiceFactory::GetForProfile(profile_);
+  if (batch_upload_service &&
+      !batch_upload_service->CanShowPromo(
+          BatchUploadService::EntryPoint::kPasswordPromoCard)) {
+    return false;
+  }
+
+  // If notification card was dismissed or shown already for
   // `kPromoDisplayLimit` times, show it in a week next time.
-  bool should_suppress =
-      was_dismissed_ ||
-      number_of_times_shown_ >= PasswordPromoCardBase::kPromoDisplayLimit;
+  bool should_suppress = pref_state.was_dismissed ||
+                         pref_state.number_of_times_shown >=
+                             PasswordNotificationCardBase::kPromoDisplayLimit;
 
   bool bubble_is_not_over_prompted =
-      !should_suppress ||
-      base::Time().Now() - last_time_shown_ > kMovePasswordsPromoPeriod;
+      !should_suppress || base::Time::Now() - pref_state.last_time_shown >
+                              kMovePasswordsPromoPeriod;
 
   return bubble_is_not_over_prompted &&
          GetLocalPasswordsCount(delegate_.get()) > 0;

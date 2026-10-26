@@ -8,15 +8,18 @@
 
 #include "base/memory/weak_ptr.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
 #include "chrome/browser/actor/actor_keyed_service_factory.h"
 #include "chrome/browser/actor/actor_keyed_service_fake.h"
-#include "chrome/browser/actor/actor_task_delegate.h"
+#include "chrome/browser/actor/actor_surface.h"
+#include "chrome/browser/actor/actor_surface_handle.h"
+#include "chrome/browser/actor/actor_surface_registry.h"
+#include "chrome/browser/actor/actor_surface_tab_helper.h"
 #include "chrome/browser/actor/actor_test_util.h"
-#include "chrome/browser/actor/enterprise_policy_checker.h"
 #include "chrome/browser/actor/execution_engine.h"
 #include "chrome/browser/actor/tools/fake_tool_request.h"
 #include "chrome/browser/actor/tools/tool_callbacks.h"
@@ -26,13 +29,16 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/actor/core/actor_features.h"
+#include "components/actor/core/actor_ui_mode.h"
 #include "components/actor/core/task_id.h"
-#include "components/actor/core/task_source_info.h"
 #include "components/tabs/public/mock_tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/test_renderer_host.h"
+#include "content/public/test/web_contents_tester.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/unowned_user_data/unowned_user_data_host.h"
 
 namespace actor {
 
@@ -40,6 +46,8 @@ namespace {
 
 using ChangeTaskState = ui::UiEventDispatcher::ChangeTaskState;
 using testing::_;
+using testing::AllOf;
+using testing::ElementsAre;
 using testing::Eq;
 using testing::Field;
 using testing::Property;
@@ -50,8 +58,7 @@ class ActorTaskTest : public testing::Test {
   ActorTaskTest()
       : task_environment_(
             content::BrowserTaskEnvironment::TimeSource::MOCK_TIME) {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kGlicActor, kActorFormScriptToolInterrupt}, {});
+    scoped_feature_list_.InitAndEnableFeature(features::kGlicActor);
   }
 
   void SetUp() override {
@@ -66,33 +73,22 @@ class ActorTaskTest : public testing::Test {
                 }))
             .Build();
 
-    // Setup ExecutionEngine mock dispatcher.
-    auto ee_mock_ui_event_dispatcher =
-        std::make_unique<testing::NiceMock<ui::MockUiEventDispatcher>>();
-    mock_ee_ui_event_dispatcher_ = ee_mock_ui_event_dispatcher.get();
-
-    ON_CALL(*mock_ee_ui_event_dispatcher_, OnPreTool)
-        .WillByDefault([](const ToolRequest&,
-                          ui::UiEventDispatcher::UiCompleteCallback callback) {
-          std::move(callback).Run(MakeOkResult());
-        });
-
-    ON_CALL(*mock_ee_ui_event_dispatcher_, OnPostTool)
-        .WillByDefault([](const ToolRequest&,
-                          ui::UiEventDispatcher::UiCompleteCallback callback) {
-          std::move(callback).Run(MakeOkResult());
-        });
-
-    scoped_ee_factory_ = std::make_unique<ScopedExecutionEngineFactory>(
-        base::BindLambdaForTesting([&](actor::ActorTask& task) {
-          return actor::ExecutionEngine::CreateForTesting(
-              task, std::move(ee_mock_ui_event_dispatcher));
-        }));
-
-    // Setup ActorTask mock dispatcher.
+    // Setup mock dispatcher for ActorTask and ExecutionEngine.
     auto mock_ui_event_dispatcher =
         std::make_unique<testing::NiceMock<ui::MockUiEventDispatcher>>();
     mock_ui_event_dispatcher_ = mock_ui_event_dispatcher.get();
+
+    ON_CALL(*mock_ui_event_dispatcher_, OnPreTool)
+        .WillByDefault([](const ToolRequest&,
+                          ui::UiEventDispatcher::UiCompleteCallback callback) {
+          std::move(callback).Run(MakeOkResult());
+        });
+
+    ON_CALL(*mock_ui_event_dispatcher_, OnPostTool)
+        .WillByDefault([](const ToolRequest&,
+                          ui::UiEventDispatcher::UiCompleteCallback callback) {
+          std::move(callback).Run(MakeOkResult());
+        });
 
     ON_CALL(*mock_ui_event_dispatcher_, OnActorTaskAsyncChange)
         .WillByDefault([](const ui::UiEventDispatcher::ActorTaskAsyncChange&,
@@ -142,11 +138,19 @@ class ActorTaskTest : public testing::Test {
         .Times(1);
   }
 
-  void AddTabAndVerify(tabs::TabInterface& tab) {
+  void AddTabAndVerify(tabs::MockTabInterface& tab) {
+    if (!tab.GetProfile()) {
+      ON_CALL(tab, GetProfile).WillByDefault(::testing::Return(profile_.get()));
+    }
+    registry().OnTabCreated(tab);
     ExpectTabAddedNotification(tab.GetHandle());
     AddTabToTask(tab, *task_);
     EXPECT_TRUE(task_->HasTab(tab.GetHandle()));
     EXPECT_TRUE(task_->GetTabs().contains(tab.GetHandle()));
+  }
+
+  ActorSurfaceRegistry& registry() {
+    return ActorKeyedService::Get(profile_.get())->GetSurfaceRegistry();
   }
 
   void RemoveTabAndVerify(tabs::TabInterface& tab) {
@@ -193,15 +197,28 @@ class ActorTaskTest : public testing::Test {
     service->ResetForTesting();
   }
 
+  std::unique_ptr<tabs::MockTabInterface> CreateCrossProfileMockTab(
+      Profile* other_profile = nullptr) {
+    if (!other_profile) {
+      if (!other_profile_) {
+        other_profile_ = TestingProfile::Builder().Build();
+      }
+      other_profile = other_profile_.get();
+    }
+    auto mock_tab = std::make_unique<tabs::MockTabInterface>();
+    ON_CALL(*mock_tab, GetProfile)
+        .WillByDefault(::testing::Return(other_profile));
+    return mock_tab;
+  }
+
  protected:
   content::BrowserTaskEnvironment task_environment_;
   base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<TestingProfile> profile_;
+  std::unique_ptr<TestingProfile> other_profile_;
   MockActorTaskDelegate mock_delegate_;
-  std::unique_ptr<ScopedExecutionEngineFactory> scoped_ee_factory_;
   raw_ptr<ActorTask> task_;
   raw_ptr<ui::MockUiEventDispatcher> mock_ui_event_dispatcher_;
-  raw_ptr<ui::MockUiEventDispatcher> mock_ee_ui_event_dispatcher_;
 };
 
 TEST_F(ActorTaskTest, CustomToolInterruptsWithUserControl) {
@@ -288,6 +305,58 @@ TEST_F(ActorTaskTest, BasicGetters) {
   EXPECT_NE(task_->GetWeakPtr(), nullptr);
 }
 
+TEST_F(ActorTaskTest, SetStepProgressSendsEveryUpdateToUi) {
+  using UpdateTaskStepProgress = ui::UiEventDispatcher::UpdateTaskStepProgress;
+  EXPECT_CALL(
+      *mock_ui_event_dispatcher_,
+      OnActorTaskSyncChange(VariantWith<UpdateTaskStepProgress>(AllOf(
+          Field(&UpdateTaskStepProgress::task_id, Eq(task_->id())),
+          Field(&UpdateTaskStepProgress::step_progress, Eq("Searching"))))))
+      .Times(2);
+  EXPECT_CALL(*mock_ui_event_dispatcher_,
+              OnActorTaskSyncChange(VariantWith<UpdateTaskStepProgress>(AllOf(
+                  Field(&UpdateTaskStepProgress::task_id, Eq(task_->id())),
+                  Field(&UpdateTaskStepProgress::step_progress,
+                        Eq("Adding to cart"))))))
+      .Times(1);
+  EXPECT_CALL(*mock_ui_event_dispatcher_,
+              OnActorTaskSyncChange(VariantWith<UpdateTaskStepProgress>(AllOf(
+                  Field(&UpdateTaskStepProgress::task_id, Eq(task_->id())),
+                  Field(&UpdateTaskStepProgress::step_progress, Eq(""))))))
+      .Times(1);
+
+  task_->SetStepProgress("Searching");
+  task_->SetStepProgress("Searching");
+  task_->SetStepProgress("Adding to cart");
+  task_->SetStepProgress("");
+}
+
+TEST_F(ActorTaskTest, SetStepProgressUpdatesStateBeforeUiEvent) {
+  using UpdateTaskStepProgress = ui::UiEventDispatcher::UpdateTaskStepProgress;
+  EXPECT_CALL(*mock_ui_event_dispatcher_,
+              OnActorTaskSyncChange(VariantWith<UpdateTaskStepProgress>(_)))
+      .WillOnce([&] { EXPECT_EQ(task_->step_progress(), "Searching"); });
+
+  task_->SetStepProgress("Searching");
+}
+
+TEST_F(ActorTaskTest, SetStepProgressNotifiesObserversOnlyOnChange) {
+  std::vector<std::string> updates;
+  base::CallbackListSubscription subscription =
+      ActorKeyedService::Get(profile_.get())
+          ->AddTaskStepProgressChangedCallback(base::BindLambdaForTesting(
+              [&](ActorTask&, const std::string& step_progress) {
+                updates.push_back(step_progress);
+              }));
+
+  task_->SetStepProgress("Searching");
+  task_->SetStepProgress("Searching");
+  task_->SetStepProgress("Adding to cart");
+
+  EXPECT_THAT(updates, ElementsAre("Searching", "Adding to cart"));
+  EXPECT_EQ(task_->step_progress(), "Adding to cart");
+}
+
 TEST_F(ActorTaskTest, StaticStateHelpers) {
   EXPECT_FALSE(ActorTask::IsCompletedState(ActorTask::State::kCreated));
   EXPECT_FALSE(ActorTask::IsCompletedState(ActorTask::State::kActing));
@@ -361,7 +430,136 @@ TEST_F(ActorTaskTest, ObserveTabOnceAndActing) {
 
   // Transitively verify ObserveTabOnce does not double add if already present.
   task_->ObserveTabOnce(mock_tab.GetHandle());
-  EXPECT_TRUE(task_->GetLastActedTabs().contains(mock_tab.GetHandle()));
+  EXPECT_TRUE(task_->GetLastActedActorSurfaces().contains(
+      ActorSurfaceHandle::From(mock_tab.GetHandle())));
+}
+
+TEST_F(ActorTaskTest, GetLastActuatedTabPreservedAfterTaskCompleted) {
+  tabs::MockTabInterface mock_tab;
+
+  AddTabAndVerify(mock_tab);
+  EXPECT_EQ(task_->GetLastActuatedTab(), &mock_tab);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(),
+            mock_tab.GetHandle().raw_value());
+
+  // Stop task. controlled_tabs_ should be cleared, but GetLastActuatedTab()
+  // should still return mock_tab.
+  ExpectStopNotification(ActorTask::State::kFinished);
+  ExpectTabRemovedNotification(mock_tab.GetHandle());
+  task_->Stop(ActorTask::StoppedReason::kTaskComplete);
+
+  EXPECT_TRUE(task_->GetTabs().empty());
+  EXPECT_TRUE(task_->GetLastActedActorSurfaces().empty());
+  EXPECT_EQ(task_->GetLastActuatedTab(), &mock_tab);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(),
+            mock_tab.GetHandle().raw_value());
+}
+
+TEST_F(ActorTaskTest, GetLastActuatedTabFiltersDestroyedTabsAfterStop) {
+  auto mock_tab = std::make_unique<tabs::MockTabInterface>();
+  tabs::TabHandle handle = mock_tab->GetHandle();
+
+  AddTabAndVerify(*mock_tab);
+  EXPECT_EQ(task_->GetLastActuatedTab(), mock_tab.get());
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(), handle.raw_value());
+
+  ExpectStopNotification(ActorTask::State::kFinished);
+  ExpectTabRemovedNotification(handle);
+  task_->Stop(ActorTask::StoppedReason::kTaskComplete);
+
+  EXPECT_EQ(task_->GetLastActuatedTab(), mock_tab.get());
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(), handle.raw_value());
+
+  // Destroy the tab.
+  mock_tab.reset();
+
+  // After tab destruction, handle.Get() is null, so it shouldn't be returned.
+  EXPECT_EQ(task_->GetLastActuatedTab(), nullptr);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().Get(), nullptr);
+}
+
+TEST_F(ActorTaskTest, GetLastActuatedTabWhileActingAndPaused) {
+  tabs::MockTabInterface mock_tab;
+
+  // Add tab to task.
+  AddTabAndVerify(mock_tab);
+  EXPECT_EQ(task_->GetLastActuatedTab(), &mock_tab);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(),
+            mock_tab.GetHandle().raw_value());
+
+  // Transition to Acting state.
+  ExpectStateChangeNotification(ActorTask::State::kActing);
+  task_->SetState(ActorTask::State::kActing);
+  EXPECT_EQ(task_->GetLastActuatedTab(), &mock_tab);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(),
+            mock_tab.GetHandle().raw_value());
+
+  // Pause task from actor.
+  ExpectStateChangeNotification(ActorTask::State::kPausedByActor);
+  task_->Pause(/*from_actor=*/true);
+  EXPECT_EQ(task_->GetLastActuatedTab(), &mock_tab);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(),
+            mock_tab.GetHandle().raw_value());
+
+  // Resume task.
+  ExpectStateChangeNotification(ActorTask::State::kReflecting);
+  task_->Resume();
+  EXPECT_EQ(task_->GetLastActuatedTab(), &mock_tab);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(),
+            mock_tab.GetHandle().raw_value());
+
+  // Transition back to Acting state.
+  ExpectStateChangeNotification(ActorTask::State::kActing);
+  task_->SetState(ActorTask::State::kActing);
+  EXPECT_EQ(task_->GetLastActuatedTab(), &mock_tab);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(),
+            mock_tab.GetHandle().raw_value());
+
+  // Pause task from user.
+  ExpectStateChangeNotification(ActorTask::State::kPausedByUser);
+  task_->Pause(/*from_actor=*/false);
+  EXPECT_EQ(task_->GetLastActuatedTab(), &mock_tab);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(),
+            mock_tab.GetHandle().raw_value());
+
+  // Stop task to clean up controlled tabs before mock_tab is destroyed.
+  ExpectStopNotification(ActorTask::State::kFinished);
+  ExpectTabRemovedNotification(mock_tab.GetHandle());
+  task_->Stop(ActorTask::StoppedReason::kTaskComplete);
+}
+
+TEST_F(ActorTaskTest, GetLastActuatedTabSwitchesBetweenTabs) {
+  tabs::MockTabInterface tab_a;
+  tabs::MockTabInterface tab_b;
+
+  // 1. Actuate on Tab A.
+  AddTabAndVerify(tab_a);
+  EXPECT_EQ(task_->GetLastActuatedTab(), &tab_a);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(),
+            tab_a.GetHandle().raw_value());
+
+  // 2. Actuate on Tab B.
+  AddTabAndVerify(tab_b);
+  EXPECT_EQ(task_->GetLastActuatedTab(), &tab_b);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(),
+            tab_b.GetHandle().raw_value());
+
+  // 3. Actuate on Tab A again (which is already controlled).
+  AddTabToTask(tab_a, *task_);
+  EXPECT_EQ(task_->GetLastActuatedTab(), &tab_a);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(),
+            tab_a.GetHandle().raw_value());
+
+  // 4. Stop task; the last actuated tab (Tab A) is preserved.
+  ExpectStopNotification(ActorTask::State::kFinished);
+  ExpectTabRemovedNotification(tab_a.GetHandle());
+  ExpectTabRemovedNotification(tab_b.GetHandle());
+  task_->Stop(ActorTask::StoppedReason::kTaskComplete);
+
+  EXPECT_TRUE(task_->GetTabs().empty());
+  EXPECT_EQ(task_->GetLastActuatedTab(), &tab_a);
+  EXPECT_EQ(task_->GetLastActuatedTabHandle().raw_value(),
+            tab_a.GetHandle().raw_value());
 }
 
 TEST_F(ActorTaskTest, AdditionalTabObservations) {
@@ -504,6 +702,367 @@ TEST_F(ActorTaskTest, MultipleActions) {
   EXPECT_EQ(future.Get().size(), 2u);
   EXPECT_EQ(future.Get()[0].result->code, mojom::ActionResultCode::kOk);
   EXPECT_EQ(future.Get()[1].result->code, mojom::ActionResultCode::kOk);
+}
+
+class ActorTaskCompletionMetricsTest : public testing::Test {
+ public:
+  ActorTaskCompletionMetricsTest()
+      : task_environment_(
+            content::BrowserTaskEnvironment::TimeSource::MOCK_TIME) {
+    scoped_feature_list_.InitAndEnableFeature(features::kGlicActor);
+  }
+
+  void SetUp() override {
+    profile_ =
+        TestingProfile::Builder()
+            .AddTestingFactory(
+                ActorKeyedServiceFactory::GetInstance(),
+                base::BindRepeating([](content::BrowserContext* context)
+                                        -> std::unique_ptr<KeyedService> {
+                  return std::make_unique<ActorKeyedServiceFake>(
+                      Profile::FromBrowserContext(context));
+                }))
+            .Build();
+  }
+
+ protected:
+  content::BrowserTaskEnvironment task_environment_;
+  base::test::ScopedFeatureList scoped_feature_list_;
+  std::unique_ptr<TestingProfile> profile_;
+  MockActorTaskDelegate mock_delegate_;
+};
+
+TEST_F(ActorTaskCompletionMetricsTest,
+       InvocationSourceCompletionMetrics_UniversalCart) {
+  base::HistogramTester histograms;
+
+  auto task_options = actor::webui::mojom::TaskOptions::New();
+  task_options->title = "Completion Metrics Task";
+
+  auto* service = ActorKeyedService::Get(profile_.get());
+  auto mock_ui_event_dispatcher =
+      std::make_unique<testing::NiceMock<ui::MockUiEventDispatcher>>();
+  TaskId task_id = service->CreateTaskForTesting(
+      std::move(mock_ui_event_dispatcher), TestTaskSourceInfo(),
+      NoEnterprisePolicyChecker(), std::move(task_options),
+      mock_delegate_.GetWeakPtr(),
+      glic::mojom::InvocationSource::kUniversalCart);
+  ActorTask* task = service->GetTask(task_id);
+  ASSERT_NE(task, nullptr);
+  EXPECT_EQ(task->initial_invocation_source(),
+            glic::mojom::InvocationSource::kUniversalCart);
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      kActorRecordInvocationSourceCompletionMetrics);
+
+  task->Stop(ActorTask::StoppedReason::kTaskComplete);
+
+  histograms.ExpectTotalCount(
+      "Actor.Task.Duration.WallClock.Completed.UniversalCart", 1);
+  histograms.ExpectTotalCount("Actor.Task.Duration.Completed.UniversalCart", 1);
+  histograms.ExpectTotalCount("Actor.Task.Count.Completed.UniversalCart", 1);
+}
+
+TEST_F(ActorTaskCompletionMetricsTest,
+       InvocationSourceCompletionMetrics_Other) {
+  base::HistogramTester histograms;
+
+  auto task_options = actor::webui::mojom::TaskOptions::New();
+  task_options->title = "Completion Metrics Task";
+
+  auto* service = ActorKeyedService::Get(profile_.get());
+  auto mock_ui_event_dispatcher =
+      std::make_unique<testing::NiceMock<ui::MockUiEventDispatcher>>();
+  TaskId task_id = service->CreateTaskForTesting(
+      std::move(mock_ui_event_dispatcher), TestTaskSourceInfo(),
+      NoEnterprisePolicyChecker(), std::move(task_options),
+      mock_delegate_.GetWeakPtr(), glic::mojom::InvocationSource::kOsButton);
+  ActorTask* task = service->GetTask(task_id);
+  ASSERT_NE(task, nullptr);
+  EXPECT_EQ(task->initial_invocation_source(),
+            glic::mojom::InvocationSource::kOsButton);
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      kActorRecordInvocationSourceCompletionMetrics);
+
+  task->Stop(ActorTask::StoppedReason::kTaskComplete);
+
+  histograms.ExpectTotalCount("Actor.Task.Duration.WallClock.Completed.Other",
+                              1);
+  histograms.ExpectTotalCount("Actor.Task.Duration.Completed.Other", 1);
+  histograms.ExpectTotalCount("Actor.Task.Count.Completed.Other", 1);
+}
+
+TEST_F(ActorTaskCompletionMetricsTest,
+       InvocationSourceCompletionMetrics_Disabled) {
+  base::HistogramTester histograms;
+
+  auto task_options = actor::webui::mojom::TaskOptions::New();
+  task_options->title = "Completion Metrics Task";
+
+  auto* service = ActorKeyedService::Get(profile_.get());
+  auto mock_ui_event_dispatcher =
+      std::make_unique<testing::NiceMock<ui::MockUiEventDispatcher>>();
+  TaskId task_id = service->CreateTaskForTesting(
+      std::move(mock_ui_event_dispatcher), TestTaskSourceInfo(),
+      NoEnterprisePolicyChecker(), std::move(task_options),
+      mock_delegate_.GetWeakPtr(),
+      glic::mojom::InvocationSource::kUniversalCart);
+  ActorTask* task = service->GetTask(task_id);
+  ASSERT_NE(task, nullptr);
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      kActorRecordInvocationSourceCompletionMetrics);
+
+  task->Stop(ActorTask::StoppedReason::kTaskComplete);
+
+  histograms.ExpectTotalCount(
+      "Actor.Task.Duration.WallClock.Completed.UniversalCart", 0);
+  histograms.ExpectTotalCount("Actor.Task.Duration.Completed.UniversalCart", 0);
+  histograms.ExpectTotalCount("Actor.Task.Count.Completed.UniversalCart", 0);
+}
+
+TEST_F(ActorTaskCompletionMetricsTest,
+       InvocationSourceCompletionMetrics_DefaultInvocationSource) {
+  base::HistogramTester histograms;
+
+  auto task_options = actor::webui::mojom::TaskOptions::New();
+  task_options->title = "Completion Metrics Task";
+
+  auto* service = ActorKeyedService::Get(profile_.get());
+  auto mock_ui_event_dispatcher =
+      std::make_unique<testing::NiceMock<ui::MockUiEventDispatcher>>();
+  TaskId task_id = service->CreateTaskForTesting(
+      std::move(mock_ui_event_dispatcher), TestTaskSourceInfo(),
+      NoEnterprisePolicyChecker(), std::move(task_options),
+      mock_delegate_.GetWeakPtr());
+  ActorTask* task = service->GetTask(task_id);
+  ASSERT_NE(task, nullptr);
+  EXPECT_EQ(task->initial_invocation_source(), std::nullopt);
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      kActorRecordInvocationSourceCompletionMetrics);
+
+  task->Stop(ActorTask::StoppedReason::kTaskComplete);
+
+  // Do not record any histograms if invocation source is not set.
+  histograms.ExpectTotalCount("Actor.Task.Duration.WallClock.Completed.Other",
+                              0);
+  histograms.ExpectTotalCount("Actor.Task.Duration.Completed.Other", 0);
+  histograms.ExpectTotalCount("Actor.Task.Count.Completed.Other", 0);
+}
+
+TEST_F(ActorTaskTest, AddTab_RejectsNonExistentTab) {
+  tabs::TabHandle non_existent_handle(99999);
+  base::test::TestFuture<mojom::ActionResultPtr> add_tab_future;
+  task_->AddTab(non_existent_handle, /*stop_task_on_detach=*/true,
+                add_tab_future.GetCallback());
+  auto result = add_tab_future.Take();
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->code, mojom::ActionResultCode::kTabWentAway);
+  EXPECT_FALSE(task_->HasTab(non_existent_handle));
+  EXPECT_FALSE(task_->GetTabs().contains(non_existent_handle));
+}
+
+TEST_F(ActorTaskTest, AddTab_RejectsCrossProfileTab) {
+  std::unique_ptr<tabs::MockTabInterface> cross_profile_tab =
+      CreateCrossProfileMockTab();
+
+  base::test::TestFuture<mojom::ActionResultPtr> add_tab_future;
+  task_->AddTab(cross_profile_tab->GetHandle(), /*stop_task_on_detach=*/true,
+                add_tab_future.GetCallback());
+  auto result = add_tab_future.Take();
+  ASSERT_TRUE(result);
+  // The tab has no surface in this task's profile, so it can't be added and is
+  // reported as gone.
+  EXPECT_EQ(result->code, mojom::ActionResultCode::kTabWentAway);
+  EXPECT_FALSE(task_->HasTab(cross_profile_tab->GetHandle()));
+  EXPECT_FALSE(task_->GetTabs().contains(cross_profile_tab->GetHandle()));
+}
+
+TEST_F(ActorTaskTest, AddTab_RejectsCrossProfileTabEvenWithNullContents) {
+  std::unique_ptr<tabs::MockTabInterface> cross_profile_tab =
+      CreateCrossProfileMockTab();
+  ON_CALL(*cross_profile_tab, GetContents)
+      .WillByDefault(::testing::Return(nullptr));
+
+  base::test::TestFuture<mojom::ActionResultPtr> add_tab_future;
+  task_->AddTab(cross_profile_tab->GetHandle(), /*stop_task_on_detach=*/true,
+                add_tab_future.GetCallback());
+  auto result = add_tab_future.Take();
+  ASSERT_TRUE(result);
+  // The tab has no surface in this task's profile, so it can't be added and is
+  // reported as gone.
+  EXPECT_EQ(result->code, mojom::ActionResultCode::kTabWentAway);
+  EXPECT_FALSE(task_->HasTab(cross_profile_tab->GetHandle()));
+  EXPECT_FALSE(task_->GetTabs().contains(cross_profile_tab->GetHandle()));
+}
+
+TEST_F(ActorTaskTest, AddActorSurface_RejectsNonExistentSurface) {
+  // A handle whose surface has been destroyed resolves to nothing.
+  ::ui::UnownedUserDataHost user_data_host;
+  tabs::MockTabInterface tab;
+  ON_CALL(tab, GetProfile).WillByDefault(::testing::Return(profile_.get()));
+  ON_CALL(tab, GetUnownedUserDataHost())
+      .WillByDefault(::testing::ReturnRef(user_data_host));
+  auto actor_surface_tab_helper = std::make_unique<ActorSurfaceTabHelper>(tab);
+  const ActorSurfaceHandle stale_handle =
+      ActorSurfaceHandle::From(tab.GetHandle());
+  ASSERT_FALSE(stale_handle.is_null());
+  actor_surface_tab_helper.reset();
+  // Let the destroyed surface's tab mapping expire (it is kept until the end of
+  // the current task).
+  task_environment_.RunUntilIdle();
+  ASSERT_FALSE(stale_handle.Get());
+
+  base::test::TestFuture<mojom::ActionResultPtr> add_actor_surface_future;
+  task_->AddActorSurface(stale_handle,
+                         /*stop_task_on_detach=*/true,
+                         add_actor_surface_future.GetCallback());
+  auto result = add_actor_surface_future.Take();
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->code, mojom::ActionResultCode::kTabWentAway);
+}
+
+TEST_F(ActorTaskTest, AddActorSurface_RejectsCrossProfileSurface) {
+  std::unique_ptr<tabs::MockTabInterface> cross_profile_tab =
+      CreateCrossProfileMockTab();
+  ::ui::UnownedUserDataHost user_data_host;
+  ON_CALL(*cross_profile_tab, GetUnownedUserDataHost())
+      .WillByDefault(::testing::ReturnRef(user_data_host));
+  ActorSurfaceTabHelper actor_surface_tab_helper(*cross_profile_tab);
+  const ActorSurfaceHandle actor_surface_handle =
+      ActorSurfaceHandle::From(cross_profile_tab->GetHandle());
+  ASSERT_FALSE(actor_surface_handle.is_null());
+
+  // The surface exists but isn't in this profile's ActorSurfaceRegistry.
+  base::test::TestFuture<mojom::ActionResultPtr> add_actor_surface_future;
+  task_->AddActorSurface(actor_surface_handle,
+                         /*stop_task_on_detach=*/true,
+                         add_actor_surface_future.GetCallback());
+  auto result = add_actor_surface_future.Take();
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->code, mojom::ActionResultCode::kActionTargetCrossProfile);
+  EXPECT_FALSE(task_->HasTab(cross_profile_tab->GetHandle()));
+}
+
+TEST_F(ActorTaskTest, ObserveTabOnce_RejectsNonExistentAndCrossProfileTab) {
+  tabs::TabHandle non_existent_handle(99999);
+  task_->ObserveTabOnce(non_existent_handle);
+  EXPECT_FALSE(task_->GetLastActedActorSurfaces().contains(
+      ActorSurfaceHandle::From(non_existent_handle)));
+
+  std::unique_ptr<tabs::MockTabInterface> cross_profile_tab =
+      CreateCrossProfileMockTab();
+
+  task_->ObserveTabOnce(cross_profile_tab->GetHandle());
+  EXPECT_FALSE(task_->GetLastActedActorSurfaces().contains(
+      ActorSurfaceHandle::From(cross_profile_tab->GetHandle())));
+}
+
+// Uses a mock tab that has a real WebContents and a registered surface, as
+// real tabs do.
+class ActorTaskSurfaceTest : public ActorTaskTest {
+ public:
+  void SetUp() override {
+    ActorTaskTest::SetUp();
+    web_contents_ = content::WebContentsTester::CreateTestWebContents(
+        profile_.get(), nullptr);
+    ON_CALL(mock_tab_, GetContents)
+        .WillByDefault(::testing::Return(web_contents_.get()));
+    ON_CALL(mock_tab_, GetProfile)
+        .WillByDefault(::testing::Return(profile_.get()));
+    registry().OnTabCreated(mock_tab_);
+  }
+
+ protected:
+  content::RenderViewHostTestEnabler rvh_test_enabler_;
+  std::unique_ptr<content::WebContents> web_contents_;
+  tabs::MockTabInterface mock_tab_;
+};
+
+TEST_F(ActorTaskSurfaceTest, ControlsPageThroughSurface) {
+  AddTabAndVerify(mock_tab_);
+  EXPECT_TRUE(web_contents_->IsBeingCaptured());
+
+  RemoveTabAndVerify(mock_tab_);
+  EXPECT_FALSE(web_contents_->IsBeingCaptured());
+}
+
+TEST_F(ActorTaskSurfaceTest, SurfaceApis) {
+  const ActorSurfaceHandle actor_surface_handle =
+      ActorSurfaceHandle::From(mock_tab_.GetHandle());
+  ASSERT_FALSE(actor_surface_handle.is_null());
+
+  ExpectTabAddedNotification(mock_tab_.GetHandle());
+  base::test::TestFuture<mojom::ActionResultPtr> add_future;
+  task_->AddActorSurface(actor_surface_handle, /*stop_task_on_detach=*/true,
+                         add_future.GetCallback());
+  ExpectOkResult(add_future);
+  EXPECT_TRUE(task_->HasActorSurface(actor_surface_handle));
+  EXPECT_TRUE(task_->IsActingOnActorSurface(actor_surface_handle));
+  EXPECT_THAT(task_->GetActorSurfaces(),
+              ::testing::UnorderedElementsAre(actor_surface_handle));
+  EXPECT_THAT(task_->GetLastActedActorSurfaces(),
+              ::testing::UnorderedElementsAre(actor_surface_handle));
+  EXPECT_EQ(task_->GetLastActuatedActorSurface(), actor_surface_handle);
+
+  ExpectTabRemovedNotification(mock_tab_.GetHandle());
+  task_->RemoveActorSurface(actor_surface_handle);
+  EXPECT_FALSE(task_->HasActorSurface(actor_surface_handle));
+  EXPECT_FALSE(task_->IsActingOnActorSurface(actor_surface_handle));
+  EXPECT_TRUE(task_->GetActorSurfaces().empty());
+  // The last actuated surface is preserved after removal.
+  EXPECT_EQ(task_->GetLastActuatedActorSurface(), actor_surface_handle);
+
+  // Observing a surface adds it to the last-acted set only.
+  task_->ObserveActorSurfaceOnce(actor_surface_handle);
+  EXPECT_FALSE(task_->HasActorSurface(actor_surface_handle));
+  EXPECT_THAT(task_->GetLastActedActorSurfaces(),
+              ::testing::UnorderedElementsAre(actor_surface_handle));
+}
+
+TEST_F(ActorTaskSurfaceTest, ObserveTabOnceThroughSurface) {
+  task_->ObserveTabOnce(mock_tab_.GetHandle());
+  EXPECT_TRUE(registry().GetForTab(mock_tab_.GetHandle()));
+  EXPECT_TRUE(web_contents_->IsBeingCaptured());
+
+  task_->Pause(/*from_actor=*/false);
+  EXPECT_FALSE(web_contents_->IsBeingCaptured());
+}
+
+// A surface without a tab comes under actor control like a tab, but doesn't
+// count as visible.
+TEST_F(ActorTaskSurfaceTest, ControlsSurfaceWithoutTab) {
+  ActorSurface* actor_surface = registry().CreateHeadlessWebContents();
+  ASSERT_TRUE(actor_surface);
+  ASSERT_FALSE(actor_surface->GetTabHandle());
+  const ActorSurfaceHandle actor_surface_handle = actor_surface->GetHandle();
+  content::WebContents* contents = actor_surface->GetWebContents();
+
+  base::test::TestFuture<mojom::ActionResultPtr> add_future;
+  task_->AddActorSurface(actor_surface_handle, /*stop_task_on_detach=*/true,
+                         add_future.GetCallback());
+  ASSERT_TRUE(add_future.Wait());
+  EXPECT_TRUE(task_->IsActingOnActorSurface(actor_surface_handle));
+  EXPECT_TRUE(contents->IsBeingCaptured());
+  EXPECT_EQ(task_->GetUiMode(), ActorUiMode::kBackground);
+
+  // Pausing and resuming exits and re-enters actor control.
+  task_->Pause(/*from_actor=*/false);
+  EXPECT_FALSE(contents->IsBeingCaptured());
+  task_->Resume();
+  EXPECT_TRUE(contents->IsBeingCaptured());
+
+  task_->RemoveActorSurface(actor_surface_handle);
+  EXPECT_FALSE(contents->IsBeingCaptured());
+
+  // Destroy the page before the test harness tears down.
+  registry().DestroySurface(actor_surface_handle);
 }
 
 }  // namespace

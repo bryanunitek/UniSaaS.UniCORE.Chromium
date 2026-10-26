@@ -6,6 +6,7 @@
 #define CHROME_RENDERER_ACCESSIBILITY_READ_ANYTHING_READ_ALOUD_APP_MODEL_H_
 
 #include "base/metrics/single_sample_metrics.h"
+#include "base/threading/sequence_bound.h"
 #include "base/values.h"
 #include "chrome/common/read_anything/read_anything.mojom.h"
 #include "chrome/renderer/accessibility/phrase_segmentation/dependency_parser_model.h"
@@ -136,7 +137,7 @@ class ReadAloudAppModel {
                                const std::set<ui::AXNodeID>* current_nodes);
 
   // Get the dependency parsing model for this renderer process.
-  DependencyParserModel& GetDependencyParserModel();
+  base::SequenceBound<DependencyParserModel>& GetDependencyParserModel();
 
   // Increments the processed_granularity_index_, updating ReadAloud's state of
   // the current granularity to refer to the next granularity. The current
@@ -361,6 +362,7 @@ class ReadAloudAppModel {
       {"Accessibility.ReadAnything.ReadAloudNextButtonSessionCount", 0},
       {"Accessibility.ReadAnything.ReadAloudPauseSessionCount", 0},
       {"Accessibility.ReadAnything.ReadAloudPlaySessionCount", 0},
+      {"Accessibility.ReadAnything.ReadAloudPlayFromLineFocusSessionCount", 0},
       {"Accessibility.ReadAnything.ReadAloudPlayFromSelectionSessionCount", 0},
       {"Accessibility.ReadAnything.ReadAloudPreviousButtonSessionCount", 0},
       {"Accessibility.ReadAnything.ReadAloud.VoiceLanguageChange", 0},
@@ -395,9 +397,6 @@ class ReadAloudAppModel {
   // currently being processed for phrases. -1 if none.
   int current_phrase_calculation_index_ = -1;
 
-  // TODO(crbug.com/40927698): Clear this when granularity changes.
-  // TODO(crbug.com/40927698): Use this to assist in navigating forwards /
-  // backwards.
   // Previously processed granularities on the current page.
   std::vector<a11y::ReadAloudCurrentGranularity>
       processed_granularities_on_current_page_;

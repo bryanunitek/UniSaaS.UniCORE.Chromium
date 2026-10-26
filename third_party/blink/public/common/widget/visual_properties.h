@@ -10,6 +10,7 @@
 #include "cc/trees/browser_controls_params.h"
 #include "components/viz/common/surfaces/local_surface_id.h"
 #include "third_party/blink/public/common/common_export.h"
+#include "third_party/blink/public/mojom/manifest/application_context.mojom.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
 #include "ui/base/mojom/window_show_state.mojom-shared.h"
 #include "ui/display/screen_infos.h"
@@ -107,10 +108,23 @@ struct BLINK_COMMON_EXPORT VisualProperties {
   // Indicates whether tab-initiated fullscreen was granted.
   bool is_fullscreen_granted = false;
 
+  // The number of times fullscreen has been granted to this widget by the
+  // browser. Allows the browser and renderer to detect fullscreen transitions
+  // that were coalesced while waiting for a visual properties ack.
+  uint64_t fullscreen_grant_count = 0;
+
   bool resizable = true;
+
+  // Whether the window is an always-on-top popup.
+  bool always_on_top_popup = false;
 
   // The display mode.
   mojom::DisplayMode display_mode = mojom::DisplayMode::kUndefined;
+
+  // How the top-level browsing context is presented to the user: as a
+  // standalone web application window or as ordinary browser UI.
+  mojom::ApplicationContext application_context =
+      mojom::ApplicationContext::kNone;
 
   // The window show state. Defaults to `WindowShowState::kDefault`.
   ui::mojom::WindowShowState window_show_state =

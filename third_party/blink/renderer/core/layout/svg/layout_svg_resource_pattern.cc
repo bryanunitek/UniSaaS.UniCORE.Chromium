@@ -51,8 +51,7 @@ struct PatternData {
 };
 
 LayoutSVGResourcePattern::LayoutSVGResourcePattern(SVGPatternElement* node)
-    : LayoutSVGResourcePaintServer(node),
-      should_collect_pattern_attributes_(true) {}
+    : LayoutSVGResourcePaintServer(node) {}
 
 void LayoutSVGResourcePattern::Trace(Visitor* visitor) const {
   visitor->Trace(attributes_);
@@ -68,18 +67,19 @@ void LayoutSVGResourcePattern::RemoveAllClientsFromCache() {
   MarkAllClientsForInvalidation(kPaintInvalidation);
 }
 
-void LayoutSVGResourcePattern::WillBeDestroyed() {
+void LayoutSVGResourcePattern::WillBeDestroyed(const ComputedStyle* style) {
   NOT_DESTROYED();
   To<SVGPatternElement>(*GetElement()).InvalidateDependentPatterns();
-  LayoutSVGResourcePaintServer::WillBeDestroyed();
+  LayoutSVGResourcePaintServer::WillBeDestroyed(style);
 }
 
 void LayoutSVGResourcePattern::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutSVGResourcePaintServer::StyleDidChange(diff, old_style,
+  LayoutSVGResourcePaintServer::StyleDidChange(diff, old_style, new_style,
                                                style_change_context);
   if (old_style)
     return;
@@ -192,14 +192,18 @@ bool LayoutSVGResourcePattern::ApplyShader(
   NOT_DESTROYED();
   ClearInvalidationMask();
 
-  std::unique_ptr<PatternData>& pattern_data =
-      pattern_map_.insert(&client, nullptr).stored_value->value;
+  auto iter = pattern_map_.find(&client);
+  PatternData* pattern_data =
+      (iter == pattern_map_.end() ? nullptr : iter->value.get());
   if (pattern_data && pattern_data->paint_flags != paint_flags) {
-    pattern_data.reset();
+    pattern_data = nullptr;
   }
 
   if (!pattern_data) {
-    pattern_data = BuildPatternData(reference_box, paint_flags);
+    auto new_pattern_data = BuildPatternData(reference_box, paint_flags);
+    pattern_data = new_pattern_data.get();
+    CHECK(pattern_data);
+    pattern_map_.Set(&client, std::move(new_pattern_data));
     pattern_data->paint_flags = paint_flags;
   }
 

@@ -27,7 +27,9 @@
 
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 
+#include "base/numerics/angle_conversions.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/skia/include/core/SkM44.h"
@@ -124,7 +126,7 @@ AffineTransform& AffineTransform::PostConcat(const AffineTransform& other) {
 
 AffineTransform& AffineTransform::Rotate(double a) {
   // angle is in degree. Switch to radian
-  return RotateRadians(Deg2rad(a));
+  return RotateRadians(base::DegToRad(a));
 }
 
 AffineTransform& AffineTransform::RotateRadians(double a) {
@@ -184,15 +186,15 @@ AffineTransform& AffineTransform::Shear(double sx, double sy) {
 }
 
 AffineTransform& AffineTransform::Skew(double angle_x, double angle_y) {
-  return Shear(tan(Deg2rad(angle_x)), tan(Deg2rad(angle_y)));
+  return Shear(tan(base::DegToRad(angle_x)), tan(base::DegToRad(angle_y)));
 }
 
 AffineTransform& AffineTransform::SkewX(double angle) {
-  return Shear(tan(Deg2rad(angle)), 0);
+  return Shear(tan(base::DegToRad(angle)), 0);
 }
 
 AffineTransform& AffineTransform::SkewY(double angle) {
-  return Shear(0, tan(Deg2rad(angle)));
+  return Shear(0, tan(base::DegToRad(angle)));
 }
 
 gfx::PointF AffineTransform::MapPoint(const gfx::PointF& point) const {
@@ -283,8 +285,8 @@ AffineTransform& AffineTransform::Zoom(double zoom_factor) {
 String AffineTransform::ToString(bool as_matrix) const {
   if (as_matrix) {
     // Return as a matrix in row-major order.
-    return String::Format("[%lg,%lg,%lg,\n%lg,%lg,%lg]", A(), C(), E(), B(),
-                          D(), F());
+    return Format("[{:g},{:g},{:g},\n{:g},{:g},{:g}]", A(), C(), E(), B(), D(),
+                  F());
   }
 
   if (IsIdentity())
@@ -295,13 +297,13 @@ String AffineTransform::ToString(bool as_matrix) const {
     return StrCat({ToString(true), " (degenerate)"});
 
   if (IsIdentityOrTranslation()) {
-    return String::Format("translation(%lg,%lg)", decomp->translate[0],
-                          decomp->translate[1]);
+    return Format("translation({:g},{:g})", decomp->translate[0],
+                  decomp->translate[1]);
   }
 
-  double angle = Rad2deg(std::asin(decomp->quaternion.z())) * 2;
-  return String::Format(
-      "translation(%lg,%lg), scale(%lg,%lg), angle(%lgdeg), skewxy(%lg)",
+  double angle = base::RadToDeg(std::asin(decomp->quaternion.z())) * 2;
+  return Format(
+      "translation({:g},{:g}), scale({:g},{:g}), angle({:g}deg), skewxy({:g})",
       decomp->translate[0], decomp->translate[1], decomp->scale[0],
       decomp->scale[1], angle, decomp->skew[0]);
 }

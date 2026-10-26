@@ -21,6 +21,7 @@
 #include "third_party/ink/src/ink/geometry/intersects.h"
 #include "third_party/ink/src/ink/geometry/partitioned_mesh.h"
 #include "third_party/ink/src/ink/geometry/point.h"
+#include "third_party/pdfium/public/fpdf_edit.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/rect_f.h"
 
@@ -70,6 +71,182 @@ TEST_P(PDFiumInkReaderTest, NoPage) {
   EXPECT_TRUE(results.empty());
 }
 
+TEST_P(PDFiumInkReaderTest, BasicTextAnnotation) {
+  TestClient client(/*use_skia_renderer=*/GetParam());
+  std::unique_ptr<PDFiumEngine> engine =
+      InitializeEngine(&client, FILE_PATH_LITERAL("ink_text.pdf"));
+  ASSERT_TRUE(engine);
+
+  constexpr int kPageIndex = 0;
+  PDFiumPage& pdfium_page = GetPDFiumPage(*engine, kPageIndex);
+  FPDF_PAGE page = pdfium_page.GetPage();
+  ASSERT_TRUE(page);
+
+  std::vector<ReadInkTextResult> results = ReadInkTextAnnotationsFromPage(page);
+  ASSERT_EQ(1u, results.size());
+
+  const InkTextBox& textbox = results[0].textbox;
+  EXPECT_EQ(0, textbox.id);
+  EXPECT_EQ("Hello\n!", textbox.attributes.text);
+
+  EXPECT_EQ(
+      textbox.attributes,
+      (InkTextBoxAttributes{
+          .rect = gfx::RectF(25.333334f, 125.333336f, 133.33334f, 66.66667f),
+          .color = SK_ColorBLACK,
+          .css_font_size = 10.0f,
+          .typeface = TextTypeface::kSansSerif,
+          .alignment = TextAlignment::kLeft,
+          .orientation = 0,
+          .viewport_orientation = PageOrientation::kOriginal,
+          .is_bold = true,
+          .is_italic = false,
+          .is_strikethrough = false,
+          .is_underline = false,
+          .text = "Hello\n!",
+      }));
+
+  // "Hello\n!" has 2 lines and should have 2 text page objects.
+  const std::vector<base::RawPtrIfPtrT<FPDF_PAGEOBJECT, DanglingUntriaged>>&
+      text_objects = results[0].text_objects;
+  ASSERT_EQ(2u, text_objects.size());
+  EXPECT_TRUE(text_objects[0]);
+  EXPECT_TRUE(text_objects[1]);
+  EXPECT_NE(text_objects[0], text_objects[1]);
+}
+
+TEST_P(PDFiumInkReaderTest, LineDecorationTextAnnotation) {
+  TestClient client(/*use_skia_renderer=*/GetParam());
+  std::unique_ptr<PDFiumEngine> engine = InitializeEngine(
+      &client, FILE_PATH_LITERAL("ink_text_line_decorations.pdf"));
+  ASSERT_TRUE(engine);
+
+  constexpr int kPageIndex = 0;
+  PDFiumPage& pdfium_page = GetPDFiumPage(*engine, kPageIndex);
+  FPDF_PAGE page = pdfium_page.GetPage();
+  ASSERT_TRUE(page);
+
+  std::vector<ReadInkTextResult> results = ReadInkTextAnnotationsFromPage(page);
+  ASSERT_EQ(1u, results.size());
+
+  const InkTextBox& textbox = results[0].textbox;
+  EXPECT_EQ(0, textbox.id);
+  EXPECT_EQ("Hello\n!", textbox.attributes.text);
+
+  EXPECT_EQ(
+      textbox.attributes,
+      (InkTextBoxAttributes{
+          .rect = gfx::RectF(25.333334f, 125.333336f, 133.33334f, 66.66667f),
+          .color = SK_ColorBLACK,
+          .css_font_size = 10.0f,
+          .typeface = TextTypeface::kSansSerif,
+          .alignment = TextAlignment::kLeft,
+          .orientation = 0,
+          .viewport_orientation = PageOrientation::kOriginal,
+          .is_bold = true,
+          .is_italic = false,
+          .is_strikethrough = true,
+          .is_underline = true,
+          .text = "Hello\n!",
+      }));
+
+  // "Hello\n!" with strikethrough and underline has 2 text page objects and 4
+  // path page objects.
+  const std::vector<base::RawPtrIfPtrT<FPDF_PAGEOBJECT, DanglingUntriaged>>&
+      page_objects = results[0].text_objects;
+  ASSERT_EQ(6u, page_objects.size());
+  EXPECT_EQ(FPDF_PAGEOBJ_TEXT, FPDFPageObj_GetType(page_objects[0]));
+  EXPECT_EQ(FPDF_PAGEOBJ_TEXT, FPDFPageObj_GetType(page_objects[1]));
+  EXPECT_EQ(FPDF_PAGEOBJ_PATH, FPDFPageObj_GetType(page_objects[2]));
+  EXPECT_EQ(FPDF_PAGEOBJ_PATH, FPDFPageObj_GetType(page_objects[3]));
+  EXPECT_EQ(FPDF_PAGEOBJ_PATH, FPDFPageObj_GetType(page_objects[4]));
+  EXPECT_EQ(FPDF_PAGEOBJ_PATH, FPDFPageObj_GetType(page_objects[5]));
+}
+
+TEST_P(PDFiumInkReaderTest, InvalidTextAnnotation) {
+  TestClient client(/*use_skia_renderer=*/GetParam());
+  std::unique_ptr<PDFiumEngine> engine =
+      InitializeEngine(&client, FILE_PATH_LITERAL("ink_text_invalid.pdf"));
+  ASSERT_TRUE(engine);
+  ASSERT_EQ(1, engine->GetNumberOfPages());
+
+  constexpr int kPageIndex = 0;
+  PDFiumPage& pdfium_page = GetPDFiumPage(*engine, kPageIndex);
+  FPDF_PAGE page = pdfium_page.GetPage();
+  ASSERT_TRUE(page);
+
+  // The PDF has multiple different objects with invalid or missing parameters,
+  // so the parser should safely skip all of them and return empty results.
+  std::vector<ReadInkTextResult> results = ReadInkTextAnnotationsFromPage(page);
+  EXPECT_TRUE(results.empty());
+}
+
+TEST_P(PDFiumInkReaderTest, MultipleTextboxesOnOnePage) {
+  TestClient client(/*use_skia_renderer=*/GetParam());
+  std::unique_ptr<PDFiumEngine> engine = InitializeEngine(
+      &client, FILE_PATH_LITERAL("ink_text_multi_textboxes.pdf"));
+  ASSERT_TRUE(engine);
+  ASSERT_EQ(1, engine->GetNumberOfPages());
+
+  constexpr int kPageIndex = 0;
+  PDFiumPage& pdfium_page = GetPDFiumPage(*engine, kPageIndex);
+  FPDF_PAGE page = pdfium_page.GetPage();
+  ASSERT_TRUE(page);
+
+  std::vector<ReadInkTextResult> results = ReadInkTextAnnotationsFromPage(page);
+  ASSERT_EQ(2u, results.size());
+
+  // Textbox 0.
+  const InkTextBox& textbox0 = results[0].textbox;
+  EXPECT_EQ(0, textbox0.id);
+  EXPECT_EQ("Hello", textbox0.attributes.text);
+  EXPECT_EQ(
+      textbox0.attributes,
+      (InkTextBoxAttributes{
+          .rect = gfx::RectF(25.333334f, 125.333336f, 133.33334f, 66.66667f),
+          .color = SK_ColorBLACK,
+          .css_font_size = 10.0f,
+          .typeface = TextTypeface::kSansSerif,
+          .alignment = TextAlignment::kLeft,
+          .orientation = 0,
+          .viewport_orientation = PageOrientation::kOriginal,
+          .is_bold = true,
+          .is_italic = false,
+          .is_strikethrough = false,
+          .is_underline = false,
+          .text = "Hello",
+      }));
+  const std::vector<base::RawPtrIfPtrT<FPDF_PAGEOBJECT, DanglingUntriaged>>&
+      text_objects0 = results[0].text_objects;
+  ASSERT_EQ(1u, text_objects0.size());
+  EXPECT_TRUE(text_objects0[0]);
+
+  // Textbox 1.
+  const InkTextBox& textbox1 = results[1].textbox;
+  EXPECT_EQ(42, textbox1.id);
+  EXPECT_EQ("World", textbox1.attributes.text);
+  EXPECT_EQ(
+      textbox1.attributes,
+      (InkTextBoxAttributes{
+          .rect = gfx::RectF(25.333334f, 186.66667f, 133.33334f, 66.66667f),
+          .color = SK_ColorBLUE,
+          .css_font_size = 15.0f,
+          .typeface = TextTypeface::kMonospace,
+          .alignment = TextAlignment::kLeft,
+          .orientation = 0,
+          .viewport_orientation = PageOrientation::kOriginal,
+          .is_bold = false,
+          .is_italic = true,
+          .is_strikethrough = false,
+          .is_underline = false,
+          .text = "World",
+      }));
+  const std::vector<base::RawPtrIfPtrT<FPDF_PAGEOBJECT, DanglingUntriaged>>&
+      text_objects1 = results[1].text_objects;
+  ASSERT_EQ(1u, text_objects1.size());
+  EXPECT_TRUE(text_objects1[0]);
+}
+
 INSTANTIATE_TEST_SUITE_P(All, PDFiumInkReaderTest, testing::Bool());
 
 class PDFiumInkReaderStrokeMarkedObjectsTests : public PDFiumInkReaderTest {
@@ -111,100 +288,5 @@ TEST_P(PDFiumInkReaderStrokeMarkedObjectsTests, MarkedObjectsHasStrokeData) {
 INSTANTIATE_TEST_SUITE_P(All,
                          PDFiumInkReaderStrokeMarkedObjectsTests,
                          testing::Values(false));
-
-TEST_P(PDFiumInkReaderTest, BasicTextAnnotation) {
-  TestClient client(/*use_skia_renderer=*/GetParam());
-  std::unique_ptr<PDFiumEngine> engine =
-      InitializeEngine(&client, FILE_PATH_LITERAL("ink_text.pdf"));
-  ASSERT_TRUE(engine);
-
-  constexpr int kPageIndex = 0;
-  PDFiumPage& pdfium_page = GetPDFiumPage(*engine, kPageIndex);
-  FPDF_PAGE page = pdfium_page.GetPage();
-  ASSERT_TRUE(page);
-
-  std::vector<ReadInkTextResult> results = ReadInkTextAnnotationsFromPage(page);
-  ASSERT_EQ(1u, results.size());
-
-  const InkTextBox& textbox = results[0].textbox;
-  EXPECT_EQ(0, textbox.id);
-  EXPECT_EQ("Hello\n!", textbox.attributes.text);
-
-  EXPECT_THAT(textbox.attributes,
-              InkTextBoxAttributesEq(
-                  gfx::RectF(25.333334f, 125.333336f, 133.33334f, 66.66667f),
-                  SK_ColorBLACK, 10.0f, TextTypeface::kSansSerif,
-                  TextAlignment::kLeft, 0, PageOrientation::kOriginal,
-                  /*is_bold=*/true, /*is_italic=*/false, "Hello\n!"));
-
-  // "Hello\n!" has 2 lines and should have 2 text page objects.
-  const std::vector<FPDF_PAGEOBJECT>& text_objects = results[0].text_objects;
-  ASSERT_EQ(2u, text_objects.size());
-  EXPECT_TRUE(text_objects[0]);
-  EXPECT_TRUE(text_objects[1]);
-  EXPECT_NE(text_objects[0], text_objects[1]);
-}
-
-TEST_P(PDFiumInkReaderTest, InvalidTextAnnotation) {
-  TestClient client(/*use_skia_renderer=*/GetParam());
-  std::unique_ptr<PDFiumEngine> engine =
-      InitializeEngine(&client, FILE_PATH_LITERAL("ink_text_invalid.pdf"));
-  ASSERT_TRUE(engine);
-  ASSERT_EQ(1, engine->GetNumberOfPages());
-
-  constexpr int kPageIndex = 0;
-  PDFiumPage& pdfium_page = GetPDFiumPage(*engine, kPageIndex);
-  FPDF_PAGE page = pdfium_page.GetPage();
-  ASSERT_TRUE(page);
-
-  // The PDF has multiple different objects with invalid or missing parameters,
-  // so the parser should safely skip all of them and return empty results.
-  std::vector<ReadInkTextResult> results = ReadInkTextAnnotationsFromPage(page);
-  EXPECT_TRUE(results.empty());
-}
-
-TEST_P(PDFiumInkReaderTest, MultipleTextboxesOnOnePage) {
-  TestClient client(/*use_skia_renderer=*/GetParam());
-  std::unique_ptr<PDFiumEngine> engine = InitializeEngine(
-      &client, FILE_PATH_LITERAL("ink_text_multi_textboxes.pdf"));
-  ASSERT_TRUE(engine);
-  ASSERT_EQ(1, engine->GetNumberOfPages());
-
-  constexpr int kPageIndex = 0;
-  PDFiumPage& pdfium_page = GetPDFiumPage(*engine, kPageIndex);
-  FPDF_PAGE page = pdfium_page.GetPage();
-  ASSERT_TRUE(page);
-
-  std::vector<ReadInkTextResult> results = ReadInkTextAnnotationsFromPage(page);
-  ASSERT_EQ(2u, results.size());
-
-  // Textbox 0.
-  const InkTextBox& textbox0 = results[0].textbox;
-  EXPECT_EQ(0, textbox0.id);
-  EXPECT_EQ("Hello", textbox0.attributes.text);
-  EXPECT_THAT(textbox0.attributes,
-              InkTextBoxAttributesEq(
-                  gfx::RectF(25.333334f, 125.333336f, 133.33334f, 66.66667f),
-                  SK_ColorBLACK, 10.0f, TextTypeface::kSansSerif,
-                  TextAlignment::kLeft, 0, PageOrientation::kOriginal,
-                  /*is_bold=*/true, /*is_italic=*/false, "Hello"));
-  const std::vector<FPDF_PAGEOBJECT>& text_objects0 = results[0].text_objects;
-  ASSERT_EQ(1u, text_objects0.size());
-  EXPECT_TRUE(text_objects0[0]);
-
-  // Textbox 1.
-  const InkTextBox& textbox1 = results[1].textbox;
-  EXPECT_EQ(42, textbox1.id);
-  EXPECT_EQ("World", textbox1.attributes.text);
-  EXPECT_THAT(textbox1.attributes,
-              InkTextBoxAttributesEq(
-                  gfx::RectF(25.333334f, 186.66667f, 133.33334f, 66.66667f),
-                  SK_ColorBLUE, 15.0f, TextTypeface::kMonospace,
-                  TextAlignment::kLeft, 0, PageOrientation::kOriginal,
-                  /*is_bold=*/false, /*is_italic=*/true, "World"));
-  const std::vector<FPDF_PAGEOBJECT>& text_objects1 = results[1].text_objects;
-  ASSERT_EQ(1u, text_objects1.size());
-  EXPECT_TRUE(text_objects1[0]);
-}
 
 }  // namespace chrome_pdf

@@ -16,6 +16,7 @@
 #include "chrome/browser/ui/autofill/autofill_message_model.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/browser/payments/legal_message_line.h"
 
 namespace content {
 class WebContents;
@@ -39,6 +40,7 @@ class AutofillAiSaveUpdateEntityFlowManager {
   explicit AutofillAiSaveUpdateEntityFlowManager(
       content::WebContents* web_contents,
       AutofillMessageController* autofill_message_controller,
+      AutofillDialogController* autofill_dialog_controller,
       std::string app_locale);
   AutofillAiSaveUpdateEntityFlowManager(
       const AutofillAiSaveUpdateEntityFlowManager&) = delete;
@@ -51,34 +53,32 @@ class AutofillAiSaveUpdateEntityFlowManager {
   void OfferSave(
       EntityInstance entity,
       std::optional<EntityInstance> old_entity,
-      AutofillClient::EntityImportPromptResultCallback prompt_result_callback);
+      AutofillClient::EntityImportPromptResultCallback prompt_result_callback,
+      LegalMessageLines public_passes_notice = {});
 
   // Shows a modal dialog to notify the user that the entity was saved locally
   // instead of uploading it to Google Wallet.
   void ShowLocalSaveNotification();
 
-  void SetAutofillDialogControllerForTest(
-      std::unique_ptr<AutofillDialogController> autofill_dialog_controller) {
-    autofill_dialog_controller_ = std::move(autofill_dialog_controller);
-  }
-
  private:
   void OnMessagePrimaryAction(EntityInstance entity,
-                              std::optional<EntityInstance> old_entity);
+                              std::optional<EntityInstance> old_entity,
+                              LegalMessageLines public_passes_notice);
 
   void OnMessageDismissed(messages::DismissReason dismiss_reason);
 
   std::unique_ptr<AutofillMessageModel> CreateMessageModel(
       EntityInstance entity,
-      std::optional<EntityInstance> old_entity);
+      std::optional<EntityInstance> old_entity,
+      LegalMessageLines public_passes_notice);
 
   void RunPromptClosedCallback(AutofillClient::AutofillAiBubbleResult result);
 
   raw_ptr<content::WebContents> web_contents_;
   raw_ref<AutofillMessageController> autofill_message_controller_;
+  raw_ref<AutofillDialogController> autofill_dialog_controller_;
   std::unique_ptr<AutofillAiSaveUpdateEntityPromptController>
       save_update_entity_prompt_controller_;
-  std::unique_ptr<AutofillDialogController> autofill_dialog_controller_;
 
   // Callback to notify the data provider about the user decision for the save
   // or update prompt.

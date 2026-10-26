@@ -20,19 +20,13 @@ import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import {getCss} from './discover_skills_page.css.js';
 import {getHtml} from './discover_skills_page.html.js';
 import type {Skill, TopicInfo} from './skill.mojom-webui.js';
-import {SkillsDialogType} from './skill.mojom-webui.js';
+import {SkillsDialogType, SkillSource} from './skill.mojom-webui.js';
 import {SkillsManagementAction, SkillsManagementPage} from './skill_metrics.mojom-webui.js';
 import type {BrowseSkillsInitialState} from './skills.mojom-webui.js';
 import {SkillsPageBrowserProxy} from './skills_page_browser_proxy.js';
 
 // The default category name for all skills.
 const kAllCategoriesString: string = loadTimeData.getString('all');
-
-export interface DiscoverSkillsPageElement {
-  $: {
-    invalidSkillToast: CrToastElement,
-  };
-}
 
 export class DiscoverSkillsPageElement extends CrLitElement {
   static get is() {
@@ -99,12 +93,22 @@ export class DiscoverSkillsPageElement extends CrLitElement {
     this.proxy_.handler.recordSkillsManagementAction(
         SkillsManagementPage.kBrowseSkills,
         SkillsManagementAction.kClickedAddSkill);
+
+    // Enterprise skills are fully defined and downloaded on policy update and
+    // do not require a separate prompt download request or verification via
+    // maybeSaveSkill(). Open the save dialog immediately.
+    if (savedSkill.source === SkillSource.kEnterprise) {
+      this.proxy_.handler.openSkillsDialog(SkillsDialogType.kAdd, savedSkill);
+      return;
+    }
+
     this.is1PSkillSaving_ = true;
     this.proxy_.handler.maybeSave1PSkill(savedSkill.id).then(({success}) => {
       if (success) {
         this.proxy_.handler.openSkillsDialog(SkillsDialogType.kAdd, savedSkill);
       } else {
-        this.$.invalidSkillToast.show();
+        this.shadowRoot.querySelector<CrToastElement>(
+                           '#invalidSkillToast')!.show();
         this.skillsPendingRemoval_ =
             new Set([...this.skillsPendingRemoval_, savedSkill.id]);
       }
@@ -130,19 +134,35 @@ export class DiscoverSkillsPageElement extends CrLitElement {
   protected getIconForCategory_(category: string): string {
     switch (category) {
       case 'All':
-        return 'skills:grid';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'skills:grid-view' :
+            'skills:grid-old';
       case 'Fun':
-        return 'skills:celebration';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'skills:celebration' :
+            'skills:celebration-old';
       case 'Learning':
-        return 'skills:book';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'skills:book-2' :
+            'skills:book-old';
       case 'Research':
-        return 'skills:search';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'skills:manage-search' :
+            'skills:search-old';
       case 'Shopping':
-        return 'skills:shopping';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'skills:shopping-bag' :
+            'skills:shopping-old';
       case 'Understand':
-        return 'skills:lightbulb';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'skills:lightbulb' :
+            'skills:lightbulb-old';
       case 'Writing':
-        return 'skills:write';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'skills:ink-pen' :
+            'skills:write-old';
+      case 'From your organization':
+        return 'cr:domain';
       default:
         return 'cr:add';
     }

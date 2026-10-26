@@ -7,18 +7,24 @@
 
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
+#include "chrome/browser/ui/read_anything/read_anything_contents_wrapper.h"
 #include "chrome/browser/ui/read_anything/read_anything_controller.h"
 #include "chrome/browser/ui/read_anything/read_anything_enums.h"
 #include "chrome/browser/ui/read_anything/read_anything_immersive_activation_observer.h"
 #include "chrome/browser/ui/read_anything/read_anything_lifecycle_observer.h"
-#include "chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_ui.h"
-#include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
+#include "printing/buildflags/buildflags.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/view.h"
 
+using read_anything::mojom::ReadAnythingOpenTrigger;
+
 class ContentsWebView;
 class ReadAnythingImmersiveWebView;
+
+namespace printing {
+class ScopedTabPrintTargetOverride;
+}
 
 // This view is an overlay that sits on top of the main web contents. It's
 // used to house the UI for the Immersive Reading Mode feature, which provides
@@ -38,13 +44,12 @@ class ReadAnythingImmersiveOverlayView
   ReadAnythingImmersiveOverlayView& operator=(
       const ReadAnythingImmersiveOverlayView&) = delete;
 
-  void ShowUI(std::unique_ptr<WebUIContentsWrapperT<ReadAnythingUntrustedUI>>
-                  contents_wrapper,
+  void ShowUI(ReadAnythingContentsWrapper contents_wrapper,
               ReadAnythingOpenTrigger trigger);
 
   // Closes the overlay and returns ownership of the WebUIContentsWrapper to the
   // caller.
-  std::unique_ptr<WebUIContentsWrapperT<ReadAnythingUntrustedUI>> CloseUI();
+  ReadAnythingContentsWrapper CloseUI();
 
   // ReadAnythingImmersiveActivationObserver:
   void OnShowImmersive(ReadAnythingOpenTrigger trigger) override;
@@ -73,7 +78,7 @@ class ReadAnythingImmersiveOverlayView
   void SubscribeToController(views::WebView* web_view);
 
   // Callback for when the immersive web view is ready to be shown.
-  void OnShowUI();
+  void OnShowUI(ReadAnythingOpenTrigger trigger);
 
   // Forward the focus event to the focus_callback_list_ observers.
   void OnImmersiveWebViewFocused(views::WebView* web_view);
@@ -104,6 +109,13 @@ class ReadAnythingImmersiveOverlayView
   // Used to hide tab modal UIs (like the FedCM identity popup) while IRM is
   // open.
   std::unique_ptr<tabs::ScopedTabModalUI> scoped_tab_modal_ui_;
+
+#if BUILDFLAG(ENABLE_PRINTING)
+  // Used to route print commands for the tab to the IRM WebContents while IRM
+  // is open.
+  std::unique_ptr<printing::ScopedTabPrintTargetOverride>
+      scoped_print_target_override_;
+#endif
 };
 
 #endif  // CHROME_BROWSER_UI_READ_ANYTHING_READ_ANYTHING_IMMERSIVE_OVERLAY_VIEW_H_

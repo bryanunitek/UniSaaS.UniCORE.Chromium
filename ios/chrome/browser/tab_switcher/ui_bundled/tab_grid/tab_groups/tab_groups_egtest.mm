@@ -31,6 +31,7 @@
 #import "ios/testing/earl_grey/app_launch_manager.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "ios/testing/earl_grey/matchers.h"
+#import "ios/testing/test_tag_registry.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "ui/base/l10n/l10n_util.h"
 #import "ui/base/l10n/l10n_util_mac.h"
@@ -64,7 +65,6 @@ using chrome_test_util::TabGridOverflowMenuCloseAllButton;
 using chrome_test_util::TabGridOverflowMenuSelectTabsButton;
 using chrome_test_util::TabGridSearchBar;
 using chrome_test_util::TabGridSearchTabsButton;
-using chrome_test_util::TabGridUndoCloseAllButton;
 using chrome_test_util::TabGroupCreationView;
 using chrome_test_util::TabGroupOverflowMenuButton;
 using chrome_test_util::TabGroupSnackBar;
@@ -314,9 +314,6 @@ void TapTabGroupTitle() {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
   config.features_enabled.push_back(
       data_sharing::features::kDataSharingFeature);
-  if ([self isRunningTest:@selector(testUpdateGroupByTappingTitle)]) {
-    config.features_enabled.push_back(kOpenEditGroupViewByTappingTitle);
-  }
   if ([self isRunningTest:@selector(testCreateGroupFromTabInAnotherWindow)]) {
     config.features_disabled.push_back(kChromeNextIa);
   } else {
@@ -355,6 +352,7 @@ void TapTabGroupTitle() {
 }
 
 // Tests that creates a tab group and opens the grouped tab.
+TAG_SMOKE_TEST(TabGroupsTestCase, testCompleteTabGroupCreation);
 - (void)testCompleteTabGroupCreation {
   [ChromeEarlGreyUI openTabGrid];
 
@@ -1621,9 +1619,9 @@ void TapTabGroupTitle() {
 
 // Ensures to create a group from a pinned tab and the tab is no longer pinned.
 - (void)testCreateGroupFromPinnedTab {
-  // This test is not relevant on iPads because there is no pinned tabs in iPad.
-  if ([ChromeEarlGrey isIPadIdiom]) {
-    EARL_GREY_TEST_SKIPPED(@"Skipped for iPad.");
+  // This test is not relevant if pinned tabs are not enabled.
+  if (![ChromeEarlGrey isPinnedTabsEnabled]) {
+    EARL_GREY_TEST_SKIPPED(@"Pinned tabs not enabled.");
   }
 
   CreatePinnedTabs(1, self.testServer);
@@ -1833,9 +1831,9 @@ void TapTabGroupTitle() {
 
 // Ensures that creating a group doesn't change the state of pinned tabs.
 - (void)testCreateGroupWithPinnedTab {
-  // This test is not relevant on iPads because there is no pinned tabs in iPad.
-  if ([ChromeEarlGrey isIPadIdiom]) {
-    EARL_GREY_TEST_SKIPPED(@"Skipped for iPad.");
+  // This test is not relevant if pinned tabs are not enabled.
+  if (![ChromeEarlGrey isPinnedTabsEnabled]) {
+    EARL_GREY_TEST_SKIPPED(@"Pinned tabs not enabled.");
   }
 
   // Create a pinned tab.

@@ -17,6 +17,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry_label_sensitive.h"
 #include "components/autofill/core/common/form_field_data.h"
@@ -27,6 +28,7 @@ class WebDatabase;
 namespace autofill {
 
 class AutocompleteEntryLabelSensitive;
+struct AutocompleteTableStats;
 
 enum class MatchingType {
   kUnknown = 0,
@@ -49,15 +51,35 @@ constexpr MatchingType ToSafeMatchingType(
 // suggestion in the UI layer and report appropriate metrics.
 class AutocompleteSearchResultLabelSensitive {
  public:
-  AutocompleteSearchResultLabelSensitive(std::u16string value,
-                                         MatchingType matching_type,
-                                         int count);
+  AutocompleteSearchResultLabelSensitive(
+      std::u16string value,
+      MatchingType matching_type,
+      std::u16string query_name,
+      std::u16string query_label,
+      int count,
+      base::Time date_last_used = base::Time());
   ~AutocompleteSearchResultLabelSensitive();
 
+  AutocompleteSearchResultLabelSensitive(
+      const AutocompleteSearchResultLabelSensitive& other);
+  AutocompleteSearchResultLabelSensitive& operator=(
+      const AutocompleteSearchResultLabelSensitive& other);
+  AutocompleteSearchResultLabelSensitive(
+      AutocompleteSearchResultLabelSensitive&& other);
+  AutocompleteSearchResultLabelSensitive& operator=(
+      AutocompleteSearchResultLabelSensitive&& other);
+
   // Getters
-  const std::u16string& value() const { return value_; }
+  const std::u16string& value() const LIFETIME_BOUND { return value_; }
   MatchingType matching_type() const { return matching_type_; }
+  const std::u16string& query_name() const LIFETIME_BOUND {
+    return query_name_;
+  }
+  const std::u16string& query_label() const LIFETIME_BOUND {
+    return query_label_;
+  }
   int count() const { return count_; }
+  base::Time date_last_used() const { return date_last_used_; }
 
   bool operator==(const AutocompleteSearchResultLabelSensitive& other) const {
     return value_ == other.value_;
@@ -78,7 +100,10 @@ class AutocompleteSearchResultLabelSensitive {
                        // suggestion was found via name, label, or both. Also
                        // used in search query for ranking suggestions (both
                        // name and label suggestions first).
-  int count_;
+  std::u16string query_name_;
+  std::u16string query_label_;
+  int count_ = 0;
+  base::Time date_last_used_;
 };
 
 // This class manages the Autocomplete table.
@@ -165,18 +190,28 @@ class AutocompleteTableLabelSensitive : public WebDatabaseTable {
   // Returns the number of unique values such that for all autocomplete entries
   // with that value, the interval between creation date and last usage is
   // entirely contained between [`begin`, `end`).
-  [[nodiscard]] int GetCountOfValuesContainedBetween(base::Time begin,
-                                                     base::Time end);
+  [[nodiscard]] int64_t GetCountOfValuesContainedBetween(base::Time begin,
+                                                         base::Time end);
 
   // Retrieves all of the entries in the autocomplete table.
   [[nodiscard]] bool GetAllAutocompleteEntries(
       std::vector<AutocompleteEntryLabelSensitive>* entries);
+
+  // Computes table-level statistics for the autocomplete table.
+  [[nodiscard]] AutocompleteTableStats GetTableStats() const;
 
   // Retrieves a single entry from the autocomplete table.
   [[nodiscard]] std::optional<AutocompleteEntryLabelSensitive>
   GetAutocompleteEntryLabelSensitive(const std::u16string_view name,
                                      const std::u16string_view label,
                                      const std::u16string_view value);
+
+  // Copies data from the legacy `autofill` table to the `autocomplete` table.
+  // Returns true if migration succeeded or if the legacy `autofill` table does
+  // not exist. Returns false if the database operation failed.
+  // Note: The caller on the UI thread must check if migration is needed before
+  // calling this method.
+  bool MigrateDataFromLegacyTable();
 
  private:
   bool AddFormFieldValueTime(const FormFieldData& element, base::Time time);

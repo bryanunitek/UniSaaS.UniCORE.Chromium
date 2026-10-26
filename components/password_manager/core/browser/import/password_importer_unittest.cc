@@ -22,6 +22,7 @@
 #include "components/password_manager/core/browser/import/import_results.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #include "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
 #include "components/password_manager/core/common/password_manager_constants.h"
@@ -51,7 +52,7 @@ const char kTestFileName[] = "test_only.csv";
 
 class PasswordImporterTest : public testing::Test {
  public:
-  PasswordImporterTest() : receiver_{&service_}, importer_(&presenter_) {
+  PasswordImporterTest() : receiver_{&service_}, importer_(presenter_) {
     CHECK(temp_directory_.CreateUniqueTempDir());
     mojo::PendingRemote<mojom::CSVPasswordParser> pending_remote{
         receiver_.BindNewPipeAndPassRemote()};
@@ -72,7 +73,6 @@ class PasswordImporterTest : public testing::Test {
   ~PasswordImporterTest() override {
     account_store_->ShutdownOnUIThread();
     profile_store_->ShutdownOnUIThread();
-    task_environment_.RunUntilIdle();
   }
 
  protected:
@@ -215,6 +215,8 @@ TEST_F(PasswordImporterTest, CSVImportBaseFields) {
 
   EXPECT_EQ(ImportResults::Status::SUCCESS, results.status);
   EXPECT_EQ(1u, results.number_imported);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return stored_passwords().size() == 1u; }));
   ASSERT_EQ(1u, stored_passwords().size());
   EXPECT_EQ(GURL(kTestOriginURL), stored_passwords()[0].GetURL());
   EXPECT_EQ(kTestSignonRealm, stored_passwords()[0].GetFirstSignonRealm());
@@ -252,6 +254,8 @@ TEST_F(PasswordImporterTest, CSVImportWithNote) {
       "PasswordManager.Import.PerFile.Notes.TotalCount", 1, 1);
 
   EXPECT_EQ(1u, results.number_imported);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return stored_passwords().size() == 1u; }));
   ASSERT_EQ(1u, stored_passwords().size());
   EXPECT_EQ(kTestNote, stored_passwords()[0].note);
 }
@@ -271,6 +275,8 @@ TEST_F(PasswordImporterTest, CSVImportWithNoteFromString) {
       "PasswordManager.Import.PerFile.Notes.TotalCount", 1, 1);
 
   EXPECT_EQ(1u, results.number_imported);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return stored_passwords().size() == 1u; }));
   ASSERT_EQ(1u, stored_passwords().size());
   EXPECT_EQ(kTestNote, stored_passwords()[0].note);
 }
@@ -323,6 +329,8 @@ TEST_F(PasswordImporterTest, CSVImportAndroidCredential) {
 
   EXPECT_EQ(ImportResults::Status::SUCCESS, results.status);
   EXPECT_EQ(1u, results.number_imported);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return stored_passwords().size() == 1u; }));
   ASSERT_EQ(1u, stored_passwords().size());
   EXPECT_EQ(GURL(kTestAndroidSignonRealm), stored_passwords()[0].GetURL());
   EXPECT_EQ(kTestAndroidSignonRealm,
@@ -345,8 +353,6 @@ TEST_F(PasswordImporterTest, CSVImportBadHeaderReturnsBadFormat) {
 
   histogram_tester.ExpectTotalCount(
       "PasswordManager.ImportedPasswordsPerUserInCSV", 0);
-  histogram_tester.ExpectUniqueSample("PasswordManager.ImportFileSize2", 120,
-                                      1);
 
   EXPECT_EQ(ImportResults::Status::BAD_FORMAT, results.status);
   EXPECT_EQ(0u, results.number_imported);
@@ -368,7 +374,8 @@ TEST_F(PasswordImporterTest,
   form_profile_store.url = GURL("https://test.com");
   form_profile_store.signon_realm = form_profile_store.url.spec();
   form_profile_store.username_value = u"username_exists_in_profile_store";
-  form_profile_store.password_value = u"password_already_stored";
+  form_profile_store.password_value =
+      PasswordString(u"password_already_stored");
   form_profile_store.SetNoteWithEmptyUniqueDisplayName(local_note);
   form_profile_store.in_store = PasswordForm::Store::kProfileStore;
 
@@ -407,7 +414,8 @@ TEST_F(PasswordImporterTest, ExactMatchWithConflictingNotesValidConcatenation) {
   form_profile_store.url = GURL("https://test.com");
   form_profile_store.signon_realm = form_profile_store.url.spec();
   form_profile_store.username_value = u"username_exists_in_profile_store";
-  form_profile_store.password_value = u"password_already_stored";
+  form_profile_store.password_value =
+      PasswordString(u"password_already_stored");
   form_profile_store.SetNoteWithEmptyUniqueDisplayName(local_note);
   form_profile_store.in_store = PasswordForm::Store::kProfileStore;
 
@@ -425,6 +433,10 @@ TEST_F(PasswordImporterTest, ExactMatchWithConflictingNotesValidConcatenation) {
 
   ASSERT_EQ(0u, results.displayed_entries.size());
   EXPECT_EQ(1u, results.number_imported);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return !stored_passwords().empty() &&
+           stored_passwords()[0].note == u"local note\nimported note";
+  }));
   ASSERT_EQ(1u, stored_passwords().size());
   EXPECT_EQ(u"local note\nimported note", stored_passwords()[0].note);
 }
@@ -442,7 +454,8 @@ TEST_F(PasswordImporterTest, ExactMatchImportedNoteIsSubstingOfLocalNote) {
   form_profile_store.url = GURL("https://test.com");
   form_profile_store.signon_realm = form_profile_store.url.spec();
   form_profile_store.username_value = u"username_exists_in_profile_store";
-  form_profile_store.password_value = u"password_already_stored";
+  form_profile_store.password_value =
+      PasswordString(u"password_already_stored");
   form_profile_store.SetNoteWithEmptyUniqueDisplayName(local_note);
   form_profile_store.in_store = PasswordForm::Store::kProfileStore;
 
@@ -475,7 +488,8 @@ TEST_F(PasswordImporterTest, CSVImportExactMatchProfileStore) {
   form_profile_store.url = GURL("https://test.com");
   form_profile_store.signon_realm = form_profile_store.url.spec();
   form_profile_store.username_value = u"username_exists_in_profile_store";
-  form_profile_store.password_value = u"password_already_stored";
+  form_profile_store.password_value =
+      PasswordString(u"password_already_stored");
   form_profile_store.SetNoteWithEmptyUniqueDisplayName(kTestNote);
   form_profile_store.in_store = PasswordForm::Store::kProfileStore;
 
@@ -517,7 +531,8 @@ TEST_F(PasswordImporterTest, CSVImportExactMatchAccountStore) {
   form_account_store.url = GURL("https://test.com");
   form_account_store.signon_realm = form_account_store.url.spec();
   form_account_store.username_value = u"username_exists_in_account_store";
-  form_account_store.password_value = u"password_already_stored";
+  form_account_store.password_value =
+      PasswordString(u"password_already_stored");
   form_account_store.in_store = PasswordForm::Store::kAccountStore;
 
   ASSERT_TRUE(AddPasswordForm(form_account_store));
@@ -560,7 +575,8 @@ TEST_F(PasswordImporterTest, CSVImportExactMatchProfileAndAccountStore) {
       form_account_profile_store.url.spec();
   form_account_profile_store.username_value =
       u"username_exists_in_profile_and_account_store";
-  form_account_profile_store.password_value = u"password_already_stored";
+  form_account_profile_store.password_value =
+      PasswordString(u"password_already_stored");
 
   AddToProfileAndAccountStores(std::move(form_account_profile_store));
 
@@ -581,6 +597,8 @@ TEST_F(PasswordImporterTest, CSVImportExactMatchProfileAndAccountStore) {
 
   EXPECT_EQ(ImportResults::Status::SUCCESS, results.status);
   EXPECT_EQ(2u, results.number_imported);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return stored_passwords().size() == 2u; }));
   ASSERT_EQ(2u, stored_passwords().size());
   EXPECT_EQ(GURL("https://test.com"), stored_passwords()[0].GetURL());
   EXPECT_EQ(u"username_exists_in_profile_and_account_store",
@@ -601,7 +619,8 @@ TEST_F(PasswordImporterTest, ImportReportsConflicts) {
   form_profile_store.url = GURL("https://test.com");
   form_profile_store.signon_realm = form_profile_store.url.spec();
   form_profile_store.username_value = u"username_exists_in_profile_store";
-  form_profile_store.password_value = u"password_does_not_match";
+  form_profile_store.password_value =
+      PasswordString(u"password_does_not_match");
   form_profile_store.in_store = PasswordForm::Store::kProfileStore;
 
   ASSERT_TRUE(AddPasswordForm(form_profile_store));
@@ -638,7 +657,8 @@ TEST_F(PasswordImporterTest, ContinueImportCanReplaceConflictingPassword) {
   form_profile_store.url = GURL("https://test.com");
   form_profile_store.signon_realm = form_profile_store.url.spec();
   form_profile_store.username_value = u"username_exists_in_profile_store";
-  form_profile_store.password_value = u"password_does_not_match";
+  form_profile_store.password_value =
+      PasswordString(u"password_does_not_match");
   form_profile_store.in_store = PasswordForm::Store::kProfileStore;
 
   ASSERT_TRUE(AddPasswordForm(form_profile_store));
@@ -667,6 +687,8 @@ TEST_F(PasswordImporterTest, ContinueImportCanReplaceConflictingPassword) {
   ASSERT_EQ(0u, results.displayed_entries.size());
 
   EXPECT_EQ(2u, results.number_imported);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return stored_passwords().size() == 2u; }));
   ASSERT_EQ(2u, stored_passwords().size());
   EXPECT_EQ(GURL("https://test.com"), stored_passwords()[0].GetURL());
   EXPECT_EQ(u"username_exists_in_profile_store",
@@ -689,7 +711,8 @@ TEST_F(PasswordImporterTest,
   form_profile_store.url = GURL("https://test.com");
   form_profile_store.signon_realm = form_profile_store.url.spec();
   form_profile_store.username_value = u"username_exists_in_profile_store";
-  form_profile_store.password_value = u"password_does_not_match";
+  form_profile_store.password_value =
+      PasswordString(u"password_does_not_match");
   form_profile_store.in_store = PasswordForm::Store::kProfileStore;
 
   ASSERT_TRUE(AddPasswordForm(form_profile_store));
@@ -711,6 +734,8 @@ TEST_F(PasswordImporterTest,
 
   EXPECT_EQ(ImportResults::Status::SUCCESS, results.status);
   EXPECT_EQ(2u, results.number_imported);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return stored_passwords().size() == 3u; }));
   ASSERT_EQ(3u, stored_passwords().size());
 }
 
@@ -904,6 +929,8 @@ TEST_F(PasswordImporterTest, CSVImportNonASCIIURL) {
   histogram_tester.ExpectUniqueSample(
       "PasswordManager.ImportedPasswordsPerUserInCSV", 1, 1);
 
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return stored_passwords().size() == 1u; }));
   ASSERT_EQ(1u, stored_passwords().size());
 
   EXPECT_EQ(ImportResults::Status::SUCCESS, results.status);
@@ -931,6 +958,8 @@ TEST_F(PasswordImporterTest, SingleFailedSingleSucceeds) {
   histogram_tester.ExpectUniqueSample(
       "PasswordManager.ImportedPasswordsPerUserInCSV", 1, 1);
 
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return stored_passwords().size() == 1u; }));
   ASSERT_EQ(1u, stored_passwords().size());
 
   EXPECT_EQ(ImportResults::Status::SUCCESS, results.status);
@@ -958,12 +987,11 @@ TEST_F(PasswordImporterTest, PartialImportSucceeds) {
 
   histogram_tester.ExpectUniqueSample("PasswordManager.ImportEntryStatus",
                                       ImportEntry::Status::MISSING_URL, 1);
-  histogram_tester.ExpectUniqueSample("PasswordManager.ImportFileSize2",
-                                      /*sample=*/104,
-                                      /*expected_bucket_count=*/1);
   histogram_tester.ExpectUniqueSample(
       "PasswordManager.ImportedPasswordsPerUserInCSV", 1, 1);
 
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return stored_passwords().size() == 1u; }));
   ASSERT_EQ(1u, stored_passwords().size());
   EXPECT_EQ(GURL(kTestOriginURL), stored_passwords()[0].GetURL());
   EXPECT_EQ(kTestSignonRealm, stored_passwords()[0].GetFirstSignonRealm());
@@ -991,9 +1019,6 @@ TEST_F(PasswordImporterTest, CSVImportLargeFileShouldFail) {
 
   EXPECT_THAT(stored_passwords(), IsEmpty());
 
-  histogram_tester.ExpectUniqueSample("PasswordManager.ImportFileSize2",
-                                      /*sample=*/1024100,
-                                      /*expected_bucket_count=*/1);
   histogram_tester.ExpectTotalCount(
       "PasswordManager.ImportedPasswordsPerUserInCSV", 0);
 
@@ -1012,9 +1037,6 @@ TEST_F(PasswordImporterTest, CSVImportLargeStringShouldFail) {
 
   EXPECT_THAT(stored_passwords(), IsEmpty());
 
-  histogram_tester.ExpectUniqueSample("PasswordManager.ImportFileSize2",
-                                      /*sample=*/1024100,
-                                      /*expected_bucket_count=*/1);
   histogram_tester.ExpectTotalCount(
       "PasswordManager.ImportedPasswordsPerUserInCSV", 0);
 
@@ -1055,7 +1077,6 @@ TEST_F(PasswordImporterTest, CSVImportNonExistingFile) {
   ImportResults results = StartImportAndWaitForCompletion(input_path);
   AssertNotStartedState();
 
-  histogram_tester.ExpectTotalCount("PasswordManager.ImportFileSize2", 0);
   histogram_tester.ExpectTotalCount(
       "PasswordManager.ImportedPasswordsPerUserInCSV", 0);
   EXPECT_THAT(results.displayed_entries, IsEmpty());
@@ -1070,7 +1091,6 @@ TEST_F(PasswordImporterTest, ImportIOErrorDueToUnreadableFile) {
       StartImportAndWaitForCompletion(non_existent_input_file);
   AssertNotStartedState();
 
-  histogram_tester.ExpectTotalCount("PasswordManager.ImportFileSize2", 0);
   histogram_tester.ExpectTotalCount(
       "PasswordManager.ImportedPasswordsPerUserInCSV", 0);
   EXPECT_THAT(results.displayed_entries, IsEmpty());
@@ -1094,6 +1114,8 @@ TEST_F(PasswordImporterTest, VectorImport) {
 
   EXPECT_EQ(results.status, ImportResults::Status::SUCCESS);
   EXPECT_EQ(results.number_imported, 1u);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return stored_passwords().size() == 1u; }));
   ASSERT_THAT(stored_passwords(), SizeIs(1));
   CredentialUIEntry stored_password = stored_passwords()[0];
   EXPECT_EQ(stored_password.GetURL(), GURL(kTestOriginURL));
@@ -1131,7 +1153,7 @@ TEST_F(PasswordImporterTest, VectorImportWithConflict) {
   existing_form.url = GURL(kTestOriginURL);
   existing_form.signon_realm = kTestSignonRealm;
   existing_form.username_value = kTestUsername;
-  existing_form.password_value = u"different_password";
+  existing_form.password_value = PasswordString(u"different_password");
   existing_form.in_store = PasswordForm::Store::kProfileStore;
   ASSERT_TRUE(AddPasswordForm(existing_form));
 
@@ -1155,6 +1177,10 @@ TEST_F(PasswordImporterTest, VectorImportWithConflict) {
 
   EXPECT_EQ(results.status, ImportResults::Status::SUCCESS);
   EXPECT_EQ(results.number_imported, 1u);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return !stored_passwords().empty() &&
+           stored_passwords()[0].password == kTestPassword;
+  }));
   ASSERT_THAT(stored_passwords(), SizeIs(1));
   EXPECT_EQ(stored_passwords()[0].password, kTestPassword);
 }
@@ -1165,7 +1191,7 @@ TEST_F(PasswordImporterTest, VectorImportWithDuplicate) {
   existing_form.url = GURL(kTestOriginURL);
   existing_form.signon_realm = kTestSignonRealm;
   existing_form.username_value = kTestUsername;
-  existing_form.password_value = kTestPassword;
+  existing_form.password_value = PasswordString(kTestPassword);
   existing_form.in_store = PasswordForm::Store::kProfileStore;
   ASSERT_TRUE(AddPasswordForm(existing_form));
 

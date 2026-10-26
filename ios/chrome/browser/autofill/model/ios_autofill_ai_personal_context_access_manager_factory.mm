@@ -4,42 +4,30 @@
 
 #import "ios/chrome/browser/autofill/model/ios_autofill_ai_personal_context_access_manager_factory.h"
 
+#import <utility>
+
 #import "base/feature_list.h"
 #import "components/autofill/core/browser/network/autofill_ai/autofill_ai_personal_context_access_manager_impl.h"
 #import "components/autofill/core/common/autofill_features.h"
 #import "components/personal_context/core/personal_context_eligibility_service.h"
 #import "components/personal_context/core/personal_context_service.h"
+#import "ios/chrome/browser/autofill/model/ios_autofill_entity_suppression_manager_factory.h"
 #import "ios/chrome/browser/personal_context/model/ios_personal_context_eligibility_service_factory.h"
 #import "ios/chrome/browser/personal_context/model/ios_personal_context_service_factory.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
-
-// static
-autofill::AutofillAiPersonalContextAccessManager*
-IOSAutofillAiPersonalContextAccessManagerFactory::GetForProfile(
-    ProfileIOS* profile) {
-  return GetInstance()
-      ->GetServiceForProfileAs<
-          autofill::AutofillAiPersonalContextAccessManager>(profile, true);
-}
-
-// static
-IOSAutofillAiPersonalContextAccessManagerFactory*
-IOSAutofillAiPersonalContextAccessManagerFactory::GetInstance() {
-  static base::NoDestructor<IOSAutofillAiPersonalContextAccessManagerFactory>
-      instance;
-  return instance.get();
-}
+#import "ios/chrome/browser/sync/model/device_info_sync_service_factory.h"
 
 IOSAutofillAiPersonalContextAccessManagerFactory::
-    IOSAutofillAiPersonalContextAccessManagerFactory()
-    : ProfileKeyedServiceFactoryIOS("AutofillAiPersonalContextAccessManager",
-                                    ProfileSelection::kNoInstanceInIncognito) {
+    IOSAutofillAiPersonalContextAccessManagerFactory(PassKey key)
+    : TypedProfileKeyedServiceFactoryIOS(
+          std::move(key),
+          "AutofillAiPersonalContextAccessManager",
+          ProfileSelection::kNoInstanceInIncognito) {
   DependsOn(IOSPersonalContextEligibilityServiceFactory::GetInstance());
   DependsOn(IOSPersonalContextServiceFactory::GetInstance());
+  DependsOn(DeviceInfoSyncServiceFactory::GetInstance());
+  DependsOn(IOSAutofillEntitySuppressionManagerFactory::GetInstance());
 }
-
-IOSAutofillAiPersonalContextAccessManagerFactory::
-    ~IOSAutofillAiPersonalContextAccessManagerFactory() = default;
 
 std::unique_ptr<KeyedService>
 IOSAutofillAiPersonalContextAccessManagerFactory::BuildServiceInstanceFor(
@@ -61,5 +49,6 @@ IOSAutofillAiPersonalContextAccessManagerFactory::BuildServiceInstanceFor(
 
   return std::make_unique<autofill::AutofillAiPersonalContextAccessManagerImpl>(
       personal_context_service, personal_context_eligibility_service,
-      profile->GetPrefs());
+      profile->GetPrefs(), DeviceInfoSyncServiceFactory::GetForProfile(profile),
+      IOSAutofillEntitySuppressionManagerFactory::GetForProfile(profile));
 }

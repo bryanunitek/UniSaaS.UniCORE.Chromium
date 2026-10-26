@@ -17,10 +17,12 @@
 #include "mojo/public/mojom/base/text_direction.mojom-blink.h"
 #include "services/viz/public/mojom/compositing/frame_sink_id.mojom-blink.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom-blink.h"
+#include "third_party/blink/public/mojom/manifest/application_context.mojom-blink.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom-blink.h"
 #include "third_party/blink/public/platform/web_text_input_info.h"
 #include "third_party/blink/public/platform/web_text_input_type.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "ui/base/ime/mojom/text_input_state.mojom-blink.h"
 #include "ui/base/ime/mojom/virtual_keyboard_types.mojom-blink.h"
 #include "ui/base/mojom/window_show_state.mojom-blink-forward.h"
@@ -134,6 +136,10 @@ class PLATFORM_EXPORT FrameWidget {
   // Returns the DisplayMode in use for the widget.
   virtual mojom::blink::DisplayMode DisplayMode() const = 0;
 
+  // Returns how the top-level browsing context is presented to the user (a
+  // standalone web application window vs ordinary browser UI).
+  virtual mojom::blink::ApplicationContext ApplicationContext() const = 0;
+
   // Returns the WindowShowState in use for the widget.
   virtual ui::mojom::blink::WindowShowState WindowShowState() const = 0;
 
@@ -207,14 +213,20 @@ class PLATFORM_EXPORT FrameWidget {
                               const gfx::Range& replacement_range,
                               int selection_start,
                               int selection_end,
-                              mojom::blink::ImeState ime_state) = 0;
+                              mojom::blink::ImeState ime_state,
+                              DOMNodeIdType target_dom_node_id) = 0;
 
   // This message deletes the current composition, inserts specified text, and
   // moves the cursor.
   virtual void CommitText(const String& text,
                           const Vector<ui::ImeTextSpan>& ime_text_spans,
                           const gfx::Range& replacement_range,
-                          int relative_cursor_pos) = 0;
+                          int relative_cursor_pos,
+                          DOMNodeIdType target_dom_node_id) = 0;
+
+  // This message pastes the text into the target node.
+  virtual void PasteIntoNode(const String& text,
+                             DOMNodeIdType target_dom_node_id) = 0;
 
   // This message inserts the ongoing composition.
   virtual void FinishComposingText(bool keep_selection) = 0;
@@ -305,6 +317,11 @@ class PLATFORM_EXPORT FrameWidget {
   // this widget, taking into account its transform to main frame space.
   virtual float GetCompositingScaleFactor() = 0;
 
+  // Returns inherited pinch zoom, which scales scrolling in child widgets but
+  // is not part of their local visual viewport. Returns 1 for the top-level
+  // widget, whose pinch zoom is already included in input-event transforms.
+  virtual float GetExternalPageScaleFactor() const = 0;
+
   // Get and set the configuration for the debugging overlay managed by the
   // underlying LayerTreeHost. This may return null if the widget does not
   // composite.
@@ -347,8 +364,18 @@ class PLATFORM_EXPORT FrameWidget {
   // https://github.com/MicrosoftEdge/MSEdgeExplainers/blob/main/ConditionalTracing/explainer-for-loaf.md
   virtual void MarkConditional(const AtomicString& name,
                                base::TimeTicks start_time) = 0;
+  virtual void MeasureConditional(const AtomicString& name,
+                                  const AtomicString& start_mark,
+                                  const AtomicString& end_mark,
+                                  base::TimeTicks end_time) = 0;
 
   virtual void OnFirstContentfulPaint() = 0;
+
+  // Whether or not the widget is in the process of handling input events.
+  virtual bool HandlingInputEvent() = 0;
+
+  // Set state that the widget is in the process of handling input events.
+  virtual void SetHandlingInputEvent(bool handling) = 0;
 };
 
 }  // namespace blink

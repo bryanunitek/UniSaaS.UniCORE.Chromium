@@ -7,6 +7,7 @@
 #import <utility>
 
 #import "base/apple/foundation_util.h"
+#import "base/base64.h"
 #import "base/files/file_util.h"
 #import "base/functional/bind.h"
 #import "base/scoped_observation.h"
@@ -20,7 +21,7 @@
 namespace {
 // Limit the lengh of sanitized url used as filename to prevent error from
 // filename being too long.
-NSUInteger kUrlLengthLimit = 50;
+constexpr NSUInteger kUrlLengthLimit = 50;
 
 // Self-deleting observer that waits for a page to finish loading.
 class SelfDestructivePageLoadObserver : public web::WebStateObserver {
@@ -108,6 +109,19 @@ SavePageContextResult SaveProtoToPath(
         c_file_path, strerror(errno));
     return result;
   }
+
+  if (page_context.has_tab_screenshot()) {
+    std::string decoded_png;
+    if (base::Base64Decode(page_context.tab_screenshot(), &decoded_png)) {
+      base::FilePath screenshot_path =
+          file_path.InsertBeforeExtensionASCII("_screenshot")
+              .ReplaceExtension(".png");
+      if (base::WriteFile(screenshot_path, decoded_png)) {
+        result.screenshot_file_path = screenshot_path;
+      }
+    }
+  }
+
   result.success = true;
   result.file_path = file_path;
   return result;
@@ -118,6 +132,26 @@ base::FilePath GetDirectoryPath() {
   return base::apple::NSStringToFilePath([NSSearchPathForDirectoriesInDomains(
       NSDocumentDirectory, NSAllDomainsMask, YES) firstObject]);
 }
+
+// Sanitizes given `url` to be used as file name.
+NSString* SanitizeUrl(NSString* url) {
+  NSCharacterSet* illegalFileNameCharacters =
+      [NSCharacterSet characterSetWithCharactersInString:@"/\\?%*|\"<>:"];
+  return [[url componentsSeparatedByCharactersInSet:illegalFileNameCharacters]
+      componentsJoinedByString:@""];
+}
+
+std::string FileNameForPageContext(
+    const optimization_guide::proto::PageContext& page_context) {
+  NSString* urlString = base::SysUTF8ToNSString(page_context.url());
+  if ([urlString length] > kUrlLengthLimit) {
+    urlString = [urlString substringToIndex:kUrlLengthLimit];
+  }
+  NSString* fileName =
+      [SanitizeUrl(urlString) stringByAppendingString:@".txtpb"];
+  return base::SysNSStringToUTF8(fileName);
+}
+
 }  // namespace
 
 SavePageContextResult::SavePageContextResult() = default;
@@ -195,22 +229,4 @@ SavePageContextResult SaveSerializedPageContextToDisk(
   std::string file_name = FileNameForPageContext(page_context);
   base::FilePath file_path = directory_path.Append(file_name);
   return SaveProtoToPath(page_context, file_path);
-}
-
-std::string FileNameForPageContext(
-    const optimization_guide::proto::PageContext& page_context) {
-  NSString* urlString = base::SysUTF8ToNSString(page_context.url());
-  if ([urlString length] > kUrlLengthLimit) {
-    urlString = [urlString substringToIndex:kUrlLengthLimit];
-  }
-  NSString* fileName =
-      [SanitizeUrl(urlString) stringByAppendingString:@".txtpb"];
-  return base::SysNSStringToUTF8(fileName);
-}
-
-NSString* SanitizeUrl(NSString* url) {
-  NSCharacterSet* illegalFileNameCharacters =
-      [NSCharacterSet characterSetWithCharactersInString:@"/\\?%*|\"<>:"];
-  return [[url componentsSeparatedByCharactersInSet:illegalFileNameCharacters]
-      componentsJoinedByString:@""];
 }

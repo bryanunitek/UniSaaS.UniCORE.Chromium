@@ -48,7 +48,7 @@ enum ActionResultCode {
   // The target frame in the renderer no longer exists or is shutting down.
   kFrameWentAway = 17,
 
-  // The target DOMNodeId does not exist in the document.
+  // The target DOMNodeId is not in the live document or the last APC.
   kInvalidDomNodeId = 18,
 
   // The targeted element cannot be modified because it is disabled.
@@ -162,6 +162,10 @@ enum ActionResultCode {
   // The action was blocked because the text payload failed enterprise policy
   // inspections for sensitive data.
   kActionBlockedByEnterpriseContentScan = 51,
+
+  // The action or tool targeted a tab, window, or resource belonging to a
+  // different profile than the active task.
+  kActionTargetCrossProfile = 52,
 
   // Please see the comment above about adding new values.
 
@@ -518,6 +522,114 @@ enum ActionResultCode {
 
   // OTP filling is not allowed on insecure (non-HTTPS) pages.
   kOtpInsecureContext = 1411,
+
+  // OTP filling could not be performed (e.g., within cool-off period or opt-in
+  // dialog error).
+  kOtpUnableToFill = 1412,
+
+  // The user declined opting into Gmail OTP filling in the opt-in dialog.
+  kOtpUserDeclinedOptingIntoFilling = 1413,
+
+  // The target frame containing the OTP fields could not be found.
+  kOtpTargetFrameNotFound = 1414,
+
+  // No tab observation was found when the TOCTOU check was performed for OTP
+  // filling.
+  kOtpNoLastTabObservation = 1415,
+
+  // The trigger field for OTP filling was not found.
+  kOtpFieldNotFound = 1416,
+
+  // The user declined the Gmail OTP filling confirmation dialog.
+  kOtpUserDeclinedFillingConfirmation = 1417,
+
+  ///////////////////////////////////////////////////////////////////////
+  // Codes 1500-1599: Errors for translate page.
+
+  // Translation is not available or supported for the tab.
+  kTranslateServiceUnavailable = 1500,
+
+  // The requested target language is not supported.
+  kTranslateUnsupportedLanguage = 1501,
+
+  ///////////////////////////////////////////////////////////////////////
+  // Codes 1600-1699: Errors for bookmark management.
+
+  // The BookmarkModel was not loaded or not available.
+  kBookmarkModelNotLoaded = 1600,
+
+  // Codes 1700-1799: Errors for find and highlight tool.
+
+  // The requested text could not be found or highlighted on the page.
+  kFindAndHighlightTextNotFound = 1700,
+
+  ///////////////////////////////////////////////////////////////////////
+  // Codes 1800-1899: Action results for file upload.
+
+  // The file was not authorized in the session allowlist.
+  kFileUploadUnauthorizedFile = 1800,
+
+  // No files were provided for the file upload action.
+  kFileUploadEmptyFileList = 1801,
+
+  ///////////////////////////////////////////////////////////////////////
+  // Codes 1900-1999: Errors for perform search.
+
+  // Template URL service for search was not available.
+  kSearchServiceUnavailable = 1900,
+
+  // Search could not be performed because default search provider was not set.
+  kDefaultSearchProviderNotSet = 1901,
+
+  // Site-based search could not be performed because the page has neither an
+  // OpenSearch template nor a discoverable search input.
+  kSiteBasedSearchNotAvailable = 1902,
+
+  // The default search provider does not support search term replacement or
+  // failed to generate a valid search URL.
+  kSearchUrlGenerationFailed = 1903,
+
+  ///////////////////////////////////////////////////////////////////////
+  // Codes 2000-2099: Errors for page search (switch tab, open known page).
+
+  // The query did not match any page.
+  kPageSearchNoMatch = 2000,
+
+  // The query matched more than one page, so the tool did not act. The message
+  // lists the candidates so the caller can disambiguate and retry.
+  kPageSearchAmbiguousMatch = 2001,
+
+  // The query only matched the currently active tab, so no tab switch was
+  // performed.
+  kPageSearchAlreadyOnMatchingTab = 2002,
+
+  ///////////////////////////////////////////////////////////////////////
+  // Codes 2100-2199: Errors for get screenshot.
+
+  // The screenshot capture failed.
+  kScreenshotCaptureFailed = 2100,
+
+  // Another screenshot capture is already in progress on this tab.
+  kScreenshotCaptureThrottled = 2101,
+
+  // The page for which the screenshot was requested changed during capture.
+  kScreenshotCapturePageChanged = 2102,
+
+  // The page for which the screenshot was requested was not eligible for
+  // capture.
+  kScreenshotCapturePageNotEligible = 2103,
+
+  ///////////////////////////////////////////////////////////////////////
+  // Codes 2200-2299: Errors for Gemini panel tool.
+
+  // The Glic service was not available for the profile.
+  kGeminiPanelServiceUnavailable = 2200,
+
+  // Invoking the Gemini panel failed.
+  kGeminiPanelInvokeFailed = 2201,
+
+  // The target surface is not in a tab.
+  kGeminiPanelNotInTab = 2202,
 
   // Please see the comment above about adding new values.
 };

@@ -56,6 +56,39 @@ std::vector<uint8_t> Get8BitStringFrom(v8_inspector::StringBuffer* msg) {
   return std::vector<uint8_t>(s.characters8(),
                               UNSAFE_BUFFERS(s.characters8() + s.length()));
 }
+
+v8_inspector::V8EmbedderState ConvertEmbedderState(
+    const mojom::blink::BrowserOriginatingSessionState* browser_state) {
+  v8_inspector::V8EmbedderState embedder_state;
+  if (!browser_state) {
+    return embedder_state;
+  }
+  for (const auto& entry : browser_state->url_breakpoints) {
+    v8_inspector::V8URLBreakpoint v8_bp;
+    v8_bp.breakpointId = ToV8InspectorStringView(entry.key);
+    v8_bp.lineNumber = entry.value->line_number;
+    if (entry.value->column_number) {
+      v8_bp.columnNumber = *entry.value->column_number;
+    }
+    if (entry.value->condition) {
+      v8_bp.condition = ToV8InspectorStringView(entry.value->condition);
+    }
+    if (entry.value->locator->is_url()) {
+      v8_bp.selectorType = v8_inspector::V8URLBreakpoint::kUrl;
+      v8_bp.selector = ToV8InspectorStringView(entry.value->locator->get_url());
+    } else if (entry.value->locator->is_url_regex()) {
+      v8_bp.selectorType = v8_inspector::V8URLBreakpoint::kUrlRegex;
+      v8_bp.selector =
+          ToV8InspectorStringView(entry.value->locator->get_url_regex());
+    } else if (entry.value->locator->is_script_hash()) {
+      v8_bp.selectorType = v8_inspector::V8URLBreakpoint::kScriptHash;
+      v8_bp.selector =
+          ToV8InspectorStringView(entry.value->locator->get_script_hash());
+    }
+    embedder_state.urlBreakpoints.push_back(v8_bp);
+  }
+  return embedder_state;
+}
 }  // namespace
 
 // Created and stored in unique_ptr on UI.
@@ -209,14 +242,20 @@ DevToolsSession::~DevToolsSession() {
 void DevToolsSession::ConnectToV8(v8_inspector::V8Inspector* inspector,
                                   int context_group_id) {
   const auto& cbor = v8_session_state_cbor_.Get();
-  v8_session_ = inspector->connectShared(
+  const auto* reattach_state = session_state_.ReattachState();
+
+  v8_session_ = V8SessionHolder(inspector->connectShared(
       context_group_id, this,
       v8_inspector::StringView(cbor.data(), cbor.size()),
       client_is_trusted_ ? v8_inspector::V8Inspector::kFullyTrusted
                          : v8_inspector::V8Inspector::kUntrusted,
       session_waits_for_debugger_
           ? v8_inspector::V8Inspector::kWaitingForDebugger
-          : v8_inspector::V8Inspector::kNotWaitingForDebugger);
+          : v8_inspector::V8Inspector::kNotWaitingForDebugger,
+      ConvertEmbedderState(
+          reattach_state
+              ? reattach_state->browser_originating_session_state.get()
+              : nullptr)));
   injected_script_manager_->SetV8Session(v8_session_.get());
 }
 
@@ -227,7 +266,8 @@ bool DevToolsSession::IsDetached() {
 void DevToolsSession::Append(InspectorAgent* agent) {
   agents_.push_back(agent);
   agent->Init(agent_->probe_sink_.Get(), inspector_backend_dispatcher_.get(),
-              &session_state_);
+              &session_state_, v8_session_,
+              ClientIsTrusted(client_is_trusted_));
 }
 
 void DevToolsSession::Detach() {
@@ -296,7 +336,8 @@ void DevToolsSession::DispatchProtocolCommandImpl(
           ToV8InspectorStringView(method))) {
     // Binary protocol messages are passed using 8-bit StringView.
     v8_session_->dispatchProtocolMessage(
-        v8_inspector::StringView(data.data(), data.size()));
+        v8_inspector::StringView(data.data(), data.size()),
+        ToV8InspectorStringView(fallthrough_data));
   } else {
     StringUtf8Adaptor UTF8(fallthrough_data);
     crdtp::Dispatchable dispatchable(crdtp::SpanFrom(data),
@@ -317,7 +358,7 @@ void DevToolsSession::DidStartProvisionalLoad(LocalFrame* frame) {
 
 void DevToolsSession::DidFailProvisionalLoad(LocalFrame* frame) {
   if (v8_session_ && agent_->inspected_frames_->Root() == frame) {
-    v8_session_->setSkipAllPauses(false);
+    v8_session_->setSkipAllPausesForInternalUse(false);
   }
 }
 
@@ -326,7 +367,7 @@ void DevToolsSession::DidCommitLoad(LocalFrame* frame, DocumentLoader*) {
     agents_[i]->DidCommitLoadForLocalFrame(frame);
   }
   if (v8_session_ && agent_->inspected_frames_->Root() == frame) {
-    v8_session_->setSkipAllPauses(false);
+    v8_session_->setSkipAllPausesForInternalUse(false);
   }
 }
 
@@ -413,6 +454,14 @@ void DevToolsSession::FlushProtocolNotifications() {
   if (IsDetached()) {
     return;
   }
+  // Only a handful of commands can be interrupting, and these generally
+  // do not generate protocol notifications. However, flushing notifications
+  // while interrupting may cause some undesired consequences, in particular
+  // in case of CSS agent that performs non-trivial work upon flushing, so
+  // defer it until handling a top-level command.
+  if (agent_->IsInterruptingExecution()) {
+    return;
+  }
   for (wtf_size_t i = 0; i < agents_.size(); i++) {
     agents_[i]->FlushPendingProtocolNotifications();
   }
@@ -475,7 +524,7 @@ void DevToolsSession::UnpauseAndTerminate() {
   if (!v8_session_) {
     return;
   }
-  v8_session_->setSkipAllPauses(true);
+  v8_session_->setSkipAllPausesForInternalUse(true);
   v8_session_->resume(true /* terminate on resume */);
 }
 

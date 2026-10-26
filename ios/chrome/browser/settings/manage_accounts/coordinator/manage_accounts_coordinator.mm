@@ -87,9 +87,9 @@ using signin_metrics::PromoAction;
                                          browser:(Browser*)browser
                        closeSettingsOnAddAccount:(BOOL)closeSettingsOnAddAccount
                                   showDoneButton:(BOOL)showDoneButton {
-  CHECK(browser, base::NotFatalUntil::M144);
+  CHECK(browser);
   DCHECK_EQ(browser->type(), Browser::Type::kRegular);
-  CHECK(navigationController, base::NotFatalUntil::M144);
+  CHECK(navigationController);
   if ((self = [self initWithBaseViewController:navigationController
                                        browser:browser])) {
     _closeSettingsOnAddAccount = closeSettingsOnAddAccount;
@@ -231,8 +231,8 @@ using signin_metrics::PromoAction;
                              continuationProvider:
                                  DoNothingContinuationProvider()];
   _addAccountSigninCoordinator.signinCompletion =
-      ^(SigninCoordinator* coordinator, SigninCoordinatorResult result,
-        id<SystemIdentity> completionIdentity) {
+      ^(SigninCoordinator* coordinator,
+        SigninCoordinatorResultOrIdentity result) {
         [weakSelf addAccountToDeviceCompletedWithCoordinator:coordinator];
       };
   [_addAccountSigninCoordinator start];
@@ -250,6 +250,7 @@ using signin_metrics::PromoAction;
                             rect:itemView.bounds
                             view:itemView
         forceSnackbarOverToolbar:NO
+                  showUndoButton:NO
                       withSource:metricSignOut
                       completion:^(BOOL success, SceneState* scene_state) {
                         [weakSelf handleSignOutCompleted:success];
@@ -300,7 +301,7 @@ using signin_metrics::PromoAction;
     // simultaneous taps. See crbug.com/368310663.
     return;
   }
-  _UIBlocker = std::make_unique<ScopedUIBlocker>(sceneState);
+  _UIBlocker = ScopedUIBlocker::ProfileScoped(sceneState);
   [_viewController preventUserInteraction];
   __weak __typeof(self) weakSelf = self;
   GetApplicationContext()->GetSystemIdentityManager()->ForgetIdentity(
@@ -356,8 +357,7 @@ using signin_metrics::PromoAction;
 
 - (void)addAccountToDeviceCompletedWithCoordinator:
     (SigninCoordinator*)coordinator {
-  CHECK_EQ(_addAccountSigninCoordinator, coordinator,
-           base::NotFatalUntil::M151);
+  CHECK_EQ(_addAccountSigninCoordinator, coordinator);
   [self stopAddAccountCoordinator];
   if (@available(iOS 26, *)) {
     [_viewController allowUserInteraction];

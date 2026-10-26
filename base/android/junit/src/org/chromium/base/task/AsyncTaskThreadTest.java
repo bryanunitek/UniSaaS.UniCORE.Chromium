@@ -9,8 +9,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -18,7 +16,6 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Log;
 import org.chromium.base.task.AsyncTask.Status;
@@ -31,7 +28,6 @@ import java.util.concurrent.TimeUnit;
 
 /** Tests for {@link AsyncTask}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class AsyncTaskThreadTest {
     private static final String TAG = "AsyncTaskThreadTest";
     private static final boolean DEBUG = false;
@@ -104,7 +100,6 @@ public class AsyncTaskThreadTest {
     }
 
     @Test
-    @SmallTest
     public void testCancel_ReturnsFalseOnceTaskFinishes() throws Exception {
         // This test requires robo executor service such that we can run
         // one background task.
@@ -126,7 +121,6 @@ public class AsyncTaskThreadTest {
     }
 
     @Test
-    @SmallTest
     public void testCancel_InPreExecute() throws Exception {
         // Note that background loop is paused.
         mTask.executeOnExecutor(RobolectricUtil.getPausedExecutor());
@@ -151,7 +145,6 @@ public class AsyncTaskThreadTest {
     }
 
     @Test
-    @SmallTest
     public void testCancel_CanReturnTrueEvenAfterTaskStarts() throws Exception {
         mTask.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
 
@@ -180,7 +173,6 @@ public class AsyncTaskThreadTest {
     }
 
     @Test
-    @SmallTest
     public void testCancel_MayInterrupt_ReturnsFalseOnceTaskFinishes() throws Exception {
         // This test requires robo executor service such that we can run
         // one background task.
@@ -203,7 +195,6 @@ public class AsyncTaskThreadTest {
     }
 
     @Test
-    @SmallTest
     public void testCancel_MayInterrupt_TaskIsInterrupted() throws Exception {
         mTask.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
 
@@ -235,7 +226,6 @@ public class AsyncTaskThreadTest {
     }
 
     @Test
-    @SmallTest
     public void testExecuteTwiceRaisesException() throws Exception {
         mTask.executeOnExecutor(RobolectricUtil.getPausedExecutor());
         // Note that background loop is paused.

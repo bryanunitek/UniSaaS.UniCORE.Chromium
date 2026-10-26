@@ -25,7 +25,6 @@ import './secure_dns.js';
 
 import type {SyncBrowserProxy, SyncStatus} from '/shared/settings/people_page/sync_browser_proxy.js';
 import {SignedInState, SyncBrowserProxyImpl} from '/shared/settings/people_page/sync_browser_proxy.js';
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {AUTH_TOKEN_INVALID_EVENT_TYPE} from 'chrome://resources/ash/common/quick_unlock/utils.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import type {RequestTokenReply} from 'chrome://resources/mojo/chromeos/components/in_session_auth/mojom/in_session_auth.mojom-webui.js';
@@ -40,7 +39,8 @@ import {LockStateMixin} from '../lock_state_mixin.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Section} from '../mojom-webui/routes.mojom-webui.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './os_privacy_page.html.js';
@@ -218,7 +218,7 @@ export class OsSettingsPrivacyPageElement extends
     return ['onDataAccessFlagsSet_(isThunderboltSupported_.*)'];
   }
 
-  syncStatus: SyncStatus;
+  declare syncStatus: SyncStatus;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -228,32 +228,32 @@ export class OsSettingsPrivacyPageElement extends
     Setting.kMakeSearchesAndBrowsingBetter,
   ]);
 
-  private authTokenInfo_: chrome.quickUnlockPrivate.TokenInfo|undefined;
+  declare private authTokenInfo_: chrome.quickUnlockPrivate.TokenInfo|undefined;
   private browserProxy_: PeripheralDataAccessBrowserProxy;
-  private authTokenReply_: RequestTokenReply|undefined|null;
+  declare private authTokenReply_: RequestTokenReply|undefined|null;
 
   /**
    * The timeout ID to pass to clearTimeout() to cancel auth token
    * invalidation.
    */
   private clearAccountPasswordTimeoutId_: number|undefined = undefined;
-  private dataAccessProtectionPrefName_: string;
-  private dataAccessShiftTabPressed_: boolean;
-  private fingerprintUnlockEnabled_: boolean;
-  private isAccountManagerEnabled_: boolean;
-  private isAuthPanelInSessionEnabled_: boolean;
-  private isGuestMode_: boolean;
-  private isRevenBranding_: boolean;
-  private isSmartPrivacyEnabled_: boolean;
-  private isThunderboltSupported_: boolean;
-  private isUserConfigurable_: boolean;
-  private profileLabel_: string;
-  private section_: Section;
-  private showDisableProtectionDialog_: boolean;
-  private showPasswordPromptDialog_: boolean;
-  private showSecureDnsSetting_: boolean;
+  declare private dataAccessProtectionPrefName_: string;
+  declare private dataAccessShiftTabPressed_: boolean;
+  declare private fingerprintUnlockEnabled_: boolean;
+  declare private isAccountManagerEnabled_: boolean;
+  declare private isAuthPanelInSessionEnabled_: boolean;
+  declare private isGuestMode_: boolean;
+  declare private isRevenBranding_: boolean;
+  declare private isSmartPrivacyEnabled_: boolean;
+  declare private isThunderboltSupported_: boolean;
+  declare private isUserConfigurable_: boolean;
+  declare private profileLabel_: string;
+  declare private section_: Section;
+  declare private showDisableProtectionDialog_: boolean;
+  declare private showPasswordPromptDialog_: boolean;
+  declare private showSecureDnsSetting_: boolean;
   private syncBrowserProxy_: SyncBrowserProxy;
-  private isAuthenticating_: boolean;
+  declare private isAuthenticating_: boolean;
 
   constructor() {
     super();
@@ -509,7 +509,7 @@ export class OsSettingsPrivacyPageElement extends
     chrome.metricsPrivate.recordEnumerationValue(
         'ChromeOS.PrivacyHub.Opened',
         PrivacyHubNavigationOrigin.SYSTEM_SETTINGS,
-        Object.keys(PrivacyHubNavigationOrigin).length);
+        PrivacyHubNavigationOrigin.COUNT);
     Router.getInstance().navigateTo(routes.PRIVACY_HUB);
   }
 

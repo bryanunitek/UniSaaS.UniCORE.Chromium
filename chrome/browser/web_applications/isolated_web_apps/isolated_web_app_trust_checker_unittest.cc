@@ -23,7 +23,7 @@
 #include "components/web_package/signed_web_bundles/ed25519_public_key.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
-#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
+#include "components/webapps/isolated_web_apps/key_distribution/iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/scheme.h"
 #include "components/webapps/isolated_web_apps/test_support/fake_iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/types/storage_location.h"
@@ -36,9 +36,9 @@
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
 #include "base/values.h"
-#include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_policy_constants.h"
 #include "chrome/common/chromeos/extensions/chromeos_system_extension_info.h"  // nogncheck
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
+#include "components/webapps/isolated_web_apps/types/isolated_web_app_policy_constants.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace web_app {

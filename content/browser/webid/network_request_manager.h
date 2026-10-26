@@ -11,6 +11,7 @@
 #include "base/functional/callback.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/frame_tree_node_id.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
@@ -32,6 +33,8 @@ enum class ParseStatus {
   // the response is empty.
   kEmptyListError,
   kInvalidContentTypeError,
+  kBlockedByConnectionAllowlist,
+  kUseNativeUiDelegation,
 };
 
 struct FetchStatus {
@@ -75,7 +78,8 @@ class CONTENT_EXPORT NetworkRequestManager {
       scoped_refptr<network::SharedURLLoaderFactory> loader_factory,
       network::mojom::ClientSecurityStatePtr client_security_state,
       network::mojom::RequestDestination destination,
-      FrameTreeNodeId frame_tree_node_id);
+      FrameTreeNodeId frame_tree_node_id,
+      WeakDocumentPtr initiator_document);
   virtual ~NetworkRequestManager();
 
   NetworkRequestManager(const NetworkRequestManager&) = delete;
@@ -94,22 +98,28 @@ class CONTENT_EXPORT NetworkRequestManager {
   // when the download result has been parsed.
   void DownloadJsonAndParse(
       std::unique_ptr<network::ResourceRequest> resource_request,
-      std::optional<std::string> url_encoded_post_data,
+      std::optional<std::string> post_data,
       ParseJsonCallback parse_json_callback,
-      bool allow_http_error_results = false);
+      bool allow_http_error_results = false,
+      const std::string& content_type = "application/x-www-form-urlencoded");
 
   // Starts download result using `url_loader`. Calls `download_callback` when
   // the download completes.
-  void DownloadUrl(std::unique_ptr<network::ResourceRequest> resource_request,
-                   std::optional<std::string> url_encoded_post_data,
-                   DownloadCallback download_callback,
-                   size_t max_download_size,
-                   bool allow_http_error_results = false);
+  void DownloadUrl(
+      std::unique_ptr<network::ResourceRequest> resource_request,
+      std::optional<std::string> post_data,
+      DownloadCallback download_callback,
+      size_t max_download_size,
+      bool allow_http_error_results = false,
+      const std::string& content_type = "application/x-www-form-urlencoded");
 
   // Called when download initiated by DownloadUrl() completes.
   void OnDownloadedUrl(std::unique_ptr<network::SimpleURLLoader> url_loader,
                        DownloadCallback callback,
                        std::optional<std::string> response_body);
+
+  // Called when the download request is going to be blocked.
+  void OnRequestBlocked(DownloadCallback callback, int response_code);
 
   std::unique_ptr<network::ResourceRequest> CreateUncredentialedResourceRequest(
       const GURL& target_url,
@@ -127,6 +137,7 @@ class CONTENT_EXPORT NetworkRequestManager {
   network::mojom::ClientSecurityStatePtr client_security_state_;
   const network::mojom::RequestDestination destination_;
   const FrameTreeNodeId frame_tree_node_id_;
+  const WeakDocumentPtr initiator_document_;
 
  private:
   // Maps each SimpleURLLoader instance to a unique, unguessable token

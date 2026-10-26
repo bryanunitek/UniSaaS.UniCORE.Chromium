@@ -101,7 +101,7 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
   // root element style. In addition to initial values things like zoom, font,
   // forced color mode etc. is set.
   ComputedStyleBuilder InitialStyleBuilderForElement() const;
-  const ComputedStyle* InitialStyleForElement() const;
+  const ComputedStyle& InitialStyleForElement() const;
 
   float InitialZoom() const;
 
@@ -123,7 +123,7 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
   //
   // If ignore_author_style is false, only the input print job settings will be
   // honored (to get default size and margins, and nothing else).
-  const ComputedStyle* StyleForPage(uint32_t page_index,
+  const ComputedStyle& StyleForPage(uint32_t page_index,
                                     const AtomicString& page_name,
                                     float page_fitting_scale = 1.0,
                                     bool ignore_author_style = false);
@@ -142,11 +142,11 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
   void LoadPaginationResources();
 
   const ComputedStyle* StyleForText(Text*);
-  const ComputedStyle* StyleForViewport();
+  const ComputedStyle& StyleForViewport();
   // Returns `ComputedStyle` for rendering initial letter text.
   // `initial_letter_box_style` should have non-normal `initial-letter`
   // property.
-  const ComputedStyle* StyleForInitialLetterText(
+  const ComputedStyle& StyleForInitialLetterText(
       const ComputedStyle& initial_letter_box_style,
       const ComputedStyle& paragraph_style);
 
@@ -158,7 +158,7 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
   ComputedStyleBuilder CreateAnonymousStyleBuilderWithDisplay(
       const ComputedStyle& parent_style,
       EDisplay);
-  const ComputedStyle* CreateAnonymousStyleWithDisplay(
+  const ComputedStyle& CreateAnonymousStyleWithDisplay(
       const ComputedStyle& parent_style,
       EDisplay display);
 
@@ -206,9 +206,7 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
       Element*,
       PseudoId);
 
-  static Element* FindContainerForElement(Element*,
-                                          const ContainerSelector&,
-                                          const TreeScope* selector_tree_scope);
+  static Element* FindContainerForElement(Element*, const ContainerSelector&);
 
   Font* ComputeFont(Element&, const ComputedStyle&, const CSSPropertyValueSet&);
 
@@ -228,6 +226,11 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
   // Return a computed value for the passed-in property:value pair in the
   // context of the current ComputedStyle of the 'element'.
   // Returns nullptr for custom property values that are IACVT.
+  static const CSSValue* ComputeValue(Element*,
+                                      const CSSPropertyName&,
+                                      const CSSValue&,
+                                      CSSToLengthConversionData::Flags&,
+                                      bool& has_random);
   static const CSSValue* ComputeValue(Element*,
                                       const CSSPropertyName&,
                                       const CSSValue&,
@@ -293,8 +296,6 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
     DCHECK(count_computed_style_bytes_);
     return computed_style_bytes_used_;
   }
-
-  void ApplyTriggerData(StyleResolverState& state);
 
   void Trace(Visitor*) const;
 
@@ -389,6 +390,14 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
 
   void ExpandInheritedVisitedProperties(StyleResolverState& state);
 
+  void PropagateStyleBuilderFlags(const StyleResolverState& state);
+
+  // Inspect the difference of properties supported for precomputing :hover
+  // styles and return true if the compositor can update the differences.
+  // Otherwise, return false.
+  bool ValidPrecomputedHoverDiff(const ComputedStyleBuilder& builder,
+                                 const ComputedStyle& style);
+
   enum UASheetCacheKeyIndex {
     kHTMLUASheet,
     kSVGUASheet,
@@ -409,7 +418,8 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
 
   MatchedPropertiesCache matched_properties_cache_;
 
-  const ComputedStyle* CreateInitialStyle() const;
+  static void SetZoomedInitialLineWidths(float zoom, ComputedStyleBuilder&);
+  const ComputedStyle& CreateInitialStyle() const;
 
   // This member is on a hot-path for creating ComputedStyle objects.
   mutable Member<const ComputedStyle> initial_style_;

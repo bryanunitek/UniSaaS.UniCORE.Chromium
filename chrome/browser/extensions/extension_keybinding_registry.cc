@@ -189,7 +189,7 @@ void ExtensionKeybindingRegistry::RemoveExtensionKeybinding(
             IsMediaKeysListenerManagerEnabled()) {
       content::MediaKeysListenerManager* media_keys_listener_manager =
           content::MediaKeysListenerManager::GetInstance();
-      DCHECK(media_keys_listener_manager);
+      CHECK(media_keys_listener_manager, base::NotFatalUntil::M161);
 
       media_keys_listener_manager->EnableInternalMediaKeyHandling();
     } else {
@@ -226,7 +226,8 @@ bool ExtensionKeybindingRegistry::NotifyEventTargets(
 
 void ExtensionKeybindingRegistry::CommandExecuted(
     const ExtensionId& extension_id,
-    const std::string& command) {
+    const std::string& command,
+    const ui::Accelerator& accelerator) {
   if (!browser_context_) {
     return;
   }
@@ -236,8 +237,8 @@ void ExtensionKeybindingRegistry::CommandExecuted(
   if (!extension)
     return;
 
-  base::ListValue args;
-  args.Append(command);
+  auto args = base::MakeRefCounted<EventArgs>();
+  args->data.Append(command);
 
   base::Value tab_value;
   if (tab_list_interface_) {
@@ -251,7 +252,7 @@ void ExtensionKeybindingRegistry::CommandExecuted(
     ActiveTabPermissionGranter* granter =
         web_contents ? ActiveTabPermissionGranter::FromWebContents(web_contents)
                      : nullptr;
-    if (granter) {
+    if (granter && !accelerator.IsMediaKey()) {
       granter->GrantIfRequested(extension);
     }
 
@@ -270,7 +271,7 @@ void ExtensionKeybindingRegistry::CommandExecuted(
     }
   }
 
-  args.Append(std::move(tab_value));
+  args->data.Append(std::move(tab_value));
 
   auto event =
       std::make_unique<Event>(events::COMMANDS_ON_COMMAND, kOnCommandEventName,
@@ -294,6 +295,8 @@ void ExtensionKeybindingRegistry::AddEventTarget(
   // Shortcuts except media keys have only one target in the list. See comment
   // about |event_targets_|.
   if (!accelerator.IsMediaKey()) {
+    // TODO(crbug.com/571680756): CHECK-exclusion: Convert to a CHECK once we
+    // are confident it won't be triggered.
     DCHECK_EQ(1u, event_targets_[accelerator].size());
   } else {
     if (media_keys_listener_)
@@ -305,7 +308,7 @@ void ExtensionKeybindingRegistry::AddEventTarget(
             IsMediaKeysListenerManagerEnabled()) {
       content::MediaKeysListenerManager* media_keys_listener_manager =
           content::MediaKeysListenerManager::GetInstance();
-      DCHECK(media_keys_listener_manager);
+      CHECK(media_keys_listener_manager, base::NotFatalUntil::M161);
 
       media_keys_listener_manager->DisableInternalMediaKeyHandling();
     } else {
@@ -325,7 +328,7 @@ bool ExtensionKeybindingRegistry::GetFirstTarget(
   if (targets == event_targets_.end())
     return false;
 
-  DCHECK(!targets->second.empty());
+  CHECK(!targets->second.empty(), base::NotFatalUntil::M161);
   auto first_target = targets->second.begin();
   *extension_id = first_target->first;
   *command_name = first_target->second;
@@ -439,7 +442,7 @@ bool ExtensionKeybindingRegistry::ExecuteCommands(
     }
 
     if (extension_id.empty() || it->first == extension_id) {
-      CommandExecuted(it->first, it->second);
+      CommandExecuted(it->first, it->second, accelerator);
       executed = true;
     }
   }

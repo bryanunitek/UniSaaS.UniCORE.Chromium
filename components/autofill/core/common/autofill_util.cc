@@ -14,11 +14,10 @@
 #include "base/feature_list.h"
 #include "base/i18n/rtl.h"
 #include "base/i18n/string_search.h"
-#include "base/no_destructor.h"
-#include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/strings/whitespace_constants.h"
 #include "components/autofill/core/common/autofill_constants.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_regex_constants.h"
@@ -42,23 +41,6 @@ bool IsPrefixOfEmailEndingWithAtSign(std::u16string_view full_string,
                                      std::u16string_view prefix) {
   return full_string.size() > prefix.size() &&
          full_string.starts_with(prefix) && full_string[prefix.size()] == u'@';
-}
-
-bool IsCheckable(const FormFieldData::CheckStatus& check_status) {
-  return check_status != FormFieldData::CheckStatus::kNotCheckable;
-}
-
-bool IsChecked(const FormFieldData::CheckStatus& check_status) {
-  return check_status == FormFieldData::CheckStatus::kChecked;
-}
-
-void SetCheckStatus(FormFieldData* form_field_data,
-                    bool is_checkable,
-                    bool is_checked) {
-  using enum FormFieldData::CheckStatus;
-  form_field_data->set_check_status(!is_checkable ? kNotCheckable
-                                    : is_checked  ? kChecked
-                                                  : kCheckableButUnchecked);
 }
 
 std::optional<size_t> FindShortestSubstringMatchInSelect(
@@ -120,13 +102,18 @@ bool SanitizedFieldIsEmpty(std::u16string_view value) {
   // Some sites enter values such as ____-____-____-____ or (___)-___-____ in
   // their fields. Check if the field value is empty after the removal of the
   // formatting characters.
-  static const base::NoDestructor<std::u16string> formatting(
-      base::StrCat({u"-_()/",
-                    {&base::i18n::kRightToLeftMark, 1},
-                    {&base::i18n::kLeftToRightMark, 1},
-                    base::kWhitespaceUTF16}));
+  static constexpr char16_t kFormatting[] = {u'-',
+                                             u'_',
+                                             u'(',
+                                             u')',
+                                             u'/',
+                                             base::i18n::kRightToLeftMark,
+                                             base::i18n::kLeftToRightMark,
+                                             WHITESPACE_UNICODE};
+  static constexpr std::u16string_view kFormattingView{std::begin(kFormatting),
+                                                       std::end(kFormatting)};
 
-  return base::ContainsOnlyChars(value, *formatting);
+  return base::ContainsOnlyChars(value, kFormattingView);
 }
 
 bool IsFillable(FocusedFieldType focused_field_type) {
@@ -137,6 +124,7 @@ bool IsFillable(FocusedFieldType focused_field_type) {
     case FocusedFieldType::kFillableUsernameField:
     case FocusedFieldType::kFillablePasswordField:
     case FocusedFieldType::kFillableWebauthnTaggedField:
+    case FocusedFieldType::kContenteditableField:
       return true;
     case FocusedFieldType::kUnfillableElement:
     case FocusedFieldType::kUnknown:
@@ -189,12 +177,13 @@ IsPasswordRequestManuallyTriggered IsPasswordsAutofillManuallyTriggered(
       AutofillSuggestionTriggerSource::kManualFallbackPasswords);
 }
 
-// If any new @memory trigger source is added, all callers need to be reviewed.
+// If any new AtMemory trigger source is added, all callers need to be reviewed.
 // Many assume that there are only two possible values.
 bool IsAtMemoryTriggerSource(AutofillSuggestionTriggerSource trigger_source) {
   switch (trigger_source) {
-    case AutofillSuggestionTriggerSource::kAtMemory:
     case AutofillSuggestionTriggerSource::kAtMemoryContextMenu:
+    case AutofillSuggestionTriggerSource::kAtMemoryDoubleCtrl:
+    case AutofillSuggestionTriggerSource::kAtMemoryKeyboardShortcut:
       return true;
     case AutofillSuggestionTriggerSource::kUnspecified:
     case AutofillSuggestionTriggerSource::kFormControlElementClicked:
@@ -209,8 +198,8 @@ bool IsAtMemoryTriggerSource(AutofillSuggestionTriggerSource trigger_source) {
     case AutofillSuggestionTriggerSource::kComposeDialogLostFocus:
     case AutofillSuggestionTriggerSource::kComposeDelayedProactiveNudge:
     case AutofillSuggestionTriggerSource::kPasswordManagerProcessedFocusedField:
-    case AutofillSuggestionTriggerSource::kPlusAddressUpdatedInBrowserProcess:
     case AutofillSuggestionTriggerSource::kProactivePasswordRecovery:
+    case AutofillSuggestionTriggerSource::kGmailOneTimePasswordAvailable:
     case AutofillSuggestionTriggerSource::kGlic:
     case AutofillSuggestionTriggerSource::kAtMemoryInactivityNudge:
       return false;

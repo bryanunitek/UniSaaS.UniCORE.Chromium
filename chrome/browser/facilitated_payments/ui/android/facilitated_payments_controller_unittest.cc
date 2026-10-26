@@ -5,17 +5,21 @@
 #include "chrome/browser/facilitated_payments/ui/android/facilitated_payments_controller.h"
 
 #include <memory>
+#include <string>
+#include <tuple>
 #include <vector>
 
-#include "base/android/jni_string.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "chrome/browser/facilitated_payments/ui/android/facilitated_payments_bottom_sheet_bridge.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
+#include "components/facilitated_payments/core/browser/account_linking_params.h"
 #include "components/facilitated_payments/core/browser/facilitated_payments_app_info_list.h"
 #include "components/facilitated_payments/core/browser/mock_facilitated_payments_app_info_list.h"
+#include "components/facilitated_payments/core/metrics/facilitated_payments_metrics.h"
 #include "components/facilitated_payments/core/utils/facilitated_payments_ui_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -50,13 +54,24 @@ class MockFacilitatedPaymentsBottomSheetBridge
        std::unique_ptr<payments::facilitated::FacilitatedPaymentsAppInfoList>
            app_suggestions),
       (override));
-  MOCK_METHOD(void, ShowProgressScreen, (), (override));
+  MOCK_METHOD(void,
+              ShowProgressScreen,
+              (payments::facilitated::ProgressScreenType),
+              (override));
   MOCK_METHOD(void, ShowErrorScreen, (), (override));
   MOCK_METHOD(void, Dismiss, (), (override));
   MOCK_METHOD(void, OnDismissed, (), (override));
   MOCK_METHOD(void,
               ShowPixAccountLinkingPrompt,
-              (int strike_count),
+              (int strike_count, const std::string& account_email),
+              (override));
+  MOCK_METHOD(bool,
+              ShowAccountLinkingPrompt,
+              (const payments::facilitated::AccountLinkingParams& params),
+              (override));
+  MOCK_METHOD(void,
+              ShowAccountLinkingFailureNotification,
+              (payments::facilitated::FacilitatedPaymentsType),
               (override));
 };
 
@@ -74,6 +89,8 @@ class FacilitatedPaymentsControllerTest
     auto mock_view = std::make_unique<MockFacilitatedPaymentsBottomSheetBridge>(
         web_contents(), controller_.get());
     mock_view_ = mock_view.get();
+    ON_CALL(*mock_view_, ShowAccountLinkingPrompt)
+        .WillByDefault(testing::Return(true));
     controller_->SetViewForTesting(std::move(mock_view));
     apps_ = std::make_unique<
         payments::facilitated::MockFacilitatedPaymentsAppInfoList>();
@@ -130,9 +147,12 @@ TEST_F(FacilitatedPaymentsControllerTest, onBankAccountSelected) {
 
 // Test controller forwards call for showing the progress screen to the view.
 TEST_F(FacilitatedPaymentsControllerTest, ShowProgressScreen) {
-  EXPECT_CALL(*mock_view_, ShowProgressScreen);
+  EXPECT_CALL(
+      *mock_view_,
+      ShowProgressScreen(payments::facilitated::ProgressScreenType::kPayment));
 
-  controller_->ShowProgressScreen();
+  controller_->ShowProgressScreen(
+      payments::facilitated::ProgressScreenType::kPayment);
 }
 
 // Test controller forwards call for showing the progress screen to the view.
@@ -145,36 +165,198 @@ TEST_F(FacilitatedPaymentsControllerTest, ShowErrorScreen) {
 // Test controller forwards call for showing the Pix account linking prompt to
 // the view.
 TEST_F(FacilitatedPaymentsControllerTest, ShowPixAccountLinkingPrompt) {
-  EXPECT_CALL(*mock_view_, ShowPixAccountLinkingPrompt(kTestStrikeCount));
+  EXPECT_CALL(*mock_view_,
+              ShowPixAccountLinkingPrompt(kTestStrikeCount, "test@gmail.com"));
 
-  controller_->ShowPixAccountLinkingPrompt(kTestStrikeCount, base::DoNothing(),
-                                           base::DoNothing());
+  controller_->ShowPixAccountLinkingPrompt(
+      kTestStrikeCount, "test@gmail.com", base::DoNothing(), base::DoNothing());
 }
 
 TEST_F(FacilitatedPaymentsControllerTest, OnPixAccountLinkingPromptAccepted) {
+  base::HistogramTester histogram_tester;
   base::MockCallback<base::OnceCallback<void()>> mock_on_accepted;
   base::MockCallback<base::OnceCallback<void()>> mock_on_declined;
-  controller_->ShowPixAccountLinkingPrompt(
-      kTestStrikeCount, mock_on_accepted.Get(), mock_on_declined.Get());
+  controller_->ShowPixAccountLinkingPrompt(kTestStrikeCount, "test@gmail.com",
+                                           mock_on_accepted.Get(),
+                                           mock_on_declined.Get());
 
   // When the Pix account linking prompt is accepted, callback should be called.
   EXPECT_CALL(mock_on_accepted, Run());
   EXPECT_CALL(mock_on_declined, Run).Times(0);
 
-  controller_->OnPixAccountLinkingPromptAccepted(nullptr);
+  controller_->OnAccountLinkingPromptAction(
+      /*env=*/nullptr,
+      /*type=*/
+      static_cast<jint>(payments::facilitated::FacilitatedPaymentsType::kPix),
+      /*action=*/
+      static_cast<jint>(
+          payments::facilitated::AccountLinkingPromptUserAction::kAccepted));
+
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.Pix.AccountLinking.PromptUserAction",
+      payments::facilitated::AccountLinkingPromptUserAction::kAccepted,
+      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectTotalCount(
+      "FacilitatedPayments.Pix.AccountLinking.PromptInteractionDuration", 1);
+  histogram_tester.ExpectTotalCount(
+      "FacilitatedPayments.Pix.AccountLinking.PromptInteractionDuration."
+      "Accepted",
+      1);
 }
 
 TEST_F(FacilitatedPaymentsControllerTest, OnPixAccountLinkingPromptDeclined) {
+  base::HistogramTester histogram_tester;
   base::MockCallback<base::OnceCallback<void()>> mock_on_accepted;
   base::MockCallback<base::OnceCallback<void()>> mock_on_declined;
-  controller_->ShowPixAccountLinkingPrompt(
-      kTestStrikeCount, mock_on_accepted.Get(), mock_on_declined.Get());
+  controller_->ShowPixAccountLinkingPrompt(kTestStrikeCount, "test@gmail.com",
+                                           mock_on_accepted.Get(),
+                                           mock_on_declined.Get());
 
   // When the Pix account linking prompt is declined, callback should be called.
   EXPECT_CALL(mock_on_accepted, Run).Times(0);
   EXPECT_CALL(mock_on_declined, Run());
 
-  controller_->OnPixAccountLinkingPromptDeclined(nullptr);
+  controller_->OnAccountLinkingPromptAction(
+      /*env=*/nullptr,
+      /*type=*/
+      static_cast<jint>(payments::facilitated::FacilitatedPaymentsType::kPix),
+      /*action=*/
+      static_cast<jint>(
+          payments::facilitated::AccountLinkingPromptUserAction::kDeclined));
+
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.Pix.AccountLinking.PromptUserAction",
+      payments::facilitated::AccountLinkingPromptUserAction::kDeclined,
+      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectTotalCount(
+      "FacilitatedPayments.Pix.AccountLinking.PromptInteractionDuration", 1);
+  histogram_tester.ExpectTotalCount(
+      "FacilitatedPayments.Pix.AccountLinking.PromptInteractionDuration."
+      "Declined",
+      1);
+}
+
+TEST_F(FacilitatedPaymentsControllerTest, OnPixAccountLinkingPromptDismissed) {
+  base::HistogramTester histogram_tester;
+  controller_->ShowPixAccountLinkingPrompt(
+      kTestStrikeCount, "test@gmail.com", base::DoNothing(), base::DoNothing());
+
+  controller_->OnAccountLinkingPromptAction(
+      /*env=*/nullptr,
+      /*type=*/
+      static_cast<jint>(payments::facilitated::FacilitatedPaymentsType::kPix),
+      /*action=*/
+      static_cast<jint>(
+          payments::facilitated::AccountLinkingPromptUserAction::kDismissed));
+
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.Pix.AccountLinking.PromptUserAction",
+      payments::facilitated::AccountLinkingPromptUserAction::kDismissed,
+      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectTotalCount(
+      "FacilitatedPayments.Pix.AccountLinking.PromptInteractionDuration", 1);
+  histogram_tester.ExpectTotalCount(
+      "FacilitatedPayments.Pix.AccountLinking.PromptInteractionDuration."
+      "Dismissed",
+      1);
+}
+
+// Test controller forwards call for showing the generic account linking prompt
+// to the view.
+TEST_F(FacilitatedPaymentsControllerTest, ShowAccountLinkingPrompt) {
+  payments::facilitated::AccountLinkingParams params(
+      payments::facilitated::FacilitatedPaymentsType::kEwallet);
+  params.fop_display_name = u"Ewallet";
+  params.strike_count = 1;
+
+  EXPECT_CALL(*mock_view_, ShowAccountLinkingPrompt(testing::_))
+      .WillOnce(testing::Return(true));
+
+  controller_->ShowAccountLinkingPrompt(params, base::DoNothing(),
+                                        base::DoNothing(), base::DoNothing());
+}
+
+// Test that calling ShowAccountLinkingPrompt while it's already showing
+// synchronously dismisses the second call.
+TEST_F(FacilitatedPaymentsControllerTest,
+       ShowAccountLinkingPrompt_ConcurrencyGuard) {
+  payments::facilitated::AccountLinkingParams params(
+      payments::facilitated::FacilitatedPaymentsType::kEwallet);
+  params.fop_display_name = u"Ewallet";
+  params.strike_count = 1;
+
+  base::HistogramTester histogram_tester;
+  base::MockCallback<base::OnceCallback<void()>> mock_on_dismissed;
+  EXPECT_CALL(*mock_view_, ShowAccountLinkingPrompt(testing::_))
+      .WillOnce(testing::Return(true));
+  // The initial prompt is dismissed upon controller destruction.
+  EXPECT_CALL(mock_on_dismissed, Run()).Times(1);
+
+  // First call should succeed and show the prompt.
+  controller_->ShowAccountLinkingPrompt(
+      params, base::DoNothing(), base::DoNothing(), mock_on_dismissed.Get());
+
+  // Second call while the first prompt is still showing should be dropped
+  // and NOT show the prompt again, nor should it trigger teardown callbacks.
+  base::MockCallback<base::OnceCallback<void()>> mock_on_dismissed2;
+  EXPECT_CALL(mock_on_dismissed2, Run()).Times(0);
+  controller_->ShowAccountLinkingPrompt(
+      params, base::DoNothing(), base::DoNothing(), mock_on_dismissed2.Get());
+
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.Ewallet.AccountLinking.PromptFailedToShow",
+      /*sample=*/true, /*expected_bucket_count=*/1);
+
+  // Explicitly reset the controller to trigger asynchronous teardown logic
+  // and verify the dismissal callback is executed before test conclusion.
+  controller_.reset();
+}
+
+TEST_F(FacilitatedPaymentsControllerTest,
+       ShowAccountLinkingPrompt_FailsToShow) {
+  payments::facilitated::AccountLinkingParams params(
+      payments::facilitated::FacilitatedPaymentsType::kEwallet);
+  params.fop_display_name = u"Ewallet";
+  params.strike_count = 1;
+
+  base::HistogramTester histogram_tester;
+  base::MockCallback<base::OnceCallback<void()>> mock_on_dismissed;
+
+  EXPECT_CALL(*mock_view_, ShowAccountLinkingPrompt(testing::_))
+      .WillOnce(testing::Return(false));
+  EXPECT_CALL(mock_on_dismissed, Run()).Times(1);
+
+  controller_->ShowAccountLinkingPrompt(
+      params, base::DoNothing(), base::DoNothing(), mock_on_dismissed.Get());
+
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.Ewallet.AccountLinking.PromptFailedToShow",
+      /*sample=*/true, /*expected_bucket_count=*/1);
+}
+
+// Test that if the account linking prompt is showing, an asynchronous UiEvent
+// that closes the bottom sheet correctly triggers the on_dismissed callback.
+TEST_F(FacilitatedPaymentsControllerTest,
+       AsynchronousCloseTriggersDismissCallback) {
+  payments::facilitated::AccountLinkingParams params(
+      payments::facilitated::FacilitatedPaymentsType::kEwallet);
+  base::MockCallback<base::OnceCallback<void()>> mock_on_dismissed;
+
+  EXPECT_CALL(*mock_view_, ShowAccountLinkingPrompt(testing::_))
+      .WillOnce(testing::Return(true));
+
+  // Setting up the account linking prompt with the mock dismissal callback.
+  controller_->ShowAccountLinkingPrompt(
+      params, base::DoNothing(), base::DoNothing(), mock_on_dismissed.Get());
+
+  // Verify the callback is executed when the UI is torn down asynchronously.
+  EXPECT_CALL(mock_on_dismissed, Run()).Times(1);
+
+  // Trigger an asynchronous close (e.g. user closed the tab, destroying the
+  // view).
+  controller_->OnUiEvent(
+      nullptr, static_cast<int32_t>(
+                   payments::facilitated::UiEvent::kScreenClosedNotByUser));
 }
 
 // Test that the view is able to process requests to show different screens back
@@ -182,10 +364,13 @@ TEST_F(FacilitatedPaymentsControllerTest, OnPixAccountLinkingPromptDeclined) {
 TEST_F(FacilitatedPaymentsControllerTest,
        ViewIsAbleToProcessBackToBackShowRequests) {
   EXPECT_CALL(*mock_view_, RequestShowContent);
-  EXPECT_CALL(*mock_view_, ShowProgressScreen);
+  EXPECT_CALL(
+      *mock_view_,
+      ShowProgressScreen(payments::facilitated::ProgressScreenType::kPayment));
 
   controller_->Show(bank_accounts_, base::DoNothing());
-  controller_->ShowProgressScreen();
+  controller_->ShowProgressScreen(
+      payments::facilitated::ProgressScreenType::kPayment);
 }
 
 // Test controller forwards call for closing the bottom sheet to the view.
@@ -334,8 +519,149 @@ TEST_F(FacilitatedPaymentsControllerTest, OnPaymentAppSelected) {
           testing::Field(&payments::facilitated::SelectedFopData::activity_name,
                          activity_name))));
 
-  JNIEnv* env = base::android::AttachCurrentThread();
-  controller_->OnPaymentAppSelected(
-      env, base::android::ConvertUTF8ToJavaString(env, package_name),
-      base::android::ConvertUTF8ToJavaString(env, activity_name));
+  controller_->OnPaymentAppSelected(package_name, activity_name);
+}
+
+class FacilitatedPaymentsControllerTestForAccountLinkingType
+    : public FacilitatedPaymentsControllerTest,
+      public testing::WithParamInterface<
+          payments::facilitated::FacilitatedPaymentsType> {
+ public:
+  payments::facilitated::FacilitatedPaymentsType GetPaymentType() const {
+    return GetParam();
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    FacilitatedPaymentsControllerTest,
+    FacilitatedPaymentsControllerTestForAccountLinkingType,
+    testing::Values(payments::facilitated::FacilitatedPaymentsType::kEwallet,
+                    payments::facilitated::FacilitatedPaymentsType::kPix));
+
+TEST_P(FacilitatedPaymentsControllerTestForAccountLinkingType,
+       OnAccountLinkingPromptShown) {
+  base::HistogramTester histogram_tester;
+
+  controller_->OnAccountLinkingPromptShown(
+      /*env=*/nullptr, /*type=*/static_cast<jint>(GetPaymentType()));
+
+  std::string histogram_prefix =
+      GetPaymentType() == payments::facilitated::FacilitatedPaymentsType::kPix
+          ? "FacilitatedPayments.Pix.AccountLinking.PromptUserAction"
+          : "FacilitatedPayments.Ewallet.AccountLinking.PromptUserAction";
+
+  histogram_tester.ExpectUniqueSample(
+      histogram_prefix,
+      payments::facilitated::AccountLinkingPromptUserAction::kShown,
+      /*expected_bucket_count=*/1);
+}
+
+class FacilitatedPaymentsControllerTestForAccountLinkingAction
+    : public FacilitatedPaymentsControllerTest,
+      public testing::WithParamInterface<
+          std::tuple<payments::facilitated::FacilitatedPaymentsType,
+                     payments::facilitated::AccountLinkingPromptUserAction>> {
+ public:
+  payments::facilitated::FacilitatedPaymentsType GetPaymentType() const {
+    return std::get<0>(GetParam());
+  }
+
+  payments::facilitated::AccountLinkingPromptUserAction GetUserAction() const {
+    return std::get<1>(GetParam());
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    FacilitatedPaymentsControllerTest,
+    FacilitatedPaymentsControllerTestForAccountLinkingAction,
+    testing::Combine(
+        testing::Values(
+            payments::facilitated::FacilitatedPaymentsType::kEwallet,
+            payments::facilitated::FacilitatedPaymentsType::kPix),
+        testing::Values(
+            payments::facilitated::AccountLinkingPromptUserAction::kAccepted,
+            payments::facilitated::AccountLinkingPromptUserAction::kDeclined,
+            payments::facilitated::AccountLinkingPromptUserAction::
+                kDismissed)));
+
+TEST_P(FacilitatedPaymentsControllerTestForAccountLinkingAction,
+       OnAccountLinkingPromptAction) {
+  payments::facilitated::AccountLinkingParams params(GetPaymentType());
+  params.fop_display_name = u"displayName";
+  params.strike_count = 1;
+
+  base::HistogramTester histogram_tester;
+  base::MockCallback<base::OnceCallback<void()>> mock_on_accepted;
+  base::MockCallback<base::OnceCallback<void()>> mock_on_declined;
+  base::MockCallback<base::OnceCallback<void()>> mock_on_dismissed;
+
+  EXPECT_CALL(*mock_view_, ShowAccountLinkingPrompt(testing::_))
+      .WillOnce(testing::Return(true));
+  controller_->ShowAccountLinkingPrompt(params, mock_on_accepted.Get(),
+                                        mock_on_declined.Get(),
+                                        mock_on_dismissed.Get());
+
+  if (GetUserAction() ==
+      payments::facilitated::AccountLinkingPromptUserAction::kAccepted) {
+    EXPECT_CALL(mock_on_accepted, Run());
+    EXPECT_CALL(mock_on_declined, Run).Times(0);
+    EXPECT_CALL(mock_on_dismissed, Run).Times(0);
+  } else if (GetUserAction() ==
+             payments::facilitated::AccountLinkingPromptUserAction::kDeclined) {
+    EXPECT_CALL(mock_on_accepted, Run).Times(0);
+    EXPECT_CALL(mock_on_declined, Run());
+    EXPECT_CALL(mock_on_dismissed, Run).Times(0);
+  } else if (GetUserAction() ==
+             payments::facilitated::AccountLinkingPromptUserAction::
+                 kDismissed) {
+    EXPECT_CALL(mock_on_accepted, Run).Times(0);
+    EXPECT_CALL(mock_on_declined, Run).Times(0);
+    EXPECT_CALL(mock_on_dismissed, Run());
+  }
+
+  controller_->OnAccountLinkingPromptAction(
+      /*env=*/nullptr, /*type=*/static_cast<jint>(GetPaymentType()),
+      /*action=*/static_cast<jint>(GetUserAction()));
+
+  std::string user_action_histogram =
+      GetPaymentType() == payments::facilitated::FacilitatedPaymentsType::kPix
+          ? "FacilitatedPayments.Pix.AccountLinking.PromptUserAction"
+          : "FacilitatedPayments.Ewallet.AccountLinking.PromptUserAction";
+
+  histogram_tester.ExpectUniqueSample(user_action_histogram, GetUserAction(),
+                                      /*expected_bucket_count=*/1);
+
+  std::string duration_histogram =
+      GetPaymentType() == payments::facilitated::FacilitatedPaymentsType::kPix
+          ? "FacilitatedPayments.Pix.AccountLinking.PromptInteractionDuration"
+          : "FacilitatedPayments.Ewallet.AccountLinking."
+            "PromptInteractionDuration";
+
+  std::string segmented_duration_histogram = duration_histogram + ".";
+  if (GetUserAction() ==
+      payments::facilitated::AccountLinkingPromptUserAction::kAccepted) {
+    segmented_duration_histogram += "Accepted";
+  } else if (GetUserAction() ==
+             payments::facilitated::AccountLinkingPromptUserAction::kDeclined) {
+    segmented_duration_histogram += "Declined";
+  } else if (GetUserAction() ==
+             payments::facilitated::AccountLinkingPromptUserAction::
+                 kDismissed) {
+    segmented_duration_histogram += "Dismissed";
+  }
+
+  histogram_tester.ExpectTotalCount(duration_histogram, 1);
+  histogram_tester.ExpectTotalCount(segmented_duration_histogram, 1);
+}
+
+// Test controller forwards call for showing the Pix account linking failure
+// notification to the view.
+TEST_F(FacilitatedPaymentsControllerTest,
+       ShowAccountLinkingFailureNotification) {
+  EXPECT_CALL(*mock_view_,
+              ShowAccountLinkingFailureNotification(
+                  payments::facilitated::FacilitatedPaymentsType::kPix));
+
+  controller_->ShowAccountLinkingFailureNotification(
+      payments::facilitated::FacilitatedPaymentsType::kPix);
 }

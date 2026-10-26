@@ -19,7 +19,6 @@
 #include "components/feature_engagement/public/event_constants.h"
 #include "components/feature_engagement/public/tracker.h"
 #include "components/infobars/content/content_infobar_manager.h"
-#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/webapps/browser/android/add_to_homescreen_params.h"
 #include "components/webapps/browser/android/app_banner_manager_android.h"
 #include "components/webapps/browser/android/webapps_utils.h"
@@ -65,7 +64,7 @@ WebappInstallSource WebappsClientAndroid::GetInstallSource(
     // Create shortcut does not exist on Android, so it doesn't apply to custom
     // tab.
     case InstallTrigger::CREATE_SHORTCUT:
-      DCHECK(!is_custom_tab);
+      CHECK(!is_custom_tab, base::NotFatalUntil::M162);
       return WebappInstallSource::MENU_CREATE_SHORTCUT;
   }
   NOTREACHED();
@@ -73,8 +72,8 @@ WebappInstallSource WebappsClientAndroid::GetInstallSource(
 
 AppBannerManager* WebappsClientAndroid::GetAppBannerManager(
     content::WebContents* web_contents) {
-  return AppBannerManagerAndroid::FromWebContents(web_contents)
-      ->app_banner_manager();
+  auto* manager = AppBannerManagerAndroid::FromWebContents(web_contents);
+  return manager ? manager->app_banner_manager() : nullptr;
 }
 
 void WebappsClientAndroid::DoesNewWebAppConflictWithExistingInstallation(

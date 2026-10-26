@@ -6,15 +6,19 @@
 
 #include <string_view>
 
+#include "base/check_op.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/page_info/web_view_side_panel_throttle.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/render_frame_host.h"
@@ -23,10 +27,11 @@
 #include "content/public/common/referrer.h"
 #include "net/base/url_util.h"
 #include "third_party/blink/public/common/loader/loader_constants.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/controls/webview/webview.h"
 #include "ui/views/layout/flex_layout_types.h"
-#include "ui/views/layout/flex_layout_view.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -86,11 +91,25 @@ WebViewSidePanelView::WebViewSidePanelView(
   web_contents->SetUserData(
       kWebViewSidePanelWebContentsUserDataKey,
       std::make_unique<WebViewSidePanelWebContentsUserData>(AsWeakPtr()));
+  web_modal::WebContentsModalDialogManager::CreateForWebContents(web_contents);
+  web_modal::WebContentsModalDialogManager::FromWebContents(web_contents)
+      ->SetDelegate(this);
   Observe(web_contents);
 
   GetViewAccessibility().SetRole(ax::mojom::Role::kWebView);
   GetViewAccessibility().SetName(
       std::u16string(), ax::mojom::NameFrom::kAttributeExplicitlyEmpty);
+}
+
+WebViewSidePanelView::~WebViewSidePanelView() {
+  CHECK(web_view_, base::NotFatalUntil::M162);
+  if (content::WebContents* web_contents = web_view_->GetWebContents()) {
+    if (auto* manager =
+            web_modal::WebContentsModalDialogManager::FromWebContents(
+                web_contents)) {
+      manager->SetDelegate(nullptr);
+    }
+  }
 }
 
 void WebViewSidePanelView::LoadProgressChanged(double progress) {
@@ -109,7 +128,7 @@ void WebViewSidePanelView::OpenUrl(const content::OpenURLParams& params) {
 }
 
 GURL WebViewSidePanelView::GetLastUrlForTesting() {
- return last_url_;
+  return last_url_;
 }
 
 // This method is called when the WebContents wants to open a link in a new
@@ -125,11 +144,19 @@ void WebViewSidePanelView::DidOpenRequestedURL(
     ui::PageTransition transition,
     bool started_from_context_menu,
     bool renderer_initiated) {
-  content::OpenURLParams params(url, referrer, disposition, transition,
-                                renderer_initiated);
+  // Renderer-initiated navigations have a 'source_renderframe_host'.
+  CHECK(!renderer_initiated || source_render_frame_host);
+  content::OpenURLParams params =
+      renderer_initiated
+          ? content::OpenURLParams::CreateRendererInitiated(
+                url, disposition, transition, referrer,
+                source_render_frame_host->GetCurrentInitiatorNavigationState())
+          : content::OpenURLParams::CreateBrowserInitiated(
+                url, disposition, transition, referrer);
+
   // If the navigation is initiated by the renderer process, we must set an
   // initiator origin.
-  if (renderer_initiated && source_render_frame_host) {
+  if (renderer_initiated) {
     params.initiator_origin =
         source_render_frame_host->GetLastCommittedOrigin();
     params.initiator_frame_token = source_render_frame_host->GetFrameToken();
@@ -186,12 +213,14 @@ BrowserView* WebViewSidePanelView::outer_browser_view() {
 
 content::WebContentsDelegate* WebViewSidePanelView::outer_delegate() {
   auto* browser_view = outer_browser_view();
-  return browser_view ? browser_view->browser() : nullptr;
+  return browser_view
+             ? BrowserWebContentsDelegate::From(browser_view->browser())
+             : nullptr;
 }
 
 void WebViewSidePanelView::OpenUrlInBrowser(
     const content::OpenURLParams& params) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (auto* browser_view = outer_browser_view()) {
     content::OpenURLParams new_params(params);
     new_params.url = CleanUpQueryParams(params.url);
@@ -204,8 +233,7 @@ GURL WebViewSidePanelView::CleanUpQueryParams(const GURL& url) {
   // Override eventual parameter for navigations to a real tab.
   if (url::IsSameOriginWith(url, last_url_) &&
       param_name_to_cleanup_.has_value() &&
-      url.query().find(param_name_to_cleanup_.value()) !=
-          std::string_view::npos) {
+      url.query().contains(param_name_to_cleanup_.value())) {
     return net::AppendOrReplaceQueryParameter(
         url, param_name_to_cleanup_.value(), std::string());
   }
@@ -217,4 +245,20 @@ void WebViewSidePanelView::SetContentVisible(bool visible) {
   loading_indicator_web_view_->SetVisible(!visible);
 }
 
-WebViewSidePanelView::~WebViewSidePanelView() = default;
+web_modal::WebContentsModalDialogHost*
+WebViewSidePanelView::GetWebContentsModalDialogHost(
+    content::WebContents* web_contents) {
+  CHECK_EQ(web_view_->GetWebContents(), web_contents,
+           base::NotFatalUntil::M162);
+  if (auto* browser_view = outer_browser_view()) {
+    return browser_view->GetWebContentsModalDialogHost();
+  }
+  return nullptr;
+}
+
+bool WebViewSidePanelView::IsWebContentsVisible(
+    content::WebContents* web_contents) {
+  CHECK_EQ(web_view_->GetWebContents(), web_contents,
+           base::NotFatalUntil::M162);
+  return web_view_->IsDrawn();
+}

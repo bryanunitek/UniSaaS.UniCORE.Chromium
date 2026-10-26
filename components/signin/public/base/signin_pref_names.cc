@@ -19,12 +19,48 @@ const char kAccountIdMigrationState[] = "account_id_migration_state";
 // tracked by this signin.
 const char kAccountInfo[] = "account_info";
 
-// Dictionary pref that contains the AccountPreviewPreference result.
+// Dictionary pref that contains the `AccountPreviewPreference` result when
+// offering signed-out users to sign in.
 const char kAccountPreviewPreference[] = "signin.account_preview_preference";
+
+// Dictionary pref that contains the `AccountPreviewPreference` result when
+// offering signed-in users to switch accounts.
+const char kAccountPreviewSwitchingPreference[] =
+    "signin.account_preview_switching_preference";
 
 // Time pref that tracks the last time account preview data was refreshed.
 const char kAccountPreviewDataLastUpdatePref[] =
     "signin.account_preview_data_last_update";
+
+// Time pref that tracks the last time account preview data request hit 429.
+const char kAccountPreviewDataLast429TimePref[] =
+    "signin.account_preview_data_last_429_time";
+
+// List pref that tracks the GAIA IDs of accounts present during the last data
+// fetch.
+const char kAccountPreviewDataLastFetchAccounts[] =
+    "signin.account_preview_data_last_fetch_accounts";
+
+// Time pref that tracks the last time account preview selection heuristic
+// scores metrics were recorded.
+const char kAccountPreviewSelectionHeuristicScoresLastRecordedPref[] =
+    "signin.account_preview.selection_heuristic_scores_last_recorded";
+
+// Time pref that tracks the last time account preview switching heuristic
+// metrics were recorded.
+const char kAccountPreviewSwitchingHeuristicLastRecordedPref[] =
+    "signin.account_preview.switching_heuristic_last_recorded";
+
+#if BUILDFLAG(IS_ANDROID)
+// Dictionary pref that contains the external app account GaiaId and timestamp.
+const char kAccountPreviewExternalAppAccount[] =
+    "signin.account_preview_external_app_account";
+#endif
+
+// Integer pref that tracks the number of non-periodic full fetches until the
+// next periodic fetch.
+const char kAccountPreviewNonPeriodicFetchCountPref[] =
+    "signin.account_preview_non_periodic_fetch_count";
 
 // A hash of the GAIA accounts present in the content area. Order does not
 // affect the hash, but signed in/out status will. Stored as the Base64 string.
@@ -126,20 +162,6 @@ const char kHistorySyncLastDeclinedTimestamp[] =
 const char kHistorySyncSuccessiveDeclineCount[] =
     "signin.history_sync.successive_decline_count";
 
-// A timestamp of the last time the history sync promo was dismissed.
-const char kHistoryPageHistorySyncPromoLastDismissedTimestamp[] =
-    "history_page.history_sync_promo_last_dismissed_timestamp";
-
-// A boolean preference to store whether the history sync promo was shown one
-// more time after the user dismissed it.
-const char kHistoryPageHistorySyncPromoShownAfterDismissal[] =
-    "history_page.history_sync_promo_shown_after_dismissal";
-
-// An integer preference to store the number of times the history sync promo
-// has been shown on the history page.
-const char kHistoryPageHistorySyncPromoShownCount[] =
-    "history.sync_promo_shown_count";
-
 #if BUILDFLAG(IS_IOS)
 // List of patterns to determine the account visibility, according to the
 // "RestrictAccountsToPatterns" policy. Note that the policy also exists on
@@ -165,28 +187,20 @@ const char kBrowserSigninPolicy[] = "signin.browser_signin_policy";
 // next startup.
 const char kSigninAllowedOnNextStartup[] = "signin.allowed_on_next_startup";
 
-// String that represent the url for which cookies will have to be moved to a
-// newly created profile via signin interception.
-const char kSigninInterceptionIDPCookiesUrl[] =
-    "signin.interception.idp_cookies.url";
-
 // Integer pref to store the number of times the address bubble signin promo
-// has been shown per profile while the user is signed out used for
-// SigninPromoLimitsExperiment.
-const char kAddressSignInPromoShownCountPerProfileForLimitsExperiment[] =
-    "signin.AddressSignInPromoShownCountForLimitsExperiment";
+// has been shown per profile while the user is signed out.
+const char kAddressSignInPromoShownCountPerProfile[] =
+    "signin.AddressSignInPromoShownCount";
 
 // Integer pref to store the number of times the bookmark bubble signin promo
-// has been shown per profile while the user is signed out used for
-// SigninPromoLimitsExperiment.
-const char kBookmarkSignInPromoShownCountPerProfileForLimitsExperiment[] =
-    "signin.BookmarkSignInPromoShownCountForLimitsExperiment";
+// has been shown per profile while the user is signed out.
+const char kBookmarkSignInPromoShownCountPerProfile[] =
+    "signin.BookmarkSignInPromoShownCount";
 
 // Integer pref to store the number of times the password bubble signin promo
-// has been shown per profile while the user is signed out used for
-// SigninPromoLimitsExperiment.
-const char kPasswordSignInPromoShownCountPerProfileForLimitsExperiment[] =
-    "signin.PasswordSignInPromoShownCountForLimitsExperiment";
+// has been shown per profile while the user is signed out.
+const char kPasswordSignInPromoShownCountPerProfile[] =
+    "signin.PasswordSignInPromoShownCount";
 
 // Integer which indicates whether enterprise profile separation is enforced or
 // disabled.

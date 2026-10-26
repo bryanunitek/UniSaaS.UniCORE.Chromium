@@ -20,9 +20,12 @@ void UpdateSupervisionStatusForAccount(
     signin::IdentityManager* identity_manager,
     bool is_subject_to_parental_controls);
 
-// Helper method that returns a base64 encoded approval result for local web
-// approvals callback.
-std::string CreatePacpApprovalResult();
+// Modifies the family info fetch status for an AccountInfo and updates the
+// given IdentityManager, which should already have the account signed in.
+void UpdateFamilyInfoFetchStatusForAccount(
+    AccountInfo& account,
+    signin::IdentityManager* identity_manager,
+    bool is_family_info_fetched);
 
 }  // namespace supervised_user
 

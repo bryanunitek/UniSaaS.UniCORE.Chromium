@@ -17,6 +17,7 @@
 #include "chrome/browser/net/nss_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
+#include "chromeos/ash/components/dbus/cryptohome/UserDataAuth.pb.h"
 #include "chromeos/ash/components/kcer/chaps/session_chaps_client.h"
 #include "chromeos/ash/components/kcer/extra_instances.h"
 #include "chromeos/ash/components/kcer/kcer.h"
@@ -45,7 +46,7 @@ const user_manager::User* GetUserByContext(content::BrowserContext* context) {
 }
 
 KcerFactoryAsh::UniqueSlotId GetUniqueId(PK11SlotInfo* nss_slot) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M160);
   return {PK11_GetModuleID(nss_slot), PK11_GetSlotID(nss_slot)};
 }
 
@@ -54,7 +55,7 @@ base::WeakPtr<internal::KcerToken> PrepareOneTokenForNss(
     HighLevelChapsClient* chaps_client,
     crypto::ScopedPK11Slot nss_slot,
     Token token_type) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M160);
 
   if (!nss_slot) {
     return nullptr;
@@ -89,7 +90,7 @@ void PrepareTokensForNss(KcerFactoryAsh::KcerTokenMapNss* token_map,
                          HighLevelChapsClient* chaps_client,
                          KcerFactoryAsh::InitializeOnUIThreadCallback callback,
                          net::NSSCertDatabase* nss_db) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M160);
   CHECK(token_map);
   if (!nss_db) {
     // Usually should not happen. Maybe possible on shutdown.
@@ -108,7 +109,7 @@ void PrepareTokensForNss(KcerFactoryAsh::KcerTokenMapNss* token_map,
 void GetNssDbOnIOThread(
     NssCertDatabaseGetter nss_db_getter,
     base::OnceCallback<void(net::NSSCertDatabase* nss_db)> callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M160);
 
   auto split_callback = base::SplitOnceCallback(std::move(callback));
 
@@ -139,7 +140,7 @@ KcerFactoryAsh::KcerService::~KcerService() = default;
 
 // static
 base::WeakPtr<Kcer> KcerFactoryAsh::GetKcer(Profile* profile) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   return GetInstance()->GetKcerImpl(profile);
 }
 
@@ -200,7 +201,7 @@ KcerFactoryAsh::KcerFactoryAsh()
 KcerFactoryAsh::~KcerFactoryAsh() = default;
 
 void KcerFactoryAsh::Initialize() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (UseKcerWithoutNss()) {
     StartInitializingDeviceKcerWithoutNss();
   } else {
@@ -265,12 +266,12 @@ void KcerFactoryAsh::RecordPkcs12CertDualWrittenImpl() {
 }
 
 void KcerFactoryAsh::ClearNssTokenMapForTestingImpl() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M160);
   nss_tokens_io_.clear();
 }
 
 bool KcerFactoryAsh::ServiceIsCreatedWithBrowserContext() const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   // This should be true because Kcer for the primary context needs to be
   // created as soon as possible. It is used by the components through
   // kcer::ExtraInstance::GetDefaultKcer() and on consumer devices to determine
@@ -281,15 +282,15 @@ bool KcerFactoryAsh::ServiceIsCreatedWithBrowserContext() const {
 std::unique_ptr<KeyedService>
 KcerFactoryAsh::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   auto new_kcer = std::make_unique<internal::KcerImpl>();
 
   // This code assumes that by the time BuildServiceInstanceForBrowserContext is
   // called, the context is initialized enough for IsPrimaryContext() to work
   // correctly.
-  if (ash::ProfileHelper::IsPrimaryProfile(
-          Profile::FromBrowserContext(context))) {
+  Profile* profile = Profile::FromBrowserContext(context);
+  if (ash::ProfileHelper::IsPrimaryProfile(profile)) {
     ExtraInstances::Get()->SetDefaultKcer(new_kcer->GetWeakPtr());
   }
 
@@ -299,10 +300,7 @@ KcerFactoryAsh::BuildServiceInstanceForBrowserContext(
       FROM_HERE,
       base::BindOnce(&KcerFactoryAsh::StartInitializingKcerInstance,
                      base::Unretained(const_cast<KcerFactoryAsh*>(this)),
-                     new_kcer->GetWeakPtr(),
-                     // TODO(crbug.com/40061562): Remove
-                     // `UnsafeDanglingUntriaged`
-                     base::UnsafeDanglingUntriaged(context)));
+                     new_kcer->GetWeakPtr(), profile->GetWeakPtr()));
 
   return std::make_unique<KcerService>(std::move(new_kcer));
 }
@@ -313,23 +311,24 @@ bool KcerFactoryAsh::UseKcerWithoutNss() const {
 
 void KcerFactoryAsh::StartInitializingKcerInstance(
     base::WeakPtr<internal::KcerImpl> kcer_service,
-    content::BrowserContext* context) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!kcer_service) {
+    base::WeakPtr<Profile> profile) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  if (!kcer_service || !profile) {
     return;
   }
 
   if (UseKcerWithoutNss()) {
-    return StartInitializingKcerWithoutNss(std::move(kcer_service), context);
+    return StartInitializingKcerWithoutNss(std::move(kcer_service),
+                                          profile.get());
   } else {
-    return StartInitializingKcerForNss(std::move(kcer_service), context);
+    return StartInitializingKcerForNss(std::move(kcer_service), profile.get());
   }
 }
 
 void KcerFactoryAsh::StartInitializingKcerWithoutNss(
     base::WeakPtr<internal::KcerImpl> kcer_service,
     content::BrowserContext* context) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (!kcer_service) {
     return;
   }
@@ -353,7 +352,7 @@ void KcerFactoryAsh::StartInitializingKcerWithoutNss(
 void KcerFactoryAsh::GetDeviceTokenInfo(
     base::WeakPtr<internal::KcerImpl> kcer_service,
     AccountId account_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (!kcer_service) {
     return;
   }
@@ -379,7 +378,7 @@ void KcerFactoryAsh::GetUserTokenInfo(
     AccountId account_id,
     std::unique_ptr<ash::TPMTokenInfoGetter> scoped_device_token_info_getter,
     std::optional<user_data_auth::TpmTokenInfo> device_token_info) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (!kcer_service) {
     return;
   }
@@ -405,7 +404,7 @@ void KcerFactoryAsh::GotAllTokenInfos(
     std::optional<user_data_auth::TpmTokenInfo> device_token_info,
     std::unique_ptr<ash::TPMTokenInfoGetter> scoped_user_token_info_getter,
     std::optional<user_data_auth::TpmTokenInfo> user_token_info) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (!kcer_service) {
     return;
   }
@@ -428,7 +427,7 @@ void KcerFactoryAsh::GotAllTokenInfos(
 base::WeakPtr<internal::KcerToken> KcerFactoryAsh::GetTokenWithoutNss(
     std::optional<SessionChapsClient::SlotId> token_id,
     Token token_type) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (!token_id) {
     return nullptr;
@@ -453,7 +452,7 @@ base::WeakPtr<internal::KcerToken> KcerFactoryAsh::GetTokenWithoutNss(
 }
 
 bool KcerFactoryAsh::EnsureHighLevelChapsClientInitialized() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (IsHighLevelChapsClientInitialized()) {
     return true;
   }
@@ -469,7 +468,7 @@ void KcerFactoryAsh::InitializeKcerInstanceWithoutNss(
     base::WeakPtr<internal::KcerImpl> kcer_service,
     std::optional<SessionChapsClient::SlotId> user_token_id,
     std::optional<SessionChapsClient::SlotId> device_token_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (!kcer_service) {
     return;
   }
@@ -482,7 +481,7 @@ void KcerFactoryAsh::InitializeKcerInstanceWithoutNss(
 void KcerFactoryAsh::StartInitializingKcerForNss(
     base::WeakPtr<internal::KcerImpl> kcer_service,
     content::BrowserContext* context) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (!kcer_service) {
     return;
   }
@@ -517,7 +516,7 @@ void KcerFactoryAsh::StartInitializingKcerForNss(
 base::OnceCallback<void(KcerFactoryAsh::InitializeOnUIThreadCallback,
                         net::NSSCertDatabase*)>
 KcerFactoryAsh::GetPrepareTokensForNssOnIOThreadFunctor() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   EnsureHighLevelChapsClientInitialized();
   // `high_level_chaps_client_` is never destroyed (as a part of the factory),
   // so it's ok to pass it by a raw pointer. PrepareTokensForNss() will run on
@@ -531,7 +530,7 @@ void KcerFactoryAsh::InitializeKcerInstanceForNss(
     base::WeakPtr<internal::KcerImpl> kcer_service,
     base::WeakPtr<internal::KcerToken> user_token,
     base::WeakPtr<internal::KcerToken> device_token) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (!kcer_service) {
     return;
   }
@@ -540,7 +539,7 @@ void KcerFactoryAsh::InitializeKcerInstanceForNss(
 }
 
 void KcerFactoryAsh::StartInitializingDeviceKcerWithoutNss() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   std::unique_ptr<ash::TPMTokenInfoGetter> scoped_device_token_info_getter =
       ash::TPMTokenInfoGetter::CreateForSystemToken(
@@ -560,7 +559,7 @@ void KcerFactoryAsh::StartInitializingDeviceKcerWithoutNss() {
 void KcerFactoryAsh::InitializeDeviceKcerWithoutNss(
     std::unique_ptr<ash::TPMTokenInfoGetter> scoped_device_token_info_getter,
     std::optional<user_data_auth::TpmTokenInfo> device_token_info) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   std::optional<SessionChapsClient::SlotId> device_token_id;
   if (device_token_info) {
@@ -578,7 +577,7 @@ void KcerFactoryAsh::InitializeDeviceKcerWithoutNss(
 }
 
 void KcerFactoryAsh::StartInitializingDeviceKcerForNss() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (!ash::SystemTokenCertDbStorage::Get()) {
     CHECK_IS_TEST();
@@ -606,7 +605,7 @@ void KcerFactoryAsh::StartInitializingDeviceKcerForNss() {
 void KcerFactoryAsh::InitializeDeviceKcerForNss(
     base::WeakPtr<internal::KcerToken> /*user_token*/,
     base::WeakPtr<internal::KcerToken> device_token) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   ExtraInstances::Get()->InitializeDeviceKcer(
       content::GetIOThreadTaskRunner({}), std::move(device_token));
 }

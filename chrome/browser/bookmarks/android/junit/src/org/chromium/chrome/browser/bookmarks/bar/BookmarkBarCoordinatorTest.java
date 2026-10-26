@@ -35,7 +35,6 @@ import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.test.core.app.ActivityScenario.ActivityAction;
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
-import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -56,7 +55,6 @@ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DisabledTest;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpener;
@@ -80,7 +78,9 @@ import org.chromium.chrome.browser.tab.TabObscuringHandler;
 import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelperJni;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.SideUiSpecs;
+import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.UiUpdateRequest;
 import org.chromium.chrome.browser.ui.side_ui.SideUiObserver;
 import org.chromium.chrome.browser.ui.side_ui.SideUiStateProvider;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
@@ -89,6 +89,7 @@ import org.chromium.components.browser_ui.widget.CoordinatorLayoutForPointer;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.listmenu.ListItemType;
 import org.chromium.ui.listmenu.ListMenuItemProperties;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -135,6 +136,8 @@ public class BookmarkBarCoordinatorTest {
     @Mock private TopUiThemeColorProvider mTopUiThemeColorProvider;
     @Mock private SideUiStateProvider mSideUiStateProvider;
     @Mock private TabObscuringHandler mTabObscuringHandler;
+    @Mock private ModalDialogManager mModalDialogManager;
+    @Mock private SnackbarManager mSnackbarManager;
 
     private ShadowLooper mShadowLooper;
     private BookmarkBarCoordinator mCoordinator;
@@ -168,6 +171,8 @@ public class BookmarkBarCoordinatorTest {
         ImageServiceBridgeJni.setInstanceForTesting(mImageServiceBridgeJni);
 
         onActivity(this::createCoordinator);
+        SideUiSpecs sideUiSpecs = new SideUiSpecs(100, 200);
+        when(mSideUiStateProvider.getCurrentSideUiSpecs()).thenReturn(sideUiSpecs);
     }
 
     @SuppressWarnings("unchecked") // Raw CompositorModelChangeProcessor mock.
@@ -227,7 +232,10 @@ public class BookmarkBarCoordinatorTest {
                         ObservableSuppliers.alwaysNull(),
                         mTopUiThemeColorProvider,
                         mSideUiStateProviderSupplier,
-                        mTabObscuringHandler);
+                        mTabObscuringHandler,
+                        () -> mModalDialogManager,
+                        () -> mSnackbarManager,
+                        ObservableSuppliers.createNonNull(false));
 
         assertNotNull("Verify view stub inflation during construction.", mView);
 
@@ -265,23 +273,20 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
-    @DisabledTest(message = "https://crbug.com/430058443")
     public void testConstructorWhenTopControlOffsetIsNonZero() {
         testConstructor(/* topControlOffset= */ -1);
     }
 
     @Test
-    @SmallTest
-    @DisabledTest(message = "https://crbug.com/430058443")
     public void testConstructorWhenTopControlOffsetIsZero() {
         testConstructor(/* topControlOffset= */ 0);
     }
 
     private void testConstructor(int topControlOffset) {
-        // Initialize browser controls manager.
+        // Initialize browser controls manager and top controls stacker.
         final int topControlsHeight = 1;
-        when(mBrowserControlsManager.getTopControlsHeight()).thenReturn(topControlsHeight);
+        when(mTopControlsStacker.getHeightFromLayerToTop(TopControlType.BOOKMARK_BAR))
+                .thenReturn(topControlsHeight);
         when(mBrowserControlsManager.getTopControlOffset()).thenReturn(topControlOffset);
 
         // Invoke constructor.
@@ -289,7 +294,7 @@ public class BookmarkBarCoordinatorTest {
 
         assertEquals(
                 "Verify view top margin.",
-                topControlsHeight - mView.getHeight(),
+                topControlsHeight,
                 ((MarginLayoutParams) mView.getLayoutParams()).topMargin);
 
         assertEquals(
@@ -299,10 +304,9 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testOnBookmarkBarHeightChanged() {
         // Verify initial state. Height is read from minHeight and hairline's height.
-        assertEquals("Verify initial state.", 41, mCoordinator.getTopControlHeight());
+        assertEquals("Verify initial state.", 43, mCoordinator.getTopControlHeight());
 
         // NOTE: the `mHeightChangeCallback` is expected to have been registered for observation
         // during `mCoordinator` construction and notified of initial height via posted task.
@@ -334,7 +338,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testOnBookmarkBarItemAdded() {
         onActivity(
                 activity -> {
@@ -347,7 +350,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testOnBookmarkBarItemMoved() {
         onActivity(
                 activity -> {
@@ -368,7 +370,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testOnBookmarkBarItemRemoved() {
         onActivity(
                 activity -> {
@@ -388,7 +389,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testOnBookmarkBarItemUpdated() {
         onActivity(
                 activity -> {
@@ -408,7 +408,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testOnBookmarkBarItemsChanged() {
         onActivity(
                 activity -> {
@@ -429,7 +428,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testOnItemsOverflowChanged() {
         onActivity(
                 activity -> {
@@ -463,7 +461,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testOnProfileChanged() {
         onActivity(
                 activity -> {
@@ -486,11 +483,10 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     @SuppressWarnings("DirectInvocationOnMock")
     public void testOnTopControlsHeightChanged() {
-        // Initialize browser controls manager. Bookmark bar start height is 40.
-        int topControlsHeight = 41;
+        // Initialize browser controls manager. Bookmark bar start height is 42.
+        int topControlsHeight = 43;
         when(mBrowserControlsManager.getTopControlsHeight()).thenReturn(topControlsHeight);
         when(mTopControlsStacker.getHeightFromLayerToTop(TopControlType.BOOKMARK_BAR))
                 .thenReturn(0);
@@ -504,7 +500,7 @@ public class BookmarkBarCoordinatorTest {
                 0,
                 ((MarginLayoutParams) mView.getLayoutParams()).topMargin);
 
-        topControlsHeight = 51;
+        topControlsHeight = 53;
         when(mBrowserControlsManager.getTopControlsHeight()).thenReturn(topControlsHeight);
         when(mTopControlsStacker.getHeightFromLayerToTop(TopControlType.BOOKMARK_BAR))
                 .thenReturn(10);
@@ -520,7 +516,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     @SuppressWarnings("DirectInvocationOnMock")
     public void testOnTopControlsOffsetChanged() {
         // Initialize browser controls manager.
@@ -567,7 +562,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testUpdateBackgroundColor_SetsModelProperties_Incognito() {
         PropertyModel bookmarkBarModel = mCoordinator.getModelForTesting();
 
@@ -601,7 +595,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testUpdateBackgroundColor_SetsModelProperties_RegularLightTheme() {
         PropertyModel bookmarkBarModel = mCoordinator.getModelForTesting();
 
@@ -662,7 +655,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testSideUiObserver_AddAndRemove() {
         mSideUiStateProviderSupplier.set(mSideUiStateProvider);
         mShadowLooper.idle();
@@ -676,7 +668,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testSideUiObserver_MarginUpdates() {
         MarginLayoutParams params = (MarginLayoutParams) mView.getLayoutParams();
         int initialStartMargin = params.getMarginStart();
@@ -692,7 +683,8 @@ public class BookmarkBarCoordinatorTest {
         SideUiObserver observer = observerCaptor.getValue();
 
         SideUiSpecs specs = new SideUiSpecs(100, 200);
-        observer.onSideUiSpecsChanged(specs);
+        observer.onSideUiSpecsChangeStarted(
+                specs, UiUpdateRequest.getRequestForTesting(/* suppressAnimations= */ true));
 
         params = (MarginLayoutParams) mView.getLayoutParams();
         assertNotEquals(initialStartMargin, params.getMarginStart());
@@ -701,7 +693,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testUpdateObscured() {
         assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_YES, mView.getImportantForAccessibility());
 
@@ -718,7 +709,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testBuildMenuModelListForFolder_FolderItemHasIconTint() {
         onActivity(
                 activity -> {
@@ -747,7 +737,6 @@ public class BookmarkBarCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testBuildMenuModelListForFolder_FolderItemHasIconTint_Incognito() {
         onActivity(
                 activity -> {

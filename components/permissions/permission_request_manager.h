@@ -15,6 +15,7 @@
 
 #include "base/callback_list.h"
 #include "base/check_is_test.h"
+#include "base/containers/flat_set.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
@@ -22,6 +23,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/content_settings/core/common/content_settings.h"
+#include "components/permissions/embedded_permission_prompt_flow_model.h"
 #include "components/permissions/features.h"
 #include "components/permissions/permission_prompt.h"
 #include "components/permissions/permission_request_queue.h"
@@ -48,6 +50,7 @@ class MockPermissionRequestManager;
 }  // namespace test
 
 namespace permissions {
+class EmbeddedPermissionPromptFlowModel;
 class PermissionRequest;
 enum class PermissionAction;
 enum class PermissionPromptDisposition;
@@ -140,6 +143,11 @@ class PermissionRequestManager
   void AddRequest(content::RenderFrameHost* source_frame,
                   std::unique_ptr<PermissionRequest> request);
 
+  // Cancels all queued or currently in-progress requests with `request_type.
+  // Note that if a matching request is currently being displayed together with
+  // other requests of other types, they will also be cancelled.
+  void CancelAllRequestsWithType(RequestType request_type);
+
   // Will reposition the bubble (may change parent if necessary).
   void UpdateAnchor();
 
@@ -182,9 +190,12 @@ class PermissionRequestManager
   void DOMContentLoaded(content::RenderFrameHost* render_frame_host) override;
   void WebContentsDestroyed() override;
   void OnVisibilityChanged(content::Visibility visibility) override;
+  void DidToggleFullscreenModeForTab(bool entered_fullscreen,
+                                     bool will_cause_resize) override;
 
   // PermissionPrompt::Delegate:
-  const std::vector<std::unique_ptr<PermissionRequest>>& Requests() override;
+  const std::vector<std::unique_ptr<PermissionRequest>>& Requests()
+      const override;
   GURL GetRequestingOrigin() const override;
   GURL GetEmbeddingOrigin() const override;
   void Accept(const PromptOptions& prompt_options) override;
@@ -212,9 +223,10 @@ class PermissionRequestManager
   content::WebContents* GetAssociatedWebContents() override;
   bool RecreateView() override;
   const PermissionPrompt* GetCurrentPrompt() const override;
-  // Returns true if there is a request in progress that is initiated by an
-  // embedded permission element.
-  bool IsCurrentRequestEmbeddedPermissionElementInitiated() const;
+  EmbeddedPermissionPromptFlowModel* GetEmbeddedPromptFlowModel()
+      const override;
+  void CalculateCurrentVariantForEmbeddedPrompt() override;
+  void AdvanceOrFinalizeEmbeddedPromptFlow() override;
 
   // Returns the bounds of the active permission prompt view if we're
   // displaying one.
@@ -227,6 +239,16 @@ class PermissionRequestManager
       bool web_contents_supports_permission_requests) {
     web_contents_supports_permission_requests_ =
         web_contents_supports_permission_requests;
+  }
+
+  // Restricts which permission request types are allowed for this WebContents.
+  // Should be called before any requests are added, as it does not affect
+  // requests that are already queued or showing.
+  void set_allowlist_for_permission_requests(
+      std::optional<base::flat_set<RequestType>>
+          allowlist_for_permission_requests) {
+    allowlist_for_permission_requests_ =
+        std::move(allowlist_for_permission_requests);
   }
 
   // For testing only, used to override the default UI selectors and instead use
@@ -306,6 +328,10 @@ class PermissionRequestManager
 
   void set_embedding_origin_for_testing(const GURL& embedding_origin) {
     embedding_origin_for_testing_ = embedding_origin;
+  }
+
+  void set_requesting_origin_for_testing(const GURL& requesting_origin) {
+    requesting_origin_for_testing_ = requesting_origin;
   }
 
   base::ObserverList<
@@ -416,9 +442,8 @@ class PermissionRequestManager
   void ResetViewStateForCurrentRequest();
 
   // Records metrics and informs embargo and autoblocker about the requests
-  // being decided. Based on |view_->ShouldFinalizeRequestAfterDecided()| it
-  // will also call |FinalizeCurrentRequests()|. Otherwise a separate
-  // |FinalizeCurrentRequests()| call must be made to release the |view_|.
+  // being decided and calls |FinalizeCurrentRequests()| or advances embedded
+  // flow.
   void CurrentRequestsDecided(PermissionAction permission_action,
                               const PromptOptions& prompt_options);
 
@@ -493,10 +518,6 @@ class PermissionRequestManager
   // access.
   bool IsCurrentRequestExclusiveAccess() const;
 
-  // Returns true when the current request should be finalized together with the
-  // permission decision.
-  bool ShouldFinalizeRequestAfterDecided(PermissionAction action) const;
-
   // Calculate and record the PermissionEmbargoStatus.
   PermissionEmbargoStatus RecordActionAndGetEmbargoStatus(
       content::BrowserContext* browser_context,
@@ -511,15 +532,27 @@ class PermissionRequestManager
 
   ContentSetting GetRequestInitialStatus(PermissionRequest* request);
 
+  // Adopts a TabInterface if not already adopted (e.g. for discarded or
+  // prerendered tabs where TabInterface lookup is created after helper
+  // attachment).
+  void AdoptTabInterfaceIfNeeded(tabs::TabInterface* tab_interface);
+
   void RegisterTabSubscriptions(tabs::TabInterface* tab_interface);
   void OnTabActiveStatusChanged(bool is_active,
                                 tabs::TabInterface* tab_interface);
   void OnTabDetached(tabs::TabInterface* tab_interface,
                      tabs::TabInterface::DetachReason reason);
+  void OnTabWillDiscardContents(tabs::TabInterface* tab_interface,
+                                content::WebContents* old_contents,
+                                content::WebContents* new_contents);
   void OnTabAttached(tabs::TabInterface* tab_interface);
   void OnTabActiveChanged();
 
   void RecordPostPromptSessionDuration();
+
+  void MaybeReportGeolocationPromptWithoutUserGestureInspectorIssue(
+      const PermissionRequest* request,
+      content::RenderFrameHost* source_frame);
 
   // Factory to be used to create views when needed.
   PermissionPrompt::Factory view_factory_;
@@ -529,6 +562,8 @@ class PermissionRequestManager
   // the object alive. The infobar system hides the actual infobar UI and modals
   // prevent tab switching.
   std::unique_ptr<PermissionPrompt> view_;
+  std::unique_ptr<EmbeddedPermissionPromptFlowModel>
+      embedded_prompt_flow_model_;
 
   // The disposition for the currently active permission prompt, if any.
   // Recorded separately because the `view_` might not be available at prompt
@@ -585,6 +620,9 @@ class PermissionRequestManager
   // Suppress notification permission prompts in this tab, regardless of the
   // origin requesting the permission.
   bool is_notification_prompt_cooldown_active_ = false;
+
+  // Whether the current page is the result of a same-origin navigation.
+  bool had_same_origin_navigation_ = false;
 
   // A vector of selectors which decide if the quiet prompt UI should be used
   // to display permission requests. Sorted from the highest priority to the
@@ -650,6 +688,13 @@ class PermissionRequestManager
   // permission prompts.
   bool web_contents_supports_permission_requests_ = true;
 
+  // Optional allowlist of permission request types supported by the web
+  // contents associated with this request manager. If set, any request whose
+  // type is not in the allowlist will be cancelled. Ignored if
+  // `web_contents_supports_permission_requests_` is false, which takes
+  // priority.
+  std::optional<base::flat_set<RequestType>> allowlist_for_permission_requests_;
+
   // Whether the current request should be dismissed if the current tab is
   // closed.
   bool should_dismiss_current_request_ = false;
@@ -676,6 +721,8 @@ class PermissionRequestManager
   std::optional<bool> enabled_app_level_notification_permission_for_testing_;
 
   std::optional<GURL> embedding_origin_for_testing_;
+
+  std::optional<GURL> requesting_origin_for_testing_;
 
   // A timer is used to pre-ignore the permission request if it's been displayed
   // as a quiet chip.

@@ -31,16 +31,15 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FILEAPI_BLOB_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FILEAPI_BLOB_H_
 
+#include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "third_party/blink/public/mojom/blob/blob.mojom-blink-forward.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_typedefs.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/fileapi/url_registry.h"
 #include "third_party/blink/renderer/core/imagebitmap/image_bitmap_source.h"
-#include "third_party/blink/renderer/core/streams/readable_stream.h"
-#include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
-#include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_view.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/blob/blob_data.h"
@@ -50,12 +49,12 @@
 namespace blink {
 
 class BlobPropertyBag;
+class DOMArrayBuffer;
 class ExceptionState;
 class ExecutionContext;
+class ReadableStream;
 
-class CORE_EXPORT Blob : public ScriptWrappable,
-                         public URLRegistrable,
-                         public ImageBitmapSource {
+class CORE_EXPORT Blob : public ScriptWrappable, public ImageBitmapSource {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -85,7 +84,7 @@ class CORE_EXPORT Blob : public ScriptWrappable,
   ScriptPromise<DOMArrayBuffer> arrayBuffer(ScriptState* script_state);
   ScriptPromise<NotShared<DOMUint8Array>> bytes(ScriptState* script_state);
   String type() const { return blob_data_handle_->GetType(); }
-  String Uuid() const { return blob_data_handle_->Uuid(); }
+  String MaybeUuid() const { return blob_data_handle_->MaybeUuid(); }
   // Returns the BlobDataHandle this `Blob` was created with. Note that the size
   // of the returned BlobDataHandle might be `BlobUtils::kUnknownSize`. If it is
   // important for the returned BlobDataHandle to contain a known size, use
@@ -103,10 +102,9 @@ class CORE_EXPORT Blob : public ScriptWrappable,
   // Used by the JavaScript Blob and File constructors.
   void AppendTo(BlobData&) const;
 
-  // URLRegistrable to support PublicURLs.
-  URLRegistry& Registry() const final;
-  bool IsMojoBlob() final;
-  void CloneMojoBlob(mojo::PendingReceiver<mojom::blink::Blob>) final;
+  // Clones this Blob's Mojo interface into `receiver` for URL registration by
+  // PublicURLManager.
+  void CloneMojoBlob(mojo::PendingReceiver<mojom::blink::Blob> receiver);
   mojo::PendingRemote<mojom::blink::Blob> AsMojoBlob() const;
 
   // ImageBitmapSource implementation

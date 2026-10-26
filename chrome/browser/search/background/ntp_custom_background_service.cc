@@ -28,7 +28,6 @@
 #include "chrome/common/search/instant_types.h"
 #include "chrome/common/url_constants.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/search/ntp_features.h"
@@ -48,15 +47,6 @@
 namespace {
 
 constexpr char kSidePanelSnapshotImageOptions[] = "=w320-h180-p-k-no-nd-mv";
-
-base::DictValue GetBackgroundInfoWithColor(
-    const base::DictValue* background_info,
-    const SkColor color) {
-  base::DictValue new_background_info = background_info->Clone();
-  new_background_info.Set(kNtpCustomBackgroundMainColor,
-                          base::Value(static_cast<int>(color)));
-  return new_background_info;
-}
 
 void CopyFileToProfilePath(const base::FilePath& from_path,
                            const base::FilePath& profile_path) {
@@ -99,13 +89,6 @@ SkColor GetBitmapMainColor(const SkBitmap& bitmap) {
 // static
 void NtpCustomBackgroundService::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
-#if !BUILDFLAG(IS_ANDROID)
-  registry->RegisterDictionaryPref(
-      prefs::kDeprecatedNtpCustomBackgroundDictDoNotUse,
-      NtpCustomBackgroundDefaults(),
-      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-#endif
-
   registry->RegisterDictionaryPref(prefs::kNtpCustomBackgroundDict,
                                    NtpCustomBackgroundDefaults());
   registry->RegisterBooleanPref(prefs::kNtpCustomBackgroundLocalToDevice,
@@ -190,7 +173,7 @@ void NtpCustomBackgroundService::SetCustomBackgroundInfo(
     const std::string& attribution_line_2,
     const GURL& action_url,
     const std::string& collection_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (IsCustomBackgroundDisabledByPolicy()) {
     return;
   }
@@ -265,7 +248,7 @@ void NtpCustomBackgroundService::SelectLocalBackgroundImage(
 }
 
 void NtpCustomBackgroundService::RefreshBackgroundIfNeeded() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   // Do not refresh background & color if extension theme is in use.
   if (theme_delegate_ && theme_delegate_->UsingExtensionTheme()) {
     return;
@@ -290,7 +273,7 @@ void NtpCustomBackgroundService::RefreshBackgroundIfNeeded() {
 
 std::optional<CustomBackground>
 NtpCustomBackgroundService::GetCustomBackground() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (pref_service_->GetBoolean(prefs::kNtpCustomBackgroundLocalToDevice)) {
     auto custom_background = std::make_optional<CustomBackground>();
@@ -351,7 +334,8 @@ bool NtpCustomBackgroundService::IsCustomBackgroundDisabledByPolicy() {
   bool managed =
       pref_service_->IsManagedPreference(prefs::kNtpCustomBackgroundDict);
   if (managed) {
-    DCHECK(pref_service_->GetDict(prefs::kNtpCustomBackgroundDict).empty());
+    CHECK(pref_service_->GetDict(prefs::kNtpCustomBackgroundDict).empty(),
+          base::NotFatalUntil::M162);
   }
   return managed;
 }
@@ -384,7 +368,8 @@ void NtpCustomBackgroundService::UpdateCustomBackgroundColorAsync(
       FROM_HERE, {base::TaskPriority::BEST_EFFORT},
       base::BindOnce(&GetBitmapMainColor, fetched_image.AsBitmap()),
       base::BindOnce(
-          &NtpCustomBackgroundService::UpdateCustomBackgroundPrefsWithColor,
+          base::IgnoreResult(&NtpCustomBackgroundService::
+                                 UpdateCustomBackgroundPrefsWithColor),
           weak_ptr_factory_.GetWeakPtr(), image_url));
 }
 
@@ -444,7 +429,7 @@ void NtpCustomBackgroundService::SetBackgroundToLocalResourceWithId(
 }
 
 void NtpCustomBackgroundService::ForceRefreshBackground() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   const base::DictValue& background_info =
       pref_service_->GetDict(prefs::kNtpCustomBackgroundDict);
@@ -455,22 +440,17 @@ void NtpCustomBackgroundService::ForceRefreshBackground() {
   background_service_->FetchNextCollectionImage(collection_id, resume_token);
 }
 
-void NtpCustomBackgroundService::UpdateCustomBackgroundPrefsWithColor(
+bool NtpCustomBackgroundService::UpdateCustomBackgroundPrefsWithColor(
     const GURL& image_url,
     SkColor color) {
-  // Update background color only if the selected background is still the same.
-  const base::DictValue& background_info =
-      pref_service_->GetDict(prefs::kNtpCustomBackgroundDict);
-
-  GURL current_bg_url(
-      background_info.Find(kNtpCustomBackgroundURL)->GetString());
-  if (current_bg_url == image_url) {
-    pref_service_->SetDict(prefs::kNtpCustomBackgroundDict,
-                           GetBackgroundInfoWithColor(&background_info, color));
-    if (theme_delegate_) {
-      theme_delegate_->OnBackgroundColorExtracted(color);
-    }
+  if (!NtpCustomBackgroundServiceBase::UpdateCustomBackgroundPrefsWithColor(
+          image_url, color)) {
+    return false;
   }
+  if (theme_delegate_) {
+    theme_delegate_->OnBackgroundColorExtracted(color);
+  }
+  return true;
 }
 
 void NtpCustomBackgroundService::FetchCustomBackgroundAndExtractBackgroundColor(

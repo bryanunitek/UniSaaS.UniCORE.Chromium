@@ -6,6 +6,7 @@
 #include "chrome/browser/ui/views/payments/payment_request_browsertest_base.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
 #include "components/payments/content/service_worker_payment_app_finder.h"
+#include "components/payments/content/service_worker_payment_app_finder_test_api.h"
 #include "components/payments/content/test_payment_manifest_downloader.h"
 #include "components/payments/core/features.h"
 #include "content/public/browser/browser_context.h"
@@ -27,8 +28,11 @@ namespace payments {
 class PaymentHandlerMissingIconTest : public PaymentRequestBrowserTestBase {
  protected:
   PaymentHandlerMissingIconTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kAllowJITInstallationWhenAppIconIsMissing);
+    SetBypassUserInteractionForTesting();
+    scoped_feature_list_.InitWithFeatures(
+        {features::kAllowJITInstallationWhenAppIconIsMissing,
+         features::kPaymentRequestMandatoryPaymentAppUi},
+        {});
   }
 
   ~PaymentHandlerMissingIconTest() override = default;
@@ -50,23 +54,16 @@ class PaymentHandlerMissingIconTest : public PaymentRequestBrowserTestBase {
   void SetDownloaderAndIgnorePortInOriginComparisonForTesting() {
     content::BrowserContext* context =
         GetActiveWebContents()->GetBrowserContext();
-    mojo::Remote<network::mojom::URLLoaderFactory> renderer_url_loader_factory;
-    GetActiveWebContents()
-        ->GetPrimaryMainFrame()
-        ->CreateNetworkServiceDefaultFactory(
-            renderer_url_loader_factory.BindNewPipeAndPassReceiver());
     auto downloader = std::make_unique<TestDownloader>(
         GetCSPCheckerForTests(),
         context->GetDefaultStoragePartition()
             ->GetURLLoaderFactoryForBrowserProcess(),
-        std::move(renderer_url_loader_factory),
         GetActiveWebContents()->GetPrimaryMainFrame()->GetWeakDocumentPtr());
     downloader->AddTestServerURL("https://kylepay.test/",
                                  kylepay_server_.GetURL("kylepay.test", "/"));
-    ServiceWorkerPaymentAppFinder::GetOrCreateForCurrentDocument(
-        GetActiveWebContents()->GetPrimaryMainFrame())
-        ->SetDownloaderAndIgnorePortInOriginComparisonForTesting(
-            std::move(downloader));
+    test_api(ServiceWorkerPaymentAppFinder::GetOrCreateForCurrentDocument(
+                 GetActiveWebContents()->GetPrimaryMainFrame()))
+        .SetDownloaderAndIgnorePortInOriginComparison(std::move(downloader));
   }
 
  private:
@@ -103,7 +100,7 @@ IN_PROC_BROWSER_TEST_F(PaymentHandlerMissingIconTest, CantSkipTheSheet) {
 
   // Click on Pay to install Kylepay and complete the payment.
   ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
   ExpectBodyContains({"kylepay.test/webpay"});
 }

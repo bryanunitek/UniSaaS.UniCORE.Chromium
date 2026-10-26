@@ -14,12 +14,18 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "content/browser/embedder_isolation_info.h"
 #include "content/browser/renderer_host/navigation_throttle_runner.h"
+#include "content/browser/site_info.h"
+#include "content/browser/site_shard.h"
+#include "content/browser/storage_partition_impl.h"
 #include "content/browser/url_info.h"
+#include "content/browser/web_exposed_isolation_info.h"
 #include "content/common/features.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/origin_trials_controller_delegate.h"
 #include "content/public/browser/process_selection_user_data.h"
+#include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/ssl_status.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_client.h"
@@ -36,9 +42,11 @@
 #include "content/test/test_render_frame_host.h"
 #include "content/test/test_web_contents.h"
 #include "net/base/features.h"
+#include "net/disk_cache/buildflags.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "services/network/public/cpp/content_security_policy/content_security_policy.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/mojom/device_bound_sessions.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/navigation/navigation_params.h"
@@ -65,6 +73,25 @@ class ProcessSelectionTestData
 };
 
 PROCESS_SELECTION_USER_DATA_KEY_IMPL(ProcessSelectionTestData);
+
+#if BUILDFLAG(IS_ANDROID)
+class MockShouldOverrideUrlLoadingBrowserClient : public ContentBrowserClient {
+ public:
+  MOCK_METHOD(bool,
+              ShouldOverrideUrlLoading,
+              (FrameTreeNodeId frame_tree_node_id,
+               bool browser_initiated,
+               const GURL& url,
+               const std::string& request_method,
+               bool has_user_gesture,
+               bool is_redirect,
+               bool is_outermost_main_frame,
+               bool is_prerendering,
+               ui::PageTransition transition,
+               bool* ignore_navigation),
+              (override));
+};
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace
 
@@ -227,8 +254,7 @@ class NavigationRequestTest : public RenderViewHostImplTestHarness {
         std::move(commit_params), false /* was_opener_suppressed */,
         std::string() /* extra_headers */, nullptr /* frame_entry */,
         nullptr /* entry */, false /* is_form_submission */,
-        nullptr /* navigation_ui_data */, std::nullopt /* impression */,
-        EmbedderIsolationInfo::Mode::kNone);
+        nullptr /* navigation_ui_data */, EmbedderIsolationInfo::Mode::kNone);
     main_test_rfh()->frame_tree_node()->TakeNavigationRequest(
         std::move(request));
     GetNavigationRequest()->StartNavigation();
@@ -251,7 +277,7 @@ class NavigationRequestTest : public RenderViewHostImplTestHarness {
         /*was_opener_suppressed=*/false, /*extra_headers=*/std::string(),
         /*frame_entry=*/nullptr, /*entry=*/nullptr,
         /*is_form_submission=*/false, /*navigation_ui_data=*/nullptr,
-        /*impression=*/std::nullopt, EmbedderIsolationInfo::Mode::kNone);
+        EmbedderIsolationInfo::Mode::kNone);
   }
 
   FrameTreeNode* AddFrame(FrameTree& frame_tree,
@@ -268,7 +294,7 @@ class NavigationRequestTest : public RenderViewHostImplTestHarness {
         TestRenderFrameHost::CreateStubAssociatedInterfaceProviderReceiver(),
         blink::mojom::TreeScopeType::kDocument, std::string(), "uniqueName0",
         false, blink::LocalFrameToken(), base::UnguessableToken::Create(),
-        blink::DocumentToken(), frame_policy,
+        blink::DocumentToken(), blink::InitiatorStateToken(), frame_policy,
         blink::mojom::FrameOwnerProperties(), false, owner_type,
         /*is_dummy_frame_for_inner_tree=*/false);
   }
@@ -292,6 +318,84 @@ class NavigationRequestTest : public RenderViewHostImplTestHarness {
   bool was_callback_called_ = false;
   NavigationThrottle::ThrottleCheckResult callback_result_;
 };
+
+#if BUILDFLAG(IS_ANDROID)
+TEST_F(NavigationRequestTest,
+       ShouldOverrideUrlLoadingDestroysNavigationRequest) {
+  // The fixture's browser-initiated navigation would take precedence over a
+  // renderer-initiated navigation without a user gesture.
+  contents()->Stop();
+  ASSERT_FALSE(main_test_rfh()->frame_tree_node()->navigation_request());
+
+  MockShouldOverrideUrlLoadingBrowserClient browser_client;
+  ScopedContentBrowserClientSetting setting(&browser_client);
+
+  for (bool success : {false, true}) {
+    SCOPED_TRACE(success);
+    EXPECT_CALL(browser_client, ShouldOverrideUrlLoading).WillOnce([&]() {
+      auto* frame_tree_node = main_test_rfh()->frame_tree_node();
+      auto request = frame_tree_node->navigation_request()->GetWeakPtr();
+      EXPECT_EQ(NavigationRequest::WILL_START_NAVIGATION, request->state());
+      contents()->Stop();
+      EXPECT_FALSE(request);
+      // A false return models an exception thrown after stopping the load.
+      return success;
+    });
+
+    main_test_rfh()->SendRendererInitiatedNavigationRequest(
+        GURL("https://example.com/"), /*has_user_gesture=*/false);
+    EXPECT_FALSE(main_test_rfh()->frame_tree_node()->navigation_request());
+  }
+}
+
+TEST_F(NavigationRequestTest, ShouldOverrideUrlLoadingException) {
+  // Clear the fixture's browser-initiated navigation before issuing a
+  // renderer-initiated navigation without a user gesture.
+  contents()->Stop();
+  ASSERT_FALSE(main_test_rfh()->frame_tree_node()->navigation_request());
+
+  MockShouldOverrideUrlLoadingBrowserClient browser_client;
+  ScopedContentBrowserClientSetting setting(&browser_client);
+  testing::NiceMock<MockWebContentsObserver> observer(contents());
+  EXPECT_CALL(observer, DidStartNavigation).Times(0);
+  EXPECT_CALL(browser_client, ShouldOverrideUrlLoading)
+      .WillOnce(testing::Return(false));
+
+  main_test_rfh()->SendRendererInitiatedNavigationRequest(
+      GURL("https://example.com/"), /*has_user_gesture=*/false);
+
+  auto* request = main_test_rfh()->frame_tree_node()->navigation_request();
+  ASSERT_TRUE(request);
+  EXPECT_EQ(NavigationRequest::WILL_START_NAVIGATION, request->state());
+}
+
+TEST_F(NavigationRequestTest, ShouldOverrideUrlLoadingResult) {
+  MockShouldOverrideUrlLoadingBrowserClient browser_client;
+  ScopedContentBrowserClientSetting setting(&browser_client);
+
+  for (bool ignore_navigation : {false, true}) {
+    SCOPED_TRACE(ignore_navigation);
+    EXPECT_CALL(browser_client, ShouldOverrideUrlLoading)
+        .WillOnce(testing::DoAll(testing::SetArgPointee<9>(ignore_navigation),
+                                 testing::Return(true)));
+
+    auto navigation = NavigationSimulatorImpl::CreateRendererInitiated(
+        GURL("https://example.com/"), main_rfh());
+    navigation->Start();
+    if (ignore_navigation) {
+      EXPECT_FALSE(main_test_rfh()->frame_tree_node()->navigation_request());
+    } else {
+      ASSERT_TRUE(main_test_rfh()->frame_tree_node()->navigation_request());
+      EXPECT_EQ(
+          NavigationRequest::WILL_START_REQUEST,
+          main_test_rfh()->frame_tree_node()->navigation_request()->state());
+      navigation->Commit();
+      EXPECT_EQ(GURL("https://example.com/"),
+                contents()->GetLastCommittedURL());
+    }
+  }
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 // Checks that the request_context_type is properly set.
 // Note: can be extended to cover more internal members.
@@ -541,91 +645,6 @@ TEST_F(NavigationRequestTest, WillFailRequestSetsSSLInfo) {
             navigation->GetNavigationHandle()->GetSSLInfo()->connection_status);
 }
 
-TEST_F(NavigationRequestTest, SharedStorageWritable) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      /*enabled_features=*/{network::features::kSharedStorageAPI,
-                            blink::features::kFencedFrames},
-      /*disabled_features=*/{});
-
-  // Create and start a simulated `NavigationRequest` for the main frame.
-  GURL main_url = GURL("https://main.com");
-  auto main_navigation =
-      NavigationSimulatorImpl::CreateBrowserInitiated(main_url, contents());
-  main_navigation->Start();
-  main_navigation->ReadyToCommit();
-
-  // Verify that the main frame's `NavigationRequest` will not be
-  // SharedStorageWritable.
-  ASSERT_TRUE(main_navigation->GetNavigationHandle());
-  EXPECT_FALSE(main_navigation->GetNavigationHandle()
-                   ->shared_storage_writable_eligible());
-
-  // Commit the navigation.
-  main_navigation->Commit();
-
-  // Append a child frame and set its `shared_storage_writable` attribute to
-  // true.
-  TestRenderFrameHost* child_frame = static_cast<TestRenderFrameHost*>(
-      content::RenderFrameHostTester::For(main_rfh())->AppendChild("child"));
-  blink::mojom::IframeAttributesPtr child_attributes =
-      blink::mojom::IframeAttributes::New();
-  child_attributes->shared_storage_writable_opted_in = true;
-  child_frame->frame_tree_node()->SetAttributes(std::move(child_attributes));
-
-  // Create and start a simulated `NavigationRequest` for the child frame.
-  GURL a_url = GURL("https://a.com");
-  auto child_navigation =
-      NavigationSimulatorImpl::CreateRendererInitiated(a_url, child_frame);
-  child_navigation->Start();
-
-  // Verify that the `NavigationRequest` will be SharedStorageWritable.
-  ASSERT_TRUE(child_navigation->GetNavigationHandle());
-  EXPECT_TRUE(child_navigation->GetNavigationHandle()
-                  ->shared_storage_writable_eligible());
-
-  // Commit the navigation.
-  child_navigation->Commit();
-
-  // Append a fenced frame and give it permission to access Shared Storage.
-  TestRenderFrameHost* fenced_frame_root = static_cast<TestRenderFrameHost*>(
-      content::RenderFrameHostTester::For(main_rfh())->AppendFencedFrame());
-  FrameTreeNode* fenced_frame_node =
-      static_cast<RenderFrameHostImpl*>(fenced_frame_root)->frame_tree_node();
-  FencedFrameConfig new_config = FencedFrameConfig(GURL("about:blank"));
-  new_config.AddEffectiveEnabledPermissionForTesting(
-      network::mojom::PermissionsPolicyFeature::kSharedStorage);
-  FencedFrameProperties new_props = FencedFrameProperties(new_config);
-  fenced_frame_node->set_fenced_frame_properties(new_props);
-  fenced_frame_root->ResetPermissionsPolicy({});
-
-  // Append a child frame to the fenced frame root and set its
-  // `shared_storage_writable` attribute to true.
-  TestRenderFrameHost* child_of_fenced_frame =
-      static_cast<TestRenderFrameHost*>(
-          fenced_frame_root->AppendChild("child_of_fenced"));
-  blink::mojom::IframeAttributesPtr child_of_fenced_frame_attributes =
-      blink::mojom::IframeAttributes::New();
-  child_of_fenced_frame_attributes->shared_storage_writable_opted_in = true;
-  child_of_fenced_frame->frame_tree_node()->SetAttributes(
-      std::move(child_of_fenced_frame_attributes));
-
-  // Create and start a simulated `NavigationRequest` for the child frame.
-  GURL b_url = GURL("https://b.com");
-  auto child_of_fenced_frame_navigation =
-      NavigationSimulatorImpl::CreateRendererInitiated(b_url,
-                                                       child_of_fenced_frame);
-  child_of_fenced_frame_navigation->Start();
-
-  // Verify that the `NavigationRequest` will be SharedStorageWritable.
-  ASSERT_TRUE(child_of_fenced_frame_navigation->GetNavigationHandle());
-  EXPECT_TRUE(child_of_fenced_frame_navigation->GetNavigationHandle()
-                  ->shared_storage_writable_eligible());
-
-  // Commit the navigation.
-  child_of_fenced_frame_navigation->Commit();
-}
-
 namespace {
 
 // Helper throttle which checks that it can access NavigationHandle's
@@ -728,12 +747,14 @@ TEST_F(NavigationRequestTest, PolicyContainerInheritance) {
         NavigationSimulatorImpl::CreateRendererInitiated(kUrl, child_frame);
     static_cast<blink::mojom::PolicyContainerHost*>(
         child_frame->policy_container_host())
-        ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kAlways);
+        ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kAlways,
+                            blink::InitiatorStateToken());
     navigation->SetInitiatorFrame(child_frame);
     navigation->Start();
     static_cast<blink::mojom::PolicyContainerHost*>(
         child_frame->policy_container_host())
-        ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kNever);
+        ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kNever,
+                            blink::InitiatorStateToken());
     navigation->Commit();
     EXPECT_EQ(
         test.expect_inherit ? network::mojom::ReferrerPolicy::kAlways
@@ -790,6 +811,28 @@ TEST_F(NavigationRequestTest, NoDnsAliases) {
 
   // Verify that there are no aliases in the NavigationRequest.
   EXPECT_TRUE(navigation->GetNavigationHandle()->GetDnsAliases().empty());
+}
+
+TEST_F(NavigationRequestTest, DeviceBoundSessionUsage) {
+  const GURL kUrl = GURL("http://chromium.org");
+  auto navigation =
+      NavigationSimulatorImpl::CreateRendererInitiated(kUrl, main_rfh());
+  navigation->set_response_postprocess_hook(
+      base::BindRepeating([](network::mojom::URLResponseHead& response) {
+        response.device_bound_session_usage =
+            network::mojom::DeviceBoundSessionUsage::kDeferred;
+      }));
+
+  // Start the navigation. Before response headers are received, usage is
+  // unknown.
+  navigation->Start();
+  EXPECT_EQ(network::mojom::DeviceBoundSessionUsage::kUnknown,
+            navigation->GetNavigationHandle()->GetDeviceBoundSessionUsage());
+
+  // Ready to commit receives the response head.
+  navigation->ReadyToCommit();
+  EXPECT_EQ(network::mojom::DeviceBoundSessionUsage::kDeferred,
+            navigation->GetNavigationHandle()->GetDeviceBoundSessionUsage());
 }
 
 TEST_F(NavigationRequestTest, ProcessSelectionUserDataIsAvailableFromUrlInfo) {
@@ -895,8 +938,9 @@ TEST_F(NavigationRequestTest, SanitizeRedirectsForCommit) {
 
   NavigationRequest* request =
       NavigationRequest::From(navigation->GetNavigationHandle());
+  auto common_params = request->common_params().Clone();
   auto commit_params = request->commit_params().Clone();
-  request->SanitizeRedirectsForCommit(commit_params);
+  request->SanitizeRedirectsForCommit(common_params, commit_params);
 
   // redirect_params contains entries for B, C, and D, but not the starting URL.
   // Ensure that the full URL for D is preserved.
@@ -961,9 +1005,10 @@ TEST_F(NavigationRequestTest, SanitizeRedirectsForCommitRelativeLocation) {
 
   NavigationRequest* request =
       NavigationRequest::From(navigation->GetNavigationHandle());
+  auto common_params = request->common_params().Clone();
   auto commit_params = request->commit_params().Clone();
 
-  request->SanitizeRedirectsForCommit(commit_params);
+  request->SanitizeRedirectsForCommit(common_params, commit_params);
 
   EXPECT_EQ(4u, commit_params->redirect_params.size());
 
@@ -1039,9 +1084,10 @@ TEST_F(NavigationRequestTest, SanitizeRedirectsForCommitNonStandardRelative) {
 
   NavigationRequest* request =
       NavigationRequest::From(navigation->GetNavigationHandle());
+  auto common_params = request->common_params().Clone();
   auto commit_params = request->commit_params().Clone();
 
-  request->SanitizeRedirectsForCommit(commit_params);
+  request->SanitizeRedirectsForCommit(common_params, commit_params);
 
   EXPECT_EQ(3u, commit_params->redirect_params.size());
 
@@ -1098,9 +1144,10 @@ TEST_F(NavigationRequestTest, SanitizeRedirectsForCommitHostlessNonStandard) {
 
   NavigationRequest* request =
       NavigationRequest::From(navigation->GetNavigationHandle());
+  auto common_params = request->common_params().Clone();
   auto commit_params = request->commit_params().Clone();
 
-  request->SanitizeRedirectsForCommit(commit_params);
+  request->SanitizeRedirectsForCommit(common_params, commit_params);
 
   EXPECT_EQ(2u, commit_params->redirect_params.size());
 
@@ -1163,6 +1210,290 @@ TEST_F(NavigationRequestTest, SanitizeRedirectsForCommitErrorPage) {
   // kSanitizeOriginalUrlDuringNavigation is enabled.
   EXPECT_EQ(GURL("https://a.com/"), commit_params.original_url);
   EXPECT_EQ(start_url, request->original_url());
+}
+
+// Helper class that turns off subframe error page isolation. Used for tests
+// that rely on subframe error pages staying in the current process rather than
+// going into an isolated error process.
+class NavigationRequestWithoutSubframeErrorPageIsolationTest
+    : public NavigationRequestTest {
+ public:
+  NavigationRequestWithoutSubframeErrorPageIsolationTest() = default;
+
+  void SetUp() override {
+    NavigationRequestTest::SetUp();
+    browser_client_ =
+        std::make_unique<NoSubframeErrorPageIsolationContentBrowserClient>();
+    old_client_ = SetBrowserClientForTesting(browser_client_.get());
+  }
+
+  void TearDown() override {
+    SetBrowserClientForTesting(old_client_);
+    browser_client_.reset();
+    NavigationRequestTest::TearDown();
+  }
+
+ private:
+  class NoSubframeErrorPageIsolationContentBrowserClient
+      : public TestContentBrowserClient {
+   public:
+    NoSubframeErrorPageIsolationContentBrowserClient() = default;
+    bool ShouldIsolateErrorPage(bool in_main_frame) override {
+      if (!in_main_frame) {
+        return false;
+      }
+      return TestContentBrowserClient::ShouldIsolateErrorPage(in_main_frame);
+    }
+  };
+
+  std::unique_ptr<NoSubframeErrorPageIsolationContentBrowserClient>
+      browser_client_;
+  raw_ptr<ContentBrowserClient> old_client_ = nullptr;
+};
+
+// Test that when a redirected subframe navigation is blocked and the resulting
+// error page commits in the initiator's process, the final URL is reduced to
+// its origin in the parameters sent to the renderer. See crbug.com/517156678.
+TEST_F(NavigationRequestWithoutSubframeErrorPageIsolationTest,
+       SanitizeRedirectsForCommitErrorPageInCurrentProcess) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{features::kSanitizeFailedSubframeNavigationUrls,
+                            features::kSanitizeLocationHeadersDuringNavigation},
+      /*disabled_features=*/{});
+
+  // Commit an initial page so the subframe has a parent document.
+  NavigationSimulator::NavigateAndCommitFromDocument(GURL("https://a.com/"),
+                                                     main_test_rfh());
+  auto* child_frame = static_cast<TestRenderFrameHost*>(
+      content::RenderFrameHostTester::For(main_rfh())->AppendChild("child"));
+
+  const GURL start_url("https://b.com/start?param=1");
+  const GURL final_url("https://c.com/path?param=2");
+  std::unique_ptr<NavigationSimulator> navigation =
+      NavigationSimulator::CreateRendererInitiated(start_url, child_frame);
+  navigation->Start();
+
+  auto headers =
+      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 302 Found");
+  headers->SetHeader("Location", "https://c.com/path?param=2");
+  navigation->SetRedirectHeaders(headers);
+
+  navigation->Redirect(final_url);
+  navigation->Fail(net::ERR_BLOCKED_BY_CLIENT);
+
+  NavigationRequest* request =
+      NavigationRequest::From(navigation->GetNavigationHandle());
+  ASSERT_EQ(ErrorPageProcess::kCurrentProcess,
+            request->ComputeErrorPageProcess());
+
+  // The error page commits in the initiator's process, so the final URL (which
+  // is the post-redirect target) should be reduced to its origin in both the
+  // common and commit params.
+  EXPECT_EQ(GURL("https://c.com/"), request->common_params().url);
+  ASSERT_EQ(1u, request->commit_params().redirect_params.size());
+  EXPECT_EQ(GURL("https://c.com/"),
+            request->commit_params().redirect_params[0]->redirect_info.new_url);
+  ASSERT_EQ(1u, request->commit_params().redirects.size());
+  EXPECT_EQ(GURL("https://b.com/"), request->commit_params().redirects[0]);
+
+  if (base::FeatureList::IsEnabled(
+          features::kSanitizeLocationHeadersDuringNavigation)) {
+    size_t iter = 0;
+    std::optional<std::string_view> location =
+        request->commit_params()
+            .redirect_params[0]
+            ->response_head->headers->EnumerateHeader(&iter, "Location");
+    ASSERT_TRUE(location.has_value());
+    EXPECT_EQ("https://c.com/", location.value());
+  }
+}
+
+TEST_F(
+    NavigationRequestWithoutSubframeErrorPageIsolationTest,
+    SanitizeRedirectsForCommitErrorPageInCurrentProcess_FinalURLFeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{features::kSanitizeLocationHeadersDuringNavigation},
+      /*disabled_features=*/{features::kSanitizeFailedSubframeNavigationUrls});
+
+  // Commit an initial page so the subframe has a parent document.
+  NavigationSimulator::NavigateAndCommitFromDocument(GURL("https://a.com/"),
+                                                     main_test_rfh());
+  auto* child_frame = static_cast<TestRenderFrameHost*>(
+      content::RenderFrameHostTester::For(main_rfh())->AppendChild("child"));
+
+  const GURL start_url("https://b.com/start?param=1");
+  const GURL final_url("https://c.com/path?param=2");
+  std::unique_ptr<NavigationSimulator> navigation =
+      NavigationSimulator::CreateRendererInitiated(start_url, child_frame);
+  navigation->Start();
+
+  auto headers =
+      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 302 Found");
+  headers->SetHeader("Location", "https://c.com/path?param=2");
+  navigation->SetRedirectHeaders(headers);
+
+  navigation->Redirect(final_url);
+  navigation->Fail(net::ERR_BLOCKED_BY_CLIENT);
+
+  NavigationRequest* request =
+      NavigationRequest::From(navigation->GetNavigationHandle());
+  ASSERT_EQ(ErrorPageProcess::kCurrentProcess,
+            request->ComputeErrorPageProcess());
+
+  // The feature is disabled, so the final URL should NOT be reduced to its
+  // origin.
+  EXPECT_EQ(final_url, request->common_params().url);
+  ASSERT_EQ(1u, request->commit_params().redirect_params.size());
+  EXPECT_EQ(final_url,
+            request->commit_params().redirect_params[0]->redirect_info.new_url);
+  ASSERT_EQ(1u, request->commit_params().redirects.size());
+  EXPECT_EQ(GURL("https://b.com/"), request->commit_params().redirects[0]);
+
+  // Even if kSanitizeLocationHeadersDuringNavigation is enabled, it should not
+  // sanitize the Location header because sanitize_final_url is false (due to
+  // the disabled feature flag), which makes it use the final URL's origin
+  // (c.com) as target_commit_origin, which is same-origin with the redirect
+  // target (c.com).
+  if (base::FeatureList::IsEnabled(
+          features::kSanitizeLocationHeadersDuringNavigation)) {
+    size_t iter = 0;
+    std::optional<std::string_view> location =
+        request->commit_params()
+            .redirect_params[0]
+            ->response_head->headers->EnumerateHeader(&iter, "Location");
+    ASSERT_TRUE(location.has_value());
+    EXPECT_EQ("https://c.com/path?param=2", location.value());
+  }
+}
+
+TEST_F(NavigationRequestWithoutSubframeErrorPageIsolationTest,
+       DontSanitizeRedirectsForCommitErrorPageInCurrentProcessSameOrigin) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{features::kSanitizeFailedSubframeNavigationUrls,
+                            features::kSanitizeLocationHeadersDuringNavigation},
+      /*disabled_features=*/{});
+
+  // Commit an initial page so the subframe has a parent document.
+  NavigationSimulator::NavigateAndCommitFromDocument(GURL("https://c.com/"),
+                                                     main_test_rfh());
+  auto* child_frame = static_cast<TestRenderFrameHost*>(
+      content::RenderFrameHostTester::For(main_rfh())->AppendChild("child"));
+
+  const GURL start_url("https://b.com/start?param=1");
+  const GURL final_url("https://c.com/path?param=2");
+  std::unique_ptr<NavigationSimulator> navigation =
+      NavigationSimulator::CreateRendererInitiated(start_url, child_frame);
+  navigation->Start();
+
+  auto headers =
+      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 302 Found");
+  headers->SetHeader("Location", "https://c.com/path?param=2");
+  navigation->SetRedirectHeaders(headers);
+
+  navigation->Redirect(final_url);
+  navigation->Fail(net::ERR_BLOCKED_BY_CLIENT);
+
+  NavigationRequest* request =
+      NavigationRequest::From(navigation->GetNavigationHandle());
+  ASSERT_EQ(ErrorPageProcess::kCurrentProcess,
+            request->ComputeErrorPageProcess());
+
+  // The final URL is same-origin with the receiving process (c.com), so it
+  // should NOT be reduced to its origin.
+  EXPECT_EQ(final_url, request->common_params().url);
+  ASSERT_EQ(1u, request->commit_params().redirect_params.size());
+  EXPECT_EQ(final_url,
+            request->commit_params().redirect_params[0]->redirect_info.new_url);
+  ASSERT_EQ(1u, request->commit_params().redirects.size());
+  EXPECT_EQ(GURL("https://b.com/"), request->commit_params().redirects[0]);
+
+  if (base::FeatureList::IsEnabled(
+          features::kSanitizeLocationHeadersDuringNavigation)) {
+    size_t iter = 0;
+    std::optional<std::string_view> location =
+        request->commit_params()
+            .redirect_params[0]
+            ->response_head->headers->EnumerateHeader(&iter, "Location");
+    ASSERT_TRUE(location.has_value());
+    EXPECT_EQ("https://c.com/path?param=2", location.value());
+  }
+}
+
+// Test that when a subframe navigation with multiple redirects (same-origin to
+// each other, but cross-origin to the main page) is blocked and commits an
+// error page in the initiator's process, all redirect URLs are reduced to
+// origin.
+TEST_F(
+    NavigationRequestWithoutSubframeErrorPageIsolationTest,
+    SanitizeRedirectsForCommitErrorPageInCurrentProcessMultipleRedirectsSameOriginWithEachOther) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{features::kSanitizeFailedSubframeNavigationUrls,
+                            features::kSanitizeLocationHeadersDuringNavigation},
+      /*disabled_features=*/{});
+
+  // Commit an initial page so the subframe has a parent document (origin A).
+  NavigationSimulator::NavigateAndCommitFromDocument(GURL("https://a.com/"),
+                                                     main_test_rfh());
+  auto* child_frame = static_cast<TestRenderFrameHost*>(
+      content::RenderFrameHostTester::For(main_rfh())->AppendChild("child"));
+
+  const GURL start_url("https://b.com/start?param=1");
+  const GURL url_2("https://b.com/path1?param=2");
+  const GURL final_url("https://b.com/path2?param=3");
+  std::unique_ptr<NavigationSimulator> navigation =
+      NavigationSimulator::CreateRendererInitiated(start_url, child_frame);
+  navigation->Start();
+
+  auto headers1 =
+      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 302 Found");
+  headers1->SetHeader("Location", "https://b.com/path1?param=2");
+  navigation->SetRedirectHeaders(headers1);
+  navigation->Redirect(url_2);
+
+  auto headers2 =
+      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 302 Found");
+  headers2->SetHeader("Location", "https://b.com/path2?param=3");
+  navigation->SetRedirectHeaders(headers2);
+  navigation->Redirect(final_url);
+
+  navigation->Fail(net::ERR_BLOCKED_BY_CLIENT);
+
+  NavigationRequest* request =
+      NavigationRequest::From(navigation->GetNavigationHandle());
+  ASSERT_EQ(ErrorPageProcess::kCurrentProcess,
+            request->ComputeErrorPageProcess());
+
+  // The error page commits in process A (initiator). Both redirect URLs and
+  // their Location headers pointing to origin B should be sanitized to origin.
+  EXPECT_EQ(GURL("https://b.com/"), request->common_params().url);
+  ASSERT_EQ(2u, request->commit_params().redirect_params.size());
+  EXPECT_EQ(GURL("https://b.com/"),
+            request->commit_params().redirect_params[0]->redirect_info.new_url);
+  EXPECT_EQ(GURL("https://b.com/"),
+            request->commit_params().redirect_params[1]->redirect_info.new_url);
+
+  if (base::FeatureList::IsEnabled(
+          features::kSanitizeLocationHeadersDuringNavigation)) {
+    size_t iter = 0;
+    std::optional<std::string_view> location1 =
+        request->commit_params()
+            .redirect_params[0]
+            ->response_head->headers->EnumerateHeader(&iter, "Location");
+    ASSERT_TRUE(location1.has_value());
+    EXPECT_EQ("https://b.com/", location1.value());
+
+    iter = 0;
+    std::optional<std::string_view> location2 =
+        request->commit_params()
+            .redirect_params[1]
+            ->response_head->headers->EnumerateHeader(&iter, "Location");
+    ASSERT_TRUE(location2.has_value());
+    EXPECT_EQ("https://b.com/", location2.value());
+  }
 }
 
 TEST_F(NavigationRequestTest, AbortsDeletedNavigationInProgress) {
@@ -1776,5 +2107,284 @@ TEST_F(NavigationRequestTest, GetRequestHeadersReflectsLaterModifications) {
   // still in scope.
   navigation->Commit();
 }
+
+#if BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
+TEST_F(NavigationRequestTest,
+       GetNetworkIsolationKeyForRendererAccessibleHttpCache) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      net::features::kRendererAccessibleHttpCache);
+
+  const GURL kUrl("https://example.com");
+  auto navigation =
+      NavigationSimulatorImpl::CreateRendererInitiated(kUrl, main_rfh());
+  navigation->Start();
+  NavigationRequest* request =
+      NavigationRequest::From(navigation->GetNavigationHandle());
+
+  auto* storage_partition = static_cast<StoragePartitionImpl*>(
+      browser_context()->GetDefaultStoragePartition());
+  storage_partition->set_supports_renderer_accessible_http_cache_for_testing(
+      true);
+  const SiteInfo original_site_info = request->site_info_for_testing();
+  const net::IsolationInfo original_isolation_info =
+      request->GetIsolationInfo();
+
+  const url::Origin kOrigin = url::Origin::Create(kUrl);
+  const net::IsolationInfo kValidIsolationInfo = net::IsolationInfo::Create(
+      net::IsolationInfo::RequestType::kMainFrame, kOrigin, kOrigin,
+      net::SiteForCookies::FromOrigin(kOrigin));
+  ASSERT_FALSE(kValidIsolationInfo.network_isolation_key().IsTransient());
+
+  struct SiteInfoParams {
+    bool is_sandboxed = false;
+    bool is_guest = false;
+    bool is_jit_disabled = false;
+    bool are_v8_optimizations_disabled = false;
+    bool is_fenced = false;
+    std::optional<StoragePartitionConfig> partition_config;
+    std::optional<WebExposedIsolationInfo> web_exposed_isolation_info;
+    std::optional<EmbedderIsolationInfo> embedder_isolation_info;
+    std::optional<AgentClusterKey> agent_cluster_key;
+  };
+  auto create_site_info = [&](const SiteInfoParams& params = {}) {
+    return SiteInfo(
+        params.agent_cluster_key.value_or(AgentClusterKey::CreateSiteKeyed(
+            kUrl, AgentClusterKey::OACStatus::kSiteKeyedByDefault)),
+        kUrl, params.is_sandboxed,
+        /*unique_sandbox_id=*/UrlInfo::kInvalidUniqueSandboxId,
+        params.partition_config.value_or(
+            StoragePartitionConfig::CreateDefault(browser_context())),
+        params.web_exposed_isolation_info.value_or(
+            WebExposedIsolationInfo::CreateNonIsolated()),
+        WebExposedIsolationLevel::kNotIsolated, params.is_guest,
+        /*does_site_request_dedicated_process_for_coop=*/false,
+        params.is_jit_disabled, params.are_v8_optimizations_disabled,
+        params.is_fenced,
+        /*browser_context_id=*/base::UnguessableToken(),
+        params.embedder_isolation_info.value_or(
+            EmbedderIsolationInfo::CreateNone()),
+        SiteShard::kDefault);
+  };
+
+  request->set_isolation_info_for_testing(kValidIsolationInfo);
+
+  // 1. Success case: All requirements satisfied.
+  request->set_site_info_for_testing(create_site_info());
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            kValidIsolationInfo.network_isolation_key());
+
+  // 2. StoragePartition does not support shared cache.
+  storage_partition->set_supports_renderer_accessible_http_cache_for_testing(
+      false);
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+  storage_partition->set_supports_renderer_accessible_http_cache_for_testing(
+      true);
+
+  // 3. StoragePartitionConfig is in-memory.
+  TestBrowserContext otr_browser_context;
+  otr_browser_context.set_is_off_the_record(true);
+  const auto in_memory_config =
+      StoragePartitionConfig::CreateDefault(&otr_browser_context);
+  auto* in_memory_storage_partition = static_cast<StoragePartitionImpl*>(
+      browser_context()->GetStoragePartition(in_memory_config));
+  in_memory_storage_partition
+      ->set_supports_renderer_accessible_http_cache_for_testing(true);
+  request->set_site_info_for_testing(
+      create_site_info({.partition_config = in_memory_config}));
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  // 4. Sandboxed.
+  request->set_site_info_for_testing(create_site_info({.is_sandboxed = true}));
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  // 5. Web-exposed isolated (cross-origin isolated).
+  request->set_site_info_for_testing(
+      create_site_info({.web_exposed_isolation_info =
+                            WebExposedIsolationInfo::CreateIsolated(kOrigin)}));
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  // 6. Guest.
+  request->set_site_info_for_testing(create_site_info({.is_guest = true}));
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  // 7. JIT disabled.
+  request->set_site_info_for_testing(
+      create_site_info({.is_jit_disabled = true}));
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  // 8. V8 optimizations disabled.
+  request->set_site_info_for_testing(
+      create_site_info({.are_v8_optimizations_disabled = true}));
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  // 9. PDF.
+  request->set_site_info_for_testing(create_site_info(
+      {.embedder_isolation_info = EmbedderIsolationInfo::CreateForPdf()}));
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  // 10. Fenced frame.
+  request->set_site_info_for_testing(create_site_info({.is_fenced = true}));
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  // 11. StoragePartitionConfig is not default.
+  const auto non_default_config = StoragePartitionConfig::Create(
+      browser_context(), "custom_domain", "custom_name",
+      /*in_memory=*/false);
+  auto* non_default_storage_partition = static_cast<StoragePartitionImpl*>(
+      browser_context()->GetStoragePartition(non_default_config));
+  non_default_storage_partition
+      ->set_supports_renderer_accessible_http_cache_for_testing(true);
+  request->set_site_info_for_testing(
+      create_site_info({.partition_config = non_default_config}));
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  // 12. Origin-keyed AgentClusterKey.
+  request->set_site_info_for_testing(create_site_info(
+      {.agent_cluster_key = AgentClusterKey::CreateOriginKeyed(
+           kOrigin, AgentClusterKey::OACStatus::kOriginKeyedByHeader)}));
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  // 13. CrossOriginIsolationKey in AgentClusterKey.
+  request->set_site_info_for_testing(create_site_info(
+      {.agent_cluster_key = AgentClusterKey::CreateWithCrossOriginIsolationKey(
+           kOrigin,
+           AgentClusterKey::CrossOriginIsolationKey(
+               kOrigin, blink::mojom::CrossOriginIsolationMode::kConcrete,
+               /*cross_origin_isolated_through_dip=*/false),
+           AgentClusterKey::OACStatus::kSiteKeyedByDefault)}));
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  // 14. Transient NetworkIsolationKey.
+  request->set_site_info_for_testing(create_site_info());
+  request->set_isolation_info_for_testing(
+      net::IsolationInfo::CreateTransient(/*nonce=*/std::nullopt));
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  request->set_site_info_for_testing(original_site_info);
+  request->set_isolation_info_for_testing(original_isolation_info);
+}
+
+TEST_F(NavigationRequestTest,
+       GetNetworkIsolationKeyForRendererAccessibleHttpCacheInMemoryPartition) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      net::features::kRendererAccessibleHttpCache);
+
+  const GURL kUrl("https://example.com");
+  auto navigation =
+      NavigationSimulatorImpl::CreateRendererInitiated(kUrl, main_rfh());
+  navigation->Start();
+  NavigationRequest* request =
+      NavigationRequest::From(navigation->GetNavigationHandle());
+
+  const SiteInfo original_site_info = request->site_info_for_testing();
+  const net::IsolationInfo original_isolation_info =
+      request->GetIsolationInfo();
+
+  TestBrowserContext otr_browser_context;
+  otr_browser_context.set_is_off_the_record(true);
+  const auto in_memory_config =
+      StoragePartitionConfig::CreateDefault(&otr_browser_context);
+  auto* in_memory_storage_partition = static_cast<StoragePartitionImpl*>(
+      browser_context()->GetStoragePartition(in_memory_config));
+  // Set supports_renderer_accessible_http_cache to true on the in-memory
+  // StoragePartition to verify that in_memory() check explicitly rejects it.
+  in_memory_storage_partition
+      ->set_supports_renderer_accessible_http_cache_for_testing(true);
+
+  const url::Origin kOrigin = url::Origin::Create(kUrl);
+  const net::IsolationInfo kValidIsolationInfo = net::IsolationInfo::Create(
+      net::IsolationInfo::RequestType::kMainFrame, kOrigin, kOrigin,
+      net::SiteForCookies::FromOrigin(kOrigin));
+  request->set_isolation_info_for_testing(kValidIsolationInfo);
+
+  SiteInfo in_memory_site_info(
+      AgentClusterKey::CreateSiteKeyed(
+          kUrl, AgentClusterKey::OACStatus::kSiteKeyedByDefault),
+      kUrl, /*is_sandboxed=*/false,
+      /*unique_sandbox_id=*/UrlInfo::kInvalidUniqueSandboxId, in_memory_config,
+      WebExposedIsolationInfo::CreateNonIsolated(),
+      WebExposedIsolationLevel::kNotIsolated, /*is_guest=*/false,
+      /*does_site_request_dedicated_process_for_coop=*/false,
+      /*is_jit_disabled=*/false, /*are_v8_optimizations_disabled=*/false,
+      /*is_fenced=*/false, /*browser_context_id=*/base::UnguessableToken(),
+      EmbedderIsolationInfo::CreateNone(), SiteShard::kDefault);
+  request->set_site_info_for_testing(in_memory_site_info);
+
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  request->set_site_info_for_testing(original_site_info);
+  request->set_isolation_info_for_testing(original_isolation_info);
+}
+
+TEST_F(
+    NavigationRequestTest,
+    GetNetworkIsolationKeyForRendererAccessibleHttpCacheNonDefaultPartition) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      net::features::kRendererAccessibleHttpCache);
+
+  const GURL kUrl("https://example.com");
+  auto navigation =
+      NavigationSimulatorImpl::CreateRendererInitiated(kUrl, main_rfh());
+  navigation->Start();
+  NavigationRequest* request =
+      NavigationRequest::From(navigation->GetNavigationHandle());
+
+  const SiteInfo original_site_info = request->site_info_for_testing();
+  const net::IsolationInfo original_isolation_info =
+      request->GetIsolationInfo();
+
+  const auto non_default_config = StoragePartitionConfig::Create(
+      browser_context(), "custom_domain", "custom_name",
+      /*in_memory=*/false);
+  auto* non_default_storage_partition = static_cast<StoragePartitionImpl*>(
+      browser_context()->GetStoragePartition(non_default_config));
+  // Set supports_renderer_accessible_http_cache to true on the non-default
+  // StoragePartition to verify that !is_default() check explicitly rejects it.
+  non_default_storage_partition
+      ->set_supports_renderer_accessible_http_cache_for_testing(true);
+
+  const url::Origin kOrigin = url::Origin::Create(kUrl);
+  const net::IsolationInfo kValidIsolationInfo = net::IsolationInfo::Create(
+      net::IsolationInfo::RequestType::kMainFrame, kOrigin, kOrigin,
+      net::SiteForCookies::FromOrigin(kOrigin));
+  request->set_isolation_info_for_testing(kValidIsolationInfo);
+
+  SiteInfo non_default_site_info(
+      AgentClusterKey::CreateSiteKeyed(
+          kUrl, AgentClusterKey::OACStatus::kSiteKeyedByDefault),
+      kUrl, /*is_sandboxed=*/false,
+      /*unique_sandbox_id=*/UrlInfo::kInvalidUniqueSandboxId,
+      non_default_config, WebExposedIsolationInfo::CreateNonIsolated(),
+      WebExposedIsolationLevel::kNotIsolated, /*is_guest=*/false,
+      /*does_site_request_dedicated_process_for_coop=*/false,
+      /*is_jit_disabled=*/false, /*are_v8_optimizations_disabled=*/false,
+      /*is_fenced=*/false, /*browser_context_id=*/base::UnguessableToken(),
+      EmbedderIsolationInfo::CreateNone(), SiteShard::kDefault);
+  request->set_site_info_for_testing(non_default_site_info);
+
+  EXPECT_EQ(request->GetNetworkIsolationKeyForRendererAccessibleHttpCache(),
+            std::nullopt);
+
+  request->set_site_info_for_testing(original_site_info);
+  request->set_isolation_info_for_testing(original_isolation_info);
+}
+#endif  // ENABLE_DISK_CACHE_SQL_BACKEND
 
 }  // namespace content

@@ -58,6 +58,7 @@ void WebEngineIntegrationTestBase::SetUp() {
   CHECK(embedded_test_server_.Start());
 }
 
+
 fuchsia::web::NavigationControllerPtr
 WebEngineIntegrationTestBase::CreateNavigationController() {
   CHECK(frame_);

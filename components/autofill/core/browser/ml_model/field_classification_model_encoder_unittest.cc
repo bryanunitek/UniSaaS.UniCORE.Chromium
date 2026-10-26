@@ -14,8 +14,8 @@
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/ml_model/field_classification_model_encoder_test_api.h"
-#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_util.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom.h"
 #include "components/optimization_guide/proto/autofill_field_classification_model_metadata.pb.h"
@@ -30,9 +30,11 @@ using testing::TestWithParam;
 
 namespace {
 // Representation of an empty string.
-constexpr TokenId kEmpty = TokenId(0);
+constexpr TokenId kEmpty =
+    FieldClassificationModelEncoderDictionary::kPaddingTokenId;
 // Representation of a token that is not in the dictionary.
-constexpr TokenId kUnknown = TokenId(1);
+constexpr TokenId kUnknown =
+    FieldClassificationModelEncoderDictionary::kUnknownTokenId;
 // Representation of the token "telefone" (may change if the test model
 // changes).
 constexpr TokenId kTelefone = TokenId(10);
@@ -106,19 +108,19 @@ class FieldClassificationModelEncoderTest : public testing::Test {
 
 TEST_F(FieldClassificationModelEncoderTest, TokensMappedCorrectly) {
   FieldClassificationModelEncoder encoder(CreateBasicEncoder());
-  EXPECT_EQ(encoder.TokenToId(u"number"), kNumber);
+  EXPECT_EQ(encoder.TokenToId("number"), kNumber);
 }
 
 // Tests that words out of vocabulary return 1.
 TEST_F(FieldClassificationModelEncoderTest, WordOutOfVocab) {
   FieldClassificationModelEncoder encoder(CreateBasicEncoder());
-  EXPECT_EQ(encoder.TokenToId(u"OutOfVocab"), kUnknown);
+  EXPECT_EQ(encoder.TokenToId("OutOfVocab"), kUnknown);
 }
 
 // Tests that empty strings return 0 for padding.
 TEST_F(FieldClassificationModelEncoderTest, EmptyToken) {
   FieldClassificationModelEncoder encoder(CreateBasicEncoder());
-  EXPECT_EQ(encoder.TokenToId(u""), kEmpty);
+  EXPECT_EQ(encoder.TokenToId(""), kEmpty);
 }
 
 TEST_F(FieldClassificationModelEncoderTest, InputEncodedCorrectly) {

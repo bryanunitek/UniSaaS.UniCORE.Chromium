@@ -2,42 +2,68 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/memory/weak_ptr.h"
 #include "base/path_service.h"
+#include "base/strings/string_util.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/plugins/plugin_utils.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension_constants.h"
+#include "chrome/common/pref_names.h"
+#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/download/public/common/download_item.h"
 #include "components/javascript_dialogs/app_modal_dialog_controller.h"
 #include "components/javascript_dialogs/app_modal_dialog_view.h"
+#include "components/prefs/pref_service.h"
 #include "components/version_info/channel.h"
+#include "content/public/browser/download_manager.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/download_test_observer.h"
+#include "content/public/test/hit_test_region_observer.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/mime_handler/mime_handler_registry.h"
+#include "extensions/browser/mime_handler/mime_handler_stream_delegate.h"
 #include "extensions/browser/mime_handler/mime_handler_stream_manager.h"
+#include "extensions/browser/mime_handler/stream_container.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_features.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/manifest_handlers/mime_types_handler.h"
 #include "extensions/test/result_catcher.h"
+#include "extensions/test/test_extension_dir.h"
 #include "net/dns/mock_host_resolver.h"
+#include "net/http/http_status_code.h"
+#include "net/test/embedded_test_server/http_request.h"
+#include "net/test/embedded_test_server/http_response.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_features.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/gfx/geometry/rect.h"
 #include "url/url_constants.h"
 
 namespace extensions {
@@ -47,6 +73,40 @@ namespace {
 constexpr char kPdfMimeType[] = "application/pdf";
 constexpr char kTestExtensionDir[] = "generic_mime_handler";
 constexpr char kTestPdfPath[] = "/test.pdf";
+constexpr char kIframeHostPath[] = "/iframe_host.html";
+constexpr char kHeaderProbePdfPath[] = "/header-probe.pdf";
+constexpr char kAuthTokenHeaderName[] = "X-Auth-Token";
+
+// A strict policy whose `default-src 'none'` fallback would block the
+// embedder document's inline styles absent the plugin-intercepted exemption.
+constexpr char kStrictCspHeader[] =
+    "default-src 'none'; img-src 'self'; media-src 'self'";
+
+// Serves `pdf_body` at kHeaderProbePdfPath with a mix of response headers:
+// CORS-safelisted ones (Content-Type via set_content_type, plus Cache-Control
+// and Last-Modified) that a generic handler must still see, and a
+// non-safelisted X-Auth-Token that must be filtered out. `pdf_body` is the
+// real test.pdf, so the response body is a valid document rather than an
+// ad-hoc literal (the test inspects only headers, so its exact bytes do not
+// matter, but a valid PDF keeps the fixture honest).
+std::unique_ptr<net::test_server::HttpResponse>
+HandlePdfWithExtraResponseHeaders(
+    const std::string& pdf_body,
+    const net::test_server::HttpRequest& request) {
+  // RegisterRequestHandler invokes every registered handler in turn; returning
+  // nullptr for any other path lets the static-file handlers serve it.
+  if (request.relative_url != kHeaderProbePdfPath) {
+    return nullptr;
+  }
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_OK);
+  response->set_content_type(kPdfMimeType);
+  response->AddCustomHeader("Cache-Control", "max-age=0");
+  response->AddCustomHeader("Last-Modified", "Wed, 21 Oct 2026 07:28:00 GMT");
+  response->AddCustomHeader(kAuthTokenHeaderName, "s3cr3t");
+  response->set_content(pdf_body);
+  return response;
+}
 
 }  // namespace
 
@@ -71,7 +131,28 @@ class GenericMimeHandlerBrowserTest : public ExtensionApiTest {
         test_data_dir.AppendASCII("pdf"));
     embedded_test_server()->ServeFilesFromDirectory(
         test_data_dir_.AppendASCII(kTestExtensionDir));
+    // Reuse the shared test PDF as the probe response body, so it is a real,
+    // valid document.
+    std::string pdf_body;
+    {
+      base::ScopedAllowBlockingForTesting allow_blocking;
+      ASSERT_TRUE(base::ReadFileToString(
+          test_data_dir_.AppendASCII(kTestExtensionDir).AppendASCII("test.pdf"),
+          &pdf_body));
+    }
+    embedded_test_server()->RegisterRequestHandler(base::BindRepeating(
+        &HandlePdfWithExtraResponseHeaders, std::move(pdf_body)));
     ASSERT_TRUE(StartEmbeddedTestServer());
+  }
+
+  // Returns the highest-precedence candidate for `mime_type`, or an empty
+  // id when the registry holds none.
+  ExtensionId GetHandlerForMimeType(const std::string& mime_type) {
+    MimeHandlerRegistry* registry = MimeHandlerRegistry::Get(profile());
+    CHECK(registry);
+    const std::vector<ExtensionId> handlers =
+        registry->GetHandlersForMimeType(mime_type, profile());
+    return handlers.empty() ? ExtensionId() : handlers.front();
   }
 
   // Returns the RFH identified by `MimeHandlerStreamManager` as the MIME
@@ -92,16 +173,15 @@ class GenericMimeHandlerBrowserTest : public ExtensionApiTest {
     return extension_frame;
   }
 
-  // Loads the test extension, navigates to /test.pdf, blocks until
-  // handler.js calls `chrome.test.succeed()`, and returns the extension
-  // RFH (nullptr on failure). Also verifies the architectural invariant
-  // that the extension frame is a cross-origin iframe of a top-level
-  // embedder frame -- the scenario these tests target.
-  content::RenderFrameHost* LoadHandlerAndGetExtensionFrame() {
+  // Loads the test extension, navigates to `url` (a resource the handler
+  // intercepts), blocks until handler.js calls `chrome.test.succeed()`, and
+  // returns the extension RFH (nullptr on failure). Also verifies the
+  // architectural invariant that the extension frame is a cross-origin
+  // iframe of a top-level embedder frame -- the scenario these tests target.
+  content::RenderFrameHost* LoadHandlerAndGetExtensionFrame(const GURL& url) {
     EXPECT_TRUE(
         LoadExtension(test_data_dir_.AppendASCII("generic_mime_handler")));
-    EXPECT_TRUE(OpenTestURL(embedded_test_server()->GetURL("/test.pdf"),
-                            /*open_in_incognito=*/false));
+    EXPECT_TRUE(OpenTestURL(url, /*open_in_incognito=*/false));
     content::RenderFrameHost* extension_frame = FindMimeHandlerExtensionFrame();
     if (!extension_frame) {
       return nullptr;
@@ -113,6 +193,11 @@ class GenericMimeHandlerBrowserTest : public ExtensionApiTest {
     EXPECT_NE(extension_frame->GetLastCommittedOrigin(),
               embedder_frame->GetLastCommittedOrigin());
     return extension_frame;
+  }
+
+  content::RenderFrameHost* LoadHandlerAndGetExtensionFrame() {
+    return LoadHandlerAndGetExtensionFrame(
+        embedded_test_server()->GetURL(kTestPdfPath));
   }
 
  private:
@@ -130,11 +215,9 @@ IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest, GetStreamInfo) {
   // Verify the extension registered as a generic MIME handler.
   const MimeTypesHandler* handler = MimeTypesHandler::Get(*extension);
   ASSERT_TRUE(handler);
-  auto* registry = MimeHandlerRegistry::Get(profile());
-  ASSERT_TRUE(registry);
   ASSERT_FALSE(handler->IsPluginExtension());
   ASSERT_TRUE(handler->CanEmbedMimeType(kPdfMimeType));
-  ASSERT_EQ(extension->id(), registry->GetHandlerForMimeType(kPdfMimeType));
+  ASSERT_EQ(extension->id(), GetHandlerForMimeType(kPdfMimeType));
 
   // Set up ResultCatcher before navigation so it catches the extension's
   // chrome.test.succeed() call.
@@ -148,6 +231,149 @@ IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest, GetStreamInfo) {
   // The handler.js in the extension calls chrome.test.succeed() after
   // verifying getStreamInfo fields and fetching the stream data.
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
+}
+
+// A generic (third-party) MIME handler sees exactly the CORS-safelisted
+// response headers fetch() would expose cross-origin, plus Content-Disposition
+// and Accept-Ranges: the safelisted Content-Type / Cache-Control /
+// Last-Modified stay visible, while the custom X-Auth-Token is filtered out.
+// handler.js already asserts mimeType and the %PDF- body on this same
+// navigation, so this test covers only responseHeaders.
+IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
+                       GetStreamInfoFiltersNonSafelistedResponseHeaders) {
+  ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII(kTestExtensionDir)));
+
+  ResultCatcher catcher;
+  ASSERT_TRUE(
+      NavigateToURL(GetActiveWebContents(),
+                    embedded_test_server()->GetURL(kHeaderProbePdfPath)));
+  ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
+
+  content::RenderFrameHost* extension_frame = FindMimeHandlerExtensionFrame();
+  ASSERT_TRUE(extension_frame);
+
+  // The browser must still hold the original response head.
+  auto* manager = mime_handler::MimeHandlerStreamManager::FromWebContents(
+      GetActiveWebContents());
+  ASSERT_TRUE(manager);
+  base::WeakPtr<StreamContainer> stream =
+      manager->GetStreamContainer(extension_frame->GetParent());
+  ASSERT_TRUE(stream);
+  EXPECT_TRUE(
+      stream->response_head()->headers->HasHeader(kAuthTokenHeaderName));
+  EXPECT_EQ(kPdfMimeType, stream->response_head()->mime_type);
+
+  // Whether getStreamInfo()'s responseHeaders contains `name`
+  // (case-insensitive).
+  auto has_header = [&](const char* name) {
+    return content::EvalJs(
+        extension_frame,
+        content::JsReplace(
+            "chrome.mimeHandler.getStreamInfo().then(info =>"
+            "  Object.keys(info.responseHeaders)"
+            "    .some(k => k.toLowerCase() === $1.toLowerCase()))",
+            name));
+  };
+
+  // Every CORS-safelisted response header the server sent must stay visible.
+  // These positive checks are also the vacuity guard: were responseHeaders
+  // ever empty or getStreamInfo() to fail, they would fail here instead of
+  // letting the X-Auth-Token check below pass against an empty object.
+  EXPECT_EQ(true, has_header("Content-Type"));
+  EXPECT_EQ(true, has_header("Cache-Control"));
+  EXPECT_EQ(true, has_header("Last-Modified"));
+
+  // The non-safelisted header must be stripped.
+  EXPECT_EQ(false, has_header("X-Auth-Token"));
+
+  // The handler's stream fetch is restricted the same way.
+  std::vector<std::string> fetch_header_names;
+  for (const base::Value& name :
+       content::EvalJs(extension_frame, "window.streamFetchHeaderNames")
+           .ExtractList()) {
+    fetch_header_names.push_back(base::ToLowerASCII(name.GetString()));
+  }
+  // An empty list would pass the negative checks, so look for a header first.
+  EXPECT_TRUE(std::ranges::contains(fetch_header_names, "content-type"));
+  EXPECT_FALSE(std::ranges::contains(fetch_header_names,
+                                     base::ToLowerASCII(kAuthTokenHeaderName)));
+  std::vector<std::string> disallowed;
+  for (const std::string& name : fetch_header_names) {
+    if (!IsResponseHeaderAllowedForHandler(name)) {
+      disallowed.push_back(name);
+    }
+  }
+  EXPECT_TRUE(disallowed.empty())
+      << "stream fetch exposed " << base::JoinString(disallowed, ", ");
+}
+
+// A PDF served with a strict Content-Security-Policy must still render at
+// full size. The response's CSP applies to the synthetic embedder document;
+// if its inline styles are dropped, the handler iframe collapses to the
+// replaced-element default 300x150 instead of filling the page.
+IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
+                       CSPDoesNotBlockEmbedderStyles) {
+  // The set-header-with-file default handler serves the shared test PDF with
+  // the strict CSP attached.
+  const GURL csp_pdf_url(embedded_test_server()->GetURL(
+      std::string("/set-header-with-file/chrome/test/data/pdf/test.pdf"
+                  "?Content-Security-Policy: ") +
+      kStrictCspHeader));
+  content::RenderFrameHost* extension_frame =
+      LoadHandlerAndGetExtensionFrame(csp_pdf_url);
+  ASSERT_TRUE(extension_frame);
+
+  // Cross-process frame geometry propagates asynchronously from the parent
+  // renderer's layout; wait for it before comparing bounds.
+  content::WaitForHitTestData(extension_frame);
+
+  content::WebContents* web_contents = GetActiveWebContents();
+  const gfx::Rect embedder_rect =
+      web_contents->GetPrimaryMainFrame()->GetView()->GetViewBounds();
+  ASSERT_FALSE(embedder_rect.IsEmpty());
+  EXPECT_EQ(embedder_rect, extension_frame->GetView()->GetViewBounds());
+
+  // Vacuity guard: the site CSP must actually be enforced on the embedder
+  // document. `default-src 'none'` makes `connect-src` fall back to 'none',
+  // so a fetch() from the embedder must be blocked.
+  EXPECT_EQ(false,
+            content::EvalJs(
+                web_contents->GetPrimaryMainFrame(),
+                content::JsReplace("fetch($1).then(() => true, () => false)",
+                                   csp_pdf_url)));
+}
+
+// A blob: PDF's synthetic embedder document inherits its CSP from the
+// creator document rather than from response headers. The inherited
+// style-src 'none' must not break the embedder's inline styles either.
+IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
+                       InheritedCSPDoesNotBlockEmbedderStyles) {
+  ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII(kTestExtensionDir)));
+
+  content::WebContents* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(web_contents, embedded_test_server()->GetURL(
+                                              "/blob_pdf_iframe_csp.html")));
+
+  // Open the blob PDF in an iframe and wait for both the navigation and the
+  // handler's chrome.test.succeed().
+  ResultCatcher catcher;
+  content::TestNavigationObserver navigation_observer(web_contents);
+  ASSERT_TRUE(content::ExecJs(web_contents->GetPrimaryMainFrame(),
+                              "openBlobPdfInIframe()"));
+  navigation_observer.Wait();
+  ASSERT_TRUE(navigation_observer.last_navigation_succeeded());
+  ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
+
+  // The synthetic embedder document committed in the iframe sets margin:0
+  // inline; without the exemption the inherited CSP drops it and the body
+  // regains the default 8px margin.
+  content::RenderFrameHost* embedder_host =
+      content::ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(embedder_host);
+  EXPECT_EQ("0px",
+            content::EvalJs(
+                embedder_host,
+                "getComputedStyle(document.body).getPropertyValue('margin')"));
 }
 
 // Verifies that a generic MIME handler with `can_embed: false` is selected
@@ -179,19 +405,19 @@ IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
   // Before disable: extension is the active handler along both paths.
   auto* registry = MimeHandlerRegistry::Get(profile());
   ASSERT_TRUE(registry);
-  ASSERT_EQ(extension->id(), registry->GetHandlerForMimeType(kPdfMimeType));
+  ASSERT_EQ(extension->id(), GetHandlerForMimeType(kPdfMimeType));
   ASSERT_EQ(extension->id(),
             PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
                                                    /*embedded=*/false));
 
   // Disable for the PDF MIME type.
-  registry->SetEnabledForMimeType(extension->id(), kPdfMimeType, false);
+  registry->SetEnabledForMimeType(extension->id(), kPdfMimeType, false,
+                                  profile());
 
   // Both lookup paths now skip this handler and fall through to the
   // built-in PDF extension, which is always registered for
   // application/pdf in this browsertest profile.
-  EXPECT_EQ(extension_misc::kPdfExtensionId,
-            registry->GetHandlerForMimeType(kPdfMimeType));
+  EXPECT_EQ(extension_misc::kPdfExtensionId, GetHandlerForMimeType(kPdfMimeType));
   EXPECT_EQ(extension_misc::kPdfExtensionId,
             PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
                                                    /*embedded=*/false));
@@ -225,7 +451,7 @@ IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
 
   auto* registry = MimeHandlerRegistry::Get(profile());
   ASSERT_TRUE(registry);
-  ASSERT_EQ(extension->id(), registry->GetHandlerForMimeType(kPdfMimeType));
+  ASSERT_EQ(extension->id(), GetHandlerForMimeType(kPdfMimeType));
 
   // First navigation: /test.pdf?action=disable. handler.js branches
   // to calling chrome.mimeHandler.setMimeHandlerOptions and then
@@ -238,13 +464,13 @@ IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
 
   // JS setMimeHandlerOptions has persisted the pref. Registry now
   // reports the handler disabled for the PDF MIME type.
-  EXPECT_FALSE(registry->IsEnabledForMimeType(extension->id(), kPdfMimeType));
+  EXPECT_FALSE(
+      registry->IsEnabledForMimeType(extension->id(), kPdfMimeType, profile()));
 
   // Both lookup paths now skip this handler and fall through to the
   // built-in PDF extension, which is always registered for
   // application/pdf in this browsertest profile.
-  EXPECT_EQ(extension_misc::kPdfExtensionId,
-            registry->GetHandlerForMimeType(kPdfMimeType));
+  EXPECT_EQ(extension_misc::kPdfExtensionId, GetHandlerForMimeType(kPdfMimeType));
   EXPECT_EQ(extension_misc::kPdfExtensionId,
             PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
                                                    /*embedded=*/false));
@@ -267,6 +493,211 @@ IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
         }
       });
   EXPECT_FALSE(found_extension_frame);
+}
+
+// handler.js turns embedding off through the API. Top-level loads are expected
+// to stay with the extension, and a PDF in an iframe is expected to go to the
+// next handler by precedence.
+IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
+                       DisablingEmbedViaApiKeepsOnlyTopLevelLoads) {
+  const Extension* extension =
+      LoadExtension(test_data_dir_.AppendASCII(kTestExtensionDir));
+  ASSERT_TRUE(extension);
+
+  ResultCatcher catcher;
+  content::WebContents* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(
+      web_contents,
+      embedded_test_server()->GetURL("/test.pdf?action=disable-embedded")));
+  ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
+
+  EXPECT_EQ(extension->id(),
+            PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
+                                                   /*embedded=*/false));
+  EXPECT_EQ(extension_misc::kPdfExtensionId,
+            PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
+                                                   /*embedded=*/true));
+
+  ASSERT_TRUE(NavigateToURL(web_contents,
+                            embedded_test_server()->GetURL(kIframeHostPath)));
+  content::RenderFrameHost* viewer_frame = FindMimeHandlerExtensionFrame();
+  ASSERT_TRUE(viewer_frame);
+  EXPECT_EQ(extension_misc::kPdfExtensionId,
+            viewer_frame->GetLastCommittedOrigin().host());
+}
+
+// An embedded load is expected to go to the highest-precedence handler that may
+// embed, or to the built-in viewer when no handler may embed.
+IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
+                       EmbeddedLoadFollowsStoredCanEmbedByPrecedence) {
+  const Extension* backup_handler =
+      LoadExtension(test_data_dir_.AppendASCII(kTestExtensionDir));
+  ASSERT_TRUE(backup_handler);
+  // The manifest of the preferred handler says can_embed false.
+  const Extension* preferred_handler = LoadExtension(
+      test_data_dir_.AppendASCII("generic_mime_handler_no_embed"));
+  ASSERT_TRUE(preferred_handler);
+  auto* registry = MimeHandlerRegistry::Get(profile());
+  ASSERT_EQ(preferred_handler->id(), GetHandlerForMimeType(kPdfMimeType));
+
+  {
+    // Both handlers may embed. The preferred handler is expected to take
+    // embedded loads.
+    registry->SetCanEmbedForMimeType(preferred_handler->id(), kPdfMimeType,
+                                     true, profile());
+    registry->SetCanEmbedForMimeType(backup_handler->id(), kPdfMimeType, true,
+                                     profile());
+    EXPECT_EQ(preferred_handler->id(),
+              PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
+                                                     /*embedded=*/true));
+  }
+
+  {
+    // Only the backup handler may embed. It is expected to take embedded
+    // loads.
+    registry->SetCanEmbedForMimeType(preferred_handler->id(), kPdfMimeType,
+                                     false, profile());
+    registry->SetCanEmbedForMimeType(backup_handler->id(), kPdfMimeType, true,
+                                     profile());
+    EXPECT_EQ(backup_handler->id(),
+              PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
+                                                     /*embedded=*/true));
+  }
+
+  {
+    // Neither handler may embed. Embedded loads are expected to go to the
+    // built-in viewer, and top-level loads to stay with the preferred handler.
+    registry->SetCanEmbedForMimeType(preferred_handler->id(), kPdfMimeType,
+                                     false, profile());
+    registry->SetCanEmbedForMimeType(backup_handler->id(), kPdfMimeType, false,
+                                     profile());
+    EXPECT_EQ(extension_misc::kPdfExtensionId,
+              PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
+                                                     /*embedded=*/true));
+    EXPECT_EQ(preferred_handler->id(),
+              PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
+                                                     /*embedded=*/false));
+  }
+
+  {
+    // The preferred handler may embed but is disabled. The backup handler is
+    // expected to take embedded loads.
+    registry->SetCanEmbedForMimeType(preferred_handler->id(), kPdfMimeType,
+                                     true, profile());
+    registry->SetEnabledForMimeType(preferred_handler->id(), kPdfMimeType,
+                                    false, profile());
+    registry->SetCanEmbedForMimeType(backup_handler->id(), kPdfMimeType, true,
+                                     profile());
+    EXPECT_EQ(backup_handler->id(),
+              PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
+                                                     /*embedded=*/true));
+  }
+}
+
+// When a split mode extension disables its MIME handler from an incognito tab,
+// regular tabs should still open PDFs in the extension. The next incognito
+// session should open PDFs in the extension again.
+IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
+                       SplitModeIncognitoChangeLastsForIncognitoSession) {
+  TestExtensionDir extension_dir;
+  extension_dir.WriteManifest(R"({
+    "name": "Split mode MIME handler",
+    "version": "1.0",
+    "manifest_version": 3,
+    "incognito": "split",
+    "mime_types_handler": {
+      "application/pdf": {"handler_url": "handler.html"}
+    }
+  })");
+  const base::FilePath handler_dir =
+      test_data_dir_.AppendASCII(kTestExtensionDir);
+  extension_dir.CopyFileTo(handler_dir.AppendASCII("handler.html"),
+                           FILE_PATH_LITERAL("handler.html"));
+  extension_dir.CopyFileTo(handler_dir.AppendASCII("handler.js"),
+                           FILE_PATH_LITERAL("handler.js"));
+  const Extension* extension =
+      LoadExtension(extension_dir.UnpackedPath(), {.allow_in_incognito = true});
+  ASSERT_TRUE(extension);
+
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
+  Profile* incognito_profile = incognito_browser->GetProfile();
+  {
+    // Before any change, both profiles are expected to use the extension.
+    EXPECT_EQ(extension->id(),
+              PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
+                                                     /*embedded=*/false));
+    EXPECT_EQ(extension->id(),
+              PluginUtils::GetExtensionIdForMimeType(
+                  incognito_profile, kPdfMimeType, /*embedded=*/false));
+  }
+
+  {
+    // After handler.js disables the MIME handler from the incognito tab,
+    // incognito PDF loads are expected to go to the built-in viewer and regular
+    // PDF loads to stay with the extension. When handler.js reads the options
+    // back, the registry is expected to return the value set from incognito,
+    // not the value for regular tabs.
+    ResultCatcher catcher;
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        incognito_browser,
+        embedded_test_server()->GetURL("/test.pdf?action=disable")));
+    ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
+    EXPECT_EQ(extension_misc::kPdfExtensionId,
+              PluginUtils::GetExtensionIdForMimeType(
+                  incognito_profile, kPdfMimeType, /*embedded=*/false));
+    EXPECT_EQ(extension->id(),
+              PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
+                                                     /*embedded=*/false));
+  }
+
+  {
+    // Closing the last incognito window ends the incognito session. The next
+    // incognito session is expected to use the manifest values again.
+    CloseBrowserSynchronously(incognito_browser);
+    ASSERT_TRUE(base::test::RunUntil(
+        [&] { return !profile()->HasPrimaryOTRProfile(); }));
+    Profile* next_incognito_profile = CreateIncognitoBrowser()->GetProfile();
+    EXPECT_EQ(extension->id(),
+              PluginUtils::GetExtensionIdForMimeType(
+                  next_incognito_profile, kPdfMimeType, /*embedded=*/false));
+  }
+}
+
+// The "Download PDFs instead of automatically opening them in Chrome"
+// preference suppresses every in-browser PDF handler, not only the
+// built-in PDF viewer.
+IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
+                       AlwaysOpenPdfExternallySuppressesGenericHandler) {
+  ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII(kTestExtensionDir)));
+  profile()->GetPrefs()->SetBoolean(prefs::kPluginsAlwaysOpenPdfExternally,
+                                    true);
+
+  EXPECT_EQ(std::string(),
+            PluginUtils::GetExtensionIdForMimeType(profile(), kPdfMimeType,
+                                                   /*embedded=*/false));
+
+  // The built-in viewer also registers "text/pdf", so the preference has to
+  // cover that MIME type as well.
+  EXPECT_EQ(std::string(),
+            PluginUtils::GetExtensionIdForMimeType(profile(), "text/pdf",
+                                                   /*embedded=*/false));
+
+  content::DownloadTestObserverTerminal download_observer(
+      profile()->GetDownloadManager(), /*wait_count=*/1,
+      content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
+
+  // The response is downloaded, so no navigation commits in the tab and
+  // content::NavigateToURL() would report failure.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL(kTestPdfPath)));
+
+  // Assert rather than expect: if the handler still claims the response
+  // there is no download and the wait below would hang until timeout.
+  ASSERT_FALSE(FindMimeHandlerExtensionFrame());
+
+  download_observer.WaitForFinished();
+  EXPECT_EQ(1u, download_observer.NumDownloadsSeenInState(
+                    download::DownloadItem::COMPLETE));
 }
 
 // A generic MIME handler renders a top-level PDF as an embedded
@@ -300,6 +731,36 @@ IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
   DisableExtension(extension->id());
   destroyed_watcher.Wait();
   EXPECT_TRUE(destroyed_watcher.IsDestroyed());
+}
+
+// Uninstalling the handler while the viewer tab is the browser's only tab
+// replaces that tab with the NTP instead of closing it, without crashing.
+// The single-tab case is distinct: the viewer's WebContents is reused for
+// the replacement navigation rather than destroyed. Regression test for
+// crbug.com/542646771.
+IN_PROC_BROWSER_TEST_F(GenericMimeHandlerBrowserTest,
+                       UninstallingTopLevelHandlerLastTabShowsNtp) {
+  const Extension* extension =
+      LoadExtension(test_data_dir_.AppendASCII(kTestExtensionDir));
+  ASSERT_TRUE(extension);
+
+  ResultCatcher catcher;
+  content::WebContents* pdf_web_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(pdf_web_contents,
+                            embedded_test_server()->GetURL(kTestPdfPath)));
+  ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
+
+  ASSERT_EQ(1, browser()->tab_strip_model()->count());
+
+  content::TestNavigationObserver ntp_observer(pdf_web_contents);
+  UninstallExtension(extension->id());
+  ntp_observer.Wait();
+
+  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_FALSE(mime_handler::MimeHandlerStreamManager::FromWebContents(
+      pdf_web_contents));
+  EXPECT_EQ(chrome::ChromeUINewTabURLAsGURL(),
+            pdf_web_contents->GetLastCommittedURL());
 }
 
 // Disabling the handler while the viewer tab has a beforeunload handler

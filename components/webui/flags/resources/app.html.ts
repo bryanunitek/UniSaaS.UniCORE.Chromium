@@ -27,20 +27,30 @@ export function getHtml(this: AppElement) {
           @keydown="${this.onResetAllKeydown_}" @blur="${this.onResetAllBlur_}">
         $i18n{reset}
       </cr-button>
-<if expr="not is_ios">
-      <label for="import-file-input">
-        <cr-icon-button id="experiment-import"
-            iron-icon="flags:file-upload"
-            aria-label="Import"
-            ?hidden="${!this.isImportExportEnabled_}">
-        </cr-icon-button>
-      </label>
+      <cr-icon-button id="experiment-import"
+          iron-icon="${this.webuiRoundedIconsEnabled_
+              ? 'flags:upload'
+              : 'flags:file-upload-old'}"
+          aria-label="Import"
+          @click="${this.onImportClick_}"
+          ?hidden="${!this.isImportExportEnabled_}">
+      </cr-icon-button>
       <cr-tooltip for="experiment-import" fit-to-visible-bounds
           ?hidden="${!this.isImportExportEnabled_}">
         Import
       </cr-tooltip>
+      <cr-action-menu id="import-menu">
+        <button id="import-from-file" class="dropdown-item"
+            @click="${this.onImportFromFileClick_}">
+          Upload file
+        </button>
+        <button id="import-from-clipboard" class="dropdown-item"
+            @click="${this.onImportFromClipboardClick_}">
+          Paste from clipboard
+        </button>
+      </cr-action-menu>
       <cr-icon-button id="experiment-export"
-          iron-icon="cr:file-download"
+          iron-icon="cr:download"
           aria-label="Export"
           @click="${this.onExportClick_}"
           ?hidden="${!this.isImportExportEnabled_}">
@@ -51,16 +61,16 @@ export function getHtml(this: AppElement) {
       </cr-tooltip>
       <input type="file" id="import-file-input" accept=".json"
           @change="${this.onImportFileChange_}" hidden>
-</if>
     </div>
   </div>
   <div class="screen-reader-only" id="screen-reader-status-message"
       role="status"></div>
-<if expr="not is_ios">
+  <cr-toast id="toast" duration="3000">
+    <div>${this.toastMessage_}</div>
+  </cr-toast>
   <cr-toast id="errorToast" duration="3000">
     <div>${this.importError}</div>
   </cr-toast>
-</if>
 </div>
 <div id="body-container">
   <div id="flagsTemplate">

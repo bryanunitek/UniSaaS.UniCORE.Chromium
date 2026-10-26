@@ -15,19 +15,23 @@
 #include "upb/mem/arena.h"
 #include "upb/reflection/def.h"
 #include "upb/reflection/def_type.h"
+#include "upb/reflection/descriptor_bootstrap.h"
 #include "upb/reflection/enum_def.h"
 #include "upb/reflection/enum_value_def.h"
 #include "upb/reflection/internal/def_builder.h"
 #include "upb/reflection/internal/enum_def.h"
+#include "upb/reflection/internal/strdup2.h"
+#include "upb/reflection/json_enumvalue_options_bootstrap.h"
 
 // Must be last.
 #include "upb/port/def.inc"
 
 struct upb_EnumValueDef {
-  UPB_ALIGN_AS(8) const UPB_DESC(EnumValueOptions*) opts;
-  const UPB_DESC(FeatureSet*) resolved_features;
+  UPB_ALIGN_AS(8) const google_protobuf_EnumValueOptions* opts;
+  const google_protobuf_FeatureSet* resolved_features;
   const upb_EnumDef* parent;
   const char* full_name;
+  const char* json_name;
   int32_t number;
 };
 
@@ -49,7 +53,7 @@ const upb_EnumValueDef** _upb_EnumValueDefs_Sorted(const upb_EnumValueDef* v,
       (upb_EnumValueDef**)upb_Arena_Malloc(a, n * sizeof(void*));
   if (!out) return NULL;
 
-  for (int i = 0; i < n; i++) {
+  for (size_t i = 0; i < n; i++) {
     out[i] = (upb_EnumValueDef*)&v[i];
   }
   qsort(out, n, sizeof(void*), _upb_EnumValueDef_Compare);
@@ -57,8 +61,8 @@ const upb_EnumValueDef** _upb_EnumValueDefs_Sorted(const upb_EnumValueDef* v,
   return (const upb_EnumValueDef**)out;
 }
 
-const UPB_DESC(EnumValueOptions) *
-    upb_EnumValueDef_Options(const upb_EnumValueDef* v) {
+const google_protobuf_EnumValueOptions* upb_EnumValueDef_Options(
+    const upb_EnumValueDef* v) {
   return v->opts;
 }
 
@@ -66,8 +70,8 @@ bool upb_EnumValueDef_HasOptions(const upb_EnumValueDef* v) {
   return v->opts != (void*)kUpbDefOptDefault;
 }
 
-const UPB_DESC(FeatureSet) *
-    upb_EnumValueDef_ResolvedFeatures(const upb_EnumValueDef* e) {
+const google_protobuf_FeatureSet* upb_EnumValueDef_ResolvedFeatures(
+    const upb_EnumValueDef* e) {
   return e->resolved_features;
 }
 
@@ -77,6 +81,10 @@ const upb_EnumDef* upb_EnumValueDef_Enum(const upb_EnumValueDef* v) {
 
 const char* upb_EnumValueDef_FullName(const upb_EnumValueDef* v) {
   return v->full_name;
+}
+
+const char* upb_EnumValueDef_JsonName(const upb_EnumValueDef* v) {
+  return v->json_name ? v->json_name : upb_EnumValueDef_Name(v);
 }
 
 const char* upb_EnumValueDef_Name(const upb_EnumValueDef* v) {
@@ -90,46 +98,45 @@ uint32_t upb_EnumValueDef_Index(const upb_EnumValueDef* v) {
   return v - upb_EnumDef_Value(v->parent, 0);
 }
 
+static const char* _upb_EnumValueDef_ExtractJsonName(
+    upb_DefBuilder* ctx, const upb_EnumValueDef* v) {
+  if (!upb_EnumValueDef_HasOptions(v)) return NULL;
+  const google_protobuf_EnumValueOptions* opts = (const google_protobuf_EnumValueOptions*)v->opts;
+  if (!pb_enumvalue_has_json(opts)) return NULL;
+  const pb_enumvalue_JsonEnumValueOptions* json_opts = pb_enumvalue_json(opts);
+  if (!json_opts || !pb_enumvalue_JsonEnumValueOptions_has_string(json_opts)) {
+    return NULL;
+  }
+  upb_StringView str = pb_enumvalue_JsonEnumValueOptions_string(json_opts);
+  return upb_strdup2(str.data, str.size, ctx->arena);
+}
+
 static void create_enumvaldef(upb_DefBuilder* ctx, const char* prefix,
-                              const UPB_DESC(EnumValueDescriptorProto*)
-                                  val_proto,
-                              const UPB_DESC(FeatureSet*) parent_features,
+                              const google_protobuf_EnumValueDescriptorProto* val_proto,
+                              const google_protobuf_FeatureSet* parent_features,
                               upb_EnumDef* e, upb_EnumValueDef* v) {
   UPB_DEF_SET_OPTIONS(v->opts, EnumValueDescriptorProto, EnumValueOptions,
                       val_proto);
   v->resolved_features = _upb_DefBuilder_ResolveFeatures(
-      ctx, parent_features, UPB_DESC(EnumValueOptions_features)(v->opts));
+      ctx, parent_features, google_protobuf_EnumValueOptions_features(v->opts));
 
-  upb_StringView name = UPB_DESC(EnumValueDescriptorProto_name)(val_proto);
+  upb_StringView name = google_protobuf_EnumValueDescriptorProto_name(val_proto);
 
   v->parent = e;  // Must happen prior to _upb_DefBuilder_Add()
   v->full_name = _upb_DefBuilder_MakeFullName(ctx, prefix, name);
-  v->number = UPB_DESC(EnumValueDescriptorProto_number)(val_proto);
+  v->number = google_protobuf_EnumValueDescriptorProto_number(val_proto);
+  v->json_name = _upb_EnumValueDef_ExtractJsonName(ctx, v);
   _upb_DefBuilder_Add(ctx, v->full_name,
                       _upb_DefType_Pack(v, UPB_DEFTYPE_ENUMVAL));
 
-  bool ok = _upb_EnumDef_Insert(e, v, ctx->arena);
-  if (!ok) _upb_DefBuilder_OomErr(ctx);
-}
-
-static void _upb_EnumValueDef_CheckZeroValue(upb_DefBuilder* ctx,
-                                             const upb_EnumDef* e,
-                                             const upb_EnumValueDef* v, int n) {
-  // When the special UPB_TREAT_CLOSED_ENUMS_LIKE_OPEN is enabled, we have to
-  // exempt closed enums from this check, even when we are treating them as
-  // open.
-  if (upb_EnumDef_IsSpecifiedAsClosed(e) || n == 0 || v[0].number == 0) return;
-
-  _upb_DefBuilder_Errf(ctx, "for open enums, the first value must be zero (%s)",
-                       upb_EnumDef_FullName(e));
+  _upb_EnumDef_Insert(ctx, e, v);
 }
 
 // Allocate and initialize an array of |n| enum value defs owned by |e|.
 upb_EnumValueDef* _upb_EnumValueDefs_New(
     upb_DefBuilder* ctx, const char* prefix, int n,
-    const UPB_DESC(EnumValueDescriptorProto*) const* protos,
-    const UPB_DESC(FeatureSet*) parent_features, upb_EnumDef* e,
-    bool* is_sorted) {
+    const google_protobuf_EnumValueDescriptorProto* const* protos,
+    const google_protobuf_FeatureSet* parent_features, upb_EnumDef* e, bool* is_sorted) {
   _upb_DefType_CheckPadding(sizeof(upb_EnumValueDef));
 
   upb_EnumValueDef* v = UPB_DEFBUILDER_ALLOCARRAY(ctx, upb_EnumValueDef, n);
@@ -143,8 +150,6 @@ upb_EnumValueDef* _upb_EnumValueDefs_New(
     if (previous > current) *is_sorted = false;
     previous = current;
   }
-
-  _upb_EnumValueDef_CheckZeroValue(ctx, e, v, n);
 
   return v;
 }

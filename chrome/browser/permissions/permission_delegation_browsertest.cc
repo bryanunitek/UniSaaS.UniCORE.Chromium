@@ -9,7 +9,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_ui_service.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_ui_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -28,8 +28,10 @@
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "base/files/file_path.h"
 #include "base/path_service.h"
+#include "base/strings/strcat.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
+#include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/permissions/chrome_permissions_client.h"
 #include "chrome/browser/plugins/plugin_utils.h"
@@ -78,7 +80,7 @@ class PermissionDelegationBrowserTest : public InProcessBrowserTest {
   }
 
   content::WebContents* GetWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
  private:
@@ -172,33 +174,6 @@ class ContextualTasksPermissionDelegationBrowserTest
   base::test::ScopedFeatureList feature_list_{
       contextual_tasks::kContextualTasks};
 };
-
-IN_PROC_BROWSER_TEST_F(ContextualTasksPermissionDelegationBrowserTest,
-                       GetEmbeddingOriginOverride) {
-  GURL contextual_tasks_url(chrome::kChromeUIContextualTasksURL);
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), contextual_tasks_url));
-  content::WebContents* outer_web_contents = GetWebContents();
-
-  // Wait for the WebUI to initialize and spawn the inner <webview> guest
-  // WebContents.
-  ASSERT_TRUE(base::test::RunUntil(
-      [&] { return !outer_web_contents->GetInnerWebContents().empty(); }));
-
-  content::WebContents* inner_web_contents =
-      outer_web_contents->GetInnerWebContents()[0];
-  ASSERT_TRUE(inner_web_contents);
-  EXPECT_EQ(outer_web_contents, inner_web_contents->GetOuterWebContents());
-
-  // Verify that GetEmbeddingOriginOverride correctly traverses from the inner
-  // <webview> guest WebContents up to the outer WebUI WebContents.
-  GURL requesting_origin("https://example.com");
-  std::optional<GURL> override_origin =
-      ChromePermissionsClient::GetInstance()->GetEmbeddingOriginOverride(
-          requesting_origin, inner_web_contents->GetPrimaryMainFrame());
-
-  ASSERT_TRUE(override_origin.has_value());
-  EXPECT_EQ(contextual_tasks_url, *override_origin);
-}
 
 IN_PROC_BROWSER_TEST_F(ContextualTasksPermissionDelegationBrowserTest,
                        RequestPermissionInWebView) {
@@ -329,7 +304,7 @@ class MimeHandlerPermissionEmbeddingBrowserTest
   }
 
   content::WebContents* GetActiveWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
  private:
@@ -423,6 +398,45 @@ IN_PROC_BROWSER_TEST_F(MimeHandlerPermissionEmbeddingBrowserTest,
 
   EXPECT_FALSE(embedding_origin_override.has_value())
       << "got override " << embedding_origin_override.value_or(GURL());
+}
+
+class ContextualTasksExtensionPermissionDelegationBrowserTest
+    : public PermissionDelegationBrowserTest {
+ public:
+  ContextualTasksExtensionPermissionDelegationBrowserTest() {
+    feature_list_.InitWithFeatures(
+        {contextual_tasks::kContextualTasks,
+         contextual_tasks::kContextualTasksRearchitecture,
+         extensions_features::kApiContextualTasksPrivate},
+        {});
+    extensions::ComponentLoader::EnableBackgroundExtensionsForTesting();
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(ContextualTasksExtensionPermissionDelegationBrowserTest,
+                       GetCanonicalOriginOverride) {
+  GURL contextual_tasks_ext_url(base::StrCat(
+      {extensions::kExtensionScheme, "://",
+       extension_misc::kContextualTasksExtensionId, "/input_plate.html"}));
+  GURL google_search_url("https://www.google.com/search?q=test");
+  GURL contextual_tasks_webui_url(chrome::kChromeUIContextualTasksURL);
+
+  // Contextual tasks extension embedded in Google Search -> Delegates to
+  // embedding origin (returns nullopt):
+  EXPECT_EQ(ChromePermissionsClient::GetInstance()->GetCanonicalOriginOverride(
+                contextual_tasks_ext_url, google_search_url),
+            std::nullopt);
+
+  // Contextual tasks extension embedded in Contextual Tasks WebUI ->
+  // Overridden to DSE (Google) origin:
+  std::optional<GURL> webui_override =
+      ChromePermissionsClient::GetInstance()->GetCanonicalOriginOverride(
+          contextual_tasks_ext_url, contextual_tasks_webui_url);
+  ASSERT_TRUE(webui_override.has_value());
+  EXPECT_EQ(webui_override->host(), "www.google.com");
 }
 
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)

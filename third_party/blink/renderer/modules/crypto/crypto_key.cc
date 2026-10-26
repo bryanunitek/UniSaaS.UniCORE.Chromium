@@ -154,10 +154,6 @@ ScriptObject CryptoKey::algorithm(ScriptState* script_state) {
   return object_builder.ToScriptObject();
 }
 
-// FIXME: This creates a new javascript array each time. What should happen
-//        instead is return the same (immutable) array. (Javascript callers can
-//        distinguish this by doing an == test on the arrays and seeing they are
-//        different).
 ScriptObject CryptoKey::usages(ScriptState* script_state) {
   Vector<String> result;
   for (const auto& mapping : kKeyUsageMappings) {
@@ -241,8 +237,8 @@ bool CryptoKey::ParseFormat(const String& format_string,
     return true;
   }
 
-  exception_state.ThrowTypeError("Invalid keyFormat argument: " +
-                                 format_string);
+  exception_state.ThrowTypeError(
+      StrCat({"Invalid keyFormat argument: ", format_string}));
   return false;
 }
 

@@ -10,6 +10,7 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.download.home.DownloadManagerUiConfig;
 import org.chromium.chrome.browser.download.home.filter.Filters.FilterType;
+import org.chromium.chrome.browser.download.home.list.ListItem.CardDividerListItem.Position;
 import org.chromium.chrome.browser.download.home.list.ListItem.OfflineItemListItem;
 import org.chromium.chrome.browser.download.home.list.ListItem.ViewListItem;
 import org.chromium.components.browser_ui.util.DownloadUtils;
@@ -125,17 +126,16 @@ public class ListUtils {
 
         if (item instanceof ListItem.CardDividerListItem) {
             switch (((ListItem.CardDividerListItem) item).position) {
-                case TOP:
+                case Position.TOP:
                     return ViewType.GROUP_CARD_DIVIDER_TOP;
-                case MIDDLE:
+                case Position.MIDDLE:
                     return ViewType.GROUP_CARD_DIVIDER_MIDDLE;
-                case BOTTOM:
+                case Position.BOTTOM:
                     return ViewType.GROUP_CARD_DIVIDER_BOTTOM;
             }
         }
 
-        if (item instanceof OfflineItemListItem) {
-            OfflineItemListItem offlineItem = (OfflineItemListItem) item;
+        if (item instanceof OfflineItemListItem offlineItem) {
             if (config.showDangerousItems
                     && DownloadUtils.shouldDisplayDownloadAsDangerous(
                             offlineItem.item.dangerType, offlineItem.item.state)) {
@@ -195,8 +195,8 @@ public class ListUtils {
 
     /** @return Whether the given {@link ListItem} can be grouped inside a card. */
     public static boolean canGroup(@Nullable ListItem listItem) {
-        if (!(listItem instanceof OfflineItemListItem)) return false;
-        return LegacyHelpers.isLegacyContentIndexedItem(((OfflineItemListItem) listItem).item.id);
+        if (!(listItem instanceof OfflineItemListItem offlineItem)) return false;
+        return LegacyHelpers.isLegacyContentIndexedItem(offlineItem.item.id);
     }
 
     /**

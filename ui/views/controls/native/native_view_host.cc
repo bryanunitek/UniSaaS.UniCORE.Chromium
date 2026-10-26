@@ -12,6 +12,8 @@
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/controls/native/native_view_host_wrapper.h"
 #include "ui/views/painter.h"
@@ -25,8 +27,8 @@ namespace views {
 // NativeViewHost, public:
 
 NativeViewHost::NativeViewHost()
-    : layer_managed_by_views_(!base::FeatureList::IsEnabled(
-          views::features::kUseNativeViewHostAuraWithClipWindow)) {
+    : layer_managed_by_views_(base::FeatureList::IsEnabled(
+          views::features::kNativeViewHostManagesLayers)) {
   set_suppress_default_focus_handling();
 }
 
@@ -74,11 +76,17 @@ gfx::NativeViewAccessible NativeViewHost::GetParentAccessible() {
   return native_wrapper_->GetParentAccessible();
 }
 
-bool NativeViewHost::SetCornerRadii(const gfx::RoundedCornersF& corner_radii) {
+bool NativeViewHost::SetNativeViewCornerRadii(
+    const gfx::RoundedCornersF& corner_radii) {
   if (!native_wrapper_) {
     return false;
   }
-  return native_wrapper_->SetCornerRadii(corner_radii);
+  return native_wrapper_->SetNativeViewCornerRadii(corner_radii);
+}
+
+gfx::RoundedCornersF NativeViewHost::GetNativeViewCornerRadii() const {
+  return native_wrapper_ ? native_wrapper_->GetNativeViewCornerRadii()
+                         : gfx::RoundedCornersF();
 }
 
 void NativeViewHost::SetHitTestTopInset(int top_inset) {
@@ -102,8 +110,8 @@ void NativeViewHost::SetLayerManagedByViews(bool managed) {
     return;
   }
 
-  CHECK(!managed || !base::FeatureList::IsEnabled(
-                        views::features::kUseNativeViewHostAuraWithClipWindow));
+  CHECK(!managed || base::FeatureList::IsEnabled(
+                        views::features::kNativeViewHostManagesLayers));
 
   layer_managed_by_views_ = managed;
   DCHECK(!native_view_);
@@ -130,7 +138,11 @@ void NativeViewHost::SetBackgroundColorWhenClipped(
 }
 
 ui::Layer* NativeViewHost::GetUILayer() {
-  return native_wrapper_->GetUILayer();
+  return layer_managed_by_views() ? layer() : native_wrapper_->GetUILayer();
+}
+
+void NativeViewHost::SetMouseEventFallback(ui::EventHandler* handler) {
+  mouse_event_fallback_ = handler;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -281,18 +293,24 @@ void NativeViewHost::SetVisible(bool visible) {
   View::SetVisible(visible);
 }
 
-bool NativeViewHost::OnMousePressed(const ui::MouseEvent& event) {
-  // In the typical case the attached NativeView receives the events directly
-  // from the system and this function is not called. There are scenarios
-  // where that may not happen. For example, if the NativeView is configured
-  // not to receive events, then this function will be called. An additional
-  // scenario is if the WidgetDelegate overrides
-  // ShouldDescendIntoChildForEventHandling(). In that case the NativeView
-  // will not receive the events, and this function will be called. Regardless,
-  // this function does not need to forward to the NativeView, because it is
-  // expected to be done by the system, and the only cases where this is called
-  // is if the NativeView should not receive events.
-  return View::OnMousePressed(event);
+void NativeViewHost::OnMouseMoved(const ui::MouseEvent& event) {
+  if (mouse_event_fallback_) {
+    // Need a copy for mutability.
+    auto event_copy = event.Clone();
+    mouse_event_fallback_->OnMouseEvent(
+        static_cast<ui::MouseEvent*>(event_copy.get()));
+  } else {
+    views::View::OnMouseMoved(event);
+  }
+}
+
+void NativeViewHost::OnMouseEvent(ui::MouseEvent* event) {
+  if (mouse_event_fallback_) {
+    mouse_event_fallback_->OnMouseEvent(event);
+    event->SetHandled();
+  } else {
+    views::View::OnMouseEvent(event);
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -303,6 +321,11 @@ bool NativeViewHost::SetNativeViewClipRect(const gfx::Rect& clip_rect) {
     return native_wrapper_->SetNativeViewClipRect(clip_rect);
   }
   return false;
+}
+
+gfx::Rect NativeViewHost::GetNativeViewClipRect() const {
+  return native_wrapper_ ? native_wrapper_->GetNativeViewClipRect()
+                         : gfx::Rect();
 }
 
 void NativeViewHost::Detach(bool destroyed) {

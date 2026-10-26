@@ -17,7 +17,6 @@
 #include "ash/system/focus_mode/sounds/focus_mode_sounds_controller.h"
 #include "ash/system/video_conference/fake_video_conference_tray_controller.h"
 #include "ash/webui/help_app_ui/help_app_prefs.h"
-#include "base/containers/flat_map.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -29,10 +28,10 @@
 #include "chrome/browser/ash/file_suggest/file_suggest_keyed_service_factory.h"
 #include "chrome/browser/ash/file_suggest/file_suggest_test_util.h"
 #include "chrome/browser/ash/file_suggest/mock_file_suggest_keyed_service.h"
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/release_notes/release_notes_storage.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/global_features.h"
+#include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/send_tab_to_self_sync_service_factory.h"
@@ -54,19 +53,19 @@
 #include "components/send_tab_to_self/send_tab_to_self_entry.h"
 #include "components/send_tab_to_self/send_tab_to_self_model.h"
 #include "components/send_tab_to_self/stub_send_tab_to_self_sync_service.h"
-#include "components/send_tab_to_self/target_device_info.h"
-#include "components/sessions/core/serialized_navigation_entry_test_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/sync/test/fake_data_type_controller_delegate.h"
 #include "components/sync/test/test_sync_service.h"
 #include "components/sync_device_info/device_info_util.h"
+#include "components/sync_device_info/remote_device_info.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
-#include "components/sync_sessions/mock_open_tabs_ui_delegate.h"
+#include "components/sync_sessions/fake_open_tabs_ui_delegate.h"
 #include "components/sync_sessions/mock_session_sync_service.h"
 #include "components/sync_sessions/open_tabs_ui_delegate.h"
 #include "components/sync_sessions/session_sync_service.h"
 #include "components/sync_sessions/synced_session.h"
-#include "components/user_manager/scoped_user_manager.h"
+#include "content/public/browser/navigation_entry.h"
 #include "services/media_session/public/cpp/test/test_media_controller.h"
 #include "services/media_session/public/mojom/media_session.mojom-shared.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -101,24 +100,6 @@ constexpr char16_t kSessionMetadataSourceTitleFull[] =
 constexpr char kMediaAppUrl[] = "https://meet.google.com";
 constexpr char16_t kMediaAppTitle[] = u"Google Meet";
 
-std::unique_ptr<sync_sessions::SyncedSession> CreateNewSession(
-    const std::string& session_name,
-    const std::string& session_tag,
-    syncer::DeviceInfo::FormFactor form_factor) {
-  auto session = std::make_unique<sync_sessions::SyncedSession>();
-  auto window = std::make_unique<sync_sessions::SyncedSessionWindow>();
-  auto tab = std::make_unique<sessions::SessionTab>();
-
-  session->SetSessionName(session_name);
-  session->SetDeviceTypeAndFormFactor(syncer::DeviceInfo::DeviceType::kUnset,
-                                      form_factor);
-
-  window->wrapped_window.tabs.push_back(std::move(tab));
-  session->windows[SessionID::NewUnique()] = std::move(window);
-  session->SetSessionTag(session_tag);
-  return session;
-}
-
 class MockSessionSyncService : public sync_sessions::MockSessionSyncService {
  public:
   MockSessionSyncService() {
@@ -135,85 +116,6 @@ class MockSessionSyncService : public sync_sessions::MockSessionSyncService {
 
  private:
   base::RepeatingClosureList subscriber_list_;
-};
-
-class MockOpenTabsUIDelegate : public sync_sessions::MockOpenTabsUIDelegate {
- public:
-  MockOpenTabsUIDelegate() {
-    foreign_sessions_owned_.push_back(CreateNewSession(
-        kSessionName1, kSessionTag1, syncer::DeviceInfo::FormFactor::kDesktop));
-    foreign_sessions_.push_back(foreign_sessions_owned_.back().get());
-    foreign_sessions_owned_.push_back(CreateNewSession(
-        kSessionName2, kSessionTag2, syncer::DeviceInfo::FormFactor::kPhone));
-    foreign_sessions_.push_back(foreign_sessions_owned_.back().get());
-
-    std::vector<std::unique_ptr<sessions::SessionTab>> session_tabs_one;
-    auto tab = std::make_unique<sessions::SessionTab>();
-    tab->timestamp = base::Time::Now();
-    tab->navigations.push_back(sessions::SerializedNavigationEntryTestHelper::
-                                   CreateNavigationForTest());
-    tab->navigations[0].set_timestamp(base::Time::Now());
-    tab->navigations[0].set_title(kTabTitle1);
-    tab->navigations[0].set_virtual_url(GURL(kExampleURL1));
-    session_tabs_one.push_back(std::move(tab));
-
-    std::vector<std::unique_ptr<sessions::SessionTab>> session_tabs_two;
-    tab = std::make_unique<sessions::SessionTab>();
-    tab->timestamp = base::Time::Now();
-    tab->navigations.push_back(sessions::SerializedNavigationEntryTestHelper::
-                                   CreateNavigationForTest());
-    tab->navigations[0].set_timestamp(base::Time::Now() + base::Minutes(5));
-    tab->navigations[0].set_title(kTabTitle2);
-    tab->navigations[0].set_virtual_url(GURL(kExampleURL2));
-    session_tabs_two.push_back(std::move(tab));
-
-    session_tabs_.emplace(kSessionTag1, std::move(session_tabs_one));
-    session_tabs_.emplace(kSessionTag2, std::move(session_tabs_two));
-  }
-
-  bool GetAllForeignSessions(
-      std::vector<raw_ptr<const sync_sessions::SyncedSession,
-                          VectorExperimental>>* sessions) override {
-    *sessions = foreign_sessions_;
-    std::ranges::sort(*sessions, std::greater(),
-                      [](const sync_sessions::SyncedSession* session) {
-                        return session->GetModifiedTime();
-                      });
-
-    return !sessions->empty();
-  }
-
-  base::flat_map<std::string, base::Time>
-  GetAllForeignSessionLastModifiedTimes() const override {
-    std::vector<std::pair<std::string, base::Time>> timestamps;
-    timestamps.reserve(foreign_sessions_.size());
-    for (const auto& session : foreign_sessions_) {
-      timestamps.emplace_back(session->GetSessionTag(),
-                              session->GetModifiedTime());
-    }
-    return base::flat_map<std::string, base::Time>(std::move(timestamps));
-  }
-
-  bool GetForeignSessionTabs(
-      const std::string& tag,
-      std::vector<const sessions::SessionTab*>* tabs) override {
-    auto it = session_tabs_.find(tag);
-    if (it != session_tabs_.end()) {
-      for (auto& tab : it->second) {
-        tabs->push_back(tab.get());
-      }
-    }
-
-    return true;
-  }
-
- private:
-  std::vector<std::unique_ptr<sync_sessions::SyncedSession>>
-      foreign_sessions_owned_;
-  std::vector<raw_ptr<const sync_sessions::SyncedSession, VectorExperimental>>
-      foreign_sessions_;
-  std::map<std::string, std::vector<std::unique_ptr<sessions::SessionTab>>>
-      session_tabs_;
 };
 
 std::unique_ptr<KeyedService> BuildMockSessionSyncService(
@@ -296,8 +198,7 @@ class BirchKeyedServiceTest : public BrowserWithTestWindowTest {
  public:
   BirchKeyedServiceTest()
       : BrowserWithTestWindowTest(
-            base::test::TaskEnvironment::TimeSource::MOCK_TIME),
-        fake_user_manager_(std::make_unique<FakeChromeUserManager>()) {
+            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
     feature_list_.InitWithFeatures(
         {features::kReleaseNotesNotificationAllChannels,
          features::kBirchVideoConferenceSuggestions},
@@ -326,6 +227,7 @@ class BirchKeyedServiceTest : public BrowserWithTestWindowTest {
     sync_service_ = static_cast<syncer::TestSyncService*>(
         SyncServiceFactory::GetForProfile(profile()));
 
+    SetUpOpenTabsUIDelegate();
     SetSessionServiceToReturnOpenTabsDelegate(true);
 
     send_tab_to_self_model_ =
@@ -349,6 +251,32 @@ class BirchKeyedServiceTest : public BrowserWithTestWindowTest {
         vc_controller_.get());
   }
 
+  void SetUpOpenTabsUIDelegate() {
+    sync_sessions::SyncedSession* session1 =
+        open_tabs_delegate_.AddForeignSession(kSessionTag1, base::Time::Now());
+    session1->SetSessionName(kSessionName1);
+    session1->SetDeviceTypeAndFormFactor(
+        syncer::DeviceInfo::DeviceType::kUnset,
+        syncer::DeviceInfo::FormFactor::kDesktop);
+    sessions::SessionTab* tab1 = open_tabs_delegate_.AddTabToForeignSession(
+        kSessionTag1, GURL(kExampleURL1));
+    tab1->timestamp = base::Time::Now();
+    tab1->navigations[0].set_timestamp(base::Time::Now());
+    tab1->navigations[0].set_title(kTabTitle1);
+
+    sync_sessions::SyncedSession* session2 =
+        open_tabs_delegate_.AddForeignSession(kSessionTag2, base::Time::Now());
+    session2->SetSessionName(kSessionName2);
+    session2->SetDeviceTypeAndFormFactor(
+        syncer::DeviceInfo::DeviceType::kUnset,
+        syncer::DeviceInfo::FormFactor::kPhone);
+    sessions::SessionTab* tab2 = open_tabs_delegate_.AddTabToForeignSession(
+        kSessionTag2, GURL(kExampleURL2));
+    tab2->timestamp = base::Time::Now();
+    tab2->navigations[0].set_timestamp(base::Time::Now() + base::Minutes(5));
+    tab2->navigations[0].set_title(kTabTitle2);
+  }
+
   void SetSessionServiceToReturnOpenTabsDelegate(bool return_delegate) {
     EXPECT_CALL(*session_sync_service_, GetOpenTabsUIDelegate())
         .WillRepeatedly(
@@ -369,13 +297,6 @@ class BirchKeyedServiceTest : public BrowserWithTestWindowTest {
     release_notes_storage_ = nullptr;
     favicon_service_ = nullptr;
     BrowserWithTestWindowTest::TearDown();
-  }
-
-  void LogIn(std::string_view email, const GaiaId& gaia_id) override {
-    // TODO(crbug.com/40286020): merge into BrowserWithTestWindowTest.
-    const AccountId account_id(AccountId::FromUserEmailGaiaId(email, gaia_id));
-    fake_user_manager_->AddUser(account_id);
-    fake_user_manager_->LoginUser(account_id);
   }
 
   TestingProfile* CreateProfile(const std::string& profile_name) override {
@@ -501,10 +422,10 @@ class BirchKeyedServiceTest : public BrowserWithTestWindowTest {
   FaviconServiceMock* favicon_service() { return favicon_service_; }
 
   void AddMockTargetDevice(syncer::DeviceInfo::FormFactor form_factor) {
-    send_tab_to_self_model()->AddTargetDevice(
-        send_tab_to_self::TargetDeviceInfo(kTargetDeviceFullName,
-                                           kTargetDeviceCacheGuid, form_factor,
-                                           base::Time::Now()));
+    send_tab_to_self_model()->AddTargetDevice(syncer::RemoteDeviceInfo(
+        kTargetDeviceFullName, kTargetDeviceCacheGuid, form_factor,
+        syncer::DeviceInfo::OsType::kChromeOsAsh, base::Time::Now(),
+        /*has_high_precision_timestamp=*/false));
   }
 
   TestMediaController* media_controller() const {
@@ -540,6 +461,9 @@ class BirchKeyedServiceTest : public BrowserWithTestWindowTest {
         TestingProfile::TestingFactory{
             FaviconServiceFactory::GetInstance(),
             base::BindRepeating(&BuildFaviconServiceMock)},
+        TestingProfile::TestingFactory{
+            HistoryServiceFactory::GetInstance(),
+            HistoryServiceFactory::GetDefaultFactory()},
     };
   }
 
@@ -548,9 +472,6 @@ class BirchKeyedServiceTest : public BrowserWithTestWindowTest {
   }
 
  private:
-  user_manager::TypedScopedUserManager<FakeChromeUserManager>
-      fake_user_manager_;
-
   base::ScopedTempDir temp_dir_;
 
   std::unique_ptr<ScopedTestMountPoint> mount_point_;
@@ -571,7 +492,7 @@ class BirchKeyedServiceTest : public BrowserWithTestWindowTest {
 
   std::unique_ptr<FakeVideoConferenceTrayController> vc_controller_;
 
-  MockOpenTabsUIDelegate open_tabs_delegate_;
+  sync_sessions::FakeOpenTabsUIDelegate open_tabs_delegate_;
 
   std::unique_ptr<ReleaseNotesStorage> release_notes_storage_;
 

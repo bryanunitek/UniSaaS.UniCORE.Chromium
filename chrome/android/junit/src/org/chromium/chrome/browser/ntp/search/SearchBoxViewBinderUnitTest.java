@@ -14,6 +14,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.robolectric.Shadows.shadowOf;
 
 import android.content.Context;
 import android.content.res.ColorStateList;
@@ -40,16 +41,15 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils;
 import org.chromium.chrome.browser.ntp.R;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
 /** Unit tests for {@link SearchBoxViewBinder}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SearchBoxViewBinderUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -58,6 +58,7 @@ public class SearchBoxViewBinderUnitTest {
 
     private Context mContext;
     private SearchBoxContainerView mSearchBoxLayout;
+    private View mSearchBoxView;
     private PropertyModel mPropertyModel;
 
     @Before
@@ -70,6 +71,7 @@ public class SearchBoxViewBinderUnitTest {
                 (SearchBoxContainerView)
                         LayoutInflater.from(mContext)
                                 .inflate(R.layout.fake_search_box_layout, null);
+        mSearchBoxView = mSearchBoxLayout.mSearchBoxView;
         mPropertyModel = new PropertyModel.Builder(SearchBoxProperties.ALL_KEYS).build();
         PropertyModelChangeProcessor.create(
                 mPropertyModel, mSearchBoxLayout, new SearchBoxViewBinder());
@@ -107,11 +109,25 @@ public class SearchBoxViewBinderUnitTest {
     }
 
     @Test
+    public void testApplyElevation() {
+        float expectedElevation =
+                mContext.getResources().getDimension(R.dimen.fake_search_box_elevation);
+        mPropertyModel.set(SearchBoxProperties.APPLY_ELEVATION, true);
+        assertEquals(expectedElevation, mSearchBoxView.getElevation(), 0.01f);
+    }
+
+    @Test
     public void testApplyWhiteBackground() {
-        mPropertyModel.set(SearchBoxProperties.APPLY_WHITE_BACKGROUND, true);
-        Drawable background = mSearchBoxLayout.getBackground();
-        assertTrue(background instanceof GradientDrawable);
-        assertEquals(Color.WHITE, ((GradientDrawable) background).getColor().getDefaultColor());
+        mPropertyModel.set(SearchBoxProperties.APPLY_WHITE_BACKGROUND_AND_SHADOW, true);
+        Drawable background = mSearchBoxView.getBackground();
+        if (NewTabPageUtils.isNtpAuroraEnabled()) {
+            assertEquals(
+                    R.drawable.fake_search_box_white_with_primary_color_alpha_2,
+                    shadowOf(background).getCreatedFromResId());
+        } else {
+            assertTrue(background instanceof GradientDrawable);
+            assertEquals(Color.WHITE, ((GradientDrawable) background).getColor().getDefaultColor());
+        }
     }
 
     @Test
@@ -141,6 +157,18 @@ public class SearchBoxViewBinderUnitTest {
         clearInvocations(mTextWatcher);
         mSearchBoxLayout.mHintTextView.setText("test2");
         verify(mTextWatcher, never()).onTextChanged(any(), anyInt(), anyInt(), anyInt());
+    }
+
+    @Test
+    public void testSetSearchText_RepeatedClearAfterDirectEdit() {
+        mSearchBoxLayout.mHintTextView.setText("pasted 1");
+        mPropertyModel.set(SearchBoxProperties.SEARCH_TEXT, "");
+        assertEquals("", mSearchBoxLayout.mHintTextView.getText().toString());
+
+        // Simulate a second paste directly into the EditText without updating PropertyModel.
+        mSearchBoxLayout.mHintTextView.setText("pasted 2");
+        mPropertyModel.set(SearchBoxProperties.SEARCH_TEXT, "");
+        assertEquals("", mSearchBoxLayout.mHintTextView.getText().toString());
     }
 
     @Test
@@ -175,5 +203,41 @@ public class SearchBoxViewBinderUnitTest {
         mPropertyModel.set(SearchBoxProperties.AI_CHIP_CLICK_CALLBACK, mOnClickListener);
         mSearchBoxLayout.mAiChip.performClick();
         verify(mOnClickListener).onClick(mSearchBoxLayout.mAiChip);
+    }
+
+    @Test
+    public void testSetSearchBoxClickListener() {
+        mPropertyModel.set(SearchBoxProperties.SEARCH_BOX_CLICK_CALLBACK, mOnClickListener);
+        mSearchBoxLayout.mHintTextView.performClick();
+        verify(mOnClickListener).onClick(mSearchBoxLayout.mHintTextView);
+        assertTrue(mSearchBoxLayout.mHintTextView.isFocusable());
+
+        mPropertyModel.set(SearchBoxProperties.SEARCH_BOX_CLICK_CALLBACK, null);
+        assertTrue(mSearchBoxLayout.mHintTextView.isFocusable());
+    }
+
+    @Test
+    public void testSetHintTextAlpha() {
+        mPropertyModel.set(SearchBoxProperties.HINT_TEXT_ALPHA, 0.5f);
+        assertEquals(0.5f, mSearchBoxLayout.mHintTextView.getAlpha(), 0.001f);
+
+        mPropertyModel.set(SearchBoxProperties.HINT_TEXT_ALPHA, 1.0f);
+        assertEquals(1.0f, mSearchBoxLayout.mHintTextView.getAlpha(), 0.001f);
+    }
+
+    @Test
+    public void testSetPlusButtonRotation() {
+        mPropertyModel.set(SearchBoxProperties.PLUS_BUTTON_ROTATION, 180f);
+        assertEquals(180f, mSearchBoxLayout.mPlusButton.getRotation(), 0.001f);
+
+        mPropertyModel.set(SearchBoxProperties.PLUS_BUTTON_ROTATION, 360f);
+        assertEquals(360f, mSearchBoxLayout.mPlusButton.getRotation(), 0.001f);
+    }
+
+    @Test
+    public void testSetPlusButtonTint() {
+        ColorStateList tint = ColorStateList.valueOf(Color.RED);
+        mPropertyModel.set(SearchBoxProperties.PLUS_BUTTON_TINT, tint);
+        assertEquals(tint, ImageViewCompat.getImageTintList(mSearchBoxLayout.mPlusButton));
     }
 }

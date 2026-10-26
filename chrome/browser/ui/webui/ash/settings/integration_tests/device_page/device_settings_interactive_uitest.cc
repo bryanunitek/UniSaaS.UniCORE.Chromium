@@ -32,7 +32,6 @@
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/state_observer.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/events/ash/keyboard_capability.h"
 #include "ui/events/devices/device_data_manager_test_api.h"
 #include "ui/events/devices/input_device.h"
@@ -45,22 +44,8 @@ namespace ash {
 
 namespace {
 
-const ui::TouchpadDevice kSampleTouchpadInternal(1,
-                                                 ui::INPUT_DEVICE_INTERNAL,
-                                                 "touchpad");
-
-const ui::InputDevice kMouse(3, ui::InputDeviceType::INPUT_DEVICE_USB, "mouse");
-
-const ui::InputDevice kFiveKeyMouse(/*id=*/15,
-                                    ui::INPUT_DEVICE_USB,
-                                    "kFiveKeyMouse",
-                                    /*phys=*/"",
-                                    /*sys_path=*/base::FilePath(),
-                                    /*vendor=*/0x1532,
-                                    /*product=*/0x0090,
-                                    /*version=*/0x0001);
-
 inline constexpr int kDeviceId1 = 5;
+constexpr int kFiveKeyMouseId = 15;
 constexpr char kKbdTopRowPropertyName[] = "CROS_KEYBOARD_TOP_ROW_LAYOUT";
 constexpr char kKbdTopRowLayout1Tag[] = "1";
 
@@ -120,11 +105,6 @@ class DeviceSettingsInteractiveUiTest : public InteractiveAshTest {
   DeviceSettingsInteractiveUiTest() {
     DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kOsSettingsWebContentsId);
     webcontents_id_ = kOsSettingsWebContentsId;
-
-    feature_list_.InitWithFeatures({features::kAltClickAndSixPackCustomization,
-                                    features::kPeripheralCustomization,
-                                    ::features::kSupportF11AndF12KeyShortcuts},
-                                   {});
   }
 
   DeviceSettingsInteractiveUiTest(const DeviceSettingsInteractiveUiTest&) =
@@ -307,6 +287,20 @@ class DeviceSettingsInteractiveUiTest : public InteractiveAshTest {
   }
 
  protected:
+  const ui::TouchpadDevice sample_touchpad_internal_ =
+      ui::TouchpadDevice(1, ui::INPUT_DEVICE_INTERNAL, "touchpad");
+  const ui::InputDevice mouse_ =
+      ui::InputDevice(3, ui::InputDeviceType::INPUT_DEVICE_USB, "mouse");
+  const ui::InputDevice five_key_mouse_ =
+      ui::InputDevice(kFiveKeyMouseId,
+                      ui::INPUT_DEVICE_USB,
+                      "kFiveKeyMouse",
+                      /*phys=*/"",
+                      /*sys_path=*/base::FilePath(),
+                      /*vendor=*/0x1532,
+                      /*product=*/0x0090,
+                      /*version=*/0x0001);
+
   std::unique_ptr<FakeDeviceManager> fake_keyboard_manager_;
   base::test::ScopedFeatureList feature_list_;
   ui::ElementIdentifier webcontents_id_;
@@ -343,7 +337,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest, OpenTouchpadSubpage) {
       "h2#deviceName",
   };
 
-  SetTouchpadDevices({kSampleTouchpadInternal});
+  SetTouchpadDevices({sample_touchpad_internal_});
   RunTestSequence(
       LaunchSettingsApp(webcontents_id_,
                         chromeos::settings::mojom::kDeviceSectionPath),
@@ -505,70 +499,6 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest, TrackpointEnabled) {
                                  "Built-in TrackPoint"));
 }
 
-class DeviceSettingsSwapPrimaryMouseButtonInteractiveUiTest
-    : public DeviceSettingsInteractiveUiTest {
- public:
-  DeviceSettingsSwapPrimaryMouseButtonInteractiveUiTest() {
-    feature_list_.Reset();
-    feature_list_.InitWithFeatures({}, {features::kPeripheralCustomization});
-  }
-  // Query to pierce through Shadow DOM to find the mouse row.
-  const DeepQuery kMouseRowQuery{
-      "os-settings-ui",       "os-settings-main",   "main-page-container",
-      "settings-device-page", "#perDeviceMouseRow",
-  };
-
-  const DeepQuery kMouseSwapButtonDropdownQuery{
-      "os-settings-ui",
-      "os-settings-main",
-      "main-page-container",
-      "settings-device-page",
-      "settings-per-device-mouse",
-      "settings-per-device-mouse-subsection",
-      "#mouseSwapButtonDropdown",
-      "#dropdownMenu",
-  };
-
-  const DeepQuery kCursorAcceleratorToggleQuery{
-      "os-settings-ui",
-      "os-settings-main",
-      "main-page-container",
-      "settings-device-page",
-      "settings-per-device-mouse",
-      "settings-per-device-mouse-subsection",
-      "#mouseAcceleration",
-      "#control",
-  };
-};
-
-IN_PROC_BROWSER_TEST_F(DeviceSettingsSwapPrimaryMouseButtonInteractiveUiTest,
-                       SwapPrimaryMouseButton) {
-  DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kCursorAccelerationToggleEnabledEvent);
-  SetMouseDevices({kMouse});
-  StateChange cursor_acceleration_toggle_enabled;
-  cursor_acceleration_toggle_enabled.type =
-      StateChange::Type::kExistsAndConditionTrue;
-  cursor_acceleration_toggle_enabled.event =
-      kCursorAccelerationToggleEnabledEvent;
-  cursor_acceleration_toggle_enabled.where = kCursorAcceleratorToggleQuery;
-  cursor_acceleration_toggle_enabled.test_function = "el => !el.disabled";
-
-  RunTestSequence(
-      LaunchSettingsApp(webcontents_id_,
-                        chromeos::settings::mojom::kDeviceSectionPath),
-      Log("Waiting for per device mouse row to be visible"),
-      WaitForElementExists(webcontents_id_, kMouseRowQuery),
-      ClickElement(webcontents_id_, kMouseRowQuery),
-      Log("Selecting 'Right button' from the dropdown menu"),
-      SelectDropdownElementOption(
-          webcontents_id_, kMouseSwapButtonDropdownQuery,
-          l10n_util::GetStringUTF8(
-              IDS_SETTINGS_PRIMARY_MOUSE_BUTTON_RIGHT_LABEL)),
-      Log("Verifying that right clicking behavior has changed"),
-      MoveMouseTo(webcontents_id_, kCursorAcceleratorToggleQuery),
-      ClickMouse(ui_controls::RIGHT),
-      WaitForStateChange(webcontents_id_, cursor_acceleration_toggle_enabled));
-}
 
 IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest, AddNewTouchpad) {
   // Query to pierce through Shadow DOM to find the touchpad row.
@@ -589,7 +519,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest, AddNewTouchpad) {
       "h2#deviceName",
   };
 
-  SetTouchpadDevices({kSampleTouchpadInternal});
+  SetTouchpadDevices({sample_touchpad_internal_});
   RunTestSequence(
       LaunchSettingsApp(
           webcontents_id_,
@@ -672,7 +602,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest,
       "div > customize-button-row:nth-child(1)" + "#remappingActionDropdown";
   const DeepQuery kRemappingDropdownContainerQuery =
       kRemappingActionDropdownQuery + "#remappingContainer";
-  SetMouseDevices({kFiveKeyMouse});
+  SetMouseDevices({five_key_mouse_});
 
   RunTestSequence(
       SetupInternalKeyboard(),
@@ -688,7 +618,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest,
                            kCustomizeMouseButtonsHelpSectionQuery),
       Log("Registering a new button for the mouse"), Do([&]() {
         ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
-        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouse.id);
+        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouseId);
       }),
       Log("Opening Remapping Action Dropdown"),
       ClickElement(webcontents_id_, kRemappingActionDropdownQuery),
@@ -714,8 +644,8 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest,
       WaitForShow(kOverviewDeskBarElementId),
       Log("Overview opened with mouse button"), Do([&]() {
         ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
-        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouse.id);
-        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouse.id);
+        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouseId);
+        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouseId);
       }),
       WaitForShow(kOverviewDeskBarElementId),
       Log("Overview closed with mouse button"));
@@ -752,7 +682,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest,
                                              "key-combination-input-dialog" +
                                              "#saveButton";
 
-  SetMouseDevices({kFiveKeyMouse});
+  SetMouseDevices({five_key_mouse_});
 
   RunTestSequence(
       SetupInternalKeyboard(),
@@ -767,7 +697,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest,
 
       Do([&]() {
         ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
-        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouse.id);
+        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouseId);
       }),
       Log("Opening Remapping Action Dropdown"),
       ClickElement(webcontents_id_, kRemappingActionDropdownQuery),
@@ -797,12 +727,12 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest,
       Log("Activating remapped button to open calendar with Search + C"),
       Do([&]() {
         ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
-        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouse.id);
+        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouseId);
       }),
       WaitForShow(kCalendarViewElementId),
       Log("Calendar opened with mouse button"), Do([&]() {
         ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
-        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouse.id);
+        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouseId);
       }),
       WaitForHide(kCalendarViewElementId),
       Log("Calendar closed with mouse button"));
@@ -840,7 +770,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest, MouseButtonRenaming) {
       kCustomizeButtonsSubsectionQuery +
       "div > customize-button-row:nth-child(1)" + "#buttonLabel";
 
-  SetMouseDevices({kFiveKeyMouse});
+  SetMouseDevices({five_key_mouse_});
 
   RunTestSequence(
       SetupInternalKeyboard(),
@@ -853,7 +783,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest, MouseButtonRenaming) {
                            kCustomizeMouseButtonsHelpSectionQuery),
       Log("Registering a new button for the mouse"), Do([&]() {
         ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
-        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouse.id);
+        generator.PressAndReleaseKey(ui::VKEY_A, ui::EF_NONE, kFiveKeyMouseId);
       }),
       Log("Clicking edit icon for mouse 'Middle Button'"),
       ClickElement(webcontents_id_, kMiddleButtonEditButtonQuery),
@@ -896,7 +826,7 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest,
 
   DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kScrollingSpeedSliderDisabledEvent);
   DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kScrollingSpeedSliderEnabledEvent);
-  SetMouseDevices({kMouse});
+  SetMouseDevices({mouse_});
 
   StateChange scrolling_speed_slider_disabled;
   scrolling_speed_slider_disabled.type =
@@ -1046,17 +976,7 @@ class AmbientLightSensorStateObserver
   bool ambient_light_sensor_enabled_;
 };
 
-class DeviceSettingsBrightnessInteractiveUiTest
-    : public DeviceSettingsInteractiveUiTest {
- public:
-  DeviceSettingsBrightnessInteractiveUiTest() {
-    feature_list_.Reset();
-    feature_list_.InitWithFeatures(
-        {features::kPeripheralCustomization,
-         features::kEnableBrightnessControlInSettings},
-        {});
-  }
-};
+using DeviceSettingsBrightnessInteractiveUiTest = DeviceSettingsInteractiveUiTest;
 
 IN_PROC_BROWSER_TEST_F(DeviceSettingsBrightnessInteractiveUiTest,
                        ToggleDisplayAutoBrightness) {

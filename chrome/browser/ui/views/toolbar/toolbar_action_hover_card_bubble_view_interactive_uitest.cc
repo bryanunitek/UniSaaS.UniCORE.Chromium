@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/toolbar/toolbar_action_hover_card_bubble_view.h"
+
 #include <optional>
 
 #include "base/run_loop.h"
@@ -9,14 +11,16 @@
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/extensions/extension_action_dispatcher.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_interactive_uitest.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/toolbar/toolbar_action_hover_card_bubble_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_action_hover_card_controller.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -67,7 +71,7 @@ class SafeWidgetDestroyedWaiter : public views::WidgetObserver {
     if (!observation_.IsObserving()) {
       return;
     }
-    DCHECK(quit_closure_.is_null());
+    CHECK(quit_closure_.is_null(), base::NotFatalUntil::M162);
     quit_closure_ = run_loop_.QuitClosure();
     run_loop_.Run();
   }
@@ -87,8 +91,11 @@ class ToolbarActionHoverCardBubbleViewUITest : public ExtensionsToolbarUITest {
       : animation_mode_reset_(gfx::AnimationTestApi::SetRichAnimationRenderMode(
             gfx::Animation::RichAnimationRenderMode::FORCE_DISABLED)) {
     ToolbarActionHoverCardController::disable_animations_for_testing_ = true;
-    scoped_feature_list_.InitAndEnableFeature(
-        extensions_features::kExtensionsMenuAccessControl);
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{extensions_features::
+                                  kExtensionsMenuAccessControl},
+        /*disabled_features=*/{features::kExtensionsPinnedByDefault,
+                               features::kWebUIExtensionsContainer});
   }
   ToolbarActionHoverCardBubbleViewUITest(
       const ToolbarActionHoverCardBubbleViewUITest&) = delete;
@@ -381,7 +388,7 @@ IN_PROC_BROWSER_TEST_F(ToolbarActionHoverCardBubbleViewUITest,
       extensions::ExtensionActionManager::Get(profile())->GetExtensionAction(
           *extension);
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(action);
   int tab_id = sessions::SessionTabHelper::IdForTab(web_contents).id();
   action->SetTitle(tab_id, "Action title");
@@ -641,8 +648,12 @@ class ToolbarActionHoverCardBubbleViewDisabledFeatureUITest
  public:
   ToolbarActionHoverCardBubbleViewDisabledFeatureUITest() {
     scoped_feature_list_.Reset();
-    scoped_feature_list_.InitAndDisableFeature(
-        extensions_features::kExtensionsMenuAccessControl);
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{
+            extensions_features::kExtensionsMenuAccessControl,
+            features::kExtensionsPinnedByDefault,
+            features::kWebUIExtensionsContainer});
   }
 };
 

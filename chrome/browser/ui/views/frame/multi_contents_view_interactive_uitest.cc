@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/frame/multi_contents_view.h"
+
 #include "base/functional/bind.h"
 #include "base/numerics/clamped_math.h"
 #include "base/numerics/ranges.h"
@@ -12,19 +14,23 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/side_panel/side_panel_action_callback.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/split_tab_highlight_controller.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/toolbar/bookmark_sub_menu_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_button.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/contents_container_outline.h"
+#include "chrome/browser/ui/views/frame/contents_web_view.h"
 #include "chrome/browser/ui/views/frame/custom_floating_corner.h"
 #include "chrome/browser/ui/views/frame/multi_contents_background_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_drop_target_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_resize_area.h"
-#include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view_drop_target_controller.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view_mini_toolbar.h"
 #include "chrome/browser/ui/views/frame/scrim_view.h"
@@ -46,12 +52,14 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
+#include "ui/actions/actions.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/interaction/state_observer.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event_modifiers.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/controls/separator.h"
 #include "ui/views/test/views_test_utils.h"
 
 #if BUILDFLAG(IS_MAC)
@@ -81,7 +89,6 @@ class ViewBoundsChangedObserver : public views::ViewObserver,
   void OnViewIsDeleting(views::View* view) override { observation_.Reset(); }
 
  private:
-  raw_ptr<Browser> browser_;
   int bounds_changed_count_ = 0;
   base::ScopedObservation<views::View, views::ViewObserver> observation_{this};
 };
@@ -101,14 +108,14 @@ class MultiContentsViewUiTest
 
   void SetUpOnMainThread() override {
     SplitViewInteractiveTestMixin::SetUpOnMainThread();
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         prefs::kTabSearchPinnedToTabstrip, true);
     host_resolver()->AddRule("*", "127.0.0.1");
     ASSERT_TRUE(embedded_test_server()->Start());
   }
 
   void TearDownOnMainThread() override {
-    browser()->profile()->GetPrefs()->ClearPref(
+    browser()->GetProfile()->GetPrefs()->ClearPref(
         prefs::kTabSearchPinnedToTabstrip);
     SplitViewInteractiveTestMixin::TearDownOnMainThread();
   }
@@ -280,8 +287,12 @@ class MultiContentsViewUiTest
                                         kSidePanelViewObserver);
 
     return Steps(Do(base::BindLambdaForTesting([this]() {
-                   chrome::ExecuteCommand(browser(),
-                                          IDC_SHOW_CUSTOMIZE_CHROME_SIDE_PANEL);
+                   chrome::ExecuteCommandWithContext(
+                       browser(), IDC_SHOW_CUSTOMIZE_CHROME_SIDE_PANEL,
+                       actions::ActionInvocationContext::Builder()
+                           .SetProperty(kSidePanelOpenTriggerKey,
+                                        SidePanelOpenTrigger::kToolbarButton)
+                           .Build());
                  })),
                  PollView(kSidePanelViewObserver, kSidePanelElementId,
                           [](const SidePanel* side_panel) -> bool {
@@ -501,7 +512,7 @@ IN_PROC_BROWSER_TEST_P(MultiContentsViewUiTest,
       EnterSplitView(2, 0), WaitForActiveTabChange(2),
       PressButton(kTabSearchButtonElementId),
       WaitForShow(kTabSearchBubbleElementId),
-      Do([this]() { browser()->tab_strip_model()->ActivateTabAt(1); }),
+      Do([this]() { browser()->GetTabStripModel()->ActivateTabAt(1); }),
       WaitForHide(kTabSearchBubbleElementId), WaitForActiveTabChange(1),
       CheckActiveContentsHasFocus());
 }
@@ -541,7 +552,7 @@ IN_PROC_BROWSER_TEST_P(MultiContentsViewUiTest,
       WaitForShow(kTabSearchBubbleElementId),
       // Switch from a regular tab directly to an inactive tab, which is on
       // the left side of a split with the TabSearch bubble dialog opened.
-      Do([this]() { browser()->tab_strip_model()->ActivateTabAt(1); }),
+      Do([this]() { browser()->GetTabStripModel()->ActivateTabAt(1); }),
       WaitForHide(kTabSearchBubbleElementId), WaitForActiveTabChange(1),
       CheckActiveContentsHasFocus(),
       // Switch out of the split view back to the regular tab
@@ -552,7 +563,7 @@ IN_PROC_BROWSER_TEST_P(MultiContentsViewUiTest,
       WaitForShow(kTabSearchBubbleElementId),
       // Switch from a regular tab directly to an inactive tab, which is on
       // the right side of a split with the TabSearch bubble dialog opened.
-      Do([this]() { browser()->tab_strip_model()->ActivateTabAt(2); }),
+      Do([this]() { browser()->GetTabStripModel()->ActivateTabAt(2); }),
       WaitForHide(kTabSearchBubbleElementId), WaitForActiveTabChange(2),
       CheckActiveContentsHasFocus());
 }
@@ -942,21 +953,21 @@ IN_PROC_BROWSER_TEST_P(MultiContentsViewUiTest, KeyboardShortcutCreatesSplit) {
   RunTestSequence(
       CheckResult(
           [&]() {
-            return browser()->tab_strip_model()->GetActiveTab()->IsSplit();
+            return browser()->GetTabStripModel()->GetActiveTab()->IsSplit();
           },
           false),
-      CheckResult([&]() { return browser()->tab_strip_model()->count(); }, 1),
+      CheckResult([&]() { return browser()->GetTabStripModel()->count(); }, 1),
       SendAccelerator(kBrowserViewElementId, accelerator),
       CheckResult(
           [&]() {
-            return browser()->tab_strip_model()->GetActiveTab()->IsSplit();
+            return browser()->GetTabStripModel()->GetActiveTab()->IsSplit();
           },
           true),
-      CheckResult([&]() { return browser()->tab_strip_model()->count(); }, 2),
+      CheckResult([&]() { return browser()->GetTabStripModel()->count(); }, 2),
       // Pressing the accelerator again shouldn't do anything since the active
       // tab is already in a split
       SendAccelerator(kBrowserViewElementId, accelerator),
-      CheckResult([&]() { return browser()->tab_strip_model()->count(); }, 2));
+      CheckResult([&]() { return browser()->GetTabStripModel()->count(); }, 2));
 }
 
 using ContentsViewOutlineHighlightObserver =
@@ -972,9 +983,7 @@ class MultiContentsViewOutlineHighlightUiTest : public MultiContentsViewUiTest {
     return Do([this, show_prompt]() {
       split_tabs::SplitTabHighlightController* const
           split_tab_highlight_controller =
-              browser()
-                  ->browser_window_features()
-                  ->split_tab_highlight_controller();
+              split_tabs::SplitTabHighlightController::From(browser());
       if (show_prompt) {
         split_tab_highlight_controller->OnPermissionPromptShown();
       } else {
@@ -1184,7 +1193,7 @@ class MultiContentsViewDragEntrypointsUiTest : public MultiContentsViewUiTest {
         RunSubsequence(
             Steps(
                 // Programmatically generate a list of mouse movement steps.
-                []() {
+                [this]() {
                   constexpr int kMouseMovements = 20;
                   constexpr base::TimeDelta kMovementDelay =
                       base::Milliseconds(250);
@@ -1301,7 +1310,7 @@ class MultiContentsViewBookmarkDragEntrypointsUiTest
 
   void SetUpOnMainThread() override {
     MultiContentsViewDragEntrypointsUiTest::SetUpOnMainThread();
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         bookmarks::prefs::kShowBookmarkBar, true);
   }
 
@@ -1336,7 +1345,7 @@ INSTANTIATE_TEST_SUITE_P(
 IN_PROC_BROWSER_TEST_P(MultiContentsViewBookmarkDragEntrypointsUiTest,
                        DISABLED_ShowsDropTargetOnBookmarkedLinkDragged) {
   bookmarks::BookmarkModel* const model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const std::u16string bookmark_title = u"Bookmark";
   model->AddNewURL(model->bookmark_bar_node(), 0, u"Bookmark",
                    GetURL("/links.html"));

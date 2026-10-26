@@ -8,7 +8,6 @@
 #import <UIKit/UIKit.h>
 
 #include "base/ios/block_types.h"
-#include "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
 #include "ios/public/provider/chrome/browser/user_feedback/user_feedback_sender.h"
 
 enum class AccountMenuAccessPoint;
@@ -16,15 +15,12 @@ enum class AccountMenuAccessPoint;
 class GURL;
 @class OpenNewTabCommand;
 @protocol SafariDataImportUIHandler;
-@class ShowSigninCommand;
+@protocol SystemIdentity;
 @class UIViewController;
 namespace password_manager {
 enum class PasswordCheckReferrer;
 enum class WarningType;
 }  // namespace password_manager
-namespace signin_metrics {
-enum class AccessPoint;
-}  // namespace signin_metrics
 enum class SafariDataImportEntryPoint;
 namespace syncer {
 enum class TrustedVaultUserActionTriggerForUMA;
@@ -60,6 +56,13 @@ enum class TabGridOpeningMode {
                            dismissOmnibox:(BOOL)dismissOmnibox
                          dismissSnackbars:(BOOL)dismissSnackbars;
 
+// Dismisses all modal dialogs and calls the completion block. Optionally does
+// not dismiss the omnibox, snackbars, or Gemini.
+- (void)dismissModalDialogsWithCompletion:(ProceduralBlock)completion
+                           dismissOmnibox:(BOOL)dismissOmnibox
+                         dismissSnackbars:(BOOL)dismissSnackbars
+                            dismissGemini:(BOOL)dismissGemini;
+
 // Dismisses all modal dialogs (if any) before showing the Password Checkup page
 // for `referrer`.
 - (void)dismissModalsAndShowPasswordCheckupPageForReferrer:
@@ -72,9 +75,6 @@ enum class TabGridOpeningMode {
                              referrer:(password_manager::PasswordCheckReferrer)
                                           referrer;
 
-// Shows the Settings UI if nothing else is displayed.
-- (void)maybeShowSettingsFromViewController;
-
 // TODO(crbug.com/41352590) : Do not pass baseViewController through dispatcher.
 // Shows the Settings UI, presenting from `baseViewController`.
 - (void)showSettingsFromViewController:(UIViewController*)baseViewController;
@@ -84,6 +84,12 @@ enum class TabGridOpeningMode {
 // for default browser settings if specified.
 - (void)showSettingsFromViewController:(UIViewController*)baseViewController
               hasDefaultBrowserBlueDot:(BOOL)hasDefaultBrowserBlueDot;
+
+// TODO(crbug.com/41352590): Do not pass baseViewController through dispatcher.
+// Shows the Settings UI, presenting from `baseViewController` and showing
+// Level Up walkthrough IPH if specified.
+- (void)showSettingsFromViewController:(UIViewController*)baseViewController
+       shouldShowLevelUpWalkthroughIPH:(BOOL)shouldShowLevelUpWalkthroughIPH;
 
 // Shows the settings UI for price tracking notifications.
 - (void)showPriceTrackingNotificationsSettings;
@@ -133,14 +139,6 @@ enum class TabGridOpeningMode {
 // URLLoader methods.
 - (void)openURLInNewTab:(OpenNewTabCommand*)command;
 
-// TODO(crbug.com/41352590) : Do not pass baseViewController through dispatcher.
-// Shows the signin UI, presenting from `baseViewController`.
-// DISCLAIMER: If possible, prefer calling `[SigninCoordinator
-// signinCoordinatorWithCommand:browser:baseViewController]` instead.
-// Keep ownership of the `SigninCoordinator` and start it explicitly.
-- (void)showSignin:(ShowSigninCommand*)command
-    baseViewController:(UIViewController*)baseViewController;
-
 // Shows the account menu. On scenes with regular width, the account menu
 // appears as a popover. This command is ignored if there is already a UI being
 // presented. Also, redirects to `url` when the sign-in flow is complete and one
@@ -150,17 +148,12 @@ enum class TabGridOpeningMode {
 // Shows the account menu.
 - (void)showAccountMenuWithAccessPoint:(AccountMenuAccessPoint)accessPoint;
 
-// TODO(crbug.com/41352590) : Do not pass baseViewController through dispatcher.
-// Shows the consistency promo UI that allows users to sign in to Chrome using
-// the default accounts on the device.
-// Redirects to `url` when the sign-in flow is complete.
-- (void)showWebSigninPromoFromViewController:
-            (UIViewController*)baseViewController
-                                         URL:(const GURL&)url;
-
 // Shows a notification with the signed-in user account.
 - (void)showSigninAccountNotificationFromViewController:
     (UIViewController*)baseViewController;
+
+// Shows the undo sign-out flow from snackbar for `identity`.
+- (void)showUndoSignoutFromSnackbarForIdentity:(id<SystemIdentity>)identity;
 
 // Sets whether the UI is displaying incognito content.
 - (void)setIncognitoContentVisible:(BOOL)incognitoContentVisible;
@@ -178,6 +171,10 @@ enum class TabGridOpeningMode {
 // Opens a debug menu for AI prototyping.
 - (void)openAIMenu;
 
+// Displays the Assistant AIM interface. Closes any existing assistant before
+// starting a new one.
+- (void)showAssistantWithNewSession;
+
 // Displays the Assistant AIM interface.
 - (void)showAssistant;
 
@@ -192,11 +189,6 @@ enum class TabGridOpeningMode {
 
 // Closes the assistant and destroys its resources.
 - (void)closeAssistant;
-
-// Shows the fullscreen sign-in promo with a completion block that is called
-// when the promo is dismissed.
-- (void)showFullscreenSigninPromoWithCompletion:
-    (SigninCoordinatorCompletionCallback)dismissalCompletion;
 
 // Shows the user the modal that contains a button to start the workflow to
 // import Safari data to Chrome. Optionally attach a UI handler for the
@@ -213,9 +205,12 @@ enum class TabGridOpeningMode {
 // migration.
 - (void)showManagedProfileCreation;
 
-// Shows/Hides the guided tour "NTP" step.
-- (void)showGuidedTourNTPStepWithCompletion:(ProceduralBlock)completion;
-- (void)hideGuidedTourNTPStep;
+// Shows/Hides the Guided Tour promo and steps, executing `completion` when
+// finished with `guidedTourStarted` indicating whether the user started the
+// tour.
+- (void)showGuidedTourWithCompletion:
+    (void (^)(BOOL guidedTourStarted))completion;
+- (void)hideGuidedTour;
 
 @end
 

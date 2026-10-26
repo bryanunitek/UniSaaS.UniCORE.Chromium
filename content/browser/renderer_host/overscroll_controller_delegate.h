@@ -33,9 +33,9 @@ class CONTENT_EXPORT OverscrollControllerDelegate {
 
   // This is called for each update in the overscroll amount. Returns true if
   // the delegate consumed the event.
-  virtual bool OnOverscrollUpdate(float delta_x, float delta_y) = 0;
+  virtual bool OnOverscrollUpdate(float delta_x) = 0;
 
-  // This is called when the overscroll completes.
+  // This is called asynchronously when the overscroll completes.
   virtual void OnOverscrollComplete(OverscrollMode overscroll_mode) = 0;
 
   // This is called when the direction of the overscroll changes. When a new

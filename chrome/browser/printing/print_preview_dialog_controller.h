@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 
 #include "base/check.h"
 #include "base/functional/callback.h"
@@ -57,13 +58,17 @@ class PrintPreviewDialogController : public WebContentsCollection::Observer {
 
   // Initiates print preview for `initiator`.
   void PrintPreview(content::WebContents* initiator,
-                    const mojom::RequestPrintPreviewParams& params);
+                    const mojom::RequestPrintPreviewParams& params,
+                    bool is_pdf);
 
   // Returns the preview dialog for `contents`.
   // Returns `contents` if `contents` is a preview dialog.
   // Returns nullptr if no preview dialog exists for `contents`.
   content::WebContents* GetPrintPreviewForContents(
       content::WebContents* contents) const;
+
+  // Cancels the open or backgrounded print preview for `initiator`, if any.
+  void CancelPrintPreview(content::WebContents* initiator);
 
   // Returns the initiator for `preview_dialog`.
   // Returns nullptr if no initiator exists for `preview_dialog`.
@@ -73,6 +78,10 @@ class PrintPreviewDialogController : public WebContentsCollection::Observer {
   // Returns nullptr if no data exists for `preview_dialog`.
   const mojom::RequestPrintPreviewParams* GetRequestParams(
       content::WebContents* preview_dialog) const;
+
+  // Returns whether the initiator associated with `preview_dialog` is printing
+  // PDF content or not. Returns nullopt if no data exists for `preview_dialog`.
+  std::optional<bool> IsPrintingPdf(content::WebContents* preview_dialog) const;
 
   // Runs `callback` on the dialog of each active print preview operation.
   void ForEachPreviewDialog(
@@ -92,12 +101,13 @@ class PrintPreviewDialogController : public WebContentsCollection::Observer {
   // Exposes a way for tests to manually specify the initiator to preview_dialog
   // relationship. For use in tests that create their own preview dialogs.
   void AssociateWebContentsesForTesting(content::WebContents* initiator,
-                                        content::WebContents* preview_dialog) {
+                                        content::WebContents* preview_dialog,
+                                        bool is_pdf = false) {
     CHECK(initiator);
     CHECK(preview_dialog);
-    mojom::RequestPrintPreviewParams params;
-    params.is_modifiable = true;
-    InitiatorData data(initiator, params, /*scoper=*/nullptr);
+
+    InitiatorData data(initiator, mojom::RequestPrintPreviewParams(), is_pdf,
+                       /*scoper=*/nullptr);
     preview_dialog_map_.emplace(preview_dialog, std::move(data));
   }
   void DisassociateWebContentsesForTesting(
@@ -117,6 +127,7 @@ class PrintPreviewDialogController : public WebContentsCollection::Observer {
   struct InitiatorData {
     InitiatorData(content::WebContents* initiator,
                   const mojom::RequestPrintPreviewParams& request_params,
+                  bool is_pdf,
                   std::unique_ptr<tabs::ScopedTabModalUI> scoper);
     InitiatorData(InitiatorData&&) noexcept;
     InitiatorData& operator=(InitiatorData&&) noexcept;
@@ -124,6 +135,7 @@ class PrintPreviewDialogController : public WebContentsCollection::Observer {
 
     raw_ptr<content::WebContents> initiator;
     mojom::RequestPrintPreviewParams request_params;
+    bool is_pdf;
 
     // Prevents other tab-modal UIs from showing.
     std::unique_ptr<tabs::ScopedTabModalUI> scoper;
@@ -159,14 +171,16 @@ class PrintPreviewDialogController : public WebContentsCollection::Observer {
   // Gets/Creates the print preview dialog for `initiator`.
   content::WebContents* GetOrCreatePreviewDialog(
       content::WebContents* initiator,
-      const mojom::RequestPrintPreviewParams& params);
+      const mojom::RequestPrintPreviewParams& params,
+      bool is_pdf);
 
   // Creates a new print preview dialog if GetOrCreatePreviewDialog() cannot
   // find a print preview dialog for `initiator`.
   content::WebContents* CreatePrintPreviewDialog(
       tabs::TabInterface* tab,
       content::WebContents* initiator,
-      const mojom::RequestPrintPreviewParams& params);
+      const mojom::RequestPrintPreviewParams& params,
+      bool is_pdf);
 
   // Helper function to store the title of the initiator associated with
   // `preview_dialog` in `preview_dialog`'s PrintPreviewUI.

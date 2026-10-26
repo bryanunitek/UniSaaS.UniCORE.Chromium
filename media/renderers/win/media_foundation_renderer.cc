@@ -14,6 +14,7 @@
 #include <tuple>
 #include <utility>
 
+#include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/clamped_math.h"
@@ -25,6 +26,7 @@
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_hdc.h"
 #include "base/win/scoped_propvariant.h"
@@ -48,6 +50,18 @@ using Microsoft::WRL::ComPtr;
 using Microsoft::WRL::MakeAndInitialize;
 
 namespace {
+
+// The MF_MEDIA_ENGINE_COMPATIBILITY_MODE value Chromium requests. It opts the
+// Media Engine into behavior tailored for Chromium, notably raising
+// MF_MEDIA_ENGINE_EVENT_ENGINE_SEEK_REQUESTED when the Media Engine needs
+// Chromium to seek in response to an internal change. Not declared by the
+// Windows SDK yet.
+// {44C4A580-FC8D-473A-A703-D0C31557AB0C}
+constexpr GUID MF_MEDIA_ENGINE_COMPATIBILITY_MODE_CHROMIUM = {
+    0x44c4a580,
+    0xfc8d,
+    0x473a,
+    {0xa7, 0x03, 0xd0, 0xc3, 0x15, 0x57, 0xab, 0x0c}};
 
 ATOM g_video_window_class = 0;
 
@@ -612,6 +626,9 @@ MediaFoundationRenderer::~MediaFoundationRenderer() {
 
   StopSendingStatistics(StopSendingStatisticsReason::kShutdown);
 
+  base::UmaHistogramCounts1000("Media.MediaFoundationRenderer.MFSeekRequested",
+                               mf_seek_requested_count_);
+
   // 'mf_media_engine_notify_' should be shutdown first as errors are possible
   // if source is being created while shutdown is called (causing
   // ERROR_FILE_NOT_FOUND from Media Foundations). These errors should be
@@ -666,7 +683,8 @@ void MediaFoundationRenderer::Initialize(MediaResource* media_resource,
 
 HRESULT MediaFoundationRenderer::CreateMediaEngine(
     MediaResource* media_resource) {
-  DVLOG_FUNC(1);
+  bool has_cdm = cdm_context_ != nullptr;
+  DVLOG_FUNC(1) << "has_cdm=" << has_cdm;
 
   if (!InitializeMediaFoundation())
     return kErrorInitializeMediaFoundation;
@@ -720,10 +738,12 @@ HRESULT MediaFoundationRenderer::CreateMediaEngine(
           &MediaFoundationRenderer::OnFrameStepCompleted, weak_this)),
       base::BindPostTaskToCurrentDefault(base::BindRepeating(
           &MediaFoundationRenderer::OnTimeUpdate, weak_this)),
+      base::BindPostTaskToCurrentDefault(base::BindRepeating(
+          &MediaFoundationRenderer::OnMFSeekRequested, weak_this)),
       video_decoder_config, audio_decoder_config));
 
   ComPtr<IMFAttributes> creation_attributes;
-  RETURN_IF_FAILED(MFCreateAttributes(&creation_attributes, 6));
+  RETURN_IF_FAILED(MFCreateAttributes(&creation_attributes, 7));
   RETURN_IF_FAILED(creation_attributes->SetUnknown(
       MF_MEDIA_ENGINE_CALLBACK, mf_media_engine_notify_.Get()));
   RETURN_IF_FAILED(
@@ -731,6 +751,14 @@ HRESULT MediaFoundationRenderer::CreateMediaEngine(
                                      MF_MEDIA_ENGINE_ENABLE_PROTECTED_CONTENT));
   RETURN_IF_FAILED(creation_attributes->SetUINT32(
       MF_MEDIA_ENGINE_AUDIO_CATEGORY, AudioCategory_Media));
+  if (base::FeatureList::IsEnabled(kMediaFoundationChromiumCompatibilityMode)) {
+    // MF_MEDIA_ENGINE_COMPATIBILITY_MODE_CHROMIUM will allow the Media Engine
+    // to raise the new MF_MEDIA_ENGINE_EVENT_ENGINE_SEEK_REQUESTED event to
+    // allow Chromium drive seeks generated from Media Engine.
+    RETURN_IF_FAILED(creation_attributes->SetGUID(
+        MF_MEDIA_ENGINE_COMPATIBILITY_MODE,
+        MF_MEDIA_ENGINE_COMPATIBILITY_MODE_CHROMIUM));
+  }
   if (virtual_video_window_) {
     RETURN_IF_FAILED(creation_attributes->SetUINT64(
         MF_MEDIA_ENGINE_OPM_HWND,
@@ -754,6 +782,9 @@ HRESULT MediaFoundationRenderer::CreateMediaEngine(
                                     IID_PPV_ARGS(&class_factory)));
 
   DWORD creation_flags = 0;
+  if (audio_decoder_config.has_value() && !video_decoder_config.has_value()) {
+    creation_flags |= MF_MEDIA_ENGINE_AUDIOONLY;
+  }
   // Enable low-latency mode if latency hint is low.
   if (latency_hint_.has_value() && (*latency_hint_ <= base::Milliseconds(50))) {
     creation_flags |= MF_MEDIA_ENGINE_REAL_TIME_MODE;
@@ -769,12 +800,22 @@ HRESULT MediaFoundationRenderer::CreateMediaEngine(
   RETURN_IF_FAILED(mf_media_engine_->SetDefaultPlaybackRate(0.0));
 
   RETURN_IF_FAILED(MakeAndInitialize<MediaFoundationSourceWrapper>(
-      &mf_source_, media_resource, media_log_.get(), task_runner_));
+      &mf_source_, media_resource, media_log_.get(), task_runner_, has_cdm));
 
-  std::ignore = SetDCompModeInternal();
+  if (video_decoder_config.has_value()) {
+    std::ignore = SetDCompModeInternal();
+  }
 
-  if (!mf_source_->HasEncryptedStream()) {
-    // Supports clear stream for testing.
+  // If we don't have a CDM and there is no encrypted stream, we can early out
+  // and start playback immediately. This is true for pure clear playback when
+  // `kMediaFoundationClearPlayback` is enabled, or during testing. However, if
+  // a CDM is attached, we must bypass this early-out (even if the initial
+  // stream is clear) to ensure the Protection Manager is fully set up.
+  // This correctly prepares the pipeline for clear leads (e.g., a clear
+  // pre-roll ad followed by an encrypted movie) so that the Decryptor MFT is
+  // included in the topology from the start.
+  if (!mf_source_->HasEncryptedStream() && !has_cdm) {
+    DVLOG_FUNC(1) << "Supports clear stream for testing";
     return SetSourceOnMediaEngine();
   }
 
@@ -1073,6 +1114,9 @@ void MediaFoundationRenderer::OnCdmProxyReceived() {
 void MediaFoundationRenderer::Flush(base::OnceClosure flush_cb) {
   DVLOG_FUNC(2);
 
+  // Only the StartPlayingFrom() that follows may resume playback.
+  awaiting_start_playing_from_ = true;
+
   HRESULT hr = PauseInternal();
   // Ignore any Pause() error. We can continue to flush |mf_source_| instead of
   // stopping the playback with error.
@@ -1086,6 +1130,8 @@ void MediaFoundationRenderer::Flush(base::OnceClosure flush_cb) {
 void MediaFoundationRenderer::StartPlayingFrom(base::TimeDelta time) {
   double current_time = time.InSecondsF();
   DVLOG_FUNC(2) << "current_time=" << current_time;
+
+  awaiting_start_playing_from_ = false;
 
   // Note: It is okay for |waiting_for_mf_cdm_| to be true here. The
   // MFMediaEngine supports calls to Play/SetCurrentTime before a source is set
@@ -1192,7 +1238,7 @@ void MediaFoundationRenderer::SetVideoStreamEnabled(bool enabled) {
     return;
 
   const bool needs_restart = mf_source_->SetVideoStreamEnabled(enabled);
-  if (needs_restart) {
+  if (needs_restart && !awaiting_start_playing_from_) {
     // If the media source indicates that we need to restart playback (e.g due
     // to a newly enabled stream being EOS), queue a pause and play operation.
     PauseInternal();
@@ -1252,8 +1298,6 @@ HRESULT MediaFoundationRenderer::UpdateVideoStream(const gfx::Size rect_size) {
     return S_OK;
   }
 
-  current_video_rect_size_ = rect_size;
-
   ComPtr<IMFMediaEngineEx> mf_media_engine_ex;
   RETURN_IF_FAILED(mf_media_engine_.As(&mf_media_engine_ex));
 
@@ -1267,6 +1311,10 @@ HRESULT MediaFoundationRenderer::UpdateVideoStream(const gfx::Size rect_size) {
   // rect set in SetWindowPos.
   RETURN_IF_FAILED(mf_media_engine_ex->UpdateVideoStream(
       /*pSrc=*/nullptr, &dest_rect, /*pBorderClr=*/nullptr));
+
+  // Cache only if size is applied. A failed update should not make a later
+  // request for the same size report success without updating Media Engine.
+  current_video_rect_size_ = rect_size;
 
   // Set the start time for the rendered video frame detection.
   RestartRenderedVideoFrameDetectionTimerInNotReported();
@@ -1513,6 +1561,10 @@ MediaEngineNotifyImpl* MediaFoundationRenderer::GetMediaEngineNotifyForTesting()
   return mf_media_engine_notify_.Get();
 }
 
+IMFMediaEngine* MediaFoundationRenderer::GetMediaEngineForTesting() const {
+  return mf_media_engine_.Get();
+}
+
 base::TimeDelta MediaFoundationRenderer::GetMediaTime() {
 // GetCurrentTime is expanded as GetTickCount in base/win/windows_types.h
 #undef GetCurrentTime
@@ -1622,9 +1674,34 @@ void MediaFoundationRenderer::OnTimeUpdate() {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
 }
 
-void MediaFoundationRenderer::OnFrameStepCompleted() {
+void MediaFoundationRenderer::OnMFSeekRequested() {
   DVLOG_FUNC(2);
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
+
+  TRACE_EVENT0("media", "MediaFoundationRenderer::OnMFSeekRequested");
+  if (!base::FeatureList::IsEnabled(
+          kMediaFoundationChromiumCompatibilityMode)) {
+    // If kMediaFoundationChromiumCompatibilityMode is not enabled, the
+    // MF_MEDIA_ENGINE_COMPATIBILITY_MODE_CHROMIUM mode is not set, therefore we
+    // should not handle the MF_MEDIA_ENGINE_EVENT_ENGINE_SEEK_REQUESTED event.
+    return;
+  }
+  mf_seek_requested_count_++;
+  renderer_client_->OnWaiting(WaitingReason::kDecoderStateLost);
+}
+
+void MediaFoundationRenderer::OnFrameStepCompleted() {
+  DVLOG_FUNC(2) << "awaiting_start_playing_from="
+                << awaiting_start_playing_from_;
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+
+  // The Media Engine has a single paused state, so this Play() would also
+  // clear the pause that Flush() issued. StartPlayingFrom()'s Play() would
+  // then find the engine unpaused and send no PLAYING event, which
+  // BUFFERING_HAVE_ENOUGH is derived from. StartPlayingFrom() resumes.
+  if (awaiting_start_playing_from_) {
+    return;
+  }
 
   // Frame-Stepping causes Media engine to be in a paused state after finishing.
   // Thus play and set playback rate is needed to change the state to be

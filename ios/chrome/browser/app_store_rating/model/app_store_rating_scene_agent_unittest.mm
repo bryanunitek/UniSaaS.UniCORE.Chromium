@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/app_store_rating/model/app_store_rating_scene_agent.h"
 
 #import "components/metrics/metrics_state_manager.h"
+#import "components/metrics/startup_visibility.h"
 #import "components/metrics/test/test_enabled_state_provider.h"
 #import "components/password_manager/core/browser/password_manager_util.h"
 #import "components/password_manager/core/common/password_manager_pref_names.h"
@@ -115,8 +116,8 @@ class ScopedVariationsService {
     variations_service_->OverrideStoredPermanentCountry("us");
   }
 
-  std::unique_ptr<metrics::MetricsStateManager> metrics_state_manager_;
   std::unique_ptr<metrics::TestEnabledStateProvider> enabled_state_provider_;
+  std::unique_ptr<metrics::MetricsStateManager> metrics_state_manager_;
   std::unique_ptr<variations::VariationsService> variations_service_;
 };
 
@@ -157,12 +158,9 @@ class AppStoreRatingSceneAgentTest : public PlatformTest {
 
   // Create a FakeSceneState.
   void CreateFakeSceneState() {
-    id mockAppState = OCMClassMock([AppState class]);
     TestProfileIOS::Builder builder;
     profile_ = std::move(builder).Build();
-    fake_scene_state_ =
-        [[FakeSceneState alloc] initWithAppState:mockAppState
-                                         profile:profile_.get()];
+    fake_scene_state_ = [[FakeSceneState alloc] initWithProfile:profile_.get()];
   }
 
   // Create an AppStoreRatingSceneAgent to test.

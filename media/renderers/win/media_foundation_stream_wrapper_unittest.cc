@@ -25,6 +25,7 @@
 #include "media/base/media_util.h"
 #include "media/base/mock_filters.h"
 #include "media/base/test_helpers.h"
+#include "media/base/win/mf_helpers.h"
 #include "media/base/win/mf_mocks.h"
 #include "media/base/win/test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -122,6 +123,57 @@ class MediaFoundationStreamWrapperTest : public testing::Test {
             mf_video_stream_wrapper_, spToken, &waitRequestSample));
 
     waitRequestSample.Wait();
+  }
+
+  void VerifyVideoGeometry(const gfx::Size& coded_size,
+                           const gfx::Rect& visible_rect,
+                           const gfx::Size& natural_size) {
+    VideoDecoderConfig config(VideoCodec::kVP9, VP9PROFILE_PROFILE0,
+                              VideoDecoderConfig::AlphaMode::kIsOpaque,
+                              VideoColorSpace::REC709(), VideoTransformation(),
+                              coded_size, visible_rect, natural_size, {},
+                              EncryptionScheme::kUnencrypted);
+    ASSERT_TRUE(config.IsValidConfig());
+    video_stream_->set_video_decoder_config(config);
+
+    ComPtr<MediaFoundationStreamWrapper> wrapper;
+    ASSERT_EQ(
+        MediaFoundationStreamWrapper::Create(
+            0, nullptr, video_stream_.get(), std::make_unique<NullMediaLog>(),
+            stream_wrapper_task_runner_, &wrapper),
+        S_OK);
+    ComPtr<IMFStreamDescriptor> descriptor;
+    ASSERT_EQ(wrapper->GetStreamDescriptor(&descriptor), S_OK);
+    ComPtr<IMFMediaTypeHandler> handler;
+    ASSERT_EQ(descriptor->GetMediaTypeHandler(&handler), S_OK);
+    ComPtr<IMFMediaType> type;
+    ASSERT_EQ(handler->GetMediaTypeByIndex(0, &type), S_OK);
+
+    UINT32 width = 0;
+    UINT32 height = 0;
+    ASSERT_EQ(MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &width, &height),
+              S_OK);
+    EXPECT_EQ(gfx::Size(width, height), coded_size);
+    MFVideoArea area = {};
+    ASSERT_EQ(
+        type->GetBlob(MF_MT_GEOMETRIC_APERTURE, reinterpret_cast<UINT8*>(&area),
+                      sizeof(area), nullptr),
+        S_OK);
+    EXPECT_EQ(area.OffsetX.value, visible_rect.x());
+    EXPECT_EQ(area.OffsetY.value, visible_rect.y());
+    EXPECT_EQ(gfx::Size(area.Area.cx, area.Area.cy), visible_rect.size());
+
+    UINT32 numerator = 0;
+    UINT32 denominator = 0;
+    ASSERT_EQ(MFGetAttributeRatio(type.Get(), MF_MT_PIXEL_ASPECT_RATIO,
+                                  &numerator, &denominator),
+              S_OK);
+    // MF derives display aspect from aperture times pixel aspect. It must
+    // agree with natural_size without applying aspect correction twice.
+    EXPECT_EQ(
+        static_cast<uint64_t>(area.Area.cx) * numerator * natural_size.height(),
+        static_cast<uint64_t>(area.Area.cy) * denominator *
+            natural_size.width());
   }
 
   void VerifyExpectedSampleEvent(ComPtr<IMFMediaEvent> spMediaEvent,
@@ -248,6 +300,22 @@ class MediaFoundationStreamWrapperTest : public testing::Test {
   scoped_refptr<DecoderBuffer> video_buffer_;
 };
 
+TEST_F(MediaFoundationStreamWrapperTest, VideoGeometrySquarePixels) {
+  VerifyVideoGeometry({1920, 1080}, {0, 0, 1920, 1080}, {1920, 1080});
+}
+
+TEST_F(MediaFoundationStreamWrapperTest, VideoGeometryAnamorphic) {
+  VerifyVideoGeometry({1920, 1080}, {0, 0, 1920, 1080}, {2420, 1080});
+}
+
+TEST_F(MediaFoundationStreamWrapperTest, VideoGeometryCodedPadding) {
+  VerifyVideoGeometry({1920, 1088}, {0, 0, 1920, 1080}, {1920, 1080});
+}
+
+TEST_F(MediaFoundationStreamWrapperTest, VideoGeometryCroppedAnamorphic) {
+  VerifyVideoGeometry({720, 480}, {8, 0, 704, 480}, {640, 480});
+}
+
 TEST_F(MediaFoundationStreamWrapperTest, VerifySampleProcessingPostStart) {
   ComPtr<IMFMediaEvent> spMediaEvent;
   ComPtr<IUnknown> spToken;
@@ -341,6 +409,118 @@ TEST_F(MediaFoundationStreamWrapperTest,
 TEST_F(MediaFoundationStreamWrapperTest,
        VerifySamplesBufferedPostFlushProcessedPostSeek) {
   VerifyBufferedPostFlushSamplesProcessed(/*startEvent*/ false);
+}
+
+// Batched reads are only used when kMediaFoundationBatchRead is enabled, and
+// MediaFoundationStreamWrapper reads that feature during initialization, so
+// the wrapper is recreated once the feature is set.
+class MediaFoundationStreamWrapperBatchReadTest
+    : public MediaFoundationStreamWrapperTest {
+ public:
+  MediaFoundationStreamWrapperBatchReadTest() {
+    scoped_feature_list_.InitAndEnableFeatureWithParameters(
+        kMediaFoundationBatchRead, {{"batch_read_count", "3"}});
+    mf_video_stream_wrapper_.Reset();
+    MediaFoundationStreamWrapper::Create(
+        0, mf_media_source_.Get(), video_stream_.get(),
+        std::make_unique<NullMediaLog>(), stream_wrapper_task_runner_,
+        &mf_video_stream_wrapper_);
+  }
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// A batched read requested before a flush completes after it, so its buffers
+// are from the position playback seeked away from. Only the read issued after
+// the flush may reach Media Engine.
+TEST_F(MediaFoundationStreamWrapperBatchReadTest,
+       DropsBatchedReadRequestedBeforeFlush) {
+  constexpr base::TimeDelta kStaleTimestamp = base::Seconds(1);
+  constexpr base::TimeDelta kFreshTimestamp = base::Seconds(10);
+
+  auto stale_buffer = base::MakeRefCounted<DecoderBuffer>(kFakeBufferSize);
+  stale_buffer->set_timestamp(kStaleTimestamp);
+  auto fresh_buffer = base::MakeRefCounted<DecoderBuffer>(kFakeBufferSize);
+  fresh_buffer->set_timestamp(kFreshTimestamp);
+
+  ComPtr<IUnknown> spToken;
+  MakeAndInitialize<TestToken>(&spToken);
+
+  // The first read is held so that it can complete after the flush below. The
+  // second one is the refill from the new position. A third read would fail
+  // this expectation.
+  base::WaitableEvent stale_read_requested;
+  DemuxerStream::ReadCB stale_read_cb;
+  EXPECT_CALL(*video_stream_, OnRead(_))
+      .WillOnce([&](DemuxerStream::ReadCB& read_cb) {
+        stale_read_cb = std::move(read_cb);
+        stale_read_requested.Signal();
+      })
+      .WillOnce(ReturnBuffer(fresh_buffer, stream_wrapper_task_runner_));
+
+  stream_wrapper_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](ComPtr<MediaFoundationStreamWrapper> mf_stream_wrapper) {
+            mf_stream_wrapper->SetSelected(true);
+          },
+          mf_video_stream_wrapper_));
+
+  RequestSample(spToken);
+  stale_read_requested.Wait();
+
+  // Seek: the flush moves the stream to a new generation and the start event
+  // ends the buffering of post flush samples.
+  stream_wrapper_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](ComPtr<MediaFoundationStreamWrapper> mf_stream_wrapper) {
+            PROPVARIANT pv;
+            PropVariantInit(&pv);
+            pv.vt = VT_I8;
+            pv.hVal.QuadPart = 0;
+
+            mf_stream_wrapper->Flush();
+            mf_stream_wrapper->QueueStartedEvent(&pv);
+          },
+          mf_video_stream_wrapper_));
+
+  // Complete the read that predates the flush.
+  stream_wrapper_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](DemuxerStream::ReadCB read_cb, scoped_refptr<DecoderBuffer> b) {
+            std::move(read_cb).Run(DemuxerStream::kOk, {b, b, b});
+          },
+          std::move(stale_read_cb), stale_buffer));
+
+  ComPtr<IMFMediaEvent> spMediaEvent;
+  MediaEventType met;
+  ASSERT_TRUE(
+      GetNextStreamEvent(/*timeout*/ base::Milliseconds(500), &spMediaEvent));
+  spMediaEvent->GetType(&met);
+  EXPECT_EQ(met, MEStreamStarted);
+
+  // The sample delivered must come from the read issued after the flush.
+  spMediaEvent.Reset();
+  ASSERT_TRUE(
+      GetNextStreamEvent(/*timeout*/ base::Milliseconds(500), &spMediaEvent));
+  spMediaEvent->GetType(&met);
+  ASSERT_EQ(met, MEMediaSample);
+
+  PROPVARIANT pv;
+  spMediaEvent->GetValue(&pv);
+  ComPtr<IMFSample> spSample;
+  ASSERT_EQ(pv.punkVal->QueryInterface(IID_PPV_ARGS(&spSample)), S_OK);
+  LONGLONG sample_time = 0;
+  ASSERT_EQ(spSample->GetSampleTime(&sample_time), S_OK);
+  EXPECT_EQ(sample_time, TimeDeltaToMfTime(kFreshTimestamp));
+
+  // The stale buffers were dropped, so nothing else is delivered.
+  spMediaEvent.Reset();
+  EXPECT_FALSE(
+      GetNextStreamEvent(/*timeout*/ base::Milliseconds(50), &spMediaEvent));
 }
 
 // Initializes a MediaFoundationStreamWrapper inside a simulated task runner

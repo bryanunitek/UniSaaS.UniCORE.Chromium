@@ -4,6 +4,8 @@
 
 #include "chrome/browser/component_updater/crowd_deny_component_installer.h"
 
+#include <stdint.h>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -98,8 +100,7 @@ base::FilePath CrowdDenyComponentInstallerPolicy::GetRelativeInstallDir()
 
 void CrowdDenyComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(std::begin(kCrowdDenyPublicKeySHA256),
-               std::end(kCrowdDenyPublicKeySHA256));
+  hash->assign_range(kCrowdDenyPublicKeySHA256);
 }
 
 std::string CrowdDenyComponentInstallerPolicy::GetName() const {

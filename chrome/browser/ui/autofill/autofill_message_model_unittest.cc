@@ -8,12 +8,17 @@
 
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
+#include "chrome/browser/android/android_theme_resources.h"
 #include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/ui/autofill/autofill_message_model_test_api.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/autofill/core/browser/ui/payments/save_payment_method_and_virtual_card_enroll_confirmation_ui_params.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/grit/components_scaled_resources.h"
+#include "components/strings/grit/components_strings.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "url/gurl.h"
 
 namespace autofill {
 
@@ -116,6 +121,102 @@ TEST(AutofillMessageModelTest, VerifyVirtualCardEnrollFailureAttributes) {
                 AutofillMessageModel::Type::kVirtualCardEnrollFailure));
 }
 
+TEST(AutofillMessageModelTest, VerifyResurrectChurnedUsersAttributes) {
+  base::MockCallback<base::OnceClosure> action_callback;
+  base::MockCallback<messages::MessageWrapper::DismissCallback>
+      dismiss_callback;
+
+  std::unique_ptr<AutofillMessageModel> message_model =
+      AutofillMessageModel::CreateForResurrectChurnedUsers(
+          action_callback.Get(), dismiss_callback.Get());
+
+  EXPECT_EQ(
+      test_api(*message_model).GetMessage().GetTitle(),
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_CHURNED_USERS_MESSAGE_TITLE));
+  EXPECT_EQ(test_api(*message_model).GetMessage().GetDescription(),
+            l10n_util::GetStringUTF16(
+                IDS_AUTOFILL_CHURNED_USERS_MESSAGE_DESCRIPTION));
+  EXPECT_EQ(test_api(*message_model).GetMessage().GetPrimaryButtonText(),
+            l10n_util::GetStringUTF16(
+                IDS_AUTOFILL_CHURNED_USERS_BUBBLE_ACCEPT_BUTTON_LABEL));
+  EXPECT_EQ(test_api(*message_model).GetMessage().GetIconResourceId(),
+            ResourceMapper::MapToJavaDrawableId(
+                IDR_ANDROID_AUTOFILL_ID_CHROME_PRODUCT));
+  EXPECT_EQ(message_model->GetType(),
+            AutofillMessageModel::Type::kResurrectChurnedUsers);
+  EXPECT_EQ(message_model->GetTypeAsString(),
+            AutofillMessageModel::TypeToString(
+                AutofillMessageModel::Type::kResurrectChurnedUsers));
+
+  EXPECT_CALL(action_callback, Run);
+  message_model->OnActionClicked();
+
+  EXPECT_CALL(dismiss_callback, Run(messages::DismissReason::PRIMARY_ACTION));
+  message_model->OnDismissed(messages::DismissReason::PRIMARY_ACTION);
+}
+
+TEST(AutofillMessageModelTest, VerifyEmailVerificationLoadingAttributes) {
+  base::MockCallback<messages::MessageWrapper::DismissCallback>
+      dismiss_callback;
+
+  std::unique_ptr<AutofillMessageModel> message_model =
+      AutofillMessageModel::CreateForEmailVerificationLoading(
+          dismiss_callback.Get());
+
+  EXPECT_EQ(test_api(*message_model).GetMessage().GetTitle(),
+            l10n_util::GetStringUTF16(IDS_EMAIL_VERIFICATION_LOADING));
+  EXPECT_TRUE(
+      test_api(*message_model).GetMessage().GetPrimaryButtonText().empty());
+  EXPECT_EQ(test_api(*message_model).GetMessage().GetPrimaryWidgetAppearance(),
+            messages::PrimaryWidgetAppearance::PROGRESS_SPINNER);
+  EXPECT_EQ(
+      test_api(*message_model).GetMessage().GetIconResourceId(),
+      ResourceMapper::MapToJavaDrawableId(IDR_ANDROID_AUTOFILL_EMAIL_VERIFIED));
+  EXPECT_EQ(message_model->GetType(),
+            AutofillMessageModel::Type::kEmailVerificationLoading);
+  EXPECT_EQ(message_model->GetTypeAsString(),
+            AutofillMessageModel::TypeToString(
+                AutofillMessageModel::Type::kEmailVerificationLoading));
+
+  EXPECT_CALL(dismiss_callback, Run(messages::DismissReason::GESTURE));
+  message_model->OnDismissed(messages::DismissReason::GESTURE);
+}
+
+TEST(AutofillMessageModelTest, VerifyEmailVerifiedAttributes) {
+  base::MockCallback<base::OnceClosure> manage_callback;
+
+  std::unique_ptr<AutofillMessageModel> message_model =
+      AutofillMessageModel::CreateForEmailVerified(GURL("https://example.com"),
+                                                   manage_callback.Get());
+
+  EXPECT_EQ(test_api(*message_model).GetMessage().GetTitle(),
+            l10n_util::GetStringFUTF16(IDS_EMAIL_VERIFIED, u"example.com"));
+  EXPECT_EQ(test_api(*message_model).GetMessage().GetPrimaryButtonText(),
+            l10n_util::GetStringUTF16(IDS_MANAGE));
+  EXPECT_EQ(message_model->GetType(),
+            AutofillMessageModel::Type::kEmailVerified);
+
+  EXPECT_CALL(manage_callback, Run);
+  message_model->OnActionClicked();
+}
+
+TEST(AutofillMessageModelTest, VerifyEmailVerificationErrorAttributes) {
+  std::unique_ptr<AutofillMessageModel> message_model =
+      AutofillMessageModel::CreateForEmailVerificationError();
+
+  EXPECT_EQ(test_api(*message_model).GetMessage().GetTitle(),
+            l10n_util::GetStringUTF16(IDS_EMAIL_VERIFICATION_ERROR));
+  EXPECT_TRUE(
+      test_api(*message_model).GetMessage().GetPrimaryButtonText().empty());
+  EXPECT_EQ(test_api(*message_model).GetMessage().GetIconResourceId(),
+            ResourceMapper::MapToJavaDrawableId(IDR_ANDROID_IC_ERROR));
+  EXPECT_EQ(message_model->GetType(),
+            AutofillMessageModel::Type::kEmailVerificationError);
+  EXPECT_EQ(message_model->GetTypeAsString(),
+            AutofillMessageModel::TypeToString(
+                AutofillMessageModel::Type::kEmailVerificationError));
+}
+
 TEST(AutofillMessageModelTest, AutofillMessageTypeToString) {
   EXPECT_EQ(AutofillMessageModel::TypeToString(
                 AutofillMessageModel::Type::kUnspecified),
@@ -132,5 +233,17 @@ TEST(AutofillMessageModelTest, AutofillMessageTypeToString) {
   EXPECT_EQ(AutofillMessageModel::TypeToString(
                 AutofillMessageModel::Type::kAddressSaveUpdateFlow),
             "AddressSaveUpdateFlow");
+  EXPECT_EQ(AutofillMessageModel::TypeToString(
+                AutofillMessageModel::Type::kEmailVerified),
+            "EmailVerified");
+  EXPECT_EQ(AutofillMessageModel::TypeToString(
+                AutofillMessageModel::Type::kResurrectChurnedUsers),
+            "ResurrectChurnedUsers");
+  EXPECT_EQ(AutofillMessageModel::TypeToString(
+                AutofillMessageModel::Type::kEmailVerificationError),
+            "EmailVerificationError");
+  EXPECT_EQ(AutofillMessageModel::TypeToString(
+                AutofillMessageModel::Type::kEmailVerificationLoading),
+            "EmailVerificationLoading");
 }
 }  // namespace autofill

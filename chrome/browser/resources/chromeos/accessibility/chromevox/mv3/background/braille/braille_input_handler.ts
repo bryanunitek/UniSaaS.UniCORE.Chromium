@@ -14,9 +14,11 @@ import {TestImportManager} from '/common/testing/test_import_manager.js';
 
 import {BrailleKeyCommand, BrailleKeyEvent} from '../../common/braille/braille_key_types.js';
 import {Spannable} from '../../common/spannable.js';
+import {CandidateMenuBackground} from '../panel/candidate_menu_background.js';
 
 import {BrailleTranslator} from './braille_translator.js';
 import {BrailleTranslatorManager} from './braille_translator_manager.js';
+import {CompositionCandidateProvider} from './composition_candidate_provider.js';
 import {ExpandingBrailleTranslator} from './expanding_braille_translator.js';
 import {ExtraCellsSpan, ValueSelectionSpan, ValueSpan} from './spans.js';
 
@@ -38,7 +40,6 @@ const STARTS_WITH_NON_WHITESPACE_RE = /^\S/;
  * non-whitespace character.
  */
 const ENDS_WITH_NON_WHITESPACE_RE = /\S$/;
-
 
 type EntryStateConstructor = new (
     handler: BrailleInputHandler, translator: BrailleTranslator) => EntryState;
@@ -129,6 +130,16 @@ class EntryState {
   commit(): void {}
 
   /**
+   * Replaces the current entry text with `newText`, sending the appropriate
+   * delta to the IME. Used by composition conversion to display conversion
+   * candidates in place of the entered composition text.
+   */
+  setText(newText: string): void {
+    this.sendTextChange_(newText);
+    this.text = newText;
+  }
+
+  /**
    * @return true if the entry state uses uncommitted cells.
    */
   get usesUncommittedCells(): boolean {
@@ -156,7 +167,7 @@ class EntryState {
       this.sendTextChange_(result);
       this.text = result;
       if (commit) {
-        this.inputHandler.commitAndClearEntryState();
+        this.inputHandler.requestCommit(this);
       }
     });
   }
@@ -193,8 +204,10 @@ class EditsEntryState extends EntryState {
       const textBeforeAfterDelete =
           this.inputHandler?.currentTextBefore.substring(
               0, this.inputHandler.currentTextBefore.length - deleteLength);
-      if (deleteLength > 0 && textBeforeAfterDelete) {
-        // Queue this text up to be ignored when the change comes in.
+      if (deleteLength > 0 && textBeforeAfterDelete !== undefined) {
+        // Queue this text up to be ignored when the change comes in. Note
+        // that this includes the empty string, which occurs when all text
+        // before the cursor is replaced (e.g. by composition conversion).
         this.pendingTextsBefore_.push(textBeforeAfterDelete);
       }
       if (toInsert.length > 0) {
@@ -240,6 +253,55 @@ class LateCommitEntryState extends EntryState {
   }
 }
 
+/**
+ * Entry state that enters text as IME composition (preedit) text instead of
+ * committing it directly. The composition is rendered inline in the field
+ * (typically underlined), giving a visual indication that the text is not
+ * final. Used for languages that require composition conversion (currently
+ * Japanese kana input, converted to kanji before being committed). Because
+ * composition updates replace the whole preedit atomically in the IME, this
+ * avoids the delete/insert churn of EditsEntryState during conversion.
+ */
+class CompositionEntryState extends EntryState {
+  /**
+   * Text that preceded the cursor when the composition started, or null if
+   * no composition has been sent yet. The composition text appears in the
+   * field value after this text.
+   */
+  private baseTextBefore_: string|null = null;
+
+  override commit(): void {
+    this.inputHandler?.postImeMessage({
+      type: 'commitComposition',
+      contextID: this.inputHandler.inputContext?.contextID,
+    });
+  }
+
+  override onTextBeforeChanged(newText: string): void {
+    // Composition text is part of the field value, so composition updates
+    // change the text before the cursor. Tolerate any text that starts with
+    // the base text observed when the composition started; asynchronous
+    // echoes of stale composition states would otherwise reset the entry
+    // state mid-word.
+    if (this.baseTextBefore_ !== null &&
+        newText.startsWith(this.baseTextBefore_)) {
+      return;
+    }
+    this.inputHandler?.clearEntryState();
+  }
+
+  protected override sendTextChange_(newText: string): void {
+    if (this.baseTextBefore_ === null) {
+      this.baseTextBefore_ = this.inputHandler?.currentTextBefore ?? '';
+    }
+    this.inputHandler?.postImeMessage({
+      type: 'setComposition',
+      contextID: this.inputHandler.inputContext?.contextID,
+      text: newText,
+    });
+  }
+}
+
 export class BrailleInputHandler {
   /** Port of the connected IME if any. */
   private imePort_: Port|null = null;
@@ -262,12 +324,38 @@ export class BrailleInputHandler {
   private entryState_: EntryState|null = null;
   private uncommittedCellsSpan_: ExtraCellsSpan|null = null;
   private uncommittedCellsChangedListener_: VoidFunction|null = null;
+  /**
+   * Whether a conversion request is in flight: fetching candidates, or the
+   * user choosing one in the Panel's candidate menu.
+   */
+  private conversionPending_ = false;
+  /**
+   * Cells entered while a conversion request was pending (see
+   * conversionPending_). Replayed through onBrailleDots_() once the request
+   * settles, so cells typed in the meantime are applied to whatever state
+   * results (a new word after a commit or cancellation) instead of being
+   * appended to the entry state the fetch/menu was tracking.
+   */
+  private queuedCellsWhilePending_: number[] = [];
+  /** Resolves when the most recent asynchronous commit request settles. */
+  commitRequestForTest: Promise<void>|null = null;
 
   /**
    * The input context of the current input field, as reported by the IME.
    * null if no input field has focus.
    */
   inputContext: Context|null = null;
+
+  /**
+   * The first non-null input context reported while a conversion is
+   * pending, i.e. the field settling back after the candidate menu's own
+   * blur/refocus. Used instead of `inputContext` when replacing text on
+   * accept, so a later, unexpected context change (the user genuinely
+   * moving focus elsewhere while the menu is open, however unlikely with
+   * the menu fullscreen) can't redirect the replacement to the wrong
+   * field.
+   */
+  private pendingConversionContext_: Context|null = null;
 
   /** Text that currently precedes the first selection end-point. */
   currentTextBefore = '';
@@ -350,11 +438,10 @@ export class BrailleInputHandler {
       if (event.standardKeyCode === 'Backspace' && !event.altKey &&
           !event.ctrlKey && !event.shiftKey && this.onBackspace_()) {
         return true;
-      } else {
-        this.commitAndClearEntryState();
-        this.sendKeyEventPair_(event);
-        return true;
       }
+      this.commitAndClearEntryState();
+      this.sendKeyEventPair_(event);
+      return true;
     }
     return false;
   }
@@ -398,6 +485,14 @@ export class BrailleInputHandler {
     if (!this.inputContext) {
       return false;
     }
+    if (this.conversionPending_) {
+      // `conversionPending_` covers both fetching candidates and, if any
+      // were found, the user choosing one in the Panel's candidate menu (see
+      // maybeStartConversion_). Cells typed in either case are queued and
+      // replayed once that settles.
+      this.queuedCellsWhilePending_.push(dots);
+      return true;
+    }
     if (!this.entryState_) {
       if (!(this.entryState_ = this.createEntryState_())) {
         return false;
@@ -431,6 +526,12 @@ export class BrailleInputHandler {
     if (!translator) {
       return null;
     }
+    // Translators for languages that require composition conversion enter
+    // text as IME composition (preedit) text instead of committing it
+    // directly.
+    if (translator.usesCompositionInput) {
+      return new CompositionEntryState(this, translator);
+    }
     const uncontractedTranslator =
         BrailleTranslatorManager.instance.getUncontractedTranslator();
     let constructor: EntryStateConstructor = EditsEntryState;
@@ -449,6 +550,112 @@ export class BrailleInputHandler {
     return new constructor(this, translator);
   }
 
+  /**
+   * Called by the entry state when a blank cell was entered, requesting that
+   * the current input be committed. For languages that require composition
+   * conversion (currently Japanese kana input), this may start conversion
+   * instead of committing directly.
+   */
+  requestCommit(entryState: EntryState): void {
+    if (entryState !== this.entryState_) {
+      return;
+    }
+    const provider = entryState.translator.getCompositionCandidateProvider?.();
+    if (!provider) {
+      this.commitAndClearEntryState();
+      return;
+    }
+    this.conversionPending_ = true;
+    this.queuedCellsWhilePending_ = [];
+    this.commitRequestForTest =
+        this.maybeStartConversion_(entryState, entryState.text, provider);
+  }
+
+  /**
+   * Fetches conversion candidates for `originalText` from `provider` and, if
+   * any are available, enters conversion mode. Otherwise commits the input
+   * as-is. Whether `originalText` is actually convertible is entirely up to
+   * `provider`; an empty result is treated the same as "not convertible."
+   */
+  private async maybeStartConversion_(
+      entryState: EntryState, originalText: string,
+      provider: CompositionCandidateProvider): Promise<void> {
+    const cellCount = entryState.cells.length;
+    let candidates: string[] = [];
+    try {
+      // An empty result (including one left over from a failed fetch, since
+      // `candidates` stays []) is treated as "not convertible" below.
+      candidates = await provider.getCandidates(originalText);
+    } catch (error) {
+      console.error('Error getting conversion candidates: ' + error);
+    }
+    this.conversionPending_ = false;
+    const queued = this.queuedCellsWhilePending_;
+    this.queuedCellsWhilePending_ = [];
+    // The entry state may have changed while fetching candidates (e.g. a
+    // backspace deleted a cell directly, or focus moved elsewhere).
+    if (this.entryState_ !== entryState ||
+        entryState.cells.length !== cellCount ||
+        entryState.text !== originalText) {
+      return;
+    }
+    if (candidates.length === 0) {
+      this.commitAndClearEntryState();
+      for (const dots of queued) {
+        this.onBrailleDots_(dots);
+      }
+      return;
+    }
+    // Commit the entered text as ordinary text before opening the menu,
+    // instead of leaving it as an active IME composition for as long as the
+    // menu is open. An uncommitted composition gets special, platform-level
+    // treatment for Enter: it's committed immediately, before the key can
+    // ever reach the Panel's own key handling, so selecting a candidate
+    // with Enter would otherwise always commit the composition instead. A
+    // selected candidate replaces this committed text via 'replaceText'; on
+    // cancel, the text is already sitting there correctly, so there's
+    // nothing further to do.
+    this.commitAndClearEntryState();
+    // Stay "pending" (queuing further cells, per onBrailleDots_ above) for
+    // the whole time the user is choosing a candidate in the Panel's menu,
+    // not just while candidates were being fetched, so cells queued during
+    // either phase are replayed together once the menu resolves rather than
+    // the fetch-phase ones being lost. This must come after
+    // commitAndClearEntryState() above, since that clears both fields back
+    // out via clearEntryState().
+    this.conversionPending_ = true;
+    this.queuedCellsWhilePending_ = queued;
+    const selected = await CandidateMenuBackground.open(candidates);
+    this.conversionPending_ = false;
+    // Use the context that settled back in while the conversion was
+    // pending, rather than one captured before the menu opened: opening
+    // and closing the fullscreen Panel blurs and refocuses the underlying
+    // field, which the IME framework treats as a brand new input context
+    // (a new contextID), not a resumption of the old one. Sending
+    // 'replaceText' with a stale ID fails silently on the IME side
+    // ("Context is not active"), even though the message itself (selected
+    // candidate, deleteBefore) was otherwise correct. Preferring the
+    // locked-in pendingConversionContext_ over the live inputContext
+    // guards against the (very unlikely, given the menu is fullscreen)
+    // case where focus genuinely moved to a different field afterward.
+    const contextID =
+        (this.pendingConversionContext_ ?? this.inputContext)?.contextID;
+    this.pendingConversionContext_ = null;
+    if (selected !== null) {
+      this.postImeMessage({
+        type: 'replaceText',
+        contextID,
+        deleteBefore: originalText.length,
+        newText: selected,
+      });
+    }
+    const requeue = this.queuedCellsWhilePending_;
+    this.queuedCellsWhilePending_ = [];
+    for (const dots of requeue) {
+      this.onBrailleDots_(dots);
+    }
+  }
+
   /** Commits the current entry state and clears it, if any. */
   commitAndClearEntryState(): void {
     if (this.entryState_) {
@@ -459,6 +666,8 @@ export class BrailleInputHandler {
 
   /** Clears the current entry state without committing it. */
   clearEntryState(): void {
+    this.conversionPending_ = false;
+    this.queuedCellsWhilePending_ = [];
     if (this.entryState_) {
       if (this.entryState_.usesUncommittedCells) {
         this.updateUncommittedCells(new ArrayBuffer(0));
@@ -508,7 +717,22 @@ export class BrailleInputHandler {
         break;
       case 'inputContext':
         this.inputContext = message.context;
-        this.clearEntryState();
+        // Opening (and closing) the fullscreen candidate menu blurs and
+        // refocuses the underlying field, which the IME framework reports
+        // as a brand new input context, same as it does for a genuine
+        // focus change elsewhere. While a conversion is pending, this is
+        // always that spurious blur/refocus rather than a real context
+        // switch, since the fullscreen menu leaves nothing else to focus;
+        // clearing the entry state here would otherwise cancel the
+        // in-progress conversion out from under the open menu.
+        if (!this.conversionPending_) {
+          this.clearEntryState();
+        } else if (!this.pendingConversionContext_ && this.inputContext) {
+          // Lock onto the first settled (non-null) context reported while
+          // pending, rather than whatever's most recently reported by the
+          // time the conversion resolves: see pendingConversionContext_.
+          this.pendingConversionContext_ = this.inputContext;
+        }
         if (this.imeActive_ && this.inputContext) {
           this.pendingCells_.forEach(this.onBrailleDots_, this);
         }
@@ -528,7 +752,12 @@ export class BrailleInputHandler {
         });
         break;
       case 'reset':
-        this.clearEntryState();
+        // Same spurious blur/refocus rationale as 'inputContext' above: the
+        // fullscreen candidate menu opening/closing can make the IME send
+        // this too, and it shouldn't cancel an in-progress conversion.
+        if (!this.conversionPending_) {
+          this.clearEntryState();
+        }
         break;
       default:
         console.error(
@@ -543,7 +772,12 @@ export class BrailleInputHandler {
    */
   private onImeDisconnect_(_port: Port): void {
     this.imePort_ = null;
-    this.clearEntryState();
+    // The IME reconnects its port periodically even with no user action;
+    // same spurious-churn rationale as 'inputContext'/'reset' above, this
+    // shouldn't cancel an in-progress conversion.
+    if (!this.conversionPending_) {
+      this.clearEntryState();
+    }
     this.imeActive_ = false;
     this.inputContext = null;
   }

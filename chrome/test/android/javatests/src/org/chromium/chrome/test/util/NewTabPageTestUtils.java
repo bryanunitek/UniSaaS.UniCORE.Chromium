@@ -4,17 +4,26 @@
 
 package org.chromium.chrome.test.util;
 
+import android.content.Context;
+
 import org.hamcrest.Matchers;
 
+import org.chromium.base.ContextUtils;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ntp.IncognitoNewTabPage;
 import org.chromium.chrome.browser.ntp.NewTabPage;
+import org.chromium.chrome.browser.omnibox.SearchEngineService;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.suggestions.SiteSuggestion;
 import org.chromium.chrome.browser.suggestions.tile.TileSectionType;
 import org.chromium.chrome.browser.suggestions.tile.TileSource;
 import org.chromium.chrome.browser.suggestions.tile.TileTitleSource;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.url_constants.UrlOverrideUtils;
+import org.chromium.components.search_engines.AiModeButtonUiConfig;
 import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.url.GURL;
 
@@ -34,11 +43,18 @@ public class NewTabPageTestUtils {
         CriteriaHelper.pollUiThread(
                 () -> {
                     if (!tab.isIncognito()) {
-                        Criteria.checkThat(
-                                tab.getNativePage(), Matchers.instanceOf(NewTabPage.class));
-                        Criteria.checkThat(
-                                ((NewTabPage) tab.getNativePage()).isLoadedForTests(),
-                                Matchers.is(true));
+                        // If the WebUI NTP override is enabled, check that the renderer is ready.
+                        // Otherwise, check that the NTP is loaded in the native page.
+                        if (UrlOverrideUtils.isWebUiNtpOverrideEnabled()) {
+                            Criteria.checkThat(
+                                    ChromeTabUtils.isRendererReady(tab), Matchers.is(true));
+                        } else {
+                            Criteria.checkThat(
+                                    tab.getNativePage(), Matchers.instanceOf(NewTabPage.class));
+                            Criteria.checkThat(
+                                    ((NewTabPage) tab.getNativePage()).isLoadedForTests(),
+                                    Matchers.is(true));
+                        }
                     } else {
                         Criteria.checkThat(
                                 tab.getNativePage(),
@@ -50,64 +66,98 @@ public class NewTabPageTestUtils {
                 });
     }
 
+    public static List<SiteSuggestion> createFakeSiteSuggestions() {
+        return createFakeSiteSuggestions("http://127.0.0.1" + TEST_PAGE);
+    }
+
     public static List<SiteSuggestion> createFakeSiteSuggestions(EmbeddedTestServer testServer) {
+        return createFakeSiteSuggestions(testServer.getURL(TEST_PAGE));
+    }
+
+    public static List<SiteSuggestion> createFakeSiteSuggestions(String baseUrl) {
         List<SiteSuggestion> siteSuggestions = new ArrayList<>();
         siteSuggestions.add(
                 new SiteSuggestion(
                         "0 TOP_SITES",
-                        new GURL(testServer.getURL(TEST_PAGE) + "#0"),
+                        new GURL(baseUrl + "#0"),
                         TileTitleSource.TITLE_TAG,
                         TileSource.TOP_SITES,
                         TileSectionType.PERSONALIZED));
         siteSuggestions.add(
                 new SiteSuggestion(
                         "1 ALLOWLIST",
-                        new GURL(testServer.getURL(TEST_PAGE) + "#1"),
+                        new GURL(baseUrl + "#1"),
                         TileTitleSource.UNKNOWN,
                         TileSource.ALLOWLIST,
                         TileSectionType.PERSONALIZED));
         siteSuggestions.add(
                 new SiteSuggestion(
                         "2 TOP_SITES",
-                        new GURL(testServer.getURL(TEST_PAGE) + "#2"),
+                        new GURL(baseUrl + "#2"),
                         TileTitleSource.TITLE_TAG,
                         TileSource.TOP_SITES,
                         TileSectionType.PERSONALIZED));
         siteSuggestions.add(
                 new SiteSuggestion(
                         "3 TOP_SITES",
-                        new GURL(testServer.getURL(TEST_PAGE) + "#3"),
+                        new GURL(baseUrl + "#3"),
                         TileTitleSource.TITLE_TAG,
                         TileSource.TOP_SITES,
                         TileSectionType.PERSONALIZED));
         siteSuggestions.add(
                 new SiteSuggestion(
                         "4 TOP_SITES",
-                        new GURL(testServer.getURL(TEST_PAGE) + "#4"),
+                        new GURL(baseUrl + "#4"),
                         TileTitleSource.TITLE_TAG,
                         TileSource.TOP_SITES,
                         TileSectionType.PERSONALIZED));
         siteSuggestions.add(
                 new SiteSuggestion(
                         "5 TOP_SITES",
-                        new GURL(testServer.getURL(TEST_PAGE) + "#5"),
+                        new GURL(baseUrl + "#5"),
                         TileTitleSource.TITLE_TAG,
                         TileSource.TOP_SITES,
                         TileSectionType.PERSONALIZED));
         siteSuggestions.add(
                 new SiteSuggestion(
                         "6 TOP_SITES",
-                        new GURL(testServer.getURL(TEST_PAGE) + "#6"),
+                        new GURL(baseUrl + "#6"),
                         TileTitleSource.TITLE_TAG,
                         TileSource.TOP_SITES,
                         TileSectionType.PERSONALIZED));
         siteSuggestions.add(
                 new SiteSuggestion(
                         "7 TOP_SITES",
-                        new GURL(testServer.getURL(TEST_PAGE) + "#7"),
+                        new GURL(baseUrl + "#7"),
                         TileTitleSource.TITLE_TAG,
                         TileSource.TOP_SITES,
                         TileSectionType.PERSONALIZED));
         return siteSuggestions;
+    }
+
+    /**
+     * Fakes the {@link AiModeButtonUiConfig} that Google offers, so that the AI Mode button is
+     * shown on the NTP. Native only hands a config to a client which is eligible for AI Mode, which
+     * a test device isn't, so without this the entry point stays hidden.
+     */
+    public static void fakeGoogleAiModeButtonUiConfig() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Context context = ContextUtils.getApplicationContext();
+                    // Google's entry point is rendered from built-in assets and navigated to via
+                    // the regular search engine plumbing, so its URLs are empty.
+                    AiModeButtonUiConfig config =
+                            new AiModeButtonUiConfig(
+                                    context.getString(R.string.ai_mode_entrypoint_label),
+                                    "Ask AI Mode in Google Search",
+                                    "AI Mode button, press Enter to ask AI Mode",
+                                    "Always show AI Mode",
+                                    "Press tab then enter to ask AI Mode",
+                                    /* faviconUrl= */ GURL.emptyGURL(),
+                                    /* navigationUrl= */ "",
+                                    /* navigationUrlEmpty= */ GURL.emptyGURL());
+                    SearchEngineService.getForProfile(ProfileManager.getLastUsedRegularProfile())
+                            .setAiModeButtonUiConfigForTesting(config);
+                });
     }
 }

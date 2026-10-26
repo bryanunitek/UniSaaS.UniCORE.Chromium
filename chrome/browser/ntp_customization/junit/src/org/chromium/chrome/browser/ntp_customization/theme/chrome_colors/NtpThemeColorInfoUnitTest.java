@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.ntp_customization.theme.chrome_colors;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 
 import android.content.Context;
 import android.graphics.Color;
@@ -18,7 +19,6 @@ import androidx.test.core.app.ApplicationProvider;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.ntp_customization.R;
@@ -27,7 +27,6 @@ import org.chromium.ui.util.ColorUtils;
 
 /** Tests for {@link NtpThemeColorInfo}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class NtpThemeColorInfoUnitTest {
     private Context mContext;
 
@@ -44,6 +43,8 @@ public class NtpThemeColorInfoUnitTest {
         assertEquals(NtpThemeColorId.NTP_COLORS_AQUA, info.id);
         assertEquals(R.color.ntp_color_aqua_primary, info.primaryColorResId);
         assertEquals(R.string.accessibility_ntp_aqua_color_theme, info.colorStringResId);
+        assertEquals(
+                mContext.getString(R.string.accessibility_ntp_aqua_color_theme), info.colorName);
         assertNotNull(info.iconDrawable);
 
         int primaryColor = ContextCompat.getColor(mContext, R.color.ntp_color_aqua_primary);
@@ -56,6 +57,7 @@ public class NtpThemeColorInfoUnitTest {
         NtpThemeColorInfo info = new NtpThemeColorInfo(mContext, NtpThemeColorId.DEFAULT);
 
         assertEquals(NtpThemeColorId.DEFAULT, info.id);
+        assertNull(info.colorName);
         assertNotNull(info.iconDrawable);
     }
 
@@ -68,6 +70,7 @@ public class NtpThemeColorInfoUnitTest {
 
         assertEquals(backgroundColor, info.backgroundColorLight);
         assertEquals(primaryColor, info.primaryColorLight);
+        assertNull(info.colorName);
         assertNotNull(info.iconDrawable);
         assertEquals(
                 ColorUtils.setAlphaComponentWithFloat(primaryColor, 0.3f), info.highlightColor);

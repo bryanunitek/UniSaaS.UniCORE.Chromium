@@ -64,7 +64,6 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
   void UseProgram(GLuint program) override;
   void Flush() override;
   void Finish() override;
-  void ShallowFinishCHROMIUM() override;
 
   void BindBuffer(GLenum target, GLuint buffer) override;
   void BindRenderbuffer(GLenum target, GLuint buffer) override;
@@ -115,9 +114,7 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
   size_t NumRenderbuffers() const;
 
   bool IsContextLost() { return context_lost_; }
-  void set_test_support(TestContextSupport* test_support) {
-    test_support_ = test_support;
-  }
+  void set_test_support(TestContextSupport* test_support);
   const gpu::Capabilities& test_capabilities() const {
     return test_capabilities_;
   }

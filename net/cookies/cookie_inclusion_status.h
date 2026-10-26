@@ -15,8 +15,6 @@
 #include "base/containers/enum_set.h"
 #include "net/base/net_export.h"
 
-class GURL;
-
 namespace net {
 
 // This class represents if a cookie was included or excluded in a cookie get or
@@ -34,90 +32,87 @@ class NET_EXPORT CookieInclusionStatus {
     // Statuses applied when accessing a cookie (either sending or setting):
 
     // Cookie was HttpOnly, but the attempted access was through a non-HTTP API.
-    EXCLUDE_HTTP_ONLY = 1,
+    EXCLUDE_HTTP_ONLY,
     // Cookie was Secure, but the URL was not allowed to access Secure cookies.
-    EXCLUDE_SECURE_ONLY = 2,
+    EXCLUDE_SECURE_ONLY,
     // The cookie's domain attribute did not match the domain of the URL
     // attempting access.
-    EXCLUDE_DOMAIN_MISMATCH = 3,
+    EXCLUDE_DOMAIN_MISMATCH,
     // The cookie's path attribute did not match the path of the URL attempting
     // access.
-    EXCLUDE_NOT_ON_PATH = 4,
+    EXCLUDE_NOT_ON_PATH,
     // The cookie had SameSite=Strict, and the attempted access did not have an
     // appropriate SameSiteCookieContext.
-    EXCLUDE_SAMESITE_STRICT = 5,
+    EXCLUDE_SAMESITE_STRICT,
     // The cookie had SameSite=Lax, and the attempted access did not have an
     // appropriate SameSiteCookieContext.
-    EXCLUDE_SAMESITE_LAX = 6,
+    EXCLUDE_SAMESITE_LAX,
     // The cookie did not specify a SameSite attribute, and therefore was
     // treated as if it were SameSite=Lax, and the attempted access did not have
     // an appropriate SameSiteCookieContext.
-    EXCLUDE_SAMESITE_UNSPECIFIED_TREATED_AS_LAX = 7,
+    EXCLUDE_SAMESITE_UNSPECIFIED_TREATED_AS_LAX,
     // The cookie specified SameSite=None, but it was not Secure.
-    EXCLUDE_SAMESITE_NONE_INSECURE = 8,
+    EXCLUDE_SAMESITE_NONE_INSECURE,
     // Caller did not allow access to the cookie.
-    EXCLUDE_USER_PREFERENCES = 9,
+    EXCLUDE_USER_PREFERENCES,
 
     // Statuses only applied when creating/setting cookies:
 
     // Cookie was malformed and could not be stored, due to problem(s) while
     // parsing.
     // TODO(crbug.com/40189703): Use more specific reasons for parsing errors.
-    EXCLUDE_FAILURE_TO_STORE = 10,
+    EXCLUDE_FAILURE_TO_STORE,
     // Attempted to set a cookie from a scheme that does not support cookies.
-    EXCLUDE_NONCOOKIEABLE_SCHEME = 11,
+    EXCLUDE_NONCOOKIEABLE_SCHEME,
     // Cookie would have overwritten a Secure cookie, and was not allowed to do
     // so. (See "Leave Secure Cookies Alone":
     // https://tools.ietf.org/html/draft-west-leave-secure-cookies-alone-05 )
-    EXCLUDE_OVERWRITE_SECURE = 12,
+    EXCLUDE_OVERWRITE_SECURE,
     // Cookie would have overwritten an HttpOnly cookie, and was not allowed to
     // do so.
-    EXCLUDE_OVERWRITE_HTTP_ONLY = 13,
+    EXCLUDE_OVERWRITE_HTTP_ONLY,
     // Cookie was set with an invalid Domain attribute.
-    EXCLUDE_INVALID_DOMAIN = 14,
+    EXCLUDE_INVALID_DOMAIN,
     // Cookie was set with an invalid __Host- or __Secure- prefix.
-    EXCLUDE_INVALID_PREFIX = 15,
+    EXCLUDE_INVALID_PREFIX,
     /// Cookie was set with an invalid Partitioned attribute, which is only
     // valid if the cookie has a __Host- prefix.
-    EXCLUDE_INVALID_PARTITIONED = 16,
+    EXCLUDE_INVALID_PARTITIONED,
     // Cookie exceeded the name/value pair size limit.
-    EXCLUDE_NAME_VALUE_PAIR_EXCEEDS_MAX_SIZE = 17,
+    EXCLUDE_NAME_VALUE_PAIR_EXCEEDS_MAX_SIZE,
     // Cookie exceeded the attribute size limit. Note that this exclusion value
     // won't be used by code that parses cookie lines since RFC6265bis
     // indicates that large attributes should be ignored instead of causing the
     // whole cookie to be rejected. There will be a corresponding WarningReason
     // to notify users that an attribute value was ignored in that case.
-    EXCLUDE_ATTRIBUTE_VALUE_EXCEEDS_MAX_SIZE = 18,
+    EXCLUDE_ATTRIBUTE_VALUE_EXCEEDS_MAX_SIZE,
     // Cookie was set with a Domain attribute containing non ASCII characters.
-    EXCLUDE_DOMAIN_NON_ASCII = 19,
-    // Special case for when a cookie is blocked by third-party cookie blocking
-    // but the two sites are in the same First-Party Set.
-    EXCLUDE_THIRD_PARTY_BLOCKED_WITHIN_FIRST_PARTY_SET = 20,
+    EXCLUDE_DOMAIN_NON_ASCII,
     // Cookie's source_port did not match the port of the request.
-    EXCLUDE_PORT_MISMATCH = 21,
+    EXCLUDE_PORT_MISMATCH,
     // Cookie's source_scheme did not match the scheme of the request.
-    EXCLUDE_SCHEME_MISMATCH = 22,
+    EXCLUDE_SCHEME_MISMATCH,
     // Cookie is a domain cookie and has the same name as an origin cookie on
     // this origin.
-    EXCLUDE_SHADOWING_DOMAIN = 23,
+    EXCLUDE_SHADOWING_DOMAIN,
     // Cookie contains ASCII control characters (including the tab character,
     // when it appears in the middle of the cookie name, value, an attribute
     // name, or an attribute value).
-    EXCLUDE_DISALLOWED_CHARACTER = 24,
+    EXCLUDE_DISALLOWED_CHARACTER,
     // Cookie is blocked for third-party cookie phaseout.
-    EXCLUDE_THIRD_PARTY_PHASEOUT = 25,
+    EXCLUDE_THIRD_PARTY_PHASEOUT,
     // Cookie contains no content or only whitespace.
-    EXCLUDE_NO_COOKIE_CONTENT = 26,
+    EXCLUDE_NO_COOKIE_CONTENT,
     // Cookie is unpartitioned and being accessed from an anonymous context
-    EXCLUDE_ANONYMOUS_CONTEXT = 27,
+    EXCLUDE_ANONYMOUS_CONTEXT,
     // Cookie was set with an invalid Path attribute (path was modified during
     // canonicalization, indicating the original path was malformed).
-    EXCLUDE_INVALID_PATH = 28,
+    EXCLUDE_INVALID_PATH,
     // Cookie was rejected in parsing due to having an ambiguous serialization.
     // This can result from having an empty name and a value containing an
     // equals sign, such as a cookie line "=Foo=Bar", which is serialized as
     // "Foo=Bar" and could shadow a cookie named "Foo".
-    EXCLUDE_AMBIGUOUS_SERIALIZATION = 29,
+    EXCLUDE_AMBIGUOUS_SERIALIZATION,
     // This should be kept last.
     MAX_EXCLUSION_REASON = EXCLUDE_AMBIGUOUS_SERIALIZATION
   };
@@ -133,56 +128,11 @@ class NET_EXPORT CookieInclusionStatus {
     // cross-site context.
     WARN_SAMESITE_UNSPECIFIED_CROSS_SITE_CONTEXT = 0,
     // Warn if a cookie with SameSite=None is not Secure.
-    WARN_SAMESITE_NONE_INSECURE = 1,
+    WARN_SAMESITE_NONE_INSECURE,
     // Warn if a cookie with unspecified SameSite attribute is defaulted into
     // Lax and is sent on a request with unsafe method, only because it is new
     // enough to activate the Lax-allow-unsafe intervention.
-    WARN_SAMESITE_UNSPECIFIED_LAX_ALLOW_UNSAFE = 2,
-
-    // The following warnings indicate that an included cookie with an effective
-    // SameSite is experiencing a SameSiteCookieContext::|context| ->
-    // SameSiteCookieContext::|schemeful_context| downgrade that will prevent
-    // its access schemefully.
-    // This situation means that a cookie is accessible when the
-    // SchemefulSameSite feature is disabled but not when it's enabled,
-    // indicating changed behavior and potential breakage.
-    //
-    // For example, a Strict to Lax downgrade for an effective SameSite=Strict
-    // cookie:
-    // This cookie would be accessible in the Strict context as its SameSite
-    // value is Strict. However its context for schemeful same-site becomes Lax.
-    // A strict cookie cannot be accessed in a Lax context and therefore the
-    // behavior has changed.
-    // As a counterexample, a Strict to Lax downgrade for an effective
-    // SameSite=Lax cookie: A Lax cookie can be accessed in both Strict and Lax
-    // contexts so there is no behavior change (and we don't warn about it).
-    //
-    // The warnings are in the following format:
-    // WARN_{context}_{schemeful_context}_DOWNGRADE_{samesite_value}_SAMESITE
-    //
-    // Of the following 5 SameSite warnings, there will be, at most, a single
-    // active one.
-
-    // Strict to Lax downgrade for an effective SameSite=Strict cookie.
-    // This warning is only applicable for cookies being sent because a Strict
-    // cookie will be set in both Strict and Lax Contexts so the downgrade will
-    // not affect it.
-    WARN_STRICT_LAX_DOWNGRADE_STRICT_SAMESITE = 3,
-    // Strict to Cross-site downgrade for an effective SameSite=Strict cookie.
-    // This also applies to Strict to Lax Unsafe downgrades due to Lax Unsafe
-    // behaving like Cross-site.
-    WARN_STRICT_CROSS_DOWNGRADE_STRICT_SAMESITE = 4,
-    // Strict to Cross-site downgrade for an effective SameSite=Lax cookie.
-    // This also applies to Strict to Lax Unsafe downgrades due to Lax Unsafe
-    // behaving like Cross-site.
-    WARN_STRICT_CROSS_DOWNGRADE_LAX_SAMESITE = 5,
-    // Lax to Cross-site downgrade for an effective SameSite=Strict cookie.
-    // This warning is only applicable for cookies being set because a Strict
-    // cookie will not be sent in a Lax context so the downgrade would not
-    // affect it.
-    WARN_LAX_CROSS_DOWNGRADE_STRICT_SAMESITE = 6,
-    // Lax to Cross-site downgrade for an effective SameSite=Lax cookie.
-    WARN_LAX_CROSS_DOWNGRADE_LAX_SAMESITE = 7,
+    WARN_SAMESITE_UNSPECIFIED_LAX_ALLOW_UNSAFE,
 
     // Advisory warning attached when a Secure cookie is accessed from (sent to,
     // or set by) a non-cryptographic URL. This can happen if the URL is
@@ -190,7 +140,7 @@ class NET_EXPORT CookieInclusionStatus {
     // the CookieAccessDelegate is configured to allow). This also applies to
     // cookies with secure source schemes when scheme binding is enabled.
     // TODO(chlily): Add metrics for how often and where this occurs.
-    WARN_SECURE_ACCESS_GRANTED_NON_CRYPTOGRAPHIC = 8,
+    WARN_SECURE_ACCESS_GRANTED_NON_CRYPTOGRAPHIC,
 
     // The cookie would have been included prior to the spec change considering
     // redirects in the SameSite context calculation
@@ -202,63 +152,40 @@ class NET_EXPORT CookieInclusionStatus {
     // was actually used for the inclusion decision). This is not applied if
     // the context was downgraded but the cookie would have been
     // included/excluded in both cases.
-    WARN_CROSS_SITE_REDIRECT_DOWNGRADE_CHANGES_INCLUSION = 9,
+    WARN_CROSS_SITE_REDIRECT_DOWNGRADE_CHANGES_INCLUSION,
 
-    // The cookie exceeded the attribute size limit. RFC6265bis indicates that
-    // large attributes should be ignored instead of causing the whole cookie
-    // to be rejected. This is applied by the code that parses cookie lines and
-    // notifies the user that an attribute value was ignored.
-    WARN_ATTRIBUTE_VALUE_EXCEEDS_MAX_SIZE = 10,
+    // Separately record when a cookie would have been included prior to the
+    // spec change considering redirects in the SameSite context computation
+    // (see above reason) when the request or response had no initiator.
+    WARN_CROSS_SITE_REDIRECT_DOWNGRADE_CHANGES_INCLUSION_NO_INITIATOR,
+
+    // The cookie exceeded the attribute size limit. RFC6265bis indicates
+    // that large attributes should be ignored instead of causing the whole
+    // cookie to be rejected. This is applied by the code that parses cookie
+    // lines and notifies the user that an attribute value was ignored.
+    WARN_ATTRIBUTE_VALUE_EXCEEDS_MAX_SIZE,
 
     // The cookie was set with a Domain attribute containing non ASCII
     // characters.
-    WARN_DOMAIN_NON_ASCII = 11,
+    WARN_DOMAIN_NON_ASCII,
     // The cookie's source_port did not match the port of the request.
-    WARN_PORT_MISMATCH = 12,
+    WARN_PORT_MISMATCH,
     // The cookie's source_scheme did not match the scheme of the request.
-    WARN_SCHEME_MISMATCH = 13,
+    WARN_SCHEME_MISMATCH,
     // The cookie's creation url is non-cryptographic but it specified the
     // "Secure" attribute. A trustworthy url may be setting this cookie, but we
     // can't confirm/deny that at the time of creation.
-    WARN_TENTATIVELY_ALLOWING_SECURE_SOURCE_SCHEME = 14,
+    WARN_TENTATIVELY_ALLOWING_SECURE_SOURCE_SCHEME,
     // Cookie is a domain cookie and has the same name as an origin cookie on
     // this origin. This cookie would be blocked if shadowing protection was
     // enabled.
-    WARN_SHADOWING_DOMAIN = 15,
+    WARN_SHADOWING_DOMAIN,
 
     // This cookie will be blocked for third-party cookie phaseout.
-    WARN_THIRD_PARTY_PHASEOUT = 16,
+    WARN_THIRD_PARTY_PHASEOUT,
 
     // This should be kept last.
     MAX_WARNING_REASON = WARN_THIRD_PARTY_PHASEOUT
-  };
-
-  // These enums encode the context downgrade warnings + the secureness of the
-  // url sending/setting the cookie. They're used for metrics only. The format
-  // is k{context}{schemeful_context}{samesite_value}{securness}.
-  // kNoDowngrade{securness} indicates that a cookie didn't have a breaking
-  // context downgrade and was A) included B) excluded only due to insufficient
-  // same-site context. I.e. the cookie wasn't excluded due to other reasons
-  // such as third-party cookie blocking. Keep this in line with
-  // SameSiteCookieContextBreakingDowngradeWithSecureness in enums.xml.
-  enum class ContextDowngradeMetricValues {
-    kNoDowngradeInsecure = 0,
-    kNoDowngradeSecure = 1,
-
-    kStrictLaxStrictInsecure = 2,
-    kStrictCrossStrictInsecure = 3,
-    kStrictCrossLaxInsecure = 4,
-    kLaxCrossStrictInsecure = 5,
-    kLaxCrossLaxInsecure = 6,
-
-    kStrictLaxStrictSecure = 7,
-    kStrictCrossStrictSecure = 8,
-    kStrictCrossLaxSecure = 9,
-    kLaxCrossStrictSecure = 10,
-    kLaxCrossLaxSecure = 11,
-
-    // Keep last.
-    kMaxValue = kLaxCrossLaxSecure
   };
 
   // Types of reasons why a cookie should-have-been-blocked by 3pcd got
@@ -268,22 +195,14 @@ class NET_EXPORT CookieInclusionStatus {
     // included, or blocked due to 3pcd-unrelated reasons.
     kNone = 0,
     // For user explicit settings, including User bypass.
-    kUserSetting = 1,
-    // k3PCDMetadata = 2,  // Deprecated
-    // k3PCDDeprecationTrial = 3,  // Deprecated
-    // kTopLevel3PCDDeprecationTrial = 4,  // Deprecated
-    // k3PCDHeuristics = 5,  // Deprecated
+    kUserSetting,
     // For Enterprise Policy : CookieAllowedForUrls and BlockThirdPartyCookies.
-    kEnterprisePolicy = 6,
-    kStorageAccess = 7,
-    kTopLevelStorageAccess = 8,
+    kEnterprisePolicy,
+    kStorageAccess,
     // Allowed by the scheme.
-    kScheme = 9,
+    kScheme,
     // Allowed by the sandbox 'allow-same-site-none-cookies' value.
-    kSameSiteNoneCookiesInSandbox = 10,
-
-    // Keep last.
-    kMaxValue = kSameSiteNoneCookiesInSandbox
+    kSameSiteNoneCookiesInSandbox,
   };
 
   using ExclusionReasonBitset =
@@ -357,15 +276,6 @@ class NET_EXPORT CookieInclusionStatus {
   // Whether the given reason for warning is present.
   bool HasWarningReason(WarningReason reason) const;
 
-  // Whether a schemeful downgrade warning is present.
-  // A schemeful downgrade means that an included cookie with an effective
-  // SameSite is experiencing a SameSiteCookieContext::|context| ->
-  // SameSiteCookieContext::|schemeful_context| downgrade that will prevent its
-  // access schemefully. If the function returns true and |reason| is valid then
-  // |reason| will contain which warning was found.
-  bool HasSchemefulDowngradeWarning(
-      CookieInclusionStatus::WarningReason* reason = nullptr) const;
-
   // Add an warning reason. CHECKs if `reason` is out of range.
   void AddWarningReason(WarningReason reason);
 
@@ -376,9 +286,6 @@ class NET_EXPORT CookieInclusionStatus {
   ExclusionReasonBitset exclusion_reasons() const { return exclusion_reasons_; }
 
   WarningReasonBitset warning_reasons() const { return warning_reasons_; }
-
-  ContextDowngradeMetricValues GetBreakingDowngradeMetricsEnumValue(
-      const GURL& url) const;
 
   // Get exclusion reason(s) and warning in string format.
   std::string GetDebugString() const;

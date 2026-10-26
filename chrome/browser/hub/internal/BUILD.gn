@@ -19,6 +19,7 @@ android_library("java") {
   ]
   sources = [
     "android/java/src/org/chromium/chrome/browser/hub/ApplyButtonData.java",
+    "android/java/src/org/chromium/chrome/browser/hub/BottomBarHubColorMixerAdapter.java",
     "android/java/src/org/chromium/chrome/browser/hub/EmptyHubBottomToolbarDelegate.java",
     "android/java/src/org/chromium/chrome/browser/hub/FadeHubLayoutAnimationFactory.java",
     "android/java/src/org/chromium/chrome/browser/hub/FadeHubLayoutAnimationFactoryImpl.java",
@@ -67,6 +68,10 @@ android_library("java") {
     "android/java/src/org/chromium/chrome/browser/hub/TabListHubLayoutAnimatorProvider.java",
     "android/java/src/org/chromium/chrome/browser/hub/TranslateHubLayoutAnimationFactory.java",
     "android/java/src/org/chromium/chrome/browser/hub/TranslateHubLayoutAnimationFactoryImpl.java",
+    "android/java/src/org/chromium/chrome/browser/hub/swipe/HubPaneSwipeAnimationConfig.java",
+    "android/java/src/org/chromium/chrome/browser/hub/swipe/HubPaneSwipeAnimator.java",
+    "android/java/src/org/chromium/chrome/browser/hub/swipe/HubPaneSwipeCoordinator.java",
+    "android/java/src/org/chromium/chrome/browser/hub/swipe/HubPaneSwipeGestureHandler.java",
   ]
   deps = [
     ":java_resources",
@@ -78,6 +83,7 @@ android_library("java") {
     "//chrome/browser/profiles/android:java",
     "//chrome/browser/tab:java",
     "//chrome/browser/ui/android/actions:java",
+    "//chrome/browser/ui/android/bars_common:java",
     "//chrome/browser/ui/android/bottombar:java",
     "//chrome/browser/ui/android/edge_to_edge:factory_java",
     "//chrome/browser/ui/android/edge_to_edge:java",
@@ -95,9 +101,7 @@ android_library("java") {
     "//components/browser_ui/styles/android:java_resources",
     "//components/browser_ui/widget/android:java",
     "//components/cached_flags:java",
-    "//components/embedder_support/android:util_java",
     "//components/feature_engagement/public:public_java",
-    "//components/omnibox/common:features_java",
     "//third_party/android_deps:guava_android_java",
     "//third_party/android_deps:material_design_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
@@ -117,6 +121,7 @@ android_resources("java_resources") {
     "android/res/color/hub_action_button_disabled_background_color.xml",
     "android/res/color/hub_action_button_disabled_icon_color.xml",
     "android/res/color/hub_search_box_bg_color.xml",
+    "android/res/drawable/hub_action_button_focus_ring.xml",
     "android/res/drawable/hub_pane_switcher_background.xml",
     "android/res/drawable/hub_pane_switcher_item_selector.xml",
     "android/res/drawable/hub_search_box_background.xml",
@@ -179,6 +184,7 @@ android_library("unit_device_javatests") {
 robolectric_library("junit") {
   resources_package = "org.chromium.chrome.browser.hub"
   sources = [
+    "android/java/src/org/chromium/chrome/browser/hub/BottomBarHubColorMixerAdapterUnitTest.java",
     "android/java/src/org/chromium/chrome/browser/hub/FadeHubLayoutAnimationFactoryImplUnitTest.java",
     "android/java/src/org/chromium/chrome/browser/hub/HubActionButtonMediatorUnitTest.java",
     "android/java/src/org/chromium/chrome/browser/hub/HubActionButtonViewUnitTest.java",
@@ -201,6 +207,10 @@ robolectric_library("junit") {
     "android/java/src/org/chromium/chrome/browser/hub/PaneTransitionHelperUnitTest.java",
     "android/java/src/org/chromium/chrome/browser/hub/ShrinkExpandHubLayoutAnimatorProviderUnitTest.java",
     "android/java/src/org/chromium/chrome/browser/hub/TranslateHubLayoutAnimationFactoryImplUnitTest.java",
+    "android/java/src/org/chromium/chrome/browser/hub/swipe/HubPaneSwipeAnimationConfigUnitTest.java",
+    "android/java/src/org/chromium/chrome/browser/hub/swipe/HubPaneSwipeAnimatorUnitTest.java",
+    "android/java/src/org/chromium/chrome/browser/hub/swipe/HubPaneSwipeCoordinatorUnitTest.java",
+    "android/java/src/org/chromium/chrome/browser/hub/swipe/HubPaneSwipeGestureHandlerUnitTest.java",
   ]
   deps = [
     ":java",
@@ -217,7 +227,9 @@ robolectric_library("junit") {
     "//chrome/browser/profiles/android:java",
     "//chrome/browser/tab:java",
     "//chrome/browser/ui/android/actions:java",
+    "//chrome/browser/ui/android/bars_common:java",
     "//chrome/browser/ui/android/bottombar:java",
+    "//chrome/browser/ui/android/bottombar:java_resources",
     "//chrome/browser/ui/android/edge_to_edge:java",
     "//chrome/browser/ui/android/layouts:java",
     "//chrome/browser/ui/android/searchactivityutils:java",
@@ -241,7 +253,7 @@ robolectric_library("junit") {
     "//third_party/androidx:androidx_core_core_java",
     "//third_party/androidx:androidx_test_core_java",
     "//third_party/androidx:androidx_test_ext_junit_java",
-    "//third_party/androidx:androidx_test_runner_java",
+    "//third_party/androidx/local_modifications/interpolator:interpolator_java",
     "//third_party/hamcrest:hamcrest_core_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",

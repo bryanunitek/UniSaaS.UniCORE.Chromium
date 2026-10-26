@@ -117,8 +117,7 @@ int GetCornerRadius(const aura::Window* window,
 HighlightBorderOverlay::HighlightBorderOverlay(
     views::Widget* widget,
     std::unique_ptr<HighlightBorderOverlayDelegate> delegate)
-    : layer_(ui::LAYER_NINE_PATCH),
-      widget_(widget),
+    : widget_(widget),
       window_(widget->GetNativeWindow()),
       delegate_(std::move(delegate)) {
   rounded_corner_radius_ = GetCornerRadius(window_, delegate_.get());
@@ -211,8 +210,8 @@ void HighlightBorderOverlay::UpdateLayerVisibilityAndBounds() {
 
   const bool show_border_in_tablet_mode =
       in_tablet_mode &&
-      window_state_type == chromeos::WindowStateType::kFloated &&
-      window_state_type == chromeos::WindowStateType::kPip;
+      (window_state_type == chromeos::WindowStateType::kFloated ||
+       window_state_type == chromeos::WindowStateType::kPip);
   const bool show_border_in_clamshell_mode =
       !in_tablet_mode &&
       window_state_type != chromeos::WindowStateType::kFullscreen;

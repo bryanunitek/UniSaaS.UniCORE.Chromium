@@ -163,7 +163,6 @@ dictionary RTCOutboundRtpStreamStats : RTCSentRtpStreamStats {
   unsigned long long   retransmittedBytesSent;
   unsigned long        rtxSsrc;
   double               targetBitrate;
-  unsigned long long   totalEncodedBytesTarget;
   unsigned long        frameWidth;
   unsigned long        frameHeight;
   double               framesPerSecond;
@@ -283,7 +282,7 @@ dictionary RTCTransportStats : RTCStats {
   RTCDtlsRole           dtlsRole;
   DOMString             srtpCipher;
   unsigned long         selectedCandidatePairChanges;
-  unsigned long         ccbfMessagesReceived;
+  unsigned long         ccfbMessagesReceived;
   // https://w3c.github.io/webrtc-provisional-stats/#RTCTransportStats-dict*
   DOMString rtcpTransportStatsId;
 };

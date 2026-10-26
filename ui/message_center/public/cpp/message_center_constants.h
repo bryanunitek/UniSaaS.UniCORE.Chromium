@@ -8,7 +8,6 @@
 #include <stddef.h>
 
 #include "build/build_config.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/color_palette.h"
 
@@ -136,9 +135,7 @@ constexpr int kNotificationResizeAnimationDurationMs = 200;
 // Returns the width of the notification.
 inline int GetNotificationWidth() {
 #if BUILDFLAG(IS_CHROMEOS)
-  return chromeos::features::IsNotificationWidthIncreaseEnabled()
-             ? kChromeOSNotificationWidth
-             : kNotificationWidth;
+  return kChromeOSNotificationWidth;
 #else
   return kNotificationWidth;
 #endif

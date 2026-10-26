@@ -6,6 +6,7 @@
 #define CONTENT_BROWSER_SERVICE_WORKER_SERVICE_WORKER_MAIN_RESOURCE_LOADER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,7 @@
 #include "third_party/blink/public/common/service_worker/service_worker_router_rule.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_response.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_fetch_response_callback.mojom-forward.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_stream_handle.mojom.h"
 
 namespace content {
@@ -133,6 +135,7 @@ class CONTENT_EXPORT ServiceWorkerMainResourceLoader
       blink::mojom::FetchAPIResponsePtr response,
       blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream,
       blink::mojom::ServiceWorkerFetchEventTimingPtr timing,
+      blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors,
       scoped_refptr<ServiceWorkerVersion> version);
 
   void DidDispatchFetchEventForSyntheticResponse(
@@ -141,6 +144,7 @@ class CONTENT_EXPORT ServiceWorkerMainResourceLoader
       blink::mojom::FetchAPIResponsePtr response,
       blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream,
       blink::mojom::ServiceWorkerFetchEventTimingPtr timing,
+      blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors,
       scoped_refptr<ServiceWorkerVersion> version);
 
   void StartResponse(blink::mojom::FetchAPIResponsePtr response,
@@ -159,9 +163,13 @@ class CONTENT_EXPORT ServiceWorkerMainResourceLoader
   // Sends net::ERR_INSUFFICIENT_RESOURCES when it can't be created.
   void CommitEmptyResponseAndComplete() override;
 
+  using ServiceWorkerResourceLoader::CommitCompleted;
   // Calls url_loader_client_->OnComplete(). |reason| will be recorded as an
   // argument of TRACE_EVENT.
-  void CommitCompleted(int error_code, const char* reason) override;
+  void CommitCompleted(int error_code,
+                       const char* reason,
+                       std::optional<network::mojom::BlockedByResponseReason>
+                           blocked_by_response_reason) override;
 
   // Calls url_loader_client_->OnReceiveRedirect().
   void HandleRedirect(
@@ -240,6 +248,9 @@ class CONTENT_EXPORT ServiceWorkerMainResourceLoader
   // Records metrics related to the fetch event handler execution.
   void RecordFetchEventHandlerMetrics(
       ServiceWorkerFetchDispatcher::FetchEventResult fetch_result);
+
+  void MaybeRecordFetchHandlerErrorUkm(
+      const blink::mojom::ServiceWorkerFetchHandlerErrorsPtr& errors);
 
   void RecordFindRegistrationTiming(bool is_fallback);
 
@@ -320,6 +331,8 @@ class CONTENT_EXPORT ServiceWorkerMainResourceLoader
   // The blob needs to be held while it's read to keep it alive.
   mojo::Remote<blink::mojom::Blob> body_as_blob_;
 
+  mojo::PendingRemote<network::mojom::CacheStorageSideDataWriter>
+      cache_storage_side_data_writer_;
 
   network::mojom::URLResponseHeadPtr response_head_ =
       network::mojom::URLResponseHead::New();

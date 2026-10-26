@@ -28,7 +28,6 @@ import '../multidevice_page/multidevice_smartlock_item.js';
 import './password_settings.js';
 import './pin_settings.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {fireAuthTokenInvalidEvent} from 'chrome://resources/ash/common/quick_unlock/utils.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {focusWithoutInk} from 'chrome://resources/js/focus_without_ink.js';
@@ -44,7 +43,8 @@ import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import {LockStateMixin} from '../lock_state_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import type {FingerprintBrowserProxy} from './fingerprint_browser_proxy.js';
@@ -142,7 +142,7 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
     };
   }
 
-  authToken: string|undefined;
+  declare authToken: string|undefined;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -152,18 +152,18 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
     Setting.kDataRecovery,
   ]);
 
-  private fingerprintUnlockEnabled_: boolean;
-  private numFingerprints_: number;
-  private numFingerprintDescription_: string;
-  private lockScreenNotificationsEnabled_: boolean;
-  private lockScreenHideSensitiveNotificationSupported_: boolean;
-  private recovery_: chrome.settingsPrivate.PrefObject|null;
-  private noRecoveryVirtualPref_: chrome.settingsPrivate.PrefObject;
-  private recoveryChangeInProcess_: boolean;
-  private showPasswordSettings_: boolean;
-  private showDisableRecoveryDialog_: boolean;
+  declare private fingerprintUnlockEnabled_: boolean;
+  declare private numFingerprints_: number;
+  declare private numFingerprintDescription_: string;
+  private lockScreenNotificationsEnabled_: boolean = false;
+  private lockScreenHideSensitiveNotificationSupported_: boolean = false;
+  declare private recovery_: chrome.settingsPrivate.PrefObject|null;
+  declare private noRecoveryVirtualPref_: chrome.settingsPrivate.PrefObject;
+  declare private recoveryChangeInProcess_: boolean;
+  declare private showPasswordSettings_: boolean;
+  declare private showDisableRecoveryDialog_: boolean;
   private fingerprintBrowserProxy_: FingerprintBrowserProxy;
-  private deviceAccountManaged_: boolean;
+  declare private deviceAccountManaged_: boolean;
 
   static get observers() {
     return [

@@ -14,6 +14,7 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/network_config_service.h"
 #include "base/check.h"
+#include "base/check_is_test.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -44,6 +45,7 @@
 #include "chromeos/services/network_config/public/cpp/cros_network_config_util.h"
 #include "chromeos/services/network_config/public/mojom/network_types.mojom-shared.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
+#include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_manager.h"
 #include "google_apis/common/api_error_codes.h"
@@ -74,6 +76,7 @@ BocaSessionManager::BocaSessionManager(
     SessionClientImpl* session_client_impl,
     const PrefService* pref_service,
     AccountId account_id,
+    signin::IdentityManager* identity_manager,
     bool is_producer,
     std::unique_ptr<SpotlightRemotingClientManager> remoting_client_manager)
     : is_producer_(is_producer),
@@ -100,20 +103,17 @@ BocaSessionManager::BocaSessionManager(
   cros_network_config_->AddObserver(
       cros_network_config_observer_.BindNewPipeAndPassRemote());
   //  Register BocaSessionManager for the current profile.
-  if (BocaAppClient::HasInstance()) {
-    BocaAppClient::Get()->AddSessionManager(this);
-    identity_manager_ = BocaAppClient::Get()->GetIdentityManager();
-    if (identity_manager_) {
-      identity_manager_->AddObserver(this);
-    }
+  if (identity_manager) {
+    identity_manager_observation_.Observe(identity_manager);
+  } else {
+    // TODO: Consider getting rid of this CHECK_IS_TEST after resolving
+    // testing complexity.
+    CHECK_IS_TEST();
   }
   if (user_manager::UserManager::IsInitialized()) {
     user_manager::UserManager::Get()->AddSessionStateObserver(this);
   }
-  if (session_manager::SessionManager::Get()) {
-    session_manager_observation_.Observe(
-        session_manager::SessionManager::Get());
-  }
+  session_manager_observation_.Observe(session_manager::SessionManager::Get());
   // Session load will be triggered when network state loaded.
   LoadInitialNetworkState();
   // This load thereotically can be removed in favor of the load after network
@@ -124,9 +124,6 @@ BocaSessionManager::BocaSessionManager(
 }
 
 BocaSessionManager::~BocaSessionManager() {
-  if (identity_manager_) {
-    identity_manager_->RemoveObserver(this);
-  }
   if (indefinite_timer_.IsRunning()) {
     indefinite_timer_.Stop();
   }
@@ -277,7 +274,7 @@ const ::boca::Session* BocaSessionManager::GetPreviousSession() {
   return previous_session_.get();
 }
 
-void BocaSessionManager::UpdateTabActivity(std::u16string title) {
+void BocaSessionManager::UpdateTabActivity(const std::u16string& title) {
   if (!current_session_ ||
       current_session_->session_state() != ::boca::Session::ACTIVE) {
     return;
@@ -285,7 +282,7 @@ void BocaSessionManager::UpdateTabActivity(std::u16string title) {
   if (title == active_tab_title_) {
     return;
   }
-  active_tab_title_ = std::move(title);
+  active_tab_title_ = title;
   auto session_id = current_session_->session_id();
   auto gaia_id = account_id_.GetGaiaId();
   auto device_id = BocaAppClient::Get()->GetDeviceId();
@@ -606,8 +603,7 @@ void BocaSessionManager::OnRefreshTokenUpdatedForAccount(
 
 void BocaSessionManager::OnIdentityManagerShutdown(
     signin::IdentityManager* identity_manager) {
-  identity_manager_->RemoveObserver(this);
-  identity_manager_ = nullptr;
+  identity_manager_observation_.Reset();
 }
 
 void BocaSessionManager::ActiveUserChanged(user_manager::User* active_user) {
@@ -619,10 +615,9 @@ void BocaSessionManager::ActiveUserChanged(user_manager::User* active_user) {
 }
 
 bool BocaSessionManager::IsProfileActive() {
-  return user_manager::UserManager::IsInitialized() &&
-         user_manager::UserManager::Get()->GetActiveUser() &&
-         user_manager::UserManager::Get()->GetActiveUser()->GetAccountId() ==
-             account_id_;
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  return active_session && active_session->account_id() == account_id_;
 }
 
 bool BocaSessionManager::IsSessionActive(const ::boca::Session* session) {

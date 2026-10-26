@@ -4,6 +4,9 @@
 
 #include "chrome/browser/ui/page_action/page_action_properties_provider.h"
 
+#include <algorithm>
+#include <array>
+
 #include "base/containers/fixed_flat_map.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
@@ -112,7 +115,7 @@ constexpr auto kPageActionProperties = base::MakeFixedFlatMap<
         },
     },
     {
-        kActionZoomNormal,
+        kActionShowZoomBubble,
         {
             .histogram_name = "Zoom",
             .type = PageActionIconType::kZoom,
@@ -305,19 +308,13 @@ constexpr auto kPageActionProperties = base::MakeFixedFlatMap<
         },
     },
     {
-        kActionWebAuthnAmbientSignin,
-        {
-            .histogram_name = "WebAuthnAmbientSignin",
-            .type = PageActionIconType::kWebAuthnAmbientSignin,
-            .element_identifier = kWebAuthnAmbientSigninIconElementId,
-        },
-    },
-    {
         kActionAutofillPayment,
         {
             .histogram_name = "AutofillPayment",
             .type = PageActionIconType::kAutofillPayment,
             .element_identifier = kAutofillPaymentIconElementId,
+            .priority =
+                page_actions::PageActionPriorityCategory::kContextualCue,
         },
     },
     {
@@ -334,7 +331,23 @@ constexpr auto kPageActionProperties = base::MakeFixedFlatMap<
             .histogram_name = "FakePageActionForDebug",
             .type = PageActionIconType::kFakePageActionForDebug,
             .priority =
-                page_actions::PageActionPriorityCategory::kUserInteraction,
+                page_actions::PageActionPriorityCategory::kPrivacySecurity,
+        },
+    },
+    {
+        kActionWalletReminderNotice,
+        {
+            .histogram_name = "WalletReminderNotice",
+            .type = PageActionIconType::kWalletReminderNotice,
+            .element_identifier = kPageActionWalletReminderNoticeElementId,
+        },
+    },
+    {
+        kActionGmailOtpOptIn,
+        {
+            .histogram_name = "GmailOtpOptIn",
+            .type = PageActionIconType::kGmailOtpOptIn,
+            .element_identifier = kPageActionGmailOtpOptInElementId,
         },
     },
 });
@@ -356,6 +369,20 @@ static_assert(
     CheckIgnoreFlagUsage(),
     "ignore_should_hide_page_actions should only be used by kActionAiMode");
 
+constexpr bool CheckNoUserInteractionDefaultPriority() {
+  for (const auto& [action_id, properties] : kPageActionProperties) {
+    if (properties.priority ==
+        page_actions::PageActionPriorityCategory::kUserInteraction) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static_assert(
+    CheckNoUserInteractionDefaultPriority(),
+    "kUserInteraction priority should not be the default for any page action");
+
 }  // namespace
 
 namespace page_actions {
@@ -365,6 +392,26 @@ PageActionPropertiesProvider::~PageActionPropertiesProvider() = default;
 
 bool PageActionPropertiesProvider::Contains(actions::ActionId action_id) const {
   return kPageActionProperties.contains(action_id);
+}
+
+// static
+base::span<const ui::ElementIdentifier>
+PageActionPropertiesProvider::GetAllElementIdentifiers() {
+  static constexpr auto kElementIdentifiers = []() consteval {
+    constexpr size_t kCount =
+        std::ranges::count_if(kPageActionProperties, [](const auto& entry) {
+          return static_cast<bool>(entry.second.element_identifier);
+        });
+    std::array<ui::ElementIdentifier, kCount> result;
+    size_t index = 0;
+    for (const auto& [action_id, properties] : kPageActionProperties) {
+      if (properties.element_identifier) {
+        result[index++] = properties.element_identifier;
+      }
+    }
+    return result;
+  }();
+  return kElementIdentifiers;
 }
 
 const PageActionProperties& PageActionPropertiesProvider::GetProperties(

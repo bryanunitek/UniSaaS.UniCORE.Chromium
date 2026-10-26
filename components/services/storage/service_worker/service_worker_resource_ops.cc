@@ -4,7 +4,6 @@
 
 #include "components/services/storage/service_worker/service_worker_resource_ops.h"
 
-#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/checked_math.h"
@@ -413,7 +412,7 @@ class ServiceWorkerResourceReaderImpl::DataReader {
 ServiceWorkerResourceReaderImpl::ServiceWorkerResourceReaderImpl(
     int64_t resource_id,
     base::WeakPtr<ServiceWorkerDiskCache> disk_cache,
-    mojo::PendingReceiver<storage::mojom::ServiceWorkerResourceReader> receiver,
+    mojo::PendingReceiver<mojom::ServiceWorkerResourceReader> receiver,
     base::OnceClosure disconnect_handler,
     const std::optional<const net::SHA256HashValue>& sha256_checksum)
     : entry_opener_(resource_id, std::move(disk_cache)),
@@ -526,9 +525,8 @@ void ServiceWorkerResourceReaderImpl::DidReadHttpResponseInfo(
   }
 
   // Deserialize the http info structure, ensuring we got headers.
-  base::PickleIterator pickle_iter =
-      base::PickleIterator::WithData(base::as_bytes(UNSAFE_TODO(
-          base::span(buffer->data(), base::checked_cast<size_t>(status)))));
+  base::PickleIterator pickle_iter = base::PickleIterator::WithData(
+      buffer->span().first(base::checked_cast<size_t>(status)));
   auto http_info = std::make_unique<net::HttpResponseInfo>();
   bool response_truncated = false;
   if (!http_info->InitFromPickle(pickle_iter, &response_truncated) ||

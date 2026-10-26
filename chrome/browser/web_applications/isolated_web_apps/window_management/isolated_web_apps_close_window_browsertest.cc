@@ -5,7 +5,8 @@
 #include <utility>
 
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
@@ -20,6 +21,7 @@
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -65,7 +67,7 @@ class IsolatedWebAppsCloseWindowBrowserTest
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   AssertionResult InstallAndOpenIWA(bool has_wm_permission_policy) {
     url_info_ = InstallIWA(has_wm_permission_policy);
@@ -164,7 +166,7 @@ class IsolatedWebAppsCloseWindowBrowserTest
     return url_info_.value();
   }
 
-  raw_ptr<Browser> browser_;
+  raw_ptr<BrowserWindowInterface> browser_;
   // Always present. optional is needed because it is not initialized in
   // test constructor and web_app::IsolatedWebAppUrlInfo has no default
   // constructor.

@@ -55,7 +55,7 @@ class SiteDataClearer : public BrowsingDataRemover::Observer {
         remover_(nullptr) {
     remover_ =
         BrowserContextImpl::From(browser_context)->GetBrowsingDataRemover();
-    DCHECK(remover_);
+    CHECK(remover_, base::NotFatalUntil::M159);
     scoped_observation_.Observe(remover_.get());
   }
 
@@ -64,11 +64,11 @@ class SiteDataClearer : public BrowsingDataRemover::Observer {
     // destroyed should be the "delete this" part in
     // OnBrowsingDataRemoverDone() function, and it invokes the |callback_|. So
     // when this destructor is called, the |callback_| should be null.
-    DCHECK(!callback_);
+    CHECK(!callback_, base::NotFatalUntil::M159);
   }
 
   void RunAndDestroySelfWhenDone() {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
     // Cookies and channel IDs are scoped to
     // a) eTLD+1 of |origin|'s host if |origin|'s host is a registrable domain
     //    or a subdomain thereof
@@ -131,6 +131,8 @@ class SiteDataClearer : public BrowsingDataRemover::Observer {
       remove_mask |= BrowsingDataRemover::DATA_TYPE_DOM_STORAGE;
       remove_mask |= BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX;
       remove_mask |= BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS;
+      remove_mask |=
+          BrowsingDataRemover::DATA_TYPE_DECLARATIVE_PERFORMANCE_OBSERVER;
       // Internal data should not be removed by site-initiated deletions.
       remove_mask &= ~BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX_INTERNAL;
       // Some deletions should also be more narrow for Clear-Site-Data, to avoid
@@ -141,6 +143,7 @@ class SiteDataClearer : public BrowsingDataRemover::Observer {
 
     if (clear_site_data_types_.Has(ClearSiteDataType::kCache)) {
       remove_mask |= BrowsingDataRemover::DATA_TYPE_CACHE;
+      remove_mask |= BrowsingDataRemover::DATA_TYPE_LOGICAL_CLEAR;
     }
 
     if (clear_site_data_types_.Has(ClearSiteDataType::kPrefetchCache)) {
@@ -187,13 +190,15 @@ class SiteDataClearer : public BrowsingDataRemover::Observer {
                                   weak_factory_.GetWeakPtr(), 0));
     }
 
+    // TODO(crbug.com/573027744): CHECK-exclusion: Convert to a CHECK once we
+    // are confident it won't be triggered.
     DCHECK_GT(pending_task_count_, 0);
   }
 
  private:
   // BrowsingDataRemover::Observer:
   void OnBrowsingDataRemoverDone(uint64_t failed_data_types) override {
-    DCHECK(pending_task_count_);
+    CHECK(pending_task_count_, base::NotFatalUntil::M159);
     if (--pending_task_count_) {
       return;
     }
@@ -231,11 +236,12 @@ void ClearSiteData(
     std::optional<blink::StorageKey> storage_key,
     bool partitioned_state_allowed_only,
     base::OnceClosure callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   // It's not possible to clear all storage and also only specific buckets.
-  DCHECK(!clear_site_data_types.Has(ClearSiteDataType::kStorage) ||
-         storage_buckets_to_remove.empty());
+  CHECK(!clear_site_data_types.Has(ClearSiteDataType::kStorage) ||
+            storage_buckets_to_remove.empty(),
+        base::NotFatalUntil::M159);
   if (!browser_context) {
     std::move(callback).Run();
     return;

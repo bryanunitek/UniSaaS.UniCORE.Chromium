@@ -5,6 +5,8 @@
 #ifndef IOS_CHROME_BROWSER_AI_PROTOTYPING_UTILS_PAGE_CONTEXT_UTIL_H_
 #define IOS_CHROME_BROWSER_AI_PROTOTYPING_UTILS_PAGE_CONTEXT_UTIL_H_
 
+#import <optional>
+
 #import "base/files/file_path.h"
 #import "base/functional/callback.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper.h"
@@ -27,6 +29,8 @@ struct SavePageContextResult {
   bool success = false;
   // The path to the saved file.
   base::FilePath file_path;
+  // The path to the saved screenshot file, if any.
+  std::optional<base::FilePath> screenshot_file_path;
   // An error message if `success` is false.
   std::string error_message;
 
@@ -61,11 +65,5 @@ SavePageContextResult SaveSerializedPageContextToDisk(
     const optimization_guide::proto::PageContext& page_context,
     const std::string& dir_name,
     const std::string& file_name);
-
-std::string FileNameForPageContext(
-    const optimization_guide::proto::PageContext& page_context);
-
-// Sanitze give `url` to be used as file name.
-NSString* SanitizeUrl(NSString* url);
 
 #endif  // IOS_CHROME_BROWSER_AI_PROTOTYPING_UTILS_PAGE_CONTEXT_UTIL_H_

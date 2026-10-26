@@ -10,61 +10,52 @@
 
 namespace page_load_metrics {
 
-// Stores information about the location where a navigation was initiated from.
+// Records that the navigation was served by DSEv1 search prefetch.
+//
+// History: This used to carry the initiator of the navigation too, as a pair
+// of `(InitiatorLocation, std::string)`, which is where the generic name of
+// this class comes from. That role was taken over by
+// `page_load_metrics::NavigationInitiator` and `NavigationInitiatorHolder`,
+// and the DSEv1 search prefetch flag is all that is left.
 //
 // Timing of availability:
-// This user data is attached to a `content::NavigationHandle`. While some
-// navigations attach it during the handle's creation (e.g., via a callback),
-// other navigations (such as those initiated from the Omnibox) attach it
-// immediately after the navigation is initiated. Consequently, this user data
-// is NOT guaranteed to be present during `PageLoadMetricsObserver::OnStart()`.
+// This user data is attached to a `content::NavigationHandle` while the
+// navigation is in flight, so it is NOT guaranteed to be present during
+// `PageLoadMetricsObserver::OnStart()`.
+// `PageLoadMetricsObserver::OnCommit()` (or `DidActivatePrerenderedPage()` for
+// prerender activation) is a reliable time to retrieve this data. Note that
+// once the navigation has finished committing, the `NavigationHandle` is
+// destroyed, making the user data no longer accessible.
 //
-// Instead, `PageLoadMetricsObserver::OnCommit()` (or
-// `DidActivatePrerenderedPage()` for prerender activation) is a reliable time
-// to retrieve this data, because:
-// 1. By the time of commit, any post-initiation attachment code has already
-//    run.
-// 2. The `NavigationHandle` (and therefore this user data) is still alive.
-// Note that once the navigation has finished committing, the
-// `NavigationHandle` is destroyed, making the user data no longer accessible.
+// TODO(https://crbug.com/517725655): Rename this to something that tells what
+// it carries, now that it no longer carries the navigation initiator.
 class NavigationHandleUserData
     : public content::NavigationHandleUserData<NavigationHandleUserData> {
  public:
-  // The enum is used for identifying the source of a navigation.
-  // These values are persisted to logs. Entries should not be renumbered and
-  // numeric values should never be reused.
-  // LINT.IfChange(NavigationInitiatorType)
-  enum class InitiatorLocation {
-    kOther = 0,
-    kBookmarkBar = 1,
-    kNewTabPage = 2,
-    kOmniboxDirectUrlInput = 3,
-    kOmniboxDefaultSearchEngine = 4,
-    kMaxValue = kOmniboxDefaultSearchEngine
-  };
-  // LINT.ThenChange(//tools/metrics/histograms/metadata/navigation/enums.xml:NavigationInitiatorType)
+  ~NavigationHandleUserData() override;
 
-  ~NavigationHandleUserData() override = default;
-
-  InitiatorLocation navigation_type() const { return navigation_type_; }
-
-  static void AttachNewTabPageNavigationHandleUserData(
-      content::NavigationHandle& navigation_handle);
-
-  static void AttachOmniboxDirectUrlInputNavigationHandleUserData(
-      content::NavigationHandle& navigation_handle);
-
-  static void AttachOmniboxDefaultSearchEngineNavigationHandleUserData(
-      content::NavigationHandle& navigation_handle);
+  bool is_served_by_legacy_search_prefetch() const {
+    return is_served_by_legacy_search_prefetch_;
+  }
+  void set_is_served_by_legacy_search_prefetch(bool is_served) {
+    is_served_by_legacy_search_prefetch_ = is_served;
+  }
 
  private:
-  NavigationHandleUserData(content::NavigationHandle& navigation,
-                           InitiatorLocation navigation_type);
+  explicit NavigationHandleUserData(content::NavigationHandle& navigation);
 
-  // `navigation_type` is used to store where this navigation is initiated from.
-  // This information is used to identify the source of the navigation, and this
-  // kind of information is utilized by PageLoadMetricsObservers.
-  const InitiatorLocation navigation_type_;
+  // Indicates whether this navigation was served by a legacy search prefetch
+  // mechanism (i.e., DSEv1 search prefetch). Legacy search prefetch refers to
+  // embedder-managed search prefetch mechanisms that operate outside and
+  // predate the unified `content::PrefetchService` preloading pipeline.
+  //
+  // Because such prefetch requests are handled directly by the embedder rather
+  // than the content layer, they do not automatically integrate with
+  // `content::PreloadServingMetrics`. This variable allows the embedder to
+  // signal that the navigation was served by the legacy search prefetch so that
+  // `PreloadServingMetricsPageLoadMetricsObserver` can accurately record
+  // preload serving metrics.
+  bool is_served_by_legacy_search_prefetch_ = false;
 
   friend content::NavigationHandleUserData<NavigationHandleUserData>;
   NAVIGATION_HANDLE_USER_DATA_KEY_DECL();

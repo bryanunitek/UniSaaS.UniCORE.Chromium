@@ -22,19 +22,21 @@ std::optional<std::vector<std::string>> ParseContentLanguages(
     return std::nullopt;
 
   for (const auto& list_item : maybe_list.value()) {
+    const net::structured_headers::ParameterizedItem* item =
+        list_item.GetIfItem();
     // Make sure not a nested list.
-    if (list_item.member.size() != 1u)
+    if (!item || !item->item.is_token()) {
       return std::nullopt;
-    if (!list_item.member[0].item.is_token())
-      return std::nullopt;
+    }
   }
 
   std::vector<std::string> result;
-  for (const auto& list_item : maybe_list.value()) {
-    const std::string& token_value = list_item.member[0].item.GetString();
-    result.push_back(token_value);
+  result.reserve(maybe_list->size());
+  for (auto& list_item : maybe_list.value()) {
+    std::string* token_value = list_item.GetIfItem()->item.GetIfToken();
+    result.emplace_back(std::move(*token_value));
   }
-  return std::make_optional(std::move(result));
+  return result;
 }
 
 }  // namespace network

@@ -26,6 +26,8 @@
 
 #include "third_party/blink/renderer/core/page/create_window.h"
 
+#include <optional>
+
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/feature_list.h"
@@ -34,6 +36,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/widget/constants.h"
 #include "third_party/blink/public/mojom/loader/request_context_frame_type.mojom-blink.h"
+#include "third_party/blink/public/mojom/window_features/window_features.mojom-blink.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/web/web_view_client.h"
 #include "third_party/blink/public/web/web_window_features.h"
@@ -47,6 +50,7 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/loader/frame_load_request.h"
@@ -54,8 +58,10 @@
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
+#include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
 #include "third_party/blink/renderer/platform/widget/frame_widget.h"
 #include "third_party/blink/renderer/platform/wtf/text/number_parsing_options.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
@@ -75,11 +81,12 @@ WebWindowFeatures GetWindowFeaturesFromString(const String& feature_string,
                                               LocalDOMWindow* dom_window) {
   WebWindowFeatures window_features;
 
-  const bool attribution_reporting_enabled =
-      dom_window &&
-      RuntimeEnabledFeatures::AttributionReportingEnabled(dom_window);
   const bool explicit_opener_enabled =
       RuntimeEnabledFeatures::RelOpenerBcgDependencyHintEnabled(dom_window);
+  const bool always_on_top_enabled =
+      RuntimeEnabledFeatures::WindowOpenAlwaysOnTopEnabled();
+  const bool split_tab_enabled =
+      RuntimeEnabledFeatures::WindowOpenSplitTabEnabled();
 
   // This code follows the HTML spec, specifically
   // https://html.spec.whatwg.org/C/#concept-window-open-features-tokenize
@@ -93,6 +100,10 @@ WebWindowFeatures GetWindowFeaturesFromString(const String& feature_string,
   bool scrollbars = true;
   enum class PopupState { kUnknown, kPopup, kWindow };
   PopupState popup_state = PopupState::kUnknown;
+  bool split_requested = false;
+  mojom::blink::SplitTabPosition split_position =
+      mojom::blink::SplitTabPosition::kUnspecified;
+  std::optional<uint8_t> split_size;
   unsigned key_begin, key_end;
   unsigned value_begin, value_end;
 
@@ -165,10 +176,14 @@ WebWindowFeatures GetWindowFeaturesFromString(const String& feature_string,
           StringToInt(value_string, NumberParsingOptions::Loose()).value_or(0);
     }
 
+    const bool window_open_attribution_src_enabled =
+        dom_window &&
+        RuntimeEnabledFeatures::WindowOpenAttributionSrcEnabled(dom_window);
     if (!ui_features_were_disabled && key_string != "noopener" &&
         (!explicit_opener_enabled || key_string != "opener") &&
         key_string != "noreferrer" &&
-        (!attribution_reporting_enabled || key_string != "attributionsrc")) {
+        (!window_open_attribution_src_enabled ||
+         key_string != "attributionsrc")) {
       ui_features_were_disabled = true;
       menu_bar = false;
       status_bar = false;
@@ -207,37 +222,60 @@ WebWindowFeatures GetWindowFeaturesFromString(const String& feature_string,
       window_features.explicit_opener = value;
     } else if (key_string == "noreferrer") {
       window_features.noreferrer = value;
+    } else if (always_on_top_enabled && key_string == "alwaysontop") {
+      window_features.always_on_top = value;
+    } else if (split_tab_enabled && key_string == "split") {
+      split_requested = value;
+    } else if (split_tab_enabled && key_string == "splitposition") {
+      // Unrecognized values leave the browser default. As with other
+      // features, the last occurrence of the key wins.
+      if (value_string == "left") {
+        split_position = mojom::blink::SplitTabPosition::kLeft;
+      } else if (value_string == "right") {
+        split_position = mojom::blink::SplitTabPosition::kRight;
+      } else if (value_string == "top") {
+        split_position = mojom::blink::SplitTabPosition::kTop;
+      } else if (value_string == "bottom") {
+        split_position = mojom::blink::SplitTabPosition::kBottom;
+      } else {
+        split_position = mojom::blink::SplitTabPosition::kUnspecified;
+      }
+    } else if (split_tab_enabled && key_string == "splitsize") {
+      // Parsed as an integer percentage. Invalid or out-of-range values leave
+      // the browser default. As with other features, the last occurrence of
+      // the key wins. `value` isn't used, because it is 1 (a valid size) for
+      // an empty, "yes", or "true" value.
+      std::optional<int> size =
+          StringToInt(value_string, NumberParsingOptions::Loose());
+      if (size && *size >= mojom::blink::WindowFeatures::kMinSplitSize &&
+          *size <= mojom::blink::WindowFeatures::kMaxSplitSize) {
+        split_size = static_cast<uint8_t>(*size);
+      } else {
+        split_size = std::nullopt;
+      }
     } else if (key_string == "background") {
       window_features.background = true;
     } else if (key_string == "persistent") {
       window_features.persistent = true;
-    } else if (attribution_reporting_enabled &&
+    } else if (window_open_attribution_src_enabled &&
                key_string == "attributionsrc") {
-      if (!window_features.attribution_srcs.has_value()) {
-        window_features.attribution_srcs.emplace();
-      }
-
-      if (!value_string.empty()) {
-        // attributionsrc values are URLs, and as such their original case needs
-        // to be retained for correctness. Positions in both `feature_string`
-        // and `buffer` correspond because ASCII-lowercasing doesn't add,
-        // remove, or swap character positions; it only does in-place
-        // transformations of capital ASCII characters. See crbug.com/1338698
-        // for details.
-        DCHECK_EQ(feature_string.length(), buffer.length());
-        const StringView original_case_value_string(feature_string, value_begin,
-                                                    value_end - value_begin);
-
-        // attributionsrc values are encoded in order to support embedded
-        // special characters, such as '='.
-        window_features.attribution_srcs->emplace_back(DecodeUrlEscapeSequences(
-            original_case_value_string, DecodeUrlMode::kUtf8));
-      }
+      UseCounter::Count(
+          dom_window,
+          mojom::blink::WebFeature::kAttributionReportingWindowOpen);
     }
   }
 
   window_features.is_popup = popup_state == PopupState::kPopup;
-  if (popup_state == PopupState::kUnknown) {
+  if (split_requested) {
+    CHECK(split_tab_enabled);
+    window_features.is_split = true;
+    window_features.split_position = split_position;
+    window_features.split_size = split_size;
+    // When a split is requested, the legacy "any other feature means popup"
+    // heuristic does not apply. `is_popup` is only true if "popup" was
+    // explicitly requested, in which case it is the fallback when the browser
+    // does not create the split. Otherwise the fallback is a new tab.
+  } else if (popup_state == PopupState::kUnknown) {
     window_features.is_popup = !tool_bar || !menu_bar || !scrollbars ||
                                !status_bar || !window_features.resizable;
   }
@@ -297,6 +335,15 @@ Frame* CreateNewWindow(LocalFrame& opener_frame,
     }
   }
 
+  if (SchemeRegistry::IsDirectLaunchScheme(url.Protocol())) {
+    opener_window.AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
+        mojom::blink::ConsoleMessageSource::kSecurity,
+        mojom::blink::ConsoleMessageLevel::kError,
+        StrCat({"Not allowed to navigate to direct-launch scheme '",
+                url.Protocol(), "' from web contexts."})));
+    return nullptr;
+  }
+
   if (!opener_window.GetSecurityOrigin()->CanDisplay(url)) {
     opener_window.AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
         mojom::blink::ConsoleMessageSource::kSecurity,
@@ -306,6 +353,8 @@ Frame* CreateNewWindow(LocalFrame& opener_frame,
   }
 
   request.SetInitiatorFrameToken(opener_frame.GetLocalFrameToken());
+  request.SetInitiatorStateToken(opener_frame.GetInitiatorStateToken());
+  request.SetInitiatorDocumentToken(opener_frame.GetDocumentToken());
   request.SetInitiatorNavigationStateKeepAliveHandle(
       opener_frame.IssueKeepAliveHandle());
 
@@ -319,6 +368,16 @@ Frame* CreateNewWindow(LocalFrame& opener_frame,
     request.SetNavigationPolicy(kNavigationPolicyPictureInPicture);
   } else {
     request.SetNavigationPolicy(NavigationPolicyForCreateWindow(features));
+    // The user's click modifiers (e.g. ctrl-click for a background tab) take
+    // precedence over a split tab request. In that case, drop the request, so
+    // that the browser handles the modifiers as it would without it. This must
+    // happen after the policy is chosen, since the policy depends on
+    // `is_split`.
+    if (features.is_split && UserRequestedNavigationPolicyForCreateWindow()) {
+      features.is_split = false;
+      features.split_position = mojom::blink::SplitTabPosition::kUnspecified;
+      features.split_size = std::nullopt;
+    }
     probe::WindowOpen(&opener_window, url, frame_name, features,
                       LocalFrame::HasTransientUserActivation(&opener_frame));
   }

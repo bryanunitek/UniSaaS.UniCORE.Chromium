@@ -29,13 +29,13 @@
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck crbug.com/40147906
 #endif
 
-class Browser;
 class BrowserWindowInterface;
 class BrowserWindow;
 class Profile;
 class DevToolsWindowTesting;
 class DevToolsEventForwarder;
 class DevToolsEyeDropper;
+enum class DevToolsBlockReason;
 
 namespace content {
 class DevToolsAgentHost;
@@ -116,6 +116,15 @@ class DevToolsWindow : public DevToolsUIBindings::Delegate,
   // only checks for |profile| in general.
   static bool AllowDevToolsFor(Profile* profile,
                                content::WebContents* web_contents);
+  static bool AllowDevToolsFor(Profile* profile,
+                               content::DevToolsAgentHost* agent_host);
+
+  // Returns why DevTools are not allowed for the specified |profile| and
+  // |web_contents|, or DevToolsBlockReason::kNotBlocked if AllowDevToolsFor()
+  // returns true.
+  static DevToolsBlockReason GetBlockReasonFor(
+      Profile* profile,
+      content::WebContents* web_contents);
 
   // Return the DevToolsWindow for the given WebContents if one exists,
   // otherwise nullptr.
@@ -479,6 +488,7 @@ class DevToolsWindow : public DevToolsUIBindings::Delegate,
   void ConnectionReady() override;
   void SetOpenNewWindowForPopups(bool value) override;
   infobars::ContentInfoBarManager* GetInfoBarManager() override;
+  void RemoveSharingInfoBar();
   void RenderProcessGone(bool crashed) override;
   void ShowCertificateViewer(const std::string& cert_viewer) override;
   int GetDockStateForLogging() override;
@@ -601,6 +611,9 @@ class DevToolsWindow : public DevToolsUIBindings::Delegate,
   raw_ptr<Throttle> throttle_ = nullptr;
   bool open_new_window_for_popups_ = false;
   raw_ptr<infobars::InfoBar> sharing_infobar_ = nullptr;
+  // Whether `sharing_infobar_` was created by `infobars::BrowserInfoBarManager`
+  // rather than `ProcessSharingInfobarDelegate`.
+  bool is_sharing_infobar_migrated_ = false;
   int checked_sharing_process_id_ = content::ChildProcessHost::kInvalidUniqueID;
 
 #if BUILDFLAG(IS_ANDROID)

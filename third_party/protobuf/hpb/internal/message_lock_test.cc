@@ -8,7 +8,6 @@
 #include "hpb/internal/message_lock.h"
 
 #include <atomic>
-#include <mutex>
 #include <string>
 #include <thread>
 
@@ -23,7 +22,7 @@
 #include "hpb/arena.h"
 #include "hpb/extension.h"
 #include "hpb/hpb.h"
-#include "upb/mem/arena.hpp"
+#include "hpb/options.h"
 
 #ifndef ASSERT_OK
 #define ASSERT_OK(x) ASSERT_TRUE(x.ok())
@@ -59,20 +58,22 @@ ABSL_CONST_INIT absl::Mutex m[8] = {
     absl::Mutex(absl::kConstInit), absl::Mutex(absl::kConstInit)};
 void unlock_func(const void* msg)
     ABSL_UNLOCK_FUNCTION(m[absl::HashOf(msg) & 0x7]) {
-  m[absl::HashOf(msg) & 0x7].Unlock();
+  m[absl::HashOf(msg) & 0x7].unlock();
 }
 
 ::hpb::internal::UpbExtensionUnlocker lock_func(const void* msg)
     ABSL_EXCLUSIVE_LOCK_FUNCTION(m[absl::HashOf(msg) & 0x7]) {
-  m[absl::HashOf(msg) & 0x7].Lock();
+  m[absl::HashOf(msg) & 0x7].lock();
   return &unlock_func;
 }
 
-void TestConcurrentExtensionAccess(::hpb::ExtensionRegistry registry) {
+void TestConcurrentExtensionAccess(const ::hpb::ExtensionRegistry& registry) {
   ::hpb::internal::upb_extension_locker_global.store(&lock_func,
                                                      std::memory_order_release);
   const std::string payload = GenerateTestData();
-  TestModel parsed_model = ::hpb::Parse<TestModel>(payload, registry).value();
+  TestModel parsed_model =
+      ::hpb::Parse<TestModel>(payload, {.extension_registry = registry})
+          .value();
   const auto test_main = [&] { EXPECT_EQ("str", parsed_model.str1()); };
   const auto test_theme = [&] {
     ASSERT_TRUE(::hpb::HasExtension(&parsed_model, theme));

@@ -33,10 +33,6 @@ BASE_DECLARE_FEATURE_PARAM(size_t, kMaxContentAnalysisFileSizeMB);
 // experiments. See http://crbug.com/444472089.
 inline constexpr int kDefaultMaxParallelActiveRequests = 30;
 
-// Controls enabling and count of concurrent upload limit for content analysis.
-BASE_DECLARE_FEATURE(kEnableNewUploadCountLimit);
-BASE_DECLARE_FEATURE_PARAM(size_t, kParallelContentAnalysisRequestCountMax);
-
 // Controls whether encrypted file upload is enabled.
 BASE_DECLARE_FEATURE(kEnableEncryptedFileUpload);
 
@@ -46,12 +42,21 @@ BASE_DECLARE_FEATURE(kDlpScanPastedImages);
 BASE_DECLARE_FEATURE(kGlicBulkDataEntrySupport);
 
 #if BUILDFLAG(IS_ANDROID)
-// Controls whether WebProtect download on Clank is enabled.
-BASE_DECLARE_FEATURE(kEnableDownloadEnterpriseScanOnClank);
+// Controls whether files attached to web pages (file picker, drag-and-drop)
+// are scanned by enterprise content analysis on Clank.
+BASE_DECLARE_FEATURE(kEnableFileAttachedEnterpriseScanOnClank);
 #endif
 
 // Controls whether cancellation of uploads is enabled for content analysis.
 BASE_DECLARE_FEATURE(kEnableCancelUploadOnContentAnalysis);
+
+// Controls whether a user cancelling a content analysis scan immediately stops
+// in-progress file opening and hashing, instead of only stopping it when the
+// request handler is torn down. The teardown path blocks the UI thread inside
+// base::JobHandle::Cancel() until in-progress reads finish; signalling
+// cancellation at click time lets those workers unwind on their own so nothing
+// has to wait.
+BASE_DECLARE_FEATURE(kNonBlockingFileOpeningJobCancel);
 
 // Controls whether the audit-only network request connector policy will be
 // applied if set.
@@ -59,6 +64,16 @@ BASE_DECLARE_FEATURE(kEnableAuditOnlyNetworkRequestConnector);
 
 // Controls whether copy to clipboard is enabled for content analysis.
 BASE_DECLARE_FEATURE(kContentAnalysisClipboardCopy);
+
+// Controls whether enterprise security events carry `Event.initiator`
+// identifying the Chrome extension that actuated the reported action (extension
+// actor attribution). See crbug.com/554183135.
+BASE_DECLARE_FEATURE(kEnterpriseExtensionActorAttribution);
+
+// Controls whether enterprise security events carry `Event.initiator`
+// identifying the local OS process tree of an external Chrome DevTools
+// Protocol (CDP) automation actor. See crbug.com/575478024.
+BASE_DECLARE_FEATURE(kEventReportingCdpAttribution);
 
 }  // namespace enterprise_connectors
 

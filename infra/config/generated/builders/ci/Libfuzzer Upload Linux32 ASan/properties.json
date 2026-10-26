@@ -60,6 +60,7 @@
       "v.test_suite"
     ]
   },
+  "archive_path": "linux32-release-asan/libfuzzer-linux32-release",
   "builder_group": "chromium.fuzz",
   "gardener_rotations": [
     "chromium"
@@ -68,6 +69,5 @@
   "sheriff_rotations": [
     "chromium"
   ],
-  "upload_bucket": "chromium-browser-libfuzzer",
-  "upload_directory": "asan"
+  "upload_bucket": "chromium-browser-libfuzzer"
 }

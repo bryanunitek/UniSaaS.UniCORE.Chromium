@@ -32,7 +32,7 @@ class MEDIA_EXPORT NullAudioSink : public SwitchableAudioRendererSink {
                   RenderCallback* callback) override;
   void Start() override;
   void Stop() override;
-  void Pause() override;
+  void Pause(PauseReason reason) override;
   void Play() override;
   void Flush() override;
   bool SetVolume(double volume) override;
@@ -58,7 +58,8 @@ class MEDIA_EXPORT NullAudioSink : public SwitchableAudioRendererSink {
   bool initialized_;
   bool started_;
   bool playing_;
-  raw_ptr<RenderCallback, DanglingUntriaged> callback_;
+  // The RenderCallback is provided via Initialize() and must outlive the sink.
+  raw_ptr<RenderCallback> callback_;
 
   // Controls whether or not a running hash is computed for audio frames.
   std::unique_ptr<AudioHash> audio_hash_;

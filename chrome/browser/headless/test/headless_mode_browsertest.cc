@@ -11,25 +11,32 @@
 // providing a compile time condition over the entire file.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #include <string>
+#include <string_view>
 
 #include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/time/time.h"
 #include "build/branding_buildflags.h"
 #include "chrome/browser/headless/headless_mode_init.h"
 #include "chrome/browser/headless/test/headless_mode_browsertest_utils.h"
 #include "chrome/browser/infobars/confirm_infobar_creator.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.h"
 #include "chrome/browser/ui/views/frame/app_menu_button.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
@@ -37,6 +44,7 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "components/headless/clipboard/headless_clipboard.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
@@ -61,6 +69,7 @@
 #include "ui/display/display_switches.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/switches.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
@@ -115,7 +124,7 @@ void HeadlessModeBrowserTest::AppendHeadlessCommandLineSwitches(
 }
 
 content::WebContents* HeadlessModeBrowserTest::GetActiveWebContents() {
-  return browser()->tab_strip_model()->GetActiveWebContents();
+  return browser()->GetTabStripModel()->GetActiveWebContents();
 }
 
 void HeadlessModeBrowserTest::FlushPostedTasks() {
@@ -147,6 +156,39 @@ namespace {
 
 IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTest, BrowserWindowIsActive) {
   EXPECT_TRUE(browser()->GetWindow()->IsActive());
+}
+
+// In headless mode frames are never presented to a display, so the exclusive
+// access bubble's presentation watchdog must not be armed -- otherwise it fires
+// (as it does on a GPU hang) and spuriously exits fullscreen. This is the
+// headless counterpart to
+// ExclusiveAccessBubbleViewsTest.PresentationWatchdog, which verifies the
+// watchdog *does* fire in headed mode.
+IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTest,
+                       PresentationWatchdogDisabledInHeadless) {
+  // Force the "frame never presented" condition that always holds in headless
+  // mode, so OnFirstPresentation() never runs to stop the watchdog. This is the
+  // same hook the headed PresentationWatchdog test uses.
+  ExclusiveAccessBubbleViews::set_simulate_gpu_hang_for_testing(true);
+  base::ScopedClosureRunner reset_gpu_hang_simulation(base::BindOnce(
+      &ExclusiveAccessBubbleViews::set_simulate_gpu_hang_for_testing, false));
+
+  // Enter browser fullscreen (the same path --start-fullscreen takes), show the
+  // exit bubble, and wait for the fullscreen transition to complete.
+  ui_test_utils::ToggleFullscreenModeAndWait(browser());
+  ASSERT_TRUE(browser()->GetWindow()->IsFullscreen());
+  ASSERT_TRUE(BrowserView::GetBrowserViewForBrowser(browser())
+                  ->GetExclusiveAccessBubble());
+
+  // Wait well past the 1.5s watchdog interval.
+  base::RunLoop run_loop;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, run_loop.QuitClosure(), base::Seconds(2));
+  run_loop.Run();
+
+  // With the watchdog correctly skipped in headless, fullscreen persists.
+  // Without the fix the watchdog would have fired and exited fullscreen.
+  EXPECT_TRUE(browser()->GetWindow()->IsFullscreen());
 }
 
 // Infobar tests -------------------------------------------------------------
@@ -285,7 +327,7 @@ class HeadlessModeUserAgentBrowserTest : public HeadlessModeBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(HeadlessModeUserAgentBrowserTest, UserAgentHasHeadless) {
-  content::BrowserContext* browser_context = browser()->profile();
+  content::BrowserContext* browser_context = browser()->GetProfile();
   DCHECK(browser_context);
 
   content::WebContents::CreateParams create_params(browser_context);
@@ -354,9 +396,9 @@ IN_PROC_BROWSER_TEST_F(HeadlessModeBrowserTest, HeadlessClipboardCopyPaste) {
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
   ASSERT_TRUE(clipboard);
 
-  static const struct ClipboardBufferInfo {
+  static constexpr struct ClipboardBufferInfo {
     ui::ClipboardBuffer buffer;
-    std::u16string paste_text;
+    std::u16string_view paste_text;
   } clipboard_buffers[] = {
       {ui::ClipboardBuffer::kCopyPaste, u"kCopyPaste"},
       {ui::ClipboardBuffer::kSelection, u"kSelection"},
@@ -398,7 +440,7 @@ class TestBubbleDelegate : public ui::DialogModelDelegate {
   void OnOkButton() { dialog_model()->host()->Close(); }
 };
 
-Widget* ShowTestBubble(Browser* browser) {
+Widget* ShowTestBubble(BrowserWindowInterface* browser) {
   views::BubbleAnchor anchor = BrowserView::GetBrowserViewForBrowser(browser)
                                    ->toolbar_button_provider()
                                    ->GetAppMenuControl()

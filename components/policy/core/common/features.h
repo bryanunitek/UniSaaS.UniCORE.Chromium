@@ -34,17 +34,16 @@ POLICY_EXPORT BASE_DECLARE_FEATURE(kUseCECFlagInPolicyData);
 POLICY_EXPORT BASE_DECLARE_FEATURE(
     kInitializePoliciesForSignedInUserInNewEntryPoints);
 
-// Controls whether to use active admins to calculate the enterprise info.
-POLICY_EXPORT BASE_DECLARE_FEATURE(kAndroidUseAdminsForEnterpriseInfo);
+// Controls whether to use RestrictionsManager instead of UserManager in
+// AppRestrictionsProvider to retrieve application restrictions.
+POLICY_EXPORT BASE_DECLARE_FEATURE(
+    kUseRestrictionsManagerInAppRestrictionsProvider);
 #endif
 
 // Enables a configurable delay for policy registration.
 POLICY_EXPORT BASE_DECLARE_FEATURE(kCustomPolicyRegistrationDelay);
 POLICY_EXPORT extern const base::FeatureParam<base::TimeDelta>
     kPolicyRegistrationDelay;
-
-// Used to enable future_on policies on Desktop Android.
-POLICY_EXPORT BASE_DECLARE_FEATURE(kFuturePoliciesOnDesktopAndroid);
 
 // A blocklist of policies supported on Desktop Android.
 POLICY_EXPORT BASE_DECLARE_FEATURE(kDesktopAndroidPolicy);
@@ -63,6 +62,14 @@ POLICY_EXPORT BASE_DECLARE_FEATURE(kEnableExtensionInstallPolicyFetching);
 // Note: Only has an effect on Mac and Windows where ShouldHonorPolicies()
 // performs platform-specific checks.
 POLICY_EXPORT BASE_DECLARE_FEATURE(kUseManagementServiceForSensitivePolicies);
+
+// When enabled, AzureActiveDirectoryDeviceStatusProvider only returns
+// CLOUD_DOMAIN for device-joined Azure AD accounts. When disabled (kill
+// switch), it falls back to the behavior of AzureActiveDirectoryStatusProvider,
+// returning CLOUD_DOMAIN for all Azure AD joined accounts (including
+// workplace-joined).
+POLICY_EXPORT BASE_DECLARE_FEATURE(
+    kFilterSensitivePoliciesOnWorkplaceJoinedDevices);
 
 // Modifies behavior of policies utilizing URLBlocklistManager.
 // When enabled, bypasses the wildcard "*" in the blocklist for internal
@@ -89,6 +96,19 @@ POLICY_EXPORT extern const base::FeatureParam<bool>
 // When enabled, URLs in the general blocklist are still blocked in incognito
 // even if they are in the incognito allowlist.
 POLICY_EXPORT BASE_DECLARE_FEATURE(kURLBlocklistOverridesIncognitoAllowlist);
+
+// Enables the export of platform policies as JSON on the chrome://policy page.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kExportPlatformPoliciesJson);
+
+// When enabled, migrates user cloud management status and sign-in interception
+// policy fetching from the legacy SecureConnect endpoint to Device Management
+// Server.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kMigrateSecureConnectApiToDmServer);
+POLICY_EXPORT extern const base::FeatureParam<base::TimeDelta>
+    kMigrateSecureConnectApiToDmServerFetchTimeout;
+
+// Returns true if `kMigrateSecureConnectApiToDmServer` is enabled.
+POLICY_EXPORT bool IsMigrateSecureConnectApiToDmServerEnabled();
 
 }  // namespace policy::features
 

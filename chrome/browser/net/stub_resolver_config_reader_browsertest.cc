@@ -16,7 +16,7 @@
 #include "chrome/browser/net/secure_dns_config.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -140,7 +140,7 @@ IN_PROC_BROWSER_TEST_P(StubResolverConfigReaderBrowsertest, ConfigFromPrefs) {
 #if BUILDFLAG(IS_CHROMEOS)
   // On ChromeOS, the local_state is shared between all users so the user-set
   // pref is stored in the profile's pref service.
-  pref_service_for_user_settings = browser()->profile()->GetPrefs();
+  pref_service_for_user_settings = browser()->GetProfile()->GetPrefs();
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   pref_service_for_user_settings->SetString(prefs::kDnsOverHttpsMode,

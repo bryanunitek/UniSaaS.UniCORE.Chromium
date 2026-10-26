@@ -7,7 +7,6 @@ package org.chromium.chrome.browser.tasks.tab_management;
 import android.content.Context;
 
 import androidx.annotation.ColorInt;
-import androidx.annotation.ColorRes;
 import androidx.annotation.DrawableRes;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.res.ResourcesCompat;
@@ -26,7 +25,7 @@ import org.chromium.ui.util.ColorUtils;
 public class TabUiThemeUtil {
     public static final float FOLIO_FOOT_LENGTH_DP = 16.f;
     private static final float MAX_TAB_STRIP_TAB_WIDTH_DP = 265.f;
-    private static final float DIVIDER_FOLIO_LIGHT_OPACITY = 0.3f;
+    private static final float DIVIDER_FOLIO_LIGHT_OPACITY = 0.2f;
 
     /**
      * Returns the tab strip background color based on the windowing mode and activity focus state.
@@ -140,25 +139,6 @@ public class TabUiThemeUtil {
     }
 
     /**
-     * Returns the mini thumbnail placeholder color for the given group color.
-     *
-     * @param context {@link Context} used to retrieve color.
-     * @param isIncognito Whether the color is used for incognito mode.
-     * @param groupColor The group color that will be composited with the mini thumbnail placeholder
-     *     overlay color.
-     */
-    public static @ColorInt int getMiniThumbnailPlaceholderColorForGroup(
-            Context context, boolean isIncognito, @ColorInt int groupColor) {
-        @ColorRes
-        int foregroundRes =
-                isIncognito
-                        ? R.color.mini_thumbnail_placeholder_overlay_color_baseline
-                        : R.color.mini_thumbnail_placeholder_overlay_color;
-        @ColorInt int foregroundColor = context.getColor(foregroundRes);
-        return androidx.core.graphics.ColorUtils.compositeColors(foregroundColor, groupColor);
-    }
-
-    /**
      * Returns the color used for the shared group notification bubble.
      *
      * @param context {@link Context} used to retrieve color.
@@ -213,11 +193,6 @@ public class TabUiThemeUtil {
         }
 
         if (!ColorUtils.inNightMode(context)) {
-            // This color will not be used at full opacity. We can't set this using the alpha
-            // component of the {@code @ColorInt}, since it is ignored when loading resources
-            // with a specified tint in the CC layer (instead retaining the alpha of the original
-            // image). Instead, this is reflected by setting the opacity of the divider itself.
-            // See https://crbug.com/40871850.
             return ColorUtils.setAlphaComponentWithFloat(
                     SemanticColorUtils.getDefaultIconColorAccent1(context),
                     DIVIDER_FOLIO_LIGHT_OPACITY);
@@ -226,37 +201,37 @@ public class TabUiThemeUtil {
         return SemanticColorUtils.getDividerColor(context);
     }
 
-    /** {@return The {@link DrawableRes} for the keyboard focus ring for tabs} */
+    /** Returns the {@link DrawableRes. for the keyboard focus ring for tabs} */
     public static @DrawableRes int getTabKeyboardFocusDrawableRes() {
         return R.drawable.tabstrip_keyfocus_8dp;
     }
 
-    /** {@return The {@link DrawableRes} for the keyboard focus ring for selected tab w/ outline} */
+    /** Returns the {@link DrawableRes. for the keyboard focus ring for selected tab w/ outline} */
     public static @DrawableRes int getSelectedTabInTabGroupKeyboardFocusDrawableRes() {
         return R.drawable.tabstrip_keyfocus_10dp;
     }
 
-    /** {@return The {@link DrawableRes} for the tab group indicator keyboard focus ring} */
+    /** Returns the {@link DrawableRes. for the tab group indicator keyboard focus ring} */
     public static @DrawableRes int getTabGroupIndicatorKeyboardFocusDrawableRes() {
         return R.drawable.tabstrip_keyfocus_11dp;
     }
 
-    /** {@return The {@link DrawableRes} for the close button keyboard focus ring} */
+    /** Returns the {@link DrawableRes. for the close button keyboard focus ring} */
     public static @DrawableRes int getCircularButtonKeyboardFocusDrawableRes() {
         return R.drawable.circular_button_keyfocus;
     }
 
-    /** {@return The {@link DrawableRes} for the Glic button keyboard focus ring} */
+    /** Returns the {@link DrawableRes. for the Glic button keyboard focus ring} */
     public static @DrawableRes int getGlicButtonKeyboardFocusDrawableRes(boolean isSplit) {
         return isSplit ? R.drawable.glic_split_button_keyfocus : R.drawable.glic_button_keyfocus;
     }
 
-    /** {@return The keyboard focus ring's offset in px} */
+    /** Returns the keyboard focus ring's offset in px. */
     public static int getFocusRingOffset(Context context) {
         return context.getResources().getDimensionPixelSize(R.dimen.tabstrip_keyfocus_offset);
     }
 
-    /** {@return The width of the keyboard focus ring stroke and tab group color line in px} */
+    /** Returns the width of the keyboard focus ring stroke and tab group color line in px. */
     public static int getLineWidth(Context context) {
         return context.getResources().getDimensionPixelSize(R.dimen.tabstrip_strokewidth);
     }

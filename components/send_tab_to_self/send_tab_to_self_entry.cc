@@ -12,9 +12,6 @@
 
 #include "base/check.h"
 #include "base/feature_list.h"
-#include "base/memory/ptr_util.h"
-#include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
 #include "components/send_tab_to_self/features.h"
 #include "components/send_tab_to_self/page_context.h"
 #include "components/send_tab_to_self/proto/send_tab_to_self.pb.h"
@@ -64,7 +61,7 @@ namespace {
 
 // Converts a time object to the format used in sync protobufs (microseconds
 // since the Windows epoch).
-int64_t TimeToProtoTime(const base::Time t) {
+int64_t TimeToProtoTime(base::Time t) {
   return t.ToDeltaSinceWindowsEpoch().InMicroseconds();
 }
 
@@ -90,16 +87,15 @@ SendTabToSelfEntry::SendTabToSelfEntry(
       device_name_(std::move(device_name)),
       target_device_sync_cache_guid_(std::move(target_device_sync_cache_guid)),
       shared_time_(shared_time),
-      notification_dismissed_(false),
       page_context_(page_context),
       navigation_history_(std::move(navigation_history)) {
   DCHECK(!guid_.empty());
   DCHECK(IsValidUrl(url_));
 }
 
-SendTabToSelfEntry::~SendTabToSelfEntry() = default;
-
 SendTabToSelfEntry::SendTabToSelfEntry(const SendTabToSelfEntry&) = default;
+
+SendTabToSelfEntry::~SendTabToSelfEntry() = default;
 
 const std::string& SendTabToSelfEntry::GetGUID() const {
   return guid_;
@@ -318,19 +314,6 @@ bool SendTabToSelfEntry::IsExpired(base::Time current_time) const {
   return (current_time.ToDeltaSinceWindowsEpoch() -
               GetSharedTime().ToDeltaSinceWindowsEpoch() >=
           kExpiryTime);
-}
-
-std::unique_ptr<SendTabToSelfEntry> SendTabToSelfEntry::FromRequiredFields(
-    std::string guid,
-    const GURL& url,
-    std::string target_device_sync_cache_guid) {
-  if (guid.empty() || !IsValidUrl(url)) {
-    return nullptr;
-  }
-  return std::make_unique<SendTabToSelfEntry>(
-      std::move(guid), url, "", base::Time(), "",
-      std::move(target_device_sync_cache_guid), PageContext{},
-      NavigationHistory{});
 }
 
 }  // namespace send_tab_to_self

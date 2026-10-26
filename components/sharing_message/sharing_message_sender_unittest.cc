@@ -8,14 +8,11 @@
 #include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/mock_callback.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "components/sharing_message/proto/sharing_message.pb.h"
 #include "components/sharing_message/sharing_channel_sender.h"
 #include "components/sharing_message/sharing_metrics.h"
-#include "components/sharing_message/sharing_sync_preference.h"
 #include "components/sharing_message/sharing_utils.h"
-#include "components/sync/base/features.h"
 #include "components/sync/protocol/device_info_specifics.pb.h"
 #include "components/sync/test/mock_sync_service.h"
 #include "components/sync_device_info/device_info.h"
@@ -23,7 +20,6 @@
 #include "components/sync_device_info/fake_device_info_sync_service.h"
 #include "components/sync_device_info/fake_local_device_info_provider.h"
 #include "components/sync_device_info/test_device_info_builder.h"
-#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -44,13 +40,11 @@ using testing::IsNull;
 class MockSharingChannelSender : public SharingChannelSender {
  public:
   MockSharingChannelSender(
-      SharingSyncPreference* sync_preference,
       syncer::DeviceInfoTracker* device_info_tracker,
       syncer::LocalDeviceInfoProvider* local_device_info_provider,
       syncer::SyncService* sync_service)
       : SharingChannelSender(
             /*sharing_message_bridge=*/nullptr,
-            sync_preference,
             /*gcm_driver=*/nullptr,
             device_info_tracker,
             local_device_info_provider,
@@ -91,7 +85,7 @@ syncer::DeviceInfo::SharingInfo CreateSharingInfo() {
       {"sender_id_fcm_token", "sender_id_p256dh", "sender_id_auth_secret"},
       "chime_representative_target_id",
       std::set<syncer::DeviceInfo::SharingFeature>{
-          syncer::DeviceInfo::SharingFeature::kClickToCallV2});
+          syncer::DeviceInfo::SharingFeature::kRemoteCopy});
 }
 
 SharingTargetDeviceInfo CreateFakeSharingTargetDeviceInfo(
@@ -109,10 +103,8 @@ SharingTargetDeviceInfo CreateFakeSharingTargetDeviceInfo(
 class SharingMessageSenderTest : public testing::Test {
  public:
   SharingMessageSenderTest() {
-    SharingSyncPreference::RegisterProfilePrefs(prefs_.registry());
     auto mock_sharing_channel_sender =
         std::make_unique<MockSharingChannelSender>(
-            &sharing_sync_preference_,
             fake_device_info_sync_service_.GetDeviceInfoTracker(),
             fake_device_info_sync_service_.GetLocalDeviceInfoProvider(),
             &sync_service_);
@@ -121,8 +113,6 @@ class SharingMessageSenderTest : public testing::Test {
         std::move(mock_sharing_channel_sender),
         fake_device_info_sync_service_.GetLocalDeviceInfoProvider(),
         base::SingleThreadTaskRunner::GetCurrentDefault());
-    sharing_sync_preference_.SetFCMRegistration(
-        SharingSyncPreference::FCMRegistration(base::Time::Now()));
     fake_device_info_sync_service_.GetLocalDeviceInfoProvider()
         ->GetMutableDeviceInfo()
         ->set_sharing_info(CreateLocalSharingInfo());
@@ -149,37 +139,11 @@ class SharingMessageSenderTest : public testing::Test {
   base::test::TaskEnvironment task_environment_{
       base::test::SingleThreadTaskEnvironment::MainThreadType::UI,
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  sync_preferences::TestingPrefServiceSyncable prefs_;
   syncer::FakeDeviceInfoSyncService fake_device_info_sync_service_;
-  SharingSyncPreference sharing_sync_preference_{
-      &prefs_, &fake_device_info_sync_service_};
   syncer::MockSyncService sync_service_;
 
   std::unique_ptr<SharingMessageSender> sharing_message_sender_;
   raw_ptr<MockSharingChannelSender> mock_sharing_channel_sender_;
-};
-
-enum class DeviceNamingMode {
-  kLegacy,
-  kSimplified,
-};
-
-class SharingMessageSenderNamingTest
-    : public SharingMessageSenderTest,
-      public testing::WithParamInterface<DeviceNamingMode> {
- public:
-  SharingMessageSenderNamingTest() {
-    if (GetParam() == DeviceNamingMode::kSimplified) {
-      scoped_feature_list_.InitAndEnableFeature(
-          syncer::kSyncSimplifyDeviceNaming);
-    } else {
-      scoped_feature_list_.InitAndDisableFeature(
-          syncer::kSyncSimplifyDeviceNaming);
-    }
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 MATCHER_P(ProtoEquals, message, "") {
@@ -286,11 +250,14 @@ TEST_F(SharingMessageSenderTest, SendIosPushMessageToDevice_InternalError) {
       device_info, sync_pb::UnencryptedSharingMessage(), mock_callback.Get());
 }
 
-TEST_P(SharingMessageSenderNamingTest, MessageSent_AckReceived) {
+// Tests that `SendMessageToDevice()` populates sender info with the local
+// device's GUID and display name and invokes the callback when an ACK is
+// received.
+TEST_F(SharingMessageSenderTest, MessageSent_AckReceived) {
   SharingTargetDeviceInfo device_info = SetupReceiverDevice();
 
   components_sharing_message::SharingMessage sent_message;
-  sent_message.mutable_click_to_call_message()->set_phone_number("999999");
+  sent_message.mutable_remote_copy_message()->set_text("999999");
 
   components_sharing_message::ResponseMessage expected_response_message;
   base::MockCallback<SharingMessageSender::ResponseCallback> mock_callback;
@@ -312,13 +279,8 @@ TEST_P(SharingMessageSenderNamingTest, MessageSent_AckReceived) {
             fake_device_info_sync_service_.GetLocalDeviceInfoProvider()
                 ->GetLocalDeviceInfo();
         ASSERT_EQ(local_device->guid(), message.sender_guid());
-
-        std::string expected_device_name =
-            (GetParam() == DeviceNamingMode::kSimplified)
-                ? syncer::GetDeviceDisplayName(local_device)
-                : syncer::GetDisplayNameCandidates(local_device)
-                      .fallback_full_name;
-        ASSERT_EQ(expected_device_name, message.sender_device_name());
+        ASSERT_EQ(syncer::GetDeviceDisplayName(local_device),
+                  message.sender_device_name());
 
         ASSERT_TRUE(local_device->sharing_info().has_value());
         auto& fcm_ack_configuration = message.fcm_channel_configuration();
@@ -350,7 +312,7 @@ TEST_F(SharingMessageSenderTest, MessageSent_AckReceivedBeforeMessageId) {
   SharingTargetDeviceInfo device_info = SetupReceiverDevice();
 
   components_sharing_message::SharingMessage sent_message;
-  sent_message.mutable_click_to_call_message()->set_phone_number("999999");
+  sent_message.mutable_remote_copy_message()->set_text("999999");
 
   components_sharing_message::ResponseMessage expected_response_message;
   base::MockCallback<SharingMessageSender::ResponseCallback> mock_callback;
@@ -391,7 +353,6 @@ TEST_F(SharingMessageSenderTest, RequestCancelled) {
   components_sharing_message::SharingMessage sent_message;
   sent_message.mutable_sms_fetch_request()->add_origins("https://a.com");
 
-  components_sharing_message::ResponseMessage expected_response_message;
   base::MockCallback<SharingMessageSender::ResponseCallback> mock_callback;
   EXPECT_CALL(mock_callback,
               Run(SharingSendMessageResult::kCancelled, IsNull()));
@@ -414,7 +375,7 @@ TEST_F(SharingMessageSenderTest, SendMessageToServerTarget_Success) {
   server_channel.set_auth_secret("test_auth_secret");
 
   components_sharing_message::SharingMessage sent_message;
-  sent_message.mutable_click_to_call_message()->set_phone_number("999999");
+  sent_message.mutable_remote_copy_message()->set_text("999999");
 
   components_sharing_message::ResponseMessage expected_response_message;
   base::MockCallback<SharingMessageSender::ResponseCallback> mock_callback;
@@ -447,8 +408,3 @@ TEST_F(SharingMessageSenderTest, SendMessageToServerTarget_Success) {
       server_channel, kTimeToLive, std::move(sent_message),
       mock_callback.Get());
 }
-
-INSTANTIATE_TEST_SUITE_P(,
-                         SharingMessageSenderNamingTest,
-                         testing::Values(DeviceNamingMode::kLegacy,
-                                         DeviceNamingMode::kSimplified));

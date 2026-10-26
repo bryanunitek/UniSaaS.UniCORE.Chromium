@@ -8,89 +8,64 @@
 #import <utility>
 
 #import "base/check.h"
-#import "base/functional/callback.h"
-#import "base/functional/callback_helpers.h"
-#import "base/no_destructor.h"
-#import "ios/chrome/browser/browsing_data/model/browsing_data_remover_factory.h"
+#import "base/feature_list.h"
+#import "components/signin/public/base/signin_switches.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
-#import "ios/chrome/browser/signin/model/authentication_service_delegate_impl.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 
 namespace {
 
-using DelegateFactory =
-    AuthenticationServiceFactory::AuthenticationServiceDelegateFactory;
-
-std::unique_ptr<AuthenticationServiceDelegate>
-BuildAuthenticationServiceDelegate(ProfileIOS* profile) {
-  return std::make_unique<AuthenticationServiceDelegateImpl>(
-      BrowsingDataRemoverFactory::GetForProfile(profile), profile->GetPrefs());
-}
-
-std::unique_ptr<KeyedService> BuildAuthenticationService(
-    DelegateFactory delegate_factory,
-    ProfileIOS* profile) {
+std::unique_ptr<KeyedService> BuildAuthenticationService(ProfileIOS* profile) {
   auto service = std::make_unique<AuthenticationService>(
       profile, profile->GetPrefs(),
       ChromeAccountManagerServiceFactory::GetForProfile(profile),
       IdentityManagerFactory::GetForProfile(profile),
       SyncServiceFactory::GetForProfile(profile));
-  service->Initialize(std::move(delegate_factory).Run(profile));
+  service->Initialize();
   DCHECK(service->initialized());
   return service;
+}
+
+std::unique_ptr<KeyedService> BuildAuthenticationServiceForTesting(
+    ProfileIOS* profile) {
+  signin::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(profile);
+  // In production OnNetworkInitialized is called by
+  // ProfileManagerIOSImpl::DoFinalInitForServices, explicitly call it in
+  // tests that utilize AuthenticationService.
+  if (base::FeatureList::IsEnabled(switches::kUseAccountInfoFetcherIos)) {
+    identity_manager->OnNetworkInitialized();
+  }
+
+  return BuildAuthenticationService(profile);
 }
 
 }  // namespace
 
 // static
-AuthenticationService* AuthenticationServiceFactory::GetForProfile(
-    ProfileIOS* profile) {
-  return GetInstance()->GetServiceForProfileAs<AuthenticationService>(
-      profile, /*create=*/true);
-}
-
-// static
-AuthenticationServiceFactory* AuthenticationServiceFactory::GetInstance() {
-  static base::NoDestructor<AuthenticationServiceFactory> instance;
-  return instance.get();
-}
-
-// static
 AuthenticationServiceFactory::TestingFactory
-AuthenticationServiceFactory::GetFactoryWithDelegate(
-    std::unique_ptr<AuthenticationServiceDelegate> delegate) {
-  return GetFactoryWithDelegateFactory(base::IgnoreArgs<ProfileIOS*>(
-      base::ReturnValueOnce(std::move(delegate))));
+AuthenticationServiceFactory::GetDefaultFactory() {
+  return base::BindOnce(&BuildAuthenticationServiceForTesting);
 }
 
-// static
-AuthenticationServiceFactory::TestingFactory
-AuthenticationServiceFactory::GetFactoryWithDelegateFactory(
-    AuthenticationServiceDelegateFactory delegate_factory) {
-  return base::BindOnce(&BuildAuthenticationService,
-                        std::move(delegate_factory));
-}
-
-AuthenticationServiceFactory::AuthenticationServiceFactory()
-    : ProfileKeyedServiceFactoryIOS("AuthenticationService",
-                                    ProfileSelection::kNoInstanceInIncognito,
-                                    TestingCreation::kNoServiceForTests) {
+AuthenticationServiceFactory::AuthenticationServiceFactory(PassKey key)
+    : TypedProfileKeyedServiceFactoryIOS(
+          std::move(key),
+          "AuthenticationService",
+          ProfileSelection::kNoInstanceInIncognito,
+          TestingCreation::kNoServiceForTests) {
   DependsOn(ChromeAccountManagerServiceFactory::GetInstance());
   DependsOn(IdentityManagerFactory::GetInstance());
   DependsOn(SyncServiceFactory::GetInstance());
-  DependsOn(BrowsingDataRemoverFactory::GetInstance());
 }
-
-AuthenticationServiceFactory::~AuthenticationServiceFactory() {}
 
 std::unique_ptr<KeyedService>
 AuthenticationServiceFactory::BuildServiceInstanceFor(
     ProfileIOS* profile) const {
-  return BuildAuthenticationService(
-      base::BindOnce(&BuildAuthenticationServiceDelegate), profile);
+  return BuildAuthenticationService(profile);
 }
 
 void AuthenticationServiceFactory::RegisterProfilePrefs(

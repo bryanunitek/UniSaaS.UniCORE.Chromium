@@ -62,6 +62,7 @@ class CORE_EXPORT LayoutTableCell : public LayoutBlockFlow {
 
   void StyleDidChange(StyleDifference diff,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) final;
 
   void WillBeRemovedFromTree() override;
@@ -81,7 +82,7 @@ class CORE_EXPORT LayoutTableCell : public LayoutBlockFlow {
   LayoutBox* CreateAnonymousBoxWithSameTypeAs(
       const LayoutObject* parent) const override;
 
-  LayoutBlock* StickyContainer() const override;
+  LayoutBox* StickyContainer() const override;
 
   void InvalidatePaint(const PaintInvalidatorContext&) const override;
 

@@ -2,22 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <cstdint>
+
 #include "base/command_line.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
-#include "components/guest_contents/browser/guest_contents_handle.h"
+#include "components/surface_embed/browser/surface_embed_handle.h"
 #include "components/surface_embed/browser/surface_embed_host.h"
+#include "components/surface_embed/common/constants.h"
 #include "components/surface_embed/common/features.h"
 #include "components/surface_embed/common/surface_embed.mojom.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/surface_embed_connector.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/result_codes.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -27,8 +35,10 @@
 #include "content/public/test/hit_test_region_observer.h"
 #include "content/public/test/no_renderer_crashes_assertion.h"
 #include "content/shell/browser/shell.h"
-#include "mojo/public/cpp/bindings/binder_map.h"
 #include "net/dns/mock_host_resolver.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+#include "third_party/blink/public/common/input/web_gesture_event.h"
+#include "third_party/blink/public/common/input/web_touch_event.h"
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -45,9 +55,43 @@ constexpr std::string_view kBlueBoxUrl = "/surface_embed/blue_box.html";
 constexpr std::string_view kRedBoxUrl = "/surface_embed/red_box.html";
 constexpr std::string_view kFocusHarnessUrl =
     "/surface_embed/focus_harness.html";
+constexpr std::string_view kMultilevelHarnessUrl =
+    "/surface_embed/multilevel_harness.html";
+constexpr std::string_view kMultilevelParentUrl =
+    "/surface_embed/multilevel_parent.html";
 constexpr std::string_view kInnerPageUrl = "/surface_embed/inner_page.html";
+constexpr std::string_view kIntersectionObserverTargetUrl =
+    "/surface_embed/intersection_observer_target.html";
 constexpr size_t kSingleEmbedCount = 1;
 constexpr float kTestDeviceScaleFactor = 1.5f;
+
+class TakeFocusTrackingDelegate : public content::WebContentsDelegate {
+ public:
+  bool TakeFocus(content::WebContents* source, bool reverse) override {
+    take_focus_called_ = true;
+    take_focus_reverse_ = reverse;
+    if (run_loop_) {
+      run_loop_->Quit();
+    }
+    return true;
+  }
+
+  void WaitForTakeFocus() {
+    if (take_focus_called_) {
+      return;
+    }
+    run_loop_ = std::make_unique<base::RunLoop>();
+    run_loop_->Run();
+  }
+
+  bool take_focus_called() const { return take_focus_called_; }
+  bool take_focus_reverse() const { return take_focus_reverse_; }
+
+ private:
+  bool take_focus_called_ = false;
+  bool take_focus_reverse_ = false;
+  std::unique_ptr<base::RunLoop> run_loop_;
+};
 
 // Helper class for tracking SurfaceEmbedHost instances.
 class SurfaceEmbedHostTracker {
@@ -94,23 +138,27 @@ class SurfaceEmbedTestContentBrowserClient
       : tracker_(tracker) {}
   ~SurfaceEmbedTestContentBrowserClient() override = default;
 
-  void RegisterBrowserInterfaceBindersForFrame(
-      content::RenderFrameHost* render_frame_host,
-      mojo::BinderMapWithContext<content::RenderFrameHost*>* map) override {
+  void RegisterAssociatedInterfaceBindersForRenderFrameHost(
+      content::RenderFrameHost& render_frame_host,
+      blink::AssociatedInterfaceRegistry& associated_registry) override {
     content::ContentBrowserTestContentBrowserClient::
-        RegisterBrowserInterfaceBindersForFrame(render_frame_host, map);
-    map->Add<mojom::SurfaceEmbedHost>(base::BindRepeating(
-        [](SurfaceEmbedHostTracker* tracker,
-           content::RenderFrameHost* render_frame_host,
-           mojo::PendingReceiver<mojom::SurfaceEmbedHost> receiver) {
-          SurfaceEmbedHost* host =
-              SurfaceEmbedHost::Create(render_frame_host, std::move(receiver));
-          host->SetDestructionCallbackForTesting(
-              base::BindOnce(&SurfaceEmbedHostTracker::RemoveHost,
-                             base::Unretained(tracker), host));
-          tracker->AddHost(host);
-        },
-        base::Unretained(tracker_)));
+        RegisterAssociatedInterfaceBindersForRenderFrameHost(
+            render_frame_host, associated_registry);
+    associated_registry.RemoveInterface(mojom::SurfaceEmbedHost::Name_);
+    associated_registry.AddInterface<mojom::SurfaceEmbedHost>(
+        base::BindRepeating(
+            [](SurfaceEmbedHostTracker* tracker,
+               content::RenderFrameHost* render_frame_host,
+               mojo::PendingAssociatedReceiver<mojom::SurfaceEmbedHost>
+                   receiver) {
+              SurfaceEmbedHost* host = SurfaceEmbedHost::Create(
+                  render_frame_host, std::move(receiver));
+              host->SetDestructionCallbackForTesting(
+                  base::BindOnce(&SurfaceEmbedHostTracker::RemoveHost,
+                                 base::Unretained(tracker), host));
+              tracker->AddHost(host);
+            },
+            base::Unretained(tracker_), &render_frame_host));
   }
 
  private:
@@ -229,11 +277,10 @@ class SurfaceEmbedBrowserTest : public content::ContentBrowserTest {
   // Attach a child to an embed element with an optional ID.
   void AttachChildToEmbedWithId(content::WebContents* child_contents,
                                 std::optional<std::string> embed_id) {
-    guest_contents::GuestContentsHandle* guest_handle =
-        guest_contents::GuestContentsHandle::CreateForWebContents(
-            child_contents);
-    ASSERT_NE(guest_handle, nullptr);
-    std::string script = "createEmbed('" + guest_handle->id().ToString();
+    SurfaceEmbedHandle* embedded_handle =
+        SurfaceEmbedHandle::CreateForWebContents(child_contents);
+    ASSERT_NE(embedded_handle, nullptr);
+    std::string script = "createEmbed('" + embedded_handle->id().ToString();
     if (embed_id.has_value()) {
       script += "', '" + embed_id.value();
     }
@@ -345,6 +392,57 @@ class SurfaceEmbedBrowserTest : public content::ContentBrowserTest {
         SK_ColorRED, scaled_embed_bounds, out_bitmap));
   }
 
+  // Waits until the active element in |wc| has the expected id.
+  void WaitForActiveElement(content::WebContents* wc,
+                            const std::string& expected_id) {
+    EXPECT_TRUE(base::test::RunUntil([&]() {
+      return content::EvalJs(wc, "document.activeElement.id") == expected_id;
+    }));
+  }
+
+  void WaitForMultilevelFocusState(content::WebContents* parent_contents,
+                                   content::WebContents* child_contents,
+                                   const std::string& root_active_element_id) {
+    EXPECT_TRUE(base::test::RunUntil([&]() {
+      return content::GetFocusedWebContents(web_contents()) == child_contents;
+    }));
+
+    WaitForActiveElement(child_contents, "inner");
+    WaitForActiveElement(parent_contents, "child_embed");
+    WaitForActiveElement(web_contents(), root_active_element_id);
+
+    for (content::WebContents* contents :
+         {web_contents(), parent_contents, child_contents}) {
+      EXPECT_TRUE(base::test::RunUntil([&]() {
+        return content::EvalJs(contents, "document.hasFocus()").ExtractBool();
+      }));
+    }
+  }
+
+  void WaitForMultilevelViewSizes(content::WebContents* parent_contents,
+                                  content::WebContents* child_contents) {
+    EXPECT_TRUE(base::test::RunUntil([&]() {
+      auto* parent_view = parent_contents->GetRenderWidgetHostView();
+      return parent_view &&
+             parent_view->GetViewBounds().size() == gfx::Size(200, 150);
+    }));
+    EXPECT_TRUE(base::test::RunUntil([&]() {
+      auto* child_view = child_contents->GetRenderWidgetHostView();
+      return child_view &&
+             child_view->GetViewBounds().size() == gfx::Size(100, 100);
+    }));
+    EXPECT_TRUE(base::test::RunUntil([&]() {
+      auto* connector = parent_contents->GetSurfaceEmbedConnector();
+      return connector && connector->GetLocalFrameSizeInPixelsForTesting() ==
+                              gfx::Size(300, 225);
+    }));
+    EXPECT_TRUE(base::test::RunUntil([&]() {
+      auto* connector = child_contents->GetSurfaceEmbedConnector();
+      return connector && connector->GetLocalFrameSizeInPixelsForTesting() ==
+                              gfx::Size(150, 150);
+    }));
+  }
+
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
   SurfaceEmbedHostTracker tracker_;
@@ -365,12 +463,11 @@ class SurfaceEmbedBrowserTestNoHost : public SurfaceEmbedBrowserTest {
 IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTestNoHost, NoCrash) {
   auto child_contents = SetupHarnessAndChild();
 
-  guest_contents::GuestContentsHandle* guest_handle =
-      guest_contents::GuestContentsHandle::CreateForWebContents(
-          child_contents.get());
-  ASSERT_NE(guest_handle, nullptr);
+  SurfaceEmbedHandle* embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(embedded_handle, nullptr);
   std::string script =
-      content::JsReplace("createEmbed($1);", guest_handle->id().ToString());
+      content::JsReplace("createEmbed($1);", embedded_handle->id().ToString());
   ASSERT_TRUE(content::ExecJs(web_contents(), script));
 
   // Access an unknown property on the embed to force plugin creation
@@ -382,19 +479,16 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTestNoHost, NoCrash) {
   // Check that the sad plugin page got rendered.
   EXPECT_TRUE(CheckHasPixelInColor(SkColors::kGray.toSkColor()));
 
-  // Try attaching a new child. Still shouldn't crash.
-  // (Handling data-content-id changes isn't implemented yet, but once it is,
-  //  this should help make sure we don't get confused).
+  // Changing data-content-id after plugin creation must not crash.
   auto child_contents2 = CreateChildWebContents();
   NavigateChildToUrl(child_contents2.get(), kBlueBoxUrl);
-  guest_contents::GuestContentsHandle* guest_handle2 =
-      guest_contents::GuestContentsHandle::CreateForWebContents(
-          child_contents2.get());
+  SurfaceEmbedHandle* embedded_handle2 =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents2.get());
   EXPECT_TRUE(content::ExecJs(
       web_contents(),
       content::JsReplace(
           "document.embeds[0].setAttribute('data-content-id', $1)",
-          guest_handle2->id().ToString())));
+          embedded_handle2->id().ToString())));
 
   EXPECT_TRUE(CheckHasPixelInColor(SkColors::kGray.toSkColor()));
 }
@@ -410,9 +504,302 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, EmbedTagCreatesPlugin) {
   ASSERT_EQ(kSingleEmbedCount, GetHostCount());
   SurfaceEmbedHost* host = GetHost(0);
   ASSERT_NE(nullptr, host);
+  auto* connector = child_contents->GetSurfaceEmbedConnector();
+  ASSERT_NE(nullptr, connector);
+  EXPECT_EQ(content::SurfaceEmbedConnector::PinchGestureMode::
+                kDelegateToParentWebContents,
+            connector->GetPinchGestureModeForTesting());
 
   // Expect the stub plugin code to render a red square.
   EXPECT_TRUE(CheckHasPixelInColor(SK_ColorRED));
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       AllowPinchZoomAttributeUpdatesConnectorMode) {
+  auto child_contents = SetupHarnessAndChild();
+  SurfaceEmbedHandle* embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(nullptr, embedded_handle);
+
+  ASSERT_TRUE(content::ExecJs(
+      web_contents(),
+      content::JsReplace("createEmbed($1, 'pinch-zoom-embed', true);",
+                         embedded_handle->id().ToString())));
+  ASSERT_TRUE(WaitForHostAttachment(kSingleEmbedCount));
+
+  ASSERT_EQ(kSingleEmbedCount, GetHostCount());
+  auto* connector = child_contents->GetSurfaceEmbedConnector();
+  ASSERT_NE(nullptr, connector);
+  EXPECT_EQ(
+      content::SurfaceEmbedConnector::PinchGestureMode::kScaleChildWebContents,
+      connector->GetPinchGestureModeForTesting());
+
+  ASSERT_TRUE(content::ExecJs(web_contents(),
+                              "document.getElementById('pinch-zoom-embed')"
+                              ".removeAttribute('data-allow-pinch-zoom');"));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return connector->GetPinchGestureModeForTesting() ==
+           content::SurfaceEmbedConnector::PinchGestureMode::
+               kDelegateToParentWebContents;
+  }));
+
+  ASSERT_TRUE(
+      content::ExecJs(web_contents(),
+                      "document.getElementById('pinch-zoom-embed')"
+                      ".setAttribute('data-allow-pinch-zoom', 'false');"));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return connector->GetPinchGestureModeForTesting() ==
+           content::SurfaceEmbedConnector::PinchGestureMode::
+               kScaleChildWebContents;
+  }));
+  EXPECT_EQ(connector, child_contents->GetSurfaceEmbedConnector());
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       TouchscreenPinchZoomsOptedInChild) {
+  auto child_contents = SetupHarnessAndChild();
+  SurfaceEmbedHandle* embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(nullptr, embedded_handle);
+
+  ASSERT_TRUE(content::ExecJs(
+      web_contents(),
+      content::JsReplace("createEmbed($1, 'pinch-zoom-embed', true);",
+                         embedded_handle->id().ToString())));
+  ASSERT_TRUE(WaitForHostAttachment(kSingleEmbedCount));
+  VerifyRedPixelInBounds(gfx::Rect(10, 10, 100, 100));
+  content::WaitForHitTestData(child_contents.get());
+
+  constexpr float kScaleDelta = 2.0f;
+  constexpr float kScaleTolerance = 0.1f;
+  const double initial_parent_scale =
+      content::EvalJs(web_contents(), "window.visualViewport.scale")
+          .ExtractDouble();
+  const double initial_child_scale =
+      content::EvalJs(child_contents.get(), "window.visualViewport.scale")
+          .ExtractDouble();
+
+  const gfx::Point anchor(60, 60);
+  constexpr uint32_t kTouchEventId = 1;
+  blink::WebTouchEvent touch_start(
+      blink::WebInputEvent::Type::kTouchStart,
+      blink::WebInputEvent::kNoModifiers,
+      blink::WebInputEvent::GetStaticTimeStampForTests());
+  touch_start.touches_length = 1;
+  touch_start.touches[0].id = 1;
+  touch_start.touches[0].state = blink::WebTouchPoint::State::kStatePressed;
+  touch_start.touches[0].SetPositionInWidget(gfx::PointF(anchor));
+  touch_start.unique_touch_event_id = kTouchEventId;
+  content::InputEventAckWaiter touch_start_waiter(
+      child_contents->GetPrimaryMainFrame()->GetRenderWidgetHost(),
+      blink::WebInputEvent::Type::kTouchStart);
+  content::SimulateRoutedTouchEvent(web_contents(), touch_start);
+  touch_start_waiter.Wait();
+
+  blink::WebGestureEvent tap_down(
+      blink::WebInputEvent::Type::kGestureTapDown,
+      blink::WebInputEvent::kNoModifiers,
+      blink::WebInputEvent::GetStaticTimeStampForTests(),
+      blink::WebGestureDevice::kTouchscreen);
+  tap_down.unique_touch_event_id = kTouchEventId;
+  tap_down.SetPositionInWidget(gfx::PointF(anchor));
+  tap_down.SetPositionInScreen(gfx::PointF(anchor));
+  content::InputEventAckWaiter tap_down_waiter(
+      child_contents->GetPrimaryMainFrame()->GetRenderWidgetHost(),
+      blink::WebInputEvent::Type::kGestureTapDown);
+  content::SimulateRoutedGestureEvent(web_contents(), tap_down);
+  tap_down_waiter.Wait();
+
+  blink::WebTouchEvent second_touch_start(
+      blink::WebInputEvent::Type::kTouchStart,
+      blink::WebInputEvent::kNoModifiers,
+      blink::WebInputEvent::GetStaticTimeStampForTests());
+  second_touch_start.touches_length = 2;
+  second_touch_start.touches[0].id = 1;
+  second_touch_start.touches[0].state =
+      blink::WebTouchPoint::State::kStateStationary;
+  second_touch_start.touches[0].SetPositionInWidget(gfx::PointF(anchor));
+  second_touch_start.touches[1].id = 2;
+  second_touch_start.touches[1].state =
+      blink::WebTouchPoint::State::kStatePressed;
+  second_touch_start.touches[1].SetPositionInWidget(
+      gfx::PointF(anchor.x() + 10, anchor.y()));
+  second_touch_start.unique_touch_event_id = kTouchEventId + 1;
+  content::InputEventAckWaiter second_touch_start_waiter(
+      child_contents->GetPrimaryMainFrame()->GetRenderWidgetHost(),
+      blink::WebInputEvent::Type::kTouchStart);
+  content::SimulateRoutedTouchEvent(web_contents(), second_touch_start);
+  second_touch_start_waiter.Wait();
+
+  blink::WebGestureEvent scroll_begin(
+      blink::WebInputEvent::Type::kGestureScrollBegin,
+      blink::WebInputEvent::kNoModifiers,
+      blink::WebInputEvent::GetStaticTimeStampForTests(),
+      blink::WebGestureDevice::kTouchscreen);
+  scroll_begin.unique_touch_event_id = second_touch_start.unique_touch_event_id;
+  scroll_begin.SetPositionInWidget(gfx::PointF(anchor));
+  scroll_begin.SetPositionInScreen(gfx::PointF(anchor));
+  scroll_begin.data.scroll_begin.delta_hint_units =
+      ui::ScrollGranularity::kScrollByPrecisePixel;
+  content::InputEventAckWaiter scroll_begin_waiter(
+      child_contents->GetPrimaryMainFrame()->GetRenderWidgetHost(),
+      blink::WebInputEvent::Type::kGestureScrollBegin);
+  content::SimulateRoutedGestureEvent(web_contents(), scroll_begin);
+  scroll_begin_waiter.Wait();
+
+  blink::WebGestureEvent pinch_begin(
+      blink::WebInputEvent::Type::kGesturePinchBegin,
+      blink::WebInputEvent::kNoModifiers,
+      blink::WebInputEvent::GetStaticTimeStampForTests(),
+      blink::WebGestureDevice::kTouchscreen);
+  pinch_begin.unique_touch_event_id = second_touch_start.unique_touch_event_id;
+  pinch_begin.SetPositionInWidget(gfx::PointF(anchor));
+  pinch_begin.SetPositionInScreen(gfx::PointF(anchor));
+  content::InputEventAckWaiter pinch_begin_waiter(
+      child_contents->GetPrimaryMainFrame()->GetRenderWidgetHost(),
+      blink::WebInputEvent::Type::kGesturePinchBegin);
+  content::SimulateRoutedGestureEvent(web_contents(), pinch_begin);
+  pinch_begin_waiter.Wait();
+
+  blink::WebGestureEvent pinch_update(pinch_begin);
+  pinch_update.SetType(blink::WebInputEvent::Type::kGesturePinchUpdate);
+  pinch_update.data.pinch_update.scale = kScaleDelta;
+  content::InputEventAckWaiter pinch_update_waiter(
+      child_contents->GetPrimaryMainFrame()->GetRenderWidgetHost(),
+      blink::WebInputEvent::Type::kGesturePinchUpdate);
+  content::SimulateRoutedGestureEvent(web_contents(), pinch_update);
+  pinch_update_waiter.Wait();
+
+  blink::WebGestureEvent pinch_end(pinch_begin);
+  pinch_end.SetType(blink::WebInputEvent::Type::kGesturePinchEnd);
+  content::InputEventAckWaiter pinch_end_waiter(
+      child_contents->GetPrimaryMainFrame()->GetRenderWidgetHost(),
+      blink::WebInputEvent::Type::kGesturePinchEnd);
+  content::SimulateRoutedGestureEvent(web_contents(), pinch_end);
+  pinch_end_waiter.Wait();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return content::EvalJs(child_contents.get(), "window.visualViewport.scale")
+               .ExtractDouble() > initial_child_scale * 1.5;
+  }));
+  EXPECT_NEAR(
+      initial_child_scale * kScaleDelta,
+      content::EvalJs(child_contents.get(), "window.visualViewport.scale")
+          .ExtractDouble(),
+      kScaleTolerance);
+  EXPECT_NEAR(initial_parent_scale,
+              content::EvalJs(web_contents(), "window.visualViewport.scale")
+                  .ExtractDouble(),
+              kScaleTolerance);
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       TouchpadPinchZoomsOptedInChild) {
+  auto child_contents = SetupHarnessAndChild();
+  SurfaceEmbedHandle* embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(nullptr, embedded_handle);
+
+  ASSERT_TRUE(content::ExecJs(
+      web_contents(),
+      content::JsReplace("createEmbed($1, 'pinch-zoom-embed', true);",
+                         embedded_handle->id().ToString())));
+  ASSERT_TRUE(WaitForHostAttachment(kSingleEmbedCount));
+  VerifyRedPixelInBounds(gfx::Rect(10, 10, 100, 100));
+  content::WaitForHitTestData(child_contents.get());
+
+  constexpr float kScaleDelta = 2.0f;
+  constexpr float kScaleTolerance = 0.1f;
+  const double initial_parent_scale =
+      content::EvalJs(web_contents(), "window.visualViewport.scale")
+          .ExtractDouble();
+  const double initial_child_scale =
+      content::EvalJs(child_contents.get(), "window.visualViewport.scale")
+          .ExtractDouble();
+
+  const gfx::PointF anchor(60, 60);
+  blink::WebGestureEvent pinch_begin(
+      blink::WebInputEvent::Type::kGesturePinchBegin,
+      blink::WebInputEvent::kNoModifiers,
+      blink::WebInputEvent::GetStaticTimeStampForTests(),
+      blink::WebGestureDevice::kTouchpad);
+  pinch_begin.SetPositionInWidget(anchor);
+  pinch_begin.SetPositionInScreen(anchor);
+  pinch_begin.SetNeedsWheelEvent(true);
+  content::SimulateRoutedGestureEvent(web_contents(), pinch_begin);
+
+  blink::WebGestureEvent pinch_update(pinch_begin);
+  pinch_update.SetType(blink::WebInputEvent::Type::kGesturePinchUpdate);
+  pinch_update.data.pinch_update.scale = kScaleDelta;
+  content::SimulateRoutedGestureEvent(web_contents(), pinch_update);
+
+  blink::WebGestureEvent pinch_end(pinch_begin);
+  pinch_end.SetType(blink::WebInputEvent::Type::kGesturePinchEnd);
+  content::SimulateRoutedGestureEvent(web_contents(), pinch_end);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return content::EvalJs(child_contents.get(), "window.visualViewport.scale")
+               .ExtractDouble() > initial_child_scale * 1.5;
+  }));
+  EXPECT_NEAR(
+      initial_child_scale * kScaleDelta,
+      content::EvalJs(child_contents.get(), "window.visualViewport.scale")
+          .ExtractDouble(),
+      kScaleTolerance);
+  EXPECT_NEAR(initial_parent_scale,
+              content::EvalJs(web_contents(), "window.visualViewport.scale")
+                  .ExtractDouble(),
+              kScaleTolerance);
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       ChangeDataContentIdChangesAttachedWebContents) {
+  auto child_contents1 = SetupHarnessAndChild();
+  AttachChildToEmbed(child_contents1.get());
+
+  WaitForHostCount(kSingleEmbedCount);
+  ASSERT_EQ(kSingleEmbedCount, GetHostCount());
+  EXPECT_NE(nullptr, child_contents1->GetSurfaceEmbedConnector());
+  EXPECT_TRUE(CheckHasPixelInColor(SK_ColorRED));
+
+  auto child_contents2 = CreateChildWebContents();
+  NavigateChildToUrl(child_contents2.get(), kBlueBoxUrl);
+  SurfaceEmbedHandle* embedded_handle2 =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents2.get());
+  ASSERT_NE(nullptr, embedded_handle2);
+
+  ASSERT_TRUE(content::ExecJs(
+      web_contents(),
+      content::JsReplace(
+          "document.embeds[0].setAttribute('data-content-id', $1);",
+          embedded_handle2->id().ToString())));
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return child_contents1->GetSurfaceEmbedConnector() == nullptr &&
+           child_contents2->GetSurfaceEmbedConnector() != nullptr;
+  }));
+  EXPECT_EQ(kSingleEmbedCount, GetHostCount());
+  EXPECT_TRUE(CheckHasPixelInColor(SK_ColorBLUE));
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       RemoveDataContentIdDetachesWebContents) {
+  auto child_contents = SetupHarnessAndChild();
+  AttachChildToEmbed(child_contents.get());
+
+  WaitForHostCount(kSingleEmbedCount);
+  SurfaceEmbedHost* host = GetHost(0);
+  ASSERT_NE(nullptr, host);
+  EXPECT_NE(nullptr, child_contents->GetSurfaceEmbedConnector());
+  EXPECT_TRUE(host->IsAttachedForTesting());
+
+  ASSERT_TRUE(content::ExecJs(
+      web_contents(),
+      "document.embeds[0].removeAttribute('data-content-id');"));
+
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return child_contents->GetSurfaceEmbedConnector() == nullptr; }));
+  EXPECT_FALSE(host->IsAttachedForTesting());
 }
 
 // Make sure we don't crash on invalid content ID.
@@ -491,6 +878,134 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, DisplayNonePropagates) {
   }));
 }
 
+IN_PROC_BROWSER_TEST_F(
+    SurfaceEmbedBrowserTest,
+    IntersectionObserverIgnoresEmbedderViewportUnlikeIframe) {
+  auto child_contents =
+      SetupHarnessAndChildWithContent(kIntersectionObserverTargetUrl);
+  AttachChildToEmbed(child_contents.get());
+
+  // Move the SurfaceEmbed host outside of the outer viewport.
+  ASSERT_TRUE(content::ExecJs(web_contents(), R"(
+    const embed = document.querySelector('embed');
+    embed.style.top = '10000px';
+    new Promise(resolve => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    });
+  )"));
+
+  // Confirm that the SurfaceEmbed host is outside of the outer viewport.
+  EXPECT_TRUE(
+      content::EvalJs(web_contents(),
+                      "document.querySelector('embed').getBoundingClientRect()."
+                      "top >= window.innerHeight")
+          .ExtractBool());
+
+  // SurfaceEmbed uses the embedded content's viewport, ignoring the outer
+  // viewport. If this were an iframe, it would use the outer viewport and be
+  // non-intersecting.
+  EXPECT_TRUE(
+      content::EvalJs(child_contents.get(), "observeViewport()").ExtractBool());
+}
+
+IN_PROC_BROWSER_TEST_F(
+    SurfaceEmbedBrowserTest,
+    IntersectionObserverIgnoresEmbedderScrollOffsetUnlikeIframe) {
+  auto child_contents =
+      SetupHarnessAndChildWithContent(kIntersectionObserverTargetUrl);
+  AttachChildToEmbed(child_contents.get());
+
+  ASSERT_TRUE(content::ExecJs(web_contents(), R"(
+    const embed = document.querySelector('embed');
+    const scroller = document.createElement('div');
+    scroller.id = 'embed_scroller';
+    scroller.style.cssText = 'width: 100px; height: 100px; overflow: hidden';
+    const spacer = document.createElement('div');
+    spacer.style.height = '200px';
+    embed.style.position = 'static';
+    embed.style.left = '';
+    embed.style.top = '';
+    embed.style.display = 'block';
+    scroller.append(spacer, embed);
+    document.body.appendChild(scroller);
+    scroller.scrollTop = 200;
+    new Promise(resolve => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    });
+  )"));
+
+  // Start with the SurfaceEmbed host fully in view.
+  EXPECT_TRUE(content::EvalJs(web_contents(), R"(
+    (() => {
+      const embed = document.querySelector('embed').getBoundingClientRect();
+      const scroller = document.querySelector('#embed_scroller')
+          .getBoundingClientRect();
+      return embed.top >= scroller.top && embed.bottom <= scroller.bottom;
+    })()
+  )")
+                  .ExtractBool());
+  EXPECT_TRUE(
+      content::EvalJs(child_contents.get(), "observeViewport()").ExtractBool());
+
+  // Scroll so the SurfaceEmbed host is partially clipped.
+  ASSERT_TRUE(content::ExecJs(web_contents(), R"(
+    document.querySelector('#embed_scroller').scrollTop = 150;
+    new Promise(resolve => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    });
+  )"));
+
+  // Verify the SurfaceEmbed host is partially outside the scroller's viewport.
+  EXPECT_TRUE(content::EvalJs(web_contents(), R"(
+    (() => {
+      const embed = document.querySelector('embed').getBoundingClientRect();
+      const scroller = document.querySelector('#embed_scroller')
+          .getBoundingClientRect();
+      return embed.top > scroller.top && embed.top < scroller.bottom &&
+          embed.bottom > scroller.bottom;
+    })()
+  )")
+                  .ExtractBool());
+  // Even though the SurfaceEmbed host (embed) is partially clipped, its
+  // embedded contents remains fully intersecting. This is different from an
+  // iframe where the iframe contents would be partially intersecting.
+  EXPECT_TRUE(
+      content::EvalJs(child_contents.get(), "observeViewport()").ExtractBool());
+  EXPECT_NEAR(1.0,
+              content::EvalJs(child_contents.get(),
+                              "observeViewportIntersectionRatio()")
+                  .ExtractDouble(),
+              0.01);
+
+  // Scroll so the SurfaceEmbed host is fully out of view.
+  ASSERT_TRUE(content::ExecJs(web_contents(), R"(
+    document.querySelector('#embed_scroller').scrollTop = 0;
+    new Promise(resolve => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    });
+  )"));
+
+  // Verify the host is fully outside the scroller's viewport.
+  EXPECT_TRUE(content::EvalJs(web_contents(), R"(
+    (() => {
+      const embed = document.querySelector('embed').getBoundingClientRect();
+      const scroller = document.querySelector('#embed_scroller')
+          .getBoundingClientRect();
+      return embed.top >= scroller.bottom;
+    })()
+  )")
+                  .ExtractBool());
+  // SurfaceEmbed remains fully intersecting. An iframe would become non-
+  // intersecting.
+  EXPECT_TRUE(
+      content::EvalJs(child_contents.get(), "observeViewport()").ExtractBool());
+  EXPECT_NEAR(1.0,
+              content::EvalJs(child_contents.get(),
+                              "observeViewportIntersectionRatio()")
+                  .ExtractDouble(),
+              0.01);
+}
+
 IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
                        MultilevelVisibilityHiddenPropagates) {
   NavigateToAttachHarness();
@@ -505,13 +1020,12 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
   NavigateChildToUrl(child_contents.get(), kRedBoxUrl);
 
   // Attach C to P.
-  guest_contents::GuestContentsHandle* child_guest_handle =
-      guest_contents::GuestContentsHandle::CreateForWebContents(
-          child_contents.get());
-  ASSERT_NE(child_guest_handle, nullptr);
+  SurfaceEmbedHandle* child_embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(child_embedded_handle, nullptr);
 
   std::string attach_child_script = "createEmbed('" +
-                                    child_guest_handle->id().ToString() +
+                                    child_embedded_handle->id().ToString() +
                                     "', 'child_embed');";
   size_t expected_attachments = GetAttachedHostCount() + 1;
   ASSERT_TRUE(content::ExecJs(parent_contents.get(), attach_child_script));
@@ -580,13 +1094,12 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
   NavigateChildToUrl(child_contents.get(), kRedBoxUrl);
 
   // Attach C to P.
-  guest_contents::GuestContentsHandle* child_guest_handle =
-      guest_contents::GuestContentsHandle::CreateForWebContents(
-          child_contents.get());
-  ASSERT_NE(child_guest_handle, nullptr);
+  SurfaceEmbedHandle* child_embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(child_embedded_handle, nullptr);
 
   std::string attach_child_script = "createEmbed('" +
-                                    child_guest_handle->id().ToString() +
+                                    child_embedded_handle->id().ToString() +
                                     "', 'child_embed');";
   size_t expected_attachments = GetAttachedHostCount() + 1;
   ASSERT_TRUE(content::ExecJs(parent_contents.get(), attach_child_script));
@@ -643,6 +1156,91 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
   EXPECT_EQ(content::Visibility::VISIBLE, parent_contents->GetVisibility());
 }
 
+// Occluding the Grandparent (G) WebContents should make the Parent (P) and the
+// Child (C) OCCLUDED rather than HIDDEN, in a G -> P -> C embedding.
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, MultilevelOcclusionPropagates) {
+  NavigateToAttachHarness();
+
+  // Setup Parent (P) WebContents.
+  auto parent_contents = CreateChildWebContents();
+  NavigateChildToUrl(parent_contents.get(), kAttachHarnessUrl);
+  AttachChildToEmbedWithId(parent_contents.get(), "parent_embed");
+
+  // Setup Child (C) WebContents.
+  auto child_contents = CreateChildWebContents();
+  NavigateChildToUrl(child_contents.get(), kRedBoxUrl);
+
+  // Attach C to P.
+  SurfaceEmbedHandle* child_embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(child_embedded_handle, nullptr);
+
+  std::string attach_child_script = "createEmbed('" +
+                                    child_embedded_handle->id().ToString() +
+                                    "', 'child_embed');";
+  size_t expected_attachments = GetAttachedHostCount() + 1;
+  ASSERT_TRUE(content::ExecJs(parent_contents.get(), attach_child_script));
+  ASSERT_TRUE(WaitForHostAttachment(expected_attachments));
+  EXPECT_NE(child_contents->GetSurfaceEmbedConnector(), nullptr);
+
+  EXPECT_EQ(content::Visibility::VISIBLE, parent_contents->GetVisibility());
+  EXPECT_EQ(content::Visibility::VISIBLE, child_contents->GetVisibility());
+
+  // Occlude G. P and C should become OCCLUDED, not HIDDEN.
+  web_contents()->WasOccluded();
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return parent_contents->GetVisibility() == content::Visibility::OCCLUDED;
+  }));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return child_contents->GetVisibility() == content::Visibility::OCCLUDED;
+  }));
+
+  // Show G again. P and C should become VISIBLE.
+  web_contents()->WasShown();
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return parent_contents->GetVisibility() == content::Visibility::VISIBLE;
+  }));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return child_contents->GetVisibility() == content::Visibility::VISIBLE;
+  }));
+
+  // Hide G. P and C should become HIDDEN.
+  web_contents()->WasHidden();
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return parent_contents->GetVisibility() == content::Visibility::HIDDEN;
+  }));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return child_contents->GetVisibility() == content::Visibility::HIDDEN;
+  }));
+
+  web_contents()->WasShown();
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return child_contents->GetVisibility() == content::Visibility::VISIBLE;
+  }));
+
+  // Hide the Child embed in P while everything is visible; renderers do not
+  // process style changes while their page is hidden or occluded.
+  ASSERT_TRUE(content::ExecJs(
+      parent_contents.get(),
+      "document.getElementById('child_embed').style.visibility = 'hidden';"));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return child_contents->GetVisibility() == content::Visibility::HIDDEN;
+  }));
+
+  // Occluding G now occludes P, but a not-rendered C must stay HIDDEN.
+  web_contents()->WasOccluded();
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return parent_contents->GetVisibility() == content::Visibility::OCCLUDED;
+  }));
+  EXPECT_EQ(content::Visibility::HIDDEN, child_contents->GetVisibility());
+
+  web_contents()->WasShown();
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return parent_contents->GetVisibility() == content::Visibility::VISIBLE;
+  }));
+  EXPECT_EQ(content::Visibility::HIDDEN, child_contents->GetVisibility());
+}
+
 IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
                        EmbedMultipleTagsCreatesMultiplePlugins) {
   constexpr size_t kMultipleEmbedCount = 2;
@@ -667,6 +1265,29 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
     SurfaceEmbedHost* host = GetHost(i);
     ASSERT_NE(nullptr, host);
   }
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       ChildDestroyedBeforeEmbedAttachment) {
+  NavigateToAttachHarness();
+
+  auto child_contents = CreateChildWebContents();
+  SurfaceEmbedHandle* embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(embedded_handle, nullptr);
+  const std::string stale_content_id = embedded_handle->id().ToString();
+  child_contents.reset();
+
+  ASSERT_TRUE(content::ExecJs(web_contents(),
+                              "createEmbed('" + stale_content_id + "');"));
+  WaitForHostCount(kSingleEmbedCount);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return GetHost(0)->HasReceivedAttachConnectorForTesting(); }));
+  EXPECT_EQ(0u, GetAttachedHostCount());
+
+  // Verify that processing the stale attachment did not terminate the parent
+  // renderer or browser.
+  EXPECT_EQ(kSingleEmbedCount, CountEmbedElementsInPage());
 }
 
 IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, EmbedTagRemovedDestroysHost) {
@@ -765,11 +1386,11 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, CrashEarly) {
 
   // Now try to attach. This doesn't actually attach successfully, so can't
   // use the usual helper.
-  guest_contents::GuestContentsHandle* guest_handle =
-      guest_contents::GuestContentsHandle::CreateForWebContents(
-          child_contents.get());
-  ASSERT_NE(guest_handle, nullptr);
-  std::string script = "createEmbed('" + guest_handle->id().ToString() + "')";
+  SurfaceEmbedHandle* embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(embedded_handle, nullptr);
+  std::string script =
+      "createEmbed('" + embedded_handle->id().ToString() + "')";
   EXPECT_TRUE(content::ExecJs(web_contents(), script));
 
   // Should have a gray background.
@@ -1052,7 +1673,15 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedAccessibilityBrowserTest,
       [&]() { return host->HasReceivedParentAccessibilityInfoForTesting(); }));
 }
 
-IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, FocusPreservedAfterNavigation) {
+// TODO(crbug.com/555865331): Flaky on Android.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_FocusPreservedAfterNavigation \
+  DISABLED_FocusPreservedAfterNavigation
+#else
+#define MAYBE_FocusPreservedAfterNavigation FocusPreservedAfterNavigation
+#endif
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       MAYBE_FocusPreservedAfterNavigation) {
   NavigateToTestUrl(kFocusHarnessUrl);
 
   auto child_contents = CreateChildWebContents();
@@ -1066,9 +1695,30 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, FocusPreservedAfterNavigation) {
   EXPECT_TRUE(
       content::EvalJs(web_contents(), "document.hasFocus()").ExtractBool());
 
-  // Focus the child input element.
+  // Script focus within the child should not move page focus across the
+  // WebContents boundary.
   EXPECT_TRUE(content::ExecJs(child_contents.get(),
                               "document.getElementById('inner').focus()"));
+  // Wait a little to ensure that focus really does not change.
+  base::RunLoop focus_settle_loop;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, focus_settle_loop.QuitClosure(), base::Milliseconds(100));
+  focus_settle_loop.Run();
+  EXPECT_EQ(web_contents(), content::GetFocusedWebContents(web_contents()));
+  EXPECT_TRUE(
+      content::EvalJs(web_contents(), "document.hasFocus()").ExtractBool());
+  EXPECT_EQ("inner",
+            content::EvalJs(child_contents.get(), "document.activeElement.id"));
+
+  // Click the child's input element to focus it.
+  content::WaitForHitTestData(child_contents.get());
+  auto inner_center = content::GetCenterCoordinatesOfElementWithId(
+      child_contents.get(), "inner");
+  // Child embed is at (10, 50) in the parent coordinate space.
+  gfx::Point click_point(static_cast<int>(inner_center.x()) + 10,
+                         static_cast<int>(inner_center.y()) + 50);
+  content::SimulateMouseClickAt(
+      web_contents(), 0, blink::WebMouseEvent::Button::kLeft, click_point);
 
   // Wait for the focus change to propagate.
   EXPECT_TRUE(base::test::RunUntil([&]() {
@@ -1092,6 +1742,763 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, FocusPreservedAfterNavigation) {
       content::EvalJs(web_contents(), "document.hasFocus()").ExtractBool());
   EXPECT_TRUE(content::EvalJs(child_contents.get(), "document.hasFocus()")
                   .ExtractBool());
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       AttachToFocusedEmbedHasPageFocus) {
+  NavigateToTestUrl(kFocusHarnessUrl);
+  content::ReadyForInputObserver(web_contents()).Wait();
+
+  // 1. Create an <embed> element without content ID and insert it into the DOM.
+  EXPECT_TRUE(content::ExecJs(web_contents(),
+                              content::JsReplace(R"(
+        const embed = document.createElement('embed');
+        embed.setAttribute('type', $1);
+        embed.style.position = 'absolute';
+        embed.style.left = '10px';
+        embed.style.top = '50px';
+        embed.style.width = '100px';
+        embed.style.height = '100px';
+        embed.id = 'my_embed';
+        const outer2 = document.getElementById('outer2');
+        document.body.insertBefore(embed, outer2);
+      )",
+                                                 kInternalPluginMimeType)));
+
+  WaitForHostCount(1);
+  SurfaceEmbedHost* host = GetHost(0);
+  ASSERT_NE(host, nullptr);
+
+  // 2. Focus the <embed> element in the outer page before attaching.
+  EXPECT_TRUE(content::ExecJs(web_contents(),
+                              "document.getElementById('my_embed').focus()"));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return content::EvalJs(web_contents(), "document.activeElement.id") ==
+               "my_embed" &&
+           content::EvalJs(web_contents(), "document.hasFocus()").ExtractBool();
+  }));
+
+  // 3. Create the inner child WebContents.
+  auto child_contents = CreateChildWebContents();
+  NavigateChildToUrl(child_contents.get(), kInnerPageUrl);
+  content::ReadyForInputObserver(child_contents.get()).Wait();
+
+  SurfaceEmbedHandle* embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(embedded_handle, nullptr);
+
+  // 4. Attach the inner WebContents to the already focused <embed> by setting
+  // data-content-id.
+  EXPECT_TRUE(content::ExecJs(
+      web_contents(),
+      content::JsReplace("document.getElementById('my_embed').setAttribute("
+                         "'data-content-id', $1);",
+                         embedded_handle->id().ToString())));
+
+  // 5. Verify that the child WebContents has page focus after attaching to the
+  // already focused <embed>.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return child_contents->GetSurfaceEmbedConnector() != nullptr &&
+           content::GetFocusedWebContents(web_contents()) ==
+               child_contents.get() &&
+           web_contents()->GetFocusedFrame() ==
+               child_contents->GetPrimaryMainFrame() &&
+           content::EvalJs(web_contents(), "document.activeElement.id") ==
+               "my_embed" &&
+           content::EvalJs(web_contents(), "document.hasFocus()")
+               .ExtractBool() &&
+           content::EvalJs(child_contents.get(), "document.hasFocus()")
+               .ExtractBool();
+  }));
+
+  EXPECT_TRUE(
+      content::EvalJs(web_contents(), "document.hasFocus()").ExtractBool());
+  EXPECT_TRUE(content::EvalJs(child_contents.get(), "document.hasFocus()")
+                  .ExtractBool());
+  EXPECT_EQ(child_contents.get(),
+            content::GetFocusedWebContents(web_contents()));
+  EXPECT_EQ(child_contents->GetPrimaryMainFrame(),
+            web_contents()->GetFocusedFrame());
+  EXPECT_EQ(child_contents.get(),
+            content::GetFocusedWebContents(child_contents.get()));
+  EXPECT_EQ(child_contents->GetPrimaryMainFrame(),
+            child_contents->GetFocusedFrame());
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, FocusByTabKey) {
+  NavigateToTestUrl(kFocusHarnessUrl);
+
+  auto child_contents = CreateChildWebContents();
+  NavigateChildToUrl(child_contents.get(), kInnerPageUrl);
+  content::ReadyForInputObserver(child_contents.get()).Wait();
+  content::ReadyForInputObserver(web_contents()).Wait();
+
+  AttachChildToEmbedWithId(child_contents.get(), "my_embed");
+  content::WaitForHitTestData(child_contents.get());
+
+  // Focus outer1 which is before the embed tag.
+  EXPECT_TRUE(content::ExecJs(web_contents(),
+                              "document.getElementById('outer1').focus()"));
+  ASSERT_EQ("outer1",
+            content::EvalJs(web_contents(), "document.activeElement.id"));
+
+  // Press tab, it should move into the embed element, which focuses the child
+  // WebContents.
+  content::SimulateKeyPress(web_contents(), ui::DomKey::TAB, ui::DomCode::TAB,
+                            ui::VKEY_TAB, false, false, false, false);
+
+  // Focus should go to the embed element in the parent WebContents.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return content::GetFocusedWebContents(web_contents()) ==
+               child_contents.get() &&
+           web_contents()->GetFocusedFrame() ==
+               child_contents->GetPrimaryMainFrame() &&
+           content::EvalJs(web_contents(), "document.activeElement.id") ==
+               "my_embed" &&
+           content::EvalJs(child_contents.get(), "document.hasFocus()")
+               .ExtractBool() &&
+           content::EvalJs(child_contents.get(), "document.activeElement.id") ==
+               "inner";
+  }));
+
+  // Keep pressing tab: focus should leave the embed element and move to the
+  // next focusable element in the embedder page ('outer2').
+  content::SimulateKeyPress(web_contents(), ui::DomKey::TAB, ui::DomCode::TAB,
+                            ui::VKEY_TAB, false, false, false, false);
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return content::EvalJs(web_contents(), "document.activeElement.id") ==
+               "outer2" &&
+           content::EvalJs(web_contents(), "document.hasFocus()")
+               .ExtractBool() &&
+           !content::EvalJs(child_contents.get(), "document.hasFocus()")
+                .ExtractBool();
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, FocusByShiftTabKey) {
+  NavigateToTestUrl(kFocusHarnessUrl);
+
+  auto child_contents = CreateChildWebContents();
+  NavigateChildToUrl(child_contents.get(), kInnerPageUrl);
+  content::ReadyForInputObserver(child_contents.get()).Wait();
+  content::ReadyForInputObserver(web_contents()).Wait();
+
+  ASSERT_TRUE(content::ExecJs(child_contents.get(), R"(
+    const input = document.createElement('input');
+    input.id = 'inner2';
+    document.body.appendChild(input);
+  )"));
+  AttachChildToEmbedWithId(child_contents.get(), "my_embed");
+  content::WaitForHitTestData(child_contents.get());
+
+  // Focus outer2, which follows the embed element in document order.
+  EXPECT_TRUE(content::ExecJs(web_contents(),
+                              "document.getElementById('outer2').focus()"));
+  ASSERT_EQ("outer2",
+            content::EvalJs(web_contents(), "document.activeElement.id"));
+
+  // Shift+Tab from outer2 moves focus into the embed element, focusing the last
+  // element ('inner2') in child WebContents.
+  content::SimulateKeyPress(web_contents(), ui::DomKey::TAB, ui::DomCode::TAB,
+                            ui::VKEY_TAB, false, true, false, false);
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return content::GetFocusedWebContents(web_contents()) ==
+               child_contents.get() &&
+           web_contents()->GetFocusedFrame() ==
+               child_contents->GetPrimaryMainFrame() &&
+           content::EvalJs(web_contents(), "document.activeElement.id") ==
+               "my_embed" &&
+           content::EvalJs(child_contents.get(), "document.hasFocus()")
+               .ExtractBool() &&
+           content::EvalJs(child_contents.get(), "document.activeElement.id") ==
+               "inner2";
+  }));
+
+  // Shift+Tab again moves focus from inner2 to inner inside child WebContents.
+  content::SimulateKeyPress(web_contents(), ui::DomKey::TAB, ui::DomCode::TAB,
+                            ui::VKEY_TAB, false, true, false, false);
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return content::EvalJs(child_contents.get(), "document.hasFocus()")
+               .ExtractBool() &&
+           content::EvalJs(child_contents.get(), "document.activeElement.id") ==
+               "inner";
+  }));
+
+  // Shift+Tab from inner moves focus out of the embed element backward to
+  // outer1.
+  content::SimulateKeyPress(web_contents(), ui::DomKey::TAB, ui::DomCode::TAB,
+                            ui::VKEY_TAB, false, true, false, false);
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return content::EvalJs(web_contents(), "document.activeElement.id") ==
+               "outer1" &&
+           content::EvalJs(web_contents(), "document.hasFocus()")
+               .ExtractBool() &&
+           !content::EvalJs(child_contents.get(), "document.hasFocus()")
+                .ExtractBool();
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       FocusByTabKeyNoNextFocusableElement) {
+  NavigateToTestUrl(kFocusHarnessUrl);
+
+  // Remove outer2 so the embed element is the last focusable element.
+  EXPECT_TRUE(content::ExecJs(web_contents(),
+                              "document.getElementById('outer2').remove()"));
+
+  auto child_contents = CreateChildWebContents();
+  NavigateChildToUrl(child_contents.get(), kInnerPageUrl);
+  content::ReadyForInputObserver(child_contents.get()).Wait();
+  content::ReadyForInputObserver(web_contents()).Wait();
+
+  AttachChildToEmbedWithId(child_contents.get(), "my_embed");
+  content::WaitForHitTestData(child_contents.get());
+
+  TakeFocusTrackingDelegate delegate;
+  web_contents()->SetDelegate(&delegate);
+
+  // Focus outer1.
+  EXPECT_TRUE(content::ExecJs(web_contents(),
+                              "document.getElementById('outer1').focus()"));
+  ASSERT_EQ("outer1",
+            content::EvalJs(web_contents(), "document.activeElement.id"));
+
+  // Press tab to move into the embed element and focus child's 'inner'.
+  content::SimulateKeyPress(web_contents(), ui::DomKey::TAB, ui::DomCode::TAB,
+                            ui::VKEY_TAB, false, false, false, false);
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return content::GetFocusedWebContents(web_contents()) ==
+               child_contents.get() &&
+           web_contents()->GetFocusedFrame() ==
+               child_contents->GetPrimaryMainFrame() &&
+           content::EvalJs(web_contents(), "document.activeElement.id") ==
+               "my_embed" &&
+           content::EvalJs(child_contents.get(), "document.hasFocus()")
+               .ExtractBool() &&
+           content::EvalJs(child_contents.get(), "document.activeElement.id") ==
+               "inner";
+  }));
+
+  // Press tab again. Since there is no next focusable element after the embed
+  // element, focus should be handed off to the embedder WebContents' TakeFocus.
+  content::SimulateKeyPress(web_contents(), ui::DomKey::TAB, ui::DomCode::TAB,
+                            ui::VKEY_TAB, false, false, false, false);
+
+  delegate.WaitForTakeFocus();
+  EXPECT_TRUE(delegate.take_focus_called());
+  EXPECT_FALSE(delegate.take_focus_reverse());
+  EXPECT_FALSE(content::EvalJs(child_contents.get(), "document.hasFocus()")
+                   .ExtractBool());
+
+  web_contents()->SetDelegate(nullptr);
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       FocusByShiftTabKeyNoPreviousFocusableElement) {
+  NavigateToTestUrl(kFocusHarnessUrl);
+
+  // Remove outer1 so the embed element is the first focusable element.
+  EXPECT_TRUE(content::ExecJs(web_contents(),
+                              "document.getElementById('outer1').remove()"));
+
+  auto child_contents = CreateChildWebContents();
+  NavigateChildToUrl(child_contents.get(), kInnerPageUrl);
+  content::ReadyForInputObserver(child_contents.get()).Wait();
+  content::ReadyForInputObserver(web_contents()).Wait();
+
+  AttachChildToEmbedWithId(child_contents.get(), "my_embed");
+  content::WaitForHitTestData(child_contents.get());
+
+  TakeFocusTrackingDelegate delegate;
+  web_contents()->SetDelegate(&delegate);
+
+  // Focus outer2.
+  EXPECT_TRUE(content::ExecJs(web_contents(),
+                              "document.getElementById('outer2').focus()"));
+  ASSERT_EQ("outer2",
+            content::EvalJs(web_contents(), "document.activeElement.id"));
+
+  // Press Shift+Tab to move into the embed element and focus child's 'inner'.
+  content::SimulateKeyPress(web_contents(), ui::DomKey::TAB, ui::DomCode::TAB,
+                            ui::VKEY_TAB, false, true, false, false);
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return content::GetFocusedWebContents(web_contents()) ==
+               child_contents.get() &&
+           web_contents()->GetFocusedFrame() ==
+               child_contents->GetPrimaryMainFrame() &&
+           content::EvalJs(web_contents(), "document.activeElement.id") ==
+               "my_embed" &&
+           content::EvalJs(child_contents.get(), "document.hasFocus()")
+               .ExtractBool() &&
+           content::EvalJs(child_contents.get(), "document.activeElement.id") ==
+               "inner";
+  }));
+
+  // Press Shift+Tab again. Since there is no previous focusable element before
+  // the embed element, focus should be handed off to the embedder WebContents'
+  // TakeFocus (with reverse = true).
+  content::SimulateKeyPress(web_contents(), ui::DomKey::TAB, ui::DomCode::TAB,
+                            ui::VKEY_TAB, false, true, false, false);
+
+  delegate.WaitForTakeFocus();
+  EXPECT_TRUE(delegate.take_focus_called());
+  EXPECT_TRUE(delegate.take_focus_reverse());
+  EXPECT_FALSE(content::EvalJs(child_contents.get(), "document.hasFocus()")
+                   .ExtractBool());
+
+  web_contents()->SetDelegate(nullptr);
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, MultilevelDetachIntermediate) {
+  NavigateToAttachHarness();
+
+  auto parent_contents = CreateChildWebContents();
+  NavigateChildToUrl(parent_contents.get(), kAttachHarnessUrl);
+  AttachChildToEmbedWithId(parent_contents.get(), "parent_embed");
+
+  auto child_contents = CreateChildWebContents();
+  NavigateChildToUrl(child_contents.get(), kRedBoxUrl);
+
+  SurfaceEmbedHandle* child_embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(child_embedded_handle, nullptr);
+
+  std::string attach_child_script = "createEmbed('" +
+                                    child_embedded_handle->id().ToString() +
+                                    "', 'child_embed');";
+  size_t expected_attachments = GetAttachedHostCount() + 1;
+  ASSERT_TRUE(content::ExecJs(parent_contents.get(), attach_child_script));
+  ASSERT_TRUE(WaitForHostAttachment(expected_attachments));
+  EXPECT_NE(child_contents->GetSurfaceEmbedConnector(), nullptr);
+  EXPECT_NE(parent_contents->GetSurfaceEmbedConnector(), nullptr);
+  EXPECT_EQ(content::Visibility::VISIBLE, child_contents->GetVisibility());
+
+  // Verify the child's red content renders through the 2-level chain.
+  const gfx::Rect embed_bounds(10, 10, 100, 100);
+  VerifyRedPixelInBounds(embed_bounds);
+
+  // Remove the parent embed from the grandparent page, detaching the parent.
+  EXPECT_TRUE(content::ExecJs(
+      web_contents(), "document.getElementById('parent_embed').remove();"));
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return parent_contents->GetSurfaceEmbedConnector() == nullptr;
+  }));
+
+  // The child remains attached to the parent.
+  EXPECT_NE(child_contents->GetSurfaceEmbedConnector(), nullptr);
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, MultilevelFocusAndInput) {
+  NavigateToTestUrl(kMultilevelHarnessUrl);
+
+  auto parent_contents = CreateChildWebContents();
+  NavigateChildToUrl(parent_contents.get(), kMultilevelParentUrl);
+  AttachChildToEmbedWithId(parent_contents.get(), "parent_embed");
+  EXPECT_NE(parent_contents->GetSurfaceEmbedConnector(), nullptr);
+
+  auto child_contents = CreateChildWebContents();
+  NavigateChildToUrl(child_contents.get(), kInnerPageUrl);
+
+  SurfaceEmbedHandle* child_embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(child_embedded_handle, nullptr);
+
+  std::string attach_child_script = "createEmbed('" +
+                                    child_embedded_handle->id().ToString() +
+                                    "', 'child_embed');";
+  size_t expected_attachments = GetAttachedHostCount() + 1;
+  ASSERT_TRUE(content::ExecJs(parent_contents.get(), attach_child_script));
+  ASSERT_TRUE(WaitForHostAttachment(expected_attachments));
+  EXPECT_NE(child_contents->GetSurfaceEmbedConnector(), nullptr);
+
+  // Focus outer1 in the grandparent and verify keyboard input.
+  content::ReadyForInputObserver(web_contents()).Wait();
+  content::SimulateMouseClickOrTapElementWithId(web_contents(), "outer1");
+  EXPECT_EQ("outer1", content::EvalJsAfterLifecycleUpdate(
+                          web_contents(), "", "document.activeElement.id"));
+  EXPECT_EQ(web_contents(), content::GetFocusedWebContents(web_contents()));
+
+  content::SimulateKeyPress(web_contents(), ui::DomKey::FromCharacter('g'),
+                            ui::DomCode::US_A, ui::VKEY_A, false, false, false,
+                            false);
+  EXPECT_EQ("g",
+            content::EvalJsAfterLifecycleUpdate(
+                web_contents(), "", "document.getElementById('outer1').value"));
+
+  // Click the child's input through grandparent -> parent -> child.
+  WaitForMultilevelViewSizes(parent_contents.get(), child_contents.get());
+  // Parent is at (10, 50) in the root, and child is at (10, 40) in
+  // parent, so the child's bounds in root coordinates are (20, 90, 100, 100).
+  const gfx::Rect child_embed_bounds(20, 90, 100, 100);
+  VerifyRedPixelInBounds(child_embed_bounds);
+  content::WaitForHitTestData(parent_contents.get());
+  content::WaitForHitTestData(child_contents.get());
+  auto inner_center = content::GetCenterCoordinatesOfElementWithId(
+      child_contents.get(), "inner");
+  // Offset by embed positions: child in parent (10, 40) + parent in
+  // grandparent (10, 50).
+  gfx::Point click_point(static_cast<int>(inner_center.x()) + 10 + 10,
+                         static_cast<int>(inner_center.y()) + 40 + 50);
+
+  content::SimulateMouseClickAt(
+      web_contents(), 0, blink::WebMouseEvent::Button::kLeft, click_point);
+
+  WaitForMultilevelFocusState(parent_contents.get(), child_contents.get(),
+                              "parent_embed");
+
+  content::SimulateKeyPress(web_contents(), ui::DomKey::FromCharacter('c'),
+                            ui::DomCode::US_A, ui::VKEY_A, false, false, false,
+                            false);
+  EXPECT_EQ("c", content::EvalJsAfterLifecycleUpdate(
+                     child_contents.get(), "",
+                     "document.getElementById('inner').value"));
+
+  // Detach parent from grandparent and re-attach with child still connected.
+  EXPECT_TRUE(content::ExecJs(
+      web_contents(), "document.getElementById('parent_embed').remove();"));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return parent_contents->GetSurfaceEmbedConnector() == nullptr;
+  }));
+  EXPECT_NE(child_contents->GetSurfaceEmbedConnector(), nullptr);
+  EXPECT_TRUE(
+      base::test::RunUntil([&]() { return !HasPixelInColor(SK_ColorRED); }));
+
+  AttachChildToEmbedWithId(parent_contents.get(), "reattached_embed");
+  EXPECT_NE(child_contents->GetSurfaceEmbedConnector(), nullptr);
+
+  // Wait for child to become visible again after re-attach.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return child_contents->GetVisibility() == content::Visibility::VISIBLE;
+  }));
+
+  // Click the child's input after re-attach.
+  WaitForMultilevelViewSizes(parent_contents.get(), child_contents.get());
+  VerifyRedPixelInBounds(child_embed_bounds);
+  content::WaitForHitTestData(parent_contents.get());
+  content::WaitForHitTestData(child_contents.get());
+  inner_center = content::GetCenterCoordinatesOfElementWithId(
+      child_contents.get(), "inner");
+  click_point = gfx::Point(static_cast<int>(inner_center.x()) + 10 + 10,
+                           static_cast<int>(inner_center.y()) + 40 + 50);
+  content::SimulateMouseClickAt(
+      web_contents(), 0, blink::WebMouseEvent::Button::kLeft, click_point);
+
+  WaitForMultilevelFocusState(parent_contents.get(), child_contents.get(),
+                              "reattached_embed");
+
+  EXPECT_TRUE(content::ExecJs(child_contents.get(),
+                              "document.getElementById('inner').value = '';"));
+  content::SimulateKeyPress(web_contents(), ui::DomKey::FromCharacter('r'),
+                            ui::DomCode::US_A, ui::VKEY_A, false, false, false,
+                            false);
+  EXPECT_EQ("r", content::EvalJsAfterLifecycleUpdate(
+                     child_contents.get(), "",
+                     "document.getElementById('inner').value"));
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       FocusAndInputWithInnerWebContents) {
+  NavigateToTestUrl(kMultilevelHarnessUrl);
+
+  auto parent_contents = CreateChildWebContents();
+  NavigateChildToUrl(parent_contents.get(), kMultilevelParentUrl);
+  AttachChildToEmbedWithId(parent_contents.get(), "parent_embed");
+  ASSERT_NE(parent_contents->GetSurfaceEmbedConnector(), nullptr);
+
+  ASSERT_TRUE(content::ExecJs(parent_contents.get(), R"(
+    new Promise(resolve => {
+      const iframe = document.createElement('iframe');
+      iframe.id = 'child_frame';
+      iframe.style.position = 'absolute';
+      iframe.style.left = '10px';
+      iframe.style.top = '40px';
+      iframe.style.width = '100px';
+      iframe.style.height = '100px';
+      iframe.style.border = '0';
+      iframe.onload = resolve;
+      iframe.src = 'about:blank';
+      document.body.appendChild(iframe);
+    });
+  )"));
+  content::RenderFrameHost* child_frame = content::ChildFrameAt(
+      parent_contents->GetPrimaryMainFrame(), /*index=*/0);
+  ASSERT_NE(child_frame, nullptr);
+
+  auto child_contents = CreateChildWebContents();
+  NavigateChildToUrl(child_contents.get(), kInnerPageUrl);
+  content::WebContents* child_contents_ptr = child_contents.get();
+  base::test::TestFuture<content::RenderFrameHost*> prepared_frame;
+  child_frame->PrepareForInnerWebContentsAttach(prepared_frame.GetCallback());
+  child_frame = prepared_frame.Get();
+  ASSERT_NE(child_frame, nullptr);
+  parent_contents->AttachInnerWebContents(std::move(child_contents),
+                                          child_frame,
+                                          /*is_full_page=*/false);
+  ASSERT_EQ(child_contents_ptr->GetOuterWebContents(), parent_contents.get());
+  EXPECT_EQ(child_contents_ptr->GetSurfaceEmbedConnector(), nullptr);
+
+  content::ReadyForInputObserver(web_contents()).Wait();
+  content::SimulateMouseClickOrTapElementWithId(web_contents(), "outer1");
+  EXPECT_EQ("outer1", content::EvalJsAfterLifecycleUpdate(
+                          web_contents(), "", "document.activeElement.id"));
+  EXPECT_EQ(web_contents(), content::GetFocusedWebContents(web_contents()));
+
+  content::SimulateKeyPress(web_contents(), ui::DomKey::FromCharacter('g'),
+                            ui::DomCode::US_A, ui::VKEY_A, false, false, false,
+                            false);
+  EXPECT_EQ("g",
+            content::EvalJsAfterLifecycleUpdate(
+                web_contents(), "", "document.getElementById('outer1').value"));
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    auto* parent_view = parent_contents->GetRenderWidgetHostView();
+    auto* child_view = child_contents_ptr->GetRenderWidgetHostView();
+    return parent_view && child_view &&
+           parent_view->GetViewBounds().size() == gfx::Size(200, 150) &&
+           child_view->GetViewBounds().size() == gfx::Size(100, 100);
+  }));
+  const gfx::Rect child_embed_bounds(20, 90, 100, 100);
+  VerifyRedPixelInBounds(child_embed_bounds);
+  content::WaitForHitTestData(parent_contents.get());
+  content::WaitForHitTestData(child_contents_ptr);
+  auto inner_center =
+      content::GetCenterCoordinatesOfElementWithId(child_contents_ptr, "inner");
+  gfx::Point click_point(static_cast<int>(inner_center.x()) + 10 + 10,
+                         static_cast<int>(inner_center.y()) + 40 + 50);
+
+  content::SimulateMouseClickAt(
+      web_contents(), 0, blink::WebMouseEvent::Button::kLeft, click_point);
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return content::GetFocusedWebContents(web_contents()) == child_contents_ptr;
+  }));
+  WaitForActiveElement(child_contents_ptr, "inner");
+  WaitForActiveElement(parent_contents.get(), "child_frame");
+  WaitForActiveElement(web_contents(), "parent_embed");
+  for (content::WebContents* contents :
+       {web_contents(), parent_contents.get(), child_contents_ptr}) {
+    EXPECT_TRUE(base::test::RunUntil([&]() {
+      return content::EvalJs(contents, "document.hasFocus()").ExtractBool();
+    }));
+  }
+
+  content::SimulateKeyPress(web_contents(), ui::DomKey::FromCharacter('c'),
+                            ui::DomCode::US_A, ui::VKEY_A, false, false, false,
+                            false);
+  EXPECT_EQ("c", content::EvalJsAfterLifecycleUpdate(
+                     child_contents_ptr, "",
+                     "document.getElementById('inner').value"));
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, ThrottlingPropagation) {
+  auto child_contents = SetupHarnessAndChild();
+  AttachChildToEmbed(child_contents.get());
+
+  auto* connector = child_contents->GetSurfaceEmbedConnector();
+  ASSERT_NE(nullptr, connector);
+
+  // Wait for initial visual properties to propagate to the child.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return connector->GetLocalFrameSizeInPixelsForTesting() ==
+           gfx::Size(150, 150);
+  }));
+
+  EXPECT_FALSE(connector->IsThrottledForTesting());
+  EXPECT_FALSE(connector->IsSubtreeThrottledForTesting());
+  EXPECT_FALSE(connector->IsDisplayLockedForTesting());
+
+  SurfaceEmbedHost* host = GetHost(0);
+  ASSERT_NE(nullptr, host);
+
+  host->OnEmbedElementThrottlingStatusChanged(
+      mojom::RenderThrottlingStatus::New(
+          /*is_throttled=*/true,
+          /*subtree_throttled=*/true,
+          /*display_locked=*/true));
+
+  EXPECT_TRUE(connector->IsThrottledForTesting());
+  EXPECT_TRUE(connector->IsSubtreeThrottledForTesting());
+  EXPECT_TRUE(connector->IsDisplayLockedForTesting());
+}
+
+// Setting content-visibility:hidden directly on the <embed> element display-
+// locks the element in its own document. This lock is not reflected in the
+// containing frame's throttling bits, so it exercises the element-level
+// display-lock path in WebPluginContainerImpl.
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       DisplayLockThrottlingViaContentVisibility) {
+  auto child_contents = SetupHarnessAndChild();
+  AttachChildToEmbedWithId(child_contents.get(), "my_embed");
+
+  auto* connector = child_contents->GetSurfaceEmbedConnector();
+  ASSERT_NE(nullptr, connector);
+
+  // Wait for initial visual properties to propagate to the child.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return connector->GetLocalFrameSizeInPixelsForTesting() ==
+           gfx::Size(150, 150);
+  }));
+
+  EXPECT_FALSE(connector->IsDisplayLockedForTesting());
+
+  // Display-lock the embed element itself.
+  ASSERT_TRUE(content::ExecJs(
+      web_contents(),
+      "document.getElementById('my_embed').style.contentVisibility = "
+      "'hidden';"));
+
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return connector->IsDisplayLockedForTesting(); }));
+
+  // Unlock and confirm the display-lock status clears.
+  ASSERT_TRUE(content::ExecJs(
+      web_contents(),
+      "document.getElementById('my_embed').style.contentVisibility = "
+      "'visible';"));
+
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return !connector->IsDisplayLockedForTesting(); }));
+}
+
+// Display-locking the parent embed in the root document propagates display-lock
+// throttling to both the parent (directly, via the element-level path) and the
+// child (via the frame-level bit pushed down from the parent frame).
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       MultilevelDisplayLockThrottlingViaContentVisibility) {
+  NavigateToAttachHarness();
+
+  // Setup Parent (P) WebContents.
+  auto parent_contents = CreateChildWebContents();
+  NavigateChildToUrl(parent_contents.get(), kAttachHarnessUrl);
+  AttachChildToEmbedWithId(parent_contents.get(), "parent_embed");
+
+  // Setup Child (C) WebContents and attach it to P.
+  auto child_contents = CreateChildWebContents();
+  NavigateChildToUrl(child_contents.get(), kRedBoxUrl);
+
+  SurfaceEmbedHandle* child_embedded_handle =
+      SurfaceEmbedHandle::CreateForWebContents(child_contents.get());
+  ASSERT_NE(child_embedded_handle, nullptr);
+  std::string attach_child_script = "createEmbed('" +
+                                    child_embedded_handle->id().ToString() +
+                                    "', 'child_embed');";
+  size_t expected_attachments = GetAttachedHostCount() + 1;
+  ASSERT_TRUE(content::ExecJs(parent_contents.get(), attach_child_script));
+  ASSERT_TRUE(WaitForHostAttachment(expected_attachments));
+
+  auto* parent_connector = parent_contents->GetSurfaceEmbedConnector();
+  auto* child_connector = child_contents->GetSurfaceEmbedConnector();
+  ASSERT_NE(nullptr, parent_connector);
+  ASSERT_NE(nullptr, child_connector);
+
+  EXPECT_FALSE(parent_connector->IsDisplayLockedForTesting());
+  EXPECT_FALSE(child_connector->IsDisplayLockedForTesting());
+
+  // Display-lock the parent embed in the root document.
+  ASSERT_TRUE(content::ExecJs(
+      web_contents(),
+      "document.getElementById('parent_embed').style.contentVisibility = "
+      "'hidden';"));
+
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return parent_connector->IsDisplayLockedForTesting(); }));
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return child_connector->IsDisplayLockedForTesting(); }));
+
+  // Unlock and confirm both connectors clear.
+  ASSERT_TRUE(content::ExecJs(
+      web_contents(),
+      "document.getElementById('parent_embed').style.contentVisibility = "
+      "'visible';"));
+
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return !parent_connector->IsDisplayLockedForTesting(); }));
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return !child_connector->IsDisplayLockedForTesting(); }));
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       TransparentChildWebContentsAndUnsubmittedSurface) {
+  NavigateToAttachHarness();
+  ASSERT_TRUE(content::ExecJs(
+      web_contents(),
+      "document.body.style.backgroundColor = 'rgb(0, 255, 0)';"));
+
+  // 1. Attach an unnavigated child WebContents (which has no active surface
+  // yet, matching `webui_examples --webshell`). The parent's green background
+  // should show through the <embed> bounds rather than being occluded/culled.
+  std::unique_ptr<content::WebContents> child_contents =
+      CreateChildWebContents();
+  AttachChildToEmbedWithId(child_contents.get(), "embed1");
+
+  gfx::Rect scaled_embed_bounds;
+  CalculateBitmapBoundsToCheck(gfx::Rect(10, 10, 100, 100),
+                               &scaled_embed_bounds);
+  EXPECT_TRUE(
+      CheckHasPixelInColorInBitmapBounds(SK_ColorGREEN, scaled_embed_bounds));
+  EXPECT_FALSE(HasPixelInColor(SK_ColorBLUE));
+
+  // 2. Navigate the child WebContents, make its background transparent, and
+  // render a 50x50 red box <div>. The red box is intentional to verify that
+  // opaque foreground content in the child is still painted (checked in the
+  // top-left region below), while the surrounding background is transparent
+  // and shows the parent's green background (checked in the bottom-right
+  // region).
+  //
+  // Transparency must be set at 3 places corresponding to the nested
+  // container levels:
+  //   - RenderWidgetHostView (window/compositor default background)
+  //     - html / documentElement (styled opaque red by `kRedBoxUrl`)
+  //       - body (styled opaque red by `kRedBoxUrl`)
+  //         - 50x50 red box <div>
+  // If any level above the <div> uses an opaque background, the resulting
+  // background will be opaque.
+  NavigateChildToUrl(child_contents.get(), kRedBoxUrl);
+  ASSERT_NE(nullptr, child_contents->GetRenderWidgetHostView());
+  // TODO(crbug.com/565576788): Remove the `RunUntil` wait below (and allow
+  // calling `SetBackgroundColor(SK_ColorTRANSPARENT)` at any time, e.g. before
+  // `NavigateChildToUrl` or after `ExecJs`) once
+  // `RenderWidgetHostViewChildFrame::UpdateBackgroundColor()` stops using
+  // `content_background_color_` to overwrite `SetBackgroundOpaque(false)`.
+  // Until then, wait for `kRedBoxUrl`'s initial frame metadata (`SK_ColorRED`)
+  // to arrive at the browser and set `SK_ColorTRANSPARENT` before clearing the
+  // DOM backgrounds in JS so an in-flight opaque `content_background_color_`
+  // update does not clobber `SetBackgroundOpaque(false)`.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return child_contents->GetRenderWidgetHostView()->GetBackgroundColor() ==
+           SK_ColorRED;
+  }));
+  child_contents->GetRenderWidgetHostView()->SetBackgroundColor(
+      SK_ColorTRANSPARENT);
+  ASSERT_TRUE(content::ExecJs(child_contents.get(), R"(
+    document.documentElement.style.backgroundColor = 'transparent';
+    document.body.style.backgroundColor = 'transparent';
+    const box = document.createElement('div');
+    box.style.width = '50px';
+    box.style.height = '50px';
+    box.style.backgroundColor = 'rgb(255, 0, 0)';
+    document.body.appendChild(box);
+  )"));
+
+  gfx::Rect scaled_top_left_bounds;
+  CalculateBitmapBoundsToCheck(gfx::Rect(15, 15, 30, 30),
+                               &scaled_top_left_bounds);
+  gfx::Rect scaled_bottom_right_bounds;
+  CalculateBitmapBoundsToCheck(gfx::Rect(70, 70, 30, 30),
+                               &scaled_bottom_right_bounds);
+
+  // Wait until both the child's red box and the parent's green background
+  // (showing through the transparent region of the child) are visible.
+  EXPECT_TRUE(
+      CheckHasPixelInColorInBitmapBounds(SK_ColorRED, scaled_top_left_bounds));
+  EXPECT_TRUE(CheckHasPixelInColorInBitmapBounds(SK_ColorGREEN,
+                                                 scaled_bottom_right_bounds));
 }
 
 }  // namespace surface_embed

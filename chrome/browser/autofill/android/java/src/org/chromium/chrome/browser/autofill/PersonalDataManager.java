@@ -4,10 +4,8 @@
 
 package org.chromium.chrome.browser.autofill;
 
-import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
-import android.text.TextUtils;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
@@ -24,12 +22,14 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.components.autofill.AutofillPolicyDataCategory;
 import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.components.autofill.IbanRecordType;
 import org.chromium.components.autofill.VirtualCardEnrollmentState;
 import org.chromium.components.autofill.payments.BankAccount;
 import org.chromium.components.autofill.payments.BnplIssuerForSettings;
 import org.chromium.components.autofill.payments.Ewallet;
+import org.chromium.components.autofill.payments.Iban;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.url.GURL;
@@ -39,7 +39,6 @@ import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
-import java.util.Objects;
 
 /**
  * Android wrapper of the PersonalDataManager which provides access from the Java layer.
@@ -85,7 +84,7 @@ public class PersonalDataManager implements Destroyable {
         // Note that while some of these fields are numbers, they're predominantly read,
         // marshaled and compared as strings. To save conversions, we sometimes use strings.
         private String mGUID;
-        private String mOrigin;
+        private boolean mIsUserConfirmed;
         private final boolean mIsLocal;
         private final boolean mIsVirtual;
         private String mName;
@@ -114,9 +113,9 @@ public class PersonalDataManager implements Destroyable {
         private final String mObfuscatedLastFourDigits;
 
         @CalledByNative
-        public static CreditCard create(
+        private static CreditCard create(
                 @JniType("std::string") String guid,
-                @JniType("std::string") String origin,
+                boolean isUserConfirmed,
                 boolean isLocal,
                 boolean isVirtual,
                 @JniType("std::u16string") String name,
@@ -131,7 +130,7 @@ public class PersonalDataManager implements Destroyable {
                 long instrumentId,
                 @JniType("std::u16string") String cardLabel,
                 @JniType("std::u16string") String nickname,
-                GURL cardArtUrl,
+                @JniType("GURL") GURL cardArtUrl,
                 @VirtualCardEnrollmentState.EnumType int virtualCardEnrollmentState,
                 @JniType("std::u16string") String productDescription,
                 @JniType("std::u16string") String cardNameForAutofillDisplay,
@@ -139,10 +138,10 @@ public class PersonalDataManager implements Destroyable {
                 @JniType("std::u16string") String cvc,
                 @JniType("std::string") String issuerId,
                 @JniType("std::string") String benefitSource,
-                GURL productTermsUrl) {
+                @JniType("GURL") GURL productTermsUrl) {
             return new CreditCard(
                     guid,
-                    origin,
+                    isUserConfirmed,
                     isLocal,
                     isVirtual,
                     name,
@@ -170,7 +169,7 @@ public class PersonalDataManager implements Destroyable {
 
         public CreditCard(
                 String guid,
-                String origin,
+                boolean isUserConfirmed,
                 boolean isLocal,
                 String name,
                 String number,
@@ -183,7 +182,7 @@ public class PersonalDataManager implements Destroyable {
                 String serverId) {
             this(
                     guid,
-                    origin,
+                    isUserConfirmed,
                     isLocal,
                     /* isVirtual= */ false,
                     name,
@@ -211,7 +210,7 @@ public class PersonalDataManager implements Destroyable {
 
         public CreditCard(
                 String guid,
-                String origin,
+                boolean isUserConfirmed,
                 boolean isLocal,
                 boolean isVirtual,
                 String name,
@@ -236,7 +235,7 @@ public class PersonalDataManager implements Destroyable {
                 String benefitSource,
                 @Nullable GURL productTermsUrl) {
             mGUID = guid;
-            mOrigin = origin;
+            mIsUserConfirmed = isUserConfirmed;
             mIsLocal = isLocal;
             mIsVirtual = isVirtual;
             mName = name;
@@ -265,7 +264,7 @@ public class PersonalDataManager implements Destroyable {
         public CreditCard() {
             this(
                     /* guid= */ "",
-                    /* origin= */ AutofillEditorBase.SETTINGS_ORIGIN,
+                    /* isUserConfirmed= */ true,
                     /* isLocal= */ true,
                     /* name= */ "",
                     /* number= */ "",
@@ -284,8 +283,8 @@ public class PersonalDataManager implements Destroyable {
         }
 
         @CalledByNative
-        public @JniType("std::string") String getOrigin() {
-            return mOrigin;
+        public boolean getIsUserConfirmed() {
+            return mIsUserConfirmed;
         }
 
         @CalledByNative
@@ -370,7 +369,7 @@ public class PersonalDataManager implements Destroyable {
         }
 
         @CalledByNative
-        public @Nullable GURL getCardArtUrl() {
+        public @JniType("GURL") @Nullable GURL getCardArtUrl() {
             return mCardArtUrl;
         }
 
@@ -390,17 +389,17 @@ public class PersonalDataManager implements Destroyable {
         }
 
         @CalledByNative
-        public String getIssuerId() {
+        public @JniType("std::string") String getIssuerId() {
             return mIssuerId;
         }
 
         @CalledByNative
-        public String getBenefitSource() {
+        public @JniType("std::string") String getBenefitSource() {
             return mBenefitSource;
         }
 
         @CalledByNative
-        public @Nullable GURL getProductTermsUrl() {
+        public @JniType("GURL") @Nullable GURL getProductTermsUrl() {
             return mProductTermsUrl;
         }
 
@@ -416,8 +415,8 @@ public class PersonalDataManager implements Destroyable {
             mGUID = guid;
         }
 
-        public void setOrigin(String origin) {
-            mOrigin = origin;
+        public void setIsUserConfirmed(boolean isUserConfirmed) {
+            mIsUserConfirmed = isUserConfirmed;
         }
 
         public void setName(String name) {
@@ -479,215 +478,6 @@ public class PersonalDataManager implements Destroyable {
             // exact expiration date.
             expiryDate.add(Calendar.MINUTE, 1);
             return Calendar.getInstance().before(expiryDate);
-        }
-    }
-
-    /** Autofill IBAN information. */
-    public static class Iban {
-        private final @Nullable String mGuid;
-        private final @Nullable Long mInstrumentId;
-
-        // Obfuscated IBAN value. This is used for displaying the IBAN in the Payment methods page.
-        private final String mLabel;
-
-        private String mNickname;
-        private final @IbanRecordType int mRecordType;
-        // Value is empty for server IBAN.
-        private @Nullable String mValue;
-
-        private Iban(
-                String guid,
-                Long instrumentId,
-                String label,
-                String nickname,
-                @IbanRecordType int recordType,
-                String value) {
-            mGuid = guid;
-            mInstrumentId = instrumentId;
-            mLabel = Objects.requireNonNull(label, "Label can't be null");
-            mNickname = Objects.requireNonNull(nickname, "Nickname can't be null");
-            mRecordType = recordType;
-            mValue = value;
-        }
-
-        // Creates an Iban instance that is not stored on a server nor locally,
-        // yet. This Iban has type IbanRecordType.UNKNOWN and has neither a
-        // Guid nor an instrumentId.
-        @CalledByNative
-        public static Iban createEphemeral(
-                @JniType("std::u16string") String label,
-                @JniType("std::u16string") String nickname,
-                @JniType("std::u16string") String value) {
-            return new Iban.Builder()
-                    .setLabel(label)
-                    .setNickname(nickname)
-                    .setRecordType(IbanRecordType.UNKNOWN)
-                    .setValue(value)
-                    .build();
-        }
-
-        @CalledByNative
-        public static Iban createLocal(
-                @JniType("std::string") String guid,
-                @JniType("std::u16string") String label,
-                @JniType("std::u16string") String nickname,
-                @JniType("std::u16string") String value) {
-            return new Iban.Builder()
-                    .setGuid(guid)
-                    .setLabel(label)
-                    .setNickname(nickname)
-                    .setRecordType(IbanRecordType.LOCAL_IBAN)
-                    .setValue(value)
-                    .build();
-        }
-
-        @CalledByNative
-        public static Iban createServer(
-                long instrumentId,
-                @JniType("std::u16string") String label,
-                @JniType("std::u16string") String nickname,
-                @JniType("std::u16string") String value) {
-            return new Iban.Builder()
-                    .setInstrumentId(Long.valueOf(instrumentId))
-                    .setLabel(label)
-                    .setNickname(nickname)
-                    .setRecordType(IbanRecordType.SERVER_IBAN)
-                    .setValue(value)
-                    .build();
-        }
-
-        @CalledByNative
-        public @Nullable @JniType("std::string") String getGuid() {
-            assert mRecordType != IbanRecordType.SERVER_IBAN;
-            return mGuid;
-        }
-
-        @CalledByNative
-        public long getInstrumentId() {
-            assert mInstrumentId != null;
-            assert mRecordType == IbanRecordType.SERVER_IBAN;
-            return mInstrumentId;
-        }
-
-        public String getLabel() {
-            return mLabel;
-        }
-
-        @CalledByNative
-        public @JniType("std::u16string") String getNickname() {
-            return mNickname;
-        }
-
-        @CalledByNative
-        public @IbanRecordType int getRecordType() {
-            return mRecordType;
-        }
-
-        @CalledByNative
-        public @Nullable @JniType("std::u16string") String getValue() {
-            return mValue;
-        }
-
-        public void updateNickname(String nickname) {
-            mNickname = nickname;
-        }
-
-        public void updateValue(String value) {
-            mValue = value;
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-
-            if (this == obj) return true;
-            if (!(obj instanceof Iban)) return false;
-
-            Iban otherIban = (Iban) obj;
-
-            return Objects.equals(mLabel, otherIban.getLabel())
-                    && Objects.equals(mNickname, otherIban.getNickname())
-                    && mRecordType == otherIban.getRecordType()
-                    && (mRecordType != IbanRecordType.SERVER_IBAN
-                            || Objects.equals(mInstrumentId, otherIban.getInstrumentId()))
-                    && (mRecordType != IbanRecordType.LOCAL_IBAN
-                            || Objects.equals(mGuid, otherIban.getGuid()))
-                    && Objects.equals(mValue, otherIban.getValue());
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(mGuid, mLabel, mNickname, mRecordType, mValue);
-        }
-
-        /** Builder for {@link Iban}. */
-        public static final class Builder {
-            private @Nullable String mGuid;
-            private @Nullable Long mInstrumentId;
-            private @Nullable String mLabel;
-            private @Nullable String mNickname;
-            private @IbanRecordType int mRecordType;
-            private @Nullable String mValue;
-
-            public Builder setGuid(String guid) {
-                mGuid = guid;
-                return this;
-            }
-
-            public Builder setInstrumentId(Long instrumentId) {
-                mInstrumentId = instrumentId;
-                return this;
-            }
-
-            public Builder setLabel(String label) {
-                mLabel = label;
-                return this;
-            }
-
-            public Builder setNickname(String nickname) {
-                mNickname = nickname;
-                return this;
-            }
-
-            public Builder setRecordType(@IbanRecordType int recordType) {
-                mRecordType = recordType;
-                return this;
-            }
-
-            public Builder setValue(String value) {
-                mValue = value;
-                return this;
-            }
-
-            public Iban build() {
-                switch (mRecordType) {
-                    case IbanRecordType.UNKNOWN:
-                        assert mGuid == null && mInstrumentId == null
-                                : "IBANs with 'UNKNOWN' record type must have an empty GUID and"
-                                        + " InstrumentId.";
-                        break;
-                    case IbanRecordType.LOCAL_IBAN:
-                        assert !TextUtils.isEmpty(mGuid) && mInstrumentId == null
-                                : "Local IBANs must have a non-empty GUID and null InstrumentID.";
-                        break;
-                    case IbanRecordType.SERVER_IBAN:
-                        assert mInstrumentId != null
-                                        && mInstrumentId != 0L
-                                        && TextUtils.isEmpty(mGuid)
-                                        && TextUtils.isEmpty(mValue)
-                                : "Server IBANs must have a non-zero instrumentId, empty GUID and"
-                                        + " empty value.";
-                        break;
-                }
-                // Non-null enforcement happens inside the constructor if applicable, assume
-                // non-null for all fields.
-                return new Iban(
-                        assumeNonNull(mGuid),
-                        assumeNonNull(mInstrumentId),
-                        assumeNonNull(mLabel),
-                        assumeNonNull(mNickname),
-                        mRecordType,
-                        assumeNonNull(mValue));
-            }
         }
     }
 
@@ -997,18 +787,32 @@ public class PersonalDataManager implements Destroyable {
     }
 
     /**
-     * @return Whether the Autofill feature for Profiles (addresses) is enabled.
+     * This checks both the underlying user setting ({@link Pref#AUTOFILL_PROFILE_ENABLED}) and
+     * whether address / contact info autofill is blocked by the {@code AutofillSettings} enterprise
+     * policy ({@code autofill.types_blocked}).
+     *
+     * @return True if profile autofill is enabled and not blocked by policy, false otherwise.
      */
     public boolean isAutofillProfileEnabled() {
-        return mPrefService.getBoolean(Pref.AUTOFILL_PROFILE_ENABLED);
+        return mPrefService.getBoolean(Pref.AUTOFILL_PROFILE_ENABLED)
+                && !isAutofillTypeDisabledByEnterprisePolicy(
+                        AutofillPolicyDataCategory.CONTACT_INFO);
     }
 
     /**
-     * @return Whether the Autofill feature for Payment Methods is enabled.
+     * This checks both the underlying user setting ({@link Pref#AUTOFILL_CREDIT_CARD_ENABLED}) and
+     * whether payments autofill is blocked by the {@code AutofillSettings} enterprise policy
+     * ({@code autofill.types_blocked}). If an enterprise policy disables payments, this will return
+     * {@code false} so that payment autofill operations are suppressed and the setting is treated
+     * as disabled.
+     *
+     * @return True if payment methods autofill is enabled and not blocked by policy, false
+     *     otherwise.
      */
     public boolean isAutofillPaymentMethodsEnabled() {
         // TODO(crbug.com/40903277): Rename pref to AUTOFILL_PAYMENT_METHODS_ENABLED.
-        return mPrefService.getBoolean(Pref.AUTOFILL_CREDIT_CARD_ENABLED);
+        return mPrefService.getBoolean(Pref.AUTOFILL_CREDIT_CARD_ENABLED)
+                && !isAutofillTypeDisabledByEnterprisePolicy(AutofillPolicyDataCategory.PAYMENTS);
     }
 
     /**
@@ -1022,6 +826,54 @@ public class PersonalDataManager implements Destroyable {
                 AUTOFILL_ADDRESS_OPT_IN_CHANGE_HISTOGRAM_NAME,
                 enable ? AutofillAddressOptInChange.OPT_IN : AutofillAddressOptInChange.OPT_OUT,
                 AutofillAddressOptInChange.HISTOGRAM_BUCKET_COUNT);
+    }
+
+    /**
+     * @return The list of email addresses that have verification state.
+     */
+    public List<String> getEmailVerificationAddresses() {
+        ThreadUtils.assertOnUiThread();
+        return PersonalDataManagerJni.get()
+                .getEmailVerificationAddresses(mPersonalDataManagerAndroid);
+    }
+
+    /**
+     * @param email The email address to get the issuer for.
+     * @return The issuer site for the verified email address, or empty/null if not found.
+     */
+    public String getEmailVerificationIssuer(String email) {
+        ThreadUtils.assertOnUiThread();
+        return PersonalDataManagerJni.get()
+                .getEmailVerificationIssuer(mPersonalDataManagerAndroid, email);
+    }
+
+    /**
+     * Removes the email address from the email verification state.
+     *
+     * @param email The email address to remove.
+     */
+    public void removeEmailVerificationAddress(String email) {
+        ThreadUtils.assertOnUiThread();
+        PersonalDataManagerJni.get()
+                .removeEmailVerificationAddress(mPersonalDataManagerAndroid, email);
+    }
+
+    /**
+     * @return Whether email verification is enabled.
+     */
+    public boolean isEmailVerificationEnabled() {
+        return mPrefService.getBoolean(Pref.AUTOFILL_EMAIL_VERIFICATION_ENABLED);
+    }
+
+    /**
+     * @param enabled Whether email verification should be enabled.
+     */
+    public void setEmailVerificationEnabled(boolean enabled) {
+        mPrefService.setBoolean(Pref.AUTOFILL_EMAIL_VERIFICATION_ENABLED, enabled);
+    }
+
+    public boolean isEmailVerificationManaged() {
+        return mPrefService.isManagedPreference(Pref.AUTOFILL_EMAIL_VERIFICATION_ENABLED);
     }
 
     /**
@@ -1096,6 +948,17 @@ public class PersonalDataManager implements Destroyable {
      */
     public boolean isAutofillProfileManaged() {
         return PersonalDataManagerJni.get().isAutofillProfileManaged(mPersonalDataManagerAndroid);
+    }
+
+    /**
+     * @param category The category of Autofill data.
+     * @return Whether the specified Autofill data category is blocked by the AutofillSettings
+     *     enterprise policy.
+     */
+    public boolean isAutofillTypeDisabledByEnterprisePolicy(
+            @AutofillPolicyDataCategory int category) {
+        return PersonalDataManagerJni.get()
+                .isAutofillTypeDisabledByEnterprisePolicy(mPersonalDataManagerAndroid, category);
     }
 
     /**
@@ -1190,16 +1053,20 @@ public class PersonalDataManager implements Destroyable {
 
         boolean isDataLoaded(long nativePersonalDataManagerAndroid);
 
+        @JniType("std::vector<std::string>")
         String[] getProfileGUIDsForSettings(long nativePersonalDataManagerAndroid);
 
+        @JniType("std::vector<std::string>")
         String[] getProfileGUIDsToSuggest(long nativePersonalDataManagerAndroid);
 
+        @JniType("std::vector<std::u16string>")
         String[] getProfileLabelsForSettings(long nativePersonalDataManagerAndroid);
 
         @JniType("std::u16string")
         String getProfileDescriptionForEditor(
                 long nativePersonalDataManagerAndroid, @JniType("std::string") String guid);
 
+        @JniType("std::vector<std::u16string>")
         String[] getProfileLabelsToSuggest(long nativePersonalDataManagerAndroid);
 
         AutofillProfile getProfileByGUID(
@@ -1229,8 +1096,10 @@ public class PersonalDataManager implements Destroyable {
                 @JniType("std::string") String guid,
                 boolean includeCountry);
 
+        @JniType("std::vector<std::string>")
         String[] getCreditCardGUIDsForSettings(long nativePersonalDataManagerAndroid);
 
+        @JniType("std::vector<std::string>")
         String[] getCreditCardGUIDsToSuggest(long nativePersonalDataManagerAndroid);
 
         CreditCard getCreditCardByGUID(
@@ -1264,6 +1133,9 @@ public class PersonalDataManager implements Destroyable {
                 long nativePersonalDataManagerAndroid, @JniType("std::string") String guid);
 
         boolean isAutofillProfileManaged(long nativePersonalDataManagerAndroid);
+
+        boolean isAutofillTypeDisabledByEnterprisePolicy(
+                long nativePersonalDataManagerAndroid, @AutofillPolicyDataCategory int category);
 
         boolean isAutofillCreditCardManaged(long nativePersonalDataManagerAndroid);
 
@@ -1299,5 +1171,15 @@ public class PersonalDataManager implements Destroyable {
                 long nativePersonalDataManagerAndroid);
 
         BnplIssuerForSettings[] getBnplIssuersForSettings(long nativePersonalDataManagerAndroid);
+
+        @JniType("std::vector<std::string>")
+        List<String> getEmailVerificationAddresses(long nativePersonalDataManagerAndroid);
+
+        @JniType("std::string")
+        String getEmailVerificationIssuer(
+                long nativePersonalDataManagerAndroid, @JniType("std::string") String email);
+
+        void removeEmailVerificationAddress(
+                long nativePersonalDataManagerAndroid, @JniType("std::string") String email);
     }
 }

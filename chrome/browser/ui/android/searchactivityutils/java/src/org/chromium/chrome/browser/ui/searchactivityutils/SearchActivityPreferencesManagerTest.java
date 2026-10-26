@@ -4,11 +4,17 @@
 
 package org.chromium.chrome.browser.ui.searchactivityutils;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -17,6 +23,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.SEARCH_WIDGET_ACCOUNT_EMAIL;
+import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.SEARCH_WIDGET_IS_AI_MODE_AVAILABLE;
 import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.SEARCH_WIDGET_IS_GOOGLE_LENS_AVAILABLE;
 import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.SEARCH_WIDGET_IS_INCOGNITO_AVAILABLE;
 import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.SEARCH_WIDGET_IS_VOICE_SEARCH_AVAILABLE;
@@ -24,7 +31,6 @@ import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.SEARC
 import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.SEARCH_WIDGET_SEARCH_ENGINE_URL;
 
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -33,25 +39,31 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.RobolectricUtil;
+import org.chromium.chrome.browser.composeplate.ComposeplateUtils;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.lens.LensController;
 import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionUtil;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
-import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferencesManager.SearchActivityPreferences;
+import org.chromium.components.prefs.PrefChangeRegistrar;
+import org.chromium.components.prefs.PrefChangeRegistrarJni;
+import org.chromium.components.prefs.PrefService;
 import org.chromium.components.search_engines.TemplateUrl;
 import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.components.search_engines.TemplateUrlService.LoadListener;
 import org.chromium.components.search_engines.TemplateUrlService.TemplateUrlServiceObserver;
 import org.chromium.components.signin.identitymanager.IdentityManager;
+import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.url.GURL;
 
 import java.util.function.Consumer;
@@ -59,15 +71,22 @@ import java.util.function.Consumer;
 /** Tests for {@link SearchActivityPreferencesManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class SearchActivityPreferencesManagerTest {
-    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    private static final long FAKE_PREF_REGISTRAR = 1L;
+
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
+
     @Mock private TemplateUrlService mTemplateUrlServiceMock;
     @Mock private TemplateUrl mTemplateUrlMock;
     @Mock private Profile mProfile;
+    @Mock private PrefService mPrefs;
+    @Mock private PrefChangeRegistrar.Natives mPrefChangeRegistrarJni;
     @Mock private LensController mLensController;
     @Mock private IdentityManager mIdentityManager;
 
     private LoadListener mTemplateUrlServiceLoadListener;
     private TemplateUrlServiceObserver mTemplateUrlServiceObserver;
+    private SearchActivityPreferences mPreferences;
 
     @SuppressWarnings("unchecked") // mock() of generic Consumer type.
     private static Consumer<SearchActivityPreferences> mockPrefsConsumer() {
@@ -87,9 +106,26 @@ public class SearchActivityPreferencesManagerTest {
         LensController.setInstanceForTesting(mLensController);
         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlServiceMock);
         ProfileManager.setLastUsedProfileForTesting(mProfile);
+        UserPrefs.setPrefServiceForTesting(mPrefs);
+        PrefChangeRegistrarJni.setInstanceForTesting(mPrefChangeRegistrarJni);
+        lenient().doReturn(FAKE_PREF_REGISTRAR).when(mPrefChangeRegistrarJni).init(any(), any());
+        lenient().doReturn(true).when(mPrefs).getBoolean(Pref.AUDIO_CAPTURE_ALLOWED);
+        VoiceRecognitionUtil.setHasRecognitionIntentHandlerForTesting(true);
         IdentityServicesProvider.setIdentityManagerForTesting(mIdentityManager);
+        ComposeplateUtils.setIsEnabledForTesting(false);
 
-        doAnswer(
+        mPreferences =
+                new SearchActivityPreferences.Builder()
+                        .setAccountEmail("persisted@email.com")
+                        .setSearchEngineName("Search Engine")
+                        .setSearchEngineUrl(new GURL("https://URL"))
+                        .setVoiceSearchAvailable(false)
+                        .setGoogleLensAvailable(true)
+                        .setAiModeAvailable(true)
+                        .build();
+
+        lenient()
+                .doAnswer(
                         invocation -> {
                             mTemplateUrlServiceLoadListener =
                                     (LoadListener) invocation.getArguments()[0];
@@ -98,7 +134,8 @@ public class SearchActivityPreferencesManagerTest {
                 .when(mTemplateUrlServiceMock)
                 .registerLoadListener(any());
 
-        doAnswer(
+        lenient()
+                .doAnswer(
                         invocation -> {
                             mTemplateUrlServiceObserver =
                                     (TemplateUrlServiceObserver) invocation.getArguments()[0];
@@ -112,8 +149,8 @@ public class SearchActivityPreferencesManagerTest {
         SearchActivityPreferencesManager.resetCachedValues();
 
         // Make sure there were no premature attempts to register observers.
-        Assert.assertNull(mTemplateUrlServiceLoadListener);
-        Assert.assertNull(mTemplateUrlServiceObserver);
+        assertNull(mTemplateUrlServiceLoadListener);
+        assertNull(mTemplateUrlServiceObserver);
 
         // Purge any pending propagate actions to ensure no side effets later in the tests.
         // Needed because `resetCachedValues()` will likely post a task to notify listeners.
@@ -126,109 +163,6 @@ public class SearchActivityPreferencesManagerTest {
         TemplateUrlServiceFactory.setInstanceForTesting(null);
         ProfileManager.setLastUsedProfileForTesting(null);
         SearchActivityPreferencesManager.resetForTesting();
-    }
-
-    @Test
-    public void preferenceTest_equalWithSameContent() {
-        SearchActivityPreferences p1 =
-                new SearchActivityPreferences(
-                        "email@a.b", "test", new GURL("https://test.url"), true, true, true);
-        SearchActivityPreferences p2 =
-                new SearchActivityPreferences(
-                        "email@a.b", "test", new GURL("https://test.url"), true, true, true);
-        Assert.assertEquals(p1, p2);
-        Assert.assertEquals(p1.hashCode(), p2.hashCode());
-
-        p1 =
-                new SearchActivityPreferences(
-                        null, null, new GURL("https://test.url"), true, false, true);
-        p2 =
-                new SearchActivityPreferences(
-                        null, null, new GURL("https://test.url"), true, false, true);
-        Assert.assertEquals(p1, p2);
-        Assert.assertEquals(p1.hashCode(), p2.hashCode());
-
-        p1 = new SearchActivityPreferences(null, "test", null, false, true, true);
-        p2 = new SearchActivityPreferences(null, "test", null, false, true, true);
-        Assert.assertEquals(p1, p2);
-        Assert.assertEquals(p1.hashCode(), p2.hashCode());
-
-        p1 = new SearchActivityPreferences(null, null, null, false, false, false);
-        p2 = new SearchActivityPreferences(null, null, null, false, false, false);
-        Assert.assertEquals(p1, p2);
-        Assert.assertEquals(p1.hashCode(), p2.hashCode());
-    }
-
-    @Test
-    public void preferenceTest_notEqualWithDifferentVoiceAvailability() {
-        SearchActivityPreferences p1 =
-                new SearchActivityPreferences(
-                        null, "test", new GURL("https://test.url"), true, false, false);
-        SearchActivityPreferences p2 =
-                new SearchActivityPreferences(
-                        null, "test", new GURL("https://test.url"), false, false, false);
-        Assert.assertNotEquals(p1, p2);
-        Assert.assertNotEquals(p1.hashCode(), p2.hashCode());
-    }
-
-    @Test
-    public void preferenceTest_notEqualWithDifferentLensAvailability() {
-        SearchActivityPreferences p1 =
-                new SearchActivityPreferences(
-                        null, "test", new GURL("https://test.url"), true, true, false);
-        SearchActivityPreferences p2 =
-                new SearchActivityPreferences(
-                        null, "test", new GURL("https://test.url"), true, false, false);
-        Assert.assertNotEquals(p1, p2);
-        Assert.assertNotEquals(p1.hashCode(), p2.hashCode());
-    }
-
-    @Test
-    public void preferenceTest_notEqualWithDifferentIncognitoAvailability() {
-        SearchActivityPreferences p1 =
-                new SearchActivityPreferences(
-                        null, "test", new GURL("https://test.url"), true, true, true);
-        SearchActivityPreferences p2 =
-                new SearchActivityPreferences(
-                        null, "test", new GURL("https://test.url"), true, true, false);
-        Assert.assertNotEquals(p1, p2);
-        Assert.assertNotEquals(p1.hashCode(), p2.hashCode());
-    }
-
-    @Test
-    public void preferenceTest_notEqualWithDifferentSearchEngineName() {
-        SearchActivityPreferences p1 =
-                new SearchActivityPreferences(
-                        null, "Search Engine 1", new GURL("https://test.url"), true, true, true);
-        SearchActivityPreferences p2 =
-                new SearchActivityPreferences(
-                        null, "Search Engine 2", new GURL("https://test.url"), true, true, true);
-        Assert.assertNotEquals(p1, p2);
-        Assert.assertNotEquals(p1.hashCode(), p2.hashCode());
-    }
-
-    @Test
-    public void preferenceTest_notEqualWithDifferentSearchEngineUrl() {
-        SearchActivityPreferences p1 =
-                new SearchActivityPreferences(
-                        null, "Google", new GURL("https://www.google.com"), true, true, true);
-        SearchActivityPreferences p2 =
-                new SearchActivityPreferences(
-                        null, "Google", new GURL("https://www.google.pl"), true, true, true);
-        Assert.assertNotEquals(p1, p2);
-        Assert.assertNotEquals(p1.hashCode(), p2.hashCode());
-    }
-
-    @Test
-    public void preferenceTest_notEqualWithDifferentEmail() {
-        SearchActivityPreferences p1 =
-                new SearchActivityPreferences(
-                        "a@b.com", "Google", new GURL("https://www.google.com"), true, true, true);
-        SearchActivityPreferences p2 =
-                new SearchActivityPreferences(
-                        "c@d.com", "Google", new GURL("https://www.google.com"), true, true, true);
-        Assert.assertNotEquals(p1, p2);
-        Assert.assertNotEquals(p1.hashCode(), p2.hashCode());
     }
 
     @Test
@@ -245,30 +179,26 @@ public class SearchActivityPreferencesManagerTest {
         clearPrefsConsumerInvocations(observer1, observer2);
 
         // Perform an update and check the number of calls.
-        var newSettings =
-                new SearchActivityPreferences(
-                        null, "Search Engine", new GURL("https://URL"), false, true, true);
-        SearchActivityPreferencesManager.setCurrentlyLoadedPreferences(newSettings, false);
+        SearchActivityPreferencesManager.setCurrentlyLoadedPreferences(mPreferences, false);
         RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
-        verify(observer1).accept(eq(newSettings));
-        verify(observer2).accept(eq(newSettings));
+        verify(observer1).accept(eq(mPreferences));
+        verify(observer2).accept(eq(mPreferences));
         clearPrefsConsumerInvocations(observer1, observer2);
 
         // Add a new listener.
         Consumer<SearchActivityPreferences> observer3 = mockPrefsConsumer();
         SearchActivityPreferencesManager.addObserver(observer3);
-        verify(observer3).accept(eq(newSettings));
+        verify(observer3).accept(eq(mPreferences));
         clearPrefsConsumerInvocations(observer1, observer2, observer3);
 
         // Perform an update and check the number of calls.
-        newSettings =
-                new SearchActivityPreferences(
-                        null, "Search Engine", new GURL("https://URL"), true, true, true);
-        SearchActivityPreferencesManager.setCurrentlyLoadedPreferences(newSettings, false);
+        SearchActivityPreferences newPreferences =
+                mPreferences.toBuilder().setVoiceSearchAvailable(true).build();
+        SearchActivityPreferencesManager.setCurrentlyLoadedPreferences(newPreferences, false);
         RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
-        verify(observer1).accept(eq(newSettings));
-        verify(observer2).accept(eq(newSettings));
-        verify(observer3).accept(eq(newSettings));
+        verify(observer1).accept(eq(newPreferences));
+        verify(observer2).accept(eq(newPreferences));
+        verify(observer3).accept(eq(newPreferences));
         clearPrefsConsumerInvocations(observer1, observer2, observer3);
 
         // Finally, reset settings to safe defaults. All listeners should be notified.
@@ -304,10 +234,7 @@ public class SearchActivityPreferencesManagerTest {
         verify(listener2, never()).accept(any());
 
         // Verify that we don't get excessive update notifications.
-        SearchActivityPreferencesManager.setCurrentlyLoadedPreferences(
-                new SearchActivityPreferences(
-                        null, "ABC", new GURL("https://abc.xyz"), false, true, true),
-                false);
+        SearchActivityPreferencesManager.setCurrentlyLoadedPreferences(mPreferences, false);
         verify(listener1, never()).accept(any());
         verify(listener2, never()).accept(any());
         RobolectricUtil.runAllBackgroundAndUi();
@@ -329,12 +256,13 @@ public class SearchActivityPreferencesManagerTest {
         final SharedPreferencesManager manager = ChromeSharedPreferences.getInstance();
 
         // Make sure we don't have anything on disk.
-        Assert.assertFalse(manager.contains(SEARCH_WIDGET_SEARCH_ENGINE_SHORTNAME));
-        Assert.assertFalse(manager.contains(SEARCH_WIDGET_SEARCH_ENGINE_URL));
-        Assert.assertFalse(manager.contains(SEARCH_WIDGET_IS_VOICE_SEARCH_AVAILABLE));
-        Assert.assertFalse(manager.contains(SEARCH_WIDGET_IS_GOOGLE_LENS_AVAILABLE));
-        Assert.assertFalse(manager.contains(SEARCH_WIDGET_IS_INCOGNITO_AVAILABLE));
-        Assert.assertFalse(manager.contains(SEARCH_WIDGET_ACCOUNT_EMAIL));
+        assertFalse(manager.contains(SEARCH_WIDGET_SEARCH_ENGINE_SHORTNAME));
+        assertFalse(manager.contains(SEARCH_WIDGET_SEARCH_ENGINE_URL));
+        assertFalse(manager.contains(SEARCH_WIDGET_IS_VOICE_SEARCH_AVAILABLE));
+        assertFalse(manager.contains(SEARCH_WIDGET_IS_GOOGLE_LENS_AVAILABLE));
+        assertFalse(manager.contains(SEARCH_WIDGET_IS_INCOGNITO_AVAILABLE));
+        assertFalse(manager.contains(SEARCH_WIDGET_IS_AI_MODE_AVAILABLE));
+        assertFalse(manager.contains(SEARCH_WIDGET_ACCOUNT_EMAIL));
 
         // Install receiver of the async pref update notification.
         // We expect the on-disk prefs to be already updated when this call is made.
@@ -343,42 +271,37 @@ public class SearchActivityPreferencesManagerTest {
         clearPrefsConsumerInvocations(listener);
 
         // Save settings to disk.
-        var persistedUrl = new GURL("https://URL");
-        var preference =
-                new SearchActivityPreferences(
-                        "persisted@email.com", "Search Engine", persistedUrl, false, true, true);
-        SearchActivityPreferencesManager.setCurrentlyLoadedPreferences(preference, true);
+        SearchActivityPreferencesManager.setCurrentlyLoadedPreferences(mPreferences, true);
         // Should not be live right away - expect posted task.
         verify(listener, never()).accept(any());
         RobolectricUtil.runAllBackgroundAndUi();
-        verify(listener).accept(eq(preference));
+        verify(listener).accept(eq(mPreferences));
 
         // Note: we provide different default values than stored ones to make sure everything works.
-        Assert.assertEquals(
+        assertEquals(
                 "Search Engine",
                 manager.readString(
                         SEARCH_WIDGET_SEARCH_ENGINE_SHORTNAME, "Engine Name Doesn't work"));
 
         GURL deserializedUrl =
                 GURL.deserialize(manager.readString(SEARCH_WIDGET_SEARCH_ENGINE_URL, ""));
-        Assert.assertEquals(persistedUrl, deserializedUrl);
-        Assert.assertEquals(
-                false, manager.readBoolean(SEARCH_WIDGET_IS_VOICE_SEARCH_AVAILABLE, true));
-        Assert.assertEquals(
-                true, manager.readBoolean(SEARCH_WIDGET_IS_GOOGLE_LENS_AVAILABLE, false));
-        Assert.assertEquals(true, manager.readBoolean(SEARCH_WIDGET_IS_INCOGNITO_AVAILABLE, false));
-        Assert.assertEquals(
-                "persisted@email.com", manager.readString(SEARCH_WIDGET_ACCOUNT_EMAIL, null));
+        assertEquals(mPreferences.searchEngineUrl, deserializedUrl);
+        assertEquals(false, manager.readBoolean(SEARCH_WIDGET_IS_VOICE_SEARCH_AVAILABLE, true));
+        assertEquals(true, manager.readBoolean(SEARCH_WIDGET_IS_GOOGLE_LENS_AVAILABLE, false));
+        assertEquals(true, manager.readBoolean(SEARCH_WIDGET_IS_INCOGNITO_AVAILABLE, false));
+        assertEquals(true, manager.readBoolean(SEARCH_WIDGET_IS_AI_MODE_AVAILABLE, false));
+        assertEquals("persisted@email.com", manager.readString(SEARCH_WIDGET_ACCOUNT_EMAIL, null));
 
         // Reset values to defaults / "clear application data". Make sure we don't have anything on
         // disk.
         SearchActivityPreferencesManager.resetCachedValues();
-        Assert.assertFalse(manager.contains(SEARCH_WIDGET_SEARCH_ENGINE_SHORTNAME));
-        Assert.assertFalse(manager.contains(SEARCH_WIDGET_SEARCH_ENGINE_URL));
-        Assert.assertFalse(manager.contains(SEARCH_WIDGET_IS_VOICE_SEARCH_AVAILABLE));
-        Assert.assertFalse(manager.contains(SEARCH_WIDGET_IS_GOOGLE_LENS_AVAILABLE));
-        Assert.assertFalse(manager.contains(SEARCH_WIDGET_IS_INCOGNITO_AVAILABLE));
-        Assert.assertFalse(manager.contains(SEARCH_WIDGET_ACCOUNT_EMAIL));
+        assertFalse(manager.contains(SEARCH_WIDGET_SEARCH_ENGINE_SHORTNAME));
+        assertFalse(manager.contains(SEARCH_WIDGET_SEARCH_ENGINE_URL));
+        assertFalse(manager.contains(SEARCH_WIDGET_IS_VOICE_SEARCH_AVAILABLE));
+        assertFalse(manager.contains(SEARCH_WIDGET_IS_GOOGLE_LENS_AVAILABLE));
+        assertFalse(manager.contains(SEARCH_WIDGET_IS_INCOGNITO_AVAILABLE));
+        assertFalse(manager.contains(SEARCH_WIDGET_IS_AI_MODE_AVAILABLE));
+        assertFalse(manager.contains(SEARCH_WIDGET_ACCOUNT_EMAIL));
     }
 
     @Test
@@ -393,21 +316,20 @@ public class SearchActivityPreferencesManagerTest {
         SearchActivityPreferencesManager.onNativeLibraryReady();
         verify(mTemplateUrlServiceMock, times(1)).registerLoadListener(any());
         verify(mTemplateUrlServiceMock, times(1)).addObserver(any());
-        Assert.assertNotNull(mTemplateUrlServiceLoadListener);
-        Assert.assertNotNull(mTemplateUrlServiceObserver);
+        assertNotNull(mTemplateUrlServiceLoadListener);
+        assertNotNull(mTemplateUrlServiceObserver);
         reset(mTemplateUrlServiceMock);
 
         // Confirm no crash if we don't have no DSE at the time of first call.
         // Confirm that we deregister load observer since it should no longer be needed.
-        doReturn(true).when(mTemplateUrlServiceMock).isLoaded();
         mTemplateUrlServiceLoadListener.onTemplateUrlServiceLoaded();
         verify(mTemplateUrlServiceMock, times(1)).getDefaultSearchEngineTemplateUrl();
         verify(mTemplateUrlServiceMock, times(1))
                 .unregisterLoadListener(eq(mTemplateUrlServiceLoadListener));
 
         // Confirm no data and no updates.
-        Assert.assertNull(SearchActivityPreferencesManager.getCurrent().searchEngineName);
-        Assert.assertTrue(SearchActivityPreferencesManager.getCurrent().searchEngineUrl.isEmpty());
+        assertNull(SearchActivityPreferencesManager.getCurrent().searchEngineName);
+        assertTrue(SearchActivityPreferencesManager.getCurrent().searchEngineUrl.isEmpty());
         RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(listener, never()).accept(any());
     }
@@ -437,18 +359,13 @@ public class SearchActivityPreferencesManagerTest {
 
         // Simulate the event where we had everything readily available when TemplateUrlService is
         // loaded.
-        doReturn(true).when(mTemplateUrlServiceMock).isLoaded();
-        doReturn(mTemplateUrlMock)
-                .when(mTemplateUrlServiceMock)
-                .getDefaultSearchEngineTemplateUrl();
         mTemplateUrlServiceLoadListener.onTemplateUrlServiceLoaded();
 
         // Confirm data is available and update is pushed.
         RobolectricUtil.runAllBackgroundAndUi();
         verify(listener).accept(refPrefs.capture());
-        Assert.assertEquals("Cowabunga", refPrefs.getValue().searchEngineName);
-        Assert.assertEquals(
-                "https://www.cowabunga.com/", refPrefs.getValue().searchEngineUrl.getSpec());
+        assertEquals("Cowabunga", refPrefs.getValue().searchEngineName);
+        assertEquals("https://www.cowabunga.com/", refPrefs.getValue().searchEngineUrl.getSpec());
     }
 
     @Test
@@ -462,8 +379,8 @@ public class SearchActivityPreferencesManagerTest {
         SearchActivityPreferencesManager.resetForTesting();
         SearchActivityPreferences data = SearchActivityPreferencesManager.getCurrent();
 
-        Assert.assertEquals("Engine", data.searchEngineName);
-        Assert.assertEquals("https://engine.com/", data.searchEngineUrl.getSpec());
+        assertEquals("Engine", data.searchEngineName);
+        assertEquals("https://engine.com/", data.searchEngineUrl.getSpec());
     }
 
     @Test
@@ -478,8 +395,8 @@ public class SearchActivityPreferencesManagerTest {
         SearchActivityPreferencesManager.resetForTesting();
         SearchActivityPreferences data = SearchActivityPreferencesManager.getCurrent();
 
-        Assert.assertEquals("Engine", data.searchEngineName);
-        Assert.assertEquals("https://engine.com/", data.searchEngineUrl.getSpec());
+        assertEquals("Engine", data.searchEngineName);
+        assertEquals("https://engine.com/", data.searchEngineUrl.getSpec());
     }
 
     @Test
@@ -487,44 +404,60 @@ public class SearchActivityPreferencesManagerTest {
         doReturn(true).when(mLensController).isLensEnabled(any());
         VoiceRecognitionUtil.setIsVoiceSearchEnabledForTesting(true);
         IncognitoUtils.setEnabledForTesting(true);
+        ComposeplateUtils.setIsEnabledForTesting(true);
 
         SearchActivityPreferencesManager.updateFeatureAvailability(
                 ContextUtils.getApplicationContext(), null);
         var data = SearchActivityPreferencesManager.getCurrent();
-        Assert.assertTrue(data.googleLensAvailable);
-        Assert.assertTrue(data.voiceSearchAvailable);
-        Assert.assertTrue(data.incognitoAvailable);
-        Assert.assertNull(data.accountEmail);
+        assertTrue(data.googleLensAvailable);
+        assertTrue(data.voiceSearchAvailable);
+        assertTrue(data.incognitoAvailable);
+        assertTrue(data.aiModeAvailable);
+        assertNull(data.accountEmail);
 
         // Disable Lens.
         doReturn(false).when(mLensController).isLensEnabled(any());
         SearchActivityPreferencesManager.updateFeatureAvailability(
                 ContextUtils.getApplicationContext(), null);
         data = SearchActivityPreferencesManager.getCurrent();
-        Assert.assertFalse(data.googleLensAvailable);
-        Assert.assertTrue(data.voiceSearchAvailable);
-        Assert.assertTrue(data.incognitoAvailable);
-        Assert.assertNull(data.accountEmail);
+        assertFalse(data.googleLensAvailable);
+        assertTrue(data.voiceSearchAvailable);
+        assertTrue(data.incognitoAvailable);
+        assertTrue(data.aiModeAvailable);
+        assertNull(data.accountEmail);
 
         // Disable Voice.
         VoiceRecognitionUtil.setIsVoiceSearchEnabledForTesting(false);
         SearchActivityPreferencesManager.updateFeatureAvailability(
                 ContextUtils.getApplicationContext(), null);
         data = SearchActivityPreferencesManager.getCurrent();
-        Assert.assertFalse(data.googleLensAvailable);
-        Assert.assertFalse(data.voiceSearchAvailable);
-        Assert.assertTrue(data.incognitoAvailable);
-        Assert.assertNull(data.accountEmail);
+        assertFalse(data.googleLensAvailable);
+        assertFalse(data.voiceSearchAvailable);
+        assertTrue(data.incognitoAvailable);
+        assertTrue(data.aiModeAvailable);
+        assertNull(data.accountEmail);
 
         // Disable Incognito.
         IncognitoUtils.setEnabledForTesting(false);
         SearchActivityPreferencesManager.updateFeatureAvailability(
                 ContextUtils.getApplicationContext(), null);
         data = SearchActivityPreferencesManager.getCurrent();
-        Assert.assertFalse(data.googleLensAvailable);
-        Assert.assertFalse(data.voiceSearchAvailable);
-        Assert.assertFalse(data.incognitoAvailable);
-        Assert.assertNull(data.accountEmail);
+        assertFalse(data.googleLensAvailable);
+        assertFalse(data.voiceSearchAvailable);
+        assertFalse(data.incognitoAvailable);
+        assertTrue(data.aiModeAvailable);
+        assertNull(data.accountEmail);
+
+        // Disable AI Mode.
+        ComposeplateUtils.setIsEnabledForTesting(false);
+        SearchActivityPreferencesManager.updateFeatureAvailability(
+                ContextUtils.getApplicationContext(), null);
+        data = SearchActivityPreferencesManager.getCurrent();
+        assertFalse(data.googleLensAvailable);
+        assertFalse(data.voiceSearchAvailable);
+        assertFalse(data.incognitoAvailable);
+        assertFalse(data.aiModeAvailable);
+        assertNull(data.accountEmail);
     }
 
     @Test
@@ -543,9 +476,48 @@ public class SearchActivityPreferencesManagerTest {
         SearchActivityPreferencesManager.get().onTemplateURLServiceChanged();
 
         var newData = SearchActivityPreferencesManager.getCurrent();
-        Assert.assertNotEquals(oldData, newData);
-        Assert.assertEquals("Engine", newData.searchEngineName);
+        assertNotEquals(oldData, newData);
+        assertEquals("Engine", newData.searchEngineName);
         // We only expect origin: no path, no query.
-        Assert.assertEquals("https://www.engine.com/", newData.searchEngineUrl.getSpec());
+        assertEquals("https://www.engine.com/", newData.searchEngineUrl.getSpec());
+    }
+
+    @Test
+    public void onNativeLibraryReady_propagatesAudioCapturePolicy() {
+        Consumer<SearchActivityPreferences> listener = mockPrefsConsumer();
+        SearchActivityPreferencesManager.addObserver(listener);
+        clearPrefsConsumerInvocations(listener);
+
+        doReturn(false).when(mPrefs).getBoolean(Pref.AUDIO_CAPTURE_ALLOWED);
+        SearchActivityPreferencesManager.onNativeLibraryReady();
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        assertFalse(SearchActivityPreferencesManager.getCurrent().voiceSearchAvailable);
+        verify(listener).accept(any());
+    }
+
+    @Test
+    public void onVoiceSearchAvailabilityChanged_updatesOnPolicyChange() {
+        Consumer<SearchActivityPreferences> listener = mockPrefsConsumer();
+        SearchActivityPreferencesManager.addObserver(listener);
+        SearchActivityPreferencesManager.onNativeLibraryReady();
+        RobolectricUtil.runAllBackgroundAndUi();
+        clearPrefsConsumerInvocations(listener);
+        assertTrue(SearchActivityPreferencesManager.getCurrent().voiceSearchAvailable);
+
+        // Policy changes from allowed to disallowed.
+        doReturn(false).when(mPrefs).getBoolean(Pref.AUDIO_CAPTURE_ALLOWED);
+        SearchActivityPreferencesManager.get().onVoiceSearchAvailabilityChanged();
+        RobolectricUtil.runAllBackgroundAndUi();
+        assertFalse(SearchActivityPreferencesManager.getCurrent().voiceSearchAvailable);
+        verify(listener).accept(any());
+        clearPrefsConsumerInvocations(listener);
+
+        // Policy changes from disallowed back to allowed.
+        doReturn(true).when(mPrefs).getBoolean(Pref.AUDIO_CAPTURE_ALLOWED);
+        SearchActivityPreferencesManager.get().onVoiceSearchAvailabilityChanged();
+        RobolectricUtil.runAllBackgroundAndUi();
+        assertTrue(SearchActivityPreferencesManager.getCurrent().voiceSearchAvailable);
+        verify(listener).accept(any());
     }
 }

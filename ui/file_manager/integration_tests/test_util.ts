@@ -47,7 +47,7 @@ export function wait(time: number): Promise<void> {
 }
 
 /** Interval milliseconds between checks of repeatUntil. */
-export const REPEAT_UNTIL_INTERVAL = 200;
+export const REPEAT_UNTIL_INTERVAL = 20;
 
 /** Interval milliseconds between log output of repeatUntil. */
 export const LOG_INTERVAL = 3000;
@@ -1570,15 +1570,6 @@ export const ENTRIES = {
     nameText: 'hello.crdownload',
     sizeText: '51 bytes',
     typeText: 'CRDOWNLOAD file',
-  }),
-
-  pluginVm: new TestEntryInfo({
-    type: EntryType.DIRECTORY,
-    targetPath: 'PvmDefault',
-    lastModifiedTime: 'Jan 1, 1980, 11:59 PM',
-    nameText: 'Windows Files',
-    sizeText: '--',
-    typeText: 'Folder',
   }),
 
   invalidLastModifiedDate: new TestEntryInfo({

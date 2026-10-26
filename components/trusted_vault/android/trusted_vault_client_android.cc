@@ -10,7 +10,6 @@
 #include "base/android/jni_android.h"
 #include "base/check_op.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/notreached.h"
 #include "components/sync/service/sync_service_utils.h"
 #include "content/public/browser/browser_thread.h"
 #include "google_apis/gaia/gaia_id.h"
@@ -50,7 +49,7 @@ TrustedVaultClientAndroid::OngoingGetIsRecoverabilityDegraded::
     ~OngoingGetIsRecoverabilityDegraded() = default;
 
 TrustedVaultClientAndroid::OngoingAddTrustedRecoveryMethod::
-    OngoingAddTrustedRecoveryMethod(base::OnceClosure callback)
+    OngoingAddTrustedRecoveryMethod(base::OnceCallback<void(bool)> callback)
     : callback(std::move(callback)) {}
 
 TrustedVaultClientAndroid::OngoingAddTrustedRecoveryMethod::
@@ -61,16 +60,21 @@ TrustedVaultClientAndroid::OngoingAddTrustedRecoveryMethod::
     ~OngoingAddTrustedRecoveryMethod() = default;
 
 TrustedVaultClientAndroid::TrustedVaultClientAndroid(
+    trusted_vault::SecurityDomainId security_domain_id,
     const GetAccountInfoByGaiaIdCallback& gaia_account_info_by_gaia_id_cb)
-    : gaia_account_info_by_gaia_id_cb_(gaia_account_info_by_gaia_id_cb) {
+    : security_domain_id_(security_domain_id),
+      gaia_account_info_by_gaia_id_cb_(gaia_account_info_by_gaia_id_cb) {
   JNIEnv* const env = base::android::AttachCurrentThread();
-  Java_TrustedVaultClient_registerNative(env, reinterpret_cast<intptr_t>(this));
+  Java_TrustedVaultClient_registerNative(
+      env, reinterpret_cast<intptr_t>(this),
+      static_cast<int32_t>(security_domain_id_));
 }
 
 TrustedVaultClientAndroid::~TrustedVaultClientAndroid() {
   JNIEnv* const env = base::android::AttachCurrentThread();
-  Java_TrustedVaultClient_unregisterNative(env,
-                                           reinterpret_cast<intptr_t>(this));
+  Java_TrustedVaultClient_unregisterNative(
+      env, reinterpret_cast<intptr_t>(this),
+      static_cast<int32_t>(security_domain_id_));
 }
 
 void TrustedVaultClientAndroid::FetchKeysCompleted(
@@ -119,13 +123,14 @@ void TrustedVaultClientAndroid::GetIsRecoverabilityDegradedCompleted(
 
 void TrustedVaultClientAndroid::AddTrustedRecoveryMethodCompleted(
     JNIEnv* env,
-    int32_t request_id) {
+    int32_t request_id,
+    bool succeeded) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   OngoingRequest ongoing_request = GetAndUnregisterOngoingRequest(request_id);
 
   std::move(std::get<OngoingAddTrustedRecoveryMethod>(ongoing_request).callback)
-      .Run();
+      .Run(!!succeeded);
 }
 
 void TrustedVaultClientAndroid::NotifyKeysChanged(
@@ -166,9 +171,9 @@ void TrustedVaultClientAndroid::FetchKeys(
 
   // Trigger the fetching keys from the implementation in Java, which will
   // eventually call FetchKeysCompleted().
-  Java_TrustedVaultClient_fetchKeys(base::android::AttachCurrentThread(),
-                                    reinterpret_cast<intptr_t>(this),
-                                    request_id, account_info);
+  Java_TrustedVaultClient_fetchKeys(
+      base::android::AttachCurrentThread(), reinterpret_cast<intptr_t>(this),
+      static_cast<int32_t>(security_domain_id_), request_id, account_info);
 }
 
 void TrustedVaultClientAndroid::StoreKeys(
@@ -176,8 +181,13 @@ void TrustedVaultClientAndroid::StoreKeys(
     const std::vector<std::vector<uint8_t>>& keys,
     int last_key_version,
     std::optional<trusted_vault::TrustedVaultUserActionTriggerForUMA> trigger) {
-  // Not supported on Android, where keys are fetched outside the browser.
-  NOTREACHED();
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  JNIEnv* const env = base::android::AttachCurrentThread();
+  const base::android::ScopedJavaLocalRef<jobjectArray> java_keys =
+      base::android::ToJavaArrayOfByteArray(env, keys);
+  Java_TrustedVaultClient_storeKeys(env, reinterpret_cast<intptr_t>(this),
+                                    static_cast<int32_t>(security_domain_id_),
+                                    gaia_id, java_keys, last_key_version);
 }
 
 void TrustedVaultClientAndroid::MarkLocalKeysAsStale(
@@ -195,7 +205,7 @@ void TrustedVaultClientAndroid::MarkLocalKeysAsStale(
   // MarkLocalKeysAsStaleCompleted().
   Java_TrustedVaultClient_markLocalKeysAsStale(
       base::android::AttachCurrentThread(), reinterpret_cast<intptr_t>(this),
-      request_id, account_info);
+      static_cast<int32_t>(security_domain_id_), request_id, account_info);
 }
 
 void TrustedVaultClientAndroid::GetIsRecoverabilityDegraded(
@@ -213,26 +223,30 @@ void TrustedVaultClientAndroid::GetIsRecoverabilityDegraded(
   // MarkLocalKeysAsStaleCompleted().
   Java_TrustedVaultClient_getIsRecoverabilityDegraded(
       base::android::AttachCurrentThread(), reinterpret_cast<intptr_t>(this),
-      request_id, account_info);
+      static_cast<int32_t>(security_domain_id_), request_id, account_info);
 }
 
 void TrustedVaultClientAndroid::AddTrustedRecoveryMethod(
     const GaiaId& gaia_id,
     const std::vector<uint8_t>& public_key,
     int method_type_hint,
-    base::OnceClosure cb) {
+    base::OnceCallback<void(bool)> cb) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(cb);
 
   const CoreAccountInfo account_info =
       gaia_account_info_by_gaia_id_cb_.Run(gaia_id);
 
-  base::UmaHistogramBoolean(
-      "Sync.TrustedVaultJavascriptAddRecoveryMethodUserKnown",
-      account_info != CoreAccountInfo());
+  // TODO(crbug.com/540854648): Record the same metric for the passkeys security
+  // domain.
+  if (security_domain_id_ == trusted_vault::SecurityDomainId::kChromeSync) {
+    base::UmaHistogramBoolean(
+        "Sync.TrustedVaultJavascriptAddRecoveryMethodUserKnown",
+        account_info != CoreAccountInfo());
+  }
 
   if (account_info == CoreAccountInfo()) {
-    std::move(cb).Run();
+    std::move(cb).Run(false);
     return;
   }
 
@@ -248,7 +262,8 @@ void TrustedVaultClientAndroid::AddTrustedRecoveryMethod(
   // The Java implementation will eventually call
   // AddTrustedRecoveryMethodCompleted().
   Java_TrustedVaultClient_addTrustedRecoveryMethod(
-      env, reinterpret_cast<intptr_t>(this), request_id, account_info,
+      env, reinterpret_cast<intptr_t>(this),
+      static_cast<int32_t>(security_domain_id_), request_id, account_info,
       java_public_key, method_type_hint);
 }
 

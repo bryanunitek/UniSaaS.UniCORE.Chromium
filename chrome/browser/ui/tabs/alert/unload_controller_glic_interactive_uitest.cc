@@ -13,11 +13,13 @@
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/glic/test_support/interactive_glic_test.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/unload_controller.h"
 #include "chrome/common/chrome_features.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/views/test/dialog_test.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
@@ -37,6 +39,7 @@ views::Widget* GetActorDialogWidget(UnloadController* controller) {
 
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kActiveTabId);
 
+// TODO(crbug.com/537847367): Migrate this test suite to GlicBrowserTest.
 class UnloadControllerGlicInteractiveUiTest
     : public glic::test::InteractiveGlicTest {
  public:
@@ -87,7 +90,7 @@ IN_PROC_BROWSER_TEST_F(UnloadControllerGlicInteractiveUiTest,
       Do([&]() {
         content::WebContents* web_contents =
             browser()->tab_strip_model()->GetWebContentsAt(0);
-        static_cast<content::WebContentsDelegate*>(browser())->CloseContents(
+        BrowserWebContentsDelegate::From(browser())->CloseContents(
             web_contents);
       }),
       InAnyContext(WaitForShow(actor::ActorTaskTabCloseConfirmDialog::kViewId)),
@@ -114,7 +117,7 @@ IN_PROC_BROWSER_TEST_F(UnloadControllerGlicInteractiveUiTest, EndToEndLogTest) {
         // This simulates closing the active tab via CloseContents.
         content::WebContents* web_contents =
             browser()->tab_strip_model()->GetWebContentsAt(0);
-        static_cast<content::WebContentsDelegate*>(browser())->CloseContents(
+        BrowserWebContentsDelegate::From(browser())->CloseContents(
             web_contents);
       }),
       InAnyContext(WaitForShow(actor::ActorTaskTabCloseConfirmDialog::kViewId)),

@@ -31,10 +31,12 @@ constexpr char kIdleDisconnectReason[] = "Disconnected due to idle timeout.";
 
 // The amount of time a session can remain inactive before the model unloads.
 const base::FeatureParam<base::TimeDelta> kModelIdleTimeout{
-    &optimization_guide::features::kOptimizationGuideOnDeviceModel,
+    &optimization_guide::features::kOptimizationGuideModelExecution,
     "on_device_model_active_session_idle_timeout", kDefaultModelIdleTimeout};
 
 constexpr base::TimeDelta kAsrIdleTimerUpdateInterval = base::Seconds(10);
+
+}  // namespace
 
 class AsrStreamWrapper;
 
@@ -81,6 +83,8 @@ class SessionWrapper final : public mojom::Session {
   bool IsForeground() const {
     return priority_ == mojom::Priority::kForeground;
   }
+
+  void OnAsrStreamDisconnected();
 
  private:
   void AppendInternal(mojom::AppendOptionsPtr options,
@@ -146,11 +150,20 @@ class AsrStreamWrapper final : public mojom::AsrStreamInput {
  public:
   AsrStreamWrapper(base::WeakPtr<SessionWrapper> session,
                    mojo::PendingReceiver<mojom::AsrStreamInput> receiver)
-      : session_(session), receiver_(this, std::move(receiver)) {}
+      : session_(session), receiver_(this, std::move(receiver)) {
+    receiver_.set_disconnect_handler(base::BindOnce(
+        &AsrStreamWrapper::OnDisconnect, weak_ptr_factory_.GetWeakPtr()));
+  }
   ~AsrStreamWrapper() override = default;
 
   AsrStreamWrapper(const AsrStreamWrapper&) = delete;
   AsrStreamWrapper& operator=(const AsrStreamWrapper&) = delete;
+
+  void OnDisconnect() {
+    if (session_) {
+      session_->OnAsrStreamDisconnected();
+    }
+  }
 
   void AddAudioChunk(mojom::AudioDataPtr data) override {
     if (!session_) {
@@ -184,6 +197,10 @@ SessionWrapper::SessionWrapper(base::WeakPtr<OnDeviceModelMojomImpl> model,
       priority_(priority) {}
 
 SessionWrapper::~SessionWrapper() = default;
+
+void SessionWrapper::OnAsrStreamDisconnected() {
+  asr_session_.reset();
+}
 
 void SessionWrapper::Append(mojom::AppendOptionsPtr options,
                             mojo::PendingRemote<mojom::ContextClient> client) {
@@ -310,14 +327,12 @@ void SessionWrapper::AsrStreamInternal(
   if (!model_) {
     return;
   }
-  DCHECK_EQ(asr_session_, nullptr);
   auto speech_stream_wrapper = std::make_unique<AsrStreamWrapper>(
       weak_ptr_factory_.GetWeakPtr(), std::move(stream));
   asr_session_ = std::move(speech_stream_wrapper);
   session_->AsrStream(std::move(options), std::move(response));
+  std::move(on_complete).Run();
 }
-
-}  // namespace
 
 struct OnDeviceModelMojomImpl::PendingTask {
   base::WeakPtr<SessionWrapper> session;
@@ -325,13 +340,19 @@ struct OnDeviceModelMojomImpl::PendingTask {
   base::TimeTicks start = base::TimeTicks::Now();
 };
 
+OnDeviceModelMojomImpl::ReceiverContext::ReceiverContext() = default;
+OnDeviceModelMojomImpl::ReceiverContext::ReceiverContext(ReceiverContext&&) =
+    default;
+OnDeviceModelMojomImpl::ReceiverContext&
+OnDeviceModelMojomImpl::ReceiverContext::operator=(ReceiverContext&&) = default;
+OnDeviceModelMojomImpl::ReceiverContext::~ReceiverContext() = default;
+
 OnDeviceModelMojomImpl::OnDeviceModelMojomImpl(
     std::unique_ptr<BackendModel> model,
     mojo::PendingReceiver<mojom::OnDeviceModel> receiver,
     base::OnceCallback<void(base::WeakPtr<mojom::OnDeviceModel>)> on_delete)
     : model_(std::move(model)), on_delete_(std::move(on_delete)) {
-  receivers_.Add(this, std::move(receiver),
-                 std::unique_ptr<BackendModel::ScopedAdaptation>());
+  receivers_.Add(this, std::move(receiver), ReceiverContext());
   receivers_.set_disconnect_handler(
       base::BindRepeating(&OnDeviceModelMojomImpl::ModelDisconnected,
                           weak_ptr_factory_.GetWeakPtr()));
@@ -365,10 +386,12 @@ void OnDeviceModelMojomImpl::StartSession(
   if (idle_timer_) {
     RestartIdleTimer();
   }
-  AddSession(std::move(session),
-             model_->CreateSession(receivers_.current_context().get(),
-                                   std::move(params)),
-             mojom::Priority::kForeground);
+  const ReceiverContext& context = receivers_.current_context();
+  AddSession(
+      std::move(session),
+      model_->CreateSession(context.adaptation.get(),
+                            context.has_post_processor, std::move(params)),
+      mojom::Priority::kForeground);
 }
 
 void OnDeviceModelMojomImpl::ClassifyTextSafety(
@@ -393,6 +416,21 @@ void OnDeviceModelMojomImpl::LoadAdaptation(
                      std::move(model), std::move(callback));
   AddAndRunPendingTask(
       base::IgnoreArgs<base::OnceClosure>(std::move(load_adaptation)),
+      /*session=*/nullptr);
+}
+
+void OnDeviceModelMojomImpl::LoadPostProcessor(
+    mojom::LoadPostProcessorParamsPtr params,
+    mojo::PendingReceiver<mojom::OnDeviceModel> model,
+    LoadPostProcessorCallback callback) {
+  TRACE_EVENT("optimization_guide",
+              "OnDeviceModelMojomImpl::LoadPostProcessor");
+  auto load_post_processor =
+      base::BindOnce(&OnDeviceModelMojomImpl::LoadPostProcessorInternal,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(params),
+                     std::move(model), std::move(callback));
+  AddAndRunPendingTask(
+      base::IgnoreArgs<base::OnceClosure>(std::move(load_post_processor)),
       /*session=*/nullptr);
 }
 
@@ -441,9 +479,25 @@ void OnDeviceModelMojomImpl::LoadAdaptationInternal(
     LoadAdaptationCallback callback) {
   TRACE_EVENT("optimization_guide",
               "OnDeviceModelMojomImpl::LoadAdaptationInternal");
-  receivers_.Add(this, std::move(model),
-                 model_->LoadAdaptation(std::move(params)));
+  ReceiverContext context;
+  context.adaptation = model_->LoadAdaptation(std::move(params));
+  receivers_.Add(this, std::move(model), std::move(context));
   std::move(callback).Run(mojom::LoadModelResult::kSuccess);
+}
+
+void OnDeviceModelMojomImpl::LoadPostProcessorInternal(
+    mojom::LoadPostProcessorParamsPtr params,
+    mojo::PendingReceiver<mojom::OnDeviceModel> model,
+    LoadPostProcessorCallback callback) {
+  TRACE_EVENT("optimization_guide",
+              "OnDeviceModelMojomImpl::LoadPostProcessorInternal");
+  mojom::LoadModelResult result = model_->LoadPostProcessor(std::move(params));
+  if (result == mojom::LoadModelResult::kSuccess) {
+    ReceiverContext context;
+    context.has_post_processor = true;
+    receivers_.Add(this, std::move(model), std::move(context));
+  }
+  std::move(callback).Run(result);
 }
 
 void OnDeviceModelMojomImpl::RunTaskIfPossible() {

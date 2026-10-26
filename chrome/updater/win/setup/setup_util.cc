@@ -11,17 +11,15 @@
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
-#include <cstring>
 #include <optional>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/compiler_specific.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
@@ -434,7 +432,7 @@ void AddComServiceWorkItems(const base::FilePath& com_service_path,
                          language),
       GetLocalizedString(IDS_UPDATER_SERVICE_DESCRIPTION_BASE, language),
       SERVICE_AUTO_START, com_service_command, com_switch, UPDATER_KEY, clsids,
-      {}));
+      {}, {}));
 
   for (const auto& clsid : clsids) {
     AddInstallComProgIdWorkItems(UpdaterScope::kSystem, clsid, list);
@@ -449,7 +447,7 @@ void AddComServiceWorkItems(const base::FilePath& com_service_path,
 
 std::wstring GetProgIdForClsid(REFCLSID clsid) {
   auto clsid_comparator = [](REFCLSID a, REFCLSID b) {
-    return UNSAFE_TODO(std::memcmp(&a, &b, sizeof(a))) < 0;
+    return base::byte_span_from_ref(a) < base::byte_span_from_ref(b);
   };
 
   const base::flat_map<CLSID, std::wstring, decltype(clsid_comparator)>
@@ -521,8 +519,9 @@ HRESULT RegisterTypeLibs(UpdaterScope scope, bool is_internal) {
     std::wstring typelib_path_str = typelib_path.value().c_str();
     const HRESULT hr =
         IsSystemInstall(scope)
-            ? ::RegisterTypeLib(type_lib.Get(), &typelib_path_str[0], nullptr)
-            : ::RegisterTypeLibForUser(type_lib.Get(), &typelib_path_str[0],
+            ? ::RegisterTypeLib(type_lib.Get(), typelib_path_str.data(),
+                                nullptr)
+            : ::RegisterTypeLibForUser(type_lib.Get(), typelib_path_str.data(),
                                        nullptr);
     if (FAILED(hr)) {
       LOG(ERROR) << __func__ << " ::GetTypeInfoOfGuid failed" << ", "
@@ -723,7 +722,9 @@ void RegisterWakeTaskWorkItem::RollbackImpl() {
   if (!task_scheduler) {
     return;
   }
-  std::ignore = task_scheduler->DeleteTask(task_name_);
+  if (!task_scheduler->DeleteTask(task_name_)) {
+    VLOG(1) << "Rollback failed to delete task: " << task_name_;
+  }
 }
 
 }  // namespace updater

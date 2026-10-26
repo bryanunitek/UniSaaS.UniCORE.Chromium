@@ -15,6 +15,7 @@ import org.jni_zero.CalledByNative;
 import org.jni_zero.JniType;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.DeviceInfo;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
@@ -22,6 +23,7 @@ import org.chromium.chrome.browser.notifications.NotificationUmaTracker;
 import org.chromium.chrome.browser.notifications.NotificationUmaTracker.SystemNotificationType;
 import org.chromium.chrome.browser.notifications.NotificationWrapperBuilderFactory;
 import org.chromium.chrome.browser.notifications.channels.ChromeChannelDefinitions;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.components.browser_ui.notifications.BaseNotificationManagerProxyFactory;
 import org.chromium.components.browser_ui.notifications.NotificationMetadata;
 import org.chromium.components.browser_ui.notifications.NotificationWrapper;
@@ -47,11 +49,13 @@ public class WebApkInstallService {
     /** Displays a notification when a WebAPK is successfully installed. */
     @CalledByNative
     @VisibleForTesting
-    static void showInstalledNotification(
+    static void showInstalledNotificationAndMaybeLaunch(
+            @Nullable Tab originatingTab,
             @JniType("std::string") String webApkPackage,
             @JniType("std::string") String notificationId,
             @JniType("std::u16string") String shortName,
             @JniType("std::string") String url,
+            @JniType("std::string") String scope,
             Bitmap icon,
             boolean isIconMaskable) {
         Context context = ContextUtils.getApplicationContext();
@@ -62,6 +66,8 @@ public class WebApkInstallService {
         PendingIntentProvider clickPendingIntent =
                 PendingIntentProvider.getActivity(
                         context, /* requestCode= */ 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+
+        maybeLaunchWebApp(context, intent, originatingTab, webApkPackage, url, scope);
 
         if (isIconMaskable) {
             icon = WebappsIconUtils.generateAdaptiveIconBitmap(icon);
@@ -75,6 +81,32 @@ public class WebApkInstallService {
                 icon,
                 context.getString(R.string.notification_webapk_installed),
                 clickPendingIntent);
+    }
+
+    private static void maybeLaunchWebApp(
+            Context context,
+            Intent intent,
+            @Nullable Tab originatingTab,
+            String webApkPackage,
+            String url,
+            String scope) {
+        if (!DeviceInfo.isDesktop()) return;
+
+        try {
+            if (originatingTab != null && !originatingTab.isDestroyed()) {
+                WebApkReparentingHandler.getInstance()
+                        .prepareIntentForReparenting(
+                                intent, originatingTab, webApkPackage, url, scope);
+            }
+
+            // Auto-launch the installed WebAPK in its own standalone window on Desktop Android.
+            context.startActivity(intent);
+        } catch (Exception e) {
+            if (originatingTab != null) {
+                WebApkReparentingHandler.getInstance().clear();
+            }
+            org.chromium.base.Log.e("WebApkInstallService", "Failed to launch installed WebAPK", e);
+        }
     }
 
     /** Display a notification when an install starts. */

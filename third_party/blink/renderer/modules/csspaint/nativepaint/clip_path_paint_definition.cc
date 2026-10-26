@@ -193,28 +193,27 @@ class ClipPathPaintWorkletInput : public PaintWorkletInput {
   SkScalar dx_, dy_;
 };
 
-BasicShape* CreateBasicShape(
-    BasicShape::ShapeType type,
+const BasicShape* CreateBasicShape(
     const InterpolableValue& interpolable_value,
     const NonInterpolableValue& untyped_non_interpolable_value,
-    const Element* element) {
-  if (type == BasicShape::kStylePathType) {
+    const StyleResolverState& state) {
+  if (PathInterpolationFunctions::IsPathNonInterpolableValue(
+          untyped_non_interpolable_value)) {
     return PathInterpolationFunctions::AppliedValue(
-        interpolable_value, untyped_non_interpolable_value);
-  }
-
-  DCHECK(element);
-  DCHECK(element->GetLayoutObject());
-  CSSToLengthConversionData conversion_data(element);
-  conversion_data.SetZoom(
-      element->GetLayoutObject()->StyleRef().EffectiveZoom());
-  if (type == BasicShape::kStyleShapeType) {
+               interpolable_value, untyped_non_interpolable_value)
+        .shape;
+  } else if (CSSShapeInterpolationType::IsShapeNonInterpolableValue(
+                 &untyped_non_interpolable_value)) {
     return CSSShapeInterpolationType::CreateShape(
-        interpolable_value, untyped_non_interpolable_value, conversion_data);
+               interpolable_value, untyped_non_interpolable_value,
+               state.CssToLengthConversionData())
+        .shape;
+  } else {
+    return basic_shape_interpolation_functions::CreateBasicShape(
+               interpolable_value, untyped_non_interpolable_value,
+               state.CssToLengthConversionData())
+        .shape;
   }
-
-  return basic_shape_interpolation_functions::CreateBasicShape(
-      interpolable_value, untyped_non_interpolable_value, conversion_data);
 }
 
 bool CanExtractShapeOrPath(const CSSValue* computed_value) {
@@ -241,10 +240,7 @@ bool IsClipPathNone(const CSSValue* computed_value) {
 }
 
 BasicShape* GetAnimatedShapeFromCSSValue(const CSSValue* computed_value,
-                                         const Element* element) {
-  StyleResolverState state(element->GetDocument(),
-                           *const_cast<Element*>(element));
-
+                                         const StyleResolverState& state) {
   // TODO(pdr): Support <geometry-box> (alone, or with a shape).
   if (CanExtractShapeOrPath(computed_value)) {
     return BasicShapeForValue(state, To<CSSValueList>(*computed_value).First());
@@ -255,19 +251,20 @@ BasicShape* GetAnimatedShapeFromCSSValue(const CSSValue* computed_value,
 }
 
 // Returns the basic shape of a keyframe, or null if the keyframe has no path
-BasicShape* GetAnimatedShapeFromKeyframe(const PropertySpecificKeyframe* frame,
-                                         const KeyframeEffectModelBase* model,
-                                         const Element* element) {
+const BasicShape* GetAnimatedShapeFromKeyframe(
+    const PropertySpecificKeyframe* frame,
+    const KeyframeEffectModelBase* model,
+    const StyleResolverState& state) {
   if (model->IsStringKeyframeEffectModel()) {
     DCHECK(frame->IsCSSPropertySpecificKeyframe());
     const CSSValue* value =
         static_cast<const CSSPropertySpecificKeyframe*>(frame)->Value();
     const CSSPropertyName property_name =
         CSSPropertyName(CSSPropertyID::kClipPath);
-    const CSSValue* computed_value = StyleResolver::ComputeValue(
-        const_cast<Element*>(element), property_name, *value);
+    const CSSValue* computed_value =
+        StyleResolver::ComputeValue(&state.GetElement(), property_name, *value);
 
-    return GetAnimatedShapeFromCSSValue(computed_value, element);
+    return GetAnimatedShapeFromCSSValue(computed_value, state);
   } else {
     DCHECK(frame->IsTransitionPropertySpecificKeyframe());
     const TransitionKeyframe::PropertySpecificKeyframe* keyframe =
@@ -279,22 +276,11 @@ BasicShape* GetAnimatedShapeFromKeyframe(const PropertySpecificKeyframe* frame,
       return GetAnimatedShapeFromCSSValue(
           To<CSSDefaultNonInterpolableValue>(non_interpolable_value)
               ->CssValue(),
-          element);
+          state);
     } else {
-      BasicShape::ShapeType type =
-          PathInterpolationFunctions::IsPathNonInterpolableValue(
-              *non_interpolable_value)
-              ? BasicShape::kStylePathType
-          : CSSShapeInterpolationType::IsShapeNonInterpolableValue(
-                non_interpolable_value)
-              ? BasicShape::kStyleShapeType
-              // This can be any shape but kStylePathType. This is needed to
-              // distinguish between Path shape and other shapes in
-              // CreateBasicShape function.
-              : BasicShape::kBasicShapeCircleType;
       return CreateBasicShape(
-          type, *keyframe->GetValue()->Value().interpolable_value.Get(),
-          *non_interpolable_value, element);
+          *keyframe->GetValue()->Value().interpolable_value.Get(),
+          *non_interpolable_value, state);
     }
   }
 }
@@ -309,8 +295,8 @@ std::optional<SkPath> GetFillRequiredByEffect(const AnimationEffect* effect,
     case Timing::FillMode::AUTO:
     case Timing::FillMode::NONE:
     case Timing::FillMode::FORWARDS: {
-      if (obj.StyleRef().HasClipPath()) {
-        ClipPathOperation* static_op = obj.StyleRef().ClipPath();
+      if (obj.Style().HasClipPath()) {
+        ClipPathOperation* static_op = obj.Style().ClipPath();
         Path path;
         switch (static_op->GetType()) {
           case ClipPathOperation::kShape:
@@ -555,6 +541,9 @@ scoped_refptr<Image> ClipPathPaintDefinition::Paint(
     int worklet_id) {
   DCHECK(node.IsElementNode());
   const Element* element = To<Element>(&node);
+  StyleResolverState state(element->GetDocument(),
+                           *const_cast<Element*>(element));
+  state.CreateNewClonedStyle(element->ComputedStyleRef());
   gfx::Vector2dF clip_offset =
       gfx::Vector2dF(node.GetLayoutObject()->FirstFragment().PaintOffset());
 
@@ -587,8 +576,8 @@ scoped_refptr<Image> ClipPathPaintDefinition::Paint(
   // class should be refactored to use the main thread machinery directly.
   std::optional<BasicShape::ShapeType> prev_type = std::nullopt;
   for (const auto& frame : *frames) {
-    BasicShape* basic_shape =
-        GetAnimatedShapeFromKeyframe(frame, model, element);
+    const BasicShape* basic_shape =
+        GetAnimatedShapeFromKeyframe(frame, model, state);
 
     // No compatibility for the first shape.
     if (!paths.empty()) {
@@ -655,17 +644,21 @@ namespace {
 std::optional<gfx::RectF> ComputeKeyframeUnionIncludingExtrapolation(
     const LayoutObject& obj,
     const Element* element,
-    const KeyframeEffect* effect) {
+    const KeyframeEffect* effect,
+    bool* rounded_inset_is_empty) {
+  StyleResolverState state(element->GetDocument(),
+                           *const_cast<Element*>(element));
+  state.CreateNewClonedStyle(element->ComputedStyleRef());
   const KeyframeEffectModelBase* model = effect->Model();
   const PropertySpecificKeyframeVector* frames =
       model->GetPropertySpecificKeyframes(
           PropertyHandle(GetCSSPropertyClipPath()));
 
-  HeapVector<Member<BasicShape>> animated_shapes;
+  HeapVector<Member<const BasicShape>> animated_shapes;
   gfx::RectF clip_area;
 
   for (const auto& frame : *frames) {
-    BasicShape* shape = GetAnimatedShapeFromKeyframe(frame, model, element);
+    const BasicShape* shape = GetAnimatedShapeFromKeyframe(frame, model, state);
     if (!shape) {
       // clip-path: none
       return std::nullopt;
@@ -682,8 +675,8 @@ std::optional<gfx::RectF> ComputeKeyframeUnionIncludingExtrapolation(
   gfx::RectF reference_box = ClipPathClipper::CalcLocalReferenceBox(
       obj, ClipPathOperation::OperationType::kShape, GeometryBox::kBorderBox);
   const float zoom = ClipPathClipper::UsesZoomedReferenceBox(obj)
-                         ? 1
-                         : obj.StyleRef().EffectiveZoom();
+                         ? obj.Style().EffectiveZoom()
+                         : 1.f;
 
   if (effect->SpecifiedTiming().start_delay.time_delay > AnimationTimeDelta()) {
     std::optional<SkPath> fill = GetFillRequiredByEffect(
@@ -703,7 +696,7 @@ std::optional<gfx::RectF> ComputeKeyframeUnionIncludingExtrapolation(
   effect_timing->Range(&min_total_progress, &max_total_progress);
 
   for (unsigned i = 0; i < frames->size(); i++) {
-    BasicShape* cur_shape = animated_shapes[i];
+    const BasicShape* cur_shape = animated_shapes[i];
     CHECK(cur_shape);
 
     const Path path = cur_shape->GetPath(reference_box, zoom, 1.f);
@@ -735,21 +728,26 @@ std::optional<gfx::RectF> ComputeKeyframeUnionIncludingExtrapolation(
     // ourselves for the maximal value to find the clip area for
     // this keyframe pair.
 
+    const BasicShape* next_shape = animated_shapes[i + 1];
+    Path toPath = next_shape->GetPath(reference_box, zoom, 1.f);
+
     if (min_progress < 0) {
-      BasicShape* next_shape = animated_shapes[i + 1];
-      Path toPath = next_shape->GetPath(reference_box, zoom, 1.f);
       SkPath interpolated =
           InterpolatePaths(cur_shape->GetType() == next_shape->GetType(),
                            path.GetSkPath(), toPath.GetSkPath(), min_progress);
       clip_area.Union(gfx::SkRectToRectF(interpolated.getBounds()));
     }
     if (max_progress > 1) {
-      BasicShape* next_shape = animated_shapes[i + 1];
-      Path toPath = next_shape->GetPath(reference_box, zoom, 1.f);
       SkPath interpolated =
           InterpolatePaths(cur_shape->GetType() == next_shape->GetType(),
                            path.GetSkPath(), toPath.GetSkPath(), max_progress);
       clip_area.Union(gfx::SkRectToRectF(interpolated.getBounds()));
+    }
+
+    if (IsA<BasicShapeInset>(cur_shape) && IsA<BasicShapeInset>(next_shape) &&
+        !path.GetSkPath().isInterpolatable(toPath.GetSkPath())) {
+      *rounded_inset_is_empty = true;
+      return std::nullopt;
     }
   }
 
@@ -772,9 +770,12 @@ std::optional<gfx::RectF> ClipPathPaintDefinition::GetAnimationBoundingRect(
   CHECK(effect);
   CHECK(effect->IsKeyframeEffect());
 
+  // Quick fallback for crbug.com/536479735
+  // TODO(crbug.com/474206417): Replace this with rounded rect keyframe values.
+  bool rounded_inset_is_empty = false;
   const std::optional<gfx::RectF> keyframe_union =
-      ComputeKeyframeUnionIncludingExtrapolation(obj, element,
-                                                 To<KeyframeEffect>(effect));
+      ComputeKeyframeUnionIncludingExtrapolation(
+          obj, element, To<KeyframeEffect>(effect), &rounded_inset_is_empty);
   if (keyframe_union.has_value()) {
     return *keyframe_union;
   }
@@ -786,7 +787,8 @@ std::optional<gfx::RectF> ClipPathPaintDefinition::GetAnimationBoundingRect(
   // that we can use.
   if (!obj.HasLayer() ||
       obj.PaintingLayer()->HasDescendantWithTransformAnim() ||
-      obj.StyleRef().HasCurrentTransformRelatedAnimation()) {
+      obj.Style().HasCurrentTransformRelatedAnimation() ||
+      rounded_inset_is_empty) {
     return std::nullopt;
   }
 

@@ -14,7 +14,6 @@ export function getHtml(this: NtpComposeboxElement) {
   return html`<!--_html_template_start_-->
     <search-animated-glow id="animatedSearchElement"
         animation-state="${this.animationState}"
-        entrypoint-name="Realbox"
         .coloredTicTacVoiceAnimationEnabled="${this.voiceSearchCoherenceEnabled}"
         .requiresVoice="${this.shouldShowVoiceSearchAnimation()}"
         .transcript="${this.transcript}"
@@ -60,22 +59,23 @@ export function getHtml(this: NtpComposeboxElement) {
     ${this.errorMessage ?
       html`<ntp-error-scrim id="errorScrim" part="error-scrim"
           ?compact-mode="${this.searchboxLayoutMode === 'Compact' &&
-                          this.files.size === 0}"
+                          !this.hasFiles()}"
           .errorMessage="${this.errorMessage}"
           @dismiss-error-scrim="${this.onDismissErrorScrim}">
       </ntp-error-scrim>`
     : ''}
     <div id="composebox" part="composebox" ?inert="${!!this.errorMessage}"
         @keydown="${this.onKeydown}"
-        @dragenter="${this.dragAndDropHandler_.handleDragEnter}"
-        @dragover="${this.dragAndDropHandler_.handleDragOver}"
-        @dragleave="${this.dragAndDropHandler_.handleDragLeave}"
-        @drop="${this.dragAndDropHandler_.handleDrop}"
+        @dragenter="${this.dragAndDropHandler.handleDragEnter}"
+        @dragover="${this.dragAndDropHandler.handleDragOver}"
+        @dragleave="${this.dragAndDropHandler.handleDragLeave}"
+        @drop="${this.dragAndDropHandler.handleDrop}"
         @paste="${this.onPaste}">
       <div id="inputContainer" part="input-container">
         <cr-composebox-input id="composeboxInput"
             class="${this.hasTabs() ? 'has-tabs' : ''}"
             exportparts="text-container, icon-container, mirror, input, smart-compose, cancel, action-icon, cancel-icon"
+            .composeboxSkillsEnabled="${this.composeboxSkillsEnabled}"
             .disableCaretColorAnimation="${this.disableCaretColorAnimation}"
             .showDropdown="${this.showDropdown}"
             .inputPlaceholder="${this.inputPlaceholder}"
@@ -84,6 +84,7 @@ export function getHtml(this: NtpComposeboxElement) {
             .smartComposeInlineHint="${this.smartComposeInlineHint}"
             .submitEnabled="${this.submitEnabled}"
             .cancelButtonTitle="${this.computeCancelButtonTitle()}"
+            .hideCancel="${this.persistentAimButtonEnabled_}"
             @input-input="${this.onInputInput}"
             @input-focusin="${this.onInputFocusin}"
             @cancel-click="${this.onCancelClick}"
@@ -91,10 +92,24 @@ export function getHtml(this: NtpComposeboxElement) {
           ${this.shouldShowVoiceSearch() ? html`
             <cr-icon-button id="voiceSearchButton" class="voice-icon"
                 slot="action-buttons"
-                part="voice-icon" iron-icon="cr:mic"
+                part="voice-icon" iron-icon="cr:mic-filled"
                 @click="${this.onVoiceSearchButtonClick}"
                 title="${this.i18n('voiceSearchButtonLabel')}">
             </cr-icon-button>
+          ` : ''}
+          ${this.persistentAimButtonEnabled_ ? html`
+            <cr-composebox-aim-button slot="action-buttons"
+                .mode="${this.getAimButtonMode()}"
+                .showExitIcon="${this.showAimButtonExitIcon_}"
+                .disabled="${this.isAimButtonDisabled()}"
+                .energyEffectAnimationEnabled="${
+                    this.energyEffectAnimationEnabled}"
+                .label="${this.i18n('searchboxComposeButtonText')}"
+                .exitTitle="${this.i18n('composeboxAimButtonExitTitle')}"
+                .sendTitle="${this.i18n('composeboxAimButtonSendTitle')}"
+                @aim-button-click="${this.onAimButtonClick}"
+                @focusin="${this.onAimButtonFocusin}">
+            </cr-composebox-aim-button>
           ` : ''}
         </cr-composebox-input>
         <div id="context" part="context-entrypoint">
@@ -127,7 +142,8 @@ export function getHtml(this: NtpComposeboxElement) {
                   </div>
                   ` : ''}
               </div>
-              ${this.shouldShowSubmitButton() ? html`
+              ${!this.persistentAimButtonEnabled_ &&
+                  this.shouldShowSubmitButton() ? html`
               <cr-composebox-submit
                 exportparts="action-icon, submit, submit-icon, submit-overlay"
                 ?disabled="${!this.canSubmitFilesAndInput}"
@@ -141,22 +157,24 @@ export function getHtml(this: NtpComposeboxElement) {
             ${this.shouldShowDivider() ? html`
             <div class="carousel-divider" part="carousel-divider"></div>
             ` : ''}
-            <cr-composebox-dropdown
-                id="matches"
-                part="dropdown"
-                exportparts="match-text-container"
-                role="listbox"
-                .result="${this.result}"
-                .selectedMatchIndex="${this.selectedMatchIndex}"
-                .maxSuggestions="${this.maxSuggestions}"
-                .toolMode="${this.inputState?.activeTool || ToolMode.kUnspecified}"
-                @selected-match-index-changed="${this.onSelectedMatchIndexChanged}"
-                @match-focusin="${this.onMatchFocusin}"
-                @match-click="${this.onMatchClick}"
-                ?hidden="${!this.showDropdown || !this.dropdownNeeded}"
-                .lastQueriedInput="${this.lastQueriedInput}">
-            </cr-composebox-dropdown>
           </cr-composebox-file-inputs>
+          <cr-composebox-dropdown
+              id="matches"
+              part="dropdown"
+              exportparts="match-text-container"
+              role="listbox"
+              .result="${this.result}"
+              .selectedMatchIndex="${this.selectedMatchIndex}"
+              .maxSuggestions="${this.maxSuggestions}"
+              .toolMode="${this.inputState?.activeTool || ToolMode.kUnspecified}"
+              .richImageSuggestionsEnabled="${
+                  this.richImageSuggestionsEnabled}"
+              @selected-match-index-changed="${this.onSelectedMatchIndexChanged}"
+              @match-focusin="${this.onMatchFocusin}"
+              @match-click="${this.onMatchClick}"
+              ?hidden="${this.shouldHideDropdown()}"
+              .lastQueriedInput="${this.lastQueriedInput}">
+          </cr-composebox-dropdown>
         </div>
       </div>
     </div>

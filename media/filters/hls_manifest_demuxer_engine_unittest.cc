@@ -147,6 +147,13 @@ const std::string kMultivariantPlaylistWithEmbeddedAlts =
     "#EXT-X-STREAM-INF:BANDWIDTH=7680000,CODECS=\"avc1.420000\",AUDIO=\"aac\"\n"
     "hi/video-only.m3u8\n";
 
+const std::string kMultivariantPlaylistAudioOnlyMissingUri =
+    "#EXTM3U\n"
+    "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aac\",NAME=\"Eng\",DEFAULT=YES,"
+    "AUTOSELECT=YES,LANGUAGE=\"en\"\n"
+    "#EXT-X-STREAM-INF:BANDWIDTH=65000,CODECS=\"mp4a.40.05\",AUDIO=\"aac\"\n"
+    "hi/audio-only.m3u8\n";
+
 const std::string kLiveFullEncryptedMediaPlaylist =
     "#EXTM3U\n"
     "#EXT-X-VERSION:4\n"
@@ -217,6 +224,10 @@ MATCHER_P2(SegmentMatches,
            range,
            "Segment matcher for HlsDataSourceProvider") {
   return arg.uri == GURL(urlstr) && arg.range == range;
+}
+
+MATCHER_P(UrlExtensionMatches, ext, "Media URL segment matcher for HLS") {
+  return arg.uri.path().ends_with(ext);
 }
 
 static constexpr size_t kKeySize = 16;
@@ -295,6 +306,16 @@ class HlsManifestDemuxerEngineTest : public testing::Test {
 
   base::OnceClosure pending_url_fetch_;
 
+  void BindMediaContentForInit() {
+    EXPECT_CALL(*mock_dsp_, ReadFromUrl(UrlExtensionMatches(".ts"), _))
+        .WillRepeatedly([](auto segment, auto cb) {
+          std::move(cb).Run(StringHlsDataSourceStreamFactory::CreateStream(
+              "media content!",
+              hls::SecurityMetadata::CreateForTesting(segment.uri, false),
+              segment.uri));
+        });
+  }
+
   template <typename T>
   void BindUrlToDataSource(std::string url,
                            std::string value,
@@ -338,7 +359,8 @@ class HlsManifestDemuxerEngineTest : public testing::Test {
         "http://media.example.com/manifest.m3u8", kSimpleMultivariantPlaylist);
     BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
         "http://example.com/low.m3u8", kSimpleMediaPlaylist);
-    EXPECT_CALL(*this, MockInitComplete(HasStatusCode(PIPELINE_OK)));
+    BindMediaContentForInit();
+    EXPECT_CALL(*this, InitSuccess());
     EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "1.2 Mbps"));
     EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "2.5 Mbps"));
     EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "7.6 Mbps"));
@@ -435,7 +457,8 @@ class HlsManifestDemuxerEngineTest : public testing::Test {
   }
 
  public:
-  MOCK_METHOD(void, MockInitComplete, (PipelineStatus status), ());
+  MOCK_METHOD(void, InitSuccess, (), ());
+  MOCK_METHOD(void, InitFailure, (HlsDemuxerStatus), ());
   MOCK_METHOD(void, SeekFinished, (), ());
   MOCK_METHOD(void, TrackNameAdded, (MediaTrack::Type, std::string), ());
   MOCK_METHOD(void, TrackNameRemoved, (MediaTrack::Type, std::string), ());
@@ -443,6 +466,14 @@ class HlsManifestDemuxerEngineTest : public testing::Test {
               TrackChangedState,
               (MediaTrack::Type, std::string, MediaTrack::State),
               ());
+
+  void InitComplete(HlsDemuxerStatus status) {
+    if (status.is_ok()) {
+      InitSuccess();
+    } else {
+      InitFailure(std::move(status));
+    }
+  }
 
   HlsManifestDemuxerEngineTest()
       : media_log_(std::make_unique<NiceMock<media::MockMediaLog>>()),
@@ -473,7 +504,7 @@ class HlsManifestDemuxerEngineTest : public testing::Test {
   void InitializeEngine() {
     engine_->Initialize(
         mock_mdeh_.get(),
-        base::BindOnce(&HlsManifestDemuxerEngineTest::MockInitComplete,
+        base::BindOnce(&HlsManifestDemuxerEngineTest::InitComplete,
                        base::Unretained(this)));
   }
 
@@ -498,8 +529,7 @@ class HlsManifestDemuxerEngineTest : public testing::Test {
 TEST_F(HlsManifestDemuxerEngineTest, TestInitFailure) {
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://media.example.com/manifest.m3u8", kInvalidMediaPlaylist);
-  EXPECT_CALL(*this,
-              MockInitComplete(HasStatusCode(DEMUXER_ERROR_COULD_NOT_PARSE)));
+  EXPECT_CALL(*this, InitFailure(_));
   InitializeEngine();
   task_environment_.RunUntilIdle();
   ASSERT_TRUE(engine_->IsSeekable());
@@ -513,7 +543,8 @@ TEST_F(HlsManifestDemuxerEngineTest, TestSimpleConfigAddsOnePrimaryRole) {
   EXPECT_CALL(*mock_mdeh_, RemoveRole("primary"));
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://media.example.com/manifest.m3u8", kSimpleMediaPlaylist);
-  EXPECT_CALL(*this, MockInitComplete(HasStatusCode(PIPELINE_OK)));
+  BindMediaContentForInit();
+  EXPECT_CALL(*this, InitSuccess());
   InitializeEngine();
   task_environment_.RunUntilIdle();
   ASSERT_TRUE(engine_->IsSeekable());
@@ -526,7 +557,8 @@ TEST_F(HlsManifestDemuxerEngineTest, TestSimpleLiveConfigAddsOnePrimaryRole) {
   EXPECT_CALL(*mock_mdeh_, RemoveRole("primary"));
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://media.example.com/manifest.m3u8", kSimpleLiveMediaPlaylist);
-  EXPECT_CALL(*this, MockInitComplete(HasStatusCode(PIPELINE_OK)));
+  BindMediaContentForInit();
+  EXPECT_CALL(*this, InitSuccess());
   InitializeEngine();
   task_environment_.RunUntilIdle();
   ASSERT_FALSE(engine_->IsSeekable());
@@ -539,8 +571,9 @@ TEST_F(HlsManifestDemuxerEngineTest, TestLivePlaybackManifestUpdates) {
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://media.example.com/manifest.m3u8",
       kInitialRequestLiveMediaPlaylist);
+  BindMediaContentForInit();
 
-  EXPECT_CALL(*this, MockInitComplete(HasStatusCode(PIPELINE_OK)));
+  EXPECT_CALL(*this, InitSuccess());
   InitializeEngine();
   task_environment_.RunUntilIdle();
 
@@ -631,13 +664,14 @@ TEST_F(HlsManifestDemuxerEngineTest, TestMultivariantPlaylistNoAlternates) {
       "http://media.example.com/manifest.m3u8", kSimpleMultivariantPlaylist);
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://example.com/low.m3u8", kSimpleMediaPlaylist);
+  BindMediaContentForInit();
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "1.2 Mbps"));
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "2.5 Mbps"));
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "7.6 Mbps"));
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kAudio, "Default"));
   EXPECT_CALL(*this, TrackChangedState(MediaTrack::Type::kVideo, "1.2 Mbps",
                                        MediaTrack::State::kActive));
-  EXPECT_CALL(*this, MockInitComplete(HasStatusCode(PIPELINE_OK)));
+  EXPECT_CALL(*this, InitSuccess());
   InitializeEngine();
   task_environment_.RunUntilIdle();
 }
@@ -663,6 +697,7 @@ TEST_F(HlsManifestDemuxerEngineTest, TestMultivariantPlaylistWithAlternates) {
       "http://media.example.com/eng-audio.m3u8", kSingleInfoMediaPlaylist);
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://media.example.com/low/video-only.m3u8", kSimpleMediaPlaylist);
+  BindMediaContentForInit();
 
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "1.2 Mbps"));
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "2.5 Mbps"));
@@ -675,7 +710,7 @@ TEST_F(HlsManifestDemuxerEngineTest, TestMultivariantPlaylistWithAlternates) {
   EXPECT_CALL(*this, TrackChangedState(MediaTrack::Type::kAudio, "Eng",
                                        MediaTrack::State::kActive));
 
-  EXPECT_CALL(*this, MockInitComplete(HasStatusCode(PIPELINE_OK)));
+  EXPECT_CALL(*this, InitSuccess());
   InitializeEngine();
   task_environment_.RunUntilIdle();
 }
@@ -699,13 +734,36 @@ TEST_F(HlsManifestDemuxerEngineTest, TestMultivariantPlaylistWithNoUrlAlts) {
       kMultivariantPlaylistWithEmbeddedAlts);
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://media.example.com/hi/video-only.m3u8", kSimpleMediaPlaylist);
+  BindMediaContentForInit();
 
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "7.6 Mbps"));
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kAudio, "Eng"));
   EXPECT_CALL(*this, TrackChangedState(MediaTrack::Type::kVideo, "7.6 Mbps",
                                        MediaTrack::State::kActive));
 
-  EXPECT_CALL(*this, MockInitComplete(HasStatusCode(PIPELINE_OK)));
+  EXPECT_CALL(*this, InitSuccess());
+  InitializeEngine();
+  task_environment_.RunUntilIdle();
+}
+
+TEST_F(HlsManifestDemuxerEngineTest, TestAudioOnlyPlaylistWithMissingUri) {
+  EXPECT_CALL(*mock_mdeh_, SetSequenceMode("primary", true));
+  EXPECT_CALL(*mock_mdeh_, SetDuration(21.021));
+  EXPECT_CALL(*mock_mdeh_,
+              AddRole("primary", RelaxedParserSupportedType::kMP2T));
+
+  BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
+      "http://media.example.com/manifest.m3u8",
+      kMultivariantPlaylistAudioOnlyMissingUri);
+  BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
+      "http://media.example.com/hi/audio-only.m3u8", kSimpleMediaPlaylist);
+  BindMediaContentForInit();
+
+  EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kAudio, "Eng"));
+  EXPECT_CALL(*this, TrackChangedState(MediaTrack::Type::kAudio, "Eng",
+                                       MediaTrack::State::kActive));
+
+  EXPECT_CALL(*this, InitSuccess());
   InitializeEngine();
   task_environment_.RunUntilIdle();
 }
@@ -716,8 +774,7 @@ TEST_F(HlsManifestDemuxerEngineTest, TestMultivariantWithNoSupportedCodecs) {
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://media.example.com/manifest.m3u8", kUnsupportedCodecs);
 
-  EXPECT_CALL(*this,
-              MockInitComplete(HasStatusCode(DEMUXER_ERROR_COULD_NOT_PARSE)));
+  EXPECT_CALL(*this, InitFailure(_));
   InitializeEngine();
   task_environment_.RunUntilIdle();
 }
@@ -818,8 +875,7 @@ TEST_F(HlsManifestDemuxerEngineTest, TestMultiRenditionCheckState) {
 TEST_F(HlsManifestDemuxerEngineTest, SeekAfterErrorFails) {
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://media.example.com/manifest.m3u8", kInvalidMediaPlaylist);
-  EXPECT_CALL(*this,
-              MockInitComplete(HasStatusCode(DEMUXER_ERROR_COULD_NOT_PARSE)));
+  EXPECT_CALL(*this, InitFailure(_));
   InitializeEngine();
   task_environment_.RunUntilIdle();
 
@@ -1024,7 +1080,7 @@ TEST_F(HlsManifestDemuxerEngineTest, TestEndOfStreamAfterAllFetched) {
   EXPECT_CALL(*mock_mdeh_,
               AddRole("primary", RelaxedParserSupportedType::kMP2T));
   EXPECT_CALL(*mock_mdeh_, SetDuration(9.009));
-  EXPECT_CALL(*this, MockInitComplete(HasStatusCode(PIPELINE_OK)));
+  EXPECT_CALL(*this, InitSuccess());
 
   std::string manifest_uri = "http://media.example.com/manifest.m3u8";
   std::string segment_uri = "http://media.example.com/first.ts";
@@ -1047,9 +1103,9 @@ TEST_F(HlsManifestDemuxerEngineTest, TestEndOfStreamAfterAllFetched) {
       });
   EXPECT_CALL(*mock_dsp_,
               ReadFromUrl(SegmentMatches(segment_uri, std::nullopt), _))
-      .WillOnce([manifest_uri, segment_uri, bitstream](
-                    HlsDataSourceProvider::UrlDataSegment,
-                    HlsDataSourceProvider::ReadCb cb) {
+      .WillRepeatedly([manifest_uri, segment_uri, bitstream](
+                          HlsDataSourceProvider::UrlDataSegment,
+                          HlsDataSourceProvider::ReadCb cb) {
         auto stream = StringHlsDataSourceStreamFactory::CreateStream(
             bitstream, hls::SecurityMetadata::CreateForTesting(manifest_uri),
             GURL(segment_uri));
@@ -1108,8 +1164,7 @@ TEST_F(HlsManifestDemuxerEngineTest, TestEndOfStreamPropagatesOnce) {
 
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://media.example.com/manifest.m3u8", kInvalidMediaPlaylist);
-  EXPECT_CALL(*this,
-              MockInitComplete(HasStatusCode(DEMUXER_ERROR_COULD_NOT_PARSE)));
+  EXPECT_CALL(*this, InitFailure(_));
   InitializeEngine();
   task_environment_.RunUntilIdle();
 
@@ -1159,13 +1214,14 @@ TEST_F(HlsManifestDemuxerEngineTest, TestOriginTainting) {
       /*taint_origin=*/true);
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://example.com/low.m3u8", kSimpleMediaPlaylist);
+  BindMediaContentForInit();
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "1.2 Mbps"));
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "2.5 Mbps"));
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "7.6 Mbps"));
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kAudio, "Default"));
   EXPECT_CALL(*this, TrackChangedState(MediaTrack::Type::kVideo, "1.2 Mbps",
                                        MediaTrack::State::kActive));
-  EXPECT_CALL(*this, MockInitComplete(HasStatusCode(PIPELINE_OK)));
+  EXPECT_CALL(*this, InitSuccess());
   InitializeEngine();
   task_environment_.RunUntilIdle();
   ASSERT_TRUE(engine_->WouldTaintOrigin());
@@ -1183,7 +1239,7 @@ TEST_F(HlsManifestDemuxerEngineTest, TestInitialSegmentEncrypted) {
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://media.example.com/manifest.m3u8",
       kLiveFullEncryptedMediaPlaylist);
-  EXPECT_CALL(*this, MockInitComplete(HasStatusCode(PIPELINE_OK)));
+  EXPECT_CALL(*this, InitSuccess());
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://media.example.com/K", std::string(base::as_string_view(key)));
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
@@ -1217,8 +1273,9 @@ TEST_F(HlsManifestDemuxerEngineTest, TestTrackChangeUpdatesSelectableOptions) {
         "http://media.example.com/1-de.m3u8", kSimpleMediaPlaylist);
     BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
         "http://media.example.com/1.m3u8", kSimpleMediaPlaylist);
+    BindMediaContentForInit();
 
-    EXPECT_CALL(*this, MockInitComplete(HasStatusCode(PIPELINE_OK)));
+    EXPECT_CALL(*this, InitSuccess());
     InitializeEngine();
     task_environment_.RunUntilIdle();
     testing::Mock::VerifyAndClear(this);
@@ -1336,6 +1393,7 @@ TEST_F(HlsManifestDemuxerEngineTest, TestPersistentTainting) {
   BindUrlToDataSource<StringHlsDataSourceStreamFactory>(
       "http://example.com/low.m3u8", kSimpleMediaPlaylist,
       /*taint_origin=*/false);
+  BindMediaContentForInit();
 
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "1.2 Mbps"));
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kVideo, "2.5 Mbps"));
@@ -1343,7 +1401,7 @@ TEST_F(HlsManifestDemuxerEngineTest, TestPersistentTainting) {
   EXPECT_CALL(*this, TrackNameAdded(MediaTrack::Type::kAudio, "Default"));
   EXPECT_CALL(*this, TrackChangedState(MediaTrack::Type::kVideo, "1.2 Mbps",
                                        MediaTrack::State::kActive));
-  EXPECT_CALL(*this, MockInitComplete(HasStatusCode(PIPELINE_OK)));
+  EXPECT_CALL(*this, InitSuccess());
 
   InitializeEngine();
   task_environment_.RunUntilIdle();

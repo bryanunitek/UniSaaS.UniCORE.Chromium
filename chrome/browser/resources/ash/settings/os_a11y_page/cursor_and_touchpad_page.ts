@@ -19,7 +19,6 @@ import '../controls/settings_toggle_button.js';
 import '../settings_shared.css.js';
 import 'chrome://resources/ash/common/cr_elements/localized_link/localized_link.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {CrLinkRowElement} from 'chrome://resources/ash/common/cr_elements/cr_link_row/cr_link_row.js';
 import type {CrToggleElement} from 'chrome://resources/ash/common/cr_elements/cr_toggle/cr_toggle.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
@@ -29,10 +28,10 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteOriginMixin} from '../common/route_origin_mixin.js';
-import type {DevicePageBrowserProxy} from '../device_page/device_page_browser_proxy.js';
 import {DevicePageBrowserProxyImpl} from '../device_page/device_page_browser_proxy.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './cursor_and_touchpad_page.html.js';
@@ -137,7 +136,7 @@ export class SettingsCursorAndTouchpadPageElement extends
         readOnly: true,
         type: Array,
         value() {
-          const options = [
+          return [
             {
               value: DEFAULT_BLACK_CURSOR_COLOR,
               name: loadTimeData.getString('cursorColorBlack'),
@@ -170,15 +169,11 @@ export class SettingsCursorAndTouchpadPageElement extends
               value: 0xf50057,  // Pink A400
               name: loadTimeData.getString('cursorColorPink'),
             },
-          ];
-          if (loadTimeData.getBoolean(
-                  'isAccessibilityInvertedMouseCursorEnabled')) {
-            options.push({
+            {
               value: INVERTED_CURSOR_COLOR,
               name: loadTimeData.getString('cursorColorInverted'),
-            });
-          }
-          return options;
+            },
+          ];
         },
       },
 
@@ -204,6 +199,13 @@ export class SettingsCursorAndTouchpadPageElement extends
         type: Boolean,
         value() {
           return loadTimeData.getBoolean('isKioskModeActive');
+        },
+      },
+
+      isAccessibilityShakeToLocateEnabled_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('isAccessibilityShakeToLocateEnabled');
         },
       },
 
@@ -250,29 +252,6 @@ export class SettingsCursorAndTouchpadPageElement extends
       },
 
       /**
-       * Whether the controlling the mouse cursor with the keyboard feature is
-       * enabled.
-       */
-      isAccessibilityDisableTouchpadEnabled_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean(
-              'isAccessibilityDisableTouchpadEnabled');
-        },
-      },
-
-      /**
-       * Whether the controlling the mouse cursor with the keyboard feature is
-       * enabled.
-       */
-      isAccessibilityMouseKeysEnabled_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean('isAccessibilityMouseKeysEnabled');
-        },
-      },
-
-      /**
        * Check if at least one mouse is connected.
        */
       hasMouse_: {
@@ -311,35 +290,28 @@ export class SettingsCursorAndTouchpadPageElement extends
     Setting.kLargeCursor,
     Setting.kMouseKeysEnabled,
     Setting.kOverscrollEnabled,
+    Setting.kShakeToLocateCursor,
     Setting.kTabletNavigationButtons,
   ]);
 
-  private autoClickDelayOptions_: Option[];
-  private autoClickMovementThresholdOptions_: Option[];
-  private cursorColorOptions_: Option[];
-  private deviceBrowserProxy_: DevicePageBrowserProxy;
-  private disableTouchpadOptions_: Option[];
-  private readonly isKioskModeActive_: boolean;
-  private shelfNavigationButtonsImplicitlyEnabled_: boolean;
-  private shelfNavigationButtonsPref_:
+  declare private autoClickDelayOptions_: Option[];
+  declare private autoClickMovementThresholdOptions_: Option[];
+  declare private cursorColorOptions_: Option[];
+  private deviceBrowserProxy_ = DevicePageBrowserProxyImpl.getInstance();
+  declare private disableTouchpadOptions_: Option[];
+  declare private readonly isAccessibilityShakeToLocateEnabled_: boolean;
+  declare private readonly isKioskModeActive_: boolean;
+  declare private shelfNavigationButtonsImplicitlyEnabled_: boolean;
+  declare private shelfNavigationButtonsPref_:
       chrome.settingsPrivate.PrefObject<boolean>;
-  private showFaceGazeRow_: boolean;
-  private showShelfNavigationButtonsSettings_: boolean;
-  private readonly isAccessibilityDisableTouchpadEnabled_: boolean;
-  private readonly isAccessibilityMouseKeysEnabled_: boolean;
-  private readonly largeCursorMaxSize_: number;
-  private hasMouse_: boolean;
-  private hasTouchpad_: boolean;
-  private hasPointingStick_: boolean;
+  declare private showFaceGazeRow_: boolean;
+  declare private showShelfNavigationButtonsSettings_: boolean;
+  declare private hasMouse_: boolean;
+  declare private hasTouchpad_: boolean;
+  declare private hasPointingStick_: boolean;
 
-  constructor() {
-    super();
-
-    /** RouteOriginMixin override */
-    this.route = routes.A11Y_CURSOR_AND_TOUCHPAD;
-
-    this.deviceBrowserProxy_ = DevicePageBrowserProxyImpl.getInstance();
-  }
+  // RouteOriginMixin override
+  override route = routes.A11Y_CURSOR_AND_TOUCHPAD;
 
   override connectedCallback(): void {
     super.connectedCallback();

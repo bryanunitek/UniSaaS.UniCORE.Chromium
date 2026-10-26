@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "ios/web/common/user_agent.h"
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
@@ -44,6 +45,7 @@ namespace web {
 class BrowserState;
 class BrowserURLRewriter;
 class CobaltController;
+class ExtensionController;
 class JavaScriptFeature;
 class WebClient;
 class WebMainParts;
@@ -59,6 +61,13 @@ enum class JSErrorReportLoggingLevel : short {
 
   // A full report may be sent, including webpage URL.
   FULL
+};
+
+// Represents the Universal Opt Out state for a browser state.
+enum class UniversalOptOutState {
+  kNotEligible,
+  kEligible,
+  kEnabled,
 };
 
 // Setter and getter for the client.  The client should be set early, before any
@@ -126,7 +135,8 @@ class WebClient {
       ui::ResourceScaleFactor scale_factor) const;
 
   // Returns the raw bytes of a scale independent data resource.
-  virtual base::RefCountedMemory* GetDataResourceBytes(int resource_id) const;
+  virtual scoped_refptr<base::RefCountedMemory> GetDataResourceBytes(
+      int resource_id) const;
 
   // Returns a list of additional WebUI schemes, if any. These additional
   // schemes act as aliases to the about: scheme. The additional schemes may or
@@ -240,8 +250,21 @@ class WebClient {
   virtual CobaltController* GetCobaltController(
       BrowserState* browser_state) const;
 
+  // Returns the ExtensionController for `browser_state`, or nullptr if not
+  // supported or enabled.
+  virtual ExtensionController* GetExtensionController(
+      BrowserState* browser_state) const API_AVAILABLE(ios(18.4));
+
   // Returns whether smooth scrolling is supported.
   virtual bool IsSmoothScrollingSupported() const;
+
+  // Returns the Universal Opt Out state for `browser_state`.
+  virtual UniversalOptOutState GetUniversalOptOutState(
+      BrowserState* browser_state) const;
+
+  // Returns true if the `url`'s universal should be blocked.
+  virtual bool ShouldBlockUniversalLinksForURL(BrowserState* browser_state,
+                                               const GURL& url) const;
 };
 
 }  // namespace web

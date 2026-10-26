@@ -9,8 +9,10 @@
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/common/chrome_features.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/webview/web_contents_set_background_color.h"
@@ -46,6 +48,7 @@ void ActorOverlayWebView::ShowUI(tabs::TabInterface* tab,
   webui::SetTabInterface(web_contents(), tab);
 
   // Make the view background transparent so it can act as an overlay.
+  web_contents()->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
   content::RenderWidgetHostView* rwhv =
       web_contents()->GetRenderWidgetHostView();
   if (rwhv) {
@@ -116,18 +119,32 @@ void ActorOverlayWebView::TriggerClickAnimation(base::OnceClosure callback) {
   }
 }
 
+void ActorOverlayWebView::SetCursorChip(const std::string& text) {
+  if (actor::ui::ActorOverlayUI* web_ui = GetWebUi()) {
+    web_ui->SetCursorChip(text);
+  }
+}
+
 actor::ui::ActorOverlayUI* ActorOverlayWebView::GetWebUi() {
   if (!web_contents()) {
     return nullptr;
   }
 
-  return web_contents()
-      ->GetWebUI()
-      ->GetController()
-      ->GetAs<actor::ui::ActorOverlayUI>();
+  // Null when the current page has no WebUI, e.g. after a failed navigation.
+  content::WebUI* web_ui = web_contents()->GetWebUI();
+  if (!web_ui) {
+    return nullptr;
+  }
+  return web_ui->GetController()->GetAs<actor::ui::ActorOverlayUI>();
 }
 
 void ActorOverlayWebView::PrimaryPageChanged(content::Page& page) {
+  content::RenderWidgetHostView* rwhv =
+      web_contents()->GetRenderWidgetHostView();
+  if (rwhv) {
+    rwhv->SetBackgroundColor(SK_ColorTRANSPARENT);
+  }
+
   if (pending_webui_init_callbacks_.empty()) {
     return;
   }

@@ -76,8 +76,6 @@ const char kMismatchedDomain3[] = "not_even_close.com";
 // Note that this is intentionally different from the default port range.
 const char kPortRange[] = "12401-12408";
 
-const char kTestStunServer[] = "test_relay_server.com";
-
 class HostEventReporterStub : public HostEventReporter {
  public:
   HostEventReporterStub() = default;
@@ -413,11 +411,6 @@ void It2MeHostTest::StartHost() {
       new FakeIt2MeDialogFactory());
   dialog_factory_ = dialog_factory.get();
 
-  protocol::IceConfig ice_config;
-  ice_config.stun_servers.push_back(
-      webrtc::SocketAddress(kTestStunServer, 100));
-  ice_config.expiration_time = base::Time::Now() + base::Hours(2);
-
   auto fake_signal_strategy = std::make_unique<FakeFtlSignalStrategy>(
       SignalingAddress("fake_local_jid"));
 
@@ -455,8 +448,7 @@ void It2MeHostTest::StartHost() {
       is_corp_user_);
   it2me_host_->Connect(host_context_->Copy(), policies_->Clone(),
                        std::move(dialog_factory), weak_factory_.GetWeakPtr(),
-                       std::move(create_connection_context), kTestHostUsername,
-                       ice_config);
+                       std::move(create_connection_context), kTestHostUsername);
 
   base::RunLoop run_loop;
   state_change_callback_ =
@@ -551,11 +543,6 @@ base::Value It2MeHostTest::MakeList(
   return base::Value(std::move(result));
 }
 
-// Callback to receive IceConfig from TransportContext
-void ReceiveIceConfig(protocol::IceConfig* ice_config,
-                      const protocol::IceConfig& received_ice_config) {
-  *ice_config = received_ice_config;
-}
 
 TEST_F(It2MeHostTest, StartAndStop) {
   StartHost();
@@ -566,20 +553,6 @@ TEST_F(It2MeHostTest, StartAndStop) {
   ShutdownHost();
   ASSERT_EQ(last_host_state_, It2MeHostState::kDisconnected);
   ASSERT_EQ(last_error_code_, ErrorCode::OK);
-}
-
-// Verify that IceConfig is passed to the TransportContext.
-TEST_F(It2MeHostTest, IceConfig) {
-  StartHost();
-  ASSERT_EQ(last_host_state_, It2MeHostState::kReceivedAccessCode);
-
-  protocol::IceConfig ice_config;
-  GetHost()->transport_context_for_tests()->GetIceConfig(
-      base::BindOnce(&ReceiveIceConfig, &ice_config));
-  EXPECT_EQ(ice_config.stun_servers[0].hostname(), kTestStunServer);
-
-  ShutdownHost();
-  ASSERT_EQ(last_host_state_, It2MeHostState::kDisconnected);
 }
 
 TEST_F(It2MeHostTest, LocalNatTraversalPolicyEnabled) {
@@ -889,14 +862,14 @@ TEST_F(It2MeHostTest, UnauthorizedHelperIsRejected) {
 }
 
 TEST_F(It2MeHostTest, HostUdpPortRangePolicyValidRange) {
-  PortRange port_range_actual;
-  ASSERT_TRUE(PortRange::Parse(kPortRange, &port_range_actual));
+  auto port_range_actual = PortRange::Parse(kPortRange);
+  ASSERT_TRUE(port_range_actual.has_value());
   SetPolicies(
       {{policy::key::kRemoteAccessHostUdpPortRange, base::Value(kPortRange)}});
   StartHost();
   PortRange port_range = get_local_session_policies().host_udp_port_range;
-  ASSERT_EQ(port_range_actual.min_port, port_range.min_port);
-  ASSERT_EQ(port_range_actual.max_port, port_range.max_port);
+  ASSERT_EQ(port_range_actual->min_port(), port_range.min_port());
+  ASSERT_EQ(port_range_actual->max_port(), port_range.max_port());
 }
 
 TEST_F(It2MeHostTest, HostUdpPortRangePolicyNoRange) {
@@ -967,6 +940,12 @@ TEST_F(It2MeHostTest, UriForwardingDisallowedByDefault) {
   StartHost();
 
   EXPECT_FALSE(*get_local_session_policies().allow_uri_forwarding);
+}
+
+TEST_F(It2MeHostTest, TerminalModeDisallowedByDefault) {
+  StartHost();
+
+  EXPECT_FALSE(*get_local_session_policies().allow_terminal_mode);
 }
 
 TEST_F(It2MeHostTest, StartHost_CorpUser_UseCorpSessionAuthz) {

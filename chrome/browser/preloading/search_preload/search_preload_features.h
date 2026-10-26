@@ -8,6 +8,8 @@
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 
+struct AutocompleteMatch;
+
 namespace omnibox::mojom {
 enum class NavigationPredictor;
 }
@@ -55,6 +57,7 @@ BASE_DECLARE_FEATURE(kDsePreload2OnPress);
 extern const base::FeatureParam<bool> kDsePreload2OnPressMouseDown;
 extern const base::FeatureParam<bool> kDsePreload2OnPressUpOrDownArrowButton;
 extern const base::FeatureParam<bool> kDsePreload2OnPressTouchDown;
+extern const base::FeatureParam<bool> kDsePreload2OnPressIgnoreSaverModes;
 
 // Enables on-press trigger in incognito mode.
 //
@@ -70,6 +73,14 @@ BASE_DECLARE_FEATURE(kDsePreload2OnPressIncognito);
 // https://docs.google.com/document/d/1f4dcNYP3O_Ft4yMmC42ETxGC5lM7YF5FDbEgnxUua7M/edit?tab=t.38v8gca76tmi
 BASE_DECLARE_FEATURE(kDsePreload2OnSuggestNonDefaultMatch);
 
+// Enables marking on-press prefetches as prefetches ahead of an imminent
+// navigation, which makes them matched more aggressively.
+//
+// See `features::kPrefetchAheadOfImminentNavigation` in
+// `content/public/common/content_features.h`, which must also be
+// enabled to take effect.
+BASE_DECLARE_FEATURE(kDsePreload2AheadOfImminentNavigation);
+
 // Returns true iff we should enter DsePreload2 code path.
 bool IsDsePreload2Enabled();
 
@@ -82,6 +93,22 @@ bool DsePreload2OnPressIsPredictorEnabled(
 
 // Returns true iff on-press in incognito is enabled.
 bool IsDsePreload2OnPressIncognitoEnabled();
+
+// Returns true iff search preload can ignore battery and data saver modes for
+// on-press navigation preloads.
+bool IsDsePreload2IgnoreSaverModesOnPressEnabled();
+
+// Returns true iff on-press prefetches should be marked as prefetches ahead of
+// an imminent navigation.
+bool IsDsePreload2AheadOfImminentNavigationEnabled();
+
+// Enables suppressing preloads for unsupported search modes (e.g. udm=50, AIM).
+BASE_DECLARE_FEATURE(kDsePreload2SuppressForUnsupportedSearchMode);
+extern const base::FeatureParam<std::string> kDsePreload2UnsupportedSearchModes;
+
+// Returns true iff preloads should be suppressed for unsupported search modes.
+bool ShouldDsePreload2SuppressForUnsupportedMode(
+    const AutocompleteMatch& match);
 
 }  // namespace features
 

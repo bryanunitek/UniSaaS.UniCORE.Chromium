@@ -38,7 +38,6 @@ BASE_FEATURE(kFastMemoryCacheWithDevTools, base::FEATURE_ENABLED_BY_DEFAULT);
 #include <memory>
 #include <optional>
 
-#include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
@@ -58,7 +57,6 @@ BASE_FEATURE(kFastMemoryCacheWithDevTools, base::FEATURE_ENABLED_BY_DEFAULT);
 #include "third_party/blink/public/common/client_hints/client_hints.h"
 #include "third_party/blink/public/common/device_memory/approximated_device_memory.h"
 #include "third_party/blink/public/common/permissions_policy/document_policy_features.h"
-#include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/mojom/loader/request_context_frame_type.mojom-blink.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_network_provider.h"
@@ -72,10 +70,10 @@ BASE_FEATURE(kFastMemoryCacheWithDevTools, base::FEATURE_ENABLED_BY_DEFAULT);
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/core/ad_tracker/ad_tracker.h"
+#include "third_party/blink/renderer/core/ad_tracker/script_initiation_monitor.h"
 #include "third_party/blink/renderer/core/css/media_values.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/fileapi/public_url_manager.h"
-#include "third_party/blink/renderer/core/frame/attribution_src_loader.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/frame/frame_console.h"
@@ -148,26 +146,17 @@ namespace {
 // structured headers as described in
 // https://www.rfc-editor.org/rfc/rfc8941.html.
 const AtomicString SerializeStringHeader(const std::string& str) {
-  std::string output;
-
-  // See https://crbug.com/1416925.
-  if (str.empty() &&
-      !base::FeatureList::IsEnabled(
-          blink::features::kQuoteEmptySecChUaStringHeadersConsistently)) {
-    return AtomicString(output.c_str());
-  }
-
-  output =
-      net::structured_headers::SerializeItem(net::structured_headers::Item(str))
-          .value_or(std::string());
+  std::string output = net::structured_headers::SerializeItem(
+                           net::structured_headers::ItemView(
+                               net::structured_headers::ItemView::string, str))
+                           .value_or(std::string());
 
   return AtomicString(output.c_str());
 }
 
 AtomicString GenerateBoolHeaderValue(bool value) {
-  const std::string output = net::structured_headers::SerializeItem(
-                                 net::structured_headers::Item(value))
-                                 .value_or(std::string());
+  const std::string output =
+      net::structured_headers::SerializeItem(value).value_or(std::string());
   return AtomicString(output.c_str());
 }
 
@@ -442,19 +431,6 @@ void FrameFetchContext::PrepareRequest(
   request.SetStorageAccessApiStatus(
       document_->GetExecutionContext()->GetStorageAccessApiStatus());
 
-  // If the original request included the attribute to opt-in to shared storage,
-  // then update eligibility for the current (possibly redirected) request. Note
-  // that if the original request didn't opt-in, then the original request and
-  // any subsequent redirects are ineligible for shared storage writing by
-  // response header.
-  if (request.GetSharedStorageWritableOptedIn()) {
-    auto* policy = GetPermissionsPolicy();
-    request.SetSharedStorageWritableEligible(
-        policy &&
-        request.IsFeatureEnabledForSubresourceRequestAssumingOptIn(
-            policy, network::mojom::PermissionsPolicyFeature::kSharedStorage,
-            SecurityOrigin::Create(request.Url())->ToUrlOrigin()));
-  }
 
   request.SetSharedDictionaryWriterEnabled(
       RuntimeEnabledFeatures::CompressionDictionaryTransportEnabled(
@@ -483,17 +459,31 @@ void FrameFetchContext::PrepareRequest(
 // calculation for resource timing and dev tools.
 void FrameFetchContext::FillInitiatorInfo(FetchInitiatorInfo& initiator_info) {
   CHECK(RuntimeEnabledFeatures::ResourceTimingInitiatorEnabled());
+  // A module script reaches one of three branches below depending on how it is
+  // requested:
+  //   - Statically imported (import "leaf.js";): the imported-module branch
+  //     just below. |initiator_info.referrer| is the importing module's URL.
+  //     Unlike the stylesheet case, it is non-empty even when the document
+  //     imports the module itself, e.g.
+  //       <script type="module">import "leaf.js";</script>
+  //   - Dynamically imported (import("leaf.js")), or loaded by a module script
+  //     element that JavaScript adds to the document (e.g. via
+  //     document.createElement("script")): the running-script branch, since a
+  //     script is executing when the fetch is initiated.
+  //   - Loaded directly by the parser (<script type="module" src="leaf.js">):
+  //     the document-fallback branch at the end.
   if (initiator_info.is_imported_module && !initiator_info.referrer.empty()) {
-    // TODO(crbug.com/40919714): Fill |initiator_url|.
     // Initiator is a referrer of an imported js file.
+    initiator_info.initiator_url = KURL(initiator_info.referrer);
     return;
   }
   bool was_requested_by_stylesheet =
       initiator_info.name == fetch_initiator_type_names::kCSS ||
       initiator_info.name == fetch_initiator_type_names::kUacss;
+  // |initiator_info.referrer| is empty when the resource is requested by
+  // the document.
   if (was_requested_by_stylesheet && !initiator_info.referrer.empty()) {
-    // TODO(crbug.com/40919714): Fill |initiator_url|.
-    // Initiator is a css file.
+    initiator_info.initiator_url = KURL(initiator_info.referrer);
     return;
   }
 
@@ -942,12 +932,6 @@ void FrameFetchContext::AddReducedAcceptLanguageIfNecessary(
     return;
   }
 
-  // Skip if enterprise policy disabled the feature.
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          blink::switches::kDisableReduceAcceptLanguage)) {
-    return;
-  }
-
   if (!request.Url().ProtocolIsInHttpFamily()) {
     return;
   }
@@ -998,13 +982,6 @@ void FrameFetchContext::PopulateResourceRequestBeforeCacheAccess(
   }
   if (document_loader_->ForceFetchCacheMode()) {
     request.SetCacheMode(*document_loader_->ForceFetchCacheMode());
-  }
-  // ResourceFetcher::DidLoadResourceFromMemoryCache() may call out in such a
-  // way that the AttributionSupport is needed.
-  if (const AttributionSrcLoader* attribution_src_loader =
-          GetFrame()->GetAttributionSrcLoader()) {
-    request.SetAttributionReportingSupport(
-        attribution_src_loader->GetSupport());
   }
   if (request.GetRequestContext() ==
       mojom::blink::RequestContextType::SERVICE_WORKER) {
@@ -1200,12 +1177,14 @@ void FrameFetchContext::CountDeprecation(WebFeature feature) const {
 }
 
 bool FrameFetchContext::ShouldBlockWebSocketByMixedContentCheck(
-    const KURL& url) const {
+    const KURL& url,
+    network::mojom::blink::IPAddressSpace target_address_space) const {
   if (GetResourceFetcherProperties().IsDetached()) {
     // TODO(yhirano): Implement the detached case.
     return false;
   }
-  return !MixedContentChecker::IsWebSocketAllowed(*this, GetFrame(), url);
+  return !MixedContentChecker::IsWebSocketAllowed(*this, GetFrame(), url,
+                                                  target_address_space);
 }
 
 std::unique_ptr<WebSocketHandshakeThrottle>
@@ -1416,32 +1395,32 @@ void FrameFetchContext::Trace(Visitor* visitor) const {
   BaseFetchContext::Trace(visitor);
 }
 
-std::optional<AdProvenance> FrameFetchContext::CalculateIfAdSubresource(
+ResourceAnnotations FrameFetchContext::CalculateResourceAnnotations(
     const ResourceRequestHead& resource_request,
     base::optional_ref<const KURL> alias_url,
     ResourceType type,
     const FetchInitiatorInfo& initiator_info,
-    bool scan_stack_for_ads) {
+    bool scan_javascript_stack) {
   // Mark the resource as an Ad if the BaseFetchContext thinks it's an ad.
-  // `scan_stack_for_ads` is only used by the `AdTracker` and is used later in
-  // this function, `BaseFetchContext::CalculateIfAdSubresource` doesn't need
-  // it.
-  std::optional<AdProvenance> known_ad_provenance =
-      BaseFetchContext::CalculateIfAdSubresource(resource_request, alias_url,
-                                                 type, initiator_info,
-                                                 /*scan_stack_for_ads=*/false);
-  if (GetResourceFetcherProperties().IsDetached() ||
-      !GetFrame()->GetAdTracker()) {
-    return known_ad_provenance;
+  ResourceAnnotations annotations =
+      BaseFetchContext::CalculateResourceAnnotations(
+          resource_request, alias_url, type, initiator_info,
+          /*scan_javascript_stack=*/false);
+  if (GetResourceFetcherProperties().IsDetached()) {
+    return annotations;
   }
 
-  // The AdTracker needs to know about the request as well, and may also mark it
-  // as an ad.
+  if (!GetFrame()->GetAdTracker()) {
+    return annotations;
+  }
+
   const KURL& url =
       alias_url.has_value() ? alias_url.value() : resource_request.Url();
-  return GetFrame()->GetAdTracker()->CalculateIfAdSubresource(
-      document_->domWindow(), url, type, initiator_info,
-      std::move(known_ad_provenance), scan_stack_for_ads);
+  annotations.ad_provenance =
+      GetFrame()->GetAdTracker()->CalculateIfAdSubresource(
+          document_->domWindow(), url, type, initiator_info,
+          std::move(annotations.ad_provenance), scan_javascript_stack);
+  return annotations;
 }
 
 void FrameFetchContext::DidObserveLoadingBehavior(

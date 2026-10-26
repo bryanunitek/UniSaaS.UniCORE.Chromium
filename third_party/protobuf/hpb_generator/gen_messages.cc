@@ -21,6 +21,7 @@
 #include "hpb_generator/gen_enums.h"
 #include "hpb_generator/gen_extensions.h"
 #include "hpb_generator/gen_utils.h"
+#include "hpb_generator/keywords.h"
 #include "hpb_generator/names.h"
 #include "google/protobuf/descriptor.h"
 #include "upb_generator/c/names.h"
@@ -187,7 +188,7 @@ std::string FieldConstantName(const google::protobuf::FieldDescriptor* field) {
 
 void WriteConstFieldNumbers(Context& ctx,
                             const google::protobuf::Descriptor* descriptor) {
-  for (auto field : FieldRange(descriptor)) {
+  for (auto field : internal::FieldRange(descriptor)) {
     ctx.Emit({{"name", FieldConstantName(field)}, {"number", field->number()}},
              "static constexpr ::uint32_t $name$ = $number$;\n");
   }
@@ -199,7 +200,7 @@ void WriteModelPublicDeclaration(
     const std::vector<const google::protobuf::FieldDescriptor*>& file_exts,
     const std::vector<const google::protobuf::EnumDescriptor*>& file_enums,
     Context& ctx) {
-  ctx.Emit({{"class_name", ClassName(descriptor)},
+  ctx.Emit({Sub("class_name", ClassName(descriptor)).AnnotatedAs(descriptor),
             {"qualified_class_name", QualifiedClassName(descriptor)}},
            R"cc(
              class $class_name$ final : private internal::$class_name$Access {
@@ -262,7 +263,8 @@ void WriteModelPublicDeclaration(
              $class_name$(upb_Message* msg, upb_Arena* arena) : $class_name$Access() {
                msg_ = ($c_api_msg_type$*)msg;
                arena_ = ::hpb::interop::upb::UnwrapArena(owned_arena_);
-               upb_Arena_Fuse(arena_, arena);
+               bool fused = upb_Arena_Fuse(arena_, arena);
+               ABSL_DCHECK(fused);
              }
              ::hpb::Arena owned_arena_;
              friend struct ::hpb::internal::PrivateAccess;
@@ -516,21 +518,24 @@ void WriteUsingEnumsInHeader(
             message->full_name()) {
       continue;
     }
-    ctx.Emit({{"enum_name", enum_descriptor->name()}}, "using $enum_name$");
+    ctx.Emit({{"enum_name", ResolveKeywordConflict(enum_descriptor->name())}},
+             "using $enum_name$");
     if (enum_descriptor->options().deprecated()) {
-      ctx.Emit({{"enum_name", enum_descriptor->name()}},
+      ctx.Emit({{"enum_name", ResolveKeywordConflict(enum_descriptor->name())}},
                " ABSL_DEPRECATED(\"Proto enum $enum_name$\")");
     }
     ctx.Emit({{"enum_resolved_type_name", enum_resolved_type_name}},
              " = $enum_resolved_type_name$;\n");
     int value_count = enum_descriptor->value_count();
     for (int i = 0; i < value_count; i++) {
-      ctx.Emit({{"enum_name", enum_descriptor->name()},
-                {"enum_value_name", enum_descriptor->value(i)->name()}},
+      ctx.Emit({{"enum_name", ResolveKeywordConflict(enum_descriptor->name())},
+                {"enum_value_name",
+                 ResolveKeywordConflict(enum_descriptor->value(i)->name())}},
                "static constexpr $enum_name$ $enum_value_name$");
       if (enum_descriptor->options().deprecated() ||
           enum_descriptor->value(i)->options().deprecated()) {
-        ctx.Emit({{"enum_value_name", enum_descriptor->value(i)->name()}},
+        ctx.Emit({{"enum_value_name",
+                   ResolveKeywordConflict(enum_descriptor->value(i)->name())}},
                  " ABSL_DEPRECATED(\"Proto enum value $enum_value_name$\") ");
       }
       ctx.Emit({{"enum_value_symbol",

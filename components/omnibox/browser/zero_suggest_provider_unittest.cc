@@ -24,10 +24,11 @@
 #include "components/history/core/browser/top_sites.h"
 #include "components/lens/proto/server/lens_overlay_response.pb.h"
 #include "components/omnibox/browser/autocomplete_provider_listener.h"
+#include "components/omnibox/browser/fake_autocomplete_provider_client.h"
 #include "components/omnibox/browser/mock_aim_eligibility_service.h"
-#include "components/omnibox/browser/mock_autocomplete_provider_client.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/omnibox_prefs.h"
+#include "components/omnibox/browser/suggest_inventory_fallback_utils.h"
 #include "components/omnibox/browser/test_scheme_classifier.h"
 #include "components/omnibox/browser/zero_suggest_cache_service.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
@@ -51,88 +52,6 @@
 using testing::_;
 using CacheEntry = ZeroSuggestCacheService::CacheEntry;
 constexpr bool is_ios = !!BUILDFLAG(IS_IOS);
-
-namespace {
-
-class FakeAutocompleteProviderClient : public MockAutocompleteProviderClient {
- public:
-  FakeAutocompleteProviderClient() {
-    ZeroSuggestProvider::RegisterProfilePrefs(
-        search_engines_test_environment_.pref_service().registry());
-    AimEligibilityService::RegisterProfilePrefs(
-        search_engines_test_environment_.pref_service().registry());
-    zero_suggest_cache_service_ = std::make_unique<ZeroSuggestCacheService>(
-        std::make_unique<TestSchemeClassifier>(),
-        &search_engines_test_environment_.pref_service());
-  }
-  FakeAutocompleteProviderClient(const FakeAutocompleteProviderClient&) =
-      delete;
-  FakeAutocompleteProviderClient& operator=(
-      const FakeAutocompleteProviderClient&) = delete;
-
-  bool SearchSuggestEnabled() const override { return true; }
-
-  TemplateURLService* GetTemplateURLService() override {
-    return search_engines_test_environment_.template_url_service();
-  }
-
-  const TemplateURLService* GetTemplateURLService() const override {
-    return search_engines_test_environment_.template_url_service();
-  }
-
-  PrefService* GetPrefs() const override {
-    return &search_engines_test_environment_.pref_service();
-  }
-
-  ZeroSuggestCacheService* GetZeroSuggestCacheService() override {
-    return zero_suggest_cache_service_.get();
-  }
-
-  const ZeroSuggestCacheService* GetZeroSuggestCacheService() const override {
-    return zero_suggest_cache_service_.get();
-  }
-
-  bool IsUrlDataCollectionActive() const override {
-    return is_url_data_collection_active_;
-  }
-
-  void set_is_url_data_collection_active(bool is_url_data_collection_active) {
-    is_url_data_collection_active_ = is_url_data_collection_active;
-  }
-
-  void Classify(
-      const std::u16string& text,
-      bool in_keyword_mode,
-      bool allow_exact_keyword_match,
-      metrics::OmniboxEventProto::PageClassification page_classification,
-      AutocompleteMatch* match,
-      GURL* alternate_nav_url) override {
-    // Populate enough of |match| to keep the ZeroSuggestProvider happy.
-    match->type = AutocompleteMatchType::URL_WHAT_YOU_TYPED;
-    match->destination_url = GURL(text);
-  }
-
-  const AutocompleteSchemeClassifier& GetSchemeClassifier() const override {
-    return scheme_classifier_;
-  }
-
-  AimEligibilityService* GetAimEligibilityService() const override {
-    return aim_eligibility_service_;
-  }
-
-  void set_aim_eligibility_service(AimEligibilityService* service) {
-    aim_eligibility_service_ = service;
-  }
-
- private:
-  search_engines::SearchEnginesTestEnvironment search_engines_test_environment_;
-  bool is_url_data_collection_active_;
-  std::unique_ptr<ZeroSuggestCacheService> zero_suggest_cache_service_;
-  TestSchemeClassifier scheme_classifier_;
-  raw_ptr<AimEligibilityService> aim_eligibility_service_ = nullptr;
-};
-
-}  // namespace
 
 class ZeroSuggestProviderTest : public testing::Test,
                                 public AutocompleteProviderListener {
@@ -312,6 +231,8 @@ class ZeroSuggestProviderTest : public testing::Test,
 
 void ZeroSuggestProviderTest::SetUp() {
   client_ = std::make_unique<FakeAutocompleteProviderClient>();
+  ON_CALL(*client_, SearchSuggestEnabled())
+      .WillByDefault(testing::Return(true));
 
   // Activate URL data collection.
   client_->set_is_url_data_collection_active(true);
@@ -377,6 +298,25 @@ TEST_F(ZeroSuggestProviderTest, AllowZeroPrefixSuggestionsOnSearchActivity) {
       .WillRepeatedly(testing::Return(true));
 
   // Offer ZPS when the user focus the omnibox.
+  EXPECT_EQ(
+      std::make_pair(ZeroSuggestProvider::ResultType::kRemoteNoURL, true),
+      ZeroSuggestProvider::GetResultTypeAndEligibility(client_.get(), input));
+
+  // Don't offer ZPS when the user is typing.
+  input.set_focus_type(metrics::OmniboxFocusType::INTERACTION_DEFAULT);
+  EXPECT_EQ(
+      std::make_pair(ZeroSuggestProvider::ResultType::kNone, false),
+      ZeroSuggestProvider::GetResultTypeAndEligibility(client_.get(), input));
+}
+
+TEST_F(ZeroSuggestProviderTest, AllowZeroPrefixSuggestionsOnOmniboxEverywhere) {
+  AutocompleteInput input(u"", metrics::OmniboxEventProto::OMNIBOX_EVERYWHERE,
+                          TestSchemeClassifier());
+  input.set_focus_type(metrics::OmniboxFocusType::INTERACTION_FOCUS);
+  EXPECT_CALL(*client_, IsAuthenticated())
+      .WillRepeatedly(testing::Return(true));
+
+  // Offer ZPS when the user focuses the omnibox.
   EXPECT_EQ(
       std::make_pair(ZeroSuggestProvider::ResultType::kRemoteNoURL, true),
       ZeroSuggestProvider::GetResultTypeAndEligibility(client_.get(), input));
@@ -741,6 +681,94 @@ TEST_F(ZeroSuggestProviderTest, SendRequestForThreadsSuggestionNtpComposebox) {
   // Expect no matches were dropped even though the query/suggestion is empty.
   EXPECT_EQ(3U, provider_->matches().size());
 }
+
+#if !BUILDFLAG(IS_ANDROID)
+TEST_F(ZeroSuggestProviderTest, FallbackMatchesOnEmptyResponse) {
+  EXPECT_CALL(*client_, IsAuthenticated())
+      .WillRepeatedly(testing::Return(true));
+  AutocompleteInput input = ZeroPrefixInputForComposebox();
+  input.set_suggest_inventory(
+      omnibox::SuggestInventory::SUGGEST_INVENTORY_BRAINSTORM);
+  provider_->Start(input, false);
+
+  EXPECT_FALSE(provider_->done());
+  EXPECT_EQ(1, test_loader_factory()->NumPending());
+
+  std::string json_response(R"(["", [], [], [], {}])");
+
+  test_loader_factory()->AddResponse(
+      test_loader_factory()->GetPendingRequest(0)->request.url.spec(),
+      json_response);
+
+  EXPECT_TRUE(base::test::RunUntil([&] { return provider_->done(); }));
+
+  // The network response is empty, so it should fallback to canned matches.
+  EXPECT_EQ(omnibox::kDefaultFallbackNumSuggestions,
+            provider_->matches().size());
+  for (const auto& match : provider_->matches()) {
+    EXPECT_EQ(omnibox::AutocompleteMatchType::kSearchSuggest, match.type);
+    EXPECT_EQ(omnibox::GROUP_AI_MODE_ZERO_SUGGEST_CANNED,
+              match.suggestion_group_id);
+  }
+}
+
+TEST_F(ZeroSuggestProviderTest, FallbackMatchesOnNetworkError) {
+  EXPECT_CALL(*client_, IsAuthenticated())
+      .WillRepeatedly(testing::Return(true));
+  AutocompleteInput input = ZeroPrefixInputForComposebox();
+  input.set_suggest_inventory(
+      omnibox::SuggestInventory::SUGGEST_INVENTORY_BRAINSTORM);
+  provider_->Start(input, false);
+
+  EXPECT_FALSE(provider_->done());
+  EXPECT_EQ(1, test_loader_factory()->NumPending());
+
+  // Simulate a network error by returning an HTTP 404 response.
+  test_loader_factory()->AddResponse(
+      test_loader_factory()->GetPendingRequest(0)->request.url.spec(),
+      /*content=*/"", net::HTTP_NOT_FOUND);
+
+  EXPECT_TRUE(base::test::RunUntil([&] { return provider_->done(); }));
+
+  // The network response failed, so it should fallback to canned matches.
+  EXPECT_EQ(omnibox::kDefaultFallbackNumSuggestions,
+            provider_->matches().size());
+  for (const auto& match : provider_->matches()) {
+    EXPECT_EQ(omnibox::AutocompleteMatchType::kSearchSuggest, match.type);
+    EXPECT_EQ(omnibox::GROUP_AI_MODE_ZERO_SUGGEST_CANNED,
+              match.suggestion_group_id);
+  }
+}
+
+TEST_F(ZeroSuggestProviderTest, FallbackMatchesOnParseFailure) {
+  EXPECT_CALL(*client_, IsAuthenticated())
+      .WillRepeatedly(testing::Return(true));
+  AutocompleteInput input = ZeroPrefixInputForComposebox();
+  input.set_suggest_inventory(
+      omnibox::SuggestInventory::SUGGEST_INVENTORY_BRAINSTORM);
+  provider_->Start(input, false);
+
+  EXPECT_FALSE(provider_->done());
+  EXPECT_EQ(1, test_loader_factory()->NumPending());
+
+  // Simulate a parsing error by returning invalid JSON.
+  test_loader_factory()->AddResponse(
+      test_loader_factory()->GetPendingRequest(0)->request.url.spec(),
+      R"(this is not valid json)");
+
+  EXPECT_TRUE(base::test::RunUntil([&] { return provider_->done(); }));
+
+  // The network response failed to parse, so it should fallback to canned
+  // matches.
+  EXPECT_EQ(omnibox::kDefaultFallbackNumSuggestions,
+            provider_->matches().size());
+  for (const auto& match : provider_->matches()) {
+    EXPECT_EQ(omnibox::AutocompleteMatchType::kSearchSuggest, match.type);
+    EXPECT_EQ(omnibox::GROUP_AI_MODE_ZERO_SUGGEST_CANNED,
+              match.suggestion_group_id);
+  }
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 TEST_F(ZeroSuggestProviderTest, SendRequestWithLensInteractionResponse) {
   AutocompleteInput input = ZeroPrefixInputForLens();
@@ -2332,11 +2360,8 @@ TEST_F(ZeroSuggestProviderTest,
 
   base::HistogramTester histogram_tester;
 
-  MockAimEligibilityService aim_service(
-      *client_->GetPrefs(), client_->GetTemplateURLService(), nullptr, nullptr);
-  EXPECT_CALL(aim_service, IsFuseboxEligible())
+  EXPECT_CALL(*client_->mock_aim_eligibility_service(), IsFuseboxEligible())
       .WillRepeatedly(testing::Return(true));
-  client_->set_aim_eligibility_service(&aim_service);
 
   // Start a prefetch request.
   AutocompleteInput input = ZeroPrefixInputForNTP(/*is_prefetch = */ true);
@@ -2393,11 +2418,8 @@ TEST_F(ZeroSuggestProviderTest, TestComposeboxPrefetchWithSuggestInventory) {
 
   PrefService* prefs = client_->GetPrefs();
 
-  MockAimEligibilityService aim_service(
-      *client_->GetPrefs(), client_->GetTemplateURLService(), nullptr, nullptr);
-  EXPECT_CALL(aim_service, IsFuseboxEligible())
+  EXPECT_CALL(*client_->mock_aim_eligibility_service(), IsFuseboxEligible())
       .WillRepeatedly(testing::Return(true));
-  client_->set_aim_eligibility_service(&aim_service);
 
   // Start a prefetch request with non-default suggest inventory.
   AutocompleteInput input = ZeroPrefixInputForNTP(/*is_prefetch = */ true);
@@ -2436,6 +2458,39 @@ TEST_F(ZeroSuggestProviderTest, TestComposeboxPrefetchWithSuggestInventory) {
   EXPECT_EQ(json_response,
             prefs->GetString(omnibox::kZeroSuggestCachedResultsComposebox));
 }
+
+#if !BUILDFLAG(IS_ANDROID)
+TEST_F(ZeroSuggestProviderTest,
+       FallbackSuggestionsForSuggestInventoryOnFailure) {
+  EXPECT_CALL(*client_, IsAuthenticated())
+      .WillRepeatedly(testing::Return(true));
+
+  EXPECT_CALL(*client_->mock_aim_eligibility_service(), IsFuseboxEligible())
+      .WillRepeatedly(testing::Return(true));
+
+  AutocompleteInput input(u"", metrics::OmniboxEventProto::NTP_COMPOSEBOX,
+                          TestSchemeClassifier());
+  input.set_focus_type(metrics::OmniboxFocusType::INTERACTION_FOCUS);
+  input.set_suggest_inventory(
+      omnibox::SuggestInventory::SUGGEST_INVENTORY_BRAINSTORM);
+
+  GURL suggest_url = GetProviderRequestURL(input);
+  EXPECT_FALSE(suggest_url.is_empty());
+
+  test_loader_factory()->AddResponse(suggest_url.spec(), "",
+                                     net::HTTP_NOT_FOUND);
+
+  EXPECT_TRUE(base::test::RunUntil([&] { return provider_->done(); }));
+
+  // Should contain fallback matches.
+  EXPECT_EQ(provider_->matches().size(),
+            omnibox::kDefaultFallbackNumSuggestions);
+  for (const auto& match : provider_->matches()) {
+    EXPECT_EQ(match.type, omnibox::AutocompleteMatchType::kSearchSuggest);
+    EXPECT_FALSE(match.contents.empty());
+  }
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 TEST_F(ZeroSuggestProviderTest, TestCacheStateWithSRPPrefetchDisabled) {
   EXPECT_CALL(*client_, IsAuthenticated())
@@ -3461,6 +3516,33 @@ TEST_F(ZeroSuggestProviderTest, SuggestUrlIncludesPageTitle) {
         .WillRepeatedly(testing::Return(true));
     GURL url =
         GetProviderRequestURL(ZeroPrefixInputForSRP(/*is_prefetch=*/false));
+    EXPECT_EQ(url.spec().find("pageTitle="), std::string::npos);
+  }
+  // Composebox gets the param when context tab title is present and
+  // personalized URL data collection is active.
+  {
+    EXPECT_CALL(*client_, IsLensEnabled())
+        .WillRepeatedly(testing::Return(true));
+    EXPECT_CALL(*client_, IsPersonalizedUrlDataCollectionActive())
+        .WillRepeatedly(testing::Return(true));
+    AutocompleteInput input = ZeroPrefixInputForComposebox();
+    input.set_context_tab_title(u"Context Tab Title");
+    input.set_context_tab_url(GURL("https://example.com/context"));
+    GURL url = GetProviderRequestURL(input);
+    EXPECT_NE(url.spec().find("pageTitle=Context%20Tab%20Title"),
+              std::string::npos);
+  }
+  // Composebox does not get the param when personalized URL data collection is
+  // disabled (such as when custom passphrase E2EE is enabled).
+  {
+    EXPECT_CALL(*client_, IsLensEnabled())
+        .WillRepeatedly(testing::Return(true));
+    EXPECT_CALL(*client_, IsPersonalizedUrlDataCollectionActive())
+        .WillRepeatedly(testing::Return(false));
+    AutocompleteInput input = ZeroPrefixInputForComposebox();
+    input.set_context_tab_title(u"Context Tab Title");
+    input.set_context_tab_url(GURL("https://example.com/context"));
+    GURL url = GetProviderRequestURL(input);
     EXPECT_EQ(url.spec().find("pageTitle="), std::string::npos);
   }
 }

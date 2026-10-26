@@ -32,6 +32,7 @@
 #include "components/viz/common/surfaces/child_local_surface_id_allocator.h"
 #include "components/viz/host/host_frame_sink_manager.h"
 #include "gpu/command_buffer/client/raster_interface.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
@@ -42,7 +43,7 @@
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/compositor/compositor.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_surface.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/display/types/display_constants.h"
@@ -386,14 +387,10 @@ void SurfaceTreeHost::SubmitCompositorFrame() {
   rii->VerifySyncTokensCHROMIUM(sync_tokens.data(), sync_tokens.size());
 
   prev_frame_verified_tokens_.clear();
-  frame.metadata.content_color_usage = gfx::ContentColorUsage::kSRGB;
   for (auto& resource : frame.resource_list) {
     if (resource.sync_token().verified_flush()) {
       prev_frame_verified_tokens_.insert(resource.sync_token());
     }
-    frame.metadata.content_color_usage =
-        std::max(frame.metadata.content_color_usage,
-                 resource.GetColorSpace().GetContentColorUsage());
   }
 
   frame.metadata.may_contain_video = root_surface_->ContainsVideo();
@@ -500,9 +497,11 @@ bool SurfaceTreeHost::ContentsFillsHostWindowOpaquely() const {
 
 void SurfaceTreeHost::InitHostWindow(const std::string& window_name) {
   host_window_->SetName(window_name);
-  host_window_->Init(ui::LAYER_SOLID_COLOR);
+  host_window_->Init(ui::LAYER_SURFACE);
   host_window_->set_owned_by_parent(false);
   host_window_->SetTransparent(true);
+  host_window_->layer()->AsSurface()->SetFallbackBackgroundColor(
+      SkColors::kWhite);
 
   // The host window is a container of surface tree. It doesn't handle pointer
   // events.
@@ -571,18 +570,18 @@ void SurfaceTreeHost::MaybeActivateSurface() {
     return;
   }
 
-  if (commit_target_layer->GetSurfaceId() &&
+  auto* surface = commit_target_layer->AsSurface();
+  if (surface->GetSurfaceId() &&
       !GetCurrentLocalSurfaceId().IsNewerThan(
-          commit_target_layer->GetSurfaceId()->local_surface_id())) {
+          surface->GetSurfaceId()->local_surface_id())) {
     return;
   }
 
   host_window_->UpdateLocalSurfaceIdFromEmbeddedClient(
       GetCurrentLocalSurfaceId());
-  commit_target_layer->SetShowSurface(
-      GetSurfaceId(), commit_target_layer->bounds().size(), SK_ColorWHITE,
-      cc::DeadlinePolicy::UseDefaultDeadline(),
-      false /* stretch_content_to_fill_bounds */);
+  surface->SetShowSurface(GetSurfaceId(), commit_target_layer->bounds().size(),
+                          cc::DeadlinePolicy::UseDefaultDeadline(),
+                          /*stretch_content_to_fill_bounds=*/false);
 }
 
 viz::SurfaceId SurfaceTreeHost::GetSurfaceId() const {
@@ -603,7 +602,7 @@ const ui::Layer* SurfaceTreeHost::GetCommitTargetLayer() const {
 
 void SurfaceTreeHost::OnLayerRecreated(ui::Layer* old_layer) {
   // TODO(b/319939913): Remove this log when the issue is fixed.
-  old_layer->SetName(old_layer->name() + "-host");
+  old_layer->SetName(old_layer->name() + ":Host");
   CHECK(old_layer->parent());
   CHECK(host_window()->layer()->parent());
 }

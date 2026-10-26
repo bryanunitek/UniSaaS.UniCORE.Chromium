@@ -4,15 +4,23 @@
 
 #import "ios/chrome/browser/assistant/ui/assistant_container_view_controller.h"
 
+#import "base/test/ios/wait_util.h"
+#import "base/time/time.h"
 #import "ios/chrome/browser/assistant/ui/assistant_container_delegate.h"
 #import "ios/chrome/browser/assistant/ui/assistant_container_detent.h"
+#import "ios/chrome/browser/assistant/ui/assistant_container_layout_utils.h"
 #import "ios/chrome/browser/keyboard/ui_bundled/UIKeyCommand+Chrome.h"
 #import "ios/chrome/browser/keyboard/ui_bundled/key_command_actions.h"
-#import "ios/chrome/browser/shared/coordinator/scene/state/layout_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/browser_layout_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/layout_state_test_passkey_factory.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/test/fake_scene_state.h"
+#import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
+#import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/test/app/uikit_test_util.h"
+#import "ios/web/public/test/web_task_environment.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
@@ -25,6 +33,7 @@
 - (void)handlePanGesture:(UIPanGestureRecognizer*)gesture;
 - (void)handleDimmingViewTap:(UITapGestureRecognizer*)gesture;
 - (void)handleGrabberButtonTapped:(UIButton*)sender;
+- (BOOL)isGrabberHidden;
 @end
 
 // Expose accessors for private properties.
@@ -32,6 +41,7 @@
 @property(nonatomic, readonly) NSLayoutConstraint* heightConstraint;
 @property(nonatomic, readonly) UIPanGestureRecognizer* headerPanGesture;
 @property(nonatomic, readonly) NSLayoutConstraint* outerBottomConstraint;
+@property(nonatomic, readonly) UIButton* grabberButton;
 @property(nonatomic, assign) BOOL isAnimating;
 @end
 
@@ -45,6 +55,10 @@
 }
 - (NSLayoutConstraint*)outerBottomConstraint {
   return [self valueForKey:@"_outerBottomConstraint"];
+}
+- (UIButton*)grabberButton {
+  return [[self valueForKey:@"_assistantContainerView"]
+      valueForKey:@"_grabberButton"];
 }
 @end
 
@@ -140,6 +154,30 @@ TEST_F(AssistantContainerViewControllerTest, UpdatesMinimizedDetentHeight) {
   view_controller_.heightConstraint.constant = new_min_height - 10.0;
   [view_controller_ updateHeightConstraint];
   EXPECT_EQ(view_controller_.heightConstraint.constant, new_min_height);
+}
+
+// Test that updating the `mediumDetentHeight` property in points dynamically
+// updates the medium detent height and resets to default when `std::nullopt`.
+TEST_F(AssistantContainerViewControllerTest, UpdatesMediumDetentHeight) {
+  [view_controller_ setDetents:{AssistantContainerDetent::kMedium}];
+
+  constexpr CGFloat kDefaultMediumRatio = 0.5;
+  NSInteger default_medium_height =
+      [view_controller_ absoluteMaxHeight] * kDefaultMediumRatio;
+  EXPECT_EQ(
+      [view_controller_ heightForDetent:AssistantContainerDetent::kMedium],
+      default_medium_height);
+
+  constexpr NSInteger kCustomMediumHeight = 350;
+  view_controller_.mediumDetentHeight = kCustomMediumHeight;
+  EXPECT_EQ(
+      [view_controller_ heightForDetent:AssistantContainerDetent::kMedium],
+      kCustomMediumHeight);
+
+  view_controller_.mediumDetentHeight = std::nullopt;
+  EXPECT_EQ(
+      [view_controller_ heightForDetent:AssistantContainerDetent::kMedium],
+      default_medium_height);
 }
 
 // Tests that specific limits are respected.
@@ -268,6 +306,68 @@ TEST_F(AssistantContainerViewControllerTest, AnimateToDetentValid) {
   EXPECT_OCMOCK_VERIFY(delegate_mock);
 }
 
+// Tests that animateToDetent without parameters uses default duration and
+// curve.
+TEST_F(AssistantContainerViewControllerTest, AnimateToDetentDefault) {
+  [view_controller_ setDetents:{AssistantContainerDetent::kMinimized,
+                                AssistantContainerDetent::kLarge}];
+
+  id delegate_mock = OCMProtocolMock(@protocol(AssistantContainerDelegate));
+  view_controller_.delegate = delegate_mock;
+
+  OCMExpect([delegate_mock assistantContainer:view_controller_
+       animateAlongsideTransitionToPercentage:1.0]);
+
+  OCMExpect([delegate_mock
+      assistantContainer:view_controller_
+         didChangeDetent:AssistantContainerDetent::kLarge]);
+
+  [view_controller_ animateToDetent:AssistantContainerDetent::kLarge];
+
+  EXPECT_EQ([view_controller_ absoluteMaxHeight],
+            view_controller_.heightConstraint.constant);
+
+  EXPECT_OCMOCK_VERIFY(delegate_mock);
+}
+
+// Tests that the delegate is notified of detent height updates on layout and
+// orientation changes.
+TEST_F(AssistantContainerViewControllerTest,
+       NotifiesDelegateOnDetentHeightUpdates) {
+  id delegate_mock = OCMProtocolMock(@protocol(AssistantContainerDelegate));
+  view_controller_.delegate = delegate_mock;
+
+  // Initial layout should notify the delegate.
+  OCMExpect([delegate_mock
+      assistantContainerDidUpdateDetentHeights:view_controller_]);
+  [view_controller_.view setNeedsLayout];
+  [view_controller_.view layoutIfNeeded];
+  EXPECT_OCMOCK_VERIFY(delegate_mock);
+
+  // Orientation / size transition should notify the delegate again.
+  id<UIViewControllerTransitionCoordinator> mock_coordinator =
+      OCMProtocolMock(@protocol(UIViewControllerTransitionCoordinator));
+  OCMStub([mock_coordinator animateAlongsideTransition:[OCMArg any]
+                                            completion:[OCMArg any]])
+      .andDo(^(NSInvocation* invocation) {
+        void (^completion)(id<UIViewControllerTransitionCoordinatorContext>) =
+            nil;
+        [invocation getArgument:&completion atIndex:3];
+        if (completion) {
+          completion(nil);
+        }
+      });
+
+  OCMExpect([delegate_mock
+      assistantContainerDidUpdateDetentHeights:view_controller_]);
+  [view_controller_ viewWillTransitionToSize:CGSizeMake(580, 320)
+                   withTransitionCoordinator:mock_coordinator];
+  [view_controller_.view setNeedsLayout];
+  [view_controller_.view layoutIfNeeded];
+
+  EXPECT_OCMOCK_VERIFY(delegate_mock);
+}
+
 // Tests that tapping the dimming view when in the large detent dismisses the
 // container back to the minimized detent.
 TEST_F(AssistantContainerViewControllerTest, HandleDimmingViewTap) {
@@ -332,23 +432,34 @@ TEST_F(AssistantContainerViewControllerTest, CyclesThroughDetentsOnTap) {
   view_controller_.isAnimating = NO;
 }
 
-// Tests that LayoutState updates trigger layout updates.
+// Tests that SceneLayoutState updates trigger layout updates.
 TEST_F(AssistantContainerViewControllerTest, UpdatesLayoutOnLayoutStateChange) {
-  LayoutState* layout_state = [[LayoutState alloc] init];
-  view_controller_.layoutState = layout_state;
+  web::WebTaskEnvironment task_environment;
+  std::unique_ptr<TestProfileIOS> profile = TestProfileIOS::Builder().Build();
+  FakeSceneState* scene_state =
+      [[FakeSceneState alloc] initWithProfile:profile.get()];
+  std::unique_ptr<TestBrowser> browser =
+      std::make_unique<TestBrowser>(profile.get(), scene_state);
+  BrowserLayoutState* layout_state = browser->GetBrowserLayoutState();
+
+  view_controller_.browserLayoutState = layout_state;
+  view_controller_.sceneLayoutState = scene_state.layoutState;
 
   // Initially unsupported, should be in sheet mode.
   EXPECT_EQ(view_controller_.presentationContext,
             AssistantPresentationContext::kSheet);
 
   // Update state to supported.
-  [layout_state setContainedLayoutSupported:YES
-                                    passKey:LayoutStateTestPassKeyFactory::
-                                                CreateSceneKey()];
+  [scene_state.layoutState
+      setContainedLayoutSupported:YES
+                          passKey:LayoutStateTestPassKeyFactory::
+                                      CreateSceneKey()];
 
   // Should switch to panel mode.
   EXPECT_EQ(view_controller_.presentationContext,
             AssistantPresentationContext::kPanel);
+  view_controller_.browserLayoutState = nil;
+  [scene_state shutdown];
 }
 
 // Tests that performing accessibility escape when in the large detent moves
@@ -456,6 +567,134 @@ TEST_F(AssistantContainerViewControllerTest, AnchorsToLayoutGuide) {
   ASSERT_NE(nil, outer_bottom_constraint);
   EXPECT_TRUE(outer_bottom_constraint.active);
   EXPECT_EQ(outer_bottom_constraint.secondAnchor, anchor_view.topAnchor);
+}
+
+// Tests that setting grabberHidden dynamically hides the grabber button and
+// disables header pan resizing.
+TEST_F(AssistantContainerViewControllerTest,
+       GrabberHiddenDisablesInteractions) {
+  EXPECT_FALSE([view_controller_ isGrabberHidden]);
+  EXPECT_TRUE(view_controller_.headerPanGesture.enabled);
+  EXPECT_FALSE(view_controller_.grabberButton.hidden);
+
+  [view_controller_ setGrabberHidden:YES animated:NO];
+  EXPECT_TRUE([view_controller_ isGrabberHidden]);
+  EXPECT_TRUE(view_controller_.headerPanGesture.enabled);
+  EXPECT_TRUE(view_controller_.grabberButton.hidden);
+
+  [view_controller_ setGrabberHidden:NO animated:NO];
+  EXPECT_FALSE([view_controller_ isGrabberHidden]);
+  EXPECT_TRUE(view_controller_.headerPanGesture.enabled);
+  EXPECT_FALSE(view_controller_.grabberButton.hidden);
+}
+
+// Tests that setting grabberHidden dynamically with animation hides the grabber
+// button and disables header pan resizing after the animation completes.
+TEST_F(AssistantContainerViewControllerTest,
+       GrabberHiddenDisablesInteractionsAnimated) {
+  EXPECT_FALSE([view_controller_ isGrabberHidden]);
+  EXPECT_TRUE(view_controller_.headerPanGesture.enabled);
+  EXPECT_FALSE(view_controller_.grabberButton.hidden);
+
+  [view_controller_ setGrabberHidden:YES animated:YES];
+  EXPECT_TRUE([view_controller_ isGrabberHidden]);
+  // During animation, interactions are disabled immediately.
+  EXPECT_FALSE(view_controller_.headerPanGesture.enabled);
+  EXPECT_FALSE(view_controller_.grabberButton.enabled);
+
+  // Wait for the animation to complete.
+  constexpr double kAnimationDelayDelta = 0.1;
+  const base::TimeDelta delay = base::Seconds(
+      kAssistantGrabberVisibilityAnimationDuration + kAnimationDelayDelta);
+  base::test::ios::SpinRunLoopWithMinDelay(delay);
+
+  EXPECT_TRUE(view_controller_.headerPanGesture.enabled);
+  EXPECT_TRUE(view_controller_.grabberButton.hidden);
+
+  [view_controller_ setGrabberHidden:NO animated:YES];
+  EXPECT_FALSE([view_controller_ isGrabberHidden]);
+  // During animation, interactions are disabled immediately.
+  EXPECT_FALSE(view_controller_.headerPanGesture.enabled);
+  EXPECT_FALSE(view_controller_.grabberButton.enabled);
+
+  // Wait for the animation to complete.
+  base::test::ios::SpinRunLoopWithMinDelay(delay);
+
+  EXPECT_TRUE(view_controller_.headerPanGesture.enabled);
+  EXPECT_FALSE(view_controller_.grabberButton.hidden);
+}
+
+// Tests that largestUndimmedDetent defaults to kMedium and controls background
+// dimming and dimming view tap handling.
+TEST_F(AssistantContainerViewControllerTest,
+       LargestUndimmedDetentControlsDimmingAndTap) {
+  EXPECT_EQ(view_controller_.largestUndimmedDetent,
+            kDefaultLargestUndimmedDetent);
+
+  [view_controller_ setDetents:{AssistantContainerDetent::kMinimized,
+                                AssistantContainerDetent::kMedium,
+                                AssistantContainerDetent::kLarge}];
+
+  // At kMedium (the default largestUndimmedDetent), the dimming view should not
+  // be dimmed and tapping it should not collapse the container.
+  [view_controller_ animateToDetent:AssistantContainerDetent::kMedium
+                           duration:0.0
+                              curve:UIViewAnimationCurveEaseInOut];
+  CGFloat medium_height = view_controller_.heightConstraint.constant;
+  EXPECT_EQ(0.0, view_controller_.dimmingView.alpha);
+
+  UITapGestureRecognizer* dummy_gesture = [[UITapGestureRecognizer alloc] init];
+  [view_controller_ handleDimmingViewTap:dummy_gesture];
+  EXPECT_EQ(medium_height, view_controller_.heightConstraint.constant);
+
+  // Setting largestUndimmedDetent to kMinimized should dim kMedium and allow
+  // tapping the dimming view to collapse to kMinimized.
+  view_controller_.largestUndimmedDetent = AssistantContainerDetent::kMinimized;
+  EXPECT_NEAR(kMaxBackgroundDimmingAlpha, view_controller_.dimmingView.alpha,
+              0.001);
+
+  [view_controller_ handleDimmingViewTap:dummy_gesture];
+  [view_controller_.view layoutIfNeeded];
+  EXPECT_EQ(view_controller_.heightConstraint.constant,
+            static_cast<CGFloat>(kAssistantContainerMinimizedDetentHeight));
+  view_controller_.isAnimating = NO;
+}
+
+// Tests that adding the container view to a parent view with different size
+// class traits before `didMoveToParentViewController:` does not crash when
+// trait changes fire before parent-relative bottom constraints are created.
+TEST_F(AssistantContainerViewControllerTest,
+       TraitChangeBeforeDidMoveToParentViewController) {
+  UIViewController* child = [[UIViewController alloc] init];
+  AssistantContainerViewController* container_vc =
+      [[AssistantContainerViewController alloc] initWithViewController:child];
+  container_vc.minimizedDetentHeight = kAssistantContainerMinimizedDetentHeight;
+
+  // Load the view before moving to the parent view controller so trait change
+  // registration in `viewDidLoad` is active.
+  UIView* container_view = container_vc.view;
+  ASSERT_TRUE(container_view);
+
+  UIViewController* parent_vc = [[UIViewController alloc] init];
+  parent_vc.view.frame = window_.bounds;
+  // Force a trait difference relative to the unparented container view.
+  UIUserInterfaceSizeClass initial_size_class =
+      container_vc.traitCollection.horizontalSizeClass;
+  parent_vc.traitOverrides.horizontalSizeClass =
+      initial_size_class == UIUserInterfaceSizeClassRegular
+          ? UIUserInterfaceSizeClassCompact
+          : UIUserInterfaceSizeClassRegular;
+  [window_.rootViewController.view addSubview:parent_vc.view];
+  [window_ layoutIfNeeded];
+
+  [parent_vc addChildViewController:container_vc];
+  [parent_vc.view addSubview:container_view];
+  [parent_vc.view layoutIfNeeded];
+  [container_vc didMoveToParentViewController:parent_vc];
+  [parent_vc.view layoutIfNeeded];
+
+  EXPECT_NE(nil, container_vc.outerBottomConstraint);
+  [parent_vc.view removeFromSuperview];
 }
 
 }  // namespace

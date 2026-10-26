@@ -8,13 +8,15 @@
 #include <memory>
 #include <set>
 
+#include "base/check.h"
 #include "base/check_deref.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
-#include "components/autofill/core/browser/autofill_browser_util.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/autofill_trigger_source.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
-#include "components/autofill/core/browser/form_qualifiers.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
@@ -22,11 +24,13 @@
 #include "components/autofill/core/browser/foundations/scoped_autofill_managers_observation.h"
 #include "components/autofill/core/browser/integrators/optimization_guide/autofill_optimization_guide_decider.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
+#include "components/autofill/core/browser/metrics/form_events/credit_card_form_event_logger.h"
 #include "components/autofill/core/browser/metrics/form_events/form_event_logger_base.h"
 #include "components/autofill/core/browser/metrics/payments/omnibox_autofill_metrics.h"
 #include "components/autofill/core/browser/metrics/suggestions_list_metrics.h"
 #include "components/autofill/core/browser/payments/credit_card_access_manager.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_util.h"
 #include "components/autofill/core/browser/suggestions/payments/credit_card_suggestion_generator.h"
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
@@ -49,15 +53,21 @@ bool IsValidOmniboxAutofillSuggestion(SuggestionType type) {
     case SuggestionType::kAllLoyaltyCardsEntry:
     case SuggestionType::kAllSavedPasswordsEntry:
     case SuggestionType::kAtMemoryAiDisclosure:
+    case SuggestionType::kAtMemoryFetching:
     case SuggestionType::kAtMemoryGenericError:
     case SuggestionType::kAtMemoryInactivityNudge:
     case SuggestionType::kAtMemoryNoConnection:
+    case SuggestionType::kAtMemoryOpenGemini:
     case SuggestionType::kAtMemorySearchAffordance:
     case SuggestionType::kAtMemorySearchResult:
+    case SuggestionType::kAtMemoryShortcutSettingsPromo:
+    case SuggestionType::kAtMemorySourceAttribution:
     case SuggestionType::kAutocompleteAtMemoryButton:
     case SuggestionType::kAutocompleteEntry:
     case SuggestionType::kAutofillAiOtherOrders:
+    case SuggestionType::kAutofillAiOtherShipments:
     case SuggestionType::kAutofillAiPrivateInferenceNotice:
+    case SuggestionType::kAutofillAiSourceAttribution:
     case SuggestionType::kBackupPasswordEntry:
     case SuggestionType::kBnplEntry:
     case SuggestionType::kBnplFootnote:
@@ -76,6 +86,7 @@ bool IsValidOmniboxAutofillSuggestion(SuggestionType type) {
     case SuggestionType::kFillPassword:
     case SuggestionType::kFreeformFooter:
     case SuggestionType::kGeneratePasswordEntry:
+    case SuggestionType::kGmailOneTimePasswordEntry:
     case SuggestionType::kIbanEntry:
     case SuggestionType::kIdentityCredential:
     case SuggestionType::kInsecureContextPaymentDisabledMessage:
@@ -90,22 +101,22 @@ bool IsValidOmniboxAutofillSuggestion(SuggestionType type) {
     case SuggestionType::kManageIban:
     case SuggestionType::kManageLoyaltyCard:
     case SuggestionType::kManageEnhancedAutofill:
+    case SuggestionType::kManageOffers:
     case SuggestionType::kMaximizeCreditCardBenefitsEntry:
     case SuggestionType::kMerchantPromoCodeEntry:
-    case SuggestionType::kMixedFormMessage:
     case SuggestionType::kOneTimePasswordEntry:
-    case SuggestionType::kOpenGemini:
+    case SuggestionType::kOpenGmailForOtps:
     case SuggestionType::kPasswordEntry:
     case SuggestionType::kPasswordFieldByFieldFilling:
     case SuggestionType::kPendingStateSignin:
     case SuggestionType::kPersonalContextNotice:
+    case SuggestionType::kRemoveAutofillAi:
     case SuggestionType::kSaveAndFillCreditCardEntry:
     case SuggestionType::kScanCreditCard:
-    case SuggestionType::kSeePromoCodeDetails:
     case SuggestionType::kSeparator:
     case SuggestionType::kTitle:
     case SuggestionType::kTroubleSigningInEntry:
-    case SuggestionType::kUndoOrClear:
+    case SuggestionType::kUndo:
     case SuggestionType::kViewPasswordDetails:
     case SuggestionType::kWebauthnCredential:
     case SuggestionType::kWebauthnPasskeyQrCode:
@@ -117,6 +128,7 @@ bool IsValidOmniboxAutofillSuggestion(SuggestionType type) {
 }  // namespace
 
 using autofill_metrics::OmniboxAutofillShowChipDecisionPart1;
+using autofill_metrics::OmniboxAutofillShowChipDecisionPart2;
 
 OmniboxAutofillDelegate::OmniboxAutofillDelegate(AutofillClient* client)
     : client_(CHECK_DEREF(client)) {
@@ -188,22 +200,29 @@ void OmniboxAutofillDelegate::OnFieldTypesDetermined(
 
   // Iterate over all AutofillFields in the FormStructure, paying attention to
   // the frame they are in (main vs. iframe) as well as ensuring there's only a
-  // single CREDIT_CARD_NUMBER type.
-  bool found_credit_card_number_field = false;
+  // single visible CREDIT_CARD_NUMBER type.
+  bool found_visible_credit_card_number_field = false;
   std::set<url::Origin> iframe_origins;
   for (const std::unique_ptr<AutofillField>& field : form_structure->fields()) {
-    if (field->Type().GetCreditCardType() == CREDIT_CARD_NUMBER) {
-      if (found_credit_card_number_field) {
+    if (IsVisibleCreditCardNumberField(*field)) {
+      if (found_visible_credit_card_number_field) {
         LogOmniboxAutofillShowChipDecisionPart1(
             OmniboxAutofillShowChipDecisionPart1::
-                kFoundMultipleCreditCardNumberFields);
+                kFoundMultipleVisibleCreditCardNumberFields);
         return;
       }
-      found_credit_card_number_field = true;
+      found_visible_credit_card_number_field = true;
     }
-    if (!FieldIsInMainFrame(manager, *field)) {
+    if (!IsFieldInMainFrame(manager, *field)) {
       iframe_origins.insert(field->origin());
     }
+  }
+
+  // Not a single visible credit card number field was detected.
+  if (!found_visible_credit_card_number_field) {
+    LogOmniboxAutofillShowChipDecisionPart1(
+        OmniboxAutofillShowChipDecisionPart1::kNoVisibleCreditCardNumberFields);
+    return;
   }
 
   // All fields of the form must be either in the main frame or an allowlisted
@@ -215,6 +234,10 @@ void OmniboxAutofillDelegate::OnFieldTypesDetermined(
     return;
   }
   for (const url::Origin& origin : iframe_origins) {
+    // Skip if the iframe origin matches the main frame origin.
+    if (origin == manager.client().GetLastCommittedPrimaryMainFrameOrigin()) {
+      continue;
+    }
     if (!manager.client()
              .GetAutofillOptimizationGuideDecider()
              ->IsUrlEligibleForOmniboxAutofill(origin.GetURL())) {
@@ -229,26 +252,42 @@ void OmniboxAutofillDelegate::OnFieldTypesDetermined(
   LogOmniboxAutofillShowChipDecisionPart1(
       OmniboxAutofillShowChipDecisionPart1::kSuccess);
   trigger_form_global_id_ = form_structure->global_id();
+  trigger_field_global_id_ = {};
   for (const std::unique_ptr<AutofillField>& field : form_structure->fields()) {
-    if (field->Type().GetCreditCardType() == CREDIT_CARD_NUMBER) {
+    if (IsVisibleCreditCardNumberField(*field)) {
       trigger_field_global_id_ = field->global_id();
       break;
     }
   }
+  CHECK(trigger_field_global_id_);
+  trigger_autofill_manager_ = manager.GetWeakPtr();
   candidate_form_found_ = true;
 
-  // TODO: crbug.com/490214534 - Initiate GetIntersectionObserverInfo(~).
+  visibility_receiver_.reset();
+  manager.driver().ObserveFieldVisibility(
+      trigger_field_global_id_,
+      visibility_receiver_.BindNewPipeAndPassRemote());
 }
 
 void OmniboxAutofillDelegate::OnAutofillManagerStateChanged(
     AutofillManager& manager,
     AutofillManager::LifecycleState previous,
     AutofillManager::LifecycleState current) {
+  if (!candidate_form_found_) {
+    // Candidate form has not yet been found, so no flow is active.
+    return;
+  }
   switch (previous) {
     case AutofillManager::LifecycleState::kActive:
-      HideOmniboxAutofillChip();
+      // Reset state (and hide the chip if it was shown) when the specific frame
+      // containing the trigger field transitions away from active.
+      if (IsTriggerFieldGlobalIdInFrame(manager.driver())) {
+        Reset();
+      }
       break;
-    default:
+    case AutofillManager::LifecycleState::kInactive:
+    case AutofillManager::LifecycleState::kPendingReset:
+    case AutofillManager::LifecycleState::kPendingDeletion:
       break;
   }
 }
@@ -258,15 +297,36 @@ void OmniboxAutofillDelegate::OnAfterFormsSeen(
     base::span<const FormGlobalId> updated_forms,
     base::span<const FormGlobalId> removed_forms) {
   if (!candidate_form_found_) {
-    // Candidate form has not yet been found, so the chip is not being shown.
+    // Candidate form has not yet been found, so no flow is active.
     return;
   }
   for (const FormGlobalId& id : removed_forms) {
+    // Reset state (and hide the chip if it was shown) when the trigger form is
+    // removed from the DOM.
     if (id == trigger_form_global_id_) {
-      HideOmniboxAutofillChip();
+      Reset();
       return;
     }
   }
+}
+
+void OmniboxAutofillDelegate::OnAfterDidAutofillForm(AutofillManager& manager,
+                                                     FormGlobalId form) {
+  if (!candidate_form_found_) {
+    // Candidate form has not yet been found, so no flow is active.
+    return;
+  }
+  if (!field_became_visible_) {
+    // The trigger field is not visible in the viewport; so the omnibox chip is
+    // not shown.
+    return;
+  }
+  if (form != trigger_form_global_id_) {
+    // The autofilled `form` is different from the trigger form.
+    return;
+  }
+
+  client_->GetPaymentsAutofillClient()->HideOmniboxAutofillChip();
 }
 
 bool OmniboxAutofillDelegate::OnFilterChanged(const std::u16string& filter) {
@@ -281,33 +341,18 @@ bool OmniboxAutofillDelegate::IsSearching() const {
   return false;
 }
 
-std::variant<AutofillDriver*, password_manager::PasswordManagerDriver*>
-OmniboxAutofillDelegate::GetDriver_DoNotUse() {
-  auto* manager = client_->GetAutofillManagerForPrimaryMainFrame();
-  if (manager) {
-    return &manager->driver();
-  }
-  return static_cast<AutofillDriver*>(nullptr);
-}
-
 void OmniboxAutofillDelegate::OnSuggestionsShown(
     base::span<const Suggestion> suggestions,
-    base::optional_ref<const SuggestionMetadata> parent_suggestion_metadata) {
-  auto* manager = static_cast<BrowserAutofillManager*>(
-      client_->GetAutofillManagerForPrimaryMainFrame());
+    const SuggestionUiMetadata& metadata) {
+  auto* manager =
+      static_cast<BrowserAutofillManager*>(trigger_autofill_manager_.get());
   if (!manager) {
     return;
   }
 
-  const FormStructure* form =
-      manager->FindCachedFormById(trigger_form_global_id_);
-  if (!form) {
-    return;
-  }
-
-  const AutofillField* trigger_field =
-      form->GetFieldById(trigger_field_global_id_);
-  if (!trigger_field) {
+  auto [form, trigger_field] = manager->FindFormAndField(
+      trigger_form_global_id_, trigger_field_global_id_);
+  if (!form || !trigger_field) {
     return;
   }
 
@@ -323,8 +368,7 @@ void OmniboxAutofillDelegate::OnSuggestionsShown(
   // Treat clicking the "Autofill payment" omnibox chip (which forcefully shows
   // the suggestions bubble) the same as a form interaction.
   if (autofill_metrics::FormEventLoggerBase* logger =
-          manager->GetEventFormLogger(*trigger_field);
-      logger && ShouldBeParsed(*form, /*log_manager=*/nullptr)) {
+          manager->GetEventFormLogger(*trigger_field)) {
     if (logger == &manager->GetCreditCardFormEventLogger()) {
       manager->GetCreditCardFormEventLogger().set_signin_state_for_metrics(
           client_->GetPersonalDataManager()
@@ -336,32 +380,39 @@ void OmniboxAutofillDelegate::OnSuggestionsShown(
 
   // TODO(crbug.com/7988776): Use an omnibox-specific trigger source.
   manager->DidShowSuggestions(
-      suggestions, parent_suggestion_metadata, trigger_form_global_id_,
-      trigger_field_global_id_,
+      suggestions, metadata, trigger_form_global_id_, trigger_field_global_id_,
       AutofillExternalDelegate::UpdateSuggestionsCallback());
+
+  manager->GetCreditCardFormEventLogger().OnOmniboxAutofillChipClicked();
 }
 
 void OmniboxAutofillDelegate::OnSuggestionsHidden(
     SuggestionHidingReason reason) {
-  if (auto* manager = static_cast<BrowserAutofillManager*>(
-          client_->GetAutofillManagerForPrimaryMainFrame())) {
-    manager->OnSuggestionsHidden(reason);
+  if (trigger_autofill_manager_) {
+    trigger_autofill_manager_->OnSuggestionsHidden(reason);
   }
 }
 
 void OmniboxAutofillDelegate::DidSelectSuggestion(
-    const Suggestion& suggestion) {
-  // TODO(crbug.com/490214497): Implement when payment method suggestion list is
-  // hovered.
-  NOTIMPLEMENTED();
+    const Suggestion& suggestion,
+    const FormGlobalId& form_id,
+    const FieldGlobalId& field_id) {
+  FillOrPreviewCard(suggestion, mojom::ActionPersistence::kPreview);
 }
 
 void OmniboxAutofillDelegate::DidAcceptSuggestion(
     const Suggestion& suggestion,
-    const SuggestionMetadata& metadata) {
-  // TODO(crbug.com/490214497): Implement when payment method suggestion list is
-  // clicked.
-  NOTIMPLEMENTED();
+    const SuggestionMetadata& metadata,
+    const FormGlobalId& form_id,
+    const FieldGlobalId& field_id) {
+  FillOrPreviewCard(suggestion, mojom::ActionPersistence::kFill);
+
+  auto* manager =
+      static_cast<BrowserAutofillManager*>(trigger_autofill_manager_.get());
+  if (!manager) {
+    return;
+  }
+  manager->GetCreditCardFormEventLogger().OnOmniboxAutofillSuggestionAccepted();
 }
 
 bool OmniboxAutofillDelegate::RemoveSuggestion(const Suggestion& suggestion) {
@@ -369,9 +420,8 @@ bool OmniboxAutofillDelegate::RemoveSuggestion(const Suggestion& suggestion) {
 }
 
 void OmniboxAutofillDelegate::ClearPreviewedForm() {
-  auto* manager = client_->GetAutofillManagerForPrimaryMainFrame();
-  if (manager) {
-    manager->driver().RendererShouldClearPreviewedForm();
+  if (trigger_autofill_manager_) {
+    trigger_autofill_manager_->driver().RendererShouldClearPreviewedForm();
   }
 }
 
@@ -384,26 +434,26 @@ void OmniboxAutofillDelegate::OnTabSelected(TabbedPaneTabType tab_type) {
   NOTREACHED();
 }
 
-void OmniboxAutofillDelegate::OnGetIntersectionObserverInfo(bool is_visible) {
-  if (!is_visible) {
-    return;
-  }
+FieldGlobalId OmniboxAutofillDelegate::GetQueriedFieldId() const {
+  return trigger_field_global_id_;
+}
 
-  auto* manager = static_cast<BrowserAutofillManager*>(
-      client_->GetAutofillManagerForPrimaryMainFrame());
+void OmniboxAutofillDelegate::OnFieldBecameVisible() {
+  // Log that the field became visible to the user's viewport.
+  LogOmniboxAutofillShowChipDecisionPart2(
+      OmniboxAutofillShowChipDecisionPart2::kSuccess);
+  field_became_visible_ = true;
+  visibility_receiver_.reset();
+
+  auto* manager =
+      static_cast<BrowserAutofillManager*>(trigger_autofill_manager_.get());
   if (!manager) {
     return;
   }
 
-  const FormStructure* form =
-      manager->FindCachedFormById(trigger_form_global_id_);
-  if (!form) {
-    return;
-  }
-
-  const AutofillField* trigger_field =
-      form->GetFieldById(trigger_field_global_id_);
-  if (!trigger_field) {
+  auto [form, trigger_field] = manager->FindFormAndField(
+      trigger_form_global_id_, trigger_field_global_id_);
+  if (!form || !trigger_field) {
     return;
   }
 
@@ -427,21 +477,18 @@ void OmniboxAutofillDelegate::OnGetIntersectionObserverInfo(bool is_visible) {
 
   // Log the number of credit card suggestions generated, maintaining
   // consistency with standard Autofill suggestion generation logging.
-  autofill_metrics::LogSuggestionsCount(suggestions.size(),
-                                        FillingProduct::kCreditCard);
+  autofill_metrics::LogSuggestionsCount(suggestions);
 
-  // Log security status of the credit card form when suggestions are generated,
-  // similar to standard Autofill suggestions generation.
-  AutofillMetrics::LogIsQueriedCreditCardFormSecure(client_->IsContextSecure());
-
-  // Shows the "Autofill payment" chip and initializes the bubble.
-  client_->GetPaymentsAutofillClient()->ShowOmniboxAutofillChip(
+  // Requests to show the "Autofill payment" chip and initializes the bubble.
+  client_->GetPaymentsAutofillClient()->ShowExpandedOmniboxAutofillChip(
       std::move(suggestions),
+      base::BindOnce(&OmniboxAutofillDelegate::OnChipShown,
+                     weak_ptr_factory_.GetWeakPtr()),
       base::BindRepeating(
           [](base::WeakPtr<OmniboxAutofillDelegate> delegate,
              base::span<const Suggestion> suggestions) {
             if (delegate) {
-              delegate->OnSuggestionsShown(suggestions, std::nullopt);
+              delegate->OnSuggestionsShown(suggestions, /*metadata=*/{});
             }
           },
           weak_ptr_factory_.GetWeakPtr()),
@@ -453,10 +500,38 @@ void OmniboxAutofillDelegate::OnGetIntersectionObserverInfo(bool is_visible) {
             }
           },
           weak_ptr_factory_.GetWeakPtr()),
-      base::BindRepeating(&OmniboxAutofillDelegate::DidSelectSuggestion,
+      base::BindRepeating(
+          [](base::WeakPtr<OmniboxAutofillDelegate> delegate,
+             FormGlobalId form_id, FieldGlobalId field_id,
+             const Suggestion& suggestion) {
+            if (delegate) {
+              delegate->DidSelectSuggestion(suggestion, form_id, field_id);
+            }
+          },
+          weak_ptr_factory_.GetWeakPtr(), trigger_form_global_id_,
+          trigger_field_global_id_),
+      base::BindRepeating(&OmniboxAutofillDelegate::ClearPreviewedForm,
                           weak_ptr_factory_.GetWeakPtr()),
-      base::BindRepeating(&OmniboxAutofillDelegate::DidAcceptSuggestion,
-                          weak_ptr_factory_.GetWeakPtr()));
+      base::BindRepeating(
+          [](base::WeakPtr<OmniboxAutofillDelegate> delegate,
+             FormGlobalId form_id, FieldGlobalId field_id,
+             const Suggestion& suggestion, const SuggestionMetadata& metadata) {
+            if (delegate) {
+              delegate->DidAcceptSuggestion(suggestion, metadata, form_id,
+                                            field_id);
+            }
+          },
+          weak_ptr_factory_.GetWeakPtr(), trigger_form_global_id_,
+          trigger_field_global_id_));
+}
+
+void OmniboxAutofillDelegate::OnChipShown() {
+  auto* manager =
+      static_cast<BrowserAutofillManager*>(trigger_autofill_manager_.get());
+  if (!manager) {
+    return;
+  }
+  manager->GetCreditCardFormEventLogger().OnOmniboxAutofillChipShown();
 }
 
 bool OmniboxAutofillDelegate::IsOutermostMainFrameActiveAutofillManager(
@@ -465,22 +540,67 @@ bool OmniboxAutofillDelegate::IsOutermostMainFrameActiveAutofillManager(
          !manager.driver().IsEmbedded() && manager.driver().IsActive();
 }
 
-bool OmniboxAutofillDelegate::FieldIsInMainFrame(
+bool OmniboxAutofillDelegate::IsVisibleCreditCardNumberField(
+    const AutofillField& field) const {
+  return field.Type().GetCreditCardType() == CREDIT_CARD_NUMBER &&
+         field.is_visible();
+}
+
+bool OmniboxAutofillDelegate::IsFieldInMainFrame(
     AutofillManager& manager,
     const AutofillField& field) const {
   return field.host_frame() == manager.driver().GetFrameToken() &&
          !manager.driver().GetParent();
 }
 
-void OmniboxAutofillDelegate::Reset() {
-  candidate_form_found_ = false;
-  trigger_form_global_id_ = FormGlobalId();
-  trigger_field_global_id_ = FieldGlobalId();
+bool OmniboxAutofillDelegate::IsTriggerFieldGlobalIdInFrame(
+    AutofillDriver& driver) const {
+  if (!candidate_form_found_) {
+    // Candidate form has not yet been found, so the trigger field has not been
+    // found.
+    return false;
+  }
+  return trigger_field_global_id_.frame_token == driver.GetFrameToken();
 }
 
-void OmniboxAutofillDelegate::HideOmniboxAutofillChip() {
-  client_->GetPaymentsAutofillClient()->HideOmniboxAutofillChip();
-  Reset();
+void OmniboxAutofillDelegate::FillOrPreviewCard(
+    const Suggestion& suggestion,
+    mojom::ActionPersistence action_persistence) {
+  CHECK(suggestion.type == SuggestionType::kCreditCardEntry ||
+        suggestion.type == SuggestionType::kVirtualCreditCardEntry);
+
+  auto* manager =
+      static_cast<BrowserAutofillManager*>(trigger_autofill_manager_.get());
+  if (!manager) {
+    return;
+  }
+
+  payments::FillOrPreviewCard(action_persistence, suggestion.type,
+                              suggestion.payload, *manager,
+                              trigger_form_global_id_, trigger_field_global_id_,
+                              AutofillTriggerSource::kOmniboxAutofill,
+                              /*require_user_confirmation=*/false);
+}
+
+void OmniboxAutofillDelegate::Reset() {
+  CHECK(candidate_form_found_);
+
+  if (field_became_visible_) {
+    client_->GetPaymentsAutofillClient()->HideOmniboxAutofillChip();
+  } else {
+    // If a candidate form was found but its trigger field never became visible
+    // by the time `Reset()` is called (e.g., the user never scrolled it into
+    // view), log that IntersectionObserver never reported it as visible.
+    LogOmniboxAutofillShowChipDecisionPart2(
+        OmniboxAutofillShowChipDecisionPart2::
+            kIntersectionObserverNeverReportedVisibility);
+  }
+
+  candidate_form_found_ = false;
+  field_became_visible_ = false;
+  trigger_form_global_id_ = FormGlobalId();
+  trigger_field_global_id_ = FieldGlobalId();
+  trigger_autofill_manager_.reset();
 }
 
 }  // namespace autofill

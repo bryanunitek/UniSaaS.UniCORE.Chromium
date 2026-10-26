@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type {DisableModuleEvent, DismissModuleInstanceEvent, DriveModuleElement} from 'chrome://new-tab-page/lazy_load.js';
+import type {DisableModuleEvent, DriveModuleElement} from 'chrome://new-tab-page/lazy_load.js';
 import {driveModuleDescriptor, FileProxy} from 'chrome://new-tab-page/lazy_load.js';
 import {$$, DriveSuggestionHandlerRemote} from 'chrome://new-tab-page/new_tab_page.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -19,8 +19,8 @@ suite('DriveModuleV2', () => {
 
   suiteSetup(() => {
     loadTimeData.overrideValues({
-      hideDismissModules: false,
       showDriveModuleSeeMoreLink: true,
+      modulesDriveSeeMoreAcc: 'See more in Google Drive',
     });
   });
 
@@ -169,47 +169,6 @@ suite('DriveModuleV2', () => {
             event.detail.message);
       });
 
-  test('backend is notified when module is dismissed or restored', async () => {
-    // Arrange.
-    const data = {
-      files: [
-        {
-          justificationText: '',
-          title: '',
-          id: '',
-          iconUrl: '',
-          itemUrl: '',
-        },
-      ],
-    };
-    handler.setPromiseResolveFor('getFiles', data);
-    const moduleElement =
-        await driveModuleDescriptor.initialize(0) as DriveModuleElement;
-    assertTrue(!!moduleElement);
-    document.body.append(moduleElement);
-    await microtasksFinished();
-
-    // Act.
-    const whenFired = eventToPromise('dismiss-module-instance', moduleElement);
-    const dismissButton =
-        moduleElement.$.moduleHeader.shadowRoot.querySelector<HTMLElement>(
-            '#dismiss');
-    assertTrue(!!dismissButton);
-    dismissButton.click();
-
-    // Assert.
-    const event: DismissModuleInstanceEvent = await whenFired;
-    assertEquals('Files hidden', event.detail.message);
-    assertTrue(!!event.detail.restoreCallback);
-    assertEquals(1, handler.getCallCount('dismissModule'));
-
-    // Act.
-    event.detail.restoreCallback();
-
-    // Assert.
-    assertEquals(1, handler.getCallCount('restoreModule'));
-  });
-
   test('clicking file records correct metrics', async () => {
     const metrics = fakeMetricsPrivate();
 
@@ -268,5 +227,33 @@ suite('DriveModuleV2', () => {
     assertEquals('', fileSuggestion.seeMoreUrl);
     assertFalse(
         !!fileSuggestion.shadowRoot.querySelector('#seeMoreButtonContainer'));
+  });
+
+  test('see more link has correct aria-label', async () => {
+    loadTimeData.overrideValues({showDriveModuleSeeMoreLink: true});
+    const data = {
+      files: [
+        {
+          justificationText: 'Edited yesterday',
+          title: 'Abc',
+          id: '012',
+          iconUrl: iconUrl,
+          itemUrl: 'https://abc.com',
+        },
+      ],
+    };
+    handler.setPromiseResolveFor('getFiles', data);
+    const driveModule =
+        await driveModuleDescriptor.initialize(0) as DriveModuleElement;
+    assertTrue(!!driveModule);
+    document.body.append(driveModule);
+    await microtasksFinished();
+
+    const fileSuggestion = driveModule.$.fileSuggestion;
+    const seeMoreButton =
+        fileSuggestion.shadowRoot.querySelector('#seeMoreButtonContainer a');
+    assertTrue(!!seeMoreButton);
+    assertEquals(
+        'See more in Google Drive', seeMoreButton.getAttribute('aria-label'));
   });
 });

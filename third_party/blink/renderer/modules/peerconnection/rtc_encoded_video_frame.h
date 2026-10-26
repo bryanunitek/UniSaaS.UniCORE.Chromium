@@ -9,15 +9,19 @@
 
 #include <memory>
 
+#include "base/feature_list.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/types/expected.h"
 #include "base/unguessable_token.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/webrtc/api/video/video_codec_type.h"
+#include "v8/include/v8-isolate.h"
 
 namespace webrtc {
 class TransformableVideoFrameInterface;
@@ -27,6 +31,7 @@ namespace blink {
 
 class DOMArrayBuffer;
 class RTCEncodedVideoFrameDelegate;
+class RTCEncodedVideoFrameInit;
 class RTCEncodedVideoFrameMetadata;
 class RTCEncodedVideoFrameOptions;
 class V8RTCEncodedVideoFrameType;
@@ -46,6 +51,10 @@ class MODULES_EXPORT RTCEncodedVideoFrame final : public ScriptWrappable {
       RTCEncodedVideoFrame* original_frame,
       const RTCEncodedVideoFrameOptions* options_dict,
       ExceptionState& exception_state);
+  static RTCEncodedVideoFrame* Create(ExecutionContext* context,
+                                      const RTCEncodedVideoFrameInit* init,
+                                      ExceptionState& exception_state);
+  static webrtc::VideoCodecType StringToVideoCodecType(const String& mime_type);
   explicit RTCEncodedVideoFrame(
       std::unique_ptr<webrtc::TransformableVideoFrameInterface> webrtc_frame);
   explicit RTCEncodedVideoFrame(
@@ -59,7 +68,7 @@ class MODULES_EXPORT RTCEncodedVideoFrame final : public ScriptWrappable {
   V8RTCEncodedVideoFrameType type() const;
   // Returns the RTP Packet Timestamp for this frame.
   uint32_t timestamp() const;
-  DOMArrayBuffer* data(ExecutionContext* context) const;
+  DOMArrayBuffer* data() const;
   RTCEncodedVideoFrameMetadata* getMetadata(ExecutionContext* context) const;
   base::expected<void, String> SetMetadata(
       ExecutionContext* context,
@@ -67,8 +76,8 @@ class MODULES_EXPORT RTCEncodedVideoFrame final : public ScriptWrappable {
   void setMetadata(ExecutionContext* context,
                    RTCEncodedVideoFrameMetadata* metadata,
                    ExceptionState& exception_state);
-  void setData(ExecutionContext*, DOMArrayBuffer*);
-  String toString(ExecutionContext* context) const;
+  void setData(DOMArrayBuffer*);
+  String toString() const;
 
   base::UnguessableToken OwnerId();
   int64_t Counter();

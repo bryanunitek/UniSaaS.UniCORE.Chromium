@@ -54,8 +54,6 @@ static_library("arc") {
     "intent.h",
   ]
 
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
-
   deps = [
     "//ash",
     "//ash/constants",
@@ -65,12 +63,12 @@ static_library("arc") {
     "//chrome/browser/ash/app_list/search/ranking",
     "//chrome/browser/ash/arc:arc_util",
     "//chrome/browser/ash/arc/boot_phase_monitor",
-    "//chrome/browser/notifications",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/resources:component_extension_resources",
     "//chrome/common:chrome_features",
     "//chrome/common:constants",
+    "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/demo_mode",
     "//chromeos/ash/experiences/arc",
     "//chromeos/ash/experiences/arc:arc_app_constants",
@@ -148,11 +146,11 @@ source_set("unit_tests") {
     "//chrome/browser/extensions",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/sync:factories",
-    "//chrome/browser/ui",
     "//chrome/browser/ui/ash/shelf",
     "//chrome/browser/web_applications:web_applications_test_support",
     "//chrome/common:constants",
     "//chrome/test:test_support",
+    "//chrome/test/base:testing_browser_process",
     "//chromeos/ash/components/dbus/concierge",
     "//chromeos/ash/components/login/session",
     "//chromeos/ash/experiences/arc:arc_app_constants",
@@ -206,7 +204,6 @@ source_set("browser_tests") {
     "//chrome/browser/ash/arc/session",
     "//chrome/browser/ash/login/users:test_support",
     "//chrome/browser/profiles:profile",
-    "//chrome/browser/ui",
     "//chrome/test:test_support_ui",
     "//chromeos/ash/experiences/arc",
     "//chromeos/ash/experiences/arc:arc_test_support",
@@ -232,7 +229,6 @@ static_library("test_support") {
     "//base",
     "//chrome/browser/ash/login/users:test_support",
     "//chrome/browser/ash/settings:test_support",
-    "//chrome/browser/ui",
     "//chromeos/ash/experiences/arc/mojom",
     "//components/session_manager/core",
     "//components/session_manager/core:test_support",
@@ -246,25 +242,25 @@ static_library("test_support") {
     "//chrome/browser/apps/app_service/publishers",
     "//chrome/browser/ash/arc",
     "//chrome/browser/ash/arc:arc_util",
-    "//chrome/browser/ash/arc/privacy_items",
     "//chrome/browser/ash/arc/session",
     "//chrome/browser/ash/arc/test:arc_test_support",
     "//chrome/browser/ash/profiles",
+    "//chrome/browser/consent_auditor",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/signin",
     "//chrome/test:test_support",
+    "//chrome/test/base:testing_browser_process",
     "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/dbus/concierge",
+    "//chromeos/ash/components/signin:test_support",
     "//chromeos/ash/experiences/arc",
     "//chromeos/ash/experiences/arc:arc_base_utils",
     "//chromeos/ash/experiences/arc:arc_test_support",
     "//chromeos/ash/experiences/arc:notification_test_support",
     "//chromeos/ash/experiences/arc/intent_helper",
     "//chromeos/ash/experiences/arc/mojom",
+    "//chromeos/ash/experiences/arc/privacy_items",
     "//chromeos/ash/experiences/arc/session",
     "//testing/gtest",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }

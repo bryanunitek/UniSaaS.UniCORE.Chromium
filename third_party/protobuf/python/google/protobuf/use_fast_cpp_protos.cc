@@ -1,4 +1,10 @@
-// go/fastpythonproto
+// Protocol Buffers - Google's data interchange format
+// Copyright 2021 Google LLC.  All rights reserved.
+//
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file or at
+// https://developers.google.com/open-source/licenses/bsd
+
 #include <Python.h>
 
 namespace google {
@@ -29,6 +35,10 @@ PyMODINIT_FUNC PyInit__use_fast_cpp_protos() {
   if (module == nullptr) {
     return nullptr;
   }
+#ifdef Py_GIL_DISABLED
+  PyUnstable_Module_SetGIL(module, Py_MOD_GIL_NOT_USED);
+#endif
+
 
   return module;
 }

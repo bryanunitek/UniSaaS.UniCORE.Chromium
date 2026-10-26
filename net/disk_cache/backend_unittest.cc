@@ -9,6 +9,7 @@
 #include <optional>
 #include <string_view>
 
+#include "base/byte_size.h"
 #include "base/containers/queue.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
@@ -29,6 +30,7 @@
 #include "base/task/thread_pool.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/bind.h"
+#include "base/test/gtest_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
@@ -41,8 +43,10 @@
 #include "build/build_config.h"
 #include "net/base/cache_type.h"
 #include "net/base/completion_once_callback.h"
+#include "net/base/features.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "net/base/network_isolation_key.h"
 #include "net/base/request_priority.h"
 #include "net/base/test_completion_callback.h"
 #include "net/disk_cache/backend_cleanup_tracker.h"
@@ -62,11 +66,16 @@
 #include "net/disk_cache/simple/simple_synchronous_entry.h"
 #include "net/disk_cache/simple/simple_test_util.h"
 #include "net/disk_cache/simple/simple_util.h"
+#if BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
+#include "net/disk_cache/sql/shared_cache_client_remote.h"
 #include "net/disk_cache/sql/sql_backend_constants.h"
+#endif  // ENABLE_DISK_CACHE_SQL_BACKEND
+#include "net/http/http_response_info.h"
 #include "net/test/gtest_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/abseil-cpp/absl/base/dynamic_annotations.h"
+#include "url/gurl.h"
 
 using disk_cache::EntryResult;
 using net::test::IsError;
@@ -80,15 +89,6 @@ using testing::Field;
 #include <windows.h>
 
 #include "base/win/scoped_handle.h"
-#endif
-
-// TODO(crbug.com/41451310): Fix memory leaks in tests and re-enable on LSAN.
-#ifdef LEAK_SANITIZER
-#define MAYBE_NonEmptyCorruptSimpleCacheDoesNotRecover \
-  DISABLED_NonEmptyCorruptSimpleCacheDoesNotRecover
-#else
-#define MAYBE_NonEmptyCorruptSimpleCacheDoesNotRecover \
-  NonEmptyCorruptSimpleCacheDoesNotRecover
 #endif
 
 using base::Time;
@@ -213,10 +213,10 @@ class DiskCacheBackendTest : public DiskCacheTestWithCache {
                      net::BackendType backend_type,
                      bool expect_limit);
 
-  void UpdateLimitAndReleaseMemory(int percentage) {
+  void UpdateLimitAndReleaseMemory(base::MemoryLimit memory_limit) {
     base::RunLoop run_loop;
     test_memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
-        percentage, base::DoNothing());
+        memory_limit, base::DoNothing());
     test_memory_consumer_registry_.NotifyReleaseMemoryAsync(
         run_loop.QuitClosure());
     run_loop.Run();
@@ -517,6 +517,68 @@ void DiskCacheBackendTest::BackendBasics() {
 
 TEST_P(DiskCacheGenericBackendTest, Basics) {
   BackendBasics();
+}
+
+TEST_P(DiskCacheGenericBackendTest, CreateBackendDoubleHttpCache) {
+#if BUILDFLAG(IS_ANDROID)
+  // Android does not support creating blockfile caches via CacheCreator.
+  if (backend_to_test_ == BackendToTest::kBlockfile) {
+    return;
+  }
+#endif
+
+  ASSERT_TRUE(CleanupCacheDir());
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      net::features::kEnableBackendCleanupTrackerOnHttpCache);
+
+  ASSERT_EQ(net::DISK_CACHE, type_);
+
+  net::BackendType backend_type = net::CACHE_BACKEND_DEFAULT;
+  switch (backend_to_test_) {
+    case BackendToTest::kBlockfile:
+      backend_type = net::CACHE_BACKEND_BLOCKFILE;
+      break;
+    case BackendToTest::kSimple:
+      backend_type = net::CACHE_BACKEND_SIMPLE;
+      break;
+    case BackendToTest::kMemory:
+      return;
+#if BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
+    case BackendToTest::kSql:
+      backend_type = net::CACHE_BACKEND_EXPERIMENTAL_SQL;
+      break;
+#endif
+  }
+
+  TestBackendResultCompletionCallback cb, cb2;
+
+  disk_cache::BackendResult rv = disk_cache::CreateCacheBackend(
+      type_, backend_type, /*file_operations=*/nullptr, cache_path_, 0,
+      disk_cache::ResetHandling::kNeverReset,
+      /*net_log=*/nullptr, /*cache_encryption_delegate=*/nullptr,
+      cb.callback());
+
+  disk_cache::BackendResult rv2 = disk_cache::CreateCacheBackend(
+      type_, backend_type, /*file_operations=*/nullptr, cache_path_, 0,
+      disk_cache::ResetHandling::kNeverReset,
+      /*net_log=*/nullptr, /*cache_encryption_delegate=*/nullptr,
+      cb2.callback());
+
+  rv = cb.GetResult(std::move(rv));
+  EXPECT_THAT(rv.net_error, IsOk());
+  EXPECT_TRUE(rv.backend);
+
+  EXPECT_EQ(net::ERR_IO_PENDING, rv2.net_error);
+  EXPECT_FALSE(rv2.backend);
+  EXPECT_FALSE(cb2.have_result());
+
+  rv.backend.reset();
+
+  rv2 = cb2.GetResult(std::move(rv2));
+  EXPECT_THAT(rv2.net_error, IsOk());
+  EXPECT_TRUE(rv2.backend);
 }
 
 TEST_F(DiskCacheBackendTest, NewEvictionBasics) {
@@ -896,12 +958,12 @@ TEST_F(DiskCacheBackendTest, MemoryListensToMemoryPressure) {
   EXPECT_GT(CalculateSizeOfAllEntries(), 0.8 * kLimit);
 
   // Signal low-memory of various sorts, and see how small it gets.
-  UpdateLimitAndReleaseMemory(50);
+  UpdateLimitAndReleaseMemory(base::MemoryLimit::FromPercent(50));
   EXPECT_LT(CalculateSizeOfAllEntries(), 0.5 * kLimit);
 
   // At 10% memory limit, the new policy (linear interpolation between 10% and
   // 50% of max_size_) sets a limit of ~18%.
-  UpdateLimitAndReleaseMemory(10);
+  UpdateLimitAndReleaseMemory(base::MemoryLimit::FromPercent(10));
   EXPECT_LT(CalculateSizeOfAllEntries(), 0.2 * kLimit);
 }
 
@@ -3681,15 +3743,17 @@ TEST_F(DiskCacheTest, MultipleInstances) {
 // Test the six regions of the curve that determines the max cache size.
 TEST_F(DiskCacheTest, AutomaticMaxSize) {
   using disk_cache::kDefaultCacheSize;
-  const int64_t large_size = kDefaultCacheSize;
+  const base::ByteSize large_size = kDefaultCacheSize;
 
   // Region 1: expected = available * 0.8
-  EXPECT_EQ((kDefaultCacheSize - 1) * 8 / 10,
-            disk_cache::PreferredCacheSize(large_size - 1));
+  EXPECT_EQ(
+      (kDefaultCacheSize - base::ByteSizeDelta(1)) * 8 / 10,
+      disk_cache::PreferredCacheSize(large_size - base::ByteSizeDelta(1)));
   EXPECT_EQ(kDefaultCacheSize * 8 / 10,
             disk_cache::PreferredCacheSize(large_size));
-  EXPECT_EQ(kDefaultCacheSize - 1,
-            disk_cache::PreferredCacheSize(large_size * 10 / 8 - 1));
+  EXPECT_EQ(kDefaultCacheSize - base::ByteSizeDelta(1),
+            disk_cache::PreferredCacheSize(large_size * 10 / 8 -
+                                           base::ByteSizeDelta(1)));
 
   // Region 2: expected = default_size
   EXPECT_EQ(kDefaultCacheSize,
@@ -3701,7 +3765,8 @@ TEST_F(DiskCacheTest, AutomaticMaxSize) {
     // true, the value obtained here is scaled with:
     // min(0.2 * available space, internal size * 4), which evaluates to
     // 0.2 * available space.
-    const int64_t available_space = large_size * 10 - 1;
+    const base::ByteSize available_space =
+        large_size * 10 - base::ByteSizeDelta(1);
     EXPECT_EQ(
         kHTTPCacheSizeIsIncreased ? available_space / 5 : kDefaultCacheSize,
         disk_cache::PreferredCacheSize(available_space));
@@ -3712,7 +3777,7 @@ TEST_F(DiskCacheTest, AutomaticMaxSize) {
     // With `kHTTPCacheSizeIsIncreased`, the value is adjusted with
     // min(0.2 * available space, internal size * 4), which evaluates to
     // 0.2 * available space.
-    const int64_t available_space = large_size * 10;
+    const base::ByteSize available_space = large_size * 10;
     EXPECT_EQ(
         kHTTPCacheSizeIsIncreased ? available_space / 5 : kDefaultCacheSize,
         disk_cache::PreferredCacheSize(available_space));
@@ -3721,7 +3786,8 @@ TEST_F(DiskCacheTest, AutomaticMaxSize) {
     // With `kHTTPCacheSizeIsIncreased`, the value is adjusted with
     // min(0.2 * available space, internal size * 4), which evaluates to
     // 0.2 * available space.
-    const int64_t available_space = large_size * 25 - 1;
+    const base::ByteSize available_space =
+        large_size * 25 - base::ByteSizeDelta(1);
     EXPECT_EQ(
         kHTTPCacheSizeIsIncreased ? available_space / 5 : available_space / 10,
         disk_cache::PreferredCacheSize(available_space));
@@ -3732,7 +3798,7 @@ TEST_F(DiskCacheTest, AutomaticMaxSize) {
     // With `kHTTPCacheSizeIsIncreased`, the value is adjusted with
     // min(0.2 * available space, internal size * 4), which evaluates to
     // 0.2 * available space.
-    const int64_t available_space = large_size * 25;
+    const base::ByteSize available_space = large_size * 25;
     EXPECT_EQ(kHTTPCacheSizeIsIncreased ? available_space / 5
                                         : kDefaultCacheSize * 25 / 10,
               disk_cache::PreferredCacheSize(available_space));
@@ -3741,7 +3807,8 @@ TEST_F(DiskCacheTest, AutomaticMaxSize) {
     // With `kHTTPCacheSizeIsIncreased`, the value is adjusted with
     // min(0.2 * available space, internal size * 4), which evaluates to
     // internal size * 4 (internal size is kDefaultCacheSize * 2.5).
-    const int64_t available_space = large_size * 100 - 1;
+    const base::ByteSize available_space =
+        large_size * 100 - base::ByteSizeDelta(1);
     EXPECT_EQ(kHTTPCacheSizeIsIncreased ? kDefaultCacheSize * 10
                                         : kDefaultCacheSize * 25 / 10,
               disk_cache::PreferredCacheSize(available_space));
@@ -3750,7 +3817,7 @@ TEST_F(DiskCacheTest, AutomaticMaxSize) {
     // With `kHTTPCacheSizeIsIncreased`, the value is adjusted with
     // min(0.2 * available space, internal size * 4), which evaluates to
     // internal size * 4 (internal size is kDefaultCacheSize * 2.5).
-    const int64_t available_space = large_size * 100;
+    const base::ByteSize available_space = large_size * 100;
     EXPECT_EQ(kHTTPCacheSizeIsIncreased ? kDefaultCacheSize * 10
                                         : kDefaultCacheSize * 25 / 10,
               disk_cache::PreferredCacheSize(available_space));
@@ -3759,7 +3826,8 @@ TEST_F(DiskCacheTest, AutomaticMaxSize) {
     // With `kHTTPCacheSizeIsIncreased`, the value is adjusted with
     // min(0.2 * available space, internal size * 4), which evaluates to
     // internal size * 4 (internal size is kDefaultCacheSize * 2.5).
-    const int64_t available_space = large_size * 250 - 1;
+    const base::ByteSize available_space =
+        large_size * 250 - base::ByteSizeDelta(1);
     EXPECT_EQ(kHTTPCacheSizeIsIncreased ? kDefaultCacheSize * 10
                                         : kDefaultCacheSize * 25 / 10,
               disk_cache::PreferredCacheSize(available_space));
@@ -3768,22 +3836,24 @@ TEST_F(DiskCacheTest, AutomaticMaxSize) {
     // With `kHTTPCacheSizeIsIncreased`, the value is adjusted with
     // min(0.2 * available space, internal size * 4), which evaluates to
     // internal size * 4 (internal size is kDefaultCacheSize * 2.5).
-    const int64_t available_space = large_size * 250;
+    const base::ByteSize available_space = large_size * 250;
     EXPECT_EQ(kHTTPCacheSizeIsIncreased ? kDefaultCacheSize * 10
                                         : kDefaultCacheSize * 25 / 10,
               disk_cache::PreferredCacheSize(available_space));
   }
 
   // Region 5: expected = available * 0.1
-  int64_t largest_size = kDefaultCacheSize * 4;
+  base::ByteSize largest_size = kDefaultCacheSize * 4;
   {
     // With `kHTTPCacheSizeIsIncreased`, the value is adjusted with
     // min(0.2 * available space, internal size * 4), which evaluates to
     // internal size * 4 (internal size is available_space - 1).
-    const int64_t available_space = largest_size * 100 - 1;
-    EXPECT_EQ(
-        kHTTPCacheSizeIsIncreased ? 4 * (largest_size - 1) : largest_size - 1,
-        disk_cache::PreferredCacheSize(available_space));
+    const base::ByteSize available_space =
+        largest_size * 100 - base::ByteSizeDelta(1);
+    EXPECT_EQ(kHTTPCacheSizeIsIncreased
+                  ? 4 * (largest_size - base::ByteSizeDelta(1))
+                  : largest_size - base::ByteSizeDelta(1),
+              disk_cache::PreferredCacheSize(available_space));
   }
 
   // Region 6: expected = largest possible size
@@ -3791,7 +3861,7 @@ TEST_F(DiskCacheTest, AutomaticMaxSize) {
     // With `kHTTPCacheSizeIsIncreased`, the value is adjusted with
     // min(0.2 * available space, internal size * 4), which evaluates to
     // internal size * 4 (internal size is available_space).
-    const int64_t available_space = largest_size * 100;
+    const base::ByteSize available_space = largest_size * 100;
     EXPECT_EQ(kHTTPCacheSizeIsIncreased ? largest_size * 4 : largest_size,
               disk_cache::PreferredCacheSize(available_space));
   }
@@ -3799,7 +3869,7 @@ TEST_F(DiskCacheTest, AutomaticMaxSize) {
     // With `kHTTPCacheSizeIsIncreased`, the value is adjusted with
     // min(0.2 * available space, internal size * 4), which evaluates to
     // internal size * 4 (internal size is available_space).
-    const int64_t available_space = largest_size * 10000;
+    const base::ByteSize available_space = largest_size * 10000;
     EXPECT_EQ(kHTTPCacheSizeIsIncreased ? largest_size * 4 : largest_size,
               disk_cache::PreferredCacheSize(available_space));
   }
@@ -4353,12 +4423,12 @@ TEST_F(DiskCacheBackendTest, MAYBE_SimpleCacheNegMaxSize) {
   EXPECT_NE(simple_cache_impl_->index()->max_size(),
             std::numeric_limits<uint64_t>::max());
 
-  int max_default_size =
-      4 * disk_cache::PreferredCacheSize(std::numeric_limits<int32_t>::max());
+  base::ByteSize max_default_size =
+      4 * disk_cache::PreferredCacheSize(
+              base::ByteSize(std::numeric_limits<int32_t>::max()));
 
-  ASSERT_GE(max_default_size, 0);
   EXPECT_LT(simple_cache_impl_->index()->max_size(),
-            static_cast<unsigned>(max_default_size));
+            max_default_size.InBytes());
 
   uint64_t max_size_without_scaling = simple_cache_impl_->index()->max_size();
   uint64_t max_file_size_without_scaling = simple_cache_impl_->MaxFileSize();
@@ -4799,6 +4869,14 @@ TEST_F(DiskCacheBackendTest, EmptyCorruptSimpleCacheRecovery) {
   EXPECT_THAT(rv.net_error, IsOk());
 }
 
+// TODO(crbug.com/41451310): Fix memory leaks in tests and re-enable on LSAN.
+#ifdef LEAK_SANITIZER
+#define MAYBE_NonEmptyCorruptSimpleCacheDoesNotRecover \
+  DISABLED_NonEmptyCorruptSimpleCacheDoesNotRecover
+#else
+#define MAYBE_NonEmptyCorruptSimpleCacheDoesNotRecover \
+  NonEmptyCorruptSimpleCacheDoesNotRecover
+#endif
 TEST_F(DiskCacheBackendTest, MAYBE_NonEmptyCorruptSimpleCacheDoesNotRecover) {
   SetBackendToTest(BackendToTest::kSimple);
   BackendOpenOrCreateEntry();
@@ -6062,6 +6140,88 @@ TEST_P(DiskCacheGenericBackendTest, BackendOnlineSetQuotaToZero) {
 
   EXPECT_EQ(cache_->GetMaxBytesForTesting(), base::ByteSize(0));
 }
+
+TEST_P(DiskCacheGenericBackendTest, DeleteBackendWithMassDoom) {
+  if (backend_to_test() == BackendToTest::kMemory) {
+    // Uninteresting w/memory since the delete is synchronous.
+    return;
+  }
+
+  SetCacheType(net::APP_CACHE);  // no optimistic ops.
+
+  InitCache();
+  for (int i = 0; i < 100; ++i) {
+    disk_cache::Entry* entry = nullptr;
+    ASSERT_THAT(CreateEntry(base::NumberToString(i), &entry), IsOk());
+    entry->Close();
+  }
+  // Get closes to actually close.
+  FlushQueueForTest();
+  net::TestCompletionCallback cb;
+
+  // Kick off a doom.
+  int rv = cache_->DoomAllEntries(cb.callback());
+  EXPECT_EQ(net::ERR_IO_PENDING, rv);
+  // We need to go to event loop since DoomAllEntries in Simple has async index
+  // readiness hop, but we don't want to flush all the threads.
+  base::RunLoop().RunUntilIdle();
+
+  base::RunLoop run_loop;
+
+  // Try to open a couple of entries, and delete it in the first callback that
+  // gets invoked. The second open should be safe since we don't go to event
+  // loop between the calls, so the callback can't be delivered yet. Also only
+  // one of the callbacks should be invoked per the cancellation semantics.
+  EntryResult result0 = cache_->OpenEntry(
+      "0", net::HIGHEST, base::BindLambdaForTesting([&](EntryResult result) {
+        EXPECT_EQ(net::ERR_FAILED, result.net_error());
+        TakeCache();
+        run_loop.Quit();
+      }));
+  if (result0.net_error() == net::ERR_FAILED) {
+    // If the delete finished already to the point the open fails synchronously,
+    // we can't really test anything, so don't proceed.
+    return;
+  }
+  EXPECT_EQ(result0.net_error(), net::ERR_IO_PENDING);
+
+  EntryResult result1 = cache_->OpenEntry(
+      "1", net::HIGHEST, base::BindLambdaForTesting([&](EntryResult result) {
+        EXPECT_EQ(net::ERR_FAILED, result.net_error());
+        TakeCache();
+        run_loop.Quit();
+      }));
+  if (result1.net_error() == net::ERR_FAILED) {
+    // If the delete finished already to the point the open fails synchronously,
+    // we can't really test anything, so don't proceed.
+    return;
+  }
+  EXPECT_EQ(result1.net_error(), net::ERR_IO_PENDING);
+
+  EXPECT_EQ(net::OK, cb.GetResult(rv));
+  run_loop.Run();
+}
+
+#if BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
+TEST_P(DiskCacheGenericBackendTest, SharedCacheNotSupported) {
+  InitCache();
+  // SqlBackendImpl is tested in sql_backend_impl_unittest.cc.
+  if (backend_to_test_ == BackendToTest::kSql) {
+    return;
+  }
+  EXPECT_FALSE(cache_->SupportsSharedCache());
+
+  EXPECT_NOTREACHED_DEATH(cache_->RegisterSharedCacheClientRemote(
+      net::NetworkIsolationKey(), nullptr));
+
+  EXPECT_NOTREACHED_DEATH(cache_->OnEntryEligibleForSharedCache(
+      "key", GURL("https://example.com"),
+      std::make_unique<net::HttpResponseInfo>(), net::NetworkIsolationKey()));
+
+  EXPECT_NOTREACHED_DEATH(cache_->ProcessAllSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner()));
+}
+#endif  // BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
 
 INSTANTIATE_TEST_SUITE_P(
     /* no name */,

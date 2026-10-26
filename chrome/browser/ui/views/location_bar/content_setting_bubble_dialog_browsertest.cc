@@ -12,8 +12,8 @@
 #include "chrome/browser/download/download_request_limiter.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/blocked_content/chrome_popup_navigation_delegate.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/content_settings/content_setting_image_model.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -27,7 +27,6 @@
 #include "components/content_settings/core/browser/website_settings_registry.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
-#include "components/content_settings/core/common/features.h"
 #include "components/content_settings/core/test/content_settings_mock_provider.h"
 #include "components/content_settings/core/test/content_settings_test_utils.h"
 #include "components/permissions/permission_request_manager.h"
@@ -76,12 +75,8 @@ class ContentSettingBubbleDialogTest
       : resetter_(&ChromeContentBrowserClient::
                       GetPopupNavigationDelegateFactoryForTesting(),
                   &CreateTestPopupNavigationDelegate) {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kQuietNotificationPrompts},
-        // `kLeftHandSideActivityIndicators` should be disabled as it changes
-        // the UI of the camera/mic activity indicator. The new UI will be
-        // tested separately.
-        {content_settings::features::kLeftHandSideActivityIndicators});
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kQuietNotificationPrompts);
   }
 
   ContentSettingBubbleDialogTest(const ContentSettingBubbleDialogTest&) =
@@ -89,7 +84,6 @@ class ContentSettingBubbleDialogTest
   ContentSettingBubbleDialogTest& operator=(
       const ContentSettingBubbleDialogTest&) = delete;
 
-  void ApplyMediastreamSettings(bool mic_accessed, bool camera_accessed);
   void ApplyContentSettingsForType(ContentSettingsType content_type);
   void TriggerQuietNotificationPermissionRequest(
       QuietUiReason simulated_reason_for_quiet_ui);
@@ -107,37 +101,10 @@ class ContentSettingBubbleDialogTest
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-void ContentSettingBubbleDialogTest::ApplyMediastreamSettings(
-    bool mic_accessed,
-    bool camera_accessed) {
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  GURL last_committed_url = web_contents->GetLastCommittedURL();
-  // Default opt-in for camera PTZ permission to current tab.
-  HostContentSettingsMapFactory::GetForProfile(browser()->profile())
-      ->SetContentSettingDefaultScope(last_committed_url, GURL(),
-                                      ContentSettingsType::CAMERA_PAN_TILT_ZOOM,
-                                      CONTENT_SETTING_ASK);
-  content_settings::PageSpecificContentSettings::MicrophoneCameraState state;
-  if (mic_accessed) {
-    state.Put(
-        content_settings::PageSpecificContentSettings::kMicrophoneAccessed);
-  }
-  if (camera_accessed) {
-    state.Put(content_settings::PageSpecificContentSettings::kCameraAccessed);
-  }
-
-  content_settings::PageSpecificContentSettings* content_settings =
-      content_settings::PageSpecificContentSettings::GetForFrame(
-          web_contents->GetPrimaryMainFrame());
-  content_settings->OnMediaStreamPermissionSet(last_committed_url, state);
-}
-
 void ContentSettingBubbleDialogTest::ApplyContentSettingsForType(
     ContentSettingsType content_type) {
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content_settings::PageSpecificContentSettings* content_settings =
       content_settings::PageSpecificContentSettings::GetForFrame(
           web_contents->GetPrimaryMainFrame());
@@ -162,9 +129,6 @@ void ContentSettingBubbleDialogTest::ApplyContentSettingsForType(
           blocked_content::PopupBlockerTabHelper::FromWebContents(web_contents);
       // popup-many-10.html should generate 10 blocked popups.
       EXPECT_EQ(10u, helper->GetBlockedPopupsCount());
-      // Set a fake URL so the UI displays a consistent string for pixel tests.
-      web_contents->GetController().GetVisibleEntry()->SetVirtualURL(
-          GURL("http://popuptest/"));
       break;
     }
     case ContentSettingsType::PROTOCOL_HANDLERS:
@@ -175,8 +139,6 @@ void ContentSettingBubbleDialogTest::ApplyContentSettingsForType(
       break;
     case ContentSettingsType::STORAGE_ACCESS:
       // Set a fake URL so the UI displays a consistent string for pixel tests.
-      web_contents->GetController().GetVisibleEntry()->SetVirtualURL(
-          GURL("http://example.com/"));
       content_settings->OnTwoSitePermissionChanged(
           content_type, net::SchemefulSite(GURL("https://embedded.com")),
           CONTENT_SETTING_BLOCK);
@@ -193,7 +155,7 @@ void ContentSettingBubbleDialogTest::ApplyContentSettingsForType(
 void ContentSettingBubbleDialogTest::TriggerQuietNotificationPermissionRequest(
     QuietUiReason simulated_reason_for_quiet_ui) {
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   auto* permission_request_manager =
       permissions::PermissionRequestManager::FromWebContents(web_contents);
   permission_request_manager->set_permission_ui_selector_for_testing(
@@ -212,7 +174,7 @@ void ContentSettingBubbleDialogTest::OverrideContentSettingsProvider(
     const std::vector<ContentSettingsType>& types) {
   auto provider = std::make_unique<content_settings::MockProvider>();
   HostContentSettingsMap* map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
 
   // All settings should have a default value defined.
   if (GetParam() == content_settings::ProviderType::kDefaultProvider) {
@@ -244,7 +206,7 @@ void ContentSettingBubbleDialogTest::NavigateToContentTab() {
   GURL url(embedded_test_server()->GetURL(
       "/content_setting_bubble/mixed_script.html"));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::NavigateToURL(web_contents, url));
 }
 
@@ -264,22 +226,6 @@ void ContentSettingBubbleDialogTest::ShowUi(const std::string& name) {
   NavigateToContentTab();
   auto scoped_display_url =
       ContentSettingBubbleModel::CreateScopedDisplayURLOverrideForTesting();
-
-  if (base::StartsWith(name, "mediastream", base::CompareCase::SENSITIVE)) {
-    bool apply_mic_settings = name.find("mic") != std::string::npos;
-    bool apply_camera_settings = name.find("camera") != std::string::npos;
-    std::vector<ContentSettingsType> types;
-    if (apply_mic_settings) {
-      types.push_back(ContentSettingsType::MEDIASTREAM_MIC);
-    }
-    if (apply_camera_settings) {
-      types.push_back(ContentSettingsType::MEDIASTREAM_CAMERA);
-    }
-    OverrideContentSettingsProvider(types);
-    ApplyMediastreamSettings(apply_mic_settings, apply_camera_settings);
-    ShowDialogBubble(ImageType::kMediaStream);
-    return;
-  }
 
   if (base::StartsWith(name, "notifications_quiet",
                        base::CompareCase::SENSITIVE)) {
@@ -361,22 +307,8 @@ IN_PROC_BROWSER_TEST_P(ContentSettingBubbleDialogTest, InvokeUi_mixed_script) {
 }
 
 IN_PROC_BROWSER_TEST_P(ContentSettingBubbleDialogTest,
-                       InvokeUi_mediastream_mic) {
-  ShowAndVerifyUi();
-}
-
-IN_PROC_BROWSER_TEST_P(ContentSettingBubbleDialogTest,
-                       InvokeUi_mediastream_camera) {
-  ShowAndVerifyUi();
-}
-
-IN_PROC_BROWSER_TEST_P(ContentSettingBubbleDialogTest,
-                       InvokeUi_mediastream_mic_and_camera) {
-  ShowAndVerifyUi();
-}
-
-IN_PROC_BROWSER_TEST_P(ContentSettingBubbleDialogTest,
                        InvokeUi_protocol_handlers) {
+  set_baseline("553146562");
   ShowAndVerifyUi();
 }
 
@@ -395,6 +327,7 @@ IN_PROC_BROWSER_TEST_P(ContentSettingBubbleDialogTest, InvokeUi_ads) {
 
 IN_PROC_BROWSER_TEST_P(ContentSettingBubbleDialogTest,
                        InvokeUi_storage_access) {
+  set_baseline("79537604");
   ShowAndVerifyUi();
 }
 

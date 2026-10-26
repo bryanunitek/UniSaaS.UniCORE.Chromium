@@ -360,9 +360,12 @@ source_set("audio") {
       "fuchsia/audio_output_stream_fuchsia.cc",
       "fuchsia/audio_output_stream_fuchsia.h",
     ]
+    public_deps = [
+      "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.media:fuchsia.media_hlcpp",
+      "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.settings:fuchsia.settings_hlcpp",
+    ]
     deps += [
       "//media/fuchsia/common",
-      "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.media:fuchsia.media_hlcpp",
       "//third_party/fuchsia-sdk/sdk/pkg/sys_cpp",
     ]
   }
@@ -479,11 +482,15 @@ source_set("unit_tests") {
 
   if (is_android) {
     sources += [
+      "android/aaudio_stream_wrapper_unittest.cc",
       "android/audio_android_unittest.cc",
       "android/audio_device_id_unittest.cc",
       "android/audio_device_type_unittest.cc",
       "android/audio_device_unittest.cc",
     ]
+    if (media_use_opensles) {
+      sources += [ "android/opensles_output_unittest.cc" ]
+    }
     deps += [
       "//media/gpu",
       "//ui/gl",
@@ -547,7 +554,10 @@ source_set("unit_tests") {
 
   if (is_fuchsia) {
     sources += [ "fuchsia/audio_input_stream_fuchsia_test.cc" ]
-    deps += [ "//media/fuchsia/audio:test_support" ]
+    deps += [
+      "//media/fuchsia/audio:test_support",
+      "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.settings:fuchsia.settings_hlcpp",
+    ]
   }
 
   if (use_alsa) {
@@ -565,14 +575,6 @@ source_set("unit_tests") {
 
 fuzzer_test("wav_audio_handler_fuzzer") {
   sources = [ "wav_audio_handler_fuzzer.cc" ]
-  deps = [
-    "//base",
-    "//media:test_support",
-  ]
-}
-
-fuzzer_test("flac_audio_handler_fuzzer") {
-  sources = [ "flac_audio_handler_fuzzer.cc" ]
   deps = [
     "//base",
     "//media:test_support",

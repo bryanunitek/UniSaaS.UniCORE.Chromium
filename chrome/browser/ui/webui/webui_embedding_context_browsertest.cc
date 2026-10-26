@@ -8,9 +8,11 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_source.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
@@ -44,7 +46,7 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_CALL(browser_changed_callback, Run).Times(1);
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   chrome::MoveTabsToNewWindow(browser(), {1});
-  Browser* new_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* new_browser = browser_created_observer.Wait();
   ASSERT_TRUE(new_browser);
   EXPECT_EQ(1, browser()->tab_strip_model()->count());
   EXPECT_EQ(1, new_browser->tab_strip_model()->count());
@@ -99,7 +101,7 @@ IN_PROC_BROWSER_TEST_F(WebUIEmbeddingContextTest,
   // Create a new WebContents, the tab and browser should start empty.
   std::unique_ptr<content::WebContents> host_contents =
       content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile()));
+          content::WebContents::CreateParams(browser()->GetProfile()));
   EXPECT_FALSE(GetTabInterface(host_contents.get()));
   EXPECT_FALSE(webui::GetBrowserWindowInterface(host_contents.get()));
 
@@ -135,7 +137,7 @@ IN_PROC_BROWSER_TEST_F(WebUIEmbeddingContextTest,
   // Create a new WebContents and set the emebdding tab interface.
   std::unique_ptr<content::WebContents> host_contents =
       content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile()));
+          content::WebContents::CreateParams(browser()->GetProfile()));
   chrome::AddTabAt(browser(), GURL(url::kAboutBlankURL), 1, true);
   tabs::TabInterface* tab_interface =
       browser()->tab_strip_model()->GetTabAtIndex(1);
@@ -156,7 +158,7 @@ IN_PROC_BROWSER_TEST_F(WebUIEmbeddingContextTest,
   EXPECT_CALL(tab_changed_callback, Run).Times(0);
   EXPECT_CALL(browser_changed_callback, Run).Times(1);
 
-  Browser* dst_browser = CreateBrowser(browser()->profile());
+  BrowserWindowInterface* dst_browser = CreateBrowser(browser()->GetProfile());
   std::unique_ptr<tabs::TabModel> detached_tab =
       browser()->tab_strip_model()->DetachTabAtForInsertion(1);
   EXPECT_EQ(tab_interface, detached_tab.get());
@@ -172,7 +174,7 @@ IN_PROC_BROWSER_TEST_F(WebUIEmbeddingContextTest,
   // Create a new WebContents and set the emebdding tab interface.
   std::unique_ptr<content::WebContents> host_contents =
       content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile()));
+          content::WebContents::CreateParams(browser()->GetProfile()));
   chrome::AddTabAt(browser(), GURL(url::kAboutBlankURL), 1, true);
   tabs::TabInterface* tab_interface =
       browser()->tab_strip_model()->GetTabAtIndex(1);

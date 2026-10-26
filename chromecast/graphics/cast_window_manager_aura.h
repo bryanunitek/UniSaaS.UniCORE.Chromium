@@ -32,7 +32,7 @@ class CastWindowTreeHostAura;
 class CastWindowManagerAura : public CastWindowManager,
                               public aura::client::WindowParentingClient {
  public:
-  explicit CastWindowManagerAura(bool enable_input);
+  CastWindowManagerAura();
 
   CastWindowManagerAura(const CastWindowManagerAura&) = delete;
   CastWindowManagerAura& operator=(const CastWindowManagerAura&) = delete;
@@ -54,6 +54,7 @@ class CastWindowManagerAura : public CastWindowManager,
   void AddGestureHandler(CastGestureHandler* handler) override;
   void RemoveGestureHandler(CastGestureHandler* handler) override;
   void SetTouchInputDisabled(bool disabled) override;
+  void SetRotationSupported(bool supported) override;
   void AddTouchActivityObserver(CastTouchActivityObserver* observer) override;
   void RemoveTouchActivityObserver(
       CastTouchActivityObserver* observer) override;
@@ -70,7 +71,6 @@ class CastWindowManagerAura : public CastWindowManager,
   }
 
  private:
-  const bool enable_input_;
 
   std::unique_ptr<CastWindowTreeHostAura> window_tree_host_;
   std::unique_ptr<aura::client::DefaultCaptureClient> capture_client_;
@@ -83,6 +83,7 @@ class CastWindowManagerAura : public CastWindowManager,
 
   std::vector<WindowId> window_order_;
   base::ObserverList<Observer>::Unchecked observer_list_;
+  bool rotation_supported_ = false;
 };
 
 }  // namespace chromecast

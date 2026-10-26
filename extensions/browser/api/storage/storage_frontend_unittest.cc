@@ -12,6 +12,7 @@
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "components/keyed_service/core/keyed_service.h"
 #include "components/value_store/value_store.h"
 #include "components/value_store/value_store_factory_impl.h"
 #include "content/public/browser/browser_context.h"
@@ -24,6 +25,8 @@
 #include "extensions/browser/api/storage/storage_frontend.h"
 #include "extensions/browser/event_listener_map.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/browser/event_router_factory.h"
+#include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extensions_test.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -39,6 +42,11 @@ namespace {
 // To save typing ValueStore::DEFAULTS everywhere.
 const ValueStore::WriteOptions DEFAULTS = ValueStore::DEFAULTS;
 
+std::unique_ptr<KeyedService> BuildEventRouter(
+    content::BrowserContext* context) {
+  return std::make_unique<EventRouter>(context, ExtensionPrefs::Get(context));
+}
+
 }  // namespace
 
 // A better name for this would be StorageFrontendTest, but the historical name
@@ -48,6 +56,11 @@ class ExtensionSettingsFrontendTest : public ExtensionsTest {
  public:
   void SetUp() override {
     ExtensionsTest::SetUp();
+    // EventRouterFactory::ServiceIsNULLWhileTesting() returns true, so an
+    // EventRouter must be explicitly provided for tests that dispatch
+    // storage.onChanged events (e.g. via StorageFrontend::OnSettingsChanged()).
+    EventRouterFactory::GetInstance()->SetTestingFactory(
+        browser_context(), base::BindRepeating(&BuildEventRouter));
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     storage_factory_ =
         new value_store::ValueStoreFactoryImpl(temp_dir_.GetPath());
@@ -390,6 +403,28 @@ TEST_F(ExtensionSettingsFrontendTest, SettingsQuotaExceededEmitsErrorMetric) {
       "Extensions.Database.Local.StatusCodeByOperation.set",
       /*sample=*/value_store::ValueStore::StatusCode::QUOTA_EXCEEDED,
       /*expected_bucket_count=*/1);
+}
+
+// Tests that OnSettingsChanged emits the execution time histogram.
+TEST_F(ExtensionSettingsFrontendTest,
+       OnSettingsChangedEmitsExecutionTimeHistogram) {
+  base::HistogramTester histogram_tester;
+
+  const std::string id = "ext";
+  scoped_refptr<const Extension> extension =
+      settings_test_util::AddExtensionWithId(browser_context(), id,
+                                             Manifest::Type::kExtension);
+
+  EventRouter* event_router = EventRouter::Get(browser_context());
+  event_router->listeners().AddListener(EventListener::CreateLazyListener(
+      "storage.onChanged", id, browser_context(), false, GURL(), std::nullopt));
+
+  SettingsChangedCallback callback = frontend_->GetObserver();
+  callback.Run(id, StorageAreaNamespace::kLocal, std::nullopt,
+               base::Value(true));
+
+  histogram_tester.ExpectTotalCount("Extensions.Storage.OnSettingsChangedTime",
+                                    1);
 }
 
 }  // namespace extensions

@@ -7,7 +7,7 @@
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/test/pixel/ash_pixel_differ.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/compositor/layer_type.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/size.h"
@@ -51,7 +51,8 @@ class DemoAshPixelDiffTest : public AshTestBase {
     // Set a solid color contents view.
     auto contents_view = std::make_unique<views::View>();
     contents_view->SetPaintToLayer(ui::LAYER_SOLID_COLOR);
-    contents_view->layer()->SetColor(color);
+    contents_view->layer()->AsSolidColor()->SetColor(
+        SkColor4f::FromColor(color));
     widget->SetContentsView(std::move(contents_view));
 
     return widget;

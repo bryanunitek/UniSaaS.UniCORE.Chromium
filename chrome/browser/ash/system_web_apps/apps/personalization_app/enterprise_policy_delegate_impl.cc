@@ -18,7 +18,7 @@ namespace ash::personalization_app {
 
 namespace {
 
-ash::UserImageManagerImpl* GetUserImageManager(const Profile* profile) {
+ash::UserImageManagerImpl* GetUserImageManager(Profile* profile) {
   return ash::UserImageManagerRegistry::Get()->GetManager(
       GetAccountId(profile));
 }
@@ -28,7 +28,7 @@ ash::UserImageManagerImpl* GetUserImageManager(const Profile* profile) {
 EnterprisePolicyDelegateImpl::EnterprisePolicyDelegateImpl(
     content::BrowserContext* browser_context)
     : profile_(Profile::FromBrowserContext(browser_context)) {
-  DCHECK(Shell::HasInstance());
+  CHECK(Shell::HasInstance(), base::NotFatalUntil::M160);
   scoped_shell_observation_.Observe(Shell::Get());
   scoped_user_manager_observation_.Observe(user_manager::UserManager::Get());
   scoped_wallpaper_controller_observation_.Observe(WallpaperController::Get());

@@ -11,6 +11,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "base/containers/span.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/shared_memory_mapping.h"
@@ -23,6 +25,7 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
+#include "build/build_config.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/phishing_classifier/features.h"
 #include "components/safe_browsing/core/common/proto/client_model.pb.h"
@@ -37,6 +40,8 @@
 #include "third_party/tflite_support/src/tensorflow_lite_support/cc/task/core/task_api_factory.h"
 #include "third_party/tflite_support/src/tensorflow_lite_support/cc/task/vision/image_classifier.h"
 #include "third_party/tflite_support/src/tensorflow_lite_support/cc/task/vision/image_embedder.h"
+#include "ui/gfx/geometry/size.h"
+#include "ui/gfx/image/image.h"
 
 namespace safe_browsing {
 
@@ -143,37 +148,68 @@ std::unique_ptr<tflite::task::vision::ImageEmbedder> CreateImageEmbedder(
   return std::move(*embedder);
 }
 
-std::string GetModelInput(const SkBitmap& bitmap,
-                          int width,
-                          int height,
-                          bool image_embedding = false) {
+// Resizes `image` to (`width`, `height`) and returns it as an SkBitmap suitable
+// for TFLite model inputs, using platform-optimized paths.
+SkBitmap ResizeImageForModel(const gfx::Image& image,
+                             int width,
+                             int height,
+                             [[maybe_unused]] bool image_embedding = false) {
+  if (image.IsEmpty() || width <= 0 || height <= 0) {
+    return SkBitmap();
+  }
+#if BUILDFLAG(IS_IOS)
+  // On iOS, we must resize via CoreGraphics to avoid contiguous memory OOMs
+  // that occur when extracting full-resolution SkBitmaps.
+  //
+  // `gfx::ResizedImage(...).AsBitmap()` is deliberately not used here:
+  // `AsBitmap()` upsamples by the maximum supported resource scale factor
+  // (e.g. 3x), which would allocate a 9x-area intermediate and then require a
+  // second `skia::ImageOperations::Resize()` pass back down to
+  // (`width`, `height`) on the calling (UI) thread. Neither pass adds detail,
+  // since the CoreGraphics resize already produced the exact target
+  // dimensions.
+  //
+  // As a result `kConditionalImageResize` has no effect on iOS: the skia
+  // interpolation-quality choice below only ever applied to that redundant
+  // second pass.
+  return visual_utils::GetResizedImageAsSkBitmap(image,
+                                                 gfx::Size(width, height));
+#else
+  // On other platforms, we can safely extract the SkBitmap and resize it using
+  // Skia, which allows us to respect the `kConditionalImageResize`
+  // interpolation quality feature flag.
+  SkBitmap bitmap = image.AsBitmap();
+  if (bitmap.drawsNothing()) {
+    return bitmap;
+  }
+  return skia::ImageOperations::Resize(
+      bitmap,
+      image_embedding && base::FeatureList::IsEnabled(kConditionalImageResize)
+          ? skia::ImageOperations::RESIZE_BEST
+          : skia::ImageOperations::RESIZE_GOOD,
+      width, height);
+#endif
+}
+
+std::string GetModelInput(const SkBitmap& bitmap, int width, int height) {
   TRACE_EVENT0("safe_browsing", "GetTfLiteModelInput");
   // Use the Rec. 2020 color space, in case the user input is wide-gamut.
   sk_sp<SkColorSpace> rec2020 = SkColorSpace::MakeRGB(
       {2.22222f, 0.909672f, 0.0903276f, 0.222222f, 0.0812429f, 0, 0},
       SkNamedGamut::kRec2020);
-
-  SkBitmap downsampled =
-      image_embedding && base::FeatureList::IsEnabled(kConditionalImageResize)
-          ? skia::ImageOperations::Resize(
-                bitmap, skia::ImageOperations::RESIZE_BEST,
-                static_cast<int>(width), static_cast<int>(height))
-          : skia::ImageOperations::Resize(
-                bitmap, skia::ImageOperations::RESIZE_GOOD,
-                static_cast<int>(width), static_cast<int>(height));
-
-  if (downsampled.drawsNothing()) {
+  if (bitmap.drawsNothing()) {
     return std::string();
   }
 
-  CHECK_EQ(downsampled.width(), width);
-  CHECK_EQ(downsampled.height(), height);
+  CHECK_EQ(bitmap.width(), width);
+  CHECK_EQ(bitmap.height(), height);
 
   // Format as an RGB buffer for input into the model
   std::string data;
+  data.reserve(width * height * 3);
   for (int y = 0; y < height; ++y) {
     for (int x = 0; x < width; ++x) {
-      SkColor color = downsampled.getColor(x, y);
+      SkColor color = bitmap.getColor(x, y);
       data += static_cast<char>(SkColorGetR(color));
       data += static_cast<char>(SkColorGetG(color));
       data += static_cast<char>(SkColorGetB(color));
@@ -289,8 +325,7 @@ void OnImageEmbedderCreated(
     std::unique_ptr<tflite::task::vision::ImageEmbedder> image_embedder,
     scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
     base::OnceCallback<void(ImageFeatureEmbedding)> callback) {
-  std::string model_input = GetModelInput(bitmap, input_width, input_height,
-                                          /*image_embedding=*/true);
+  std::string model_input = GetModelInput(bitmap, input_width, input_height);
   if (model_input.empty()) {
     callback_task_runner->PostTask(
         FROM_HERE,
@@ -349,6 +384,7 @@ void Scorer::ApplyImageEmbeddingTfLiteModelHelper(
         base::BindOnce(std::move(callback), ImageFeatureEmbedding()));
     return;
   }
+
   base::ThreadPool::PostTask(
       FROM_HERE, {base::TaskPriority::BEST_EFFORT},
       base::BindOnce(&OnImageEmbedderCreated, bitmap, input_width, input_height,
@@ -356,9 +392,12 @@ void Scorer::ApplyImageEmbeddingTfLiteModelHelper(
                      std::move(callback)));
 }
 
-Scorer::Scorer() = default;
+Scorer::Scorer() {
+  DETACH_FROM_SEQUENCE(sequence_checker_);
+}
 Scorer::~Scorer() = default;
 
+#if !BUILDFLAG(IS_IOS)
 // static
 ScorerStorage* ScorerStorage::GetInstance() {
   static base::NoDestructor<ScorerStorage> instance;
@@ -367,6 +406,7 @@ ScorerStorage* ScorerStorage::GetInstance() {
 
 ScorerStorage::ScorerStorage() = default;
 ScorerStorage::~ScorerStorage() = default;
+#endif
 
 /* static */
 std::unique_ptr<Scorer> Scorer::Create(base::ReadOnlySharedMemoryRegion region,
@@ -384,13 +424,13 @@ std::unique_ptr<Scorer> Scorer::Create(base::ReadOnlySharedMemoryRegion region,
     return nullptr;
   }
 
-  flatbuffers::Verifier verifier(
-      reinterpret_cast<const uint8_t*>(mapping.memory()), mapping.size());
+  const auto model_bytes = base::span(mapping);
+  flatbuffers::Verifier verifier(model_bytes.data(), model_bytes.size());
   if (!flat::VerifyClientSideModelBuffer(verifier)) {
     RecordScorerCreationStatus(SCORER_FAIL_FLATBUFFER_FAILED_VERIFY);
     return nullptr;
   }
-  scorer->flatbuffer_model_ = flat::GetClientSideModel(mapping.memory());
+  scorer->flatbuffer_model_ = flat::GetClientSideModel(model_bytes.data());
   if (!scorer->flatbuffer_model_ ||
       !scorer->flatbuffer_model_->tflite_metadata()) {
     RecordScorerCreationStatus(SCORER_FAIL_MODEL_MISSING_FIELDS);
@@ -439,13 +479,17 @@ std::unique_ptr<Scorer> Scorer::CreateScorerWithImageEmbeddingModel(
   std::unique_ptr<Scorer> scorer =
       Create(std::move(region), std::move(visual_tflite_model));
 
+  if (!scorer) {
+    return nullptr;
+  }
+
   if (image_embedding_model.IsValid()) {
-    if (scorer && !scorer->image_embedding_model_.Initialize(
-                      std::move(image_embedding_model))) {
+    if (!scorer->image_embedding_model_.Initialize(
+            std::move(image_embedding_model))) {
       RecordScorerCreationStatus(
           SCORER_FAIL_FLATBUFFER_INVALID_IMAGE_EMBEDDING_TFLITE_MODEL);
       return nullptr;
-    } else if (scorer) {
+    } else {
       if (!scorer->flatbuffer_model_->img_embedding_metadata()) {
         RecordScorerCreationStatus(SCORER_FAIL_MODEL_MISSING_FIELDS);
         return nullptr;
@@ -523,6 +567,10 @@ void Scorer::AttachImageEmbeddingModel(base::File image_embedding_model) {
     }
   }
 
+  if (!flatbuffer_model_ || !flatbuffer_model_->img_embedding_metadata()) {
+    return;
+  }
+
   SetImageEmbeddingDimensions(
       flatbuffer_model_->img_embedding_metadata()->input_width(),
       flatbuffer_model_->img_embedding_metadata()->input_height());
@@ -544,15 +592,20 @@ void Scorer::AttachImageEmbeddingModel(int image_embedding_input_width,
 }
 
 void Scorer::ApplyVisualTfLiteModel(
-    const SkBitmap& bitmap,
+    const gfx::Image& image,
     base::OnceCallback<void(std::vector<double>)> callback) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (visual_tflite_model_.IsValid()) {
+    SkBitmap model_bitmap = ResizeImageForModel(
+        image, classification_input_width_, classification_input_height_);
+
     base::ThreadPool::PostTask(
-        FROM_HERE, {base::TaskPriority::BEST_EFFORT},
+        FROM_HERE,
+        {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+         base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
         base::BindOnce(
-            &ApplyVisualTfLiteModelHelper, bitmap, classification_input_width_,
-            classification_input_height_,
+            &Scorer::ApplyVisualTfLiteModelHelper, std::move(model_bitmap),
+            classification_input_width_, classification_input_height_,
             std::string(base::as_string_view(visual_tflite_model_.bytes())),
             base::SequencedTaskRunner::GetCurrentDefault(),
             std::move(callback)));
@@ -562,16 +615,23 @@ void Scorer::ApplyVisualTfLiteModel(
 }
 
 void Scorer::ApplyVisualTfLiteModelImageEmbedding(
-    const SkBitmap& bitmap,
+    const gfx::Image& image,
     base::OnceCallback<void(ImageFeatureEmbedding)> callback) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (image_embedding_model_.IsValid()) {
+    SkBitmap embedder_bitmap = ResizeImageForModel(
+        image, image_embedding_input_width_, image_embedding_input_height_,
+        /*image_embedding=*/true);
+
     base::Time start_post_task_time = base::Time::Now();
     base::ThreadPool::PostTask(
-        FROM_HERE, {base::TaskPriority::BEST_EFFORT},
+        FROM_HERE,
+        {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+         base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
         base::BindOnce(
-            &ApplyImageEmbeddingTfLiteModelHelper, bitmap,
-            image_embedding_input_width_, image_embedding_input_height_,
+            &Scorer::ApplyImageEmbeddingTfLiteModelHelper,
+            std::move(embedder_bitmap), image_embedding_input_width_,
+            image_embedding_input_height_,
             std::string(base::as_string_view(image_embedding_model_.bytes())),
             base::SequencedTaskRunner::GetCurrentDefault(),
             std::move(callback)));
@@ -583,8 +643,13 @@ void Scorer::ApplyVisualTfLiteModelImageEmbedding(
   }
 }
 
+bool Scorer::HasVisualTfLiteModel() const {
+  return flatbuffer_model_ != nullptr;
+}
+
 int Scorer::tflite_model_version() const {
-  return flatbuffer_model_->tflite_metadata()->version();
+  return flatbuffer_model_ ? flatbuffer_model_->tflite_metadata()->version()
+                           : 0;
 }
 const google::protobuf::RepeatedPtrField<TfLiteModelMetadata::Threshold>&
 Scorer::tflite_thresholds() const {
@@ -604,10 +669,25 @@ void Scorer::SetImageEmbeddingDimensions(int image_embedding_input_width,
 }
 
 int Scorer::image_embedding_tflite_model_version() const {
-  return flatbuffer_model_->img_embedding_metadata()->version();
+  return (flatbuffer_model_ && flatbuffer_model_->img_embedding_metadata())
+             ? flatbuffer_model_->img_embedding_metadata()->version()
+             : 0;
 }
 
+#if !BUILDFLAG(IS_IOS)
 void ScorerStorage::SetScorer(std::unique_ptr<Scorer> scorer) {
+  if (scorer_) {
+    // The Scorer contains a TensorFlow Lite model. Destroying it can take a
+    // non-trivial amount of time and may involve blocking I/O operations (like
+    // unmapping memory-mapped files). To avoid blocking the main thread and
+    // causing UI jank, we post the destruction of the old scorer to a
+    // background task.
+    base::ThreadPool::PostTask(
+        FROM_HERE,
+        {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+         base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
+        base::DoNothingWithBoundArgs(std::move(scorer_)));
+  }
   scorer_ = std::move(scorer);
   for (Observer& obs : observers_) {
     obs.OnScorerChanged();
@@ -615,10 +695,7 @@ void ScorerStorage::SetScorer(std::unique_ptr<Scorer> scorer) {
 }
 
 void ScorerStorage::ClearScorer() {
-  scorer_.reset();
-  for (Observer& obs : observers_) {
-    obs.OnScorerChanged();
-  }
+  SetScorer(nullptr);
 }
 
 Scorer* ScorerStorage::GetScorer() const {
@@ -632,5 +709,6 @@ void ScorerStorage::AddObserver(ScorerStorage::Observer* observer) {
 void ScorerStorage::RemoveObserver(ScorerStorage::Observer* observer) {
   observers_.RemoveObserver(observer);
 }
+#endif  // !BUILDFLAG(IS_IOS)
 
 }  // namespace safe_browsing

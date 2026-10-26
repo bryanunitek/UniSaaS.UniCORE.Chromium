@@ -22,7 +22,6 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.android.XmlResourceParserImpl;
-import org.robolectric.annotation.Config;
 import org.robolectric.res.ResourceTable;
 import org.w3c.dom.Document;
 
@@ -50,7 +49,6 @@ import javax.xml.parsers.DocumentBuilderFactory;
 
 /** Tests {@link WebappInfo} with WebAPKs. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class WebApkInfoTest {
     private static final String WEBAPK_PACKAGE_NAME = "org.chromium.webapk.test_package";
     private static final String UNBOUND_WEBAPK_PACKAGE_NAME = "unbound.webapk";
@@ -532,7 +530,7 @@ public class WebApkInfoTest {
         Intent intent = WebApkTestHelper.createMinimalWebApkIntent(WEBAPK_PACKAGE_NAME, START_URL);
         intent.putExtra(WebappConstants.EXTRA_SOURCE, ShortcutSource.EXTERNAL_INTENT);
         intent.putExtra(
-                Browser.EXTRA_APPLICATION_ID, RuntimeEnvironment.application.getPackageName());
+                Browser.EXTRA_APPLICATION_ID, RuntimeEnvironment.getApplication().getPackageName());
 
         WebappInfo info = createWebApkInfo(intent);
         Assert.assertEquals(ShortcutSource.EXTERNAL_INTENT_FROM_CHROME, info.source());
@@ -725,7 +723,7 @@ public class WebApkInfoTest {
 
         WebappInfo info = createWebApkInfo(intent);
         Assert.assertEquals(
-                SplashLayout.getDefaultBackgroundColor(RuntimeEnvironment.application),
+                SplashLayout.getDefaultBackgroundColor(RuntimeEnvironment.getApplication()),
                 info.backgroundColorFallbackToDefault());
     }
 

@@ -12,6 +12,10 @@ import android.widget.FrameLayout;
 import androidx.annotation.Px;
 
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.JniUniquePtr;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.ContextUtils;
@@ -42,9 +46,12 @@ import org.chromium.ui.modaldialog.ModalDialogManager;
 @JNINamespace("thin_webview::android")
 @NullMarked
 public class ThinWebViewImpl extends FrameLayout implements ThinWebView {
+    @JniType("::thin_webview::android::ThinWebView")
+    public interface NativeThinWebView extends JniTypeToken {}
+
     private CompositorView mCompositorView;
     private final WindowAndroid mWindowAndroid;
-    private long mNativeThinWebViewImpl;
+    private @Nullable JniUniquePtr<NativeThinWebView> mNativeThinWebViewImpl;
     private @Nullable View mContentView;
     // Passed to native and stored as a weak reference, so ensure this strong
     // reference is not optimized away by R8.
@@ -146,7 +153,7 @@ public class ThinWebViewImpl extends FrameLayout implements ThinWebView {
     @Override
     public void attachWebContents(
             WebContents webContents, View contentView, ThinWebViewAttachParams attachParams) {
-        if (mNativeThinWebViewImpl == 0) return;
+        if (mNativeThinWebViewImpl == null) return;
 
         // Native code holds only a weak reference to this object.
         mWebContentsDelegate = attachParams.webContentsDelegate;
@@ -157,10 +164,12 @@ public class ThinWebViewImpl extends FrameLayout implements ThinWebView {
                         webContents,
                         attachParams.webContentsDelegate,
                         mEnablePermissionRequests,
-                        attachParams.supportTheming);
+                        attachParams.supportTheming,
+                        attachParams.enableBrowserAutofill);
 
         // Allow highlighting text.
         SelectionPopupController controller = SelectionPopupController.fromWebContents(webContents);
+        controller.setUseWindowReadbackView(false);
         if (attachParams.selectionDropdownMenuDelegate != null) {
             controller.setDropdownMenuDelegate(attachParams.selectionDropdownMenuDelegate);
         } else {
@@ -181,14 +190,18 @@ public class ThinWebViewImpl extends FrameLayout implements ThinWebView {
 
     @Override
     public void destroy() {
-        if (mNativeThinWebViewImpl == 0) return;
+        if (mNativeThinWebViewImpl == null) return;
         if (mContentView != null) {
+            mContentView.setOnScrollChangeListener(null);
             removeView(mContentView);
             mContentView = null;
         }
+        mWebContentsDelegate = null;
+        setOnScrollChangeListener(null);
+        setOnHierarchyChangeListener(null);
         mCompositorView.destroy();
-        ThinWebViewImplJni.get().destroy(mNativeThinWebViewImpl);
-        mNativeThinWebViewImpl = 0;
+        mNativeThinWebViewImpl.destroy();
+        mNativeThinWebViewImpl = null;
         if (mOwnsWindowAndroid) {
             mWindowAndroid.destroy();
         }
@@ -210,13 +223,13 @@ public class ThinWebViewImpl extends FrameLayout implements ThinWebView {
 
     @Override
     public void resizeWebContents(@Px int width, @Px int height) {
-        if (mNativeThinWebViewImpl == 0) return;
+        if (mNativeThinWebViewImpl == null) return;
         ThinWebViewImplJni.get().sizeChanged(mNativeThinWebViewImpl, width, height);
     }
 
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
-        if (mNativeThinWebViewImpl == 0 || mIgnoreSizeChanges) return;
+        if (mNativeThinWebViewImpl == null || mIgnoreSizeChanges) return;
         if (w != oldw || h != oldh) {
             ThinWebViewImplJni.get().sizeChanged(mNativeThinWebViewImpl, w, h);
         }
@@ -227,6 +240,7 @@ public class ThinWebViewImpl extends FrameLayout implements ThinWebView {
 
         if (mContentView != null) {
             assert getChildCount() > 1;
+            mContentView.setOnScrollChangeListener(null);
             removeViewAt(1);
         }
 
@@ -236,20 +250,20 @@ public class ThinWebViewImpl extends FrameLayout implements ThinWebView {
 
     @NativeMethods
     interface Natives {
-        long init(ThinWebViewImpl self, CompositorView compositorView, WindowAndroid windowAndroid);
-
-        void destroy(long nativeThinWebView);
+        JniUniquePtr<NativeThinWebView> init(
+                ThinWebViewImpl self, CompositorView compositorView, WindowAndroid windowAndroid);
 
         void setWebContents(
-                long nativeThinWebView,
+                JniPtr<NativeThinWebView> self,
                 WebContents webContents,
                 @Nullable WebContentsDelegateAndroid delegate,
                 boolean enablePermissionRequests,
-                boolean supportTheming);
+                boolean supportTheming,
+                boolean enableBrowserAutofill);
 
         void setContextMenuPopulatorFactory(
-                long nativeThinWebView, ContextMenuPopulatorFactory factory);
+                JniPtr<NativeThinWebView> self, ContextMenuPopulatorFactory factory);
 
-        void sizeChanged(long nativeThinWebView, int width, int height);
+        void sizeChanged(JniPtr<NativeThinWebView> self, int width, int height);
     }
 }

@@ -10,6 +10,7 @@
 #include "base/check_deref.h"
 #include "base/no_destructor.h"
 #import "components/remote_cocoa/app_shim/native_widget_mac_nswindow.h"
+#import "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #import "components/remote_cocoa/app_shim/views_nswindow_delegate.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -23,6 +24,7 @@ using enum NativeWidgetMacNSWindowHeadlessInfo::WindowState;
 // Window visibility and Z-Order.
 - (BOOL)isVisible;
 - (BOOL)invokeOriginalIsVisibleForTesting;
+- (NSWindowOcclusionState)occlusionState;
 - (void)orderFront:(id)sender;
 - (void)orderBack:(id)sender;
 - (void)orderOut:(id)sender;
@@ -32,6 +34,12 @@ using enum NativeWidgetMacNSWindowHeadlessInfo::WindowState;
 // Window key state.
 - (BOOL)isKeyWindow;
 - (void)makeKeyAndOrderFront:(id)sender;
+
+// Window geometry.
+- (NSRect)frame;
+- (void)setFrame:(NSRect)frameRect
+         display:(BOOL)displayFlag
+         animate:(BOOL)animateFlag;
 
 // Window fullscreen.
 - (NSWindowStyleMask)styleMask;
@@ -67,6 +75,7 @@ namespace {
 DEFINE_SWIZZLER(isVisible, isVisible)
 DEFINE_SWIZZLER(invokeOriginalIsVisibleForTesting,
                 invokeOriginalIsVisibleForTesting)
+DEFINE_SWIZZLER(occlusionState, occlusionState)
 DEFINE_SWIZZLER(orderFront, orderFront:)
 DEFINE_SWIZZLER(orderBack, orderBack:)
 DEFINE_SWIZZLER(orderOut, orderOut:)
@@ -75,6 +84,9 @@ DEFINE_SWIZZLER(orderFrontRegardless, orderFrontRegardless)
 
 DEFINE_SWIZZLER(isKeyWindow, isKeyWindow)
 DEFINE_SWIZZLER(makeKeyAndOrderFront, makeKeyAndOrderFront:)
+
+DEFINE_SWIZZLER(frame, frame)
+DEFINE_SWIZZLER(setFrame, setFrame:display:animate:)
 
 DEFINE_SWIZZLER(styleMask, styleMask)
 DEFINE_SWIZZLER(setStyleMask, setStyleMask:)
@@ -94,6 +106,7 @@ void InstallSwizzlers() {
   dispatch_once(&once, ^{
     isVisibleSwizzler();
     invokeOriginalIsVisibleForTestingSwizzler();
+    occlusionStateSwizzler();
     orderFrontSwizzler();
     orderBackSwizzler();
     orderOutSwizzler();
@@ -102,6 +115,9 @@ void InstallSwizzlers() {
 
     isKeyWindowSwizzler();
     makeKeyAndOrderFrontSwizzler();
+
+    frameSwizzler();
+    setFrameSwizzler();
 
     styleMaskSwizzler();
     setStyleMaskSwizzler();
@@ -149,6 +165,16 @@ void InstallSwizzlers() {
   return isVisibleSwizzler().InvokeOriginal<BOOL>(self, isVisibleSelector());
 }
 
+- (NSWindowOcclusionState)occlusionState {
+  NativeWidgetMacNSWindowHeadlessInfo* headless_info = GET_HEADLESS_INFO;
+  if (!headless_info) {
+    return occlusionStateSwizzler().InvokeOriginal<NSWindowOcclusionState>(
+        self, occlusionStateSelector());
+  }
+
+  return headless_info->is_visible ? NSWindowOcclusionStateVisible : 0;
+}
+
 - (void)orderFront:(id)sender {
   NativeWidgetMacNSWindowHeadlessInfo* headless_info = GET_HEADLESS_INFO;
   if (!headless_info) {
@@ -168,6 +194,10 @@ void InstallSwizzlers() {
   if (delegate) {
     [delegate onWindowOrderChanged:nil];
   }
+
+  [[NSNotificationCenter defaultCenter]
+      postNotificationName:NSWindowDidChangeOcclusionStateNotification
+                    object:self];
 }
 
 - (void)orderBack:(id)sender {
@@ -189,6 +219,10 @@ void InstallSwizzlers() {
   if (delegate) {
     [delegate onWindowOrderChanged:nil];
   }
+
+  [[NSNotificationCenter defaultCenter]
+      postNotificationName:NSWindowDidChangeOcclusionStateNotification
+                    object:self];
 }
 
 - (void)orderOut:(id)sender {
@@ -218,6 +252,10 @@ void InstallSwizzlers() {
   if (delegate) {
     [delegate onWindowOrderChanged:nil];
   }
+
+  [[NSNotificationCenter defaultCenter]
+      postNotificationName:NSWindowDidChangeOcclusionStateNotification
+                    object:self];
 }
 
 - (void)orderWindow:(NSWindowOrderingMode)place relativeTo:(NSInteger)otherWin {
@@ -325,6 +363,43 @@ void InstallSwizzlers() {
       self, setStyleMaskSelector(), styleMask);
 }
 
+- (NSRect)frame {
+  NativeWidgetMacNSWindowHeadlessInfo* headless_info = GET_HEADLESS_INFO;
+  if (headless_info && headless_info->headless_frame) {
+    return gfx::ScreenRectToNSRect(headless_info->headless_frame.value());
+  }
+
+  return frameSwizzler().InvokeOriginal<NSRect>(self, frameSelector());
+}
+
+- (void)setFrame:(NSRect)frameRect
+         display:(BOOL)displayFlag
+         animate:(BOOL)animateFlag {
+  NativeWidgetMacNSWindowHeadlessInfo* headless_info = GET_HEADLESS_INFO;
+  if (headless_info) {
+    const NSRect old_frame = [self frame];
+    headless_info->headless_frame = gfx::ScreenRectFromNSRect(frameRect);
+    NativeWidgetMacNSWindow* window = (NativeWidgetMacNSWindow*)self;
+    if (window.bridge) {
+      window.bridge->UpdateWindowGeometry();
+    }
+    if (!NSEqualPoints(old_frame.origin, frameRect.origin)) {
+      [[NSNotificationCenter defaultCenter]
+          postNotificationName:NSWindowDidMoveNotification
+                        object:self];
+    }
+    if (!NSEqualSizes(old_frame.size, frameRect.size)) {
+      [[NSNotificationCenter defaultCenter]
+          postNotificationName:NSWindowDidResizeNotification
+                        object:self];
+    }
+    return;
+  }
+
+  setFrameSwizzler().InvokeOriginal<void, NSRect, BOOL, BOOL>(
+      self, setFrameSelector(), frameRect, displayFlag, animateFlag);
+}
+
 - (void)toggleFullScreen:(id)sender {
   NativeWidgetMacNSWindowHeadlessInfo* headless_info = GET_HEADLESS_INFO;
   if (!headless_info) {
@@ -341,14 +416,19 @@ void InstallSwizzlers() {
       [delegate windowWillEnterFullScreen:nil];
     }
 
-    const gfx::Rect frame_rect = gfx::ScreenRectFromNSRect([super frame]);
-    headless_info->restored_bounds = frame_rect;
+    const gfx::Rect frame_rect = gfx::ScreenRectFromNSRect([self frame]);
+    // Preserve the original normal restored bounds if the window was already
+    // in a non-normal (e.g. zoomed) state before entering fullscreen.
+    if (!headless_info->restored_bounds) {
+      headless_info->restored_bounds = frame_rect;
+    }
     headless_info->window_state = kFullscreen;
 
     // Fullscreen state uses the entire screen estate.
     display::Screen& screen = CHECK_DEREF(display::Screen::Get());
     display::Display display = screen.GetDisplayMatching(frame_rect);
     NSRect zoomed_frame = gfx::ScreenRectToNSRect(display.bounds());
+
     [self setFrame:zoomed_frame display:NO animate:NO];
 
     if (delegate) {
@@ -399,8 +479,11 @@ void InstallSwizzlers() {
     if ([self isZoomed]) {
       return;
     }
-    const gfx::Rect frame_rect = gfx::ScreenRectFromNSRect([super frame]);
-    headless_info->restored_bounds = frame_rect;
+    const gfx::Rect frame_rect = gfx::ScreenRectFromNSRect([self frame]);
+    // Preserve the original normal restored bounds if already set.
+    if (!headless_info->restored_bounds) {
+      headless_info->restored_bounds = frame_rect;
+    }
     headless_info->window_state = kZoomed;
 
     // Zoomed state uses the screen's work area.
@@ -482,6 +565,10 @@ void InstallSwizzlers() {
   if (delegate) {
     [delegate windowDidMiniaturize:nil];
   }
+
+  [[NSNotificationCenter defaultCenter]
+      postNotificationName:NSWindowDidChangeOcclusionStateNotification
+                    object:self];
 }
 
 - (void)deminiaturize:(id)sender {
@@ -511,6 +598,10 @@ void InstallSwizzlers() {
       [delegate windowDidBecomeKey:nil];
     }
   }
+
+  [[NSNotificationCenter defaultCenter]
+      postNotificationName:NSWindowDidChangeOcclusionStateNotification
+                    object:self];
 }
 
 - (void)performMiniaturize:(id)sender {

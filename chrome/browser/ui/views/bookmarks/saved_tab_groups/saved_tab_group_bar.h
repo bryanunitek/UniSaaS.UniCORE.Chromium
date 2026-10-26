@@ -24,10 +24,6 @@
 
 class BrowserWindowInterface;
 
-namespace content {
-class PageNavigator;
-}
-
 namespace views {
 class Widget;
 }
@@ -60,13 +56,6 @@ class SavedTabGroupBar : public views::AccessiblePaneView,
   SavedTabGroupBar& operator=(const SavedTabGroupBar&) = delete;
   ~SavedTabGroupBar() override;
 
-  // Sets the stored page navigator.
-  // TODO(pengchaocai): Navigator seems not needed. Investigate and remove.
-  void SetPageNavigator(content::PageNavigator* page_navigator) {
-    page_navigator_ = page_navigator;
-  }
-
-  content::PageNavigator* page_navigator() { return page_navigator_; }
   views::View* everything_menu_button() { return everything_menu_button_; }
 
   // views::View
@@ -182,9 +171,6 @@ class SavedTabGroupBar : public views::AccessiblePaneView,
   // the maximum visible.
   bool ShouldShowOverflowButtonForWidth(int max_width) const;
 
-  // Updates `resumption_iph_dismissed_` based on Projects Panel feature state.
-  void UpdateResumptionRailIPHDismissedState();
-
   // Returns whether the overflow button is explicitly hidden by logic (e.g. for
   // promo or if there are no groups with projects panel).
   bool IsOverflowButtonHidden() const;
@@ -235,10 +221,6 @@ class SavedTabGroupBar : public views::AccessiblePaneView,
   // The service used to manage and query SavedTabGroups.
   raw_ptr<TabGroupSyncService> tab_group_service_ = nullptr;
 
-  // The page navigator used to create tab groups
-  raw_ptr<content::PageNavigator, AcrossTasksDanglingUntriaged>
-      page_navigator_ = nullptr;
-
   raw_ptr<BrowserWindowInterface> browser_ = nullptr;
 
   // During a drag and drop session, `drag_data_` owns the state for the drag.
@@ -246,9 +228,6 @@ class SavedTabGroupBar : public views::AccessiblePaneView,
 
   base::ScopedObservation<views::Widget, SavedTabGroupBar> widget_observation_{
       this};
-
-  // True if the IPH has been dismissed by the user.
-  bool resumption_iph_dismissed_ = false;
 
   // Factory for creating WeakPtrs to this class. This is used to ensure that
   // callbacks to this class are not run after the class is destroyed.

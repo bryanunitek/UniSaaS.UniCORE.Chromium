@@ -11,7 +11,9 @@ enum class IOSGeminiSettingsItem {
   kGeminiAppsActivity = 0,
   kPersonalization = 1,
   kExtensions = 2,
-  kUnknown = 3,
+  // kUnknown = 3, // deprecated, moved to 50
+  kUsageLimits = 4,
+  kUnknown = 50,
   kMaxValue = kUnknown,
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/ios/enums.xml:IOSGeminiSettingsItem)
@@ -34,6 +36,9 @@ void RecordGeminiSettingsExtensions();
 // Records that the user tapped on the Gemini Personalization settings item.
 void RecordGeminiSettingsPersonalization();
 
+// Records that the user tapped on the Gemini Usage Limits settings item.
+void RecordGeminiSettingsUsageLimits();
+
 // Records that an item is shown in the Gemini settings page.
 void RecordGeminiSettingsItemShown(IOSGeminiSettingsItem item);
 
@@ -51,5 +56,17 @@ void RecordGeminiCameraSettingsBack();
 // Records that the user toggled the Gemini camera setting on/off on the Gemini
 // camera settings page.
 void RecordGeminiCameraSettingsToggled(bool enabled);
+
+// Records that the user tapped the close button on the Gemini suggestions
+// settings page.
+void RecordGeminiSuggestionsSettingsClose();
+
+// Records that the user tapped the back button on the Gemini suggestions
+// settings page.
+void RecordGeminiSuggestionsSettingsBack();
+
+// Records that the user toggled the Gemini suggestions setting on/off on the
+// Gemini suggestions settings page.
+void RecordGeminiSuggestionsSettingsToggled(bool enabled);
 
 #endif  // IOS_CHROME_BROWSER_SETTINGS_UI_BUNDLED_BWG_UTILS_GEMINI_SETTINGS_METRICS_H_

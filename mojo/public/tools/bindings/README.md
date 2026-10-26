@@ -99,12 +99,11 @@ for message parameters.
 | `array<T>`                    | Array of any Mojom type *T*; for example, `array<uint8>` or `array<array<string>>`.
 | `array<T, N>`                 | Fixed-length array of any Mojom type *T*. The parameter *N* must be an integral constant.
 | `map<S, T>`                   | Associated array mapping values of type *S* to values of type *T*. *S* may be a `string`, `enum`, or numeric type.
-| `handle`                      | Generic Mojo handle. May be any type of handle, including a wrapped native platform handle.
 | `handle<message_pipe>`        | Generic message pipe handle.
 | `handle<shared_buffer>`       | Shared buffer handle.
 | `handle<data_pipe_producer>`  | Data pipe producer handle.
 | `handle<data_pipe_consumer>`  | Data pipe consumer handle.
-| `handle<platform>`            | A native platform/OS handle.
+| `handle<platform>`            | A native platform/OS handle (e.g. file descriptor, Windows HANDLE, Mach port).
 | *`pending_remote<InterfaceType>`*             | Any user-defined Mojom interface type. This is sugar for a strongly-typed message pipe handle which should eventually be used to make outgoing calls on the interface.
 | *`pending_receiver<InterfaceType>`*            | A pending receiver for any user-defined Mojom interface type. This is sugar for a more strongly-typed message pipe handle which is expected to receive request messages and should therefore eventually be bound to an implementation of the interface.
 | *`pending_associated_remote<InterfaceType>`*  | An associated interface handle. See [Associated Interfaces](#associated-interfaces)
@@ -256,7 +255,7 @@ struct AllTheThings {
   // nullable. Note that interfaces and interface requests (the "Foo" and
   // "Foo&" type syntax respectively) are just strongly-typed message pipe
   // handles.
-  handle generic_handle;
+  handle<platform> platform_handle;
   handle<data_pipe_consumer> reader;
   handle<data_pipe_producer>? maybe_writer;
   handle<shared_buffer> dumping_ground;
@@ -645,6 +644,7 @@ bindings API documentation for that language:
 * [C++ Bindings](/mojo/public/cpp/bindings/README.md)
 * [JavaScript Bindings](/mojo/public/js/README.md)
 * [Java Bindings](/mojo/public/java/bindings/README.md)
+* [Rust Bindings](/mojo/public/rust/bindings/README.md)
 
 ## Message Validation
 
@@ -708,10 +708,11 @@ manually encode their own bindings messages.
 ### Custom Validation
 
 It's also possible for developers to define custom validation logic for specific
-Mojom struct types by exploiting the
-[type mapping](/mojo/public/cpp/bindings/README.md#Type-Mapping) system for C++
-bindings. Messages rejected by custom validation logic trigger the same
-validation failure behavior as the built-in type validation routines.
+Mojom struct types by exploiting the type mapping system for
+[C++](/mojo/public/cpp/bindings/README.md#Type-Mapping) or
+[Rust](/mojo/public/rust/bindings/README.md#type-mapping) bindings. Messages
+rejected by custom validation logic trigger the same validation failure behavior
+as the built-in type validation routines.
 
 ## Associated Interfaces
 
@@ -725,9 +726,11 @@ relative ordering guarantees among them. Associated interfaces are useful when
 one interface needs to guarantee strict FIFO ordering with respect to one or
 more other interfaces, as they allow interfaces to share a single pipe.
 
-Currently associated interfaces are only supported in generated C++ bindings.
+Currently associated interfaces are supported in generated C++, JavaScript, and Rust bindings.
 See the documentation for
-[C++ Associated Interfaces](/mojo/public/cpp/bindings/README.md#Associated-Interfaces).
+[C++ Associated Interfaces](/mojo/public/cpp/bindings/README.md#Associated-Interfaces),
+[JavaScript Associated Interfaces](/mojo/public/js/README.md#Associated-Interfaces), and
+[Rust Associated Interfaces](/mojo/public/rust/bindings/README.md#Associated-Interfaces).
 
 ## Versioning
 
@@ -1068,8 +1071,8 @@ Since `mojom` targets are generated `source_set` targets and `mojom_component` t
 are generated `component` targets, you would use `mojom_component` in the same cases
 where you would use `component` for non-mojom files.
 *** note
-**NOTE**: by default, components for both blink and non-blink bindings are generated.
-Use the `disable_variants` target parameter to generate only non-blink bindings.
+**NOTE**: by default, components for only non-blink bindings are generated.
+Use the `generate_blink` target parameter to also generate blink bindings.
 You can also generate a `source_set` for one of the variants by defining
 [export_*](https://source.chromium.org/chromium/chromium/src/+/main:mojo/public/tools/bindings/mojom.gni;drc=739b9fbce50310c1dd2b59c279cd90a9319cb6e8;l=318)
 parameters for the `mojom_component` target.
@@ -1131,7 +1134,7 @@ TypeName = BasicTypeName
 BasicTypeName = Identifier | "associated" Identifier | HandleType | NumericType
 NumericType = "bool" | "int8" | "uint8" | "int16" | "uint16" | "int32"
             | "uint32" | "int64" | "uint64" | "float" | "double"
-HandleType = "handle" | "handle" "<" SpecificHandleType ">"
+HandleType = "handle" "<" SpecificHandleType ">"
 SpecificHandleType = "message_pipe"
                    | "shared_buffer"
                    | "data_pipe_consumer"

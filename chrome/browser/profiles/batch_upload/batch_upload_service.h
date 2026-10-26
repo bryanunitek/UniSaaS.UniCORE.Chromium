@@ -17,7 +17,7 @@
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/sync/service/local_data_description.h"
 
-class Browser;
+class BrowserWindowInterface;
 class BatchUploadDelegate;
 
 namespace signin {
@@ -72,7 +72,7 @@ class BatchUploadService : public KeyedService {
   // profile. `dialog_shown_callback` returns whether the dialog was shown or
   // not.
   void OpenBatchUpload(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       EntryPoint entry_point,
       base::OnceCallback<void(bool)> dialog_shown_callback = base::DoNothing(),
       base::OnceCallback<void()> dialog_closed_callback = base::DoNothing());
@@ -92,7 +92,20 @@ class BatchUploadService : public KeyedService {
   // Gets the ordered list of all available types in BatchUpload.
   static std::vector<syncer::DataType> AvailableTypesOrder();
 
+  // Returns whether a batch upload promo can be shown for a specific entry
+  // point.
+  //
+  // Permanent entry points (such as the Profile Menu row button) always return
+  // true because they must never be suppressed.
+  // Non-permanent promo entry points (such as promo cards and avatar pill
+  // promos) return false if the user previously uploaded only a subset of their
+  // local data via Batch Upload, to avoid over-promoting with promos.
+  bool CanShowPromo(EntryPoint entry_point) const;
+
  private:
+  // Returns whether the user has remaining local data from the last batch
+  // upload for the current primary account.
+  bool HasRemainingLocalDataAfterLastUpload() const;
   // Callback that returns a map of `syncer::LocalDataDescription` for the data
   // types that can be shown in the Batch Upload dialog.
   void OnGetLocalDataDescriptionsReady(
@@ -103,6 +116,7 @@ class BatchUploadService : public KeyedService {
   // storage. Empty map means the dialog was closed explicitly not to move any
   // data.
   void OnBatchUploadDialogResult(
+      size_t total_item_count,
       const std::map<syncer::DataType,
                      std::vector<syncer::LocalDataItemModel::DataId>>&
           item_ids_to_move);
@@ -113,7 +127,7 @@ class BatchUploadService : public KeyedService {
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
   // Changes the avatar button text to saving data and starts a timer that will
   // revert the button text on timeout.
-  void TriggerAvatarButtonSavingDataText(Browser* browser);
+  void TriggerAvatarButtonSavingDataText(BrowserWindowInterface* browser);
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
@@ -137,7 +151,7 @@ class BatchUploadService : public KeyedService {
     // Fields related to the dialog currently showing.
     struct DialogState {
       // Browser that is showing the dialog.
-      raw_ptr<Browser> browser_;
+      raw_ptr<BrowserWindowInterface> browser_;
       // Entry point of the dialog.
       EntryPoint entry_point_ = EntryPoint::kPasswordManagerSettings;
       // Called when the decision about showing the dialog is made.

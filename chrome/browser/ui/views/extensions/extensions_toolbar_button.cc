@@ -7,7 +7,6 @@
 #include "base/feature_list.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/layout_constants.h"
@@ -144,10 +143,6 @@ void ExtensionsToolbarButton::OnWidgetDestroying(views::Widget* widget) {
   extensions_toolbar_->OnMenuClosed();
 }
 
-bool ExtensionsToolbarButton::ShouldShowInkdropAfterIphInteraction() {
-  return false;
-}
-
 void ExtensionsToolbarButton::ToggleExtensionsMenu() {
   if (extensions_menu_coordinator_ &&
       extensions_menu_coordinator_->IsShowing()) {
@@ -176,8 +171,8 @@ void ExtensionsToolbarButton::ToggleExtensionsMenu() {
     // extensions_features::kExtensionsMenuAccessControl menu, therefore we can
     // use Browser for the other menu until the feature is rolled out.
     menu = ExtensionsMenuView::ShowBubble(
-        this, browser_, extensions_toolbar_->GetToolbarViewModel(),
-        extensions_toolbar_);
+        views::BubbleAnchor(this), browser_,
+        extensions_toolbar_->GetToolbarViewModel(), extensions_toolbar_);
   }
   extensions_menu_widget_ = menu->GetWeakPtr();
   extension_menu_observation_.Observe(menu);

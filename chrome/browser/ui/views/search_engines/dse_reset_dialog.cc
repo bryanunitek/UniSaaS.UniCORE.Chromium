@@ -10,6 +10,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/views/frame/app_menu_button.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -26,10 +27,15 @@
 #include "services/preferences/tracked/pref_hash_filter.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/controls/link.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
 namespace search_engines {
 
@@ -39,14 +45,14 @@ namespace {
 const char kDefaultSearchEngineResetNotificationShown[] =
     "Search.DefaultSearchEngineResetNotificationShown";
 
-void OpenLearnMoreLink(Browser* browser, const ui::Event& event) {
+void OpenLearnMoreLink(BrowserWindowInterface* browser,
+                       const ui::Event& event) {
   const GURL kLearnMoreUrl(
       "https://support.google.com/chrome?p=chrome_reset_settings");
-  browser->OpenURL(
-      content::OpenURLParams(kLearnMoreUrl, content::Referrer(),
-                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                             ui::PAGE_TRANSITION_LINK, false),
-      {});
+  browser->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
+                       kLearnMoreUrl, WindowOpenDisposition::kNewForegroundTab,
+                       ui::PAGE_TRANSITION_LINK),
+                   {});
 }
 
 // Checks if a default search engine reset occurred that requires the
@@ -82,7 +88,7 @@ bool NeedsDseResetNotification(Profile* profile,
 }
 
 void ShowSearchEngineResetNotification(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     DefaultSearchManager* default_search_manager) {
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
   if (!browser_view) {
@@ -136,8 +142,8 @@ void ShowSearchEngineResetNotification(
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
 void MaybeShowSearchEngineResetNotification(
-    Browser* browser,
-    AutocompleteMatch::Type match_type) {
+    BrowserWindowInterface* browser,
+    omnibox::AutocompleteMatchType match_type) {
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   // Ensure it is a non-navigation search query.
   if (!AutocompleteMatch::IsSearchType(match_type)) {

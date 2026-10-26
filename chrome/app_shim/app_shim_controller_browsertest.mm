@@ -18,7 +18,6 @@
 #include "base/test/bind.h"
 #include "base/test/multiprocess_test.h"
 #include "base/test/test_timeouts.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
@@ -116,11 +115,11 @@ class AppShimControllerBrowserTest : public InProcessBrowserTest {
         WebAppInstallInfo::CreateWithStartUrlForTesting(app_url);
     web_app_info->user_display_mode =
         web_app::mojom::UserDisplayMode::kStandalone;
-    app_id_ = web_app::test::InstallWebApp(browser()->profile(),
+    app_id_ = web_app::test::InstallWebApp(browser()->GetProfile(),
                                            std::move(web_app_info));
     auto os_integration = OsIntegrationTestOverrideImpl::Get();
     app_shim_path_ = os_integration->GetShortcutPath(
-        browser()->profile(), os_integration->chrome_apps_folder(), app_id_,
+        browser()->GetProfile(), os_integration->chrome_apps_folder(), app_id_,
         "");
     ASSERT_TRUE(!app_shim_path_.empty());
   }

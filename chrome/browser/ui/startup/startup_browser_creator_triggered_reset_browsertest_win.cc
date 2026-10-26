@@ -9,7 +9,6 @@
 #include "base/callback_list.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
-#include "base/memory/ptr_util.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/win/windows_version.h"
 #include "chrome/browser/browser_process.h"
@@ -17,7 +16,6 @@
 #include "chrome/browser/profile_resetter/triggered_profile_resetter_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/signin_promo.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
@@ -63,7 +61,7 @@ bool MockTriggeredProfileResetter::has_reset_trigger_ = false;
 
 std::unique_ptr<KeyedService> BuildMockTriggeredProfileResetter(
     content::BrowserContext* context) {
-  return base::WrapUnique(new MockTriggeredProfileResetter);
+  return std::make_unique<MockTriggeredProfileResetter>();
 }
 
 GURL GetTriggeredResetSettingsURL() {
@@ -108,7 +106,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTriggeredResetTest,
   urls.push_back(embedded_test_server()->GetURL("/title1.html"));
   urls.push_back(embedded_test_server()->GetURL("/title2.html"));
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   // Avoid showing the What's New page.
   PrefService* pref_service = g_browser_process->local_state();

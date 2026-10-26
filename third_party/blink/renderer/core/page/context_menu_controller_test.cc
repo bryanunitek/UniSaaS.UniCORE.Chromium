@@ -18,20 +18,14 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "components/attribution_reporting/data_host.mojom-blink.h"
-#include "components/attribution_reporting/os_registration.h"
-#include "components/attribution_reporting/registration_header_error.h"
-#include "components/attribution_reporting/source_registration.h"
-#include "components/attribution_reporting/suitable_origin.h"
-#include "components/attribution_reporting/trigger_registration.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
-#include "services/network/public/mojom/attribution.mojom-blink.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/context_menu_data/context_menu_data.h"
 #include "third_party/blink/public/common/context_menu_data/edit_flags.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
+#include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/mojom/context_menu/context_menu.mojom-blink.h"
 #include "third_party/blink/public/web/web_plugin.h"
 #include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
@@ -45,6 +39,7 @@
 #include "third_party/blink/renderer/core/frame/web_frame_widget_impl.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
+#include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/html_anchor_element.h"
 #include "third_party/blink/renderer/core/html/html_area_element.h"
@@ -98,6 +93,15 @@ class ContextMenuControllerTestPlugin : public FakeWebPlugin {
 
     // The selected text in the plugin when the context menu is created.
     WebString selected_text;
+
+    // Whether the plugin has editable text.
+    bool has_editable_text = false;
+
+    // Whether the plugin can edit text.
+    bool can_edit_text = false;
+
+    // The text direction of the plugin.
+    std::optional<base::i18n::TextDirection> text_direction;
   };
 
   explicit ContextMenuControllerTestPlugin(const WebPluginParams& params)
@@ -106,15 +110,27 @@ class ContextMenuControllerTestPlugin : public FakeWebPlugin {
   // FakeWebPlugin:
   WebString SelectionAsText() const override { return selected_text_; }
   bool CanCopy() const override { return can_copy_; }
+  bool HasEditableText() const override { return has_editable_text_; }
+  bool CanEditText() const override { return can_edit_text_; }
+  std::optional<base::i18n::TextDirection> GetFocusedFormTextDirection()
+      const override {
+    return text_direction_;
+  }
 
   void SetAttributesForTesting(const PluginAttributes& attributes) {
     can_copy_ = attributes.can_copy;
     selected_text_ = attributes.selected_text;
+    has_editable_text_ = attributes.has_editable_text;
+    can_edit_text_ = attributes.can_edit_text;
+    text_direction_ = attributes.text_direction;
   }
 
  private:
   bool can_copy_ = true;
   WebString selected_text_;
+  bool has_editable_text_ = false;
+  bool can_edit_text_ = false;
+  std::optional<base::i18n::TextDirection> text_direction_;
 };
 
 class TestWebFrameClientImpl : public frame_test_helpers::TestWebFrameClient {
@@ -160,99 +176,6 @@ void RegisterMockedImageURLLoad(const String& url) {
       url_test_helpers::ToKURL(url.Utf8().c_str()),
       test::CoreTestDataPath(kTestResourceFilename), kTestResourceMimeType);
 }
-
-class MockAttributionHost
-    : public mojom::blink::AttributionHost,
-      public attribution_reporting::mojom::blink::DataHost {
- public:
-  explicit MockAttributionHost(blink::AssociatedInterfaceProvider* provider)
-      : provider_(provider), on_data_host_bound_(base::DoNothing()) {
-    provider_->OverrideBinderForTesting(
-        mojom::blink::AttributionHost::Name_,
-        BindRepeating(&MockAttributionHost::BindReceiver, Unretained(this)));
-  }
-
-  ~MockAttributionHost() override {
-    CHECK(provider_);
-    provider_->OverrideBinderForTesting(mojom::blink::AttributionHost::Name_,
-                                        base::NullCallback());
-  }
-
-  size_t NumBoundDataHosts() {
-    // Ensure that any pending disconnects have been propagated.
-    receiver_.FlushForTesting();
-    return data_hosts_.size();
-  }
-
-  void WaitUntilDataHostsBound(size_t expected) {
-    if (data_hosts_.size() >= expected) {
-      return;
-    }
-    base::RunLoop wait_loop;
-    on_data_host_bound_ = base::BarrierClosure(expected - data_hosts_.size(),
-                                               wait_loop.QuitClosure());
-    wait_loop.Run();
-  }
-
- private:
-  // mojom::blink::AttributionHost:
-
-  void BindReceiver(mojo::ScopedInterfaceEndpointHandle handle) {
-    receiver_.Bind(
-        mojo::PendingAssociatedReceiver<mojom::blink::AttributionHost>(
-            std::move(handle)));
-  }
-
-  void RegisterDataHost(
-      mojo::PendingReceiver<attribution_reporting::mojom::blink::DataHost>,
-      attribution_reporting::mojom::RegistrationEligibility,
-      bool is_for_background_requests,
-      const Vector<scoped_refptr<const blink::SecurityOrigin>>&
-          reporting_origins) override {}
-
-  void RegisterNavigationDataHost(
-      mojo::PendingReceiver<attribution_reporting::mojom::blink::DataHost>
-          data_host,
-      const AttributionSrcToken&) override {
-    data_hosts_.Add(this, std::move(data_host));
-    on_data_host_bound_.Run();
-  }
-
-  void NotifyNavigationWithBackgroundRegistrationsWillStart(
-      const AttributionSrcToken&,
-      uint32_t expected_registrations) override {}
-
-  // attribution_reporting::mojom::blink::DataHost:
-
-  void SourceDataAvailable(
-      attribution_reporting::SuitableOrigin reporting_origin,
-      attribution_reporting::SourceRegistration,
-      bool was_fetched_via_serivce_worker) override {}
-
-  void TriggerDataAvailable(
-      attribution_reporting::SuitableOrigin reporting_origin,
-      attribution_reporting::TriggerRegistration,
-      bool was_fetched_via_serivce_worker) override {}
-
-  void OsSourceDataAvailable(
-      std::vector<attribution_reporting::OsRegistrationItem>,
-      bool was_fetched_via_serivce_worker) override {}
-
-  void OsTriggerDataAvailable(
-      std::vector<attribution_reporting::OsRegistrationItem>,
-      bool was_fetched_via_serivce_worker) override {}
-
-  void ReportRegistrationHeaderError(
-      attribution_reporting::SuitableOrigin reporting_origin,
-      attribution_reporting::RegistrationHeaderError) override {}
-
-  blink::AssociatedInterfaceProvider* provider_;
-  mojo::AssociatedReceiver<mojom::blink::AttributionHost> receiver_{this};
-
-  base::RepeatingClosure on_data_host_bound_;
-
-  mojo::ReceiverSet<attribution_reporting::mojom::blink::DataHost> data_hosts_;
-};
 
 }  // namespace
 
@@ -325,10 +248,70 @@ class ContextMenuControllerTest : public testing::Test {
   }
 
  protected:
-  test::TaskEnvironment task_environment_;
   base::test::ScopedFeatureList feature_list_;
+  test::TaskEnvironment task_environment_;
   TestWebFrameClientImpl web_frame_client_;
   frame_test_helpers::WebViewHelper web_view_helper_;
+};
+
+class ContextMenuControllerInputTest : public ContextMenuControllerTest {
+ protected:
+  HTMLInputElement* SetUpTextInput(const String& value) {
+    LoadAhem();
+    GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+      <style>
+        body { margin: 0; }
+        input { border: 0; padding: 0; width: 80px; font: 10px/10px Ahem; }
+      </style>
+      <input>
+    )HTML");
+    auto* input = To<HTMLInputElement>(
+        GetDocument()->QuerySelector(AtomicString("input")));
+    input->SetValue(value);
+    input->Focus();
+    return input;
+  }
+
+  gfx::Point SetCaret(HTMLInputElement& input, unsigned offset) {
+    Node* text = input.InnerEditorElement()->firstChild();
+    FrameSelection& selection = GetDocument()->GetFrame()->Selection();
+    selection.SetSelection(
+        SelectionInDomTree::Builder().Collapse(Position(text, offset)).Build(),
+        SetSelectionOptions());
+    LocalMainFrame()->ViewImpl()->MainFrameWidget()->UpdateAllLifecyclePhases(
+        DocumentUpdateReason::kTest);
+    return selection.AbsoluteCaretBounds().CenterPoint();
+  }
+
+  void SendMouseEvent(const gfx::Point& location,
+                      WebInputEvent::Type type,
+                      WebInputEvent::Modifiers modifiers,
+                      WebMouseEvent::Button button) {
+    WebMouseEvent event(type, modifiers,
+                        WebInputEvent::GetStaticTimeStampForTests());
+    event.SetFrameScale(1);
+    event.button = button;
+    event.SetPositionInWidget(location.x(), location.y());
+    event.click_count = 1;
+    GetWebView()->MainFrameWidget()->HandleInputEvent(
+        WebCoalescedInputEvent(event, ui::LatencyInfo()));
+  }
+
+  void LeftClick(const gfx::Point& location) {
+    SendMouseEvent(location, WebInputEvent::Type::kMouseDown,
+                   WebInputEvent::kLeftButtonDown,
+                   WebMouseEvent::Button::kLeft);
+    SendMouseEvent(location, WebInputEvent::Type::kMouseUp,
+                   WebInputEvent::kNoModifiers, WebMouseEvent::Button::kLeft);
+  }
+
+  void RightClick(const gfx::Point& location) {
+    SendMouseEvent(location, WebInputEvent::Type::kMouseDown,
+                   WebInputEvent::kRightButtonDown,
+                   WebMouseEvent::Button::kRight);
+    SendMouseEvent(location, WebInputEvent::Type::kMouseUp,
+                   WebInputEvent::kNoModifiers, WebMouseEvent::Button::kRight);
+  }
 };
 
 TEST_F(ContextMenuControllerTest, CopyFromPlugin) {
@@ -405,6 +388,162 @@ TEST_F(ContextMenuControllerTest, CopyFromPlugin) {
   EXPECT_EQ(context_menu_data.selected_text, "some text");
   EXPECT_FALSE(
       !!(context_menu_data.edit_flags & ContextMenuDataEditFlags::kCanCopy));
+}
+
+TEST_F(ContextMenuControllerTest, WritingDirectionFromPlugin) {
+  ContextMenuAllowedScope context_menu_allowed_scope;
+  frame_test_helpers::LoadFrame(LocalMainFrame(), R"HTML(data:text/html,
+  <html>
+    <body>
+      <embed id="embed" type="application/x-webkit-test-webplugin"
+       src="chrome-extension://test" original-url="http://www.test.pdf">
+      </embed>
+    </body>
+  <html>
+  )HTML");
+
+  Element* embed_element = GetDocument()->getElementById(AtomicString("embed"));
+
+  auto* embedded =
+      DynamicTo<LayoutEmbeddedContent>(embed_element->GetLayoutObject());
+  WebPluginContainerImpl* embedded_plugin_view = embedded->Plugin();
+
+  auto* test_plugin = DynamicTo<ContextMenuControllerTestPlugin>(
+      embedded_plugin_view->Plugin());
+
+  // Test LTR direction.
+  test_plugin->SetAttributesForTesting(
+      {/*can_copy=*/false, /*selected_text=*/"", /*has_editable_text=*/true,
+       /*can_edit_text=*/true, /*text_direction=*/base::i18n::LEFT_TO_RIGHT});
+
+  ASSERT_TRUE(ShowContextMenuForElement(
+      embed_element, ui::mojom::blink::MenuSourceType::kMouse));
+  ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_EQ(context_menu_data.media_type,
+            mojom::blink::ContextMenuDataMediaType::kPlugin);
+  EXPECT_TRUE(context_menu_data.is_editable);
+  EXPECT_EQ(context_menu_data.writing_direction_left_to_right,
+            ContextMenuData::kCheckableMenuItemEnabled |
+                ContextMenuData::kCheckableMenuItemChecked);
+  EXPECT_EQ(context_menu_data.writing_direction_right_to_left,
+            ContextMenuData::kCheckableMenuItemEnabled);
+
+  // Test RTL direction.
+  test_plugin->SetAttributesForTesting(
+      {/*can_copy=*/false, /*selected_text=*/"", /*has_editable_text=*/true,
+       /*can_edit_text=*/true, /*text_direction=*/base::i18n::RIGHT_TO_LEFT});
+
+  ASSERT_TRUE(ShowContextMenuForElement(
+      embed_element, ui::mojom::blink::MenuSourceType::kMouse));
+  context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_TRUE(context_menu_data.is_editable);
+  EXPECT_EQ(context_menu_data.writing_direction_left_to_right,
+            ContextMenuData::kCheckableMenuItemEnabled);
+  EXPECT_EQ(context_menu_data.writing_direction_right_to_left,
+            ContextMenuData::kCheckableMenuItemEnabled |
+                ContextMenuData::kCheckableMenuItemChecked);
+}
+
+TEST_F(ContextMenuControllerTest, TranslateFromPlugin) {
+  frame_test_helpers::LoadFrame(LocalMainFrame(), R"HTML(data:text/html,
+  <html>
+    <body>
+      <embed id="plugin-generic" type="application/x-webkit-test-webplugin"></embed>
+      <embed id="plugin-pdf" type="application/pdf"></embed>
+      <embed id="plugin-chrome-pdf" type="application/x-google-chrome-pdf"></embed>
+      <embed id="plugin-pdf-uppercase" type="APPLICATION/PDF"></embed>
+    </body>
+  </html>
+  )HTML");
+
+  Document* document = GetDocument();
+
+  Element* plugin_generic =
+      document->getElementById(AtomicString("plugin-generic"));
+  auto* embedded_generic =
+      DynamicTo<LayoutEmbeddedContent>(plugin_generic->GetLayoutObject());
+  ASSERT_TRUE(embedded_generic && embedded_generic->Plugin());
+  auto* test_plugin_generic = DynamicTo<ContextMenuControllerTestPlugin>(
+      embedded_generic->Plugin()->Plugin());
+  ASSERT_TRUE(test_plugin_generic);
+  test_plugin_generic->SetAttributesForTesting(
+      {/*can_copy=*/true, /*selected_text=*/"some text"});
+
+  ASSERT_TRUE(ShowContextMenuForElement(
+      plugin_generic, ui::mojom::blink::MenuSourceType::kMouse));
+  ContextMenuData context_menu_data_generic =
+      GetWebFrameClient().GetContextMenuData();
+  EXPECT_EQ(context_menu_data_generic.edit_flags &
+                ContextMenuDataEditFlags::kCanTranslate,
+            0);
+  EXPECT_EQ(context_menu_data_generic.edit_flags &
+                ContextMenuDataEditFlags::kCanCopy,
+            ContextMenuDataEditFlags::kCanCopy);
+
+  Element* plugin_pdf = document->getElementById(AtomicString("plugin-pdf"));
+  auto* embedded_pdf =
+      DynamicTo<LayoutEmbeddedContent>(plugin_pdf->GetLayoutObject());
+  ASSERT_TRUE(embedded_pdf && embedded_pdf->Plugin());
+  auto* test_plugin_pdf = DynamicTo<ContextMenuControllerTestPlugin>(
+      embedded_pdf->Plugin()->Plugin());
+  ASSERT_TRUE(test_plugin_pdf);
+  test_plugin_pdf->SetAttributesForTesting(
+      {/*can_copy=*/true, /*selected_text=*/"some text"});
+
+  ASSERT_TRUE(ShowContextMenuForElement(
+      plugin_pdf, ui::mojom::blink::MenuSourceType::kMouse));
+  ContextMenuData context_menu_data_pdf =
+      GetWebFrameClient().GetContextMenuData();
+  EXPECT_EQ(context_menu_data_pdf.edit_flags &
+                ContextMenuDataEditFlags::kCanTranslate,
+            ContextMenuDataEditFlags::kCanTranslate);
+  EXPECT_EQ(context_menu_data_pdf.edit_flags &
+                ContextMenuDataEditFlags::kCanCopy,
+            ContextMenuDataEditFlags::kCanCopy);
+
+  Element* plugin_chrome_pdf =
+      document->getElementById(AtomicString("plugin-chrome-pdf"));
+  auto* embedded_chrome_pdf =
+      DynamicTo<LayoutEmbeddedContent>(plugin_chrome_pdf->GetLayoutObject());
+  ASSERT_TRUE(embedded_chrome_pdf && embedded_chrome_pdf->Plugin());
+  auto* test_plugin_chrome_pdf = DynamicTo<ContextMenuControllerTestPlugin>(
+      embedded_chrome_pdf->Plugin()->Plugin());
+  ASSERT_TRUE(test_plugin_chrome_pdf);
+  test_plugin_chrome_pdf->SetAttributesForTesting(
+      {/*can_copy=*/true, /*selected_text=*/"some text"});
+
+  ASSERT_TRUE(ShowContextMenuForElement(
+      plugin_chrome_pdf, ui::mojom::blink::MenuSourceType::kMouse));
+  ContextMenuData context_menu_data_chrome_pdf =
+      GetWebFrameClient().GetContextMenuData();
+  EXPECT_EQ(context_menu_data_chrome_pdf.edit_flags &
+                ContextMenuDataEditFlags::kCanTranslate,
+            ContextMenuDataEditFlags::kCanTranslate);
+  EXPECT_EQ(context_menu_data_chrome_pdf.edit_flags &
+                ContextMenuDataEditFlags::kCanCopy,
+            ContextMenuDataEditFlags::kCanCopy);
+
+  Element* plugin_pdf_uppercase =
+      document->getElementById(AtomicString("plugin-pdf-uppercase"));
+  auto* embedded_pdf_uppercase = DynamicTo<LayoutEmbeddedContent>(
+      plugin_pdf_uppercase->GetLayoutObject());
+  ASSERT_TRUE(embedded_pdf_uppercase && embedded_pdf_uppercase->Plugin());
+  auto* test_plugin_pdf_uppercase = DynamicTo<ContextMenuControllerTestPlugin>(
+      embedded_pdf_uppercase->Plugin()->Plugin());
+  ASSERT_TRUE(test_plugin_pdf_uppercase);
+  test_plugin_pdf_uppercase->SetAttributesForTesting(
+      {/*can_copy=*/true, /*selected_text=*/"some text"});
+
+  ASSERT_TRUE(ShowContextMenuForElement(
+      plugin_pdf_uppercase, ui::mojom::blink::MenuSourceType::kMouse));
+  ContextMenuData context_menu_data_pdf_uppercase =
+      GetWebFrameClient().GetContextMenuData();
+  EXPECT_EQ(context_menu_data_pdf_uppercase.edit_flags &
+                ContextMenuDataEditFlags::kCanTranslate,
+            ContextMenuDataEditFlags::kCanTranslate);
+  EXPECT_EQ(context_menu_data_pdf_uppercase.edit_flags &
+                ContextMenuDataEditFlags::kCanCopy,
+            ContextMenuDataEditFlags::kCanCopy);
 }
 
 TEST_F(ContextMenuControllerTest, VideoNotLoaded) {
@@ -966,6 +1105,83 @@ TEST_F(ContextMenuControllerTest,
 }
 #endif
 
+#if BUILDFLAG(IS_ANDROID)
+TEST_F(ContextMenuControllerTest, AndroidKeyboardContextMenuKeyDown) {
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(
+      "<a href=\"http://example.test/link1\" id=\"link1\">Link 1</a>"
+      "<a href=\"http://example.test/link2\" id=\"link2\">Link 2</a>");
+
+  Document* document = GetDocument();
+  Element* link1 = document->getElementById(AtomicString("link1"));
+  Element* link2 = document->getElementById(AtomicString("link2"));
+
+  // When kAndroidKeyboardContextMenu is disabled, kKeyDown for VKEY_APPS and
+  // Shift+F10 should not open the context menu.
+  {
+    base::test::ScopedFeatureList disabled_feature_list;
+    disabled_feature_list.InitAndDisableFeature(
+        features::kAndroidKeyboardContextMenu);
+
+    link1->Focus();
+    document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+
+    WebKeyboardEvent menu_key_event(
+        WebInputEvent::Type::kKeyDown, WebInputEvent::kNoModifiers,
+        WebInputEvent::GetStaticTimeStampForTests());
+    menu_key_event.windows_key_code = ui::VKEY_APPS;
+    EXPECT_EQ(WebInputEventResult::kNotHandled,
+              GetWebView()->MainFrameWidget()->HandleInputEvent(
+                  WebCoalescedInputEvent(menu_key_event, ui::LatencyInfo())));
+    EXPECT_TRUE(GetWebFrameClient().GetContextMenuData().link_url.is_empty());
+
+    WebKeyboardEvent shift_f10_event(
+        WebInputEvent::Type::kKeyDown, WebInputEvent::kShiftKey,
+        WebInputEvent::GetStaticTimeStampForTests());
+    shift_f10_event.windows_key_code = ui::VKEY_F10;
+    EXPECT_EQ(WebInputEventResult::kNotHandled,
+              GetWebView()->MainFrameWidget()->HandleInputEvent(
+                  WebCoalescedInputEvent(shift_f10_event, ui::LatencyInfo())));
+    EXPECT_TRUE(GetWebFrameClient().GetContextMenuData().link_url.is_empty());
+  }
+
+  // When kAndroidKeyboardContextMenu is enabled, kKeyDown for VKEY_APPS and
+  // Shift+F10 should open a keyboard-sourced context menu.
+  {
+    base::test::ScopedFeatureList enabled_feature_list;
+    enabled_feature_list.InitAndEnableFeature(
+        features::kAndroidKeyboardContextMenu);
+
+    link1->Focus();
+    document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+
+    WebKeyboardEvent menu_key_event(
+        WebInputEvent::Type::kKeyDown, WebInputEvent::kNoModifiers,
+        WebInputEvent::GetStaticTimeStampForTests());
+    menu_key_event.windows_key_code = ui::VKEY_APPS;
+    EXPECT_EQ(WebInputEventResult::kHandledSystem,
+              GetWebView()->MainFrameWidget()->HandleInputEvent(
+                  WebCoalescedInputEvent(menu_key_event, ui::LatencyInfo())));
+    ContextMenuData data1 = GetWebFrameClient().GetContextMenuData();
+    EXPECT_EQ(GURL("http://example.test/link1"), data1.link_url);
+    EXPECT_EQ(ui::mojom::MenuSourceType::kKeyboard, data1.source_type);
+
+    link2->Focus();
+    document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+
+    WebKeyboardEvent shift_f10_event(
+        WebInputEvent::Type::kKeyDown, WebInputEvent::kShiftKey,
+        WebInputEvent::GetStaticTimeStampForTests());
+    shift_f10_event.windows_key_code = ui::VKEY_F10;
+    EXPECT_EQ(WebInputEventResult::kHandledSystem,
+              GetWebView()->MainFrameWidget()->HandleInputEvent(
+                  WebCoalescedInputEvent(shift_f10_event, ui::LatencyInfo())));
+    ContextMenuData data2 = GetWebFrameClient().GetContextMenuData();
+    EXPECT_EQ(GURL("http://example.test/link2"), data2.link_url);
+    EXPECT_EQ(ui::mojom::MenuSourceType::kKeyboard, data2.source_type);
+  }
+}
+#endif
+
 TEST_F(ContextMenuControllerTest, ContextMenuImageHitTestSVGImageElement) {
   RegisterMockedImageURLLoad("http://test.png");
   Document* document = GetDocument();
@@ -1208,6 +1424,7 @@ TEST_F(ContextMenuControllerTest, ContextMenuImageHitTestStandardCanvas) {
   ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
   EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kCanvas,
             context_menu_data.media_type);
+  EXPECT_TRUE(context_menu_data.has_image_contents);
 
   histograms.ExpectBucketCount(
       "Blink.ContextMenu.ImageSelection.Outcome",
@@ -1226,6 +1443,23 @@ TEST_F(ContextMenuControllerTest, ContextMenuImageHitTestStandardCanvas) {
       "Blink.ContextMenu.ImageSelection.Outcome",
       ContextMenuController::ImageSelectionOutcome::kBlockedByCrossFrameNode,
       0);
+}
+
+TEST_F(ContextMenuControllerTest, TaintedCanvasHasNoCopyableImageContents) {
+  GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <body style="margin:0">
+      <canvas id="target" width="100" height="100"></canvas>
+    </body>
+  )HTML");
+  auto* canvas = To<HTMLCanvasElement>(
+      GetDocument()->getElementById(AtomicString("target")));
+  canvas->SetOriginTainted();
+
+  ASSERT_TRUE(ShowContextMenuForElement(
+      canvas, ui::mojom::blink::MenuSourceType::kMouse));
+  const ContextMenuData& data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_EQ(mojom::blink::ContextMenuDataMediaType::kCanvas, data.media_type);
+  EXPECT_FALSE(data.has_image_contents);
 }
 
 // Test that  an image node will not be selected through an opaque div
@@ -2025,6 +2259,75 @@ TEST_F(ContextMenuControllerTest,
   EXPECT_EQ(GetDocument()->GetFrame()->Selection().SelectedText(), "is a");
 }
 
+TEST_F(ContextMenuControllerInputTest,
+       MouseContextMenuAwayFromCaretSelectsWord) {
+  HTMLInputElement* input = SetUpTextInput("test");
+  GetDocument()->GetFrame()->GetSettings()->SetEditingBehaviorType(
+      mojom::EditingBehavior::kEditingMacBehavior);
+  gfx::Point location = SetCaret(*input, 2);
+  SetCaret(*input, 4);
+  RightClick(location);
+  EXPECT_EQ(0u, input->selectionStart());
+  EXPECT_EQ(4u, input->selectionEnd());
+}
+
+TEST_F(ContextMenuControllerInputTest,
+       MouseContextMenuOnExistingCaretPreservesCaret) {
+  HTMLInputElement* input = SetUpTextInput("test");
+  GetDocument()->GetFrame()->GetSettings()->SetEditingBehaviorType(
+      mojom::EditingBehavior::kEditingMacBehavior);
+  const gfx::Point location = SetCaret(*input, 2);
+  LeftClick(location);
+  const unsigned caret_offset = input->selectionStart();
+  ASSERT_EQ(caret_offset, input->selectionEnd());
+  ASSERT_GT(caret_offset, 0u);
+  ASSERT_LT(caret_offset, 4u);
+
+  RightClick(location);
+  EXPECT_EQ(caret_offset, input->selectionStart());
+  EXPECT_EQ(caret_offset, input->selectionEnd());
+}
+
+TEST_F(ContextMenuControllerInputTest,
+       MouseContextMenuAfterTextPreservesEndCaret) {
+  HTMLInputElement* input = SetUpTextInput("test");
+  GetDocument()->GetFrame()->GetSettings()->SetEditingBehaviorType(
+      mojom::EditingBehavior::kEditingMacBehavior);
+  gfx::Point location = SetCaret(*input, 4);
+  const int end_caret_x = location.x();
+  location.set_x(static_cast<int>(input->GetBoundingClientRect()->right()) - 5);
+  ASSERT_GT(location.x(), end_caret_x);
+  LeftClick(location);
+  ASSERT_EQ(4u, input->selectionStart());
+  ASSERT_EQ(4u, input->selectionEnd());
+  RightClick(location);
+  EXPECT_EQ(4u, input->selectionStart());
+  EXPECT_EQ(4u, input->selectionEnd());
+}
+
+TEST_F(ContextMenuControllerInputTest,
+       MouseContextMenuAtCaretSelectsMisspellingAndProvidesSuggestions) {
+  HTMLInputElement* input = SetUpTextInput("spllchck");
+  Node* text = input->InnerEditorElement()->firstChild();
+  gfx::Point location = SetCaret(*input, 4);
+  GetDocument()->Markers().AddSpellingMarker(
+      EphemeralRange(Position(text, 0), Position(text, 8)), "spellcheck");
+  LocalMainFrame()->ViewImpl()->MainFrameWidget()->UpdateAllLifecyclePhases(
+      DocumentUpdateReason::kTest);
+  LeftClick(location);
+  ASSERT_EQ(input->selectionStart(), input->selectionEnd());
+  ASSERT_GT(input->selectionStart(), 0u);
+  ASSERT_LT(input->selectionStart(), 8u);
+  RightClick(location);
+
+  const ContextMenuData& data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_EQ(u"spllchck", data.misspelled_word);
+  ASSERT_EQ(1u, data.dictionary_suggestions.size());
+  EXPECT_EQ(u"spellcheck", data.dictionary_suggestions[0]);
+  EXPECT_EQ(0u, input->selectionStart());
+  EXPECT_EQ(8u, input->selectionEnd());
+}
+
 TEST_F(ContextMenuControllerTest, CheckRendererIdFromContextMenuOnTextField) {
   WebURL url = url_test_helpers::ToKURL("http://www.test.com/");
   frame_test_helpers::LoadHTMLString(LocalMainFrame(),
@@ -2080,193 +2383,6 @@ TEST_F(ContextMenuControllerTest, CheckRendererIdFromContextMenuOnTextField) {
     EXPECT_EQ(!context_menu_data.field_renderer_id.is_null(),
               is_field_renderer_id_present);
     EXPECT_EQ(context_menu_data.form_control_type, form_control_type);
-  }
-}
-
-TEST_F(ContextMenuControllerTest, AttributionSrc) {
-  // The context must be secure for attributionsrc to work at all.
-  frame_test_helpers::LoadHTMLString(
-      LocalMainFrame(), R"(<html><body>)",
-      url_test_helpers::ToKURL("https://test.com/"));
-
-  static constexpr char kSecureURL[] = "https://a.com/";
-  static constexpr char kInsecureURL[] = "http://b.com/";
-
-  const struct {
-    const char* href;
-    const char* attributionsrc;
-    bool impression_expected;
-  } kTestCases[] = {
-      {
-          .href = nullptr,
-          .attributionsrc = nullptr,
-          .impression_expected = false,
-      },
-      {
-          .href = nullptr,
-          .attributionsrc = "",
-          .impression_expected = false,
-      },
-      {
-          .href = nullptr,
-          .attributionsrc = kInsecureURL,
-          .impression_expected = false,
-      },
-      {
-          .href = nullptr,
-          .attributionsrc = kSecureURL,
-          .impression_expected = false,
-      },
-      {
-          .href = kInsecureURL,
-          .attributionsrc = nullptr,
-          .impression_expected = false,
-      },
-      {
-          .href = kInsecureURL,
-          .attributionsrc = "",
-          .impression_expected = false,
-      },
-      {
-          .href = kInsecureURL,
-          .attributionsrc = kInsecureURL,
-          .impression_expected = false,
-      },
-      {
-          .href = kInsecureURL,
-          .attributionsrc = kSecureURL,
-          .impression_expected = true,
-      },
-      {
-          .href = kSecureURL,
-          .attributionsrc = nullptr,
-          .impression_expected = false,
-      },
-      {
-          .href = kSecureURL,
-          .attributionsrc = "",
-          .impression_expected = true,
-      },
-      {
-          .href = kSecureURL,
-          .attributionsrc = kInsecureURL,
-          .impression_expected = true,
-      },
-      {
-          .href = kSecureURL,
-          .attributionsrc = kSecureURL,
-          .impression_expected = true,
-      },
-  };
-
-  for (bool use_anchor : {true, false}) {
-    for (const auto& test_case : kTestCases) {
-      Persistent<HTMLAnchorElementBase> anchor;
-      if (use_anchor) {
-        anchor = MakeGarbageCollected<HTMLAnchorElement>(*GetDocument());
-      } else {
-        anchor = MakeGarbageCollected<HTMLAreaElement>(*GetDocument());
-      }
-
-      anchor->setInnerText("abc");
-
-      if (test_case.href) {
-        anchor->SetHref(AtomicString(test_case.href));
-      }
-
-      if (test_case.attributionsrc) {
-        anchor->setAttribute(html_names::kAttributionsrcAttr,
-                             AtomicString(test_case.attributionsrc));
-      }
-
-      GetPage()->SetAttributionSupport(
-          network::mojom::AttributionSupport::kWeb);
-
-      GetDocument()->body()->AppendChild(anchor);
-      ASSERT_TRUE(ShowContextMenuForElement(
-          anchor, ui::mojom::blink::MenuSourceType::kMouse));
-
-      ContextMenuData context_menu_data =
-          GetWebFrameClient().GetContextMenuData();
-
-      EXPECT_EQ(context_menu_data.impression.has_value(),
-                test_case.impression_expected);
-    }
-  }
-}
-
-TEST_F(ContextMenuControllerTest, AttributionSrc_DataHostLifetime) {
-  // The context must be secure for attributionsrc to work at all.
-  frame_test_helpers::LoadHTMLString(
-      LocalMainFrame(), R"(<html><body>)",
-      url_test_helpers::ToKURL("https://test.com/"));
-
-  Persistent<HTMLAnchorElement> anchor =
-      MakeGarbageCollected<HTMLAnchorElement>(*GetDocument());
-  anchor->setInnerText("abc");
-
-  anchor->SetHref(AtomicString("https://a.com/"));
-
-  anchor->setAttribute(html_names::kAttributionsrcAttr,
-                       AtomicString("https://b.com/ https://c.com/"));
-
-  GetPage()->SetAttributionSupport(network::mojom::AttributionSupport::kWeb);
-
-  GetDocument()->body()->AppendChild(anchor);
-
-  enum CloseMechanism {
-    kContextMenuClosedInvalidNavigationUrl,
-    kContextMenuClosedValidNavigationUrl,
-    kClearContextMenu,
-  };
-
-  for (CloseMechanism close_mechanism :
-       {kContextMenuClosedInvalidNavigationUrl,
-        kContextMenuClosedValidNavigationUrl, kClearContextMenu}) {
-    SCOPED_TRACE(close_mechanism);
-
-    MockAttributionHost host(
-        GetWebFrameClient().GetRemoteNavigationAssociatedInterfaces());
-
-    ASSERT_TRUE(ShowContextMenuForElement(
-        anchor, ui::mojom::blink::MenuSourceType::kMouse));
-
-    // https://b.com/ and https://c.com/ should share a single data host.
-    host.WaitUntilDataHostsBound(/*expected=*/1);
-
-    ContextMenuData context_menu_data =
-        GetWebFrameClient().GetContextMenuData();
-
-    ASSERT_TRUE(context_menu_data.impression.has_value());
-
-    switch (close_mechanism) {
-      case kContextMenuClosedInvalidNavigationUrl:
-        GetPage()->GetContextMenuController().ContextMenuClosed(
-            KURL(), context_menu_data.impression);
-        EXPECT_EQ(host.NumBoundDataHosts(), 0u);
-        break;
-      case kContextMenuClosedValidNavigationUrl:
-        RegisterMockedImageURLLoad("https://b.com/");
-        RegisterMockedImageURLLoad("https://c.com/");
-
-        GetPage()->GetContextMenuController().ContextMenuClosed(
-            url_test_helpers::ToKURL("https://d.com/"),
-            context_menu_data.impression);
-
-        // The data host should remain bound because it will be used to handle
-        // responses from https://b.com/ and https://c.com/.
-        EXPECT_EQ(host.NumBoundDataHosts(), 1u);
-
-        // Flush the image-loading microtasks to prevent DCHECK failure on test
-        // exit.
-        base::RunLoop().RunUntilIdle();
-        url_test_helpers::ServeAsynchronousRequests();
-        break;
-      case kClearContextMenu:
-        GetPage()->GetContextMenuController().ClearContextMenu();
-        EXPECT_EQ(host.NumBoundDataHosts(), 0u);
-        break;
-    }
   }
 }
 
@@ -2344,8 +2460,8 @@ class ContextMenuControllerRemoteParentFrameTest : public testing::Test {
   }
 
  protected:
-  test::TaskEnvironment task_environment_;
   base::test::ScopedFeatureList feature_list_;
+  test::TaskEnvironment task_environment_;
   TestWebFrameClientImpl child_web_frame_client_;
   frame_test_helpers::WebViewHelper web_view_helper_;
   Persistent<WebLocalFrameImpl> child_frame_;
@@ -2535,6 +2651,35 @@ TEST_F(ContextMenuControllerTest, RevealedPasswordField) {
   ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
   EXPECT_EQ(context_menu_data.form_control_type,
             mojom::blink::FormControlType::kInputPassword);
+}
+
+TEST_F(ContextMenuControllerTest, ImageReplacement) {
+  RegisterMockedImageURLLoad("https://example.com/image.png");
+
+  frame_test_helpers::LoadHTMLString(
+      LocalMainFrame(), "<img id='target' src='https://example.com/image.png'>",
+      url_test_helpers::ToKURL("https://example.com/"));
+
+  GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+
+  Element* img_element = GetDocument()->getElementById(AtomicString("target"));
+  ASSERT_TRUE(IsA<HTMLImageElement>(img_element));
+  auto* image_element = To<HTMLImageElement>(img_element);
+
+  ASSERT_TRUE(ShowContextMenuForElement(
+      img_element, ui::mojom::blink::MenuSourceType::kMouse));
+  ContextMenuData context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_FALSE(context_menu_data.image_replacement_frame_token.has_value());
+
+  image_element->StartImageReplacement();
+  GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+
+  ASSERT_TRUE(ShowContextMenuForElement(
+      img_element, ui::mojom::blink::MenuSourceType::kMouse));
+  context_menu_data = GetWebFrameClient().GetContextMenuData();
+  EXPECT_TRUE(context_menu_data.image_replacement_frame_token.has_value());
+  EXPECT_EQ(context_menu_data.image_replacement_frame_token,
+            image_element->ReplacementFrameToken());
 }
 
 }  // namespace blink

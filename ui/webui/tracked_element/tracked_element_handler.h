@@ -15,6 +15,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/types/pass_key.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -26,6 +27,7 @@
 #include "ui/webui/resources/js/tracked_element/tracked_element.mojom.h"
 
 namespace content {
+class RenderFrameHost;
 class WebContents;
 class WebUIController;
 }
@@ -33,6 +35,14 @@ class WebUIController;
 namespace user_education {
 class HelpBubbleHandlerBase;
 }  // namespace user_education
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "ui/views/view_tracker.h"
+
+namespace views {
+class WebView;
+}
+#endif
 
 namespace ui {
 
@@ -47,6 +57,13 @@ class TrackedElementHandler
   explicit TrackedElementHandler(content::WebUIController* controller);
   TrackedElementHandler(content::WebContents* web_contents,
                         ui::ElementContext context);
+  TrackedElementHandler(
+      content::WebContents* web_contents,
+      mojo::PendingReceiver<tracked_element::mojom::TrackedElementHandler>
+          receiver,
+      ui::ElementContext context,
+      const std::vector<ui::ElementIdentifier>& identifiers,
+      content::RenderFrameHost* render_frame_host = nullptr);
   ~TrackedElementHandler() override;
   TrackedElementHandler(const TrackedElementHandler&) = delete;
   TrackedElementHandler& operator=(const TrackedElementHandler&) = delete;
@@ -94,6 +111,14 @@ class TrackedElementHandler
     help_bubble_handler_ = help_bubble_handler;
   }
 
+#if !BUILDFLAG(IS_ANDROID)
+  // Returns the host WebView for this WebUI, if any. Note that for backgrounded
+  // tabs, there will not be a WebView, and this should only be used if you
+  // absolutely need the view itself (e.g. for screenshotting or anchoring).
+  views::WebView* GetWebView() const;
+  void SetWebViewForTesting(views::WebView* web_view);
+#endif
+
   void BindInterface(
       mojo::PendingReceiver<tracked_element::mojom::TrackedElementHandler>
           receiver);
@@ -105,14 +130,16 @@ class TrackedElementHandler
 
   std::vector<std::string> GetIdentifiers();
   ui::ElementContext context() { return context_; }
+  content::RenderFrameHost* render_frame_host() const;
 
   // Flushes the C++ -> WebUI mojo pipe.
   void FlushManagerRemoteForTesting();
 
   // Interaction simulation methods.
   bool ClickElement(TrackedElementWebUI& element,
+                    tracked_element::mojom::InputType input_type,
                     base::PassKey<InteractionTestUtilSimulatorWebUI>) {
-    return ClickElement(element);
+    return ClickElement(element, input_type);
   }
   bool FocusElement(TrackedElementWebUI& element,
                     base::PassKey<InteractionTestUtilSimulatorWebUI>) {
@@ -163,7 +190,9 @@ class TrackedElementHandler
   FRIEND_TEST_ALL_PREFIXES(TrackedElementHandlerTest, Interaction);
 
   // Interaction simulation methods.
-  bool ClickElement(TrackedElementWebUI& element);
+  bool ClickElement(TrackedElementWebUI& element,
+                    tracked_element::mojom::InputType input_type =
+                        tracked_element::mojom::InputType::kDontCare);
   bool FocusElement(TrackedElementWebUI& element);
   bool SelectTab(TrackedElementWebUI& element, size_t index);
   bool SelectDropdownItem(TrackedElementWebUI& element, size_t index);
@@ -191,8 +220,15 @@ class TrackedElementHandler
 
   bool is_web_contents_visible_ = false;
   base::WeakPtr<user_education::HelpBubbleHandlerBase> help_bubble_handler_;
+#if !BUILDFLAG(IS_ANDROID)
+  // Caches the host WebView once located (or set in tests). Marked mutable so
+  // it can be lazily populated in the const GetWebView() method, while using
+  // ViewTracker to safely handle WebView destruction without dangling pointers.
+  mutable views::ViewTracker web_view_tracker_;
+#endif
   mojo::Receiver<tracked_element::mojom::TrackedElementHandler> receiver_;
   mojo::Remote<tracked_element::mojom::TrackedElementManager> manager_remote_;
+  const content::GlobalRenderFrameHostId rfh_id_;
 
   base::WeakPtrFactory<TrackedElementHandler> weak_ptr_factory_{this};
 };

@@ -14,8 +14,8 @@
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
 #include "ui/compositor/animation_throughput_reporter.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/animation/tween.h"
@@ -119,8 +119,11 @@ void HotseatTransitionAnimator::DoAnimation(HotseatState old_state,
 
   StopObservingImplicitAnimations();
 
-  shelf_widget_->GetAnimatingBackground()->SetColor(
-      ShelfConfig::Get()->GetMaximizedShelfColor(shelf_widget_));
+  // TODO(b:522627357): Update `GetAnimatingBackground` to return
+  // `ui::LayerSolidColor`.
+  shelf_widget_->GetAnimatingBackground()->AsSolidColor()->SetColor(
+      SkColor4f::FromColor(
+          ShelfConfig::Get()->GetMaximizedShelfColor(shelf_widget_)));
 
   gfx::Rect drag_handle_bounds(shelf_widget_->GetAnimatingBackground()->size());
   drag_handle_bounds.ClampToCenteredSize(ShelfConfig::Get()->DragHandleSize());

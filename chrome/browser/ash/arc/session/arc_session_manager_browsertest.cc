@@ -31,7 +31,6 @@
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
@@ -176,7 +175,7 @@ class ArcSessionManagerTest : public MixinBasedInProcessBrowserTest {
     base::RunLoop().RunUntilIdle();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   signin::IdentityTestEnvironment* identity_test_env() {
     return identity_test_environment_adaptor_->identity_test_env();

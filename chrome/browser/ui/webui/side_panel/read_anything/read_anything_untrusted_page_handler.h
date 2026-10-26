@@ -5,11 +5,11 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_SIDE_PANEL_READ_ANYTHING_READ_ANYTHING_UNTRUSTED_PAGE_HANDLER_H_
 #define CHROME_BROWSER_UI_WEBUI_SIDE_PANEL_READ_ANYTHING_READ_ANYTHING_UNTRUSTED_PAGE_HANDLER_H_
 
-#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
 
+#include "base/containers/flat_set.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/safe_ref.h"
@@ -20,14 +20,12 @@
 #include "chrome/browser/ui/read_anything/read_anything_controller.h"
 #include "chrome/browser/ui/read_anything/read_anything_enums.h"
 #include "chrome/browser/ui/read_anything/read_anything_lifecycle_observer.h"
-#include "chrome/browser/ui/read_anything/read_anything_side_panel_controller.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
+#include "chrome/browser/ui/webui/side_panel/read_anything/read_anything_translate_observer.h"
 #include "chrome/common/read_anything/distillation_evaluator.mojom.h"
 #include "chrome/common/read_anything/read_anything.mojom.h"
 #include "components/dom_distiller/core/task_tracker.h"
 #include "components/translate/core/browser/translate_client.h"
-#include "components/translate/core/browser/translate_driver.h"
 #include "content/public/browser/tts_controller.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -45,6 +43,8 @@ using ash::language_packs::PackResult;
 #else
 #include "extensions/browser/extension_registry_observer.h"
 #endif
+
+using read_anything::mojom::ReadAnythingOpenTrigger;
 
 namespace content {
 class NavigationHandle;
@@ -86,6 +86,24 @@ enum class ReadAnythingDistillationScheme {
 
 // LINT.ThenChange(/tools/metrics/histograms/metadata/accessibility/enums.xml:ReadAnythingDistillationScheme)
 
+// LINT.IfChange(ReadAnythingRendererRequestResult)
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class ReadAnythingRendererRequestResult {
+  kAllowed = 0,
+  kNotObservedTree = 1,
+  kDisallowedActionOnPageType = 2,
+  kMaxValue = kDisallowedActionOnPageType,
+};
+
+// LINT.ThenChange(/tools/metrics/histograms/metadata/accessibility/enums.xml:ReadAnythingRendererRequestResult)
+
+enum class ListenToThisPagePlaybackMetricState {
+  kInactive = 0,
+  kWaitingForAudioStart,
+  kWaitingForSustainedPlayback,
+};
+
 ///////////////////////////////////////////////////////////////////////////////
 // ReadAnythingWebContentsObserver
 //
@@ -107,15 +125,13 @@ class ReadAnythingWebContentsObserver : public content::WebContentsObserver {
   // content::WebContentsObserver:
   void AccessibilityEventReceived(
       const ui::AXUpdatesAndEvents& details) override;
-  void AccessibilityLocationChangesReceived(
-      const ui::AXTreeID& tree_id,
-      ui::AXLocationAndScrollUpdates& details) override;
   void PrimaryPageChanged(content::Page& page) override;
   void WebContentsDestroyed() override;
   void DidStopLoading() override;
   void DidUpdateAudioMutingState(bool muted) override;
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
+  void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
 
   // base::SafeRef used since the lifetime of ReadAnythingWebContentsObserver is
   // completely contained by page_handler_. See
@@ -146,8 +162,7 @@ class ReadAnythingUntrustedPageHandler :
     public ui::AXActionHandlerObserver,
     public read_anything::mojom::UntrustedPageHandler,
     public ReadAnythingLifecycleObserver,
-    public PinnedToolbarActionsModel::Observer,
-    public translate::TranslateDriver::LanguageDetectionObserver {
+    public PinnedToolbarActionsModel::Observer {
 
  public:
   ReadAnythingUntrustedPageHandler(
@@ -174,25 +189,37 @@ class ReadAnythingUntrustedPageHandler :
   const std::optional<std::string>& dom_distiller_content() const {
     return dom_distiller_content_;
   }
+
+  base::TimeTicks readability_distillation_tree_change_start_time() const {
+    return readability_distillation_tree_change_start_time_;
+  }
+
   bool ack_timed_out_for_testing() const { return ack_timed_out_for_testing_; }
 
-  static const int kMaxWordsDistilled = 25000;
-  static const int kWordsDistilledBuckets = 100;
   static const int kMaxNodesForDistillationQualityEvaluation = 5000;
   static constexpr base::TimeDelta kReadingModeHiddenAckTimeout =
       base::Seconds(2);
 
+  // The maximum amount of time for Read Aloud to start playing audio to
+  // consider a successful playback from the "Listen to this page" entry point.
+  static constexpr base::TimeDelta kListenToThisPagePlaybackStartupTimeout =
+      base::Seconds(5);
+  // The minimum amount of time that Read Aloud must play audio to consider a
+  // successful playback from the "Listen to this page" entry point.
+  static constexpr base::TimeDelta kListenToThisPagePlaybackSustainedDuration =
+      base::Seconds(2);
+
   void AccessibilityEventReceived(const ui::AXUpdatesAndEvents& details);
-  void AccessibilityLocationChangesReceived(
-      const ui::AXTreeID& tree_id,
-      ui::AXLocationAndScrollUpdates& details);
   void PrimaryPageChanged();
   void DidStopLoading();
   void DidUpdateAudioMutingState(bool muted);
   void WebContentsDestroyed();
   void DidFinishNavigation(content::NavigationHandle* navigation_handle);
+  void RenderFrameDeleted(content::RenderFrameHost* render_frame_host);
   void OnActiveAXTreeIDChanged();
-  bool CheckForPdfContentAfterLoad();
+  // Sends the PDF content frame's tree if it now exists. Returns whether the
+  // frame has been found.
+  bool CheckForPdfContentFrame();
 
   // read_anything::mojom::UntrustedPageHandler:
   void GetPresentationState() override;
@@ -200,6 +227,7 @@ class ReadAnythingUntrustedPageHandler :
                      const std::string& lang) override;
   void OnLanguagePrefChange(const std::string& lang, bool enabled) override;
   void OnReadAloudAudioStateChange(bool playing) override;
+  void OnAiPlaybackStateChanged(bool enabled) override;
   void OnSpeechRateChange(double rate) override;
   void OnImageDataRequested(const ui::AXTreeID& target_tree_id,
                             ui::AXNodeID target_node_id) override;
@@ -232,7 +260,9 @@ class ReadAnythingUntrustedPageHandler :
   void OnDistillationStateChanged(
       read_anything::mojom::ReadAnythingDistillationState new_state) override;
   void OnSpeechEngineStalled() override;
-  void RequestReadabilityDistillation() override;
+  void RequestReadabilityDistillation(
+      read_anything::mojom::ReadabilityDistillationReason reason,
+      RequestReadabilityDistillationCallback callback) override;
 
   // PinnedToolbarModel::Observer
   void OnActionsChanged() override;
@@ -241,16 +271,11 @@ class ReadAnythingUntrustedPageHandler :
   // of read anything immersive
   void MaybeUpdateImmersivePinStatus();
 
-  // TranslateDriver::LanguageDetectionObserver:
-  void OnLanguageDetermined(
-      const translate::LanguageDetectionDetails& details) override;
-  void OnTranslateDriverDestroyed(translate::TranslateDriver* driver) override;
-
   // ReadAnythingLifecycleObserver:
   void OnDestroyed() override;
   void Activate(
       bool active,
-      std::optional<ReadAnythingOpenTrigger> open_trigger,
+      ReadAnythingOpenTrigger open_trigger,
       std::optional<base::TimeDelta> completed_session_duration) override;
   void OnReadingModePresenterChanged() override;
 
@@ -265,6 +290,8 @@ class ReadAnythingUntrustedPageHandler :
   // ash::SessionObserver
   void OnLockStateChanged(bool locked) override;
 #endif
+
+  void RecordListenToThisPagePlaybackMetricForTesting(bool successful_playback);
 
  protected:
   void OnImageDataDownloaded(const ui::AXTreeID& target_tree_id,
@@ -308,9 +335,20 @@ class ReadAnythingUntrustedPageHandler :
                       content::WebContents* old_contents,
                       content::WebContents* new_contents);
 
-  // Used to verify that an incoming action request is for the currently
-  // observed tree. If it's not, it may be a malicious request.
+  // Returns whether `tree_id` belongs to a frame whose accessibility data may
+  // be sent to, and whose nodes may be acted on by, the Reading Mode page.
+  // Allowed frames are:
+  //  - the primary main frame of the observed tab;
+  //  - subframes of the primary page that are same-origin with the main frame
+  //    (not when the main frame's origin is opaque or file://);
+  //  - the direct https://www.google.com child of chrome://whats-new;
+  //  - for full-page PDFs, the PDF extension host and PDF content frame.
   bool IsObservingTree(const ui::AXTreeID& tree_id) const;
+
+  // Used to verify if an incoming action request (e.g. clicking a link or
+  // downloading an image) is allowed on the current tree. Actions are allowed
+  // if the page is HTTP/HTTPS or a PDF.
+  bool AreActionsAllowedInTree(const ui::AXTreeID& tree_id) const;
 
   // ui::AXActionHandlerObserver:
   void TreeRemoved(ui::AXTreeID ax_tree_id) override;
@@ -329,14 +367,29 @@ class ReadAnythingUntrustedPageHandler :
                          ui::AXNodeID anchor_node_id,
                          int anchor_offset,
                          ui::AXNodeID focus_node_id,
-                         int focus_offset) override;
-  void OnCollapseSelection() override;
+                         int focus_offset,
+                         OnSelectionChangeCallback callback) override;
+  void OnCollapseSelection(OnCollapseSelectionCallback callback) override;
 
   void SetDefaultLanguageCode(const std::string& code);
 
   // Sends the language code of the new page, or the default if a language can't
   // be determined.
   void SetLanguageCode(const std::string& code);
+
+  // Sends whether the tab is currently translated to the page.
+  void SendTranslationState(bool is_translated);
+
+  // Triggers the tab's pending PDF translation, if any. A PDF translation
+  // requested while Reading Mode was closed stays pending on the tab's
+  // ContentTranslateDriver until Reading Mode has distilled the PDF's content,
+  // so that the translation applies to the content it displays. It stays
+  // pending until it's triggered, Reading Mode is closed, or the page changes.
+  void MaybeTriggerPendingPdfTranslation();
+
+  // Tells the page that a translation of the tab failed. Only sent when
+  // translate::kEnableTranslatePdf is enabled.
+  void SendTranslationFailed();
 
   void SetUpPdfObserver();
   void CheckIfActiveAXTreeChangedToPdf();
@@ -353,15 +406,22 @@ class ReadAnythingUntrustedPageHandler :
   // Logs the current visual settings values.
   void LogTextStyle();
 
+  void LogDistillationQualityMetrics(
+      const reading_mode::mojom::DistillationMetricsPtr& metrics);
+
   // Restores settings from preferences.
   void RestoreSettingsFromPrefs();
 
-  void PerformActionInTargetTree(const ui::AXActionData& data);
+  // Returns false if the target tree has no action handler.
+  bool PerformActionInTargetTree(const ui::AXActionData& data);
 
   bool AreInnerContentsPdfContent(
       std::vector<content::WebContents*> inner_contents);
+  bool IsGoogleDocs(const GURL& url) const;
 
   content::WebContents* GetWebContents() const;
+
+  bool HasTransientUserActivation() const;
 
   void OnScreenAIServiceInitialized(bool successful);
 
@@ -376,14 +436,21 @@ class ReadAnythingUntrustedPageHandler :
       bool is_available);
 
   // Called if IsReadAnythingWithReadabilityEnabled is enabled. Triggers
-  // DomDistiller Distillation for the current page.
-  void RequestDomDistillerDistillation(content::WebContents* contents);
+  // DomDistiller Distillation for the current page. Returns true if
+  // distillation was successfully started.
+  bool RequestDomDistillerDistillation(content::WebContents* contents);
+
+  // Resets the state of the current readability distillation: resolves an
+  // outstanding RequestReadabilityDistillation callback with kCancelled and
+  // empty strings, cancels the in-flight DomDistiller distillation, if any, and
+  // clears the cached article and its timing state.
+  void ResetReadabilityState();
 
   // Called if IsReadAnythingWithReadabilityEnabled is enabled. Records
   // the current url scheme in ReadAnything.DistillationScheme.
   void RecordDistillationSchemeHistogram(const GURL& url) const;
 
-  // Called by the DistillerDelegate with the result of a DomDistiller
+  // Called by the DomDistillerDelegate with the result of a DomDistiller
   // distillation.
   void ProcessDistilledArticle(
       const dom_distiller::DistilledArticleProto* article_proto);
@@ -395,14 +462,14 @@ class ReadAnythingUntrustedPageHandler :
   void OnAXTreeSnapshotReceived(const std::string& distilled_html,
                                 ui::AXTreeUpdate& snapshot);
 
-  // The Reading Mode controller for both immersive and side-panel reading mode,
-  // used when the immersive reading mode flag is enabled.
+  // Updates the playback state for "Listen to this page" and starts/stops the
+  // timer for recording the Listen to this page playback metric.
+  void UpdateForListenToThisPage(bool& playing);
+
+  void RecordListenToThisPagePlaybackMetric(bool successful_playback);
+
+  // The Reading Mode controller for both immersive and side-panel reading mode.
   raw_ptr<ReadAnythingController> read_anything_controller_;
-  // Legacy side-panel reading mode controller, only to be used when the
-  // immersive reading mode flag is disabled.
-  // TODO: (crbug.com/449162079) Remove this when immersive reading mode flag is
-  // fully rolled out.
-  raw_ptr<ReadAnythingSidePanelController> side_panel_controller_;
   const raw_ptr<Profile> profile_;
   const raw_ptr<content::WebUI> web_ui_;
   raw_ptr<tabs::TabInterface> tab_;
@@ -416,22 +483,20 @@ class ReadAnythingUntrustedPageHandler :
 
   // Private implementation for dom_distiller::ViewRequestDelegate, not part of
   // the public API.
-  class DistillerDelegate;
-  std::unique_ptr<DistillerDelegate> distiller_delegate_;
+  class DomDistillerDelegate;
+  std::unique_ptr<DomDistillerDelegate> distiller_delegate_;
 
   const mojo::Receiver<read_anything::mojom::UntrustedPageHandler> receiver_;
   const mojo::Remote<read_anything::mojom::UntrustedPage> page_;
 
-  std::optional<ReadAnythingOpenTrigger> last_open_trigger_;
-
-  // Whether the Read Anything feature is currently active. The feature is
-  // active when it is currently shown in the Side Panel.
-  bool active_ = true;
   // Whether the tab is going to detach soon.
   bool tab_will_detach_ = false;
 
   // The current language being used in the app.
   std::string current_language_code_ = "en-US";
+  // The translation state last sent to the page, or nullopt if none has been
+  // sent yet.
+  std::optional<bool> last_sent_is_translated_;
   const bool use_screen_ai_service_;
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -453,10 +518,12 @@ class ReadAnythingUntrustedPageHandler :
   // frame has loaded. This allows the page handler to trigger distillation if
   // the page would now be recognized as a pdf after it finishes loading.
   bool is_pdf_with_frame_ = false;
-  // When the current distilled page is recognized as a pdf, the pdf frame
-  // itself has not necessarily loaded in yet, so wait for that frame before
-  // notifying of the new tree using the info from the pdf frame itself.
-  bool is_waiting_for_pdf_frame_ = false;
+
+  // IDs of trees whose data has been sent to `page_`, either through
+  // AccessibilityEventReceived or OnActiveAXTreeIDChanged. Used to forward
+  // only removals of those trees, because AXActionHandlerRegistry reports tree
+  // removals for every tree in the browser.
+  base::flat_set<ui::AXTreeID> forwarded_tree_ids_;
 
   // Subscription for tab discard events.
   base::CallbackListSubscription tab_discard_subscription_;
@@ -475,11 +542,8 @@ class ReadAnythingUntrustedPageHandler :
 
   base::ScopedClosureRunner audible_closure_;
 
-  // Observes LanguageDetectionObserver, which notifies us when the language of
-  // the contents of the current page has been determined.
-  base::ScopedObservation<translate::TranslateDriver,
-                          translate::TranslateDriver::LanguageDetectionObserver>
-      translate_observation_{this};
+  // Observes the page's language and translation state.
+  ReadAnythingTranslateObserver translate_observer_;
 
   // Timer used for checking for pdf contents after the page has loaded.
   // Otherwise, it may incorrectly return that the page is not a pdf if
@@ -490,15 +554,32 @@ class ReadAnythingUntrustedPageHandler :
   base::OneShotTimer reading_mode_hidden_ack_timer_;
   bool ack_timed_out_for_testing_ = false;
 
+  // Timer for tracking "Listen to this page" startup and sustained playback.
+  base::OneShotTimer listen_to_this_page_playback_timer_;
+  ListenToThisPagePlaybackMetricState listen_to_this_page_playback_state_ =
+      ListenToThisPagePlaybackMetricState::kInactive;
+
   // Hold DOM distiller distillation results.
   std::optional<std::string> dom_distiller_title_;
   std::optional<std::string> dom_distiller_content_;
+
+  // Tracks the start time of a readability distillation triggered by an active
+  // accessibility tree ID change. This is used to measure readability
+  // distillation latency from a tree change event. It is preserved across a
+  // renderer request with reason kTreeChanged and cleared for kRedistill
+  // (e.g. SPA) requests.
+  base::TimeTicks readability_distillation_tree_change_start_time_;
 
   mojo::Remote<reading_mode::mojom::DistillationEvaluator>
       distillation_evaluator_;
 
   read_anything::mojom::ReadAnythingDistillationState distillation_state_ =
       read_anything::mojom::ReadAnythingDistillationState::kUndefined;
+
+  // Stores the active callback for a RequestReadabilityDistillation request.
+  // Always wrapped with mojo::WrapCallbackWithDefaultInvokeIfNotRun to ensure
+  // automatic default invocation on overwrite, early return, or destruction.
+  RequestReadabilityDistillationCallback readability_callback_;
 
   base::WeakPtrFactory<ReadAnythingUntrustedPageHandler> weak_factory_{this};
 };

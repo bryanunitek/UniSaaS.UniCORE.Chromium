@@ -18,6 +18,8 @@ static_library("fileapi") {
     "arc_content_file_system_size_util.h",
     "arc_content_file_system_url_util.cc",
     "arc_content_file_system_url_util.h",
+    "arc_content_url_allowlist.cc",
+    "arc_content_url_allowlist.h",
     "arc_documents_provider_async_file_util.cc",
     "arc_documents_provider_async_file_util.h",
     "arc_documents_provider_backend_delegate.cc",
@@ -58,8 +60,6 @@ static_library("fileapi") {
     "file_stream_forwarder.h",
   ]
 
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
-
   deps = [
     "//ash/constants",
     "//base",
@@ -83,6 +83,7 @@ static_library("fileapi") {
     "//extensions/browser/api/file_handlers",
     "//mojo/public/cpp/bindings",
     "//net",
+    "//sql",
     "//third_party/re2",
     "//ui/shell_dialogs",
     "//url",
@@ -128,14 +129,17 @@ source_set("unit_tests") {
     "//chrome/browser/ash/fusebox",
     "//chrome/browser/ash/guest_os",
     "//chrome/browser/ash/guest_os/public",
+    "//chrome/browser/ash/login/users:test_support",
     "//chrome/browser/ui/select_file_policy",
     "//chrome/test:test_support",
+    "//chrome/test/base:testing_browser_process",
     "//chromeos/ash/components/dbus/seneschal",
     "//chromeos/ash/components/dbus/virtual_file_provider",
     "//chromeos/ash/experiences/arc",
     "//chromeos/ash/experiences/arc:arc_test_support",
     "//chromeos/ash/experiences/arc/mojom",
     "//components/keyed_service/core",
+    "//components/session_manager/test:test_support",
     "//content/test:test_support",
     "//storage/browser:test_support",
     "//testing/gtest",

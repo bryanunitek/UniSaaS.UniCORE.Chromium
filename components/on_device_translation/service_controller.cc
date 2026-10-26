@@ -55,6 +55,8 @@ using mojom::OnDeviceTranslationServiceConfigPtr;
 constexpr std::string_view kCreateTranslatorMetricActionName =
     "CreateTranslator";
 constexpr std::string_view kCanTranslateMetricActionName = "CanTranslate";
+constexpr std::string_view kCreateFailedLanguagePairMetricName =
+    "Translate.OnDeviceTranslation.CreateFailed.LanguagePair";
 
 constexpr std::string_view
     kCreateTranslatorSourceLanguageIsSupportedMetricName =
@@ -215,7 +217,8 @@ void OnDeviceTranslationServiceController::CreateTranslator(
       *best_fit_target_language);
 
   LanguagePackRequirements language_pack_requirements =
-      GetLanguagePackRequirements(source_lang, target_lang);
+      GetLanguagePackRequirements(*best_fit_source_language,
+                                  *best_fit_target_language);
   std::vector<LanguagePackKey> to_be_registered_packs =
       language_pack_requirements.to_be_registered_packs;
   if (!to_be_registered_packs.empty()) {
@@ -279,7 +282,8 @@ void OnDeviceTranslationServiceController::CreateTranslatorImpl(
       source_lang, target_lang, std::move(pending_receiver),
       mojo::WrapCallbackWithDropHandler(
           base::BindOnce(
-              [](base::OnceCallback<void(
+              [](const std::string& source_lang, const std::string& target_lang,
+                 base::OnceCallback<void(
                      base::expected<
                          mojo::PendingRemote<mojom::OnDeviceTranslator>,
                          CreateTranslatorError>)> callback,
@@ -288,11 +292,14 @@ void OnDeviceTranslationServiceController::CreateTranslatorImpl(
                 if (result == CreateTranslatorResult::kSuccess) {
                   std::move(callback).Run(std::move(pending_remote));
                 } else {
+                  RecordLanguagePairUma(kCreateFailedLanguagePairMetricName,
+                                        source_lang, target_lang);
                   std::move(callback).Run(
                       base::unexpected(ToCreateTranslatorError(result)));
                 }
               },
-              std::move(callbacks.first), std::move(pending_remote)),
+              source_lang, target_lang, std::move(callbacks.first),
+              std::move(pending_remote)),
           base::BindOnce(
               std::move(callbacks.second),
               base::unexpected(CreateTranslatorError::kServiceCrashed))));
@@ -402,8 +409,13 @@ bool OnDeviceTranslationServiceController::MaybeStartService() {
     return true;
   }
 
-  service_remote_.Bind(
-      launcher_->Launch(service_display_name_suffix_, installer_));
+  mojo::PendingRemote<mojom::OnDeviceTranslationService> pending_remote =
+      launcher_->Launch(service_display_name_suffix_, installer_);
+  if (!pending_remote.is_valid()) {
+    return false;
+  }
+
+  service_remote_.Bind(std::move(pending_remote));
   service_remote_.reset_on_disconnect();
   service_remote_.set_idle_handler(
       service_idle_timeout_,

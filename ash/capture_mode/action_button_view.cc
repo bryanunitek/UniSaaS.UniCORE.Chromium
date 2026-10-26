@@ -13,7 +13,7 @@
 #include "ash/capture_mode/capture_mode_util.h"
 #include "ash/style/ash_color_id.h"
 #include "ash/style/style_util.h"
-#include "ash/style/system_shadow.h"
+#include "ash/style/system_decoration.h"
 #include "ash/style/typography.h"
 #include "base/time/time.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -66,13 +66,7 @@ ActionButtonView::ActionButtonView(views::Button::PressedCallback callback,
                                    std::u16string text,
                                    const gfx::VectorIcon* icon,
                                    ActionButtonRank rank)
-    : views::Button(std::move(callback)),
-      rank_(rank),
-      // Since this view has fully circular rounded corners, we can't use a
-      // nine patch layer for the shadow. We have to use the
-      // `ShadowOnTextureLayer`. For more info, see https://crbug.com/1308800.
-      shadow_(SystemShadow::CreateShadowOnTextureLayer(
-          SystemShadow::Type::kElevation12)) {
+    : views::Button(std::move(callback)), rank_(rank) {
   box_layout_ = SetLayoutManager(
       icon ? std::make_unique<views::BoxLayout>(
                  views::BoxLayout::Orientation::kHorizontal,
@@ -85,7 +79,6 @@ ActionButtonView::ActionButtonView(views::Button::PressedCallback callback,
 
   SetBackground(views::CreateRoundedRectBackground(
       cros_tokens::kCrosSysSystemBaseElevated, kActionButtonRadius));
-  shadow_->SetRoundedCornerRadius(kActionButtonRadius);
   capture_mode_util::SetHighlightBorder(
       this, kActionButtonRadius,
       views::HighlightBorder::Type::kHighlightBorderNoShadow);
@@ -99,6 +92,10 @@ ActionButtonView::ActionButtonView(views::Button::PressedCallback callback,
       AddChildView(std::make_unique<views::InkDropContainerView>());
   // The container should adjust its bounds if we collapse to an icon button.
   ink_drop_container_->SetAutoMatchParentBounds(true);
+
+  shadow_ = SystemDecoration::CreateShadowOnNinePatchLayer(
+      SystemDecoration::ShadowType::kElevation12);
+  shadow_->SetRoundedCorners(gfx::RoundedCornersF(kActionButtonRadius));
 
   if (icon) {
     image_view_ = AddChildView(

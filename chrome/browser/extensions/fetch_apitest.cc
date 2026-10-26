@@ -11,7 +11,7 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/user_scripts_test_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/extension_action_test_helper.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/common/chrome_paths.h"
@@ -452,8 +452,8 @@ class ExtensionFetchHeadersTest : public base::test::WithFeatureOverride,
     {
       base::AutoLock lock(requests_to_server_lock_);
 
-      DCHECK(url_to_wait_for_.is_empty());
-      DCHECK(!wait_for_request_run_loop_);
+      CHECK(url_to_wait_for_.is_empty(), base::NotFatalUntil::M161);
+      CHECK(!wait_for_request_run_loop_, base::NotFatalUntil::M161);
 
       if (requests_to_server_.count(url_to_wait_for)) {
         return;

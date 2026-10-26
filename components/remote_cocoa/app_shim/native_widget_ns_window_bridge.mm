@@ -48,6 +48,7 @@
 #include "ui/base/cocoa/animation_utils.h"
 #import "ui/base/cocoa/constrained_window/constrained_window_animation.h"
 #include "ui/base/cocoa/cursor_utils.h"
+#include "ui/base/cocoa/drag_permission.h"
 #include "ui/base/cocoa/remote_accessibility_api.h"
 #import "ui/base/cocoa/window_size_constants.h"
 #include "ui/base/emoji/emoji_panel_helper.h"
@@ -82,8 +83,27 @@ CG_EXTERN CGError CGSSetWindowCaptureExcludeShape(CGSConnectionID cid,
                                                   CGRegionRef region);
 CG_EXTERN CGRegionRef CGRegionCreateWithRect(CGRect rect);
 
+namespace remote_cocoa {
+
+NSString* const kOpaqueFrameBackgroundViewIdentifier =
+    @"OpaqueFrameBackgroundView";
+
+}  // namespace remote_cocoa
+
 namespace {
 constexpr auto kUIPaintTimeout = base::Milliseconds(500);
+
+void ApplyCaptureExclusion(NSWindow* window, bool allow) {
+  CGSConnectionID connection_id = CGSMainConnectionID();
+  CGSWindowID window_id = window.windowNumber;
+  CGRect frame = window.frame;
+  frame.origin = CGPointZero;
+  base::apple::ScopedCFTypeRef<CGRegionRef> region;
+  if (!allow) {
+    region.reset(CGRegionCreateWithRect(frame));
+  }
+  CGSSetWindowCaptureExcludeShape(connection_id, window_id, region.get());
+}
 
 // Returns the display that the specified window is on.
 display::Display GetDisplayForWindow(NSWindow* window) {
@@ -97,7 +117,14 @@ bool IsBackgroundEffectView(NSView* view) {
   }
 
   if (@available(macOS 26, *)) {
-    return [view isKindOfClass:[NSGlassEffectView class]];
+    if ([view isKindOfClass:[NSGlassEffectView class]]) {
+      return true;
+    }
+  }
+
+  if ([view.identifier
+          isEqualToString:remote_cocoa::kOpaqueFrameBackgroundViewIdentifier]) {
+    return true;
   }
 
   return false;
@@ -457,6 +484,8 @@ void NativeWidgetNSWindowBridge::SetCommandDispatcher(
 }
 
 void NativeWidgetNSWindowBridge::SetParent(uint64_t new_parent_id) {
+  const bool was_allowing_screenshots = ShouldAllowScreenshots();
+
   // Remove from the old parent.
   if (parent_) {
     parent_->RemoveChildWindow(this);
@@ -484,6 +513,9 @@ void NativeWidgetNSWindowBridge::SetParent(uint64_t new_parent_id) {
     // collection behavior.
     window_.collectionBehavior =
         collectionBehavior | NSWindowCollectionBehaviorManaged;
+    if (!was_allowing_screenshots || !ShouldAllowScreenshots()) {
+      UpdateCaptureExclusion();
+    }
     return;
   }
 
@@ -496,6 +528,10 @@ void NativeWidgetNSWindowBridge::SetParent(uint64_t new_parent_id) {
   // transient collection behavior. See https://crbug.com/41305285.
   window_.collectionBehavior =
       collectionBehavior | NSWindowCollectionBehaviorTransient;
+
+  if (!was_allowing_screenshots || !ShouldAllowScreenshots()) {
+    UpdateCaptureExclusion();
+  }
 
   if (wants_to_be_visible_) {
     parent_->OrderChildren();
@@ -585,6 +621,10 @@ void NativeWidgetNSWindowBridge::InitWindow(
              name:NSApplicationDidHideNotification
            object:nil];
 
+  // TODO(crbug.com/448692747): Remove this observer once
+  // `kThemeChangeOptimization` is enabled by default, as
+  // `NSSystemColorsDidChangeNotification` is handled centrally by
+  // `OsSettingsProviderMac`.
   [[NSNotificationCenter defaultCenter]
       addObserver:window_delegate_
          selector:@selector(onSystemColorsChanged:)
@@ -650,14 +690,6 @@ void NativeWidgetNSWindowBridge::SetBounds(
     const gfx::Rect& new_bounds,
     const gfx::Size& minimum_content_size,
     const std::optional<gfx::Size>& maximum_content_size) {
-  // Ensure that any changes to the window frame be atomic with the updates to
-  // their content.
-  if (!ca_transaction_sync_suppressed_ &&
-      base::FeatureList::IsEnabled(features::kCATransactionV2) &&
-      !base::FeatureList::IsEnabled(features::kAsyncLiveResize)) {
-    ui::CATransactionCoordinator::Get().Synchronize();
-  }
-
   // Discard any pending live resizes.
   live_resize_.pending_window_frame = std::nullopt;
   live_resize_.queued_pending_window_frame = std::nullopt;
@@ -694,6 +726,14 @@ void NativeWidgetNSWindowBridge::SetBounds(
   [window_ setFrame:gfx::ScreenRectToNSRect(actual_new_bounds)
             display:YES
             animate:NO];
+
+  if (window_move_loop_) {
+    // If the window bounds are updated programmatically during an active move
+    // loop (e.g. by TabDragController when crossing display boundaries),
+    // update the move loop baseline so subsequent mouse drag events calculate
+    // deltas against the new frame rather than the stale initial frame.
+    window_move_loop_->SetBaseFrame([window_ frame], [NSEvent mouseLocation]);
+  }
 
   // If the window has focus but is not on the active space and the window was
   // moved to a different display, re-activate it to switch the space to the
@@ -979,8 +1019,22 @@ void NativeWidgetNSWindowBridge::SetVisibilityState(
 
   DCHECK(wants_to_be_visible_);
 
-  if (!ca_transaction_sync_suppressed_)
-    ui::CATransactionCoordinator::Get().Synchronize();
+  if (!ca_transaction_sync_suppressed_) {
+    if (base::FeatureList::IsEnabled(features::kAlphaInsteadOfCATransaction)) {
+      // If the window isn't visible and a compositor frame for the window size
+      // hasn't come in yet, keep the window effectively invisible via
+      // `alphaValue`. It will be made visible when a correctly sized compositor
+      // frame arrives.
+      if (!window_.visible && compositor_frame_dip_size_ != content_dip_size_) {
+        if (!pending_alpha_value_.has_value()) {
+          pending_alpha_value_ = window_.alphaValue;
+        }
+        window_.alphaValue = 0.0;
+      }
+    } else {
+      ui::CATransactionCoordinator::Get().Synchronize();
+    }
+  }
 
   // If the parent (or an ancestor) is hidden, return and wait for it to become
   // visible.
@@ -1005,9 +1059,20 @@ void NativeWidgetNSWindowBridge::SetVisibilityState(
     parent_->OrderChildren();
 
   if (new_state == WindowVisibilityState::kShowAndActivateWindow) {
-    [window_ makeKeyAndOrderFront:nil];
-    if (![window_ activationIndependence]) {
-      [NSApp activateIgnoringOtherApps:YES];
+    // Avoid ordering a child window to the front before it has been attached to
+    // its parent (e.g. when OrderChildren() deferred attachment because the
+    // parent is not on the active space). Ordering an unattached child window
+    // with NSWindowCollectionBehaviorTransient onto the screen causes it to
+    // appear detached on the currently active space.
+    if (!parent_ || [window_ parentWindow]) {
+      // Activate the app before `makeKeyAndOrderFront:`. If the order is
+      // reversed while the app is inactive, AppKit will not send
+      // NSWindowDidBecomeKeyNotification, causing Widget::IsActive() to
+      // incorrectly return false.
+      if (![window_ activationIndependence]) {
+        [NSApp activateIgnoringOtherApps:YES];
+      }
+      [window_ makeKeyAndOrderFront:nil];
     }
   } else if (new_state == WindowVisibilityState::kShowInactive && !parent_ &&
              ![window_ isMiniaturized]) {
@@ -1164,6 +1229,11 @@ void NativeWidgetNSWindowBridge::EndMoveLoop() {
   window_move_loop_.reset();
 }
 
+void NativeWidgetNSWindowBridge::SetWindowMoveLoopForTesting(
+    std::unique_ptr<CocoaWindowMoveLoop> move_loop) {
+  window_move_loop_ = std::move(move_loop);
+}
+
 void NativeWidgetNSWindowBridge::SetCursor(NSCursor* cursor) {
   [window_delegate_ setCursor:cursor];
 }
@@ -1282,15 +1352,36 @@ void NativeWidgetNSWindowBridge::DisplayContextMenu(
 }
 
 void NativeWidgetNSWindowBridge::SetAllowScreenshots(bool allow) {
-  CGSConnectionID connection_id = CGSMainConnectionID();
-  CGSWindowID window_id = ns_window().windowNumber;
-  CGRect frame = ns_window().frame;
-  frame.origin = CGPointZero;
-  base::apple::ScopedCFTypeRef<CGRegionRef> region;
-  if (!allow) {
-    region.reset(CGRegionCreateWithRect(frame));
+  if (allow_screenshots_ == allow) {
+    return;
   }
-  CGSSetWindowCaptureExcludeShape(connection_id, window_id, region.get());
+  allow_screenshots_ = allow;
+  UpdateCaptureExclusion();
+}
+
+bool NativeWidgetNSWindowBridge::ShouldAllowScreenshots() const {
+  // A window inherits the capture exclusion of its ancestors: if this window or
+  // any of its ancestors disallows screenshots, this window is excluded from
+  // capture. This mirrors the Windows implementation, where an owned window
+  // inherits the display affinity of its owner. See
+  // `DesktopWindowTreeHostWin::UpdateDisplayAffinity()`.
+  if (!allow_screenshots_) {
+    return false;
+  }
+  return !parent_ || parent_->ShouldAllowScreenshots();
+}
+
+void NativeWidgetNSWindowBridge::UpdateCaptureExclusion() {
+  const bool allow = ShouldAllowScreenshots();
+  if (capture_exclusion_applier_for_testing_) {
+    capture_exclusion_applier_for_testing_.Run(ns_window(), allow);
+  } else {
+    ApplyCaptureExclusion(ns_window(), allow);
+  }
+
+  for (NativeWidgetNSWindowBridge* child : child_windows_) {
+    child->UpdateCaptureExclusion();
+  }
 }
 
 void NativeWidgetNSWindowBridge::SetColorMode(
@@ -1307,6 +1398,10 @@ void NativeWidgetNSWindowBridge::BeginFileDrag(
     const gfx::PointF& mouse_location) {
   if (!window_ || !bridged_view_) {
     DLOG(WARNING) << "BeginFileDrag failed: window or bridged_view is null";
+    return;
+  }
+  if (!ui::IsDragSessionInitiationAllowed()) {
+    DLOG(WARNING) << "BeginFileDrag failed: drag session not allowed";
     return;
   }
 
@@ -1409,6 +1504,11 @@ void NativeWidgetNSWindowBridge::OnWindowWillClose() {
 
 void NativeWidgetNSWindowBridge::OnSizeChanged() {
   UpdateWindowGeometry();
+  // The capture exclusion shape is expressed in window coordinates, so it has
+  // to be re-applied to match the new window size.
+  if (!ShouldAllowScreenshots()) {
+    UpdateCaptureExclusion();
+  }
 }
 
 void NativeWidgetNSWindowBridge::OnPositionChanged() {
@@ -1462,11 +1562,30 @@ void NativeWidgetNSWindowBridge::OnVisibilityChanged() {
     invalidate_shadow_on_frame_swap_ = true;
 
   NotifyVisibilityChangeDown();
+  OnSpaceActivationMayHaveChanged();
   host_->OnVisibilityChanged(window_visible_);
 }
 
 void NativeWidgetNSWindowBridge::OnSpaceActivationMayHaveChanged() {
-  host_->OnSpaceActivationChanged(window_.onActiveSpace);
+  // Attach any children whose attachment was deferred by OrderChildren() while
+  // this window was not on the active space. A window returning to the active
+  // space is already visible and may not become the key window (e.g. the
+  // immersive fullscreen overlay window), so OnVisibilityChanged() and
+  // OnWindowKeyStatusChangedTo() will not be called to order its children.
+  if (window_.onActiveSpace) {
+    OrderChildren();
+  }
+  bool is_visible_on_screen = window_.onActiveSpace;
+  if (base::FeatureList::IsEnabled(features::kDetectSpaceChangeViaOcclusion)) {
+    is_visible_on_screen =
+        is_visible_on_screen ||
+        (([window_ occlusionState] & NSWindowOcclusionStateVisible) != 0);
+  }
+  host_->OnSpaceActivationChanged(is_visible_on_screen);
+}
+
+void NativeWidgetNSWindowBridge::OnWindowOcclusionChanged(bool occluded) {
+  host_->OnWindowOcclusionChanged(occluded);
 }
 
 void NativeWidgetNSWindowBridge::OnSystemColorsChanged() {
@@ -1648,14 +1767,7 @@ void NativeWidgetNSWindowBridge::FullscreenControllerTransitionComplete(
   UpdateWindowDisplay();
 
   // Add any children that were skipped during the fullscreen transition.
-  // A weak pointer is needed because OrderChildren() can synchronously run a
-  // modal sheet animation (ShowAsModalSheet), entering a nested run-loop during
-  // which this bridge may be destroyed.
-  base::WeakPtr<NativeWidgetNSWindowBridge> weak_ptr = factory_.GetWeakPtr();
   OrderChildren();
-  if (!weak_ptr) {
-    return;
-  }
 
   host_->OnWindowFullscreenTransitionComplete(is_fullscreen);
   if (is_fullscreen && immersive_mode_controller_) {
@@ -1878,6 +1990,7 @@ void NativeWidgetNSWindowBridge::SetCanAppearInExistingFullscreenSpaces(
 void NativeWidgetNSWindowBridge::SetMiniaturized(bool miniaturized) {
 
   if (miniaturized) {
+    wants_to_be_visible_ = false;
     // Calling performMiniaturize: will momentarily highlight the button, but
     // AppKit will reject it if there is no miniaturize button.
     if ([window_ styleMask] & NSWindowStyleMaskMiniaturizable)
@@ -1890,7 +2003,13 @@ void NativeWidgetNSWindowBridge::SetMiniaturized(bool miniaturized) {
 }
 
 void NativeWidgetNSWindowBridge::SetOpacity(float opacity) {
-  [window_ setAlphaValue:opacity];
+  // If the window is currently invisible waiting for a compositor frame to
+  // arrive, update the value to set once that frame arrives.
+  if (pending_alpha_value_.has_value()) {
+    pending_alpha_value_ = opacity;
+  } else {
+    window_.alphaValue = opacity;
+  }
 }
 
 void NativeWidgetNSWindowBridge::SetWindowLevel(int32_t level) {
@@ -1934,6 +2053,10 @@ void NativeWidgetNSWindowBridge::SetCALayerParams(
     return;
   compositor_frame_dip_size_ = frame_dip_size;
 
+  // Take the fence mach port (if any), and only release it after the NSWindow
+  // resize.
+  auto fence_mach_port = std::move(ca_layer_params.ca_context_fence_mach_port);
+
   // Update the contents atomically with the NSWindow frame resize.
   std::optional<ScopedCAActionDisabler> disabler;
   if (live_resize_.pending_window_frame.has_value()) {
@@ -1947,6 +2070,23 @@ void NativeWidgetNSWindowBridge::SetCALayerParams(
   if (ca_transaction_sync_suppressed_)
     ca_transaction_sync_suppressed_ = false;
 
+  // If the window is being kept invisible by its `alphaValue` waiting for
+  // a compositor frame, show it now.
+  if (pending_alpha_value_.has_value()) {
+    window_.alphaValue = pending_alpha_value_.value();
+    pending_alpha_value_ = std::nullopt;
+
+    // Now that the window has visually transitioned from invisible to visible,
+    // inform observers that the window's occlusion state has changed. AppKit
+    // does not post notifications when `alphaValue` changes, so without this
+    // notification, manual occlusion detection (e.g.
+    // WebContentsOcclusionCheckerMac) could miss that this window can now
+    // occlude other windows beneath it which is needed for glass frame.
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:NSWindowDidChangeOcclusionStateNotification
+                      object:window_];
+  }
+
   if (invalidate_shadow_on_frame_swap_) {
     invalidate_shadow_on_frame_swap_ = false;
     [window_ invalidateShadow];
@@ -1955,20 +2095,19 @@ void NativeWidgetNSWindowBridge::SetCALayerParams(
   // If this frame is in response to a live-resize, then update the NSWindow's
   // frame now.
   if (live_resize_.pending_window_frame.has_value()) {
+    // The calls to OnWindowGeometryChanged that this triggers will early-out
+    // because `live_resize_.pending_window_frame` is still set (we already sent
+    // the new geometry to the host).
     [window_ setFrame:live_resize_.pending_window_frame.value()
               display:YES
               animate:NO];
 
-    // If a subsequent resize came in, send the new size to the compositor now.
-    live_resize_.pending_window_frame =
+    // If a subsequent resize came in, send the new size to the host now.
+    live_resize_.pending_window_frame = std::nullopt;
+    auto pending_frame =
         std::exchange(live_resize_.queued_pending_window_frame, std::nullopt);
-    if (live_resize_.pending_window_frame.has_value()) {
-      // The pending size must be different from the current size (otherwise we
-      // will never un-set `live_resize_.pending_window_frame`) and hang the
-      // resize.
-      DCHECK_NE(gfx::Size(live_resize_.pending_window_frame->size),
-                content_dip_size_);
-      SendWindowFrameChangeToHost(live_resize_.pending_window_frame.value());
+    if (pending_frame.has_value()) {
+      SendWindowFrameChangeToHost(pending_frame);
     }
   }
 }
@@ -2026,6 +2165,10 @@ bool NativeWidgetNSWindowBridge::NeedsUpdateWindows() {
   return [bridged_view_ needsUpdateWindows];
 }
 
+void NativeWidgetNSWindowBridge::SetDeferInputContextActivation(bool defer) {
+  bridged_view_.deferInputContextActivation = defer;
+}
+
 void NativeWidgetNSWindowBridge::RedispatchKeyEvent(
     const std::vector<uint8_t>& native_event_data) {
   RedispatchKeyEvent(ui::EventFromData(native_event_data));
@@ -2058,7 +2201,7 @@ void NativeWidgetNSWindowBridge::OrderChildren() {
   if (!window.visible || !window.onActiveSpace) {
     return;
   }
-  for (auto* child : child_windows_) {
+  for (NativeWidgetNSWindowBridge* child : child_windows_) {
     if (!child->wants_to_be_visible())
       continue;
     NSWindow* child_window = child->window_;
@@ -2134,29 +2277,13 @@ void NativeWidgetNSWindowBridge::OnLiveResizeToFrame(NSRect new_window_frame) {
   // the compositor to produce a frame of the previously-requested size before
   // asking it for a new one).
   if (live_resize_.pending_window_frame.has_value()) {
-    if (gfx::Size(new_window_frame.size) ==
-        gfx::Size(live_resize_.pending_window_frame->size)) {
-      // If this request is the same as the pending live resize request, just
-      // discard it.
-      live_resize_.queued_pending_window_frame = std::nullopt;
-    } else {
-      live_resize_.queued_pending_window_frame = new_window_frame;
-    }
-    return;
-  }
-
-  // If we already have a compositor frame of the expected size, then we will
-  // not get re-notified of frames of the current size, which will cause us to
-  // never un-set `live_resize_.pending_window_frame` and hang the resize.
-  // http://crbug.com/510621306
-  if (gfx::Size(new_window_frame.size) == content_dip_size_) {
+    live_resize_.queued_pending_window_frame = new_window_frame;
     return;
   }
 
   // Tell the compositor about the new frame, so it can produce the right
   // sized frame. We will call -[NSWindow setFrame:] when the compositor
   // produces the frame.
-  live_resize_.pending_window_frame = new_window_frame;
   SendWindowFrameChangeToHost(new_window_frame);
 }
 
@@ -2166,17 +2293,15 @@ void NativeWidgetNSWindowBridge::UpdateWindowGeometry() {
   if (live_resize_.pending_window_frame.has_value()) {
     return;
   }
-
-  const auto content_dip_size_before = content_dip_size_;
-  SendWindowFrameChangeToHost([window_ frame]);
-  bool content_resized = content_dip_size_before != content_dip_size_;
+  bool content_resized = SendWindowFrameChangeToHost();
 
   CheckAndNotifyZoomedStateChanged();
   CheckAndNotifyAllWorkspacesStateChanged();
 
-  if (content_resized && !ca_transaction_sync_suppressed_ &&
-      !base::FeatureList::IsEnabled(features::kAsyncLiveResize)) {
-    ui::CATransactionCoordinator::Get().Synchronize();
+  if (content_resized && window_.visible && !ca_transaction_sync_suppressed_) {
+    if (!base::FeatureList::IsEnabled(features::kAsyncLiveResize)) {
+      ui::CATransactionCoordinator::Get().Synchronize();
+    }
   }
 
   // For a translucent window, the shadow calculation needs to be carried out
@@ -2185,13 +2310,36 @@ void NativeWidgetNSWindowBridge::UpdateWindowGeometry() {
     invalidate_shadow_on_frame_swap_ = true;
 }
 
-void NativeWidgetNSWindowBridge::SendWindowFrameChangeToHost(
-    NSRect new_window_frame) {
-  gfx::Rect window_in_screen = gfx::ScreenRectFromNSRect(new_window_frame);
+bool NativeWidgetNSWindowBridge::SendWindowFrameChangeToHost(
+    std::optional<NSRect> pending_window_frame) {
+  NSRect current_window_frame = [window_ frame];
+  NSRect window_frame_for_compositor =
+      pending_window_frame.value_or(current_window_frame);
+
+  gfx::Rect window_in_screen =
+      gfx::ScreenRectFromNSRect(window_frame_for_compositor);
   gfx::Rect content_in_screen = gfx::ScreenRectFromNSRect(
-      [window_ contentRectForFrameRect:new_window_frame]);
+      [window_ contentRectForFrameRect:window_frame_for_compositor]);
+
+  bool content_dip_size_changed = content_dip_size_ != content_in_screen.size();
   content_dip_size_ = content_in_screen.size();
+
+  if (pending_window_frame.has_value()) {
+    DCHECK(!live_resize_.pending_window_frame.has_value());
+    // Store the new frame to apply when the compositor frame arrives.
+    live_resize_.pending_window_frame = pending_window_frame.value();
+
+    // If this did not trigger a content resize, then set the window's frame
+    // size to the new value now, with live_resize_.pending_window_frame
+    // temporarily still set, to avoid recursing.
+    if (!content_dip_size_changed) {
+      [window_ setFrame:pending_window_frame.value() display:YES animate:NO];
+      live_resize_.pending_window_frame = std::nullopt;
+    }
+  }
+
   host_->OnWindowGeometryChanged(window_in_screen, content_in_screen);
+  return content_dip_size_changed;
 }
 
 void NativeWidgetNSWindowBridge::UpdateWindowDisplay() {
@@ -2228,42 +2376,53 @@ void NativeWidgetNSWindowBridge::ShowAsModalSheet() {
     return;
   }
 
-  auto begin_sheet_closure = base::BindOnce(^{
-    [parent_window beginSheet:window_
-            completionHandler:^(NSModalResponse return_code) {
-              // This class, NativeWidgetNSWindowBridge, clears the window's
-              // delegate as an indication of its death, in which case this
-              // completion handler will no-op. This is necessary to handle
-              // AppKit invoking this selector via a posted task. See
-              // https://crbug.com/851376.
-              NSWindow* window = weak_window;
-              if (!window.delegate) {
-                return;
-              }
-              // Make sure to mark ourselves as not wanting to be visible.
-              // Otherwise if during the orderOut call our parent becomes the
-              // key window, it would try to show us as a new modal sheet.
-              wants_to_be_visible_ = false;
-              [window orderOut:nil];
-              // Notify that the sheet window is closing.
-              OnWindowWillClose();
-            }];
-  });
-
-  if (host_helper_->MustPostTaskToRunModalSheetAnimation()) {
-    // This function is called via mojo when using remote cocoa. Inside the
-    // nested run loop, we will wait for a message providing the correctly-sized
-    // frame for the new sheet. This message will not be processed until we
-    // return from handling this message, because it will coming on the same
-    // pipe. Avoid the resulting hang by posting a task to show the modal
-    // sheet (which will be executed on a fresh stack, which will not block
-    // the message).
-    // https://crbug.com/1234509
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, std::move(begin_sheet_closure));
-  } else {
-    std::move(begin_sheet_closure).Run();
-  }
+  base::WeakPtr<NativeWidgetNSWindowBridge> weak_this = factory_.GetWeakPtr();
+  // AppKit's sheet presentation animation runs a nested run loop. We post
+  // this task to run the animation asynchronously for two reasons:
+  // 1. For remote cocoa (out-of-process), it prevents a deadlock by allowing
+  //    the sizing message to be processed before entering the nested run loop.
+  // 2. For in-process windows, it prevents Use-After-Free (UAF) bugs and
+  //    undefined behavior when returning from the nested run loop if the
+  //    window was closed during presentation, causing its bridge (this) to be
+  //    destroyed.
+  // https://crbug.com/40781530, https://crbug.com/517040438,
+  // https://crbug.com/518006007
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(^{
+        NativeWidgetNSWindowBridge* bridge = weak_this.get();
+        if (!bridge || !bridge->wants_to_be_visible_) {
+          return;
+        }
+        // Check again inside the posted task in case ShowAsModalSheet() was
+        // called multiple times before the first task executed
+        // (https://crbug.com/572474546).
+        if (parent_window.attachedSheet == bridge->ns_window()) {
+          return;
+        }
+        [parent_window beginSheet:bridge->ns_window()
+                completionHandler:^(NSModalResponse return_code) {
+                  // This class, NativeWidgetNSWindowBridge, clears the window's
+                  // delegate as an indication of its death, in which case this
+                  // completion handler will no-op. This is necessary to handle
+                  // AppKit invoking this selector via a posted task. See
+                  // https://crbug.com/41393772
+                  NSWindow* window = weak_window;
+                  if (!window.delegate) {
+                    return;
+                  }
+                  // Make sure to mark ourselves as not wanting to be visible.
+                  // Otherwise if during the orderOut call our parent becomes
+                  // the key window, it would try to show us as a new modal
+                  // sheet.
+                  if (weak_this) {
+                    weak_this->wants_to_be_visible_ = false;
+                  }
+                  [window orderOut:nil];
+                  if (weak_this) {
+                    weak_this->OnWindowWillClose();
+                  }
+                }];
+      }));
 }
 
 }  // namespace remote_cocoa

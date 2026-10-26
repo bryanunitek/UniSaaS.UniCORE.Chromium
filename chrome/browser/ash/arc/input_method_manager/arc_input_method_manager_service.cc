@@ -381,7 +381,7 @@ ArcInputMethodManagerService::ArcInputMethodManagerService(
       arc_ime_state_delegate_(
           std::make_unique<ArcInputMethodStateDelegateImpl>(profile_)),
       arc_ime_state_(arc_ime_state_delegate_.get()),
-      prefs_(profile_),
+      prefs_(profile_->GetPrefs()),
       is_virtual_keyboard_shown_(false),
       is_updating_imm_entry_(false),
       proxy_ime_extension_id_(
@@ -412,7 +412,7 @@ ArcInputMethodManagerService::ArcInputMethodManagerService(
             base::Unretained(this)));
   }
 
-  DCHECK(ash::IMEBridge::Get());
+  CHECK(ash::IMEBridge::Get(), base::NotFatalUntil::M160);
   ash::IMEBridge::Get()->AddObserver(this);
 }
 
@@ -467,7 +467,7 @@ void ArcInputMethodManagerService::OnActiveImeChanged(
     // Create a list of enabled Chrome OS IMEs.
     auto enabled_imes = imm->GetActiveIMEState()->GetEnabledInputMethodIds();
     std::erase_if(enabled_imes, ash::extension_ime_util::IsArcIME);
-    DCHECK(!enabled_imes.empty());
+    CHECK(!enabled_imes.empty(), base::NotFatalUntil::M160);
     imm->GetActiveIMEState()->ChangeInputMethod(enabled_imes[0],
                                                 false /* show_message */);
     return;
@@ -750,7 +750,7 @@ void ArcInputMethodManagerService::NotifyInputMethodManagerObservers(
   // TODO(yhanada): This is a temporary workaround for supporting ARC IMEs
   // and supports neither Chrome OS extensions nor state changes enforced by
   // the policy. The better way to do this is to add a dedicated event to
-  // language_settings_private.idl and send the new event to the JS side
+  // language_settings_private.webidl and send the new event to the JS side
   // instead.
   auto* manager = ash::input_method::InputMethodManager::Get();
   if (!manager)

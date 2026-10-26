@@ -14,7 +14,6 @@
 #include "base/test/bind.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -113,7 +112,7 @@ IN_PROC_BROWSER_TEST_F(SharesheetClientBrowserTest, ShareMultipleFiles) {
   EXPECT_EQ(file_paths.size(), 3U);
 
   const base::FilePath share_cache =
-      file_manager::util::GetShareCacheFilePath(browser()->profile());
+      file_manager::util::GetShareCacheFilePath(browser()->GetProfile());
   EXPECT_EQ(file_paths[0],
             share_cache.AppendASCII(".WebShare/share1/sam.ple.mp3"));
   EXPECT_EQ(file_paths[1],

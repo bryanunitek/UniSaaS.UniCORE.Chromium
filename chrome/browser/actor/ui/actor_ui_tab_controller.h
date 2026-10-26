@@ -5,6 +5,10 @@
 #ifndef CHROME_BROWSER_ACTOR_UI_ACTOR_UI_TAB_CONTROLLER_H_
 #define CHROME_BROWSER_ACTOR_UI_ACTOR_UI_TAB_CONTROLLER_H_
 
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ref.h"
 #include "base/timer/timer.h"
@@ -12,6 +16,11 @@
 #include "chrome/browser/actor/ui/handoff_button_controller.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+#include "url/gurl.h"
+
+namespace views {
+class Widget;
+}  // namespace views
 
 namespace actor {
 class ActorKeyedService;
@@ -25,6 +34,8 @@ class ActorUiTabController : public ActorUiTabControllerInterface {
   ~ActorUiTabController() override;
   DECLARE_USER_DATA(ActorUiTabController);
 
+  static ActorUiTabController* From(tabs::TabInterface* tab);
+
   // ActorUiTabControllerInterface:
   void OnUiTabStateChange(const UiTabState& ui_tab_state,
                           UiResultCallback callback) override;
@@ -32,8 +43,18 @@ class ActorUiTabController : public ActorUiTabControllerInterface {
   void SetActorTaskResume() override;
   base::WeakPtr<ActorUiTabControllerInterface> GetWeakPtr() override;
   UiTabState GetCurrentUiTabState() const override;
+  bool MaybeDeferNavigation(
+      tabs::TabInterface* tab,
+      const GURL& url,
+      ActorNavigationThrottle::Delegate::NavigationConfirmedCallback callback)
+      override;
 
 #if !BUILDFLAG(IS_ANDROID)
+  // Closes this tab's navigation confirmation dialog, if one is showing.
+  void CancelNavigationConfirmation(tabs::TabInterface* tab) override;
+
+  views::Widget* GetActiveNavigationConfirmDialogWidgetForTesting() const;
+
   void OnWebContentsAttached() override;
   void OnViewBoundsChanged() override;
   void OnOverlayHoverStatusChanged(bool is_hovering) override;
@@ -44,13 +65,14 @@ class ActorUiTabController : public ActorUiTabControllerInterface {
 
   void OnImmersiveModeChanged() override;
 
-  [[nodiscard]] base::ScopedClosureRunner
-  RegisterActorTabIndicatorStateChangedCallback(
-      ActorTabIndicatorStateChangedCallback callback) override;
   [[nodiscard]] base::ScopedClosureRunner RegisterActorOverlayStateChange(
       ActorOverlayStateChangeCallback callback) override;
   [[nodiscard]] base::ScopedClosureRunner RegisterActorOverlayBackgroundChange(
       ActorOverlayBackgroundChangeCallback callback) override;
+  void SetCursorChipText(const std::string& text) override;
+  std::string GetCursorChipText() const override;
+  [[nodiscard]] base::ScopedClosureRunner RegisterCursorChipTextChange(
+      CursorChipTextChangeCallback callback) override;
 #endif
 
  private:
@@ -75,6 +97,8 @@ class ActorUiTabController : public ActorUiTabControllerInterface {
 #if !BUILDFLAG(IS_ANDROID)
   // Called when the omnibox's popup visibility changes.
   void OnWindowOmniboxPopupVisibilityChanged() override;
+  // Called when tab modal UI showing state changes.
+  void OnModalUIChanged(tabs::TabInterface* tab);
 #endif
 
   // Sets the Tab Indicator visibility.
@@ -95,7 +119,7 @@ class ActorUiTabController : public ActorUiTabControllerInterface {
 
   void UnregisterActorOverlayStateChange();
   void UnregisterActorOverlayBackgroundChange();
-  void UnregisterActorTabIndicatorStateChange();
+  void UnregisterCursorChipTextChange();
   void UnregisterHandoffButtonController();
 
   // The current UiTabState.
@@ -117,11 +141,13 @@ class ActorUiTabController : public ActorUiTabControllerInterface {
   std::vector<base::CallbackListSubscription> tab_subscriptions_;
 
 #if !BUILDFLAG(IS_ANDROID)
-  ActorTabIndicatorStateChangedCallback
-      on_actor_tab_indicator_changed_callback_;
   ActorOverlayStateChangeCallback on_actor_overlay_state_changed_callback_;
   ActorOverlayBackgroundChangeCallback
       actor_overlay_background_changed_callback_;
+  CursorChipTextChangeCallback cursor_chip_text_changed_callback_;
+  // Kept outside UiTabState so a text change never replays mouse commands.
+  std::string cursor_chip_text_;
+  base::WeakPtr<views::Widget> active_navigation_confirm_widget_;
 #endif
 
   // The Actor Keyed Service for the associated profile.

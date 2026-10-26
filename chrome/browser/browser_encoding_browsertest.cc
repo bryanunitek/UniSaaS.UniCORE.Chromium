@@ -13,12 +13,11 @@
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
@@ -232,8 +231,8 @@ IN_PROC_BROWSER_TEST_F(BrowserEncodingTest, TestEncodingAutoDetect) {
   // Set the default charset to one of encodings not supported by the current
   // auto-detector (Please refer to the above comments) to make sure we
   // incorrectly decode the page. Now we use ISO-8859-4.
-  browser()->profile()->GetPrefs()->SetString(prefs::kDefaultCharset,
-                                              "ISO-8859-4");
+  browser()->GetProfile()->GetPrefs()->SetString(prefs::kDefaultCharset,
+                                                 "ISO-8859-4");
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();

@@ -6,14 +6,33 @@
 
 #import "ios/testing/test_expectations.h"
 
-@interface BaseXCTestCase ()
+namespace {
+
+struct TestState {
+  bool matched_expectation = false;
+  bool issue_occurred = false;
+};
+
+}  // namespace
+
+@interface BaseXCTestCase () {
+  TestState _testState;
+}
 - (void)applyExpectation:(TestExpectationEntry*)expectation;
+// Configures XCTExpectFailureWithOptions for expected failure or crash.
+- (void)configureExpectedFailureForExpectation:
+    (TestExpectationEntry*)expectation;
+// Handles an issue reported by XCTest and determines whether it matches the
+// given expectation, updating test state accordingly.
+- (BOOL)handleIssue:(XCTIssue*)issue
+     forExpectation:(TestExpectationEntry*)expectation;
 @end
 
 @implementation BaseXCTestCase
 
 - (void)setUp {
   [super setUp];
+  _testState = TestState();
   // Configure expected failure if defined in the expectations file.
   NSString* className = NSStringFromClass([self class]);
   NSString* methodName = nil;
@@ -34,6 +53,9 @@
 }
 
 - (void)applyExpectation:(TestExpectationEntry*)expectation {
+  // Print a message to the console documenting the test expectation.
+  NSLog(@"%@", [expectation documentationMessage]);
+
   TestExpectationType type = expectation.type;
   NSString* reason = expectation.bug;
   if (type & TestExpectationTypeSkip) {
@@ -41,43 +63,56 @@
   }
 
   if (type & (TestExpectationTypeFailure | TestExpectationTypeCrash)) {
-    XCTExpectedFailureOptions* options =
-        [[XCTExpectedFailureOptions alloc] init];
-    // If Pass is specified as part of the expectations (e.g. [ Pass Failure
-    // ]), the failure is non-strict (meaning it is flaky, and allowed to
-    // pass). Otherwise, the failure is strict (meaning the test is expected
-    // to fail consistently, and it is a failure if the test passes).
-    options.strict = !(type & TestExpectationTypePass);
-
-    options.issueMatcher = ^BOOL(XCTIssue* issue) {
-      BOOL didCrash = issue.type == XCTIssueTypeUncaughtException ||
-                      issue.type == XCTIssueTypeThrownError;
-
-      // EarlGrey aborts test execution on assertion failures by raising an
-      // EarlGreyInternalTestInterruptException. This is part of the standard
-      // failure flow, not an unexpected crash, so classify it as a failure
-      // rather than a crash. Check for both the exception class name and
-      // the interrupt description because XCTest's formatting of uncaught
-      // exceptions can vary across iOS SDK versions.
-      if (didCrash) {
-        NSString* description = issue.compactDescription;
-        if ([description
-                containsString:@"EarlGreyInternalTestInterruptException"] ||
-            [description
-                containsString:@"Immediately halt execution of testcase"]) {
-          didCrash = NO;
-        }
-      }
-
-      if (didCrash) {
-        return (type & TestExpectationTypeCrash) != 0;
-      } else {
-        return (type & TestExpectationTypeFailure) != 0;
-      }
-    };
-
-    XCTExpectFailureWithOptions(reason, options);
+    [self configureExpectedFailureForExpectation:expectation];
   }
+}
+
+- (BOOL)handleIssue:(XCTIssue*)issue
+     forExpectation:(TestExpectationEntry*)expectation {
+  TestExpectationMatchResult result =
+      [expectation matchesIssueType:issue.type
+                 compactDescription:issue.compactDescription];
+  if (result == TestExpectationMatchResult::kMatched) {
+    _testState.issue_occurred = true;
+    _testState.matched_expectation = true;
+    return YES;
+  }
+  if (result == TestExpectationMatchResult::kMismatched) {
+    _testState.issue_occurred = true;
+  }
+  return NO;
+}
+
+- (void)configureExpectedFailureForExpectation:
+    (TestExpectationEntry*)expectation {
+  TestExpectationType type = expectation.type;
+  XCTExpectedFailureOptions* options = [[XCTExpectedFailureOptions alloc] init];
+  // If Pass is specified as part of the expectations (e.g. [ Pass Failure
+  // ]), the failure is non-strict (meaning it is flaky, and allowed to
+  // pass). Otherwise, the failure is strict (meaning the test is expected
+  // to fail consistently, and it is a failure if the test passes).
+  options.strict = !(type & TestExpectationTypePass);
+
+  __weak BaseXCTestCase* weakSelf = self;
+  options.issueMatcher = ^BOOL(XCTIssue* issue) {
+    return [weakSelf handleIssue:issue forExpectation:expectation];
+  };
+
+  if (options.strict) {
+    [self addTeardownBlock:^{
+      BaseXCTestCase* strongSelf = weakSelf;
+      if (!strongSelf) {
+        return;
+      }
+      if (!strongSelf->_testState.matched_expectation &&
+          !strongSelf->_testState.issue_occurred) {
+        NSLog(@"%@",
+              [expectation unmetExpectationMessageWithActualOutcome:@"Pass"]);
+      }
+    }];
+  }
+
+  XCTExpectFailureWithOptions(expectation.bug, options);
 }
 
 @end

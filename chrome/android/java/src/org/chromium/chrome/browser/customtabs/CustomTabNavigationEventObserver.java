@@ -11,20 +11,20 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.net.NetError;
 import org.chromium.url.GURL;
 
 /** An observer for firing navigation events on {@link CustomTabsCallback}. */
 @NullMarked
-public class CustomTabNavigationEventObserver extends EmptyTabObserver {
+public class CustomTabNavigationEventObserver implements TabObserver {
     // An operation was aborted (due to user action). Should match the value in net_error_list.h.
     private static final int NET_ERROR_ABORTED = -3;
 
-    private final @Nullable SessionHolder<?> mSessionToken;
+    private final @Nullable SessionHolder mSessionToken;
     private final CustomTabsConnection mConnection;
     private boolean mIsPrerender;
 
@@ -33,8 +33,7 @@ public class CustomTabNavigationEventObserver extends EmptyTabObserver {
     private boolean mPageLoadFinished;
     private @Nullable Integer mPageLoadFailed;
 
-    public CustomTabNavigationEventObserver(
-            @Nullable SessionHolder<?> session, boolean forPrerender) {
+    public CustomTabNavigationEventObserver(@Nullable SessionHolder session, boolean forPrerender) {
         mSessionToken = session;
         mConnection = CustomTabsConnection.getInstance();
         // Kill-switch for reporting events for prerendered navigations.

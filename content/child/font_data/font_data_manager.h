@@ -10,9 +10,11 @@
 #include <string>
 
 #include "base/containers/hashing_lru_cache.h"
+#include "base/functional/callback_forward.h"
 #include "base/hash/hash.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/sequence_local_storage_slot.h"
 #include "base/unguessable_token.h"
@@ -21,6 +23,7 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+#include "third_party/blink/public/platform/web_font_prewarmer.h"
 #include "third_party/freetype_buildflags.h"
 #include "third_party/skia/include/core/SkFontMgr.h"
 #include "third_party/skia/include/core/SkFontStyle.h"
@@ -42,9 +45,10 @@ namespace font_data_service {
 // Instantiated in the child on startup. Font fallback mechanism is still in
 // place/has not changed.
 //
-// The methods of this class (as imposed by blink requirements) may be called on
-// any thread.
-class CONTENT_EXPORT FontDataManager : public SkFontMgr {
+// The SkFontMgr methods (as imposed by Blink requirements) may be called on any
+// thread. PrewarmFamily() must be called on the renderer main thread.
+class CONTENT_EXPORT FontDataManager : public SkFontMgr,
+                                       public blink::WebFontPrewarmer {
  public:
   FontDataManager();
   FontDataManager(const FontDataManager&) = delete;
@@ -52,6 +56,9 @@ class CONTENT_EXPORT FontDataManager : public SkFontMgr {
   ~FontDataManager() override;
 
   static void CreateAndInitialize();
+
+  // blink::WebFontPrewarmer:
+  void PrewarmFamily(const blink::WebString& family_name) override;
 
   // SkFontMgr:
   int onCountFamilies() const override;
@@ -81,9 +88,22 @@ class CONTENT_EXPORT FontDataManager : public SkFontMgr {
       mojo::PendingRemote<font_data_service::mojom::FontDataService>
           font_data_service);
 
+  void InitializePrewarmerForTesting(
+      mojo::PendingRemote<font_data_service::mojom::FontDataService>
+          font_data_service);
+  void ShutdownPrewarmerForTesting(base::OnceClosure completion_callback);
+  void PrewarmFamilyForTesting(const blink::WebString& family_name,
+                               base::OnceClosure completion_callback);
+
   size_t GetMappedFilesCountForTesting() const;
 
  private:
+  void InitializePrewarmer();
+  void PrewarmFamilyImpl(const blink::WebString& family_name,
+                         base::OnceClosure completion_callback);
+  void PrewarmFamilyOnWorker(std::string family_name,
+                             base::OnceClosure completion_callback);
+
   font_data_service::mojom::FontDataService& GetRemoteFontDataService() const;
 
   sk_sp<SkTypeface> CreateTypefaceFromMatchResult(
@@ -119,6 +139,17 @@ class CONTENT_EXPORT FontDataManager : public SkFontMgr {
   void AddToCache(const MatchFamilyRequest& request,
                   sk_sp<SkTypeface> typeface) const;
 
+  // Returns the typeface in `response`, if any, and remembers the family as
+  // unmatched when the service says it does not exist.
+  sk_sp<SkTypeface> CreateTypefaceFromMatchResponse(
+      const MatchFamilyRequest& request,
+      mojom::MatchFamilyNameResponsePtr response) const;
+
+  // Families the service has no font for in any style, keyed by the
+  // canonical name in `request`. Requests for them skip the service.
+  bool IsKnownUnmatchedFamily(const MatchFamilyRequest& request) const;
+  void AddUnmatchedFamily(const MatchFamilyRequest& request) const;
+
   struct MatchFamilyRequestHash {
     size_t operator()(const MatchFamilyRequest& key) const {
       return base::HashCombine(0ull, key.name, key.weight, key.width,
@@ -142,6 +173,7 @@ class CONTENT_EXPORT FontDataManager : public SkFontMgr {
   mutable base::Lock mapped_files_lock_;
   mutable base::Lock family_names_lock_;
   mutable base::Lock typeface_cache_lock_;
+  mutable base::Lock unmatched_families_lock_;
 
   // Cache of the font requests to existing typefaces. Allows replying directly
   // with a typeface for a match request that was already made.
@@ -150,6 +182,11 @@ class CONTENT_EXPORT FontDataManager : public SkFontMgr {
                                 MatchFamilyRequestHash,
                                 MatchFamilyRequestEqual>
       typeface_cache_ GUARDED_BY(typeface_cache_lock_);
+
+  // Family names the font service has no font for, see
+  // IsKnownUnmatchedFamily().
+  mutable base::HashingLRUCacheSet<std::string> unmatched_families_
+      GUARDED_BY(unmatched_families_lock_);
 
   // Cache of the shared memory region by GUID to known font mappings. Allows
   // reusing a pre-existing shared memory region if it contains the data
@@ -179,10 +216,14 @@ class CONTENT_EXPORT FontDataManager : public SkFontMgr {
   // onCountFamilies or onGetFamilyName.
   mutable std::vector<std::string> family_names_ GUARDED_BY(family_names_lock_);
 
-#if BUILDFLAG(ENABLE_FREETYPE)
+  // FreeType font manager used on non-Windows platforms (e.g. Linux/ChromeOS)
+  // when the FreeType backend is selected. Windows exclusively uses DirectWrite
+  // typefaces (via DWriteFontTypeface).
+#if !BUILDFLAG(IS_WIN) && BUILDFLAG(ENABLE_FREETYPE)
   sk_sp<SkFontMgr> custom_fnt_mgr_;
 #endif
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
+  scoped_refptr<base::SequencedTaskRunner> prewarm_task_runner_;
   mutable base::SequenceLocalStorageSlot<
       mojo::Remote<font_data_service::mojom::FontDataService>>
       font_data_service_slot_;

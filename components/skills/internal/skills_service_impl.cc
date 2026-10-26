@@ -4,8 +4,12 @@
 
 #include "components/skills/internal/skills_service_impl.h"
 
+#include <string>
+#include <vector>
+
 #include "base/check_is_test.h"
 #include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/notimplemented.h"
 #include "base/task/single_thread_task_runner.h"
@@ -108,7 +112,20 @@ const Skill* SkillsServiceImpl::AddSkill(const std::string& source_skill_id,
   skill->source_skill_id = source_skill_id;
   // If the skill has a source skill id, it is a derived skill.
   if (!source_skill_id.empty()) {
-    skill->source = sync_pb::SkillSource::SKILL_SOURCE_DERIVED_FROM_FIRST_PARTY;
+    const Skill* source_skill = GetSkillById(source_skill_id);
+    const bool is_enterprise_derived =
+        source_skill &&
+        (source_skill->source ==
+             sync_pb::SkillSource::SKILL_SOURCE_ENTERPRISE ||
+         source_skill->source ==
+             sync_pb::SkillSource::SKILL_SOURCE_DERIVED_FROM_ENTERPRISE);
+    skill->source =
+        is_enterprise_derived
+            ? sync_pb::SkillSource::SKILL_SOURCE_DERIVED_FROM_ENTERPRISE
+            : sync_pb::SkillSource::SKILL_SOURCE_DERIVED_FROM_FIRST_PARTY;
+    base::UmaHistogramEnumeration(
+        "Skills.Save.DerivedSource", skill->source,
+        static_cast<sync_pb::SkillSource>(sync_pb::SkillSource_ARRAYSIZE));
   }
   return AddSkillImpl(std::move(skill), UpdateSource::kLocal);
 }
@@ -122,13 +139,17 @@ const Skill* SkillsServiceImpl::AddOrUpdateSkillFromSync(
     std::string_view description,
     base::Time creation_time,
     base::Time last_update_time,
-    sync_pb::SkillSource source) {
+    sync_pb::SkillSource source,
+    bool enabled) {
   CHECK_EQ(GetServiceStatus(), ServiceStatus::kReady);
 
-  if (Skill* skill = GetMutableSkillById(skill_id)) {
+  // First-party skills are never synced.
+  CHECK_NE(source, sync_pb::SkillSource::SKILL_SOURCE_FIRST_PARTY);
+
+  if (Skill* skill = GetMutableUserSkillById(skill_id)) {
     // Skill already exists, update its fields.
     UpdateSkillImpl(skill, name, icon, prompt, description, last_update_time,
-                    UpdateSource::kSync);
+                    UpdateSource::kSync, enabled);
     return skill;
   }
 
@@ -141,6 +162,7 @@ const Skill* SkillsServiceImpl::AddOrUpdateSkillFromSync(
   skill->creation_time = creation_time;
   skill->last_update_time = last_update_time;
   skill->source = source;
+  skill->enabled = enabled;
   return AddSkillImpl(std::move(skill), UpdateSource::kSync);
 }
 
@@ -152,14 +174,15 @@ const Skill* SkillsServiceImpl::UpdateSkill(std::string_view skill_id,
     return nullptr;
   }
 
-  Skill* skill = GetMutableSkillById(skill_id);
+  Skill* skill = GetMutableUserSkillById(skill_id);
   if (!skill) {
     // Skill does not exist, nothing to update.
     return nullptr;
   }
 
   UpdateSkillImpl(skill, name, icon, prompt, /*description=*/"",
-                  /*update_time=*/base::Time::Now(), UpdateSource::kLocal);
+                  /*update_time=*/base::Time::Now(), UpdateSource::kLocal,
+                  skill->enabled);
   return skill;
 }
 
@@ -176,16 +199,38 @@ void SkillsServiceImpl::DeleteSkill(std::string_view skill_id,
   }
 }
 
+void SkillsServiceImpl::DeleteSkillsModifiedBetween(base::Time delete_begin,
+                                                    base::Time delete_end) {
+  std::vector<std::string> skill_ids_to_delete;
+  for (const std::unique_ptr<Skill>& skill : skills_) {
+    if (skill->last_update_time >= delete_begin &&
+        skill->last_update_time < delete_end) {
+      skill_ids_to_delete.push_back(skill->id);
+    }
+  }
+
+  for (const std::string& skill_id : skill_ids_to_delete) {
+    DeleteSkill(skill_id, UpdateSource::kLocal);
+  }
+}
+
 const Skill* SkillsServiceImpl::GetSkillById(std::string_view skill_id) const {
-  // A skill can be either a 1st party skill, or a user generated skill.
-  // First, Attempt to retrieve the skill from the definitive list of 1P
-  // skills.
+  // A skill can be a 1st party skill, a provided skill (e.g. enterprise
+  // policy), or a user generated skill. First attempt to retrieve from 1P or
+  // provided collections; otherwise fall back to searching skills_ (user
+  // skills). Note that 1P and provided skills are preferred in case of ID
+  // collision.
   auto it = first_party_skill_objects_map_.find(skill_id);
   if (it != first_party_skill_objects_map_.end()) {
     return &it->second;
   }
 
-  std::optional<size_t> skill_position = GetSkillPosition(skill_id);
+  auto provided_it = provided_skill_objects_map_.find(std::string(skill_id));
+  if (provided_it != provided_skill_objects_map_.end()) {
+    return provided_it->second.get();
+  }
+
+  std::optional<size_t> skill_position = GetUserSkillPosition(skill_id);
   if (!skill_position.has_value()) {
     return nullptr;
   }
@@ -196,6 +241,11 @@ const Skill* SkillsServiceImpl::GetSkillById(std::string_view skill_id) const {
 const std::vector<std::unique_ptr<Skill>>& SkillsServiceImpl::GetSkills()
     const {
   return skills_;
+}
+
+const std::unordered_map<std::string, std::unique_ptr<Skill>>&
+SkillsServiceImpl::GetProvidedSkills() const {
+  return provided_skill_objects_map_;
 }
 
 const SkillProtoList& SkillsServiceImpl::Get1PSkills() const {
@@ -210,6 +260,12 @@ SkillsServiceImpl::Get1PTopicsInfo() const {
 void SkillsServiceImpl::LoadInitialSkills(
     std::vector<std::unique_ptr<Skill>> initial_skills) {
   CHECK(!is_initialized_);
+  // `SkillsSyncBridge` already filters out invalid entries (including
+  // `SKILL_SOURCE_FIRST_PARTY`) via `IsEntityDataValid()` when reading from
+  // storage before calling `LoadInitialSkills()`.
+  for (const std::unique_ptr<Skill>& skill : initial_skills) {
+    CHECK_NE(skill->source, sync_pb::SkillSource::SKILL_SOURCE_FIRST_PARTY);
+  }
   skills_ = std::move(initial_skills);
   SortSkills();
 
@@ -274,8 +330,10 @@ void SkillsServiceImpl::SetServiceStatusForTesting(ServiceStatus status) {
 
 const Skill* SkillsServiceImpl::AddSkillImpl(std::unique_ptr<Skill> skill,
                                              UpdateSource update_source) {
-  // Added skill must not exist in the service.
-  CHECK(!GetSkillById(skill->id));
+  // Added skill must not exist in user skills and must not be a first-party
+  // skill.
+  CHECK_NE(skill->source, sync_pb::SkillSource::SKILL_SOURCE_FIRST_PARTY);
+  CHECK(!GetMutableUserSkillById(skill->id));
 
   const Skill* skill_ptr = skill.get();
   skills_.push_back(std::move(skill));
@@ -354,11 +412,17 @@ void SkillsServiceImpl::Handle1pSkills(
   }
 }
 
-Skill* SkillsServiceImpl::GetMutableSkillById(std::string_view skill_id) {
-  return const_cast<Skill*>(GetSkillById(skill_id));
+Skill* SkillsServiceImpl::GetMutableUserSkillById(std::string_view skill_id) {
+  // Only user skills can be modified. First-party and provided skills are
+  // immutable.
+  std::optional<size_t> skill_position = GetUserSkillPosition(skill_id);
+  if (!skill_position.has_value()) {
+    return nullptr;
+  }
+  return skills_[*skill_position].get();
 }
 
-std::optional<size_t> SkillsServiceImpl::GetSkillPosition(
+std::optional<size_t> SkillsServiceImpl::GetUserSkillPosition(
     std::string_view skill_id) const {
   for (size_t i = 0; i < skills_.size(); ++i) {
     if (skills_[i]->id == skill_id) {
@@ -374,11 +438,12 @@ void SkillsServiceImpl::UpdateSkillImpl(Skill* skill,
                                         std::string_view prompt,
                                         std::string_view description,
                                         base::Time update_time,
-                                        UpdateSource update_source) {
+                                        UpdateSource update_source,
+                                        bool enabled) {
   CHECK(skill);
 
   // Update the existing skill.
-  std::optional<size_t> old_position = GetSkillPosition(skill->id);
+  std::optional<size_t> old_position = GetUserSkillPosition(skill->id);
 
   bool is_changed = false;
   if (skill->name != name) {
@@ -397,6 +462,10 @@ void SkillsServiceImpl::UpdateSkillImpl(Skill* skill,
     skill->description = description;
     is_changed = true;
   }
+  if (skill->enabled != enabled) {
+    skill->enabled = enabled;
+    is_changed = true;
+  }
 
   if (update_source == UpdateSource::kSync &&
       skill->last_update_time < update_time) {
@@ -411,7 +480,7 @@ void SkillsServiceImpl::UpdateSkillImpl(Skill* skill,
     SortSkills();
 
     const bool is_position_changed =
-        old_position != GetSkillPosition(skill->id);
+        old_position != GetUserSkillPosition(skill->id);
     NotifySkillChanged(skill->id, update_source, is_position_changed);
   }
 }
@@ -451,15 +520,48 @@ void SkillsServiceImpl::RefreshDiscoverySkills() {
 
   if (requires_refresh) {
     FetchDiscoverySkills();
+    for (auto& provider : providers_) {
+      provider->RefreshSkills();
+    }
+  }
+}
+
+void SkillsServiceImpl::AddProvider(std::unique_ptr<SkillsProvider> provider) {
+  SkillsProvider* provider_ptr = provider.get();
+  provider_subscriptions_.push_back(provider->RegisterSkillsChangedCallback(
+      base::BindRepeating(&SkillsServiceImpl::OnProviderSkillsChanged,
+                          base::Unretained(this), provider_ptr)));
+  providers_.push_back(std::move(provider));
+}
+
+void SkillsServiceImpl::OnProviderSkillsChanged(SkillsProvider* provider) {
+  provided_skill_objects_map_.clear();
+
+  // Populate provided_skill_objects_map_ from all active providers.
+  for (const auto& active_provider : providers_) {
+    for (const std::unique_ptr<Skill>& provided_skill :
+         active_provider->GetSkills()) {
+      provided_skill_objects_map_[provided_skill->id] =
+          std::make_unique<Skill>(*provided_skill);
+    }
+  }
+
+  // Notify observers that provided skills have changed.
+  for (Observer& observer : observers_) {
+    observer.OnProvidedSkillsChanged(provider);
   }
 }
 
 void SkillsServiceImpl::OnSkillsEnabledPrefChanged() {
-  if (IsSkillsEnabled(pref_service_)) {
+  bool enabled = IsSkillsEnabled(pref_service_);
+  if (enabled) {
     if (optimization_guide_) {
       optimization_guide_->RegisterOptimizationTypes(
           {optimization_guide::proto::SKILLS});
     }
+  }
+  for (Observer& observer : observers_) {
+    observer.OnSkillsEnabledChanged(enabled);
   }
 }
 

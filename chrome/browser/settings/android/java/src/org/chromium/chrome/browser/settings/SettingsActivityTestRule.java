@@ -72,6 +72,7 @@ public class SettingsActivityTestRule<T extends Fragment>
         Context context = ApplicationProvider.getApplicationContext();
         SettingsNavigation settingsNavigation =
                 SettingsNavigationFactory.createSettingsNavigation();
+        settingsNavigation.setUseSettingsActivityForTesting(true);
         Intent intent =
                 settingsNavigation.createSettingsIntent(context, mFragmentClass, fragmentArgs);
         launchActivity(intent);
@@ -86,7 +87,7 @@ public class SettingsActivityTestRule<T extends Fragment>
     public T getFragment() {
         Assert.assertNotNull("#getFragment is called before activity launch.", getActivity());
 
-        Fragment fragment = getActivity().getMainFragment();
+        Fragment fragment = SettingsTestFragmentFinder.find(getActivity(), mFragmentClass);
         Assert.assertNotNull(fragment);
         return (T) fragment;
     }

@@ -25,26 +25,8 @@ namespace {
 
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSecondTabContents);
 
-// A valid template; IIDGUID and STATS are substituted at runtime.
-constexpr char kUrlTemplate[] =
-    "https://example.com/installer.exe?iid=IIDGUID&stats=STATS";
-
-class InstallerDownloaderInteractiveUiTest
-    : public InteractiveBrowserTest,
-      public testing::WithParamInterface<bool> {
+class InstallerDownloaderInteractiveUiTestBase : public InteractiveBrowserTest {
  protected:
-  void SetUp() override {
-    std::vector<base::test::FeatureRefAndParams> enabled_features = {
-        {kInstallerDownloader,
-         {{kInstallerUrlTemplateParam.name, kUrlTemplate}}}};
-    if (GetParam()) {
-      enabled_features.push_back({infobars::kCentralizedInfoBarFramework,
-                                  {{"installer_downloader", "true"}}});
-    }
-    feature_list_.InitWithFeaturesAndParameters(enabled_features, {});
-    InteractiveBrowserTest::SetUp();
-  }
-
   InteractiveTestApi::MultiStep ShowInfobarOnNewTab() {
     return Steps(AddInstrumentedTab(kSecondTabContents,
                                     chrome::ChromeUINewTabURLAsGURL()),
@@ -62,7 +44,7 @@ class InstallerDownloaderInteractiveUiTest
   // Assumes that actual window have infobar visible. As a result, new window
   // will also get the infobar.
   InteractiveTestApi::MultiStep ShowInfobarInNewWindow() {
-    return Steps(Do([&]() { CreateBrowser(browser()->profile()); }),
+    return Steps(Do([&]() { CreateBrowser(browser()->GetProfile()); }),
                  WaitForShow(ConfirmInfoBar::kInfoBarElementId));
   }
 
@@ -79,6 +61,21 @@ class InstallerDownloaderInteractiveUiTest
     g_browser_process->GetFeatures()
         ->installer_downloader_controller()
         ->MaybeShowInfoBar();
+  }
+};
+
+class InstallerDownloaderInteractiveUiTest
+    : public InstallerDownloaderInteractiveUiTestBase,
+      public testing::WithParamInterface<bool> {
+ protected:
+  void SetUp() override {
+    std::vector<base::test::FeatureRefAndParams> enabled_features;
+    if (GetParam()) {
+      enabled_features.push_back({infobars::kCentralizedInfoBarFramework,
+                                  {{"MigratedInstallerDownloader", "true"}}});
+    }
+    feature_list_.InitWithFeaturesAndParameters(enabled_features, {});
+    InteractiveBrowserTest::SetUp();
   }
 
  private:
@@ -179,6 +176,118 @@ INSTANTIATE_TEST_SUITE_P(All,
                          testing::Bool(),
                          [](const testing::TestParamInfo<bool>& info) {
                            return info.param ? "Migrated" : "Legacy";
+                         });
+
+class InstallerDownloaderReengagementInteractiveUiTest
+    : public InstallerDownloaderInteractiveUiTestBase,
+      public testing::WithParamInterface<bool> {
+ protected:
+  void SetUp() override {
+    std::vector<base::test::FeatureRefAndParams> enabled_features;
+    if (GetParam()) {
+      enabled_features.push_back({infobars::kCentralizedInfoBarFramework,
+                                  {{"MigratedInstallerDownloader", "true"}}});
+    }
+    enabled_features.push_back(
+        {kInstallerDownloaderReengagement,
+         {{"MaxCycleCount", "3"}, {"ReengagementCooldownDays", "60"}}});
+    feature_list_.InitWithFeaturesAndParameters(enabled_features, {});
+    InteractiveBrowserTest::SetUp();
+  }
+
+  void AdvanceCooldownAndResetSession() {
+    g_browser_process->local_state()->SetTime(
+        prefs::kInstallerDownloaderInfobarLastShowTime,
+        base::Time::Now() - base::Days(61));
+    g_browser_process->GetFeatures()
+        ->installer_downloader_controller()
+        ->ResetSessionStateForTesting();
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(InstallerDownloaderReengagementInteractiveUiTest,
+                       ReengagementShowsAgainAfterCooldown) {
+  base::HistogramTester histograms;
+
+  // 1. Show and dismiss in Cycle 1.
+  TriggerInfobar();
+  RunTestSequence(WaitForShow(ConfirmInfoBar::kInfoBarElementId),
+                  PressButton(ConfirmInfoBar::kDismissButtonElementId),
+                  VerifyNoInfobarInAnyTab());
+
+  // Verify dismissed metric.
+  histograms.ExpectUniqueSample("Windows.InstallerDownloader.RequestAccepted",
+                                /*false=*/0, /*expected_bucket_count=*/1);
+
+  // 2. Try to show again immediately (should fail because in cooldown).
+  TriggerInfobar();
+  RunTestSequence(EnsureNotPresent(ConfirmInfoBar::kInfoBarElementId));
+
+  // 3. Simulate cooldown passed and a new browser session starting.
+  AdvanceCooldownAndResetSession();
+
+  // 4. Trigger again, should show (Cycle 2).
+  TriggerInfobar();
+  RunTestSequence(WaitForShow(ConfirmInfoBar::kInfoBarElementId),
+                  PressButton(ConfirmInfoBar::kDismissButtonElementId),
+                  VerifyNoInfobarInAnyTab());
+
+  // Verify metrics.
+  histograms.ExpectUniqueSample("Windows.InstallerDownloader.InfobarShown",
+                                /*true=*/1, /*expected_bucket_count=*/2);
+
+  histograms.ExpectBucketCount(
+      "Windows.InstallerDownloader.Reengagement.InfobarShown",
+      /*cycle 1=*/1, /*expected_count=*/1);
+  histograms.ExpectBucketCount(
+      "Windows.InstallerDownloader.Reengagement.InfobarShown",
+      /*cycle 2=*/2, /*expected_count=*/1);
+}
+
+IN_PROC_BROWSER_TEST_P(InstallerDownloaderReengagementInteractiveUiTest,
+                       ReengagementStopsAfterMaxCycles) {
+  base::HistogramTester histograms;
+
+  // Cycle 1: Show and Dismiss.
+  TriggerInfobar();
+  RunTestSequence(WaitForShow(ConfirmInfoBar::kInfoBarElementId),
+                  PressButton(ConfirmInfoBar::kDismissButtonElementId),
+                  VerifyNoInfobarInAnyTab());
+
+  // Cycle 2: Fast forward, Show and Dismiss.
+  AdvanceCooldownAndResetSession();
+  TriggerInfobar();
+  RunTestSequence(WaitForShow(ConfirmInfoBar::kInfoBarElementId),
+                  PressButton(ConfirmInfoBar::kDismissButtonElementId),
+                  VerifyNoInfobarInAnyTab());
+
+  // Cycle 3 (Last): Fast forward, Show and Dismiss.
+  AdvanceCooldownAndResetSession();
+  TriggerInfobar();
+  RunTestSequence(WaitForShow(ConfirmInfoBar::kInfoBarElementId),
+                  PressButton(ConfirmInfoBar::kDismissButtonElementId),
+                  VerifyNoInfobarInAnyTab());
+
+  // Campaign should be ended now. TotalShowCount should be logged.
+  // We had 3 shows (1 in C1, 1 in C2, 1 in C3).
+  histograms.ExpectUniqueSample("Windows.InstallerDownloader.TotalShowCount",
+                                /*sample=*/3, /*expected_bucket_count=*/1);
+
+  // Try to show again after another cooldown (should fail).
+  AdvanceCooldownAndResetSession();
+  TriggerInfobar();
+  RunTestSequence(EnsureNotPresent(ConfirmInfoBar::kInfoBarElementId));
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         InstallerDownloaderReengagementInteractiveUiTest,
+                         testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "MigratedInfobar"
+                                             : "LegacyInfobar";
                          });
 
 }  // namespace

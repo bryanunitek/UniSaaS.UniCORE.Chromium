@@ -9,7 +9,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/process/process.h"
 #include "base/synchronization/lock.h"
@@ -104,8 +103,7 @@ void ClientProcessImpl::OnChromeMemoryDumpDone(
     uint64_t dump_guid,
     std::unique_ptr<base::trace_event::ProcessMemoryDump> process_memory_dump) {
   CHECK(outcome == base::trace_event::ProcessMemoryDumpOutcome::kSuccess ||
-            !process_memory_dump,
-        base::NotFatalUntil::M148);
+        !process_memory_dump);
 
   auto callback_it = pending_chrome_callbacks_.find(dump_guid);
   CHECK(callback_it != pending_chrome_callbacks_.end());
@@ -174,7 +172,12 @@ void ClientProcessImpl::RequestOSMemoryDump(
 
 #if BUILDFLAG(IS_MAC)
   // If the most recent chrome memory dump hasn't finished, wait for that to
-  // finish.
+  // finish. On Mac, `phys_footprint` (used to compute `private_footprint_kb`)
+  // counts faulted pages of anonymous shared memory. The Chrome dump faults
+  // every resident shared memory page (see
+  // ProcessMemoryDump::CountResidentBytesInSharedMemory()), so that subtracting
+  // the resident size reported by SharedMemoryTracker is accurate. That only
+  // works if phys_footprint is sampled after the Chrome dump.
   if (most_recent_chrome_memory_dump_guid_.has_value()) {
     uint64_t guid = most_recent_chrome_memory_dump_guid_.value();
     auto it = pending_chrome_callbacks_.find(guid);
@@ -191,17 +194,23 @@ void ClientProcessImpl::PerformOSMemoryDump(OSMemoryDumpArgs args) {
   mojom::RequestOutcome outcome = mojom::RequestOutcome::kSuccess;
   base::flat_map<base::ProcessId, mojom::RawOSMemDumpPtr> results;
   for (const base::ProcessId& pid : args.pids) {
-    auto handle = base::Process::Open(pid).Handle();
     mojom::RawOSMemDumpPtr result = mojom::RawOSMemDump::New();
     result->platform_private_footprint = mojom::PlatformPrivateFootprint::New();
-
-    if (!OSMetrics::FillOSMemoryDump(handle, args.flags, result.get())) {
+    const base::Process process = pid == base::kNullProcessId
+                                      ? base::Process::Current()
+                                      : base::Process::Open(pid);
+    if (!process.IsValid()) {
+      DLOG(ERROR) << "OS memory dump failed for pid " << pid
+                  << " (OpenProcess)";
+      outcome = mojom::RequestOutcome::kProcessNotFound;
+    } else if (!OSMetrics::FillOSMemoryDump(process.Handle(), args.flags,
+                                            result.get())) {
       DLOG(ERROR) << "OS memory dump failed for pid " << pid
                   << " (FillOSMemoryDump)";
       outcome = mojom::RequestOutcome::kFillOsMemoryDumpFailed;
     } else if (args.mmap_option != mojom::MemoryMapOption::NONE &&
-               !OSMetrics::FillProcessMemoryMaps(handle, args.mmap_option,
-                                                 result.get())) {
+               !OSMetrics::FillProcessMemoryMaps(
+                   process.Handle(), args.mmap_option, result.get())) {
       DLOG(ERROR) << "OS memory dump failed for pid " << pid
                   << " (FillProcessMemoryMaps)";
       outcome = mojom::RequestOutcome::kFillProcessMemoryMapsFailed;

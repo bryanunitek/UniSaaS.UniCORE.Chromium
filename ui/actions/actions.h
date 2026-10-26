@@ -9,12 +9,15 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "base/component_export.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/span.h"
 #include "base/functional/callback.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -22,6 +25,7 @@
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/class_property.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_utils.h"
 #include "ui/base/models/image_model.h"
 #include "ui/events/event.h"
 
@@ -32,7 +36,8 @@ class CallbackListSubscription;
 namespace actions {
 
 class ActionItem;
-using ActionListVector = std::vector<std::unique_ptr<ActionItem>>;
+class BaseAction;
+using ActionListVector = std::vector<std::unique_ptr<BaseAction>>;
 using ActionItemVector = std::vector<raw_ptr<ActionItem, VectorExperimental>>;
 
 class COMPONENT_EXPORT(ACTIONS) ActionList {
@@ -48,8 +53,10 @@ class COMPONENT_EXPORT(ACTIONS) ActionList {
   const ActionListVector& children() const { return children_; }
   bool empty() const { return children_.empty(); }
 
-  ActionItem* AddAction(std::unique_ptr<ActionItem> action_item);
-  std::unique_ptr<ActionItem> RemoveAction(ActionItem* action_item);
+  BaseAction* AddAction(std::unique_ptr<BaseAction> action_item);
+  BaseAction* AddActionAt(std::unique_ptr<BaseAction> action_item,
+                          size_t index);
+  std::unique_ptr<BaseAction> RemoveAction(BaseAction* action_item);
   // Clear the action list vector
   void Reset();
 
@@ -64,6 +71,9 @@ class COMPONENT_EXPORT(ACTIONS) BaseAction
       public ui::PropertyHandler {
  public:
   METADATA_HEADER_BASE(BaseAction);
+
+  using PopulateChildActions = base::RepeatingCallback<void(BaseAction*)>;
+
   BaseAction();
   BaseAction(const BaseAction&) = delete;
   BaseAction& operator=(const BaseAction&) = delete;
@@ -71,11 +81,44 @@ class COMPONENT_EXPORT(ACTIONS) BaseAction
 
   BaseAction* GetParent() const;
 
-  ActionItem* AddChild(std::unique_ptr<ActionItem> action_item);
-  std::unique_ptr<ActionItem> RemoveChild(ActionItem* action_item);
+  template <typename T>
+  T* AddChild(std::unique_ptr<T> action_item) {
+    DCHECK(!action_item->GetParent());
+    action_item->parent_ = this;
+    T* result = action_item.get();
+    AddChildInternal(std::move(action_item));
+    return result;
+  }
+
+  template <typename T>
+  T* AddChildAt(std::unique_ptr<T> action_item, size_t index) {
+    DCHECK(!action_item->GetParent());
+    action_item->parent_ = this;
+    T* result = action_item.get();
+    AddChildAtInternal(std::move(action_item), index);
+    return result;
+  }
+
+  template <typename T>
+  std::unique_ptr<T> RemoveChild(T* action_item) {
+    DCHECK(action_item);
+    DCHECK_EQ(action_item->GetParent(), this);
+    action_item->parent_ = nullptr;
+    std::unique_ptr<BaseAction> removed_action =
+        children_.RemoveAction(action_item);
+    if (!removed_action) {
+      return nullptr;
+    }
+    return base::WrapUnique(ui::metadata::AsClass<T>(removed_action.release()));
+  }
 
   const ActionList& GetChildren() const { return children_; }
   void ResetActionList();
+  void SetPopulateChildrenCallback(PopulateChildActions callback);
+  bool HasPopulateChildActionsCallback() const;
+  void PopulateChildItems();
+
+  virtual ActionItem* GetActionItem() = 0;
 
  protected:
   void ActionListChanged() override;
@@ -83,6 +126,10 @@ class COMPONENT_EXPORT(ACTIONS) BaseAction
  private:
   raw_ptr<BaseAction> parent_ = nullptr;
   ActionList children_{this};
+  PopulateChildActions populate_child_callback_;
+  void AddChildInternal(std::unique_ptr<BaseAction> action_item);
+  void AddChildAtInternal(std::unique_ptr<BaseAction> action_item,
+                          size_t index);
 };
 
 // Class returned from ActionItem::BeginUpdate() in order to allow a "batch"
@@ -125,6 +172,14 @@ class COMPONENT_EXPORT(ACTIONS) ActionInvocationContext
       return std::move(*this);
     }
 
+    template <typename T, typename U>
+      requires std::is_enum_v<U> && std::is_same_v<T, std::underlying_type_t<U>>
+    ContextBuilder&& SetProperty(const ui::ClassProperty<T>* property,
+                                 U value) && {
+      context_->SetProperty(property, static_cast<T>(value));
+      return std::move(*this);
+    }
+
     [[nodiscard]] ActionInvocationContext Build() &&;
 
    private:
@@ -144,6 +199,9 @@ class BaseActionItemBuilderT {
   using ActionChangedCallback = ui::metadata::PropertyChangedCallback;
   using InvokeActionCallback =
       base::RepeatingCallback<void(ActionItem*, ActionInvocationContext)>;
+
+  using PopulateChildActions = base::RepeatingCallback<void(BaseAction*)>;
+
   BaseActionItemBuilderT() {
     action_item_ = std::make_unique<ActionItemClass>();
   }
@@ -313,6 +371,15 @@ class BaseActionItemBuilderT {
     return std::move(this->SetInvokeActionCallback(std::move(callback)));
   }
 
+  BuilderT& SetPopulateChildrenCallback(PopulateChildActions callback) & {
+    action_item_->SetPopulateChildrenCallback(std::move(callback));
+    return static_cast<BuilderT&>(*this);
+  }
+
+  BuilderT&& SetPopulateChildrenCallback(PopulateChildActions callback) && {
+    return std::move(this->SetPopulateChildrenCallback(std::move(callback)));
+  }
+
   BuilderT& SetIsShowingBubble(bool showing_bubble) & {
     action_item_->SetIsShowingBubble(showing_bubble);
     return static_cast<BuilderT&>(*this);
@@ -320,6 +387,15 @@ class BaseActionItemBuilderT {
 
   BuilderT&& SetIsShowingBubble(bool showing_bubble) && {
     return std::move(this->SetIsShowingBubble(showing_bubble));
+  }
+
+  BuilderT& AddSynonyms(std::initializer_list<std::u16string> synonyms) & {
+    action_item_->AddSynonyms(synonyms);
+    return static_cast<BuilderT&>(*this);
+  }
+
+  BuilderT&& AddSynonyms(std::initializer_list<std::u16string> synonyms) && {
+    return std::move(this->AddSynonyms(synonyms));
   }
 
   [[nodiscard]] std::unique_ptr<ActionItemClass> Build() && {
@@ -358,7 +434,6 @@ class COMPONENT_EXPORT(ACTIONS) ActionItem : public BaseAction {
   using ActionChangedCallback = ui::metadata::PropertyChangedCallback;
   using InvokeActionCallback =
       base::RepeatingCallback<void(ActionItem*, ActionInvocationContext)>;
-
   class COMPONENT_EXPORT(ACTIONS) ActionItemBuilder
       : public BaseActionItemBuilderT<ActionItemBuilder, ActionItem> {
     // TODO: possibly construct a Core class of
@@ -379,6 +454,8 @@ class COMPONENT_EXPORT(ACTIONS) ActionItem : public BaseAction {
     return ActionItemBuilder(std::move(callback));
   }
 
+  ActionItem* GetActionItem() override;
+
   // Configure action states and attributes.
   std::u16string_view GetAccessibleName() const;
   void SetAccessibleName(std::u16string_view accessible_name);
@@ -394,7 +471,14 @@ class COMPONENT_EXPORT(ACTIONS) ActionItem : public BaseAction {
   void SetGroupId(std::optional<int> group_id);
   const ui::ImageModel& GetImage() const;
   void SetImage(const ui::ImageModel& image);
+  // - SetText() takes text that may contain a mnemonic marker, like u"&Find".
+  //   A literal "&" must be written as "&&" for it not to be considered a
+  //   mnemonic.
+  // - GetText() returns the text without the marker for cases that do not need
+  //   to show mnemonics, like buttons and tooltips. "&Find" becomes "Find".
+  // - GetTextWithMnemonic() returns the text as it is set.
   std::u16string_view GetText() const;
+  std::u16string_view GetTextWithMnemonic() const;
   void SetText(std::u16string_view text);
   std::u16string_view GetTooltipText() const;
   void SetTooltipText(std::u16string_view tooltip);
@@ -409,6 +493,9 @@ class COMPONENT_EXPORT(ACTIONS) ActionItem : public BaseAction {
 
   // Alternative terms used to identify this action. Used for search indexing.
   void AddSynonyms(std::initializer_list<std::u16string> synonyms);
+
+  // Returns the synonyms for this action. Used for fuzzy search.
+  base::span<const std::u16string> GetSynonyms() const;
 
   // Do a "batch" update of the ActionItem state without triggering
   // ActionChanged callbacks for each state change.
@@ -437,9 +524,9 @@ class COMPONENT_EXPORT(ACTIONS) ActionItem : public BaseAction {
   void EndUpdate();
 
   using Synonyms = std::vector<std::u16string>;
-  // When `updating_` > 0, calling ActionItemChanged() will only record whether
-  // is item was updated in `updated_`. Once `updating_` returns to 0 and
-  // `updated_` = true, the ActionChanged callbacks will trigger.
+  // When updating_ > 0, calling ActionItemChanged() will only record whether
+  // the item was updated in updated_. Once updating_ returns to 0 and
+  // updated_ = true, the ActionChanged callbacks will trigger.
   int updating_ = 0;
   bool updated_ = false;
   std::u16string accessible_name_;
@@ -449,7 +536,11 @@ class COMPONENT_EXPORT(ACTIONS) ActionItem : public BaseAction {
   bool enabled_ = true;
   std::optional<int> group_id_;
   bool visible_ = true;
+  // raw_text_ is the text as set, which may have a mnemonic marker.
+  // text_ is the same text without the marker, stored so that GetText() can
+  // return a view of it.
   std::u16string text_;
+  std::u16string raw_text_;
   std::u16string tooltip_;
   ui::ImageModel image_;
   Synonyms synonyms_;
@@ -465,6 +556,21 @@ class COMPONENT_EXPORT(ACTIONS) ActionItem : public BaseAction {
   // close on deactivate.
   bool is_showing_bubble_ = false;
   base::WeakPtrFactory<ActionItem> weak_ptr_factory_{this};
+};
+
+class COMPONENT_EXPORT(ACTIONS) IndirectActionItem : public BaseAction {
+  METADATA_HEADER(IndirectActionItem, BaseAction)
+
+ public:
+  explicit IndirectActionItem(ActionItem* delegate)
+      : delegate_(delegate->GetActionItem()) {
+    CHECK(delegate_);
+  }
+
+  ActionItem* GetActionItem() override;
+
+ private:
+  raw_ptr<ActionItem> delegate_;
 };
 
 // TODO(crbug.com/375261318): Make it so that this ActionItem descendant can
@@ -511,8 +617,8 @@ class COMPONENT_EXPORT(ACTIONS) StatefulImageActionItem : public ActionItem {
 };
 
 template <typename A>
-bool IsActionItemClass(ActionItem* action_item) {
-  return ui::metadata::IsClass<A, ActionItem>(action_item);
+bool IsActionClass(BaseAction* action_item) {
+  return ui::metadata::IsClass<A, BaseAction>(action_item);
 }
 
 class COMPONENT_EXPORT(ACTIONS) ActionManager
@@ -531,10 +637,9 @@ class COMPONENT_EXPORT(ACTIONS) ActionManager
   static void ResetForTesting();
 
   void IndexActions();
-  ActionItem* FindAction(std::u16string term, ActionItem* scope = nullptr);
-  ActionItem* FindAction(ActionId action_id, ActionItem* scope = nullptr);
-  ActionItem* FindAction(const ui::KeyEvent& key_event,
-                         ActionItem* scope = nullptr);
+  ActionItem* FindAction(std::u16string term, ActionItem* scope);
+  ActionItem* FindAction(ActionId action_id, ActionItem* scope);
+  ActionItem* FindAction(const ui::KeyEvent& key_event, ActionItem* scope);
   void GetActions(ActionItemVector& items, ActionItem* scope = nullptr);
 
   ActionItem* AddAction(std::unique_ptr<ActionItem> action_item);
@@ -575,7 +680,8 @@ class COMPONENT_EXPORT(ACTIONS) ActionManager
   std::unique_ptr<ActionItemInitializerList> initializer_list_;
 
   // All "root" actions are parented to this action.
-  BaseAction root_action_parent_;
+  std::unique_ptr<BaseAction> root_action_parent_ =
+      std::make_unique<ActionItem>();
 };
 
 class COMPONENT_EXPORT(ACTIONS) ActionIdMap {
@@ -628,6 +734,8 @@ enum class ActionPinnableState {
 COMPONENT_EXPORT(ACTIONS)
 extern const ui::ClassProperty<
     std::underlying_type_t<ActionPinnableState>>* const kActionItemPinnableKey;
+COMPONENT_EXPORT(ACTIONS)
+extern const ui::ClassProperty<std::u16string*>* const kShortTitleTextKey;
 
 }  // namespace actions
 

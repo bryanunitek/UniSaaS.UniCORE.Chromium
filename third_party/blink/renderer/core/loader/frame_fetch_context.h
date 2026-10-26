@@ -142,12 +142,12 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
 
   bool IsFrameContext() const override { return true; }
 
-  std::optional<AdProvenance> CalculateIfAdSubresource(
+  ResourceAnnotations CalculateResourceAnnotations(
       const ResourceRequestHead& resource_request,
       base::optional_ref<const KURL> alias_url,
       ResourceType type,
       const FetchInitiatorInfo& initiator_info,
-      bool scan_stack_for_ads) override;
+      bool scan_javascript_stack) override;
 
   // LoadingBehaviorObserver overrides:
   void DidObserveLoadingBehavior(LoadingBehaviorFlag) override;
@@ -194,7 +194,9 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
   bool IsIsolatedSVGChromeClient() const override;
   void CountUsage(WebFeature) const override;
   void CountDeprecation(WebFeature) const override;
-  bool ShouldBlockWebSocketByMixedContentCheck(const KURL&) const override;
+  bool ShouldBlockWebSocketByMixedContentCheck(
+      const KURL&,
+      network::mojom::blink::IPAddressSpace) const override;
   std::unique_ptr<WebSocketHandshakeThrottle> CreateWebSocketHandshakeThrottle()
       override;
   bool ShouldBlockFetchByMixedContentCheck(

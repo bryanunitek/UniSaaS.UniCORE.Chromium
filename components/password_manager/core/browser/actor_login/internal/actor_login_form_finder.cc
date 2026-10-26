@@ -17,9 +17,11 @@
 #include "base/functional/concurrent_callbacks.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/unique_ids.h"
+#include "components/password_manager/core/browser/actor_login/actor_login_frame_util.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_form_cache.h"
@@ -64,35 +66,6 @@ GetFieldType(const autofill::FormFieldData& field,
       UNKNOWN;
 }
 
-bool IsFormOriginSupported(const url::Origin& form_origin,
-                           const url::Origin& main_frame_origin) {
-  return net::registry_controlled_domains::SameDomainOrHost(
-      form_origin, main_frame_origin,
-      net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
-}
-
-bool IsValidFrameAndOriginToFill(
-    base::WeakPtr<password_manager::PasswordManagerDriver> driver,
-    const url::Origin& main_frame_origin) {
-  if (driver->IsNestedWithinFencedFrame()) {
-    // Fenced frames should not be filled.
-    return false;
-  }
-
-  if (!IsFormOriginSupported(driver->GetLastCommittedOrigin(),
-                             main_frame_origin)) {
-    return false;
-  }
-
-  bool is_same_origin =
-      driver->GetLastCommittedOrigin().IsSameOriginWith(main_frame_origin);
-
-  // We can fill a form if its frame context is considered safe and not overly
-  // nested. A "fillable context" is either the primary main frame itself, or
-  // a direct child of the primary main frame that is not a fenced frame.
-  return is_same_origin || driver->IsInPrimaryMainFrame() ||
-         driver->IsDirectChildOfPrimaryMainFrame();
-}
 
 void OnIsLoginFormAsyncFinished(
     DriverFormKey key,
@@ -119,7 +92,8 @@ using ParsedFormDetails =
 FormFinderResult::FormFinderResult() = default;
 
 FormFinderResult::FormFinderResult(
-    std::vector<password_manager::PasswordFormManager*> eligible_managers,
+    std::vector<raw_ptr<password_manager::PasswordFormManager>>
+        eligible_managers,
     std::vector<ParsedFormDetails> parsed_forms_details)
     : eligible_managers(std::move(eligible_managers)),
       parsed_forms_details(std::move(parsed_forms_details)) {}
@@ -161,10 +135,10 @@ std::u16string ActorLoginFormFinder::GetSourceSiteOrAppFromUrl(
 // static
 password_manager::PasswordFormManager*
 ActorLoginFormFinder::GetSigninFormManager(
-    const std::vector<password_manager::PasswordFormManager*>&
+    const std::vector<raw_ptr<password_manager::PasswordFormManager>>&
         eligible_managers) {
   password_manager::PasswordFormManager* signin_form_manager = nullptr;
-  for (auto* manager : eligible_managers) {
+  for (password_manager::PasswordFormManager* manager : eligible_managers) {
     // Prefer filling the primary main frame form if one exists, but
     // also prefer more recently-parsed forms.
     if (manager->GetDriver()->IsInPrimaryMainFrame()) {
@@ -196,7 +170,7 @@ void ActorLoginFormFinder::GetEligibleLoginFormManagersAsync(
       continue;
     }
 
-    if (!IsValidFrameAndOriginToFill(manager->GetDriver(), origin)) {
+    if (!IsValidFrameAndOriginToFill(manager->GetDriver().get(), origin)) {
       ParsedFormDetails form_details;
       SetFormData(*form_details.mutable_form_data(),
                   *manager->GetParsedObservedForm());
@@ -334,7 +308,7 @@ void ActorLoginFormFinder::OnVisibilityChecksComplete(
 void ActorLoginFormFinder::OnAllEligibleChecksCompleted(
     EligibleManagersCallback callback,
     std::vector<std::pair<DriverFormKey, bool>> results) {
-  std::vector<password_manager::PasswordFormManager*> eligible_managers;
+  std::vector<raw_ptr<password_manager::PasswordFormManager>> eligible_managers;
   password_manager::PasswordFormCache* form_cache =
       client_->GetPasswordManager()->GetPasswordFormCache();
   CHECK(form_cache);

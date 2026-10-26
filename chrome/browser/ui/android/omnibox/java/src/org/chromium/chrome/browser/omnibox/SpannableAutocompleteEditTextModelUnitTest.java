@@ -11,9 +11,9 @@ import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.clearInvocations;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
@@ -32,6 +32,7 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -44,14 +45,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 /** Unit tests for {@link SpannableAutocompleteEditTextModel}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class SpannableAutocompleteEditTextModelUnitTest {
-    public @Rule MockitoRule mockitoRule = MockitoJUnit.rule();
-    private @Mock AutocompleteInputConnection mConnection;
-    private @Mock AutocompleteEditTextModelBase.Delegate mDelegate;
-    private @Mock OmniboxWordBoundary.Natives mWordBoundaryNatives;
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
+
+    @Mock private AutocompleteInputConnection mConnection;
+    @Mock private AutocompleteEditTextModelBase.Delegate mDelegate;
+    @Mock private OmniboxWordBoundary.Natives mWordBoundaryNatives;
     private SpannableAutocompleteEditTextModel mModel;
     private AutocompleteState mCurrentState;
     private AtomicInteger mImeCommandNestLevel;
-    private @Captor ArgumentCaptor<KeyEvent> mKeyEventCaptor;
+    @Captor private ArgumentCaptor<KeyEvent> mKeyEventCaptor;
 
     @Before
     public void setUp() {
@@ -66,14 +69,16 @@ public class SpannableAutocompleteEditTextModelUnitTest {
         mCurrentState = mModel.getCurrentAutocompleteState();
         clearInvocations(mDelegate);
 
-        doAnswer(
+        lenient()
+                .doAnswer(
                         inv -> {
                             return mImeCommandNestLevel.incrementAndGet() != 0;
                         })
                 .when(mConnection)
                 .onBeginImeCommand();
 
-        doAnswer(
+        lenient()
+                .doAnswer(
                         inv -> {
                             return mImeCommandNestLevel.decrementAndGet() == 0;
                         })
@@ -97,7 +102,7 @@ public class SpannableAutocompleteEditTextModelUnitTest {
 
         clearInvocations(mConnection, mDelegate);
         mModel.dispatchKeyEvent(event);
-        verify(mDelegate, times(0)).super_dispatchKeyEvent(event);
+        verify(mDelegate, never()).super_dispatchKeyEvent(event);
         verify(mConnection).commitAutocomplete();
 
         // Secondary, not directly linked to the test.
@@ -134,7 +139,7 @@ public class SpannableAutocompleteEditTextModelUnitTest {
 
         clearInvocations(mConnection, mDelegate);
         mModel.dispatchKeyEvent(event);
-        verify(mConnection, times(0)).commitAutocomplete();
+        verify(mConnection, never()).commitAutocomplete();
         verify(mDelegate).super_dispatchKeyEvent(event);
 
         // Secondary, not directly linked to the test.
@@ -163,6 +168,19 @@ public class SpannableAutocompleteEditTextModelUnitTest {
         confirmAutocompletionBypassed(KeyEvent.KEYCODE_ENTER);
         confirmAutocompletionBypassed(KeyEvent.KEYCODE_TAB);
         confirmAutocompletionBypassed(KeyEvent.KEYCODE_DPAD_LEFT);
+    }
+
+    @Test
+    public void dispatchKeyEvent_ctrlTabBypassed() {
+        mCurrentState.setAutocompleteText("google.com");
+        var event =
+                new KeyEvent(
+                        0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_TAB, 0, KeyEvent.META_CTRL_ON);
+
+        clearInvocations(mConnection, mDelegate);
+        mModel.dispatchKeyEvent(event);
+        verify(mConnection, never()).commitAutocomplete();
+        verify(mDelegate).super_dispatchKeyEvent(event);
     }
 
     @Test

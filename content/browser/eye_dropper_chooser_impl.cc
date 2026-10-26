@@ -4,6 +4,7 @@
 
 #include "content/browser/eye_dropper_chooser_impl.h"
 
+#include "base/check.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
@@ -50,6 +51,11 @@ void EyeDropperChooserImpl::Create(
     mojo::PendingReceiver<blink::mojom::EyeDropperChooser> receiver) {
   CHECK(render_frame_host);
 
+  // Frame must be active to use EyeDropperChooser.
+  if (!render_frame_host->IsActive()) {
+    return;
+  }
+
   // Renderer process should already check for user activation before sending
   // this request. Double check in case of compromised renderer and consume
   // the activation.
@@ -62,13 +68,15 @@ void EyeDropperChooserImpl::Create(
     return;
   }
 
-  new EyeDropperChooserImpl(*render_frame_host, std::move(receiver));
+  base::MakeSelfDeleting<EyeDropperChooserImpl>(*render_frame_host,
+                                                std::move(receiver));
 }
 
 EyeDropperChooserImpl::EyeDropperChooserImpl(
     RenderFrameHost& render_frame_host,
-    mojo::PendingReceiver<blink::mojom::EyeDropperChooser> receiver)
-    : DocumentService(render_frame_host, std::move(receiver)) {}
+    mojo::PendingReceiver<blink::mojom::EyeDropperChooser> receiver,
+    base::SelfDeletingPassKey key)
+    : DocumentService(render_frame_host, std::move(receiver), key) {}
 
 EyeDropperChooserImpl::~EyeDropperChooserImpl() {
   ClearActiveEyeDropper();
@@ -78,6 +86,12 @@ EyeDropperChooserImpl::~EyeDropperChooserImpl() {
 }
 
 void EyeDropperChooserImpl::Choose(ChooseCallback callback) {
+  // Frame must be active to use EyeDropperChooser.
+  if (!render_frame_host().IsActive()) {
+    std::move(callback).Run(/*success=*/false, /*color=*/0);
+    return;
+  }
+
   if (callback_ || eye_dropper_) {
     ReportBadMessageAndDeleteThis(
         "EyeDropperChooser::Choose() called while a selection was already in "
@@ -115,13 +129,19 @@ void EyeDropperChooserImpl::Choose(ChooseCallback callback) {
 }
 
 void EyeDropperChooserImpl::ColorSelected(SkColor color) {
+  base::WeakPtr<EyeDropperChooserImpl> weak_this =
+      weak_ptr_factory_.GetWeakPtr();
   eye_dropper_.reset();
+  CHECK(weak_this);
   ClearActiveEyeDropper();
   std::move(callback_).Run(/*success=*/true, color);
 }
 
 void EyeDropperChooserImpl::ColorSelectionCanceled() {
+  base::WeakPtr<EyeDropperChooserImpl> weak_this =
+      weak_ptr_factory_.GetWeakPtr();
   eye_dropper_.reset();
+  CHECK(weak_this);
   ClearActiveEyeDropper();
   std::move(callback_).Run(/*success=*/false, /*color=*/0);
 }

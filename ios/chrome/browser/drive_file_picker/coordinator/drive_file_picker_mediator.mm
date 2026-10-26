@@ -19,6 +19,7 @@
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
+#import "ios/chrome/browser/composebox/shared/ui/composebox_snackbar_presenter.h"
 #import "ios/chrome/browser/drive/model/drive_file_downloader.h"
 #import "ios/chrome/browser/drive/model/drive_list.h"
 #import "ios/chrome/browser/drive/model/drive_service.h"
@@ -63,7 +64,7 @@ constexpr base::TimeDelta kClearItemsDelay = base::Seconds(2.0);
 
 @interface DriveFilePickerMediator () <AuthenticationServiceObserving,
                                        ChooseFileControllerObserving,
-                                       IdentityManagerObserverBridgeDelegate>
+                                       IdentityManagerObserving>
 @end
 
 @implementation DriveFilePickerMediator {
@@ -300,7 +301,6 @@ constexpr base::TimeDelta kClearItemsDelay = base::Seconds(2.0);
   }
   _active = active;
   if (_active) {
-    [self.delegate mediator:self didActivateSearch:_shouldShowSearchItems];
     if (_shouldShowSearchItems) {
       if (_searchText.length) {
         _metricsHelper.searchingState = DriveFilePickerSearchState::kSearchText;
@@ -371,6 +371,13 @@ constexpr base::TimeDelta kClearItemsDelay = base::Seconds(2.0);
   [self.delegate browseDriveCollectionWithMediator:self
                                         collection:std::move(collection)
                                            options:_options];
+}
+
+- (void)didTapDisabledDriveItem:(NSString*)itemIdentifier {
+  if (_forComposebox && _maxAttachmentCount > 0 &&
+      _selectedFiles.size() >= _maxAttachmentCount) {
+    [self.delegate mediatorDidReachAttachmentLimit:self];
+  }
 }
 
 - (void)loadFirstPage {
@@ -584,20 +591,30 @@ constexpr base::TimeDelta kClearItemsDelay = base::Seconds(2.0);
 
 // Update what items can be selected by the user.
 - (void)updateAcceptableItems {
+  BOOL limitReached = _forComposebox && _maxAttachmentCount > 0 &&
+                      _selectedFiles.size() >= _maxAttachmentCount;
   NSMutableSet<NSString*>* enabledItemsIdentifiers = [NSMutableSet set];
   for (const DriveItem& item : _fetchedDriveItems) {
-    if (DriveFilePickerItemShouldBeEnabled(item, _acceptedTypes,
-                                           _options.ignore_accepted_types)) {
+    if (limitReached) {
+      if (item.CanBeBrowsed() || _selectedFiles.contains(item)) {
+        [enabledItemsIdentifiers addObject:item.identifier];
+      }
+    } else if (DriveFilePickerItemShouldBeEnabled(
+                   item, _acceptedTypes, _options.ignore_accepted_types,
+                   _forComposebox)) {
       [enabledItemsIdentifiers addObject:item.identifier];
     }
   }
   [self.consumer setEnabledItems:enabledItemsIdentifiers];
-  [self.consumer setAllFilesEnabled:_options.ignore_accepted_types];
+  [self.consumer
+      setAllFilesEnabled:(!limitReached &&
+                          (_options.ignore_accepted_types || _forComposebox))];
   // Update selected files to exclude items which should not be enabled.
   std::unordered_set<DriveItem> enabledSelectedFiles;
   for (const DriveItem& selectedFile : _selectedFiles) {
-    if (DriveFilePickerItemShouldBeEnabled(selectedFile, _acceptedTypes,
-                                           _options.ignore_accepted_types)) {
+    if (limitReached || DriveFilePickerItemShouldBeEnabled(
+                            selectedFile, _acceptedTypes,
+                            _options.ignore_accepted_types, _forComposebox)) {
       enabledSelectedFiles.insert(selectedFile);
     }
   }
@@ -647,7 +664,6 @@ constexpr base::TimeDelta kClearItemsDelay = base::Seconds(2.0);
   // When this line is reached, the mediator is switching between two modes:
   // showing search items and showing non-search items.
   _shouldShowSearchItems = shouldShowSearchItems;
-  [self.delegate mediator:self didActivateSearch:shouldShowSearchItems];
   if (!_selectedFiles.empty() && _selectedFilesAreSearchItems &&
       !_shouldShowSearchItems) {
     // If the selected items were search items and search items are hidden,
@@ -711,10 +727,19 @@ constexpr base::TimeDelta kClearItemsDelay = base::Seconds(2.0);
       // If the file was selected, deselect it.
       [self deselectFile:file];
     } else {
+      if (_forComposebox && _maxAttachmentCount > 0 &&
+          oldSelectedFiles.size() >= _maxAttachmentCount) {
+        [self.delegate mediatorDidReachAttachmentLimit:self];
+        return;
+      }
       // If the file was not selected, add it to the selection.
       std::unordered_set<DriveItem> newSelectedFiles = oldSelectedFiles;
       newSelectedFiles.insert(file);
       [self setSelectedFiles:newSelectedFiles];
+      if (_forComposebox && _maxAttachmentCount > 0 &&
+          newSelectedFiles.size() >= _maxAttachmentCount) {
+        [self.delegate mediatorDidReachAttachmentLimit:self];
+      }
     }
     return;
   }
@@ -787,6 +812,27 @@ constexpr base::TimeDelta kClearItemsDelay = base::Seconds(2.0);
   // Allow/forbid file picker dismissal.
   [self.delegate mediator:self didAllowDismiss:_selectedFiles.empty()];
   _metricsHelper.selectedFile = !_selectedFiles.empty();
+
+  if (_forComposebox && _maxAttachmentCount > 0) {
+    NSMutableSet<NSString*>* enabledItemsIdentifiers = [NSMutableSet set];
+    BOOL limitReached = _selectedFiles.size() >= _maxAttachmentCount;
+    for (const DriveItem& item : _fetchedDriveItems) {
+      if (limitReached) {
+        if (item.CanBeBrowsed() || _selectedFiles.contains(item)) {
+          [enabledItemsIdentifiers addObject:item.identifier];
+        }
+      } else if (DriveFilePickerItemShouldBeEnabled(
+                     item, _acceptedTypes, _options.ignore_accepted_types,
+                     _forComposebox)) {
+        [enabledItemsIdentifiers addObject:item.identifier];
+      }
+    }
+    [self.consumer setEnabledItems:enabledItemsIdentifiers];
+    [self.consumer
+        setAllFilesEnabled:(!limitReached && (_options.ignore_accepted_types ||
+                                              _forComposebox))];
+  }
+
   [self processDownloadingQueue];
 }
 
@@ -985,11 +1031,9 @@ constexpr base::TimeDelta kClearItemsDelay = base::Seconds(2.0);
 
   // If there is a timer programmed to fetch items, cancel it.
   _timerBeforeFetch.Stop();
+  _timerAfterFetchBeforeClearItems.Stop();
   // Cancel any pending fetch query.
-  if (_driveList->IsExecutingQuery()) {
-    _timerAfterFetchBeforeClearItems.Stop();
-    _driveList->CancelCurrentQuery();
-  }
+  _driveList->CancelCurrentQuery();
 
   if (!_collection->IsRoot() || _shouldShowSearchItems) {
     const base::TimeDelta delay =
@@ -1059,7 +1103,7 @@ constexpr base::TimeDelta kClearItemsDelay = base::Seconds(2.0);
       _shouldShowSearchItems, _searchText, _nextPageToken);
 
   auto completion = base::BindOnce(
-      [](DriveFilePickerMediator* mediator, const base::TimeDelta& delayToRetry,
+      [](DriveFilePickerMediator* mediator, base::TimeDelta delayToRetry,
          BOOL animated, const DriveListResult& result) {
         [mediator handleListItemsResponse:result
                              delayToRetry:delayToRetry
@@ -1083,6 +1127,12 @@ constexpr base::TimeDelta kClearItemsDelay = base::Seconds(2.0);
                        animated:(BOOL)animated {
   // Cancel clearing items if fetching completed.
   _timerAfterFetchBeforeClearItems.Stop();
+
+  // If the response is delivered when displaying the root collection outside
+  // of search, ignore the result as root items are static collections.
+  if (_collection->IsRoot() && !_shouldShowSearchItems) {
+    return;
+  }
 
   const BOOL append = _nextPageToken != nil;
   if (result.error) {
@@ -1134,7 +1184,7 @@ constexpr base::TimeDelta kClearItemsDelay = base::Seconds(2.0);
         item, _collection->GetType(), _options.sorting_criterion,
         _shouldShowSearchItems, _searchText);
     filePickerItem.enabled = DriveFilePickerItemShouldBeEnabled(
-        item, _acceptedTypes, _options.ignore_accepted_types);
+        item, _acceptedTypes, _options.ignore_accepted_types, _forComposebox);
     // If the search text is not empty, emphasize the first match of the search
     // text inside the name of the item.
     if (_searchText.length != 0) {
@@ -1289,9 +1339,9 @@ constexpr base::TimeDelta kClearItemsDelay = base::Seconds(2.0);
   }
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {
     case signin::PrimaryAccountChangeEvent::Type::kCleared:

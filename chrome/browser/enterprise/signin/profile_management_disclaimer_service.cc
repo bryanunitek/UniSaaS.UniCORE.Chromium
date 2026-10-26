@@ -10,8 +10,12 @@
 #include "base/check_is_test.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/metrics/user_metrics.h"
+#include "base/metrics/user_metrics_action.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/signin/managed_profile_creation_controller.h"
+#include "chrome/browser/enterprise/signin/signals_disclaimer_metrics.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/browser/net/system_network_context_manager.h"
@@ -23,6 +27,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
+#include "chrome/browser/signin/chrome_signin_helper.h"
 #include "chrome/browser/signin/dice_intercepted_session_startup_helper.h"
 #include "chrome/browser/signin/dice_signed_in_profile_creator.h"
 #include "chrome/browser/signin/dice_web_signin_interceptor.h"
@@ -31,17 +36,22 @@
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/profiles/profile_colors_util.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
+#include "chrome/browser/ui/webui/signin/signin_policy_fetch_tracker.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/device_signals/core/browser/pref_names.h"
+#include "components/policy/core/browser/cloud/user_cloud_management_status_fetcher.h"
 #include "components/policy/core/browser/signin/profile_separation_policies.h"
 #include "components/policy/core/browser/signin/user_cloud_signin_restriction_policy_fetcher.h"
 #include "components/policy/core/common/features.h"
@@ -53,8 +63,13 @@
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/primary_account_change_event.h"
 #include "components/signin/public/identity_manager/tribool.h"
+#include "ui/base/page_transition_types.h"
+#include "url/gurl.h"
 
 namespace {
+
+constexpr char kSignalsDisclaimerLearnMoreURL[] =
+    "https://support.google.com/chrome/a?p=managed_profile_signals";
 
 bool CanTryPolicyRegistration(std::optional<base::Time> last_failure_time) {
   if (!last_failure_time) {
@@ -108,7 +123,7 @@ ProfileManagementDisclaimerService::ProfileManagementDisclaimerService(
       FROM_HERE, base::BindOnce(&ProfileManagementDisclaimerService::
                                     MaybeShowEnterpriseManagementDisclaimer,
                                 weak_ptr_factory_.GetWeakPtr(),
-                                GetPrimaryAccountInfo().account_id,
+                                GetPrimaryAccountInfo().GetAccountId(),
                                 signin_metrics::AccessPoint::
                                     kEnterpriseManagementDisclaimerAtStartup));
 }
@@ -228,8 +243,9 @@ void ProfileManagementDisclaimerService::
   }
   state_->access_point = access_point;
 
-  // Wait for the current disclaimer to be closed.
-  if (state_->profile_creation_controller) {
+  // Wait for the current disclaimer or in-flight status fetch to complete.
+  if (state_->profile_creation_controller ||
+      state_->is_fetching_management_status) {
     return;
   }
 
@@ -274,8 +290,8 @@ void ProfileManagementDisclaimerService::
       ProfileBrowserCollection::GetForProfile(&profile_.get())
           ->GetLastActiveBrowser();
   bool has_browser_with_tab =
-      browser && browser->GetBrowserForMigrationOnly()->SupportsWindowFeature(
-                     Browser::WindowFeature::kFeatureTabStrip);
+      browser && WindowFeatureController::From(browser)->SupportsWindowFeature(
+                     WindowFeatureController::WindowFeature::kFeatureTabStrip);
   // If there is no browser and we are not in tests, abort.
   if (!has_browser_with_tab && !profile_separation_policies_for_testing_ &&
       !user_choice_for_testing_) {
@@ -289,9 +305,46 @@ void ProfileManagementDisclaimerService::
   // between failures, we can reset the state and wait for another attempt.
   if (!CanTryPolicyRegistration(
           signin_prefs_.GetPolicyDisclaimerLastRegistrationFailureTime(
-              info.gaia))) {
-    OnRegisteredForPolicy(/*is_from_cached_registration_result=*/true,
+              info.GetGaiaId()))) {
+    OnRegisteredForPolicy(account_id,
+                          /*is_from_cached_registration_result=*/true,
                           /*is_managed_account=*/false);
+    return;
+  }
+
+  if (policy::features::IsMigrateSecureConnectApiToDmServerEnabled()) {
+    state_->is_fetching_management_status = true;
+    if (profile_separation_policies_for_testing_.has_value() ||
+        user_choice_for_testing_.has_value() || auto_accept_management_) {
+      if (!auto_accept_management_) {
+        CHECK_IS_TEST();
+      }
+      policy::UserManagementStatus status;
+      status.is_account_managed = true;
+      status.is_chrome_profile_management_enabled = true;
+
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              &ProfileManagementDisclaimerService::OnManagementStatusFetched,
+              weak_ptr_factory_.GetWeakPtr(),
+              state_->weak_ptr_factory.GetWeakPtr(), account_id, status,
+              profile_separation_policies_for_testing_.value_or(
+                  policy::ProfileSeparationPolicies())));
+      return;
+    }
+    policy::UserCloudManagementStatusFetcher::FetchStatusAndPolicies(
+        policy::UserCloudManagementStatusFetcher::Caller::
+            kProfileManagementDisclaimer,
+        g_browser_process->browser_policy_connector()
+            ->device_management_service(),
+        g_browser_process->system_network_context_manager()
+            ->GetSharedURLLoaderFactory(),
+        GetIdentityManager(), account_id, /*should_fetch_policies=*/true,
+        base::BindOnce(
+            &ProfileManagementDisclaimerService::OnManagementStatusFetched,
+            weak_ptr_factory_.GetWeakPtr(),
+            state_->weak_ptr_factory.GetWeakPtr(), account_id));
     return;
   }
 
@@ -304,7 +357,8 @@ void ProfileManagementDisclaimerService::
           .value_or(false);
 
   if (has_cached_successful_registration_result) {
-    OnRegisteredForPolicy(/*is_from_cached_registration_result=*/true,
+    OnRegisteredForPolicy(account_id,
+                          /*is_from_cached_registration_result=*/true,
                           /*is_managed_account=*/true);
     return;
   }
@@ -312,20 +366,21 @@ void ProfileManagementDisclaimerService::
   // Create a new tracker for the account, if it doesn't exist yet or if it had
   // a cached failure. This will also reset any cached failure.
   policy_fetch_tracker_by_account_id_[account_id] =
-      TurnSyncOnHelperPolicyFetchTracker::CreateInstance(&profile_.get(), info);
+      SigninPolicyFetchTracker::CreateInstance(&profile_.get(),
+                                               info.GetCoreAccountInfo());
 
   policy_fetch_tracker_by_account_id_[account_id]->RegisterForPolicy(
       base::BindOnce(&ProfileManagementDisclaimerService::OnRegisteredForPolicy,
-                     weak_ptr_factory_.GetWeakPtr(),
+                     weak_ptr_factory_.GetWeakPtr(), account_id,
                      /*is_from_cached_registration_result=*/false),
       !IsSigninRegistration(*state_->access_point));
 }
 
-void ProfileManagementDisclaimerService::MaybeShowDeviceSignalsDisclaimerDialog(
-    BrowserWindowInterface* browser) {
+bool ProfileManagementDisclaimerService::IsDeviceSignalsDisclaimerRequired(
+    BrowserWindowInterface* browser) const {
   if (!base::FeatureList::IsEnabled(
           policy::features::kDeviceSignalsBackfillDisclaimer)) {
-    return;
+    return false;
   }
 
   // Suppress the dialog if we force --no-first-run for testing
@@ -333,58 +388,103 @@ void ProfileManagementDisclaimerService::MaybeShowDeviceSignalsDisclaimerDialog(
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kNoFirstRun) &&
       !bypass_no_first_run_) {
-    return;
-  }
-
-  // The management notice dialog or this dialog are already open.
-  if ((state_ && state_->profile_creation_controller) ||
-      browser->GetFeatures().signin_view_controller()->ShowsModalDialog()) {
-    return;
+    return false;
   }
 
   // If the user has not accepted the account management yet,
   // they will see this disclaimer as part of that process in the future.
   if (!enterprise_util::UserAcceptedAccountManagement(&*profile_)) {
-    return;
+    return false;
   }
 
   // If the permission was already obtained the dialog is not necessary.
   if (profile_->GetPrefs()->GetBoolean(
           device_signals::prefs::kDeviceSignalsPermanentConsentReceived)) {
+    return false;
+  }
+
+  // Only the standard browser windows should show the disclaimer.
+  // `browser` can be null when the disclaimer is shown within the profile
+  // picker.
+  if (browser && browser->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
+    return false;
+  }
+
+  return true;
+}
+
+void ProfileManagementDisclaimerService::MaybeShowDeviceSignalsDisclaimerDialog(
+    BrowserWindowInterface* browser) {
+  if (!IsDeviceSignalsDisclaimerRequired(browser)) {
     return;
   }
 
-  browser->GetFeatures()
-      .signin_view_controller()
-      ->ShowModalManagedUserNoticeDialog(
-          signin::EnterpriseProfileCreationDialogParams::
-              CreateForDeviceSignalsDisclaimer(
-                  GetPrimaryAccountInfo(),
-                  base::BindOnce(&ProfileManagementDisclaimerService::
-                                     HandleDeviceSignalsDisclaimerChoice,
-                                 weak_ptr_factory_.GetWeakPtr())));
+  // A tab must be active to present a modal dialog. We'll back off and try
+  // again once the next OnBrowserActivated is fired.
+  if (browser && !browser->GetActiveTabInterface()) {
+    base::UmaHistogramEnumeration(
+        kEnterpriseSignalsDisclaimerNotShownReason,
+        EnterpriseSignalsDisclaimerNotShownReason::kTabsNotReady);
+    return;
+  }
+
+  // Profile creation is already in progress.
+  if (state_ && state_->profile_creation_controller) {
+    base::UmaHistogramEnumeration(
+        kEnterpriseSignalsDisclaimerNotShownReason,
+        EnterpriseSignalsDisclaimerNotShownReason::kProfileCreationInProgress);
+    return;
+  }
+
+  // The management notice dialog or another modal dialog is already open.
+  if (SigninViewController::From(browser)->ShowsModalDialog()) {
+    base::UmaHistogramEnumeration(
+        kEnterpriseSignalsDisclaimerNotShownReason,
+        EnterpriseSignalsDisclaimerNotShownReason::kOtherModalDialogShown);
+    return;
+  }
+
+  base::UmaHistogramBoolean(kEnterpriseSignalsDisclaimerModalShown, true);
+
+  SigninViewController::From(browser)->ShowModalManagedUserNoticeDialog(
+      signin::EnterpriseProfileCreationDialogParams::
+          CreateForDeviceSignalsDisclaimer(
+              GetPrimaryAccountInfo(),
+              base::BindOnce(&ProfileManagementDisclaimerService::
+                                 HandleDeviceSignalsDisclaimerChoice,
+                             weak_ptr_factory_.GetWeakPtr(),
+                             browser->GetWeakPtr()),
+              /*is_modal_dialog=*/true));
   opened_device_signals_disclaimers_.push_back(browser->GetWeakPtr());
 }
 
 void ProfileManagementDisclaimerService::HandleDeviceSignalsDisclaimerChoice(
+    base::WeakPtr<BrowserWindowInterface> source_browser,
     signin::DeviceSignalsDisclaimerResult result) {
-  // TODO(b/512836948): Prevent the dialog being dismissable by clicking Escape.
   switch (result) {
-    case signin::DeviceSignalsDisclaimerResult::kAccepted:
+    case signin::DeviceSignalsDisclaimerResult::kAccepted: {
+      base::UmaHistogramEnumeration(
+          kEnterpriseSignalsDisclaimerModalResult,
+          EnterpriseSignalsDisclaimerModalResult::kAccepted);
       // Close the dialog on all windows it was open and mark the permission as
       // granted.
-      profile_->GetPrefs()->SetBoolean(
-          device_signals::prefs::kDeviceSignalsPermanentConsentReceived, true);
-      for (const auto& browser :
-           std::move(opened_device_signals_disclaimers_)) {
+      OnDeviceSignalsCollectionConsentGranted();
+
+      auto browsers_to_close = std::move(opened_device_signals_disclaimers_);
+      for (const auto& browser : browsers_to_close) {
         if (browser) {
           // This will trigger `HandleDeviceSignalsDisclaimerChoice` with
           // `kDismissed` for any other dialogs.
-          browser->GetFeatures().signin_view_controller()->CloseModalSignin();
+          SigninViewController::From(browser.get())->CloseModalSignin();
         }
       }
+
       break;
+    }
     case signin::DeviceSignalsDisclaimerResult::kCanceled:
+      base::UmaHistogramEnumeration(
+          kEnterpriseSignalsDisclaimerModalResult,
+          EnterpriseSignalsDisclaimerModalResult::kDeclined);
       // If the user does not grant permission all windows for this profile
       // should be closed and the profile picker should be presented.
       //
@@ -396,49 +496,172 @@ void ProfileManagementDisclaimerService::HandleDeviceSignalsDisclaimerChoice(
           ProfilePicker::EntryPoint::kProfileMenuManageProfiles));
       break;
     case signin::DeviceSignalsDisclaimerResult::kDismissed:
-      // This case means the dialog was not closed by choosing either of the
-      // dialog buttons.
-      // If device_signals::prefs::kDeviceSignalsPermanentConsentReceived is
-      // still false here it means the dialog was interrupted by a different one
-      // or by a window being closed for another reason.
-      // TODO(b/512836948): Figure out how to determine if the dismissal was
-      // caused by another window or not. Emit a metric to track unexpected
-      // dismissals.
+      // This case means the dialog in `source_browser` was not closed by
+      // choosing either of the dialog buttons. If the dialog is missing from
+      // `opened_device_signals_disclaimers_` it had to be closed explicitly by
+      // either `kAccepted` or `kCanceled` branch.
+      auto itr = std::find_if(opened_device_signals_disclaimers_.begin(),
+                              opened_device_signals_disclaimers_.end(),
+                              [&source_browser](const auto& browser) {
+                                return browser && source_browser &&
+                                       browser.get() == source_browser.get();
+                              });
+      if (itr != opened_device_signals_disclaimers_.end()) {
+        base::UmaHistogramEnumeration(kEnterpriseSignalsDisclaimerModalResult,
+                                      EnterpriseSignalsDisclaimerModalResult::
+                                          kDismissedWithoutExplicitUserAction);
+        opened_device_signals_disclaimers_.erase(itr);
+      } else {
+        base::UmaHistogramEnumeration(
+            kEnterpriseSignalsDisclaimerModalResult,
+            EnterpriseSignalsDisclaimerModalResult::kDismissedByAnotherWindow);
+      }
       break;
   }
 }
 
-void ProfileManagementDisclaimerService::OnRegisteredForPolicy(
-    bool is_from_cached_registration_result,
+void ProfileManagementDisclaimerService::UpdatePolicyRegistrationFailureTime(
+    const GaiaId& gaia_id,
+    bool is_managed_account,
+    bool update_failure_time_on_unmanaged) {
+  if (!enable_management_disclaimer_ || gaia_id.empty()) {
+    return;
+  }
+  if (is_managed_account) {
+    signin_prefs_.ClearPolicyDisclaimerLastRegistrationFailureTime(gaia_id);
+  } else if (update_failure_time_on_unmanaged) {
+    signin_prefs_.SetPolicyDisclaimerLastRegistrationFailureTime(
+        gaia_id, base::Time::Now());
+  }
+}
+
+bool ProfileManagementDisclaimerService::IsEligibleForManagementDisclaimer(
     bool is_managed_account) {
   if (!enable_management_disclaimer_) {
-    Reset();
+    return false;
+  }
+  if (!state_ || state_->account_id.empty()) {
+    return false;
+  }
+  if (GetExtendedAccountInfo(state_->account_id).GetGaiaId().empty()) {
+    return false;
+  }
+  return is_managed_account;
+}
+
+bool ProfileManagementDisclaimerService::MaybeAutoAcceptManagement() {
+  if (!auto_accept_management_) {
+    return false;
+  }
+  // When auto-accepting management, directly record the user acceptance and
+  // signal success without showing the disclaimer dialog.
+  enterprise_util::SetUserAcceptedAccountManagement(&profile_.get(), true);
+  OnManagedProfileCreationResult(base::ok<Profile*>(&profile_.get()),
+                                 /*profile_creation_required_by_policy=*/false);
+  return true;
+}
+
+void ProfileManagementDisclaimerService::OnManagementStatusFetched(
+    base::WeakPtr<ResetableState> state_weak_ptr,
+    const CoreAccountId& account_id,
+    std::optional<policy::UserManagementStatus> status,
+    policy::ProfileSeparationPolicies profile_separation_policies) {
+  // Ensure the fetched management status corresponds to the active state and
+  // account currently being evaluated. This protects against stale callbacks if
+  // `Reset()`, an account switch, or signout occurred while the asynchronous
+  // network fetch was in flight.
+  if (!state_weak_ptr || !state_ || state_->account_id != account_id) {
     return;
   }
-  GaiaId gaia_id = GetExtendedAccountInfo(state_->account_id).gaia;
-  // If the account has been removed in the meantime, reset the state.
-  if (gaia_id.empty()) {
-    state_->profile_to_continue_in = nullptr;
-    Reset();
-    return;
-  }
-  if (!is_managed_account) {
-    if (!is_from_cached_registration_result) {
-      signin_prefs_.SetPolicyDisclaimerLastRegistrationFailureTime(
-          gaia_id, base::Time::Now());
+  state_->is_fetching_management_status = false;
+
+  const bool is_managed_account =
+      status.has_value() && status->CanBeSubjectedToEnterprisePolicies();
+  GaiaId gaia_id = GetExtendedAccountInfo(state_->account_id).GetGaiaId();
+  UpdatePolicyRegistrationFailureTime(
+      gaia_id, is_managed_account,
+      /*update_failure_time_on_unmanaged=*/true);
+
+  if (!IsEligibleForManagementDisclaimer(is_managed_account)) {
+    if (gaia_id.empty()) {
+      state_->profile_to_continue_in = nullptr;
     }
     Reset();
     return;
   }
-  signin_prefs_.ClearPolicyDisclaimerLastRegistrationFailureTime(gaia_id);
 
-  if (auto_accept_management_) {
-    enterprise_util::SetUserAcceptedAccountManagement(&profile_.get(), true);
-    OnManagedProfileCreationResult(
-        base::ok<Profile*>(&profile_.get()),
-        /*profile_creation_required_by_policy=*/false);
+  if (MaybeAutoAcceptManagement()) {
     return;
   }
+
+  OnProfileSeparationPoliciesFetched(std::move(profile_separation_policies));
+}
+
+void ProfileManagementDisclaimerService::OnRegisteredForPolicy(
+    const CoreAccountId& account_id,
+    bool is_from_cached_registration_result,
+    bool is_managed_account) {
+  // Ensure the fetched management status corresponds to the account currently
+  // being evaluated. This protects against cross-account race conditions where
+  // an account switch or signout occurred while the asynchronous network fetch
+  // was in flight.
+  if (!state_ || state_->account_id != account_id) {
+    return;
+  }
+
+  GaiaId gaia_id = GetExtendedAccountInfo(state_->account_id).GetGaiaId();
+  UpdatePolicyRegistrationFailureTime(gaia_id, is_managed_account,
+                                      /*update_failure_time_on_unmanaged=*/
+                                      !is_from_cached_registration_result);
+
+  if (!IsEligibleForManagementDisclaimer(is_managed_account)) {
+    if (gaia_id.empty()) {
+      state_->profile_to_continue_in = nullptr;
+    }
+    Reset();
+    return;
+  }
+
+  if (MaybeAutoAcceptManagement()) {
+    return;
+  }
+
+  if (profile_separation_policies_for_testing_.has_value() ||
+      user_choice_for_testing_.has_value()) {
+    CHECK_IS_TEST();
+    OnProfileSeparationPoliciesFetched(
+        profile_separation_policies_for_testing_.value_or(
+            policy::ProfileSeparationPolicies()));
+    return;
+  }
+
+  state_->user_cloud_signin_restriction_policy_fetcher =
+      std::make_unique<policy::UserCloudSigninRestrictionPolicyFetcher>(
+          g_browser_process->browser_policy_connector(),
+          g_browser_process->system_network_context_manager()
+              ->GetSharedURLLoaderFactory());
+  state_->user_cloud_signin_restriction_policy_fetcher
+      ->GetManagedAccountsSigninRestriction(
+          GetIdentityManager(), state_->account_id,
+          base::BindOnce(&ProfileManagementDisclaimerService::
+                             OnProfileSeparationPoliciesFetched,
+                         weak_ptr_factory_.GetWeakPtr()),
+          policy::utils::IsPolicyTestingEnabled(profile_->GetPrefs(),
+                                                chrome::GetChannel())
+              ? profile_->GetPrefs()
+                    ->GetDefaultPrefValue(
+                        prefs::kUserCloudSigninPolicyResponseFromPolicyTestPage)
+                    ->GetString()
+              : std::string());
+}
+
+void ProfileManagementDisclaimerService::OnProfileSeparationPoliciesFetched(
+    policy::ProfileSeparationPolicies profile_separation_policies) {
+  if (!state_ || state_->account_id.empty()) {
+    Reset();
+    return;
+  }
+  CHECK(state_->access_point.has_value());
 
   if (profile_separation_policies_for_testing_.has_value() ||
       user_choice_for_testing_.has_value()) {
@@ -446,13 +669,13 @@ void ProfileManagementDisclaimerService::OnRegisteredForPolicy(
     state_->profile_creation_controller =
         ManagedProfileCreationController::CreateManagedProfileForTesting(
             &profile_.get(), GetExtendedAccountInfo(state_->account_id),
-            // The access point always has a value if the account_id is set.
             *state_->access_point,
             base::BindOnce(&ProfileManagementDisclaimerService::
                                OnManagedProfileCreationResult,
                            weak_ptr_factory_.GetWeakPtr()),
-            std::move(profile_separation_policies_for_testing_),
-            std::move(user_choice_for_testing_));
+            profile_separation_policies_for_testing_.value_or(
+                std::move(profile_separation_policies)),
+            user_choice_for_testing_);
     return;
   }
 
@@ -463,7 +686,8 @@ void ProfileManagementDisclaimerService::OnRegisteredForPolicy(
           *state_->access_point,
           base::BindOnce(&ProfileManagementDisclaimerService::
                              OnManagedProfileCreationResult,
-                         weak_ptr_factory_.GetWeakPtr()));
+                         weak_ptr_factory_.GetWeakPtr()),
+          std::move(profile_separation_policies));
 }
 
 void ProfileManagementDisclaimerService::OnManagedProfileCreationResult(
@@ -474,6 +698,15 @@ void ProfileManagementDisclaimerService::OnManagedProfileCreationResult(
   }
   state_->profile_creation_required_by_policy =
       profile_creation_required_by_policy;
+
+  // In the new flow (`kMigrateSecureConnectApiToDmServer`), we should never
+  // register for policies nor fetch policies.
+  if (policy::features::IsMigrateSecureConnectApiToDmServerEnabled()) {
+    CHECK(!policy_fetch_tracker_by_account_id_.contains(state_->account_id));
+    Reset();
+    return;
+  }
+
   auto& policy_fetch_tracker =
       policy_fetch_tracker_by_account_id_[state_->account_id];
   if (state_->profile_to_continue_in && policy_fetch_tracker) {
@@ -494,7 +727,7 @@ void ProfileManagementDisclaimerService::OnPrimaryAccountChanged(
     const signin::PrimaryAccountChangeEvent& event) {
   if (event.GetEventTypeFor(signin::ConsentLevel::kSignin) ==
           signin::PrimaryAccountChangeEvent::Type::kCleared &&
-      state_->account_id == GetPrimaryAccountInfo().account_id) {
+      state_->account_id == GetPrimaryAccountInfo().GetAccountId()) {
     state_->profile_to_continue_in = nullptr;
     Reset();
     return;
@@ -524,7 +757,7 @@ void ProfileManagementDisclaimerService::OnPrimaryAccountChanged(
 
 void ProfileManagementDisclaimerService::OnExtendedAccountInfoUpdated(
     const AccountInfo& info) {
-  if (info.account_id != state_->account_id) {
+  if (info.GetAccountId() != state_->account_id) {
     return;
   }
   // Management status is not yet available, wait for extended account info.
@@ -542,7 +775,7 @@ void ProfileManagementDisclaimerService::OnRefreshTokenUpdatedForAccount(
   // This would most likely happen at startup after all refresh tokens are
   // loaded.
   if (state_->account_id.empty() &&
-      GetPrimaryAccountInfo().account_id != account_info.account_id) {
+      GetPrimaryAccountInfo().GetAccountId() != account_info.account_id) {
     return;
   }
   if (!state_->account_id.empty() &&
@@ -562,10 +795,58 @@ void ProfileManagementDisclaimerService::OnBrowserActivated(
   MaybeShowDeviceSignalsDisclaimerDialog(browser);
 
   CoreAccountId account_id = state_->account_id.empty()
-                                 ? GetPrimaryAccountInfo().account_id
+                                 ? GetPrimaryAccountInfo().GetAccountId()
                                  : state_->account_id;
   signin_metrics::AccessPoint access_point = state_->access_point.value_or(
       signin_metrics::AccessPoint::
           kEnterpriseManagementDisclaimerAfterBrowserFocus);
   MaybeShowEnterpriseManagementDisclaimer(account_id, access_point);
+}
+
+void ProfileManagementDisclaimerService::
+    OnDeviceSignalsCollectionConsentGranted() {
+  profile_->GetPrefs()->SetBoolean(
+      device_signals::prefs::kDeviceSignalsPermanentConsentReceived, true);
+}
+
+void ProfileManagementDisclaimerService::OpenPrivacyPolicyArticlePopUp(
+    bool is_modal_dialog) {
+  if (is_modal_dialog) {
+    base::UmaHistogramBoolean(kEnterpriseSignalsDisclaimerModalLearnMoreClicked,
+                              true);
+  } else {
+    base::UmaHistogramBoolean(
+        kEnterpriseSignalsDisclaimerProfilePickerLearnMoreClicked, true);
+  }
+
+  // If the dedicated browser for the privacy article has already been created
+  // bring it to focus instead of creating a new window.
+  if (privacy_article_browser_) {
+    if (auto* window = privacy_article_browser_->GetWindow()) {
+      window->Show();
+      window->Activate();
+      return;
+    } else {
+      privacy_article_browser_.reset();
+    }
+  }
+
+  // This will open a new browser window in the same profile. We need to make
+  // sure the dialog is not shown in that window to allow the user to read the
+  // article.
+  BrowserWindowCreateParams create_params(BrowserWindowInterface::TYPE_POPUP,
+                                          &*profile_,
+                                          /*from_user_gesture=*/true);
+  create_params.should_trigger_session_restore = false;
+  create_params.omit_from_session_restore = true;
+  BrowserWindowInterface* popup_browser =
+      CreateBrowserWindow(std::move(create_params));
+  if (popup_browser) {
+    privacy_article_browser_ = popup_browser->GetWeakPtr();
+    chrome::AddSelectedTabWithURL(popup_browser,
+                                  GURL(kSignalsDisclaimerLearnMoreURL),
+                                  ui::PAGE_TRANSITION_LINK);
+    popup_browser->GetWindow()->Show();
+    popup_browser->GetWindow()->Activate();
+  }
 }

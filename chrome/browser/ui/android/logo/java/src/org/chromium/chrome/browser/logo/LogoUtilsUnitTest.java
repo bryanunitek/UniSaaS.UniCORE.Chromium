@@ -4,47 +4,43 @@
 
 package org.chromium.chrome.browser.logo;
 
-import static org.mockito.Mockito.when;
-
 import android.app.Activity;
 import android.content.res.Resources;
+import android.view.View;
 import android.view.ViewGroup.MarginLayoutParams;
-
-import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
-import org.mockito.junit.MockitoJUnit;
-import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.FeatureOverrides;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.logo.LogoUtils.DoodleSize;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils.PaddingStyle;
 
-/** Unit tests for the {@link LogoViewBinder}. */
+/** Unit tests for the {@link LogoUtils}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class LogoUtilsUnitTest {
-    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Mock private Resources mResources;
-    @Mock private LogoView mLogoView;
+    private Resources mResources;
+    private View mLogoView;
 
     @Before
     public void setUp() {
-        mResources = Robolectric.buildActivity(Activity.class).setup().get().getResources();
+        Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        mResources = activity.getResources();
+        mLogoView = new View(activity);
     }
 
-    @SuppressWarnings("DirectInvocationOnMock")
     @Test
-    @SmallTest
+    @EnableFeatures({ChromeFeatureList.NTP_AURORA + ":padding_style/0"})
     public void testSetLogoViewLayoutParamsForDoodle() {
         MarginLayoutParams layoutParams = new MarginLayoutParams(0, 0);
-        when(mLogoView.getLayoutParams()).thenReturn(layoutParams);
+        mLogoView.setLayoutParams(layoutParams);
 
         int doodleHeight = mResources.getDimensionPixelSize(R.dimen.doodle_height);
         int doodleHeightForTabletSplitScreen =
@@ -69,14 +65,111 @@ public class LogoUtilsUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testGetTotalLogoHeight() {
         MarginLayoutParams layoutParams = new MarginLayoutParams(100, 200);
         layoutParams.topMargin = 10;
         layoutParams.bottomMargin = 20;
-        when(mLogoView.getLayoutParams()).thenReturn(layoutParams);
+        mLogoView.setLayoutParams(layoutParams);
 
         int totalHeight = LogoUtils.getTotalLogoHeight(mLogoView);
         Assert.assertEquals(230, totalHeight);
+    }
+
+    @Test
+    @EnableFeatures({ChromeFeatureList.NTP_AURORA + ":padding_style/0"})
+    public void testGetTopMarginForLogo_phone() {
+        testGetTopMarginForLogoImpl();
+    }
+
+    @Test
+    @Config(qualifiers = "sw600dp")
+    public void testGetTopMarginForLogo_tablet() {
+        Resources resources = mResources;
+        // Verify that on tablets, all Aurora padding resources equal the base dimension.
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top),
+                resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top_small));
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top),
+                resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top_medium));
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top),
+                resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top_large));
+
+        testGetTopMarginForLogoImpl();
+    }
+
+    private void testGetTopMarginForLogoImpl() {
+        Resources resources = mResources;
+        // Default should be ntp_logo_margin_top.
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top),
+                LogoUtils.getTopMarginForLogo(resources));
+
+        FeatureOverrides.overrideParam(
+                ChromeFeatureList.NTP_AURORA, "padding_style", PaddingStyle.SMALL);
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top_small),
+                LogoUtils.getTopMarginForLogo(resources));
+
+        FeatureOverrides.overrideParam(
+                ChromeFeatureList.NTP_AURORA, "padding_style", PaddingStyle.MEDIUM);
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top_medium),
+                LogoUtils.getTopMarginForLogo(resources));
+
+        FeatureOverrides.overrideParam(
+                ChromeFeatureList.NTP_AURORA, "padding_style", PaddingStyle.LARGE);
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top_large),
+                LogoUtils.getTopMarginForLogo(resources));
+    }
+
+    @Test
+    @EnableFeatures({ChromeFeatureList.NTP_AURORA + ":padding_style/0"})
+    public void testGetTopMarginForDoodle_phone() {
+        testGetTopMarginForDoodleImpl();
+    }
+
+    @Test
+    @Config(qualifiers = "sw600dp")
+    public void testGetTopMarginForDoodle_tablet() {
+        Resources resources = mResources;
+        // Verify that on tablets, all Aurora padding resources equal the base dimension.
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.doodle_margin_top),
+                resources.getDimensionPixelSize(R.dimen.doodle_margin_top_small));
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.doodle_margin_top),
+                resources.getDimensionPixelSize(R.dimen.doodle_margin_top_large));
+
+        testGetTopMarginForDoodleImpl();
+    }
+
+    private void testGetTopMarginForDoodleImpl() {
+        Resources resources = mResources;
+
+        // Default should be the ntp_logo_margin_top.
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.doodle_margin_top),
+                LogoUtils.getTopMarginForDoodle(resources));
+
+        FeatureOverrides.overrideParam(
+                ChromeFeatureList.NTP_AURORA, "padding_style", PaddingStyle.SMALL);
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.doodle_margin_top_small),
+                LogoUtils.getTopMarginForDoodle(resources));
+
+        FeatureOverrides.overrideParam(
+                ChromeFeatureList.NTP_AURORA, "padding_style", PaddingStyle.MEDIUM);
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.doodle_margin_top_small),
+                LogoUtils.getTopMarginForDoodle(resources));
+
+        FeatureOverrides.overrideParam(
+                ChromeFeatureList.NTP_AURORA, "padding_style", PaddingStyle.LARGE);
+        Assert.assertEquals(
+                resources.getDimensionPixelSize(R.dimen.doodle_margin_top_large),
+                LogoUtils.getTopMarginForDoodle(resources));
     }
 }

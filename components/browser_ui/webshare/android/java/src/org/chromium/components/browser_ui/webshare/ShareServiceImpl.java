@@ -9,7 +9,6 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.content.ComponentName;
 import android.net.Uri;
 
-import org.chromium.base.Callback;
 import org.chromium.base.FileProviderUtils;
 import org.chromium.base.FileUtils;
 import org.chromium.base.Log;
@@ -121,6 +120,12 @@ public class ShareServiceImpl implements ShareService {
         boolean canShare();
 
         /**
+         * Consumes transient user activation in the frame tree, returning true if an active
+         * transient user activation was consumed.
+         */
+        boolean consumeTransientUserActivation();
+
+        /**
          * Overridden by the embedder to execute the share.
          *
          * @param params the share data.
@@ -130,7 +135,7 @@ public class ShareServiceImpl implements ShareService {
         /**
          * @return The current {@link WindowAndroid} used to perform sharing.
          */
-        WindowAndroid getWindowAndroid();
+        @Nullable WindowAndroid getWindowAndroid();
 
         /**
          * Kills the renderer process when it is detected to have made a bad request.
@@ -181,6 +186,11 @@ public class ShareServiceImpl implements ShareService {
             }
         }
 
+        if (!mDelegate.consumeTransientUserActivation()) {
+            callback.call(ShareError.PERMISSION_DENIED);
+            return;
+        }
+
         ShareParams.TargetChosenCallback innerCallback =
                 new ShareParams.TargetChosenCallback() {
                     @Override
@@ -202,8 +212,14 @@ public class ShareServiceImpl implements ShareService {
                     }
                 };
 
+        WindowAndroid windowAndroid = mDelegate.getWindowAndroid();
+        if (windowAndroid == null) {
+            callback.call(ShareError.INTERNAL_ERROR);
+            return;
+        }
+
         final ShareParams.Builder paramsBuilder =
-                new ShareParams.Builder(mDelegate.getWindowAndroid(), title, url.url)
+                new ShareParams.Builder(windowAndroid, title, url.url)
                         .setText(text)
                         .setCallback(innerCallback);
         if (files == null || files.length == 0) {
@@ -262,14 +278,11 @@ public class ShareServiceImpl implements ShareService {
                 mCollator =
                         new SharedFileCollator(
                                 files.length,
-                                new Callback<Boolean>() {
-                                    @Override
-                                    public void onResult(Boolean success) {
-                                        if (success) {
-                                            mDelegate.share(paramsBuilder.build());
-                                        } else {
-                                            callback.call(ShareError.INTERNAL_ERROR);
-                                        }
+                                success -> {
+                                    if (success) {
+                                        mDelegate.share(paramsBuilder.build());
+                                    } else {
+                                        callback.call(ShareError.INTERNAL_ERROR);
                                     }
                                 });
                 return true;

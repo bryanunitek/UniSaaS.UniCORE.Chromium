@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include "base/atomicops.h"
 #include "base/base_export.h"
@@ -23,6 +24,17 @@
 #include "base/values.h"
 
 namespace base {
+
+namespace metrics_internal {
+
+// UMA provides helper macros/functions for recording enum histograms which
+// understand the conventions around `Enum::kMaxValue` and ensure the use of the
+// correct boundary value (which defines the range of the overflow bucket). See
+// crbug.com/40512541 for more background.
+template <typename T>
+concept HasKMaxValue = std::is_enum_v<T> && requires { T::kMaxValue; };
+
+}  // namespace metrics_internal
 
 class HistogramBase;
 class HistogramSamples;
@@ -68,6 +80,21 @@ class BASE_EXPORT HistogramBase {
 
   static const Sample32 kSampleType_MAX;  // INT_MAX
 
+  // Flags that control histogram behavior and metadata.
+  //
+  // CRITICAL INVARIANT FOR FLAGS AND DESERIALIZATION:
+  // Histograms can be loaded from persistent memory allocators (PMA) mapped
+  // as OS-level READ_ONLY memory (e.g., `FileMetricsProvider` reading leftover
+  // .pma files during startup).
+  //
+  // Therefore, setting or clearing flags (via `SetFlags` / `ClearFlags`), as
+  // well as any operations executed during flag deserialization in
+  // `PersistentHistogramAllocator::CreateHistogram()`, MUST BE STRICTLY
+  // READ-ONLY with zero side-effect writes to backing persistent memory
+  // storage. Any write operation on a read-only PMA page will cause a SIGSEGV.
+  //
+  // Note: When adding a new flag to `Flags`, add it above `kAllFlags` and OR it
+  // into `kAllFlags`.
   enum Flags : uint16_t {
     kNoFlags = 0x0,
 
@@ -93,15 +120,31 @@ class BASE_EXPORT HistogramBase {
     kCallbackExists = 0x20,
 
     // Indicates that the histogram is held in "persistent" memory and may
-    // be accessible between processes. This is only possible if such a
-    // memory segment has been created/attached, used to create a Persistent-
-    // MemoryAllocator, and that loaded into the Histogram module before this
-    // histogram is created.
+    // be accessible between processes. This flag is set internally by the
+    // allocator upon creation, rather than being passed as an input flag when
+    // defining or creating a histogram.
     kIsPersistent = 0x40,
 
     // Indicates that the histogram should be collected by PUMA, and its type is
     // PUMA for Regional Capabilities.
     kPumaRcTargetedHistogramFlag = 0x80,
+
+    // Mask of flags indicating that the histogram should be persisted in PMA
+    // files. Currently, only UMA-targeted histograms (including stability
+    // histograms, which include `kUmaTargetedHistogramFlag`) are persisted.
+    // Unlike `kIsPersistent` (which is a state flag set internally on histograms
+    // already allocated in persistent memory), this mask is checked against the
+    // histogram's creation flags (e.g. `kUmaTargetedHistogramFlag`) to determine
+    // whether to allocate the histogram in the GlobalHistogramAllocator.
+    // Note: This constant should only be used for testing whether a histogram
+    // should be persisted, and must not be passed as a flag when creating a
+    // histogram.
+    kPersistentHistogramFlagsMask = kUmaTargetedHistogramFlag,
+
+    // A combination of all flags used in tests.
+    kAllFlags = kUmaTargetedHistogramFlag | kUmaStabilityHistogramFlag |
+                kIPCSerializationSourceFlag | kCallbackExists | kIsPersistent |
+                kPumaRcTargetedHistogramFlag,
   };
 
   // Histogram data inconsistency types.
@@ -148,6 +191,10 @@ class BASE_EXPORT HistogramBase {
 
   // Operations with Flags enum.
   int32_t flags() const { return flags_.load(std::memory_order_relaxed); }
+
+  // Sets flags for this histogram instance.
+  // Must not attempt to mutate backing persistent memory, as the instance
+  // may be backed by a read-only memory segment.
   void SetFlags(int32_t flags);
   void ClearFlags(int32_t flags);
   bool HasFlags(int32_t flags) const;
@@ -170,11 +217,11 @@ class BASE_EXPORT HistogramBase {
   virtual void AddCount(Sample32 value, int count) = 0;
 
   // Convenient functions that call Add(Sample32).
-  void AddTime(const TimeDelta& time) { AddTimeMillisecondsGranularity(time); }
-  void AddTimeMillisecondsGranularity(const TimeDelta& time);
+  void AddTime(TimeDelta time) { AddTimeMillisecondsGranularity(time); }
+  void AddTimeMillisecondsGranularity(TimeDelta time);
   // Note: AddTimeMicrosecondsGranularity() drops the report if this client
   // doesn't have a high-resolution clock.
-  void AddTimeMicrosecondsGranularity(const TimeDelta& time);
+  void AddTimeMicrosecondsGranularity(TimeDelta time);
   void AddBoolean(bool value);
 
   virtual bool AddSamples(const HistogramSamples& samples) = 0;
@@ -271,8 +318,6 @@ class BASE_EXPORT HistogramBase {
   void WriteJSON(std::string* output, JSONVerbosityLevel verbosity_level) const;
 
  protected:
-  enum ReportActivity { HISTOGRAM_CREATED, HISTOGRAM_LOOKUP };
-
   struct BASE_EXPORT CountAndBucketData {
     Count32 count;
     int64_t sum;
@@ -295,20 +340,6 @@ class BASE_EXPORT HistogramBase {
   // counts to |buckets|, the total sample count to |count| and the total sum
   // to |sum|.
   CountAndBucketData GetCountAndBucketData() const;
-
-  // Produces an actual graph (set of blank vs non blank char's) for a bucket.
-  void WriteAsciiBucketGraph(double x_count,
-                             int line_length,
-                             std::string* output) const;
-
-  // Return a string description of what goes in a given bucket.
-  const std::string GetSimpleAsciiBucketRange(Sample32 sample) const;
-
-  // Write textual description of the bucket contents (relative to histogram).
-  // Output is the count in the buckets, as well as the percentage.
-  void WriteAsciiBucketValue(Count32 current,
-                             double scaled_sum,
-                             std::string* output) const;
 
   // Retrieves the registered callbacks for this histogram, if any, and runs
   // them passing |sample| as the parameter.

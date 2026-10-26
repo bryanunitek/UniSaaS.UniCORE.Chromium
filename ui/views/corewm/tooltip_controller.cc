@@ -119,6 +119,16 @@ aura::Window* GetTooltipTarget(const ui::MouseEvent& event,
       aura::client::GetScreenPositionClient(target->GetRootWindow())
           ->ConvertPointFromScreen(target, &target_loc);
       aura::Window* screen_target = target->GetEventHandlerForPoint(target_loc);
+      // `screen_target` can be nullptr if no window inside `target` accepts the
+      // event at `target_loc` (e.g., `target` or its subtrees use
+      // `EventTargetingPolicy::kNone` or `kDescendantsOnly` with no matching
+      // child, or `ShouldDescendIntoChildForEventHandling()` /
+      // `GetCanProcessEventsWithinSubtree()` reject the event). If no window
+      // handles the event, no tooltip target exists.
+      if (!screen_target) {
+        return nullptr;
+      }
+
       if (!IsValidTarget(event_target, screen_target)) {
         return nullptr;
       }
@@ -139,22 +149,14 @@ aura::Window* GetTooltipTarget(const ui::MouseEvent& event,
 
 TooltipController::TooltipController(std::unique_ptr<Tooltip> tooltip,
                                      wm::ActivationClient* activation_client)
-    : activation_client_(activation_client),
-      state_manager_(
+    : state_manager_(
           std::make_unique<TooltipStateManager>(std::move(tooltip))) {
-  if (activation_client_) {
-    activation_client_->AddObserver(this);
+  if (activation_client) {
+    activation_client_observation_.Observe(activation_client);
   }
 }
 
-TooltipController::~TooltipController() {
-  if (observed_window_) {
-    observed_window_->RemoveObserver(this);
-  }
-  if (activation_client_) {
-    activation_client_->RemoveObserver(this);
-  }
-}
+TooltipController::~TooltipController() = default;
 
 void TooltipController::AddObserver(wm::TooltipObserver* observer) {
   state_manager_->AddObserver(observer);
@@ -355,7 +357,7 @@ void TooltipController::OnCursorVisibilityChanged(bool is_visible) {
 void TooltipController::OnWindowVisibilityChanged(aura::Window* window,
                                                   bool visible) {
   // If window is not drawn, skip modifying tooltip.
-  if (!visible && window->layer()->type() != ui::LAYER_NOT_DRAWN) {
+  if (!visible && !window->layer()->AsNotDrawn()) {
     HideAndReset();
   }
 }
@@ -371,6 +373,7 @@ void TooltipController::OnWindowDestroying(aura::Window* window) {
 
 void TooltipController::OnWindowDestroyed(aura::Window* window) {
   if (observed_window_ == window) {
+    window_observation_.Reset();
     RemoveTooltipDelayFromMap(observed_window_);
     observed_window_ = nullptr;
   }
@@ -502,12 +505,10 @@ void TooltipController::SetObservedWindow(aura::Window* target) {
     state_manager_->HideAndReset();
   }
 
-  if (observed_window_) {
-    observed_window_->RemoveObserver(this);
-  }
+  window_observation_.Reset();
   observed_window_ = target;
   if (observed_window_) {
-    observed_window_->AddObserver(this);
+    window_observation_.Observe(observed_window_);
   }
 }
 

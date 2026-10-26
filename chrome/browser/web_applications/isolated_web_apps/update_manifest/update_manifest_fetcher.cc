@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include <string_view>
 
+#include "base/check_is_test.h"
 #include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/metrics/histogram_functions.h"
@@ -15,6 +17,7 @@
 #include "base/types/expected.h"
 #include "chrome/browser/web_applications/isolated_web_apps/update_manifest/update_manifest.h"
 #include "net/base/address_list.h"
+#include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/ip_address_space_util.h"
@@ -36,6 +39,18 @@ namespace {
 constexpr size_t kMaxUpdateManifestLength = 5 * 1024 * 1024;
 
 }  // namespace
+
+// static
+std::string_view UpdateManifestFetcher::ErrorToString(Error error) {
+  switch (error) {
+    case Error::kDownloadFailed:
+      return "Failed to download update manifest";
+    case Error::kInvalidJson:
+      return "Update manifest contains invalid JSON";
+    case Error::kInvalidManifest:
+      return "Invalid update manifest format";
+  }
+}
 
 UpdateManifestFetcher::UpdateManifestFetcher(
     GURL url,
@@ -100,7 +115,7 @@ void UpdateManifestFetcher::OnHostResolved(
 }
 
 void UpdateManifestFetcher::DownloadUpdateManifest(
-    network::mojom::IPAddressSpace client_space) {
+    network::mojom::IPAddressSpace client_security_state_address_space) {
   net::NetworkTrafficAnnotationTag traffic_annotation =
       net::CompleteNetworkTrafficAnnotation("iwa_update_manifest_fetcher",
                                             partial_traffic_annotation_,
@@ -127,17 +142,19 @@ void UpdateManifestFetcher::DownloadUpdateManifest(
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = url_;
+  resource_request->load_flags =
+      net::LOAD_DISABLE_CACHE | net::LOAD_BYPASS_CACHE;
   // Cookies are not allowed.
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
 
   // Configure the security state for this request to enable Local Network
-  // Access (LNA) checks. By specifying the 'client_space' (determined during
-  // host resolution), we allow the network service to identify if this is a
-  // request from a more privileged space to a less privileged one (e.g., Public
-  // -> Local) and enforce the appropriate security policies, such as CORS
-  // preflights for LNA.
+  // Access (LNA) checks. By specifying the
+  // `client_security_state_address_space` (determined during host resolution),
+  // we allow the network service to identify if this is a request from a more
+  // privileged space to a less privileged one (e.g., Public -> Local) and
+  // enforce the appropriate security policies, such as CORS preflights for LNA.
   auto client_security_state = network::mojom::ClientSecurityState::New();
-  client_security_state->ip_address_space = client_space;
+  client_security_state->ip_address_space = client_security_state_address_space;
   client_security_state->is_web_secure_context = true;
   client_security_state->local_network_access_request_policy =
       network::mojom::LocalNetworkAccessRequestPolicy::kBlock;
@@ -181,18 +198,31 @@ void UpdateManifestFetcher::OnUpdateManifestDownloaded(
         error_or_http_response_code_);
   }
 
-  simple_url_loader_.reset();
-
   if (!update_manifest_content) {
+    simple_url_loader_.reset();
     std::move(fetch_callback_).Run(base::unexpected(Error::kDownloadFailed));
     return;
   }
 
-  ParseUpdateManifest(*update_manifest_content);
+  network::mojom::IPAddressSpace manifest_address_space =
+      simple_url_loader_->ResponseInfo()
+          ? simple_url_loader_->ResponseInfo()->response_address_space
+          : network::mojom::IPAddressSpace::kUnknown;
+  if (manifest_address_space == network::mojom::IPAddressSpace::kUnknown) {
+    CHECK_IS_TEST();
+    manifest_address_space =
+        network::GetAddressSpaceFromUrl(simple_url_loader_->GetFinalURL())
+            .value_or(network::mojom::IPAddressSpace::kPublic);
+  }
+
+  simple_url_loader_.reset();
+
+  ParseUpdateManifest(*update_manifest_content, manifest_address_space);
 }
 
 void UpdateManifestFetcher::ParseUpdateManifest(
-    const std::string& update_manifest_content) {
+    const std::string& update_manifest_content,
+    network::mojom::IPAddressSpace manifest_address_space) {
   base::JSONReader::Result result =
       base::JSONReader::ReadAndReturnValueWithError(update_manifest_content,
                                                     base::JSON_PARSE_RFC);
@@ -204,22 +234,20 @@ void UpdateManifestFetcher::ParseUpdateManifest(
     return;
   }
 
-  base::expected<UpdateManifest, UpdateManifest::JsonFormatError>
-      update_manifest =
-          UpdateManifest::CreateFromJson(std::move(*result), url_);
-
   std::move(fetch_callback_)
-      .Run(update_manifest.transform_error(
-          [](UpdateManifest::JsonFormatError error) -> Error {
-            switch (error) {
-              case UpdateManifest::JsonFormatError::kRootNotADictionary:
-              case UpdateManifest::JsonFormatError::kChannelsNotADictionary:
-              case UpdateManifest::JsonFormatError::kChannelNotADictionary:
-              case UpdateManifest::JsonFormatError::kVersionsNotAnArray:
-              case UpdateManifest::JsonFormatError::kVersionEntryNotADictionary:
-                return Error::kInvalidManifest;
-            }
-          }));
+      .Run(UpdateManifest::CreateFromJson(std::move(*result), url_)
+               .transform_error([this](UpdateManifest::JsonFormatError error) {
+                 LOG(ERROR)
+                     << "Unable to parse IWA Update Manifest format for URL "
+                     << url_ << ": " << UpdateManifest::ErrorToString(error);
+                 return Error::kInvalidManifest;
+               })
+               .transform([manifest_address_space](UpdateManifest manifest) {
+                 return UpdateManifestWithAddressSpace{
+                     .manifest = std::move(manifest),
+                     .address_space = manifest_address_space,
+                 };
+               }));
 }
 
 }  // namespace web_app

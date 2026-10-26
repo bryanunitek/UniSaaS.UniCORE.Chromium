@@ -15,11 +15,9 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/menu_util.h"
 #include "chrome/browser/apps/app_service/publishers/guest_os_apps.h"
-#include "chrome/browser/ash/borealis/borealis_app_launcher.h"
 #include "chrome/browser/ash/borealis/borealis_app_uninstaller.h"
-#include "chrome/browser/ash/borealis/borealis_context_manager.h"
 #include "chrome/browser/ash/borealis/borealis_features.h"
-#include "chrome/browser/ash/borealis/borealis_metrics.h"
+#include "chrome/browser/ash/borealis/borealis_installer.h"
 #include "chrome/browser/ash/borealis/borealis_prefs.h"
 #include "chrome/browser/ash/borealis/borealis_service.h"
 #include "chrome/browser/ash/borealis/borealis_service_factory.h"
@@ -194,8 +192,10 @@ void BorealisApps::CreateAppOverrides(
     App* app) {
   // The special apps are not GuestOs apps, they don't have a registration and
   // can't be converted.
-  DCHECK_NE(registration.app_id(), borealis::kInstallerAppId);
-  DCHECK_NE(registration.app_id(), borealis::kLauncherSearchAppId);
+  CHECK_NE(registration.app_id(), borealis::kInstallerAppId,
+           base::NotFatalUntil::M161);
+  CHECK_NE(registration.app_id(), borealis::kLauncherSearchAppId,
+           base::NotFatalUntil::M161);
 
   // Borealis apps don't handle intents (like "open with").
   app->handles_intents = false;
@@ -242,10 +242,7 @@ void BorealisApps::LaunchAppWithIntent(const std::string& app_id,
                                        LaunchSource launch_source,
                                        WindowInfoPtr window_info,
                                        LaunchCallback callback) {
-  borealis::BorealisServiceFactory::GetForProfile(profile())
-      ->AppLauncher()
-      .Launch(app_id, borealis::BorealisLaunchSource::kSteamInstallerApp,
-              base::DoNothing());
+  std::move(callback).Run(LaunchResult::kFailed);
 }
 
 void BorealisApps::SetPermission(const std::string& app_id,

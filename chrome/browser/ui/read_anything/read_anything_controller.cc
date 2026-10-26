@@ -6,60 +6,95 @@
 
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
-#include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/accelerator_utils.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
-#include "chrome/browser/ui/read_anything/read_anything_entry_point_controller.h"
+#include "chrome/browser/ui/read_anything/read_anything_contents_wrapper.h"
 #include "chrome/browser/ui/read_anything/read_anything_enums.h"
 #include "chrome/browser/ui/read_anything/read_anything_hats_survey_controller.h"
 #include "chrome/browser/ui/read_anything/read_anything_omnibox_controller.h"
 #include "chrome/browser/ui/read_anything/read_anything_prefs.h"
 #include "chrome/browser/ui/read_anything/read_anything_service.h"
-#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/read_anything/read_anything_side_panel_controller.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
-#include "chrome/browser/ui/tabs/tab_model.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
-#include "chrome/browser/ui/view_ids.h"
+#include "chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_ui.h"
+#include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
+#include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/find_in_page/find_tab_helper.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/page.h"
+#include "content/public/browser/page_navigator.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "pdf/buildflags.h"
+#include "printing/buildflags/buildflags.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_recorder.h"
 #include "ui/accessibility/accessibility_features.h"
-#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/base/window_open_disposition.h"
+#include "ui/events/keycodes/keyboard_codes.h"
+#include "url/gurl.h"
+
+#if BUILDFLAG(ENABLE_PDF)
+#include <string>
+#include <vector>
+
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "chrome/browser/pdf/pdf_extension_util.h"
+#endif  // BUILDFLAG(ENABLE_PDF)
+
+#if BUILDFLAG(ENABLE_PRINTING)
+#include "chrome/browser/printing/printing_init.h"
+#endif
+
+#if BUILDFLAG(ENABLE_PDF)
+GURL GetPdfUrlWithFitToWidth(const GURL& pdf_url) {
+  std::vector<std::string> params =
+      base::SplitString(pdf_url.ref(), "&", base::KEEP_WHITESPACE,
+                        base::SPLIT_WANT_NONEMPTY);
+
+  // Replace any existing view params, including duplicates, with a single one.
+  std::erase_if(params, [](const std::string& param) {
+    return param == "view" || base::StartsWith(param, "view=");
+  });
+  params.push_back("view=FitH");
+
+  // `Replacements` doesn't own the string, so it must outlive
+  // `ReplaceComponents()`.
+  const std::string ref = base::JoinString(params, "&");
+  GURL::Replacements replacements;
+  replacements.SetRefStr(ref);
+  return pdf_url.ReplaceComponents(replacements);
+}
+#endif  // BUILDFLAG(ENABLE_PDF)
 
 ///////////////////////////////////////////////////////////////////////////////
 // WebContentsObserverInstance
 
 WebContentsObserverInstance::WebContentsObserverInstance(
     content::WebContents* web_contents,
-    base::RepeatingClosure primary_page_changed_callback,
     base::RepeatingClosure renderer_crashed_callback,
     base::RepeatingCallback<void(content::Visibility)>
         visibility_changed_callback)
     : content::WebContentsObserver(web_contents),
-      primary_page_changed_callback_(primary_page_changed_callback),
       renderer_crashed_callback_(renderer_crashed_callback),
       visibility_changed_callback_(visibility_changed_callback) {}
 
 WebContentsObserverInstance::~WebContentsObserverInstance() = default;
 
 // content::WebContentsObserver:
-void WebContentsObserverInstance::PrimaryPageChanged(content::Page& page) {
-  primary_page_changed_callback_.Run();
-}
-
 void WebContentsObserverInstance::OnVisibilityChanged(
     content::Visibility visibility) {
   visibility_changed_callback_.Run(visibility);
@@ -92,14 +127,24 @@ ReadAnythingControllerGlue::ReadAnythingControllerGlue(
 bool ReadAnythingController::freeze_distillation_for_testing_ = false;
 
 // static
+base::TimeDelta ReadAnythingController::ai_playback_iph_delay_ =
+    ReadAnythingController::kAiPlaybackIphDefaultDelay;
+
+// static
 void ReadAnythingController::
     SetFreezeDistillationOnCreationForTesting(  // IN-TEST
         bool locked) {
   freeze_distillation_for_testing_ = locked;
 }
 
+// static
+void ReadAnythingController::SetAiPlaybackIphDelayForTesting(  // IN-TEST
+    base::TimeDelta delay) {
+  ai_playback_iph_delay_ = delay;
+}
+
 ReadAnythingController* ReadAnythingController::From(tabs::TabInterface* tab) {
-  return Get(tab->GetUnownedUserDataHost());
+  return tab ? Get(tab->GetUnownedUserDataHost()) : nullptr;
 }
 
 ReadAnythingController::ReadAnythingController(
@@ -107,17 +152,11 @@ ReadAnythingController::ReadAnythingController(
     SidePanelRegistry* side_panel_registry)
     : tabs::ContentsObservingTabFeature(*tab),
       tab_(tab),
-      side_panel_registry_(side_panel_registry),
       scoped_unowned_user_data_(tab->GetUnownedUserDataHost(), *this),
       read_anything_side_panel_controller_(
           std::make_unique<ReadAnythingSidePanelController>(
               tab,
-              side_panel_registry)),
-      distillation_state_locked_for_testing_(freeze_distillation_for_testing_) {
-  // This controller should only be instantiated if
-  // IsImmersiveReadAnythingEnabled is enabled
-  CHECK(features::IsImmersiveReadAnythingEnabled());
-
+              side_panel_registry)) {
   // Point the FindBar to IRM's WebContents, if it's open. We already call
   // MaybeUpdateFindBarController when IRM opens and closes, but if IRM is open
   // on a split view, it can stay open even if the tab is not active, so we need
@@ -128,7 +167,8 @@ ReadAnythingController::ReadAnythingController(
           base::Unretained(this))));
 
   if (features::IsReadAnythingOmniboxChipEnabled() &&
-      base::FeatureList::IsEnabled(features::kPageActionsMigration)) {
+      tab_->GetBrowserWindowInterface() && tab_->GetTabFeatures() &&
+      tab_->GetTabFeatures()->page_action_controller()) {
     omnibox_controller_ = std::make_unique<ReadAnythingOmniboxController>(tab_);
   }
 
@@ -197,18 +237,17 @@ void ReadAnythingController::RemoveImmersiveActivationObserver(
   immersive_activation_observers_.RemoveObserver(observer);
 }
 
-void ReadAnythingController::OnEntryShown(
-    std::optional<ReadAnythingOpenTrigger> trigger) {
+void ReadAnythingController::OnEntryShown(ReadAnythingOpenTrigger trigger) {
+  last_open_trigger_ = trigger;
   observers_.Notify(&Observer::Activate, /*active=*/true, trigger,
                     /*completed_session_duration=*/std::nullopt);
-  active_service_ =
-      ReadAnythingService::Get(tab_->GetBrowserWindowInterface()->GetProfile());
   // At the moment, services are created for normal, guest, and incognito
   // profiles but not unusual profile types. On the other hand,
   // ReadAnythingController is created for all tabs. Thus we need a
   // nullptr check.
-  if (active_service_) {
-    active_service_->OnReadAnythingShown();
+  if (auto* service = ReadAnythingService::Get(
+          tab_->GetBrowserWindowInterface()->GetProfile())) {
+    service->OnReadAnythingShown();
   }
 
   if (is_presentation_transitioning_) {
@@ -238,23 +277,43 @@ void ReadAnythingController::OnEntryShown(
       user_ed->MaybeShowFeaturePromo(
           feature_engagement::kIPHReadingModePresentationModeFeature);
     }
+    if (features::IsReadAnythingReadAloudExperimentalPlaybackUiEnabled() &&
+        distillation_state_ == DistillationState::kDistillationWithContent &&
+        !ai_playback_iph_timer_.IsRunning()) {
+      ai_playback_iph_timer_.Start(
+          FROM_HERE, ai_playback_iph_delay_,
+          base::BindOnce(&ReadAnythingController::MaybeShowAiPlaybackIph,
+                         weak_factory_.GetWeakPtr()));
+    }
   }
 
   MaybeUpdateFindBarController();
+
+#if BUILDFLAG(ENABLE_PDF)
+  // When Reading Mode opens for PDF translation, the PDF viewer's viewport
+  // becomes narrower, so fit the PDF to the new width.
+  if (trigger == ReadAnythingOpenTrigger::kPdfTranslation) {
+    content::WebContents* contents = tab_->GetContents();
+    if (contents && contents->GetPrimaryMainFrame()) {
+      pdf_extension_util::DispatchShouldUpdateViewportEvent(
+          contents->GetPrimaryMainFrame(),
+          GetPdfUrlWithFitToWidth(contents->GetLastCommittedURL()));
+    }
+  }
+#endif  // BUILDFLAG(ENABLE_PDF)
 }
 
 void ReadAnythingController::OnEntryHidden() {
+  if (features::IsReadAnythingReadAloudExperimentalPlaybackUiEnabled() &&
+      !is_presentation_transitioning_) {
+    ai_playback_iph_timer_.Stop();
+  }
   std::optional<base::TimeDelta> completed_session_duration =
       RecordEntryHiddenMetrics();
 
   observers_.Notify(&Observer::Activate, /*active=*/false,
-                    /*trigger=*/std::optional<ReadAnythingOpenTrigger>(),
+                    /*trigger=*/ReadAnythingOpenTrigger::kUnknown,
                     completed_session_duration);
-
-  if (active_service_) {
-    active_service_->OnReadAnythingHidden();
-    active_service_ = nullptr;
-  }
 }
 
 std::optional<base::TimeDelta>
@@ -298,27 +357,25 @@ SidePanelUI* ReadAnythingController::GetSidePanelUI() {
     return nullptr;
   }
 
-  return tab_->GetBrowserWindowInterface()->GetFeatures().side_panel_ui();
+  return SidePanelUI::From(tab_->GetBrowserWindowInterface());
 }
 
 // Lazily creates and returns the WebUIContentsWrapper for Reading Mode.
-std::unique_ptr<WebUIContentsWrapperT<ReadAnythingUntrustedUI>>
-ReadAnythingController::GetOrCreateWebUIWrapper(
+ReadAnythingContentsWrapper ReadAnythingController::GetOrCreateWebUIWrapper(
     PresentationState web_ui_new_presentation_state) {
   SetPresentationState(web_ui_new_presentation_state);
   if (should_recreate_web_ui_ || !web_ui_wrapper_) {
     should_recreate_web_ui_ = false;
     has_shown_ui_ = false;
     Profile* profile = tab_->GetBrowserWindowInterface()->GetProfile();
-    web_ui_wrapper_ =
+    web_ui_wrapper_ = ReadAnythingContentsWrapper(
         std::make_unique<WebUIContentsWrapperT<ReadAnythingUntrustedUI>>(
             GURL(chrome::kChromeUIUntrustedReadAnythingSidePanelURL), profile,
             IDS_READING_MODE_TITLE,
-            /*esc_closes_ui=*/false);
+            /*esc_closes_ui=*/false));
 
     ra_web_ui_observer_ = std::make_unique<WebContentsObserverInstance>(
         /*web_contents=*/web_ui_wrapper_->web_contents(),
-        /*primary_page_changed_callback=*/base::DoNothing(),
         /*renderer_crashed_callback=*/
         base::BindRepeating(&ReadAnythingController::OnRendererCrashed,
                             base::Unretained(this)),
@@ -329,8 +386,26 @@ ReadAnythingController::GetOrCreateWebUIWrapper(
 
     ReadAnythingControllerGlue::CreateForWebContents(
         web_ui_wrapper_->web_contents(), this);
+    // A single WebUIContentsWrapper is reused across both presentations, so
+    // the embedding context is set once here, at the point of creation,
+    // rather than in each host view. `ReadAnythingImmersiveWebView` never set
+    // it, while `ReadAnythingSidePanelWebView` inherits the call from
+    // `SidePanelWebUIView`, so the context depended on which presentation
+    // happened to create the wrapper first. `SidePanelWebUIView` still makes
+    // the same call when Reading Mode is shown in the side panel; because the
+    // tab is unchanged, that call is an early-return no-op (see
+    // `EmbeddingTabTracker::SetTabInterface`).
+    webui::SetTabInterface(web_ui_wrapper_->web_contents(), tab_);
     find_in_page::FindTabHelper::CreateForWebContents(
         web_ui_wrapper_->web_contents());
+#if BUILDFLAG(ENABLE_PRINTING)
+    // Lets Immersive Reading Mode print this WebContents. Printing is attached
+    // once, for the WebContents' whole lifetime.
+    if (features::IsImmersiveReadAnythingPrintEnabled()) {
+      printing::InitializePrintingForWebContents(
+          web_ui_wrapper_->web_contents());
+    }
+#endif
   }
   return std::move(web_ui_wrapper_);
 }
@@ -354,14 +429,12 @@ void ReadAnythingController::OnRendererCrashed() {
 }
 
 void ReadAnythingController::SetWebUIWrapperForTest(
-    std::unique_ptr<WebUIContentsWrapperT<ReadAnythingUntrustedUI>>
-        web_ui_wrapper) {
+    ReadAnythingContentsWrapper web_ui_wrapper) {
   web_ui_wrapper_ = std::move(web_ui_wrapper);
 }
 
 void ReadAnythingController::TransferWebUiOwnership(
-    std::unique_ptr<WebUIContentsWrapperT<ReadAnythingUntrustedUI>>
-        web_ui_wrapper,
+    ReadAnythingContentsWrapper web_ui_wrapper,
     PresentationState from_presentation) {
   // Ignore the returned wrapper if it's coming from a UI that is no longer
   // the active presentation.
@@ -400,16 +473,16 @@ void ReadAnythingController::MaybeUpdateFindBarController() {
     target_contents = tab_->GetContents();
   }
 
-  // If the target is just the main web contents, we don't need to force the
-  // FindBarController's creation if it doesn't already exist.
-  auto& window_features = tab_->GetBrowserWindowInterface()->GetFeatures();
-  if (target_contents == tab_->GetContents() &&
-      !window_features.HasFindBarController()) {
+  auto* find_bar_controller =
+      FindBarController::From(tab_->GetBrowserWindowInterface());
+  if (!find_bar_controller) {
     return;
   }
 
-  auto* find_bar_controller = window_features.GetFindBarController();
-  if (!find_bar_controller) {
+  // If the target is just the main web contents, we don't need to force the
+  // FindBar's creation if it doesn't already exist.
+  if (target_contents == tab_->GetContents() &&
+      !find_bar_controller->HasFindBar()) {
     return;
   }
 
@@ -467,6 +540,12 @@ void ReadAnythingController::ShowSidePanelUI(SidePanelOpenTrigger trigger) {
   }
 }
 
+void ReadAnythingController::CloseImmersiveUI(
+    base::PassKey<ReadAnythingUntrustedPageHandler>,
+    ReadAnythingCloseReason reason) {
+  CloseImmersiveUI(reason);
+}
+
 void ReadAnythingController::CloseImmersiveUI(ReadAnythingCloseReason reason) {
   if (GetPresentationState() != PresentationState::kInImmersiveOverlay) {
     return;
@@ -483,8 +562,8 @@ void ReadAnythingController::CloseImmersiveUI(ReadAnythingCloseReason reason) {
     should_show_immersive_on_tab_reactivate_ = true;
   }
 
-  // Ensure the observer returned the web_ui_wrapper_
-  CHECK(web_ui_wrapper_);
+  // Ensure the observer returned the web_ui_wrapper_ if one existed.
+  CHECK(!has_shown_ui_ || web_ui_wrapper_);
 }
 
 void ReadAnythingController::CloseSidePanelUI(ReadAnythingCloseReason reason) {
@@ -492,14 +571,37 @@ void ReadAnythingController::CloseSidePanelUI(ReadAnythingCloseReason reason) {
     return;
   }
 
+  pending_side_panel_close_reason_ = reason;
+
   if (SidePanelUI* side_panel_ui = GetSidePanelUI()) {
     SidePanelEntryHideReason hide_reason =
         (reason == ReadAnythingCloseReason::kTabSwitched)
             ? SidePanelEntryHideReason::kBackgrounded
             : SidePanelEntryHideReason::kSidePanelClosed;
-    side_panel_ui->Close(hide_reason,
-                         /*suppress_animations=*/true);
+    // Only user-initiated closes should animate.
+    bool suppress_animations = reason != ReadAnythingCloseReason::kClosedByUser;
+    side_panel_ui->Close(hide_reason, suppress_animations);
   }
+}
+
+void ReadAnythingController::OnSidePanelWillHide(
+    SidePanelEntryHideReason side_panel_reason) {
+  ReadAnythingCloseReason reason;
+  if (pending_side_panel_close_reason_.has_value()) {
+    reason = *pending_side_panel_close_reason_;
+    pending_side_panel_close_reason_.reset();
+  } else if (side_panel_reason == SidePanelEntryHideReason::kBackgrounded) {
+    reason = ReadAnythingCloseReason::kTabSwitched;
+  } else {
+    reason = ReadAnythingCloseReason::kClosedByUser;
+  }
+  observers_.Notify(&ReadAnythingLifecycleObserver::OnWillClose, reason);
+}
+
+void ReadAnythingController::ShowInPreferredUI(
+    base::PassKey<read_anything::ReadAnythingEntryPointController>,
+    ReadAnythingOpenTrigger trigger) {
+  ShowInPreferredUI(trigger);
 }
 
 void ReadAnythingController::ShowInPreferredUI(
@@ -531,6 +633,12 @@ void ReadAnythingController::ShowInPreferredUI(
   }
 }
 
+void ReadAnythingController::ToggleUI(
+    base::PassKey<read_anything::ReadAnythingEntryPointController>,
+    ReadAnythingOpenTrigger trigger) {
+  ToggleUI(trigger);
+}
+
 void ReadAnythingController::ToggleUI(ReadAnythingOpenTrigger trigger) {
   if (trigger == ReadAnythingOpenTrigger::kKeyboardShortcut) {
     if (auto* user_ed = BrowserUserEducationInterface::From(
@@ -553,6 +661,12 @@ void ReadAnythingController::ToggleUI(ReadAnythingOpenTrigger trigger) {
   }
 
   ShowInPreferredUI(trigger);
+}
+
+void ReadAnythingController::TogglePresentation(
+    base::PassKey<ReadAnythingUntrustedPageHandler>,
+    bool is_user_initiated) {
+  TogglePresentation(is_user_initiated);
 }
 
 void ReadAnythingController::TogglePresentation(bool is_user_initiated) {
@@ -581,7 +695,6 @@ void ReadAnythingController::SavePresentationPreference(
   }
 }
 
-// TODO(crbug.com/458335664): Add logic to check if IRM SidePanel is showing
 ReadAnythingController::PresentationState
 ReadAnythingController::GetPresentationState() const {
   return presentation_state_;
@@ -652,29 +765,179 @@ void ReadAnythingController::ReleaseMainContentsCapture() {
   main_contents_capturer_handle_.RunAndReset();
 }
 
+content::WebContents* ReadAnythingController::OpenURLFromTab(
+    content::WebContents* source,
+    const content::OpenURLParams& params,
+    base::OnceCallback<void(content::NavigationHandle&)>
+        navigation_handle_callback) {
+  // Reading Mode only renders links from distilled web content, so restrict
+  // forwarded navigations to web schemes.
+  if (!params.url.SchemeIsHTTPOrHTTPS()) {
+    return nullptr;
+  }
+  if (tab_ && tab_->GetBrowserWindowInterface()) {
+    content::OpenURLParams modified_params = params;
+    content::RenderFrameHost* source_rfh = nullptr;
+    if (params.initiator_frame_token.has_value()) {
+      source_rfh = content::RenderFrameHost::FromFrameToken(
+          content::GlobalRenderFrameHostToken(
+              params.initiator_process_id,
+              params.initiator_frame_token.value()));
+    }
 
+    // Check that user_gesture is really true, by confirming that there was a
+    // recent activation in the RM rfh
+    if (modified_params.user_gesture &&
+        (!source_rfh || !source_rfh->HasTransientUserActivation())) {
+      modified_params.user_gesture = false;
+    }
+
+    // If a compromised renderer requests a CURRENT_TAB navigation, it
+    // bypasses the popup blocker, and also has other security risks like
+    // spoofing the original webpage. Set to NEW_FOREGROUND_TAB to make sure
+    // the popup blocker runs on links opened from the untrusted webui. We
+    // strictly allow-list dispositions that open new windows/tabs, and demote
+    // all others.
+    switch (modified_params.disposition) {
+      case WindowOpenDisposition::kNewForegroundTab:
+      case WindowOpenDisposition::kNewBackgroundTab:
+      case WindowOpenDisposition::kNewPopup:
+      case WindowOpenDisposition::kNewWindow:
+      case WindowOpenDisposition::kSaveToDisk:
+      case WindowOpenDisposition::kOffTheRecord:
+        break;
+      default:
+        modified_params.disposition = WindowOpenDisposition::kNewForegroundTab;
+        break;
+    }
+
+    // Pass the main tab's WebContents as the source so the navigation pipeline
+    // has the correct context to evaluate disposition and blocking rules.
+    content::WebContents* tab_contents = tab_->GetContents();
+    if (tab_contents && tab_contents->GetDelegate()) {
+      return tab_contents->GetDelegate()->OpenURLFromTab(
+          tab_contents, modified_params, std::move(navigation_handle_callback));
+    }
+  }
+  return nullptr;
+}
+
+bool ReadAnythingController::HandleEscapeKey(
+    const input::NativeWebKeyboardEvent& event) {
+  if (event.windows_key_code == ui::VKEY_ESCAPE && tab_ &&
+      tab_->GetBrowserWindowInterface()) {
+    ExclusiveAccessManager::From(tab_->GetBrowserWindowInterface())
+        ->HandleUserKeyEvent(event);
+    return true;
+  }
+  return false;
+}
 
 void ReadAnythingController::OnDistillationStateChanged(
     DistillationState new_state) {
-  if (distillation_state_locked_for_testing_) {
+  if (freeze_distillation_for_testing_) {
     return;
   }
 
-  if (new_state == DistillationState::kDistillationEmpty &&
-      GetPresentationState() == PresentationState::kInImmersiveOverlay) {
-    base::UmaHistogramEnumeration(
-        "Accessibility.ReadAnything.SidePanelTriggeredByEmptyState",
-        ReadAnythingOpenTrigger::kReadAnythingTogglePresentationButton);
-
-    TogglePresentation(/*is_user_initiated=*/false);
-  }
   distillation_state_ = new_state;
+  auto* user_ed =
+      BrowserUserEducationInterface::From(tab_->GetBrowserWindowInterface());
+
+  if (new_state == DistillationState::kDistillationEmpty) {
+    if (user_ed) {
+      user_ed->AbortFeaturePromo(
+          feature_engagement::kIPHReadingModeLineFocusFeature);
+    }
+    if (features::IsReadAnythingReadAloudExperimentalPlaybackUiEnabled()) {
+      ai_playback_iph_timer_.Stop();
+      if (user_ed) {
+        user_ed->AbortFeaturePromo(
+            feature_engagement::kIPHReadingModeAiPlaybackFeature);
+        user_ed->AbortFeaturePromo(
+            feature_engagement::kIPHReadingModeAiPlaybackSettingsFeature);
+      }
+    }
+
+    if (GetPresentationState() == PresentationState::kInImmersiveOverlay) {
+      base::UmaHistogramEnumeration(
+          "Accessibility.ReadAnything.SidePanelTriggeredByEmptyState",
+          ReadAnythingOpenTrigger::kReadAnythingTogglePresentationButton);
+
+      TogglePresentation(/*is_user_initiated=*/false);
+    }
+  } else if (new_state == DistillationState::kDistillationWithContent &&
+             GetPresentationState() != PresentationState::kInactive &&
+             user_ed) {
+    if (features::IsReadAnythingLineFocusEnabled()) {
+      // Only show the line focus IPH if there is content because line focus
+      // does not do anything on an empty page.
+      user_ed->MaybeShowFeaturePromo(
+          feature_engagement::kIPHReadingModeLineFocusFeature);
+    }
+    if (features::IsReadAnythingReadAloudExperimentalPlaybackUiEnabled() &&
+        !ai_playback_iph_timer_.IsRunning()) {
+      ai_playback_iph_timer_.Start(
+          FROM_HERE, ai_playback_iph_delay_,
+          base::BindOnce(&ReadAnythingController::MaybeShowAiPlaybackIph,
+                         weak_factory_.GetWeakPtr()));
+    }
+  }
 }
 
-void ReadAnythingController::UnlockDistillationStateForTesting() {
-  distillation_state_locked_for_testing_ = false;
+void ReadAnythingController::MaybeShowAiPlaybackIph() {
+  CHECK(features::IsReadAnythingReadAloudExperimentalPlaybackUiEnabled());
+  if (GetPresentationState() == PresentationState::kInactive ||
+      distillation_state_ != DistillationState::kDistillationWithContent) {
+    return;
+  }
+  if (auto* user_ed = BrowserUserEducationInterface::From(
+          tab_->GetBrowserWindowInterface())) {
+    user_ed->MaybeShowFeaturePromo(
+        feature_engagement::kIPHReadingModeAiPlaybackFeature);
+  }
+}
+
+void ReadAnythingController::OnAiPlaybackStateChanged(bool enabled) {
+  if (!features::IsReadAnythingReadAloudExperimentalPlaybackUiEnabled() ||
+      !enabled) {
+    return;
+  }
+  ai_playback_iph_timer_.Stop();
+  if (auto* user_ed = BrowserUserEducationInterface::From(
+          tab_->GetBrowserWindowInterface())) {
+    user_ed->NotifyFeaturePromoFeatureUsed(
+        feature_engagement::kIPHReadingModeAiPlaybackFeature,
+        FeaturePromoFeatureUsedAction::kClosePromoIfPresent);
+    user_ed->MaybeShowFeaturePromo(
+        feature_engagement::kIPHReadingModeAiPlaybackSettingsFeature);
+  }
+}
+
+void ReadAnythingController::OnDistillationStatus(
+    read_anything::mojom::DistillationStatus status,
+    int word_count) {
+  content::WebContents* web_contents = tab_->GetContents();
+  if (last_open_trigger_ == ReadAnythingOpenTrigger::kOmniboxChip) {
+    if (status != read_anything::mojom::DistillationStatus::kStillRunning) {
+      last_open_trigger_ = ReadAnythingOpenTrigger::kUnknown;
+      base::UmaHistogramEnumeration(
+          "Accessibility.ReadAnything.DistillationStatusAfterOmnibox", status);
+      base::UmaHistogramCustomCounts(
+          "Accessibility.ReadAnything.WordsDistilledAfterOmnibox", word_count,
+          1, kMaxWordsDistilled, kWordsDistilledBuckets);
+
+      if (web_contents && web_contents->GetPrimaryMainFrame()) {
+        ukm::builders::Accessibility_ReadAnything_OmniboxEntryPointDistillation(
+            web_contents->GetPrimaryMainFrame()->GetPageUkmSourceId())
+            .SetDistillationStatus(static_cast<int>(status))
+            .Record(ukm::UkmRecorder::Get());
+      }
+    }
+  }
 }
 
 void ReadAnythingController::SetDwellTimeForTesting(base::TimeTicks test_time) {
-  omnibox_controller_->SetDwellTimeForTesting(test_time);
+  if (omnibox_controller_) {
+    omnibox_controller_->SetDwellTimeForTesting(test_time);
+  }
 }

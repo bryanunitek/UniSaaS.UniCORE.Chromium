@@ -19,7 +19,6 @@ import android.view.View;
 import android.view.View.OnClickListener;
 
 import androidx.test.core.app.ApplicationProvider;
-import androidx.test.filters.SmallTest;
 
 import org.junit.After;
 import org.junit.Before;
@@ -32,27 +31,26 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
-import org.chromium.base.shared_preferences.SharedPreferencesManager;
+import org.chromium.base.ServiceLoaderUtil;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchConfigManager;
 import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchConfigManager.ShareTabsWithOsStateListener;
 import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchControllerFactory;
 import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchHooks;
+import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchMetrics;
 import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchMetrics.ClickInfo;
 import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchUtils;
 import org.chromium.chrome.browser.auxiliary_search.R;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
-import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /** Unit tests for {@link AuxiliarySearchModuleMediator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class AuxiliarySearchModuleMediatorUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -81,7 +79,7 @@ public class AuxiliarySearchModuleMediatorUnitTest {
         mFactory = AuxiliarySearchControllerFactory.getInstance();
         mHooks = Mockito.mock(AuxiliarySearchHooks.class);
         when(mHooks.isEnabled()).thenReturn(true);
-        mFactory.setHooksForTesting(mHooks);
+        ServiceLoaderUtil.setInstanceForTesting(AuxiliarySearchHooks.class, mHooks);
         assertTrue(mFactory.isEnabled());
     }
 
@@ -91,7 +89,6 @@ public class AuxiliarySearchModuleMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testShowModule_DefaultOptIn_FirstButton() {
         when(mHooks.isSettingDefaultEnabledByOs()).thenReturn(true);
         assertTrue(mFactory.isSettingDefaultEnabledByOs());
@@ -108,7 +105,6 @@ public class AuxiliarySearchModuleMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testShowModule_DefaultOptIn_SecondButton() {
         when(mHooks.isSettingDefaultEnabledByOs()).thenReturn(true);
         assertTrue(mFactory.isSettingDefaultEnabledByOs());
@@ -126,7 +122,6 @@ public class AuxiliarySearchModuleMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testShowModule_DefaultOptOut_FirstButton() {
         when(mHooks.isSettingDefaultEnabledByOs()).thenReturn(false);
         assertFalse(mFactory.isSettingDefaultEnabledByOs());
@@ -142,7 +137,6 @@ public class AuxiliarySearchModuleMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testShowModule_DefaultOptOut_SecondButton() {
         when(mHooks.isSettingDefaultEnabledByOs()).thenReturn(false);
         assertFalse(mFactory.isSettingDefaultEnabledByOs());
@@ -164,7 +158,6 @@ public class AuxiliarySearchModuleMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testShowModule() {
         createMediator();
 
@@ -183,14 +176,12 @@ public class AuxiliarySearchModuleMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testGetModuleType() {
         createMediator();
         assertEquals(ModuleType.AUXILIARY_SEARCH, mMediator.getModuleType());
     }
 
     @Test
-    @SmallTest
     public void testHideModule() {
         createMediator();
         mMediator.hideModule();
@@ -232,6 +223,10 @@ public class AuxiliarySearchModuleMediatorUnitTest {
 
         verify(mPropertyModel)
                 .set(
+                        eq(AuxiliarySearchModuleProperties.MODULE_TITLE_TEXT_RES_ID),
+                        eq(R.string.auxiliary_search_module_name));
+        verify(mPropertyModel)
+                .set(
                         eq(AuxiliarySearchModuleProperties.MODULE_CONTENT_TEXT_RES_ID),
                         eq(contentTextResId));
         verify(mPropertyModel)
@@ -242,6 +237,29 @@ public class AuxiliarySearchModuleMediatorUnitTest {
                 .set(
                         eq(AuxiliarySearchModuleProperties.MODULE_SECOND_BUTTON_TEXT_RES_ID),
                         eq(secondButtonTextResId));
+    }
+
+    private void inflateBrowsingDataViewAndVerify() {
+        mView =
+                LayoutInflater.from(mContext)
+                        .inflate(R.layout.auxiliary_search_module_layout, null);
+
+        verify(mPropertyModel)
+                .set(
+                        eq(AuxiliarySearchModuleProperties.MODULE_TITLE_TEXT_RES_ID),
+                        eq(R.string.auxiliary_search_browsing_data_module_name));
+        verify(mPropertyModel)
+                .set(
+                        eq(AuxiliarySearchModuleProperties.MODULE_CONTENT_TEXT_RES_ID),
+                        eq(R.string.auxiliary_search_browsing_data_module_content));
+        verify(mPropertyModel)
+                .set(
+                        eq(AuxiliarySearchModuleProperties.MODULE_FIRST_BUTTON_TEXT_RES_ID),
+                        eq(R.string.auxiliary_search_module_button_go_to_settings));
+        verify(mPropertyModel)
+                .set(
+                        eq(AuxiliarySearchModuleProperties.MODULE_SECOND_BUTTON_TEXT_RES_ID),
+                        eq(R.string.auxiliary_search_module_button_got_it));
     }
 
     private void verifyShowModuleComplete() {
@@ -259,17 +277,64 @@ public class AuxiliarySearchModuleMediatorUnitTest {
     private void clickButtonAndVerify(OnClickListener clickListener, @ClickInfo int clickInfo) {
         HistogramWatcher histogramWatcher =
                 HistogramWatcher.newBuilder()
-                        .expectIntRecords("Search.AuxiliarySearch.Module.ClickInfo", clickInfo)
+                        .expectIntRecords(
+                                AuxiliarySearchMetrics.HISTOGRAM_MODULE_CONSENT, clickInfo)
+                        .expectNoRecords(
+                                AuxiliarySearchMetrics.HISTOGRAM_MODULE_CONSENT_BROWSING_DATA)
                         .build();
         clickListener.onClick(mView);
 
         verify(mModuleDelegate).onModuleClicked(eq(ModuleType.AUXILIARY_SEARCH));
         verify(mModuleDelegate).removeModule(eq(ModuleType.AUXILIARY_SEARCH));
         histogramWatcher.assertExpected();
+    }
 
-        SharedPreferencesManager prefManager = ChromeSharedPreferences.getInstance();
-        assertTrue(
-                prefManager.readBoolean(
-                        ChromePreferenceKeys.AUXILIARY_SEARCH_MODULE_USER_RESPONDED, false));
+    private void clickButtonAndVerifyBrowsingData(
+            OnClickListener clickListener, @ClickInfo int clickInfo) {
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecords(
+                                AuxiliarySearchMetrics.HISTOGRAM_MODULE_CONSENT_BROWSING_DATA,
+                                clickInfo)
+                        .expectNoRecords(AuxiliarySearchMetrics.HISTOGRAM_MODULE_CONSENT)
+                        .build();
+        clickListener.onClick(mView);
+
+        verify(mModuleDelegate).onModuleClicked(eq(ModuleType.AUXILIARY_SEARCH));
+        verify(mModuleDelegate).removeModule(eq(ModuleType.AUXILIARY_SEARCH));
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @EnableFeatures({ChromeFeatureList.AUXILIARY_SEARCH_HISTORY_DONATION})
+    public void testShowModule_BrowsingDataDonation_FirstButton() {
+        when(mHooks.isBrowsingDataDonationSupported()).thenReturn(true);
+
+        createMediator();
+        inflateBrowsingDataViewAndVerify();
+
+        mMediator.showModule();
+        verifyShowModuleComplete();
+
+        // Verifies the case of clicking the "Go to settings" button.
+        clickButtonAndVerifyBrowsingData(
+                mFirstButtonClickListenerCaptor.getValue(), ClickInfo.OPEN_SETTINGS);
+        verify(mOpenSettingsRunnable).run();
+    }
+
+    @Test
+    @EnableFeatures({ChromeFeatureList.AUXILIARY_SEARCH_HISTORY_DONATION})
+    public void testShowModule_BrowsingDataDonation_SecondButton() {
+        when(mHooks.isBrowsingDataDonationSupported()).thenReturn(true);
+
+        createMediator();
+        inflateBrowsingDataViewAndVerify();
+
+        mMediator.showModule();
+        verifyShowModuleComplete();
+
+        // Verifies the case of clicking the "Got it" button.
+        clickButtonAndVerifyBrowsingData(
+                mSecondButtonClickListenerCaptor.getValue(), ClickInfo.OPT_IN);
     }
 }

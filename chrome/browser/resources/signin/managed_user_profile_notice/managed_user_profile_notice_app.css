@@ -63,6 +63,14 @@
   width: 100vw;
 }
 
+#signals-disclaimer-action-container {
+  gap: 8px;
+
+  & cr-button {
+    min-width: auto;
+  }
+}
+
 .action-container cr-button {
   /* Reverts inherited pointer-events value from .action-container. */
   pointer-events: all;

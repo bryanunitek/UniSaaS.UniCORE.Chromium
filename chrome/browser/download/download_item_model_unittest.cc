@@ -12,6 +12,7 @@
 
 #include "base/check_op.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -42,6 +43,8 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/text/bytes_formatting.h"
 #include "ui/base/ui_base_features.h"
+#include "url/gurl.h"
+#include "url/origin.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "base/strings/pattern.h"
@@ -743,41 +746,46 @@ TEST_F(DownloadItemModelTest, GetBubbleStatusMessageWithBytes) {
     }
   };
 
-  base::i18n::SetRTLForTesting(true);
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(true);
 
-  // Arabic
-  auto* arabic_bytes = L"5 \x062A";
-  auto* arabic_status = L"\x0645";
-  std::u16string arabic =
-      StatusTextBuilderUtils::GetBubbleStatusMessageWithBytes(
-          base::WideToUTF16(arabic_bytes), base::WideToUTF16(arabic_status));
-  std::vector<int> expected_arabic =
+    // Arabic
+    auto* arabic_bytes = L"5 \x062A";
+    auto* arabic_status = L"\x0645";
+    std::u16string arabic =
+        StatusTextBuilderUtils::GetBubbleStatusMessageWithBytes(
+            base::WideToUTF16(arabic_bytes), base::WideToUTF16(arabic_status));
+    std::vector<int> expected_arabic =
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_POSIX)
-      {8207, 8235, 53, 32, 1578, 32, 8226, 32, 1605, 8236, 8207};
+        {8207, 8235, 53, 32, 1578, 32, 8226, 32, 1605, 8236, 8207};
 #else
-      {8235, 53, 32, 1578, 32, 8226, 32, 1605, 8236};
+        {8235, 53, 32, 1578, 32, 8226, 32, 1605, 8236};
 #endif
-  compare_results(arabic, expected_arabic);
+    compare_results(arabic, expected_arabic);
 
-  // Hebrew
-  auto* hebrew_status = L"\x05D0";
-  std::u16string hebrew =
-      StatusTextBuilderUtils::GetBubbleStatusMessageWithBytes(
-          u"5 MB", base::WideToUTF16(hebrew_status));
-  std::vector<int> expected_hebrew =
+    // Hebrew
+    auto* hebrew_status = L"\x05D0";
+    std::u16string hebrew =
+        StatusTextBuilderUtils::GetBubbleStatusMessageWithBytes(
+            u"5 MB", base::WideToUTF16(hebrew_status));
+    std::vector<int> expected_hebrew =
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_POSIX)
-      {8207, 8235, 8234, 53, 32, 77, 66, 8236, 32, 8226, 32, 1488, 8236, 8207};
+        {8207, 8235, 8234, 53, 32,   77,   66,
+         8236, 32,   8226, 32, 1488, 8236, 8207};
 #else
-      {8235, 8234, 53, 32, 77, 66, 8236, 32, 8226, 32, 1488, 8236};
+        {8235, 8234, 53, 32, 77, 66, 8236, 32, 8226, 32, 1488, 8236};
 #endif
-  compare_results(hebrew, expected_hebrew);
+    compare_results(hebrew, expected_hebrew);
+  }
 
-  // English
-  base::i18n::SetRTLForTesting(false);
-  std::u16string english =
-      StatusTextBuilderUtils::GetBubbleStatusMessageWithBytes(u"5 MB", u"A");
-  std::vector<int> expected_english = {53, 32, 77, 66, 32, 8226, 32, 65};
-  compare_results(english, expected_english);
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(false);
+    // English
+    std::u16string english =
+        StatusTextBuilderUtils::GetBubbleStatusMessageWithBytes(u"5 MB", u"A");
+    std::vector<int> expected_english = {53, 32, 77, 66, 32, 8226, 32, 65};
+    compare_results(english, expected_english);
+  }
 }
 
 TEST_F(DownloadItemModelTest, ShouldShowInUi) {
@@ -901,6 +909,116 @@ TEST_F(DownloadItemModelTest, RenamingProgress) {
 
   EXPECT_EQ(6, model().GetCompletedBytes());
   EXPECT_EQ(60, model().PercentComplete());
+}
+
+TEST_F(DownloadItemModelTest, GetDownloadDomainForDisplay_PrefersTabUrl) {
+  GURL tab_url("https://tab.example.com/path");
+  std::optional<url::Origin> initiator =
+      url::Origin::Create(GURL("https://initiator.example.com"));
+  GURL original_url("https://original.example.com/file.apk");
+  GURL download_url("https://cdn.example.com/file.apk");
+
+  EXPECT_CALL(item(), GetTabUrl()).WillRepeatedly(ReturnRef(tab_url));
+  EXPECT_CALL(item(), GetRequestInitiator())
+      .WillRepeatedly(ReturnRef(initiator));
+  EXPECT_CALL(item(), GetOriginalUrl()).WillRepeatedly(ReturnRef(original_url));
+  EXPECT_CALL(item(), GetURL()).WillRepeatedly(ReturnRef(download_url));
+
+  EXPECT_EQ(u"tab.example.com", model().GetDownloadDomainForDisplay());
+  EXPECT_EQ(u"tab.example.com",
+            DownloadUIModel::GetDownloadDomainForDisplay(&item()));
+}
+
+TEST_F(DownloadItemModelTest,
+       GetDownloadDomainForDisplay_FallsBackToRequestInitiator) {
+  GURL empty_tab_url;
+  std::optional<url::Origin> initiator =
+      url::Origin::Create(GURL("https://initiator.example.com"));
+  GURL original_url("https://original.example.com/file.apk");
+  GURL download_url("https://cdn.example.com/file.apk");
+
+  EXPECT_CALL(item(), GetTabUrl()).WillRepeatedly(ReturnRef(empty_tab_url));
+  EXPECT_CALL(item(), GetRequestInitiator())
+      .WillRepeatedly(ReturnRef(initiator));
+  EXPECT_CALL(item(), GetOriginalUrl()).WillRepeatedly(ReturnRef(original_url));
+  EXPECT_CALL(item(), GetURL()).WillRepeatedly(ReturnRef(download_url));
+
+  EXPECT_EQ(u"initiator.example.com", model().GetDownloadDomainForDisplay());
+  EXPECT_EQ(u"initiator.example.com",
+            DownloadUIModel::GetDownloadDomainForDisplay(&item()));
+}
+
+TEST_F(DownloadItemModelTest,
+       GetDownloadDomainForDisplay_FallsBackToOriginalUrl) {
+  GURL empty_tab_url;
+  std::optional<url::Origin> null_initiator = std::nullopt;
+  GURL original_url("https://original.example.com/file.apk");
+  GURL download_url("https://cdn.example.com/file.apk");
+
+  EXPECT_CALL(item(), GetTabUrl()).WillRepeatedly(ReturnRef(empty_tab_url));
+  EXPECT_CALL(item(), GetRequestInitiator())
+      .WillRepeatedly(ReturnRef(null_initiator));
+  EXPECT_CALL(item(), GetOriginalUrl()).WillRepeatedly(ReturnRef(original_url));
+  EXPECT_CALL(item(), GetURL()).WillRepeatedly(ReturnRef(download_url));
+
+  EXPECT_EQ(u"original.example.com", model().GetDownloadDomainForDisplay());
+  EXPECT_EQ(u"original.example.com",
+            DownloadUIModel::GetDownloadDomainForDisplay(&item()));
+}
+
+TEST_F(DownloadItemModelTest, GetDownloadDomainForDisplay_FallsBackToUrl) {
+  GURL empty_tab_url;
+  std::optional<url::Origin> null_initiator = std::nullopt;
+  GURL empty_original_url;
+  GURL download_url("https://cdn.example.com/file.apk");
+
+  EXPECT_CALL(item(), GetTabUrl()).WillRepeatedly(ReturnRef(empty_tab_url));
+  EXPECT_CALL(item(), GetRequestInitiator())
+      .WillRepeatedly(ReturnRef(null_initiator));
+  EXPECT_CALL(item(), GetOriginalUrl())
+      .WillRepeatedly(ReturnRef(empty_original_url));
+  EXPECT_CALL(item(), GetURL()).WillRepeatedly(ReturnRef(download_url));
+
+  EXPECT_EQ(u"cdn.example.com", model().GetDownloadDomainForDisplay());
+  EXPECT_EQ(u"cdn.example.com",
+            DownloadUIModel::GetDownloadDomainForDisplay(&item()));
+}
+
+TEST_F(DownloadItemModelTest,
+       GetDownloadDomainForDisplay_BlobUrlExtractsInnerOrigin) {
+  GURL empty_tab_url;
+  std::optional<url::Origin> null_initiator = std::nullopt;
+  GURL empty_original_url;
+  GURL blob_url("blob:https://blob.example.com/1234-5678");
+
+  EXPECT_CALL(item(), GetTabUrl()).WillRepeatedly(ReturnRef(empty_tab_url));
+  EXPECT_CALL(item(), GetRequestInitiator())
+      .WillRepeatedly(ReturnRef(null_initiator));
+  EXPECT_CALL(item(), GetOriginalUrl())
+      .WillRepeatedly(ReturnRef(empty_original_url));
+  EXPECT_CALL(item(), GetURL()).WillRepeatedly(ReturnRef(blob_url));
+
+  EXPECT_EQ(u"blob.example.com", model().GetDownloadDomainForDisplay());
+  EXPECT_EQ(u"blob.example.com",
+            DownloadUIModel::GetDownloadDomainForDisplay(&item()));
+}
+
+TEST_F(DownloadItemModelTest,
+       GetDownloadDomainForDisplay_OpaqueOriginReturnsEmpty) {
+  GURL empty_tab_url;
+  std::optional<url::Origin> null_initiator = std::nullopt;
+  GURL empty_original_url;
+  GURL data_url("data:text/plain;base64,SGVsbG8sIFdvcmxkIQ==");
+
+  EXPECT_CALL(item(), GetTabUrl()).WillRepeatedly(ReturnRef(empty_tab_url));
+  EXPECT_CALL(item(), GetRequestInitiator())
+      .WillRepeatedly(ReturnRef(null_initiator));
+  EXPECT_CALL(item(), GetOriginalUrl())
+      .WillRepeatedly(ReturnRef(empty_original_url));
+  EXPECT_CALL(item(), GetURL()).WillRepeatedly(ReturnRef(data_url));
+
+  EXPECT_EQ(u"", model().GetDownloadDomainForDisplay());
+  EXPECT_EQ(u"", DownloadUIModel::GetDownloadDomainForDisplay(&item()));
 }
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)

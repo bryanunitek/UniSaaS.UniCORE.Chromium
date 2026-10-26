@@ -28,7 +28,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/global_features.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -136,7 +135,7 @@ class GraduationManagerTest : public SystemWebAppBrowserTestBase,
   void SetGraduationEnablement(bool is_enabled) {
     base::DictValue status;
     status.Set("is_enabled", is_enabled);
-    browser()->profile()->GetPrefs()->SetDict(
+    browser()->GetProfile()->GetPrefs()->SetDict(
         prefs::kGraduationEnablementStatus, status.Clone());
   }
 
@@ -151,7 +150,7 @@ class GraduationManagerTest : public SystemWebAppBrowserTestBase,
     start_date.Set("month", month);
     start_date.Set("year", year);
     status.Set("start_date", start_date.Clone());
-    browser()->profile()->GetPrefs()->SetDict(
+    browser()->GetProfile()->GetPrefs()->SetDict(
         prefs::kGraduationEnablementStatus, status.Clone());
   }
 
@@ -166,7 +165,7 @@ class GraduationManagerTest : public SystemWebAppBrowserTestBase,
     end_date.Set("month", month);
     end_date.Set("year", year);
     status.Set("end_date", end_date.Clone());
-    browser()->profile()->GetPrefs()->SetDict(
+    browser()->GetProfile()->GetPrefs()->SetDict(
         prefs::kGraduationEnablementStatus, status.Clone());
   }
 

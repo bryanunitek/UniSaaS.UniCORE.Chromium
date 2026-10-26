@@ -54,9 +54,7 @@ import java.util.List;
 
 /** Robolectric tests for BaseSessionController. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowMediaRouter.class, ShadowCastContext.class})
+@Config(shadows = {ShadowMediaRouter.class, ShadowCastContext.class})
 public class BaseSessionControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private static final String PRESENTATION_ID = "presentation-id";
@@ -81,7 +79,7 @@ public class BaseSessionControllerTest {
 
     @Before
     public void setUp() {
-        mContext = RuntimeEnvironment.application;
+        mContext = RuntimeEnvironment.getApplication();
         mMediaRouterHelper = new MediaRouterTestHelper();
         MediaRouterClient.setInstance(new TestMediaRouterClient());
         ShadowCastContext.setInstance(mCastContext);

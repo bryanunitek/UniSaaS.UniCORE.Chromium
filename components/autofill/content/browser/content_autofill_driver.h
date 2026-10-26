@@ -24,6 +24,8 @@
 #include "content/public/browser/render_widget_host.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
+#include "mojo/public/cpp/bindings/pending_associated_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace password_manager {
@@ -31,6 +33,10 @@ class ContentPasswordManagerDriver;
 }
 
 namespace autofill {
+
+namespace mojom {
+class AutofillVisibilityObserver;
+}  // namespace mojom
 
 class ContentAutofillDriverFactory;
 class AutofillDriverRouter;
@@ -216,6 +222,7 @@ class ContentAutofillDriver : public AutofillDriver,
   void TriggerFormExtractionInAllFrames(
       base::OnceCallback<void(bool success)> form_extraction_finished_callback)
       override;
+  void ClearFormCacheInAllFrames() override;
   void RendererShouldClearPreviewedForm() override;
 
   // Group (1b): browser -> renderer events, routed (see comment above).
@@ -227,19 +234,19 @@ class ContentAutofillDriver : public AutofillDriver,
       const FillId& fill_id,
       bool supports_refill,
       const url::Origin& triggered_origin,
-      const absl::flat_hash_map<FieldGlobalId, FieldType>& field_type_map,
-      const Section& section_for_clear_form_on_ios) override;
+      const absl::flat_hash_map<FieldGlobalId, FieldType>& field_type_map)
+      override;
   void ApplyFieldAction(mojom::FieldActionType action_type,
                         mojom::ActionPersistence action_persistence,
                         const FieldGlobalId& field_id,
                         const std::u16string& value) override;
+  void GetNonceForEmailVerification(
+      FieldGlobalId email_field_id,
+      base::OnceCallback<void(const std::optional<std::string>&)> callback)
+      override;
   void SendEmailVerificationToken(FieldGlobalId email_field_id,
                                   const std::string& email,
-                                  FieldGlobalId token_field_id,
                                   const std::string& token) override;
-  void UpdateEmailVerificationState(
-      const FieldGlobalId& email_field_id,
-      mojom::EmailVerificationState state) override;
   void ExtractFormWithField(FieldGlobalId field_id,
                             BrowserFormHandler final_handler) override;
   void RendererShouldAcceptDataListSuggestion(
@@ -253,6 +260,9 @@ class ContentAutofillDriver : public AutofillDriver,
       AutofillSuggestionTriggerSource trigger_source) override;
   void SendTypePredictionsToRenderer(const FormStructure& form) override;
   void ScrollFieldIntoView(FieldGlobalId field_id) override;
+  void ObserveFieldVisibility(
+      const FieldGlobalId& field_id,
+      mojo::PendingRemote<mojom::AutofillVisibilityObserver> observer) override;
 
   // Group (1c): browser -> renderer events, directed to this driver's main
   // frame's agent (see comment above).
@@ -316,11 +326,12 @@ class ContentAutofillDriver : public AutofillDriver,
                           FieldRendererId field_id) override;
   void FormWithEmailVerificationTokenSubmitted(
       const FormData& form,
-      FieldRendererId field_id) override;
+      FieldRendererId email_field_id) override;
   void DidDetectJavaScriptAutofill(
       const FormData& form,
       FieldRendererId trigger_field_id,
-      const std::vector<FieldRendererId>& field_ids) override;
+      std::vector<mojom::JavaScriptFieldModificationPtr> field_modifications,
+      base::TimeTicks detection_start_timestamp) override;
 
   // The functions below this line do not cross the IPC boundary.
   bool IsSafeToFill(const FormFieldData& field,
@@ -335,13 +346,21 @@ class ContentAutofillDriver : public AutofillDriver,
 
   const mojo::AssociatedRemote<mojom::AutofillAgent>& GetAutofillAgent();
 
+  // This only exists so that ContentAutofillDriverAttorney can make the pass
+  // key available to the helper functions in the anonymous namespace.
+  static AutofillManager::RendererEventPassKey autofill_manager_pass_key() {
+    return {};
+  }
+
+  // This only exists so that ContentAutofillDriverTestApi can make Lift()
+  // available to tests.
+  void LiftForTest(FormData& form);
+
   // The frame/document to which this driver is associated. Outlives `this`.
   // RFH is corresponds to neither a frame nor a document: it may survive
   // navigations that documents don't, but it may not survive cross-origin
   // navigations.
   const raw_ref<content::RenderFrameHost> render_frame_host_;
-
-  void LiftForTest(FormData& form);
 
   // The factory that created this driver. Outlives `this`.
   const raw_ref<ContentAutofillDriverFactory> owner_;

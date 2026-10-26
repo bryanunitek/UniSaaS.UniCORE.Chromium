@@ -6,8 +6,11 @@
 
 #import <UIKit/UIKit.h>
 
+#import <optional>
+
 #import "base/check.h"
 #import "base/memory/raw_ptr.h"
+#import "components/signin/core/browser/account_preview_data_service.h"
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/signin/public/base/signin_switches.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
@@ -16,6 +19,7 @@
 #import "components/sync/service/sync_service.h"
 #import "components/sync/service/sync_user_settings.h"
 #import "ios/chrome/browser/authentication/ui_bundled/enterprise/enterprise_utils.h"
+#import "ios/chrome/browser/authentication/ui_bundled/signin/account_preview_preference_string_utils.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/consistency_promo_signin/consistency_default_account/consistency_default_account_consumer.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_context_style.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
@@ -44,7 +48,10 @@ namespace {
 NSString* GetPromoLabelString(
     signin_metrics::AccessPoint access_point,
     bool sync_transport_disabled_by_policy,
-    syncer::UserSelectableTypeSet sync_types_disabled_by_policy) {
+    syncer::UserSelectableTypeSet sync_types_disabled_by_policy,
+    const std::optional<
+        signin::AccountPreviewDataService::AccountPreviewPreference>&
+        preference) {
   switch (access_point) {
     case signin_metrics::AccessPoint::kSendTabToSelfPromo:
       // Sign-in shouldn't be offered if the feature doesn't work.
@@ -56,13 +63,29 @@ NSString* GetPromoLabelString(
     case signin_metrics::AccessPoint::kWebSignin:
       // This could check `sync_types_disabled_by_policy` only for the types
       // mentioned in the regular string, but don't bother.
-      return sync_transport_disabled_by_policy ||
-                     !sync_types_disabled_by_policy.empty()
-                 ? l10n_util::GetNSString(
-                       IDS_IOS_CONSISTENCY_PROMO_DEFAULT_ACCOUNT_LABEL)
-                 : l10n_util::GetNSString(
-                       IDS_IOS_SIGNIN_SHEET_LABEL_FOR_WEB_SIGNIN);
+      if (sync_transport_disabled_by_policy ||
+          !sync_types_disabled_by_policy.empty()) {
+        return l10n_util::GetNSString(
+            IDS_IOS_CONSISTENCY_PROMO_DEFAULT_ACCOUNT_LABEL);
+      }
+      if (NSString* label =
+              signin::GetPromoLabelStringForWebSignin(preference)) {
+        return label;
+      }
+      return l10n_util::GetNSString(IDS_IOS_SIGNIN_SHEET_LABEL_FOR_WEB_SIGNIN);
     case signin_metrics::AccessPoint::kNtpSignedOutIcon:
+      // This could check `sync_types_disabled_by_policy` only for the types
+      // mentioned in the regular string, but keep it here for consistency with
+      // other access points.
+      if (sync_transport_disabled_by_policy ||
+          !sync_types_disabled_by_policy.empty()) {
+        return nil;
+      }
+      if (NSString* label =
+              signin::GetPromoLabelStringForNtpSignedOutIcon(preference)) {
+        return label;
+      }
+      return l10n_util::GetNSString(IDS_IOS_IDENTITY_DISC_SIGN_IN_PROMO_LABEL);
     case signin_metrics::AccessPoint::kOverflowMenu:
     case signin_metrics::AccessPoint::kLevelUp:
       // This could check `sync_types_disabled_by_policy` only for the types
@@ -110,7 +133,6 @@ NSString* GetPromoLabelString(
     case signin_metrics::AccessPoint::kExtensions:
     case signin_metrics::AccessPoint::kBookmarkBubble:
     case signin_metrics::AccessPoint::kBookmarkManager:
-    case signin_metrics::AccessPoint::kAvatarBubbleSignIn:
     case signin_metrics::AccessPoint::kUserManager:
     case signin_metrics::AccessPoint::kFullscreenSigninPromo:
     case signin_metrics::AccessPoint::kPasswordBubble:
@@ -137,7 +159,7 @@ NSString* GetPromoLabelString(
     case signin_metrics::AccessPoint::kSettingsSignoutConfirmationPrompt:
     case signin_metrics::AccessPoint::kOidcRedirectionInterception:
     case signin_metrics::AccessPoint::kWebauthnModalDialog:
-    case signin_metrics::AccessPoint::kAvatarBubbleSignInWithSyncPromo:
+    case signin_metrics::AccessPoint::kProfileMenuPrimaryButton:
     case signin_metrics::AccessPoint::kProductSpecifications:
     case signin_metrics::AccessPoint::kAccountMenuSwitchAccount:
     case signin_metrics::AccessPoint::kAccountMenuSwitchAccountFailed:
@@ -173,6 +195,13 @@ NSString* GetPromoLabelString(
     case signin_metrics::AccessPoint::kIndigo:
     case signin_metrics::AccessPoint::kDeepLinkDefault:
     case signin_metrics::AccessPoint::kAgeMismatchSignout:
+    case signin_metrics::AccessPoint::kSignoutUndoSnackbar:
+    case signin_metrics::AccessPoint::kComposeboxDriveContextMenuOptionBubble:
+    case signin_metrics::AccessPoint::kSkills:
+    case signin_metrics::AccessPoint::kAccountMenuSignedOutState:
+    case signin_metrics::AccessPoint::kAppSwitcherAISummarization:
+    case signin_metrics::AccessPoint::kGeminiExternalAppStoreEvent:
+    case signin_metrics::AccessPoint::kPasswordManagerCard:
       // Nothing prevents instantiating ConsistencyDefaultAccountViewController
       // with an arbitrary entry point, API-wise. In doubt, no label is a good,
       // generic default that fits all entry points.
@@ -182,8 +211,7 @@ NSString* GetPromoLabelString(
 
 }  // namespace
 
-@interface ConsistencyDefaultAccountMediator () <
-    IdentityManagerObserverBridgeDelegate> {
+@interface ConsistencyDefaultAccountMediator () <IdentityManagerObserving> {
   std::unique_ptr<signin::IdentityManagerObserverBridge>
       _identityManagerObserver;
   signin_metrics::AccessPoint _accessPoint;
@@ -197,16 +225,20 @@ NSString* GetPromoLabelString(
 @implementation ConsistencyDefaultAccountMediator {
   raw_ptr<signin::IdentityManager> _identityManager;
   raw_ptr<ChromeAccountManagerService> _accountManagerService;
+  raw_ptr<signin::AccountPreviewDataService> _accountPreviewDataService;
   // Used to customize content on screen.
   SigninContextStyle _contextStyle;
 }
 
 - (instancetype)
-    initWithIdentityManager:(signin::IdentityManager*)identityManager
-      accountManagerService:(ChromeAccountManagerService*)accountManagerService
-                syncService:(syncer::SyncService*)syncService
-               contextStyle:(SigninContextStyle)contextStyle
-                accessPoint:(signin_metrics::AccessPoint)accessPoint {
+      initWithIdentityManager:(signin::IdentityManager*)identityManager
+        accountManagerService:
+            (ChromeAccountManagerService*)accountManagerService
+    accountPreviewDataService:
+        (signin::AccountPreviewDataService*)accountPreviewDataService
+                  syncService:(syncer::SyncService*)syncService
+                 contextStyle:(SigninContextStyle)contextStyle
+                  accessPoint:(signin_metrics::AccessPoint)accessPoint {
   if ((self = [super init])) {
     CHECK(identityManager);
     CHECK(accountManagerService);
@@ -214,6 +246,7 @@ NSString* GetPromoLabelString(
 
     _identityManager = identityManager;
     _accountManagerService = accountManagerService;
+    _accountPreviewDataService = accountPreviewDataService;
     _syncService = syncService;
     _contextStyle = contextStyle;
     _accessPoint = accessPoint;
@@ -236,6 +269,7 @@ NSString* GetPromoLabelString(
 - (void)disconnect {
   _identityManager = nullptr;
   _accountManagerService = nullptr;
+  _accountPreviewDataService = nullptr;
   _syncService = nullptr;
   _identityManagerObserver.reset();
 }
@@ -247,40 +281,11 @@ NSString* GetPromoLabelString(
 
   _consumer = consumer;
 
-  syncer::UserSelectableTypeSet disabledTypes;
-  syncer::SyncUserSettings* syncSettings = _syncService->GetUserSettings();
-  for (syncer::UserSelectableType type :
-       syncSettings->GetRegisteredSelectableTypes()) {
-    if (syncSettings->IsTypeManagedByPolicy(type)) {
-      disabledTypes.Put(type);
-    }
-  }
-
-  NSString* labelText = GetPromoLabelString(
-      _accessPoint,
-      _syncService->HasDisableReason(
-          syncer::SyncService::DISABLE_REASON_ENTERPRISE_POLICY),
-      disabledTypes);
-  switch (_contextStyle) {
-    case SigninContextStyle::kCollaborationJoinTabGroup:
-      NOTREACHED() << "kCollaborationShareTabGroup style should be presented "
-                      "in a full screen signin screen.";
-    case SigninContextStyle::kCollaborationShareTabGroup:
-      labelText = l10n_util::GetNSString(
-          IDS_IOS_SIGNIN_GROUP_COLLABORATION_HALF_SHEET_SUBTITLE);
-      break;
-    case SigninContextStyle::kDeeplinkSignin:
-    case SigninContextStyle::kDefault:
-      break;
-  }
-  [_consumer setLabelText:labelText];
-
   NSString* skipButtonText =
       _accessPoint == signin_metrics::AccessPoint::kWebSignin
           ? l10n_util::GetNSString(IDS_IOS_CONSISTENCY_PROMO_SKIP)
           : l10n_util::GetNSString(IDS_CANCEL);
   [_consumer setSkipButtonText:skipButtonText];
-
   [self selectDefaultIdentity];
 }
 
@@ -296,7 +301,8 @@ NSString* GetPromoLabelString(
 #pragma mark - Private
 
 // Selects the default identity to be either:
-// * the device default identity if any,
+// * the preferred account from _accountPreviewDataService,
+// * otherwise the device default identity if any,
 // * otherwise nil.
 // Also updates the UI accordingly.
 - (void)selectDefaultIdentity {
@@ -304,9 +310,31 @@ NSString* GetPromoLabelString(
     return;
   }
 
-  // Here, default identity may be nil.
-  self.selectedIdentity = signin::GetDefaultIdentityOnDevice(
-      _identityManager, _accountManagerService);
+  id<SystemIdentity> identity;
+  std::optional<signin::AccountPreviewDataService::AccountPreviewPreference>
+      preference;
+  if (_accountPreviewDataService &&
+      base::FeatureList::IsEnabled(
+          switches::kEnableAccountPreviewPreferredAccount)) {
+    preference = _accountPreviewDataService->GetPreferredAccountForSignin();
+    if (preference.has_value()) {
+      identity =
+          _accountManagerService->GetIdentityWithGaiaID(preference->gaia_id);
+      if (!identity) {
+        preference = std::nullopt;
+      }
+    }
+  }
+  if (!identity) {
+    // Here, default identity may be nil.
+    identity = signin::GetDefaultIdentityOnDevice(_identityManager,
+                                                  _accountManagerService);
+  }
+
+  // `updateLabelTextWithPreference:` must be called before setting
+  // `selectedIdentity` because the view does not refresh afterwards.
+  [self updateLabelTextWithPreference:preference];
+  self.selectedIdentity = identity;
 }
 
 // Updates the view controller using the default identity, or hide the default
@@ -321,13 +349,46 @@ NSString* GetPromoLabelString(
   UIImage* avatar =
       GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
           selectedIdentity, IdentityAvatarSize::TableViewIcon);
-  CHECK(self.selectedIdentity, base::NotFatalUntil::M147);
+  CHECK(self.selectedIdentity);
   BOOL isManaged = [self isIdentityKnownToBeManaged:selectedIdentity];
   [self.consumer showDefaultAccountWithFullName:selectedIdentity.userFullName
                                       givenName:selectedIdentity.userGivenName
                                           email:selectedIdentity.userEmail
                                          avatar:avatar
                                         managed:isManaged];
+}
+
+- (void)updateLabelTextWithPreference:
+    (const std::optional<
+        signin::AccountPreviewDataService::AccountPreviewPreference>&)
+        preference {
+  syncer::UserSelectableTypeSet disabledTypes;
+  syncer::SyncUserSettings* syncSettings = _syncService->GetUserSettings();
+  for (syncer::UserSelectableType type :
+       syncSettings->GetRegisteredSelectableTypes()) {
+    if (syncSettings->IsTypeManagedByPolicy(type)) {
+      disabledTypes.Put(type);
+    }
+  }
+
+  NSString* labelText = GetPromoLabelString(
+      _accessPoint,
+      _syncService->HasDisableReason(
+          syncer::SyncService::DISABLE_REASON_ENTERPRISE_POLICY),
+      disabledTypes, preference);
+  switch (_contextStyle) {
+    case SigninContextStyle::kCollaborationJoinTabGroup:
+      NOTREACHED() << "kCollaborationShareTabGroup style should be presented "
+                      "in a full screen signin screen.";
+    case SigninContextStyle::kCollaborationShareTabGroup:
+      labelText = l10n_util::GetNSString(
+          IDS_IOS_SIGNIN_GROUP_COLLABORATION_HALF_SHEET_SUBTITLE);
+      break;
+    case SigninContextStyle::kDeeplinkSignin:
+    case SigninContextStyle::kDefault:
+      break;
+  }
+  [_consumer setLabelText:labelText];
 }
 
 - (void)handleIdentityUpdated:(id<SystemIdentity>)identity {
@@ -343,7 +404,7 @@ NSString* GetPromoLabelString(
 // called asynchronously when the management status if retrieved and the
 // identity is managed.
 - (BOOL)isIdentityKnownToBeManaged:(id<SystemIdentity>)identity {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   if (std::optional<BOOL> managed = IsIdentityManaged(identity);
       managed.has_value()) {
     return managed.value();
@@ -360,7 +421,7 @@ NSString* GetPromoLabelString(
 
 #pragma mark -  IdentityManagerObserver
 
-- (void)onAccountsOnDeviceChanged {
+- (void)accountsOnDeviceDidChange {
   if (_accountManagerService &&
       !_accountManagerService->IsValidIdentity(self.selectedIdentity.gaiaId)) {
     // The currently selected identity is not valid anymore. Let’s select the
@@ -369,9 +430,9 @@ NSString* GetPromoLabelString(
   }
 }
 
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)info {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)info {
   id<SystemIdentity> identity =
-      _accountManagerService->GetIdentityOnDeviceWithGaiaID(info.gaia);
+      _accountManagerService->GetIdentityOnDeviceWithGaiaID(info.GetGaiaId());
   [self handleIdentityUpdated:identity];
 }
 @end

@@ -15,10 +15,10 @@
 #include "ash/capture_mode/capture_mode_session_focus_cycler.h"
 #include "ash/capture_mode/capture_mode_types.h"
 #include "ash/capture_mode/capture_mode_util.h"
-#include "ash/public/cpp/style/color_provider.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/style/system_shadow.h"
+#include "ash/style/style_util.h"
+#include "ash/style/system_decoration.h"
 #include "ash/style/typography.h"
 #include "base/check.h"
 #include "base/functional/bind.h"
@@ -93,8 +93,9 @@ constexpr base::TimeDelta kSmartActionsButtonTransitionSlideInDuration =
 }  // namespace
 
 ActionButtonContainerView::ErrorView::ErrorView()
-    : shadow_(SystemShadow::CreateShadowOnTextureLayer(
-          SystemShadow::Type::kElevation12)) {
+    : shadow_(SystemDecoration::CreateShadowOnNinePatchLayerForView(
+          this,
+          SystemDecoration::ShadowType::kElevation12)) {
   SetOrientation(views::BoxLayout::Orientation::kHorizontal);
   SetInsideBorderInsets(kErrorViewBorderInsets);
 
@@ -108,11 +109,11 @@ ActionButtonContainerView::ErrorView::ErrorView()
 
   if (chromeos::features::IsSystemBlurEnabled()) {
     layer()->SetFillsBoundsOpaquely(false);
-    layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-    layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+    layer()->SetBackgroundBlur(StyleUtil::kBackgroundBlurSigma);
+    layer()->SetBackdropFilterQuality(StyleUtil::kBackgroundBlurQuality);
   }
 
-  shadow_->SetRoundedCornerRadius(kErrorViewCornerRadius);
+  shadow_->SetRoundedCorners(gfx::RoundedCornersF(kErrorViewCornerRadius));
   capture_mode_util::SetHighlightBorder(
       this, kErrorViewCornerRadius,
       views::HighlightBorder::Type::kHighlightBorderNoShadow);
@@ -152,33 +153,6 @@ ActionButtonContainerView::ErrorView::ErrorView()
 }
 
 ActionButtonContainerView::ErrorView::~ErrorView() = default;
-
-void ActionButtonContainerView::ErrorView::SetVisible(bool visible) {
-  views::BoxLayoutView::SetVisible(visible);
-  shadow_->GetLayer()->SetVisible(visible);
-}
-
-void ActionButtonContainerView::ErrorView::AddedToWidget() {
-  views::BoxLayoutView::AddedToWidget();
-
-  // Since the layer of the shadow has to be added as a sibling to this view's
-  // layer, we need to wait until the view is added to the widget.
-  auto* parent = layer()->parent();
-  ui::Layer* shadow_layer = shadow_->GetLayer();
-  parent->Add(shadow_layer);
-  parent->StackAtBottom(shadow_layer);
-
-  // Make the shadow observe the color provider source change to update the
-  // colors.
-  shadow_->ObserveColorProviderSource(GetWidget());
-}
-
-void ActionButtonContainerView::ErrorView::OnBoundsChanged(
-    const gfx::Rect& previous_bounds) {
-  // The shadow layer is a sibling of this view's layer, and should have the
-  // same bounds.
-  shadow_->SetContentBounds(layer()->bounds());
-}
 
 void ActionButtonContainerView::ErrorView::SetErrorMessage(
     const std::u16string& error_message) {

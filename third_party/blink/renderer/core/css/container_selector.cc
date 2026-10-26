@@ -7,7 +7,6 @@
 #include "third_party/blink/renderer/core/css/conditional_exp_node.h"
 #include "third_party/blink/renderer/core/css/media_feature_names.h"
 #include "third_party/blink/renderer/core/css/media_query_exp.h"
-#include "third_party/blink/renderer/core/dom/tree_scope.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 
 namespace blink {
@@ -118,8 +117,8 @@ ContainerSelector::FeatureFlags ContainerSelector::CollectFeatureFlags(
   return collector.GetFlags();
 }
 
-unsigned ContainerSelector::GetHash() const {
-  unsigned hash = !name_.empty() ? blink::GetHash(name_) : 0;
+uint32_t ContainerSelector::GetHash() const {
+  uint32_t hash = !name_.empty() ? blink::GetHash(name_) : 0;
   AddIntToHash(hash, physical_axes_.value());
   AddIntToHash(hash, logical_axes_.value());
   AddIntToHash(hash, has_style_query_);
@@ -150,10 +149,6 @@ unsigned ContainerSelector::Type(WritingMode writing_mode) const {
     type |= kContainerTypeAnchored;
   }
   return type;
-}
-
-void ScopedContainerSelector::Trace(Visitor* visitor) const {
-  visitor->Trace(tree_scope_);
 }
 
 }  // namespace blink

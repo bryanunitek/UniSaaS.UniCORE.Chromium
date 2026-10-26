@@ -42,6 +42,7 @@
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "third_party/blink/public/mojom/ad_tagging/ad_evidence.mojom-blink.h"
 #include "third_party/blink/public/mojom/loader/same_document_navigation_type.mojom-blink.h"
+#include "third_party/blink/public/web/web_text_check_client.h"
 #include "third_party/blink/renderer/bindings/core/v8/isolated_world_csp.h"
 #include "third_party/blink/renderer/bindings/core/v8/local_window_proxy.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
@@ -50,7 +51,9 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/document_timing.h"
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
+#include "third_party/blink/renderer/core/editing/spellcheck/spell_checker.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
+#include "third_party/blink/renderer/core/exported/web_view_impl.h"
 #include "third_party/blink/renderer/core/frame/frame.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -61,11 +64,13 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/test_report_body.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
+#include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/html/parser/text_resource_decoder.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/inspector/ad_tagging_utils.h"
+#include "third_party/blink/renderer/core/inspector/dev_tools_emulator.h"
 #include "third_party/blink/renderer/core/inspector/identifiers_factory.h"
 #include "third_party/blink/renderer/core/inspector/inspected_frames.h"
 #include "third_party/blink/renderer/core/inspector/inspector_css_agent.h"
@@ -98,6 +103,7 @@
 #include "third_party/blink/renderer/platform/text/locale_to_script_mapping.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/text/base64.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -194,20 +200,16 @@ std::unique_ptr<protocol::Array<String>> GetEnabledWindowFeatures(
     const WebWindowFeatures& window_features) {
   auto feature_strings = std::make_unique<protocol::Array<String>>();
   if (window_features.x_set) {
-    feature_strings->emplace_back(
-        String::Format("left=%d", static_cast<int>(window_features.x)));
+    feature_strings->emplace_back(Format("left={}", window_features.x));
   }
   if (window_features.y_set) {
-    feature_strings->emplace_back(
-        String::Format("top=%d", static_cast<int>(window_features.y)));
+    feature_strings->emplace_back(Format("top={}", window_features.y));
   }
   if (window_features.width_set) {
-    feature_strings->emplace_back(
-        String::Format("width=%d", static_cast<int>(window_features.width)));
+    feature_strings->emplace_back(Format("width={}", window_features.width));
   }
   if (window_features.height_set) {
-    feature_strings->emplace_back(
-        String::Format("height=%d", static_cast<int>(window_features.height)));
+    feature_strings->emplace_back(Format("height={}", window_features.height));
   }
   if (!window_features.is_popup) {
     feature_strings->emplace_back("menubar");
@@ -499,11 +501,9 @@ InspectorPageAgent::InspectorPageAgent(
     InspectedFrames* inspected_frames,
     Client* client,
     InspectorResourceContentLoader* resource_content_loader,
-    v8_inspector::V8InspectorSession* v8_session,
     const String& script_to_evaluate_on_load,
     InspectorInjectedScriptManager* injected_script_manager)
     : inspected_frames_(inspected_frames),
-      v8_session_(v8_session),
       client_(client),
       inspector_resource_content_loader_(resource_content_loader),
       resource_content_loader_client_id_(
@@ -513,9 +513,10 @@ InspectorPageAgent::InspectorPageAgent(
       enabled_(&agent_state_, /*default_value=*/false),
       enable_file_chooser_opened_event_(&agent_state_,
                                         /*default_value=*/false),
-      screencast_enabled_(&agent_state_, /*default_value=*/false),
       lifecycle_events_enabled_(&agent_state_, /*default_value=*/false),
       bypass_csp_enabled_(&agent_state_, /*default_value=*/false),
+      input_visualization_clicks_enabled_(&agent_state_,
+                                          /*default_value=*/false),
       standard_font_size_(&agent_state_, /*default_value=*/0),
       fixed_font_size_(&agent_state_, /*default_value=*/0),
       script_font_families_cbor_(&agent_state_, std::vector<uint8_t>()),
@@ -529,9 +530,10 @@ void InspectorPageAgent::Restore() {
   if (bypass_csp_enabled_.Get()) {
     setBypassCSP(true);
   }
-  LocalFrame* frame = inspected_frames_->Root();
-  auto* settings = frame->GetSettings();
-  if (settings) {
+  if (input_visualization_clicks_enabled_.Get()) {
+    setInputVisualization(/*clicks=*/true);
+  }
+  if (DevToolsEmulator* emulator = GetDevToolsEmulator()) {
     // Re-apply generic fonts overrides.
     if (!script_font_families_cbor_.Get().empty()) {
       protocol::Array<protocol::Page::ScriptFontFamilies> script_font_families;
@@ -540,16 +542,14 @@ void InspectorPageAgent::Restore() {
           protocol::Array<protocol::Page::ScriptFontFamilies>>::
           Deserialize(&state, &script_font_families);
       CHECK(result);
-      auto& family_settings = settings->GetGenericFontFamilySettings();
-      setFontFamilies(family_settings, script_font_families);
-      settings->NotifyGenericFontFamilyChange();
+      setFontFamilies(*emulator, script_font_families);
     }
     // Re-apply default font size overrides.
     if (standard_font_size_.Get() != 0) {
-      settings->SetDefaultFontSize(standard_font_size_.Get());
+      emulator->SetDefaultFontSizeOverride(standard_font_size_.Get());
     }
     if (fixed_font_size_.Get() != 0) {
-      settings->SetDefaultFixedFontSize(fixed_font_size_.Get());
+      emulator->SetDefaultFixedFontSizeOverride(fixed_font_size_.Get());
     }
   }
 }
@@ -564,6 +564,15 @@ protocol::Response InspectorPageAgent::enable(
 }
 
 protocol::Response InspectorPageAgent::disable() {
+  if (input_visualization_clicks_enabled_.Get()) {
+    setInputVisualization(/*clicks=*/false);
+  }
+  if (!script_font_families_cbor_.Get().empty() ||
+      standard_font_size_.Get() != 0 || fixed_font_size_.Get() != 0) {
+    if (DevToolsEmulator* emulator = GetDevToolsEmulator()) {
+      emulator->ResetFontOverrides();
+    }
+  }
   agent_state_.ClearAllFields();
   pending_isolated_worlds_.clear();
   script_injection_on_load_once_ = {};
@@ -574,7 +583,6 @@ protocol::Response InspectorPageAgent::disable() {
   requested_compilation_cache_.clear();
   compilation_cache_.clear();
   frame_ad_script_ancestry_.clear();
-  stopScreencast();
 
   return protocol::Response::Success();
 }
@@ -647,8 +655,8 @@ protocol::Response InspectorPageAgent::reload(
   }
   pending_script_injection_on_load_ =
       optional_script_to_evaluate_on_load.value_or("");
-  v8_session_->setSkipAllPauses(true);
-  v8_session_->resume(true /* terminate on resume */);
+  V8Session()->setSkipAllPausesForInternalUse(true);
+  V8Session()->resume(true /* terminate on resume */);
   return protocol::Response::Success();
 }
 
@@ -812,6 +820,26 @@ protocol::Response InspectorPageAgent::getAdScriptAncestry(
   return protocol::Response::Success();
 }
 
+protocol::Response InspectorPageAgent::getSpellCheckCustomDictionary(
+    const String& frame_id,
+    std::unique_ptr<protocol::Array<String>>* words) {
+  LocalFrame* frame =
+      IdentifiersFactory::FrameById(inspected_frames_, frame_id);
+  if (!frame) {
+    return protocol::Response::ServerError("No frame for given id found");
+  }
+  *words = std::make_unique<protocol::Array<String>>();
+  // The words are held by the embedder's text check client, which keeps a
+  // separate set for each frame's document.
+  if (WebTextCheckClient* client =
+          frame->GetSpellChecker().GetTextCheckerClient()) {
+    for (const WebString& word : client->GetSpellCheckCustomDictionaryWords()) {
+      (*words)->push_back(word);
+    }
+  }
+  return protocol::Response::Success();
+}
+
 void InspectorPageAgent::SearchContentAfterResourcesContentLoaded(
     const String& frame_id,
     const String& url,
@@ -843,7 +871,7 @@ void InspectorPageAgent::SearchContentAfterResourcesContentLoaded(
     return;
   }
 
-  auto matches = v8_session_->searchInTextByLines(
+  auto matches = V8Session()->searchInTextByLines(
       ToV8InspectorStringView(content), ToV8InspectorStringView(query),
       case_sensitive, is_regex);
   callback->sendSuccess(
@@ -876,6 +904,15 @@ protocol::Response InspectorPageAgent::setBypassCSP(bool enabled) {
   LocalFrame* frame = inspected_frames_->Root();
   frame->GetSettings()->SetBypassCSP(enabled);
   bypass_csp_enabled_.Set(enabled);
+  return protocol::Response::Success();
+}
+
+protocol::Response InspectorPageAgent::setInputVisualization(
+    std::optional<bool> clicks) {
+  input_visualization_clicks_enabled_.Set(clicks.value_or(false));
+  if (client_) {
+    client_->UpdateInputVisualizationState();
+  }
   return protocol::Response::Success();
 }
 
@@ -1055,11 +1092,11 @@ void InspectorPageAgent::DidCreateMainWorldContext(LocalFrame* frame) {
   }
   String script = std::move(script_injection_on_load_once_);
   ScriptState* script_state = ToScriptStateForMainWorld(frame);
-  if (!script_state || !v8_session_) {
+  if (!script_state || !V8Session()) {
     return;
   }
 
-  v8_session_->evaluate(script_state->GetContext(),
+  V8Session()->evaluate(script_state->GetContext(),
                         ToV8InspectorStringView(script));
 }
 
@@ -1143,10 +1180,6 @@ void InspectorPageAgent::FrameDetachedFromParent(LocalFrame* frame,
 void InspectorPageAgent::FrameSubtreeWillBeDetached(Frame* frame) {
   GetFrontend()->frameSubtreeWillBeDetached(IdentifiersFactory::FrameId(frame));
   GetFrontend()->flush();
-}
-
-bool InspectorPageAgent::ScreencastEnabled() {
-  return enabled_.Get() && screencast_enabled_.Get();
 }
 
 void InspectorPageAgent::FrameStoppedLoading(LocalFrame* frame) {
@@ -1589,21 +1622,6 @@ InspectorPageAgent::BuildObjectForResourceTree(LocalFrame* frame) {
   return result;
 }
 
-protocol::Response InspectorPageAgent::startScreencast(
-    std::optional<String> format,
-    std::optional<int> quality,
-    std::optional<int> max_width,
-    std::optional<int> max_height,
-    std::optional<int> every_nth_frame) {
-  screencast_enabled_.Set(true);
-  return protocol::Response::Success();
-}
-
-protocol::Response InspectorPageAgent::stopScreencast() {
-  screencast_enabled_.Set(false);
-  return protocol::Response::Success();
-}
-
 protocol::Response InspectorPageAgent::getLayoutMetrics(
     std::unique_ptr<protocol::Page::LayoutViewport>* out_layout_viewport,
     std::unique_ptr<protocol::Page::VisualViewport>* out_visual_viewport,
@@ -1759,7 +1777,7 @@ void InspectorPageAgent::CreateIsolatedWorldImpl(
 }
 
 protocol::Response InspectorPageAgent::setFontFamilies(
-    GenericFontFamilySettings& family_settings,
+    DevToolsEmulator& emulator,
     const protocol::Array<protocol::Page::ScriptFontFamilies>&
         script_font_families) {
   for (const auto& entry : script_font_families) {
@@ -1770,44 +1788,55 @@ protocol::Response InspectorPageAgent::setFontFamilies(
     }
     auto* font_families = entry->getFontFamilies();
     if (font_families->hasStandard()) {
-      family_settings.UpdateStandard(
+      emulator.SetStandardFontFamilyOverride(
           AtomicString(font_families->getStandard(String())), script);
     }
     if (font_families->hasFixed()) {
-      family_settings.UpdateFixed(
+      emulator.SetFixedFontFamilyOverride(
           AtomicString(font_families->getFixed(String())), script);
     }
     if (font_families->hasSerif()) {
-      family_settings.UpdateSerif(
+      emulator.SetSerifFontFamilyOverride(
           AtomicString(font_families->getSerif(String())), script);
     }
     if (font_families->hasSansSerif()) {
-      family_settings.UpdateSansSerif(
+      emulator.SetSansSerifFontFamilyOverride(
           AtomicString(font_families->getSansSerif(String())), script);
     }
     if (font_families->hasCursive()) {
-      family_settings.UpdateCursive(
+      emulator.SetCursiveFontFamilyOverride(
           AtomicString(font_families->getCursive(String())), script);
     }
     if (font_families->hasFantasy()) {
-      family_settings.UpdateFantasy(
+      emulator.SetFantasyFontFamilyOverride(
           AtomicString(font_families->getFantasy(String())), script);
     }
     if (font_families->hasMath()) {
-      family_settings.UpdateMath(AtomicString(font_families->getMath(String())),
-                                 script);
+      emulator.SetMathFontFamilyOverride(
+          AtomicString(font_families->getMath(String())), script);
     }
   }
+  if (Settings* settings = inspected_frames_->Root()->GetSettings()) {
+    settings->NotifyGenericFontFamilyChange();
+  }
   return protocol::Response::Success();
+}
+
+DevToolsEmulator* InspectorPageAgent::GetDevToolsEmulator() {
+  WebLocalFrameImpl* web_frame =
+      WebLocalFrameImpl::FromFrame(inspected_frames_->Root());
+  if (!web_frame || !web_frame->ViewImpl()) {
+    return nullptr;
+  }
+  return web_frame->ViewImpl()->GetDevToolsEmulator();
 }
 
 protocol::Response InspectorPageAgent::setFontFamilies(
     std::unique_ptr<protocol::Page::FontFamilies> font_families,
     std::unique_ptr<protocol::Array<protocol::Page::ScriptFontFamilies>>
         for_scripts) {
-  LocalFrame* frame = inspected_frames_->Root();
-  auto* settings = frame->GetSettings();
-  if (!settings) {
+  DevToolsEmulator* emulator = GetDevToolsEmulator();
+  if (!emulator) {
     return protocol::Response::ServerError("No settings");
   }
 
@@ -1826,8 +1855,7 @@ protocol::Response InspectorPageAgent::setFontFamilies(
                              .setFontFamilies(std::move(font_families))
                              .build());
 
-  auto response =
-      setFontFamilies(settings->GetGenericFontFamilySettings(), script_fonts);
+  auto response = setFontFamilies(*emulator, script_fonts);
   if (response.IsError()) {
     return response;
   }
@@ -1836,22 +1864,19 @@ protocol::Response InspectorPageAgent::setFontFamilies(
       protocol::Page::ScriptFontFamilies>>::Serialize(script_fonts,
                                                       &serialized);
   script_font_families_cbor_.Set(serialized);
-  settings->NotifyGenericFontFamilyChange();
   return protocol::Response::Success();
 }
 
 protocol::Response InspectorPageAgent::setFontSizes(
     std::unique_ptr<protocol::Page::FontSizes> font_sizes) {
-  LocalFrame* frame = inspected_frames_->Root();
-  auto* settings = frame->GetSettings();
-  if (settings) {
+  if (DevToolsEmulator* emulator = GetDevToolsEmulator()) {
     if (font_sizes->hasStandard()) {
       standard_font_size_.Set(font_sizes->getStandard(0));
-      settings->SetDefaultFontSize(standard_font_size_.Get());
+      emulator->SetDefaultFontSizeOverride(standard_font_size_.Get());
     }
     if (font_sizes->hasFixed()) {
       fixed_font_size_.Set(font_sizes->getFixed(0));
-      settings->SetDefaultFixedFontSize(fixed_font_size_.Get());
+      emulator->SetDefaultFixedFontSizeOverride(fixed_font_size_.Get());
     }
   }
 
@@ -2002,13 +2027,16 @@ void InspectorPageAgent::Trace(Visitor* visitor) const {
   visitor->Trace(pending_isolated_worlds_);
   visitor->Trace(inspector_resource_content_loader_);
   visitor->Trace(injected_script_manager_);
+  visitor->Trace(client_);
   InspectorBaseAgent::Trace(visitor);
 }
 
 void InspectorPageAgent::Dispose() {
+  if (input_visualization_clicks_enabled_.Get()) {
+    setInputVisualization(/*clicks=*/false);
+  }
   InspectorBaseAgent::Dispose();
   injected_script_manager_ = nullptr;
-  v8_session_ = nullptr;
 }
 
 protocol::Response InspectorPageAgent::getOriginTrials(

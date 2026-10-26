@@ -63,7 +63,7 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        boolean isTablet = mEmbedder != null && mEmbedder.isTablet();
+        boolean shouldWrapDropdownHeight = mEmbedder != null && !mEmbedder.isPhoneStyleWindow();
 
         try (TraceEvent tracing = TraceEvent.scoped("OmniboxSuggestionsList.Measure");
                 TimingMetric metric = OmniboxMetrics.recordSuggestionListMeasureTime();
@@ -78,9 +78,9 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
             heightMeasureSpec =
                     MeasureSpec.makeMeasureSpec(
                             availableViewportHeight,
-                            isTablet ? MeasureSpec.AT_MOST : MeasureSpec.EXACTLY);
+                            shouldWrapDropdownHeight ? MeasureSpec.AT_MOST : MeasureSpec.EXACTLY);
             super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-            if (isTablet) {
+            if (shouldWrapDropdownHeight) {
                 setRoundingCorners(mShouldRoundTopCorners, shouldRoundBottomCorners());
             }
         }
@@ -101,6 +101,23 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
         // activators, including keyboard <Enter> key.
         super.onTouchEvent(event);
         return true;
+    }
+
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        if (!OmniboxCapabilities.isDesktopPlatform()) return super.onGenericMotionEvent(event);
+        // On desktop, we have no scrim which means the ContentView underneath the LocationBar will
+        // eagerly handle ACTION_BUTTON_PRESS, gaining focus and unfocusing the omnibox. Stop it
+        // from doing so by returning true for these events.
+        switch (event.getAction()) {
+            case MotionEvent.ACTION_BUTTON_PRESS:
+                if (event.getActionButton() != 0) {
+                    return true;
+                }
+                return super.onGenericMotionEvent(event);
+            default:
+                return super.onGenericMotionEvent(event);
+        }
     }
 
     /**

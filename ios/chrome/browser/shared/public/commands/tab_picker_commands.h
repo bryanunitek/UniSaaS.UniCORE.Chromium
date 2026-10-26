@@ -7,17 +7,25 @@
 
 #import <UIKit/UIKit.h>
 
-#include <set>
+#import <optional>
+#import <set>
 
 #import "ios/web/public/web_state_id.h"
 
 @protocol TabPickerLogger;
 @protocol TabPickerSnackbarPresenter;
 
-// Callback which returns the IDs of tabs that were selected by the user and
-// which of those have persisted tab context available.
-typedef void (^TabPickerCompletionBlock)(std::set<web::WebStateID> selectedIDs,
-                                         std::set<web::WebStateID> cachedIDs);
+// Holds the tabs that were selected by the user, and which of those have
+// persisted tab context available.
+struct TabPickerSelection {
+  std::set<web::WebStateID> selected_ids;
+  std::set<web::WebStateID> cached_ids;
+};
+
+// Callback invoked with the user selection or std::nullopt if the user
+// cancelled the tab picker.
+using TabPickerCompletionBlock =
+    void (^)(std::optional<TabPickerSelection> selection);
 
 // Contains parameters used to configure the tab picker.
 @interface TabPickerParams : NSObject
@@ -34,6 +42,9 @@ typedef void (^TabPickerCompletionBlock)(std::set<web::WebStateID> selectedIDs,
 // The IDs of the tabs that should be preselected. If empty, no tabs will be
 // preselected.
 @property(nonatomic, assign) std::set<web::WebStateID> preselectedWebStateIDs;
+
+// Whether PDF extraction is enabled for the tab picker.
+@property(nonatomic, assign) BOOL PDFEnabled;
 
 // The presenter that will display snackbar messages. This should stay non-nil
 // for the duration of the tab picker's lifecycle.
@@ -54,8 +65,9 @@ typedef void (^TabPickerCompletionBlock)(std::set<web::WebStateID> selectedIDs,
 @protocol TabPickerCommands <NSObject>
 
 // Shows the tab picker UI configured with the given non-nil `params`.
-// `completion` is called when the user triggers the tab picker's dismissal
-// only if the selected tabs have changed.
+// `completion` is called when the user confirms their selection (`selection`
+// has value) or cancels / dismisses the tab picker (`selection` is
+// `std::nullopt`).
 - (void)showTabPickerWithParams:(TabPickerParams*)params
                      completion:(TabPickerCompletionBlock)completion;
 

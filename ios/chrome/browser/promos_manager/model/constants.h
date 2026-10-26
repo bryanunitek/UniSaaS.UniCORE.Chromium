@@ -52,7 +52,10 @@ enum class Promo {
       20,                       // Reminder for the Safari import entry point.
   DefaultBrowserOffCycle = 21,  // Off-cycle fullscreen default browser promo.
   HomeBackgroundCustomization = 22,  // Home (NTP) background customization.
-  kMaxValue = HomeBackgroundCustomization,
+  LevelUp = 23,                      // Level Up fullscreen opt-in promo.
+  EphemeralTheme = 24,               // Home (NTP) ephemeral theme promo.
+  AccountSwitching = 25,  // Smart account switching fullscreen promo.
+  kMaxValue = AccountSwitching,
 };
 // LINT.ThenChange(
 //   /ios/chrome/browser/promos_manager/model/constants.cc,

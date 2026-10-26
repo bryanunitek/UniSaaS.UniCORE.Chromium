@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -64,18 +65,6 @@ namespace web_app {
 
 namespace {
 
-#if BUILDFLAG(IS_MAC)
-const int kDesiredIconSizesForShortcut[] = {16, 32, 128, 256, 512};
-#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-// Linux supports icons of any size. FreeDesktop Icon Theme Specification states
-// that "Minimally you should install a 48x48 icon in the hicolor theme."
-const int kDesiredIconSizesForShortcut[] = {16, 32, 48, 128, 256, 512};
-#elif BUILDFLAG(IS_WIN)
-const int* kDesiredIconSizesForShortcut = IconUtil::kIconDimensions;
-#else
-const int kDesiredIconSizesForShortcut[] = {32};
-#endif
-
 #if BUILDFLAG(IS_WIN)
 base::LazyThreadPoolCOMSTATaskRunner g_shortcuts_task_runner =
     LAZY_COM_STA_TASK_RUNNER_INITIALIZER(
@@ -88,14 +77,6 @@ base::LazyThreadPoolSequencedTaskRunner g_shortcuts_task_runner =
         base::TaskTraits({base::MayBlock(), base::TaskPriority::USER_VISIBLE,
                           base::TaskShutdownBehavior::BLOCK_SHUTDOWN}));
 #endif
-
-size_t GetNumDesiredIconSizesForShortcut() {
-#if BUILDFLAG(IS_WIN)
-  return IconUtil::kNumIconDimensions;
-#else
-  return std::size(kDesiredIconSizesForShortcut);
-#endif
-}
 
 void CreatePlatformShortcutsAndPostCallback(
     const base::FilePath& shortcut_data_path,
@@ -218,11 +199,11 @@ std::unique_ptr<ShortcutInfo> BuildShortcutInfoWithoutFavicon(
 
   shortcut_info->app_id = app_id;
   shortcut_info->url = start_url;
-  DCHECK(state.has_shortcut());
+  CHECK(state.has_shortcut(), base::NotFatalUntil::M162);
   const proto::os_state::ShortcutDescription& shortcut_state = state.shortcut();
-  DCHECK(shortcut_state.has_title());
+  CHECK(shortcut_state.has_title(), base::NotFatalUntil::M162);
   shortcut_info->title = base::UTF8ToUTF16(shortcut_state.title());
-  DCHECK(shortcut_state.has_description());
+  CHECK(shortcut_state.has_description(), base::NotFatalUntil::M162);
   shortcut_info->description = base::UTF8ToUTF16(shortcut_state.description());
   shortcut_info->profile_path = profile_path;
   shortcut_info->profile_name = profile_name;
@@ -237,7 +218,7 @@ std::unique_ptr<ShortcutInfo> BuildShortcutInfoWithoutFavicon(
 
   if (state.has_protocols_handled()) {
     for (const auto& protocol_handler : state.protocols_handled().protocols()) {
-      DCHECK(protocol_handler.has_protocol());
+      CHECK(protocol_handler.has_protocol(), base::NotFatalUntil::M162);
       if (protocol_handler.has_protocol() &&
           !protocol_handler.protocol().empty()) {
         shortcut_info->protocol_handlers.emplace(protocol_handler.protocol());
@@ -250,7 +231,8 @@ std::unique_ptr<ShortcutInfo> BuildShortcutInfoWithoutFavicon(
 #if BUILDFLAG(IS_LINUX)
   const std::vector<WebAppShortcutsMenuItemInfo>& shortcuts_menu_item_infos =
       CreateShortcutsMenuItemInfos(state.shortcut_menus());
-  DCHECK_LE(shortcuts_menu_item_infos.size(), kMaxApplicationDockMenuItems);
+  CHECK_LE(shortcuts_menu_item_infos.size(), kMaxApplicationDockMenuItems,
+           base::NotFatalUntil::M162);
   for (const auto& shortcuts_menu_item_info : shortcuts_menu_item_infos) {
     if (!shortcuts_menu_item_info.name.empty() &&
         !shortcuts_menu_item_info.url.is_empty()) {
@@ -279,7 +261,7 @@ void PopulateFaviconPurposeForShortcutInfo(
     IconPurpose purpose,
     base::OnceCallback<void(std::unique_ptr<ShortcutInfo>)> callback,
     std::unique_ptr<ShortcutInfo> shortcut_info_to_populate) {
-  DCHECK(app);
+  CHECK(app, base::NotFatalUntil::M162);
 
   // Build a common intersection between desired and downloaded icons.
   auto icon_sizes_in_px = base::STLSetIntersection<std::vector<SquareSizePx>>(
@@ -315,7 +297,7 @@ void PopulateFaviconForShortcutInfo(
     WebAppIconManager& icon_manager,
     std::unique_ptr<ShortcutInfo> shortcut_info_to_populate,
     base::OnceCallback<void(std::unique_ptr<ShortcutInfo>)> callback) {
-  DCHECK(app);
+  CHECK(app, base::NotFatalUntil::M162);
 
   auto populate_favicon_maskable = base::BindOnce(
       &PopulateFaviconPurposeForShortcutInfo, app, std::ref(icon_manager),
@@ -394,7 +376,7 @@ base::FilePath GetOsIntegrationResourcesDirectoryForApp(
     const base::FilePath& profile_path,
     const std::string& app_id,
     const GURL& url) {
-  DCHECK(!profile_path.empty());
+  CHECK(!profile_path.empty(), base::NotFatalUntil::M162);
   base::FilePath app_data_dir(profile_path.Append(chrome::kWebAppDirname));
 
   if (!app_id.empty()) {
@@ -420,12 +402,26 @@ base::FilePath GetOsIntegrationResourcesDirectoryForApp(
 }
 
 base::span<const int> GetDesiredIconSizesForShortcut() {
-  return UNSAFE_TODO(base::span<const int>(
-      kDesiredIconSizesForShortcut, GetNumDesiredIconSizesForShortcut()));
+#if BUILDFLAG(IS_MAC)
+  static constexpr int kDesiredIconSizesForShortcut[] = {16, 32, 128, 256, 512};
+  return kDesiredIconSizesForShortcut;
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  // Linux supports icons of any size. FreeDesktop Icon Theme Specification
+  // states that "Minimally you should install a 48x48 icon in the hicolor
+  // theme."
+  static constexpr int kDesiredIconSizesForShortcut[] = {16,  32,  48,
+                                                         128, 256, 512};
+  return kDesiredIconSizesForShortcut;
+#elif BUILDFLAG(IS_WIN)
+  return IconUtil::kIconDimensions;
+#else
+  static constexpr int kDesiredIconSizesForShortcut[] = {32};
+  return kDesiredIconSizesForShortcut;
+#endif
 }
 
 gfx::ImageSkia CreateDefaultApplicationIcon(int size) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   // TODO(crbug.com/40583793): Create web_app_browser_resources.grd with the
   // default app icon. Remove dependency on extensions_browser_resources.h and
@@ -449,7 +445,7 @@ namespace internals {
 void PostShortcutIOTask(base::OnceCallback<void(const ShortcutInfo&)> task,
                         std::unique_ptr<ShortcutInfo> shortcut_info,
                         const base::Location& location) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   // Ownership of |shortcut_info| moves to the Reply, which is guaranteed to
   // outlive the const reference.
@@ -468,7 +464,7 @@ void PostAsyncShortcutIOTask(
     base::OnceCallback<void(std::unique_ptr<ShortcutInfo>)> task,
     std::unique_ptr<ShortcutInfo> shortcut_info,
     const base::Location& location) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   // Ownership of |shortcut_info| is transferred to the task. The task must
   // ensure that it is destroyed on the UI thread.
@@ -482,7 +478,7 @@ void ScheduleCreatePlatformShortcuts(
     ShortcutCreationReason reason,
     std::unique_ptr<ShortcutInfo> shortcut_info,
     CreateShortcutsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   PostAsyncShortcutIOTask(
       base::BindOnce(&CreatePlatformShortcutsAndPostCallback,
@@ -495,7 +491,7 @@ void ScheduleDeletePlatformShortcuts(
     const base::FilePath& shortcut_data_path,
     std::unique_ptr<ShortcutInfo> shortcut_info,
     DeleteShortcutsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   PostShortcutIOTask(base::BindOnce(&DeletePlatformShortcutsAndPostCallback,
                                     shortcut_data_path, std::move(callback)),
@@ -504,7 +500,7 @@ void ScheduleDeletePlatformShortcuts(
 
 void ScheduleDeleteMultiProfileShortcutsForApp(const std::string& app_id,
                                                ResultCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   GetShortcutIOTaskRunner()->PostTask(
       FROM_HERE,
@@ -518,7 +514,7 @@ void ScheduleUpdatePlatformShortcuts(
     std::optional<ShortcutLocations> locations,
     base::OnceCallback<void(Result)> on_complete,
     std::unique_ptr<ShortcutInfo> shortcut_info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   internals::PostAsyncShortcutIOTask(
       base::BindOnce(&UpdatePlatformShortcutsAndPostCallback,

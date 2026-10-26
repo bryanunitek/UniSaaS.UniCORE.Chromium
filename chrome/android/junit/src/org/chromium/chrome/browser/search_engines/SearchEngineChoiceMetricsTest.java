@@ -9,8 +9,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doReturn;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -18,7 +16,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -29,7 +26,6 @@ import org.chromium.components.search_engines.TemplateUrlService;
 
 /** Unit tests for {@link SearchEngineChoiceMetrics}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public final class SearchEngineChoiceMetricsTest {
     private static final String TEST_INITIAL_ENGINE = "google.com";
     private static final String TEST_ALTERNATIVE_ENGINE = "duckduckgo.com";
@@ -63,7 +59,6 @@ public final class SearchEngineChoiceMetricsTest {
     }
 
     @Test
-    @SmallTest
     public void recordSearchEngineTypeBeforeChoice() {
         doReturn(mInitialSearchEngine)
                 .when(mTemplateUrlService)
@@ -87,7 +82,6 @@ public final class SearchEngineChoiceMetricsTest {
     }
 
     @Test
-    @SmallTest
     public void recordSearchEngineTypeAfterChoice() {
         doReturn(mInitialSearchEngine)
                 .when(mTemplateUrlService)
@@ -106,7 +100,6 @@ public final class SearchEngineChoiceMetricsTest {
     }
 
     @Test
-    @SmallTest
     public void recordSearchEngineTypeAfterChoice_noChoice() {
         doReturn(mInitialSearchEngine)
                 .when(mTemplateUrlService)
@@ -127,7 +120,6 @@ public final class SearchEngineChoiceMetricsTest {
     }
 
     @Test
-    @SmallTest
     public void getDefaultSearchEngineType() {
         doReturn(mInitialSearchEngine)
                 .when(mTemplateUrlService)
@@ -145,7 +137,6 @@ public final class SearchEngineChoiceMetricsTest {
     }
 
     @Test
-    @SmallTest
     public void isSearchEnginePossiblyDifferent() {
         doReturn(mInitialSearchEngine)
                 .when(mTemplateUrlService)
@@ -156,7 +147,6 @@ public final class SearchEngineChoiceMetricsTest {
     }
 
     @Test
-    @SmallTest
     public void isSearchEnginePossiblyDifferent_notDifferent() {
         doReturn(mInitialSearchEngine)
                 .when(mTemplateUrlService)
@@ -165,7 +155,6 @@ public final class SearchEngineChoiceMetricsTest {
     }
 
     @Test
-    @SmallTest
     public void recordEventV2_sanityCheck() {
         SearchEngineChoiceMetrics.recordEventV2(
                 SearchEngineChoiceMetrics.EventsV2.CHOICE_REQUEST_VALID);

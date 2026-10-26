@@ -5,7 +5,9 @@
 package org.chromium.chrome.browser.tabmodel;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -16,13 +18,13 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabId;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabState;
 import org.chromium.chrome.browser.tabmodel.RecordingTabCreator.TabCreationData;
@@ -31,11 +33,11 @@ import org.chromium.content_public.browser.WebContents;
 import org.chromium.url.GURL;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /** Unit tests for {@link RecordingTabCreator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @EnableFeatures(ChromeFeatureList.TAB_STORAGE_SQLITE_PROTOTYPE)
 public class RecordingTabCreatorUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -127,6 +129,7 @@ public class RecordingTabCreatorUnitTest {
         assertEquals(0, data.size());
     }
 
+
     @Test
     public void testLaunchUrl() {
         mRecordingTabCreator.launchUrl(mGurl.getSpec(), TabLaunchType.FROM_LINK);
@@ -146,17 +149,23 @@ public class RecordingTabCreatorUnitTest {
 
     @Test
     public void testCreateTabWithWebContents() {
+        when(mWebContents.getVisibleUrl()).thenReturn(mGurl);
+
         mRecordingTabCreator.createTabWithWebContents(
-                mTab, true, mWebContents, TabLaunchType.FROM_LINK, mGurl, 5, mAddTabToModel);
+                mTab,
+                /* shouldPin= */ true,
+                mWebContents,
+                TabLaunchType.FROM_LINK,
+                /* index= */ 5,
+                mAddTabToModel);
 
         verify(mDelegate)
                 .createTabWithWebContents(
                         mTab,
-                        true,
+                        /* shouldPin= */ true,
                         mWebContents,
                         TabLaunchType.FROM_LINK,
-                        mGurl,
-                        5,
+                        /* index= */ 5,
                         mAddTabToModel);
 
         assertEquals(1, mRecordingTabCreator.getTabCount());
@@ -255,5 +264,29 @@ public class RecordingTabCreatorUnitTest {
 
         List<TabCreationData> data = mRecordingTabCreator.getNewTabCreationData();
         assertEquals(0, data.size());
+    }
+
+    @Test
+    public void testRecordFallbackTab() {
+        mRecordingTabCreator.recordFallbackTab(123, "https://fallback.com");
+        Map<@TabId Integer, String> regularFallbackTabs =
+                mRecordingTabCreator.getRegularFallbackTabs();
+        assertEquals(1, regularFallbackTabs.size());
+        assertEquals("https://fallback.com", regularFallbackTabs.get(123));
+
+        mRecordingTabCreator.stopRecording();
+        mRecordingTabCreator.recordFallbackTab(456, "https://fallback456.com");
+        assertEquals(1, mRecordingTabCreator.getRegularFallbackTabs().size());
+    }
+
+    @Test
+    public void testIsReparenting() {
+        when(mDelegate.isReparenting(123)).thenReturn(true);
+        when(mDelegate.isReparenting(456)).thenReturn(false);
+
+        assertTrue(mRecordingTabCreator.isReparenting(123));
+        assertFalse(mRecordingTabCreator.isReparenting(456));
+        verify(mDelegate).isReparenting(123);
+        verify(mDelegate).isReparenting(456);
     }
 }

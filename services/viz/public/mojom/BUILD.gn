@@ -3,7 +3,9 @@
 # found in the LICENSE file.
 import("//build/config/ui.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
+
 mojom("mojom") {
+  generate_blink = true
   generate_java = true
   sources = [
     "compositing/animation.mojom",
@@ -67,6 +69,7 @@ mojom("mojom") {
     "//gpu/ipc/common:interfaces",
     "//media/mojo/mojom:video_encode",
     "//mojo/public/mojom/base",
+    "//services/viz/privileged/mojom/gl:gpu_client_type",
     "//services/viz/public/mojom/compositing:shared_image_format",
     "//services/viz/public/mojom/compositing/internal:singleplanar_format",
     "//skia/public/mojom",
@@ -77,9 +80,6 @@ mojom("mojom") {
     "//ui/gl/mojom",
     "//ui/latency/mojom",
   ]
-  if (is_chromeos) {
-    public_deps += [ "//components/chromeos_camera/common" ]
-  }
   export_class_attribute_blink = "BLINK_PLATFORM_EXPORT"
   export_define_blink = "BLINK_PLATFORM_IMPLEMENTATION=1"
   export_header_blink = "third_party/blink/public/platform/web_common.h"
@@ -141,6 +141,16 @@ mojom("mojom") {
     {
       types = [
         {
+          mojom = "viz.mojom.SurfaceIdAndDeadline"
+          cpp = "::viz::SurfaceIdAndDeadline"
+        },
+      ]
+      traits_headers = [ "//services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h" ]
+      traits_public_deps = [ "//components/viz/common" ]
+    },
+    {
+      types = [
+        {
           mojom = "viz.mojom.VerticalScrollDirection"
           cpp = "::viz::VerticalScrollDirection"
         },
@@ -166,6 +176,8 @@ mojom("mojom") {
       ]
     },
     {
+      # TODO(crbug.com/537760819): Consider consolidating BeginFrmeArgs and
+      # related types into shared_cpp_typemaps.
       types = [
         {
           mojom = "viz.mojom.BeginFrameArgs"
@@ -174,6 +186,10 @@ mojom("mojom") {
         {
           mojom = "viz.mojom.BeginFrameAck"
           cpp = "::viz::BeginFrameAck"
+        },
+        {
+          mojom = "viz.mojom.BeginFrameId"
+          cpp = "::viz::BeginFrameId"
         },
       ]
 
@@ -208,10 +224,7 @@ mojom("mojom") {
       traits_private_headers = [
         "//services/viz/public/cpp/compositing/compositor_frame_mojom_traits.h",
       ]
-      traits_public_deps = [
-        "//components/viz/common",
-        "//services/viz/public/cpp:crash_keys",
-      ]
+      traits_public_deps = [ "//components/viz/common" ]
     },
     {
       types = [
@@ -308,6 +321,7 @@ mojom("mojom") {
         "//services/viz/public/cpp/compositing/copy_output_result_mojom_traits.cc",
       ]
       traits_headers = [ "//services/viz/public/cpp/compositing/copy_output_result_mojom_traits.h" ]
+      traits_deps = [ "//ui/gfx:gfx_skia" ]
       traits_public_deps = [ "//components/viz/common" ]
     },
     {
@@ -391,7 +405,6 @@ mojom("mojom") {
       traits_sources = [ "//services/viz/public/cpp/hit_test/hit_test_region_list_mojom_traits.cc" ]
       traits_public_deps = [
         "//components/viz/common",
-        "//services/viz/public/cpp:crash_keys",
         "//ui/gfx/geometry/mojom",
       ]
     },
@@ -442,7 +455,6 @@ mojom("mojom") {
         "//services/viz/public/cpp/compositing/compositor_render_pass_mojom_traits.h",
         "//services/viz/public/cpp/compositing/quads_mojom_traits.h",
       ]
-      traits_public_deps = [ "//ui/gl" ]
     },
     {
       types = [
@@ -519,6 +531,10 @@ mojom("mojom") {
           mojom = "viz.mojom.BeginFrameAck"
           cpp = "::viz::BeginFrameAck"
         },
+        {
+          mojom = "viz.mojom.BeginFrameId"
+          cpp = "::viz::BeginFrameId"
+        },
       ]
       traits_headers =
           [ "//components/viz/common/frame_sinks/begin_frame_args.h" ]
@@ -542,7 +558,6 @@ mojom("mojom") {
       traits_headers = [ "//services/viz/public/cpp/hit_test/hit_test_region_list_mojom_traits.h" ]
       traits_public_deps = [
         "//components/viz/common",
-        "//services/viz/public/cpp:crash_keys",
         "//ui/gfx/geometry/mojom",
       ]
     },
@@ -646,6 +661,7 @@ mojom("mojom") {
 }
 
 mojom("surfaces") {
+  generate_blink = true
   generate_java = true
   sources = [
     "compositing/frame_sink_id.mojom",

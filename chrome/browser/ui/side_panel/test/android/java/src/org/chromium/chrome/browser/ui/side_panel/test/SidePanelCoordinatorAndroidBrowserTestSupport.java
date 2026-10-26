@@ -13,6 +13,7 @@ import android.view.ViewGroup;
 import android.widget.TextView;
 
 import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.base.WindowAndroid;
@@ -20,23 +21,24 @@ import org.chromium.ui.base.WindowAndroid;
 /** Supports {@code side_panel_coordinator_android_browsertest.cc}. */
 @NullMarked
 public final class SidePanelCoordinatorAndroidBrowserTestSupport {
-
     private SidePanelCoordinatorAndroidBrowserTestSupport() {}
 
     @CalledByNative
     @SuppressLint("SetTextI18n")
-    private static View createTestView(WindowAndroid windowAndroid) {
-        Context context = windowAndroid.getContext().get();
-        assert context != null : "null context in WindowAndroid";
-
-        TextView view = new TextView(context);
+    private static View createTestView(@JniType("ui::WindowAndroid*") WindowAndroid windowAndroid) {
+        TextView view = new TextView(getContext(windowAndroid));
         view.setText("Test Side Panel View");
         view.setBackgroundColor(Color.GREEN);
         view.setLayoutParams(
                 new ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         view.setGravity(Gravity.CENTER);
-
         return view;
+    }
+
+    private static Context getContext(WindowAndroid windowAndroid) {
+        var context = windowAndroid.getContext().get();
+        assert context != null : "null context in WindowAndroid";
+        return context;
     }
 }

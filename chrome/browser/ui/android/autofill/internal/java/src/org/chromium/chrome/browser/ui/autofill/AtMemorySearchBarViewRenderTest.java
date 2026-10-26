@@ -55,6 +55,8 @@ public class AtMemorySearchBarViewRenderTest {
     @Rule
     public RenderTestRule mRenderTestRule =
             RenderTestRule.Builder.withPublicCorpus()
+                    .setRevision(3)
+                    .setDescription("Ligatures and contextual alternates disabled in UI text")
                     .setBugComponent(RenderTestRule.Component.UI_BROWSER_AUTOFILL)
                     .build();
 

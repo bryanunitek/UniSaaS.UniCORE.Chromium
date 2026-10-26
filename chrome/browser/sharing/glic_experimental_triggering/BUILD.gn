@@ -7,6 +7,8 @@ source_set("glic_experimental_triggering") {
 
   public_deps = [
     "//base",
+    "//chrome/browser/actor",
+    "//chrome/browser/glic",
     "//chrome/browser/glic:mojo_bindings",
     "//components/sharing_message",
     "//components/sharing_message/proto",
@@ -15,11 +17,7 @@ source_set("glic_experimental_triggering") {
 }
 
 source_set("impl") {
-  sources = [
-    "actor_log.cc",
-    "actor_log.h",
-    "glic_experimental_triggering_message_handler.cc",
-  ]
+  sources = [ "glic_experimental_triggering_message_handler.cc" ]
 
   deps = [
     ":glic_experimental_triggering",
@@ -27,8 +25,8 @@ source_set("impl") {
     "//chrome/browser/glic",
     "//chrome/browser/glic:impl",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
     "//chrome/common:chrome_features",
-    "//components/actor/core:journal",
   ]
 }
 

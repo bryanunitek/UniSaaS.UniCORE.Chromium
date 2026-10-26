@@ -19,9 +19,9 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
@@ -90,6 +90,9 @@ std::ostream& operator<<(std::ostream& os,
   switch (type) {
     case feature_engagement::ANY:
       os << "ANY";
+      break;
+    case feature_engagement::ANY_RELAXED:
+      os << "ANY_RELAXED";
       break;
     case feature_engagement::LESS_THAN:
       os << "LESS_THAN";
@@ -252,6 +255,7 @@ bool IsComparatorLimited(const feature_engagement::Comparator& comparator,
                          uint32_t max_count) {
   switch (comparator.type) {
     case feature_engagement::ANY:
+    case feature_engagement::ANY_RELAXED:
     case feature_engagement::GREATER_THAN:
     case feature_engagement::GREATER_THAN_OR_EQUAL:
     case feature_engagement::NOT_EQUAL:
@@ -685,42 +689,6 @@ IN_PROC_BROWSER_TEST_P(BrowserUserEducationServiceNewBadgeBrowserTest,
       user_education::features::kNewBadgeTestFeature));
   EXPECT_FALSE(UserEducationService::MaybeShowNewBadge(
       incog->GetProfile(), user_education::features::kNewBadgeTestFeature));
-}
-
-// Tests for the presence or absence of the recent sessions logic based on
-// the enabling flag.
-class BrowserUserEducationServiceRecentSessionsTest
-    : public InProcessBrowserTest,
-      public testing::WithParamInterface<bool> {
- public:
-  BrowserUserEducationServiceRecentSessionsTest() = default;
-  ~BrowserUserEducationServiceRecentSessionsTest() override = default;
-
-  void SetUp() override {
-    if (GetParam()) {
-      feature_list_.InitAndEnableFeature(kAllowRecentSessionTracking);
-    } else {
-      feature_list_.InitAndDisableFeature(kAllowRecentSessionTracking);
-    }
-    InProcessBrowserTest::SetUp();
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-INSTANTIATE_TEST_SUITE_P(,
-                         BrowserUserEducationServiceRecentSessionsTest,
-                         testing::Bool());
-
-// Ensure that the recent sessions logic only gets created if the flag is
-// enabled.
-IN_PROC_BROWSER_TEST_P(BrowserUserEducationServiceRecentSessionsTest,
-                       RecentSessionTrackerDependsOnFlag) {
-  auto* const result =
-      UserEducationServiceFactory::GetForBrowserContext(browser()->GetProfile())
-          ->recent_session_tracker();
-  EXPECT_EQ(GetParam(), result != nullptr);
 }
 
 // Verify that the "disable rate limiting" command line arg works.

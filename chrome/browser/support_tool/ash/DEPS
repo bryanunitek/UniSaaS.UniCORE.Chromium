@@ -13,11 +13,14 @@ include_rules = [
   "+chrome/browser/ash/system_logs",
   "+chrome/browser/profiles",
   "+chrome/browser/support_tool",
-  "+chrome/browser/ui/browser.h",
+  "+chrome/browser/ui/browser_window/public/browser_window_interface.h",
   "+chrome/test",
 ]
 
 specific_include_rules = {
+  "chrome_user_logs_data_collector_unittest\\.cc": [
+    "+chrome/browser/ash/login/test/chrome_user_session_test_environment_delegate.h",
+  ],
   "shill_data_collector\\.cc": [
     "+dbus/object_path.h",
   ],

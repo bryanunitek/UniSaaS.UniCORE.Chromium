@@ -42,7 +42,7 @@ void SaveUpdateAddressProfileFlowManager::OfferSave(
     const AutofillProfile* original_profile,
     SaveUpdateAddressProfilePromptMode prompt_mode,
     AutofillClient::AddressProfileSavePromptCallback callback) {
-  DCHECK(callback);
+  CHECK(callback, base::NotFatalUntil::M162);
 
   // If the message is already shown, suppress the incoming offer.
   if (is_message_displayed_ || save_update_address_profile_prompt_controller_) {
@@ -175,7 +175,7 @@ std::u16string SaveUpdateAddressProfileFlowManager::GetMessageRecordTypeNotice()
                    IDS_AUTOFILL_SAVE_IN_ACCOUNT_MESSAGE_ADDRESS_MIGRATION_RECORD_TYPE_NOTICE)
              : l10n_util::GetStringFUTF16(
                    IDS_AUTOFILL_SAVE_IN_ACCOUNT_MESSAGE_ADDRESS_RECORD_TYPE_NOTICE,
-                   base::UTF8ToUTF16(account->email));
+                   base::UTF8ToUTF16(account->GetEmail()));
 }
 
 std::u16string

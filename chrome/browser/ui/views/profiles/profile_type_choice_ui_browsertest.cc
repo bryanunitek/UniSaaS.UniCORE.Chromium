@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <memory>
+#include <array>
 
-#include "base/functional/callback_helpers.h"
+#include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/browser/ui/views/profiles/profile_management_step_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view_test_utils.h"
@@ -29,7 +29,7 @@ namespace {
 struct ProfileTypeChoiceTestParam {
   PixelTestParam pixel_test_param;
   bool decline_signin_cta_experiment_enabled = false;
-  bool use_primary_and_tonal_buttons_for_promos = false;
+
   bool use_refreshed_ui = false;
 };
 
@@ -42,10 +42,8 @@ std::string ParamToTestSuffix(
 }
 
 // Permutations of supported parameters.
-const ProfileTypeChoiceTestParam kTestParams[] = {
+const base::NoDestructor kTestParams(std::to_array<ProfileTypeChoiceTestParam>({
     {.pixel_test_param = {.test_suffix = "Regular"}},
-    {.pixel_test_param = {.test_suffix = "RegularUsePrimaryAndTonalButtons"},
-     .use_primary_and_tonal_buttons_for_promos = true},
     {.pixel_test_param = {.test_suffix = "RegularRefreshedUI"},
      .use_refreshed_ui = true},
     {.pixel_test_param = {.test_suffix = "RegularRefreshedUIDarkMode",
@@ -58,7 +56,7 @@ const ProfileTypeChoiceTestParam kTestParams[] = {
     {.pixel_test_param = {.test_suffix = "DarkDeclineSigninCTAExperiment",
                           .use_dark_theme = true},
      .decline_signin_cta_experiment_enabled = true},
-};
+}));
 
 const char kRemoveAvatarIconJS[] =
     "(() => {"
@@ -80,8 +78,7 @@ class ProfileTypeChoiceUIPixelTest
     scoped_feature_list_.InitWithFeatureStates(
         {{switches::kProfileCreationDeclineSigninCTAExperiment,
           GetParam().decline_signin_cta_experiment_enabled},
-         {switches::kUsePrimaryAndTonalButtonsForPromos,
-          GetParam().use_primary_and_tonal_buttons_for_promos},
+
          {switches::kFirstRunDesktopRefresh, GetParam().use_refreshed_ui}});
   }
 
@@ -124,8 +121,9 @@ class ProfileTypeChoiceUIPixelTest
     views::Widget* widget = GetWidgetForScreenshot();
 
     auto* test_info = testing::UnitTest::GetInstance()->current_test_info();
-    const std::string screenshot_name =
-        base::StrCat({test_info->test_suite_name(), "_", test_info->name()});
+    const std::string baseline = "8481376";
+    const std::string screenshot_name = base::StrCat(
+        {test_info->test_suite_name(), "_", test_info->name(), "_", baseline});
 
     return VerifyPixelUi(widget, "ProfileTypeChoiceUIPixelTest",
                          screenshot_name) != ui::test::ActionResult::kFailed;
@@ -152,5 +150,5 @@ IN_PROC_BROWSER_TEST_P(ProfileTypeChoiceUIPixelTest, InvokeUi_default) {
 
 INSTANTIATE_TEST_SUITE_P(,
                          ProfileTypeChoiceUIPixelTest,
-                         testing::ValuesIn(kTestParams),
+                         testing::ValuesIn(*kTestParams),
                          &ParamToTestSuffix);

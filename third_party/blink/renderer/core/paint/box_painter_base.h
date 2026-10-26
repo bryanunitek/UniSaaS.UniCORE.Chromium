@@ -33,6 +33,7 @@ class FillLayer;
 class GraphicsContext;
 class ImageResourceObserver;
 class LayoutBox;
+class LayoutObject;
 class Node;
 struct BorderShapeReferenceRects;
 struct PaintInfo;
@@ -187,6 +188,12 @@ class BoxPainterBase {
       BackgroundBleedAvoidance,
       bool is_painting_background_in_contents_space,
       PaintFlags paint_flags) const = 0;
+  // Returns the `LayoutObject` that generated the background image. Should only
+  // be used for paint timing, which currently uses a LayoutObject-based
+  // architecture. This should not be used in general (see `BoxPainterBase`
+  // class comment).
+  virtual const LayoutObject* PaintTimingLayoutObject() const = 0;
+
   static void PaintInsetBoxShadow(
       const PaintInfo&,
       const ContouredRect&,

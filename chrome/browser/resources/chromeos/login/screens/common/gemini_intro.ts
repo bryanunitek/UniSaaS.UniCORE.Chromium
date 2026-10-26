@@ -51,13 +51,13 @@ export class GeminiIntroScreen extends GeminiIntroScreenElementBase {
     };
   }
 
-  private backButtonVisible: boolean;
-  private handler: GeminiIntroPageHandlerRemote;
+  declare private backButtonVisible: boolean;
+  private handler = new GeminiIntroPageHandlerRemote();
 
   override ready(): void {
     super.ready();
+
     this.initializeLoginScreen('GeminiIntro');
-    this.handler = new GeminiIntroPageHandlerRemote();
     OobeScreensFactoryBrowserProxy.getInstance()
         .screenFactory.establishGeminiIntroScreenPipe(
             this.handler.$.bindNewPipeAndPassReceiver());

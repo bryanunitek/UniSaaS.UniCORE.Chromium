@@ -46,6 +46,7 @@ class TestGpuChannelHost : public GpuChannelHost {
  public:
   explicit TestGpuChannelHost(mojom::GpuChannel& gpu_channel)
       : GpuChannelHost(0 /* channel_id */,
+                       viz::mojom::GpuClientType::kBrowser,
                        mojo::ScopedMessagePipeHandle(
                            mojo::MessagePipeHandle(mojo::kInvalidHandleValue))),
         gpu_channel_(gpu_channel) {}
@@ -66,7 +67,6 @@ class MockGpuControlClient : public GpuControlClient {
   MOCK_METHOD0(OnGpuControlLostContext, void());
   MOCK_METHOD0(OnGpuControlLostContextMaybeReentrant, void());
   MOCK_METHOD2(OnGpuControlErrorMessage, void(const char*, int32_t));
-  MOCK_METHOD0(OnGpuSwitched, void());
   MOCK_METHOD1(OnGpuControlReturnData, void(base::span<const uint8_t>));
 };
 
@@ -209,11 +209,6 @@ TEST_P(CommandBufferProxyImplTest, OrderingBarriersAreCoalescedWithFlush) {
   EXPECT_CALL(mock_gpu_channel_, DestroyCommandBuffer(_))
       .Times(2)
       .WillRepeatedly(Return(true));
-
-  if (!features::IsSyncPointGraphValidationEnabled()) {
-    // Each proxy sends a sync GpuControl flush on disconnect.
-    ExpectFlush(2);
-  }
 }
 
 TEST_P(CommandBufferProxyImplTest, FlushPendingWorkFlushesOrderingBarriers) {
@@ -239,11 +234,6 @@ TEST_P(CommandBufferProxyImplTest, FlushPendingWorkFlushesOrderingBarriers) {
   EXPECT_CALL(mock_gpu_channel_, DestroyCommandBuffer(_))
       .Times(2)
       .WillRepeatedly(Return(true));
-
-  if (!features::IsSyncPointGraphValidationEnabled()) {
-    // Each proxy sends a sync GpuControl flush on disconnect.
-    ExpectFlush(2);
-  }
 }
 
 TEST_P(CommandBufferProxyImplTest, EnsureWorkVisibleFlushesOrderingBarriers) {
@@ -281,11 +271,6 @@ TEST_P(CommandBufferProxyImplTest, EnsureWorkVisibleFlushesOrderingBarriers) {
   EXPECT_CALL(mock_gpu_channel_, DestroyCommandBuffer(_))
       .Times(2)
       .WillRepeatedly(Return(true));
-
-  if (!features::IsSyncPointGraphValidationEnabled()) {
-    // Each proxy sends a sync GpuControl flush on disconnect.
-    ExpectFlush(2);
-  }
 }
 
 TEST_P(CommandBufferProxyImplTest,
@@ -324,11 +309,6 @@ TEST_P(CommandBufferProxyImplTest,
   EXPECT_CALL(mock_gpu_channel_, DestroyCommandBuffer(_))
       .Times(1)
       .WillOnce(Return(true));
-
-  if (!features::IsSyncPointGraphValidationEnabled()) {
-    // The proxy sends a sync GpuControl flush on disconnect.
-    ExpectFlush(1);
-  }
 }
 
 TEST_P(CommandBufferProxyImplTest, CreateTransferBufferOOM) {
@@ -380,11 +360,21 @@ TEST_P(CommandBufferProxyImplTest, CreateTransferBufferOOM) {
   EXPECT_CALL(mock_gpu_channel_, DestroyCommandBuffer(_))
       .Times(1)
       .WillOnce(Return(true));
+}
 
-  if (!features::IsSyncPointGraphValidationEnabled()) {
-    // The proxy sends a sync GpuControl flush on disconnect.
-    ExpectFlush(1);
-  }
+TEST_P(CommandBufferProxyImplTest, DisconnectChannelDoesNotIssueSyncFlush) {
+  // Regardless of whether kConditionallySkipGpuChannelFlush is enabled or
+  // disabled by Finch, DisconnectChannel() must use EnsureFlush() rather than
+  // VerifyFlush() so it does not issue a redundant synchronous Flush() IPC
+  // right before the synchronous DestroyCommandBuffer() call.
+  auto proxy = CreateAndInitializeProxy();
+
+  EXPECT_CALL(mock_gpu_channel_, DestroyCommandBuffer(_))
+      .Times(1)
+      .WillOnce(Return(true));
+  EXPECT_CALL(mock_gpu_channel_, Flush()).Times(0);
+
+  proxy.reset();
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

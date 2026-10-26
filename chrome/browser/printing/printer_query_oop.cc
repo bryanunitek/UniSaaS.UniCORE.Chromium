@@ -15,6 +15,7 @@
 #include "chrome/browser/printing/print_backend_service_manager.h"
 #include "chrome/browser/printing/print_job_worker_oop.h"
 #include "components/device_event_log/device_event_log.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/web_contents.h"
 #include "printing/buildflags/buildflags.h"
@@ -28,7 +29,7 @@ PrinterQueryOop::~PrinterQueryOop() = default;
 
 std::unique_ptr<PrintJobWorker> PrinterQueryOop::TransferContextToNewWorker(
     PrintJob* print_job) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   return CreatePrintJobWorkerOop(print_job);
 }
 
@@ -36,7 +37,7 @@ std::unique_ptr<PrintJobWorker> PrinterQueryOop::TransferContextToNewWorker(
 void PrinterQueryOop::UpdatePrintableArea(
     PrintSettings* print_settings,
     OnDidUpdatePrintableAreaCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   std::string printer_name = base::UTF16ToUTF8(print_settings->device_name());
   PRINTER_LOG(EVENT) << "Updating paper printable area via service for "
@@ -63,11 +64,11 @@ void PrinterQueryOop::SetClientId(
 void PrinterQueryOop::OnDidUseDefaultSettings(
     SettingsCallback callback,
     base::expected<PrintSettings, mojom::ResultCode> print_settings) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   mojom::ResultCode result;
   if (!print_settings.has_value()) {
     result = print_settings.error();
-    DCHECK_NE(result, mojom::ResultCode::kSuccess);
+    CHECK_NE(result, mojom::ResultCode::kSuccess, base::NotFatalUntil::M162);
     PRINTER_LOG(ERROR) << "Error trying to use default settings via service: "
                        << result;
 
@@ -86,7 +87,7 @@ void PrinterQueryOop::OnDidUseDefaultSettings(
 void PrinterQueryOop::OnDidAskUserForSettings(
     SettingsCallback callback,
     base::expected<PrintSettings, mojom::ResultCode> print_settings) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   mojom::ResultCode result;
   if (print_settings.has_value()) {
     VLOG(1) << "Ask user for settings from service complete";
@@ -108,7 +109,7 @@ void PrinterQueryOop::OnDidAskUserForSettings(
     }
   } else {
     result = print_settings.error();
-    DCHECK_NE(result, mojom::ResultCode::kSuccess);
+    CHECK_NE(result, mojom::ResultCode::kSuccess, base::NotFatalUntil::M162);
     if (result != mojom::ResultCode::kCanceled) {
       PRINTER_LOG(ERROR) << "Error getting settings from user via service: "
                          << result;
@@ -125,7 +126,7 @@ void PrinterQueryOop::OnDidAskUserForSettings(
     SettingsCallback callback,
     std::unique_ptr<PrintSettings> new_settings,
     mojom::ResultCode result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (result == mojom::ResultCode::kSuccess) {
     // Want the same PrintBackend service as the query so that we use the same
     // device context.
@@ -198,7 +199,7 @@ void PrinterQueryOop::GetSettingsWithUI(uint32_t document_page_count,
 
 void PrinterQueryOop::UpdatePrintSettings(base::DictValue new_settings,
                                           SettingsCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   // Do not take a const reference, as `new_settings` will be modified below.
   std::string device_name = *new_settings.FindString(kSettingDeviceName);
@@ -253,11 +254,11 @@ void PrinterQueryOop::OnDidUpdatePrintSettings(
     const std::string& device_name,
     SettingsCallback callback,
     base::expected<PrintSettings, mojom::ResultCode> print_settings) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   mojom::ResultCode result;
   if (!print_settings.has_value()) {
     result = print_settings.error();
-    DCHECK_NE(result, mojom::ResultCode::kSuccess);
+    CHECK_NE(result, mojom::ResultCode::kSuccess, base::NotFatalUntil::M162);
     PRINTER_LOG(ERROR) << "Error updating print settings via service for `"
                        << device_name << "`: " << result;
 
@@ -307,7 +308,7 @@ void PrinterQueryOop::OnDidGetPaperPrintableArea(
     PrintSettings* print_settings,
     OnDidUpdatePrintableAreaCallback callback,
     const gfx::Rect& printable_area_um) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (printable_area_um.IsEmpty()) {
     std::move(callback).Run(/*success=*/false);
     return;
@@ -321,8 +322,8 @@ void PrinterQueryOop::OnDidGetPaperPrintableArea(
 void PrinterQueryOop::SendEstablishPrintingContext(
     PrintBackendServiceManager::ClientId client_id,
     const std::string& printer_name) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(ShouldPrintJobOop());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(ShouldPrintJobOop(), base::NotFatalUntil::M162);
 
   DVLOG(1) << "Establishing printing context for system print";
 
@@ -344,8 +345,8 @@ void PrinterQueryOop::SendEstablishPrintingContext(
 }
 
 void PrinterQueryOop::SendUseDefaultSettings(SettingsCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(ShouldPrintJobOop());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(ShouldPrintJobOop(), base::NotFatalUntil::M162);
   CHECK(query_with_ui_client_id_.has_value());
 
   PrintBackendServiceManager& service_mgr =
@@ -362,8 +363,8 @@ void PrinterQueryOop::SendAskUserForSettings(uint32_t document_page_count,
                                              bool has_selection,
                                              bool is_scripted,
                                              SettingsCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(ShouldPrintJobOop());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(ShouldPrintJobOop(), base::NotFatalUntil::M162);
 
   if (document_page_count > kMaxPageCount) {
     InvokeSettingsCallback(std::move(callback), mojom::ResultCode::kFailed);

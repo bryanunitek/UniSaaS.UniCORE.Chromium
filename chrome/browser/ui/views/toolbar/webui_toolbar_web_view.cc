@@ -6,7 +6,10 @@
 
 #include <limits>
 #include <memory>
+#include <optional>
+#include <utility>
 
+#include "base/auto_reset.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -24,17 +27,22 @@
 #include "base/time/time.h"
 #include "base/trace_event/named_trigger.h"
 #include "base/types/expected.h"
+#include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/omnibox/omnibox_controller.h"
+#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
+#include "chrome/browser/ui/omnibox/omnibox_view.h"
+#include "chrome/browser/ui/profiles/profile_colors_util.h"
 #include "chrome/browser/ui/tabs/split_tab_util.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar_controller_util.h"
@@ -42,27 +50,36 @@
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/global_media_controls/media_toolbar_button.h"
 #include "chrome/browser/ui/views/location_bar/webui_content_setting_image_control.h"
 #include "chrome/browser/ui/views/location_bar/webui_location_bar.h"
 #include "chrome/browser/ui/views/profiles/profile_menu_coordinator.h"
 #include "chrome/browser/ui/views/toolbar/app_menu_control.h"
+#include "chrome/browser/ui/views/toolbar/webui_home_control.h"
+#include "chrome/browser/ui/views/toolbar/webui_overflow_button.h"
+#include "chrome/browser/ui/views/toolbar/webui_performance_intervention_control.h"
 #include "chrome/browser/ui/views/toolbar/webui_split_tabs_control.h"
 #include "chrome/browser/ui/views/toolbar/webui_toolbar_extensions_container_wrapper.h"
 #include "chrome/browser/ui/waap/initial_web_ui_manager.h"
 #include "chrome/browser/ui/waap/initial_webui_window_metrics_manager.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/browser/ui/webui/webui_toolbar/adapters/browser_controls_adapter_impl.h"
-#include "chrome/browser/ui/webui/webui_toolbar/adapters/navigation_controls_state_fetcher_impl.h"
+#include "chrome/browser/ui/webui/webui_toolbar/adapters/toolbar_state_fetcher_impl.h"
+#include "chrome/browser/ui/webui/webui_toolbar/utils/toolbar_button_utils.h"
 #include "chrome/browser/ui/webui/webui_toolbar/webui_toolbar_drag_state.h"
 #include "chrome/browser/ui/webui/webui_toolbar/webui_toolbar_extensions_container.h"
+#include "chrome/browser/ui/webui/webui_toolbar/webui_toolbar_ui.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/ukm/content/source_url_recorder.h"
 #include "components/user_education/common/user_education_class_properties.h"
+#include "components/viz/common/features.h"
 #include "components/zoom/zoom_controller.h"
 #include "content/public/browser/browser_accessibility_state.h"
 #include "content/public/browser/context_menu_params.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/reload_type.h"
 #include "content/public/browser/render_frame_host.h"
@@ -79,24 +96,33 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "ui/accessibility/ax_enums.mojom-shared.h"
+#include "ui/base/interaction/element_tracker.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/accessibility/view_accessibility.h"
-#include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
+#include "ui/views/controls/webview/web_contents_set_background_color.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/focus/focus_manager.h"
+#include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/flex_layout_types.h"
 #include "ui/views/layout/layout_manager_base.h"
+#include "ui/views/style/platform_style.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/widget/widget.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view_util_mac.h"
+#endif  // BUILDFLAG(IS_MAC)
 
 namespace {
 
@@ -133,6 +159,15 @@ WebUIToolbarUI* GetWebUIToolbarUIFromWebContents(
   return controller ? controller->GetAs<WebUIToolbarUI>() : nullptr;
 }
 
+// Mirrors LabelButton::GetVisualState(): on platforms where inactive widgets
+// make controls appear disabled (Mac), native toolbar buttons use
+// kColorToolbarButtonIconInactive while the window isn't painted as active.
+bool ShouldToolbarControlsAppearInactive(const views::Widget* widget) {
+  return views::PlatformStyle::kInactiveWidgetControlsAppearDisabled &&
+         widget && widget->ShouldViewsStyleFollowWidgetActivation() &&
+         !widget->ShouldPaintAsActive();
+}
+
 }  // namespace
 
 class WebUIToolbarInternalWebView : public views::WebView {
@@ -142,32 +177,53 @@ class WebUIToolbarInternalWebView : public views::WebView {
   WebUIToolbarInternalWebView(content::BrowserContext* browser_context,
                               WebUIToolbarWebView* webui_toolbar_web_view)
       : views::WebView(browser_context),
-        webui_toolbar_web_view_(webui_toolbar_web_view) {}
-  ~WebUIToolbarInternalWebView() override = default;
+        webui_toolbar_web_view_(webui_toolbar_web_view) {
+    SetBackground(nullptr);
+    SetAcceleratorHandling(views::WebContentsAcceleratorHandling::kEnabled);
+#if BUILDFLAG(IS_MAC)
+    forwarder_ = std::make_unique<WebUIToolbarEventForwarder>(
+        *webui_toolbar_web_view, *this);
+    holder()->SetMouseEventFallback(forwarder_.get());
+#endif
+  }
+
+  ~WebUIToolbarInternalWebView() override {
+#if BUILDFLAG(IS_MAC)
+    holder()->SetMouseEventFallback(nullptr);
+#endif
+  }
 
   // views::WebView:
   void PreHandleDragUpdate(const content::DropData& drop_data,
                            const gfx::PointF& client_pt) override {
-    if (!drop_data.filenames.empty()) {
+    bool did_originate_from_renderer = drop_data.did_originate_from_renderer;
+#if BUILDFLAG(IS_CHROMEOS)
+    // On ChromeOS, drag origin provenance cannot be reliably distinguished
+    // between OS-local and renderer sources (b/256022714). To ensure security
+    // by default, all drags are conservatively treated as renderer-originated.
+    did_originate_from_renderer = true;
+#endif
+    if (!did_originate_from_renderer && !drop_data.filenames.empty()) {
       cached_dragged_file_path_ = drop_data.filenames.front().path;
       cached_dragged_file_position_ = client_pt;
+    } else {
+      ClearCachedDraggedFile();
     }
-    webui_toolbar::WebUIToolbarDragState::GetOrCreateForWebContents(
-        web_contents())
-        ->set_drag_originated_from_renderer(
-            drop_data.did_originate_from_renderer);
+    const bool has_javascript_url =
+        !drop_data.url_infos.empty() &&
+        drop_data.url_infos.front().url.SchemeIs(url::kJavaScriptScheme);
+    auto* drag_state =
+        webui_toolbar::WebUIToolbarDragState::GetOrCreateForWebContents(
+            web_contents());
+    drag_state->set_drag_originated_from_renderer(did_originate_from_renderer);
+    drag_state->set_drag_has_javascript_url(has_javascript_url);
   }
+
+  void PreHandleDragExit() override { ClearCachedDraggedFile(); }
 
   bool CanDragEnter(content::WebContents* source,
                     const content::DropData& data,
                     blink::DragOperationsMask operations_allowed) override {
-    // Cache the drag origin on the WebContents. This is needed because the
-    // subsequent Mojo navigation calls (Navigate/NavigateText) do not receive
-    // did_originate_from_renderer information from the drop event directly.
-    webui_toolbar::WebUIToolbarDragState::GetOrCreateForWebContents(
-        web_contents())
-        ->set_drag_originated_from_renderer(data.did_originate_from_renderer);
-
     // TODO(xtlsheep): We ideally want to block `javascript:` text drags over
     // the general toolbar area (showing a forbidden cursor) to prevent
     // self-XSS, while still allowing them to be dropped specifically into the
@@ -212,43 +268,66 @@ class WebUIToolbarInternalWebView : public views::WebView {
                                          std::move(hang_monitor_restarter));
   }
 
-  bool HandleKeyboardEvent(
-      content::WebContents* source,
-      const input::NativeWebKeyboardEvent& event) override {
-    // Used to handle the focus event triggered by keyboard (e.g. cmd+L to focus
-    // on the omnibox from macOS). See crbug.com/491963415.
-    return unhandled_keyboard_event_handler_.HandleKeyboardEvent(
-        event, GetFocusManager());
-  }
-
   bool HandleContextMenu(content::RenderFrameHost& render_frame_host,
                          const content::ContextMenuParams& params) override {
     gfx::Point point(params.x, params.y);
     views::View::ConvertPointToScreen(this, &point);
     webui_toolbar_web_view_->HandleOmniboxContextMenu(point, params.source_type,
-                                                      params.edit_flags);
+                                                      params);
     // We handled this.
     return true;
   }
 
+  void OnFocus() override {
+    views::WebView::OnFocus();
+    webui_toolbar_web_view_->OnInternalWebViewFocused();
+  }
+
+  void OnBlur() override {
+    views::WebView::OnBlur();
+    webui_toolbar_web_view_->OnBlur();
+  }
+
+#if BUILDFLAG(IS_MAC)
+  void AddedToWidget() override {
+    views::WebView::AddedToWidget();
+    forwarder_->AddedToWidget();
+  }
+
+  void RemovedFromWidget() override {
+    views::WebView::RemovedFromWidget();
+    forwarder_->RemovedFromWidget();
+  }
+#endif
+
   std::optional<GURL> ConsumeDroppedUrl(const gfx::PointF& point) {
     std::optional<GURL> url;
-    if (cached_dragged_file_position_.has_value() &&
-        point == *cached_dragged_file_position_ &&
+    if (GetLocalBounds().Contains(gfx::ToRoundedPoint(point)) &&
+        cached_dragged_file_position_.has_value() &&
         cached_dragged_file_path_.has_value()) {
-      url = net::FilePathToFileURL(*cached_dragged_file_path_);
+      // Allow 1.0f DIP tolerance to account for floating-point differences.
+      constexpr float kMaxAllowedDelta = 1.0f;
+      const gfx::Vector2dF delta = *cached_dragged_file_position_ - point;
+      if (std::abs(delta.x()) <= kMaxAllowedDelta &&
+          std::abs(delta.y()) <= kMaxAllowedDelta) {
+        url = net::FilePathToFileURL(*cached_dragged_file_path_);
+      }
     }
-    cached_dragged_file_path_.reset();
-    cached_dragged_file_position_.reset();
+    ClearCachedDraggedFile();
     return url;
   }
 
  private:
+  void ClearCachedDraggedFile() {
+    cached_dragged_file_path_.reset();
+    cached_dragged_file_position_.reset();
+  }
+
+#if BUILDFLAG(IS_MAC)
+  std::unique_ptr<WebUIToolbarEventForwarder> forwarder_;
+#endif
   // owns `this` as a child view.
   raw_ptr<WebUIToolbarWebView> webui_toolbar_web_view_;
-  // A handler to handle unhandled keyboard messages coming back from the
-  // renderer process.
-  views::UnhandledKeyboardEventHandler unhandled_keyboard_event_handler_;
   std::optional<base::FilePath> cached_dragged_file_path_;
   std::optional<gfx::PointF> cached_dragged_file_position_;
 };
@@ -266,14 +345,18 @@ WebUIToolbarWebView::WebUIToolbarWebView(
       reload_control_(this),
       split_tabs_control_(this),
       home_control_(this),
+      performance_intervention_control_(this),
       app_menu_control_(*this),
       battery_saver_control_(this),
-      avatar_control_(this, browser->GetBrowserForMigrationOnly()),
+      avatar_control_(this),
+      media_control_(this),
+      glic_control_(this),
       location_bar_(std::move(location_bar)),
       extensions_container_(this),
       back_control_(this, BackForwardButton::Direction::kBack),
       forward_control_(this, BackForwardButton::Direction::kForward),
       pinned_toolbar_actions_(this),
+      overflow_button_(this, &pinned_toolbar_actions_),
       clock_(base::DefaultTickClock::GetInstance()),
       touch_ui_subscription_(ui::TouchUiController::Get()->RegisterCallback(
           base::BindRepeating(&WebUIToolbarWebView::OnTouchUiChanged,
@@ -285,8 +368,10 @@ WebUIToolbarWebView::WebUIToolbarWebView(
       toolbar_ui_api::mojom::ReloadControlState::New();
   last_queued_state_.home_control_state =
       toolbar_ui_api::mojom::HomeControlState::New();
-  last_queued_state_.battery_saver_button_visible =
-      battery_saver_control_.IsVisible();
+  last_queued_state_.battery_saver_control_state =
+      battery_saver_control_.CreateState();
+  last_queued_state_.performance_intervention_control_state =
+      toolbar_ui_api::mojom::PerformanceInterventionControlState::New();
   last_queued_state_.location_bar_state =
       toolbar_ui_api::mojom::LocationBarState::New();
   last_queued_state_.location_bar_state->omnibox_view_state =
@@ -299,20 +384,32 @@ WebUIToolbarWebView::WebUIToolbarWebView(
               toolbar_ui_api::IconHandle(),
               toolbar_ui_api::mojom::SecurityLevel::kNone,
               /*text=*/std::u16string(),
+              /*tooltip=*/std::u16string(),
               toolbar_ui_api::mojom::SecurityChipAccessibilityState::New(
+                  /*role=*/toolbar_ui_api::mojom::SecurityChipRole::kButton,
                   /*label=*/std::u16string(),
                   /*description=*/std::u16string()),
               /*is_clickable=*/false, /*is_text_dangerous=*/false,
-              /*is_visible=*/true),
+              /*is_visible=*/true, /*is_context_menu_visible=*/false),
           /*activity_indicators=*/
           std::vector<toolbar_ui_api::mojom::ContentSettingImageStatePtr>(),
-          /*permission_dashboard=*/nullptr);
+          /*permission_dashboard=*/
+          toolbar_ui_api::mojom::PermissionDashboardState::New(
+              toolbar_ui_api::mojom::PermissionChipState::New(),
+              toolbar_ui_api::mojom::PermissionChipState::New(),
+              /*is_divider_visible=*/false));
   last_queued_state_.layout_constants_version = 0;
   last_queued_state_.touch_ui = ui::TouchUiController::Get()->touch_ui();
   last_queued_state_.back_forward_control_state = GetBackForwardState();
   last_queued_state_.app_menu_control_state = app_menu_control_.GetState();
   last_queued_state_.avatar_control_state =
       toolbar_ui_api::mojom::AvatarControlState::New();
+  last_queued_state_.overflow_button_control_state =
+      toolbar_ui_api::mojom::OverflowButtonControlState::New();
+  last_queued_state_.media_control_state =
+      toolbar_ui_api::mojom::MediaControlState::New();
+  last_queued_state_.glic_button_state =
+      toolbar_ui_api::mojom::GlicButtonState::New();
 
   if (auto* manager = InitialWebUIWindowMetricsManager::From(browser_)) {
     manager->OnReloadButtonCreated();
@@ -330,24 +427,26 @@ WebUIToolbarWebView::WebUIToolbarWebView(
   if (pre_created_contents) {
     is_preloaded_ = true;
     const bool pre_navigate =
-        features::kWebUIReloadButtonPrewarmWebUIPreNavigate.Get() ||
-        base::FeatureList::IsEnabled(
-            features::kWebUIToolbarProcessOverheadExperiment);
+        features::kWebUIReloadButtonPrewarmWebUIPreNavigate.Get();
     if (pre_navigate) {
       // Only set to `kPending` when the navigation is already done. Otherwise
       // the state remains `kUninitialized` and the navigation will happen in
       // `WebUIToolbarWebView::AddedToWidget()`.
       SetInitializationState(InitializationState::kPending);
       // When preload is not enabled, the `WebUIToolbarUI` init is done in
-      // `WebUIToolbarWebView::DidFinishNavigation()`. Here since the
-      // `WebContents` is pre-created, it might finish navigation before we
-      // install the observer, so we have to manually init the `WebUIToolbarUI`.
-      if (!pre_created_contents->IsLoading() &&
-          pre_created_contents->GetController().GetLastCommittedEntry()) {
-        if (auto* ui =
-                GetWebUIToolbarUIFromWebContents(pre_created_contents.get())) {
-          ui->Init(this);
-        }
+      // `WebUIToolbarWebView::DidFinishNavigation()`. If the pre-created
+      // WebContents has already committed the WebUI before we installed the
+      // observer, record that it has navigated so `ToolbarInitialized()` will
+      // initialize it once the inner parts (e.g. location bar) are ready.
+      // Note that `GetWebUIToolbarUIFromWebContents()` can already be non-null
+      // as soon as `LoadURL()` starts when the initial RenderFrameHost shares
+      // the WebUI SiteInstance, see the comments of `GetLastCommittedEntry()`,
+      // so also check `!entry->IsInitialEntry()`.
+      auto* entry =
+          pre_created_contents->GetController().GetLastCommittedEntry();
+      if (entry && !entry->IsInitialEntry() &&
+          GetWebUIToolbarUIFromWebContents(pre_created_contents.get())) {
+        is_webui_navigation_finished_ = true;
       }
     }
     Observe(pre_created_contents.get());
@@ -361,6 +460,10 @@ WebUIToolbarWebView::WebUIToolbarWebView(
 
   content::WebContents* web_contents = web_view->GetWebContents();
   if (web_contents) {
+    views::WebContentsSetBackgroundColor::CreateForWebContentsWithColor(
+        web_contents, SK_ColorTRANSPARENT);
+    WebUIToolbarUIDependencyProviderUserData::CreateForWebContents(web_contents,
+                                                                   this);
     scoped_accessibility_mode_ =
         content::BrowserAccessibilityState::GetInstance()
             ->CreateScopedModeForWebContents(
@@ -382,7 +485,25 @@ WebUIToolbarWebView::WebUIToolbarWebView(
   }
 }
 
-WebUIToolbarWebView::~WebUIToolbarWebView() = default;
+WebUIToolbarWebView::~WebUIToolbarWebView() {
+  DestroyWebContents();
+}
+
+void WebUIToolbarWebView::DestroyWebContents() {
+  if (auto* ui = GetWebUIToolbarUI()) {
+    ui->DependenciesDestroying();
+  }
+  if (web_contents()) {
+    web_contents()->RemoveUserData(
+        WebUIToolbarUIDependencyProviderUserData::UserDataKey());
+  }
+  if (web_view_) {
+    // Resetting the WebContents in the child WebView immediately destroys the
+    // owned WebContents unique_ptr and terminates its renderer process before
+    // browser-side IPC services disconnect.
+    web_view_->SetWebContents(nullptr);
+  }
+}
 
 int WebUIToolbarWebView::GetLocationBarWidthForTesting() const {
   CHECK(location_bar_);
@@ -393,6 +514,11 @@ int WebUIToolbarWebView::GetLocationBarWidthForTesting() const {
 
 void WebUIToolbarWebView::AddedToWidget() {
   CHECK(web_view_);
+
+  focus_manager_observation_.Reset();
+  if (views::FocusManager* focus_manager = GetFocusManager()) {
+    focus_manager_observation_.Observe(focus_manager);
+  }
 
   if (initialization_state_ == InitializationState::kUninitialized) {
     // If the WebUI is in uninitialized state, it must be from the non-preloaded
@@ -427,30 +553,74 @@ void WebUIToolbarWebView::AddedToWidget() {
     if (features::IsWebUIBatterySaverButtonEnabled()) {
       battery_saver_control_.Init();
     }
+    if (features::IsWebUIPerformanceInterventionButtonEnabled()) {
+      performance_intervention_control_.Init();
+    }
     if (features::IsWebUIPinnedToolbarActionsEnabled()) {
       pinned_toolbar_actions_.Init();
+    }
+    if (features::IsWebUIGlicButtonEnabled()) {
+      glic_control_.Init();
     }
     if (features::IsWebUIExtensionsContainerEnabled()) {
       extensions_container_.Init(web_contents());
     }
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+    if (features::IsWebUIMediaButtonEnabled()) {
+      media_control_.Init();
+    }
+#endif
 
     // Safe-initialize page-dependent controls if the WebUI finished loading
     // early when the widget was still null during `OnPageInitialized()` due to
     // preloading.
     MaybeInitializePageDependentControls();
   }
+
+  if constexpr (views::PlatformStyle::kInactiveWidgetControlsAppearDisabled) {
+    paint_as_active_subscription_ =
+        GetWidget()->RegisterPaintAsActiveChangedCallback(
+            base::BindRepeating(&WebUIToolbarWebView::OnPaintAsActiveChanged,
+                                base::Unretained(this)));
+    OnPaintAsActiveChanged();
+  }
+}
+
+void WebUIToolbarWebView::OnPaintAsActiveChanged() {
+  const bool inactive = ShouldToolbarControlsAppearInactive(GetWidget());
+  if (last_queued_state_.controls_appear_inactive != inactive) {
+    last_queued_state_.controls_appear_inactive = inactive;
+    // These icons are rendered by the browser, so they need updating.
+    if (features::IsWebUIPinnedToolbarActionsEnabled()) {
+      pinned_toolbar_actions_.OnControlsAppearInactiveChanged();
+    }
+    avatar_control_.OnControlsAppearInactiveChanged();
+    PostPushToolbarState();
+  }
+}
+
+void WebUIToolbarWebView::RemovedFromWidget() {
+  focus_manager_observation_.Reset();
+  paint_as_active_subscription_ = {};
 }
 
 void WebUIToolbarWebView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  avatar_control_.UpdateIcon();
+  if (features::IsWebUIAvatarButtonEnabled()) {
+    UpdateProfileThemeColors(browser_, GetColorProvider());
+    avatar_control_.UpdateIcon();
+  }
   if (location_bar_) {
     location_bar_->OnThemeChanged();
   }
   if (features::IsWebUIPinnedToolbarActionsEnabled()) {
     pinned_toolbar_actions_.OnThemeChanged();
   }
+  if (features::IsWebUIGlicButtonEnabled()) {
+    glic_control_.OnThemeChanged();
+  }
   extensions_container_.OnThemeChanged();
+  icon_table_.OnThemeChanged();
 }
 
 gfx::Size WebUIToolbarWebView::GetMinimumSize() const {
@@ -474,24 +644,50 @@ void WebUIToolbarWebView::PreferredSizeChanged() {
   View::PreferredSizeChanged();
 }
 
+void WebUIToolbarWebView::OnBlur() {
+  View::OnBlur();
+  // Note: a pending focus request is deliberately not touched here. Blur is
+  // often transient while the page is still initializing (focus cleared and
+  // restored around widget activation, or around native focus changes on
+  // Mac), so whether the request is stale is decided in `OnWillChangeFocus()`
+  // and `MaybeFlushPendingFocusRequest()`.
+  if (location_bar_) {
+    location_bar_->OnBlur();
+  }
+}
+
+void WebUIToolbarWebView::OnWillChangeFocus(views::View* focused_before,
+                                            views::View* focused_now) {
+  // Ignore `ClearFocus()` / `StoreFocusedView()` (`focused_now == nullptr`)
+  // and the focus change initiated by `OnFocusRequested()` itself. Otherwise:
+  // - If some other view is gaining focus (`focused_now != web_view_`), a
+  //   pending request for `web_view_` has been superseded.
+  // - If `web_view_` is gaining focus (`focused_now == web_view_`), it is only
+  //   fulfilling a pending request if `web_view_` was waiting as the stored
+  //   focus view. `OnWillChangeFocus()` runs before
+  //   `FocusManager::SetFocusedViewWithReason()` overwrites the stored focus
+  //   view with `focused_now`, so if `GetStoredFocusView() != web_view_` here,
+  //   something else replaced or cleared the stored focus view while
+  //   `web_view_` was unfocused (e.g. another view called `RequestFocus()` on
+  //   an inactive widget) and this is an unrelated later focus (such as a user
+  //   click). Drop the stale request before `OnInternalWebViewFocused()` runs.
+  if (!pending_focus_request_ || in_focus_request_ || !focused_now) {
+    return;
+  }
+  views::FocusManager* focus_manager = GetFocusManager();
+  if (focused_now != web_view_ || !focus_manager ||
+      focus_manager->GetStoredFocusView() != web_view_) {
+    pending_focus_request_.reset();
+  }
+}
+
 void WebUIToolbarWebView::HandleContextMenu(
     toolbar_ui_api::mojom::ContextMenuType menu_type,
     const gfx::RectF& bounds_in_css_pixels,
-    ui::mojom::MenuSourceType source) {
-  CHECK(web_view_);
-  // The coordinates are in CSS pixels relative the viewport origin. We need
-  // to multiply by the page scaling factor to convert them to DIPs before we
-  // can use them as the bounding rectangle relative to the viewport origin to
-  // show the menu.
-  double page_zoom_scale = blink::ZoomLevelToZoomFactor(
-      zoom::ZoomController::GetZoomLevelForWebContents(
-          web_view_->web_contents()));
-  gfx::Rect screen_rect = gfx::ToEnclosingRect(
-      gfx::ScaleRect(bounds_in_css_pixels, page_zoom_scale));
-
-  // Add the offset of the WebView's top-left corner in screen coordinates to
-  // convert the relative rect to an absolute screen rect.
-  screen_rect.Offset(GetBoundsInScreen().origin().OffsetFromOrigin());
+    ui::mojom::MenuSourceType source,
+    std::optional<uint32_t> show_menu_token) {
+  gfx::Rect screen_rect =
+      ConvertBoundsFromCssPixelsToScreenCoords(bounds_in_css_pixels);
 
   switch (menu_type) {
     case toolbar_ui_api::mojom::ContextMenuType::kBack:
@@ -505,13 +701,17 @@ void WebUIToolbarWebView::HandleContextMenu(
       break;
     case toolbar_ui_api::mojom::ContextMenuType::kSplitTabsAction:
     case toolbar_ui_api::mojom::ContextMenuType::kSplitTabsContext:
-      split_tabs_control_.HandleContextMenu(menu_type, screen_rect, source);
+      split_tabs_control_.HandleContextMenu(menu_type, screen_rect, source,
+                                            show_menu_token);
       break;
     case toolbar_ui_api::mojom::ContextMenuType::kHome:
       home_control_.HandleContextMenu(screen_rect, source);
       break;
     case toolbar_ui_api::mojom::ContextMenuType::kBatterySaver:
       battery_saver_control_.ShowBubble(screen_rect);
+      break;
+    case toolbar_ui_api::mojom::ContextMenuType::kMedia:
+      media_control_.HandleContextMenu(screen_rect, source);
       break;
     case toolbar_ui_api::mojom::ContextMenuType::
         kPinnedActionNewIncognitoWindow:
@@ -557,23 +757,45 @@ void WebUIToolbarWebView::HandleContextMenu(
         kPinnedActionSendSharedTabGroupFeedback:
     case toolbar_ui_api::mojom::ContextMenuType::
         kPinnedActionSidePanelShowComments:
+    case toolbar_ui_api::mojom::ContextMenuType::
+        kPinnedActionShowAiOverlayDialog:
+    case toolbar_ui_api::mojom::ContextMenuType::kPinnedActionTtcToolbar:
+    case toolbar_ui_api::mojom::ContextMenuType::
+        kPinnedActionSidePanelShowHistory:
+    case toolbar_ui_api::mojom::ContextMenuType::kPinnedActionShowChromeLabs:
+    case toolbar_ui_api::mojom::ContextMenuType::kPinnedActionSidePanelShowGlic:
       pinned_toolbar_actions_.HandleContextMenu(menu_type, screen_rect, source);
       break;
     case toolbar_ui_api::mojom::ContextMenuType::kAppMenu:
       app_menu_control_.HandleContextMenu(screen_rect, source);
+      break;
+    case toolbar_ui_api::mojom::ContextMenuType::kGlic:
+      glic_control_.HandleContextMenu(screen_rect, source);
       break;
     case toolbar_ui_api::mojom::ContextMenuType::kUnspecified:
       NOTREACHED() << "Unexpected ContextMenuType::kUnspecified.";
   }
 }
 
+void WebUIToolbarWebView::ShowOverflowMenu(
+    std::vector<toolbar_ui_api::mojom::OverflowMenuItemPtr> controls,
+    const gfx::RectF& bounds_in_css_pixels,
+    ui::mojom::MenuSourceType source,
+    toolbar_ui_api::mojom::ToolbarUIService::ShowOverflowMenuCallback
+        callback) {
+  overflow_button_.ShowOverflowMenu(
+      controls, ConvertBoundsFromCssPixelsToScreenCoords(bounds_in_css_pixels),
+      source, std::move(callback));
+}
+
 void WebUIToolbarWebView::ShowContentSettingsBubble(
     ::toolbar_ui_api::mojom::ContentSettingImageType type,
+    bool is_pointer_interaction,
     toolbar_ui_api::ToolbarUIService::ShowContentSettingsBubbleCallback
         callback) {
   if (location_bar_) {
     location_bar_->content_setting_image_control().ShowContentSettingsBubble(
-        type, std::move(callback));
+        type, is_pointer_interaction, std::move(callback));
   } else {
     std::move(callback).Run(base::unexpected(Error::New(
         Code::kFailedPrecondition,
@@ -582,6 +804,15 @@ void WebUIToolbarWebView::ShowContentSettingsBubble(
                            static_cast<int32_t>(type)))));
   }
 }
+
+void WebUIToolbarWebView::OnContentSettingImagePointerDown(
+    ::toolbar_ui_api::mojom::ContentSettingImageType type) {
+  if (location_bar_) {
+    location_bar_->content_setting_image_control()
+        .OnContentSettingImagePointerDown(type);
+  }
+}
+
 
 void WebUIToolbarWebView::OnPageActionClick(
     ::toolbar_ui_api::mojom::PageActionId action_id,
@@ -603,11 +834,12 @@ void WebUIToolbarWebView::OnPageActionClick(
 
 void WebUIToolbarWebView::OnPageActionChipShowingChanged(
     ::toolbar_ui_api::mojom::PageActionId action_id,
+    bool is_showing,
     ::toolbar_ui_api::mojom::ToolbarUIService::
         OnPageActionChipShowingChangedCallback callback) {
   if (location_bar_) {
     location_bar_->page_action_control().OnPageActionChipShowingChanged(
-        action_id, std::move(callback));
+        action_id, is_showing, std::move(callback));
   } else {
     std::move(callback).Run(base::unexpected(Error::New(
         Code::kFailedPrecondition,
@@ -636,6 +868,8 @@ void WebUIToolbarWebView::OnPageInitialized() {
   SetInitializationState(InitializationState::kInitialized);
   MaybeInitializePageDependentControls();
 
+  MaybeFlushPendingFocusRequest();
+
   if (auto* manager = InitialWebUIManager::From(browser_)) {
     manager->OnWebUIToolbarLoaded();
   }
@@ -644,6 +878,34 @@ void WebUIToolbarWebView::OnPageInitialized() {
 void WebUIToolbarWebView::InvokePinnedToolbarAction(
     toolbar_ui_api::mojom::PinnedToolbarAction action_id) {
   pinned_toolbar_actions_.Invoke(action_id);
+}
+
+void WebUIToolbarWebView::MovePinnedToolbarAction(
+    toolbar_ui_api::mojom::PinnedToolbarAction action_id,
+    int32_t target_index) {
+  if (std::optional<actions::ActionId> id =
+          webui_toolbar::PinnedToolbarActionToActionId(action_id)) {
+    pinned_toolbar_actions_.MovePinnedAction(*id, target_index);
+  }
+}
+
+void WebUIToolbarWebView::MovePinnedToolbarActionBy(
+    toolbar_ui_api::mojom::PinnedToolbarAction action_id,
+    int32_t delta) {
+  if (std::optional<actions::ActionId> id =
+          webui_toolbar::PinnedToolbarActionToActionId(action_id)) {
+    pinned_toolbar_actions_.MovePinnedActionBy(*id, delta);
+  }
+}
+
+void WebUIToolbarWebView::MoveExtensionAction(const std::string& extension_id,
+                                              int32_t target_index) {
+  extensions_container_.MoveExtension(extension_id, target_index);
+}
+
+void WebUIToolbarWebView::MoveExtensionActionBy(const std::string& extension_id,
+                                                int32_t delta) {
+  extensions_container_.MoveExtensionBy(extension_id, delta);
 }
 
 base::expected<std::monostate, mojo_base::mojom::ErrorPtr>
@@ -689,6 +951,59 @@ void WebUIToolbarWebView::ShowExtensionContextMenu(
   extensions_container_.ShowContextMenu(source, extension_id);
 }
 
+base::expected<toolbar_ui_api::mojom::AdjustOmniboxTextForCopyResultPtr,
+               mojo_base::mojom::ErrorPtr>
+WebUIToolbarWebView::AdjustOmniboxTextForCopy(const std::u16string& text,
+                                              int32_t selection_start) {
+  std::u16string text16 = text;
+  GURL url;
+  bool write_url = false;
+
+  LocationBar* location_bar =
+      BrowserWindow::FromBrowser(browser_)->GetLocationBar();
+  if (location_bar) {
+    OmniboxController* controller = location_bar->GetOmniboxController();
+    if (controller && controller->edit_model()) {
+      controller->edit_model()->AdjustTextForCopy(selection_start, &text16,
+                                                  &url, &write_url);
+    }
+  }
+
+  auto result = toolbar_ui_api::mojom::AdjustOmniboxTextForCopyResult::New();
+  result->adjusted_text = text16;
+  if (write_url) {
+    result->adjusted_url = url;
+
+    std::u16string page_title;
+    if (location_bar) {
+      content::WebContents* web_contents = location_bar->GetWebContents();
+      if (web_contents) {
+        page_title = web_contents->GetTitle();
+      }
+    }
+    if (page_title.empty()) {
+      page_title = base::UTF8ToUTF16(url.spec());
+    }
+    result->page_title = std::move(page_title);
+  } else {
+    result->adjusted_url = std::nullopt;
+    result->page_title = std::nullopt;
+  }
+  return result;
+}
+
+void WebUIToolbarWebView::OnPerformanceInterventionButtonClicked() {
+  performance_intervention_control_.OnClicked();
+}
+
+void WebUIToolbarWebView::OnMediaButtonClicked() {
+  media_control_.OnClicked();
+}
+
+void WebUIToolbarWebView::OnGlicButtonClicked() {
+  glic_control_.OnClicked();
+}
+
 ReloadControl* WebUIToolbarWebView::GetReloadControl() {
   return &reload_control_;
 }
@@ -696,6 +1011,19 @@ ReloadControl* WebUIToolbarWebView::GetReloadControl() {
 AvatarToolbarButtonInterface*
 WebUIToolbarWebView::GetAvatarToolbarButtonInterface() {
   return &avatar_control_;
+}
+
+MediaToolbarButton* WebUIToolbarWebView::GetMediaToolbarButton() {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  if (features::IsWebUIMediaButtonEnabled()) {
+    return &media_control_;
+  }
+#endif
+  return nullptr;
+}
+
+ExtensionsContainerViews* WebUIToolbarWebView::extensions_container_views() {
+  return extensions_container_.extensions_container();
 }
 
 BrowserWindowInterface* WebUIToolbarWebView::GetBrowser() {
@@ -710,6 +1038,14 @@ views::View* WebUIToolbarWebView::GetView() {
   return this;
 }
 
+views::View* WebUIToolbarWebView::GetInternalWebView() {
+  return web_view_.get();
+}
+
+content::WebContents* WebUIToolbarWebView::GetWebContents() {
+  return web_view_->web_contents();
+}
+
 void WebUIToolbarWebView::AnnounceAlert(const std::u16string& announcement) {
   GetViewAccessibility().AnnounceAlert(announcement);
 }
@@ -722,9 +1058,14 @@ void WebUIToolbarWebView::OnPreferredSizeChanged() {
   PreferredSizeChanged();
 }
 
-const toolbar_ui_api::mojom::NavigationControlsState&
-WebUIToolbarWebView::GetState() const {
+const toolbar_ui_api::mojom::ToolbarState& WebUIToolbarWebView::GetState()
+    const {
   return last_queued_state_;
+}
+
+base::WeakPtr<WebUIToolbarUI::DependencyProvider>
+WebUIToolbarWebView::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
 }
 
 browser_controls_api::BrowserControlsService::BrowserControlsServiceDelegate*
@@ -737,10 +1078,10 @@ WebUIToolbarWebView::GetToolbarUIServiceDelegate() {
   return this;
 }
 
-std::unique_ptr<toolbar_ui_api::NavigationControlsStateFetcher>
-WebUIToolbarWebView::GetNavigationControlsStateFetcher() {
-  return std::make_unique<toolbar_ui_api::NavigationControlsStateFetcherImpl>(
-      base::BindRepeating(&WebUIToolbarWebView::GetNavigationControlsState,
+std::unique_ptr<toolbar_ui_api::ToolbarStateFetcher>
+WebUIToolbarWebView::GetToolbarStateFetcher() {
+  return std::make_unique<toolbar_ui_api::ToolbarStateFetcherImpl>(
+      base::BindRepeating(&WebUIToolbarWebView::GetToolbarState,
                           base::Unretained(this)));
 }
 
@@ -750,11 +1091,14 @@ WebUIToolbarWebView::GetIconTableFetcher() {
 }
 
 CommandUpdater* WebUIToolbarWebView::GetCommandUpdater() {
-  return browser_->GetFeatures().browser_command_controller();
+  return controller_;
 }
 
-toolbar_ui_api::mojom::NavigationControlsStatePtr
-WebUIToolbarWebView::GetNavigationControlsState() {
+OmniboxController* WebUIToolbarWebView::GetOmniboxController() {
+  return location_bar_ ? location_bar_->GetOmniboxController() : nullptr;
+}
+
+toolbar_ui_api::mojom::ToolbarStatePtr WebUIToolbarWebView::GetToolbarState() {
   return last_queued_state_.Clone();
 }
 
@@ -769,6 +1113,11 @@ void WebUIToolbarWebView::DidStartNavigation(
   }
 }
 
+void WebUIToolbarWebView::ToolbarInitialized() {
+  is_toolbar_initialized_ = true;
+  MaybeInitWebUI();
+}
+
 void WebUIToolbarWebView::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   if (!navigation_handle->IsInPrimaryMainFrame() ||
@@ -776,10 +1125,22 @@ void WebUIToolbarWebView::DidFinishNavigation(
     return;
   }
 
-  // Explicitly do another fetch to check if browser is in a shutdown state.
-  auto* bwi = webui::GetBrowserWindowInterface(web_view_->GetWebContents());
-  auto shutting_down = bwi == nullptr;
-  if (shutting_down) {
+  is_webui_navigation_finished_ = true;
+  MaybeInitWebUI();
+}
+
+void WebUIToolbarWebView::MaybeInitWebUI() {
+  if (!is_toolbar_initialized_ || !is_webui_navigation_finished_) {
+    return;
+  }
+
+  auto* web_contents = web_view_->GetWebContents();
+  if (!web_contents) {
+    return;
+  }
+
+  auto* bwi = webui::GetBrowserWindowInterface(web_contents);
+  if (!bwi) {
     LOG(WARNING) << "browser is shutting down, aborting Init()";
     return;
   }
@@ -787,24 +1148,25 @@ void WebUIToolbarWebView::DidFinishNavigation(
   // Devtools navigates to about:blank when doing a "reload" in performance
   // tracing.
   if (base::FeatureList::IsEnabled(features::kDebugTopChromeWebUI) &&
-      navigation_handle->GetURL().IsAboutBlank()) {
+      web_contents->GetLastCommittedURL().IsAboutBlank()) {
     return;
   }
+
   auto* ui = GetWebUIToolbarUI();
   CHECK(ui) << "Could not find the web ui for the toolbar";
+  if (ui->is_initialized()) {
+    return;
+  }
   ui->Init(this);
 }
 
-void WebUIToolbarWebView::SetBackButtonLeadingMargin(int margin) {
-  // This is called every time ToolbarView::Layout() is called, almost always
-  // with the same value as before. Best to avoid the expensive
-  // PreferredSizeChanged() call if nothing actually changed.
-  if (margin == back_button_leading_margin_) {
+void WebUIToolbarWebView::SetIsMaximizedOrFullscreen(
+    bool maximized_or_fullscreen) {
+  if (maximized_or_fullscreen == window_is_maximized_or_fullscreen_) {
     return;
   }
-  back_button_leading_margin_ = margin;
+  window_is_maximized_or_fullscreen_ = maximized_or_fullscreen;
   OnBackForwardStateChanged();
-  PreferredSizeChanged();
 }
 
 void WebUIToolbarWebView::SetBackForwardEnabled(int command_id, bool enabled) {
@@ -853,6 +1215,11 @@ void WebUIToolbarWebView::PrimaryMainFrameRenderProcessGone(
   if (browser_->capabilities() &&
       browser_->capabilities()->IsAttemptingToCloseBrowser()) {
     return;
+  }
+
+  if (auto* metrics_manager =
+          InitialWebUIWindowMetricsManager::From(browser_)) {
+    metrics_manager->OnReloadButtonRenderProcessGone();
   }
 
   // Reset the crash count if when the reset interval is reached.
@@ -949,10 +1316,24 @@ void WebUIToolbarWebView::OverflowButtonClicked(
   // For better or for worse, ignoring modifiers and instead doing everything in
   // the current tab matches the Views overflow menu behavior.
   if (identifier == kToolbarForwardButtonElementId) {
-    browser_controls_adapter_->Forward(WindowOpenDisposition::CURRENT_TAB);
+    browser_controls_adapter_->Forward(WindowOpenDisposition::kCurrentTab);
     return;
   } else if (identifier == kToolbarHomeButtonElementId) {
-    browser_controls_adapter_->NavigateHome(WindowOpenDisposition::CURRENT_TAB);
+    browser_controls_adapter_->NavigateHome(WindowOpenDisposition::kCurrentTab);
+    return;
+  } else if (identifier == kToolbarSplitTabsToolbarButtonElementId) {
+    split_tabs_control_.HandleContextMenuOverflowClick();
+    return;
+  } else if (identifier == kToolbarBatterySaverButtonElementId) {
+    battery_saver_control_.ShowBubble();
+    return;
+  } else if (identifier == kToolbarMediaButtonElementId) {
+    media_control_.OnClicked();
+    return;
+  } else if (identifier == kToolbarAvatarButtonElementId) {
+    // ButtonPressed() makes the button visible before showing any bubble
+    // anchored to it.
+    avatar_control_.ButtonPressed(/*is_source_accelerator=*/false);
     return;
   }
   NOTREACHED();
@@ -972,6 +1353,12 @@ float WebUIToolbarWebView::GetScaleFactor() const {
 views::FlexSpecification WebUIToolbarWebView::GetFlexSpecification(
     int navigation_button_flex_order,
     int location_bar_flex_order) {
+  // If the all controls are using WebUI, don't need to integrate with the Views
+  // overflow logic, and flex orders don't really make any sense, so this method
+  // should not be called. Instead, the caller should set a basic
+  // FlexSpecification itself.
+  CHECK(!is_webui_toolbar_fully_enabled_);
+
   // This is the base flex rule when using the lowest order / highest priority
   // for the WebUIToolbarWebView. If there's enough space for all the highest
   // priority controls, then we'll switch to the lower priority flex rule for
@@ -1072,10 +1459,15 @@ void WebUIToolbarWebView::SetSurfaceSyncDeadline(
   if (auto* rwhv = web_view_->web_contents()->GetRenderWidgetHostView()) {
     rwhv->SetForceSpecifiedDeadline(deadline_in_frames);
   }
-  if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {
-    if (auto* active_contents = browser_view->GetActiveWebContents()) {
-      if (auto* main_rwhv = active_contents->GetRenderWidgetHostView()) {
-        main_rwhv->SetForceSpecifiedDeadline(deadline_in_frames);
+  // When per-dependency deadlines are enabled, the toolbar and active tab
+  // surfaces have independent deadlines. We do not need to impose the
+  // toolbar's deadline on the active web contents tab.
+  if (!features::UsePerDependencyDeadlines()) {
+    if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {
+      if (auto* active_contents = browser_view->GetActiveWebContents()) {
+        if (auto* main_rwhv = active_contents->GetRenderWidgetHostView()) {
+          main_rwhv->SetForceSpecifiedDeadline(deadline_in_frames);
+        }
       }
     }
   }
@@ -1138,9 +1530,18 @@ void WebUIToolbarWebView::OnHomeButtonDropFile(
   }
 }
 
+void WebUIToolbarWebView::OnHomeButtonDropText(const std::string& text) {
+  if (!home_control_.ShouldHandleDropText()) {
+    return;
+  }
+  if (browser_controls_adapter_) {
+    browser_controls_adapter_->NavigateText(text);
+  }
+}
+
 void WebUIToolbarWebView::OnToolbarDropFile(const gfx::PointF& drop_position) {
   if (std::optional<GURL> url = web_view_->ConsumeDroppedUrl(drop_position)) {
-    browser_->OpenGURL(*url, WindowOpenDisposition::CURRENT_TAB);
+    browser_->OpenGURL(*url, WindowOpenDisposition::kCurrentTab);
   }
 }
 
@@ -1148,7 +1549,7 @@ void WebUIToolbarWebView::OnReloadControlStateChanged(
     toolbar_ui_api::mojom::ReloadControlStatePtr state) {
   if (*state != *last_queued_state_.reload_control_state) {
     last_queued_state_.reload_control_state = std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
   }
 }
 
@@ -1156,7 +1557,7 @@ void WebUIToolbarWebView::OnSplitTabsControlStateChanged(
     toolbar_ui_api::mojom::SplitTabsControlStatePtr state) {
   if (*state != *last_queued_state_.split_tabs_control_state) {
     last_queued_state_.split_tabs_control_state = std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
   }
 }
 
@@ -1164,7 +1565,7 @@ void WebUIToolbarWebView::OnBackForwardStateChanged() {
   auto state = GetBackForwardState();
   if (*state != *last_queued_state_.back_forward_control_state) {
     last_queued_state_.back_forward_control_state = std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
   }
 }
 
@@ -1172,7 +1573,16 @@ void WebUIToolbarWebView::OnHomeControlStateChanged(
     toolbar_ui_api::mojom::HomeControlStatePtr state) {
   if (*state != *last_queued_state_.home_control_state) {
     last_queued_state_.home_control_state = std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
+  }
+}
+
+void WebUIToolbarWebView::OnPerformanceInterventionControlStateChanged(
+    toolbar_ui_api::mojom::PerformanceInterventionControlStatePtr state) {
+  if (*state != *last_queued_state_.performance_intervention_control_state) {
+    last_queued_state_.performance_intervention_control_state =
+        std::move(state);
+    PostPushToolbarState();
   }
 }
 
@@ -1180,14 +1590,23 @@ void WebUIToolbarWebView::OnAppMenuControlStateChanged(
     toolbar_ui_api::mojom::AppMenuControlStatePtr state) {
   if (*state != *last_queued_state_.app_menu_control_state) {
     last_queued_state_.app_menu_control_state = std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
   }
 }
 
-void WebUIToolbarWebView::OnBatterySaverControlStateChanged(bool is_showing) {
-  if (is_showing != last_queued_state_.battery_saver_button_visible) {
-    last_queued_state_.battery_saver_button_visible = is_showing;
-    PostPushNavigationState();
+void WebUIToolbarWebView::OnOverflowButtonControlStateChanged(
+    toolbar_ui_api::mojom::OverflowButtonControlStatePtr state) {
+  if (*state != *last_queued_state_.overflow_button_control_state) {
+    last_queued_state_.overflow_button_control_state = std::move(state);
+    PostPushToolbarState();
+  }
+}
+
+void WebUIToolbarWebView::OnBatterySaverControlStateChanged(
+    toolbar_ui_api::mojom::BatterySaverControlStatePtr state) {
+  if (*state != *last_queued_state_.battery_saver_control_state) {
+    last_queued_state_.battery_saver_control_state = std::move(state);
+    PostPushToolbarState();
   }
 }
 
@@ -1196,7 +1615,7 @@ void WebUIToolbarWebView::OnOmniboxViewStateChanged(
   if (*state != *last_queued_state_.location_bar_state->omnibox_view_state) {
     last_queued_state_.location_bar_state->omnibox_view_state =
         std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
   }
 }
 
@@ -1205,7 +1624,7 @@ void WebUIToolbarWebView::OnLocationBarFlagsChanged(
   if (*state != *last_queued_state_.location_bar_state->location_bar_flags) {
     last_queued_state_.location_bar_state->location_bar_flags =
         std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
   }
 }
 
@@ -1215,7 +1634,7 @@ void WebUIToolbarWebView::OnSelectedKeywordChanged(
   if (!mojo::Equals(state,
                     last_queued_state_.location_bar_state->selected_keyword)) {
     last_queued_state_.location_bar_state->selected_keyword = std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
   }
 }
 
@@ -1224,22 +1643,34 @@ void WebUIToolbarWebView::OnLhsChipsStateChanged(
   if (!mojo::Equals(state,
                     last_queued_state_.location_bar_state->lhs_chips_state)) {
     last_queued_state_.location_bar_state->lhs_chips_state = std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
+  }
+}
+
+void WebUIToolbarWebView::OnLocationBarFocusWithinChanged(bool focused) {
+  if (focused && (!web_view_ || !web_view_->HasFocus())) {
+    return;
+  }
+  if (location_bar_) {
+    location_bar_->SetFocusWithin(focused);
   }
 }
 
 void WebUIToolbarWebView::OnLhsChipMousePressed(
-    toolbar_ui_api::mojom::LhsChipIdentifier identifier) {
+    toolbar_ui_api::mojom::LhsChipIdentifier identifier,
+    bool is_middle_click) {
   if (location_bar_) {
-    location_bar_->OnLhsChipMousePressed(identifier);
+    location_bar_->OnLhsChipMousePressed(identifier, is_middle_click);
   }
 }
 
 void WebUIToolbarWebView::OnLhsChipClicked(
     toolbar_ui_api::mojom::LhsChipIdentifier identifier,
-    bool is_mouse_interaction) {
+    bool is_mouse_interaction,
+    uint32_t state_token) {
   if (location_bar_) {
-    location_bar_->OnLhsChipClicked(identifier, is_mouse_interaction);
+    location_bar_->OnLhsChipClicked(identifier, is_mouse_interaction,
+                                    state_token);
   }
 }
 
@@ -1283,7 +1714,7 @@ void WebUIToolbarWebView::OnPinnedToolbarActionsStateChanged(
     std::vector<toolbar_ui_api::mojom::PinnedToolbarActionStatePtr> state) {
   if (!mojo::Equals(state, last_queued_state_.pinned_toolbar_actions_state)) {
     last_queued_state_.pinned_toolbar_actions_state = std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
   }
 }
 
@@ -1291,7 +1722,7 @@ void WebUIToolbarWebView::OnExtensionsStateChanged(
     std::vector<extensions_bar::mojom::ExtensionActionInfoPtr> state) {
   if (!mojo::Equals(state, last_queued_state_.extensions_state)) {
     last_queued_state_.extensions_state = std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
   }
 }
 
@@ -1301,7 +1732,7 @@ void WebUIToolbarWebView::OnContentSettingChanged(
                                ->content_setting_image_states)) {
     last_queued_state_.location_bar_state->content_setting_image_states =
         std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
   }
 }
 
@@ -1311,7 +1742,7 @@ void WebUIToolbarWebView::OnPageActionChanged(
           state, last_queued_state_.location_bar_state->page_action_states)) {
     last_queued_state_.location_bar_state->page_action_states =
         std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
   }
 }
 
@@ -1319,26 +1750,101 @@ void WebUIToolbarWebView::OnAvatarControlStateChanged(
     toolbar_ui_api::mojom::AvatarControlStatePtr state) {
   if (!mojo::Equals(state, last_queued_state_.avatar_control_state)) {
     last_queued_state_.avatar_control_state = std::move(state);
-    PostPushNavigationState();
+    PostPushToolbarState();
   }
 }
 
+void WebUIToolbarWebView::OnMediaControlStateChanged(
+    toolbar_ui_api::mojom::MediaControlStatePtr state) {
+  if (!mojo::Equals(state, last_queued_state_.media_control_state)) {
+    last_queued_state_.media_control_state = std::move(state);
+    PostPushToolbarState();
+  }
+}
+
+void WebUIToolbarWebView::OnGlicButtonStateChanged(
+    toolbar_ui_api::mojom::GlicButtonStatePtr state) {
+  if (!mojo::Equals(state, last_queued_state_.glic_button_state)) {
+    last_queued_state_.glic_button_state = std::move(state);
+    PostPushToolbarState();
+  }
+}
 void WebUIToolbarWebView::OnFocusRequested(
     toolbar_ui_api::mojom::FocusRequestTarget target) {
-  // We need to focus the WebView as well, besides the JS focus.
-  web_view_->RequestFocus();
-  if (WebUIToolbarUI* web_ui = GetWebUIToolbarUI()) {
-    web_ui->OnFocusRequested(target);
+  // Record the request before focusing the WebView: if `RequestFocus()` grants
+  // focus synchronously it re-enters `OnInternalWebViewFocused()`, which
+  // delivers the request right away (if the page is ready).
+  pending_focus_request_ = target;
+  {
+    base::AutoReset<bool> in_focus_request(&in_focus_request_, true);
+    // We need to focus the WebView as well, besides the JS focus.
+    web_view_->RequestFocus();
+  }
+  // Covers the case where the WebView already had focus, so that
+  // `RequestFocus()` was a no-op and `OnInternalWebViewFocused()` did not run.
+  // Otherwise this is a no-op too and the request stays pending until the
+  // page initializes and/or the WebView gains focus.
+  MaybeFlushPendingFocusRequest();
+}
+
+void WebUIToolbarWebView::OnInternalWebViewFocused() {
+  MaybeFlushPendingFocusRequest();
+}
+
+void WebUIToolbarWebView::MaybeFlushPendingFocusRequest() {
+  if (!pending_focus_request_ ||
+      initialization_state_ != InitializationState::kInitialized) {
+    // Nothing to do, or the page can't take the request yet. Keep it pending:
+    // focus may still be in flux while the page initializes (widget activation
+    // clears and restores focus; on Mac, native first responder changes such
+    // as `WebView::SetUpNewMainFrame()` re-focusing the native view when the
+    // WebUI page's frame is swapped in can briefly clear views focus too), so
+    // don't try to judge the request before the page is ready.
+    return;
+  }
+
+  // Only hand the request to the WebUI once the WebView actually holds views
+  // focus. `RequestFocus()` does not grant focus synchronously when the widget
+  // is inactive: the view is merely stored and focused once the widget gets
+  // activated (see `FocusManager::SetFocusedViewWithReason()`). If we told the
+  // WebUI to focus regardless, it would report back that the omnibox has focus
+  // even though views never focused the WebView; and since focus requests on
+  // an inactive widget just replace the stored view, no `Blur()` would ever
+  // arrive to undo that, leaving the edit model stuck in a focused state.
+  // Mirroring Views (where `OmniboxViewViews` only learns about focus via
+  // `OnFocus()`), wait for `OnInternalWebViewFocused()` instead.
+  if (web_view_->HasFocus()) {
+    const toolbar_ui_api::mojom::FocusRequestTarget target =
+        *std::exchange(pending_focus_request_, std::nullopt);
+    if (WebUIToolbarUI* web_ui = GetWebUIToolbarUI()) {
+      web_ui->OnFocusRequested(target);
+    }
+    return;
+  }
+
+  // The page is ready but the WebView doesn't hold views focus. Keep waiting
+  // only if focus is set to come back to the WebView on its own, i.e. it is
+  // the FocusManager's stored focus view: that's the case when the widget is
+  // inactive and focus is restored on activation, or when focus was merely
+  // cleared (`FocusManager::ClearFocus()` keeps the stored view). Otherwise
+  // focus has moved to some other view since the request was made (or the
+  // request never got focus to begin with, e.g. because the WebView wasn't
+  // focusable), so the request is stale: drop it rather than letting it fire
+  // on some unrelated later focus of the WebView. This mirrors
+  // `LocationBarView::FocusLocation()`, which gives up when `RequestFocus()`
+  // on the omnibox doesn't take.
+  views::FocusManager* focus_manager = GetFocusManager();
+  if (!focus_manager || focus_manager->GetStoredFocusView() != web_view_) {
+    pending_focus_request_.reset();
   }
 }
 
 void WebUIToolbarWebView::HandleOmniboxContextMenu(
     const gfx::Point& point,
     ui::mojom::MenuSourceType source_type,
-    int edit_flags) {
+    content::ContextMenuParams params) {
   if (location_bar_) {
-    location_bar_->HandleContextMenu(GetWidget(), point, source_type,
-                                     edit_flags);
+    location_bar_->HandleContextMenu(GetWidget(), point, source_type, params);
   }
 }
 
@@ -1350,11 +1856,10 @@ std::optional<GURL> WebUIToolbarWebView::ConsumeDroppedUrl(
 void WebUIToolbarWebView::OnTouchUiChanged() {
   ++last_queued_state_.layout_constants_version;
   last_queued_state_.touch_ui = ui::TouchUiController::Get()->touch_ui();
-  PostPushNavigationState();
+  PostPushToolbarState();
 }
 
-
-void WebUIToolbarWebView::PostPushNavigationState() {
+void WebUIToolbarWebView::PostPushToolbarState() {
   // The toolbar is implemented by many individual elements that all update
   // their state separately. To avoid significant visual flicker caused by
   // repeated state pushes that only update individual elements, we delay
@@ -1369,20 +1874,29 @@ void WebUIToolbarWebView::PostPushNavigationState() {
   state_push_weak_ptr_factory_.InvalidateWeakPtrs();
 
   // Then waiting to perform the push of the latest state until the last posted
-  // invocation of PushNavigationState from here. Note that this post may also
+  // invocation of PushToolbarState from here. Note that this post may also
   // get cancelled if later updates trickle in.  If the state gets modified
   // after this post, there is a fair chance that there may still be other
   // pending tasks to further update the state, so we keep cancelling pending
-  // posts and issuing a later post of PushNavigationState().
+  // posts and issuing a later post of PushToolbarState().
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&WebUIToolbarWebView::PushNavigationState,
+      FROM_HERE, base::BindOnce(&WebUIToolbarWebView::PushToolbarState,
                                 state_push_weak_ptr_factory_.GetWeakPtr()));
 }
 
-void WebUIToolbarWebView::PushNavigationState() {
+void WebUIToolbarWebView::PushToolbarState() {
   if (WebUIToolbarUI* web_ui = GetWebUIToolbarUI()) {
-    web_ui->OnNavigationControlsStateChanged(last_queued_state_);
+    web_ui->OnToolbarStateChanged(last_queued_state_);
   }
+}
+
+void WebUIToolbarWebView::FlushPendingToolbarStateForTesting() {
+  if (!state_push_weak_ptr_factory_.HasWeakPtrs()) {
+    return;  // No push is pending.
+  }
+  // Cancel the posted PushToolbarState() and do its work now.
+  state_push_weak_ptr_factory_.InvalidateWeakPtrs();
+  PushToolbarState();
 }
 
 toolbar_ui_api::mojom::BackForwardControlStatePtr
@@ -1390,7 +1904,7 @@ WebUIToolbarWebView::GetBackForwardState() const {
   auto state = toolbar_ui_api::mojom::BackForwardControlState::New();
   state->back_button_state = back_control_.GetButtonState();
   state->forward_button_state = forward_control_.GetButtonState();
-  state->back_button_leading_margin = back_button_leading_margin_;
+  state->window_is_maximized_or_fullscreen = window_is_maximized_or_fullscreen_;
   return state;
 }
 
@@ -1409,6 +1923,15 @@ gfx::Size WebUIToolbarWebView::ComputeLayout(
   button_count += features::IsWebUIAvatarButtonEnabled();
   button_count += features::IsWebUIBatterySaverButtonEnabled() &&
                   battery_saver_control_.IsVisible();
+  button_count += features::IsWebUIPerformanceInterventionButtonEnabled() &&
+                  performance_intervention_control_.IsButtonShowing();
+  button_count += features::IsWebUIAppMenuButtonEnabled();
+  button_count +=
+      features::IsWebUIGlicButtonEnabled() && glic_control_.IsVisible();
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  button_count +=
+      features::IsWebUIMediaButtonEnabled() && media_control_.IsButtonShowing();
+#endif
 
   const int size = GetLayoutConstant(LayoutConstant::kToolbarButtonHeight);
   const int gap = GetLayoutConstant(LayoutConstant::kToolbarIconDefaultMargin);
@@ -1419,7 +1942,15 @@ gfx::Size WebUIToolbarWebView::ComputeLayout(
 
   // TODO(crbug.com/517948314): This isn't sizing the forward button correctly.
   if (features::IsWebUIBackForwardButtonEnabled()) {
-    width += back_button_leading_margin_;
+    const gfx::Insets default_insets =
+        ::GetLayoutInsets(LayoutInset::TOOLBAR_INTERIOR_MARGIN);
+    width += GetMirrored() ? default_insets.right() : default_insets.left();
+  }
+
+  if (features::IsWebUIAppMenuButtonEnabled()) {
+    const gfx::Insets default_insets =
+        ::GetLayoutInsets(LayoutInset::TOOLBAR_INTERIOR_MARGIN);
+    width += GetMirrored() ? default_insets.left() : default_insets.right();
   }
 
   // Handle overflowable / resizable controls here, with highest priority
@@ -1532,6 +2063,12 @@ gfx::Size WebUIToolbarWebView::ComputeLayout(
 }
 
 void WebUIToolbarWebView::UpdateButtonOverflowState() {
+  // If all controls are being managed by WebUI, overflow is handled entirely in
+  // Javascript instead of C++.
+  if (is_webui_toolbar_fully_enabled_) {
+    return;
+  }
+
   // Compute layout to determine which buttons to hide. Ignore the returned
   // Size.
   ButtonOverflowInfo button_overflow_info;
@@ -1599,6 +2136,25 @@ bool WebUIToolbarWebView::RuleEnabledPredicate(
     return button_overflow_info.is_forward_button_overflowed ||
            button_overflow_info.is_home_button_overflowed;
   }
+}
+
+gfx::Rect WebUIToolbarWebView::ConvertBoundsFromCssPixelsToScreenCoords(
+    const gfx::RectF& bounds_in_css_pixels) const {
+  CHECK(web_view_);
+  // The coordinates are in CSS pixels relative the viewport origin. We need
+  // to multiply by the page scaling factor to convert them to DIPs before we
+  // can use them as the bounding rectangle relative to the viewport origin to
+  // show the menu.
+  double page_zoom_scale = blink::ZoomLevelToZoomFactor(
+      zoom::ZoomController::GetZoomLevelForWebContents(
+          web_view_->web_contents()));
+  gfx::Rect screen_rect = gfx::ToEnclosingRect(
+      gfx::ScaleRect(bounds_in_css_pixels, page_zoom_scale));
+
+  // Add the offset of the WebView's top-left corner in screen coordinates to
+  // convert the relative rect to an absolute screen rect.
+  screen_rect.Offset(GetBoundsInScreen().origin().OffsetFromOrigin());
+  return screen_rect;
 }
 
 BEGIN_METADATA(WebUIToolbarWebView)

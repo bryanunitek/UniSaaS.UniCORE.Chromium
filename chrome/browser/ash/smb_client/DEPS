@@ -14,7 +14,6 @@ include_rules = [
   # Files residing in certain directories (e.g., //chrome/browser) are listed
   # individually. Other dependencies within //chrome are listed on a per-
   # directory basis. See //tools/chromeos/gen_deps.sh for details.
-  "+chrome/browser/ash/fileapi",
   "+chrome/browser/ash/file_manager",
   "+chrome/browser/ash/file_system_provider",
   "+chrome/browser/ash/kerberos",
@@ -23,13 +22,13 @@ include_rules = [
   "+chrome/browser/platform_util.h",
   "+chrome/browser/profiles",
   "+chrome/browser/ui/webui/ash/smb_shares",
-  "+chrome/common/chrome_features.h",
   "+chrome/grit",
   "+chrome/test/base",
 ]
 
 specific_include_rules = {
   ".*unittest\\.cc": [
+    "+chrome/browser/ash/settings/scoped_cros_settings_test_helper.h",
     "+chrome/browser/ash/settings/scoped_testing_cros_settings.h",
     "+chrome/browser/ash/login/session/user_session_manager.h",
     "+chrome/browser/global_features.h",

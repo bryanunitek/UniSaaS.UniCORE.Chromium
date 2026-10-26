@@ -4,6 +4,8 @@
 
 #include "chrome/updater/policy/service.h"
 
+#include <stddef.h>
+
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -427,6 +429,23 @@ TEST_F(PolicyServiceTest, SinglePolicyManager) {
   EXPECT_EQ(app2_update_status.conflict_policy(), std::nullopt);
   EXPECT_THAT(app2_update_status.all_policies(),
               ElementsAre(PolicyEntry("test_source", 3)));
+}
+
+TEST_F(PolicyServiceTest, VersionRolloutPolicies) {
+  auto manager = base::MakeRefCounted<FakePolicyManager>(true, "test_source");
+  manager->SetMajorVersionRolloutPolicy("app1", 1);
+  manager->SetMinorVersionRolloutPolicy("app1", 2);
+  auto policy_service = CreatePolicyServiceForTesting({std::move(manager)});
+
+  PolicyStatus<int> major_policy =
+      policy_service->GetMajorVersionRolloutPolicy("app1");
+  ASSERT_TRUE(major_policy);
+  EXPECT_EQ(major_policy.policy(), 1);
+
+  PolicyStatus<int> minor_policy =
+      policy_service->GetMinorVersionRolloutPolicy("app1");
+  ASSERT_TRUE(minor_policy);
+  EXPECT_EQ(minor_policy.policy(), 2);
 }
 
 TEST_F(PolicyServiceTest, MultiplePolicyManagers) {

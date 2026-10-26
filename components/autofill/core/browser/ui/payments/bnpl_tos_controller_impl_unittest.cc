@@ -61,7 +61,7 @@ class BnplTosControllerImplTest : public Test {
     static_cast<TestPaymentsDataManager&>(
         test_autofill_client_->GetPaymentsAutofillClient()
             ->GetPaymentsDataManager())
-        .SetAccountInfoForPayments(account_info_);
+        .SetAccountInfoForPayments(account_info_.GetCoreAccountInfo());
 
     // Set `issuer_` to be unlinked by default.
     issuer_ = BnplIssuer(/*instrument_id=*/std::nullopt,
@@ -247,7 +247,7 @@ TEST_F(BnplTosControllerImplTest, GetLegalMessageLines) {
 TEST_F(BnplTosControllerImplTest, GetAccountInfo) {
   ShowBnplTos();
 
-  EXPECT_EQ(controller_->GetAccountInfo().email, account_info_.email);
+  EXPECT_EQ(controller_->GetAccountInfo().GetEmail(), account_info_.GetEmail());
 }
 
 TEST_F(BnplTosControllerImplTest, GetIssuerId) {

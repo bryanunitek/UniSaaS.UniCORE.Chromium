@@ -4,11 +4,13 @@
 
 #include "media/muxers/mp4_movie_box_writer.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/big_endian.h"
 #include "base/numerics/safe_conversions.h"
 #include "media/base/audio_timestamp_helper.h"
 #include "media/formats/mp4/box_constants.h"
@@ -16,7 +18,6 @@
 #include "media/muxers/box_byte_stream.h"
 #include "media/muxers/mp4_muxer_context.h"
 #include "media/muxers/mp4_type_conversion.h"
-#include "media/muxers/output_position_tracker.h"
 
 namespace media {
 

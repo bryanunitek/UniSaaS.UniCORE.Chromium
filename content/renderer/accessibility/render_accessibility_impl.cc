@@ -138,6 +138,8 @@ void RenderAccessibilityImpl::DidCommitProvisionalLoad(
   ukm_timer_ = std::make_unique<base::ElapsedTimer>();
 
   ax_annotators_manager_->CancelAnnotations();
+  ax_annotators_manager_->AccessibilityModeChanged(ui::AXMode(),
+                                                   accessibility_mode_);
   page_language_.clear();
 
   // New document has started. Do not expect to receive the ACK for a
@@ -356,7 +358,8 @@ void RenderAccessibilityImpl::PerformAction(const ui::AXActionData& data) {
   // Actions shouldn't be handled in both places.
   switch (data.action) {
     case ax::mojom::Action::kGetImageData:
-      OnGetImageData(target.get(), data.target_rect.size());
+      OnGetImageData(target.get(),
+                     data.target_rect.value_or(gfx::Rect()).size());
       break;
     case ax::mojom::Action::kLoadInlineTextBoxes:
       OnLoadInlineTextBoxes(target.get());
@@ -366,9 +369,15 @@ void RenderAccessibilityImpl::PerformAction(const ui::AXActionData& data) {
                            data.focus_offset);
       break;
     case ax::mojom::Action::kScrollToMakeVisible:
-      target->ScrollToMakeVisibleWithSubFocus(
-          data.target_rect, data.horizontal_scroll_alignment,
-          data.vertical_scroll_alignment, data.scroll_behavior);
+      if (data.target_rect) {
+        target->ScrollToMakeVisibleWithSubFocus(
+            *data.target_rect, data.horizontal_scroll_alignment,
+            data.vertical_scroll_alignment, data.scroll_behavior);
+      } else {
+        target->ScrollToMakeVisible(data.horizontal_scroll_alignment,
+                                    data.vertical_scroll_alignment,
+                                    data.scroll_behavior);
+      }
       break;
     case ax::mojom::Action::kBlur:
     case ax::mojom::Action::kClearAccessibilityFocus:
@@ -394,6 +403,8 @@ void RenderAccessibilityImpl::PerformAction(const ui::AXActionData& data) {
     case ax::mojom::Action::kScrollLeft:
     case ax::mojom::Action::kScrollRight:
     case ax::mojom::Action::kStitchChildTree:
+    case ax::mojom::Action::kShowTooltip:
+    case ax::mojom::Action::kHideTooltip:
       target->PerformAction(data);
       break;
     case ax::mojom::Action::kCustomAction:
@@ -410,8 +421,6 @@ void RenderAccessibilityImpl::PerformAction(const ui::AXActionData& data) {
       HandleAXEvent(
           ui::AXEvent(ComputeRoot().AxID(), ax::mojom::Event::kEndOfTest));
       break;
-    case ax::mojom::Action::kShowTooltip:
-    case ax::mojom::Action::kHideTooltip:
     case ax::mojom::Action::kInternalInvalidateTree:
     case ax::mojom::Action::kResumeMedia:
     case ax::mojom::Action::kStartDuckingMedia:

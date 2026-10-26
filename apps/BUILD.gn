@@ -6,8 +6,8 @@ import("//build/config/ui.gni")
 import("//extensions/buildflags/buildflags.gni")
 
 assert(!is_android && !is_ios)
-assert(enable_extensions,
-       "Cannot depend on extensions because enable_extensions=false.")
+assert(enable_platform_apps,
+       "Cannot depend on platform apps because enable_platform_apps=false.")
 
 static_library("apps") {
   sources = []
@@ -32,8 +32,6 @@ static_library("apps") {
     "switches.cc",
     "switches.h",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   deps = [
     "//base",
@@ -103,7 +101,6 @@ source_set("browser_tests") {
     "//chrome/browser",
     "//chrome/browser/apps/platform_apps:browser_test_support",
     "//chrome/browser/profiles:profile",
-    "//chrome/browser/ui",
     "//chrome/browser/ui:simple_message_box_internal",
     "//chrome/test:test_support",
     "//content/public/browser",

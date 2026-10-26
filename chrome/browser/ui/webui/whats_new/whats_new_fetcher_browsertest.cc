@@ -23,27 +23,21 @@ using BrowserCommand = browser_command::mojom::Command;
 
 // Enabled through feature list.
 BASE_FEATURE(kTestModuleEnabled,
-             "TestModuleEnabled",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Enabled through feature list.
 BASE_FEATURE(kTestModule2Enabled,
-             "TestModule2Enabled",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Enabled through feature list.
 BASE_FEATURE(kTestEditionEnabled,
-             "TestEditionEnabled",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Disabled through feature list.
 BASE_FEATURE(kTestModuleDisabled,
-             "TestModuleDisabled",
              base::FEATURE_DISABLED_BY_DEFAULT);
 // Enabled by default.
 BASE_FEATURE(kTestModuleEnabledByDefault,
-             "TestModuleEnabledByDefault",
              base::FEATURE_ENABLED_BY_DEFAULT);
 // Disabled by default.
 BASE_FEATURE(kTestModuleDisabledByDefault,
-             "TestModuleDisabledByDefault",
              base::FEATURE_DISABLED_BY_DEFAULT);
 }  // namespace
 
@@ -143,6 +137,39 @@ IN_PROC_BROWSER_TEST_F(WhatsNewFetcherBrowserTest,
   EXPECT_EQ(
       expected,
       whats_new::GetServerURLForRender(*GetRegistry()).possibly_invalid_spec());
+}
+
+IN_PROC_BROWSER_TEST_F(WhatsNewFetcherBrowserTest,
+                       GetServerURLForRenderWithNativeMobileQr) {
+  std::string expected = base::StringPrintf(
+      "https://www.google.com/chrome/whats-new/"
+      "?version=%d&use-native-mobile-qr=true&internal=true",
+      CHROME_VERSION_MAJOR);
+
+  EXPECT_EQ(expected,
+            whats_new::GetServerURLForRender(*GetRegistry(),
+                                             /*is_staging=*/false,
+                                             /*use_native_mobile_qr=*/true)
+                .possibly_invalid_spec());
+}
+
+IN_PROC_BROWSER_TEST_F(WhatsNewFetcherBrowserTest,
+                       GetServerURLForRenderWithOneEnabledAndNativeMobileQr) {
+  whats_new::WhatsNewRegistry* registry = GetRegistry();
+  registry->RegisterModule(whats_new::WhatsNewModule(kTestModuleEnabled, ""));
+
+  // `use-native-mobile-qr` is a dedicated parameter and does not alter
+  // `enabled`.
+  std::string expected = base::StringPrintf(
+      "https://www.google.com/chrome/whats-new/"
+      "?version=%d&enabled=%s&use-native-mobile-qr=true&internal=true",
+      CHROME_VERSION_MAJOR, kTestModuleEnabled.name);
+
+  EXPECT_EQ(expected,
+            whats_new::GetServerURLForRender(*GetRegistry(),
+                                             /*is_staging=*/false,
+                                             /*use_native_mobile_qr=*/true)
+                .possibly_invalid_spec());
 }
 
 IN_PROC_BROWSER_TEST_F(WhatsNewFetcherBrowserTest,

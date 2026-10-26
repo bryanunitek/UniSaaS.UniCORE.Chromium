@@ -174,26 +174,64 @@ fn integer_limits_incompatible(
         min_type: 1,
         max_type: -1
     });
-    json_err_test(
-        schema,
-        "Unsatisfiable schema: minimum (1) is greater than maximum (-1)",
-    );
+    let expected = format!("Unsatisfiable schema: {min_type} (1) is greater than {max_type} (-1)");
+    json_err_test(schema, &expected);
 }
 
 #[rstest]
-fn integer_limits_empty() {
-    json_err_test(
-        &json!({
-            "type": "integer",
-            "exclusiveMinimum": 0, "exclusiveMaximum": 1
-        }),
-        "Failed to generate regex for integer range",
-    );
+#[case::exclusive_bounds(&json!({
+    "type": "integer",
+    "exclusiveMinimum": 0,
+    "exclusiveMaximum": 1
+}), "Unsatisfiable schema: integer interval (0, 1) contains no integer values")]
+#[case::fractional_bounds(&json!({
+    "type": "integer",
+    "minimum": 0.1,
+    "maximum": 0.9
+}), "Unsatisfiable schema: integer interval [0.1, 0.9] contains no integer values")]
+#[case::before_multiple_of(&json!({
+    "type": "integer",
+    "minimum": 0.1,
+    "maximum": 0.9,
+    "multipleOf": 1
+}), "Unsatisfiable schema: integer interval [0.1, 0.9] contains no integer values")]
+fn integer_limits_empty(#[case] schema: &Value, #[case] expected: &str) {
+    json_err_test(schema, expected);
 }
 
 #[rstest]
-fn integer_multipleof(#[values(0, 1, 3, 12, 1818, 1819)] test_value: i64) {
-    // See also issue 222: want to add some negative values
+#[case::exclusive_minimum_accepts_one(
+    &json!({"type": "integer", "exclusiveMinimum": 0, "maximum": 1}),
+    &json!(1),
+    true
+)]
+#[case::exclusive_minimum_rejects_zero(
+    &json!({"type": "integer", "exclusiveMinimum": 0, "maximum": 1}),
+    &json!(0),
+    false
+)]
+#[case::exclusive_maximum_accepts_zero(
+    &json!({"type": "integer", "minimum": 0, "exclusiveMaximum": 1}),
+    &json!(0),
+    true
+)]
+#[case::exclusive_maximum_rejects_one(
+    &json!({"type": "integer", "minimum": 0, "exclusiveMaximum": 1}),
+    &json!(1),
+    false
+)]
+fn integer_limits_singleton(
+    #[case] schema: &Value,
+    #[case] sample: &Value,
+    #[case] should_pass: bool,
+) {
+    json_schema_check(schema, sample, should_pass);
+}
+
+#[rstest]
+fn integer_multipleof(
+    #[values(-1819, -1818, -12, -3, -2, -1, 0, 1, 3, 12, 1818, 1819)] test_value: i64,
+) {
     const MULTIPLE_OF: i64 = 3;
     let schema = &json!({"type":"integer", "multipleOf": MULTIPLE_OF});
     json_schema_check(schema, &json!(test_value), test_value % MULTIPLE_OF == 0);
@@ -386,10 +424,9 @@ fn number_limits_incompatible(
         min_type: -0.1,
         max_type: -1.0
     });
-    json_err_test(
-        schema,
-        "Unsatisfiable schema: minimum (-0.1) is greater than maximum (-1)",
-    );
+    let expected =
+        format!("Unsatisfiable schema: {min_type} (-0.1) is greater than {max_type} (-1)");
+    json_err_test(schema, &expected);
 }
 
 #[rstest]
@@ -408,15 +445,16 @@ fn number_multipleof(#[case] test_value: f64, #[case] expected_pass: bool) {
 }
 
 #[rstest]
-// Issue 222 #[case(-35.0, true)]
-// Issue 222 #[case(-30.0, false)]
-// Issue 222 #[case(-7.0, true)]
+#[case(-35.0, true)]
+#[case(-30.0, false)]
+#[case(-7.0, true)]
 #[case(0.0, true)]
 #[case(3.5, true)]
 #[case(4.0, false)]
 #[case(325.5, true)]
 #[case(326.5, false)]
-// Issue 222 #[case(3.5e22, true)]
+// scientific notation (3.5e22) is blocked by #216, not #222
+// #[case(3.5e22, true)]
 fn number_multipleof_noninteger(#[case] test_value: f64, #[case] expected_pass: bool) {
     // See also issue 222
     const MULTIPLE_OF: f64 = 3.5;

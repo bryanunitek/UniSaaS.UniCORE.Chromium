@@ -10,8 +10,6 @@ assert(!is_android)
 source_set("link_capturing") {
   sources = [
     "apps_intent_picker_delegate.h",
-    "intent_picker_info.cc",
-    "intent_picker_info.h",
     "link_capturing_tab_data.cc",
     "link_capturing_tab_data.h",
   ]
@@ -22,6 +20,8 @@ source_set("link_capturing") {
       "mac_intent_picker_helpers.mm",
     ]
   }
+
+  public_deps = [ "//components/apps/link_capturing" ]
 
   deps = [
     "//base",
@@ -36,6 +36,7 @@ source_set("link_capturing") {
     "//components/webapps/common",
     "//components/webapps/isolated_web_apps:scheme",
     "//content/public/browser",
+    "//net",
     "//third_party/abseil-cpp:absl",
     "//url",
   ]
@@ -58,6 +59,7 @@ source_set("link_capturing") {
       "//ash/webui/projector_app/public/cpp",
       "//chrome/browser/apps/app_service",
       "//chromeos/ash/experiences/arc",
+      "//components/webapps/browser",
     ]
 
     # Needed only to allow circular includes.
@@ -139,7 +141,6 @@ source_set("app_service_browser_tests") {
     ":link_capturing",
     ":test_support",
     "//chrome/browser/apps/app_service:app_registry_cache_waiter",
-    "//chrome/browser/ui",
     "//chrome/browser/ui/tabs:tab_strip",
     "//chrome/browser/ui/web_applications",
     "//chrome/browser/web_applications",
@@ -152,4 +153,25 @@ source_set("app_service_browser_tests") {
     "//components/web_package/test_support",
     "//components/webapps/services/web_app_origin_association/test:test_support",
   ]
+
+  if (is_chromeos) {
+    sources +=
+        [ "chromeos_reimpl_navigation_capturing_throttle_browsertest.cc" ]
+    deps += [
+      "//chrome/browser/apps/app_service",
+      "//chrome/browser/profiles:profile",
+      "//chrome/browser/ui/browser_window",
+      "//chrome/browser/ui/web_applications/test:test_support_ui",
+      "//components/webapps/common",
+      "//content/public/browser",
+      "//content/test:test_support",
+      "//net",
+      "//net:test_support",
+      "//testing/gmock",
+      "//testing/gtest",
+      "//third_party/blink/public/common:headers",
+      "//ui/base",
+      "//url",
+    ]
+  }
 }

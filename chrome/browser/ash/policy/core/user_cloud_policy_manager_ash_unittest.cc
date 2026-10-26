@@ -15,7 +15,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -27,6 +26,7 @@
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_token_forwarder.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/global_features.h"
@@ -54,6 +54,7 @@
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/core/common/schema_registry.h"
 #include "components/policy/policy_constants.h"
+#include "components/policy/proto/cloud_policy.pb.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
@@ -163,7 +164,10 @@ class UserCloudPolicyManagerAshTest : public testing::Test {
         TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
         TestingBrowserProcess::GetGlobal()
             ->platform_part()
-            ->browser_policy_connector_ash());
+            ->browser_policy_connector_ash(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->component_manager_ash());
 
     // The initialization path that blocks on the initial policy fetch requires
     // a signin Profile to use its URLRequestContext.
@@ -186,9 +190,6 @@ class UserCloudPolicyManagerAshTest : public testing::Test {
     // attach it to the main Profile.
     signin_profile_ = TestingProfile::Builder().BuildIncognito(profile_);
     ASSERT_EQ(signin_profile_, ash::ProfileHelper::GetSigninProfile());
-
-    device_management_service_.ScheduleInitialization(0);
-    base::RunLoop().RunUntilIdle();
 
     // Set up a policy map for testing.
     GetExpectedDefaultPolicy(&policy_map_);
@@ -759,7 +760,7 @@ TEST_F(UserCloudPolicyManagerAshTest, NonBlockingFirstFetch) {
       kEmail, signin::ConsentLevel::kSignin);
   EXPECT_TRUE(
       identity_test_env()->identity_manager()->HasAccountWithRefreshToken(
-          account_info.account_id));
+          account_info.GetAccountId()));
 
   // That should have notified the manager, which now issues the request for the
   // policy oauth token.
@@ -846,12 +847,6 @@ TEST_F(UserCloudPolicyManagerAshTest, TestLifetimeReportingEphemeralUser) {
   ASSERT_TRUE(register_request.register_request().has_lifetime());
   ASSERT_EQ(em::DeviceRegisterRequest::LIFETIME_EPHEMERAL_USER,
             register_request.register_request().lifetime());
-}
-
-TEST_F(UserCloudPolicyManagerAshTest, TestHasAppInstallEventLogUploader) {
-  ASSERT_NO_FATAL_FAILURE(MakeManagerWithEmptyStore(
-      base::TimeDelta(), PolicyEnforcement::kPolicyRequired));
-  EXPECT_TRUE(manager_->GetAppInstallEventLogUploader());
 }
 
 TEST_F(UserCloudPolicyManagerAshTest, TestReportSchedulerCreation) {

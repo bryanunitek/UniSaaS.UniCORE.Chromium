@@ -8,13 +8,16 @@
 #include "build/build_config.h"
 #include "chrome/browser/sync/test/integration/apps_helper.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/sync/base/user_selectable_type.h"
+#include "ui/base/page_transition_types.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/multi_user/multi_user_window_manager.h"
@@ -58,16 +61,18 @@ SyncTest::SetupSyncMode TwoClientWebAppsIntegrationTestBase::GetSetupSyncMode()
 }
 
 // WebAppIntegrationTestDriver::TestDelegate
-Browser* TwoClientWebAppsIntegrationTestBase::CreateBrowser(Profile* profile) {
+BrowserWindowInterface* TwoClientWebAppsIntegrationTestBase::CreateBrowser(
+    Profile* profile) {
   return InProcessBrowserTest::CreateBrowser(profile);
 }
 
 void TwoClientWebAppsIntegrationTestBase::CloseBrowserSynchronously(
-    Browser* browser) {
+    BrowserWindowInterface* browser) {
   InProcessBrowserTest::CloseBrowserSynchronously(browser);
 }
 
-void TwoClientWebAppsIntegrationTestBase::AddBlankTabAndShow(Browser* browser) {
+void TwoClientWebAppsIntegrationTestBase::AddBlankTabAndShow(
+    BrowserWindowInterface* browser) {
   InProcessBrowserTest::AddBlankTabAndShow(browser);
 }
 
@@ -116,13 +121,17 @@ void TwoClientWebAppsIntegrationTestBase::SyncSignOut(Profile* profile) {
 #if BUILDFLAG(IS_CHROMEOS)
   NOTREACHED();
 #else
+  bool signed_out = false;
   for (int i = 0; i < num_clients(); ++i) {
     if (GetProfile(i) != profile) {
       continue;
     }
     GetClient(i)->SignOutPrimaryAccount();
+    signed_out = true;
   }
-  AwaitWebAppQuiescence();
+  if (signed_out) {
+    AwaitWebAppQuiescence();
+  }
 #endif
 }
 
@@ -201,7 +210,6 @@ void TwoClientWebAppsIntegrationTestBase::SetUpOnMainThread() {
               })));
     } else {
       ASSERT_TRUE(GetClient(i)->SignInNoWaitForCompletion());
-      ASSERT_TRUE(GetClient(i)->AwaitSyncTransportActive());
       ASSERT_TRUE(GetClient(i)->DisableAllSelectableTypes());
 #if BUILDFLAG(IS_CHROMEOS)
       ASSERT_TRUE(GetClient(i)->DisableAllSelectableOsTypes());
@@ -221,6 +229,7 @@ bool TwoClientWebAppsIntegrationTestBase::SetupClients() {
   if (!WebAppsSyncTestBase::SetupClients()) {
     return false;
   }
+  AddBrowser(1);
   for (Profile* profile : GetAllProfiles()) {
     if (!web_app::AreWebAppsEnabled(profile) ||
         !web_app::WebAppProvider::GetForWebApps(profile)) {
@@ -231,9 +240,10 @@ bool TwoClientWebAppsIntegrationTestBase::SetupClients() {
     web_app_provider->on_registry_ready().Post(FROM_HERE, loop.QuitClosure());
     loop.Run();
 
-    // The base SyncTest class creates a Browser window for each profile, but
-    // does not create any tabs in that window. Our tests require all Browser
-    // windows to always have at least one tab, so create these tabs as needed.
+    // The base SyncTest class creates a Browser window for profile 0, and
+    // AddBrowser(1) creates a Browser window for profile 1. Our tests require
+    // all Browser windows to always have at least one tab, so create these tabs
+    // as needed.
     BrowserWindowInterface* browser =
         ProfileBrowserCollection::GetForProfile(profile)->FindTabbedBrowser();
     CHECK(browser);

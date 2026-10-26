@@ -4,7 +4,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/network_profile_bubble.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/app_menu_control.h"
@@ -19,6 +19,8 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/label.h"
@@ -93,11 +95,12 @@ void NetworkProfileBubbleView::LinkClicked(const ui::Event& event) {
   NetworkProfileBubble::RecordUmaEvent(
       NetworkProfileBubble::METRIC_LEARN_MORE_CLICKED);
   WindowOpenDisposition disposition = ui::DispositionFromEventFlags(
-      event.flags(), WindowOpenDisposition::NEW_FOREGROUND_TAB);
-  content::OpenURLParams params(
-      GURL("https://sites.google.com/a/chromium.org/dev/administrators/"
-           "common-problems-and-solutions#network_profile"),
-      content::Referrer(), disposition, ui::PAGE_TRANSITION_LINK, false);
+      event.flags(), WindowOpenDisposition::kNewForegroundTab);
+  content::OpenURLParams params =
+      content::OpenURLParams::CreateBrowserInitiated(
+          GURL("https://sites.google.com/a/chromium.org/dev/administrators/"
+               "common-problems-and-solutions#network_profile"),
+          disposition, ui::PAGE_TRANSITION_LINK);
   navigator_->OpenURL(params, /*navigation_handle_callback=*/{});
 
   // If the user interacted with the bubble we don't reduce the number of

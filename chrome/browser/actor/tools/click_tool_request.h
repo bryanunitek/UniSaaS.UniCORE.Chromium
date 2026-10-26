@@ -6,8 +6,12 @@
 #define CHROME_BROWSER_ACTOR_TOOLS_CLICK_TOOL_REQUEST_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
+#include "chrome/browser/actor/actor_surface_handle.h"
+#include "chrome/browser/actor/tools/observation_delay_controller.h"
 #include "chrome/browser/actor/tools/page_tool_request.h"
 #include "chrome/common/actor.mojom-forward.h"
 
@@ -17,17 +21,24 @@ class ToolRequestVisitorFunctor;
 class ClickToolRequest : public PageToolRequest {
  public:
   static constexpr char kName[] = "Click";
+  // Canonical model-facing name exposed in LLM prompt schemas and indexed by
+  // `ToolRegistry` for lookup and routing via `GetToolDefinition()`.
+  static constexpr std::string_view kModelFacingName = "click";
+  // JSON argument key for the target element's DOM node ID parameter.
+  static constexpr std::string_view kDomNodeIdParam = "dom_node_id";
 
-  ClickToolRequest(tabs::TabHandle tab_handle,
-                   const PageTarget& target,
-                   mojom::ClickType type,
-                   mojom::ClickCount count);
-  ClickToolRequest(tabs::TabHandle tab_handle,
-                   const PageTarget& target,
-                   mojom::ClickType type,
-                   mojom::ClickCount count,
-                   bool requires_opening_web_contents);
+  ClickToolRequest(
+      ActorSurfaceHandle actor_surface_handle,
+      const PageTarget& target,
+      mojom::ClickType type,
+      mojom::ClickCount count,
+      bool requires_opening_web_contents = false,
+      std::optional<ObservationDelayController::PageStabilityConfig>
+          page_stability_config = std::nullopt);
   ~ClickToolRequest() override;
+
+  // Returns the `ToolId::kClick` tool schema definition.
+  static std::optional<ToolDefinition> GetToolDefinition();
 
   void Apply(ToolRequestVisitorFunctor& f) const override;
 
@@ -44,6 +55,8 @@ class ClickToolRequest : public PageToolRequest {
   mojom::ToolActionPtr ToMojoToolAction(
       content::RenderFrameHost& frame) const override;
   std::unique_ptr<PageToolRequest> Clone() const override;
+  bool RequiresTargetInLastApc() const override;
+  bool IsSubframeTargetingAllowed() const override;
 
   void WillSendToRenderer(
       content::RenderWidgetHost* render_widget_host) override;
@@ -52,6 +65,8 @@ class ClickToolRequest : public PageToolRequest {
   mojom::ClickType click_type_;
   mojom::ClickCount click_count_;
   bool requires_opening_web_contents_ = false;
+  std::optional<ObservationDelayController::PageStabilityConfig>
+      page_stability_config_;
 };
 
 }  // namespace actor

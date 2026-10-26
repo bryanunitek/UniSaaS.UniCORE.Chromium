@@ -11,14 +11,23 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/types/optional_util.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_dom_rect_init.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_element_geometry_update_event_init.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_element_image_default_size.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_element_elementimage.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_update_element_geometry_options.h"
 #include "third_party/blink/renderer/core/css/css_font_selector.h"
 #include "third_party/blink/renderer/core/css/offscreen_font_selector.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/dom_node_ids.h"
+#include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
+#include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/fileapi/blob.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -29,6 +38,7 @@
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context_factory.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_resource_tracker.h"
+#include "third_party/blink/renderer/core/html/canvas/element_geometry_update_event.h"
 #include "third_party/blink/renderer/core/html/canvas/element_image.h"
 #include "third_party/blink/renderer/core/html/canvas/image_data.h"
 #include "third_party/blink/renderer/core/html/canvas/ukm_parameters.h"
@@ -49,11 +59,13 @@
 #include "third_party/blink/renderer/platform/graphics/static_bitmap_image_transform.h"
 #include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/image-encoders/image_encoder_utils.h"
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/scheduler/public/event_loop.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
@@ -130,6 +142,49 @@ void ClearAllRenderedTextOnMainThread(int placeholder_canvas_id) {
   }
 }
 
+void ApplyElementGeometryUpdatesOnMainThread(
+    DOMNodeId canvas_id,
+    Vector<OffscreenCanvas::ElementGeometryUpdate> updates) {
+  DCHECK(IsMainThread());
+  auto* canvas = DynamicTo<HTMLCanvasElement>(DOMNodeIds::NodeForId(canvas_id));
+  if (!canvas) {
+    return;
+  }
+
+  HeapVector<Member<Element>> updated_elements;
+  HeapHashSet<Member<Element>> seen_elements;
+  for (const auto& update : updates) {
+    if (Element* element =
+            DynamicTo<Element>(DOMNodeIds::NodeForId(update.element_id))) {
+      if (element->CanvasForDrawing() == canvas) {
+        if (update.clear_element_geometry) {
+          canvas->ClearDrawnElementGeometry(*element);
+        } else {
+          canvas->UpdateDrawnElementGeometry(
+              *element,
+              update.transform.has_value() ? &update.transform.value()
+                                           : nullptr,
+              update.clip.has_value() ? &update.clip.value() : nullptr,
+              update.update_hit_test_order);
+        }
+        if (seen_elements.insert(element).is_new_entry) {
+          updated_elements.push_back(element);
+        }
+      }
+    }
+  }
+
+  if (updated_elements.empty()) {
+    return;
+  }
+
+  ElementGeometryUpdateEventInit* init =
+      ElementGeometryUpdateEventInit::Create();
+  init->setElements(updated_elements);
+  canvas->DispatchEvent(*ElementGeometryUpdateEvent::Create(
+      event_type_names::kElementgeometryupdate, init));
+}
+
 }  // namespace
 
 OffscreenCanvas::OffscreenCanvas(ExecutionContext* context,
@@ -175,6 +230,11 @@ OffscreenCanvas::OffscreenCanvas(ExecutionContext* context,
 
   OffscreenCanvasRegistry::From(execution_context_).Register(canvas_id, this);
 
+  if (HasPlaceholderCanvas() && execution_context_->IsWorkerGlobalScope()) {
+    UseCounter::Count(execution_context_,
+                      WebFeature::kOffscreenCanvasTransferToWorker);
+  }
+
   if (HasPlaceholderCanvas() &&
       execution_context_->IsDedicatedWorkerGlobalScope()) {
     WorkerAnimationFrameProvider* animation_frame_provider =
@@ -209,6 +269,7 @@ void OffscreenCanvas::Dispose() {
   disposing_ = true;
   placeholder_client_ = nullptr;
   frame_dispatcher_ = nullptr;
+  pending_element_geometry_updates_.clear();
   DiscardResources();
 
   if (context_) {
@@ -249,36 +310,19 @@ void OffscreenCanvas::setHeight(unsigned height) {
 }
 
 void OffscreenCanvas::SetSize(gfx::Size size) {
-  // Setting size of a canvas also resets it.
-  if (size == Size()) {
-    if (context_ && context_->IsRenderingContext2D()) {
-      context_->Reset();
-      origin_clean_ = true;
-      // We need to trigger the draw, because we did reset the context.
-      context_->DidDraw(CanvasPerformanceMonitor::DrawType::kOther);
-    }
-    return;
-  }
-
+  gfx::Size old_size = size_;
   size_ = size;
 
-  if (context_ && context_->isContextLost()) {
-    context_->RestoreFromInvalidSizeIfNeeded();
+  if (frame_dispatcher_) {
+    frame_dispatcher_->Reshape(Size());
   }
 
-  if (frame_dispatcher_)
-    frame_dispatcher_->Reshape(Size());
   if (context_) {
-    if (context_->IsWebGL() || IsWebGPU()) {
-      context_->Reshape(Size().width(), Size().height());
-    } else if (context_->IsRenderingContext2D() ||
-               context_->IsImageBitmapRenderingContext()) {
-      context_->Reset();
-      if (context_->IsRenderingContext2D()) {
-        origin_clean_ = true;
-      }
+    if (context_->IsRenderingContext2D()) {
+      origin_clean_ = true;
     }
-    context_->DidDraw(CanvasPerformanceMonitor::DrawType::kOther);
+
+    context_->Reshape(old_size, Size());
   }
 }
 
@@ -388,10 +432,9 @@ ScriptPromise<ImageBitmap> OffscreenCanvas::CreateImageBitmap(
       options, exception_state);
 }
 
-DOMMatrix* OffscreenCanvas::getElementTransform(
+ElementImageDefaultSize* OffscreenCanvas::getElementImageDefaultSize(
     const V8UnionElementOrElementImage* element_or_image,
-    DOMMatrix* draw_transform,
-    ExceptionState& exception_state) {
+    ExceptionState& exception_state) const {
   if (element_or_image->IsElement()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -414,13 +457,70 @@ DOMMatrix* OffscreenCanvas::getElementTransform(
           "The ElementImage was captured from a different canvas.");
       return nullptr;
     }
-    gfx::Transform transform = GetElementTransform(
-        paint_record->paint_state, Size(), draw_transform->Matrix());
-    return MakeGarbageCollected<DOMMatrix>(transform,
-                                           transform.Is2dTransform());
+    gfx::Vector2dF scale =
+        GetCanvasGridScaleFactor(paint_record->paint_state, Size());
+    auto* default_size = ElementImageDefaultSize::Create();
+    default_size->setWidth(paint_record->paint_state.box_size.width() *
+                           scale.x());
+    default_size->setHeight(paint_record->paint_state.box_size.height() *
+                            scale.y());
+    return default_size;
   }
 
-  return DOMMatrix::Create();
+  return ElementImageDefaultSize::Create();
+}
+
+void OffscreenCanvas::updateElementGeometry(
+    const V8UnionElementOrElementImage* element_or_element_image,
+    const UpdateElementGeometryOptions* options,
+    ExceptionState& exception_state) {
+  const gfx::Transform* transform_ptr = nullptr;
+  gfx::Transform transform;
+  if (options->hasCanvasTransform()) {
+    DOMMatrix* matrix =
+        DOMMatrix::fromMatrix(options->canvasTransform(), exception_state);
+    if (exception_state.HadException()) {
+      return;
+    }
+    CHECK(matrix);
+    transform = matrix->Matrix();
+    transform_ptr = &transform;
+  }
+
+  const FloatClipRect* clip_ptr = nullptr;
+  FloatClipRect clip;
+  if (options->hasCanvasClip()) {
+    const DOMRectInit* rect = options->canvasClip();
+    double x = rect->x();
+    double y = rect->y();
+    double width = rect->width();
+    double height = rect->height();
+    if (std::isfinite(x) && std::isfinite(y) && std::isfinite(width) &&
+        std::isfinite(height)) {
+      CanvasRenderingContext::AdjustRectForCanvas(x, y, width, height);
+      clip = FloatClipRect(gfx::RectF(x, y, width, height));
+      clip_ptr = &clip;
+    }
+  }
+
+  if (element_or_element_image->IsElement()) {
+    UpdateDrawnElementGeometry(*element_or_element_image->GetAsElement(),
+                               transform_ptr, clip_ptr,
+                               !options->preserveHitTestOrder());
+  } else if (element_or_element_image->IsElementImage()) {
+    UpdateDrawnElementGeometry(*element_or_element_image->GetAsElementImage(),
+                               transform_ptr, clip_ptr,
+                               !options->preserveHitTestOrder());
+  }
+}
+
+void OffscreenCanvas::clearElementGeometry(
+    const V8UnionElementOrElementImage* element_or_element_image) {
+  if (element_or_element_image->IsElement()) {
+    ClearDrawnElementGeometry(*element_or_element_image->GetAsElement());
+  } else if (element_or_element_image->IsElementImage()) {
+    ClearDrawnElementGeometry(*element_or_element_image->GetAsElementImage());
+  }
 }
 
 ScriptPromise<Blob> OffscreenCanvas::convertToBlob(
@@ -428,9 +528,6 @@ ScriptPromise<Blob> OffscreenCanvas::convertToBlob(
     const ImageEncodeOptions* options,
     ExceptionState& exception_state) {
   DCHECK(IsOffscreenCanvas());
-  String object_name = "OffscreenCanvas";
-  std::stringstream error_msg;
-
   if (is_neutered_) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "OffscreenCanvas object is detached.");
@@ -445,8 +542,8 @@ ScriptPromise<Blob> OffscreenCanvas::convertToBlob(
   }
 
   if (!OriginClean()) {
-    error_msg << "Tainted " << object_name << " may not be exported.";
-    exception_state.ThrowSecurityError(error_msg.str().c_str());
+    exception_state.ThrowSecurityError(
+        "A tainted OffscreenCanvas may not be exported.");
     return EmptyPromise();
   }
 
@@ -458,16 +555,16 @@ ScriptPromise<Blob> OffscreenCanvas::convertToBlob(
   }
 
   if (!IsPaintable() || Size().IsEmpty()) {
-    error_msg << "The size of " << object_name << " is zero.";
-    exception_state.ThrowDOMException(DOMExceptionCode::kIndexSizeError,
-                                      error_msg.str().c_str());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kIndexSizeError,
+        "The size of the OffscreenCanvas is zero.");
     return EmptyPromise();
   }
 
   if (!context_) {
-    error_msg << object_name << " has no rendering context.";
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      error_msg.str().c_str());
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        "The OffscreenCanvas has no rendering context.");
     return EmptyPromise();
   }
 
@@ -500,8 +597,9 @@ CanvasRenderingContext* OffscreenCanvas::GetCanvasRenderingContext(
     const CanvasContextCreationAttributesCore& attributes) {
   DCHECK_EQ(execution_context, GetTopExecutionContext());
 
-  if (execution_context->IsContextDestroyed())
+  if (execution_context->IsContextDestroyed()) {
     return nullptr;
+  }
 
   // Unknown type.
   if (rendering_api == CanvasRenderingContext::CanvasRenderingAPI::kUnknown)
@@ -523,24 +621,36 @@ CanvasRenderingContext* OffscreenCanvas::GetCanvasRenderingContext(
           this, "OffscreenCanvas has an existing context of a different type");
       return nullptr;
     }
-  } else {
-    // Tell the debugger about the attempt to create an offscreen
-    // canvas context even if it will fail, to ease debugging.
-    probe::DidCreateOffscreenCanvasContext(this);
-
-    CanvasContextCreationAttributesCore recomputed_attributes = attributes;
-    if (!allow_high_performance_power_preference_) {
-      recomputed_attributes.power_preference =
-          CanvasContextCreationAttributesCore::PowerPreference::kLowPower;
-    }
-
-    context_ = factory->Create(execution_context, this, recomputed_attributes);
-    if (context_) {
-      context_->RecordUKMCanvasRenderingAPI();
-      context_->RecordUMACanvasRenderingAPI();
-    }
+    return context_.Get();
   }
 
+  // Tell the debugger about the attempt to create an offscreen
+  // canvas context even if it will fail, to ease debugging.
+  probe::DidCreateOffscreenCanvasContext(this);
+
+  CanvasContextCreationAttributesCore recomputed_attributes = attributes;
+  if (!allow_high_performance_power_preference_) {
+    recomputed_attributes.power_preference =
+        CanvasContextCreationAttributesCore::PowerPreference::kLowPower;
+  }
+
+  // Do not assign `context_` directly: `factory->Create()` can synchronously
+  // dispatch events (such as "webglcontextcreationerror"), allowing an event
+  // listener to reentrantly call `getContext()` or transfer (neuter) this
+  // OffscreenCanvas while `Create()` is still on the stack.
+  CanvasRenderingContext* context =
+      factory->Create(execution_context, this, recomputed_attributes);
+  if (!context) {
+    return nullptr;
+  }
+  if (context_ || is_neutered_ || disposing_) {
+    context->Dispose();
+    return nullptr;
+  }
+
+  context_ = context;
+  context_->RecordUKMCanvasRenderingAPI();
+  context_->RecordUMACanvasRenderingAPI();
   return context_.Get();
 }
 
@@ -613,7 +723,7 @@ CanvasResourceDispatcher* OffscreenCanvas::GetOrCreateResourceDispatcher() {
               std::move(dispatcher_task_runner),
               blink::BindRepeating(
                   [](OffscreenCanvas* canvas) {
-                    if (canvas->frame_dispatcher_) {
+                    if (canvas && canvas->frame_dispatcher_) {
                       canvas->frame_dispatcher_->SetAnimationState(
                           canvas->placeholder_client_->GetAnimationState());
                     }
@@ -730,8 +840,7 @@ void OffscreenCanvas::NotifyGpuContextLost() {
     // We'll need to recreate a new frame dispatcher once the context is
     // restored in order to reestablish the compositor frame sink mojo
     // channel.
-    placeholder_client_ = nullptr;
-    frame_dispatcher_ = nullptr;
+    DiscardResourceDispatcher();
   }
 }
 
@@ -864,12 +973,101 @@ void OffscreenCanvas::ClearRenderedText() {
   }
 }
 
+void OffscreenCanvas::UpdateDrawnElementGeometry(
+    Element& element,
+    const gfx::Transform* transform,
+    const FloatClipRect* clip,
+    bool update_hit_test_order) {
+  QueueElementGeometryUpdate(element.GetDomNodeId(), transform, clip,
+                             update_hit_test_order);
+}
+
+void OffscreenCanvas::UpdateDrawnElementGeometry(
+    ElementImage& element_image,
+    const gfx::Transform* transform,
+    const FloatClipRect* clip,
+    bool update_hit_test_order) {
+  QueueElementGeometryUpdate(element_image.GetNodeId(), transform, clip,
+                             update_hit_test_order);
+}
+
+void OffscreenCanvas::ClearDrawnElementGeometry(Element& element) {
+  QueueClearElementGeometry(element.GetDomNodeId());
+}
+
+void OffscreenCanvas::ClearDrawnElementGeometry(ElementImage& element_image) {
+  QueueClearElementGeometry(element_image.GetNodeId());
+}
+
+void OffscreenCanvas::QueueUpdate(ElementGeometryUpdate update) {
+  if (placeholder_canvas_id_ == kInvalidDOMNodeId) {
+    return;
+  }
+
+  bool should_enqueue_microtask = pending_element_geometry_updates_.empty();
+  pending_element_geometry_updates_.push_back(std::move(update));
+
+  if (should_enqueue_microtask) {
+    if (auto* execution_context = GetExecutionContext()) {
+      execution_context->GetAgent()->event_loop()->EnqueueMicrotask(
+          blink::BindOnce(
+              &OffscreenCanvas::ProcessPendingElementGeometryUpdates,
+              WrapWeakPersistent(this)));
+    }
+  }
+}
+
+void OffscreenCanvas::QueueElementGeometryUpdate(
+    DOMNodeId element_id,
+    const gfx::Transform* transform,
+    const FloatClipRect* clip,
+    bool update_hit_test_order) {
+  QueueUpdate(ElementGeometryUpdate{
+      .element_id = element_id,
+      .transform = base::OptionalFromPtr(transform),
+      .clip = base::OptionalFromPtr(clip),
+      .update_hit_test_order = update_hit_test_order,
+      .clear_element_geometry = false,
+  });
+}
+
+void OffscreenCanvas::QueueClearElementGeometry(DOMNodeId element_id) {
+  QueueUpdate(ElementGeometryUpdate{
+      .element_id = element_id,
+      .clear_element_geometry = true,
+  });
+}
+
+void OffscreenCanvas::ProcessPendingElementGeometryUpdates() {
+  if (pending_element_geometry_updates_.empty()) {
+    return;
+  }
+
+  Vector<ElementGeometryUpdate> updates;
+  updates.swap(pending_element_geometry_updates_);
+
+  if (IsMainThread()) {
+    ApplyElementGeometryUpdatesOnMainThread(placeholder_canvas_id_,
+                                            std::move(updates));
+  } else {
+    if (auto* context = GetTopExecutionContext()) {
+      if (auto task_runner =
+              context->GetAgentGroupSchedulerCompositorTaskRunner()) {
+        PostCrossThreadTask(
+            *task_runner, FROM_HERE,
+            CrossThreadBindOnce(&ApplyElementGeometryUpdatesOnMainThread,
+                                placeholder_canvas_id_, std::move(updates)));
+      }
+    }
+  }
+}
+
 void OffscreenCanvas::Trace(Visitor* visitor) const {
   visitor->Trace(context_);
   visitor->Trace(execution_context_);
   CanvasRenderingContextHost::Trace(visitor);
   EventTarget::Trace(visitor);
-  CanvasRenderingContextHost::Trace(visitor);
+  CanvasResourceDispatcherClient::Trace(visitor);
 }
 
 }  // namespace blink

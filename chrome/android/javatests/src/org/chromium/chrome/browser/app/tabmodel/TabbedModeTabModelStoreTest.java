@@ -31,6 +31,7 @@ import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
@@ -51,6 +52,7 @@ import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.components.tab_groups.TabGroupColorId;
+import org.chromium.ui.test.util.DeviceRestriction;
 
 import java.util.List;
 
@@ -98,7 +100,7 @@ public class TabbedModeTabModelStoreTest {
     @After
     public void tearDown() {
         if (mLoadedData != null) {
-            destroyData(mLoadedData);
+            runOnUiThreadBlocking(mLoadedData::destroy);
             mLoadedData = null;
         }
     }
@@ -587,7 +589,8 @@ public class TabbedModeTabModelStoreTest {
         runOnUiThreadBlocking(
                 () -> {
                     mTabModel.mergeTabsToGroup(tabId1, tabId0);
-                    mTabModel.moveRelatedTabs(tabId0, 2);
+                    Token tabGroupId = mTabModel.getTabById(tabId0).getTabGroupId();
+                    mTabModel.moveGroupToIndex(tabGroupId, 2);
                 });
 
         StorageLoadedData data = loadAllDataSync(WINDOW_TAG, false);
@@ -625,6 +628,7 @@ public class TabbedModeTabModelStoreTest {
 
     @Test
     @MediumTest
+    @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO) // crbug.com/567031910
     @EnableFeatures(
             ChromeFeatureList.TAB_STORAGE_SQLITE_PROTOTYPE
                     + ":phase/"
@@ -683,6 +687,62 @@ public class TabbedModeTabModelStoreTest {
     @EnableFeatures(
             ChromeFeatureList.TAB_STORAGE_SQLITE_PROTOTYPE
                     + ":phase/"
+                    + TabStateStorageFlagHelper.PHASE_AUTHORITATIVE_READ_SOURCE)
+    @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO) // crbug.com/565238230
+    public void testAuthoritativeStoreActivityRecreationCrash() throws Exception {
+        setupActivityStore(StoreType.TAB_STATE_STORE);
+
+        TabModelOrchestrator orchestrator =
+                mActivityTestRule.getActivity().getTabModelOrchestratorSupplier().get();
+        assertEquals(
+                Integer.valueOf(StoreType.TAB_STATE_STORE),
+                runOnUiThreadBlocking(orchestrator::getAuthoritativeStoreType));
+        assertTrue(orchestrator.getTabPersistentStore() instanceof TabStateStore);
+
+        // Load a new tab to create tabs in the model.
+        mActivityTestRule.loadUrlInNewTab(
+                mActivityTestRule.getTestServer().getURL(TEST_PATH), /* incognito= */ false);
+        @TabId int newTabId = getActiveTabId();
+
+        // Save active tab in ActiveTabCache and persist state in TabStateStore.
+        runOnUiThreadBlocking(
+                () -> {
+                    ActiveTabCache cache =
+                            new ActiveTabCache(
+                                    WINDOW_TAG,
+                                    mActivityTestRule.getActivity().getTabModelSelector(),
+                                    null);
+                    cache.saveActiveTab(mActivityTestRule.getActivity().getActivityTab());
+                    orchestrator.saveState();
+                });
+
+        // Recreate activity to trigger restoration from ActiveTabCache + authoritative
+        // TabStateStore.
+        mActivityTestRule.recreateActivity();
+
+        ChromeTabbedActivity newActivity = mActivityTestRule.getActivity();
+        TabModelSelector newSelector = newActivity.getTabModelSelector();
+
+        CriteriaHelper.pollUiThread(
+                newSelector::isTabStateInitialized,
+                "Recreated activity tab state never initialized");
+
+        TabModel newModel = runOnUiThreadBlocking(() -> newSelector.getModel(false));
+        CriteriaHelper.pollUiThread(
+                () -> runOnUiThreadBlocking(() -> newModel.getCount() >= 2),
+                "Tabs were not properly restored on app load");
+
+        // Verify restored tab state.
+        assertNotNull(
+                "Newly added tab should be restored after activity restart",
+                runOnUiThreadBlocking(() -> newModel.getTabById(newTabId)));
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(
+            ChromeFeatureList.TAB_STORAGE_SQLITE_PROTOTYPE
+                    + ":phase/"
                     + TabStateStorageFlagHelper.PHASE_ONLY_SHADOW)
     public void testNonAuthoritativeStoreAppLoadAndRestart() throws Exception {
         setupActivityStore(StoreType.LEGACY);
@@ -724,19 +784,10 @@ public class TabbedModeTabModelStoreTest {
                 runOnUiThreadBlocking(() -> newModel.getTabById(newTabId)));
     }
 
-    private void destroyData(StorageLoadedData data) {
-        for (StorageLoadedData.LoadedTabState lts : data.getLoadedTabStates()) {
-            if (lts.tabState != null && lts.tabState.contentsState != null) {
-                lts.tabState.contentsState.destroy();
-            }
-        }
-        data.destroy();
-    }
-
     private StorageLoadedData loadAllDataSync(String windowTag, boolean incognito)
             throws Exception {
         if (mLoadedData != null) {
-            destroyData(mLoadedData);
+            runOnUiThreadBlocking(mLoadedData::destroy);
             mLoadedData = null;
         }
         Holder<StorageLoadedData> holder = new Holder<>(null);

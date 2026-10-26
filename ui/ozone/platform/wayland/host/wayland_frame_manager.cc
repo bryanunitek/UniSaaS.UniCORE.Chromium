@@ -8,15 +8,17 @@
 #include <sync/sync.h>
 
 #include <cstdint>
+#include <ranges>
 #include <variant>
 
-#include "base/containers/adapters.h"
 #include "base/containers/fixed_flat_set.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/typed_macros.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rrect_f.h"
@@ -108,7 +110,18 @@ WaylandFrame::~WaylandFrame() = default;
 
 WaylandFrameManager::WaylandFrameManager(WaylandWindow* window,
                                          WaylandConnection* connection)
-    : window_(window), connection_(connection), weak_factory_(this) {}
+    : window_(window), connection_(connection), weak_factory_(this) {
+  // The begin frame source paces off wp_presentation feedback, so
+  // older compositors fall back to the delay-based timer.
+  auto* presentation = connection_->presentation();
+  const bool has_presentation_timing =
+      presentation && wp_presentation_get_version(presentation) >= 2;
+  if (has_presentation_timing &&
+      base::FeatureList::IsEnabled(
+          features::kWaylandExternalBeginFrameSource)) {
+    CreateBeginFrameSource();
+  }
+}
 
 WaylandFrameManager::~WaylandFrameManager() {
   ClearStates();
@@ -243,6 +256,21 @@ void WaylandFrameManager::MaybeProcessPendingFrame() {
        !submitted_frames_.back()->wl_frame_callback)) {
     MaybeProcessPendingFrame();
   }
+
+  // The tail call may have set up a new frame callback
+  // so re-run the check before notifying the begin frame source
+  // that a callback will not be delivered.
+  //
+  // TODO(crbug.com/537421794): OnFrameCallbackUnavailable() can be called
+  // multiple times back-to-back due to the extra calls to
+  // MaybeProcessPendingFrame(), e.g. if a frame is discarded. While these calls
+  // are idempotent, we can replace the tail call with a loop and track early
+  // exit conditions to avoid this.
+  if (begin_frame_source_ && !submitted_frames_.empty() &&
+      (should_skip_frame_callbacks_ ||
+       !submitted_frames_.back()->wl_frame_callback)) {
+    begin_frame_source_->OnFrameCallbackUnavailable();
+  }
 }
 
 void WaylandFrameManager::PlayBackFrame(std::unique_ptr<WaylandFrame> frame) {
@@ -319,7 +347,7 @@ void WaylandFrameManager::PlayBackFrame(std::unique_ptr<WaylandFrame> frame) {
   // frame_callback and presentation_feedback on the top-most possible surface.
   WaylandSubsurface* reference_above = nullptr;
   for (auto& [subsurface, config] :
-       base::Reversed(frame->subsurfaces_to_overlays)) {
+       std::views::reverse(frame->subsurfaces_to_overlays)) {
     DCHECK(subsurface);
     auto* surface = subsurface->wayland_surface();
     if (empty_frame || !config.buffer_id ||
@@ -572,19 +600,6 @@ void WaylandFrameManager::OnFrameDone(void* data,
 }
 
 void WaylandFrameManager::HandleFrameCallback(wl_callback* callback) {
-  if (no_damage_frame_callback_.get() == callback) {
-    // "Empty" frame callbacks are issued for no damage if the begin
-    // frame source driver is enabled. These do not need to be processed,
-    // only relayed to the frame source to trigger the next frame.
-    no_damage_frame_callback_.reset();
-    TRACE_EVENT("wayland", "HandleFrameCallback (no damage)");
-    auto time = base::TimeTicks::Now();
-    if (frame_timing_observer_) {
-      frame_timing_observer_->OnFrameCallback(time);
-    }
-    return;
-  }
-
   if (frame_callback_freeze_detected_ &&
       submitted_frames_.back()->wl_frame_callback.get() != callback) {
     // If there is a frame callback freeze, frames are still submitted without
@@ -604,8 +619,8 @@ void WaylandFrameManager::HandleFrameCallback(wl_callback* callback) {
   EvaluateShouldSkipFrameCallbacks();
 
   auto time = base::TimeTicks::Now();
-  if (frame_timing_observer_) {
-    frame_timing_observer_->OnFrameCallback(time);
+  if (begin_frame_source_) {
+    begin_frame_source_->OnFrameCallback(time);
   }
 
   MaybeProcessPendingFrame();
@@ -676,8 +691,8 @@ void WaylandFrameManager::HandlePresentationFeedback(
     CHECK_NE(frame.get(), submitted_frames_.back().get());
   }
 
-  if (frame_timing_observer_) {
-    frame_timing_observer_->OnPresentationFeedback(feedback);
+  if (begin_frame_source_) {
+    begin_frame_source_->OnPresentationFeedback(feedback);
   }
 
   MaybeProcessSubmittedFrames();
@@ -1003,32 +1018,19 @@ void WaylandFrameManager::FrameCallbackTimeout() {
   EvaluateShouldSkipFrameCallbacks();
 }
 
-void WaylandFrameManager::AddFrameTimingObserver(
-    WaylandFrameTimingObserver* observer) {
-  DCHECK(!frame_timing_observer_);
-  frame_timing_observer_ = observer;
+void WaylandFrameManager::CreateBeginFrameSource() {
+  DCHECK(!begin_frame_source_);
+  begin_frame_source_ =
+      std::make_unique<BeginFrameSourceWayland>(window_, this);
 }
 
-void WaylandFrameManager::RemoveFrameTimingObserver(
-    WaylandFrameTimingObserver* observer) {
-  DCHECK_EQ(frame_timing_observer_, observer);
-  frame_timing_observer_ = nullptr;
-}
-
-void WaylandFrameManager::RequestFrameCallback() {
-  if (no_damage_frame_callback_ ||
-      (!submitted_frames_.empty() &&
-       submitted_frames_.back()->wl_frame_callback)) {
-    return;
-  }
-
+uint32_t WaylandFrameManager::GetRootSurfaceId() const {
   auto* surface = window_->root_surface();
-  static constexpr wl_callback_listener kFrameCallbackListener = {
-      .done = &OnFrameDone};
-  no_damage_frame_callback_.reset(wl_surface_frame(surface->surface()));
-  wl_callback_add_listener(no_damage_frame_callback_.get(),
-                           &kFrameCallbackListener, this);
-  surface->Commit();
+  return surface ? surface->get_surface_id() : 0u;
+}
+
+bool WaylandFrameManager::HasFrameWaitingToCommit() const {
+  return !pending_frames_.empty();
 }
 
 void WaylandFrameManager::FreezeTimeout() {
@@ -1067,6 +1069,10 @@ void WaylandFrameManager::Hide() {
   }
   pending_frames_.clear();
 
+  if (begin_frame_source_) {
+    begin_frame_source_->OnFrameCallbackUnavailable();
+  }
+
   MaybeProcessSubmittedFrames();
 }
 
@@ -1097,6 +1103,9 @@ void WaylandFrameManager::OnWindowSuspensionChanged() {
   DVLOG(1) << __func__
            << " surface=" << window_->root_surface()->get_surface_id()
            << " is_suspended=" << window_->IsSuspended();
+  if (begin_frame_source_) {
+    begin_frame_source_->OnWindowSuspensionChanged(window_->IsSuspended());
+  }
   EvaluateShouldAckSwapWithoutCommit();
 }
 
@@ -1128,6 +1137,10 @@ void WaylandFrameManager::EvaluateShouldAckSwapWithoutCommit() {
     // It should be safe to do so as after this point frame callbacks will not
     // be used.
     MaybeProcessPendingFrame();
+
+    if (begin_frame_source_) {
+      begin_frame_source_->OnFrameCallbackUnavailable();
+    }
   }
 }
 
@@ -1155,6 +1168,10 @@ void WaylandFrameManager::EvaluateShouldSkipFrameCallbacks() {
     // It should be safe to do so as after this point frame callbacks will no
     // longer be waited on.
     MaybeProcessPendingFrame();
+
+    if (begin_frame_source_) {
+      begin_frame_source_->OnFrameCallbackUnavailable();
+    }
   }
   DVLOG_IF(1, prev_skip_frame_callbacks && !should_skip_frame_callbacks_)
       << "surface=" << window_->root_surface()->get_surface_id()

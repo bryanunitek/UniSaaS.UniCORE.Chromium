@@ -10,10 +10,12 @@
 #include <dawn/webgpu_cpp.h>
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <utility>
 
 #include "base/bits.h"
+#include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/functional/callback_helpers.h"
@@ -41,6 +43,7 @@
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
 #include "gpu/command_buffer/service/shared_image/shared_memory_copy_strategy.h"
 #include "gpu/config/gpu_finch_features.h"
+#include "gpu/config/gpu_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkAlphaType.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -59,9 +62,11 @@
 #include "ui/gfx/gpu_memory_buffer_handle.h"
 #include "ui/gfx/win/d3d_shared_fence.h"
 #include "ui/gl/buildflags.h"
+#include "ui/gl/dc_surface_solid_color_pool.h"
 #include "ui/gl/direct_composition_support.h"
 #include "ui/gl/gl_angle_util_win.h"
 #include "ui/gl/gl_context.h"
+#include "ui/gl/gl_features.h"
 #include "ui/gl/gl_surface.h"
 #include "ui/gl/gl_utils.h"
 #include "ui/gl/init/gl_factory.h"
@@ -139,9 +144,6 @@ class D3DImageBackingFactoryTestBase : public testing::Test {
     shared_image_representation_factory_ =
         std::make_unique<SharedImageRepresentationFactory>(
             &shared_image_manager_, nullptr);
-    shared_image_factory_ = std::make_unique<D3DImageBackingFactory>(
-        gl::QueryD3D11DeviceObjectFromANGLE(),
-        shared_image_manager_.dxgi_shared_handle_manager(), GLFormatCaps());
     dawnProcSetProcs(&dawn::native::GetProcs());
   }
 
@@ -154,29 +156,57 @@ class D3DImageBackingFactoryTestBase : public testing::Test {
   std::unique_ptr<MemoryTypeTracker> memory_type_tracker_;
   std::unique_ptr<SharedImageRepresentationFactory>
       shared_image_representation_factory_;
-  std::unique_ptr<D3DImageBackingFactory> shared_image_factory_;
 };
 
 class D3DImageBackingFactoryTest
     : public D3DImageBackingFactoryTestBase,
-      public testing::WithParamInterface<GrContextType> {
+      public testing::WithParamInterface<
+          std::pair<GrContextType, SkiaBackendType>> {
  public:
   void SetUp() override {
     D3DImageBackingFactoryTestBase::SetUp();
     GpuDriverBugWorkarounds workarounds;
     scoped_refptr<gl::GLShareGroup> share_group = new gl::GLShareGroup();
 
-    auto gr_context_type = GetParam();
+    auto [gr_context_type, skia_backend_type] = GetParam();
     if (gr_context_type == GrContextType::kGraphiteDawn) {
+      if (skia_backend_type == SkiaBackendType::kGraphiteDawnD3D12) {
+        feature_list_.InitWithFeatures({features::kDCompOnD3D12}, {});
+        // Read by DawnContextProvider::GetDefaultBackendType(). The command
+        // line is restored between tests, so this doesn't affect other params.
+        base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+            switches::kSkiaGraphiteDawnBackend,
+            switches::kSkiaGraphiteDawnBackendD3D12);
+      }
       features::InitSkiaGraphiteDefaultParamsForTesting();
       dawn_context_provider_ =
           DawnContextProvider::Create(GpuPreferences(), GpuFeatureInfo());
     }
+
     context_state_ = base::MakeRefCounted<SharedContextState>(
         std::move(share_group), surface_, context_,
         /*use_virtualized_gl_contexts=*/false, base::DoNothing(),
         gr_context_type, /*vulkan_context_provider=*/nullptr,
         dawn_context_provider_.get());
+
+    auto d3d11_device = context_state_->GetD3D11Device();
+    auto d3d12_command_queue = context_state_->GetD3D12CommandQueue();
+    ASSERT_TRUE(d3d11_device);
+
+    gl::InitializeDirectComposition(
+        d3d11_device, d3d12_command_queue,
+        gl::CreateDCSurfaceSolidColorPoolFactory(d3d11_device));
+    if (context_state_->IsGraphiteDawnD3D12()) {
+      if (!gl::DirectCompositionTextureSupported() ||
+          !gl::GetDirectCompositionD3D12CommandQueue()) {
+        GTEST_SKIP() << "IDCompositionTexture backed by a D3D12 resource is "
+                        "not supported on this machine";
+      }
+    }
+
+    shared_image_factory_ = std::make_unique<D3DImageBackingFactory>(
+        d3d11_device, shared_image_manager_.dxgi_shared_handle_manager(),
+        GLFormatCaps());
     context_state_->InitializeSkia(GpuPreferences(), workarounds);
     context_state_->InitializeGL(GpuPreferences(), workarounds,
                                  GpuFeatureInfo());
@@ -189,11 +219,20 @@ class D3DImageBackingFactoryTest
     // proc table.
     context_state_ = nullptr;
     dawn_context_provider_ = nullptr;
+    gl::ShutdownDirectComposition();
 
     D3DImageBackingFactoryTestBase::TearDown();
   }
 
  protected:
+  gpu::SharedImageUsageSet GetDisplayReadUsage() const {
+    // SCANOUT is needed for D3D12 to trigger DComp texture path which creates a
+    // shared handle required for cross-device (D3D11->D3D12) resource sharing.
+    return SHARED_IMAGE_USAGE_DISPLAY_READ |
+           (context_state_->IsGraphiteDawnD3D12() ? SHARED_IMAGE_USAGE_SCANOUT
+                                                  : SharedImageUsageSet());
+  }
+
   bool ReadPixels(const sk_sp<SkImage>& sk_image,
                   const SkImageInfo& dst_info,
                   void* dst_pointer,
@@ -284,9 +323,10 @@ class D3DImageBackingFactoryTest
       bool use_factory);
   void RunVideoTest(bool use_shared_handle, bool use_factory);
   void RunOverlayTest(bool use_shared_handle, bool use_factory);
+  void RunVideoEndAccessFenceTest(bool use_compound_backing);
   void RunCreateSharedImageFromHandleTest(DXGI_FORMAT dxgi_format);
   void RunCreateFromSharedMemoryMultiplanarTest(bool use_async_copy);
-  void RunMultiplanarUploadAndReadback(bool use_upload_subresource);
+  void RunMultiplanarUploadAndReadback();
 
   static constexpr wgpu::FeatureName kRequiredFeatures[] = {
       // We need to request internal usage to be able to do operations with
@@ -298,9 +338,11 @@ class D3DImageBackingFactoryTest
       wgpu::FeatureName::SharedFenceDXGISharedHandle,
   };
 
+  std::unique_ptr<D3DImageBackingFactory> shared_image_factory_;
   std::unique_ptr<DawnContextProvider> dawn_context_provider_;
   scoped_refptr<SharedContextState> context_state_;
   scoped_refptr<SharedImageCopyManager> copy_manager_;
+  base::test::ScopedFeatureList feature_list_;
 };
 
 // Test to check interaction between Gl and skia GL representations.
@@ -606,6 +648,12 @@ TEST_P(D3DImageBackingFactoryTest, Dawn_ConcurrentReads) {
     SkCanvas* canvas = scoped_write_access->surface()->getCanvas();
     canvas->clear(SkColors::kRed);
     context_state_->FlushWriteAccess(scoped_write_access.get());
+    // GraphiteD3D11 backend uses PersistentGraphiteDawnAccess executes a submit
+    // in the flush, but the D3D12 backend does not, so we need to manually call
+    // submit here.
+    context_state_->SubmitIfNecessary(
+        /*signal_semaphores=*/{},
+        scoped_write_access->NeedGraphiteContextSubmit());
 
     skia_representation->SetCleared();
   }
@@ -859,7 +907,7 @@ TEST_P(D3DImageBackingFactoryTest, SkiaAccessFirstFails) {
   const auto format = viz::SinglePlaneFormat::kRGBA_8888;
   const gfx::Size size(1, 1);
   const auto color_space = gfx::ColorSpace::CreateSRGB();
-  const gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_DISPLAY_READ;
+  const gpu::SharedImageUsageSet usage = GetDisplayReadUsage();
   const gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
   auto backing = shared_image_factory_->CreateSharedImage(
       mailbox,
@@ -890,7 +938,7 @@ TEST_P(D3DImageBackingFactoryTest, CreateFromPixelData) {
   const auto format = viz::SinglePlaneFormat::kRGBA_8888;
   const gfx::Size size(1, 1);
   const auto color_space = gfx::ColorSpace::CreateSRGB();
-  const gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_DISPLAY_READ;
+  const gpu::SharedImageUsageSet usage = GetDisplayReadUsage();
   const std::vector<uint8_t> pixel_data = {0x01, 0x02, 0x03, 0x04};
   auto backing = shared_image_factory_->CreateSharedImage(
       mailbox,
@@ -1125,10 +1173,112 @@ TEST_P(D3DImageBackingFactoryTest, InvalidExternalFence) {
   EXPECT_FALSE(scoped_access);
 }
 
+void D3DImageBackingFactoryTest::RunVideoEndAccessFenceTest(
+    bool use_compound_backing) {
+  Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device =
+      shared_image_factory_->GetDeviceForTesting();
+  if (!gfx::D3DSharedFence::IsSupported(d3d11_device.Get())) {
+    GTEST_SKIP();
+  }
+
+  constexpr gfx::Size size(32, 32);
+  D3D11_TEXTURE2D_DESC desc = {
+      .Width = size.width(),
+      .Height = size.height(),
+      .MipLevels = 1,
+      .ArraySize = 1,
+      .Format = DXGI_FORMAT_B8G8R8A8_UNORM,
+      .SampleDesc = {.Count = 1},
+      .Usage = D3D11_USAGE_DEFAULT,
+      .BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+      .MiscFlags =
+          D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED,
+  };
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+  ASSERT_HRESULT_SUCCEEDED(
+      d3d11_device->CreateTexture2D(&desc, nullptr, &texture));
+
+  Microsoft::WRL::ComPtr<IDXGIResource1> dxgi_resource;
+  ASSERT_HRESULT_SUCCEEDED(texture.As(&dxgi_resource));
+  HANDLE shared_handle = nullptr;
+  ASSERT_HRESULT_SUCCEEDED(dxgi_resource->CreateSharedHandle(
+      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+      &shared_handle));
+
+  const Mailbox mailbox = Mailbox::Generate();
+  gfx::GpuMemoryBufferHandle gmb_handle{
+      gfx::DXGIHandle(base::win::ScopedHandle(shared_handle))};
+  auto backing = shared_image_factory_->CreateSharedImage(
+      mailbox,
+      SharedImageInfo(
+          viz::SinglePlaneFormat::kBGRA_8888, size,
+          gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
+          kPremul_SkAlphaType,
+          SHARED_IMAGE_USAGE_VIDEO_DECODE | SHARED_IMAGE_USAGE_GLES2_READ,
+          "VideoEndAccessFence"),
+      /*is_thread_safe=*/false, std::move(gmb_handle));
+  ASSERT_TRUE(backing);
+
+  if (use_compound_backing) {
+    backing->SetNotRefCounted();
+    auto buffer_usage = backing->buffer_usage();
+    backing = std::unique_ptr<CompoundImageBacking>(new CompoundImageBacking(
+        std::move(buffer_usage), std::move(backing), copy_manager_,
+        /*shared_image_factory=*/nullptr));
+  }
+
+  backing->SetCleared();
+  auto shared_image_ref = shared_image_manager_.Register(
+      std::move(backing), memory_type_tracker_.get());
+  ASSERT_TRUE(shared_image_ref);
+
+  auto video_representation = shared_image_manager_.ProduceVideo(
+      d3d11_device, mailbox, memory_type_tracker_.get());
+  ASSERT_TRUE(video_representation);
+  auto write_access = video_representation->BeginScopedWriteAccess();
+  ASSERT_TRUE(write_access);
+
+  HANDLE dummy_handle = ::CreateEvent(nullptr, FALSE, FALSE, nullptr);
+  ASSERT_NE(dummy_handle, nullptr);
+  write_access->SetEndAccessFence(gfx::D3DSharedFence::CreateFromScopedHandle(
+      base::win::ScopedHandle(dummy_handle), gfx::DXGIHandleToken()));
+  write_access.reset();
+
+  auto gl_representation =
+      shared_image_representation_factory_->ProduceGLTexturePassthrough(
+          mailbox);
+  ASSERT_TRUE(gl_representation);
+  auto read_access = gl_representation->BeginScopedAccess(
+      GL_SHARED_IMAGE_ACCESS_MODE_READ_CHROMIUM,
+      SharedImageRepresentation::AllowUnclearedAccess::kNo);
+  // The read access should fail because the video end-access fence has not been
+  // signaled yet.
+  EXPECT_FALSE(read_access);
+}
+
+// Verifies that video end-access fences are waited on by subsequent readers.
+TEST_P(D3DImageBackingFactoryTest, VideoEndAccessFence) {
+  RunVideoEndAccessFenceTest(/*use_compound_backing=*/false);
+}
+
+// Verifies that compound video representations forward end-access fences.
+TEST_P(D3DImageBackingFactoryTest, CompoundVideoEndAccessFence) {
+  RunVideoEndAccessFenceTest(/*use_compound_backing=*/true);
+}
+
 // Tests that writing to a Skia representation of a D3DImageBacking created
 // from a shared handle is reflected in a second backing created from the
 // same handle.
 TEST_P(D3DImageBackingFactoryTest, SkiaWriteReadWithSharedHandle) {
+  // TODO(crbug.com/545230727): Enable once sharing a texture opened from a DXGI
+  // shared handle with D3D12 is supported for the Graphite-Dawn D3D12 backend.
+  // D3D11On12 cannot unwrap a texture it did not create, so the unwrap fails
+  // with E_INVALIDARG.
+  if (context_state_->IsGraphiteDawnD3D12()) {
+    GTEST_SKIP() << "Sharing a texture opened from a DXGI shared handle with "
+                    "D3D12 is not implemented";
+  }
+
   auto mailbox1 = Mailbox::Generate();
   auto mailbox2 = Mailbox::Generate();
   const auto format = viz::SinglePlaneFormat::kRGBA_8888;
@@ -1426,6 +1576,18 @@ D3DImageBackingFactoryTest::CreateVideoImage(const gfx::Size& size,
   if (FAILED(hr))
     return {};
 
+  if (context_state_->IsGraphiteDawnD3D12()) {
+    // The texture is created and filled on Graphite's D3D11On12 device, which
+    // is not the device that reads it back (e.g. ANGLE reads it through the
+    // shared handle). The initial data upload is only queued on this device's
+    // immediate context, so submit it before another device can observe it.
+    // TODO(crbug.com/547997743): Extend the tests using this util to test
+    // reading the textures via Dawn.
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> device_context;
+    d3d11_device->GetImmediateContext(&device_context);
+    device_context->Flush();
+  }
+
   // The video tests read from the created SharedImages via GL.
   gpu::SharedImageUsageSet usage =
       gpu::SHARED_IMAGE_USAGE_VIDEO_DECODE |
@@ -1463,7 +1625,7 @@ D3DImageBackingFactoryTest::CreateVideoImage(const gfx::Size& size,
     shared_image_backing = shared_image_factory_->CreateSharedImage(
         mailbox,
         {viz::MultiPlaneFormat::kNV12, size, gfx::ColorSpace(),
-         kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, "TestLabel"},
+         kTopLeft_GrSurfaceOrigin, kUnpremul_SkAlphaType, usage, "TestLabel"},
         /*is_thread_safe=*/false, std::move(gmb_handle));
     if (!shared_image_backing) {
       return {};
@@ -1479,7 +1641,7 @@ D3DImageBackingFactoryTest::CreateVideoImage(const gfx::Size& size,
     shared_image_backing = D3DImageBacking::Create(
         mailbox,
         SharedImageInfo(viz::MultiPlaneFormat::kNV12, size, gfx::ColorSpace(),
-                        kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage,
+                        kTopLeft_GrSurfaceOrigin, kUnpremul_SkAlphaType, usage,
                         "TestLabel"),
         d3d11_texture, std::move(dxgi_shared_handle_state),
         context_state_->GetGLFormatCaps(), GL_TEXTURE_EXTERNAL_OES,
@@ -1494,7 +1656,7 @@ D3DImageBackingFactoryTest::CreateVideoImage(const gfx::Size& size,
   EXPECT_EQ(backing->format(), viz::MultiPlaneFormat::kNV12);
   EXPECT_EQ(backing->color_space(), gfx::ColorSpace());
   EXPECT_EQ(backing->surface_origin(), kTopLeft_GrSurfaceOrigin);
-  EXPECT_EQ(backing->alpha_type(), kPremul_SkAlphaType);
+  EXPECT_EQ(backing->alpha_type(), kUnpremul_SkAlphaType);
   EXPECT_EQ(backing->usage(), usage);
   EXPECT_TRUE(backing->IsCleared());
 
@@ -1506,6 +1668,17 @@ D3DImageBackingFactoryTest::CreateVideoImage(const gfx::Size& size,
 
 void D3DImageBackingFactoryTest::RunVideoTest(bool use_shared_handle,
                                               bool use_factory) {
+  // This test reads the video texture through GL. Without a shared handle that
+  // is only possible when the texture belongs to ANGLE's D3D11 device, which is
+  // not the case when Graphite runs on D3D12 and the factory uses a D3D11On12
+  // device.
+  // TODO(crbug.com/425864542): Enable this case without a shared handle.
+  if (!use_shared_handle && shared_image_factory_->GetDeviceForTesting() !=
+                                gl::QueryD3D11DeviceObjectFromANGLE()) {
+    GTEST_SKIP() << "Video texture is not accessible from ANGLE's D3D11 device "
+                    "without a shared handle";
+  }
+
   const gfx::Size size(32, 32);
 
   const uint8_t kYFillValue = 0x12;
@@ -1673,6 +1846,71 @@ TEST_P(D3DImageBackingFactoryTest, CreateFromVideoTextureSharedHandle) {
   RunVideoTest(/*use_shared_handle=*/true, /*use_factory=*/false);
 }
 
+// Validates that a Dawn representation is successfully created in a Graphite
+// D3D12 context for a D3D11 texture with a keyed mutex.
+TEST_P(D3DImageBackingFactoryTest, KeyedMutexTextureSupportsDawnD3D12Access) {
+  if (!context_state_->IsGraphiteDawnD3D12()) {
+    GTEST_SKIP() << "This test requires the Graphite-Dawn D3D12 backend";
+  }
+
+  // Create a texture with the keyed mutex flag set.
+  constexpr gfx::Size size(32, 32);
+  D3D11_TEXTURE2D_DESC desc = {
+      .Width = size.width(),
+      .Height = size.height(),
+      .MipLevels = 1,
+      .ArraySize = 1,
+      .Format = DXGI_FORMAT_NV12,
+      .SampleDesc = {.Count = 1},
+      .Usage = D3D11_USAGE_DEFAULT,
+      .BindFlags = D3D11_BIND_SHADER_RESOURCE,
+      .MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE |
+                   D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX,
+  };
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+  ASSERT_HRESULT_SUCCEEDED(
+      shared_image_factory_->GetDeviceForTesting()->CreateTexture2D(
+          &desc, /*pInitialData=*/nullptr, &texture));
+
+  Microsoft::WRL::ComPtr<IDXGIResource1> dxgi_resource;
+  ASSERT_HRESULT_SUCCEEDED(texture.As(&dxgi_resource));
+  HANDLE handle = nullptr;
+  ASSERT_HRESULT_SUCCEEDED(dxgi_resource->CreateSharedHandle(
+      nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr,
+      &handle));
+  auto shared_handle_state = shared_image_manager_.dxgi_shared_handle_manager()
+                                 ->CreateAnonymousSharedHandleState(
+                                     base::win::ScopedHandle(handle), texture);
+  ASSERT_TRUE(shared_handle_state);
+
+  const Mailbox mailbox = Mailbox::Generate();
+  auto backing = D3DImageBacking::Create(
+      mailbox,
+      SharedImageInfo(
+          viz::MultiPlaneFormat::kNV12, size, gfx::ColorSpace(),
+          kTopLeft_GrSurfaceOrigin, kUnpremul_SkAlphaType,
+          SHARED_IMAGE_USAGE_VIDEO_DECODE | SHARED_IMAGE_USAGE_WEBGPU_READ,
+          "KeyedMutexVideoTexture"),
+      std::move(texture), std::move(shared_handle_state),
+      context_state_->GetGLFormatCaps(), GL_TEXTURE_EXTERNAL_OES,
+      /*array_slice=*/0);
+  ASSERT_TRUE(backing);
+  backing->SetCleared();
+  auto shared_image_ref = shared_image_manager_.Register(
+      std::move(backing), memory_type_tracker_.get());
+  ASSERT_TRUE(shared_image_ref);
+
+  auto dawn_representation = shared_image_representation_factory_->ProduceDawn(
+      mailbox, context_state_->dawn_context_provider()->GetDevice(),
+      wgpu::BackendType::D3D12, {}, context_state_);
+  ASSERT_TRUE(dawn_representation);
+
+  auto scoped_access = dawn_representation->BeginScopedAccess(
+      wgpu::TextureUsage::TextureBinding,
+      SharedImageRepresentation::AllowUnclearedAccess::kNo);
+  EXPECT_TRUE(scoped_access);
+}
+
 TEST_P(D3DImageBackingFactoryTest,
        CreateFromVideoTextureViaFactoryMultiplanar) {
   RunVideoTest(/*use_shared_handle=*/true,
@@ -1734,6 +1972,12 @@ void D3DImageBackingFactoryTest::RunOverlayTest(bool use_shared_handle,
 }
 
 TEST_P(D3DImageBackingFactoryTest, CreateFromVideoTextureOverlay) {
+  // TODO(crbug.com/542565485): Enable once overlay access to a video texture is
+  // supported for the Graphite-Dawn D3D12 backend.
+  if (context_state_->IsGraphiteDawnD3D12()) {
+    GTEST_SKIP() << "Overlay access to video is not implemented.";
+  }
+
   RunOverlayTest(/*use_shared_handle=*/false, /*use_factory=*/false);
 }
 
@@ -1777,7 +2021,7 @@ void D3DImageBackingFactoryTest::RunCreateFromSharedMemoryMultiplanarTest(
       shared_image_factory_.get(), copy_manager_, mailbox,
       std::move(shm_gmb_handle),
       SharedImageInfo(viz::MultiPlaneFormat::kNV12, size, gfx::ColorSpace(),
-                      kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage,
+                      kTopLeft_GrSurfaceOrigin, kUnpremul_SkAlphaType, usage,
                       "TestLabel"));
   EXPECT_NE(backing, nullptr);
 
@@ -1786,7 +2030,7 @@ void D3DImageBackingFactoryTest::RunCreateFromSharedMemoryMultiplanarTest(
   EXPECT_EQ(backing->format(), viz::MultiPlaneFormat::kNV12);
   EXPECT_EQ(backing->color_space(), gfx::ColorSpace());
   EXPECT_EQ(backing->surface_origin(), kTopLeft_GrSurfaceOrigin);
-  EXPECT_EQ(backing->alpha_type(), kPremul_SkAlphaType);
+  EXPECT_EQ(backing->alpha_type(), kUnpremul_SkAlphaType);
   EXPECT_EQ(backing->usage(), usage);
   EXPECT_TRUE(backing->IsCleared());
 
@@ -1910,26 +2154,10 @@ TEST_P(D3DImageBackingFactoryTest, CreateFromSharedMemoryMultiplanarAsyncCopy) {
 
 // Verifies that a multi-planar NV12 image can be created without DXGI handle
 // for use with software GMBs.
-void D3DImageBackingFactoryTest::RunMultiplanarUploadAndReadback(
-    bool use_update_subresource) {
-  base::test::ScopedFeatureList feature_list;
-  if (use_update_subresource) {
-    feature_list.InitAndEnableFeature(
-        features::kD3DBackingUploadWithUpdateSubresource);
-  } else {
-    feature_list.InitAndDisableFeature(
-        features::kD3DBackingUploadWithUpdateSubresource);
-  }
-
-  // Recreate a new share image factory which will pick up the
-  // kD3DBackingUploadWithUpdateSubresource feature.
-  shared_image_factory_ = std::make_unique<D3DImageBackingFactory>(
-      gl::QueryD3D11DeviceObjectFromANGLE(),
-      shared_image_manager_.dxgi_shared_handle_manager(), GLFormatCaps());
-
+void D3DImageBackingFactoryTest::RunMultiplanarUploadAndReadback() {
   constexpr gfx::Size size(32, 32);
   constexpr size_t kDataSize = size.width() * size.height() * 3 / 2;
-  constexpr SkAlphaType alpha_type = kPremul_SkAlphaType;
+  constexpr SkAlphaType alpha_type = kOpaque_SkAlphaType;
   constexpr gfx::ColorSpace color_space;
   constexpr gpu::SharedImageUsageSet usage =
       gpu::SHARED_IMAGE_USAGE_RASTER_READ |
@@ -1976,11 +2204,6 @@ void D3DImageBackingFactoryTest::RunMultiplanarUploadAndReadback(
   // Upload initial data into the image.
   backing->UploadFromMemory(pixmaps);
   backing->SetCleared();
-
-  // If UpdateSubresource() is used, the staging texture shouldn't be created.
-  EXPECT_EQ(
-      !static_cast<D3DImageBacking*>(backing)->HasStagingTextureForTesting(),
-      use_update_subresource);
 
   auto skia_representation = shared_image_representation_factory_->ProduceSkia(
       mailbox, context_state_);
@@ -2064,17 +2287,26 @@ void D3DImageBackingFactoryTest::RunMultiplanarUploadAndReadback(
 }
 
 TEST_P(D3DImageBackingFactoryTest, MultiplanarUploadAndReadback) {
-  RunMultiplanarUploadAndReadback(/*use_update_subresource=*/false);
-}
+  // TODO(crbug.com/544806581): Enable once CPU upload/readback is supported for
+  // the Graphite-Dawn D3D12 backend.
+  if (context_state_->IsGraphiteDawnD3D12()) {
+    GTEST_SKIP() << "CPU upload/readback of a D3D11On12 texture is under "
+                    "development";
+  }
 
-TEST_P(D3DImageBackingFactoryTest,
-       MultiplanarUploadAndReadbackWithUpdateSubresource) {
-  RunMultiplanarUploadAndReadback(/*use_update_subresource=*/true);
+  RunMultiplanarUploadAndReadback();
 }
 
 // Verifies that UploadFromMemory flushes pending Graphite commands. Draws blue
 // via Skia, then uploads red pixels. The final result should be red.
 TEST_P(D3DImageBackingFactoryTest, UploadAfterSkiaWrite) {
+  // TODO(crbug.com/544806581): Enable once CPU upload/readback is supported for
+  // the Graphite-Dawn D3D12 backend.
+  if (context_state_->IsGraphiteDawnD3D12()) {
+    GTEST_SKIP() << "CPU upload/readback of a D3D11On12 texture is under "
+                    "development";
+  }
+
   const auto format = viz::SinglePlaneFormat::kRGBA_8888;
   const gfx::Size size(4, 4);
   const auto color_space = gfx::ColorSpace::CreateSRGB();
@@ -2137,6 +2369,13 @@ TEST_P(D3DImageBackingFactoryTest, UploadAfterSkiaWrite) {
 // Verifies that ReadbackToMemory flushes pending Graphite commands. Draws blue
 // via Skia, then reads back. The result should be blue.
 TEST_P(D3DImageBackingFactoryTest, ReadbackAfterSkiaWrite) {
+  // TODO(crbug.com/544806581): Enable once CPU upload/readback is supported for
+  // the Graphite-Dawn D3D12 backend.
+  if (context_state_->IsGraphiteDawnD3D12()) {
+    GTEST_SKIP() << "CPU upload/readback of a D3D11On12 texture is under "
+                    "development";
+  }
+
   const auto format = viz::SinglePlaneFormat::kRGBA_8888;
   const gfx::Size size(4, 4);
   const auto color_space = gfx::ColorSpace::CreateSRGB();
@@ -2187,10 +2426,11 @@ TEST_P(D3DImageBackingFactoryTest, ReadbackAfterSkiaWrite) {
   ASSERT_TRUE(backing->ReadbackToMemory(pixmaps));
 
   // Verify every pixel is blue (RGBA: 0, 0, 255, 255).
-  const uint8_t kExpectedColor[] = {0, 0, 255, 255};  // Blue
+  constexpr auto kExpectedColor =
+      std::to_array<uint8_t>({0, 0, 255, 255});  // Blue
   for (size_t i = 0; i < num_pixels; ++i) {
     for (size_t j = 0; j < 4; ++j) {
-      ASSERT_EQ(readback_pixels[i * 4 + j], UNSAFE_TODO(kExpectedColor[j]))
+      ASSERT_EQ(readback_pixels[i * 4 + j], kExpectedColor[j])
           << "Mismatch at pixel " << i << " component " << j;
     }
   }
@@ -2218,6 +2458,46 @@ TEST_P(D3DImageBackingFactoryTest, CanCreateScanoutBacking) {
           gpu::SHARED_IMAGE_USAGE_SCANOUT, viz::SinglePlaneFormat::kBGRA_8888,
           arbitrary_size, /*thread_safe=*/false,
           gfx::GpuMemoryBufferType::EMPTY_BUFFER, GrContextType ::kGL, {}));
+}
+
+TEST_P(D3DImageBackingFactoryTest, CreateP010Backing) {
+  if (context_state_->IsGraphiteDawnD3D12()) {
+    GTEST_SKIP() << "The factory has no D3D11 device to create textures with.";
+  }
+
+  Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device =
+      gl::QueryD3D11DeviceObjectFromANGLE();
+  ASSERT_TRUE(d3d11_device);
+
+  constexpr UINT kRequiredUsage = D3D11_FORMAT_SUPPORT_TEXTURE2D |
+                                  D3D11_FORMAT_SUPPORT_SHADER_SAMPLE |
+                                  D3D11_FORMAT_SUPPORT_RENDER_TARGET;
+  UINT format_support = 0;
+  if (FAILED(d3d11_device->CheckFormatSupport(DXGI_FORMAT_P010,
+                                              &format_support)) ||
+      (format_support & kRequiredUsage) != kRequiredUsage) {
+    GTEST_SKIP() << "D3D device does not support P010";
+  }
+
+  constexpr gfx::Size size(32, 32);
+  constexpr auto format = viz::MultiPlaneFormat::kP010;
+  constexpr gpu::SharedImageUsageSet usage =
+      gpu::SHARED_IMAGE_USAGE_RASTER_READ |
+      gpu::SHARED_IMAGE_USAGE_DISPLAY_READ | gpu::SHARED_IMAGE_USAGE_CPU_UPLOAD;
+
+  EXPECT_TRUE(shared_image_factory_->CanCreateSharedImage(
+      usage, format, size, /*thread_safe=*/false,
+      gfx::GpuMemoryBufferType::EMPTY_BUFFER, context_state_->gr_context_type(),
+      {}));
+
+  auto backing = shared_image_factory_->CreateSharedImage(
+      gpu::Mailbox::Generate(),
+      {format, size, gfx::ColorSpace(), kTopLeft_GrSurfaceOrigin,
+       kUnpremul_SkAlphaType, usage, "TestLabel"},
+      kNullSurfaceHandle, /*is_thread_safe=*/false);
+  ASSERT_NE(backing, nullptr);
+  EXPECT_EQ(backing->format(), format);
+  EXPECT_EQ(backing->size(), size);
 }
 
 TEST_P(D3DImageBackingFactoryTest, CanProduceDCompTextureOverlay) {
@@ -2288,6 +2568,7 @@ TEST_P(D3DImageBackingFactoryTest, CanProduceVideoForExternalDevice) {
       shared_image_manager_.Register(std::move(owned_backing),
                                      memory_type_tracker_.get());
   ASSERT_TRUE(shared_image_ref);
+  shared_image_ref->SetCleared();
 
   Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device;
   UINT creation_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
@@ -2321,24 +2602,41 @@ TEST_P(D3DImageBackingFactoryTest, CanProduceVideoForExternalDevice) {
 INSTANTIATE_TEST_SUITE_P(
     All,
     D3DImageBackingFactoryTest,
-    ::testing::Values(GrContextType::kGL, GrContextType::kGraphiteDawn),
-    [](const testing::TestParamInfo<GrContextType>& info) {
-      switch (info.param) {
+    ::testing::Values(std::make_pair(GrContextType::kGL,
+                                     SkiaBackendType::kUnknown),
+                      std::make_pair(GrContextType::kGraphiteDawn,
+                                     SkiaBackendType::kGraphiteDawnD3D11),
+                      std::make_pair(GrContextType::kGraphiteDawn,
+                                     SkiaBackendType::kGraphiteDawnD3D12)),
+    [](const testing::TestParamInfo<std::pair<GrContextType, SkiaBackendType>>&
+           info) {
+      switch (info.param.first) {
         case GrContextType::kGL:
           return "GaneshGL";
         case GrContextType::kGraphiteDawn:
-          return "GraphiteDawn";
+          switch (info.param.second) {
+            case SkiaBackendType::kGraphiteDawnD3D11:
+              return "GraphiteDawnD3D11";
+            case SkiaBackendType::kGraphiteDawnD3D12:
+              return "GraphiteDawnD3D12";
+            default:
+              NOTREACHED();
+          }
         default:
-          // This should not be reached with the provided values.
-          return "Unknown";
+          NOTREACHED();
       }
     });
-
 
 class D3DImageBackingFactoryBufferTest : public D3DImageBackingFactoryTestBase {
  public:
   void SetUp() override {
     D3DImageBackingFactoryTestBase::SetUp();
+    Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device =
+        gl::QueryD3D11DeviceObjectFromANGLE();
+    ASSERT_TRUE(d3d11_device);
+    shared_image_factory_ = std::make_unique<D3DImageBackingFactory>(
+        d3d11_device, shared_image_manager_.dxgi_shared_handle_manager(),
+        GLFormatCaps());
   }
 
  protected:
@@ -2346,6 +2644,7 @@ class D3DImageBackingFactoryBufferTest : public D3DImageBackingFactoryTestBase {
       // Required for Dawn interop.
       wgpu::FeatureName::SharedFenceDXGISharedHandle,
       wgpu::FeatureName::SharedBufferMemoryD3D12Resource,
+      wgpu::FeatureName::SharedTextureMemoryD3D12Resource,
   };
 
   void CheckDawnBuffer(wgpu::Buffer src_buffer,
@@ -2380,6 +2679,8 @@ class D3DImageBackingFactoryBufferTest : public D3DImageBackingFactoryTestBase {
 
     EXPECT_EQ(expected_value, *dst_value);
   }
+
+  std::unique_ptr<D3DImageBackingFactory> shared_image_factory_;
 };
 
 // Verifies that creating a shared image backed by a D3D12 buffer works and can

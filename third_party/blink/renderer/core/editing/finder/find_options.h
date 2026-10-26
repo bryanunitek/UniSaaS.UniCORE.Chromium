@@ -67,15 +67,6 @@ class FindOptions {
     return *this;
   }
 
-  // Used for window.find() or execCommand('find').
-  // TODO(yosin) Once find UI works on flat tree and it doesn't use
-  // `rangeOfString()`, we should get rid of the FindApiCall flag.
-  bool IsFindApiCall() const { return find_api_call_; }
-  constexpr FindOptions& SetFindApiCall(bool flag) {
-    find_api_call_ = flag;
-    return *this;
-  }
-
   bool IsRubySupported() const { return ruby_supported_; }
   constexpr FindOptions& SetRubySupported(bool flag) {
     ruby_supported_ = flag;
@@ -98,17 +89,26 @@ class FindOptions {
     return *this;
   }
 
+  // Construct the searchable text to allow matching across nodes that are
+  // ignored. hello<img>world becomes helloworld. This is used by
+  // text fragment matching.
+  bool MatchAcrossIgnoredNodes() const { return match_across_ignored_nodes_; }
+  FindOptions& SetMatchAcrossIgnoredNodes(bool v) {
+    match_across_ignored_nodes_ = v;
+    return *this;
+  }
+
  private:
   bool case_insensitive_ : 1 = false;
   bool backwards_ : 1 = false;
   bool wrapping_around_ : 1 = false;
   bool starting_in_selection_ : 1 = false;
   bool whole_word_ : 1 = false;
-  bool find_api_call_ : 1 = false;
   bool ruby_supported_ : 1 = false;
   bool require_word_bounded_start_ : 1 = false;
   bool require_word_bounded_end_ : 1 = false;
   bool allow_overlap_matches_ : 1 = false;
+  bool match_across_ignored_nodes_ : 1 = false;
 };
 
 }  // namespace blink

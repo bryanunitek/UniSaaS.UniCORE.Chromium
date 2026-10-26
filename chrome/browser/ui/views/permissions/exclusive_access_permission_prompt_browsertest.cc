@@ -5,15 +5,16 @@
 #include "chrome/browser/ui/views/permissions/exclusive_access_permission_prompt.h"
 
 #include <memory>
+#include <optional>
 #include <variant>
 #include <vector>
 
 #include "base/test/mock_callback.h"
 #include "chrome/browser/ui/permission_bubble/permission_bubble_browser_test_util.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/permissions/exclusive_access_permission_prompt_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/content_settings/core/common/content_settings.h"
-#include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_prompt_decision.h"
 #include "components/permissions/permission_request.h"
 #include "components/permissions/permission_request_data.h"
@@ -22,6 +23,7 @@
 #include "components/permissions/resolvers/content_setting_permission_resolver.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
+#include "ui/gfx/geometry/rect.h"
 
 using testing::_;
 
@@ -94,7 +96,7 @@ class ExclusiveAccessPermissionPromptInteractiveTest
       std::vector<std::unique_ptr<permissions::PermissionRequest>> requests) {
     prompt_delegate_->set_requests(std::move(requests));
     return std::make_unique<ExclusiveAccessPermissionPrompt>(
-        browser()->tab_strip_model()->GetActiveWebContents(),
+        browser()->GetTabStripModel()->GetActiveWebContents(),
         prompt_delegate_.get());
   }
 
@@ -221,4 +223,23 @@ IN_PROC_BROWSER_TEST_F(ExclusiveAccessPermissionPromptInteractiveTest,
                       .is_final = true},
                   _));
   PressDenyButton(prompt.get());
+}
+
+// The exclusive access prompt is modal and covers the whole web contents, so
+// it should report the web contents' bounds as its view bounds. These are used
+// e.g. by `PermissionManager::GetExclusionAreaBoundsInScreen()`.
+IN_PROC_BROWSER_TEST_F(ExclusiveAccessPermissionPromptInteractiveTest,
+                       GetViewBoundsInScreen) {
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.emplace_back(CreateKeyboardRequest());
+  std::unique_ptr<ExclusiveAccessPermissionPrompt> prompt =
+      CreatePrompt(std::move(requests));
+  ASSERT_TRUE(prompt->GetViewForTesting());
+
+  content::WebContents* web_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  std::optional<gfx::Rect> bounds = prompt->GetViewBoundsInScreen();
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_FALSE(bounds->IsEmpty());
+  EXPECT_EQ(web_contents->GetContainerBounds(), *bounds);
 }

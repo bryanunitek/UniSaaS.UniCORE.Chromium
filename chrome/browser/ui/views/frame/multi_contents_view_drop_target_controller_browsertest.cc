@@ -10,8 +10,9 @@
 #include "base/functional/callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_drop_target_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view.h"
@@ -44,7 +45,7 @@ class MultiContentsViewDropTargetControllerBrowserTest
     delegate_ = std::make_unique<MultiContentsViewDelegateImpl>(*browser());
     controller_ = std::make_unique<MultiContentsViewDropTargetController>(
         *drop_target_view(), *delegate_.get(), g_browser_process->local_state(),
-        browser()->tab_strip_model());
+        browser()->GetTabStripModel());
   }
 
   void TearDownOnMainThread() override {
@@ -54,10 +55,13 @@ class MultiContentsViewDropTargetControllerBrowserTest
 
   MultiContentsViewDropTargetController& controller() { return *controller_; }
   TabStrip* tabstrip() {
-    return browser()->GetBrowserView().horizontal_tab_strip_for_testing();
+    return BrowserView::GetBrowserViewForBrowser(browser())
+        ->horizontal_tab_strip_for_testing();
   }
 
-  int GetViewWidth() { return browser()->GetBrowserView().width(); }
+  int GetViewWidth() {
+    return BrowserView::GetBrowserViewForBrowser(browser())->width();
+  }
 
   void SimulateTabDrag(
       bool is_maximized,
@@ -76,7 +80,7 @@ class MultiContentsViewDropTargetControllerBrowserTest
 
     // Maximize the browser if necessary
     if (is_maximized) {
-      browser()->GetBrowserView().Maximize();
+      BrowserView::GetBrowserViewForBrowser(browser())->Maximize();
       EXPECT_TRUE(ui_test_utils::WaitForMaximized(browser()));
     }
 

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/personalization_app/time_of_day_test_utils.h"
@@ -35,12 +36,12 @@
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_utils.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/test_personalization_app_webui_provider.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_browsertest_base.h"
-#include "chrome/browser/ash/wallpaper_handlers/mock_wallpaper_handlers.h"
+#include "chrome/browser/ash/wallpaper_handlers/fake_wallpaper_handlers.h"
 #include "chrome/browser/ash/wallpaper_handlers/test_wallpaper_fetcher_delegate.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/wallpaper/wallpaper_controller_client_impl.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chromeos/ash/components/geolocation/geoposition.h"
 #include "chromeos/ash/components/geolocation/location_fetcher.h"
 #include "chromeos/ash/components/geolocation/system_location_provider.h"
@@ -141,14 +142,14 @@ class PersonalizationAppTimeOfDayBrowserTest
     WallpaperControllerClientImpl::Get()->SetWallpaperFetcherDelegateForTesting(
         std::make_unique<wallpaper_handlers::TestWallpaperFetcherDelegate>());
 
-    auto wallpaper_controller_test_api =
-        std::make_unique<WallpaperControllerTestApi>(
-            ::ash::Shell::Get()->wallpaper_controller());
-    wallpaper_controller_test_api->SetDefaultWallpaper(
+    WallpaperControllerTestApi wallpaper_controller_test_api(
+        ::ash::Shell::Get()->wallpaper_controller());
+    wallpaper_controller_test_api.SetDefaultWallpaper(
         GetAccountId(browser()->GetProfile()));
 
+    test_webui_provider_.emplace(g_browser_process->local_state());
     test_chrome_webui_controller_factory_.AddFactoryOverride(
-        kChromeUIPersonalizationAppHost, &test_webui_provider_);
+        kChromeUIPersonalizationAppHost, &test_webui_provider_.value());
 
     time_of_day_scheduler_ = Shell::Get()
                                  ->wallpaper_controller()
@@ -179,12 +180,16 @@ class PersonalizationAppTimeOfDayBrowserTest
   }
 
   void TearDownOnMainThread() override {
-    SystemWebAppBrowserTestBase::TearDownOnMainThread();
-
     time_of_day_scheduler_ = nullptr;
+    test_chrome_webui_controller_factory_.RemoveFactoryOverride(
+        kChromeUIPersonalizationAppHost);
+    test_webui_provider_.reset();
+
+    SystemWebAppBrowserTestBase::TearDownOnMainThread();
   }
 
-  content::WebContents* LaunchAppAtWallpaperSubpage(Browser** browser) {
+  content::WebContents* LaunchAppAtWallpaperSubpage(
+      BrowserWindowInterface** browser) {
     apps::AppLaunchParams launch_params =
         LaunchParamsForApp(ash::SystemWebAppType::PERSONALIZATION);
     launch_params.override_url =
@@ -250,7 +255,7 @@ class PersonalizationAppTimeOfDayBrowserTest
   base::SimpleTestTickClock tick_clock_;
   raw_ptr<WallpaperTimeOfDayScheduler> time_of_day_scheduler_;
   TestChromeWebUIControllerFactory test_chrome_webui_controller_factory_;
-  TestPersonalizationAppWebUIProvider test_webui_provider_;
+  std::optional<TestPersonalizationAppWebUIProvider> test_webui_provider_;
   content::ScopedWebUIControllerFactoryRegistration
       scoped_controller_factory_registration_{
           &test_chrome_webui_controller_factory_};
@@ -304,7 +309,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 IN_PROC_BROWSER_TEST_P(PersonalizationAppTimeOfDayBrowserTest,
                        ShowsExpectedImageTypesAtCheckpoints) {
-  Browser* browser;
+  BrowserWindowInterface* browser = nullptr;
   auto* web_contents = LaunchAppAtWallpaperSubpage(&browser);
 
   {
@@ -321,7 +326,7 @@ IN_PROC_BROWSER_TEST_P(PersonalizationAppTimeOfDayBrowserTest,
 
   ASSERT_EQ(WallpaperType::kOnline, wallpaper_controller->GetWallpaperType())
       << "Time of day wallpaper expected";
-  ASSERT_EQ(wallpaper_handlers::MockBackdropImageInfoFetcher::kTimeOfDayUnitId,
+  ASSERT_EQ(wallpaper_handlers::FakeBackdropImageInfoFetcher::kTimeOfDayUnitId,
             wallpaper_controller->GetActiveUserWallpaperInfo()->unit_id.value())
       << "Time of day wallpaper unit id set as wallpaper";
 
@@ -345,7 +350,7 @@ IN_PROC_BROWSER_TEST_P(PersonalizationAppTimeOfDayBrowserTest,
     auto current_wallpaper_info =
         wallpaper_controller->GetActiveUserWallpaperInfo().value();
     ASSERT_EQ(
-        wallpaper_handlers::MockBackdropImageInfoFetcher::kTimeOfDayUnitId,
+        wallpaper_handlers::FakeBackdropImageInfoFetcher::kTimeOfDayUnitId,
         current_wallpaper_info.unit_id.value())
         << "WallpaperInfo still has time of day unit_id";
     all_image_types.push_back(FirstValidVariant(current_wallpaper_info.variants,

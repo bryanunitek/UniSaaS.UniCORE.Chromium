@@ -142,24 +142,22 @@ const CGFloat kContentViewVerticalPadding = 00.0;
       AutocompleteProvider::TypeToString(match.provider->type()));
   _providerTypeLabel.hidden = !shouldShowProviderType;
 
-  _matchTypeLabel.text =
-      base::SysUTF8ToNSString(AutocompleteMatchType::ToString(match.type));
+  _matchTypeLabel.text = base::SysUTF8ToNSString(
+      omnibox::AutocompleteMatchTypeToString(match.type));
   _textLabel.attributedText = matchFormatter.text;
   _relevanceLabel.text = [NSString stringWithFormat:@"%d", match.relevance];
   _descriptionLabel.text = base::SysUTF16ToNSString(match.description);
   _URLLabel.text = base::SysUTF8ToNSString(match.destination_url.spec());
 
   if (match.allowed_to_be_default_match) {
-    UIImage* checkmarkSymbol =
-        SymbolWithPalette(DefaultSymbolWithPointSize(kCheckmarkCircleFillSymbol,
-                                                     kDefaultMatchIconSize),
-                          @[ UIColor.systemGreenColor ]);
+    UIImage* checkmarkSymbol = SymbolWithPalette(
+        SymbolWithPointSize(SymbolCheckmarkCircleFill, kDefaultMatchIconSize),
+        @[ UIColor.systemGreenColor ]);
     _defaultMatchImageView.image = checkmarkSymbol;
   } else {
-    UIImage* xmarkSymbol =
-        SymbolWithPalette(DefaultSymbolWithPointSize(kXMarkCircleFillSymbol,
-                                                     kDefaultMatchIconSize),
-                          @[ UIColor.redColor ]);
+    UIImage* xmarkSymbol = SymbolWithPalette(
+        SymbolWithPointSize(SymbolXMarkCircleFill, kDefaultMatchIconSize),
+        @[ UIColor.redColor ]);
     _defaultMatchImageView.image = xmarkSymbol;
   }
 

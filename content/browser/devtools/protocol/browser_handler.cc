@@ -24,25 +24,33 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/types/expected_macros.h"
+#include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "build/util/chromium_git_revision.h"
 #include "components/download/public/common/download_item.h"
 #include "content/browser/devtools/browser_devtools_agent_host.h"
 #include "content/browser/devtools/devtools_agent_host_impl.h"
 #include "content/browser/devtools/devtools_manager.h"
+#include "content/browser/devtools/devtools_session.h"
 #include "content/browser/devtools/protocol/devtools_download_manager_delegate.h"
+#include "content/browser/global_privacy_control_util.h"
 #include "content/browser/gpu/gpu_process_host.h"
-#include "content/browser/interest_group/interest_group_manager_impl.h"
 #include "content/browser/permissions/permission_controller_impl.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
+#include "content/browser/webrtc/mock_capture_device_controller.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/download_item_utils.h"
+#include "content/public/browser/video_capture_service.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
+#include "media/capture/video/video_capture_device_descriptor.h"
 #include "net/base/filename_util.h"
+#include "services/video_capture/public/mojom/video_capture_service.mojom.h"
+#include "third_party/blink/public/common/global_privacy_control/global_privacy_control_util.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "url/gurl.h"
 #include "v8/include/v8-version-string.h"
@@ -53,6 +61,11 @@ namespace content {
 namespace protocol {
 
 namespace {
+
+void ConnectToVideoSourceProvider(
+    mojo::PendingReceiver<video_capture::mojom::VideoSourceProvider> receiver) {
+  GetVideoCaptureService().ConnectToVideoSourceProvider(std::move(receiver));
+}
 
 base::expected<std::optional<url::Origin>, Response> ParseOriginString(
     base::optional_ref<const std::string> origin_string) {
@@ -96,27 +109,15 @@ Response BrowserHandler::Disable() {
   }
   contexts_with_overridden_permissions_.clear();
 
-  // TODO: this leaks context ids for all contexts with overridden downloads.
-  for (auto& browser_context_id : contexts_with_overridden_downloads_) {
-    content::BrowserContext* browser_context = nullptr;
-    std::string error;
-    std::optional<std::string> context_id =
-        browser_context_id == ""
-            ? std::nullopt
-            : std::optional<std::string>(browser_context_id);
-    FindBrowserContext(context_id, &browser_context);
-    if (browser_context) {
-      auto* delegate =
-          DevToolsDownloadManagerDelegate::GetInstance(browser_context);
-      if (delegate) {
-        delegate->set_download_behavior(
-            DevToolsDownloadManagerDelegate::DownloadBehavior::DEFAULT);
-      }
-    }
-  }
-  contexts_with_overridden_downloads_.clear();
+  download_behavior_overrides_.clear();
   SetDownloadEventsEnabled(false);
   histograms_snapshots_.clear();
+  mock_capture_device_controller_.reset();
+  mock_camera_device_id_prefix_.clear();
+
+  if (session()->GetAgentHost()->GetType() == DevToolsAgentHost::kTypeBrowser) {
+    ResetGlobalPrivacyControlDevToolsOverride();
+  }
 
   return Response::Success();
 }
@@ -371,21 +372,18 @@ Response BrowserHandler::FindBrowserContext(
         "Browser context management is not supported.");
   if (!browser_context_id.has_value()) {
     *browser_context = delegate->GetDefaultBrowserContext();
-    if (*browser_context == nullptr)
+    if (!*browser_context) {
       return Response::ServerError(
           "Browser context management is not supported.");
+    }
     return Response::Success();
   }
-
-  std::string context_id = browser_context_id.value();
-  for (auto* context : delegate->GetBrowserContexts()) {
-    if (context->UniqueId() == context_id) {
-      *browser_context = context;
-      return Response::Success();
-    }
+  *browser_context = delegate->GetBrowserContext(browser_context_id.value());
+  if (!*browser_context) {
+    return Response::InvalidParams("Failed to find browser context for id " +
+                                   browser_context_id.value());
   }
-  return Response::InvalidParams("Failed to find browser context for id " +
-                                 context_id);
+  return Response::Success();
 }
 
 // static
@@ -582,7 +580,8 @@ Response BrowserHandler::DoSetDownloadBehavior(
     std::optional<std::string> download_path) {
   if (!allow_set_download_behavior_)
     return Response::ServerError("Not allowed");
-  if (behavior == Browser::SetDownloadBehavior::BehaviorEnum::Allow &&
+  if ((behavior == Browser::SetDownloadBehavior::BehaviorEnum::Allow ||
+       behavior == Browser::SetDownloadBehavior::BehaviorEnum::AllowAndName) &&
       !download_path.has_value()) {
     return Response::InvalidParams("downloadPath not provided");
   }
@@ -595,26 +594,30 @@ Response BrowserHandler::DoSetDownloadBehavior(
 
   auto* delegate =
       DevToolsDownloadManagerDelegate::GetOrCreateInstance(browser_context);
+  DevToolsDownloadManagerDelegate::DownloadBehaviorOverrideHandle
+      override_handle;
   if (behavior == Browser::SetDownloadBehavior::BehaviorEnum::Allow) {
-    delegate->set_download_behavior(
-        DevToolsDownloadManagerDelegate::DownloadBehavior::ALLOW);
-    delegate->set_download_path(download_path.value());
+    override_handle = delegate->SetDownloadBehavior(
+        DevToolsDownloadManagerDelegate::DownloadBehavior::ALLOW,
+        download_path.value());
   } else if (behavior ==
              Browser::SetDownloadBehavior::BehaviorEnum::AllowAndName) {
-    delegate->set_download_behavior(
-        DevToolsDownloadManagerDelegate::DownloadBehavior::ALLOW_AND_NAME);
-    delegate->set_download_path(download_path.value());
+    override_handle = delegate->SetDownloadBehavior(
+        DevToolsDownloadManagerDelegate::DownloadBehavior::ALLOW_AND_NAME,
+        download_path.value());
   } else if (behavior == Browser::SetDownloadBehavior::BehaviorEnum::Deny) {
-    delegate->set_download_behavior(
-        DevToolsDownloadManagerDelegate::DownloadBehavior::DENY);
+    override_handle = delegate->SetDownloadBehavior(
+        DevToolsDownloadManagerDelegate::DownloadBehavior::DENY, "");
   } else {
-    delegate->set_download_behavior(
-        DevToolsDownloadManagerDelegate::DownloadBehavior::DEFAULT);
+    override_handle = delegate->SetDownloadBehavior(
+        DevToolsDownloadManagerDelegate::DownloadBehavior::DEFAULT, "");
   }
-  contexts_with_overridden_downloads_.insert(
+  const std::string browser_context_id =
       manager_delegate->GetDefaultBrowserContext() == browser_context
           ? ""
-          : browser_context->UniqueId());
+          : browser_context->UniqueId();
+  download_behavior_overrides_.insert_or_assign(browser_context_id,
+                                                std::move(override_handle));
 
   return Response::Success();
 }
@@ -642,13 +645,13 @@ Response BrowserHandler::GetHistograms(
     const std::optional<std::string> in_query,
     const std::optional<bool> in_delta,
     std::unique_ptr<Array<Browser::Histogram>>* const out_histograms) {
-  DCHECK(out_histograms);
+  CHECK(out_histograms, base::NotFatalUntil::M159);
   bool get_deltas = in_delta.value_or(false);
   *out_histograms = std::make_unique<Array<Browser::Histogram>>();
   for (base::HistogramBase* const h :
        base::StatisticsRecorder::Sort(base::StatisticsRecorder::WithName(
            base::StatisticsRecorder::GetHistograms(), in_query.value_or("")))) {
-    DCHECK(h);
+    CHECK(h, base::NotFatalUntil::M159);
     (*out_histograms)->emplace_back(GetHistogramData(*h, get_deltas));
   }
 
@@ -665,7 +668,7 @@ Response BrowserHandler::GetHistogram(
   if (!in_histogram)
     return Response::InvalidParams("Cannot find histogram: " + in_name);
 
-  DCHECK(out_histogram);
+  CHECK(out_histogram, base::NotFatalUntil::M159);
   *out_histogram = GetHistogramData(*in_histogram, in_delta.value_or(false));
 
   return Response::Success();
@@ -692,6 +695,32 @@ Response BrowserHandler::GetBrowserCommandLine(
   }
 }
 
+Response BrowserHandler::AddMockCamera(const std::string& device_id) {
+  if (session()->GetAgentHost()->GetType() != DevToolsAgentHost::kTypeBrowser) {
+    return Response::ServerError(
+        "Browser.addMockCamera is only supported on the browser target");
+  }
+
+  if (device_id.empty()) {
+    return Response::InvalidParams("deviceId must not be empty");
+  }
+
+  if (!mock_capture_device_controller_) {
+    mock_camera_device_id_prefix_ =
+        base::StrCat({media::kVirtualDeviceIdPrefix,
+                      base::UnguessableToken::Create().ToString(), "-"});
+    mock_capture_device_controller_ =
+        std::make_unique<MockCaptureDeviceController>(
+            base::SequencedTaskRunner::GetCurrentDefault(),
+            base::BindRepeating(&ConnectToVideoSourceProvider));
+  }
+
+  mock_capture_device_controller_->AddMockCamera(MockCameraConfig{
+      .device_id = base::StrCat({mock_camera_device_id_prefix_, device_id}),
+  });
+  return Response::Success();
+}
+
 Response BrowserHandler::Crash() {
   base::ImmediateCrash();
 }
@@ -704,57 +733,27 @@ Response BrowserHandler::CrashGpuProcess() {
   return Response::Success();
 }
 
-void BrowserHandler::AddPrivacySandboxCoordinatorKeyConfig(
-    const std::string& in_api,
-    const std::string& in_coordinator_origin,
-    const std::string& in_key_config,
-    std::optional<std::string> browser_context_id,
-    std::unique_ptr<AddPrivacySandboxCoordinatorKeyConfigCallback> callback) {
-  BrowserContext* browser_context = nullptr;
-  Response response = FindBrowserContext(browser_context_id, &browser_context);
-  if (!response.IsSuccess()) {
-    callback->sendFailure(response);
-    return;
+Response BrowserHandler::GetGlobalPrivacyControl(bool* out_gpc) {
+  if (!blink::IsGlobalPrivacyControlFeatureEnabled()) {
+    return Response::ServerError("Global Privacy Control is disabled.");
   }
-
-  url::Origin coordinator_origin =
-      url::Origin::Create(GURL(in_coordinator_origin));
-
-  if (!base::EndsWith(coordinator_origin.host(), ".test")) {
-    callback->sendFailure(
-        Response::InvalidParams("coordinatorOrigin not a .test domain"));
-    return;
+  if (session()->GetAgentHost()->GetType() != DevToolsAgentHost::kTypeBrowser) {
+    return Response::ServerError("Browser agent host required");
   }
+  *out_gpc = GetGlobalPrivacyControlDevToolsOverride().value_or(false);
+  return Response::Success();
+}
 
-  std::optional<InterestGroupManager::TrustedServerAPIType> api;
-  if (in_api ==
-      protocol::Browser::PrivacySandboxAPIEnum::BiddingAndAuctionServices) {
-    api = InterestGroupManager::TrustedServerAPIType::kBiddingAndAuction;
-  } else if (in_api ==
-             protocol::Browser::PrivacySandboxAPIEnum::TrustedKeyValue) {
-    api = InterestGroupManager::TrustedServerAPIType::kTrustedKeyValue;
-  } else {
-    callback->sendFailure(Response::InvalidParams("Unrecognized API target"));
-    return;
+Response BrowserHandler::SetGlobalPrivacyControl(bool in_gpc, bool* out_gpc) {
+  if (!blink::IsGlobalPrivacyControlFeatureEnabled()) {
+    return Response::ServerError("Global Privacy Control is disabled.");
   }
-
-  CHECK(api.has_value());
-  static_cast<InterestGroupManagerImpl*>(
-      browser_context->GetDefaultStoragePartition()->GetInterestGroupManager())
-      ->AddTrustedServerKeysDebugOverride(
-          *api, coordinator_origin, in_key_config,
-          base::BindOnce(
-              [](std::unique_ptr<AddPrivacySandboxCoordinatorKeyConfigCallback>
-                     callback,
-                 std::optional<std::string> maybe_error) {
-                if (maybe_error.has_value()) {
-                  callback->sendFailure(
-                      Response::InvalidParams(std::move(maybe_error).value()));
-                } else {
-                  callback->sendSuccess();
-                }
-              },
-              std::move(callback)));
+  if (session()->GetAgentHost()->GetType() != DevToolsAgentHost::kTypeBrowser) {
+    return Response::ServerError("Browser agent host required");
+  }
+  UpdateGlobalPrivacyControlDevToolsOverride(in_gpc);
+  *out_gpc = GetGlobalPrivacyControlDevToolsOverride().value_or(false);
+  return Response::Success();
 }
 
 void BrowserHandler::OnDownloadUpdated(download::DownloadItem* item) {

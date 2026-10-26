@@ -94,6 +94,9 @@ class BLINK_EXPORT WebNode {
     kKeypress,
   };
 
+  // Returns a null node for values that are not DOM Node wrappers.
+  static WebNode FromV8Value(v8::Isolate*, v8::Local<v8::Value>);
+
   static WebNode FromDomNodeId(int dom_node_id);
 
   virtual ~WebNode();
@@ -124,6 +127,11 @@ class BLINK_EXPORT WebNode {
   WebNode ParentOrShadowHostNode() const;
   // Returns the parent node of this node in the flat (composed) tree.
   WebNode ParentInFlatTree() const;
+  // Returns the next node in flat-tree preorder, or a null node if advancing
+  // would leave the subtree rooted at `stay_within`.
+  WebNode NextInFlatTree(const WebNode& stay_within) const;
+  // As above, but skips this node's descendants.
+  WebNode NextSkippingChildrenInFlatTree(const WebNode& stay_within) const;
   bool IsInUserAgentShadowRoot() const;
   WebString NodeValue() const;
   WebDocument GetDocument() const;
@@ -140,6 +148,8 @@ class BLINK_EXPORT WebNode {
   bool IsFocusable() const;
   bool IsContentEditable() const;
   bool IsElementNode() const;
+  // Pseudo-elements are internal nodes and must not be exposed to extensions.
+  bool IsPseudoElement() const;
   void SimulateClick();
 
   // Returns the top-most ancestor such this WebNode and that ancestor and all

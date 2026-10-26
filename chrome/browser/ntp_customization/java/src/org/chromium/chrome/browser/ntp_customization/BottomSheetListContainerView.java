@@ -10,10 +10,8 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.LinearLayout;
 
-import androidx.annotation.Nullable;
-import androidx.annotation.VisibleForTesting;
-
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.util.List;
 
@@ -56,8 +54,7 @@ public class BottomSheetListContainerView extends LinearLayout implements ListCo
     }
 
     /** Returns a {@link BottomSheetListItemView}. */
-    @VisibleForTesting
-    View createListItemView() {
+    private View createListItemView() {
         return LayoutInflater.from(getContext())
                 .inflate(R.layout.bottom_sheet_list_item_view, this, false);
     }

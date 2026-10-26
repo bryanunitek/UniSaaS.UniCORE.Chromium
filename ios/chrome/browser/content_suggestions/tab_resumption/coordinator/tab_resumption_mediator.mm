@@ -200,7 +200,10 @@ void ConfigureTabResumptionItemForShopCard(
     std::unique_ptr<payments::CurrencyFormatter> formatter =
         std::make_unique<payments::CurrencyFormatter>(
             price_tracking_data->product_update().new_price().currency_code(),
-            GetApplicationContext()->GetApplicationLocaleStorage()->Get());
+            std::string(GetApplicationContext()
+                            ->GetApplicationLocaleStorage()
+                            ->GetTag()
+                            .tag_string()));
     config.shopCardData.priceDrop = GetPriceDrop(
         formatter.get(),
         price_tracking_data->product_update().new_price().amount_micros(),
@@ -245,7 +248,7 @@ class TabResumptionMediatorProxy {
 };
 
 @interface TabResumptionMediator () <BooleanObserver,
-                                     IdentityManagerObserverBridgeDelegate,
+                                     IdentityManagerObserving,
                                      MagicStackModuleDelegate,
                                      StartSurfaceRecentTabObserving,
                                      SyncedSessionsObserver,
@@ -405,7 +408,7 @@ class TabResumptionMediatorProxy {
 
 - (void)openTabResumptionItem:(TabResumptionConfig*)config {
   DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
-  [self.contentSuggestionsMetricsRecorder
+  [ContentSuggestionsMetricsRecorder
       recordTabResumptionTabOpened:config.shopCardData];
   tab_resumption_prefs::SetTabResumptionLastOpenedTabURL(config.tabURL,
                                                          _profilePrefs);
@@ -507,7 +510,7 @@ class TabResumptionMediatorProxy {
       [self.NTPActionsDelegate recentTabTileDisplayedAtIndex:index];
       break;
   }
-  [self.contentSuggestionsMetricsRecorder
+  [ContentSuggestionsMetricsRecorder
       recordTabResumptionImpressionWithCustomization:
           static_cast<TabResumptionConfig*>(magicStackModule).shopCardData
                                              atIndex:index];
@@ -535,9 +538,9 @@ class TabResumptionMediatorProxy {
   }
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {

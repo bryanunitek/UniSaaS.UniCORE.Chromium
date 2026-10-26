@@ -17,7 +17,7 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.library_loader.LibraryLoader;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
@@ -31,9 +31,6 @@ public class ExternalIntentUrlCheckerTest {
 
     @Before
     public void setUp() {
-        // To allow use of GURL.
-        LibraryLoader.getInstance().ensureMainDexInitialized();
-
         ExternalIntentUrlCheckerJni.setInstanceForTesting(mNativeMock);
     }
 
@@ -96,9 +93,36 @@ public class ExternalIntentUrlCheckerTest {
         assertFalse(
                 ExternalIntentUrlChecker.isUnsafeExternalIntentUrl(
                         new GURL("chrome://extensions/?id=abcdef")));
-        assertFalse(
+        assertTrue(
                 ExternalIntentUrlChecker.isUnsafeExternalIntentUrl(
                         new GURL("chrome-native://pdf/viewer.html")));
+        assertTrue(
+                ExternalIntentUrlChecker.isUnsafeExternalIntentUrl(
+                        new GURL("chrome-native://pdf/link?url=content://media/external/file/1")));
+    }
+
+    @Test
+    public void testIsUnsafeExternalIntentUrl_BlocksChromeFileProvider() {
+        doReturn(true).when(mNativeMock).validateUrl(any());
+
+        String packageName = ContextUtils.getApplicationContext().getPackageName();
+        assertTrue(
+                ExternalIntentUrlChecker.isUnsafeExternalIntentUrl(
+                        new GURL("content://" + packageName + ".FileProvider/document.pdf")));
+        assertTrue(
+                ExternalIntentUrlChecker.isUnsafeExternalIntentUrl(
+                        new GURL(
+                                "content://userinfo@"
+                                        + packageName
+                                        + ".FileProvider/document.pdf")));
+        assertTrue(
+                ExternalIntentUrlChecker.isUnsafeExternalIntentUrl(
+                        new GURL("content://" + packageName + "/document.pdf")));
+
+        // Should not block legitimate external providers that start with Chrome's package name
+        assertFalse(
+                ExternalIntentUrlChecker.isUnsafeExternalIntentUrl(
+                        new GURL("content://" + packageName + "cast.FileProvider/document.pdf")));
     }
 
     @Test

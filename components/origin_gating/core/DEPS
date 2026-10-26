@@ -1,14 +1,8 @@
 include_rules = [
   "+base",
-  "+components/optimization_guide/proto",
+  "+components/keyed_service/core",
   "+net",
   "+testing/gtest",
   "+third_party/abseil-cpp/absl",
   "+url",
 ]
-
-specific_include_rules = {
-  'actor_container_config_unittest\\.cc': [
-    "+third_party/fuzztest",
-  ],
-}

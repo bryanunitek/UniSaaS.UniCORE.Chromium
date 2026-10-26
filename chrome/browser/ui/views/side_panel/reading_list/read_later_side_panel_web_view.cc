@@ -10,6 +10,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/webui_url_constants.h"
@@ -57,9 +58,8 @@ void ReadLaterSidePanelWebView::OnTabStripModelChanged(
 }
 
 void ReadLaterSidePanelWebView::OnTabChangedAt(tabs::TabInterface* tab,
-                                               int index,
                                                TabChangeType change_type) {
-  if (GetVisible() && index == tab_strip_model_->active_index() &&
+  if (GetVisible() && tab->IsActivated() &&
       change_type == TabChangeType::kAll) {
     UpdateActiveURL(tab->GetContents());
   }

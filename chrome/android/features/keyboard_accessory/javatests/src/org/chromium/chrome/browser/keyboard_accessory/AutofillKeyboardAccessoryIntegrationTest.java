@@ -28,6 +28,7 @@ import android.app.Activity;
 import android.view.MotionEvent;
 import android.view.View;
 
+import androidx.test.espresso.NoMatchingViewException;
 import androidx.test.filters.MediumTest;
 import androidx.test.filters.SmallTest;
 
@@ -142,17 +143,13 @@ public class AutofillKeyboardAccessoryIntegrationTest {
         whenDisplayed(withId(R.id.bar_items_view))
                 .perform(scrollTo(isAssignableFrom(KeyboardAccessoryButtonGroupView.class)));
         CriteriaHelper.pollUiThread(
-                () -> {
-                    return mHelper.getAccessoryBarView().computeHorizontalScrollOffset() > 0;
-                },
+                () -> mHelper.getAccessoryBarView().computeHorizontalScrollOffset() > 0,
                 "Should keep the manual scroll position.");
 
         // Clicking any other node should now scroll the items back to the initial position.
         mHelper.clickNodeAndShowKeyboard("NAME_LAST", 2);
         CriteriaHelper.pollUiThread(
-                () -> {
-                    return mHelper.getAccessoryBarView().computeHorizontalScrollOffset() == 0;
-                },
+                () -> mHelper.getAccessoryBarView().computeHorizontalScrollOffset() == 0,
                 "Should be scrolled back to position 0.");
     }
 
@@ -218,7 +215,7 @@ public class AutofillKeyboardAccessoryIntegrationTest {
         MultiWindowUtils.getInstance().setIsInMultiWindowModeForTesting(true);
         startAtTestPage(MultiWindowKeyboard::new);
         // The metric logs potentially filtered events as well, so it doesn't depend on the feature
-        // flag being turned on of off.
+        // flag being turned on or off.
         HistogramWatcher histogramExpectation =
                 HistogramWatcher.newSingleRecordWatcher(
                         "KeyboardAccessory.TouchEventFiltered", true);
@@ -244,6 +241,7 @@ public class AutofillKeyboardAccessoryIntegrationTest {
 
     @Test
     @MediumTest
+    @DisableFeatures({ChromeFeatureList.AUTOFILL_ANDROID_DESKTOP_SUPPRESS_ACCESSORY_ON_EMPTY})
     public void testMouseClicksConsumedByAccessoryBar() throws TimeoutException {
         mHelper.startAtTestPage(/* isRtl= */ false);
         mHelper.registerSheetDataProvider(AccessoryTabType.CREDIT_CARDS);
@@ -311,9 +309,8 @@ public class AutofillKeyboardAccessoryIntegrationTest {
 
         whenDisplayed(withId(R.id.keyboard_accessory_sheet_frame), /* atLeast= */ 51)
                 .check(
-                        (sheetView, exception) -> {
-                            assertTrue(sheetView.isShown() && sheetView.getHeight() > 0);
-                        });
+                        (View sheetView, NoMatchingViewException _) ->
+                                assertTrue(sheetView.isShown() && sheetView.getHeight() > 0));
 
         // Click the back arrow.
         whenDisplayed(withId(R.id.show_keyboard)).perform(click());

@@ -9,13 +9,15 @@
 
 #include "base/functional/bind.h"
 #include "chrome/browser/ui/views/controls/hover_button.h"
-#include "components/sync_device_info/device_info.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+
+namespace syncer {
+struct RemoteDeviceInfo;
+}  // namespace syncer
 
 namespace send_tab_to_self {
 
 class SendTabToSelfDevicePickerBubbleView;
-struct TargetDeviceInfo;
 
 // A button representing a device in share bubble. It is highlighted when
 // hovered.
@@ -24,7 +26,7 @@ class SendTabToSelfBubbleDeviceButton : public HoverButton {
 
  public:
   SendTabToSelfBubbleDeviceButton(SendTabToSelfDevicePickerBubbleView* bubble,
-                                  const TargetDeviceInfo& device_info);
+                                  const syncer::RemoteDeviceInfo& device_info);
   SendTabToSelfBubbleDeviceButton(const SendTabToSelfBubbleDeviceButton&) =
       delete;
   SendTabToSelfBubbleDeviceButton& operator=(
@@ -42,7 +44,6 @@ class SendTabToSelfBubbleDeviceButton : public HoverButton {
 
   std::string device_name_;
   std::string device_guid_;
-  syncer::DeviceInfo::FormFactor device_form_factor_;
   bool is_selected_ = false;
 };
 

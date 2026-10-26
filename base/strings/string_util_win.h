@@ -123,6 +123,7 @@ inline std::u16string AsString16(std::wstring_view str) {
 // The following section contains overloads of the cross-platform APIs for
 // std::wstring and std::wstring_view.
 BASE_EXPORT bool IsStringASCII(std::wstring_view str);
+BASE_EXPORT size_t FindFirstNonASCII(std::wstring_view str);
 
 BASE_EXPORT std::wstring ToLowerASCII(std::wstring_view str);
 
@@ -206,20 +207,24 @@ BASE_EXPORT void ReplaceSubstringsAfterOffset(std::wstring* str,
 
 BASE_EXPORT wchar_t* WriteInto(std::wstring* str, size_t length_with_null);
 
+// Templates for the same reason as the JoinString() overloads in string_util.h.
+template <typename LazyInstantiation = void>
 constexpr std::wstring JoinString(span<const std::wstring> parts,
                                   std::wstring_view separator) {
-  return strings_internal::JoinStringT(parts, separator);
+  return strings_internal::JoinStringT<LazyInstantiation>(parts, separator);
 }
 
+template <typename LazyInstantiation = void>
 constexpr std::wstring JoinString(span<const std::wstring_view> parts,
                                   std::wstring_view separator) {
-  return strings_internal::JoinStringT(parts, separator);
+  return strings_internal::JoinStringT<LazyInstantiation>(parts, separator);
 }
 
+template <typename LazyInstantiation = void>
 constexpr std::wstring JoinString(
     std::initializer_list<std::wstring_view> parts,
     std::wstring_view separator) {
-  return strings_internal::JoinStringT(parts, separator);
+  return strings_internal::JoinStringT<LazyInstantiation>(parts, separator);
 }
 
 BASE_EXPORT std::wstring ReplaceStringPlaceholders(

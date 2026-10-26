@@ -12,7 +12,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -20,6 +19,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/prefs/pref_service.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -28,6 +28,7 @@
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -95,7 +96,7 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, ClearDropInfo) {
   ui::OSExchangeData data;
   data.SetURL(GURL("http://www.chromium.org/"), std::u16string());
 
-  auto* tab_strip_model = browser()->tab_strip_model();
+  auto* tab_strip_model = browser()->GetTabStripModel();
   EXPECT_EQ(tab_strip_model->count(), 1);
 
   ui::mojom::DragOperation drag_op = ui::mojom::DragOperation::kNone;
@@ -133,7 +134,7 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, ClearDropTarget) {
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, OnDragEnteredNoTabs) {
-  auto* tab_strip_model = browser()->tab_strip_model();
+  auto* tab_strip_model = browser()->GetTabStripModel();
   EXPECT_EQ(tab_strip_model->count(), 1);
   EXPECT_EQ(tab_strip_model->active_index(), 0);
   tab_strip_model->CloseAllTabs();
@@ -154,7 +155,7 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, WheelTabChange) {
     GTEST_SKIP() << "Test does not apply to this platform.";
   }
 
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
 
   while (model->count() < 2) {
     ASSERT_TRUE(
@@ -183,24 +184,12 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, WheelTabChange) {
   EXPECT_EQ(1, model->active_index());
 }
 
-class BrowserRootViewWithVerticalTabsBrowserTest
-    : public BrowserRootViewBrowserTest {
- public:
-  BrowserRootViewWithVerticalTabsBrowserTest() {
-    scoped_feature_list_.InitAndEnableFeature(tabs::kVerticalTabs);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(BrowserRootViewWithVerticalTabsBrowserTest,
-                       WheelTabChange) {
+IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, VerticalTabsWheelTabChange) {
   if (!browser_defaults::kScrollEventChangesTab) {
     GTEST_SKIP() << "Test does not apply to this platform.";
   }
 
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
 
   while (model->count() < 2) {
     ASSERT_TRUE(
@@ -235,7 +224,7 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest,
     GTEST_SKIP() << "Test does not apply to this platform.";
   }
 
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   TabStrip* tabstrip = BrowserView::GetBrowserViewForBrowser(browser())
                            ->horizontal_tab_strip_for_testing();
   ASSERT_TRUE(model->SupportsTabGroups());
@@ -286,7 +275,7 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest,
 #define MAYBE_DropOrderingCorrect DropOrderingCorrect
 #endif
 IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, MAYBE_DropOrderingCorrect) {
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
 
   // HELPER FUNCTION: Verify that the tabs in the current browser window match
   // the expected list of tabs.
@@ -496,7 +485,7 @@ IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest, MAYBE_DropOrderingCorrect) {
 
 IN_PROC_BROWSER_TEST_F(BrowserRootViewBrowserTest,
                        InitiatorOriginForDroppedLink) {
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(AddTabAtIndex(0, GURL("about:blank"), ui::PAGE_TRANSITION_LINK));
   using BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex;
   ui::mojom::DragOperation drag_operation;

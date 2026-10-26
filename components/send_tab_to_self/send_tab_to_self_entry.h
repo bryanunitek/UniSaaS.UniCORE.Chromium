@@ -20,6 +20,8 @@ class SendTabToSelfSpecifics;
 
 namespace send_tab_to_self {
 
+class SendTabToSelfLocal;
+
 inline constexpr base::TimeDelta kExpiryTime = base::Days(10);
 
 // Maximum size of the PageContext proto in bytes. Arbitrarily chosen as
@@ -54,7 +56,6 @@ struct NavigationHistory {
   std::optional<int> current_navigation_index;
 };
 
-class SendTabToSelfLocal;
 // A tab that is being shared. The URL is a unique identifier for an entry, as
 // such it should not be empty and is the only thing considered when comparing
 // entries.
@@ -88,7 +89,7 @@ class SendTabToSelfEntry {
   base::Time GetSharedTime() const;
   // The name of the device that originated the sent tab.
   const std::string& GetDeviceName() const;
-  // The cache guid of of the device that this tab is shared with.
+  // The cache guid of the device that this tab is shared with.
   const std::string& GetTargetDeviceSyncCacheGuid() const;
   // The opened state of the entry.
   bool IsOpened() const;
@@ -148,14 +149,6 @@ class SendTabToSelfEntry {
   // Returns if the Entry has expired based on the `current_time`.
   bool IsExpired(base::Time current_time) const;
 
-  // Creates a SendTabToSelfEntry consisting of only the required fields.
-  // This entry will have an expired SharedTime and therefor this function
-  // should only be used for testing.
-  static std::unique_ptr<SendTabToSelfEntry> FromRequiredFields(
-      std::string guid,
-      const GURL& url,
-      std::string target_device_sync_cache_guid);
-
  private:
   std::string guid_;
   GURL url_;
@@ -163,7 +156,7 @@ class SendTabToSelfEntry {
   std::string device_name_;
   std::string target_device_sync_cache_guid_;
   base::Time shared_time_;
-  bool notification_dismissed_;
+  bool notification_dismissed_ = false;
   PageContext page_context_;
   NavigationHistory navigation_history_;
   base::Time received_time_;

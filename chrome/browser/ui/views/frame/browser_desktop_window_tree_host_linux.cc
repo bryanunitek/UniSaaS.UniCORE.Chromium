@@ -9,9 +9,14 @@
 
 #include "base/no_destructor.h"
 #include "build/build_config.h"
+#include "chrome/browser/ui/browser_init_state.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+#include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_linux.h"
 #include "chrome/browser/ui/views/frame/browser_native_widget_aura_linux.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
 #include "chrome/browser/ui/views/tabs/dragging/tab_drag_controller.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
@@ -22,9 +27,9 @@
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/linux/linux_ui.h"
 #include "ui/ozone/public/ozone_platform.h"
-#include "ui/platform_window/extensions/wayland_extension.h"
 #include "ui/platform_window/extensions/x11_extension.h"
 #include "ui/platform_window/platform_window_init_properties.h"
+#include "ui/views/widget/widget.h"
 #include "ui/views/window/frame_view_utils_linux.h"
 
 namespace {
@@ -44,12 +49,9 @@ absl::flat_hash_set<std::string>& SentStartupIds() {
 
 // Returns the event source for the active tab drag session.
 std::optional<ui::mojom::DragEventSource> GetCurrentTabDragEventSource() {
-  if (auto* source_context = TabDragController::GetSourceContext()) {
-    if (auto* drag_controller = source_context->GetDragController()) {
-      return drag_controller->event_source();
-    }
-  }
-  return std::nullopt;
+  return SafeInvoke(TabDragController::GetSourceContext())
+      .Then(&TabDragContext::GetDragController)
+      .Then(&TabDragController::event_source);
 }
 
 bool IsShowingFrame(bool use_custom_frame,
@@ -100,7 +102,7 @@ void BrowserDesktopWindowTreeHostLinux::AddAdditionalInitProperties(
     ui::PlatformWindowInitProperties* properties) {
   views::DesktopWindowTreeHostLinux::AddAdditionalInitProperties(params,
                                                                  properties);
-  auto* profile = browser_view_->browser()->profile();
+  auto* profile = browser_view_->browser()->GetProfile();
   const auto* linux_ui_theme = ui::LinuxUiTheme::GetForProfile(profile);
   properties->prefer_dark_theme =
       linux_ui_theme && linux_ui_theme->PreferDarkTheme();
@@ -126,32 +128,24 @@ void BrowserDesktopWindowTreeHostLinux::TabDraggingKindChanged(
   CHECK(browser_view_);
   // If there's no tabs left, the browser window is about to close, so don't
   // call SetOverrideRedirect() to prevent the window from flashing.
-  if (!browser_view_->browser()->tab_strip_model()->count()) {
+  if (!browser_view_->browser()->GetTabStripModel()->count()) {
     return;
   }
 
-  auto* x11_extension = GetX11Extension();
-  if (x11_extension && x11_extension->IsWmTiling() &&
-      x11_extension->CanResetOverrideRedirect()) {
-    bool was_dragging_window =
-        browser_widget_->tab_drag_kind() == TabDragKind::kAllTabs;
-    bool is_dragging_window = tab_drag_kind == TabDragKind::kAllTabs;
-    if (is_dragging_window != was_dragging_window) {
-      auto weak_this = weak_factory_.GetWeakPtr();
-      x11_extension->SetOverrideRedirect(is_dragging_window);
-      if (!weak_this) {
-        return;
-      }
-    }
+  bool was_dragging_window =
+      browser_widget_->tab_drag_kind() == TabDragKind::kAllTabs;
+  bool is_dragging_window = tab_drag_kind == TabDragKind::kAllTabs;
+  if (is_dragging_window != was_dragging_window) {
+    browser_widget_->SetBypassWindowManager(is_dragging_window);
   }
 
-  if (auto* wayland_extension =
-          ui::GetWaylandToplevelExtension(*platform_window())) {
-    if (tab_drag_kind != TabDragKind::kNone) {
-      if (auto event_source = GetCurrentTabDragEventSource()) {
-        wayland_extension->StartWindowDraggingSessionIfNeeded(
-            *event_source, /*allow_system_drag=*/true);
-      }
+  if (tab_drag_kind != TabDragKind::kNone) {
+    if (auto event_source = GetCurrentTabDragEventSource()) {
+      views::Widget::MoveLoopSource move_loop_source =
+          (*event_source == ui::mojom::DragEventSource::kTouch)
+              ? views::Widget::MoveLoopSource::kTouch
+              : views::Widget::MoveLoopSource::kMouse;
+      browser_widget_->PrepareForMoveLoop(move_loop_source);
     }
   }
 }
@@ -255,7 +249,9 @@ void BrowserDesktopWindowTreeHostLinux::Show(
   DesktopWindowTreeHostLinux::Show(show_state, restore_bounds);
 
   const std::string& startup_id =
-      browser_view_->browser()->create_params().startup_id;
+      BrowserInitState::From(browser_view_->browser())
+          ->create_params()
+          .startup_id;
   if (!startup_id.empty() && !SentStartupIds().contains(startup_id)) {
     platform_window()->NotifyStartupComplete(startup_id);
     SentStartupIds().insert(startup_id);
@@ -290,9 +286,28 @@ void BrowserDesktopWindowTreeHostLinux::OnWindowStateChanged(
 
   DesktopWindowTreeHostLinux::OnWindowStateChanged(old_state, new_state);
 
-  bool fullscreen_changed = new_state == ui::PlatformWindowState::kFullScreen ||
-                            old_state == ui::PlatformWindowState::kFullScreen;
-  if (old_state != new_state && fullscreen_changed) {
+  // Minimizing a fullscreen window does not exit fullscreen. This way it can
+  // be properly restored to fullscreen when unminimized.
+  bool fullscreen_to_minimized =
+      old_state == ui::PlatformWindowState::kFullScreen &&
+      new_state == ui::PlatformWindowState::kMinimized;
+
+  ExclusiveAccessManager* manager =
+      browser_view_->browser()
+          ? ExclusiveAccessManager::From(browser_view_->browser())
+          : nullptr;
+
+  bool minimized_fullscreen_to_non_fullscreen =
+      old_state == ui::PlatformWindowState::kMinimized &&
+      new_state != ui::PlatformWindowState::kFullScreen && manager &&
+      manager->fullscreen_controller()->IsControllerInitiatedFullscreen();
+
+  bool notify_fullscreen_changed =
+      new_state == ui::PlatformWindowState::kFullScreen ||
+      (old_state == ui::PlatformWindowState::kFullScreen &&
+       !fullscreen_to_minimized) ||
+      minimized_fullscreen_to_non_fullscreen;
+  if (old_state != new_state && notify_fullscreen_changed) {
     // If the browser view initiated this state change,
     // BrowserView::ProcessFullscreen will no-op, so this call is harmless.
     browser_view_->FullscreenStateChanging();

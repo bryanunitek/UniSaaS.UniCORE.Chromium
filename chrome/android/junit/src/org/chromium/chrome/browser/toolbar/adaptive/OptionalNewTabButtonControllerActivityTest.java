@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.toolbar.adaptive;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
@@ -15,19 +16,17 @@ import android.content.res.Resources;
 import android.util.Pair;
 
 import androidx.test.core.app.ActivityScenario;
-import androidx.test.filters.MediumTest;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mockito;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.BaseSwitches;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.ChromeRobolectricTestRunner;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -54,13 +53,10 @@ import java.util.NoSuchElementException;
  * ChromeTabbedActivity}.
  */
 @RunWith(ChromeRobolectricTestRunner.class)
-@EnableFeatures(
-        ChromeFeatureList.ADAPTIVE_BUTTON_IN_TOP_TOOLBAR_CUSTOMIZATION_V2
-                + ":min_version_adaptive/0")
 @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
 @CommandLineFlags.Add({
     ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
-    ChromeSwitches.DISABLE_NATIVE_INITIALIZATION
+    BaseSwitches.DISABLE_NATIVE_INITIALIZATION
 })
 public class OptionalNewTabButtonControllerActivityTest {
 
@@ -70,14 +66,14 @@ public class OptionalNewTabButtonControllerActivityTest {
 
     @Before
     public void setUp() {
-        Profile originalProfile = Mockito.mock(Profile.class);
-        Profile incognitoProfile = Mockito.mock(Profile.class);
+        Profile originalProfile = mock(Profile.class);
+        Profile incognitoProfile = mock(Profile.class);
         when(originalProfile.getOriginalProfile()).thenReturn(originalProfile);
         when(incognitoProfile.isOffTheRecord()).thenReturn(true);
 
         PriceTrackingFeatures.setPriceAnnotationsEnabledForTesting(false);
 
-        GlicKeyedService glicKeyedService = Mockito.mock(GlicKeyedService.class);
+        GlicKeyedService glicKeyedService = mock(GlicKeyedService.class);
         GlicKeyedServiceFactory.setForTesting(glicKeyedService);
         GlicEnabling.setEnabledForTesting(false);
 
@@ -97,7 +93,7 @@ public class OptionalNewTabButtonControllerActivityTest {
                         (id, incognito) -> {
                             Profile profile = incognito ? incognitoProfile : originalProfile;
                             MockTab tab = spy(MockTab.createAndInitialize(id, profile));
-                            doReturn(Mockito.mock(WebContents.class)).when(tab).getWebContents();
+                            doReturn(mock(WebContents.class)).when(tab).getWebContents();
                             return tab;
                         });
         OptionalNewTabButtonController.setActiveTabSupplierForTesting(
@@ -122,7 +118,6 @@ public class OptionalNewTabButtonControllerActivityTest {
     }
 
     @Test
-    @MediumTest
     @Config(qualifiers = "w390dp-h820dp-land")
     public void testAlwaysShownOnPhone() {
         mActivityScenario.onActivity(
@@ -136,7 +131,6 @@ public class OptionalNewTabButtonControllerActivityTest {
     }
 
     @Test
-    @MediumTest
     @Config(qualifiers = "w600dp-h820dp")
     public void testNeverShownOnTablet() {
         mActivityScenario.onActivity(
@@ -151,7 +145,6 @@ public class OptionalNewTabButtonControllerActivityTest {
     }
 
     @Test
-    @MediumTest
     @Config(qualifiers = "w400dp-h600dp")
     public void testNightMode() {
         mActivityScenario.onActivity(
@@ -167,7 +160,6 @@ public class OptionalNewTabButtonControllerActivityTest {
     }
 
     @Test
-    @MediumTest
     @Config(qualifiers = "w400dp-h600dp")
     public void testNtp() {
         mActivityScenario.onActivity(

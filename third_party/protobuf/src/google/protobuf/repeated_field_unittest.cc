@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <list>
@@ -30,12 +32,15 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/base/config.h"
+#include "absl/log/absl_check.h"
 #include "absl/numeric/bits.h"
 #include "absl/strings/cord.h"
+#include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 #include "absl/types/span.h"
 #include "google/protobuf/arena_test_util.h"
-#include "google/protobuf/internal_visibility_for_testing.h"
+#include "google/protobuf/internal_visibility.h"
 #include "google/protobuf/io/coded_stream.h"
 #include "google/protobuf/io/zero_copy_stream_impl_lite.h"
 #include "google/protobuf/parse_context.h"
@@ -54,9 +59,13 @@ namespace {
 
 using ::proto2_unittest::TestAllTypes;
 using ::testing::AllOf;
+using ::testing::AnyOf;
 using ::testing::ElementsAre;
+using ::testing::ElementsAreArray;
 using ::testing::Ge;
+using ::testing::HasSubstr;
 using ::testing::Le;
+using ::testing::Lt;
 
 TEST(RepeatedFieldIterator, Traits) {
   using It = RepeatedField<absl::Cord>::iterator;
@@ -156,6 +165,48 @@ TEST(RepeatedField, Small) {
 }
 
 
+class RepeatedFieldIsFullTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    if (sizeof(void*) == 4) {
+      GTEST_SKIP() << "Platform does not have enough memory for the test.";
+    }
+    if (internal::GetBoundsCheckMode() != internal::BoundsCheckMode::kAbort) {
+      GTEST_SKIP() << "Preemtive abort is not enabled.";
+    }
+  }
+
+  RepeatedField<bool> MakeFullField() {
+    // Using `bool` to make it easier on the system to allocate the memory.
+    RepeatedField<bool> field;
+    field.resize(std::numeric_limits<int>::max());
+    return field;
+  }
+};
+
+TEST_F(RepeatedFieldIsFullTest, AddAbortOnFull) {
+  EXPECT_DEATH(MakeFullField().Add(),
+               HasSubstr("Integer overflow in CheckedAdd: 2147483647 + 1"));
+}
+
+TEST_F(RepeatedFieldIsFullTest, AddValueAbortOnFull) {
+  EXPECT_DEATH(MakeFullField().Add(0),
+               HasSubstr("Integer overflow in CheckedAdd: 2147483647 + 1"));
+}
+
+TEST_F(RepeatedFieldIsFullTest, AddFwdIterAbortOnFull) {
+  int i = 2;
+  EXPECT_DEATH(MakeFullField().Add(&i, &i + 1),
+               HasSubstr("Integer overflow in CheckedAdd: 2147483647 + 1"));
+}
+
+TEST_F(RepeatedFieldIsFullTest, AddInputIterAbortOnFull) {
+  std::istringstream test_data("1 2 3 4 5");
+  EXPECT_DEATH(MakeFullField().Add(std::istream_iterator<int>(test_data),
+                                   std::istream_iterator<int>()),
+               HasSubstr("Integer overflow in CheckedAdd: 2147483647 + 1"));
+}
+
 // Test operations on a RepeatedField which is large enough to allocate a
 // separate array.
 TEST(RepeatedField, Large) {
@@ -174,22 +225,6 @@ TEST(RepeatedField, Large) {
 
   int expected_usage = 16 * sizeof(int);
   EXPECT_GE(field.SpaceUsedExcludingSelf(), expected_usage);
-}
-
-TEST(RepeatedField, AddRangeThatOverflowsFailsWithATermination) {
-  if (sizeof(void*) < 8) {
-    GTEST_SKIP() << "Disabled on 32-bit builds due to insufficient memory";
-  }
-  RepeatedField<bool> field;
-
-  std::vector<bool> input;
-  // Overflows into "negative" ints.
-  input.resize(size_t{std::numeric_limits<int32_t>::max()} + 1);
-  EXPECT_DEATH(field.Add(input.begin(), input.end()), "Input too large");
-
-  // Overflows the ints completely.
-  input.resize(size_t{std::numeric_limits<uint32_t>::max()} + 1);
-  EXPECT_DEATH(field.Add(input.begin(), input.end()), "Input too large");
 }
 
 template <typename Rep>
@@ -428,20 +463,16 @@ TEST(RepeatedField, ReserveLessThanExisting) {
   EXPECT_LE(20, ReservedSpace(&field));
 }
 
-TEST(RepeatedField, Resize) {
+TEST(RepeatedField, resize) {
   RepeatedField<int> field;
-  field.Resize(2, 1);
-  EXPECT_EQ(2, field.size());
-  field.Resize(5, 2);
-  EXPECT_EQ(5, field.size());
-  field.Resize(4, 3);
-  ASSERT_EQ(4, field.size());
-  EXPECT_EQ(1, field.Get(0));
-  EXPECT_EQ(1, field.Get(1));
-  EXPECT_EQ(2, field.Get(2));
-  EXPECT_EQ(2, field.Get(3));
-  field.Resize(0, 4);
-  EXPECT_TRUE(field.empty());
+  field.resize(2);
+  EXPECT_THAT(field, ElementsAre(0, 0));
+  field.resize(5, 2);
+  EXPECT_THAT(field, ElementsAre(0, 0, 2, 2, 2));
+  field.resize(4, 3);
+  EXPECT_THAT(field, ElementsAre(0, 0, 2, 2));
+  field.resize(0, 4);
+  EXPECT_THAT(field, ElementsAre());
 }
 
 TEST(RepeatedField, ReserveLowerClamp) {
@@ -547,6 +578,16 @@ TEST(RepeatedField, MergeFrom) {
   EXPECT_EQ(3, destination.Get(2));
   EXPECT_EQ(4, destination.Get(3));
   EXPECT_EQ(5, destination.Get(4));
+}
+
+TEST(RepeatedField, MergeFromSelfFailsWithATermination) {
+  // Self-merge is undefined behavior and is now a well-defined termination.
+  // Use a SOO-capacity field (2 elements for int32_t), the case that
+  // previously appended heap-pointer bytes in release builds.
+  RepeatedField<int32_t> field;
+  field.Add(1);
+  field.Add(2);
+  EXPECT_DEATH(field.MergeFrom(field), "self-reference");
 }
 
 
@@ -698,7 +739,7 @@ TEST(RepeatedField, AddRange7) {
   int ints[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
   absl::Span<const int> span(ints);
   auto p = span.begin();
-  static_assert(std::is_convertible<decltype(p), const int*>::value, "");
+  static_assert(std::is_convertible_v<decltype(p), const int*>, "");
   RepeatedField<int> me;
   me.Add(span.begin(), span.end());
 
@@ -733,72 +774,67 @@ TEST(RepeatedField, AddAndAssignRanges) {
 }
 
 TEST(RepeatedField, CopyConstructIntegers) {
-  auto token = internal::InternalVisibilityForTesting{};
   using RepeatedType = RepeatedField<int>;
   RepeatedType original;
   original.Add(1);
   original.Add(2);
 
   RepeatedType fields1(original);
-  ASSERT_EQ(2, fields1.size());
-  EXPECT_EQ(1, fields1.Get(0));
-  EXPECT_EQ(2, fields1.Get(1));
+  ASSERT_EQ(fields1.size(), 2);
+  EXPECT_EQ(fields1.Get(0), 1);
+  EXPECT_EQ(fields1.Get(1), 2);
 
-  RepeatedType fields2(token, nullptr, original);
-  ASSERT_EQ(2, fields2.size());
-  EXPECT_EQ(1, fields2.Get(0));
-  EXPECT_EQ(2, fields2.Get(1));
+  auto* fields2 = Arena::Create<RepeatedType>(nullptr, original);
+  ASSERT_EQ(fields2->size(), 2);
+  EXPECT_EQ(fields2->Get(0), 1);
+  EXPECT_EQ(fields2->Get(1), 2);
+
+  delete fields2;
 }
 
 TEST(RepeatedField, CopyConstructCords) {
-  auto token = internal::InternalVisibilityForTesting{};
   using RepeatedType = RepeatedField<absl::Cord>;
   RepeatedType original;
   original.Add(absl::Cord("hello"));
   original.Add(absl::Cord("world and text to avoid SSO"));
 
   RepeatedType fields1(original);
-  ASSERT_EQ(2, fields1.size());
-  EXPECT_EQ("hello", fields1.Get(0));
-  EXPECT_EQ("world and text to avoid SSO", fields1.Get(1));
+  ASSERT_EQ(fields1.size(), 2);
+  EXPECT_EQ(fields1.Get(0), "hello");
+  EXPECT_EQ(fields1.Get(1), "world and text to avoid SSO");
 
-  RepeatedType fields2(token, nullptr, original);
-  ASSERT_EQ(2, fields1.size());
-  EXPECT_EQ("hello", fields1.Get(0));
-  EXPECT_EQ("world and text to avoid SSO", fields2.Get(1));
+  auto* fields2 = Arena::Create<RepeatedType>(nullptr, original);
+  ASSERT_EQ(fields2->size(), 2);
+  EXPECT_EQ(fields2->Get(0), "hello");
+  EXPECT_EQ(fields2->Get(1), "world and text to avoid SSO");
+
+  delete fields2;
 }
 
 TEST(RepeatedField, CopyConstructIntegersWithArena) {
-  auto token = internal::InternalVisibilityForTesting{};
   using RepeatedType = RepeatedField<int>;
   RepeatedType original;
   original.Add(1);
   original.Add(2);
 
   Arena arena;
-  alignas(RepeatedType) char mem[sizeof(RepeatedType)];
-  RepeatedType& fields1 = *new (mem) RepeatedType(token, &arena, original);
-  ASSERT_EQ(2, fields1.size());
-  EXPECT_EQ(1, fields1.Get(0));
-  EXPECT_EQ(2, fields1.Get(1));
+  auto* fields1 = Arena::Create<RepeatedType>(&arena, original);
+  ASSERT_EQ(fields1->size(), 2);
+  EXPECT_EQ(fields1->Get(0), 1);
+  EXPECT_EQ(fields1->Get(1), 2);
 }
 
 TEST(RepeatedField, CopyConstructCordsWithArena) {
-  auto token = internal::InternalVisibilityForTesting{};
   using RepeatedType = RepeatedField<absl::Cord>;
   RepeatedType original;
   original.Add(absl::Cord("hello"));
   original.Add(absl::Cord("world and text to avoid SSO"));
 
   Arena arena;
-  alignas(RepeatedType) char mem[sizeof(RepeatedType)];
-  RepeatedType& fields1 = *new (mem) RepeatedType(token, &arena, original);
-  ASSERT_EQ(2, fields1.size());
-  EXPECT_EQ("hello", fields1.Get(0));
-  EXPECT_EQ("world and text to avoid SSO", fields1.Get(1));
-
-  // Contract requires dtor to be invoked for absl::Cord
-  fields1.~RepeatedType();
+  auto* fields1 = Arena::Create<RepeatedType>(&arena, original);
+  ASSERT_EQ(fields1->size(), 2);
+  EXPECT_EQ(fields1->Get(0), "hello");
+  EXPECT_EQ(fields1->Get(1), "world and text to avoid SSO");
 }
 
 TEST(RepeatedField, IteratorConstruct) {
@@ -1015,7 +1051,7 @@ TEST(RepeatedCordField, AddClear) {
 
 TEST(RepeatedCordField, Resize) {
   RepeatedField<absl::Cord> field;
-  field.Resize(10, absl::Cord("foo"));
+  field.resize(10, absl::Cord("foo"));
 }
 
 TEST(RepeatedField, Cords) {
@@ -1079,17 +1115,17 @@ TEST(RepeatedField, TruncateCords) {
 
 TEST(RepeatedField, ResizeCords) {
   RepeatedField<absl::Cord> field;
-  field.Resize(2, absl::Cord("foo"));
+  field.resize(2, absl::Cord("foo"));
   EXPECT_EQ(2, field.size());
-  field.Resize(5, absl::Cord("bar"));
+  field.resize(5, absl::Cord("bar"));
   EXPECT_EQ(5, field.size());
-  field.Resize(4, absl::Cord("baz"));
+  field.resize(4, absl::Cord("baz"));
   ASSERT_EQ(4, field.size());
   EXPECT_EQ("foo", std::string(field.Get(0)));
   EXPECT_EQ("foo", std::string(field.Get(1)));
   EXPECT_EQ("bar", std::string(field.Get(2)));
   EXPECT_EQ("bar", std::string(field.Get(3)));
-  field.Resize(0, absl::Cord("moo"));
+  field.resize(0, absl::Cord("moo"));
   EXPECT_TRUE(field.empty());
 }
 
@@ -1135,7 +1171,7 @@ TEST(RepeatedField, TestSAddFromSelf) {
 // We have, or at least had bad callers that never triggered our DCHECKS
 // Here we check we DO fail on bad Truncate calls under debug, and do nothing
 // under opt compiles.
-TEST(RepeatedField, HardenAgainstBadTruncate) {
+TEST(RepeatedFieldTest, HardenAgainstBadTruncate) {
   RepeatedField<int> field;
   for (int size = 0; size < 10; ++size) {
     field.Truncate(size);
@@ -1149,6 +1185,216 @@ TEST(RepeatedField, HardenAgainstBadTruncate) {
     EXPECT_EQ(field.size(), size);
     field.Add(1);
   }
+}
+
+TEST(RepeatedFieldTest, Erase) {
+  RepeatedField<int32_t> elements;
+  while (elements.size() < 15) {
+    elements.Add(elements.size() % 5);
+  }
+  EXPECT_EQ(3, google::protobuf::erase(elements, 3));
+  EXPECT_THAT(elements, ElementsAre(0, 1, 2, 4, 0, 1, 2, 4, 0, 1, 2, 4));
+}
+
+TEST(RepeatedFieldTest, EraseIf) {
+  RepeatedField<int32_t> elements;
+  while (elements.size() < 15) {
+    elements.Add(elements.size());
+  }
+  const int32_t* start_ptr = elements.data();
+  const int32_t* end_ptr = start_ptr + elements.size();
+  EXPECT_EQ(5, google::protobuf::erase_if(elements, [start_ptr, end_ptr](auto&& i) {
+              static_assert(std::is_same_v<decltype(i), const int32_t&>);
+              // Verify that the address of `i` does not lie in the range of the
+              // repeated field.
+              EXPECT_THAT(&i, AnyOf(Lt(start_ptr), Ge(end_ptr)));
+              return i % 3 == 0;
+            }));
+  EXPECT_THAT(elements, ElementsAre(1, 2, 4, 5, 7, 8, 10, 11, 13, 14));
+}
+
+TEST(RepeatedFieldTest, EraseIfCord) {
+  RepeatedField<absl::Cord> elements;
+  absl::Cord c;
+  while (elements.size() < 15) {
+    elements.Add(absl::Cord(absl::StrCat("v", elements.size())));
+  }
+  const absl::Cord* start_ptr = elements.data();
+  const absl::Cord* end_ptr = start_ptr + elements.size();
+  EXPECT_EQ(
+      5, google::protobuf::erase_if(elements, [start_ptr, end_ptr](auto&& cord) {
+        static_assert(std::is_same_v<decltype(cord), const absl::Cord&>);
+        // The Cord is copied when debug checks are enabled. Verify that the
+        // address of `cord` does not lie in the range of the repeated field.
+        if constexpr (internal::PerformDebugChecks()) {
+          EXPECT_THAT(&cord, AnyOf(Lt(start_ptr), Ge(end_ptr)));
+        }
+
+        absl::Cord cord_copy = cord;
+        int value;
+        ABSL_CHECK(absl::SimpleAtoi(cord_copy.Flatten().substr(1), &value));
+        return value % 3 == 0;
+      }));
+  EXPECT_THAT(elements, ElementsAre("v1", "v2", "v4", "v5", "v7", "v8", "v10",
+                                    "v11", "v13", "v14"));
+}
+
+TEST(RepeatedFieldTest, SortTest) {
+  RepeatedField<int64_t> rep;
+
+  // Store values in decreasing order.
+  for (int i = 0; i < 20; i++) {
+    rep.Add(20 - (i / 2));
+  }
+
+  EXPECT_TRUE(std::is_sorted(rep.begin(), rep.end(), std::greater<>{}));
+
+  // Sort by numeric values - this should reverse the order of creation.
+  {
+    ASSERT_FALSE(std::is_sorted(rep.begin(), rep.end(), std::less<>{}));
+
+    const int64_t* start_ptr = rep.data();
+    const int64_t* end_ptr = start_ptr + rep.size();
+    google::protobuf::sort(rep.begin(), rep.end(), [&](auto&& lhs, auto&& rhs) {
+      static_assert(std::is_same_v<decltype(lhs), const int64_t&>);
+      static_assert(std::is_same_v<decltype(rhs), const int64_t&>);
+      // Verify that the addresses of `lhs` and `rhs` don't lie in the range of
+      // the repeated field.
+      EXPECT_THAT(&lhs, AnyOf(Lt(start_ptr), Ge(end_ptr)));
+      EXPECT_THAT(&rhs, AnyOf(Lt(start_ptr), Ge(end_ptr)));
+      return lhs < rhs;
+    });
+    EXPECT_TRUE(std::is_sorted(rep.begin(), rep.end(), std::less<>{}));
+  }
+
+  // Reverse again.
+  {
+    auto cmp = std::greater<>{};
+    ASSERT_FALSE(std::is_sorted(rep.begin(), rep.end(), cmp));
+    google::protobuf::c_sort(rep, cmp);
+    EXPECT_TRUE(std::is_sorted(rep.begin(), rep.end(), cmp));
+  }
+
+  // And again - without a predicate this time.
+  ASSERT_FALSE(std::is_sorted(rep.begin(), rep.end()));
+  google::protobuf::c_sort(rep);
+  EXPECT_TRUE(std::is_sorted(rep.begin(), rep.end()));
+}
+
+TEST(RepeatedFieldTest, SortSubrangeTest) {
+  RepeatedField<int> rep;
+  for (int v : {1, 4, 9, 0, 2, 3, 5}) rep.Add(v);
+  EXPECT_THAT(rep, ElementsAre(1, 4, 9, 0, 2, 3, 5));
+
+  google::protobuf::sort(rep.begin() + 1, rep.begin() + 5);
+  EXPECT_THAT(rep, ElementsAre(1, 0, 2, 4, 9, 3, 5));
+}
+
+TEST(RepeatdFieldTest, StableSort) {
+  RepeatedField<int> rep;
+  while (rep.size() < 100) rep.Add(rep.size());
+
+  const auto less_10 = [](int a, int b) { return a % 10 < b % 10; };
+
+  ASSERT_FALSE(std::is_sorted(rep.begin(), rep.end(), less_10));
+
+  const int* start_ptr = rep.data();
+  const int* end_ptr = start_ptr + rep.size();
+  google::protobuf::stable_sort(rep.begin(), rep.end(), [&](auto&& lhs, auto&& rhs) {
+    static_assert(std::is_same_v<decltype(lhs), const int&>);
+    static_assert(std::is_same_v<decltype(rhs), const int&>);
+    // Verify that the addresses of `lhs` and `rhs` don't lie in the range of
+    // the repeated field.
+    EXPECT_THAT(&lhs, AnyOf(Lt(start_ptr), Ge(end_ptr)));
+    EXPECT_THAT(&rhs, AnyOf(Lt(start_ptr), Ge(end_ptr)));
+    return less_10(lhs, rhs);
+  });
+
+  EXPECT_TRUE(std::is_sorted(rep.begin(), rep.end(), less_10));
+
+  // Make sure that the relative orders where kept.
+  std::vector<int> expected;
+  for (int i = 0; i < 10; ++i) {
+    for (int j = 0; j < 10; ++j) {
+      expected.push_back(10 * j + i);
+    }
+  }
+  EXPECT_THAT(rep, ElementsAreArray(expected));
+
+  ASSERT_FALSE(std::is_sorted(rep.begin(), rep.end()));
+  google::protobuf::c_stable_sort(rep);
+  EXPECT_TRUE(std::is_sorted(rep.begin(), rep.end()));
+}
+
+TEST(RepeatedFieldTest, SortCordTest) {
+  RepeatedField<absl::Cord> rep;
+
+  // Store values in decreasing order.
+  for (int i = 0; i < 5; i++) {
+    rep.Add(absl::Cord(absl::StrFormat("%d", i)));
+  }
+
+  {
+    // Sort by std::greater, which should reverse the order.
+    const absl::Cord* start_ptr = rep.data();
+    const absl::Cord* end_ptr = start_ptr + rep.size();
+    google::protobuf::sort(rep.begin(), rep.end(), [&](auto&& a, auto&& b) {
+      static_assert(std::is_same_v<decltype(a), const absl::Cord&>);
+      static_assert(std::is_same_v<decltype(b), const absl::Cord&>);
+      // Cords are only copied when debug checks are enabled.
+      if constexpr (internal::PerformDebugChecks()) {
+        EXPECT_THAT(&a, AnyOf(Lt(start_ptr), Ge(end_ptr)));
+        EXPECT_THAT(&b, AnyOf(Lt(start_ptr), Ge(end_ptr)));
+      }
+      return std::greater<>{}(a, b);
+    });
+    EXPECT_THAT(rep, ElementsAre("4", "3", "2", "1", "0"));
+  }
+
+  {
+    // Stable sort by an even/odd predicate.
+    const absl::Cord* start_ptr = rep.data();
+    const absl::Cord* end_ptr = start_ptr + rep.size();
+    google::protobuf::stable_sort(rep.begin(), rep.end(), [&](auto&& a, auto&& b) {
+      static_assert(std::is_same_v<decltype(a), const absl::Cord&>);
+      static_assert(std::is_same_v<decltype(b), const absl::Cord&>);
+      // Cords are only copied when debug checks are enabled.
+      if constexpr (internal::PerformDebugChecks()) {
+        EXPECT_THAT(&a, AnyOf(Lt(start_ptr), Ge(end_ptr)));
+        EXPECT_THAT(&b, AnyOf(Lt(start_ptr), Ge(end_ptr)));
+      }
+
+      absl::Cord a_copy = a;
+      absl::Cord b_copy = b;
+      return std::less<>{}(static_cast<int>(a_copy.Flatten().back()) % 2,
+                           static_cast<int>(b_copy.Flatten().back()) % 2);
+    });
+    // All the evens first, in preserved order, followed by the odds in
+    // preserved order.
+    EXPECT_THAT(rep, ElementsAre("4", "2", "0", "3", "1"));
+  }
+}
+
+TEST(RepeatdFieldTest, ContainerAnnotationsAreProperlyCleanedInArena) {
+#if !defined(ABSL_HAVE_ADDRESS_SANITIZER)
+  GTEST_SKIP() << "Asan is not on.";
+#endif
+  alignas(8) char block[128];
+  ArenaOptions options;
+  options.initial_block = block;
+  options.initial_block_size = sizeof(block);
+
+  Arena arena(options);
+  // Make a container and reserve memory
+  arena.Make<RepeatedField<bool>>()->Reserve(64);
+
+  // Accessing it should cause a problem.
+  EXPECT_TRUE(internal::IsMemoryPoisoned(block + 64));
+  // Now reset the arena and let's make sure the memory is accessible.
+  // If `allow_user_poisoning=0`, we need to reset the memory even though
+  // unpoisoning doesn't work.
+  arena.Reset();
+  EXPECT_FALSE(internal::IsMemoryPoisoned(block + 64));
 }
 
 #if defined(GTEST_HAS_DEATH_TEST) && (defined(ABSL_HAVE_ADDRESS_SANITIZER) || \
@@ -1236,7 +1482,7 @@ TEST(RepeatedField, PoisonsMemoryOnAssign) {
 TEST(RepeatedField, Cleanups) {
   Arena arena;
   auto growth = internal::CleanupGrowth(
-      arena, [&] { Arena::Create<RepeatedField<int>>(&arena); });
+      arena, [&] { (void)Arena::Create<RepeatedField<int>>(&arena); });
   EXPECT_THAT(growth.cleanups, testing::IsEmpty());
 
   void* ptr;
@@ -1247,7 +1493,7 @@ TEST(RepeatedField, Cleanups) {
 
 TEST(RepeatedField, InitialSooCapacity) {
   if (sizeof(void*) == 8) {
-    EXPECT_EQ(RepeatedField<bool>().Capacity(), 3);
+    EXPECT_EQ(RepeatedField<bool>().Capacity(), 8);
     EXPECT_EQ(RepeatedField<int32_t>().Capacity(), 2);
     EXPECT_EQ(RepeatedField<int64_t>().Capacity(), 1);
     EXPECT_EQ(RepeatedField<absl::Cord>().Capacity(), 0);
@@ -1362,20 +1608,86 @@ TEST(RepeatedField, CheckedGetOrAbortTest) {
   RepeatedField<int> field;
 
   // Empty container tests.
-  EXPECT_DEATH(CheckedMutableOrAbort(&field, -1), "index: -1, size: 0");
-  EXPECT_DEATH(CheckedMutableOrAbort(&field, field.size()),
-               "index: 0, size: 0");
+  EXPECT_DEATH(internal::CheckedGetOrAbort(field, -1),
+               "Index \\(-1\\) out of bounds of container with size \\(0\\)");
+  EXPECT_DEATH(internal::CheckedGetOrAbort(field, field.size()),
+               "Index \\(0\\) out of bounds of container with size \\(0\\)");
 
   // Non-empty container tests
   field.Add(5);
   field.Add(4);
-  EXPECT_DEATH(CheckedMutableOrAbort(&field, 2), "index: 2, size: 2");
-  EXPECT_DEATH(CheckedMutableOrAbort(&field, -1), "index: -1, size: 2");
+  EXPECT_DEATH(internal::CheckedGetOrAbort(field, 2),
+               "Index \\(2\\) out of bounds of container with size \\(2\\)");
+  EXPECT_DEATH(internal::CheckedGetOrAbort(field, -1),
+               "Index \\(-1\\) out of bounds of container with size \\(2\\)");
+}
+
+TEST(RepeatedField, CheckedMutableOrAbortTest) {
+  RepeatedField<int> field;
+
+  // Empty container tests.
+  EXPECT_DEATH(internal::CheckedMutableOrAbort(&field, -1),
+               "Index \\(-1\\) out of bounds of container with size \\(0\\)");
+  EXPECT_DEATH(internal::CheckedMutableOrAbort(&field, field.size()),
+               "Index \\(0\\) out of bounds of container with size \\(0\\)");
+
+  // Non-empty container tests
+  field.Add(5);
+  field.Add(4);
+  EXPECT_DEATH(internal::CheckedMutableOrAbort(&field, 2),
+               "Index \\(2\\) out of bounds of container with size \\(2\\)");
+  EXPECT_DEATH(internal::CheckedMutableOrAbort(&field, -1),
+               "Index \\(-1\\) out of bounds of container with size \\(2\\)");
+}
+
+
+
+// TODO: Re-enable once parsing overflow is fixed.
+TEST(RepeatedFieldIsFullTest, DISABLED_MergeFrom) {
+  if (sizeof(void*) < 8) {
+    GTEST_SKIP() << "Not enough memory for the test.";
+  }
+
+  TestAllTypes msg;
+  msg.mutable_repeated_bool()->resize(std::numeric_limits<int>::max(), false);
+
+  TestAllTypes payload;
+  payload.add_repeated_bool(true);
+  std::string serialized = payload.SerializeAsString();
+
+  EXPECT_FALSE(msg.MergeFromString(serialized));
+  EXPECT_EQ(msg.repeated_bool_size(), std::numeric_limits<int>::max());
+}
+
+// TODO: Re-enable once parsing overflow is fixed.
+TEST(RepeatedFieldIsFullTest, DISABLED_MergeFromPacked) {
+  if (sizeof(void*) < 8) {
+    GTEST_SKIP() << "Not enough memory for the test.";
+  }
+
+  ::proto2_unittest::TestPackedTypes msg;
+  msg.mutable_packed_bool()->resize(std::numeric_limits<int>::max(), false);
+
+  ::proto2_unittest::TestPackedTypes payload;
+  payload.add_packed_bool(true);
+  std::string serialized = payload.SerializeAsString();
+
+  EXPECT_FALSE(msg.MergeFromString(serialized));
+  EXPECT_EQ(msg.packed_bool_size(), std::numeric_limits<int>::max());
 }
 
 }  // namespace
 
 }  // namespace protobuf
 }  // namespace google
+
+// Code thunks to be dumped by the debugger to inspect the generated assemtbly.
+static const int& CodegenRepeatedFieldGet(const google::protobuf::RepeatedField<int>& a,
+                                          int idx) {
+  return a[idx];
+}
+
+static int odr_use =
+    (google::protobuf::internal::StrongPointer(&CodegenRepeatedFieldGet), 0);
 
 #include "google/protobuf/port_undef.inc"

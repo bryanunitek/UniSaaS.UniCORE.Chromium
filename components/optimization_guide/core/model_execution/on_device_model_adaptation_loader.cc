@@ -8,6 +8,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/files/file_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/to_string.h"
@@ -15,15 +16,13 @@
 #include "base/trace_event/trace_event.h"
 #include "base/types/optional_util.h"
 #include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
-#include "components/optimization_guide/core/model_execution/model_execution_util.h"
 #include "components/optimization_guide/core/model_execution/on_device_features.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_feature_adapter.h"
-#include "components/optimization_guide/core/model_execution/on_device_model_service_controller.h"
+#include "components/optimization_guide/core/model_execution/on_device_model_names.h"
 #include "components/optimization_guide/core/model_execution/usage_tracker.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
+#include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/optimization_guide/proto/common_types.pb.h"
 #include "components/optimization_guide/proto/models.pb.h"
 #include "components/optimization_guide/proto/on_device_base_model_metadata.pb.h"
@@ -35,6 +34,22 @@
 namespace optimization_guide {
 
 namespace {
+
+std::unique_ptr<proto::OnDeviceModelExecutionConfig>
+ReadOnDeviceModelExecutionConfig(const base::FilePath& config_path) {
+  TRACE_EVENT("optimization_guide", "ReadOnDeviceModelExecutionConfig");
+  // Unpack and verify model config file.
+  std::string binary_config_pb;
+  if (!base::ReadFileToString(config_path, &binary_config_pb)) {
+    return nullptr;
+  }
+
+  auto config = std::make_unique<proto::OnDeviceModelExecutionConfig>();
+  if (!config->ParseFromString(binary_config_pb)) {
+    return nullptr;
+  }
+  return config;
+}
 
 void RecordAdaptationModelAvailability(
     mojom::OnDeviceFeature feature,
@@ -117,18 +132,14 @@ DetectBaseModelIncompatibility(const optimization_guide::ModelInfo& model_info,
   if (!supported_model_spec) {
     return OnDeviceModelAdaptationAvailability::kAdaptationModelInvalid;
   }
-  // Check for incompatibility when base model override is not specified
-  if (!switches::GetOnDeviceModelExecutionOverride()) {
-    if (supported_model_spec->base_model_name() != registered_spec.model_name ||
-        supported_model_spec->base_model_version() !=
-            registered_spec.model_version) {
-      return OnDeviceModelAdaptationAvailability::kAdaptationModelIncompatible;
-    }
-    if (!ArePerformanceHintsCompatible(*supported_model_spec,
-                                       registered_spec)) {
-      return OnDeviceModelAdaptationAvailability::
-          kAdaptationModelHintsIncompatible;
-    }
+  if (supported_model_spec->base_model_name() != registered_spec.model_name ||
+      supported_model_spec->base_model_version() !=
+          registered_spec.model_version) {
+    return OnDeviceModelAdaptationAvailability::kAdaptationModelIncompatible;
+  }
+  if (!ArePerformanceHintsCompatible(*supported_model_spec, registered_spec)) {
+    return OnDeviceModelAdaptationAvailability::
+        kAdaptationModelHintsIncompatible;
   }
   return std::nullopt;
 }
@@ -245,8 +256,7 @@ void OnDeviceModelAdaptationLoader::MaybeRegisterModelDownload(
   bool is_background_download_enabled_for_feature =
       features::IsOnDeviceModelBackgroundDownloadEnabledForFeature(feature_);
 
-  if (!switches::GetOnDeviceModelExecutionOverride() &&
-      !was_feature_recently_used &&
+  if (!was_feature_recently_used &&
       !is_background_download_enabled_for_feature) {
     RecordAdaptationModelAvailability(
         feature_, OnDeviceModelAdaptationAvailability::kFeatureNotRecentlyUsed);

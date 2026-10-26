@@ -9,6 +9,7 @@ import './promo_card.js';
 
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import type {CrLazyListElement} from 'chrome://resources/cr_elements/cr_lazy_list/cr_lazy_list.js';
+import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -27,7 +28,8 @@ import {StoreClientMixinLit} from './store_client_mixin_lit.js';
 import type {BookmarksPageState, OpenCommandMenuDetail} from './types.js';
 import {canReorderChildren, getDisplayedList} from './util.js';
 
-const BookmarksListElementBase = StoreClientMixinLit(CrLitElement);
+const BookmarksListElementBase =
+    WebUiListenerMixinLit(StoreClientMixinLit(CrLitElement));
 
 export interface BookmarksListElement {
   $: {
@@ -75,18 +77,15 @@ export class BookmarksListElement extends BookmarksListElementBase {
     this.eventTracker_.add(
         document, 'highlight-items',
         (e: Event) => this.onHighlightItems_(e as CustomEvent<string[]>));
-    this.eventTracker_.add(
-        document, 'import-began', () => this.onImportBegan_());
-    this.eventTracker_.add(
-        document, 'import-ended', () => this.onImportEnded_());
+
+    this.addWebUiListener('import-began', () => this.onImportBegan_());
+    this.addWebUiListener('import-ended', () => this.onImportEnded_());
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
 
     this.eventTracker_.remove(document, 'highlight-items');
-    this.eventTracker_.remove(document, 'import-began');
-    this.eventTracker_.remove(document, 'import-ended');
   }
 
   override willUpdate(changedProperties: PropertyValues<this>) {
@@ -203,7 +202,17 @@ export class BookmarksListElement extends BookmarksListElementBase {
   private async focusMenuButton_(index: number) {
     const element =
         await this.$.list.ensureItemRendered(index) as BookmarksItemElement;
-    element.focusMenuButton();
+    if (isMac && this.getState().selection.items.size === 0) {
+      element.focus();
+      // On macOS, auto-select the first focused item when entering a
+      // folder (when selection is empty) without overriding existing
+      // selections during multi-select navigation (Cmd + Arrow).
+      this.dispatch(selectItem(
+          this.displayedIds_[index]!, this.getState(),
+          {clear: true, range: false, toggle: false}));
+    } else {
+      element.focusMenuButton();
+    }
   }
 
   /**
@@ -389,6 +398,21 @@ export class BookmarksListElement extends BookmarksListElementBase {
 
     if (focusedIdx !== -1) {
       this.focusedIndex_ = focusedIdx;
+      // On macOS, auto-select focused item when tabbing into the list
+      // from outside (when selection is empty). Ignore programmatic focus
+      // changes in unit tests and internal Shadow DOM movements.
+      const related = (e as FocusEvent).relatedTarget as Node | null;
+      const isInsideList = related &&
+          (this.contains(related) ||
+           (this.shadowRoot && this.shadowRoot.contains(related)));
+      const enteringFromOutside =
+          related && related !== document.body && !isInsideList;
+      if (isMac && this.getState().selection.items.size === 0 &&
+          enteringFromOutside) {
+        this.dispatch(selectItem(
+            this.displayedIds_[focusedIdx]!, this.getState(),
+            {clear: true, range: false, toggle: false}));
+      }
     }
   }
 

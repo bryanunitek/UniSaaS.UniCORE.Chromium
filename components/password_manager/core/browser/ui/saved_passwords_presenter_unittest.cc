@@ -36,6 +36,7 @@
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #include "components/sync/protocol/webauthn_credential_specifics.pb.h"
 #include "components/sync/test/test_sync_service.h"
@@ -181,7 +182,8 @@ PasswordForm CreateTestPasswordForm(PasswordForm::Store store, int index = 0) {
   form.url = GURL("https://test" + base::NumberToString(index) + ".com");
   form.signon_realm = form.url.spec();
   form.username_value = u"username" + base::NumberToString16(index);
-  form.password_value = u"password" + base::NumberToString16(index);
+  form.password_value =
+      PasswordString(u"password" + base::NumberToString16(index));
   form.in_store = store;
   return form;
 }
@@ -277,7 +279,7 @@ TEST_F(SavedPasswordsPresenterTest, AddPasswordFailWhenEmptyPassword) {
 
   PasswordForm form =
       CreateTestPasswordForm(PasswordForm::Store::kProfileStore);
-  form.password_value = u"";
+  form.password_value = PasswordString(u"");
 
   EXPECT_CALL(observer, OnSavedPasswordsChanged).Times(0);
   EXPECT_FALSE(presenter().AddCredential(CredentialUIEntry(form)));
@@ -346,7 +348,7 @@ TEST_F(SavedPasswordsPresenterTest, EditPassword) {
   const std::u16string new_password = u"new_password";
 
   PasswordForm updated = form;
-  updated.password_value = new_password;
+  updated.password_value = PasswordString(std::u16string(new_password));
   CredentialUIEntry updated_credential(updated);
   // The expected updated form should have a new password and no password
   // issues.
@@ -500,12 +502,13 @@ TEST_F(SavedPasswordsPresenterTest, EditOnlyPassword) {
   PasswordForm updated_password = form;
   // The result of the update should have a new password and no password
   // issues.
-  updated_password.password_value = new_password;
+  updated_password.password_value =
+      PasswordString(std::u16string(new_password));
   updated_password.date_password_modified = base::Time::Now();
   updated_password.password_issues.clear();
 
   CredentialUIEntry credential_to_edit(form);
-  credential_to_edit.password = new_password;
+  credential_to_edit.password = PasswordString(std::u16string(new_password));
 
   base::HistogramTester histogram_tester;
   // Verify that editing a password triggers the right notifications.
@@ -687,13 +690,13 @@ TEST_F(SavedPasswordsPresenterTest, EditUsernameAndPassword) {
   // The result of the update should have a new username and password and no
   // password issues.
   updated_both.username_value = new_username;
-  updated_both.password_value = new_password;
+  updated_both.password_value = PasswordString(std::u16string(new_password));
   updated_both.date_password_modified = base::Time::Now();
   updated_both.password_issues.clear();
 
   CredentialUIEntry credential_to_edit(form);
   credential_to_edit.username = new_username;
-  credential_to_edit.password = new_password;
+  credential_to_edit.password = PasswordString(std::u16string(new_password));
 
   base::HistogramTester histogram_tester;
   // Verify that editing username and password triggers the right notifications.
@@ -733,7 +736,7 @@ TEST_F(SavedPasswordsPresenterTest, EditPasswordFails) {
               ElementsAre(Pair(form1.signon_realm, ElementsAre(form1, form2))));
 
   credential_to_edit = CredentialUIEntry(form1);
-  credential_to_edit.password = u"";
+  credential_to_edit.password = PasswordString(u"");
   // Updating the form with the empty password fails.
   EXPECT_EQ(SavedPasswordsPresenter::EditResult::kEmptyPassword,
             presenter().EditSavedCredentials(CredentialUIEntry(form1),
@@ -803,7 +806,7 @@ TEST_F(SavedPasswordsPresenterTest, EditUpdatesDuplicates) {
   const std::u16string new_password = u"new_password";
 
   PasswordForm updated_form = form;
-  updated_form.password_value = new_password;
+  updated_form.password_value = PasswordString(std::u16string(new_password));
   CredentialUIEntry updated_credential(updated_form);
 
   // The result of the update should have a new password and no password_issues.
@@ -812,7 +815,8 @@ TEST_F(SavedPasswordsPresenterTest, EditUpdatesDuplicates) {
   updated_form.password_issues.clear();
 
   PasswordForm updated_duplicate_form = duplicate_form;
-  updated_duplicate_form.password_value = new_password;
+  updated_duplicate_form.password_value =
+      PasswordString(std::u16string(new_password));
   updated_duplicate_form.date_password_modified = base::Time::Now();
   updated_duplicate_form.password_issues.clear();
 
@@ -1562,7 +1566,7 @@ TEST_F(SavedPasswordsPresenterWithTwoStoresTest,
 
   // Adding password for the same url/username to the same store should fail.
   PasswordForm similar_form = form;
-  similar_form.password_value = u"new password";
+  similar_form.password_value = PasswordString(u"new password");
   EXPECT_CALL(observer, OnSavedPasswordsChanged).Times(0);
   EXPECT_FALSE(presenter().AddCredential(CredentialUIEntry(similar_form)));
   RunUntilIdle();
@@ -1583,7 +1587,7 @@ TEST_F(SavedPasswordsPresenterWithTwoStoresTest,
   presenter().RemoveObserver(&observer);
 }
 
-TEST_F(SavedPasswordsPresenterWithTwoStoresTest, UpdatePasswordForms) {
+TEST_F(SavedPasswordsPresenterWithTwoStoresTest, UpdateStoredCredentials) {
   PasswordForm account_store_form_1 =
       CreateTestPasswordForm(PasswordForm::Store::kAccountStore, /*index=*/0);
   PasswordForm account_store_form_2 =
@@ -1600,10 +1604,11 @@ TEST_F(SavedPasswordsPresenterWithTwoStoresTest, UpdatePasswordForms) {
   EXPECT_THAT(presenter().GetSavedCredentials(),
               testing::UnorderedElementsAreArray(credentials_to_add));
 
-  account_store_form_1.password_value = u"new_password_1";
-  account_store_form_2.password_value = u"new_password_2";
+  account_store_form_1.password_value = PasswordString(u"new_password_1");
+  account_store_form_2.password_value = PasswordString(u"new_password_2");
 
-  presenter().UpdatePasswordForms({account_store_form_1, account_store_form_2});
+  presenter().UpdateStoredCredentials(
+      FromPasswordForms({account_store_form_1, account_store_form_2}));
   RunUntilIdle();
 
   ASSERT_THAT(presenter().GetSavedCredentials(),
@@ -1713,7 +1718,7 @@ TEST_F(SavedPasswordsPresenterTest, EditPasswordsInCredentialGroup) {
   // Prepare updated credential.
   const std::u16string new_password = u"new_password";
   CredentialUIEntry updated_credential(original_forms);
-  updated_credential.password = new_password;
+  updated_credential.password = PasswordString(std::u16string(new_password));
 
   // Expect successful passwords editing.
   EXPECT_EQ(SavedPasswordsPresenter::EditResult::kSuccess,
@@ -1724,10 +1729,10 @@ TEST_F(SavedPasswordsPresenterTest, EditPasswordsInCredentialGroup) {
 
   // Prepare expected updated forms.
   PasswordForm updated1 = form;
-  updated1.password_value = new_password;
+  updated1.password_value = PasswordString(std::u16string(new_password));
   updated1.date_password_modified = date_password_modified;
   PasswordForm updated2 = form2;
-  updated2.password_value = new_password;
+  updated2.password_value = PasswordString(std::u16string(new_password));
   updated2.date_password_modified = date_password_modified;
 
   EXPECT_THAT(GetAllLoginsSync(&store()),
@@ -1895,6 +1900,24 @@ TEST_F(SavedPasswordsPresenterWithTwoStoresTest, GetSavedCredentials) {
 
   EXPECT_THAT(presenter().GetSavedCredentials(),
               ElementsAre(CredentialUIEntry(expected_form)));
+}
+
+TEST_F(SavedPasswordsPresenterWithTwoStoresTest,
+       GetSavedCredentialsSeparatesDifferentPasswords) {
+  PasswordForm profile_store_form =
+      CreateTestPasswordForm(PasswordForm::Store::kProfileStore);
+
+  PasswordForm account_store_form = profile_store_form;
+  account_store_form.password_value = PasswordString(u"different password");
+  account_store_form.in_store = PasswordForm::Store::kAccountStore;
+
+  profile_store().AddLogin(FromPasswordForm(profile_store_form));
+  account_store().AddLogin(FromPasswordForm(account_store_form));
+  RunUntilIdle();
+
+  EXPECT_THAT(presenter().GetSavedCredentials(),
+              UnorderedElementsAre(CredentialUIEntry(profile_store_form),
+                                   CredentialUIEntry(account_store_form)));
 }
 
 TEST_F(SavedPasswordsPresenterTest, GetAffiliatedGroups) {
@@ -2242,7 +2265,7 @@ TEST_F(SavedPasswordsPresenterWithTwoStoresTest, EditPasswordBothStores) {
 
   CredentialUIEntry updated_credential(profile_store_form);
   updated_credential.username = new_username;
-  updated_credential.password = new_password;
+  updated_credential.password = PasswordString(std::u16string(new_password));
   EXPECT_EQ(SavedPasswordsPresenter::EditResult::kSuccess,
             presenter().EditSavedCredentials(
                 CredentialUIEntry(profile_store_form), updated_credential));
@@ -2251,7 +2274,8 @@ TEST_F(SavedPasswordsPresenterWithTwoStoresTest, EditPasswordBothStores) {
 
   PasswordForm expected_profile_store_form = profile_store_form;
   expected_profile_store_form.username_value = new_username;
-  expected_profile_store_form.password_value = new_password;
+  expected_profile_store_form.password_value =
+      PasswordString(std::u16string(new_password));
   expected_profile_store_form.in_store = PasswordForm::Store::kProfileStore;
   expected_profile_store_form.date_password_modified = base::Time::Now();
   // The result of the update should not contain password issues, because

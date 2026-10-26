@@ -6,14 +6,11 @@ package org.chromium.base;
 
 import static org.hamcrest.core.StringStartsWith.startsWith;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.ThreadUtils.ThreadChecker;
 import org.chromium.base.task.PostTask;
@@ -24,7 +21,6 @@ import org.chromium.build.BuildConfig;
 
 /** Unit tests for ThreadUtils. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ThreadUtilsTest {
     @Before
     public void setUp() {
@@ -32,7 +28,6 @@ public class ThreadUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testThreadChecker_uiThread() {
         Assume.assumeTrue(BuildConfig.ENABLE_ASSERTS);
         ThreadChecker checker = new ThreadChecker();
@@ -52,7 +47,6 @@ public class ThreadUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testThreadChecker_backgroundThread() {
         Assume.assumeTrue(BuildConfig.ENABLE_ASSERTS);
         ThreadChecker[] checkerHolder = new ThreadChecker[1];

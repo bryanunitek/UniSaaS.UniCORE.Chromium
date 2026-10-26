@@ -32,6 +32,7 @@ class Rect;
 namespace cc {
 class LayerTreeFrameSink;
 class LayerTreeMutator;
+struct ManagedMemoryPolicy;
 class PaintWorkletLayerPainter;
 class RenderFrameMetadataObserver;
 
@@ -62,6 +63,7 @@ class CC_EXPORT Proxy {
   virtual void SetNeedsRedraw(const gfx::Rect& damage_rect) = 0;
   virtual void SetTargetLocalSurfaceId(
       const viz::LocalSurfaceId& target_local_surface_id) = 0;
+  virtual void SetMemoryPolicy(const ManagedMemoryPolicy& policy) = 0;
 
   // Detaches the InputDelegateForCompositor (InputHandler) bound on the
   // compositor thread.
@@ -154,6 +156,9 @@ class CC_EXPORT Proxy {
   // Callbacks for unbounded element frames.
   virtual void SetUnboundedFrameSink(
       std::unique_ptr<LayerTreeFrameSink> unbounded_frame_sink,
+      const viz::LocalSurfaceId& local_surface_id) {}
+  virtual void SetUnboundedFrameSinkId(
+      const viz::FrameSinkId& frame_sink_id,
       const viz::LocalSurfaceId& local_surface_id) {}
   virtual void DismissUnboundedFrameSink() {}
   virtual void SetUnboundedLocalSurfaceId(

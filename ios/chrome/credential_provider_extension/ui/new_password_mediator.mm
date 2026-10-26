@@ -15,7 +15,7 @@
 #import "ios/chrome/common/credential_provider/archivable_credential.h"
 #import "ios/chrome/common/credential_provider/archivable_credential_util.h"
 #import "ios/chrome/common/credential_provider/constants.h"
-#import "ios/chrome/common/credential_provider/credential_provider_creation_notifier.h"
+#import "ios/chrome/common/credential_provider/credential_provider_migration_notifier.h"
 #import "ios/chrome/common/credential_provider/credential_store.h"
 #import "ios/chrome/common/credential_provider/net_util.h"
 #import "ios/chrome/common/credential_provider/user_defaults_credential_store.h"
@@ -68,12 +68,14 @@ using base::SysUTF16ToNSString;
 - (void)userDidRequestGeneratedPassword {
   if (self.fetcher.didFetchSpec) {
     PasswordRequirementsSpec spec = self.fetcher.spec;
-    [self.uiHandler setPassword:SysUTF16ToNSString(GeneratePassword(spec))];
+    [self.uiHandler
+        setPassword:SysUTF16ToNSString(GeneratePassword(spec).secure_value())];
     return;
   }
   __weak __typeof__(self) weakSelf = self;
   [self.fetcher fetchSpecWithCompletion:^(PasswordRequirementsSpec spec) {
-    [weakSelf.uiHandler setPassword:SysUTF16ToNSString(GeneratePassword(spec))];
+    [weakSelf.uiHandler
+        setPassword:SysUTF16ToNSString(GeneratePassword(spec).secure_value())];
   }];
 }
 
@@ -109,7 +111,7 @@ using base::SysUTF16ToNSString;
                }
                [self.uiHandler credentialSaved:credential];
                [self userSelectedCredential:credential];
-               [CredentialProviderCreationNotifier notifyCredentialCreated];
+               [CredentialProviderMigrationNotifier notifyMigrationNeeded];
              }];
 }
 

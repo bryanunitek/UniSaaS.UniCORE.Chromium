@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import 'chrome://contextual-tasks/app.js';
+import type {ContextualTasksOnboardingTooltipElement} from 'chrome://contextual-tasks/onboarding_tooltip.js';
 
 import {BrowserProxyImpl} from 'chrome://contextual-tasks/contextual_tasks_browser_proxy.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -18,8 +19,7 @@ import {createContextualTasksAppElement, fixtureUrl} from './contextual_tasks_te
 async function removeThreadFrameToPreventRaceConditions() {
   const appElement = document.querySelector('contextual-tasks-app');
   appElement?.removeThreadFrameListenersForTesting();
-  const threadFrame =
-      appElement?.shadowRoot.querySelector<HTMLElement>('#threadFrame');
+  const threadFrame = appElement?.$.threadFrame;
   threadFrame?.remove();
   await microtasksFinished();
 }
@@ -41,6 +41,10 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
       enableComposeboxJumpFix: false,
       composeboxSmartTabSharingVisible: false,
       contextManagementInComposeboxEnabled: false,
+      showOnboardingTooltip: true,
+      composeboxShowOnboardingTooltipSessionImpressionCap: 3,
+      isOnboardingTooltipDismissCountBelowCap: true,
+      composeboxShowOnboardingTooltipImpressionDelay: 0,
     });
     const proxy = new TestContextualTasksBrowserProxy('http://example.com');
     BrowserProxyImpl.setInstance(proxy);
@@ -54,9 +58,8 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
 
         const composebox =
             appElement.shadowRoot.querySelector('contextual-tasks-composebox');
-        const threadFrame = appElement.shadowRoot.querySelector('#threadFrame');
-        const flexCenterContainer =
-            appElement.shadowRoot.querySelector('#flexCenterContainer');
+        const threadFrame = appElement.$.threadFrame;
+        const flexCenterContainer = appElement.$.flexCenterContainer;
 
         assertTrue(!!composebox);
         assertFalse(composebox.hasAttribute('hidden'));
@@ -68,8 +71,8 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
         // With flag enabled, hidden attribute should NOT be present.
         assertFalse(composebox.hasAttribute('hidden'));
 
-        const threadFrameStyle = getComputedStyle(threadFrame!);
-        const flexCenterStyle = getComputedStyle(flexCenterContainer!);
+        const threadFrameStyle = getComputedStyle(threadFrame);
+        const flexCenterStyle = getComputedStyle(flexCenterContainer);
 
         assertEquals(
             '1', threadFrameStyle.zIndex, 'Thread frame z-index should be 1');
@@ -82,8 +85,8 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
         await proxy.callbackRouterRemote.$.flushForTesting();
         assertFalse(composebox.hasAttribute('hidden'));
 
-        const threadFrameStyleRestored = getComputedStyle(threadFrame!);
-        const flexCenterStyleRestored = getComputedStyle(flexCenterContainer!);
+        const threadFrameStyleRestored = getComputedStyle(threadFrame);
+        const flexCenterStyleRestored = getComputedStyle(flexCenterContainer);
 
         // Verify z-index is not stuck
         assertFalse(threadFrameStyleRestored.zIndex === '1');
@@ -130,15 +133,14 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
 
         const composebox =
             appElement.shadowRoot.querySelector('contextual-tasks-composebox');
-        const threadFrame = appElement.shadowRoot.querySelector('#threadFrame');
-        const flexCenterContainer =
-            appElement.shadowRoot.querySelector('#flexCenterContainer');
+        const threadFrame = appElement.$.threadFrame;
+        const flexCenterContainer = appElement.$.flexCenterContainer;
 
         assertTrue(!!composebox);
         assertFalse(composebox.hasAttribute('hidden'));
 
-        const threadFrameStyle = getComputedStyle(threadFrame!);
-        const flexCenterStyle = getComputedStyle(flexCenterContainer!);
+        const threadFrameStyle = getComputedStyle(threadFrame);
+        const flexCenterStyle = getComputedStyle(flexCenterContainer);
 
         // Verify z-index is not set to basic mode values
         assertFalse(threadFrameStyle.zIndex === '1');
@@ -158,16 +160,15 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
 
         const composebox =
             appElement.shadowRoot.querySelector('contextual-tasks-composebox');
-        const threadFrame = appElement.shadowRoot.querySelector('#threadFrame');
-        const flexCenterContainer =
-            appElement.shadowRoot.querySelector('#flexCenterContainer');
+        const threadFrame = appElement.$.threadFrame;
+        const flexCenterContainer = appElement.$.flexCenterContainer;
 
         assertTrue(!!composebox);
         // With z-order enabled, it should NOT be hidden
         assertFalse(composebox.hasAttribute('hidden'));
 
-        const threadFrameStyle = getComputedStyle(threadFrame!);
-        const flexCenterStyle = getComputedStyle(flexCenterContainer!);
+        const threadFrameStyle = getComputedStyle(threadFrame);
+        const flexCenterStyle = getComputedStyle(flexCenterContainer);
 
         assertEquals(
             '1', threadFrameStyle.zIndex, 'Thread frame z-index should be 1');
@@ -179,7 +180,7 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
   test(
       'sets basic mode when navigating from AI page and backend sends notification',
       async () => {
-        const {appElement, proxy} =
+        const {appElement, proxy, toolbarProxy} =
             await createContextualTasksAppElement(/*url=*/ fixtureUrl);
 
         await removeThreadFrameToPreventRaceConditions();
@@ -190,8 +191,8 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
             'Initial state should not be in basic mode');
 
         // Ensure the app is on an AI page.
-        proxy.callbackRouterRemote.onAiPageStatusChanged(true);
-        await proxy.callbackRouterRemote.$.flushForTesting();
+        toolbarProxy.callbackRouterRemote.onAiPageStatusChanged(true);
+        await toolbarProxy.callbackRouterRemote.$.flushForTesting();
         await microtasksFinished();
 
         // Ensure the new page is also an AI page.
@@ -266,7 +267,7 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
   test(
       'sets basic mode as true when navigating due to backend sending notification',
       async () => {
-        const {appElement, proxy} =
+        const {appElement, proxy, toolbarProxy} =
             await createContextualTasksAppElement(/*url=*/ fixtureUrl);
 
         await removeThreadFrameToPreventRaceConditions();
@@ -277,8 +278,8 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
             'Initial state should not be in basic mode');
 
         // Ensure the app is on an AI page.
-        proxy.callbackRouterRemote.onAiPageStatusChanged(true);
-        await proxy.callbackRouterRemote.$.flushForTesting();
+        toolbarProxy.callbackRouterRemote.onAiPageStatusChanged(true);
+        await toolbarProxy.callbackRouterRemote.$.flushForTesting();
         await microtasksFinished();
 
         // Ensure the new page is also an AI page.
@@ -354,15 +355,15 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
   test(
       'does not set basic mode when navigating from AI page to non-AI page',
       async () => {
-        const {appElement, proxy} =
+        const {appElement, proxy, toolbarProxy} =
             await createContextualTasksAppElement(/*url=*/ fixtureUrl);
 
         // Verify initial state.
         assertFalse(appElement.hasAttribute('is-in-basic-mode_'));
 
         // Ensure the app is on an AI page.
-        proxy.callbackRouterRemote.onAiPageStatusChanged(true);
-        await proxy.callbackRouterRemote.$.flushForTesting();
+        toolbarProxy.callbackRouterRemote.onAiPageStatusChanged(true);
+        await toolbarProxy.callbackRouterRemote.$.flushForTesting();
         await microtasksFinished();
 
         // Ensure the new page is NOT an AI page.
@@ -388,15 +389,15 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
       });
 
   test('does not set basic mode when navigating from non-AI page', async () => {
-    const {appElement, proxy} =
+    const {appElement, toolbarProxy} =
         await createContextualTasksAppElement(/*url=*/ fixtureUrl);
 
     // Verify initial state.
     assertFalse(appElement.hasAttribute('is-in-basic-mode_'));
 
     // Ensure the app is NOT on an AI page.
-    proxy.callbackRouterRemote.onAiPageStatusChanged(false);
-    await proxy.callbackRouterRemote.$.flushForTesting();
+    toolbarProxy.callbackRouterRemote.onAiPageStatusChanged(false);
+    await toolbarProxy.callbackRouterRemote.$.flushForTesting();
     await microtasksFinished();
 
     // Simulate navigation start.
@@ -430,11 +431,12 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
         const fixtureUrlWithHistory = new URL(fixtureUrl);
         fixtureUrlWithHistory.searchParams.set('atvm', '1');
 
-        const {appElement, proxy} = await createContextualTasksAppElement(
-            /*url=*/ fixtureUrlWithHistory.toString(),
-            /*setupProxy=*/ (p) => {
-              p.handler.setIsShownInTab(true);
-            });
+        const {appElement, proxy, toolbarProxy} =
+            await createContextualTasksAppElement(
+                /*url=*/ fixtureUrlWithHistory.toString(),
+                /*setupProxy=*/ (p) => {
+                  p.handler.setIsShownInTab(true);
+                });
 
         await removeThreadFrameToPreventRaceConditions();
 
@@ -442,8 +444,8 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
         assertTrue(appElement.hasAttribute('is-in-basic-mode_'));
 
         // Ensure the app is on an AI page so navigation logic triggers.
-        proxy.callbackRouterRemote.onAiPageStatusChanged(true);
-        await proxy.callbackRouterRemote.$.flushForTesting();
+        toolbarProxy.callbackRouterRemote.onAiPageStatusChanged(true);
+        await toolbarProxy.callbackRouterRemote.$.flushForTesting();
         await microtasksFinished();
 
         // Ensure the new page is also an AI page.
@@ -484,7 +486,7 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
       'sets pending basic mode to false when navigating from AI page and initially not in basic mode',
       async () => {
         loadTimeData.overrideValues({enableBasicMode: true});
-        const {appElement, proxy} =
+        const {appElement, proxy, toolbarProxy} =
             await createContextualTasksAppElement(/*url=*/ fixtureUrl);
 
         await removeThreadFrameToPreventRaceConditions();
@@ -492,8 +494,8 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
         assertFalse(appElement.hasAttribute('is-in-basic-mode_'));
 
         // Ensure the app is on an AI page.
-        proxy.callbackRouterRemote.onAiPageStatusChanged(true);
-        await proxy.callbackRouterRemote.$.flushForTesting();
+        toolbarProxy.callbackRouterRemote.onAiPageStatusChanged(true);
+        await toolbarProxy.callbackRouterRemote.$.flushForTesting();
         await microtasksFinished();
 
         // Ensure the new page is also an AI page.
@@ -536,7 +538,7 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
       'does not set pending basic mode when navigating from AI page and initially in basic mode',
       async () => {
         loadTimeData.overrideValues({enableBasicMode: true});
-        const {appElement, proxy} =
+        const {appElement, proxy, toolbarProxy} =
             await createContextualTasksAppElement(/*url=*/ fixtureUrl);
 
         // Force into basic mode initially.
@@ -546,8 +548,8 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
         assertTrue(appElement.hasAttribute('is-in-basic-mode_'));
 
         // Ensure the app is on an AI page.
-        proxy.callbackRouterRemote.onAiPageStatusChanged(true);
-        await proxy.callbackRouterRemote.$.flushForTesting();
+        toolbarProxy.callbackRouterRemote.onAiPageStatusChanged(true);
+        await toolbarProxy.callbackRouterRemote.$.flushForTesting();
         await microtasksFinished();
 
         // Ensure the new page is also an AI page.
@@ -575,7 +577,7 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
       'updates basic mode on load commit when navigating from AI page and initially not in basic mode',
       async () => {
         loadTimeData.overrideValues({enableBasicMode: true});
-        const {appElement, proxy} =
+        const {appElement, proxy, toolbarProxy} =
             await createContextualTasksAppElement(/*url=*/ fixtureUrl);
 
         await removeThreadFrameToPreventRaceConditions();
@@ -584,8 +586,8 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
         assertFalse(appElement.hasAttribute('is-in-basic-mode_'));
 
         // Ensure the app is on an AI page.
-        proxy.callbackRouterRemote.onAiPageStatusChanged(true);
-        await proxy.callbackRouterRemote.$.flushForTesting();
+        toolbarProxy.callbackRouterRemote.onAiPageStatusChanged(true);
+        await toolbarProxy.callbackRouterRemote.$.flushForTesting();
         await microtasksFinished();
 
         // Ensure the new page is also an AI page.
@@ -637,11 +639,45 @@ suite('ContextualTasksAppComposeboxBasicModeTest', function() {
         /*url=*/ nlmFixtureUrl.toString());
 
     // Verify composeboxHeaderWrapper is hidden.
-    const headerWrapper =
-        appElement.shadowRoot.querySelector('#composeboxHeaderWrapper');
-    assertTrue(!!headerWrapper);
+    const headerWrapper = appElement.$.composeboxHeaderWrapper;
     assertTrue(headerWrapper.hasAttribute('hidden'));
   });
 
+  test(
+      'hides onboarding tooltip when basic mode is entered',
+      async () => {
+        const {appElement, proxy} =
+            await createContextualTasksAppElement(/*url=*/ fixtureUrl);
 
+        const onboardingTooltip =
+            appElement.shadowRoot.querySelector<ContextualTasksOnboardingTooltipElement>(
+                '#onboardingTooltip');
+        assertTrue(!!onboardingTooltip, 'onboardingTooltip should exist');
+        await onboardingTooltip.updateComplete;
+
+        (onboardingTooltip as any).isOnboardingTooltipDismissCountBelowCap_ = true;
+        (onboardingTooltip as any).maximumTimesTooltipShown_ = 3;
+        (onboardingTooltip as any).numberOfTimesTooltipShown_ = 0;
+
+        const targetElement = document.createElement('div');
+        document.body.appendChild(targetElement);
+
+        const crComposebox = appElement.$.composebox.getComposebox();
+        assertTrue(!!crComposebox, 'crComposebox should exist');
+        (crComposebox as any).getHasAutomaticActiveTabChipToken = () => true;
+        (crComposebox as any).getAutomaticActiveTabChipElement = () => targetElement;
+
+        // Trigger tooltip visibility update in normal mode.
+        (appElement as any).updateTooltipVisibility_();
+        await microtasksFinished();
+        assertTrue(onboardingTooltip.shouldShow, 'tooltip should initially show');
+
+        // Enter basic mode.
+        proxy.callbackRouterRemote.enterBasicMode();
+        await proxy.callbackRouterRemote.$.flushForTesting();
+        await microtasksFinished();
+        await appElement.updateComplete;
+
+        assertFalse(onboardingTooltip.shouldShow, 'tooltip should hide in basic mode');
+      });
 });

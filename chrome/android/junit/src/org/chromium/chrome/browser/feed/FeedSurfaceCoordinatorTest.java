@@ -28,13 +28,18 @@ import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtil
 import android.app.Activity;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Matrix;
 import android.graphics.Point;
+import android.os.SystemClock;
 import android.view.MotionEvent;
+import android.view.View;
+import android.widget.FrameLayout;
 
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import org.jni_zero.JniUniquePtr;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -56,6 +61,7 @@ import org.chromium.base.LocaleUtils;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
@@ -68,8 +74,8 @@ import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManag
 import org.chromium.chrome.browser.ntp_customization.policy.NtpCustomizationPolicyManager;
 import org.chromium.chrome.browser.ntp_customization.theme.NtpBackgroundImageCoordinator;
 import org.chromium.chrome.browser.ntp_customization.theme.upload_image.BackgroundImageInfo;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataUploadImage;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.preferences.Pref;
@@ -80,8 +86,6 @@ import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.signin.services.SigninManager;
-import org.chromium.chrome.browser.tabmodel.EmptyTabModel;
-import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.xsurface.HybridListRenderer;
@@ -97,7 +101,6 @@ import org.chromium.components.feed.proto.wire.ReliabilityLoggingEnums.DiscoverL
 import org.chromium.components.prefs.PrefChangeRegistrar;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.search_engines.TemplateUrlService;
-import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.components.user_prefs.UserPrefsJni;
@@ -105,15 +108,12 @@ import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.edge_to_edge.EdgeToEdgePadAdjuster;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 
-import java.util.ArrayList;
 import java.util.Locale;
 import java.util.function.Supplier;
 
 /** Tests for {@link FeedSurfaceCoordinator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @DisableFeatures({ChromeFeatureList.FEED_CONTAINMENT})
-@EnableFeatures({SigninFeatures.ENABLE_SEAMLESS_SIGNIN})
 public class FeedSurfaceCoordinatorTest {
     private static final @SurfaceType int SURFACE_TYPE = SurfaceType.NEW_TAB_PAGE;
     private static final long SURFACE_CREATION_TIME_NS = 1234L;
@@ -153,18 +153,6 @@ public class FeedSurfaceCoordinatorTest {
         }
     }
 
-    private static class TestTabModel extends EmptyTabModel {
-        public final ArrayList<TabModelObserver> mObservers = new ArrayList<>();
-
-        @Override
-        public void addObserver(TabModelObserver observer) {
-            mObservers.add(observer);
-        }
-    }
-
-    private final TestTabModel mTabModel = new TestTabModel();
-    private final TestTabModel mTabModelIncognito = new TestTabModel();
-
     private FeedSurfaceCoordinator mCoordinator;
 
     private Activity mActivity;
@@ -182,6 +170,11 @@ public class FeedSurfaceCoordinatorTest {
 
     // Mocked JNI.
     @Mock private FeedSurfaceRendererBridge.Natives mFeedSurfaceRendererBridgeJniMock;
+
+    @Mock
+    private JniUniquePtr<FeedSurfaceRendererBridge.NativeFeedSurfaceRendererBridge>
+            mNativeSurfaceRenderer;
+
     @Mock private FeedServiceBridge.Natives mFeedServiceBridgeJniMock;
     @Mock private FeedProcessScopeDependencyProvider.Natives mProcessScopeJniMock;
     @Mock private FeedReliabilityLoggingBridge.Natives mFeedReliabilityLoggingBridgeJniMock;
@@ -230,6 +223,8 @@ public class FeedSurfaceCoordinatorTest {
         mLayoutManager = new LinearLayoutManager(mActivity);
         mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
         FeedSurfaceRendererBridgeJni.setInstanceForTesting(mFeedSurfaceRendererBridgeJniMock);
+        when(mFeedSurfaceRendererBridgeJniMock.init(any(), any(), anyInt(), anyLong()))
+                .thenReturn(mNativeSurfaceRenderer);
         FeedServiceBridgeJni.setInstanceForTesting(mFeedServiceBridgeJniMock);
         FeedProcessScopeDependencyProviderJni.setInstanceForTesting(mProcessScopeJniMock);
         FeedReliabilityLoggingBridgeJni.setInstanceForTesting(mFeedReliabilityLoggingBridgeJniMock);
@@ -473,7 +468,7 @@ public class FeedSurfaceCoordinatorTest {
 
         NtpBackgroundDataUploadImage uploadImageData =
                 new NtpBackgroundDataUploadImage(
-                        NtpBackgroundDataBase.PlatformType.ANDROID_LOCAL,
+                        PlatformType.ANDROID,
                         mBackgroundImageInfo,
                         mBitmap,
                         /* primaryColor= */ null,
@@ -583,8 +578,8 @@ public class FeedSurfaceCoordinatorTest {
     public void testDestroy_WithSwipeRefreshLayout() {
         mCoordinator.destroy();
 
-        FeedSwipeRefreshLayout swipeRefreshLayout = mock(FeedSwipeRefreshLayout.class);
-        when(swipeRefreshLayout.isRefreshing()).thenReturn(true);
+        FeedSwipeRefreshLayout swipeRefreshLayout =
+                FeedSwipeRefreshLayout.create(mActivity, View.NO_ID);
         mCoordinator =
                 new FeedSurfaceCoordinator(
                         mActivity,
@@ -600,7 +595,7 @@ public class FeedSurfaceCoordinatorTest {
                         mShareDelegateSupplier,
                         mScrollableContainerDelegate,
                         mPrivacyPreferencesManager,
-                        () -> null,
+                        SupplierUtils.ofNull(),
                         SURFACE_CREATION_TIME_NS,
                         swipeRefreshLayout,
                         /* overScrollDisabled= */ false,
@@ -609,13 +604,54 @@ public class FeedSurfaceCoordinatorTest {
                         mEdgeToEdgeSupplier,
                         mModuleRegistry);
 
+        swipeRefreshLayout.enableSwipe(/* scrollableContainerDelegate= */ null);
+        swipeRefreshLayout.setRefreshing(true);
+        assertTrue(swipeRefreshLayout.isEnabled());
+        assertTrue(swipeRefreshLayout.isRefreshing());
+        assertTrue(swipeRefreshLayout.getRefreshListenersForTesting().hasObserver(mCoordinator));
+
         mCoordinator.destroy();
 
-        verify(swipeRefreshLayout).setRefreshing(false);
-        verify(swipeRefreshLayout).removeOnRefreshListener(mCoordinator);
-        verify(swipeRefreshLayout).disableSwipe();
+        assertFalse(swipeRefreshLayout.getRefreshListenersForTesting().hasObserver(mCoordinator));
+        assertFalse(swipeRefreshLayout.isRefreshing());
+        assertFalse(swipeRefreshLayout.isEnabled());
 
         mCoordinator = null;
+    }
+
+    @Test
+    public void testRootViewFocusabilityAndTapRequestsFocus() {
+        FrameLayout rootView = mCoordinator.getRootViewForTesting();
+        assertTrue(rootView.isFocusable());
+        assertTrue(rootView.isFocusableInTouchMode());
+
+        View otherView = new View(mActivity);
+        otherView.setFocusableInTouchMode(true);
+        rootView.addView(otherView);
+        otherView.requestFocus();
+        assertTrue(otherView.isFocused());
+        assertFalse(rootView.isFocused());
+
+        long downTime = SystemClock.uptimeMillis();
+        MotionEvent downEvent =
+                MotionEvent.obtain(
+                        /* downTime= */ downTime,
+                        /* eventTime= */ downTime,
+                        /* action= */ MotionEvent.ACTION_DOWN,
+                        /* x= */ 100f,
+                        /* y= */ 100f,
+                        /* metaState= */ 0);
+        rootView.dispatchTouchEvent(downEvent);
+        assertTrue(rootView.isFocused());
+        assertFalse(otherView.isFocused());
+        downEvent.recycle();
+    }
+
+    @Test
+    public void testHasDrawnFrame() {
+        assertFalse(mCoordinator.hasDrawnFrame());
+        mCoordinator.getView().draw(new Canvas());
+        assertTrue(mCoordinator.hasDrawnFrame());
     }
 
     private boolean hasStreamBound() {

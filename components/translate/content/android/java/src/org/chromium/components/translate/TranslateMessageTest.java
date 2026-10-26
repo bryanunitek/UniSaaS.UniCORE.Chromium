@@ -13,8 +13,6 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import android.app.Activity;
 import android.content.Context;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -28,6 +26,7 @@ import org.mockito.invocation.InvocationOnMock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.mockito.stubbing.Answer;
+import org.robolectric.Robolectric;
 
 import org.chromium.base.UnownedUserDataHost;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -73,7 +72,6 @@ public final class TranslateMessageTest {
     }
 
     @Test
-    @SmallTest
     public void testCreateWithNullWindowAndroid() {
         doReturn(null).when(mWebContents).getTopLevelNativeWindow();
         Assert.assertNull(
@@ -82,7 +80,6 @@ public final class TranslateMessageTest {
     }
 
     @Test
-    @SmallTest
     public void testCreateWithNullActivityWeakReference() {
         WindowAndroid windowAndroid = Mockito.mock(WindowAndroid.class);
         doReturn(null).when(windowAndroid).getActivity();
@@ -93,7 +90,6 @@ public final class TranslateMessageTest {
     }
 
     @Test
-    @SmallTest
     public void testCreateWithNullActivity() {
         WindowAndroid windowAndroid = Mockito.mock(WindowAndroid.class);
         doReturn(new WeakReference<Activity>(null)).when(windowAndroid).getActivity();
@@ -104,9 +100,8 @@ public final class TranslateMessageTest {
     }
 
     @Test
-    @SmallTest
     public void testCreateWithNullMessageDispatcher() {
-        Activity activity = Mockito.mock(Activity.class);
+        Activity activity = Robolectric.buildActivity(Activity.class).get();
         WindowAndroid windowAndroid = Mockito.mock(WindowAndroid.class);
 
         doReturn(new WeakReference<Activity>(activity)).when(windowAndroid).getActivity();
@@ -119,7 +114,6 @@ public final class TranslateMessageTest {
     }
 
     @Test
-    @SmallTest
     public void testFullTranslateFlowThenDismissViaGesture() {
         TranslateMessage translateMessage =
                 new TranslateMessage(
@@ -213,7 +207,6 @@ public final class TranslateMessageTest {
     }
 
     @Test
-    @SmallTest
     public void testShowMessageWithoutOverflowMenu() {
         TranslateMessage translateMessage =
                 new TranslateMessage(
@@ -256,7 +249,6 @@ public final class TranslateMessageTest {
     }
 
     @Test
-    @SmallTest
     public void testDismissFromNative() {
         TranslateMessage translateMessage =
                 new TranslateMessage(
@@ -300,7 +292,6 @@ public final class TranslateMessageTest {
     }
 
     @Test
-    @SmallTest
     public void testClearNativePointer() {
         TranslateMessage translateMessage =
                 new TranslateMessage(
@@ -326,7 +317,7 @@ public final class TranslateMessageTest {
         translateMessage.clearNativePointer();
 
         // No native methods should be called after clearing the native pointer.
-        var unused = messageProperties.get(MessageBannerProperties.ON_PRIMARY_ACTION).get();
+        var _ = messageProperties.get(MessageBannerProperties.ON_PRIMARY_ACTION).get();
         messageProperties.get(MessageBannerProperties.ON_DISMISSED).onResult(DismissReason.GESTURE);
         Assert.assertNull(
                 translateMessage.handleSecondaryMenuItemClicked(
@@ -336,7 +327,6 @@ public final class TranslateMessageTest {
     }
 
     @Test
-    @SmallTest
     public void testConstructMenuItemArray() {
         final String[] titles = new String[] {"foo", "bar", "", "English", "French"};
         final String[] subtitles = new String[] {"", "", "", "", "Français"};

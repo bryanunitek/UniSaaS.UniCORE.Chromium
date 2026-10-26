@@ -4,9 +4,13 @@
 
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_coordinator.h"
 
+#include <memory>
 #include <string>
+#include <utility>
 
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/types/to_address.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_actions.h"
@@ -47,7 +51,7 @@ void UpdateBubbleVisibilityState(BrowserWindowInterface* browser,
   }
 
   auto* action_item = actions::ActionManager::Get().FindAction(
-      kActionZoomNormal, browser->GetActions()->root_action_item());
+      kActionShowZoomBubble, BrowserActions::From(browser)->root_action_item());
   CHECK(action_item);
   action_item->SetIsShowingBubble(is_bubble_visible);
 }
@@ -80,13 +84,36 @@ ZoomBubbleCoordinator* ZoomBubbleCoordinator::From(
 void ZoomBubbleCoordinator::OnWidgetVisibilityChanged(views::Widget* widget,
                                                       bool visible) {
   CHECK(widget_observation_.IsObservingSource(widget));
-  UpdateZoomBubbleStateAndIconVisibility(
-      /*is_bubble_visible=*/visible);
+  if (visible) {
+    UpdateZoomBubbleStateAndIconVisibility(
+        /*is_bubble_visible=*/true);
+  } else {
+    // The visibility state should be updated asynchronously because a
+    // light-dismiss click on the anchor view triggers widget hiding during
+    // mouse press. Deferring the update keeps IsBubbleShowing() true long
+    // enough for IconLabelBubbleView to suppress the mouse release and toggle
+    // the bubble.
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<ZoomBubbleCoordinator> coordinator,
+                          base::WeakPtr<views::Widget> widget) {
+                         if (coordinator && widget &&
+                             coordinator->widget_observation_.IsObservingSource(
+                                 widget.get()) &&
+                             !widget->IsVisible()) {
+                           coordinator->UpdateZoomBubbleStateAndIconVisibility(
+                               /*is_bubble_visible=*/false);
+                         }
+                       },
+                       weak_ptr_factory_.GetWeakPtr(), widget->GetWeakPtr()));
+  }
 }
 
 void ZoomBubbleCoordinator::OnWidgetDestroying(views::Widget* widget) {
   CHECK(widget_observation_.IsObservingSource(widget));
   widget_observation_.Reset();
+  UpdateZoomBubbleStateAndIconVisibility(
+      /*is_bubble_visible=*/false);
 }
 
 void ZoomBubbleCoordinator::Show(
@@ -100,6 +127,12 @@ void ZoomBubbleCoordinator::Show(
     return;
   }
 
+  // Close any existing bubble, whether it is currently visible or not. A bubble
+  // can be hidden without being closed (e.g. when its parent window is hidden
+  // by the OS during a sleep/wake cycle on macOS), and a zoom change from an
+  // extension may then request a new bubble before the old one has been
+  // closed. Hide() must therefore close every widget we still observe, not just
+  // visible ones, so that the state below is consistent.
   Hide();
 
   if (widget_observation_.IsObserving()) {
@@ -151,11 +184,21 @@ void ZoomBubbleCoordinator::OnImmersiveModeControllerDestroyed() {
 }
 
 void ZoomBubbleCoordinator::Hide() {
-  if (!IsShowing()) {
+  // Do not gate this on IsShowing(): that also requires the widget to be
+  // visible, but a bubble widget may be hidden without being closed (for
+  // example when the OS hides the parent window). Such a widget is still being
+  // observed and must be closed here, otherwise Show() would later find an
+  // observed widget that was never closed.
+  if (!widget_observation_.IsObserving()) {
     return;
   }
 
-  widget_observation_.GetSource()->Close();
+  views::Widget* widget = widget_observation_.GetSource();
+  if (widget->IsClosed()) {
+    return;
+  }
+
+  widget->Close();
 }
 
 bool ZoomBubbleCoordinator::RefreshIfShowing(content::WebContents* contents) {
@@ -212,17 +255,15 @@ void ZoomBubbleCoordinator::UpdateZoomBubbleStateAndIconVisibility(
     return;
   }
 
-  if (!IsPageActionMigrated(PageActionIconType::kZoom)) {
-    manager_->UpdateLegacyPageActionIcon();
-    return;
-  }
-
   // Update the bubble visibility state before we refresh the icon so that
   // UpdateZoomIconVisibility() sees the correct value bubble state value.
   UpdateBubbleVisibilityState(base::to_address(browser_), is_bubble_visible);
 
   auto* tab_feature = tab_interface->GetTabFeatures();
   CHECK(tab_feature);
+  tab_feature->zoom_view_controller()->UpdateBubbleVisibility(
+      /*prefer_to_show_bubble=*/is_bubble_visible,
+      /*from_user_gesture=*/false);
   tab_feature->zoom_view_controller()->UpdatePageActionIconVisibility(
       is_bubble_visible);
 }

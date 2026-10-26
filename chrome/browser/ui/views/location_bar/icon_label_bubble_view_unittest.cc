@@ -4,9 +4,6 @@
 
 #include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
 
-#include "chrome/browser/ui/views/location_bar/slide_and_crossfade_icon_label_bubble_layout_strategy.h"
-#include "chrome/browser/ui/views/location_bar/standard_icon_label_bubble_layout_strategy.h"
-
 #include <optional>
 
 #include "base/memory/raw_ptr.h"
@@ -14,10 +11,15 @@
 #include "build/build_config.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+#include "chrome/browser/ui/views/location_bar/slide_and_crossfade_icon_label_bubble_layout_strategy.h"
+#include "chrome/browser/ui/views/location_bar/standard_icon_label_bubble_layout_strategy.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/strings/grit/components_strings.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/compositor/layer.h"
+#include "ui/base/pointer/touch_ui_controller.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/animation/animation_test_api.h"
@@ -25,6 +27,8 @@
 #include "ui/gfx/image/image_unittest_util.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/gfx/text_constants.h"
+#include "ui/native_theme/mock_os_settings_provider.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/test/ink_drop_host_test_api.h"
 #include "ui/views/animation/test/test_ink_drop.h"
@@ -57,9 +61,12 @@ class TestIconLabelBubbleView : public IconLabelBubbleView {
   using IconLabelBubbleView::GetAnimationValue;
   using IconLabelBubbleView::GetCrossfadeImageView;
   using IconLabelBubbleView::image_container_view;
+  using IconLabelBubbleView::IsShrinking;
   using IconLabelBubbleView::RemoveLayerFromRegions;
   using IconLabelBubbleView::ResetSlideAnimation;
+  using IconLabelBubbleView::SetUpForInOutAnimation;
   using IconLabelBubbleView::UpdateAnimationProgress;
+  using IconLabelBubbleView::UpdateBackground;
 
   enum State {
     GROWING,
@@ -172,8 +179,7 @@ class IconLabelBubbleViewTest : public IconLabelBubbleViewTestBase {
     ChromeViewsTestBase::SetUp();
     gfx::FontList font_list;
 
-    widget_ =
-        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+    widget_ = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
     generator_ = std::make_unique<ui::test::EventGenerator>(
         GetRootWindow(widget_.get()));
     view_ = widget_->SetContentsView(
@@ -206,6 +212,8 @@ class IconLabelBubbleViewTest : public IconLabelBubbleViewTestBase {
   void FastForwardLabelAnimationBy(base::TimeDelta delta) {
     label_animation_->Step(base::TimeTicks::Now() + delta);
   }
+
+  gfx::AnimationTestApi* label_animation() { return label_animation_.get(); }
 
   TestIconLabelBubbleView* view() { return view_; }
 
@@ -806,6 +814,7 @@ TEST_F(IconLabelBubbleViewTest, AdditionalPaddingNotShownOnEmptyText) {
 
 TEST_F(IconLabelBubbleViewTest,
        AdditionalPaddingNotShownWhileCollapsedAndAnimated) {
+  gfx::Animation::SetPrefersReducedMotionForTesting(false);
   view()->SetUpAnimation();
   view()->SetSlideAnimationDuration(base::Seconds(60));
   view()->ResetSlideAnimation(false);
@@ -937,24 +946,38 @@ TEST_F(IconLabelBubbleViewTest, SlideAndCrossfadeAnimationConfiguredAndDriven) {
   view()->SetCrossfadeImage(
       ui::ImageModel::FromImage(gfx::test::CreateImage(16, 16)));
 
-  // Verify trailing icon is present and visible.
-  ASSERT_NE(view()->GetCrossfadeImageView(), nullptr);
-  EXPECT_TRUE(view()->GetCrossfadeImageView()->GetVisible());
+  // Verify trailing icon is present and visible with layer.
+  views::ImageView* trailing_image = view()->GetCrossfadeImageView();
+  ASSERT_NE(trailing_image, nullptr);
+  EXPECT_TRUE(trailing_image->GetVisible());
+  EXPECT_TRUE(trailing_image->GetFlipCanvasOnPaintForRTLUI());
+  ASSERT_NE(trailing_image->layer(), nullptr);
 
   // Leading icon container layer is created.
   views::View* image_container = view()->image_container_view();
   ASSERT_NE(image_container, nullptr);
   ASSERT_NE(image_container->layer(), nullptr);
 
-  // Leading icon is fully opaque when slide animation is collapsed (0.0).
+  // Verify configured animation durations (333ms expand, 383ms collapse).
+  SlideAndCrossfadeIconLabelBubbleAnimationLayoutStrategy strategy(*view());
+  EXPECT_EQ(strategy.GetAnimationDuration(true), base::Milliseconds(333));
+  EXPECT_EQ(strategy.GetAnimationDuration(false), base::Milliseconds(383));
+
+  // Beginning state (collapsed / 0.0): leading icon is fully opaque and
+  // trailing icon is fully transparent, with identity layer transforms.
   view()->ResetSlideAnimation(false);
   view()->UpdateAnimationProgress();
   EXPECT_FLOAT_EQ(image_container->layer()->opacity(), 1.0f);
+  EXPECT_FLOAT_EQ(trailing_image->layer()->opacity(), 0.0f);
+  EXPECT_TRUE(image_container->layer()->transform().IsIdentity());
 
-  // Leading icon is fully transparent when slide animation is expanded (1.0).
+  // End state (expanded / 1.0): leading icon is fully transparent and
+  // trailing icon is fully opaque, with identity layer transforms.
   view()->ResetSlideAnimation(true);
   view()->UpdateAnimationProgress();
   EXPECT_FLOAT_EQ(image_container->layer()->opacity(), 0.0f);
+  EXPECT_FLOAT_EQ(trailing_image->layer()->opacity(), 1.0f);
+  EXPECT_TRUE(image_container->layer()->transform().IsIdentity());
 }
 
 TEST_F(IconLabelBubbleViewTest, LayerRecreationOnInkDropRegionsChange) {
@@ -971,11 +994,198 @@ TEST_F(IconLabelBubbleViewTest, LayerRecreationOnInkDropRegionsChange) {
 
   // Simulate hover events which trigger AddLayerToRegion /
   // RemoveLayerFromRegions.
-  ui::Layer dummy_layer;
+  ui::LayerTextured dummy_layer;
   view()->AddLayerToRegion(&dummy_layer, views::LayerRegion::kAbove);
   view()->RemoveLayerFromRegions(&dummy_layer);
 
   // Verify layer is preserved and opacity is synced back.
   EXPECT_NE(image_container->layer(), nullptr);
   EXPECT_FLOAT_EQ(image_container->layer()->opacity(), 0.0f);
+}
+
+TEST_F(IconLabelBubbleViewTest, SlideAndCrossfadeCollapsedLayout) {
+  constexpr int kExpandedWidth = 200;
+  constexpr int kLargerThanMinimumWidth = 35;
+  constexpr int kSmallerThanMinimumWidth = 28;
+  constexpr int kHeight = 24;
+  constexpr int kTestImageSize = 16;
+
+  view()->SetBounds(0, 0, kExpandedWidth, kHeight);
+  view()->SetCrossfadeImage(ui::ImageModel::FromImage(
+      gfx::test::CreateImage(kTestImageSize, kTestImageSize)));
+
+  // Set to fully expanded.
+  view()->ResetSlideAnimation(true);
+  view()->UpdateAnimationProgress();
+
+  views::View* image_container = view()->image_container_view();
+  ASSERT_NE(image_container, nullptr);
+  ASSERT_NE(image_container->layer(), nullptr);
+  EXPECT_FLOAT_EQ(image_container->layer()->opacity(), 0.0f);
+
+  // Set background visibility to kWithLabel to verify background painting.
+  view()->SetBackgroundVisibility(
+      IconLabelBubbleView::BackgroundVisibility::kWithLabel);
+  view()->UpdateBackground();
+
+  // Resize view bounds directly to constrained collapsed width.
+  view()->SetBounds(0, 0, kSmallerThanMinimumWidth, kHeight);
+
+  // Opacity should automatically update to 1.0f on bounds change.
+  EXPECT_FLOAT_EQ(image_container->layer()->opacity(), 1.0f);
+
+  // Verify that the background is still painted in the constrained collapsed
+  // state.
+  EXPECT_NE(nullptr, view()->GetBackground());
+
+  // Verify that the layout stops expanding at its preferred minimum width
+  // (31px) when there is ample room (e.g. 35px available).
+  // dimensions.leading_expanded (6) + icon_size (15) +
+  // dimensions.trailing_expanded (10) = 31.
+  views::ProposedLayout layout = view()->CalculateProposedLayout(
+      views::SizeBounds(kLargerThanMinimumWidth, kHeight));
+  EXPECT_EQ(layout.host_size.width(), 31);
+
+  // Verify that the layout caps down and centers the icon when squeezed below
+  // its preferred minimum width (e.g. 28px available).
+  int icon_size = view()->image_container_view()->GetPreferredSize().width();
+  views::ProposedLayout layout_constrained = view()->CalculateProposedLayout(
+      views::SizeBounds(kSmallerThanMinimumWidth, kHeight));
+  EXPECT_EQ(layout_constrained.host_size.width(), kSmallerThanMinimumWidth);
+  const views::ChildLayout* image_layout =
+      layout_constrained.GetLayoutFor(view()->image_container_view());
+  ASSERT_NE(image_layout, nullptr);
+  // Assert that the leading icon is centered symmetrically inside the
+  // constrained 28px space.
+  EXPECT_EQ(image_layout->bounds.x(),
+            (kSmallerThanMinimumWidth - icon_size) / 2);
+}
+
+TEST_F(IconLabelBubbleViewTest,
+       SlideAndCrossfadeShouldCollapsePreventsAnimation) {
+  view()->SetBounds(0, 0, 200, 24);
+  view()->SetCrossfadeImage(
+      ui::ImageModel::FromImage(gfx::test::CreateImage(16, 16)));
+
+  // Set bounds under constraint so the strategy evaluates ShouldCollapse to
+  // true.
+  view()->SetBounds(0, 0, 35, 24);
+
+  // Trigger AnimateIn().
+  view()->AnimateIn(std::nullopt);
+
+  // Since it should collapse, the animation should not start and
+  // ShouldShowLabel should stay false.
+  EXPECT_FALSE(view()->is_animating_label());
+  EXPECT_FALSE(view()->ShouldShowLabel());
+}
+
+TEST_F(IconLabelBubbleViewTest, SetUpForInOutAnimationDurationAndFraction) {
+  // Default static hold duration is 1800ms. With 600ms fade-in and 600ms
+  // fade-out, the total animation slide duration should be
+  // 1800ms + 2 * 600ms = 3000ms.
+  // The fraction of the animation spent in the fade-in (and fade-out) phase is
+  // 600ms / 3000ms = 0.2.
+  view()->SetUpForInOutAnimation();
+  EXPECT_EQ(view()->slide_animation_for_testing().GetSlideDuration(),
+            base::Milliseconds(3000));
+  EXPECT_DOUBLE_EQ(view()->open_state_fraction_for_testing(), 0.2);
+
+  // Custom static hold duration of 1200ms.
+  // Total slide duration: 1200ms + 2 * 600ms = 2400ms.
+  // Fraction: 600ms / 2400ms = 0.25.
+  view()->SetUpForInOutAnimation(base::Milliseconds(1200));
+  EXPECT_EQ(view()->slide_animation_for_testing().GetSlideDuration(),
+            base::Milliseconds(2400));
+  EXPECT_DOUBLE_EQ(view()->open_state_fraction_for_testing(), 0.25);
+}
+
+TEST_F(IconLabelBubbleViewTest, InOutAnimationShrinkingThreshold) {
+  gfx::ScopedAnimationDurationScaleMode normal_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+
+  view()->SetUpForInOutAnimation();
+  const base::TimeTicks start_time = base::TimeTicks::Now();
+  label_animation()->SetStartTime(start_time);
+  view()->slide_animation_for_testing().Show();
+  ASSERT_TRUE(view()->slide_animation_for_testing().is_animating());
+
+  // At 600ms (progress = 600/3000 = 0.2, end of fade-in), it is not shrinking.
+  label_animation()->Step(start_time + base::Milliseconds(600));
+  EXPECT_DOUBLE_EQ(view()->slide_animation_for_testing().GetCurrentValue(),
+                   0.2);
+  EXPECT_FALSE(view()->IsShrinking());
+
+  // At 2100ms (progress = 2100/3000 = 0.7, steady hold phase), it is not
+  // shrinking.
+  // With the old bug (open_state_fraction_ = 600 / 1800 = 1/3), 1 - fraction
+  // was 2/3 (~0.667), which erroneously caused IsShrinking() to return true at
+  // progress 0.7.
+  label_animation()->Step(start_time + base::Milliseconds(2100));
+  EXPECT_DOUBLE_EQ(view()->slide_animation_for_testing().GetCurrentValue(),
+                   0.7);
+  EXPECT_FALSE(view()->IsShrinking());
+
+  // At 2700ms (progress = 2700/3000 = 0.9, in the fade-out phase past 0.8),
+  // it is shrinking.
+  label_animation()->Step(start_time + base::Milliseconds(2700));
+  EXPECT_DOUBLE_EQ(view()->slide_animation_for_testing().GetCurrentValue(),
+                   0.9);
+  EXPECT_TRUE(view()->IsShrinking());
+}
+
+namespace {
+
+class HighlightableTestInkDrop : public TestInkDrop {
+ public:
+  void SetHighlighted(bool highlighted) { highlighted_ = highlighted; }
+  bool IsHighlightFadingInOrVisible() const override { return highlighted_; }
+
+ private:
+  bool highlighted_ = false;
+};
+
+}  // namespace
+
+TEST_F(IconLabelBubbleViewTest, HighContrastInkDropLabelLayerAndColor) {
+  ui::MockOsSettingsProvider os_settings_provider;
+
+  // In normal mode, the label does not paint to a layer and subpixel rendering
+  // is enabled.
+  EXPECT_FALSE(view()->GetLabel()->layer());
+  EXPECT_TRUE(view()->GetLabel()->GetSubpixelRenderingEnabled());
+
+  // Enable forced colors and high contrast.
+  os_settings_provider.SetForcedColorsActive(true);
+  os_settings_provider.SetPreferredContrast(
+      ui::NativeTheme::PreferredContrast::kMore);
+
+  ASSERT_TRUE(view()->GetLabel()->layer());
+  EXPECT_FALSE(view()->GetLabel()->layer()->fills_bounds_opaquely());
+  EXPECT_FALSE(view()->GetLabel()->GetSubpixelRenderingEnabled());
+
+  auto test_ink_drop = std::make_unique<HighlightableTestInkDrop>();
+  auto* test_ink_drop_ptr = test_ink_drop.get();
+  InkDropHostTestApi(views::InkDrop::Get(view()))
+      .SetInkDrop(std::move(test_ink_drop));
+
+  const SkColor normal_color = view()->GetLabel()->GetEnabledColor();
+  const SkColor hover_color =
+      view()->GetColorProvider()->GetColor(ui::kColorIconHovered);
+
+  // Highlighting the ink drop updates the label color to kColorIconHovered.
+  test_ink_drop_ptr->SetHighlighted(true);
+  views::InkDrop::Get(view())->OnInkDropHighlightedChanged();
+  EXPECT_EQ(view()->GetLabel()->GetEnabledColor(), hover_color);
+
+  // Clearing the ink drop highlight restores the normal foreground color.
+  test_ink_drop_ptr->SetHighlighted(false);
+  views::InkDrop::Get(view())->OnInkDropHighlightedChanged();
+  EXPECT_EQ(view()->GetLabel()->GetEnabledColor(), normal_color);
+
+  // Disabling forced colors destroys the label layer and re-enables subpixel
+  // rendering.
+  os_settings_provider.SetForcedColorsActive(false);
+  EXPECT_FALSE(view()->GetLabel()->layer());
+  EXPECT_TRUE(view()->GetLabel()->GetSubpixelRenderingEnabled());
 }

@@ -21,8 +21,7 @@ class MockIbanAccessManager : public IbanAccessManager {
 
   MOCK_METHOD(void,
               FetchValue,
-              (const Suggestion::Payload&,
-               (base::OnceCallback<void(const std::u16string& value)>)),
+              (const Suggestion::Payload&, OnIbanFetchedCallback),
               (override));
 };
 

@@ -7,6 +7,7 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <XCTest/XCTest.h>
 
 #import "ui/base/device_form_factor.h"
 
@@ -18,9 +19,41 @@ typedef NS_OPTIONS(NSUInteger, TestExpectationType) {
   TestExpectationTypeCrash = 1 << 3,
 };
 
+enum class TestExpectationMatchResult {
+  // XCTest reported an unmatched expected failure (the test unexpectedly
+  // passed).
+  kUnmatched = 0,
+  // The issue occurred and matches this expectation.
+  kMatched,
+  // The issue occurred but does not match this expectation (e.g. crash vs
+  // failure mismatch).
+  kMismatched,
+};
+
 @interface TestExpectationEntry : NSObject
 @property(nonatomic, copy) NSString* bug;
 @property(nonatomic, assign) TestExpectationType type;
+// 1-indexed line number of this expectation entry in test_expectations.txt.
+@property(nonatomic, assign) NSUInteger lineNumber;
+// File path where this expectation entry was defined.
+@property(nonatomic, copy) NSString* filePath;
+
+// Returns a human-readable description of the expected outcomes (e.g. "fail",
+// "crash", "pass or fail").
+- (NSString*)expectedOutcomeDescription;
+
+// Returns a console message documenting this test expectation when running the
+// test.
+- (NSString*)documentationMessage;
+
+// Returns a message clearly stating the unmet expectation (actual vs expected
+// outcome) and identifying the line number of the test expectations file.
+- (NSString*)unmetExpectationMessageWithActualOutcome:(NSString*)actualOutcome;
+
+// Returns how the given XCTest issue type and description match this
+// expectation.
+- (TestExpectationMatchResult)matchesIssueType:(XCTIssueType)issueType
+                            compactDescription:(NSString*)compactDescription;
 @end
 
 // Helper class to manage and check expected failures for XCTests.

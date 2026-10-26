@@ -10,22 +10,26 @@
 #include <string_view>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation_traits.h"
 #include "base/time/time.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 
-class Browser;
+class BrowserWindowInterface;
 class ChipController;
 class CommandUpdater;
 class LocationBarModel;
 class LocationBarTesting;
 class OmniboxController;
+class PermissionDashboardController;
 class OmniboxView;
+class OmniboxPopupPresenterDelegate;
 class OmniboxPopupView;
 class Profile;
 
@@ -42,6 +46,10 @@ class MouseEvent;
 class TrackedElement;
 }
 
+namespace views {
+class Widget;
+}
+
 // The LocationBar class is a virtual interface, defining access to the
 // window's location bar component.  This class exists so that cross-platform
 // components like the browser command system can talk to the platform
@@ -52,7 +60,7 @@ class LocationBar {
   // Holds the details necessary to open the omnibox match via browser commands.
   struct NavigationParams {
     GURL destination_url;
-    WindowOpenDisposition disposition{WindowOpenDisposition::CURRENT_TAB};
+    WindowOpenDisposition disposition{WindowOpenDisposition::kCurrentTab};
     ui::PageTransition transition{ui::PAGE_TRANSITION_TYPED |
                                   ui::PAGE_TRANSITION_FROM_ADDRESS_BAR};
     base::TimeTicks match_selection_timestamp;
@@ -66,6 +74,7 @@ class LocationBar {
     ~Observer() override;
 
     virtual void OnLocationBarBoundsChanged();
+    virtual void OnLocationBarFocusChanged();
   };
 
   explicit LocationBar(CommandUpdater* command_updater);
@@ -109,6 +118,8 @@ class LocationBar {
 
   virtual OmniboxPopupView* GetOmniboxPopupView() = 0;
 
+  virtual OmniboxPopupPresenterDelegate* GetPresenterDelegate();
+
   // Returns the OmniboxController owned by this LocationBar.
   virtual OmniboxController* GetOmniboxController() = 0;
 
@@ -129,6 +140,12 @@ class LocationBar {
   // Controls the chip in the LocationBar.
   virtual ChipController* GetChipController() = 0;
 
+  // Controls the permission dashboard in the LocationBar.
+  virtual PermissionDashboardController* GetPermissionDashboardController();
+
+  // Announces an alert for accessibility screen readers.
+  virtual void AnnounceAlert(const std::u16string& announcement) = 0;
+
   // Called when anything has changed that might affect the layout or contents
   // of the views around the edit, including the text of the edit and the
   // status of any keyword- or hint-related state.
@@ -137,12 +154,20 @@ class LocationBar {
   // Called when the edit should update itself without restoring any tab state.
   virtual void UpdateWithoutTabRestore() = 0;
 
+  // Called to notify the location bar (and its omnibox popup presenter)
+  // whether a permission prompt is currently showing.
+  virtual void SetPermissionPromptShowing(bool showing) {}
+
   CommandUpdater* command_updater() { return command_updater_; }
   const CommandUpdater* command_updater() const { return command_updater_; }
 
   // Warning: this may be null if the location bar is not visible.
   // Gets an anchor for the entire location bar.
   virtual ui::TrackedElement* GetAnchorOrNull() = 0;
+
+  // Returns the ElementContext used to look up tracked elements in this
+  // location bar.
+  virtual ui::ElementContext GetElementContext() const;
 
   // Returns true if the location bar is currently in the middle of a popup
   // state transition.
@@ -151,7 +176,7 @@ class LocationBar {
   // Returns the Browser object this is for. This may be nullptr sometimes;
   // known cases include captive portals on ChromeOS and
   // PresentationReceiverWindowView.
-  virtual Browser* GetBrowser() = 0;
+  virtual BrowserWindowInterface* GetBrowser() = 0;
 
   // Returns the profile this is for.
   virtual Profile* GetProfile() = 0;
@@ -175,6 +200,10 @@ class LocationBar {
 
   // Returns true if the mouse is over the location bar.
   virtual bool IsMouseHovered() const = 0;
+
+  // Returns true if the focus is within location bar, including any of the
+  // child widgets.
+  virtual bool IsFocusWithin() const = 0;
 
   // Tells whatever UI system is used that it should recompute sizes of things.
   virtual void InvalidateLayout() = 0;
@@ -208,15 +237,24 @@ class LocationBar {
   void AddLocationBarObserver(Observer* observer);
   void RemoveLocationBarObserver(Observer* observer);
 
+  base::WeakPtr<LocationBar> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+  base::WeakPtr<const LocationBar> GetWeakPtr() const {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  protected:
   virtual ~LocationBar();
 
   void NotifyBoundsChanged();
+  void NotifyFocusChanged();
 
  private:
   NavigationParams navigation_params_;
   const raw_ptr<CommandUpdater, DanglingUntriaged> command_updater_;
   base::ObserverList<Observer> observers_;
+  base::WeakPtrFactory<LocationBar> weak_ptr_factory_{this};
 };
 
 class LocationBarTesting {
@@ -227,6 +265,13 @@ class LocationBarTesting {
 
   // Returns if the content setting image at |index| is displaying a bubble.
   virtual bool IsContentSettingBubbleShowing(size_t index) = 0;
+
+  // Returns the bubble widget for the content setting image at |index|, if
+  // showing.
+  virtual views::Widget* GetContentSettingBubbleWidget(size_t index) = 0;
+
+  // Returns if the content setting image at |index| is currently visible.
+  virtual bool IsContentSettingImageVisible(size_t index) = 0;
 
  protected:
   virtual ~LocationBarTesting() = default;

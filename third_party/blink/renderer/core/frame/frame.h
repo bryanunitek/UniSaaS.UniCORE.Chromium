@@ -39,7 +39,7 @@
 #include "third_party/blink/public/common/fenced_frame/redacted_fenced_frame_config.h"
 #include "third_party/blink/public/common/frame/frame_ad_evidence.h"
 #include "third_party/blink/public/common/frame/user_activation_state.h"
-#include "third_party/blink/public/common/frame/user_activation_update_source.h"
+#include "third_party/blink/public/common/frame/user_activation_update_scope.h"
 #include "third_party/blink/public/common/permissions_policy/document_policy_features.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/frame/frame_owner_properties.mojom-blink-forward.h"
@@ -179,6 +179,10 @@ class CORE_EXPORT Frame : public GarbageCollected<Frame> {
   // frame or has an outer document in another frame tree.
   // See |IsCrossOriginToNearestMainFrame| for important notes.
   bool IsCrossOriginToParentOrOuterDocument() const;
+
+  // Returns true if this frame is cross-origin to any of its ancestors up to
+  // the outermost main frame.
+  bool HasCrossOriginAncestorFrame() const;
 
   FrameOwner* Owner() const;
   void SetOwner(FrameOwner*);
@@ -381,6 +385,15 @@ class CORE_EXPORT Frame : public GarbageCollected<Frame> {
   // Returns the top-most frame in the hierarchy containing this frame.
   Frame* Top();
 
+  // Returns the nearest frame that is an inclusive ancestor of both this frame
+  // and `other`, or nullptr if there is no common ancestor.
+  Frame* CommonAncestor(const Frame* other) const;
+
+  // Returns true if every frame on the shortest frame-tree path between this
+  // frame and `other`, including both endpoints and their common ancestor, has
+  // the same origin.
+  bool IsFrameTreePathSameOrigin(const Frame* other) const;
+
   // Returns the first child frame.
   Frame* FirstChild() const { return first_child_.Get(); }
 
@@ -445,7 +458,7 @@ class CORE_EXPORT Frame : public GarbageCollected<Frame> {
   GetDeprecatedFencedFrameMode() const;
 
   // Iterates through the frame owner's ancestor nodes and adjusts the offset.
-  void AdjustOffsetByAncestorFrames(gfx::Point* origin_point);
+  void DeprecatedAdjustOffsetByAncestorFrames(gfx::Point* origin_point);
 
   // Checks whether this frame is a descendant of other.
   bool IsDescendantOf(const Frame* other) const;

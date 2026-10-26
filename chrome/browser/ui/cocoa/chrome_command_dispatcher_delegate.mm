@@ -13,6 +13,7 @@
 #include "components/remote_cocoa/common/native_widget_ns_window_host.mojom.h"
 #include "ui/base/accelerators/accelerator_manager.h"
 #import "ui/base/cocoa/nsmenu_additions.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/content_accelerators/accelerator_util.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/widget/widget.h"
@@ -118,7 +119,7 @@
 
   // See if this command will execute on the window bridge side.
   bridge->host()->WillExecuteCommand(result.chrome_command,
-                                     WindowOpenDisposition::CURRENT_TAB,
+                                     WindowOpenDisposition::kCurrentTab,
                                      kIsBeforeFirstResponder, &will_execute);
 
   // On macOS, command key shortcuts flash the title of their owning menu
@@ -133,7 +134,7 @@
 
   bool was_executed = false;
   bridge->host()->ExecuteCommand(result.chrome_command,
-                                 WindowOpenDisposition::CURRENT_TAB,
+                                 WindowOpenDisposition::kCurrentTab,
                                  kIsBeforeFirstResponder, &was_executed);
 
   return was_executed ? ui::PerformKeyEquivalentResult::kHandled
@@ -170,9 +171,9 @@
 
       bool was_executed = false;
       bridge->host()->ExecuteCommand(
-          result.chrome_command, WindowOpenDisposition::CURRENT_TAB,
+          result.chrome_command, WindowOpenDisposition::kCurrentTab,
           /*is_before_first_responder=*/false, &was_executed);
-      DCHECK(was_executed);
+      CHECK(was_executed, base::NotFatalUntil::M162);
       return ui::PerformKeyEquivalentResult::kHandled;
     }
   }

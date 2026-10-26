@@ -22,6 +22,14 @@ class ApplicationLocaleStorage;
 class PrefService;
 class Profile;
 
+namespace consent_auditor {
+class ConsentAuditor;
+}  // namespace consent_auditor
+
+namespace metrics {
+class MetricsService;
+}  // namespace metrics
+
 namespace ash {
 class SchedulerConfigurationManagerBase;
 }
@@ -48,10 +56,13 @@ class ArcServiceLauncher {
  public:
   // `local_state` and `application_locale_storage` must be non-null and must
   // outlive `this`.
-  // |scheduler_configuration_manager| must outlive |this| object.
+  // `metrics_service` may be null in tests. If non-null, it must remain valid
+  // until Shutdown() is called. `scheduler_configuration_manager` must outlive
+  // `this` object.
   ArcServiceLauncher(
       PrefService* local_state,
       const ApplicationLocaleStorage* application_locale_storage,
+      metrics::MetricsService* metrics_service,
       ash::SchedulerConfigurationManagerBase* scheduler_configuration_manager);
 
   ArcServiceLauncher(const ArcServiceLauncher&) = delete;
@@ -71,7 +82,10 @@ class ArcServiceLauncher {
   void MaybeSetProfile(Profile* profile);
 
   // Called when the main profile is initialized after user logs in.
-  void OnPrimaryUserProfilePrepared(Profile* profile);
+  // `consent_auditor` is the one belonging to `profile`.
+  void OnPrimaryUserProfilePrepared(
+      Profile* profile,
+      consent_auditor::ConsentAuditor* consent_auditor);
 
   // Called after the main MessageLoop stops, and before the Profile is
   // destroyed.
@@ -129,6 +143,7 @@ class ArcServiceLauncher {
 
   const raw_ref<PrefService> local_state_;
   const raw_ref<const ApplicationLocaleStorage> application_locale_storage_;
+  raw_ptr<metrics::MetricsService> metrics_service_ = nullptr;
 
   std::unique_ptr<ArcServiceManager> arc_service_manager_;
   // |scheduler_configuration_manager_| outlives |this|.
@@ -142,7 +157,7 @@ class ArcServiceLauncher {
   std::unique_ptr<ArcIconCacheDelegateProvider>
       arc_icon_cache_delegate_provider_;
   std::unique_ptr<BrowserUrlOpener> arc_net_url_opener_;
-  std::unique_ptr<ArcVmDataMigrationNotifier> arc_vm_data_migration_notifier_;
+
   std::unique_ptr<ArcLockedFullscreenManager> arc_locked_fullscreen_manager_;
 
   std::unique_ptr<apps::WebApkManager> web_apk_manager_;

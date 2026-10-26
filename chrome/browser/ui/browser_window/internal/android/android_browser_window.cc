@@ -6,6 +6,8 @@
 
 #include <jni.h>
 
+#include <memory>
+
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/check_deref.h"
@@ -24,16 +26,9 @@
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
-#include "extensions/buildflags/buildflags.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
+#include "third_party/jni_zero/jni_unique_ptr.h"
 #include "ui/base/unowned_user_data/unowned_user_data_host.h"
-
-#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
-#include "chrome/browser/devtools/devtools_window.h"
-#include "chrome/browser/extensions/extension_browser_window_helper.h"
-#include "chrome/common/pref_names.h"
-#include "content/public/browser/devtools_agent_host.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 namespace {
 using base::android::AttachCurrentThread;
@@ -42,13 +37,31 @@ using base::android::JavaRef;
 }  // namespace
 
 // Implements Java |AndroidBrowserWindow.Natives#create|.
-static int64_t JNI_AndroidBrowserWindow_Create(JNIEnv* env,
-                                               const JavaRef<jobject>& caller,
-                                               int32_t browser_window_type,
-                                               Profile* profile) {
-  return reinterpret_cast<intptr_t>(new AndroidBrowserWindow(
-      env, caller,
-      static_cast<BrowserWindowInterface::Type>(browser_window_type), profile));
+static jni_zero::JniUniquePtr<BrowserWindowInterface>
+JNI_AndroidBrowserWindow_Create(JNIEnv* env,
+                                const JavaRef<jobject>& caller,
+                                int32_t browser_window_type,
+                                Profile* profile) {
+  std::unique_ptr<BrowserWindowInterface> browser_window =
+      std::make_unique<AndroidBrowserWindow>(
+          env, caller,
+          static_cast<BrowserWindowInterface::Type>(browser_window_type),
+          profile);
+  return jni_zero::MakeUnique(std::move(browser_window));
+}
+
+// Implements Java |AndroidBrowserWindow.Natives#getLegacyNativePtr|.
+static int64_t JNI_AndroidBrowserWindow_GetLegacyNativePtr(
+    JNIEnv* env,
+    BrowserWindowInterface* browser_window) {
+  return reinterpret_cast<intptr_t>(browser_window);
+}
+
+// Implements Java |AndroidBrowserWindow.Natives#getSessionIdForTesting|.
+static int32_t JNI_AndroidBrowserWindow_GetSessionIdForTesting(
+    JNIEnv* env,
+    BrowserWindowInterface* browser_window) {
+  return browser_window->GetSessionID().id();
 }
 
 AndroidBrowserWindow::AndroidBrowserWindow(
@@ -60,31 +73,10 @@ AndroidBrowserWindow::AndroidBrowserWindow(
       profile_(CHECK_DEREF(profile)),
       session_id_(SessionID::NewUnique()) {
   java_android_browser_window_.Reset(env, java_android_browser_window);
-
-#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
-  extension_browser_window_helper_ =
-      std::make_unique<extensions::ExtensionBrowserWindowHelper>(this, profile);
-
-  profile_pref_registrar_.Init(profile_->GetPrefs());
-  profile_pref_registrar_.Add(
-      prefs::kDevToolsAvailability,
-      base::BindRepeating(&AndroidBrowserWindow::OnDevToolsAvailabilityChanged,
-                          base::Unretained(this)));
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 }
 
 AndroidBrowserWindow::~AndroidBrowserWindow() {
   browser_did_close_callback_list_.Notify(this);
-  Java_AndroidBrowserWindow_clearNativePtr(AttachCurrentThread(),
-                                           java_android_browser_window_);
-}
-
-void AndroidBrowserWindow::Destroy(JNIEnv* env) {
-  delete this;
-}
-
-int32_t AndroidBrowserWindow::GetSessionIdForTesting(JNIEnv* env) const {
-  return GetSessionID().id();
 }
 
 ui::UnownedUserDataHost& AndroidBrowserWindow::GetUnownedUserDataHost() {
@@ -202,21 +194,5 @@ content::WebContents* AndroidBrowserWindow::OpenURL(
 
   return nullptr;
 }
-
-base::android::ScopedJavaLocalRef<jobject> AndroidBrowserWindow::GetActivity() {
-  return Java_AndroidBrowserWindow_getActivity(AttachCurrentThread(),
-                                               java_android_browser_window_);
-}
-
-#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
-void AndroidBrowserWindow::OnDevToolsAvailabilityChanged() {
-  for (auto& agent_host : content::DevToolsAgentHost::GetAll()) {
-    if (!DevToolsWindow::AllowDevToolsFor(&profile_.get(),
-                                          agent_host->GetWebContents())) {
-      agent_host->ForceDetachAllSessions();
-    }
-  }
-}
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 DEFINE_JNI(AndroidBrowserWindow)

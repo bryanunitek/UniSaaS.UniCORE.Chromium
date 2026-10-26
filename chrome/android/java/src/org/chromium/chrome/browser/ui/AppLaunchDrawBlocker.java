@@ -47,7 +47,9 @@ public class AppLaunchDrawBlocker {
     private final Supplier<Intent> mIntentSupplier;
     private final Supplier<Boolean> mShouldIgnoreIntentSupplier;
     private final Supplier<Boolean> mIsTabletSupplier;
+    private final Supplier<Boolean> mIsRecreatingSupplier;
     private final MonotonicObservableSupplier<Profile> mProfileSupplier;
+    private final Supplier<Boolean> mShouldBlockDrawForTabLayoutSupplier;
     private final long mStartTime;
 
     /**
@@ -62,7 +64,13 @@ public class AppLaunchDrawBlocker {
      */
     private boolean mBlockDrawForInitialTab;
 
+    /** Whether View pre-draw is currently blocked during Activity recreation. */
+    private boolean mBlockDrawForRecreation;
+
     private boolean mBlockDrawForIncognitoRestore;
+
+    /** Whether View pre-draw is currently blocked until the tab layout is ready. */
+    private boolean mBlockDrawForTabLayout;
 
     /**
      * Constructor for AppLaunchDrawBlocker.
@@ -74,8 +82,11 @@ public class AppLaunchDrawBlocker {
      * @param shouldIgnoreIntentSupplier {@link Supplier<Boolean>} for whether the ignore should be
      *     ignored.
      * @param isTabletSupplier {@link Supplier<Boolean>} for whether the device is a tablet.
+     * @param isRecreatingSupplier {@link Supplier<Boolean>} for whether the activity is recreating.
      * @param incognitoRestoreAppLaunchDrawBlockerFactory Factory to create {@link
      *     IncognitoRestoreAppLaunchDrawBlocker}.
+     * @param shouldBlockDrawForTabLayoutSupplier {@link Supplier<Boolean>} for whether draw should
+     *     be blocked for the tab layout.
      */
     public AppLaunchDrawBlocker(
             ActivityLifecycleDispatcher activityLifecycleDispatcher,
@@ -83,9 +94,10 @@ public class AppLaunchDrawBlocker {
             Supplier<Intent> intentSupplier,
             Supplier<Boolean> shouldIgnoreIntentSupplier,
             Supplier<Boolean> isTabletSupplier,
+            Supplier<Boolean> isRecreatingSupplier,
             MonotonicObservableSupplier<Profile> profileSupplier,
-            IncognitoRestoreAppLaunchDrawBlockerFactory
-                    incognitoRestoreAppLaunchDrawBlockerFactory) {
+            IncognitoRestoreAppLaunchDrawBlockerFactory incognitoRestoreAppLaunchDrawBlockerFactory,
+            Supplier<Boolean> shouldBlockDrawForTabLayoutSupplier) {
         mActivityLifecycleDispatcher = activityLifecycleDispatcher;
         mViewSupplier = viewSupplier;
         mInflationObserver =
@@ -95,8 +107,10 @@ public class AppLaunchDrawBlocker {
 
                     @Override
                     public void onPostInflationStartup() {
-                        maybeBlockDraw();
+                        maybeBlockDrawForInitialTab();
                         maybeBlockDrawForIncognitoRestore();
+                        maybeBlockDrawForRecreation();
+                        maybeBlockDrawForTabLayout();
                     }
                 };
         mActivityLifecycleDispatcher.register(mInflationObserver);
@@ -114,7 +128,9 @@ public class AppLaunchDrawBlocker {
         mIntentSupplier = intentSupplier;
         mShouldIgnoreIntentSupplier = shouldIgnoreIntentSupplier;
         mIsTabletSupplier = isTabletSupplier;
+        mIsRecreatingSupplier = isRecreatingSupplier;
         mProfileSupplier = profileSupplier;
+        mShouldBlockDrawForTabLayoutSupplier = shouldBlockDrawForTabLayoutSupplier;
         mIncognitoRestoreAppLaunchDrawBlocker =
                 incognitoRestoreAppLaunchDrawBlockerFactory.create(
                         intentSupplier,
@@ -139,6 +155,11 @@ public class AppLaunchDrawBlocker {
                 "Android.AppLaunchDrawBlocker.ActiveTabAvailable", uptimeMillis() - mStartTime);
     }
 
+    /** Should be called when the initial tab is ready during activity recreation. */
+    public void onActiveTabAvailableForRecreation() {
+        mBlockDrawForRecreation = false;
+    }
+
     /**
      * A method that is passed as a {@link Runnable} to {@link
      * IncognitoRestoreAppLaunchDrawBlocker}.
@@ -149,6 +170,15 @@ public class AppLaunchDrawBlocker {
     @VisibleForTesting
     public void onIncognitoRestoreUnblockConditionsFired() {
         mBlockDrawForIncognitoRestore = false;
+    }
+
+    /** Should be called when the tab layout UI (horizontal strip or vertical rail) is ready. */
+    public void onTabLayoutAvailable() {
+        if (mBlockDrawForTabLayout) {
+            RecordHistogram.recordTimesHistogram(
+                    "Android.VerticalTabs.TabLayoutAvailable", uptimeMillis() - mStartTime);
+            mBlockDrawForTabLayout = false;
+        }
     }
 
     private void writeSearchEngineHadLogoPref() {
@@ -174,8 +204,24 @@ public class AppLaunchDrawBlocker {
                 mViewSupplier.get(), () -> !mBlockDrawForIncognitoRestore);
     }
 
+    /** Conditionally blocks the draw during Activity recreation. */
+    private void maybeBlockDrawForRecreation() {
+        if (!mIsRecreatingSupplier.get()) return;
+        mBlockDrawForRecreation = true;
+        ViewDrawBlocker.blockViewDrawUntilReady(
+                mViewSupplier.get(), () -> !mBlockDrawForRecreation);
+    }
+
+    /** Conditionally blocks the draw until the tab layout UI is ready on cold start. */
+    private void maybeBlockDrawForTabLayout() {
+        if (!mShouldBlockDrawForTabLayoutSupplier.get()) return;
+        mBlockDrawForTabLayout = true;
+        View view = mViewSupplier.get();
+        ViewDrawBlocker.blockViewDrawUntilReady(view, () -> !mBlockDrawForTabLayout);
+    }
+
     /** Only block the draw if we believe the initial tab will be the NTP. */
-    private void maybeBlockDraw() {
+    private void maybeBlockDrawForInitialTab() {
         @ActiveTabState int tabState = TabPersistentStoreImpl.readLastKnownActiveTabStatePref();
         boolean singleUrlBarMode = NewTabPage.isInSingleUrlBarMode(mIsTabletSupplier.get());
 

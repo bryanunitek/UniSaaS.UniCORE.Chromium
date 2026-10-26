@@ -4,11 +4,11 @@
 
 #include "content/public/browser/site_isolation_policy.h"
 
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/byte_size.h"
 #include "base/test/scoped_amount_of_physical_memory_override.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
@@ -42,7 +42,6 @@
 #endif
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/ui_test_utils.h"
 #endif
 
@@ -180,7 +179,9 @@ class IsolateOriginsPolicyBrowserTest
       const IsolateOriginsPolicyBrowserTest&) = delete;
 
   IsolateOriginsPolicyBrowserTest()
-      : memory_override_(std::make_unique<base::test::ScopedAmountOfPhysicalMemoryOverride>(base::MiBU(4000))) {}
+      : memory_override_(
+            std::make_unique<base::test::ScopedAmountOfPhysicalMemoryOverride>(
+                base::MiB(4000))) {}
   ~IsolateOriginsPolicyBrowserTest() override = default;
 
  private:
@@ -254,7 +255,9 @@ class IsolateOriginsShortlistPolicyBrowserTest
       const IsolateOriginsShortlistPolicyBrowserTest&) = delete;
 
   IsolateOriginsShortlistPolicyBrowserTest()
-      : memory_override_(std::make_unique<base::test::ScopedAmountOfPhysicalMemoryOverride>(base::MiBU(2000))) {}  // 2GB
+      : memory_override_(
+            std::make_unique<base::test::ScopedAmountOfPhysicalMemoryOverride>(
+                base::MiB(2000))) {}  // 2GB
   ~IsolateOriginsShortlistPolicyBrowserTest() override = default;
 
  protected:
@@ -317,7 +320,9 @@ class IsolateOriginsMultipleHighEndPolicyBrowserTest
     : public IsolateOriginsMultiplePolicyBrowserTest {
  public:
   IsolateOriginsMultipleHighEndPolicyBrowserTest()
-      : memory_override_(std::make_unique<base::test::ScopedAmountOfPhysicalMemoryOverride>(base::MiBU(4000))) {}  // 4GB
+      : memory_override_(
+            std::make_unique<base::test::ScopedAmountOfPhysicalMemoryOverride>(
+                base::MiB(4000))) {}  // 4GB
   ~IsolateOriginsMultipleHighEndPolicyBrowserTest() override = default;
 
  private:
@@ -340,7 +345,9 @@ class IsolateOriginsMultipleLowEndPolicyBrowserTest
     : public IsolateOriginsMultiplePolicyBrowserTest {
  public:
   IsolateOriginsMultipleLowEndPolicyBrowserTest()
-      : memory_override_(std::make_unique<base::test::ScopedAmountOfPhysicalMemoryOverride>(base::MiBU(2000))) {}  // 2GB
+      : memory_override_(
+            std::make_unique<base::test::ScopedAmountOfPhysicalMemoryOverride>(
+                base::MiB(2000))) {}  // 2GB
   ~IsolateOriginsMultipleLowEndPolicyBrowserTest() override = default;
 
  private:
@@ -449,7 +456,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationPolicyBrowserTest,
                 // TODO(crbug.com/429140103): Comments in the original code
                 // suggested that this was in KiB, but it was in fact in MiB.
                 // Needs investigation.
-                /*ram=*/base::MiBU(8000)),
+                /*ram=*/base::MiB(8000)),
             base::FeatureList::IsEnabled(features::kSitePerProcess));
 #else
   EXPECT_TRUE(content::SiteIsolationPolicy::UseDedicatedProcessesForAllSites());
@@ -467,7 +474,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationPolicyBrowserTest,
       /*is_under_advanced_protection=*/true,
       // TODO(crbug.com/429140103): Comments in the original code suggested that
       // this was in KiB, but it was in fact in MiB. Needs investigation.
-      /*ram=*/base::MiBU(8000)));
+      /*ram=*/base::MiB(8000)));
 }
 
 IN_PROC_BROWSER_TEST_F(SiteIsolationPolicyBrowserTest,
@@ -493,7 +500,7 @@ IN_PROC_BROWSER_TEST_F(SiteIsolationPolicyBrowserTest,
       /*is_under_advanced_protection=*/true,
       // TODO(crbug.com/429140103): Comments in the original code suggested that
       // this was in KiB, but it was in fact in MiB. Needs investigation.
-      /*ram=*/base::MiBU(1000)));
+      /*ram=*/base::MiB(1000)));
 }
 #endif
 
@@ -582,7 +589,7 @@ IN_PROC_BROWSER_TEST_P(OriginKeyedProcessesEnabledPolicyBrowserTest, Simple) {
       https_server()->GetURL("crossorigin.a.test", "/simple.html"));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      chrome_test_utils::GetActiveWebContents(this);
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), start_url));
   EXPECT_TRUE(NavigateIframeToURL(web_contents, "test", cross_origin_url));

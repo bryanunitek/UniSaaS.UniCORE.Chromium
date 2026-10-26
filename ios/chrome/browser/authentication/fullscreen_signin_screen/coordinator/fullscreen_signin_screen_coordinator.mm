@@ -4,11 +4,11 @@
 
 #import "ios/chrome/browser/authentication/fullscreen_signin_screen/coordinator/fullscreen_signin_screen_coordinator.h"
 
+#import <utility>
+
 #import "base/apple/foundation_util.h"
-#import "base/feature_list.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/strings/sys_string_conversions.h"
-#import "components/signin/public/base/signin_switches.h"
 #import "ios/chrome/browser/authentication/fullscreen_signin_screen/coordinator/fullscreen_signin_screen_mediator.h"
 #import "ios/chrome/browser/authentication/fullscreen_signin_screen/coordinator/fullscreen_signin_screen_mediator_delegate.h"
 #import "ios/chrome/browser/authentication/fullscreen_signin_screen/ui/fullscreen_signin_screen_consumer.h"
@@ -33,6 +33,7 @@
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/signin/model/account_preview_data_service_factory.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
@@ -100,8 +101,7 @@
   self = [super initWithBaseViewController:navigationController
                                    browser:browser];
   if (self) {
-    CHECK_EQ(browser->type(), Browser::Type::kRegular,
-             base::NotFatalUntil::M145);
+    CHECK_EQ(browser->type(), Browser::Type::kRegular);
     CHECK(changeProfileContinuationProvider);
     _baseNavigationController = navigationController;
     _delegate = delegate;
@@ -144,6 +144,8 @@
       ChromeAccountManagerServiceFactory::GetForProfile(profile);
   signin::IdentityManager* identityManager =
       IdentityManagerFactory::GetForProfile(profile);
+  signin::AccountPreviewDataService* accountPreviewDataService =
+      AccountPreviewDataServiceFactory::GetForProfile(profile);
   PrefService* localPrefService = GetApplicationContext()->GetLocalState();
   PrefService* prefService = profile->GetPrefs();
   syncer::SyncService* syncService = SyncServiceFactory::GetForProfile(profile);
@@ -153,6 +155,7 @@
           initWithAccountManagerService:self.accountManagerService
                   authenticationService:self.authenticationService
                         identityManager:identityManager
+              accountPreviewDataService:accountPreviewDataService
                        localPrefService:localPrefService
                             prefService:prefService
                             syncService:syncService
@@ -169,24 +172,21 @@
   BOOL animated = self.baseNavigationController.topViewController != nil;
   [self.baseNavigationController setViewControllers:@[ self.viewController ]
                                            animated:animated];
-  if (base::FeatureList::IsEnabled(switches::kBuildExternalPrivacyContext)) {
-    GetApplicationContext()
-        ->GetSystemIdentityManager()
-        ->RegisterExternalPrivacyContextProvider(self);
-    [self.browser->GetSceneState() addObserver:self];
-  }
+  GetApplicationContext()
+      ->GetSystemIdentityManager()
+      ->RegisterExternalPrivacyContextProvider(self);
+  [self.browser->GetSceneState() addObserver:self];
 }
 
 - (void)stop {
-  if (base::FeatureList::IsEnabled(switches::kBuildExternalPrivacyContext)) {
-    GetApplicationContext()
-        ->GetSystemIdentityManager()
-        ->UnregisterExternalPrivacyContextProvider(self);
-    [self.browser->GetSceneState() removeObserver:self];
-  }
+  GetApplicationContext()
+      ->GetSystemIdentityManager()
+      ->UnregisterExternalPrivacyContextProvider(self);
+  [self.browser->GetSceneState() removeObserver:self];
   [self stopAddAccountCoordinator];
   [self stopIdentityChooserCoordinator];
   self.delegate = nil;
+  self.viewController.delegate = nil;
   self.viewController = nil;
   [self.mediator disconnect];
   self.mediator = nil;
@@ -241,29 +241,25 @@
                              continuationProvider:
                                  _changeProfileContinuationProvider];
   __weak __typeof(self) weakSelf = self;
-  self.addAccountSigninCoordinator.signinCompletion = ^(
-      SigninCoordinator* coordinator, SigninCoordinatorResult signinResult,
-      id<SystemIdentity> signinCompletionIdentity) {
-    [weakSelf addAccountSigninCompleteWithCoordinator:coordinator
-                                         signinResult:signinResult
-                                   completionIdentity:signinCompletionIdentity];
-  };
+  self.addAccountSigninCoordinator.signinCompletion =
+      ^(SigninCoordinator* coordinator,
+        SigninCoordinatorResultOrIdentity result) {
+        [weakSelf addAccountSigninCompleteWithCoordinator:coordinator
+                                             signinResult:std::move(result)];
+      };
   [self.addAccountSigninCoordinator start];
 }
 
 // Callback handling the completion of the AddAccount action.
 - (void)addAccountSigninCompleteWithCoordinator:(SigninCoordinator*)coordinator
                                    signinResult:
-                                       (SigninCoordinatorResult)signinResult
-                             completionIdentity:
-                                 (id<SystemIdentity>)signinCompletionIdentity {
-  CHECK_EQ(self.addAccountSigninCoordinator, coordinator,
-           base::NotFatalUntil::M151);
+                                       (SigninCoordinatorResultOrIdentity)
+                                           signinResult {
+  CHECK_EQ(self.addAccountSigninCoordinator, coordinator);
   [self stopAddAccountCoordinator];
-  if (signinResult == SigninCoordinatorResultSuccess &&
-      self.accountManagerService->IsValidIdentity(
-          signinCompletionIdentity.gaiaId)) {
-    self.mediator.selectedIdentity = signinCompletionIdentity;
+  if (signinResult.has_value() && self.accountManagerService->IsValidIdentity(
+                                      signinResult.value().gaiaId)) {
+    self.mediator.selectedIdentity = signinResult.value();
     self.mediator.addedAccount = YES;
   }
 }
@@ -275,7 +271,16 @@
     // See crbug.com/478202195.
     return;
   }
+
   DCHECK(self.mediator.selectedIdentity);
+  if ([self.mediator.selectedIdentity
+          isEqual:self.authenticationService->GetPrimaryIdentity()]) {
+    // Dismiss the signin screen if user tries to sign-in with an account
+    // already signed in. See crbug.com/537715404.
+    [self finishPresentingWithSignIn:NO];
+    return;
+  }
+
   AuthenticationFlow* authenticationFlow =
       [[AuthenticationFlow alloc] initWithBrowser:self.browser
                                          identity:self.mediator.selectedIdentity
@@ -300,7 +305,7 @@
 
 // Shows the UMA dialog so the user can manage metric reporting.
 - (void)showUMADialog {
-  CHECK(!self.UMACoordinator, base::NotFatalUntil::M144);
+  CHECK(!self.UMACoordinator);
   self.UMACoordinator = [[UMACoordinator alloc]
       initWithBaseViewController:self.viewController
                          browser:self.browser
@@ -310,7 +315,7 @@
 }
 
 - (void)showTOSPage {
-  CHECK(!self.TOSCoordinator, base::NotFatalUntil::M144);
+  CHECK(!self.TOSCoordinator);
   self.mediator.TOSLinkWasTapped = YES;
   self.TOSCoordinator =
       [[TOSCoordinator alloc] initWithBaseViewController:self.viewController
@@ -323,13 +328,13 @@
 
 - (void)fullscreenSigninScreenMediatorDidFinishSignin:
     (FullscreenSigninScreenMediator*)mediator {
-  CHECK_EQ(mediator, self.mediator, base::NotFatalUntil::M140);
+  CHECK_EQ(mediator, self.mediator);
   [self finishPresentingWithSignIn:YES];
 }
 
 - (void)fullscreenSigninScreenMediatorWantsToBeDismissed:
     (FullscreenSigninScreenMediator*)mediator {
-  CHECK_EQ(mediator, self.mediator, base::NotFatalUntil::M141);
+  CHECK_EQ(mediator, self.mediator);
   [self finishPresentingWithSignIn:NO];
 }
 
@@ -417,7 +422,7 @@
 #pragma mark - TOSCoordinatorDelegate
 
 - (void)TOSCoordinatorWantsToBeStopped:(TOSCoordinator*)coordinator {
-  CHECK_EQ(self.TOSCoordinator, coordinator, base::NotFatalUntil::M144);
+  CHECK_EQ(self.TOSCoordinator, coordinator);
   [self.TOSCoordinator stop];
   self.TOSCoordinator.delegate = nil;
   self.TOSCoordinator = nil;
@@ -455,8 +460,7 @@
 #pragma mark - Private
 
 - (void)notifyProviderReadyIfUIAvailable {
-  if (base::FeatureList::IsEnabled(switches::kBuildExternalPrivacyContext) &&
-      [self isUIAvailableToShowIOSPrompt]) {
+  if ([self isUIAvailableToShowIOSPrompt]) {
     GetApplicationContext()
         ->GetSystemIdentityManager()
         ->ExternalPrivacyContextProviderReady(self);

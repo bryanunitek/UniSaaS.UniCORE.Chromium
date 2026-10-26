@@ -43,6 +43,7 @@
 #include "third_party/blink/renderer/platform/loader/fetch/service_worker_router_info.h"
 #include "third_party/blink/renderer/platform/network/http_names.h"
 #include "third_party/blink/renderer/platform/network/http_parsers.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
@@ -89,6 +90,7 @@ ResourceResponse::ResourceResponse()
       was_fetched_via_spdy_(false),
       was_fetched_via_service_worker_(false),
       from_synthetic_response_(false),
+      intercepted_by_plugin_(false),
       did_service_worker_navigation_preload_(false),
       did_use_shared_dictionary_(false),
       async_revalidation_requested_(false),
@@ -160,10 +162,16 @@ KURL ResourceResponse::ResponseUrl() const {
   return CurrentRequestUrl();
 }
 
+bool ResourceResponse::HasMatchingServiceWorkerUrl() const {
+  return !url_list_via_service_worker_.empty() &&
+         url_list_via_service_worker_.back() == current_request_url_;
+}
+
 bool ResourceResponse::IsServiceWorkerPassThrough() const {
-  return cache_storage_cache_name_.empty() &&
-         !url_list_via_service_worker_.empty() &&
-         ResponseUrl() == CurrentRequestUrl();
+  return service_worker_response_source_ !=
+             network::mojom::FetchResponseSource::kCacheStorage &&
+         !cache_storage_side_data_writer_->data.is_valid() &&
+         HasMatchingServiceWorkerUrl();
 }
 
 const AtomicString& ResourceResponse::MimeType() const {
@@ -526,16 +534,19 @@ void ResourceResponse::SetDecodedBodyLength(int64_t value) {
 
 network::mojom::CrossOriginEmbedderPolicyValue
 ResourceResponse::GetCrossOriginEmbedderPolicy() const {
-  const std::string value =
-      HttpHeaderField(http_names::kLowerCrossOriginEmbedderPolicy).Utf8();
-  using Item = net::structured_headers::Item;
-  const auto item = net::structured_headers::ParseItem(value);
-  if (!item || item->item.Type() != Item::kTokenType) {
+  const AtomicString& value =
+      HttpHeaderField(http_names::kLowerCrossOriginEmbedderPolicy);
+  if (value.IsNull()) {
     return network::mojom::CrossOriginEmbedderPolicyValue::kNone;
   }
-  if (item->item.GetString() == "require-corp") {
+  const auto item = net::structured_headers::ParseItem(value.Utf8());
+  const std::string* token = item ? item->item.GetIfToken() : nullptr;
+  if (!token) {
+    return network::mojom::CrossOriginEmbedderPolicyValue::kNone;
+  }
+  if (*token == "require-corp") {
     return network::mojom::CrossOriginEmbedderPolicyValue::kRequireCorp;
-  } else if (item->item.GetString() == "credentialless") {
+  } else if (*token == "credentialless") {
     return network::mojom::CrossOriginEmbedderPolicyValue::kCredentialless;
   } else {
     return network::mojom::CrossOriginEmbedderPolicyValue::kNone;
@@ -550,6 +561,13 @@ ResourceResponse::GetUnencodedDigests() const {
 void ResourceResponse::SetUnencodedDigests(
     Vector<network::IntegrityMetadata> digests) {
   unencoded_digests_ = std::move(digests);
+}
+
+bool ResourceResponse::ShouldUseSourceHashForJSCodeCache() const {
+  return should_use_source_hash_for_js_code_cache_ ||
+         (was_fetched_via_service_worker_ &&
+          RuntimeEnabledFeatures::ServiceWorkerCodeCacheEnabled() &&
+          RuntimeEnabledFeatures::ServiceWorkerCodeCacheHashingEnabled());
 }
 
 STATIC_ASSERT_ENUM(WebURLResponse::kHTTPVersionUnknown,

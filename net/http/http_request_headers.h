@@ -21,7 +21,8 @@
 #include "net/base/net_export.h"
 #include "net/filter/source_stream_type.h"
 #include "net/log/net_log_capture_mode.h"
-#include "url/gurl.h"
+
+class GURL;
 
 namespace net {
 
@@ -103,6 +104,9 @@ class NET_EXPORT HttpRequestHeaders {
   static constexpr char kProxyConnection[] = "Proxy-Connection";
   static constexpr char kRange[] = "Range";
   static constexpr char kReferer[] = "Referer";
+  static constexpr char kSecGPC[] = "Sec-GPC";
+  static constexpr char kSecPrivateVerificationToken[] =
+      "Sec-Private-Verification-Token";
   static constexpr char kSecPurpose[] = "Sec-Purpose";
   static constexpr char kTransferEncoding[] = "Transfer-Encoding";
   static constexpr char kUpgradeInsecureRequests[] =

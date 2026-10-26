@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyChar;
 import static org.mockito.ArgumentMatchers.anyInt;
 
+import android.app.Activity;
 import android.app.PendingIntent;
 import android.app.RemoteAction;
 import android.content.ClipData;
@@ -43,6 +44,7 @@ import org.chromium.base.SelectionActionMenuClientWrapper.MenuType;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
@@ -78,6 +80,7 @@ import java.util.concurrent.Callable;
 
 /** Integration tests for text selection-related behavior. */
 @RunWith(ContentJUnit4ClassRunner.class)
+@Batch(Batch.PER_CLASS)
 public class ContentTextSelectionTest {
     @Rule
     public ContentShellActivityTestRule mActivityTestRule = new ContentShellActivityTestRule();
@@ -324,16 +327,16 @@ public class ContentTextSelectionTest {
         Assert.assertTrue(mSelectionPopupController.hasSelection());
 
         View webContentsView = mWebContents.getViewAndroidDelegate().getContainerView();
-        float mCurrentX = webContentsView.getWidth() / 2f;
-        float mCurrentY = webContentsView.getHeight() / 2f;
+        float currentX = webContentsView.getWidth() / 2f;
+        float currentY = webContentsView.getHeight() / 2f;
 
         // Perform a scroll.
         TouchCommon.performDrag(
                 mActivityTestRule.getActivity(),
-                mCurrentX,
-                mCurrentX,
-                mCurrentY,
-                mCurrentY - 100,
+                currentX,
+                currentX,
+                currentY,
+                currentY - 100,
                 /* stepCount= */ 3, /* duration in ms */
                 250);
 
@@ -353,16 +356,16 @@ public class ContentTextSelectionTest {
         waitForSelectActionBarVisible(false);
 
         View webContentsView = mWebContents.getViewAndroidDelegate().getContainerView();
-        float mCurrentX = webContentsView.getWidth() / 2f;
-        float mCurrentY = webContentsView.getHeight() / 2f;
+        float currentX = webContentsView.getWidth() / 2f;
+        float currentY = webContentsView.getHeight() / 2f;
 
         // Perform a scroll.
         TouchCommon.performDrag(
                 mActivityTestRule.getActivity(),
-                mCurrentX,
-                mCurrentX,
-                mCurrentY,
-                mCurrentY - 100,
+                currentX,
+                currentX,
+                currentY,
+                currentY - 100,
                 /* stepCount= */ 3, /* duration in ms */
                 250);
 
@@ -393,10 +396,15 @@ public class ContentTextSelectionTest {
 
         List<ItemMatcher> matchers =
                 List.of(
+                        hasId(R.id.select_action_menu_cut),
+                        hasId(R.id.select_action_menu_copy),
                         hasId(android.R.id.paste),
+                        hasId(android.R.id.pasteAsPlainText),
                         hasId(R.id.select_action_menu_select_all),
                         isDivider(),
-                        hasTitle("testNonSelectionItem"));
+                        hasTitle("testNonSelectionItem"),
+                        hasId(R.id.select_action_menu_web_search),
+                        hasId(R.id.select_action_menu_share));
         TestSelectionDropdownMenuDelegate dropdownDelegate =
                 new TestSelectionDropdownMenuDelegate();
         MVCListAdapter.ModelList items = menu.getMenuAsDropdown(dropdownDelegate);
@@ -450,26 +458,37 @@ public class ContentTextSelectionTest {
         PendingSelectionMenu menu =
                 mSelectionPopupController.getPendingSelectionMenu(MenuType.DROPDOWN);
 
-        List<ItemMatcher> matchers =
-                List.of(
-                        hasTitle("Phone"),
-                        isDivider(),
-                        hasId(R.id.select_action_menu_cut),
-                        hasId(R.id.select_action_menu_copy),
-                        hasId(android.R.id.paste),
-                        hasId(R.id.select_action_menu_select_all),
-                        isDivider(),
-                        hasTitle("testTextProcessingItem"));
+        List<ItemMatcher> matchers = new ArrayList<>();
+        matchers.add(hasTitle("Phone"));
+        matchers.add(isDivider());
+        matchers.add(hasId(R.id.select_action_menu_cut));
+        matchers.add(hasId(R.id.select_action_menu_copy));
+        matchers.add(hasId(android.R.id.paste));
+        matchers.add(hasId(android.R.id.pasteAsPlainText));
+        matchers.add(hasId(R.id.select_action_menu_select_all));
+        matchers.add(isDivider());
+        matchers.add(hasId(R.id.select_action_menu_web_search));
+        matchers.add(hasId(R.id.select_action_menu_share));
+        matchers.add(isDivider());
+        matchers.add(hasTitle("testTextProcessingItem"));
+
         TestSelectionDropdownMenuDelegate dropdownDelegate =
                 new TestSelectionDropdownMenuDelegate();
         MVCListAdapter.ModelList items = menu.getMenuAsDropdown(dropdownDelegate);
         verifyMenu(items, matchers, dropdownDelegate);
         // Check correct processText intent state is sent to 3rd party apps.
+        Activity activityDropdown = mActivityTestRule.getActivity();
+        SelectionMenuItem textProcessingItemDropdown = null;
+        for (SelectionMenuItem item : menu.getMenuItemsForTesting()) {
+            if ("testTextProcessingItem".equals(item.getTitle(activityDropdown))) {
+                textProcessingItemDropdown = item;
+                break;
+            }
+        }
+        Assert.assertNotNull(textProcessingItemDropdown);
         Assert.assertFalse(
-                menu.getMenuItemsForTesting()
-                        .get(menu.getMenuItemsForTesting().size() - 1)
-                        .intent
-                        .getBooleanExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, false));
+                textProcessingItemDropdown.intent.getBooleanExtra(
+                        Intent.EXTRA_PROCESS_TEXT_READONLY, false));
     }
 
     @Test
@@ -537,14 +556,13 @@ public class ContentTextSelectionTest {
                 mSelectionPopupController.isSelectActionModeAllowed(
                         ActionModeCallbackHelper.MENU_ITEM_WEB_SEARCH);
 
-        // Map | Copy [Share] Select All [Web Search] | testTextProcessingItem
+        // Map | Copy [Web Search] [Share] | testTextProcessingItem
         ArrayList<ItemMatcher> matchers = new ArrayList<>();
         matchers.add(hasTitle("Map"));
         matchers.add(isDivider());
         matchers.add(hasId(R.id.select_action_menu_copy));
-        if (shareAllowed) matchers.add(hasId(R.id.select_action_menu_share));
-        matchers.add(hasId(R.id.select_action_menu_select_all));
         if (webSearchAllowed) matchers.add(hasId(R.id.select_action_menu_web_search));
+        if (shareAllowed) matchers.add(hasId(R.id.select_action_menu_share));
         matchers.add(isDivider());
         // The text processing menu item we created is added to the menu.
         matchers.add(hasTitle("testTextProcessingItem"));
@@ -555,11 +573,18 @@ public class ContentTextSelectionTest {
         verifyMenu(items, matchers, dropdownDelegate);
 
         // Check correct processText intent state is sent to 3rd party apps.
+        Activity activityDropdown = mActivityTestRule.getActivity();
+        SelectionMenuItem textProcessingItemDropdown = null;
+        for (SelectionMenuItem item : menu.getMenuItemsForTesting()) {
+            if ("testTextProcessingItem".equals(item.getTitle(activityDropdown))) {
+                textProcessingItemDropdown = item;
+                break;
+            }
+        }
+        Assert.assertNotNull(textProcessingItemDropdown);
         Assert.assertTrue(
-                menu.getMenuItemsForTesting()
-                        .get(menu.getMenuItemsForTesting().size() - 1)
-                        .intent
-                        .getBooleanExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, false));
+                textProcessingItemDropdown.intent.getBooleanExtra(
+                        Intent.EXTRA_PROCESS_TEXT_READONLY, false));
     }
 
     @Test
@@ -580,13 +605,13 @@ public class ContentTextSelectionTest {
                 mSelectionPopupController.isSelectActionModeAllowed(
                         ActionModeCallbackHelper.MENU_ITEM_WEB_SEARCH);
 
-        // Map Copy [Share] Select All [Web Search] testTextProcessingItem
+        // Map Copy Select All [Web Search] [Share] testTextProcessingItem
         ArrayList<ItemMatcher> matchers = new ArrayList<>();
         matchers.add(hasTitle("Map"));
         matchers.add(hasId(R.id.select_action_menu_copy));
-        if (shareAllowed) matchers.add(hasId(R.id.select_action_menu_share));
         matchers.add(hasId(R.id.select_action_menu_select_all));
         if (webSearchAllowed) matchers.add(hasId(R.id.select_action_menu_web_search));
+        if (shareAllowed) matchers.add(hasId(R.id.select_action_menu_share));
         // The text processing menu item we created is added to the menu.
         matchers.add(hasTitle("testTextProcessingItem"));
 
@@ -596,11 +621,18 @@ public class ContentTextSelectionTest {
         verifyMenu(actualItems, matchers);
 
         // Check correct processText intent state is sent to 3rd party apps.
+        Activity activityFloating = mActivityTestRule.getActivity();
+        SelectionMenuItem textProcessingItemFloating = null;
+        for (SelectionMenuItem item : menu.getMenuItemsForTesting()) {
+            if ("testTextProcessingItem".equals(item.getTitle(activityFloating))) {
+                textProcessingItemFloating = item;
+                break;
+            }
+        }
+        Assert.assertNotNull(textProcessingItemFloating);
         Assert.assertTrue(
-                menu.getMenuItemsForTesting()
-                        .get(menu.getMenuItemsForTesting().size() - 1)
-                        .intent
-                        .getBooleanExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, false));
+                textProcessingItemFloating.intent.getBooleanExtra(
+                        Intent.EXTRA_PROCESS_TEXT_READONLY, false));
     }
 
     @Test
@@ -682,7 +714,7 @@ public class ContentTextSelectionTest {
         DOMUtils.longPressNode(mWebContents, "empty_input_text");
         waitForPastePopupStatus(true);
         waitForInsertion(true);
-        Assert.assertFalse(mSelectionPopupController.canSelectAll());
+        Assert.assertFalse(mSelectionPopupController.canSelectAll(MenuType.FLOATING));
     }
 
     @Test
@@ -695,7 +727,7 @@ public class ContentTextSelectionTest {
         DOMUtils.longPressNode(mWebContents, "whitespace_input_text");
         waitForPastePopupStatus(true);
         waitForInsertion(true);
-        Assert.assertTrue(mSelectionPopupController.canSelectAll());
+        Assert.assertTrue(mSelectionPopupController.canSelectAll(MenuType.FLOATING));
     }
 
     @Test
@@ -875,7 +907,8 @@ public class ContentTextSelectionTest {
     @Test
     @SmallTest
     @Feature({"TextInput"})
-    public void testSelectActionBarPlainTextCopy() throws Exception {
+    public void testSelectActionBarPlainTextCopy() throws Throwable {
+        copyStringToClipboard("SampleTextToCopy");
         DOMUtils.longPressNode(mWebContents, "plain_text_1");
         waitForSelectActionBarVisible(true);
         Assert.assertTrue(mSelectionPopupController.hasSelection());
@@ -1182,12 +1215,12 @@ public class ContentTextSelectionTest {
         Assert.assertTrue(mSelectionPopupController.isActionModeValid());
         selectActionBarSearch();
         Intent i = mActivityTestRule.getActivity().getLastSentIntent();
-        int new_task_flag = Intent.FLAG_ACTIVITY_NEW_TASK;
-        Assert.assertEquals(i.getFlags() & new_task_flag, new_task_flag);
+        int newTaskFlag = Intent.FLAG_ACTIVITY_NEW_TASK;
+        Assert.assertEquals(i.getFlags() & newTaskFlag, newTaskFlag);
 
         selectActionBarShare();
         i = mActivityTestRule.getActivity().getLastSentIntent();
-        Assert.assertEquals(i.getFlags() & new_task_flag, new_task_flag);
+        Assert.assertEquals(i.getFlags() & newTaskFlag, newTaskFlag);
     }
 
     private TextClassification createSingleActionTextClassification(String title) {

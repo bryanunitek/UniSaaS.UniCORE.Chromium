@@ -22,9 +22,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Promise;
+import org.chromium.base.TriState;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.browserservices.verification.ChromeOriginVerifier;
 import org.chromium.chrome.browser.browserservices.verification.ChromeOriginVerifierFactory;
@@ -39,7 +39,6 @@ import java.util.HashSet;
 
 /** Tests for {@link TwaVerifier}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TwaVerifierTest {
     private static final String INITIAL_URL = "https://www.initialurl.com/page.html";
     private static final String ADDITIONAL_ORIGIN = "https://www.otherverifiedorigin.com";
@@ -86,6 +85,25 @@ public class TwaVerifierTest {
                 mDelegate.getVerifiedScope("https://www.example.com/dir/page2.html"));
     }
 
+    /**
+     * Tests that {@link TwaVerifier#getVerifiedScope} returns the URL itself for URLs with
+     * non-HTTP(S) schemes.
+     */
+    @Test
+    public void verifiedScopeIsUrl_forUrlsWithNonHttpSchemes() {
+        assertEquals(
+                "blob:https://www.example.com/1234-5678",
+                mDelegate.getVerifiedScope("blob:https://www.example.com/1234-5678"));
+        assertEquals("about:blank", mDelegate.getVerifiedScope("about:blank"));
+        assertEquals(
+                "data:text/html,sample_text",
+                mDelegate.getVerifiedScope("data:text/html,sample_text"));
+        assertEquals(
+                "filesystem:https://www.example.com/temporary/f",
+                mDelegate.getVerifiedScope("filesystem:https://www.example.com/temporary/f"));
+        assertEquals("not-an-origin", mDelegate.getVerifiedScope("not-an-origin"));
+    }
+
     @Test
     public void isPageInVerificationCache() {
         Origin trusted = Origin.create("https://www.trusted.com");
@@ -101,6 +119,15 @@ public class TwaVerifierTest {
     public void verify_failsInvalidUrl() {
         Promise<Boolean> result = mDelegate.verify("not-an-origin");
         assertFalse(result.getResult());
+    }
+
+    /** Tests that verification fails for URLs with non-HTTP(S) schemes. */
+    @Test
+    public void verify_failsUrlsWithNonHttpSchemes() {
+        assertFalse(mDelegate.verify("blob:" + INITIAL_URL).getResult());
+        assertFalse(mDelegate.verify("about:blank").getResult());
+        assertFalse(mDelegate.verify("data:text/html,sample_text").getResult());
+        verify(mOriginVerifier, never()).start(any(), any());
     }
 
     /** Tests that the first call to verify for a trusted origin performs full verification. */
@@ -132,7 +159,7 @@ public class TwaVerifierTest {
                 ArgumentCaptor.forClass(OriginVerificationListener.class);
         verify(mOriginVerifier).start(callback.capture(), eq(Origin.create(url)));
 
-        callback.getValue().onOriginVerified(null, null, true, true);
+        callback.getValue().onOriginVerified(null, null, true, TriState.TRUE);
 
         assertTrue(promise.getResult());
 

@@ -15,8 +15,8 @@ namespace content::features {
 // TODO(b/354661640): Temporarily disable this flag while investigating CrOS
 // file saving issue.
 //
-// When enabled, GetFile() and GetEntries() on a directory handle performs
-// the blocklist check on child file handles.
+// When enabled, GetFile() and GetEntries() on a directory handle, as well as
+// AsBlob() on a file handle, perform the blocklist check.
 BASE_FEATURE(kFileSystemAccessDirectoryIterationBlocklistCheck,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -26,6 +26,9 @@ BASE_FEATURE(kFileSystemAccessDirectoryIterationBlocklistCheck,
 // limit.
 BASE_FEATURE(kFileSystemAccessObserverQuotaLimit,
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, check for hidden WebContents before showing chooser.
+BASE_FEATURE(kFileSystemAccessCheckHidden, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // On Linux, the quota limit is found by:
 // 1. Rounding down the system limit (read from
@@ -71,12 +74,17 @@ BASE_FEATURE_PARAM(size_t,
 // When enabled, rename in the local file system requires write permission to
 // its parent directory.
 BASE_FEATURE(kFileSystemAccessRenameRequiresParentWritePermission,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Controls whether the rename permission check is restricted to the home
 // directory.
 BASE_FEATURE_PARAM(bool,
                    kOnlyInHomedir,
                    &kFileSystemAccessRenameRequiresParentWritePermission,
-                   true);
+                   false);
+
+// When enabled, CreateFileWriter() and GetFile()/GetDirectory() with
+// create=true perform sensitive entry access checks for write operations.
+BASE_FEATURE(kFileSystemAccessWriteBlocklistCheck,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 }  // namespace content::features

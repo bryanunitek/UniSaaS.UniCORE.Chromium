@@ -10,8 +10,8 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/ptr_util.h"
 #include "chrome/browser/profiles/profiles_state.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/bubble/webui_bubble_dialog_view.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/user_education/custom_webui_help_bubble_controller.h"
 #include "chrome/browser/ui/views/user_education/impl/browser_user_education_context.h"
 #include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
@@ -147,8 +147,10 @@ CustomWebUIHelpBubble::CreateForController(
 
   // Specific shadow types are required for help bubbles in order to properly
   // render visible bubble arrows.
-  bubble->set_shadow(
-      user_education::HelpBubbleFactoryViews::GetDefaultBubbleShadow());
+  auto shadow_config = bubble->shadow_config();
+  shadow_config.shadow_type =
+      user_education::HelpBubbleFactoryViews::GetDefaultBubbleShadow();
+  bubble->set_shadow_config(shadow_config);
 
   std::unique_ptr<views::Widget> widget =
       views::BubbleDialogDelegate::CreateBubble(

@@ -6,18 +6,20 @@
 #include <string>
 #include <vector>
 
+#include "base/command_line.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/allow_check_is_test_for_testing.h"
 #include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
+#include "base/test/run_until.h"
 #include "build/build_config.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
+#include "chrome/browser/loader/features.h"
 #include "chrome/browser/loader/keep_alive_request_browsertest_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/page_load_metrics/browser/features.h"
 #include "components/variations/net/variations_http_headers.h"
+#include "components/variations/variations_switches.h"
 #include "content/public/browser/back_forward_cache.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -50,6 +52,15 @@ class ChromeKeepAliveURLBrowserTestBase
       delete;
   ChromeKeepAliveURLBrowserTestBase& operator=(
       const ChromeKeepAliveURLBrowserTestBase&) = delete;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    ChromeKeepAliveRequestBrowserTestBase::SetUpCommandLine(command_line);
+
+    // Add a dummy variation ID so that the X-Client-Data header is appended to
+    // eligible requests to select Google servers.
+    command_line->AppendSwitchASCII(variations::switches::kForceVariationIds,
+                                    "112233");
+  }
 };
 
 // Basic Chrome browser tests to cover behaviors when handling fetch keepalive
@@ -113,16 +124,16 @@ IN_PROC_BROWSER_TEST_P(ChromeKeepAliveURLBrowserTest,
 #if !BUILDFLAG(IS_ANDROID)
 // Mac browser shutdown is flaky: https://crbug.com/40201651
 #if BUILDFLAG(IS_MAC)
-#define MAYBE_ReceiveResponseAfterBrowserShutdown \
-  DISABLED_ReceiveResponseAfterBrowserShutdown
+#define MAYBE_ReceiveResponseAfterLastWindowClose \
+  DISABLED_ReceiveResponseAfterLastWindowClose
 #else
-#define MAYBE_ReceiveResponseAfterBrowserShutdown \
-  ReceiveResponseAfterBrowserShutdown
+#define MAYBE_ReceiveResponseAfterLastWindowClose \
+  ReceiveResponseAfterLastWindowClose
 #endif
 // Verifies that a keepalive ping can be made within a short timeframe after
-// browser shutdown.
+// the last browser window closes.
 IN_PROC_BROWSER_TEST_P(ChromeKeepAliveURLBrowserTest,
-                       MAYBE_ReceiveResponseAfterBrowserShutdown) {
+                       MAYBE_ReceiveResponseAfterLastWindowClose) {
   const std::string target_url = kKeepAliveEndpoint;
   auto request_handler = std::move(RegisterRequestHandlers({target_url})[0]);
   ASSERT_TRUE(server()->Start());
@@ -131,20 +142,34 @@ IN_PROC_BROWSER_TEST_P(ChromeKeepAliveURLBrowserTest,
 
   ASSERT_TRUE(content::NavigateToURL(web_contents(), keepalive_page_url));
 
-  // Close the browser.
+  const bool keeps_process_alive =
+      base::FeatureList::IsEnabled(features::kKeepAliveBrowserProcessAlive);
+  if (keeps_process_alive) {
+    request_handler->WaitForRequest();
+  }
+
   CloseBrowserSynchronously(browser());
-  ASSERT_TRUE(browser_shutdown::IsTryingToQuit());
   ASSERT_TRUE(GlobalBrowserCollection::GetInstance()->IsEmpty());
-  ASSERT_EQ(browser_shutdown::GetShutdownType(),
-            browser_shutdown::ShutdownType::kWindowClose);
-  // The keepalive request may be sent before or after shutting down, but only
-  // get processed by the server after shutting down here.
-  request_handler->WaitForRequest();
+  if (keeps_process_alive) {
+    EXPECT_FALSE(browser_shutdown::IsTryingToQuit());
+  } else {
+    ASSERT_TRUE(browser_shutdown::IsTryingToQuit());
+    ASSERT_EQ(browser_shutdown::GetShutdownType(),
+              browser_shutdown::ShutdownType::kWindowClose);
+    // The request may be sent before or after shutting down, but only gets
+    // processed by the server after shutting down here.
+    request_handler->WaitForRequest();
+  }
   // The disconnected loader is pending to receive response.
 
   // Send back response to terminate in-browser request handling.
   request_handler->Send(k200TextResponse);
   request_handler->Done();
+
+  if (keeps_process_alive) {
+    ASSERT_TRUE(base::test::RunUntil(
+        []() { return browser_shutdown::IsTryingToQuit(); }));
+  }
 
   // The response should be processed by browser before shutting down.
   // TODO(crbug.com/464173571): Deflake WaitForTotalOnReceiveResponseProcessed

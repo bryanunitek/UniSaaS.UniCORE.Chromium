@@ -14,9 +14,9 @@ from codegen import header_common
 from codegen import natives_header
 from codegen import register_natives
 import common
+import java_parse
 import java_types
 import jni_generator
-import parse
 
 _CLASS_NAME_RE = re.compile(r'\b(?:class|interface|enum)\s+([\w.$]+)',
                             re.MULTILINE)
@@ -60,7 +60,7 @@ def _CreateHeader(jni_mode, jni_objs, args):
 
   with sb.section('Class Accessors.'):
     for java_class in java_classes:
-      escaped_name = java_class.to_cpp()
+      escaped_name = java_class.class_without_prefix.to_cpp()
       sb(f"""\
 static jclass {escaped_name}_clazz(JNIEnv* env) {{
   static const char kClassName[] = "{java_class.full_name}";
@@ -101,7 +101,9 @@ def _ParseJavap(stdout, default_namespace, jni_objs):
     filename = class_name.replace('.', '/') + '.class'
 
     try:
-      parsed_file = parse.parse_javap_data(filename, part, natives_only=True)
+      parsed_file = java_parse.parse_javap_data(filename,
+                                                part,
+                                                natives_only=True)
       if parsed_file.outer_class.non_proxy_methods:
         jni_obj = jni_generator.JniObject(parsed_file,
                                           from_javap=True,
@@ -118,8 +120,6 @@ def GenerateRegisterNativesFromJars(parser, args, jni_mode):
     if not args.javap:
       parser.error('Could not find "javap" on your PATH. Use --javap to '
                    'specify its location.')
-
-  java_types.SetUseJniPrimitiveTypes()
 
   class_blocklist = None
   if args.class_blocklist:

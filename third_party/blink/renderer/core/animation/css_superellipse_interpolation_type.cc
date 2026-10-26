@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ref.h"
 #include "base/notreached.h"
 #include "third_party/blink/renderer/core/animation/number_property_functions.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value.h"
@@ -26,7 +27,6 @@ namespace blink {
 namespace {
 
 static constexpr double kNotchInterpolationValue = 0;
-static constexpr double kBevelInterpolationValue = 0.5;
 static constexpr double kSquareInterpolationValue = 1;
 
 // https://drafts.csswg.org/css-borders-4/#corner-shape-interpolation
@@ -47,32 +47,13 @@ double SuperellipseToInterpolableValue(Superellipse superellipse) {
 // https://drafts.csswg.org/css-borders-4/#corner-shape-interpolation
 Superellipse SuperellipseFromInterpolableValue(
     const InterpolableValue& interpolable_value) {
-  static constexpr double kEpsilon = 0.001;
   const double value = To<InterpolableNumber>(interpolable_value).Value();
-  static const double kScoopInterpolationValue =
-      SuperellipseToInterpolableValue(Superellipse::Scoop());
-  static const double kRoundInterpolationValue =
-      SuperellipseToInterpolableValue(Superellipse::Round());
-  static const double kSquircleInterpolationValue =
-      SuperellipseToInterpolableValue(Superellipse::Squircle());
 
   if (value <= kNotchInterpolationValue) {
     return Superellipse::Notch();
   }
   if (value >= kSquareInterpolationValue) {
     return Superellipse::Square();
-  }
-  if (std::abs(value - kBevelInterpolationValue) < kEpsilon) {
-    return Superellipse::Bevel();
-  }
-  if (std::abs(value - kRoundInterpolationValue) < kEpsilon) {
-    return Superellipse::Round();
-  }
-  if (std::abs(value - kScoopInterpolationValue) < kEpsilon) {
-    return Superellipse::Scoop();
-  }
-  if (std::abs(value - kSquircleInterpolationValue) < kEpsilon) {
-    return Superellipse::Squircle();
   }
 
   const bool is_convex = value > 0.5;
@@ -136,10 +117,11 @@ class InheritedSuperellipseChecker
   bool IsValid(const StyleResolverState& state,
                const InterpolationValue& underlying) const final {
     return value_ ==
-           ExtractSuperellipseValueFromStyle(property_, *state.ParentStyle());
+           ExtractSuperellipseValueFromStyle(*property_, *state.ParentStyle());
   }
 
-  const CSSProperty& property_;
+  const raw_ref<const CSSProperty, UnprotectedInRelease | DanglingUntriaged>
+      property_;
   const std::optional<Superellipse> value_;
 };
 

@@ -9,16 +9,17 @@
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/policy/core/browser/configuration_policy_pref_store.h"
 #include "components/policy/core/browser/configuration_policy_pref_store_test.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_switches.h"
 #include "chrome/browser/ash/login/users/scoped_account_id_annotator.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -245,6 +246,7 @@ class DeveloperToolsPolicyHandlerWithProfileTest
       primary_profile_ =
           profile_manager_.CreateTestingProfile(kPrimaryProfileName);
 
+      // TODO(crbug.com/40225390): Use ProfileUserManagerController.
       user_manager_->OnUserProfileCreated(kPrimaryUserAccountId,
                                           primary_profile_->GetPrefs());
     }
@@ -259,6 +261,7 @@ class DeveloperToolsPolicyHandlerWithProfileTest
           profile_manager_.profile_manager(), kSecondaryUserAccountId);
       secondary_profile_ =
           profile_manager_.CreateTestingProfile(kSecondaryProfileName);
+      // TODO(crbug.com/40225390): Use ProfileUserManagerController.
       user_manager_->OnUserProfileCreated(kSecondaryUserAccountId,
                                           secondary_profile_->GetPrefs());
     }
@@ -314,7 +317,7 @@ TEST_F(DeveloperToolsPolicyHandlerWithProfileTest,
       DeveloperToolsPolicyHandler::GetEffectiveAvailability(primary_profile_));
 
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  command_line->AppendSwitch(switches::kForceDevToolsAvailable);
+  command_line->AppendSwitch(ash::switches::kForceDevToolsAvailable);
 
   EXPECT_EQ(
       Availability::kAllowed,

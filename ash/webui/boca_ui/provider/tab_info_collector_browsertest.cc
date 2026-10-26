@@ -14,7 +14,8 @@
 #include "base/functional/bind.h"
 #include "base/test/bind.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -51,20 +52,18 @@ class TabInfoCollectorTest : public InProcessBrowserTest {
   TabInfoCollectorTest operator=(const TabInfoCollectorTest&) = delete;
   ~TabInfoCollectorTest() override = default;
 
-  Browser* CreateBrowser(const std::vector<GURL>& urls) {
-    Browser::CreateParams params(Browser::TYPE_NORMAL,
-                                 ProfileManager::GetActiveUserProfile(),
-                                 /*user_gesture=*/false);
-    Browser* browser = Browser::Create(params);
+  BrowserWindowInterface* CreateBrowser(const std::vector<GURL>& urls) {
+    BrowserWindowCreateParams params(ProfileManager::GetActiveUserProfile(),
+                                     /*from_user_gesture=*/false);
+    BrowserWindowInterface* browser = CreateBrowserWindow(std::move(params));
     // Create a new tab and make sure the urls have loaded.
     for (const auto& url : urls) {
       ui_test_utils::NavigateToURLWithDisposition(
-          browser, url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+          browser, url, WindowOpenDisposition::kNewForegroundTab,
           ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
     }
     return browser;
   }
-
 
   void TearDown() override {
     tab_info_collector_.reset();

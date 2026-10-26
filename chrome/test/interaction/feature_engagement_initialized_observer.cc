@@ -6,7 +6,7 @@
 
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/feature_engagement/public/tracker.h"
 #include "ui/base/interaction/state_observer.h"
 
@@ -14,9 +14,9 @@ DEFINE_STATE_IDENTIFIER_VALUE(FeatureEngagementInitializedObserver,
                               kFeatureEngagementInitializedState);
 
 FeatureEngagementInitializedObserver::FeatureEngagementInitializedObserver(
-    Browser* browser)
+    BrowserWindowInterface* browser)
     : tracker_(feature_engagement::TrackerFactory::GetForBrowserContext(
-          browser->profile())) {
+          browser->GetProfile())) {
   if (tracker_) {
     tracker_->AddOnInitializedCallback(base::BindOnce(
         &FeatureEngagementInitializedObserver::OnTrackerInitialized,

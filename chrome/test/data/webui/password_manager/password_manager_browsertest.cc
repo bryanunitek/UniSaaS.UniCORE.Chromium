@@ -4,6 +4,7 @@
 
 #include "base/test/scoped_feature_list.h"
 #include "build/branding_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/test/base/web_ui_mocha_browser_test.h"
 #include "components/password_manager/content/common/web_ui_constants.h"
 #include "components/password_manager/core/common/password_manager_features.h"
@@ -20,7 +21,13 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, AddPasswordDialog) {
   RunTest("password_manager/add_password_dialog_test.js", "mocha.run()");
 }
 
-IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, App) {
+// TODO(crbug.com/545478765): Flaky on Windows.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_App DISABLED_App
+#else
+#define MAYBE_App App
+#endif
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, MAYBE_App) {
   RunTest("password_manager/password_manager_app_test.js", "mocha.run()");
 }
 
@@ -35,6 +42,10 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, CheckupSection) {
 
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, CheckupDetailsSection) {
   RunTest("password_manager/checkup_details_section_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, CheckupListItem) {
+  RunTest("password_manager/checkup_list_item_test.js", "mocha.run()");
 }
 
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, CredentialField) {
@@ -57,6 +68,10 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, EditPasswordDialog) {
   RunTest("password_manager/edit_password_dialog_test.js", "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, FindShortcutMixin) {
+  RunTest("password_manager/find_shortcut_mixin_test.js", "mocha.run()");
+}
+
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, FullDataReset) {
   RunTest("password_manager/full_data_reset_test.js", "mocha.run()");
 }
@@ -67,6 +82,10 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, MovePasswordsDialog) {
 
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, PasskeyDetailsCard) {
   RunTest("password_manager/passkey_details_card_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, PasswordChangeDetails) {
+  RunTest("password_manager/password_change_details_test.js", "mocha.run()");
 }
 
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, PasswordDetailsCard) {
@@ -92,6 +111,10 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, PasswordsImporter) {
 
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, PasswordsSection) {
   RunTest("password_manager/passwords_section_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, PolicyUtils) {
+  RunTest("password_manager/policy_utils_test.js", "mocha.run()");
 }
 
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest,
@@ -148,12 +171,16 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, SiteFavicon) {
   RunTest("password_manager/site_favicon_test.js", "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, TrustedVaultErrorDialog) {
+  RunTest("password_manager/trusted_vault_error_dialog_test.js", "mocha.run()");
+}
+
 IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, UserUtilsMixin) {
   RunTest("password_manager/user_utils_mixin_test.js", "mocha.run()");
 }
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, PromoCards) {
-  RunTest("password_manager/promo_cards_test.js", "mocha.run()");
+IN_PROC_BROWSER_TEST_F(PasswordManagerUITest, NotificationCards) {
+  RunTest("password_manager/notification_cards_test.js", "mocha.run()");
 }
 #endif

@@ -41,10 +41,10 @@ export function getHtml(this: SearchAnimatedGlowElement) {
 
   // clang-format off
   return html`<!--_html_template_start_-->
-    ${this.energyEffectAnimationEnabled &&
+    ${this.useEnergyEffect_() &&
       (this.animationState === GlowAnimationState.DRAGGING ||
        this.animationState === GlowAnimationState.SUBMITTING ||
-      this.isZeroState || this.entrypointName === 'Realbox') ? html`
+       this.animationState === GlowAnimationState.EXPANDING) ? html`
       <div class="gradient-blur-wrapper">
         <div class="gradient"></div>
       </div>
@@ -65,7 +65,7 @@ export function getHtml(this: SearchAnimatedGlowElement) {
       </div>
     `}
 
-    <div id="fullContainerOverlay">
+    <div id="fullContainerOverlay" part="full-container-overlay">
       ${this.requiresVoice && this.coloredTicTacVoiceAnimationEnabled ?
           html`
               ${this.isListening ?
@@ -75,6 +75,8 @@ export function getHtml(this: SearchAnimatedGlowElement) {
                   class='audio-animation'
                   .darkThemeColorsEnabled="${this.darkThemeColorsEnabled}"
                   .isListening="${this.isListening}"
+                  .transcript="${this.transcript}"
+                  .receivedSpeech="${this.receivedSpeech}"
               ></recording-wave>
               ${this.isListening ?
                   html`<slot name="tool-chip"></slot>`

@@ -53,23 +53,17 @@ std::optional<double> FindSizeForContainerAxis(
   DCHECK(requested_axis == kPhysicalAxesHorizontal ||
          requested_axis == kPhysicalAxesVertical);
 
-  ContainerSelector selector;
-  const TreeScope* tree_scope = nullptr;
-  if (container_name) {
-    selector = ContainerSelector(container_name->GetName(), requested_axis,
-                                 kLogicalAxesNone, /*scroll_state=*/false,
-                                 /*anchored_query=*/false);
-    tree_scope = container_name->GetTreeScope();
-  } else {
-    selector = ContainerSelector(requested_axis);
-    tree_scope = context_element ? &context_element->GetTreeScope() : nullptr;
-  }
+  ContainerSelector selector =
+      container_name ? ContainerSelector(container_name->GetName(),
+                                         requested_axis, kLogicalAxesNone,
+                                         /*scroll_state=*/false,
+                                         /*anchored_query=*/false)
+                     : ContainerSelector(requested_axis);
 
-  for (Element* container = ContainerQueryEvaluator::FindContainer(
-           context_element, selector, tree_scope);
+  for (Element* container =
+           ContainerQueryEvaluator::FindContainer(context_element, selector);
        container; container = ContainerQueryEvaluator::FindContainer(
-                      FlatTreeTraversal::ParentElement(*container), selector,
-                      tree_scope)) {
+                      FlatTreeTraversal::ParentElement(*container), selector)) {
     ContainerQueryEvaluator& evaluator =
         container->EnsureContainerQueryEvaluator();
     evaluator.SetReferencedByUnit();
@@ -529,6 +523,18 @@ double CSSToLengthConversionData::DynamicViewportHeight() const {
   return viewport_size_.DynamicHeight();
 }
 
+const CSSToLengthConversionData::ViewportSize&
+CSSToLengthConversionData::ViewportSizes(
+    const CSSPrimitiveValue::LengthTypeFlags& types) const {
+  if (CSSPrimitiveValue::HasStaticViewportUnits(types)) {
+    SetFlag(Flag::kViewport);
+  }
+  if (CSSPrimitiveValue::HasDynamicViewportUnits(types)) {
+    SetFlag(Flag::kDynamicViewport);
+  }
+  return viewport_size_;
+}
+
 double CSSToLengthConversionData::ContainerWidth() const {
   SetFlag(Flag::kContainerRelative);
   return container_sizes_.Width().value_or(SmallViewportWidth());
@@ -572,6 +578,10 @@ void CSSToLengthConversionData::ReferenceTreeScope() const {
 
 void CSSToLengthConversionData::ReferenceAnchor() const {
   SetFlag(Flag::kAnchorRelative);
+}
+
+void CSSToLengthConversionData::ReferenceDefaultAnchor() const {
+  SetFlag(Flag::kDefaultAnchorRelative);
 }
 
 void CSSToLengthConversionData::ReferenceSibling() const {

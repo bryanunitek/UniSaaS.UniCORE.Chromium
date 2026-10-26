@@ -60,10 +60,12 @@ class NET_EXPORT_PRIVATE WebSocketQuicSpdyStream
 
   void OnCanWriteNewData() override;
 
-  // Decouples the delegate from this stream and cancels the underlying QUIC
-  // stream. This allows the delegate to be destroyed independently while
-  // ensuring the stream is properly terminated. The stream is reset with
-  // QUIC_STREAM_CANCELLED to signal intentional closure to the peer.
+  // Decouples the delegate from this stream and closes the stream, if it is
+  // not closed already. Once the peer's FIN has been consumed the closing
+  // handshake is complete, so the stream is closed with a FIN of our own: the
+  // orderly closure of RFC 9220 section 3. A stream abandoned before that is
+  // reset with QUIC_STREAM_CANCELLED, the RST exception of that same section,
+  // to signal intentional closure to the peer.
   void DetachDelegate();
 
  private:

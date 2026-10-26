@@ -6,16 +6,21 @@ import 'chrome://contextual-tasks/strings.m.js';
 import 'chrome://resources/cr_components/composebox/contextual_action_menu.js';
 import 'chrome://resources/cr_components/composebox/composebox_favicon_group.js';
 
+import {SingleTabMenuItemAction, SingleTabType, SmartTabSharingSurface} from 'chrome://resources/cr_components/composebox/common.js';
 import type {ComposeboxFaviconGroupElement} from 'chrome://resources/cr_components/composebox/composebox_favicon_group.js';
 import type {ContextualActionMenuElement} from 'chrome://resources/cr_components/composebox/contextual_action_menu.js';
-import {DEFAULT_FLYOUT_WIDTH_PX, MIN_MENU_HEIGHT_PX, SHARE_TABS_FLYOUT_GAP_PX, SHARE_TABS_FLYOUT_MAX_HEIGHT_PX, VIEWPORT_BUFFER_PX, DEFAULT_MAX_MENU_HEIGHT_PX} from 'chrome://resources/cr_components/composebox/contextual_action_menu.js';
+import {DEFAULT_FLYOUT_WIDTH_PX, DEFAULT_MAX_MENU_HEIGHT_PX, MIN_MENU_HEIGHT_PX, SHARE_TABS_FLYOUT_GAP_PX, SHARE_TABS_FLYOUT_MAX_HEIGHT_PX, VIEWPORT_BUFFER_PX} from 'chrome://resources/cr_components/composebox/contextual_action_menu.js';
+import {MojoPluralStringProxy} from 'chrome://resources/cr_components/search/mojo_plural_string_proxy.js';
 import {AnchorAlignment} from 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
+import type {CrIconsetElement} from 'chrome://resources/cr_elements/cr_icon/cr_iconset.js';
+import {IconsetMap} from 'chrome://resources/cr_elements/cr_icon/iconset_map.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {PluralStringProxyImpl} from 'chrome://resources/js/plural_string_proxy.js';
 import type {TabInfo} from 'chrome://resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
 import type {InputState} from 'chrome://resources/mojo/components/omnibox/composebox/composebox_query.mojom-webui.js';
 import {InputType, ModelMode, ToolMode} from 'chrome://resources/mojo/components/omnibox/composebox/composebox_query.mojom-webui.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import type {MetricsTracker} from 'chrome://webui-test/metrics_test_support.js';
+import {fakeMetricsPrivate} from 'chrome://webui-test/metrics_test_support.js';
 import {TestPluralStringProxy} from 'chrome://webui-test/test_plural_string_proxy.js';
 import {$$, eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
@@ -29,6 +34,7 @@ function createTabSuggestion(overrides: Partial<TabInfo> = {}): TabInfo {
         url: 'about:blank',
         showInCurrentTabChip: false,
         showInPreviousTabChip: false,
+        isLoading: false,
         lastActive: {internalValue: 0n},
       },
       overrides);
@@ -57,6 +63,7 @@ interface InternalContextualActionMenu {
   deleteTabContext_: (uuid: string) => void;
   readonly closeMenuOnSelect: boolean;
   reposition_: () => void;
+  maybeCloseMenuBasedOnEntrypoint_: () => void;
 }
 
 function asInternal(element: ContextualActionMenuElement):
@@ -76,15 +83,20 @@ suite('ContextualActionMenu', () => {
       ShowContextMenuHeaders: true,
       contextManagementInComposeboxEnabled: false,
       keepMenuOpenOnTabSelectForRealbox: false,
+      composeboxContextMenuEnableTabDeselection: false,
+      composeboxSingleTabMenuItemEnabled: false,
+      useSearchboxConfigIconIds: true,
+      stsMegaplusAutomaticallyAddTabsHeader: 'Automatically add tabs',
+      stsMegaplusManuallyAddTabsHeader: 'Manually add tabs',
     });
 
     const pluralStringProxy = new TestPluralStringProxy();
-    PluralStringProxyImpl.setInstance(pluralStringProxy);
+    MojoPluralStringProxy.setInstance(pluralStringProxy);
 
     actionMenu = document.createElement('cr-composebox-contextual-action-menu');
     Object.assign(actionMenu, {
       fileNum: 0,
-      disabledTabIds: new Map(),
+      selectedTabIds: new Map(),
       tabSuggestions: [],
       smartTabSharingVisible: false,
       contextManagementInComposeboxEnabled: false,
@@ -97,6 +109,130 @@ suite('ContextualActionMenu', () => {
     await microtasksFinished();
     assertFalse(actionMenu.$.menu.open);
   });
+
+  test(
+      'Drop shadows on plus menu and flyout match and use elevation 3',
+      async () => {
+        actionMenu.remove();
+        actionMenu =
+            document.createElement('cr-composebox-contextual-action-menu');
+        actionMenu.contextManagementInComposeboxEnabled = true;
+        const tabInfo = createTabSuggestion({
+          tabId: 101,
+          title: 'Shadow Verification Tab',
+          url: 'about:blank/1',
+        });
+        actionMenu.tabSuggestions = [tabInfo];
+        actionMenu.inputState = new MockInputState({
+          allowedInputTypes: [InputType.kBrowserTab],
+        });
+        document.body.appendChild(actionMenu);
+        await microtasksFinished();
+
+        actionMenu.showAt(actionMenu);
+        await microtasksFinished();
+        assertTrue(actionMenu.$.menu.open);
+
+        // Verify plus menu drop shadow is elevation 3.
+        const expectedElevation3 =
+            window.getComputedStyle(document.documentElement)
+                .getPropertyValue('--cr-elevation-3')
+                .trim();
+        const menuShadowVariable = window.getComputedStyle(actionMenu.$.menu)
+                                       .getPropertyValue('--cr-menu-shadow')
+                                       .trim();
+        assertEquals(expectedElevation3, menuShadowVariable);
+
+        const menuDialog = actionMenu.$.menu.getDialog();
+        const menuShadow = window.getComputedStyle(menuDialog).boxShadow;
+        assertTrue(!!menuShadow && menuShadow !== 'none');
+
+        // Hover over Share Tabs to open flyout.
+        const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+        assertTrue(!!trigger);
+        trigger.dispatchEvent(new PointerEvent('pointerenter'));
+        await microtasksFinished();
+
+        // Verify flyout drop shadow matches plus menu drop shadow.
+        const flyout = $$(actionMenu, '.share-tabs-flyout') as HTMLElement;
+        assertTrue(!!flyout);
+        assertFalse(flyout.hidden);
+
+        const flyoutShadow = window.getComputedStyle(flyout).boxShadow;
+        assertEquals(menuShadow, flyoutShadow);
+
+        actionMenu.$.menu.close();
+        await microtasksFinished();
+      });
+
+  // TODO(crbug.com/537768276): Test is flaky.
+  test.skip(
+      'Flyout scroll position retained when collapsing flyout, but reset when entire menu closes',
+      async () => {
+        actionMenu.remove();
+        actionMenu =
+            document.createElement('cr-composebox-contextual-action-menu');
+        actionMenu.contextManagementInComposeboxEnabled = true;
+        const tabSuggestions: TabInfo[] = [];
+        for (let i = 0; i < 15; i++) {
+          tabSuggestions.push(createTabSuggestion({
+            tabId: 100 + i,
+            title: `Tab ${i}`,
+            url: `about:blank/${i}`,
+          }));
+        }
+        actionMenu.tabSuggestions = tabSuggestions;
+        actionMenu.inputState = new MockInputState({
+          allowedInputTypes: [InputType.kBrowserTab],
+        });
+        document.body.appendChild(actionMenu);
+        await microtasksFinished();
+
+        actionMenu.showAt(actionMenu);
+        await microtasksFinished();
+        assertTrue(actionMenu.$.menu.open);
+
+        const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+        assertTrue(!!trigger);
+        trigger.dispatchEvent(new PointerEvent('pointerenter'));
+        await microtasksFinished();
+
+        const flyout = $$(actionMenu, '.share-tabs-flyout') as HTMLElement;
+        assertTrue(!!flyout);
+        assertFalse(flyout.hidden);
+
+        flyout.scrollTop = 120;
+        assertEquals(120, flyout.scrollTop);
+
+        // Collapse flyout while main menu remains open.
+        trigger.dispatchEvent(new PointerEvent('pointerleave'));
+        asInternal(actionMenu).scheduleCloseTimer_();
+        await microtasksFinished();
+
+        // Reopen flyout and verify scroll position is retained.
+        trigger.dispatchEvent(new PointerEvent('pointerenter'));
+        await microtasksFinished();
+        assertFalse(flyout.hidden);
+        assertEquals(120, flyout.scrollTop);
+
+        // Close entire menu.
+        actionMenu.$.menu.close();
+        await microtasksFinished();
+        assertFalse(actionMenu.$.menu.open);
+
+        // Reopen entire menu and verify flyout scroll position is reset to 0.
+        actionMenu.showAt(actionMenu);
+        await microtasksFinished();
+        assertTrue(actionMenu.$.menu.open);
+
+        trigger.dispatchEvent(new PointerEvent('pointerenter'));
+        await microtasksFinished();
+        assertFalse(flyout.hidden);
+        assertEquals(0, flyout.scrollTop);
+
+        actionMenu.$.menu.close();
+        await microtasksFinished();
+      });
 
   test(
       'No tabs or tab header displayed when there are no tab suggestions',
@@ -126,6 +262,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
         {
           tool: ToolMode.kImageGen,
@@ -135,6 +272,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
       ],
       toolsSectionConfig: {header: ''},
@@ -146,6 +284,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
         {
           model: ModelMode.kGeminiPro,
@@ -153,6 +292,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
       ],
       modelSectionConfig: {header: ''},
@@ -191,6 +331,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
         {
           tool: ToolMode.kImageGen,
@@ -200,6 +341,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
       ],
       toolsSectionConfig: {header: ''},
@@ -211,6 +353,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
         {
           model: ModelMode.kGeminiPro,
@@ -218,6 +361,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
       ],
       modelSectionConfig: {header: ''},
@@ -244,6 +388,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
         {
           tool: ToolMode.kImageGen,
@@ -253,6 +398,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
       ],
       toolsSectionConfig: {header: ''},
@@ -265,6 +411,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
         {
           model: ModelMode.kGeminiPro,
@@ -272,6 +419,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
       ],
       modelSectionConfig: {header: ''},
@@ -309,6 +457,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
         {
           model: ModelMode.kGeminiPro,
@@ -316,6 +465,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
       ],
       modelSectionConfig: {header: ''},
@@ -336,6 +486,419 @@ suite('ContextualActionMenu', () => {
     assertEquals('true', thinkingModel.getAttribute('aria-checked'));
   });
 
+  test('Renders icon defined in modelConfig', async () => {
+    actionMenu.inputState = new MockInputState({
+      allowedModels: [ModelMode.kGeminiRegular, ModelMode.kGeminiPro],
+      modelConfigs: [
+        {
+          model: ModelMode.kGeminiRegular,
+          menuLabel: 'Gemini Regular',
+          icon: 107,
+          hintText: '',
+          aimUrlParams: [],
+          menuTooltip: '',
+        },
+        {
+          model: ModelMode.kGeminiPro,
+          menuLabel: 'Gemini Pro',
+          icon: 97,
+          hintText: '',
+          aimUrlParams: [],
+          menuTooltip: '',
+        },
+      ],
+      modelSectionConfig: {header: ''},
+    });
+    actionMenu.showAt(actionMenu);
+    await microtasksFinished();
+
+    const regularModelButton =
+        $$(actionMenu, `[data-model="${ModelMode.kGeminiRegular}"]`);
+    assertTrue(isVisible(regularModelButton));
+    const regularIcon = regularModelButton!.querySelector('cr-icon');
+    assertTrue(isVisible(regularIcon));
+    assertEquals('searchbox_config:107', regularIcon!.getAttribute('icon'));
+
+    const proModelButton =
+        $$(actionMenu, `[data-model="${ModelMode.kGeminiPro}"]`);
+    assertTrue(isVisible(proModelButton));
+    const proIcon = proModelButton!.querySelector('cr-icon');
+    assertTrue(isVisible(proIcon));
+    assertEquals('searchbox_config:97', proIcon!.getAttribute('icon'));
+  });
+
+  test(
+      'Falls back to legacy model icon if icon is 0 or unspecified',
+      async () => {
+        actionMenu.inputState = new MockInputState({
+          allowedModels: [ModelMode.kGeminiRegular, ModelMode.kGeminiPro],
+          modelConfigs: [
+            {
+              model: ModelMode.kGeminiRegular,
+              menuLabel: 'Gemini Regular',
+              icon: 0,
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: '',
+            },
+            {
+              model: ModelMode.kGeminiPro,
+              menuLabel: 'Gemini Pro',
+              icon: 0,
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: '',
+            },
+          ],
+          modelSectionConfig: {header: ''},
+        });
+        actionMenu.showAt(actionMenu);
+        await microtasksFinished();
+
+        const regularModelButton =
+            $$(actionMenu, `[data-model="${ModelMode.kGeminiRegular}"]`);
+        assertTrue(isVisible(regularModelButton));
+        const regularIcon = regularModelButton!.querySelector('cr-icon');
+        assertTrue(isVisible(regularIcon));
+        assertEquals('composebox:acute', regularIcon!.getAttribute('icon'));
+
+        const proModelButton =
+            $$(actionMenu, `[data-model="${ModelMode.kGeminiPro}"]`);
+        assertTrue(isVisible(proModelButton));
+        const proIcon = proModelButton!.querySelector('cr-icon');
+        assertTrue(isVisible(proIcon));
+        assertEquals('composebox:timer', proIcon!.getAttribute('icon'));
+      });
+
+  test(
+      'Uses legacy model icons when useSearchboxConfigIconIds is false',
+      async () => {
+        loadTimeData.overrideValues({
+          useSearchboxConfigIconIds: false,
+        });
+        actionMenu.inputState = new MockInputState({
+          allowedModels: [ModelMode.kGeminiRegular, ModelMode.kGeminiPro],
+          modelConfigs: [
+            {
+              model: ModelMode.kGeminiRegular,
+              menuLabel: 'Gemini Regular',
+              icon: 107,
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: '',
+            },
+            {
+              model: ModelMode.kGeminiPro,
+              menuLabel: 'Gemini Pro',
+              icon: 97,
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: '',
+            },
+          ],
+          modelSectionConfig: {header: ''},
+        });
+        actionMenu.showAt(actionMenu);
+        await microtasksFinished();
+
+        const regularModelButton =
+            $$(actionMenu, `[data-model="${ModelMode.kGeminiRegular}"]`);
+        assertTrue(isVisible(regularModelButton));
+        const regularIcon = regularModelButton!.querySelector('cr-icon');
+        assertTrue(isVisible(regularIcon));
+        assertEquals('composebox:acute', regularIcon!.getAttribute('icon'));
+
+        const proModelButton =
+            $$(actionMenu, `[data-model="${ModelMode.kGeminiPro}"]`);
+        assertTrue(isVisible(proModelButton));
+        const proIcon = proModelButton!.querySelector('cr-icon');
+        assertTrue(isVisible(proIcon));
+        assertEquals('composebox:timer', proIcon!.getAttribute('icon'));
+      });
+
+  test('Renders icon defined in toolConfig', async () => {
+    actionMenu.inputState = new MockInputState({
+      allowedTools:
+          [ToolMode.kDeepSearch, ToolMode.kImageGen, ToolMode.kCanvas],
+      toolConfigs: [
+        {
+          tool: ToolMode.kDeepSearch,
+          menuLabel: 'Deep Search',
+          disableActiveModelSelection: false,
+          chipLabel: '',
+          icon: 94,
+          hintText: '',
+          aimUrlParams: [],
+          menuTooltip: '',
+        },
+        {
+          tool: ToolMode.kImageGen,
+          menuLabel: 'Create Images',
+          disableActiveModelSelection: false,
+          chipLabel: '',
+          icon: 100,
+          hintText: '',
+          aimUrlParams: [],
+          menuTooltip: '',
+        },
+        {
+          tool: ToolMode.kCanvas,
+          menuLabel: 'Canvas',
+          disableActiveModelSelection: false,
+          chipLabel: '',
+          icon: 96,
+          hintText: '',
+          aimUrlParams: [],
+          menuTooltip: '',
+        },
+      ],
+    });
+    actionMenu.showAt(actionMenu);
+    await microtasksFinished();
+
+    const deepSearchButton =
+        $$(actionMenu, `[data-mode="${ToolMode.kDeepSearch}"]`);
+    assertTrue(isVisible(deepSearchButton));
+    const deepSearchIcon = deepSearchButton!.querySelector('cr-icon');
+    assertTrue(isVisible(deepSearchIcon));
+    assertEquals('searchbox_config:94', deepSearchIcon!.getAttribute('icon'));
+
+    const imageGenButton =
+        $$(actionMenu, `[data-mode="${ToolMode.kImageGen}"]`);
+    assertTrue(isVisible(imageGenButton));
+    const imageGenIcon = imageGenButton!.querySelector('cr-icon');
+    assertTrue(isVisible(imageGenIcon));
+    assertEquals('searchbox_config:100', imageGenIcon!.getAttribute('icon'));
+
+    const canvasButton = $$(actionMenu, `[data-mode="${ToolMode.kCanvas}"]`);
+    assertTrue(isVisible(canvasButton));
+    const canvasIcon = canvasButton!.querySelector('cr-icon');
+    assertTrue(isVisible(canvasIcon));
+    assertEquals('searchbox_config:96', canvasIcon!.getAttribute('icon'));
+  });
+
+  test(
+      'Uses searchbox_config:0 when tool icon is 0 or unspecified in config',
+      async () => {
+        actionMenu.inputState = new MockInputState({
+          allowedTools:
+              [ToolMode.kDeepSearch, ToolMode.kImageGen, ToolMode.kCanvas],
+          toolConfigs: [
+            {
+              tool: ToolMode.kDeepSearch,
+              menuLabel: 'Deep Search',
+              disableActiveModelSelection: false,
+              chipLabel: '',
+              icon: 0,
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: '',
+            },
+            {
+              tool: ToolMode.kImageGen,
+              menuLabel: 'Create Images',
+              disableActiveModelSelection: false,
+              chipLabel: '',
+              icon: 0,
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: '',
+            },
+            {
+              tool: ToolMode.kCanvas,
+              menuLabel: 'Canvas',
+              disableActiveModelSelection: false,
+              chipLabel: '',
+              icon: 0,
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: '',
+            },
+          ],
+        });
+        actionMenu.showAt(actionMenu);
+        await microtasksFinished();
+
+        const deepSearchButton =
+            $$(actionMenu, `[data-mode="${ToolMode.kDeepSearch}"]`);
+        assertTrue(isVisible(deepSearchButton));
+        const deepSearchIcon = deepSearchButton!.querySelector('cr-icon');
+        assertTrue(isVisible(deepSearchIcon));
+        assertEquals(
+            'searchbox_config:0', deepSearchIcon!.getAttribute('icon'));
+
+        const imageGenButton =
+            $$(actionMenu, `[data-mode="${ToolMode.kImageGen}"]`);
+        assertTrue(isVisible(imageGenButton));
+        const imageGenIcon = imageGenButton!.querySelector('cr-icon');
+        assertTrue(isVisible(imageGenIcon));
+        assertEquals('searchbox_config:0', imageGenIcon!.getAttribute('icon'));
+
+        const canvasButton =
+            $$(actionMenu, `[data-mode="${ToolMode.kCanvas}"]`);
+        assertTrue(isVisible(canvasButton));
+        const canvasIcon = canvasButton!.querySelector('cr-icon');
+        assertTrue(isVisible(canvasIcon));
+        assertEquals('searchbox_config:0', canvasIcon!.getAttribute('icon'));
+      });
+
+  test(
+      'Uses searchbox_config:0 when tool is not present in toolConfigs',
+      async () => {
+        actionMenu.inputState = new MockInputState({
+          allowedTools:
+              [ToolMode.kDeepSearch, ToolMode.kImageGen, ToolMode.kCanvas],
+          toolConfigs: [],
+        });
+        actionMenu.showAt(actionMenu);
+        await microtasksFinished();
+
+        const deepSearchButton =
+            $$(actionMenu, `[data-mode="${ToolMode.kDeepSearch}"]`);
+        assertTrue(isVisible(deepSearchButton));
+        const deepSearchIcon = deepSearchButton!.querySelector('cr-icon');
+        assertTrue(isVisible(deepSearchIcon));
+        assertEquals(
+            'searchbox_config:0', deepSearchIcon!.getAttribute('icon'));
+
+        const imageGenButton =
+            $$(actionMenu, `[data-mode="${ToolMode.kImageGen}"]`);
+        assertTrue(isVisible(imageGenButton));
+        const imageGenIcon = imageGenButton!.querySelector('cr-icon');
+        assertTrue(isVisible(imageGenIcon));
+        assertEquals('searchbox_config:0', imageGenIcon!.getAttribute('icon'));
+
+        const canvasButton =
+            $$(actionMenu, `[data-mode="${ToolMode.kCanvas}"]`);
+        assertTrue(isVisible(canvasButton));
+        const canvasIcon = canvasButton!.querySelector('cr-icon');
+        assertTrue(isVisible(canvasIcon));
+        assertEquals('searchbox_config:0', canvasIcon!.getAttribute('icon'));
+      });
+
+  test(
+      'Uses legacy tool icons when useSearchboxConfigIconIds is false',
+      async () => {
+        loadTimeData.overrideValues({
+          useSearchboxConfigIconIds: false,
+        });
+        actionMenu.inputState = new MockInputState({
+          allowedTools:
+              [ToolMode.kDeepSearch, ToolMode.kImageGen, ToolMode.kCanvas],
+          toolConfigs: [
+            {
+              tool: ToolMode.kDeepSearch,
+              menuLabel: 'Deep Search',
+              disableActiveModelSelection: false,
+              chipLabel: '',
+              icon: 94,
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: '',
+            },
+            {
+              tool: ToolMode.kImageGen,
+              menuLabel: 'Create Images',
+              disableActiveModelSelection: false,
+              chipLabel: '',
+              icon: 100,
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: '',
+            },
+            {
+              tool: ToolMode.kCanvas,
+              menuLabel: 'Canvas',
+              disableActiveModelSelection: false,
+              chipLabel: '',
+              icon: 96,
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: '',
+            },
+          ],
+        });
+        actionMenu.showAt(actionMenu);
+        await microtasksFinished();
+
+        const deepSearchButton =
+            $$(actionMenu, `[data-mode="${ToolMode.kDeepSearch}"]`);
+        assertTrue(isVisible(deepSearchButton));
+        const deepSearchIcon = deepSearchButton!.querySelector('cr-icon');
+        assertTrue(isVisible(deepSearchIcon));
+        assertEquals(
+            'composebox:travel-explore', deepSearchIcon!.getAttribute('icon'));
+
+        const imageGenButton =
+            $$(actionMenu, `[data-mode="${ToolMode.kImageGen}"]`);
+        assertTrue(isVisible(imageGenButton));
+        const imageGenIcon = imageGenButton!.querySelector('cr-icon');
+        assertTrue(isVisible(imageGenIcon));
+        assertEquals(
+            'composebox:nanoBanana-custom', imageGenIcon!.getAttribute('icon'));
+
+        const canvasButton =
+            $$(actionMenu, `[data-mode="${ToolMode.kCanvas}"]`);
+        assertTrue(isVisible(canvasButton));
+        const canvasIcon = canvasButton!.querySelector('cr-icon');
+        assertTrue(isVisible(canvasIcon));
+        assertEquals(
+            'composebox:draft-spark', canvasIcon!.getAttribute('icon'));
+      });
+
+  // LINT.IfChange(SearchboxConfigIcons)
+  test(
+      'searchbox_config icon definitions match composebox icon definitions',
+      () => {
+        const searchboxConfigIconset =
+            IconsetMap.getInstance().get('searchbox_config') as
+            CrIconsetElement;
+        const composeboxIconset =
+            IconsetMap.getInstance().get('composebox') as CrIconsetElement;
+        assertTrue(!!searchboxConfigIconset, 'searchbox_config iconset found');
+        assertTrue(!!composeboxIconset, 'composebox iconset found');
+
+        const iconMappings: Array<[number, string]> = [
+          [93, 'add-photo-alternate'],
+          [103, 'drive'],
+          [92, 'attach-file'],
+          [96, 'draft-spark'],
+          [94, 'travel-explore'],
+          [102, 'photo-prints'],
+          [90, 'autorenew'],
+          [91, 'bolt'],
+          [97, 'timer'],
+          [107, 'acute'],
+          [100, 'nanoBanana-custom'],
+        ];
+
+        for (const [intId, stringName] of iconMappings) {
+          const intIcon = searchboxConfigIconset.createIcon(`${intId}`);
+          const strIcon = composeboxIconset.createIcon(stringName);
+          assertTrue(
+              !!intIcon,
+              `Icon for integer ID ${
+                  intId} exists in searchbox_config iconset`);
+          assertTrue(
+              !!strIcon,
+              `Icon for string '${stringName}' exists in composebox iconset`);
+          assertEquals(
+              strIcon.innerHTML, intIcon.innerHTML,
+              `SVG content mismatch between searchbox_config:${
+                  intId} and composebox:${stringName}`);
+        }
+
+        const newToolIconIds = [108];
+        for (const intId of newToolIconIds) {
+          const intIcon = searchboxConfigIconset.createIcon(`${intId}`);
+          assertTrue(
+              !!intIcon,
+              `Icon for integer ID ${
+                  intId} exists in searchbox_config iconset`);
+        }
+      });
+  // LINT.ThenChange(//ui/webui/resources/cr_components/composebox/searchbox_config_icons.html.ts:SearchboxConfigIcons)
+
   test('Shows active tool checkmark and does not disable it', async () => {
     actionMenu.inputState = new MockInputState({
       allowedTools: [ToolMode.kDeepSearch, ToolMode.kImageGen],
@@ -350,6 +913,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
         {
           tool: ToolMode.kImageGen,
@@ -359,6 +923,7 @@ suite('ContextualActionMenu', () => {
           hintText: '',
           aimUrlParams: [],
           menuTooltip: '',
+          icon: 0,
         },
       ],
       toolsSectionConfig: {header: ''},
@@ -461,6 +1026,7 @@ suite('ContextualActionMenu', () => {
         hintText: '',
         aimUrlParams: [],
         menuTooltip: '',
+        icon: 0,
       }],
       modelSectionConfig: {header: 'Models'},
     });
@@ -483,6 +1049,7 @@ suite('ContextualActionMenu', () => {
         hintText: '',
         aimUrlParams: [],
         menuTooltip: '',
+        icon: 0,
       }],
       toolsSectionConfig: {header: ''},
       allowedModels: [],
@@ -540,6 +1107,7 @@ suite('ContextualActionMenu', () => {
         hintText: '',
         aimUrlParams: [],
         menuTooltip: '',
+        icon: 0,
       }],
       toolsSectionConfig: {header: ''},
       modelSectionConfig: {header: ''},
@@ -560,6 +1128,7 @@ suite('ContextualActionMenu', () => {
         hintText: '',
         aimUrlParams: [],
         menuTooltip: '',
+        icon: 0,
       }],
       modelSectionConfig: {header: ''},
       toolsSectionConfig: {header: ''},
@@ -582,6 +1151,7 @@ suite('ContextualActionMenu', () => {
       lastActiveTime: {internalValue: 0n},
       showInCurrentTabChip: false,
       showInPreviousTabChip: false,
+      isLoading: false,
       lastActive: {internalValue: 0n},
     };
     actionMenu.tabSuggestions = [tabInfo];
@@ -608,6 +1178,7 @@ suite('ContextualActionMenu', () => {
       lastActiveTime: {internalValue: 0n},
       showInCurrentTabChip: false,
       showInPreviousTabChip: false,
+      isLoading: false,
       lastActive: {internalValue: 0n},
     };
     actionMenu.tabSuggestions = [tabInfo];
@@ -630,7 +1201,7 @@ suite('ContextualActionMenu', () => {
     assertEquals('false', tabButton.getAttribute('aria-checked'));
 
     // Check with selection.
-    actionMenu.disabledTabIds = new Map([[tabInfo.tabId, '1']]);
+    actionMenu.selectedTabIds = new Map([[tabInfo.tabId, '1']]);
     await microtasksFinished();
     assertEquals('true', tabButton.getAttribute('aria-checked'));
   });
@@ -646,6 +1217,7 @@ suite('ContextualActionMenu', () => {
           lastActiveTime: {internalValue: 0n},
           showInCurrentTabChip: false,
           showInPreviousTabChip: false,
+          isLoading: false,
           lastActive: {internalValue: 0n},
         };
         actionMenu.tabSuggestions = [tabInfo];
@@ -672,6 +1244,9 @@ suite('ContextualActionMenu', () => {
       'Browser tab suggestions disabled when they are thread restored',
       async () => {
         actionMenu.remove();
+        loadTimeData.overrideValues({
+          composeboxContextMenuEnableTabDeselection: false,
+        });
         actionMenu =
             document.createElement('cr-composebox-contextual-action-menu');
         actionMenu.contextManagementInComposeboxEnabled = true;
@@ -726,6 +1301,7 @@ suite('ContextualActionMenu', () => {
         hintText: '',
         aimUrlParams: [],
         menuTooltip: '',
+        icon: 0,
       }],
       toolsSectionConfig: {header: toolsHeader},
       allowedModels: [ModelMode.kGeminiRegular],
@@ -735,6 +1311,7 @@ suite('ContextualActionMenu', () => {
         hintText: '',
         aimUrlParams: [],
         menuTooltip: '',
+        icon: 0,
       }],
       modelSectionConfig: {header: ''},
       allowedInputTypes: [InputType.kLensImage],
@@ -762,6 +1339,177 @@ suite('ContextualActionMenu', () => {
     assertTrue(imageUpload!.textContent.includes(imageUploadLabel));
   });
 
+  test(
+      'Shows tool and model tooltips when config provides them and ' +
+          'feature is enabled',
+      async () => {
+        const deepSearchTooltip = 'Deep search tooltip content';
+        const regularModelTooltip = 'Gemini Regular tooltip content';
+
+        actionMenu.contextMenuTooltipsEnabled = true;
+        actionMenu.inputState = new MockInputState({
+          allowedTools: [ToolMode.kDeepSearch, ToolMode.kImageGen],
+          toolConfigs: [
+            {
+              tool: ToolMode.kDeepSearch,
+              menuLabel: 'Deep Search',
+              disableActiveModelSelection: false,
+              chipLabel: '',
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: deepSearchTooltip,
+              icon: 0,
+            },
+            {
+              tool: ToolMode.kImageGen,
+              menuLabel: 'Generate Image',
+              disableActiveModelSelection: false,
+              chipLabel: '',
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: '',
+              icon: 0,
+            },
+          ],
+          toolsSectionConfig: {header: ''},
+          allowedModels: [ModelMode.kGeminiRegular, ModelMode.kGeminiPro],
+          modelConfigs: [
+            {
+              model: ModelMode.kGeminiRegular,
+              menuLabel: 'Gemini Regular',
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: regularModelTooltip,
+              icon: 0,
+            },
+            {
+              model: ModelMode.kGeminiPro,
+              menuLabel: 'Gemini Pro',
+              hintText: '',
+              aimUrlParams: [],
+              menuTooltip: '',
+              icon: 0,
+            },
+          ],
+          modelSectionConfig: {header: ''},
+        });
+
+        actionMenu.showAt(actionMenu);
+        await microtasksFinished();
+
+        const deepSearchEl =
+            $$(actionMenu, `[data-mode="${ToolMode.kDeepSearch}"]`);
+        assertTrue(!!deepSearchEl);
+        assertEquals(deepSearchTooltip, deepSearchEl.getAttribute('title'));
+
+        const imageGenEl =
+            $$(actionMenu, `[data-mode="${ToolMode.kImageGen}"]`);
+        assertTrue(!!imageGenEl);
+        assertEquals('', imageGenEl.getAttribute('title') || '');
+
+        const regularModelEl =
+            $$(actionMenu, `[data-model="${ModelMode.kGeminiRegular}"]`);
+        assertTrue(!!regularModelEl);
+        assertEquals(regularModelTooltip, regularModelEl.getAttribute('title'));
+
+        const proModelEl =
+            $$(actionMenu, `[data-model="${ModelMode.kGeminiPro}"]`);
+        assertTrue(!!proModelEl);
+        assertEquals('', proModelEl.getAttribute('title') || '');
+      });
+
+  test('Hides tool and model tooltips when feature is disabled', async () => {
+    actionMenu.contextMenuTooltipsEnabled = false;
+    actionMenu.inputState = new MockInputState({
+      allowedTools: [ToolMode.kDeepSearch],
+      toolConfigs: [
+        {
+          tool: ToolMode.kDeepSearch,
+          menuLabel: 'Deep Search',
+          disableActiveModelSelection: false,
+          chipLabel: '',
+          hintText: '',
+          aimUrlParams: [],
+          menuTooltip: 'Deep search tooltip content',
+          icon: 0,
+        },
+      ],
+      allowedModels: [ModelMode.kGeminiRegular],
+      modelConfigs: [
+        {
+          model: ModelMode.kGeminiRegular,
+          menuLabel: 'Gemini Regular',
+          hintText: '',
+          aimUrlParams: [],
+          menuTooltip: 'Gemini Regular tooltip content',
+          icon: 0,
+        },
+      ],
+    });
+
+    actionMenu.showAt(actionMenu);
+    await microtasksFinished();
+
+    const deepSearchEl =
+        $$(actionMenu, `[data-mode="${ToolMode.kDeepSearch}"]`);
+    assertTrue(!!deepSearchEl);
+    assertEquals('', deepSearchEl.getAttribute('title') || '');
+
+    const regularModelEl =
+        $$(actionMenu, `[data-model="${ModelMode.kGeminiRegular}"]`);
+    assertTrue(!!regularModelEl);
+    assertEquals('', regularModelEl.getAttribute('title') || '');
+  });
+
+  test(
+      'Shows add tabs tooltip based on selected tabs when tooltips enabled',
+      async () => {
+        actionMenu.contextManagementInComposeboxEnabled = true;
+        actionMenu.contextMenuTooltipsEnabled = true;
+        const tabInfo = createTabSuggestion({tabId: 101, title: 'Tab 1'});
+        actionMenu.tabSuggestions = [tabInfo];
+        actionMenu.inputState = new MockInputState({
+          allowedInputTypes: [InputType.kBrowserTab],
+        });
+
+        actionMenu.showAt(actionMenu);
+        await microtasksFinished();
+
+        const shareTabsTrigger =
+            actionMenu.$.menu.querySelector<HTMLButtonElement>(
+                '#shareTabsTrigger')!;
+        assertTrue(!!shareTabsTrigger);
+        assertEquals(
+            actionMenu.i18n('addOpenTabsToAskAnything'),
+            shareTabsTrigger.getAttribute('title'));
+
+        // Select a tab.
+        actionMenu.selectedTabIds = new Map([[101, 'uuid-101']]);
+        await microtasksFinished();
+
+        assertEquals(
+            actionMenu.i18n('sharingTabsWithGoogle'),
+            shareTabsTrigger.getAttribute('title'));
+      });
+
+  test('Hides add tabs tooltip when tooltips disabled', async () => {
+    actionMenu.contextManagementInComposeboxEnabled = true;
+    actionMenu.contextMenuTooltipsEnabled = false;
+    const tabInfo = createTabSuggestion({tabId: 101, title: 'Tab 1'});
+    actionMenu.tabSuggestions = [tabInfo];
+    actionMenu.inputState = new MockInputState({
+      allowedInputTypes: [InputType.kBrowserTab],
+    });
+
+    actionMenu.showAt(actionMenu);
+    await microtasksFinished();
+
+    const shareTabsTrigger = actionMenu.$.menu.querySelector<HTMLButtonElement>(
+        '#shareTabsTrigger')!;
+    assertTrue(!!shareTabsTrigger);
+    assertEquals('', shareTabsTrigger.getAttribute('title') || '');
+  });
+
   test('Toggling smart tab sharing fires event', async () => {
     actionMenu.remove();
     actionMenu = document.createElement('cr-composebox-contextual-action-menu');
@@ -774,6 +1522,7 @@ suite('ContextualActionMenu', () => {
         url: 'about:blank',
         showInCurrentTabChip: false,
         showInPreviousTabChip: false,
+        isLoading: false,
         lastActive: {internalValue: 0n},
       },
     ];
@@ -815,6 +1564,7 @@ suite('ContextualActionMenu', () => {
         url: 'about:blank',
         showInCurrentTabChip: false,
         showInPreviousTabChip: false,
+        isLoading: false,
         lastActive: {internalValue: 0n},
       },
     ];
@@ -1100,7 +1850,7 @@ suite('ContextualActionMenu', () => {
       toolsSectionConfig: {header: ''},
       modelSectionConfig: {header: ''},
     });
-    actionMenu.disabledTabIds = new Map();
+    actionMenu.selectedTabIds = new Map();
     document.body.appendChild(actionMenu);
     actionMenu.showAt(actionMenu);
     await microtasksFinished();
@@ -1110,12 +1860,12 @@ suite('ContextualActionMenu', () => {
     assertFalse(shareTabsTrigger.textContent.includes('1'));
 
     // Show tab counter when one tab is chosen.
-    actionMenu.disabledTabIds = new Map([[1, '1']]);
+    actionMenu.selectedTabIds = new Map([[1, '1']]);
     await microtasksFinished();
     assertTrue(!!shareTabsTrigger.querySelector('.share-tabs-arrow'));
 
     // No tab counter when no tab is selected.
-    actionMenu.disabledTabIds = new Map();
+    actionMenu.selectedTabIds = new Map();
     await microtasksFinished();
     assertFalse(shareTabsTrigger.textContent.includes('1'));
   });
@@ -1242,7 +1992,7 @@ suite('ContextualActionMenu', () => {
 
     actionMenu.tabSuggestions = [tab1, tab2, tab3, tab4];
     // Select 2 tabs to reach the limit of 2, so that unselected tabs (2 & 4) are disabled.
-    actionMenu.disabledTabIds = new Map([[1, 'uuid1'], [3, 'uuid3']]);
+    actionMenu.selectedTabIds = new Map([[1, 'uuid1'], [3, 'uuid3']]);
     actionMenu.inputState = new MockInputState({
       allowedInputTypes: [InputType.kBrowserTab],
     });
@@ -1298,6 +2048,79 @@ suite('ContextualActionMenu', () => {
     triggerKeyDown(firstItem, 'ArrowUp');
     await actionMenu.updateComplete;
     assertEquals(thirdItem, actionMenu.shadowRoot.activeElement);
+  });
+
+  test('Attached tabs stay deselectable at the input limit', async () => {
+    actionMenu.remove();
+    actionMenu = document.createElement('cr-composebox-contextual-action-menu');
+    actionMenu.contextManagementInComposeboxEnabled = true;
+    const tab1 = createTabSuggestion({tabId: 1, title: 'Tab 1'});
+    const tab2 = createTabSuggestion({tabId: 2, title: 'Tab 2'});
+
+    actionMenu.tabSuggestions = [tab1, tab2];
+    // Attaching tab1 reaches the limit of one total input. The browser then
+    // reports every allowed input type as disabled.
+    actionMenu.selectedTabIds = new Map([[1, 'uuid1']]);
+    actionMenu.inputState = new MockInputState({
+      allowedInputTypes: [InputType.kBrowserTab],
+      disabledInputTypes: [InputType.kBrowserTab],
+      maxTotalInputs: 1,
+    });
+    document.body.appendChild(actionMenu);
+    await microtasksFinished();
+
+    actionMenu.showAt(actionMenu);
+    await microtasksFinished();
+
+    // The entry point must stay actionable so the flyout can be opened.
+    const trigger = $$<HTMLButtonElement>(actionMenu, '#shareTabsTrigger');
+    assertTrue(!!trigger);
+    assertTrue(isVisible(trigger));
+    assertFalse(trigger.disabled);
+
+    const flyout = $$(actionMenu, '.share-tabs-flyout') as HTMLElement;
+    assertTrue(!!flyout);
+    triggerKeyDown(trigger, 'ArrowRight');
+    await actionMenu.updateComplete;
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await microtasksFinished();
+
+    const buttons = Array.from(
+        flyout.querySelectorAll<HTMLButtonElement>('button.dropdown-item'));
+    assertEquals(2, buttons.length);
+    assertFalse(buttons[0]!.disabled);  // tab1 (attached) -> deselectable
+    assertTrue(buttons[1]!.disabled);   // tab2 (unattached) -> at the limit
+
+    // Clicking the attached tab removes it from the context.
+    const deleteEvent = eventToPromise<CustomEvent<{tabId: number}>>(
+        'delete-tab-context', actionMenu);
+    buttons[0]!.click();
+    const event = await deleteEvent;
+    assertEquals(1, event.detail.tabId);
+  });
+
+  test('Tab entry point stays disabled when no tabs are attached', async () => {
+    actionMenu.remove();
+    actionMenu = document.createElement('cr-composebox-contextual-action-menu');
+    actionMenu.contextManagementInComposeboxEnabled = true;
+    actionMenu.tabSuggestions = [createTabSuggestion({tabId: 1, title: 'Tab'})];
+    actionMenu.selectedTabIds = new Map();
+    // Tabs are unavailable for a reason unrelated to the input limit, e.g. the
+    // active tool does not support them.
+    actionMenu.inputState = new MockInputState({
+      allowedInputTypes: [InputType.kBrowserTab],
+      disabledInputTypes: [InputType.kBrowserTab],
+    });
+    document.body.appendChild(actionMenu);
+    await microtasksFinished();
+
+    actionMenu.showAt(actionMenu);
+    await microtasksFinished();
+
+    const trigger = $$<HTMLButtonElement>(actionMenu, '#shareTabsTrigger');
+    assertTrue(!!trigger);
+    assertTrue(isVisible(trigger));
+    assertTrue(trigger.disabled);
   });
 
   test('focuses Share Tabs when opening the + menu via keydown', async () => {
@@ -1439,7 +2262,50 @@ suite('ContextualActionMenu', () => {
 
     assertEquals('left', flyout.getAttribute('data-position'));
 
-    // When blocked on both sides in a narrow panel, the flyout positions at the bottom with a bounded indent.
+    // When blocked on both sides in a narrow panel, the flyout positions at the
+    // bottom.
+    trigger.getBoundingClientRect = () => ({
+      left: 10,
+      right: 250,
+      top: 100,
+      bottom: 132,
+      width: 240,
+      height: 32,
+    } as DOMRect);
+    Object.defineProperty(
+        window, 'innerWidth', {value: 300, configurable: true});
+
+    trigger.dispatchEvent(new PointerEvent('pointerenter'));
+    await actionMenu.updateComplete;
+    await microtasksFinished();
+
+    assertEquals('bottom', flyout.getAttribute('data-position'));
+  });
+
+  test('Share tabs flyout bottom indent', async () => {
+    actionMenu.remove();
+    actionMenu = document.createElement('cr-composebox-contextual-action-menu');
+    actionMenu.contextManagementInComposeboxEnabled = true;
+    actionMenu.tabSuggestions = [
+      createTabSuggestion({tabId: 1, title: 'Tab 1'}),
+    ];
+    actionMenu.inputState = new MockInputState({
+      allowedInputTypes: [InputType.kBrowserTab],
+    });
+    document.body.appendChild(actionMenu);
+    await microtasksFinished();
+
+    actionMenu.showAt(actionMenu);
+    await microtasksFinished();
+
+    const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+    const flyout = $$(actionMenu, '.share-tabs-flyout') as HTMLElement;
+    assertTrue(!!trigger);
+    assertTrue(!!flyout);
+
+    Object.defineProperty(
+        flyout, 'offsetWidth', {value: 320, configurable: true});
+
     trigger.getBoundingClientRect = () => ({
       left: 16,
       right: 256,
@@ -1448,13 +2314,16 @@ suite('ContextualActionMenu', () => {
       width: 240,
       height: 32,
     } as DOMRect);
-    Object.defineProperty(window, 'innerWidth', {value: 380, configurable: true});
+    Object.defineProperty(
+        window, 'innerWidth', {value: 500, configurable: true});
 
     trigger.dispatchEvent(new PointerEvent('pointerenter'));
     await actionMenu.updateComplete;
     await microtasksFinished();
 
     assertEquals('bottom', flyout.getAttribute('data-position'));
+    assertEquals(
+        '114px', flyout.style.getPropertyValue('--share-tabs-flyout-indent'));
   });
 
   test('Favicon group rendered in action menu', async () => {
@@ -1469,7 +2338,7 @@ suite('ContextualActionMenu', () => {
     actionMenu.inputState = new MockInputState({
       allowedInputTypes: [InputType.kBrowserTab],
     });
-    actionMenu.disabledTabIds = new Map([[1, '1']]);
+    actionMenu.selectedTabIds = new Map([[1, '1']]);
     document.body.appendChild(actionMenu);
     actionMenu.showAt(actionMenu);
     await microtasksFinished();
@@ -1479,6 +2348,38 @@ suite('ContextualActionMenu', () => {
     assertTrue(!!faviconGroup);
     assertEquals(1, faviconGroup.tabs.length);
   });
+
+  test(
+      'Action menu preserves submitted tab state in favicon group',
+      async () => {
+        actionMenu.remove();
+        actionMenu =
+            document.createElement('cr-composebox-contextual-action-menu');
+        actionMenu.contextManagementInComposeboxEnabled = true;
+
+        const submittedTab = createTabSuggestion({
+          tabId: 1,
+          title: 'Submitted Tab',
+          url: 'https://google.com',
+        });
+        actionMenu.tabSuggestions = [submittedTab];
+        actionMenu.aimThreadRestoredTabs = [submittedTab];
+
+        actionMenu.inputState = new MockInputState({
+          allowedInputTypes: [InputType.kBrowserTab],
+        });
+
+        document.body.appendChild(actionMenu);
+        actionMenu.showAt(actionMenu);
+        await microtasksFinished();
+
+        const faviconGroup = $$(actionMenu, 'composebox-favicon-group') as
+            ComposeboxFaviconGroupElement;
+        assertTrue(isVisible(faviconGroup));
+
+        assertTrue(faviconGroup.submittedTabIds.has(1));
+        assertEquals(1, faviconGroup.submittedTabIds.size);
+      });
 
   test(
       'Disables uploads and tabs immediately when maxFileCount is reached',
@@ -1557,7 +2458,7 @@ suite('ContextualActionMenu', () => {
         });
         actionMenu.tabSuggestions = [tabInfo1, tabInfo2];
         // Select tab 1.
-        actionMenu.disabledTabIds = new Map([[1, 'uuid-1']]);
+        actionMenu.selectedTabIds = new Map([[1, 'uuid-1']]);
 
         // inputState allows everything and disables nothing.
         actionMenu.inputState = new MockInputState({
@@ -1594,106 +2495,6 @@ suite('ContextualActionMenu', () => {
         assertTrue(tabButton2.disabled);
       });
 
-  test('Disables all items when uploadButtonDisabled is true', async () => {
-    actionMenu.uploadButtonDisabled = true;
-
-    // Provide tab suggestion.
-    const tabInfo = createTabSuggestion({
-      tabId: 1,
-      title: 'Google',
-    });
-    actionMenu.tabSuggestions = [tabInfo];
-
-    // inputState allows everything and disables nothing.
-    actionMenu.inputState = new MockInputState({
-      allowedInputTypes: [
-        InputType.kLensImage,
-        InputType.kLensFile,
-        InputType.kDrive,
-        InputType.kBrowserTab,
-      ],
-      allowedTools: [ToolMode.kDeepSearch],
-      activeTool: ToolMode.kDeepSearch,
-      toolConfigs: [{
-        tool: ToolMode.kDeepSearch,
-        menuLabel: 'Deep Search',
-        disableActiveModelSelection: false,
-        chipLabel: '',
-        hintText: '',
-        aimUrlParams: [],
-        menuTooltip: '',
-      }],
-      toolsSectionConfig: {header: ''},
-      allowedModels: [ModelMode.kGeminiRegular],
-      modelConfigs: [{
-        model: ModelMode.kGeminiRegular,
-        menuLabel: 'Gemini Regular',
-        hintText: '',
-        aimUrlParams: [],
-        menuTooltip: '',
-      }],
-      modelSectionConfig: {header: ''},
-    });
-
-    actionMenu.showAt(actionMenu);
-    await microtasksFinished();
-
-    // Verify uploads are disabled.
-    const imageUpload = $$(actionMenu, '#imageUpload') as HTMLButtonElement;
-    const fileUpload = $$(actionMenu, '#fileUpload') as HTMLButtonElement;
-    const driveUpload = $$(actionMenu, '#driveUpload') as HTMLButtonElement;
-    assertTrue(imageUpload.disabled);
-    assertTrue(fileUpload.disabled);
-    assertTrue(driveUpload.disabled);
-
-    // Verify tabs are disabled.
-    const tabButton = actionMenu.$.menu.querySelector<HTMLButtonElement>(
-        '.suggestion-container button')!;
-    assertTrue(isVisible(tabButton));
-    assertTrue(tabButton.disabled);
-
-    // Verify tools are disabled.
-    const deepSearch =
-        $$(actionMenu, `[data-mode="${ToolMode.kDeepSearch}"]`) as
-        HTMLButtonElement;
-    assertTrue(deepSearch.disabled);
-
-    // Verify models are disabled.
-    const regularModel =
-        $$(actionMenu, `[data-model="${ModelMode.kGeminiRegular}"]`) as
-        HTMLButtonElement;
-    assertTrue(regularModel.disabled);
-  });
-
-  test('Recent tab suffix disabled state', async () => {
-    actionMenu.remove();
-    actionMenu = document.createElement('cr-composebox-contextual-action-menu');
-    actionMenu.contextManagementInComposeboxEnabled = true;
-    const tabInfo = createTabSuggestion({
-      tabId: 1,
-      title: 'Recent Tab',
-    });
-    actionMenu.tabSuggestions = [tabInfo];
-    actionMenu.recentTabId = tabInfo.tabId;
-    actionMenu.inputState = new MockInputState({
-      allowedInputTypes: [InputType.kBrowserTab],
-      disabledInputTypes: [InputType.kBrowserTab],
-    });
-    document.body.appendChild(actionMenu);
-    await microtasksFinished();
-
-    actionMenu.showAt(actionMenu);
-    await microtasksFinished();
-
-    const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
-    trigger.dispatchEvent(new PointerEvent('pointerenter'));
-    await microtasksFinished();
-
-    const suffix = $$(actionMenu, '.recent-tabs-suffix');
-    assertTrue(isVisible(suffix));
-    assertTrue(suffix!.hasAttribute('disabled'));
-  });
-
   test('Share tabs trigger disabled when tab upload disabled', async () => {
     actionMenu.remove();
     actionMenu = document.createElement('cr-composebox-contextual-action-menu');
@@ -1704,6 +2505,7 @@ suite('ContextualActionMenu', () => {
       url: 'about:blank',
       showInCurrentTabChip: false,
       showInPreviousTabChip: false,
+      isLoading: false,
       lastActive: {internalValue: 0n},
     };
     actionMenu.tabSuggestions = [tabInfo];
@@ -1721,12 +2523,12 @@ suite('ContextualActionMenu', () => {
     assertTrue(!!trigger);
     assertTrue(trigger.disabled);
 
-    // Hovering should open the flyout.
+    // Hovering should not open the flyout.
     trigger.dispatchEvent(new PointerEvent('pointerenter'));
     await microtasksFinished();
 
     const flyout = $$(actionMenu, '.share-tabs-flyout') as HTMLElement;
-    assertFalse(flyout.hidden);
+    assertTrue(flyout.hidden);
   });
 
   test(
@@ -1858,7 +2660,7 @@ suite('ContextualActionMenu', () => {
             document.createElement('cr-composebox-contextual-action-menu');
         Object.assign(actionMenu, {
           metricsSource_: 'NewTabPage',
-          disabledTabIds: new Map([[1, 'some-token']]),
+          selectedTabIds: new Map([[1, 'some-token']]),
           contextManagementInComposeboxEnabled: true,
         });
 
@@ -1898,7 +2700,7 @@ suite('ContextualActionMenu', () => {
             document.createElement('cr-composebox-contextual-action-menu');
         Object.assign(actionMenu, {
           metricsSource_: 'NewTabPage',
-          disabledTabIds: new Map([[1, 'some-token']]),
+          selectedTabIds: new Map([[1, 'some-token']]),
         });
 
         actionMenu.tabSuggestions = [tabInfo];
@@ -1920,131 +2722,236 @@ suite('ContextualActionMenu', () => {
         assertTrue(actionMenu.$.menu.open);
       });
 
-  test(
-      'Recent tab suffix follows the correct tab after reordering',
-      async () => {
-        const tab1 = createTabSuggestion({
-          tabId: 1,
-          title: 'Tab 1',
-          url: 'about:blank/1',
-        });
-        const tab2 = createTabSuggestion({
-          tabId: 2,
-          title: 'Tab 2',
-          url: 'about:blank/2',
-        });
+  suite('SingleTabMenuItem', () => {
+    let metrics: MetricsTracker;
 
-        loadTimeData.overrideValues({
-          composeboxContextMenuEnableMultiTabSelection: true,
-        });
-        actionMenu.remove();
-        actionMenu =
-            document.createElement('cr-composebox-contextual-action-menu');
-        actionMenu.contextManagementInComposeboxEnabled = true;
+    setup(() => {
+      metrics = fakeMetricsPrivate();
+    });
 
-        actionMenu.inputState = new MockInputState({
-          allowedInputTypes: [InputType.kBrowserTab],
-          toolsSectionConfig: {header: ''},
-          modelSectionConfig: {header: ''},
-        });
+    const recentTab = createTabSuggestion({
+      tabId: 1,
+      title: 'Recent Tab',
+      url: 'about:blank/1',
+    });
+    const otherTab = createTabSuggestion({
+      tabId: 2,
+      title: 'Other Tab',
+      url: 'about:blank/2',
+    });
 
-        // Backend initially provides Tab 1 as the first (most recent) item.
-        actionMenu.tabSuggestions = [tab1, tab2];
-        actionMenu.recentTabId = tab1.tabId;
-        document.body.appendChild(actionMenu);
-
-        actionMenu.showAt(actionMenu);
-        await microtasksFinished();
-        await actionMenu.updateComplete;
-
-        // Precisely target only the tab items inside the Flyout.
-        const getFlyoutItems = () => {
-          return actionMenu.shadowRoot.querySelectorAll(
-              '.share-tabs-flyout .dropdown-item');
-        };
-
-        let items = getFlyoutItems();
-        assertEquals(2, items.length, 'The flyout menu should render 2 tabs');
-
-        // Verify Tab 1 (index 0 in flyout) has the suffix and Tab 2 (index 1)
-        // does not.
-        assertTrue(
-            !!items[0]?.querySelector('.recent-tabs-suffix'),
-            'Tab 1 should have a suffix initially');
-        assertFalse(
-            !!items[1]?.querySelector('.recent-tabs-suffix'),
-            'Tab 2 should not have a suffix initially');
-
-        // Simulate frontend re-sorting (Tab 2 moved to index 0)
-        actionMenu.tabSuggestions = [tab2, tab1];
-
-        actionMenu.requestUpdate();
-        await microtasksFinished();
-        await actionMenu.updateComplete;
-
-        // Allow a small amount of time for the Lit render tree to sync.
-        await new Promise(resolve => setTimeout(resolve, 0));
-
-        // Re-fetch the latest items inside the Flyout.
-        items = getFlyoutItems();
-        assertEquals(2, items.length);
-
-        // The new index 0 (Tab 2) should NOT have the suffix.
-        assertFalse(
-            !!items[0]?.querySelector('.recent-tabs-suffix'),
-            'Tab 2 should not have a suffix after reordering');
-
-        // The suffix should still be on Tab 1, now at index 1.
-        assertTrue(
-            !!items[1]?.querySelector('.recent-tabs-suffix'),
-            'Tab 1 should retain the suffix after reordering');
+    async function createMenu(
+        enabled: boolean,
+        overrides: Partial<ContextualActionMenuElement> = {}) {
+      loadTimeData.overrideValues({
+        composeboxSingleTabMenuItemEnabled: enabled,
+        composeboxContextMenuEnableMultiTabSelection: true,
       });
-
-  test(
-      'Dynamic suffix shows Current Tab only in Side Panel Contextual Tasks',
-      async () => {
-        actionMenu.remove();
-        actionMenu =
-            document.createElement('cr-composebox-contextual-action-menu');
-        actionMenu.contextManagementInComposeboxEnabled = true;
-
-        const tabInfo = createTabSuggestion({
-          tabId: 1,
-          title: 'Google Docs',
-        });
-        actionMenu.tabSuggestions = [tabInfo];
-        actionMenu.recentTabId = tabInfo.tabId;
-        actionMenu.inputState = new MockInputState({
+      actionMenu.remove();
+      actionMenu =
+          document.createElement('cr-composebox-contextual-action-menu');
+      Object.assign(actionMenu, {
+        contextManagementInComposeboxEnabled: true,
+        tabSuggestions: [recentTab, otherTab],
+        recentTabId: recentTab.tabId,
+        inputState: new MockInputState({
           allowedInputTypes: [InputType.kBrowserTab],
+        }),
+        ...overrides,
+      });
+      document.body.appendChild(actionMenu);
+      await microtasksFinished();
+
+      actionMenu.showAt(actionMenu);
+      await microtasksFinished();
+      assertTrue(actionMenu.$.menu.open);
+    }
+
+    test('Item hidden when the param is disabled', async () => {
+      await createMenu(/*enabled=*/ false);
+      assertFalse(!!$$(actionMenu, '#singleTabItem'));
+      assertTrue(!!$$(actionMenu, '#shareTabsTrigger'));
+    });
+
+    test('Item rendered above the Add tabs trigger', async () => {
+      await createMenu(/*enabled=*/ true);
+
+      const item = $$(actionMenu, '#singleTabItem') as HTMLButtonElement;
+      assertTrue(!!item);
+      assertTrue(isVisible(item));
+      assertFalse(item.disabled);
+      assertEquals('menuitemcheckbox', item.getAttribute('role'));
+      assertEquals('false', item.getAttribute('aria-checked'));
+      assertEquals(
+          recentTab.title,
+          item.querySelector('.tab-title')!.textContent.trim());
+      assertFalse(!!item.querySelector('.share-tabs-check'));
+      const favicon = item.querySelector('cr-composebox-tab-favicon');
+      assertTrue(!!favicon);
+
+      // DOM order: item, then the "Add tabs" trigger.
+      const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+      assertTrue(!!trigger);
+      assertTrue(
+          !!(item.compareDocumentPosition(trigger) &
+             Node.DOCUMENT_POSITION_FOLLOWING));
+
+      // The flyout still lists the same tab as well.
+      trigger.dispatchEvent(new PointerEvent('pointerenter'));
+      await microtasksFinished();
+      const flyoutItems = actionMenu.shadowRoot.querySelectorAll(
+          '.share-tabs-flyout .dropdown-item');
+      assertEquals(2, flyoutItems.length);
+    });
+
+    test('Item hidden when the recent tab is not a suggestion', async () => {
+      await createMenu(/*enabled=*/ true, {recentTabId: 999});
+      assertFalse(!!$$(actionMenu, '#singleTabItem'));
+      assertTrue(!!$$(actionMenu, '#shareTabsTrigger'));
+    });
+
+    test('Item follows recentTabId when suggestions update', async () => {
+      await createMenu(/*enabled=*/ true);
+      let item = $$(actionMenu, '#singleTabItem') as HTMLButtonElement;
+      assertEquals('0', item.dataset['index']);
+
+      actionMenu.tabSuggestions = [otherTab, recentTab];
+      await microtasksFinished();
+      item = $$(actionMenu, '#singleTabItem') as HTMLButtonElement;
+      assertEquals('1', item.dataset['index']);
+      assertEquals(
+          recentTab.title,
+          item.querySelector('.tab-title')!.textContent.trim());
+
+      actionMenu.recentTabId = otherTab.tabId;
+      await microtasksFinished();
+      item = $$(actionMenu, '#singleTabItem') as HTMLButtonElement;
+      assertEquals('0', item.dataset['index']);
+      assertEquals(
+          otherTab.title, item.querySelector('.tab-title')!.textContent.trim());
+    });
+
+    test('Click adds the tab as context', async () => {
+      await createMenu(/*enabled=*/ true);
+      asInternal(actionMenu).metricsSource_ = 'NewTabPage';
+      const item = $$(actionMenu, '#singleTabItem') as HTMLButtonElement;
+      const whenAdded = eventToPromise<CustomEvent<{
+        id: number,
+        title: string,
+        url: string,
+        singleTabType?: SingleTabType,
+      }>>('add-tab-context', actionMenu);
+      item.click();
+      const event = await whenAdded;
+      assertEquals(recentTab.tabId, event.detail.id);
+      assertEquals(recentTab.title, event.detail.title);
+      assertEquals(recentTab.url, event.detail.url);
+      assertEquals(SingleTabType.RECENT_TAB, event.detail.singleTabType);
+
+      assertEquals(
+          1,
+          metrics.count(
+              'ContextualSearch.SingleTabMenuItem.Action.NewTabPage',
+              SingleTabMenuItemAction.RECENT_TAB_SELECTED));
+    });
+
+    test('Shows checkmark and deselects when already selected', async () => {
+      await createMenu(/*enabled=*/ true, {
+        selectedTabIds: new Map([[recentTab.tabId, 'some-token']]),
+      });
+      asInternal(actionMenu).metricsSource_ = 'NewTabPage';
+      const item = $$(actionMenu, '#singleTabItem') as HTMLButtonElement;
+      assertEquals('true', item.getAttribute('aria-checked'));
+      assertTrue(!!item.querySelector('.share-tabs-check'));
+
+      const whenDeleted = eventToPromise<CustomEvent<{tabId: number}>>(
+          'delete-tab-context', actionMenu);
+      item.click();
+      const event = await whenDeleted;
+      assertEquals(recentTab.tabId, event.detail.tabId);
+
+      assertEquals(
+          1,
+          metrics.count(
+              'ContextualSearch.SingleTabMenuItem.Action.NewTabPage',
+              SingleTabMenuItemAction.RECENT_TAB_DESELECTED));
+    });
+
+    test('Records CurrentTab slice when clicked in side panel', async () => {
+      await createMenu(/*enabled=*/ true, {isSidePanel: true});
+      asInternal(actionMenu).metricsSource_ = 'ContextualTasks';
+      const item = $$(actionMenu, '#singleTabItem') as HTMLButtonElement;
+      const whenAdded = eventToPromise<CustomEvent<{
+        singleTabType?: SingleTabType,
+      }>>('add-tab-context', actionMenu);
+      item.click();
+      const event = await whenAdded;
+      assertEquals(SingleTabType.CURRENT_TAB, event.detail.singleTabType);
+
+      assertEquals(
+          1,
+          metrics.count(
+              'ContextualSearch.SingleTabMenuItem.Action.ContextualTasks',
+              SingleTabMenuItemAction.CURRENT_TAB_SELECTED));
+
+      actionMenu.selectedTabIds = new Map([[recentTab.tabId, 'token']]);
+      await microtasksFinished();
+      item.click();
+      assertEquals(
+          1,
+          metrics.count(
+              'ContextualSearch.SingleTabMenuItem.Action.ContextualTasks',
+              SingleTabMenuItemAction.CURRENT_TAB_DESELECTED));
+    });
+
+    test(
+        'Flyout tab click does not record SingleTabMenuItem metrics',
+        async () => {
+          await createMenu(/*enabled=*/ true);
+          asInternal(actionMenu).metricsSource_ = 'NewTabPage';
+          const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+          trigger.dispatchEvent(new PointerEvent('pointerenter'));
+          await microtasksFinished();
+
+          const flyoutItem =
+              actionMenu.shadowRoot.querySelector<HTMLButtonElement>(
+                  '.share-tabs-flyout .dropdown-item');
+          assertTrue(!!flyoutItem);
+
+          const whenAdded =
+              eventToPromise<CustomEvent<{singleTabType?: SingleTabType}>>(
+                  'add-tab-context', actionMenu);
+          flyoutItem.click();
+          const event = await whenAdded;
+          assertEquals(undefined, event.detail.singleTabType);
+          assertEquals(
+              0,
+              metrics.count(
+                  'ContextualSearch.SingleTabMenuItem.Action.NewTabPage'));
         });
 
-        document.body.appendChild(actionMenu);
-        await microtasksFinished();
-
-        actionMenu.showAt(actionMenu);
-        await microtasksFinished();
-
-        const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
-        trigger.dispatchEvent(new PointerEvent('pointerenter'));
-        await microtasksFinished();
-
-        const suffix = $$(actionMenu, '.recent-tabs-suffix') as HTMLElement;
-        assertTrue(isVisible(suffix), 'Suffix should be visible');
-
-        actionMenu.isSidePanel = true;
-        await microtasksFinished();
-        assertEquals(
-            `· ${actionMenu.i18n('currentTabSuffix')}`,
-            suffix.textContent.trim(),
-            'Should render "Current tab" in side panel contextual tasks');
-
-        actionMenu.isSidePanel = false;
-        await microtasksFinished();
-        assertEquals(
-            `· ${actionMenu.i18n('recentTabsSuffix')}`,
-            suffix.textContent.trim(),
-            'Should fall back to "Recent tab" on the NTP');
+    test('Disabled when tab upload is disabled', async () => {
+      await createMenu(/*enabled=*/ true, {
+        inputState: new MockInputState({
+          allowedInputTypes: [InputType.kBrowserTab],
+          disabledInputTypes: [InputType.kBrowserTab],
+        }),
       });
+      const item = $$(actionMenu, '#singleTabItem') as HTMLButtonElement;
+      assertTrue(!!item);
+      assertTrue(item.disabled);
+    });
+
+    test('Item hidden while Smart Tab Sharing is active', async () => {
+      await createMenu(/*enabled=*/ true, {
+        smartTabSharingVisible: true,
+        smartTabSharingActive: true,
+      });
+      assertFalse(!!$$(actionMenu, '#singleTabItem'));
+      assertTrue(!!$$(actionMenu, '#smartTabSharingItem'));
+      assertFalse(!!$$(actionMenu, '#shareTabsTrigger'));
+    });
+  });
 
   suite('SmartTabSharingTogglePositioning', () => {
     setup(async () => {
@@ -2079,7 +2986,7 @@ suite('ContextualActionMenu', () => {
 
       // Main menu toggle is NOT visible
       const mainMenuToggle = $$(actionMenu, '#smartTabSharingItem');
-      assertFalse(!!mainMenuToggle);
+      assertFalse(isVisible(mainMenuToggle));
 
       // Open flyout
       trigger.dispatchEvent(new PointerEvent('pointerenter'));
@@ -2100,7 +3007,58 @@ suite('ContextualActionMenu', () => {
       const icon = flyoutToggleItem.querySelector('cr-icon');
       assertTrue(!!icon);
       assertEquals('composebox:screensaverAuto', icon.getAttribute('icon'));
+
+      // Headers are visible in flyout
+      const autoHeader = $$(actionMenu, '#automaticallyAddTabsHeader');
+      assertTrue(isVisible(autoHeader));
+      assertEquals('true', autoHeader?.getAttribute('aria-hidden'));
+      assertEquals('Automatically add tabs', autoHeader?.textContent?.trim());
+
+      const manualHeader = $$(actionMenu, '#manuallyAddTabsHeader');
+      assertTrue(isVisible(manualHeader));
+      assertEquals('true', manualHeader?.getAttribute('aria-hidden'));
+      assertEquals('Manually add tabs', manualHeader?.textContent?.trim());
     });
+
+    test(
+        'STS is OFF: no headers when showContextMenuHeaders is false',
+        async () => {
+          loadTimeData.overrideValues({
+            ShowContextMenuHeaders: false,
+          });
+          actionMenu.remove();
+          actionMenu =
+              document.createElement('cr-composebox-contextual-action-menu');
+          actionMenu.smartTabSharingVisible = true;
+          actionMenu.contextManagementInComposeboxEnabled = true;
+          actionMenu.tabSuggestions = [
+            createTabSuggestion({
+              tabId: 1,
+              title: 'Tab 1',
+            }),
+          ];
+          actionMenu.inputState = new MockInputState({
+            allowedInputTypes: [InputType.kBrowserTab],
+          });
+          document.body.appendChild(actionMenu);
+          await microtasksFinished();
+
+          actionMenu.smartTabSharingActive = false;
+          actionMenu.showAt(actionMenu);
+          await microtasksFinished();
+          await actionMenu.updateComplete;
+
+          const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+          trigger.dispatchEvent(new PointerEvent('pointerenter'));
+          await microtasksFinished();
+          await actionMenu.updateComplete;
+
+          const autoHeader = $$(actionMenu, '#automaticallyAddTabsHeader');
+          assertFalse(isVisible(autoHeader));
+
+          const manualHeader = $$(actionMenu, '#manuallyAddTabsHeader');
+          assertFalse(isVisible(manualHeader));
+        });
 
     test('STS is ON: Show toggle in main menu, no flyout', async () => {
       actionMenu.smartTabSharingActive = true;
@@ -2115,9 +3073,12 @@ suite('ContextualActionMenu', () => {
 
       assertEquals('true', mainMenuToggle.getAttribute('aria-checked'));
       assertTrue(!!mainMenuToggle.querySelector('.share-tabs-check'));
+      const icon = mainMenuToggle.querySelector('cr-icon:not(.share-tabs-check)');
+      assertTrue(!!icon);
+      assertEquals('composebox:screensaverAuto', icon.getAttribute('icon'));
       // Trigger is NOT visible
       const trigger = $$(actionMenu, '#shareTabsTrigger');
-      assertFalse(!!trigger);
+      assertFalse(isVisible(trigger));
     });
 
     test('Clicking toggle in flyout closes the menu', async () => {
@@ -2182,14 +3143,42 @@ suite('ContextualActionMenu', () => {
           assertTrue(isVisible(mainMenuToggle));
 
           const trigger = $$(actionMenu, '#shareTabsTrigger');
-          assertFalse(!!trigger);
+          assertFalse(isVisible(trigger));
+        });
+
+    test(
+        'Flyout divider retains 1px height when tab list overflows max-height',
+        async () => {
+          actionMenu.smartTabSharingActive = false;
+          actionMenu.tabSuggestions =
+              Array.from({length: 12}, (_, i) => createTabSuggestion({
+                                         tabId: i + 1,
+                                         title: `Tab ${i + 1}`,
+                                       }));
+          actionMenu.showAt(actionMenu);
+          await microtasksFinished();
+          await actionMenu.updateComplete;
+
+          const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+          assertTrue(!!trigger);
+          trigger.dispatchEvent(new PointerEvent('pointerenter'));
+          await microtasksFinished();
+          await actionMenu.updateComplete;
+
+          const flyout = $$(actionMenu, '.share-tabs-flyout') as HTMLElement;
+          assertTrue(!!flyout);
+          assertTrue(flyout.scrollHeight > flyout.clientHeight);
+
+          const divider = flyout.querySelector('hr');
+          assertTrue(!!divider);
+          assertEquals(1, divider.offsetHeight);
         });
   });
 
   suite('getSelectedTabs_', () => {
     test(
-        'returns empty array when disabled and restored are empty', () => {
-          actionMenu.disabledTabIds = new Map();
+        'returns empty array when selected and restored are empty', () => {
+          actionMenu.selectedTabIds = new Map();
           actionMenu.aimThreadRestoredTabs = [];
           actionMenu.tabSuggestions = [
             createTabSuggestion({
@@ -2203,7 +3192,7 @@ suite('ContextualActionMenu', () => {
 
     test(
         'returns matched tabs in reverse order of' +
-            ' addition to disabled and concatenated with restored',
+            ' addition to selected and concatenated with restored',
         () => {
           const tab1 = createTabSuggestion({
             tabId: 1,
@@ -2222,10 +3211,10 @@ suite('ContextualActionMenu', () => {
 
           actionMenu.contextManagementInComposeboxEnabled = true;
           actionMenu.aimThreadRestoredTabs = [tab1];
-          const disabledTabIds = new Map();
-          disabledTabIds.set(2, 'token2');
-          disabledTabIds.set(3, 'token3');
-          actionMenu.disabledTabIds = disabledTabIds;
+          const selectedTabIds = new Map();
+          selectedTabIds.set(2, 'token2');
+          selectedTabIds.set(3, 'token3');
+          actionMenu.selectedTabIds = selectedTabIds;
 
           const selectedTabs = asInternal(actionMenu).getSelectedTabs_();
           assertEquals(3, selectedTabs.length);
@@ -2245,10 +3234,10 @@ suite('ContextualActionMenu', () => {
       actionMenu.tabSuggestions = [tab1];
 
       actionMenu.aimThreadRestoredTabs = [];
-      const disabledTabIds = new Map();
-      disabledTabIds.set(1, 'token1');
-      disabledTabIds.set(5, 'token5');
-      actionMenu.disabledTabIds = disabledTabIds;
+      const selectedTabIds = new Map();
+      selectedTabIds.set(1, 'token1');
+      selectedTabIds.set(5, 'token5');
+      actionMenu.selectedTabIds = selectedTabIds;
 
       const selectedTabs = asInternal(actionMenu).getSelectedTabs_();
       // Tab 5 is filtered out because it is not found in tabSuggestions.
@@ -2344,6 +3333,11 @@ suite('ContextualActionMenu', () => {
     });
 
     test('Anchors above the button if space below < 160px', async () => {
+      Object.defineProperty(actionMenu.$.menu.getDialog(), 'scrollHeight', {
+        value: 144,
+        configurable: true,
+      });
+
       // Mock window innerHeight
       Object.defineProperty(window, 'innerHeight', {
         value: 600,
@@ -2593,6 +3587,7 @@ suite('ContextualActionMenu', () => {
         lastActiveTime: {internalValue: 0n},
         showInCurrentTabChip: false,
         showInPreviousTabChip: false,
+        isLoading: false,
         lastActive: {internalValue: 0n},
       });
 
@@ -2688,6 +3683,7 @@ suite('ContextualActionMenu', () => {
             lastActiveTime: {internalValue: 0n},
             showInCurrentTabChip: false,
             showInPreviousTabChip: false,
+            isLoading: false,
             lastActive: {internalValue: 0n},
           });
           await Promise.all([microtasksFinished(), repositionedPromise]);
@@ -2959,6 +3955,7 @@ suite('ContextualActionMenu', () => {
           lastActiveTime: {internalValue: 0n},
           showInCurrentTabChip: false,
           showInPreviousTabChip: false,
+          isLoading: false,
           lastActive: {internalValue: 0n},
         } as unknown as TabInfo,
       ];
@@ -3150,6 +4147,7 @@ suite('ContextualActionMenu', () => {
         lastActiveTime: {internalValue: 0n},
         showInCurrentTabChip: false,
         showInPreviousTabChip: false,
+        isLoading: false,
         lastActive: {internalValue: 0n},
       });
       actionMenu.inputState = new MockInputState({
@@ -3307,5 +4305,540 @@ suite('ContextualActionMenu', () => {
       // Verify the flyout does not have inline scrollbar-width override.
       assertFalse(flyout.style.getPropertyValue('scrollbar-width') === 'thin');
     });
+
+    test('Unbounded menu enabled property and flyout positioning', async () => {
+      actionMenu.unboundedMenuEnabled = true;
+      await microtasksFinished();
+      assertTrue(actionMenu.hasAttribute('unbounded-menu-enabled'));
+
+      const tabInfo = createTabSuggestion({
+        tabId: 101,
+        title: 'Unbounded Test Tab',
+        url: 'about:blank/1',
+      });
+      actionMenu.tabSuggestions = [tabInfo];
+      actionMenu.contextManagementInComposeboxEnabled = true;
+      actionMenu.inputState = new MockInputState({
+        allowedInputTypes: [InputType.kBrowserTab],
+      });
+
+      actionMenu.showAt(actionMenu);
+      await microtasksFinished();
+
+      const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+      assertTrue(isVisible(trigger));
+      trigger.dispatchEvent(new PointerEvent('pointerenter'));
+      await microtasksFinished();
+
+      const flyout = $$(actionMenu, '.share-tabs-flyout') as HTMLElement;
+      assertTrue(isVisible(flyout));
+      assertTrue(!!flyout.getAttribute('data-position'));
+
+      const wrapper = $$(actionMenu, '.menu-outer-wrapper') as HTMLElement;
+      assertTrue(!!wrapper);
+      assertEquals(
+          flyout.getAttribute('data-position'),
+          wrapper.getAttribute('data-flyout-position'));
+
+      // Test resetting flyout scroll on close/reopen
+      flyout.scrollTop = 50;
+      trigger.dispatchEvent(new PointerEvent('pointerleave'));
+      trigger.dispatchEvent(new PointerEvent('pointerenter'));
+      await microtasksFinished();
+      assertEquals(0, flyout.scrollTop);
+    });
+
+    test(
+        'closes menu on tab click when unboundedMenuEnabled is true',
+        async () => {
+          const tabInfo = createTabSuggestion({
+            tabId: 201,
+            title: 'Unbounded Click Tab',
+            url: 'about:blank/201',
+          });
+          actionMenu.tabSuggestions = [tabInfo];
+          actionMenu.contextManagementInComposeboxEnabled = true;
+          actionMenu.inputState = new MockInputState({
+            allowedInputTypes: [InputType.kBrowserTab],
+          });
+          actionMenu.unboundedMenuEnabled = true;
+          actionMenu.showAt(actionMenu);
+          await microtasksFinished();
+          assertTrue(actionMenu.$.menu.open);
+
+          const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+          assertTrue(isVisible(trigger));
+          trigger.dispatchEvent(new PointerEvent('pointerenter'));
+          await microtasksFinished();
+
+          const tabButton = actionMenu.shadowRoot.querySelector<HTMLElement>(
+              '.share-tabs-flyout .dropdown-item')!;
+          assertTrue(isVisible(tabButton));
+          tabButton.click();
+          await microtasksFinished();
+
+          assertFalse(actionMenu.$.menu.open);
+        });
+  });
+
+  suite('SmartTabSharingMetrics', () => {
+    let originalRecordEnumerationValue: any;
+    let recordedMetrics:
+        Array<{metricName: string, value: number, enumSize: number}> = [];
+
+    suiteSetup(() => {
+      (window as any).chrome = (window as any).chrome || {};
+      (window as any).chrome.histograms =
+          (window as any).chrome.histograms || {};
+      originalRecordEnumerationValue =
+          (window as any).chrome.histograms.recordEnumerationValue;
+      (window as any).chrome.histograms.recordEnumerationValue =
+          (metricName: string, value: number, enumSize: number) => {
+            recordedMetrics.push({metricName, value, enumSize});
+            if (originalRecordEnumerationValue) {
+              originalRecordEnumerationValue(metricName, value, enumSize);
+            }
+          };
+    });
+
+    suiteTeardown(() => {
+      if ((window as any).chrome && (window as any).chrome.histograms) {
+        (window as any).chrome.histograms.recordEnumerationValue =
+            originalRecordEnumerationValue;
+      }
+    });
+
+    setup(() => {
+      recordedMetrics = [];
+    });
+
+    test(
+        'Logs OMNIBOX_COMPOSEBOX when shown directly from NewTabPage',
+        async () => {
+          asInternal(actionMenu).metricsSource_ = 'NewTabPage';
+          actionMenu.smartTabSharingVisible = true;
+          actionMenu.smartTabSharingActive = true;
+
+          actionMenu.showAt(actionMenu);
+          await microtasksFinished();
+
+          assertEquals(1, recordedMetrics.length);
+          assertEquals(
+              'ContextualSearch.SmartTabSharing.MenuOptionShown',
+              recordedMetrics[0]!.metricName);
+          assertEquals(
+              SmartTabSharingSurface.OMNIBOX_COMPOSEBOX,
+              recordedMetrics[0]!.value);
+        });
+
+    test(
+        'Logs OMNIBOX_COMPOSEBOX when shown directly from Omnibox',
+        async () => {
+          asInternal(actionMenu).metricsSource_ = 'Omnibox';
+          actionMenu.smartTabSharingVisible = true;
+          actionMenu.smartTabSharingActive = true;
+
+          actionMenu.showAt(actionMenu);
+          await microtasksFinished();
+
+          assertEquals(1, recordedMetrics.length);
+          assertEquals(
+              SmartTabSharingSurface.OMNIBOX_COMPOSEBOX,
+              recordedMetrics[0]!.value);
+        });
+
+    test(
+        'Logs CONTEXTUAL_SEARCHBOX when shown directly from ContextualTasks',
+        async () => {
+          asInternal(actionMenu).metricsSource_ = 'ContextualTasks';
+          actionMenu.smartTabSharingVisible = true;
+          actionMenu.smartTabSharingActive = true;
+
+          actionMenu.showAt(actionMenu);
+          await microtasksFinished();
+
+          assertEquals(1, recordedMetrics.length);
+          assertEquals(
+              SmartTabSharingSurface.CONTEXTUAL_SEARCHBOX,
+              recordedMetrics[0]!.value);
+        });
+
+    test(
+        'Does not log when smartTabSharingActive is false and flyout is closed',
+        async () => {
+          asInternal(actionMenu).metricsSource_ = 'NewTabPage';
+          actionMenu.smartTabSharingVisible = true;
+          actionMenu.smartTabSharingActive = false;
+
+          actionMenu.showAt(actionMenu);
+          await microtasksFinished();
+
+          assertEquals(0, recordedMetrics.length);
+        });
+
+    test(
+        'Logs when smartTabSharingActive is false but flyout is open',
+        async () => {
+          asInternal(actionMenu).metricsSource_ = 'NewTabPage';
+          actionMenu.smartTabSharingVisible = true;
+          actionMenu.smartTabSharingActive = false;
+          actionMenu.contextManagementInComposeboxEnabled = true;
+          actionMenu.tabSuggestions = [createTabSuggestion()];
+          actionMenu.inputState = new MockInputState({
+            allowedInputTypes: [InputType.kBrowserTab],
+          });
+
+          actionMenu.showAt(actionMenu);
+          await microtasksFinished();
+
+          // Open flyout
+          actionMenu.shareTabsFlyoutOpen = true;
+          await microtasksFinished();
+
+          assertEquals(1, recordedMetrics.length);
+          assertEquals(
+              SmartTabSharingSurface.OMNIBOX_COMPOSEBOX,
+              recordedMetrics[0]!.value);
+        });
+
+    test('Logs only once per show', async () => {
+      asInternal(actionMenu).metricsSource_ = 'NewTabPage';
+      actionMenu.smartTabSharingVisible = true;
+      actionMenu.smartTabSharingActive = true;
+
+      actionMenu.showAt(actionMenu);
+      await microtasksFinished();
+
+      assertEquals(1, recordedMetrics.length);
+
+      // Trigger update again without closing, should not log again
+      actionMenu.requestUpdate();
+      await microtasksFinished();
+      assertEquals(1, recordedMetrics.length);
+
+      // Close and re-show, should log again
+      const closePromise = eventToPromise('close', actionMenu);
+      actionMenu.close();
+      await closePromise;
+
+      actionMenu.showAt(actionMenu);
+      await microtasksFinished();
+      assertEquals(2, recordedMetrics.length);
+    });
+  });
+
+  suite('Accessibility', () => {
+    test(
+        'ensure accessibility of wrappers, dividers, headers, and flyout',
+        async () => {
+          loadTimeData.overrideValues({
+            ShowContextMenuHeaders: true,
+          });
+
+          actionMenu.remove();
+          actionMenu =
+              document.createElement('cr-composebox-contextual-action-menu');
+          actionMenu.contextManagementInComposeboxEnabled = true;
+          const tabs = [
+            createTabSuggestion(
+                {tabId: 1, title: 'Tab 1', url: 'about:blank/1'}),
+            createTabSuggestion(
+                {tabId: 2, title: 'Tab 2', url: 'about:blank/2'}),
+          ];
+          actionMenu.tabSuggestions = tabs;
+          actionMenu.inputState = new MockInputState({
+            allowedInputTypes: [
+              InputType.kBrowserTab,
+              InputType.kLensImage,
+              InputType.kLensFile,
+            ],
+            allowedTools: [
+              ToolMode.kImageGen,
+              ToolMode.kDeepSearch,
+              ToolMode.kCanvas,
+            ],
+            toolsSectionConfig: {header: 'Tools'},
+            allowedModels: [ModelMode.kGeminiRegular],
+            modelSectionConfig: {header: 'Models'},
+          });
+          document.body.appendChild(actionMenu);
+          await microtasksFinished();
+
+          actionMenu.showAt(actionMenu);
+          await microtasksFinished();
+          assertTrue(actionMenu.$.menu.open);
+
+          // Verify wrappers have role="presentation".
+          const outerWrapper =
+              actionMenu.shadowRoot.querySelector('.menu-outer-wrapper');
+          assertTrue(!!outerWrapper);
+          assertEquals('presentation', outerWrapper.getAttribute('role'));
+
+          const mainCard =
+              actionMenu.shadowRoot.querySelector('.main-menu-card');
+          assertTrue(!!mainCard);
+          assertEquals('presentation', mainCard.getAttribute('role'));
+
+          const shareTabsContainer =
+              actionMenu.shadowRoot.querySelector('.share-tabs-container');
+          assertTrue(!!shareTabsContainer);
+          assertEquals('presentation', shareTabsContainer.getAttribute('role'));
+
+          // Verify dividers have aria-hidden="true".
+          const dividers =
+              Array.from(actionMenu.shadowRoot.querySelectorAll('hr'));
+          assertTrue(dividers.length > 0);
+          dividers.forEach(hr => {
+            assertEquals('true', hr.getAttribute('aria-hidden'));
+          });
+
+          // Verify headers have aria-hidden="true".
+          const toolHeader = actionMenu.shadowRoot.querySelector('#toolHeader');
+          assertTrue(!!toolHeader);
+          assertEquals('true', toolHeader.getAttribute('aria-hidden'));
+
+          const modelHeader =
+              actionMenu.shadowRoot.querySelector('#modelHeader');
+          assertTrue(!!modelHeader);
+          assertEquals('true', modelHeader.getAttribute('aria-hidden'));
+
+          // Verify flyout is aria-hidden when closed.
+          const flyout = actionMenu.shadowRoot.querySelector<HTMLElement>(
+              '.share-tabs-flyout');
+          assertTrue(!!flyout);
+          assertEquals('true', flyout.getAttribute('aria-hidden'));
+
+          // Open flyout by hovering over Share Tabs trigger.
+          const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+          assertTrue(!!trigger);
+          trigger.dispatchEvent(new PointerEvent('pointerenter'));
+          await microtasksFinished();
+
+          // Verify flyout is not aria-hidden when open.
+          assertEquals('false', flyout.getAttribute('aria-hidden'));
+        });
+  });
+
+  suite('ContextualSearchTabPickerTelemetry', () => {
+    let recordedMetrics:
+        Array<{metricName: string, value: number, enumSize: number}> = [];
+    let originalRecordEnumerationValue: any;
+    let recordedBooleans: Array<{metricName: string, value: boolean}> = [];
+    let originalRecordBoolean: any;
+
+    suiteSetup(() => {
+      (window as any).chrome = (window as any).chrome || {};
+      (window as any).chrome.histograms =
+          (window as any).chrome.histograms || {};
+      originalRecordEnumerationValue =
+          (window as any).chrome.histograms.recordEnumerationValue;
+      (window as any).chrome.histograms.recordEnumerationValue =
+          (metricName: string, value: number, enumSize: number) => {
+            recordedMetrics.push({metricName, value, enumSize});
+            if (originalRecordEnumerationValue) {
+              originalRecordEnumerationValue(metricName, value, enumSize);
+            }
+          };
+      originalRecordBoolean = (window as any).chrome.histograms.recordBoolean;
+      (window as any).chrome.histograms.recordBoolean =
+          (metricName: string, value: boolean) => {
+            recordedBooleans.push({metricName, value});
+            if (originalRecordBoolean) {
+              originalRecordBoolean(metricName, value);
+            }
+          };
+    });
+
+    suiteTeardown(() => {
+      if ((window as any).chrome && (window as any).chrome.histograms) {
+        (window as any).chrome.histograms.recordEnumerationValue =
+            originalRecordEnumerationValue;
+        (window as any).chrome.histograms.recordBoolean = originalRecordBoolean;
+      }
+    });
+
+    setup(async () => {
+      recordedMetrics = [];
+      recordedBooleans = [];
+      asInternal(actionMenu).metricsSource_ = 'ContextualTasks';
+      actionMenu.inputState = new MockInputState({
+        allowedInputTypes: [
+          InputType.kBrowserTab,
+          InputType.kLensFile,
+          InputType.kDrive,
+        ],
+        allowedTools: [
+          ToolMode.kImageGen,
+          ToolMode.kDeepSearch,
+          ToolMode.kCanvas,
+        ],
+      });
+      actionMenu.tabSuggestions = [
+        createTabSuggestion({tabId: 1, title: 'Recent Tab'}),
+        createTabSuggestion(
+            {tabId: 2, title: 'Active Tab', showInCurrentTabChip: true}),
+        createTabSuggestion({tabId: 3, title: 'BG Tab'}),
+      ];
+      actionMenu.recentTabId = 1;
+      actionMenu.contextManagementInComposeboxEnabled = true;
+      actionMenu.showAt(actionMenu);
+      await microtasksFinished();
+    });
+
+    test(
+        'Records ContextualSearch.TabPicker.SelectedTab{IsActive,Position}.ContextualTasksWebUi when tab is selected',
+        async () => {
+          const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+          assertTrue(!!trigger);
+          trigger.dispatchEvent(new PointerEvent('pointerenter'));
+          await microtasksFinished();
+
+          const flyout = actionMenu.shadowRoot.querySelector<HTMLElement>(
+              '.share-tabs-flyout');
+          assertTrue(!!flyout);
+          const tabItems = Array.from(
+              flyout.querySelectorAll<HTMLButtonElement>('.dropdown-item'));
+          assertEquals(3, tabItems.length);
+
+          // Only tab 1 is the active tab, so the two axes disagree and the
+          // assertions below would fail if they were conflated.
+          const expectations = [
+            {position: 0, isActive: false},
+            {position: 1, isActive: true},
+            {position: 2, isActive: false},
+          ];
+          for (const expected of expectations) {
+            recordedMetrics = [];
+            recordedBooleans = [];
+            tabItems[expected.position]!.click();
+            await microtasksFinished();
+
+            const position = recordedMetrics.find(
+                m => m.metricName ===
+                    'ContextualSearch.TabPicker.SelectedTabPosition.ContextualTasksWebUi');
+            assertTrue(!!position);
+            assertEquals(expected.position, position.value);
+            assertEquals(21, position.enumSize);
+
+            const isActive = recordedBooleans.find(
+                m => m.metricName ===
+                    'ContextualSearch.TabPicker.SelectedTabIsActive.ContextualTasksWebUi');
+            assertTrue(!!isActive);
+            assertEquals(expected.isActive, isActive.value);
+          }
+        });
+
+    test(
+        'Records ContextualSearch.TabPicker metrics for NewTabPage and Omnibox surfaces',
+        async () => {
+          const testCases = [
+            {source: 'NewTabPage', suffix: 'NewTabPage'},
+            {source: 'Omnibox', suffix: 'Omnibox'},
+            {source: 'OmniboxEverywhere', suffix: 'Omnibox'},
+          ];
+
+          for (const tc of testCases) {
+            asInternal(actionMenu).metricsSource_ = tc.source;
+            await microtasksFinished();
+
+            const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+            assertTrue(!!trigger);
+            trigger.dispatchEvent(new PointerEvent('pointerenter'));
+            await microtasksFinished();
+
+            const flyout = actionMenu.shadowRoot.querySelector<HTMLElement>(
+                '.share-tabs-flyout');
+            assertTrue(!!flyout);
+            const tabItems = Array.from(
+                flyout.querySelectorAll<HTMLButtonElement>('.dropdown-item'));
+            assertTrue(tabItems.length > 0);
+
+            recordedMetrics = [];
+            recordedBooleans = [];
+            tabItems[0]!.click();
+            await microtasksFinished();
+
+            const position = recordedMetrics.find(
+                m => m.metricName ===
+                    `ContextualSearch.TabPicker.SelectedTabPosition.${
+                         tc.suffix}`);
+            assertTrue(!!position);
+            assertEquals(0, position.value);
+
+            const isActive = recordedBooleans.find(
+                m => m.metricName ===
+                    `ContextualSearch.TabPicker.SelectedTabIsActive.${
+                         tc.suffix}`);
+            assertTrue(!!isActive);
+            assertFalse(isActive.value);
+          }
+        });
+
+    test(
+        'Does not record ContextualSearch.TabPicker metrics when metricsSource is unrecognized',
+        async () => {
+          asInternal(actionMenu).metricsSource_ = 'UnknownSource';
+          await microtasksFinished();
+
+          const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+          assertTrue(!!trigger);
+          trigger.dispatchEvent(new PointerEvent('pointerenter'));
+          await microtasksFinished();
+
+          const flyout = actionMenu.shadowRoot.querySelector<HTMLElement>(
+              '.share-tabs-flyout');
+          assertTrue(!!flyout);
+          const tabItems = Array.from(
+              flyout.querySelectorAll<HTMLButtonElement>('.dropdown-item'));
+          assertTrue(tabItems.length > 0);
+
+          recordedMetrics = [];
+          recordedBooleans = [];
+          tabItems[0]!.click();
+          await microtasksFinished();
+
+          assertFalse(!!recordedMetrics.find(
+              m => m.metricName.startsWith('ContextualSearch.TabPicker.')));
+          assertFalse(!!recordedBooleans.find(
+              m => m.metricName.startsWith('ContextualSearch.TabPicker.')));
+        });
+
+    test(
+        'Omits ContextualSearch.TabPicker.SelectedTabIsActive when no active tab candidate exists',
+        async () => {
+          actionMenu.tabSuggestions = [
+            createTabSuggestion({tabId: 1, title: 'Tab 1'}),
+            createTabSuggestion({tabId: 2, title: 'Tab 2'}),
+          ];
+          await microtasksFinished();
+
+          const trigger = $$(actionMenu, '#shareTabsTrigger') as HTMLElement;
+          assertTrue(!!trigger);
+          trigger.dispatchEvent(new PointerEvent('pointerenter'));
+          await microtasksFinished();
+
+          const flyout = actionMenu.shadowRoot.querySelector<HTMLElement>(
+              '.share-tabs-flyout');
+          assertTrue(!!flyout);
+          const tabItems = Array.from(
+              flyout.querySelectorAll<HTMLButtonElement>('.dropdown-item'));
+          assertTrue(tabItems.length > 0);
+
+          recordedMetrics = [];
+          recordedBooleans = [];
+          tabItems[0]!.click();
+          await microtasksFinished();
+
+          const position = recordedMetrics.find(
+              m => m.metricName ===
+                  'ContextualSearch.TabPicker.SelectedTabPosition.ContextualTasksWebUi');
+          assertTrue(!!position);
+          assertEquals(0, position.value);
+
+          const isActive = recordedBooleans.find(
+              m => m.metricName ===
+                  'ContextualSearch.TabPicker.SelectedTabIsActive.ContextualTasksWebUi');
+          assertFalse(!!isActive);
+        });
   });
 });

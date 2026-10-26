@@ -7,6 +7,7 @@
 
 #include <optional>
 
+#include "base/containers/span.h"
 #include "base/memory/raw_ref.h"
 #include "components/signin/public/base/signin_prefs.h"
 #include "google_apis/gaia/gaia_id.h"
@@ -21,6 +22,9 @@ namespace signin {
 
 class IdentityManager;
 struct AccountPreviewData;
+struct AccountPreviewHeuristicContext;
+struct AccountPreviewSelectionResult;
+struct AccountSwitchingSelectionResult;
 
 class AccountPreviewMetricsRecorder {
  public:
@@ -37,7 +41,15 @@ class AccountPreviewMetricsRecorder {
 
   void RecordMetrics(const GaiaId& gaia_id, const AccountPreviewData& data);
 
+  void RecordSelectionHeuristicResult(
+      base::span<const AccountPreviewHeuristicContext> accounts,
+      const AccountPreviewSelectionResult& selection_result);
+
+  void RecordSwitchingHeuristicResult(
+      const AccountSwitchingSelectionResult& switching_result);
+
  private:
+  raw_ref<PrefService> pref_service_;
   SigninPrefs signin_prefs_;
   raw_ref<const IdentityManager> identity_manager_;
   raw_ref<const metrics::ProfileMetricsService> profile_metrics_service_;

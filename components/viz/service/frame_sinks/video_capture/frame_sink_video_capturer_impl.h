@@ -33,7 +33,7 @@
 #include "components/viz/service/viz_service_export.h"
 #include "media/base/video_frame.h"
 #include "media/capture/content/video_capture_oracle.h"
-#include "media/video/renderable_mappable_shared_image_video_frame_pool.h"
+#include "media/gfx/renderable_mappable_shared_image_video_frame_pool.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -123,6 +123,7 @@ class VIZ_SERVICE_EXPORT FrameSinkVideoCapturerImpl final
   void SetAutoThrottlingEnabled(bool enabled) final;
   void SetAnimationFpsLockIn(bool enabled,
                              float majority_damaged_pixel_min_ratio) final;
+  void SetIsSecure(bool is_secure) final;
   void ChangeTarget(const std::optional<VideoCaptureTarget>& target,
                     uint32_t sub_capture_target_version) final;
   void Start(mojo::PendingRemote<mojom::FrameSinkVideoConsumer> consumer,
@@ -134,6 +135,7 @@ class VIZ_SERVICE_EXPORT FrameSinkVideoCapturerImpl final
   // event triggers a frame capture in the meantime, and will result in a frame
   // sent to the consumer with a delay of up to one second.
   void RequestRefreshFrame() final;
+  void InvalidateBuffers() final;
   void CreateOverlay(int32_t stacking_index,
                      mojo::PendingReceiver<mojom::FrameSinkVideoCaptureOverlay>
                          receiver) final;
@@ -437,6 +439,12 @@ class VIZ_SERVICE_EXPORT FrameSinkVideoCapturerImpl final
   // Models current content change/draw behavior and proposes when to capture
   // frames, and at what size and frame rate.
   const std::unique_ptr<media::VideoCaptureOracle> oracle_;
+
+  // A capture is considered secure if the captured content is not easily
+  // accessible to JavaScript or users, and cannot be trivially shared or
+  // streamed out of the device. Used for capture prevention, e.g. for protected
+  // content or by enterprise policy.
+  bool is_secure_ = false;
 
   // The target requested by the client, as provided in the last call to
   // ChangeTarget(). May be nullopt if no target is currently set.

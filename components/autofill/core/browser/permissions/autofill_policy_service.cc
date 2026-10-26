@@ -11,7 +11,11 @@
 #include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/notreached.h"
 #include "base/values.h"
+#include "components/autofill/core/browser/autofill_type.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/prefs/pref_service.h"
@@ -40,11 +44,25 @@ bool IsCategoryGloballyBlocked(
       }
       break;
     case AutofillClient::AutofillPolicyDataCategory::kIdentityDocs:
+      // Due to the legacy AutofillAddressEnabled policy, if
+      // AutofillAddressEnabled is disabled by an enterprise admin, identity
+      // docs are also blocked by policy.
+      if (prefs.IsManagedPreference(prefs::kAutofillProfileEnabled) &&
+          !prefs.GetBoolean(prefs::kAutofillProfileEnabled)) {
+        return true;
+      }
       if (!prefs.GetBoolean(prefs::kAutofillAiIdentityEntitiesEnabled)) {
         return true;
       }
       break;
     case AutofillClient::AutofillPolicyDataCategory::kTravel:
+      // Due to the legacy AutofillAddressEnabled policy, if
+      // AutofillAddressEnabled is disabled by an enterprise admin, travel
+      // information is also blocked by policy.
+      if (prefs.IsManagedPreference(prefs::kAutofillProfileEnabled) &&
+          !prefs.GetBoolean(prefs::kAutofillProfileEnabled)) {
+        return true;
+      }
       if (!prefs.GetBoolean(prefs::kAutofillAiTravelEntitiesEnabled)) {
         return true;
       }
@@ -120,7 +138,7 @@ std::optional<ParsedPolicyEntry> ParsePolicyEntry(const base::Value& entry) {
            AutofillClient::AutofillPolicyDataCategory::kIdentityDocs,
            AutofillClient::AutofillPolicyDataCategory::kTravel,
            AutofillClient::AutofillPolicyDataCategory::kShopping});
-      // LINT.ThenChange(//components/autofill/core/browser/foundations/autofill_client.h:AutofillPolicyDataCategory,//components/autofill/core/browser/permissions/autofill_policy_service_unittest.cc:AutofillPolicyDataCategory)
+      // LINT.ThenChange(//components/autofill/core/browser/foundations/autofill_client.h:AutofillPolicyDataCategory,//components/autofill/core/browser/permissions/autofill_policy_service_unittest.cc:AutofillPolicyDataCategory,//chrome/browser/resources/settings/autofill_page/policy_utils.ts:AutofillPolicyDataCategory)
     }
   }
   return ParsedPolicyEntry{std::move(pattern), std::move(categories)};
@@ -149,6 +167,26 @@ bool EvaluatePolicyList(const base::ListValue& policy_list,
   });
 }
 
+// Maps an Autofill AI EntityType to its corresponding policy data category.
+AutofillClient::AutofillPolicyDataCategory
+GetAutofillPolicyDataCategoryForEntityType(EntityType entity_type) {
+  switch (entity_type.name()) {
+    case EntityTypeName::kNationalIdCard:
+    case EntityTypeName::kPassport:
+    case EntityTypeName::kDriversLicense:
+      return AutofillClient::AutofillPolicyDataCategory::kIdentityDocs;
+    case EntityTypeName::kVehicle:
+    case EntityTypeName::kFlightReservation:
+    case EntityTypeName::kRedressNumber:
+    case EntityTypeName::kKnownTravelerNumber:
+      return AutofillClient::AutofillPolicyDataCategory::kTravel;
+    case EntityTypeName::kOrder:
+    case EntityTypeName::kShipment:
+      return AutofillClient::AutofillPolicyDataCategory::kShopping;
+  }
+  NOTREACHED();
+}
+
 }  // namespace
 
 AutofillPolicyService::AutofillPolicyService(PrefService* prefs)
@@ -175,9 +213,26 @@ bool AutofillPolicyService::IsAutofillTypeBlockedByPolicyFromPref(
     return true;
   }
 
+  return IsAutofillTypeDisabledByEnterprisePolicy(prefs, url, category);
+}
+
+// static
+bool AutofillPolicyService::IsAutofillTypeDisabledByEnterprisePolicy(
+    const PrefService& prefs,
+    const GURL& url,
+    AutofillClient::AutofillPolicyDataCategory category) {
   if (!base::FeatureList::IsEnabled(
           features::kAutofillEnableAutofillSettingsEnterprisePolicy)) {
     return false;
+  }
+
+  // If the legacy AutofillAddressEnabled policy is disabled by the enterprise
+  // admin, identity docs and travel are disabled as well.
+  if ((category == AutofillClient::AutofillPolicyDataCategory::kIdentityDocs ||
+       category == AutofillClient::AutofillPolicyDataCategory::kTravel) &&
+      prefs.IsManagedPreference(prefs::kAutofillProfileEnabled) &&
+      !prefs.GetBoolean(prefs::kAutofillProfileEnabled)) {
+    return true;
   }
 
   const base::ListValue& policy_list =
@@ -204,6 +259,31 @@ bool AutofillPolicyService::IsAutofillTypeBlockedByPolicy(
         return entry.pattern.Matches(url) &&
                std::ranges::contains(entry.blocked_categories, category);
       });
+}
+
+// static
+DenseSet<AutofillClient::AutofillPolicyDataCategory>
+AutofillPolicyService::GetAutofillPolicyDataCategoriesForType(
+    const AutofillType& type) {
+  DenseSet<AutofillClient::AutofillPolicyDataCategory> categories;
+
+  if (type.GetAddressType() != UNKNOWN_TYPE) {
+    categories.insert(AutofillClient::AutofillPolicyDataCategory::kContactInfo);
+  }
+
+  if (type.GetCreditCardType() != UNKNOWN_TYPE ||
+      type.GetTypes().contains(IBAN_VALUE)) {
+    categories.insert(AutofillClient::AutofillPolicyDataCategory::kPayments);
+  }
+
+  for (EntityType entity_type : DenseSet<EntityType>::all()) {
+    if (type.GetAutofillAiType(entity_type) != UNKNOWN_TYPE) {
+      categories.insert(
+          GetAutofillPolicyDataCategoryForEntityType(entity_type));
+    }
+  }
+
+  return categories;
 }
 
 void AutofillPolicyService::OnAutofillPolicyChanged() {

@@ -30,8 +30,11 @@
 
 #include "third_party/blink/renderer/modules/mediasource/media_source_registry_impl.h"
 
+#include <utility>
+
+#include "third_party/blink/renderer/platform/blob/blob_url.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
-#include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace blink {
@@ -43,22 +46,22 @@ void MediaSourceRegistryImpl::Init() {
   DVLOG(1) << __func__ << " instance=" << &instance;
 }
 
-void MediaSourceRegistryImpl::RegisterURL(const KURL& url,
-                                          URLRegistrable* registrable) {
+KURL MediaSourceRegistryImpl::RegisterUrl(
+    const SecurityOrigin* security_origin,
+    scoped_refptr<MediaSourceAttachment> attachment) {
   DCHECK(IsMainThread());
-  DCHECK_EQ(&registrable->Registry(), this);
+  DCHECK_EQ(&attachment->Registry(), this);
 
-  DCHECK(!url.IsEmpty());  // Caller of interface should already enforce this.
+  const KURL url = BlobURL::CreatePublicURL(security_origin);
+  DCHECK(!url.IsEmpty());
 
   DVLOG(1) << __func__ << " url=" << url << ", IsMainThread=" << IsMainThread();
 
-  scoped_refptr<MediaSourceAttachment> attachment =
-      base::AdoptRef(static_cast<MediaSourceAttachment*>(registrable));
-
   media_sources_.Set(url.GetString(), std::move(attachment));
+  return url;
 }
 
-void MediaSourceRegistryImpl::UnregisterURL(const KURL& url) {
+void MediaSourceRegistryImpl::UnregisterUrl(const KURL& url) {
   DCHECK(IsMainThread());
   DVLOG(1) << __func__ << " url=" << url << ", IsMainThread=" << IsMainThread();
   DCHECK(!url.IsEmpty());  // Caller of interface should already enforce this.

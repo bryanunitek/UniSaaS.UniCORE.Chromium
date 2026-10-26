@@ -73,7 +73,9 @@ LocalFrame* SingleChildLocalFrameClient::CreateFrame(
         base::UnguessableToken::Create());
   }
 
-  child->Init(/*opener=*/nullptr, DocumentToken(), std::move(policy_container),
+  child->Init(/*opener=*/nullptr, DocumentToken(),
+              /*initiator_state_token=*/InitiatorStateToken(),
+              std::move(policy_container),
               parent_frame->DomWindow()->GetStorageKey(),
               /*document_ukm_source_id=*/ukm::kInvalidSourceId,
               /*creator_base_url=*/KURL(), std::move(sandbox_origin_token));
@@ -105,18 +107,19 @@ void RenderingTestChromeClient::InjectScrollbarGestureScroll(
   local_frame.GetEventHandler().HandleGestureEvent(*gesture_event);
 }
 
+RenderingTest::RenderingTest(LocalFrameClient* local_frame_client)
+    : local_frame_client_(local_frame_client) {}
+
 RenderingTest::RenderingTest(
-    base::test::TaskEnvironment::TimeSource time_source)
-    : PageTestBase(time_source) {}
+    base::test::TaskEnvironment::TimeSource time_source,
+    LocalFrameClient* local_frame_client)
+    : PageTestBase(time_source), local_frame_client_(local_frame_client) {}
 
 RenderingTestChromeClient& RenderingTest::GetChromeClient() const {
   DEFINE_STATIC_LOCAL(Persistent<RenderingTestChromeClient>, client,
                       (MakeGarbageCollected<RenderingTestChromeClient>()));
   return *client;
 }
-
-RenderingTest::RenderingTest(LocalFrameClient* local_frame_client)
-    : local_frame_client_(local_frame_client) {}
 
 const Node* RenderingTest::HitTest(int x, int y) {
   HitTestLocation location(PhysicalOffset(x, y));
@@ -216,7 +219,7 @@ PhysicalRect VisualRectInDocument(const LayoutObject& object,
 }
 
 PhysicalRect LocalVisualRect(const LayoutObject& object) {
-  if (object.StyleRef().Visibility() != EVisibility::kVisible &&
+  if (object.Style().Visibility() != EVisibility::kVisible &&
       object.VisualRectRespectsVisibility()) {
     return PhysicalRect();
   }

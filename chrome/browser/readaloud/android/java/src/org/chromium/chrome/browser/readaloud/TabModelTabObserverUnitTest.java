@@ -8,8 +8,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -17,7 +15,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -31,7 +28,6 @@ import org.chromium.chrome.test.util.browser.tabmodel.MockTabModel;
 
 /** Tests for the TabModelTabObserver. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabModelTabObserverUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     private MockTabModel mTabModel;
@@ -53,7 +49,6 @@ public class TabModelTabObserverUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSelectingTabAddsObservers() {
         assertEquals(1, mTabModel.getCount());
 
@@ -64,7 +59,6 @@ public class TabModelTabObserverUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testDestroyRemovesObservers() {
         assertEquals(1, mTabModel.getCount());
         mTabModelTabObserver.destroy();

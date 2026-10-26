@@ -17,13 +17,11 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.RobolectricUtil;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.tab.Tab;
 
@@ -31,8 +29,6 @@ import java.util.concurrent.TimeUnit;
 
 /** Tests for {@link NavigationInfoCaptureTrigger}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
-@Config(manifest = Config.NONE)
 public class NavigationInfoCaptureTriggerTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private Callback<Tab> mDelegate;
@@ -52,6 +48,10 @@ public class NavigationInfoCaptureTriggerTest {
     @Test
     @Feature({"CustomTabs"})
     public void testNormalFlow() {
+        testNormalFlowImpl();
+    }
+
+    private void testNormalFlowImpl() {
         mTrigger.onLoadFinished(mTab);
 
         // If we run everything on the Looper, the backup onload capture will trigger. Therefore
@@ -73,6 +73,10 @@ public class NavigationInfoCaptureTriggerTest {
     @Test
     @Feature({"CustomTabs"})
     public void testDelayedOnload() {
+        testDelayedOnloadImpl();
+    }
+
+    private void testDelayedOnloadImpl() {
         mTrigger.onFirstMeaningfulPaint(mTab);
         verifyCaptured(0);
 
@@ -121,17 +125,17 @@ public class NavigationInfoCaptureTriggerTest {
     @Test
     @Feature({"CustomTabs"})
     public void testResetOnNavigation() {
-        testNormalFlow();
+        testNormalFlowImpl();
 
         mTrigger.onNewNavigation();
 
         clearInvocations(mDelegate); // Clears the mock so the verifies in the original test work.
-        testNormalFlow();
+        testNormalFlowImpl();
 
         mTrigger.onNewNavigation();
 
         clearInvocations(mDelegate);
-        testDelayedOnload();
+        testDelayedOnloadImpl();
     }
 
     /** Tests that we capture only on the first FMP. */

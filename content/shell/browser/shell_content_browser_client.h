@@ -13,6 +13,7 @@
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/common/child_process_id.h"
 #include "content/shell/browser/shell_speech_recognition_manager_delegate.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/mojom/network_context.mojom-forward.h"
@@ -21,6 +22,8 @@
 class PrefService;
 
 #if BUILDFLAG(IS_IOS)
+class ApplicationLocaleStorage;
+
 namespace permissions {
 class BluetoothDelegateImpl;
 }
@@ -59,30 +62,20 @@ class ShellContentBrowserClient : public ContentBrowserClient {
   bool AreIsolatedWebAppsEnabled(BrowserContext* browser_context) override;
   void AppendExtraCommandLineSwitches(base::CommandLine* command_line,
                                       int child_process_id) override;
+#if BUILDFLAG(IS_IOS)
+  std::string GetApplicationLocale() override;
+#endif
   std::string GetAcceptLangs(BrowserContext* context) override;
   std::string GetDefaultDownloadName() override;
   std::unique_ptr<WebContentsViewDelegate> GetWebContentsViewDelegate(
       WebContents* web_contents) override;
   bool ShouldUrlUseApplicationIsolationLevel(BrowserContext* browser_context,
                                              const GURL& url) override;
-  bool IsSharedStorageAllowed(
-      content::BrowserContext* browser_context,
-      content::RenderFrameHost* rfh,
-      const url::Origin& top_frame_origin,
-      const url::Origin& accessing_origin,
-      std::string* out_debug_message,
-      bool* out_block_is_site_setting_specific) override;
-  bool IsSharedStorageSelectURLAllowed(
-      content::BrowserContext* browser_context,
-      const url::Origin& top_frame_origin,
-      const url::Origin& accessing_origin,
-      std::string* out_debug_message,
-      bool* out_block_is_site_setting_specific) override;
   GeneratedCodeCacheSettings GetGeneratedCodeCacheSettings(
       content::BrowserContext* context) override;
   base::OnceClosure SelectClientCertificate(
       BrowserContext* browser_context,
-      int process_id,
+      ChildProcessId process_id,
       WebContents* web_contents,
       net::SSLCertRequestInfo* cert_request_info,
       net::ClientCertIdentityList client_certs,
@@ -108,6 +101,9 @@ class ShellContentBrowserClient : public ContentBrowserClient {
   void RegisterBrowserInterfaceBindersForFrame(
       RenderFrameHost* render_frame_host,
       mojo::BinderMapWithContext<RenderFrameHost*>* map) override;
+  void RegisterAssociatedInterfaceBindersForRenderFrameHost(
+      RenderFrameHost& render_frame_host,
+      blink::AssociatedInterfaceRegistry& associated_registry) override;
   void OpenURL(SiteInstance* site_instance,
                const OpenURLParams& params,
                base::OnceCallback<void(WebContents*)> callback) override;
@@ -123,6 +119,7 @@ class ShellContentBrowserClient : public ContentBrowserClient {
       const GURL& url,
       scoped_refptr<net::HttpResponseHeaders> response_headers,
       bool first_auth_attempt,
+      bool do_not_prompt_for_login,
       GuestPageHolder* guest,
       LoginDelegate::LoginAuthRequiredCallback auth_required_callback) override;
   base::DictValue GetNetLogConstants() override;
@@ -245,6 +242,7 @@ class ShellContentBrowserClient : public ContentBrowserClient {
   base::RepeatingCallback<void(NavigationThrottleRegistry&)>
       create_throttles_for_navigation_callback_;
 #if BUILDFLAG(IS_IOS)
+  std::unique_ptr<ApplicationLocaleStorage> application_locale_storage_;
   std::unique_ptr<permissions::BluetoothDelegateImpl> bluetooth_delegate_;
 #endif
 

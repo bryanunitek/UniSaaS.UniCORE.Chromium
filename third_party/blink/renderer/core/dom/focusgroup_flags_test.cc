@@ -155,7 +155,7 @@ TEST_F(FocusgroupFlagsTest, RedundantInlineBlockGeneratesWarning) {
 
 TEST_F(FocusgroupFlagsTest, InvalidAxisForGridGeneratesError) {
   ScopedFocusgroupForTest focusgroup_scope(true);
-  ScopedFocusgroupGridForTest grid_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(true);
 
   auto* element = MakeGarbageCollected<HTMLTableElement>(GetDocument());
   GetDocument().body()->appendChild(element);
@@ -164,25 +164,39 @@ TEST_F(FocusgroupFlagsTest, InvalidAxisForGridGeneratesError) {
   FocusgroupData result = ParseFocusgroup(element, AtomicString("grid inline"));
 
   EXPECT_EQ(result.behavior, FocusgroupBehavior::kGrid);
-  EXPECT_EQ(result.flags, FocusgroupFlags::kNone);
+  EXPECT_EQ(result.flags, FocusgroupFlags::kItemControls);
 
   auto messages = CopyConsoleMessages();
   ASSERT_EQ(messages.size(), 1u);
   EXPECT_TRUE(messages[0].contains("not valid for grid focusgroups"));
-  EXPECT_TRUE(messages[0].contains("row-wrap/col-wrap or flow modifiers"));
+  EXPECT_TRUE(messages[0].contains("rowwrap/colwrap or flow modifiers"));
+}
+
+TEST_F(FocusgroupFlagsTest, GridBehaviorRequiresFocusgroupV2) {
+  ScopedFocusgroupForTest focusgroup_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(false);
+
+  auto* element = MakeGarbageCollected<HTMLTableElement>(GetDocument());
+  GetDocument().body()->appendChild(element);
+
+  FocusgroupData result = ParseFocusgroup(element, AtomicString("grid"));
+
+  EXPECT_EQ(result.behavior, FocusgroupBehavior::kNoBehavior);
+  EXPECT_EQ(result.flags, FocusgroupFlags::kNone);
 }
 
 TEST_F(FocusgroupFlagsTest, GridTokensOnLinearGenerateError) {
   ScopedFocusgroupForTest focusgroup_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(true);
 
   auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
   GetDocument().body()->appendChild(element);
 
   ClearConsoleMessages();
   FocusgroupData result =
-      ParseFocusgroup(element, AtomicString("toolbar row-wrap"));
+      ParseFocusgroup(element, AtomicString("toolbar rowwrap"));
 
-  // Linear focusgroup uses toolbar's default axis (inline); row-wrap ignored
+  // Linear focusgroup uses toolbar's default axis (inline); rowwrap ignored
   // with warning.
   EXPECT_EQ(result.behavior, FocusgroupBehavior::kToolbar);
   EXPECT_EQ(result.flags, FocusgroupFlags::kInline);
@@ -190,6 +204,25 @@ TEST_F(FocusgroupFlagsTest, GridTokensOnLinearGenerateError) {
   ASSERT_GE(messages.size(), 1u);
   EXPECT_TRUE(messages[0].contains("only valid for grid focusgroups"));
   EXPECT_TRUE(messages[0].contains("use 'wrap' for linear focusgroups"));
+}
+
+TEST_F(FocusgroupFlagsTest, GridTokenSupportRequiresFocusgroupV2) {
+  ScopedFocusgroupV2ForTest v2_scope(false);
+
+  EXPECT_FALSE(IsValidFocusgroupToken(AtomicString("grid")));
+  EXPECT_FALSE(IsValidFocusgroupToken(AtomicString("rowwrap")));
+  EXPECT_FALSE(IsValidFocusgroupToken(AtomicString("flow")));
+  EXPECT_FALSE(IsValidFocusgroupToken(AtomicString("manual")));
+
+  {
+    ScopedFocusgroupV2ForTest v2_enabled(true);
+    EXPECT_TRUE(IsValidFocusgroupToken(AtomicString("grid")));
+    EXPECT_TRUE(IsValidFocusgroupToken(AtomicString("rowwrap")));
+    EXPECT_TRUE(IsValidFocusgroupToken(AtomicString("flow")));
+    EXPECT_TRUE(IsValidFocusgroupToken(AtomicString("manual")));
+    EXPECT_FALSE(IsValidFocusgroupToken(AtomicString("row-wrap")));
+    EXPECT_FALSE(IsValidFocusgroupToken(AtomicString("row-flow")));
+  }
 }
 
 TEST_F(FocusgroupFlagsTest, NowrapAlone) {
@@ -228,7 +261,7 @@ TEST_F(FocusgroupFlagsTest, WrapAndNowrapConflict) {
 
 TEST_F(FocusgroupFlagsTest, NowrapOnGrid) {
   ScopedFocusgroupForTest focusgroup_scope(true);
-  ScopedFocusgroupGridForTest grid_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(true);
 
   auto* element = MakeGarbageCollected<HTMLTableElement>(GetDocument());
   GetDocument().body()->appendChild(element);
@@ -237,11 +270,64 @@ TEST_F(FocusgroupFlagsTest, NowrapOnGrid) {
   FocusgroupData result = ParseFocusgroup(element, AtomicString("grid nowrap"));
 
   EXPECT_EQ(result.behavior, FocusgroupBehavior::kGrid);
-  EXPECT_EQ(result.flags, FocusgroupFlags::kNone);
+  EXPECT_EQ(result.flags, FocusgroupFlags::kItemControls);
+  EXPECT_TRUE(CopyConsoleMessages().empty());
+}
+
+TEST_F(FocusgroupFlagsTest, GridV2GrammarAndDefaults) {
+  ScopedFocusgroupForTest focusgroup_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(true);
+
+  auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
+  GetDocument().body()->appendChild(element);
+
+  EXPECT_EQ(ParseFocusgroup(element, AtomicString("grid manual")).flags,
+            FocusgroupFlags::kManual | FocusgroupFlags::kItemControls);
+  EXPECT_EQ(ParseFocusgroup(element, AtomicString("grid noitemcontrols")).flags,
+            FocusgroupFlags::kNone);
+  EXPECT_EQ(
+      ParseFocusgroup(element, AtomicString("grid rowwrap colflow")).flags,
+      FocusgroupFlags::kWrapInline | FocusgroupFlags::kColFlow |
+          FocusgroupFlags::kItemControls);
+  EXPECT_EQ(
+      ParseFocusgroup(element, AtomicString("grid rowflow colwrap")).flags,
+      FocusgroupFlags::kRowFlow | FocusgroupFlags::kWrapBlock |
+          FocusgroupFlags::kItemControls);
+}
+
+TEST_F(FocusgroupFlagsTest, GridConflictsFallBackPerAxis) {
+  ScopedFocusgroupForTest focusgroup_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(true);
+
+  auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
+  GetDocument().body()->appendChild(element);
+
+  EXPECT_EQ(ParseFocusgroup(element, AtomicString("grid wrap flow")).flags,
+            FocusgroupFlags::kItemControls);
+  EXPECT_EQ(ParseFocusgroup(element, AtomicString("grid wrap rowflow")).flags,
+            FocusgroupFlags::kWrapBlock | FocusgroupFlags::kItemControls);
+  EXPECT_EQ(ParseFocusgroup(element, AtomicString("grid nowrap flow")).flags,
+            FocusgroupFlags::kItemControls);
+}
+
+TEST_F(FocusgroupFlagsTest, LegacyGridSpellingsAreUnknown) {
+  ScopedFocusgroupForTest focusgroup_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(true);
+
+  auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
+  GetDocument().body()->appendChild(element);
+
+  ClearConsoleMessages();
+  FocusgroupData result = ParseFocusgroup(
+      element, AtomicString("grid row-wrap col-wrap row-flow col-flow"));
+  EXPECT_EQ(result.behavior, FocusgroupBehavior::kGrid);
+  EXPECT_EQ(result.flags, FocusgroupFlags::kItemControls);
   auto messages = CopyConsoleMessages();
-  ASSERT_GE(messages.size(), 1u);
-  EXPECT_TRUE(messages[0].contains("nowrap"));
-  EXPECT_TRUE(messages[0].contains("not valid for grid"));
+  ASSERT_EQ(messages.size(), 1u);
+  EXPECT_TRUE(messages[0].contains("row-wrap"));
+  EXPECT_TRUE(messages[0].contains("col-wrap"));
+  EXPECT_TRUE(messages[0].contains("row-flow"));
+  EXPECT_TRUE(messages[0].contains("col-flow"));
 }
 
 TEST_F(FocusgroupFlagsTest, NowrapOverridesDefaultWrap) {
@@ -388,7 +474,7 @@ TEST_F(FocusgroupFlagsTest, ListboxDefaultsBlock) {
 
 TEST_F(FocusgroupFlagsTest, ValidTokenListStringIncludesNowrap) {
   ScopedFocusgroupForTest focusgroup_scope(true);
-  ScopedFocusgroupGridForTest grid_scope(false);
+  ScopedFocusgroupV2ForTest v2_scope(false);
 
   auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
   GetDocument().body()->appendChild(element);
@@ -409,15 +495,16 @@ TEST_F(FocusgroupFlagsTest, ValidTokenListStringIncludesNowrap) {
   EXPECT_TRUE(messages[0].contains("nowrap"));
 
   // Grid-only tokens must not appear.
-  EXPECT_FALSE(messages[0].contains("row-wrap"));
-  EXPECT_FALSE(messages[0].contains("col-wrap"));
-  EXPECT_FALSE(messages[0].contains("row-flow"));
-  EXPECT_FALSE(messages[0].contains("col-flow"));
+  EXPECT_FALSE(messages[0].contains("rowwrap"));
+  EXPECT_FALSE(messages[0].contains("colwrap"));
+  EXPECT_FALSE(messages[0].contains("rowflow"));
+  EXPECT_FALSE(messages[0].contains("colflow"));
+  EXPECT_FALSE(messages[0].contains("manual"));
 }
 
 TEST_F(FocusgroupFlagsTest, ValidTokenListStringIncludesGridTokens) {
   ScopedFocusgroupForTest focusgroup_scope(true);
-  ScopedFocusgroupGridForTest grid_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(true);
 
   auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
   GetDocument().body()->appendChild(element);
@@ -430,11 +517,12 @@ TEST_F(FocusgroupFlagsTest, ValidTokenListStringIncludesGridTokens) {
   ASSERT_GE(messages.size(), 1u);
 
   // All tokens including grid-only should appear.
-  EXPECT_TRUE(messages[0].contains("row-wrap"));
-  EXPECT_TRUE(messages[0].contains("col-wrap"));
+  EXPECT_TRUE(messages[0].contains("rowwrap"));
+  EXPECT_TRUE(messages[0].contains("colwrap"));
   EXPECT_TRUE(messages[0].contains("flow"));
-  EXPECT_TRUE(messages[0].contains("row-flow"));
-  EXPECT_TRUE(messages[0].contains("col-flow"));
+  EXPECT_TRUE(messages[0].contains("rowflow"));
+  EXPECT_TRUE(messages[0].contains("colflow"));
+  EXPECT_TRUE(messages[0].contains("manual"));
   EXPECT_TRUE(messages[0].contains("nowrap"));
 }
 
@@ -490,7 +578,7 @@ TEST_F(FocusgroupFlagsTest, NoneAnywhereOptsOut) {
 
 TEST_F(FocusgroupFlagsTest, NoneAnywhereWithGridDisabled) {
   ScopedFocusgroupForTest focusgroup_scope(true);
-  ScopedFocusgroupGridForTest grid_scope(false);
+  ScopedFocusgroupV2ForTest v2_scope(false);
 
   auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
   GetDocument().body()->appendChild(element);
@@ -588,6 +676,108 @@ TEST_F(FocusgroupFlagsTest, CaseInsensitiveParsing) {
   FocusgroupData result2 = ParseFocusgroup(element, AtomicString("NONE"));
   EXPECT_EQ(result2.behavior, FocusgroupBehavior::kOptOut);
   EXPECT_EQ(result2.flags, FocusgroupFlags::kNone);
+}
+
+TEST_F(FocusgroupFlagsTest, FeedDefaultsToBlockItemControls) {
+  ScopedFocusgroupForTest focusgroup_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(true);
+
+  auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
+  GetDocument().body()->appendChild(element);
+
+  FocusgroupData result = ParseFocusgroup(element, AtomicString("feed"));
+
+  EXPECT_EQ(result.behavior, FocusgroupBehavior::kFeed);
+  EXPECT_EQ(result.flags,
+            FocusgroupFlags::kBlock | FocusgroupFlags::kItemControls);
+}
+
+TEST_F(FocusgroupFlagsTest, FeedNoItemControlsSuppressesDefault) {
+  ScopedFocusgroupForTest focusgroup_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(true);
+
+  auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
+  GetDocument().body()->appendChild(element);
+
+  FocusgroupData result =
+      ParseFocusgroup(element, AtomicString("feed noitemcontrols"));
+
+  EXPECT_EQ(result.behavior, FocusgroupBehavior::kFeed);
+  EXPECT_EQ(result.flags, FocusgroupFlags::kBlock);
+}
+
+TEST_F(FocusgroupFlagsTest, ItemControlsAppliesToLinearBehavior) {
+  ScopedFocusgroupForTest focusgroup_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(true);
+
+  auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
+  GetDocument().body()->appendChild(element);
+
+  FocusgroupData result =
+      ParseFocusgroup(element, AtomicString("toolbar itemcontrols"));
+
+  EXPECT_EQ(result.behavior, FocusgroupBehavior::kToolbar);
+  EXPECT_EQ(result.flags,
+            FocusgroupFlags::kInline | FocusgroupFlags::kItemControls);
+}
+
+TEST_F(FocusgroupFlagsTest, NoItemControlsTakesPrecedence) {
+  ScopedFocusgroupForTest focusgroup_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(true);
+
+  auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
+  GetDocument().body()->appendChild(element);
+  ClearConsoleMessages();
+
+  FocusgroupData result = ParseFocusgroup(
+      element, AtomicString("feed itemcontrols noitemcontrols"));
+
+  EXPECT_EQ(result.behavior, FocusgroupBehavior::kFeed);
+  EXPECT_EQ(result.flags, FocusgroupFlags::kBlock);
+  auto messages = CopyConsoleMessages();
+  ASSERT_EQ(messages.size(), 1u);
+  EXPECT_TRUE(messages[0].contains("author error"));
+  EXPECT_TRUE(messages[0].contains("noitemcontrols takes precedence"));
+}
+
+TEST_F(FocusgroupFlagsTest, V2TokensAreUnsupportedWhenDisabled) {
+  ScopedFocusgroupForTest focusgroup_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(false);
+
+  auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
+  GetDocument().body()->appendChild(element);
+
+  EXPECT_EQ(ParseFocusgroup(element, AtomicString("feed")), FocusgroupData());
+  EXPECT_EQ(
+      ParseFocusgroup(element,
+                      AtomicString("toolbar itemcontrols noitemcontrols")),
+      FocusgroupData(FocusgroupBehavior::kToolbar, FocusgroupFlags::kInline));
+  EXPECT_FALSE(IsValidFocusgroupToken(AtomicString("feed")));
+  EXPECT_FALSE(IsValidFocusgroupToken(AtomicString("itemcontrols")));
+  EXPECT_FALSE(IsValidFocusgroupToken(AtomicString("noitemcontrols")));
+}
+
+TEST_F(FocusgroupFlagsTest, DisabledFeedDoesNotMaskValidBehavior) {
+  ScopedFocusgroupForTest focusgroup_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(false);
+
+  auto* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
+  GetDocument().body()->appendChild(element);
+
+  FocusgroupData result =
+      ParseFocusgroup(element, AtomicString("feed toolbar"));
+
+  EXPECT_EQ(result, FocusgroupData(FocusgroupBehavior::kToolbar,
+                                   FocusgroupFlags::kInline));
+}
+
+TEST_F(FocusgroupFlagsTest, V2TokenSupport) {
+  ScopedFocusgroupForTest focusgroup_scope(true);
+  ScopedFocusgroupV2ForTest v2_scope(true);
+
+  EXPECT_TRUE(IsValidFocusgroupToken(AtomicString("feed")));
+  EXPECT_TRUE(IsValidFocusgroupToken(AtomicString("itemcontrols")));
+  EXPECT_TRUE(IsValidFocusgroupToken(AtomicString("noitemcontrols")));
 }
 
 }  // namespace blink::focusgroup

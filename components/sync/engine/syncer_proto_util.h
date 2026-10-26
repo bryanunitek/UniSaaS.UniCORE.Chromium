@@ -54,14 +54,6 @@ class SyncerProtoUtil {
       SyncCycle* cycle,
       DataTypeSet* partial_failure_data_types);
 
-  // Specifies where entity's position should be updated from the data in
-  // GetUpdates message.
-  static bool ShouldMaintainPosition(const sync_pb::SyncEntity& sync_entity);
-
-  // Specifies where entity's parent ID should be updated from the data in
-  // GetUpdates message.
-  static bool ShouldMaintainHierarchy(const sync_pb::SyncEntity& sync_entity);
-
   // Get a debug string representation of the client to server response.
   static std::string ClientToServerResponseDebugString(
       const sync_pb::ClientToServerResponse& response);
@@ -92,9 +84,11 @@ class SyncerProtoUtil {
 
   // Post the message using the scm, and do some processing on the returned
   // headers. Decode the server response.
-  static bool PostAndProcessHeaders(ServerConnectionManager* scm,
-                                    const sync_pb::ClientToServerMessage& msg,
-                                    sync_pb::ClientToServerResponse* response);
+  static bool PostAndProcessHeaders(
+      ServerConnectionManager* scm,
+      const sync_pb::ClientToServerMessage& msg,
+      sync_pb::ClientToServerResponse* response,
+      const signin::AccessTokenInfo& access_token_info);
 
   // Handles the server response and returns whether there was any error.
   static SyncerError HandleClientToServerMessageResponse(
@@ -109,6 +103,8 @@ class SyncerProtoUtil {
   friend class SyncerProtoUtilTest;
   FRIEND_TEST_ALL_PREFIXES(SyncerProtoUtilTest, AddRequestBirthday);
   FRIEND_TEST_ALL_PREFIXES(SyncerProtoUtilTest, PostAndProcessHeaders);
+  FRIEND_TEST_ALL_PREFIXES(SyncerProtoUtilTest,
+                           PostAndProcessHeadersWithPropagatedToken);
   FRIEND_TEST_ALL_PREFIXES(SyncerProtoUtilTest, HandleThrottlingNoDatatypes);
   FRIEND_TEST_ALL_PREFIXES(SyncerProtoUtilTest, HandleThrottlingWithDatatypes);
 };

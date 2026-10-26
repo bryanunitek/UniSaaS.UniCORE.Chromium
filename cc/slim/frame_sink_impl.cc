@@ -113,8 +113,7 @@ bool FrameSinkImpl::BindToClient(FrameSinkImplClient* client) {
   frame_sink_remote_.set_disconnect_handler(
       base::BindOnce(&FrameSinkImpl::OnContextLost, base::Unretained(this)));
 
-  if (mojo::IsDirectReceiverSupported() &&
-      base::FeatureList::IsEnabled(features::kSlimDirectReceiverIpc)) {
+  if (mojo::IsDirectReceiverSupported()) {
     client_receiver_.emplace<DirectReceiver>(mojo::DirectReceiverKey{}, this);
   }
 
@@ -174,9 +173,6 @@ void FrameSinkImpl::UploadUIResource(cc::UIResourceId resource_id,
   switch (resource_bitmap.GetFormat()) {
     case cc::UIResourceBitmap::RGBA8:
       format = viz::PlatformColor::BestSupportedTextureFormat(caps);
-      break;
-    case cc::UIResourceBitmap::ALPHA_8:
-      format = viz::SinglePlaneFormat::kALPHA_8;
       break;
     case cc::UIResourceBitmap::ETC1:
       format = viz::SinglePlaneFormat::kETC1;

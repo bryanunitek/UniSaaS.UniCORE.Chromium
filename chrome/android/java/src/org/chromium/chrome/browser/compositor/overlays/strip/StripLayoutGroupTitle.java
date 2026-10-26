@@ -21,8 +21,8 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.data_sharing.ui.shared_image_tiles.SharedImageTilesConfig;
 import org.chromium.chrome.browser.data_sharing.ui.shared_image_tiles.SharedImageTilesCoordinator;
-import org.chromium.chrome.browser.tasks.tab_management.TabBubbler;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiThemeUtil;
+import org.chromium.chrome.browser.tasks.tab_management.labels.TabBubbler;
 import org.chromium.components.collaboration.CollaborationService;
 import org.chromium.components.data_sharing.DataSharingService;
 import org.chromium.components.tab_groups.TabGroupColorId;
@@ -39,7 +39,7 @@ import org.chromium.ui.resources.dynamics.ViewResourceAdapter;
 public class StripLayoutGroupTitle extends StripLayoutView {
 
     /** Delegate for additional group title functionality. */
-    public interface StripLayoutGroupTitleDelegate extends StripLayoutViewOnClickHandler {
+    public interface StripLayoutGroupTitleDelegate {
         /**
          * Releases the resources associated with this group indicator.
          *
@@ -77,6 +77,7 @@ public class StripLayoutGroupTitle extends StripLayoutView {
     private static final int MARGIN_BOTTOM_DP = 9;
     private static final int MARGIN_START_DP = 13;
     private static final int MARGIN_END_DP = 9;
+    static final float COLLAPSED_MARGIN_ADJUSTMENT_DP = MARGIN_START_DP - MARGIN_END_DP;
     private static final int TEXT_PADDING_DP = 8;
 
     // The padding between the start of the indicator and the avatar when the group is shared. If no
@@ -126,19 +127,31 @@ public class StripLayoutGroupTitle extends StripLayoutView {
      * Create a {@link StripLayoutGroupTitle} that represents the TabGroup for the {@code
      * tabGroupId}.
      *
+     * @param context An Android context for fetching resources.
      * @param delegate The delegate for additional strip group title functionality.
+     * @param clickHandler Handles click events on this view.
+     * @param longClickHandler Handles long click events on this view.
      * @param keyboardFocusHandler Handles keyboard focus gain/loss on this view.
+     * @param accessibilityFocusHandler Handles accessibility focus gain/loss on this view.
      * @param incognito Whether or not this tab group is Incognito.
      * @param tabGroupId The tab group ID for the tab group.
      */
     public StripLayoutGroupTitle(
             Context context,
             StripLayoutGroupTitleDelegate delegate,
+            StripLayoutViewOnClickHandler clickHandler,
+            @Nullable StripLayoutViewOnLongClickHandler longClickHandler,
             StripLayoutViewOnKeyboardFocusHandler keyboardFocusHandler,
             StripLayoutViewOnAccessibilityFocusHandler accessibilityFocusHandler,
             boolean incognito,
             @Nullable Token tabGroupId) {
-        super(incognito, delegate, keyboardFocusHandler, accessibilityFocusHandler, context);
+        super(
+                incognito,
+                clickHandler,
+                longClickHandler,
+                keyboardFocusHandler,
+                accessibilityFocusHandler,
+                context);
         assert tabGroupId != null : "Tried to create a group title for an invalid group.";
         mDelegate = delegate;
         mTabGroupId = tabGroupId;
@@ -166,30 +179,22 @@ public class StripLayoutGroupTitle extends StripLayoutView {
         assert false : "Incognito state of a group title cannot change";
     }
 
-    /**
-     * @return DrawX accounting for padding.
-     */
+    /** Returns drawX accounting for padding. */
     public float getPaddedX() {
         return getDrawX() + (LocalizationUtils.isLayoutRtl() ? MARGIN_END_DP : MARGIN_START_DP);
     }
 
-    /**
-     * @return DrawY accounting for padding.
-     */
+    /** Returns drawY accounting for padding. */
     public float getPaddedY() {
         return getDrawY() + MARGIN_TOP_DP;
     }
 
-    /**
-     * @return Width accounting for padding.
-     */
+    /** Returns width accounting for padding. */
     public float getPaddedWidth() {
         return getWidth() - MARGIN_START_DP - MARGIN_END_DP;
     }
 
-    /**
-     * @return Height accounting for padding.
-     */
+    /** Returns height accounting for padding. */
     public float getPaddedHeight() {
         return getHeight() - MARGIN_TOP_DP - MARGIN_BOTTOM_DP;
     }
@@ -221,9 +226,7 @@ public class StripLayoutGroupTitle extends StripLayoutView {
                 Math.round((getDrawY() + getHeight()) * dpToPx));
     }
 
-    /**
-     * @return The tab group color id that represents the tab group title indicator background.
-     */
+    /** Returns the tab group color id that represents the tab group title indicator background. */
     public @TabGroupColorId int getTint() {
         return TabGroupColorPickerUtils.getTabGroupColorPickerItemColor(
                 mContext, mColorId, isIncognito());
@@ -242,9 +245,7 @@ public class StripLayoutGroupTitle extends StripLayoutView {
         }
     }
 
-    /**
-     * @return The group's title.
-     */
+    /** Returns the group's title. */
     protected @Nullable String getTitle() {
         return mTitle;
     }
@@ -266,37 +267,27 @@ public class StripLayoutGroupTitle extends StripLayoutView {
         setWidth(MathUtils.clamp(viewWidth, EFFECTIVE_MIN_WIDTH, EFFECTIVE_MAX_WIDTH));
     }
 
-    /**
-     * @return The group's tab group ID.
-     */
+    /** Returns the group's tab group ID. */
     public Token getTabGroupId() {
         return mTabGroupId;
     }
 
-    /**
-     * @return The start padding for the title.
-     */
+    /** Returns the start padding for the title. */
     public int getTitleStartPadding() {
         return mAvatarWidthWithPadding > 0 ? AVATAR_START_PADDING_DP : TEXT_PADDING_DP;
     }
 
-    /**
-     * @return The end padding for the title.
-     */
+    /** Returns the end padding for the title. */
     public int getTitleEndPadding() {
         return TEXT_PADDING_DP;
     }
 
-    /**
-     * @return The corner radius for the title container.
-     */
+    /** Returns the corner radius for the title container. */
     public int getCornerRadius() {
         return CORNER_RADIUS_DP;
     }
 
-    /**
-     * @return The width of the bottom indicator should be applied to this tab group.
-     */
+    /** Returns the width of the bottom indicator that should be applied to this tab group. */
     public float getBottomIndicatorWidth() {
         return mBottomIndicatorWidth;
     }
@@ -309,9 +300,7 @@ public class StripLayoutGroupTitle extends StripLayoutView {
         mBottomIndicatorWidth = bottomIndicatorWidth;
     }
 
-    /**
-     * @return The height of the bottom indicator should be applied to this tab group.
-     */
+    /** Returns the height of the bottom indicator that should be applied to this tab group. */
     public float getBottomIndicatorHeight() {
         return BOTTOM_INDICATOR_HEIGHT_DP;
     }
@@ -378,7 +367,7 @@ public class StripLayoutGroupTitle extends StripLayoutView {
      * This method measures and lays out the avatar view, registers the avatar resource and triggers
      * an update to the group title bitmap
      *
-     * @params avatarView The Android view of the avatar.
+     * @param avatarView The Android view of the avatar.
      * @param registerAvatarResource A callback to register the avatar resource once it is captured.
      * @param updateGroupTitleBitmap A {@link Runnable} to update the group title bitmap after the
      *     avatar is captured.
@@ -420,9 +409,7 @@ public class StripLayoutGroupTitle extends StripLayoutView {
         }
     }
 
-    /**
-     * @return The width of the shared group avatar and padding.
-     */
+    /** Returns the width of the shared group avatar and padding. */
     public float getAvatarWidthWithPadding() {
         return mAvatarWidthWithPadding;
     }
@@ -439,16 +426,16 @@ public class StripLayoutGroupTitle extends StripLayoutView {
     }
 
     /**
-     * @return The {@link TabBubbler} that responsible for managing shared group notification
-     *     bubbles.
+     * Returns the {@link TabBubbler} that is responsible for managing shared group notification
+     * bubbles.
      */
     public @Nullable TabBubbler getTabBubbler() {
         return mTabBubbler;
     }
 
     /**
-     * @return The total horizontal space needed for the notification bubble and its padding, or 0
-     *     if the bubble is not shown.
+     * Returns the total horizontal space needed for the notification bubble and its padding, or 0
+     * if the bubble is not shown.
      */
     public float getBubbleWidthWithPadding() {
         return getNotificationBubbleShown()
@@ -456,9 +443,7 @@ public class StripLayoutGroupTitle extends StripLayoutView {
                 : 0;
     }
 
-    /**
-     * @return Notification bubble drawX accounting for padding.
-     */
+    /** Returns notification bubble drawX accounting for padding. */
     public float getBubbleDrawX() {
         assert getNotificationBubbleShown();
         return LocalizationUtils.isLayoutRtl()
@@ -466,44 +451,32 @@ public class StripLayoutGroupTitle extends StripLayoutView {
                 : getPaddedX() + getPaddedWidth() - getTitleEndPadding() - getBubbleSize();
     }
 
-    /**
-     * @return The tint of the notification bubble.
-     */
+    /** Returns the tint of the notification bubble. */
     public @ColorInt int getBubbleTint() {
         return mBubbleTint;
     }
 
-    /**
-     * @return The size of the notification bubble circle.
-     */
+    /** Returns the size of the notification bubble circle. */
     public float getBubbleSize() {
         return NOTIFICATION_BUBBLE_SIZE_DP;
     }
 
-    /**
-     * @return The padding between title text end and bubble.
-     */
+    /** Returns the padding between title text end and bubble. */
     public float getBubblePadding() {
         return NOTIFICATION_BUBBLE_PADDING_DP;
     }
 
-    /**
-     * @return Whether the group is shared.
-     */
+    /** Returns whether the group is shared. */
     public boolean isGroupShared() {
         return mIsShared;
     }
 
-    /**
-     * @return The coordinator to retrieve the avatar face pile for shared group.
-     */
+    /** Returns the coordinator to retrieve the avatar face pile for shared group. */
     public @Nullable SharedImageTilesCoordinator getSharedImageTilesCoordinatorForTesting() {
         return mSharedImageTilesCoordinator;
     }
 
-    /**
-     * @return The avatar face pile resource displayed on the tab group title for shared group.
-     */
+    /** Returns the avatar face pile resource displayed on the tab group title for shared group. */
     public @Nullable ViewResourceAdapter getAvatarResourceForTesting() {
         return mAvatarResource;
     }

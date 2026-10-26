@@ -34,8 +34,6 @@ import org.robolectric.Robolectric;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
-import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.commerce.ShoppingServiceFactory;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -50,9 +48,9 @@ import org.chromium.url.JUnitTestGURLs;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.TimeZone;
 
 /** Unit Tests for {@link DiscountsBottomSheetContentMediator}. */
-@Batch(Batch.UNIT_TESTS)
 @RunWith(BaseRobolectricTestRunner.class)
 public class DiscountsBottomSheetContentMediatorTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -97,8 +95,9 @@ public class DiscountsBottomSheetContentMediatorTest {
     }
 
     @Test
-    @DisabledTest(message = "https://crbug.com/393301380")
     public void testRequestShowContent_contentReady() {
+        // The expiry date is formatted in the default time zone.
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
         List<DiscountInfo> infoList = createDiscountInfoList();
         setShoppingServiceGetDiscountInfoForUrl(infoList);
 

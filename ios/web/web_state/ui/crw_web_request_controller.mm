@@ -14,6 +14,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "ios/web/common/features.h"
 #import "ios/web/common/referrer_util.h"
+#import "ios/web/navigation/crw_error_page_helper.h"
 #import "ios/web/navigation/crw_navigation_item_holder.h"
 #import "ios/web/navigation/crw_pending_navigation_info.h"
 #import "ios/web/navigation/crw_wk_navigation_handler.h"
@@ -29,9 +30,9 @@
 #import "ios/web/web_state/web_state_impl.h"
 #import "net/base/apple/url_conversions.h"
 #import "net/base/url_util.h"
+#import "url/origin.h"
 
 using web::wk_navigation_util::kReferrerHeaderName;
-using web::wk_navigation_util::URLNeedsUserAgentType;
 
 @interface CRWWebRequestController ()
 
@@ -183,8 +184,15 @@ using web::wk_navigation_util::URLNeedsUserAgentType;
 
   self.currentNavItem->SetTransitionType(
       ui::PageTransition::PAGE_TRANSITION_RELOAD);
-  if (!web::GetWebClient()->IsAppSpecificURL(
-          net::GURLWithNSURL(self.webView.URL))) {
+  GURL webViewURL = net::GURLWithNSURL(self.webView.URL);
+  // Error pages loaded via `loadHTMLString:baseURL:` with an error page `file:`
+  // URL cannot be reloaded directly via `[self.webView reload]`, as WebKit
+  // would reload the empty placeholder string rather than re-requesting the
+  // failed navigation URL. Fall back to
+  // `loadCurrentURLWithRendererInitiatedNavigation:` to reload the underlying
+  // `NavigationItem` URL.
+  if (!web::GetWebClient()->IsAppSpecificURL(webViewURL) &&
+      ![CRWErrorPageHelper isErrorPageFileURL:webViewURL]) {
     // New navigation manager can delegate directly to WKWebView to reload
     // for non-app-specific URLs. The necessary navigation states will be
     // updated in WKNavigationDelegate callbacks.
@@ -269,8 +277,8 @@ using web::wk_navigation_util::URLNeedsUserAgentType;
     // pending navigation item.
     // Do not do it for localhost address as this is needed to have
     // pre-rendering in tests.
-    if (item->GetURL().DeprecatedGetOriginAsURL() ==
-            requestURL.DeprecatedGetOriginAsURL() &&
+    if (item->GetURL().SchemeIs(requestURL.scheme()) &&
+        url::IsSameOriginWith(item->GetURL(), requestURL) &&
         !net::IsLocalhost(requestURL)) {
       self.navigationManagerImpl->UpdatePendingItemUrl(requestURL);
     }

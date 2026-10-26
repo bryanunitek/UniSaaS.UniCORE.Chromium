@@ -5,6 +5,11 @@
 #ifndef CHROME_BROWSER_UI_AI_OVERLAY_DIALOG_AI_OVERLAY_DIALOG_CONTROLLER_H_
 #define CHROME_BROWSER_UI_AI_OVERLAY_DIALOG_AI_OVERLAY_DIALOG_CONTROLLER_H_
 
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
@@ -13,23 +18,32 @@
 #include "ui/base/class_property.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
-namespace views {
-class WebView;
-}  // namespace views
+namespace user_prefs {
+class PrefRegistrySyncable;
+}  // namespace user_prefs
 
 class HostContentSettingsMap;
+class Profile;
 
 namespace ttc {
+
+namespace prefs {
+inline constexpr char kAiOverlayRememberedNotes[] =
+    "ai_overlay.remembered_notes";
+}  // namespace prefs
 
 class AiOverlayDialogController : public content::WebContentsDelegate {
  public:
   class Observer : public base::CheckedObserver {
    public:
-    virtual void OnCaptionsVisibleChanged(bool visible) {}
+    virtual void OnInputCaptionsVisibleChanged(bool visible) {}
+    virtual void OnOutputCaptionsVisibleChanged(bool visible) {}
     virtual void OnUsePersonaChanged(bool use_persona) {}
   };
 
   DECLARE_USER_DATA(AiOverlayDialogController);
+
+  static bool IsEnabledForProfile(Profile* profile);
 
   static AiOverlayDialogController* From(BrowserWindowInterface* browser);
 
@@ -39,16 +53,17 @@ class AiOverlayDialogController : public content::WebContentsDelegate {
       delete;
   ~AiOverlayDialogController() override;
 
-  // Shows the transparent overlay above the browser window.
-  void ShowOverlay();
 
-  // Hides the overlay.
-  void HideOverlay();
+  // Shows the transparent overlay above the browser window.
+  virtual void ShowOverlay() = 0;
+
+  // Closes the overlay and tears down the active session.
+  virtual void CloseOverlay() = 0;
 
   // Toggles the overlay visibility.
   void ToggleOverlay();
 
-  bool IsOverlayShowing() const;
+  virtual bool IsOverlayShowing() const = 0;
 
   // content::WebContentsDelegate:
   void RequestMediaAccessPermission(
@@ -58,21 +73,33 @@ class AiOverlayDialogController : public content::WebContentsDelegate {
   bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
                                   const url::Origin& security_origin,
                                   blink::mojom::MediaStreamType type) override;
-  void ResizeDueToAutoResize(content::WebContents* source,
-                             const gfx::Size& new_size) override;
 
-  bool captions_visible() const { return captions_visible_; }
-  void set_captions_visible(bool visible);
+  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+
+  bool input_captions_visible() const { return input_captions_visible_; }
+  void SetInputCaptionsVisible(bool visible);
+
+  bool output_captions_visible() const { return output_captions_visible_; }
+  void SetOutputCaptionsVisible(bool visible);
+
+  bool captions_visible() const {
+    return input_captions_visible_ && output_captions_visible_;
+  }
+  void SetCaptionsVisible(bool visible);
 
   bool use_persona() const { return use_persona_; }
-  void set_use_persona(bool use_persona);
+  void SetUsePersona(bool use_persona);
+
+  std::vector<std::pair<std::string, std::string>> GetRememberedNotes() const;
+  void SetRememberedNote(const std::string& key, const std::string& value);
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
- private:
-  views::WebView* GetActiveOverlayWebView() const;
+ protected:
+  BrowserWindowInterface* browser() const { return browser_; }
 
+ private:
   raw_ptr<BrowserWindowInterface> browser_;
 
   ui::ScopedUnownedUserData<AiOverlayDialogController>
@@ -80,7 +107,8 @@ class AiOverlayDialogController : public content::WebContentsDelegate {
 
   const raw_ptr<HostContentSettingsMap> host_content_settings_map_;
 
-  bool captions_visible_ = true;
+  bool input_captions_visible_ = true;
+  bool output_captions_visible_ = true;
   bool use_persona_ = false;
 
   base::ObserverList<Observer> observers_;

@@ -15,7 +15,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
-#include "components/history/core/browser/features.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/sync/history_sync_metadata_database.h"
 #include "components/history/core/browser/sync/visit_id_remapper.h"
@@ -583,17 +582,6 @@ HistorySyncBridge::ApplyIncrementalSyncChanges(
     const sync_pb::HistorySpecifics& specifics =
         entity_change->data().specifics.history();
 
-    // `kVisitedLinksOn404` may be enabled on one device, where 404s are saved
-    // to history. That device's history may then be synced to another device
-    // where `kVisitedLinksOn404` is disabled and is therefore not expecting
-    // 404s to be in history. To avoid this scenario, don't save 404s to the
-    // local device if the flag is disabled.
-    if (!base::FeatureList::IsEnabled(history::kVisitedLinksOn404) &&
-        specifics.has_http_response_code() &&
-        specifics.http_response_code() == 404) {
-      continue;
-    }
-
     // Check validity requirements.
     std::optional<SpecificsError> specifics_error =
         GetSpecificsError(specifics, history_backend_);
@@ -973,7 +961,7 @@ void HistorySyncBridge::MaybeCommit(const VisitRow& visit_row) {
   }
 
   // If this visit is actor-initiated, ignore it.
-  history::VisitSource visit_source = VisitSource::SOURCE_BROWSED;
+  VisitSource visit_source = VisitSource::SOURCE_BROWSED;
   if (history_backend_->GetVisitSource(visit_row.visit_id, &visit_source) &&
       visit_source == VisitSource::SOURCE_ACTOR) {
     return;
@@ -1175,7 +1163,7 @@ bool HistorySyncBridge::AddEntityInBackend(
     if (specifics.originator_cluster_id() > 0 &&
         specifics.http_response_code() != 404) {
       // Populate the visit to a synced cluster.
-      history::ClusterVisit cluster_visit;
+      ClusterVisit cluster_visit;
       cluster_visit.annotated_visit.visit_row = visit_row;
       cluster_visit.annotated_visit.visit_row.visit_id = added_visit_id;
       history_backend_->AddVisitToSyncedCluster(

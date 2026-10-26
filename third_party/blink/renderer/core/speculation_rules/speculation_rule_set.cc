@@ -8,6 +8,7 @@
 
 #include "services/network/public/mojom/no_vary_search.mojom-shared.h"
 #include "services/network/public/mojom/referrer_policy.mojom-shared.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom-shared.h"
 #include "third_party/blink/renderer/core/css/style_rule.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -59,8 +60,9 @@ void AddConsoleMessageForSpeculationRuleSetValidation(
         mojom::blink::ConsoleMessageSource::kOther,
         mojom::blink::ConsoleMessageLevel::kWarning, error_message);
     if (script_element) {
-      console_message->SetNodes(element_document.GetFrame(),
-                                {script_element->GetDOMNodeId()});
+      console_message->SetNodes(
+          element_document.GetFrame(),
+          {DOMNodeIdType(script_element->GetDOMNodeId())});
     }
     element_document.AddConsoleMessage(console_message);
   }
@@ -80,8 +82,9 @@ void AddConsoleMessageForSpeculationRuleSetValidation(
         mojom::blink::ConsoleMessageSource::kOther,
         mojom::blink::ConsoleMessageLevel::kWarning, warning_message);
     if (script_element) {
-      console_message->SetNodes(element_document.GetFrame(),
-                                {script_element->GetDOMNodeId()});
+      console_message->SetNodes(
+          element_document.GetFrame(),
+          {DOMNodeIdType(script_element->GetDOMNodeId())});
     }
     element_document.AddConsoleMessage(console_message);
   }
@@ -662,9 +665,10 @@ SpeculationRuleSet* SpeculationRuleSet::Parse(Source* source,
       StringBuilder builder;
       builder.Append(
           "The following keys were duplicated on one or more objects: ");
-      builder.AppendRange(
-          parse_error.duplicate_keys, ", ",
-          [](const auto& key) { return key.EncodeForDebugging(); });
+      builder.AppendRange(parse_error.duplicate_keys, ", ",
+                          [](const auto& key, StringBuilder& b) {
+                            b.Append(key.EncodeForDebugging());
+                          });
       builder.Append(". All but the last value for each key are ignored.");
       duplicate_key_warning = builder.ReleaseString();
     }

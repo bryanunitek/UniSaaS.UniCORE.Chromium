@@ -8,6 +8,7 @@
 #include "base/strings/stringprintf.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
+#include "net/shared_dictionary/shared_dictionary_constants.h"
 #include "services/network/public/cpp/features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -27,6 +28,21 @@ TEST(HeaderUtilTest, IsRequestHeaderSafe) {
       {"Upgrade", "websocket", false},
       {"Upgrade", "webbedsocket", false},
       {"hOsT", "foo.test", false},
+
+      {net::HttpRequestHeaders::kAcceptEncoding, "gzip", true},
+      {net::HttpRequestHeaders::kAcceptEncoding, "identity;q=1, *;q=0", true},
+      {net::HttpRequestHeaders::kAcceptEncoding, "gzip, identity;q=1, *;q=0",
+       true},
+      {net::HttpRequestHeaders::kAcceptEncoding, "identity;q=1, * ; q=0", true},
+      {net::HttpRequestHeaders::kAcceptEncoding, "*", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "gzip, *", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "*;q=1", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "*;q=0.5", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "dcb", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "dcz", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "gzip, dcb", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "dcz;q=1", false},
+      {net::shared_dictionary::kAvailableDictionaryHeaderName, ":hash:", false},
 
       {net::HttpRequestHeaders::kConnection, "Upgrade", false},
       {net::HttpRequestHeaders::kConnection, "Close", true},
@@ -91,6 +107,21 @@ TEST(HeaderUtilTest, AreRequestHeadersSafe) {
       {"Keep-Alive", "timeout=5, max=1000", false},
       {net::HttpRequestHeaders::kTransferEncoding, "gzip", false},
       {"Set-Cookie", "foo=bar", false},
+
+      {net::HttpRequestHeaders::kAcceptEncoding, "gzip", true},
+      {net::HttpRequestHeaders::kAcceptEncoding, "identity;q=1, *;q=0", true},
+      {net::HttpRequestHeaders::kAcceptEncoding, "gzip, identity;q=1, *;q=0",
+       true},
+      {net::HttpRequestHeaders::kAcceptEncoding, "identity;q=1, * ; q=0", true},
+      {net::HttpRequestHeaders::kAcceptEncoding, "*", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "gzip, *", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "*;q=1", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "*;q=0.5", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "dcb", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "dcz", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "gzip, dcb", false},
+      {net::HttpRequestHeaders::kAcceptEncoding, "dcz;q=1", false},
+      {net::shared_dictionary::kAvailableDictionaryHeaderName, ":hash:", false},
 
       {net::HttpRequestHeaders::kConnection, "Upgrade", false},
       {net::HttpRequestHeaders::kConnection, "Close", true},
@@ -329,49 +360,67 @@ TEST(HeaderUtilTest,
   EXPECT_EQ(*headers.GetHeader("Sec-Speculation-Tags"), std::string(2048, 'a'));
 }
 
-TEST(HeaderUtilTest, ContainsForbiddenSecurityHeader_SecAdAuction_Truncation) {
-  net::HttpRequestHeaders headers;
+TEST(HeaderUtilTest, ValidateRemovedHeaders) {
+  std::string forbidden_header;
 
-  // Normal case (< 2048)
-  std::string normal_value = "auction-signal-data";
-  headers.SetHeader("Sec-Ad-Auction-Signals", normal_value);
-  EXPECT_FALSE(ContainsForbiddenSecurityHeader(headers));
-  auto value_opt = headers.GetHeader("Sec-Ad-Auction-Signals");
-  ASSERT_TRUE(value_opt.has_value());
-  EXPECT_EQ(*value_opt, normal_value);
+  // Empty list is valid.
+  EXPECT_TRUE(ValidateRemovedHeaders({}, &forbidden_header));
+  EXPECT_TRUE(forbidden_header.empty());
 
-  // Truncation case
-  std::string long_value(2500, 'a');
-  headers.SetHeader("Sec-Ad-Auction-Signals", long_value);
-  EXPECT_FALSE(ContainsForbiddenSecurityHeader(headers));
-  value_opt = headers.GetHeader("Sec-Ad-Auction-Signals");
-  ASSERT_TRUE(value_opt.has_value());
-  std::string value = *value_opt;
-  EXPECT_EQ(value.length(), 2048u);
-  EXPECT_EQ(value, long_value.substr(0, 2048));
+  // Non-security headers are valid to remove.
+  EXPECT_TRUE(ValidateRemovedHeaders({"Accept", "Authorization", "User-Agent"},
+                                     &forbidden_header));
+  EXPECT_TRUE(forbidden_header.empty());
 
-  // Boundary cases for Sec-Ad-Auction-Signals
-  std::string value_2047(2047, 'a');
-  headers.SetHeader("Sec-Ad-Auction-Signals", value_2047);
-  EXPECT_FALSE(ContainsForbiddenSecurityHeader(headers));
-  EXPECT_EQ(*headers.GetHeader("Sec-Ad-Auction-Signals"), value_2047);
+  // Client Hints (Sec-CH-*) are permitted to be removed on redirect.
+  EXPECT_TRUE(ValidateRemovedHeaders({"Sec-CH-UA", "Sec-CH-UA-Mobile"},
+                                     &forbidden_header));
+  EXPECT_TRUE(forbidden_header.empty());
 
-  std::string value_2048(2048, 'a');
-  headers.SetHeader("Sec-Ad-Auction-Signals", value_2048);
-  EXPECT_FALSE(ContainsForbiddenSecurityHeader(headers));
-  EXPECT_EQ(*headers.GetHeader("Sec-Ad-Auction-Signals"), value_2048);
+  // Client Hints case-insensitivity.
+  EXPECT_TRUE(ValidateRemovedHeaders({"sec-ch-ua", "SEC-CH-UA-PLATFORM"},
+                                     &forbidden_header));
+  EXPECT_TRUE(forbidden_header.empty());
 
-  std::string value_2049(2049, 'a');
-  headers.SetHeader("Sec-Ad-Auction-Signals", value_2049);
-  EXPECT_FALSE(ContainsForbiddenSecurityHeader(headers));
-  EXPECT_EQ(headers.GetHeader("Sec-Ad-Auction-Signals")->length(), 2048u);
+  // Origin header removal is forbidden (canonical and non-canonical casing).
+  EXPECT_FALSE(ValidateRemovedHeaders({"Origin"}, &forbidden_header));
+  EXPECT_EQ(forbidden_header, "Origin");
 
-  // Sec-Ad-Auction-Fetch should still be strictly checked
-  headers.SetHeader("Sec-Ad-Auction-Fetch", "?1");
-  EXPECT_FALSE(ContainsForbiddenSecurityHeader(headers));
+  forbidden_header.clear();
+  EXPECT_FALSE(ValidateRemovedHeaders({"origin"}, &forbidden_header));
+  EXPECT_EQ(forbidden_header, "origin");
 
-  headers.SetHeader("Sec-Ad-Auction-Fetch", "?0");
-  EXPECT_TRUE(ContainsForbiddenSecurityHeader(headers));
+  forbidden_header.clear();
+  EXPECT_FALSE(ValidateRemovedHeaders({"ORIGIN"}, &forbidden_header));
+  EXPECT_EQ(forbidden_header, "ORIGIN");
+
+  // Sec- headers other than Sec-CH- are forbidden to remove.
+  forbidden_header.clear();
+  EXPECT_FALSE(ValidateRemovedHeaders({"Sec-Fetch-Site"}, &forbidden_header));
+  EXPECT_EQ(forbidden_header, "Sec-Fetch-Site");
+
+  forbidden_header.clear();
+  EXPECT_FALSE(ValidateRemovedHeaders({"sEc-FeTcH-mOdE"}, &forbidden_header));
+  EXPECT_EQ(forbidden_header, "sEc-FeTcH-mOdE");
+
+  forbidden_header.clear();
+  EXPECT_FALSE(ValidateRemovedHeaders({"Sec-Purpose"}, &forbidden_header));
+  EXPECT_EQ(forbidden_header, "Sec-Purpose");
+
+  forbidden_header.clear();
+  EXPECT_FALSE(ValidateRemovedHeaders({"Sec-GPC"}, &forbidden_header));
+  EXPECT_EQ(forbidden_header, "Sec-GPC");
+
+  // Mixed permitted Client Hints and forbidden headers.
+  forbidden_header.clear();
+  EXPECT_FALSE(
+      ValidateRemovedHeaders({"Sec-CH-UA", "Origin"}, &forbidden_header));
+  EXPECT_EQ(forbidden_header, "Origin");
+
+  forbidden_header.clear();
+  EXPECT_FALSE(ValidateRemovedHeaders({"Sec-CH-UA", "Sec-Fetch-Dest"},
+                                      &forbidden_header));
+  EXPECT_EQ(forbidden_header, "Sec-Fetch-Dest");
 }
 
 }  // namespace network

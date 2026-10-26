@@ -131,11 +131,6 @@ Note: This is a jinja2 template, processed at build time into the final resource
 
         <item name="android:forceDarkAllowed">false</item>
 
-        <!-- TODO(crbug.com/419879223): Clean these up once the styles are finalized. -->
-        <!-- Baseline app menu styles. -->
-        <item name="overflowMenuButtonStyle">@style/OverflowMenuButton</item>
-        <item name="overflowMenuActionBarBgDrawable">@drawable/menu_action_bar_bg</item>
-        <item name="appMenuIconRowPadding">0dp</item>
 
         <!-- Tab switcher button styles. -->
         <item name="newTabButtonStyle">@style/NewTabButtonStyle</item>
@@ -159,7 +154,8 @@ Note: This is a jinja2 template, processed at build time into the final resource
         <item name="listDividerHeight">@dimen/list_divider_layout_height</item>
 
         <!-- Popup attributes. -->
-        <item name="popupBg">@drawable/popup_bg_24dp</item>
+        <item name="popupBgShadow">@drawable/popup_bg_shadow_24dp</item>
+        <item name="popupBgShape">@drawable/popup_bg_shape_24dp</item>
         <item name="popupBgCornerRadius">@dimen/popup_bg_corner_radius_24dp</item>
         <item name="zeroRadius">0dp</item>
 
@@ -168,12 +164,13 @@ Note: This is a jinja2 template, processed at build time into the final resource
         <item name="textLargeLeading">@dimen/text_size_large_leading</item>
         <!-- LINT.ThenChange(//ui/android/java/res/values/themes.xml:AdaptiveDensityDefaults) -->
 
+        <!-- Fusebox attributes -->
+        <item name="fuseboxPlusButtonStartMargin">0dp</item>
+        <item name="fuseboxPlusButtonBottomMargin">0dp</item>
+
         <!-- Glic task menu attributes -->
         <item name="glicTaskMenuEndIconWidth">@dimen/glic_menu_end_icon_width</item>
         <item name="glicTaskMenuMaxWidth">@dimen/glic_task_menu_max_width</item>
-
-        <!-- App menu -->
-        <item name="appMenuWidth">@dimen/menu_width_lff</item>
 
         <!-- Button attributes -->
         <item name="iconRowButtonSizeOverlay">@style/SizeOverlay.BrowserUI.IconRowButton</item>
@@ -184,6 +181,12 @@ Note: This is a jinja2 template, processed at build time into the final resource
         <item name="toolbarButtonHeight">@dimen/toolbar_button_height</item>
         <item name="toolbarButtonMarginHorizontal">@dimen/toolbar_button_margin_horizontal</item>
         <item name="toolbarButtonMarginVertical">@dimen/toolbar_button_margin_vertical</item>
+
+        <!-- Web App Header button dimensions. -->
+        <item name="webAppHeaderButtonSize">
+            @dimen/header_button_size
+        </item>
+        <item name="webAppHeaderHeight">@dimen/web_app_header_height</item>
 
         <!-- Location bar action button dimensions(e.g. bookmark, downloads). -->
         <item name="locationBarActionButtonWidth">@dimen/location_bar_action_icon_width</item>
@@ -198,6 +201,7 @@ Note: This is a jinja2 template, processed at build time into the final resource
         buttons to fallback to the expected bottom-anchored position on mobile.-->
         <item name="locationBarActionButtonConstraintTopToTopOf">@null</item>
         <item name="locationBarActionButtonConstraintBottomToBottomOf">@null</item>
+        <item name="locationBarDeleteButtonPadding">0dp</item>
 
         <!-- Search box action button dimensions. -->
         <item name="searchBoxActionButtonMargin">0dp</item>
@@ -368,7 +372,8 @@ Note: This is a jinja2 template, processed at build time into the final resource
         <item name="textLargeLeading">@dimen/text_size_large_leading_desktop</item>
 
         <!-- Popup attributes. -->
-        <item name="popupBg">@drawable/popup_bg_16dp</item>
+        <item name="popupBgShadow">@drawable/popup_bg_shadow_16dp</item>
+        <item name="popupBgShape">@drawable/popup_bg_shape_16dp</item>
         <item name="popupBgCornerRadius">@dimen/popup_bg_corner_radius_16dp</item>
 
         <!-- List item dimensions. -->
@@ -383,15 +388,24 @@ Note: This is a jinja2 template, processed at build time into the final resource
         <item name="glicTaskMenuEndIconWidth">@dimen/glic_menu_end_icon_width_desktop</item>
         <item name="glicTaskMenuMaxWidth">@dimen/glic_task_menu_max_width_desktop</item>
 
-        <!-- App menu -->
-        <item name="appMenuWidth">@dimen/menu_width_lff_desktop</item>
-
         <!-- Button attributes -->
         <item name="iconRowButtonSizeOverlay">@style/SizeOverlay.BrowserUI.IconRowButton.DesktopDensity</item>
         <item name="colorButtonSizeOverlay">@style/SizeOverlay.BrowserUI.ColorButton.DesktopDensity</item>
 
+        <!-- Web App Header button dimensions. -->
+        <item name="webAppHeaderButtonSize">
+            @dimen/header_button_size_desktop
+        </item>
+        <item name="webAppHeaderHeight">
+           @dimen/web_app_header_height_desktop
+       </item>
+
         <!-- Search box attributes -->
         <item name="searchBoxActionButtonMargin">@dimen/ntp_search_box_action_button_margin</item>
+
+        <!-- Fusebox attributes -->
+        <item name="fuseboxPlusButtonStartMargin">@dimen/fusebox_popover_plus_button_start_margin</item>
+        <item name="fuseboxPlusButtonBottomMargin">@dimen/fusebox_popover_plus_button_bottom_margin</item>
     </style>
 
     <style name="ThemeOverlay.BrowserUI.DesktopDensity.TabStrip" parent="">
@@ -407,6 +421,7 @@ Note: This is a jinja2 template, processed at build time into the final resource
         <item name="locationBarActionButtonMarginHorizontal">@dimen/location_bar_action_icon_margin_horizontal_desktop</item>
         <item name="locationBarActionButtonConstraintTopToTopOf">@id/location_bar</item>
         <item name="locationBarActionButtonConstraintBottomToBottomOf">@id/location_bar</item>
+        <item name="locationBarDeleteButtonPadding">8dp</item>
 
         <!-- Close button dimensions. -->
         <item name="closeButtonWidth">@dimen/close_button_width_desktop</item>
@@ -424,9 +439,4 @@ Note: This is a jinja2 template, processed at build time into the final resource
         <!-- TODO(crbug.com/438804527): Update Incognito theme overlay with missing attributes. -->
     </style>
 
-    <style name="ThemeOverlay.BrowserUI.ExpressiveUpdate" parent="">
-        <item name="overflowMenuButtonStyle">@style/OverflowMenuButton.Expressive</item>
-        <item name="overflowMenuActionBarBgDrawable">@empty</item>
-        <item name="appMenuIconRowPadding">8dp</item>
-    </style>
 </resources>

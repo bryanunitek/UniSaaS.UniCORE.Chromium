@@ -29,15 +29,16 @@
 #import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_tab_change_audience.h"
 #import "ios/chrome/browser/lens_overlay/coordinator/lens_result_page_mediator.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_configuration_factory.h"
-#import "ios/chrome/browser/lens_overlay/model/lens_overlay_entrypoint.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_metrics_recorder.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_overflow_menu_delegate.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_overflow_menu_factory.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_pan_tracker.h"
+#import "ios/chrome/browser/lens_overlay/model/lens_overlay_presentation_type.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_snapshot_controller.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_tab_helper.h"
 #import "ios/chrome/browser/lens_overlay/model/snapshot_cover_view_controller.h"
 #import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_entrypoint.h"
 #import "ios/chrome/browser/lens_overlay/ui/lens_overlay_consent_presenter.h"
 #import "ios/chrome/browser/lens_overlay/ui/lens_overlay_consent_view_controller.h"
 #import "ios/chrome/browser/lens_overlay/ui/lens_overlay_container_presenter.h"
@@ -57,8 +58,8 @@
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
 #import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_util.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
-#import "ios/chrome/browser/shared/coordinator/scene/state/layout_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/lens_overlay_state_notifier.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
@@ -86,11 +87,13 @@
 #import "ios/chrome/browser/snapshots/model/snapshot_tab_helper.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/web/model/web_state_delegate_browser_agent.h"
+#import "ios/chrome/common/ui/util/ui_util.h"
 #import "ios/public/provider/chrome/browser/lens/lens_configuration.h"
 #import "ios/public/provider/chrome/browser/lens/lens_image_metadata.h"
 #import "ios/public/provider/chrome/browser/lens/lens_image_source.h"
 #import "ios/public/provider/chrome/browser/lens/lens_overlay_api.h"
 #import "ios/public/provider/chrome/browser/lens/lens_overlay_result.h"
+#import "ios/web/public/navigation/referrer.h"
 #import "ios/web/public/web_state.h"
 #import "ui/base/device_form_factor.h"
 #import "url/gurl.h"
@@ -109,17 +112,17 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
 
 }  // namespace
 
-@interface LensOverlayCoordinator () <LayoutStateObserver,
+@interface LensOverlayCoordinator () <LensOverlayCommands,
                                       LensOverlayConsentPresenterDelegate,
                                       LensOverlayConsentViewControllerDelegate,
-                                      LensOverlayCommands,
-                                      LensOverlayNetworkIssuePresenterDelegate,
+                                      LensOverlayContainerPresenterDelegate,
                                       LensOverlayMediatorDelegate,
+                                      LensOverlayNetworkIssuePresenterDelegate,
                                       LensOverlayOverflowMenuDelegate,
                                       LensOverlayResultConsumer,
-                                      LensOverlayContainerPresenterDelegate,
                                       LensOverlayResultsPagePresenterDelegate,
-                                      LensOverlayTabChangeAudience>
+                                      LensOverlayTabChangeAudience,
+                                      SceneLayoutStateObserver>
 
 /// Whether the `_containerViewController` is currently presented.
 @property(nonatomic, assign, readonly, getter=isLensOverlayVisible)
@@ -326,6 +329,9 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
 }
 
 - (void)stop {
+  if (self.stopped) {
+    return;
+  }
   self.stopped = YES;
 
   if (Browser* browser = self.browser) {
@@ -351,10 +357,14 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
     return;
   }
   _presentationBaseViewController = initialPresentationBase;
+
+  base::RecordAction(
+      base::UserMetricsAction("Mobile.LensOverlay.CameraSearch.Performed"));
   // Even if the image is already prepared at this point, the snapshotting
   // infrastructure still needs to be built to allow the restoration window to
   // be displayed when exiting and re-entering the experience.
   [self prepareSnapshotCapturingInfrastructure];
+  // C2PA: LensImageMetadata provides its own C2PA support. b/541315801
   LensImageSource* imageSource =
       [[LensImageSource alloc] initWithImageMetadata:metadata];
   [self handleOverlayImageSourceFound:imageSource
@@ -363,6 +373,7 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
 }
 
 - (void)searchImageWithLens:(UIImage*)image
+               rawImageData:(NSData*)rawImageData
                  entrypoint:(LensOverlayEntrypoint)entrypoint
     initialPresentationBase:(UIViewController*)initialPresentationBase
     resultsPresenterFactory:(LensResultsPresenterFactory)presenterFactory
@@ -381,7 +392,8 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
   // be displayed when exiting and re-entering the experience.
   [self prepareSnapshotCapturingInfrastructure];
   LensImageSource* imageSource =
-      [[LensImageSource alloc] initWithSnapshot:image];
+      rawImageData ? [[LensImageSource alloc] initWithRawImageData:rawImageData]
+                   : [[LensImageSource alloc] initWithSnapshot:image];
   [self handleOverlayImageSourceFound:imageSource
                              animated:YES
                            completion:completion];
@@ -402,6 +414,7 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
   [self captureSnapshotWithCompletion:^(UIImage* snapshot) {
     LensImageSource* imageSource =
         [[LensImageSource alloc] initWithSnapshot:snapshot];
+    // C2PA: Snapshots should not have C2PA metadata. b/541315801
     [weakSelf handleOverlayImageSourceFound:imageSource
                                    animated:animated
                                  completion:completion];
@@ -568,6 +581,8 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
   // If the destroy command is invoked on the stopped coordinator, immediately
   // destroy all dependencies even if another exit flow is in progress.
   if (self.stopped) {
+    [self dismissLensOverlayAnimated:NO completion:nil];
+    [self exitFullscreenAnimated:NO];
     [self completeLensOverlayDestroy];
     return;
   }
@@ -583,7 +598,9 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
   __weak __typeof(self) weakSelf = self;
   [self exitAnimated:shouldAnimate
           completion:^{
-            [weakSelf completeLensOverlayDestroy];
+            if (!weakSelf.isStopped) {
+              [weakSelf completeLensOverlayDestroy];
+            }
           }];
 }
 
@@ -593,6 +610,9 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
   __weak __typeof(self) weakSelf = self;
 
   auto onExitComplete = ^{
+    if (weakSelf.isStopped) {
+      return;
+    }
     if (!animated) {
       [weakSelf exitFullscreenAnimated:NO];
     }
@@ -602,6 +622,9 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
   };
 
   auto dismissLensOverlay = ^{
+    if (weakSelf.isStopped) {
+      return;
+    }
     [weakSelf dismissLensOverlayAnimated:animated completion:onExitComplete];
   };
 
@@ -653,6 +676,9 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
       _containerPresenter;
 
   void (^onSelectionExitPositionSettled)() = ^{
+    if (weakSelf.isStopped) {
+      return;
+    }
     [weakSelf exitFullscreenAnimated:YES];
     if (!weakContainerPresenter) {
       if (completion) {
@@ -674,8 +700,11 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
 
 - (void)dismissLensOverlayAnimated:(BOOL)animated
                         completion:(ProceduralBlock)completion {
-  if (!_containerPresenter && completion) {
-    completion();
+  if (!_containerPresenter) {
+    if (completion) {
+      completion();
+    }
+    return;
   }
   [_containerPresenter dismissContainerAnimated:animated completion:completion];
 }
@@ -1179,16 +1208,14 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
 
 - (void)lensOverlayConsentPresenterWillShowConsent:
     (LensOverlayConsentPresenter*)presented {
-  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
+  if (IsRegularXRegularSizeClass(self.baseViewController)) {
     [_containerPresenter setContainerHidden:YES animated:NO];
   }
 }
 
 - (void)lensOverlayConsentPresenterWillDismissConsent:
     (LensOverlayConsentPresenter*)presented {
-  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
-    [_containerPresenter setContainerHidden:NO animated:YES];
-  }
+  [_containerPresenter setContainerHidden:NO animated:YES];
 }
 
 #pragma mark - LensOverlayOverflowMenuDelegate
@@ -1249,8 +1276,11 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
 // Opens a given URL in a new tab.
 - (void)openURLInNewTab:(GURL)URL {
   OpenNewTabCommand* command =
-      [OpenNewTabCommand commandWithURLFromChrome:URL
-                                      inIncognito:self.isOffTheRecord];
+      [[OpenNewTabCommand alloc] initWithURL:URL
+                                    referrer:web::Referrer()
+                                 inIncognito:self.isOffTheRecord
+                                inBackground:NO
+                                    appendTo:OpenPosition::kLastTab];
 
   [HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands)
       openURLInNewTab:command];
@@ -1290,6 +1320,11 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
 
 // Returns whether or not the consent dialog should be shown.
 - (BOOL)shouldShowConsentFlow {
+  // The Level Up feature always wants to show the consent/user education
+  // dialog, as the point is to educate users.
+  if (_entrypoint == LensOverlayEntrypoint::kLevelUp) {
+    return YES;
+  }
   if (!lens::EntrypointRequiresUserConsent(_entrypoint)) {
     return NO;
   }
@@ -1548,17 +1583,13 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
 // Creates or updates the initial visible area layout guide, to ensure that it
 // takes into account the AppBar when it overlaps the browser.
 - (void)updateInitialVisibleAreaLayoutGuide {
-  if (!IsChromeNextIaEnabled() || !IsFullscreenRefactoringEnabled()) {
-    return;
-  }
-
-  if (!_containerViewController) {
+  if (!_containerViewController || !_selectionViewController) {
     return;
   }
 
   if (!_initialVisibleAreaLayoutGuide) {
     _initialVisibleAreaLayoutGuide = [[UILayoutGuide alloc] init];
-    [_containerViewController.view
+    [_selectionViewController.view
         addLayoutGuide:_initialVisibleAreaLayoutGuide];
   }
 
@@ -1566,15 +1597,21 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
     [NSLayoutConstraint deactivateConstraints:_initialVisibleAreaConstraints];
   }
 
-  NSLayoutYAxisAnchor* bottomAnchor =
-      _containerViewController.view.bottomAnchor;
-
+  BOOL snapToAppBarAllowed =
+      IsChromeNextIaEnabled() && IsFullscreenRefactoringEnabled();
+  BOOL usesSidePanel =
+      lens::ResultPagePresentationFor(self.baseViewController) ==
+      lens::ResultPagePresentationType::kSidePanel;
   BOOL appBarAtBottom =
       self.browser->GetSceneState().layoutState.appBarPosition ==
       AppBarPosition::kBottom;
-  BOOL viewInWindow = _containerViewController.view.window != nil;
+  BOOL viewInWindow = _selectionViewController.view.window != nil;
+  BOOL shouldSnapToAppBar =
+      snapToAppBarAllowed && appBarAtBottom && viewInWindow && !usesSidePanel;
 
-  if (appBarAtBottom && viewInWindow) {
+  NSLayoutYAxisAnchor* bottomAnchor =
+      _selectionViewController.view.bottomAnchor;
+  if (shouldSnapToAppBar) {
     LayoutGuideCenter* layoutGuideCenter =
         LayoutGuideCenterForBrowser(self.browser);
     UIView* appBarView =
@@ -1586,11 +1623,11 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
 
   _initialVisibleAreaConstraints = @[
     [_initialVisibleAreaLayoutGuide.topAnchor
-        constraintEqualToAnchor:_containerViewController.view.topAnchor],
+        constraintEqualToAnchor:_selectionViewController.view.topAnchor],
     [_initialVisibleAreaLayoutGuide.leadingAnchor
-        constraintEqualToAnchor:_containerViewController.view.leadingAnchor],
+        constraintEqualToAnchor:_selectionViewController.view.leadingAnchor],
     [_initialVisibleAreaLayoutGuide.trailingAnchor
-        constraintEqualToAnchor:_containerViewController.view.trailingAnchor],
+        constraintEqualToAnchor:_selectionViewController.view.trailingAnchor],
     [_initialVisibleAreaLayoutGuide.bottomAnchor
         constraintEqualToAnchor:bottomAnchor],
   ];
@@ -1598,9 +1635,11 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
   [NSLayoutConstraint activateConstraints:_initialVisibleAreaConstraints];
 
   // Only update selection VC's visible area layout guide if results bottom
-  // sheet is not currently visible.
-  if (!self.isResultsBottomSheetCreated ||
-      !_resultsPagePresenter.isResultPageVisible) {
+  // sheet is not currently visible or if it's a side panel.
+  BOOL bottomSheetNotVisible = !self.isResultsBottomSheetCreated ||
+                               !_resultsPagePresenter.isResultPageVisible;
+  BOOL shouldUpdateLayourGuide = usesSidePanel || bottomSheetNotVisible;
+  if (shouldUpdateLayourGuide) {
     _selectionViewController.visibleAreaLayoutGuide =
         _initialVisibleAreaLayoutGuide;
   }
@@ -1703,7 +1742,8 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
   } else {
     _resultsPagePresenter = [[LensOverlayResultsPagePresenter alloc]
         initWithBaseViewController:_containerViewController
-          resultPageViewController:_resultViewController];
+          resultPageViewController:_resultViewController
+                             isLVF:lens::IsLVFEntrypoint(_entrypoint)];
   }
 
   _resultsPagePresenter.delegate = self;
@@ -1790,9 +1830,9 @@ const base::TimeDelta kSearchWithCameraTooltipHintDelay = base::Seconds(2.0);
       indicateLensOverlayVisible:lensOverlayVisible];
 }
 
-#pragma mark - LayoutStateObserver
+#pragma mark - SceneLayoutStateObserver
 
-- (void)layoutState:(LayoutState*)layoutState
+- (void)layoutState:(SceneLayoutState*)layoutState
     didChangeAppBarPosition:(AppBarPosition)appBarPosition {
   [self updateInitialVisibleAreaLayoutGuide];
 }

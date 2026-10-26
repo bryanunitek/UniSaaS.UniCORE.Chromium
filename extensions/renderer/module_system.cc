@@ -7,6 +7,7 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/trace_event/trace_event.h"
@@ -14,6 +15,7 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/renderer/console.h"
+#include "extensions/renderer/renderer_extension_registry.h"
 #include "extensions/renderer/safe_builtins.h"
 #include "extensions/renderer/script_context.h"
 #include "extensions/renderer/script_context_set.h"
@@ -143,6 +145,14 @@ bool ContextNeedsMojoBindings(ScriptContext* context) {
     if (context->GetAvailability(api).is_available())
       return true;
   }
+
+  const Extension* extension = context->extension();
+  if (context->IsForServiceWorker() && extension &&
+      RendererExtensionRegistry::Get()->IsMojoJsEnabledForServiceWorker(
+          extension->id())) {
+    return true;
+  }
+
   return false;
 }
 
@@ -194,9 +204,7 @@ ModuleSystem::ModuleSystem(ScriptContext* context, const SourceMap* source_map)
   if (context_->context_type() == mojom::ContextType::kPrivilegedExtension &&
       ContextNeedsMojoBindings(context_) &&
       blink::WebV8Features::IsSupported(context->v8_context())) {
-    // Valid enablement code path, so need to ensure MojoJS is allowed for the
-    // process before attempting to enable it.
-    blink::WebV8Features::AllowMojoJSForProcess();
+    blink::WebV8Features::AllowMojoJSPerContextForProcess();
     blink::WebV8Features::EnableMojoJS(context->v8_context(), true);
   }
 }
@@ -256,8 +264,7 @@ void ModuleSystem::HandleException(const v8::TryCatch& try_catch) {
   exception_handler_->HandleUncaughtException(try_catch);
 }
 
-v8::MaybeLocal<v8::Object> ModuleSystem::Require(
-    const std::string& module_name) {
+v8::MaybeLocal<v8::Object> ModuleSystem::Require(std::string_view module_name) {
   v8::Local<v8::String> v8_module_name;
   if (!ToV8String(GetIsolate(), module_name, &v8_module_name))
     return v8::MaybeLocal<v8::Object>();
@@ -384,11 +391,12 @@ void ModuleSystem::OverrideNativeHandlerForTest(const std::string& name) {
 void ModuleSystem::LazyFieldGetter(
     v8::Local<v8::Name> property,
     const v8::PropertyCallbackInfo<v8::Value>& info) {
-  CHECK(!info.Data().IsEmpty());
-  CHECK(info.Data()->IsObject());
+  CHECK(!info.DataV2().IsEmpty());
+  CHECK(info.DataV2().As<v8::Value>()->IsObject());
   v8::Isolate* isolate = info.GetIsolate();
   v8::HandleScope handle_scope(isolate);
-  v8::Local<v8::Object> parameters = v8::Local<v8::Object>::Cast(info.Data());
+  v8::Local<v8::Object> parameters =
+      info.DataV2().As<v8::Value>().As<v8::Object>();
   // This context should be the same as context()->v8_context().
   v8::Local<v8::Context> context =
       parameters->GetCreationContextChecked(isolate);
@@ -495,7 +503,7 @@ void ModuleSystem::SetLazyField(v8::Local<v8::Object> object,
 }
 
 void ModuleSystem::OnNativeBindingCreated(
-    const std::string& api_name,
+    std::string_view api_name,
     v8::Local<v8::Value> api_bridge_value) {
   DCHECK(!get_internal_api_.IsEmpty());
   v8::HandleScope scope(GetIsolate());
@@ -562,7 +570,7 @@ v8::MaybeLocal<v8::Object> ModuleSystem::RequireNativeFromString(
     return v8::MaybeLocal<v8::Object>();
   }
 
-  if (overridden_native_handlers_.count(native_name) > 0u) {
+  if (overridden_native_handlers_.contains(native_name)) {
     v8::Local<v8::Value> value = RequireForJsInner(
         ToV8StringUnsafe(GetIsolate(), native_name.c_str()), true /* create */);
     if (value.IsEmpty() || !value->IsObject())
@@ -597,8 +605,9 @@ void ModuleSystem::LoadScript(const v8::FunctionCallbackInfo<v8::Value>& args) {
     Fatal(context_, "No source for loadScript(" + module_name + ")");
 
   v8::Local<v8::String> v8_module_name;
-  if (!ToV8String(GetIsolate(), module_name.c_str(), &v8_module_name))
+  if (!ToV8String(GetIsolate(), module_name, &v8_module_name)) {
     Warn(GetIsolate(), "module_name is too long");
+  }
 
   RunString(source, v8_module_name);
   args.GetReturnValue().Set(v8::Undefined(GetIsolate()));
@@ -645,13 +654,13 @@ void ModuleSystem::Private(const v8::FunctionCallbackInfo<v8::Value>& args) {
   args.GetReturnValue().Set(privates);
 }
 
-v8::Local<v8::Value> ModuleSystem::LoadModule(const std::string& module_name) {
+v8::Local<v8::Value> ModuleSystem::LoadModule(std::string_view module_name) {
   return LoadModuleWithNativeAPIBridge(module_name,
                                        v8::Undefined(GetIsolate()));
 }
 
 v8::Local<v8::Value> ModuleSystem::LoadModuleWithNativeAPIBridge(
-    const std::string& module_name,
+    std::string_view module_name,
     v8::Local<v8::Value> api_bridge) {
   v8::EscapableHandleScope handle_scope(GetIsolate());
   v8::Local<v8::Context> v8_context = context()->v8_context();
@@ -660,19 +669,20 @@ v8::Local<v8::Value> ModuleSystem::LoadModuleWithNativeAPIBridge(
   v8::Local<v8::String> source =
       source_map_->GetSource(GetIsolate(), module_name);
   if (source.IsEmpty()) {
-    Fatal(context_, "No source for require(" + module_name + ")");
+    Fatal(context_, base::StrCat({"No source for require(", module_name, ")"}));
     return v8::Undefined(GetIsolate());
   }
   v8::Local<v8::String> wrapped_source(WrapSource(source));
   v8::Local<v8::String> v8_module_name;
-  if (!ToV8String(GetIsolate(), module_name.c_str(), &v8_module_name)) {
+  if (!ToV8String(GetIsolate(), module_name, &v8_module_name)) {
     NOTREACHED() << "module_name is too long";
   }
   // Modules are wrapped in (function(){...}) so they always return functions.
   v8::Local<v8::Value> func_as_value =
       RunString(wrapped_source, v8_module_name);
   if (func_as_value.IsEmpty() || func_as_value->IsUndefined()) {
-    Fatal(context_, "Bad source for require(" + module_name + ")");
+    Fatal(context_,
+          base::StrCat({"Bad source for require(", module_name, ")"}));
     return v8::Undefined(GetIsolate());
   }
 
@@ -773,8 +783,8 @@ v8::Local<v8::Function> ModuleSystem::GetModuleFunction(
     const std::string& method_name) {
   v8::Local<v8::String> v8_module_name;
   v8::Local<v8::String> v8_method_name;
-  if (!ToV8String(GetIsolate(), module_name.c_str(), &v8_module_name) ||
-      !ToV8String(GetIsolate(), method_name.c_str(), &v8_method_name)) {
+  if (!ToV8String(GetIsolate(), module_name, &v8_module_name) ||
+      !ToV8String(GetIsolate(), method_name, &v8_method_name)) {
     return v8::Local<v8::Function>();
   }
 

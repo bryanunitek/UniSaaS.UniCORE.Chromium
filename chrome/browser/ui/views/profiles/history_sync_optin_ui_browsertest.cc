@@ -4,14 +4,16 @@
 
 #include "chrome/browser/ui/webui/signin/history_sync_optin/history_sync_optin_ui.h"
 
+#include <array>
 #include <optional>
 
 #include "base/functional/callback_helpers.h"
+#include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
@@ -23,6 +25,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/features.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
@@ -42,11 +45,11 @@ std::string ParamToTestSuffix(
       {pixel_param.test_suffix, is_ui_refresh_enabled ? "Refresh" : ""});
 }
 
-const PixelTestParam kDialogTestParams[] = {
+const base::NoDestructor kDialogTestParams(std::to_array<PixelTestParam>({
     {.test_suffix = "Regular"},
     {.test_suffix = "DarkTheme", .use_dark_theme = true},
     {.test_suffix = "Rtl", .use_right_to_left_language = true},
-};
+}));
 }  // namespace
 
 class HistorySyncOptinUIDialogPixelTest
@@ -87,7 +90,7 @@ class HistorySyncOptinUIDialogPixelTest
         views::test::AnyWidgetTestPasskey{},
         "SigninViewControllerDelegateViews");
 
-    auto* controller = browser()->GetFeatures().signin_view_controller();
+    auto* controller = SigninViewController::From(browser());
     controller->ShowModalHistorySyncOptInDialog(
         should_close_modal_dialog_,
         HistorySyncOptinHelper::FlowCompletedCallback(base::DoNothing()));
@@ -101,12 +104,13 @@ class HistorySyncOptinUIDialogPixelTest
 };
 
 IN_PROC_BROWSER_TEST_P(HistorySyncOptinUIDialogPixelTest, InvokeUi_default) {
+  set_baseline("8481376");
   ShowAndVerifyUi();
 }
 
 INSTANTIATE_TEST_SUITE_P(,
                          HistorySyncOptinUIDialogPixelTest,
-                         testing::Combine(testing::ValuesIn(kDialogTestParams),
+                         testing::Combine(testing::ValuesIn(*kDialogTestParams),
                                           testing::Bool()),
                          &ParamToTestSuffix);
 
@@ -127,20 +131,18 @@ class HistorySyncOptinStepControllerForTest
   void Show(StepSwitchFinishedCallback step_shown_callback,
             bool reset_state) override {
     // Reload the WebUI in the picker contents.
-    host()->ShowScreenInPickerContents(
+    host().ShowScreenInPickerContents(
         history_sync_optin_url_,
         base::BindOnce(
             &HistorySyncOptinStepControllerForTest::OnHistorySyncOptinLoaded,
             weak_ptr_factory_.GetWeakPtr(), std::move(step_shown_callback)));
   }
 
-  void OnNavigateBackRequested() override { NOTREACHED(); }
-
   void OnHistorySyncOptinLoaded(
       StepSwitchFinishedCallback step_shown_callback) {
     HistorySyncOptinUI* history_sync_optin_ui =
         static_cast<HistorySyncOptinUI*>(
-            host()->GetPickerContents()->GetWebUI()->GetController());
+            host().GetPickerContents()->GetWebUI()->GetController());
 
     history_sync_optin_ui->Initialize(
         /*browser=*/nullptr,
@@ -159,13 +161,13 @@ class HistorySyncOptinStepControllerForTest
       this};
 };
 
-const PixelTestParam kWindowTestParams[] = {
+const base::NoDestructor kWindowTestParams(std::to_array<PixelTestParam>({
     {.test_suffix = "Regular"},
     {.test_suffix = "DarkTheme", .use_dark_theme = true},
     {.test_suffix = "Rtl", .use_right_to_left_language = true},
     {.test_suffix = "SmallWindow",
      .window_size = PixelTestParam::kSmallWindowSize},
-};
+}));
 
 class HistorySyncOptinUIWindowPixelTest
     : public ProfilesPixelTestBaseT<UiBrowserTest>,
@@ -215,8 +217,9 @@ class HistorySyncOptinUIWindowPixelTest
     views::Widget* widget = GetWidgetForScreenshot();
 
     auto* test_info = testing::UnitTest::GetInstance()->current_test_info();
-    const std::string screenshot_name =
-        base::StrCat({test_info->test_suite_name(), "_", test_info->name()});
+    const std::string baseline = "8481376";
+    const std::string screenshot_name = base::StrCat(
+        {test_info->test_suite_name(), "_", test_info->name(), "_", baseline});
 
     return VerifyPixelUi(widget, "HistorySyncOptinUIWindowPixelTest",
                          screenshot_name) != ui::test::ActionResult::kFailed;
@@ -254,6 +257,6 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinUIWindowPixelTest, InvokeUi_default) {
 
 INSTANTIATE_TEST_SUITE_P(,
                          HistorySyncOptinUIWindowPixelTest,
-                         testing::Combine(testing::ValuesIn(kWindowTestParams),
+                         testing::Combine(testing::ValuesIn(*kWindowTestParams),
                                           testing::Bool()),
                          &ParamToTestSuffix);

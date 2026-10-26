@@ -10,19 +10,16 @@
 #include "base/notreached.h"
 #include "base/time/time.h"
 #include "build/branding_buildflags.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "components/app_constants/constants.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "extensions/common/constants.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_extension_constants.h"
 #include "ash/public/cpp/app_list/internal_app_id_constants.h"
 #include "ash/user_education/user_education_util.h"
 #include "ash/user_education/welcome_tour/welcome_tour_metrics.h"
-#include "ash/webui/projector_app/public/cpp/projector_app_constants.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
 #include "chromeos/ash/components/file_manager/app_id.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -245,8 +242,6 @@ std::optional<apps::DefaultAppName> AppIdToName(const std::string& app_id) {
   if (app_id == extension_misc::kCalculatorAppId) {
     // The legacy calculator chrome app.
     return DefaultAppName::kCalculatorChromeApp;
-  } else if (app_id == extension_misc::kTextEditorAppId) {
-    return DefaultAppName::kText;
   } else if (app_id == app_constants::kChromeAppId) {
     return DefaultAppName::kChrome;
   } else if (app_id == extension_misc::kGoogleDocsAppId) {
@@ -254,6 +249,8 @@ std::optional<apps::DefaultAppName> AppIdToName(const std::string& app_id) {
   } else if (app_id == extension_misc::kGoogleDriveAppId) {
     return DefaultAppName::kDrive;
 #if BUILDFLAG(IS_CHROMEOS)
+  } else if (app_id == extension_misc::kTextEditorAppId) {
+    return DefaultAppName::kText;
   } else if (app_id == arc::kGoogleDuoAppId) {
     return DefaultAppName::kDuo;
   } else if (app_id == extension_misc::kFilesManagerAppId) {
@@ -304,9 +301,7 @@ void RecordAppLaunch(const std::string& app_id,
   if (const std::optional<DefaultAppName> app_name = AppIdToName(app_id)) {
     RecordDefaultAppLaunch(app_name.value(), launch_source);
 #if BUILDFLAG(IS_CHROMEOS)
-    if (ash::features::IsWelcomeTourEnabled()) {
-      RecordWelcomeTourInteraction(app_name.value(), launch_source);
-    }
+    RecordWelcomeTourInteraction(app_name.value(), launch_source);
 #endif  // BUILDFLAG(IS_CHROMEOS)
   }
 }

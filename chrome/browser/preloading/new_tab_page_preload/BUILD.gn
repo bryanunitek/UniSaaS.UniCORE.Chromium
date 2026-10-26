@@ -24,6 +24,7 @@ source_set("impl") {
   deps = [
     ":new_tab_page_preload",
     "//chrome/browser:browser_features",
+    "//chrome/browser/page_load_metrics",
     "//chrome/browser/preloading",
     "//chrome/browser/preloading/prerender",
     "//chrome/browser/profiles:profile",
@@ -43,6 +44,7 @@ source_set("unit_tests") {
     "//chrome/browser/preloading",
     "//chrome/browser/preloading/prerender",
     "//chrome/test:test_support",
+    "//chrome/test/base:chrome_render_view_host_test_harness",
     "//content/test:test_support",
   ]
 }
@@ -60,7 +62,6 @@ if (!is_android) {
       "//chrome/browser/preloading",
       "//chrome/browser/preloading:prefs",
       "//chrome/browser/preloading/prerender",
-      "//chrome/browser/ui",
       "//chrome/common",
       "//chrome/test:test_support",
       "//components/page_load_metrics/browser",

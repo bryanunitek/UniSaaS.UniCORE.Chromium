@@ -133,8 +133,9 @@ NigoriState NigoriState::CreateFromLocalProto(
     const sync_pb::NigoriModel& proto) {
   NigoriState state;
 
-  state.cryptographer =
-      CryptographerImpl::FromLocalProto(proto.cryptographer_data());
+  state.cryptographer = CryptographerImpl::FromLocalProto(
+      proto.cryptographer_data(),
+      /*default_encryption_key_invalidated=*/proto.has_pending_keys());
   CHECK(state.cryptographer);
 
   if (proto.has_pending_keys()) {
@@ -154,22 +155,13 @@ NigoriState NigoriState::CreateFromLocalProto(
   state.encrypt_everything = proto.encrypt_everything();
 
   state.keystore_keys_cryptographer =
-      KeystoreKeysCryptographer::FromKeystoreKeys(base::ToVector(proto.keystore_key()));
-  if (!state.keystore_keys_cryptographer) {
-    // Crypto error occurs, create empty `keystore_keys_cryptographer`.
-    // Effectively it resets keystore keys.
-    state.keystore_keys_cryptographer =
-        KeystoreKeysCryptographer::CreateEmpty();
-  }
+      KeystoreKeysCryptographer::FromKeystoreKeys(
+          base::ToVector(proto.keystore_key()));
+  CHECK(state.keystore_keys_cryptographer, base::NotFatalUntil::M162);
 
   if (proto.has_pending_keystore_decryptor_token()) {
     state.pending_keystore_decryptor_token =
         proto.pending_keystore_decryptor_token();
-  }
-
-  if (proto.has_last_default_trusted_vault_key_name()) {
-    state.last_default_trusted_vault_key_name =
-        proto.last_default_trusted_vault_key_name();
   }
 
   state.trusted_vault_debug_info = proto.trusted_vault_debug_info();
@@ -239,10 +231,6 @@ sync_pb::NigoriModel NigoriState::ToLocalProto() const {
     *proto.mutable_pending_keystore_decryptor_token() =
         *pending_keystore_decryptor_token;
   }
-  if (last_default_trusted_vault_key_name.has_value()) {
-    proto.set_last_default_trusted_vault_key_name(
-        *last_default_trusted_vault_key_name);
-  }
   *proto.mutable_trusted_vault_debug_info() = trusted_vault_debug_info;
   if (cross_user_sharing_public_key.has_value() &&
       cross_user_sharing_key_pair_version.has_value()) {
@@ -284,7 +272,11 @@ sync_pb::NigoriSpecifics NigoriState::ToSpecificsProto() const {
       DCHECK(pending_keys.has_value());
       *specifics.mutable_keystore_decryptor_token() =
           *pending_keystore_decryptor_token;
-    } else {
+    } else if (!pending_keys.has_value()) {
+      // Absence of `pending_keys` is required to backfill
+      // `keystore_decryptor_token`, because otherwise the default encryption
+      // key in `cryptographer` is invalidated and `ExportDefaultKey()` cannot
+      // be called.
       // TODO(crbug.com/40868132): ensure correct error handling, e.g. in case
       // of empty `keystore_keys_cryptographer` or crypto errors (should be
       // impossible, but code doesn't yet guarantee that).
@@ -325,8 +317,6 @@ NigoriState NigoriState::Clone() const {
   result.encrypt_everything = encrypt_everything;
   result.keystore_keys_cryptographer = keystore_keys_cryptographer->Clone();
   result.pending_keystore_decryptor_token = pending_keystore_decryptor_token;
-  result.last_default_trusted_vault_key_name =
-      last_default_trusted_vault_key_name;
   result.trusted_vault_debug_info = trusted_vault_debug_info;
   if (cross_user_sharing_public_key.has_value()) {
     result.cross_user_sharing_public_key =
@@ -363,6 +353,17 @@ bool NigoriState::NeedsGenerateCrossUserSharingKeyPair() const {
   }
 
   return !IsValidKeyPairState(*this);
+}
+
+bool NigoriState::NeedsImplicitPassphraseMigration() const {
+  if (passphrase_type != sync_pb::NigoriSpecifics::IMPLICIT_PASSPHRASE ||
+      pending_keys.has_value() || !cryptographer->CanEncrypt()) {
+    return false;
+  }
+  if (!encrypt_everything && keystore_keys_cryptographer->IsEmpty()) {
+    return false;
+  }
+  return base::FeatureList::IsEnabled(kSyncMigrateFromImplicitPassphrase);
 }
 
 }  // namespace syncer

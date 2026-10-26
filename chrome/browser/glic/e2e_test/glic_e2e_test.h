@@ -5,13 +5,18 @@
 #ifndef CHROME_BROWSER_GLIC_E2E_TEST_GLIC_E2E_TEST_H_
 #define CHROME_BROWSER_GLIC_E2E_TEST_GLIC_E2E_TEST_H_
 
+#include <string_view>
+
 #include "base/scoped_observation.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/autofill/captured_sites_test_utils.h"
+#include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/glic/host/host.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
+#include "chrome/browser/glic/test_support/glic_test_util.h"
+#include "chrome/browser/glic/test_support/interactive_test_util.h"
 #include "chrome/browser/signin/e2e_tests/live_test.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
@@ -64,6 +69,7 @@ class GlicE2ETest : public InteractiveBrowserTestMixin<signin::test::LiveTest>,
 
   // Host::Observer implementation:
   void WebUiStateChanged(glic::mojom::WebUiState state) override;
+  void ClientLoadStateChanged(ClientLoadState state) override;
 
   MultiStep WaitForAndInstrumentFre();
 
@@ -116,6 +122,12 @@ class GlicE2ETest : public InteractiveBrowserTestMixin<signin::test::LiveTest>,
  private:
   void OnActiveInstanceChanged(GlicInstance* new_instance);
 
+  // Fails the test and shuts down glic so that it doesn't wait for a timeout.
+  void FailEarly(std::string_view reason);
+
+  // True once the active instance is showing and its web client is connected.
+  bool IsGlicReadyAndShowing();
+
   base::test::ScopedFeatureList scoped_feature_list_;
   base::test::ScopedFeatureList exempt_actor_policy_control_feature_list_;
   bool enable_low_bandwidth_tests_ = false;
@@ -153,7 +165,6 @@ DECLARE_STATE_IDENTIFIER_VALUE(GlicActorTaskState, kGlicActorTaskState);
 
 extern const ui::ElementIdentifier kGlicHandoffButtonElementId;
 
-const base::Feature& GetGlicActionAllowlistFeature();
 const char* GetDisableActorSafetyChecksSwitch();
 const base::Feature& GetGlicLiveModeFeature();
 const base::Feature& GetGlicMultiInstanceFeature();

@@ -12,10 +12,14 @@ ALLOWEDLIST = [r'.+_test.py$']
 
 
 def CheckChangeOnUpload(input_api, output_api):
+  if not input_api.HasAffectedFiles(extensions='.py'):
+    return []
   return input_api.canned_checks.RunUnitTestsInDirectory(
-      input_api, output_api, '.', files_to_check=ALLOWEDLIST)
+    input_api, output_api, '.', files_to_check=ALLOWEDLIST
+  )
 
 
 def CheckChangeOnCommit(input_api, output_api):
   return input_api.canned_checks.RunUnitTestsInDirectory(
-      input_api, output_api, '.', files_to_check=ALLOWEDLIST)
+    input_api, output_api, '.', files_to_check=ALLOWEDLIST
+  )

@@ -6,6 +6,8 @@
 
 #include "base/check_deref.h"
 #include "base/containers/extend.h"
+#include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -111,6 +113,8 @@ const DeepQuery kLensSearchButton = {"ntp-app", "ntp-searchbox",
                                      "#lensSearchButton"};
 const DeepQuery kComposeButton = {"ntp-app", "ntp-searchbox", "#composeButton",
                                   "#composeButton"};
+const DeepQuery kComposeButtonHost = {"ntp-app", "ntp-searchbox",
+                                      "#composeButton"};
 const DeepQuery kComposeboxVoiceSearchButton = {"ntp-app", "#composebox",
                                                 "#voiceSearchButton"};
 const DeepQuery kContextualEntrypoint = {"ntp-app", "ntp-searchbox", "#context",
@@ -275,9 +279,16 @@ class NtpRealboxUiTestBase
   }
 
   auto WaitForDialogStateChange(const DeepQuery& where, bool expected_open) {
-    return WaitForJsConditionAt(
-        kNtpElementId, where,
-        expected_open ? "(el) => el && el.open" : "(el) => el && !el.open");
+    DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kDialogStateChangeEvent);
+    WebContentsInteractionTestUtil::StateChange state_change;
+    state_change.event = kDialogStateChangeEvent;
+    state_change.where = where;
+    state_change.type =
+        expected_open
+            ? WebContentsInteractionTestUtil::StateChange::Type::kExists
+            : WebContentsInteractionTestUtil::StateChange::Type::kDoesNotExist;
+
+    return WaitForStateChange(kNtpElementId, state_change);
   }
 
   auto WaitForElementVisibilityChange(const DeepQuery& where,
@@ -435,12 +446,10 @@ IN_PROC_BROWSER_TEST_P(NtpRealboxUiScreenshotTest, MAYBE_Screenshots) {
 
   os_settings_provider().SetPreferredColorScheme(GetParam().color_scheme);
 
-  if (GetParam().rtl) {
-    base::i18n::SetRTLForTesting(true);
-  }
+  base::i18n::ScopedRTLForTesting scoped_rtl(GetParam().rtl);
 
   // Disable compose button animation to prevent screenshot variations.
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       prefs::kNtpComposeButtonShownCountPrefName,
       ntp_composebox::FeatureConfig::Get()
           .config.entry_point()
@@ -847,13 +856,13 @@ IN_PROC_BROWSER_TEST_F(NtpRealboxTabFlyoverInteractiveTest,
 
   RunTestSequence(
       Do([this]() {
-        browser()->profile()->GetPrefs()->SetInteger(
+        browser()->GetProfile()->GetPrefs()->SetInteger(
             contextual_search::kSearchContentSharingSettings,
             static_cast<int>(contextual_search::
                                  SearchContentSharingSettingsValue::kEnabled));
       }),
       // Open a background tab first, then open NTP.
-      AddInstrumentedTab(kFirstTab, GURL("about:blank")),
+      AddInstrumentedTab(kFirstTab, GURL("https://www.example.com")),
       AddInstrumentedTab(kNtpElementId, chrome::ChromeUINewTabURLAsGURL()),
       // Open NTP composebox by clicking compose button.
       WaitForElementToRender(kNtpElementId, kRealbox),
@@ -874,6 +883,9 @@ IN_PROC_BROWSER_TEST_F(NtpRealboxTabFlyoverInteractiveTest,
                   "el => el.click()"),
       // Wait for the WebUI menu trigger to render and click/hover it.
       WaitForElementToRender(kNtpElementId, kShareTabsTrigger),
+      ExecuteJsAt(kNtpElementId, kShareTabsTrigger,
+                  "el => el.dispatchEvent(new MouseEvent('mouseover', "
+                  "{bubbles: true}))"),
       MoveMouseTo(kNtpElementId, kShareTabsTrigger),
       // Set pointerOverFlyout_ to true via JS to prevent the flyout from
       // closing due to async mouse move events in tests.
@@ -886,7 +898,7 @@ IN_PROC_BROWSER_TEST_F(NtpRealboxTabFlyoverInteractiveTest,
       // Verify tab is attached in NTP composebox.
       WaitForElementToRender(kNtpElementId, kComposeboxFaviconGroup),
       CheckJsResultAt(kNtpElementId, {"ntp-app", "#composebox"},
-                      "el => el.files.size", 1),
+                      "el => el.attachedContext.size", 1),
       CheckJsResultAt(kNtpElementId, {"ntp-app", "#composebox"},
                       "el => el.errorMessage", ""),
       CheckJsResultAt(kNtpElementId, {"ntp-app", "#composebox"},
@@ -1353,7 +1365,79 @@ IN_PROC_BROWSER_TEST_F(NtpRealboxDefaultExperienceInteractiveTest,
                            "(el) => el.value === 'a'"));
 }
 
-IN_PROC_BROWSER_TEST_F(NtpRealboxDefaultExperienceInteractiveTest,
+// Pins kRealboxVirtualFocusNavigation on, independent of whether
+// fieldtrial_testing_config.json is applied.
+class NtpRealboxDefaultExperienceVirtualFocusInteractiveTest
+    : public NtpRealboxDefaultExperienceInteractiveTest {
+ public:
+  NtpRealboxDefaultExperienceVirtualFocusInteractiveTest() {
+    virtual_focus_feature_list_.InitAndEnableFeature(
+        ntp_features::kRealboxVirtualFocusNavigation);
+  }
+
+ private:
+  base::test::ScopedFeatureList virtual_focus_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(NtpRealboxDefaultExperienceVirtualFocusInteractiveTest,
+                       RemoveSuggestionViaKeyboard) {
+  RunTestSequence(
+      AddInstrumentedTab(kNtpElementId, chrome::ChromeUINewTabURLAsGURL()),
+      WaitForElementToRender(kNtpElementId, kRealboxInput),
+      // Seed history result to populate the dropdown
+      SeedSearchboxResult("a"), SeedSearchboxResult("b"),
+      // Click on Realbox to show the dropdown
+      ClickElement(kNtpElementId, kRealboxInput),
+      WaitForElementVisibilityChange(kSearchboxDropdown,
+                                     /*expected_visible=*/true),
+      // Pressing Tab moves virtual focus to the AIM button.
+      SendKeyPress(kNtpElementId, ui::VKEY_TAB),
+      WaitForJsConditionAt(
+          kNtpElementId, kComposeButtonHost,
+          "(el) => el && el.hasAttribute('has-virtual-focus')"),
+      // Pressing Tab again selects the inline autocomplete match.
+      SendKeyPress(kNtpElementId, ui::VKEY_TAB),
+      WaitForJsConditionAt(kNtpElementId, kRealboxInput,
+                           "(el) => el.value === 'b'"),
+      // Pressing Tab again selects the match remove button.
+      SendKeyPress(kNtpElementId, ui::VKEY_TAB),
+      WaitForJsConditionAt(kNtpElementId, kRealboxMatchRemoveButton,
+                           "(el) => el && el.classList.contains('selected')"),
+      // Trigger the remove button via ENTER
+      SendKeyPress(kNtpElementId, ui::VKEY_RETURN),
+      // After removing the match, the next match is selected.
+      WaitForJsConditionAt(kNtpElementId, kRealboxInput,
+                           "(el) => el.value === 'a'"),
+      // Pressing Tab selects the next match's remove button.
+      SendKeyPress(kNtpElementId, ui::VKEY_TAB),
+      WaitForJsConditionAt(kNtpElementId, kRealboxMatchRemoveButton,
+                           "(el) => el && el.classList.contains('selected')"),
+      // Trigger the remove button via ENTER
+      SendKeyPress(kNtpElementId, ui::VKEY_RETURN),
+      // After all history matches are removed, verify none remain.
+      WaitForJsConditionAt(kNtpElementId, kSearchboxDropdown,
+                           "(el) => el && ![...el.shadowRoot.querySelectorAll("
+                           "'cr-searchbox-match')].some(m => "
+                           "m.match.supportsDeletion)"));
+}
+
+// Pins kRealboxVirtualFocusNavigation off to cover the legacy native-focus
+// behavior.
+// TODO(crbug.com/483160026): Remove once kRealboxVirtualFocusNavigation
+// launches.
+class NtpRealboxDefaultExperienceLegacyFocusInteractiveTest
+    : public NtpRealboxDefaultExperienceInteractiveTest {
+ public:
+  NtpRealboxDefaultExperienceLegacyFocusInteractiveTest() {
+    virtual_focus_feature_list_.InitAndDisableFeature(
+        ntp_features::kRealboxVirtualFocusNavigation);
+  }
+
+ private:
+  base::test::ScopedFeatureList virtual_focus_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(NtpRealboxDefaultExperienceLegacyFocusInteractiveTest,
                        RemoveSuggestionViaKeyboard) {
   RunTestSequence(
       AddInstrumentedTab(kNtpElementId, chrome::ChromeUINewTabURLAsGURL()),

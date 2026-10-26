@@ -12,6 +12,8 @@ source_set("xdg") {
     "portal_constants.h",
     "request.cc",
     "request.h",
+    "session.cc",
+    "session.h",
     "systemd.cc",
     "systemd.h",
     "systemd_constants.h",
@@ -25,8 +27,6 @@ source_set("xdg") {
     "//components/dbus/thread_linux",
     "//components/dbus/utils",
     "//dbus",
-    "//net",
-    "//url",
   ]
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
@@ -40,6 +40,7 @@ source_set("unit_tests") {
   sources = [
     "file_transfer_portal_unittest.cc",
     "portal_unittest.cc",
+    "session_unittest.cc",
     "systemd_unittest.cc",
   ]
   deps = [

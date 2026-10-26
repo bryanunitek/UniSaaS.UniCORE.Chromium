@@ -51,7 +51,8 @@ struct StructTraits<ax::mojom::AXActionDataDataView, ui::AXActionData> {
   static int32_t custom_action_id(const ui::AXActionData& a) {
     return a.custom_action_id;
   }
-  static const gfx::Rect& target_rect(const ui::AXActionData& a) {
+  static const std::optional<gfx::Rect>& target_rect(
+      const ui::AXActionData& a) {
     return a.target_rect;
   }
   static const gfx::Point& target_point(const ui::AXActionData& a) {
@@ -72,8 +73,7 @@ struct StructTraits<ax::mojom::AXActionDataDataView, ui::AXActionData> {
   static ax::mojom::ScrollBehavior scroll_behavior(const ui::AXActionData& a) {
     return a.scroll_behavior;
   }
-  static const std::optional<ui::AXTreeID> child_tree_id(
-      const ui::AXActionData& a) {
+  static const ui::AXTreeID& child_tree_id(const ui::AXActionData& a) {
     return a.child_tree_id;
   }
   static const base::flat_map<ax::mojom::IntListAttribute,

@@ -18,6 +18,7 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.background_sync.BackgroundSyncBackgroundTaskScheduler.BackgroundSyncTask;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
@@ -53,6 +54,7 @@ import java.util.concurrent.atomic.AtomicInteger;
             + "min_periodic_sync_events_interval_sec/1/"
             + "skip_permissions_check_for_testing/true"
 })
+@DoNotBatch(reason = "Shared state in BackgroundSyncManager/Scheduler")
 public final class PeriodicBackgroundSyncTest {
     @Rule
     public final FreshCtaTransitTestRule mActivityTestRule =
@@ -64,7 +66,6 @@ public final class PeriodicBackgroundSyncTest {
     public final AccountManagerTestRule mAccountManagerTestRule = new AccountManagerTestRule();
 
     private EmbeddedTestServer mTestServer;
-    private String mTestPage;
     private static final String TEST_PAGE =
             "/chrome/test/data/background_sync/background_sync_test.html";
     private static final int TITLE_UPDATE_TIMEOUT_SECONDS = (int) scaleTimeout(10);

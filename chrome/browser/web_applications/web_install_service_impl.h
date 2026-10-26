@@ -13,9 +13,11 @@
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
+#include "chrome/browser/web_applications/model/parse_manifest_result.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/document_service.h"
 #include "content/public/browser/permission_result.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom-forward.h"
 #include "third_party/blink/public/mojom/manifest/manifest_manager.mojom-forward.h"
@@ -24,18 +26,19 @@
 #include "url/gurl.h"
 
 namespace content {
+class Page;
 class WebContents;
-}
+}  // namespace content
 
 namespace webapps {
 enum class InstallResultCode;
 enum class InstallableStatusCode;
+class MlInstallOperationTracker;
 }  // namespace webapps
 namespace web_app {
 class AppLock;
-struct WebAppInstallInfo;
+struct IconMetadataFromDisk;
 class WebAppDataRetriever;
-class WebAppProvider;
 class WebInstallManifestFetcher;
 enum class WebInstallManifestFetchError;
 
@@ -55,8 +58,9 @@ enum class WebInstallServiceResult {
   kNoCustomManifestId = 7,
   kManifestIdMismatch = 8,
   kInstallInProgress = 9,
+  kNoManifestIcons = 10,
   // Insert new values above this line.
-  kMaxValue = kInstallInProgress,
+  kMaxValue = kNoManifestIcons,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/webapps/enums.xml:WebInstallServiceResult)
 
@@ -73,26 +77,22 @@ enum class WebInstallServiceType {
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/webapps/enums.xml:WebInstallServiceType)
 
-// Used to coordinate running the `InstallCallback` from `Install()` with firing
-// the appropriate Uma result.
-using InstallCallbackWithMetrics =
+// Wraps `InstallFromManifestCallback` to record result UMA/UKMs and release the
+// install-in-progress guard before running the blink callback.
+using InstallFromManifestCallbackWithMetrics =
     base::OnceCallback<void(web_app::WebInstallServiceResult,
-                            blink::mojom::WebInstallServiceResult,
-                            std::optional<webapps::ManifestId>)>;
+                            blink::mojom::WebInstallServiceResult)>;
 
-// Wraps the `InstallFromManifestCallback` so that the install-in-progress guard
-// is automatically released on every exit path.
-using InstallFromManifestCallbackWithGuard =
-    base::OnceCallback<void(blink::mojom::WebInstallServiceResult)>;
-
-// Service side implementation for the Blink Web Install API. Takes the
-// parameters from the API call in the form of `InstallOptionsPtr`, and decides
-// whether to install the current document or a background document.
-// Background document installs will prompt for approval/denial of the Web app
-// installation permission for the calling origin.
+// Service side implementation for the Blink Web Install API. Installs either
+// the current document or a background app fetched directly from its manifest.
 class WebInstallServiceImpl
-    : public content::DocumentService<blink::mojom::WebInstallService> {
+    : public content::DocumentService<blink::mojom::WebInstallService>,
+      public content::WebContentsObserver {
  public:
+  WebInstallServiceImpl(
+      content::RenderFrameHost& render_frame_host,
+      mojo::PendingReceiver<blink::mojom::WebInstallService> receiver,
+      base::SelfDeletingPassKey key);
   WebInstallServiceImpl(const WebInstallServiceImpl&) = delete;
   WebInstallServiceImpl& operator=(const WebInstallServiceImpl&) = delete;
 
@@ -106,26 +106,22 @@ class WebInstallServiceImpl
   static base::AutoReset<base::TimeDelta>
   SetMinCrossOriginQueryIntervalForTesting(base::TimeDelta interval);
 
-  // blink::mojom::WebInstallService implementation:
-  void IsInstalled(blink::mojom::InstallOptionsPtr options,
+  // blink::mojom::WebInstallService:
+  // TODO(crbug.com/485281836): Only explicit manifest IDs are supported for
+  // now. Re-evaluate current document and manifest-only lookups when
+  // implementing this.
+  void IsInstalled(blink::mojom::ManifestInstallOptionsPtr options,
                    IsInstalledCallback callback) override;
-  // TODO(crbug.com/520025525): Clean up install_url code.
-  void Install(blink::mojom::InstallOptionsPtr options,
-               InstallCallback callback) override;
-  void InstallFromElement(blink::mojom::InstallOptionsPtr options,
-                          InstallCallback callback) override;
   void InstallFromManifest(blink::mojom::ManifestInstallOptionsPtr options,
                            InstallFromManifestCallback callback) override;
+  void ElementInstallFromManifest(
+      blink::mojom::ManifestInstallOptionsPtr options,
+      InstallFromManifestCallback callback) override;
+
+  // content::WebContentsObserver:
+  void PrimaryPageChanged(content::Page& page) override;
 
  private:
-  // Shared implementation for Install() and InstallFromElement().
-  // `triggered_from_element` controls metrics routing and whether the
-  // permission prompt is bypassed (the <install> element handles permission
-  // via its own UI).
-  void InstallInternal(blink::mojom::InstallOptionsPtr options,
-                       InstallCallback callback,
-                       bool triggered_from_element);
-
   // Internal entry point for the manifest URL install flow. Acquires the
   // install-in-progress guard and wraps the callback so the guard is
   // released on every exit path.
@@ -134,119 +130,131 @@ class WebInstallServiceImpl
       InstallFromManifestCallback callback,
       bool triggered_from_element);
 
-  WebInstallServiceImpl(
-      content::RenderFrameHost& render_frame_host,
-      mojo::PendingReceiver<blink::mojom::WebInstallService> receiver);
+  // Internal entry point for the no-argument API signature. Acquires the
+  // install-in-progress guard and wraps the callback so the guard is released
+  // on every exit path.
+  void InstallCurrentDocumentInternal(InstallFromManifestCallback callback,
+                                      bool triggered_from_element);
+
   ~WebInstallServiceImpl() override;
 
   // Manages `install_in_progress_`.
   bool IsInstallInProgress() const;
+  bool IsInitiatingPageGoneOrChanged() const;
   base::ScopedClosureRunner ReserveInstallInProgress();
   void ReleaseInstallInProgress();
 
-  void OnInstallNotSupportedDialogClosed(
-      InstallCallbackWithMetrics callback_with_metrics);
-
-  void TryInstallCurrentDocument(
-      InstallCallbackWithMetrics callback_with_metrics);
-
-  void CheckForInstalledAppMaybeLaunch(
-      content::WebContents* web_contents,
-      InstallCallbackWithMetrics callback_with_metrics,
-      AppLock& lock,
-      base::DictValue& debug_value);
-
-  void OnIntentPickerMaybeLaunched(
-      InstallCallbackWithMetrics callback_with_metrics,
-      webapps::AppId app_id,
-      bool user_chose_to_open);
-
-  void OnGotManifestForCurrentDocumentInstall(
-      InstallCallbackWithMetrics callback_with_metrics,
-      WebAppProvider* provider,
-      base::WeakPtr<WebAppDataRetriever> data_retriever,
-      const base::expected<blink::mojom::ManifestPtr,
-                           blink::mojom::RequestManifestErrorPtr>& result);
+  // Runs the actual registrar lookup for `IsInstalled` and replies via
+  // `callback`. Posted with a delay for cross-origin queries, and invoked
+  // synchronously for same-origin queries.
+  void RunIsInstalledLookup(webapps::ManifestId manifest_id,
+                            IsInstalledCallback callback);
 
   void RequestWebInstallPermission(
       base::OnceCallback<void(const std::vector<content::PermissionResult>&)>
           callback);
 
-  void OnPermissionDecided(
-      blink::mojom::InstallOptionsPtr install_options,
-      InstallCallbackWithMetrics callback_with_metrics,
-      const std::vector<content::PermissionResult>& permission_result);
+  void OnDidCheckInstallabilityForCurrentDocumentInstall(
+      InstallFromManifestCallbackWithMetrics callback_with_metrics,
+      base::WeakPtr<WebAppDataRetriever> data_retriever,
+      std::optional<GURL> linked_manifest_url,
+      blink::mojom::ManifestPtr manifest,
+      bool valid_manifest_for_web_app,
+      webapps::InstallableStatusCode error_code);
 
-  // `install_info` was fetched from an install url and is used to populate the
-  // background launch dialog.
-  void OnInstallInfoFromInstallUrlFetched(
-      InstallCallbackWithMetrics callback_with_metrics,
+  void RecheckInstalledAppMaybeLaunch(
+      InstallFromManifestCallbackWithMetrics callback_with_metrics,
+      webapps::AppId installed_app_id,
+      content::WebContents* web_contents,
+      AppLock& lock,
+      base::DictValue& debug_value);
+
+  void OnIntentPickerMaybeLaunched(
+      InstallFromManifestCallbackWithMetrics callback_with_metrics,
       webapps::AppId app_id,
-      const GURL& manifest_id,
-      std::unique_ptr<WebAppInstallInfo> install_info);
+      bool user_chose_to_open);
 
-  // Triggers the icon launch dialog after any behavior has been applied on the
-  // icon, like masking.
-  void OnIconFinalizedTriggerDialog(
-      InstallCallbackWithMetrics callback_with_metrics,
-      webapps::AppId app_id,
-      const GURL& manifest_id,
-      std::u16string app_title,
-      const SkBitmap icon_to_use);
-
-  // Used by the launch dialog to report whether the user accepted the launch.
-  void OnBackgroundAppLaunchDialogClosed(
-      InstallCallbackWithMetrics callback_with_metrics,
-      const GURL& manifest_id,
-      bool accepted);
-
-  // Used by web app install dialog code as the WebAppInstalledCallback.
-  // Reports install success or failure back to Blink via `callback`.
-  void OnAppInstalled(InstallCallbackWithMetrics callback_with_metrics,
-                      const webapps::AppId& app_id,
-                      webapps::InstallResultCode code);
-
-  // Runs the actual registrar lookup for `IsInstalled` and replies via
-  // `callback`. Posted with a delay for cross-origin queries, and invoked
-  // synchronously for same-origin queries.
-  void RunIsInstalledLookup(GURL install_target,
-                            std::optional<GURL> manifest_id,
-                            IsInstalledCallback callback);
-
-  // Callback for when InstallFromManifest's fetch completes.
+  // Callback for when InstallFromManifest's fetch completes. `install_tracker`
+  // holds the registered current-install state for the web contents; dropping
+  // it on any failure path releases the registration.
   void OnManifestFetched(
-      InstallFromManifestCallbackWithGuard callback_with_guard,
+      InstallFromManifestCallbackWithMetrics callback_with_metrics,
       blink::mojom::ManifestInstallOptionsPtr options,
+      std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker,
       bool triggered_from_element,
+      bool can_report_devtools_issue,
       base::expected<std::string, WebInstallManifestFetchError> result);
 
   // Callback for when the manifest parse command completes.
   void OnManifestParsed(
-      InstallFromManifestCallbackWithGuard callback_with_guard,
+      InstallFromManifestCallbackWithMetrics callback_with_metrics,
       blink::mojom::ManifestInstallOptionsPtr options,
+      std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker,
       bool triggered_from_element,
-      blink::mojom::ManifestPtr manifest);
+      bool can_report_devtools_issue,
+      ParseManifestResult parse_result);
 
   void OnManifestInstallNotSupportedDialogClosed(
-      InstallFromManifestCallbackWithGuard callback_with_guard);
+      InstallFromManifestCallbackWithMetrics callback_with_metrics);
 
   // Callback for when the manifest URL permission prompt completes.
   void OnManifestPermissionDecided(
-      InstallFromManifestCallbackWithGuard callback_with_guard,
+      InstallFromManifestCallbackWithMetrics callback_with_metrics,
       blink::mojom::ManifestInstallOptionsPtr options,
+      std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker,
+      blink::mojom::ManifestPtr manifest,
       const std::vector<content::PermissionResult>& permission_result);
 
   // Shared "permission granted, proceed to install" step for the manifest URL
   // flow.
   void ContinueManifestInstall(
-      InstallFromManifestCallbackWithGuard callback_with_guard,
-      blink::mojom::ManifestInstallOptionsPtr options);
+      InstallFromManifestCallbackWithMetrics callback_with_metrics,
+      blink::mojom::ManifestInstallOptionsPtr options,
+      std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker,
+      blink::mojom::ManifestPtr manifest);
+
+  // Callback for when the manifest URL install command completes.
+  void OnAppInstalledFromManifest(
+      InstallFromManifestCallbackWithMetrics callback_with_metrics,
+      const webapps::AppId& app_id,
+      webapps::InstallResultCode code);
+
+  // Manifest URL launch flow (already-installed app). The installed app's
+  // trusted icon has been read from disk.
+  void OnManifestLaunchIconRead(
+      InstallFromManifestCallbackWithMetrics callback_with_metrics,
+      webapps::AppId app_id,
+      std::u16string app_title,
+      std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker,
+      IconMetadataFromDisk icon_metadata);
+
+  // Triggers the launch dialog after any masking has been applied to the icon.
+  void OnManifestLaunchIconFinalized(
+      InstallFromManifestCallbackWithMetrics callback_with_metrics,
+      webapps::AppId app_id,
+      std::u16string app_title,
+      std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker,
+      const SkBitmap icon_to_use);
+
+  // Used by the launch dialog to report whether the user accepted the launch.
+  void OnManifestLaunchDialogClosed(
+      InstallFromManifestCallbackWithMetrics callback_with_metrics,
+      webapps::AppId app_id,
+      std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker,
+      bool accepted);
 
   // Only one install can be in progress at a time.
   bool install_in_progress_ = false;
 
   const content::GlobalRenderFrameHostId frame_routing_id_;
   GURL last_committed_url_;
+  // Captured when an install is received and passed to the install command to
+  // ensure the initiating page has not navigated away.
+  base::WeakPtr<content::Page> initiating_page_;
+  // Latches any primary page change during a manifest install so that
+  // restoring the initiating page from the back-forward cache cannot resume
+  // the flow.
+  bool initiating_page_changed_during_install_ = false;
   // Active data retrievers. They are destroyed when this service is destroyed
   // or when their callback completes.
   absl::flat_hash_set<std::unique_ptr<WebAppDataRetriever>> data_retrievers_;

@@ -4,9 +4,13 @@
 
 #include "ui/views/test/mock_activation_controller.h"
 
+#include "base/containers/to_vector.h"
 #include "base/memory/raw_ptr.h"
+#include "base/strings/string_util.h"
 #include "build/build_config.h"
+#include "ui/base/test/ui_controls.h"
 #include "ui/views/buildflags.h"
+#include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_activation_delegate.h"
 
@@ -35,6 +39,10 @@ NativeWidgetMac* GetNativeWidget(Widget* widget) {
 
 void SetActivationState(Widget* widget, bool active) {
   CHECK(widget);
+  if (widget->is_destroying()) {
+    CHECK(!active);
+    return;
+  }
   auto* native_widget = GetNativeWidget(widget);
   CHECK(native_widget);
 
@@ -47,7 +55,14 @@ void SetActivationState(Widget* widget, bool active) {
 
 }  // namespace
 
-MockActivationController::MockActivationController() = default;
+MockActivationController::MockActivationController(
+    bool allow_in_interactive_ui_tests) {
+  CHECK(allow_in_interactive_ui_tests || !ui_controls::IsUIControlsEnabled());
+  const auto widgets = WidgetTest::GetAllWidgets();
+  CHECK(widgets.empty())
+      << "MockActivationController created when widgets already exist: "
+      << base::JoinString(base::ToVector(widgets, &Widget::GetName), ", ");
+}
 
 MockActivationController::~MockActivationController() {
   for (auto widget : widgets_) {
@@ -94,16 +109,15 @@ void MockActivationController::Deactivate(Widget* widget) {
   if (active_widget_ == widget) {
     Widget* next_active = nullptr;
     if (widgets_.size() > 1) {
-      auto iter = std::ranges::find(widgets_, widget);
-      CHECK(iter != widgets_.end());
-      widgets_.erase(iter);
+      next_active = FindActivatableWidget(widget);
+      if (next_active) {
+        auto iter = std::ranges::find(widgets_, widget);
+        CHECK(iter != widgets_.end());
+        widgets_.erase(iter);
 
-      auto riter = FindActivatableWidget();
-      if (riter != widgets_.rend()) {
-        next_active = (*riter).get();
-        // reverse iterator
-        riter++;
-        widgets_.insert(riter.base(), widget);
+        auto next_active_iter = std::ranges::find(widgets_, next_active);
+        CHECK(next_active_iter != widgets_.end());
+        widgets_.insert(next_active_iter, widget);
       }
     }
 
@@ -120,6 +134,10 @@ bool MockActivationController::IsActive(const Widget* widget) {
   return widget == active_widget_;
 }
 
+bool MockActivationController::IsTrackedForTesting(const Widget* widget) const {
+  return std::ranges::find(widgets_, widget) != widgets_.end();
+}
+
 void MockActivationController::OnWidgetDestroying(Widget* widget) {
   widget->RemoveObserver(this);
   auto iter = std::ranges::find(widgets_, widget);
@@ -127,14 +145,7 @@ void MockActivationController::OnWidgetDestroying(Widget* widget) {
   widgets_.erase(iter);
 
   if (active_widget_ == widget) {
-    active_widget_ = nullptr;
-
-    if (!widgets_.empty()) {
-      auto riter = FindActivatableWidget();
-      if (riter != widgets_.rend()) {
-        active_widget_ = (*riter).get();
-      }
-    }
+    active_widget_ = FindActivatableWidget();
     if (active_widget_) {
       SetActivationState(active_widget_, true);
     }
@@ -152,14 +163,14 @@ void MockActivationController::OnWidgetVisibilityChanged(Widget* widget,
   }
 }
 
-MockActivationController::WidgetList::reverse_iterator
-MockActivationController::FindActivatableWidget() {
+Widget* MockActivationController::FindActivatableWidget(Widget* skip_widget) {
   for (auto iter = widgets_.rbegin(); iter != widgets_.rend(); iter++) {
-    if ((*iter)->IsVisible() && (*iter)->CanActivate()) {
-      return iter;
+    if (*iter != skip_widget && (*iter)->IsVisible() &&
+        (*iter)->CanActivate()) {
+      return *iter;
     }
   }
-  return widgets_.rend();
+  return nullptr;
 }
 
 }  // namespace views::test

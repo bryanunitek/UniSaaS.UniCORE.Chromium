@@ -55,13 +55,14 @@
 #include "third_party/blink/renderer/core/layout/svg/svg_layout_tree_as_text.h"
 #include "third_party/blink/renderer/core/layout/table/layout_table_cell.h"
 #include "third_party/blink/renderer/core/page/print_context.h"
-#include "third_party/blink/renderer/core/paint/fragment_data_iterator.h"
+#include "third_party/blink/renderer/core/paint/fragment_data.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_paint_order_iterator.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -132,7 +133,7 @@ String QuoteAndEscapeNonPrintables(const String& s) {
       if (c >= 0x20 && c < 0x7F) {
         result.Append(c);
       } else {
-        result.AppendFormat("\\x{%X}", c);
+        FormatTo(result, "\\x{{{:X}}}", c);
       }
     }
   }
@@ -176,10 +177,11 @@ void WriteLayoutObject(StringBuilder& ts,
   ts << o.DecoratedName();
 
   if (behavior & kLayoutAsTextShowAddresses)
-    ts << String::Format(" %p", &o);
+    FormatTo(ts, " {}", &o);
 
-  if (o.Style() && o.StyleRef().ZIndex())
-    ts << " zI: " << o.StyleRef().ZIndex();
+  if (o.Style().ZIndex()) {
+    ts << " zI: " << o.Style().ZIndex();
+  }
 
   if (o.GetNode()) {
     String tag_name = GetTagName(o.GetNode());
@@ -218,10 +220,11 @@ void WriteLayoutObject(StringBuilder& ts,
           text_stroke_color != color && text_stroke_color.Rgb())
         ts << " [textStrokeColor=" << text_stroke_color << "]";
 
-      if (o.Parent()->StyleRef().TextStrokeWidth() !=
-              o.StyleRef().TextStrokeWidth() &&
-          o.StyleRef().TextStrokeWidth() > 0)
-        ts << " [textStrokeWidth=" << o.StyleRef().TextStrokeWidth() << "]";
+      if (o.Parent()->Style().TextStrokeWidth() !=
+              o.Style().TextStrokeWidth() &&
+          o.Style().TextStrokeWidth() > 0) {
+        ts << " [textStrokeWidth=" << o.Style().TextStrokeWidth() << "]";
+      }
     }
 
     if (!o.IsBoxModelObject())
@@ -235,7 +238,7 @@ void WriteLayoutObject(StringBuilder& ts,
         ts << " none";
       } else {
         ts << " (" << border.top << "px ";
-        PrintBorderStyle(ts, o.StyleRef().BorderTopStyle());
+        PrintBorderStyle(ts, o.Style().BorderTopStyle());
         ts << o.ResolveColor(GetCSSPropertyBorderTopColor()) << ")";
       }
 
@@ -243,7 +246,7 @@ void WriteLayoutObject(StringBuilder& ts,
         ts << " none";
       } else {
         ts << " (" << border.right << "px ";
-        PrintBorderStyle(ts, o.StyleRef().BorderRightStyle());
+        PrintBorderStyle(ts, o.Style().BorderRightStyle());
         ts << o.ResolveColor(GetCSSPropertyBorderRightColor()) << ")";
       }
 
@@ -251,7 +254,7 @@ void WriteLayoutObject(StringBuilder& ts,
         ts << " none";
       } else {
         ts << " (" << border.bottom << "px ";
-        PrintBorderStyle(ts, o.StyleRef().BorderBottomStyle());
+        PrintBorderStyle(ts, o.Style().BorderBottomStyle());
         ts << o.ResolveColor(GetCSSPropertyBorderBottomColor()) << ")";
       }
 
@@ -259,7 +262,7 @@ void WriteLayoutObject(StringBuilder& ts,
         ts << " none";
       } else {
         ts << " (" << border.left << "px ";
-        PrintBorderStyle(ts, o.StyleRef().BorderLeftStyle());
+        PrintBorderStyle(ts, o.Style().BorderLeftStyle());
         ts << o.ResolveColor(GetCSSPropertyBorderLeftColor()) << ")";
       }
 
@@ -354,7 +357,7 @@ static void WritePaintProperties(StringBuilder& ts,
     ts << "fragments:\n";
   }
   int fragment_index = 0;
-  for (const FragmentData& fragment : FragmentDataIterator(o)) {
+  for (const FragmentData& fragment : o.FragmentList()) {
     WriteIndent(ts, indent);
     if (has_fragments)
       ts << " " << fragment_index++ << ":";
@@ -470,14 +473,14 @@ static void Write(StringBuilder& ts,
 
   WriteIndent(ts, indent);
 
-  if (layer.GetLayoutObject().StyleRef().Visibility() == EVisibility::kHidden) {
+  if (layer.GetLayoutObject().Style().Visibility() == EVisibility::kHidden) {
     ts << "hidden ";
   }
 
   ts << "layer ";
 
   if (behavior & kLayoutAsTextShowAddresses)
-    ts << String::Format("%p ", &layer);
+    FormatTo(ts, "{} ", &layer);
 
   ts << "at " << adjusted_layer_offset;
 
@@ -507,9 +510,9 @@ static void Write(StringBuilder& ts,
   else if (paint_phase == kLayerPaintPhaseForeground)
     ts << " layerType: foreground only";
 
-  if (layer.GetLayoutObject().StyleRef().HasBlendMode()) {
+  if (layer.GetLayoutObject().Style().HasBlendMode()) {
     ts << " blendMode: "
-       << BlendModeToString(layer.GetLayoutObject().StyleRef().GetBlendMode());
+       << BlendModeToString(layer.GetLayoutObject().Style().GetBlendMode());
   }
 
   if (behavior & kLayoutAsTextShowPaintProperties) {

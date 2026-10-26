@@ -36,12 +36,9 @@ import static org.chromium.components.browser_ui.bottomsheet.BottomSheetControll
 
 import android.app.Activity;
 import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.Color;
 import android.os.Build;
 import android.view.View;
 
-import androidx.annotation.ColorInt;
 import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.After;
@@ -57,7 +54,6 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
@@ -70,9 +66,6 @@ import org.chromium.chrome.browser.ntp_customization.policy.NtpCustomizationPoli
 import org.chromium.chrome.browser.ntp_customization.theme.NtpCustomizationPromoManager;
 import org.chromium.chrome.browser.ntp_customization.theme.NtpCustomizationPromoManager.SnackBarState;
 import org.chromium.chrome.browser.ntp_customization.theme.NtpThemeStateProvider;
-import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorInfo;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataThemeCollection;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataUploadImage;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
@@ -83,6 +76,7 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.search_engines.TemplateUrlService;
+import org.chromium.ui.base.ViewUtils;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.edge_to_edge.EdgeToEdgeStateProvider;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -93,7 +87,7 @@ import java.util.function.Supplier;
 
 /** Unit tests for {@link NtpCustomizationMediator} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, sdk = Build.VERSION_CODES.R)
+@Config(sdk = Build.VERSION_CODES.R)
 public class NtpCustomizationMediatorUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -325,7 +319,7 @@ public class NtpCustomizationMediatorUnitTest {
         // Verifies mTypeToListenerMap is cleared.
         Map<Integer, View.OnClickListener> typeToListenerMap =
                 mMediator.getTypeToListenersForTesting();
-        typeToListenerMap.put(BottomSheetType.NTP_CARDS, view -> {});
+        typeToListenerMap.put(BottomSheetType.NTP_CARDS, ViewUtils.emptyClickListener());
         assertEquals(1, typeToListenerMap.size());
 
         // Verifies mListContent is cleared.
@@ -375,15 +369,19 @@ public class NtpCustomizationMediatorUnitTest {
         mMediator.onNewColorSelected(/* isDifferentColor= */ true);
         observer.onSheetClosed(2);
         verify(ntpThemeStateProvider).notifyApplyThemeChanges();
+        verify(mConfigManager).maybeSaveUserSelectedBackgroundTypeToSharedPreference(eq(mContext));
         assertTrue(NtpCustomizationUtils.getLastApplyThemeTimestampFromSharedPreference() > 0);
 
         clearInvocations(ntpThemeStateProvider);
+        clearInvocations(mConfigManager);
         NtpCustomizationUtils.setLastApplyThemeTimestampToSharedPreference(0);
 
         // Verifies notifyApplyThemeChanges() is NOT called when theme color isn't changed.
         mMediator.onNewColorSelected(/* isDifferentColor= */ false);
         observer.onSheetClosed(2);
         verify(ntpThemeStateProvider, never()).notifyApplyThemeChanges();
+        verify(mConfigManager, never())
+                .maybeSaveUserSelectedBackgroundTypeToSharedPreference(any());
         assertEquals(0, NtpCustomizationUtils.getLastApplyThemeTimestampFromSharedPreference());
 
         NtpThemeStateProvider.setInstanceForTesting(null);
@@ -456,7 +454,7 @@ public class NtpCustomizationMediatorUnitTest {
     @Features.EnableFeatures(ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2)
     public void testBuildListContent_ExcludesThemeWhenE2EDisabled() {
         // Release the token so E2E returns false
-        mE2EProvider.releaseSetDecorFitsSystemWindowToken(0);
+        mE2EProvider.releaseEdgeToEdgeToken(0);
 
         List<Integer> listContent = mMediator.buildListContent(mContext);
 
@@ -470,7 +468,7 @@ public class NtpCustomizationMediatorUnitTest {
     @Features.EnableFeatures(ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2)
     public void testBuildListContent_IncludesThemeWhenE2EDisabled_tablet() {
         // Release the token so E2E returns false
-        mE2EProvider.releaseSetDecorFitsSystemWindowToken(0);
+        mE2EProvider.releaseEdgeToEdgeToken(0);
 
         List<Integer> listContent = mMediator.buildListContent(mContext);
 
@@ -478,7 +476,6 @@ public class NtpCustomizationMediatorUnitTest {
         assertEquals(List.of(MVT, NTP_CARDS, THEME), listContent);
     }
 
-    @DisabledTest(message = "crbug.com/525121740")
     @Test
     public void testBuildListContentWhenProfileIsNotReady() {
         List<Integer> listContent = mMediator.buildListContent(mContext);
@@ -502,7 +499,6 @@ public class NtpCustomizationMediatorUnitTest {
         assertEquals(List.of(MVT, NTP_CARDS, THEME), mMediator.buildListContent(mContext));
     }
 
-    @DisabledTest(message = "crbug.com/525121740")
     @Test
     public void testBuildListContent_themeDisabledByPolicy() {
         when(mPrefService.getBoolean(Pref.ENABLE_SNIPPETS_BY_DSE)).thenReturn(true);
@@ -536,6 +532,7 @@ public class NtpCustomizationMediatorUnitTest {
     @Test
     @EnableFeatures(ChromeFeatureList.USE_WEB_UI_NTP_ANDROID)
     public void testBuildListContent_ExcludesThemeWhenWebUiNtpEnabled() {
+        DeviceInfo.setIsDesktopForTesting(true);
         List<Integer> listContent = mMediator.buildListContent(mContext);
         assertFalse(listContent.contains(THEME));
     }
@@ -603,55 +600,18 @@ public class NtpCustomizationMediatorUnitTest {
     }
 
     @Test
-    public void testOnNewThemeCollectionImageSelected_onSheetClosed() {
+    public void testOnSheetClosed() {
         BottomSheetObserver observer = mMediator.getBottomSheetObserverForTesting();
-        NtpCustomizationUtils.resetSharedPreferenceForTesting();
-        assertEquals(
-                NtpThemeColorInfo.COLOR_NOT_SET,
-                NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
 
-        Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
-        @ColorInt int themeCollectionDataPrimaryColor = Color.BLUE;
-        bitmap.eraseColor(themeCollectionDataPrimaryColor);
-        NtpBackgroundDataThemeCollection themeCollectionData =
-                mock(NtpBackgroundDataThemeCollection.class);
-        when(themeCollectionData.getPrimaryColor()).thenReturn(null);
-        mMediator.onNewThemeCollectionImageSelected(bitmap);
-        when(mConfigManager.getNtpBackgroundData()).thenReturn(themeCollectionData);
+        // Case 1: mShouldRecreate is false.
         observer.onSheetClosed(0);
+        verify(mConfigManager, never())
+                .maybeSaveUserSelectedBackgroundTypeToSharedPreference(any());
 
-        // Verifies pickAndSavePrimaryColor() is called when a new theme collection image is
-        // selected and the background image type is THEME_COLLECTION.
-        assertEquals(
-                themeCollectionDataPrimaryColor,
-                NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
-
-        // Sets the current theme type is NtpBackgroundType.IMAGE_FROM_DISK.
-        NtpCustomizationUtils.resetSharedPreferenceForTesting();
-        NtpBackgroundDataUploadImage uploadImageData = mock(NtpBackgroundDataUploadImage.class);
-        when(mConfigManager.getNtpBackgroundData()).thenReturn(uploadImageData);
-        mMediator.onNewThemeCollectionImageSelected(bitmap);
+        // Case 2: mShouldRecreate is true.
+        mMediator.onNewColorSelected(/* isDifferentColor= */ true);
         observer.onSheetClosed(0);
-        // Verifies pickAndSavePrimaryColor() is NOT called if background image type is not
-        // THEME_COLLECTION.
-        assertEquals(
-                NtpThemeColorInfo.COLOR_NOT_SET,
-                NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
-
-        // Clean up shared preference for the test.
-        NtpCustomizationUtils.resetSharedPreferenceForTesting();
-        when(mConfigManager.getNtpBackgroundData()).thenReturn(themeCollectionData);
-        assertEquals(
-                NtpThemeColorInfo.COLOR_NOT_SET,
-                NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
-
-        mMediator.onNewThemeCollectionImageSelected(null);
-        observer.onSheetClosed(0);
-
-        // Verifies pickAndSavePrimaryColor() is not called when mNewThemeCollectionImage is null.
-        assertEquals(
-                NtpThemeColorInfo.COLOR_NOT_SET,
-                NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
+        verify(mConfigManager).maybeSaveUserSelectedBackgroundTypeToSharedPreference(eq(mContext));
     }
 
     @Test
@@ -887,10 +847,13 @@ public class NtpCustomizationMediatorUnitTest {
             // Verify snackbar is shown
             verify(mSnackbarManager).showSnackbar(any(Snackbar.class));
             assertTrue(NtpCustomizationUtils.isThemeSnackbarShownFromSharedPreference());
+            verify(mConfigManager, never())
+                    .maybeSaveUserSelectedBackgroundTypeToSharedPreference(any());
         } else {
             // Verify snackbar isn't shown.
             verify(mSnackbarManager, never()).showSnackbar(any(Snackbar.class));
             assertFalse(NtpCustomizationUtils.isThemeSnackbarShownFromSharedPreference());
+            verify(mConfigManager).maybeSaveUserSelectedBackgroundTypeToSharedPreference(any());
         }
 
         assertEquals(expectedState, NtpCustomizationPromoManager.getStateForTesting());

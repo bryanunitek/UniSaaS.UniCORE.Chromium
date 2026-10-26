@@ -10,14 +10,22 @@ for more details on the presubmit API built into depot_tools.
 
 
 def CommonChecks(input_api, output_api):
+  if not (
+    input_api.HasAffectedFiles(extensions='.py')
+    or input_api.HasAffectedFiles(path='run_tests')
+  ):
+    return []
   output = []
   # These tests don't run on Windows and give verbose and cryptic failure
   # messages.
   if input_api.sys.platform != 'win32':
     output.extend(
-        input_api.canned_checks.RunUnitTests(input_api, output_api, [
-            input_api.os_path.join(input_api.PresubmitLocalPath(), 'run_tests')
-        ]))
+      input_api.canned_checks.RunUnitTests(
+        input_api,
+        output_api,
+        [input_api.os_path.join(input_api.PresubmitLocalPath(), 'run_tests')],
+      )
+    )
   return output
 
 

@@ -12,7 +12,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "chrome/browser/ui/views/infobars/confirm_infobar.h"
-#include "chrome/browser/win/installer_downloader/installer_downloader_feature.h"
+#include "chrome/browser/win/installer_downloader/installer_downloader_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
@@ -81,7 +81,13 @@ std::u16string InstallerDownloaderInfoBarDelegate::GetMessageText() const {
 }
 
 std::u16string InstallerDownloaderInfoBarDelegate::GetLinkText() const {
-  return l10n_util::GetStringUTF16(IDS_INSTALLER_DOWNLOADER_LINK);
+  return l10n_util::GetStringUTF16(IDS_INSTALLER_DOWNLOADER_LINK_TEXT);
+}
+
+std::optional<std::u16string>
+InstallerDownloaderInfoBarDelegate::GetLinkAccessibleText() const {
+  return l10n_util::GetStringUTF16(
+      IDS_INSTALLER_DOWNLOADER_LINK_ACCESSIBLE_TEXT);
 }
 
 int InstallerDownloaderInfoBarDelegate::GetButtons() const {
@@ -94,8 +100,7 @@ std::u16string InstallerDownloaderInfoBarDelegate::GetButtonLabel(
 }
 
 GURL InstallerDownloaderInfoBarDelegate::GetLinkURL() const {
-  const std::string learn_more_url_str = kLearnMoreUrl.Get();
-  GURL learn_more_url(learn_more_url_str);
+  GURL learn_more_url(kLearnMoreUrl);
   CHECK(learn_more_url.is_valid());
 
   return learn_more_url;

@@ -2,15 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
 #include <string_view>
 
-#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/task_traits.h"
+#include "base/test/test_timeouts.h"
 #include "base/test/values_test_util.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
@@ -18,11 +22,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/platform_browser_test.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
@@ -41,45 +46,10 @@
 
 namespace {
 
-class RunLoopUntilLoadedAndPainted : public content::WebContentsObserver {
- public:
-  explicit RunLoopUntilLoadedAndPainted(content::WebContents* web_contents)
-      : content::WebContentsObserver(web_contents) {}
-
-  RunLoopUntilLoadedAndPainted(const RunLoopUntilLoadedAndPainted&) = delete;
-  RunLoopUntilLoadedAndPainted& operator=(const RunLoopUntilLoadedAndPainted&) =
-      delete;
-
-  ~RunLoopUntilLoadedAndPainted() override = default;
-
-  // Runs a RunLoop on the main thread until the first non-empty frame is
-  // painted and the load is complete for the WebContents provided to the
-  // constructor.
-  void Run() {
-    if (LoadedAndPainted())
-      return;
-
-    run_loop_.Run();
-  }
-
- private:
-  bool LoadedAndPainted() {
-    return web_contents()->CompletedFirstVisuallyNonEmptyPaint() &&
-           !web_contents()->IsLoading();
-  }
-
-  // content::WebContentsObserver:
-  void DidFirstVisuallyNonEmptyPaint() override {
-    if (LoadedAndPainted())
-      run_loop_.Quit();
-  }
-  void DidStopLoading() override {
-    if (LoadedAndPainted())
-      run_loop_.Quit();
-  }
-
-  base::RunLoop run_loop_;
-};
+void WaitUntilLoadedAndPainted(content::WebContents* web_contents) {
+  ASSERT_TRUE(content::WaitForLoadStop(web_contents));
+  content::WaitForCopyableViewInWebContents(web_contents);
+}
 
 class NoBestEffortTasksTest : public PlatformBrowserTest {
  public:
@@ -113,25 +83,54 @@ class NoBestEffortTasksTest : public PlatformBrowserTest {
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 constexpr std::string_view kExtensionId = "ddchlicdkolnonkihahngkmmmjnjlkkf";
-constexpr base::TimeDelta kSendMessageRetryPeriod = base::Milliseconds(250);
 #endif
 
 }  // namespace
 
+// Verify that BEST_EFFORT tasks don't run during these tests.
+IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, ValidatePreconditions) {
+  // `best_effort_tasks_allowed` must be heap-allocated because the validation
+  // task could in theory run after returning from this scope.
+  auto best_effort_tasks_allowed = std::make_unique<bool>(false);
+#if BUILDFLAG(IS_ANDROID)
+  bool* best_effort_tasks_allowed_ptr = best_effort_tasks_allowed.get();
+#endif
+
+  base::ThreadPool::PostTask(
+      FROM_HERE, {base::TaskPriority::BEST_EFFORT},
+      base::BindOnce(
+          [](std::unique_ptr<bool> best_effort_tasks_allowed) {
+            EXPECT_TRUE(*best_effort_tasks_allowed);
+          },
+          std::move(best_effort_tasks_allowed)));
+
+  // Give the validation task a chance to run before continuing, to avoid
+  // false positives.
+  base::RunLoop run_loop;
+  base::ThreadPool::PostDelayedTask(FROM_HERE, run_loop.QuitClosure(),
+                                    TestTimeouts::action_timeout());
+  run_loop.Run();
+
+#if BUILDFLAG(IS_ANDROID)
+  // Android doesn't shut down the ThreadPool between tests so the validation
+  // task could run during teardown. On other platforms it shouldn't run at all.
+  *best_effort_tasks_allowed_ptr = true;
+#endif
+}
+
 // Verify that it is possible to load and paint the initial about:blank page
 // without running BEST_EFFORT tasks.
-// TODO(crbug.com/40932711): Disabled due to excessive flakiness.
-IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, DISABLED_LoadAndPaintAboutBlank) {
+IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadAndPaintAboutBlank) {
   content::WebContents* const web_contents =
       chrome_test_utils::GetActiveWebContents(this);
+  ASSERT_TRUE(web_contents);
 #if BUILDFLAG(IS_ANDROID)
   // Ensure about:blank is loaded, so the last committed URL is correct.
-  EXPECT_TRUE(content::WaitForLoadStop(web_contents));
+  ASSERT_TRUE(content::WaitForLoadStop(web_contents));
 #endif
-  EXPECT_TRUE(web_contents->GetLastCommittedURL().IsAboutBlank());
+  ASSERT_TRUE(web_contents->GetLastCommittedURL().IsAboutBlank());
 
-  RunLoopUntilLoadedAndPainted run_until_loaded_and_painted(web_contents);
-  run_until_loaded_and_painted.Run();
+  WaitUntilLoadedAndPainted(web_contents);
 }
 
 // Verify that it is possible to load and paint a page from the network without
@@ -139,23 +138,20 @@ IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, DISABLED_LoadAndPaintAboutBlank) {
 //
 // This test has more dependencies than LoadAndPaintAboutBlank, including
 // loading cookies.
-// TODO(crbug.com/40932711): Disabled due to excessive flakiness.
-IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest,
-                       DISABLED_LoadAndPaintFromNetwork) {
+IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadAndPaintFromNetwork) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   content::WebContents* const web_contents =
       OpenUrlInNewTab(embedded_test_server()->GetURL("a.com", "/empty.html"));
-  EXPECT_TRUE(web_contents->IsLoading());
+  ASSERT_TRUE(web_contents);
+  ASSERT_TRUE(web_contents->IsLoading());
 
-  RunLoopUntilLoadedAndPainted run_until_loaded_and_painted(web_contents);
-  run_until_loaded_and_painted.Run();
+  WaitUntilLoadedAndPainted(web_contents);
 }
 
 // Verify that it is possible to load and paint a file:// URL without running
 // BEST_EFFORT tasks. Regression test for https://crbug.com/40631718.
-// TODO(crbug.com/40932711): Disabled due to excessive flakiness.
-IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, DISABLED_LoadAndPaintFileScheme) {
+IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadAndPaintFileScheme) {
   constexpr base::FilePath::CharType kFile[] = FILE_PATH_LITERAL("links.html");
   GURL file_url(chrome_test_utils::GetTestUrl(
       base::FilePath(base::FilePath::kCurrentDirectory),
@@ -163,10 +159,10 @@ IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, DISABLED_LoadAndPaintFileScheme) {
   ASSERT_TRUE(file_url.SchemeIs(url::kFileScheme));
 
   content::WebContents* const web_contents = OpenUrlInNewTab(file_url);
-  EXPECT_TRUE(web_contents->IsLoading());
+  ASSERT_TRUE(web_contents);
+  ASSERT_TRUE(web_contents->IsLoading());
 
-  RunLoopUntilLoadedAndPainted run_until_loaded_and_painted(web_contents);
-  run_until_loaded_and_painted.Run();
+  WaitUntilLoadedAndPainted(web_contents);
 }
 
 // Verify that an extension can be loaded and perform basic messaging without
@@ -201,6 +197,7 @@ IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadExtensionAndSendMessages) {
   // extension permissions).
   content::WebContents* const web_contents =
       chrome_test_utils::GetActiveWebContents(this);
+  ASSERT_TRUE(web_contents);
   ASSERT_TRUE(chrome_test_utils::NavigateToURL(
       web_contents,
       embedded_test_server()->GetURL("fake.chromium.org", "/empty.html")));
@@ -235,7 +232,7 @@ IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadExtensionAndSendMessages) {
     LOG(INFO) << "Waiting for the extension's message listener...";
     base::RunLoop run_loop;
     base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, run_loop.QuitClosure(), kSendMessageRetryPeriod);
+        FROM_HERE, run_loop.QuitClosure(), TestTimeouts::tiny_timeout());
     run_loop.Run();
   }
 }
@@ -245,8 +242,10 @@ IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, LoadExtensionAndSendMessages) {
 // Regression test for https://crbug.com/40638518.
 IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTest, BlobXMLHttpRequest) {
   ASSERT_TRUE(embedded_test_server()->Start());
+
   content::WebContents* const web_contents =
       chrome_test_utils::GetActiveWebContents(this);
+  ASSERT_TRUE(web_contents);
   ASSERT_TRUE(chrome_test_utils::NavigateToURL(
       web_contents, embedded_test_server()->GetURL("/empty.html")));
   const char kScript[] = R"(
@@ -277,8 +276,10 @@ class NoBestEffortTasksTestWithQuota : public NoBestEffortTasksTest {
 // Regression test for https://crbug.com/40099913.
 IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTestWithQuota, CacheStorage) {
   ASSERT_TRUE(embedded_test_server()->Start());
+
   content::WebContents* const web_contents =
       chrome_test_utils::GetActiveWebContents(this);
+  ASSERT_TRUE(web_contents);
   ASSERT_TRUE(chrome_test_utils::NavigateToURL(
       web_contents, embedded_test_server()->GetURL("/empty.html")));
   const char kScript[] = R"(
@@ -300,8 +301,10 @@ IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTestWithQuota, CacheStorage) {
 // Regression test for https://crbug.com/40099913.
 IN_PROC_BROWSER_TEST_F(NoBestEffortTasksTestWithQuota, QuotaEstimate) {
   ASSERT_TRUE(embedded_test_server()->Start());
+
   content::WebContents* const web_contents =
       chrome_test_utils::GetActiveWebContents(this);
+  ASSERT_TRUE(web_contents);
   ASSERT_TRUE(chrome_test_utils::NavigateToURL(
       web_contents, embedded_test_server()->GetURL("/empty.html")));
   const char kScript[] = R"(

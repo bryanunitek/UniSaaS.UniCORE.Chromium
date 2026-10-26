@@ -128,6 +128,8 @@ class RemoteDisplaySessionManager : public GdmRemoteDisplayManager::Observer,
   }
 
  private:
+  friend class RemoteDisplaySessionManagerTest;
+
   enum class StartState {
     NOT_STARTED,
     STARTING,
@@ -141,6 +143,7 @@ class RemoteDisplaySessionManager : public GdmRemoteDisplayManager::Observer,
   // If `start_state_` is `STARTING` and there are no more session info queries
   // blocking startup, then transition to `STARTED` and run the init callback.
   void HandleSessionInfoQueriesBlockingStartup();
+  void FinalizeSessionInfoQuery(const gvariant::ObjectPath& display_path);
 
   void OnCreateDbusConnectionResult(
       base::expected<GDBusConnectionRef, Loggable> result);
@@ -181,16 +184,6 @@ class RemoteDisplaySessionManager : public GdmRemoteDisplayManager::Observer,
       base::expected<LoginSessionManager::SessionInfo, Loggable> result);
 
   bool IsRunningInCrdSessionSynchronous(const std::string& session_id) const;
-
-  void FetchSystemdEnvironmentVariables(
-      const std::string& display_name,
-      const gvariant::ObjectPath& display_path,
-      const std::string& username);
-
-  void OnGetUserSystemdEnvironmentResult(
-      const std::string& display_name,
-      const gvariant::ObjectPath& display_path,
-      const std::string& output);
 
   SEQUENCE_CHECKER(sequence_checker_);
 

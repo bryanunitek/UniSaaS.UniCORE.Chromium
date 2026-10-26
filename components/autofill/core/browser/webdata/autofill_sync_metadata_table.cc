@@ -11,7 +11,7 @@
 
 #include "base/check.h"
 #include "base/logging.h"
-#include "components/autofill/core/browser/webdata/autofill_table_utils.h"
+#include "components/autofill/core/browser/webdata/autofill_table_util.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/protocol/data_type_state.pb.h"
@@ -38,6 +38,15 @@ constexpr std::string_view kAutofillDataTypeStateTable =
     "autofill_model_type_state";
 // kModelType = "model_type"
 // kValue = "value"
+
+// The `kModelType` value that was persisted for the removed
+// `AUTOFILL_WALLET_OFFER` data type. This mirrors
+// `syncer::DataTypeToStableIdentifier()`, which is not usable here anymore
+// since the data type no longer exists.
+constexpr int kDeprecatedAutofillWalletOfferModelType =
+    static_cast<int>(
+        syncer::DataTypeForHistograms::kDeprecatedAutofillWalletOffer) +
+    1;
 
 WebDatabaseTable::TypeKey GetKey() {
   // We just need a unique constant. Use the address of a static that
@@ -68,7 +77,6 @@ bool AutofillSyncMetadataTable::SupportsMetadataForDataType(
          data_type == syncer::AUTOFILL_WALLET_CREDENTIAL ||
          data_type == syncer::AUTOFILL_WALLET_DATA ||
          data_type == syncer::AUTOFILL_WALLET_METADATA ||
-         data_type == syncer::AUTOFILL_WALLET_OFFER ||
          data_type == syncer::AUTOFILL_WALLET_USAGE ||
          data_type == syncer::CONTACT_INFO;
 }
@@ -87,7 +95,27 @@ bool AutofillSyncMetadataTable::MigrateToVersion(
   if (!db()->is_open()) {
     return false;
   }
+  switch (version) {
+    case 156:
+      *update_compatible_version = false;
+      return MigrateToVersion156ClearAutofillWalletOfferSyncMetadata();
+  }
   return true;
+}
+
+bool AutofillSyncMetadataTable::
+    MigrateToVersion156ClearAutofillWalletOfferSyncMetadata() {
+  sql::Transaction transaction(db());
+  return transaction.Begin() &&
+         (!db()->DoesTableExist(kAutofillSyncMetadataTable) ||
+          sql::DeleteWhereColumnEq(*db(), kAutofillSyncMetadataTable,
+                                   kModelType,
+                                   kDeprecatedAutofillWalletOfferModelType)) &&
+         (!db()->DoesTableExist(kAutofillDataTypeStateTable) ||
+          sql::DeleteWhereColumnEq(*db(), kAutofillDataTypeStateTable,
+                                   kModelType,
+                                   kDeprecatedAutofillWalletOfferModelType)) &&
+         transaction.Commit();
 }
 
 bool AutofillSyncMetadataTable::GetAllSyncMetadata(

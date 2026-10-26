@@ -12,6 +12,8 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
@@ -34,9 +36,10 @@
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
-#include "ui/views/test/widget_test.h"
 #include "ui/views/view.h"
 #include "ui/views/view_utils.h"
+#include "ui/webui/tracked_element/interaction_test_util_web_ui.h"
+#include "ui/webui/tracked_element/tracked_element_web_ui.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "ui/base/interaction/interaction_test_util_mac.h"
@@ -127,6 +130,8 @@ views::View* GetScreenshotTargetView(ui::TrackedElement* element) {
     return view_el->view();
   } else if (auto* const page_el = element->AsA<TrackedElementWebContents>()) {
     return page_el->owner()->GetWebView();
+  } else if (auto* const webui_el = element->AsA<ui::TrackedElementWebUI>()) {
+    return webui_el->GetWebView();
   }
   return nullptr;
 }
@@ -168,9 +173,14 @@ class InteractionTestUtilSimulatorBrowser
     // Browser accelerators must be sent via key events to the window on Mac or
     // they don't work properly. Dialog accelerators still appear to work the
     // same as on other platforms.
+    //
+    // Synthesized key events are posted to the application's event queue and
+    // dispatched asynchronously, so wait for them to be processed: callers
+    // expect the accelerator to have taken effect when this returns, as is
+    // the case for FocusManager::ProcessAccelerator() on other platforms.
     if (auto* const bwi = InteractionTestUtilBrowser::GetBrowserFromContext(
             element->context())) {
-      if (!ui_controls::SendKeyPress(
+      if (!ui_test_utils::SendKeyPressToWindowSync(
               BrowserView::GetBrowserViewForBrowser(bwi)->GetNativeWindow(),
               accelerator.key_code(), accelerator.IsCtrlDown(),
               accelerator.IsShiftDown(), accelerator.IsAltDown(),
@@ -183,54 +193,75 @@ class InteractionTestUtilSimulatorBrowser
     }
 #endif  // BUILDFLAG(IS_MAC)
 
+    // Extract the hosting WebView and WebContents for web or WebUI elements.
+    views::WebView* view = nullptr;
+    content::WebContents* web_contents = nullptr;
     if (auto* const tracked_contents =
             element->AsA<TrackedElementWebContents>()) {
-      if (auto* const view = tracked_contents->owner()->GetWebView()) {
-        // There are two possibilities:
-        //  1. This is a legitimate accelerator, which must be handled by the
-        //     focus manager.
-        //  2. This is a control key that will be processed by Blink (e.g.
-        //     pressing enter or space to "click" an HTML button), and therefore
-        //     must be injected as a keypress.
-        bool result = view->GetFocusManager()->ProcessAccelerator(accelerator);
-        if (!result) {
-          result = ui_controls::SendKeyPress(
-              tracked_contents->owner()
-                  ->web_contents()
-                  ->GetTopLevelNativeWindow(),
-              accelerator.key_code(), accelerator.IsCtrlDown(),
-              accelerator.IsShiftDown(), accelerator.IsAltDown(),
-              accelerator.IsCmdDown());
-        }
-        return result ? ui::test::ActionResult::kSucceeded
-                      : ui::test::ActionResult::kFailed;
-      } else {
-        LOG(ERROR) << "No associated view to send accelerators to.";
-        return ui::test::ActionResult::kFailed;
+      view = tracked_contents->owner()->GetWebView();
+      web_contents = tracked_contents->owner()->web_contents();
+    } else if (auto* const webui_el = element->AsA<ui::TrackedElementWebUI>()) {
+      view = webui_el->GetWebView();
+      if (view) {
+        web_contents = view->GetWebContents();
       }
+    } else {
+      // Non-web elements are handled by other simulators (e.g. Views).
+      return ui::test::ActionResult::kNotAttempted;
     }
 
-    return ui::test::ActionResult::kNotAttempted;
+    if (!view || !web_contents) {
+      LOG(ERROR) << "No associated view or contents to send accelerators to.";
+      return ui::test::ActionResult::kFailed;
+    }
+
+    // There are two possibilities:
+    //  1. This is a legitimate accelerator, which must be handled by the
+    //     focus manager.
+    //  2. This is a control key that will be processed by Blink (e.g.
+    //     pressing enter or space to "click" an HTML button), and therefore
+    //     must be injected as a keypress.
+    bool result = view->GetFocusManager()->ProcessAccelerator(accelerator);
+    if (!result) {
+      result = ui_controls::SendKeyPress(
+          web_contents->GetTopLevelNativeWindow(), accelerator.key_code(),
+          accelerator.IsCtrlDown(), accelerator.IsShiftDown(),
+          accelerator.IsAltDown(), accelerator.IsCmdDown());
+    }
+    return result ? ui::test::ActionResult::kSucceeded
+                  : ui::test::ActionResult::kFailed;
   }
 
-  // Handle sending key presses to web contents. All other cases are handled by
-  // the Views simulator.
+  // Handle sending key presses to web contents and WebUI elements. All other
+  // cases are handled by the Views simulator.
   ui::test::ActionResult SendKeyPress(ui::TrackedElement* element,
                                       ui::KeyboardCode key,
                                       int flags) override {
+    gfx::NativeWindow native_window = gfx::NativeWindow();
     if (auto* const tracked_contents =
             element->AsA<TrackedElementWebContents>()) {
-      auto native_window =
+      native_window =
           tracked_contents->owner()->web_contents()->GetTopLevelNativeWindow();
-      const bool result = ui_test_utils::SendKeyPressToWindowSync(
-          native_window, key, flags & ui::EF_CONTROL_DOWN,
-          flags & ui::EF_SHIFT_DOWN, flags & ui::EF_ALT_DOWN,
-          flags & ui::EF_COMMAND_DOWN);
-      return result ? ui::test::ActionResult::kSucceeded
-                    : ui::test::ActionResult::kFailed;
+    } else if (auto* const webui_el = element->AsA<ui::TrackedElementWebUI>()) {
+      if (auto* const web_view = webui_el->GetWebView()) {
+        if (auto* const contents = web_view->GetWebContents()) {
+          native_window = contents->GetTopLevelNativeWindow();
+        }
+      }
+    } else {
+      return ui::test::ActionResult::kNotAttempted;
     }
 
-    return ui::test::ActionResult::kNotAttempted;
+    if (!native_window) {
+      return ui::test::ActionResult::kFailed;
+    }
+
+    const bool result = ui_test_utils::SendKeyPressToWindowSync(
+        native_window, key, flags & ui::EF_CONTROL_DOWN,
+        flags & ui::EF_SHIFT_DOWN, flags & ui::EF_ALT_DOWN,
+        flags & ui::EF_COMMAND_DOWN);
+    return result ? ui::test::ActionResult::kSucceeded
+                  : ui::test::ActionResult::kFailed;
   }
 
   // Chrome has better and more thorough functionality for bringing a browser
@@ -248,6 +279,9 @@ class InteractionTestUtilSimulatorBrowser
         LOG(ERROR) << "WebContents not associated with any UI element.";
         return ui::test::ActionResult::kFailed;
       }
+    } else if (auto* const web_el = el->AsA<ui::TrackedElementWebUI>()) {
+      is_web_contents = true;
+      view = web_el->GetWebView();
     }
     if (!view) {
       return ui::test::ActionResult::kNotAttempted;
@@ -362,7 +396,8 @@ class InteractionTestUtilSimulatorBrowser
 
     // Tabs can be selected using a default action; no special input logic is
     // needed.
-    views::View* const tab = tab_strip_region->GetTabAnchorViewAt(index);
+    views::View* const tab = tab_strip_region->GetTabAnchorView(
+        tab_strip_model->GetTabAtIndex(index)->GetHandle());
     views::test::InteractionTestUtilSimulatorViews::DoDefaultAction(tab,
                                                                     input_type);
 
@@ -401,6 +436,8 @@ void InteractionTestUtilBrowser::PopulateSimulators(
     ui::test::InteractionTestUtil& test_util) {
   test_util.AddSimulator(
       std::make_unique<InteractionTestUtilSimulatorBrowser>());
+  test_util.AddSimulator(
+      std::make_unique<ui::InteractionTestUtilSimulatorWebUI>());
 }
 
 // static
@@ -424,11 +461,21 @@ ui::test::ActionResult InteractionTestUtilBrowser::CompareScreenshot(
     ui::TrackedElement* element,
     const std::string& screenshot_name,
     const std::string& baseline_cl,
-    const ScreenshotOptions& options) {
+    ScreenshotOptions options) {
   views::View* const view = GetScreenshotTargetView(element);
   if (!view) {
     return ui::test::ActionResult::kNotAttempted;
   }
+
+  if (auto* const webui_el = element->AsA<ui::TrackedElementWebUI>()) {
+    if (!options.region.has_value()) {
+      options.region = webui_el->GetBoundsInWebContents();
+    } else {
+      options.region->Offset(
+          webui_el->GetBoundsInWebContents().OffsetFromOrigin());
+    }
+  }
+
   return CompareScreenshotCommon(view, options, screenshot_name, baseline_cl);
 }
 

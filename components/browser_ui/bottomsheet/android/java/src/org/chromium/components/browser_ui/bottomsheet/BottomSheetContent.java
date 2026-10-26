@@ -6,6 +6,7 @@ package org.chromium.components.browser_ui.bottomsheet;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.view.MotionEvent;
 import android.view.View;
 
 import androidx.annotation.ColorInt;
@@ -26,6 +27,9 @@ import java.util.Objects;
  */
 @NullMarked
 public interface BottomSheetContent {
+    /** The maximum height ratio for the sheet content. */
+    float MAX_HEIGHT_RATIO = 1.0f;
+
     /** The different possible height modes for a given state. */
     @IntDef({
         HeightMode.DEFAULT,
@@ -131,18 +135,49 @@ public interface BottomSheetContent {
     @Nullable View getToolbarView();
 
     /**
+     * @param event The motion event to test.
+     * @return Whether a drag gesture starting at this touch event can drag the sheet, even if the
+     *     content inside the sheet is scrolled down (e.g. touches on a custom header area or drag
+     *     handlebar).
+     */
+    default boolean canDragSheet(@Nullable MotionEvent event) {
+        return false;
+    }
+
+    /**
      * @return The vertical scroll offset of the content view.
      */
     int getVerticalScrollOffset();
 
     /**
-     * Called to destroy the {@link BottomSheetContent} when it is dismissed. The means the
-     * sheet is in the {@link BottomSheetController.SheetState#HIDDEN} state without being
-     * suppressed. This method does not necessarily need to be used but exists for convenience.
-     * Cleanup can be done manually via the owning component (likely watching for the sheet hidden
-     * event using an observer).
+     * Called to destroy the {@link BottomSheetContent} when it is dismissed. The means the sheet is
+     * in the {@link BottomSheetController.SheetState#HIDDEN} state without being suppressed. This
+     * method does not necessarily need to be used but exists for convenience. Cleanup can be done
+     * manually via the owning component (likely watching for the sheet hidden event using an
+     * observer).
+     *
+     * <p>When deferred content swapping is enabled, this is also called when the content is dropped
+     * from the pending show requests without ever being shown, for example by {@code
+     * ManagedBottomSheetController#clearRequestsAndHide()}. Observers are not notified in that
+     * case.
      */
     void destroy();
+
+    /**
+     * Returns the {@link BottomSheetType} defining the behavioral characteristics (modality,
+     * user-initiated trigger, suppressibility, and user-criticality) of this sheet content.
+     *
+     * <p>Used by {@link BottomSheetController} to determine prioritization, suppression, and
+     * background scrim management.
+     *
+     * @return The {@link BottomSheetType} for this content. Defaults to a standard non-modal,
+     *     passive bottom sheet.
+     */
+    // TODO(crbug.com/505050661): Cleanup default case once all other sheets have been migrated to
+    // types.
+    default BottomSheetType getSheetType() {
+        return new BottomSheetType.Builder().build();
+    }
 
     /**
      * @return The priority of this content.
@@ -181,10 +216,20 @@ public interface BottomSheetContent {
     }
 
     /**
-     * @return Whether this content owns the scrim lifecycle. If false, a default scrim will
-     *         be displayed behind the sheet when this content is shown.
+     * @return Whether this content owns the scrim lifecycle. If false, a default scrim will be
+     *     displayed behind the sheet when this content is shown.
+     *     <p>Note: New features should define modality via {@link BottomSheetType#isModal()}
+     *     returned by {@link #getSheetType()} instead of overriding this method.
      */
     default boolean hasCustomScrimLifecycle() {
+        return false;
+    }
+
+    /**
+     * @return Whether this content covers the bottom controls (e.g. bottom navigation bar)
+     *         from the bottom of the screen with zero bottom margin, even when unscrimmed.
+     */
+    default boolean coversBottomControls() {
         return false;
     }
 
@@ -255,8 +300,9 @@ public interface BottomSheetContent {
      * disabled.
      *
      * <p>If {@link HeightMode#RESIZE_CONTENT} is returned, the sheet will dynamically resize the
-     * sheet content to match the sheet offset. The maximum height will be {@link
-     * BottomSheet#MAX_HEIGHT_RATIO} and the minimum height will be the height of the half height
+     * sheet content to match the sheet offset. The maximum height will be determined by {@link
+     * #getMaxResizeContentHeightRatio()} (in the range (0.0f, 1.0f], defaults to {@link
+     * BottomSheet#MAX_HEIGHT_RATIO}) and the minimum height will be the height of the half height
      * ratio.
      *
      * <p>This method cannot return {@link HeightMode#DISABLED}.
@@ -266,8 +312,18 @@ public interface BottomSheetContent {
     }
 
     /**
+     * Maximum full-height ratio cap when {@link #getFullHeightRatio()} returns {@link
+     * HeightMode#RESIZE_CONTENT}. This method is only used when the sheet is in dynamic resize
+     * mode. Must be in the range (0.0f, {@link #MAX_HEIGHT_RATIO}]. Defaults to {@link
+     * #MAX_HEIGHT_RATIO}.
+     */
+    default float getMaxResizeContentHeightRatio() {
+        return MAX_HEIGHT_RATIO;
+    }
+
+    /**
      * @return Whether the sheet should be hidden when it is in the PEEK/HALF state and the user
-     *         scrolls down the page.
+     *     scrolls down the page.
      */
     default boolean hideOnScroll() {
         return false;
@@ -299,11 +355,15 @@ public interface BottomSheetContent {
     default void onBackPressed() {}
 
     /**
-     * Returns the content description for the bottom sheet. This is generally the name of the
-     * feature/content that is showing. It can be a dynamic string. 'Swipe down to close.' will be
-     * automatically appended after the content description.
+     * @deprecated Container-level content descriptions on the bottom sheet cause screen readers
+     *     (like TalkBack) to mask and skip non-interactive descendant views. Use {@link
+     *     #getSheetFullHeightAccessibilityStringId()} or {@link
+     *     #getSheetHalfHeightAccessibilityStringId()} for accessibility pane titles instead.
      */
-    @Nullable String getSheetContentDescription(Context context);
+    @Deprecated
+    default @Nullable String getSheetContentDescription(Context context) {
+        return null;
+    }
 
     /**
      * @return The resource id of the string announced when the sheet is opened at half height. This
@@ -344,6 +404,8 @@ public interface BottomSheetContent {
     /**
      * @param nextContent The content that is requesting to be shown.
      * @return True if this content should hide when another content is requested to be shown.
+     *     <p>Note: New features should configure suppressibility and prioritization via {@link
+     *     BottomSheetType} returned by {@link #getSheetType()} instead of overriding this method.
      */
     default boolean canBeSuppressed(BottomSheetContent nextContent) {
         return false;
@@ -391,5 +453,23 @@ public interface BottomSheetContent {
      */
     default boolean shouldRestoreStateOnUnsuppress() {
         return true;
+    }
+
+    /**
+     * @return Whether this content supports rendering specifically configured for large form factor
+     *     devices (e.g., width constraints, specific background styling).
+     */
+    default boolean supportsLargeFormFactor() {
+        return true;
+    }
+
+    /**
+     * @return Whether the bottom sheet should show the drag handlebar. If true, clicking or tapping
+     *     the handlebar toggles the bottom sheet between its enabled states (e.g. HALF and FULL).
+     *     If the sheet only supports a single open state, clicking the handlebar has no effect.
+     *     Defaults to false.
+     */
+    default boolean showHandlebar() {
+        return false;
     }
 }

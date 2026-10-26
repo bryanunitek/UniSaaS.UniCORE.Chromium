@@ -34,6 +34,8 @@ using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::StrictMock;
 
+#include "media/base/win/mf_mocks.h"
+
 namespace media {
 
 using ABI::Windows::Media::Protection::IMediaProtectionPMPServer;
@@ -45,34 +47,8 @@ constexpr char kSubsequentEventUmaName[] =
     "Media.MediaFoundation.MediaEngineError.SubsequentEvent";
 constexpr char kSubsequentEventOrErrorReportedUmaName[] =
     "Media.MediaFoundation.MediaEngineError.SubsequentEventOrErrorReported";
-
-class MockMediaFoundationCdmProxy : public MediaFoundationCdmProxy {
- public:
-  MockMediaFoundationCdmProxy();
-
-  // MediaFoundationCdmProxy.
-  MOCK_METHOD2(GetPMPServer, HRESULT(REFIID riid, void** object_result));
-  MOCK_METHOD6(GetInputTrustAuthority,
-               HRESULT(uint32_t stream_id,
-                       uint32_t stream_count,
-                       const uint8_t* content_init_data,
-                       uint32_t content_init_data_size,
-                       REFIID riid,
-                       IUnknown** object_result));
-  MOCK_METHOD2(SetLastKeyId, HRESULT(uint32_t stream_id, REFGUID key_id));
-  MOCK_METHOD0(RefreshTrustedInput, HRESULT());
-  MOCK_METHOD2(ProcessContentEnabler,
-               HRESULT(IUnknown* request, IMFAsyncResult* result));
-  MOCK_METHOD0(OnHardwareContextReset, void());
-  MOCK_METHOD0(OnSignificantPlayback, void());
-  MOCK_METHOD1(OnPlaybackError, void(HRESULT));
-
- protected:
-  ~MockMediaFoundationCdmProxy() override;
-};
-
-MockMediaFoundationCdmProxy::MockMediaFoundationCdmProxy() = default;
-MockMediaFoundationCdmProxy::~MockMediaFoundationCdmProxy() = default;
+constexpr char kMFSeekRequestedUmaName[] =
+    "Media.MediaFoundationRenderer.MFSeekRequested";
 
 class MockMediaProtectionPMPServer
     : public Microsoft::WRL::RuntimeClass<
@@ -213,6 +189,67 @@ TEST_F(MediaFoundationRendererTest, InitThenSetCdm) {
 
   mf_renderer_->Initialize(&media_resource_, &renderer_client_,
                            renderer_init_cb_.Get());
+  mf_renderer_->SetCdm(&cdm_context_, set_cdm_cb_.Get());
+
+  task_environment_.RunUntilIdle();
+}
+
+TEST_F(MediaFoundationRendererTest, ClearStreamWithCdmSetsUpProtectionManager) {
+  LUID empty_luid{0, 0};
+  mf_renderer_ = std::make_unique<MediaFoundationRenderer>(
+      task_environment_.GetMainThreadTaskRunner(),
+      std::make_unique<NullMediaLog>(), empty_luid,
+      /*is_testing=*/false);
+
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/false);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/false);
+
+  EXPECT_CALL(set_cdm_cb_, Run(true));
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+
+  // Expect the CDM proxy to be queried for the PMP server, proving that
+  // MediaFoundationProtectionManager is initialized despite the clear streams
+  // because a CDM was explicitly attached prior to initialization.
+  EXPECT_CALL(*mf_cdm_proxy_, GetPMPServer(_, _)).Times(1);
+
+  // In production, SetCdm() is strictly guaranteed to be called before
+  // Initialize(). Attach the CDM first.
+  mf_renderer_->SetCdm(&cdm_context_, set_cdm_cb_.Get());
+
+  // Initialize the renderer. Because has_cdm is true, it should setup the
+  // protection manager rather than early-outing into clear playback.
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+
+  task_environment_.RunUntilIdle();
+}
+
+TEST_F(MediaFoundationRendererTest,
+       ClearStreamInitThenSetCdmDoesNotSetUpProtectionManager) {
+  LUID empty_luid{0, 0};
+  mf_renderer_ = std::make_unique<MediaFoundationRenderer>(
+      task_environment_.GetMainThreadTaskRunner(),
+      std::make_unique<NullMediaLog>(), empty_luid,
+      /*is_testing=*/false);
+
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/false);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/false);
+
+  EXPECT_CALL(set_cdm_cb_, Run(true));
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+
+  // Expect the CDM proxy to NOT be queried for the PMP server, proving that
+  // MediaFoundationProtectionManager is NOT initialized because the CDM was
+  // not attached prior to initialization and the streams are clear.
+  EXPECT_CALL(*mf_cdm_proxy_, GetPMPServer(_, _)).Times(0);
+
+  // Initialize the renderer first. Because has_cdm is false and streams are
+  // clear, it should early-out to clear playback.
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+
+  // Attach the CDM second. This should still succeed, but won't trigger
+  // protection manager setup.
   mf_renderer_->SetCdm(&cdm_context_, set_cdm_cb_.Get());
 
   task_environment_.RunUntilIdle();
@@ -484,5 +521,86 @@ TEST_F(MediaFoundationRendererTest,
                                      MF_MEDIA_ENGINE_EVENT_ENDED, 1);
   histogram_tester.ExpectBucketCount(kSubsequentEventOrErrorReportedUmaName,
                                      true, 1);
+}
+
+// A frame step completing during a seek must leave the Media Engine paused for
+// StartPlayingFrom().
+TEST_F(MediaFoundationRendererTest,
+       FrameStepCompletedDuringFlushDoesNotResume) {
+  // Use encrypted streams to avoid SetSourceOnMediaEngine() being called
+  // automatically during Initialize(). This prevents the MediaEngine from
+  // generating events that could interfere with the test.
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
+
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+  task_environment_.RunUntilIdle();
+
+  MediaEngineNotifyImpl* media_engine_notify =
+      mf_renderer_->GetMediaEngineNotifyForTesting();
+  ASSERT_TRUE(media_engine_notify);
+  IMFMediaEngine* media_engine = mf_renderer_->GetMediaEngineForTesting();
+  ASSERT_TRUE(media_engine);
+
+  // Flush() pauses the Media Engine for the seek.
+  base::MockOnceClosure flush_cb;
+  EXPECT_CALL(flush_cb, Run());
+  mf_renderer_->Flush(flush_cb.Get());
+  task_environment_.RunUntilIdle();
+
+  ASSERT_TRUE(media_engine->IsPaused());
+
+  // The frame step completes before StartPlayingFrom().
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_FRAMESTEPCOMPLETED, 0L,
+                                   0L);
+  task_environment_.RunUntilIdle();
+
+  EXPECT_TRUE(media_engine->IsPaused());
+}
+
+// The Media Engine asks Chromium to seek instead of seeking on its own, so
+// each request should be forwarded to the pipeline as a lost decoder state.
+TEST_F(MediaFoundationRendererTest,
+       EngineSeekRequestedReportsDecoderStateLost) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kMediaFoundationChromiumCompatibilityMode);
+  base::HistogramTester histogram_tester;
+  // Use encrypted streams to avoid SetSourceOnMediaEngine() being called
+  // automatically during Initialize(). This prevents the MediaEngine from
+  // generating events that could interfere with the test.
+  AddStream(DemuxerStream::AUDIO, /*encrypted=*/true);
+  AddStream(DemuxerStream::VIDEO, /*encrypted=*/true);
+
+  EXPECT_CALL(renderer_init_cb_, Run(HasStatusCode(PIPELINE_OK)));
+
+  mf_renderer_->Initialize(&media_resource_, &renderer_client_,
+                           renderer_init_cb_.Get());
+  task_environment_.RunUntilIdle();
+
+  EXPECT_CALL(renderer_client_, OnWaiting(WaitingReason::kDecoderStateLost))
+      .Times(2);
+
+  MediaEngineNotifyImpl* media_engine_notify =
+      mf_renderer_->GetMediaEngineNotifyForTesting();
+  ASSERT_TRUE(media_engine_notify);
+
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_ENGINE_SEEK_REQUESTED,
+                                   0L, 0L);
+  task_environment_.RunUntilIdle();
+
+  media_engine_notify->EventNotify(MF_MEDIA_ENGINE_EVENT_ENGINE_SEEK_REQUESTED,
+                                   0L, 0L);
+  task_environment_.RunUntilIdle();
+
+  testing::Mock::VerifyAndClearExpectations(&renderer_client_);
+
+  // The number of requests is reported when the renderer is destroyed.
+  mf_renderer_.reset();
+  task_environment_.RunUntilIdle();
+
+  histogram_tester.ExpectUniqueSample(kMFSeekRequestedUmaName, 2, 1);
 }
 }  // namespace media

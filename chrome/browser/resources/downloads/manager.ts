@@ -162,8 +162,7 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
 
     // Intercepts clicks on toast.
     const toastManager = getToastManager();
-    toastManager.shadowRoot.querySelector<HTMLElement>('#toast')!.onclick = e =>
-        this.onToastClicked_(e);
+    toastManager.$.toast.onclick = e => this.onToastClicked_(e);
 
     // <if expr="_google_chrome">
     this.browserProxy_.handler.isEligibleForEsbPromo().then((result) => {
@@ -449,6 +448,10 @@ export class DownloadsManagerElement extends DownloadsManagerElementBase {
 
   protected onListBlurredChanged_(e: CustomEvent<{value: boolean}>) {
     this.listBlurred_ = e.detail.value;
+  }
+
+  protected onRestoreListFocus_() {
+    this.listBlurred_ = false;
   }
 
   // Override FindShortcutMixin methods.

@@ -82,10 +82,10 @@ public interface NavigationController {
      * off during user input).
      *
      * @param params Parameters for this load.
-     * @return NavigationHandle for the initiated navigation (might be null if the navigation
-     *     couldn't be started for some reason).
+     * @return NavigationResult containing the NavigationHandle if successful, or a reason if the
+     *     navigation could not be started.
      */
-    @Nullable NavigationHandle loadUrl(LoadUrlParams params);
+    NavigationResult loadUrl(LoadUrlParams params);
 
     /** Clears NavigationController's page history in both backwards and forwards directions. */
     void clearHistory();
@@ -190,7 +190,7 @@ public interface NavigationController {
     void setEntryExtraData(int index, String key, String value);
 
     /**
-     * Copies the navigation controller state from {@param sourceNavigationController} to this.
+     * Copies the navigation controller state from {@code sourceNavigationController} to this.
      *
      * @param sourceNavigationController The {@link NavigationController} to copy from.
      */

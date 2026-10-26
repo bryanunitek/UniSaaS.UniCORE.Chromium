@@ -20,6 +20,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.view.ViewStub;
+import android.widget.ImageView;
 import android.widget.RadioButton;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
@@ -32,7 +33,6 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.widget.containment.ContainmentItem;
 import org.chromium.components.browser_ui.widget.containment.ContainmentUiUtils;
 import org.chromium.ui.UiUtils;
-import org.chromium.ui.widget.ChromeImageView;
 
 import java.util.List;
 
@@ -86,7 +86,7 @@ public class RadioButtonWithDescription extends RelativeLayout
     private RadioButton mRadioButton;
 
     @SuppressWarnings("NullAway.Init")
-    private ChromeImageView mIcon;
+    private ImageView mIcon;
 
     @SuppressWarnings("NullAway.Init")
     private TextView mPrimary;
@@ -170,6 +170,10 @@ public class RadioButtonWithDescription extends RelativeLayout
         mIcon = getIcon();
         mPrimary = getPrimaryTextView();
         mDescription = getDescriptionTextView();
+        // TextViewWithClickableSpans sets a long-click listener in its constructor, which marks the
+        // view long-clickable. Reset it here so plain-text descriptions (e.g. set via XML) are not
+        // treated as separate interactive accessibility nodes unless LinkMovementMethod is applied.
+        mDescription.setLongClickable(false);
 
         int endStubLayoutResourceId = getEndStubLayoutResourceId();
         if (endStubLayoutResourceId != NO_LAYOUT_ID) {
@@ -179,7 +183,9 @@ public class RadioButtonWithDescription extends RelativeLayout
         }
     }
 
-    /** @return The layout resource id used for inflating this {@link RadioButtonWithDescription}. */
+    /**
+     * @return The layout resource id used for inflating this {@link RadioButtonWithDescription}.
+     */
     protected int getLayoutResource() {
         return R.layout.radio_button_with_description;
     }
@@ -192,9 +198,9 @@ public class RadioButtonWithDescription extends RelativeLayout
     }
 
     /**
-     * @return ChromeImageView inside this {@link RadioButtonWithDescription}.
+     * @return ImageView inside this {@link RadioButtonWithDescription}.
      */
-    protected ChromeImageView getIcon() {
+    protected ImageView getIcon() {
         return findViewById(R.id.icon);
     }
 
@@ -307,15 +313,23 @@ public class RadioButtonWithDescription extends RelativeLayout
         return mPrimary.getText();
     }
 
-    /** Sets the text shown in the description section. */
+    /**
+     * Sets the text shown in the description section. If {@code text} contains clickable spans,
+     * sets a link movement method on the description view so the links are clickable and
+     * keyboard-focusable.
+     */
     public void setDescriptionText(CharSequence text) {
         mDescription.setText(text);
+        // Clear any existing LinkMovementMethod (and reset focusable/clickable/longClickable)
+        // before re-evaluating whether the updated text contains a ClickableSpan.
+        mDescription.setMovementMethod(null);
 
         if (TextUtils.isEmpty(text)) {
             ((LayoutParams) mPrimary.getLayoutParams()).addRule(RelativeLayout.CENTER_VERTICAL);
             mDescription.setVisibility(View.GONE);
         } else {
             ((LayoutParams) mPrimary.getLayoutParams()).removeRule(RelativeLayout.CENTER_VERTICAL);
+            UiUtils.maybeSetLinkMovementMethod(mDescription);
             mDescription.setVisibility(View.VISIBLE);
         }
     }
@@ -428,9 +442,9 @@ public class RadioButtonWithDescription extends RelativeLayout
 
     @Override
     protected void onRestoreInstanceState(Parcelable state) {
-        if (state instanceof Bundle) {
-            super.onRestoreInstanceState(((Bundle) state).getParcelable(SUPER_STATE_KEY));
-            setChecked(((Bundle) state).getBoolean(CHECKED_KEY));
+        if (state instanceof Bundle bundle) {
+            super.onRestoreInstanceState(bundle.getParcelable(SUPER_STATE_KEY));
+            setChecked(bundle.getBoolean(CHECKED_KEY));
         } else {
             super.onRestoreInstanceState(state);
         }

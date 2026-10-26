@@ -8,14 +8,15 @@
 #include "base/test/gmock_expected_support.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
 #include "components/autofill/core/browser/foundations/test_autofill_driver.h"
 #include "components/autofill/core/browser/foundations/test_browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/with_test_autofill_client_driver_manager.h"
-#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_util.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -130,9 +131,9 @@ class AutofillFeedbackDataUnitTest
 
 TEST_F(AutofillFeedbackDataUnitTest, CreatesCompleteReport) {
   FormData form = CreateFeedbackTestFormData();
-  autofill_manager().OnFormsSeen(
-      /*updated_forms=*/{form},
-      /*removed_forms=*/{});
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{form},
+                                 /*removed_forms=*/{},
+                                 AutofillManagerTestApi::pass_key());
 
   base::DictValue autofill_feedback_data =
       data_logs::FetchAutofillFeedbackData(&autofill_manager());
@@ -149,9 +150,9 @@ TEST_F(AutofillFeedbackDataUnitTest, CreatesCompleteReport) {
 TEST_F(AutofillFeedbackDataUnitTest, IncludesLastAutofillEventLogEntry) {
   FormData form = CreateFeedbackTestFormData();
   FormFieldData field = form.fields()[0];
-  autofill_manager().OnFormsSeen(
-      /*updated_forms=*/{form},
-      /*removed_forms=*/{});
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{form},
+                                 /*removed_forms=*/{},
+                                 AutofillManagerTestApi::pass_key());
 
   // Simulates an autofill event.
   Suggestion suggestion(u"TestValue", SuggestionType::kIbanEntry);
@@ -180,9 +181,9 @@ TEST_F(AutofillFeedbackDataUnitTest,
        NotIncludeLastAutofillEventIfExceedTimeLimit) {
   FormData form = CreateFeedbackTestFormData();
   const FormFieldData& field = form.fields()[0];
-  autofill_manager().OnFormsSeen(
-      /*updated_forms=*/{form},
-      /*removed_forms=*/{});
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{form},
+                                 /*removed_forms=*/{},
+                                 AutofillManagerTestApi::pass_key());
 
   // Simulates an autofill event.
   Suggestion suggestion(u"TestValue", SuggestionType::kIbanEntry);
@@ -206,9 +207,9 @@ TEST_F(AutofillFeedbackDataUnitTest,
 
 TEST_F(AutofillFeedbackDataUnitTest, IncludesExtraLogs) {
   FormData form = CreateFeedbackTestFormData();
-  autofill_manager().OnFormsSeen(
-      /*updated_forms=*/{form},
-      /*removed_forms=*/{});
+  autofill_manager().OnFormsSeen(/*updated_forms=*/{form},
+                                 /*removed_forms=*/{},
+                                 AutofillManagerTestApi::pass_key());
 
   base::DictValue extra_logs;
   extra_logs.Set("triggerFormSignature", "123");

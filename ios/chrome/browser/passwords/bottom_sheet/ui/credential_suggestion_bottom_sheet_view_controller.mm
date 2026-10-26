@@ -14,17 +14,18 @@
 #import "components/password_manager/core/browser/features/password_features.h"
 #import "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #import "components/password_manager/ios/shared_password_controller.h"
-#import "components/url_formatter/elide_url.h"
 #import "components/webauthn/ios/features.h"
 #import "ios/chrome/browser/passwords/bottom_sheet/ui/credential_suggestion_bottom_sheet_delegate.h"
 #import "ios/chrome/browser/passwords/bottom_sheet/ui/credential_suggestion_bottom_sheet_handler.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/create_password_manager_title_view.h"
+#import "ios/chrome/browser/shared/ui/bottom_sheet/bottom_sheet_util.h"
 #import "ios/chrome/browser/shared/ui/bottom_sheet/table_view_bottom_sheet_view_controller+subclassing.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_url_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/favicon_content_configuration.h"
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/image_content_configuration.h"
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/table_view_cell_content_configuration.h"
+#import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/credential_provider/net_util.h"
 #import "ios/chrome/common/string_util.h"
 #import "ios/chrome/common/ui/button_stack/button_stack_configuration.h"
@@ -139,14 +140,11 @@ void LogSuggestionAcceptedMetrics(BOOL is_backup_suggestion,
     self.subtitleString = _subtitle;
   } else {
     self.subtitleTextStyle = UIFontTextStyleFootnote;
-    std::u16string formattedURL =
-        url_formatter::FormatUrlForDisplayOmitSchemePathAndTrivialSubdomains(
-            _URL);
     self.subtitleString = l10n_util::GetNSStringF(
         IsConditionalPasskeyLoginEnabled()
             ? IDS_IOS_CREDENTIAL_BOTTOM_SHEET_SUBTITLE_WITH_PASSKEYS
             : IDS_IOS_CREDENTIAL_BOTTOM_SHEET_SUBTITLE,
-        formattedURL);
+        FormatUrlForBottomSheetDisplay(_URL));
   }
 
   [super viewDidLoad];
@@ -302,6 +300,11 @@ void LogSuggestionAcceptedMetrics(BOOL is_backup_suggestion,
     // Setting `attributedText` overrides `textColor` set in the parent class,
     // which does not render visibly in dark mode.
     subtitle.textColor = [UIColor colorNamed:kTextSecondaryColor];
+  } else {
+    // When `_subtitle` is nil, the parent class default subtitle text is used.
+    // Apply semibold styling to the entire default header subtitle.
+    subtitle.font = PreferredFontForTextStyle(UIFontTextStyleFootnote,
+                                              UIFontWeightSemibold);
   }
 }
 
@@ -421,7 +424,7 @@ void LogSuggestionAcceptedMetrics(BOOL is_backup_suggestion,
     [weakSelf.handler displayPasswordManager];
   };
   UIImage* keyIcon =
-      CustomSymbolWithPointSize(kPasswordSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolPassword, kSymbolActionPointSize);
   return [UIAction
       actionWithTitle:l10n_util::GetNSString(
                           IDS_IOS_CREDENTIAL_BOTTOM_SHEET_PASSWORD_MANAGER)
@@ -441,7 +444,7 @@ void LogSuggestionAcceptedMetrics(BOOL is_backup_suggestion,
   };
 
   UIImage* infoIcon =
-      DefaultSymbolWithPointSize(kInfoCircleSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolInfoCircle, kSymbolActionPointSize);
   return [UIAction
       actionWithTitle:l10n_util::GetNSString(
                           IDS_IOS_CREDENTIAL_BOTTOM_SHEET_SHOW_DETAILS)

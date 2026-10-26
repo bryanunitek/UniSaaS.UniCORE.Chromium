@@ -11,6 +11,7 @@
 #include "base/containers/span.h"
 #include "net/device_bound_sessions/registration_fetcher_param.h"
 #include "net/device_bound_sessions/session_challenge_param.h"
+#include "net/device_bound_sessions/session_error.h"
 #include "net/device_bound_sessions/session_service.h"
 #include "net/ssl/ssl_cert_request_info.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -29,14 +30,13 @@ class SessionServiceMock : public SessionService {
               (OnAccessCallback on_access_callback,
                RegistrationFetcherParam registration_params,
                const IsolationInfo& isolation_info,
+               const net::SiteForCookies& site_for_cookies,
                const NetLogWithSource& net_log,
                const std::optional<url::Origin>& original_request_initiator),
               (override));
   MOCK_METHOD(std::optional<SessionService::DeferralParams>,
               ShouldDefer,
-              (DbscRequest & request,
-               HttpRequestHeaders* extra_headers,
-               const FirstPartySetMetadata& first_party_set_metadata),
+              (DbscRequest & request, HttpRequestHeaders* extra_headers),
               (override));
   MOCK_METHOD(void,
               DeferRequestForRefresh,
@@ -48,7 +48,6 @@ class SessionServiceMock : public SessionService {
               SetChallengeForBoundSession,
               (OnAccessCallback on_access_callback,
                DbscRequest& request,
-               const FirstPartySetMetadata& first_party_set_metadata,
                const SessionChallengeParam& challenge_param),
               (override));
   MOCK_METHOD(
@@ -72,9 +71,7 @@ class SessionServiceMock : public SessionService {
               (DeletionReason reason,
                std::optional<base::Time> created_after_time,
                std::optional<base::Time> created_before_time,
-               base::RepeatingCallback<bool(const url::Origin&,
-                                            const net::SchemefulSite&)>
-                   origin_and_site_matcher,
+               OriginAndSiteMatcher origin_and_site_matcher,
                base::OnceClosure completion_callback),
               (override));
   MOCK_METHOD(base::ScopedClosureRunner,
@@ -116,15 +113,17 @@ class SessionServiceMock : public SessionService {
               (override));
   MOCK_METHOD(void,
               HandleResponseHeaders,
-              (DbscRequest & request,
-               HttpResponseHeaders* headers,
-               const FirstPartySetMetadata& first_party_set_metadata),
+              (DbscRequest & request, HttpResponseHeaders* headers),
               (override));
   MOCK_METHOD(void,
               SelectClientCertificate,
               (const GURL& url,
                scoped_refptr<SSLCertRequestInfo> cert_info,
                SelectClientCertificateCallback callback),
+              (override));
+  MOCK_METHOD(void,
+              PrewarmSessionsForUrl,
+              (const GURL& url, PrewarmCallback callback),
               (override));
 };
 

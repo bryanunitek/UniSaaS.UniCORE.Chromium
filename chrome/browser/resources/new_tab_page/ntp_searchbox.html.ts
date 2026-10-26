@@ -25,22 +25,22 @@ export function getHtml(this: NtpSearchboxElement) {
         .isListening="${this.isListening}"
         .darkThemeColorsEnabled="${false}"
         .energyEffectAnimationEnabled="${this.energyEffectAnimationEnabled}"
-        .entrypointName="${'Realbox'}"
         part="animated-glow">
       </search-animated-glow>
     ` : ''}
   <cr-searchbox-input id="input"
       exportparts="searchbox-input"
       ?dropdown-is-visible="${this.dropdownIsVisible}"
-      input-aria-live="${this.inputAriaLive}"
       ?multi-line-enabled="${this.multiLineEnabled}"
       placeholder-text="${this.computePlaceholderText_(this.placeholderText)}"
       searchbox-aria-description="${this.searchboxAriaDescription}"
       searchbox-icon="${this.searchboxIcon_}"
       .selectedMatch="${this.selectedMatch}"
+      .inputKeywordModel="${this.inputKeywordModel}"
       ?input-has-matches="${this.inputHasMatches_()}"
       ?allow-file-paste="${this.ntpRealboxNextEnabled}"
       @focusin="${this.onInputFocusin_}"
+      @searchbox-input-pasted="${this.onSearchboxInputPasted_}"
       @searchbox-input-files-pasted="${this.onSearchboxInputFilesPasted_}"
       @searchbox-input-text-updated="${this.onSearchboxInputTextUpdated_}"
       @input-focus-changed="${this.onInputFocusChanged}">
@@ -52,6 +52,8 @@ export function getHtml(this: NtpSearchboxElement) {
     ${this.shouldShowVoiceLens_(this.searchboxVoiceSearchEnabled_) ? html`
       <div slot="action-buttons" class="searchbox-icon-button-container voice">
         <button id="voiceSearchButton" class="searchbox-icon-button"
+            tabindex="${this.virtualFocusEnabled &&
+                this.dropdownIsVisible ? -1 : 0}"
             @click="${this.onVoiceSearchClick}"
             title="${this.i18n('voiceSearchButtonLabel')}">
         </button>
@@ -60,6 +62,8 @@ export function getHtml(this: NtpSearchboxElement) {
     ${this.shouldShowVoiceLens_(this.searchboxLensSearchEnabled_) ? html`
       <div slot="action-buttons" class="searchbox-icon-button-container lens">
         <button id="lensSearchButton" class="searchbox-icon-button lens"
+            tabindex="${this.virtualFocusEnabled &&
+                this.dropdownIsVisible ? -1 : 0}"
             @click="${this.onLensSearchClick_}"
             title="${this.i18n('lensSearchButtonLabel')}">
         </button>
@@ -69,6 +73,9 @@ export function getHtml(this: NtpSearchboxElement) {
       <cr-searchbox-compose-button id="composeButton" slot="compose-button"
           ?dynamic="${this.ntpRealboxDynamicAiModeButtonEnabled_}"
           ?has-user-input="${this.hasUserInput_}"
+          ?virtual-focus-enabled="${this.virtualFocusEnabled}"
+          ?has-virtual-focus="${this.isAiModeVirtualFocused()}"
+          ?dropdown-is-visible="${this.dropdownIsVisible}"
           @compose-click="${this.onComposeClick_}">
       </cr-searchbox-compose-button>
     ` : ''}
@@ -77,12 +84,11 @@ export function getHtml(this: NtpSearchboxElement) {
     <cr-searchbox-dropdown id="matches" part="searchbox-dropdown"
         exportparts="dropdown-content"
         role="listbox" .result="${this.result}"
+        .selection="${this.selection}"
+        @selection-changed="${this.onSelectionChanged}"
         selected-match-index="${this.selectedMatchIndex}"
         @selected-match-index-changed="${this.onSelectedMatchIndexChanged}"
         ?can-show-secondary-side="${this.canShowSecondarySide}"
-        ?had-secondary-side="${this.hadSecondarySide}"
-        @had-secondary-side-changed="${this.onHadSecondarySideChanged_}"
-        ?has-secondary-side="${this.hasSecondarySide}"
         @has-secondary-side-changed="${this.onHasSecondarySideChanged_}"
         @match-focusin="${this.onMatchFocusin}"
         @match-click="${this.onMatchClick}"

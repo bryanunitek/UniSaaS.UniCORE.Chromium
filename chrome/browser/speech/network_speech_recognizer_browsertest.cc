@@ -15,7 +15,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "chrome/browser/speech/speech_recognizer_delegate.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
@@ -87,7 +87,7 @@ IN_PROC_BROWSER_TEST_F(NetworkSpeechRecognizerBrowserTest, RecognizeSpeech) {
   NetworkSpeechRecognizer recognizer(
       mock_speech_delegate_->GetWeakPtr(),
       browser()
-          ->profile()
+          ->GetProfile()
           ->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcessIOThread(),
       "en" /* locale */);

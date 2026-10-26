@@ -18,7 +18,6 @@
 #include "components/sessions/core/session_types.h"
 #include "ui/base/window_open_disposition.h"
 
-class Browser;
 class BrowserWindowInterface;
 class Profile;
 class SessionRestoreImpl;
@@ -33,8 +32,8 @@ using StartupTabs = std::vector<StartupTab>;
 // SessionRestore handles restoring either the last or saved session. Session
 // restore come in two variants, asynchronous or synchronous. The synchronous
 // variety is meant for startup and blocks until restore is complete.
-// TODO(crbug.com/469787848): Plumb BrowserWindowInterface through the
-// SessionRestore code.
+// TODO(crbug.com/469787848): Migrate SessionRestore implementation internals
+// to BrowserWindowInterface.
 class SessionRestore {
  public:
   // Struct to hold the number of tabs and windows per profile.
@@ -45,6 +44,10 @@ class SessionRestore {
     int app_windows = 0;
   };
 
+  // Keys of the per-profile `kPreSmartRestartSessionState` dictionary pref,
+  // which holds the tab and window counts saved before a restart. Profile
+  // counts are saved separately in local state; see
+  // ProfileDiffAfterRestartRecorder.
   static constexpr char kNormalTabsKey[] = "normal_tabs";
   static constexpr char kNormalWindowsKey[] = "normal_windows";
   static constexpr char kAppTabsKey[] = "app_tabs";
@@ -85,17 +88,18 @@ class SessionRestore {
   // added to it. Returns the last active browser.
   //
   // If |startup_tabs| is non-empty, a tab is added for each of the URLs.
-  static Browser* RestoreSession(Profile* profile,
-                                 Browser* browser,
-                                 BehaviorBitmask behavior,
-                                 const StartupTabs& startup_tabs);
+  static BrowserWindowInterface* RestoreSession(
+      Profile* profile,
+      BrowserWindowInterface* browser,
+      BehaviorBitmask behavior,
+      const StartupTabs& startup_tabs);
 
   // Restores the last session when the last session crashed. It's a wrapper
   // of function RestoreSession.
-  static void RestoreSessionAfterCrash(Browser* browser);
+  static void RestoreSessionAfterCrash(BrowserWindowInterface* browser);
 
   // Opens the startup pages when the last session crashed.
-  static void OpenStartupPagesAfterCrash(Browser* browser);
+  static void OpenStartupPagesAfterCrash(BrowserWindowInterface* browser);
 
   // Specifically used in the restoration of a foreign session.  This function
   // restores the given session windows to multiple browsers. Takes a callback
@@ -120,6 +124,11 @@ class SessionRestore {
 
   // Returns true if we're in the process of restoring |profile|.
   static bool IsRestoring(const Profile* profile);
+
+  // Returns true if any profile's own last session is currently being
+  // restored. Restores of sessions from other devices (foreign sessions) are
+  // ignored.
+  static bool IsAnySessionCurrentlyRestoring();
 
   // Returns true if any session has been restored during the current process
   // lifetime.

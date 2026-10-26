@@ -12,5 +12,5 @@ directly executable in a <script> element, and therefore should not have any
 exports.
 */
 
-(window as WithGlicApi).internalAutoGlicBoot = (windowProxy: WindowProxy) =>
-    new GlicHostRegistryImpl(windowProxy);
+(window as WithGlicApi).internalAutoGlicBoot = (_windowProxy?: WindowProxy) =>
+    new GlicHostRegistryImpl();

@@ -5,11 +5,10 @@
 #include "components/update_client/utils.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <algorithm>
 #include <array>
-#include <cmath>
-#include <cstring>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -94,7 +93,7 @@ std::string GetCrxIdFromPublicKeyHash(base::span<const uint8_t> pk_hash) {
 
 bool VerifyFileHash256(const base::FilePath& filepath,
                        const std::string& expected_hash_str) {
-  std::array<uint8_t, crypto::hash::kSha256Size> expected_hash;
+  std::array<uint8_t, crypto::hash::kSha256Size> expected_hash = {};
   if (!base::HexStringToSpan(expected_hash_str, expected_hash)) {
     return false;
   }
@@ -106,7 +105,7 @@ bool VerifyFileHash256(const base::FilePath& filepath,
     return false;
   }
 
-  std::array<uint8_t, crypto::hash::kSha256Size> hash;
+  std::array<uint8_t, crypto::hash::kSha256Size> hash = {};
   if (!crypto::hash::HashFile(crypto::hash::kSha256, &file, hash)) {
     return false;
   }

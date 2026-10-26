@@ -23,6 +23,7 @@
 #include "upb/mini_table/file.h"
 #include "upb/reflection/def.h"
 #include "upb/reflection/def_type.h"
+#include "upb/reflection/descriptor_bootstrap.h"
 #include "upb/reflection/internal/def_builder.h"
 #include "upb/reflection/internal/desc_state.h"
 #include "upb/reflection/internal/enum_reserved_range.h"
@@ -34,8 +35,8 @@
 #include "upb/port/def.inc"
 
 struct upb_EnumDef {
-  UPB_ALIGN_AS(8) const UPB_DESC(EnumOptions*) opts;
-  const UPB_DESC(FeatureSet*) resolved_features;
+  UPB_ALIGN_AS(8) const google_protobuf_EnumOptions* opts;
+  const google_protobuf_FeatureSet* resolved_features;
   const upb_MiniTableEnum* layout;  // Only for proto2.
   const upb_FileDef* file;
   const upb_MessageDef* containing_type;  // Could be merged with "file".
@@ -49,9 +50,31 @@ struct upb_EnumDef {
   int res_range_count;
   int res_name_count;
   int32_t defaultval;
-  UPB_DESC(SymbolVisibility) visibility;
+  google_protobuf_SymbolVisibility visibility;
   bool is_sorted;  // Whether all of the values are defined in ascending order.
 };
+
+// We store both regular proto enum names and custom JSON enum names in the
+// same strtable (ntoi). This is safe because protoc enforces that custom JSON
+// enum names never conflict with default enum names across different enum
+// values (or are identical, in which case we leave the entry untagged). Because
+// upb_EnumValueDef pointers are arena-aligned to at least 4 bytes (bit 0 is
+// always 0 for untagged pointers), we set bit 0 to tag custom JSON-only names
+// so that regular name lookups can ignore them.
+static const uintptr_t kUpb_EnumDef_JsonOnlyTag = 1ULL;
+
+static upb_value _upb_EnumDef_TagJsonOnly(upb_value v) {
+  v.val |= kUpb_EnumDef_JsonOnlyTag;
+  return v;
+}
+
+static bool _upb_EnumDef_IsJsonOnly(upb_value v) {
+  return (v.val & kUpb_EnumDef_JsonOnlyTag) != 0;
+}
+
+static const upb_EnumValueDef* _upb_EnumDef_Untag(upb_value v) {
+  return (const upb_EnumValueDef*)(v.val & ~kUpb_EnumDef_JsonOnlyTag);
+}
 
 upb_EnumDef* _upb_EnumDef_At(const upb_EnumDef* e, int i) {
   return (upb_EnumDef*)&e[i];
@@ -61,21 +84,46 @@ const upb_MiniTableEnum* _upb_EnumDef_MiniTable(const upb_EnumDef* e) {
   return e->layout;
 }
 
-bool _upb_EnumDef_Insert(upb_EnumDef* e, upb_EnumValueDef* v, upb_Arena* a) {
+void _upb_EnumDef_Insert(upb_DefBuilder* ctx, upb_EnumDef* e,
+                         upb_EnumValueDef* v) {
   const char* name = upb_EnumValueDef_Name(v);
   const upb_value val = upb_value_constptr(v);
-  bool ok = upb_strtable_insert(&e->ntoi, name, strlen(name), val, a);
-  if (!ok) return false;
+  bool ok = upb_strtable_insert(&e->ntoi, name, strlen(name), val, ctx->arena);
+  if (!ok) _upb_DefBuilder_OomErr(ctx);
 
-  // Multiple enumerators can have the same number, first one wins.
+  // Aliased enum values can share the same custom JSON name, first one wins.
+  const char* json_name = upb_EnumValueDef_JsonName(v);
+  size_t json_len = strlen(json_name);
+  if (strcmp(json_name, name) != 0) {
+    upb_value existing_value;
+    if (upb_strtable_lookup2(&e->ntoi, json_name, json_len, &existing_value)) {
+      const upb_EnumValueDef* enumval = _upb_EnumDef_Untag(existing_value);
+      if (upb_EnumValueDef_Number(enumval) != upb_EnumValueDef_Number(v)) {
+        // If the custom JSON name exists, but points to a value with a
+        // different number, then this is a parse/conflict error.
+        _upb_DefBuilder_Errf(ctx,
+                             "duplicate custom json_name (%s) in enum (%s)",
+                             json_name, upb_EnumDef_FullName(e));
+      }
+    } else {
+      upb_value json_val = _upb_EnumDef_TagJsonOnly(val);
+      if (!upb_strtable_insert(&e->ntoi, json_name, json_len, json_val,
+                               ctx->arena)) {
+        _upb_DefBuilder_OomErr(ctx);
+      }
+    }
+  }
+
+  // Multiple enum values can have the same number, first one wins.
   const int number = upb_EnumValueDef_Number(v);
   if (!upb_inttable_lookup(&e->iton, number, NULL)) {
-    return upb_inttable_insert(&e->iton, number, val, a);
+    if (!upb_inttable_insert(&e->iton, number, val, ctx->arena)) {
+      _upb_DefBuilder_OomErr(ctx);
+    }
   }
-  return true;
 }
 
-const UPB_DESC(EnumOptions) * upb_EnumDef_Options(const upb_EnumDef* e) {
+const google_protobuf_EnumOptions* upb_EnumDef_Options(const upb_EnumDef* e) {
   return e->opts;
 }
 
@@ -83,12 +131,11 @@ bool upb_EnumDef_HasOptions(const upb_EnumDef* e) {
   return e->opts != (void*)kUpbDefOptDefault;
 }
 
-const UPB_DESC(FeatureSet) *
-    upb_EnumDef_ResolvedFeatures(const upb_EnumDef* e) {
+const google_protobuf_FeatureSet* upb_EnumDef_ResolvedFeatures(const upb_EnumDef* e) {
   return e->resolved_features;
 }
 
-UPB_DESC(SymbolVisibility) upb_EnumDef_Visibility(const upb_EnumDef* e) {
+google_protobuf_SymbolVisibility upb_EnumDef_Visibility(const upb_EnumDef* e) {
   return e->visibility;
 }
 
@@ -130,6 +177,16 @@ upb_StringView upb_EnumDef_ReservedName(const upb_EnumDef* e, int i) {
 
 int upb_EnumDef_ValueCount(const upb_EnumDef* e) { return e->value_count; }
 
+const upb_EnumValueDef* upb_EnumDef_FindByJsonNameWithSize(const upb_EnumDef* e,
+                                                           const char* name,
+                                                           size_t size) {
+  upb_value v;
+  if (!upb_strtable_lookup2(&e->ntoi, name, size, &v)) {
+    return NULL;
+  }
+  return _upb_EnumDef_Untag(v);
+}
+
 const upb_EnumValueDef* upb_EnumDef_FindValueByName(const upb_EnumDef* e,
                                                     const char* name) {
   return upb_EnumDef_FindValueByNameWithSize(e, name, strlen(name));
@@ -138,9 +195,13 @@ const upb_EnumValueDef* upb_EnumDef_FindValueByName(const upb_EnumDef* e,
 const upb_EnumValueDef* upb_EnumDef_FindValueByNameWithSize(
     const upb_EnumDef* e, const char* name, size_t size) {
   upb_value v;
-  return upb_strtable_lookup2(&e->ntoi, name, size, &v)
-             ? upb_value_getconstptr(v)
-             : NULL;
+  if (!upb_strtable_lookup2(&e->ntoi, name, size, &v)) {
+    return NULL;
+  }
+  if (_upb_EnumDef_IsJsonOnly(v)) {
+    return NULL;
+  }
+  return upb_value_getconstptr(v);
 }
 
 const upb_EnumValueDef* upb_EnumDef_FindValueByNumber(const upb_EnumDef* e,
@@ -161,14 +222,14 @@ const upb_EnumValueDef* upb_EnumDef_Value(const upb_EnumDef* e, int i) {
   return _upb_EnumValueDef_At(e->values, i);
 }
 
-bool upb_EnumDef_IsClosed(const upb_EnumDef* e) {
-  if (UPB_TREAT_CLOSED_ENUMS_LIKE_OPEN) return false;
-  return upb_EnumDef_IsSpecifiedAsClosed(e);
+static bool upb_EnumDef_IsSpecifiedAsClosed(const upb_EnumDef* e) {
+  return google_protobuf_FeatureSet_enum_type(e->resolved_features) ==
+         google_protobuf_FeatureSet_CLOSED;
 }
 
-bool upb_EnumDef_IsSpecifiedAsClosed(const upb_EnumDef* e) {
-  return UPB_DESC(FeatureSet_enum_type)(e->resolved_features) ==
-         UPB_DESC(FeatureSet_CLOSED);
+bool upb_EnumDef_IsClosed(const upb_EnumDef* e) {
+  if (_upb_FileDef_ClosedEnumCheckingDisabled(e->file)) return false;
+  return upb_EnumDef_IsSpecifiedAsClosed(e);
 }
 
 bool upb_EnumDef_MiniDescriptorEncode(const upb_EnumDef* e, upb_Arena* a,
@@ -237,60 +298,70 @@ static upb_StringView* _upb_EnumReservedNames_New(
 }
 
 static void create_enumdef(upb_DefBuilder* ctx, const char* prefix,
-                           const UPB_DESC(EnumDescriptorProto) * enum_proto,
-                           const UPB_DESC(FeatureSet*) parent_features,
+                           const google_protobuf_EnumDescriptorProto* enum_proto,
+                           const google_protobuf_FeatureSet* parent_features,
                            upb_EnumDef* e) {
-  const UPB_DESC(EnumValueDescriptorProto)* const* values;
-  const UPB_DESC(EnumDescriptorProto_EnumReservedRange)* const* res_ranges;
+  const google_protobuf_EnumValueDescriptorProto* const* values;
+  const google_protobuf_EnumDescriptorProto_EnumReservedRange* const* res_ranges;
   const upb_StringView* res_names;
   upb_StringView name;
   size_t n_value, n_res_range, n_res_name;
 
   UPB_DEF_SET_OPTIONS(e->opts, EnumDescriptorProto, EnumOptions, enum_proto);
   e->resolved_features = _upb_DefBuilder_ResolveFeatures(
-      ctx, parent_features, UPB_DESC(EnumOptions_features)(e->opts));
+      ctx, parent_features, google_protobuf_EnumOptions_features(e->opts));
 
   // Must happen before _upb_DefBuilder_Add()
   e->file = _upb_DefBuilder_File(ctx);
 
-  name = UPB_DESC(EnumDescriptorProto_name)(enum_proto);
+  name = google_protobuf_EnumDescriptorProto_name(enum_proto);
 
   e->full_name = _upb_DefBuilder_MakeFullName(ctx, prefix, name);
   _upb_DefBuilder_Add(ctx, e->full_name,
                       _upb_DefType_Pack(e, UPB_DEFTYPE_ENUM));
 
-  values = UPB_DESC(EnumDescriptorProto_value)(enum_proto, &n_value);
-
-  bool ok = upb_strtable_init(&e->ntoi, n_value, ctx->arena);
-  if (!ok) _upb_DefBuilder_OomErr(ctx);
-
-  ok = upb_inttable_init(&e->iton, ctx->arena);
-  if (!ok) _upb_DefBuilder_OomErr(ctx);
-
-  e->defaultval = 0;
-  e->value_count = n_value;
-  e->values = _upb_EnumValueDefs_New(ctx, prefix, n_value, values,
-                                     e->resolved_features, e, &e->is_sorted);
+  values = google_protobuf_EnumDescriptorProto_value(enum_proto, &n_value);
 
   if (n_value == 0) {
     _upb_DefBuilder_Errf(ctx, "enums must contain at least one value (%s)",
                          e->full_name);
   }
 
+  e->defaultval = google_protobuf_EnumValueDescriptorProto_number(values[0]);
+
+  // When the special UPB_TREAT_CLOSED_ENUMS_LIKE_OPEN is enabled, we have to
+  // exempt closed enums from this check, even when we are treating them as
+  // open.
+  //
+  // We rely on the fact that the proto compiler will have already ensured that
+  // implicit presence fields do not use closed enums, even if we are treating
+  // them as open.
+  if (!upb_EnumDef_IsSpecifiedAsClosed(e) && e->defaultval != 0) {
+    _upb_DefBuilder_Errf(ctx,
+                         "for open enums, the first value must be zero (%s)",
+                         upb_EnumDef_FullName(e));
+  }
+
+  bool ok = upb_strtable_init(&e->ntoi, n_value * 2, ctx->arena);
+  if (!ok) _upb_DefBuilder_OomErr(ctx);
+
+  ok = upb_inttable_init(&e->iton, ctx->arena);
+  if (!ok) _upb_DefBuilder_OomErr(ctx);
+
+  e->value_count = n_value;
+  e->values = _upb_EnumValueDefs_New(ctx, prefix, n_value, values,
+                                     e->resolved_features, e, &e->is_sorted);
+
   res_ranges =
-      UPB_DESC(EnumDescriptorProto_reserved_range)(enum_proto, &n_res_range);
+      google_protobuf_EnumDescriptorProto_reserved_range(enum_proto, &n_res_range);
   e->res_range_count = n_res_range;
   e->res_ranges = _upb_EnumReservedRanges_New(ctx, n_res_range, res_ranges, e);
 
-  res_names =
-      UPB_DESC(EnumDescriptorProto_reserved_name)(enum_proto, &n_res_name);
+  res_names = google_protobuf_EnumDescriptorProto_reserved_name(enum_proto, &n_res_name);
   e->res_name_count = n_res_name;
   e->res_names = _upb_EnumReservedNames_New(ctx, n_res_name, res_names);
 
-  e->visibility = UPB_DESC(EnumDescriptorProto_visibility)(enum_proto);
-
-  if (!upb_inttable_compact(&e->iton, ctx->arena)) _upb_DefBuilder_OomErr(ctx);
-
+  e->visibility = google_protobuf_EnumDescriptorProto_visibility(enum_proto);
   if (upb_EnumDef_IsClosed(e)) {
     if (ctx->layout) {
       e->layout = upb_MiniTableFile_Enum(ctx->layout, ctx->enum_count++);
@@ -303,9 +374,8 @@ static void create_enumdef(upb_DefBuilder* ctx, const char* prefix,
 }
 
 upb_EnumDef* _upb_EnumDefs_New(upb_DefBuilder* ctx, int n,
-                               const UPB_DESC(EnumDescriptorProto*)
-                                   const* protos,
-                               const UPB_DESC(FeatureSet*) parent_features,
+                               const google_protobuf_EnumDescriptorProto* const* protos,
+                               const google_protobuf_FeatureSet* parent_features,
                                const upb_MessageDef* containing_type) {
   _upb_DefType_CheckPadding(sizeof(upb_EnumDef));
 

@@ -5,7 +5,6 @@
 #include "chrome/browser/ash/accessibility/event_handler_common.h"
 
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "extensions/browser/api/offscreen/offscreen_document_manager.h"
@@ -22,7 +21,7 @@ extensions::ExtensionHost* GetAccessibilityExtensionHost(
   if (!AccessibilityManager::Get())
     return nullptr;
 
-  content::BrowserContext* context = ProfileManager::GetActiveUserProfile();
+  content::BrowserContext* context = AccessibilityManager::Get()->profile();
   if (!context)
     return nullptr;
 
@@ -44,7 +43,7 @@ extensions::OffscreenDocumentHost* GetAccessibilityOffscreenDocumentHost(
     return nullptr;
   }
 
-  content::BrowserContext* context = ProfileManager::GetActiveUserProfile();
+  content::BrowserContext* context = AccessibilityManager::Get()->profile();
   if (!context) {
     return nullptr;
   }
@@ -76,7 +75,7 @@ void ForwardKeyToExtension(const ui::KeyEvent& key_event,
   }
 
   content::RenderFrameHost* main_frame = host->main_frame_host();
-  DCHECK(main_frame);
+  CHECK(main_frame, base::NotFatalUntil::M160);
 
   const input::NativeWebKeyboardEvent web_event(key_event);
   // Don't forward latency info, as these are getting forwarded to an extension.
@@ -91,7 +90,7 @@ void ForwardMouseToExtension(const ui::MouseEvent& mouse_event,
   }
 
   content::RenderFrameHost* main_frame = host->main_frame_host();
-  DCHECK(main_frame);
+  CHECK(main_frame, base::NotFatalUntil::M160);
 
   if (mouse_event.type() == ui::EventType::kMouseExited) {
     VLOG(3) << "Couldn't forward unsupported mouse event to extension";

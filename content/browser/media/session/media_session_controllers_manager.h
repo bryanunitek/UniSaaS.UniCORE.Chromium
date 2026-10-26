@@ -67,9 +67,10 @@ class CONTENT_EXPORT MediaSessionControllersManager {
       const MediaPlayerId& id,
       const media_session::MediaPosition& position);
 
-  // Called when entering/leaving Picture-in-Picture for the associated
-  // WebContents.
-  void PictureInPictureStateChanged(bool is_picture_in_picture);
+  // Called when entering/leaving Picture-in-Picture for the given media
+  // player.
+  void PictureInPictureStateChanged(const MediaPlayerId& id,
+                                    bool is_picture_in_picture);
 
   // Called when the WebContents was muted or unmuted.
   void WebContentsMutedStateChanged(bool muted);
@@ -98,6 +99,9 @@ class CONTENT_EXPORT MediaSessionControllersManager {
   // Called when video visibility for the player |id| has changed.
   void OnVideoVisibilityChanged(const MediaPlayerId& id,
                                 bool meets_visibility_threshold);
+
+  // Called when video frame availability for the player |id| has changed.
+  void OnVideoFrameAvailabilityChanged(const MediaPlayerId& id, bool available);
 
  private:
   using ControllersMap =

@@ -73,7 +73,7 @@ import java.util.concurrent.TimeoutException;
 })
 @EnableFeatures({MediaFeatures.AUTO_PICTURE_IN_PICTURE_ANDROID})
 @Restriction(RESTRICTION_TYPE_NON_AUTO)
-// PictureInPicture#isEnabled() is true on Android 11+.
+// Web Picture-in-Picture requires Android 11+.
 @DisableIf.Build(sdk_is_less_than = VERSION_CODES.R)
 @Batch(Batch.PER_CLASS)
 public class AutoPictureInPictureTabHelperTest {
@@ -91,6 +91,8 @@ public class AutoPictureInPictureTabHelperTest {
     private static final String PIP_BUTTON_ID = "pip";
     private static final String AUTO_PIP_VIDEO_PAGE =
             "/chrome/test/data/media/picture-in-picture/autopip-video.html";
+    private static final String AUTO_PIP_VIDEO_SANDBOXED_PAGE =
+            "/chrome/test/data/media/picture-in-picture/autopip-video-sandboxed.html";
     private static final String AUTO_PIP_NOT_REGISTERED_PAGE =
             "/chrome/test/data/media/picture-in-picture/autopip-no-register.html";
     private static final String VIDEO_CONFERENCING_PAGE =
@@ -134,11 +136,13 @@ public class AutoPictureInPictureTabHelperTest {
         switchToTab(newTab);
         AutoPictureInPictureTabHelperTestUtils.waitForAutoPictureInPictureState(
                 webContents, true, "Did not enter auto-PiP after tab hidden.");
+        PictureInPictureActivity pipActivity = getPictureInPictureActivity();
 
         // Return to the tab. This should exit auto-PiP.
         switchToTab(originalTab);
         AutoPictureInPictureTabHelperTestUtils.waitForAutoPictureInPictureState(
                 webContents, false, "Did not exit auto-PiP after tab shown.");
+        waitForPipWindowToClose(pipActivity);
     }
 
     @Test
@@ -166,16 +170,17 @@ public class AutoPictureInPictureTabHelperTest {
         switchToTab(newTab);
         AutoPictureInPictureTabHelperTestUtils.waitForAutoPictureInPictureState(
                 webContents, true, "Did not enter auto-PiP after tab hidden.");
+        PictureInPictureActivity pipActivity = getPictureInPictureActivity();
 
         // Return to the tab. This should exit auto-PiP.
         switchToTab(originalTab);
         AutoPictureInPictureTabHelperTestUtils.waitForAutoPictureInPictureState(
                 webContents, false, "Did not exit auto-PiP after tab shown.");
+        waitForPipWindowToClose(pipActivity);
     }
 
     @Test
     @MediumTest
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // crbug.com/511288544
     public void testHideAutoPip() throws TimeoutException {
         WebContents webContents = loadUrlAndInitializeForTest(AUTO_PIP_VIDEO_PAGE);
         Tab originalTab = mPage.getTab();
@@ -194,10 +199,12 @@ public class AutoPictureInPictureTabHelperTest {
                             activity.areTabModelsInitialized(),
                             Matchers.is(true));
                     Criteria.checkThat(
-                            "Still on the original tab.",
-                            activity.getTabModelSelector().getCurrentTab().getId()
-                                    == originalTab.getId(),
-                            Matchers.is(false));
+                            "Still on the original tab or tab not fully initialized.",
+                            activity.getTabModelSelector() != null
+                                    && activity.getTabModelSelector().getCurrentTab() != null
+                                    && activity.getTabModelSelector().getCurrentTab().getId()
+                                            != originalTab.getId(),
+                            Matchers.is(true));
                 });
 
         // Now that the activity is gone, verify the C++ state.
@@ -291,6 +298,29 @@ public class AutoPictureInPictureTabHelperTest {
 
     @Test
     @MediumTest
+    public void testDoesNotAutopipWithOpaqueOrigin() throws TimeoutException {
+        WebContents webContents = loadUrlAndInitializeForTest(AUTO_PIP_VIDEO_SANDBOXED_PAGE);
+        assertTrue(
+                "Page should have registered for auto-pip.",
+                AutoPictureInPictureTabHelperTestUtils.hasAutoPictureInPictureBeenRegistered(
+                        webContents));
+
+        // Create a new tab in the background to switch to later.
+        Tab originalTab = mPage.getTab();
+        Tab newTab = createNewTabInBackground(originalTab);
+
+        fulfillVideoPlaybackConditions(webContents);
+
+        // Switch away from the tab.
+        switchToTab(newTab);
+
+        // Since the site has an opaque origin, it should not enter auto-PiP.
+        AutoPictureInPictureTabHelperTestUtils.waitForAutoPictureInPictureState(
+                webContents, false, "Should not enter auto-PiP with opaque origin.");
+    }
+
+    @Test
+    @MediumTest
     public void testDoesNotAutopipWithoutPlayback() {
         WebContents webContents = loadUrlAndInitializeForTest(AUTO_PIP_VIDEO_PAGE);
         assertTrue(
@@ -356,6 +386,7 @@ public class AutoPictureInPictureTabHelperTest {
         DOMUtils.clickNodeWithJavaScript(webContents, PIP_BUTTON_ID);
         AutoPictureInPictureTabHelperTestUtils.waitForPictureInPictureVideoState(
                 webContents, true, "Did not enter PiP after manual request.");
+        getPictureInPictureActivity();
 
         // Create a new tab in the background to switch to later.
         Tab originalTab = mPage.getTab();
@@ -712,7 +743,9 @@ public class AutoPictureInPictureTabHelperTest {
                         return false;
                     }
                 },
-                "Video element did not enter Picture-in-Picture mode.");
+                "Video element did not enter Picture-in-Picture mode.",
+                PIP_TIMEOUT_MS,
+                CriteriaHelper.DEFAULT_POLLING_INTERVAL);
 
         AutoPictureInPictureTabHelperTestUtils.waitForAutoPictureInPictureState(
                 webContents, true, "Did not enter auto-PiP after tab hidden.");
@@ -730,20 +763,24 @@ public class AutoPictureInPictureTabHelperTest {
      * @return The current {@link PictureInPictureActivity} instance, or null if not found.
      */
     private PictureInPictureActivity getPictureInPictureActivity() {
-        final Activity[] activityHolder = new Activity[1];
+        final PictureInPictureActivity[] activityHolder = new PictureInPictureActivity[1];
         CriteriaHelper.pollUiThread(
                 () -> {
+                    ChromeTabbedActivity cta = getActivity();
+                    if (cta == null) return false;
                     List<Activity> activities = ApplicationStatus.getRunningActivities();
                     for (Activity activity : activities) {
-                        if (activity instanceof PictureInPictureActivity) {
-                            activityHolder[0] = activity;
-                            return true;
+                        if (activity instanceof PictureInPictureActivity pipActivity) {
+                            activityHolder[0] = pipActivity;
+                            return pipActivity.isPipTransitionCompleteForTesting(cta);
                         }
                     }
                     return false;
                 },
-                "Could not find PictureInPictureActivity.");
-        return (PictureInPictureActivity) activityHolder[0];
+                "Could not find PictureInPictureActivity in PiP mode.",
+                PIP_TIMEOUT_MS,
+                CriteriaHelper.DEFAULT_POLLING_INTERVAL);
+        return activityHolder[0];
     }
 
     /** Waits for the remote action lists to be initialized. */
@@ -765,7 +802,9 @@ public class AutoPictureInPictureTabHelperTest {
                     return pipActivity.getActionsForTesting().stream()
                             .anyMatch(action -> action.getTitle().equals(hideActionTitle));
                 },
-                "Hide action not found.");
+                "Hide action not found.",
+                PIP_TIMEOUT_MS,
+                CriteriaHelper.DEFAULT_POLLING_INTERVAL);
     }
 
     /**
@@ -776,8 +815,7 @@ public class AutoPictureInPictureTabHelperTest {
             throws TimeoutException {
         PictureInPictureActivity pipActivity = enterAutoPip(webContents, originalTab);
 
-        // Verify video is playing and hide action is visible before clicking it.
-        DOMUtils.waitForMediaPlay(webContents, VIDEO_ID);
+        // Verify hide action is visible before clicking it.
         waitForHideActionPresence(pipActivity);
 
         // Simulate clicking the hide button.

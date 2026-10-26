@@ -24,13 +24,14 @@
 #include "ash/webui/diagnostics_ui/mojom/input_data_provider.mojom.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/command_line.h"
-#include "base/compiler_specific.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
+#include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/message_loop/message_pump_for_ui.h"
@@ -45,7 +46,6 @@
 #include "chromeos/ash/components/mojo_service_manager/fake_mojo_service_manager.h"
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
-#include "chromeos/ash/components/test/ash_test_suite.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "content/public/test/browser_task_environment.h"
@@ -71,14 +71,6 @@
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/widget.h"
 
-// Note: this is not a recommended pattern, but works and allows cleanly
-// formatted invocations for this test set.
-#define EXPECT_KEY_EVENTS(observerptr, id, ...)    \
-  do {                                             \
-    SCOPED_TRACE("EXPECT_KEY_EVENTS invocation");  \
-    ExpectKeyEvents(observerptr, id, __VA_ARGS__); \
-  } while (0);
-
 namespace ash {
 namespace diagnostics {
 
@@ -96,9 +88,9 @@ constexpr mojom::TopRowKey kClassicTopRowKeys[] = {
     mojom::TopRowKey::kVolumeDown,
     mojom::TopRowKey::kVolumeUp};
 
-const std::vector<uint32_t> kInternalJinlonScanCodes = {
-    0xEA, 0xE7, 0x91, 0x92, 0x93, 0x94, 0x95,
-    0x96, 0x97, 0x98, 0xA0, 0xAE, 0xB0};
+constexpr uint32_t kInternalJinlonScanCodes[] = {0xEA, 0xE7, 0x91, 0x92, 0x93,
+                                                 0x94, 0x95, 0x96, 0x97, 0x98,
+                                                 0xA0, 0xAE, 0xB0};
 
 constexpr mojom::TopRowKey kInternalJinlonTopRowKeys[] = {
     mojom::TopRowKey::kBack,
@@ -504,7 +496,8 @@ class FakeInputDeviceInfoHelper : public InputDeviceInfoHelper {
           ui::KeyboardCapability::DeviceType::kDeviceInternalKeyboard;
       info->keyboard_top_row_layout =
           ui::KeyboardCapability::KeyboardTopRowLayout::kKbdTopRowLayoutCustom;
-      info->keyboard_scan_codes = kInternalJinlonScanCodes;
+      info->keyboard_scan_codes.assign(std::begin(kInternalJinlonScanCodes),
+                                       std::end(kInternalJinlonScanCodes));
 
       keyboard_info = std::make_unique<ui::KeyboardCapability::KeyboardInfo>();
       keyboard_info->device_type =
@@ -514,7 +507,9 @@ class FakeInputDeviceInfoHelper : public InputDeviceInfoHelper {
           std::end(kInternalJinlonActionKeys));
       keyboard_info->top_row_layout =
           ui::KeyboardCapability::KeyboardTopRowLayout::kKbdTopRowLayoutCustom;
-      keyboard_info->top_row_scan_codes = kInternalJinlonScanCodes;
+      keyboard_info->top_row_scan_codes.assign(
+          std::begin(kInternalJinlonScanCodes),
+          std::end(kInternalJinlonScanCodes));
       EXPECT_EQ(7, id);
     } else if (base_name == "event8") {
       device_caps = ui::kMicrosoftBluetoothNumberPad;
@@ -541,7 +536,8 @@ class FakeInputDeviceInfoHelper : public InputDeviceInfoHelper {
           ui::KeyboardCapability::DeviceType::kDeviceInternalKeyboard;
       info->keyboard_top_row_layout =
           ui::KeyboardCapability::KeyboardTopRowLayout::kKbdTopRowLayoutCustom;
-      info->keyboard_scan_codes = kInternalJinlonScanCodes;
+      info->keyboard_scan_codes.assign(std::begin(kInternalJinlonScanCodes),
+                                       std::end(kInternalJinlonScanCodes));
       // Set 0xC4 to be F8.
       info->keyboard_scan_codes[7] = 0xC4;
 
@@ -553,7 +549,9 @@ class FakeInputDeviceInfoHelper : public InputDeviceInfoHelper {
           std::end(kInternalJinlonActionKeys));
       keyboard_info->top_row_layout =
           ui::KeyboardCapability::KeyboardTopRowLayout::kKbdTopRowLayoutCustom;
-      keyboard_info->top_row_scan_codes = kInternalJinlonScanCodes;
+      keyboard_info->top_row_scan_codes.assign(
+          std::begin(kInternalJinlonScanCodes),
+          std::end(kInternalJinlonScanCodes));
       keyboard_info->top_row_scan_codes[7] = 0xC4;
       keyboard_info->top_row_action_keys[7] = ui::TopRowActionKey::kUnknown;
       EXPECT_EQ(11, id);
@@ -660,8 +658,6 @@ class InputDataProviderTest : public AshTestBase {
     scoped_feature_list_->InitAndEnableFeature(
         features::kEnableExternalKeyboardsInDiagnostics);
 
-    ui::ResourceBundle::CleanupSharedInstance();
-    AshTestSuite::LoadTestResources();
     AshTestBase::SetUp();
 
     // Note: some init for creating widgets is performed in base SetUp
@@ -726,34 +722,33 @@ class InputDataProviderTest : public AshTestBase {
 
   void ExpectKeyEvents(FakeKeyboardObserver* fake_observer,
                        uint32_t id,
-                       std::initializer_list<ExpectedKeyEvent> list) {
+                       base::span<const ExpectedKeyEvent> events,
+                       base::Location location = base::Location::Current()) {
+    testing::ScopedTrace trace(location.file_name(), location.line_number(),
+                               "ExpectKeyEvents invocation");
+
     // Make sure the test does something...
-    EXPECT_TRUE(std::size(list) > 0);
+    EXPECT_FALSE(events.empty());
 
-    size_t i;
-
-    i = 0;
-    for (auto* iter = list.begin(); iter != list.end();
-         UNSAFE_TODO(iter++), i++) {
-      (*provider_->watchers_)[id]->PostKeyEvent(iter->down, iter->key.key_code,
-                                                iter->key.at_scan_code);
+    for (const auto& event : events) {
+      (*provider_->watchers_)[id]->PostKeyEvent(event.down, event.key.key_code,
+                                                event.key.at_scan_code);
     }
     base::RunLoop().RunUntilIdle();
 
-    ASSERT_EQ(std::size(list), fake_observer->events_.size());
+    ASSERT_EQ(events.size(), fake_observer->events_.size());
 
-    i = 0;
-    for (auto* iter = list.begin(); iter != list.end();
-         UNSAFE_TODO(iter++), i++) {
+    for (size_t i = 0; i < events.size(); ++i) {
+      const auto& event = events[i];
       EXPECT_EQ(
           *fake_observer->events_[i].second,
           mojom::KeyEvent(/*id=*/id,
-                          /*type=*/iter->down ? mojom::KeyEventType::kPress
+                          /*type=*/event.down ? mojom::KeyEventType::kPress
                                               : mojom::KeyEventType::kRelease,
-                          /*key_code=*/iter->key.key_code,
-                          /*scan_code=*/iter->key.at_scan_code,
-                          /*top_row_position=*/iter->position))
-          << " which is EXPECT_KEY_EVENTS item #" << i;
+                          /*key_code=*/event.key.key_code,
+                          /*scan_code=*/event.key.at_scan_code,
+                          /*top_row_position=*/event.position))
+          << " which is ExpectKeyEvents item #" << i;
     }
   }
 
@@ -877,8 +872,6 @@ TEST_F(InputDataProviderTest, GetConnectedDevices_HasInternalKeyboard) {
 }
 
 TEST_F(InputDataProviderTest, GetConnectedDevices_SplitModifierKeyboard) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kModifierSplit);
 
   // Initialize one split modifier keyboard in DeviceDataManager.
   std::vector<ui::KeyboardDevice> keyboard_devices;
@@ -897,8 +890,6 @@ TEST_F(InputDataProviderTest, GetConnectedDevices_SplitModifierKeyboard) {
 }
 
 TEST_F(InputDataProviderTest, FilterOutSplitModifierKeyboardWithoutConfig) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kModifierSplit);
 
   // Initialize one split modifier keyboard in DeviceDataManager.
   std::vector<ui::KeyboardDevice> keyboard_devices;
@@ -1600,7 +1591,7 @@ TEST_F(InputDataProviderTest, KeyObservationRemoval) {
   ASSERT_TRUE((*provider_->watchers_)[6]);
 
   // Test a key event.
-  EXPECT_KEY_EVENTS(fake_observer.get(), 6u, {{kKeyA, -1}});
+  ExpectKeyEvents(fake_observer.get(), 6u, {{kKeyA, -1}});
 
   // Disconnect keyboard while it is being observed.
   ui::DeviceEvent remove_kbd_event(ui::DeviceEvent::DeviceType::INPUT,
@@ -1636,11 +1627,11 @@ TEST_F(InputDataProviderTest, KeyObservationMultiple) {
 
   ASSERT_TRUE((*provider_->watchers_)[6]);
 
-  EXPECT_KEY_EVENTS(fake_observer.get(), 6u,
-                    {{kKeyA, -1, true},
-                     {kKeyB, -1, true},
-                     {kKeyA, -1, false},
-                     {kKeyB, -1, false}});
+  ExpectKeyEvents(fake_observer.get(), 6u,
+                  {{kKeyA, -1, true},
+                   {kKeyB, -1, true},
+                   {kKeyA, -1, false},
+                   {kKeyB, -1, false}});
 }
 
 TEST_F(InputDataProviderTest, KeyObservationObeysFocus) {
@@ -2160,12 +2151,12 @@ TEST_F(InputDataProviderTest, KeyObservationTopRowBasic) {
 
   ASSERT_TRUE((*provider_->watchers_)[6]);
 
-  EXPECT_KEY_EVENTS(fake_observer.get(), 6u,
-                    {{kKeyEsc, -1},
-                     {kKeyF1, 0},
-                     {kKeyF10, 9},
-                     {kKeyMenu, -1},
-                     {kKeyDelete, -1}});
+  ExpectKeyEvents(fake_observer.get(), 6u,
+                  {{kKeyEsc, -1},
+                   {kKeyF1, 0},
+                   {kKeyF10, 9},
+                   {kKeyMenu, -1},
+                   {kKeyDelete, -1}});
 }
 
 TEST_F(InputDataProviderTest, KeyObservationTopRowUnknownAction) {
@@ -2209,25 +2200,25 @@ TEST_F(InputDataProviderTest, KeyObservationTopRowUnknownAction) {
 
   ASSERT_TRUE((*provider_->watchers_)[11]);
 
-  EXPECT_KEY_EVENTS(fake_observer.get(), 11u,
-                    {{kKeyEsc, -1},
-                     {kKeyActionBack, 0},
-                     {kKeyF1, 0},
-                     {kKeyActionRefresh, 1},
-                     {kKeyActionFullscreen, 2},
-                     {kKeyActionOverview, 3},
-                     {kKeyActionScreenshot, 4},
-                     {kKeyActionScreenBrightnessDown, 5},
-                     {kKeyActionScreenBrightnessUp, 6},
-                     {{0, kUnknownScancode, 0}, kUnknownScancodeIndex},
-                     {kKeyF8, 7},
-                     {kKeyActionKeyboardBrightnessDown, 8},
-                     {kKeyActionKeyboardBrightnessUp, 9},
-                     {kKeyActionKeyboardVolumeMute, 10},
-                     {kKeyF10, 9},
-                     {kKeyActionKeyboardVolumeDown, 11},
-                     {kKeyActionKeyboardVolumeUp, 12},
-                     {kKeySleep, -1}});
+  ExpectKeyEvents(fake_observer.get(), 11u,
+                  {{kKeyEsc, -1},
+                   {kKeyActionBack, 0},
+                   {kKeyF1, 0},
+                   {kKeyActionRefresh, 1},
+                   {kKeyActionFullscreen, 2},
+                   {kKeyActionOverview, 3},
+                   {kKeyActionScreenshot, 4},
+                   {kKeyActionScreenBrightnessDown, 5},
+                   {kKeyActionScreenBrightnessUp, 6},
+                   {{0, kUnknownScancode, 0}, kUnknownScancodeIndex},
+                   {kKeyF8, 7},
+                   {kKeyActionKeyboardBrightnessDown, 8},
+                   {kKeyActionKeyboardBrightnessUp, 9},
+                   {kKeyActionKeyboardVolumeMute, 10},
+                   {kKeyF10, 9},
+                   {kKeyActionKeyboardVolumeDown, 11},
+                   {kKeyActionKeyboardVolumeUp, 12},
+                   {kKeySleep, -1}});
 }
 
 // TODO(b/208729519): Not available until we can test Drallion keyboards.
@@ -2291,16 +2282,16 @@ TEST_F(InputDataProviderTest, KeyObservationTopRowExternalUSB) {
   ASSERT_TRUE((*provider_->watchers_)[9]);
 
   // Test with generic external keyboard.
-  EXPECT_KEY_EVENTS(fake_observer.get(), 9u,
-                    {{kKeyA, -1},
-                     {kKeyB, -1},
-                     {kKeyMenu, -1},
-                     {kKeyDelete, -1},
-                     {kKeyEsc, -1},
-                     {kKeyF1, 0},
-                     {kKeyF10, 9},
-                     {kKeyF11, 10},
-                     {kKeyF12, 11}});
+  ExpectKeyEvents(fake_observer.get(), 9u,
+                  {{kKeyA, -1},
+                   {kKeyB, -1},
+                   {kKeyMenu, -1},
+                   {kKeyDelete, -1},
+                   {kKeyEsc, -1},
+                   {kKeyF1, 0},
+                   {kKeyF10, 9},
+                   {kKeyF11, 10},
+                   {kKeyF12, 11}});
 }
 
 TEST_F(InputDataProviderTest, KeyboardInputLog) {
@@ -2333,7 +2324,7 @@ TEST_F(InputDataProviderTest, KeyboardInputLog) {
   ASSERT_TRUE((*provider_->watchers_)[6]);
 
   // Test a key event.
-  EXPECT_KEY_EVENTS(fake_observer.get(), 6u, {{kKeyA, -1}});
+  ExpectKeyEvents(fake_observer.get(), 6u, {{kKeyA, -1}});
 
   // Disconnect keyboard while it is being observed.
   ui::DeviceEvent remove_kbd_event(ui::DeviceEvent::DeviceType::INPUT,
@@ -2389,7 +2380,7 @@ TEST_F(InputDataProviderTest, KeyboardTesterRoutineDurationMetric) {
   ASSERT_TRUE((*provider_->watchers_)[6]);
 
   // Test a key event.
-  EXPECT_KEY_EVENTS(fake_observer.get(), /*id=*/6u, {{kKeyA, -1}});
+  ExpectKeyEvents(fake_observer.get(), /*id=*/6u, {{kKeyA, -1}});
 
   // Disconnect keyboard while it is being observed.
   ui::DeviceEvent remove_kbd_event(ui::DeviceEvent::DeviceType::INPUT,
@@ -2436,7 +2427,7 @@ TEST_F(InputDataProviderTest,
   ASSERT_TRUE((*provider_->watchers_)[6]);
 
   // Test a key event.
-  EXPECT_KEY_EVENTS(fake_observer.get(), /*id=*/6u, {{kKeyA, -1}});
+  ExpectKeyEvents(fake_observer.get(), /*id=*/6u, {{kKeyA, -1}});
 
   // Manually destroy the provider.
   provider_.reset();
@@ -2772,6 +2763,41 @@ TEST_F(InputDataProviderTest, SetA11yTouchPassthrough) {
 
   ASSERT_FALSE(window->GetProperty(
       aura::client::kAccessibilityTouchExplorationPassThrough));
+}
+
+TEST_F(InputDataProviderTest, DestructorDoesNotCrashWhenObserving) {
+  std::unique_ptr<FakeKeyboardObserver> fake_observer1 =
+      std::make_unique<FakeKeyboardObserver>();
+  std::unique_ptr<FakeKeyboardObserver> fake_observer2 =
+      std::make_unique<FakeKeyboardObserver>();
+
+  // Widget must be active and visible.
+  provider_->attached_widget_->Show();
+  provider_->attached_widget_->Activate();
+
+  // Add TWO keyboards (event6 and event4).
+  const ui::DeviceEvent event0(ui::DeviceEvent::DeviceType::INPUT,
+                               ui::DeviceEvent::ActionType::ADD,
+                               base::FilePath("/dev/input/event6"));
+  const ui::DeviceEvent event1(ui::DeviceEvent::DeviceType::INPUT,
+                               ui::DeviceEvent::ActionType::ADD,
+                               base::FilePath("/dev/input/event4"));
+  provider_->OnDeviceEvent(event0);
+  provider_->OnDeviceEvent(event1);
+  base::RunLoop().RunUntilIdle();
+
+  // Attach observers to BOTH keyboards.
+  provider_->ObserveKeyEvents(
+      6u, fake_observer1->receiver.BindNewPipeAndPassRemote());
+  provider_->ObserveKeyEvents(
+      4u, fake_observer2->receiver.BindNewPipeAndPassRemote());
+  base::RunLoop().RunUntilIdle();
+
+  // Ensure the watchers were successfully registered.
+  ASSERT_TRUE((*provider_->watchers_)[6]);
+  ASSERT_TRUE((*provider_->watchers_)[4]);
+
+  provider_.reset();
 }
 
 }  // namespace diagnostics

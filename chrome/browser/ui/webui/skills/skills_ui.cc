@@ -8,6 +8,7 @@
 #include "base/command_line.h"
 #include "base/i18n/number_formatting.h"
 #include "base/strings/string_util.h"
+#include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/global_features.h"
@@ -21,27 +22,42 @@
 #include "chrome/browser/ui/webui/skills/skills_dialog_handler.h"
 #include "chrome/browser/ui/webui/skills/skills_page_handler.h"
 #include "chrome/browser/ui/webui/skills/skills_page_handler_v2.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/skills_resources.h"
 #include "chrome/grit/skills_resources_map.h"
 #include "components/application_locale_storage/application_locale_storage.h"
+#include "components/google/core/common/google_util.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/skills/features.h"
 #include "components/skills/public/skill.h"
+#include "components/skills/public/skills_features.h"
 #include "components/skills/public/skills_metrics.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/webui/webui_util.h"
+#include "url/gurl.h"
 
 namespace skills {
 namespace {
 
 constexpr int kMaxNameCharCount = 100;
 constexpr int kMaxPromptCharCount = 20000;
+
+std::string GetSkillsV2Origin() {
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kSkillsV2Origin)) {
+    return command_line->GetSwitchValueASCII(switches::kSkillsV2Origin);
+  }
+  // Default to prod if not specified.
+  return "https://clients5.google.com";
+}
 
 bool ShouldDisableBrowseSkillsPage() {
   if (!base::FeatureList::IsEnabled(
@@ -53,16 +69,13 @@ bool ShouldDisableBrowseSkillsPage() {
   const ApplicationLocaleStorage& application_locale_storage =
       CHECK_DEREF(CHECK_DEREF(CHECK_DEREF(g_browser_process).GetFeatures())
                       .application_locale_storage());
-  return !base::StartsWith(application_locale_storage.Get(), "en",
-                           base::CompareCase::INSENSITIVE_ASCII);
+  return application_locale_storage.GetTag().language_subtag() == "en";
 }
 
 void AddSkillsV1Resources(content::WebUIDataSource* source, Profile* profile) {
   source->AddResourcePath("dialog", IDR_SKILLS_SKILLS_DIALOG_HTML);
   source->AddBoolean("isGlicEnabled",
                      glic::GlicEnabling::IsReadyForProfile(profile));
-  source->AddBoolean("isSkillsEnabled",
-                     SkillsServiceFactory::IsSkillsEnabledForProfile(profile));
   source->AddInteger("MAX_NAME_CHAR_COUNT", kMaxNameCharCount);
   source->AddInteger("MAX_PROMPT_CHAR_COUNT", kMaxPromptCharCount);
   source->AddBoolean("isRefinementEnabled",
@@ -81,7 +94,6 @@ void AddSkillsV1Resources(content::WebUIDataSource* source, Profile* profile) {
   content::URLDataSource::Add(profile,
                               std::make_unique<SanitizedImageSource>(profile));
   static constexpr webui::LocalizedString kStrings[] = {
-      {"cancel", IDS_CANCEL},
       {"edit", IDS_EDIT2},
       {"menu", IDS_MENU},
       {"save", IDS_SAVE},
@@ -135,7 +147,10 @@ void AddSkillsV1Resources(content::WebUIDataSource* source, Profile* profile) {
 
 }  // namespace
 
-SkillsUI::SkillsUI(content::WebUI* web_ui) : ui::MojoWebUIController(web_ui) {
+SkillsUI::SkillsUI(content::WebUI* web_ui)
+    : ui::MojoWebUIController(web_ui,
+                              /*enable_chrome_send=*/false,
+                              /*enable_chrome_histograms=*/true) {
   Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       profile, chrome::kChromeUISkillsHost);
@@ -143,6 +158,8 @@ SkillsUI::SkillsUI(content::WebUI* web_ui) : ui::MojoWebUIController(web_ui) {
   if (base::FeatureList::IsEnabled(features::kSkillsWebViewV2Enabled)) {
     webui::SetupWebUIDataSource(source, kSkillsResources,
                                 IDR_SKILLS_V2_SKILLS_HTML);
+    source->AddResourcePath("dialog", IDR_SKILLS_V2_SKILLS_DIALOG_HTML);
+    source->AddString("skillsPrimaryOrigin", GetSkillsV2Origin());
   } else {
     webui::SetupWebUIDataSource(source, kSkillsResources,
                                 IDR_SKILLS_SKILLS_HTML);
@@ -154,6 +171,12 @@ SkillsUI::SkillsUI(content::WebUI* web_ui) : ui::MojoWebUIController(web_ui) {
   source->AddBoolean(
       "isSkillsWebViewV2Enabled",
       base::FeatureList::IsEnabled(features::kSkillsWebViewV2Enabled));
+  source->AddBoolean("isSkillsEnabled",
+                     skills::IsSkillsEnabled(profile->GetPrefs()));
+
+  std::string application_locale = g_browser_process->GetApplicationLocale();
+  std::string google_locale = google_util::GetGoogleLocale(application_locale);
+  source->AddString("languageCode", google_locale);
 
   auto* command_line = base::CommandLine::ForCurrentProcess();
   source->AddBoolean("devMode", command_line->HasSwitch("skills-dev"));
@@ -169,7 +192,9 @@ SkillsUI::SkillsUI(content::WebUI* web_ui) : ui::MojoWebUIController(web_ui) {
   // Shared strings for Skills V1/V2.
   // TODO(b/521780336): Remove search results strings once we migrate to v2.
   static constexpr webui::LocalizedString kStrings[] = {
+      {"cancel", IDS_CANCEL},
       {"goToSettings", IDS_SKILLS_GO_TO_SETTINGS},
+      {"signInToChrome", IDS_SKILLS_SIGN_IN_TO_CHROME},
       {"skillsTitle", IDS_SKILL_PAGE_TITLE},
       {"errorPageTitle", IDS_SKILLS_ERROR_PAGE_TITLE},
       {"noSearchResultsTitle", IDS_SKILLS_NO_SEARCH_RESULT_TITLE},
@@ -192,6 +217,17 @@ void SkillsUI::InitializeDialog(base::WeakPtr<SkillsDialogDelegate> delegate,
   initial_skill_ = std::move(skill);
   entrypoint_ = entrypoint;
   dialog_type_ = dialog_type;
+
+  if (base::FeatureList::IsEnabled(features::kSkillsWebViewV2Enabled)) {
+    base::DictValue update =
+        base::DictValue()
+            .Set("dialogType", static_cast<int>(dialog_type))
+            .Set("skillId", initial_skill_.id)
+            .Set("skillPrompt", initial_skill_.prompt);
+    content::WebUIDataSource::Update(Profile::FromWebUI(web_ui()),
+                                     chrome::kChromeUISkillsHost,
+                                     std::move(update));
+  }
 }
 
 void SkillsUI::BindInterface(
@@ -204,11 +240,29 @@ void SkillsUI::BindInterface(
 void SkillsUI::BindInterface(
     mojo::PendingReceiver<::skills::mojom::SkillsPageHandler> receiver) {
   CHECK(base::FeatureList::IsEnabled(features::kSkillsWebViewV2Enabled));
+
   Profile* profile = Profile::FromWebUI(web_ui());
+  bool is_internal_user = false;
+  if (auto* identity_manager = IdentityManagerFactory::GetForProfile(profile)) {
+    is_internal_user = gaia::IsGoogleInternalAccountEmail(
+        identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
+            .email);
+  }
+
+  // If delegate is null, that means a user is trying to navigate to /dialog
+  // themselves. Allow internal users to navigate directly.
+  GURL url = web_ui()->GetWebContents()->GetVisibleURL();
+  if (url.path() == "/dialog" && !delegate_ && !is_internal_user) {
+    web_ui()->GetWebContents()->GetController().LoadURL(
+        GURL(chrome::kChromeUISkillsURL), content::Referrer(),
+        ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
+    return;
+  }
+
   page_handler_v2_ = std::make_unique<skills::SkillsPageHandlerV2>(
       std::move(receiver), profile,
       IdentityManagerFactory::GetForProfile(profile),
-      web_ui()->GetWebContents());
+      web_ui()->GetWebContents(), delegate_);
 }
 
 void SkillsUI::CreatePageHandler(

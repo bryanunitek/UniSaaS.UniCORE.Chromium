@@ -18,8 +18,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/unload_controller.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -119,12 +120,23 @@ class BrowserCloseTest : public InProcessBrowserTest {
     ON_CALL(*mock_service, BlockingShutdownCount())
         .WillByDefault(testing::Return(downloads));
   }
+
+  // Simulates a profile whose DownloadCoreService KeyedService has already
+  // been torn down (e.g. mid OTR-profile shutdown).
+  void MakeDownloadCoreServiceNull(Profile* profile) {
+    DownloadCoreServiceFactory::GetInstance()->SetTestingFactory(
+        profile,
+        base::BindOnce(
+            [](content::BrowserContext*) -> std::unique_ptr<KeyedService> {
+              return nullptr;
+            }));
+  }
 };
 
 // Last window close (incognito window) will trigger warning.
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastWindowIncognito) {
   Profile* profile = CreateProfile();
-  Browser* incognito_browser = CreateIncognitoBrowser(profile);
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser(profile);
   MockDownloadCount(incognito_browser->GetProfile(), 1);
   CloseBrowserSynchronously(browser());
 
@@ -137,7 +149,8 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastWindowIncognito) {
 
 // Last incognito window close triggers incognito warning.
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastIncognito) {
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   MockDownloadCount(incognito_browser->GetProfile(), 1);
 
   int num_downloads_blocking = 0;
@@ -153,7 +166,7 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastIncognito) {
 // Last incognito window close with no downloads => no warning.
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastIncognitoNoDownloads) {
   Profile* profile = CreateProfile();
-  Browser* incognito_browser = CreateIncognitoBrowser(profile);
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser(profile);
   MockDownloadCount(incognito_browser->GetProfile(), 0);
   CloseBrowserSynchronously(browser());
 
@@ -167,11 +180,11 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastIncognitoNoDownloads) {
 // => no warning.
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, NoIncognitoCrossChat) {
   Profile* profile1 = CreateProfile();
-  Browser* incognito_browser1 = CreateIncognitoBrowser(profile1);
+  BrowserWindowInterface* incognito_browser1 = CreateIncognitoBrowser(profile1);
   MockDownloadCount(incognito_browser1->GetProfile(), 0);
 
   Profile* profile2 = CreateProfile();
-  Browser* incognito_browser2 = CreateIncognitoBrowser(profile2);
+  BrowserWindowInterface* incognito_browser2 = CreateIncognitoBrowser(profile2);
   MockDownloadCount(incognito_browser2->GetProfile(), 1);
 
   CloseBrowserSynchronously(browser());
@@ -185,7 +198,7 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, NoIncognitoCrossChat) {
 // Non-last incognito window => no warning.
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, NonLastIncognito) {
   Profile* profile = CreateProfile();
-  Browser* incognito_browser1 = CreateIncognitoBrowser(profile);
+  BrowserWindowInterface* incognito_browser1 = CreateIncognitoBrowser(profile);
   CreateIncognitoBrowser(profile);
   MockDownloadCount(incognito_browser1->GetProfile(), 1);
 
@@ -199,7 +212,7 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, NonLastIncognito) {
 
 // Non-last regular window => no warning.
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, NonLastRegular) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   CreateBrowser(profile);
   MockDownloadCount(profile, 1);
 
@@ -246,7 +259,8 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastRegularDifferentProfile) {
 
 // Last regular + incognito window + download => no warning.
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastRegularPlusIncognito) {
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   MockDownloadCount(incognito_browser->GetProfile(), 1);
 
   int num_downloads_blocking = 0;
@@ -273,7 +287,7 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastRegularPlusOtherIncognito) {
   MockDownloadCount(browser()->GetProfile(), 0);
 
   Profile* profile2 = CreateProfile();
-  Browser* incognito_browser2 = CreateIncognitoBrowser(profile2);
+  BrowserWindowInterface* incognito_browser2 = CreateIncognitoBrowser(profile2);
   MockDownloadCount(incognito_browser2->GetProfile(), 1);
 
   int num_downloads_blocking = 0;
@@ -286,7 +300,8 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastRegularPlusOtherIncognito) {
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastRegularPlusIncognito2) {
   MockDownloadCount(browser()->GetProfile(), 1);
 
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   MockDownloadCount(incognito_browser->GetProfile(), 0);
 
   int num_downloads_blocking = 0;
@@ -308,7 +323,8 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, Plural) {
 
 // Multiple downloads are recognized for incognito.
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, PluralIncognito) {
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   MockDownloadCount(incognito_browser->GetProfile(), 2);
 
   int num_downloads_blocking = 0;
@@ -318,10 +334,33 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, PluralIncognito) {
   EXPECT_EQ(2, num_downloads_blocking);
 }
 
+// Regression test for a null-pointer dereference: if the
+// last-window-for-profile's DownloadCoreService has already been torn down
+// (returns null from the factory) while some other profile still has an
+// in-progress download, OkToCloseWithInProgressDownloads() must not
+// dereference the null service.
+IN_PROC_BROWSER_TEST_F(BrowserCloseTest,
+                       LastIncognitoWithTornDownDownloadCoreService) {
+  // Any concurrent download on another profile makes the global download
+  // count non-zero, which is required to reach the per-profile lookup below.
+  Profile* other_profile = CreateProfile();
+  MockDownloadCount(other_profile, 1);
+
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
+  MakeDownloadCoreServiceNull(incognito_browser->GetProfile());
+
+  int num_downloads_blocking = 0;
+  EXPECT_EQ(UnloadController::DownloadCloseType::kOk,
+            UnloadController::From(incognito_browser)
+                ->OkToCloseWithInProgressDownloads(&num_downloads_blocking));
+  EXPECT_EQ(num_downloads_blocking, 0);
+}
+
 #if !BUILDFLAG(IS_CHROMEOS)
 // Last window close (guest window) will trigger warning.
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastWindowGuest) {
-  Browser* guest_browser = CreateGuestBrowser();
+  BrowserWindowInterface* guest_browser = CreateGuestBrowser();
   MockDownloadCount(guest_browser->GetProfile(), 1);
   CloseBrowserSynchronously(browser());
 
@@ -334,7 +373,7 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastWindowGuest) {
 
 // Last guest window close triggers download warning.
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastGuest) {
-  Browser* guest_browser = CreateGuestBrowser();
+  BrowserWindowInterface* guest_browser = CreateGuestBrowser();
   MockDownloadCount(guest_browser->GetProfile(), 1);
 
   int num_downloads_blocking = 0;
@@ -350,7 +389,7 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastGuest) {
 
 // Last guest window close with no downloads => no warning.
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastGuestNoDownloads) {
-  Browser* guest_browser = CreateGuestBrowser();
+  BrowserWindowInterface* guest_browser = CreateGuestBrowser();
   MockDownloadCount(guest_browser->GetProfile(), 0);
 
   int num_downloads_blocking = 0;
@@ -361,7 +400,7 @@ IN_PROC_BROWSER_TEST_F(BrowserCloseTest, LastGuestNoDownloads) {
 
 // Non-last guest window => no warning.
 IN_PROC_BROWSER_TEST_F(BrowserCloseTest, NonLastGuest) {
-  Browser* guest_browser1 = CreateGuestBrowser();
+  BrowserWindowInterface* guest_browser1 = CreateGuestBrowser();
   CreateGuestBrowser();
   MockDownloadCount(guest_browser1->GetProfile(), 1);
 

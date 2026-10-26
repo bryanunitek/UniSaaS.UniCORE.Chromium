@@ -36,7 +36,10 @@
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -101,7 +104,7 @@ class TextIteratorTest : public EditingTestBase {
 
   Range* GetBodyRange() const;
 
-  int TestRangeLength(const std::string& selection_text) {
+  wtf_size_t TestRangeLength(const std::string& selection_text) {
     return TextIterator::RangeLength(
         SetSelectionTextToBody(selection_text).ComputeRange());
   }
@@ -140,7 +143,7 @@ std::string TextIteratorTest::IterateWithIterator(
     text_chunks.Append(iterator.GetTextState().GetTextForTesting());
     text_chunks.Append(']');
   }
-  return text_chunks.ToString().Utf8();
+  return text_chunks.Utf8();
 }
 
 Range* TextIteratorTest::GetBodyRange() const {
@@ -150,11 +153,12 @@ Range* TextIteratorTest::GetBodyRange() const {
 }
 
 TEST_F(TextIteratorTest, BitStackOverflow) {
-  const unsigned kBitsInWord = sizeof(unsigned) * 8;
+  const wtf_size_t kBitsInWord = sizeof(uint32_t) * 8;
   BitStack bs;
 
-  for (unsigned i = 0; i < kBitsInWord + 1u; i++)
+  for (wtf_size_t i = 0; i < kBitsInWord + 1u; ++i) {
     bs.Push(true);
+  }
 
   bs.Pop();
 
@@ -1174,6 +1178,72 @@ TEST_F(TextIteratorTest, BasicIterationWithButtonInInlineElement) {
   SetBodyContent(body_content);
   EXPECT_EQ("[test][][;]", Iterate<DomTree>());
   EXPECT_EQ("[test][][;]", Iterate<FlatTree>());
+}
+
+TEST_F(TextIteratorTest, ExcludeAutofilledValueSelect) {
+  SetBodyContent(
+      "<select id='sel'>"
+      "<option value='1' selected>One</option>"
+      "<option value='2'>Two</option>"
+      "</select>");
+  auto* select = To<HTMLSelectElement>(GetElementById("sel"));
+  select->SetSuggestedValue("2");
+  ASSERT_TRUE(select->IsPreviewed());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* popover = select->GetAutofillPreviewElement();
+  ASSERT_TRUE(popover);
+
+  const Position start = Position::FirstPositionInNode(*popover);
+  const Position end = Position::LastPositionInNode(*popover);
+
+  // Without ExcludeAutofilledValue, the preview text in the popover is emitted.
+  EXPECT_EQ("[Two]", IteratePartial<DomTree>(start, end));
+
+  // With ExcludeAutofilledValue, the preview text must be suppressed when the
+  // fix is enabled.
+  TextIteratorBehavior behavior =
+      TextIteratorBehavior::Builder().SetExcludeAutofilledValue(true).Build();
+  EXPECT_EQ("", IteratePartial<DomTree>(start, end, behavior));
+
+  // When the feature is disabled, the previous behavior is restored (preview
+  // text is emitted).
+  ScopedTextIteratorExcludeAutofilledSelectFixForTest disable_fix(false);
+  EXPECT_EQ("[Two]", IteratePartial<DomTree>(start, end, behavior));
+}
+
+TEST_F(TextIteratorTest, ExcludeAutofilledValueListboxSelect) {
+  SetBodyContent(
+      "<select id='sel' size='2'>"
+      "<option value='1' selected>One</option>"
+      "<option value='2'>Two</option>"
+      "</select>");
+  auto* select = To<HTMLSelectElement>(GetElementById("sel"));
+  select->SetSuggestedValue("2");
+  ASSERT_TRUE(select->IsPreviewed());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* popover = select->GetAutofillPreviewElement();
+  ASSERT_TRUE(popover);
+
+  const Position start = Position::FirstPositionInNode(*popover);
+  const Position end = Position::LastPositionInNode(*popover);
+
+  // Without ExcludeAutofilledValue, the preview text in the popover is emitted.
+  EXPECT_EQ("[Two]", IteratePartial<DomTree>(start, end));
+
+  // With ExcludeAutofilledValue, the preview text must be suppressed when the
+  // fix is enabled.
+  TextIteratorBehavior behavior =
+      TextIteratorBehavior::Builder().SetExcludeAutofilledValue(true).Build();
+  EXPECT_EQ("", IteratePartial<DomTree>(start, end, behavior));
+
+  // When the feature is disabled, the previous behavior is restored (preview
+  // text is emitted).
+  ScopedTextIteratorExcludeAutofilledSelectFixForTest disable_fix(false);
+  EXPECT_EQ("[Two]", IteratePartial<DomTree>(start, end, behavior));
 }
 
 }  // namespace text_iterator_test

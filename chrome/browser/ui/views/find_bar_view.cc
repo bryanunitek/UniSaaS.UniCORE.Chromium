@@ -31,6 +31,7 @@
 #include "components/find_in_page/find_tab_helper.h"
 #include "components/find_in_page/find_types.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/clipboard_types.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
@@ -56,6 +57,7 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/box_layout_view.h"
 #include "ui/views/layout/layout_provider.h"
 #include "ui/views/metadata/view_factory.h"
 #include "ui/views/painter.h"
@@ -275,19 +277,19 @@ FindBarView::FindBarView(FindBarHost* host) {
   // Theme-aware image models.
   views::SetImageFromVectorIconWithColor(
       find_previous_button_,
-      features::IsRoundedIconsEnabled() ? kKeyboardArrowUpIcon
+      features::IsRoundedIconsEnabled() ? vector_icons::kKeyboardArrowUpIcon
                                         : kKeyboardArrowUpChromeRefreshOldIcon,
       {kColorFindBarButtonIcon, kColorFindBarButtonIconDisabled});
   find_previous_button_->SetImageModel(
       views::Button::STATE_HOVERED,
       ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
-                                         ? kKeyboardArrowUpIcon
+                                         ? vector_icons::kKeyboardArrowUpIcon
                                          : kKeyboardArrowUpChromeRefreshOldIcon,
                                      kColorFindBarButtonIconHovered));
   find_previous_button_->SetImageModel(
       views::Button::STATE_PRESSED,
       ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
-                                         ? kKeyboardArrowUpIcon
+                                         ? vector_icons::kKeyboardArrowUpIcon
                                          : kKeyboardArrowUpChromeRefreshOldIcon,
                                      kColorFindBarButtonIconHovered));
 
@@ -337,11 +339,11 @@ FindBarView::FindBarView(FindBarHost* host) {
   AddChildView(std::move(main_container));
 
   const float corner_radius = layout_provider->GetCornerRadiusMetric(
-      views::ShapeContextTokens::kFindBarViewRadius);
+      ChromeShapeContextTokens::kFindBarViewRadius);
   {
     auto border = std::make_unique<views::BubbleBorder>(
         views::BubbleBorder::NONE, views::BubbleBorder::STANDARD_SHADOW);
-    border->SetColor(kColorFindBarBackground);
+    border->set_background_color(kColorFindBarBackground);
     border->set_md_shadow_elevation(
         layout_provider->GetCornerRadiusMetric(views::Emphasis::kHigh));
     border->set_rounded_corners(gfx::RoundedCornersF(corner_radius));
@@ -530,7 +532,7 @@ bool FindBarView::HandleMouseEvent(views::Textfield* sender,
     // On macOS, clicking on the find text field should also activate the owner
     // widget (if it isn't already), so that the user can interact with the text
     // field.
-    DCHECK(find_bar_host_);
+    CHECK(find_bar_host_, base::NotFatalUntil::M162);
     find_bar_host_->ActivateOwnerWidgetIfNecessary();
   }
 #endif  // BUILDFLAG(IS_MAC)
@@ -593,9 +595,9 @@ FindBarView::CreateClipboardWriter() {
 }
 
 void FindBarView::Find(std::u16string_view search_text) {
-  DCHECK(find_bar_host_);
+  CHECK(find_bar_host_, base::NotFatalUntil::M162);
   FindBarController* controller = find_bar_host_->GetFindBarController();
-  DCHECK(controller);
+  CHECK(controller, base::NotFatalUntil::M162);
   content::WebContents* web_contents = controller->web_contents();
   // We must guard against a NULL web_contents, which can happen if the text
   // in the Find box is changed right after the tab is destroyed. Otherwise, it

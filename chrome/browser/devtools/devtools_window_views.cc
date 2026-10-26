@@ -4,7 +4,6 @@
 
 #include "chrome/browser/devtools/devtools_ui_controller.h"
 #include "chrome/browser/devtools/devtools_window.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
@@ -15,6 +14,7 @@
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/render_process_host.h"
+#include "printing/buildflags/buildflags.h"
 
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
 #include "chrome/browser/printing/print_preview_dialog_controller.h"
@@ -50,7 +50,8 @@ void DevToolsWindow::ToggleDevToolsWindow(BrowserWindowInterface* browser,
 // static
 bool DevToolsWindow::HasFiredBeforeUnloadEventForDevToolsBrowser(
     BrowserWindowInterface* browser) {
-  DCHECK(browser->GetType() == BrowserWindowInterface::Type::TYPE_DEVTOOLS);
+  CHECK(browser->GetType() == BrowserWindowInterface::Type::TYPE_DEVTOOLS,
+        base::NotFatalUntil::M161);
   // When FastUnloadController is used, devtools frontend will be detached
   // from the browser window at this point which means we've already fired
   // beforeunload.
@@ -67,7 +68,8 @@ bool DevToolsWindow::HasFiredBeforeUnloadEventForDevToolsBrowser(
 // static
 DevToolsWindow* DevToolsWindow::AsDevToolsWindow(
     BrowserWindowInterface* browser) {
-  DCHECK(browser->GetType() == BrowserWindowInterface::Type::TYPE_DEVTOOLS);
+  CHECK(browser->GetType() == BrowserWindowInterface::Type::TYPE_DEVTOOLS,
+        base::NotFatalUntil::M161);
   if (browser->GetTabStripModel()->empty()) {
     return nullptr;
   }

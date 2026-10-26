@@ -5,10 +5,11 @@
 #ifndef IOS_CHROME_BROWSER_OPTIMIZATION_GUIDE_MODEL_OPTIMIZATION_GUIDE_SERVICE_H_
 #define IOS_CHROME_BROWSER_OPTIMIZATION_GUIDE_MODEL_OPTIMIZATION_GUIDE_SERVICE_H_
 
+#include <memory>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/functional/callback_forward.h"
+#include "base/functional/callback.h"
 #import "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
@@ -24,6 +25,7 @@
 #include "components/optimization_guide/proto/hints.pb.h"
 #include "ios/chrome/browser/download/model/background_service/background_download_service_factory.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_global_state.h"
+#include "services/network/public/cpp/network_context_getter.h"
 #include "url/gurl.h"
 
 namespace leveldb_proto {
@@ -78,7 +80,8 @@ class OptimizationGuideService
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       signin::IdentityManager* identity_manager,
       std::unique_ptr<optimization_guide::ModelExecutionManager::Delegate>
-          delegate);
+          delegate,
+      network::NetworkContextGetter network_context_getter);
   ~OptimizationGuideService() override;
 
   OptimizationGuideService(const OptimizationGuideService&) = delete;
@@ -109,6 +112,12 @@ class OptimizationGuideService
       const optimization_guide::ModelExecutionOptions& options,
       optimization_guide::OptimizationGuideModelExecutionResultCallback
           callback) override;
+  std::unique_ptr<optimization_guide::RemoteModelExecutionSession>
+  StartStreamingSession(
+      optimization_guide::ModelBasedCapabilityKey feature,
+      const optimization_guide::StreamingModelExecutionOptions& options,
+      optimization_guide::OptimizationGuideModelExecutionStreamingCallback
+          callback) override;
 
   // optimization_guide::OptimizationGuideModelProvider implementation:
   void AddObserverForOptimizationTargetModel(
@@ -119,6 +128,9 @@ class OptimizationGuideService
   void RemoveObserverForOptimizationTargetModel(
       optimization_guide::proto::OptimizationTarget optimization_target,
       optimization_guide::OptimizationTargetModelObserver* observer) override;
+  void SetModelDownloadSchedulingParams(
+      optimization_guide::proto::OptimizationTarget optimization_target,
+      const download::SchedulingParams& params) override;
 
   // These functions are not private but are for optimization_guide component
   // internal use only.
@@ -217,6 +229,12 @@ class OptimizationGuideService
 
   // The PrefService of the profile this service is linked to.
   const raw_ptr<PrefService> pref_service_ = nullptr;
+
+  // Function that returns the current network context.
+  const network::NetworkContextGetter network_context_getter_;
+
+  // IdentityManager of the profile this service is linked to.
+  const raw_ptr<signin::IdentityManager> identity_manager_ = nullptr;
 
   // Whether the service is linked to an incognito profile.
   const bool off_the_record_ = false;

@@ -192,19 +192,19 @@ class GPU_COMMAND_BUFFER_CLIENT_EXPORT SharedImageInterface
                                  const Mailbox& mailbox) = 0;
 
   // Update the GpuMemoryBuffer associated with the shared image |mailbox| after
-  // |sync_token| is released. This needed when the GpuMemoryBuffer is backed by
-  // shared memory on platforms like Windows where the renderer cannot create
-  // native GMBs.
-  virtual void CopyToGpuMemoryBuffer(const SyncToken& sync_token,
+  // all |sync_tokens| have been released. This is needed when the
+  // GpuMemoryBuffer is backed by shared memory on platforms like Windows where
+  // the renderer cannot create native GMBs.
+  virtual void CopyToGpuMemoryBuffer(std::vector<SyncToken> sync_tokens,
                                      const Mailbox& mailbox);
 
   // Update the GpuMemoryBuffer associated with the shared image |mailbox| after
-  // |sync_token| is released. The |callback| is run denoting if the copy was
-  // successful and the GpuMemoryBuffer is ready to be mapped by the client.
-  // This is needed when the GpuMemoryBuffer is backed by shared memory on
-  // platforms like Windows where the renderer cannot create native GMBs.
+  // all |sync_tokens| have been released. The |callback| is run denoting if the
+  // copy was successful and the GpuMemoryBuffer is ready to be mapped by the
+  // client. This is needed when the GpuMemoryBuffer is backed by shared memory
+  // on platforms like Windows where the renderer cannot create native GMBs.
   virtual void CopyToGpuMemoryBufferAsync(
-      const SyncToken& sync_token,
+      std::vector<SyncToken> sync_tokens,
       const Mailbox& mailbox,
       base::OnceCallback<void(bool)> callback);
 
@@ -219,18 +219,12 @@ class GPU_COMMAND_BUFFER_CLIENT_EXPORT SharedImageInterface
       base::UnsafeSharedMemoryRegion memory_region,
       base::OnceCallback<void(bool)> callback);
 
-  // Destroys the shared image, unregistering its mailbox, after |sync_token|
-  // has been released. After this call, the mailbox can't be used to reference
-  // the image any more, however if the image was imported into other APIs,
-  // those may keep a reference to the underlying data.
-  virtual void DestroySharedImage(const SyncToken& sync_token,
+  // Destroys the shared image, unregistering its mailbox, after all
+  // |sync_tokens| have been released. After this call, the mailbox can't be
+  // used to reference the image any more, however if the image was imported
+  // into other APIs, those may keep a reference to the underlying data.
+  virtual void DestroySharedImage(std::vector<SyncToken> sync_tokens,
                                   const Mailbox& mailbox) = 0;
-
-  // Same behavior as the above, except that this version takes
-  // a |client_shared_image| parameter (which holds a mailbox).
-  virtual void DestroySharedImage(
-      const SyncToken& sync_token,
-      scoped_refptr<ClientSharedImage> client_shared_image) = 0;
 
   // Imports SharedImage to this interface and returns an owning reference. It
   // must be released via DestroySharedImage in the same way as for SharedImages
@@ -298,7 +292,7 @@ class GPU_COMMAND_BUFFER_CLIENT_EXPORT SharedImageInterface
         gpu::SyncToken&>
   void VerifySyncTokens(Range&& sync_token_range, Proj proj = {}) {
     bool flush_required = false;
-    for (auto const& element : sync_token_range) {
+    for (auto& element : sync_token_range) {
       gpu::SyncToken& sync_token = proj(element);
       if (sync_token.verified_flush()) {
         continue;
@@ -325,6 +319,11 @@ class GPU_COMMAND_BUFFER_CLIENT_EXPORT SharedImageInterface
   // this interface on the service side. This is an async wait for all the
   // previous commands which will be sent to server on the next flush().
   virtual void WaitSyncToken(const gpu::SyncToken& sync_token) = 0;
+
+  // Asynchronously waits until all `sync_tokens` are signaled, then runs
+  // `callback` on the calling thread.
+  virtual void SignalSyncToken(std::vector<SyncToken> sync_tokens,
+                               base::OnceClosure callback);
 
   // Informs that existing |mailbox| with the specified metadata can be passed
   // to DestroySharedImage().

@@ -31,6 +31,11 @@ suite('PrefService', function() {
         key2: 2,
       },
     },
+    {
+      key: 'browser.list_pref',
+      type: chrome.settingsPrivate.PrefType.LIST,
+      value: ['item1', 'item2'],
+    },
   ];
 
   setup(function() {
@@ -196,6 +201,67 @@ suite('PrefService', function() {
     callArgs = await proxy.fakeApi.whenCalled('setPref');
     assertEquals(key, callArgs.key);
     assertDeepEquals({key1: 10, key2: 2, key3: 3}, callArgs.value);
+  });
+
+  test('DeletePrefDictEntry', async function() {
+    const key = 'browser.dict_pref';
+
+    // Verify initial values.
+    const initialPref = service.getPref<Record<string, number>>(key);
+    assertEquals(1, initialPref.value['key1']);
+    assertEquals(2, initialPref.value['key2']);
+
+    // Delete an entry.
+    const promise = service.deletePrefDictEntry(key, 'key1');
+
+    // Verify synchronous update in cache.
+    const updatedPref = service.getPref<Record<string, number>>(key);
+    assertEquals(undefined, updatedPref.value['key1']);
+    assertEquals(2, updatedPref.value['key2']);
+
+    // Verify promise resolves to true.
+    const success = await promise;
+    assertTrue(success);
+
+    // Verify backend is called with correct params.
+    const callArgs = await proxy.fakeApi.whenCalled('setPref');
+    assertEquals(key, callArgs.key);
+    assertDeepEquals({key2: 2}, callArgs.value);
+  });
+
+  test('AppendPrefListItem', async function() {
+    const key = 'browser.list_pref';
+
+    // Verify initial values.
+    let listPref = service.getPref<string[]>(key);
+    assertDeepEquals(['item1', 'item2'], listPref.value);
+
+    // Append a new item.
+    let promise = service.appendPrefListItem<string>(key, 'item3');
+
+    // Verify synchronous update in cache.
+    listPref = service.getPref<string[]>(key);
+    assertDeepEquals(['item1', 'item2', 'item3'], listPref.value);
+
+    let success = await promise;
+    assertTrue(success);
+
+    // Verify backend is called with correct params.
+    const callArgs = await proxy.fakeApi.whenCalled('setPref');
+    assertEquals(key, callArgs.key);
+    assertDeepEquals(['item1', 'item2', 'item3'], callArgs.value);
+
+    // Append an existing item (no-op).
+    proxy.fakeApi.resetResolver('setPref');
+    promise = service.appendPrefListItem<string>(key, 'item2');
+
+    // Verify cache remains unchanged.
+    listPref = service.getPref<string[]>(key);
+    assertDeepEquals(['item1', 'item2', 'item3'], listPref.value);
+
+    success = await promise;
+    assertTrue(success);
+    assertEquals(0, proxy.fakeApi.getCallCount('setPref'));
   });
 
   test('addObserverSingleExternalChange', async function() {
@@ -366,5 +432,140 @@ suite('PrefService', function() {
 
   test('RemoveObserverFailure', function() {
     assertFalse(service.removeObserver(999));
+  });
+
+  test('RefreshPrefFromBackend', async function() {
+    const key = 'browser.homepage';
+    let observedVal: string|null = null;
+
+    service.addObserver<string>(key, pref => {
+      observedVal = pref.value;
+    });
+    await Promise.resolve();
+    assertEquals('https://google.com', observedVal);
+
+    // Mutate the backend value directly without firing onPrefsChanged.
+    proxy.fakeApi.prefs[key]!.value = 'https://refreshed.example.com';
+    assertEquals('https://google.com', service.getPref<string>(key).value);
+
+    await service.refreshPrefFromBackend(key);
+    assertEquals(
+        'https://refreshed.example.com', service.getPref<string>(key).value);
+    assertEquals('https://refreshed.example.com', observedVal);
+  });
+
+  test('SetSyntheticPrefValueSuccess', async function() {
+    const key = 'synthetic.settings.category_default.ads';
+    const pref = service.getPref<string>(key);
+    assertEquals('default', pref.value);
+    assertEquals(chrome.settingsPrivate.PrefType.STRING, pref.type);
+
+    let calledCount = 0;
+    let observedValue: string|null = null;
+    service.addObserver<string>(key, p => {
+      calledCount++;
+      observedValue = p.value;
+    });
+
+    // Wait for initial call (dispatched via microtask after addObserver).
+    await Promise.resolve();
+    assertEquals(1, calledCount);
+    assertEquals('default', observedValue);
+
+    // Reset tracking.
+    calledCount = 0;
+    observedValue = null;
+
+    // Verify synchronous update in cache and observer notification.
+    const promise = service.setPrefValue(key, 'block');
+    assertEquals('block', service.getPref<string>(key).value);
+    assertEquals(1, calledCount);
+    assertEquals('block', observedValue);
+
+    // Verify promise resolves to true and backend is not called.
+    const success = await promise;
+    assertTrue(success);
+    assertEquals(0, proxy.fakeApi.getCallCount('setPref'));
+  });
+
+  test('SetSyntheticPrefSuccess', async function() {
+    const key = 'synthetic.settings.category_default.ads';
+
+    let calledCount = 0;
+    let observedPref: chrome.settingsPrivate.PrefObject<string>|null = null;
+    service.addObserver<string>(key, p => {
+      calledCount++;
+      observedPref = p;
+    });
+
+    // Wait for initial call.
+    await Promise.resolve();
+    assertEquals(1, calledCount);
+    assertDeepEquals(
+        {
+          key,
+          type: chrome.settingsPrivate.PrefType.STRING,
+          value: 'default',
+        },
+        observedPref);
+
+    calledCount = 0;
+    observedPref = null;
+
+    // Update value, enforcement, and controlledBy.
+    const enforcedPref: chrome.settingsPrivate.PrefObject<string> = {
+      key,
+      type: chrome.settingsPrivate.PrefType.STRING,
+      value: 'block',
+      enforcement: chrome.settingsPrivate.Enforcement.ENFORCED,
+      controlledBy: chrome.settingsPrivate.ControlledBy.EXTENSION,
+    };
+    service.setSyntheticPref(enforcedPref);
+
+    assertEquals(1, calledCount);
+    assertDeepEquals(enforcedPref, observedPref);
+    assertDeepEquals(enforcedPref, service.getPref<string>(key));
+    assertEquals(0, proxy.fakeApi.getCallCount('setPref'));
+
+    // Calling setSyntheticPref with an identical PrefObject is a no-op.
+    calledCount = 0;
+    service.setSyntheticPref(enforcedPref);
+    assertEquals(0, calledCount);
+  });
+
+  test('SetSyntheticPrefThrowsForNonSyntheticPref', function() {
+    // Throws for a backend-based pref.
+    assertThrows(() => {
+      service.setSyntheticPref({
+        key: 'browser.show_home_button',
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: true,
+      });
+    });
+
+    // Throws for an unknown pref.
+    assertThrows(() => {
+      service.setSyntheticPref({
+        key: 'unknown.pref',
+        type: chrome.settingsPrivate.PrefType.BOOLEAN,
+        value: true,
+      });
+    });
+  });
+
+  test('RefreshPrefFromBackendThrowsForSyntheticPref', async function() {
+    const key = 'synthetic.settings.category_default.ads';
+
+    let thrownError: Error|null = null;
+    try {
+      await service.refreshPrefFromBackend(key);
+    } catch (e) {
+      thrownError = e as Error;
+    }
+    assertTrue(!!thrownError);
+    assertEquals(
+        `Assertion failed: refreshPrefFromBackend called for synthetic pref '${
+            key}'`,
+        thrownError.message);
   });
 });

@@ -11,16 +11,19 @@ PRESUBMIT_VERSION = '2.0.0'
 
 
 def RunUnittests(input_api, output_api):
+  if not (
+    input_api.HasAffectedFiles(extensions='.py')
+    or input_api.HasAffectedFiles(
+      path=('symbolize_trace', 'profile_chrome_startup')
+    )
+  ):
+    return []
   results = []
-  # Run Pylint over the files in the directory.
-  pylint_checks = input_api.canned_checks.GetPylint(input_api,
-                                                    output_api,
-                                                    version='2.6')
-  results.extend(input_api.RunTests(pylint_checks))
-
   results.extend(
-      input_api.canned_checks.RunUnitTestsInDirectory(
-          input_api, output_api, '.', files_to_check=[r'.+_unittest\.py$']))
+    input_api.canned_checks.RunUnitTestsInDirectory(
+      input_api, output_api, '.', files_to_check=[r'.+_unittest\.py$']
+    )
+  )
   return results
 
 

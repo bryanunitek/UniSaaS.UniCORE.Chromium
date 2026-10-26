@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ash/strings/grit/ash_strings.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "services/accessibility/android/accessibility_window_info_data_wrapper.h"
 #include "services/accessibility/android/android_accessibility_util.h"
@@ -1115,12 +1116,12 @@ TEST_F(AccessibilityNodeInfoDataWrapperTest, CustomActions) {
   EXPECT_TRUE(data.HasAction(ax::mojom::Action::kCustomAction));
   EXPECT_TRUE(
       data.HasIntListAttribute(ax::mojom::IntListAttribute::kCustomActionIds));
-  const std::vector<int>& result_ids =
+  base::span<const int32_t> result_ids =
       data.GetIntListAttribute(ax::mojom::IntListAttribute::kCustomActionIds);
-  EXPECT_EQ(std::vector<int>({300}), result_ids);
+  EXPECT_EQ(std::vector<int32_t>({300}), result_ids);
   EXPECT_TRUE(data.HasStringListAttribute(
       ax::mojom::StringListAttribute::kCustomActionDescriptions));
-  const std::vector<std::string>& result_labels = data.GetStringListAttribute(
+  base::span<const std::string> result_labels = data.GetStringListAttribute(
       ax::mojom::StringListAttribute::kCustomActionDescriptions);
   EXPECT_EQ(std::vector<std::string>({"This is label"}), result_labels);
 }

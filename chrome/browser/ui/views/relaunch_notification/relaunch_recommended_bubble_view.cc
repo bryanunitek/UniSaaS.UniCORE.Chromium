@@ -4,21 +4,20 @@
 
 #include "chrome/browser/ui/views/relaunch_notification/relaunch_recommended_bubble_view.h"
 
-#include <tuple>
 #include <utility>
 
 #include "base/functional/bind.h"
-#include "base/logging.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
+#include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
 #include "chrome/browser/ui/views/toolbar/app_menu_control.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
@@ -28,16 +27,10 @@
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/gfx/color_palette.h"
-#include "ui/gfx/geometry/point.h"
-#include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/text_constants.h"
-#include "ui/views/animation/ink_drop.h"
 #include "ui/views/border.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
-#include "ui/views/bubble/bubble_frame_view.h"
-#include "ui/views/controls/button/button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/style/typography.h"
@@ -48,16 +41,18 @@ views::Widget* RelaunchRecommendedBubbleView::ShowBubble(
     BrowserWindowInterface* browser,
     base::Time detection_time,
     base::RepeatingClosure on_accept) {
-  DCHECK(browser);
+  CHECK(browser, base::NotFatalUntil::M162);
 
   // Anchor the popup to the browser's app menu.
-  auto* browser_view = BrowserView::GetBrowserViewForBrowser(
-      browser->GetBrowserForMigrationOnly());
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
   auto* control = browser_view->toolbar_button_provider()->GetAppMenuControl();
   views::BubbleAnchor anchor =
       control ? control->GetAnchor() : views::BubbleAnchor();
   auto* bubble_view = new RelaunchRecommendedBubbleView(anchor, detection_time,
                                                         std::move(on_accept));
+  if (anchor) {
+    bubble_view->SetHighlightedElement(kToolbarAppMenuButtonElementId);
+  }
   bubble_view->SetArrow(views::BubbleBorder::TOP_RIGHT);
 
   views::Widget* bubble_widget =
@@ -99,9 +94,11 @@ ui::ImageModel RelaunchRecommendedBubbleView::GetWindowIcon() {
 void RelaunchRecommendedBubbleView::Init() {
   SetLayoutManager(std::make_unique<views::FillLayout>());
   auto label = std::make_unique<views::Label>(
-      l10n_util::GetPluralStringFUTF16(
-          IDS_RELAUNCH_RECOMMENDED_BODY,
-          GlobalBrowserCollection::GetInstance()->GetIncognitoBrowserCount()),
+      GlobalBrowserCollection::GetInstance()
+          ->GetDialogWithIncognitoAndIsolatedVariants(
+              IDS_RELAUNCH_RECOMMENDED_BODY,
+              IDS_RELAUNCH_RECOMMENDED_BODY_ISOLATED,
+              IDS_RELAUNCH_RECOMMENDED_BODY_INCOGNITO_AND_ISOLATED),
       views::style::CONTEXT_DIALOG_BODY_TEXT);
 
   label->SetMultiLine(true);
@@ -122,15 +119,6 @@ void RelaunchRecommendedBubbleView::Init() {
   AddChildView(std::move(label));
 
   base::RecordAction(base::UserMetricsAction("RelaunchRecommendedShown"));
-}
-
-void RelaunchRecommendedBubbleView::VisibilityChanged(
-    views::View* starting_from,
-    bool is_visible) {
-  views::InkDrop::Get(GetAnchorView())
-      ->AnimateToState(is_visible ? views::InkDropState::ACTIVATED
-                                  : views::InkDropState::DEACTIVATED,
-                       nullptr);
 }
 
 // |relaunch_recommended_timer_| automatically starts for the next time the

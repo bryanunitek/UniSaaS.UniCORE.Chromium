@@ -30,6 +30,7 @@
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/native_ui_types.h"
+#include "ui/views/accessibility/ax_virtual_view.h"
 #include "ui/views/cascading_property.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/radio_button.h"
@@ -39,6 +40,7 @@
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/table/table_view.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/test/menu_test_utils.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/widget.h"
@@ -102,9 +104,9 @@ class TestTableModel : public ui::TableModel {
   TestTableModel& operator=(const TestTableModel&) = delete;
 
   // ui::TableModel:
-  size_t RowCount() override { return 10; }
+  size_t RowCount() const override { return 10; }
 
-  std::u16string GetText(size_t row, int column_id) override {
+  std::u16string GetText(size_t row, int column_id) const override {
     const std::array<std::array<const char* const, 4>, 5> cells({
         {{"Orange", "Orange", "South america", "$5"}},
         {{"Apple", "Green", "Canada", "$3"}},
@@ -612,6 +614,61 @@ TEST_F(ViewAXPlatformNodeDelegateTest, LabelIsChildOfButton) {
   EXPECT_EQ(button_->GetNativeViewAccessible(),
             label_accessibility()->GetParent());
   EXPECT_EQ(ax::mojom::Role::kStaticText, label_accessibility()->GetRole());
+}
+
+// An ignored view is left out of its parent's children, but still reports that
+// parent. Asking it for its index in parent therefore searches a list it can
+// never appear in.
+TEST_F(ViewAXPlatformNodeDelegateTest, IgnoredChildIndexInParent) {
+  button_->SetInstallFocusRingOnFocus(false);
+
+  // A focusable button ignores all of its children, and a parent with no
+  // unignored children is a leaf, which is handled separately. So make the
+  // button unfocusable and give the label a sibling.
+  button_->SetFocusBehavior(View::FocusBehavior::NEVER);
+  button_->AddChildView(std::make_unique<Label>());
+  label_->GetViewAccessibility().SetIsIgnored(true);
+
+  ASSERT_EQ(1u, button_accessibility()->GetChildCount());
+  ASSERT_NE(label_->GetNativeViewAccessible(),
+            button_accessibility()->ChildAtIndex(0));
+  ASSERT_EQ(button_->GetNativeViewAccessible(),
+            label_accessibility()->GetParent());
+
+  auto* label_node = static_cast<ui::AXPlatformNodeBase*>(
+      ui::AXPlatformNode::FromNativeViewAccessible(
+          label_->GetNativeViewAccessible()));
+  ASSERT_NE(nullptr, label_node);
+
+  EXPECT_FALSE(label_node->GetIndexInParent().has_value());
+}
+
+// A virtual child hides all of its parent's real children, but those children
+// still report that parent. Asking one of them for its index in parent
+// therefore searches a list it can never appear in.
+TEST_F(ViewAXPlatformNodeDelegateTest, HiddenRealChildIndexInParent) {
+  button_->SetInstallFocusRingOnFocus(false);
+  button_->SetFocusBehavior(View::FocusBehavior::NEVER);
+
+  auto virtual_label = std::make_unique<AXVirtualView>();
+  virtual_label->SetRole(ax::mojom::Role::kStaticText);
+  virtual_label->SetName("Virtual label");
+  button_->GetViewAccessibility().AddVirtualChildView(std::move(virtual_label));
+
+  // The virtual child is now the button's only child, and the real label is
+  // nowhere among them.
+  ASSERT_EQ(1u, button_accessibility()->GetChildCount());
+  ASSERT_NE(label_->GetNativeViewAccessible(),
+            button_accessibility()->ChildAtIndex(0));
+  ASSERT_EQ(button_->GetNativeViewAccessible(),
+            label_accessibility()->GetParent());
+
+  auto* label_node = static_cast<ui::AXPlatformNodeBase*>(
+      ui::AXPlatformNode::FromNativeViewAccessible(
+          label_->GetNativeViewAccessible()));
+  ASSERT_NE(nullptr, label_node);
+
+  EXPECT_FALSE(label_node->GetIndexInParent().has_value());
 }
 
 // Verify Views with invisible ancestors have ax::mojom::State::kInvisible.
@@ -1567,5 +1624,98 @@ TEST_F(AXViewTest, LayoutCalledInvalidateRootView) {
   cache.GetOrCreate(widget.get());
 }
 #endif
+
+// On Mac, ViewAXPlatformNodeDelegateMac::GetParent() resolves a root view
+// through its NSView rather than through the widget hierarchy.
+#if !BUILDFLAG(IS_MAC)
+TEST_F(ViewAXPlatformNodeDelegateTest, HiddenChildWidgetRootViewHasNoParent) {
+  auto parent_widget = std::make_unique<Widget>();
+  Widget::InitParams parent_params =
+      CreateParams(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                   Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+  parent_widget->Init(std::move(parent_params));
+  parent_widget->SetContentsView(std::make_unique<View>());
+  parent_widget->Show();
+
+  auto child_widget = std::make_unique<Widget>();
+  Widget::InitParams child_params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_CONTROL);
+  child_params.parent = parent_widget->GetNativeView();
+  child_widget->Init(std::move(child_params));
+  child_widget->SetContentsView(std::make_unique<View>());
+
+  ViewAXPlatformNodeDelegate* child_root_view =
+      view_accessibility(child_widget->GetRootView());
+
+  EXPECT_EQ(parent_widget->GetRootView()->GetNativeViewAccessible(),
+            child_root_view->GetParent());
+
+  child_widget->Hide();
+  EXPECT_FALSE(child_root_view->GetParent());
+
+  child_widget->Show();
+  EXPECT_EQ(parent_widget->GetRootView()->GetNativeViewAccessible(),
+            child_root_view->GetParent());
+}
+#endif  // !BUILDFLAG(IS_MAC)
+
+#if defined(USE_AURA)
+TEST_F(ViewAXPlatformNodeDelegateTest,
+       NativeChildWidgetsPreserveAccessibilityAndFocus) {
+  // Native parenting: widget() -> owned_widget -> transitively_owned_widget.
+  ViewAXPlatformNodeDelegate* root_view_accessibility =
+      view_accessibility(widget()->GetRootView());
+  const size_t initial_child_count = root_view_accessibility->GetChildCount();
+
+  auto owned_widget = std::make_unique<Widget>();
+  Widget::InitParams owned_params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_CONTROL);
+  owned_params.parent = widget()->GetNativeView();
+  owned_widget->Init(std::move(owned_params));
+  owned_widget->SetContentsView(std::make_unique<View>());
+  owned_widget->Show();
+
+  EXPECT_EQ(initial_child_count + 1, root_view_accessibility->GetChildCount());
+
+  ViewAXPlatformNodeDelegate* owned_root_view_accessibility =
+      view_accessibility(owned_widget->GetRootView());
+  const size_t owned_child_count =
+      owned_root_view_accessibility->GetChildCount();
+
+  auto transitively_owned_widget = std::make_unique<Widget>();
+  Widget::InitParams transitively_owned_params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_CONTROL);
+  transitively_owned_params.parent = owned_widget->GetNativeView();
+  transitively_owned_widget->Init(std::move(transitively_owned_params));
+  transitively_owned_widget->SetContentsView(std::make_unique<View>());
+  transitively_owned_widget->Show();
+
+  ASSERT_TRUE(Widget::GetAllOwnedWidgets(widget()->GetNativeView())
+                  .contains(transitively_owned_widget.get()));
+
+  EXPECT_EQ(owned_child_count + 1,
+            owned_root_view_accessibility->GetChildCount());
+  EXPECT_EQ(transitively_owned_widget->GetRootView()->GetNativeViewAccessible(),
+            owned_root_view_accessibility->ChildAtIndex(owned_child_count));
+
+  // Unfocused root-view child lists (ordinary view children omitted):
+  //   widget(): owned_widget, transitively_owned_widget
+  //   owned_widget: transitively_owned_widget
+  // The desktop HWND filter must not prune these native descendants.
+  EXPECT_EQ(initial_child_count + 2, root_view_accessibility->GetChildCount());
+  auto* focused = transitively_owned_widget->GetContentsView();
+  focused->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+  widget()->GetFocusManager()->SetFocusedView(focused);
+  // Focus projects widget()'s children to just transitively_owned_widget.
+  EXPECT_EQ(1u, root_view_accessibility->GetChildCount());
+  EXPECT_EQ(transitively_owned_widget->GetRootView()->GetNativeViewAccessible(),
+            root_view_accessibility->ChildAtIndex(0));
+  widget()->GetFocusManager()->SetFocusedView(nullptr);
+  transitively_owned_widget->Hide();
+  EXPECT_EQ(initial_child_count + 1, root_view_accessibility->GetChildCount());
+  transitively_owned_widget->CloseNow();
+  EXPECT_EQ(initial_child_count + 1, root_view_accessibility->GetChildCount());
+}
+#endif  // defined(USE_AURA)
 
 }  // namespace views::test

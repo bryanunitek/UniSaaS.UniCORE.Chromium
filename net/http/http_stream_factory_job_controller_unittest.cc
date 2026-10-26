@@ -347,7 +347,8 @@ class HttpStreamFactoryJobControllerTestBase : public TestWithTaskEnvironment {
     } else {
       disabled_features.emplace_back(features::kHappyEyeballsV3);
     }
-    feature_list_.InitWithFeatures(enabled_features, disabled_features);
+    AddScopedFeatureList().InitWithFeatures(enabled_features,
+                                            disabled_features);
     FLAGS_quic_enable_http3_grease_randomness = false;
     CreateSessionDeps();
   }
@@ -520,8 +521,8 @@ class HttpStreamFactoryJobControllerTestBase : public TestWithTaskEnvironment {
     } else {
       disabled_features.emplace_back(features::kAsyncQuicSession);
     }
-    feature_list_.Reset();
-    feature_list_.InitWithFeatures(enabled_features, disabled_features);
+    AddScopedFeatureList().InitWithFeatures(enabled_features,
+                                            disabled_features);
   }
 
   void TestAltJobSucceedsAfterMainJobFailed(
@@ -609,8 +610,6 @@ class HttpStreamFactoryJobControllerTestBase : public TestWithTaskEnvironment {
  private:
   const bool happy_eyeballs_v3_enabled_;
   bool create_job_controller_ = true;
-
-  base::test::ScopedFeatureList feature_list_;
 };
 
 class HttpStreamFactoryJobControllerTest
@@ -619,6 +618,13 @@ class HttpStreamFactoryJobControllerTest
   HttpStreamFactoryJobControllerTest()
       : HttpStreamFactoryJobControllerTestBase(
             /*happy_eyeballs_v3_enabled=*/false) {}
+
+  void TestOnConnectionInitialized(bool use_alternative_job,
+                                   int rv,
+                                   bool expect_immediate_resume);
+  void TestFirstQuicCandidateFails(bool async_quic_session,
+                                   bool fast_fail,
+                                   bool async_dns = false);
 };
 
 // Tests that are run with Happy Eyeballs v3 both enabled and disabled.
@@ -1263,7 +1269,8 @@ class JobControllerReconsiderProxyAfterErrorTest
         /*enable_origin_frame=*/true,
         /*allow_server_preferred_address=*/true,
         MultiplexedSessionCreationInitiator::kUnknown,
-        NetLogWithSource::Make(NetLogSourceType::NONE));
+        NetLogWithSource::Make(NetLogSourceType::NONE),
+        QuicConnectionReuseDetails());
     mock_proxy_sessions_.emplace_back(new_session.get());
 
     quic::test::NoopQpackStreamSenderDelegate
@@ -4377,8 +4384,8 @@ TEST_F(HttpStreamFactoryJobControllerTest, InvalidPortForQuic) {
 TEST_F(HttpStreamFactoryJobControllerTest, HostResolutionHang) {
   // Explicitly disable the kAdditionalDelayMainJob feature, since this would
   // add a delay to the main job and cause the test to fail.
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(net::features::kAdditionalDelayMainJob);
+  AddScopedFeatureList().InitAndDisableFeature(
+      net::features::kAdditionalDelayMainJob);
 
   auto hanging_resolver = std::make_unique<MockHostResolver>();
   hanging_resolver->set_ondemand_mode(true);
@@ -4535,6 +4542,302 @@ TEST_F(HttpStreamFactoryJobControllerTest, ResumeMainJobLaterCanceled) {
 
   EXPECT_TRUE(job_controller_->main_job());
   request_.reset();
+}
+
+void HttpStreamFactoryJobControllerTest::TestOnConnectionInitialized(
+    bool use_alternative_job,
+    int rv,
+    bool expect_immediate_resume) {
+  // Explicitly disable the kAdditionalDelayMainJob feature, since this would
+  // add a delay to the main job and cause the test to fail on Android where it
+  // is enabled by default.
+  AddScopedFeatureList().InitAndDisableFeature(
+      net::features::kAdditionalDelayMainJob);
+
+  session_deps_.alternate_host_resolver =
+      std::make_unique<HangingHostResolver>();
+
+  HttpRequestInfo request_info;
+  request_info.method = "GET";
+  request_info.url = GURL("https://www.google.com");
+
+  tcp_data_ = std::make_unique<SequencedSocketData>();
+  tcp_data_->set_connect_data(MockConnect(ASYNC, ERR_IO_PENDING));
+
+  Initialize(request_info);
+
+  // Enable delayed TCP and set time delay for waiting job.
+  QuicSessionPool* quic_session_pool = session_->quic_session_pool();
+  quic_session_pool->set_has_quic_ever_worked_on_current_network(true);
+  ServerNetworkStats stats;
+  stats.srtt = base::Milliseconds(100);
+  session_->http_server_properties()->SetServerNetworkStats(
+      url::SchemeHostPort(GURL("https://www.google.com")),
+      NetworkAnonymizationKey(), stats);
+
+  if (use_alternative_job) {
+    url::SchemeHostPort server(request_info.url);
+    AlternativeService alternative_service(NextProto::kProtoQUIC, server.host(),
+                                           443);
+    SetAlternativeService(request_info, alternative_service);
+  }
+
+  request_ = job_controller_->Start(
+      request_delegate_.get(), nullptr, net_log_with_source_,
+      HttpStreamRequest::HTTP_STREAM, DEFAULT_PRIORITY);
+  EXPECT_TRUE(job_controller_->main_job());
+  EXPECT_TRUE(job_controller_->main_job()->is_waiting());
+  HttpStreamFactory::Job* job;
+  if (use_alternative_job) {
+    EXPECT_TRUE(job_controller_->alternative_job());
+    job = job_factory_.alternative_job();
+  } else {
+    EXPECT_FALSE(job_controller_->alternative_job());
+    EXPECT_TRUE(job_controller_->dns_alpn_h3_job());
+    job = job_factory_.dns_alpn_h3_job();
+  }
+
+  base::HistogramTester histogram_tester;
+  if (expect_immediate_resume) {
+    base::RunLoop run_loop;
+    EXPECT_CALL(*job_factory_.main_job(), Resume())
+        .Times(1)
+        .WillOnce([this, &run_loop]() {
+          job_factory_.main_job()->DoResume();
+          run_loop.Quit();
+        });
+    job_controller_->OnConnectionInitialized(job, rv);
+    FastForwardBy(base::TimeDelta());
+    run_loop.Run();
+    histogram_tester.ExpectUniqueTimeSample(
+        "Net.HttpStreamFactory.MainJobWaitTime", base::TimeDelta(), 1);
+  } else {
+    EXPECT_CALL(*job_factory_.main_job(), Resume()).Times(0);
+    job_controller_->OnConnectionInitialized(job, rv);
+    FastForwardBy(base::TimeDelta());
+
+    base::RunLoop run_loop;
+    EXPECT_CALL(*job_factory_.main_job(), Resume())
+        .Times(1)
+        .WillOnce([this, &run_loop]() {
+          job_factory_.main_job()->DoResume();
+          run_loop.Quit();
+        });
+    FastForwardBy(base::Milliseconds(150));
+    run_loop.Run();
+    histogram_tester.ExpectUniqueTimeSample(
+        "Net.HttpStreamFactory.MainJobWaitTime", base::Milliseconds(150), 1);
+  }
+  EXPECT_TRUE(job_controller_->main_job());
+}
+
+TEST_F(HttpStreamFactoryJobControllerTest,
+       OnConnectionInitializedResumesMainJobImmediatelyWithFastFail) {
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
+      {{features::kAsyncDnsQuicJob, {{"AsyncDnsQuicJobFastFail", "true"}}}},
+      {});
+  TestOnConnectionInitialized(/*use_alternative_job=*/true,
+                              ERR_QUIC_PROTOCOL_ERROR,
+                              /*expect_immediate_resume=*/true);
+}
+
+TEST_F(
+    HttpStreamFactoryJobControllerTest,
+    OnConnectionInitializedDnsAlpnH3JobResumesMainJobImmediatelyWithFastFail) {
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
+      {{features::kAsyncDnsQuicJob, {{"AsyncDnsQuicJobFastFail", "true"}}}},
+      {});
+  TestOnConnectionInitialized(/*use_alternative_job=*/false,
+                              ERR_QUIC_PROTOCOL_ERROR,
+                              /*expect_immediate_resume=*/true);
+}
+
+TEST_F(HttpStreamFactoryJobControllerTest,
+       OnConnectionInitializedWithPendingResumesMainJobWithDelayWithFastFail) {
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
+      {{features::kAsyncDnsQuicJob, {{"AsyncDnsQuicJobFastFail", "true"}}}},
+      {});
+  TestOnConnectionInitialized(/*use_alternative_job=*/true, ERR_IO_PENDING,
+                              /*expect_immediate_resume=*/false);
+}
+
+TEST_F(
+    HttpStreamFactoryJobControllerTest,
+    OnConnectionInitializedDnsAlpnH3JobWithPendingResumesMainJobWithDelayWithFastFail) {
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
+      {{features::kAsyncDnsQuicJob, {{"AsyncDnsQuicJobFastFail", "true"}}}},
+      {});
+  TestOnConnectionInitialized(/*use_alternative_job=*/false, ERR_IO_PENDING,
+                              /*expect_immediate_resume=*/false);
+}
+
+TEST_F(HttpStreamFactoryJobControllerTest,
+       OnConnectionInitializedResumesMainJobWithDelayByDefault) {
+  TestOnConnectionInitialized(/*use_alternative_job=*/true,
+                              ERR_QUIC_PROTOCOL_ERROR,
+                              /*expect_immediate_resume=*/false);
+}
+
+// ERR_DNS_NO_MATCHING_SUPPORTED_ALPN means DNS has no QUIC endpoint, so the
+// main job resumes immediately even without FastFail.
+TEST_F(HttpStreamFactoryJobControllerTest,
+       OnConnectionInitializedNoMatchingAlpnResumesMainJobImmediately) {
+  TestOnConnectionInitialized(/*use_alternative_job=*/true,
+                              ERR_DNS_NO_MATCHING_SUPPORTED_ALPN,
+                              /*expect_immediate_resume=*/true);
+}
+
+TEST_F(
+    HttpStreamFactoryJobControllerTest,
+    OnConnectionInitializedDnsAlpnH3JobNoMatchingAlpnResumesMainJobImmediately) {
+  TestOnConnectionInitialized(/*use_alternative_job=*/false,
+                              ERR_DNS_NO_MATCHING_SUPPORTED_ALPN,
+                              /*expect_immediate_resume=*/true);
+}
+
+void HttpStreamFactoryJobControllerTest::TestFirstQuicCandidateFails(
+    bool async_quic_session,
+    bool fast_fail,
+    bool async_dns) {
+  SetAsyncQuicSession(async_quic_session);
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
+      {{features::kAsyncDnsQuicJob,
+        {{"AsyncDnsQuicJobFastFail", fast_fail ? "true" : "false"}}}},
+      {features::kAdditionalDelayMainJob});
+
+  session_deps_.host_resolver->set_synchronous_mode(!async_dns);
+  session_deps_.host_resolver->rules()->AddIPLiteralRule(
+      "www.google.com", "192.168.0.1,192.168.0.2", "");
+
+  quic_data_ = std::make_unique<MockQuicData>(version_);
+  quic_data_->AddConnect(SYNCHRONOUS, ERR_ADDRESS_IN_USE);
+
+  quic_data2_ = std::make_unique<MockQuicData>(version_);
+  if (async_quic_session) {
+    quic_data2_->AddConnect(ASYNC, ERR_IO_PENDING);
+  } else {
+    quic_data2_->AddRead(SYNCHRONOUS, ERR_IO_PENDING);
+  }
+  crypto_client_stream_factory_.set_handshake_mode(
+      MockCryptoClientStream::COLD_START);
+
+  tcp_data_ = std::make_unique<SequencedSocketData>();
+  tcp_data_->set_connect_data(MockConnect(ASYNC, ERR_IO_PENDING));
+
+  HttpRequestInfo request_info;
+  request_info.method = "GET";
+  request_info.url = GURL("https://www.google.com");
+
+  Initialize(request_info);
+
+  QuicSessionPool* quic_session_pool = session_->quic_session_pool();
+  quic_session_pool->set_has_quic_ever_worked_on_current_network(true);
+  ServerNetworkStats stats;
+  stats.srtt = base::Milliseconds(100);
+  session_->http_server_properties()->SetServerNetworkStats(
+      url::SchemeHostPort(GURL("https://www.google.com")),
+      NetworkAnonymizationKey(), stats);
+
+  url::SchemeHostPort server(request_info.url);
+  AlternativeService alternative_service(NextProto::kProtoQUIC, server.host(),
+                                         443);
+  SetAlternativeService(request_info, alternative_service);
+
+  request_ = job_controller_->Start(
+      request_delegate_.get(), nullptr, net_log_with_source_,
+      HttpStreamRequest::HTTP_STREAM, DEFAULT_PRIORITY);
+  EXPECT_TRUE(job_controller_->main_job());
+  EXPECT_TRUE(job_controller_->alternative_job());
+
+  if (fast_fail) {
+    if (async_quic_session || async_dns) {
+      // With AsyncQuicSession or asynchronous DNS, the first candidate's
+      // failure is reported on a posted task; once it runs, the main job is
+      // resumed with 0 delay.
+      EXPECT_TRUE(job_controller_->main_job()->is_waiting());
+      base::RunLoop run_loop;
+      EXPECT_CALL(*job_factory_.main_job(), Resume())
+          .Times(1)
+          .WillOnce([this, &run_loop]() {
+            job_factory_.main_job()->DoResume();
+            run_loop.Quit();
+          });
+      FastForwardBy(base::TimeDelta());
+      run_loop.Run();
+    } else {
+      // With SyncQuicSession and synchronous DNS, the first candidate fails
+      // synchronously during `alternative_job_->Start()` before
+      // `main_job_->Start()` enters its waiting state, clearing
+      // `main_job_wait_time_` so `main_job_` never waits.
+      EXPECT_FALSE(job_controller_->main_job()->is_waiting());
+    }
+  } else {
+    EXPECT_TRUE(job_controller_->main_job()->is_waiting());
+    EXPECT_CALL(*job_factory_.main_job(), Resume()).Times(0);
+    FastForwardBy(base::TimeDelta());
+
+    base::RunLoop run_loop;
+    EXPECT_CALL(*job_factory_.main_job(), Resume())
+        .Times(1)
+        .WillOnce([this, &run_loop]() {
+          job_factory_.main_job()->DoResume();
+          run_loop.Quit();
+        });
+    FastForwardBy(base::Milliseconds(150));
+    run_loop.Run();
+  }
+}
+
+TEST_F(HttpStreamFactoryJobControllerTest,
+       FirstQuicCandidateFailsOnDnsCacheHitSyncQuicSessionFastFail) {
+  TestFirstQuicCandidateFails(/*async_quic_session=*/false,
+                              /*fast_fail=*/true);
+}
+
+TEST_F(HttpStreamFactoryJobControllerTest,
+       FirstQuicCandidateFailsOnDnsCacheHitAsyncQuicSessionFastFail) {
+  TestFirstQuicCandidateFails(/*async_quic_session=*/true,
+                              /*fast_fail=*/true);
+}
+
+TEST_F(HttpStreamFactoryJobControllerTest,
+       FirstQuicCandidateFailsOnDnsCacheHitSyncQuicSessionDelayedByDefault) {
+  TestFirstQuicCandidateFails(/*async_quic_session=*/false,
+                              /*fast_fail=*/false);
+}
+
+TEST_F(HttpStreamFactoryJobControllerTest,
+       FirstQuicCandidateFailsOnDnsCacheHitAsyncQuicSessionDelayedByDefault) {
+  TestFirstQuicCandidateFails(/*async_quic_session=*/true,
+                              /*fast_fail=*/false);
+}
+
+TEST_F(HttpStreamFactoryJobControllerTest,
+       FirstQuicCandidateFailsAsyncDnsSyncQuicSessionFastFail) {
+  TestFirstQuicCandidateFails(/*async_quic_session=*/false,
+                              /*fast_fail=*/true,
+                              /*async_dns=*/true);
+}
+
+TEST_F(HttpStreamFactoryJobControllerTest,
+       FirstQuicCandidateFailsAsyncDnsAsyncQuicSessionFastFail) {
+  TestFirstQuicCandidateFails(/*async_quic_session=*/true,
+                              /*fast_fail=*/true,
+                              /*async_dns=*/true);
+}
+
+TEST_F(HttpStreamFactoryJobControllerTest,
+       FirstQuicCandidateFailsAsyncDnsSyncQuicSessionDelayedByDefault) {
+  TestFirstQuicCandidateFails(/*async_quic_session=*/false,
+                              /*fast_fail=*/false,
+                              /*async_dns=*/true);
+}
+
+TEST_F(HttpStreamFactoryJobControllerTest,
+       FirstQuicCandidateFailsAsyncDnsAsyncQuicSessionDelayedByDefault) {
+  TestFirstQuicCandidateFails(/*async_quic_session=*/true,
+                              /*fast_fail=*/false,
+                              /*async_dns=*/true);
 }
 
 // Test that main job is blocked for kMaxDelayTimeForMainJob(3s) if
@@ -4711,12 +5014,11 @@ TEST_F(HttpStreamFactoryJobControllerTest,
 // support respects NetworkIsolationKeys.
 TEST_F(HttpStreamFactoryJobControllerTest,
        PreconnectMultipleStreamsToH2ServerWithNetworkIsolationKey) {
-  base::test::ScopedFeatureList feature_list;
   // It's not strictly necessary to enable
   // `kPartitionConnectionsByNetworkIsolationKey`, but the second phase of the
   // test would only make 4 connections, reusing the first connection, without
   // it.
-  feature_list.InitAndEnableFeature(
+  AddScopedFeatureList().InitAndEnableFeature(
       features::kPartitionConnectionsByNetworkIsolationKey);
   // Need to re-create HttpServerProperties after enabling the field trial,
   // since it caches the field trial value on construction.
@@ -5177,8 +5479,7 @@ TEST_F(JobControllerLimitMultipleH2Requests, MultipleRequests) {
 // NetworkIsolationKeys.
 TEST_F(JobControllerLimitMultipleH2Requests,
        MultipleRequestsNetworkIsolationKey) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
+  AddScopedFeatureList().InitAndEnableFeature(
       features::kPartitionConnectionsByNetworkIsolationKey);
   // Need to re-create HttpServerProperties after enabling the field trial,
   // since it caches the field trial value on construction.
@@ -5647,8 +5948,8 @@ class HttpStreamFactoryJobControllerPreconnectTest
 
   void SetUp() override {
     if (!GetParam()) {
-      scoped_feature_list_.InitFromCommandLine(std::string(),
-                                               "LimitEarlyPreconnects");
+      AddScopedFeatureList().InitFromCommandLine(std::string(),
+                                                 "LimitEarlyPreconnects");
     }
   }
 
@@ -5682,7 +5983,6 @@ class HttpStreamFactoryJobControllerPreconnectTest
   }
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
   HttpRequestInfo request_info_;
 };
 
@@ -6280,6 +6580,8 @@ TEST_F(HttpStreamFactoryJobControllerDnsHttpsAlpnTest,
   // The main job should be resumed quickly after resolving the host.
   EXPECT_TRUE(job_controller_->main_job()->is_waiting());
 
+  base::HistogramTester histogram_tester;
+
   // Resolve the host resolve request from `dns_alpn_h3_job`.
   session_deps_.host_resolver->ResolveAllPending();
   base::RunLoop().RunUntilIdle();
@@ -6290,12 +6592,12 @@ TEST_F(HttpStreamFactoryJobControllerDnsHttpsAlpnTest,
                   /*dns_alpn_h3_job_exists=*/false,
                   "DNS ALPN job must be deleted.");
   EXPECT_FALSE(job_controller_->main_job()->is_waiting());
+  histogram_tester.ExpectTotalCount("Net.HttpStreamFactory.MainJobWaitTime", 1);
 
   // The host resolve request from the main job must be resolved using the
   // cached result.
   EXPECT_TRUE(tcp_data_->socket());
 
-  base::HistogramTester histogram_tester;
   MakeMainJobSucceed(/*expect_stream_ready=*/true);
   // Net.AlternateProtocolUsage records
   // ALTERNATE_PROTOCOL_USAGE_UNSPECIFIED_REASON, when only main job exists.
@@ -7736,11 +8038,13 @@ class HttpStreamFactoryJobControllerWsOverH3Test
   }
 
   void EnableWebsocketsOverHttp3() {
-    feature_list_.InitAndEnableFeature(features::kEnableWebsocketsOverHttp3);
+    AddScopedFeatureList().InitAndEnableFeature(
+        features::kEnableWebsocketsOverHttp3);
   }
 
   void DisableWebsocketsOverHttp3() {
-    feature_list_.InitAndDisableFeature(features::kEnableWebsocketsOverHttp3);
+    AddScopedFeatureList().InitAndDisableFeature(
+        features::kEnableWebsocketsOverHttp3);
   }
 
   void CreateWebSocketJobController(const HttpRequestInfo& request_info) {
@@ -7850,7 +8154,8 @@ class HttpStreamFactoryJobControllerWsOverH3Test
         /*enable_origin_frame=*/true,
         /*allow_server_preferred_address=*/true,
         MultiplexedSessionCreationInitiator::kUnknown,
-        NetLogWithSource::Make(NetLogSourceType::NONE));
+        NetLogWithSource::Make(NetLogSourceType::NONE),
+        QuicConnectionReuseDetails());
 
     QuicChromiumClientSession* raw_session = new_session.get();
 
@@ -7869,7 +8174,6 @@ class HttpStreamFactoryJobControllerWsOverH3Test
     mock_quic_session_ = raw_session;
   }
 
-  base::test::ScopedFeatureList feature_list_;
   quic::test::MockRandom random_{0};
   quic::MockClock clock_;
   QuicChromiumConnectionHelper helper_{&clock_, &random_};

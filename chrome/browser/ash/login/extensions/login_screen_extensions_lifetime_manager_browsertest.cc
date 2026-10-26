@@ -9,7 +9,6 @@
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
 #include "base/path_service.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/ash/extensions/authentication_screen_extensions_external_loader.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
@@ -23,10 +22,9 @@
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "components/account_id/account_id.h"
-#include "components/user_manager/user.h"
-#include "components/user_manager/user_manager.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/extension_host_test_helper.h"
 #include "extensions/browser/test_extension_registry_observer.h"
@@ -69,9 +67,6 @@ class LoginScreenExtensionsLifetimeManagerTest
     // Don't shut down when no browser is open, since it breaks the test and
     // since it's not the real Chrome OS behavior.
     set_exit_when_last_browser_closes(false);
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{chromeos::features::kLockScreenBadgeAuth},
-        /*disabled_features=*/{});
   }
 
   ~LoginScreenExtensionsLifetimeManagerTest() override = default;
@@ -99,8 +94,10 @@ class LoginScreenExtensionsLifetimeManagerTest
 
   void UnlockSession() {
     const std::string kPassword = "pass";
-    const AccountId account_id =
-        user_manager::UserManager::Get()->GetPrimaryUser()->GetAccountId();
+    const session_manager::Session* primary_session =
+        session_manager::SessionManager::Get()->GetPrimarySession();
+    ASSERT_TRUE(primary_session);
+    const AccountId account_id = primary_session->account_id();
     ScreenLockerTester screen_locker_tester;
     screen_locker_tester.SetUnlockPassword(account_id, kPassword);
     screen_locker_tester.UnlockWithPassword(account_id, kPassword);
@@ -136,7 +133,6 @@ class LoginScreenExtensionsLifetimeManagerTest
   }
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
   DeviceStateMixin device_state_mixin_{
       &mixin_host_, DeviceStateMixin::State::OOBE_COMPLETED_CLOUD_ENROLLED};
   LoginManagerMixin login_manager_mixin_{&mixin_host_};

@@ -42,7 +42,7 @@ use sequenced_task_runner::SequencedTaskRunnerHandle;
 use crate::interface::{DynMojomInterface, MojomInterface};
 use crate::marker_types::{Associated, Primary};
 use crate::message::MojomMessage;
-use crate::multiplex_router::{EndpointInfo, MultiplexRouterHandle, ResponseSender};
+use crate::multiplex_router::{EndpointInfo, MultiplexRouterHandle, ResponseSender, RouterHandle};
 use crate::pending_associated_endpoint_parsing::Registrar;
 
 /// This type looks very scary, but mostly it's just a map from request ID to
@@ -50,9 +50,6 @@ use crate::pending_associated_endpoint_parsing::Registrar;
 /// of what a real `ResponseCallbackTy` looks like, it's easiest to take a look
 /// at some generated code from a mojom file with an `interface`.
 type CallbackMap<T> = Arc<Mutex<HashMap<u64, <T as MojomInterface>::ResponseCallbackTy>>>;
-
-// TODO(crbug.com/517519181): Use an enum instead of a trait object.
-pub(crate) type RouterHandle = Box<dyn AsRef<MultiplexRouterHandle> + Send + Sync + 'static>;
 
 /// This type represents either a regular mojom `Remote`, or an
 /// `AssociatedRemote`. See the documentation of those types for details.
@@ -162,7 +159,11 @@ where
         });
         let make_handle = |endpoint_info| -> RouterHandle {
             let sets_high_bit = true; // Remotes set the high bit to 1
-            Box::new(MultiplexRouterHandle::new(self.endpoint, sets_high_bit, endpoint_info))
+            RouterHandle::Primary(MultiplexRouterHandle::new(
+                self.endpoint,
+                sets_high_bit,
+                endpoint_info,
+            ))
         };
         Remote::new(make_handle, runner, disconnect_handler)
     }
@@ -238,7 +239,8 @@ where
         mut message: MojomMessage,
         response_callback: Option<T::ResponseCallbackTy>,
     ) {
-        // Set the request ID and stash the callback in the map with that ID as the key
+        // Set the request ID and stash the callback in the map with that ID as
+        // the key
         message.header.request_id = self.next_request_id;
         if let Some(callback) = response_callback {
             let old_entry = self
@@ -247,19 +249,23 @@ where
                 .expect("Mutex should never be poisoned")
                 .insert(self.next_request_id, callback);
             if old_entry.is_some() {
-                // This is technically possible...if we wrap all the way around with request IDs
+                // This is technically possible...if we wrap all the way around
+                // with request IDs
                 panic!("send_message_internal: Tried to insert duplicate response!")
             }
         }
 
-        // Generate the next request ID. Skip 0 in case it gets a special meaning in the
-        // future.
+        // Generate the next request ID. Skip 0 in case it gets a special
+        // meaning in the future.
         self.next_request_id =
             if self.next_request_id == u64::MAX { 1 } else { self.next_request_id + 1 };
 
-        // This can only fail if the other end is closed, in which case we've nothing to
-        // do here (we'll get a disconnection notification separately).
-        self.router.as_ref().as_ref().send_message(message);
+        // This can only fail if the other end is closed, in which case we'll
+        // get a disconnection notification separately.
+        // TODO(crbug.com/546129246): If the send failed, we shouldn't insert
+        // the response handler in the first place. But that requires plumbing
+        // to observe if it failed.
+        self.router.send_message(message);
     }
 
     /// This is the function which is called by the `MultiplexRouter`
@@ -279,7 +285,8 @@ where
         let response_callback = match response_callback {
             Some(callback) => callback,
             None => {
-                // The error here is a reminder to return immediately, which we do
+                // The error here is a reminder to return immediately, which we
+                // do
                 let _ = message.report_bad_message(&format!(
                     "Received message with unknown request_id {}",
                     message.header.request_id
@@ -291,10 +298,25 @@ where
     }
 
     pub fn as_registrar(&self) -> &impl Registrar {
-        self.router.as_ref().as_ref()
+        &self.router
     }
 }
 
 // We deliberately do not implement `From` and `Into` for
 // `Remote/PendingRemote` pairs, because binding and unbinding are
 // stateful operations that should be done explicitly.
+
+impl<T> AssociatedRemote<T>
+where
+    T: DynMojomInterface + ?Sized,
+{
+    /// Checks if the endpoint has been associated with a specific pipe yet,
+    /// and can therefore be used to send messages.
+    ///
+    /// This only happens when the _other_ endpoint is sent via a Mojo message.
+    /// If this returns false, trying to use the endpoint (e.g. sending
+    /// messages) will panic.
+    pub fn ready_for_messages(&self) -> bool {
+        self.router.ready_for_messages()
+    }
+}

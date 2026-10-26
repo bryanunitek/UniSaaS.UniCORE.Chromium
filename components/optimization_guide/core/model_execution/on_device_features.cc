@@ -35,30 +35,9 @@ std::string_view GetVariantName(mojom::OnDeviceFeature feature) {
       return "OnDeviceSpeechRecognition";
     case mojom::OnDeviceFeature::kSpeechRecognitionSmallExpertModel:
       return "SpeechRecognitionSmallExpertModel";
-    case mojom::OnDeviceFeature::kClassifier:
-      return "Classifier";
   }
 }
 
-OnDeviceModelType GetOnDeviceModelType(mojom::OnDeviceFeature feature) {
-  switch (feature) {
-    case mojom::OnDeviceFeature::kClassifier:
-      return OnDeviceModelType::kClassifierModel;
-    case mojom::OnDeviceFeature::kCompose:
-    case mojom::OnDeviceFeature::kTest:
-    case mojom::OnDeviceFeature::kPromptApi:
-    case mojom::OnDeviceFeature::kHistorySearch:
-    case mojom::OnDeviceFeature::kSummarize:
-    case mojom::OnDeviceFeature::kHistoryQueryIntent:
-    case mojom::OnDeviceFeature::kScamDetection:
-    case mojom::OnDeviceFeature::kPermissionsAi:
-    case mojom::OnDeviceFeature::kProofreaderApi:
-    case mojom::OnDeviceFeature::kWritingAssistanceApi:
-    case mojom::OnDeviceFeature::kOnDeviceSpeechRecognition:
-    case mojom::OnDeviceFeature::kSpeechRecognitionSmallExpertModel:
-      return OnDeviceModelType::kBaseModel;
-  }
-}
 
 // To enable on-device execution for a feature, update this to return a
 // non-null target.
@@ -93,8 +72,6 @@ proto::OptimizationTarget GetOptimizationTargetForFeature(
     case mojom::OnDeviceFeature::kSpeechRecognitionSmallExpertModel:
       return proto::
           OPTIMIZATION_TARGET_MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION_TINY_GEMMA;
-    case mojom::OnDeviceFeature::kClassifier:
-      return proto::OPTIMIZATION_TARGET_MODEL_EXECUTION_FEATURE_CLASSIFIER;
   }
 }
 
@@ -133,8 +110,6 @@ proto::ModelExecutionFeature ToModelExecutionFeatureProto(
     case mojom::OnDeviceFeature::kSpeechRecognitionSmallExpertModel:
       return proto::ModelExecutionFeature::
           MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION_TINY_GEMMA;
-    case mojom::OnDeviceFeature::kClassifier:
-      return proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_CLASSIFIER;
   }
 }
 
@@ -180,8 +155,6 @@ std::string ToUseCaseName(mojom::OnDeviceFeature feature) {
       return "speech_recognition";
     case mojom::OnDeviceFeature::kSpeechRecognitionSmallExpertModel:
       return "speech_recognition_small_expert_model";
-    case mojom::OnDeviceFeature::kClassifier:
-      return "classifier_api";
   }
 }
 

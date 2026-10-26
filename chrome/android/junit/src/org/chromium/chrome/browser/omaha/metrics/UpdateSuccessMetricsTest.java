@@ -23,18 +23,16 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Shadows;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Promise;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.version_info.VersionConstants;
+import org.chromium.base.version_info.VersionInfo;
 import org.chromium.chrome.browser.omaha.metrics.UpdateProtos.Tracking;
 import org.chromium.chrome.browser.omaha.metrics.UpdateProtos.Tracking.Source;
 import org.chromium.chrome.browser.omaha.metrics.UpdateProtos.Tracking.Type;
 
 /** Tests the API surface of UpdateSuccessMetrics. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class UpdateSuccessMetricsTest {
     @Mock private TrackingProvider mProvider;
 
@@ -91,7 +89,7 @@ public class UpdateSuccessMetricsTest {
     private static Tracking buildProto() {
         return Tracking.newBuilder()
                 .setTimestampMs(System.currentTimeMillis())
-                .setVersion(VersionConstants.PRODUCT_VERSION)
+                .setVersion(VersionInfo.getProductVersion())
                 .setType(Type.INTENT)
                 .setSource(Source.FROM_MENU)
                 .setRecordedSession(false)

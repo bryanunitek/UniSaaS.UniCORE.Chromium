@@ -15,7 +15,7 @@ use crate::traits::{
 
 /// Derive the `Pod` trait for a struct
 ///
-/// The macro ensures that the struct follows all the the safety requirements
+/// The macro ensures that the struct follows all the safety requirements
 /// for the `Pod` trait.
 ///
 /// The following constraints need to be satisfied for the macro to succeed
@@ -97,7 +97,7 @@ pub fn derive_pod(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
 /// Derive the `AnyBitPattern` trait for a struct
 ///
-/// The macro ensures that the struct follows all the the safety requirements
+/// The macro ensures that the struct follows all the safety requirements
 /// for the `AnyBitPattern` trait.
 ///
 /// The following constraints need to be satisfied for the macro to succeed
@@ -116,7 +116,7 @@ pub fn derive_anybitpattern(
 
 /// Derive the `Zeroable` trait for a type.
 ///
-/// The macro ensures that the type follows all the the safety requirements
+/// The macro ensures that the type follows all the safety requirements
 /// for the `Zeroable` trait.
 ///
 /// The following constraints need to be satisfied for the macro to succeed on a
@@ -245,7 +245,7 @@ pub fn derive_zeroable(
 
 /// Derive the `NoUninit` trait for a struct or enum
 ///
-/// The macro ensures that the type follows all the the safety requirements
+/// The macro ensures that the type follows all the safety requirements
 /// for the `NoUninit` trait.
 ///
 /// The following constraints need to be satisfied for the macro to succeed
@@ -263,7 +263,7 @@ pub fn derive_zeroable(
 /// - If the enum has fields:
 ///   - All fields must implement `NoUninit`
 ///   - All variants must not contain any padding bytes
-///   - All variants must be of the the same size
+///   - All variants must be of the same size
 ///   - There must be no padding bytes between the discriminant and any of the
 ///     variant fields
 /// - The enum must contain no generic parameters
@@ -279,7 +279,7 @@ pub fn derive_no_uninit(
 
 /// Derive the `CheckedBitPattern` trait for a struct or enum.
 ///
-/// The macro ensures that the type follows all the the safety requirements
+/// The macro ensures that the type follows all the safety requirements
 /// for the `CheckedBitPattern` trait and derives the required `Bits` type
 /// definition and `is_valid_bit_pattern` method for the type automatically.
 ///
@@ -307,7 +307,7 @@ pub fn derive_maybe_pod(
 
 /// Derive the `TransparentWrapper` trait for a struct
 ///
-/// The macro ensures that the struct follows all the the safety requirements
+/// The macro ensures that the struct follows all the safety requirements
 /// for the `TransparentWrapper` trait.
 ///
 /// The following constraints need to be satisfied for the macro to succeed
@@ -381,7 +381,7 @@ pub fn derive_transparent(
 
 /// Derive the `Contiguous` trait for an enum
 ///
-/// The macro ensures that the enum follows all the the safety requirements
+/// The macro ensures that the enum follows all the safety requirements
 /// for the `Contiguous` trait.
 ///
 /// The following constraints need to be satisfied for the macro to succeed
@@ -597,6 +597,9 @@ fn derive_marker_trait_inner<Trait: Derivable>(
 ) -> Result<TokenStream> {
   let crate_name = bytemuck_crate_name(&input);
   let trait_ = Trait::ident(&input, &crate_name)?;
+  // Some traits (notably TransparentWrapper) omit extra generated bounds on the
+  // impl, but the type's own where-clause must still be forwarded.
+  let original_where_clause = input.generics.where_clause.clone();
   // If this trait allows explicit bounds, and any explicit bounds were given,
   // then use those explicit bounds. Else, apply the default bounds (bound
   // each generic type on this trait).
@@ -677,8 +680,11 @@ fn derive_marker_trait_inner<Trait: Derivable>(
     quote!()
   };
 
-  let where_clause =
-    if Trait::requires_where_clause() { where_clause } else { None };
+  let where_clause = if Trait::requires_where_clause() {
+    where_clause
+  } else {
+    original_where_clause.as_ref()
+  };
 
   Ok(quote! {
     #asserts

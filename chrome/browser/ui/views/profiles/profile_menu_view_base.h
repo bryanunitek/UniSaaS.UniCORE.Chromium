@@ -18,6 +18,7 @@
 #include "chrome/browser/ui/views/close_bubble_on_tab_activation_helper.h"
 #include "chrome/browser/ui/views/controls/hover_button.h"
 #include "components/signin/public/identity_manager/account_info.h"
+#include "components/user_education/common/new_badge/new_badge_controller.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -31,7 +32,8 @@
 #include "ui/views/style/typography.h"
 #include "ui/views/view_tracker.h"
 
-class Browser;
+class BrowserWindowInterface;
+class ProfileAttributesEntry;
 
 namespace views {
 class Button;
@@ -93,6 +95,8 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/profile/enums.xml:ProfileMenuActionableItem)
 
+  enum class AvatarRingType { kNone, kDotted, kGradient };
+
   // Parameters for `SetProfileIdentityWithCallToAction()`
   struct IdentitySectionParams {
     IdentitySectionParams();
@@ -113,11 +117,11 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
 
     // `profile_image` must not be empty. It does not need to be circular.
     ui::ImageModel profile_image;
-    bool has_dotted_ring = false;
+    AvatarRingType avatar_ring = AvatarRingType::kNone;
     // This padding does not make the avatar larger in the menu.
     // `profile_image` is drawn smaller to leave space around for the padding.
     int profile_image_padding = 0;
-    int ai_subscription_tier = 0;
+    std::u16string badge_label;
 
     // Must not be empty.
     std::u16string title;
@@ -154,11 +158,16 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
   static constexpr int kOtherProfileImageSize = 16;
 
   // `browser` must not be nullptr.
-  ProfileMenuViewBase(views::BubbleAnchor anchor_element, Browser* browser);
+  ProfileMenuViewBase(views::BubbleAnchor anchor_element,
+                      BrowserWindowInterface* browser);
   ~ProfileMenuViewBase() override;
 
   ProfileMenuViewBase(const ProfileMenuViewBase&) = delete;
   ProfileMenuViewBase& operator=(const ProfileMenuViewBase&) = delete;
+
+  // Returns a formatted profile display name based on the name form in `entry`.
+  static std::u16string GetProfileIdentifier(
+      const ProfileAttributesEntry& entry);
 
   // Resizes and crops `image_model` to a circular shape.
   // Note: if the image is backed by a vector icon, it is actually not cropped.
@@ -178,14 +187,16 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
                         base::RepeatingClosure action,
                         const gfx::VectorIcon& icon,
                         float icon_to_image_ratio = 1.0f,
-                        bool is_new = false);
+                        user_education::DisplayNewBadge display_new_badge = {});
   void SetProfileManagementHeading(const std::u16string& heading);
 
   // Does not resize the image.
-  void AddAvailableProfile(const ui::ImageModel& image_model,
-                           const std::u16string& name,
-                           bool is_guest,
-                           base::RepeatingClosure action);
+  void AddAvailableProfile(
+      const ui::ImageModel& image_model,
+      const std::u16string& name,
+      bool is_guest,
+      base::RepeatingClosure action,
+      const std::u16string& extra_accessible_text = std::u16string());
 
   void AddProfileManagementFeaturesSeparator();
   void AddProfileManagementFeatureButton(const gfx::VectorIcon& icon,
@@ -241,15 +252,12 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
 
   void CreateAXWidgetObserver(views::Widget* widget);
 
-  // `badge_view` is a view positioned on the trailing edge of the button (e.g.
-  // a "New" badge or status icon) that sits flush on the far right opposite of
-  // the main title.
   std::unique_ptr<HoverButton> CreateMenuRowButton(
       base::RepeatingClosure action,
       std::unique_ptr<views::View> icon_view,
       const std::u16string& text,
       int icon_offset = 0,
-      std::unique_ptr<views::View> badge_view = nullptr);
+      user_education::DisplayNewBadge display_new_badge = {});
 
   const raw_ref<Profile> profile_;
 

@@ -23,7 +23,6 @@ import org.robolectric.Robolectric;
 
 import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.browser.safety_hub.SafetyHubModuleMediator.ModuleOption;
 import org.chromium.chrome.browser.safety_hub.SafetyHubModuleMediator.ModuleState;
 import org.chromium.ui.base.TestActivity;
@@ -83,7 +82,6 @@ public class SafetyHubModuleMediatorTest {
     }
 
     @RunWith(ParameterizedRobolectricTestRunner.class)
-    @Batch(Batch.UNIT_TESTS)
     public static class SafetyHubModuleMediatorParamTests {
         @Parameters
         public static Collection<Object> data() {
@@ -92,8 +90,7 @@ public class SafetyHubModuleMediatorTest {
                         ModuleOption.UPDATE_CHECK,
                         ModuleOption.ACCOUNT_PASSWORDS,
                         ModuleOption.SAFE_BROWSING,
-                        ModuleOption.UNUSED_PERMISSIONS,
-                        ModuleOption.NOTIFICATION_REVIEW
+                        ModuleOption.UNUSED_PERMISSIONS
                     });
         }
 
@@ -104,7 +101,7 @@ public class SafetyHubModuleMediatorTest {
         private static final @DrawableRes int SAFE_ICON = R.drawable.material_ic_check_24dp;
         private static final @DrawableRes int INFO_ICON = R.drawable.btn_info;
         private static final @DrawableRes int MANAGED_ICON = R.drawable.ic_domain;
-        private static final @DrawableRes int WARNING_ICON = R.drawable.ic_error;
+        private static final @DrawableRes int WARNING_ICON = R.drawable.ic_error_24dp;
 
         private Activity mActivity;
 
@@ -225,7 +222,6 @@ public class SafetyHubModuleMediatorTest {
     }
 
     @RunWith(BaseRobolectricTestRunner.class)
-    @Batch(Batch.UNIT_TESTS)
     public static class SafetyHubModuleMediatorSingleTests {
         @Test
         public void order_mixedStates() {
@@ -294,19 +290,13 @@ public class SafetyHubModuleMediatorTest {
                             ModuleState.SAFE,
                             /* isManaged= */ false,
                             ModuleOption.UNUSED_PERMISSIONS);
-            SafetyHubModuleMediatorImpl notificationReviewMediator =
-                    new SafetyHubModuleMediatorImpl(
-                            ModuleState.SAFE,
-                            /* isManaged= */ false,
-                            ModuleOption.NOTIFICATION_REVIEW);
 
             int[] actualOrder =
                     new int[] {
                         updateCheckMediator.getOrder(),
                         accountPasswordsMediator.getOrder(),
                         safeBrowsingMediator.getOrder(),
-                        unusedPermissionsMediator.getOrder(),
-                        notificationReviewMediator.getOrder()
+                        unusedPermissionsMediator.getOrder()
                     };
             Arrays.sort(actualOrder);
 
@@ -317,8 +307,7 @@ public class SafetyHubModuleMediatorTest {
                         updateCheckMediator.getOrder(),
                         accountPasswordsMediator.getOrder(),
                         safeBrowsingMediator.getOrder(),
-                        unusedPermissionsMediator.getOrder(),
-                        notificationReviewMediator.getOrder()
+                        unusedPermissionsMediator.getOrder()
                     });
         }
     }

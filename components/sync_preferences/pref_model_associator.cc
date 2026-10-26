@@ -168,9 +168,7 @@ void PrefModelAssociator::InitPrefAndAssociate(
       // Else if account storage is disabled, this implies there exists both
       // server and local values. Merge them.
       base::Value new_value;
-      if (dual_layer_user_prefs_ &&
-          base::FeatureList::IsEnabled(
-              syncer::kSyncPreferencesUseSelectedTypes)) {
+      if (dual_layer_user_prefs_) {
         new_value = user_pref_value->Clone();
       } else {
         new_value = helper::MergePreference(client_.get(), pref_name,
@@ -481,8 +479,9 @@ void PrefModelAssociator::OnPrefValueChanged(std::string_view name) {
   }
 
   if (client_) {
-    std::optional<SyncablePrefMetadata> pref_metadata =
+    const SyncablePrefMetadata* pref_metadata =
         client_->GetSyncablePrefsDatabase().GetSyncablePrefMetadata(name);
+    CHECK(pref_metadata);
     int id = pref_metadata->syncable_pref_id();
     // TODO(crbug.com/418991364): Determine if this histogram should replace the
     // one below. If not, remove this histogram.
@@ -532,8 +531,9 @@ void PrefModelAssociator::OnPrefValueChanged(std::string_view name) {
   if (client_ &&
       // Only log if there's actually something to sync.
       !changes.empty()) {
-    std::optional<SyncablePrefMetadata> pref_metadata =
+    const SyncablePrefMetadata* pref_metadata =
         client_->GetSyncablePrefsDatabase().GetSyncablePrefMetadata(name);
+    CHECK(pref_metadata);
     int id = pref_metadata->syncable_pref_id();
     base::UmaHistogramSparse("Sync.SyncablePrefValueChanged", id);
     base::UmaHistogramSparse(

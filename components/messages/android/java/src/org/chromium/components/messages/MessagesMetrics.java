@@ -49,7 +49,7 @@ public class MessagesMetrics {
         String histogramName =
                 DISMISSED_HISTOGRAM_PREFIX + messageIdentifierToHistogramSuffix(messageIdentifier);
         RecordHistogram.recordEnumeratedHistogram(
-                histogramName, dismissReason, DismissReason.COUNT);
+                histogramName, dismissReason, DismissReason.MAX_VALUE + 1);
     }
 
     /**
@@ -206,8 +206,6 @@ public class MessagesMetrics {
                 return "OsAdvancedProtectionSettingChangedMessage";
             case MessageIdentifier.UPDATE_CHROME_FOR_TAB_GROUP_SHARE:
                 return "UpdateChromeForTabGroupShare";
-            case MessageIdentifier.MODE_B_ROLLBACK_MESSAGE:
-                return "ModeBRollbackMessage";
             case MessageIdentifier.RELOAD_PAGE:
                 return "ReloadPage";
             case MessageIdentifier.MULTI_INSTANCE_CREATION_LIMIT:
@@ -230,6 +228,22 @@ public class MessagesMetrics {
                 return "PersonalContextFetchingFailure";
             case MessageIdentifier.PRIVATE_INFERENCE_NOTICE:
                 return "PrivateInferenceNotice";
+            case MessageIdentifier.CONTEXTUAL_TASKS_WINDOW_RESIZED:
+                return "ContextualTasksWindowResized";
+            case MessageIdentifier.IMMERSIVE_PLAYBACK_CONFIRMATION:
+                return "ImmersivePlaybackConfirmation";
+            case MessageIdentifier.INTRANET_REDIRECT:
+                return "IntranetRedirect";
+            case MessageIdentifier.PASSWORD_SAVED_CONFIRMATION:
+                return "PasswordSavedConfirmation";
+            case MessageIdentifier.EMAIL_VERIFIED:
+                return "EmailVerified";
+            case MessageIdentifier.RESURRECT_CHURNED_USERS:
+                return "ResurrectChurnedUsers";
+            case MessageIdentifier.EMAIL_VERIFICATION_ERROR:
+                return "EmailVerificationError";
+            case MessageIdentifier.EMAIL_VERIFICATION_LOADING:
+                return "EmailVerificationLoading";
             default:
                 return "Unknown";
         }

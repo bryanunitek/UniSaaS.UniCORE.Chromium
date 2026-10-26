@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "components/keep_alive_registry/keep_alive_types.h"
+
 #include "base/logging.h"
 #include "base/notreached.h"
 
@@ -92,6 +93,16 @@ std::ostream& operator<<(std::ostream& out, const KeepAliveOrigin& origin) {
       return out << "SESSION_DATA_DELETER";
     case KeepAliveOrigin::UMA_LOG:
       return out << "UMA_LOG";
+    case KeepAliveOrigin::OMNIBOX_EVERYWHERE:
+      return out << "OMNIBOX_EVERYWHERE";
+    case KeepAliveOrigin::OMNIBOX_EVERYWHERE_UI:
+      return out << "OMNIBOX_EVERYWHERE_UI";
+    case KeepAliveOrigin::OMNIBOX_EVERYWHERE_STARTUP:
+      return out << "OMNIBOX_EVERYWHERE_STARTUP";
+    case KeepAliveOrigin::FETCH_KEEPALIVE_REQUEST:
+      return out << "FETCH_KEEPALIVE_REQUEST";
+    case KeepAliveOrigin::ISOLATION_STATE_CHANGE:
+      return out << "ISOLATION_STATE_CHANGE";
   }
 
   NOTREACHED() << static_cast<int>(origin);

@@ -142,6 +142,7 @@ class MockFrameHost : public mojom::FrameHost {
 
   void CreateChildFrame(
       const blink::LocalFrameToken& frame_token,
+      const blink::InitiatorStateToken& initiator_state_token,
       mojo::PendingAssociatedRemote<mojom::Frame> frame_remote,
       mojo::PendingReceiver<blink::mojom::BrowserInterfaceBroker>
           browser_interface_broker_receiver,
@@ -180,6 +181,8 @@ class MockFrameHost : public mojom::FrameHost {
   }
 
   void DidOpenDocumentInputStream(const GURL& url) override {}
+
+  void DidCommitDocumentReplacement() override {}
 
   void BeginNavigation(
       blink::mojom::CommonNavigationParamsPtr common_params,
@@ -276,6 +279,7 @@ void TestRenderFrame::Navigate(
       /*fetch_later_loader_factory=*/mojo::NullAssociatedRemote(),
       /*document_token=*/blink::DocumentToken(),
       /*devtools_navigation_token=*/base::UnguessableToken::Create(),
+      /*initiator_state_token=*/blink::InitiatorStateToken(),
       /*base_auction_nonce=*/base::Uuid::GenerateRandomV4(),
       blink::mojom::PolicyContainer::New(
           blink::mojom::PolicyContainerPolicies::New(),
@@ -312,7 +316,8 @@ void TestRenderFrame::NavigateWithError(
       /*has_stale_copy_in_cache=*/false, error_code,
       /*extended_error_code=*/0, resolve_error_info, error_page_content,
       std::move(pending_factory_bundle), blink::DocumentToken(),
-      base::UnguessableToken::Create(), CreateStubPolicyContainer(),
+      base::UnguessableToken::Create(), blink::InitiatorStateToken(),
+      CreateStubPolicyContainer(),
       /*alternative_error_page_info=*/nullptr,
       base::BindOnce(&MockFrameHost::DidCommitProvisionalLoad,
                      base::Unretained(mock_frame_host_.get())));

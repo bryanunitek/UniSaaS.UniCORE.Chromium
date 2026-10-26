@@ -24,10 +24,10 @@
 #include "base/types/optional_ref.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "components/webapps/isolated_web_apps/key_distribution/iwa_entitlements.h"
 #include "components/webapps/isolated_web_apps/key_distribution/iwa_key_distribution_histograms.h"
+#include "components/webapps/isolated_web_apps/key_distribution/iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/key_distribution/proto/key_distribution.pb.h"
-#include "components/webapps/isolated_web_apps/public/iwa_entitlements.h"
-#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
 
 namespace web_app {
 
@@ -153,6 +153,11 @@ bool IwaKeyDistributionInfoProvider::IsBundleBlocklisted(
 
 bool IwaKeyDistributionInfoProvider::IsManagedInstallPermitted(
     std::string_view web_bundle_id) const {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (base::FeatureList::IsEnabled(kIsolatedWebAppBypassManagedAllowlist)) {
+    return true;
+  }
+#endif
   if (skip_managed_checks_for_testing_) {
     CHECK_IS_TEST();
     return true;
@@ -172,6 +177,11 @@ bool IwaKeyDistributionInfoProvider::IsManagedInstallPermitted(
 
 bool IwaKeyDistributionInfoProvider::IsManagedUpdatePermitted(
     std::string_view web_bundle_id) const {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (base::FeatureList::IsEnabled(kIsolatedWebAppBypassManagedAllowlist)) {
+    return true;
+  }
+#endif
   if (skip_managed_checks_for_testing_) {
     CHECK_IS_TEST();
     return true;
@@ -602,5 +612,10 @@ IwaKeyDistributionInfoProvider::Component::Component(base::Version version,
 IwaKeyDistributionInfoProvider::Component::~Component() = default;
 IwaKeyDistributionInfoProvider::Component::Component(const Component&) =
     default;
+
+#if BUILDFLAG(IS_CHROMEOS)
+BASE_FEATURE(kIsolatedWebAppBypassManagedAllowlist,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace web_app

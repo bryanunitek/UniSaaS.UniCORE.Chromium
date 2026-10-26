@@ -7,6 +7,8 @@
 
 #import <UIKit/UIKit.h>
 
+#import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+
 @protocol GREYMatcher;
 
 // Helper class to return matchers for EG tests.  These helpers are compiled
@@ -86,10 +88,9 @@
 // Matcher for element with an image defined by its name in the main bundle.
 + (id<GREYMatcher>)imageViewWithImageNamed:(NSString*)imageName;
 
-// Matcher for element with a custom symbol defined by its name and point size
-// in the main bundle.
-+ (id<GREYMatcher>)imageViewWithCustomSymbolNamed:(NSString*)symbolName
-                                        pointSize:(CGFloat)pointSize;
+// Matcher for element with a symbol defined by `symbol` and `pointSize`.
++ (id<GREYMatcher>)imageViewWithSymbol:(Symbol)symbol
+                             pointSize:(CGFloat)pointSize;
 
 // Matcher for element with an image corresponding to `imageID` and
 // accessibility trait UIAccessibilityTraitButton.
@@ -267,6 +268,9 @@
 // Matcher for the done button on the navigation bar.
 + (id<GREYMatcher>)navigationBarDoneButton;
 
+// Matcher for the edit button on the navigation bar.
++ (id<GREYMatcher>)navigationBarEditButton;
+
 // Matcher for the done button on the Bookmarks navigation bar.
 + (id<GREYMatcher>)bookmarksNavigationBarDoneButton;
 
@@ -427,9 +431,6 @@
 
 // Returns matcher for the voice search button on the main Settings screen.
 + (id<GREYMatcher>)voiceSearchButton;
-
-// Returns matcher for the voice search button on the omnibox input accessory.
-+ (id<GREYMatcher>)voiceSearchInputAccessoryButton;
 
 // Returns matcher for the settings main menu view.
 + (id<GREYMatcher>)settingsCollectionView;
@@ -594,9 +595,6 @@
 // Returns the GREYMatcher for the button that closes the tab grid.
 + (id<GREYMatcher>)tabGridDoneButton;
 
-// Returns the GREYMatcher for the button that reverts the close all tabs action
-// in the tab grid.
-+ (id<GREYMatcher>)tabGridUndoCloseAllButton;
 
 // Returns the GREYMatcher for the cell that opens History in Recent Tabs.
 + (id<GREYMatcher>)tabGridSelectShowHistoryCell;
@@ -799,12 +797,6 @@
 
 // Returns the GREYMatcher for the button to open the overflow menu.
 + (id<GREYMatcher>)tabGridOverflowMenuButton;
-
-// Returns a matcher for the legacy edit button.
-+ (id<GREYMatcher>)tabGridEditButton;
-
-// Returns a matcher for the legacy edit menu button to close all tabs.
-+ (id<GREYMatcher>)tabGridEditMenuCloseAllButton;
 
 // Returns a matcher for the overflow menu button to close all tabs.
 + (id<GREYMatcher>)tabGridOverflowMenuCloseAllButton;

@@ -16,14 +16,8 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/device_attributes.h"
-#include "chrome/browser/ash/policy/core/device_attributes_impl.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/user_manager/user.h"
 #include "third_party/re2/src/re2/re2.h"
 
@@ -55,26 +49,8 @@ std::string EmailDomain(const std::string& email) {
   return email.substr(at_sign_pos + 1);
 }
 
-std::string SignedInUserEmail(const Profile* profile) {
-  DCHECK(profile);
-  signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfileIfExists(profile);
-  CoreAccountInfo info =
-      identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
-  return info.email;
-}
-
-std::string DeviceDirectoryId(policy::DeviceAttributes* device_attributes) {
-  return device_attributes->GetDirectoryApiID();
-}
-
-std::string DeviceAssetId(policy::DeviceAttributes* device_attributes) {
-  return device_attributes->GetDeviceAssetID();
-}
-
-std::string DeviceAnnotatedLocation(
-    policy::DeviceAttributes* device_attributes) {
-  return device_attributes->GetDeviceAnnotatedLocation();
+std::string Identity(const std::string& email) {
+  return email;
 }
 
 std::string DeviceSerialNumber() {
@@ -88,60 +64,46 @@ std::string DeviceSerialNumber() {
 typedef base::flat_map<std::string, base::RepeatingCallback<std::string()>>
     VariableResolver;
 
-bool IsAffiliatedUser(const Profile* profile) {
-  const user_manager::User* user =
-      ash::ProfileHelper::Get()->GetUserByProfile(profile);
-  return user && user->IsAffiliated();
-}
-
-// Build a |VariableResolver| from all known variables.
+// Builds a `VariableResolver` from all known variables.
+// `attributes` must not be null and must outlive the returned
+// `VariableResolver`.
 const VariableResolver BuildVariableResolver(
-    const Profile* profile,
-    policy::DeviceAttributes* attributes) {
+    const user_manager::User& user,
+    const policy::DeviceAttributes* attributes) {
+  CHECK(attributes);
+
   // Use |empty_string_getter| for device attributes if user is not affiliated.
-  const bool is_affiliated = IsAffiliatedUser(profile);
+  const bool is_affiliated = user.IsAffiliated();
+  const std::string user_email = user.GetAccountId().GetUserEmail();
   const auto empty_string_getter =
       base::BindRepeating([]() { return std::string(); });
 
   return VariableResolver{
-      {kUserEmail,
-       base::BindRepeating(
-           [](const Profile* profile) { return SignedInUserEmail(profile); },
-           profile)},
-      {kUserEmailName, base::BindRepeating(
-                           [](const Profile* profile) {
-                             return EmailName(SignedInUserEmail(profile));
-                           },
-                           profile)},
-      {kUserEmailDomain, base::BindRepeating(
-                             [](const Profile* profile) {
-                               return EmailDomain(SignedInUserEmail(profile));
-                             },
-                             profile)},
-      {kDeviceDirectoryId, is_affiliated
-                               ? base::BindRepeating(
-                                     [](policy::DeviceAttributes* attributes) {
-                                       return DeviceDirectoryId(attributes);
-                                     },
-                                     attributes)
-                               : empty_string_getter},
+      {kUserEmail, base::BindRepeating(&Identity, user_email)},
+      {kUserEmailName, base::BindRepeating(&EmailName, user_email)},
+      {kUserEmailDomain, base::BindRepeating(&EmailDomain, user_email)},
+      {kDeviceDirectoryId,
+       is_affiliated
+           // The safety of Unretained is upheld by the caller.
+           ? base::BindRepeating(&policy::DeviceAttributes::GetDirectoryApiID,
+                                 base::Unretained(attributes))
+           : empty_string_getter},
       {kDeviceSerialNumber, is_affiliated
                                 ? base::BindRepeating(&DeviceSerialNumber)
                                 : empty_string_getter},
-      {kDeviceAssetId, is_affiliated
-                           ? base::BindRepeating(
-                                 [](policy::DeviceAttributes* attributes) {
-                                   return DeviceAssetId(attributes);
-                                 },
-                                 attributes)
-                           : empty_string_getter},
+      {kDeviceAssetId,
+       is_affiliated
+           // The safety of Unretained is upheld by the caller.
+           ? base::BindRepeating(&policy::DeviceAttributes::GetDeviceAssetID,
+                                 base::Unretained(attributes))
+           : empty_string_getter},
       {kDeviceAnnotatedLocation,
-       is_affiliated ? base::BindRepeating(
-                           [](policy::DeviceAttributes* attributes) {
-                             return DeviceAnnotatedLocation(attributes);
-                           },
-                           attributes)
-                     : empty_string_getter},
+       is_affiliated
+           // The safety of Unretained is upheld by the caller.
+           ? base::BindRepeating(
+                 &policy::DeviceAttributes::GetDeviceAnnotatedLocation,
+                 base::Unretained(attributes))
+           : empty_string_getter},
   };
 }
 
@@ -151,7 +113,7 @@ std::string ResolveVariableChain(const VariableResolver& resolver,
                                  std::vector<std::string_view> variables) {
   for (const auto& variable : variables) {
     // Variables should always be valid and have a mapping in |resolver|.
-    DCHECK(resolver.find(variable) != resolver.end());
+    CHECK(resolver.find(variable) != resolver.end(), base::NotFatalUntil::M160);
 
     // Resolve the given variable and return if it has a value.
     std::string result = resolver.at(variable).Run();
@@ -177,16 +139,17 @@ std::string SearchAndReplace(
 
   // Loop as long as |regex| matches |search_input|.
   while (re2::RE2::PartialMatch(search_input, regex, &capture)) {
-    DCHECK(capture.data() != nullptr);
+    CHECK(capture.data() != nullptr, base::NotFatalUntil::M160);
     // Output the prefix skipped by PartialMatch until |capture| is found.
-    DCHECK(capture.begin() >= search_input.begin());
+    CHECK(capture.begin() >= search_input.begin(), base::NotFatalUntil::M160);
     size_t prefix_size = capture.begin() - search_input.begin();
     output.emplace_back(search_input.data(), prefix_size);
     // Output the replacement for |capture|.
     output.emplace_back(replacement_getter.Run(capture));
 
     // Update |search_input| to the suffix after |capture|.
-    DCHECK(search_input.length() >= prefix_size + capture.length());
+    CHECK(search_input.length() >= prefix_size + capture.length(),
+          base::NotFatalUntil::M160);
     size_t remaining_size =
         search_input.length() - (prefix_size + capture.length());
     search_input = std::string_view(
@@ -230,7 +193,8 @@ void ReplaceVariables(const VariableResolver& resolver,
   auto chain_resolver = base::BindRepeating(
       [](const VariableResolver& resolver, std::string_view variable) {
         // Remove the "${" prefix and the "}" suffix from |variable|.
-        DCHECK(variable.starts_with("${") && variable.ends_with("}"));
+        CHECK(variable.starts_with("${") && variable.ends_with("}"),
+              base::NotFatalUntil::M160);
         const std::string_view chain = variable.substr(2, variable.size() - 3);
         const std::vector<std::string_view> variables = SplitByColon(chain);
 
@@ -285,19 +249,11 @@ const char kDeviceAssetId[] = "DEVICE_ASSET_ID";
 const char kDeviceAnnotatedLocation[] = "DEVICE_ANNOTATED_LOCATION";
 
 void RecursivelyReplaceManagedConfigurationVariables(
-    const Profile* profile,
-    base::DictValue& managedConfiguration) {
-  policy::DeviceAttributesImpl device_attributes;
-  RecursivelyReplaceManagedConfigurationVariables(profile, &device_attributes,
-                                                  managedConfiguration);
-}
-
-void RecursivelyReplaceManagedConfigurationVariables(
-    const Profile* profile,
-    policy::DeviceAttributes* device_attributes,
+    const user_manager::User& user,
+    const policy::DeviceAttributes& device_attributes,
     base::DictValue& managedConfiguration) {
   const VariableResolver resolver =
-      BuildVariableResolver(profile, device_attributes);
+      BuildVariableResolver(user, &device_attributes);
   ReplaceVariables(resolver, managedConfiguration);
 }
 

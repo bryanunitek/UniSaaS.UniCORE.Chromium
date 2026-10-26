@@ -190,6 +190,8 @@ void PopulateBrowserMetrics(GlobalMemoryDumpPtr& global_dump,
   pmd->process_type = ProcessType::BROWSER;
   SetAllocatorDumpMetric(pmd, "malloc", "effective_size",
                          metrics_mb["Malloc"] * 1024 * 1024);
+  SetAllocatorDumpMetric(pmd, "site_storage/blob_storage", "effective_size",
+                         metrics_mb["SiteStorage.BlobStorage"] * 1024 * 1024);
   // These three categories are required for total gpu memory, but do not
   // have a UKM value set for them, so don't appear in metrics_mb.
   SetAllocatorDumpMetric(pmd, "gpu/gl", "effective_size",
@@ -210,6 +212,7 @@ MetricMap GetExpectedBrowserMetrics() {
       {"Malloc", 20},
       {"PrivateMemoryFootprint", 30},
       {"SharedMemoryFootprint", 35},
+      {"SiteStorage.BlobStorage", 15},
       {"Uptime", 42},
       {"GpuMemory", kGpuTotalMemory * 1024 * 1024},
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
@@ -1117,6 +1120,14 @@ TEST_F(ProcessMemoryMetricsEmitterTest, RendererAndTotalHistogramsAreRecorded) {
   SetAllocatorDumpMetric(global_dump->process_dumps[1], "canvas/hibernated",
                          "size", 12 * kMiB);
 
+  // 16 * kKib because it is reported as a kib metric in UMA.
+  SetAllocatorDumpMetric(global_dump->process_dumps[0],
+                         "malloc/partitions/allocator",
+                         "aligned_alloc_wasted_size", 16 * kKiB);
+  SetAllocatorDumpMetric(global_dump->process_dumps[1],
+                         "malloc/partitions/allocator",
+                         "aligned_alloc_wasted_size", 32 * kKiB);
+
   global_dump->aggregated_metrics->native_library_resident_kb =
       kNativeLibraryResidentMemoryFootprint;
   global_dump->aggregated_metrics->native_library_not_resident_ordered_kb =
@@ -1170,6 +1181,12 @@ TEST_F(ProcessMemoryMetricsEmitterTest, RendererAndTotalHistogramsAreRecorded) {
       1);
   histograms.ExpectBucketCount(
       "Memory.Experimental.Renderer2.Small.HibernatedCanvas.Size", 22 * kKiB,
+      1);
+  histograms.ExpectBucketCount(
+      "Memory.Experimental.Renderer2.Small.Malloc.AlignedAlloc.WastedKiB", 16,
+      1);
+  histograms.ExpectBucketCount(
+      "Memory.Experimental.Renderer2.Small.Malloc.AlignedAlloc.WastedKiB", 32,
       1);
   histograms.ExpectUniqueSample("Memory.Renderer.PrivateMemoryFootprint",
                                 kTestRendererPrivateMemoryFootprint, 2);

@@ -90,6 +90,9 @@ class PolicyUIHandler : public web::WebUIIOSMessageHandler,
   void GetPoliciesJson(policy::mojom::GetPoliciesReason reason,
                        GetPoliciesJsonCallback callback) override;
 
+  // Called to send the initial state of the page to the UI.
+  void SendInitialState(const base::ListValue& args = base::ListValue());
+
  private:
   // UserCloudPolicyStatusProvider::Delegate.
   base::flat_set<std::string> GetDeviceAffiliationIds() override;
@@ -97,13 +100,17 @@ class PolicyUIHandler : public web::WebUIIOSMessageHandler,
 
   // Returns a dictionary containing the policies supported by Chrome.
   base::DictValue GetPolicyNames() const;
+  // TODO(crbug.com/40897784): Delete the non-mojo version once the migration is
+  // complete.
+  base::flat_map<std::string, policy::mojom::PolicyGroupNamesPtr>
+  GetPolicyNamesMojo() const;
 
   // Returns a dictionary containing the current values of the policies
   // supported by Chrome and list of the policy IDs.
   base::DictValue GetPolicyValues() const;
-
-  // Called to handle the "listenPoliciesUpdates" WebUI message.
-  void HandleListenPoliciesUpdates(const base::ListValue& args);
+  // TODO(crbug.com/40897784): Delete the non-mojo version once the migration is
+  // complete.
+  policy::mojom::PolicyGroupsResponsePtr GetPolicyValuesMojo() const;
 
   // Called to handle the "getPoliciesJson" WebUI message.
   void HandleGetPoliciesJson(const base::ListValue& args);
@@ -139,6 +146,7 @@ class PolicyUIHandler : public web::WebUIIOSMessageHandler,
   // Called to handle the "getPolicyLogs" WebUI message from
   // chrome://policy/logs.
   void HandleGetPolicyLogs(const base::ListValue& args);
+  void OnGetPolicyLogs(base::Value callback_id, base::ListValue logs);
 
   // Called to handle the "getAppliedTestPolicies" WebUI message from
   // chrome://policy/test. This returns the policies that have been set through

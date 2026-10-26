@@ -8,12 +8,13 @@
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_ids.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -47,6 +48,11 @@ CommentsSidePanelCoordinator::CommentsSidePanelCoordinator(
           tab_groups::TabGroupSyncServiceFactory::GetForProfile(
               browser_->GetProfile())),
       scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this) {
+  SidePanelRegistry::From(browser)->Register(std::make_unique<SidePanelEntry>(
+      SidePanelEntry::Key(SidePanelEntry::Id::kComments),
+      base::BindRepeating(&CommentsSidePanelCoordinator::CreateCommentsWebView,
+                          base::Unretained(this)),
+      /*default_content_width_callback=*/base::NullCallback()));
   browser_->GetTabStripModel()->AddObserver(this);
   tab_groups::TabGroupSyncServiceFactory::GetForProfile(browser_->GetProfile())
       ->AddObserver(this);
@@ -132,8 +138,11 @@ bool CommentsSidePanelCoordinator::ShouldShowCommentsAction(
 
 void CommentsSidePanelCoordinator::UpdateCommentsActionVisibility(
     bool should_show_comments_action) {
+  // Driven by a tab-group observer, which fires as tabs are removed during
+  // window teardown.
+  BrowserWindow* const browser_window = BrowserWindow::FromBrowser(browser_);
   PinnedToolbarActions* controller =
-      browser_->GetFeatures().pinned_toolbar_actions();
+      browser_window ? browser_window->GetPinnedToolbarActions() : nullptr;
   if (!controller) {
     return;
   }
@@ -150,7 +159,7 @@ void CommentsSidePanelCoordinator::UpdateCommentsActionVisibility(
 
 void CommentsSidePanelCoordinator::UpdateCommentsSidePanelVisibility(
     bool should_show_comments_action) {
-  SidePanelUI* const side_panel_ui = browser_->GetFeatures().side_panel_ui();
+  SidePanelUI* const side_panel_ui = SidePanelUI::From(browser_);
 
   SidePanelEntry::Key side_panel_entry_key(SidePanelEntry::Id::kComments);
 
@@ -210,7 +219,8 @@ void CommentsSidePanelCoordinator::UpdateSidePanelTitle(
                 IDS_COLLABORATION_SHARED_TAB_GROUPS_COMMENTS_TITLE);
 
   actions::ActionItem* action_item = actions::ActionManager::Get().FindAction(
-      kActionSidePanelShowComments, browser_->GetActions()->root_action_item());
+      kActionSidePanelShowComments,
+      BrowserActions::From(browser_)->root_action_item());
 
   if (title != action_item->GetText()) {
     action_item->SetText(title);
@@ -226,15 +236,6 @@ bool CommentsSidePanelCoordinator::IsSupported() {
 CommentsSidePanelCoordinator* CommentsSidePanelCoordinator::From(
     BrowserWindowInterface* interface) {
   return Get(interface->GetUnownedUserDataHost());
-}
-
-void CommentsSidePanelCoordinator::CreateAndRegisterEntry(
-    SidePanelRegistry* global_registry) {
-  global_registry->Register(std::make_unique<SidePanelEntry>(
-      SidePanelEntry::Key(SidePanelEntry::Id::kComments),
-      base::BindRepeating(&CommentsSidePanelCoordinator::CreateCommentsWebView,
-                          base::Unretained(this)),
-      /*default_content_width_callback=*/base::NullCallback()));
 }
 
 std::unique_ptr<views::View>

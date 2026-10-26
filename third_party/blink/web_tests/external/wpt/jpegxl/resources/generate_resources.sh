@@ -118,6 +118,18 @@ djxl 3x3_jpeg_recompression.jxl 3x3_jpeg_recompression.png
 # Cleanup temporary file
 rm -f temp.jxl 3x3.png 3x3a.png 3x3.jpg 3x3_recovered.jpg
 
+# A flat BT.2100 PQ patch of 588 cd/m2 (code value 177/255), encoded twice with
+# a different intensity_target. The pair differs only in the peak luminance that
+# the codestream states, and both state a peak at or above the content's.
+convert -size 8x8 "xc:rgb(177,177,177)" -depth 8 pq_flat.ppm
+# 255 is the codestream default, so that file carries no intensity_target
+# field at all.
+for nits in 255 600 10000; do
+  cjxl pq_flat.ppm "pq_intensity_target_${nits}.jxl" -d 0 \
+    -x color_space=RGB_D65_202_Rel_PeQ "--intensity_target=${nits}"
+done
+rm -f pq_flat.ppm
+
 # --- Part 2: Optional jxl-rs fixtures ---
 
 JXL_RS_TESTDATA="${JXL_RS_TESTDATA:-$HOME/jxl-rs/jxl/resources/test}"
@@ -141,6 +153,9 @@ for f in \
   do
   copy_if_exists "$JXL_RS_TESTDATA/$f" "$SCRIPT_DIR/$f"
 done
+
+copy_if_exists "$JXL_RS_TESTDATA/small_grayscale_patches_modular_with_icc.jxl" \
+  "$SCRIPT_DIR/gray-with-icc.jxl"
 
 copy_if_exists "$JXL_RS_CONF/alpha_nonpremultiplied.jxl" \
   "$SCRIPT_DIR/conformance_alpha_nonpremultiplied.jxl"
@@ -202,6 +217,9 @@ decode_png_ref_if_exists \
 decode_png_ref_if_exists \
   "$SCRIPT_DIR/8x8_noise.jxl" \
   "$SCRIPT_DIR/8x8_noise.png"
+decode_png_ref_if_exists \
+  "$SCRIPT_DIR/gray-with-icc.jxl" \
+  "$SCRIPT_DIR/gray-with-icc.png"
 
 # --- Part 3: Hand-crafted edge case bitstreams ---
 

@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.signin.services;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.anyBoolean;
@@ -17,6 +18,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import androidx.test.filters.MediumTest;
@@ -34,7 +36,9 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DoNotBatch;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.bookmarks.BookmarkModel;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
@@ -50,6 +54,7 @@ import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.externalauth.ExternalAuthUtils;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.signin.SigninFeatures;
+import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.identitymanager.IdentityManagerImpl;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.components.signin.metrics.SignoutReason;
@@ -80,6 +85,7 @@ public class SigninManagerImplTest {
     @Mock private ExternalAuthUtils mExternalAuthUtils;
     @Mock private SigninManager.SignInStateObserver mSignInStateObserver;
     @Mock private SigninManagerImpl.Natives mNativeMock;
+    @Mock private IdentityManager.Observer mIdentityManagerObserver;
 
     private SigninManager mSigninManager;
     private IdentityManagerImpl mIdentityManager;
@@ -164,6 +170,114 @@ public class SigninManagerImplTest {
     public void testDataNotWipedOnSignOutWithManagedAccount() {
         mSigninTestRule.addAccountThenSignin(TestAccounts.MANAGED_ACCOUNT);
         verifyDataNotWipedOnSignout();
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(SigninFeatures.USER_POLICY_FETCH_REQUIRES_ACCEPTANCE)
+    public void testPolicyFetchRequiresAcceptance_NotAccepted() {
+        mSigninTestRule.addAccount(TestAccounts.MANAGED_ACCOUNT);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mSigninManager.setUserAcceptedAccountManagement(false));
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Signin.Android.AccountManagementAcceptedBeforeUserPolicyFetch", false);
+
+        SigninManager.SignInCallback callback = mock(SigninManager.SignInCallback.class);
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        mSigninManager.signin(
+                                TestAccounts.MANAGED_ACCOUNT,
+                                SigninAccessPoint.WEB_SIGNIN,
+                                callback));
+
+        verify(callback, timeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL)).onSignInComplete();
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @MediumTest
+    @DisableFeatures(SigninFeatures.USER_POLICY_FETCH_REQUIRES_ACCEPTANCE)
+    public void testPolicyFetchRequiresAcceptance_FeatureDisabled() {
+        mSigninTestRule.addAccount(TestAccounts.MANAGED_ACCOUNT);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mSigninManager.setUserAcceptedAccountManagement(false));
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Signin.Android.AccountManagementAcceptedBeforeUserPolicyFetch", false);
+
+        SigninManager.SignInCallback callback = mock(SigninManager.SignInCallback.class);
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        mSigninManager.signin(
+                                TestAccounts.MANAGED_ACCOUNT,
+                                SigninAccessPoint.WEB_SIGNIN,
+                                callback));
+
+        verify(callback, timeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL)).onSignInComplete();
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(SigninFeatures.USER_POLICY_FETCH_REQUIRES_ACCEPTANCE)
+    public void testPolicyFetchRequiresAcceptance_Accepted() {
+        mSigninTestRule.addAccount(TestAccounts.MANAGED_ACCOUNT);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mSigninManager.setUserAcceptedAccountManagement(true));
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Signin.Android.AccountManagementAcceptedBeforeUserPolicyFetch", true);
+
+        SigninManager.SignInCallback callback = mock(SigninManager.SignInCallback.class);
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        mSigninManager.signin(
+                                TestAccounts.MANAGED_ACCOUNT,
+                                SigninAccessPoint.WEB_SIGNIN,
+                                callback));
+
+        verify(callback, timeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL)).onSignInComplete();
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @MediumTest
+    @DisableFeatures(SigninFeatures.SKIP_CHECK_FOR_ACCOUNT_MANAGEMENT_ON_SIGNIN)
+    @EnableFeatures(SigninFeatures.USER_POLICY_FETCH_REQUIRES_ACCEPTANCE)
+    public void testPolicyFetchRequiresAcceptance_ThrowException() {
+        mSigninTestRule.addAccount(TestAccounts.MANAGED_ACCOUNT);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mSigninManager.setUserAcceptedAccountManagement(false));
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectNoRecords(
+                                "Signin.Android.AccountManagementAcceptedBeforeUserPolicyFetch")
+                        .build();
+
+        SigninManager.SignInCallback callback = mock(SigninManager.SignInCallback.class);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertThrows(
+                            IllegalStateException.class,
+                            () ->
+                                    mSigninManager.signin(
+                                            TestAccounts.MANAGED_ACCOUNT,
+                                            SigninAccessPoint.WEB_SIGNIN,
+                                            callback));
+                });
+
+        verify(callback, never()).onSignInComplete();
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -325,6 +439,73 @@ public class SigninManagerImplTest {
 
         mSigninTestRule.setAccountFetchFailed();
         assertFalse(mSigninManager.didAccountsFetchSucceed());
+    }
+
+    @Test
+    @MediumTest
+    @SigninTestRule.BlockGetAccounts
+    @EnableFeatures(SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS)
+    public void testAccountFetchFailedSetsRefreshTokensLoadingFailed() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mIdentityManager.addObserver(mIdentityManagerObserver);
+                    assertEquals(
+                            IdentityManager.RefreshTokensLoadingState.IN_PROGRESS,
+                            mIdentityManager.getRefreshTokensLoadingState());
+                });
+
+        mSigninTestRule.setAccountFetchFailed();
+        mSigninTestRule.unblockGetAccounts();
+
+        verify(mIdentityManagerObserver)
+                .onRefreshTokensLoaded(IdentityManager.RefreshTokensLoadingState.FAILED);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertEquals(
+                            IdentityManager.RefreshTokensLoadingState.FAILED,
+                            mIdentityManager.getRefreshTokensLoadingState());
+                });
+
+        // Subsequent account seeding should reset the failed state.
+        mSigninTestRule.addAccount(TestAccounts.ACCOUNT1);
+
+        verify(mIdentityManagerObserver)
+                .onRefreshTokensLoaded(IdentityManager.RefreshTokensLoadingState.SUCCEEDED);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertEquals(
+                            IdentityManager.RefreshTokensLoadingState.SUCCEEDED,
+                            mIdentityManager.getRefreshTokensLoadingState());
+                    mIdentityManager.removeObserver(mIdentityManagerObserver);
+                });
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS)
+    public void
+            testAccountFetchFailedAfterRefreshTokensLoadedDoesNotSetRefreshTokensLoadingFailed() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mIdentityManager.addObserver(mIdentityManagerObserver);
+                    assertEquals(
+                            IdentityManager.RefreshTokensLoadingState.SUCCEEDED,
+                            mIdentityManager.getRefreshTokensLoadingState());
+                });
+
+        var blocker = mSigninTestRule.blockGetAccountsUpdate();
+        mSigninTestRule.setAccountFetchFailed();
+        blocker.close();
+
+        assertFalse(mSigninManager.didAccountsFetchSucceed());
+        verifyNoInteractions(mIdentityManagerObserver);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertEquals(
+                            IdentityManager.RefreshTokensLoadingState.SUCCEEDED,
+                            mIdentityManager.getRefreshTokensLoadingState());
+                    mIdentityManager.removeObserver(mIdentityManagerObserver);
+                });
     }
 
     private void verifyDataNotWipedOnSignout() {

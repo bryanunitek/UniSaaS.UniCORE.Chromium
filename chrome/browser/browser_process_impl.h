@@ -23,9 +23,9 @@
 #include "base/sequence_checker.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
+#include "chrome/browser/accessibility/accessibility_prefs/android/accessibility_prefs_controller.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/buildflags.h"
-#include "components/activity_reporter/activity_reporter.h"
 #include "components/keep_alive_registry/keep_alive_state_observer.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
 #include "components/prefs/persistent_pref_store.h"
@@ -43,19 +43,29 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/application_status_listener.h"
-#include "chrome/browser/accessibility/accessibility_prefs/android/accessibility_prefs_controller.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 class BatteryMetrics;
 class ChromeMetricsServicesManagerClient;
 class DevToolsAutoOpener;
 class GlobalFeatures;
+class IntranetRedirectDetector;
 class RemoteDebuggingServer;
 class PrefRegistrySimple;
 class SecureOriginPrefsObserver;
 class SiteIsolationPrefsObserver;
 class SystemNotificationHelper;
 class StartupData;
+
+#if !BUILDFLAG(IS_CHROMEOS)
+namespace activity_reporter {
+class ActivityReporter;
+}  // namespace activity_reporter
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
+namespace speech {
+class SpeechRecognitionSmallExpertModelInstaller;
+}  // namespace speech
 
 namespace breadcrumbs {
 class ApplicationBreadcrumbsLogger;
@@ -66,11 +76,12 @@ class OriginTrialsSettingsStorage;
 }  // namespace embedder_support
 
 #if BUILDFLAG(IS_WIN)
-#include "chrome/browser/win/isolated_browser_support.h"
+#include "chrome/browser/win/isolated_browser/isolated_browser_support.h"
 #endif  // BUILDFLAG(IS_WIN)
 
 namespace extensions {
 class ExtensionsBrowserClient;
+class ScopedChromeExtensionsClient;
 }
 
 namespace gcm {
@@ -94,10 +105,6 @@ class WebRtcEventLogManager;
 namespace speech {
 class SodaInstaller;
 }  // namespace speech
-
-namespace screen_ai {
-class ScreenAIInstallState;
-}  // namespace screen_ai
 
 namespace supervised_user {
 class DeviceParentalControls;
@@ -157,12 +164,6 @@ class BrowserProcessImpl : public BrowserProcess,
   void PostDestroyThreads();
 #endif
 
-  // Sets |metrics_services_manager_| and |metrics_services_manager_client_|
-  // which is owned by it.
-  void SetMetricsServices(
-      std::unique_ptr<metrics_services_manager::MetricsServicesManager> manager,
-      metrics_services_manager::MetricsServicesManagerClient* client);
-
   // BrowserProcess implementation.
   void EndSession() override;
   metrics_services_manager::MetricsServicesManager* GetMetricsServicesManager()
@@ -196,9 +197,7 @@ class BrowserProcessImpl : public BrowserProcess,
       override;
   printing::BackgroundPrintingManager* background_printing_manager() override;
   supervised_user::DeviceParentalControls& device_parental_controls() override;
-#if !BUILDFLAG(IS_ANDROID)
   IntranetRedirectDetector* intranet_redirect_detector() override;
-#endif
   const std::string& GetApplicationLocale() override;
   void SetApplicationLocale(const std::string& actual_locale) override;
   DownloadStatusUpdater* download_status_updater() override;
@@ -221,7 +220,9 @@ class BrowserProcessImpl : public BrowserProcess,
   void StartAutoupdateTimer() override;
 #endif
 
+#if !BUILDFLAG(IS_CHROMEOS)
   activity_reporter::ActivityReporter* activity_reporter() override;
+#endif  // !BUILDFLAG(IS_CHROMEOS)
   component_updater::ComponentUpdateService* component_updater() override;
 #if BUILDFLAG(IS_CHROMEOS)
   MediaFileSystemRegistry* media_file_system_registry() override;
@@ -243,6 +244,8 @@ class BrowserProcessImpl : public BrowserProcess,
   UsbSystemTrayIcon* usb_system_tray_icon() override;
   void set_usb_system_tray_icon_for_test(
       std::unique_ptr<UsbSystemTrayIcon> icon) override;
+  speech::SpeechRecognitionSmallExpertModelInstaller*
+  speech_recognition_small_expert_model_installer() override;
 #endif
 
   os_crypt_async::OSCryptAsync* os_crypt_async() override;
@@ -295,6 +298,10 @@ class BrowserProcessImpl : public BrowserProcess,
       base::expected<chrome::IsolationState, HRESULT> result);
 #endif  // BUILDFLAG(IS_WIN)
 
+#if !BUILDFLAG(IS_ANDROID)
+  void OnDevToolsRemoteDebuggingAllowedChanged();
+#endif
+
   // Methods called to control our lifetime. The browser process can be "pinned"
   // to make sure it keeps running.
   void Pin();
@@ -330,11 +337,9 @@ class BrowserProcessImpl : public BrowserProcess,
   raw_ptr<ChromeMetricsServicesManagerClient> metrics_services_manager_client_ =
       nullptr;
 
-#if BUILDFLAG(IS_ANDROID)
   // Must be destroyed before |local_state_|.
   std::unique_ptr<accessibility::AccessibilityPrefsController>
       accessibility_prefs_controller_;
-#endif
 
   std::unique_ptr<network::NetworkQualityTracker> network_quality_tracker_;
 
@@ -353,6 +358,7 @@ class BrowserProcessImpl : public BrowserProcess,
   std::unique_ptr<GpuModeManager> gpu_mode_manager_;
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  std::unique_ptr<extensions::ScopedChromeExtensionsClient> extensions_client_;
   std::unique_ptr<extensions::ExtensionsBrowserClient>
       extensions_browser_client_;
 #endif
@@ -383,9 +389,7 @@ class BrowserProcessImpl : public BrowserProcess,
   std::unique_ptr<NotificationUIManager> notification_ui_manager_;
 #endif
 
-#if !BUILDFLAG(IS_ANDROID)
   std::unique_ptr<IntranetRedirectDetector> intranet_redirect_detector_;
-#endif
 
   std::unique_ptr<StatusTray> status_tray_;
 
@@ -446,7 +450,9 @@ class BrowserProcessImpl : public BrowserProcess,
   void RestartBackgroundInstance();
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 
+#if !BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<activity_reporter::ActivityReporter> activity_reporter_;
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
   // component updater is normally not used under ChromeOS due
   // to concerns over integrity of data shared between profiles,
@@ -460,9 +466,8 @@ class BrowserProcessImpl : public BrowserProcess,
   // to ensure that SodaInstallerImpl gets destructed first.
   std::unique_ptr<speech::SodaInstaller> soda_installer_impl_;
 
-  // Used to download Screen AI on demand and keep track of the library
-  // availability.
-  std::unique_ptr<screen_ai::ScreenAIInstallState> screen_ai_download_;
+  std::unique_ptr<speech::SpeechRecognitionSmallExpertModelInstaller>
+      speech_recognition_small_expert_model_installer_;
 #endif
 
   std::unique_ptr<BrowserProcessPlatformPart> platform_part_;
@@ -489,6 +494,7 @@ class BrowserProcessImpl : public BrowserProcess,
   // Called to signal the process' main message loop to exit.
   base::OnceClosure quit_closure_;
 
+  // Must be destroyed before `profile_manager_`.
   std::unique_ptr<HidSystemTrayIcon> hid_system_tray_icon_;
   std::unique_ptr<UsbSystemTrayIcon> usb_system_tray_icon_;
 

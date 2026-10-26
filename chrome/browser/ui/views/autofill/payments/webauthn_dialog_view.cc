@@ -20,6 +20,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/views/layout/layout_provider.h"
 
 namespace autofill {
 
@@ -96,7 +97,8 @@ void WebauthnDialogView::OnDialogStateChanged() {
 }
 
 bool WebauthnDialogView::Accept() {
-  DCHECK_EQ(model_->dialog_state(), WebauthnDialogState::kOffer);
+  CHECK_EQ(model_->dialog_state(), WebauthnDialogState::kOffer,
+           base::NotFatalUntil::M162);
   controller_->OnOkButtonClicked();
   return false;
 }
@@ -139,7 +141,7 @@ void WebauthnDialogView::RefreshContent() {
   SetButtonLabel(ui::mojom::DialogButton::kOk, model_->GetAcceptButtonLabel());
   SetButtonLabel(ui::mojom::DialogButton::kCancel,
                  model_->GetCancelButtonLabel());
-  DCHECK(model_->IsCancelButtonVisible());
+  CHECK(model_->IsCancelButtonVisible(), base::NotFatalUntil::M162);
   SetButtons(model_->GetAcceptButtonState() != AcceptButtonState::kNotVisible
                  ? static_cast<int>(ui::mojom::DialogButton::kOk) |
                        static_cast<int>(ui::mojom::DialogButton::kCancel)

@@ -26,6 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_DELAY_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_DELAY_H_
 
+#include "base/check_op.h"
 #include "third_party/blink/renderer/platform/audio/audio_array.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 
@@ -68,6 +69,14 @@ class PLATFORM_EXPORT Delay final {
   // Fill the return value of this before calling `ProcessARate()`
   base::span<float> DelayTimes() { return delay_times_.as_span(); }
 
+  base::span<float> BufferSpan() { return buffer_.as_span(); }
+  base::span<const float> BufferSpan() const { return buffer_.as_span(); }
+  size_t WriteIndex() const { return write_index_; }
+  void SetWriteIndex(size_t index) {
+    CHECK_LT(index, buffer_.size());
+    write_index_ = index;
+  }
+
  private:
   // Main processing loop for ProcessARate using scalar operations.  Returns the
   // new write_index.
@@ -80,11 +89,6 @@ class PLATFORM_EXPORT Delay final {
   // process by this function and the updated wirte_index_.
   std::tuple<size_t, size_t> ProcessARateVector(base::span<float> destination,
                                                 size_t frames_to_process) const;
-
-  // Handle NaN values in `delay_times`.  Replace NaN with `max_time`.
-  void HandleNaN(base::span<float> delay_times,
-                 size_t frames_to_process,
-                 float max_time);
 
   double DelayTime(float sample_rate);
 

@@ -9,6 +9,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "components/payments/core/features.h"
+#include "components/payments/core/payment_request_metrics.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source.h"
@@ -65,6 +66,50 @@ TEST(JourneyLoggerTest,
   EXPECT_TRUE(buckets[0].min & toInt(Event2::kRequestMethodBasicCard));
   EXPECT_TRUE(buckets[0].min & toInt(Event2::kRequestMethodGoogle));
   EXPECT_FALSE(buckets[0].min & toInt(Event2::kRequestMethodOther));
+}
+
+TEST(JourneyLoggerTest, RecordJourneyStatsHistograms_CanMakePaymentCalled) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  logger.SetCanMakePaymentCalled();
+  logger.SetNotShown(
+      JourneyLogger::NOT_SHOWN_REASON_NO_SUPPORTED_PAYMENT_METHOD);
+
+  std::vector<base::Bucket> buckets =
+      histogram_tester.GetAllSamples("PaymentRequest.Events2");
+  ASSERT_EQ(1U, buckets.size());
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kCanMakePaymentCalled));
+}
+
+TEST(JourneyLoggerTest,
+     RecordJourneyStatsHistograms_HasEnrolledInstrumentCalled) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  logger.SetHasEnrolledInstrumentCalled();
+  logger.SetNotShown(
+      JourneyLogger::NOT_SHOWN_REASON_NO_SUPPORTED_PAYMENT_METHOD);
+
+  std::vector<base::Bucket> buckets =
+      histogram_tester.GetAllSamples("PaymentRequest.Events2");
+  ASSERT_EQ(1U, buckets.size());
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kHasEnrolledInstrumentCalled));
+}
+
+TEST(JourneyLoggerTest,
+     RecordJourneyStatsHistograms_InitiatedInCrossSiteIframe) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  logger.SetInitiatedInCrossSiteIframe();
+  logger.SetNotShown(
+      JourneyLogger::NOT_SHOWN_REASON_NO_SUPPORTED_PAYMENT_METHOD);
+
+  std::vector<base::Bucket> buckets =
+      histogram_tester.GetAllSamples("PaymentRequest.Events2");
+  ASSERT_EQ(1U, buckets.size());
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kInitiatedInCrossSiteIframe));
 }
 
 // Tests that the completion status metrics based on whether the user had
@@ -542,6 +587,9 @@ TEST(JourneyLoggerTest, RecordJourneyStatsHistograms_TwoPaymentRequests) {
   EXPECT_FALSE(buckets[1].min & toInt(Event2::kUserAborted));
   EXPECT_TRUE(buckets[1].min & toInt(Event2::kRequestShipping));
   EXPECT_TRUE(buckets[1].min & toInt(Event2::kRequestPayerData));
+  EXPECT_TRUE(buckets[1].min & toInt(Event2::kRequestPayerEmail));
+  EXPECT_FALSE(buckets[1].min & toInt(Event2::kRequestPayerPhone));
+  EXPECT_FALSE(buckets[1].min & toInt(Event2::kRequestPayerName));
   EXPECT_TRUE(buckets[1].min & toInt(Event2::kRequestMethodBasicCard));
   EXPECT_TRUE(buckets[1].min & toInt(Event2::kRequestMethodGoogle));
   EXPECT_TRUE(buckets[1].min & toInt(Event2::kRequestMethodOther));
@@ -579,6 +627,7 @@ TEST(JourneyLoggerTest,
   int64_t expected_step_metric =
       toInt(Event2::kShown) | toInt(Event2::kPayClicked) |
       toInt(Event2::kRequestShipping) | toInt(Event2::kRequestPayerData) |
+      toInt(Event2::kRequestPayerEmail) |
       toInt(Event2::kRequestMethodBasicCard) | toInt(Event2::kUserAborted) |
       toInt(Event2::kHadInitialFormOfPayment);
 
@@ -631,7 +680,7 @@ TEST(JourneyLoggerTest,
 
   int64_t expected_step_metric =
       toInt(Event2::kShown) | toInt(Event2::kRequestShipping) |
-      toInt(Event2::kRequestPayerData) |
+      toInt(Event2::kRequestPayerData) | toInt(Event2::kRequestPayerEmail) |
       toInt(Event2::kRequestMethodBasicCard) | toInt(Event2::kCompleted) |
       toInt(Event2::kHadInitialFormOfPayment) | toInt(Event2::kPayClicked) |
       toInt(Event2::kSelectedCreditCard);
@@ -764,6 +813,7 @@ TEST(JourneyLoggerTest, RecordJourneyStatsHistograms_WindowSizeCheckRejection) {
   base::test::ScopedFeatureList feature_list(
       features::kPaymentRequestRejectTooSmallWindows);
   base::test::TaskEnvironment task_environment_;
+  base::HistogramTester histogram_tester;
   using UkmEntry = ukm::builders::PaymentRequest_CheckoutEvents;
   ukm::TestAutoSetUkmRecorder ukm_recorder;
   char test_url[] = "http://www.google.com/";
@@ -793,6 +843,29 @@ TEST(JourneyLoggerTest, RecordJourneyStatsHistograms_WindowSizeCheckRejection) {
         static_cast<int64_t>(
             JourneyLogger::WindowSizeCheckRejectionReason::kRejectedAtResize));
   }
+
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.WindowSizeCheckRejectionReason",
+      JourneyLogger::WindowSizeCheckRejectionReason::kRejectedAtResize, 1);
+}
+
+// Tests that the browser window size check rejection reason is still logged to
+// UMA even when the UKM source ID is invalid (e.g., in an initial about:blank
+// Document Picture-in-Picture window).
+TEST(JourneyLoggerTest,
+     RecordJourneyStatsHistograms_WindowSizeCheckRejection_InvalidUkmSourceId) {
+  base::test::ScopedFeatureList feature_list(
+      features::kPaymentRequestRejectTooSmallWindows);
+  base::HistogramTester histogram_tester;
+
+  JourneyLogger logger(ukm::kInvalidSourceId);
+  logger.SetWindowSizeCheckRejectionReason(
+      JourneyLogger::WindowSizeCheckRejectionReason::kRejectedAtResize);
+  logger.SetAborted(JourneyLogger::ABORT_REASON_INTERNAL_ERROR);
+
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.WindowSizeCheckRejectionReason",
+      JourneyLogger::WindowSizeCheckRejectionReason::kRejectedAtResize, 1);
 }
 
 // Tests that the browser window size check rejection reason is NOT logged to
@@ -829,6 +902,285 @@ TEST(JourneyLoggerTest,
 
   histogram_tester.ExpectTotalCount(
       "PaymentRequest.WindowSizeCheckRejectionReason", 0);
+}
+
+TEST(JourneyLoggerTest,
+     RecordRespondWithResolvedStatus_BeforeOpenWindowAndUserGesture) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  EXPECT_FALSE(logger.was_payment_app_window_opened_for_testing());
+  EXPECT_FALSE(logger.was_payment_app_user_interaction_captured_for_testing());
+
+  logger.RecordRespondWithResolvedStatus();
+
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithResolvedBeforeOpenWindow",
+      true, 1);
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithResolvedBeforeUserGesture",
+      true, 1);
+}
+
+TEST(JourneyLoggerTest,
+     RecordRespondWithResolvedStatus_AfterOpenWindowBeforeUserGesture) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  logger.SetPaymentAppWindowOpened();
+  EXPECT_TRUE(logger.was_payment_app_window_opened_for_testing());
+  EXPECT_FALSE(logger.was_payment_app_user_interaction_captured_for_testing());
+
+  logger.RecordRespondWithResolvedStatus();
+
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithResolvedBeforeOpenWindow",
+      false, 1);
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithResolvedBeforeUserGesture",
+      true, 1);
+}
+
+TEST(JourneyLoggerTest,
+     RecordRespondWithResolvedStatus_AfterOpenWindowAndUserGesture) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  logger.SetPaymentAppWindowOpened();
+  logger.SetPaymentAppUserInteractionCaptured();
+  EXPECT_TRUE(logger.was_payment_app_window_opened_for_testing());
+  EXPECT_TRUE(logger.was_payment_app_user_interaction_captured_for_testing());
+
+  logger.RecordRespondWithResolvedStatus();
+
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithResolvedBeforeOpenWindow",
+      false, 1);
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithResolvedBeforeUserGesture",
+      false, 1);
+}
+
+TEST(JourneyLoggerTest,
+     RecordRespondWithRejectedStatus_BeforeOpenWindowAndUserGesture) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  EXPECT_FALSE(logger.was_payment_app_window_opened_for_testing());
+  EXPECT_FALSE(logger.was_payment_app_user_interaction_captured_for_testing());
+
+  logger.RecordRespondWithRejectedStatus();
+
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithRejectedBeforeOpenWindow",
+      true, 1);
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithRejectedBeforeUserGesture",
+      true, 1);
+}
+
+TEST(JourneyLoggerTest,
+     RecordRespondWithRejectedStatus_AfterOpenWindowBeforeUserGesture) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  logger.SetPaymentAppWindowOpened();
+  EXPECT_TRUE(logger.was_payment_app_window_opened_for_testing());
+  EXPECT_FALSE(logger.was_payment_app_user_interaction_captured_for_testing());
+
+  logger.RecordRespondWithRejectedStatus();
+
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithRejectedBeforeOpenWindow",
+      false, 1);
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithRejectedBeforeUserGesture",
+      true, 1);
+}
+
+TEST(JourneyLoggerTest,
+     RecordRespondWithRejectedStatus_AfterOpenWindowAndUserGesture) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  logger.SetPaymentAppWindowOpened();
+  logger.SetPaymentAppUserInteractionCaptured();
+  EXPECT_TRUE(logger.was_payment_app_window_opened_for_testing());
+  EXPECT_TRUE(logger.was_payment_app_user_interaction_captured_for_testing());
+
+  logger.RecordRespondWithRejectedStatus();
+
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithRejectedBeforeOpenWindow",
+      false, 1);
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithRejectedBeforeUserGesture",
+      false, 1);
+}
+
+TEST(JourneyLoggerTest,
+     RecordPaymentHandlerPausedResolutionOutcome_UserInteracted) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  logger.RecordPaymentHandlerPausedResolutionOutcome(
+      PaymentHandlerPausedResolutionOutcome::kUserInteracted);
+
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "PaymentHandlerPausedResolutionOutcome",
+      PaymentHandlerPausedResolutionOutcome::kUserInteracted, 1);
+}
+
+TEST(JourneyLoggerTest,
+     RecordPaymentHandlerPausedResolutionOutcome_WindowClosed) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  logger.RecordPaymentHandlerPausedResolutionOutcome(
+      PaymentHandlerPausedResolutionOutcome::kWindowClosed);
+
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "PaymentHandlerPausedResolutionOutcome",
+      PaymentHandlerPausedResolutionOutcome::kWindowClosed, 1);
+}
+
+TEST(JourneyLoggerTest, Outcome_Completed) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  std::vector<PaymentMethodCategory> methods{PaymentMethodCategory::kGoogle};
+  logger.SetRequestedPaymentMethods(methods);
+  logger.SetShown();
+  logger.SetSelectedMethod(PaymentMethodCategory::kGoogle);
+  logger.SetCompleted();
+
+  histogram_tester.ExpectUniqueSample("PaymentRequest.Outcome",
+                                      PaymentRequestOutcome::kSuccess, 1);
+}
+
+TEST(JourneyLoggerTest, Outcome_Aborted) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  logger.SetAborted(JourneyLogger::ABORT_REASON_ABORTED_BY_USER);
+
+  histogram_tester.ExpectUniqueSample("PaymentRequest.Outcome",
+                                      PaymentRequestOutcome::kAbortedByUser, 1);
+}
+
+TEST(JourneyLoggerTest, Outcome_NotShown) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+
+  logger.SetNotShown(JourneyLogger::NOT_SHOWN_REASON_ALREADY_SHOWING);
+
+  histogram_tester.ExpectUniqueSample(
+      "PaymentRequest.Outcome", PaymentRequestOutcome::kNotShownAlreadyShowing,
+      1);
+}
+
+TEST(JourneyLoggerTest, SetRequestedInformation_PayerEmail) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+  logger.SetRequestedInformation(
+      /*requested_shipping=*/false, /*requested_email=*/true,
+      /*requested_phone=*/false, /*requested_name=*/false);
+  logger.SetNotShown(
+      JourneyLogger::NOT_SHOWN_REASON_NO_SUPPORTED_PAYMENT_METHOD);
+
+  std::vector<base::Bucket> buckets =
+      histogram_tester.GetAllSamples("PaymentRequest.Events2");
+  ASSERT_EQ(1U, buckets.size());
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kRequestPayerData));
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kRequestPayerEmail));
+  EXPECT_FALSE(buckets[0].min & toInt(Event2::kRequestPayerPhone));
+  EXPECT_FALSE(buckets[0].min & toInt(Event2::kRequestPayerName));
+}
+
+TEST(JourneyLoggerTest, SetRequestedInformation_PayerPhone) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+  logger.SetRequestedInformation(
+      /*requested_shipping=*/false, /*requested_email=*/false,
+      /*requested_phone=*/true, /*requested_name=*/false);
+  logger.SetNotShown(
+      JourneyLogger::NOT_SHOWN_REASON_NO_SUPPORTED_PAYMENT_METHOD);
+
+  std::vector<base::Bucket> buckets =
+      histogram_tester.GetAllSamples("PaymentRequest.Events2");
+  ASSERT_EQ(1U, buckets.size());
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kRequestPayerData));
+  EXPECT_FALSE(buckets[0].min & toInt(Event2::kRequestPayerEmail));
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kRequestPayerPhone));
+  EXPECT_FALSE(buckets[0].min & toInt(Event2::kRequestPayerName));
+}
+
+TEST(JourneyLoggerTest, SetRequestedInformation_PayerName) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+  logger.SetRequestedInformation(
+      /*requested_shipping=*/false, /*requested_email=*/false,
+      /*requested_phone=*/false, /*requested_name=*/true);
+  logger.SetNotShown(
+      JourneyLogger::NOT_SHOWN_REASON_NO_SUPPORTED_PAYMENT_METHOD);
+
+  std::vector<base::Bucket> buckets =
+      histogram_tester.GetAllSamples("PaymentRequest.Events2");
+  ASSERT_EQ(1U, buckets.size());
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kRequestPayerData));
+  EXPECT_FALSE(buckets[0].min & toInt(Event2::kRequestPayerEmail));
+  EXPECT_FALSE(buckets[0].min & toInt(Event2::kRequestPayerPhone));
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kRequestPayerName));
+}
+
+TEST(JourneyLoggerTest, SetRequestedInformation_AllPayerData) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+  logger.SetRequestedInformation(
+      /*requested_shipping=*/false, /*requested_email=*/true,
+      /*requested_phone=*/true, /*requested_name=*/true);
+  logger.SetNotShown(
+      JourneyLogger::NOT_SHOWN_REASON_NO_SUPPORTED_PAYMENT_METHOD);
+
+  std::vector<base::Bucket> buckets =
+      histogram_tester.GetAllSamples("PaymentRequest.Events2");
+  ASSERT_EQ(1U, buckets.size());
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kRequestPayerData));
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kRequestPayerEmail));
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kRequestPayerPhone));
+  EXPECT_TRUE(buckets[0].min & toInt(Event2::kRequestPayerName));
+}
+
+TEST(JourneyLoggerTest, SetRequestedInformation_NoPayerData) {
+  base::HistogramTester histogram_tester;
+  JourneyLogger logger(ukm::kInvalidSourceId);
+  logger.SetRequestedInformation(
+      /*requested_shipping=*/false, /*requested_email=*/false,
+      /*requested_phone=*/false, /*requested_name=*/false);
+  logger.SetNotShown(
+      JourneyLogger::NOT_SHOWN_REASON_NO_SUPPORTED_PAYMENT_METHOD);
+
+  std::vector<base::Bucket> buckets =
+      histogram_tester.GetAllSamples("PaymentRequest.Events2");
+  ASSERT_EQ(1U, buckets.size());
+  EXPECT_FALSE(buckets[0].min & toInt(Event2::kRequestPayerData));
+  EXPECT_FALSE(buckets[0].min & toInt(Event2::kRequestPayerEmail));
+  EXPECT_FALSE(buckets[0].min & toInt(Event2::kRequestPayerPhone));
+  EXPECT_FALSE(buckets[0].min & toInt(Event2::kRequestPayerName));
 }
 
 }  // namespace payments

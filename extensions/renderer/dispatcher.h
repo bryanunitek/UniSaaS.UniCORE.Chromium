@@ -53,9 +53,6 @@ namespace base {
 class SingleThreadTaskRunner;
 }
 
-namespace content {
-class RenderThread;
-}  // namespace content
 
 namespace extensions {
 
@@ -117,8 +114,6 @@ class Dispatcher : public content::RenderThreadObserver,
   }
 
   bool activity_logging_enabled() const { return activity_logging_enabled_; }
-
-  void OnRenderThreadStarted(content::RenderThread* render_thread);
 
   void OnRenderFrameCreated(content::RenderFrame* render_frame);
 
@@ -288,7 +283,7 @@ class Dispatcher : public content::RenderThreadObserver,
 
   // mojom::EventDispatcher implementation.
   void DispatchEvent(mojom::DispatchEventParamsPtr params,
-                     base::ListValue event_args,
+                     const scoped_refptr<const EventArgs>& event_args,
                      DispatchEventCallback callback) override;
 
   // UserScriptSetManager::Observer implementation.

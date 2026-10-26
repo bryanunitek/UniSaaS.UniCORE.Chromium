@@ -63,24 +63,24 @@ export class NetworkDeviceInfoDialogElement extends I18nMixin
     };
   }
 
-  euicc: EuiccRemote|undefined;
-  deviceState: OncMojo.DeviceStateProperties|undefined;
-  private canvasSize_: number;
-  private eid_: string|undefined;
-  private canvasContext_: CanvasRenderingContext2D|null;
+  declare euicc: EuiccRemote|undefined;
+  declare deviceState: OncMojo.DeviceStateProperties|undefined;
+  declare private canvasSize_: number;
+  declare private eid_: string|undefined;
+  private canvasContext_: CanvasRenderingContext2D|null = null;
 
-    override ready(): void {
-      super.ready();
+  override ready(): void {
+    super.ready();
 
-      if (this.euicc) {
-        this.fetchEid_(this.euicc);
-        return;
-      }
-
-      requestAnimationFrame(() => {
-        this.$.done.focus();
-      });
+    if (this.euicc) {
+      this.fetchEid_(this.euicc);
+      return;
     }
+
+    requestAnimationFrame(() => {
+      this.$.done.focus();
+    });
+  }
 
     private onDonePressed_(): void {
       this.$.deviceInfoDialog.close();

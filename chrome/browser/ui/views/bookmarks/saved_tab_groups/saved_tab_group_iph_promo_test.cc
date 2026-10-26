@@ -7,11 +7,13 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/user_education/interactive_feature_promo_test.h"
 #include "chrome/test/user_education/interactive_feature_promo_test_common.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/user_education/views/help_bubble_view.h"
 #include "content/public/test/browser_test.h"
 #include "ui/base/interaction/interactive_test.h"
@@ -35,7 +37,7 @@ class SavedTabGroupV2PromoTest : public InteractiveFeaturePromoTest {
           chrome::AddTabAt(browser(), GURL(), 0, true);
           chrome::AddTabAt(browser(), GURL(), 1, true);
           tab_groups::TabGroupId group_id =
-              browser()->tab_strip_model()->AddToNewGroup({0});
+              browser()->GetTabStripModel()->AddToNewGroup({0});
 
           tab_groups::SavedTabGroupUtils::RemoveGroupFromTabstrip(browser(),
                                                                   group_id);
@@ -52,7 +54,7 @@ class SavedTabGroupV2PromoTest : public InteractiveFeaturePromoTest {
 IN_PROC_BROWSER_TEST_F(SavedTabGroupV2PromoTest,
                        TestShowingIPHOnSavedTabGroupBar) {
   // Show the SavedTabGroupBar and the BookmarkBar.
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   const bool original_stgb_pref =
       prefs->GetBoolean(bookmarks::prefs::kShowTabGroupsInBookmarkBar);
   prefs->SetBoolean(bookmarks::prefs::kShowTabGroupsInBookmarkBar, true);
@@ -70,7 +72,7 @@ IN_PROC_BROWSER_TEST_F(SavedTabGroupV2PromoTest,
 IN_PROC_BROWSER_TEST_F(SavedTabGroupV2PromoTest,
                        TestShowingIPHWithoutSavedTabGroupBar) {
   // Show the SavedTabGroupBar and the BookmarkBar.
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   const bool original_stgb_pref =
       prefs->GetBoolean(bookmarks::prefs::kShowTabGroupsInBookmarkBar);
   prefs->SetBoolean(bookmarks::prefs::kShowTabGroupsInBookmarkBar, false);

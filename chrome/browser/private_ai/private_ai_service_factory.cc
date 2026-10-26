@@ -4,6 +4,11 @@
 
 #include "chrome/browser/private_ai/private_ai_service_factory.h"
 
+#include <optional>
+
+#include "base/functional/bind.h"
+#include "chrome/browser/net/profile_network_context_service.h"
+#include "chrome/browser/net/profile_network_context_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_selections.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
@@ -29,10 +34,23 @@ PrivateAiServiceFactory* PrivateAiServiceFactory::GetInstance() {
   return instance.get();
 }
 
+// static
+network::NetworkContextGetter
+PrivateAiServiceFactory::CreateNetworkContextGetter(Profile* profile) {
+  return base::BindRepeating(
+      [](base::WeakPtr<Profile> profile) -> network::mojom::NetworkContext* {
+        return profile
+                   ? profile->GetDefaultStoragePartition()->GetNetworkContext()
+                   : nullptr;
+      },
+      profile->GetWeakPtr());
+}
+
 PrivateAiServiceFactory::PrivateAiServiceFactory()
     : ProfileKeyedServiceFactory("private_ai::PrivateAiService",
                                  ProfileSelections::BuildForRegularProfile()) {
   DependsOn(IdentityManagerFactory::GetInstance());
+  DependsOn(ProfileNetworkContextServiceFactory::GetInstance());
 }
 
 PrivateAiServiceFactory::~PrivateAiServiceFactory() = default;
@@ -40,13 +58,28 @@ PrivateAiServiceFactory::~PrivateAiServiceFactory() = default;
 std::unique_ptr<KeyedService>
 PrivateAiServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  if (!PrivateAiService::CanPrivateAiBeEnabled(chrome::GetChannel())) {
+  version_info::Channel channel = chrome::GetChannel();
+  if (!PrivateAiService::CanPrivateAiBeEnabled(channel)) {
     return nullptr;
   }
 
   Profile* profile = Profile::FromBrowserContext(context);
 
-  auto network_driver = std::make_unique<PrivateAiNetworkDriverContent>();
+  auto network_driver =
+      std::make_unique<PrivateAiNetworkDriverContent>(base::BindRepeating(
+          [](base::WeakPtr<Profile> profile) -> std::optional<bool> {
+            if (!profile) {
+              return std::nullopt;
+            }
+            auto* pnc_service =
+                ProfileNetworkContextServiceFactory::GetForContext(
+                    profile.get());
+            if (!pnc_service) {
+              return std::nullopt;
+            }
+            return pnc_service->IsProxyConfigured();
+          },
+          profile->GetWeakPtr()));
   auto oak_session_driver =
       std::make_unique<PrivateAiOakSessionDriverContent>();
 
@@ -56,10 +89,9 @@ PrivateAiServiceFactory::BuildServiceInstanceForBrowserContext(
       profile->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess(),
       std::move(network_driver), std::move(oak_session_driver),
-      profile->GetDefaultStoragePartition()->GetNetworkContext(),
-      kPrivateAiUrl.Get(), PrivateAiService::GetApiKey(chrome::GetChannel()),
-      kPrivateAiProxyServerUrl.Get(),
-      base::FeatureList::IsEnabled(kPrivateAiUseTokenAttestation));
+      CreateNetworkContextGetter(profile), kPrivateAiUrl.Get(),
+      PrivateAiService::GetApiKey(channel), kPrivateAiProxyServerUrl.Get(),
+      base::FeatureList::IsEnabled(kPrivateAiUseTokenAttestation), channel);
 }
 
 }  // namespace private_ai

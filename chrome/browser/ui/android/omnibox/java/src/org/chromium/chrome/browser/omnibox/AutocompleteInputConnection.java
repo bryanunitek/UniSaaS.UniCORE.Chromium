@@ -6,10 +6,10 @@ package org.chromium.chrome.browser.omnibox;
 
 import android.os.Bundle;
 import android.text.Editable;
-import android.text.TextUtils;
 import android.view.KeyEvent;
 import android.view.inputmethod.CompletionInfo;
 import android.view.inputmethod.CorrectionInfo;
+import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.ExtractedText;
 import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnectionWrapper;
@@ -106,15 +106,28 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
         /** Notifies that the autocomplete text state has changed. */
         void notifyAutocompleteTextStateChanged();
 
-        /** Updates the selection, primarily for testing purposes. */
-        void updateSelectionForTesting();
-
         /**
          * Determines if the composition should be finished upon deletion.
          *
          * @return True if the composition should be finished on deletion, false otherwise.
          */
         boolean shouldFinishCompositionOnDeletion();
+
+        /** Updates the selection, primarily for testing purposes. */
+        void updateSelectionForTesting();
+    }
+
+    /**
+     * Checks whether the given text contains any whitespace characters (ASCII or Unicode) without
+     * allocations.
+     */
+    private static boolean containsWhitespace(CharSequence text) {
+        for (int i = 0; i < text.length(); i++) {
+            if (Character.isWhitespace(text.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private final AutocompleteState mPreBatchEditState;
@@ -196,10 +209,10 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
             if (mInputDelegate.getDeletePostfixOnNextBeginImeCommand() > len) {
                 mInputDelegate.setDeletePostfixOnNextBeginImeCommand(len);
             }
-            mInputDelegate
-                    .getAutocompleteEditTextModelBaseDelegate()
-                    .getText()
-                    .delete(len - mInputDelegate.getDeletePostfixOnNextBeginImeCommand(), len);
+            Editable editable = mInputDelegate.getAutocompleteEditTextModelBaseDelegate().getText();
+            try (var capture = new UndoStackCapture(editable)) {
+                editable.delete(len - mInputDelegate.getDeletePostfixOnNextBeginImeCommand(), len);
+            }
         }
         mInputDelegate.setDeletePostfixOnNextBeginImeCommand(0);
         mInputDelegate.getSpanCursorController().removeAutocompleteSpan();
@@ -221,7 +234,9 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
         incrementBatchEditCount(); // avoids additional notifyAutocompleteTextStateChanged()
         Editable editable =
                 mInputDelegate.getAutocompleteEditTextModelBaseDelegate().getEditableText();
-        editable.append(diff);
+        try (var capture = new UndoStackCapture(editable)) {
+            editable.append(diff);
+        }
         decrementBatchEditCount();
     }
 
@@ -238,12 +253,7 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
         mInputDelegate
                 .getAutocompleteEditTextModelBaseDelegate()
                 .setInputIsMultilineEligible(
-                        TextUtils.indexOf(
-                                        OmniboxFeatures.sWrapAutocompleteText.getValue()
-                                                ? mInputDelegate.getCurrentState().getText()
-                                                : mInputDelegate.getCurrentState().getUserText(),
-                                        ' ')
-                                >= 0);
+                        containsWhitespace(mInputDelegate.getCurrentState().getUserText()));
 
         if (!mInputDelegate.getCurrentState().isCursorAtEndOfUserText()) return false;
 
@@ -275,9 +285,10 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
         if (DEBUG) Log.i(TAG, "onEndImeCommand: " + mInputDelegate.isInBatchEdit());
         AutocompleteState currentState = mInputDelegate.getCurrentState();
         String diff = currentState.getBackwardDeletedTextFrom(mPreBatchEditState);
+        boolean retVal;
         if (diff != null) {
             // Update selection first such that keyboard app gets what it expects.
-            boolean retVal = decrementBatchEditCount();
+            retVal = decrementBatchEditCount();
 
             // Ensure this deletion is for autocomplete and not a site search transition.
             // When site search is activated (e.g. hitting <space> on "yahoo[ suggestion]")
@@ -290,22 +301,25 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
             }
             mInputDelegate.setLastEditWasTyping(false);
             mInputDelegate.clearAutocompleteText();
-            mInputDelegate.notifyAutocompleteTextStateChanged();
-            return retVal;
-        }
-        if (!setAutocompleteSpan()) {
-            mInputDelegate.clearAutocompleteText();
-        }
-        boolean retVal = decrementBatchEditCount();
-        // Simply typed some characters or whole text selection has been overridden.
-        if (currentState.isForwardTypedFrom(mPreBatchEditState)
-                || (mPreBatchEditState.isWholeUserTextSelected()
-                        && currentState.getUserText().length() > 0
-                        && currentState.getSelection().isCollapsed()
-                        && currentState.isCursorAtEndOfUserText())) {
-            mInputDelegate.setLastEditWasTyping(true);
+        } else {
+            if (!setAutocompleteSpan()) {
+                mInputDelegate.clearAutocompleteText();
+            }
+            retVal = decrementBatchEditCount();
+            // Simply typed some characters or whole text selection has been overridden.
+            if (currentState.isForwardTypedFrom(mPreBatchEditState)
+                    || currentState.isForwardReplacementFrom(mPreBatchEditState)
+                    || (mPreBatchEditState.isWholeUserTextSelected()
+                            && currentState.getUserText().length() > 0
+                            && currentState.getSelection().isCollapsed()
+                            && currentState.isCursorAtEndOfUserText())) {
+                mInputDelegate.setLastEditWasTyping(true);
+            }
         }
         mInputDelegate.notifyAutocompleteTextStateChanged();
+        if (!mInputDelegate.isInBatchEdit()) {
+            mPreBatchEditState.copyFrom(currentState);
+        }
         return retVal;
     }
 
@@ -349,7 +363,17 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
     public boolean deleteSurroundingText(final int beforeLength, final int afterLength) {
         if (DEBUG) Log.i(TAG, "deleteSurroundingText [%d,%d]", beforeLength, afterLength);
         onBeginImeCommand();
-        boolean retVal = super.deleteSurroundingText(beforeLength, afterLength);
+        AutocompleteState state = mInputDelegate.getCurrentState();
+        boolean bypassUndo =
+                state.getAutocompleteText() != null
+                        && afterLength == 0
+                        && state.getUserText().length() > beforeLength;
+        Editable editable =
+                mInputDelegate.getAutocompleteEditTextModelBaseDelegate().getEditableText();
+        boolean retVal;
+        try (var capture = bypassUndo ? new UndoStackCapture(editable) : null) {
+            retVal = super.deleteSurroundingText(beforeLength, afterLength);
+        }
         onEndImeCommand();
         return retVal;
     }
@@ -366,6 +390,12 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
     @Override
     public boolean performEditorAction(final int editorAction) {
         if (DEBUG) Log.i(TAG, "performEditorAction: " + editorAction);
+        // Swallow NEXT and PREVIOUS actions to avoid triggering TextView focusSearch.
+        // The Omnibox does not support form field navigation.
+        if (editorAction == EditorInfo.IME_ACTION_NEXT
+                || editorAction == EditorInfo.IME_ACTION_PREVIOUS) {
+            return true;
+        }
         onBeginImeCommand();
         commitAutocomplete();
         boolean retVal = super.performEditorAction(editorAction);
@@ -383,7 +413,8 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
     }
 
     @Override
-    public ExtractedText getExtractedText(final ExtractedTextRequest request, final int flags) {
+    public @Nullable ExtractedText getExtractedText(
+            final ExtractedTextRequest request, final int flags) {
         if (DEBUG) Log.i(TAG, "getExtractedText");
         onBeginImeCommand();
         ExtractedText retVal = super.getExtractedText(request, flags);
@@ -410,7 +441,7 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
     }
 
     @Override
-    public CharSequence getSelectedText(final int flags) {
+    public @Nullable CharSequence getSelectedText(final int flags) {
         if (DEBUG) Log.i(TAG, "getSelectedText");
         onBeginImeCommand();
         CharSequence retVal = super.getSelectedText(flags);
@@ -449,7 +480,19 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
     public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
         if (DEBUG) Log.i(TAG, "deleteSurroundingTextInCodePoints");
         onBeginImeCommand();
-        boolean retVal = super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
+        AutocompleteState state = mInputDelegate.getCurrentState();
+        int userTextCodePoints =
+                Character.codePointCount(state.getUserText(), 0, state.getUserText().length());
+        boolean bypassUndo =
+                state.getAutocompleteText() != null
+                        && afterLength == 0
+                        && userTextCodePoints > beforeLength;
+        Editable editable =
+                mInputDelegate.getAutocompleteEditTextModelBaseDelegate().getEditableText();
+        boolean retVal;
+        try (var capture = bypassUndo ? new UndoStackCapture(editable) : null) {
+            retVal = super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
+        }
         onEndImeCommand();
         return retVal;
     }

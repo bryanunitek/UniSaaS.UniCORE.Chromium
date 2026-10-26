@@ -11,6 +11,8 @@
 #import "base/test/task_environment.h"
 #import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_pref_names.h"
+#import "components/subscription_eligibility/subscription_eligibility_prefs.h"
+#import "components/subscription_eligibility/subscription_eligibility_service.h"
 #import "components/sync/test/test_sync_service.h"
 #import "components/test/ios/test_utils.h"
 #import "ios/chrome/browser/authentication/account_menu/coordinator/account_menu_mediator_delegate.h"
@@ -25,6 +27,7 @@
 #import "ios/chrome/browser/settings/model/sync/utils/identity_error_util.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
+#import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
@@ -32,11 +35,11 @@
 #import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
-#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/signin/model/identity_test_environment_browser_state_adaptor.h"
+#import "ios/chrome/browser/subscription_eligibility/model/subscription_eligibility_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
@@ -74,21 +77,21 @@ class AccountMenuMediatorTest : public PlatformTest {
                               base::BindRepeating(&CreateTestSyncService));
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
-            std::make_unique<FakeAuthenticationServiceDelegate>()));
-    profile_ = std::move(builder).Build();
+        AuthenticationServiceFactory::GetDefaultFactory());
+    profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
+    avatar_provider_ = std::make_unique<signin::AvatarProvider>();
 
     // Set the manager and services variables.
     fake_system_identity_manager_ =
         FakeSystemIdentityManager::FromSystemIdentityManager(
             GetApplicationContext()->GetSystemIdentityManager());
     authentication_service_ =
-        AuthenticationServiceFactory::GetForProfile(profile_.get());
+        AuthenticationServiceFactory::GetForProfile(profile_);
     account_manager_service_ =
-        ChromeAccountManagerServiceFactory::GetForProfile(profile_.get());
+        ChromeAccountManagerServiceFactory::GetForProfile(profile_);
     test_sync_service_ = static_cast<syncer::TestSyncService*>(
-        SyncServiceFactory::GetForProfile(profile_.get()));
-    identity_manager_ = IdentityManagerFactory::GetForProfile(profile_.get());
+        SyncServiceFactory::GetForProfile(profile_));
+    identity_manager_ = IdentityManagerFactory::GetForProfile(profile_);
 
     AddPrimaryIdentity();
     AddSecondaryIdentity();
@@ -100,14 +103,17 @@ class AccountMenuMediatorTest : public PlatformTest {
         OCMStrictProtocolMock(@protocol(SyncErrorSettingsCommandHandler));
     consumer_mock_ = OCMStrictProtocolMock(@protocol(AccountMenuConsumer));
     mediator_ = [[AccountMenuMediator alloc]
-          initWithSyncService:test_sync_service_
-        accountManagerService:account_manager_service_
-                  authService:authentication_service_
-              identityManager:identity_manager_
-                        prefs:profile_->GetPrefs()
-                  accessPoint:AccountMenuAccessPoint::kNewTabPage
-                          URL:GURL()
-         prepareChangeProfile:nil];
+                   initWithSyncService:test_sync_service_
+                 accountManagerService:account_manager_service_
+                           authService:authentication_service_
+                       identityManager:identity_manager_
+                                 prefs:profile_->GetPrefs()
+        subscriptionEligibilityService:SubscriptionEligibilityServiceFactory::
+                                           GetForProfile(profile_)
+                           accessPoint:AccountMenuAccessPoint::kNewTabPage
+                                   URL:GURL()
+                  prepareChangeProfile:nil
+                        avatarProvider:avatar_provider_.get()];
     mediator_.delegate = delegate_mock_;
     mediator_.syncErrorSettingsCommandHandler = sync_error_settings_mock_;
     mediator_.consumer = consumer_mock_;
@@ -121,8 +127,11 @@ class AccountMenuMediatorTest : public PlatformTest {
     account_manager_service_ = nullptr;
     test_sync_service_ = nullptr;
     identity_manager_ = nullptr;
+    profile_ = nullptr;
 
     [mediator_ disconnect];
+    mediator_ = nil;
+    avatar_provider_.reset();
     VerifyMock();
     PlatformTest::TearDown();
   }
@@ -166,16 +175,11 @@ class AccountMenuMediatorTest : public PlatformTest {
         GetApplicationContext()->GetSystemIdentityManager());
   }
 
-  void SignOut() {
-    base::RunLoop run_loop;
-    base::RepeatingClosure closure = run_loop.QuitClosure();
-    authentication_service_->SignOut(signin_metrics::ProfileSignout::kTest,
-                                     ^() {
-                                       closure.Run();
-                                     });
-    run_loop.Run();
-  }
-
+ protected:
+  web::WebTaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  IOSChromeScopedTestingLocalState scoped_testing_local_state_;
+  TestProfileManagerIOS profile_manager_;
   id<AccountMenuMediatorDelegate> delegate_mock_;
   id<SyncErrorSettingsCommandHandler> sync_error_settings_mock_;
   id<AccountMenuConsumer> consumer_mock_;
@@ -187,6 +191,8 @@ class AccountMenuMediatorTest : public PlatformTest {
   raw_ptr<FakeSystemIdentityManager> fake_system_identity_manager_;
   raw_ptr<signin::IdentityManager> identity_manager_;
   base::UserActionTester user_actions_;
+  std::unique_ptr<signin::AvatarProvider> avatar_provider_;
+  raw_ptr<TestProfileIOS> profile_;
 
  private:
   // Signs in kPrimaryIdentity as primary identity.
@@ -200,11 +206,6 @@ class AccountMenuMediatorTest : public PlatformTest {
   void AddSecondaryIdentity() {
     fake_system_identity_manager_->AddIdentity(kSecondaryIdentity);
   }
-
-  web::WebTaskEnvironment task_environment_{
-      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  IOSChromeScopedTestingLocalState scoped_testing_local_state_;
-  std::unique_ptr<TestProfileIOS> profile_;
 };
 
 #pragma mark - Test for ChromeAccountManagerServiceObserver
@@ -217,12 +218,21 @@ TEST_F(AccountMenuMediatorTest, TestAddSecondaryIdentity) {
   thirdIdentity.userFullName = nil;
   thirdIdentity.userGivenName = nil;
 
+  NSArray<NSString*>* gaiaIDsToKeep = @[
+    kSecondaryIdentity.gaiaId.ToNSString(), thirdIdentity.gaiaId.ToNSString()
+  ];
+  // Adding an identity triggers notifications from both
+  // -[<IdentityManagerObserving> accountsOnDeviceDidChange] and
+  // -[<IdentityManagerObserving> extendedAccountInfoDidUpdate:] .
   OCMExpect([consumer_mock_
       updateAccountListWithGaiaIDsToAdd:@[ thirdIdentity.gaiaId.ToNSString() ]
                         gaiaIDsToRemove:@[]
                           gaiaIDsToKeep:@[
                             kSecondaryIdentity.gaiaId.ToNSString()
                           ]]);
+  OCMExpect([consumer_mock_ updateAccountListWithGaiaIDsToAdd:@[]
+                                              gaiaIDsToRemove:@[]
+                                                gaiaIDsToKeep:gaiaIDsToKeep]);
   fake_system_identity_manager_->AddIdentity(thirdIdentity);
 
   // Simulate that the identity gets updated (e.g. the username became known).
@@ -230,9 +240,6 @@ TEST_F(AccountMenuMediatorTest, TestAddSecondaryIdentity) {
   // identities is unchanged.
   thirdIdentity.userFullName = @"First Last";
   thirdIdentity.userGivenName = @"First";
-  NSArray<NSString*>* gaiaIDsToKeep = @[
-    kSecondaryIdentity.gaiaId.ToNSString(), thirdIdentity.gaiaId.ToNSString()
-  ];
   OCMExpect([consumer_mock_ updateAccountListWithGaiaIDsToAdd:@[]
                                               gaiaIDsToRemove:@[]
                                                 gaiaIDsToKeep:gaiaIDsToKeep]);
@@ -262,7 +269,7 @@ TEST_F(AccountMenuMediatorTest, TestRemoveSecondaryIdentity) {
   }
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
 // Checks that removing the primary identity lead to updating the
 // consumer.
@@ -273,8 +280,7 @@ TEST_F(AccountMenuMediatorTest, TestRemovePrimaryIdentity) {
                   signedIdentity:nil
                  userTappedClose:NO]);
   OCMExpect([consumer_mock_ setUserInteractionsEnabled:NO]);
-  authentication_service_->SignOut(signin_metrics::ProfileSignout::kTest, ^(){
-                                   });
+  authentication_service_->SignOut(signin_metrics::ProfileSignout::kTest);
 }
 
 #pragma mark - AccountMenuDataSource
@@ -301,10 +307,9 @@ TEST_F(AccountMenuMediatorTest, emailForGaiaID) {
 
 // Tests the result of imageForGaiaID.
 TEST_F(AccountMenuMediatorTest, imageForGaiaID) {
-  EXPECT_NSEQ(
-      [mediator_ imageForGaiaID:kSecondaryIdentity.gaiaId],
-      GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
-          kSecondaryIdentity, IdentityAvatarSize::TableViewIcon));
+  EXPECT_NSEQ([mediator_ imageForGaiaID:kSecondaryIdentity.gaiaId],
+              avatar_provider_->GetIdentityAvatar(
+                  kSecondaryIdentity, IdentityAvatarSize::TableViewIcon));
 }
 
 // Tests the result of primaryAccountEmail.
@@ -320,10 +325,48 @@ TEST_F(AccountMenuMediatorTest, TestPrimaryAccountUserFullName) {
 
 // Tests the result of primaryAccountAvatar.
 TEST_F(AccountMenuMediatorTest, TestPrimaryAccountAvatar) {
-  EXPECT_NSEQ(
-      [mediator_ primaryAccountAvatar],
-      GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
-          kPrimaryIdentity, IdentityAvatarSize::Large));
+  EXPECT_NE([mediator_ primaryAccountAvatar], nil);
+}
+
+// Tests the result of primaryAccountAITier.
+TEST_F(AccountMenuMediatorTest, TestPrimaryAccountAITier) {
+  OCMStub([consumer_mock_ updatePrimaryAccount]);
+
+  // Feature disabled, even if tier is positive.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndDisableFeature(kAiSubscriptionAvatarRingIOS);
+    profile_->GetPrefs()->SetInteger(
+        subscription_eligibility::prefs::kAiSubscriptionTier, 1);
+    EXPECT_EQ([mediator_ primaryAccountAITier], 0);
+  }
+
+  // Feature enabled, but tier is negative.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(kAiSubscriptionAvatarRingIOS);
+    profile_->GetPrefs()->SetInteger(
+        subscription_eligibility::prefs::kAiSubscriptionTier, -1);
+    EXPECT_EQ([mediator_ primaryAccountAITier], 0);
+  }
+
+  // Feature enabled, and tier is 0 (not positive).
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(kAiSubscriptionAvatarRingIOS);
+    profile_->GetPrefs()->SetInteger(
+        subscription_eligibility::prefs::kAiSubscriptionTier, 0);
+    EXPECT_EQ([mediator_ primaryAccountAITier], 0);
+  }
+
+  // Feature enabled, and tier is positive (1).
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(kAiSubscriptionAvatarRingIOS);
+    profile_->GetPrefs()->SetInteger(
+        subscription_eligibility::prefs::kAiSubscriptionTier, 1);
+    EXPECT_EQ([mediator_ primaryAccountAITier], 1);
+  }
 }
 
 // Tests the result of TestError when there is no error.

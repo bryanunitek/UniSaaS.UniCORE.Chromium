@@ -469,9 +469,13 @@ void PrintingContextMac::AskUserForSettings(int max_pages,
     // This function may be called in the middle of a CATransaction, where
     // running a modal panel is forbidden. That situation isn't ideal, but from
     // this code's POV the right answer is to defer running the panel until
-    // after the current transaction. See https://crbug.com/849538.
+    // after the current transaction. See https://crbug.com/40579303.
+
+    // Schedule the modal panel from the main run loop. Do not run it from a
+    // CoreAnimation completion block because the callback would remain active
+    // until the panel closes.
     __block auto block_callback = std::move(callback);
-    [CATransaction setCompletionBlock:^{
+    CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
       NSInteger selection = [panel runModalWithPrintInfo:print_info_];
       if (selection == NSModalResponseOK) {
         print_info_ = [panel printInfo];
@@ -492,7 +496,8 @@ void PrintingContextMac::AskUserForSettings(int max_pages,
       } else {
         std::move(block_callback).Run(mojom::ResultCode::kCanceled);
       }
-    }];
+    });
+    CFRunLoopWakeUp(CFRunLoopGetMain());
   }
 }
 
@@ -543,7 +548,8 @@ mojom::ResultCode PrintingContextMac::UpdatePrinterSettings(
         !SetCollateInPrintSettings(settings_->collate()) ||
         !SetDuplexModeInPrintSettings(settings_->duplex_mode()) ||
         !SetOutputColor(static_cast<int>(settings_->color())) ||
-        !SetResolution(settings_->dpi_size())) {
+        !SetResolution(settings_->dpi_size()) ||
+        !SetPrintRangeInPrintSettings(settings_->ranges())) {
       return OnError();
     }
   }
@@ -796,6 +802,26 @@ bool PrintingContextMac::SetKeyValue(std::string_view key,
 
   return PMPrintSettingsSetValue(print_settings, cf_key.get(), cf_value.get(),
                                  /*locked=*/false) == noErr;
+}
+
+bool PrintingContextMac::SetPrintRangeInPrintSettings(
+    const PageRanges& ranges) {
+  // The default is already NSPrintAllPages, so there is nothing to do.
+  if (ranges.empty()) {
+    return true;
+  }
+
+  PMPrintSettings print_settings =
+      static_cast<PMPrintSettings>([print_info_ PMPrintSettings]);
+
+  // macOS does not allow multiple ranges, so always choose the first.
+  const auto& range = ranges.front();
+  bool set_first_page =
+      PMSetFirstPage(print_settings, range.from + 1, false) == noErr;
+  bool set_last_page =
+      PMSetLastPage(print_settings, range.to + 1, false) == noErr;
+
+  return set_first_page && set_last_page;
 }
 
 PageRanges PrintingContextMac::GetPageRangesFromPrintInfo() {

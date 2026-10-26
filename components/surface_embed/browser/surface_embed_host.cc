@@ -10,14 +10,16 @@
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
-#include "components/guest_contents/browser/guest_contents_handle.h"
+#include "components/surface_embed/browser/surface_embed_handle.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "content/public/browser/document_user_data.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/surface_embed_connector.h"
 #include "content/public/browser/web_contents.h"
+#include "mojo/public/cpp/bindings/message.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/blink/public/common/frame/frame_visual_properties.h"
+#include "ui/accessibility/ax_node_id_forward.h"
 #include "ui/accessibility/ax_tree_id.h"
 
 namespace surface_embed {
@@ -70,7 +72,7 @@ void SurfaceEmbedHostCollection::RemoveHost(SurfaceEmbedHost* host) {
 // static
 SurfaceEmbedHost* SurfaceEmbedHost::Create(
     content::RenderFrameHost* rfh,
-    mojo::PendingReceiver<mojom::SurfaceEmbedHost> receiver) {
+    mojo::PendingAssociatedReceiver<mojom::SurfaceEmbedHost> receiver) {
   auto* collection =
       SurfaceEmbedHostCollection::GetOrCreateForCurrentDocument(rfh);
   SurfaceEmbedHost* host = collection->CreateHost();
@@ -89,7 +91,7 @@ SurfaceEmbedHost::~SurfaceEmbedHost() {
 }
 
 void SurfaceEmbedHost::Bind(
-    mojo::PendingReceiver<mojom::SurfaceEmbedHost> receiver) {
+    mojo::PendingAssociatedReceiver<mojom::SurfaceEmbedHost> receiver) {
   CHECK(!receiver_.is_bound());
   receiver_.Bind(std::move(receiver));
   receiver_.set_disconnect_handler(base::BindOnce(
@@ -102,25 +104,37 @@ void SurfaceEmbedHost::SetDestructionCallbackForTesting(
 }
 
 void SurfaceEmbedHost::SetSurfaceEmbed(
-    mojo::PendingRemote<mojom::SurfaceEmbed> surface_embed) {
+    mojo::PendingAssociatedRemote<mojom::SurfaceEmbed> surface_embed) {
   CHECK(!surface_embed_.is_bound());
   surface_embed_.Bind(std::move(surface_embed));
   surface_embed_.set_disconnect_handler(base::BindOnce(
       &SurfaceEmbedHost::OnMojoDisconnect, base::Unretained(this)));
 }
 
-void SurfaceEmbedHost::AttachConnector(
-    const base::UnguessableToken& content_id) {
+void SurfaceEmbedHost::AttachConnector(const base::UnguessableToken& content_id,
+                                       bool is_embed_element_focused,
+                                       bool allow_pinch_zoom) {
+  has_received_attach_connector_for_testing_ = true;
+
   // Should never call attach without having a valid SurfaceEmbed remote already
   // bound.
   CHECK(surface_embed_);
 
   CHECK(!content_id.is_empty());
-  guest_contents::GuestContentsHandle* guest_handle =
-      guest_contents::GuestContentsHandle::FromID(content_id);
-  CHECK(guest_handle);
 
-  content::WebContents* web_contents_to_attach = guest_handle->web_contents();
+  // If this host already has a child attached, we need to detach it first. Note
+  // that this request comes from the parent side, so we don't notify the
+  // SurfaceEmbed as it initiated the detachment.
+  DetachConnector();
+
+  SurfaceEmbedHandle* handle = SurfaceEmbedHandle::FromID(content_id);
+  if (!handle) {
+    // The child may have been destroyed while the renderer was asynchronously
+    // creating the embed element.
+    return;
+  }
+
+  content::WebContents* web_contents_to_attach = handle->web_contents();
   CHECK(web_contents_to_attach);
 
   // If the child WebContents is already attached to a SurfaceEmbedConnector, we
@@ -132,11 +146,6 @@ void SurfaceEmbedHost::AttachConnector(
     CHECK(!web_contents_to_attach->GetSurfaceEmbedConnector());
   }
 
-  // If this host already has a child attached, we need to detach it first. Note
-  // that this request comes from the parent side, so we don't notify the
-  // SurfaceEmbed as it initiated the detachment.
-  DetachConnector();
-
   if (web_contents_to_attach->IsCrashed()) {
     // The child process may have crashed before the renderer for the parent
     // got the chance to attach it. We want to handle this early since attaching
@@ -146,13 +155,41 @@ void SurfaceEmbedHost::AttachConnector(
   }
 
   child_contents_ = web_contents_to_attach->GetWeakPtr();
-  content::SurfaceEmbedConnector::Attach(
-      web_contents_to_attach, &collection_->render_frame_host(), this);
+  const auto pinch_gesture_mode =
+      allow_pinch_zoom ? content::SurfaceEmbedConnector::PinchGestureMode::
+                             kScaleChildWebContents
+                       : content::SurfaceEmbedConnector::PinchGestureMode::
+                             kDelegateToParentWebContents;
+  content::SurfaceEmbedConnector::Attach(web_contents_to_attach,
+                                         &collection_->render_frame_host(),
+                                         this, pinch_gesture_mode);
 
   // If accessibility info was received before the connector was attached,
   // pass it to the connector now.
   if (container_accessibility_node_id_ != ui::kInvalidAXNodeID) {
     ForwardParentAccessibilityInfo();
+  }
+
+  if (is_embed_element_focused) {
+    FocusChildWebContents();
+  }
+}
+
+void SurfaceEmbedHost::SetAllowPinchZoom(bool allow_pinch_zoom) {
+  content::SurfaceEmbedConnector* connector = GetConnector();
+  if (!connector) {
+    return;
+  }
+  connector->SetPinchGestureMode(
+      allow_pinch_zoom ? content::SurfaceEmbedConnector::PinchGestureMode::
+                             kScaleChildWebContents
+                       : content::SurfaceEmbedConnector::PinchGestureMode::
+                             kDelegateToParentWebContents);
+}
+
+void SurfaceEmbedHost::FocusChildWebContents() {
+  if (child_contents_ && !child_contents_->ContainsOrIsFocusedWebContents()) {
+    child_contents_->Focus();
   }
 }
 
@@ -176,7 +213,61 @@ void SurfaceEmbedHost::SynchronizeVisualProperties(
   }
 }
 
+void SurfaceEmbedHost::OnEmbedElementFocused(
+    bool focused,
+    blink::mojom::FocusType focus_type) {
+  if (!child_contents_) {
+    return;
+  }
+
+  if (!focused) {
+    // TODO(crbug.com/508638062): the <embed> element in the parent frame lost
+    // focus. Should we remove the page focus from the embedded page?
+    return;
+  }
+
+  // When a child embed requests focus via RequestFocusOnEmbedElement(),
+  // focusing the <embed> element in the parent renderer triggers
+  // OnEmbedElementFocused(). In a multi-level embedding setup
+  // (e.g., root -> parent embed -> child embed), clicking on the child embed
+  // focuses the parent <embed> element. If there is a pending
+  // RequestFocusOnEmbedElement(), do nothing so we don't call Focus() on the
+  // parent <embed>'s WebContents.
+  if (pending_request_focus_on_embed_element_) {
+    return;
+  }
+
+  // A page-focus event is fired for the active element when the window receives
+  // OS focus and the page becomes focused. It does not indicate that the
+  // focused element changed.
+  if (focus_type == blink::mojom::FocusType::kPage) {
+    return;
+  }
+
+  if (focus_type == blink::mojom::FocusType::kForward) {
+    child_contents_->FocusThroughTabTraversal(/*reverse=*/false);
+  } else if (focus_type == blink::mojom::FocusType::kBackward) {
+    child_contents_->FocusThroughTabTraversal(/*reverse=*/true);
+  }
+
+  FocusChildWebContents();
+}
+
+void SurfaceEmbedHost::OnEmbedElementThrottlingStatusChanged(
+    mojom::RenderThrottlingStatusPtr status) {
+  if (content::SurfaceEmbedConnector* connector = GetConnector()) {
+    connector->UpdateRenderThrottlingStatus(status->is_throttled,
+                                            status->subtree_throttled,
+                                            status->display_locked);
+  }
+}
+
 void SurfaceEmbedHost::SetParentAccessibilityInfo(ui::AXNodeID ax_node_id) {
+  if (!ui::IsValidAXNodeIDFromRenderer(ax_node_id)) {
+    mojo::ReportBadMessage("Invalid AXNodeID in SetParentAccessibilityInfo.");
+    return;
+  }
+
   container_accessibility_node_id_ = ax_node_id;
 
   ForwardParentAccessibilityInfo();
@@ -225,9 +316,27 @@ void SurfaceEmbedHost::DetachedByHost() {
   DetachConnector();
 }
 
-void SurfaceEmbedHost::RequestFocus() {
+void SurfaceEmbedHost::RequestFocusOnEmbedElement() {
+  if (pending_request_focus_on_embed_element_) {
+    return;
+  }
+
   if (surface_embed_) {
-    surface_embed_->RequestFocus();
+    pending_request_focus_on_embed_element_ = true;
+    surface_embed_->RequestFocusOnEmbedElement(
+        base::BindOnce(&SurfaceEmbedHost::OnRequestFocusOnEmbedElementCompleted,
+                       weak_ptr_factory_.GetWeakPtr()));
+  }
+}
+
+void SurfaceEmbedHost::OnRequestFocusOnEmbedElementCompleted() {
+  CHECK(pending_request_focus_on_embed_element_);
+  pending_request_focus_on_embed_element_ = false;
+}
+
+void SurfaceEmbedHost::AdvanceFocusFromEmbedElement(bool reverse) {
+  if (surface_embed_) {
+    surface_embed_->AdvanceFocusFromEmbedElement(reverse);
   }
 }
 

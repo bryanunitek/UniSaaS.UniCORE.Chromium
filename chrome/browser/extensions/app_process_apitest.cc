@@ -4,21 +4,23 @@
 
 #include "base/command_line.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/run_until.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/browsertest_util.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/window_controller_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/blocked_content/popup_blocker_tab_helper.h"
 #include "components/embedder_support/switches.h"
 #include "components/sync/model/string_ordinal.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -38,6 +40,7 @@
 #include "extensions/common/switches.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "ui/base/window_open_disposition.h"
 
 using content::NavigationController;
 using content::RenderViewHost;
@@ -96,12 +99,13 @@ class AppApiTest : public extensions::ExtensionApiTest {
     NavigateToURLInNewTab(base_url.Resolve("path1/empty.html"));
     LOG(INFO) << "Nav 1.";
     EXPECT_TRUE(process_map->Contains(browser()
-                                          ->tab_strip_model()
+                                          ->GetTabStripModel()
                                           ->GetWebContentsAt(1)
                                           ->GetPrimaryMainFrame()
                                           ->GetProcess()
-                                          ->GetDeprecatedID()));
-    EXPECT_FALSE(browser()->tab_strip_model()->GetWebContentsAt(1)->GetWebUI());
+                                          ->GetID()));
+    EXPECT_FALSE(
+        browser()->GetTabStripModel()->GetWebContentsAt(1)->GetWebUI());
 
     ui_test_utils::TabAddedWaiter tab_add(browser());
     chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
@@ -111,23 +115,24 @@ class AppApiTest : public extensions::ExtensionApiTest {
         browser(), base_url.Resolve("path2/empty.html")));
     LOG(INFO) << "Nav 2.";
     EXPECT_TRUE(process_map->Contains(browser()
-                                          ->tab_strip_model()
+                                          ->GetTabStripModel()
                                           ->GetWebContentsAt(2)
                                           ->GetPrimaryMainFrame()
                                           ->GetProcess()
-                                          ->GetDeprecatedID()));
-    EXPECT_FALSE(browser()->tab_strip_model()->GetWebContentsAt(2)->GetWebUI());
+                                          ->GetID()));
+    EXPECT_FALSE(
+        browser()->GetTabStripModel()->GetWebContentsAt(2)->GetWebUI());
 
     // We should have opened 2 new extension tabs. Including the original blank
     // tab, we now have 3 tabs.
-    ASSERT_EQ(3, browser()->tab_strip_model()->count());
+    ASSERT_EQ(3, browser()->GetTabStripModel()->count());
     // The two app tabs don't have the background permission. To improve
     // responsiveness, they should not be in the same process unless the
     // kProcessPerSiteUpToMainFrameThreshold feature is enabled. The assumption
     // of the kProcessPerSiteUpToMainFrameThreshold is that sharing a process
     // with a threshold doesn't hurt responsiveness.
-    WebContents* tab1 = browser()->tab_strip_model()->GetWebContentsAt(1);
-    WebContents* tab2 = browser()->tab_strip_model()->GetWebContentsAt(2);
+    WebContents* tab1 = browser()->GetTabStripModel()->GetWebContentsAt(1);
+    WebContents* tab2 = browser()->GetTabStripModel()->GetWebContentsAt(2);
     if (!base::FeatureList::IsEnabled(
             features::kProcessPerSiteUpToMainFrameThreshold)) {
       EXPECT_NE(tab1->GetPrimaryMainFrame()->GetProcess(),
@@ -172,21 +177,21 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, AppProcess) {
   // they have no elevated privileges and thus should not have WebUI bindings.
   NavigateToURLInNewTab(base_url.Resolve("path1/empty.html"));
   EXPECT_TRUE(process_map->Contains(browser()
-                                        ->tab_strip_model()
+                                        ->GetTabStripModel()
                                         ->GetWebContentsAt(1)
                                         ->GetPrimaryMainFrame()
                                         ->GetProcess()
-                                        ->GetDeprecatedID()));
-  EXPECT_FALSE(browser()->tab_strip_model()->GetWebContentsAt(1)->GetWebUI());
+                                        ->GetID()));
+  EXPECT_FALSE(browser()->GetTabStripModel()->GetWebContentsAt(1)->GetWebUI());
 
   NavigateToURLInNewTab(base_url.Resolve("path2/empty.html"));
   EXPECT_TRUE(process_map->Contains(browser()
-                                        ->tab_strip_model()
+                                        ->GetTabStripModel()
                                         ->GetWebContentsAt(2)
                                         ->GetPrimaryMainFrame()
                                         ->GetProcess()
-                                        ->GetDeprecatedID()));
-  EXPECT_FALSE(browser()->tab_strip_model()->GetWebContentsAt(2)->GetWebUI());
+                                        ->GetID()));
+  EXPECT_FALSE(browser()->GetTabStripModel()->GetWebContentsAt(2)->GetWebUI());
 
   ui_test_utils::TabAddedWaiter tab_add(browser());
   chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
@@ -194,29 +199,29 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, AppProcess) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), base_url.Resolve("path3/empty.html")));
   EXPECT_FALSE(process_map->Contains(browser()
-                                         ->tab_strip_model()
+                                         ->GetTabStripModel()
                                          ->GetWebContentsAt(3)
                                          ->GetPrimaryMainFrame()
                                          ->GetProcess()
-                                         ->GetDeprecatedID()));
-  EXPECT_FALSE(browser()->tab_strip_model()->GetWebContentsAt(3)->GetWebUI());
+                                         ->GetID()));
+  EXPECT_FALSE(browser()->GetTabStripModel()->GetWebContentsAt(3)->GetWebUI());
 
   // We should have opened 3 new extension tabs. Including the original blank
   // tab, we now have 4 tabs. Because the app_process app has the background
   // permission, all of its instances are in the same process.  Thus two tabs
   // should be part of the extension app and grouped in the same process.
-  ASSERT_EQ(4, browser()->tab_strip_model()->count());
-  WebContents* tab = browser()->tab_strip_model()->GetWebContentsAt(1);
+  ASSERT_EQ(4, browser()->GetTabStripModel()->count());
+  WebContents* tab = browser()->GetTabStripModel()->GetWebContentsAt(1);
 
   EXPECT_EQ(tab->GetPrimaryMainFrame()->GetProcess(),
             browser()
-                ->tab_strip_model()
+                ->GetTabStripModel()
                 ->GetWebContentsAt(2)
                 ->GetPrimaryMainFrame()
                 ->GetProcess());
   EXPECT_NE(tab->GetPrimaryMainFrame()->GetProcess(),
             browser()
-                ->tab_strip_model()
+                ->GetTabStripModel()
                 ->GetWebContentsAt(3)
                 ->GetPrimaryMainFrame()
                 ->GetProcess());
@@ -238,18 +243,18 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, AppProcess) {
   const GURL& app_url(base_url.Resolve("path1/empty.html"));
   const GURL& non_app_url(base_url.Resolve("path3/empty.html"));
   EXPECT_TRUE(NavigateInRenderer(
-      browser()->tab_strip_model()->GetWebContentsAt(2), non_app_url));
+      browser()->GetTabStripModel()->GetWebContentsAt(2), non_app_url));
   EXPECT_TRUE(NavigateInRenderer(
-      browser()->tab_strip_model()->GetWebContentsAt(3), app_url));
+      browser()->GetTabStripModel()->GetWebContentsAt(3), app_url));
   EXPECT_NE(tab->GetPrimaryMainFrame()->GetProcess(),
             browser()
-                ->tab_strip_model()
+                ->GetTabStripModel()
                 ->GetWebContentsAt(2)
                 ->GetPrimaryMainFrame()
                 ->GetProcess());
   EXPECT_EQ(tab->GetPrimaryMainFrame()->GetProcess(),
             browser()
-                ->tab_strip_model()
+                ->GetTabStripModel()
                 ->GetWebContentsAt(3)
                 ->GetPrimaryMainFrame()
                 ->GetProcess());
@@ -257,15 +262,15 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, AppProcess) {
   // If one of the popup tabs navigates back to the app, window.opener should
   // be valid.
   EXPECT_TRUE(NavigateInRenderer(
-      browser()->tab_strip_model()->GetWebContentsAt(6), app_url));
+      browser()->GetTabStripModel()->GetWebContentsAt(6), app_url));
   EXPECT_EQ(tab->GetPrimaryMainFrame()->GetProcess(),
             browser()
-                ->tab_strip_model()
+                ->GetTabStripModel()
                 ->GetWebContentsAt(6)
                 ->GetPrimaryMainFrame()
                 ->GetProcess());
   ASSERT_EQ(true,
-            content::EvalJs(browser()->tab_strip_model()->GetWebContentsAt(6),
+            content::EvalJs(browser()->GetTabStripModel()->GetWebContentsAt(6),
                             "window.opener != null"));
 }
 
@@ -314,22 +319,22 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, DISABLED_AppProcessRedirectBack) {
 
   // 3 tabs, including the initial about:blank. The last 2 should be the same
   // process.
-  ASSERT_EQ(3, browser()->tab_strip_model()->count());
+  ASSERT_EQ(3, browser()->GetTabStripModel()->count());
   EXPECT_EQ("/extensions/api_test/app_process/path1/empty.html",
             browser()
-                ->tab_strip_model()
+                ->GetTabStripModel()
                 ->GetWebContentsAt(2)
                 ->GetController()
                 .GetLastCommittedEntry()
                 ->GetURL()
                 .GetPath());
   EXPECT_EQ(browser()
-                ->tab_strip_model()
+                ->GetTabStripModel()
                 ->GetWebContentsAt(1)
                 ->GetPrimaryMainFrame()
                 ->GetProcess(),
             browser()
-                ->tab_strip_model()
+                ->GetTabStripModel()
                 ->GetWebContentsAt(2)
                 ->GetPrimaryMainFrame()
                 ->GetProcess());
@@ -352,9 +357,9 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, NavigateIntoAppProcess) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), base_url.Resolve("path1/empty.html")));
   LOG(INFO) << "Loading path1/empty.html - done.";
-  WebContents* contents = browser()->tab_strip_model()->GetWebContentsAt(0);
+  WebContents* contents = browser()->GetTabStripModel()->GetWebContentsAt(0);
   EXPECT_FALSE(process_map->Contains(
-      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
 
   // Load app and re-navigate to the page.
   LOG(INFO) << "Loading extension.";
@@ -367,7 +372,7 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, NavigateIntoAppProcess) {
       browser(), base_url.Resolve("path1/empty.html")));
   LOG(INFO) << "Loading path1/empty.html - done.";
   EXPECT_TRUE(process_map->Contains(
-      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
 
   // Disable app and re-navigate to the page.
   LOG(INFO) << "Disabling extension.";
@@ -378,7 +383,7 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, NavigateIntoAppProcess) {
       browser(), base_url.Resolve("path1/empty.html")));
   LOG(INFO) << "Loading path1/empty.html - done.";
   EXPECT_FALSE(process_map->Contains(
-      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
 }
 
 // Ensure that reloading a URL after installing or uninstalling it as an app
@@ -406,10 +411,10 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, ReloadIntoAppProcess) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), base_url.Resolve("path1/empty.html")));
   LOG(INFO) << "Navigate to path1/empty.html - done.";
-  WebContents* contents = browser()->tab_strip_model()->GetWebContentsAt(0);
+  WebContents* contents = browser()->GetTabStripModel()->GetWebContentsAt(0);
   content::NavigationController& controller = contents->GetController();
   EXPECT_FALSE(process_map->Contains(
-      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
   // The test starts with about:blank, then navigates to path1/empty.html,
   // so there should be two entries.
   EXPECT_EQ(2, controller.GetEntryCount());
@@ -419,13 +424,13 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, ReloadIntoAppProcess) {
   EnableExtension(app->id());
   LOG(INFO) << "Enabling extension - done.";
   content::LoadStopObserver reload_observer(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   LOG(INFO) << "Reloading.";
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   reload_observer.Wait();
   LOG(INFO) << "Reloading - done.";
   EXPECT_TRUE(process_map->Contains(
-      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
   // Reloading, even with changing SiteInstance/process should not add any
   // more entries.
   EXPECT_EQ(2, controller.GetEntryCount());
@@ -435,13 +440,13 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, ReloadIntoAppProcess) {
   DisableExtension(app->id());
   LOG(INFO) << "Disabling extension - done.";
   content::LoadStopObserver reload_observer2(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   LOG(INFO) << "Reloading.";
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   reload_observer2.Wait();
   LOG(INFO) << "Reloading - done.";
   EXPECT_FALSE(process_map->Contains(
-      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
   EXPECT_EQ(2, controller.GetEntryCount());
 }
 
@@ -470,35 +475,35 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, ReloadIntoAppProcessWithJavaScript) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), base_url.Resolve("path1/empty.html")));
   LOG(INFO) << "Navigate to path1/empty.html - done.";
-  WebContents* contents = browser()->tab_strip_model()->GetWebContentsAt(0);
+  WebContents* contents = browser()->GetTabStripModel()->GetWebContentsAt(0);
   EXPECT_FALSE(process_map->Contains(
-      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
 
   // Enable app and reload via JavaScript.
   LOG(INFO) << "Enabling extension.";
   EnableExtension(app->id());
   LOG(INFO) << "Enabling extension - done.";
   content::LoadStopObserver js_reload_observer(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   LOG(INFO) << "Executing location.reload().";
   ASSERT_TRUE(content::ExecJs(contents, "location.reload();"));
   js_reload_observer.Wait();
   LOG(INFO) << "Executing location.reload() - done.";
   EXPECT_TRUE(process_map->Contains(
-      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
 
   // Disable app and reload via JavaScript.
   LOG(INFO) << "Disabling extension.";
   DisableExtension(app->id());
   LOG(INFO) << "Disabling extension - done.";
   content::LoadStopObserver js_reload_observer2(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   LOG(INFO) << "Executing location = location.";
   ASSERT_TRUE(content::ExecJs(contents, "location = location;"));
   js_reload_observer2.Wait();
   LOG(INFO) << "Executing location = location - done.";
   EXPECT_FALSE(process_map->Contains(
-      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
 }
 
 // Similar to the previous test, but ensure that popup blocking bypass
@@ -512,13 +517,13 @@ IN_PROC_BROWSER_TEST_F(BlockedAppApiTest, OpenAppFromIframe) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(),
       GetTestBaseURL("app_process").Resolve("path3/container.html")));
-  ui_test_utils::WaitForViewVisibility(browser(), VIEW_ID_CONTENT_SETTING_POPUP,
-                                       true);
 
-  WebContents* tab = browser()->tab_strip_model()->GetActiveWebContents();
+  WebContents* tab = browser()->GetTabStripModel()->GetActiveWebContents();
   blocked_content::PopupBlockerTabHelper* popup_blocker_tab_helper =
       blocked_content::PopupBlockerTabHelper::FromWebContents(tab);
-  EXPECT_EQ(1u, popup_blocker_tab_helper->GetBlockedPopupsCount());
+  ASSERT_TRUE(base::test::RunUntil([popup_blocker_tab_helper]() {
+    return popup_blocker_tab_helper->GetBlockedPopupsCount() == 1u;
+  }));
 }
 
 // Tests that if an extension launches an app via chrome.tabs.create with an URL
@@ -534,8 +539,7 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, ServerRedirectToAppFromExtension) {
   // 2. The app's URL (which includes a server redirect).
   // Note that the server redirect does not generate a navigation event.
   content::TestNavigationObserver test_navigation_observer(
-      browser()->tab_strip_model()->GetActiveWebContents(),
-      2);
+      browser()->GetTabStripModel()->GetActiveWebContents(), 2);
   test_navigation_observer.StartWatchingNewWebContents();
 
   // Load the launcher extension, which should launch the app.
@@ -547,7 +551,7 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, ServerRedirectToAppFromExtension) {
 
   // App has loaded, and chrome.app.isInstalled should be true.
   ASSERT_EQ(true, content::EvalJs(
-                      browser()->tab_strip_model()->GetActiveWebContents(),
+                      browser()->GetTabStripModel()->GetActiveWebContents(),
                       "chrome.app.isInstalled"));
 }
 
@@ -564,8 +568,7 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, ClientRedirectToAppFromExtension) {
   // 2. The URL that the extension launches, which client redirects.
   // 3. The app's URL.
   content::TestNavigationObserver test_navigation_observer(
-      browser()->tab_strip_model()->GetActiveWebContents(),
-      3);
+      browser()->GetTabStripModel()->GetActiveWebContents(), 3);
   test_navigation_observer.StartWatchingNewWebContents();
 
   // Load the launcher extension, which should launch the app.
@@ -577,7 +580,7 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, ClientRedirectToAppFromExtension) {
 
   // App has loaded, and chrome.app.isInstalled should be true.
   ASSERT_EQ(true, content::EvalJs(
-                      browser()->tab_strip_model()->GetActiveWebContents(),
+                      browser()->GetTabStripModel()->GetActiveWebContents(),
                       "chrome.app.isInstalled"));
 }
 
@@ -601,11 +604,11 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, OpenWebPopupFromWebIframe) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), base_url.Resolve("path1/container.html")));
   content::RenderProcessHost* process = browser()
-                                            ->tab_strip_model()
+                                            ->GetTabStripModel()
                                             ->GetWebContentsAt(0)
                                             ->GetPrimaryMainFrame()
                                             ->GetProcess();
-  EXPECT_TRUE(process_map->Contains(process->GetDeprecatedID()));
+  EXPECT_TRUE(process_map->Contains(process->GetID()));
 
   // Popup window should be in the app's process.
   const WindowControllerList* active_window_list =
@@ -619,7 +622,7 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, OpenWebPopupFromWebIframe) {
   content::RenderProcessHost* popup_process =
       popup_contents->GetPrimaryMainFrame()->GetProcess();
   EXPECT_EQ(process, popup_process);
-  EXPECT_TRUE(process_map->Contains(popup_process->GetDeprecatedID()));
+  EXPECT_TRUE(process_map->Contains(popup_process->GetID()));
 }
 
 IN_PROC_BROWSER_TEST_F(AppApiTest, ReloadAppAfterCrash) {
@@ -632,16 +635,16 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, ReloadAppAfterCrash) {
   // Load the app, chrome.app.isInstalled should be true.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), base_url.Resolve("path1/empty.html")));
-  WebContents* contents = browser()->tab_strip_model()->GetWebContentsAt(0);
+  WebContents* contents = browser()->GetTabStripModel()->GetWebContentsAt(0);
   EXPECT_TRUE(process_map->Contains(
-      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
   ASSERT_EQ(true, content::EvalJs(contents, "chrome.app.isInstalled"));
 
   // Crash the tab and reload it, chrome.app.isInstalled should still be true.
-  content::CrashTab(browser()->tab_strip_model()->GetActiveWebContents());
+  content::CrashTab(browser()->GetTabStripModel()->GetActiveWebContents());
   content::LoadStopObserver observer(
-      browser()->tab_strip_model()->GetActiveWebContents());
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+      browser()->GetTabStripModel()->GetActiveWebContents());
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   observer.Wait();
   ASSERT_EQ(true, content::EvalJs(contents, "chrome.app.isInstalled"));
 }
@@ -663,9 +666,8 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, NavigatePopupFromAppToOutsideApp) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), base_url.Resolve("path1/iframe.html")));
   content::SiteInstance* app_instance =
-      browser()->tab_strip_model()->GetWebContentsAt(0)->GetSiteInstance();
-  EXPECT_TRUE(
-      process_map->Contains(app_instance->GetProcess()->GetDeprecatedID()));
+      browser()->GetTabStripModel()->GetWebContentsAt(0)->GetSiteInstance();
+  EXPECT_TRUE(process_map->Contains(app_instance->GetProcess()->GetID()));
 
   // Popup window should be in the app's process.
   const WindowControllerList* active_window_list =

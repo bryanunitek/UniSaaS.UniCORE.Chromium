@@ -28,7 +28,6 @@
 #include "components/download/public/common/download_stats.h"
 #include "components/services/quarantine/quarantine.h"
 #include "crypto/hash.h"
-#include "crypto/secure_hash.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/content_uri_utils.h"
@@ -125,7 +124,7 @@ DownloadInterruptReason BaseFile::Initialize(
     base::File file,
     int64_t bytes_so_far,
     const std::string& hash_so_far,
-    std::unique_ptr<crypto::SecureHash> hash_state,
+    std::optional<crypto::hash::Hasher> hash_state,
     bool is_sparse_file,
     int64_t* const bytes_wasted) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -348,14 +347,26 @@ void BaseFile::Cancel() {
   Detach();
 }
 
-std::unique_ptr<crypto::SecureHash> BaseFile::Finish() {
+std::optional<crypto::hash::Hasher> BaseFile::Finish(int64_t expected_size) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // TODO(qinmin): verify that all the holes have been filled.
-  if (is_sparse_file_)
+  if (is_sparse_file_) {
+    // Determine the target physical size to truncate to.
+    // If expected_size is provided (> 0), use that; otherwise fall back to
+    // bytes_so_far_.
+    int64_t target_size = (expected_size > 0) ? expected_size : bytes_so_far_;
+
+    // Calculate hash over the logical prefix
     CalculatePartialHash(std::string());
+
+    // Truncate trailing unverified bytes past the target size
+    if (file_.IsValid() && file_.GetLength() > target_size) {
+      file_.SetLength(target_size);
+    }
+  }
   Close();
-  return std::move(secure_hash_);
+  return std::exchange(secure_hash_, std::nullopt);
 }
 
 std::string BaseFile::DebugString() const {
@@ -369,7 +380,7 @@ std::string BaseFile::DebugString() const {
 
 DownloadInterruptReason BaseFile::CalculatePartialHash(
     const std::string& hash_to_expect) {
-  secure_hash_ = crypto::SecureHash::Create(crypto::SecureHash::SHA256);
+  secure_hash_ = crypto::hash::Hasher(crypto::hash::kSha256);
 
   if (bytes_so_far_ == 0)
     return DOWNLOAD_INTERRUPT_REASON_NONE;
@@ -378,16 +389,16 @@ DownloadInterruptReason BaseFile::CalculatePartialHash(
     return LogSystemError("Seek partial file",
                           logging::GetLastSystemErrorCode());
 
-  const size_t kMinBufferSize = secure_hash_->GetHashLength();
+  const size_t kMinBufferSize = crypto::hash::kSha256Size;
   const size_t kMaxBufferSize = 1024 * 512;
   static_assert(kMaxBufferSize <= std::numeric_limits<int>::max(),
                 "kMaxBufferSize must fit on an int");
 
   // The size of the buffer is:
-  // - at least kMinBufferSize so that we can use it to hold the hash as well.
+  // - at least kMinBufferSize.
   // - at most kMaxBufferSize so that there's a reasonable bound.
-  // - not larger than |bytes_so_far_| unless bytes_so_far_ is less than the
-  //   hash size.
+  // - not larger than |bytes_so_far_| unless bytes_so_far_ is smaller than
+  //   kMinBufferSize.
   std::vector<uint8_t> buffer(std::max<int64_t>(
       kMinBufferSize, std::min<int64_t>(kMaxBufferSize, bytes_so_far_)));
 
@@ -424,9 +435,8 @@ DownloadInterruptReason BaseFile::CalculatePartialHash(
 
   if (!hash_to_expect.empty()) {
     std::array<uint8_t, crypto::hash::kSha256Size> result;
-    CHECK_EQ(secure_hash_->GetHashLength(), result.size());
-    std::unique_ptr<crypto::SecureHash> partial_hash(secure_hash_->Clone());
-    partial_hash->Finish(result);
+    crypto::hash::Hasher partial_hash(*secure_hash_);
+    partial_hash.Finish(result);
 
     if (base::span(result) != base::as_byte_span(hash_to_expect)) {
       return LogInterruptReason("Verifying prefix hash", 0,
@@ -497,7 +507,7 @@ DownloadInterruptReason BaseFile::Open(const std::string& hash_so_far,
     // If the file was truncated to the beginning, the hash state is no longer
     // valid.
     if (bytes_so_far_ == 0) {
-      secure_hash_ = crypto::SecureHash::Create(crypto::SecureHash::SHA256);
+      secure_hash_ = crypto::hash::Hasher(crypto::hash::kSha256);
     }
   } else if (file_size < bytes_so_far_) {
     // The file is shorter than we expected.  Our hashes won't be valid.
@@ -616,8 +626,10 @@ DownloadInterruptReason QuarantineFileResultToReason(
 }  // namespace
 
 // static
-GURL BaseFile::GetEffectiveAuthorityURL(const GURL& source_url,
-                                        const GURL& referrer_url) {
+GURL BaseFile::GetEffectiveAuthorityURL(
+    const GURL& source_url,
+    const GURL& referrer_url,
+    const std::optional<url::Origin>& request_initiator) {
   if (source_url.is_valid()) {
     // http{,s} has an authority and are supported.
     if (source_url.SchemeIsHTTPOrHTTPS())
@@ -637,6 +649,16 @@ GURL BaseFile::GetEffectiveAuthorityURL(const GURL& source_url,
 
     if (source_url.SchemeIs(url::kBlobScheme))
       return url::Origin::Create(source_url).GetURL();
+  }
+
+  // The request initiator is validated by the browser process, so prefer it
+  // over the referrer (which may have been supplied by the renderer) when the
+  // source URL itself doesn't carry a usable authority. If an initiator was
+  // provided but isn't HTTP/S (e.g. it is opaque), the referrer from the same
+  // requesting context won't be a more reliable signal, so skip it as well.
+  if (request_initiator) {
+    GURL initiator_url = request_initiator->GetURL();
+    return initiator_url.SchemeIsHTTPOrHTTPS() ? initiator_url : GURL();
   }
 
   if (referrer_url.is_valid() && referrer_url.SchemeIsHTTPOrHTTPS())
@@ -670,7 +692,8 @@ void BaseFile::AnnotateWithSourceInformation(
     const std::optional<url::Origin>& request_initiator,
     mojo::PendingRemote<quarantine::mojom::Quarantine> remote_quarantine,
     OnAnnotationDoneCallback on_annotation_done_callback) {
-  GURL authority_url = GetEffectiveAuthorityURL(source_url, referrer_url);
+  GURL authority_url =
+      GetEffectiveAuthorityURL(source_url, referrer_url, request_initiator);
   if (!remote_quarantine) {
 #if BUILDFLAG(IS_WIN)
     quarantine::mojom::QuarantineFileResult result =

@@ -14,6 +14,7 @@
 #include "base/check.h"
 #include "base/compiler_specific.h"
 #include "base/dcheck_is_on.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "cc/paint/paint_canvas.h"
 #include "cc/paint/paint_flags.h"
@@ -23,6 +24,7 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_canvas_fill_rule.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_image_smoothing_quality.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_typedefs.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_performance_monitor.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
@@ -40,6 +42,7 @@
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/forward.h"  // IWYU pragma: keep (blink::Visitor)
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -176,6 +179,8 @@ class MODULES_EXPORT Canvas2DRecorderContext : public CanvasPath {
   int LayerCount() const { return layer_count_; }
   virtual void reset();          // Called by the javascript interface
   virtual void ResetInternal();  // Called from within blink
+  void ClearCanvas(gfx::Size size);
+  void ResetState();
 
   void scale(double sx, double sy);
   void rotate(double angle_in_radians);
@@ -356,33 +361,10 @@ class MODULES_EXPORT Canvas2DRecorderContext : public CanvasPath {
   };
 
   enum class OverdrawOp {
-    // Must remain in sync with CanvasOverdrawOp defined in
-    // tools/metrics/histograms/enums.xml
-    //
-    // Note: Several enum values are now obsolete because the use cases they
-    // covered were removed because they had low incidence rates in real-world
-    // web content.
-
-    kNone = 0,  // Not used in histogram
-
-    kTotal = 1,  // Counts total number of overdraw optimization hits.
-
-    // Ops. These are mutually exclusive for a given overdraw hit.
-    kClearRect = 2,
-    // kFillRect = 3,  // Removed due to low incidence
-    // kPutImageData = 4,  // Removed due to low incidence
-    kDrawImage = 5,
-    kContextReset = 6,
-    // kClearForSrcBlendMode = 7,  // Removed due to low incidence
-
-    // Modifiers
-    kHasTransform = 9,
-    // kSourceOverBlendMode = 10,  // Removed due to low incidence
-    // kClearBlendMode = 11,  // Removed due to low incidence
-    kHasClip = 12,
-    kHasClipAndTransform = 13,
-
-    kMaxValue = kHasClipAndTransform,
+    kNone = 0,
+    kClearRect,
+    kDrawImage,
+    kContextReset,
   };
 
   struct UsageCounters {
@@ -470,7 +452,6 @@ class MODULES_EXPORT Canvas2DRecorderContext : public CanvasPath {
   virtual void DisableAcceleration() {}
 
   virtual bool IsPaint2D() const { return false; }
-  void WillOverwriteCanvas(OverdrawOp);
 
   void SetColorScheme(mojom::blink::ColorScheme color_scheme) {
     if (color_scheme == color_scheme_) {
@@ -484,8 +465,8 @@ class MODULES_EXPORT Canvas2DRecorderContext : public CanvasPath {
   // Returns the color provider stored in the Page via the Document.
   const ui::ColorProvider* GetColorProvider() const;
 
-  // Returns if the current Document is within installed WebApp scope.
-  bool IsInWebAppScope() const;
+  // Returns whether the current Document may expose the system accent color.
+  bool CanExposeSystemAccentColor() const;
 
   virtual RespectImageOrientationEnum RespectImageOrientation() const = 0;
 
@@ -561,8 +542,6 @@ class MODULES_EXPORT Canvas2DRecorderContext : public CanvasPath {
 
   AffineTransform GetTransform() const override;
 
-  bool StateHasFilter();
-
   // When the canvas is stroked or filled with a pattern, which is assumed to
   // have a transparent background, the shadow needs to be applied with
   // DropShadowPaintFilter for kNonOpaqueImageType
@@ -586,7 +565,7 @@ class MODULES_EXPORT Canvas2DRecorderContext : public CanvasPath {
     if (BlendModeRequiresCompositedDraw(state)) {
       return true;
     }
-    if (StateHasFilter()) {
+    if (state.IsFilterResolved()) {
       return true;
     }
     if (state.ShouldDrawShadows() &&
@@ -600,19 +579,6 @@ class MODULES_EXPORT Canvas2DRecorderContext : public CanvasPath {
                           SkBlendMode blend_mode,
                           const gfx::RectF* bounds = nullptr);
 
-  // `paint_canvas` is null if this function is called asynchronously.
-  template <OverdrawOp CurrentOverdrawOp,
-            typename DrawFunc,
-            typename DrawCoversClipBoundsFunc>
-  void DrawInternal(MemoryManagedPaintCanvas* paint_canvas,
-                    const DrawFunc&,
-                    const DrawCoversClipBoundsFunc&,
-                    const gfx::RectF& bounds,
-                    CanvasRenderingContext2DState::PaintType,
-                    CanvasRenderingContext2DState::ImageType,
-                    const SkIRect& clip_bounds,
-                    CanvasPerformanceMonitor::DrawType);
-
   void DrawPathInternal(const CanvasPath&,
                         CanvasRenderingContext2DState::PaintType,
                         SkPathFillType,
@@ -623,7 +589,8 @@ class MODULES_EXPORT Canvas2DRecorderContext : public CanvasPath {
                          const gfx::RectF& src_rect,
                          const gfx::RectF& dst_rect,
                          const SkSamplingOptions&,
-                         const cc::PaintFlags*);
+                         const cc::PaintFlags*,
+                         RespectImageOrientationEnum);
   void ClipInternal(const Path&,
                     const V8CanvasFillRule& winding_rule,
                     cc::UsePaintCache);
@@ -646,12 +613,6 @@ class MODULES_EXPORT Canvas2DRecorderContext : public CanvasPath {
                       MemoryManagedPaintCanvas*,
                       CanvasRenderingContext2DState::PaintType,
                       CanvasRenderingContext2DState::ImageType);
-
-  template <typename T>
-  bool ValidateRectForCanvas(T x, T y, T width, T height);
-
-  template <typename T>
-  void AdjustRectForCanvas(T& x, T& y, T& width, T& height);
 
   bool RectContainsTransformedRect(const gfx::RectF&, const SkIRect&) const;
 
@@ -712,7 +673,7 @@ ALWAYS_INLINE bool Canvas2DRecorderContext::BlendModeRequiresCompositedDraw(
     const CanvasRenderingContext2DState& state) const {
   SkBlendMode blend_mode = state.GlobalComposite();
   // The "copy" composite operation (a.k.a. `SkBlendMode::kSrc`) is handled as a
-  // special case in `DrawInternal` and thus doesn't require `CompositedDraw`.
+  // special case in `Draw` and thus doesn't require `CompositedDraw`.
   if (blend_mode == SkBlendMode::kSrc) {
     return false;
   }
@@ -799,28 +760,45 @@ ALWAYS_INLINE void Canvas2DRecorderContext::CheckOverdraw(
     }
   }
 
-  WillOverwriteCanvas(overdraw_op);
+  auto* host = GetCanvasRenderingContextHost();
+  if (host) {  // CSS paint use cases not counted.
+    UseCounter::Count(GetTopExecutionContext(),
+                      WebFeature::kCanvasRenderingContext2DHasOverdraw);
+  }
+
+  Recorder()->RestartCurrentLayer();
 }
 
 template <Canvas2DRecorderContext::OverdrawOp CurrentOverdrawOp,
           typename DrawFunc,
           typename DrawCoversClipBoundsFunc>
-void Canvas2DRecorderContext::DrawInternal(
-    MemoryManagedPaintCanvas* paint_canvas,
+void Canvas2DRecorderContext::Draw(
     const DrawFunc& draw_func,
     const DrawCoversClipBoundsFunc& draw_covers_clip_bounds,
     const gfx::RectF& bounds,
     CanvasRenderingContext2DState::PaintType paint_type,
     CanvasRenderingContext2DState::ImageType image_type,
-    const SkIRect& clip_bounds,
     CanvasPerformanceMonitor::DrawType draw_type) {
-  if (!paint_canvas) [[unlikely]] {
-    // This is the async draw case.
-    paint_canvas = GetPaintCanvas();
-    if (!paint_canvas) {
+  if (!IsTransformInvertible()) [[unlikely]] {
+    return;
+  }
+
+  if (GetState().IsFilterUnresolved()) [[unlikely]] {
+    // Resolving a filter can synchronously execute script (via style and
+    // layout updates), which may reset the canvas recorder or state stack.
+    // Resolve the filter before acquiring `paint_canvas` and `state`.
+    StateGetFilter();
+    if (!IsTransformInvertible()) [[unlikely]] {
       return;
     }
   }
+
+  SkIRect clip_bounds;
+  MemoryManagedPaintCanvas* paint_canvas = GetOrCreatePaintCanvas();
+  if (!paint_canvas || !paint_canvas->getDeviceClipBounds(&clip_bounds)) {
+    return;
+  }
+
   const CanvasRenderingContext2DState& state = GetState();
   SkBlendMode global_composite = state.GlobalComposite();
   if (ShouldUseCompositedDraw(paint_type, image_type)) {
@@ -861,38 +839,6 @@ void Canvas2DRecorderContext::DrawInternal(
   }
 }
 
-template <Canvas2DRecorderContext::OverdrawOp CurrentOverdrawOp,
-          typename DrawFunc,
-          typename DrawCoversClipBoundsFunc>
-void Canvas2DRecorderContext::Draw(
-    const DrawFunc& draw_func,
-    const DrawCoversClipBoundsFunc& draw_covers_clip_bounds,
-    const gfx::RectF& bounds,
-    CanvasRenderingContext2DState::PaintType paint_type,
-    CanvasRenderingContext2DState::ImageType image_type,
-    CanvasPerformanceMonitor::DrawType draw_type) {
-  if (!IsTransformInvertible()) [[unlikely]] {
-    return;
-  }
-
-  SkIRect clip_bounds;
-  MemoryManagedPaintCanvas* paint_canvas = GetOrCreatePaintCanvas();
-  if (!paint_canvas || !paint_canvas->getDeviceClipBounds(&clip_bounds)) {
-    return;
-  }
-
-  if (GetState().IsFilterUnresolved()) [[unlikely]] {
-    // Resolving a filter requires allocating garbage-collected objects.
-    DrawInternal<CurrentOverdrawOp, DrawFunc, DrawCoversClipBoundsFunc>(
-        nullptr, draw_func, draw_covers_clip_bounds, bounds, paint_type,
-        image_type, clip_bounds, draw_type);
-  } else {
-    DrawInternal<CurrentOverdrawOp, DrawFunc, DrawCoversClipBoundsFunc>(
-        paint_canvas, draw_func, draw_covers_clip_bounds, bounds, paint_type,
-        image_type, clip_bounds, draw_type);
-  }
-}
-
 template <typename DrawFunc>
 void Canvas2DRecorderContext::CompositedDraw(
     const DrawFunc& draw_func,
@@ -902,7 +848,7 @@ void Canvas2DRecorderContext::CompositedDraw(
   // Due to the complexity of composited draw operations, we need to grant an
   // exception to allow multi-pass rendering, and state finalization
   // operations to proceed between the time when a flush is requested by
-  // draw_func and when the flush request is fulfilled in DrawInternal. We
+  // draw_func and when the flush request is fulfilled in Draw. We
   // cannot fulfill flush request in the middle of a composited draw because
   // it would break the rendering behavior.
   // It is safe to cast 'c' to RecordPaintCanvas below because we know that
@@ -913,8 +859,9 @@ void Canvas2DRecorderContext::CompositedDraw(
   cc::RecordPaintCanvas::DisableFlushCheckScope disable_flush_check_scope(
       static_cast<cc::RecordPaintCanvas*>(c));
 
-  sk_sp<PaintFilter> canvas_filter = StateGetFilter();
   const CanvasRenderingContext2DState& state = GetState();
+  sk_sp<PaintFilter> canvas_filter =
+      state.IsFilterResolved() ? StateGetFilter() : nullptr;
   DCHECK(ShouldUseCompositedDraw(paint_type, image_type));
   SkM44 ctm = c->getLocalToDevice();
   c->setMatrix(SkM44());
@@ -964,31 +911,6 @@ void Canvas2DRecorderContext::CompositedDraw(
   c->setMatrix(ctm);
 }
 
-template <typename T>
-bool Canvas2DRecorderContext::ValidateRectForCanvas(T x,
-                                                    T y,
-                                                    T width,
-                                                    T height) {
-  return (std::isfinite(x) && std::isfinite(y) && std::isfinite(width) &&
-          std::isfinite(height) && (width || height));
-}
-
-template <typename T>
-void Canvas2DRecorderContext::AdjustRectForCanvas(T& x,
-                                                  T& y,
-                                                  T& width,
-                                                  T& height) {
-  if (width < 0) {
-    width = -width;
-    x -= width;
-  }
-
-  if (height < 0) {
-    height = -height;
-    y -= height;
-  }
-}
-
 ALWAYS_INLINE void Canvas2DRecorderContext::SetTransform(
     const AffineTransform& matrix) {
   GetState().SetTransform(matrix);
@@ -1002,15 +924,6 @@ ALWAYS_INLINE bool Canvas2DRecorderContext::IsFullCanvasCompositeMode(
   // platforms already implement the specification's behavior.
   return op == SkBlendMode::kSrcIn || op == SkBlendMode::kSrcOut ||
          op == SkBlendMode::kDstIn || op == SkBlendMode::kDstATop;
-}
-
-ALWAYS_INLINE bool Canvas2DRecorderContext::StateHasFilter() {
-  const CanvasRenderingContext2DState& state = GetState();
-  if (state.IsFilterUnresolved()) [[unlikely]] {
-    return !!StateGetFilter();
-  }
-  // The fast path avoids the virtual call overhead of StateGetFilter
-  return state.IsFilterResolved();
 }
 
 ALWAYS_INLINE bool Canvas2DRecorderContext::ComputeDirtyRect(

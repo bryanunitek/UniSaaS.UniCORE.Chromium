@@ -9,8 +9,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -18,7 +16,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -28,7 +25,6 @@ import org.chromium.base.test.util.Feature;
 
 /** Tests for the TabSupplierObserver. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabSupplierObserverTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private Tab mMockTab;
@@ -73,7 +69,6 @@ public class TabSupplierObserverTest {
 
     /** Test that the {@link TabSupplierObserver} switches between tabs as the tab changes. */
     @Test
-    @SmallTest
     @Feature({"TabSupplierObserver"})
     public void basicChangeTracking() {
         Tab startingTab = getCurrentTab();
@@ -101,7 +96,6 @@ public class TabSupplierObserverTest {
     }
 
     @Test
-    @SmallTest
     @Feature({"TabSupplierObserver"})
     public void initialTrigger() {
         TestTabSupplierObserver tabSupplierObserver =

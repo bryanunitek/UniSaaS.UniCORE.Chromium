@@ -10,11 +10,11 @@
 #include "base/functional/bind.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/navigation_controller.h"
@@ -32,6 +32,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/chrome_debug_urls.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 using content::OpenURLParams;
 using content::Referrer;
@@ -42,14 +43,12 @@ using content::WebContents;
 
 namespace {
 
-void SimulateRendererCrash(Browser* browser) {
+void SimulateRendererCrash(BrowserWindowInterface* browser) {
   content::RenderProcessHostWatcher crash_observer(
-      browser->tab_strip_model()->GetActiveWebContents(),
+      browser->GetTabStripModel()->GetActiveWebContents(),
       content::RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
-  browser->OpenURL(OpenURLParams(GURL(blink::kChromeUICrashURL), Referrer(),
-                                 WindowOpenDisposition::CURRENT_TAB,
-                                 ui::PAGE_TRANSITION_TYPED, false),
-                   /*navigation_handle_callback=*/{});
+  browser->OpenGURL(GURL(blink::kChromeUICrashURL),
+                    WindowOpenDisposition::kCurrentTab);
   crash_observer.Wait();
 }
 
@@ -109,7 +108,7 @@ IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, Reload) {
   ASSERT_TRUE(ui_test_utils::GetCurrentTabTitle(browser(),
                                                 &title_before_crash));
   SimulateRendererCrash(browser());
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_TRUE(content::WaitForLoadStop(GetActiveWebContents()));
   ASSERT_TRUE(ui_test_utils::GetCurrentTabTitle(browser(),
                                                 &title_after_crash));
@@ -143,7 +142,7 @@ IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest,
   ASSERT_TRUE(ui_test_utils::GetCurrentTabTitle(browser(),
                                                 &title_before_crash));
   SimulateRendererCrash(browser());
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_TRUE(content::WaitForLoadStop(GetActiveWebContents()));
   ASSERT_TRUE(ui_test_utils::GetCurrentTabTitle(browser(),
                                                 &title_after_crash));
@@ -178,7 +177,7 @@ IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, MAYBE_LoadInNewTab) {
                                                 ->GetController()
                                                 .GetVisibleEntry()
                                                 ->GetVirtualURL());
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_TRUE(content::WaitForLoadStop(GetActiveWebContents()));
   ASSERT_TRUE(ui_test_utils::GetCurrentTabTitle(browser(),
                                                 &title_after_crash));
@@ -187,18 +186,24 @@ IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, MAYBE_LoadInNewTab) {
 
 // Tests that reloads of navigation errors behave correctly after a crash.
 // Regression test for http://crbug.com/40354123
-IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, DoubleReloadWithError) {
+// TODO(crbug.com/563611531): Flaky on Windows.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_DoubleReloadWithError DISABLED_DoubleReloadWithError
+#else
+#define MAYBE_DoubleReloadWithError DoubleReloadWithError
+#endif
+IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, MAYBE_DoubleReloadWithError) {
   GURL url(content::GetWebUIURL("bogus"));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   ASSERT_EQ(url, GetActiveWebContents()->GetVisibleURL());
 
   SimulateRendererCrash(browser());
 
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_FALSE(content::WaitForLoadStop(GetActiveWebContents()));
   ASSERT_EQ(url, GetActiveWebContents()->GetVisibleURL());
 
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_FALSE(content::WaitForLoadStop(GetActiveWebContents()));
   ASSERT_EQ(url, GetActiveWebContents()->GetVisibleURL());
 }

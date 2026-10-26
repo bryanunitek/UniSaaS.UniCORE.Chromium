@@ -17,6 +17,7 @@
 #include "third_party/blink/renderer/core/html/parser/html_document_parser.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/platform/bindings/source_location.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "v8/include/v8-metrics.h"
 
 namespace blink {
@@ -244,8 +245,8 @@ void PerformanceMonitor::Did(const probe::CallFunction& probe) {
 
   String name = user_callback->name ? String(user_callback->name)
                                     : String(user_callback->atomic_name);
-  String text = String::Format("'%s' handler took %" PRId64 "ms",
-                               name.Utf8().c_str(), duration.InMilliseconds());
+  String text =
+      Format("'{}' handler took {}ms", name, duration.InMilliseconds());
   InnerReportGenericViolation(
       probe.context, handler_type, text, duration,
       CaptureSourceLocation(probe.context->GetIsolate(), probe.function));
@@ -303,8 +304,10 @@ void PerformanceMonitor::WillProcessTask(base::TimeTicks start_time) {
   user_callback_ = nullptr;
 }
 
-void PerformanceMonitor::DidProcessTask(base::TimeTicks start_time,
-                                        base::TimeTicks end_time) {
+void PerformanceMonitor::DidProcessTask(
+    base::TimeTicks start_time,
+    base::TimeTicks end_time,
+    base::TimeTicks /*desired_execution_time*/) {
   if (!task_should_be_reported_)
     return;
 

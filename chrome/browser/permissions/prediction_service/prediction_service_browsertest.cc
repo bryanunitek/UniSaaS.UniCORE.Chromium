@@ -31,7 +31,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -39,8 +41,8 @@
 #include "components/content_settings/core/common/features.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/model_util.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
 #include "components/optimization_guide/core/delivery/test_optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/proto/models.pb.h"
@@ -69,6 +71,7 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 namespace permissions {
@@ -340,18 +343,20 @@ class PredictionServiceBrowserTestBase : public InProcessBrowserTest {
     mock_permission_prompt_factory_ =
         std::make_unique<MockPermissionPromptFactory>(manager);
     host_resolver()->AddRule("*", "127.0.0.1");
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kEnableNotificationCPSS,
-                                                 true);
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kEnableGeolocationCPSS,
-                                                 true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        prefs::kEnableNotificationCPSS, true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        prefs::kEnableGeolocationCPSS, true);
   }
 
   void TearDownOnMainThread() override {
     mock_permission_prompt_factory_.reset();
   }
 
+  void reset_bubble_factory() { mock_permission_prompt_factory_.reset(); }
+
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   content::RenderFrameHost* primary_main_frame() {
@@ -360,7 +365,7 @@ class PredictionServiceBrowserTestBase : public InProcessBrowserTest {
 
   PermissionRequestManager* permission_request_manager() {
     return PermissionRequestManager::FromWebContents(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
   }
 
   MockPermissionPromptFactory* bubble_factory() {
@@ -517,7 +522,7 @@ class PredictionServiceHoldbackBrowserTest
   void SetUpOnMainThread() override {
     PredictionServiceBrowserTestBase::SetUpOnMainThread();
 
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         unified_consent::prefs::kUrlKeyedAnonymizedDataCollectionEnabled, true);
   }
 };
@@ -745,10 +750,10 @@ IN_PROC_BROWSER_TEST_P(SignatureModelPredictionServiceBrowserTest,
 
   opt_guide()->OverrideTargetModelForTesting(
       kCpssV1OptTargetNotification,
-      optimization_guide::TestModelInfoBuilder()
-          .SetModelFilePath(ModelFilePath(kZeroDotFiveReturnSignatureModel))
-          .SetModelMetadata(any)
-          .Build());
+      optimization_guide::ModelInfo{
+          .model_file_path = ModelFilePath(kZeroDotFiveReturnSignatureModel),
+          .model_metadata = any,
+      });
 
   prediction_model_handler()->WaitForModelLoadForTesting();
 
@@ -827,7 +832,7 @@ class AivXModelPredictionServiceBrowserTest
     // providing it with the additional AIv4 permission relevance field. Because
     // of this we only provide those workflows to users that agreed to data
     // collection.
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         unified_consent::prefs::kUrlKeyedAnonymizedDataCollectionEnabled, true);
 
     // Only one model_handler can be registered for the same optimization
@@ -851,9 +856,9 @@ class AivXModelPredictionServiceBrowserTest
 
   void PushModelFileToModelExecutor(const base::FilePath& model_file_path) {
     opt_guide()->OverrideTargetModelForTesting(
-        optimization_target(), optimization_guide::TestModelInfoBuilder()
-                                   .SetModelFilePath(model_file_path)
-                                   .Build());
+        optimization_target(), optimization_guide::ModelInfo{
+                                   .model_file_path = model_file_path,
+                               });
     model_handler()->WaitForModelLoadForTesting();
   }
 
@@ -886,6 +891,12 @@ class Aiv4ModelPredictionServiceBrowserTestBase
                                               }, /*disabled_features=*/
                                               {permissions::features::
                                                    kPermissionsAIP92}) {}
+
+  Aiv4ModelPredictionServiceBrowserTestBase(
+      const std::vector<FeatureRefAndParams>& enabled_features,
+      const std::vector<FeatureRef>& disabled_features)
+      : AivXModelPredictionServiceBrowserTest(enabled_features,
+                                              disabled_features) {}
 
   void SetUpOnMainThread() override {
     AivXModelPredictionServiceBrowserTest<
@@ -1680,7 +1691,7 @@ class PredictionServiceAIP92BrowserTest
 
   void SetUpOnMainThread() override {
     PredictionServiceBrowserTestBase::SetUpOnMainThread();
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         unified_consent::prefs::kUrlKeyedAnonymizedDataCollectionEnabled, true);
   }
 };
@@ -1739,17 +1750,133 @@ IN_PROC_BROWSER_TEST_P(PredictionServiceAIP92BrowserTest, TestAIP92Workflow) {
                                         false, 1);
 }
 
+// ---------------------------------------------------------------------------
+// --------- Prediction Service AILikelihoodOrRelevance --------------------
+// ---------------------------------------------------------------------------
+struct PredictionServiceAILikelihoodOrRelevanceTestCase {
+  std::string test_name;
+  bool feature_enabled;
+  std::string_view model_name;
+  PermissionRequestRelevance expected_relevance;
+  PermissionUiSelector::PredictionGrantLikelihood prediction_service_likelihood;
+  bool should_expect_quiet_ui;
+};
+
+class PredictionServiceAILikelihoodOrRelevanceBrowserTest
+    : public Aiv4ModelPredictionServiceBrowserTestBase,
+      public testing::WithParamInterface<
+          PredictionServiceAILikelihoodOrRelevanceTestCase> {
+ public:
+  PredictionServiceAILikelihoodOrRelevanceBrowserTest()
+      : Aiv4ModelPredictionServiceBrowserTestBase(
+            /*enabled_features=*/GetParam().feature_enabled
+                ? std::vector<
+                      FeatureRefAndParams>{{permissions::features::
+                                                kPermissionsAIv4,
+                                            {}},
+                                           {permissions::features::
+                                                kPermissionsAILikelihoodOrRelevance,
+                                            {}},
+                                           CONFIGURE_NO_HOLDBACK_CHANCE}
+                : std::vector<
+                      FeatureRefAndParams>{{permissions::features::
+                                                kPermissionsAIv4,
+                                            {}},
+                                           CONFIGURE_NO_HOLDBACK_CHANCE},
+            /*disabled_features=*/GetParam().feature_enabled
+                ? std::vector<
+                      FeatureRef>{permissions::features::kPermissionsAIP92}
+                : std::vector<FeatureRef>{
+                      permissions::features::kPermissionsAIP92,
+                      permissions::features::
+                          kPermissionsAILikelihoodOrRelevance}) {}
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    PredictionServiceAILikelihoodOrRelevanceTest,
+    PredictionServiceAILikelihoodOrRelevanceBrowserTest,
+    ValuesIn<PredictionServiceAILikelihoodOrRelevanceTestCase>({
+        {/*test_name=*/"FeatureEnabled_VeryLowRelevance_LikelyPrediction",
+         /*feature_enabled=*/true,
+         /*model_name=*/kZeroReturnAiv4Model,
+         /*expected_relevance=*/PermissionRequestRelevance::kVeryLow,
+         /*prediction_service_likelihood=*/kLikelihoodLikely,
+         /*should_expect_quiet_ui=*/true},
+        {/*test_name=*/"FeatureEnabled_VeryHighRelevance_LikelyPrediction",
+         /*feature_enabled=*/true,
+         /*model_name=*/kOneReturnAiv4Model,
+         /*expected_relevance=*/PermissionRequestRelevance::kVeryHigh,
+         /*prediction_service_likelihood=*/kLikelihoodLikely,
+         /*should_expect_quiet_ui=*/false},
+        {/*test_name=*/"FeatureEnabled_VeryHighRelevance_UnlikelyPrediction",
+         /*feature_enabled=*/true,
+         /*model_name=*/kOneReturnAiv4Model,
+         /*expected_relevance=*/PermissionRequestRelevance::kVeryHigh,
+         /*prediction_service_likelihood=*/kLikelihoodUnlikely,
+         /*should_expect_quiet_ui=*/true},
+        {/*test_name=*/"FeatureEnabled_VeryHighRelevance_"
+                       "VeryUnlikelyPrediction",
+         /*feature_enabled=*/true,
+         /*model_name=*/kOneReturnAiv4Model,
+         /*expected_relevance=*/PermissionRequestRelevance::kVeryHigh,
+         /*prediction_service_likelihood=*/kLikelihoodVeryUnlikely,
+         /*should_expect_quiet_ui=*/true},
+        {/*test_name=*/"FeatureDisabled_VeryLowRelevance_LikelyPrediction",
+         /*feature_enabled=*/false,
+         /*model_name=*/kZeroReturnAiv4Model,
+         /*expected_relevance=*/PermissionRequestRelevance::kVeryLow,
+         /*prediction_service_likelihood=*/kLikelihoodLikely,
+         /*should_expect_quiet_ui=*/false},
+    }),
+    /*name_generator=*/
+    [](const testing::TestParamInfo<
+        PredictionServiceAILikelihoodOrRelevanceBrowserTest::ParamType>& info) {
+      return info.param.test_name;
+    });
+
+IN_PROC_BROWSER_TEST_P(PredictionServiceAILikelihoodOrRelevanceBrowserTest,
+                       TestAILikelihoodOrRelevanceWorkflow) {
+  ASSERT_TRUE(aiv4_model_handler());
+
+  PushModelFileToModelExecutor(ModelFilePath(GetParam().model_name));
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  set_dummy_screenshot_for_testing();
+  set_dummy_inner_text_for_testing();
+
+  GeneratePredictionsResponse prediction_service_response =
+      BuildPredictionServiceResponse(GetParam().prediction_service_likelihood);
+
+  PredictionRequestFeatures expected_features =
+      BuildRequestFeatures(request_type(), ExperimentId::kAiV4ExperimentId,
+                           GetParam().expected_relevance);
+  EXPECT_CALL(prediction_service(),
+              StartLookup(PredictionRequestFeatureEq(expected_features), _, _))
+      .WillOnce(WithArg<2>(
+          [&](PredictionService::LookupResponseCallback response_callback) {
+            std::move(response_callback)
+                .Run(/*lookup_successful=*/true,
+                     /*response_from_cache=*/true, prediction_service_response);
+          }));
+
+  TriggerPromptAndVerifyUi(/*test_url=*/"test.a", PermissionAction::DISMISSED,
+                           GetParam().should_expect_quiet_ui,
+                           GetParam().expected_relevance,
+                           GetParam().prediction_service_likelihood);
+
+  histogram_tester().ExpectUniqueSample(kPredictionServiceTimeoutHistogram,
+                                        false, 1);
+}
+
 struct PredictionServiceGeolocationAccuracyTestCase {
   PermissionPrediction::GeolocationPrediction::Accuracy response_accuracy;
   GeolocationAccuracy expected_accuracy;
 };
 
-class PredictionServiceGeolocationAccuracyBrowserTest
-    : public PredictionServiceBrowserTestBase,
-      public testing::WithParamInterface<
-          PredictionServiceGeolocationAccuracyTestCase> {
+class PredictionServiceGeolocationAccuracyBrowserTestBase
+    : public PredictionServiceBrowserTestBase {
  public:
-  PredictionServiceGeolocationAccuracyBrowserTest()
+  PredictionServiceGeolocationAccuracyBrowserTestBase()
       : PredictionServiceBrowserTestBase(
             /*enabled_features=*/
             {{permissions::features::kPermissionPredictionsV2, {}},
@@ -1759,7 +1886,7 @@ class PredictionServiceGeolocationAccuracyBrowserTest
 
   void SetUpOnMainThread() override {
     PredictionServiceBrowserTestBase::SetUpOnMainThread();
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         unified_consent::prefs::kUrlKeyedAnonymizedDataCollectionEnabled, true);
   }
 
@@ -1767,6 +1894,11 @@ class PredictionServiceGeolocationAccuracyBrowserTest
     return RequestType::kGeolocation;
   }
 };
+
+class PredictionServiceGeolocationAccuracyBrowserTest
+    : public PredictionServiceGeolocationAccuracyBrowserTestBase,
+      public testing::WithParamInterface<
+          PredictionServiceGeolocationAccuracyTestCase> {};
 
 IN_PROC_BROWSER_TEST_P(PredictionServiceGeolocationAccuracyBrowserTest,
                        UseGeolocationAccuracyFromResponse) {
@@ -1812,6 +1944,55 @@ IN_PROC_BROWSER_TEST_P(PredictionServiceGeolocationAccuracyBrowserTest,
       static_cast<int64_t>(GetParam().expected_accuracy));
 }
 
+// Regression test for crbug.com/548056474.
+IN_PROC_BROWSER_TEST_F(
+    PredictionServiceGeolocationAccuracyBrowserTestBase,
+    WebContentsDestroyedWhilePredictionInFlightDoesNotCrash) {
+  // Reset the mock prompt factory so the test uses the production prompt path
+  // and avoids holding a dangling pointer when tab 0 is closed.
+  reset_bubble_factory();
+  permission_request_manager()->set_view_factory_for_testing(
+      base::BindRepeating(&PermissionPrompt::Create));
+
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  // Open a new foreground tab before starting so closing the test tab does not
+  // close the last tab and shut down the browser.
+  ui_test_utils::NavigateToURLWithDisposition(
+      browser(), GURL(url::kAboutBlankURL),
+      WindowOpenDisposition::kNewForegroundTab,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+
+  // Switch back to the first tab to run the test.
+  browser()->GetTabStripModel()->ActivateTabAt(/*index=*/0);
+
+  PredictionRequestFeatures expected_features = BuildRequestFeatures(
+      RequestType::kGeolocation, ExperimentId::kNoExperimentId,
+      PermissionRequestRelevance::kUnspecified);
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(prediction_service(),
+              StartLookup(PredictionRequestFeatureEq(expected_features), _, _))
+      .WillOnce(WithArg<2>(
+          [&](PredictionService::LookupResponseCallback response_callback) {
+            run_loop.Quit();
+          }));
+
+  GURL url = embedded_test_server()->GetURL("test.a", "/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  auto req = std::make_unique<MockPermissionRequest>(
+      request_type(), PermissionRequestGestureType::GESTURE);
+  permission_request_manager()->AddRequest(primary_main_frame(),
+                                           std::move(req));
+
+  run_loop.Run();
+
+  // Close the tab while the prediction lookup is still in flight.
+  browser()->GetTabStripModel()->CloseWebContentsAt(
+      /*index=*/0, TabCloseTypes::CLOSE_USER_GESTURE);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     GeolocationAccuracy,
     PredictionServiceGeolocationAccuracyBrowserTest,
@@ -1852,10 +2033,10 @@ class Aiv4ModelMultiplePassagesBrowserTest
 
     opt_guide()->OverrideTargetModelForTesting(
         optimization_target(),
-        optimization_guide::TestModelInfoBuilder()
-            .SetModelFilePath(ModelFilePath(kOneReturnAiv4Model))
-            .SetModelMetadata(any)
-            .Build());
+        optimization_guide::ModelInfo{
+            .model_file_path = ModelFilePath(kOneReturnAiv4Model),
+            .model_metadata = any,
+        });
     model_handler()->WaitForModelLoadForTesting();
   }
 

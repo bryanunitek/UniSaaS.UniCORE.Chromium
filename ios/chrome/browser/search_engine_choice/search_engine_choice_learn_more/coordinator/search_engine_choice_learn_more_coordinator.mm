@@ -4,12 +4,14 @@
 
 #import "ios/chrome/browser/search_engine_choice/search_engine_choice_learn_more/coordinator/search_engine_choice_learn_more_coordinator.h"
 
+#import "base/check.h"
+#import "components/regional_capabilities/regional_capabilities_service.h"
+#import "ios/chrome/browser/regional_capabilities/model/regional_capabilities_service_factory.h"
 #import "ios/chrome/browser/search_engine_choice/search_engine_choice_learn_more/ui/search_engine_choice_learn_more_view_controller.h"
 #import "ios/chrome/browser/search_engine_choice/ui/search_engine_choice_constants.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
-// #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
-#import "ui/base/device_form_factor.h"
 
 @interface SearchEngineChoiceLearnMoreCoordinator () <
     SearchEngineChoiceLearnMoreDelegate,
@@ -23,35 +25,35 @@
 
 - (void)start {
   [super start];
+  ProfileIOS* profile = self.browser->GetProfile();
+  regional_capabilities::RegionalCapabilitiesService*
+      regionalCapabilitiesService =
+          ios::RegionalCapabilitiesServiceFactory::GetForProfile(profile);
+  std::optional<
+      regional_capabilities::RegionalCapabilitiesService::ChoiceScreenDesign>
+      choiceScreenDesign = regionalCapabilitiesService->GetChoiceScreenDesign();
+  CHECK(choiceScreenDesign.has_value());
+
   _viewController = [[SearchEngineChoiceLearnMoreViewController alloc] init];
+  _viewController.thirdParagraphStringID =
+      choiceScreenDesign->learn_more_third_paragraph_string_id;
   _viewController.delegate = self;
   // Creates the navigation controller and presents.
   UINavigationController* navigationController = [[UINavigationController alloc]
       initWithRootViewController:_viewController];
-  // Need to set `modalPresentationStyle` otherwise, UIKit ignores the value.
-  if (self.forcePresentationFormSheet) {
-    navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
-  } else {
-    ui::DeviceFormFactor deviceFormFactor = ui::GetDeviceFormFactor();
-    if (deviceFormFactor == ui::DEVICE_FORM_FACTOR_PHONE) {
-      navigationController.modalPresentationStyle =
-          UIModalPresentationPageSheet;
-    } else {
-      navigationController.modalPresentationStyle =
-          UIModalPresentationFormSheet;
-      navigationController.preferredContentSize =
-          CGSizeMake(kIPadSearchEngineChoiceScreenPreferredWidth,
-                     kIPadSearchEngineChoiceScreenPreferredHeight);
-    }
+  navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
+  // During the FRE, `FirstRunCoordinator` presents its navigation controller
+  // using UIKit's default form sheet size, whereas outside the FRE
+  // `SearchEngineChoiceCoordinator` sets a custom `preferredContentSize`.
+  if (!self.firstRun) {
+    navigationController.preferredContentSize =
+        CGSizeMake(kSearchEngineChoiceScreenPreferredWidth,
+                   kSearchEngineChoiceScreenPreferredHeight);
   }
   navigationController.presentationController.delegate = self;
   UISheetPresentationController* presentationController =
       navigationController.sheetPresentationController;
   presentationController.prefersEdgeAttachedInCompactHeight = YES;
-  presentationController.detents = @[
-    [UISheetPresentationControllerDetent mediumDetent],
-    [UISheetPresentationControllerDetent largeDetent]
-  ];
   [self.baseViewController presentViewController:navigationController
                                         animated:YES
                                       completion:nil];

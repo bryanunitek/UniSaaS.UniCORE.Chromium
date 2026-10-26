@@ -44,6 +44,8 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.PackageManagerWrapper;
 import org.chromium.base.test.util.RequiresRestart;
 import org.chromium.chrome.R;
@@ -62,6 +64,7 @@ import org.chromium.chrome.test.transit.page.CtaPageStation;
 import org.chromium.chrome.test.util.ChromeApplicationTestUtils;
 import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.network.mojom.ReferrerPolicy;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.mojom.WindowOpenDisposition;
 import org.chromium.url.GURL;
 
@@ -124,6 +127,7 @@ public final class TabbedActivityLaunchCauseMetricsTest {
 
     @Test
     @MediumTest
+    @DisabledTest(message = "crbug.com/567102829")
     public void testRecreationMetrics() throws Throwable {
         final int count = histogramCountForValue(LaunchCauseMetrics.LaunchCause.RECREATION);
         // If this is the first test in the batch, opens an NTP. Otherwise, opens a blank page.
@@ -267,6 +271,8 @@ public final class TabbedActivityLaunchCauseMetricsTest {
     @Test
     @MediumTest
     @RequiresRestart("crbug.com/40774438")
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // crbug.com/537353093
+    @DisabledTest(message = "https://crbug.com/573081777")
     public void testExternalSearchIntentNoResolvers() throws Throwable {
         final int count =
                 1
@@ -330,7 +336,9 @@ public final class TabbedActivityLaunchCauseMetricsTest {
                                             "",
                                             ReferrerPolicy.DEFAULT,
                                             "",
-                                            null);
+                                            null,
+                                            null,
+                                            false);
                                 }));
         CriteriaHelper.pollInstrumentationThread(
                 () -> {

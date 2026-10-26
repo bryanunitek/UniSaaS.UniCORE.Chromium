@@ -9,7 +9,6 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/observer_list.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
@@ -35,7 +34,7 @@ ToolbarIconContainerView::RoundRectBorder::RoundRectBorder(views::View* parent)
     : parent_(parent) {
   layer_.set_delegate(this);
   layer_.SetFillsBoundsOpaquely(false);
-  layer_.SetFillsBoundsCompletely(false);
+  layer_.AsTextured()->SetFillsBoundsCompletely(false);
   layer_.SetOpacity(0);
   layer_.SetVisible(true);
 }
@@ -115,7 +114,7 @@ ToolbarIconContainerView::ToolbarIconContainerView(
     : uses_highlight_(uses_highlight) {
   SetPaintToLayer();
   layer()->SetFillsBoundsOpaquely(false);
-  layer()->SetFillsBoundsCompletely(false);
+  layer()->AsTextured()->SetFillsBoundsCompletely(false);
   AddLayerToRegion(border_.layer(), views::LayerRegion::kBelow);
 
   views::AnimatingLayoutManager* animating_layout =
@@ -137,13 +136,13 @@ ToolbarIconContainerView::ToolbarIconContainerView(
 }
 
 ToolbarIconContainerView::~ToolbarIconContainerView() {
-  // As childred might be Observers of |this|, we need to destroy them before
-  // destroying |observers_|.
+  // |this| observes its child buttons and binds callbacks to them in
+  // ObserveButton(), so destroy them while |this| is still intact.
   RemoveAllChildViews();
 }
 
 void ToolbarIconContainerView::AddMainItem(views::View* item) {
-  DCHECK(!main_item_);
+  CHECK(!main_item_, base::NotFatalUntil::M162);
   main_item_ = item;
   auto* const main_button = views::Button::AsButton(item);
   if (main_button) {
@@ -167,42 +166,39 @@ void ToolbarIconContainerView::ObserveButton(views::Button* button) {
   button->AddObserver(this);
 }
 
-void ToolbarIconContainerView::AddObserver(Observer* obs) {
-  observers_.AddObserver(obs);
-}
-
-void ToolbarIconContainerView::RemoveObserver(const Observer* obs) {
-  observers_.RemoveObserver(obs);
-}
-
 bool ToolbarIconContainerView::GetHighlighted() const {
   if (!uses_highlight_) {
     return false;
   }
 
-  if (IsMouseHovered() && (!main_item_ || !main_item_->IsMouseHovered())) {
+  const views::Widget* widget = GetWidget();
+  const bool is_widget_active = !widget || widget->ShouldPaintAsActive();
+
+  if (is_widget_active && IsMouseHovered() &&
+      (!main_item_ || !main_item_->IsMouseHovered())) {
     return true;
   }
 
-  // Focused, pressed or hovered children should trigger the highlight.
+  // Focused, pressed or hovered children should trigger the highlight when the
+  // widget is active. Highlighted buttons (e.g., anchored dialogs) trigger the
+  // highlight regardless of widget activation state.
   for (const views::View* child : children()) {
     if (child == main_item_) {
       continue;
     }
-    if (child->HasFocus()) {
-      return true;
-    }
     const views::Button* button = views::Button::AsButton(child);
-    if (!button) {
-      continue;
-    }
-    if (button->GetState() == views::Button::ButtonState::STATE_PRESSED ||
-        button->GetState() == views::Button::ButtonState::STATE_HOVERED) {
+    if (button && highlighted_buttons_.contains(button)) {
       return true;
     }
-    // The container should also be highlighted if a dialog is anchored to.
-    if (highlighted_buttons_.contains(button)) {
-      return true;
+    if (is_widget_active) {
+      if (child->HasFocus()) {
+        return true;
+      }
+      if (button &&
+          (button->GetState() == views::Button::ButtonState::STATE_PRESSED ||
+           button->GetState() == views::Button::ButtonState::STATE_HOVERED)) {
+        return true;
+      }
     }
   }
 
@@ -256,6 +252,19 @@ void ToolbarIconContainerView::AddedToWidget() {
   // Add an observer to reset the animation if the browser window is restored,
   // preventing spurious animation. (See crbug.com/40706372)
   restore_observer_ = std::make_unique<WidgetRestoreObserver>(this);
+  widget_observation_.Observe(GetWidget());
+}
+
+void ToolbarIconContainerView::RemovedFromWidget() {
+  widget_observation_.Reset();
+}
+
+void ToolbarIconContainerView::OnWidgetActivationChanged(views::Widget* widget,
+                                                         bool active) {
+  if (widget != GetWidget()) {
+    return;
+  }
+  UpdateHighlight();
 }
 
 void ToolbarIconContainerView::UpdateHighlight() {
@@ -267,13 +276,7 @@ void ToolbarIconContainerView::UpdateHighlight() {
     return;
   }
 
-  bool showing_before = border_.layer()->GetTargetOpacity() == 1;
   border_.layer()->SetOpacity(GetHighlighted() ? 1 : 0);
-
-  if (showing_before == (border_.layer()->GetTargetOpacity() == 1)) {
-    return;
-  }
-  observers_.Notify(&Observer::OnHighlightChanged);
 }
 
 void ToolbarIconContainerView::OnButtonHighlightedChanged(

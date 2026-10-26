@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// cc_file_path:
+// chrome/browser/sharing/glic_experimental_triggering/glic_experimental_triggering_message_handler_browsertest.cc
+
 import {ActuationTarget, ExperimentalTriggeringUpdateType} from '/glic/glic_api/glic_api.js';
 import type {ExperimentalTriggeringUpdate, Observable2} from '/glic/glic_api/glic_api.js';
 import {Subject} from '/glic/observable.js';
@@ -11,6 +14,7 @@ import {ApiTestFixtureBase, assertDefined, assertEquals, runUntil, testMain, Web
 class TriggeringUpdatesClient extends WebClient {
   triggeringUpdatesSubject = new Subject<ExperimentalTriggeringUpdate>();
   isSubscribed = false;
+  override mockFileToken = 'mock_file_token_from_client';
 
   async getExperimentalTriggeringUpdates():
       Promise<Observable2<ExperimentalTriggeringUpdate>> {
@@ -51,11 +55,11 @@ class TriggeringUpdatesTest extends ApiTestFixtureBase {
     });
   }
 
-  async testRespectsLastSeenSequenceNumber() {
+  async testRelaysResumedUpdate(): Promise<void> {
     await runUntil(() => client.isSubscribed);
     client.triggeringUpdatesSubject.next({
-      type: ExperimentalTriggeringUpdateType.WORKLOG,
-      data: 'test_update',
+      type: ExperimentalTriggeringUpdateType.RESUMED,
+      data: '',
     });
   }
 
@@ -76,38 +80,55 @@ class TriggeringUpdatesTest extends ApiTestFixtureBase {
     await runUntil(() => client.isSubscribed);
   }
 
-  async testHandlesStopActuationRequestNoMatchingUpdatesHandler() {
-    // No-op.
+  async testHandlesContinueActuationRequestSuccessfully() {
+    await runUntil(() => client.isSubscribed);
   }
 
-  async testRelaysParentConversationMetadataUpdated() {
+  async testContinueActuationTargetsCorrectTab() {
     await runUntil(() => client.isSubscribed);
-    const contextPromise = new Promise<any>(resolve => {
-      this.host.getAdditionalContext!().subscribe(context => {
-        resolve(context);
-      });
+    assertDefined(this.host.registerConversation);
+    await this.host.registerConversation({
+      conversationId: 'test_conv_id',
+      conversationTitle: 'test',
     });
-    await this.advanceToNextStep();
-    const context = await contextPromise;
-    assertDefined(context);
-    assertEquals(1, context.parts.length);
-    const metadata = context.parts[0]!.parentConversationMetadata;
-    assertDefined(metadata);
-    assertEquals('test_conv_id', metadata.conversationId);
-    assertEquals('test_title', metadata.conversationTitle);
+    assertDefined(this.host.createTask);
+    await this.host.createTask();
+    client.triggeringUpdatesSubject.next({
+      type: ExperimentalTriggeringUpdateType.WORKLOG,
+      data: 'test_update',
+    });
   }
 
-  async testRelaysParentConversationMetadataInitial() {
+  async testHandlesGetScreenshotRequestSuccessfully() {
     await runUntil(() => client.isSubscribed);
-    const invokeOpts = await client.invokeData.waitUntil(v => v !== undefined);
-    assertDefined(invokeOpts);
-    assertEquals(ActuationTarget.TARGET_SURFACE, invokeOpts.actuationTarget);
-    assertDefined(invokeOpts.context);
-    assertEquals(1, invokeOpts.context!.parts.length);
-    const metadata = invokeOpts.context!.parts[0]!.parentConversationMetadata;
-    assertDefined(metadata);
-    assertEquals('test_init_id', metadata.conversationId);
-    assertEquals('test_init_title', metadata.conversationTitle);
+    client.triggeringUpdatesSubject.next({
+      type: ExperimentalTriggeringUpdateType.WORKLOG,
+      data: 'ready_for_screenshot',
+    });
+  }
+
+  async testRelaysUpdatesWithMetadataEnabled() {
+    await runUntil(() => client.isSubscribed);
+    client.triggeringUpdatesSubject.next({
+      type: ExperimentalTriggeringUpdateType.WORKLOG,
+      data: 'test_update_with_metadata',
+      metadata: {
+        'key1': 'value1',
+        'key2': 'value2',
+      },
+    });
+  }
+
+  async testRelaysUpdatesWithMetadataDisabled() {
+    await runUntil(() => client.isSubscribed);
+    client.triggeringUpdatesSubject.next({
+      type: ExperimentalTriggeringUpdateType.WORKLOG,
+      data: 'test_update_with_metadata',
+      metadata: {
+        'key1': 'value1',
+        'key2': 'value2',
+      },
+    });
   }
 }
 

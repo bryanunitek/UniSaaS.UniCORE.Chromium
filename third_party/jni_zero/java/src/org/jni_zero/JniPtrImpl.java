@@ -11,6 +11,7 @@ package org.jni_zero;
 class JniPtrImpl<T extends JniTypeToken> implements JniPtrInner<T> {
     private long mNativePtr;
 
+    @CalledByNative
     JniPtrImpl(long nativePtr) {
         if (nativePtr == 0) {
             throw new IllegalArgumentException(
@@ -21,6 +22,7 @@ class JniPtrImpl<T extends JniTypeToken> implements JniPtrInner<T> {
 
     // Invalidates the reference (does NOT delete the underlying object).
     // Called automatically by generated glue code.
+    @CalledByNative
     void release() {
         mNativePtr = 0;
     }
@@ -28,7 +30,9 @@ class JniPtrImpl<T extends JniTypeToken> implements JniPtrInner<T> {
     @Override
     public long getNativePtr() {
         if (mNativePtr == 0) {
-            throw new IllegalStateException("Trying to access an already-released JniPtr");
+            throw new IllegalStateException(
+                    "Safe JNI Pointer violation: Attempted to access a JniPtr after it was"
+                            + " released.");
         }
         return mNativePtr;
     }

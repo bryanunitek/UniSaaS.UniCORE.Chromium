@@ -5,7 +5,6 @@
   },
 
   data: [
-    "attributionsrc",
     "audio",
     "beacon",
     "css",
@@ -13,6 +12,7 @@
     "icon",
     "internal",
     "fetch",
+    "font",
     "link",
     "other",
     "ping",

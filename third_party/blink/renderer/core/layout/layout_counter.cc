@@ -37,6 +37,7 @@
 #include "third_party/blink/renderer/core/html/list_item_ordinal.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
+#include "third_party/blink/renderer/core/style/list_style_type_data.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
 #if DCHECK_IS_ON()
@@ -60,7 +61,7 @@ String CounterTextFromStyleAndValue(const CounterStyle* counter_style,
 LayoutCounter::LayoutCounter(Document& document,
                              const CounterContentData& counter)
     : LayoutText(nullptr, StringImpl::empty_), counter_(counter) {
-  SetDocumentForAnonymous(&document);
+  SetDocumentForAnonymous(document);
   View()->AddLayoutCounter();
 }
 
@@ -71,12 +72,12 @@ void LayoutCounter::Trace(Visitor* visitor) const {
   LayoutText::Trace(visitor);
 }
 
-void LayoutCounter::WillBeDestroyed() {
+void LayoutCounter::WillBeDestroyed(const ComputedStyle* style) {
   NOT_DESTROYED();
   if (View()) {
     View()->RemoveLayoutCounter();
   }
-  LayoutText::WillBeDestroyed();
+  LayoutText::WillBeDestroyed(style);
 }
 
 String LayoutCounter::GenerateCounterText(Vector<int> counter_values,
@@ -108,19 +109,13 @@ const CounterStyle* LayoutCounter::NullableCounterStyle() const {
   if (counter_->ListStyle() == keywords::kNone) {
     return nullptr;
   }
-  return &GetDocument().GetStyleEngine().FindCounterStyleAcrossScopes(
-      counter_->ListStyle(), counter_->GetTreeScope());
+  return &counter_->ResolveCounterStyle(GetDocument().GetStyleEngine());
 }
 
 bool LayoutCounter::IsDirectionalSymbolMarker() const {
   NOT_DESTROYED();
   const auto* counter_style = NullableCounterStyle();
-  if (!counter_style || !counter_style->IsPredefinedSymbolMarker()) {
-    return false;
-  }
-  const AtomicString& list_style = counter_->ListStyle();
-  return list_style == keywords::kDisclosureOpen ||
-         list_style == keywords::kDisclosureClosed;
+  return counter_style && counter_style->IsDisclosureMarker();
 }
 
 const AtomicString& LayoutCounter::Separator() const {
@@ -129,12 +124,30 @@ const AtomicString& LayoutCounter::Separator() const {
 }
 
 // static
-const AtomicString& LayoutCounter::ListStyle(const LayoutObject* object,
-                                             const ComputedStyle& style) {
+AtomicString LayoutCounter::ListStyle(const LayoutObject* object,
+                                      const ComputedStyle& style) {
+  // When the counter style resolves through `extends` to a predefined symbol
+  // marker, return that base name (e.g. `disclosure-open`) so callers paint the
+  // marker with the correct direction. Otherwise return the declared name.
   if (const auto* counter = DynamicTo<LayoutCounter>(object)) {
+    if (const CounterStyle* counter_style = counter->NullableCounterStyle()) {
+      const AtomicString symbol_marker =
+          counter_style->GetEffectiveSymbolMarkerName();
+      if (!symbol_marker.IsNull()) {
+        return symbol_marker;
+      }
+    }
     return counter->counter_->ListStyle();
   }
-  if (const auto list_style_type = style.ListStyleType()) {
+  if (const ListStyleTypeData* list_style_type = style.ListStyleType()) {
+    if (object && list_style_type->IsCounterStyle()) {
+      const AtomicString symbol_marker =
+          list_style_type->GetCounterStyle(object->GetDocument())
+              .GetEffectiveSymbolMarkerName();
+      if (!symbol_marker.IsNull()) {
+        return symbol_marker;
+      }
+    }
     return list_style_type->GetCounterStyleName();
   }
   return g_null_atom;

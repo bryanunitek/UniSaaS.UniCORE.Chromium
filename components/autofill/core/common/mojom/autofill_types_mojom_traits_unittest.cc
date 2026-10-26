@@ -8,7 +8,7 @@
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/task_environment.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/autocomplete_parsing_util.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_constants.h"
@@ -40,6 +40,8 @@ const std::vector<const char*> kOptions = {"Option1", "Option2", "Option3",
 void CreateTestFieldDataPredictions(const std::string& signature,
                                     FormFieldDataPredictions* field_predict) {
   field_predict->host_form_signature = "TestHostFormSignature";
+  field_predict->host_form_structural_signature =
+      "TestHostFormStructuralSignature";
   field_predict->signature = signature;
   field_predict->heuristic_type = "TestHeuristicType";
   field_predict->server_type = "TestServerType";
@@ -313,7 +315,6 @@ TEST_F(AutofillTypeTraitsTestImpl, PassFormFieldData) {
   input.set_host_form_id(FormRendererId(123));
   input.set_max_length(12345);
   input.set_is_autofilled_according_to_renderer(true);
-  input.set_check_status(FormFieldData::CheckStatus::kChecked);
   input.set_should_autocomplete(true);
   input.set_role(FormFieldData::RoleAttribute::kPresentation);
   input.set_text_direction(base::i18n::RIGHT_TO_LEFT);
@@ -347,7 +348,6 @@ TEST_F(AutofillTypeTraitsTestImpl, PassDataListFormFieldData) {
   input.set_aria_description(u"aria description");
   input.set_max_length(12345);
   input.set_is_autofilled_according_to_renderer(true);
-  input.set_check_status(FormFieldData::CheckStatus::kChecked);
   input.set_should_autocomplete(true);
   input.set_role(FormFieldData::RoleAttribute::kPresentation);
   input.set_text_direction(base::i18n::RIGHT_TO_LEFT);

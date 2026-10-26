@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://webui-toolbar.top-chrome/app.js';
+import 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
 
 import {assertEquals, assertFalse} from 'chrome://webui-test/chai_assert.js';
 import {microtasksFinished} from 'chrome://webui-test/test_util.js';
-import type {ToolbarChipButtonElement} from 'chrome://webui-toolbar.top-chrome/app.js';
+import type {ToolbarChipButtonElement} from 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
 
 suite('ToolbarChipButtonTest', function() {
   let element: ToolbarChipButtonElement;
@@ -23,15 +23,10 @@ suite('ToolbarChipButtonTest', function() {
   });
 
   test('ForwardAriaLabel', async function() {
-    const button = element.shadowRoot.querySelector('#button')!;
+    const button = element.$.button;
 
     // Default is empty
     assertEquals('', button.getAttribute('aria-label'));
-
-    // Set attribute
-    element.setAttribute('aria-label', 'test-aria-label');
-    await microtasksFinished();
-    assertEquals('test-aria-label', button.getAttribute('aria-label'));
 
     // Set property
     element.ariaLabel = 'new-aria-label';
@@ -40,15 +35,10 @@ suite('ToolbarChipButtonTest', function() {
   });
 
   test('ForwardAriaHasPopup', async function() {
-    const button = element.shadowRoot.querySelector('#button')!;
+    const button = element.$.button;
 
     // Default is null (not present)
     assertFalse(button.hasAttribute('aria-haspopup'));
-
-    // Set attribute
-    element.setAttribute('aria-haspopup', 'menu');
-    await microtasksFinished();
-    assertEquals('menu', button.getAttribute('aria-haspopup'));
 
     // Set property
     element.ariaHasPopup = 'dialog';
@@ -61,17 +51,45 @@ suite('ToolbarChipButtonTest', function() {
     assertFalse(button.hasAttribute('aria-haspopup'));
   });
 
+  test('ForwardAriaExpanded', async function() {
+    const button = element.$.button;
+
+    // Default is null (not present)
+    assertFalse(button.hasAttribute('aria-expanded'));
+
+    // Set property
+    element.ariaExpanded = 'false';
+    await microtasksFinished();
+    assertEquals('false', button.getAttribute('aria-expanded'));
+
+    // Clear property
+    element.ariaExpanded = null;
+    await microtasksFinished();
+    assertFalse(button.hasAttribute('aria-expanded'));
+  });
+
+  test('ForwardButtonRole', async function() {
+    const button = element.$.button;
+
+    // Default is null (not present), keeping the implicit button role.
+    assertFalse(button.hasAttribute('role'));
+
+    // Set property
+    element.buttonRole = 'img';
+    await microtasksFinished();
+    assertEquals('img', button.getAttribute('role'));
+
+    // Clear property
+    element.buttonRole = null;
+    await microtasksFinished();
+    assertFalse(button.hasAttribute('role'));
+  });
+
   test('ForwardTooltip', async function() {
-    const button = element.shadowRoot.querySelector('#button')!;
+    const button = element.$.button;
 
     // Default is empty
     assertEquals('', button.getAttribute('title'));
-
-    // Set attribute 'title'
-    element.setAttribute('title', 'test-title');
-    await microtasksFinished();
-    assertEquals('test-title', button.getAttribute('title'));
-    assertEquals('test-title', element.tooltip);
 
     // Set property 'tooltip'
     element.tooltip = 'new-title';
@@ -112,5 +130,25 @@ suite('ToolbarChipButtonTest', function() {
 
     assertEquals(1, suffixSlot.assignedNodes().length);
     assertEquals(suffixIcon, suffixSlot.assignedNodes()[0]);
+  });
+
+  test('CollapsesGapAndLabelWithoutHasLabel', async function() {
+    const prefixIcon = document.createElement('div');
+    prefixIcon.slot = 'prefix-icon';
+    const content = document.createElement('span');
+    content.textContent = 'button label';
+    element.appendChild(prefixIcon);
+    element.appendChild(content);
+    element.style.setProperty('--toolbar-chip-icon-label-gap', '8px');
+    await microtasksFinished();
+
+    assertEquals('0px', window.getComputedStyle(element.$.button).gap);
+    assertEquals('0px', window.getComputedStyle(content).maxWidth);
+
+    element.toggleAttribute('has-label', true);
+    await microtasksFinished();
+
+    assertEquals('8px', window.getComputedStyle(element.$.button).gap);
+    assertEquals('none', window.getComputedStyle(content).maxWidth);
   });
 });

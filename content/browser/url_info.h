@@ -163,6 +163,12 @@ struct CONTENT_EXPORT UrlInfo {
   EmbedderIsolationInfo embedder_isolation_info =
       EmbedderIsolationInfo::CreateNone();
 
+  // Indicates that the URL should bypass origin isolation and be site-keyed
+  // by default due to ad rules (either matching an ad host filter directly, or
+  // being a same-site subframe inside an ad frame tree whose root matched an
+  // ad host filter).
+  bool is_ad_tagged_for_site_keying = false;
+
   // The CrossOriginIsolationKey to use for the navigation. This represents the
   // isolation requested by the page itself through the use of COOP, COEP and
   // DIP. Right now, this is only set when DocumentIsolationPolicy is enabled,
@@ -209,6 +215,7 @@ class CONTENT_EXPORT UrlInfoInit {
   UrlInfoInit& WithWebExposedIsolationInfo(
       std::optional<WebExposedIsolationInfo> web_exposed_isolation_info);
   UrlInfoInit& WithEmbedderIsolationInfo(EmbedderIsolationInfo info);
+  UrlInfoInit& WithIsAdTaggedForSiteKeying(bool is_ad_tagged_for_site_keying);
   UrlInfoInit& WithCrossOriginIsolationKey(
       const std::optional<AgentClusterKey::CrossOriginIsolationKey>&
           cross_origin_isolation_key);
@@ -233,6 +240,7 @@ class CONTENT_EXPORT UrlInfoInit {
   std::optional<WebExposedIsolationInfo> web_exposed_isolation_info_;
   EmbedderIsolationInfo embedder_isolation_info_ =
       EmbedderIsolationInfo::CreateNone();
+  bool is_ad_tagged_for_site_keying_ = false;
   std::optional<AgentClusterKey::CrossOriginIsolationKey>
       cross_origin_isolation_key_;
   std::optional<base::SafeRef<ProcessSelectionUserData>>

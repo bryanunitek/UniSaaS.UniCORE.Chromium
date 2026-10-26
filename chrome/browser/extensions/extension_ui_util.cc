@@ -5,27 +5,48 @@
 #include "chrome/browser/extensions/extension_ui_util.h"
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "chrome/browser/extensions/cws_info_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/common/extensions/extension_constants.h"
+#include "chrome/common/pref_names.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/tribool.h"
+#include "components/supervised_user/core/browser/family_link_user_capabilities.h"
 #include "components/url_formatter/elide_url.h"
+#include "components/url_formatter/url_fixer.h"
 #include "components/url_formatter/url_formatter.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/browser/blocklist_extension_prefs.h"
+#include "extensions/browser/cws_info_service.h"
+#include "extensions/browser/disable_reason.h"
+#include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_system.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/browser/management_policy.h"
 #include "extensions/browser/ui_util.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/image_util.h"
 #include "extensions/common/manifest_handlers/app_display_info.h"
+#include "extensions/common/mojom/manifest.mojom-shared.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "extensions/browser/mime_handler/mime_handler_ui_util.h"
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/components/kiosk/kiosk_utils.h"
+#include "chromeos/components/mgs/managed_guest_session_utils.h"
 #endif
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -36,7 +57,7 @@ namespace {
 
 bool IsBlockedByPolicy(const Extension* app, content::BrowserContext* context) {
   Profile* profile = Profile::FromBrowserContext(context);
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M161);
 
   return app->id() == extensions::kWebStoreAppId &&
          profile->GetPrefs()->GetBoolean(
@@ -125,10 +146,97 @@ bool HasManageableExtensions(content::BrowserContext* browser_context) {
 
 std::u16string GetFormattedHostForDisplay(content::WebContents& web_contents) {
   auto url = web_contents.GetLastCommittedURL();
-  // Hide the scheme when necessary (e.g hide "https://" but don't
-  // "chrome://").
+
+  GURL::Replacements replacements;
+  replacements.ClearQuery();
+  replacements.ClearRef();
+
+  GURL fixed_url = url.ReplaceComponents(replacements);
+
+  // Format the URL for display by omitting the scheme (http/https), stripping
+  // fragment(#), query string, trivial subdomains (like 'www') from the
+  // resulting string to prevent visual clutter or origin confusion. Explicitly
+  // convert the resulting string_view back to std::u16string for the return
+  // value.
   return url_formatter::FormatUrlForDisplayOmitSchemePathAndTrivialSubdomains(
-      url);
+      fixed_url);
+}
+
+bool ShouldShowReviewPrompt(const Extension& extension, Profile& profile) {
+  if (!base::FeatureList::IsEnabled(
+          extensions_features::kCWSReviewPromptingNativeUI)) {
+    return false;
+  }
+
+  if (!profile.IsRegularProfile() ||
+      !profile.GetPrefs()->GetBoolean(
+          prefs::kExtensionReviewPromptsAllowed)) {
+    return false;
+  }
+
+#if BUILDFLAG(IS_CHROMEOS)
+  if (chromeos::IsManagedGuestSession() || chromeos::IsKioskSession()) {
+    return false;
+  }
+#endif
+
+  if (extension.location() != mojom::ManifestLocation::kInternal ||
+      !extension.from_webstore()) {
+    return false;
+  }
+
+  signin::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(&profile);
+  // Prompts are suppressed when capabilities are unknown (fail closed).
+  if (identity_manager &&
+      supervised_user::IsPrimaryAccountSubjectToParentalControls(
+          identity_manager) != signin::Tribool::kFalse) {
+    return false;
+  }
+
+  ManagementPolicy* management_policy =
+      ExtensionSystem::Get(&profile)->management_policy();
+  CHECK(management_policy);
+  if (management_policy->MustRemainInstalled(&extension, nullptr)) {
+    return false;
+  }
+
+  // Suppress prompts for broken extensions; the UI offers a Repair/Reload
+  // affordance instead.
+  if (ExtensionRegistry::Get(&profile)->terminated_extensions().Contains(
+          extension.id())) {
+    return false;
+  }
+
+  ExtensionPrefs* extension_prefs = ExtensionPrefs::Get(&profile);
+  DisableReasonSet disable_reasons =
+      extension_prefs->GetDisableReasons(extension.id());
+  if (disable_reasons.contains(disable_reason::DISABLE_CORRUPTED) ||
+      disable_reasons.contains(disable_reason::DISABLE_NOT_VERIFIED)) {
+    return false;
+  }
+
+  // Safe Browsing, Omaha and the telemetry service can each flag an extension
+  // as harmful. This is a separate signal from the Chrome Web Store check.
+  if (blocklist_prefs::GetExtensionBlocklistState(extension.id(),
+                                                  extension_prefs) !=
+      BitMapBlocklistState::NOT_BLOCKLISTED) {
+    return false;
+  }
+
+  // Suppress prompts unless CWS info confirms the extension is present in CWS,
+  // live, and has no active policy violations.
+  CWSInfoService* cws_info = CWSInfoServiceFactory::GetForProfile(&profile);
+  CHECK(cws_info);
+
+  std::optional<CWSInfoService::CWSInfo> info =
+      cws_info->GetCWSInfo(extension);
+  if (!info.has_value() || !info->is_present || !info->is_live ||
+      info->violation_type != CWSInfoService::CWSViolationType::kNone) {
+    return false;
+  }
+
+  return true;
 }
 
 }  // namespace ui_util

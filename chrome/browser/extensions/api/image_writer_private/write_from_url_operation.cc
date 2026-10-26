@@ -37,7 +37,7 @@ WriteFromUrlOperation::WriteFromUrlOperation(
 WriteFromUrlOperation::~WriteFromUrlOperation() = default;
 
 void WriteFromUrlOperation::StartImpl() {
-  DCHECK(IsRunningInCorrectSequence());
+  CHECK(IsRunningInCorrectSequence(), base::NotFatalUntil::M161);
 
   GetDownloadTarget(base::BindOnce(
       &WriteFromUrlOperation::Download, this,
@@ -53,7 +53,7 @@ void WriteFromUrlOperation::StartImpl() {
 }
 
 void WriteFromUrlOperation::GetDownloadTarget(base::OnceClosure continuation) {
-  DCHECK(IsRunningInCorrectSequence());
+  CHECK(IsRunningInCorrectSequence(), base::NotFatalUntil::M161);
   if (IsCancelled()) {
     return;
   }
@@ -73,7 +73,7 @@ void WriteFromUrlOperation::GetDownloadTarget(base::OnceClosure continuation) {
 }
 
 void WriteFromUrlOperation::Download(base::OnceClosure continuation) {
-  DCHECK(IsRunningInCorrectSequence());
+  CHECK(IsRunningInCorrectSequence(), base::NotFatalUntil::M161);
 
   if (IsCancelled()) {
     return;
@@ -112,6 +112,10 @@ void WriteFromUrlOperation::Download(base::OnceClosure continuation) {
 
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = GURL(url_);
+  // To accurately report progress we must request no content encoding, since that
+  // will affect the value of the "Content-Length" header. This doesn't impact
+  // download efficiency since the resource is already compressed.
+  request->headers.SetHeader(net::HttpRequestHeaders::kAcceptEncoding, "identity");
   simple_url_loader_ =
       network::SimpleURLLoader::Create(std::move(request), traffic_annotation);
 
@@ -144,7 +148,7 @@ void WriteFromUrlOperation::OnResponseStarted(
 }
 
 void WriteFromUrlOperation::OnDataDownloaded(uint64_t current) {
-  DCHECK(IsRunningInCorrectSequence());
+  CHECK(IsRunningInCorrectSequence(), base::NotFatalUntil::M161);
 
   if (IsCancelled()) {
     DestroySimpleURLLoader();
@@ -156,7 +160,7 @@ void WriteFromUrlOperation::OnDataDownloaded(uint64_t current) {
 }
 
 void WriteFromUrlOperation::OnSimpleLoaderComplete(base::FilePath file_path) {
-  DCHECK(IsRunningInCorrectSequence());
+  CHECK(IsRunningInCorrectSequence(), base::NotFatalUntil::M161);
   if (!file_path.empty()) {
     SetProgress(kProgressComplete);
 
@@ -167,7 +171,7 @@ void WriteFromUrlOperation::OnSimpleLoaderComplete(base::FilePath file_path) {
 }
 
 void WriteFromUrlOperation::VerifyDownload(base::OnceClosure continuation) {
-  DCHECK(IsRunningInCorrectSequence());
+  CHECK(IsRunningInCorrectSequence(), base::NotFatalUntil::M161);
 
   if (IsCancelled()) {
     return;
@@ -189,7 +193,7 @@ void WriteFromUrlOperation::VerifyDownload(base::OnceClosure continuation) {
 void WriteFromUrlOperation::VerifyDownloadCompare(
     base::OnceClosure continuation,
     const std::string& download_hash) {
-  DCHECK(IsRunningInCorrectSequence());
+  CHECK(IsRunningInCorrectSequence(), base::NotFatalUntil::M161);
   if (download_hash != hash_) {
     Error(error::kDownloadHashError);
     return;
@@ -201,7 +205,7 @@ void WriteFromUrlOperation::VerifyDownloadCompare(
 
 void WriteFromUrlOperation::VerifyDownloadComplete(
     base::OnceClosure continuation) {
-  DCHECK(IsRunningInCorrectSequence());
+  CHECK(IsRunningInCorrectSequence(), base::NotFatalUntil::M161);
   if (IsCancelled()) {
     return;
   }

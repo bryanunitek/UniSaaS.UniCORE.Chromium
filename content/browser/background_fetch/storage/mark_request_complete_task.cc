@@ -25,6 +25,7 @@
 #include "third_party/blink/public/mojom/blob/blob.mojom.h"
 #include "third_party/blink/public/mojom/blob/serialized_blob.mojom.h"
 #include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
+#include "url/origin.h"
 
 namespace content {
 namespace background_fetch {
@@ -33,7 +34,7 @@ namespace {
 
 blink::mojom::SerializedBlobPtr MakeBlob(
     scoped_refptr<BackgroundFetchRequestInfo> info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
 
   std::unique_ptr<storage::BlobDataHandle> response_blob_handle =
       info->TakeResponseBlobDataHandleOnIO();
@@ -73,7 +74,7 @@ MarkRequestCompleteTask::MarkRequestCompleteTask(
 MarkRequestCompleteTask::~MarkRequestCompleteTask() = default;
 
 void MarkRequestCompleteTask::Start() {
-  DCHECK(blob_storage_context());
+  CHECK(blob_storage_context(), base::NotFatalUntil::M158);
   request_info_->CreateResponseBlobDataHandle(blob_storage_context());
 
   base::RepeatingClosure barrier_closure = base::BarrierClosure(
@@ -88,12 +89,18 @@ void MarkRequestCompleteTask::Start() {
 void MarkRequestCompleteTask::StoreResponse(base::OnceClosure done_closure) {
   response_ = blink::mojom::FetchAPIResponse::New();
   response_->url_list = request_info_->GetURLChain();
-  response_->response_type = network::mojom::FetchResponseType::kDefault;
+  if (!request_info_->GetURLChain().empty() &&
+      !url::Origin::Create(request_info_->GetURLChain().back())
+           .IsSameOriginWith(registration_id_.storage_key().origin())) {
+    response_->response_type = network::mojom::FetchResponseType::kCors;
+  } else {
+    response_->response_type = network::mojom::FetchResponseType::kDefault;
+  }
   response_->response_time = request_info_->GetResponseTime();
 
   if (request_info_->GetURLChain().empty()) {
     // The URL chain was not provided, so this is a failed response.
-    DCHECK(!request_info_->IsResultSuccess());
+    CHECK(!request_info_->IsResultSuccess(), base::NotFatalUntil::M158);
     failure_reason_ = proto::BackgroundFetchRegistration::FETCH_ERROR;
     CreateAndStoreCompletedRequest(std::move(done_closure));
     return;

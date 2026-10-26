@@ -39,6 +39,7 @@
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/url_loader_mock_factory.h"
@@ -115,10 +116,11 @@ class WebFrameSerializerTest : public testing::Test {
 
   String SerializeFile(const String& url,
                        const String& file_name,
-                       bool save_with_empty_url) {
+                       bool save_with_empty_url,
+                       const String& mime_type = "text/html") {
     KURL parsed_url(url);
     String file_path("frameserialization/" + file_name);
-    RegisterMockedFileURLLoad(parsed_url, file_path, "text/html");
+    RegisterMockedFileURLLoad(parsed_url, file_path, mime_type);
     frame_test_helpers::LoadFrame(MainFrameImpl(), url.Utf8().c_str());
     SingleLinkRewritingDelegate delegate(parsed_url, WebString("local"));
     SimpleWebFrameSerializerClient serializer_client;
@@ -231,6 +233,27 @@ host6.attachShadow({mode: 'open'}).innerHTML = '<div>hello world</div>';
   String actual_html =
       SerializeFile("http://www.test.com", "shadowdom.html", true);
   EXPECT_EQ(String(expected_html), actual_html);
+}
+
+TEST_F(WebFrameSerializerTest, EntitiesInAttributeHtml) {
+  String expected(
+      u"<body "
+      u"title=\"&quot;&amp;&lt;&gt;'\u00A9&nbsp;\t\n\r\">\n\n</body></html>");
+
+  String actual =
+      SerializeFile("http://www.test.com/2", "entities.html", false);
+  EXPECT_TRUE(actual.ends_with(expected));
+}
+
+TEST_F(WebFrameSerializerTest, EntitiesInAttributeXml) {
+  String expected(
+      u"<body "
+      u"title=\"&quot;&amp;&lt;&gt;'\u00C2\u00A9\u00C2\u00A0&#9;&#10;&#13;\" "
+      u"/>\n</html>");
+
+  String actual = SerializeFile("http://www.test.com/2", "entities.xml", false,
+                                "application/xhtml+xml");
+  EXPECT_TRUE(actual.ends_with(expected));
 }
 
 }  // namespace blink

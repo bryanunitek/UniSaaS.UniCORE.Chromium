@@ -186,14 +186,15 @@ class CONTENT_EXPORT ServiceWorkerContextWrapper
       ServiceWorkerContextObserverSynchronous* observer) override;
   void RemoveSyncObserver(
       ServiceWorkerContextObserverSynchronous* observer) override;
-  // TODO (crbug.com/1335059) RegisterServiceWorker passes an invalid frame id.
-  // Currently it's okay because it is used only by PaymentAppInstaller and
-  // Extensions, but ideally we should add some guard to avoid the method is
-  // called from other places.
+  // TODO(crbug.com/40228395): RegisterServiceWorker accepts an invalid frame
+  // id. Currently it's okay because only Extensions calls this function with an
+  // invalid frame id, but ideally we should add some guards to avoid the method
+  // being called with an invalid frame id from other places.
   void RegisterServiceWorker(
       const GURL& script_url,
       const blink::StorageKey& key,
       const blink::mojom::ServiceWorkerRegistrationOptions& options,
+      GlobalRenderFrameHostId requesting_frame_id,
       StatusCodeCallback callback) override;
   void UnregisterServiceWorker(const GURL& scope,
                                const blink::StorageKey& key,
@@ -332,6 +333,14 @@ class CONTENT_EXPORT ServiceWorkerContextWrapper
   void FindReadyRegistrationForId(int64_t registration_id,
                                   const blink::StorageKey& key,
                                   FindRegistrationCallback callback);
+
+  // Similar to FindReadyRegistrationForId, but does not activate waiting
+  // versions if the registration only has a waiting version or if a waiting
+  // version is present. May return the installing version if one is present.
+  void FindRegistrationForIdWithoutActivation(
+      int64_t registration_id,
+      const blink::StorageKey& key,
+      FindRegistrationCallback callback);
 
   // Returns the registration for |registration_id|. It is guaranteed that the
   // returned registration has the activated worker.
@@ -501,6 +510,7 @@ class CONTENT_EXPORT ServiceWorkerContextWrapper
 
   void DidFindRegistrationForFindImpl(
       bool include_installing_version,
+      bool activate_waiting_version,
       FindRegistrationCallback callback,
       blink::ServiceWorkerStatusCode status,
       scoped_refptr<ServiceWorkerRegistration> registration);

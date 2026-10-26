@@ -4,19 +4,16 @@
 
 
 def _CommonChecks(input_api, output_api):
+  if not input_api.HasAffectedFiles(extensions='.py'):
+    return []
   results = []
-
-  # Run Pylint over the files in the directory.
-  pylint_checks = input_api.canned_checks.GetPylint(input_api,
-                                                    output_api,
-                                                    version='2.7')
-  results.extend(input_api.RunTests(pylint_checks))
 
   # Run the generate_token unittests.
   results.extend(
-      input_api.canned_checks.RunUnitTestsInDirectory(input_api, output_api,
-                                                      '.',
-                                                      [r'^.+_unittest\.py$']))
+    input_api.canned_checks.RunUnitTestsInDirectory(
+      input_api, output_api, '.', [r'^.+_unittest\.py$']
+    )
+  )
 
   return results
 

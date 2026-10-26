@@ -19,7 +19,7 @@
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_test_api.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/webdata/addresses/contact_info_sync_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/signin/public/base/signin_switches.h"
@@ -104,6 +104,7 @@ class ContactInfoActiveChecker : public SingleClientStatusChangeChecker {
 
   // StatusChangeChecker implementation.
   bool IsExitConditionSatisfied(std::ostream* os) override {
+    *os << "Waiting for CONTACT_INFO active state to become " << expect_active_;
     return service()->GetActiveDataTypes().Has(syncer::CONTACT_INFO) ==
            expect_active_;
   }
@@ -126,6 +127,7 @@ class FakeServerSpecificsChecker
 
   // StatusChangeChecker implementation.
   bool IsExitConditionSatisfied(std::ostream* os) override {
+    *os << "Waiting for server CONTACT_INFO specifics to match: ";
     std::vector<std::string> specifics;
     for (const sync_pb::SyncEntity& entity :
          fake_server()->GetSyncEntitiesByDataType(syncer::CONTACT_INFO)) {
@@ -302,9 +304,11 @@ class SingleClientContactInfoPassphraseSyncTest
  public:
   SingleClientContactInfoPassphraseSyncTest()
       : SingleClientContactInfoSyncTestBase(GetSetupSyncMode()) {
+#if BUILDFLAG(IS_CHROMEOS)
     passphrase_feature_.InitWithFeatureState(
         syncer::kSyncEnableContactInfoDataTypeForCustomPassphraseUsers,
         EnabledForPassphraseUsersTestParam());
+#endif  // BUILDFLAG(IS_CHROMEOS)
   }
 
   SyncTest::SetupSyncMode GetSetupSyncMode() const override {
@@ -316,13 +320,21 @@ class SingleClientContactInfoPassphraseSyncTest
   }
 
  private:
+#if BUILDFLAG(IS_CHROMEOS)
   base::test::ScopedFeatureList passphrase_feature_;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 };
 
 INSTANTIATE_TEST_SUITE_P(
     ,
     SingleClientContactInfoPassphraseSyncTest,
-    testing::Combine(GetSyncTestModes(), testing::Bool()),
+    testing::Combine(GetSyncTestModes(),
+#if BUILDFLAG(IS_CHROMEOS)
+                     testing::Bool()
+#else
+                     testing::Values(true)
+#endif
+                         ),
     [](const testing::TestParamInfo<std::tuple<SyncTest::SetupSyncMode, bool>>&
            info) {
       return testing::PrintToString(std::get<0>(info.param)) +
@@ -447,9 +459,6 @@ IN_PROC_BROWSER_TEST_P(SingleClientContactInfoSyncTest, AuthErrorState) {
   EXPECT_FALSE(GetPersonalDataManager()
                    ->address_data_manager()
                    .IsEligibleForAddressAccountStorage());
-  EXPECT_FALSE(GetPersonalDataManager()
-                   ->address_data_manager()
-                   .IsAutofillSyncToggleAvailable());
 
   // Fix the authentication error, sync is available again.
   signin::UpdatePersistentErrorOfRefreshTokenForAccount(
@@ -462,71 +471,6 @@ IN_PROC_BROWSER_TEST_P(SingleClientContactInfoSyncTest, AuthErrorState) {
   EXPECT_TRUE(GetPersonalDataManager()
                   ->address_data_manager()
                   .IsEligibleForAddressAccountStorage());
-
-  // The toggle is not available when kReplaceSyncPromosWithSignInPromos is
-  // enabled, and is instead available in the account settings page.
-  const bool is_autofill_sync_toggle_available =
-      !syncer::IsReplaceSyncPromosWithSignInPromosEnabled();
-  EXPECT_EQ(GetPersonalDataManager()
-                ->address_data_manager()
-                .IsAutofillSyncToggleAvailable(),
-            is_autofill_sync_toggle_available);
-}
-
-// Regression test for https://crbug.com/340194452.
-// TODO(crbug.com/40943238): Remove when `kReplaceSyncPromosWithSignInPromos` is
-// enabled.
-IN_PROC_BROWSER_TEST_P(SingleClientContactInfoSyncTest,
-                       IsAutofillSyncToggleAvailable) {
-  // Setup transport mode.
-  ASSERT_TRUE(SignIn());
-  EXPECT_TRUE(
-      GetSyncService(0)->GetActiveDataTypes().Has(syncer::CONTACT_INFO));
-
-  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
-    // The toggle is not available when
-    // kReplaceSyncPromosWithSignInPromos is enabled, and is instead
-    // available in the account settings page.
-    EXPECT_FALSE(GetPersonalDataManager()
-                     ->address_data_manager()
-                     .IsAutofillSyncToggleAvailable());
-    return;
-  }
-
-  // The toggle is available.
-  EXPECT_TRUE(GetPersonalDataManager()
-                  ->address_data_manager()
-                  .IsAutofillSyncToggleAvailable());
-
-  // Turn account storage OFF.
-  GetPersonalDataManager()
-      ->address_data_manager()
-      .SetAutofillSelectableTypeEnabled(
-          /*enabled=*/false);
-  EXPECT_TRUE(ContactInfoActiveChecker(GetSyncService(0),
-                                       /*expect_active=*/false)
-                  .Wait());
-
-  // The toggle is still available.
-  EXPECT_TRUE(GetPersonalDataManager()
-                  ->address_data_manager()
-                  .IsAutofillSyncToggleAvailable());
-
-  // Turn on Sync.
-  ASSERT_TRUE(GetClient(0)->SetupSync());
-  HideAccountNameEmailProfile();
-  // The toggle is no longer available.
-  EXPECT_FALSE(GetPersonalDataManager()
-                   ->address_data_manager()
-                   .IsAutofillSyncToggleAvailable());
-
-  // Sign out.
-  GetClient(0)->SignOutPrimaryAccount();
-
-  // The toggle is not available.
-  EXPECT_FALSE(GetPersonalDataManager()
-                   ->address_data_manager()
-                   .IsAutofillSyncToggleAvailable());
 }
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 

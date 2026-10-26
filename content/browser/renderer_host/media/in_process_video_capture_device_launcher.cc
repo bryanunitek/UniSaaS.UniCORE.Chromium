@@ -164,7 +164,7 @@ void ReportDesktopCaptureImplementationAndType(
   constexpr int kDesktopIdTypeCount = 4;
   static_assert(kDesktopIdTypeCount * kImplementationCount ==
                 DesktopCaptureImplementationAndType::kMaxValue + 1);
-  DCHECK_LT(type, kDesktopIdTypeCount);
+  CHECK_LT(type, kDesktopIdTypeCount, base::NotFatalUntil::M158);
   auto implementation_and_type =
       static_cast<DesktopCaptureImplementationAndType>(
           implementation * kDesktopIdTypeCount + type);
@@ -180,7 +180,7 @@ DesktopCaptureImplementation CreatePlatformDependentVideoCaptureDevice(
         pip_screen_capture_coordinator_proxy,
     std::unique_ptr<media::VideoCaptureDevice>& device_out,
     media::VideoCaptureDeviceClient* device_client) {
-  DCHECK_EQ(device_out.get(), nullptr);
+  CHECK_EQ(device_out.get(), nullptr, base::NotFatalUntil::M158);
 #if BUILDFLAG(IS_MAC)
   // Use ScreenCaptureKit with picker if specified. `desktop_id` for the picker
   // is not compatible with the other implementations.
@@ -227,8 +227,8 @@ InProcessVideoCaptureDeviceLauncher::InProcessVideoCaptureDeviceLauncher(
       native_screen_capture_picker_(picker) {}
 
 InProcessVideoCaptureDeviceLauncher::~InProcessVideoCaptureDeviceLauncher() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK(state_ == State::READY_TO_LAUNCH);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
+  CHECK(state_ == State::READY_TO_LAUNCH, base::NotFatalUntil::M158);
 }
 
 void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
@@ -239,8 +239,8 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
     base::OnceClosure /* connection_lost_cb */,
     Callbacks* callbacks,
     base::OnceClosure done_cb) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK(state_ == State::READY_TO_LAUNCH);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
+  CHECK(state_ == State::READY_TO_LAUNCH, base::NotFatalUntil::M158);
 
   if (receiver_on_io_thread) {
     std::ostringstream string_stream;
@@ -257,12 +257,10 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
       receiver_on_io_thread, GetIOThreadTaskRunner({}));
 
   base::OnceClosure start_capture_closure;
-  // Use of Unretained |this| is safe, because |done_cb| guarantees that |this|
-  // stays alive.
   ReceiveDeviceCallback after_start_capture_callback =
       base::BindPostTaskToCurrentDefault(base::BindOnce(
           &InProcessVideoCaptureDeviceLauncher::OnDeviceStarted,
-          base::Unretained(this), callbacks, std::move(done_cb)));
+          weak_factory_.GetWeakPtr(), callbacks, std::move(done_cb)));
 
   switch (stream_type) {
     case blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE:
@@ -273,7 +271,7 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
     case blink::mojom::MediaStreamType::GUM_TAB_VIDEO_CAPTURE:
       start_capture_closure = base::BindOnce(
           &InProcessVideoCaptureDeviceLauncher::DoStartTabCaptureOnDeviceThread,
-          base::Unretained(this), device_id, params, std::move(receiver),
+          device_id, params, std::move(receiver),
           std::move(after_start_capture_callback));
       break;
 
@@ -293,7 +291,7 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
         start_capture_closure = base::BindOnce(
             &InProcessVideoCaptureDeviceLauncher::
                 DoStartFakeDisplayCaptureOnDeviceThread,
-            base::Unretained(this), desktop_id, params,
+            desktop_id, params,
             CreateDeviceClient(media::VideoCaptureBufferType::kSharedMemory,
                                kMaxNumberOfBuffers, std::move(receiver),
                                std::move(receiver_on_io_thread)),
@@ -314,11 +312,11 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
               std::move(callback).Run(std::move(device));
             },
             desktop_id, std::move(after_start_capture_callback));
-        start_capture_closure = base::BindOnce(
-            &InProcessVideoCaptureDeviceLauncher::
-                DoStartTabCaptureOnDeviceThread,
-            base::Unretained(this), device_id, params, std::move(receiver),
-            std::move(after_start_capture_callback));
+        start_capture_closure =
+            base::BindOnce(&InProcessVideoCaptureDeviceLauncher::
+                               DoStartTabCaptureOnDeviceThread,
+                           device_id, params, std::move(receiver),
+                           std::move(after_start_capture_callback));
         break;
       }
 
@@ -330,11 +328,11 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
         TRACE_EVENT_INSTANT(
             TRACE_DISABLED_BY_DEFAULT("video_and_image_capture"),
             "UsingVizFrameSinkCapturer");
-        start_capture_closure = base::BindOnce(
-            &InProcessVideoCaptureDeviceLauncher::
-                DoStartVizFrameSinkWindowCaptureOnDeviceThread,
-            base::Unretained(this), desktop_id, params, std::move(receiver),
-            std::move(after_start_capture_callback));
+        start_capture_closure =
+            base::BindOnce(&InProcessVideoCaptureDeviceLauncher::
+                               DoStartVizFrameSinkWindowCaptureOnDeviceThread,
+                           desktop_id, params, std::move(receiver),
+                           std::move(after_start_capture_callback));
         break;
       }
 #endif  // defined(USE_AURA) || BUILDFLAG(IS_MAC)
@@ -361,7 +359,7 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
       start_capture_closure = base::BindOnce(
           &InProcessVideoCaptureDeviceLauncher::
               DoStartDesktopCaptureOnDeviceThread,
-          base::Unretained(this), desktop_id, params,
+          native_screen_capture_picker_, desktop_id, params,
           CreateDeviceClient(buffer_type, max_buffer_count, std::move(receiver),
                              std::move(receiver_on_io_thread)),
           std::move(after_start_capture_callback));
@@ -384,7 +382,7 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
 }
 
 void InProcessVideoCaptureDeviceLauncher::AbortLaunch() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
   if (state_ == State::DEVICE_START_IN_PROGRESS)
     state_ = State::DEVICE_START_ABORTING;
 }
@@ -395,7 +393,7 @@ InProcessVideoCaptureDeviceLauncher::CreateDeviceClient(
     int buffer_pool_max_buffer_count,
     std::unique_ptr<media::VideoFrameReceiver> receiver,
     base::WeakPtr<media::VideoFrameReceiver> receiver_on_io_thread) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
 
 #if BUILDFLAG(IS_WIN)
   scoped_refptr<media::VideoCaptureBufferPool> buffer_pool =
@@ -428,7 +426,7 @@ void InProcessVideoCaptureDeviceLauncher::OnDeviceStarted(
     Callbacks* callbacks,
     base::OnceClosure done_cb,
     std::unique_ptr<media::VideoCaptureDevice> device) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
   State state_copy = state_;
   state_ = State::READY_TO_LAUNCH;
   if (!device) {
@@ -473,8 +471,6 @@ void InProcessVideoCaptureDeviceLauncher::DoStartTabCaptureOnDeviceThread(
     const media::VideoCaptureParams& params,
     std::unique_ptr<media::VideoFrameReceiver> receiver,
     ReceiveDeviceCallback result_callback) {
-  DCHECK(device_task_runner_->BelongsToCurrentThread());
-
   std::unique_ptr<WebContentsVideoCaptureDevice> video_capture_device =
       WebContentsVideoCaptureDevice::Create(device_id);
   if (video_capture_device) {
@@ -491,8 +487,6 @@ void InProcessVideoCaptureDeviceLauncher::
         const media::VideoCaptureParams& params,
         std::unique_ptr<media::VideoFrameReceiver> receiver,
         ReceiveDeviceCallback result_callback) {
-  DCHECK(device_task_runner_->BelongsToCurrentThread());
-
   std::unique_ptr<FrameSinkVideoCaptureDevice> video_capture_device;
 #if defined(USE_AURA)
   video_capture_device =
@@ -511,12 +505,12 @@ void InProcessVideoCaptureDeviceLauncher::
 #endif  // defined(USE_AURA) || BUILDFLAG(IS_MAC)
 
 void InProcessVideoCaptureDeviceLauncher::DoStartDesktopCaptureOnDeviceThread(
+    NativeScreenCapturePicker* picker,
     const DesktopMediaID& desktop_id,
     const media::VideoCaptureParams& params,
     std::unique_ptr<media::VideoCaptureDeviceClient> device_client,
     ReceiveDeviceCallback result_callback) {
-  DCHECK(device_task_runner_->BelongsToCurrentThread());
-  DCHECK(!desktop_id.is_null());
+  CHECK(!desktop_id.is_null(), base::NotFatalUntil::M158);
 
 #if BUILDFLAG(IS_MAC)
   // TODO(crbug.com/445202459): Refactor the calling code to avoid
@@ -524,7 +518,7 @@ void InProcessVideoCaptureDeviceLauncher::DoStartDesktopCaptureOnDeviceThread(
   GetUIThreadTaskRunner({})->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce([]() -> std::unique_ptr<PipScreenCaptureCoordinatorProxy> {
-        DCHECK_CURRENTLY_ON(BrowserThread::UI);
+        CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
         if (auto* coordinator =
                 PipScreenCaptureCoordinatorImpl::GetInstance()) {
           return coordinator->CreateProxy();
@@ -533,30 +527,29 @@ void InProcessVideoCaptureDeviceLauncher::DoStartDesktopCaptureOnDeviceThread(
       }),
       base::BindOnce(&InProcessVideoCaptureDeviceLauncher::
                          OnPipScreenCaptureCoordinatorProxyCreated,
-                     weak_factory_.GetWeakPtr(), desktop_id, params,
-                     std::move(device_client), std::move(result_callback)));
+                     picker, desktop_id, params, std::move(device_client),
+                     std::move(result_callback)));
 #else
   OnPipScreenCaptureCoordinatorProxyCreated(
-      desktop_id, params, std::move(device_client), std::move(result_callback),
-      nullptr);
+      picker, desktop_id, params, std::move(device_client),
+      std::move(result_callback), nullptr);
 #endif
 }
 
 void InProcessVideoCaptureDeviceLauncher::
     OnPipScreenCaptureCoordinatorProxyCreated(
+        NativeScreenCapturePicker* picker,
         const DesktopMediaID& desktop_id,
         const media::VideoCaptureParams& params,
         std::unique_ptr<media::VideoCaptureDeviceClient> device_client,
         ReceiveDeviceCallback result_callback,
         std::unique_ptr<PipScreenCaptureCoordinatorProxy>
             pip_screen_capture_coordinator_proxy) {
-  DCHECK(device_task_runner_->BelongsToCurrentThread());
   std::unique_ptr<media::VideoCaptureDevice> video_capture_device;
   DesktopCaptureImplementation implementation =
       CreatePlatformDependentVideoCaptureDevice(
-          native_screen_capture_picker_, desktop_id,
-          std::move(pip_screen_capture_coordinator_proxy), video_capture_device,
-          device_client.get());
+          picker, desktop_id, std::move(pip_screen_capture_coordinator_proxy),
+          video_capture_device, device_client.get());
   std::ostringstream string_stream;
   string_stream << "InProcessVideoCaptureDeviceLauncher::"
                    "DoStartDesktopCaptureOnDeviceThread: implementation = "
@@ -579,10 +572,9 @@ void InProcessVideoCaptureDeviceLauncher::
         const media::VideoCaptureParams& params,
         std::unique_ptr<media::VideoCaptureDeviceClient> device_client,
         ReceiveDeviceCallback result_callback) {
-  DCHECK(device_task_runner_->BelongsToCurrentThread());
-  DCHECK_EQ(DesktopMediaID::kFakeId, desktop_id.id);
+  CHECK_EQ(DesktopMediaID::kFakeId, desktop_id.id, base::NotFatalUntil::M158);
 
-  fake_device_factory_ =
+  auto fake_device_factory =
       std::make_unique<media::FakeVideoCaptureDeviceFactory>();
   const base::CommandLine* command_line =
       base::CommandLine::ForCurrentProcess();
@@ -594,30 +586,30 @@ void InProcessVideoCaptureDeviceLauncher::
             command_line->GetSwitchValueASCII(
                 switches::kUseFakeDeviceForMediaStream),
             &config);
-    fake_device_factory_->SetToCustomDevicesConfig(config);
+    fake_device_factory->SetToCustomDevicesConfig(config);
   }
 
-  // base::Unretained() is safe because |this| owns |fake_device_factory_|.
-  fake_device_factory_->GetDevicesInfo(base::BindOnce(
+  media::FakeVideoCaptureDeviceFactory* factory_ptr = fake_device_factory.get();
+  factory_ptr->GetDevicesInfo(base::BindOnce(
       &InProcessVideoCaptureDeviceLauncher::OnFakeDevicesEnumerated,
-      base::Unretained(this), params, std::move(device_client),
+      std::move(fake_device_factory), params, std::move(device_client),
       std::move(result_callback)));
 }
 
 void InProcessVideoCaptureDeviceLauncher::OnFakeDevicesEnumerated(
+    std::unique_ptr<media::FakeVideoCaptureDeviceFactory> fake_device_factory,
     const media::VideoCaptureParams& params,
     std::unique_ptr<media::VideoCaptureDeviceClient> device_client,
     ReceiveDeviceCallback result_callback,
     std::vector<media::VideoCaptureDeviceInfo> devices_info) {
-  DCHECK(device_task_runner_->BelongsToCurrentThread());
-
   if (devices_info.empty()) {
     LOG(ERROR) << "Cannot start with no fake device config";
     std::move(result_callback).Run(nullptr);
     return;
   }
+  CHECK(fake_device_factory, base::NotFatalUntil::M158);
   media::VideoCaptureErrorOrDevice video_capture_device_or_error =
-      fake_device_factory_->CreateDevice(devices_info.front().descriptor);
+      fake_device_factory->CreateDevice(devices_info.front().descriptor);
   if (!video_capture_device_or_error.ok()) {
     LOG(ERROR) << "Failed to create fake device";
     std::move(result_callback).Run(nullptr);

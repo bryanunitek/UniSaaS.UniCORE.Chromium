@@ -10,11 +10,10 @@ source_set("converters") {
     "tab_converters.h",
   ]
 
-  # Remove this once tab_ui_helper.cc is modularized.
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
-
   deps = [
     "//base",
+    "//chrome/browser/ui:tab_ui_helper",
+    "//chrome/browser/ui/tabs:favicon_theming",
     "//chrome/browser/ui/tabs:tab_strip",
     "//chrome/browser/ui/tabs:tab_strip_model_observer",
     "//chrome/browser/ui/tabs/alert:tab_alert",
@@ -22,8 +21,11 @@ source_set("converters") {
     "//components/browser_apis/tab_strip/adapters",
     "//components/browser_apis/tab_strip/events",
     "//components/browser_apis/tab_strip/types",
+    "//components/favicon/content",
+    "//components/favicon/core",
     "//components/tabs:public",
     "//ui/color",
+    "//ui/gfx",
   ]
 }
 
@@ -38,7 +40,7 @@ source_set("browser_tests") {
     ":converters",
     "//base",
     "//base/test:test_support",
-    "//chrome/browser/ui",
+    "//chrome/browser/ui:tab_ui_helper",
     "//chrome/browser/ui/tabs:tab_strip",
     "//chrome/browser/ui/tabs/alert:tab_alert",
     "//chrome/test:test_support",

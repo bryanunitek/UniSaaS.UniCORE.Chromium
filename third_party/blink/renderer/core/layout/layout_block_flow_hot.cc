@@ -20,12 +20,12 @@ bool LayoutBlockFlow::CreatesNewFormattingContext() const {
   if (IsInline() || IsFloatingOrOutOfFlowPositioned() || IsScrollContainer() ||
       IsFlexItem() || IsCustomItem() || IsDocumentElement() || IsGridItem() ||
       IsGridLanesItem() || IsWritingModeRoot() || IsMathItem() ||
-      StyleRef().Display() == EDisplay::kFlowRoot ||
-      StyleRef().Display() == EDisplay::kFlowRootListItem ||
+      Style().Display() == EDisplay::kFlowRoot ||
+      Style().Display() == EDisplay::kFlowRootListItem ||
       ShouldApplyPaintContainment() || ShouldApplyLayoutContainment() ||
-      StyleRef().IsContainerForSizeContainerQueries() ||
-      StyleRef().HasLineClamp() || StyleRef().SpecifiesColumns() ||
-      StyleRef().GetColumnSpan() == EColumnSpan::kAll) {
+      Style().IsContainerForSizeContainerQueries() || Style().HasLineClamp() ||
+      Style().SpecifiesColumns() ||
+      Style().GetColumnSpan() == EColumnSpan::kAll) {
     // The specs require this object to establish a new formatting context.
     return true;
   }
@@ -39,8 +39,9 @@ bool LayoutBlockFlow::CreatesNewFormattingContext() const {
   // https://drafts.csswg.org/css-align/#distribution-block
   // All values other than normal force the block container to establish an
   // independent formatting context.
-  if (StyleRef().AlignContent().GetPosition() != ContentPosition::kNormal ||
-      StyleRef().AlignContent().Distribution() !=
+  if (Style().AlignContent().GetComputedPosition() !=
+          ContentPosition::kNormal ||
+      Style().AlignContent().Distribution() !=
           ContentDistributionType::kDefault) {
     return true;
   }
@@ -59,9 +60,10 @@ DISABLE_CFI_PERF
 void LayoutBlockFlow::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutBlock::StyleDidChange(diff, old_style, style_change_context);
+  LayoutBlock::StyleDidChange(diff, old_style, new_style, style_change_context);
 
   if (diff.NeedsFullLayout() || !old_style) {
     UpdateForMulticol();
@@ -70,7 +72,7 @@ void LayoutBlockFlow::StyleDidChange(
     // We either gained or lost ::column style, trigger relayout to determine,
     // if column pseudo-elements are needed.
     if (old_style->CanGeneratePseudoElement(kPseudoIdColumn) !=
-        StyleRef().CanGeneratePseudoElement(kPseudoIdColumn)) {
+        new_style.CanGeneratePseudoElement(kPseudoIdColumn)) {
       SetNeedsLayout(layout_invalidation_reason::kStyleChange);
     }
   }
@@ -80,7 +82,6 @@ void LayoutBlockFlow::StyleDidChange(
 
     // The `initial-letter` creates a special `InlineItem`. When it's turned
     // on/off, its parent IFC should run `CollectInlines()`.
-    const ComputedStyle& new_style = StyleRef();
     if (old_style->InitialLetter().IsNormal() !=
         new_style.InitialLetter().IsNormal()) [[unlikely]] {
       if (LayoutObject* parent = Parent()) {

@@ -50,6 +50,18 @@ class AutofillMessageControllerImplTest
     return message_ptr;
   }
 
+  AutofillMessageModel* CreateAndShowResurrectChurnedUsersMessage() {
+    std::unique_ptr<AutofillMessageModel> message =
+        AutofillMessageModel::CreateForResurrectChurnedUsers(
+            /*action_callback=*/base::DoNothing(),
+            /*dismiss_callback=*/base::DoNothing());
+    AutofillMessageModel* message_ptr = message.get();
+
+    controller().Show(std::move(message));
+
+    return message_ptr;
+  }
+
   // Expect a `EnqueueMessage` call to the message dispatcher bridge `times`
   // number of times.
   void ExpectEnqueueMessageCall(int times = 1) {
@@ -123,17 +135,19 @@ TEST_F(AutofillMessageControllerImplTest, Dismiss) {
   CreateAndShowSaveCardFailureMessage();
   CreateAndShowSaveCardFailureMessage();
 
-  ExpectDismissMessageCallWithReason(messages::DismissReason::UNKNOWN,
-                                     /*times=*/2);
+  ExpectDismissMessageCallWithReason(
+      messages::DismissReason::DISMISSED_BY_FEATURE,
+      /*times=*/2);
 
-  test_api(controller()).Dismiss();
+  controller().Dismiss(messages::DismissReason::DISMISSED_BY_FEATURE);
 }
 
 TEST_F(AutofillMessageControllerImplTest, DismissWithoutMessages) {
-  ExpectDismissMessageCallWithReason(messages::DismissReason::UNKNOWN,
-                                     /*times=*/0);
+  ExpectDismissMessageCallWithReason(
+      messages::DismissReason::DISMISSED_BY_FEATURE,
+      /*times=*/0);
 
-  test_api(controller()).Dismiss();
+  controller().Dismiss(messages::DismissReason::DISMISSED_BY_FEATURE);
 }
 
 TEST_F(AutofillMessageControllerImplTest, Metrics_Show_EntitySaveUpdateFlow) {
@@ -164,6 +178,43 @@ TEST_F(AutofillMessageControllerImplTest,
   messages::DismissReason dismiss_reason =
       messages::DismissReason::PRIMARY_ACTION;
   AutofillMessageModel* message = CreateAndShowEntitySaveUpdateFlowMessage();
+  std::string_view type_as_string = message->GetTypeAsString();
+
+  test_api(controller()).OnDismissed(message, dismiss_reason);
+
+  histogram_tester.ExpectUniqueSample(
+      base::StrCat({"Autofill.Message.", type_as_string, ".Dismissed"}),
+      dismiss_reason, 1);
+}
+
+TEST_F(AutofillMessageControllerImplTest, Metrics_Show_ResurrectChurnedUsers) {
+  base::HistogramTester histogram_tester;
+  AutofillMessageModel* message = CreateAndShowResurrectChurnedUsersMessage();
+
+  histogram_tester.ExpectUniqueSample(
+      base::StrCat({"Autofill.Message.", message->GetTypeAsString(), ".Shown"}),
+      true, 1);
+}
+
+TEST_F(AutofillMessageControllerImplTest,
+       Metrics_OnActionClicked_ResurrectChurnedUsers) {
+  base::HistogramTester histogram_tester;
+  AutofillMessageModel* message = CreateAndShowResurrectChurnedUsersMessage();
+
+  test_api(controller()).OnActionClicked(message);
+
+  histogram_tester.ExpectUniqueSample(
+      base::StrCat(
+          {"Autofill.Message.", message->GetTypeAsString(), ".ActionClicked"}),
+      true, 1);
+}
+
+TEST_F(AutofillMessageControllerImplTest,
+       Metrics_OnDismissed_ResurrectChurnedUsers) {
+  base::HistogramTester histogram_tester;
+  messages::DismissReason dismiss_reason =
+      messages::DismissReason::PRIMARY_ACTION;
+  AutofillMessageModel* message = CreateAndShowResurrectChurnedUsersMessage();
   std::string_view type_as_string = message->GetTypeAsString();
 
   test_api(controller()).OnDismissed(message, dismiss_reason);

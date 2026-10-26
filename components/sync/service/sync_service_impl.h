@@ -103,6 +103,7 @@ class SyncServiceImpl : public SyncService,
     version_info::Channel channel = version_info::Channel::UNKNOWN;
     std::string debug_identifier;
     raw_ptr<os_crypt_async::OSCryptAsync> os_crypt_async = nullptr;
+    base::TimeDelta account_managed_status_finder_timeout = base::Seconds(5);
   };
 
   explicit SyncServiceImpl(InitParams init_params);
@@ -143,7 +144,9 @@ class SyncServiceImpl : public SyncService,
   void TriggerRefresh(TriggerRefreshSource source,
                       const DataTypeSet& types) override;
   void DataTypePreconditionChanged(DataType type) override;
+#if BUILDFLAG(IS_ANDROID)
   void SetInvalidationsForSessionsEnabled(bool enabled) override;
+#endif  // BUILDFLAG(IS_ANDROID)
   void SendExplicitPassphraseToPlatformClient() override;
   void AddObserver(SyncServiceObserver* observer) override;
   void RemoveObserver(SyncServiceObserver* observer) override;
@@ -157,6 +160,7 @@ class SyncServiceImpl : public SyncService,
       base::RepeatingCallback<void(const TypeEntitiesCount&)> callback)
       const override;
   const GURL& GetSyncServiceUrlForDebugging() const override;
+  base::FilePath GetLocalSyncBackendFolderForDebugging() const override;
   std::string GetUnrecoverableErrorMessageForDebugging() const override;
   base::Location GetUnrecoverableErrorLocationForDebugging() const override;
   void AddProtocolEventObserver(ProtocolEventObserver* observer) override;
@@ -164,6 +168,8 @@ class SyncServiceImpl : public SyncService,
   void GetAllNodesForDebugging(
       base::OnceCallback<void(base::ListValue)> callback) override;
   DataTypeDownloadStatus GetDownloadStatusFor(DataType type) const override;
+  base::flat_set<std::string> GetCurrentDeviceCacheGuidsForAllGaiaIds()
+      const override;
   void GetTypesWithUnsyncedData(
       DataTypeSet requested_types,
       base::OnceCallback<void(absl::flat_hash_map<DataType, size_t>)> callback)
@@ -193,6 +199,8 @@ class SyncServiceImpl : public SyncService,
   void OnBackedOffTypesChanged() override;
   void OnInvalidationStatusChanged() override;
   void OnNewInvalidatedDataTypes() override;
+  void FetchAccessToken(
+      base::OnceCallback<void(signin::AccessTokenInfo)> callback) override;
 
   // DataTypeManagerObserver implementation.
   void OnConfigureDone(const DataTypeManager::ConfigureResult& result) override;
@@ -241,7 +249,7 @@ class SyncServiceImpl : public SyncService,
   std::unique_ptr<DeviceStatisticsRequest> CreateDeviceStatisticsRequest(
       const CoreAccountInfo&,
       const GURL&) override;
-  std::vector<std::string> GetCurrentDeviceCacheGuidsForDeviceStatistics()
+  base::flat_set<std::string> GetCurrentDeviceCacheGuidsForDeviceStatistics()
       override;
 
   // Similar to OnAccountsInCookieUpdated() but with a callback that will be
@@ -377,9 +385,8 @@ class SyncServiceImpl : public SyncService,
   void TryStart();
 
   // The actual synchronous implementation of TryStart().
-  void TryStartImpl(
-      base::TimeTicks try_start_time,
-      std::vector<scoped_refptr<os_crypt_async::Encryptor>> encryptors);
+  void TryStartImpl(base::TimeTicks try_start_time,
+                    scoped_refptr<os_crypt_async::Encryptor> encryptor);
 
   // Whether sync has been authenticated with an account ID.
   bool IsSignedIn() const;
@@ -509,6 +516,8 @@ class SyncServiceImpl : public SyncService,
   // Manages the start and stop of the data types.
   std::unique_ptr<DataTypeManager> data_type_manager_;
 
+  bool is_shutting_down_ = false;
+
   // Note: This is an Optional so that we can control its destruction - in
   // particular, to trigger the "check_empty" test in Shutdown().
   // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
@@ -540,10 +549,12 @@ class SyncServiceImpl : public SyncService,
   // related to trusted vault passphrase.
   bool trusted_vault_auto_upgrade_synthetic_field_trial_registered_ = false;
 
+#if BUILDFLAG(IS_ANDROID)
   // Whether we want to receive invalidations for the SESSIONS data type. This
-  // is typically false on Android (to save network traffic), but true on all
-  // other platforms.
-  bool sessions_invalidations_enabled_ = !BUILDFLAG(IS_ANDROID);
+  // is false by default on Android (to save network traffic) when
+  // kAlwaysRegisterSessionsInvalidationsAndroid is disabled.
+  bool sessions_invalidations_enabled_ = false;
+#endif  // BUILDFLAG(IS_ANDROID)
 
   // Set if/when Initialize() schedules a deferred task to start the engine.
   // Cleared on the first start attempt, regardless of success and who triggered

@@ -4,16 +4,14 @@
 
 import("//extensions/buildflags/buildflags.gni")
 
-assert(enable_extensions,
-       "Cannot depend on extensions because enable_extensions=false.")
+assert(enable_platform_apps,
+       "Cannot depend on platform apps because enable_platform_apps=false.")
 
 source_set("app_window") {
   sources = [
     "app_window_api.cc",
     "app_window_api.h",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   public_deps = [ "//extensions/browser:browser_sources" ]
 

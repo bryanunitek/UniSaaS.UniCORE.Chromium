@@ -38,6 +38,7 @@
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_names.h"
 #include "content/public/test/browser_task_environment.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -77,7 +78,10 @@ class UserSessionActivityReporterTest : public ::testing::Test {
         TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
         TestingBrowserProcess::GetGlobal()
             ->platform_part()
-            ->browser_policy_connector_ash());
+            ->browser_policy_connector_ash(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->component_manager_ash());
   }
 
   void TearDown() override {

@@ -6,6 +6,7 @@
 
 #include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -54,7 +55,7 @@ void LayoutTextControlInnerEditor::AddChild(LayoutObject* new_child,
       last_anonymous->AddChild(new_child);
       return;
     }
-    auto* anonymous = LayoutBlockFlow::CreateAnonymous(&GetDocument(), Style());
+    auto* anonymous = LayoutBlockFlow::CreateAnonymous(GetDocument(), Style());
     LayoutBlockFlow::AddChild(anonymous);
     anonymous->AddChild(new_child);
     return;
@@ -74,7 +75,7 @@ void LayoutTextControlInnerEditor::AddChild(LayoutObject* new_child,
         return;
       }
     }
-    auto* anonymous = LayoutBlockFlow::CreateAnonymous(&GetDocument(), Style());
+    auto* anonymous = LayoutBlockFlow::CreateAnonymous(GetDocument(), Style());
     LayoutBlockFlow::AddChild(anonymous, before_child);
     anonymous->AddChild(new_child);
     return;
@@ -84,20 +85,48 @@ void LayoutTextControlInnerEditor::AddChild(LayoutObject* new_child,
     before_parent->AddChild(new_child, before_child);
     return;
   }
-  auto* anonymous = LayoutBlockFlow::CreateAnonymous(&GetDocument(), Style());
+  auto* anonymous = LayoutBlockFlow::CreateAnonymous(GetDocument(), Style());
   LayoutBlockFlow::AddChild(anonymous, before_parent);
   before_parent->MoveChildrenTo(anonymous, before_parent->FirstChild(),
                                 before_child, /* full_remove_insert */ true);
   anonymous->AddChild(new_child);
 }
 
+const LayoutObject* LayoutTextControlInnerEditor::ScrollerForTextOverflow()
+    const {
+  NOT_DESTROYED();
+  if (!is_multiline_ ||
+      !RuntimeEnabledFeatures::TextOverflowInTextareaEnabled()) {
+    return this;
+  }
+  // Unlike an <input>, a textarea scrolls on its host rather than on the inner
+  // editor.
+  const LayoutObject* host = Parent();
+  CHECK(host && host->IsTextArea());
+  return host;
+}
+
+void LayoutTextControlInnerEditor::UpdateAnonymousChildStyle(
+    const LayoutObject*,
+    ComputedStyleBuilder& child_style_builder) const {
+  NOT_DESTROYED();
+  if (is_multiline_ &&
+      RuntimeEnabledFeatures::TextOverflowInTextareaEnabled()) {
+    // The anonymous blocks are the textarea's lines. text-overflow is not
+    // inherited, so hand it to them explicitly.
+    child_style_builder.SetTextOverflow(Style().TextOverflow());
+  }
+}
+
 void LayoutTextControlInnerEditor::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
-  LayoutBlockFlow::StyleDidChange(diff, old_style, style_change_context);
+  LayoutBlockFlow::StyleDidChange(diff, old_style, new_style,
+                                  style_change_context);
 
-  if (old_style && old_style->UsedUserModify() != StyleRef().UsedUserModify() &&
+  if (old_style && old_style->UsedUserModify() != new_style.UsedUserModify() &&
       !FirstChild()) {
     // If this has no children and the UserModify state is changed from
     // non-editable to editable, the box height was zero and this box should be

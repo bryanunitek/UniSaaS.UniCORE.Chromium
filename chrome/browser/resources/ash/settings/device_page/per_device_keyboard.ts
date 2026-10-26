@@ -28,7 +28,7 @@ import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import type {PrefsState} from '../common/types.js';
 import type {KeyboardPolicies} from '../mojom-webui/input_device_settings.mojom-webui.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router, routes} from '../router.js';
 
 import type {DevicePageBrowserProxy} from './device_page_browser_proxy.js';
@@ -93,7 +93,7 @@ export class SettingsPerDeviceKeyboardElement extends
     };
   }
 
-  prefs: PrefsState;
+  declare prefs: PrefsState;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -101,10 +101,10 @@ export class SettingsPerDeviceKeyboardElement extends
     Setting.kKeyboardShortcuts,
   ]);
 
-  protected keyboards: Keyboard[];
-  protected keyboardPolicies: KeyboardPolicies;
-  private autoRepeatDelays: number[];
-  private autoRepeatIntervals: number[];
+  declare protected keyboards: Keyboard[];
+  declare protected keyboardPolicies: KeyboardPolicies;
+  declare private autoRepeatDelays: number[];
+  declare private autoRepeatIntervals: number[];
   private browserProxy: DevicePageBrowserProxy =
       DevicePageBrowserProxyImpl.getInstance();
 

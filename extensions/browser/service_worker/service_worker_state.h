@@ -41,9 +41,26 @@ class ServiceWorkerState
     // Worker thread has been initialized, but has not executed all its
     // JavaScript and registered all its listeners.
     kInitialized,
-    // Worker thread has started, has executed all its JavaScript, registered
-    // all listeners, and it's running.
+    // Worker thread has started and completed a synchronous first pass of
+    // its JavaScript. In classic listener registration, all listeners must
+    // be registered at this point; with async listener registration,
+    // listeners can continue to be registered until calling
+    // `runtime.markListenerRegistrationComplete()`.
     kActive,
+  };
+
+  // Registration state of the worker in the //content layer. The worker must be
+  // registered to be started.
+  enum class RegistrationState {
+    // The worker isn't registered, and isn't being registered, e.g. because
+    // its registration failed.
+    kNotRegistered,
+    // The worker is being registered, including while a failed registration
+    // waits to be retried.
+    kRegistering,
+    // The worker is registered. A registration stored in a previous session
+    // counts as registered while the task queue verifies that it still exists.
+    kRegistered,
   };
 
   ServiceWorkerState(content::ServiceWorkerContext* service_worker_context,
@@ -79,7 +96,13 @@ class ServiceWorkerState
 
   void SetBrowserState(BrowserState browser_state);
   void SetRendererState(RendererState renderer_state);
+  void SetRegistrationState(RegistrationState registration_state);
   void Reset();
+
+  // Resets the state after service worker storage is wiped. Unlike `Reset()`,
+  // this also drops any in-flight start request, and marks the worker as not
+  // registered.
+  void ResetForStorageWipe();
 
   // Returns true if a request to start the worker has been made but the worker
   // is not ready yet.
@@ -87,6 +110,9 @@ class ServiceWorkerState
 
   // Returns true if the worker is running and is ready to execute tasks.
   bool IsReady() const;
+
+  // Returns true if the worker is registered, which is required to start it.
+  bool IsRegistered() const;
 
   // Starts the extension service worker. This method should only be called
   // if the service worker hasn't started yet. If this method is called while
@@ -101,8 +127,11 @@ class ServiceWorkerState
       const WorkerId& worker_id);
 
   // Called when a service worker renderer process is running, has executed its
-  // global JavaScript scope, and all its global event listeners have been
-  // registered with the //extensions layer. It is considered the
+  // global JavaScript scope, and its global event listeners have been
+  // registered with the //extensions layer. In classic listener registration,
+  // all listeners must be registered at this point; with async listener
+  // registration, listeners can continue to be registered until calling
+  // `runtime.markListenerRegistrationComplete()`. It is considered the
   // "renderer-side" signal that the worker is ready.
   // NOTE: this can be called before or after `DidStartWorkerForScope`.
   void RendererDidStartServiceWorkerContext(
@@ -134,6 +163,7 @@ class ServiceWorkerState
 
   BrowserState browser_state() const { return browser_state_; }
   RendererState renderer_state() const { return renderer_state_; }
+  RegistrationState registration_state() const { return registration_state_; }
   const std::optional<WorkerId>& worker_id() const { return worker_id_; }
 
   static base::AutoReset<bool> AllowMultipleWorkersPerExtensionForTesting();
@@ -168,6 +198,9 @@ class ServiceWorkerState
 
   BrowserState browser_state_ = BrowserState::kNotActive;
   RendererState renderer_state_ = RendererState::kNotActive;
+
+  // Not cleared by `Reset()`, since stopping the worker doesn't unregister it.
+  RegistrationState registration_state_ = RegistrationState::kNotRegistered;
 
   // Whether the service worker is in the process of starting.
   bool worker_starting_ = false;

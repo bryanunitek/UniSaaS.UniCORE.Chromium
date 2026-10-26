@@ -17,9 +17,9 @@
 #include "ui/views/controls/menu/menu_delegate.h"
 
 class BookmarkBarView;
+class BookmarkBarMenuDelegate;
 class BookmarkMenuControllerObserver;
-class BookmarkMenuDelegate;
-class Browser;
+class BrowserWindowInterface;
 
 namespace ui {
 class OSExchangeData;
@@ -41,7 +41,7 @@ class BookmarkMenuController : public BookmarkMergedSurfaceServiceObserver,
  public:
   // Creates a BookmarkMenuController showing the children of `folder` starting
   // at `start_child_index`.
-  BookmarkMenuController(Browser* browser,
+  BookmarkMenuController(BrowserWindowInterface* browser,
                          views::Widget* parent,
                          const BookmarkParentFolder& folder,
                          size_t start_child_index,
@@ -139,7 +139,7 @@ class BookmarkMenuController : public BookmarkMergedSurfaceServiceObserver,
 
   std::unique_ptr<views::MenuRunner> menu_runner_;
 
-  std::unique_ptr<BookmarkMenuDelegate> menu_delegate_;
+  std::unique_ptr<BookmarkBarMenuDelegate> menu_delegate_;
 
   // The folder we're showing the contents of.
   const BookmarkParentFolder folder_;

@@ -85,6 +85,21 @@ public class JourneyLogger {
         JourneyLoggerJni.get().setPayClicked(mJourneyLoggerAndroid);
     }
 
+    /** Records that PaymentRequest.canMakePayment() was called. */
+    public void setCanMakePaymentCalled() {
+        JourneyLoggerJni.get().setCanMakePaymentCalled(mJourneyLoggerAndroid);
+    }
+
+    /** Records that PaymentRequest.hasEnrolledInstrument() was called. */
+    public void setHasEnrolledInstrumentCalled() {
+        JourneyLoggerJni.get().setHasEnrolledInstrumentCalled(mJourneyLoggerAndroid);
+    }
+
+    /** Records that the PaymentRequest was initiated in a cross-site iframe. */
+    public void setInitiatedInCrossSiteIframe() {
+        JourneyLoggerJni.get().setInitiatedInCrossSiteIframe(mJourneyLoggerAndroid);
+    }
+
     /**
      * Records the method that has been selected and invoked.
      *
@@ -149,8 +164,8 @@ public class JourneyLogger {
      *
      * @param reason An int indicating why the payment request was aborted.
      */
-    public void setAborted(int reason) {
-        assert reason < AbortReason.MAX;
+    public void setAborted(@AbortReason int reason) {
+        assert reason >= 0 && reason < AbortReason.MAX;
 
         // The abort reasons on Android cascade into each other, so only the first one should be
         // recorded.
@@ -160,13 +175,17 @@ public class JourneyLogger {
         }
     }
 
-    /** Records that the Payment Request was not shown to the user. */
-    public void setNotShown() {
-        assert !mHasRecorded;
+    /**
+     * Records that the Payment Request was not shown to the user.
+     *
+     * @param reason The reason the PaymentRequest was not shown.
+     */
+    public void setNotShown(@NotShownReason int reason) {
+        assert reason >= 0 && reason < NotShownReason.MAX;
 
         if (!mHasRecorded) {
             mHasRecorded = true;
-            JourneyLoggerJni.get().setNotShown(mJourneyLoggerAndroid);
+            JourneyLoggerJni.get().setNotShown(mJourneyLoggerAndroid, reason);
         }
     }
 
@@ -210,6 +229,12 @@ public class JourneyLogger {
 
         void setPayClicked(long nativeJourneyLoggerAndroid);
 
+        void setCanMakePaymentCalled(long nativeJourneyLoggerAndroid);
+
+        void setHasEnrolledInstrumentCalled(long nativeJourneyLoggerAndroid);
+
+        void setInitiatedInCrossSiteIframe(long nativeJourneyLoggerAndroid);
+
         void setSelectedMethod(long nativeJourneyLoggerAndroid, int paymentMethodCategory);
 
         void setRequestedInformation(
@@ -223,9 +248,9 @@ public class JourneyLogger {
 
         void setCompleted(long nativeJourneyLoggerAndroid);
 
-        void setAborted(long nativeJourneyLoggerAndroid, int reason);
+        void setAborted(long nativeJourneyLoggerAndroid, @AbortReason int reason);
 
-        void setNotShown(long nativeJourneyLoggerAndroid);
+        void setNotShown(long nativeJourneyLoggerAndroid, @NotShownReason int reason);
 
         void recordCheckoutStep(long nativeJourneyLoggerAndroid, int step);
 

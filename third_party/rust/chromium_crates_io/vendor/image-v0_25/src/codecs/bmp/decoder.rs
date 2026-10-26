@@ -1278,8 +1278,25 @@ impl<R: BufRead + Seek> BmpDecoder<R> {
 
     /// Read ICC profile data from the file.
     fn read_icc_profile(&mut self, icc: &ParsedIccProfile) -> ImageResult<()> {
+        let profile_end = icc
+            .profile_offset
+            .checked_add(u64::from(icc.profile_size))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "BMP ICC profile range overflow")
+            })?;
+        let stream_len = self.reader.seek(SeekFrom::End(0))?;
+        if profile_end > stream_len {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "BMP ICC profile extends beyond file",
+            )
+            .into());
+        }
+
         self.reader.seek(SeekFrom::Start(icc.profile_offset))?;
-        let mut profile_data = vec![0u8; icc.profile_size as usize];
+        let profile_size = icc.profile_size as usize;
+        let mut profile_data = vec_try_with_capacity(profile_size)?;
+        profile_data.resize(profile_size, 0);
         self.reader.read_exact(&mut profile_data)?;
         self.icc_profile = Some(profile_data);
         Ok(())
@@ -1934,30 +1951,43 @@ impl<R: BufRead + Seek> BmpDecoder<R> {
                                     pixel_iter.for_each(|p| p.fill(0));
 
                                     for _ in 1..y_delta {
-                                        let row =
-                                            row_iter.next().ok_or(DecoderError::CorruptRleData)?;
-                                        row.fill(0);
+                                        if let Some(row) = row_iter.next() {
+                                            row.fill(0);
+                                        } else if self.spec_strictness == BmpSpec::Strict {
+                                            return Err(DecoderError::CorruptRleData.into());
+                                        } else {
+                                            return Ok(());
+                                        }
                                     }
 
                                     current_row += y_delta as u32;
-
-                                    pixel_iter = row_iter
-                                        .next()
-                                        .ok_or(DecoderError::CorruptRleData)?
-                                        .chunks_exact_mut(num_channels);
+                                    if let Some(next_row) = row_iter.next() {
+                                        pixel_iter = next_row.chunks_exact_mut(num_channels);
+                                    } else if self.spec_strictness == BmpSpec::Strict {
+                                        return Err(DecoderError::CorruptRleData.into());
+                                    } else {
+                                        return Ok(());
+                                    }
 
                                     for _ in 0..x {
-                                        pixel_iter
-                                            .next()
-                                            .ok_or(DecoderError::CorruptRleData)?
-                                            .fill(0);
+                                        if let Some(pixel) = pixel_iter.next() {
+                                            pixel.fill(0);
+                                        } else if self.spec_strictness == BmpSpec::Strict {
+                                            return Err(DecoderError::CorruptRleData.into());
+                                        } else {
+                                            break;
+                                        }
                                     }
                                 }
 
                                 for _ in 0..x_delta {
-                                    let pixel =
-                                        pixel_iter.next().ok_or(DecoderError::CorruptRleData)?;
-                                    pixel.fill(0);
+                                    if let Some(pixel) = pixel_iter.next() {
+                                        pixel.fill(0);
+                                    } else if self.spec_strictness == BmpSpec::Strict {
+                                        return Err(DecoderError::CorruptRleData.into());
+                                    } else {
+                                        break;
+                                    }
                                 }
                                 x += x_delta as u32;
                             }
@@ -1969,12 +1999,14 @@ impl<R: BufRead + Seek> BmpDecoder<R> {
                                         let mut length = count;
                                         length += length & 1;
                                         rle_reader.read_exact(&mut rle_indices_buffer[..length])?;
-                                        if !set_8bit_pixel_run(
+                                        // Silently truncate if run overflows the row.
+                                        let success = set_8bit_pixel_run(
                                             &mut pixel_iter,
                                             p.unwrap(),
                                             rle_indices_buffer[..length].iter(),
                                             count,
-                                        ) {
+                                        );
+                                        if self.spec_strictness == BmpSpec::Strict && !success {
                                             return Err(DecoderError::CorruptRleData.into());
                                         }
                                     }
@@ -1982,12 +2014,14 @@ impl<R: BufRead + Seek> BmpDecoder<R> {
                                         let mut length = count.div_ceil(2);
                                         length += length & 1;
                                         rle_reader.read_exact(&mut rle_indices_buffer[..length])?;
-                                        if !set_4bit_pixel_run(
+                                        // Silently truncate if run overflows the row.
+                                        let success = set_4bit_pixel_run(
                                             &mut pixel_iter,
                                             p.unwrap(),
                                             rle_indices_buffer[..length].iter(),
                                             count,
-                                        ) {
+                                        );
+                                        if self.spec_strictness == BmpSpec::Strict && !success {
                                             return Err(DecoderError::CorruptRleData.into());
                                         }
                                     }
@@ -2030,12 +2064,15 @@ impl<R: BufRead + Seek> BmpDecoder<R> {
                             }
                             ImageType::RLE4 => {
                                 let palette_index = rle_reader.read_byte()?;
-                                if !set_4bit_pixel_run(
+                                // Silently truncate if run overflows the row
+                                // (matches RLE8 encoded run behavior).
+                                let success = set_4bit_pixel_run(
                                     &mut pixel_iter,
                                     p.unwrap(),
                                     repeat(&palette_index),
                                     n_pixels,
-                                ) {
+                                );
+                                if self.spec_strictness == BmpSpec::Strict && !success {
                                     return Err(DecoderError::CorruptRleData.into());
                                 }
                             }
@@ -2332,6 +2369,31 @@ mod test {
             "rgb24prof2.bmp",
             moxcms::DataColorSpace::Rgb,
             moxcms::ProfileClass::DisplayDevice,
+        );
+    }
+
+    #[test]
+    fn bmp_v5_rejects_truncated_icc_profile_before_allocation() {
+        let mut bmp = vec![0; 138];
+        bmp[0..2].copy_from_slice(b"BM");
+        bmp[2..6].copy_from_slice(&138u32.to_le_bytes());
+        bmp[10..14].copy_from_slice(&138u32.to_le_bytes());
+        bmp[14..18].copy_from_slice(&124u32.to_le_bytes());
+        bmp[18..22].copy_from_slice(&1i32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&1i32.to_le_bytes());
+        bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+        bmp[28..30].copy_from_slice(&32u16.to_le_bytes());
+        bmp[70..74].copy_from_slice(&u32::from_be_bytes(*b"MBED").to_le_bytes());
+        bmp[126..130].copy_from_slice(&0x90u32.to_le_bytes());
+        bmp[130..134].copy_from_slice(&u32::MAX.to_le_bytes());
+
+        let err = match BmpDecoder::new(Cursor::new(bmp)) {
+            Ok(_) => panic!("truncated ICC profile should fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            matches!(err, ImageError::IoError(err) if err.kind() == io::ErrorKind::UnexpectedEof)
         );
     }
 

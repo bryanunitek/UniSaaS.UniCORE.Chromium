@@ -2,15 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {BrowserProxy, NodeStore, SelectionController} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import type {NodeStore, SelectionController} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
 
-import {FakeReadingMode} from './fake_reading_mode.js';
-import {TestColorUpdaterBrowserProxy} from './test_color_updater_browser_proxy.js';
+import {setupTestEnvironment} from './common.js';
+import type {TestContentBrowserProxy} from './test_content_browser_proxy.js';
 
 suite('SelectionController', () => {
   let selectionController: SelectionController;
   let nodeStore: NodeStore;
+  let contentBrowserProxy: TestContentBrowserProxy;
 
   const parentIds = [100, 200, 300, 400];
   const textNodeIds = [3, 5, 7, 9];
@@ -39,15 +40,10 @@ suite('SelectionController', () => {
   }
 
   setup(() => {
-    // Clearing the DOM should always be done first.
-    document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    BrowserProxy.setInstance(new TestColorUpdaterBrowserProxy());
-    const readingMode = new FakeReadingMode();
-    chrome.readingMode = readingMode as unknown as typeof chrome.readingMode;
-    nodeStore = new NodeStore();
-    NodeStore.setInstance(nodeStore);
-    selectionController = new SelectionController();
-    SelectionController.setInstance(selectionController);
+    const result = setupTestEnvironment();
+    contentBrowserProxy = result.contentBrowserProxy;
+    nodeStore = result.nodeStore;
+    selectionController = result.selectionController;
   });
 
   suite('onSelectionChange', () => {
@@ -56,6 +52,15 @@ suite('SelectionController', () => {
     let actualFocusId: number;
     let actualAnchorOffset: number;
     let actualFocusOffset: number;
+
+    async function onSelectionChanged(): Promise<void> {
+      const [anchorId, anchorOffset, focusId, focusOffset] =
+          await contentBrowserProxy.whenCalled('onSelectionChange');
+      actualAnchorId = anchorId;
+      actualAnchorOffset = anchorOffset;
+      actualFocusId = focusId;
+      actualFocusOffset = focusOffset;
+    }
 
     function highlightEverything() {
       for (let i = 0; i < textNodes.length; i++) {
@@ -102,15 +107,6 @@ suite('SelectionController', () => {
       actualFocusId = -1;
       actualAnchorOffset = -1;
       actualFocusOffset = -1;
-
-      // Capture what's sent off to the main panel so we can verify
-      chrome.readingMode.onSelectionChange =
-          (anchorId, anchorOffset, focusId, focusOffset) => {
-            actualAnchorId = anchorId;
-            actualAnchorOffset = anchorOffset;
-            actualFocusId = focusId;
-            actualFocusOffset = focusOffset;
-          };
     });
 
     test('updates hasSelection', () => {
@@ -128,12 +124,10 @@ suite('SelectionController', () => {
     });
 
     test('current selection start with no selection returns null', () => {
-      chrome.readingMode.isImmersiveEnabled = true;
       assertFalse(!!selectionController.getCurrentSelectionStart());
     });
 
     test('current selection start with forward selection in one node', () => {
-      chrome.readingMode.isImmersiveEnabled = true;
       const expectedAnchorOffset = 2;
       const expectedFocusOffset = 10;
       const node = getNodeAt(1);
@@ -148,7 +142,6 @@ suite('SelectionController', () => {
     });
 
     test('current selection start with backward selection in one node', () => {
-      chrome.readingMode.isImmersiveEnabled = true;
       const expectedAnchorOffset = 10;
       const expectedFocusOffset = 2;
       const node = getNodeAt(1);
@@ -163,7 +156,6 @@ suite('SelectionController', () => {
     });
 
     test('current selection start with forward selection across nodes', () => {
-      chrome.readingMode.isImmersiveEnabled = true;
       const expectedAnchorOffset = 10;
       const expectedFocusOffset = 2;
       const node1 = getNodeAt(0);
@@ -180,7 +172,6 @@ suite('SelectionController', () => {
     });
 
     test('current selection start with backward selection across nodes', () => {
-      chrome.readingMode.isImmersiveEnabled = true;
       const expectedAnchorOffset = 10;
       const expectedFocusOffset = 2;
       const node1 = getNodeAt(0);
@@ -196,7 +187,7 @@ suite('SelectionController', () => {
       assertEquals(expectedAnchorOffset, selectionStart.offset);
     });
 
-    test('sends node when node exists as is', () => {
+    test('sends node when node exists as is', async () => {
       const expectedAnchorOffset = 2;
       const expectedFocusOffset = 10;
       const node = getNodeAt(1);
@@ -204,6 +195,7 @@ suite('SelectionController', () => {
 
       selectNodes(node, expectedAnchorOffset, node, expectedFocusOffset);
 
+      await onSelectionChanged();
       assertEquals(node.id, actualAnchorId);
       assertEquals(node.id, actualFocusId);
       assertEquals(expectedAnchorOffset, actualAnchorOffset);
@@ -219,13 +211,15 @@ suite('SelectionController', () => {
 
           selectNodes(node, anchorOffset, node, focusOffset);
 
+          assertEquals(
+              0, contentBrowserProxy.getCallCount('onSelectionChange'));
           assertEquals(-1, actualAnchorId);
           assertEquals(-1, actualFocusId);
           assertEquals(-1, actualAnchorOffset);
           assertEquals(-1, actualFocusOffset);
         });
 
-    test('one node selected with ancestor and no ancestor offset', () => {
+    test('one node selected with ancestor and no ancestor offset', async () => {
       highlightEverything();
       const expectedAnchorOffset = 2;
       const expectedFocusOffset = 7;
@@ -233,28 +227,32 @@ suite('SelectionController', () => {
 
       selectNodes(node, expectedAnchorOffset, node, expectedFocusOffset);
 
+      await onSelectionChanged();
       assertEquals(parentIds[0], actualAnchorId);
       assertEquals(parentIds[0], actualFocusId);
       assertEquals(expectedAnchorOffset, actualAnchorOffset);
       assertEquals(expectedFocusOffset, actualFocusOffset);
     });
 
-    test('multiple nodes selected with ancestor and no ancestor offset', () => {
-      highlightEverything();
-      const expectedAnchorOffset = 1;
-      const expectedFocusOffset = 7;
-      const node1 = getNodeAt(0);
-      const node2 = getNodeAt(1);
+    test(
+        'multiple nodes selected with ancestor and no ancestor offset',
+        async () => {
+          highlightEverything();
+          const expectedAnchorOffset = 1;
+          const expectedFocusOffset = 7;
+          const node1 = getNodeAt(0);
+          const node2 = getNodeAt(1);
 
-      selectNodes(node1, expectedAnchorOffset, node2, expectedFocusOffset);
+          selectNodes(node1, expectedAnchorOffset, node2, expectedFocusOffset);
 
-      assertEquals(parentIds[0], actualAnchorId);
-      assertEquals(parentIds[1], actualFocusId);
-      assertEquals(expectedAnchorOffset, actualAnchorOffset);
-      assertEquals(expectedFocusOffset, actualFocusOffset);
-    });
+          await onSelectionChanged();
+          assertEquals(parentIds[0], actualAnchorId);
+          assertEquals(parentIds[1], actualFocusId);
+          assertEquals(expectedAnchorOffset, actualAnchorOffset);
+          assertEquals(expectedFocusOffset, actualFocusOffset);
+        });
 
-    test('one node selected with anchor offset in ancestor', () => {
+    test('one node selected with anchor offset in ancestor', async () => {
       const highlightStart = 15;
       highlightAtOffset(0, highlightStart);
       const node = getNodeAt(0);
@@ -263,13 +261,14 @@ suite('SelectionController', () => {
 
       selectNodes(node, anchorOffset, node, focusOffset);
 
+      await onSelectionChanged();
       assertEquals(parentIds[0], actualAnchorId);
       assertEquals(parentIds[0], actualFocusId);
       assertEquals(highlightStart + anchorOffset, actualAnchorOffset);
       assertEquals(highlightStart + focusOffset, actualFocusOffset);
     });
 
-    test('multiple nodes selected with anchor offset in ancestor', () => {
+    test('multiple nodes selected with anchor offset in ancestor', async () => {
       const highlightStart = 15;
       highlightAtOffset(0, highlightStart);
       highlightAtOffset(1, 0);
@@ -280,13 +279,14 @@ suite('SelectionController', () => {
 
       selectNodes(anchorNode, anchorOffset, focusNode, focusOffset);
 
+      await onSelectionChanged();
       assertEquals(parentIds[0], actualAnchorId);
       assertEquals(parentIds[1], actualFocusId);
       assertEquals(highlightStart + anchorOffset, actualAnchorOffset);
       assertEquals(focusOffset, actualFocusOffset);
     });
 
-    test('multiple nodes selected with focus offset in ancestor', () => {
+    test('multiple nodes selected with focus offset in ancestor', async () => {
       const highlightStart = 15;
       highlightAtOffset(0, 0);
       highlightAtOffset(1, highlightStart);
@@ -297,13 +297,14 @@ suite('SelectionController', () => {
 
       selectNodes(anchorNode, anchorOffset, focusNode, focusOffset);
 
+      await onSelectionChanged();
       assertEquals(parentIds[0], actualAnchorId);
       assertEquals(parentIds[1], actualFocusId);
       assertEquals(anchorOffset, actualAnchorOffset);
       assertEquals(highlightStart + focusOffset, actualFocusOffset);
     });
 
-    test('multiple nodes selected with anchor ancestor only', () => {
+    test('multiple nodes selected with anchor ancestor only', async () => {
       highlightAtOffset(0, 0);
       const anchorNode = getNodeAt(0);
       const focusNode = getNodeAt(1);
@@ -313,13 +314,14 @@ suite('SelectionController', () => {
 
       selectNodes(anchorNode, anchorOffset, focusNode, focusOffset);
 
+      await onSelectionChanged();
       assertEquals(parentIds[0], actualAnchorId);
       assertEquals(focusNode.id, actualFocusId);
       assertEquals(anchorOffset, actualAnchorOffset);
       assertEquals(focusOffset, actualFocusOffset);
     });
 
-    test('multiple nodes selected with focus ancestor only', () => {
+    test('multiple nodes selected with focus ancestor only', async () => {
       highlightAtOffset(1, 0);
       const anchorNode = getNodeAt(0);
       const focusNode = getNodeAt(1);
@@ -329,32 +331,36 @@ suite('SelectionController', () => {
 
       selectNodes(anchorNode, anchorOffset, focusNode, focusOffset);
 
+      await onSelectionChanged();
       assertEquals(anchorNode.id, actualAnchorId);
       assertEquals(parentIds[1], actualFocusId);
       assertEquals(anchorOffset, actualAnchorOffset);
       assertEquals(focusOffset, actualFocusOffset);
     });
 
-    test('selection with both anchor and focus offset in ancestors', () => {
-      const anchorHighlightStart = 10;
-      const focusHighlightStart = 20;
-      highlightAtOffset(0, anchorHighlightStart);
-      highlightAtOffset(1, focusHighlightStart);
+    test(
+        'selection with both anchor and focus offset in ancestors',
+        async () => {
+          const anchorHighlightStart = 10;
+          const focusHighlightStart = 20;
+          highlightAtOffset(0, anchorHighlightStart);
+          highlightAtOffset(1, focusHighlightStart);
 
-      const anchorNode = getNodeAt(0);
-      const focusNode = getNodeAt(1);
-      const anchorOffset = 5;
-      const focusOffset = 15;
+          const anchorNode = getNodeAt(0);
+          const focusNode = getNodeAt(1);
+          const anchorOffset = 5;
+          const focusOffset = 15;
 
-      selectNodes(anchorNode, anchorOffset, focusNode, focusOffset);
+          selectNodes(anchorNode, anchorOffset, focusNode, focusOffset);
 
-      assertEquals(parentIds[0], actualAnchorId);
-      assertEquals(parentIds[1], actualFocusId);
-      assertEquals(anchorHighlightStart + anchorOffset, actualAnchorOffset);
-      assertEquals(focusHighlightStart + focusOffset, actualFocusOffset);
-    });
+          await onSelectionChanged();
+          assertEquals(parentIds[0], actualAnchorId);
+          assertEquals(parentIds[1], actualFocusId);
+          assertEquals(anchorHighlightStart + anchorOffset, actualAnchorOffset);
+          assertEquals(focusHighlightStart + focusOffset, actualFocusOffset);
+        });
 
-    test('selection starts at offset 0 with an ancestor offset', () => {
+    test('selection starts at offset 0 with an ancestor offset', async () => {
       const highlightStart = 15;
       highlightAtOffset(0, highlightStart);
       const node = getNodeAt(0);
@@ -363,13 +369,14 @@ suite('SelectionController', () => {
 
       selectNodes(node, anchorOffset, node, focusOffset);
 
+      await onSelectionChanged();
       assertEquals(parentIds[0], actualAnchorId);
       assertEquals(parentIds[0], actualFocusId);
       assertEquals(highlightStart + anchorOffset, actualAnchorOffset);
       assertEquals(highlightStart + focusOffset, actualFocusOffset);
     });
 
-    test('selection with element container maps to text nodes', () => {
+    test('selection with element container maps to text nodes', async () => {
       const node0 = getNodeAt(0);
       const node1 = getNodeAt(1);
       nodeStore.setDomNode(node0.node, node0.id);
@@ -383,6 +390,7 @@ suite('SelectionController', () => {
       selectionController.onSelectionChange(selection);
 
       // It should map to text node 0 fully!
+      await onSelectionChanged();
       assertEquals(node0.id, actualAnchorId);
       assertEquals(node0.id, actualFocusId);
       assertEquals(0, actualAnchorOffset);
@@ -391,7 +399,7 @@ suite('SelectionController', () => {
 
     test(
         'triple click like selection with element container maps to text nodes',
-        () => {
+        async () => {
           // Register all text nodes in nodeStore
           for (let i = 0; i < textNodes.length; i++) {
             const node = getNodeAt(i);
@@ -409,33 +417,31 @@ suite('SelectionController', () => {
           // text node at end!
           const nodeStart = getNodeAt(0);
           const nodeEnd = getNodeAt(3);
+          await onSelectionChanged();
           assertEquals(nodeStart.id, actualAnchorId);
           assertEquals(nodeEnd.id, actualFocusId);
           assertEquals(0, actualAnchorOffset);
           assertEquals(nodeEnd.text.length, actualFocusOffset);
         });
 
-    test('collapsed selection is not shifted and collapses selection', () => {
-      const node = getNodeAt(1);
-      nodeStore.setDomNode(node.node, node.id);
+    test(
+        'collapsed selection is not shifted and collapses selection',
+        async () => {
+          const node = getNodeAt(1);
+          nodeStore.setDomNode(node.node, node.id);
 
-      let collapseCalled = false;
-      chrome.readingMode.onCollapseSelection = () => {
-        collapseCalled = true;
-      };
+          // Set a collapsed selection at the end of node (offset 10)
+          selection.setBaseAndExtent(node.node, 10, node.node, 10);
+          selectionController.onSelectionChange(selection);
 
-      // Set a collapsed selection at the end of node (offset 10)
-      selection.setBaseAndExtent(node.node, 10, node.node, 10);
-      selectionController.onSelectionChange(selection);
-
-      assertTrue(collapseCalled);
-      assertEquals(-1, actualAnchorId);
-      assertEquals(-1, actualFocusId);
-    });
+          await contentBrowserProxy.whenCalled('onCollapseSelection');
+          assertEquals(
+              0, contentBrowserProxy.getCallCount('onSelectionChange'));
+        });
 
     test(
         'backward selection is correctly normalized without shifting past boundaries',
-        () => {
+        async () => {
           // Register text nodes
           for (let i = 0; i < textNodes.length; i++) {
             const node = getNodeAt(i);
@@ -451,13 +457,14 @@ suite('SelectionController', () => {
           // With backward selection, the focus (start) should NOT shift
           // backward to node 0 (title) and the anchor (end) should NOT shift
           // forward to node 2.
+          await onSelectionChanged();
           assertEquals(node.id, actualAnchorId);
           assertEquals(node.id, actualFocusId);
           assertEquals(node.text.length, actualAnchorOffset);
           assertEquals(0, actualFocusOffset);
         });
 
-    test('selection in node with axNodeOffset', () => {
+    test('selection in node with axNodeOffset', async () => {
       const node = getNodeAt(1);
       const axNodeOffset = 10;
       nodeStore.setDomNode(node.node, node.id);
@@ -467,31 +474,108 @@ suite('SelectionController', () => {
       const focusOffset = 5;
       selectNodes(node, anchorOffset, node, focusOffset);
 
+      await onSelectionChanged();
       assertEquals(node.id, actualAnchorId);
       assertEquals(node.id, actualFocusId);
-
       assertEquals(anchorOffset + axNodeOffset, actualAnchorOffset);
       assertEquals(focusOffset + axNodeOffset, actualFocusOffset);
     });
 
-    test('selection in highlighted node with ancestor and axNodeOffset', () => {
-      const axNodeOffset = 20;
-      const highlightStart = 5;
-      highlightAtOffset(0, highlightStart);
+    test(
+        'selection in highlighted node with ancestor and axNodeOffset',
+        async () => {
+          const axNodeOffset = 20;
+          const highlightStart = 5;
+          highlightAtOffset(0, highlightStart);
 
-      const node = getNodeAt(0);  // This is the text node inside the span
-      const parentSpan = node.node.parentElement!;
-      nodeStore.setAxNodeOffset(parentSpan, axNodeOffset);
+          const node = getNodeAt(0);  // This is the text node inside the span
+          const parentSpan = node.node.parentElement!;
+          nodeStore.setAxNodeOffset(parentSpan, axNodeOffset);
 
-      const anchorOffset = 2;
-      const focusOffset = 4;
-      selectNodes(node, anchorOffset, node, focusOffset);
+          const anchorOffset = 2;
+          const focusOffset = 4;
+          selectNodes(node, anchorOffset, node, focusOffset);
 
-      assertEquals(parentIds[0], actualAnchorId);
-      // Expected = user_offset(2) + offset_in_span(5) + span_ax_offset(20) = 27
-      assertEquals(
-          anchorOffset + highlightStart + axNodeOffset, actualAnchorOffset);
-    });
+          await onSelectionChanged();
+          assertEquals(parentIds[0], actualAnchorId);
+          // Expected = user_offset(2) + offset_in_span(5) + span_ax_offset(20)
+          // = 27
+          assertEquals(
+              anchorOffset + highlightStart + axNodeOffset, actualAnchorOffset);
+        });
+
+    test(
+        'shifts focus backward skipping unmapped nodes in readability',
+        async () => {
+          // Recreate clean DOM for scenario where whitespace unmapped nodes
+          // exist.
+          document.body.innerHTML = window.trustedTypes!.emptyHTML;
+          const parent = document.createElement('p');
+          const node0 = document.createTextNode(texts[0]!);
+          const spacer1 = document.createTextNode(' \n  ');
+          const spacer2 = document.createTextNode('   ');
+          const node1 = document.createTextNode(texts[1]!);
+          parent.appendChild(node0);
+          parent.appendChild(spacer1);
+          parent.appendChild(spacer2);
+          parent.appendChild(node1);
+          document.body.appendChild(parent);
+
+          // Register parent, node0 and node1, but NOT the spacers.
+          nodeStore.setDomNode(parent, parentIds[0]!);
+          nodeStore.setDomNode(node0, textNodeIds[0]!);
+          nodeStore.setDomNode(node1, textNodeIds[1]!);
+
+          // Drag from end of node0 to start of node1 (offset 0), which is a
+          // forward drag (isBackward = false).
+          selection.setBaseAndExtent(node0, 5, node1, 0);
+          selectionController.onSelectionChange(selection);
+
+          // The focus node (node1 at offset 0) should be shifted backward
+          // skipping the unmapped spacer1 and spacer2 to the end of node0!
+          await onSelectionChanged();
+          assertEquals(textNodeIds[0], actualAnchorId);
+          assertEquals(textNodeIds[0], actualFocusId);
+          assertEquals(5, actualAnchorOffset);
+          assertEquals(node0.textContent.length, actualFocusOffset);
+        });
+
+    test(
+        'shifts anchor forward skipping unmapped nodes in readability',
+        async () => {
+          // Recreate clean DOM for scenario where whitespace unmapped nodes
+          // exist.
+          document.body.innerHTML = window.trustedTypes!.emptyHTML;
+          const parent = document.createElement('p');
+          const node0 = document.createTextNode(texts[0]!);
+          const spacer1 = document.createTextNode(' \n  ');
+          const spacer2 = document.createTextNode('   ');
+          const node1 = document.createTextNode(texts[1]!);
+          parent.appendChild(node0);
+          parent.appendChild(spacer1);
+          parent.appendChild(spacer2);
+          parent.appendChild(node1);
+          document.body.appendChild(parent);
+
+          nodeStore.setDomNode(parent, parentIds[0]!);
+          nodeStore.setDomNode(node0, textNodeIds[0]!);
+          nodeStore.setDomNode(node1, textNodeIds[1]!);
+
+          // Drag from end of node0 (offset length) to some point in node1.
+          // This is a forward drag (isBackward = false), so start boundary
+          // sits at the end of node0 and should shift forward.
+          selection.setBaseAndExtent(node0, node0.textContent.length, node1, 5);
+          selectionController.onSelectionChange(selection);
+
+          // The anchor node (node0 at offset length) should be shifted
+          // forward skipping the unmapped spacer1 and spacer2 to the start of
+          // node1!
+          await onSelectionChanged();
+          assertEquals(textNodeIds[1], actualAnchorId);
+          assertEquals(textNodeIds[1], actualFocusId);
+          assertEquals(0, actualAnchorOffset);
+          assertEquals(5, actualFocusOffset);
+        });
   });
 
   suite('updateSelection', () => {
@@ -502,10 +586,10 @@ suite('SelectionController', () => {
     function selectNodesInMainPanel(
         anchorId: number, anchorOffset: number, focusId: number,
         focusOffset: number) {
-      chrome.readingMode.startNodeId = anchorId;
-      chrome.readingMode.startOffset = anchorOffset;
-      chrome.readingMode.endNodeId = focusId;
-      chrome.readingMode.endOffset = focusOffset;
+      contentBrowserProxy.startNodeId = anchorId;
+      contentBrowserProxy.startOffset = anchorOffset;
+      contentBrowserProxy.endNodeId = focusId;
+      contentBrowserProxy.endOffset = focusOffset;
     }
 
     setup(() => {
@@ -525,57 +609,80 @@ suite('SelectionController', () => {
 
     suite('with readability enabled', () => {
       setup(() => {
-        chrome.readingMode.isReadabilityEnabled = true;
-        chrome.readingMode.activeDistillationMethod =
-            chrome.readingMode.distillationTypeReadability;
+        contentBrowserProxy.activeDistillationMethod =
+            contentBrowserProxy.distillationTypeReadability;
       });
 
-      test('does nothing when node content is missing', () => {
+      test('selects nodes with AX IDs in readability', () => {
         const expectedAnchorOffset = 2;
         const expectedFocusOffset = 10;
+        const node = getNodeAt(0);
+        nodeStore.setDomNode(node.node, node.id);
+
         selectNodesInMainPanel(
-            100, expectedAnchorOffset, 101, expectedFocusOffset);
-        const prefix =
-            'Being home alone is like being home with no, with no people. ';
-        const content = 'I was alone cause there were no people at all.';
-        chrome.readingMode.getPrefixText = () => prefix;
-        // Simulate one of the nodes not having content.
-        chrome.readingMode.getTextContent = (id: number) =>
-            (id === 100) ? content : '';
-        const p = document.createElement('p');
-        p.appendChild(document.createTextNode(prefix));
-        p.appendChild(document.createTextNode(content));
-        document.body.appendChild(p);
+            node.id, expectedAnchorOffset, node.id, expectedFocusOffset);
+        selectionController.updateSelection(selection);
 
-        selectionController.updateSelection(selection, document.body);
-
-        assertFalse(!!selection.anchorNode);
-        assertFalse(!!selection.focusNode);
+        assertEquals(node.node, selection.anchorNode);
+        assertEquals(node.node, selection.focusNode);
+        assertEquals(expectedAnchorOffset, selection.anchorOffset);
+        assertEquals(expectedFocusOffset, selection.focusOffset);
+        assertEquals(
+            1, contentBrowserProxy.getCallCount('attemptLogEarlySelection'));
+        assertFalse(
+            contentBrowserProxy.getArgs('attemptLogEarlySelection')[0]);
       });
 
-      test('does nothing when ids are unknown', () => {
+      test('does nothing when ids are unknown in readability', () => {
         selectNodesInMainPanel(0, 2, 0, 10);
-        selectionController.updateSelection(selection, document.body);
+        selectionController.updateSelection(selection);
 
         assertFalse(!!selection.anchorNode);
         assertFalse(!!selection.focusNode);
       });
+
+      test(
+          'does nothing when one node is missing in multi-node selection',
+          () => {
+            const expectedAnchorOffset = 2;
+            const expectedFocusOffset = 10;
+            const startId = 100;
+            const endId = 101;
+            selectNodesInMainPanel(
+                startId, expectedAnchorOffset, endId, expectedFocusOffset);
+            const prefix =
+                'Being home alone is like being home with no, with no people. ';
+            const content = 'I was alone cause there were no people at all.';
+            const p = document.createElement('p');
+            p.appendChild(document.createTextNode(prefix));
+            const startNode = document.createTextNode(content);
+            p.appendChild(startNode);
+            // Simulate only one of the nodes being in nodeStore.
+            nodeStore.setDomNode(startNode, startId);
+            document.body.appendChild(p);
+
+            selectionController.updateSelection(selection);
+
+            assertFalse(!!selection.anchorNode);
+            assertFalse(!!selection.focusNode);
+          });
 
       test('selects correct text in one node', () => {
         const expectedAnchorOffset = 2;
         const expectedFocusOffset = 10;
+        const startId = 100;
         selectNodesInMainPanel(
-            100, expectedAnchorOffset, 100, expectedFocusOffset);
+            startId, expectedAnchorOffset, startId, expectedFocusOffset);
         const prefix = 'My folks were small-time grifters. ';
         const content = 'Yeah and counterfeiters too';
-        chrome.readingMode.getPrefixText = () => prefix;
-        chrome.readingMode.getTextContent = () => content;
         const p = document.createElement('p');
         p.appendChild(document.createTextNode(prefix));
-        p.appendChild(document.createTextNode(content));
+        const contentNode = document.createTextNode(content);
+        p.appendChild(contentNode);
+        nodeStore.setDomNode(contentNode, startId);
         document.body.appendChild(p);
 
-        selectionController.updateSelection(selection, document.body);
+        selectionController.updateSelection(selection);
 
         assertEquals(content, selection.anchorNode!.textContent);
         assertEquals(content, selection.focusNode!.textContent);
@@ -588,15 +695,16 @@ suite('SelectionController', () => {
         const content = 'hello hello hello hello hello hello';
         const expectedAnchorOffset = 24;
         const expectedFocusOffset = 29;
+        const startId = 100;
         selectNodesInMainPanel(
-            100, expectedAnchorOffset, 100, expectedFocusOffset);
-        chrome.readingMode.getPrefixText = () => '';
-        chrome.readingMode.getTextContent = () => content;
+            startId, expectedAnchorOffset, startId, expectedFocusOffset);
         const p = document.createElement('p');
-        p.appendChild(document.createTextNode(content));
+        const contentNode = document.createTextNode(content);
+        p.appendChild(contentNode);
+        nodeStore.setDomNode(contentNode, startId);
         document.body.appendChild(p);
 
-        selectionController.updateSelection(selection, document.body);
+        selectionController.updateSelection(selection);
 
         // The offsets should still be the same as before.
         assertEquals(content, selection.anchorNode!.textContent);
@@ -608,22 +716,28 @@ suite('SelectionController', () => {
       test('selects correct text in one node with different offsets', () => {
         const expectedAnchorOffset = 2;
         const expectedFocusOffset = 10;
+        const axNodeOffset = 4;
+        const startId = 100;
         selectNodesInMainPanel(
-            100, expectedAnchorOffset, 100, expectedFocusOffset);
+            startId, expectedAnchorOffset + axNodeOffset, startId,
+            expectedFocusOffset + axNodeOffset);
         const prefix = 'My folks were small-time grifters. ';
         const content = 'Yeah and counterfeiters too';
         const expectedSelection =
             content.substring(expectedAnchorOffset, expectedFocusOffset);
-        chrome.readingMode.getPrefixText = () => prefix;
-        chrome.readingMode.getTextContent = () => content;
         const p = document.createElement('p');
         p.appendChild(document.createTextNode(prefix));
-        p.appendChild(document.createTextNode('    ' + content));
+        const contentNode = document.createTextNode(content);
+        p.appendChild(contentNode);
+        nodeStore.setDomNode(contentNode, startId);
+        nodeStore.setAxNodeOffset(contentNode, axNodeOffset);
         document.body.appendChild(p);
 
-        selectionController.updateSelection(selection, document.body);
+        selectionController.updateSelection(selection);
 
         assertEquals(expectedSelection, selection.toString());
+        assertEquals(expectedAnchorOffset, selection.anchorOffset);
+        assertEquals(expectedFocusOffset, selection.focusOffset);
       });
 
       test(
@@ -634,16 +748,17 @@ suite('SelectionController', () => {
             const content = 'hello hello hello hello hello hello';
             const expectedAnchorOffset = 24;
             const expectedFocusOffset = 29;
+            const startId = 100;
             selectNodesInMainPanel(
-                100, expectedAnchorOffset, 100, expectedFocusOffset);
-            chrome.readingMode.getPrefixText = () => prefix;
-            chrome.readingMode.getTextContent = () => content;
+                startId, expectedAnchorOffset, startId, expectedFocusOffset);
             const p = document.createElement('p');
             p.appendChild(document.createTextNode(prefix));
-            p.appendChild(document.createTextNode(content));
+            const contentNode = document.createTextNode(content);
+            p.appendChild(contentNode);
+            nodeStore.setDomNode(contentNode, startId);
             document.body.appendChild(p);
 
-            selectionController.updateSelection(selection, document.body);
+            selectionController.updateSelection(selection);
 
             // The offsets should still be the same as before.
             assertEquals(content, selection.anchorNode!.textContent, 'anchor');
@@ -656,20 +771,20 @@ suite('SelectionController', () => {
         const beforeContent = 'they never';
         const content = ' did the kind';
         const afterContent = ' of things';
-        const prefix = beforeContent + content + afterContent;
         const expectedAnchorOffset = 2;
         const expectedFocusOffset = 7;
+        const startId = 100;
         selectNodesInMainPanel(
-            100, expectedAnchorOffset, 100, expectedFocusOffset);
-        chrome.readingMode.getPrefixText = () => prefix;
-        chrome.readingMode.getTextContent = () => content;
+            startId, expectedAnchorOffset, startId, expectedFocusOffset);
         const p = document.createElement('p');
         p.appendChild(document.createTextNode(beforeContent));
-        p.appendChild(document.createTextNode(content));
+        const contentNode = document.createTextNode(content);
+        p.appendChild(contentNode);
+        nodeStore.setDomNode(contentNode, startId);
         p.appendChild(document.createTextNode(afterContent));
         document.body.appendChild(p);
 
-        selectionController.updateSelection(selection, document.body);
+        selectionController.updateSelection(selection);
 
         assertEquals(content, selection.anchorNode!.textContent);
         assertEquals(content, selection.focusNode!.textContent);
@@ -681,15 +796,16 @@ suite('SelectionController', () => {
         const content = 'That most kids parents do';
         const expectedAnchorOffset = 2;
         const expectedFocusOffset = 7;
+        const startId = 100;
         selectNodesInMainPanel(
-            100, expectedAnchorOffset, 100, expectedFocusOffset);
-        chrome.readingMode.getPrefixText = () => '';
-        chrome.readingMode.getTextContent = () => content;
+            startId, expectedAnchorOffset, startId, expectedFocusOffset);
         const p = document.createElement('p');
-        p.appendChild(document.createTextNode(content));
+        const contentNode = document.createTextNode(content);
+        p.appendChild(contentNode);
+        nodeStore.setDomNode(contentNode, startId);
         document.body.appendChild(p);
 
-        selectionController.updateSelection(selection, document.body);
+        selectionController.updateSelection(selection);
 
         assertEquals(content, selection.anchorNode!.textContent);
         assertEquals(content, selection.focusNode!.textContent);
@@ -709,16 +825,17 @@ suite('SelectionController', () => {
             const prefix = 'Most fathers make a living. ';
             const startContent = 'Keepin books or pushing broom. ';
             const endContent = 'But mom and dad made homemade dough.';
-            chrome.readingMode.getPrefixText = () => prefix;
-            chrome.readingMode.getTextContent = (id) =>
-                (id === startId) ? startContent : endContent;
             const p = document.createElement('p');
             p.appendChild(document.createTextNode(prefix));
-            p.appendChild(document.createTextNode(startContent));
-            p.appendChild(document.createTextNode(endContent));
+            const startNode = document.createTextNode(startContent);
+            p.appendChild(startNode);
+            nodeStore.setDomNode(startNode, startId);
+            const endNode = document.createTextNode(endContent);
+            p.appendChild(endNode);
+            nodeStore.setDomNode(endNode, endId);
             document.body.appendChild(p);
 
-            selectionController.updateSelection(selection, document.body);
+            selectionController.updateSelection(selection);
 
             assertEquals(startContent, selection.anchorNode!.textContent);
             assertEquals(endContent, selection.focusNode!.textContent);
@@ -729,27 +846,33 @@ suite('SelectionController', () => {
       test('selects correct text in two nodes with different offsets', () => {
         const expectedAnchorOffset = 10;
         const expectedFocusOffset = 3;
+        const axNodeOffset = 4;
         const startId = 100;
         const endId = 101;
         selectNodesInMainPanel(
-            startId, expectedAnchorOffset, endId, expectedFocusOffset);
+            startId, expectedAnchorOffset + axNodeOffset, endId,
+            expectedFocusOffset);
         const prefix = 'Most fathers make a living. ';
         const startContent = 'Keepin books or pushing broom. ';
         const endContent = 'But mom and dad made homemade dough.';
         const expectedSelection = startContent.substring(expectedAnchorOffset) +
             endContent.substring(0, expectedFocusOffset);
-        chrome.readingMode.getPrefixText = () => prefix;
-        chrome.readingMode.getTextContent = (id) =>
-            (id === startId) ? startContent : endContent;
         const p = document.createElement('p');
         p.appendChild(document.createTextNode(prefix));
-        p.appendChild(document.createTextNode('    ' + startContent));
-        p.appendChild(document.createTextNode(endContent));
+        const startNode = document.createTextNode(startContent);
+        p.appendChild(startNode);
+        nodeStore.setDomNode(startNode, startId);
+        nodeStore.setAxNodeOffset(startNode, axNodeOffset);
+        const endNode = document.createTextNode(endContent);
+        p.appendChild(endNode);
+        nodeStore.setDomNode(endNode, endId);
         document.body.appendChild(p);
 
-        selectionController.updateSelection(selection, document.body);
+        selectionController.updateSelection(selection);
 
         assertEquals(expectedSelection, selection.toString());
+        assertEquals(expectedAnchorOffset, selection.anchorOffset);
+        assertEquals(expectedFocusOffset, selection.focusOffset);
       });
 
       test(
@@ -765,17 +888,17 @@ suite('SelectionController', () => {
             const prefix = 'Most fathers make a living. ';
             const startContent = 'Keepin books or pushing broom. ';
             const endContent = 'But mom and dad made homemade dough.';
-            chrome.readingMode.getPrefixText = (id) =>
-                (id === startId) ? prefix : startContent;
-            chrome.readingMode.getTextContent = (id) =>
-                (id === startId) ? startContent : endContent;
             const p = document.createElement('p');
             p.appendChild(document.createTextNode(prefix));
-            p.appendChild(document.createTextNode(startContent));
-            p.appendChild(document.createTextNode(endContent));
+            const startNode = document.createTextNode(startContent);
+            p.appendChild(startNode);
+            nodeStore.setDomNode(startNode, startId);
+            const endNode = document.createTextNode(endContent);
+            p.appendChild(endNode);
+            nodeStore.setDomNode(endNode, endId);
             document.body.appendChild(p);
 
-            selectionController.updateSelection(selection, document.body);
+            selectionController.updateSelection(selection);
 
             assertEquals(startContent, selection.anchorNode!.textContent);
             assertEquals(endContent, selection.focusNode!.textContent);
@@ -796,19 +919,17 @@ suite('SelectionController', () => {
             const prefix = 'Most fathers make a living. ';
             const startContent = 'Keepin books or pushing broom. ';
             const endContent = 'But mom and dad made homemade dough.';
-            chrome.readingMode.getPrefixText = (id) => (id === startId) ?
-                prefix :
-                startContent.substring(
-                    startContent.length - 5, startContent.length - 1);
-            chrome.readingMode.getTextContent = (id) =>
-                (id === startId) ? startContent : endContent;
             const p = document.createElement('p');
             p.appendChild(document.createTextNode(prefix));
-            p.appendChild(document.createTextNode(startContent));
-            p.appendChild(document.createTextNode(endContent));
+            const startNode = document.createTextNode(startContent);
+            p.appendChild(startNode);
+            nodeStore.setDomNode(startNode, startId);
+            const endNode = document.createTextNode(endContent);
+            p.appendChild(endNode);
+            nodeStore.setDomNode(endNode, endId);
             document.body.appendChild(p);
 
-            selectionController.updateSelection(selection, document.body);
+            selectionController.updateSelection(selection);
 
             assertEquals(startContent, selection.anchorNode!.textContent);
             assertEquals(endContent, selection.focusNode!.textContent);
@@ -830,18 +951,18 @@ suite('SelectionController', () => {
             const prefix2 = 'But when the heat got too intense. ';
             const startContent = 'They took it on the lam. ';
             const endContent = 'My father left a note that said.';
-            chrome.readingMode.getPrefixText = (id) =>
-                (id === startId) ? prefix1 : prefix2;
-            chrome.readingMode.getTextContent = (id) =>
-                (id === startId) ? startContent : endContent;
             const p = document.createElement('p');
             p.appendChild(document.createTextNode(prefix1));
             p.appendChild(document.createTextNode(prefix2));
-            p.appendChild(document.createTextNode(startContent));
-            p.appendChild(document.createTextNode(endContent));
+            const startNode = document.createTextNode(startContent);
+            p.appendChild(startNode);
+            nodeStore.setDomNode(startNode, startId);
+            const endNode = document.createTextNode(endContent);
+            p.appendChild(endNode);
+            nodeStore.setDomNode(endNode, endId);
             document.body.appendChild(p);
 
-            selectionController.updateSelection(selection, document.body);
+            selectionController.updateSelection(selection);
 
             assertEquals(startContent, selection.anchorNode!.textContent);
             assertEquals(endContent, selection.focusNode!.textContent);
@@ -862,18 +983,18 @@ suite('SelectionController', () => {
             const prefix2 = 'Then Jerrys clan across the hall. ';
             const startContent = 'Stepped in to save the day. ';
             const endContent = 'They took me in and raised me right.';
-            chrome.readingMode.getPrefixText = (id) =>
-                (id === startId) ? prefix1 : prefix2;
-            chrome.readingMode.getTextContent = (id) =>
-                (id === startId) ? startContent : endContent;
             const p = document.createElement('p');
             p.appendChild(document.createTextNode(prefix1));
-            p.appendChild(document.createTextNode(startContent));
+            const startNode = document.createTextNode(startContent);
+            p.appendChild(startNode);
+            nodeStore.setDomNode(startNode, startId);
             p.appendChild(document.createTextNode(prefix2));
-            p.appendChild(document.createTextNode(endContent));
+            const endNode = document.createTextNode(endContent);
+            p.appendChild(endNode);
+            nodeStore.setDomNode(endNode, endId);
             document.body.appendChild(p);
 
-            selectionController.updateSelection(selection, document.body);
+            selectionController.updateSelection(selection);
 
             assertEquals(startContent, selection.anchorNode!.textContent);
             assertEquals(endContent, selection.focusNode!.textContent);
@@ -895,19 +1016,18 @@ suite('SelectionController', () => {
             const startContent = 'That he\'s the needle, I\'m the thread';
             const beforeEndContent = 'He\'s the butter, ';
             const endContent = 'I\'m the bread. ';
-            const prefix2 = beforeEndContent + endContent;
-            chrome.readingMode.getPrefixText = (id) =>
-                (id === startId) ? prefix1 : prefix2;
-            chrome.readingMode.getTextContent = (id) =>
-                (id === startId) ? startContent : endContent;
             const p = document.createElement('p');
             p.appendChild(document.createTextNode(prefix1));
-            p.appendChild(document.createTextNode(startContent));
+            const startNode = document.createTextNode(startContent);
+            p.appendChild(startNode);
+            nodeStore.setDomNode(startNode, startId);
             p.appendChild(document.createTextNode(beforeEndContent));
-            p.appendChild(document.createTextNode(endContent));
+            const endNode = document.createTextNode(endContent);
+            p.appendChild(endNode);
+            nodeStore.setDomNode(endNode, endId);
             document.body.appendChild(p);
 
-            selectionController.updateSelection(selection, document.body);
+            selectionController.updateSelection(selection);
 
             assertEquals(startContent, selection.anchorNode!.textContent);
             assertEquals(endContent, selection.focusNode!.textContent);
@@ -918,7 +1038,7 @@ suite('SelectionController', () => {
 
     test('does nothing when ids are unknown', () => {
       selectNodesInMainPanel(0, 2, 0, 10);
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertFalse(!!selection.anchorNode);
       assertFalse(!!selection.focusNode);
@@ -926,8 +1046,8 @@ suite('SelectionController', () => {
 
     test('does nothing when selection is invalid', () => {
       selectNodesInMainPanel(100, 2, 101, 10);
-      chrome.readingMode.hasValidSelection = false;
-      selectionController.updateSelection(selection, document.body);
+      contentBrowserProxy.hasValidSelectionVal = false;
+      selectionController.updateSelection(selection);
 
       assertFalse(!!selection.anchorNode);
       assertFalse(!!selection.focusNode);
@@ -941,7 +1061,7 @@ suite('SelectionController', () => {
 
       selectNodesInMainPanel(
           node.id, expectedAnchorOffset, node.id, expectedFocusOffset);
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertEquals(node.node, selection.anchorNode);
       assertEquals(node.node, selection.focusNode);
@@ -953,7 +1073,7 @@ suite('SelectionController', () => {
       const node = getNodeAt(1);
 
       selectNodesInMainPanel(node.id, 2, node.id, 10);
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertFalse(!!selection.anchorNode);
       assertFalse(!!selection.focusNode);
@@ -966,7 +1086,7 @@ suite('SelectionController', () => {
 
       selectNodesInMainPanel(
           parentId, expectedAnchorOffset, parentId, expectedFocusOffset);
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertEquals(node.text, selection.anchorNode?.textContent);
       assertEquals(node.text, selection.focusNode?.textContent);
@@ -984,7 +1104,7 @@ suite('SelectionController', () => {
       // The main panel selection is relative to the paragraph.
       selectNodesInMainPanel(
           parentId, relativeAnchorOffset, parentId, selectedFocusOffset);
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertEquals(node1.text, selection.anchorNode?.textContent);
       assertEquals(node2.text, selection.focusNode?.textContent);
@@ -1004,7 +1124,7 @@ suite('SelectionController', () => {
       // The main panel selection is relative to the paragraph.
       selectNodesInMainPanel(
           parentId, selectedAnchorOffset, parentId, selectedFocusOffset);
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertEquals(node2.text, selection.anchorNode?.textContent);
       assertEquals(node2.text, selection.focusNode?.textContent);
@@ -1026,7 +1146,7 @@ suite('SelectionController', () => {
       // The main panel selection is relative to the paragraph.
       selectNodesInMainPanel(
           parentId, selectedAnchorOffset, parentId, selectedFocusOffset);
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertEquals(node2.text, selection.anchorNode?.textContent);
       assertEquals(node3.text, selection.focusNode?.textContent);
@@ -1044,7 +1164,7 @@ suite('SelectionController', () => {
 
       selectNodesInMainPanel(
           parentId, relativeAnchorOffset, node2.id, relativeFocusOffset);
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertEquals(node1.text, selection.anchorNode?.textContent);
       assertEquals(node2.text, selection.focusNode?.textContent);
@@ -1062,7 +1182,7 @@ suite('SelectionController', () => {
 
       selectNodesInMainPanel(
           node1.id, relativeAnchorOffset, parentId, selectedFocusOffset);
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertEquals(node1.text, selection.anchorNode?.textContent);
       assertEquals(node2.text, selection.focusNode?.textContent);
@@ -1081,7 +1201,7 @@ suite('SelectionController', () => {
 
       selectNodesInMainPanel(
           parentId, selectedAnchorOffset, node3.id, relativeFocusOffset);
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertEquals(node2.text, selection.anchorNode?.textContent);
       assertEquals(node3.text, selection.focusNode?.textContent);
@@ -1101,7 +1221,7 @@ suite('SelectionController', () => {
 
       selectNodesInMainPanel(
           node2.id, relativeAnchorOffset, parentId, selectedFocusOffset);
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertEquals(node2.text, selection.anchorNode?.textContent);
       assertEquals(node3.text, selection.focusNode?.textContent);
@@ -1121,7 +1241,7 @@ suite('SelectionController', () => {
       selectNodesInMainPanel(
           node.id, mainAnchorOffset, node.id, mainFocusOffset);
 
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertEquals(node.node, selection.anchorNode);
       assertEquals(0, selection.anchorOffset);  // 17 - 17
@@ -1141,7 +1261,7 @@ suite('SelectionController', () => {
       selectNodesInMainPanel(
           node.id, mainAnchorOffset, node.id, mainFocusOffset);
 
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertFalse(!!selection.anchorNode);
     });
@@ -1159,7 +1279,7 @@ suite('SelectionController', () => {
       selectNodesInMainPanel(
           node.id, mainAnchorOffset, node.id, mainFocusOffset);
 
-      selectionController.updateSelection(selection, document.body);
+      selectionController.updateSelection(selection);
 
       assertFalse(!!selection.anchorNode);
     });

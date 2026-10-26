@@ -33,6 +33,7 @@ source_set("content") {
   ]
 
   public_deps = [
+    ":metrics",
     "//base",
     "//components/content_extraction/content/browser",
     "//components/feature_engagement/public",
@@ -43,15 +44,16 @@ source_set("content") {
     "//components/paint_preview/common",
     "//components/paint_preview/common/mojom",
     "//components/paint_preview/public",
+    "//components/tabs:public",
     "//components/viz/common",
     "//content/public/browser",
     "//skia",
+    "//ui/base/unowned_user_data",
     "//ui/gfx/geometry",
     "//url",
   ]
 
   deps = [
-    ":metrics",
     "//components/continuous_search/browser",
     "//components/optimization_guide/content/browser:page_context_eligibility",
     "//components/optimization_guide/core:page_content",
@@ -63,9 +65,14 @@ source_set("content") {
   ]
 
   if (enable_pdf) {
+    sources += [
+      "pdf_content_fetcher.cc",
+      "pdf_content_fetcher.h",
+    ]
+    public_deps += [ "//pdf/mojom" ]
     deps += [
       "//components/pdf/browser",
-      "//pdf/mojom",
+      "//mojo/public/cpp/bindings",
     ]
   }
 }
@@ -134,18 +141,25 @@ source_set("unit_tests") {
     "//components/feature_engagement/public:feature_constants",
     "//components/feature_engagement/test:test_support",
     "//components/optimization_guide/proto:optimization_guide_proto",
-    "//components/os_crypt/async/browser:test_support",
+    "//components/os_crypt/browser:test_support",
     "//components/page_content_annotations/core",
     "//components/page_content_annotations/core:features",
     "//components/passage_embeddings/core:passage_embeddings_types",
     "//components/passage_embeddings/core:test_support",
+    "//components/pdf/common:constants",
+    "//components/tabs:test_support",
     "//components/ukm:test_support",
     "//content/test:test_support",
     "//pdf:buildflags",
     "//testing/gmock",
     "//testing/gtest",
+    "//ui/base",
   ]
   if (enable_pdf) {
-    deps += [ "//components/pdf/browser" ]
+    deps += [
+      "//components/pdf/browser",
+      "//mojo/public/cpp/bindings",
+      "//pdf/mojom",
+    ]
   }
 }

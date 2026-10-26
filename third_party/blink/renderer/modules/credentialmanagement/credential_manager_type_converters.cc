@@ -52,7 +52,6 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_union_identityproviderfield_usvstring.h"
 #include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
-#include "third_party/blink/renderer/core/typed_arrays/dom_array_piece.h"
 #include "third_party/blink/renderer/modules/credentialmanagement/credential.h"
 #include "third_party/blink/renderer/modules/credentialmanagement/federated_credential.h"
 #include "third_party/blink/renderer/modules/credentialmanagement/password_credential.h"
@@ -279,6 +278,9 @@ TypeConverter<blink::AuthenticationExtensionsClientOutputs*,
         ConvertTo<blink::AuthenticationExtensionsCmtgKeyOutputs*>(
             extensions->cmtg_key));
   }
+  if (extensions->echo_remote_client_data_json) {
+    extension_outputs->setRemoteClientDataJSON(true);
+  }
   if (extensions->cross_device_fallback_url.has_value()) {
     extension_outputs->setCrossDeviceFallbackUrl(
         *extensions->cross_device_fallback_url);
@@ -368,6 +370,9 @@ TypeConverter<std::optional<AuthenticatorTransport>, blink::String>::Convert(
   if (transport == "internal") {
     return AuthenticatorTransport::INTERNAL;
   }
+  if (transport == "smart-card") {
+    return AuthenticatorTransport::SMART_CARD;
+  }
   return std::nullopt;
 }
 
@@ -388,6 +393,9 @@ blink::String TypeConverter<blink::String, AuthenticatorTransport>::Convert(
   }
   if (transport == AuthenticatorTransport::INTERNAL) {
     return "internal";
+  }
+  if (transport == AuthenticatorTransport::SMART_CARD) {
+    return "smart-card";
   }
   NOTREACHED();
 }
@@ -582,9 +590,9 @@ TypeConverter<PublicKeyCredentialDescriptorPtr,
     }
   } else {
     mojo_descriptor->transports = {
-        AuthenticatorTransport::USB, AuthenticatorTransport::BLE,
-        AuthenticatorTransport::NFC, AuthenticatorTransport::HYBRID,
-        AuthenticatorTransport::INTERNAL};
+        AuthenticatorTransport::USB,      AuthenticatorTransport::BLE,
+        AuthenticatorTransport::NFC,      AuthenticatorTransport::HYBRID,
+        AuthenticatorTransport::INTERNAL, AuthenticatorTransport::SMART_CARD};
   }
   return mojo_descriptor;
 }
@@ -742,6 +750,10 @@ TypeConverter<PublicKeyCredentialCreationOptionsPtr,
           RemoteDesktopClientOverride::From(
               *extensions->remoteDesktopClientOverride());
     }
+    if (extensions->hasRemoteClientDataJSON()) {
+      mojo_options->remote_client_data_json =
+          extensions->remoteClientDataJSON();
+    }
     if (extensions->hasPayment() &&
         extensions->payment()->hasBrowserBoundPubKeyCredParams()) {
       mojo_options->payment_browser_bound_key_parameters =
@@ -845,6 +857,9 @@ TypeConverter<AuthenticationExtensionsClientInputsPtr,
     mojo_inputs->remote_desktop_client_override =
         RemoteDesktopClientOverride::From(
             *inputs.remoteDesktopClientOverride());
+  }
+  if (inputs.hasRemoteClientDataJSON()) {
+    mojo_inputs->remote_client_data_json = inputs.remoteClientDataJSON();
   }
   if (inputs.hasPayment() &&
       inputs.payment()->hasBrowserBoundPubKeyCredParams()) {
@@ -1042,14 +1057,21 @@ TypeConverter<blink::Vector<Hint>, blink::Vector<blink::String>>::Convert(
   blink::Vector<Hint> ret;
 
   for (const blink::String& hint : hints) {
+    Hint parsed_hint;
     if (hint == "security-key") {
-      ret.push_back(Hint::SECURITY_KEY);
+      parsed_hint = Hint::SECURITY_KEY;
     } else if (hint == "client-device") {
-      ret.push_back(Hint::CLIENT_DEVICE);
+      parsed_hint = Hint::CLIENT_DEVICE;
     } else if (hint == "hybrid") {
-      ret.push_back(Hint::HYBRID);
+      parsed_hint = Hint::HYBRID;
+    } else {
+      // Unrecognised values are ignored.
+      continue;
     }
-    // Unrecognised values are ignored.
+    // Keep the first occurrence of each hint in preference order.
+    if (!ret.Contains(parsed_hint)) {
+      ret.push_back(parsed_hint);
+    }
   }
 
   return ret;

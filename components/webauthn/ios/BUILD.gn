@@ -23,6 +23,9 @@ source_set("ios") {
     "passkey_tab_helper.mm",
   ]
 
+  public_deps =
+      [ "//components/webauthn/core/browser/device_authorization:types" ]
+
   deps = [
     ":features",
     ":passkey_controller_js",
@@ -31,16 +34,21 @@ source_set("ios") {
     "//components/autofill/ios/browser",
     "//components/autofill/ios/browser:util",
     "//components/autofill/ios/form_util:child_frame_registrar",
+    "//components/cbor",
     "//components/password_manager/core/browser",
     "//components/password_manager/core/browser:passkey_credential",
+    "//components/webauthn/core/browser",
     "//components/webauthn/core/browser:client_data",
     "//components/webauthn/core/browser:common_utils",
     "//components/webauthn/core/browser:passkey_model",
+    "//components/webauthn/core/browser:signal_api_utils",
+    "//components/webauthn/core/browser/device_authorization:features",
     "//device/fido",
     "//ios/web/public",
     "//ios/web/public/js_messaging",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
+    "//url",
   ]
 }
 
@@ -57,6 +65,7 @@ static_library("test_support") {
     "//base",
     "//components/sync/protocol",
     "//components/webauthn/core/browser:passkey_model",
+    "//components/webauthn/core/browser:signal_api_utils",
     "//components/webauthn/ios",
     "//ios/web/public/test/fakes",
   ]
@@ -124,12 +133,16 @@ source_set("unit_tests") {
     "//components/password_manager/core/browser:test_support",
     "//components/password_manager/ios",
     "//components/strings",
+    "//components/webauthn/core/browser",
     "//components/webauthn/core/browser:passkey_model",
+    "//components/webauthn/core/browser:signal_api_utils",
     "//components/webauthn/core/browser:test_support",
+    "//components/webauthn/core/browser/device_authorization:features",
     "//device/fido/public",
     "//ios/web/public/test",
     "//testing/gtest",
     "//third_party/ocmock",
+    "//url",
   ]
 }
 
@@ -140,6 +153,7 @@ source_set("js_tests") {
     ":features",
     ":ios",
     ":passkey_controller_js",
+    ":passkey_types",
     "//ios/web/public/test:javascript_test",
     "//ios/web/public/test:util",
     "//net:test_support",

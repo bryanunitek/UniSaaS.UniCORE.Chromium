@@ -75,7 +75,8 @@ constexpr CGFloat kHelpSymbolSize = 20;
 // The "Primary Action" was touched.
 - (void)standardPromoPrimaryAction {
   RecordDefaultBrowserPromoLastAction(
-      IOSDefaultBrowserPromoAction::kActionButton);
+      IOSDefaultBrowserPromoAction::kActionButton,
+      IOSDefaultBrowserPromoSurface::kTailored);
   RecordAction(
       UserMetricsAction("IOS.DefaultBrowserPromo.TailoredFullscreen.Accepted"));
   LogDefaultBrowserPromoHistogramForAction(
@@ -120,7 +121,7 @@ constexpr CGFloat kHelpSymbolSize = 20;
       initWithRootViewController:_promoViewController];
 
   _helpButton = [[UIBarButtonItem alloc]
-      initWithImage:DefaultSymbolWithPointSize(kHelpSymbol, kHelpSymbolSize)
+      initWithImage:SymbolWithPointSize(SymbolHelp, kHelpSymbolSize)
               style:UIBarButtonItemStylePlain
              target:self
              action:@selector(showLearnMoreView)];

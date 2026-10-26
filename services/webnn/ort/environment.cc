@@ -4,6 +4,7 @@
 
 #include "services/webnn/ort/environment.h"
 
+#include <algorithm>
 #include <ranges>
 #include <utility>
 
@@ -13,21 +14,24 @@
 #include "base/files/file_path.h"
 #include "base/memory/raw_span.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/strings/cstring_view.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split_win.h"
 #include "base/strings/stringprintf.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/types/zip.h"
 #include "base/version.h"
 #include "services/webnn/ort/logging.h"
 #include "services/webnn/ort/ort_data_type.h"
+#include "services/webnn/ort/ort_session_options.h"
 #include "services/webnn/ort/ort_status.h"
 #include "services/webnn/ort/platform_functions_ort.h"
+#include "services/webnn/ort/trivial_model.h"
+#include "services/webnn/public/cpp/webnn_device_util.h"
 #include "services/webnn/public/mojom/webnn_service_introspection.mojom-forward.h"
 #include "services/webnn/webnn_switches.h"
+#include "third_party/windows_app_sdk_headers/src/inc/abi/winml/winml/onnxruntime_ep_device_ep_metadata_keys.h"
 
 namespace webnn::ort {
 
@@ -107,28 +111,6 @@ void ORT_API_CALL OrtCustomLoggingFunction(void* /*param*/,
              << category << ", " << code_location << "] " << message;
 }
 
-// Parses the value of `--webnn-ort-ep-library-path-for-testing` switch. Returns
-// the ORT EP name and library path pair if the value is valid. Otherwise,
-// returns the error message.
-base::expected<std::pair<std::string, base::FilePath>, std::string>
-ParseEpLibraryPathSwitch(std::wstring_view value) {
-  std::vector<std::wstring> parts = base::SplitString(
-      value, L"?", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-  if (parts.size() != 2) {
-    return base::unexpected(
-        "Invalid format of the specified EP library path. It should be in "
-        "the format of <ep_name>?<ep_library_path>.");
-  }
-  std::string ep_name = base::WideToUTF8(parts[0]);
-  base::FilePath ep_library_path(parts[1]);
-
-  if (!kKnownEPs.contains(ep_name)) {
-    return base::unexpected("The specified EP name is not recognized.");
-  }
-
-  return std::make_pair(ep_name, ep_library_path);
-}
-
 bool MatchesEpVendor(const OrtEpDevice* ep_device) {
   const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
 
@@ -158,7 +140,7 @@ bool IsDiscreteGpu(const OrtEpDevice* device) {
       ort_api->HardwareDevice_Metadata(hardware_device);
 
   auto [keys, values] = GetKeyValueSpans(ort_api, device_metadata);
-  for (auto [key, value] : base::zip(keys, values)) {
+  for (auto [key, value] : std::views::zip(keys, values)) {
     if (std::string_view(key) == "Discrete") {
       return std::string_view(value) == "1";
     }
@@ -239,9 +221,10 @@ std::vector<const OrtEpDevice*> SelectEpDevicesForCpu(
   const OrtEpDevice* first_cpu = SelectFirstEpDeviceForDeviceType(
       sorted_devices, OrtHardwareDeviceType_CPU);
 
-  // Handle the rare case where no CPU EP device is available.
+  // Having no CPU EP is expected since `sorted_devices` for the compiler
+  // process filters out the default CPU EP.
   if (!first_cpu) {
-    LOG(ERROR) << "[WebNN] No CPU execution provider available.";
+    VLOG(2) << "[WebNN] No CPU execution provider available.";
     return selected_devices;
   }
 
@@ -266,13 +249,12 @@ std::vector<const OrtEpDevice*> SelectEpDevicesForGpu(
   const OrtEpDevice* first_gpu = SelectFirstEpDeviceForDeviceType(
       sorted_devices, OrtHardwareDeviceType_GPU);
 
-  if (!first_gpu) {
-    return SelectEpDevicesForCpu(sorted_devices);
-  } else if (Environment::IsEpDevice(first_gpu, {kDmlExecutionProvider}) &&
-             IsSoftwareGpu(first_gpu)) {
-    // Skip DirectML EP for software GPU adaptor, because it will throw
-    // exception and cause GPU process to crash. See more details in
-    // crbug.com/466848120.
+  // Fall back to CPU when there is no GPU, or when the only GPU is a software
+  // (CPU-emulated) adapter such as the Microsoft Basic Render Driver (WARP).
+  // Software GPUs perform poorly and are not worth targeting. The DirectML EP
+  // in particular throws and crashes the GPU process on them. See
+  // crbug.com/466848120.
+  if (!first_gpu || IsSoftwareGpu(first_gpu)) {
     return SelectEpDevicesForCpu(sorted_devices);
   }
 
@@ -300,15 +282,37 @@ std::string_view GetOsDriverVersion(const OrtEpDevice* ep_device) {
 
   auto [keys, values] = GetKeyValueSpans(ort_api, ep_metadata);
 
-  // For now, redefine the key for the EP OS driver version here according to
-  // https://github.com/microsoft/onnxruntime/blob/56c984ffc417987eafcd9efb252ab2c65f24398a/include/onnxruntime/core/session/onnxruntime_ep_device_ep_metadata_keys.h#L13
-  // TODO(crbug.com/474141335): Use the key from
-  // onnxruntime_ep_device_ep_metadata_keys.h once it's available.
-  constexpr std::string_view kOrtEpDeviceEpMetadataKeyOSDriverVersion =
-      "os_driver_version";
-  for (auto [key, value] : base::zip(keys, values)) {
-    if (key == kOrtEpDeviceEpMetadataKeyOSDriverVersion) {
+  for (auto [key, value] : std::views::zip(keys, values)) {
+    if (std::string_view(key) == kOrtEpDevice_EpMetadataKey_OSDriverVersion) {
       return std::string_view(value);
+    }
+  }
+
+  return std::string_view();
+}
+
+// Returns the compute architecture the EP published for `ep_device`, or an
+// empty string view if it published nothing usable. EPs publish this where the
+// driver is reachable so that the Compiler process, which cannot reach it, can
+// still name the compilation target.
+std::string_view GetTargetArchitecture(const OrtEpDevice* ep_device) {
+  const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
+
+  const OrtKeyValuePairs* ep_metadata = ort_api->EpDevice_EpMetadata(ep_device);
+  CHECK(ep_metadata);
+
+  auto [keys, values] = GetKeyValueSpans(ort_api, ep_metadata);
+
+  // TODO(crbug.com/552751647): Use a key from
+  // onnxruntime_ep_device_ep_metadata_keys.h once ORT defines one.
+  constexpr std::string_view kOrtEpDeviceEpMetadataKeyTargetArchitecture =
+      "target_architecture";
+  for (auto [key, value] : std::views::zip(keys, values)) {
+    if (key == kOrtEpDeviceEpMetadataKeyTargetArchitecture) {
+      std::string_view published(value);
+      if (IsValidEpTargetArchitecture(published)) {
+        return published;
+      }
     }
   }
 
@@ -611,8 +615,8 @@ ConvertEpListForIntrospection(base::span<const OrtEpDevice* const> ep_devices) {
     const OrtHardwareDevice* hardware_device =
         ort_api->EpDevice_Device(ep_device);
     CHECK(hardware_device);
-    ep_details->hardware_type = OrtHardwareDeviceTypeToString(
-        ort_api->HardwareDevice_Type(hardware_device));
+    ep_details->hardware_type = DeviceTypeToString(
+        OrtToWebnnDeviceType(ort_api->HardwareDevice_Type(hardware_device)));
     ep_details->vendor_id = base::StringPrintf(
         "0x%04x", ort_api->HardwareDevice_VendorId(hardware_device));
     ep_details->device_id = base::StringPrintf(
@@ -622,7 +626,7 @@ ConvertEpListForIntrospection(base::span<const OrtEpDevice* const> ep_devices) {
     CHECK(ep_metadata);
 
     auto [keys, values] = GetKeyValueSpans(ort_api, ep_metadata);
-    for (auto [key, value] : base::zip(keys, values)) {
+    for (auto [key, value] : std::views::zip(keys, values)) {
       if (std::string_view(key) == "version") {
         ep_details->version = value;
         break;
@@ -632,6 +636,89 @@ ConvertEpListForIntrospection(base::span<const OrtEpDevice* const> ep_devices) {
     ep_details_list.push_back(std::move(ep_details));
   }
   return ep_details_list;
+}
+
+// Returns true if the EP device supports offline compilation.
+bool EpDeviceSupportsOfflineCompilation(const OrtEpDevice* ep_device) {
+  const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
+
+  std::string_view ep_name = ort_api->EpDevice_EpName(ep_device);
+  auto ep_it = kKnownEPs.find(ep_name);
+  if (ep_it == kKnownEPs.end()) {
+    return false;
+  }
+
+  const OrtHardwareDevice* hardware_device =
+      ort_api->EpDevice_Device(ep_device);
+  mojom::Device device_type =
+      OrtToWebnnDeviceType(ort_api->HardwareDevice_Type(hardware_device));
+
+  const auto& offline_support = ep_it->second.offline_compilation_support;
+  auto support_it = std::ranges::find(offline_support, device_type,
+                                      &OfflineCompilationSupport::device_type);
+  if (support_it == offline_support.end()) {
+    VLOG(2) << "[WebNN] [" << ep_name
+            << "] does not support offline compilation for device type: "
+            << DeviceTypeToString(device_type);
+    return false;
+  }
+  // An empty `device_ids` span means all device IDs for this device type are
+  // supported, so skip the concrete device ID allowlist check. This covers both
+  // a vendor-agnostic EP backing one generic device (the WebGPU EP) and a
+  // single-vendor EP for which every device it enumerates qualifies (the
+  // TensorRT-RTX EP). Only the former is a generic virtual device;
+  // EpSupportsGenericVirtualDevice() additionally requires `vendor_id` 0.
+  if (support_it->device_ids.empty()) {
+    return true;
+  }
+
+  uint32_t device_id = ort_api->HardwareDevice_DeviceId(hardware_device);
+  if (!std::ranges::contains(support_it->device_ids, device_id)) {
+    VLOG(2) << "[WebNN] [" << ep_name
+            << "] does not support offline compilation for device ID: 0x"
+            << std::hex << device_id;
+    return false;
+  }
+  return true;
+}
+
+// Returns true if `ep_name` backs a generic virtual device for `device_type`,
+// i.e. it is vendor-agnostic (`vendor_id` == 0) and its
+// `OfflineCompilationSupport` allows all device IDs (empty `device_ids`).
+bool EpSupportsGenericVirtualDevice(std::string_view ep_name,
+                                    mojom::Device device_type) {
+  auto ep_it = kKnownEPs.find(ep_name);
+  if (ep_it == kKnownEPs.end()) {
+    return false;
+  }
+  if (ep_it->second.vendor_id != 0) {
+    return false;
+  }
+  const auto& offline_support = ep_it->second.offline_compilation_support;
+  auto support_it = std::ranges::find(offline_support, device_type,
+                                      &OfflineCompilationSupport::device_type);
+  return support_it != offline_support.end() && support_it->device_ids.empty();
+}
+
+// Returns true if `ep_device` is backed by a virtual (non-hardware) device,
+// as indicated by the ORT `is_virtual` hardware device metadata.
+bool IsVirtualDevice(const OrtEpDevice* ep_device) {
+  const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
+
+  const OrtHardwareDevice* hardware_device =
+      ort_api->EpDevice_Device(ep_device);
+  CHECK(hardware_device);
+  const OrtKeyValuePairs* device_metadata =
+      ort_api->HardwareDevice_Metadata(hardware_device);
+  CHECK(device_metadata);
+
+  auto [keys, values] = GetKeyValueSpans(ort_api, device_metadata);
+  for (auto [key, value] : std::views::zip(keys, values)) {
+    if (std::string_view(key) == kOrtHardwareDevice_MetadataKey_IsVirtual) {
+      return std::string_view(value) == "1";
+    }
+  }
+  return false;
 }
 
 }  // namespace
@@ -658,20 +745,6 @@ Environment::GetOrCreateInstance(
 }
 
 // static
-// TODO(crbug.com/502249078): Replace this function with CreateForCompiler() and
-// ensure the Compiler process only calls it once per its lifetime.
-base::expected<scoped_refptr<Environment>, std::string>
-Environment::GetOrCreateInstanceForCompiler(
-    const std::string& ep_name,
-    const base::FilePath& ep_library_path) {
-  base::AutoLock auto_lock(GetLock());
-  if (instance_) {
-    return base::WrapRefCounted(instance_);
-  }
-  return CreateForCompiler(ep_name, ep_library_path);
-}
-
-// static
 base::expected<scoped_refptr<Environment>, std::string> Environment::Create(
     const base::flat_map<std::string, mojom::EpPackageInfoPtr>&
         ep_package_info_map) {
@@ -693,28 +766,6 @@ base::expected<scoped_refptr<Environment>, std::string> Environment::Create(
     return base::unexpected("Failed to create the ONNX Runtime environment.");
   }
 
-  // If `kWebNNOrtEpLibraryPathForTesting` switch exists and the switch value is
-  // valid, register the EP via loading EP libraries from the specified path.
-  // Failure is ignored.
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kWebNNOrtEpLibraryPathForTesting)) {
-    std::wstring value =
-        base::CommandLine::ForCurrentProcess()->GetSwitchValueNative(
-            switches::kWebNNOrtEpLibraryPathForTesting);
-    auto result = ParseEpLibraryPathSwitch(value);
-    if (!result.has_value()) {
-      LOG(WARNING) << "[WebNN] Invalid value of the switch "
-                   << switches::kWebNNOrtEpLibraryPathForTesting << ": "
-                   << result.error() << " The switch will be ignored.";
-    } else {
-      std::pair<std::string, base::FilePath> ep_path_info =
-          std::move(result.value());
-      CALL_ORT_FUNC(ort_api->RegisterExecutionProviderLibrary(
-          env.get(), ep_path_info.first.c_str(),
-          ep_path_info.second.value().c_str()));
-    }
-  }
-
   // Register EPs from `ep_package_info_map` if they are not registered yet.
   // Failure is ignored.
   for (const auto& [ep_name, package_info] : ep_package_info_map) {
@@ -722,7 +773,10 @@ base::expected<scoped_refptr<Environment>, std::string> Environment::Create(
       continue;
     }
 
-    if (!GetDependentEpPackages().contains(package_info->family_name)) {
+    // Skip the package dependency initialization for entries with an empty
+    // family name (e.g. injected by `kWebNNOrtEpLibraryPathForTesting`).
+    if (!package_info->family_name.empty() &&
+        !GetDependentEpPackages().contains(package_info->family_name)) {
       if (platform_functions
               ->InitializePackageDependency(package_info->family_name,
                                             package_info->version)
@@ -750,8 +804,34 @@ base::expected<scoped_refptr<Environment>, std::string> Environment::Create(
 
 // static
 base::expected<scoped_refptr<Environment>, std::string>
-Environment::CreateForCompiler(const std::string& ep_name,
-                               const base::FilePath& ep_library_path) {
+Environment::InitializeForCompilerProcess(const base::FilePath& ep_library_path,
+                                          const EpDeviceInfo& target_device) {
+  auto env_result = CreateForCompilerProcess(ep_library_path, target_device);
+  if (!env_result.has_value()) {
+    return env_result;
+  }
+  // Ensure that the target device is registered in the environment.
+  if (!env_result.value()->FindRegisteredEpDevice(target_device)) {
+    return base::unexpected(base::StrCat(
+        {"Target device not registered: ", target_device.ToSwitchValue()}));
+  }
+  // Warm up the target device for the compiler process to ensure that the
+  // libraries required for offline compilation are preloaded.
+  auto warmup_result =
+      env_result.value()->WarmupEpDeviceForCompilerProcess(target_device);
+  if (!warmup_result.has_value()) {
+    return base::unexpected(std::move(warmup_result.error()));
+  }
+  return env_result;
+}
+
+// static
+base::expected<scoped_refptr<Environment>, std::string>
+Environment::CreateForCompilerProcess(const base::FilePath& ep_library_path,
+                                      const EpDeviceInfo& target_device) {
+  base::AutoLock auto_lock(GetLock());
+  CHECK(!instance_) << "Environment instance already exists.";
+
   if (!PlatformFunctions::EnsureInitialized()) {
     return base::unexpected("Failed to get ONNX Runtime platform functions.");
   }
@@ -760,6 +840,58 @@ Environment::CreateForCompiler(const std::string& ep_name,
   const OrtApi* ort_api = platform_functions->ort_api();
   const OrtLoggingLevel ort_logging_level = GetOrtLoggingLevel();
 
+  ScopedOrtKeyValuePairs config_entries;
+  ort_api->CreateKeyValuePairs(
+      ScopedOrtKeyValuePairs::Receiver(config_entries).get());
+
+  // Skip the allow-virtual-devices config when `kWebNNOrtDisableVirtualDevices`
+  // is set, so the Compiler process exercises the actual hardware devices
+  // instead of virtual ones.
+  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kWebNNOrtDisableVirtualDevices)) {
+    // Allow the virtual devices to enable offline compilation without requiring
+    // the actual device.
+    // https://github.com/microsoft/onnxruntime/blob/3874516/include/onnxruntime/core/session/onnxruntime_env_config_keys.h#L24
+    ort_api->AddKeyValuePair(config_entries.get(), "allow_virtual_devices",
+                             "1");
+  }
+
+  // Describe the device to compile for. The EP would normally learn these by
+  // querying the driver while it enumerates devices, but the Compiler process
+  // is locked down before it runs any code and cannot reach the driver. ORT
+  // reserves environment config keys prefixed "ep_factory.<ep_name>." for the
+  // EP registered under that name.
+  const auto ep_it = kKnownEPs.find(target_device.ep_name);
+  if (ep_it != kKnownEPs.end()) {
+    // An EP either describes its compilation target through both keys or
+    // through neither. One without the other would leave the EP naming a device
+    // it cannot build for, or building for a device it cannot name.
+    CHECK_EQ(ep_it->second.target_architecture_env_config_key.empty(),
+             ep_it->second.hardware_device_id_env_config_key.empty());
+
+    auto add_config_entry = [&](base::cstring_view key,
+                                base::cstring_view value) {
+      const std::string config_key =
+          base::StrCat({"ep_factory.", target_device.ep_name, ".", key});
+      ort_api->AddKeyValuePair(config_entries.get(), config_key.c_str(),
+                               value.c_str());
+      VLOG(1) << "[WebNN] [" << target_device.ep_name << "] compiling for "
+              << config_key << "=" << value << ".";
+    };
+
+    if (!ep_it->second.target_architecture_env_config_key.empty() &&
+        !target_device.target_architecture.empty()) {
+      add_config_entry(ep_it->second.target_architecture_env_config_key,
+                       target_device.target_architecture);
+    }
+
+    // The EP parses this in base 16.
+    if (!ep_it->second.hardware_device_id_env_config_key.empty()) {
+      add_config_entry(ep_it->second.hardware_device_id_env_config_key,
+                       base::StringPrintf("%04x", target_device.device_id));
+    }
+  }
+
   OrtEnvCreationOptions env_options = {
       .version = ORT_API_VERSION,
       .logging_severity_level = static_cast<int32_t>(ort_logging_level),
@@ -767,7 +899,7 @@ Environment::CreateForCompiler(const std::string& ep_name,
       .custom_logging_function = OrtCustomLoggingFunction,
       .custom_logging_param = nullptr,
       .threading_options = nullptr,
-      .config_entries = nullptr,
+      .config_entries = config_entries.get(),
   };
 
   ScopedOrtEnv env;
@@ -775,25 +907,9 @@ Environment::CreateForCompiler(const std::string& ep_name,
           &env_options, ScopedOrtEnv::Receiver(env).get()))) {
     return base::unexpected("Failed to create the ONNX Runtime environment.");
   }
-
-  std::string ep_name_to_register = ep_name;
-  base::FilePath ep_library_path_to_register = ep_library_path;
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kWebNNOrtEpLibraryPathForTesting)) {
-    std::wstring value =
-        base::CommandLine::ForCurrentProcess()->GetSwitchValueNative(
-            switches::kWebNNOrtEpLibraryPathForTesting);
-    auto result = ParseEpLibraryPathSwitch(value);
-    CHECK(result.has_value())
-        << "[WebNN] Invalid value of the switch "
-        << switches::kWebNNOrtEpLibraryPathForTesting << ": " << result.error();
-    ep_name_to_register = std::move(result.value().first);
-    ep_library_path_to_register = std::move(result.value().second);
-  }
-
   if (ORT_CALL_FAILED(ort_api->RegisterExecutionProviderLibrary(
-          env.get(), ep_name_to_register.c_str(),
-          ep_library_path_to_register.value().c_str()))) {
+          env.get(), target_device.ep_name.c_str(),
+          ep_library_path.value().c_str()))) {
     return base::unexpected(
         "Failed to register the execution provider library.");
   }
@@ -804,9 +920,56 @@ Environment::CreateForCompiler(const std::string& ep_name,
     LogEpDevices(ort_api, GetRegisteredEpDevicesImpl(ort_api, env.get()),
                  "Registered OrtEpDevice");
   }
-
   return base::MakeRefCounted<Environment>(base::PassKey<Environment>(),
                                            std::move(env));
+}
+
+base::expected<void, std::string> Environment::WarmupEpDeviceForCompilerProcess(
+    const EpDeviceInfo& target_device) {
+  auto* platform_functions = PlatformFunctions::GetInstance();
+  const OrtCompileApi* ort_compile_api = platform_functions->ort_compile_api();
+
+  // Create minimal session options bound to the target device.
+  const OrtEpDevice* target_ort_device = FindRegisteredEpDevice(target_device);
+  CHECK(target_ort_device);
+  ScopedOrtSessionOptions session_options =
+      CreateTrivialModelSessionOptions(env_.get(), target_ort_device);
+  ScopedOrtModelCompilationOptions compile_options;
+  CHECK_STATUS(ort_compile_api->CreateModelCompilationOptionsFromSessionOptions(
+      env_.get(), session_options.get(),
+      ScopedOrtModelCompilationOptions::Receiver(compile_options).get()));
+  CHECK_STATUS(ort_compile_api->ModelCompilationOptions_SetInputModelFromBuffer(
+      compile_options.get(), kTrivialModel, sizeof(kTrivialModel)));
+
+  // Embed EP context binary data into the output model buffer.
+  CHECK_STATUS(ort_compile_api->ModelCompilationOptions_SetEpContextEmbedMode(
+      compile_options.get(), /*embed_ep_context_in_model=*/true));
+
+  const OrtApi* ort_api = platform_functions->ort_api();
+
+  OrtAllocator* default_allocator = nullptr;
+  CHECK_STATUS(ort_api->GetAllocatorWithDefaultOptions(&default_allocator));
+
+  void* output_model_buffer = nullptr;
+  size_t output_model_buffer_size = 0;
+  CHECK_STATUS(ort_compile_api->ModelCompilationOptions_SetOutputModelBuffer(
+      compile_options.get(), default_allocator, &output_model_buffer,
+      &output_model_buffer_size));
+
+  // This compilation step will trigger the EP to warm up and load the required
+  // libraries. Unlike the calls above, which only configure the compilation,
+  // this one exercises the EP and can legitimately fail, so report the failure
+  // rather than terminating the process on it.
+  if (ORT_CALL_FAILED(
+          ort_compile_api->CompileModel(env_.get(), compile_options.get()))) {
+    return base::unexpected(
+        "Failed to compile the warmup model on the target device.");
+  }
+  CHECK(output_model_buffer);
+  CHECK_GT(output_model_buffer_size, 0u);
+
+  default_allocator->Free(default_allocator, output_model_buffer);
+  return base::ok();
 }
 
 Environment::Environment(base::PassKey<Environment> /*pass_key*/,
@@ -879,31 +1042,75 @@ std::vector<const OrtEpDevice*> Environment::SelectEpDevices(
 
 std::optional<EpDeviceInfo> Environment::SelectEpDeviceForCompiler(
     OrtHardwareDeviceType device_type) {
-  std::vector<const OrtEpDevice*> selected_devices =
-      SelectEpDevices(GetRegisteredEpDevices(), device_type);
-  if (selected_devices.empty()) {
+  if (device_type == OrtHardwareDeviceType_CPU) {
+    VLOG(2) << "[WebNN] CPU device is not supported for offline compilation.";
     return std::nullopt;
   }
-  // Select the first available EP device.
+
+  base::span<const OrtEpDevice* const> registered_ep_devices =
+      GetRegisteredEpDevices();
+
+  // Filter out EP devices that don't support offline compilation before running
+  // EP selection, so selection only considers compiler-eligible devices.
+  // Skipped when testing online compilation on real hardware or when all
+  // compiler devices are explicitly allowed.
+  const bool allow_all_compiler_devices =
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kWebNNOrtDisableVirtualDevices) ||
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kWebNNOrtAllowAllCompilerDevices);
+  std::vector<const OrtEpDevice*> candidate_devices;
+  for (const OrtEpDevice* ep_device : registered_ep_devices) {
+    if (allow_all_compiler_devices ||
+        EpDeviceSupportsOfflineCompilation(ep_device)) {
+      candidate_devices.push_back(ep_device);
+    }
+  }
+
+  std::vector<const OrtEpDevice*> selected_devices =
+      SelectEpDevices(candidate_devices, device_type);
+  if (selected_devices.empty()) {
+    VLOG(1) << "[WebNN] No suitable EP device found for compiler, device type: "
+            << DeviceTypeToString(OrtToWebnnDeviceType(device_type));
+    return std::nullopt;
+  }
   const OrtEpDevice* selected_ep_device = selected_devices[0];
 
   const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
+  std::string_view selected_ep_name =
+      ort_api->EpDevice_EpName(selected_ep_device);
+  const OrtHardwareDevice* selected_hardware_device =
+      ort_api->EpDevice_Device(selected_ep_device);
+  mojom::Device selected_device_type = OrtToWebnnDeviceType(
+      ort_api->HardwareDevice_Type(selected_hardware_device));
+  uint32_t selected_device_id =
+      ort_api->HardwareDevice_DeviceId(selected_hardware_device);
+  uint32_t selected_vendor_id =
+      ort_api->HardwareDevice_VendorId(selected_hardware_device);
 
-  std::string_view ep_name = ort_api->EpDevice_EpName(selected_ep_device);
-  // Only allow selecting from EPs listed in `kKnownEPs`.
-  if (kKnownEPs.find(ep_name) == kKnownEPs.end()) {
-    return std::nullopt;
+  EpDeviceInfo selected_device_info = {
+      .ep_name = std::string(selected_ep_name),
+      .device_type = selected_device_type,
+      .device_id = selected_device_id,
+      .vendor_id = selected_vendor_id,
+  };
+
+  // Carry the architecture the EP published for this device, so that the
+  // Compiler process can compile for it without the hardware query it cannot
+  // make. Only EPs that accept the value back have a use for it.
+  const auto ep_it = kKnownEPs.find(selected_ep_name);
+  if (ep_it != kKnownEPs.end() &&
+      !ep_it->second.target_architecture_env_config_key.empty()) {
+    std::string_view published = GetTargetArchitecture(selected_ep_device);
+    if (!published.empty()) {
+      selected_device_info.target_architecture = std::string(published);
+    }
   }
 
-  const OrtHardwareDevice* hardware_device =
-      ort_api->EpDevice_Device(selected_ep_device);
-  const OrtHardwareDeviceType hardware_device_type =
-      ort_api->HardwareDevice_Type(hardware_device);
-  uint32_t device_id = ort_api->HardwareDevice_DeviceId(hardware_device);
+  VLOG(1) << "[WebNN] Selected EP device for compiler: "
+          << selected_device_info.ToSwitchValue();
 
-  return EpDeviceInfo{.ep_name = std::string(ep_name),
-                      .device_type = OrtToWebnnDeviceType(hardware_device_type),
-                      .device_id = device_id};
+  return selected_device_info;
 }
 
 // static
@@ -920,19 +1127,80 @@ base::span<const OrtEpDevice* const> Environment::GetRegisteredEpDevices()
   return GetRegisteredEpDevicesImpl(ort_api, this->get());
 }
 
-std::vector<mojom::WebNNExecutionProviderDetailsPtr>
-Environment::GetAvailableEpDetails() const {
+const OrtEpDevice* Environment::FindRegisteredEpDevice(
+    const EpDeviceInfo& device_info) const {
   const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
   base::span<const OrtEpDevice* const> registered_ep_devices =
-      GetRegisteredEpDevicesImpl(ort_api, this->get());
-  return ConvertEpListForIntrospection(registered_ep_devices);
+      GetRegisteredEpDevices();
+
+  // Returns true if `ep_device`'s EP name and hardware device type both match
+  // `device_info`.
+  auto matches_ep_and_type = [&](const OrtEpDevice* ep_device) {
+    return ort_api->EpDevice_EpName(ep_device) == device_info.ep_name &&
+           ort_api->HardwareDevice_Type(ort_api->EpDevice_Device(ep_device)) ==
+               WebnnToOrtDeviceType(device_info.device_type);
+  };
+
+  // Returns true if `ep_device` additionally matches the hardware vendor ID and
+  // device ID of `device_info` (an exact hardware match).
+  auto matches_hardware_ids = [&](const OrtEpDevice* ep_device) {
+    const OrtHardwareDevice* hardware_device =
+        ort_api->EpDevice_Device(ep_device);
+    return ort_api->HardwareDevice_DeviceId(hardware_device) ==
+               device_info.device_id &&
+           ort_api->HardwareDevice_VendorId(hardware_device) ==
+               device_info.vendor_id;
+  };
+
+  // Some EPs (e.g. the WebGPU EP) back a generic virtual device (vendor-
+  // agnostic, with an empty `OfflineCompilationSupport::device_ids`). In the
+  // sandboxed Compiler process only that virtual device is registered, and its
+  // IDs won't match the real IDs in `device_info`, so prefer it and match on
+  // EP name and device type only.
+  //
+  // A single-vendor EP like the TensorRT-RTX EP is not generic: it is handed
+  // the device id to describe its virtual device with and it knows its own
+  // vendor id, so that device matches on hardware IDs below like a discovered
+  // one.
+  const bool ep_supports_generic_virtual_device =
+      EpSupportsGenericVirtualDevice(device_info.ep_name,
+                                     device_info.device_type);
+
+  const OrtEpDevice* exactly_matched_device = nullptr;
+  for (const auto* ep_device : registered_ep_devices) {
+    CHECK(ep_device);
+    if (!matches_ep_and_type(ep_device)) {
+      continue;
+    }
+    // Prefer the generic virtual device and return as soon as one is found.
+    if (ep_supports_generic_virtual_device && IsVirtualDevice(ep_device)) {
+      return ep_device;
+    }
+    // Otherwise remember the exact hardware match. This is the only match for
+    // non-generic EPs, and the fallback for generic virtual EPs when no virtual
+    // device is registered: either in the GPU process, whose environment never
+    // enables virtual devices, or in the Compiler process when virtual devices
+    // are disabled for testing via --webnn-ort-disable-virtual-devices (usually
+    // together with --disable-webnn-compiler-sandbox, since reaching the actual
+    // hardware is otherwise blocked by the compiler sandbox). Matching the
+    // hardware IDs also correctly disambiguates multiple real devices of the
+    // same type (e.g. integrated vs discrete GPU).
+    if (matches_hardware_ids(ep_device)) {
+      exactly_matched_device = ep_device;
+    }
+  }
+  return exactly_matched_device;
+}
+
+std::vector<mojom::WebNNExecutionProviderDetailsPtr>
+Environment::GetAvailableEpDetails() const {
+  return ConvertEpListForIntrospection(GetRegisteredEpDevices());
 }
 
 std::vector<mojom::WebNNExecutionProviderDetailsPtr>
 Environment::GetSelectedEpDetails(OrtHardwareDeviceType device_type) const {
-  const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
   base::span<const OrtEpDevice* const> registered_ep_devices =
-      GetRegisteredEpDevicesImpl(ort_api, this->get());
+      GetRegisteredEpDevices();
   std::vector<const OrtEpDevice*> selected_ep_devices =
       Environment::SelectEpDevices(registered_ep_devices, device_type);
   auto ep_list = ConvertEpListForIntrospection(selected_ep_devices);
@@ -948,7 +1216,7 @@ EpWorkarounds Environment::GetEpWorkarounds(
   EpWorkarounds workarounds;
   const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
   base::span<const OrtEpDevice* const> registered_ep_devices =
-      GetRegisteredEpDevicesImpl(ort_api, this->get());
+      GetRegisteredEpDevices();
   std::vector<const OrtEpDevice*> selected_ep_devices =
       SelectEpDevices(registered_ep_devices, device_type);
   for (const auto* ep_device : selected_ep_devices) {
@@ -968,7 +1236,7 @@ base::Lock& Environment::GetLock() {
   return *lock;
 }
 
-raw_ptr<Environment> Environment::instance_ = nullptr;
+Environment* Environment::instance_ = nullptr;
 
 // static
 base::flat_set<std::wstring>& Environment::GetDependentEpPackages() {

@@ -23,9 +23,10 @@ import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.context_sharing.R;
-import org.chromium.chrome.browser.contextual_tasks.fusebox.ContextualTasksFusebox;
 import org.chromium.components.browser_ui.widget.text.TextViewWithCompoundDrawables;
 import org.chromium.content_public.browser.WebContents;
+
+import java.util.function.Supplier;
 
 /**
  * Class responsible for holding the co-browse view and its respective components. NOTE: Owner is
@@ -37,20 +38,25 @@ public class CoBrowseViews {
             ObservableSuppliers.createNullable();
 
     private final @Nullable TabBottomSheetWebUi mWebUi;
-    private final @Nullable ContextualTasksFusebox mFusebox;
     private final @ColorInt int mBackgroundColor;
     private final View mContainerView;
     private final @TabBottomSheetClientType int mClientType;
     private final @CoBrowseContainerType int mContainerType;
     private final @Nullable CoBrowseComponentProvider mContentProvider;
-    private final @Nullable PeekViewManager mPeekViewManager;
+    private final Supplier<@Nullable PeekViewManager> mPeekViewManagerSupplier;
+    private final Callback<@Nullable Boolean> mPlaceholderAllowedCallback =
+            this::onPlaceholderAllowedChanged;
+    private final Callback<@Nullable WebContents> mWebContentsObserver = this::onWebContentsChanged;
+
+    private final TabBottomSheetWebUiContainer mWebUiContainer;
+    private final ViewGroup mPeekContainer;
+    private final @Nullable View mHandleBar;
+
+    private @Nullable PeekViewManager mPeekViewManager;
     private @Nullable View mPeekView;
     private boolean mIsPlaceholderSetUp;
     private @Nullable View mPlaceholderView;
     private @Nullable NullableObservableSupplier<Boolean> mPlaceholderAllowedSupplier;
-    private final Callback<@Nullable Boolean> mPlaceholderAllowedCallback =
-            this::onPlaceholderAllowedChanged;
-    private final Callback<@Nullable WebContents> mWebContentsObserver = this::onWebContentsChanged;
 
     /**
      * Constructor for CoBrowseViews.
@@ -59,28 +65,30 @@ public class CoBrowseViews {
      * @param clientType The client using the bottom sheet.
      * @param containerType The type of container hosting the views.
      * @param webUi The web UI for the view.
-     * @param fusebox The fusebox for the view.
      * @param backgroundColor The background color for the view.
      * @param contentProvider The provider for custom sheet content implementations.
-     * @param peekViewManager The manager for the peek view.
+     * @param peekViewManagerSupplier Supplier for the manager for the peek view.
      */
     public CoBrowseViews(
             View containerView,
             @TabBottomSheetClientType int clientType,
             @CoBrowseContainerType int containerType,
             @Nullable TabBottomSheetWebUi webUi,
-            @Nullable ContextualTasksFusebox fusebox,
             @ColorInt int backgroundColor,
             @Nullable CoBrowseComponentProvider contentProvider,
-            @Nullable PeekViewManager peekViewManager) {
+            Supplier<@Nullable PeekViewManager> peekViewManagerSupplier) {
         mClientType = clientType;
         mContainerType = containerType;
         mWebUi = webUi;
-        mFusebox = fusebox;
         mBackgroundColor = backgroundColor;
         mContainerView = containerView;
         mContentProvider = contentProvider;
-        mPeekViewManager = peekViewManager;
+        mPeekViewManagerSupplier = peekViewManagerSupplier;
+
+        // Cache view lookups.
+        mWebUiContainer = assertNonNull(containerView.findViewById(R.id.web_ui_container));
+        mPeekContainer = assertNonNull(containerView.findViewById(R.id.peek_view_container));
+        mHandleBar = containerView.findViewById(R.id.handle_bar);
 
         mWebContentsSupplier.set(getWebContents());
         populateViewHierarchy();
@@ -89,38 +97,30 @@ public class CoBrowseViews {
     }
 
     /** Returns the peek view manager if one was specified, null otherwise. */
-    public @Nullable PeekViewManager getPeekViewManager() {
+    public @Nullable PeekViewManager getOrCreatePeekViewManager() {
+        if (mPeekViewManager == null) {
+            mPeekViewManager = mPeekViewManagerSupplier.get();
+        }
         return mPeekViewManager;
+    }
+
+    /**
+     * Destroys the cached {@link PeekViewManager}, if any, and clears the cache so that a fresh
+     * instance is created the next time {@link #getOrCreatePeekViewManager()} is called.
+     *
+     * <p>The cached instance must never outlive its {@link PeekViewManager#destroy()} call: a
+     * destroyed manager has unregistered its observers and will no longer update the peek view.
+     */
+    public void destroyPeekViewManager() {
+        if (mPeekViewManager != null) {
+            mPeekViewManager.destroy();
+            mPeekViewManager = null;
+        }
     }
 
     /** Returns the custom content provider if one was specified, null otherwise. */
     public @Nullable CoBrowseComponentProvider getContentProvider() {
         return mContentProvider;
-    }
-
-    /** Destroys the co-browse view and its components. */
-    @CalledByNative
-    @VisibleForTesting
-    void destroy() {
-        mWebContentsSupplier.removeObserver(mWebContentsObserver);
-        if (mPlaceholderAllowedSupplier != null) {
-            mPlaceholderAllowedSupplier.removeObserver(mPlaceholderAllowedCallback);
-        }
-        ViewGroup webUiContainer = mContainerView.findViewById(R.id.web_ui_container);
-        ViewGroup fuseboxContainer = mContainerView.findViewById(R.id.fusebox_container);
-        ViewGroup peekContainer = mContainerView.findViewById(R.id.peek_view_container);
-        if (mWebUi != null) {
-            webUiContainer.removeAllViews();
-            mWebUi.destroy();
-        }
-        if (mFusebox != null) {
-            fuseboxContainer.removeAllViews();
-            mFusebox.destroy();
-        }
-        if (mPeekView != null) {
-            peekContainer.removeAllViews();
-            mPeekView = null;
-        }
     }
 
     /** Returns the background color for the co-browse view. */
@@ -130,9 +130,7 @@ public class CoBrowseViews {
 
     /** Sets the touch handler for the Web UI container. */
     public void setWebUiTouchHandler(TabBottomSheetWebUiContainer.TouchHandler touchHandler) {
-        TabBottomSheetWebUiContainer webUiContainer =
-                assertNonNull(mContainerView.findViewById(R.id.web_ui_container));
-        webUiContainer.setTouchHandler(touchHandler);
+        mWebUiContainer.setTouchHandler(touchHandler);
     }
 
     /** Returns the view for the co-browse content. */
@@ -151,11 +149,10 @@ public class CoBrowseViews {
      * @param peekView The peek view to attach.
      */
     public void attachPeekView(View peekView) {
-        ViewGroup peekContainer = mContainerView.findViewById(R.id.peek_view_container);
-        peekContainer.removeAllViews();
+        mPeekContainer.removeAllViews();
         detachFromParent(peekView);
         mPeekView = peekView;
-        peekContainer.addView(mPeekView);
+        mPeekContainer.addView(mPeekView);
     }
 
     /**
@@ -165,8 +162,7 @@ public class CoBrowseViews {
      */
     public void removePeekView(View peekView) {
         if (mPeekView == peekView) {
-            ViewGroup peekContainer = mContainerView.findViewById(R.id.peek_view_container);
-            peekContainer.removeView(mPeekView);
+            mPeekContainer.removeView(mPeekView);
             mPeekView = null;
         }
     }
@@ -182,10 +178,9 @@ public class CoBrowseViews {
             mWebContentsSupplier.set(webContents);
             View newView = mWebUi.getWebUiView();
             if (oldView != newView) {
-                ViewGroup webUiContainer = mContainerView.findViewById(R.id.web_ui_container);
-                webUiContainer.removeAllViews();
+                mWebUiContainer.removeAllViews();
                 detachFromParent(newView);
-                webUiContainer.addView(newView);
+                mWebUiContainer.addView(newView);
             }
         }
     }
@@ -204,6 +199,29 @@ public class CoBrowseViews {
             mPlaceholderAllowedSupplier.addSyncObserver(mPlaceholderAllowedCallback);
         }
         updatePlaceholderVisibility();
+    }
+
+    public NullableObservableSupplier<WebContents> getWebContentsSupplier() {
+        return mWebContentsSupplier;
+    }
+
+    /** Destroys the co-browse view and its components. */
+    @CalledByNative
+    @VisibleForTesting
+    void destroy() {
+        mWebContentsSupplier.removeObserver(mWebContentsObserver);
+        if (mPlaceholderAllowedSupplier != null) {
+            mPlaceholderAllowedSupplier.removeObserver(mPlaceholderAllowedCallback);
+        }
+        if (mWebUi != null) {
+            mWebUiContainer.removeAllViews();
+            mWebUi.destroy();
+        }
+        if (mPeekView != null) {
+            mPeekContainer.removeAllViews();
+            mPeekView = null;
+        }
+        destroyPeekViewManager();
     }
 
     /** Returns whether the placeholder view is set up. */
@@ -232,32 +250,19 @@ public class CoBrowseViews {
         return mWebUi != null ? mWebUi.getWebContents() : null;
     }
 
-    public NullableObservableSupplier<WebContents> getWebContentsSupplier() {
-        return mWebContentsSupplier;
-    }
-
     @Nullable WebViewResizingHelper getWebViewResizingHelper() {
         return mWebUi != null ? mWebUi.getWebViewResizingHelper() : null;
     }
 
     private void populateViewHierarchy() {
-        ViewGroup webUiContainer = mContainerView.findViewById(R.id.web_ui_container);
-        ViewGroup fuseboxContainer = mContainerView.findViewById(R.id.fusebox_container);
-        ViewGroup peekContainer = mContainerView.findViewById(R.id.peek_view_container);
-
         if (mWebUi != null) {
             View webUiView = mWebUi.getWebUiView();
             detachFromParent(webUiView);
-            webUiContainer.addView(webUiView);
-        }
-        if (mFusebox != null) {
-            View fuseboxView = mFusebox.getFuseboxView();
-            detachFromParent(fuseboxView);
-            fuseboxContainer.addView(fuseboxView);
+            mWebUiContainer.addView(webUiView);
         }
         if (mPeekView != null) {
             detachFromParent(mPeekView);
-            peekContainer.addView(mPeekView);
+            mPeekContainer.addView(mPeekView);
         }
     }
 
@@ -271,19 +276,18 @@ public class CoBrowseViews {
     }
 
     private void updateForContainerType() {
-        ViewGroup webUiContainer = mContainerView.findViewById(R.id.web_ui_container);
-
         if (mContainerType == CoBrowseContainerType.SIDE_PANEL) {
-            View handleBar = mContainerView.findViewById(R.id.handle_bar);
-            if (handleBar != null) {
-                handleBar.setVisibility(View.GONE);
+            if (mHandleBar != null) {
+                mHandleBar.setVisibility(View.GONE);
             }
 
-            MarginLayoutParams layoutParams = (MarginLayoutParams) webUiContainer.getLayoutParams();
+            MarginLayoutParams layoutParams =
+                    (MarginLayoutParams) mWebUiContainer.getLayoutParams();
             layoutParams.topMargin = 0;
-            webUiContainer.setLayoutParams(layoutParams);
+            mWebUiContainer.setLayoutParams(layoutParams);
         }
     }
+
     private void setupPlaceholder() {
         mPlaceholderView = mContainerView.findViewById(R.id.empty_placeholder_container);
         assert mPlaceholderView instanceof TextViewWithCompoundDrawables;

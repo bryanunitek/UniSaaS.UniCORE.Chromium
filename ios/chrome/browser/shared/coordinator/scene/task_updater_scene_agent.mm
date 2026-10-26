@@ -16,8 +16,7 @@
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 
 @interface TaskUpdaterSceneAgent () <ProfileStateObserver,
-                                     SceneUIBlockerStateObserver,
-                                     UIBlockerManagerObserver>
+                                     SceneUIBlockerStateObserver>
 @end
 
 @implementation TaskUpdaterSceneAgent {
@@ -29,7 +28,6 @@
 - (void)setSceneState:(SceneState*)sceneState {
   [super setSceneState:sceneState];
   [self.sceneState.profileState addObserver:self];
-  [self.sceneState.profileState addUIBlockerManagerObserver:self];
   [self.sceneState.uiBlockerState addObserver:self];
 
   [NSNotificationCenter.defaultCenter
@@ -59,12 +57,6 @@
   }
 }
 
-#pragma mark - UIBlockerManagerObserver
-
-- (void)currentUIBlockerRemoved {
-  [self maybeUpdateToUIReady];
-}
-
 #pragma mark - SceneStateObserver
 
 - (void)sceneState:(SceneState*)sceneState
@@ -80,9 +72,17 @@
   [self updateToStageNone];
   [self.sceneState.profileState removeObserver:self];
   [self.sceneState removeObserver:self];
-  [self.sceneState.profileState removeUIBlockerManagerObserver:self];
   [self.sceneState.uiBlockerState removeObserver:self];
   [NSNotificationCenter.defaultCenter removeObserver:self];
+}
+
+// Downgrades the scene from `TaskExecutionUIReady` to
+// `TaskExecutionProfileLoaded` when a sign-in flow starts so UI-ready tasks
+// are deferred until sign-in completes.
+- (void)signinDidStart:(SceneState*)sceneState {
+  if (_didUpdateToUIReady) {
+    [self resetExecutionStage];
+  }
 }
 
 - (void)signinDidEnd:(SceneState*)sceneState {
@@ -92,6 +92,15 @@
 }
 
 #pragma mark - SceneUIBlockerStateObserver
+
+// Downgrades the scene from `TaskExecutionUIReady` to
+// `TaskExecutionProfileLoaded` when a modal overlay is presented so UI-ready
+// tasks are deferred while the scene is blocked.
+- (void)willShowModalOverlay {
+  if (_didUpdateToUIReady) {
+    [self resetExecutionStage];
+  }
+}
 
 - (void)didHideModalOverlay {
   [self maybeUpdateToUIReady];
@@ -110,14 +119,14 @@
 - (void)updateToStageNone {
   [self.sceneState.profileState.appState.taskOrchestrator
       updateToStage:TaskExecutionStage::TaskExecutionStageNone
-           forScene:self.sceneState.sceneSessionID];
+           forScene:self.sceneState];
 }
 
 // Updates the scene to TaskExecutionProfileLoaded.
 - (void)updateToProfileLoaded {
   [self.sceneState.profileState.appState.taskOrchestrator
       updateToStage:TaskExecutionStage::TaskExecutionProfileLoaded
-           forScene:self.sceneState.sceneSessionID];
+           forScene:self.sceneState];
 }
 
 // Updates the scene to TaskExecutionUIReady if conditions are met.
@@ -132,7 +141,7 @@
 
   [self.sceneState.profileState.appState.taskOrchestrator
       updateToStage:TaskExecutionStage::TaskExecutionUIReady
-           forScene:self.sceneState.sceneSessionID];
+           forScene:self.sceneState];
   _didUpdateToUIReady = YES;
 }
 
@@ -140,9 +149,6 @@
 - (BOOL)canUpdateToUIReady {
   SceneState* sceneState = self.sceneState;
   if (!sceneState.UIEnabled) {
-    return NO;
-  }
-  if (sceneState.profileState.currentUIBlocker) {
     return NO;
   }
   if (sceneState.activationLevel < SceneActivationLevelForegroundActive) {

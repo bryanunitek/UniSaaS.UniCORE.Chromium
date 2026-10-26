@@ -62,6 +62,7 @@
 #include "extensions/common/file_util.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "third_party/zlib/google/compression_utils.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/extensions/browsertest_util.h"
@@ -512,14 +513,14 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTestWithForcedHashes,
 
   // ... And we should have recorded metrics for where we found the corruption.
   histogram_tester.ExpectUniqueSample(
-      "Extensions.ContentVerification.VerifyFailedOnFileMV3."
+      "Extensions.ContentVerification.VerifyFailedOnFile."
       "ServiceWorkerScript",
       ContentVerifyJob::HASH_MISMATCH, 1);
   // We hard-code the script type here to avoid exposing it publicly from the
   // class.
   constexpr int kServiceWorkerScriptFileType = 3;
   histogram_tester.ExpectUniqueSample(
-      "Extensions.ContentVerification.VerifyFailedOnFileTypeMV3",
+      "Extensions.ContentVerification.VerifyFailedOnFileType",
       kServiceWorkerScriptFileType, 1);
 }
 
@@ -669,14 +670,14 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest, TestServiceWorker_AcrossSession) {
 
   // ... And we should have recorded metrics for where we found the corruption.
   histogram_tester.ExpectUniqueSample(
-      "Extensions.ContentVerification.VerifyFailedOnFileMV3."
+      "Extensions.ContentVerification.VerifyFailedOnFile."
       "ServiceWorkerScript",
       ContentVerifyJob::HASH_MISMATCH, 1);
   // We hard-code the script type here to avoid exposing it publicly from the
   // class.
   constexpr int kServiceWorkerScriptFileType = 3;
   histogram_tester.ExpectUniqueSample(
-      "Extensions.ContentVerification.VerifyFailedOnFileTypeMV3",
+      "Extensions.ContentVerification.VerifyFailedOnFileType",
       kServiceWorkerScriptFileType, 1);
 }
 
@@ -1101,7 +1102,7 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierTest,
   const char kLargeResource[] = "ten_meg_background.js";
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), extension->GetResourceURL(kLargeResource),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_NO_WAIT);
 }
 
@@ -1306,8 +1307,9 @@ IN_PROC_BROWSER_TEST_F(ContentVerifierPolicyTest,
 
   // Wait for the extension to be installed by policy we set up in
   // SetUpInProcessBrowserTestFixture.
-  if (!registry->GetInstalledExtension(id_))
+  if (!registry->GetInstalledExtension(id_)) {
     EXPECT_TRUE(registry_observer.WaitForExtensionInstalled());
+  }
 
   // Simulate corruption of the extension so that we can test what happens
   // at startup in the non-PRE test.

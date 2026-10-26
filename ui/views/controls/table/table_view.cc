@@ -20,6 +20,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/types/pass_key.h"
 #include "build/build_config.h"
 #include "cc/paint/paint_flags.h"
 #include "third_party/skia/include/core/SkPath.h"
@@ -27,6 +28,7 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/table_model.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
@@ -52,6 +54,7 @@
 #include "ui/views/controls/table/table_header.h"
 #include "ui/views/controls/table/table_utils.h"
 #include "ui/views/controls/table/table_view_observer.h"
+#include "ui/views/deprecated_layout_immediately_pass_key.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/layout_provider.h"
 #include "ui/views/property_effects.h"
@@ -419,10 +422,14 @@ std::optional<size_t> TableView::GetFirstSelectedRow() const {
              : std::make_optional(*selection_model_.selected_indices().begin());
 }
 
-// TODO(dpenning) : Prevent the last column from being closed. See
-// crbug.com/1324306 for details.
 void TableView::SetColumnVisibility(int id, bool is_visible) {
   if (is_visible == IsColumnVisible(id)) {
+    return;
+  }
+
+  // Hiding the last visible column would leave a table with rows but nothing
+  // to show for them (see crbug.com/40836680), so keep it visible.
+  if (!is_visible && IsLastVisibleColumn(id)) {
     return;
   }
 
@@ -516,6 +523,10 @@ bool TableView::IsColumnVisible(int id) const {
   return std::ranges::contains(
       visible_columns_, id,
       [](const VisibleColumn& column) { return column.column.id; });
+}
+
+bool TableView::IsLastVisibleColumn(int id) const {
+  return visible_columns_.size() == 1 && IsColumnVisible(id);
 }
 
 bool TableView::HasColumn(int id) const {
@@ -732,7 +743,8 @@ void TableView::Layout(PassKey) {
                   gfx::Size(width, header_->GetPreferredSize({}).height())));
   }
 
-  views::FocusRing::Get(this)->DeprecatedLayoutImmediately();
+  views::FocusRing::Get(this)->DeprecatedLayoutImmediately(
+      DeprecatedLayoutImmediatelyPassKey());
 }
 
 gfx::Size TableView::CalculatePreferredSize(
@@ -1564,6 +1576,10 @@ void TableView::SortItemsAndUpdateMapping(bool schedule_paint) {
       view_to_model_[view_index] = view_index;
     }
 
+    // All comparisons need to be in a context with a collator.
+    // Be sure to clear the collator below when the sort is finished.
+    ui::TableModel::CreateCollator(base::PassKey<TableView>());
+
     if (grouper_) {
       GroupSortHelper sort_helper(this);
       GetModelIndexToRangeStart(grouper_, row_count,
@@ -1583,7 +1599,10 @@ void TableView::SortItemsAndUpdateMapping(bool schedule_paint) {
       UpdateAccessibleNameForIndex(view_index, 1);
     }
 
-    model_->ClearCollator();
+    // This clears the collator allocated above. Only one such block should
+    // be executing at any given time (i.e. this method should not be
+    // re-entrant).
+    ui::TableModel::ClearCollator(base::PassKey<TableView>());
   }
 
   GetViewAccessibility().SetTableRowCount(static_cast<int32_t>(GetRowCount()));
@@ -1601,7 +1620,7 @@ void TableView::SortItemsAndUpdateMapping(bool schedule_paint) {
   }
 }
 
-int TableView::CompareRows(size_t model_row1, size_t model_row2) {
+int TableView::CompareRows(size_t model_row1, size_t model_row2) const {
   const int sort_result = model_->CompareValues(model_row1, model_row2,
                                                 sort_descriptors_[0].column_id);
   if (sort_result == 0 && sort_descriptors_.size() > 1) {

@@ -11,6 +11,7 @@
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/task/single_thread_task_runner.h"
@@ -39,33 +40,13 @@
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/tabs/public/tab_handle_factory.h"
 #include "components/tabs/public/tab_interface.h"
+#include "extensions/browser/api/constants.h"
 #include "extensions/common/features/feature_channel.h"
 
 namespace extensions {
 
 namespace {
 
-class NullPolicyChecker : public actor::EnterprisePolicyChecker {
- public:
-  actor::EnterprisePolicyChecker::UrlBlockReason Evaluate(
-      const GURL& url) const override {
-    return actor::EnterprisePolicyChecker::UrlBlockReason::kNotBlocked;
-  }
-
-  void ValidateContentSentToRenderer(
-      content::RenderFrameHost* frame,
-      const std::string& content,
-      actor::EnterprisePolicyChecker::ContentValidationCallback callback)
-      const override {
-    std::move(callback).Run(
-        actor::EnterprisePolicyChecker::ContentValidationReason::kAllowed);
-  }
-};
-
-NullPolicyChecker& GetNullPolicyChecker() {
-  static NullPolicyChecker checker;
-  return checker;
-}
 
 // Converts a session tab id to a tab handle.
 int32_t ConvertSessionTabIdToTabHandle(
@@ -186,7 +167,7 @@ ExtensionFunction::ResponseAction ExperimentalActorCreateTaskFunction::Run() {
   actor::TaskId task_id = actor_service->CreateTask(
       actor::TaskSourceInfo(actor::TaskSourceInfo::Client::kExperimentalActor,
                             /*id=*/std::nullopt),
-      &GetNullPolicyChecker());
+      actor::GetNullEnterprisePolicyChecker());
 
   return RespondNow(ArgumentList(
       api::experimental_actor::CreateTask::Results::Create(task_id.value())));
@@ -264,6 +245,12 @@ ExperimentalActorPerformActionsFunction::Run() {
         ConvertActionTabId(action.mutable_attempt_otp_filling(),
                            browser_context());
         break;
+      case optimization_guide::proto::Action::kChangePassword:
+        ConvertActionTabId(action.mutable_change_password(), browser_context());
+        break;
+      case optimization_guide::proto::Action::kTranslatePage:
+        ConvertActionTabId(action.mutable_translate_page(), browser_context());
+        break;
       case optimization_guide::proto::Action::kWait:
       case optimization_guide::proto::Action::kCreateTab:
       case optimization_guide::proto::Action::kCreateWindow:
@@ -274,6 +261,9 @@ ExperimentalActorPerformActionsFunction::Run() {
       case optimization_guide::proto::Action::kLoadAndExtractContent:
       case optimization_guide::proto::Action::ACTION_NOT_SET:
         // No tab id to convert.
+        break;
+      default:
+        NOTIMPLEMENTED();
         break;
     }
   }
@@ -451,18 +441,16 @@ ExperimentalActorRequestTabObservationFunction::Run() {
   if (!ExtensionTabUtil::GetTabById(params->tab_id, browser_context(),
                                     include_incognito_information(),
                                     &web_contents)) {
-    return RespondNow(Error(
-        ErrorUtils::FormatErrorMessage(ExtensionTabUtil::kTabNotFoundError,
-                                       base::NumberToString(params->tab_id))));
+    return RespondNow(Error(ErrorUtils::FormatErrorMessage(
+        kTabNotFoundError, base::NumberToString(params->tab_id))));
   }
   tabs::TabInterface* tab =
       tabs::TabInterface::MaybeGetFromContents(web_contents);
   // Can be null for pre-render web-contents.
   // TODO(crbug.com/369319589): Remove this logic.
   if (!tab) {
-    return RespondNow(Error(
-        ErrorUtils::FormatErrorMessage(ExtensionTabUtil::kTabNotFoundError,
-                                       base::NumberToString(params->tab_id))));
+    return RespondNow(Error(ErrorUtils::FormatErrorMessage(
+        kTabNotFoundError, base::NumberToString(params->tab_id))));
   }
 
   auto* actor_service = actor::ActorKeyedService::Get(browser_context());

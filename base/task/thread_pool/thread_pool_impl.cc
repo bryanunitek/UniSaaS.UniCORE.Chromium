@@ -10,8 +10,6 @@
 #include <string_view>
 #include <utility>
 
-#include "base/base_switches.h"
-#include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/debug/leak_annotations.h"
 #include "base/feature_list.h"
@@ -68,15 +66,6 @@ enum ThreadGroupType {
 
 constexpr size_t kMaxBestEffortTasks = 2;
 
-// Indicates whether BEST_EFFORT tasks are disabled by a command line switch.
-bool HasDisableBestEffortTasksSwitch() {
-  // The CommandLine might not be initialized if ThreadPool is initialized in a
-  // dynamic library which doesn't have access to argc/argv.
-  return CommandLine::InitializedForCurrentProcess() &&
-         CommandLine::ForCurrentProcess()->HasSwitch(
-             switches::kDisableBestEffortTasks);
-}
-
 // A global variable that can be set from test fixtures while no
 // ThreadPoolInstance is active. Global instead of being a member variable to
 // avoid having to add a public API to ThreadPoolInstance::InitParams for this
@@ -88,15 +77,16 @@ bool g_synchronous_thread_start_for_testing = false;
 ThreadPoolImpl::ThreadPoolImpl(std::string_view histogram_label)
     : ThreadPoolImpl(histogram_label, std::make_unique<TaskTrackerImpl>()) {}
 
-ThreadPoolImpl::ThreadPoolImpl(std::string_view histogram_label,
-                               std::unique_ptr<TaskTrackerImpl> task_tracker,
-                               bool use_background_threads,
-                               bool monitor_worker_thread_priorities)
+ThreadPoolImpl::ThreadPoolImpl(
+    std::string_view histogram_label,
+    std::unique_ptr<TaskTrackerImpl> task_tracker,
+    bool use_background_threads,
+    bool monitor_worker_thread_priorities,
+    ThreadPoolInstance::RecordLockContention record_lock_contention)
     : histogram_label_(histogram_label),
       task_tracker_(std::move(task_tracker)),
       single_thread_task_runner_manager_(task_tracker_->GetTrackedRef(),
                                          &delayed_task_manager_),
-      has_disable_best_effort_switch_(HasDisableBestEffortTasksSwitch()),
       tracked_ref_factory_(this) {
   foreground_thread_group_ = std::make_unique<ThreadGroupImpl>(
       histogram_label.empty()
@@ -107,7 +97,8 @@ ThreadPoolImpl::ThreadPoolImpl(std::string_view histogram_label,
       kForegroundPoolEnvironmentParams.name_suffix,
       kForegroundPoolEnvironmentParams.thread_type_hint,
       ThreadGroupType::FOREGROUND, task_tracker_->GetTrackedRef(),
-      tracked_ref_factory_.GetTrackedRef(), monitor_worker_thread_priorities);
+      tracked_ref_factory_.GetTrackedRef(), monitor_worker_thread_priorities,
+      record_lock_contention);
 
   if (CanUseBackgroundThreadTypeForWorkerThread()) {
     background_thread_group_ = std::make_unique<ThreadGroupImpl>(
@@ -121,7 +112,8 @@ ThreadPoolImpl::ThreadPoolImpl(std::string_view histogram_label,
             ? kBackgroundPoolEnvironmentParams.thread_type_hint
             : kForegroundPoolEnvironmentParams.thread_type_hint,
         ThreadGroupType::BACKGROUND, task_tracker_->GetTrackedRef(),
-        tracked_ref_factory_.GetTrackedRef(), monitor_worker_thread_priorities);
+        tracked_ref_factory_.GetTrackedRef(), monitor_worker_thread_priorities,
+        record_lock_contention);
   }
 }
 
@@ -211,7 +203,6 @@ void ThreadPoolImpl::Start(const ThreadPoolInstance::InitParams& init_params,
             ThreadType::kPresentation, presentation_thread_group_.get());
   }
 
-  // Update the CanRunPolicy based on |has_disable_best_effort_switch_|.
   UpdateCanRunPolicy(CalculateCanRunPolicy());
 
   // Needs to happen after starting the service thread to get its task_runner().
@@ -735,14 +726,13 @@ ThreadGroup* ThreadPoolImpl::GetThreadGroup(ThreadType thread_type,
 CanRunPolicy ThreadPoolImpl::CalculateCanRunPolicy() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if ((num_fences_ == 0 && num_best_effort_fences_ == 0 &&
-       !has_disable_best_effort_switch_) ||
+  if ((num_fences_ == 0 && num_best_effort_fences_ == 0) ||
       task_tracker_->HasShutdownStarted()) {
     return CanRunPolicy::kAll;
   } else if (num_fences_ != 0) {
     return CanRunPolicy::kNone;
   } else {
-    DCHECK(num_best_effort_fences_ > 0 || has_disable_best_effort_switch_);
+    DCHECK(num_best_effort_fences_ > 0);
     return CanRunPolicy::kForegroundOnly;
   }
 }

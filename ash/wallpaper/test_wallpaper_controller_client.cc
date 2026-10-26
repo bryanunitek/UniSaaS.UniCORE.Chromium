@@ -12,10 +12,6 @@
 
 namespace ash {
 
-// static
-const std::string TestWallpaperControllerClient::kDummyCollectionId =
-    "testCollectionId";
-
 TestWallpaperControllerClient::TestWallpaperControllerClient() {
   std::vector<backdrop::Image>& images = variations_[kDummyCollectionId];
   backdrop::Image image1;
@@ -48,7 +44,6 @@ void TestWallpaperControllerClient::ResetCounts() {
   fetch_daily_refresh_wallpaper_param_ = std::string();
   fetch_daily_refresh_info_fails_ = false;
   fake_files_ids_.clear();
-  wallpaper_sync_enabled_ = true;
 }
 
 // WallpaperControllerClient:
@@ -139,11 +134,6 @@ void TestWallpaperControllerClient::GetFilesId(
     return;
   }
   std::move(files_id_callback).Run(iter->second);
-}
-
-bool TestWallpaperControllerClient::IsWallpaperSyncEnabled(
-    const AccountId& account_id) const {
-  return wallpaper_sync_enabled_;
 }
 
 }  // namespace ash

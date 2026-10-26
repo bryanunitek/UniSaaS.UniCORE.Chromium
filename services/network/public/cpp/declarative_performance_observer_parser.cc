@@ -4,7 +4,14 @@
 
 #include "services/network/public/cpp/declarative_performance_observer_parser.h"
 
-#include "base/strings/string_util.h"
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "base/compiler_specific.h"
+#include "base/containers/map_util.h"
 #include "net/http/structured_headers.h"
 
 namespace network {
@@ -19,6 +26,7 @@ constexpr char kCaptureEarlyFailures[] = "capture-early-failures";
 constexpr char kEntryTypeNavigation[] = "navigation";
 constexpr char kEntryTypeMark[] = "mark";
 constexpr char kEntryTypeVisibilityState[] = "visibility-state";
+constexpr char kEntryTypeLargestContentfulPaint[] = "largest-contentful-paint";
 
 std::optional<mojom::PerformanceEntryType> ParseEntryType(
     std::string_view type_str) {
@@ -31,7 +39,32 @@ std::optional<mojom::PerformanceEntryType> ParseEntryType(
   if (type_str == kEntryTypeVisibilityState) {
     return mojom::PerformanceEntryType::kVisibilityState;
   }
+  if (type_str == kEntryTypeLargestContentfulPaint) {
+    return mojom::PerformanceEntryType::kLargestContentfulPaint;
+  }
   return std::nullopt;
+}
+
+net::structured_headers::Item* FindItem(
+    net::structured_headers::Dictionary& dict LIFETIME_BOUND,
+    std::string_view key) {
+  auto* member = base::FindOrNull(dict, key);
+  if (!member) {
+    return nullptr;
+  }
+  net::structured_headers::ParameterizedItem* item = member->GetIfItem();
+  return item ? &item->item : nullptr;
+}
+
+std::vector<net::structured_headers::ParameterizedItem>* FindInnerList(
+    net::structured_headers::Dictionary& dict LIFETIME_BOUND,
+    std::string_view key) {
+  auto* member = base::FindOrNull(dict, key);
+  if (!member) {
+    return nullptr;
+  }
+  net::structured_headers::InnerList* inner_list = member->GetIfInnerList();
+  return inner_list ? &inner_list->items : nullptr;
 }
 
 }  // namespace
@@ -45,46 +78,39 @@ ParseDeclarativePerformanceObserverPolicy(std::string_view header) {
 
   auto policy = mojom::DeclarativePerformanceObserverPolicy::New();
 
-  if (dict->contains(kReportTo)) {
-    const auto& member = dict->at(kReportTo);
-    if (!member.member_is_inner_list && !member.member.empty() &&
-        member.member[0].item.is_string()) {
-      policy->reporting_endpoint = member.member[0].item.GetString();
+  if (auto* item = FindItem(*dict, kReportTo)) {
+    if (std::string* str = item->GetIfString()) {
+      policy->reporting_endpoint = std::move(*str);
     }
   }
 
-  if (dict->contains(kEntryTypes)) {
-    const auto& member = dict->at(kEntryTypes);
-    if (member.member_is_inner_list) {
-      for (const auto& item : member.member) {
-        if (item.item.is_token() || item.item.is_string()) {
-          const std::string& type_str = item.item.GetString();
-          if (auto type = ParseEntryType(type_str)) {
-            policy->entry_types.push_back(*type);
-          }
+  if (const auto* inner_list = FindInnerList(*dict, kEntryTypes)) {
+    for (const auto& item : *inner_list) {
+      const std::string* type_str = item.item.GetIfToken();
+      if (!type_str) {
+        type_str = item.item.GetIfString();
+      }
+      if (type_str) {
+        if (auto type = ParseEntryType(*type_str)) {
+          policy->entry_types.push_back(*type);
         }
       }
     }
   }
 
-  if (dict->contains(kIncludeUserTiming)) {
-    const auto& member = dict->at(kIncludeUserTiming);
-    if (member.member_is_inner_list) {
-      std::vector<std::string> user_timing;
-      for (const auto& item : member.member) {
-        if (item.item.is_string()) {
-          user_timing.push_back(item.item.GetString());
-        }
+  if (auto* inner_list = FindInnerList(*dict, kIncludeUserTiming)) {
+    std::vector<std::string> user_timing;
+    for (auto& item : *inner_list) {
+      if (std::string* str = item.item.GetIfString()) {
+        user_timing.emplace_back(std::move(*str));
       }
-      policy->include_user_timing = std::move(user_timing);
     }
+    policy->include_user_timing = std::move(user_timing);
   }
 
-  if (dict->contains(kCaptureEarlyFailures)) {
-    const auto& member = dict->at(kCaptureEarlyFailures);
-    if (!member.member_is_inner_list && !member.member.empty() &&
-        member.member[0].item.is_boolean()) {
-      policy->capture_early_failures = member.member[0].item.GetBoolean();
+  if (const auto* item = FindItem(*dict, kCaptureEarlyFailures)) {
+    if (const bool* boolean = item->GetIfBoolean()) {
+      policy->capture_early_failures = *boolean;
     }
   }
 

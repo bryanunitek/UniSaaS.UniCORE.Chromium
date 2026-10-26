@@ -39,7 +39,6 @@
 #include "chrome/browser/ash/login/oobe_quick_start/connectivity/fake_target_device_connection_broker.h"
 #include "chrome/browser/ash/login/saml/lockscreen_reauth_dialog_test_helper.h"
 #include "chrome/browser/ash/login/signin/token_handle_store_factory.h"
-#include "chrome/browser/ash/login/signin/token_handle_util.h"
 #include "chrome/browser/ash/login/signin_partition_manager.h"
 #include "chrome/browser/ash/login/signin_partition_manager_factory.h"
 #include "chrome/browser/ash/login/test/auth_ui_utils.h"
@@ -60,14 +59,14 @@
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_test_helper.h"
 #include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ssl/ssl_client_certificate_selector.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/marketing_opt_in_screen_handler.h"
@@ -79,6 +78,7 @@
 #include "chrome/test/base/ash/scoped_test_system_nss_key_slot_mixin.h"
 #include "chrome/test/base/fake_gaia_mixin.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/http_auth_dialog/http_auth_dialog.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
@@ -98,6 +98,8 @@
 #include "components/policy/policy_constants.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/sync/service/sync_service_impl.h"
 #include "components/trusted_vault/securebox.h"
@@ -105,6 +107,7 @@
 #include "components/trusted_vault/trusted_vault_client.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -826,7 +829,7 @@ IN_PROC_BROWSER_TEST_F(WebviewLoginTestWithSyncTrustedVaultEnabled,
                                FakeGaiaMixin::kPasswordPath);
   test::OobeJS().ClickOnPath(kPrimaryButton);
 
-  Browser* browser = ui_test_utils::WaitForBrowserToOpen();
+  BrowserWindowInterface* browser = ui_test_utils::WaitForBrowserToOpen();
   test::WaitForPrimaryUserSessionStart();
 
   // AddRecoveryMethod() logic is deferred until refresh tokens are loaded.
@@ -1580,7 +1583,9 @@ class WebviewClientCertsLoginTestBase : public WebviewLoginTest {
         device_policy_builder_.GetBlob());
     PrefChangeRegistrar registrar;
     base::test::TestFuture<const char*> pref_changed_future;
-    registrar.Init(ProfileHelper::GetSigninProfile()->GetPrefs());
+    registrar.Init(Profile::FromBrowserContext(
+                       BrowserContextHelper::Get()->GetSigninBrowserContext())
+                       ->GetPrefs());
     registrar.Add(
         ::prefs::kManagedAutoSelectCertificateForUrls,
         base::BindRepeating(pref_changed_future.GetRepeatingCallback(),
@@ -1636,7 +1641,9 @@ class WebviewClientCertsLoginTestBase : public WebviewLoginTest {
         device_policy_builder_.GetBlob());
     PrefChangeRegistrar registrar;
     base::test::TestFuture<const char*> pref_changed_future;
-    registrar.Init(ProfileHelper::GetSigninProfile()->GetPrefs());
+    registrar.Init(Profile::FromBrowserContext(
+                       BrowserContextHelper::Get()->GetSigninBrowserContext())
+                       ->GetPrefs());
     registrar.Add(
         ::prefs::kPromptOnMultipleMatchingCertificates,
         base::BindRepeating(pref_changed_future.GetRepeatingCallback(),
@@ -2574,9 +2581,13 @@ IN_PROC_BROWSER_TEST_F(WebviewChildLoginTest, UserInfoSentBeforeAuthFinished) {
 
   test::WaitForPrimaryUserSessionStart();
 
-  const user_manager::UserManager* const user_manager =
-      user_manager::UserManager::Get();
-  EXPECT_TRUE(user_manager->GetActiveUser()->IsChild());
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ASSERT_TRUE(active_session);
+  const user_manager::User* user =
+      user_manager::UserManager::Get()->FindUser(active_session->account_id());
+  ASSERT_TRUE(user);
+  EXPECT_TRUE(user->IsChild());
 }
 
 // Test verfies that user info message sent after authentication is finished
@@ -2602,9 +2613,13 @@ IN_PROC_BROWSER_TEST_F(WebviewChildLoginTest, UserInfoSentAfterTimerSet) {
 
   test::WaitForPrimaryUserSessionStart();
 
-  const user_manager::UserManager* const user_manager =
-      user_manager::UserManager::Get();
-  EXPECT_TRUE(user_manager->GetActiveUser()->IsChild());
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ASSERT_TRUE(active_session);
+  const user_manager::User* user =
+      user_manager::UserManager::Get()->FindUser(active_session->account_id());
+  ASSERT_TRUE(user);
+  EXPECT_TRUE(user->IsChild());
 }
 
 // Verifies flow when user info message is never sent.
@@ -2632,9 +2647,13 @@ IN_PROC_BROWSER_TEST_P(WebviewCloseViewLoginTest, UserInfoNeverSent) {
   histogram_tester_.ExpectUniqueSample("ChromeOS.Gaia.Message.Gaia.UserInfo",
                                        false, 1);
 
-  const user_manager::UserManager* const user_manager =
-      user_manager::UserManager::Get();
-  EXPECT_FALSE(user_manager->GetActiveUser()->IsChild());
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ASSERT_TRUE(active_session);
+  const user_manager::User* user =
+      user_manager::UserManager::Get()->FindUser(active_session->account_id());
+  ASSERT_TRUE(user);
+  EXPECT_FALSE(user->IsChild());
 }
 
 class WebviewLoginEnrolledTest : public WebviewLoginTest {

@@ -15,9 +15,11 @@ import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
 import org.chromium.chrome.browser.browserservices.intents.WebappExtras;
+import org.chromium.chrome.browser.customtabs.CustomTabResumeManager;
 import org.chromium.chrome.browser.customtabs.CustomTabsConnection;
 import org.chromium.chrome.browser.customtabs.features.minimizedcustomtab.CustomTabMinimizationManagerHolder;
 import org.chromium.chrome.browser.flags.ActivityType;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.net.NetworkChangeNotifier;
 
@@ -90,7 +92,10 @@ public class CustomTabIntentHandler {
      */
     public boolean onNewIntent(BrowserServicesIntentDataProvider intentDataProvider) {
         Intent intent = intentDataProvider.getIntent();
-        SessionHolder<?> session = intentDataProvider.getSession();
+        if (maybeRelaunchForCctResumption(intentDataProvider)) {
+            return false;
+        }
+        SessionHolder session = intentDataProvider.getSession();
         WebappExtras webappExtras = intentDataProvider.getWebappExtras();
         if (webappExtras != null) {
             // Don't navigate if the purpose of the intent was to bring the webapp to the
@@ -127,6 +132,21 @@ public class CustomTabIntentHandler {
         runWhenTabCreated(() -> mHandlingStrategy.handleNewIntent(intentDataProvider));
 
         return true;
+    }
+
+    private boolean maybeRelaunchForCctResumption(
+            BrowserServicesIntentDataProvider intentDataProvider) {
+        if (ChromeFeatureList.sCctTabResumption.isEnabled()) {
+            Intent intent = intentDataProvider.getIntent();
+            if (intent != null
+                    && CustomTabResumeManager.shouldForceRelaunchForResumption(
+                            intentDataProvider, mIntentDataProvider)) {
+                intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                mContext.startActivity(intent);
+                return true;
+            }
+        }
+        return false;
     }
 
     private void runWhenTabCreated(Runnable runnable) {

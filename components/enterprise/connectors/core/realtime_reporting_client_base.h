@@ -60,14 +60,6 @@ class RealtimeReportingClientBase : public KeyedService,
   virtual void ReportEvent(::chrome::cros::reporting::proto::Event event,
                            const ReportingSettings& settings);
 
-  // Function that uploads security events, parameterized with the time. We
-  // should stop using this once the migration for the reporting events from
-  // dictionary to proto is done.
-  void ReportEventWithTimestampDeprecated(const std::string& name,
-                                          const ReportingSettings& settings,
-                                          base::DictValue event,
-                                          const base::Time& time,
-                                          bool include_profile_user_name);
 
   // Report a SaaS usage event to the reporting server. The `per_profile`
   // parameter determines if the browser or profile client will be used. The
@@ -112,10 +104,8 @@ class RealtimeReportingClientBase : public KeyedService,
   // verifications and initialize the profile reporting client. Returns a policy
   // client description and a client, which can be nullptr if it can't be
   // initialized.
-#if !BUILDFLAG(IS_CHROMEOS)
   virtual std::pair<std::string, policy::CloudPolicyClient*>
   InitProfileReportingClient(const std::string& dm_token) = 0;
-#endif
 
   // Returns the browser client id required for initializing browser reporting
   // client.
@@ -123,43 +113,23 @@ class RealtimeReportingClientBase : public KeyedService,
 
   // Sub-method called by ReportEventWithTimestamp() to collect device signals
   // on Windows/Mac/Linux platforms. Regardless of collecting device signals or
-  // not, this method is expected to call `UploadSecurityEventReport()` in the
+  // not, this method is expected to call `UploadSecurityEvent()` in the
   // end.
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-  virtual void MaybeCollectDeviceSignalsAndReportEventDeprecated(
-      base::DictValue event,
-      policy::CloudPolicyClient* client,
-      std::string name,
-      const ReportingSettings& settings,
-      base::Time time) = 0;
+
   virtual void MaybeCollectDeviceSignalsAndReportEvent(
       ::chrome::cros::reporting::proto::Event event,
       policy::CloudPolicyClient* client,
       const ReportingSettings& settings) = 0;
 #endif
 
-  // Callback used with UploadSecurityEventReport() to upload events to the
-  // reporting server.
-  virtual void UploadCallbackDeprecated(
-      base::DictValue event_wrapper,
-      bool per_profile,
-      policy::CloudPolicyClient* client,
-      EnterpriseReportingEventType event_type,
-      base::TimeTicks upload_started_at,
-      policy::CloudPolicyClient::Result upload_result) = 0;
-
+  // Callback used in FinishUploadSecurityEvent() to log UMA metrics and add
+  // events with response to chrome://safe-browsing#tab-reporting page.
   virtual void UploadCallback(
-      ::chrome::cros::reporting::proto::UploadEventsRequest request,
-      bool per_profile,
-      policy::CloudPolicyClient* client,
       EnterpriseReportingEventType event_type,
       base::TimeTicks upload_started_at,
       policy::CloudPolicyClient::Result upload_result) = 0;
 
-  // Returns a dictionary of information added to reporting events,
-  // corresponding to the Device, Browser and Profile protos defined in
-  // google3/google/internal/chrome/reporting/v1/chromereporting.proto.
-  virtual base::DictValue GetContext() = 0;
 
   // Creates and returns an UploadEventsRequest proto with the Device, Browser
   // and Profile protos set.
@@ -173,7 +143,7 @@ class RealtimeReportingClientBase : public KeyedService,
                                    const std::string& dm_token);
 
   void OnIpAddressesFetched(::chrome::cros::reporting::proto::Event event,
-                            policy::CloudPolicyClient* client,
+                            base::WeakPtr<policy::CloudPolicyClient> client,
                             const ReportingSettings& settings,
                             std::vector<std::string> ip_addresses);
 
@@ -187,27 +157,6 @@ class RealtimeReportingClientBase : public KeyedService,
                                  policy::CloudPolicyClient* client,
                                  const ReportingSettings& settings);
 
-  void OnIpAddressesFetchedDeprecated(base::DictValue event,
-                                      policy::CloudPolicyClient* client,
-                                      std::string name,
-                                      const ReportingSettings& settings,
-                                      base::Time time,
-                                      std::vector<std::string> ip_addresses);
-
-  // Prepares information required by
-  // CloudPolicyClient::UploadSecurityEventReportDeprecated() and calls it.
-  // DEPRECATED: Use UploadSecurityEvent() instead.
-  void UploadSecurityEventReportDeprecated(base::DictValue event,
-                                           policy::CloudPolicyClient* client,
-                                           std::string name,
-                                           const ReportingSettings& settings,
-                                           base::Time time);
-
-  void FinishUploadSecurityEventReportDeprecated(
-      base::DictValue event,
-      policy::CloudPolicyClient* client,
-      std::string name,
-      const ReportingSettings& settings);
 
   const std::string GetProfilePolicyClientDescription();
 
@@ -226,21 +175,50 @@ class RealtimeReportingClientBase : public KeyedService,
       base::TimeTicks upload_started_at,
       policy::CloudPolicyClient::Result upload_result);
 
+  // Helper method to get the reporting client. If the client is not
+  // initialized, it will attempt to initialize it. If initialization fails or
+  // the DM token is rejected, it returns nullptr.
+  policy::CloudPolicyClient* GetReportingClient(const std::string& dm_token,
+                                                bool per_profile);
+
+  // Replaces the cloud policy client owned by this class for the given scope,
+  // unregistering the observer and clearing `browser_client_`/`profile_client_`
+  // before destroying any previously owned client.
+  void SetOwnedReportingClient(
+      bool per_profile,
+      std::unique_ptr<policy::CloudPolicyClient> client);
+
+  policy::CloudPolicyClient* GetOwnedReportingClient(bool per_profile) const;
+
   raw_ptr<signin::IdentityManager, DanglingUntriaged> identity_manager_ =
       nullptr;
 
-  // The cloud policy clients used to upload browser events and profile events
-  // to the cloud. These clients are never used to fetch policies. These
-  // pointers are not owned by the class.
+  // The cloud policy clients currently used to upload browser events and
+  // profile events to the cloud. These clients are never used to fetch
+  // policies. Each is either owned by
+  // `browser_private_client_`/`profile_private_client_` below, or injected by
+  // a test.
+  //
+  // There is at most one client per scope, which is only correct because each
+  // scope maps to exactly one DM token:
+  //
+  //                    browser scope              profile scope
+  //   ChromeOS         device DM token            user DM token
+  //                    (connectors, affiliated)   (connectors unaffiliated,
+  //                                                SaaS usage)
+  //   Other platforms  CBCM DM token              user DM token
+  //
+  // Reporting features do not all use the same DM token, so this mapping is
+  // what keeps them from fighting over a scope. If a feature ever uploads with
+  // a DM token that does not match its scope, IsClientValid() will see a
+  // mismatch and the scope's client will be torn down and rebuilt under the
+  // feature that was already using it. Events in flight on the old client are
+  // dropped. Put a new feature's (DM token, scope) pair in the table above
+  // rather than reusing a scope that already carries a different token.
   raw_ptr<policy::CloudPolicyClient, DanglingUntriaged> browser_client_ =
       nullptr;
   raw_ptr<policy::CloudPolicyClient, DanglingUntriaged> profile_client_ =
       nullptr;
-
-  // The private clients are used on platforms where we cannot just get a
-  // client and we create our own (used through the above client pointers).
-  std::unique_ptr<policy::CloudPolicyClient> browser_private_client_;
-  std::unique_ptr<policy::CloudPolicyClient> profile_private_client_;
 
   // When a request is rejected for a given DM token, wait 24 hours before
   // trying again for this specific DM Token.
@@ -255,15 +233,16 @@ class RealtimeReportingClientBase : public KeyedService,
   std::pair<std::string, policy::CloudPolicyClient*> InitBrowserReportingClient(
       const std::string& dm_token);
 
-  // Helper method to get the reporting client. If the client is not
-  // initialized, it will attempt to initialize it. If initialization fails or
-  // the DM token is rejected, it returns nullptr.
-  policy::CloudPolicyClient* GetReportingClient(const std::string& dm_token,
-                                                bool per_profile);
-
   // Handle the availability of a cloud policy client.
   void OnCloudPolicyClientAvailable(const std::string& policy_client_desc,
                                     policy::CloudPolicyClient* client);
+
+  // The private clients are used on platforms where we cannot just get a
+  // client and we create our own (used through `browser_client_` and
+  // `profile_client_`). Always modified via SetOwnedReportingClient() so that
+  // the observer registration and raw pointers are cleared before destruction.
+  std::unique_ptr<policy::CloudPolicyClient> browser_private_client_;
+  std::unique_ptr<policy::CloudPolicyClient> profile_private_client_;
 
   raw_ptr<policy::DeviceManagementService> device_management_service_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;

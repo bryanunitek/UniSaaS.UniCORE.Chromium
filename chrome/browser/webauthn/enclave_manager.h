@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/cancelable_callback.h"
@@ -190,9 +191,39 @@ class EnclaveManager : public EnclaveManagerInterface {
     kUploadVaultAndMemberFromResponseFailedResponseWasNotMap = 42,
     kUploadVaultAndMemberFromResponseFailedToParseResponse = 43,
     kDoNextActionFailedAccountMismatch = 44,
-    kMaxValue = kDoNextActionFailedAccountMismatch,
+    // Indicates that the action was not started because the wrapped PIN could
+    // not be parsed or failed invariants check in `AddDeviceToAccount`.
+    kAddDeviceToAccountNotStartedWrappedPinParsingError = 45,
+    // Indicates that the action was not started because the wrapped PIN from
+    // security domain update could not be parsed or failed invariants check in
+    // `ConsiderSecurityDomainState`.
+    kConsiderSecurityDomainStateNotStartedWrappedPinParsingError = 46,
+    kDoNextActionFailedICloudKeychainKeyAlreadyReady = 47,
+    kDoDownloadingAccountStateForICloudRecoveryFailedTrustedVaultErrorResponse =
+        48,
+    kDoDownloadingAccountStateForICloudRecoveryFailedNoICloudKeysInAccount = 49,
+    kDoRecoveringWithICloudKeychainFailedNoMatchingLocalICloudKey = 50,
+    kDoRecoveringWithICloudKeychainFailedDecryptionFailed = 51,
+    kMaxValue = kDoRecoveringWithICloudKeychainFailedDecryptionFailed,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/webauthn/enums.xml:EnclaveManagerActionOutcome)
+
+  // LINT.IfChange(EnclaveManagerActionForUMA)
+  enum class ActionForUMA {
+    kRegisterIfNeeded,
+    kSetupWithPIN,
+    kAddDeviceToAccount,
+    kAddDeviceAndPINToAccount,
+    kSetPIN,
+    kChangePIN,
+#if BUILDFLAG(IS_MAC)
+    kAddICloudRecoveryKey,
+    kRecoverWithICloudKeychain,
+#endif  // BUILDFLAG(IS_MAC)
+    kUnenroll,
+    kConsiderSecurityDomainState,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/webauthn/histograms.xml:EnclaveManagerActionForUMA)
 
   class UvKeyCreationLock {
    public:
@@ -239,6 +270,18 @@ class EnclaveManager : public EnclaveManagerInterface {
   bool IsLoaded() const override;
   // Returns true if the current user has been registered with the enclave.
   bool IsRegistered() const override;
+  // Loads the persistent state from disk if needed and invokes `callback` with
+  // whether the current user is registered with the enclave.
+  void LoadAndCheckIsRegistered(Callback callback) override;
+  // Invokes `callback` with true if the account identified by `gaia_id` has
+  // been registered with the enclave, irrespective of whether it is the current
+  // primary account, loading persistent state first if needed.
+  void IsRegisteredForAccount(const GaiaId& gaia_id,
+                              base::OnceCallback<void(bool)> callback);
+  // Returns true if at least one `StoreKeysLock` (see `GetStoreKeysLock`) is
+  // outstanding, i.e. an explicit flow is waiting for keys to be provided via
+  // `StoreKeys`.
+  bool has_store_keys_lock() const;
   // Returns true if `StoreKeys` has been called and thus `AddDeviceToAccount`
   // or `AddDeviceAndPINToAccount` can be called.
   bool has_pending_keys() const;
@@ -392,6 +435,10 @@ class EnclaveManager : public EnclaveManagerInterface {
   std::unique_ptr<trusted_vault::TrustedVaultConnection::Request>
   CheckGpmPinAvailability(GpmPinAvailabilityCallback callback) override;
 
+#if BUILDFLAG(IS_MAC)
+  void RecoverWithICloudKeychain(Callback callback) override;
+#endif  // BUILDFLAG(IS_MAC)
+
   // Checks whether UserVerifyingKeyCreationCallback() is available to be
   // called, returning true if not. There should only be one key creation
   // callback in existence at any one time, or else one could overwrite a
@@ -459,18 +506,6 @@ class EnclaveManager : public EnclaveManagerInterface {
 
   unsigned renewal_checks_for_testing() const;
   unsigned renewal_attempts_for_testing() const;
-
-  // Create a wrapped PIN, suitable for putting into a simulated security domain
-  // member.
-  static std::string MakeWrappedPINForTesting(
-      base::span<const uint8_t> security_domain_secret,
-      std::string_view pin);
-
-  // Encrypts `cbor_bytes` representing a wrapped PIN with
-  // `security_domain_secret`.
-  static std::vector<uint8_t> EncryptWrappedPIN(
-      base::span<const uint8_t> security_domain_secret,
-      base::span<const uint8_t> cbor_bytes);
 
   base::WeakPtr<EnclaveManager> GetWeakPtr();
 
@@ -576,6 +611,9 @@ class EnclaveManager : public EnclaveManagerInterface {
   void StoreKeysFromOutOfContextRetrieval(
       const GaiaId& gaia_id,
       std::vector<trusted_vault::TrustedVaultKeyAndVersion> keys);
+  void DoStoreKeysFromOutOfContextRetrieval(
+      std::unique_ptr<StoreKeysArgs> pending_keys,
+      bool is_registered);
   void OpportunisticStoreKeysAddComplete(ActionOutcome action_outcome);
   void NotifyObserversAboutOutOfContextRecoveryOutcome(
       OutOfContextRecoveryOutcome outcome);
@@ -585,8 +623,12 @@ class EnclaveManager : public EnclaveManagerInterface {
 
   void RemoveGaiaIdsFromLocalState(base::flat_set<GaiaId> gaia_ids_to_remove);
 
+  // Returns a callback that records the `ActionOutcome` metric to
+  // the histogram corresponding to `action` and then invokes `callback` with a
+  // boolean indicating whether the outcome was successful.
   base::OnceCallback<void(EnclaveManager::ActionOutcome)>
-  ToActionOutcomeCallback(EnclaveManager::Callback callback);
+  ToActionOutcomeCallback(EnclaveManager::Callback callback,
+                          ActionForUMA action);
 
   const base::FilePath file_path_;
   const raw_ptr<signin::IdentityManager> identity_manager_;

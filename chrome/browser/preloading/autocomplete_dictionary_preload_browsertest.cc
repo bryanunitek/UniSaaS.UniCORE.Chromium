@@ -15,7 +15,7 @@
 #include "chrome/browser/preloading/prefetch/search_prefetch/field_trial_settings.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_browser_test_base.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/omnibox/browser/autocomplete_result.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/storage_partition.h"
@@ -43,7 +43,7 @@ class AutocompleteDictionaryPreloadBrowserTest
  protected:
   network::mojom::NetworkContext* GetTargetNetworkContext() {
     return browser()
-        ->profile()
+        ->GetProfile()
         ->GetDefaultStoragePartition()
         ->GetNetworkContext();
   }
@@ -77,7 +77,7 @@ IN_PROC_BROWSER_TEST_F(AutocompleteDictionaryPreloadBrowserTest,
                        PreloadDictionaryAndDiscard) {
   auto* dictionary_preload_service =
       AutocompleteDictionaryPreloadServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   std::string search_terms = kOmniboxSuggestPrefetchQuery;
   AutocompleteMatch autocomplete_match =
       CreateSearchSuggestionMatch(search_terms, search_terms, false);
@@ -93,7 +93,7 @@ IN_PROC_BROWSER_TEST_F(AutocompleteDictionaryPreloadBrowserTest,
                        NonHttpFamilyAreIgnored) {
   auto* dictionary_preload_service =
       AutocompleteDictionaryPreloadServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   std::string search_terms = kOmniboxSuggestPrefetchQuery;
   AutocompleteMatch autocomplete_match =
       CreateSearchSuggestionMatch(search_terms, search_terms, false);
@@ -108,7 +108,7 @@ IN_PROC_BROWSER_TEST_F(AutocompleteDictionaryPreloadBrowserTest,
                        DoNotPreloadDictionayUnderMemoryPressure) {
   auto* dictionary_preload_service =
       AutocompleteDictionaryPreloadServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   std::string search_terms = kOmniboxSuggestPrefetchQuery;
   AutocompleteMatch autocomplete_match =
       CreateSearchSuggestionMatch(search_terms, search_terms, false);
@@ -124,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(AutocompleteDictionaryPreloadBrowserTest,
                        PreloadedDictionayDiscardedByMemoryPressure) {
   auto* dictionary_preload_service =
       AutocompleteDictionaryPreloadServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   std::string search_terms = kOmniboxSuggestPrefetchQuery;
   AutocompleteMatch autocomplete_match =
       CreateSearchSuggestionMatch(search_terms, search_terms, false);

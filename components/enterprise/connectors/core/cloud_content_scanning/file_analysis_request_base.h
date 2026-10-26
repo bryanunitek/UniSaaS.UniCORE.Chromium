@@ -53,7 +53,8 @@ class FileAnalysisRequestBase : public BinaryUploadRequest {
 
   // Opens the file, reads it, and then calls OnGotFileData on the UI thread.
   // This should be called on a thread with base::MayBlock().
-  void OpenFile(const std::atomic<bool>* is_cancelled = nullptr);
+  // This function is virtual for testing.
+  virtual void OpenFile(const std::atomic<bool>* is_cancelled);
 
   // Cancels the request if it hasn't been opened yet, triggering callbacks
   // to avoid memory leaks. Resetting data_callback_ destroys the bound
@@ -61,6 +62,12 @@ class FileAnalysisRequestBase : public BinaryUploadRequest {
   // FileAnalysisRequestBase, destroying it and breaking the circular reference
   // silently.
   void Cancel();
+
+  // Returns true if `path` is a virtual/FSP file system mount (e.g. ChromeOS
+  // Fusebox).
+  static bool IsVirtualFile(const base::FilePath& path);
+
+  static void SetIsVirtualFileForTesting(bool is_virtual);
 
  protected:
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)

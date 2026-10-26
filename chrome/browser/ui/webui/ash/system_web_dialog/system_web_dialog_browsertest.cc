@@ -8,7 +8,7 @@
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/webui/ash/system_web_dialog/system_web_dialog_delegate.h"
 #include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
 #include "chrome/common/pref_names.h"
@@ -16,6 +16,7 @@
 #include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/render_view_host.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -107,7 +108,7 @@ IN_PROC_BROWSER_TEST_F(SystemWebDialogTest, FontSize) {
   const int kDefaultFixedFontSize = kDefaultPrefs.default_fixed_font_size;
 
   // Set the browser font sizes to non-default values.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   profile_prefs->SetInteger(prefs::kWebKitDefaultFontSize,
                             kDefaultFontSize + 2);
   profile_prefs->SetInteger(prefs::kWebKitDefaultFixedFontSize,
@@ -134,7 +135,7 @@ IN_PROC_BROWSER_TEST_F(SystemWebDialogTest, FontSize) {
 IN_PROC_BROWSER_TEST_F(SystemWebDialogTest, PageZoom) {
   // Set the default browser page zoom to 150%.
   double level = blink::ZoomFactorToZoomLevel(1.5);
-  browser()->profile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(level);
+  browser()->GetProfile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(level);
 
   // Open a system dialog.
   MockSystemWebDialog* dialog = new MockSystemWebDialog();

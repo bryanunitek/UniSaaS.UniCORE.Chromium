@@ -5,7 +5,6 @@
 #include "components/input/mouse_wheel_event_queue.h"
 
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
@@ -89,7 +88,6 @@ void MouseWheelEventQueue::QueueEvent(
   wheel_queue_.push_back(std::make_unique<QueuedWebMouseWheelEvent>(
       event_with_action, std::move(dispatch_callback)));
   TryForwardNextEventToRenderer();
-  LOCAL_HISTOGRAM_COUNTS_100("Renderer.WheelQueueSize", wheel_queue_.size());
 }
 
 bool MouseWheelEventQueue::CanGenerateGestureScroll(
@@ -132,8 +130,12 @@ void MouseWheelEventQueue::ProcessMouseWheelAck(
     return;
 
   event_sent_for_gesture_ack_->latency.AddNewLatencyFrom(ack_event.latency);
+  auto weak_this = weak_ptr_factory_.GetWeakPtr();
   client_->OnMouseWheelEventAck(*event_sent_for_gesture_ack_, ack_source,
                                 ack_result);
+  if (!weak_this) {
+    return;
+  }
 
   // If event wasn't consumed then generate a gesture scroll for it.
   if (CanGenerateGestureScroll(ack_result)) {
@@ -195,7 +197,16 @@ void MouseWheelEventQueue::ProcessMouseWheelAck(
       if (scroll_update.data.scroll_update.delta_y)
         scroll_update.data.scroll_update.delta_y =
             scroll_update.data.scroll_update.delta_y > 0 ? 1 : -1;
-    } else {
+    }
+
+    scroll_update.data.scroll_update.delta_x_unconstrained =
+        scroll_update.data.scroll_update.delta_x;
+    scroll_update.data.scroll_update.delta_y_unconstrained =
+        scroll_update.data.scroll_update.delta_y;
+
+    // Apply railing (axis locking) only for non-page scrolls.
+    if (event_sent_for_gesture_ack_->event.delta_units !=
+        ui::ScrollGranularity::kScrollByPage) {
       if (event_sent_for_gesture_ack_->event.rails_mode ==
           WebInputEvent::RailsMode::kRailsModeVertical)
         scroll_update.data.scroll_update.delta_x = 0;
@@ -224,8 +235,9 @@ void MouseWheelEventQueue::ProcessMouseWheelAck(
       current_phase_ended = scroll_phase_ended || momentum_phase_ended;
     }
 
-    bool needs_update = scroll_update.data.scroll_update.delta_x != 0 ||
-                        scroll_update.data.scroll_update.delta_y != 0;
+    bool needs_update =
+        scroll_update.data.scroll_update.delta_x_unconstrained != 0 ||
+        scroll_update.data.scroll_update.delta_y_unconstrained != 0;
 
     bool synthetic = event_sent_for_gesture_ack_->event.has_synthetic_phase;
 
@@ -301,7 +313,7 @@ void MouseWheelEventQueue::TryForwardNextEventToRenderer() {
   client_->SendMouseWheelEventImmediately(
       *event_sent_for_gesture_ack_,
       base::BindOnce(&MouseWheelEventQueue::ProcessMouseWheelAck,
-                     base::Unretained(this)),
+                     weak_ptr_factory_.GetWeakPtr()),
       event_sent_for_gesture_ack_->dispatch_callback);
 }
 

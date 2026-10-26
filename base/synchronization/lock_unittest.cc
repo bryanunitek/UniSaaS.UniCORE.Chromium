@@ -266,7 +266,9 @@ TEST(LockTest, AutoLockMaybe) {
     AutoLockMaybe auto_lock(&lock);
     lock.AssertAcquired();
   }
+#if EXPENSIVE_DCHECKS_ARE_ON()
   EXPECT_DCHECK_DEATH(lock.AssertAcquired());
+#endif
 }
 
 TEST(LockTest, AutoLockMaybeNull) {
@@ -278,7 +280,9 @@ TEST(LockTest, ReleasableAutoLockExplicitRelease) {
   ReleasableAutoLock auto_lock(&lock);
   lock.AssertAcquired();
   auto_lock.Release();
+#if EXPENSIVE_DCHECKS_ARE_ON()
   EXPECT_DCHECK_DEATH(lock.AssertAcquired());
+#endif
 }
 
 TEST(LockTest, ReleasableAutoLockImplicitRelease) {
@@ -287,7 +291,9 @@ TEST(LockTest, ReleasableAutoLockImplicitRelease) {
     ReleasableAutoLock auto_lock(&lock);
     lock.AssertAcquired();
   }
+#if EXPENSIVE_DCHECKS_ARE_ON()
   EXPECT_DCHECK_DEATH(lock.AssertAcquired());
+#endif
 }
 
 class TryLockTest : public testing::Test {
@@ -599,6 +605,9 @@ TEST(LockTest, PriorityIsInherited) {
 class LockTrySpinTest : public testing::Test {
  public:
   void SetUp() override {
+    scoped_feature_list_.InitAndEnableFeature(
+        base::features::kRecordLockAcquisitionTime);
+    LockMetricsRecorder::SetAllowedThreadsForTesting({"LockTrySpinTest"});
     LockMetricsRecorder::EnableRecordingOnCurrentThread("LockTrySpinTest");
   }
 
@@ -639,8 +648,9 @@ class LockTrySpinTest : public testing::Test {
     auto* recorder = LockMetricsRecorder::GetForCurrentThread();
     if (recorder) {
       recorder->ForEachSample(
-          LockMetricsRecorder::LockType::kBaseLock,
-          [&sample_recorded](const TimeDelta&) { sample_recorded = true; });
+          [&sample_recorded](const LockMetricsRecorder::LockMetricSample&) {
+            sample_recorded = true;
+          });
     }
     return sample_recorded;
   }
@@ -649,12 +659,13 @@ class LockTrySpinTest : public testing::Test {
     // Clear any samples that may have been recorded.
     auto* recorder = LockMetricsRecorder::GetForCurrentThread();
     if (recorder) {
-      recorder->ForEachSample(LockMetricsRecorder::LockType::kBaseLock,
-                              [](const TimeDelta&) {});
+      recorder->ForEachSample(
+          [](const LockMetricsRecorder::LockMetricSample&) {});
     }
   }
 
  private:
+  base::test::ScopedFeatureList scoped_feature_list_;
   MetricsSubSampler::ScopedAlwaysSampleForTesting always_sample_;
 };
 

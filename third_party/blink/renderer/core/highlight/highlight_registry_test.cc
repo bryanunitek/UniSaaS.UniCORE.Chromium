@@ -12,6 +12,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_highlights_from_point_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_static_range_init.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/node_range.h"
 #include "third_party/blink/renderer/core/dom/range.h"
 #include "third_party/blink/renderer/core/dom/static_range.h"
 #include "third_party/blink/renderer/core/dom/text.h"
@@ -19,6 +20,7 @@
 #include "third_party/blink/renderer/core/editing/markers/custom_highlight_marker.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker_controller.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/highlight/highlight.h"
 #include "third_party/blink/renderer/core/highlight/highlight_style_utils.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
@@ -27,6 +29,7 @@
 #include "third_party/blink/renderer/core/paint/paint_info.h"
 #include "third_party/blink/renderer/core/paint/replaced_painter.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
+#include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller.h"
 #include "ui/gfx/geometry/rect.h"
@@ -114,6 +117,12 @@ class HighlightsFromPointTest : public HighlightRegistryTest {
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+class HighlightRegistryFrameTest : public RenderingTest {
+ public:
+  HighlightRegistryFrameTest()
+      : RenderingTest(MakeGarbageCollected<SingleChildLocalFrameClient>()) {}
 };
 
 TEST_F(HighlightRegistryTest, CompareStacking) {
@@ -537,11 +546,11 @@ TEST_F(HighlightRegistryTest, TracksReplacedWithPlumbingChild) {
 }
 
 TEST_F(HighlightRegistryTest, SkipsVideoWithUAShadowChildren) {
-  // A <video> is a replaced element (LayoutVideo, a LayoutImage subclass),
-  // but its user-agent shadow tree (the media-controls container) produces
-  // child layout objects, so its layout object is not a selection leaf and
-  // must not be tracked -- the same painted-children rule that excludes a
-  // <canvas> with fallback content. This documents that the gate is not
+  // A <video> is a replaced element, but its user-agent shadow tree (the
+  // media-controls container) produces child layout objects, so its layout
+  // object is not a selection leaf and must not be tracked -- the same
+  // painted-children rule that excludes a <canvas> with fallback content.
+  // This documents that the gate is not
   // "<img>-only": it turns on IsLayoutReplaced() + CanBeSelectionLeaf() for
   // any element, and <img> in the positive tests is representative of that
   // contract rather than a special case.
@@ -893,6 +902,67 @@ TEST_F(HighlightRegistryTest, TracksSlottedImage) {
       registry->GetActiveHighlightsForReplacedElement(*img).Contains(name));
 }
 
+TEST_F(HighlightRegistryFrameTest, AdoptedStaticRangePaintsInCurrentDocument) {
+  SetBodyInnerHTML("<iframe></iframe><span id='span'>adopted highlight</span>");
+  SetChildFrameHTML("");
+  auto* span = GetDocument().getElementById(AtomicString("span"));
+  auto* text = To<Text>(span->firstChild());
+  auto* static_range =
+      MakeGarbageCollected<StaticRange>(text, 0u, text, text->length());
+
+  ChildDocument().adoptNode(span, ASSERT_NO_EXCEPTION);
+  ChildDocument().body()->AppendChild(span);
+  HeapVector<Member<AbstractRange>> ranges;
+  ranges.push_back(static_range);
+  auto* highlight = Highlight::Create(ranges);
+  auto* registry = HighlightRegistry::From(*ChildDocument().domWindow());
+  registry->SetForTesting(AtomicString("h"), highlight);
+  RunDocumentLifecycle();
+
+  DocumentMarkerVector markers = ChildDocument().Markers().MarkersFor(
+      *text, DocumentMarker::MarkerTypes::CustomHighlight());
+  EXPECT_FALSE(markers.empty());
+}
+
+TEST_F(HighlightRegistryFrameTest, MutateRegistryOfDetachedWindowDoesNotCrash) {
+  SetBodyInnerHTML("<iframe id='f'></iframe><span id='span'>text</span>");
+  SetChildFrameHTML("");
+  auto* child_window = ChildDocument().domWindow();
+  ASSERT_TRUE(child_window->GetFrame());
+
+  // Detach the child frame without ever creating its HighlightRegistry, so the
+  // registry below is created for a window that no longer has a frame.
+  GetDocument().getElementById(AtomicString("f"))->remove();
+  UpdateAllLifecyclePhasesForTest();
+  ASSERT_FALSE(child_window->GetFrame());
+
+  auto* span = GetDocument().getElementById(AtomicString("span"));
+  auto* text = To<Text>(span->firstChild());
+  HeapVector<Member<AbstractRange>> ranges;
+  ranges.push_back(
+      MakeGarbageCollected<Range>(GetDocument(), text, 0, text, 1));
+  auto* highlight = Highlight::Create(ranges);
+
+  auto* registry = HighlightRegistry::From(*child_window);
+  AtomicString name("h");
+  registry->SetForTesting(name, highlight);
+  EXPECT_EQ(registry->size(), 1u);
+
+  // Modifying a Highlight registered in the registry schedules a repaint on it
+  // too.
+  highlight->setPriority(1);
+
+  // Hit testing has no frame to resolve coordinates against.
+  EXPECT_TRUE(registry->highlightsFromPoint(0, 0, nullptr).empty());
+
+  registry->RemoveForTesting(name, highlight);
+  EXPECT_EQ(registry->size(), 0u);
+
+  registry->SetForTesting(name, highlight);
+  registry->clearForBinding(nullptr, ASSERT_NO_EXCEPTION);
+  EXPECT_EQ(registry->size(), 0u);
+}
+
 TEST_F(HighlightsFromPointTest, HighlightsFromPoint) {
   GetDocument().body()->SetInnerHTMLWithoutTrustedTypes("1234");
 
@@ -1032,6 +1102,111 @@ TEST_F(HighlightsFromPointTest, HighlightsFromPointShadowRoot) {
   EXPECT_EQ(highlight_hit_results_at_point.size(), 0u);
   highlight_hit_results_at_point = registry->highlightsFromPoint(x, y, nullptr);
   EXPECT_EQ(highlight_hit_results_at_point.size(), 0u);
+}
+
+namespace {
+
+// A range that, once armed, adds ranges to a Highlight the first time its end
+// offset is read. highlightsFromPoint() reads the end offset while resolving a
+// range's geometry, so this grows the range set at a point where the registry
+// is in the middle of iterating it, as would happen if script ran there.
+class HighlightGrowingRange final : public NodeRange {
+ public:
+  HighlightGrowingRange(Text* text, unsigned start_offset, unsigned end_offset)
+      : text_(text), start_offset_(start_offset), end_offset_(end_offset) {}
+
+  void GrowHighlightOnNextEndOffset(Highlight* highlight, unsigned count) {
+    highlight_to_grow_ = highlight;
+    count_to_add_ = count;
+  }
+  bool did_grow() const { return did_grow_; }
+
+  Node* startContainer() const override { return text_.Get(); }
+  unsigned startOffset() const override { return start_offset_; }
+  Node* endContainer() const override { return text_.Get(); }
+  unsigned endOffset() const override {
+    MaybeGrowHighlight();
+    return end_offset_;
+  }
+  bool collapsed() const override { return start_offset_ == end_offset_; }
+  bool IsStaticRange() const override { return false; }
+  Document& OwnerDocument() const override { return text_->GetDocument(); }
+
+  void Trace(Visitor* visitor) const override {
+    visitor->Trace(text_);
+    visitor->Trace(highlight_to_grow_);
+    ScriptWrappable::Trace(visitor);
+  }
+
+ private:
+  void MaybeGrowHighlight() const {
+    if (!highlight_to_grow_ || did_grow_) {
+      return;
+    }
+    did_grow_ = true;
+    for (unsigned i = 0; i < count_to_add_; ++i) {
+      highlight_to_grow_->addForBinding(
+          nullptr,
+          MakeGarbageCollected<Range>(text_->GetDocument(), text_.Get(), 0,
+                                      text_.Get(), 0),
+          ASSERT_NO_EXCEPTION);
+    }
+  }
+
+  Member<Text> text_;
+  unsigned start_offset_;
+  unsigned end_offset_;
+  Member<Highlight> highlight_to_grow_;
+  unsigned count_to_add_ = 0;
+  mutable bool did_grow_ = false;
+};
+
+}  // namespace
+
+// Regression test for crbug.com/576984708. Growing a Highlight's range set
+// reallocates its backing store, so highlightsFromPoint() must not hold on to
+// a reference to one of its entries while it resolves that range's geometry.
+TEST_F(HighlightsFromPointTest, RangeSetGrowsWhileResolvingRangeGeometry) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes("1234");
+  auto* text = To<Text>(GetDocument().body()->firstChild());
+
+  auto* growing_range = MakeGarbageCollected<HighlightGrowingRange>(text, 0, 4);
+  auto* trailing_range =
+      MakeGarbageCollected<Range>(GetDocument(), text, 1, text, 3);
+  HeapVector<Member<AbstractRange>> range_vector;
+  range_vector.push_back(growing_range);
+  range_vector.push_back(trailing_range);
+  auto* highlight = Highlight::Create(range_vector);
+  HighlightRegistry* registry =
+      HighlightRegistry::From(*GetDocument().domWindow());
+  registry->SetForTesting(AtomicString("TestHighlight"), highlight);
+  UpdateAllLifecyclePhasesForTest();
+
+  // The center of |trailing_range|, which is inside both ranges.
+  gfx::Rect rect =
+      ComputeTextRect(EphemeralRange(Position(text, 1), Position(text, 3)));
+  const float x = rect.CenterPoint().x() / GetDocument().DevicePixelRatio();
+  const float y = rect.CenterPoint().y() / GetDocument().DevicePixelRatio();
+
+  const Member<AbstractRange>* const first_entry =
+      &*highlight->GetRanges().begin();
+  constexpr unsigned kRangesToAdd = 64;
+  growing_range->GrowHighlightOnNextEndOffset(highlight, kRangesToAdd);
+
+  HeapVector<Member<HighlightHitResult>> hit_results =
+      registry->highlightsFromPoint(x, y, nullptr);
+
+  ASSERT_TRUE(growing_range->did_grow());
+  EXPECT_EQ(highlight->size(), 2u + kRangesToAdd);
+  // The test is only meaningful if growing the set moved its backing store,
+  // which is what leaves references to its previous entries dangling.
+  EXPECT_NE(first_entry, &*highlight->GetRanges().begin());
+
+  ASSERT_EQ(hit_results.size(), 1u);
+  EXPECT_EQ(hit_results[0]->highlight(), highlight);
+  ASSERT_EQ(hit_results[0]->ranges().size(), 2u);
+  EXPECT_EQ(hit_results[0]->ranges()[0].Get(), growing_range);
+  EXPECT_EQ(hit_results[0]->ranges()[1].Get(), trailing_range);
 }
 
 TEST_F(HighlightRegistryTest, LiveIterationBasic) {
@@ -1463,6 +1638,219 @@ TEST_F(HighlightRegistryTest, LiveIterationDeleteAndReaddVisited) {
   EXPECT_EQ(key, "h2");
   EXPECT_TRUE(iter->FetchNextItem(nullptr, key, value));
   EXPECT_EQ(key, "h1");
+  EXPECT_FALSE(iter->FetchNextItem(nullptr, key, value));
+}
+
+TEST_F(HighlightRegistryTest, SetExistingKeyPreservesIterationOrder) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes("1234");
+  auto* dom_window = GetDocument().domWindow();
+  HighlightRegistry* registry = HighlightRegistry::From(*dom_window);
+  auto* text = To<Text>(GetDocument().body()->firstChild());
+
+  auto* highlight1 = CreateHighlight(text, 0, text, 1);
+  auto* highlight2 = CreateHighlight(text, 1, text, 2);
+  auto* highlight3 = CreateHighlight(text, 2, text, 3);
+  registry->SetForTesting(AtomicString("h1"), highlight1);
+  registry->SetForTesting(AtomicString("h2"), highlight2);
+  registry->SetForTesting(AtomicString("h3"), highlight3);
+
+  // Overwriting an existing key replaces the value in place: the size and the
+  // iteration order stay the same, following Map semantics.
+  auto* new_highlight1 = CreateHighlight(text, 0, text, 2);
+  registry->SetForTesting(AtomicString("h1"), new_highlight1);
+  EXPECT_EQ(registry->size(), 3u);
+
+  auto* iter =
+      MakeGarbageCollected<HighlightRegistry::IterationSource>(*registry);
+  String key;
+  Highlight* value;
+  EXPECT_TRUE(iter->FetchNextItem(nullptr, key, value));
+  EXPECT_EQ(key, "h1");
+  EXPECT_EQ(value, new_highlight1);
+  EXPECT_TRUE(iter->FetchNextItem(nullptr, key, value));
+  EXPECT_EQ(key, "h2");
+  EXPECT_EQ(value, highlight2);
+  EXPECT_TRUE(iter->FetchNextItem(nullptr, key, value));
+  EXPECT_EQ(key, "h3");
+  EXPECT_EQ(value, highlight3);
+  EXPECT_FALSE(iter->FetchNextItem(nullptr, key, value));
+}
+
+TEST_F(HighlightRegistryTest, SetExistingKeyUpdatesStackingPosition) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes("1234");
+  auto* dom_window = GetDocument().domWindow();
+  HighlightRegistry* registry = HighlightRegistry::From(*dom_window);
+  auto* text = To<Text>(GetDocument().body()->firstChild());
+
+  AtomicString highlight1_name("h1");
+  AtomicString highlight2_name("h2");
+  registry->SetForTesting(highlight1_name, CreateHighlight(text, 0, text, 4));
+  registry->SetForTesting(highlight2_name, CreateHighlight(text, 2, text, 4));
+
+  EXPECT_EQ(HighlightRegistry::kOverlayStackingPositionBelow,
+            registry->CompareOverlayStackingPosition(highlight1_name,
+                                                     highlight2_name));
+
+  // Overwriting an existing key registers the Highlight again, so it keeps
+  // stacking above the previously registered ones even though its position in
+  // the iteration order doesn't change.
+  registry->SetForTesting(highlight1_name, CreateHighlight(text, 0, text, 4));
+  EXPECT_EQ(HighlightRegistry::kOverlayStackingPositionAbove,
+            registry->CompareOverlayStackingPosition(highlight1_name,
+                                                     highlight2_name));
+}
+
+TEST_F(HighlightRegistryTest, SetExistingKeyKeepsRegistrationBalanced) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes("1234");
+  auto* dom_window = GetDocument().domWindow();
+  HighlightRegistry* registry = HighlightRegistry::From(*dom_window);
+  auto* text = To<Text>(GetDocument().body()->firstChild());
+
+  // Registering the same Highlight twice under the same name must not
+  // increase the number of times it's considered registered in the registry,
+  // otherwise removing it once would leave it registered forever.
+  auto* highlight = CreateHighlight(text, 0, text, 1);
+  AtomicString name("h1");
+  registry->SetForTesting(name, highlight);
+  registry->SetForTesting(name, highlight);
+  registry->RemoveForTesting(name, highlight);
+  EXPECT_EQ(registry->size(), 0u);
+
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(registry->GetForceMarkersValidationForTesting());
+
+  // The Highlight is no longer in the registry, so modifying it must not
+  // schedule a repaint.
+  highlight->setPriority(1);
+  EXPECT_FALSE(registry->GetForceMarkersValidationForTesting());
+}
+
+TEST_F(HighlightRegistryTest, SetExistingKeyKeepsOtherNamesRegistered) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes("1234");
+  auto* dom_window = GetDocument().domWindow();
+  HighlightRegistry* registry = HighlightRegistry::From(*dom_window);
+  auto* text = To<Text>(GetDocument().body()->firstChild());
+
+  // The same Highlight registered under two names is registered twice.
+  auto* highlight = CreateHighlight(text, 0, text, 1);
+  AtomicString name1("h1");
+  AtomicString name2("h2");
+  registry->SetForTesting(name1, highlight);
+  registry->SetForTesting(name2, highlight);
+
+  // Overwriting one of the names with a different Highlight leaves it
+  // registered under the other name.
+  registry->SetForTesting(name1, CreateHighlight(text, 1, text, 2));
+  UpdateAllLifecyclePhasesForTest();
+  ASSERT_FALSE(registry->GetForceMarkersValidationForTesting());
+  highlight->setPriority(1);
+  EXPECT_TRUE(registry->GetForceMarkersValidationForTesting());
+
+  // Removing the remaining name deregisters it completely.
+  registry->RemoveForTesting(name2, highlight);
+  UpdateAllLifecyclePhasesForTest();
+  ASSERT_FALSE(registry->GetForceMarkersValidationForTesting());
+  highlight->setPriority(2);
+  EXPECT_FALSE(registry->GetForceMarkersValidationForTesting());
+}
+
+TEST_F(HighlightRegistryTest, LiveIterationSetExistingKeyDuringIteration) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes("1234");
+  auto* dom_window = GetDocument().domWindow();
+  HighlightRegistry* registry = HighlightRegistry::From(*dom_window);
+  auto* text = To<Text>(GetDocument().body()->firstChild());
+
+  registry->SetForTesting(AtomicString("h1"),
+                          CreateHighlight(text, 0, text, 1));
+  registry->SetForTesting(AtomicString("h2"),
+                          CreateHighlight(text, 1, text, 2));
+  registry->SetForTesting(AtomicString("h3"),
+                          CreateHighlight(text, 2, text, 3));
+
+  // Overwriting the entry the iterator is pointing at must not move it, so the
+  // iteration visits every key exactly once and terminates.
+  auto* iter =
+      MakeGarbageCollected<HighlightRegistry::IterationSource>(*registry);
+  String key;
+  Highlight* value;
+  Vector<String> visited;
+  while (iter->FetchNextItem(nullptr, key, value)) {
+    visited.push_back(key);
+    ASSERT_LE(visited.size(), 10u) << "iteration doesn't terminate";
+    registry->SetForTesting(AtomicString(key),
+                            CreateHighlight(text, 0, text, 4));
+  }
+
+  ASSERT_EQ(visited.size(), 3u);
+  EXPECT_EQ(visited[0], "h1");
+  EXPECT_EQ(visited[1], "h2");
+  EXPECT_EQ(visited[2], "h3");
+}
+
+TEST_F(HighlightRegistryTest, LiveIterationSetExistingKeyBehindCursor) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes("1234");
+  auto* dom_window = GetDocument().domWindow();
+  HighlightRegistry* registry = HighlightRegistry::From(*dom_window);
+  auto* text = To<Text>(GetDocument().body()->firstChild());
+
+  auto* highlight3 = CreateHighlight(text, 2, text, 3);
+  registry->SetForTesting(AtomicString("h1"),
+                          CreateHighlight(text, 0, text, 1));
+  registry->SetForTesting(AtomicString("h2"),
+                          CreateHighlight(text, 1, text, 2));
+  registry->SetForTesting(AtomicString("h3"), highlight3);
+
+  auto* iter =
+      MakeGarbageCollected<HighlightRegistry::IterationSource>(*registry);
+  String key;
+  Highlight* value;
+  EXPECT_TRUE(iter->FetchNextItem(nullptr, key, value));
+  EXPECT_EQ(key, "h1");
+  EXPECT_TRUE(iter->FetchNextItem(nullptr, key, value));
+  EXPECT_EQ(key, "h2");
+
+  // Overwriting a key the iterator has already moved past doesn't move it to
+  // the end, so the iterator doesn't visit it a second time.
+  registry->SetForTesting(AtomicString("h1"),
+                          CreateHighlight(text, 0, text, 4));
+
+  EXPECT_TRUE(iter->FetchNextItem(nullptr, key, value));
+  EXPECT_EQ(key, "h3");
+  EXPECT_EQ(value, highlight3);
+  EXPECT_FALSE(iter->FetchNextItem(nullptr, key, value));
+}
+
+TEST_F(HighlightRegistryTest, LiveIterationSetExistingKeyAheadOfCursor) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes("1234");
+  auto* dom_window = GetDocument().domWindow();
+  HighlightRegistry* registry = HighlightRegistry::From(*dom_window);
+  auto* text = To<Text>(GetDocument().body()->firstChild());
+
+  auto* highlight3 = CreateHighlight(text, 2, text, 3);
+  registry->SetForTesting(AtomicString("h1"),
+                          CreateHighlight(text, 0, text, 1));
+  registry->SetForTesting(AtomicString("h2"),
+                          CreateHighlight(text, 1, text, 2));
+  registry->SetForTesting(AtomicString("h3"), highlight3);
+
+  auto* iter =
+      MakeGarbageCollected<HighlightRegistry::IterationSource>(*registry);
+  String key;
+  Highlight* value;
+  EXPECT_TRUE(iter->FetchNextItem(nullptr, key, value));
+  EXPECT_EQ(key, "h1");
+
+  // Overwriting a key the iterator hasn't reached yet keeps it in place, so it
+  // is still visited in its original position with the new Highlight.
+  auto* new_highlight2 = CreateHighlight(text, 0, text, 4);
+  registry->SetForTesting(AtomicString("h2"), new_highlight2);
+
+  EXPECT_TRUE(iter->FetchNextItem(nullptr, key, value));
+  EXPECT_EQ(key, "h2");
+  EXPECT_EQ(value, new_highlight2);
+  EXPECT_TRUE(iter->FetchNextItem(nullptr, key, value));
+  EXPECT_EQ(key, "h3");
+  EXPECT_EQ(value, highlight3);
   EXPECT_FALSE(iter->FetchNextItem(nullptr, key, value));
 }
 

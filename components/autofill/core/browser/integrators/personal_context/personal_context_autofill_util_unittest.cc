@@ -11,6 +11,8 @@
 #include "components/autofill/core/browser/webdata/autofill_ai/entity_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_test_helper.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "components/optimization_guide/core/feature_registry/enterprise_policy_registry.h"
+#include "components/optimization_guide/core/feature_registry/feature_registration.h"
 #include "components/personal_context/core/personal_context_eligibility_service.h"
 #include "components/personal_context/core/personal_context_types.h"
 #include "components/subscription_eligibility/subscription_eligibility_prefs.h"
@@ -31,25 +33,36 @@ class MockPersonalContextEligibilityService
  public:
   MOCK_METHOD(void, AddObserver, (Observer*), (override));
   MOCK_METHOD(void, RemoveObserver, (Observer*), (override));
+  MOCK_METHOD(bool, IsInitialized, (), (const, override));
   MOCK_METHOD(PersonalContextEligibilityState,
               GetEligibilityState,
               (),
               (override));
+  MOCK_METHOD(bool, IsEligibleForEncryption, (), (const, override));
+  MOCK_METHOD(
+      std::optional<personal_context::PersonalContextNonEligibilityReason>,
+      GetNonEligibilityReason,
+      (),
+      (const, override));
 };
 
 class PersonalContextAutofillUtilTest : public testing::Test {
  public:
   PersonalContextAutofillUtilTest() {
+    std::vector<base::test::FeatureRefAndParams> enabled_features = {
+        {features::kAutofillAiWithDataSchema, {}},
+        {features::kAutofillAiServerModel, {}},
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+        {features::kAutofillAiAvailableByDefault, {}},
+#endif
+        {features::kAutofillAmbientAutofill, {}},
+    };
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        /*enabled_features=*/
-        {
-            {features::kAutofillAiWithDataSchema, {}},
-            {features::kAutofillAiServerModel, {}},
-            {features::kAutofillAiAvailableByDefault, {}},
-            {features::kAutofillAmbientAutofill,
-             {{"ambient_autofill_eligible_tiers", "1"}}},
-        },
+        enabled_features,
         /*disabled_features=*/{});
+    client_.GetPrefs()->registry()->RegisterIntegerPref(
+        optimization_guide::prefs::kFindAndFillWithGeminiSettings,
+        std::to_underlying(optimization_guide::EnterprisePolicyValue::kAllow));
     client_.GetPrefs()->SetInteger(
         subscription_eligibility::prefs::kAiSubscriptionTier, 1);
     client_.SetUpPrefsAndIdentityForAutofillAi();
@@ -83,7 +96,6 @@ TEST_F(PersonalContextAutofillUtilTest,
   };
 
   EXPECT_FALSE(check_state(kDisabledNotEligible));
-  EXPECT_FALSE(check_state(kDisabledNeedsOptIn));
   EXPECT_TRUE(check_state(kEligible));
 
   EXPECT_FALSE(ShouldShowPersonalContextAutofillSetting(
@@ -110,6 +122,19 @@ TEST_F(PersonalContextAutofillUtilTest,
   ON_CALL(service, GetEligibilityState())
       .WillByDefault(Return(PersonalContextEligibilityState::kEligible));
 
+  EXPECT_TRUE(ShouldShowPersonalContextAutofillSetting(client_, &service));
+}
+
+TEST_F(PersonalContextAutofillUtilTest,
+       ShouldShowPersonalContextAutofillSetting_AtMemoryEnabled) {
+  NiceMock<MockPersonalContextEligibilityService> service;
+  ON_CALL(service, GetEligibilityState())
+      .WillByDefault(Return(PersonalContextEligibilityState::kEligible));
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{features::kAutofillAtMemory},
+      /*disabled_features=*/{features::kAutofillAmbientAutofill});
   EXPECT_TRUE(ShouldShowPersonalContextAutofillSetting(client_, &service));
 }
 

@@ -66,6 +66,7 @@ public class LanguagesManager {
         LanguageSettingsActionType.REMOVE_SITE_FROM_NEVER_TRANSLATE,
         LanguageSettingsActionType.RESTART_CHROME
     })
+    // LINT.IfChange(LanguageSettingsActionType)
     @Retention(RetentionPolicy.SOURCE)
     @interface LanguageSettingsActionType {
         // int CLICK_ON_ADD_LANGUAGE = 1; // Removed M89
@@ -86,6 +87,10 @@ public class LanguagesManager {
         int RESTART_CHROME = 16;
         int NUM_ENTRIES = 17;
     }
+    // LINT.ThenChange(
+    //   //chrome/browser/resources/settings/languages_page/languages_settings_metrics_proxy.ts:LanguageSettingsActionType,
+    //   //tools/metrics/histograms/metadata/language/enums.xml:LanguageSettingsActionType
+    // )
 
     // Constants used to log UMA enum histogram, must stay in sync with
     // LanguageSettingsPageType. Further actions can only be appended, existing
@@ -103,6 +108,7 @@ public class LanguagesManager {
         LanguageSettingsPageType.ALWAYS_TRANSLATE_ADD_LANGUAGE,
         LanguageSettingsPageType.VIEW_NEVER_TRANSLATE_SITES
     })
+    // LINT.IfChange(LanguageSettingsPageType)
     @Retention(RetentionPolicy.SOURCE)
     @interface LanguageSettingsPageType {
         int PAGE_MAIN = 0;
@@ -120,6 +126,12 @@ public class LanguagesManager {
         int NUM_ENTRIES = 12;
     }
 
+    // LINT.ThenChange(
+    //
+    // //chrome/browser/resources/settings/languages_page/languages_settings_metrics_proxy.ts:LanguageSettingsPageType,
+    //   //tools/metrics/histograms/metadata/language/enums.xml:LanguageSettingsPageType
+    // )
+
     // Int keys to determine the list of potential languages for different language preferences.
     @IntDef({
         LanguageListType.ACCEPT_LANGUAGES,
@@ -129,7 +141,7 @@ public class LanguagesManager {
         LanguageListType.ALWAYS_LANGUAGES
     })
     @Retention(RetentionPolicy.SOURCE)
-    @interface LanguageListType {
+    public @interface LanguageListType {
         int ACCEPT_LANGUAGES = 0; // Default
         int UI_LANGUAGES = 1;
         int TARGET_LANGUAGES = 2;

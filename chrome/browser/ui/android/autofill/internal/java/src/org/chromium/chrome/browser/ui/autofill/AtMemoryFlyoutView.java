@@ -21,6 +21,7 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ui.autofill.internal.R;
 import org.chromium.components.autofill.AutofillSuggestion;
+import org.chromium.components.autofill.SuggestionType;
 import org.chromium.components.browser_ui.widget.chips.ChipView;
 
 import java.util.ArrayList;
@@ -28,18 +29,20 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** View wrapper for the flyout screen of the @memory bottom sheet. */
+/** View wrapper for the flyout screen of the AtMemory bottom sheet. */
 @NullMarked
 public class AtMemoryFlyoutView extends LinearLayout {
     private ConstraintLayout mChipsContainer;
     private Flow mChipsFlow;
     private View mBackButton;
     private TextView mTitleView;
+    private TextView mSourceTextView;
     private TextView mManageButton;
 
     private final List<ChipView> mActiveChips = new ArrayList<>();
 
     private @Nullable Callback<Integer> mSuggestionClickListener;
+    private @Nullable Runnable mBackClickListener;
     private final View.OnLayoutChangeListener mChipsLayoutListener =
             (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
                 alignFlyoutChipHeights(v, right - left, oldRight - oldLeft);
@@ -55,8 +58,10 @@ public class AtMemoryFlyoutView extends LinearLayout {
         mChipsContainer = findViewById(R.id.flyout_chips_container);
         mChipsFlow = findViewById(R.id.chips_flow);
         mBackButton = findViewById(R.id.flyout_back_button);
+        mBackButton.setOnClickListener(v -> onBackPressed());
         mTitleView = findViewById(R.id.flyout_title);
         mManageButton = findViewById(R.id.flyout_manage_button);
+        mSourceTextView = findViewById(R.id.flyout_source_text);
         mChipsContainer.addOnLayoutChangeListener(mChipsLayoutListener);
     }
 
@@ -65,32 +70,87 @@ public class AtMemoryFlyoutView extends LinearLayout {
     }
 
     public void setSuggestions(List<AutofillSuggestion> suggestions) {
+        resetViews();
+
+        List<Integer> chipViewIds = new ArrayList<>();
+
+        for (int index = 0; index < suggestions.size(); index++) {
+            AutofillSuggestion suggestion = suggestions.get(index);
+            switch (suggestion.getSuggestionType()) {
+                case SuggestionType.MANAGE_ADDRESS:
+                case SuggestionType.MANAGE_AUTOFILL_AI:
+                case SuggestionType.MANAGE_AUTOFILL_AI_IDENTITY_DOCS:
+                case SuggestionType.MANAGE_AUTOFILL_AI_TRAVEL:
+                case SuggestionType.MANAGE_AUTOFILL_AI_SHOPPING:
+                case SuggestionType.MANAGE_CREDIT_CARD:
+                case SuggestionType.MANAGE_IBAN:
+                case SuggestionType.MANAGE_LOYALTY_CARD:
+                case SuggestionType.MANAGE_ENHANCED_AUTOFILL:
+                    setUpManageButton(suggestion, index);
+                    break;
+                case SuggestionType.AT_MEMORY_SOURCE_ATTRIBUTION:
+                    setUpSourceTextView(suggestion);
+                    break;
+                case SuggestionType.AT_MEMORY_SEARCH_RESULT:
+                    setUpChip(suggestion, index, chipViewIds);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        mChipsFlow.setReferencedIds(toIntArray(chipViewIds));
+        mChipsContainer.setVisibility(chipViewIds.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    private void resetViews() {
         for (ChipView chip : mActiveChips) {
             mChipsContainer.removeView(chip);
         }
         mActiveChips.clear();
+        mSourceTextView.setVisibility(View.GONE);
+        mManageButton.setVisibility(View.GONE);
+        mManageButton.setOnClickListener(null);
+    }
 
-        int[] ids = new int[suggestions.size()];
-        for (int i = 0; i < suggestions.size(); i++) {
-            AutofillSuggestion suggestion = suggestions.get(i);
-            ChipView chip = createFlyoutChipView(mChipsContainer, suggestion, i);
-            ids[i] = chip.getId();
-            mChipsContainer.addView(chip);
-            mActiveChips.add(chip);
-        }
-        mChipsFlow.setReferencedIds(ids);
+    private void setUpSourceTextView(AutofillSuggestion suggestion) {
+        mSourceTextView.setText(suggestion.getLabel());
+        mSourceTextView.setVisibility(View.VISIBLE);
+    }
+
+    private void setUpManageButton(AutofillSuggestion suggestion, int index) {
+        mManageButton.setText(suggestion.getLabel());
+        mManageButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                suggestion.getIconId(), 0, 0, 0);
+        mManageButton.setVisibility(View.VISIBLE);
+        mManageButton.setOnClickListener(
+                v -> {
+                    if (mSuggestionClickListener != null) {
+                        mSuggestionClickListener.onResult(index);
+                    }
+                });
+    }
+
+    private void setUpChip(AutofillSuggestion suggestion, int index, List<Integer> chipViewIds) {
+        ChipView chip = createFlyoutChipView(mChipsContainer, suggestion, index);
+        chipViewIds.add(chip.getId());
+        mChipsContainer.addView(chip);
+        mActiveChips.add(chip);
     }
 
     public void setBackClickListener(Runnable onClickListener) {
-        mBackButton.setOnClickListener(v -> onClickListener.run());
-    }
-
-    public void setManageClickListener(Runnable onClickListener) {
-        mManageButton.setOnClickListener(v -> onClickListener.run());
+        mBackClickListener = onClickListener;
     }
 
     public void setSuggestionClickListener(Callback<Integer> onClickListener) {
         mSuggestionClickListener = onClickListener;
+    }
+
+    /** Invokes the back navigation callback. */
+    public void onBackPressed() {
+        if (mBackClickListener != null) {
+            mBackClickListener.run();
+        }
     }
 
     private ChipView createFlyoutChipView(
@@ -106,6 +166,8 @@ public class AtMemoryFlyoutView extends LinearLayout {
         chip.setId(View.generateViewId());
 
         TextView primaryTextView = chip.getPrimaryTextView();
+        primaryTextView.setMaxLines(2);
+        primaryTextView.setEllipsize(TextUtils.TruncateAt.END);
         primaryTextView.setText(suggestion.getLabel());
 
         TextView secondaryTextView = chip.getSecondaryTextView();
@@ -153,5 +215,13 @@ public class AtMemoryFlyoutView extends LinearLayout {
             }
         }
         container.addOnLayoutChangeListener(mChipsLayoutListener);
+    }
+
+    private int[] toIntArray(List<Integer> list) {
+        int[] array = new int[list.size()];
+        for (int i = 0; i < list.size(); i++) {
+            array[i] = list.get(i);
+        }
+        return array;
     }
 }

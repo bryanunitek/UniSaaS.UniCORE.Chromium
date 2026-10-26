@@ -2,12 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import type {CrInfiniteListElement} from '//resources/cr_elements/cr_infinite_list/cr_infinite_list.js';
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
 import type {EventEntry, EventListElement} from './event_list.js';
 
+export interface TemplatizedDomNodes {
+  eventList: CrInfiniteListElement<EventEntry>;
+}
+
 export function getHtml(this: EventListElement) {
-  // clang-format off
   return html`
 <!--_html_template_start_-->
 <div class="filter-bar-container">
@@ -24,20 +28,20 @@ export function getHtml(this: EventListElement) {
 <div class="event-count">
   <span>${this.getNumDisplayedEventsLabel()}</span>
   ${this.eventsWithoutDatesLabel ? html`
-    <span>&bull;</span>
+    <span>•</span>
     <span class="events-without-dates-label">
       ${this.eventsWithoutDatesLabel}
     </span>
   ` : ''}
   ${this.eventsWithParseErrorsLabel ? html`
-    <span>&bull;</span>
+    <span>•</span>
     <span class="events-with-parse-errors-label">
       ${this.eventsWithParseErrorsLabel}
     </span>
   ` : ''}
 </div>
-<cr-infinite-list class="event-list" .items="${this.events}" item-size="36"
-    chunk-size="100" aria-rowcount="${this.events.length}"
+<cr-infinite-list id="eventList" class="event-list" .items="${this.events}"
+    item-size="36" chunk-size="100" aria-rowcount="${this.events.length}"
     .scrollTarget="${this.scrollTarget}"
     .template="${(item: EventEntry) => html`
       <div>
@@ -45,8 +49,8 @@ export function getHtml(this: EventListElement) {
             .processMap="${this.processMap}" .policies="${item.policies}"
             @expanded-changed="${this.onEventItemExpandedChanged}">
         </event-list-item>
-      </div>`}">
+      </div>
+    `}">
 </cr-infinite-list>
 <!--_html_template_end_-->`;
-  // clang-format on
 }

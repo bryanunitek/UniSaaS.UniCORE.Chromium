@@ -22,6 +22,10 @@
 #include "base/i18n/base_i18n_switches.h"
 #include "base/i18n/break_iterator.h"
 #include "base/i18n/char_iterator.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
+#include "base/i18n/test/scoped_icu_locale.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/not_fatal_until.h"
@@ -122,13 +126,6 @@ bool IndexInRange(const Range& range, size_t index) {
 std::u16string_view GetSelectedText(RenderText* render_text) {
   return render_text->text().substr(render_text->selection().GetMin(),
                                     render_text->selection().length());
-}
-
-// A test utility function to set the application default text direction.
-void SetRTL(bool rtl) {
-  // Override the current locale/direction.
-  base::i18n::SetICUDefaultLocale(rtl ? "he" : "en");
-  EXPECT_EQ(rtl, base::i18n::IsRTL());
 }
 
 // Execute MoveCursor on the given |render_text| instance for the given
@@ -1399,11 +1396,9 @@ TEST_F(RenderTextTest, ObscuredText) {
       u"hop on pop",  // Check LTR word boundaries.
       u"אב אג בג",    // Check RTL word boundaries.
   });
-  for (size_t i = 0; i < std::size(texts); ++i) {
-    TestVisualCursorMotionInObscuredField(render_text, texts[i],
-                                          SELECTION_NONE);
-    TestVisualCursorMotionInObscuredField(render_text, texts[i],
-                                          SELECTION_RETAIN);
+  for (auto* text : texts) {
+    TestVisualCursorMotionInObscuredField(render_text, text, SELECTION_NONE);
+    TestVisualCursorMotionInObscuredField(render_text, text, SELECTION_RETAIN);
   }
 }
 
@@ -3678,14 +3673,13 @@ TEST_F(RenderTextTest, GetDisplayTextDirection) {
 
   for (size_t i = 0; i < 2; ++i) {
     // Toggle the application default text direction (to try each direction).
-    SetRTL(!base::i18n::IsRTL());
+    base::i18n::ScopedRTLForTesting scoped_rtl(!base::i18n::IsRTL());
 
     // Ensure that directionality modes yield the correct text directions.
-    for (size_t j = 0; j < std::size(cases); j++) {
-      render_text->SetText(cases[j].text);
+    for (auto c : cases) {
+      render_text->SetText(c.text);
       render_text->SetDirectionalityMode(DIRECTIONALITY_FROM_TEXT);
-      EXPECT_EQ(render_text->GetDisplayTextDirection(),
-                cases[j].text_direction);
+      EXPECT_EQ(render_text->GetDisplayTextDirection(), c.text_direction);
       render_text->SetDirectionalityMode(DIRECTIONALITY_FORCE_LTR);
       EXPECT_EQ(render_text->GetDisplayTextDirection(),
                 base::i18n::LEFT_TO_RIGHT);
@@ -4459,9 +4453,9 @@ TEST_F(RenderTextTest, EdgeSelectionModels) {
   });
 
   RenderText* render_text = GetRenderText();
-  for (size_t i = 0; i < std::size(cases); i++) {
-    render_text->SetText(cases[i].text);
-    bool ltr = (cases[i].expected_text_direction == base::i18n::LEFT_TO_RIGHT);
+  for (const auto& c : cases) {
+    render_text->SetText(c.text);
+    bool ltr = (c.expected_text_direction == base::i18n::LEFT_TO_RIGHT);
 
     SelectionModel start_edge =
         test_api()->EdgeSelectionModel(ltr ? CURSOR_LEFT : CURSOR_RIGHT);
@@ -4469,7 +4463,7 @@ TEST_F(RenderTextTest, EdgeSelectionModels) {
 
     SelectionModel end_edge =
         test_api()->EdgeSelectionModel(ltr ? CURSOR_RIGHT : CURSOR_LEFT);
-    EXPECT_EQ(end_edge, SelectionModel(cases[i].text.length(), CURSOR_FORWARD));
+    EXPECT_EQ(end_edge, SelectionModel(c.text.length(), CURSOR_FORWARD));
   }
 }
 
@@ -4485,14 +4479,14 @@ TEST_F(RenderTextTest, SelectAll) {
   const bool was_rtl = base::i18n::IsRTL();
 
   for (size_t i = 0; i < 2; ++i) {
-    SetRTL(!base::i18n::IsRTL());
+    base::i18n::ScopedRTLForTesting scoped_rtl(!base::i18n::IsRTL());
     // Test that an empty string produces an empty selection model.
     render_text->SetText(std::u16string());
     EXPECT_EQ(render_text->selection_model(), SelectionModel());
 
     // Test the weak, LTR, RTL, and Bidi string cases.
-    for (size_t j = 0; j < std::size(cases); j++) {
-      render_text->SetText(cases[j]);
+    for (auto* c : cases) {
+      render_text->SetText(c);
       render_text->SelectAll(false);
       EXPECT_EQ(render_text->selection_model(), expected_forwards);
       render_text->SelectAll(true);
@@ -4775,8 +4769,9 @@ TEST_F(RenderTextTest, MAYBE_MoveLeftRightByWordInBidiText) {
       u" abc def hij \u05E1\u05E2\u05E3 \u05E4\u05E5\u05E6"
       u" \u05E7\u05E8\u05E9");
 
-  for (size_t i = 0; i < test.size(); ++i)
-    MoveLeftRightByWordVerifier(render_text, test[i]);
+  for (auto& i : test) {
+    MoveLeftRightByWordVerifier(render_text, i);
+  }
 }
 
 TEST_F(RenderTextTest, MoveLeftRightByWordInBidiText_TestEndOfText) {
@@ -5436,11 +5431,11 @@ TEST_F(RenderTextTest, StringSizeHeight) {
   const FontList& larger_font_list = default_font_list.DeriveWithSizeDelta(24);
   EXPECT_GT(larger_font_list.GetHeight(), default_font_list.GetHeight());
 
-  for (size_t i = 0; i < std::size(cases); i++) {
+  for (const auto& i : cases) {
     ResetRenderTextInstance();
     RenderText* render_text = GetRenderText();
     render_text->SetFontList(default_font_list);
-    render_text->SetText(cases[i]);
+    render_text->SetText(i);
 
     const int height1 = render_text->GetStringSize().height();
     EXPECT_GT(height1, 0);
@@ -5507,8 +5502,7 @@ TEST_F(RenderTextTest, GetTextOffset) {
   // The default horizontal text offset differs for LTR and RTL, and is only set
   // when the RenderText object is created.  This test will check the default in
   // LTR mode, and the next test will check the RTL default.
-  const bool was_rtl = base::i18n::IsRTL();
-  SetRTL(false);
+  base::i18n::ScopedRTLForTesting scoped_rtl(false);
 
   // Reset the render text instance since the locale was changed.
   ResetRenderTextInstance();
@@ -5554,15 +5548,12 @@ TEST_F(RenderTextTest, GetTextOffset) {
   render_text->SetDisplayRect(display_rect);
   offset = render_text->GetLineOffset(0);
   EXPECT_EQ(prev_offset.y() + kEnlargementY, offset.y());
-
-  SetRTL(was_rtl);
 }
 
 TEST_F(RenderTextTest, GetTextOffsetHorizontalDefaultInRTL) {
   // This only checks the default horizontal alignment in RTL mode; all other
   // GetLineOffset(0) attributes are checked by the test above.
-  const bool was_rtl = base::i18n::IsRTL();
-  SetRTL(true);
+  base::i18n::ScopedRTLForTesting scoped_rtl(true);
 
   // Reset the render text instance since the locale was changed.
   ResetRenderTextInstance();
@@ -5577,7 +5568,6 @@ TEST_F(RenderTextTest, GetTextOffsetHorizontalDefaultInRTL) {
   render_text->SetDisplayRect(display_rect);
   Vector2d offset = render_text->GetLineOffset(0);
   EXPECT_EQ(kEnlargement, offset.x());
-  SetRTL(was_rtl);
 }
 
 TEST_F(RenderTextTest, GetTextOffsetVerticalAlignment) {
@@ -5686,9 +5676,9 @@ TEST_F(RenderTextTest, SetDisplayOffset) {
       {ALIGN_CENTER, kEnlargement},
   });
 
-  for (size_t i = 0; i < std::size(small_content_cases); i++) {
-    render_text->SetHorizontalAlignment(small_content_cases[i].alignment);
-    render_text->SetDisplayOffset(small_content_cases[i].offset);
+  for (auto small_content_case : small_content_cases) {
+    render_text->SetHorizontalAlignment(small_content_case.alignment);
+    render_text->SetDisplayOffset(small_content_case.offset);
     EXPECT_EQ(0, render_text->GetUpdatedDisplayOffset().x());
   }
 
@@ -5722,10 +5712,10 @@ TEST_F(RenderTextTest, SetDisplayOffset) {
       {ALIGN_CENTER, kEnlargement, (kEnlargement - 1) / 2},
   });
 
-  for (size_t i = 0; i < std::size(large_content_cases); i++) {
-    render_text->SetHorizontalAlignment(large_content_cases[i].alignment);
-    render_text->SetDisplayOffset(large_content_cases[i].offset);
-    EXPECT_EQ(large_content_cases[i].expected_offset,
+  for (auto large_content_case : large_content_cases) {
+    render_text->SetHorizontalAlignment(large_content_case.alignment);
+    render_text->SetDisplayOffset(large_content_case.offset);
+    EXPECT_EQ(large_content_case.expected_offset,
               render_text->GetUpdatedDisplayOffset().x());
   }
 }
@@ -5770,16 +5760,16 @@ TEST_F(RenderTextTest, SameFontForParentheses) {
   });
 
   RenderText* render_text = GetRenderText();
-  for (size_t i = 0; i < std::size(cases); ++i) {
-    const size_t start_paren_char_index = cases[i].find('(');
+  for (const auto& i : cases) {
+    const size_t start_paren_char_index = i.find('(');
     ASSERT_NE(std::u16string::npos, start_paren_char_index);
-    const size_t end_paren_char_index = cases[i].find(')');
+    const size_t end_paren_char_index = i.find(')');
     ASSERT_NE(std::u16string::npos, end_paren_char_index);
 
-    for (size_t j = 0; j < std::size(punctuation_pairs); ++j) {
-      std::u16string text = cases[i];
-      text[start_paren_char_index] = punctuation_pairs[j].left_char;
-      text[end_paren_char_index] = punctuation_pairs[j].right_char;
+    for (auto punctuation_pair : punctuation_pairs) {
+      std::u16string text = i;
+      text[start_paren_char_index] = punctuation_pair.left_char;
+      text[end_paren_char_index] = punctuation_pair.right_char;
       render_text->SetText(text);
 
       const std::vector<FontSpan> spans = GetFontSpans();
@@ -5841,10 +5831,10 @@ TEST_F(RenderTextTest, SelectWord) {
       {16, 13, 16},
   });
 
-  for (size_t i = 0; i < std::size(cases); ++i) {
-    render_text->SetCursorPosition(cases[i].cursor);
+  for (const auto& i : cases) {
+    render_text->SetCursorPosition(i.cursor);
     render_text->SelectWord();
-    EXPECT_EQ(Range(cases[i].selection_start, cases[i].selection_end),
+    EXPECT_EQ(Range(i.selection_start, i.selection_end),
               render_text->selection());
   }
 }
@@ -5891,7 +5881,6 @@ TEST_F(RenderTextTest, SelectMultipleWords) {
 
 TEST_F(RenderTextTest, DisplayRectShowsCursorLTR) {
   ASSERT_FALSE(base::i18n::IsRTL());
-  ASSERT_FALSE(base::i18n::ICUIsRTL());
 
   RenderText* render_text = GetRenderText();
   render_text->SetText(u"abcdefghijklmnopqrstuvwxzyabcdefg");
@@ -5944,8 +5933,7 @@ TEST_F(RenderTextTest, DisplayRectShowsCursorLTR) {
 
 TEST_F(RenderTextTest, DisplayRectShowsCursorRTL) {
   // Set the application default text direction to RTL.
-  const bool was_rtl = base::i18n::IsRTL();
-  SetRTL(true);
+  base::i18n::ScopedRTLForTesting scoped_rtl(true);
 
   // Reset the render text instance since the locale was changed.
   ResetRenderTextInstance();
@@ -5997,9 +5985,6 @@ TEST_F(RenderTextTest, DisplayRectShowsCursorRTL) {
   EXPECT_EQ(render_text->display_rect().width() - width - 1,
             render_text->GetUpdatedCursorBounds().x());
 
-  // Reset the application default text direction to LTR.
-  SetRTL(was_rtl);
-  EXPECT_EQ(was_rtl, base::i18n::IsRTL());
 }
 
 // Changing colors between or inside ligated glyphs should not break shaping.
@@ -6009,8 +5994,8 @@ TEST_F(RenderTextTest, SelectionKeepsLigatures) {
   RenderText* render_text = GetRenderText();
   render_text->set_selection_color(SK_ColorGREEN);
 
-  for (size_t i = 0; i < std::size(kTestStrings); ++i) {
-    render_text->SetText(kTestStrings[i]);
+  for (auto* test_string : kTestStrings) {
+    render_text->SetText(test_string);
     const int expected_width = render_text->GetStringSize().width();
     render_text->SelectRange({0, 1});
     EXPECT_EQ(expected_width, render_text->GetStringSize().width());
@@ -7499,8 +7484,8 @@ TEST_F(RenderTextTest, GlyphBounds) {
       {u"asdf 1234 qwer", u"\u0647\u0654", u"\u0645\u0631\u062D\u0628\u0627"});
   RenderText* render_text = GetRenderText();
 
-  for (size_t i = 0; i < std::size(kTestStrings); ++i) {
-    render_text->SetText(kTestStrings[i]);
+  for (auto* test_string : kTestStrings) {
+    render_text->SetText(test_string);
 
     for (size_t j = 0; j < render_text->text().length(); ++j)
       EXPECT_FALSE(render_text->GetCursorSpan(Range(j, j + 1)).is_empty());
@@ -7919,7 +7904,8 @@ TEST_F(RenderTextTest, CJKFontWithLocale) {
 
   std::set<std::string> tested_font_names;
   for (const auto* locale : kLocaleTests) {
-    base::i18n::SetICUDefaultLocale(locale);
+    base::i18n::ScopedDefaultIcuLocale scoped_locale(
+        base::i18n::GetLanguageTagFromString(locale).value());
     ResetRenderTextInstance();
 
     RenderTextHarfBuzz* render_text = GetRenderText();
@@ -9387,6 +9373,54 @@ TEST_F(RenderTextTest, Clusterfuzz_Issue_1193815) {
   render_text->Draw(canvas());
 }
 
+class SkiaTextRendererTest : public testing::Test, public SkCanvas {
+ protected:
+  SkiaTextRendererTest()
+      : SkCanvas(100, 100),
+        canvas_(recorder_.beginRecording(), 1.0f),
+        renderer_(&canvas_) {}
+
+  void onDrawRect(const SkRect& rect, const SkPaint& paint) override {
+    rects_.push_back(rect);
+  }
+
+  internal::SkiaTextRenderer* renderer() { return &renderer_; }
+
+  const std::vector<SkRect>& GetDrawnRects() {
+    recorder_.finishRecordingAsPicture().Playback(this);
+    return rects_;
+  }
+
+ private:
+  cc::PaintRecorder recorder_;
+  Canvas canvas_;
+  internal::SkiaTextRenderer renderer_;
+  std::vector<SkRect> rects_;
+};
+
+// Ensure underline thickness is clamped to at least 1.0f on small fonts to
+// prevent faint subpixel lines. See crbug.com/553093012.
+TEST_F(SkiaTextRendererTest, DrawUnderlineMinimumThickness) {
+  // Font size 11px: 11 * (1/18) = 0.61px, clamps to 1.0f.
+  renderer()->SetTextSize(11);
+  renderer()->DrawUnderline(0, 0, 100);
+
+  // Font size 36px: 36 * (1/18) = 2.0px, not clamped.
+  renderer()->SetTextSize(36);
+  renderer()->DrawUnderline(0, 0, 100);
+
+  // Font size 11px with thickness_factor = 2.0: 1.22px, not clamped.
+  renderer()->SetTextSize(11);
+  renderer()->DrawUnderline(0, 0, 100, 2.0f);
+
+  const auto& rects = GetDrawnRects();
+  ASSERT_EQ(rects.size(), 3u);
+  EXPECT_FLOAT_EQ(rects[0].height(), 1.0f);
+  EXPECT_FLOAT_EQ(rects[1].height(), 2.0f);
+  EXPECT_FLOAT_EQ(rects[2].height(),
+                  11.0f * 2.0f * RenderText::kLineThicknessFactor);
+}
+
 class RenderTextDirectionTest
     : public testing::Test,
       public testing::WithParamInterface<std::string> {
@@ -9405,7 +9439,7 @@ class RenderTextDirectionTest
  private:
   void SetUp() override {
     // Set default locale to a LTR language.
-    base::i18n::SetICUDefaultLocale("en");
+    locale_override_.emplace(base::i18n::GetKnownLanguageTag("en"));
 
     if (!GetParam().empty()) {
       base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
@@ -9416,6 +9450,7 @@ class RenderTextDirectionTest
     test_api_ = std::make_unique<test::RenderTextTestApi>(render_text_.get());
   }
 
+  std::optional<base::i18n::ScopedDefaultIcuLocale> locale_override_;
   std::unique_ptr<RenderTextHarfBuzz> render_text_;
   std::unique_ptr<test::RenderTextTestApi> test_api_;
 };

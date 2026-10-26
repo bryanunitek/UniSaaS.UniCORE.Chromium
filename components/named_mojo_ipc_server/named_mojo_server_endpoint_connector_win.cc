@@ -33,6 +33,7 @@
 #include "components/named_mojo_ipc_server/endpoint_options.h"
 #include "mojo/public/cpp/platform/named_platform_channel.h"
 #include "mojo/public/cpp/platform/platform_channel_endpoint.h"
+#include "mojo/public/cpp/platform/platform_channel_server.h"
 #include "mojo/public/cpp/platform/platform_handle.h"
 
 namespace named_mojo_ipc_server {
@@ -113,6 +114,7 @@ void NamedMojoServerEndpointConnectorWin::Connect() {
   mojo::NamedPlatformChannel::Options options;
   options.server_name = options_.server_name;
   options.security_descriptor = options_.security_descriptor;
+  options.pipe_name_type = options_.pipe_name_type;
 
   // Allow multiple clients to connect.
   options.enforce_uniqueness = false;
@@ -134,8 +136,8 @@ void NamedMojoServerEndpointConnectorWin::Connect() {
   // be safe.
   UNSAFE_TODO(memset(&connect_overlapped_, 0, sizeof(connect_overlapped_)));
   connect_overlapped_.hEvent = client_connected_event_.handle();
-  BOOL ok =
-      ConnectNamedPipe(pending_named_pipe_handle_.Get(), &connect_overlapped_);
+  BOOL ok = mojo::ConnectNamedPipeWithoutCompletionPacket(
+      pending_named_pipe_handle_.Get(), &connect_overlapped_);
   if (ok) {
     PLOG(ERROR) << "Unexpected success while waiting for pipe connection";
     OnError();

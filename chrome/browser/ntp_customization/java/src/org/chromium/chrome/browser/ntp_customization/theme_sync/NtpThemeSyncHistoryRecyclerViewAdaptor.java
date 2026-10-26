@@ -14,21 +14,26 @@ import android.widget.ImageView;
 import androidx.annotation.VisibleForTesting;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.chrome.browser.ntp_customization.R;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase.PlatformType;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
 
 import java.util.List;
 
 @NullMarked
 public class NtpThemeSyncHistoryRecyclerViewAdaptor
         extends RecyclerView.Adapter<NtpThemeSyncHistoryRecyclerViewAdaptor.ImageViewHolder> {
+    /** Callback interface for when an item in the adapter is clicked. */
+    public interface OnItemClickCallback {
+        void onClicked(NtpBackgroundDataBase backgroundData, int position);
+    }
+
     private final Context mContext;
     private final List<NtpBackgroundDataBase> mBackgroundDataList;
-    private final Callback<NtpBackgroundDataBase> mOnClickCallback;
+    private final OnItemClickCallback mOnClickCallback;
 
     // Variable to hold the position of the selected item.
     private int mSelectedPosition;
@@ -46,7 +51,7 @@ public class NtpThemeSyncHistoryRecyclerViewAdaptor
     public NtpThemeSyncHistoryRecyclerViewAdaptor(
             Context context,
             List<NtpBackgroundDataBase> backgroundDataList,
-            Callback<NtpBackgroundDataBase> onClickCallback,
+            OnItemClickCallback onClickCallback,
             int selectedPosition) {
         mContext = context;
         mBackgroundDataList = backgroundDataList;
@@ -78,7 +83,7 @@ public class NtpThemeSyncHistoryRecyclerViewAdaptor
                             /* isFromClick= */ true);
                 };
 
-        holder.bind(ntpBackgroundData, clickListener, mSelectedPosition);
+        holder.bind(mContext, ntpBackgroundData, clickListener, mSelectedPosition);
     }
 
     @Override
@@ -131,7 +136,7 @@ public class NtpThemeSyncHistoryRecyclerViewAdaptor
         }
 
         if (backgroundDataInfo != null && isFromClick) {
-            mOnClickCallback.onResult(backgroundDataInfo);
+            mOnClickCallback.onClicked(backgroundDataInfo, newPosition);
         }
 
         // Notify the adapter to un-draw its selection.
@@ -158,22 +163,29 @@ public class NtpThemeSyncHistoryRecyclerViewAdaptor
          * Binds the background data, a click listener and the current selected position to the
          * view.
          *
+         * @param context The activity context to get resources.
          * @param backgroundData The background data to bind.
          * @param onClickListener The click listener for the item view.
          * @param selectedPosition The currently selected position in the adapter.
          */
         void bind(
+                Context context,
                 NtpBackgroundDataBase backgroundData,
                 View.OnClickListener onClickListener,
                 int selectedPosition) {
             bindImpl(
-                    backgroundData, onClickListener, selectedPosition, getBindingAdapterPosition());
+                    context,
+                    backgroundData,
+                    onClickListener,
+                    selectedPosition,
+                    getBindingAdapterPosition());
         }
 
         /**
          * Binds the background data, a click listener, the current selected position, and the
          * adapter position to the view.
          *
+         * @param context The activity context to get resources.
          * @param backgroundData The background data to bind.
          * @param onClickListener The click listener for the item view.
          * @param selectedPosition The currently selected position in the adapter.
@@ -181,17 +193,26 @@ public class NtpThemeSyncHistoryRecyclerViewAdaptor
          */
         @VisibleForTesting
         void bindImpl(
+                Context context,
                 NtpBackgroundDataBase backgroundData,
                 View.OnClickListener onClickListener,
                 int selectedPosition,
                 int bindingAdaptorPosition) {
+            String contentDescription = backgroundData.getContentDescription();
+            if (contentDescription != null) {
+                itemView.setContentDescription(contentDescription);
+                itemView.setTooltipText(contentDescription);
+            }
             ImageView backgroundView = itemView.findViewById(R.id.background_view);
             Drawable image = backgroundData.getImageDrawable();
+            if (backgroundData.getBackgroundType()
+                    == NtpCustomizationUtils.NtpBackgroundType.DEFAULT) {
+                image = context.getDrawable(R.drawable.default_theme_icon);
+            }
             if (image != null) {
-                backgroundView.setImageBitmap(null);
-                backgroundView.setForeground(image);
+                backgroundView.setImageDrawable(image);
             } else {
-                backgroundView.setForeground(null);
+                backgroundView.setImageDrawable(null);
                 backgroundData.getBitmapOrLoadImage(
                         (result) -> backgroundView.setImageBitmap(result));
             }
@@ -200,10 +221,8 @@ public class NtpThemeSyncHistoryRecyclerViewAdaptor
 
             ImageView badgeView = itemView.findViewById(R.id.platform_badge);
             @PlatformType int platformType = backgroundData.getPlatformType();
-            if (platformType != PlatformType.ANDROID_LOCAL) {
-                boolean isMobile =
-                        platformType == PlatformType.ANDROID_REMOTE
-                                || platformType == PlatformType.IOS;
+            if (platformType != PlatformType.ANDROID) {
+                boolean isMobile = platformType == PlatformType.IOS;
                 if (isMobile) {
                     badgeView.setBackgroundResource(R.drawable.mobile_badge);
                 } else {

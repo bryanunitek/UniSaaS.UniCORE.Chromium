@@ -26,7 +26,7 @@
 #include "chrome/browser/ui/autofill/autofill_popup_controller_impl_test_api.h"
 #include "chrome/browser/ui/autofill/autofill_suggestion_controller.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
 #include "chrome/browser/webauthn/gpm_enclave_controller.h"
 #include "chrome/browser/webauthn/passkey_model_factory.h"
@@ -44,6 +44,7 @@
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync/base/features.h"
@@ -54,6 +55,7 @@
 #include "components/trusted_vault/proto/vault.pb.h"
 #include "components/trusted_vault/test/mock_trusted_vault_throttling_connection.h"
 #include "components/trusted_vault/trusted_vault_connection.h"
+#include "components/trusted_vault/trusted_vault_server_constants.h"
 #include "components/webauthn/core/browser/test_passkey_model.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/scoped_authenticator_environment_for_testing.h"
@@ -146,10 +148,12 @@ class WebAuthnAutofillIntegrationTest : public CertVerifierBrowserTest {
     void Created(ChromeAuthenticatorRequestDelegate* delegate) override {
       auto connection = std::make_unique<testing::NiceMock<
           trusted_vault::MockTrustedVaultThrottlingConnection>>();
-      ON_CALL(*connection, DownloadAuthenticationFactorsRegistrationState(
-                               testing::_, testing::_, testing::_))
+      ON_CALL(*connection,
+              DownloadAuthenticationFactorsRegistrationState(
+                  testing::_, trusted_vault::SecurityDomainId::kPasskeys,
+                  testing::_, testing::_))
           .WillByDefault(
-              [](const CoreAccountInfo&,
+              [](const CoreAccountInfo&, trusted_vault::SecurityDomainId,
                  base::OnceCallback<void(
                      trusted_vault::
                          DownloadAuthenticationFactorsRegistrationStateResult)>
@@ -219,7 +223,7 @@ class WebAuthnAutofillIntegrationTest : public CertVerifierBrowserTest {
     // popup to appear after aborting the request.
     password_manager::PasswordStoreInterface* password_store =
         ProfilePasswordStoreFactory::GetForProfile(
-            browser()->profile(), ServiceAccessType::EXPLICIT_ACCESS)
+            browser()->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS)
             .get();
     password_manager::PasswordForm signin_form;
     GURL url = https_server_.GetURL(kRpId, "/");
@@ -227,7 +231,8 @@ class WebAuthnAutofillIntegrationTest : public CertVerifierBrowserTest {
     signin_form.url = url;
     signin_form.action = url;
     signin_form.username_value = u"remilia";
-    signin_form.password_value = u"shouldbeusingapasskeyinstead";
+    signin_form.password_value =
+        password_manager::PasswordString(u"shouldbeusingapasskeyinstead");
     base::RunLoop run_loop;
     password_store->AddLogin(password_manager::FromPasswordForm(signin_form),
                              run_loop.QuitClosure());
@@ -247,7 +252,7 @@ class WebAuthnAutofillIntegrationTest : public CertVerifierBrowserTest {
 
     identity_test_env_adaptor_ =
         std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
-            browser()->profile());
+            browser()->GetProfile());
     identity_test_env_adaptor_->identity_test_env()->SetPrimaryAccount(
         "test@gmail.com", signin::ConsentLevel::kSignin);
 
@@ -369,7 +374,8 @@ class WebAuthnAutofillIntegrationTest : public CertVerifierBrowserTest {
         .DisableThreshold(true);
     suggestion_controller->AcceptSuggestion(
         it - suggestions.begin(),
-        autofill::AutofillMetrics::SuggestionAcceptedMethod::kMouse);
+        autofill::AutofillMetrics::SuggestionAcceptedMethod::kMouse,
+        /*was_obscured=*/false);
     std::string result;
     ASSERT_TRUE(message_queue.WaitForMessage(&result));
     EXPECT_EQ(result, "\"webauthn: OK\"");
@@ -633,7 +639,7 @@ class WebAuthnMagiChromeQrAutofillIntegrationTest
             signin_metrics::Reason::kSigninPrimaryAccount,
             signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO, GURL(),
             /*record_signin_started_metrics=*/false, base::DoNothing(),
-            base::DoNothing(), base::DoNothing(), base::DoNothing());
+            base::DoNothing(), base::DoNothing());
   }
 
   void PostRunTestOnMainThread() override {
@@ -740,13 +746,12 @@ IN_PROC_BROWSER_TEST_F(WebAuthnMagiChromeQrAutofillIntegrationTest,
                               &autofill::Suggestion::type);
   ASSERT_NE(it, suggestions.end()) << "WebAuthn QR Code suggestion not found";
 
-  // It should replace "Sign in with another device..."
+  // Both inline QR code and "Sign in with another device..." should be present.
   auto another_device_it = std::ranges::find(
       suggestions, autofill::SuggestionType::kWebauthnSignInWithAnotherDevice,
       &autofill::Suggestion::type);
-  EXPECT_EQ(another_device_it, suggestions.end())
-      << "Old 'Sign in with another device...' suggestion should not be "
-         "present";
+  EXPECT_NE(another_device_it, suggestions.end())
+      << "'Sign in with another device...' suggestion should still be present";
 
   // Main text of QR suggestion should be correct:
   EXPECT_EQ(
@@ -778,7 +783,8 @@ IN_PROC_BROWSER_TEST_F(WebAuthnMagiChromeQrAutofillIntegrationTest,
 
   delegate_observer_->WaitForUI();
 
-  ASSERT_TRUE(TapUsernameFieldUntilPopupWithSignInWithAnotherDeviceAppears(web_contents));
+  ASSERT_TRUE(TapUsernameFieldUntilPopupWithSignInWithAnotherDeviceAppears(
+      web_contents));
   base::WeakPtr<autofill::AutofillSuggestionController> suggestion_controller =
       autofill_client->suggestion_controller_for_testing();
   const std::vector<autofill::Suggestion>& suggestions =

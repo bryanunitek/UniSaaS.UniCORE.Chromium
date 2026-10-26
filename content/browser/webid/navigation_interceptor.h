@@ -12,7 +12,6 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/weak_document_ptr.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "net/http/structured_headers.h"
 #include "services/data_decoder/public/cpp/data_decoder.h"
 #include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
@@ -37,8 +36,7 @@ class CONTENT_EXPORT NavigationInterceptor
     ~RequestBuilder() = default;
     CONTENT_EXPORT std::optional<
         std::vector<blink::mojom::IdentityProviderGetParametersPtr>>
-    Build(const GURL& base_url,
-          const net::structured_headers::Dictionary& dictionary);
+    Build(const GURL& base_url, net::structured_headers::Dictionary dictionary);
   };
 
   class ResponseBuilder {
@@ -55,7 +53,7 @@ class CONTENT_EXPORT NavigationInterceptor
       ::password_manager::CredentialMediationRequirement requirement,
       NavigationHandle* navigation_handle,
       const GURL& intercepted_url,
-      Request::RequestTokenCallback callback)>;
+      RequestHandler::RequestTokenCallback callback)>;
 
   explicit NavigationInterceptor(NavigationThrottleRegistry& registry);
   NavigationInterceptor(NavigationThrottleRegistry& registry,
@@ -90,7 +88,8 @@ class CONTENT_EXPORT NavigationInterceptor
       bool is_auto_selected);
 
   RequestInitiator request_initiator_;
-  bool callback_executed_ = false;
+  bool is_inside_onheaderparsed_ = false;
+  bool should_cancel_ = false;
   // Tracks the document present in the target RenderFrameHost at the time the
   // relevant navigation began. This will be navigated to complete the FedCM
   // flow after the initiating navigation is canceled and replaced. A

@@ -9,16 +9,16 @@
 
 #include "base/logging.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/tabs/tab_data.h"
-#include "chrome/browser/ui/views/tabs/fake_tab_slot_controller.h"
+#include "chrome/browser/ui/views/tabs/hovercard/fade_footer_view.h"
 #include "chrome/browser/ui/views/tabs/hovercard/filename_elider.h"
-#include "chrome/browser/ui/views/tabs/hovercard/hover_card_anchor_target.h"
-#include "chrome/browser/ui/views/tabs/tab.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/views/chrome_views_test_base.h"
+#include "components/tabs/public/tab_alert.h"
 #include "content/public/test/browser_task_environment.h"
 #include "skia/ext/font_utils.h"
 #include "testing/gtest/include/gtest/gtest-param-test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/render_text.h"
 #include "ui/views/widget/widget.h"
@@ -387,33 +387,14 @@ class TabHoverCardBubbleViewTest : public ChromeViewsTestBase {
   ~TabHoverCardBubbleViewTest() override = default;
 };
 
-TEST_F(TabHoverCardBubbleViewTest, HoverCardLabel_DomainIsUrl) {
-  auto tab_slot_controller = std::make_unique<FakeTabSlotController>();
-  std::unique_ptr<views::Widget> widget =
-      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
-  Tab* tab = widget->SetContentsView(
-      std::make_unique<Tab>(tabs::TabHandle(1), tab_slot_controller.get()));
+TEST_F(TabHoverCardBubbleViewTest, AlertFooterRowAiModeSharing) {
+  FadeAlertFooterRow alert_row(/*is_fade_out_view=*/false);
+  AlertFooterRowData data;
+  data.alert_state = tabs::TabAlert::kAiModeSharing;
+  alert_row.SetData(data);
 
-  TabHoverCardBubbleView* hover_card =
-      new TabHoverCardBubbleView(tab, {.show_domain = true});
-
-  tabs::TabData data;
-  data.last_committed_url = GURL("https://example.com");
-  data.should_display_url = true;
-  tab->SetDataForTesting(data);
-
-  hover_card->UpdateCardContent(tab);
-
-  FadeLabelView* domain_view = hover_card->GetDomainViewForTesting();
-  FadeLabel* primary_label = domain_view->GetPrimaryViewForTesting();
-  EXPECT_EQ(gfx::DirectionalityMode::DIRECTIONALITY_AS_URL,
-            primary_label->GetDirectionalityMode());
-
-  data.should_display_url = false;
-  tab->SetDataForTesting(data);
-  hover_card->UpdateCardContent(tab);
-  EXPECT_EQ(gfx::DirectionalityMode::DIRECTIONALITY_FROM_TEXT,
-            primary_label->GetDirectionalityMode());
-
-  hover_card->GetWidget()->CloseNow();
+  EXPECT_EQ(
+      alert_row.footer_label()->GetText(),
+      l10n_util::GetStringUTF16(IDS_TOOLTIP_TAB_ALERT_STATE_AI_MODE_SHARING));
+  EXPECT_FALSE(alert_row.icon()->GetImageModel().IsEmpty());
 }

@@ -85,9 +85,12 @@ class BnplStrategy;
 class BnplUiDelegate;
 class MandatoryReauthManager;
 class MultipleRequestPaymentsNetworkInterface;
+class PaymentsChurnedUsersUiDelegate;
 class PaymentsNetworkInterface;
 class PaymentsWindowManager;
 class SaveAndFillManager;
+class WalletReminderNoticeManager;
+class WalletReminderNoticeUiDelegate;
 
 // A payments-specific client interface that handles dependency injection, and
 // its implementations serve as the integration for platform-specific code. One
@@ -171,6 +174,8 @@ class PaymentsAutofillClient : public RiskDataLoader {
     kCardSaveWithCvc = 1,
     // Only CVC is saved.
     kCvcSaveOnly = 2,
+    // Only cardholder name is updated for an existing server card.
+    kCardholderNameUpdateOnly = 3,
   };
 
   enum class SourceFeature {
@@ -180,7 +185,7 @@ class PaymentsAutofillClient : public RiskDataLoader {
     kScanCardSaveAndFill,
   };
 
-  // Used for options of upload prompt.
+  // Used for options of card and CVC save prompts.
   struct SaveCreditCardOptions {
     SaveCreditCardOptions& with_should_request_name_from_user(bool b) {
       should_request_name_from_user = b;
@@ -200,6 +205,11 @@ class PaymentsAutofillClient : public RiskDataLoader {
 
     SaveCreditCardOptions& with_has_multiple_legal_lines(bool b = true) {
       has_multiple_legal_lines = b;
+      return *this;
+    }
+
+    SaveCreditCardOptions& with_legal_lines_mention_personalization(bool b) {
+      legal_lines_mention_personalization = b;
       return *this;
     }
 
@@ -230,10 +240,14 @@ class PaymentsAutofillClient : public RiskDataLoader {
       return *this;
     }
 
+    // Only used for the cardholder name fix flow during account creation, not
+    // for the separate cardholder name update flow
+    // (`kCardholderNameUpdateOnly`).
     bool should_request_name_from_user = false;
     bool should_request_expiration_date_from_user = false;
     bool show_prompt = false;
     bool has_multiple_legal_lines = false;
+    bool legal_lines_mention_personalization = false;
     bool has_same_last_four_as_server_card_but_different_expiration_date =
         false;
     std::optional<int> num_strikes;
@@ -629,11 +643,6 @@ class PaymentsAutofillClient : public RiskDataLoader {
   // client (can be null for unsupported platforms).
   virtual MerchantPromoCodeManager* GetMerchantPromoCodeManager() = 0;
 
-  // Navigates to `url` in a new tab. `url` links to the promo code offer
-  // details page for the offers in a promo code suggestions popup. Every offer
-  // in a promo code suggestions popup links to the same offer details page.
-  virtual void OpenPromoCodeOfferDetailsURL(const GURL& url) = 0;
-
   // Gets an AutofillOfferManager instance (can be null for unsupported
   // platforms).
   virtual AutofillOfferManager* GetAutofillOfferManager() = 0;
@@ -654,11 +663,15 @@ class PaymentsAutofillClient : public RiskDataLoader {
   // Dismiss any visible offer notification on the current tab.
   virtual void DismissOfferNotification() = 0;
 
+  // Returns whether the tab this client belongs to is currently visible to the
+  // user, for deciding whether to set up an offer notification on it.
+  virtual bool IsTabVisibleForOfferNotification() const = 0;
+
   // Shows the Touch To Fill surface for filling credit card information, if
   // possible, and returns `true` on success. `delegate` will be notified of
   // events. `suggestions` are generated using the `cards_to_suggest` data and
   // include fields such as `main_text`, `minor_text`, and
-  // `HasDeactivatedStyle` member function. Should be called only if the feature
+  // `IsSelectable` member function. Should be called only if the feature
   // is supported by the platform. This function is implemented on all
   // platforms so this should be a pure virtual function to enforce the override
   // implementation.
@@ -813,35 +826,43 @@ class PaymentsAutofillClient : public RiskDataLoader {
   // UI in the BNPL flow depending on the platform.
   virtual BnplUiDelegate* GetBnplUiDelegate() = 0;
 
+  // Gets the `WalletReminderNoticeUiDelegate` instance associated with the
+  // client. Handles the UI for the Wallet Reminder Notice.
+  virtual WalletReminderNoticeUiDelegate* GetWalletReminderNoticeUiDelegate();
+
+  // Gets the `WalletReminderNoticeManager` instance associated with the
+  // client.
+  virtual WalletReminderNoticeManager* GetWalletReminderNoticeManager();
+
+  // Gets the `PaymentsChurnedUsersUiDelegate` instance associated with the
+  // client. Handles the resurrection UI for the Payments Churned Users flow.
+  virtual PaymentsChurnedUsersUiDelegate* GetPaymentsChurnedUsersUiDelegate();
+
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   // Gets the `OmniboxAutofillDelegate` instance associated with the client, or
   // nullptr on unsupported platforms. Handles the Autofill flow where the
   // Omnibox is the trigger point.
   virtual OmniboxAutofillDelegate* GetOmniboxAutofillDelegate() = 0;
 
-  // Shows the "Autofill payments" omnibox chip and initializes the bubble
-  // controller with the given suggestions and callbacks.
-  virtual void ShowOmniboxAutofillChip(
+  // Shows the expanded omnibox chip and initializes the bubble controller with
+  // the given suggestions and callbacks.
+  virtual void ShowExpandedOmniboxAutofillChip(
       std::vector<Suggestion> suggestions,
+      base::OnceClosure on_chip_shown,
       base::RepeatingCallback<void(base::span<const Suggestion>)>
           on_suggestions_shown,
       base::RepeatingCallback<void(SuggestionHidingReason)>
           on_suggestions_hidden,
       base::RepeatingCallback<void(const Suggestion&)> did_select_suggestion,
+      base::RepeatingClosure did_deselect_suggestion,
       base::RepeatingCallback<
           void(const Suggestion&,
                const AutofillSuggestionDelegate::SuggestionMetadata&)>
           did_accept_suggestion) = 0;
 
-  // Hides the "Autofill payments" omnibox chip that appears for relevant
-  // payment checkout forms.
+  // Hides the entire omnibox chip.
   virtual void HideOmniboxAutofillChip() = 0;
 #endif
-
-  // Shows the Payments Churned Users UI. This UI is responsible for providing
-  // users that have turned off autofill with a value prop to turn autofill back
-  // on.
-  virtual void ShowPaymentsChurnedUsersUI() {}
 };
 
 }  // namespace payments

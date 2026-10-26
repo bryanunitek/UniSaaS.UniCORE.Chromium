@@ -29,7 +29,8 @@
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -42,20 +43,21 @@
 #include "components/optimization_guide/core/filters/hints_component_util.h"
 #include "components/optimization_guide/core/filters/optimization_hints_component_update_listener.h"
 #include "components/optimization_guide/core/filters/test_hints_component_creator.h"
+#include "components/optimization_guide/core/hints/command_line_top_host_provider.h"
 #include "components/optimization_guide/core/hints/fake_hints_fetcher.h"
 #include "components/optimization_guide/core/hints/hints_manager.h"
-#include "components/optimization_guide/core/hints/optimization_guide_store.h"
+#include "components/optimization_guide/core/hints/optimization_guide_navigation_data.h"
 #include "components/optimization_guide/core/hints/top_host_provider.h"
-#include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_prefs.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
+#include "components/optimization_guide/core/optimization_guide_permissions_util.h"
 #include "components/optimization_guide/proto/hints.pb.h"
 #include "components/prefs/pref_service.h"
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "components/variations/hashing.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_base.h"
 #include "content/public/test/browser_test_utils.h"
@@ -179,7 +181,7 @@ class HintsFetcherDisabledBrowserTest : public InProcessBrowserTest {
     ASSERT_TRUE(hints_server_->Start());
 
     std::map<std::string, std::string> params;
-    params["random_anchor_sampling_period"] = "1";
+    params["RandomAnchorSamplingPeriod"] = "1";
     params["traffic_client_enabled_percent"] = "100";
     param_feature_list_.InitAndEnableFeatureWithParameters(
         blink::features::kNavigationPredictor, params);
@@ -190,13 +192,14 @@ class HintsFetcherDisabledBrowserTest : public InProcessBrowserTest {
   void SetUpCommandLine(base::CommandLine* cmd) override {
     cmd->AppendSwitch("purge_hint_cache_store");
 
-    cmd->AppendSwitch(optimization_guide::switches::
-                          kDisableCheckingUserPermissionsForTesting);
+    cmd->AppendSwitch(
+        optimization_guide::
+            kDisableCheckingUserPermissionsForTestingSwitch);
 
     // Set up OptimizationGuideServiceURL, this does not enable HintsFetching,
     // only provides the URL.
     cmd->AppendSwitchASCII(
-        optimization_guide::switches::kOptimizationGuideServiceGetHintsURL,
+        optimization_guide::kOptimizationGuideServiceGetHintsURLSwitch,
         hints_server_
             ->GetURL(GURL(optimization_guide::
                               kOptimizationGuideServiceGetHintsDefaultURL)
@@ -205,10 +208,10 @@ class HintsFetcherDisabledBrowserTest : public InProcessBrowserTest {
             .spec());
     cmd->AppendSwitchASCII("force-variation-ids", "4");
 
-    cmd->AppendSwitchASCII(optimization_guide::switches::kFetchHintsOverride,
+    cmd->AppendSwitchASCII(optimization_guide::kFetchHintsOverrideSwitch,
                            "example1.com, example2.com");
 
-    cmd->AppendSwitch(optimization_guide::switches::kFetchHintsOverrideTimer);
+    cmd->AppendSwitch(optimization_guide::kFetchHintsOverrideTimerSwitch);
 
     // Ignore the port numbers for the Google Search URL check.
     cmd->AppendSwitch(switches::kIgnoreGooglePortNumbers);
@@ -342,7 +345,13 @@ class HintsFetcherDisabledBrowserTest : public InProcessBrowserTest {
         no_state_prefetch_manager->StartPrefetchingFromLinkRelPrerender(
             /*process_id=*/-1, /*route_id=*/-1, url,
             blink::mojom::PrerenderTriggerType::kLinkRelPrerender,
-            content::Referrer(), url::Origin::Create(url), gfx::Size(640, 480));
+            content::Referrer(), url::Origin::Create(url),
+            browser()
+                ->GetTabStripModel()
+                ->GetActiveWebContents()
+                ->GetPrimaryMainFrame()
+                ->GetCurrentInitiatorNavigationState(),
+            gfx::Size(640, 480));
     ASSERT_EQ(no_state_prefetch_handle->contents(), test_prerender->contents());
 
     // The final status may be either  FINAL_STATUS_NOSTATE_PREFETCH_FINISHED or
@@ -407,9 +416,7 @@ class HintsFetcherDisabledBrowserTest : public InProcessBrowserTest {
 
       optimization_guide::proto::Hint* hint = get_hints_response.add_hints();
       hint->set_key_representation(optimization_guide::proto::HOST);
-      hint->set_key(search_results_page_url_.GetHost());
-      hint->add_allowlisted_optimizations()->set_optimization_type(
-          optimization_guide::proto::OptimizationType::NOSCRIPT);
+      hint->set_key(https_url_.GetHost());
       optimization_guide::proto::PageHint* page_hint = hint->add_page_hints();
       page_hint->set_page_pattern("page pattern");
 
@@ -634,10 +641,16 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest,
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), https_url()));
 
-  // Verifies that the fetched hint is just used in memory and nothing is
-  // loaded.
+  // Verifies that the fetched hint is active in memory and overrides the
+  // component hint, and no fetched hint is loaded from store.
+  EXPECT_EQ(optimization_guide::OptimizationGuideDecision::kFalse,
+            OptimizationGuideKeyedServiceFactory::GetForProfile(
+                browser()->GetProfile())
+                ->CanApplyOptimization(https_url(),
+                                       optimization_guide::proto::NOSCRIPT,
+                                       /*optimization_metadata=*/nullptr));
   histogram_tester->ExpectTotalCount(
-      "OptimizationGuide.HintCache.HintType.Loaded", 0);
+      "OptimizationGuide.HintCache.FetchedHint.TimeToExpiration", 0);
 }
 
 IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest,
@@ -786,7 +799,7 @@ IN_PROC_BROWSER_TEST_F(
   histogram_tester->ExpectUniqueSample(
       "OptimizationGuide.HintsFetcher.GetHintsRequest.RequestStatus."
       "PageNavigation",
-      optimization_guide::FetcherRequestStatus::kRequestCanceled, 1);
+      optimization_guide::HintsFetcherRequestStatus::kRequestCanceled, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest,
@@ -819,13 +832,20 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest,
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), https_url()));
 
-  // Verifies that the fetched hint is used in-memory and no hint is loaded
-  // from store.
+  // The fetched hint is active in memory and overrides the component hint, and
+  // https_url() does not match its "page pattern" page pattern, and no fetched
+  // hint is loaded from store.
+  EXPECT_EQ(optimization_guide::OptimizationGuideDecision::kFalse,
+            OptimizationGuideKeyedServiceFactory::GetForProfile(
+                browser()->GetProfile())
+                ->CanApplyOptimization(https_url(),
+                                       optimization_guide::proto::NOSCRIPT,
+                                       /*optimization_metadata=*/nullptr));
   histogram_tester->ExpectTotalCount(
-      "OptimizationGuide.HintCache.HintType.Loaded", 0);
+      "OptimizationGuide.HintCache.FetchedHint.TimeToExpiration", 0);
 
   // Wipe the browser history - clear all the fetched hints.
-  browser()->profile()->Wipe();
+  browser()->GetProfile()->Wipe();
 
   // Wait until hint cache stabilizes and clears all the fetched hints.
   base::ThreadPoolInstance::Get()->FlushForTesting();
@@ -836,20 +856,25 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest,
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), https_url()));
 
-  histogram_tester->ExpectUniqueSample(
-      "OptimizationGuide.HintCache.HintType.Loaded",
-      static_cast<int>(optimization_guide::OptimizationGuideStore::
-                           StoreEntryType::kComponentHint),
-      1);
+  // The fetched hint was wiped and HintCache fell back to the component hint
+  // whose "*" page pattern matches https_url().
+  EXPECT_EQ(optimization_guide::OptimizationGuideDecision::kTrue,
+            OptimizationGuideKeyedServiceFactory::GetForProfile(
+                browser()->GetProfile())
+                ->CanApplyOptimization(https_url(),
+                                       optimization_guide::proto::NOSCRIPT,
+                                       /*optimization_metadata=*/nullptr));
+  histogram_tester->ExpectTotalCount(
+      "OptimizationGuide.HintCache.FetchedHint.TimeToExpiration", 0);
 }
 
 IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest, HintsFetcherOverrideTimer) {
   const base::HistogramTester* histogram_tester = GetHistogramTester();
   GURL url = https_url();
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      optimization_guide::switches::kFetchHintsOverride, "whatever.com");
+      optimization_guide::kFetchHintsOverrideSwitch, "whatever.com");
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      optimization_guide::switches::kFetchHintsOverrideTimer);
+      optimization_guide::kFetchHintsOverrideTimerSwitch);
 
   // Allowlist NoScript for https_url()'s' host.
   SetUpComponentUpdateHints(https_url());
@@ -881,9 +906,16 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest, HintsFetcherOverrideTimer) {
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), https_url()));
 
-  // Verifies that the fetched hint is used from memory and no hints are loaded.
+  // Verifies that the fetched hint is used from memory and overrides the
+  // component hint, and no fetched hints are loaded from store.
+  EXPECT_EQ(optimization_guide::OptimizationGuideDecision::kFalse,
+            OptimizationGuideKeyedServiceFactory::GetForProfile(
+                browser()->GetProfile())
+                ->CanApplyOptimization(https_url(),
+                                       optimization_guide::proto::NOSCRIPT,
+                                       /*optimization_metadata=*/nullptr));
   histogram_tester->ExpectTotalCount(
-      "OptimizationGuide.HintCache.HintType.Loaded", 0);
+      "OptimizationGuide.HintCache.FetchedHint.TimeToExpiration", 0);
 }
 
 IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest, HintsFetcherFetches) {
@@ -959,7 +991,7 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest,
     histogram_tester.ExpectUniqueSample(
         "OptimizationGuide.HintsFetcher.GetHintsRequest.RequestStatus."
         "Bookmarks",
-        optimization_guide::FetcherRequestStatus::kSuccess, 1);
+        optimization_guide::HintsFetcherRequestStatus::kSuccess, 1);
   }
 
   {
@@ -991,7 +1023,7 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest,
     histogram_tester.ExpectUniqueSample(
         "OptimizationGuide.HintsFetcher.GetHintsRequest.RequestStatus."
         "Bookmarks",
-        optimization_guide::FetcherRequestStatus::kSuccess, 1);
+        optimization_guide::HintsFetcherRequestStatus::kSuccess, 1);
   }
 }
 
@@ -1086,7 +1118,8 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest,
             /*create_if_needed=*/true))
         ->RegisterOptimizationTypes({optimization_guide::proto::NOSCRIPT});
 
-    Browser* otr_browser = CreateIncognitoBrowser(browser()->GetProfile());
+    BrowserWindowInterface* otr_browser =
+        CreateIncognitoBrowser(browser()->GetProfile());
     ASSERT_TRUE(ui_test_utils::NavigateToURL(otr_browser, GURL(full_url)));
 
     // Make sure no additional hints requests were received.
@@ -1162,7 +1195,7 @@ IN_PROC_BROWSER_TEST_F(
 
   OptimizationGuideKeyedServiceFactory::GetForProfile(
       Profile::FromBrowserContext(browser()
-                                      ->tab_strip_model()
+                                      ->GetTabStripModel()
                                       ->GetActiveWebContents()
                                       ->GetBrowserContext()))
       ->RegisterOptimizationTypes(
@@ -1254,7 +1287,7 @@ IN_PROC_BROWSER_TEST_F(
 
   OptimizationGuideKeyedServiceFactory::GetForProfile(
       Profile::FromBrowserContext(browser()
-                                      ->tab_strip_model()
+                                      ->GetTabStripModel()
                                       ->GetActiveWebContents()
                                       ->GetBrowserContext()))
       ->RegisterOptimizationTypes(
@@ -1326,8 +1359,9 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest, HintsFetcherDoesntFetchOnNSP) {
 class HintsFetcherSearchPageBrowserTest : public HintsFetcherBrowserTest {
  public:
   void SetUpCommandLine(base::CommandLine* cmd) override {
-    cmd->AppendSwitch(optimization_guide::switches::
-                          kDisableFetchingHintsAtNavigationStartForTesting);
+    cmd->AppendSwitch(
+        optimization_guide::
+            kDisableFetchingHintsAtNavigationStartForTestingSwitch);
     HintsFetcherBrowserTest::SetUpCommandLine(cmd);
   }
 };
@@ -1441,7 +1475,7 @@ class HintsFetcherSearchPagePrerenderingBrowserTest
   }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
  private:
@@ -1527,7 +1561,7 @@ class HintsFetcherSearchPageDisabledBrowserTest
     std::vector<base::test::FeatureRefAndParams> enabled_features = {
         {optimization_guide::features::kOptimizationHints, {}},
         {blink::features::kNavigationPredictor,
-         {{"random_anchor_sampling_period", "1"},
+         {{"RandomAnchorSamplingPeriod", "1"},
           {"traffic_client_enabled_percent", "100"}}},
         {*optimization_guide::kHintsMaxConcurrentNavigationFetches.feature,
          {{optimization_guide::kHintsMaxConcurrentNavigationFetches.name,
@@ -1663,8 +1697,9 @@ class HintsFetcherSearchPageLimitedURLsBrowserTest
   }
 
   void SetUpCommandLine(base::CommandLine* cmd) override {
-    cmd->AppendSwitch(optimization_guide::switches::
-                          kDisableFetchingHintsAtNavigationStartForTesting);
+    cmd->AppendSwitch(
+        optimization_guide::
+            kDisableFetchingHintsAtNavigationStartForTestingSwitch);
     HintsFetcherDisabledBrowserTest::SetUpCommandLine(cmd);
   }
 
@@ -1801,7 +1836,7 @@ IN_PROC_BROWSER_TEST_F(PersonalizedHintsFetcherBrowserTest, NoUserSignIn) {
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.HintsFetcher.GetHintsRequest.RequestStatus."
       "PageInsightsHub",
-      optimization_guide::FetcherRequestStatus::kSuccess, 1);
+      optimization_guide::HintsFetcherRequestStatus::kSuccess, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(PersonalizedHintsFetcherBrowserTest, UserSignedIn) {
@@ -1817,7 +1852,7 @@ IN_PROC_BROWSER_TEST_F(PersonalizedHintsFetcherBrowserTest, UserSignedIn) {
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.HintsFetcher.GetHintsRequest.RequestStatus."
       "PageInsightsHub",
-      optimization_guide::FetcherRequestStatus::kSuccess, 1);
+      optimization_guide::HintsFetcherRequestStatus::kSuccess, 1);
 
   // Only the enabled RequestContext will have access token enabled.
   SetExpectedBearerAccessToken(std::string());
@@ -1826,7 +1861,7 @@ IN_PROC_BROWSER_TEST_F(PersonalizedHintsFetcherBrowserTest, UserSignedIn) {
       optimization_guide::proto::CONTEXT_JOURNEYS);
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.HintsFetcher.GetHintsRequest.RequestStatus.Journeys",
-      optimization_guide::FetcherRequestStatus::kSuccess, 1);
+      optimization_guide::HintsFetcherRequestStatus::kSuccess, 1);
 }
 
 // TODO(crbug.com/425936619): Add checks for url, hint counts, context.

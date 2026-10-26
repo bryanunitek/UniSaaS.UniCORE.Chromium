@@ -72,6 +72,7 @@ public class ListItemBuilderUnitTest {
 
         assertNull(model.get(ListMenuItemProperties.TITLE));
         assertEquals(0, model.get(ListMenuItemProperties.TITLE_ID));
+        assertNull(model.get(ListMenuItemProperties.SHORTCUT_TEXT));
         assertFalse(model.get(ListMenuItemProperties.IS_TEXT_ELLIPSIZED_AT_END));
         assertNull(model.get(ListMenuItemProperties.CONTENT_DESCRIPTION));
     }
@@ -138,6 +139,9 @@ public class ListItemBuilderUnitTest {
         assertEquals(
                 R.style.TextAppearance_DensityAdaptive_TextLarge_Primary_Baseline_Light,
                 model.get(ListMenuItemProperties.TEXT_APPEARANCE_ID));
+        assertEquals(
+                R.style.TextAppearance_TextMedium_Secondary_Baseline_Light,
+                model.get(ListMenuItemProperties.SHORTCUT_TEXT_APPEARANCE_ID));
         assertEquals(
                 R.color.default_icon_color_light_tint_list,
                 model.get(ListMenuItemProperties.ICON_TINT_COLOR_STATE_LIST_ID));
@@ -261,5 +265,12 @@ public class ListItemBuilderUnitTest {
         int width = 12;
         ListItem listItem = new ListItemBuilder().withStartIconWidth(width).build();
         assertEquals(width, (int) listItem.model.get(ListMenuItemProperties.START_ICON_WIDTH));
+    }
+
+    @Test
+    public void testBuild_withShortcutText() {
+        String shortcutText = "Ctrl+T";
+        ListItem listItem = new ListItemBuilder().withShortcutText(shortcutText).build();
+        assertEquals(shortcutText, listItem.model.get(ListMenuItemProperties.SHORTCUT_TEXT));
     }
 }

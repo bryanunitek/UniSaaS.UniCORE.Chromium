@@ -7,9 +7,10 @@
 
 #include <windows.h>
 
-#include <d3d11.h>
+#include <d3d11_1.h>
 #include <d3d12.h>
 #include <dcomp.h>
+#include <dxgi.h>
 #include <wrl/client.h>
 
 #include <memory>
@@ -82,8 +83,8 @@ struct VideoProcessorWrapper {
 
   // The video processor is cached so SwapChains don't have to recreate it
   // whenever they're created.
-  Microsoft::WRL::ComPtr<ID3D11VideoDevice> video_device;
-  Microsoft::WRL::ComPtr<ID3D11VideoContext> video_context;
+  Microsoft::WRL::ComPtr<ID3D11VideoDevice1> video_device;
+  Microsoft::WRL::ComPtr<ID3D11VideoContext1> video_context;
   Microsoft::WRL::ComPtr<ID3D11VideoProcessor> video_processor;
   Microsoft::WRL::ComPtr<ID3D11VideoProcessorEnumerator>
       video_processor_enumerator;
@@ -122,9 +123,8 @@ class GL_EXPORT DCLayerTree {
 
   // Called by SwapChainPresenter to initialize video processor that can handle
   // at least given input and output size.  The video processor is shared across
-  // layers so the same one can be reused if it's large enough.  Returns true on
-  // success.
-  VideoProcessorWrapper* InitializeVideoProcessor(
+  // layers so the same one can be reused if it's large enough.
+  base::expected<VideoProcessorWrapper*, CommitError> InitializeVideoProcessor(
       const gfx::Size& input_size,
       const gfx::Size& output_size,
       bool is_hdr_output,
@@ -178,6 +178,13 @@ class GL_EXPORT DCLayerTree {
   }
 
   HWND window() const { return window_; }
+
+  // The IDXGIOutput for the monitor |window_| is currently on, refreshed when
+  // the DXGI factory becomes stale or the window moves to a different monitor.
+  // Enumerates all adapters so it works even when the window is on a monitor
+  // driven by a different adapter than d3d11_device_. Query GetDesc().Monitor
+  // to get the corresponding HMONITOR.
+  IDXGIOutput* current_output() const { return current_output_.Get(); }
 
   bool SupportsDelegatedInk();
 
@@ -454,6 +461,11 @@ class GL_EXPORT DCLayerTree {
   VisualTree::VisualSubtree* GetFrontMostVideoVisualSubtreeForTesting() const;
 
  private:
+  // Refreshes |current_output_| to match the monitor |window_| is currently
+  // on. Invalidates the cache if the DXGI factory is stale or the window moved
+  // to a different monitor, then re-enumerates adapters to find the new output.
+  void UpdateCurrentOutput();
+
   const bool disable_nv12_dynamic_textures_;
   const bool disable_vp_auto_hdr_;
   const bool disable_vp_scaling_;
@@ -465,6 +477,7 @@ class GL_EXPORT DCLayerTree {
   const bool tint_video_layer_;
 
   HWND window_;
+  Microsoft::WRL::ComPtr<IDXGIOutput> current_output_;
   Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device_;
   Microsoft::WRL::ComPtr<IDCompositionDevice3> dcomp_device_;
   Microsoft::WRL::ComPtr<IDCompositionTarget> dcomp_target_;

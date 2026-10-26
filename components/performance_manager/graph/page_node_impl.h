@@ -93,6 +93,7 @@ class PageNodeImpl
   bool HasFreezingOriginTrialOptOut() const override;
   bool IsOffTheRecord() const override;
   LoadingState GetLoadingState() const override;
+  bool IsUserOrBrowserInitiatedLoad() const override;
   ukm::SourceId GetUkmSourceID() const override;
   LifecycleState GetLifecycleState() const override;
   bool IsHoldingWebLock() const override;
@@ -127,6 +128,7 @@ class PageNodeImpl
   void SetIsAudible(bool is_audible);
   void SetHasPictureInPicture(bool has_picture_in_picture);
   void SetLoadingState(LoadingState loading_state);
+  void SetIsUserOrBrowserInitiatedLoad(bool is_user_or_browser_initiated_load);
   void SetUkmSourceId(ukm::SourceId ukm_source_id);
   void OnFaviconUpdated(blink::mojom::FaviconUpdateReason reason);
   void OnTitleUpdated();
@@ -154,7 +156,7 @@ class PageNodeImpl
   // Accessors.
   FrameNodeImpl* opener_frame_node() const;
   FrameNodeImpl* embedder_frame_node() const;
-  FrameNodeImpl* main_frame_node() const;
+  FrameNodeImpl* primary_main_frame_node() const;
   NodeSetView<FrameNodeImpl*> main_frame_nodes() const;
 
   // Invoked to set/clear the opener of this page.
@@ -200,7 +202,6 @@ class PageNodeImpl
   void TraceFrame(base::PassKey<FrameNodeImpl>, FrameNodeImpl* frame_node);
   void RemoveFrame(base::PassKey<FrameNodeImpl>, FrameNodeImpl* frame_node);
 
-  // Function meant to be called by FrozenFrameAggregator.
   void SetLifecycleState(base::PassKey<FrozenFrameAggregator>,
                          LifecycleState lifecycle_state) {
     SetLifecycleState(lifecycle_state);
@@ -239,7 +240,7 @@ class PageNodeImpl
   // Partial PageNode implementation:
   const FrameNode* GetOpenerFrameNode() const override;
   const FrameNode* GetEmbedderFrameNode() const override;
-  const FrameNode* GetMainFrameNode() const override;
+  const FrameNode* GetPrimaryMainFrameNode() const override;
   NodeSetView<const FrameNode*> GetMainFrameNodes() const override;
 
   // NodeBase:
@@ -300,9 +301,10 @@ class PageNodeImpl
 
   // The URL the main frame last committed, or the initial URL a page was
   // initialized with. The latter case is distinguished by a zero navigation ID.
-  ObservedProperty::
-      NotifiesOnlyOnChanges<GURL, &PageNodeObserver::OnMainFrameUrlChanged>
-          main_frame_url_ GUARDED_BY_CONTEXT(sequence_checker_);
+  ObservedProperty::NotifiesOnlyOnChangesWithPreviousValue<
+      GURL,
+      &PageNodeObserver::OnMainFrameUrlChanged>
+      main_frame_url_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   // The unique ID of the navigation handle the main frame last committed, or
   // zero if the page has never committed a navigation.
@@ -361,7 +363,7 @@ class PageNodeImpl
       &PageNodeObserver::OnHasPictureInPictureChanged>
       has_picture_in_picture_ GUARDED_BY_CONTEXT(sequence_checker_){false};
   // Whether the page is opted-out from freezing via origin trial, i.e. if any
-  // of its current frames sets the origin trial.
+  // of its active frames sets the origin trial.
   ObservedProperty::NotifiesOnlyOnChanges<
       bool,
       &PageNodeObserver::OnPageHasFreezingOriginTrialOptOutChanged>
@@ -377,6 +379,17 @@ class PageNodeImpl
       &PageNodeObserver::OnLoadingStateChanged,
       TracedWrapper<LoadingState>>
       loading_state_ GUARDED_BY_CONTEXT(sequence_checker_);
+  // Whether the current (or most recent) load was initiated by the browser or
+  // by a renderer with transient user activation, or is a client redirect that
+  // continues such a load. Maintained by
+  // PerformanceManagerTabHelper from primary main frame navigations. Defaults
+  // to true so that a page whose load start wasn't observed keeps being treated
+  // as a user-intended load.
+  ObservedProperty::NotifiesOnlyOnChanges<
+      bool,
+      &PageNodeObserver::OnIsUserOrBrowserInitiatedLoadChanged>
+      is_user_or_browser_initiated_load_ GUARDED_BY_CONTEXT(sequence_checker_){
+          true};
   // The UKM source ID associated with the URL of the main frame of this page.
   ObservedProperty::NotifiesOnlyOnChanges<
       ukm::SourceId,

@@ -15,13 +15,14 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "chrome/test/base/android/android_ui_test_utils.h"
 #else
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #endif
 
@@ -223,7 +224,7 @@ IN_PROC_BROWSER_TEST_F(GlobalConfirmInfoBarTest, ClickLink) {
   infobars::InfoBar* first_tab_infobar =
       GetInfoBarManagerFromTabIndex(0)->infobars()[0];
   EXPECT_FALSE(first_tab_infobar->delegate()->LinkClicked(
-      WindowOpenDisposition::NEW_BACKGROUND_TAB));
+      WindowOpenDisposition::kNewBackgroundTab));
 
   // This should have opened a new tab.
   ASSERT_EQ(2, GetTabCount());

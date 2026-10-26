@@ -95,6 +95,14 @@
       password_manager::prefs::kPasswordLeakDetectionEnabled);
 }
 
+- (void)setPasswordManagerSafeLifecycleEnabled:(BOOL)enabled {
+  // No-op: see the deprecation note in the header.
+}
+
+- (BOOL)isPasswordManagerSafeLifecycleEnabled {
+  return YES;
+}
+
 - (void)setSafeBrowsingEnabled:(BOOL)enabled {
   safe_browsing::SetSafeBrowsingState(
       _prefService,
@@ -115,6 +123,22 @@
   return ios_web_view::IsAutofillVCNUsageEnabled(_prefService);
 }
 
+- (void)setAutofillSafeLifecycleEnabled:(BOOL)enabled {
+  // No-op: see the deprecation note in the header.
+}
+
+- (BOOL)isAutofillSafeLifecycleEnabled {
+  return YES;
+}
+
+- (void)setAutofillScopedFormActivityEnabled:(BOOL)enabled {
+  ios_web_view::SetAutofillScopedFormActivityEnabled(_prefService, enabled);
+}
+
+- (BOOL)isAutofillScopedFormActivityEnabled {
+  return ios_web_view::IsAutofillScopedFormActivityEnabled(_prefService);
+}
+
 - (void)setTriggerNonFatalCheck:(BOOL)enabled {
   // TODO(crbug.com/503005390): Remove after release integration testing in
   // stable.
@@ -133,6 +157,10 @@
       completionHandler();
     }
   }));
+}
+
+- (void)shutDown {
+  _prefService = nullptr;
 }
 
 @end

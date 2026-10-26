@@ -6,7 +6,10 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include <cmath>
+#include <cstdlib>
 #include <memory>
+#include <utility>
 
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
@@ -15,21 +18,27 @@
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "remoting/base/string_resources.h"
 #include "remoting/host/client_session_control.h"
 #include "remoting/host/host_window.h"
+#include "remoting/host/input_monitor/local_input_monitor.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
-@interface DisconnectWindowController ()
-- (BOOL)isRToL;
-- (void)hide;
-@property(nonatomic, strong) NSTextField* connectedToField;
-@property(nonatomic, strong) NSButton* disconnectButton;
-@end
-
-const int kMaximumConnectedNameWidthInPixels = 600;
-
 namespace {
+
+constexpr int kMaximumConnectedNameWidthInPixels = 600;
+
+// Margins from screen edges to ensure the dialog is not obscured by the menu
+// bar at the top or an auto-hiding Dock at the bottom.
+constexpr CGFloat kTopMargin = 40.0;
+constexpr CGFloat kBottomMargin = 80.0;
+
+// The amount of time to wait before hiding the disconnect window.
+constexpr base::TimeDelta kAutoHideTimeout = base::Seconds(10);
+
+// The duration of the hide and show animations.
+constexpr NSTimeInterval kAnimationDuration = 0.2;
 
 bool IsDarkMode() {
   NSAppearanceName appearance =
@@ -41,24 +50,22 @@ bool IsDarkMode() {
 
 }  // namespace
 
+@interface DisconnectWindowController ()
+- (BOOL)isRToL;
+- (void)hide;
+- (void)updateToggleButtonText;
+- (void)setDialogPosition;
+- (void)onScreenParametersChanged:(NSNotification*)notification;
+- (void)onWindowDidMove:(NSNotification*)notification;
+- (void)onCooldownExpired;
+- (IBAction)toggleAlignment:(id)sender;
+@property(nonatomic, assign) BOOL isHidden;
+@property(nonatomic, strong) NSButton* toggleButton;
+@property(nonatomic, strong) NSTextField* connectedToField;
+@property(nonatomic, strong) NSButton* disconnectButton;
+@end
+
 namespace remoting {
-
-class DisconnectWindowMac : public HostWindow {
- public:
-  DisconnectWindowMac();
-
-  DisconnectWindowMac(const DisconnectWindowMac&) = delete;
-  DisconnectWindowMac& operator=(const DisconnectWindowMac&) = delete;
-
-  ~DisconnectWindowMac() override;
-
-  // HostWindow overrides.
-  void Start(const base::WeakPtr<ClientSessionControl>& client_session_control)
-      override;
-
- private:
-  DisconnectWindowController* __strong window_controller_;
-};
 
 DisconnectWindowMac::DisconnectWindowMac() = default;
 
@@ -68,18 +75,18 @@ DisconnectWindowMac::~DisconnectWindowMac() {
   window_controller_ = nil;
 }
 
+void DisconnectWindowMac::EnableAutoHide(
+    std::unique_ptr<LocalInputMonitor> local_input_monitor) {
+  local_input_monitor_ = std::move(local_input_monitor);
+}
+
 void DisconnectWindowMac::Start(
     const base::WeakPtr<ClientSessionControl>& client_session_control) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(client_session_control);
   DCHECK(window_controller_ == nil);
 
-  // Create the window.
-  base::OnceClosure disconnect_callback = base::BindOnce(
-      &ClientSessionControl::DisconnectSession, client_session_control,
-      ErrorCode::OK, "Disconnect button was clicked.", FROM_HERE);
-  std::string client_jid = client_session_control->client_jid();
-  std::string username = client_jid.substr(0, client_jid.find('/'));
+  DisconnectWindowBase::Start(client_session_control);
 
   NSRect frame = NSMakeRect(0, 0, 466, 40);
   DisconnectWindow* window =
@@ -89,11 +96,77 @@ void DisconnectWindowMac::Start(
                                               defer:NO];
   window.releasedWhenClosed = NO;
   window_controller_ = [[DisconnectWindowController alloc]
-      initWithCallback:std::move(disconnect_callback)
-              username:username
-                window:window];
+      initWithDisconnectWindow:weak_factory_.GetWeakPtr()
+                        window:window];
   [window_controller_ initializeWindow];
   [window_controller_ showWindow:nil];
+
+  if (local_input_monitor_) {
+    local_input_monitor_->StartMonitoring(
+        base::BindRepeating(&DisconnectWindowMac::OnLocalMouseEvent,
+                            weak_factory_.GetWeakPtr()),
+        base::BindRepeating(&DisconnectWindowMac::OnLocalKeyPressed,
+                            weak_factory_.GetWeakPtr()),
+        base::BindRepeating(&DisconnectWindowMac::StopAutoHideBehavior,
+                            weak_factory_.GetWeakPtr()));
+
+    auto_hide_timer_.Start(FROM_HERE, kAutoHideTimeout,
+                           base::BindOnce(&DisconnectWindowMac::HideDialog,
+                                          base::Unretained(this)));
+  }
+}
+
+void DisconnectWindowMac::OnCooldownExpired() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  [window_controller_ onCooldownExpired];
+}
+
+void DisconnectWindowMac::ShowDialog() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Always reset the hide timer when this method is called.
+  if (local_input_monitor_) {
+    auto_hide_timer_.Start(FROM_HERE, kAutoHideTimeout,
+                           base::BindOnce(&DisconnectWindowMac::HideDialog,
+                                          base::Unretained(this)));
+  }
+
+  if (!was_auto_hidden_) {
+    return;
+  }
+  was_auto_hidden_ = false;
+  [window_controller_ showDialog];
+}
+
+void DisconnectWindowMac::HideDialog() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (was_auto_hidden_ || !local_input_monitor_ || !window_controller_) {
+    return;
+  }
+  was_auto_hidden_ = true;
+  [window_controller_ hideDialog];
+}
+
+void DisconnectWindowMac::StopAutoHideBehavior() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto_hide_timer_.Stop();
+  local_input_monitor_.reset();
+  ShowDialog();
+}
+
+void DisconnectWindowMac::OnLocalMouseEvent(
+    const webrtc::DesktopVector& position,
+    ui::EventType /*type*/) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (std::abs(position.x() - mouse_position_.x()) > 1 ||
+      std::abs(position.y() - mouse_position_.y()) > 1) {
+    mouse_position_ = position;
+    ShowDialog();
+  }
+}
+
+void DisconnectWindowMac::OnLocalKeyPressed(uint32_t /*usb_keycode*/) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ShowDialog();
 }
 
 // static
@@ -101,31 +174,85 @@ std::unique_ptr<HostWindow> HostWindow::CreateDisconnectWindow() {
   return std::make_unique<DisconnectWindowMac>();
 }
 
+// static
+std::unique_ptr<HostWindow> HostWindow::CreateAutoHidingDisconnectWindow(
+    std::unique_ptr<LocalInputMonitor> local_input_monitor) {
+  auto disconnect_window = std::make_unique<DisconnectWindowMac>();
+  disconnect_window->EnableAutoHide(std::move(local_input_monitor));
+  return disconnect_window;
+}
+
 }  // namespace remoting
 
 @implementation DisconnectWindowController {
-  base::OnceClosure _disconnect_callback;
-  std::u16string _username;
+  base::WeakPtr<remoting::DisconnectWindowMac> _disconnect_window;
 }
 
+@synthesize isHidden = _isHidden;
+@synthesize toggleButton = _toggleButton;
 @synthesize connectedToField = _connectedToField;
 @synthesize disconnectButton = _disconnectButton;
 
-- (instancetype)initWithCallback:(base::OnceClosure)disconnect_callback
-                        username:(const std::string&)username
-                          window:(NSWindow*)window {
+- (instancetype)initWithDisconnectWindow:
+                    (base::WeakPtr<remoting::DisconnectWindowMac>)
+                        disconnect_window
+                                  window:(NSWindow*)window {
   self = [super initWithWindow:window];
   if (self) {
-    _disconnect_callback = std::move(disconnect_callback);
-    _username = base::UTF8ToUTF16(username);
+    _disconnect_window = std::move(disconnect_window);
+    [NSNotificationCenter.defaultCenter
+        addObserver:self
+           selector:@selector(onScreenParametersChanged:)
+               name:NSApplicationDidChangeScreenParametersNotification
+             object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(onWindowDidMove:)
+                                               name:NSWindowDidMoveNotification
+                                             object:window];
   }
   return self;
 }
 
+- (void)dealloc {
+  [NSNotificationCenter.defaultCenter removeObserver:self];
+}
+
 - (IBAction)stopSharing:(id)sender {
-  if (_disconnect_callback) {
-    std::move(_disconnect_callback).Run();
+  if (_disconnect_window) {
+    _disconnect_window->DisconnectSession();
   }
+}
+
+- (IBAction)toggleAlignment:(id)sender {
+  if (!_disconnect_window || _disconnect_window->is_cooldown_active()) {
+    return;
+  }
+  _disconnect_window->ToggleAlignment();
+  [self updateToggleButtonText];
+  self.toggleButton.enabled = NO;
+  [self setDialogPosition];
+}
+
+- (void)onCooldownExpired {
+  self.toggleButton.enabled = YES;
+}
+
+- (void)updateToggleButtonText {
+  if (!_disconnect_window) {
+    return;
+  }
+  self.toggleButton.title =
+      (_disconnect_window->current_anchor() ==
+       remoting::DisconnectWindowBase::WindowAnchor::kBottom)
+          ? @"▲"
+          : @"▼";
+  int string_id = (_disconnect_window->current_anchor() ==
+                   remoting::DisconnectWindowBase::WindowAnchor::kBottom)
+                      ? IDS_MOVE_TO_TOP_BUTTON
+                      : IDS_MOVE_TO_BOTTOM_BUTTON;
+  NSString* tooltip_text = l10n_util::GetNSString(string_id);
+  self.toggleButton.toolTip = tooltip_text;
+  self.toggleButton.accessibilityLabel = tooltip_text;
 }
 
 - (BOOL)isRToL {
@@ -133,20 +260,58 @@ std::unique_ptr<HostWindow> HostWindow::CreateDisconnectWindow() {
 }
 
 - (void)hide {
-  _disconnect_callback.Reset();
+  [NSNotificationCenter.defaultCenter removeObserver:self];
+  _disconnect_window.reset();
   [self close];
+}
+
+- (void)hideDialog {
+  self.isHidden = YES;
+  __weak __typeof(self) weakSelf = self;
+  [NSAnimationContext
+      runAnimationGroup:^(NSAnimationContext* context) {
+        context.duration = kAnimationDuration;
+        self.window.animator.alphaValue = 0.0;
+      }
+      completionHandler:^{
+        if (weakSelf.isHidden) {
+          [weakSelf.window orderOut:nil];
+        }
+      }];
+}
+
+- (void)showDialog {
+  self.isHidden = NO;
+  [self setDialogPosition];
+  [self.window orderFrontRegardless];
+  [NSAnimationContext runAnimationGroup:^(NSAnimationContext* context) {
+    context.duration = kAnimationDuration;
+    self.window.animator.alphaValue = 1.0;
+  }];
 }
 
 - (void)initializeWindow {
   self.window.contentView =
       [[DisconnectView alloc] initWithFrame:self.window.contentView.frame];
 
+  self.toggleButton =
+      [[NSButton alloc] initWithFrame:NSMakeRect(12, 9, 22, 22)];
+  self.toggleButton.buttonType = NSButtonTypeMomentaryPushIn;
+  self.toggleButton.bezelStyle = NSBezelStyleFlexiblePush;
+  self.toggleButton.font = [NSFont systemFontOfSize:11];
+  self.toggleButton.action = @selector(toggleAlignment:);
+  self.toggleButton.target = self;
+  [self updateToggleButtonText];
+  [self.window.contentView addSubview:self.toggleButton];
+
   self.connectedToField =
-      [[NSTextField alloc] initWithFrame:NSMakeRect(26, 13, 240, 14)];
+      [[NSTextField alloc] initWithFrame:NSMakeRect(40, 13, 240, 14)];
   self.connectedToField.drawsBackground = NO;
   self.connectedToField.bezeled = NO;
   self.connectedToField.editable = NO;
   self.connectedToField.font = [NSFont systemFontOfSize:11];
+  self.connectedToField.cell.lineBreakMode = NSLineBreakByTruncatingMiddle;
+  self.connectedToField.cell.usesSingleLineMode = YES;
   [self.window.contentView addSubview:self.connectedToField];
 
   self.disconnectButton =
@@ -158,12 +323,13 @@ std::unique_ptr<HostWindow> HostWindow::CreateDisconnectWindow() {
   self.disconnectButton.target = self;
   [self.window.contentView addSubview:self.disconnectButton];
 
-  self.connectedToField.stringValue =
-      l10n_util::GetNSStringF(IDS_MESSAGE_SHARED, _username);
+  self.connectedToField.stringValue = l10n_util::GetNSStringF(
+      IDS_MESSAGE_SHARED, _disconnect_window
+                              ? _disconnect_window->formatted_email()
+                              : std::u16string());
   self.disconnectButton.title = l10n_util::GetNSString(IDS_STOP_SHARING_BUTTON);
 
   // Resize the window dynamically based on the content.
-  CGFloat oldConnectedWidth = NSWidth(self.connectedToField.bounds);
   [self.connectedToField sizeToFit];
   NSRect connectedToFrame = self.connectedToField.frame;
   CGFloat newConnectedWidth = NSWidth(connectedToFrame);
@@ -175,50 +341,97 @@ std::unique_ptr<HostWindow> HostWindow::CreateDisconnectWindow() {
     self.connectedToField.frame = connectedToFrame;
   }
 
-  CGFloat oldDisconnectWidth = NSWidth(self.disconnectButton.bounds);
   [self.disconnectButton sizeToFit];
   NSRect disconnectFrame = self.disconnectButton.frame;
   CGFloat newDisconnectWidth = NSWidth(disconnectFrame);
 
-  // Move the disconnect button appropriately.
-  disconnectFrame.origin.x += newConnectedWidth - oldConnectedWidth;
+  // Align vertical centers.
+  CGFloat contentViewHeight = NSHeight(self.window.contentView.frame);
+  NSRect toggleFrame = self.toggleButton.frame;
+  toggleFrame.origin.y = (contentViewHeight - NSHeight(toggleFrame)) / 2;
+  connectedToFrame.origin.y =
+      (contentViewHeight - NSHeight(connectedToFrame)) / 2;
   disconnectFrame.origin.y =
-      (NSHeight(self.window.contentView.frame) - NSHeight(disconnectFrame)) / 2;
-  self.disconnectButton.frame = disconnectFrame;
+      (contentViewHeight - NSHeight(disconnectFrame)) / 2;
 
-  // Then resize the window appropriately
+  const CGFloat kMargin = 12.0;
+  const CGFloat kToggleGap = 6.0;
+  const CGFloat kButtonGap = 12.0;
+
+  // Calculate total window width.
+  CGFloat totalWidth = kMargin + NSWidth(toggleFrame) + kToggleGap +
+                       newConnectedWidth + kButtonGap + newDisconnectWidth +
+                       kMargin;
+
   NSRect windowFrame = self.window.frame;
-  windowFrame.size.width += (newConnectedWidth - oldConnectedWidth +
-                             newDisconnectWidth - oldDisconnectWidth);
+  windowFrame.size.width = totalWidth;
   [self.window setFrame:windowFrame display:NO];
 
   if ([self isRToL]) {
-    // Handle right to left case
-    CGFloat buttonInset = NSWidth(windowFrame) - NSMaxX(disconnectFrame);
-    CGFloat buttonTextSpacing =
-        NSMinX(disconnectFrame) - NSMaxX(connectedToFrame);
-    disconnectFrame.origin.x = buttonInset;
-    connectedToFrame.origin.x = NSMaxX(disconnectFrame) + buttonTextSpacing;
-    self.connectedToField.frame = connectedToFrame;
-    self.disconnectButton.frame = disconnectFrame;
+    // Handle right-to-left layout: [Stop Sharing] [Message] [Toggle]
+    disconnectFrame.origin.x = kMargin;
+    connectedToFrame.origin.x = NSMaxX(disconnectFrame) + kButtonGap;
+    toggleFrame.origin.x = NSMaxX(connectedToFrame) + kToggleGap;
+  } else {
+    // Handle left-to-right layout: [Toggle] [Message] [Stop Sharing]
+    toggleFrame.origin.x = kMargin;
+    connectedToFrame.origin.x = NSMaxX(toggleFrame) + kToggleGap;
+    disconnectFrame.origin.x = NSMaxX(connectedToFrame) + kButtonGap;
   }
 
-  // Center the window at the bottom of the screen, above the dock (if present).
-  NSRect desktopRect = NSScreen.mainScreen.visibleFrame;
+  self.toggleButton.frame = toggleFrame;
+  self.connectedToField.frame = connectedToFrame;
+  self.disconnectButton.frame = disconnectFrame;
+
+  [self setDialogPosition];
+}
+
+- (void)setDialogPosition {
+  if (!_disconnect_window) {
+    return;
+  }
+  NSScreen* primaryScreen = NSScreen.screens.firstObject;
+  if (!primaryScreen) {
+    return;
+  }
+  NSRect screenRect = primaryScreen.frame;
   NSRect windowRect = self.window.frame;
-  CGFloat x = (NSWidth(desktopRect) - NSWidth(windowRect)) / 2;
-  CGFloat y = NSMinY(desktopRect);
+  CGFloat x = std::round(NSMinX(screenRect) +
+                         (NSWidth(screenRect) - NSWidth(windowRect)) / 2.0);
+  CGFloat y =
+      std::round((_disconnect_window->current_anchor() ==
+                  remoting::DisconnectWindowBase::WindowAnchor::kTop)
+                     ? NSMaxY(screenRect) - NSHeight(windowRect) - kTopMargin
+                     : NSMinY(screenRect) + kBottomMargin);
+  _disconnect_window->SetExpectedPosition(static_cast<int>(x),
+                                          static_cast<int>(y));
   [self.window setFrameOrigin:NSMakePoint(x, y)];
+}
+
+- (void)onScreenParametersChanged:(NSNotification*)notification {
+  if (!_disconnect_window) {
+    return;
+  }
+  _disconnect_window->ResetRepositionAttempts();
+  [self setDialogPosition];
+}
+
+- (void)onWindowDidMove:(NSNotification*)notification {
+  if (!_disconnect_window) {
+    return;
+  }
+  NSRect frame = self.window.frame;
+  if (_disconnect_window->ShouldRepositionOnDisplacement(
+          static_cast<int>(std::round(frame.origin.x)),
+          static_cast<int>(std::round(frame.origin.y)))) {
+    [self setDialogPosition];
+  }
 }
 
 - (void)windowWillClose:(NSNotification*)notification {
   [self stopSharing:self];
 }
 
-@end
-
-@interface DisconnectWindow ()
-- (BOOL)isRToL;
 @end
 
 @implementation DisconnectWindow
@@ -237,31 +450,22 @@ std::unique_ptr<HostWindow> HostWindow::CreateDisconnectWindow() {
     // Set window to be clear and non-opaque so we can see through it.
     self.backgroundColor = NSColor.clearColor;
     self.opaque = NO;
-    self.movableByWindowBackground = YES;
 
     // Pull the window up to Status Level so that it always displays.
     [self setLevel:NSStatusWindowLevel];
+
+    // Allow the window to join all spaces, appear with full-screen windows, and
+    // remain stationary during Mission Control / Exposé.
+    self.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
+                              NSWindowCollectionBehaviorFullScreenAuxiliary |
+                              NSWindowCollectionBehaviorStationary;
   }
   return self;
 }
 
-- (BOOL)isRToL {
-  DCHECK([self.windowController respondsToSelector:@selector(isRToL)]);
-  return [self.windowController isRToL];
-}
-
-@end
-
-@interface DisconnectView ()
-- (BOOL)isRToL;
 @end
 
 @implementation DisconnectView
-
-- (BOOL)isRToL {
-  DCHECK([self.window isKindOfClass:[DisconnectWindow class]]);
-  return [static_cast<DisconnectWindow*>(self.window) isRToL];
-}
 
 - (void)drawRect:(NSRect)rect {
   // All magic numbers taken from screen shots provided by UX.
@@ -272,76 +476,21 @@ std::unique_ptr<HostWindow> HostWindow::CreateDisconnectWindow() {
                                                        yRadius:5];
   NSColor* bgColor;
   NSColor* frameColor;
-  NSColor* lineColor;
-  NSColor* lineShadowColor;
   if (IsDarkMode()) {
     bgColor = [NSColor colorWithCalibratedWhite:0.2 alpha:1.0];
     frameColor = [NSColor colorWithCalibratedWhite:0.91 alpha:1.0];
-    lineColor = [NSColor colorWithCalibratedWhite:0.91 alpha:1.0];
-    lineShadowColor = [NSColor colorWithCalibratedWhite:0.32 alpha:1.0];
   } else {
     bgColor = [NSColor colorWithCalibratedWhite:0.91 alpha:1.0];
     frameColor = [NSColor colorWithCalibratedRed:0.13
                                            green:0.69
                                             blue:0.11
                                            alpha:1.0];
-    lineColor = [NSColor colorWithCalibratedWhite:0.70 alpha:1.0];
-    lineShadowColor = [NSColor colorWithCalibratedWhite:0.97 alpha:1.0];
   }
   [bgColor setFill];
   [path fill];
   [path setLineWidth:4];
   [frameColor setStroke];
   [path stroke];
-
-  // Draw drag handle on proper side
-  const CGFloat kHeight = 21.0;
-  const CGFloat kBaseInset = 12.0;
-  const CGFloat kDragHandleWidth = 5.0;
-
-  // Turn off aliasing so it's nice and crisp.
-  NSGraphicsContext* context = NSGraphicsContext.currentContext;
-  BOOL alias = context.shouldAntialias;
-  context.shouldAntialias = NO;
-
-  // Handle bidirectional locales properly.
-  CGFloat inset = [self isRToL] ? NSMaxX(bounds) - kBaseInset - kDragHandleWidth
-                                : kBaseInset;
-
-  NSPoint top = NSMakePoint(inset, NSMidY(bounds) - kHeight / 2.0);
-  NSPoint bottom = NSMakePoint(inset, top.y + kHeight);
-
-  path = [NSBezierPath bezierPath];
-  [path moveToPoint:top];
-  [path lineToPoint:bottom];
-  [lineColor setStroke];
-  [path stroke];
-
-  top.x += 1;
-  bottom.x += 1;
-  path = [NSBezierPath bezierPath];
-  [path moveToPoint:top];
-  [path lineToPoint:bottom];
-  [lineShadowColor setStroke];
-  [path stroke];
-
-  top.x += 2;
-  bottom.x += 2;
-  path = [NSBezierPath bezierPath];
-  [path moveToPoint:top];
-  [path lineToPoint:bottom];
-  [lineColor setStroke];
-  [path stroke];
-
-  top.x += 1;
-  bottom.x += 1;
-  path = [NSBezierPath bezierPath];
-  [path moveToPoint:top];
-  [path lineToPoint:bottom];
-  [lineShadowColor setStroke];
-  [path stroke];
-
-  context.shouldAntialias = alias;
 }
 
 @end

@@ -23,6 +23,7 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/managed_ui.h"
 #include "chrome/browser/ui/profiles/profile_colors_util.h"
+#include "chrome/browser/ui/signin/account_preview_utils.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
@@ -47,7 +48,7 @@ namespace {
 BASE_FEATURE(kSigninInterceptSimpleButtons, base::FEATURE_ENABLED_BY_DEFAULT);
 
 constexpr char kEnterprizeBadgeSource[] = "cr:domain";
-constexpr char kSupervisedBadgeSource[] = "cr:kite";
+constexpr char kSupervisedBadgeSource[] = "cr:family-link";
 
 // Returns true if the account capabilities are marked as supervised.
 bool IsSupervisedUser(const AccountCapabilities& capabilities) {
@@ -60,7 +61,7 @@ SkColor GetProfileHighlightColor(Profile* profile) {
       g_browser_process->profile_manager()
           ->GetProfileAttributesStorage()
           .GetProfileAttributesWithPath(profile->GetPath());
-  DCHECK(entry);
+  CHECK(entry, base::NotFatalUntil::M162);
 
   return entry->GetProfileThemeColors().profile_highlight_color;
 }
@@ -92,7 +93,7 @@ DiceWebSigninInterceptHandler::DiceWebSigninInterceptHandler(
       show_widget_with_height_callback_(
           std::move(show_widget_with_height_callback)),
       completion_callback_(std::move(completion_callback)) {
-  DCHECK(completion_callback_);
+  CHECK(completion_callback_, base::NotFatalUntil::M162);
 }
 
 DiceWebSigninInterceptHandler::~DiceWebSigninInterceptHandler() = default;
@@ -139,10 +140,10 @@ void DiceWebSigninInterceptHandler::OnExtendedAccountInfoUpdated(
   }
 
   bool should_fire_event = false;
-  if (info.account_id == intercepted_account().account_id) {
+  if (info.GetAccountId() == intercepted_account().GetAccountId()) {
     should_fire_event = true;
     bubble_parameters_.intercepted_account = info;
-  } else if (info.account_id == primary_account().account_id) {
+  } else if (info.GetAccountId() == primary_account().GetAccountId()) {
     should_fire_event = true;
     bubble_parameters_.primary_account = info;
   }
@@ -200,7 +201,7 @@ void DiceWebSigninInterceptHandler::HandlePageLoaded(
     bubble_parameters_.primary_account = builder.Build();
   }
 
-  DCHECK(!args.empty());
+  CHECK(!args.empty(), base::NotFatalUntil::M162);
   const base::Value& callback_id = args[0];
   ResolveJavascriptCallback(callback_id, GetInterceptionParametersValue());
 }
@@ -212,7 +213,7 @@ void DiceWebSigninInterceptHandler::HandleChromeSigninPageLoaded(
   // Image might not be loaded yet.
   UpdateExtendedAccountsInfo();
 
-  DCHECK(!args.empty());
+  CHECK(!args.empty(), base::NotFatalUntil::M162);
   const base::Value& callback_id = args[0];
   ResolveJavascriptCallback(callback_id,
                             GetInterceptionChromeSigninParametersValue());
@@ -236,13 +237,14 @@ void DiceWebSigninInterceptHandler::UpdateExtendedAccountsInfo() {
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
 
-  AccountInfo updated_info =
-      identity_manager->FindExtendedAccountInfo(intercepted_account());
+  AccountInfo updated_info = identity_manager->FindExtendedAccountInfo(
+      intercepted_account().GetCoreAccountInfo());
   if (!updated_info.IsEmpty()) {
     bubble_parameters_.intercepted_account = updated_info;
   }
 
-  updated_info = identity_manager->FindExtendedAccountInfo(primary_account());
+  updated_info = identity_manager->FindExtendedAccountInfo(
+      primary_account().GetCoreAccountInfo());
   if (!updated_info.IsEmpty()) {
     bubble_parameters_.primary_account = updated_info;
   }
@@ -358,6 +360,16 @@ std::string DiceWebSigninInterceptHandler::GetChromeSigninSubtitle() {
     return l10n_util::GetStringUTF8(
         IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_SUBTITLE_SUPERVISED);
   }
+
+  if (bubble_parameters_.account_preview_preference.has_value()) {
+    if (std::optional<std::string> subtitle =
+            signin::GetAccountPreviewPromoSubtitle(
+                *bubble_parameters_.account_preview_preference);
+        subtitle.has_value() && !subtitle->empty()) {
+      return *subtitle;
+    }
+  }
+
   return l10n_util::GetStringUTF8(
       syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
           ? IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_SUBTITLE_WITH_BOOKMARKS
@@ -415,6 +427,20 @@ std::string DiceWebSigninInterceptHandler::GetBodyText() {
         IDS_SIGNIN_DICE_WEB_INTERCEPT_CREATE_BUBBLE_DESC_SUPERVISED,
         base::UTF8ToUTF16(intercepted_account().GetEmail()));
   }
+
+  if (bubble_parameters_.interception_type ==
+          WebSigninInterceptor::SigninInterceptionType::kMultiUser &&
+      bubble_parameters_.account_preview_preference.has_value()) {
+    if (std::optional<std::string> subtitle =
+            signin::GetAccountPreviewProfileSeparationSubtitle(
+                primary_account().GetGivenName().value_or(""),
+                intercepted_account().GetEmail(),
+                *bubble_parameters_.account_preview_preference);
+        subtitle.has_value() && !subtitle->empty()) {
+      return *subtitle;
+    }
+  }
+
   return l10n_util::GetStringFUTF8(
       IDS_SIGNIN_DICE_WEB_INTERCEPT_CREATE_BUBBLE_DESC,
       base::UTF8ToUTF16(primary_account().GetGivenName().value_or("")),

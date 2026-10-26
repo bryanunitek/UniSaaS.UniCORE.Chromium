@@ -18,7 +18,15 @@ import androidx.xr.scenecore.SurfaceEntity.StereoMode;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.xr.scenecore.custom_mesh.XrCurvedMeshGenerator;
+import org.chromium.chrome.browser.xr.scenecore.custom_mesh.XrCurvedMeshHolder;
+import org.chromium.chrome.browser.xr.scenecore.custom_mesh.XrCustomMeshHolder;
+import org.chromium.chrome.browser.xr.scenecore.custom_mesh.XrPlanarMeshGenerator;
+import org.chromium.chrome.browser.xr.scenecore.custom_mesh.XrPlanarMeshHolder;
+import org.chromium.chrome.browser.xr.scenecore.custom_mesh.XrRoundedQuadMeshGenerator;
+import org.chromium.chrome.browser.xr.scenecore.custom_mesh.XrSeamlessSphereMeshGenerator;
 import org.chromium.ui.xr.scenecore.XrCurvedSurfaceEntityHolder;
+import org.chromium.ui.xr.scenecore.XrFloatSize3d;
 import org.chromium.ui.xr.scenecore.XrMeshData;
 import org.chromium.ui.xr.scenecore.XrSurfaceEntityHolder;
 import org.chromium.ui.xr.scenecore.XrSurfaceEntityHolder.Callback;
@@ -45,7 +53,10 @@ public class XrSurfaceEntityHolderImpl extends XrTransformableEntityHolderImpl<S
                     XrSurfaceEntityStereoMode.TOP_BOTTOM, StereoMode.TOP_BOTTOM);
 
     private final CopyOnWriteArrayList<Callback> mCallbacks = new CopyOnWriteArrayList<>();
-    private IntSize2d mCurrentSurfaceDimensions = new IntSize2d(1, 1);
+    private @Nullable IntSize2d mCurrentSurfaceDimensions;
+
+    /** Helper for managing custom meshes. */
+    private @Nullable XrCustomMeshHolder<?> mCustomMeshHolder;
 
     public static XrSurfaceEntityHolderImpl create(Session xrSession, SurfaceEntity surfaceEntity) {
         return new XrSurfaceEntityHolderImpl(xrSession, surfaceEntity);
@@ -59,19 +70,33 @@ public class XrSurfaceEntityHolderImpl extends XrTransformableEntityHolderImpl<S
     public void addCallback(Callback callback) {
         if (!mCallbacks.contains(callback)) {
             mCallbacks.add(callback);
+            notifyCallbackIfSurfaceReady(callback);
+        }
+    }
 
-            Surface surface = getSurface();
-            if (surface != null && surface.isValid()) {
+    private void notifyCallbackIfSurfaceReady(Callback callback) {
+        Surface surface = getSurface();
+        if (mCurrentSurfaceDimensions != null && surface != null && surface.isValid()) {
+            callback.surfaceCreated(surface);
+            callback.surfaceChanged(
+                    surface,
+                    mCurrentSurfaceDimensions.getWidth(),
+                    mCurrentSurfaceDimensions.getHeight());
+        }
+    }
+
+    private void notifySurfaceCreated() {
+        if (mCurrentSurfaceDimensions == null) return;
+        Surface surface = getSurface();
+        if (surface != null && surface.isValid()) {
+            for (Callback callback : mCallbacks) {
                 callback.surfaceCreated(surface);
-                callback.surfaceChanged(
-                        surface,
-                        mCurrentSurfaceDimensions.getWidth(),
-                        mCurrentSurfaceDimensions.getHeight());
             }
         }
     }
 
     private void notifySurfaceChanged() {
+        if (mCurrentSurfaceDimensions == null) return;
         Surface surface = getSurface();
         if (surface != null && surface.isValid()) {
             for (Callback callback : mCallbacks) {
@@ -108,8 +133,15 @@ public class XrSurfaceEntityHolderImpl extends XrTransformableEntityHolderImpl<S
     public void setSurfacePixelDimensions(int width, int height) {
         assertDisposed();
         if (width <= 0 || height <= 0) return;
+        boolean wasInitialized = mCurrentSurfaceDimensions != null;
         mCurrentSurfaceDimensions = new IntSize2d(width, height);
         mEntity.setSurfacePixelDimensions(mCurrentSurfaceDimensions);
+        if (mCustomMeshHolder != null) {
+            mCustomMeshHolder.setSurfacePixelDimensions(width, height);
+        }
+        if (!wasInitialized) {
+            notifySurfaceCreated();
+        }
         notifySurfaceChanged();
     }
 
@@ -120,17 +152,20 @@ public class XrSurfaceEntityHolderImpl extends XrTransformableEntityHolderImpl<S
         for (Map.Entry<Integer, StereoMode> entry : STEREO_MODE_MAP.entrySet()) {
             if (entry.getValue().equals(surfaceStereoMode)) return entry.getKey();
         }
-        throw new IllegalStateException("Unknown stereo mode: " + surfaceStereoMode);
+        return XrSurfaceEntityStereoMode.MONO;
     }
 
     @Override
     public void setSurfaceStereoMode(@XrSurfaceEntityStereoMode int stereoMode) {
         assertDisposed();
+        if (getSurfaceStereoMode() == stereoMode) return;
         StereoMode surfaceStereoMode = STEREO_MODE_MAP.get(stereoMode);
-        if (surfaceStereoMode != null) {
-            mEntity.setStereoMode(surfaceStereoMode);
-        } else {
+        if (surfaceStereoMode == null) {
             throw new IllegalArgumentException("Invalid stereo mode: " + stereoMode);
+        }
+        mEntity.setStereoMode(surfaceStereoMode);
+        if (mCustomMeshHolder != null) {
+            mCustomMeshHolder.setStereoMode(stereoMode);
         }
     }
 
@@ -143,6 +178,8 @@ public class XrSurfaceEntityHolderImpl extends XrTransformableEntityHolderImpl<S
             return XrSurfaceEntityShape.SPHERE;
         } else if (mEntity.getShape() instanceof Shape.Hemisphere) {
             return XrSurfaceEntityShape.HEMISPHERE;
+        } else if (mCustomMeshHolder != null) {
+            return mCustomMeshHolder.getShape();
         } else if (mEntity.getShape() instanceof Shape.CustomMesh) {
             return XrSurfaceEntityShape.CUSTOM;
         } else {
@@ -150,9 +187,30 @@ public class XrSurfaceEntityHolderImpl extends XrTransformableEntityHolderImpl<S
         }
     }
 
+    private void updateSurfaceCallbacks(
+            @Nullable Surface oldSurface, @Nullable Surface newSurface) {
+        if (mCurrentSurfaceDimensions == null) return;
+        if (oldSurface != newSurface) {
+            if (oldSurface != null) {
+                notifySurfaceDestroyed();
+            }
+            notifySurfaceCreated();
+            notifySurfaceChanged();
+        } else {
+            notifySurfaceChanged();
+        }
+    }
+
     @Override
     public void setSurfaceShape(@XrSurfaceEntityShape int shape) {
         assertDisposed();
+        if (getSurfaceShape() == shape) return;
+        Surface oldSurface = getSurface();
+        clearCustomState();
+        int surfaceWidth =
+                mCurrentSurfaceDimensions != null ? mCurrentSurfaceDimensions.getWidth() : 1;
+        int surfaceHeight =
+                mCurrentSurfaceDimensions != null ? mCurrentSurfaceDimensions.getHeight() : 1;
         switch (shape) {
             case XrSurfaceEntityShape.QUAD:
                 mEntity.setShape(new Shape.Quad(new FloatSize2d(1f, 1f)));
@@ -163,22 +221,70 @@ public class XrSurfaceEntityHolderImpl extends XrTransformableEntityHolderImpl<S
             case XrSurfaceEntityShape.HEMISPHERE:
                 mEntity.setShape(new Shape.Hemisphere(1f));
                 break;
+            case XrSurfaceEntityShape.SEAMLESS_SPHERE:
+                var sphereConfig =
+                        new XrCurvedMeshGenerator.Config(
+                                getSurfaceStereoMode(), surfaceWidth, surfaceHeight);
+                var sphereGenerator = new XrSeamlessSphereMeshGenerator(sphereConfig);
+                var sphereHolder =
+                        new XrCurvedMeshHolder(
+                                mXrSession,
+                                mEntity,
+                                mInteractableComponent,
+                                XrSurfaceEntityShape.SEAMLESS_SPHERE,
+                                sphereGenerator);
+                sphereHolder.updateMesh();
+                mCustomMeshHolder = sphereHolder;
+                break;
+            case XrSurfaceEntityShape.ROUNDED_QUAD:
+                var quadConfig =
+                        new XrPlanarMeshGenerator.Config(
+                                getSurfaceStereoMode(), surfaceWidth, surfaceHeight);
+                var quadGenerator = new XrRoundedQuadMeshGenerator(quadConfig);
+                var quadHolder =
+                        new XrPlanarMeshHolder(
+                                mXrSession,
+                                mEntity,
+                                mInteractableComponent,
+                                XrSurfaceEntityShape.ROUNDED_QUAD,
+                                quadGenerator);
+                quadHolder.updateMesh();
+                mCustomMeshHolder = quadHolder;
+                break;
             default:
                 throw new IllegalArgumentException("Invalid surface shape: " + shape);
         }
+        Surface newSurface = getSurface();
+        updateSurfaceCallbacks(oldSurface, newSurface);
     }
 
     @Override
     public void setSurfaceShape(XrMeshData[] meshDatas) {
         Shape.CustomMesh customMesh = XrSurfaceEntityUtils.createCustomMesh(meshDatas);
         if (customMesh != null) {
+            clearCustomState();
+            Surface oldSurface = getSurface();
+            // Reset SceneCore internal entity node scale by temporarily setting a uniform shape.
+            mEntity.setShape(new Shape.Sphere(1f));
             mEntity.setShape(customMesh);
+            Surface newSurface = getSurface();
+            updateSurfaceCallbacks(oldSurface, newSurface);
+        }
+    }
+
+    private void clearCustomState() {
+        if (mCustomMeshHolder != null) {
+            mCustomMeshHolder.dispose();
+            mCustomMeshHolder = null;
         }
     }
 
     @Override
     public SizeF getEntitySize() {
         assertDisposed();
+        if (mCustomMeshHolder instanceof XrPlanarMeshHolder) {
+            return ((XrPlanarMeshHolder) mCustomMeshHolder).getSize();
+        }
         FloatSize3d dimensions = mEntity.getDimensions();
         return new SizeF(dimensions.getWidth(), dimensions.getHeight());
     }
@@ -188,26 +294,76 @@ public class XrSurfaceEntityHolderImpl extends XrTransformableEntityHolderImpl<S
         assertDisposed();
         if (width <= 0f || height <= 0f) return;
         if (mEntity.getShape() instanceof Shape.Quad) {
-            mEntity.setShape(new Shape.Quad(new FloatSize2d(width, height)));
+            float cornerRadius = ((Shape.Quad) mEntity.getShape()).getCornerRadius();
+            mEntity.setShape(new Shape.Quad(new FloatSize2d(width, height), cornerRadius));
+        } else if (mCustomMeshHolder instanceof XrPlanarMeshHolder) {
+            ((XrPlanarMeshHolder) mCustomMeshHolder).setDimensions(width, height);
         }
         mMovableComponent.setSize(width, height, 0f);
 
         if (mResizableComponent.shouldMaintainAspectRatio()) {
             float aspectRatio = width / height;
-            float[] minSize = mResizableComponent.getMinSize();
-            float[] maxSize = mResizableComponent.getMaxSize();
-            mResizableComponent.setMinSize(minSize[0], minSize[0] / aspectRatio, minSize[2]);
-            mResizableComponent.setMaxSize(maxSize[0], maxSize[0] / aspectRatio, maxSize[2]);
+            XrFloatSize3d minSize = mResizableComponent.getMinSize();
+            XrFloatSize3d maxSize = mResizableComponent.getMaxSize();
+            mResizableComponent.setMinSize(
+                    XrFloatSize3d.create(
+                            minSize.getWidth(),
+                            minSize.getWidth() / aspectRatio,
+                            minSize.getDepth()));
+            mResizableComponent.setMaxSize(
+                    XrFloatSize3d.create(
+                            maxSize.getWidth(),
+                            maxSize.getWidth() / aspectRatio,
+                            maxSize.getDepth()));
         }
+    }
+
+    @Override
+    public float getCornerRadius() {
+        assertDisposed();
+        if (mEntity.getShape() instanceof Shape.Quad) {
+            return ((Shape.Quad) mEntity.getShape()).getCornerRadius();
+        } else if (mCustomMeshHolder instanceof XrPlanarMeshHolder) {
+            return ((XrPlanarMeshHolder) mCustomMeshHolder).getCornerRadius();
+        }
+        return 0f;
+    }
+
+    @Override
+    public void setCornerRadius(float radius) {
+        assertDisposed();
+        if (radius < 0f) return;
+        if (mEntity.getShape() instanceof Shape.Quad) {
+            FloatSize2d extents = ((Shape.Quad) mEntity.getShape()).getExtents();
+            mEntity.setShape(new Shape.Quad(extents, radius));
+        } else if (mCustomMeshHolder instanceof XrPlanarMeshHolder) {
+            ((XrPlanarMeshHolder) mCustomMeshHolder).setCornerRadius(radius);
+        }
+    }
+
+    @Override
+    public void setRectangleEdgeFeathering(float leftRight, float topBottom) {
+        assertDisposed();
+        mEntity.setEdgeFeatheringParams(
+                new SurfaceEntity.EdgeFeatheringParams.RectangleFeather(leftRight, topBottom));
+    }
+
+    @Override
+    public void removeEdgeFeathering() {
+        assertDisposed();
+        mEntity.setEdgeFeatheringParams(new SurfaceEntity.EdgeFeatheringParams.NoFeathering());
     }
 
     @Override
     public float getEntityRadius() {
         assertDisposed();
-        if (mEntity.getShape() instanceof Shape.Sphere) {
-            return ((Shape.Sphere) mEntity.getShape()).getRadius();
-        } else if (mEntity.getShape() instanceof Shape.Hemisphere) {
-            return ((Shape.Hemisphere) mEntity.getShape()).getRadius();
+        Shape shape = mEntity.getShape();
+        if (shape instanceof Shape.Sphere) {
+            return ((Shape.Sphere) shape).getRadius();
+        } else if (shape instanceof Shape.Hemisphere) {
+            return ((Shape.Hemisphere) shape).getRadius();
+        } else if (mCustomMeshHolder instanceof XrCurvedMeshHolder) {
+            return ((XrCurvedMeshHolder) mCustomMeshHolder).getRadius();
         }
         return 0f;
     }
@@ -216,17 +372,24 @@ public class XrSurfaceEntityHolderImpl extends XrTransformableEntityHolderImpl<S
     public void setEntityRadius(float radius) {
         assertDisposed();
         if (radius <= 0f) return;
-        if (mEntity.getShape() instanceof Shape.Sphere) {
+        Shape shape = mEntity.getShape();
+        if (shape instanceof Shape.Sphere) {
             mEntity.setShape(new Shape.Sphere(radius));
-        } else if (mEntity.getShape() instanceof Shape.Hemisphere) {
+        } else if (shape instanceof Shape.Hemisphere) {
             mEntity.setShape(new Shape.Hemisphere(radius));
+        } else if (mCustomMeshHolder instanceof XrCurvedMeshHolder) {
+            ((XrCurvedMeshHolder) mCustomMeshHolder).setRadius(radius);
+            return;
         }
     }
 
     @Override
     public void dispose() {
         if (!mIsDisposed) {
-            notifySurfaceDestroyed();
+            clearCustomState();
+            if (mCurrentSurfaceDimensions != null) {
+                notifySurfaceDestroyed();
+            }
             mCallbacks.clear();
             super.dispose();
         }

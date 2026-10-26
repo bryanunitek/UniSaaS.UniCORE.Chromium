@@ -7,6 +7,8 @@
 #include <memory>
 
 #include "base/supports_user_data.h"
+#include "build/build_config.h"
+#include "chrome/browser/enterprise/connectors/connectors_service.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_util.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
 #include "components/enterprise/connectors/core/reporting_utils.h"
@@ -44,15 +46,39 @@ safe_browsing::ReferrerChain GetSafeBrowsingReferrerChain(
     const GURL& url,
     content::WebContents& web_contents) {
   safe_browsing::ReferrerChain referrers;
-  safe_browsing::SafeBrowsingNavigationObserverManagerFactory::
-      GetForBrowserContext(web_contents.GetBrowserContext())
-          ->IdentifyReferrerChainByEventURL(
-              url, sessions::SessionTabHelper::IdForTab(&web_contents),
-              kReferrerUserGestureLimit, &referrers);
+  auto* observer_manager =
+      safe_browsing::SafeBrowsingNavigationObserverManagerFactory::
+          GetForBrowserContext(web_contents.GetBrowserContext());
+  if (observer_manager) {
+    observer_manager->IdentifyReferrerChainByEventURL(
+        url, sessions::SessionTabHelper::IdForTab(&web_contents),
+        kReferrerUserGestureLimit, &referrers);
+  }
   return referrers;
 }
 
 }  // namespace
+
+bool IsReferrerChainNeededForEnterprise(
+    content::BrowserContext* browser_context) {
+  auto* service =
+      ConnectorsServiceFactory::GetForBrowserContext(browser_context);
+  if (!service) {
+    return false;
+  }
+  return service->IsConnectorEnabled(AnalysisConnector::BULK_DATA_ENTRY) ||
+         service->IsConnectorEnabled(AnalysisConnector::FILE_ATTACHED) ||
+         service->IsConnectorEnabled(AnalysisConnector::FILE_DOWNLOADED) ||
+#if BUILDFLAG(IS_CHROMEOS)
+         service->IsConnectorEnabled(AnalysisConnector::FILE_TRANSFER) ||
+#endif
+         service->IsConnectorEnabled(AnalysisConnector::PRINT) ||
+         service->IsConnectorEnabled(AnalysisConnector::NETWORK_REQUEST) ||
+         service->GetReportingSettings().has_value() ||
+         service->GetAppliedRealTimeUrlCheck() ==
+             EnterpriseRealTimeUrlCheckMode::
+                 REAL_TIME_CHECK_FOR_MAINFRAME_ENABLED;
+}
 
 safe_browsing::ReferrerChain GetReferrerChain(
     const GURL& url,

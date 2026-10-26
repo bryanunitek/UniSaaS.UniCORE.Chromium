@@ -165,7 +165,7 @@ class SimpleErrorCollector : public io::ErrorCollector {
  public:
   SimpleErrorCollector() = default;
   void RecordError(int line, io::ColumnNumber column,
-                   absl::string_view message) override{};
+                   absl::string_view message) override {};
 };
 
 TEST(RetentionTest, StripSourceRetentionOptionsWithSourceCodeInfo) {
@@ -225,6 +225,10 @@ TEST(RetentionTest, StripSourceRetentionOptionsWithSourceCodeInfo) {
   FileDescriptorProto stripped_file = compiler::StripSourceRetentionOptions(
       *pool.FindFileByName("retention.proto"),
       /*include_source_code_info=*/true);
+
+  // TODO: b/168903973 - Remove once we update the format.
+  // The number of locations is reduced by the number of stripped elements.
+  EXPECT_EQ(file_descriptor.source_code_info().location_size(), 88);
   EXPECT_EQ(stripped_file.source_code_info().location_size(), 63);
 }
 
@@ -302,9 +306,6 @@ TEST(RetentionTest, InvalidDescriptor) {
   ASSERT_NE(pool.BuildFile(descriptor_proto_descriptor), nullptr);
   const FileDescriptor* file_descriptor = pool.BuildFile(file_descriptor_proto);
   ASSERT_NE(file_descriptor, nullptr);
-
-  FileDescriptorProto stripped_file =
-      compiler::StripSourceRetentionOptions(*file_descriptor);
 }
 
 TEST(RetentionTest, MissingRequiredField) {

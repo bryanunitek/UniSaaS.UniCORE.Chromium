@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/navigation_predictor/navigation_predictor.h"
+
 #include <memory>
 #include <tuple>
 
@@ -12,12 +14,11 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/navigation_predictor/navigation_predictor.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor_keyed_service.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor_keyed_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/search_test_utils.h"
@@ -28,7 +29,6 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "net/base/features.h"
@@ -49,7 +49,7 @@ class NavigationPredictorBrowserTest
   NavigationPredictorBrowserTest() {
     // Report all anchors to avoid non-deterministic behavior.
     std::map<std::string, std::string> params;
-    params["random_anchor_sampling_period"] = "1";
+    params["RandomAnchorSamplingPeriod"] = "1";
     params["traffic_client_enabled_percent"] = "100";
 
     feature_list_.InitAndEnableFeatureWithParameters(
@@ -132,7 +132,7 @@ class NavigationPredictorBrowserTest
  private:
   void EnsureLayout() {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     content::RenderFrameHost* primary_rfh = web_contents->GetPrimaryMainFrame();
     if (primary_rfh->IsRenderFrameLive()) {
       EXPECT_EQ(true, EvalJsAfterLifecycleUpdate(primary_rfh, "", "true"));
@@ -245,12 +245,12 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, PipelineOffTheRecord) {
   ResetUKM();
 
   const GURL& url = GetTestURL("/simple_page_with_anchors.html");
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, url));
   base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(
-      content::ExecJs(incognito->tab_strip_model()->GetActiveWebContents(),
+      content::ExecJs(incognito->GetTabStripModel()->GetActiveWebContents(),
                       "document.getElementById('google').click();"));
   base::RunLoop().RunUntilIdle();
 
@@ -277,7 +277,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, PipelineHttp) {
   base::RunLoop().RunUntilIdle();
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::TestNavigationObserver click_nav_observer(web_contents);
   EXPECT_TRUE(content::ExecJs(web_contents,
                               "document.getElementById('google').click();"));
@@ -405,7 +405,7 @@ IN_PROC_BROWSER_TEST_P(NavigationPredictorSiteIsolationBrowserTest,
   const GURL& iframe_url =
       GetTestURL("b.test", "/iframe_simple_page_with_anchors.html");
   EXPECT_TRUE(content::NavigateIframeToURL(
-      browser()->tab_strip_model()->GetActiveWebContents(), "crossFrame",
+      browser()->GetTabStripModel()->GetActiveWebContents(), "crossFrame",
       iframe_url));
   WaitLinkEnteredViewport(1);
 
@@ -516,7 +516,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, ClickAnchorElement) {
   WaitLinkEnteredViewport(1);
 
   EXPECT_TRUE(
-      content::ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
+      content::ExecJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                       "document.getElementById('google').click();"));
   base::RunLoop().RunUntilIdle();
 
@@ -550,15 +550,15 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest,
 
   const GURL& url = GetTestURL("/simple_page_with_anchors.html");
 
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, url));
   base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(
-      content::ExecJs(incognito->tab_strip_model()->GetActiveWebContents(),
+      content::ExecJs(incognito->GetTabStripModel()->GetActiveWebContents(),
                       "document.getElementById('google').click();"));
   content::WaitForLoadStop(
-      incognito->tab_strip_model()->GetActiveWebContents());
+      incognito->GetTabStripModel()->GetActiveWebContents());
 
   auto entries = test_ukm_recorder->GetMergedEntriesByName(
       ukm::builders::PageLoad::kEntryName);
@@ -611,7 +611,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, SingleObserver) {
 
   NavigationPredictorKeyedService* service =
       NavigationPredictorKeyedServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   EXPECT_NE(nullptr, service);
   service->AddObserver(&observer);
 
@@ -645,7 +645,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest,
 
   NavigationPredictorKeyedService* service =
       NavigationPredictorKeyedServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   EXPECT_NE(nullptr, service);
   service->AddObserver(&observer);
 
@@ -677,7 +677,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, TwoObservers) {
 
   NavigationPredictorKeyedService* service =
       NavigationPredictorKeyedServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   service->AddObserver(&observer_1);
   service->AddObserver(&observer_2);
 
@@ -713,10 +713,10 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, TwoObservers) {
 // Test that the navigation predictor keyed service is null for incognito
 // profiles.
 IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, Incognito) {
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
   NavigationPredictorKeyedService* incognito_service =
       NavigationPredictorKeyedServiceFactory::GetForProfile(
-          incognito->profile());
+          incognito->GetProfile());
   EXPECT_EQ(nullptr, incognito_service);
 }
 
@@ -741,7 +741,7 @@ class NavigationPredictorMPArchBrowserTest
   }
 
   content::WebContents* GetWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   net::EmbeddedTestServer* test_server() { return &test_server_; }
@@ -816,51 +816,6 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorPrerenderBrowserTest,
   // Make sure the activating logs anchors correctly.
   anchor_entries = test_ukm_recorder->GetEntriesByName(AnchorEntry::kEntryName);
   EXPECT_EQ(4u, anchor_entries.size());
-}
-
-class NavigationPredictorFencedFrameBrowserTest
-    : public NavigationPredictorMPArchBrowserTest {
- public:
-  NavigationPredictorFencedFrameBrowserTest() = default;
-  ~NavigationPredictorFencedFrameBrowserTest() override = default;
-  NavigationPredictorFencedFrameBrowserTest(
-      const NavigationPredictorFencedFrameBrowserTest&) = delete;
-
-  NavigationPredictorFencedFrameBrowserTest& operator=(
-      const NavigationPredictorFencedFrameBrowserTest&) = delete;
-
-  content::test::FencedFrameTestHelper& fenced_frame_test_helper() {
-    return fenced_frame_helper_;
-  }
-
- private:
-  content::test::FencedFrameTestHelper fenced_frame_helper_;
-};
-
-IN_PROC_BROWSER_TEST_F(NavigationPredictorFencedFrameBrowserTest,
-                       EnsureFencedFrameDoesNotCreateNavigationPredictor) {
-  auto test_ukm_recorder = std::make_unique<ukm::TestAutoSetUkmRecorder>();
-  ResetUKM();
-
-  // Navigate to an initial page.
-  const GURL& url = test_server()->GetURL("/simple_page_with_anchors.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-  WaitLinkEnteredViewport(1);
-
-  using AnchorEntry = ukm::builders::NavigationPredictorAnchorElementMetrics;
-  auto anchor_entries =
-      test_ukm_recorder->GetEntriesByName(AnchorEntry::kEntryName);
-  EXPECT_EQ(2u, anchor_entries.size());
-
-  // Create a fenced frame.
-  const GURL& fenced_frame_url =
-      test_server()->GetURL("/fenced_frames/simple_page_with_anchors.html");
-  std::ignore = fenced_frame_test_helper().CreateFencedFrame(
-      web_contents()->GetPrimaryMainFrame(), fenced_frame_url);
-
-  // Make sure the fenced frame doesn't log any anchors.
-  anchor_entries = test_ukm_recorder->GetEntriesByName(AnchorEntry::kEntryName);
-  EXPECT_EQ(2u, anchor_entries.size());
 }
 
 }  // namespace

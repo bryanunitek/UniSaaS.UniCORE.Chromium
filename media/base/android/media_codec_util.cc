@@ -322,13 +322,22 @@ void MediaCodecUtil::AddSupportedCodecProfileLevels(
 }
 
 // static
+bool MediaCodecUtil::RequiresSecureDecoderComponent(
+    const base::android::JavaRef<jobject>& media_crypto,
+    std::string_view mime_type) {
+  JNIEnv* env = AttachCurrentThread();
+  return Java_MediaCodecUtil_requiresSecureDecoderComponent(
+      env, media_crypto, ConvertUTF8ToJavaString(env, mime_type));
+}
+
+// static
 bool MediaCodecUtil::IsKnownUnaccelerated(VideoCodec codec,
                                           MediaCodecDirection direction) {
   auto* env = AttachCurrentThread();
   auto j_mime = ConvertUTF8ToJavaString(env, CodecToAndroidMimeType(codec));
   auto j_codec_name = Java_MediaCodecUtil_getDefaultCodecName(
       env, j_mime, static_cast<int>(direction), /*requireSoftwareCodec=*/false,
-      /*requireHardwareCodec=*/true);
+      /*requireHardwareCodec=*/true, /*requireSecure=*/false);
 
   auto codec_name =
       base::android::ConvertJavaStringToUTF8(env, j_codec_name.obj());

@@ -5,18 +5,26 @@
 #include "ui/views/input_protection/occluded_widget_input_protector.h"
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <utility>
+#include <vector>
 
 #include "base/containers/circular_deque.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
-#include "build/build_config.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/cascading_property.h"
+#include "ui/views/controls/label.h"
+#include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/input_protection/input_protection_specification.h"
 #include "ui/views/metrics.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/views_features.h"
@@ -33,6 +41,31 @@ class TestBubbleDelegate : public BubbleDialogDelegate {
     SetContentsView(std::make_unique<View>());
   }
 };
+
+class TestInputProtectedView : public View {
+  METADATA_HEADER(TestInputProtectedView, View)
+
+ public:
+  explicit TestInputProtectedView(
+      std::optional<gfx::Rect> local_protected_bounds = std::nullopt)
+      : local_protected_bounds_(local_protected_bounds) {
+    InputProtectionSpecification::Install(
+        *this,
+        base::BindRepeating(&TestInputProtectedView::GetLocalProtectedBounds));
+  }
+
+  ~TestInputProtectedView() override = default;
+
+  std::vector<gfx::Rect> GetLocalProtectedBounds() const {
+    return {local_protected_bounds_.value_or(GetLocalBounds())};
+  }
+
+ private:
+  std::optional<gfx::Rect> local_protected_bounds_;
+};
+
+BEGIN_METADATA(TestInputProtectedView)
+END_METADATA
 
 // Used in tests to wait for a widget bounds change.
 class WidgetBoundsWaiter : public WidgetObserver {
@@ -112,19 +145,40 @@ class OccludedWidgetInputProtectorTestBase : public WidgetTest {
 
   void TearDown() override {
     OccludedWidgetInputProtector::GetInstance()->ClearForTesting();
+    delegates_.clear();
     WidgetTest::TearDown();
   }
 
  protected:
+  // Keeps the delegate alive for the duration of the test. This is necessary
+  // because when using CLIENT_OWNS_WIDGET, the Widget does not take ownership
+  // of the delegate, and we must ensure the delegate outlives the widget to
+  // avoid memory leaks and dangling pointers.
+  void KeepDelegateAlive(std::unique_ptr<WidgetDelegate> delegate) {
+    delegates_.push_back(std::move(delegate));
+  }
+
   std::unique_ptr<Widget> CreateWidgetWithZOrder(
-      ui::ZOrderLevel z_order = ui::ZOrderLevel::kNormal) {
+      ui::ZOrderLevel z_order = ui::ZOrderLevel::kNormal,
+      bool remove_standard_frame = false,
+      bool use_input_protected_view = true) {
     Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
     params.z_order = z_order;
+    params.remove_standard_frame = remove_standard_frame;
     params.ownership = Widget::InitParams::CLIENT_OWNS_WIDGET;
+    auto delegate = std::make_unique<WidgetDelegate>();
+    delegate->SetContentsView(use_input_protected_view
+                                  ? std::make_unique<TestInputProtectedView>()
+                                  : std::make_unique<View>());
+    params.delegate = delegate.get();
+    KeepDelegateAlive(std::move(delegate));
     auto widget = std::make_unique<Widget>();
     widget->Init(std::move(params));
     return widget;
   }
+
+ private:
+  std::vector<std::unique_ptr<WidgetDelegate>> delegates_;
 };
 
 class OccludedWidgetInputProtectorTest
@@ -296,9 +350,7 @@ TEST_F(OccludedWidgetInputProtectorTest, ShouldBlockEvent_NoAOTWidgets) {
   widget->Show();
   WidgetVisibleWaiter(widget.get()).Wait();
 
-  View* view =
-      widget->GetContentsView()->AddChildView(std::make_unique<View>());
-  view->SetBoundsRect(kBounds);
+  View* view = widget->GetClientContentsView();
 
   ui::MouseEvent mouse_event = CreateMouseEventAtScreenPoint(
       view, widget->GetNonDecoratedClientAreaBoundsInScreen().CenterPoint());
@@ -321,9 +373,7 @@ TEST_F(OccludedWidgetInputProtectorTest, ShouldBlockEvent_LocatedEvent) {
   normal_widget->SetBounds(kNormalBounds);
   normal_widget->Show();
   WidgetVisibleWaiter(normal_widget.get()).Wait();
-  View* view =
-      normal_widget->GetContentsView()->AddChildView(std::make_unique<View>());
-  view->SetBoundsRect(kNormalBounds);
+  View* view = normal_widget->GetClientContentsView();
 
   // Point inside AOT widget.
   ui::MouseEvent inside_event = CreateMouseEventAtScreenPoint(
@@ -342,15 +392,500 @@ TEST_F(OccludedWidgetInputProtectorTest, ShouldBlockEvent_LocatedEvent) {
       outside_event, *view));
 }
 
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockEvent_LocatedEvent_ProtectedByParentSpecification) {
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(gfx::Rect(10, 10, 100, 100));
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  const gfx::Rect kNormalBounds(0, 0, 200, 200);
+  auto normal_widget = CreateWidgetWithZOrder();
+  normal_widget->SetBounds(kNormalBounds);
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+
+  View* parent = normal_widget->GetClientContentsView();
+  // Install specification on parent.
+  InputProtectionSpecification::Install(
+      *parent, base::BindRepeating([](const View* v) {
+        return std::vector<gfx::Rect>{v->GetLocalBounds()};
+      }));
+
+  View* child = parent->AddChildView(std::make_unique<View>());
+  child->SetBoundsRect(gfx::Rect(0, 0, 200, 200));
+
+  // Point inside AOT widget.
+  ui::MouseEvent inside_event = CreateMouseEventAtScreenPoint(
+      child,
+      aot_widget->GetNonDecoratedClientAreaBoundsInScreen().CenterPoint());
+
+  // Querying child should block because parent defines protected bounds (which
+  // cover child).
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      inside_event, *child));
+
+  // Point outside AOT widget.
+  gfx::Point screen_point_outside =
+      aot_widget->GetNonDecoratedClientAreaBoundsInScreen().bottom_right();
+  screen_point_outside.Offset(10, 10);
+  ui::MouseEvent outside_event =
+      CreateMouseEventAtScreenPoint(child, screen_point_outside);
+  EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      outside_event, *child));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockEvent_NonLocatedEvent_ProtectedByParentSpecification) {
+  const gfx::Rect kAotBounds(0, 0, 100, 100);
+  const gfx::Rect kNormalWidgetBounds(0, 0, 200, 200);
+
+  // AOT widget occludes the top-left part of the normal widget.
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(kAotBounds);
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  // Create normal widget.
+  auto normal_widget =
+      CreateWidgetWithZOrder(ui::ZOrderLevel::kNormal, false, false);
+  normal_widget->SetBounds(kNormalWidgetBounds);
+  normal_widget->EnableInputEventActivationProtection();
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+
+  // Setup parent and child views.
+  View* parent_view = normal_widget->GetClientContentsView()->AddChildView(
+      std::make_unique<View>());
+  parent_view->SetBounds(0, 0, 150, 150);
+  View* child_view = parent_view->AddChildView(std::make_unique<View>());
+  child_view->SetBounds(10, 10, 50, 50);
+
+  // Set the specification on the parent_view.
+  // It protects the parent_view's local bounds (0, 0, 150, 150).
+  InputProtectionSpecification::Install(
+      *parent_view, base::BindRepeating([](const View* v) {
+        return std::vector<gfx::Rect>{v->GetLocalBounds()};
+      }));
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+
+  // Querying on child_view should block because it inherits the specification
+  // from `parent_view`, and the protected area (`parent_view` bounds, which
+  // overlap with AOT) is partially occluded.
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *child_view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockEvent_LocatedEvent_AdditiveParentAndChildSpecification) {
+  const gfx::Rect kAotBounds(100, 100, 50, 50);
+  const gfx::Rect kNormalWidgetBounds(0, 0, 200, 200);
+
+  // Always-on-top widget occludes the bottom-right part of the normal widget.
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(kAotBounds);
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  // Create normal widget.
+  auto normal_widget =
+      CreateWidgetWithZOrder(ui::ZOrderLevel::kNormal, false, false);
+  normal_widget->SetBounds(kNormalWidgetBounds);
+  normal_widget->EnableInputEventActivationProtection();
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+
+  // Setup parent and child views.
+  View* parent_view = normal_widget->GetClientContentsView()->AddChildView(
+      std::make_unique<View>());
+  // The parent view covers the entire widget.
+  parent_view->SetBounds(0, 0, 200, 200);
+  View* child_view = parent_view->AddChildView(std::make_unique<View>());
+  // The child view covers most of the parent view.
+  child_view->SetBounds(0, 0, 150, 150);
+
+  // Set specification on parent view to protect parent bounds.
+  InputProtectionSpecification::Install(
+      *parent_view, base::BindRepeating([](const View* v) {
+        return std::vector<gfx::Rect>{v->GetLocalBounds()};
+      }));
+  auto* parent_spec = parent_view->GetProperty(kInputProtectionKey);
+
+  // Set specification on child view to protect only the top-left part.
+  InputProtectionSpecification::Install(
+      *child_view, base::BindRepeating([](const View*) {
+        return std::vector<gfx::Rect>{gfx::Rect(0, 0, 80, 80)};
+      }));
+  auto* child_spec = child_view->GetProperty(kInputProtectionKey);
+
+  // Verify the geometry in screen coordinates to make assumptions explicit.
+  gfx::Rect child_view_bounds_in_screen = child_view->GetBoundsInScreen();
+  gfx::Rect aot_client_bounds_in_screen =
+      aot_widget->GetNonDecoratedClientAreaBoundsInScreen();
+
+  // Click point is chosen to be the center of the always-on-top client area.
+  gfx::Point click_point = aot_client_bounds_in_screen.CenterPoint();
+
+  // Verify that the click is inside the always-on-top widget client area.
+  EXPECT_TRUE(aot_client_bounds_in_screen.Contains(click_point));
+
+  // Verify that the click is inside the child view physical bounds.
+  EXPECT_TRUE(child_view_bounds_in_screen.Contains(click_point));
+
+  // Verify that the click is outside the child view custom protected bounds.
+  std::vector<gfx::Rect> child_protected_bounds =
+      child_spec->GetProtectedBoundsInScreen(*child_view);
+  ASSERT_EQ(child_protected_bounds.size(), 1u);
+  EXPECT_FALSE(child_protected_bounds[0].Contains(click_point));
+
+  // Verify that the click is inside the parent view custom protected bounds.
+  std::vector<gfx::Rect> parent_protected_bounds =
+      parent_spec->GetProtectedBoundsInScreen(*parent_view);
+  ASSERT_EQ(parent_protected_bounds.size(), 1u);
+  EXPECT_TRUE(parent_protected_bounds[0].Contains(click_point));
+
+  ui::MouseEvent click_event =
+      CreateMouseEventAtScreenPoint(child_view, click_point);
+
+  // Should block because the parent specification still protects the click
+  // point even though we targeted the child view (which has its own
+  // specification that does not cover the click point).
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      click_event, *child_view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockEvent_ViewWithoutProtectedBounds) {
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(gfx::Rect(10, 10, 100, 100));
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  const gfx::Rect kNormalBounds(0, 0, 200, 200);
+  auto normal_widget =
+      CreateWidgetWithZOrder(ui::ZOrderLevel::kNormal, false,
+                             /*use_input_protected_view=*/false);
+  normal_widget->SetBounds(kNormalBounds);
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+  View* view = normal_widget->GetClientContentsView();
+
+  // Located events do not require widget opt-in. The click is blocked because
+  // it lands inside the default view bounds and is occluded by the AOT widget.
+  ui::MouseEvent inside_event = CreateMouseEventAtScreenPoint(
+      view,
+      aot_widget->GetNonDecoratedClientAreaBoundsInScreen().CenterPoint());
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      inside_event, *view));
+}
+
+TEST_F(
+    OccludedWidgetInputProtectorTest,
+    ShouldNotBlockNonLocatedEvent_ViewWithoutProtectedBounds_PartiallyOccluded) {
+  // AOT widget partially occludes the normal widget.
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(gfx::Rect(0, 0, 100, 100));
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  // Create normal widget that is partially occluded (overlapping the AOT widget
+  // at 50,50, 50x50).
+  const gfx::Rect kNormalBounds(50, 50, 150, 150);
+  auto normal_widget =
+      CreateWidgetWithZOrder(ui::ZOrderLevel::kNormal, false,
+                             /*use_input_protected_view=*/false);
+  normal_widget->SetBounds(kNormalBounds);
+  normal_widget->EnableInputEventActivationProtection();
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+  View* view = normal_widget->GetClientContentsView();
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+
+  // Not blocked because it is only partially occluded, and views that do not
+  // override `GetLocalInputProtectedBounds()` are only blocked when fully
+  // occluded.
+  EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockNonLocatedEvent_ViewWithoutProtectedBounds_FullyOccluded) {
+  // AOT widget fully occludes the normal widget.
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(gfx::Rect(0, 0, 200, 200));
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  // Create normal widget that is fully occluded (fully inside the AOT widget
+  // bounds).
+  const gfx::Rect kNormalBounds(0, 0, 100, 100);
+  auto normal_widget =
+      CreateWidgetWithZOrder(ui::ZOrderLevel::kNormal, false,
+                             /*use_input_protected_view=*/false);
+  normal_widget->SetBounds(kNormalBounds);
+  normal_widget->EnableInputEventActivationProtection();
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+  View* view = normal_widget->GetClientContentsView();
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+
+  // Blocked because it is fully occluded (even though it has no protected
+  // bounds).
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockNonLocatedEvent_FullyOccludedByAdjacentWidgets) {
+  constexpr gfx::Rect kAot1WindowBounds(100, 100, 100, 100);
+  auto aot_widget_1 = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget_1->SetBounds(kAot1WindowBounds);
+  aot_widget_1->Show();
+  WidgetVisibleWaiter(aot_widget_1.get()).Wait();
+  const gfx::Rect aot1_bounds =
+      aot_widget_1->GetNonDecoratedClientAreaBoundsInScreen();
+
+  // Shift the second AOT window horizontally by the client area width of
+  // `aot_widget_1` (`aot1_bounds.width()`) so their client areas touch edge to
+  // edge without a gap from the window frame borders.
+  const gfx::Rect aot2_window_bounds(
+      gfx::Point(kAot1WindowBounds.x() + aot1_bounds.width(),
+                 kAot1WindowBounds.y()),
+      kAot1WindowBounds.size());
+
+  // Create a normal widget spanning the combined bounds of both AOT widgets so
+  // `aot_widget_1` covers its exact left half.
+  auto normal_widget =
+      CreateWidgetWithZOrder(ui::ZOrderLevel::kNormal, false,
+                             /*use_input_protected_view=*/false);
+  normal_widget->SetBounds(
+      gfx::UnionRects(kAot1WindowBounds, aot2_window_bounds));
+  normal_widget->EnableInputEventActivationProtection();
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+  View* view = normal_widget->GetClientContentsView();
+  const gfx::Rect view_bounds = view->GetBoundsInScreen();
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+
+  // With only the left half covered, `view` is only partially occluded and key
+  // events are allowed.
+  EXPECT_FALSE(aot1_bounds.Contains(view_bounds));
+  EXPECT_TRUE(aot1_bounds.Intersects(view_bounds));
+  EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+
+  // Show the second AOT widget covering the right half.
+  auto aot_widget_2 = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget_2->SetBounds(aot2_window_bounds);
+  aot_widget_2->Show();
+  WidgetVisibleWaiter(aot_widget_2.get()).Wait();
+  const gfx::Rect aot2_bounds =
+      aot_widget_2->GetNonDecoratedClientAreaBoundsInScreen();
+
+  // Verify geometric assumptions: the two AOT widgets do not overlap each
+  // other, are directly adjacent edge to edge, neither contains `view_bounds`
+  // on its own, and their union equals `view_bounds`.
+  EXPECT_FALSE(aot1_bounds.Intersects(aot2_bounds));
+  EXPECT_EQ(aot1_bounds.right(), aot2_bounds.x());
+  EXPECT_FALSE(aot2_bounds.Contains(view_bounds));
+  EXPECT_TRUE(aot2_bounds.Intersects(view_bounds));
+  EXPECT_EQ(gfx::UnionRects(aot1_bounds, aot2_bounds), view_bounds);
+
+  // Key event is now blocked because the two adjacent AOT widgets jointly
+  // fully occlude `view_bounds`.
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockNonLocatedEvent_FullyOccludedByOverlappingWidgets) {
+  constexpr gfx::Rect kAot1WindowBounds(100, 100, 100, 100);
+  auto aot_widget_1 = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget_1->SetBounds(kAot1WindowBounds);
+  aot_widget_1->Show();
+  WidgetVisibleWaiter(aot_widget_1.get()).Wait();
+  const gfx::Rect aot1_bounds =
+      aot_widget_1->GetNonDecoratedClientAreaBoundsInScreen();
+
+  // Shift the second AOT widget by half of `aot1_bounds.width()` so the two
+  // client areas overlap in the middle.
+  const gfx::Rect aot2_window_bounds(
+      gfx::Point(kAot1WindowBounds.x() + aot1_bounds.width() / 2,
+                 kAot1WindowBounds.y()),
+      kAot1WindowBounds.size());
+  auto aot_widget_2 = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget_2->SetBounds(aot2_window_bounds);
+  aot_widget_2->Show();
+  WidgetVisibleWaiter(aot_widget_2.get()).Wait();
+  const gfx::Rect aot2_bounds =
+      aot_widget_2->GetNonDecoratedClientAreaBoundsInScreen();
+
+  // Create a normal widget spanning the combined bounds of both AOT widgets.
+  auto normal_widget =
+      CreateWidgetWithZOrder(ui::ZOrderLevel::kNormal, false,
+                             /*use_input_protected_view=*/false);
+  normal_widget->SetBounds(
+      gfx::UnionRects(kAot1WindowBounds, aot2_window_bounds));
+  normal_widget->EnableInputEventActivationProtection();
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+  View* view = normal_widget->GetClientContentsView();
+  const gfx::Rect view_bounds = view->GetBoundsInScreen();
+
+  // Verify geometric assumptions: the two AOT widgets overlap in the middle,
+  // neither contains `view_bounds` alone, and their union equals `view_bounds`.
+  EXPECT_TRUE(aot1_bounds.Intersects(aot2_bounds));
+  EXPECT_FALSE(aot1_bounds.Contains(view_bounds));
+  EXPECT_FALSE(aot2_bounds.Contains(view_bounds));
+  EXPECT_EQ(gfx::UnionRects(aot1_bounds, aot2_bounds), view_bounds);
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldNotBlockNonLocatedEvent_GapBetweenWidgets) {
+  constexpr gfx::Rect kAot1WindowBounds(100, 100, 100, 100);
+  auto aot_widget_1 = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget_1->SetBounds(kAot1WindowBounds);
+  aot_widget_1->Show();
+  WidgetVisibleWaiter(aot_widget_1.get()).Wait();
+  const gfx::Rect aot1_bounds =
+      aot_widget_1->GetNonDecoratedClientAreaBoundsInScreen();
+
+  // Shift the second AOT widget by `aot1_bounds.width() + 10` so the two AOT
+  // widgets leave a 10px unoccluded gap between their client areas.
+  const gfx::Rect aot2_window_bounds(
+      gfx::Point(kAot1WindowBounds.x() + aot1_bounds.width() + 10,
+                 kAot1WindowBounds.y()),
+      kAot1WindowBounds.size());
+  auto aot_widget_2 = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget_2->SetBounds(aot2_window_bounds);
+  aot_widget_2->Show();
+  WidgetVisibleWaiter(aot_widget_2.get()).Wait();
+  const gfx::Rect aot2_bounds =
+      aot_widget_2->GetNonDecoratedClientAreaBoundsInScreen();
+
+  // Create a normal widget spanning the combined bounds of both AOT widgets.
+  auto normal_widget =
+      CreateWidgetWithZOrder(ui::ZOrderLevel::kNormal, false,
+                             /*use_input_protected_view=*/false);
+  normal_widget->SetBounds(
+      gfx::UnionRects(kAot1WindowBounds, aot2_window_bounds));
+  normal_widget->EnableInputEventActivationProtection();
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+  View* view = normal_widget->GetClientContentsView();
+  const gfx::Rect view_bounds = view->GetBoundsInScreen();
+
+  // Verify geometric assumptions: the two AOT widgets do not intersect and have
+  // a gap between them (`aot1_bounds.right() < aot2_bounds.x()`), even though
+  // their bounding rect (`gfx::UnionRects`) equals `view_bounds`.
+  EXPECT_FALSE(aot1_bounds.Intersects(aot2_bounds));
+  EXPECT_LT(aot1_bounds.right(), aot2_bounds.x());
+  EXPECT_EQ(gfx::UnionRects(aot1_bounds, aot2_bounds), view_bounds);
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+
+  // Not blocked because `view_bounds` is not fully covered by the region union
+  // due to the unoccluded gap between the two AOT widgets.
+  EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockNonLocatedEvent_FullyOccludedByLiveAndHistorical) {
+  constexpr gfx::Rect kAot1WindowBounds(100, 100, 100, 100);
+  auto aot_widget_1 = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget_1->SetBounds(kAot1WindowBounds);
+  aot_widget_1->Show();
+  WidgetVisibleWaiter(aot_widget_1.get()).Wait();
+  const gfx::Rect aot1_bounds =
+      aot_widget_1->GetNonDecoratedClientAreaBoundsInScreen();
+
+  // Place `aot_widget_2` shifted horizontally by `aot1_bounds.width()` so the
+  // two AOT client areas sit directly side by side without a gap between their
+  // window frames.
+  const gfx::Rect aot2_window_bounds(
+      gfx::Point(kAot1WindowBounds.x() + aot1_bounds.width(),
+                 kAot1WindowBounds.y()),
+      kAot1WindowBounds.size());
+  auto aot_widget_2 = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget_2->SetBounds(aot2_window_bounds);
+  aot_widget_2->Show();
+  WidgetVisibleWaiter(aot_widget_2.get()).Wait();
+  const gfx::Rect aot2_bounds =
+      aot_widget_2->GetNonDecoratedClientAreaBoundsInScreen();
+
+  // Create a normal widget spanning the combined bounds of both AOT widgets so
+  // `aot_widget_1` covers its left half and `aot_widget_2` covers its right
+  // half.
+  auto normal_widget =
+      CreateWidgetWithZOrder(ui::ZOrderLevel::kNormal, false,
+                             /*use_input_protected_view=*/false);
+  normal_widget->SetBounds(
+      gfx::UnionRects(kAot1WindowBounds, aot2_window_bounds));
+  normal_widget->EnableInputEventActivationProtection();
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+  View* view = normal_widget->GetClientContentsView();
+  const gfx::Rect view_bounds = view->GetBoundsInScreen();
+
+  // Clear any historical records from initial `Show()`.
+  FastForwardBy(GetDoubleClickInterval() + base::Milliseconds(1));
+  PruneCachedOcclusionHistory();
+  ASSERT_TRUE(occlusion_history().empty());
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+
+  // Hide only `aot_widget_1` while `aot_widget_2` remains visible.
+  aot_widget_1->Hide();
+  WidgetVisibleWaiter(aot_widget_1.get()).WaitUntilInvisible();
+
+  // Verify assumptions: `aot1_bounds` (left half) is now in
+  // `occlusion_history()` and `aot2_bounds` (right half) remains in
+  // `always_on_top_widgets()`. They do not overlap, are directly adjacent,
+  // neither contains `view_bounds` alone, and their union equals `view_bounds`.
+  ASSERT_EQ(always_on_top_widgets().size(), 1u);
+  ASSERT_EQ(occlusion_history().size(), 1u);
+  const gfx::Rect historical_bounds = occlusion_history().front().bounds;
+  const gfx::Rect live_bounds =
+      aot_widget_2->GetNonDecoratedClientAreaBoundsInScreen();
+  EXPECT_EQ(historical_bounds, aot1_bounds);
+  EXPECT_EQ(live_bounds, aot2_bounds);
+  EXPECT_FALSE(historical_bounds.Intersects(live_bounds));
+  EXPECT_EQ(historical_bounds.right(), live_bounds.x());
+  EXPECT_FALSE(historical_bounds.Contains(view_bounds));
+  EXPECT_FALSE(live_bounds.Contains(view_bounds));
+  EXPECT_EQ(gfx::UnionRects(historical_bounds, live_bounds), view_bounds);
+
+  // During the cooldown after hiding `aot_widget_1`, the historical left half
+  // and live right half jointly cover `view_bounds` in full, so the key event
+  // remains blocked.
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+
+  // Once the historical record expires, only the live right half remains (half
+  // coverage), so the key event is allowed.
+  FastForwardBy(GetDoubleClickInterval() + base::Milliseconds(1));
+  EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+}
+
 TEST_F(OccludedWidgetInputProtectorTest, ShouldBlockEvent_TrackedWidget) {
   const gfx::Rect kBounds(0, 0, 100, 100);
   auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
   aot_widget->SetBounds(kBounds);
   aot_widget->Show();
   WidgetVisibleWaiter(aot_widget.get()).Wait();
-  View* view =
-      aot_widget->GetContentsView()->AddChildView(std::make_unique<View>());
-  view->SetBoundsRect(kBounds);
+  View* view = aot_widget->GetClientContentsView();
 
   ui::MouseEvent mouse_event = CreateMouseEventAtScreenPoint(
       view,
@@ -376,15 +911,202 @@ TEST_F(OccludedWidgetInputProtectorTest, ShouldBlockEvent_NonLocatedEvent) {
   normal_widget->SetBounds(kBounds);
   normal_widget->Show();
   WidgetVisibleWaiter(normal_widget.get()).Wait();
-  View* view =
-      normal_widget->GetContentsView()->AddChildView(std::make_unique<View>());
-  view->SetBoundsRect(kBounds);
+  View* view = normal_widget->GetClientContentsView();
 
   ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_TAB, 0);
 
   // Non-located events are currently not handled and should not be blocked,
   // even if the view is physically occluded by an always-on-top widget.
   EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockEvent_NonLocatedEvent_OptIn) {
+  const gfx::Rect kBounds(0, 0, 100, 100);
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(kBounds);
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  auto normal_widget = CreateWidgetWithZOrder();
+  normal_widget->SetBounds(kBounds);
+  normal_widget->EnableInputEventActivationProtection();
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+  View* view = normal_widget->GetClientContentsView();
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+
+  // Blocked because occluded and opted-in.
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+
+  // Test that it is not blocked when not occluded.
+  auto unoccluded_widget = CreateWidgetWithZOrder();
+  unoccluded_widget->SetBounds(gfx::Rect(200, 200, 100, 100));
+  unoccluded_widget->EnableInputEventActivationProtection();
+  unoccluded_widget->Show();
+  WidgetVisibleWaiter(unoccluded_widget.get()).Wait();
+  View* unoccluded_view = unoccluded_widget->GetClientContentsView();
+
+  EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *unoccluded_view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockEvent_NestedWidget_ParentEnabled) {
+  const gfx::Rect kBounds(0, 0, 100, 100);
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(kBounds);
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  // Create parent widget.
+  auto parent_widget = CreateWidgetWithZOrder();
+  parent_widget->SetBounds(kBounds);
+  parent_widget->EnableInputEventActivationProtection();
+  parent_widget->Show();
+  WidgetVisibleWaiter(parent_widget.get()).Wait();
+
+  // Create child widget parented to parent_widget.
+  Widget::InitParams child_params =
+      CreateParams(Widget::InitParams::TYPE_CONTROL);
+  child_params.parent = parent_widget->GetNativeView();
+  child_params.bounds = kBounds;
+  child_params.ownership = Widget::InitParams::CLIENT_OWNS_WIDGET;
+  auto child_widget = std::make_unique<Widget>();
+  child_widget->Init(std::move(child_params));
+  View* view =
+      child_widget->SetContentsView(std::make_unique<TestInputProtectedView>());
+  child_widget->Show();
+  WidgetVisibleWaiter(child_widget.get()).Wait();
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+
+  // Blocked because parent widget has protection enabled.
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *parent_widget->GetClientContentsView()));
+
+  // Blocked because child widget inherits protection from parent_widget.
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockEvent_NestedWidget_NeitherEnabled) {
+  const gfx::Rect kBounds(0, 0, 100, 100);
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(kBounds);
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  // Test that it is not blocked if parent does not enable protection.
+  auto parent_widget = CreateWidgetWithZOrder();
+  parent_widget->SetBounds(kBounds);
+  parent_widget->Show();
+  WidgetVisibleWaiter(parent_widget.get()).Wait();
+
+  Widget::InitParams child_params =
+      CreateParams(Widget::InitParams::TYPE_CONTROL);
+  child_params.parent = parent_widget->GetNativeView();
+  child_params.bounds = kBounds;
+  child_params.ownership = Widget::InitParams::CLIENT_OWNS_WIDGET;
+  auto child_widget = std::make_unique<Widget>();
+  child_widget->Init(std::move(child_params));
+  View* view =
+      child_widget->SetContentsView(std::make_unique<TestInputProtectedView>());
+  child_widget->Show();
+  WidgetVisibleWaiter(child_widget.get()).Wait();
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+
+  // Not blocked because parent widget does not have protection enabled.
+  EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *parent_widget->GetClientContentsView()));
+
+  // Not blocked because child widget does not have protection enabled.
+  EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockEvent_NestedWidget_ChildEnabled) {
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(gfx::Rect(0, 0, 800, 800));
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  // Create parent widget (unprotected).
+  const gfx::Rect kParentWidgetBounds(0, 0, 100, 100);
+  auto parent_widget = CreateWidgetWithZOrder();
+  parent_widget->SetBounds(kParentWidgetBounds);
+  parent_widget->Show();
+  WidgetVisibleWaiter(parent_widget.get()).Wait();
+
+  // Create child widget parented to parent_widget (protected).
+  Widget::InitParams child_params =
+      CreateParams(Widget::InitParams::TYPE_CONTROL);
+  child_params.parent = parent_widget->GetNativeView();
+  child_params.bounds = kParentWidgetBounds;
+  child_params.ownership = Widget::InitParams::CLIENT_OWNS_WIDGET;
+  auto child_widget = std::make_unique<Widget>();
+  child_widget->Init(std::move(child_params));
+  child_widget->EnableInputEventActivationProtection();
+  View* view =
+      child_widget->SetContentsView(std::make_unique<TestInputProtectedView>());
+  child_widget->Show();
+  WidgetVisibleWaiter(child_widget.get()).Wait();
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+
+  // Blocked because child widget itself has protection enabled.
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+
+  // Not blocked on the parent widget because it does not have protection
+  // enabled.
+  EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *parent_widget->GetClientContentsView()));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockEvent_NestedWidget_BothEnabled) {
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(gfx::Rect(0, 0, 800, 800));
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  // Create parent widget (protected).
+  const gfx::Rect kParentWidgetBounds(0, 0, 100, 100);
+  auto parent_widget = CreateWidgetWithZOrder();
+  parent_widget->SetBounds(kParentWidgetBounds);
+  parent_widget->EnableInputEventActivationProtection();
+  parent_widget->Show();
+  WidgetVisibleWaiter(parent_widget.get()).Wait();
+
+  // Create child widget parented to parent_widget (protected).
+  Widget::InitParams child_params =
+      CreateParams(Widget::InitParams::TYPE_CONTROL);
+  child_params.parent = parent_widget->GetNativeView();
+  child_params.bounds = kParentWidgetBounds;
+  child_params.ownership = Widget::InitParams::CLIENT_OWNS_WIDGET;
+  auto child_widget = std::make_unique<Widget>();
+  child_widget->Init(std::move(child_params));
+  child_widget->EnableInputEventActivationProtection();
+  View* view =
+      child_widget->SetContentsView(std::make_unique<TestInputProtectedView>());
+  child_widget->Show();
+  WidgetVisibleWaiter(child_widget.get()).Wait();
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+
+  // Blocked because parent widget has protection enabled.
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *parent_widget->GetClientContentsView()));
+
+  // Blocked because child widget has protection enabled.
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
       key_event, *view));
 }
 
@@ -403,11 +1125,11 @@ TEST_F(OccludedWidgetInputProtectorTest, ShouldBlockEvent_ParentedWidget) {
   child_params.ownership = Widget::InitParams::CLIENT_OWNS_WIDGET;
   auto child_widget = std::make_unique<Widget>();
   child_widget->Init(std::move(child_params));
-  View* view = child_widget->SetContentsView(std::make_unique<View>());
+  View* view =
+      child_widget->SetContentsView(std::make_unique<TestInputProtectedView>());
   child_widget->Show();
   WidgetVisibleWaiter(child_widget.get()).Wait();
 
-  view->SetBoundsRect(gfx::Rect(0, 0, 100, 100));
 
   ui::MouseEvent mouse_event = CreateMouseEventAtScreenPoint(
       view,
@@ -429,15 +1151,14 @@ TEST_F(OccludedWidgetInputProtectorTest, ShouldBlockEvent_AnchoredWidget) {
   // Create a bubble anchored to the AOT widget. This establishes a logical
   // anchoring relationship which is resolved via `GetPrimaryWindowWidget`.
   auto bubble_delegate =
-      std::make_unique<TestBubbleDelegate>(aot_widget->GetContentsView());
+      std::make_unique<TestBubbleDelegate>(aot_widget->GetClientContentsView());
   auto bubble_widget =
       base::WrapUnique(BubbleDialogDelegate::CreateBubbleDeprecated(
           bubble_delegate.get(), Widget::InitParams::CLIENT_OWNS_WIDGET));
   bubble_widget->Show();
   WidgetVisibleWaiter(bubble_widget.get()).Wait();
 
-  View* view = bubble_widget->GetContentsView();
-  view->SetBoundsRect(gfx::Rect(0, 0, 100, 100));
+  View* view = bubble_widget->GetClientContentsView();
 
   ui::MouseEvent mouse_event = CreateMouseEventAtScreenPoint(
       view,
@@ -462,7 +1183,7 @@ TEST_F(OccludedWidgetInputProtectorTest, HistoricalOcclusion_Hide) {
   normal_widget->Show();
   WidgetVisibleWaiter(normal_widget.get()).Wait();
 
-  View* view = normal_widget->GetContentsView();
+  View* view = normal_widget->GetClientContentsView();
   ui::MouseEvent event = CreateMouseEventAtScreenPoint(
       view,
       normal_widget->GetNonDecoratedClientAreaBoundsInScreen().CenterPoint());
@@ -491,7 +1212,7 @@ TEST_F(OccludedWidgetInputProtectorTest, HistoricalOcclusion_Close) {
   normal_widget->Show();
   WidgetVisibleWaiter(normal_widget.get()).Wait();
 
-  View* view = normal_widget->GetContentsView();
+  View* view = normal_widget->GetClientContentsView();
   ui::MouseEvent event = CreateMouseEventAtScreenPoint(
       view,
       normal_widget->GetNonDecoratedClientAreaBoundsInScreen().CenterPoint());
@@ -517,7 +1238,7 @@ TEST_F(OccludedWidgetInputProtectorTest, HistoricalOcclusion_Unregister) {
   normal_widget->Show();
   WidgetVisibleWaiter(normal_widget.get()).Wait();
 
-  View* view = normal_widget->GetContentsView();
+  View* view = normal_widget->GetClientContentsView();
   ui::MouseEvent event = CreateMouseEventAtScreenPoint(
       view,
       normal_widget->GetNonDecoratedClientAreaBoundsInScreen().CenterPoint());
@@ -543,7 +1264,7 @@ TEST_F(OccludedWidgetInputProtectorTest, HistoricalOcclusion_Move) {
   normal_widget->Show();
   WidgetVisibleWaiter(normal_widget.get()).Wait();
 
-  View* view = normal_widget->GetContentsView();
+  View* view = normal_widget->GetClientContentsView();
 
   WidgetBoundsWaiter waiter(aot_widget.get(), new_bounds);
   aot_widget->SetBounds(new_bounds);
@@ -745,9 +1466,7 @@ TEST_F(OccludedWidgetInputProtectorTest, ShouldBlockEvent_FeatureDisabled) {
   normal_widget->SetBounds(kBounds);
   normal_widget->Show();
   WidgetVisibleWaiter(normal_widget.get()).Wait();
-  View* view =
-      normal_widget->GetContentsView()->AddChildView(std::make_unique<View>());
-  view->SetBoundsRect(kBounds);
+  View* view = normal_widget->GetClientContentsView();
 
   ui::MouseEvent mouse_event = CreateMouseEventAtScreenPoint(
       view,
@@ -755,6 +1474,160 @@ TEST_F(OccludedWidgetInputProtectorTest, ShouldBlockEvent_FeatureDisabled) {
 
   EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
       mouse_event, *view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldBlockNonLocatedEvent_ViewWithProtectedBounds_PartiallyOccluded) {
+  // AOT widget partially occludes the normal widget.
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(gfx::Rect(0, 0, 100, 100));
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  // Create normal widget that is partially occluded (overlapping the AOT widget
+  // at 50,50, 50x50).
+  const gfx::Rect kNormalBounds(50, 50, 150, 150);
+  auto normal_widget = CreateWidgetWithZOrder();
+  normal_widget->SetBounds(kNormalBounds);
+  normal_widget->EnableInputEventActivationProtection();
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+  View* view = normal_widget->GetClientContentsView();
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+
+  // Blocked because views that override `GetLocalInputProtectedBounds()` are
+  // blocked even on partial occlusion.
+  EXPECT_TRUE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       ShouldNotBlockLocatedEvent_OutsideProtectedArea) {
+  const gfx::Rect kAotBounds(0, 0, 100, 100);
+  const gfx::Rect kNormalWidgetBounds(0, 0, 200, 200);
+  const gfx::Rect kProtectedBounds(0, 0, 50, 50);
+  // A point inside the AOT widget but outside the protected area (which is at
+  // the top-left).
+  const gfx::Point kClickPoint(kAotBounds.right() - 20,
+                               kAotBounds.bottom() - 20);
+
+  // AOT widget occludes only the top-left part of the normal widget.
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(kAotBounds);
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  // The view defines a small protected area at local kProtectedBounds.
+  auto delegate = std::make_unique<WidgetDelegate>();
+  auto* view = delegate->SetContentsView(
+      std::make_unique<TestInputProtectedView>(kProtectedBounds));
+
+  // Create normal widget that is partially occluded by the AOT widget.
+  //
+  // The `delegate` must be declared before `normal_widget` so that the widget
+  // is destroyed first.
+  auto normal_widget = std::make_unique<Widget>();
+  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  params.ownership = Widget::InitParams::CLIENT_OWNS_WIDGET;
+  params.delegate = delegate.get();
+  normal_widget->Init(std::move(params));
+  normal_widget->SetBounds(kNormalWidgetBounds);
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+
+  // Click is outside the protected area but inside the AOT widget bounds.
+  ui::MouseEvent click_outside_protected =
+      CreateMouseEventAtScreenPoint(view, kClickPoint);
+
+  // Should not be blocked because click is outside the protected area.
+  EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      click_outside_protected, *view));
+}
+
+TEST_F(
+    OccludedWidgetInputProtectorTest,
+    ShouldNotBlockNonLocatedEvent_ViewWithPartialProtectedBounds_ProtectedAreaUnoccluded) {
+  const gfx::Rect kAotBounds(150, 150, 100, 100);
+  const gfx::Rect kNormalWidgetBounds(0, 0, 200, 200);
+  const gfx::Rect kProtectedBounds(0, 0, 50, 50);
+
+  // AOT widget occludes only the bottom-right part of the normal widget.
+  auto aot_widget = CreateWidgetWithZOrder(ui::ZOrderLevel::kFloatingWindow);
+  aot_widget->SetBounds(kAotBounds);
+  aot_widget->Show();
+  WidgetVisibleWaiter(aot_widget.get()).Wait();
+
+  // The view defines a protected area at top-left kProtectedBounds.
+  // Since AOT is at kAotBounds (bottom-right), the protected area is fully
+  // unoccluded.
+  auto delegate = std::make_unique<WidgetDelegate>();
+  auto* view = delegate->SetContentsView(
+      std::make_unique<TestInputProtectedView>(kProtectedBounds));
+
+  // Create normal widget that is partially occluded by the AOT widget.
+  //
+  // The `delegate` must be declared before `normal_widget` so that the widget
+  // is destroyed first.
+  auto normal_widget = std::make_unique<Widget>();
+  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  params.ownership = Widget::InitParams::CLIENT_OWNS_WIDGET;
+  params.delegate = delegate.get();
+  normal_widget->Init(std::move(params));
+  normal_widget->SetBounds(kNormalWidgetBounds);
+  normal_widget->EnableInputEventActivationProtection();
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
+
+  // Should not be blocked because the protected area is fully unoccluded
+  // (even though the widget is partially occluded in the bottom-right).
+  EXPECT_FALSE(OccludedWidgetInputProtector::GetInstance()->ShouldBlockEvent(
+      key_event, *view));
+}
+
+TEST_F(OccludedWidgetInputProtectorTest,
+       GetInputProtectedBoundsInScreen_ClipsToLocalBounds) {
+  const gfx::Rect kNormalBounds(0, 0, 200, 200);
+  auto normal_widget = CreateWidgetWithZOrder();
+  normal_widget->SetBounds(kNormalBounds);
+  normal_widget->Show();
+  WidgetVisibleWaiter(normal_widget.get()).Wait();
+
+  // Retrieve the container view.
+  View* container = normal_widget->GetClientContentsView();
+
+  // Test a view returning bounds that stretch outside its boundaries. The
+  // returned bounds should be clipped to the view's local bounds (0, 0, 100,
+  // 100).
+  gfx::Rect bad_bounds_1(-50, -50, 200, 200);
+  auto* view1 = container->AddChildView<View>(
+      std::make_unique<TestInputProtectedView>(bad_bounds_1));
+  view1->SetBounds(10, 10, 100, 100);
+
+  // The expected result is the view's actual screen bounds.
+  gfx::Rect expected_screen_bounds = view1->GetBoundsInScreen();
+
+  InputProtectionSpecification* spec = view1->GetProperty(kInputProtectionKey);
+  ASSERT_TRUE(spec);
+  std::vector<gfx::Rect> screen_bounds =
+      spec->GetProtectedBoundsInScreen(*view1);
+  ASSERT_EQ(screen_bounds.size(), 1u);
+  EXPECT_EQ(screen_bounds[0], expected_screen_bounds);
+
+  // Test a view returning bounds that are completely outside its boundaries.
+  // The returned bounds should be completely ignored (empty bounds).
+  gfx::Rect bad_bounds_2(150, 150, 50, 50);
+  auto* view2 = container->AddChildView<View>(
+      std::make_unique<TestInputProtectedView>(bad_bounds_2));
+  view2->SetBounds(10, 10, 100, 100);
+
+  InputProtectionSpecification* spec2 = view2->GetProperty(kInputProtectionKey);
+  ASSERT_TRUE(spec2);
+  std::vector<gfx::Rect> screen_bounds2 =
+      spec2->GetProtectedBoundsInScreen(*view2);
+  EXPECT_TRUE(screen_bounds2.empty());
 }
 
 class OccludedWidgetInputProtectorDisabledTest

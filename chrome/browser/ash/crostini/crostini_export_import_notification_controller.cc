@@ -13,17 +13,16 @@
 #include "base/check_deref.h"
 #include "chrome/browser/ash/crostini/crostini_export_import.h"
 #include "chrome/browser/ash/crostini/crostini_export_import_factory.h"
-#include "chrome/browser/notifications/notification_display_service.h"
-#include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/navigator/browser_navigator.h"
-#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
 #include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
+#include "components/user_manager/user.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
 
@@ -90,9 +89,15 @@ CrostiniExportImportNotificationController::
 void CrostiniExportImportNotificationController::ForceRedisplay() {
   hidden_ = false;
 
-  NotificationDisplayServiceFactory::GetForProfile(profile_)->Display(
-      NotificationHandler::Type::TRANSIENT, *notification_,
-      /*metadata=*/nullptr);
+  const user_manager::User& user = CHECK_DEREF(
+      ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile_));
+  auto notification = std::make_unique<message_center::Notification>(
+      ash::CreateUserScopedNotificationId(notification_->id(),
+                                          user.username_hash()),
+      *notification_);
+  notification->set_profile_id(user.GetAccountId().GetUserEmail());
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 void CrostiniExportImportNotificationController::SetStatusRunningUI(
@@ -107,7 +112,7 @@ void CrostiniExportImportNotificationController::SetStatusRunningUI(
         if (!button_index.has_value()) {
           return;
         }
-        DCHECK_EQ(0, *button_index);
+        CHECK_EQ(0, *button_index, base::NotFatalUntil::M160);
         CrostiniExportImportFactory::GetForProfile(profile)->CancelOperation(
             type, container_id);
       },
@@ -191,8 +196,12 @@ void CrostiniExportImportNotificationController::SetStatusCancelledUI() {
   delegate_->SetCallback(
       CrostiniExportImportClickCloseDelegate::ButtonClickCallback());
 
-  NotificationDisplayServiceFactory::GetForProfile(profile_)->Close(
-      NotificationHandler::Type::TRANSIENT, notification_->id());
+  const user_manager::User& user = CHECK_DEREF(
+      ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile_));
+  message_center::MessageCenter::Get()->RemoveNotification(
+      ash::CreateUserScopedNotificationId(notification_->id(),
+                                          user.username_hash()),
+      /*by_user=*/false);
 }
 
 void CrostiniExportImportNotificationController::SetStatusFailedWithMessageUI(
@@ -214,12 +223,12 @@ void CrostiniExportImportNotificationController::SetStatusFailedWithMessageUI(
     case Status::FAILED_ARCHITECTURE_MISMATCH:
       delegate_->SetCallback(base::BindRepeating(
           [](Profile* profile) {
-            NavigateParams params(
-                profile, GURL(ash::external_urls::kLinuxExportImportHelpURL),
-                ui::PAGE_TRANSITION_LINK);
-            params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-            params.window_action = NavigateParams::WindowAction::kShowWindow;
-            Navigate(&params);
+            auto* user =
+                ash::BrowserContextHelper::Get()->GetUserByBrowserContext(
+                    profile);
+            ash::BrowserController::GetInstance()->OpenUrl(
+                CHECK_DEREF(user).GetAccountId(),
+                GURL(ash::external_urls::kLinuxExportImportHelpURL), {});
           },
           profile_));
       break;

@@ -27,6 +27,7 @@
 #include "third_party/blink/renderer/core/page/scrolling/sticky_position_scrolling_constraints.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/platform/geometry/calculation_value.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -56,26 +57,53 @@ TimelineInset ResolveAuto(const TimelineInset& inset,
                           PhysicalAxis axis) {
   const LayoutObject* layout_object =
       resolved_source ? resolved_source->GetLayoutObject() : nullptr;
-  const ComputedStyle* style = layout_object ? layout_object->Style() : nullptr;
-  if (!style) {
+  if (!layout_object) {
     return inset;
   }
 
+  const ComputedStyle& style = layout_object->Style();
   const Length& start = inset.GetStart();
   const Length& end = inset.GetEnd();
 
-  if (IsBlockDirection(axis, style->GetWritingMode())) {
+  if (IsBlockDirection(axis, style.GetWritingMode())) {
     return TimelineInset(
-        start.IsAuto() ? style->ScrollPaddingBlockStart() : start,
-        end.IsAuto() ? style->ScrollPaddingBlockEnd() : end);
+        start.IsAuto() ? style.ScrollPaddingBlockStart() : start,
+        end.IsAuto() ? style.ScrollPaddingBlockEnd() : end);
   }
   return TimelineInset(
-      start.IsAuto() ? style->ScrollPaddingInlineStart() : start,
-      end.IsAuto() ? style->ScrollPaddingInlineEnd() : end);
+      start.IsAuto() ? style.ScrollPaddingInlineStart() : start,
+      end.IsAuto() ? style.ScrollPaddingInlineEnd() : end);
 }
 
 LayoutUnit ComputeInset(const Length& inset, LayoutUnit viewport_size) {
   return MinimumValueForLength(inset, viewport_size);
+}
+
+bool ShouldRejectInsetValue(const CSSValue* value) {
+  if (const auto* identifier = DynamicTo<CSSIdentifierValue>(value)) {
+    return identifier->GetValueID() != CSSValueID::kAuto;
+  }
+  const auto* primitive_value = DynamicTo<CSSPrimitiveValue>(value);
+  if (!primitive_value) {
+    return true;
+  }
+  if (primitive_value->IsElementDependent()) {
+    return RuntimeEnabledFeatures::AnimationRangeRejectRelativeLengthsEnabled();
+  }
+  if (primitive_value->IsPercentage()) {
+    return false;
+  }
+
+  CSSPrimitiveValue::LengthTypeFlags unit_types;
+  primitive_value->AccumulateLengthUnitTypes(unit_types);
+  if (!unit_types.any()) {
+    return true;
+  }
+
+  unit_types.reset(CSSPrimitiveValue::kUnitTypePixels);
+  unit_types.reset(CSSPrimitiveValue::kUnitTypePercentage);
+  return unit_types.any() &&
+         RuntimeEnabledFeatures::AnimationRangeRejectRelativeLengthsEnabled();
 }
 
 const CSSValue* ParseInset(const InsetValueSequence& array,
@@ -86,8 +114,10 @@ const CSSValue* ParseInset(const InsetValueSequence& array,
 
   V8UnionCSSNumericValueOrString* value = array[index];
   if (value->IsString()) {
-    if (value->GetAsString() != "auto")
+    if (value->GetAsString() != "auto") {
       exception_state.ThrowTypeError("inset must be CSSNumericValue or auto");
+      return nullptr;
+    }
 
     return CSSIdentifierValue::Create(Length(Length::Type::kAuto));
   }
@@ -95,7 +125,7 @@ const CSSValue* ParseInset(const InsetValueSequence& array,
   CSSNumericValue* numeric_value = value->GetAsCSSNumericValue();
   const CSSPrimitiveValue* css_value =
       DynamicTo<CSSPrimitiveValue>(numeric_value->ToCSSValue());
-  if (!css_value || (!css_value->IsLength() && !css_value->IsPercentage())) {
+  if (ShouldRejectInsetValue(css_value)) {
     exception_state.ThrowTypeError("Invalid inset");
     return nullptr;
   }
@@ -112,7 +142,13 @@ const CSSValuePair* ParseInsetPair(Document& document, const String str_value) {
   if (!value_list || value_list->length() != 1)
     return nullptr;
 
-  return &To<CSSValuePair>(value_list->Item(0));
+  const auto& pair = To<CSSValuePair>(value_list->Item(0));
+  if (ShouldRejectInsetValue(&pair.First()) ||
+      ShouldRejectInsetValue(&pair.Second())) {
+    return nullptr;
+  }
+
+  return &pair;
 }
 
 bool IsStyleDependent(const CSSValue* value) {
@@ -253,13 +289,16 @@ ViewTimeline* ViewTimeline::Create(Document& document,
   if (v8_inset && v8_inset->IsCSSNumericValueOrStringSequence()) {
     const InsetValueSequence inset_array =
         v8_inset->GetAsCSSNumericValueOrStringSequence();
-    if (inset_array.size() > 2) {
+    if (inset_array.empty() || inset_array.size() > 2) {
       exception_state.ThrowTypeError("Invalid inset");
       return nullptr;
     }
 
     start_inset_value = ParseInset(inset_array, 0, exception_state);
     end_inset_value = ParseInset(inset_array, 1, exception_state);
+    if (exception_state.HadException()) {
+      return nullptr;
+    }
   } else if (v8_inset && v8_inset->IsString()) {
     const CSSValuePair* value_pair =
         ParseInsetPair(document, v8_inset->GetAsString());
@@ -277,9 +316,13 @@ ViewTimeline* ViewTimeline::Create(Document& document,
   Length inset_end_side = InsetValueToLength(end_inset_value.value_or(nullptr),
                                              subject, inset_start_side);
 
+  // Implements the IDL constructor new ViewTimeline.
+  // Imperative timelines are attached directly to the animation via the
+  // web animations AIP and do not participate in name lookup, and have no
+  // CSS defining tree scope.
   ViewTimeline* view_timeline = MakeGarbageCollected<ViewTimeline>(
-      &document, subject, axis,
-      TimelineInset(inset_start_side, inset_end_side));
+      &document, subject, axis, TimelineInset(inset_start_side, inset_end_side),
+      /*tree_scope=*/nullptr);
 
   if (start_inset_value && IsStyleDependent(start_inset_value.value()))
     view_timeline->style_dependant_start_inset_ = start_inset_value.value();
@@ -293,11 +336,13 @@ ViewTimeline* ViewTimeline::Create(Document& document,
 ViewTimeline::ViewTimeline(Document* document,
                            Element* subject,
                            ScrollAxis axis,
-                           TimelineInset inset)
+                           TimelineInset inset,
+                           const TreeScope* tree_scope)
     : ScrollTimeline(document,
                      ReferenceType::kNearestAncestor,
                      /* reference_element */ subject,
-                     axis),
+                     axis,
+                     tree_scope),
       inset_(inset) {}
 
 void ViewTimeline::CalculateOffsets(PaintLayerScrollableArea* scrollable_area,
@@ -309,7 +354,7 @@ void ViewTimeline::CalculateOffsets(PaintLayerScrollableArea* scrollable_area,
   LayoutBox* scroll_container =
       ComputeScrollContainer(state->resolved_source, physical_orientation);
   DCHECK(scroll_container);
-  DCHECK(subject());
+  DCHECK(SubjectInternal());
 
   std::optional<gfx::SizeF> subject_size = SubjectSize();
   if (!subject_size) {
@@ -344,11 +389,11 @@ void ViewTimeline::CalculateOffsets(PaintLayerScrollableArea* scrollable_area,
     Length updated_end = inset.GetEnd();
     if (style_dependant_start_inset_) {
       updated_start = InsetValueToLength(style_dependant_start_inset_,
-                                         subject(), Length::Fixed());
+                                         SubjectInternal(), Length::Fixed());
     }
     if (style_dependant_end_inset_) {
-      updated_end = InsetValueToLength(style_dependant_end_inset_, subject(),
-                                       Length::Fixed());
+      updated_end = InsetValueToLength(style_dependant_end_inset_,
+                                       SubjectInternal(), Length::Fixed());
     }
     inset = TimelineInset(updated_start, updated_end);
   }
@@ -384,11 +429,11 @@ void ViewTimeline::ApplyStickyAdjustments(ScrollOffsets& scroll_offsets,
                                           double target_offset,
                                           PhysicalAxis orientation,
                                           LayoutBox* scroll_container) const {
-  if (!subject()) {
+  if (!SubjectInternal()) {
     return;
   }
 
-  LayoutBox* subject_layout_box = subject()->GetLayoutBox();
+  LayoutBox* subject_layout_box = SubjectInternal()->GetLayoutBox();
   if (!subject_layout_box || !scroll_container) {
     return;
   }
@@ -478,10 +523,11 @@ void ViewTimeline::ApplyStickyAdjustments(ScrollOffsets& scroll_offsets,
 }
 
 std::optional<gfx::SizeF> ViewTimeline::SubjectSize() const {
-  if (!subject()) {
+  if (!SubjectInternal()) {
     return std::nullopt;
   }
-  const LayoutObject* subject_layout_object = subject()->GetLayoutObject();
+  const LayoutObject* subject_layout_object =
+      SubjectInternal()->GetLayoutObject();
   if (!subject_layout_object) {
     return std::nullopt;
   }
@@ -515,15 +561,16 @@ std::optional<gfx::SizeF> ViewTimeline::SubjectSize() const {
 
 std::optional<gfx::PointF> ViewTimeline::SubjectPosition(
     LayoutBox* scroll_container) const {
-  if (!subject() || !scroll_container) {
+  if (!SubjectInternal() || !scroll_container) {
     return std::nullopt;
   }
-  LayoutObject* subject_layout_object = subject()->GetLayoutObject();
+  LayoutObject* subject_layout_object = SubjectInternal()->GetLayoutObject();
   if (!subject_layout_object || !scroll_container) {
     return std::nullopt;
   }
-  MapCoordinatesFlags flags =
-      kIgnoreScrollOffset | kIgnoreStickyOffset | kIgnoreTransforms;
+  MapCoordinatesFlags flags = {MapCoordinatesMode::kIgnoreScrollOffset,
+                               MapCoordinatesMode::kIgnoreStickyOffset,
+                               MapCoordinatesMode::kIgnoreTransforms};
   gfx::PointF subject_pos = subject_layout_object->LocalToAncestorPoint(
       gfx::PointF(), scroll_container, flags);
 
@@ -591,14 +638,20 @@ CSSNumericValue* ViewTimeline::getCurrentTime(const String& rangeName) {
 }
 
 Element* ViewTimeline::subject() const {
+  return Sanitize(SubjectInternal());
+}
+
+Element* ViewTimeline::SubjectInternal() const {
   return GetReferenceElement();
 }
 
 bool ViewTimeline::Matches(Element* subject,
                            ScrollAxis axis,
-                           const TimelineInset& inset) const {
+                           const TimelineInset& inset,
+                           const TreeScope* tree_scope) const {
   if (!ScrollTimeline::Matches(ReferenceType::kNearestAncestor,
-                               /* reference_element */ subject, axis)) {
+                               /* reference_element */ subject, axis,
+                               tree_scope)) {
     return false;
   }
   return inset_ == inset;

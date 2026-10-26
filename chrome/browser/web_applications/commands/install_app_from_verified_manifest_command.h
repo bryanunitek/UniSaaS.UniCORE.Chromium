@@ -15,6 +15,7 @@
 #include "chrome/browser/web_applications/commands/web_app_command.h"
 #include "chrome/browser/web_applications/jobs/manifest_to_web_app_install_info_job.h"
 #include "chrome/browser/web_applications/locks/shared_web_contents_lock.h"
+#include "chrome/browser/web_applications/model/parse_manifest_result.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_install_params.h"
 #include "chrome/browser/web_applications/web_contents/web_app_data_retriever.h"
@@ -25,7 +26,7 @@
 
 namespace web_app {
 
-class FinalizeInstallJob;
+class FinalizeInstallOrUpdateJob;
 class ParseManifestFromStringJob;
 class SharedWebContentsWithAppLock;
 
@@ -81,7 +82,7 @@ class InstallAppFromVerifiedManifestCommand
   void StartWithLock(std::unique_ptr<SharedWebContentsLock> lock) override;
 
  private:
-  void OnManifestParsed(blink::mojom::ManifestPtr manifest);
+  void OnManifestParsed(ParseManifestResult parse_result);
   void OnInstallInfoParsedFromManifest(
       std::unique_ptr<WebAppInstallInfo> install_info);
   void OnAppLockAcquired();
@@ -108,7 +109,7 @@ class InstallAppFromVerifiedManifestCommand
   std::unique_ptr<WebAppDataRetriever> data_retriever_;
   std::unique_ptr<WebAppInstallInfo> web_app_info_;
   std::unique_ptr<ManifestToWebAppInstallInfoJob> manifest_to_install_info_job_;
-  std::unique_ptr<FinalizeInstallJob> install_job_;
+  std::unique_ptr<FinalizeInstallOrUpdateJob> install_job_;
 
   base::WeakPtrFactory<InstallAppFromVerifiedManifestCommand> weak_ptr_factory_{
       this};

@@ -32,6 +32,7 @@
 #include <thread>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
@@ -149,7 +150,8 @@ class WorkerThread::InterruptData {
   bool is_in_back_forward_cache() const { return is_in_back_forward_cache_; }
 
  private:
-  WorkerThread* worker_thread_;
+  raw_ptr<WorkerThread, UnprotectedInRelease | DanglingUntriaged>
+      worker_thread_;
   mojom::blink::FrameLifecycleState state_;
   bool is_in_back_forward_cache_;
   bool seen_interrupt_ = false;
@@ -182,19 +184,6 @@ void WorkerThread::Start(
                           IsOwningBackingThread() ?
                               thread_startup_data : std::nullopt,
                           std::move(devtools_params)));
-}
-
-void WorkerThread::EvaluateClassicScript(
-    const KURL& script_url,
-    const String& source_code,
-    std::unique_ptr<Vector<uint8_t>> cached_meta_data,
-    const v8_inspector::V8StackTraceId& stack_id) {
-  DCHECK_CALLED_ON_VALID_THREAD(parent_thread_checker_);
-  PostCrossThreadTask(
-      *GetTaskRunner(TaskType::kDOMManipulation), FROM_HERE,
-      CrossThreadBindOnce(&WorkerThread::EvaluateClassicScriptOnWorkerThread,
-                          CrossThreadUnretained(this), script_url, source_code,
-                          std::move(cached_meta_data), stack_id));
 }
 
 void WorkerThread::FetchAndRunClassicScript(
@@ -601,6 +590,7 @@ void WorkerThread::InitializeOnWorkerThread(
       TaskType::kBackgroundFetch,
       TaskType::kCanvasBlobSerialization,
       TaskType::kDatabaseAccess,
+      TaskType::kClipboard,
       TaskType::kDOMManipulation,
       TaskType::kFileReading,
       TaskType::kFontLoading,
@@ -645,7 +635,7 @@ void WorkerThread::InitializeOnWorkerThread(
   base::ElapsedTimer timer;
   DCHECK(IsCurrentThread());
   backing_thread_weak_factory_.emplace(this);
-  worker_reporting_proxy_.WillInitializeWorkerContext();
+  worker_reporting_proxy_->WillInitializeWorkerContext();
   {
     TRACE_EVENT0("blink.worker", "WorkerThread::InitializeWorkerContext");
     base::AutoLock locker(lock_);
@@ -675,11 +665,16 @@ void WorkerThread::InitializeOnWorkerThread(
     global_scope_ =
         CreateWorkerGlobalScope(std::move(global_scope_creation_params));
     worker_scheduler_->InitializeOnWorkerThread(global_scope_);
-    worker_reporting_proxy_.DidCreateWorkerGlobalScope(GlobalScope());
+    worker_reporting_proxy_->DidCreateWorkerGlobalScope(GlobalScope());
 
     worker_inspector_controller_ = WorkerInspectorController::Create(
         this, url_for_debugger, inspector_task_runner_,
         std::move(devtools_params));
+
+    if (auto* worker_global_scope =
+            DynamicTo<WorkerGlobalScope>(GlobalScope())) {
+      worker_global_scope->CreateAnimationFrameTimingMonitor();
+    }
 
     // Since context initialization below may fail, we should notify debugger
     // about the new worker thread separately, so that it can resolve it by id
@@ -723,17 +718,6 @@ void WorkerThread::InitializeOnWorkerThread(
   // Note the above call runs nested message loop which may result in
   // worker thread being torn down by request from the parent thread,
   // while waiting for debugger.
-}
-
-void WorkerThread::EvaluateClassicScriptOnWorkerThread(
-    const KURL& script_url,
-    String source_code,
-    std::unique_ptr<Vector<uint8_t>> cached_meta_data,
-    const v8_inspector::V8StackTraceId& stack_id) {
-  WorkerGlobalScope* global_scope = To<WorkerGlobalScope>(GlobalScope());
-  CHECK(global_scope);
-  global_scope->EvaluateClassicScript(script_url, std::move(source_code),
-                                      std::move(cached_meta_data), stack_id);
 }
 
 void WorkerThread::FetchAndRunClassicScriptOnWorkerThread(
@@ -815,7 +799,8 @@ void WorkerThread::PrepareForShutdownOnWorkerThread() {
   // are observer of the |GlobalScope()| (see the DedicatedWorker class) and
   // they initiate thread termination on destruction of the parent context.
   GlobalScope()->NotifyContextDestroyed();
-  GetIsolate()->ContextDisposedNotification(/*dependant_context=*/false);
+  GetIsolate()->ContextDisposedNotification(
+      v8::ContextDependants::kNoDependants);
 
   worker_scheduler_->Dispose();
 

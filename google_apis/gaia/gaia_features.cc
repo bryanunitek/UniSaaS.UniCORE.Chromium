@@ -8,20 +8,13 @@
 
 namespace gaia::features {
 
-// Switches account capabilities fetch to the "getAllVisible" URL that fetches
-// all capabilities visible to Chrome instead of asking for a hardcoded list of
-// capabilities that might be only partially available.
-// Consult https://crbug.com/436151197 before enabling.
-BASE_FEATURE(kGetAccountCapabilitiesUsesGetAllVisibleUrl,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Intended as a Finch killswitch.
-// Enabled by default in M150. Remove in or after M153.
-BASE_FEATURE(kSigninChromePasskeyUnlockUrlUsesAccountIndex,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 // Intended as a Finch killswitch.
 BASE_FEATURE(kSigninChromeSyncKeysUrlUsesAccountIndex,
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, IssueToken fetches return transient failure instead of a
+// permanent one when receiving an HTTP 200 response with an unexpected body.
+BASE_FEATURE(kOAuth2MintTokenUnexpectedResponseBodyIsTransient,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace gaia::features

@@ -15,6 +15,7 @@ group("common") {
   public_deps = [
     ":crash_key",
     ":crash_key_utils",
+    ":shared_memory_user_stream",
   ]
 
   if (is_apple) {
@@ -24,6 +25,18 @@ group("common") {
   if (is_ios) {
     public_deps += [ ":reporter_running_ios" ]
   }
+}
+
+source_set("shared_memory_user_stream") {
+  sources = [
+    "shared_memory_user_stream.h",
+    "shared_memory_user_stream_reader.cc",
+    "shared_memory_user_stream_reader.h",
+    "shared_memory_user_stream_writer.cc",
+    "shared_memory_user_stream_writer.h",
+  ]
+
+  deps = [ "//base" ]
 }
 
 use_crashpad_annotation =
@@ -56,6 +69,7 @@ if (use_crash_key_stubs || use_crashpad_annotation) {
 } else {
   crash_key_target_type = "component"
 }
+
 target(crash_key_target_type, "crash_key_lib") {
   sources = [
     "crash_export.h",
@@ -112,10 +126,12 @@ static_library("crash_key_utils") {
     "crash_keys.h",
   ]
 
-  deps = [
+  public_deps = [
+    ":crash_buildflags",
     ":crash_key",
-    "//base",
   ]
+
+  deps = [ "//base" ]
 }
 
 if (is_apple) {
@@ -161,11 +177,14 @@ source_set("unit_tests") {
   sources = [
     "crash_key_unittest.cc",
     "crash_keys_unittest.cc",
+    "shared_memory_user_stream_reader_unittest.cc",
+    "shared_memory_user_stream_writer_unittest.cc",
   ]
 
   deps = [
     ":common",
     "//base",
+    "//base/test:test_support",
     "//testing/gmock",
     "//testing/gtest",
   ]

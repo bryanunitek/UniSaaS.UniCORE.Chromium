@@ -3,35 +3,42 @@
 // found in the LICENSE file.
 
 #include "base/strings/string_util.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "chrome/browser/ui/views/payments/payment_handler_web_flow_view_controller.h"
 #include "chrome/browser/ui/views/payments/payment_request_browsertest_base.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
+#include "chrome/browser/ui/views/payments/payment_request_dialog_view_test_api.h"
+#include "chrome/browser/ui/views/payments/payment_request_views_util.h"
 #include "chrome/test/payments/payment_app_install_util.h"
 #include "components/omnibox/browser/buildflags.h"
 #include "components/payments/content/icon/icon_size.h"
 #include "components/payments/core/features.h"
-#include "content/public/common/content_switches.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/features_generated.h"
-#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 #include "ui/views/controls/image_view.h"
+#include "ui/views/interaction/element_tracker_views.h"
+#include "ui/views/test/views_test_utils.h"
 
 namespace payments {
 namespace {
 
+using IconInstall = test::PaymentAppInstallUtil::IconInstall;
+
 class PaymentHandlerHeaderViewUITest : public PaymentRequestBrowserTestBase {
  public:
-  PaymentHandlerHeaderViewUITest() = default;
-  ~PaymentHandlerHeaderViewUITest() override = default;
-
   void SetUpOnMainThread() override {
     PaymentRequestBrowserTestBase::SetUpOnMainThread();
     NavigateTo("/payment_handler.html");
   }
+
+ private:
+  base::test::ScopedFeatureList feature_list_{
+      {features::kPaymentRequestMandatoryPaymentAppUi,
+       features::kPaymentHandlerHtmlHeadThemeColor,
+       features::kPaymentHandlerCameraAccessUx}};
 };
 
 IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest,
@@ -44,9 +51,9 @@ IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest,
   ResetEventWaiterForSequence({DialogEvent::PROCESSING_SPINNER_SHOWN,
                                DialogEvent::PROCESSING_SPINNER_HIDDEN,
                                DialogEvent::DIALOG_OPENED,
-                               DialogEvent::PROCESSING_SPINNER_SHOWN,
-                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
+                               DialogEvent::LOADING_VIEW_SHOWN,
                                DialogEvent::PAYMENT_HANDLER_WINDOW_OPENED,
+                               DialogEvent::LOADING_VIEW_HIDDEN,
                                DialogEvent::PAYMENT_HANDLER_TITLE_SET});
   ASSERT_EQ(
       "success",
@@ -58,13 +65,23 @@ IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest,
   // We always push the initial browser sheet to the stack, even if it isn't
   // shown. Since it also defines a SHEET_TITLE, we have to explicitly test the
   // front PaymentHandler view here.
-  ViewStack* view_stack = dialog_view()->view_stack_for_testing();
+  ViewStack* view_stack = test_api(dialog_view()).view_stack();
 
   EXPECT_TRUE(IsViewVisible(DialogViewID::CANCEL_BUTTON, view_stack->top()));
   EXPECT_FALSE(IsViewVisible(DialogViewID::BACK_BUTTON, view_stack->top()));
   EXPECT_TRUE(IsViewVisible(DialogViewID::SHEET_TITLE, view_stack->top()));
-  EXPECT_TRUE(
+
+  // With kPaymentHandlerCameraAccessUx enabled the payment app icon is replaced
+  // by the PageInfo LocationIconView (`kAppIconElementId`), so
+  // PAYMENT_APP_HEADER_ICON is not shown.
+  EXPECT_NE(
+      nullptr,
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          PaymentHandlerWebFlowViewController::kAppIconElementId,
+          views::ElementTrackerViews::GetContextForView(view_stack->top())));
+  EXPECT_FALSE(
       IsViewVisible(DialogViewID::PAYMENT_APP_HEADER_ICON, view_stack->top()));
+
   EXPECT_TRUE(IsViewVisible(DialogViewID::PAYMENT_APP_OPENED_WINDOW_SHEET,
                             view_stack->top()));
 
@@ -103,13 +120,21 @@ IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest, HeaderWithoutIcon) {
 
   // The pay button should be enabled now.
   ASSERT_TRUE(IsPayButtonEnabled());
-  ResetEventWaiterForSequence({DialogEvent::PROCESSING_SPINNER_SHOWN,
-                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
+  ResetEventWaiterForSequence({DialogEvent::LOADING_VIEW_SHOWN,
                                DialogEvent::PAYMENT_HANDLER_WINDOW_OPENED,
+                               DialogEvent::LOADING_VIEW_HIDDEN,
                                DialogEvent::PAYMENT_HANDLER_TITLE_SET});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON);
 
-  // The payment app has no icon, so it should not be displayed on the header.
+  // The payment app has no icon, so PAYMENT_APP_HEADER_ICON should not be
+  // displayed on the header, while the PageInfo LocationIconView is still
+  // displayed.
+  ViewStack* view_stack = test_api(dialog_view()).view_stack();
+  EXPECT_NE(
+      nullptr,
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          PaymentHandlerWebFlowViewController::kAppIconElementId,
+          views::ElementTrackerViews::GetContextForView(view_stack->top())));
   EXPECT_FALSE(IsViewVisible(DialogViewID::PAYMENT_APP_HEADER_ICON));
 }
 
@@ -146,9 +171,9 @@ IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest, CloseButtonPressed) {
 
   // The pay button should be enabled now.
   ASSERT_TRUE(IsPayButtonEnabled());
-  ResetEventWaiterForSequence({DialogEvent::PROCESSING_SPINNER_SHOWN,
-                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
+  ResetEventWaiterForSequence({DialogEvent::LOADING_VIEW_SHOWN,
                                DialogEvent::PAYMENT_HANDLER_WINDOW_OPENED,
+                               DialogEvent::LOADING_VIEW_HIDDEN,
                                DialogEvent::PAYMENT_HANDLER_TITLE_SET});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON);
 
@@ -171,9 +196,9 @@ IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest,
   ResetEventWaiterForSequence({DialogEvent::PROCESSING_SPINNER_SHOWN,
                                DialogEvent::PROCESSING_SPINNER_HIDDEN,
                                DialogEvent::DIALOG_OPENED,
-                               DialogEvent::PROCESSING_SPINNER_SHOWN,
-                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
+                               DialogEvent::LOADING_VIEW_SHOWN,
                                DialogEvent::PAYMENT_HANDLER_WINDOW_OPENED,
+                               DialogEvent::LOADING_VIEW_HIDDEN,
                                DialogEvent::PAYMENT_HANDLER_TITLE_SET});
   ASSERT_EQ(
       "success",
@@ -182,7 +207,7 @@ IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest,
           content::JsReplace("launchWithoutWaitForResponse($1)", method_name)));
   ASSERT_TRUE(WaitForObservedEvent());
 
-  ViewStack* view_stack = dialog_view()->view_stack_for_testing();
+  ViewStack* view_stack = test_api(dialog_view()).view_stack();
   int header_height_with_title =
       view_stack->top()
           ->GetViewByID(static_cast<int>(DialogViewID::PAYMENT_APP_HEADER))
@@ -197,9 +222,9 @@ IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest,
   ResetEventWaiterForSequence({DialogEvent::PROCESSING_SPINNER_SHOWN,
                                DialogEvent::PROCESSING_SPINNER_HIDDEN,
                                DialogEvent::DIALOG_OPENED,
-                               DialogEvent::PROCESSING_SPINNER_SHOWN,
-                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
-                               DialogEvent::PAYMENT_HANDLER_WINDOW_OPENED});
+                               DialogEvent::LOADING_VIEW_SHOWN,
+                               DialogEvent::PAYMENT_HANDLER_WINDOW_OPENED,
+                               DialogEvent::LOADING_VIEW_HIDDEN});
   ASSERT_EQ("success",
             content::EvalJs(
                 GetActiveWebContents(),
@@ -209,7 +234,7 @@ IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest,
   ASSERT_TRUE(WaitForObservedEvent());
 
   // Expect the dialog and header height with a title to be the same as before.
-  view_stack = dialog_view()->view_stack_for_testing();
+  view_stack = test_api(dialog_view()).view_stack();
   EXPECT_EQ(dialog_height_with_title, view_stack->top()->height());
   EXPECT_EQ(
       header_height_with_title,
@@ -220,21 +245,108 @@ IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest,
   ClickOnCancel();
 }
 
-IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest, LargeIcon) {
-  // Install a payment app with a large icon that will be sized down at render.
-  std::string method_name = PaymentAppInstallUtil::InstallPaymentApp(
-      *GetActiveWebContents(), *https_server(), "a.com",
-      "/payment_handler_sw.js",
-      PaymentAppInstallUtil::IconInstall::kWithLargeIcon);
+IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest, HtmlHeadThemeColor) {
+  std::string method_name;
+  InstallPaymentApp("a.com", "/payment_handler_sw.js", &method_name);
 
   // Trigger PaymentRequest, and wait until the PaymentHandler has loaded a
   // web-contents that has set a title.
   ResetEventWaiterForSequence({DialogEvent::PROCESSING_SPINNER_SHOWN,
                                DialogEvent::PROCESSING_SPINNER_HIDDEN,
                                DialogEvent::DIALOG_OPENED,
-                               DialogEvent::PROCESSING_SPINNER_SHOWN,
-                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
+                               DialogEvent::LOADING_VIEW_SHOWN,
                                DialogEvent::PAYMENT_HANDLER_WINDOW_OPENED,
+                               DialogEvent::LOADING_VIEW_HIDDEN,
+                               DialogEvent::PAYMENT_HANDLER_TITLE_SET});
+  ASSERT_EQ(
+      "success",
+      content::EvalJs(
+          GetActiveWebContents(),
+          content::JsReplace("launchWithoutWaitForResponse($1)", method_name)));
+  ASSERT_TRUE(WaitForObservedEvent());
+
+  ViewStack* view_stack = test_api(dialog_view()).view_stack();
+  views::View* header_view = view_stack->top()->GetViewByID(
+      static_cast<int>(DialogViewID::PAYMENT_APP_HEADER));
+  ASSERT_TRUE(header_view);
+
+  auto* controller_map = test_api(dialog_view()).controller_map();
+  auto it = controller_map->find(view_stack->top());
+  ASSERT_NE(it, controller_map->end());
+  auto* controller =
+      static_cast<PaymentHandlerWebFlowViewController*>(it->second.get());
+  content::WebContents* payment_handler_web_contents =
+      controller->web_contents();
+  ASSERT_NE(nullptr, payment_handler_web_contents);
+
+  // Verify red color is not set yet.
+  EXPECT_NE(SK_ColorRED, header_view->background()->color().ResolveToSkColor(
+                             header_view->GetColorProvider()));
+
+  // Inject meta theme-color tag via JavaScript and verify event, header
+  // background color (#FF0000 -> SK_ColorRED)
+  ResetEventWaiter(DialogEvent::PAYMENT_HANDLER_THEME_COLOR_SET);
+  ASSERT_TRUE(content::ExecJs(
+      payment_handler_web_contents,
+      "const meta = document.createElement('meta'); meta.name = 'theme-color';"
+      "meta.content = '#FF0000'; document.head.appendChild(meta);"));
+  ASSERT_TRUE(WaitForObservedEvent());
+
+  EXPECT_EQ(SK_ColorRED, header_view->background()->color().ResolveToSkColor(
+                             header_view->GetColorProvider()));
+}
+
+IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest, HeaderHeight) {
+  std::string method_name;
+  InstallPaymentApp("a.com", "/payment_handler_sw.js", &method_name);
+
+  // Trigger PaymentRequest, and wait until the PaymentHandler has loaded a
+  // web-contents that has set a title.
+  ResetEventWaiterForSequence({DialogEvent::PROCESSING_SPINNER_SHOWN,
+                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
+                               DialogEvent::DIALOG_OPENED,
+                               DialogEvent::LOADING_VIEW_SHOWN,
+                               DialogEvent::PAYMENT_HANDLER_WINDOW_OPENED,
+                               DialogEvent::LOADING_VIEW_HIDDEN,
+                               DialogEvent::PAYMENT_HANDLER_TITLE_SET});
+  ASSERT_EQ(
+      "success",
+      content::EvalJs(
+          GetActiveWebContents(),
+          content::JsReplace("launchWithoutWaitForResponse($1)", method_name)));
+  ASSERT_TRUE(WaitForObservedEvent());
+
+  ViewStack* view_stack = test_api(dialog_view()).view_stack();
+  views::View* top_view = view_stack->top();
+  views::test::RunScheduledLayout(top_view);
+  EXPECT_EQ(
+      kPaymentHandlerHeaderHeight,
+      top_view->GetViewByID(static_cast<int>(DialogViewID::PAYMENT_APP_HEADER))
+          ->height());
+}
+
+class PaymentHandlerHeaderViewAppIconUITest
+    : public PaymentHandlerHeaderViewUITest {
+ private:
+  base::test::ScopedFeatureList app_icon_feature_list_{
+      {},
+      {features::kPaymentHandlerCameraAccessUx}};
+};
+
+IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewAppIconUITest, LargeIcon) {
+  // Install a payment app with a large icon that will be sized down at render.
+  std::string method_name = test::PaymentAppInstallUtil::InstallPaymentApp(
+      *GetActiveWebContents()->GetPrimaryMainFrame(), *https_server(), "a.com",
+      "/payment_handler_sw.js", IconInstall::kWithLargeIcon);
+
+  // Trigger PaymentRequest, and wait until the PaymentHandler has loaded a
+  // web-contents that has set a title.
+  ResetEventWaiterForSequence({DialogEvent::PROCESSING_SPINNER_SHOWN,
+                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
+                               DialogEvent::DIALOG_OPENED,
+                               DialogEvent::LOADING_VIEW_SHOWN,
+                               DialogEvent::PAYMENT_HANDLER_WINDOW_OPENED,
+                               DialogEvent::LOADING_VIEW_HIDDEN,
                                DialogEvent::PAYMENT_HANDLER_TITLE_SET});
   ASSERT_EQ(
       "success",
@@ -246,7 +358,7 @@ IN_PROC_BROWSER_TEST_F(PaymentHandlerHeaderViewUITest, LargeIcon) {
   // We always push the initial browser sheet to the stack, even if it isn't
   // shown. Since it also defines a SHEET_TITLE, we have to explicitly test the
   // front PaymentHandler view here.
-  ViewStack* view_stack = dialog_view()->view_stack_for_testing();
+  ViewStack* view_stack = test_api(dialog_view()).view_stack();
   EXPECT_TRUE(
       IsViewVisible(DialogViewID::PAYMENT_APP_HEADER_ICON, view_stack->top()));
   EXPECT_EQ(

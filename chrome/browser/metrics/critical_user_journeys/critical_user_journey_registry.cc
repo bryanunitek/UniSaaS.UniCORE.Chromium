@@ -6,11 +6,13 @@
 
 #include <utility>
 
+#include "base/time/time.h"
 #include "chrome/browser/browsing_data/browsing_data_important_sites_util.h"
 #include "chrome/browser/metrics/critical_user_journeys/critical_user_journey.h"
 #include "chrome/browser/metrics/critical_user_journeys/features.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
+#include "chrome/browser/ui/webui/settings/settings_element_ids.h"
 #include "ui/base/interaction/interaction_sequence.h"
 
 namespace metrics {
@@ -29,6 +31,22 @@ void CriticalUserJourneyRegistry::AddJourneys() {
   HatsParams clear_browsing_history_hats_params;
   clear_browsing_history_hats_params.trigger =
       metrics::kHatsSurveyTriggerClearBrowsingHistory;
+
+  HatsParams customize_chrome_hats_params;
+  customize_chrome_hats_params.trigger =
+      metrics::kHatsSurveyTriggerCustomizeChromeJourney;
+
+  HatsParams read_anything_hats_params;
+  read_anything_hats_params.trigger =
+      metrics::kHatsSurveyTriggerReadAnythingJourney;
+
+  HatsParams tab_search_hats_params;
+  tab_search_hats_params.trigger =
+      metrics::kHatsSurveyTriggerTabSearchJourney;
+
+  // ---------------------------------------------------------------------------
+  // Existing Browser Journeys
+  // ---------------------------------------------------------------------------
 
   AddJourney(
       CriticalUserJourney::Builder(&kViewDownloadedFileJourney)
@@ -99,13 +117,153 @@ void CriticalUserJourneyRegistry::AddJourneys() {
                    ui::InteractionSequence::StepType::kCustomEvent,
                    ClearBrowsingHistoryJourneySteps::
                        kShowClearBrowsingDataSettingsDialog)
-          .AddStep(
-              browsing_data_important_sites_util::
-                  kClearBrowsingDataHistoryEventId,
-              ui::InteractionSequence::StepType::kCustomEvent,
-              ClearBrowsingHistoryJourneySteps::kClearBrowsingDataHistoryEvent)
+          .AddAnyOf({Branch(browsing_data_important_sites_util::
+                                kClearBrowsingDataHistoryEventId,
+                            ClearBrowsingHistoryJourneySteps::
+                                kClearBrowsingDataHistoryEvent),
+                     Branch(browsing_data_important_sites_util::
+                                kDismissClearBrowsingDataDialogEventId,
+                            ClearBrowsingHistoryJourneySteps::
+                                kDismissClearBrowsingDataDialog)
+                         .SetExitBranch(base::Milliseconds(2000))})
           .LaunchHatsSurveyOnCompletion(clear_browsing_history_hats_params)
           .Build());
+
+  // Customize Chrome (Themes & Colors)
+  AddJourney(
+      CriticalUserJourney::Builder(&kCustomizeChromeJourney)
+          .AddStep(kCustomizeChromeSidePanelWebViewElementId,
+                   ui::InteractionSequence::StepType::kShown,
+                   CustomizeChromeJourneySteps::kSidePanelShown)
+          .AddStep(kBrowserThemeChangedEventId,
+                   ui::InteractionSequence::StepType::kCustomEvent,
+                   CustomizeChromeJourneySteps::kThemeOrColorSelected)
+          .LaunchHatsSurveyOnCompletion(customize_chrome_hats_params)
+          .Build());
+
+  // Reading Mode (Read Anything)
+  AddJourney(
+      CriticalUserJourney::Builder(&kReadAnythingJourney)
+          .AddAnyOf(
+              {Branch(kToolbarSidePanelButtonElementId,
+                      ui::InteractionSequence::StepType::kActivated,
+                      ReadAnythingJourneySteps::kOpenReadAnything),
+               Branch(kReadAnythingPageActionElementId,
+                      ui::InteractionSequence::StepType::kActivated,
+                      ReadAnythingJourneySteps::kOpenReadAnything),
+               Branch(kSidePanelComboboxElementId,
+                      ui::InteractionSequence::StepType::kActivated,
+                      ReadAnythingJourneySteps::kOpenReadAnything)})
+          .AddStep(kReadAnythingViewModeElementId,
+                   ui::InteractionSequence::StepType::kShown,
+                   ReadAnythingJourneySteps::kReadAnythingViewShown,
+                   ui::InteractionSequence::ContextMode::kAny)
+          .LaunchHatsSurveyOnCompletion(read_anything_hats_params)
+          .Build());
+
+  // Tab Search
+  AddJourney(
+      CriticalUserJourney::Builder(&kTabSearchJourney)
+          .AddStep(kTabSearchButtonElementId,
+                   ui::InteractionSequence::StepType::kActivated,
+                   TabSearchJourneySteps::kOpenTabSearch)
+          .AddStep(kTabSearchBubbleElementId,
+                   ui::InteractionSequence::StepType::kShown,
+                   TabSearchJourneySteps::kTabSearchBubbleShown)
+          .LaunchHatsSurveyOnCompletion(tab_search_hats_params)
+          .Build());
+
+  // ---------------------------------------------------------------------------
+  // Settings Glow Up Journeys
+  // ---------------------------------------------------------------------------
+  if (base::FeatureList::IsEnabled(kSettingsGlowupJourneys)) {
+    // Navigational IA Findability
+    AddJourney(CriticalUserJourney::Builder(&kSettingsNavIAJourney)
+                   .AddStep(settings::kSettingsPageLoadedId,
+                            ui::InteractionSequence::StepType::kShown,
+                            SettingsNavIAJourneySteps::kSettingsPageLoaded)
+                   .AddStep(settings::kSettingsNavCategoryClickedId,
+                            ui::InteractionSequence::StepType::kActivated,
+                            SettingsNavIAJourneySteps::kNavCategoryClicked)
+                   .AddStep(settings::kSettingStateChangedEventId,
+                            ui::InteractionSequence::StepType::kCustomEvent,
+                            SettingsNavIAJourneySteps::kSettingStateChanged)
+                   .Build());
+
+    // Supercharged Search & Inline Controls
+    AddJourney(
+        CriticalUserJourney::Builder(&kSettingsSuperchargedSearchJourney)
+            .AddStep(settings::kSettingsSearchBoxElementId,
+                     ui::InteractionSequence::StepType::kShown,
+                     SettingsSuperchargedSearchJourneySteps::kSearchBoxShown)
+            .AddStep(
+                settings::kSettingsSearchQueryEnteredId,
+                ui::InteractionSequence::StepType::kActivated,
+                SettingsSuperchargedSearchJourneySteps::kSearchQueryEntered)
+            .AddStep(
+                settings::kSettingsSearchResultClickedEventId,
+                ui::InteractionSequence::StepType::kCustomEvent,
+                SettingsSuperchargedSearchJourneySteps::kSearchResultClicked)
+            .Build());
+
+    // Dedicated Search Engine & Shortcuts
+    AddJourney(
+        CriticalUserJourney::Builder(&kSettingsSearchEngineJourney)
+            .AddStep(settings::kSearchEngineNavMenuItemId,
+                     ui::InteractionSequence::StepType::kActivated,
+                     SettingsSearchEngineJourneySteps::kSearchEngineNavClicked)
+            .AddStep(
+                settings::kDefaultSearchEngineChangedId,
+                ui::InteractionSequence::StepType::kCustomEvent,
+                SettingsSearchEngineJourneySteps::kDefaultSearchEngineChanged)
+            .AddStep(settings::kSearchShortcutsToggledEventId,
+                     ui::InteractionSequence::StepType::kCustomEvent,
+                     SettingsSearchEngineJourneySteps::kSearchShortcutsToggled)
+            .Build());
+
+    // Sites Dashboard & Site Permissions
+    AddJourney(
+        CriticalUserJourney::Builder(&kSettingsSitesDashboardJourney)
+            .AddStep(settings::kSitesNavMenuItemId,
+                     ui::InteractionSequence::StepType::kActivated,
+                     SettingsSitesDashboardJourneySteps::kSitesNavClicked)
+            .AddStep(
+                settings::kSitePermissionCategoryElementId,
+                ui::InteractionSequence::StepType::kActivated,
+                SettingsSitesDashboardJourneySteps::kPermissionCategoryClicked)
+            .AddStep(settings::kSitePermissionChangedEventId,
+                     ui::InteractionSequence::StepType::kCustomEvent,
+                     SettingsSitesDashboardJourneySteps::kSitePermissionChanged)
+            .Build());
+
+    // Clear Browsing Data Baseline
+    AddJourney(
+        CriticalUserJourney::Builder(&kSettingsClearBrowsingDataJourney)
+            .AddStep(settings::kClearBrowsingDataElementId,
+                     ui::InteractionSequence::StepType::kActivated,
+                     SettingsClearBrowsingDataJourneySteps::
+                         kClearBrowsingDataClicked)
+            .AddStep(
+                settings::kClearBrowsingDataDialogOkButtonElementId,
+                ui::InteractionSequence::StepType::kActivated,
+                SettingsClearBrowsingDataJourneySteps::kConfirmButtonClicked)
+            .Build());
+
+    // Appearance & GM3 Themes
+    AddJourney(
+        CriticalUserJourney::Builder(&kSettingsAppearanceThemesJourney)
+            .AddStep(
+                settings::kAppearanceNavMenuItemId,
+                ui::InteractionSequence::StepType::kActivated,
+                SettingsAppearanceThemesJourneySteps::kAppearanceNavClicked)
+            .AddStep(settings::kAppearanceColorTileSelectedId,
+                     ui::InteractionSequence::StepType::kActivated,
+                     SettingsAppearanceThemesJourneySteps::kColorTileSelected)
+            .AddStep(settings::kAppearanceThemeChangedId,
+                     ui::InteractionSequence::StepType::kCustomEvent,
+                     SettingsAppearanceThemesJourneySteps::kThemeChanged)
+            .Build());
+  }
 }
 
 void CriticalUserJourneyRegistry::AddJourney(

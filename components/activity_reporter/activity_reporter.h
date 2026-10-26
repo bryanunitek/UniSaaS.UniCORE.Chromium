@@ -6,6 +6,7 @@
 #define COMPONENTS_ACTIVITY_REPORTER_ACTIVITY_REPORTER_H_
 
 #include <memory>
+#include <string>
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
@@ -18,6 +19,27 @@ class NetworkFetcherFactory;
 }
 
 namespace activity_reporter {
+
+// The persisted DateLastActive state when ActivityReporter is constructed.
+//
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(InitialDateLastActiveState)
+enum class InitialDateLastActiveState {
+  // No DateLastActive recorded yet (`kDateUnknown`, -2). Expected once per
+  // fresh install; repeated emissions from the same client indicate local state
+  // data loss.
+  kUnknown = 0,
+  // `kDateFirstTime` (-1) was written in a prior session, but no successful
+  // activity response has been recorded since.
+  kFirstTimeUnpersisted = 1,
+  // A valid `daynum` (>= 0) was persisted in a prior session.
+  kPersisted = 2,
+  // Any other value (< -2), indicating an unexpected or corrupted value.
+  kInvalid = 3,
+  kMaxValue = kInvalid,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/others/enums.xml:InitialDateLastActiveState)
 
 // An ActivityReporter is capable of reporting that Chrome was actively used by
 // the user in a privacy-preserving manner.
@@ -47,6 +69,7 @@ std::unique_ptr<ActivityReporter> CreateActivityReporter(
     base::RepeatingCallback<PrefService*()> pref_service_provider,
     scoped_refptr<update_client::NetworkFetcherFactory> network_fetcher_factory,
     base::RepeatingCallback<version_info::Channel()> channel_provider,
+    base::RepeatingCallback<std::string()> brand_provider,
     base::RepeatingClosure updater_active_callback,
     bool per_user_install);
 

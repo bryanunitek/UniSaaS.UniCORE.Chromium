@@ -9,7 +9,6 @@ import "mojo/public/mojom/base/file_path.mojom";
 import "mojo/public/mojom/base/time.mojom";
 import "mojo/public/mojom/base/unguessable_token.mojom";
 import "services/network/public/mojom/accept_ch_frame_observer.mojom";
-import "services/network/public/mojom/attribution.mojom";
 import "services/network/public/mojom/chunked_data_pipe_getter.mojom";
 import "services/network/public/mojom/client_security_state.mojom";
 import "services/network/public/mojom/cookie_access_observer.mojom";
@@ -182,12 +181,6 @@ struct TrustedUrlRequestParams {
   // TODO(crbug.com/447039330): This is temporary for the SyntheticResponse
   // experiment and will be removed after standardization.
   HttpResponseHeaders? expected_response_headers_for_synthetic_response;
-
-  // If true, `Content-Type: message/ad-auction-trusted-signals-request` will
-  // be treated as a CORS-safelisted Content-Type, so it will not trigger a CORS
-  // preflight. No new consumers should use this. It will be removed once the
-  // deprecated Protected Audiences code is deleted.
-  bool is_ad_auction_trusted_signals_request = false;
 };
 
 // Options that may only be set on URLRequests which are related to WebBundle.
@@ -402,21 +395,6 @@ struct URLRequest {
   // https://fetch.spec.whatwg.org/#request-keepalive-flag
   bool keepalive;
 
-  // True if the request should try to calculate and send the
-  // `Sec-Browsing-Topics` headers.
-  // https://github.com/patcg-individual-drafts/topics
-  bool browsing_topics;
-
-  // True if this is an ad auction request eligible for attaching the
-  // `Sec-Ad-Auction-Fetch` request header and processing the
-  // `X-Ad-Auction-Result` response header.
-  // https://github.com/WICG/turtledove/blob/main/FLEDGE_browser_bidding_and_auction_API.md#step-3-get-response-blobs-to-browser
-  bool ad_auction_headers;
-
-  // True if the request should send the `Sec-Shared-Storage-Writable` request
-  // header.
-  bool shared_storage_writable_eligible;
-
   // True if the request was user initiated.
   bool has_user_gesture;
 
@@ -430,6 +408,10 @@ struct URLRequest {
 
   // True if login prompts for this request should be suppressed. Cached
   // credentials or default credentials may still be used for authentication.
+  // Server auth challenges are cancelled in the network service. Proxy auth
+  // challenges are forwarded to the URLLoaderNetworkServiceObserver, flagged
+  // with `do_not_prompt_for_login`, so that non-UI credential sources (e.g.
+  // extensions) can answer them.
   bool do_not_prompt_for_login;
 
   // True if |frame_id| is the outermost main frame of a page.
@@ -459,6 +441,10 @@ struct URLRequest {
   // Some users, notably blink, has its own cache. This flag is set to exempt
   // some CORS logic for a revalidating request.
   bool is_revalidating;
+
+  // Metadata passed for safe revalidation handling in Network Service.
+  string? revalidation_etag;
+  string? revalidation_last_modified;
 
   // The profile ID of network conditions to throttle the network request.
   mojo_base.mojom.UnguessableToken? throttling_profile_id;
@@ -595,19 +581,6 @@ struct URLRequest {
   // assumption, the browser process has already determined that this access is
   // ok.
   StorageAccessApiStatus storage_access_api_status;
-
-  // Indicates whether web or OS-level Attribution Reporting is supported.
-  AttributionSupport attribution_reporting_support;
-
-  // Indicates the value of the request's `Attribution-Reporting-Eligible`
-  // header; how this header is interpreted depends on the context in which
-  // the request is made.
-  AttributionReportingEligibility attribution_reporting_eligibility =
-      AttributionReportingEligibility.kUnset;
-
-  // When applicable, indicates the token of an Attribution Reporting API
-  // eligible navigation request to which the current request is associated.
-  mojo_base.mojom.UnguessableToken? attribution_reporting_src_token;
 
   // When applicable, i.e. `keepalive` is true, indicates a fetch keepalive
   // request.

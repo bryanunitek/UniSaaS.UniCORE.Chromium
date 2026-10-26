@@ -412,7 +412,8 @@ class BLINK_PLATFORM_EXPORT Platform {
 
   // Returns the raw bytes of a data resource for the specified `resource_id`.
   // Can be called from any thread.
-  virtual base::RefCountedMemory* GetDataResourceBytes(int resource_id) {
+  virtual scoped_refptr<base::RefCountedMemory> GetDataResourceBytes(
+      int resource_id) {
     return nullptr;
   }
 
@@ -630,6 +631,11 @@ class BLINK_PLATFORM_EXPORT Platform {
       base::OnceCallback<void(scoped_refptr<gpu::GpuChannelHost>)>;
   virtual void EstablishGpuChannel(EstablishGpuChannelCallback callback);
 
+  // Sends the deferred messages of the GPU channel right away, if a channel is
+  // established and not lost. Unlike the methods above, this never establishes
+  // a channel.
+  virtual void FlushGpuChannelIfEstablished();
+
   // Media stream ----------------------------------------------------
   virtual scoped_refptr<media::AudioCapturerSource> NewAudioCapturerSource(
       blink::WebLocalFrame* web_frame,
@@ -698,10 +704,6 @@ class BLINK_PLATFORM_EXPORT Platform {
   virtual void DidStartWorkerThread() {}
   virtual void WillStopWorkerThread() {}
   virtual void WorkerContextCreated(const v8::Local<v8::Context>& worker) {}
-  virtual bool AllowScriptExtensionForServiceWorker(
-      const WebSecurityOrigin& script_origin) {
-    return false;
-  }
   virtual ProtocolHandlerSecurityLevel GetProtocolHandlerSecurityLevel(
       const WebSecurityOrigin& origin) {
     return ProtocolHandlerSecurityLevel::kStrict;
@@ -870,6 +872,14 @@ class BLINK_PLATFORM_EXPORT Platform {
   // subframe. To allow this viewer to function correctly, Chrome uses this
   // method to grant it access to the file picker.
   virtual bool IsFilePickerAllowedForCrossOriginSubframe(
+      const WebSecurityOrigin& origin) {
+    return false;
+  }
+
+  // Returns true if windows with the given origin should allocate isolated
+  // WindowAgents per BrowsingInstance rather than sharing a process-global
+  // agent.
+  virtual bool ShouldUsePerBrowsingInstanceWindowAgent(
       const WebSecurityOrigin& origin) {
     return false;
   }

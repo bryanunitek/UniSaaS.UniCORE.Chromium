@@ -6,6 +6,9 @@
 
 namespace switches {
 
+// Passes the number of recent GPU crashes to the GPU process.
+const char kGpuRecentCrashCount[] = "gpu-recent-crash-count";
+
 // Disable GPU rasterization, i.e. rasterize on the CPU only.
 // Overrides the kEnableGpuRasterization flag.
 const char kDisableGpuRasterization[] = "disable-gpu-rasterization";
@@ -109,10 +112,6 @@ const char kGpuRevision[] = "gpu-revision";
 // collection GPU process.
 const char kGpuDriverVersion[] = "gpu-driver-version";
 
-// Indicate that the this is being used by Android WebView and its draw functor
-// is using vulkan.
-const char kWebViewDrawFunctorUsesVulkan[] = "webview-draw-functor-uses-vulkan";
-
 // Enables using protected memory for vulkan resources.
 const char kEnableVulkanProtectedMemory[] = "enable-vulkan-protected-memory";
 
@@ -149,6 +148,9 @@ const char kSkiaGraphiteDawnBackendMetal[] = "metal";
 const char kSkiaGraphiteDawnBackendOpenGLES[] = "opengles";
 const char kSkiaGraphiteDawnBackendSwiftshader[] = "swiftshader";
 const char kSkiaGraphiteDawnBackendVulkan[] = "vulkan";
+
+// Specify using Skia Graphite with native Vulkan backend.
+const char kSkiaGraphiteVulkanBackend[] = "skia-graphite-vulkan-backend";
 
 // Force disabling/enabling Skia Graphite. Disabling will take precedence over
 // enabling if both are specified.

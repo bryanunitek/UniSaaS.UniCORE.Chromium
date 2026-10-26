@@ -4,29 +4,37 @@
 
 static_library("trusted_vault") {
   sources = [
+    "features.cc",
+    "features.h",
+    "local_recovery_factor.h",
     "trusted_vault_client.h",
+    "trusted_vault_histograms.cc",
+    "trusted_vault_histograms.h",
     "trusted_vault_server_constants.cc",
     "trusted_vault_server_constants.h",
     "trusted_vault_service.cc",
     "trusted_vault_service.h",
   ]
+  deps = [ "//components/signin/public/identity_manager" ]
   public_deps = [
     "//base",
     "//components/keyed_service/core",
   ]
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
-  if (!is_android) {
+  if (!is_android && !is_ios) {
     sources += [
       "command_line_switches.cc",
       "command_line_switches.h",
       "download_keys_response_handler.cc",
       "download_keys_response_handler.h",
-      "features.cc",
-      "features.h",
       "frontend_trusted_vault_connection.cc",
       "frontend_trusted_vault_connection.h",
-      "local_recovery_factor.h",
+      "legacy_standalone_trusted_vault_storage.cc",
+      "legacy_standalone_trusted_vault_storage.h",
+      "legacy_standalone_trusted_vault_storage_adapter.cc",
+      "legacy_standalone_trusted_vault_storage_adapter.h",
+      "local_domains_storage.cc",
+      "local_domains_storage.h",
       "physical_device_recovery_factor.cc",
       "physical_device_recovery_factor.h",
       "proto_string_bytes_conversion.cc",
@@ -44,9 +52,10 @@ static_library("trusted_vault") {
       "standalone_trusted_vault_backend.h",
       "standalone_trusted_vault_client.cc",
       "standalone_trusted_vault_client.h",
+      "standalone_trusted_vault_frontend.cc",
+      "standalone_trusted_vault_frontend.h",
       "standalone_trusted_vault_server_constants.cc",
       "standalone_trusted_vault_server_constants.h",
-      "standalone_trusted_vault_storage.cc",
       "standalone_trusted_vault_storage.h",
       "trusted_vault_access_token_fetcher.h",
       "trusted_vault_access_token_fetcher_frontend.cc",
@@ -61,8 +70,6 @@ static_library("trusted_vault") {
       "trusted_vault_crypto.h",
       "trusted_vault_degraded_recoverability_handler.cc",
       "trusted_vault_degraded_recoverability_handler.h",
-      "trusted_vault_histograms.cc",
-      "trusted_vault_histograms.h",
       "trusted_vault_request.cc",
       "trusted_vault_request.h",
       "trusted_vault_throttling_connection.h",
@@ -70,9 +77,10 @@ static_library("trusted_vault") {
       "trusted_vault_throttling_connection_impl.h",
     ]
 
-    deps = [
+    deps += [
       "//components/account_id",
-      "//components/signin/public/identity_manager",
+      "//components/os_crypt/async/browser",
+      "//components/os_crypt/async/common",
       "//components/trusted_vault/proto",
       "//crypto",
       "//google_apis",
@@ -93,11 +101,15 @@ static_library("trusted_vault") {
   }
 }
 
-if (!is_android) {
+if (!is_android && !is_ios) {
   source_set("unit_tests") {
     testonly = true
     sources = [
       "download_keys_response_handler_unittest.cc",
+      "legacy_standalone_trusted_vault_storage_adapter_unittest.cc",
+      "legacy_standalone_trusted_vault_storage_unittest.cc",
+      "local_domains_storage_migration_unittest.cc",
+      "local_domains_storage_unittest.cc",
       "physical_device_recovery_factor_unittest.cc",
       "proto_string_bytes_conversion_unittest.cc",
       "proto_time_conversion_unittest.cc",
@@ -105,8 +117,9 @@ if (!is_android) {
       "recovery_key_store_connection_unittest.cc",
       "securebox_unittest.cc",
       "standalone_trusted_vault_backend_unittest.cc",
+      "standalone_trusted_vault_client_unittest.cc",
+      "standalone_trusted_vault_frontend_unittest.cc",
       "standalone_trusted_vault_server_constants_unittest.cc",
-      "standalone_trusted_vault_storage_unittest.cc",
       "trusted_vault_access_token_fetcher_frontend_unittest.cc",
       "trusted_vault_connection_impl_unittest.cc",
       "trusted_vault_crypto_unittest.cc",
@@ -121,12 +134,17 @@ if (!is_android) {
     deps = [
       ":test_support",
       ":trusted_vault",
+      "//components/os_crypt/async/browser:test_support",
+      "//components/os_crypt/async/common",
       "//components/signin/public/identity_manager:test_support",
       "//components/trusted_vault/proto",
       "//google_apis",
       "//google_apis:test_support",
+      "//services/network:network_service",
+      "//services/network:test_support",
       "//testing/gmock",
       "//testing/gtest",
+      "//third_party/fuzztest",
     ]
 
     if (is_mac) {
@@ -169,19 +187,26 @@ static_library("test_support") {
     "//base",
   ]
 
-  if (!is_android) {
+  if (!is_android && !is_ios) {
     sources += [
-      "test/fake_file_access.cc",
-      "test/fake_file_access.h",
+      "test/fake_local_domains_storage_file_access.cc",
+      "test/fake_local_domains_storage_file_access.h",
       "test/fake_security_domains_server.cc",
       "test/fake_security_domains_server.h",
+      "test/fake_security_domains_url_loader_factory.cc",
+      "test/fake_security_domains_url_loader_factory.h",
+      "test/legacy_fake_file_access.cc",
+      "test/legacy_fake_file_access.h",
       "test/mock_trusted_vault_throttling_connection.cc",
       "test/mock_trusted_vault_throttling_connection.h",
     ]
 
+    deps += [ "//services/network:test_support" ]
+
     public_deps += [
       "//components/trusted_vault/proto",
       "//net:test_support",
+      "//services/network/public/cpp",
       "//url",
     ]
   }

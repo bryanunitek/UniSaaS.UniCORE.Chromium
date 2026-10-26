@@ -70,7 +70,7 @@ namespace flags {
   for feature in features:
     body += f'BASE_FEATURE(k{feature[1]},\n'
     body += f'             "{feature[1]}",\n'
-    body += f'             base::FEATURE_DISABLED_BY_DEFAULT);\n\n'
+    body += '             base::FEATURE_DISABLED_BY_DEFAULT);\n\n'
 
   body += """// Returns the unexpire feature for the given mstone, if any.
 const base::Feature* GetUnexpireFeatureForMilestone(int milestone) {
@@ -143,8 +143,7 @@ def gen_flags_fragment(prog_name, mstone):
 
 
 def update_file_if_stale(filename, data):
-  """Writes data to filename if data is different from file's contents on disk.
-  """
+  """Writes data to filename if data is different from file's contents on disk."""
   try:
     disk_data = open(filename, 'r').read()
     if disk_data == data:

@@ -57,6 +57,7 @@
 #include "components/services/app_service/public/cpp/run_on_os_login_types.h"
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "components/webapps/browser/web_app_error_page_constants.h"
+#include "components/webapps/common/constants.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -158,12 +159,12 @@ class AppIconFetcherTask : public content::WebContentsObserver {
   }
 
   void OnIconFetched(int fetched_size, OrderedSizeToBitmap icon_bitmaps) {
-    DCHECK_EQ(icon_bitmaps.size(), 1ul);
-    DCHECK_EQ(icon_bitmaps.begin()->first, fetched_size);
     if (icon_bitmaps.empty()) {
       delete this;
       return;
     }
+    DCHECK_EQ(icon_bitmaps.size(), 1ul);
+    DCHECK_EQ(icon_bitmaps.begin()->first, fetched_size);
     icon_url_ = EncodeIconAsUrl(icon_bitmaps.begin()->second);
     MaybeSendImageAndSelfDestruct();
   }
@@ -187,7 +188,7 @@ class AppIconFetcherTask : public content::WebContentsObserver {
 
     content::RenderFrameHost* host = web_contents()->GetPrimaryMainFrame();
     host->ExecuteJavaScriptInIsolatedWorld(app_icon_inline, base::DoNothing(),
-                                           ISOLATED_WORLD_ID_EXTENSIONS);
+                                           ISOLATED_WORLD_ID_CHROME_INTERNAL);
 
     delete this;
   }
@@ -597,7 +598,6 @@ bool IsValidScopeForLinkCapturing(const GURL& scope) {
   return scope.is_valid() && scope.has_scheme() && scope.SchemeIsHTTPOrHTTPS();
 }
 
-
 // TODO(crbug.com/331208955): Remove after migration.
 bool WillBeSystemWebApp(const webapps::AppId& app_id,
                         WebAppManagementTypes sources) {
@@ -608,5 +608,24 @@ bool WillBeSystemWebApp(const webapps::AppId& app_id,
   return false;
 #endif
 }
+
+// LINT.IfChange(WebAppPrefs)
+void ClearWebAppProfilePrefs(PrefService* profile_prefs) {
+  profile_prefs->ClearPref(prefs::kWebAppsPreferences);
+  profile_prefs->ClearPref(prefs::kWebAppsDailyMetrics);
+  profile_prefs->ClearPref(prefs::kWebAppsAppAgnosticIphState);
+  profile_prefs->ClearPref(prefs::kWebAppsAppAgnosticMlState);
+  profile_prefs->ClearPref(prefs::kWebAppsAppAgnosticIPHLinkCapturingState);
+  profile_prefs->ClearPref(prefs::kWebAppsLastPreinstallSynchronizeVersion);
+  profile_prefs->ClearPref(webapps::kWebAppsMigratedPreinstalledApps);
+  profile_prefs->ClearPref(prefs::kWebAppsDidMigrateDefaultChromeApps);
+  profile_prefs->ClearPref(prefs::kWebAppsUninstalledDefaultChromeApps);
+  profile_prefs->ClearPref(prefs::kAppShortcutsVersion);
+  profile_prefs->ClearPref(prefs::kAppShortcutsArch);
+  profile_prefs->ClearPref(prefs::kAppShortcutsOsVersion);
+  profile_prefs->ClearPref(prefs::kIsolatedWebAppPendingInitializationCount);
+  profile_prefs->ClearPref(prefs::kIsolatedWebAppUserInstallationEnabled);
+}
+// LINT.ThenChange()
 
 }  // namespace web_app

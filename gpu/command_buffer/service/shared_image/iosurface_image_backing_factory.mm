@@ -22,7 +22,6 @@
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
 #include "gpu/command_buffer/service/skia_utils.h"
 #include "gpu/command_buffer/service/texture_manager.h"
-#include "gpu/config/gpu_finch_features.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/gpu_memory_buffer_handle.h"
 #include "ui/gfx/mac/io_surface.h"
@@ -88,14 +87,8 @@ bool IsFormatSupported(viz::SharedImageFormat format,
     return flags.chromium_image_ab30;
   }
 
-  if (format == viz::SinglePlaneFormat::kR_8 ||
-      format == viz::SinglePlaneFormat::kRG_88) {
+  if (format == viz::SinglePlaneFormat::kR_8) {
     return flags.ext_texture_rg;
-  }
-
-  if (format == viz::SinglePlaneFormat::kR_16 ||
-      format == viz::SinglePlaneFormat::kRG_1616) {
-    return flags.ext_texture_norm16;
   }
 
   return false;
@@ -136,6 +129,12 @@ bool IsPixelDataValid(viz::SharedImageFormat format,
   if (pixel_data.empty()) {
     return true;
   }
+
+  if (format.is_multi_plane()) {
+    LOG(ERROR) << "Initial data is not supported for multiplanar formats.";
+    return false;
+  }
+
   // If we have initial data to upload, ensure it is sized appropriately
 
   auto estimated_size = format.MaybeEstimatedSizeInBytes(size);
@@ -298,11 +297,6 @@ bool IOSurfaceImageBackingFactory::IsSupported(
     }
   }
 
-  if (thread_safe &&
-      !base::FeatureList::IsEnabled(features::kIOSurfaceMultiThreading)) {
-    return false;
-  }
-
   // Never used with shared memory GMBs.
   if (gmb_type != gfx::EMPTY_BUFFER && gmb_type != gfx::IO_SURFACE_BUFFER) {
     return false;
@@ -315,6 +309,10 @@ bool IOSurfaceImageBackingFactory::IsSupported(
   }
 
   if (!IsFormatSupported(format, feature_info_->feature_flags())) {
+    return false;
+  }
+
+  if (!IsValidSize(size, max_texture_size_)) {
     return false;
   }
 
@@ -356,8 +354,7 @@ IOSurfaceImageBackingFactory::CreateSharedImageInternal(
   const auto size = si_info.size;
   const auto usage = si_info.usage;
 
-  if (!IsValidSize(size, max_texture_size_) ||
-      !IsPixelDataValid(format, size, pixel_data)) {
+  if (!IsPixelDataValid(format, size, pixel_data)) {
     return nullptr;
   }
 

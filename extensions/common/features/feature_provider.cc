@@ -4,6 +4,7 @@
 
 #include "extensions/common/features/feature_provider.h"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string_view>
@@ -12,9 +13,9 @@
 #include "base/debug/alias.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
-#include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
 #include "base/strings/span_printf.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/trace_event/trace_event.h"
@@ -60,16 +61,18 @@ class FeatureProviderStatic {
   FeatureProviderStatic(const FeatureProviderStatic&) = delete;
   FeatureProviderStatic& operator=(const FeatureProviderStatic&) = delete;
 
-  const FeatureProvider* GetFeatures(const std::string& name) const {
+  const FeatureProvider* GetFeatures(std::string_view name) const {
     auto* provider = base::FindPtrOrNull(feature_providers_, name);
     if (!provider) {
-      CRASH_WITH_MINIDUMP("FeatureProvider \"" + name + "\" not found");
+      CRASH_WITH_MINIDUMP(
+          base::StrCat({"FeatureProvider \"", name, "\" not found"}));
     }
     return provider;
   }
 
  private:
-  std::map<std::string, std::unique_ptr<FeatureProvider>> feature_providers_;
+  std::map<std::string, std::unique_ptr<FeatureProvider>, std::less<>>
+      feature_providers_;
 };
 
 const FeatureProviderStatic& GetFeatureProviderStatic() {
@@ -77,8 +80,8 @@ const FeatureProviderStatic& GetFeatureProviderStatic() {
   return *instance;
 }
 
-const Feature* GetFeatureFromProviderByName(const std::string& provider_name,
-                                            const std::string& feature_name) {
+const Feature* GetFeatureFromProviderByName(std::string_view provider_name,
+                                            std::string_view feature_name) {
   const Feature* feature =
       FeatureProvider::GetByName(provider_name)->GetFeature(feature_name);
   // We should always refer to existing features, but we can't CHECK here
@@ -94,7 +97,7 @@ FeatureProvider::FeatureProvider() = default;
 FeatureProvider::~FeatureProvider() = default;
 
 // static
-const FeatureProvider* FeatureProvider::GetByName(const std::string& name) {
+const FeatureProvider* FeatureProvider::GetByName(std::string_view name) {
   return GetFeatureProviderStatic().GetFeatures(name);
 }
 
@@ -119,26 +122,26 @@ const FeatureProvider* FeatureProvider::GetBehaviorFeatures() {
 }
 
 // static
-const Feature* FeatureProvider::GetAPIFeature(const std::string& name) {
+const Feature* FeatureProvider::GetAPIFeature(std::string_view name) {
   return GetFeatureFromProviderByName("api", name);
 }
 
 // static
-const Feature* FeatureProvider::GetManifestFeature(const std::string& name) {
+const Feature* FeatureProvider::GetManifestFeature(std::string_view name) {
   return GetFeatureFromProviderByName("manifest", name);
 }
 
 // static
-const Feature* FeatureProvider::GetPermissionFeature(const std::string& name) {
+const Feature* FeatureProvider::GetPermissionFeature(std::string_view name) {
   return GetFeatureFromProviderByName("permission", name);
 }
 
 // static
-const Feature* FeatureProvider::GetBehaviorFeature(const std::string& name) {
+const Feature* FeatureProvider::GetBehaviorFeature(std::string_view name) {
   return GetFeatureFromProviderByName("behavior", name);
 }
 
-const Feature* FeatureProvider::GetFeature(const std::string& name) const {
+const Feature* FeatureProvider::GetFeature(std::string_view name) const {
   return base::FindPtrOrNull(features_, name);
 }
 
@@ -155,10 +158,10 @@ const Feature* FeatureProvider::GetParent(const Feature& feature) const {
 }
 
 // Children of a given API are named starting with parent.name()+".", which
-// means they'll be contiguous in the features_ std::map.
+// means they'll be contiguous in the sorted features_ registry.
 std::vector<const Feature*> FeatureProvider::GetChildren(
     const Feature& parent) const {
-  std::string prefix = parent.name() + ".";
+  std::string prefix = base::StrCat({parent.name(), "."});
   const FeatureMap::const_iterator first_child = features_.lower_bound(prefix);
 
   // All children have names before (parent.name() + ('.'+1)).
@@ -180,23 +183,20 @@ const FeatureMap& FeatureProvider::GetAllFeatures() const {
   return features_;
 }
 
-void FeatureProvider::AddFeature(std::string_view name,
-                                 std::unique_ptr<Feature> feature) {
-  DCHECK(feature);
-  const auto& map =
-      ExtensionsClient::Get()->GetFeatureDelegatedAvailabilityCheckMap();
-  if (!map.empty() && feature->RequiresDelegatedAvailabilityCheck()) {
-    auto* handler = base::FindOrNull(map, feature->name());
-    if (handler && !handler->is_null()) {
-      feature->SetDelegatedAvailabilityCheckHandler(*handler);
-    }
+void FeatureProvider::AddStaticFeatures(
+    base::span<const Feature* const> features) {
+  features_.reserve(features_.size() + features.size());
+
+  for (const Feature* feature : features) {
+    CHECK(feature);
+    const std::string_view feature_name = feature->name();
+    const size_t previous_size = features_.size();
+    // Generated entries arrive sorted, making end() the optimal insertion
+    // hint; batches from other providers transparently fall back to lookup.
+    features_.emplace_hint(features_.end(), feature_name, feature);
+    CHECK_EQ(features_.size(), previous_size + 1u)
+        << "Duplicate feature registration: " << feature_name;
   }
-
-  features_[std::string(name)] = std::move(feature);
-}
-
-void FeatureProvider::AddFeature(std::string_view name, Feature* feature) {
-  AddFeature(name, base::WrapUnique(feature));
 }
 
 }  // namespace extensions

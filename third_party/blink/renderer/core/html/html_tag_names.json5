@@ -93,6 +93,12 @@
       interfaceHeaderDir: "third_party/blink/renderer/core/html/forms",
     },
     {
+      name: "camera",
+      interfaceName: "HTMLCameraElement",
+      runtimeEnabled: "CameraAndMicrophoneElements",
+      noTypeHelpers: true,
+    },
+    {
       name: "canvas",
       interfaceHeaderDir: "third_party/blink/renderer/core/html/canvas",
     },
@@ -352,6 +358,16 @@
       runtimeEnabled: "MenuElements",
     },
     {
+      name: "menuitemcheckbox",
+      interfaceName: "HTMLMenuItemCheckboxElement",
+      runtimeEnabled: "MenuElements",
+    },
+    {
+      name: "menuitemradio",
+      interfaceName: "HTMLMenuItemRadioElement",
+      runtimeEnabled: "MenuElements",
+    },
+    {
       name: "menulist",
       interfaceName: "HTMLMenuListElement",
       runtimeEnabled: "MenuElements",
@@ -363,6 +379,12 @@
     {
       name: "meter",
       interfaceName: "HTMLMeterElement",
+    },
+    {
+      name: "microphone",
+      interfaceName: "HTMLMicrophoneElement",
+      runtimeEnabled: "CameraAndMicrophoneElements",
+      noTypeHelpers: true,
     },
     {
       name: "nav",
@@ -412,6 +434,12 @@
       interfaceName: "HTMLParagraphElement",
     },
     "param",
+    {
+      name: "persistentwidget",
+      interfaceName: "HTMLPersistentWidgetElement",
+      interfaceHeaderDir: "third_party/blink/renderer/core/html/persistent_widgets",
+      runtimeEnabled: "PersistentWidgetAPI",
+    },
     {
       name: "picture",
       interfaceName: "HTMLPictureElement",

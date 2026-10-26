@@ -17,7 +17,6 @@
 #include "chrome/browser/search/background/wallpaper_search/wallpaper_search_background_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/side_panel/customize_chrome/customize_chrome_utils.h"
 #include "chrome/browser/ui/webui/cr_components/customize_color_scheme_mode/customize_color_scheme_mode_handler.h"
 #include "chrome/browser/ui/webui/cr_components/theme_color_picker/theme_color_picker_handler.h"
 #include "chrome/browser/ui/webui/new_tab_page/composebox/variations/composebox_fieldtrial.h"
@@ -25,10 +24,7 @@
 #include "chrome/browser/ui/webui/sanitized_image/sanitized_image_source.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_page_handler.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_section.h"
-#include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.h"
-#include "chrome/browser/ui/webui/side_panel/customize_chrome/wallpaper_search/wallpaper_search_handler.h"
-#include "chrome/browser/ui/webui/side_panel/customize_chrome/wallpaper_search/wallpaper_search_string_map.h"
-#include "chrome/browser/ui/webui/theme_handler.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
@@ -41,6 +37,7 @@
 #include "components/search/ntp_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -50,6 +47,13 @@
 #include "ui/webui/color_change_listener/color_change_handler.h"
 #include "ui/webui/tracked_element/tracked_element_handler_document_singleton.h"
 #include "ui/webui/webui_util.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/views/side_panel/customize_chrome/customize_chrome_utils.h"
+#include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.h"
+#include "chrome/browser/ui/webui/side_panel/customize_chrome/wallpaper_search/wallpaper_search_handler.h"
+#include "chrome/browser/ui/webui/side_panel/customize_chrome/wallpaper_search/wallpaper_search_string_map.h"
+#include "chrome/browser/ui/webui/theme_handler.h"
+#endif
 
 namespace {
 
@@ -82,6 +86,9 @@ CustomizeChromeUI::CustomizeChromeUI(content::WebUI* web_ui)
                                    profile_)),
       page_factory_receiver_(this),
       id_(RandInt64()) {
+#if BUILDFLAG(IS_ANDROID)
+  const bool wallpaper_search_enabled = false;
+#else
   const bool wallpaper_search_enabled =
       customize_chrome::IsWallpaperSearchEnabledForProfile(profile_);
   if (wallpaper_search_enabled) {
@@ -89,12 +96,16 @@ CustomizeChromeUI::CustomizeChromeUI(content::WebUI* web_ui)
         std::make_unique<WallpaperSearchBackgroundManager>(profile_);
     wallpaper_search_string_map_ = WallpaperSearchStringMap::Create();
   }
+#endif
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       profile_, chrome::kChromeUICustomizeChromeSidePanelHost);
 
+// ThemeHandler used only by "Customize Toolbar".
+#if !BUILDFLAG(IS_ANDROID)
   if (!profile_->IsGuestSession()) {
     web_ui->AddMessageHandler(std::make_unique<ThemeHandler>());
   }
+#endif
 
   static constexpr webui::LocalizedString kLocalizedStrings[] = {
       // Side panel strings.
@@ -285,13 +296,14 @@ CustomizeChromeUI::CustomizeChromeUI(content::WebUI* web_ui)
       base::FeatureList::IsEnabled(
           ntp_features::kCustomizeChromeSidePanelExtensionsCard));
 
-  source->AddBoolean(
-      "ntpNextFeaturesEnabled",
+  bool ntp_next_features_enabled =
       ntp_realbox::IsNtpRealboxNextEnabled(profile_) &&
-          base::FeatureList::IsEnabled(ntp_features::kNtpNextFeatures));
+      base::FeatureList::IsEnabled(ntp_features::kNtpNextFeatures);
+  source->AddBoolean("ntpNextFeaturesEnabled", ntp_next_features_enabled);
   source->AddBoolean("ntpNextDisablementEnabled",
                      ntp_features::kNtpNextDisablementParam.Get());
   source->AddBoolean("wallpaperSearchEnabled", wallpaper_search_enabled);
+  source->AddBoolean("toolbarCustomizationEnabled", !BUILDFLAG(IS_ANDROID));
   source->AddBoolean(
       "wallpaperSearchInspirationCardEnabled",
       wallpaper_search_enabled &&
@@ -324,9 +336,13 @@ CustomizeChromeUI::CustomizeChromeUI(content::WebUI* web_ui)
       num_tools_eligible++;
     }
   }
-  bool action_chips_eligible = aim_eligibility_service &&
-                               aim_eligibility_service->IsAimEligible() &&
-                               num_tools_eligible >= 2;
+  bool action_chips_eligible =
+      (base::FeatureList::IsEnabled(ntp_features::kNtpScaledActionChips) ||
+       base::FeatureList::IsEnabled(ntp_features::kNtpScaledActionChipsSmall))
+          ? ntp_next_features_enabled
+          : (aim_eligibility_service &&
+             aim_eligibility_service->IsAimEligible() &&
+             num_tools_eligible >= 2);
   source->AddBoolean("aimPolicyEnabled", action_chips_eligible);
 
   source->AddBoolean("footerEnabled",
@@ -339,6 +355,8 @@ CustomizeChromeUI::CustomizeChromeUI(content::WebUI* web_ui)
 
   content::URLDataSource::Add(profile_,
                               std::make_unique<SanitizedImageSource>(profile_));
+  content::URLDataSource::Add(profile_,
+                              std::make_unique<ThemeSource>(profile_));
 
   ui::TrackedElementHandlerDocumentSingleton::Register(
       this, std::vector<ui::ElementIdentifier>{
@@ -390,6 +408,7 @@ void CustomizeChromeUI::BindInterface(
   page_factory_receiver_.Bind(std::move(receiver));
 }
 
+#if !BUILDFLAG(IS_ANDROID)
 void CustomizeChromeUI::BindInterface(
     mojo::PendingReceiver<
         side_panel::customize_chrome::mojom::CustomizeToolbarHandlerFactory>
@@ -399,6 +418,7 @@ void CustomizeChromeUI::BindInterface(
   }
   customize_toolbar_handler_factory_receiver_.Bind(std::move(receiver));
 }
+#endif
 
 void CustomizeChromeUI::BindInterface(
     mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandlerFactory>
@@ -431,6 +451,7 @@ void CustomizeChromeUI::BindInterface(
       std::move(pending_receiver));
 }
 
+#if !BUILDFLAG(IS_ANDROID)
 void CustomizeChromeUI::BindInterface(
     mojo::PendingReceiver<
         side_panel::customize_chrome::mojom::WallpaperSearchHandlerFactory>
@@ -440,12 +461,13 @@ void CustomizeChromeUI::BindInterface(
   }
   wallpaper_search_handler_factory_receiver_.Bind(std::move(pending_receiver));
 }
+#endif
 
 void CustomizeChromeUI::CreatePageHandler(
     mojo::PendingRemote<side_panel::mojom::CustomizeChromePage> pending_page,
     mojo::PendingReceiver<side_panel::mojom::CustomizeChromePageHandler>
         pending_page_handler) {
-  DCHECK(pending_page.is_valid());
+  CHECK(pending_page.is_valid(), base::NotFatalUntil::M162);
   customize_chrome_page_handler_ = std::make_unique<CustomizeChromePageHandler>(
       std::move(pending_page_handler), std::move(pending_page),
       NtpCustomBackgroundServiceFactory::GetForProfile(profile_), web_contents_,
@@ -496,6 +518,7 @@ void CustomizeChromeUI::CreateThemeColorPickerHandler(
       web_contents_);
 }
 
+#if !BUILDFLAG(IS_ANDROID)
 void CustomizeChromeUI::CreateWallpaperSearchHandler(
     mojo::PendingRemote<
         side_panel::customize_chrome::mojom::WallpaperSearchClient> client,
@@ -526,3 +549,4 @@ void CustomizeChromeUI::CreateCustomizeToolbarHandler(
   customize_toolbar_handler_ = std::make_unique<CustomizeToolbarHandler>(
       std::move(handler), std::move(client), web_contents_);
 }
+#endif

@@ -10,6 +10,7 @@
 #import "base/functional/callback_forward.h"
 #import "base/types/id_type.h"
 #import "components/actor/core/task_id.h"
+#import "components/actor/public/mojom/actor_types.mojom-forward.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper.h"
 #import "ios/web/public/web_state_id.h"
@@ -42,6 +43,9 @@ enum class ActorTaskState {
   kFailed = 8
 };
 
+// Returns whether `state` corresponds to a terminal actor task state.
+bool IsTerminalState(ActorTaskState state);
+
 // Reasons why an ActorTask was stopped.
 enum class ActorTaskStoppedReason {
   // Task was explicitly stopped by the user.
@@ -54,10 +58,25 @@ enum class ActorTaskStoppedReason {
   kBrowserFailure = 3,
   // One of the tabs executing the task was detached or destroyed.
   kTabDetached = 4,
-  // System or browser is shutting down.
+  // System or browser is shutting down (including a cancelled/expired
+  // background task).
   kShutdown = 5,
   // User started a new chat session, aborting the current task.
   kUserStartedNewChat = 6
+};
+
+// Reasons why an ActorTask is interrupted to wait for user input.
+enum class ActorTaskInterruptReason {
+  // Unknown or unrecognized reason.
+  kUnknownReason = 0,
+  // Waiting for user confirmation.
+  kWaitingUserConfirmation = 1,
+  // Waiting for user clarification.
+  kWaitingUserClarification = 2,
+  // Waiting for user takeover.
+  kWaitingUserTakeover = 3,
+  // User provided irrelevant input.
+  kWaitingIrrelevantUserInput = 4,
 };
 
 // Represents the result of an action execution.
@@ -76,6 +95,12 @@ struct ActionResult {
 
 // Callback for when ActorTask/ActorEngine's `Act` finishes executing actions.
 using ActCallback = base::OnceCallback<void(std::vector<ActionResult>)>;
+
+// Returns the results reported for an `Act()` request rejected or aborted as a
+// whole (e.g. `kExecutionEngineExistingAction` for a concurrent request): a
+// single result carrying `code`. An empty vector is not used because it is
+// indistinguishable from a successful empty action sequence.
+std::vector<ActionResult> MakeActionResults(mojom::ActionResultCode code);
 
 // Represents a response for a tab observation (PageContext extraction),
 // associating the WebStateID with the extraction response or failure reason.

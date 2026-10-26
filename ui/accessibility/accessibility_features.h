@@ -9,6 +9,7 @@
 #include "base/feature_list.h"
 #include "build/build_config.h"
 #include "ui/accessibility/ax_base_export.h"
+#include "ui/accessibility/ax_features.mojom-features.h"
 
 // This file declares base::Features related to the ui/accessibility code.
 //
@@ -29,8 +30,8 @@
 //
 // In the .cc file, a corresponding new entry should look like:
 //
-//    BASE_FEATURE(kNewFeature, "NewFeature",
-//    base::FEATURE_DISABLED_BY_DEFAULT); bool IsNewFeatureEnabled() {
+//    BASE_FEATURE(kNewFeature, base::FEATURE_DISABLED_BY_DEFAULT);
+//    bool IsNewFeatureEnabled() {
 //      return base::FeatureList::IsEnabled(::features::kNewFeature);
 //    }
 //
@@ -46,14 +47,13 @@ namespace features {
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityPdfOcrForSelectToSpeak);
 AX_BASE_EXPORT bool IsAccessibilityPdfOcrForSelectToSpeakEnabled();
 
-// A replacement algorithm for AbstractInlineTextBox + InlineCursor for
-// AXInlineTextBox creation.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityBlockFlowIterator);
-AX_BASE_EXPORT bool IsAccessibilityBlockFlowIteratorEnabled();
-
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(
     kAccessibilityPruneRedundantInlineConnectivity);
 AX_BASE_EXPORT bool IsAccessibilityPruneRedundantInlineConnectivityEnabled();
+
+// Check AXNodeIDs sent over Mojo
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityCheckAXNodeIDs);
+AX_BASE_EXPORT bool IsAccessibilityCheckAXNodeIDsEnabled();
 
 // Enables the addition of text formatting information to the Android
 // AccessibilityNodeInfo accessibility tree.
@@ -64,10 +64,6 @@ AX_BASE_EXPORT bool IsAccessibilityTextFormattingEnabled();
 // "browser's UI.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityHandleOccludingViews);
 AX_BASE_EXPORT bool IsAccessibilityHandleOccludingViewsEnabled();
-
-// Enables text change types for text changed events.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityTextChangeTypes);
-AX_BASE_EXPORT bool IsAccessibilityTextChangeTypesEnabled();
 
 // Enables the addition of `labeledby` relationships in the accessibility tree.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityLabeledBy);
@@ -80,22 +76,6 @@ AX_BASE_EXPORT bool IsAccessibilityTreeForViewsEnabled();
 // Serialize Views' accessibility data as soon as it changes.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kViewsAccessibilitySerializeOnDataChange);
 AX_BASE_EXPORT bool IsViewsAccessibilitySerializeOnDataChangeEnabled();
-
-// Experiment to measure the performance impact of various accessibility
-// changes.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(
-    kAccessibilityPerformanceMeasurementExperiment);
-AX_BASE_EXPORT bool IsAccessibilityPerformanceMeasurementExperimentEnabled();
-
-enum class AccessibilityPerformanceMeasurementExperimentGroup {
-  kAXModeComplete,
-  kWebContentsOnly,
-  kAXModeCompleteNoInlineTextBoxes,
-  kRendererSerializationOnly,
-};
-
-AX_BASE_EXPORT AccessibilityPerformanceMeasurementExperimentGroup
-GetAccessibilityPerformanceMeasurementExperimentGroup();
 
 // Use Alternative mechanism for acquiring image descriptions.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kImageDescriptionsAlternateRouting);
@@ -187,23 +167,19 @@ AX_BASE_EXPORT BASE_DECLARE_FEATURE(kUiaEventOptimization);
 // technologies.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kUiaMathMlSupport);
 AX_BASE_EXPORT bool IsUiaMathMlSupportEnabled();
+
+// Group location-changed events by sending a single location changed event
+// on the root of the subtree containing all location-change events. This
+// feature-flag is enabled by default as a kill-switch for the event semantics
+// change.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(
+    kAccessibilityGroupLocationChangeByCommonAncestor);
+AX_BASE_EXPORT bool IsAccessibilityGroupLocationChangeByCommonAncestorEnabled();
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_CHROMEOS)
 // TODO(accessibility): Should this be moved to ash_features.cc?
 AX_BASE_EXPORT bool IsDictationOfflineAvailable();
-
-// Adds option to enable Accessibility accelerator.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityAccelerator);
-AX_BASE_EXPORT bool IsAccessibilityAcceleratorEnabled();
-
-// Adds option to limit the movement on the screen.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityReducedAnimations);
-AX_BASE_EXPORT bool IsAccessibilityReducedAnimationsEnabled();
-
-// Adds reduced animations toggle to kiosk quick settings.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityReducedAnimationsInKiosk);
-AX_BASE_EXPORT bool IsAccessibilityReducedAnimationsInKioskEnabled();
 
 // Allow context checking with the accessibility Dictation
 // feature.
@@ -212,45 +188,26 @@ AX_BASE_EXPORT BASE_DECLARE_FEATURE(
 AX_BASE_EXPORT bool
 IsExperimentalAccessibilityDictationContextCheckingEnabled();
 
-// Whether the screen magnifier can follow the ChromeVox focus.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityMagnifierFollowsChromeVox);
-AX_BASE_EXPORT bool IsAccessibilityMagnifierFollowsChromeVoxEnabled();
-
-// Control mouse with keyboard.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityMouseKeys);
-AX_BASE_EXPORT bool IsAccessibilityMouseKeysEnabled();
-
-// Show captions on a braille display.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityCaptionsOnBrailleDisplay);
-AX_BASE_EXPORT bool IsAccessibilityCaptionsOnBrailleDisplayEnabled();
-
 // Controls whether the shake cursor to locate feature is available.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityShakeToLocate);
 AX_BASE_EXPORT bool IsAccessibilityShakeToLocateEnabled();
 
-// Controls whether the disable touchpad feature is enabled.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityDisableTouchpad);
-AX_BASE_EXPORT bool IsAccessibilityDisableTouchpadEnabled();
-
-// Controls whether the flash screen for notifications feature is available.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityFlashScreenFeature);
-AX_BASE_EXPORT bool IsAccessibilityFlashScreenFeatureEnabled();
-
-// Controls whether the inverted mouse cursor feature is available.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityInvertedMouseCursor);
-AX_BASE_EXPORT bool IsAccessibilityInvertedMouseCursorEnabled();
-
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityManifestV3ChromeVox);
 AX_BASE_EXPORT bool IsAccessibilityManifestV3EnabledForChromeVox();
-
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityManifestV3EspeakNGTts);
-AX_BASE_EXPORT bool IsAccessibilityManifestV3EnabledForEspeakNGTts();
 
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityManifestV3GoogleTts);
 AX_BASE_EXPORT bool IsAccessibilityManifestV3EnabledForGoogleTts();
 
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityChromeVoxJapaneseBraille);
 AX_BASE_EXPORT bool IsAccessibilityChromeVoxJapaneseBrailleEnabled();
+
+// Controls whether Google TTS automatically attempts to reconnect.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityGoogleTtsAutomaticReconnect);
+AX_BASE_EXPORT bool IsAccessibilityGoogleTtsAutomaticReconnectEnabled();
+
+// Controls whether the ChromeOS Hover Text accessibility feature is available.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityHoverText);
+AX_BASE_EXPORT bool IsAccessibilityHoverTextEnabled();
 
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
@@ -264,20 +221,40 @@ AX_BASE_EXPORT bool IsAccessibilityInlineLineSeparatorsEnabled();
 // Propagate bounding rectangles of cursor moves and input focus changes to the
 // Android platform to allow Magnification to follow them. For compatibility
 // with older behaviour, Android SDK levels before Baklava 36.1 will only be
-// notified on cursor moves.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityMagnificationFollowsFocus);
-AX_BASE_EXPORT bool IsAccessibilityMagnificationFollowsFocusEnabled();
+// notified on cursor moves. Feature controls behavior for when a keyboard is
+// attached.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(
+    kAccessibilityMagnificationFollowsFocusKeyboardAttached);
+
+// Similar to kAccessibilityMagnificationFollowsFocusKeyboardAttached but
+// controls behavior when no keyboard is attached.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(
+    kAccessibilityMagnificationFollowsFocusNoKeyboard);
 
 // Enables MathML support for Android.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityAndroidMath);
 AX_BASE_EXPORT bool IsAccessibilityAndroidMathEnabled();
 
-// Controls the new native C++ implementation for Read Aloud on Android,
-// replacing the previous Speakr service integration.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAloudNative);
-AX_BASE_EXPORT bool IsReadAloudNativeEnabled();
+// When enabled, web content accessibility runs on a background thread instead
+// of the UI thread. Use `IsAccessibilityAndroidBackgroundThreadEnabled()` to
+// check it. It returns true only when the device runs Android R or later and
+// the feature is enabled.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAccessibilityAndroidBackgroundThread);
+AX_BASE_EXPORT bool IsAccessibilityAndroidBackgroundThreadEnabled();
 
 #endif  // BUILDFLAG(IS_ANDROID)
+
+// Controls the new native C++ implementation for Read Aloud,
+// replacing the previous Speakr service integration.
+using ax::mojom::features::kReadAloudNative;
+AX_BASE_EXPORT bool IsReadAloudNativeEnabled();
+
+// Controls the server speech synthesis broker for Read Aloud. Returns true if
+// kReadAloudServerSynthesizer is enabled or if kReadAloudNative is enabled,
+// unless kReadAloudServerSynthesizer is explicitly disabled via command line or
+// Finch field trial overrides.
+using ax::mojom::features::kReadAloudServerSynthesizer;
+AX_BASE_EXPORT bool IsReadAloudServerSynthesizerEnabled();
 
 #if !BUILDFLAG(IS_ANDROID)
 // Use the AXTree fixing code, which may be an assortment of different
@@ -285,9 +262,13 @@ AX_BASE_EXPORT bool IsReadAloudNativeEnabled();
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kAXTreeFixing);
 AX_BASE_EXPORT bool IsAXTreeFixingEnabled();
 
-// Enable Immersive Mode for Read Anything.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kImmersiveReadAnything);
-AX_BASE_EXPORT bool IsImmersiveReadAnythingEnabled();
+#if !BUILDFLAG(IS_CHROMEOS)
+// Shows the Page Colors control in chrome://settings/accessibility, which lets
+// users override the web theme's forced colors independently of the operating
+// system theme. This is not available on Android or ChromeOS.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(kPageColorsSettings);
+AX_BASE_EXPORT bool IsPageColorsSettingsEnabled();
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 // Identify and annotate the main node of the AXTree where one was not already
 // provided.
@@ -323,9 +304,10 @@ GetReadAnythingMenuShuffleExperimentGroup();
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAnythingMenuShuffleExperiment);
 AX_BASE_EXPORT bool IsReadAnythingMenuShuffleExperimentEnabled();
 
-// Enable the select text feature for Read Anything Readability.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAnythingReadabilitySelectText);
-AX_BASE_EXPORT bool IsReadAnythingReadabilitySelectTextEnabled();
+// Enable the experimental playback UI for Read Anything Read Aloud.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(
+    kReadAnythingReadAloudExperimentalPlaybackUi);
+AX_BASE_EXPORT bool IsReadAnythingReadAloudExperimentalPlaybackUiEnabled();
 
 // Enable phrase highlighting in Read Anything Read Aloud.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAnythingReadAloudPhraseHighlighting);
@@ -339,6 +321,10 @@ AX_BASE_EXPORT bool IsReadAnythingOmniboxChipEnabled();
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAnythingTranslateEntryPoint);
 AX_BASE_EXPORT bool IsReadAnythingTranslateEntryPointEnabled();
 
+// Enable improved UI layouts and controls in Read Anything.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAnythingImprovedUi);
+AX_BASE_EXPORT bool IsReadAnythingImprovedUiEnabled();
+
 // Enable the line focus feature for Read Anything.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAnythingLineFocus);
 AX_BASE_EXPORT bool IsReadAnythingLineFocusEnabled();
@@ -347,18 +333,6 @@ AX_BASE_EXPORT bool IsReadAnythingLineFocusEnabled();
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kHatsReadingModeSurvey);
 AX_BASE_EXPORT bool IsHatsReadingModeSurveyEnabled();
 
-// Enable images to be distilled via algorithm. Should be disabled by
-// default.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAnythingImagesViaAlgorithm);
-AX_BASE_EXPORT bool IsReadAnythingImagesViaAlgorithmEnabled();
-
-AX_BASE_EXPORT bool IsReadAnythingDocsIntegrationEnabled();
-
-// Enable "load more" button to show at the end of Reading Mode panel.
-// Should be disabled by default.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAnythingDocsLoadMoreButton);
-AX_BASE_EXPORT bool IsReadAnythingDocsLoadMoreButtonEnabled();
-
 // Enable ReadabilityJS as the distillation source for Reading Mode.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAnythingWithReadability);
 AX_BASE_EXPORT bool IsReadAnythingWithReadabilityEnabled();
@@ -366,6 +340,20 @@ AX_BASE_EXPORT bool IsReadAnythingWithReadabilityEnabled();
 // Enable distillation quality evaluation for Reading Mode.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAnythingDistillationQualityEvaluation);
 AX_BASE_EXPORT bool IsReadAnythingDistillationQualityEvaluationEnabled();
+
+// Enables unifying distillation triggers to the renderer and decoupling
+// distillation logic.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAnythingDistillerRefactor);
+AX_BASE_EXPORT bool IsReadAnythingDistillerRefactorEnabled();
+
+// Enables printing the distilled content from immersive Reading Mode. Immersive
+// Reading Mode itself has launched and is not gated by a feature flag.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(kImmersiveReadAnythingPrint);
+AX_BASE_EXPORT bool IsImmersiveReadAnythingPrintEnabled();
+
+// Enables the send feedback entry point for Reading Mode.
+AX_BASE_EXPORT BASE_DECLARE_FEATURE(kReadAnythingSendFeedback);
+AX_BASE_EXPORT bool IsReadAnythingSendFeedbackEnabled();
 
 // ScreenAI library's Main Content Extraction service is enabled.
 AX_BASE_EXPORT bool IsScreenAIMainContentExtractionEnabled();
@@ -377,13 +365,6 @@ AX_BASE_EXPORT bool IsScreenAIOCREnabled();
 // If enabled, ScreenAI library will be loaded from //third_party/screen-ai.
 AX_BASE_EXPORT BASE_DECLARE_FEATURE(kScreenAITestMode);
 AX_BASE_EXPORT bool IsScreenAITestModeEnabled();
-
-#if BUILDFLAG(IS_LINUX)
-// Enables advanced partition allocation checks in ScreenAI service.
-// TODO(crbug.com/418199684): Remove when the bug is fixed.
-AX_BASE_EXPORT BASE_DECLARE_FEATURE(
-    kScreenAIPartitionAllocAdvancedChecksEnabled);
-#endif  // BUILDFLAG(IS_LINUX)
 
 #endif  // !BUILDFLAG(IS_ANDROID)
 

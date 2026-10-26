@@ -58,11 +58,13 @@ LayoutSVGRect::~LayoutSVGRect() = default;
 void LayoutSVGRect::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutSVGShape::StyleDidChange(diff, old_style, style_change_context);
+  LayoutSVGShape::StyleDidChange(diff, old_style, new_style,
+                                 style_change_context);
 
-  if (old_style && GeometryPropertiesChanged(*old_style, StyleRef())) {
+  if (old_style && GeometryPropertiesChanged(*old_style, new_style)) {
     SetNeedsShapeUpdate();
   }
 }
@@ -74,7 +76,7 @@ gfx::RectF LayoutSVGRect::UpdateShapeFromElement() {
   ClearPath();
   SetGeometryType(GeometryType::kEmpty);
 
-  const ComputedStyle& style = StyleRef();
+  const ComputedStyle& style = Style();
   SetGeometryDependsOnViewport(CalculateGeometryDependsOnViewport(style));
 
   const SVGViewportResolver viewport_resolver(*this);
@@ -135,7 +137,7 @@ bool LayoutSVGRect::ShapeDependentFillContains(const HitTestLocation& location,
 // Returns true if the stroke is continuous and definitely uses miter joins.
 bool LayoutSVGRect::DefinitelyHasSimpleStroke() const {
   NOT_DESTROYED();
-  const ComputedStyle& style = StyleRef();
+  const ComputedStyle& style = Style();
 
   // The four angles of a rect are 90 degrees. Using the formula at:
   // http://www.w3.org/TR/SVG/painting.html#StrokeMiterlimitProperty

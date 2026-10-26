@@ -96,6 +96,8 @@ static_library("engine") {
     "loopback_server/loopback_connection_manager.h",
     "loopback_server/loopback_server.cc",
     "loopback_server/loopback_server.h",
+    "loopback_server/loopback_server_bookmark_migration.cc",
+    "loopback_server/loopback_server_bookmark_migration.h",
     "loopback_server/loopback_server_entity.cc",
     "loopback_server/loopback_server_entity.h",
     "loopback_server/persistent_bookmark_entity.cc",
@@ -121,6 +123,7 @@ static_library("engine") {
     "required_passphrase_verifier.h",
     "shutdown_reason.cc",
     "shutdown_reason.h",
+    "sync_access_token_fetcher.h",
     "sync_credentials.h",
     "sync_cycle_event.cc",
     "sync_cycle_event.h",
@@ -161,7 +164,6 @@ static_library("engine") {
     # The target has >50 .cc files, so speed up the build with
     # precompiled_headers.
     "//build/config:precompiled_headers",
-    "//build/config/compiler:wexit_time_destructors",
   ]
 
   public_deps = [
@@ -179,7 +181,7 @@ static_library("engine") {
     "//base:i18n",
     "//build:branding_buildflags",
     "//components/autofill/core/browser:payments_sync_utils",
-    "//components/os_crypt/async/common",
+    "//components/os_crypt/common",
     "//components/variations/net",
 
     # For engine/nigori.

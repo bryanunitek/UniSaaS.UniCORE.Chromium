@@ -11,6 +11,7 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_runner.h"
@@ -22,7 +23,7 @@ namespace {
 
 class WrappedTask;
 class PumpableTaskRunner;
-using WrappedTaskQueue = std::list<WrappedTask*>;
+using WrappedTaskQueue = std::list<raw_ptr<WrappedTask, DanglingUntriaged>>;
 using EventTimedWaitCallback =
     base::RepeatingCallback<void(base::WaitableEvent*, base::TimeDelta)>;
 
@@ -201,10 +202,7 @@ bool PumpableTaskRunner::WaitForSingleWrappedTaskToRun(
     {
       base::AutoLock lock(task_queue_lock_);
 
-      for (WrappedTaskQueue::iterator it = task_queue_.begin();
-           it != task_queue_.end(); ++it) {
-        WrappedTask* potential_task = *it;
-
+      for (WrappedTask* potential_task : task_queue_) {
         // If this task is scheduled for the future, take it into account when
         // deciding how long to sleep, and continue on to the next task.
         if (potential_task->can_run_time() > current_time) {

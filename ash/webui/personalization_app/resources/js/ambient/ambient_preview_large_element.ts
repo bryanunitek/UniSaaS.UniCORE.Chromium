@@ -20,7 +20,6 @@ import {assert} from 'chrome://resources/js/assert.js';
 import type {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
 
 import {TopicSource} from '../../personalization_app.mojom-webui.js';
-import {logAmbientModeOptInUMA} from '../personalization_metrics_logger.js';
 import {Paths, PersonalizationRouterElement, ScrollableTarget} from '../personalization_router_element.js';
 
 import {setAmbientModeEnabled} from './ambient_controller.js';
@@ -39,18 +38,14 @@ export class AmbientPreviewLargeElement extends AmbientPreviewBase {
 
   static override get properties() {
     return {
-      previewImages_: {
-        type: Array,
-        value: null,
-      },
-      thumbnailImages_: {
+      thumbnailImages: {
         type: Array,
         computed: 'computeThumbnailImages_(topicSource_, previewImages_)',
       },
     };
   }
 
-  private thumbnailImages_: Url[];
+  declare protected thumbnailImages: Url[];
 
   /** Returns the array of thumbnail images. */
   private computeThumbnailImages_(): Url[] {
@@ -71,7 +66,6 @@ export class AmbientPreviewLargeElement extends AmbientPreviewBase {
   private async onClickAmbientModeButton_(event: Event) {
     assert(this.ambientModeEnabled_ === false);
     event.stopPropagation();
-    logAmbientModeOptInUMA();
     await setAmbientModeEnabled(
         /*ambientModeEnabled=*/ true, getAmbientProvider(), this.getStore());
     PersonalizationRouterElement.instance().goToRoute(Paths.AMBIENT);
@@ -93,7 +87,7 @@ export class AmbientPreviewLargeElement extends AmbientPreviewBase {
   }
 
   private getThumbnailContainerClass_(): string {
-    return `thumbnail-${this.thumbnailImages_.length} clickable`;
+    return `thumbnail-${this.thumbnailImages.length} clickable`;
   }
 }
 

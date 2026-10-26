@@ -7,7 +7,6 @@
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils_desktop.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_test_utils.h"
@@ -114,7 +113,7 @@ class BookmarkEditorViewBrowserTestMoveDialog
   // BookmarkEditorView dialog with a tree view.
   void ShowUi(const std::string& name) override {
     BookmarkEditor::Show(
-        browser()->GetWindow()->GetNativeWindow(), browser()->profile(),
+        browser()->GetWindow()->GetNativeWindow(), browser()->GetProfile(),
         BookmarkEditor::EditDetails::MoveNodes(bookmark_model(), nodes_),
         BookmarkEditor::SHOW_TREE);
   }

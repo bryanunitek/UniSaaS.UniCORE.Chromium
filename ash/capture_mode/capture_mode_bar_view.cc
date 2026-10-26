@@ -12,12 +12,12 @@
 #include "ash/capture_mode/capture_mode_session.h"
 #include "ash/capture_mode/capture_mode_session_focus_cycler.h"
 #include "ash/capture_mode/capture_mode_util.h"
-#include "ash/public/cpp/style/color_provider.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_id.h"
 #include "ash/style/icon_button.h"
-#include "ash/style/system_shadow.h"
+#include "ash/style/style_util.h"
+#include "ash/style/system_decoration.h"
 #include "base/functional/bind.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -68,30 +68,12 @@ bool CaptureModeBarView::IsEventOnSettingsButton(
          settings_button_->GetBoundsInScreen().Contains(screen_location);
 }
 
-void CaptureModeBarView::AddedToWidget() {
-  // Since the layer of the shadow has to be added as a sibling to this view's
-  // layer, we need to wait until the view is added to the widget.
-  auto* parent = layer()->parent();
-  parent->Add(shadow_->GetLayer());
-  parent->StackAtBottom(shadow_->GetLayer());
-
-  // Make the shadow observe the color provider source change to update the
-  // colors.
-  shadow_->ObserveColorProviderSource(GetWidget());
-}
-
-void CaptureModeBarView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
-  // The shadow layer is a sibling of this view's layer, and should have the
-  // same bounds.
-  shadow_->SetContentBounds(layer()->bounds());
-}
-
 // TODO(hewer): Add a check and/or test so that the behavior sets
 // `ShouldShowUserNudge()` to false if the `settings_button_` doesn't exist.
 CaptureModeBarView::CaptureModeBarView()
-    // Use the `ShadowOnTextureLayer` for the view with fully rounded corners.
-    : shadow_(SystemShadow::CreateShadowOnTextureLayer(
-          SystemShadow::Type::kElevation12)) {
+    : shadow_(SystemDecoration::CreateShadowOnNinePatchLayerForView(
+          this,
+          SystemDecoration::ShadowType::kElevation12)) {
   SetPaintToLayer();
   SetBackground(views::CreateSolidBackground(
       chromeos::features::IsSystemBlurEnabled()
@@ -100,8 +82,8 @@ CaptureModeBarView::CaptureModeBarView()
 
   if (chromeos::features::IsSystemBlurEnabled()) {
     layer()->SetFillsBoundsOpaquely(false);
-    layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-    layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+    layer()->SetBackgroundBlur(StyleUtil::kBackgroundBlurSigma);
+    layer()->SetBackdropFilterQuality(StyleUtil::kBackgroundBlurQuality);
   }
 
   const int border_radius = capture_mode::kCaptureBarHeight / 2;
@@ -117,7 +99,7 @@ CaptureModeBarView::CaptureModeBarView()
       this, border_radius,
       views::HighlightBorder::Type::kHighlightBorderOnShadow);
 
-  shadow_->SetRoundedCornerRadius(border_radius);
+  shadow_->SetRoundedCorners(gfx::RoundedCornersF(border_radius));
 }
 
 void CaptureModeBarView::AppendSettingsButton() {

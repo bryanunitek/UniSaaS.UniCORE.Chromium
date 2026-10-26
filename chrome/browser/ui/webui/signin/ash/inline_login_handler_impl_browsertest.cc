@@ -23,12 +23,14 @@
 #include "chrome/browser/ash/test/regular_logged_in_browser_test_mixin.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/signin/signin_promo.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/ash/edu_coexistence/edu_coexistence_login_handler.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -132,8 +134,8 @@ base::Value GetCompleteLoginArgs(const std::string& email) {
 }
 
 account_manager::Account CreateGaiaAccount(const AccountInfo& account_info) {
-  return {account_manager::AccountKey::FromGaiaId(account_info.gaia),
-          account_info.email};
+  return {account_manager::AccountKey::FromGaiaId(account_info.GetGaiaId()),
+          std::string(account_info.GetEmail())};
 }
 
 bool IsAccountAvailableInArc(AccountAppsAvailability* account_apps_availability,
@@ -261,8 +263,11 @@ class InlineLoginHandlerTest
       profile()->GetPrefs()->SetString(prefs::kSupervisedUserId,
                                        supervised_user::kChildAccountSUID);
       // This is required for Child users, otherwise an account cannot be added.
-      edu_handler_ =
-          std::make_unique<EduCoexistenceLoginHandler>(base::DoNothing());
+      edu_handler_ = std::make_unique<EduCoexistenceLoginHandler>(
+          g_browser_process->GetFeatures()->application_locale_storage(),
+          identity_test_env_profile_adaptor_->identity_test_env()
+              ->identity_manager(),
+          base::DoNothing());
       edu_handler_->set_web_ui_for_test(web_ui());
       edu_handler_->RegisterMessages();
     }
@@ -349,7 +354,8 @@ class InlineLoginHandlerTest
       const std::string& email) {
     AccountInfo account = identity_test_env()->MakeAccountAvailable(email);
     account_manager()->UpsertAccount(
-        account_manager::AccountKey::FromGaiaId(account.gaia), account.email,
+        account_manager::AccountKey::FromGaiaId(account.GetGaiaId()),
+        std::string(account.GetEmail()),
         account_manager::AccountManager::kInvalidToken);
     CHECK(AccountManagerHasAccount(email));
     return account;
@@ -397,10 +403,10 @@ class InlineLoginHandlerTest
   DeviceAccountInfo GetDeviceAccountInfo() const { return GetParam(); }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   content::TestWebUI* web_ui() { return &web_ui_; }
 

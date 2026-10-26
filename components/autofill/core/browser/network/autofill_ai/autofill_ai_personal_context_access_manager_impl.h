@@ -19,8 +19,10 @@
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
+#include "components/autofill/core/browser/data_manager/autofill_ai/entity_suppression_manager.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/metrics/personal_context_metrics.h"
 #include "components/autofill/core/browser/network/autofill_ai/autofill_ai_personal_context_access_manager.h"
 #include "components/personal_context/core/personal_context_eligibility_service.h"
 #include "components/personal_context/core/personal_context_types.h"
@@ -35,6 +37,10 @@ namespace personal_context {
 class PersonalContextService;
 }  // namespace personal_context
 
+namespace syncer {
+class DeviceInfoSyncService;
+}  // namespace syncer
+
 namespace autofill {
 
 // Manages fetching masked and unmasked pContext entities. In particular:
@@ -47,19 +53,26 @@ namespace autofill {
 //   - For unmasked entities, the class handles the cache changes internally.
 class AutofillAiPersonalContextAccessManagerImpl
     : public AutofillAiPersonalContextAccessManager,
-      public personal_context::PersonalContextEligibilityService::Observer {
+      public personal_context::PersonalContextEligibilityService::Observer,
+      public EntitySuppressionManager::Observer {
  public:
-  // The TTL for prefetched (masked/non-SPII) entities and presence signals.
-  static constexpr base::TimeDelta kPrefetchedEntitiesAndSignalsCacheTTL =
-      base::Minutes(30);
-  // The TTL for unmasked sensitive PII (SPII) entities.
-  static constexpr base::TimeDelta kUnmaskedSpiiCacheTTL = base::Minutes(1);
+  // Represents the type of personal context network request sent to the server.
+  enum class RequestType {
+    // Request for non-sensitive data and presence signals for sensitive data.
+    kNonSpiiAndPresence,
+    // Request for masked sensitive data.
+    kSpiiMasked,
+    // Request for unmasking sensitive data.
+    kSpiiUnmasking,
+  };
 
   AutofillAiPersonalContextAccessManagerImpl(
       personal_context::PersonalContextService* personal_context_service,
       personal_context::PersonalContextEligibilityService*
           personal_context_eligibility_service,
-      PrefService* pref_service);
+      PrefService* pref_service,
+      syncer::DeviceInfoSyncService* device_info_sync_service,
+      EntitySuppressionManager* suppression_manager);
 
   AutofillAiPersonalContextAccessManagerImpl(
       const AutofillAiPersonalContextAccessManagerImpl&) = delete;
@@ -69,12 +82,12 @@ class AutofillAiPersonalContextAccessManagerImpl
   ~AutofillAiPersonalContextAccessManagerImpl() override;
 
   // AutofillAiPersonalContextAccessManager:
-  void PrefetchContext(base::span<const EntityType> requested_types) override;
+  void PrefetchContext(DenseSet<EntityType> requested_types) override;
   RequestStatus GetPrefetchStatusByEntityType(EntityType type) const override;
   void GetUnmaskedSpiiEntity(const EntityInstance::EntityId& id,
                              GetUnmaskedSpiiEntityCallback callback) override;
   bool IsTypePrefetched(EntityType type) const override;
-  bool ServerHasDataAvailable(EntityType type) const override;
+  bool ServerHasSpiiPresenceSignal(EntityType type) const override;
   void AddObserver(
       AutofillAiPersonalContextAccessManager::Observer* observer) override;
   void RemoveObserver(
@@ -83,6 +96,10 @@ class AutofillAiPersonalContextAccessManagerImpl
   // personal_context::PersonalContextEligibilityService::Observer:
   void OnEligibilityStateChanged(
       personal_context::PersonalContextEligibilityState new_state) override;
+  void OnContextSourceDisabled() override;
+
+  // EntitySuppressionManager::Observer:
+  void OnEntitySuppressionsChanged() override;
 
  private:
   friend class AutofillAiPersonalContextAccessManagerImplTestApi;
@@ -118,11 +135,10 @@ class AutofillAiPersonalContextAccessManagerImpl
   void ResetStateForType(EntityType type);
 
   // Handles the asynchronous result of the personal context fetch.
-  // `requested_spii_presence` expresses whether SPII types are fetched
-  // or only their presence is indicated
   void OnPrefetchContextRequestComplete(
-      std::vector<EntityType> requested_types,
-      bool requested_spii_presence,
+      DenseSet<EntityType> requested_types,
+      RequestType request_type,
+      base::TimeTicks request_start_time,
       personal_context::FetchContextResult result);
 
   // Parses the raw protobuf string response and converts it into a vector of
@@ -135,6 +151,7 @@ class AutofillAiPersonalContextAccessManagerImpl
   void OnFetchPiiEntitiesComplete(
       const EntityInstance::EntityId& id,
       GetUnmaskedSpiiEntityCallback callback,
+      base::TimeTicks request_start_time,
       personal_context::FetchPiiEntitiesResult result);
 
   // Processes a batch of prefetched entities, by
@@ -142,13 +159,12 @@ class AutofillAiPersonalContextAccessManagerImpl
   // - Scheduling eviction of the prefetched types.
   // - Scheduling eviction of spii presence signals.
   // - Notifying observers.
-  void ProcessPrefetchedEntities(std::vector<EntityType> requested_types,
+  void ProcessPrefetchedEntities(DenseSet<EntityType> prefetched_types,
+                                 DenseSet<EntityType> requested_types,
                                  std::vector<ParsedEntity> parsed_entities);
 
-  // Returns true if a network request should be initiated for `type`.
-  // This is true if the type is not cached, its cache TTL has expired, or a
-  // previous fetch failed and is now eligible for a retry.
-  bool ShouldRequestType(EntityType type) const;
+  PersonalContextPrefetchTriggerResult DeterminePrefetchTriggerResult(
+      EntityType type) const;
 
   // Evaluates whether enough time has elapsed since the last failure to
   // attempt fetching the type again, taking backoff delays into account.
@@ -163,21 +179,42 @@ class AutofillAiPersonalContextAccessManagerImpl
       std::optional<base::span<const EntityInstance>> entities);
 
   // Caches an unmasked SPII `entity`, so it can be refilled without an
-  // additional network round trip for `kUnmaskedSpiiCacheTTL`.
+  // additional network round trip for the duration of
+  // `kAutofillAmbientAutofillUnmaskedSpiiCacheTTL`.
   void CacheUnmaskedSpiiEntity(EntityInstance entity);
 
   // Caches a presence signal for an SPII `type`. Evicts the signal after
-  // `kPrefetchedEntitiesAndSignalsCacheTTL` time.
+  // `kAutofillAmbientAutofillPrefetchedEntitiesAndSignalsCacheTTL` time.
   void CachePresenceSignal(SpiiEntityPresenceSignal signal);
 
-  void HandleFailedResponse(base::span<const EntityType> requested_types,
-                            bool requested_spii_presence);
+  // Handles a failed network response for a prefetch request targeting
+  // `requested_types`. Sets their status to `kFailure` and notifies observers.
+  // If `requested_spii_presence` is true, SPII types are excluded from the
+  // failure status, as their outcome is governed by the dedicated SPII data
+  // request.
+  void HandleFailedResponse(DenseSet<EntityType> requested_types,
+                            RequestType request_type);
+
+  // Logs the total latency for a prefetch request of a specific `type`.
+  // Latency is only logged if the previous status was `kPending` and the
+  // request start time is valid.
+  void LogPrefetchTotalLatency(EntityType type);
+
+  // Computes the non-eligibility reason specific to personal context in
+  // Autofill AI and logs it to UMA if the reason has changed and the startup
+  // delay has elapsed.
+  void ComputeAndMaybeLogNonEligibilityReason();
+
+  // Indicates whether `kNonEligibilityLoggingDelayOnStartup` has elapsed,
+  // preventing premature UMA logging during browser startup.
+  bool is_non_eligibility_startup_delay_elapsed_ = false;
 
   const raw_ref<personal_context::PersonalContextService>
       personal_context_service_;
   const raw_ref<personal_context::PersonalContextEligibilityService>
       personal_context_eligibility_service_;
   const raw_ptr<PrefService> pref_service_;
+  const raw_ptr<syncer::DeviceInfoSyncService> device_info_sync_service_;
 
   // Map from EntityId to the original proto Entity received during prefetch.
   absl::flat_hash_map<EntityInstance::EntityId, personal_context::proto::Entity>
@@ -187,7 +224,8 @@ class AutofillAiPersonalContextAccessManagerImpl
   //
   // **Eviction Mechanism**: Managed **per individual entity** (not per type).
   // When an entity is individually unmasked, it is added here, and a separate
-  // task is scheduled to evict just this entity after `kUnmaskedSpiiCacheTTL`.
+  // task is scheduled to evict just this entity after
+  // `kAutofillAmbientAutofillUnmaskedSpiiCacheTTL`.
   //
   // **Interaction with Prefetched entities**:
   // When a prefetched entity type is evicted, all unmasked entities of the same
@@ -204,16 +242,33 @@ class AutofillAiPersonalContextAccessManagerImpl
   //
   // **Eviction Mechanism**: Managed per type. When a presence signal is
   // received, it is added here, and a separate task is scheduled to evict just
-  // this signal after `kPrefetchedEntitiesAndSignalsCacheTTL`.
+  // this signal after
+  // `kAutofillAmbientAutofillPrefetchedEntitiesAndSignalsCacheTTL`.
   base::flat_set<SpiiEntityPresenceSignal> spii_presence_signal_cache_;
+
+  // The last reported non-eligibility reason for personal context in Autofill
+  // AI.
+  std::optional<personal_context::PersonalContextNonEligibilityReason>
+      last_non_eligibility_reason_;
 
   base::ObserverList<AutofillAiPersonalContextAccessManager::Observer>
       observers_;
+
+  // Converts a proto Entity into an EntityInstance (decrypting if encrypted).
+  // If `mask_spii` is true, decrypted entities have their SPII fields masked,
+  // retaining only a suffix.
+  std::optional<EntityInstance> ConvertProtoToEntityInstance(
+      const personal_context::proto::Entity& entity,
+      bool mask_spii) const;
 
   base::ScopedObservation<
       personal_context::PersonalContextEligibilityService,
       personal_context::PersonalContextEligibilityService::Observer>
       eligibility_service_observation_{this};
+
+  base::ScopedObservation<EntitySuppressionManager,
+                          EntitySuppressionManager::Observer>
+      suppression_observation_{this};
 
   PrefChangeRegistrar pref_registrar_;
 

@@ -15,10 +15,7 @@ source_set("internal") {
 
   public_deps = [ "//components/browser_actuator/public" ]
 
-  deps = [
-    "//base",
-    "//components/keyed_service/core",
-  ]
+  deps = [ "//base" ]
 }
 
 source_set("unit_tests") {
@@ -29,10 +26,10 @@ source_set("unit_tests") {
   deps = [
     ":internal",
     "//base",
-    "//base/test:test_support",
-    "//components/browser_actuator/public",
-    "//components/browser_actuator/test_support",
-    "//testing/gmock",
+    "//components/browser_actuator/internal/transport:unit_tests",
+    "//components/browser_actuator/internal/transport/oauth:unit_tests",
+    "//components/browser_actuator/internal/transport/proto_stream_client:unit_tests",
+    "//components/browser_actuator/internal/transport/upstream_message_client:unit_tests",
     "//testing/gtest",
   ]
 

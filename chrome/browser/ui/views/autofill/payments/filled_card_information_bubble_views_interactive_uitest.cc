@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/autofill/payments/filled_card_information_bubble_views.h"
+
 #include <memory>
 #include <string>
 
@@ -11,29 +13,30 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/run_until.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/autofill/payments/filled_card_information_bubble_controller_impl.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/autofill/payments/filled_card_information_bubble_views.h"
-#include "chrome/browser/ui/views/autofill/payments/filled_card_information_icon_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/page_action/test_support/page_action_test_support.h"
+#include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
+#include "chrome/browser/ui/views/page_action/page_action_view_interface.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_accessor.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card_test_api.h"
 #include "components/autofill/core/browser/payments/constants.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/test_utils/test_event_waiter.h"
-#include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/credit_card_network_identifiers.h"
 #include "components/grit/components_scaled_resources.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/prerender_test_util.h"
 #include "ui/base/clipboard/clipboard.h"
@@ -43,88 +46,28 @@
 #include "ui/base/test/ui_controls.h"
 #include "ui/gfx/image/image_unittest_util.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/test/widget_test.h"
-#include "ui/views/view_observer.h"
 
 namespace autofill {
 
-class ViewVisibilityWaiter : public views::ViewObserver {
- public:
-  explicit ViewVisibilityWaiter(views::View* observed_view,
-                                bool expected_visible)
-      : view_(observed_view), expected_visible_(expected_visible) {
-    observation_.Observe(view_.get());
-  }
-  ViewVisibilityWaiter(const ViewVisibilityWaiter&) = delete;
-  ViewVisibilityWaiter& operator=(const ViewVisibilityWaiter&) = delete;
-
-  ~ViewVisibilityWaiter() override = default;
-
-  // Wait for changes to occur, or return immediately if view already has
-  // expected visibility.
-  void Wait() {
-    if (expected_visible_ != view_->GetVisible()) {
-      run_loop_.Run();
-    }
-  }
-
- private:
-  // views::ViewObserver:
-  void OnViewVisibilityChanged(views::View* observed_view,
-                               views::View* starting_view,
-                               bool visible) override {
-    if (expected_visible_ == observed_view->GetVisible()) {
-      run_loop_.Quit();
-    }
-  }
-
-  raw_ptr<views::View> view_;
-  const bool expected_visible_;
-  base::RunLoop run_loop_;
-  base::ScopedObservation<views::View, views::ViewObserver> observation_{this};
-};
-
-struct FilledCardInformationBubbleViewsTestParams {
-  bool show_bubbles_based_on_priorities = false;
-  bool is_page_action_migration_enabled = false;
-};
+void WaitForVisibility(page_actions::PageActionTestAccessor accessor,
+                       bool expected_visible) {
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return accessor.GetVisible() == expected_visible; }));
+}
 
 class FilledCardInformationBubbleViewsInteractiveUiTest
     : public InProcessBrowserTest,
-      public FilledCardInformationBubbleControllerImpl::ObserverForTest,
-      public ::testing::WithParamInterface<
-          FilledCardInformationBubbleViewsTestParams> {
+      public FilledCardInformationBubbleControllerImpl::ObserverForTest {
  public:
   // Various events that can be waited on by the DialogEventWaiter.
   enum class BubbleEvent : int {
     BUBBLE_SHOWN,
   };
 
-  FilledCardInformationBubbleViewsInteractiveUiTest() {
-    std::vector<base::test::FeatureRefAndParams> enabled_features = {};
-    std::vector<base::test::FeatureRef> disabled_features = {};
-
-    if (GetParam().show_bubbles_based_on_priorities) {
-      enabled_features.push_back(
-          {features::kAutofillShowBubblesBasedOnPriorities, {}});
-    } else {
-      disabled_features.emplace_back(
-          features::kAutofillShowBubblesBasedOnPriorities);
-    }
-
-    enabled_features.push_back({
-        ::features::kPageActionsMigration,
-        {{
-            ::features::kPageActionsMigrationFilledCardInformation.name,
-            GetParam().is_page_action_migration_enabled ? "true" : "false",
-        }},
-    });
-
-    feature_list_.InitWithFeaturesAndParameters(enabled_features,
-                                                disabled_features);
-  }
-
+  FilledCardInformationBubbleViewsInteractiveUiTest() = default;
   ~FilledCardInformationBubbleViewsInteractiveUiTest() override = default;
   FilledCardInformationBubbleViewsInteractiveUiTest(
       const FilledCardInformationBubbleViewsInteractiveUiTest&) = delete;
@@ -143,8 +86,8 @@ class FilledCardInformationBubbleViewsInteractiveUiTest
     FilledCardInformationBubbleControllerImpl* controller =
         static_cast<FilledCardInformationBubbleControllerImpl*>(
             FilledCardInformationBubbleControllerImpl::GetOrCreate(
-                browser()->tab_strip_model()->GetActiveWebContents()));
-    DCHECK(controller);
+                browser()->GetTabStripModel()->GetActiveWebContents()));
+    CHECK(controller, base::NotFatalUntil::M162);
     controller->SetEventObserverForTesting(this);
   }
 
@@ -173,7 +116,12 @@ class FilledCardInformationBubbleViewsInteractiveUiTest
     ASSERT_TRUE(event_waiter_->Wait());
   }
 
-  bool IsIconVisible() { return GetIconView() && GetIconView()->GetVisible(); }
+  page_actions::PageActionTestAccessor GetIconAccessor() {
+    return page_actions::PageActionTestAccessor(browser(),
+                                                kActionFilledCardInformation);
+  }
+
+  bool IsIconVisible() { return GetIconAccessor().GetVisible(); }
 
   std::u16string GetValueForField(FilledCardInformationBubbleField field) {
     return GetController()->GetValueForField(field);
@@ -184,13 +132,13 @@ class FilledCardInformationBubbleViewsInteractiveUiTest
   }
 
   FilledCardInformationBubbleControllerImpl* GetController() {
-    if (!browser() || !browser()->tab_strip_model() ||
-        !browser()->tab_strip_model()->GetActiveWebContents()) {
+    if (!browser() || !browser()->GetTabStripModel() ||
+        !browser()->GetTabStripModel()->GetActiveWebContents()) {
       return nullptr;
     }
 
     return FilledCardInformationBubbleControllerImpl::FromWebContents(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
   }
 
   FilledCardInformationBubbleViews* GetBubbleViews() {
@@ -203,14 +151,13 @@ class FilledCardInformationBubbleViewsInteractiveUiTest
         controller->GetBubble());
   }
 
-  IconLabelBubbleView* GetIconView() {
+  page_actions::PageActionViewInterface* GetIconView() {
     BrowserView* browser_view =
         BrowserView::GetBrowserViewForBrowser(browser());
     auto* provider = browser_view->toolbar_button_provider();
-    IconLabelBubbleView* icon = page_actions::GetIconLabelBubbleViewForTesting(
-        provider->GetPageActionViewInterface(kActionFilledCardInformation),
-        kActionFilledCardInformation);
-    DCHECK(icon);
+    auto* icon =
+        provider->GetPageActionViewInterface(kActionFilledCardInformation);
+    CHECK(icon, base::NotFatalUntil::M162);
     return icon;
   }
 
@@ -230,7 +177,7 @@ class FilledCardInformationBubbleViewsInteractiveUiTest
 
 // Invokes a bubble showing the complete information for the virtual card
 // selected to fill the form.
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        ShowBubble) {
   ShowBubble();
   EXPECT_TRUE(GetBubbleViews());
@@ -244,7 +191,7 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
 #else
 #define MAYBE_DismissBubbleUponNavigation DismissBubbleUponNavigation
 #endif
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        MAYBE_DismissBubbleUponNavigation) {
   ShowBubble();
   ASSERT_TRUE(GetBubbleViews());
@@ -256,10 +203,10 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
       ui_test_utils::NavigateToURL(browser(), GURL("https://www.google.com")));
   destroyed_waiter.Wait();
   EXPECT_FALSE(GetBubbleViews());
-  EXPECT_FALSE(GetIconView()->GetVisible());
+  EXPECT_FALSE(GetIconAccessor().GetVisible());
 }
 
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        CopyFieldValueVirtualCard) {
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
   std::u16string clipboard_text;
@@ -343,7 +290,7 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
       autofill_metrics::FilledCardInformationBubbleFieldClicked::kCVC, 1);
 }
 
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        CopyFieldValueServerCard) {
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
   std::u16string clipboard_text;
@@ -426,7 +373,7 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
       autofill_metrics::FilledCardInformationBubbleFieldClicked::kCVC, 1);
 }
 
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        Metrics_BubbleShownAndClosedByUser) {
   base::HistogramTester histogram_tester;
 
@@ -476,7 +423,7 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
       "Autofill.FilledCardInformationBubble.Shown", true, 2);
 }
 
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        Metrics_BubbleClosedByNotInteracted) {
   base::HistogramTester histogram_tester;
 
@@ -488,7 +435,7 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
   // Mock browser being closed.
   views::test::WidgetDestroyedWaiter destroyed_waiter(
       GetBubbleViews()->GetWidget());
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
   destroyed_waiter.Wait();
 
   // Confirm metrics.
@@ -497,7 +444,7 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
       autofill_metrics::FilledCardInformationBubbleResult::kNotInteracted, 1);
 }
 
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        TooltipAndAccessibleName) {
   ShowBubble();
   ASSERT_TRUE(GetBubbleViews());
@@ -541,16 +488,16 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
             cardholder_name_button->GetViewAccessibility().GetCachedName());
 }
 
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        IconViewAccessibleName) {
   ShowBubble();
   EXPECT_EQ(
-      GetIconView()->GetViewAccessibility().GetCachedName(),
+      GetIconView()->GetAccessibleName(),
       l10n_util::GetStringUTF16(
           IDS_AUTOFILL_FILLED_CARD_INFORMATION_ICON_TOOLTIP_VIRTUAL_CARD));
 }
 
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        BnplFlowAffirm) {
   CreditCard card;
   test::SetCreditCardInfo(&card, "John Smith", "5454545454545454",
@@ -592,7 +539,7 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
   EXPECT_EQ(GetValueForField(FilledCardInformationBubbleField::kCvc), u"345");
 }
 
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        BnplFlowKlarna) {
   CreditCard card;
   test::SetCreditCardInfo(&card, "John Smith", "5454545454545454",
@@ -634,7 +581,7 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
   EXPECT_EQ(GetValueForField(FilledCardInformationBubbleField::kCvc), u"345");
 }
 
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        BnplFlowZip) {
   CreditCard card;
   test::SetCreditCardInfo(&card, "John Smith", "5454545454545454",
@@ -674,7 +621,7 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
   EXPECT_EQ(GetValueForField(FilledCardInformationBubbleField::kCvc), u"345");
 }
 
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        BnplTooltipAndAccessibleName) {
   CreditCard card;
   test::SetCreditCardInfo(&card, "John Smith", "5454545454545454",
@@ -730,7 +677,7 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
 }
 
 // Test that the card image and name views are set from the credit card options.
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        CardImageAndName) {
   CreditCard card = test::GetVirtualCard();
   ShowBubble(&card, /*cvc=*/u"123");
@@ -755,7 +702,7 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
 #else
 #define MAYBE_BnplCardImageAndName BnplCardImageAndName
 #endif
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsInteractiveUiTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsInteractiveUiTest,
                        MAYBE_BnplCardImageAndName) {
   CreditCard card = test::GetVirtualCard();
   card.set_is_bnpl_card(true);
@@ -795,14 +742,14 @@ class FilledCardInformationBubbleViewsPrerenderTest
   }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
  protected:
   content::test::PrerenderTestHelper prerender_helper_;
 };
 
-IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsPrerenderTest,
+IN_PROC_BROWSER_TEST_F(FilledCardInformationBubbleViewsPrerenderTest,
                        KeepBubbleOnPrerenderNavigation) {
   base::HistogramTester histogram_tester;
 
@@ -813,7 +760,7 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsPrerenderTest,
   // Show the bubble and wait until the icon visibility changes.
   {
     ShowBubble();
-    ViewVisibilityWaiter(GetIconView(), true).Wait();
+    WaitForVisibility(GetIconAccessor(), true);
   }
 
   ASSERT_TRUE(GetBubbleViews());
@@ -833,58 +780,12 @@ IN_PROC_BROWSER_TEST_P(FilledCardInformationBubbleViewsPrerenderTest,
   // Activate a prerendered page and wait until the icon visibility changes.
   {
     prerender_helper_.NavigatePrimaryPage(url);
-    ViewVisibilityWaiter(GetIconView(), false).Wait();
+    WaitForVisibility(GetIconAccessor(), false);
   }
 
   // Ensure the bubble hides after prerender Activation.
   EXPECT_FALSE(GetBubbleViews());
   EXPECT_FALSE(IsIconVisible());
 }
-
-INSTANTIATE_TEST_SUITE_P(
-    ,
-    FilledCardInformationBubbleViewsInteractiveUiTest,
-    ::testing::ConvertGenerator(
-        ::testing::Combine(::testing::Bool(), ::testing::Bool()),
-        [](std::tuple<bool, bool> t) {
-          return FilledCardInformationBubbleViewsTestParams{
-              .show_bubbles_based_on_priorities = std::get<0>(t),
-              .is_page_action_migration_enabled = std::get<1>(t),
-          };
-        }),
-    [](const ::testing::TestParamInfo<
-        FilledCardInformationBubbleViewsInteractiveUiTest::ParamType>& info) {
-      return base::StrCat({
-          info.param.show_bubbles_based_on_priorities
-              ? "BubblesBasedOnPrioritiesEnabled"
-              : "BubblesBasedOnPrioritiesDisabled",
-          "_with_",
-          info.param.is_page_action_migration_enabled ? "NewPageAction"
-                                                      : "OldPageAction",
-      });
-    });
-
-INSTANTIATE_TEST_SUITE_P(
-    ,
-    FilledCardInformationBubbleViewsPrerenderTest,
-    ::testing::ConvertGenerator(
-        ::testing::Combine(::testing::Bool(), ::testing::Bool()),
-        [](std::tuple<bool, bool> t) {
-          return FilledCardInformationBubbleViewsTestParams{
-              .show_bubbles_based_on_priorities = std::get<0>(t),
-              .is_page_action_migration_enabled = std::get<1>(t),
-          };
-        }),
-    [](const ::testing::TestParamInfo<
-        FilledCardInformationBubbleViewsPrerenderTest::ParamType>& info) {
-      return base::StrCat({
-          info.param.show_bubbles_based_on_priorities
-              ? "BubblesBasedOnPrioritiesEnabled"
-              : "BubblesBasedOnPrioritiesDisabled",
-          "_with_",
-          info.param.is_page_action_migration_enabled ? "NewPageAction"
-                                                      : "OldPageAction",
-      });
-    });
 
 }  // namespace autofill

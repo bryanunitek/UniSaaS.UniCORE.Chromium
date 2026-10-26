@@ -6,6 +6,8 @@ import 'chrome://profile-picker/profile_picker.js';
 
 import type {ProfileCardElement, ProfilePickerMainViewElement, ProfileState} from 'chrome://profile-picker/profile_picker.js';
 import {loadTimeData, ManageProfilesBrowserProxyImpl, navigateTo, NavigationMixin, Routes} from 'chrome://profile-picker/profile_picker.js';
+import type {CrCheckboxElement} from 'chrome://resources/cr_elements/cr_checkbox/cr_checkbox.js';
+import type {CrToggleElement} from 'chrome://resources/cr_elements/cr_toggle/cr_toggle.js';
 import {webUIListenerCallback} from 'chrome://resources/js/cr.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertGE, assertTrue} from 'chrome://webui-test/chai_assert.js';
@@ -64,7 +66,7 @@ function generateProfilesList(n: number): ProfileState[] {
              avatarBadge: i % 4 === 0 ? 'cr:domain' : '',
              profileCardButtonLabel: '',
              hasEnterpriseLabel: false,
-             hasAiRing: i % 3 === 0,
+             hasAvatarRing: i % 3 === 0,
            }));
 }
 
@@ -146,8 +148,8 @@ suite('ProfilePickerMainViewTest', function() {
       assertEquals(
           avatarElement.src.split('/').pop(), expectedProfile.avatarIcon);
       assertEquals(
-          avatarElement.classList.contains('with-ai-ring'),
-          expectedProfile.hasAiRing);
+          avatarElement.classList.contains('with-avatar-ring'),
+          expectedProfile.hasAvatarRing);
     }
   }
 
@@ -155,15 +157,19 @@ suite('ProfilePickerMainViewTest', function() {
     assertTrue(navigationElement.changeCalled);
     assertEquals(navigationElement.route, Routes.MAIN);
     await browserProxy.whenCalled('initializeMainView');
+    const askOnStartup =
+        mainViewElement.shadowRoot
+            .querySelector<CrCheckboxElement|CrToggleElement>('#askOnStartup');
+    assertTrue(!!askOnStartup);
     // Hidden while profiles list is not yet defined.
     assertTrue(mainViewElement.$.profilesWrapper.hidden);
-    assertTrue(mainViewElement.$.askOnStartup.hidden);
+    assertTrue(askOnStartup.hidden);
     const profiles = generateProfilesList(6);
     await simulateProfilesListChanged(profiles);
     // Profiles list defined.
     assertTrue(!mainViewElement.$.profilesWrapper.hidden);
-    assertTrue(!mainViewElement.$.askOnStartup.hidden);
-    assertTrue(mainViewElement.$.askOnStartup.checked);
+    assertTrue(!askOnStartup.hidden);
+    assertTrue(askOnStartup.checked);
     // Verify profile card.
     await verifyProfileCard(
         profiles, mainViewElement.shadowRoot.querySelectorAll('profile-card'));
@@ -176,9 +182,9 @@ suite('ProfilePickerMainViewTest', function() {
     webUIListenerCallback('reset-picker-buttons');
     await microtasksFinished();
     // Ask when chrome opens.
-    mainViewElement.$.askOnStartup.click();
+    askOnStartup.click();
     await browserProxy.whenCalled('askOnStartupChanged');
-    assertTrue(!mainViewElement.$.askOnStartup.checked);
+    assertTrue(!askOnStartup.checked);
     // Update profile data.
     profiles[1] = profiles[4]!;
     await simulateProfilesListChanged(profiles);
@@ -194,17 +200,17 @@ suite('ProfilePickerMainViewTest', function() {
   test('EditLocalProfileNameDisabledForWorkProfile', async function() {
     await browserProxy.whenCalled('initializeMainView');
     const profiles = Array({
-      profilePath: `profilePath`,
-      localProfileName: `Work Profile`,
+      profilePath: 'profilePath',
+      localProfileName: 'Work Profile',
       isSyncing: true,
       needsSignin: false,
-      gaiaName: `User`,
-      userName: `User@example.com`,
-      avatarIcon: `AvatarUrl`,
+      gaiaName: 'User',
+      userName: 'User@example.com',
+      avatarIcon: 'AvatarUrl',
       avatarBadge: 'cr:domain',
       profileCardButtonLabel: '',
       hasEnterpriseLabel: true,
-      hasAiRing: false,
+      hasAvatarRing: false,
     });
     await simulateProfilesListChanged(profiles);
 
@@ -230,8 +236,7 @@ suite('ProfilePickerMainViewTest', function() {
 
     // Set to valid profile name.
     localProfileName.value = 'Alice';
-    localProfileName.dispatchEvent(
-        new CustomEvent('change', {bubbles: true, composed: true}));
+    localProfileName.fire('change');
     const args = await browserProxy.whenCalled('setProfileName');
     assertEquals(args[0], profiles[0]!.profilePath);
     assertEquals(args[1], 'Alice');
@@ -371,10 +376,15 @@ suite('ProfilePickerMainViewTest', function() {
               profiles,
               mainViewElement.shadowRoot.querySelectorAll('profile-card'));
           assertTrue(isChildVisible(mainViewElement, '#askOnStartup'));
-          assertTrue(mainViewElement.$.askOnStartup.checked);
-          mainViewElement.$.askOnStartup.click();
+          const askOnStartup =
+              mainViewElement.shadowRoot
+                  .querySelector<CrCheckboxElement|CrToggleElement>(
+                      '#askOnStartup');
+          assertTrue(!!askOnStartup);
+          assertTrue(askOnStartup.checked);
+          askOnStartup.click();
           await browserProxy.whenCalled('askOnStartupChanged');
-          assertTrue(!mainViewElement.$.askOnStartup.checked);
+          assertTrue(!askOnStartup.checked);
         });
   });
 

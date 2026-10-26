@@ -26,6 +26,7 @@ import org.chromium.base.ResettersForTesting;
 import org.chromium.base.TimeUtils.CurrentThreadTimeMillisTimer;
 import org.chromium.base.TimeUtils.UptimeMillisTimer;
 import org.chromium.base.TraceEvent;
+import org.chromium.base.lifetime.LifetimeAssert;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.UmaRecorderHolder;
 import org.chromium.build.BuildConfig;
@@ -63,7 +64,7 @@ public class LibraryLoader {
 
     private static boolean sBrowserStartupBlockedForTesting;
 
-    // Helps mInitializedForTesting and mLoadStateForTesting to be removed by R8.
+    // Helps mInitializedForTesting and mLoadedForTesting to be removed by R8.
     private static boolean sEnableStateForTesting;
 
     // One-way switch becomes true when the libraries are initialized (by calling
@@ -77,30 +78,16 @@ public class LibraryLoader {
     // synchronization.
     private boolean mFallbackToSystemLinker;
 
-    // State that only transitions one-way from 0->1->2. Volatile for the same reasons as
-    // mInitialized.
-    @IntDef({LoadState.NOT_LOADED, LoadState.MAIN_DEX_LOADED, LoadState.LOADED})
-    @Retention(RetentionPolicy.SOURCE)
-    private @interface LoadState {
-        int NOT_LOADED = 0;
-        // TODO(crbug.com/404880581): Make this a boolean.
-        int MAIN_DEX_LOADED = 1;
-        int LOADED = 2;
-    }
+    // One-way switch becomes true when the libraries are loaded.
+    private volatile boolean mLoaded;
 
-    private volatile @LoadState int mLoadState;
-
-    // Tracks mLoadState, but can be reset to NOT_LOADED between tests to ensure that each test that
+    // Tracks mLoaded, but can be reset to false between tests to ensure that each test that
     // requires native explicitly loads it.
-    private @LoadState int mLoadStateForTesting;
+    private boolean mLoadedForTesting;
 
     // Tracks mInitialized, but can be reset to false between tests to ensure that each test that
     // requires native explicitly loads it.
     private boolean mInitializedForTesting;
-
-    // Whether to use the Chromium linker vs. the system linker.
-    // Avoids locking: should be initialized very early.
-    private boolean mUseChromiumLinker = NativeLibraries.sUseLinker;
 
     // The type of process the shared library is loaded in. Gets passed to native after loading.
     // Avoids locking: should be initialized very early.
@@ -113,8 +100,6 @@ public class LibraryLoader {
     private final Object mLock = new Object();
 
     // When a Chromium linker is used, this field represents the concrete class serving as a Linker.
-    // Always accessed via getLinker() because the choice of the class can be influenced by
-    // public setLinkerImplementation() below.
     @GuardedBy("mLock")
     private @Nullable Linker mLinker;
 
@@ -124,7 +109,7 @@ public class LibraryLoader {
     @GuardedBy("mLock")
     private boolean mLibraryPreloaderCalled;
 
-    // Similar to |mLoadState| but is limited case of being loaded in app zygote.
+    // Similar to |mLoaded| but is limited case of being loaded in app zygote.
     // This is exposed to clients.
     @GuardedBy("mLock")
     private boolean mLoadedByZygote;
@@ -302,11 +287,7 @@ public class LibraryLoader {
                                 getLoadAddress());
             } else if (isLoadedByZygote()) {
                 if (DEBUG) {
-                    Log.i(
-                            TAG,
-                            "initInChildProcess: already loaded by app zygote "
-                                    + "(mFallbackToSystemLinker=%b)",
-                            mFallbackToSystemLinker);
+                    Log.i(TAG, "initInChildProcess: already loaded by app zygote");
                 }
             } else if (mCreatedIn == CreatedIn.ZYGOTE) {
                 if (DEBUG) {
@@ -323,11 +304,14 @@ public class LibraryLoader {
                 // 1. Running in a privileged process - very common
                 // 2. Running in a renderer process - App Zygote was disabled due to opt out on
                 //    low end devices - somewhat common
-                // To cover both cases start with FIND_RESERVED, and proceed with fallbacks built
-                // into the Linker initialization.
+                // 3. Running in renderer, APK was updated without restarting the App Zygote; a new
+                //    ClassLoader instantiated a new LibraryLoader
+                // 4. Running in SandboxedProcessService1 (which does not have
+                //    android:useAppZygote="true") after connecting to SandboxedProcessService0
+                //    times out
                 //
-                // TODO(pasko): Investigate whether searching with FIND_RESERVED affects startup
-                // speed on Go devices.
+                // To cover these cases start with FIND_RESERVED, and proceed with fallbacks built
+                // into the Linker initialization.
                 if (DEBUG) {
                     Log.i(
                             TAG,
@@ -412,6 +396,7 @@ public class LibraryLoader {
         if (DEBUG) {
             logLinkerUsed();
         }
+        LifetimeAssert.registerSafePointersTrackerFactory();
     }
 
     /**
@@ -448,23 +433,9 @@ public class LibraryLoader {
     public void setNativeLibraryPreloader(NativeLibraryPreloader loader) {
         synchronized (mLock) {
             assert mLibraryPreloader == null;
-            assert mLoadState == LoadState.NOT_LOADED;
+            assert !mLoaded;
             mLibraryPreloader = loader;
         }
-    }
-
-    /**
-     * Sets the configuration for library loading.
-     *
-     * Must be called before loading the library. Since this function is called extremely early on
-     * in startup, locking is not required.
-     *
-     * @param useChromiumLinker Whether to use a chromium linker.
-     */
-    public void setLinkerImplementation(boolean useChromiumLinker) {
-        assert !mInitialized;
-        mUseChromiumLinker = useChromiumLinker;
-        if (DEBUG) logLinkerUsed();
     }
 
     private void logLinkerUsed() {
@@ -476,7 +447,7 @@ public class LibraryLoader {
     // common for App Zygote to choose loading with the system linker when sharing RELRO with the
     // browser process is not supported.
     private boolean useChromiumLinker() {
-        return mUseChromiumLinker;
+        return NativeLibraries.sUseLinker && !mFallbackToSystemLinker;
     }
 
     /**
@@ -502,31 +473,17 @@ public class LibraryLoader {
     }
 
     /**
-     *  Blocks until the library is fully loaded and initialized. When this method is used (without
-     *  the {@link MultiProcessMediator}) the current process is treated as the Main process
-     *  (w.r.t. how it shares RELRO and reports metrics) unless it was initialized before.
+     * Blocks until the library is fully loaded and initialized. When this method is used (without
+     * the {@link MultiProcessMediator}) the current process is treated as the Main process (w.r.t.
+     * how it shares RELRO and reports metrics) unless it was initialized before.
      */
     public void ensureInitialized() {
         if (isInitialized()) return;
-        ensureMainDexInitialized();
-        loadNonMainDex();
-    }
-
-    /**
-     * This method blocks until the native library is initialized, and the Main Dex is loaded
-     * (MainDex JNI is registered).
-     *
-     * You should use this if you would like to use isolated parts of the native library that don't
-     * depend on content initialization, and only use MainDex classes with JNI.
-     *
-     * However, you should be careful not to call this too early in startup on the UI thread, or you
-     * may significantly increase the time to first draw.
-     */
-    public void ensureMainDexInitialized() {
         synchronized (mLock) {
             if (DEBUG) logLinkerUsed();
-            loadMainDexAlreadyLocked(
-                    ContextUtils.getApplicationContext().getApplicationInfo(), false);
+            loadAlreadyLocked(
+                    ContextUtils.getApplicationContext().getApplicationInfo(),
+                    /* inZygote= */ false);
             initializeAlreadyLocked();
         }
     }
@@ -546,15 +503,15 @@ public class LibraryLoader {
     public void preloadNowOverridePackageName(String packageName) {
         synchronized (mLock) {
             if (useChromiumLinker()) return;
-            preloadAlreadyLocked(packageName, /* inZygote= */ false);
+            preloadAlreadyLocked(packageName);
         }
     }
 
     @GuardedBy("mLock")
-    private void preloadAlreadyLocked(String packageName, boolean inZygote) {
+    private void preloadAlreadyLocked(String packageName) {
         try (TraceEvent te = TraceEvent.scoped("LibraryLoader.preloadAlreadyLocked")) {
             // Preloader uses system linker, we shouldn't preload if Chromium linker is used.
-            assert !useChromiumLinker() || (inZygote && mainProcessIntendsToProvideRelroFd());
+            assert !useChromiumLinker();
             if (mLibraryPreloader != null && !mLibraryPreloaderCalled) {
                 mLibraryPreloader.loadLibrary(packageName);
                 mLibraryPreloaderCalled = true;
@@ -571,13 +528,7 @@ public class LibraryLoader {
     @Deprecated
     @VisibleForTesting
     public boolean isLoaded() {
-        return mLoadState == LoadState.LOADED
-                && (!sEnableStateForTesting || mLoadStateForTesting == LoadState.LOADED);
-    }
-
-    private boolean isMainDexLoaded() {
-        return mLoadState >= LoadState.MAIN_DEX_LOADED
-                && (!sEnableStateForTesting || mLoadStateForTesting >= LoadState.MAIN_DEX_LOADED);
+        return mLoaded && (!sEnableStateForTesting || mLoadedForTesting);
     }
 
     /**
@@ -592,6 +543,14 @@ public class LibraryLoader {
     }
 
     /**
+     * Returns whether native libraries are loaded and initialized at the process level, ignoring
+     * testing resets.
+     */
+    public boolean isProcessInitialized() {
+        return mInitialized;
+    }
+
+    /**
      * Loads the library and blocks until the load completes. The caller is responsible for
      * subsequently calling ensureInitialized(). May be called on any thread, but should only be
      * called once.
@@ -602,7 +561,7 @@ public class LibraryLoader {
 
     /** Causes LibraryLoader to pretend that native libraries have not yet been initialized. */
     public void resetForTesting() {
-        mLoadStateForTesting = LoadState.NOT_LOADED;
+        mLoadedForTesting = false;
         mInitializedForTesting = false;
         sEnableStateForTesting = true;
     }
@@ -616,20 +575,17 @@ public class LibraryLoader {
      */
     public void loadNowOverrideApplicationContext(Context appContext) {
         synchronized (mLock) {
-            if (mLoadState != LoadState.NOT_LOADED
-                    && appContext != ContextUtils.getApplicationContext()) {
+            if (mLoaded && appContext != ContextUtils.getApplicationContext()) {
                 throw new IllegalStateException("Attempt to load again from alternate context.");
             }
-            loadMainDexAlreadyLocked(appContext.getApplicationInfo(), /* inZygote= */ false);
+            loadAlreadyLocked(appContext.getApplicationInfo(), /* inZygote= */ false);
         }
-        loadNonMainDex();
     }
 
     public void loadNowInZygote(ApplicationInfo appInfo) {
         synchronized (mLock) {
-            assert mLoadState == LoadState.NOT_LOADED;
-            loadMainDexAlreadyLocked(appInfo, /* inZygote= */ true);
-            loadNonMainDex();
+            assert !mLoaded;
+            loadAlreadyLocked(appInfo, /* inZygote= */ true);
             mLoadedByZygote = true;
         }
     }
@@ -654,9 +610,9 @@ public class LibraryLoader {
 
     @GuardedBy("mLock")
     @SuppressLint({"UnsafeDynamicallyLoadedCode"})
-    private void loadWithSystemLinkerAlreadyLocked(ApplicationInfo appInfo, boolean inZygote) {
+    private void loadWithSystemLinkerAlreadyLocked(ApplicationInfo appInfo) {
         setEnvForNative();
-        preloadAlreadyLocked(appInfo.packageName, inZygote);
+        preloadAlreadyLocked(appInfo.packageName);
         for (String library : NativeLibraries.LIBRARIES) {
             System.loadLibrary(library);
         }
@@ -666,15 +622,15 @@ public class LibraryLoader {
     // triggering JNI_OnLoad in native code.
     @GuardedBy("mLock")
     @VisibleForTesting
-    protected void loadMainDexAlreadyLocked(ApplicationInfo appInfo, boolean inZygote) {
-        try (TraceEvent te = TraceEvent.scoped("LibraryLoader.loadMainDexAlreadyLocked")) {
-            if (mLoadState >= LoadState.MAIN_DEX_LOADED) {
+    protected void loadAlreadyLocked(ApplicationInfo appInfo, boolean inZygote) {
+        try (TraceEvent te = TraceEvent.scoped("LibraryLoader.loadAlreadyLocked")) {
+            if (mLoaded) {
                 if (sEnableStateForTesting) {
                     if (sOverrideNativeLibraryCannotBeLoadedForTesting) {
                         throw new UnsatisfiedLinkError();
                     }
-                    if (mLoadStateForTesting == LoadState.NOT_LOADED) {
-                        mLoadStateForTesting = LoadState.MAIN_DEX_LOADED;
+                    if (!mLoadedForTesting) {
+                        mLoadedForTesting = true;
                     }
                 }
                 return;
@@ -690,7 +646,7 @@ public class LibraryLoader {
                 throw new UnsatisfiedLinkError();
             }
 
-            if (useChromiumLinker() && !mFallbackToSystemLinker) {
+            if (useChromiumLinker()) {
                 if (DEBUG) Log.i(TAG, "Loading with the Chromium linker.");
                 // See base/android/linker/config.gni, the chromium linker is only enabled when
                 // we have a single library.
@@ -699,15 +655,15 @@ public class LibraryLoader {
                 loadWithChromiumLinker(appInfo, library);
             } else {
                 if (DEBUG) Log.i(TAG, "Loading with the System linker.");
-                loadWithSystemLinkerAlreadyLocked(appInfo, inZygote);
+                loadWithSystemLinkerAlreadyLocked(appInfo);
             }
 
             long loadTimeMs = uptimeTimer.getElapsedMillis();
 
             if (DEBUG) Log.i(TAG, "Time to load native libraries: %d ms", loadTimeMs);
-            mLoadState = LoadState.MAIN_DEX_LOADED;
+            mLoaded = true;
             if (sEnableStateForTesting) {
-                mLoadStateForTesting = LoadState.MAIN_DEX_LOADED;
+                mLoadedForTesting = true;
             }
 
             getMediator().recordLoadTimeHistogram(loadTimeMs);
@@ -721,17 +677,6 @@ public class LibraryLoader {
         }
     }
 
-    // This used to actually do stuff, but now we have removed the concept of MainDex/non-MainDex
-    // JNI. However, entirely removing the "middle state" (LoadState.MAIN_DEX) causes issues with
-    // robolectric tests using GURL. See https://crbug.com/1371542#c13.
-    @VisibleForTesting
-    protected void loadNonMainDex() {
-        mLoadState = LoadState.LOADED;
-        if (sEnableStateForTesting) {
-            mLoadStateForTesting = LoadState.LOADED;
-        }
-    }
-
     // The WebView requires the Command Line to be switched over before
     // initialization is done. This is okay in the WebView's case since the
     // JNI is already loaded by this point.
@@ -742,7 +687,7 @@ public class LibraryLoader {
     // Switch the CommandLine over from Java to native if it hasn't already been done.
     // Must happen as soon as native is loaded to ensure flags are available when queried.
     private void ensureCommandLineSwitched() {
-        assert isMainDexLoaded();
+        assert mLoaded;
         // TODO(agrieve): We should fail rather than silently initialize here.
         if (!CommandLine.isInitialized()) {
             CommandLine.init(null);
@@ -787,8 +732,7 @@ public class LibraryLoader {
         // From now on, keep tracing in sync with native.
         TraceEvent.onNativeTracingReady();
 
-        // From this point on, native code is ready to use, but non-MainDex JNI may not yet have
-        // been registered. Check isInitialized() to be sure that initialization is fully complete.
+        // From this point on, native code is ready to use.
         // Note that this flag can be accessed asynchronously, so any initialization
         // must be performed before.
         mInitialized = true;
@@ -843,11 +787,11 @@ public class LibraryLoader {
      */
     protected static void setLibrariesLoadedForNativeTests() {
         LibraryLoader self = getInstance();
-        self.mLoadState = LoadState.LOADED;
+        self.mLoaded = true;
         self.mInitialized = true;
         if (sEnableStateForTesting) {
             self.mInitializedForTesting = true;
-            self.mLoadStateForTesting = LoadState.LOADED;
+            self.mLoadedForTesting = true;
         }
     }
 

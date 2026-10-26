@@ -15,6 +15,7 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/command_line.h"
 #include "base/containers/map_util.h"
 #include "base/containers/queue.h"
 #include "base/debug/alias.h"
@@ -30,6 +31,7 @@
 #include "components/input/utils.h"
 #include "components/viz/common/features.h"
 #include "components/viz/common/performance_hint_utils.h"
+#include "components/viz/common/quads/compositor_frame.h"
 #include "components/viz/common/surfaces/subtree_capture_id.h"
 #include "components/viz/common/surfaces/video_capture_target.h"
 #include "components/viz/service/display/overdraw_tracker.h"
@@ -49,7 +51,10 @@
 #if BUILDFLAG(IS_MAC)
 #include "components/viz/service/frame_sinks/external_begin_frame_source_mojo_mac.h"
 #include "ui/display/display_features.h"
+#include "ui/display/mac/ca_display_link_mac.h"
+#include "ui/display/mac/display_link_mac.h"
 #include "ui/display/mac/vsync_provider_mac.h"
+#include "ui/gfx/switches.h"
 #endif
 
 namespace viz {
@@ -121,6 +126,31 @@ FrameSinkManagerImpl::FrameSinkManagerImpl(const InitParams& params)
   // is saved for VSyncProviderMac.
   if (ui::DisplayLinkMac::SupportsDisplayLinkMacInBrowser()) {
     ui::VSyncProviderMac::GetInstance();
+  }
+
+  // To support CADisplayLink in the GPU process, WindowServer events must be
+  // manually pumped because child processes lack the standard NSApplication
+  // event loop. We create a dedicated thread for this purpose. Note: Do not
+  // start WindowServerEventPumpThread in the browser process, as it will
+  // interfere with the standard event loop.
+  if (ui::DisplayLinkMac::SupportsCADisplayLinkInGPU()) {
+    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+    bool in_process_or_headless_switch =
+        command_line->HasSwitch("in-process-gpu") ||
+        command_line->HasSwitch("single-process") ||
+        command_line->HasSwitch("single-process-tests") ||
+        command_line->HasSwitch(switches::kHeadless);
+    bool in_host_process = gpu_service_ && gpu_service_->in_host_process();
+    if (!in_process_or_headless_switch && !in_host_process &&
+        !ui::WindowServerEventPumpThread::NSAppInitialized()) {
+      auto update_vsync_displays_cb =
+          base::BindRepeating(&FrameSinkManagerImpl::UpdateVSyncDisplays,
+                              weak_factory_.GetWeakPtr());
+
+      window_server_event_thread_ =
+          std::make_unique<ui::WindowServerEventPumpThread>(
+              std::move(update_vsync_displays_cb));
+    }
   }
 #endif
 }
@@ -226,11 +256,63 @@ void FrameSinkManagerImpl::InvalidateFrameSinkId(
 
   MaybeEraseHitTestQuery(frame_sink_id);
 
+  pending_non_empty_frame_notifications_.erase(frame_sink_id);
+
   // Destroy the [Root]CompositorFrameSinkImpl if there is one.
   sink_map_.erase(frame_sink_id);
   root_sink_map_.erase(frame_sink_id);
 
   frame_sink_data_.erase(frame_sink_id);
+}
+
+void FrameSinkManagerImpl::RequestNonEmptyFrameNotification(
+    const FrameSinkId& frame_sink_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // The client only arms registered frame sinks, and messages are ordered on
+  // the same pipe, so registration has already arrived. The request is dropped
+  // again by InvalidateFrameSinkId(), so it cannot outlive registration.
+  CHECK(frame_sink_data_.contains(frame_sink_id));
+
+  pending_non_empty_frame_notifications_.insert(frame_sink_id);
+
+  // Callers are expected to arm before Create(Root)CompositorFrameSink() so
+  // that no frame can be processed first. Handle a late request anyway, in case
+  // a non-empty frame has already activated: otherwise the notification would
+  // never arrive until the client happened to paint again.
+  //
+  // This is best effort and does not replace the ordering requirement. It only
+  // consults the client's current support and its last activated surface, so it
+  // misses a non-empty frame whose client has since closed its
+  // CompositorFrameSink, and one that has since been followed by an empty frame
+  // in a newer LocalSurfaceId. Security sensitive callers must arm first.
+  auto support_it = support_map_.find(frame_sink_id);
+  if (support_it == support_map_.end()) {
+    return;
+  }
+  Surface* surface = surface_manager_.GetSurfaceForId(
+      support_it->second->last_activated_surface_id());
+  if (surface && surface->HasActiveFrame() &&
+      surface->GetActiveFrame().HasVisuallyNonEmptyContent()) {
+    NotifyFirstNonEmptyFrame(frame_sink_id);
+  }
+}
+
+void FrameSinkManagerImpl::CancelNonEmptyFrameNotification(
+    const FrameSinkId& frame_sink_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  pending_non_empty_frame_notifications_.erase(frame_sink_id);
+}
+
+void FrameSinkManagerImpl::NotifyFirstNonEmptyFrame(
+    const FrameSinkId& frame_sink_id) {
+  // The erase makes this one-shot: subsequent non-empty frames are ignored
+  // until the client arms another request.
+  bool erased = pending_non_empty_frame_notifications_.erase(frame_sink_id);
+  CHECK(erased);
+  if (client_) {
+    client_->OnFirstNonEmptyFrame(frame_sink_id);
+  }
 }
 
 void FrameSinkManagerImpl::SetFrameSinkDebugLabel(
@@ -298,13 +380,11 @@ void FrameSinkManagerImpl::CreateCompositorDisplayLink(
           update_vsync_displays_cb);
 }
 
-void FrameSinkManagerImpl::UpdateVSyncDisplays(
-    int64_t display_id,
-    bool is_browser_vsync_supported) {
+void FrameSinkManagerImpl::UpdateVSyncDisplays(int64_t display_id) {
   for (auto& root_frame_sink : root_sink_map_) {
     if (root_frame_sink.second->external_begin_frame_source()) {
       root_frame_sink.second->external_begin_frame_source()->UpdateVSyncDisplay(
-          display_id, is_browser_vsync_supported);
+          display_id);
     }
   }
 }
@@ -597,6 +677,32 @@ void FrameSinkManagerImpl::OnFirstSurfaceActivation(
   }
 }
 
+void FrameSinkManagerImpl::OnSurfaceActivated(const SurfaceId& surface_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Almost always empty, so this is a single check on the activation hot path.
+  if (pending_non_empty_frame_notifications_.empty()) {
+    return;
+  }
+  if (!pending_non_empty_frame_notifications_.contains(
+          surface_id.frame_sink_id())) {
+    return;
+  }
+
+  // Note that this observes SurfaceManager rather than
+  // CompositorFrameSinkSupport, so a client cannot suppress the notification by
+  // destroying its CompositorFrameSink immediately after submitting a frame:
+  // the surface has already activated (and may still be drawn on screen) by the
+  // time the sink goes away.
+  Surface* surface = surface_manager_.GetSurfaceForId(surface_id);
+  if (!surface || !surface->HasActiveFrame() ||
+      !surface->GetActiveFrame().HasVisuallyNonEmptyContent()) {
+    return;
+  }
+
+  NotifyFirstNonEmptyFrame(surface_id.frame_sink_id());
+}
+
 void FrameSinkManagerImpl::UpdateHitTestRegionData(
     const FrameSinkId& frame_sink_id,
     const std::vector<AggregatedHitTestRegion>& hit_test_data) {
@@ -834,31 +940,65 @@ void FrameSinkManagerImpl::RecursivelyDetachBeginFrameSource(
 
 CapturableFrameSink* FrameSinkManagerImpl::FindCapturableFrameSink(
     const VideoCaptureTarget& target) {
+  if (!target.frame_sink_id.is_valid()) {
+    return nullptr;
+  }
+
   // Search the known CompositorFrameSinkSupport objects for region capture
-  // bounds matching the crop ID specified by |target| (if one was set), and
-  // return the corresponding frame sink.
+  // bounds matching the crop ID specified by `target` (if one was set), and
+  // return the corresponding frame sink. The search must be restricted to
+  // `target.frame_sink_id` and its child frame sinks (e.g. Out-Of-Process
+  // iframes) to prevent capturing an unrelated frame sink (such as an
+  // unselected tab).
   if (IsRegionCapture(target.sub_target)) {
     const auto crop_id = std::get<RegionCaptureCropId>(target.sub_target);
     for (const auto& id_and_sink : support_map_) {
       const RegionCaptureBounds& bounds =
           id_and_sink.second->current_capture_bounds();
-      if (bounds.bounds().contains(crop_id)) {
+      if (!bounds.bounds().contains(crop_id)) {
+        continue;
+      }
+      if (id_and_sink.first == target.frame_sink_id ||
+          ChildContains(target.frame_sink_id, id_and_sink.first)) {
         return id_and_sink.second;
       }
     }
     return nullptr;
   }
 
-  FrameSinkId frame_sink_id = target.frame_sink_id;
-  if (!frame_sink_id.is_valid())
-    return nullptr;
-
-  return base::FindPtrOrNull(support_map_, frame_sink_id);
+  return base::FindPtrOrNull(support_map_, target.frame_sink_id);
 }
 
 void FrameSinkManagerImpl::OnCapturerConnectionLost(
     FrameSinkVideoCapturerImpl* capturer) {
   video_capturers_.erase(capturer);
+}
+
+bool FrameSinkManagerImpl::IsValidUnboundedFrameSinkId(
+    const FrameSinkId& parent_frame_sink_id,
+    const FrameSinkId& unbounded_frame_sink_id) const {
+  // Unbounded surface FrameSinkIds are allocated by the browser process, so
+  // they must not use the renderer's own client_id namespace.
+  if (unbounded_frame_sink_id.client_id() == parent_frame_sink_id.client_id()) {
+    return false;
+  }
+  // Check the hierarchy tree to verify unbounded_frame_sink_id belongs to the
+  // frame sink hierarchy.
+  if (ChildContains(parent_frame_sink_id, unbounded_frame_sink_id)) {
+    return true;
+  }
+  FrameSinkId root_id = parent_frame_sink_id;
+  while (!root_sink_map_.contains(root_id)) {
+    FrameSinkId oldest_parent = GetOldestParentByChildFrameId(root_id);
+    if (!oldest_parent.is_valid()) {
+      break;
+    }
+    root_id = oldest_parent;
+  }
+  if (root_id != parent_frame_sink_id && root_id.is_valid()) {
+    return ChildContains(root_id, unbounded_frame_sink_id);
+  }
+  return false;
 }
 
 bool FrameSinkManagerImpl::ChildContains(

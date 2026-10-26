@@ -19,6 +19,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/run_loop.h"
+#include "base/test/bind.h"
 #include "base/test/mock_callback.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -39,6 +40,7 @@
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
 #include "ui/ozone/platform/wayland/host/wayland_frame_manager.h"
 #include "ui/ozone/platform/wayland/host/wayland_subsurface.h"
+#include "ui/ozone/platform/wayland/host/wayland_window_manager.h"
 #include "ui/ozone/platform/wayland/host/wayland_zwp_linux_dmabuf.h"
 #include "ui/ozone/platform/wayland/test/mock_drm_syncobj_ioctl_wrapper.h"
 #include "ui/ozone/platform/wayland/test/mock_surface.h"
@@ -331,8 +333,8 @@ class WaylandBufferManagerTest : public WaylandTest {
                     float surface_scale_factor,
                     const gfx::Rect& damage_region) {
     buffer_manager_gpu_->CommitBuffer(
-        widget, frame_id, buffer_id, data, bounds_rect, /*enable_blend=*/false,
-        corners, surface_scale_factor, damage_region);
+        widget, frame_id, buffer_id, std::move(data), bounds_rect,
+        /*enable_blend=*/false, corners, surface_scale_factor, damage_region);
     // Let the mojo message to be processed.
     base::RunLoop().RunUntilIdle();
   }
@@ -715,6 +717,59 @@ TEST_P(WaylandBufferManagerTest, CreateAndDestroyBuffer) {
     DestroyBufferAndSetTerminateExpectation(kBufferId2, false /*fail*/);
     DestroyBufferAndSetTerminateExpectation(kBufferId2, true /*fail*/);
   }
+}
+
+// Verifies that requesting a new dmabuf-based wl_buffer from within the
+// callback of a previous request (i.e. re-entrantly) is handled safely. This
+// only applies to the non-immediate creation path.
+TEST_P(WaylandBufferManagerTest, ReentrantDmabufBufferCreation) {
+  auto* buffer_factory = connection_->buffer_factory();
+  ASSERT_FALSE(buffer_factory->CanCreateDmabufImmed());
+
+  PostToServerAndWait([](wl::TestWaylandServerThread* server) {
+    EXPECT_CALL(*server->zwp_linux_dmabuf_v1(), CreateParams(_, _, _)).Times(3);
+  });
+
+  std::vector<wl::Object<wl_buffer>> created_buffers;
+  bool reentered = false;
+  auto create_buffer = [&](wl::OnRequestBufferCallback callback) {
+    buffer_factory->CreateDmabufBuffer(MakeFD(), kDefaultSize, {1}, {2}, {3},
+                                       DRM_FORMAT_ABGR8888, 1,
+                                       std::move(callback));
+  };
+  auto on_created = [&](wl::Object<wl_buffer> buffer) {
+    EXPECT_TRUE(buffer);
+    created_buffers.push_back(std::move(buffer));
+  };
+  auto on_created_reentrant = [&](wl::Object<wl_buffer> buffer) {
+    on_created(std::move(buffer));
+    if (!reentered) {
+      reentered = true;
+      // Issue another request while the pending requests container is at
+      // capacity, so that it would need to reallocate.
+      create_buffer(base::BindLambdaForTesting(on_created));
+    }
+  };
+
+  create_buffer(base::BindLambdaForTesting(on_created_reentrant));
+  create_buffer(base::BindLambdaForTesting(on_created_reentrant));
+  base::RunLoop().RunUntilIdle();
+
+  // Complete the first two requests. One of them re-enters and issues a third.
+  ProcessCreatedBufferResourcesWithExpectation(/*expected_size=*/2u,
+                                               /*fail=*/false);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(reentered);
+  EXPECT_EQ(created_buffers.size(), 2u);
+
+  // Complete the re-entrant request.
+  ProcessCreatedBufferResourcesWithExpectation(/*expected_size=*/1u,
+                                               /*fail=*/false);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(created_buffers.size(), 3u);
+
+  created_buffers.clear();
+  base::RunLoop().RunUntilIdle();
 }
 
 TEST_P(WaylandBufferManagerTest, CommitBufferNonExistingBufferId) {
@@ -2968,6 +3023,71 @@ TEST_P(WaylandBufferManagerViewportTest, ViewportDestinationInteger) {
     ViewportDestinationTestHelper(data[0] /* display_rect */,
                                   data[1] /* expected_rect */);
   }
+}
+
+// Regression test: WaylandBufferManagerHost::OnChannelDestroyed iterates a
+// bare-pointer snapshot of all WaylandWindows and calls OnChannelDestroyed()
+// on each. If processing one window synchronously destroys another (via the
+// OnStateUpdate delegate callout, reachable when should_ack_swap_without_commit
+// is set on a suspended window under video capture), the next iteration
+// dereferences a freed WaylandWindow pointer.
+TEST_P(WaylandBufferManagerTest,
+       OnChannelDestroyedSnapshotSurvivesWindowDeletion) {
+  // Create a second toplevel that will be destroyed synchronously from within
+  // the first window's OnChannelDestroyed() -> ... -> delegate()->OnStateUpdate
+  // call chain.
+  testing::NiceMock<MockWaylandPlatformWindowDelegate> victim_delegate(
+      connection_.get());
+  std::unique_ptr<WaylandWindow> victim = CreateWaylandWindowWithParams(
+      PlatformWindowType::kWindow, gfx::Rect(0, 0, 100, 100), &victim_delegate);
+  ASSERT_TRUE(victim);
+  // Both windows must be tracked by the manager.
+  ASSERT_EQ(2u, connection_->window_manager()->GetAllWindows().size());
+  // Iteration order in the flat_map is by widget id; window_ was created first.
+  ASSERT_LT(window_->GetWidget(), victim->GetWidget());
+
+  // Put |window_| into the state where WaylandWindow::OnChannelDestroyed ->
+  // WaylandFrameManager::MaybeProcessPendingFrame takes the
+  // should_ack_swap_without_commit_ branch and reaches delegate->OnStateUpdate.
+  //
+  // 1) Queue enough server-side configures to hit MAX_IN_FLIGHT_REQUESTS so
+  //    the last one remains unapplied for MaybeApplyLatestStateRequest to pick
+  //    up when OnSequencePoint(-1) runs.
+  WaylandWindow::WindowStates states;
+  states.is_activated = true;
+  for (int i = 1; i <= 4; ++i) {
+    window_->HandleToplevelConfigure(200 + i * 10, 200 + i * 10, states);
+    window_->HandleSurfaceConfigure(10 + i);
+  }
+  // 2) Video capture + suspended -> should_ack_swap_without_commit_ = true.
+  window_->SetVideoCapture();
+  states.is_suspended = true;
+  window_->HandleToplevelConfigure(250, 250, states);
+
+  // 3) Hook OnStateUpdate on |window_|'s delegate so that when it fires from
+  //    inside the OnChannelDestroyed loop, it synchronously destroys the other
+  //    window that is still referenced by the snapshot vector.
+  bool destroyed_from_callback = false;
+  delegate_.set_on_state_update_callback(
+      base::BindLambdaForTesting([&]() -> bool {
+        if (victim) {
+          victim.reset();
+          destroyed_from_callback = true;
+        }
+        return false;
+      }));
+
+  // Simulate GPU-process channel loss. The dangling snapshot loop will call
+  // OnChannelDestroyed() on the freed |victim| pointer without a per-iteration
+  // liveness check.
+  manager_host_->OnChannelDestroyed();
+
+  EXPECT_TRUE(destroyed_from_callback);
+  EXPECT_EQ(1u, connection_->window_manager()->GetAllWindows().size());
+
+  delegate_.set_on_state_update_callback({});
+  manager_host_ = connection_->buffer_manager_host();
+  DisableSyncOnTearDown();
 }
 
 INSTANTIATE_TEST_SUITE_P(XdgVersionStableTest,

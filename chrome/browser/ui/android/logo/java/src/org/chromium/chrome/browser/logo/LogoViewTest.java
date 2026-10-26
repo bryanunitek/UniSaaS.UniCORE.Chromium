@@ -21,7 +21,6 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
-import androidx.test.filters.MediumTest;
 
 import org.junit.Assert;
 import org.junit.Before;
@@ -33,6 +32,8 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.logo.LogoBridge.Logo;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.components.search_engines.TemplateUrlService;
@@ -48,7 +49,7 @@ public class LogoViewTest {
             new ActivityScenarioRule<>(TestActivity.class);
 
     @Mock public TemplateUrlService mTemplateUrlService;
-    @Mock public LogoProperties.ClickHandler mLogoClickHandler;
+    @Mock public LogoView.ClickHandler mLogoClickHandler;
 
     private static final String LOGO_URL = "https://www.google.com";
     private static final String ANIMATED_LOGO_URL =
@@ -110,7 +111,10 @@ public class LogoViewTest {
                         /* altText= */ null,
                         /* animatedLogoUrl= */ null,
                         /* darkAnimatedLogoUrl= */ null,
-                        /* logUrl= */ null);
+                        /* logUrl= */ null,
+                        /* darkLogUrl= */ null,
+                        /* ctaLogUrl= */ null,
+                        /* darkCtaLogUrl= */ null);
         mView.updateLogo(logo);
         mView.endAnimationsForTesting();
 
@@ -131,7 +135,10 @@ public class LogoViewTest {
                         /* altText= */ null,
                         /* animatedLogoUrl= */ ANIMATED_LOGO_URL,
                         /* darkAnimatedLogoUrl= */ null,
-                        /* logUrl= */ null);
+                        /* logUrl= */ null,
+                        /* darkLogUrl= */ null,
+                        /* ctaLogUrl= */ null,
+                        /* darkCtaLogUrl= */ null);
         mView.updateLogo(logo);
         mView.endAnimationsForTesting();
 
@@ -153,7 +160,10 @@ public class LogoViewTest {
                         /* altText= */ null,
                         /* animatedLogoUrl= */ null,
                         /* darkAnimatedLogoUrl= */ null,
-                        /* logUrl= */ null);
+                        /* logUrl= */ null,
+                        /* darkLogUrl= */ null,
+                        /* ctaLogUrl= */ null,
+                        /* darkCtaLogUrl= */ null);
         mView.updateLogo(logo);
         mView.endAnimationsForTesting();
         mView.performClick();
@@ -170,7 +180,10 @@ public class LogoViewTest {
                         /* altText= */ ALT_TEXT,
                         /* animatedLogoUrl= */ null,
                         /* darkAnimatedLogoUrl= */ null,
-                        /* logUrl= */ null);
+                        /* logUrl= */ null,
+                        /* darkLogUrl= */ null,
+                        /* ctaLogUrl= */ null,
+                        /* darkCtaLogUrl= */ null);
         mView.updateLogo(logo);
         mView.endAnimationsForTesting();
 
@@ -182,7 +195,7 @@ public class LogoViewTest {
     }
 
     @Test
-    @MediumTest
+    @EnableFeatures({ChromeFeatureList.NTP_AURORA + ":padding_style/0"})
     public void testDoodleAnimation() {
         // Test default google logo drawable.
         doReturn(true).when(mTemplateUrlService).isDefaultSearchEngineGoogle();
@@ -214,7 +227,10 @@ public class LogoViewTest {
                         /* altText= */ ALT_TEXT,
                         /* animatedLogoUrl= */ null,
                         /* darkAnimatedLogoUrl= */ null,
-                        /* logUrl= */ null);
+                        /* logUrl= */ null,
+                        /* darkLogUrl= */ null,
+                        /* ctaLogUrl= */ null,
+                        /* darkCtaLogUrl= */ null);
         mView.updateLogo(logo);
 
         // With TransitionManager, layout params are updated immediately.
@@ -274,7 +290,10 @@ public class LogoViewTest {
                         /* altText= */ ALT_TEXT,
                         /* animatedLogoUrl= */ null,
                         /* darkAnimatedLogoUrl= */ null,
-                        /* logUrl= */ null);
+                        /* logUrl= */ null,
+                        /* darkLogUrl= */ null,
+                        /* ctaLogUrl= */ null,
+                        /* darkCtaLogUrl= */ null);
         mView.updateLogo(logo);
         mView.endAnimationsForTesting();
         Assert.assertEquals(ImageView.ScaleType.FIT_CENTER, mView.getScaleType());
@@ -291,7 +310,10 @@ public class LogoViewTest {
                         null,
                         ANIMATED_LOGO_URL,
                         DARK_ANIMATED_LOGO_URL,
-                        /* logUrl= */ null);
+                        /* logUrl= */ null,
+                        /* darkLogUrl= */ null,
+                        /* ctaLogUrl= */ null,
+                        /* darkCtaLogUrl= */ null);
 
         // Test Light Mode
         mView.setNightMode(false);
@@ -325,7 +347,17 @@ public class LogoViewTest {
     @Test
     public void testLogoView_DarkMode_WithoutDarkAsset() {
         Logo logo =
-                new Logo(mBitmap, null, null, null, ANIMATED_LOGO_URL, null, /* logUrl= */ null);
+                new Logo(
+                        mBitmap,
+                        null,
+                        null,
+                        null,
+                        ANIMATED_LOGO_URL,
+                        null,
+                        /* logUrl= */ null,
+                        /* darkLogUrl= */ null,
+                        /* ctaLogUrl= */ null,
+                        /* darkCtaLogUrl= */ null);
 
         // Test Dark Mode Fallback
         mView.setNightMode(true);

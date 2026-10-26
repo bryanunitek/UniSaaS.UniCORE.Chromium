@@ -29,8 +29,11 @@ class MockCampaignsManagerClient : public CampaignsManagerClient {
               AddOnTrackerInitializedCallback,
               (OnTrackerInitializedCallback callback),
               (override));
+  MOCK_METHOD(void,
+              SetActiveAccountId,
+              (const AccountId& account_id),
+              (override));
   MOCK_METHOD(bool, IsDeviceInDemoMode, (), (const, override));
-  MOCK_METHOD(bool, IsCloudGamingDevice, (), (const, override));
   MOCK_METHOD(bool, IsFeatureAwareDevice, (), (const, override));
   MOCK_METHOD(bool,
               IsAppIconOnShelf,
@@ -60,10 +63,6 @@ class MockCampaignsManagerClient : public CampaignsManagerClient {
               WouldTriggerHelpUI,
               ((const std::map<std::string, std::string>& params)),
               (override));
-  MOCK_METHOD(signin::IdentityManager*,
-              GetIdentityManager,
-              (),
-              (const, override));
   MOCK_METHOD(void,
               RecordImpressionEvents,
               (int campaign_id, std::optional<int> group_id),

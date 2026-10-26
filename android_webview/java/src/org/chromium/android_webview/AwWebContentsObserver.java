@@ -4,11 +4,8 @@
 
 package org.chromium.android_webview;
 
-import androidx.annotation.IntDef;
-
 import org.chromium.android_webview.AwContents.VisualStateCallback;
 import org.chromium.android_webview.common.Lifetime;
-import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.content_public.browser.GlobalRenderFrameHostId;
@@ -170,31 +167,6 @@ public class AwWebContentsObserver extends WebContentsObserver {
         }
     }
 
-    // Used to record the UMA histogram Android.WebView.Navigation.MainFrame. Since these
-    // values are persisted to logs, they should never be renumbered or reused.
-    @IntDef({
-        NavigationType.INITIAL,
-        NavigationType.SAME_DOCUMENT,
-        NavigationType.BROWSER_INITIATED_SAME_ORIGIN,
-        NavigationType.BROWSER_INITIATED_CROSS_ORIGIN,
-        NavigationType.RENDERER_INITIATED_SAME_ORIGIN,
-        NavigationType.RENDERER_INITIATED_CROSS_ORIGIN,
-    })
-    public @interface NavigationType {
-        int INITIAL = 0;
-        int SAME_DOCUMENT = 1;
-        int BROWSER_INITIATED_SAME_ORIGIN = 2;
-        int BROWSER_INITIATED_CROSS_ORIGIN = 3;
-        int RENDERER_INITIATED_SAME_ORIGIN = 4;
-        int RENDERER_INITIATED_CROSS_ORIGIN = 5;
-        int COUNT = 6;
-    }
-
-    private static void recordMainFrameNavigationType(@NavigationType int value) {
-        RecordHistogram.recordEnumeratedHistogram(
-                "Android.WebView.Navigation.MainFrame", value, NavigationType.COUNT);
-    }
-
     @Override
     public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) {
         String url = navigation.getUrl().getPossiblyInvalidSpec();
@@ -224,26 +196,6 @@ public class AwWebContentsObserver extends WebContentsObserver {
 
         if (!navigation.hasCommitted()) return;
 
-        if (navigation.isInPrimaryMainFrame()) {
-            if (!mCommittedNavigation) {
-                recordMainFrameNavigationType(NavigationType.INITIAL);
-            } else if (navigation.isSameDocument()) {
-                recordMainFrameNavigationType(NavigationType.SAME_DOCUMENT);
-            } else if (navigation.isRendererInitiated()) {
-                if (navigation.isSameOrigin()) {
-                    recordMainFrameNavigationType(NavigationType.RENDERER_INITIATED_SAME_ORIGIN);
-                } else {
-                    recordMainFrameNavigationType(NavigationType.RENDERER_INITIATED_CROSS_ORIGIN);
-                }
-            } else {
-                if (navigation.isSameOrigin()) {
-                    recordMainFrameNavigationType(NavigationType.BROWSER_INITIATED_SAME_ORIGIN);
-                } else {
-                    recordMainFrameNavigationType(NavigationType.BROWSER_INITIATED_CROSS_ORIGIN);
-                }
-            }
-        }
-
         mCommittedNavigation = true;
 
         navigation.getCommittedPage().setUrl(navigation.getUrl());
@@ -265,27 +217,15 @@ public class AwWebContentsObserver extends WebContentsObserver {
             client.getCallbackHelper().postDoUpdateVisitedHistory(url, isReload);
         }
 
-        // Only invoke the onPageCommitVisible callback when navigating to a different document,
-        // but not when navigating to a different fragment within the same document.
-        if (!navigation.isSameDocument()) {
-            PostTask.postTask(
-                    TaskTraits.UI_DEFAULT,
-                    () -> {
-                        AwContents awContents2 = mAwContents.get();
-                        if (awContents2 != null) {
-                            awContents2.insertVisualStateCallbackIfNotDestroyed(
-                                    0,
-                                    new VisualStateCallback() {
-                                        @Override
-                                        public void onComplete(long requestId) {
-                                            AwContentsClient client1 = mAwContentsClient.get();
-                                            if (client1 == null) return;
-                                            client1.onPageCommitVisible(url);
-                                        }
-                                    });
-                        }
-                    });
-        }
+        PostTask.postTask(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    AwContents awContents = mAwContents.get();
+                    if (awContents == null) return;
+
+                    awContents.insertVisualStateCallbackIfNotDestroyed(
+                            0, new PageCommitVisibleCallback(navigation));
+                });
 
         if (client != null && navigation.isPrimaryMainFrameFragmentNavigation()) {
             // Note fragment navigations do not have a matching onPageStarted.
@@ -307,5 +247,43 @@ public class AwWebContentsObserver extends WebContentsObserver {
 
     public boolean didEverCommitNavigation() {
         return mCommittedNavigation;
+    }
+
+    @Override
+    public void didChangeThemeColor() {
+        AwContents awContents = mAwContents.get();
+        if (awContents == null) return;
+
+        AwContentsClient client = mAwContentsClient.get();
+        if (client == null) return;
+
+        client.getCallbackHelper().postOnReceivedThemeColor(awContents.getThemeColor());
+    }
+
+    /** Callback that triggers {@code onPageCommitVisible} and {@code onNavigationVisible}. */
+    // Deliberately not static to capture the outer class members so we don't have to
+    // redeclare all the weakReferences.
+    private class PageCommitVisibleCallback extends VisualStateCallback {
+        private final NavigationHandle mNavigation;
+
+        PageCommitVisibleCallback(NavigationHandle navigation) {
+            mNavigation = navigation;
+        }
+
+        @Override
+        public void onComplete(long requestId) {
+            AwContents awContents = mAwContents.get();
+            if (awContents != null) {
+                awContents.getNavigationClient().onNavigationVisible(mNavigation);
+            }
+            // Only invoke the onPageCommitVisible callback when navigating to a different document,
+            // but not when navigating to a different fragment within the same document.
+            if (!mNavigation.isSameDocument()) {
+                AwContentsClient client = mAwContentsClient.get();
+                if (client != null) {
+                    client.onPageCommitVisible(mNavigation.getUrl().getPossiblyInvalidSpec());
+                }
+            }
+        }
     }
 }

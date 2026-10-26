@@ -15,6 +15,7 @@
 #include "content/public/browser/web_contents.h"
 #include "net/http/http_no_vary_search_data.h"
 #include "third_party/blink/public/mojom/loader/referrer.mojom.h"
+#include "ui/base/page_transition_types.h"
 
 SearchPreloadPipeline::SearchPreloadPipeline(GURL canonical_url)
     : pipeline_info_(content::PreloadPipelineInfo::Create(
@@ -54,7 +55,9 @@ SearchPreloadSignalResult SearchPreloadPipeline::StartPrefetch(
     const GURL& prefetch_url,
     content::PreloadingPredictor predictor,
     const std::optional<net::HttpNoVarySearchData>& no_vary_search_hint,
-    bool is_navigation_likely) {
+    bool is_navigation_likely,
+    bool should_ignore_saver_modes,
+    bool is_ahead_of_imminent_navigation) {
   // Don't trigger prefetch if already triggered and is alive.
   //
   // TODO(crbug.com/394213503): Reconsider the behavior when prefetch is already
@@ -106,7 +109,8 @@ SearchPreloadSignalResult SearchPreloadPipeline::StartPrefetch(
       std::move(priority), pipeline_info_, attempt->GetWeakPtr(),
       /*holdback_status_override=*/
       content::PreloadingHoldbackStatus::kUnspecified,
-      /*ttl=*/features::kDsePreload2PrefetchTtl.Get());
+      /*ttl=*/features::kDsePreload2PrefetchTtl.Get(),
+      should_ignore_saver_modes, is_ahead_of_imminent_navigation);
   CHECK(prefetch_handle_);
   prefetch_handle_->SetOnPrefetchHeadReceivedCallback(base::BindRepeating(
       &SearchPreloadService::OnPrefetchHeadReceived, search_preload_service));

@@ -50,11 +50,12 @@ using ChromiumRule = ChromiumResult::TriggeredRule;
 using SdkRule = SdkResult::TriggeredRule;
 
 TEST(EnterpriseConnectorsProtoTest, TriggeredRuleActionEnum) {
-  // `ChromiumRule::Action` and `SdkRule::Action` have different sizes due to
-  // the addition of FORCE_SAVE_TO_CLOUD and KEEP_IN_MANAGED_CHROME, which are
-  // not supported by Local Content Analysis Connectors, and therefore not added
-  // to `SdkRule::Action`.
-  EXPECT_EQ(ChromiumRule::Action_ARRAYSIZE, 6);
+  // `ChromiumRule::Action` has more values than `SdkRule::Action` because
+  // FORCE_SAVE_TO_CLOUD, JUSTIFICATION_REQUIRED and KEEP_IN_MANAGED_CHROME are
+  // only ever returned by cloud DLP verdicts. Local Content Analysis
+  // Connectors never produce them, so they are intentionally absent from
+  // `SdkRule::Action`; the values both enums share must stay identical.
+  EXPECT_EQ(ChromiumRule::Action_ARRAYSIZE, 7);
   EXPECT_EQ(SdkRule::Action_ARRAYSIZE, 4);
 
   EXPECT_EQ((int)ChromiumRule::ACTION_UNSPECIFIED,

@@ -50,8 +50,7 @@ public class PdfSelectionCoordinator {
     private void prepareMenuItems(PdfView pdfView, List<ContextMenuComponent> components) {
         Selection selection = pdfView.getCurrentSelection();
 
-        if (selection instanceof TextSelection) {
-            TextSelection textSelection = (TextSelection) selection;
+        if (selection instanceof TextSelection textSelection) {
             components.add(
                     new SelectionMenuComponent(
                             CONTEXT_MENU_SHARE,
@@ -59,8 +58,11 @@ public class PdfSelectionCoordinator {
                             mActivity.getString(org.chromium.content.R.string.actionbar_share),
                             session -> {
                                 SelectionUtils.share(mActivity, textSelection.getText().toString());
+                                PdfUtils.recordSelectionMenuItem(
+                                        PdfUtils.PdfSelectionMenuItem.SHARE);
                                 return null;
                             }));
+
             components.add(
                     new SelectionMenuComponent(
                             CONTEXT_MENU_WEB_SEARCH,
@@ -68,7 +70,11 @@ public class PdfSelectionCoordinator {
                             mActivity.getString(org.chromium.content.R.string.actionbar_web_search),
                             session -> {
                                 SelectionUtils.webSearch(
-                                        mActivity, textSelection.getText().toString());
+                                        mActivity,
+                                        textSelection.getText().toString(),
+                                        /* setPackage= */ true);
+                                PdfUtils.recordSelectionMenuItem(
+                                        PdfUtils.PdfSelectionMenuItem.WEB_SEARCH);
                                 return null;
                             }));
 
@@ -82,6 +88,8 @@ public class PdfSelectionCoordinator {
                             session -> {
                                 SelectionUtils.translate(
                                         mActivity, textSelection.getText().toString());
+                                PdfUtils.recordSelectionMenuItem(
+                                        PdfUtils.PdfSelectionMenuItem.TRANSLATE);
                                 return null;
                             }));
         }

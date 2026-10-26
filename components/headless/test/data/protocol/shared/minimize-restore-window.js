@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const html = `<!doctype html>
     <html><script>
       document.addEventListener("visibilitychange", () => {
@@ -20,14 +20,27 @@
 
   await dp.Runtime.enable();
 
-  async function waitForVisibilityChange() {
-    for (;;) {
-      const result = await dp.Runtime.onceConsoleAPICalled();
-      const text = result.params.args[0].value;
-      if (text === 'visible' || text === 'hidden') {
-        break;
+  async function waitForWindowState(expectedVisibility, expectedFocus) {
+    return await session.evaluateAsync(async (expectedVis, expectedFoc) => {
+      if (document.visibilityState === expectedVis &&
+          document.hasFocus() === expectedFoc) {
+        return;
       }
-    }
+      return await new Promise(resolve => {
+        const check = () => {
+          if (document.visibilityState === expectedVis &&
+              document.hasFocus() === expectedFoc) {
+            document.removeEventListener('visibilitychange', check);
+            window.removeEventListener('focus', check);
+            window.removeEventListener('blur', check);
+            resolve();
+          }
+        };
+        document.addEventListener('visibilitychange', check);
+        window.addEventListener('focus', check);
+        window.addEventListener('blur', check);
+      });
+    }, expectedVisibility, expectedFocus);
   }
 
   async function logWindowState(text, windowId) {
@@ -42,12 +55,13 @@
 
   await logWindowState('Initial', windowId);
 
-  dp.Browser.setWindowBounds({windowId, bounds: {windowState: 'minimized'}});
-  await waitForVisibilityChange();
+  await dp.Browser.setWindowBounds(
+      {windowId, bounds: {windowState: 'minimized'}});
+  await waitForWindowState('hidden', false);
   await logWindowState('Minimized', windowId);
 
-  dp.Browser.setWindowBounds({windowId, bounds: {windowState: 'normal'}});
-  await waitForVisibilityChange();
+  await dp.Browser.setWindowBounds({windowId, bounds: {windowState: 'normal'}});
+  await waitForWindowState('visible', true);
   await logWindowState('Restored', windowId);
 
   testRunner.completeTest();

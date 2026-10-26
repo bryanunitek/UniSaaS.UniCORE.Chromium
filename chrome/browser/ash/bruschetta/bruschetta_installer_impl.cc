@@ -31,11 +31,11 @@
 #include "chrome/browser/ash/guest_os/guest_os_terminal.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_key.h"
 #include "chromeos/ash/components/dbus/attestation/attestation_client.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
 #include "components/prefs/pref_service.h"
+#include "ui/display/types/display_constants.h"
 
 namespace bruschetta {
 
@@ -48,7 +48,7 @@ namespace {
 // Should be synced with the value in the chromiumos repo:
 // src/platform2/vtpm/backends/attested_virtual_endorsement.cc
 constexpr char kVtpmEkLabel[] = "vtpm-ek";
-constexpr base::ByteCount kBruschettaRequiredMemory = base::GiB(12);
+constexpr base::ByteSize kBruschettaRequiredMemory = base::GiB(12);
 
 std::unique_ptr<BruschettaInstallerImpl::Fds> OpenFdsBlocking(
     base::FilePath boot_disk_path,
@@ -98,12 +98,11 @@ void BruschettaInstallerImpl::Install(std::string vm_name,
                                       std::string config_id) {
   if (!base::FeatureList::IsEnabled(
           ash::features::kDisableBruschettaInstallChecks)) {
-    base::ByteCount physical_memory =
-        base::SysInfo::AmountOfTotalPhysicalMemory().AsDeprecatedByteCount();
+    base::ByteSize physical_memory =
+        base::SysInfo::AmountOfTotalPhysicalMemory();
     // Physical memory reporting never lines up with exact GB definitions, allow
     // for some wiggle room.
-    if (physical_memory.InBytes() <
-        kBruschettaRequiredMemory.InBytes() * 0.85) {
+    if (physical_memory < kBruschettaRequiredMemory * 0.85) {
       Error(BruschettaInstallResult::kNotEnoughMemoryError);
       LOG(ERROR) << "System memory of " << physical_memory.InBytes()
                  << " less than required "
@@ -680,7 +679,7 @@ void BruschettaInstallerImpl::HandleVmInstallSucceeded() {
                                    true);
 
   auto* client = ash::ConciergeClient::Get();
-  DCHECK(client);
+  CHECK(client, base::NotFatalUntil::M160);
   vm_tools::concierge::StopVmRequest request;
   request.set_name(vm_name_);
   request.set_owner_id(ash::ProfileHelper::GetUserIdHashFromProfile(profile_));
@@ -737,12 +736,12 @@ void BruschettaInstallerImpl::Error(BruschettaInstallResult error) {
 void BruschettaInstallerImpl::AddObserver(Observer* observer) {
   // We only support a single observer for now, since we'll only ever have one
   // (the UI calling us).
-  DCHECK(observer_ == nullptr);
+  CHECK(observer_ == nullptr, base::NotFatalUntil::M160);
   observer_ = observer;
 }
 
 void BruschettaInstallerImpl::RemoveObserver(Observer* observer) {
-  DCHECK(observer_ == observer);
+  CHECK(observer_ == observer, base::NotFatalUntil::M160);
   observer_ = nullptr;
 }
 

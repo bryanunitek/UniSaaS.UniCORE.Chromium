@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/views/permissions/embedded_permission_prompt_policy_view.h"
 
-#include "chrome/browser/ui/url_identity.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -69,7 +68,7 @@ const gfx::VectorIcon& EmbeddedPermissionPromptPolicyView::GetIcon() const {
 
 void EmbeddedPermissionPromptPolicyView::RunButtonCallback(int button_id) {
   ButtonType button = GetButtonType(button_id);
-  DCHECK_EQ(button, ButtonType::kPolicyOK);
+  CHECK_EQ(button, ButtonType::kPolicyOK, base::NotFatalUntil::M162);
 
   if (delegate()) {
     delegate()->Acknowledge();

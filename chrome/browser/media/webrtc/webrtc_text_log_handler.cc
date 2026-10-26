@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "chrome/browser/media/webrtc/webrtc_text_log_handler.h"
 
 #include <map>
@@ -17,12 +16,12 @@
 #include "base/cpu.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/i18n/time_formatting.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
@@ -78,8 +77,11 @@ std::string Format(const std::string& message,
   int32_t interval_ms =
       static_cast<int32_t>((timestamp - start_time).InMilliseconds());
   // Log start time (current time).
+  base::Time::Exploded exploded;
+  base::Time::Now().LocalExplode(&exploded);
   const std::string now =
-      base::UnlocalizedTimeFormatWithPattern(base::Time::Now(), "HH:mm:ss.SSS");
+      base::StringPrintf("%02d:%02d:%02d.%03d", exploded.hour, exploded.minute,
+                         exploded.second, exploded.millisecond);
   return base::StringPrintf("[%03d:%03d, %s] %s", interval_ms / 1000,
                             interval_ms % 1000, now.c_str(), message.c_str());
 }
@@ -154,8 +156,8 @@ WebRtcTextLogHandler::WebRtcTextLogHandler(int render_process_id)
 WebRtcTextLogHandler::~WebRtcTextLogHandler() {
   // If the log isn't closed that means we haven't decremented the log count
   // in the LogUploader.
-  DCHECK(logging_state_ == CLOSED || channel_is_closing_);
-  DCHECK(!log_buffer_);
+  CHECK_EQ(logging_state_, CLOSED, base::NotFatalUntil::M161);
+  CHECK(!log_buffer_, base::NotFatalUntil::M161);
 }
 
 WebRtcTextLogHandler::LoggingState WebRtcTextLogHandler::GetState() const {
@@ -172,7 +174,7 @@ void WebRtcTextLogHandler::SetMetaData(
     std::unique_ptr<WebRtcLogMetaDataMap> meta_data,
     GenericDoneCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!callback.is_null());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
 
   if (channel_is_closing_) {
     FireGenericDoneCallback(std::move(callback), false,
@@ -206,7 +208,7 @@ void WebRtcTextLogHandler::SetMetaData(
 
 bool WebRtcTextLogHandler::StartLogging(GenericDoneCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!callback.is_null());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
   base::UmaHistogramBoolean("WebRtcTextLogging.StartCalled", true);
 
   if (channel_is_closing_) {
@@ -234,7 +236,7 @@ bool WebRtcTextLogHandler::StartLogging(GenericDoneCallback callback) {
 
   logging_state_ = STARTING;
 
-  DCHECK(!log_buffer_);
+  CHECK(!log_buffer_, base::NotFatalUntil::M161);
   log_buffer_ = std::make_unique<WebRtcLogBuffer>();
   if (!meta_data_)
     meta_data_ = std::make_unique<WebRtcLogMetaDataMap>();
@@ -248,7 +250,7 @@ bool WebRtcTextLogHandler::StartLogging(GenericDoneCallback callback) {
 
 void WebRtcTextLogHandler::StartDone(GenericDoneCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!callback.is_null());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
 
   if (channel_is_closing_) {
     FireGenericDoneCallback(std::move(callback), false,
@@ -257,7 +259,7 @@ void WebRtcTextLogHandler::StartDone(GenericDoneCallback callback) {
     return;
   }
 
-  DCHECK_EQ(STARTING, logging_state_);
+  CHECK_EQ(STARTING, logging_state_, base::NotFatalUntil::M161);
 
   base::UmaHistogramSparse("WebRtcTextLogging.Started", web_app_id_);
 
@@ -268,7 +270,7 @@ void WebRtcTextLogHandler::StartDone(GenericDoneCallback callback) {
 
 bool WebRtcTextLogHandler::StopLogging(GenericDoneCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!callback.is_null());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
 
   if (channel_is_closing_) {
     FireGenericDoneCallback(std::move(callback), false,
@@ -292,7 +294,7 @@ bool WebRtcTextLogHandler::StopLogging(GenericDoneCallback callback) {
 
 void WebRtcTextLogHandler::StopDone() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(stop_callback_);
+  CHECK(stop_callback_, base::NotFatalUntil::M161);
 
   if (channel_is_closing_) {
     FireGenericDoneCallback(std::move(stop_callback_), false,
@@ -304,7 +306,7 @@ void WebRtcTextLogHandler::StopDone() {
   // it is responsible for checking the state before making the call. If we do
   // enter here in a bad state, then we can't use the stop_callback_ or we
   // might fire the same callback multiple times.
-  DCHECK_EQ(STOPPING, logging_state_);
+  CHECK_EQ(STOPPING, logging_state_, base::NotFatalUntil::M161);
   if (logging_state_ == STOPPING) {
     logging_started_time_ = base::Time();
     logging_state_ = STOPPED;
@@ -324,8 +326,9 @@ void WebRtcTextLogHandler::ChannelClosing() {
 
 void WebRtcTextLogHandler::DiscardLog() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(logging_state_ == STOPPED ||
-         (channel_is_closing_ && logging_state_ != CLOSED));
+  CHECK(logging_state_ == STOPPED ||
+            (channel_is_closing_ && logging_state_ != CLOSED),
+        base::NotFatalUntil::M161);
 
   base::UmaHistogramSparse("WebRtcTextLogging.Discard", web_app_id_);
 
@@ -338,10 +341,11 @@ void WebRtcTextLogHandler::ReleaseLog(
     std::unique_ptr<WebRtcLogBuffer>* log_buffer,
     std::unique_ptr<WebRtcLogMetaDataMap>* meta_data) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(logging_state_ == STOPPED ||
-         (channel_is_closing_ && logging_state_ != CLOSED));
-  DCHECK(log_buffer_);
-  DCHECK(meta_data_);
+  CHECK(logging_state_ == STOPPED ||
+            (channel_is_closing_ && logging_state_ != CLOSED),
+        base::NotFatalUntil::M161);
+  CHECK(log_buffer_, base::NotFatalUntil::M161);
+  CHECK(meta_data_, base::NotFatalUntil::M161);
 
   // Checking log_buffer_ here due to seeing some crashes out in the wild.
   // See crbug.com/41306472 for more details.
@@ -359,7 +363,7 @@ void WebRtcTextLogHandler::ReleaseLog(
 
 void WebRtcTextLogHandler::LogToCircularBuffer(const std::string& message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_NE(logging_state_, CLOSED);
+  CHECK_NE(logging_state_, CLOSED, base::NotFatalUntil::M161);
   if (log_buffer_) {
     log_buffer_->Log(message);
   }
@@ -415,16 +419,16 @@ void WebRtcTextLogHandler::FireGenericDoneCallback(
     bool success,
     const std::string& error_message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!callback.is_null());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
 
   if (error_message.empty()) {
-    DCHECK(success);
+    CHECK(success, base::NotFatalUntil::M161);
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), success, error_message));
     return;
   }
 
-  DCHECK(!success);
+  CHECK(!success, base::NotFatalUntil::M161);
 
   // Add current logging state to error message.
   auto state_string = [&] {
@@ -485,8 +489,11 @@ void WebRtcTextLogHandler::OnGetNetworkInterfaceListFinish(
   }
 
   // Log start time (current time).
-  LogToCircularBuffer(base::UnlocalizedTimeFormatWithPattern(
-      base::Time::Now(), "'Start 'y-MM-dd HH:mm:ss"));
+  base::Time::Exploded exploded_start;
+  base::Time::Now().LocalExplode(&exploded_start);
+  LogToCircularBuffer(base::StringPrintf(
+      "Start %04d-%02d-%02d %02d:%02d:%02d", exploded_start.year, exploded_start.month,
+      exploded_start.day_of_month, exploded_start.hour, exploded_start.minute, exploded_start.second));
 
   // Write metadata if received before logging started.
   if (meta_data_ && !meta_data_->empty()) {

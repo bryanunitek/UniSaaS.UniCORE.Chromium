@@ -11,11 +11,13 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/types/id_type.h"
+#include "base/unguessable_token.h"
 #include "chrome/browser/predictors/resource_prefetch_predictor.h"
 #include "content/public/browser/document_user_data.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_handle_user_data.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_user_data.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 namespace content {
 class NavigationHandle;
@@ -27,6 +29,10 @@ enum class OptimizationGuideDecision;
 class OptimizationMetadata;
 }  // namespace optimization_guide
 
+namespace tabs {
+class TabInterface;
+}  // namespace tabs
+
 namespace predictors {
 using NavigationId = base::IdType64<content::NavigationHandle>;
 
@@ -37,15 +43,21 @@ class LoadingPredictor;
 // profile.
 //
 // All methods must be called from the UI thread.
-class LoadingPredictorTabHelper
-    : public content::WebContentsObserver,
-      public content::WebContentsUserData<LoadingPredictorTabHelper> {
+class LoadingPredictorTabHelper : public content::WebContentsObserver {
  public:
+  DECLARE_USER_DATA(LoadingPredictorTabHelper);
+
+  LoadingPredictorTabHelper(tabs::TabInterface& tab,
+                            content::WebContents* web_contents);
   LoadingPredictorTabHelper(const LoadingPredictorTabHelper&) = delete;
   LoadingPredictorTabHelper& operator=(const LoadingPredictorTabHelper&) =
       delete;
 
   ~LoadingPredictorTabHelper() override;
+
+  static LoadingPredictorTabHelper* From(tabs::TabInterface* tab);
+  static LoadingPredictorTabHelper* FromWebContents(
+      content::WebContents* web_contents);
 
   // content::WebContentsObserver implementation
   void DidStartNavigation(
@@ -150,9 +162,6 @@ class LoadingPredictorTabHelper
     base::WeakPtrFactory<NavigationPageDataHolder> weak_factory_{this};
   };
 
-  explicit LoadingPredictorTabHelper(content::WebContents* web_contents);
-  friend class content::WebContentsUserData<LoadingPredictorTabHelper>;
-
   // Callback invoked when |optimization_guide_decider_| has the information
   // required to decide if it has remote predictions for the page load.
   void OnOptimizationGuideDecision(
@@ -160,6 +169,8 @@ class LoadingPredictorTabHelper
       const std::optional<url::Origin>& initiator_origin,
       const GURL& main_frame_url,
       bool should_add_preconnects_to_prediction,
+      base::UnguessableToken network_restrictions_id,
+      content::GlobalRenderFrameHostId initiator_frame_id,
       optimization_guide::OptimizationGuideDecision decision,
       const optimization_guide::OptimizationMetadata& metadata);
 
@@ -169,6 +180,8 @@ class LoadingPredictorTabHelper
   void PrepareForPageLoad(scoped_refptr<PageData> page_data,
                           const std::optional<url::Origin> initiator_origin,
                           const GURL main_frame_url,
+                          base::UnguessableToken network_restrictions_id,
+                          content::GlobalRenderFrameHostId initiator_frame_id,
                           bool should_consult_optimization_guide);
 
   bool is_prepare_for_pageload_called_for_testing_ = false;
@@ -180,10 +193,11 @@ class LoadingPredictorTabHelper
   raw_ptr<optimization_guide::OptimizationGuideDecider>
       optimization_guide_decider_ = nullptr;
 
+  ui::ScopedUnownedUserData<LoadingPredictorTabHelper>
+      scoped_unowned_user_data_;
+
   // Used to get a weak pointer to |this|.
   base::WeakPtrFactory<LoadingPredictorTabHelper> weak_ptr_factory_{this};
-
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
 }  // namespace predictors

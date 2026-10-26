@@ -4,10 +4,8 @@ per-file accessibility_main_handler*=file://ui/accessibility/OWNERS
 
 per-file people_handler*=msalama@chromium.org
 per-file people_handler*=treib@chromium.org
-per-file people_handler*=amelies@google.com
 
 per-file hats_handler*=msramek@google.com
-per-file privacy_sandbox_handler*=file://components/privacy_sandbox/OWNERS
 per-file *site_settings*=msramek@chromium.org
 per-file *site_settings*=fsenra@google.com
 per-file safety_hub_handler*=sideyilmaz@chromium.org,rainhard@chromium.org
@@ -23,3 +21,4 @@ per-file glic_*=file://chrome/browser/resources/settings/glic_page/OWNERS
 per-file performance_*=file://chrome/browser/ui/performance_controls/OWNERS
 per-file captions_handler*=evliu@google.com
 per-file certificate_manager_handler*=hchao@chromium.org,mattm@chromium.org
+per-file omnibox_everywhere_*=file://chrome/browser/ui/omnibox/omnibox_everywhere/OWNERS

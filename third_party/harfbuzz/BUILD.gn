@@ -9,6 +9,7 @@ import("//third_party/harfbuzz/harfbuzz.gni")
 
 if (use_system_harfbuzz) {
   import("//build/config/linux/pkg_config.gni")
+
   pkg_config("harfbuzz_from_pkgconfig") {
     visibility = [
       "//third_party/freetype",
@@ -22,6 +23,7 @@ if (use_system_harfbuzz) {
 
   component("harfbuzz") {
     public_configs = [ ":harfbuzz_from_pkgconfig" ]
+    check_includes_strict = CHECK_INCLUDES_STRICT_PUBLIC_INCLUDES_PRIVATE
   }
 } else {
   import("//build/rust/cargo_crate.gni")
@@ -37,6 +39,7 @@ if (use_system_harfbuzz) {
       "no-doc-comments",
     ]
     configs = [ ":harfbuzz_config" ]
+    check_includes_strict = CHECK_INCLUDES_STRICT_PUBLIC_INCLUDES_PRIVATE
   }
 
   cargo_crate("harfbuzz_rust") {
@@ -54,13 +57,14 @@ if (use_system_harfbuzz) {
     features = [
       "font",
       "shape",
+      "skrifa",
     ]
     bindgen_deps = [ ":hb_rs_generator" ]
     deps = [
       "//third_party/rust/font_types/v0_12:lib",
-      "//third_party/rust/harfrust/v0_12:lib",
-      "//third_party/rust/read_fonts/v0_41:lib",
-      "//third_party/rust/skrifa/v0_44:lib",
+      "//third_party/rust/harfrust/v0_14:lib",
+      "//third_party/rust/read_fonts/v0_45:lib",
+      "//third_party/rust/skrifa/v0_48:lib",
       "//third_party/rust/smallvec/v1:lib",
     ]
   }
@@ -217,6 +221,7 @@ if (use_system_harfbuzz) {
       "src/src/hb-ot-color.cc",
       "src/src/hb-ot-color.h",
       "src/src/hb-ot-deprecated.h",
+      "src/src/hb-ot-dual.hh",
       "src/src/hb-ot-face-table-list.hh",
       "src/src/hb-ot-face.cc",
       "src/src/hb-ot-face.hh",
@@ -306,6 +311,7 @@ if (use_system_harfbuzz) {
       "src/src/hb-ot-vorg-table.hh",
       "src/src/hb-priority-queue.hh",
       "src/src/hb-repacker.hh",
+      "src/src/hb-result.hh",
       "src/src/hb-sanitize.hh",
       "src/src/hb-script-list.h",
       "src/src/hb-serialize.hh",
@@ -353,6 +359,7 @@ if (use_system_harfbuzz) {
       "src/src/hb-unicode.cc",
       "src/src/hb-unicode.hh",
       "src/src/hb-utf.hh",
+      "src/src/hb-vector.h",
       "src/src/hb-vector.hh",
       "src/src/hb.hh",
     ]
@@ -372,6 +379,9 @@ if (use_system_harfbuzz) {
       "src/src/hb-coretext.h",
       "src/src/hb-coretext.hh",
       "src/src/hb-decycler.hh",
+      "src/src/hb-depend-data.hh",
+      "src/src/hb-depend.cc",
+      "src/src/hb-depend.hh",
       "src/src/hb-directwrite-font.cc",
       "src/src/hb-directwrite-shape.cc",
       "src/src/hb-directwrite.cc",
@@ -411,6 +421,8 @@ if (use_system_harfbuzz) {
       "src/src/hb-gpu.h",
       "src/src/hb-graphite2.cc",
       "src/src/hb-graphite2.h",
+      "src/src/hb-ot-fetch.cc",
+      "src/src/hb-ot-fetch.h",
       "src/src/hb-outline.cc",
       "src/src/hb-outline.hh",
       "src/src/hb-paint-bounded.cc",
@@ -430,6 +442,7 @@ if (use_system_harfbuzz) {
       "src/src/hb-style.cc",
       "src/src/hb-style.h",
       "src/src/hb-subset-cff2-to-cff1.hh",
+      "src/src/hb-subset-depend.h",
       "src/src/hb-uniscribe.cc",
       "src/src/hb-uniscribe.h",
       "src/src/hb-vector-buf.hh",
@@ -557,7 +570,7 @@ if (use_system_harfbuzz) {
     deps = [
       ":harfbuzz_rust",
       "//third_party/icu:icuuc",
-      "//third_party/rust/harfrust/v0_12:lib",
+      "//third_party/rust/harfrust/v0_14:lib",
     ]
 
     if (use_glib) {
@@ -565,6 +578,7 @@ if (use_system_harfbuzz) {
       public += [ "src/src/hb-glib.h" ]
       sources += [ "src/src/hb-glib.cc" ]
     }
+    check_includes_strict = CHECK_INCLUDES_STRICT_PUBLIC_INCLUDES_PRIVATE
   }
 }
 

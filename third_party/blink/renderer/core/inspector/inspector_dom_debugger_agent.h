@@ -31,6 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_DOM_DEBUGGER_AGENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_DOM_DEBUGGER_AGENT_H_
 
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_event_listener_info.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy_violation_type.h"
@@ -63,9 +64,7 @@ class CORE_EXPORT InspectorDOMDebuggerAgent final
                                           v8::Local<v8::Value>,
                                           V8EventListenerInfoList* listeners);
 
-  InspectorDOMDebuggerAgent(v8::Isolate*,
-                            InspectorDOMAgent*,
-                            v8_inspector::V8InspectorSession*);
+  InspectorDOMDebuggerAgent(v8::Isolate*, InspectorDOMAgent*);
   InspectorDOMDebuggerAgent(const InspectorDOMDebuggerAgent&) = delete;
   InspectorDOMDebuggerAgent& operator=(const InspectorDOMDebuggerAgent&) =
       delete;
@@ -167,9 +166,8 @@ class CORE_EXPORT InspectorDOMDebuggerAgent final
                               const V8EventListenerInfo&,
                               const v8_inspector::StringView& object_group_id);
 
-  v8::Isolate* isolate_;
+  raw_ptr<v8::Isolate, UnprotectedInRelease | DanglingUntriaged> isolate_;
   Member<InspectorDOMAgent> dom_agent_;
-  v8_inspector::V8InspectorSession* v8_session_;
   HeapHashMap<Member<Node>, uint32_t> dom_breakpoints_;
   InspectorAgentState::Boolean enabled_;
   InspectorAgentState::Boolean pause_on_all_xhrs_;

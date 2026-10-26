@@ -35,6 +35,10 @@ namespace content {
 class RenderFrameHostImpl;
 }  // namespace content
 
+namespace network {
+class PendingSharedURLLoaderFactory;
+}  // namespace network
+
 namespace download {
 
 class DownloadItem;
@@ -127,6 +131,10 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
     initiator_ = std::move(initiator);
   }
 
+  void set_url_loader_factory(
+      std::unique_ptr<network::PendingSharedURLLoaderFactory>
+          url_loader_factory);
+
   // If this is a request for resuming an HTTP/S download, |last_modified|
   // should be the value of the last seen Last-Modified response header.
   void set_last_modified(const std::string& last_modified) {
@@ -147,6 +155,12 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   void set_credentials_mode(
       ::network::mojom::CredentialsMode credentials_mode) {
     credentials_mode_ = credentials_mode;
+  }
+
+  // The requests' fetch request mode.
+  void set_fetch_request_mode(
+      ::network::mojom::RequestMode fetch_request_mode) {
+    fetch_request_mode_ = fetch_request_mode;
   }
 
   // Body of the HTTP POST request.
@@ -212,7 +226,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   // of the first |offset| bytes of the target file. In this case, the prefix
   // hash will be ignored since the |hash_state| is assumed to be correct if
   // provided.
-  void set_hash_state(std::unique_ptr<crypto::SecureHash> hash_state) {
+  void set_hash_state(std::optional<crypto::hash::Hasher> hash_state) {
     save_info_.hash_state = std::move(hash_state);
   }
 
@@ -318,6 +332,9 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   ::network::mojom::CredentialsMode credentials_mode() const {
     return credentials_mode_;
   }
+  ::network::mojom::RequestMode fetch_request_mode() const {
+    return fetch_request_mode_;
+  }
   scoped_refptr<network::ResourceRequestBody> post_body() { return post_body_; }
   int64_t post_id() const { return post_id_; }
   bool prefer_cache() const { return prefer_cache_; }
@@ -325,6 +342,11 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   net::ReferrerPolicy referrer_policy() const { return referrer_policy_; }
   const std::string& referrer_encoding() const { return referrer_encoding_; }
   const std::optional<url::Origin>& initiator() const { return initiator_; }
+  std::unique_ptr<network::PendingSharedURLLoaderFactory>
+  take_url_loader_factory();
+  network::PendingSharedURLLoaderFactory* url_loader_factory() {
+    return url_loader_factory_.get();
+  }
   const std::string& request_origin() const { return request_origin_; }
 
   // These will be -1 if the request is not associated with a frame. See
@@ -402,12 +424,14 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   bool use_if_range_;
   std::string method_;
   ::network::mojom::CredentialsMode credentials_mode_;
+  ::network::mojom::RequestMode fetch_request_mode_;
   scoped_refptr<network::ResourceRequestBody> post_body_;
   int64_t post_id_;
   bool prefer_cache_;
   GURL referrer_;
   net::ReferrerPolicy referrer_policy_;
   std::optional<url::Origin> initiator_;
+  std::unique_ptr<network::PendingSharedURLLoaderFactory> url_loader_factory_;
   std::string referrer_encoding_;
   int render_process_host_id_;
   int render_frame_host_routing_id_;

@@ -25,8 +25,6 @@ namespace {
 
 using ::base::allocator::dispatcher::ReentryGuard;
 
-const size_t kDefaultSamplingIntervalBytes = 128 * 1024;
-
 const intptr_t kAccumulatedBytesOffset = 1 << 29;
 
 // Controls if sample intervals should not be randomized. Used for testing.
@@ -36,7 +34,8 @@ bool g_deterministic = false;
 constinit std::atomic<LockFreeAddressHashSet*> g_sampled_addresses_set{nullptr};
 
 // Sampling interval parameter, the mean value for intervals between samples.
-constinit std::atomic_size_t g_sampling_interval{kDefaultSamplingIntervalBytes};
+constinit std::atomic_size_t g_sampling_interval{
+    PoissonAllocationSampler::kDefaultSamplingIntervalBytes};
 
 struct ThreadLocalData {
   // Accumulated bytes towards sample.
@@ -95,32 +94,6 @@ ThreadLocalData* GetThreadLocalData() {
 }
 
 }  // namespace
-
-PoissonAllocationSamplerStats::PoissonAllocationSamplerStats(
-    size_t address_cache_hits,
-    size_t address_cache_misses,
-    size_t address_cache_max_size,
-    float address_cache_max_load_factor,
-    AddressCacheBucketStats address_cache_bucket_stats,
-    size_t bloom_filter_hits,
-    size_t bloom_filter_misses,
-    size_t bloom_filter_max_saturation)
-    : address_cache_hits(address_cache_hits),
-      address_cache_misses(address_cache_misses),
-      address_cache_max_size(address_cache_max_size),
-      address_cache_max_load_factor(address_cache_max_load_factor),
-      address_cache_bucket_stats(std::move(address_cache_bucket_stats)),
-      bloom_filter_hits(bloom_filter_hits),
-      bloom_filter_misses(bloom_filter_misses),
-      bloom_filter_max_saturation(bloom_filter_max_saturation) {}
-
-PoissonAllocationSamplerStats::~PoissonAllocationSamplerStats() = default;
-
-PoissonAllocationSamplerStats::PoissonAllocationSamplerStats(
-    const PoissonAllocationSamplerStats&) = default;
-
-PoissonAllocationSamplerStats& PoissonAllocationSamplerStats::operator=(
-    const PoissonAllocationSamplerStats&) = default;
 
 PoissonAllocationSampler::ScopedMuteThreadSamples::ScopedMuteThreadSamples() {
   ThreadLocalData* const thread_local_data = GetThreadLocalData();
@@ -184,20 +157,16 @@ bool PoissonAllocationSampler::ScopedSuppressRandomnessForTesting::
 }
 
 PoissonAllocationSampler::ScopedMuteHookedSamplesForTesting::
-    ScopedMuteHookedSamplesForTesting() {
+    ScopedMuteHookedSamplesForTesting()
+    : accumulated_bytes_snapshot_(&GetThreadLocalData()->accumulated_bytes, 0),
+      sampling_interval_initialized_snapshot_(
+          &GetThreadLocalData()->sampling_interval_initialized,
+          false) {
   SetProfilingStateFlag(ProfilingStateFlag::kHookedSamplesMutedForTesting);
-
-  // Reset the accumulated bytes to 0 on this thread.
-  ThreadLocalData* const thread_local_data = GetThreadLocalData();
-  accumulated_bytes_snapshot_ = thread_local_data->accumulated_bytes;
-  thread_local_data->accumulated_bytes = 0;
 }
 
 PoissonAllocationSampler::ScopedMuteHookedSamplesForTesting::
     ~ScopedMuteHookedSamplesForTesting() {
-  // Restore the accumulated bytes.
-  ThreadLocalData* const thread_local_data = GetThreadLocalData();
-  thread_local_data->accumulated_bytes = accumulated_bytes_snapshot_;
   ResetProfilingStateFlag(ProfilingStateFlag::kHookedSamplesMutedForTesting);
 }
 
@@ -246,20 +215,6 @@ void PoissonAllocationSampler::SetTargetHashSetLoadFactor(
   address_cache_target_load_factor_ = load_factor.value_or(1.0);
 }
 
-PoissonAllocationSamplerStats PoissonAllocationSampler::GetAndResetStats() {
-  ScopedMuteThreadSamples no_reentrancy_scope;
-  AutoLock lock(mutex_);
-  return PoissonAllocationSamplerStats(
-      address_cache_hits_.exchange(0, std::memory_order_relaxed),
-      address_cache_misses_.exchange(0, std::memory_order_relaxed),
-      std::exchange(address_cache_max_size_, 0),
-      std::exchange(address_cache_max_load_factor_, 0.0),
-      sampled_addresses_set().GetBucketStats(),
-      bloom_filter_hits_.exchange(0, std::memory_order_relaxed),
-      bloom_filter_misses_.exchange(0, std::memory_order_relaxed),
-      std::exchange(bloom_filter_max_saturation_, 0));
-}
-
 // static
 size_t PoissonAllocationSampler::GetNextSampleInterval(size_t interval) {
   if (g_deterministic) [[unlikely]] {
@@ -292,7 +247,7 @@ size_t PoissonAllocationSampler::GetNextSampleInterval(size_t interval) {
   return static_cast<size_t>(value);
 }
 
-void PoissonAllocationSampler::DoRecordAllocation(
+bool PoissonAllocationSampler::DoRecordAllocation(
     const ProfilingStateFlagMask state,
     void* address,
     size_t size,
@@ -303,7 +258,7 @@ void PoissonAllocationSampler::DoRecordAllocation(
   thread_local_data->accumulated_bytes += size;
   intptr_t accumulated_bytes = thread_local_data->accumulated_bytes;
   if (accumulated_bytes < 0) [[likely]] {
-    return;
+    return false;
   }
 
   if (!(state & ProfilingStateFlag::kIsRunning)) [[unlikely]] {
@@ -314,12 +269,12 @@ void PoissonAllocationSampler::DoRecordAllocation(
     // for the rest of the Chrome session.)
     thread_local_data->sampling_interval_initialized = false;
     thread_local_data->accumulated_bytes = 0;
-    return;
+    return false;
   }
 
   // Failed allocation? Skip the sample.
   if (!address) [[unlikely]] {
-    return;
+    return false;
   }
 
   size_t mean_interval = g_sampling_interval.load(std::memory_order_relaxed);
@@ -333,7 +288,7 @@ void PoissonAllocationSampler::DoRecordAllocation(
     accumulated_bytes -= GetNextSampleInterval(mean_interval);
     if (accumulated_bytes < 0) {
       thread_local_data->accumulated_bytes = accumulated_bytes;
-      return;
+      return false;
     }
   }
 
@@ -350,7 +305,7 @@ void PoissonAllocationSampler::DoRecordAllocation(
   thread_local_data->accumulated_bytes = accumulated_bytes;
 
   if (ScopedMuteThreadSamples::IsMuted()) [[unlikely]] {
-    return;
+    return false;
   }
 
   ScopedMuteThreadSamples no_reentrancy_scope;
@@ -363,24 +318,11 @@ void PoissonAllocationSampler::DoRecordAllocation(
     LockFreeAddressHashSet& address_cache = sampled_addresses_set();
     if (address_cache.Contains(address) ==
         LockFreeAddressHashSet::ContainsResult::kFound) {
-      return;
+      return false;
     }
     address_cache.Insert(address);
     BalanceAddressesHashSet();
 
-    // Record the load factor after balancing gets a chance to reduce it.
-    // Balancing won't change the size.
-    const LockFreeAddressHashSet& balanced_address_cache =
-        sampled_addresses_set();
-    address_cache_max_size_ =
-        std::max(address_cache_max_size_, balanced_address_cache.size());
-    address_cache_max_load_factor_ = std::max(
-        address_cache_max_load_factor_, balanced_address_cache.load_factor());
-    if (balanced_address_cache.HasBloomFilter()) {
-      bloom_filter_max_saturation_ =
-          std::max(bloom_filter_max_saturation_,
-                   balanced_address_cache.MaxBloomFilterSaturation());
-    }
     observers_copy = observers_;
   }
 
@@ -389,6 +331,7 @@ void PoissonAllocationSampler::DoRecordAllocation(
        observers_copy) {
     observer->SampleAdded(address, size, total_allocated, type, context);
   }
+  return true;
 }
 
 void PoissonAllocationSampler::DoRecordFree(void* address) {
@@ -401,12 +344,45 @@ void PoissonAllocationSampler::DoRecordFree(void* address) {
   {
     AutoLock lock(mutex_);
     observers_copy = observers_;
-    sampled_addresses_set().Remove(address);
+    bool removed = sampled_addresses_set().Remove(address);
+    DCHECK(removed);
   }
   for (base::PoissonAllocationSampler::SamplesObserver* observer :
        observers_copy) {
     observer->SampleRemoved(address);
   }
+}
+
+bool PoissonAllocationSampler::OnMove(void* from, void* to) {
+  const ProfilingStateFlagMask state =
+      profiling_state_.load(std::memory_order_relaxed);
+  if (!(state & ProfilingStateFlag::kWasStarted)) [[likely]] {
+    return false;
+  }
+  if (from == nullptr || to == nullptr) [[unlikely]] {
+    return false;
+  }
+  if (ScopedMuteThreadSamples::IsMuted()) [[unlikely]] {
+    return false;
+  }
+
+  ScopedMuteThreadSamples no_reentrancy_scope;
+  std::vector<SamplesObserver*> observers_copy;
+  {
+    AutoLock lock(mutex_);
+    LockFreeAddressHashSet& address_cache = sampled_addresses_set();
+    if (!address_cache.Remove(from)) {
+      return false;
+    }
+    address_cache.Insert(to);
+    BalanceAddressesHashSet();
+    observers_copy = observers_;
+  }
+  for (base::PoissonAllocationSampler::SamplesObserver* observer :
+       observers_copy) {
+    observer->SampleMoved(from, to);
+  }
+  return true;
 }
 
 void PoissonAllocationSampler::BalanceAddressesHashSet() {

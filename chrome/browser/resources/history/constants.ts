@@ -33,7 +33,6 @@ export enum SyncState {
 }
 // LINT.ThenChange(/chrome/browser/ui/webui/history/history_identity_state_watcher.h:HistoryIdentityState.SyncState)
 
-
 /**
  * Histogram buckets for UMA tracking of which view is being shown to the user.
  * Keep this in sync with the HistoryPageView enum in histograms.xml.
@@ -88,6 +87,8 @@ export enum VisitContextMenuAction {
   MORE_FROM_THIS_SITE_CLICKED = 0,
   REMOVE_FROM_HISTORY_CLICKED = 1,
   REMOVE_BOOKMARK_CLICKED = 2,
-  MAX_VALUE = 3,
+  REVIEW_GEMINI_ACTIVITY_CLICKED = 3,
+  GO_TO_GEMINI_CHAT_CLICKED = 4,
+  MAX_VALUE = 5,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/history/enums.xml:VisitContextMenuAction)

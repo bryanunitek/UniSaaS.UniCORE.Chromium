@@ -24,26 +24,26 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/wm_event.h"
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/ash/new_window/chrome_new_window_client.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
-#include "chrome/browser/ui/views/tabs/shared/tab_strip_observer.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/ash/util/ash_test_util.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "ui/base/base_window.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/display/test/display_manager_test_api.h"
 #include "ui/events/test/event_generator.h"
@@ -70,14 +70,15 @@ void ClickButton(const views::Button* button) {
 // by releasing the left mouse button when a tab strip is removed from a window.
 class TabRemoveObserver : public TabStripModelObserver {
  public:
-  TabRemoveObserver(Browser* browser, ui::test::EventGenerator* event_generator)
+  TabRemoveObserver(BrowserWindowInterface* browser,
+                    ui::test::EventGenerator* event_generator)
       : browser_(browser), event_generator_(event_generator) {
-    browser_->tab_strip_model()->AddObserver(this);
+    browser_->GetTabStripModel()->AddObserver(this);
   }
   TabRemoveObserver(const TabRemoveObserver&) = delete;
   TabRemoveObserver& operator=(const TabRemoveObserver&) = delete;
   ~TabRemoveObserver() override {
-    browser_->tab_strip_model()->RemoveObserver(this);
+    browser_->GetTabStripModel()->RemoveObserver(this);
   }
 
   // TabStripModelObserver:
@@ -88,7 +89,7 @@ class TabRemoveObserver : public TabStripModelObserver {
   }
 
  private:
-  raw_ptr<Browser> browser_;
+  raw_ptr<BrowserWindowInterface> browser_;
   raw_ptr<ui::test::EventGenerator> event_generator_;
 };
 
@@ -116,7 +117,7 @@ IN_PROC_BROWSER_TEST_F(FasterSplitScreenBrowserTest,
   ASSERT_TRUE(ash::OverviewController::Get()->InOverviewSession());
 
   // Open a new browser window. Test it gets auto-snapped.
-  Browser* browser3 = CreateBrowser(browser()->GetProfile());
+  BrowserWindowInterface* browser3 = CreateBrowser(browser()->GetProfile());
   aura::Window* window3 = browser3->GetWindow()->GetNativeWindow();
   EXPECT_TRUE(ash::WindowState::Get(window3)->IsSnapped());
   EXPECT_FALSE(ash::OverviewController::Get()->InOverviewSession());
@@ -291,9 +292,17 @@ IN_PROC_BROWSER_TEST_F(SnapGroupBrowserTest, DoNotBreakGroupOnTabDragging) {
   TabStripRegionView* tab_strip_view =
       BrowserView::GetBrowserViewForBrowser(browser())->tab_strip_view();
   const auto start_point =
-      tab_strip_view->GetTabAnchorViewAt(1)->GetBoundsInScreen().CenterPoint();
+      tab_strip_view
+          ->GetTabAnchorView(
+              browser()->tab_strip_model()->GetTabAtIndex(1)->GetHandle())
+          ->GetBoundsInScreen()
+          .CenterPoint();
   const auto end_point =
-      tab_strip_view->GetTabAnchorViewAt(0)->GetBoundsInScreen().left_center();
+      tab_strip_view
+          ->GetTabAnchorView(
+              browser()->tab_strip_model()->GetTabAtIndex(0)->GetHandle())
+          ->GetBoundsInScreen()
+          .left_center();
   event_generator.MoveMouseTo(start_point);
   event_generator.PressLeftButton();
   event_generator.MoveMouseTo(end_point);
@@ -325,7 +334,11 @@ IN_PROC_BROWSER_TEST_F(SnapGroupBrowserTest, DoNotBreakGroupOnTabDetaching) {
   TabStripRegionView* tab_strip_view =
       BrowserView::GetBrowserViewForBrowser(browser())->tab_strip_view();
   const gfx::Point start_point =
-      tab_strip_view->GetTabAnchorViewAt(1)->GetBoundsInScreen().CenterPoint();
+      tab_strip_view
+          ->GetTabAnchorView(
+              browser()->tab_strip_model()->GetTabAtIndex(1)->GetHandle())
+          ->GetBoundsInScreen()
+          .CenterPoint();
   const gfx::Point end_point = window2->GetBoundsInScreen().CenterPoint();
   event_generator.MoveMouseTo(start_point);
 
@@ -361,9 +374,9 @@ IN_PROC_BROWSER_TEST_F(SnapGroupBrowserTest,
       ash::DesksMoveWindowFromActiveDeskSource::kShortcut);
 
   // Create a Snap Group with two incognito browser windows.
-  Browser* incognito_browser1 = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser1 = CreateIncognitoBrowser();
   aura::Window* window1 = incognito_browser1->GetWindow()->GetNativeWindow();
-  Browser* incognito_browser2 = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser2 = CreateIncognitoBrowser();
   aura::Window* window2 = incognito_browser2->GetWindow()->GetNativeWindow();
 
   ui::test::EventGenerator event_generator(root_window);

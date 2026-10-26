@@ -24,6 +24,8 @@ ToolType ActorToolRequest::GetToolType() const {
       return ToolType::kScroll;
     case optimization_guide::proto::Action::kSelect:
       return ToolType::kSelect;
+    case optimization_guide::proto::Action::kDragAndRelease:
+      return ToolType::kDragAndRelease;
     case optimization_guide::proto::Action::kNavigate:
       return ToolType::kNavigate;
     case optimization_guide::proto::Action::kBack:
@@ -36,8 +38,14 @@ ToolType ActorToolRequest::GetToolType() const {
       return ToolType::kScrollTo;
     case optimization_guide::proto::Action::kAttemptLogin:
       return ToolType::kAttemptLogin;
+    case optimization_guide::proto::Action::kAttemptFormFilling:
+      return ToolType::kAttemptFormFilling;
+    case optimization_guide::proto::Action::kCreateTab:
+      return ToolType::kCreateTab;
     case optimization_guide::proto::Action::kCloseTab:
       return ToolType::kCloseTab;
+    case optimization_guide::proto::Action::kActivateTab:
+      return ToolType::kActivateTab;
     default:
       return ToolType::kUnknown;
   }
@@ -66,6 +74,11 @@ web::WebStateID ActorToolRequest::GetTargetWebStateId() const {
     case optimization_guide::proto::Action::kSelect:
       if (action_.select().has_tab_id()) {
         tab_id = action_.select().tab_id();
+      }
+      break;
+    case optimization_guide::proto::Action::kDragAndRelease:
+      if (action_.drag_and_release().has_tab_id()) {
+        tab_id = action_.drag_and_release().tab_id();
       }
       break;
     case optimization_guide::proto::Action::kNavigate:
@@ -98,9 +111,19 @@ web::WebStateID ActorToolRequest::GetTargetWebStateId() const {
         tab_id = action_.attempt_login().tab_id();
       }
       break;
+    case optimization_guide::proto::Action::kAttemptFormFilling:
+      if (action_.attempt_form_filling().has_tab_id()) {
+        tab_id = action_.attempt_form_filling().tab_id();
+      }
+      break;
     case optimization_guide::proto::Action::kCloseTab:
       if (action_.close_tab().has_tab_id()) {
         tab_id = action_.close_tab().tab_id();
+      }
+      break;
+    case optimization_guide::proto::Action::kActivateTab:
+      if (action_.activate_tab().has_tab_id()) {
+        tab_id = action_.activate_tab().tab_id();
       }
       break;
     default:
@@ -114,4 +137,31 @@ web::WebStateID ActorToolRequest::GetTargetWebStateId() const {
   // LINT.ThenChange(//ios/chrome/browser/intelligence/actor/tools/model/actor_tool_factory.mm:CreateTool)
 }
 
+bool ActorToolRequest::RequiresUrlCheckInCurrentTab() const {
+  if (!GetTargetWebStateId().valid()) {
+    return false;
+  }
+
+  switch (GetToolType()) {
+    case ToolType::kNavigate:
+    case ToolType::kBack:
+    case ToolType::kForward:
+    case ToolType::kWait:
+    case ToolType::kWaitZeroDuration:
+    case ToolType::kCreateTab:
+    case ToolType::kUnknown:
+      return false;
+    case ToolType::kClick:
+    case ToolType::kType:
+    case ToolType::kScroll:
+    case ToolType::kSelect:
+    case ToolType::kDragAndRelease:
+    case ToolType::kScrollTo:
+    case ToolType::kAttemptLogin:
+    case ToolType::kAttemptFormFilling:
+    case ToolType::kCloseTab:
+    case ToolType::kActivateTab:
+      return true;
+  }
+}
 }  // namespace actor

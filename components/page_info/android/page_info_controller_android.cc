@@ -12,6 +12,7 @@
 #include "base/android/jni_string.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/notimplemented.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/browser/permission_settings_registry.h"
@@ -23,10 +24,8 @@
 #include "components/page_info/core/features.h"
 #include "components/page_info/page_info.h"
 #include "components/page_info/page_info_ui.h"
-#include "components/permissions/android/permissions_android_feature_map.h"
 #include "components/permissions/features.h"
 #include "components/security_state/core/security_state.h"
-#include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
@@ -36,7 +35,12 @@
 #include "media/base/media_switches.h"
 #include "net/base/features.h"
 #include "services/network/public/cpp/features.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/jni_zero/jni_zero.h"
+#include "ui/base/window_open_disposition.h"
+#include "ui/events/event.h"
 #include "url/origin.h"
+#include "url/url_constants.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/page_info/android/jni_headers/PageInfoController_jni.h"
@@ -50,10 +54,10 @@ using base::android::ConvertUTF8ToJavaString;
 using base::android::JavaRef;
 
 // static
-static int64_t JNI_PageInfoController_Init(
-    JNIEnv* env,
-    const JavaRef<jobject>& obj,
-    const JavaRef<jobject>& java_web_contents) {
+static jni_zero::JniUniquePtr<PageInfoControllerAndroid>
+JNI_PageInfoController_Init(JNIEnv* env,
+                            const JavaRef<jobject>& obj,
+                            const JavaRef<jobject>& java_web_contents) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(java_web_contents);
 
@@ -61,10 +65,10 @@ static int64_t JNI_PageInfoController_Init(
   content::NavigationEntry* nav_entry =
       web_contents->GetController().GetVisibleEntry();
   if (nav_entry->IsInitialEntry())
-    return 0;
+    return nullptr;
 
-  return reinterpret_cast<intptr_t>(
-      new PageInfoControllerAndroid(env, obj, web_contents));
+  return jni_zero::MakeUnique<PageInfoControllerAndroid>(env, obj,
+                                                         web_contents);
 }
 
 PageInfoControllerAndroid::PageInfoControllerAndroid(
@@ -89,10 +93,6 @@ PageInfoControllerAndroid::PageInfoControllerAndroid(
 
 PageInfoControllerAndroid::~PageInfoControllerAndroid() = default;
 
-void PageInfoControllerAndroid::Destroy(JNIEnv* env) {
-  delete this;
-}
-
 void PageInfoControllerAndroid::RecordPageInfoAction(JNIEnv* env,
                                                      int32_t action) {
   presenter_->RecordPageInfoAction(
@@ -109,6 +109,10 @@ void PageInfoControllerAndroid::SetIdentityInfo(
   std::unique_ptr<PageInfoUI::SecurityDescription> security_description =
       GetSecurityDescription(identity_info);
 
+  is_suspicious_site_ =
+      (identity_info.safe_browsing_status ==
+       PageInfo::SAFE_BROWSING_STATUS_WARNABLE_SUSPICIOUS_SITE);
+
   if (base::FeatureList::IsEnabled(net::features::kVerifyQWACs)) {
     if (PageInfo::IsFileOrInternalPage(url_)) {
       // On Desktop, when PageInfo::IsFileOrInternalPage returns true, an
@@ -117,6 +121,14 @@ void PageInfoControllerAndroid::SetIdentityInfo(
       // string.
       Java_PageInfoController_showConnectionSecurityInfo(env,
                                                          controller_jobject_);
+    } else if (is_suspicious_site_) {
+      // Have the controller set security description and configure suspicious
+      // site UI directly.
+      Java_PageInfoController_setSecurityDescription(
+          env, controller_jobject_,
+          ConvertUTF16ToJavaString(env, security_description->summary),
+          ConvertUTF16ToJavaString(env, security_description->details),
+          is_suspicious_site_);
     } else if (security_description->summary_style ==
                SecuritySummaryColor::GREEN) {
       // Have the controller set up the button that will show the connection
@@ -136,7 +148,32 @@ void PageInfoControllerAndroid::SetIdentityInfo(
   Java_PageInfoController_setSecurityDescription(
       env, controller_jobject_,
       ConvertUTF16ToJavaString(env, security_description->summary),
-      ConvertUTF16ToJavaString(env, security_description->details));
+      ConvertUTF16ToJavaString(env, security_description->details),
+      is_suspicious_site_);
+}
+
+void PageInfoControllerAndroid::OnSuspiciousSiteBackToSafety(JNIEnv* env) {
+  if (presenter_) {
+    presenter_->OnSuspiciousSiteBackToSafety();
+  }
+}
+
+void PageInfoControllerAndroid::OnSuspiciousSiteMarkAsSafe(JNIEnv* env) {
+  if (presenter_) {
+    presenter_->OnSuspiciousSiteMarkAsSafe();
+  }
+}
+
+void PageInfoControllerAndroid::OpenSafeBrowsingHelpCenter(JNIEnv* env) {
+  if (presenter_) {
+    presenter_->OpenSafeBrowsingHelpCenterPage(/*event=*/nullptr,
+                                               is_suspicious_site_);
+  }
+}
+
+void PageInfoControllerAndroid::SetIsSuspiciousSite(JNIEnv* env,
+                                                    bool is_suspicious_site) {
+  is_suspicious_site_ = is_suspicious_site;
 }
 
 void PageInfoControllerAndroid::SetPageFeatureInfo(
@@ -180,8 +217,13 @@ void PageInfoControllerAndroid::SetPermissionInfo(
   base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
   permissions_to_display.push_back(
       ContentSettingsType::FILE_SYSTEM_WRITE_GUARD);
-  if (cmd->HasSwitch(switches::kEnableExperimentalWebPlatformFeatures))
+  permissions_to_display.push_back(ContentSettingsType::SERIAL_GUARD);
+  if (cmd->HasSwitch(switches::kEnableExperimentalWebPlatformFeatures)) {
     permissions_to_display.push_back(ContentSettingsType::BLUETOOTH_SCANNING);
+  }
+  if (base::FeatureList::IsEnabled(blink::features::kWebHID)) {
+    permissions_to_display.push_back(ContentSettingsType::HID_GUARD);
+  }
   permissions_to_display.push_back(ContentSettingsType::VR);
   permissions_to_display.push_back(ContentSettingsType::AR);
 #if BUILDFLAG(ENABLE_VR)
@@ -261,7 +303,7 @@ void PageInfoControllerAndroid::SetPermissionInfo(
   for (const auto& chosen_object : chosen_object_info_list) {
     std::u16string object_title =
         presenter_->GetChooserContextFromUIInfo(*chosen_object->ui_info)
-            ->GetObjectDisplayName(chosen_object->chooser_object->value);
+            ->GetObjectDisplayNameForUI(chosen_object->chooser_object->value);
 
     Java_PageInfoController_addPermissionSection(
         env, controller_jobject_, ConvertUTF16ToJavaString(env, object_title),
@@ -292,13 +334,8 @@ std::optional<PermissionSetting> PageInfoControllerAndroid::GetSettingToDisplay(
     // The javascript content setting should show up if it is blocked globally
     // to give users an easy way to create exceptions.
     return permission.default_setting;
-  } else if (permission.type == ContentSettingsType::NOTIFICATIONS &&
-             (base::FeatureList::IsEnabled(
-                  permissions::kPermissionsAndroidClapperLoud) ||
-              base::FeatureList::IsEnabled(
-                  permissions::kPermissionsAndroidClapperQuiet))) {
-    // For the Clapper experiment, Notifications permission should be
-    // displayed while it is being requested.
+  } else if (permission.type == ContentSettingsType::NOTIFICATIONS) {
+    // Notifications permission should be displayed while it is being requested.
     return permission.default_setting;
   } else if (permission.type == ContentSettingsType::SOUND) {
     // The sound content setting should always show up when the tab has played
@@ -321,18 +358,6 @@ std::optional<PermissionSetting> PageInfoControllerAndroid::GetSettingToDisplay(
   // subpage directly from the permissions returned from this controller.
 
   return std::nullopt;
-}
-
-void PageInfoControllerAndroid::SetAdPersonalizationInfo(
-    const AdPersonalizationInfo& info) {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  std::vector<std::u16string> topic_names;
-  for (const auto& topic : info.accessed_topics) {
-    topic_names.push_back(topic.GetLocalizedRepresentation());
-  }
-  Java_PageInfoController_setAdPersonalizationInfo(
-      env, controller_jobject_, info.has_joined_user_to_interest_group,
-      base::android::ToJavaArrayOfStrings(env, topic_names));
 }
 
 DEFINE_JNI(PageInfoController)

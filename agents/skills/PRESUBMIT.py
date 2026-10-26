@@ -10,11 +10,21 @@ for more details about the presubmit API built into depot_tools.
 PRESUBMIT_VERSION = '2.0.0'
 
 
-def CheckPythonTests(input_api, output_api):
+def _EnsureRepoRootInSysPath(input_api):
     repo_root = input_api.change.RepositoryRoot()
     if repo_root not in input_api.sys.path:
         input_api.sys.path.insert(0, repo_root)
-    # pylint: disable=import-outside-toplevel
+
+
+def CheckPythonTests(input_api, output_api):
+    if not (
+        input_api.HasAffectedFiles(extensions='.py')
+        or input_api.HasAffectedFiles(
+            path='multi-agent-engineering-workflow/tests'
+        )
+    ):
+        return []
+    _EnsureRepoRootInSysPath(input_api)
     from agents import presubmit_support
 
     return input_api.RunTests(
@@ -24,4 +34,13 @@ def CheckPythonTests(input_api, output_api):
             input_api.PresubmitLocalPath(),
             files_to_check=[r'.+_(?:unit)?test\.py$'],
             files_to_skip=[],
-            env=presubmit_support.get_agents_env(input_api)))
+            env=presubmit_support.get_agents_env(input_api),
+        )
+    )
+
+
+def CheckSkills(input_api, output_api):
+    _EnsureRepoRootInSysPath(input_api)
+    from agents.presubmit_support import CheckSkillPresubmit
+
+    return CheckSkillPresubmit(input_api, output_api, check_personas=True)

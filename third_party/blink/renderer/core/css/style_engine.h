@@ -113,6 +113,7 @@ class StyleSheetContents;
 class StyleInitialData;
 class TextTrack;
 class StyleSheetCollection;
+class URLPattern;
 class ViewportStyleResolver;
 class SelectorFilter;
 struct LogicalSize;
@@ -276,6 +277,11 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
   void AdoptedStyleSheetAdded(TreeScope& tree_scope, CSSStyleSheet* sheet);
   void AdoptedStyleSheetRemoved(TreeScope& tree_scope, CSSStyleSheet* sheet);
 
+  StyleSheetContents* FindStyleSheetContents(
+      const String& text,
+      const CSSParserContext* parser_context);
+  void AddStyleSheetContents(const String& text, StyleSheetContents* contents);
+
   void WatchedSelectorsChanged();
   void DocumentRulesSelectorsChanged();
   void InitialStyleChanged();
@@ -327,6 +333,22 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
   // changes at some later point, we may have to mark affected elements for
   // style recalc.
   bool EvaluateFunctionalNavigationQuery(const NavigationTestExpression&);
+
+  void SetNeedsStyleUpdateOnNavigation() {
+    needs_style_update_on_navigation_ = true;
+  }
+  bool NeedsStyleUpdateOnNavigation() const {
+    return needs_style_update_on_navigation_;
+  }
+
+  // Add a URLPattern for a given @location rule.
+  // `location` is a <dashed-ident>.
+  void AddURLPatternFromLocation(const AtomicString& location_name,
+                                 URLPattern*);
+
+  // Look up and return the URLPattern identified by <dashed-ident> `location`.
+  const URLPattern* FindURLPatternByLocation(
+      const AtomicString& location_name) const;
 
   void UpdateActiveStyle();
 
@@ -428,7 +450,7 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
   }
   // Push all pending invalidations on the document.
   void InvalidateStyle();
-  bool HasViewportDependentMediaQueries();
+  bool MayHaveViewportDependentMediaQueries();
   bool HasViewportDependentPropertyRegistrations();
 
   class InApplyAnimationUpdateScope {
@@ -501,7 +523,7 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
                              PendingSheetType type,
                              RenderBlockingBehavior render_blocking_behavior);
 
-  void CollectFeaturesTo(RuleFeatureSet& features);
+  void CollectFeaturesTo(RuleFeatureSet& features) const;
 
   void EnsureUAStyleForFullscreen(const Element&);
   void EnsureUAStyleForElement(const Element&);
@@ -510,7 +532,6 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
 
   void PlatformColorsChanged();
 
-  bool HasRulesForId(const AtomicString& id) const;
   void ClassChangedForElement(const SpaceSplitString& changed_classes,
                               Element&);
   void ClassChangedForElement(const SpaceSplitString& old_classes,
@@ -555,7 +576,6 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
       InvalidationScope,
       bool invalidate_slotted,
       bool invalidate_part);
-  void ScheduleCustomElementInvalidations(HashSet<AtomicString> tag_names);
   void ScheduleInvalidationsForHasPseudoAffectedByInsertionOrRemoval(
       ContainerNode* parent,
       Node* node_before_change,
@@ -577,6 +597,8 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
 
   // Invalidate caches that depends on the base url.
   void BaseURLChanged();
+  // Invalidate caches that depend on the document's referrer policy.
+  void ReferrerPolicyChanged();
 
   unsigned StyleForElementCount() const { return style_for_element_count_; }
   void IncStyleForElementCount() { style_for_element_count_++; }
@@ -699,7 +721,6 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
   StyleRulePositionTry* GetPositionTryRule(const ScopedCSSName&);
   void RecalcStyle();
 
-  void ClearEnsuredDescendantStyles(Element& element);
   void RebuildLayoutTree(Element* size_container = nullptr);
   bool InRebuildLayoutTree() const { return in_layout_tree_rebuild_; }
   bool InDOMRemoval() const { return in_dom_removal_; }
@@ -855,7 +876,6 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
                                        MediaValueChange);
   void MediaQueryAffectingValueChanged(HeapHashSet<Member<TextTrack>>&,
                                        MediaValueChange);
-  void EnsureUAStyleForTransitionPseudos();
 
   const RuleFeatureSet& GetRuleFeatureSet() const {
     DCHECK(global_rule_set_);
@@ -866,11 +886,6 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
 
   void CollectUserStyleFeaturesTo(RuleFeatureSet&) const;
   void CollectScopedStyleFeaturesTo(RuleFeatureSet&) const;
-
-  CSSStyleSheet* ParseSheet(Element&,
-                            const String& text,
-                            TextPosition start_position,
-                            RenderBlockingBehavior render_blocking_behavior);
 
   const StyleSheetCollection& GetDocumentStyleSheetCollection() const {
     DCHECK(document_style_sheet_collection_);
@@ -884,8 +899,7 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
 
   void PrepareUpdateActiveStyleSheetsInShadow(
       TreeScope*,
-      UnorderedTreeScopeSet& tree_scopes_removed,
-      const MediaQueryEvaluator& medium);
+      UnorderedTreeScopeSet& tree_scopes_removed);
 
   bool ShouldSkipInvalidationFor(const Element&) const;
   bool IsSubtreeAndSiblingsStyleDirty(const Element&) const;
@@ -1088,6 +1102,7 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
   bool fonts_need_update_{false};
   bool counter_styles_need_update_{false};
   bool position_try_styles_dirty_{false};
+  bool needs_style_update_on_navigation_{false};
 
   // Set to true if we allow marking style dirty from style recalc. Ideally, we
   // should get rid of this, but we keep track of where we allow it with
@@ -1106,6 +1121,11 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
 
   // True if some data backing env() has changed.
   bool is_env_dirty_{false};
+
+  // Media query result flags from the "media" attribute of author style
+  // sheets. Sticky: only ever grows for the lifetime of the StyleEngine, so
+  // that setting it never requires rebuilding the CSSGlobalRuleSet.
+  MediaQueryResultFlags media_query_result_flags_;
 
   // Flags collected from all calls to EvaluateFunctionalMediaQuery.
   MediaQueryResultFlags functional_media_query_result_flags_;
@@ -1298,6 +1318,9 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
   RandomValueCache random_base_value_cache_;
   using ElementSharedRandomValueCache = HashMap<AtomicString, double>;
   ElementSharedRandomValueCache element_shared_random_base_value_cache_;
+
+  // URLPattern entries defined by @location rules.
+  HeapHashMap<AtomicString, Member<URLPattern>> navigation_locations_;
 };
 
 void PossiblyScheduleNthPseudoInvalidations(Node& node);

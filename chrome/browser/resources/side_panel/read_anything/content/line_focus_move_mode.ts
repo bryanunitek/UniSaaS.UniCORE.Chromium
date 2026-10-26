@@ -3,13 +3,18 @@
 // found in the LICENSE file.
 import {assert} from '//resources/js/assert.js';
 
+import type {VisualBrowserProxy} from '../app/visual_browser_proxy.js';
+import {VisualBrowserProxyImpl} from '../app/visual_browser_proxy.js';
 import type {Segment} from '../read_aloud/read_aloud_types.js';
-import {getRectIndexAtY, getRectsForSegments} from '../shared/dom_queries.js';
-import {calculateTextBounds} from '../shared/rect_calculations.js';
+import {SpeechController} from '../read_aloud/speech_controller.js';
+import {getRectsForSegments} from '../shared/dom_queries.js';
+import type {MetricsBrowserProxy} from '../shared/metrics_browser_proxy.js';
+import {MetricsBrowserProxyImpl} from '../shared/metrics_browser_proxy.js';
+import {calculateTextBounds, getLineForRect, getRectIndexAtY} from '../shared/rect_calculations.js';
 
 import type {LineFocusModel} from './line_focus_model.js';
 import type {LineFocusStyleMode} from './line_focus_style_mode.js';
-import {LineFocusMovement} from './read_anything_types.js';
+import {LineFocusMovement, LineFocusNotificationType} from './read_anything_types.js';
 
 // Used to prevent microadjustments of the line focus window when adjusting to
 // new line heights as it can be distracting for no functional difference.
@@ -19,8 +24,13 @@ const BASE_MOVEMENT_THRESHOLD = 8;
 // Interface for communicating notifications back to the main
 // LineFocusController.
 export interface MoveModeDelegate {
-  // Notifies that the focus element has moved.
-  notifyMove(): void;
+  // Notifies that the focus element has moved from an intentional user
+  // movement, such as a scroll or keyboard navigation;
+  notifyMoveWithContentPositionChange(): void;
+
+  // Notifies that the focus element has moved auatomatically, from an update,
+  // such as a settings change.
+  notifyMoveWithVisualPositionChange(): void;
 
   // Notifies that the view needs to scroll.
   notifyScroll(scrollDiff: number, instant?: boolean): void;
@@ -31,14 +41,23 @@ export interface MoveModeDelegate {
   // Notifies that the content panel needs a scroll buffer to allow for
   // centering focus.
   notifyScrollBuffer(needsBuffer: boolean): void;
-
-  // Notifies that a line focus session has ended.
-  onSessionEnd(): void;
 }
 
 // Base class for line focus movement strategies.
 export abstract class LineFocusMoveMode {
   protected movementThreshold: number = BASE_MOVEMENT_THRESHOLD;
+  // Tracks the scroller scrollTop position across frames during smooth
+  // scrolling to calculate frame-by-frame scroll differences.
+  protected lastFrameScrollTop_: number|null = null;
+  // Cached container and viewport height to enable recalculating fresh text
+  // bounds when repositioning the focal point.
+  protected textContentContainer_: HTMLElement|null = null;
+  protected viewportHeight_: number = 0;
+  protected speechController_ = SpeechController.getInstance();
+  protected metricsBrowserProxy_: MetricsBrowserProxy =
+      MetricsBrowserProxyImpl.getInstance();
+  protected visualBrowserProxy_: VisualBrowserProxy =
+      VisualBrowserProxyImpl.getInstance();
 
   constructor(
       protected model_: LineFocusModel,
@@ -77,7 +96,7 @@ export abstract class LineFocusMoveMode {
       this.initializeSnapIndex(isForward);
       const linesToLog = this.styleMode_.getStyle().lines;
       for (let i = 0; i < linesToLog; i++) {
-        chrome.readingMode.incrementLineFocusKeyboardLines();
+        this.metricsBrowserProxy_.incrementLineFocusKeyboardLines();
       }
     } else {
       this.updateSnapIndex_(currentIndex, isForward);
@@ -93,11 +112,14 @@ export abstract class LineFocusMoveMode {
       return;
     }
     const rect = rects[0]!;
-    if (Math.abs(this.model_.getFocalPoint() -
-                 this.styleMode_.getFocalPointForRect(rect)) > 0.1) {
-      chrome.readingMode.incrementLineFocusSpeechLines();
+    const targetRect =
+        getLineForRect(rect, this.model_.getTextBounds()) ?? rect;
+    if (Math.abs(
+            this.model_.getFocalPoint() -
+            this.styleMode_.getFocalPointForRect(targetRect)) > 2) {
+      this.metricsBrowserProxy_.incrementLineFocusSpeechLines();
     }
-    this.moveToRect(rect);
+    this.moveToRect(targetRect);
   }
 
   // Returns whether this move mode needs padding to reach all text.
@@ -128,11 +150,19 @@ export abstract class LineFocusMoveMode {
     return false;
   }
 
-  protected setFocalPoint(focalPointY: number, quietly: boolean = false): void {
+  protected setFocalPoint(
+      focalPointY: number, notificationType: LineFocusNotificationType): void {
     this.model_.setFocalPoint(focalPointY);
     this.styleMode_.updateFocusBounds();
-    if (!quietly) {
-      this.delegate_.notifyMove();
+
+    if (notificationType === LineFocusNotificationType.NONE) {
+      return;
+    }
+
+    if (notificationType === LineFocusNotificationType.CONTENT) {
+      this.delegate_.notifyMoveWithContentPositionChange();
+    } else {
+      this.delegate_.notifyMoveWithVisualPositionChange();
     }
   }
 
@@ -154,7 +184,7 @@ export abstract class LineFocusMoveMode {
   protected resetScrollState(newScrollTop: number) {
     const distance =
         Math.round(Math.abs(newScrollTop - this.model_.getLastScrollTop()));
-    chrome.readingMode.addLineFocusScrollDistance(distance);
+    this.metricsBrowserProxy_.addLineFocusScrollDistance(distance);
     this.model_.setLastScrollTop(newScrollTop);
 
     // If the scroll was not initiated by line focus, then reset which line is
@@ -164,6 +194,7 @@ export abstract class LineFocusMoveMode {
     }
 
     this.model_.setInitiatedScroll(false);
+    this.lastFrameScrollTop_ = null;
   }
 
   protected initializeSnapIndex(isForward: boolean) {
@@ -175,20 +206,21 @@ export abstract class LineFocusMoveMode {
   }
 
   protected updatePositions(container: HTMLElement, height: number): void {
+    this.textContentContainer_ = container;
+    this.viewportHeight_ = height;
     const {minY, maxY, bounds} = calculateTextBounds(container, height);
     this.model_.setMinY(minY);
     this.model_.setMaxY(maxY);
     this.model_.setTextBounds(bounds);
     this.movementThreshold =
-        BASE_MOVEMENT_THRESHOLD * chrome.readingMode.fontSize;
+        BASE_MOVEMENT_THRESHOLD * this.visualBrowserProxy_.getFontSize();
   }
 
   // Common setup logic for when a movement mode that enables line focus is
   // activated.
   protected setupEnabledMode(container: HTMLElement, height: number): void {
-    this.model_.setLastEnabledLineFocusStyle(this.styleMode_.getStyle());
     if (!this.model_.isSessionActive()) {
-      chrome.readingMode.startLineFocusSession();
+      this.metricsBrowserProxy_.startLineFocusSession();
       this.model_.setSessionActive(true);
     }
     this.updatePositions(container, height);
@@ -200,7 +232,7 @@ export abstract class LineFocusMoveMode {
   }
 
   protected getCenterY(): number {
-    return (this.model_.getMaxY()) / 2;
+    return this.styleMode_.getCenterY();
   }
 
   protected notifyScrollToTop(): void {
@@ -220,7 +252,7 @@ export abstract class LineFocusMoveMode {
     const clampedIndex = this.styleMode_.clampLineIndex(nextIndex);
     this.model_.setCurrentLineIndex(clampedIndex);
     if (this.model_.getCurrentLineIndex() !== currentIndex) {
-      chrome.readingMode.incrementLineFocusKeyboardLines();
+      this.metricsBrowserProxy_.incrementLineFocusKeyboardLines();
     }
     this.moveToRect(lines[clampedIndex]!);
 
@@ -240,11 +272,20 @@ export class LineFocusStaticMoveMode extends LineFocusMoveMode {
   }
 
   onActivated(container: HTMLElement, height: number): void {
+    const notificationType: LineFocusNotificationType =
+        this.model_.isSessionActive() ? LineFocusNotificationType.VISUAL :
+                                        LineFocusNotificationType.CONTENT;
     this.setupEnabledMode(container, height);
     // In static mode, don't adapt the window size to line height to prevent
     // jarring movement / jitter.
     this.model_.setAdaptMultiLineWindow(false);
-    this.setFocalPoint(this.getCenterY());
+    // When switching between Line Focus styles while active (wasEnabled ===
+    // true), update the focal point quietly without calling
+    // notifyMoveWithContentPositionChange(). This prevents DOM hit-testing and
+    // avoids calling onLineFocusChange, which would otherwise reset paused
+    // speech or jump the audio. Visual highlight styling is updated via
+    // notifyMoveWithVisualPositionChange() below.
+    this.setFocalPoint(this.getCenterY(), notificationType);
     // Start at the first text line on activate by scrolling to it if needed.
     this.recenterCurrentTextLineIfNeeded(/*instant=*/ true);
   }
@@ -260,7 +301,7 @@ export class LineFocusStaticMoveMode extends LineFocusMoveMode {
     // position in the content even though the coordinates are the same. This
     // ensures speaking from the current line focus position works properly.
     if (!initiatedScroll) {
-      this.delegate_.notifyMove();
+      this.delegate_.notifyMoveWithContentPositionChange();
       return;
     }
 
@@ -274,7 +315,7 @@ export class LineFocusStaticMoveMode extends LineFocusMoveMode {
       const topDiff = Math.abs(oldTop - this.model_.getTop());
       if (heightDiff > this.movementThreshold ||
           topDiff > this.movementThreshold) {
-        this.delegate_.notifyMove();
+        this.delegate_.notifyMoveWithContentPositionChange();
       }
     }
   }
@@ -298,10 +339,11 @@ export class LineFocusStaticMoveMode extends LineFocusMoveMode {
     if (Math.abs(newSpread - previousSpread) > this.movementThreshold ||
         previousMaxY !== this.model_.getMaxY() ||
         previousMinY !== this.model_.getMinY()) {
-      this.setFocalPoint(this.getCenterY());
       // Notify of a change even if it's less than the threshold so that the
       // window adapts to the new line heights.
-      this.delegate_.notifyMove();
+      this.setFocalPoint(
+          this.getCenterY(),
+          /*notificationType=*/ LineFocusNotificationType.VISUAL);
     }
   }
 
@@ -328,10 +370,21 @@ export class LineFocusCursorMoveMode extends LineFocusMoveMode {
 
   onActivated(container: HTMLElement, height: number): void {
     const wasEnabled = this.model_.isSessionActive();
+    const notificationType: LineFocusNotificationType = wasEnabled ?
+        LineFocusNotificationType.VISUAL :
+        LineFocusNotificationType.CONTENT;
     this.setupEnabledMode(container, height);
     this.model_.setAdaptMultiLineWindow(true);
-    this.setFocalPoint(Math.max(
-        this.getFirstVisibleFocalPoint_(), this.model_.getFocalPoint()));
+    // When switching Line Focus styles while active (wasEnabled === true), set
+    // the focal point quietly without calling
+    // notifyMoveWithContentPositionChange(). This prevents DOM hit-testing and
+    // calling onLineFocusChange, avoiding audio jumps or speech resets. Visual
+    // highlight styling is updated via notifyMoveWithVisualPositionChange()
+    // below.
+    this.setFocalPoint(
+        Math.max(
+            this.getFirstVisibleFocalPoint_(), this.model_.getFocalPoint()),
+        notificationType);
     if (!wasEnabled && this.model_.getTextBounds().length > 0) {
       this.initializeSnapIndex(/*isForward=*/ true);
     }
@@ -340,8 +393,9 @@ export class LineFocusCursorMoveMode extends LineFocusMoveMode {
   onMouseMove(y: number): void {
     this.model_.setCurrentLineIndex(null);
     const previousFocalPoint = this.model_.getFocalPoint();
-    this.setFocalPoint(Math.max(this.model_.getMinY(), y));
-    chrome.readingMode.addLineFocusMouseDistance(
+    this.setFocalPoint(
+        Math.max(this.model_.getMinY(), y), LineFocusNotificationType.CONTENT);
+    this.metricsBrowserProxy_.addLineFocusMouseDistance(
         Math.round(Math.abs(this.model_.getFocalPoint() - previousFocalPoint)));
   }
 
@@ -350,17 +404,26 @@ export class LineFocusCursorMoveMode extends LineFocusMoveMode {
     // in the toolbar, which means they are likely trying to change some
     // settings. onAllMenusClose will notify them of the final position when
     // all the settings menus are closed.
-    this.setFocalPoint(Math.max(this.model_.getMinY(), y), /*quietly=*/ true);
+    this.setFocalPoint(
+        Math.max(this.model_.getMinY(), y), LineFocusNotificationType.NONE);
   }
 
   onScrollEnd(newScrollTop: number): void {
+    const wasInitiated = this.model_.getInitiatedScroll();
     this.resetScrollState(newScrollTop);
+    // When an auto-scroll or speech-driven scroll finishes, recalculate bounds
+    // to ensure the line focus highlight visually aligns with the resting text.
+    if (wasInitiated || this.speechController_.isSpeechActive()) {
+      this.styleMode_.updateFocusBounds();
+      this.delegate_.notifyMoveWithVisualPositionChange();
+    }
   }
 
   onTextLocationsChange(container: HTMLElement, height: number): void {
     const currentIndex = this.model_.getCurrentLineIndex();
 
     this.updatePositions(container, height);
+    this.updateScrollOffset_(container);
     this.updateScrollBuffer();
     // If the user is focusing on a particular line when font size or spacing
     // changes, recenter that text line if it would go off screen to keep their
@@ -372,7 +435,16 @@ export class LineFocusCursorMoveMode extends LineFocusMoveMode {
 
     if (currentIndex !== null) {
       const newFocalPoint = this.styleMode_.getDesiredCenter(currentIndex);
-      this.setFocalPoint(newFocalPoint);
+      this.setFocalPoint(newFocalPoint, LineFocusNotificationType.VISUAL);
+    } else if (this.model_.getFocalPoint() === 0) {
+      // After content finishes rendering, set the focal point. This
+      // prevents scenarios where read aloud starts playing before the focal
+      // point is set (i.e. on a first open if the mouse cursor hasn't
+      // entered the main content panel), which would mean the line focus
+      // window would be missing or "stuck" at the top of the page while
+      // read aloud continues reading behind the scrim.
+      const firstVisible = this.getFirstVisibleFocalPoint_();
+      this.setFocalPoint(firstVisible, LineFocusNotificationType.VISUAL);
     } else if (this.model_.getMinY() > this.model_.getFocalPoint()) {
       this.initializeSnapIndex(/*isForward=*/ true);
     }
@@ -383,19 +455,52 @@ export class LineFocusCursorMoveMode extends LineFocusMoveMode {
     const oldTop = this.model_.getTop();
     const oldFocalPoint = this.model_.getFocalPoint();
 
+    // Ensure text bounds are initialized or updated if the scroll offset
+    // changed before applying the new focal point. When scroll position is
+    // unchanged between words, skip recomputing positions to avoid redundant
+    // layout reflows on each word boundary.
+    const scroller = this.textContentContainer_?.closest('.sp-scroller');
+    const currentScrollTop = scroller ? scroller.scrollTop : null;
+    const lastScrollTop =
+        this.lastFrameScrollTop_ ?? this.model_.getLastScrollTop();
+    const scrolledSinceLastUpdate = this.model_.getTextBounds().length === 0 ||
+        (currentScrollTop !== null && currentScrollTop !== lastScrollTop);
+    if (scrolledSinceLastUpdate) {
+      this.updatePositionsAndScrollTop_(scroller);
+    }
+
     // Set the focal point quietly as the threshold calculation below will
     // determine whether or not to notify of movement.
     const newFocalPoint = this.styleMode_.getFocalPointForRect(rect);
-    this.setFocalPoint(newFocalPoint, /*quietly=*/ true);
-    this.recenterCurrentTextLineIfNeeded(/*instant=*/ false);
+    this.setFocalPoint(newFocalPoint, LineFocusNotificationType.NONE);
+
+    // During active speech playback, scroll instantly so the spoken text is
+    // in view before audio plays, avoiding smooth-scroll animation lag.
+    const scrolledAfterRecentering = this.recenterCurrentTextLineIfNeeded(
+        /*instant=*/ this.speechController_.isSpeechActive());
+    if (scrolledAfterRecentering) {
+      this.updatePositionsAndScrollTop_(scroller);
+    }
 
     const heightDiff = Math.abs(oldHeight - this.model_.getWindowHeight());
     const topDiff = Math.abs(oldTop - this.model_.getTop());
     const focalDiff = Math.abs(oldFocalPoint - newFocalPoint);
-    if (focalDiff > this.movementThreshold ||
+    if (scrolledAfterRecentering || focalDiff > this.movementThreshold ||
         heightDiff > this.movementThreshold ||
         topDiff > this.movementThreshold) {
-      this.delegate_.notifyMove();
+      this.delegate_.notifyMoveWithContentPositionChange();
+    }
+  }
+
+  private updatePositionsAndScrollTop_(scroller?: Element|null): void {
+    if (!this.textContentContainer_) {
+      return;
+    }
+    this.updatePositions(this.textContentContainer_, this.viewportHeight_);
+    const scrollTop = scroller ? scroller.scrollTop : null;
+    if (scrollTop !== null) {
+      this.lastFrameScrollTop_ = scrollTop;
+      this.model_.setLastScrollTop(scrollTop);
     }
   }
 
@@ -419,6 +524,37 @@ export class LineFocusCursorMoveMode extends LineFocusMoveMode {
         this.styleMode_.getFocalPointForRect(firstVisibleRect) :
         this.model_.getMinY();
   }
+
+  // Shifts the line focus focal point during an active smooth-scroll animation
+  // (such as when scrolling while reading) when using follow cursor mode so
+  // that the focus window visually follows the moving text instead of being
+  // offset by the previous scroll amount.
+  private updateScrollOffset_(container: HTMLElement): void {
+    const scroller = container.closest('.sp-scroller');
+    if (!scroller) {
+      return;
+    }
+
+    const currentScrollTop = scroller.scrollTop;
+    // Use lastFrameScrollTop_ if set, falling back to model's last scroll top
+    // so the initial scroll delta is not dropped on the first frame.
+    const lastScrollTop =
+        this.lastFrameScrollTop_ ?? this.model_.getLastScrollTop();
+    const scrollDiff = currentScrollTop - lastScrollTop;
+
+    // If line focus is currently tracking the reading cursor (currentIndex
+    // is null), shift the focal point by the scroll difference so the focus
+    // box visually moves with the text during the smooth scroll animation.
+    const isFollowingCursor = this.model_.getCurrentLineIndex() === null;
+    const isAutoScrollActive = this.model_.getInitiatedScroll() ||
+        this.speechController_.isSpeechActive();
+    if (isFollowingCursor && (scrollDiff !== 0) && isAutoScrollActive) {
+      this.setFocalPoint(
+          this.model_.getFocalPoint() - scrollDiff,
+          LineFocusNotificationType.VISUAL);
+    }
+    this.lastFrameScrollTop_ = currentScrollTop;
+  }
 }
 
 // Movement strategy for when line focus is disabled.
@@ -434,9 +570,6 @@ export class LineFocusNoneMoveMode extends LineFocusMoveMode {
   }
 
   onActivated(_container: HTMLElement, _height: number): void {
-    if (this.model_.isSessionActive()) {
-      this.delegate_.onSessionEnd();
-    }
     this.model_.reset();
     this.updateScrollBuffer();
   }

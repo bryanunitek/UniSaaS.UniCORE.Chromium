@@ -6,13 +6,16 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 
+#include "base/containers/span.h"
 #include "base/no_destructor.h"
 #include "ui/base/class_property.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/gfx/text_utils.h"
 
 DEFINE_UI_CLASS_PROPERTY_TYPE(actions::ActionPinnableState)
 namespace actions {
@@ -39,12 +42,17 @@ DEFINE_UI_CLASS_PROPERTY_KEY(std::underlying_type_t<ActionPinnableState>,
                              std::underlying_type_t<ActionPinnableState>(
                                  ActionPinnableState::kNotPinnable))
 
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(std::u16string, kShortTitleTextKeyInternal)
+
+const ui::ClassProperty<std::u16string*>* const kShortTitleTextKey =
+    kShortTitleTextKeyInternal;
+
 ActionList::ActionList(Delegate* delegate) : delegate_(delegate) {}
 
 ActionList::~ActionList() = default;
 
-ActionItem* ActionList::AddAction(std::unique_ptr<ActionItem> action_item) {
-  ActionItem* result = action_item.get();
+BaseAction* ActionList::AddAction(std::unique_ptr<BaseAction> action_item) {
+  BaseAction* result = action_item.get();
   children_.push_back(std::move(action_item));
   if (delegate_) {
     delegate_->ActionListChanged();
@@ -52,7 +60,19 @@ ActionItem* ActionList::AddAction(std::unique_ptr<ActionItem> action_item) {
   return result;
 }
 
-std::unique_ptr<ActionItem> ActionList::RemoveAction(ActionItem* action_item) {
+BaseAction* ActionList::AddActionAt(std::unique_ptr<BaseAction> action_item,
+                                    size_t index) {
+  CHECK_LE(index, children_.size());
+  BaseAction* result = action_item.get();
+  children_.insert(children_.begin() + static_cast<ptrdiff_t>(index),
+                   std::move(action_item));
+  if (delegate_) {
+    delegate_->ActionListChanged();
+  }
+  return result;
+}
+
+std::unique_ptr<BaseAction> ActionList::RemoveAction(BaseAction* action_item) {
   auto result = std::find_if(
       children_.begin(), children_.end(),
       [action_item](auto& item) { return item.get() == action_item; });
@@ -82,23 +102,39 @@ BaseAction* BaseAction::GetParent() const {
   return parent_;
 }
 
-ActionItem* BaseAction::AddChild(std::unique_ptr<ActionItem> action_item) {
-  DCHECK(!action_item->GetParent());
-  action_item->parent_ = this;
-  return children_.AddAction(std::move(action_item));
-}
-
-std::unique_ptr<ActionItem> BaseAction::RemoveChild(ActionItem* action_item) {
-  DCHECK(action_item);
-  DCHECK_EQ(action_item->GetParent(), this);
-  action_item->parent_ = nullptr;
-  return children_.RemoveAction(action_item);
-}
-
 void BaseAction::ActionListChanged() {}
 
 void BaseAction::ResetActionList() {
   children_.Reset();
+}
+
+void BaseAction::SetPopulateChildrenCallback(PopulateChildActions callback) {
+  if (populate_child_callback_ == callback) {
+    return;
+  }
+  populate_child_callback_ = std::move(callback);
+}
+
+bool BaseAction::HasPopulateChildActionsCallback() const {
+  return !populate_child_callback_.is_null();
+}
+
+void BaseAction::PopulateChildItems() {
+  for (auto& child : GetChildren().children()) {
+    child->PopulateChildItems();
+  }
+  if (populate_child_callback_) {
+    populate_child_callback_.Run(this);
+  }
+}
+
+void BaseAction::AddChildInternal(std::unique_ptr<BaseAction> action_item) {
+  children_.AddAction(std::move(action_item));
+}
+
+void BaseAction::AddChildAtInternal(std::unique_ptr<BaseAction> action_item,
+                                    size_t index) {
+  children_.AddActionAt(std::move(action_item), index);
 }
 
 BEGIN_METADATA_BASE(BaseAction)
@@ -158,6 +194,10 @@ ActionItem::ActionItem(InvokeActionCallback callback)
 
 ActionItem::~ActionItem() = default;
 
+ActionItem* ActionItem::GetActionItem() {
+  return this;
+}
+
 std::u16string_view ActionItem::GetAccessibleName() const {
   return accessible_name_;
 }
@@ -213,9 +253,10 @@ void ActionItem::SetChecked(bool checked) {
       if (child.get() == this) {
         continue;
       }
-      auto child_id = child->GetGroupId();
+      auto& child_action_item = *child->GetActionItem();
+      auto child_id = child_action_item.GetGroupId();
       if (child_id.has_value() && group_id_ == child_id) {
-        child->SetChecked(false);
+        child_action_item.SetChecked(false);
       }
     }
   }
@@ -263,11 +304,16 @@ std::u16string_view ActionItem::GetText() const {
 }
 
 void ActionItem::SetText(std::u16string_view text) {
-  if (text_ == text) {
+  if (raw_text_ == text) {
     return;
   }
-  text_ = std::u16string(text);
+  raw_text_ = std::u16string(text);
+  text_ = gfx::RemoveAccelerator(raw_text_);
   ActionItemChanged();
+}
+
+std::u16string_view ActionItem::GetTextWithMnemonic() const {
+  return raw_text_;
 }
 
 std::u16string_view ActionItem::GetTooltipText() const {
@@ -321,6 +367,11 @@ void ActionItem::AddSynonyms(std::initializer_list<std::u16string> synonyms) {
   synonyms_.insert(synonyms_.end(), synonyms);
 }
 
+// Returns the synonyms for this action. Used for fuzzy search.
+base::span<const std::u16string> ActionItem::GetSynonyms() const {
+  return synonyms_;
+}
+
 void ActionItem::InvokeAction(ActionInvocationContext context) {
   if (enabled_) {
     invoke_count_++;
@@ -372,17 +423,18 @@ void ActionItem::EndUpdate() {
 }
 
 BEGIN_METADATA(ActionItem)
-ADD_PROPERTY_METADATA(std::u16string_view, AccessibleName)
+ADD_PROPERTY_METADATA(std::u16string, AccessibleName)
 ADD_PROPERTY_METADATA(std::optional<ActionId>, ActionId)
 ADD_PROPERTY_METADATA(ui::Accelerator, Accelerator)
 ADD_PROPERTY_METADATA(bool, Checked)
 ADD_PROPERTY_METADATA(bool, Enabled)
 ADD_PROPERTY_METADATA(std::optional<int>, GroupId)
-ADD_PROPERTY_METADATA(std::u16string_view, Text)
-ADD_PROPERTY_METADATA(std::u16string_view, TooltipText)
+ADD_PROPERTY_METADATA(std::u16string, Text)
+ADD_PROPERTY_METADATA(std::u16string, TooltipText)
 ADD_PROPERTY_METADATA(bool, Visible)
 ADD_READONLY_PROPERTY_METADATA(int, InvokeCount)
 ADD_READONLY_PROPERTY_METADATA(std::optional<base::TimeTicks>, LastInvokeTime)
+ADD_READONLY_PROPERTY_METADATA(std::u16string, TextWithMnemonic)
 END_METADATA
 
 StatefulImageActionItem::~StatefulImageActionItem() = default;
@@ -564,8 +616,15 @@ std::pair<ActionId, bool> ActionIdMap::CreateActionId(
   return {new_action_id--, true};
 }
 
+ActionItem* IndirectActionItem::GetActionItem() {
+  return delegate_.get();
+}
+
+BEGIN_METADATA(IndirectActionItem)
+END_METADATA
+
 void ActionManager::IndexActions() {
-  if (root_action_parent_.GetChildren().children().empty() &&
+  if (root_action_parent_->GetChildren().children().empty() &&
       !initializer_list_->empty()) {
     initializer_list_->Notify(this);
   }
@@ -585,7 +644,7 @@ ActionItem* ActionManager::FindAction(ActionId action_id, ActionItem* scope) {
     }
   }
   const ActionList& action_list =
-      scope ? scope->GetChildren() : root_action_parent_.GetChildren();
+      scope ? scope->GetChildren() : root_action_parent_->GetChildren();
   return FindActionImpl(action_id, action_list);
 }
 
@@ -598,23 +657,23 @@ ActionItem* ActionManager::FindAction(const ui::KeyEvent& key_event,
 void ActionManager::GetActions(ActionItemVector& items, ActionItem* scope) {
   IndexActions();
   const ActionList& action_list =
-      scope ? scope->GetChildren() : root_action_parent_.GetChildren();
+      scope ? scope->GetChildren() : root_action_parent_->GetChildren();
   for (auto& child : action_list.children()) {
-    GetActionsImpl(child.get(), items);
+    GetActionsImpl(child->GetActionItem(), items);
   }
 }
 
 ActionItem* ActionManager::AddAction(std::unique_ptr<ActionItem> action_item) {
-  return root_action_parent_.AddChild(std::move(action_item));
+  return root_action_parent_->AddChild(std::move(action_item));
 }
 
 std::unique_ptr<ActionItem> ActionManager::RemoveAction(
     ActionItem* action_item) {
-  return root_action_parent_.RemoveChild(action_item);
+  return root_action_parent_->RemoveChild(action_item);
 }
 
 void ActionManager::ResetActions() {
-  root_action_parent_.ResetActionList();
+  root_action_parent_->ResetActionList();
 }
 
 void ActionManager::ResetActionItemInitializerList() {
@@ -627,7 +686,7 @@ base::CallbackListSubscription ActionManager::AppendActionItemInitializer(
   DCHECK(initializer_list_);
   // If an initializer is added after items have already been added, just run
   // the initializer immediately.
-  if (!root_action_parent_.GetChildren().children().empty()) {
+  if (!root_action_parent_->GetChildren().children().empty()) {
     initializer.Run(this);
   }
 
@@ -637,9 +696,10 @@ base::CallbackListSubscription ActionManager::AppendActionItemInitializer(
 ActionItem* ActionManager::FindActionImpl(ActionId action_id,
                                           const ActionList& list) {
   for (const auto& item : list.children()) {
-    auto id = item->GetActionId();
+    auto* action_item = item->GetActionItem();
+    auto id = action_item->GetActionId();
     if (id && id == action_id) {
-      return item.get();
+      return action_item;
     }
     if (!item->GetChildren().empty()) {
       ActionItem* result = FindActionImpl(action_id, item->GetChildren());
@@ -654,7 +714,8 @@ ActionItem* ActionManager::FindActionImpl(ActionId action_id,
 void ActionManager::GetActionsImpl(ActionItem* item, ActionItemVector& items) {
   items.push_back(item);
   for (auto& child : item->GetChildren().children()) {
-    GetActionsImpl(child.get(), items);
+    auto* child_action_item = child->GetActionItem();
+    GetActionsImpl(child_action_item, items);
   }
 }
 

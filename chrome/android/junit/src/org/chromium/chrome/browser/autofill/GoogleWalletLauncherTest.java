@@ -31,13 +31,16 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowActivity;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.ui.base.TestActivity;
 
 import java.util.ArrayList;
 import java.util.List;
 
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, sdk = Build.VERSION_CODES.TIRAMISU)
+@Config(sdk = Build.VERSION_CODES.TIRAMISU)
+@EnableFeatures(ChromeFeatureList.CCT_DONT_OVERRIDE_INTENT_MIME_TYPE)
 public class GoogleWalletLauncherTest {
     /** Unit tests for {@link AutofillFallbackSurfaceLauncher}. */
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();

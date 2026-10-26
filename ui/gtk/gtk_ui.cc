@@ -8,7 +8,6 @@
 #include <glib.h>
 #include <pango/pango.h>
 
-#include <array>
 #include <cmath>
 #include <memory>
 #include <optional>
@@ -22,13 +21,14 @@
 #include "base/containers/flat_map.h"
 #include "base/debug/leak_annotations.h"
 #include "base/environment.h"
-#include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/nix/mime_util_xdg.h"
 #include "base/nix/xdg_util.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/observer_list.h"
+#include "base/scoped_environment_variable_override.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "chrome/browser/themes/theme_properties.h"  // nogncheck
@@ -36,6 +36,7 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkShader.h"
 #include "ui/base/glib/glib_cast.h"
+#include "ui/base/glib/gsettings.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/linux/fake_input_method_context.h"
 #include "ui/base/ime/linux/linux_input_method_context.h"
@@ -103,8 +104,6 @@ namespace gtk {
 
 namespace {
 
-constexpr double kDefaultDPI = 96;
-
 // The unknown content type.
 constexpr char kUnknownContentType[] = "application/octet-stream";
 
@@ -158,6 +157,17 @@ gfx::FontRenderParams GetGtkFontRenderParams() {
   return params;
 }
 
+const char* GdkBackendName(ui::LinuxUiBackend backend) {
+  switch (backend) {
+    case ui::LinuxUiBackend::kX11:
+      return "x11";
+    case ui::LinuxUiBackend::kWayland:
+      return "wayland";
+    default:
+      return nullptr;
+  }
+}
+
 std::unique_ptr<GtkUiPlatform> CreateGtkUiPlatform(ui::LinuxUiBackend backend) {
   switch (backend) {
     case ui::LinuxUiBackend::kStub:
@@ -175,151 +185,22 @@ std::unique_ptr<GtkUiPlatform> CreateGtkUiPlatform(ui::LinuxUiBackend backend) {
   }
 }
 
-int GetXftDpi() {
-  int dpi = -1;
-  g_object_get(gtk_settings_get_default(), "gtk-xft-dpi", &dpi, nullptr);
-  return dpi < 0 ? 0 : dpi;
-}
-
-double FontScale() {
-  double resolution = 0;
-  if (const int dpi = GetXftDpi()) {
-    resolution = dpi / 1024.0;
-  } else {
-    GdkScreen* screen = gdk_screen_get_default();
-    resolution = gdk_screen_get_resolution(screen);
-  }
-  const double font_scale = resolution > 0 ? resolution / kDefaultDPI : 1.0;
-  // Round to the nearest 1/64th so that UI can losslessly multiply and divide
-  // the scale factor.
-  return std::round(font_scale * 64) / 64;
-}
-
-// Some misconfigured systems have missing or corrupted schemas, see
-// https://crbug.com/434763642. Avoid initializing GTK in this case to prevent
-// a crash.
-bool IsValidSchema(ui::LinuxUiBackend backend) {
-  struct GFreeDeleter {
-    void operator()(gchar* ptr) const { g_free(ptr); }
-  };
-  struct GVariantDeleter {
-    void operator()(GVariant* ptr) const { g_variant_unref(ptr); }
-  };
-  struct GSettingsSchemaKeyDeleter {
-    void operator()(GSettingsSchemaKey* ptr) const {
-      g_settings_schema_key_unref(ptr);
-    }
-  };
-  struct GSettingsSchemaDeleter {
-    void operator()(GSettingsSchema* ptr) const {
-      g_settings_schema_unref(ptr);
-    }
-  };
-
-  struct {
-    const char* interface;
-    std::array<const char*, 3> keys;
-  } static constexpr kInterfaces[] = {
-      {"org.gnome.desktop.interface",
-       {"font-antialiasing", "font-hinting", "font-rgba-order"}},
-      {"org.gnome.settings-daemon.plugins.xsettings",
-       {"antialiasing", "hinting", "rgba-order"}},
-  };
-
-  if (backend != ui::LinuxUiBackend::kWayland) {
-    // The GTK codepath using these schemas is only used on Wayland.
-    return true;
-  }
-
-  auto* source = g_settings_schema_source_get_default();
-  if (!source) {
-    return true;
-  }
-
-  for (const auto& interface : kInterfaces) {
-    std::unique_ptr<GSettingsSchema, GSettingsSchemaDeleter> schema(
-        g_settings_schema_source_lookup(source, interface.interface,
-                                        /*recursive=*/true));
-    if (!schema) {
-      // Not an error, try the next schema.
-      continue;
-    }
-
-    for (const char* key_string : interface.keys) {
-      // Checking for the key first is required, otherwise
-      // g_settings_schema_get_key() could crash.
-      if (!g_settings_schema_has_key(schema.get(), key_string)) {
-        LOG(ERROR) << "Schema " << interface.interface << " does not have key "
-                   << key_string;
-        return false;
-      }
-
-      std::unique_ptr<GSettingsSchemaKey, GSettingsSchemaKeyDeleter> key(
-          g_settings_schema_get_key(schema.get(), key_string));
-      if (!key) {
-        LOG(ERROR) << "Schema " << interface.interface << " has key "
-                   << key_string << ", but g_settings_schema_get_key() failed";
-        return false;
-      }
-
-      std::unique_ptr<GVariant, GVariantDeleter> range(
-          g_settings_schema_key_get_range(key.get()));
-      if (!range) {
-        LOG(ERROR) << "Schema " << interface.interface << " key " << key_string
-                   << " has no range, but it is required";
-        return false;
-      }
-
-      char* type_string = nullptr;
-      g_variant_get(range.get(), "(sv)", &type_string, nullptr);
-      std::unique_ptr<gchar, GFreeDeleter> type_string_deleter(type_string);
-      if (!type_string || type_string != std::string_view("enum")) {
-        LOG(ERROR) << "Schema " << interface.interface << " key " << key_string
-                   << " must be an enum";
-        return false;
-      }
-    }
-
-    // Valid schema. Return now since GTK uses the first present schema.
-    return true;
-  }
-
-  // No schema found. This is acceptable, because GTK will fallback to using
-  // default values.
-  return true;
-}
-
-std::string GetSettingsStringProperty(const char* property_name) {
-  gchar* prop_value = nullptr;
-  g_object_get(gtk_settings_get_default(), property_name, &prop_value, nullptr);
-  std::string prop_string;
-  if (prop_value) {
-    prop_string = prop_value;
-    g_free(prop_value);
-  }
-  return prop_string;
-}
-
-std::string GetIconThemeName() {
-  return GetSettingsStringProperty("gtk-icon-theme-name");
-}
-
-std::string GetThemeName() {
-  return GetSettingsStringProperty("gtk-theme-name");
-}
-
 }  // namespace
 
 GtkUi::GtkUi() : window_frame_actions_() {}
 
-GtkUi::~GtkUi() = default;
+GtkUi::~GtkUi() {
+  SetGtkShutdownCb(base::NullCallback());
+}
 
 bool GtkUi::Initialize() {
   const auto* delegate = ui::LinuxUiDelegate::GetInstance();
   DCHECK(delegate);
   const auto backend = delegate->GetBackend();
 
-  if (!IsValidSchema(backend)) {
+  // The GTK codepath using these schemas is only used on Wayland.
+  if (backend == ui::LinuxUiBackend::kWayland &&
+      !ui::AreGdkWaylandFontSchemasValid()) {
     return false;
   }
 
@@ -338,13 +219,39 @@ bool GtkUi::Initialize() {
   // do it once it is ready.
   std::unique_ptr<base::Environment> env(base::Environment::Create());
   env->SetVar("NO_AT_BRIDGE", "1");
+
+  // When GDK opens the display during gtk_init() it probes it for OpenGL
+  // support (GLX/EGL version and extension queries), which loads the GL
+  // driver into this process and costs tens of milliseconds on the main
+  // thread during startup. GTK 3 is only used here to render theme parts
+  // through cairo and for dialogs, neither of which uses GdkGLContext, so
+  // skip the probe. GDK reads the variable once during initialization; it is
+  // restored afterwards so that processes launched from the browser are not
+  // affected, and left alone if the user set it.
+  constexpr char kGdkGl[] = "GDK_GL";
+  std::optional<base::ScopedEnvironmentVariableOverride> disable_gdk_gl_probe;
+  if (!GtkCheckVersion(4) && !env->HasVar(kGdkGl)) {
+    disable_gdk_gl_probe.emplace(kGdkGl, "disable");
+  }
+  // GDK_BACKEND takes precedence over gdk_set_allowed_backends(), so force it
+  // to the platform's backend while GDK opens the display, and restore it
+  // afterwards for the same reason as GDK_GL.
+  std::optional<base::ScopedEnvironmentVariableOverride> gdk_backend;
+  if (const char* name = GdkBackendName(backend)) {
+    gdk_backend.emplace("GDK_BACKEND", name);
+  }
   // gtk_init_check() modifies argv, so make a copy first.
   CmdLineArgs cmd_line = CopyCmdLine(*base::CommandLine::ForCurrentProcess());
-  if (!GtkInitFromCommandLine(&cmd_line.argc, cmd_line.argv.data())) {
+  const bool initialized =
+      GtkInitFromCommandLine(&cmd_line.argc, cmd_line.argv.data());
+  gdk_backend.reset();
+  disable_gdk_gl_probe.reset();
+  if (!initialized) {
     return false;
   }
 
   os_settings_provider_ = std::make_unique<OsSettingsProviderGtk>();
+  SelectFileDialogLinuxGtk::EnsureActivationKeyTracking();
   ui::ColorProviderManager::Get().AppendColorProviderInitializer(
       base::BindRepeating(&GtkUi::AddGtkNativeColorMixer,
                           base::Unretained(this)));
@@ -365,15 +272,6 @@ bool GtkUi::Initialize() {
   };
 
   GtkSettings* settings = gtk_settings_get_default();
-  SanitizeIconThemeName();
-  SanitizeThemeName();
-  InstallGtkSettingsInterceptor();
-
-  if (!GtkCheckVersion(4)) {
-    SanitizeKeyThemeName();
-    connect(settings, "notify::gtk-key-theme-name",
-            &GtkUi::OnKeyThemeNameChanged);
-  }
   connect(settings, "notify::gtk-theme-name", &GtkUi::OnThemeChanged);
   connect(settings, "notify::gtk-icon-theme-name", &GtkUi::OnThemeChanged);
   connect(settings, "notify::gtk-application-prefer-dark-theme",
@@ -387,8 +285,10 @@ bool GtkUi::Initialize() {
   connect(settings, "notify::gtk-enable-primary-paste",
           &GtkUi::OnPrimaryPasteChanged);
 
-  // Listen for DPI changes, if supported.
-  if (GetXftDpi() > 0) {
+  // Listen for DPI changes, if supported.  GdkScreen was removed in GTK4, so
+  // `gtk-xft-dpi` is the only DPI source there, even if it's currently unset
+  // (eg. on Wayland without the xdg-desktop-portal Settings interface).
+  if (GtkCheckVersion(4) || GetXftDpi() > 0) {
     connect(settings, "notify::gtk-xft-dpi", &GtkUi::OnGtkXftDpiChanged);
   } else {
     GdkScreen* screen = gdk_screen_get_default();
@@ -438,7 +338,7 @@ void GtkUi::InitializeFontSettings() {
   double pango_size =
       pango_font_description_get_size(desc) / static_cast<double>(PANGO_SCALE);
   if (GtkCheckVersion(4)) {
-    pango_size /= FontScale();
+    pango_size /= GetFontScale();
   }
   double size_pixels;
   if (pango_font_description_get_size_is_absolute(desc)) {
@@ -453,7 +353,7 @@ void GtkUi::InitializeFontSettings() {
     query.point_size = std::round(pango_size);
   }
   if (!platform_->IncludeFontScaleInDeviceScale()) {
-    size_pixels *= FontScale();
+    size_pixels *= GetFontScale();
   }
 
   query.style = gfx::Font::NORMAL;
@@ -524,11 +424,6 @@ void GtkUi::GetInactiveSelectionFgColor(SkColor* color) const {
 gfx::Image GtkUi::GetIconForContentType(const std::string& content_type,
                                         int dip_size,
                                         float scale) const {
-  if (!IsValidThemeName(ThemeProperty::kIconThemeName,
-                        GetIconThemeName().c_str())) {
-    return gfx::Image();
-  }
-
   // This call doesn't take a reference.
   GtkIconTheme* theme = GetDefaultIconTheme();
 
@@ -684,16 +579,37 @@ std::vector<std::string> GtkUi::GetCmdLineFlagsForCopy() const {
               base::NumberToString(major_version)};
 }
 
+void GtkUi::SetShutdownCb(base::OnceClosure shutdown_cb) {
+  SetGtkShutdownCb(std::move(shutdown_cb));
+}
+
 void GtkUi::SetDarkTheme(bool dark) {
+  // `g_object_set()` unconditionally resets GTK CSS values and emits
+  // `notify::gtk-application-prefer-dark-theme` even when the property already
+  // equals `dark`, causing an expensive full theme rebuild.
+  if (PreferDarkTheme() == dark) {
+    return;
+  }
   auto* settings = gtk_settings_get_default();
   g_object_set(settings, "gtk-application-prefer-dark-theme", dark, nullptr);
-  // OnThemeChanged() will be called via the
-  // notify::gtk-application-prefer-dark-theme handler to update the colors.
+  // `OnThemeChanged()` will be called via the
+  // `notify::gtk-application-prefer-dark-theme` handler to update the colors.
+}
+
+void GtkUi::SetColorScheme(std::optional<bool> prefer_dark) {
+  // Route the color scheme through the OS settings provider, which sources the
+  // web `NativeTheme::preferred_color_scheme()` via
+  // `UpdateVariablesForToolkitSettings()`.
+  os_settings_provider_->SetColorScheme(prefer_dark);
 }
 
 void GtkUi::SetAccentColor(std::optional<SkColor> accent_color) {
   accent_color_ = accent_color;
-  native_theme_->NotifyOnNativeThemeUpdated();
+  // Route the accent color through the OS settings provider. This updates
+  // `NativeTheme::user_color()` (via `UpdateVariablesForToolkitSettings()`) and
+  // notifies all observing native themes, which re-runs the native color mixer
+  // using the freshly-set `accent_color_`.
+  os_settings_provider_->SetAccentColor(accent_color);
 }
 
 bool GtkUi::AnimationsEnabled() const {
@@ -806,47 +722,6 @@ std::string GtkUi::GetCursorThemeName() {
   return theme_string;
 }
 
-bool GtkUi::SanitizeIconThemeName() {
-  std::string theme = GetIconThemeName();
-  if (!IsValidThemeName(ThemeProperty::kIconThemeName, theme.c_str())) {
-    g_object_set(gtk_settings_get_default(), "gtk-icon-theme-name", "hicolor",
-                 nullptr);
-    return true;
-  }
-  return false;
-}
-
-bool GtkUi::SanitizeThemeName() {
-  std::string theme = GetThemeName();
-  if (!IsValidThemeName(ThemeProperty::kThemeName, theme.c_str())) {
-    g_object_set(gtk_settings_get_default(), "gtk-theme-name", "Adwaita",
-                 nullptr);
-    return true;
-  }
-  return false;
-}
-
-bool GtkUi::SanitizeKeyThemeName() {
-  gchar* name = nullptr;
-  g_object_get(gtk_settings_get_default(), "gtk-key-theme-name", &name,
-               nullptr);
-  std::string name_str;
-  if (name) {
-    name_str = name;
-    g_free(name);
-  }
-  if (!IsValidThemeName(ThemeProperty::kKeyThemeName, name_str.c_str())) {
-    g_object_set(gtk_settings_get_default(), "gtk-key-theme-name", nullptr,
-                 nullptr);
-    return true;
-  }
-  return false;
-}
-
-void GtkUi::OnKeyThemeNameChanged(GtkSettings* settings, GtkParamSpec* param) {
-  SanitizeKeyThemeName();
-}
-
 int GtkUi::GetCursorThemeSize() {
   gint size = 0;
   g_object_get(gtk_settings_get_default(), "gtk-cursor-theme-size", &size,
@@ -897,13 +772,14 @@ gfx::Size GtkUi::GetPdfPaperSize(printing::PrintingContextLinux* context) {
 #endif
 
 void GtkUi::OnThemeChanged(GtkSettings* settings, GtkParamSpec* param) {
-  if (SanitizeIconThemeName() || SanitizeThemeName()) {
-    return;  // Exit early; modifying the setting re-triggered this function
-  }
+  ClearStyleColorCache();
   colors_.clear();
   custom_frame_colors_.clear();
   native_frame_colors_.clear();
   LoadGtkValues();
+  // Recompute values derived from the theme (e.g. `NativeThemeGtk`'s color
+  // scheme) now that the cached colors have been cleared.
+  os_settings_provider_->OnThemeChanged();
   native_theme_->NotifyOnNativeThemeUpdated();
 }
 
@@ -931,7 +807,7 @@ void GtkUi::OnCursorThemeSizeChanged(GtkSettings* settings,
 
 void GtkUi::OnEnableAnimationsChanged(GtkSettings* settings,
                                       GtkParamSpec* param) {
-  gfx::Animation::UpdatePrefersReducedMotion();
+  NotifyAnimationsEnabledChanged();
 }
 
 void GtkUi::OnPrimaryPasteChanged(GtkSettings* settings, GtkParamSpec* param) {
@@ -996,8 +872,8 @@ void GtkUi::LoadGtkValues() {
   // to the theme bits associated with the NativeThemeGtk instance to ensure
   // we do not regress existing behavior during the transition.
   ui::ColorProviderKey key;
-  if (ui::OsSettingsProvider::Get().PreferredColorScheme() ==
-      ui::NativeTheme::PreferredColorScheme::kDark) {
+  // Match `NativeThemeGtk::CalculatePreferredColorScheme()`.
+  if (IsGtkThemeDark()) {
     key.color_mode = ui::ColorProviderKey::ColorMode::kDark;
   }
   // Some theme colors, e.g. COLOR_NTP_LINK, are derived from color provider
@@ -1158,7 +1034,7 @@ display::DisplayConfig GtkUi::GetDisplayConfig() const {
   }
 
   const double font_scale =
-      platform_->IncludeFontScaleInDeviceScale() ? FontScale() : 1.0;
+      platform_->IncludeFontScaleInDeviceScale() ? GetFontScale() : 1.0;
 
   GdkDisplay* display = gdk_display_get_default();
   GdkMonitor* primary = nullptr;

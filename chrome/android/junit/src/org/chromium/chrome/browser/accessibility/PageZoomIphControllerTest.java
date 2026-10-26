@@ -4,11 +4,8 @@
 
 package org.chromium.chrome.browser.accessibility;
 
-import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 
-import android.content.Context;
-import android.content.res.Resources;
 import android.view.View;
 
 import androidx.test.core.app.ApplicationProvider;
@@ -23,7 +20,6 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.R;
@@ -34,26 +30,19 @@ import org.chromium.components.feature_engagement.FeatureConstants;
 
 /** Unit tests for {@link PageZoomIphController}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class PageZoomIphControllerTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Mock private Context mContext;
     @Mock private AppMenuHandler mAppMenuHandler;
-    @Mock private View mToolbarMenuButton;
     @Mock private UserEducationHelper mUserEducationHelper;
 
     @Captor private ArgumentCaptor<IphCommand> mIphCommandCaptor;
 
+    private final View mToolbarMenuButton = new View(ApplicationProvider.getApplicationContext());
     private PageZoomIphController mPageZoomIphController;
 
     @Before
     public void setUp() {
-
-        Resources resources = ApplicationProvider.getApplicationContext().getResources();
-        doReturn(resources).when(mContext).getResources();
-        doReturn(mContext).when(mToolbarMenuButton).getContext();
-
         mPageZoomIphController =
                 new PageZoomIphController(
                         mAppMenuHandler, mToolbarMenuButton, mUserEducationHelper);

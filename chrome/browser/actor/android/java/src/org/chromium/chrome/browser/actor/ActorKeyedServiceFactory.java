@@ -4,17 +4,23 @@
 
 package org.chromium.chrome.browser.actor;
 
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileKeyedMap;
 
 /** Standard Chromium pattern for accessing ActorKeyedService in Java. */
 @NullMarked
 public class ActorKeyedServiceFactory {
     @Nullable private static ActorKeyedService sServiceForTesting;
+    private static final ProfileKeyedMap<ActorKeyedService> sProfileMap =
+            new ProfileKeyedMap<>(
+                    ProfileKeyedMap.ProfileSelection.OWN_INSTANCE,
+                    ProfileKeyedMap.noRequiredCleanupAction());
 
     private ActorKeyedServiceFactory() {}
 
@@ -25,7 +31,12 @@ public class ActorKeyedServiceFactory {
     @Nullable
     public static ActorKeyedService getForProfile(Profile profile) {
         if (sServiceForTesting != null) return sServiceForTesting;
-        // JNI call will return null if the profile is off-the-record or service not available.
+        return sProfileMap.getForProfile(profile, ActorKeyedServiceFactory::buildForProfile);
+    }
+
+    private static ActorKeyedService buildForProfile(Profile profile) {
+        // TODO(543155398): This can be null, but fix callers to not call this with unexpected
+        // profile or mark this method Nullable.
         return ActorKeyedServiceFactoryJni.get().getForProfile(profile);
     }
 
@@ -36,6 +47,6 @@ public class ActorKeyedServiceFactory {
 
     @NativeMethods
     public interface Natives {
-        ActorKeyedService getForProfile(Profile profile);
+        ActorKeyedService getForProfile(@JniType("Profile*") Profile profile);
     }
 }

@@ -65,12 +65,10 @@ import './screens/osauth/remove_local_auth_factors.js';
 // AUTHENTICATION SCREENS USED DURING THE LOGIN FLOW
 import './screens/osauth/cryptohome_recovery.js';
 // SCREENS USED DURING THE LOGIN FLOW
-import './screens/login/arc_vm_data_migration.js';
 import './screens/login/encryption_migration.js';
 import './screens/login/management_transition.js';
 import './screens/login/offline_login.js';
 import './screens/login/update_required_card.js';
-import './screens/common/account_selection.js';
 // SCREENS USED DURING THE OOBE FLOW
 import './screens/oobe/auto_enrollment_check.js';
 import './screens/oobe/consumer_update.js';
@@ -223,11 +221,6 @@ export const commonScreensList: OobeTypes.ScreensList = [
  * List of screens that are used during the `login` flow only.
  */
 export const loginScreensList: OobeTypes.ScreensList = [
-  {
-    tag: 'arc-vm-data-migration-element',
-    id: 'arc-vm-data-migration',
-    condition: 'isArcVmDataMigrationEnabled',
-  },
   {tag: 'cryptohome-recovery-element', id: 'cryptohome-recovery'},
   {tag: 'encryption-migration-element', id: 'encryption-migration'},
   {
@@ -237,11 +230,6 @@ export const loginScreensList: OobeTypes.ScreensList = [
   },
   {tag: 'offline-login-element', id: 'offline-login'},
   {tag: 'update-required-card-element', id: 'update-required'},
-  {
-    tag: 'account-selection-element',
-    id: 'account-selection',
-    condition: 'isOobeAddUserDuringEnrollmentEnabled',
-  },
 ];
 
 /**

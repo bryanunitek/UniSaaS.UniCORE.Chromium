@@ -106,6 +106,7 @@ class DISPLAY_EXPORT DisplayLinkMac : public base::RefCounted<DisplayLinkMac> {
   static scoped_refptr<DisplayLinkMac> GetForDisplay(int64_t display_id);
 
   static bool SupportsDisplayLinkMacInBrowser();
+  static bool SupportsCADisplayLinkInGPU();
 
   // Register an observer callback.
   // * The specified callback will be called at every VSync tick, until the
@@ -149,6 +150,8 @@ class DISPLAY_EXPORT DisplayLinkMac : public base::RefCounted<DisplayLinkMac> {
   // might be triggered before Viz receives the display addition IPC.
   static void RecordDisplayLinkCreation(bool success);
 };
+
+DISPLAY_EXPORT bool SkipPostTaskForCallbacks();
 
 }  // namespace ui
 

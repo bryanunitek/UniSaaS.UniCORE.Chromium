@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -17,9 +18,13 @@
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
+#include "base/test/bind.h"
 #include "base/test/gtest_util.h"
+#include "base/test/mock_callback.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "cc/paint/display_item_list.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/accessibility/accessibility_features.h"
@@ -31,6 +36,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/color/color_provider_key.h"
@@ -59,13 +65,17 @@
 #include "ui/views/style/platform_style.h"
 #include "ui/views/test/configurable_test_native_frame_view.h"
 #include "ui/views/test/mock_drag_controller.h"
+#include "ui/views/test/mock_input_event_activation_protector.h"
 #include "ui/views/test/mock_native_widget.h"
 #include "ui/views/test/native_widget_factory.h"
 #include "ui/views/test/test_views.h"
 #include "ui/views/test/test_widget_observer.h"
 #include "ui/views/test/views_test_utils.h"
+#include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view_test_api.h"
+#include "ui/views/view_tracker.h"
+#include "ui/views/views_features.h"
 #include "ui/views/views_test_suite.h"
 #include "ui/views/widget/native_widget_delegate.h"
 #include "ui/views/widget/native_widget_private.h"
@@ -77,6 +87,7 @@
 #include "ui/views/widget/widget_utils.h"
 #include "ui/views/window/dialog_delegate.h"
 #include "ui/views/window/native_frame_view.h"
+#include "ui/views/window/non_client_view.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/window.h"
@@ -3147,6 +3158,49 @@ TEST_F(WidgetTest, WheelEventsFromScrollEventTarget) {
   EXPECT_EQ(0, cursor_view->GetEventCount(ui::EventType::kMousewheel));
 }
 
+TEST_F(DesktopWidgetTest, ShowSurvivesWidgetDestructionInVisibilityChange) {
+  // Observer that synchronously destroys the owning unique_ptr when the widget
+  // becomes visible.
+  class DestroyOnVisibleObserver : public WidgetObserver {
+   public:
+    explicit DestroyOnVisibleObserver(std::unique_ptr<Widget> widget)
+        : widget_(std::move(widget)) {
+      widget_->AddObserver(this);
+    }
+    ~DestroyOnVisibleObserver() override {
+      if (widget_) {
+        widget_->RemoveObserver(this);
+      }
+    }
+
+    void OnWidgetVisibilityChanged(Widget* widget, bool visible) override {
+      if (visible) {
+        widget->RemoveObserver(this);
+        widget_.reset();
+      }
+    }
+
+    Widget* widget() { return widget_.get(); }
+
+   private:
+    std::unique_ptr<Widget> widget_;
+  };
+
+  {
+    DestroyOnVisibleObserver observer(
+        CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                         Widget::InitParams::TYPE_WINDOW));
+    EXPECT_CHECK_DEATH(observer.widget()->Show());
+  }
+
+  {
+    DestroyOnVisibleObserver observer(
+        CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                         Widget::InitParams::TYPE_WINDOW));
+    EXPECT_CHECK_DEATH(observer.widget()->ShowInactive());
+  }
+}
+
 // Tests that if a scroll-begin gesture is not handled, then subsequent scroll
 // events are not dispatched to any view.
 TEST_F(WidgetTest, GestureScrollEventDispatching) {
@@ -3765,6 +3819,164 @@ TEST_F(DesktopWidgetTest, LockPaintAsActiveAndCloseParent) {
 
   // Ensure that child widget has been destroyed.
   ASSERT_TRUE(child && child->IsClosed());
+}
+
+// Regression tests for https://crbug.com/558945747
+class WidgetDestroyedDuringPaintAsActiveChangeTest : public WidgetTest {
+ public:
+  WidgetDestroyedDuringPaintAsActiveChangeTest() = default;
+  ~WidgetDestroyedDuringPaintAsActiveChangeTest() override = default;
+
+  void SetUp() override {
+    WidgetTest::SetUp();
+    ResetCallbackBehavior();
+
+    parent1_ = CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                                Widget::InitParams::TYPE_WINDOW);
+    parent1_->MakeCloseSynchronous(base::BindLambdaForTesting(
+        [this](Widget::ClosedReason) { parent1_.reset(); }));
+    parent1_->Show();
+    subscriptions_.emplace_back(parent1_->RegisterPaintAsActiveChangedCallback(
+        parent1_callback_.Get()));
+    parent2_ = CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                                Widget::InitParams::TYPE_WINDOW);
+    parent2_->MakeCloseSynchronous(base::BindLambdaForTesting(
+        [this](Widget::ClosedReason) { parent2_.reset(); }));
+    parent2_->ShowInactive();
+    subscriptions_.emplace_back(parent2_->RegisterPaintAsActiveChangedCallback(
+        parent2_callback_.Get()));
+    WaitForWidgetActive(parent1_.get(), true);
+
+    Widget::InitParams params(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                              Widget::InitParams::TYPE_BUBBLE);
+    params.parent = parent1_->GetNativeView();
+    widget_ = CreateTestWidget(std::move(params));
+    widget_->MakeCloseSynchronous(base::BindLambdaForTesting(
+        [this](Widget::ClosedReason) { widget_.reset(); }));
+    widget_->Show();
+    CHECK_EQ(parent1_.get(), widget_->parent());
+    WaitForWidgetActive(widget_.get(), true);
+    subscriptions_.emplace_back(
+        widget_->RegisterPaintAsActiveChangedCallback(widget_callback_.Get()));
+
+    CHECK(widget_->ShouldPaintAsActive());
+    CHECK(parent1_->ShouldPaintAsActive());
+    CHECK(!parent2_->ShouldPaintAsActive());
+  }
+
+  void TearDown() override {
+    subscriptions_.clear();
+    if (widget_) {
+      widget_->Close();
+    }
+    if (parent1_) {
+      parent1_->Close();
+    }
+    if (parent2_) {
+      parent2_->Close();
+    }
+    WidgetTest::TearDown();
+  }
+
+ protected:
+  void ResetCallbackBehavior() {
+    EXPECT_CALL(widget_callback_, Run).Times(testing::AnyNumber());
+    EXPECT_CALL(parent1_callback_, Run).Times(testing::AnyNumber());
+    EXPECT_CALL(parent2_callback_, Run).Times(testing::AnyNumber());
+  }
+
+  base::MockCallback<Widget::PaintAsActiveCallbackList::CallbackType>
+      widget_callback_;
+  base::MockCallback<Widget::PaintAsActiveCallbackList::CallbackType>
+      parent1_callback_;
+  base::MockCallback<Widget::PaintAsActiveCallbackList::CallbackType>
+      parent2_callback_;
+  std::unique_ptr<Widget> widget_;
+  std::unique_ptr<Widget> parent1_;
+  std::unique_ptr<Widget> parent2_;
+
+ private:
+  std::vector<base::CallbackListSubscription> subscriptions_;
+};
+
+TEST_F(WidgetDestroyedDuringPaintAsActiveChangeTest,
+       ChecksOnDestructionDuringPaintAsActiveFalse) {
+  auto lock = widget_->LockPaintAsActive();
+  parent2_->Activate();
+  WaitForWidgetActive(parent2_.get(), true);
+  WaitForWidgetActive(parent1_.get(), false);
+  WaitForWidgetActive(widget_.get(), false);
+  EXPECT_CALL(widget_callback_, Run).WillRepeatedly([this]() {
+    if (widget_ && !widget_->ShouldPaintAsActive()) {
+      EXPECT_CHECK_DEATH_WITH(widget_->Close(), "Check failed: !iterating_.");
+    }
+  });
+  lock.reset();
+}
+
+TEST_F(WidgetDestroyedDuringPaintAsActiveChangeTest,
+       ChecksOnDestructionDuringPaintAsActiveTrue) {
+  parent2_->Activate();
+  WaitForWidgetActive(parent2_.get(), true);
+  WaitForWidgetActive(parent1_.get(), false);
+  WaitForWidgetActive(widget_.get(), false);
+  EXPECT_CALL(widget_callback_, Run).WillRepeatedly([this]() {
+    if (widget_ && widget_->ShouldPaintAsActive()) {
+      EXPECT_CHECK_DEATH_WITH(widget_->Close(), "Check failed: !iterating_.");
+    }
+  });
+  auto lock = widget_->LockPaintAsActive();
+}
+
+TEST_F(WidgetDestroyedDuringPaintAsActiveChangeTest,
+       DestroysOnParentPaintAsActiveFalse) {
+  auto lock = widget_->LockPaintAsActive();
+  parent2_->Activate();
+  WaitForWidgetActive(parent2_.get(), true);
+  WaitForWidgetActive(parent1_.get(), false);
+  WaitForWidgetActive(widget_.get(), false);
+  EXPECT_CALL(parent1_callback_, Run).WillOnce([this]() {
+    if (!parent1_->ShouldPaintAsActive()) {
+      widget_->Close();
+    }
+  });
+  lock.reset();
+}
+
+TEST_F(WidgetDestroyedDuringPaintAsActiveChangeTest,
+       DestroysOnParentPaintAsActiveTrue) {
+  parent2_->Activate();
+  WaitForWidgetActive(parent2_.get(), true);
+  WaitForWidgetActive(parent1_.get(), false);
+  WaitForWidgetActive(widget_.get(), false);
+  EXPECT_CALL(parent1_callback_, Run).WillRepeatedly([this]() {
+    if (widget_ && parent1_->ShouldPaintAsActive()) {
+      widget_->Close();
+    }
+  });
+  auto lock = widget_->LockPaintAsActive();
+}
+
+TEST_F(WidgetDestroyedDuringPaintAsActiveChangeTest,
+       DestroysOnReparentWhenOriginalParentLosesPaintAsActive) {
+  widget_->LockPaintAsActive();
+  EXPECT_CALL(parent1_callback_, Run).WillOnce([this]() {
+    if (!parent1_->ShouldPaintAsActive()) {
+      widget_->Close();
+    }
+  });
+  widget_->Reparent(parent2_.get());
+}
+
+TEST_F(WidgetDestroyedDuringPaintAsActiveChangeTest,
+       DestroysOnReparentWhenNewParentGainsPaintAsActive) {
+  widget_->LockPaintAsActive();
+  EXPECT_CALL(parent2_callback_, Run).WillRepeatedly([this]() {
+    if (widget_ && parent2_->ShouldPaintAsActive()) {
+      widget_->Close();
+    }
+  });
+  widget_->Reparent(parent2_.get());
 }
 
 // Widget used to destroy itself when OnNativeWidgetDestroyed is called.
@@ -5834,7 +6046,7 @@ class WidgetWithAXTree : public WidgetTest {
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_{
-      features::kAccessibilityTreeForViews};
+      ::features::kAccessibilityTreeForViews};
 };
 
 TEST_F(WidgetWithAXTree, WidgetAXManagerInitializedWhenFlagIsOn) {
@@ -6467,10 +6679,18 @@ namespace {
 
 class WidgetModalVisibilityObserver : public WidgetObserver {
  public:
-  MOCK_METHOD(void,
-              OnWidgetWindowModalVisibilityChanged,
-              (Widget*, bool),
-              (override));
+  void OnWidgetWindowModalVisibilityChanged(Widget* widget,
+                                            bool visible) override {
+    last_visibility_ = visible;
+    change_count_++;
+  }
+
+  std::optional<bool> last_visibility() const { return last_visibility_; }
+  size_t change_count() const { return change_count_; }
+
+ private:
+  std::optional<bool> last_visibility_;
+  size_t change_count_ = 0;
 };
 
 }  // namespace
@@ -6493,28 +6713,27 @@ TEST_F(WidgetTest, ChildWidgetNotifiesModalVisibilityChanged) {
   child_widget->Init(std::move(params));
 
   // Sequence: show -> hide -> show -> destroy.
-  testing::InSequence seq;
-  EXPECT_CALL(observer,
-              OnWidgetWindowModalVisibilityChanged(widget.get(), true));
-  EXPECT_CALL(observer,
-              OnWidgetWindowModalVisibilityChanged(widget.get(), false));
-  EXPECT_CALL(observer,
-              OnWidgetWindowModalVisibilityChanged(widget.get(), true));
-  EXPECT_CALL(observer,
-              OnWidgetWindowModalVisibilityChanged(widget.get(), false));
+  child_widget->Show();
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return observer.last_visibility() == true; }));
+  EXPECT_EQ(1u, observer.change_count());
 
-  WidgetVisibleWaiter waiter(child_widget.get());
-  child_widget->Show();
-  waiter.Wait();
   child_widget->Hide();
-  waiter.WaitUntilInvisible();
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return observer.last_visibility() == false; }));
+  EXPECT_EQ(2u, observer.change_count());
+
   child_widget->Show();
-  waiter.Wait();
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return observer.last_visibility() == true; }));
+  EXPECT_EQ(3u, observer.change_count());
+
   // Destroy the child widget, the parent should be notified about child modal
   // visibility change.
   child_widget.reset();
-  // No need to wait for visibility change because the widget is already
-  // destroyed.
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return observer.last_visibility() == false; }));
+  EXPECT_EQ(4u, observer.change_count());
 
   widget->RemoveObserver(&observer);
 }
@@ -6545,7 +6764,8 @@ TEST_F(WidgetTest, ReplaceClientContentsView) {
   EXPECT_EQ(client_view_ptr, widget->GetClientContentsView());
 }
 
-// Ensure that view accelerators unregistered when closing a chid widget.
+// Ensure that view accelerators unregistered when closing a chid widget, and
+// that other targets of the same accelerator stay registered.
 TEST_F(WidgetTest, ClosingChildWidgetUnregisterAccelerators) {
   auto parent_widget = base::WrapUnique<Widget>(
       CreateTopLevelNativeWidget(Widget::InitParams::CLIENT_OWNS_WIDGET));
@@ -6564,15 +6784,28 @@ TEST_F(WidgetTest, ClosingChildWidgetUnregisterAccelerators) {
   auto* focus_manager = parent_widget->GetFocusManager();
   ui::Accelerator accelerator(ui::VKEY_F10,
                               ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN);
+  ui::Accelerator shared_accelerator(ui::VKEY_F11, ui::EF_NONE);
   ASSERT_FALSE(focus_manager->IsAcceleratorRegistered(accelerator));
+  ASSERT_FALSE(focus_manager->IsAcceleratorRegistered(shared_accelerator));
   View* view =
       child_widget->GetContentsView()->AddChildView(std::make_unique<View>());
   view->AddAccelerator(accelerator);
+  view->AddAccelerator(shared_accelerator);
   ASSERT_EQ(view->GetFocusManager(), parent_widget->GetFocusManager());
 
+  // A view in the parent widget registers `shared_accelerator` as well.
+  View* parent_view =
+      parent_widget->GetContentsView()->AddChildView(std::make_unique<View>());
+  parent_view->AddAccelerator(shared_accelerator);
+
   ASSERT_TRUE(focus_manager->IsAcceleratorRegistered(accelerator));
+  ASSERT_TRUE(focus_manager->IsAcceleratorRegistered(shared_accelerator));
   child_widget.reset();
   EXPECT_FALSE(focus_manager->IsAcceleratorRegistered(accelerator));
+  EXPECT_TRUE(focus_manager->IsAcceleratorRegistered(shared_accelerator));
+
+  parent_view->ResetAccelerators();
+  EXPECT_FALSE(focus_manager->IsAcceleratorRegistered(shared_accelerator));
 }
 
 TEST_F(WidgetTest, IsDragging) {
@@ -6649,6 +6882,445 @@ TEST_F(WidgetTest, GetNonDecoratedClientAreaBoundsInScreenNoNonClientView) {
 
   EXPECT_EQ(widget->GetRootView()->GetBoundsInScreen(),
             widget->GetNonDecoratedClientAreaBoundsInScreen());
+}
+
+#if defined(USE_AURA)
+TEST_F(WidgetTest, ShouldDescendIntoChildForEventHandling) {
+  Widget* toplevel = CreateTopLevelPlatformWidget();
+  toplevel->SetBounds(gfx::Rect(0, 0, 200, 200));
+  toplevel->Show();
+
+  // Create a target view that has a layer.
+  View* target_view =
+      toplevel->GetRootView()->AddChildView(std::make_unique<View>());
+  target_view->SetBounds(0, 0, 100, 100);
+  target_view->SetPaintToLayer();
+  ui::Layer* target_layer = target_view->layer();
+  ASSERT_NE(nullptr, target_layer);
+
+  ui::Layer* root_layer = toplevel->GetLayer();
+  ASSERT_NE(nullptr, root_layer);
+
+  // location inside target_view.
+  gfx::Point location(50, 50);
+  ASSERT_EQ(target_view,
+            toplevel->GetRootView()->GetEventHandlerForPoint(location));
+
+  // 1. No child layer -> returns true.
+  EXPECT_TRUE(toplevel->ShouldDescendIntoChildForEventHandling(
+      root_layer, nullptr, nullptr, location));
+
+  auto child_layer = ui::Layer::Create(ui::LAYER_NOT_DRAWN);
+
+  // 2. Disjoint child layer -> returns true.
+  EXPECT_TRUE(toplevel->ShouldDescendIntoChildForEventHandling(
+      root_layer, nullptr, child_layer.get(), location));
+
+  // 3. Target layer is child of child layer (kFirstIsChildOfSecond) -> returns
+  // false.
+  // Move target_layer under child_layer, and child_layer under root_layer.
+  root_layer->Add(child_layer.get());
+  child_layer->Add(target_layer);
+  EXPECT_FALSE(toplevel->ShouldDescendIntoChildForEventHandling(
+      root_layer, nullptr, child_layer.get(), location));
+
+  // Cleanup layer tree structure before next test case.
+  root_layer->Add(target_layer);
+  root_layer->Remove(child_layer.get());
+
+  // 4. Child layer is child of target layer (kSecondIsChildOfFirst) -> returns
+  // true.
+  target_layer->Add(child_layer.get());
+  EXPECT_TRUE(toplevel->ShouldDescendIntoChildForEventHandling(
+      root_layer, nullptr, child_layer.get(), location));
+  target_layer->Remove(child_layer.get());
+
+  // 5. Siblings.
+  // Case A: child_layer is above target_layer in Z-order.
+  root_layer->Add(target_layer);
+  root_layer->Add(child_layer.get());
+  // children order: [target_layer, child_layer], so child is on top.
+  EXPECT_TRUE(toplevel->ShouldDescendIntoChildForEventHandling(
+      root_layer, nullptr, child_layer.get(), location));
+
+  // Case B: target_layer is above child_layer in Z-order.
+  root_layer->StackBelow(child_layer.get(), target_layer);
+  // children order: [child_layer, target_layer], so views are on top.
+  EXPECT_FALSE(toplevel->ShouldDescendIntoChildForEventHandling(
+      root_layer, nullptr, child_layer.get(), location));
+
+  // Cleanup child_layer.
+  root_layer->Remove(child_layer.get());
+
+  // 6. Target view has no layer -> target_layer is root_layer -> returns true.
+  target_view->DestroyLayer();
+  EXPECT_TRUE(toplevel->ShouldDescendIntoChildForEventHandling(
+      root_layer, nullptr, child_layer.get(), location));
+
+  toplevel->CloseNow();
+}
+#endif  // defined(USE_AURA)
+
+TEST_F(WidgetTest, InputProtectionDisabledByDefault) {
+  std::unique_ptr<Widget> widget =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+  EXPECT_FALSE(widget->IsInputEventActivationProtectionEnabled());
+  EXPECT_EQ(widget->GetInputEventActivationProtector(), nullptr);
+  EXPECT_EQ(widget->input_protection_event_handler_for_testing(), nullptr);
+
+  // Attempting to enable it when feature is disabled should be a no-op.
+  widget->EnableInputEventActivationProtection();
+  EXPECT_FALSE(widget->IsInputEventActivationProtectionEnabled());
+  EXPECT_EQ(widget->GetInputEventActivationProtector(), nullptr);
+  EXPECT_EQ(widget->input_protection_event_handler_for_testing(), nullptr);
+}
+
+TEST_F(WidgetTest, InputProtectionForwardsToProtector) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(features::kEnableInputProtection);
+
+  std::unique_ptr<Widget> widget =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+
+  auto mock_protector =
+      std::make_unique<testing::NiceMock<MockInputEventActivationProtector>>();
+  auto* mock_protector_ptr = mock_protector.get();
+
+  widget->EnableInputEventActivationProtection(std::move(mock_protector));
+  EXPECT_TRUE(widget->IsInputEventActivationProtectionEnabled());
+  ASSERT_NE(widget->GetInputEventActivationProtector(), nullptr);
+
+  ui::MouseEvent dummy_event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
+
+  // Expect that the mock protector is called and returns true.
+  EXPECT_CALL(*mock_protector_ptr, IsPossiblyUnintendedInteraction(
+                                       testing::_, testing::_, testing::_))
+      .WillOnce(testing::Return(true));
+
+  EXPECT_TRUE(widget->GetInputEventActivationProtector()
+                  ->IsPossiblyUnintendedInteraction(dummy_event,
+                                                    /*allow_key_events=*/false,
+                                                    widget->GetRootView()));
+
+  // Expect that the mock protector is called and returns false.
+  EXPECT_CALL(*mock_protector_ptr, IsPossiblyUnintendedInteraction(
+                                       testing::_, testing::_, testing::_))
+      .WillOnce(testing::Return(false));
+
+  EXPECT_FALSE(widget->GetInputEventActivationProtector()
+                   ->IsPossiblyUnintendedInteraction(dummy_event,
+                                                     /*allow_key_events=*/false,
+                                                     widget->GetRootView()));
+}
+
+TEST_F(WidgetTest, InputProtectionEventHandlerInterceptsEvents) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(features::kEnableInputProtection);
+
+  std::unique_ptr<Widget> widget =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+  widget->SetBounds(gfx::Rect(0, 0, 400, 400));
+  EXPECT_NE(widget->input_protection_event_handler_for_testing(), nullptr);
+
+  auto* contents = widget->SetContentsView(std::make_unique<View>());
+  int click_count = 0;
+  auto button = std::make_unique<LabelButton>(
+      base::BindRepeating([](int* count) { (*count)++; }, &click_count),
+      u"Button");
+  button->SetBounds(10, 10, 100, 40);
+  auto* button_ptr = contents->AddChildView(std::move(button));
+  widget->Show();
+
+  auto mock_protector =
+      std::make_unique<testing::NiceMock<MockInputEventActivationProtector>>();
+  auto* mock_protector_ptr = mock_protector.get();
+  widget->EnableInputEventActivationProtection(std::move(mock_protector));
+
+  // When the protector blocks the event, mouse click is intercepted and
+  // dropped.
+  EXPECT_CALL(*mock_protector_ptr, IsPossiblyUnintendedInteraction(
+                                       testing::_, testing::_, testing::_))
+      .WillRepeatedly(testing::Return(true));
+
+  ui::test::EventGenerator generator(GetContext(), widget->GetNativeWindow());
+  generator.MoveMouseTo(button_ptr->GetBoundsInScreen().CenterPoint());
+  generator.PressLeftButton();
+  generator.ReleaseLeftButton();
+  EXPECT_EQ(click_count, 0);
+
+  // When the protector allows the event, mouse click goes through to the
+  // button.
+  EXPECT_CALL(*mock_protector_ptr, IsPossiblyUnintendedInteraction(
+                                       testing::_, testing::_, testing::_))
+      .WillRepeatedly(testing::Return(false));
+
+  generator.PressLeftButton();
+  generator.ReleaseLeftButton();
+  EXPECT_EQ(click_count, 1);
+}
+
+TEST_F(WidgetTest, EnableInputProtectionIdempotentAndRejectsLateCustom) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(features::kEnableInputProtection);
+
+  std::unique_ptr<Widget> widget =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+
+  widget->EnableInputEventActivationProtection();
+  InputEventActivationProtector* initial_protector =
+      widget->GetInputEventActivationProtector();
+  ASSERT_NE(initial_protector, nullptr);
+
+  // Calling `EnableInputEventActivationProtection()` again with `nullptr` is a
+  // no-op and preserves the existing protector instance.
+  widget->EnableInputEventActivationProtection();
+  EXPECT_EQ(widget->GetInputEventActivationProtector(), initial_protector);
+
+  // Passing a custom protector after input protection has already been enabled
+  // must fail.
+  EXPECT_CHECK_DEATH(widget->EnableInputEventActivationProtection(
+      std::make_unique<
+          testing::NiceMock<MockInputEventActivationProtector>>()));
+}
+
+namespace {
+
+class ThemeChangeTrackingView : public View {
+  METADATA_HEADER(ThemeChangeTrackingView, View)
+
+ public:
+  void OnThemeChanged() override {
+    View::OnThemeChanged();
+    ++theme_changed_count_;
+  }
+  int theme_changed_count() const { return theme_changed_count_; }
+
+ private:
+  int theme_changed_count_ = 0;
+};
+
+BEGIN_METADATA(ThemeChangeTrackingView)
+END_METADATA
+
+}  // namespace
+
+// TODO(crbug.com/555907780): Re-enable this test on Mac.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_ThemeChangedShortCircuitRedundantUpdates \
+  DISABLED_ThemeChangedShortCircuitRedundantUpdates
+#else
+#define MAYBE_ThemeChangedShortCircuitRedundantUpdates \
+  ThemeChangedShortCircuitRedundantUpdates
+#endif
+TEST_F(WidgetTest, MAYBE_ThemeChangedShortCircuitRedundantUpdates) {
+  base::test::ScopedFeatureList feature_list(
+      ::features::kThemeChangeOptimization);
+
+  std::unique_ptr<Widget> widget =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+  auto* tracking_view =
+      widget->SetContentsView(std::make_unique<ThemeChangeTrackingView>());
+
+  // Initial ThemeChanged() should propagate to the view tree.
+  widget->ThemeChanged();
+  const int initial_count = tracking_view->theme_changed_count();
+  EXPECT_GT(initial_count, 0);
+
+  // Calling ThemeChanged() again with an identical ColorProviderKey should
+  // short-circuit.
+  widget->ThemeChanged();
+  EXPECT_EQ(tracking_view->theme_changed_count(), initial_count);
+
+  // Modifying the key (e.g. via color mode override) should trigger
+  // propagation.
+  widget->SetColorModeOverride(ui::ColorProviderKey::ColorMode::kDark);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return tracking_view->theme_changed_count() == initial_count + 1;
+  }));
+
+  // Calling ThemeChanged() again with the same override should short-circuit.
+  widget->ThemeChanged();
+  EXPECT_EQ(tracking_view->theme_changed_count(), initial_count + 1);
+
+  // Modifying user color override should trigger propagation again.
+  widget->SetUserColorOverride(SK_ColorRED);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return tracking_view->theme_changed_count() == initial_count + 2;
+  }));
+
+  // Redundant call should short-circuit.
+  widget->ThemeChanged();
+  EXPECT_EQ(tracking_view->theme_changed_count(), initial_count + 2);
+}
+
+TEST_F(WidgetTest, ThemeChangedDoesNotShortCircuitWhenFeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(::features::kThemeChangeOptimization);
+
+  std::unique_ptr<Widget> widget =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+  auto* tracking_view =
+      widget->SetContentsView(std::make_unique<ThemeChangeTrackingView>());
+
+  widget->ThemeChanged();
+  const int initial_count = tracking_view->theme_changed_count();
+  EXPECT_GT(initial_count, 0);
+
+  // Calling ThemeChanged() again should not short-circuit when disabled.
+  widget->ThemeChanged();
+  EXPECT_EQ(tracking_view->theme_changed_count(), initial_count + 1);
+}
+
+// TODO(crbug.com/555468642): Re-enable this test on Mac.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_ChildWidgetObservesParentThemeChanges \
+  DISABLED_ChildWidgetObservesParentThemeChanges
+#else
+#define MAYBE_ChildWidgetObservesParentThemeChanges \
+  ChildWidgetObservesParentThemeChanges
+#endif
+TEST_F(WidgetTest, MAYBE_ChildWidgetObservesParentThemeChanges) {
+  base::test::ScopedFeatureList feature_list(
+      ::features::kThemeChangeOptimization);
+
+  std::unique_ptr<Widget> parent_widget =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+
+  Widget::InitParams child_params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_POPUP);
+  child_params.parent = parent_widget->GetNativeView();
+  child_params.child = true;
+  std::unique_ptr<Widget> child_widget =
+      CreateTestWidget(std::move(child_params));
+
+  auto* child_tracking_view = child_widget->SetContentsView(
+      std::make_unique<ThemeChangeTrackingView>());
+
+  // Initial ThemeChanged() on child.
+  child_widget->ThemeChanged();
+  const int child_initial_count = child_tracking_view->theme_changed_count();
+  EXPECT_GT(child_initial_count, 0);
+
+  // Changing parent widget's color mode should automatically propagate to child
+  // widget.
+  parent_widget->SetColorModeOverride(ui::ColorProviderKey::ColorMode::kDark);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return child_tracking_view->theme_changed_count() ==
+           child_initial_count + 1;
+  }));
+
+  // Changing parent widget's user color should also propagate to child widget.
+  parent_widget->SetUserColorOverride(SK_ColorBLUE);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return child_tracking_view->theme_changed_count() ==
+           child_initial_count + 2;
+  }));
+}
+
+// TODO(crbug.com/555304813) Re-enable.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_ScheduleThemeChangedCoalescesUpdates \
+  DISABLED_ScheduleThemeChangedCoalescesUpdates
+#else
+#define MAYBE_ScheduleThemeChangedCoalescesUpdates \
+  ScheduleThemeChangedCoalescesUpdates
+#endif
+TEST_F(WidgetTest, MAYBE_ScheduleThemeChangedCoalescesUpdates) {
+  base::test::ScopedFeatureList feature_list(
+      ::features::kThemeChangeOptimization);
+
+  std::unique_ptr<Widget> widget =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+  auto* tracking_view =
+      widget->SetContentsView(std::make_unique<ThemeChangeTrackingView>());
+
+  widget->ThemeChanged();
+  const int initial_count = tracking_view->theme_changed_count();
+  EXPECT_GT(initial_count, 0);
+
+  // Reset cached key and schedule multiple updates asynchronously.
+  widget->ResetLastColorProviderKey();
+  widget->ScheduleThemeChanged();
+  widget->ScheduleThemeChanged();
+  widget->ScheduleThemeChanged();
+
+  // Asynchronous update has not run yet.
+  EXPECT_EQ(tracking_view->theme_changed_count(), initial_count);
+
+  // Wait for the scheduled tasks to process.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return tracking_view->theme_changed_count() == initial_count + 1;
+  }));
+
+  // Scheduling an update then calling ThemeChanged() synchronously should run
+  // immediately and prevent the posted task from executing again.
+  widget->ResetLastColorProviderKey();
+  widget->ScheduleThemeChanged();
+  widget->ThemeChanged();
+  EXPECT_EQ(tracking_view->theme_changed_count(), initial_count + 2);
+
+  // Ensure no duplicate deferred execution occurs.
+  EXPECT_EQ(tracking_view->theme_changed_count(), initial_count + 2);
+}
+
+TEST_F(WidgetTest, ScheduleThemeChangedRunsSynchronouslyWhenDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(::features::kThemeChangeOptimization);
+
+  std::unique_ptr<Widget> widget =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+  auto* tracking_view =
+      widget->SetContentsView(std::make_unique<ThemeChangeTrackingView>());
+
+  widget->ThemeChanged();
+  const int initial_count = tracking_view->theme_changed_count();
+  EXPECT_GT(initial_count, 0);
+
+  widget->ScheduleThemeChanged();
+  // When feature is disabled, ScheduleThemeChanged runs synchronously.
+  EXPECT_EQ(tracking_view->theme_changed_count(), initial_count + 1);
+}
+
+TEST_F(WidgetTest, NonClientViewOverlayViewOwnership) {
+  ViewTracker initial_tracker;
+  auto delegate = std::make_unique<WidgetDelegate>();
+  delegate->SetOverlayViewFactory(
+      base::BindLambdaForTesting([&initial_tracker]() {
+        auto view = std::make_unique<View>();
+        initial_tracker.SetView(view.get());
+        return view;
+      }));
+
+  auto widget = std::make_unique<Widget>();
+  Widget::InitParams params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
+  params.delegate = delegate.get();
+  widget->Init(std::move(params));
+
+  NonClientView* non_client_view = widget->non_client_view();
+  ASSERT_TRUE(non_client_view);
+  ASSERT_TRUE(initial_tracker.view());
+  EXPECT_EQ(initial_tracker.view()->parent(), non_client_view);
+
+  ViewTracker tracker1;
+  auto overlay1 = std::make_unique<View>();
+  tracker1.SetView(overlay1.get());
+  non_client_view->SetOverlayView(std::move(overlay1));
+  EXPECT_FALSE(initial_tracker.view());
+  EXPECT_TRUE(tracker1.view());
+  EXPECT_EQ(tracker1.view()->parent(), non_client_view);
+
+  ViewTracker tracker2;
+  auto overlay2 = std::make_unique<View>();
+  tracker2.SetView(overlay2.get());
+  non_client_view->SetOverlayView(std::move(overlay2));
+  EXPECT_FALSE(tracker1.view());
+  EXPECT_TRUE(tracker2.view());
+  EXPECT_EQ(tracker2.view()->parent(), non_client_view);
+
+  non_client_view->SetOverlayView(std::unique_ptr<View>());
+  EXPECT_FALSE(tracker2.view());
 }
 
 }  // namespace views::test

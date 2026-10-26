@@ -32,7 +32,6 @@
 #include "extensions/renderer/safe_builtins.h"
 #include "extensions/renderer/script_context_set.h"
 #include "extensions/renderer/string_source_map.h"
-#include "extensions/renderer/test_v8_extension_configuration.h"
 #include "extensions/renderer/utils_native_handler.h"
 #include "gin/converter.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -155,8 +154,7 @@ ModuleSystemTestEnvironment::ModuleSystemTestEnvironment(
       extension_(extension),
       context_set_(context_set),
       source_map_(std::make_unique<StringSourceMap>()) {
-  context_holder_->SetContext(v8::Context::New(
-      isolate, TestV8ExtensionConfiguration::GetConfiguration()));
+  context_holder_->SetContext(v8::Context::New(isolate));
 
   {
     auto context = std::make_unique<ScriptContext>(
@@ -185,16 +183,14 @@ ModuleSystemTestEnvironment::ModuleSystemTestEnvironment(
   module_system->RegisterNativeHandler(
       "assert", std::unique_ptr<NativeHandler>(assert_natives_));
   module_system->RegisterNativeHandler(
-      "logging",
-      std::unique_ptr<NativeHandler>(new LoggingNativeHandler(context_)));
+      "logging", std::make_unique<LoggingNativeHandler>(context_));
   module_system->RegisterNativeHandler(
-      "utils",
-      std::unique_ptr<NativeHandler>(new UtilsNativeHandler(context_)));
+      "utils", std::make_unique<UtilsNativeHandler>(context_));
   module_system->RegisterNativeHandler(
       "apiGetter",
       std::make_unique<GetAPINatives>(context_, bindings_system_.get()));
   module_system->SetExceptionHandlerForTest(
-      std::unique_ptr<ModuleSystem::ExceptionHandler>(new FailsOnException));
+      std::make_unique<FailsOnException>());
 
   bindings_system_->DidCreateScriptContext(context_);
   bindings_system_->UpdateBindingsForContext(context_);

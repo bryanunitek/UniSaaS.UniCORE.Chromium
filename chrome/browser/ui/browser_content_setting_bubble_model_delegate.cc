@@ -6,13 +6,13 @@
 
 #include "base/check_deref.h"
 #include "chrome/browser/content_settings/chrome_content_settings_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/tab_dialogs.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/subresource_filter/core/browser/subresource_filter_constants.h"
+#include "ui/base/page_transition_types.h"
 
 namespace {
 // The URL for when the user clicks "Learn more" on the mixed scripting page
@@ -26,9 +26,19 @@ constexpr char kNotificationsHelpUrl[] =
     "https://support.google.com/chrome/answer/3220216";
 }  // namespace
 
+DEFINE_USER_DATA(BrowserContentSettingBubbleModelDelegate);
+
+// static
+BrowserContentSettingBubbleModelDelegate*
+BrowserContentSettingBubbleModelDelegate::From(
+    BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
+
 BrowserContentSettingBubbleModelDelegate::
     BrowserContentSettingBubbleModelDelegate(BrowserWindowInterface* browser)
-    : browser_(CHECK_DEREF(browser)) {}
+    : scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this),
+      browser_(CHECK_DEREF(browser)) {}
 
 BrowserContentSettingBubbleModelDelegate::
     ~BrowserContentSettingBubbleModelDelegate() = default;
@@ -72,6 +82,6 @@ void BrowserContentSettingBubbleModelDelegate::ShowLearnMorePage(
     default:
       return;
   }
-  chrome::AddSelectedTabWithURL(browser_->GetBrowserForMigrationOnly(),
-                                learn_more_url, ui::PAGE_TRANSITION_LINK);
+  chrome::AddSelectedTabWithURL(&*browser_, learn_more_url,
+                                ui::PAGE_TRANSITION_LINK);
 }

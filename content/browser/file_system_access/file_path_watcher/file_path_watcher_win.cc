@@ -8,7 +8,6 @@
 
 #include <winnt.h>
 
-#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -497,7 +496,8 @@ void CompletionIOPortThread::ThreadMain() {
 }
 
 FilePathWatcherImpl::~FilePathWatcherImpl() {
-  DCHECK(!task_runner() || task_runner()->RunsTasksInCurrentSequence());
+  CHECK(!task_runner() || task_runner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M159);
 }
 
 bool FilePathWatcherImpl::Watch(const base::FilePath& path,
@@ -526,7 +526,8 @@ bool FilePathWatcherImpl::WatchWithChangeInfo(
     const WatchOptions& options,
     const FilePathWatcher::CallbackWithChangeInfo& callback,
     const FilePathWatcher::UsageChangeCallback& usage_callback) {
-  DCHECK(target_.empty());  // Can only watch one path.
+  CHECK(target_.empty(),
+        base::NotFatalUntil::M159);  // Can only watch one path.
 
   set_task_runner(base::SequencedTaskRunner::GetCurrentDefault());
   callback_ = callback;
@@ -550,7 +551,7 @@ void FilePathWatcherImpl::Cancel() {
     return;
   }
 
-  DCHECK(task_runner()->RunsTasksInCurrentSequence());
+  CHECK(task_runner()->RunsTasksInCurrentSequence(), base::NotFatalUntil::M159);
 
   CloseWatchHandle();
 
@@ -562,7 +563,7 @@ base::Lock& FilePathWatcherImpl::GetWatchThreadLockForTest() {
 }
 
 void FilePathWatcherImpl::BufferOverflowed() {
-  DCHECK(task_runner()->RunsTasksInCurrentSequence());
+  CHECK(task_runner()->RunsTasksInCurrentSequence(), base::NotFatalUntil::M159);
 
   DecrementAndGetUpcomingBatchCount();
 
@@ -579,7 +580,7 @@ void FilePathWatcherImpl::BufferOverflowed() {
 void FilePathWatcherImpl::WatchedDirectoryDeleted(
     base::FilePath watched_path,
     base::HeapArray<uint8_t> notification_batch) {
-  DCHECK(task_runner()->RunsTasksInCurrentSequence());
+  CHECK(task_runner()->RunsTasksInCurrentSequence(), base::NotFatalUntil::M159);
 
   WatchWithChangeInfoResult result = SetupWatchHandleForTarget();
 
@@ -632,7 +633,7 @@ void FilePathWatcherImpl::WatchedDirectoryDeleted(
 void FilePathWatcherImpl::ProcessNotificationBatch(
     base::FilePath watched_path,
     base::HeapArray<uint8_t> notification_batch) {
-  DCHECK(task_runner()->RunsTasksInCurrentSequence());
+  CHECK(task_runner()->RunsTasksInCurrentSequence(), base::NotFatalUntil::M159);
   CHECK(!notification_batch.empty());
 
   // When a new batch arrives, cancel the timer to send a pending delete since
@@ -648,17 +649,6 @@ void FilePathWatcherImpl::ProcessNotificationBatch(
   while (has_next_entry) {
     const auto& file_notify_info =
         *reinterpret_cast<FILE_NOTIFY_INFORMATION*>(sub_span.data());
-
-    // `FILE_NOTIFY_INFORMATION` is a variable-length struct. Make note
-    // of the size of the current `file_notify_info` to ensure that
-    // we're not running off the end of `sub_span`.
-    const size_t file_name_bytes =
-        file_notify_info.FileNameLength / sizeof(wchar_t);
-    if (file_name_bytes + offsetof(FILE_NOTIFY_INFORMATION, FileNameLength) >
-        sub_span.size_bytes()) {
-      // Malformed info.
-      break;
-    }
 
     has_next_entry = file_notify_info.NextEntryOffset != 0;
     if (has_next_entry) {
@@ -786,7 +776,7 @@ int FilePathWatcherImpl::DecrementAndGetUpcomingBatchCount() {
 }
 
 void FilePathWatcherImpl::RunCallbackOnPendingDelete() {
-  DCHECK(task_runner()->RunsTasksInCurrentSequence());
+  CHECK(task_runner()->RunsTasksInCurrentSequence(), base::NotFatalUntil::M159);
 
   if (callback_.is_null()) {
     return;

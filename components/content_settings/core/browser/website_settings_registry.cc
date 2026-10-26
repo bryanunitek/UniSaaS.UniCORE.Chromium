@@ -56,7 +56,7 @@ const WebsiteSettingsInfo* WebsiteSettingsRegistry::GetByName(
 
 const WebsiteSettingsInfo* WebsiteSettingsRegistry::Register(
     ContentSettingsType type,
-    const std::string& name,
+    std::string_view name,
     base::Value initial_default_value,
     WebsiteSettingsInfo::SyncStatus sync_status,
     WebsiteSettingsInfo::LossyStatus lossy_status,
@@ -355,6 +355,11 @@ void WebsiteSettingsRegistry::Init() {
            WebsiteSettingsInfo::UNSYNCABLE, WebsiteSettingsInfo::NOT_LOSSY,
            WebsiteSettingsInfo::GENERIC_SINGLE_ORIGIN_SCOPE,
            DESKTOP | PLATFORM_ANDROID,
+           WebsiteSettingsInfo::DONT_INHERIT_IN_INCOGNITO);
+  Register(ContentSettingsType::SUSPICIOUS_SITE_WARNING_DATA,
+           "suspicious-site-warning-data", base::Value(),
+           WebsiteSettingsInfo::UNSYNCABLE, WebsiteSettingsInfo::LOSSY,
+           WebsiteSettingsInfo::GENERIC_SINGLE_ORIGIN_SCOPE, ALL_PLATFORMS,
            WebsiteSettingsInfo::DONT_INHERIT_IN_INCOGNITO);
 }
 

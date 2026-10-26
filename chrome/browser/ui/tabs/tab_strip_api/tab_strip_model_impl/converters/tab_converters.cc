@@ -4,12 +4,18 @@
 
 #include "chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.h"
 
+#include "base/check.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/tabs/alert/tab_alert_controller.h"
+#include "chrome/browser/ui/tabs/tab_change_type.h"
+#include "chrome/browser/ui/tabs/tab_favicon_theming.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/favicon/content/content_favicon_driver.h"
+#include "components/favicon/core/favicon_driver.h"
 #include "components/split_tabs/split_tab_visual_data.h"
 #include "components/tab_groups/tab_group_visual_data.h"
 #include "components/tabs/public/split_tab_collection.h"
@@ -20,8 +26,46 @@
 #include "components/tabs/public/tab_interface.h"
 #include "components/tabs/public/tab_network_state.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/gfx/image/image_skia.h"
 
 namespace tabs_api::converters {
+
+namespace {
+
+// Rasterizes the tab's favicon against `color_provider` and, mirroring
+// TabIcon::UpdateThemedFavicon(), recolors default / chrome:// favicons and
+// monochrome (e.g. web app) favicons so they stay visible against the tab
+// background.
+gfx::ImageSkia RasterizeThemedFavicon(tabs::TabInterface* tab,
+                                      TabUIHelper* tab_ui_helper,
+                                      const ui::ColorProvider& color_provider,
+                                      const types::TabStates& states) {
+  gfx::ImageSkia rasterized =
+      tab_ui_helper->GetFavicon().Rasterize(&color_provider);
+
+  favicon::FaviconDriver* const favicon_driver =
+      favicon::ContentFaviconDriver::FromWebContents(tab->GetContents());
+  CHECK(favicon_driver);
+
+  // A tab uses the (theme-independent) default favicon whenever it has no valid
+  // site favicon. Those, along with chrome:// page favicons, must be recolored
+  // for the active theme.
+  if (!favicon_driver->FaviconIsValid() ||
+      tab_ui_helper->ShouldThemifyFavicon()) {
+    return tabs::ThemeFaviconForTab(rasterized, color_provider);
+  }
+
+  // Monochrome favicons (e.g. web app icons) are recolored to contrast with the
+  // tab background of the tab's current active state.
+  if (tab_ui_helper->IsMonochromeFavicon()) {
+    return tabs::ThemeMonochromeFaviconForTab(rasterized, color_provider,
+                                              states.is_active);
+  }
+
+  return rasterized;
+}
+
+}  // namespace
 
 tabs_api::mojom::TabFieldMaskPtr BuildTabFieldMask(TabChangeType type) {
   auto mask = tabs_api::mojom::TabFieldMask::New();
@@ -42,8 +86,7 @@ tabs_api::mojom::TabFieldMaskPtr BuildTabFieldMask(TabChangeType type) {
     case TabChangeType::kAttentionOnly:
       // AttentionOnly affects "needs_attention" which is not yet exposed.
       break;
-    case TabChangeType::kBlockedOnly:
-      mask->is_blocked = true;
+    case TabChangeType::kResourceUsageOnly:
       break;
   }
   return mask;
@@ -68,7 +111,8 @@ tabs_api::mojom::TabPtr BuildMojoTab(tabs::TabInterface* tab,
       tabs_api::NodeId(tabs_api::NodeId::Type::kContent,
                        base::NumberToString(tab->GetHandle().raw_value()));
   result->title = base::UTF16ToUTF8(tab_ui_helper->GetTitle());
-  result->favicon = tab_ui_helper->GetFavicon().Rasterize(&color_provider);
+  result->favicon =
+      RasterizeThemedFavicon(tab, tab_ui_helper, color_provider, states);
   result->url = tab_ui_helper->GetVisibleURL();
   result->network_state = tab_ui_helper->GetTabNetworkState();
   if (tab->GetHandle().Get() != nullptr) {
@@ -115,6 +159,7 @@ tabs_api::mojom::DataPtr BuildMojoTabCollectionData(
       const TabGroup* tab_group = group_collection->GetTabGroup();
       CHECK(tab_group);
       mojo_tab_group->data = *tab_group->visual_data();
+      mojo_tab_group->is_ephemeral = tab_group->is_ephemeral();
       return tabs_api::mojom::Data::NewTabGroup(std::move(mojo_tab_group));
     }
     case tabs::TabCollection::Type::SPLIT: {

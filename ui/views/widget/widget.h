@@ -13,11 +13,12 @@
 #include <vector>
 
 #include "base/callback_list.h"
-#include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/sanitized_object.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
+#include "base/types/pass_key.h"
 #include "build/build_config.h"
 #include "ui/accessibility/platform/ax_mode_observer.h"
 #include "ui/base/class_property.h"
@@ -38,6 +39,7 @@
 #include "ui/native_theme/native_theme.h"
 #include "ui/native_theme/native_theme_observer.h"
 #include "ui/views/focus/focus_manager.h"
+#include "ui/views/input_event_activation_protector.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/native_widget_delegate.h"
 #include "ui/views/window/client_view.h"
@@ -61,6 +63,7 @@ class Rect;
 namespace ui {
 class Accelerator;
 class ColorProvider;
+class ColorProviderSourceObserver;
 class Compositor;
 class GestureRecognizer;
 class InputMethod;
@@ -77,6 +80,7 @@ class BubbleLocking;
 namespace views {
 
 class DesktopWindowTreeHost;
+class InputProtectionEventHandler;
 class NativeWidget;
 class SublevelManager;
 class TooltipManager;
@@ -158,7 +162,7 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // The macro is maintained by the memory safety team.
   // `Widget` is used extensively and has a complicated lifetime. This macro
   // enables additional lifetime checks.
-  ADVANCED_MEMORY_SAFETY_CHECKS();
+  SANITIZED_OBJECT();
 
  public:
   METADATA_HEADER_BASE(Widget);
@@ -367,6 +371,11 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
     bool accept_events = true;
 
+    // Whether drag and drop should be enabled for this widget. If nullopt, it
+    // is inferred based on `accept_events` and `type` (e.g. disabled if
+    // `!accept_events` or `type == TYPE_TOOLTIP` or `type == TYPE_DRAG`).
+    std::optional<bool> accept_drag_drop;
+
     Activatable activatable = Activatable::kDefault;
 
     // The class of window and its overall z-order level. This level is visible
@@ -503,9 +512,6 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     // with the launch event that created it. Used for both X11 and Wayland.
     std::string startup_id;
 #endif  // BUILDFLAG(IS_LINUX)
-
-    // If true then the widget uses software compositing.
-    bool force_software_compositing = false;
 
     // If set, the window size will follow the content preferred size.
     bool autosize = false;
@@ -836,6 +842,19 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // Whether calling RunMoveLoop() is supported for the widget.
   bool IsMoveLoopSupported() const;
 
+  // Prepares the widget for an upcoming move loop. On Wayland, this initiates
+  // a drag-and-drop session for window dragging. On other platforms it is a
+  // no-op.
+  void PrepareForMoveLoop(MoveLoopSource source);
+
+  // Sets whether the window should bypass the window manager (e.g. override
+  // redirect on X11). This is used to prevent tiling during dragging.
+  // The bypass state will be automatically restored when the move loop exits.
+  void SetBypassWindowManager(bool bypass);
+
+  // Returns true if a mouse button is currently down.
+  bool IsMouseButtonDown() const;
+
   // Starts a nested run loop that moves the window. This can be used to
   // start a window move operation from a mouse or touch event. This returns
   // when the move completes. |drag_offset| is the offset from the top left
@@ -966,6 +985,13 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // Returns true if views style follows the widget activation state. The
   // default implementation simply calls CanActivate().
   virtual bool ShouldViewsStyleFollowWidgetActivation() const;
+
+  // [Deprecated] Legacy implementation of above method.
+  bool ShouldDescendIntoChildForEventHandlingDeprecated(
+      ui::Layer* root_layer,
+      gfx::NativeView child,
+      ui::Layer* child_layer,
+      const gfx::Point& location);
 
   // Sets the z-order of the widget. This only applies to top-level widgets.
   void SetZOrderLevel(ui::ZOrderLevel order);
@@ -1346,6 +1372,13 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // Prevents the widget from being rendered as inactive during the lifetime of
   // the returned lock. Multiple locks can exist with disjoint lifetimes. The
   // returned lock can safely outlive the associated widget.
+  //
+  // IMPORTANT SAFETY NOTE: When the paint-as-active state of a window changes,
+  // callbacks are called. Destroying a widget synchronously in response to it
+  // gaining or losing paint-on-active status will cause a crash, but it is
+  // possible for a callback from an ancestor widget to indirectly delete the
+  // widget. Do not assume that a widget is still valid after adding or removing
+  // a paint-as-active lock.
   std::unique_ptr<PaintAsActiveLock> LockPaintAsActive();
 
   // Undoes LockPaintAsActive(). This should never be called outside of
@@ -1361,6 +1394,34 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // Notifies registered callbacks and the native widget of changes to
   // the ShouldPaintAsActive() state.
   void NotifyPaintAsActiveChanged();
+
+  // Enables input activation protection. Installs standard policies (window
+  // activation, click-spam) if `custom_protector` is nullptr. Otherwise, the
+  // caller must configure the provided protector with the desired policies. A
+  // `custom_protector` may only be provided when first enabling protection.
+  //
+  // Enabling this also activates occlusion protection for non-located events
+  // (e.g. keyboard action keys like Space or Return) in
+  // `OccludedWidgetInputProtector` (whereas unprotected widgets only check
+  // located pointer events).
+  //
+  // See ui/views/input_protection/README.md for details on how this works.
+  void EnableInputEventActivationProtection(
+      std::unique_ptr<InputEventActivationProtector> custom_protector =
+          nullptr);
+
+  // Returns true if input event activation protection is enabled.
+  bool IsInputEventActivationProtectionEnabled() const;
+
+  // Returns the input event activation protector if it exists, nullptr
+  // otherwise.
+  InputEventActivationProtector* GetInputEventActivationProtector() const {
+    return input_protector_.get();
+  }
+
+  InputProtectionEventHandler* input_protection_event_handler_for_testing() {
+    return input_protection_event_handler_.get();
+  }
 
   base::WeakPtr<Widget> GetWeakPtr();
 
@@ -1458,6 +1519,15 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
       ui::ColorProviderKey::ForcedColors forced_colors) const override;
 
   ui::ColorProviderKey GetColorProviderKeyForTesting() const;
+
+  // Schedules an asynchronous theme changed update. Multiple calls within the
+  // same task or event loop turn are coalesced into a single ThemeChanged()
+  // run.
+  void ScheduleThemeChanged();
+
+  // Resets the cached ColorProviderKey, ensuring the next call to
+  // ThemeChanged() does not short-circuit.
+  void ResetLastColorProviderKey();
 
   // Causes IsFullscreen() to also check parent state, since this widget is
   // logically part of the same window as the parent.
@@ -1815,6 +1885,29 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   base::ScopedObservation<ui::AXPlatform, ui::AXModeObserver>
       ax_mode_observation_{this};
+
+  // Handles input protection for this widget.
+  std::unique_ptr<InputEventActivationProtector> input_protector_;
+
+  // Pre-target handler that intercepts input events on `root_view_` for input
+  // protection.
+  std::unique_ptr<InputProtectionEventHandler> input_protection_event_handler_;
+
+  // True if input protection is enabled for this widget.
+  bool input_event_activation_protection_enabled_ = false;
+
+  // The last ColorProviderKey used to update the widget's theme. Used to
+  // short-circuit redundant ThemeChanged() calls.
+  std::optional<ui::ColorProviderKey> last_color_provider_key_;
+
+  // Observes the parent widget's ColorProviderSource to propagate theme
+  // changes.
+  std::unique_ptr<ui::ColorProviderSourceObserver> parent_theme_observer_;
+
+  void ProcessScheduledThemeChanged();
+
+  // True if a ThemeChanged() run has been scheduled and is pending.
+  bool theme_update_scheduled_ = false;
 
   // Indicates whether there is an autosize task in the task queue. Also used to
   // cancel the autosize task in testing.

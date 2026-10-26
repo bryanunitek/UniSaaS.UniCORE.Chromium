@@ -33,9 +33,10 @@ enum class AccessibilityAndroidAccessibilityTools {
   kSwitchAccess = 5,
   kAccessibilityMenu = 6,
   kBrailleBack = 7,
-  kMaxValue = kBrailleBack,
+  kSamsungTalkBack = 8,
+  kMaxValue = kSamsungTalkBack,
 };
-// LINT.ThenChange(//tools/metrics/histograms/metadata/accessibility/histograms.xml:AccessibilityAndroidAccessibilityTools)
+// LINT.ThenChange(//tools/metrics/histograms/metadata/accessibility/enums.xml:AccessibilityAndroidAccessibilityTools)
 
 // These are hashes of different accessibility services which are generally used
 // as part of an assistive technology, mapped to their corresponding enum
@@ -44,6 +45,7 @@ constexpr auto kAssistiveTechMap =
     base::MakeFixedFlatMap<uint32_t, AccessibilityAndroidAccessibilityTools>(
         {{0x1630cddb, AccessibilityAndroidAccessibilityTools::kSwitchAccess},
          {0x349d4b1a, AccessibilityAndroidAccessibilityTools::kTalkBack},
+         {0x4cacc6c4, AccessibilityAndroidAccessibilityTools::kSamsungTalkBack},
          {0xa5a469fc, AccessibilityAndroidAccessibilityTools::kSoundAmplifier},
          {0xb13e6179, AccessibilityAndroidAccessibilityTools::kActionBlocks},
          {0xb38ef877, AccessibilityAndroidAccessibilityTools::kVoiceAccess},
@@ -426,10 +428,25 @@ void BrowserAccessibilityStateImplAndroid::
 void BrowserAccessibilityStateImplAndroid::OnAnimatorDurationScaleChanged() {
   // We need to call into gfx::Animation and WebContentsImpl on the UI thread,
   // so ensure that we setup the notification on the correct thread.
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M159);
 
   gfx::Animation::UpdatePrefersReducedMotion();
   NotifyWebContentsPreferencesChanged();
+}
+
+// On Android, platform accessibility modes are scoped per `WebContents` rather
+// than process-wide. `GetAccessibilityMode()` combines the process mode with
+// all active `WebContents` modes, and `OnAnyModeChanged()` uses this to update
+// process-level histograms, assistive tech state, and crash keys.
+ui::AXMode BrowserAccessibilityStateImplAndroid::GetAccessibilityMode() {
+  ui::AXMode mode = BrowserAccessibilityStateImpl::GetAccessibilityMode();
+  for (WebContentsImpl* wc : WebContentsImpl::GetAllWebContents()) {
+    if (!wc->IsBeingDestroyed() && !wc->IsNeverComposited()) {
+      mode |= wc->GetAccessibilityMode();
+    }
+  }
+  mode.set_mode(ui::AXMode::kNativeAdaptedWebContents, false);
+  return mode;
 }
 
 void BrowserAccessibilityStateImplAndroid::RefreshAssistiveTech() {

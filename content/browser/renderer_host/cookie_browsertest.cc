@@ -735,6 +735,7 @@ class CookieStoreContentBrowserClient
       bool is_service_worker,
       int process_id,
       int routing_id,
+      bool prefer_bound_cookie_context,
       mojo::PendingReceiver<network::mojom::RestrictedCookieManager>* receiver)
       override {
     mojo::PendingReceiver<network::mojom::RestrictedCookieManager>
@@ -830,6 +831,33 @@ IN_PROC_BROWSER_TEST_F(CookieBrowserTest, CrossSiteCookieSecurityEnforcement) {
       "Where A = http://127.0.0.1/\n"
       "      B = http://baz.com/",
       v.DepictFrameTree(tab->GetPrimaryFrameTree().root()));
+}
+
+// Verifies that a frame committed in a PDF-isolated process cannot bind a
+// RestrictedCookieManager for the committed origin. The SendCommitNavigation
+// path already skips the bind for PDF processes, so this exercises the
+// BrowserInterfaceBroker fallback used when no cookie manager was supplied at
+// commit time.
+IN_PROC_BROWSER_TEST_F(CookieBrowserTest, CookiesBlockedForPdfProcess) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  WebContentsImpl* tab = static_cast<WebContentsImpl*>(shell()->web_contents());
+  GURL url = embedded_test_server()->GetURL("a.test", "/empty.html");
+
+  SetCookieDirect(tab, url, "A=1");
+  ASSERT_EQ("A=1", GetCookiesDirect(tab, url));
+
+  // Commit `url` as PDF content so that the resulting frame runs in a process
+  // whose SiteInfo has `is_pdf` set.
+  ASSERT_TRUE(NavigateToURLWithPdf(tab, url));
+
+  RenderFrameHost* frame = tab->GetPrimaryMainFrame();
+
+  // The PDF process must not be able to read or write cookies for the committed
+  // origin.
+  EXPECT_EQ("", GetCookieFromJS(frame));
+  std::ignore = EvalJs(frame, "document.cookie = 'B=2'");
+  EXPECT_EQ("A=1", GetCookiesDirect(tab, url));
 }
 
 IN_PROC_BROWSER_TEST_F(CookieBrowserTest, CookieNotReadableAfterExpiry) {

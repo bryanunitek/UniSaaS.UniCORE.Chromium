@@ -178,11 +178,12 @@ CSSGapDecorationUtils::GetExpandedGapDataList(
 Vector<int> CSSGapDecorationUtils::GetExpandedWidths(
     const GapDataList<int>& gap_data_list,
     wtf_size_t gap_count) {
-  GapDataListIterator<int> iter(gap_data_list.GetGapDataList(), gap_count);
+  GapDataListValueAccessor<int> accessor(gap_data_list.GetGapDataList(),
+                                         gap_count);
   Vector<int> result;
   result.ReserveInitialCapacity(gap_count);
-  while (iter.HasNext()) {
-    result.push_back(iter.Next());
+  for (wtf_size_t index = 0; index < gap_count; ++index) {
+    result.push_back(accessor.ValueAt(index));
   }
   return result;
 }
@@ -221,6 +222,7 @@ RuleVisibilityItems CSSGapDecorationUtils::ResolveRuleVisibilityItemsValue(
   // https://drafts.csswg.org/css-gaps-1/#visibility-rules.
   switch (container_type) {
     case GapGeometry::ContainerType::kGrid:
+    case GapGeometry::ContainerType::kGridLanes:
       return RuleVisibilityItems::kAll;
     case GapGeometry::ContainerType::kFlex:
     case GapGeometry::ContainerType::kMultiColumn:

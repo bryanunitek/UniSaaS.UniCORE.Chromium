@@ -242,7 +242,7 @@ IDNSpoofChecker::IDNSpoofChecker() {
        {"am"}},
       {// Cyrillic
        "[[:Cyrl:]]",
-       "[аысԁеԍһіюкјӏорԗԛѕтԝхуъьҽпгѵѡ]",
+       "[аысԁеԍһіюкјӏморԗԛѕтԝхуъьҽпгѵѡ]",
        // TLDs containing most of the Cyrillic domains.
        {"bg", "by", "kz", "pyc", "ru", "su", "ua", "uz"}},
       {// Ethiopic (Ge'ez). Variants of these characters such as ሁ and ሡ could
@@ -503,9 +503,14 @@ IDNSpoofCheckerResult IDNSpoofChecker::SafeToDisplayAsUnicode(
             R"(^[\p{scx=hira}]+[\u30d8-\u30da][\p{scx=hira}]+$|)"
 
             // Disallow U+30FB (Katakana Middle Dot) and U+30FC (Hiragana-
-            // Katakana Prolonged Sound) used out-of-context.
+            // Katakana Prolonged Sound) used out-of-context. U+30FB is
+            // rejected when adjacent to any character not in Hiragana,
+            // Katakana, or Han, or at the end of a label, to prevent
+            // visual confusion with label separators.
             R"([^\p{scx=kana}\p{scx=hira}]\u30fc|^\u30fc|)"
-            R"([a-z]\u30fb|\u30fb[a-z]|)"
+            R"([^\p{scx=kana}\p{scx=hira}\p{scx=hani}]\u30fb|)"
+            R"(\u30fb[^\p{scx=kana}\p{scx=hira}\p{scx=hani}]|)"
+            R"(\u30fb$|)"
 
             // Disallow these CJK ideographs and Kangxi Radicals if they are
             // next to non-CJK characters. These characters can be used to spoof

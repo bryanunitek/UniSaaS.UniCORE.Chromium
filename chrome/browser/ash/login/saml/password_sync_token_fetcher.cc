@@ -20,7 +20,6 @@
 #include "base/strings/escape.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/access_token_fetcher.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
@@ -124,45 +123,40 @@ PasswordSyncTokenFetcher::Consumer::~Consumer() = default;
 
 PasswordSyncTokenFetcher::PasswordSyncTokenFetcher(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    Profile* profile,
+    signin::IdentityManager* identity_manager,
     Consumer* consumer)
     : url_loader_factory_(std::move(url_loader_factory)),
-      profile_(profile),
+      identity_manager_(identity_manager),
       consumer_(consumer),
       request_type_(RequestType::kNone) {
-  DCHECK(consumer_);
+  CHECK(consumer_, base::NotFatalUntil::M160);
 }
 
 PasswordSyncTokenFetcher::~PasswordSyncTokenFetcher() = default;
 
 void PasswordSyncTokenFetcher::StartTokenCreate() {
-  DCHECK_EQ(request_type_, RequestType::kNone);
+  CHECK_EQ(request_type_, RequestType::kNone, base::NotFatalUntil::M160);
   request_type_ = RequestType::kCreateToken;
   StartAccessTokenFetch();
 }
 
 void PasswordSyncTokenFetcher::StartTokenGet() {
-  DCHECK_EQ(request_type_, RequestType::kNone);
+  CHECK_EQ(request_type_, RequestType::kNone, base::NotFatalUntil::M160);
   request_type_ = RequestType::kGetToken;
   StartAccessTokenFetch();
 }
 
 void PasswordSyncTokenFetcher::StartTokenVerify(const std::string& sync_token) {
-  DCHECK_EQ(request_type_, RequestType::kNone);
+  CHECK_EQ(request_type_, RequestType::kNone, base::NotFatalUntil::M160);
   request_type_ = RequestType::kVerifyToken;
   sync_token_ = sync_token;
   FetchSyncToken(/*access_token=*/std::string());
 }
 
 void PasswordSyncTokenFetcher::StartAccessTokenFetch() {
-  DCHECK(profile_);
-  signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(profile_);
-  DCHECK(identity_manager);
-
   access_token_fetcher_ =
       std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-          signin::OAuthConsumerId::kPasswordSyncTokenFetcher, identity_manager,
+          signin::OAuthConsumerId::kPasswordSyncTokenFetcher, identity_manager_,
           base::BindOnce(&PasswordSyncTokenFetcher::OnAccessTokenFetchComplete,
                          weak_ptr_factory_.GetWeakPtr()),
           signin::PrimaryAccountAccessTokenFetcher::Mode::kWaitUntilAvailable,
@@ -253,7 +247,7 @@ void PasswordSyncTokenFetcher::FetchSyncToken(const std::string& access_token) {
                                       kContentTypeJSON);
   resource_request->headers.SetHeader(net::HttpRequestHeaders::kAccept,
                                       kAcceptValue);
-  DCHECK(!simple_url_loader_);
+  CHECK(!simple_url_loader_, base::NotFatalUntil::M160);
 
   simple_url_loader_ = network::SimpleURLLoader::Create(
       std::move(resource_request), traffic_annotation);

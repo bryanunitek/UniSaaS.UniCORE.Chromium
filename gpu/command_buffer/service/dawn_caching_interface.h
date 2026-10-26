@@ -14,8 +14,9 @@
 #include "base/containers/flat_set.h"
 #include "base/containers/linked_list.h"
 #include "base/functional/callback.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory_coordinator/memory_limit.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
 #include "base/trace_event/memory_dump_provider.h"
@@ -38,25 +39,22 @@ class GPU_GLES2_EXPORT DawnCachingInterface
 
   ~DawnCachingInterface() override;
 
-  size_t FindKey(std::span<const std::byte> key) override;
-  size_t LoadData(std::span<const std::byte> key,
-                  std::span<std::byte> dest) override;
-  void StoreData(std::span<const std::byte> key,
-                 std::span<const std::byte> src) override;
-
-  // TODO(503801946): Remove these outdated non-spanified implementations once
-  // we have migrated to use the one's above.
-  size_t LoadData(const void* key,
-                  size_t key_size,
-                  void* value_out,
-                  size_t value_size) override;
-  void StoreData(const void* key,
-                 size_t key_size,
-                 const void* value,
-                 size_t value_size) override;
+  // Chromium versions using std::string_view and base::span of the Dawn APIs
+  // that should be used in Chromium usages.
+  size_t FindKey(std::string_view key);
+  size_t LoadData(std::string_view key, base::span<uint8_t> dst);
+  void StoreData(std::string_view key, base::span<const uint8_t> src);
 
  private:
   friend class DawnCachingInterfaceFactory;
+
+  // Dawn API implementations. Use the Chromium base::span versions anywhere
+  // else in Chromium.
+  size_t FindKey(std::span<const std::byte> key) override;
+  size_t LoadData(std::span<const std::byte> key,
+                  std::span<std::byte> dst) override;
+  void StoreData(std::span<const std::byte> key,
+                 std::span<const std::byte> src) override;
 
   // Simplified accessor to the backend.
   MemoryCache* memory_cache() { return memory_cache_backend_.get(); }
@@ -111,7 +109,12 @@ class GPU_GLES2_EXPORT DawnCachingInterfaceFactory
   // released.
   void ReleaseHandle(const gpu::GpuDiskCacheHandle& handle);
 
-  void PurgeMemory(base::MemoryPressureLevel memory_pressure_level);
+  // Memory coordinator interface:
+  // Triggers immediate eviction of cache entries down to `memory_limit`.
+  void OnReleaseMemory(base::MemoryLimit memory_limit);
+  // Updates the target cache size limit non-destructively without forcing
+  // immediate eviction.
+  void OnUpdateMemoryLimit(base::MemoryLimit memory_limit);
 
   // base::trace_event::MemoryDumpProvider implementation.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
@@ -129,6 +132,8 @@ class GPU_GLES2_EXPORT DawnCachingInterfaceFactory
 
   // Map that holds existing backends.
   base::flat_map<gpu::GpuDiskCacheHandle, scoped_refptr<MemoryCache>> backends_;
+
+  base::MemoryLimit current_memory_limit_ = base::kNoMemoryPressureThreshold;
 };
 
 }  // namespace gpu::webgpu

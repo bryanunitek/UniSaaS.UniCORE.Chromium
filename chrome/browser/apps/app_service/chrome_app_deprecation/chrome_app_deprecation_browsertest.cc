@@ -7,8 +7,8 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "content/public/test/browser_test.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/message_center/message_center.h"
 
 using extensions::Extension;
@@ -34,10 +34,10 @@ class ChromeAppDeprecationUserInstalledAppsBrowserTest
   void RunPlatformApp(const Extension* extension) {
     AppLaunchParams params(
         extension->id(), LaunchContainer::kLaunchContainerNone,
-        WindowOpenDisposition::NEW_WINDOW, LaunchSource::kFromTest);
+        WindowOpenDisposition::kNewWindow, LaunchSource::kFromTest);
     params.command_line = *base::CommandLine::ForCurrentProcess();
 
-    AppServiceProxyFactory::GetForProfile(browser()->profile())
+    AppServiceProxyFactory::GetForProfile(browser()->GetProfile())
         ->LaunchAppWithParams(std::move(params));
   }
 };

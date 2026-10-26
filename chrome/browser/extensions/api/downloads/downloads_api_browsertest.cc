@@ -57,6 +57,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/download/public/common/download_features.h"
 #include "components/download/public/common/download_item.h"
+#include "components/download/public/common/download_url_parameters.h"
 #include "components/history/core/browser/download_row.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/prefs/pref_service.h"
@@ -78,16 +79,20 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/api_test_utils.h"
+#include "extensions/browser/browsertest_util.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_function_dispatcher.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/manifest_handlers/incognito_info.h"
+#include "extensions/test/extension_test_message_listener.h"
+#include "extensions/test/test_extension_dir.h"
 #include "net/base/data_url.h"
 #include "net/base/mime_util.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/controllable_http_response.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_response.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/features.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_operation_runner.h"
@@ -105,7 +110,6 @@
 #include "chrome/browser/download/bubble/download_bubble_ui_controller.h"
 #include "chrome/browser/download/bubble/download_display_controller.h"
 #include "chrome/browser/download/download_browsertest_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -302,8 +306,7 @@ class DownloadsEventsListener : public EventRouter::TestObserver {
 
     Event* new_event = new Event(
         Profile::FromBrowserContext(event.restrict_to_browser_context),
-        event.event_name, base::Value(event.event_args.Clone()),
-        base::Time::Now());
+        event.event_name, base::Value(event.args().Clone()), base::Time::Now());
     // Keep track of the last filename seen in the event stream. Don't overwrite
     // with empty strings because some (most) events don't have filenames.
     if (!new_event->filename().empty()) {
@@ -457,7 +460,7 @@ class DownloadExtensionTest : public ExtensionApiTest {
     GURL url(extension_->GetResourceURL("empty.html"));
     // NOTE: `current_browser()` could be incognito.
     NavigateParams params(current_browser(), url, ui::PAGE_TRANSITION_LINK);
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     base::WeakPtr<content::NavigationHandle> handle = Navigate(&params);
     CHECK(handle);
     content::WebContents* const tab = handle->GetWebContents();
@@ -622,6 +625,11 @@ class DownloadExtensionTest : public ExtensionApiTest {
   bool CreateHistoryDownloads(
       base::span<const HistoryDownloadInfo> history_info,
       DownloadManager::DownloadVector* items) {
+    DownloadCoreService* service =
+        DownloadCoreServiceFactory::GetForBrowserContext(current_profile());
+    if (service) {
+      service->InitializeHistory();
+    }
     DownloadIdComparator download_id_comparator;
     base::Time current = base::Time::Now();
     items->clear();
@@ -652,7 +660,7 @@ class DownloadExtensionTest : public ExtensionApiTest {
               : download::DOWNLOAD_INTERRUPT_REASON_USER_CANCELED,
           false,    // opened
           current,  // last_access_time
-          false, std::vector<DownloadItem::ReceivedSlice>());
+          false, std::vector<DownloadItem::ReceivedSlice>(), base::FilePath());
       items->push_back(item);
     }
 
@@ -685,6 +693,37 @@ class DownloadExtensionTest : public ExtensionApiTest {
     return CreateSlowTestDownload(second_download_.get(), kSecondDownloadUrl);
   }
 
+  DownloadItem* CreateInternalApiSlowTestDownload() {
+    if (!embedded_test_server()->Started()) {
+      StartEmbeddedTestServer();
+    }
+    std::unique_ptr<content::DownloadTestObserver> observer(
+        CreateInProgressDownloadObserver(1));
+    DownloadManager* manager = GetCurrentManager();
+
+    auto params = std::make_unique<download::DownloadUrlParameters>(
+        embedded_test_server()->GetURL(kFirstDownloadUrl),
+        TRAFFIC_ANNOTATION_FOR_TESTS);
+    params->set_download_source(download::DownloadSource::INTERNAL_API);
+    manager->DownloadUrl(std::move(params));
+
+    first_download_->WaitForRequest();
+    first_download_->Send(
+        "HTTP/1.1 200 OK\r\n"
+        "Content-type: application/octet-stream\r\n"
+        "Cache-Control: max-age=0\r\n"
+        "\r\n");
+    first_download_->Send(std::string(kDownloadSize, '*'));
+
+    observer->WaitForFinished();
+    EXPECT_EQ(1u, observer->NumDownloadsSeenInState(DownloadItem::IN_PROGRESS));
+
+    DownloadManager::DownloadVector items;
+    manager->GetAllDownloads(&items);
+    EXPECT_TRUE(!items.empty());
+    return items.empty() ? nullptr : items.back();
+  }
+
   DownloadItem* CreateSlowTestDownload(
       net::test_server::ControllableHttpResponse* response,
       const std::string& path) {
@@ -696,7 +735,7 @@ class DownloadExtensionTest : public ExtensionApiTest {
     DownloadManager* manager = GetCurrentManager();
 
     const GURL url = embedded_test_server()->GetURL(path);
-    LoadURLNoWait(url, WindowOpenDisposition::CURRENT_TAB);
+    LoadURLNoWait(url, WindowOpenDisposition::kCurrentTab);
 
     response->WaitForRequest();
     response->Send(
@@ -815,9 +854,9 @@ class DownloadExtensionTest : public ExtensionApiTest {
       tab = PlatformOpenURLOffTheRecord(current_profile(), GURL("about:blank"));
     }
     CHECK(tab);
-    content::OpenURLParams params(url, content::Referrer(), disposition,
-                                  ui::PAGE_TRANSITION_LINK,
-                                  /*is_renderer_initiated=*/false);
+    content::OpenURLParams params =
+        content::OpenURLParams::CreateBrowserInitiated(
+            url, disposition, ui::PAGE_TRANSITION_LINK);
     tab->OpenURL(params,
                  /*navigation_handle_callback=*/{});
     return tab;
@@ -841,7 +880,7 @@ class DownloadExtensionTest : public ExtensionApiTest {
                            : extension->GetResourceURL("empty.html");
       // Recreate the tab each time for insulation.
       content::WebContents* tab =
-          LoadURLNoWait(url, WindowOpenDisposition::NEW_FOREGROUND_TAB);
+          LoadURLNoWait(url, WindowOpenDisposition::kNewForegroundTab);
       CHECK(tab);
       CHECK(content::WaitForLoadStop(tab));
       function->set_extension(extension);
@@ -877,7 +916,7 @@ class DownloadExtensionTest : public ExtensionApiTest {
     CHECK(extension);
     GURL url = extension->GetResourceURL("empty.html");
     content::WebContents* tab =
-        LoadURLNoWait(url, WindowOpenDisposition::NEW_FOREGROUND_TAB);
+        LoadURLNoWait(url, WindowOpenDisposition::kNewForegroundTab);
     EXPECT_TRUE(content::WaitForLoadStop(tab));
     EventRouter::Get(current_profile())
         ->AddEventListener(downloads::OnCreated::kEventName,
@@ -1223,6 +1262,40 @@ IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
   ASSERT_EQ(1UL, result_list.size());
   ASSERT_TRUE(result_list[0].is_int());
   EXPECT_EQ(id, result_list[0].GetInt());
+}
+
+// Action functions that take a download id should treat downloads that are not
+// surfaced via search() or events as if the id were unknown.
+IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
+                       DownloadExtensionTest_InternalApiDownloadActions) {
+  ScopedCancellingItem item(CreateInternalApiSlowTestDownload());
+  ASSERT_TRUE(item.get());
+  ASSERT_EQ(download::DownloadSource::INTERNAL_API,
+            item.get()->GetDownloadSource());
+  ASSERT_EQ(DownloadItem::IN_PROGRESS, item.get()->GetState());
+  const std::string args = DownloadItemIdAsArgList(item.get());
+
+  EXPECT_STREQ(errors::kInvalidId,
+               RunFunctionAndReturnError(
+                   base::MakeRefCounted<DownloadsPauseFunction>(), args)
+                   .c_str());
+  EXPECT_FALSE(item.get()->IsPaused());
+
+  EXPECT_STREQ(errors::kInvalidId,
+               RunFunctionAndReturnError(
+                   base::MakeRefCounted<DownloadsResumeFunction>(), args)
+                   .c_str());
+
+  EXPECT_STREQ(errors::kInvalidId,
+               RunFunctionAndReturnError(
+                   base::MakeRefCounted<DownloadsRemoveFileFunction>(), args)
+                   .c_str());
+
+  // cancel() never fails for unknown ids so just verify it does not affect the
+  // item.
+  EXPECT_TRUE(
+      RunFunction(base::MakeRefCounted<DownloadsCancelFunction>(), args));
+  EXPECT_EQ(DownloadItem::IN_PROGRESS, item.get()->GetState());
 }
 
 IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
@@ -3133,6 +3206,13 @@ IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
                           result_id)));
   ASSERT_TRUE(item->GetTargetFilePath().empty());
   ASSERT_EQ(DownloadItem::IN_PROGRESS, item->GetState());
+
+  // Calling getFileIcon before the target filename has been determined
+  // (e.g. right after onCreated) yields kEmptyFile.
+  EXPECT_EQ(RunFunctionAndReturnError(
+                base::MakeRefCounted<DownloadsGetFileIconFunction>(),
+                base::StringPrintf("[%d, {}]", result_id)),
+            errors::kEmptyFile);
 
   // Respond to the onDeterminingFilename.
   std::string error;
@@ -5398,5 +5478,136 @@ IN_PROC_BROWSER_TEST_P(DownloadExtensionDeferredHistoryTest,
 INSTANTIATE_TEST_SUITE_P(All,
                          DownloadExtensionDeferredHistoryTest,
                          testing::Bool());
+
+// Verifies the behavior reported in https://crbug.com/40878315 where
+// `chrome.downloads.onChanged` listener in an inactive Manifest V3 service
+// worker wakes up the worker and fires when a download state changes, recording
+// the expected event timestamp in storage.
+IN_PROC_BROWSER_TEST_F(DownloadExtensionTest,
+                       ServiceWorkerInactiveOnChangedListener) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+  GoOnTheRecord();
+
+  TestExtensionDir test_dir;
+  test_dir.WriteManifest(R"({
+    "name": "downloads onChanged Service Worker test",
+    "version": "0.1",
+    "manifest_version": 3,
+    "background": {
+      "service_worker": "worker.js"
+    },
+    "permissions": [
+      "downloads",
+      "storage"
+    ]
+  })");
+
+  test_dir.WriteFile(FILE_PATH_LITERAL("worker.js"), R"(
+    chrome.downloads.onCreated.addListener((downloadItem) => {
+      const now = Date.now();
+      chrome.storage.local.set({ onCreatedTime: now });
+      chrome.test.sendMessage('ON_CREATED');
+    });
+
+    chrome.downloads.onChanged.addListener((downloadDelta) => {
+      const now = Date.now();
+      chrome.storage.local.set({
+        onChangedTime: now,
+        onChangedDelta: downloadDelta
+      });
+      chrome.test.sendMessage('ON_CHANGED');
+    });
+
+    chrome.downloads.onDeterminingFilename.addListener(
+        (downloadItem, suggest) => {
+          suggest();
+          const now = Date.now();
+          chrome.storage.local.set({ onDeterminingFilenameTime: now });
+          chrome.test.sendMessage('ON_DETERMINING_FILENAME');
+        });
+
+    chrome.test.sendMessage('WORKER_READY');
+  )");
+
+  // Load the `Extension` and wait for the service worker to start and be ready.
+  ExtensionTestMessageListener ready_listener("WORKER_READY");
+  const Extension* extension = ExtensionBrowserTest::LoadExtension(
+      test_dir.UnpackedPath(), {.wait_for_registration_stored = true});
+  ASSERT_TRUE(extension);
+  ASSERT_TRUE(ready_listener.WaitUntilSatisfied());
+
+  // Stop the service worker so that it becomes inactive.
+  browsertest_util::StopServiceWorkerForExtensionGlobalScope(profile(),
+                                                             extension->id());
+
+  // Set up listeners to observe event messages when the service worker wakes
+  // up.
+  ExtensionTestMessageListener on_created_listener("ON_CREATED");
+  ExtensionTestMessageListener on_determining_filename_listener(
+      "ON_DETERMINING_FILENAME");
+  ExtensionTestMessageListener on_changed_listener("ON_CHANGED");
+
+  // Record `base::Time` timestamp before initiating the download.
+  const base::Time before_download_time = base::Time::Now();
+  const int64_t before_download_ms =
+      before_download_time.InMillisecondsSinceUnixEpoch();
+
+  // Initiate a download while the service worker is inactive.
+  DownloadManager::DownloadVector items;
+  DownloadManager* manager = GetCurrentManager();
+  ScopedItemVectorCanceller delete_items(&items);
+  std::string download_url = embedded_test_server()->GetURL("/slow?0").spec();
+  auto params = std::make_unique<download::DownloadUrlParameters>(
+      GURL(download_url), TRAFFIC_ANNOTATION_FOR_TESTS);
+  manager->DownloadUrl(std::move(params));
+
+  // Verify that `chrome.downloads.onChanged` (along with
+  // `chrome.downloads.onCreated` and `chrome.downloads.onDeterminingFilename`)
+  // listener fires and wakes up the inactive service worker.
+  {
+    SCOPED_TRACE("waiting for download API event listeners to fire");
+    ASSERT_TRUE(on_created_listener.WaitUntilSatisfied());
+    ASSERT_TRUE(on_determining_filename_listener.WaitUntilSatisfied());
+    ASSERT_TRUE(on_changed_listener.WaitUntilSatisfied());
+  }
+
+  // Populate `items` so `ScopedItemVectorCanceller` cancels the in-progress
+  // download on teardown, preventing active download keepalives from blocking
+  // browser shutdown on Windows.
+  manager->GetAllDownloads(&items);
+
+  // Verify stored timestamps and delta in `chrome.storage.local`.
+  base::Value storage_result = browsertest_util::ExecuteScriptInBackgroundPage(
+      profile(), extension->id(),
+      R"((async () => {
+               const items = await chrome.storage.local.get([
+                   'onCreatedTime', 'onDeterminingFilenameTime',
+                   'onChangedTime', 'onChangedDelta'
+               ]);
+               chrome.test.sendScriptResult(items);
+             })())");
+  ASSERT_TRUE(storage_result.is_dict());
+  const base::DictValue& storage_dict = storage_result.GetDict();
+
+  std::optional<double> stored_on_changed_time =
+      storage_dict.FindDouble("onChangedTime");
+  ASSERT_TRUE(stored_on_changed_time.has_value());
+  EXPECT_GE(static_cast<int64_t>(*stored_on_changed_time), before_download_ms);
+
+  std::optional<double> stored_on_created_time =
+      storage_dict.FindDouble("onCreatedTime");
+  ASSERT_TRUE(stored_on_created_time.has_value());
+  EXPECT_GE(static_cast<int64_t>(*stored_on_created_time), before_download_ms);
+
+  std::optional<double> stored_on_determining_filename_time =
+      storage_dict.FindDouble("onDeterminingFilenameTime");
+  ASSERT_TRUE(stored_on_determining_filename_time.has_value());
+  EXPECT_GE(static_cast<int64_t>(*stored_on_determining_filename_time),
+            before_download_ms);
+
+  const base::DictValue* stored_delta = storage_dict.FindDict("onChangedDelta");
+  ASSERT_TRUE(stored_delta);
+  EXPECT_TRUE(stored_delta->FindInt("id").has_value());
+}
 
 }  // namespace extensions

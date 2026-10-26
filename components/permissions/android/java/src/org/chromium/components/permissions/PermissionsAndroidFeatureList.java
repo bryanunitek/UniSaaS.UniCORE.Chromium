@@ -36,11 +36,11 @@ public abstract class PermissionsAndroidFeatureList {
     public static final String ANDROID_ITEM_CHOOSER_CANCEL_BUTTON =
             "AndroidItemChooserCancelButton";
     public static final String PERMISSIONS_ANDROID_CLAPPER_LOUD = "PermissionsAndroidClapperLoud";
-    public static final String PERMISSIONS_ANDROID_CLAPPER_QUIET = "PermissionsAndroidClapperQuiet";
     public static final String PERMISSION_PROMISE_LIFETIME_MODULATION_ANDROID =
             "PermissionPromiseLifetimeModulationAndroid";
     public static final String PERMISSIONS_GESTURE_GATED_PROMPTS = "PermissionsGestureGatedPrompts";
 
+    public static final String CAMERA_AND_MICROPHONE_ELEMENTS = "CameraAndMicrophoneElements";
     public static final String USER_MEDIA_ELEMENT = "UserMediaElement";
     public static final String GEOLOCATION_ELEMENT = "GeolocationElement";
     public static final String BYPASS_PEPC_SECURITY_FOR_TESTING = "BypassPepcSecurityForTesting";

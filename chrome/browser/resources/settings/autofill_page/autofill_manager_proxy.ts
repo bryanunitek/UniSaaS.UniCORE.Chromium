@@ -43,9 +43,10 @@ export interface AutofillManagerProxy {
   removeAddress(guid: string): void;
 
   /**
-   * Sets the Sync Autofill toggle value.
+   * Fetches user data processing consent states.
    */
-  setAutofillSyncToggleEnabled(enabled: boolean): void;
+  fetchUserDataProcessingConsent():
+      Promise<chrome.autofillPrivate.UserDataProcessingConsentStates>;
 }
 
 /**
@@ -76,8 +77,8 @@ export class AutofillManagerImpl implements AutofillManagerProxy {
     chrome.autofillPrivate.removeAddress(guid);
   }
 
-  setAutofillSyncToggleEnabled(enabled: boolean) {
-    chrome.autofillPrivate.setAutofillSyncToggleEnabled(enabled);
+  fetchUserDataProcessingConsent() {
+    return chrome.autofillPrivate.fetchUserDataProcessingConsent();
   }
 
   static getInstance(): AutofillManagerProxy {

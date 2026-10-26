@@ -9,8 +9,10 @@
 #import "base/functional/callback_helpers.h"
 #import "base/logging.h"
 #import "base/memory/weak_ptr.h"
+#import "base/timer/elapsed_timer.h"
 #import "base/values.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool_constants.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool_java_script_feature_util.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
 #import "ios/web/public/js_messaging/web_frame.h"
@@ -32,8 +34,6 @@ mojom::ActionResultCode ToActionResultCode(int code) {
       return mojom::ActionResultCode::kTypeTargetNotElement;
     case TypeToolResultCode::kTypeTargetNotFocusable:
       return mojom::ActionResultCode::kTypeTargetNotFocusable;
-    case TypeToolResultCode::kTypeKeyDownSuppressed:
-      return mojom::ActionResultCode::kTypeKeyDownSuppressed;
     case TypeToolResultCode::kInvalidArguments:
       return mojom::ActionResultCode::kArgumentsInvalid;
     case TypeToolResultCode::kElementDisabled:
@@ -64,13 +64,12 @@ TypeToolJavaScriptFeature::~TypeToolJavaScriptFeature() = default;
 
 void TypeToolJavaScriptFeature::Type(
     base::WeakPtr<web::WebFrame> target_frame,
-    const optimization_guide::proto::TypeAction& action,
+    const ActionTarget& target,
+    const std::string& text,
+    optimization_guide::proto::TypeAction_TypeMode mode,
+    bool follow_by_enter,
     ToolExecutionCallback callback) {
-  CHECK(action.has_target());
-  CHECK(action.has_text() && action.has_mode());
-  CHECK(action.target().has_coordinate() ||
-        (action.target().has_content_node_id() &&
-         action.target().has_document_identifier()));
+  CHECK(target.is_valid());
 
   if (!target_frame) {
     std::move(callback).Run(
@@ -79,35 +78,23 @@ void TypeToolJavaScriptFeature::Type(
   }
 
   base::ListValue parameters;
-  std::string function_name;
-
-  if (action.target().has_content_node_id()) {
-    parameters.Append(action.target().content_node_id());
-    parameters.Append(action.text());
-    parameters.Append(static_cast<int>(action.mode()));
-    parameters.Append(action.follow_by_enter());
-    function_name = "type_tool.typeByNodeId";
-  } else {
-    parameters.Append(action.target().coordinate().x());
-    parameters.Append(action.target().coordinate().y());
-    parameters.Append(
-        static_cast<int>(action.target().coordinate().pixel_type()));
-    parameters.Append(action.text());
-    parameters.Append(static_cast<int>(action.mode()));
-    parameters.Append(action.follow_by_enter());
-    function_name = "type_tool.typeByCoordinate";
-  }
+  parameters.Append(target.ToDictValue());
+  parameters.Append(text);
+  parameters.Append(static_cast<int>(mode));
+  parameters.Append(follow_by_enter);
 
   auto [cb_for_js, cb_for_error] = base::SplitOnceCallback(std::move(callback));
   bool sent = CallJavaScriptFunction(
-      target_frame.get(), function_name, parameters,
+      target_frame.get(), "type_tool.type", parameters,
       base::BindOnce(
-          [](ToolExecutionCallback callback, const base::Value* result) {
+          [](ToolExecutionCallback callback, base::ElapsedTimer timer,
+             const base::Value* result) {
             std::move(callback).Run(ParseJavaScriptResultWithResultCode(
-                &ToActionResultCode, result));
+                ActorJavaScriptCall::kType, &ToActionResultCode, result,
+                timer));
           },
-          std::move(cb_for_js)),
-      base::Milliseconds(web::kJavaScriptFunctionCallDefaultTimeout));
+          std::move(cb_for_js), base::ElapsedTimer()),
+      kActorJavaScriptExecutionTimeout);
 
   if (!sent) {
     std::move(cb_for_error)

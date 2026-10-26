@@ -10,6 +10,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/types/pass_key.h"
+#include "chrome/browser/ui/page_info/chrome_page_info_delegate.h"
 #include "chrome/browser/ui/page_info/page_info_dialog.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "ui/gfx/native_ui_types.h"
@@ -47,6 +48,12 @@ class PageInfoBubbleSpecification {
     // `callback` will run when the bubble widget is destroying.
     Builder& AddPageInfoClosingCallback(PageInfoClosingCallback callback);
 
+    // Sets a custom callback to look up the BrowserWindowInterface for the
+    // WebContents. Useful for WebContents not directly hosted as browser tabs
+    // (e.g. payment handler dialogs or modal web dialogs).
+    Builder& AddGetBrowserCallback(
+        ChromePageInfoDelegate::GetBrowserCallback callback);
+
     // Hides the extended site info section at the bottom of the page info
     // bubble.
     Builder& HideExtendedSiteInfo();
@@ -54,6 +61,14 @@ class PageInfoBubbleSpecification {
     // Opens a page in the page info bubble. Note: only one page can be shown at
     // a time.
     Builder& ShowPermissionPage(ContentSettingsType type);
+
+    // Sets a callback to be run when the extensions menu item in the page info
+    // bubble is clicked, and enables showing the extensions menu item.
+    Builder& SetOnExtensionsClickedCallback(base::RepeatingClosure callback);
+
+    // Sets the surface from which the page info bubble is opened (e.g.
+    // Contextual Tasks side panel toolbar Super G button).
+    Builder& SetSurface(PageInfo::Surface surface);
 
     std::unique_ptr<PageInfoBubbleSpecification> Build();
 
@@ -74,8 +89,12 @@ class PageInfoBubbleSpecification {
   void AddAnchorRect(gfx::Rect rect);
   void AddInitializedCallback(base::OnceClosure callback);
   void AddPageInfoClosingCallback(PageInfoClosingCallback callback);
+  void AddGetBrowserCallback(
+      ChromePageInfoDelegate::GetBrowserCallback callback);
   void HideExtendedSiteInfo();
   void ShowPermissionPage(ContentSettingsType type);
+  void SetOnExtensionsClickedCallback(base::RepeatingClosure callback);
+  void SetSurface(PageInfo::Surface surface);
 
   views::BubbleAnchor anchor();
   gfx::NativeWindow parent_window();
@@ -84,8 +103,12 @@ class PageInfoBubbleSpecification {
   gfx::Rect anchor_rect();
   base::OnceClosure initialized_callback();
   PageInfoClosingCallback page_info_closing_callback();
+  ChromePageInfoDelegate::GetBrowserCallback get_browser_callback();
   bool show_extended_site_info();
   std::optional<ContentSettingsType> permission_page_type();
+  bool should_show_extensions_menu() const;
+  const base::RepeatingClosure& get_open_extensions_menu_callback() const;
+  PageInfo::Surface surface() const;
 
  private:
   views::BubbleAnchor anchor_;
@@ -95,8 +118,12 @@ class PageInfoBubbleSpecification {
   gfx::Rect anchor_rect_;
   base::OnceClosure initialized_callback_;
   PageInfoClosingCallback page_info_closing_callback_;
+  ChromePageInfoDelegate::GetBrowserCallback get_browser_callback_{
+      ChromePageInfoDelegate::DefaultGetBrowserCallback()};
   bool show_extended_site_info_ = true;
   std::optional<ContentSettingsType> permission_page_type_;
+  base::RepeatingClosure open_extensions_menu_callback_;
+  PageInfo::Surface surface_ = PageInfo::Surface::kDefault;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_PAGE_INFO_PAGE_INFO_BUBBLE_SPECIFICATION_H_

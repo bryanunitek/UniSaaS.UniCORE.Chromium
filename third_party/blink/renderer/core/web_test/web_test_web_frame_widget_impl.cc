@@ -194,6 +194,7 @@ WebTestWebFrameWidgetImpl::GetFrameWidgetTestHelperForTesting() {
 
 void WebTestWebFrameWidgetImpl::Reset() {
   event_sender_->Reset();
+  screen_infos_for_testing_.reset();
 
   // Ends any synthetic gestures started in |event_sender_|.
   FlushInputProcessedCallback();
@@ -219,6 +220,37 @@ void WebTestWebFrameWidgetImpl::Reset() {
 
 content::EventSender* WebTestWebFrameWidgetImpl::GetEventSender() {
   return event_sender_.get();
+}
+
+void WebTestWebFrameWidgetImpl::SetScreenSizeForTesting(int width, int height) {
+  screen_infos_for_testing_ = WebFrameWidgetImpl::GetOriginalScreenInfos();
+  display::ScreenInfo& screen_info =
+      screen_infos_for_testing_->mutable_current();
+  screen_info.rect = gfx::Rect(width, height);
+  screen_info.available_rect = screen_info.rect;
+}
+
+const display::ScreenInfo& WebTestWebFrameWidgetImpl::GetScreenInfo() {
+  return screen_infos_for_testing_ ? screen_infos_for_testing_->current()
+                                   : WebFrameWidgetImpl::GetScreenInfo();
+}
+
+const display::ScreenInfos& WebTestWebFrameWidgetImpl::GetScreenInfos() {
+  return screen_infos_for_testing_ ? *screen_infos_for_testing_
+                                   : WebFrameWidgetImpl::GetScreenInfos();
+}
+
+const display::ScreenInfo& WebTestWebFrameWidgetImpl::GetOriginalScreenInfo() {
+  return screen_infos_for_testing_
+             ? screen_infos_for_testing_->current()
+             : WebFrameWidgetImpl::GetOriginalScreenInfo();
+}
+
+const display::ScreenInfos&
+WebTestWebFrameWidgetImpl::GetOriginalScreenInfos() {
+  return screen_infos_for_testing_
+             ? *screen_infos_for_testing_
+             : WebFrameWidgetImpl::GetOriginalScreenInfos();
 }
 
 void WebTestWebFrameWidgetImpl::SynchronouslyCompositeAfterTest(
@@ -290,16 +322,14 @@ void WebTestWebFrameWidgetImpl::SynchronouslyComposite(
 
   in_synchronous_composite_ = true;
 
-  auto wrapped_callback = blink::BindOnce(
-      [](base::OnceClosure cb, bool* in_synchronous_composite) {
-        *in_synchronous_composite = false;
-        if (cb) {
-          std::move(cb).Run();
-        }
-      },
-      // base::Unretained is safe by construction, because WebFrameWidgetImpl
-      // must always outlive the compositing machinery.
-      std::move(callback), base::Unretained(&in_synchronous_composite_));
+  // Use WrapWeakPersistent because `this` (a GarbageCollected object) can be
+  // destroyed before the compositing machinery invokes the presentation
+  // callback. For example, child local root iframes can be detached and
+  // garbage-collected while a composite or presentation is still in flight.
+  // See https://crbug.com/541312750.
+  auto wrapped_callback =
+      blink::BindOnce(&WebTestWebFrameWidgetImpl::DidSynchronouslyComposite,
+                      WrapWeakPersistent(this), std::move(callback));
 
   // If there's a visible popup, then we will update its compositing after
   // updating the host frame.
@@ -322,6 +352,14 @@ void WebTestWebFrameWidgetImpl::SynchronouslyComposite(
 
   DoComposite(popup->LayerTreeHostForTesting(), do_raster,
               std::move(wrapped_callback));
+}
+
+void WebTestWebFrameWidgetImpl::DidSynchronouslyComposite(
+    base::OnceClosure callback) {
+  in_synchronous_composite_ = false;
+  if (callback) {
+    std::move(callback).Run();
+  }
 }
 
 void WebTestWebFrameWidgetImpl::AnimateNow() {

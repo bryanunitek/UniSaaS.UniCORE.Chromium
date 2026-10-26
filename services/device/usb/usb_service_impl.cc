@@ -14,6 +14,7 @@
 
 #include "base/barrier_closure.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -67,8 +68,14 @@ std::optional<std::vector<ScopedLibusbDeviceRef>> GetDeviceListBlocking(
 
   std::vector<ScopedLibusbDeviceRef> scoped_devices;
   scoped_devices.reserve(device_count);
-  for (ssize_t i = 0; i < device_count; ++i)
-    scoped_devices.emplace_back(UNSAFE_TODO(platform_devices[i]), usb_context);
+  // SAFETY: `platform_devices` is a raw pointer to a NULL-terminated array of
+  // device pointers returned by `libusb_get_device_list`. libusb guarantees
+  // that this array is of size `device_count` + 1.
+  auto devices_span = UNSAFE_BUFFERS(
+      base::span(platform_devices, static_cast<size_t>(device_count)));
+  for (libusb_device* device : devices_span) {
+    scoped_devices.emplace_back(device, usb_context);
+  }
 
   // Free the list but don't unref the devices because ownership has been
   // been transfered to the elements of |scoped_devices|.
@@ -199,7 +206,9 @@ void UsbServiceImpl::GetDevices(GetDevicesCallback callback) {
     return;
   }
 
-  if (enumeration_in_progress_) {
+  // Hold requests until the first enumeration has completed so that callers
+  // do not see an empty list while the libusb context is still initializing.
+  if (!enumeration_ready_ || enumeration_in_progress_) {
     pending_enumeration_callbacks_.push_back(std::move(callback));
     return;
   }
@@ -209,7 +218,7 @@ void UsbServiceImpl::GetDevices(GetDevicesCallback callback) {
 
 void UsbServiceImpl::OnUsbContext(scoped_refptr<UsbContext> context) {
   if (!context) {
-    usb_unavailable_ = true;
+    OnUsbUnavailable();
     return;
   }
 
@@ -223,13 +232,25 @@ void UsbServiceImpl::OnUsbContext(scoped_refptr<UsbContext> context) {
       LIBUSB_HOTPLUG_MATCH_ANY, LIBUSB_HOTPLUG_MATCH_ANY,
       &UsbServiceImpl::HotplugCallback, this, &hotplug_handle_);
   if (rv != LIBUSB_SUCCESS) {
-    usb_unavailable_ = true;
     context_.reset();
+    OnUsbUnavailable();
     return;
   }
 
   // This will call any enumeration callbacks queued while initializing.
   RefreshDevices();
+}
+
+void UsbServiceImpl::OnUsbUnavailable() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  usb_unavailable_ = true;
+
+  // Answer any GetDevices() calls that were waiting for initialization.
+  std::vector<GetDevicesCallback> callbacks;
+  callbacks.swap(pending_enumeration_callbacks_);
+  for (GetDevicesCallback& callback : callbacks) {
+    std::move(callback).Run(std::vector<scoped_refptr<UsbDevice>>());
+  }
 }
 
 void UsbServiceImpl::RefreshDevices() {

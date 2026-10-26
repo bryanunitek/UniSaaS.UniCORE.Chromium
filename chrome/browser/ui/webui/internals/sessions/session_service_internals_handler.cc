@@ -11,6 +11,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
@@ -27,7 +28,11 @@ namespace {
 
 // This is for debugging, so it doesn't use local time conversions.
 std::string EventTimeToString(const SessionServiceEvent& event) {
-  return base::UnlocalizedTimeFormatWithPattern(event.time, "M/d/y H:mm:ss");
+  base::Time::Exploded exploded;
+  event.time.UTCExplode(&exploded);
+  return base::StringPrintf("%d/%d/%d %d:%02d:%02d", exploded.month,
+                            exploded.day_of_month, exploded.year, exploded.hour,
+                            exploded.minute, exploded.second);
 }
 
 std::string EventToString(const SessionServiceEvent& event) {
@@ -72,7 +77,7 @@ std::string EventToString(const SessionServiceEvent& event) {
 }
 
 std::string GetSessionServiceInternalsAsString(Profile* profile) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   std::vector<std::string> events;
   events.push_back("<pre>");
   for (const auto& event : GetSessionServiceEvents(profile)) {
@@ -111,8 +116,8 @@ void SessionServiceInternalsHandler::HandleWebUIRequestCallback(
     Profile* profile,
     const std::string& path,
     content::WebUIDataSource::GotDataCallback callback) {
-  DCHECK(ShouldHandleWebUIRequestCallback(path));
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK(ShouldHandleWebUIRequestCallback(path), base::NotFatalUntil::M162);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   std::move(callback).Run(base::MakeRefCounted<base::RefCountedString>(
       GetSessionServiceInternalsAsString(profile)));
 }

@@ -34,17 +34,18 @@
 
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include "base/compiler_specific.h"
-#include "base/containers/adapters.h"
 #include "base/containers/flat_map.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_view_util.h"
 #include "net/http/http_content_disposition.h"
+#include "net/http/http_no_vary_search_data.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
 #include "services/network/public/cpp/content_security_policy/content_security_policy.h"
@@ -79,6 +80,7 @@
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/wtf.h"
+#include "url/gurl.h"
 
 // We would like finding a way to convert from/to blink type automatically.
 // The following attempt has been withdrawn:
@@ -239,10 +241,10 @@ blink::ContentSecurityPolicyPtr ConvertToBlink(
   return blink::ContentSecurityPolicy::New(
       ConvertToBlink(in->self_origin), ConvertToBlink(in->raw_directives),
       ConvertToBlink(in->directives), in->upgrade_insecure_requests,
-      in->treat_as_public_address, in->block_all_mixed_content, in->sandbox,
-      ConvertToBlink(in->header), in->use_reporting_api,
-      ConvertToBlink(in->report_endpoints), in->require_trusted_types_for,
-      ConvertToBlink(in->trusted_types), ConvertToBlink(in->parsing_errors));
+      in->block_all_mixed_content, in->sandbox, ConvertToBlink(in->header),
+      in->use_reporting_api, ConvertToBlink(in->report_endpoints),
+      in->require_trusted_types_for, ConvertToBlink(in->trusted_types),
+      ConvertToBlink(in->parsing_errors));
 }
 
 blink::OriginOrWildcardHeaderValuePtr ConvertToBlink(
@@ -421,7 +423,7 @@ blink::ParsedHeadersPtr ConvertToBlink(const ParsedHeadersPtr& in) {
           ? std::make_optional(ConvertToBlink(in->content_language.value()))
           : std::nullopt,
       ConvertToBlink(in->no_vary_search_with_parse_error),
-      in->observe_browsing_topics, in->allow_cross_origin_event_reporting,
+      in->allow_cross_origin_event_reporting,
       /*declarative_performance_observer_policy=*/nullptr,
       in->prefetch_activation_beacon_endpoint.has_value()
           ? std::make_optional(
@@ -1040,24 +1042,15 @@ bool ParseMultipartFormHeadersFromBody(base::span<const uint8_t> bytes,
   return true;
 }
 
-bool ParseContentRangeHeaderFor206(const String& content_range,
-                                   int64_t* first_byte_position,
-                                   int64_t* last_byte_position,
-                                   int64_t* instance_length) {
-  return net::HttpUtil::ParseContentRangeHeaderFor206(
-      StringUtf8Adaptor(content_range).AsStringView(), first_byte_position,
-      last_byte_position, instance_length);
-}
-
 std::unique_ptr<ServerTimingHeaderVector> ParseServerTimingHeader(
-    const String& headerValue) {
+    const String& header_value) {
   std::unique_ptr<ServerTimingHeaderVector> headers =
       std::make_unique<ServerTimingHeaderVector>();
 
-  if (!headerValue.IsNull()) {
-    DCHECK(headerValue.Is8Bit());
+  if (!header_value.IsNull()) {
+    DCHECK(header_value.Is8Bit());
 
-    HeaderFieldTokenizer tokenizer(headerValue);
+    HeaderFieldTokenizer tokenizer(header_value);
     while (!tokenizer.IsConsumed()) {
       StringView name;
       if (!tokenizer.ConsumeToken(ParsedContentType::Mode::kNormal, name)) {
@@ -1149,8 +1142,17 @@ ParseContentSecurityPolicyHeaders(
           network::mojom::blink::ContentSecurityPolicyType::kReport,
           network::mojom::blink::ContentSecurityPolicySource::kHTTP,
           headers.ResponseUrl());
-  parsed_csps.append_range(base::RangeAsRvalues(std::move(report_only_csps)));
+  parsed_csps.append_range(std::views::as_rvalue(report_only_csps));
   return parsed_csps;
+}
+
+network::mojom::blink::CSPSourceListPtr ParseAllowOrigins(
+    const StringView& raw_value) {
+  std::vector<std::string> parsing_errors;
+  // `allow-origins` uses the same syntax as CSP `frame-ancestors`.
+  return network::mojom::ConvertToBlink(
+      network::ParseSourceList(network::mojom::CSPDirectiveName::FrameAncestors,
+                               raw_value.Utf8(), parsing_errors));
 }
 
 network::mojom::blink::SRIMessageSignaturesPtr
@@ -1192,5 +1194,31 @@ String GetNoVarySearchHintConsoleMessage(
     const network::mojom::NoVarySearchParseError& error) {
   return network::mojom::ConvertToBlink(
       network::GetNoVarySearchHintConsoleMessage(error));
+}
+
+bool AreUrlsEquivalentUnderNoVarySearch(
+    const KURL& url1,
+    const KURL& url2,
+    const network::mojom::blink::NoVarySearchPtr& no_vary_search) {
+  DCHECK(no_vary_search);
+  auto to_std_vector = [](const Vector<String>& params) {
+    std::vector<std::string> result;
+    result.reserve(params.size());
+    for (const String& param : params) {
+      result.push_back(param.Utf8());
+    }
+    return result;
+  };
+  net::HttpNoVarySearchData data =
+      no_vary_search->search_variance->is_vary_params()
+          ? net::HttpNoVarySearchData::CreateFromVaryParams(
+                to_std_vector(
+                    no_vary_search->search_variance->get_vary_params()),
+                no_vary_search->vary_on_key_order)
+          : net::HttpNoVarySearchData::CreateFromNoVaryParams(
+                to_std_vector(
+                    no_vary_search->search_variance->get_no_vary_params()),
+                no_vary_search->vary_on_key_order);
+  return data.AreEquivalent(GURL(url1), GURL(url2));
 }
 }  // namespace blink

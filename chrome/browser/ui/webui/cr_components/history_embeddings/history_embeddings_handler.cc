@@ -13,14 +13,12 @@
 #include "chrome/browser/feedback/show_feedback_page.h"
 #include "chrome/browser/history_embeddings/history_embeddings_service_factory.h"
 #include "chrome/browser/history_embeddings/history_embeddings_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
-#include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
 #include "components/history_clusters/core/history_clusters_util.h"
@@ -31,6 +29,8 @@
 #include "history_embeddings_handler.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/time_format.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 namespace {
@@ -281,15 +281,6 @@ void HistoryEmbeddingsHandler::OpenSettingsPage() {
                                  GURL(chrome::kHistorySearchSettingURL),
                                  ui::PAGE_TRANSITION_LINK);
   navigate_params.window_action = NavigateParams::WindowAction::kShowWindow;
-  navigate_params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  navigate_params.disposition = WindowOpenDisposition::kNewForegroundTab;
   Navigate(&navigate_params);
-}
-
-void HistoryEmbeddingsHandler::MaybeShowFeaturePromo() {
-  if (auto* user_education =
-          BrowserUserEducationInterface::MaybeGetForWebContentsInTab(
-              web_ui_->GetWebContents())) {
-    user_education->MaybeShowFeaturePromo(
-        feature_engagement::kIPHHistorySearchFeature);
-  }
 }

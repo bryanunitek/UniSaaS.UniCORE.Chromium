@@ -17,7 +17,6 @@
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/permissions/resolvers/permission_prompt_options.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/device/public/mojom/geolocation.mojom.h"
 #include "services/device/public/mojom/geolocation_context.mojom.h"
@@ -125,25 +124,15 @@ class GeolocationHeaderService : public KeyedService {
   void RecordInlineLocationSuggestionShown(
       OmniboxInlineLocationSuggestionShown shown_state,
       size_t match_index) const;
-  void RecordInlineLocationSuggestionClicked(
+  void MaybeRecordInlineLocationSuggestionClicked(
       const AutocompleteMatch& match) const;
 
   // Returns true if the given URL is eligible for the X-Geo header.
   bool IsUrlEligibleForLocationHeader(const GURL& url) const;
 
-  void SetLocationAgeForTesting(base::TimeDelta age) {
-    location_age_for_testing_ = age;
-  }
-
-  void SetLocationForTesting(device::mojom::GeopositionPtr position) {
-    last_position_ = std::move(position);
-  }
-
-  bool is_geolocation_bound_for_testing() const {
-    return geolocation_.is_bound();
-  }
-
  private:
+  friend class GeolocationHeaderServiceTestApi;
+
   // Returns true if both the site-level and OS-level geolocation permissions
   // are granted for the given URL.
   bool IsAllowedByPermission(const GURL& url) const;

@@ -5,7 +5,7 @@
 package org.chromium.chrome.browser.omnibox.suggestions;
 
 import static org.junit.Assert.assertEquals;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 import static org.chromium.components.omnibox.GroupConfigTestSupport.SECTION_1_NO_HEADER;
 import static org.chromium.components.omnibox.GroupConfigTestSupport.SECTION_2_WITH_HEADER;
@@ -21,12 +21,13 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.FuseboxLayoutMode;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties.RoundSides;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.omnibox.suggestions.OmniboxSuggestionUiType;
@@ -40,15 +41,14 @@ import java.util.List;
 
 /** Tests for {@link DropdownItemViewInfoListManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class DropdownItemViewInfoListManagerUnitTest {
-    public @Rule MockitoRule mockitoRule = MockitoJUnit.rule();
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-    private @Spy SuggestionProcessor mBasicSuggestionProcessor;
-    private @Spy SuggestionProcessor mEditUrlSuggestionProcessor;
-    private @Spy DropdownItemProcessor mHeaderProcessor;
-    private @Mock PropertyModel mModel;
-    private @Mock ListObserver<Void> mListObserver;
+    @Spy private SuggestionProcessor mBasicSuggestionProcessor;
+    @Spy private SuggestionProcessor mEditUrlSuggestionProcessor;
+    @Mock private PropertyModel mModel;
+    @Mock private ListObserver<Void> mListObserver;
 
     private ModelList mSuggestionModels;
     private SettableNonNullObservableSupplier<Integer> mRoundSidesSupplier;
@@ -56,10 +56,12 @@ public class DropdownItemViewInfoListManagerUnitTest {
 
     @Before
     public void setUp() {
-        when(mBasicSuggestionProcessor.getViewTypeId()).thenReturn(OmniboxSuggestionUiType.DEFAULT);
-        when(mEditUrlSuggestionProcessor.getViewTypeId())
+        lenient()
+                .when(mBasicSuggestionProcessor.getViewTypeId())
+                .thenReturn(OmniboxSuggestionUiType.DEFAULT);
+        lenient()
+                .when(mEditUrlSuggestionProcessor.getViewTypeId())
                 .thenReturn(OmniboxSuggestionUiType.EDIT_URL_SUGGESTION);
-        when(mHeaderProcessor.getViewTypeId()).thenReturn(OmniboxSuggestionUiType.HEADER);
 
         mSuggestionModels = new ModelList();
         mSuggestionModels.addObserver(mListObserver);
@@ -141,13 +143,11 @@ public class DropdownItemViewInfoListManagerUnitTest {
         // 5. AutocompleteMediator receives same suggestions as in (2)
         // 6. user sees suggestions again.
         final List<DropdownItemViewInfo> list1 = new ArrayList<>();
-        list1.add(new DropdownItemViewInfo(mHeaderProcessor, mModel, SECTION_1_NO_HEADER));
         list1.add(new DropdownItemViewInfo(mBasicSuggestionProcessor, mModel, SECTION_1_NO_HEADER));
         list1.add(new DropdownItemViewInfo(mBasicSuggestionProcessor, mModel, SECTION_1_NO_HEADER));
 
         final List<DropdownItemViewInfo> list2 =
                 Arrays.asList(
-                        new DropdownItemViewInfo(mHeaderProcessor, mModel, SECTION_1_NO_HEADER),
                         new DropdownItemViewInfo(
                                 mBasicSuggestionProcessor, mModel, SECTION_1_NO_HEADER),
                         new DropdownItemViewInfo(
@@ -167,10 +167,6 @@ public class DropdownItemViewInfoListManagerUnitTest {
         List<DropdownItemViewInfo> list =
                 Arrays.asList(
                         new DropdownItemViewInfo(
-                                mHeaderProcessor,
-                                new PropertyModel(SuggestionCommonProperties.ALL_KEYS),
-                                SECTION_1_NO_HEADER),
-                        new DropdownItemViewInfo(
                                 mBasicSuggestionProcessor,
                                 new PropertyModel(SuggestionCommonProperties.ALL_KEYS),
                                 SECTION_1_NO_HEADER),
@@ -182,29 +178,37 @@ public class DropdownItemViewInfoListManagerUnitTest {
         mManager.setSourceViewInfoList(list);
         verifyModelEquals(list);
         verifyPropertyValues(
-                View.LAYOUT_DIRECTION_INHERIT, BrandedColorScheme.LIGHT_BRANDED_THEME, true);
+                View.LAYOUT_DIRECTION_INHERIT,
+                BrandedColorScheme.LIGHT_BRANDED_THEME,
+                /* applySideSpacing= */ true);
 
         mManager.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         verifyPropertyValues(
-                View.LAYOUT_DIRECTION_RTL, BrandedColorScheme.LIGHT_BRANDED_THEME, true);
+                View.LAYOUT_DIRECTION_RTL,
+                BrandedColorScheme.LIGHT_BRANDED_THEME,
+                /* applySideSpacing= */ true);
 
         mManager.setBrandedColorScheme(BrandedColorScheme.DARK_BRANDED_THEME);
         verifyPropertyValues(
-                View.LAYOUT_DIRECTION_RTL, BrandedColorScheme.DARK_BRANDED_THEME, true);
+                View.LAYOUT_DIRECTION_RTL,
+                BrandedColorScheme.DARK_BRANDED_THEME,
+                /* applySideSpacing= */ true);
 
         mManager.setBrandedColorScheme(BrandedColorScheme.INCOGNITO);
-        verifyPropertyValues(View.LAYOUT_DIRECTION_RTL, BrandedColorScheme.INCOGNITO, true);
+        verifyPropertyValues(
+                View.LAYOUT_DIRECTION_RTL,
+                BrandedColorScheme.INCOGNITO,
+                /* applySideSpacing= */ true);
 
-        mManager.setApplySideSpacing(false);
-        verifyPropertyValues(View.LAYOUT_DIRECTION_RTL, BrandedColorScheme.INCOGNITO, false);
+        mManager.setFuseboxLayoutMode(FuseboxLayoutMode.SUGGESTIONS_POPOVER);
+        verifyPropertyValues(
+                View.LAYOUT_DIRECTION_RTL,
+                BrandedColorScheme.INCOGNITO,
+                /* applySideSpacing= */ false);
 
         // Finally, set the new list and confirm that the values are still applied.
         list =
                 Arrays.asList(
-                        new DropdownItemViewInfo(
-                                mHeaderProcessor,
-                                new PropertyModel(SuggestionCommonProperties.ALL_KEYS),
-                                SECTION_2_WITH_HEADER),
                         new DropdownItemViewInfo(
                                 mBasicSuggestionProcessor,
                                 new PropertyModel(SuggestionCommonProperties.ALL_KEYS),
@@ -219,17 +223,16 @@ public class DropdownItemViewInfoListManagerUnitTest {
                                 SECTION_2_WITH_HEADER));
         mManager.setSourceViewInfoList(list);
         verifyModelEquals(list);
-        verifyPropertyValues(View.LAYOUT_DIRECTION_RTL, BrandedColorScheme.INCOGNITO, false);
+        verifyPropertyValues(
+                View.LAYOUT_DIRECTION_RTL,
+                BrandedColorScheme.INCOGNITO,
+                /* applySideSpacing= */ false);
     }
 
     @Test
     public void updateSuggestionsList_roundSidesArePropagatedToSuggestions() {
         List<DropdownItemViewInfo> list =
                 Arrays.asList(
-                        new DropdownItemViewInfo(
-                                mHeaderProcessor,
-                                new PropertyModel(SuggestionCommonProperties.ALL_KEYS),
-                                SECTION_1_NO_HEADER),
                         new DropdownItemViewInfo(
                                 mBasicSuggestionProcessor,
                                 new PropertyModel(SuggestionCommonProperties.ALL_KEYS),

@@ -1,3 +1,4 @@
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +7,17 @@
 #include <algorithm>
 #include <bitset>
 #include <utility>
+#include <variant>
 
 #include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "net/http/structured_headers.h"
 #include "services/network/public/cpp/permissions_policy/origin_with_possible_wildcards.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/web/web_navigation_params.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -90,8 +94,8 @@ class ParsingContext {
 
  public:
   ParsingContext(PolicyParserMessageBuffer& logger,
-                 const SecurityOrigin& self_origin LIFETIME_CAPTURE_BY(this),
-                 const SecurityOrigin* src_origin LIFETIME_CAPTURE_BY(this),
+                 const SecurityOrigin& self_origin LIFETIME_CAPTURE_BY_THIS,
+                 const SecurityOrigin* src_origin LIFETIME_CAPTURE_BY_THIS,
                  const FeatureNameMap& feature_names,
                  ExecutionContext* execution_context)
       : logger_(logger),
@@ -460,6 +464,20 @@ PermissionsPolicyParser::Node ParsingContext::ParseFeaturePolicyToIR(
   return root;
 }
 
+namespace {
+
+String GetEndpoint(const net::structured_headers::Parameters& params) {
+  for (const auto& [key, value] : params) {
+    if (const std::string* token = value.GetIfToken();
+        key == "report-to" && token) {
+      return String(*token);
+    }
+  }
+  return String();
+}
+
+}  // namespace
+
 PermissionsPolicyParser::Node ParsingContext::ParsePermissionsPolicyToIR(
     const String& policy) {
   if (policy.length() > MAX_LENGTH_PARSE) {
@@ -479,64 +497,69 @@ PermissionsPolicyParser::Node ParsingContext::ParsePermissionsPolicyToIR(
 
   PermissionsPolicyParser::Node ir_root{
       network::OriginWithPossibleWildcards::NodeType::kHeader};
-  for (const auto& feature_entry : root.value()) {
-    const auto& key = feature_entry.first;
-    const char* feature_name = key.c_str();
-    const auto& value = feature_entry.second;
-    String endpoint;
-
-    if (!value.params.empty()) {
-      for (const auto& param : value.params) {
-        if (param.first == "report-to" && param.second.is_token()) {
-          endpoint = String(param.second.GetString());
-        }
-      }
-    }
+  for (const auto& [key, value] : root.value()) {
+    String feature_name(key);
 
     Vector<String> allowlist;
-    for (const auto& parameterized_item : value.member) {
-      if (!parameterized_item.params.empty()) {
-        logger_.Warn(UNSAFE_TODO(String::Format(
-            "Feature %s's parameters are ignored.", feature_name)));
-      }
 
-      String allowlist_item;
-      if (parameterized_item.item.is_token()) {
-        // All special keyword appears as token, i.e. self, src and *.
-        const std::string& token_value = parameterized_item.item.GetString();
-        if (token_value != "*" && token_value != "self") {
-          logger_.Warn(UNSAFE_TODO(String::Format(
-              "Invalid allowlist item(%s) for feature %s. Allowlist item "
-              "must be *, self or quoted url.",
-              token_value.c_str(), feature_name)));
-          continue;
-        }
-
-        if (token_value == "*") {
-          allowlist_item = "*";
-        } else {
-          allowlist_item = String::Format("'%s'", token_value.c_str());
-        }
-      } else if (parameterized_item.item.is_string()) {
-        allowlist_item = parameterized_item.item.GetString().c_str();
-      } else {
-        logger_.Warn(UNSAFE_TODO(
-            String::Format("Invalid allowlist item for feature %s. Allowlist "
-                           "item must be *, self, or quoted url.",
-                           feature_name)));
-        continue;
-      }
+    const auto process_item = [&](const net::structured_headers::Item& item) {
+      String allowlist_item = item.Visit(absl::Overload{
+          [&](const net::structured_headers::Item::Token& token) -> String {
+            // All special keyword appears as token, i.e. self and *.
+            if (token.value == "*") {
+              return "*";
+            }
+            if (token.value == "self") {
+              return "'self'";
+            }
+            logger_.Warn(
+                StrCat({"Invalid allowlist item(", token.value.c_str(),
+                        ") for feature ", feature_name,
+                        ". Allowlist item must be *, self or quoted url."}));
+            return String();
+          },
+          [](const std::string& str) { return String(str); },
+          [&](const auto&) -> String {
+            logger_.Warn(
+                StrCat({"Invalid allowlist item for feature ", feature_name,
+                        ". Allowlist item must be *, self, or quoted url."}));
+            return String();
+          },
+      });
       if (!allowlist_item.empty()) {
-        allowlist.push_back(allowlist_item);
+        allowlist.push_back(std::move(allowlist_item));
       }
-    }
+    };
+
+    String endpoint = value.Visit(absl::Overload{
+        [&](const net::structured_headers::ParameterizedItem& item) {
+          process_item(item.item);
+          return GetEndpoint(item.params);
+        },
+        [&](const net::structured_headers::InnerList& inner_list) {
+          for (const auto& parameterized_item : inner_list.items) {
+            if (!parameterized_item.params.empty()) {
+              logger_.Warn(StrCat(
+                  {"Feature ", feature_name, "'s parameters are ignored."}));
+            }
+
+            process_item(parameterized_item.item);
+          }
+          return GetEndpoint(inner_list.params);
+        },
+        [](std::monostate) -> String {
+          // Parsed dictionaries always return a value from either
+          // `GetIfItem()` or `GetIfInnerList()`.
+          NOTREACHED();
+        },
+    });
 
     if (allowlist.empty()) {
       allowlist.push_back("'none'");
     }
 
     ir_root.declarations.push_back(PermissionsPolicyParser::Declaration{
-        feature_name, std::move(allowlist), endpoint});
+        std::move(feature_name), std::move(allowlist), std::move(endpoint)});
   }
 
   return ir_root;
@@ -709,11 +732,11 @@ network::ParsedPermissionsPolicy PermissionsPolicyParser::ParseHeader(
               std::ostream_iterator<std::string>(features_stream, ", "));
     features_stream << overlap_features.back();
 
-    feature_policy_logger.Warn(String::Format(
-        "Some features are specified in both Feature-Policy and "
-        "Permissions-Policy header: %s. Values defined in Permissions-Policy "
-        "header will be used.",
-        features_stream.str().c_str()));
+    feature_policy_logger.Warn(StrCat(
+        {"Some features are specified in both Feature-Policy and "
+         "Permissions-Policy header: ",
+         features_stream.str().c_str(),
+         ". Values defined in Permissions-Policy header will be used."}));
   }
   return permissions_policy;
 }
@@ -730,6 +753,29 @@ network::ParsedPermissionsPolicy PermissionsPolicyParser::ParseAttribute(
                         GetDefaultFeatureNameMap(is_isolated_context),
                         execution_context)
       .ParseFeaturePolicy(policy);
+}
+
+network::PermissionsPolicyFeaturesBitset
+PermissionsPolicyParser::ParseAllowForWorkers(
+    const String& policy,
+    const SecurityOrigin& self_origin,
+    const SecurityOrigin& src_origin,
+    PolicyParserMessageBuffer& logger,
+    ExecutionContext* execution_context) {
+  network::ParsedPermissionsPolicy parsed_policy = ParseAttribute(
+      policy, self_origin, src_origin, logger, execution_context);
+  const url::Origin src_url_origin = src_origin.ToUrlOrigin();
+  network::PermissionsPolicyFeaturesBitset allowed_features;
+  for (const auto& decl : parsed_policy) {
+    // The 'allow' parameter for workers determines the feature->boolean mapping
+    // of whether each feature is enabled or not in the worker. Since workers
+    // cannot be navigated away, we can just check here whether the worker's
+    // origin (which is immutable) is allowed or not.
+    if (decl.Contains(src_url_origin)) {
+      allowed_features.Add(decl.feature);
+    }
+  }
+  return allowed_features;
 }
 
 network::ParsedPermissionsPolicy PermissionsPolicyParser::ParsePolicyFromNode(
@@ -837,6 +883,7 @@ const Vector<String> GetAvailableFeatures(ExecutionContext* execution_context) {
       execution_context && execution_context->IsIsolatedContext();
   for (const auto& feature : GetDefaultFeatureNameMap(is_isolated_context)) {
     if (!DisabledByOriginTrial(feature.key, execution_context) &&
+        !DisabledByContext(feature.key, execution_context) &&
         !IsFeatureForMeasurementOnly(feature.value)) {
       available_features.push_back(feature.key);
     }

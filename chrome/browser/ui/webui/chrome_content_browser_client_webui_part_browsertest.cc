@@ -3,14 +3,16 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/test/browser_test.h"
@@ -34,7 +36,7 @@ class ChromeContentBrowserClientWebUiPartTest : public InProcessBrowserTest {
   // the default preferences.
   const blink::web_pref::WebPreferences RegisterCustomFontPrefs() {
     const blink::web_pref::WebPreferences prefs = GetCustomFontPrefs();
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
     PrefService* profile_prefs = profile->GetPrefs();
     profile_prefs->SetInteger(prefs::kWebKitDefaultFontSize,
                               prefs.default_font_size);

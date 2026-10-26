@@ -4,10 +4,13 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions.basic;
 
+import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.DrawableRes;
 import androidx.annotation.VisibleForTesting;
+import androidx.core.text.BidiFormatter;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -15,15 +18,15 @@ import org.chromium.chrome.browser.omnibox.MatchClassificationStyle;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.UrlBarData;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxDrawableState;
-import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.styles.SuggestionSpannable;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteUIContext;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties;
 import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionViewProcessor;
+import org.chromium.components.metrics.OmniboxEventProtosIntDef.PageClassification;
 import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.DocumentType;
-import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.omnibox.OmniboxSuggestionKind;
 import org.chromium.components.omnibox.OmniboxSuggestionType;
 import org.chromium.components.omnibox.SuggestTemplateInfoProto.SuggestTemplateInfo;
@@ -39,7 +42,9 @@ import java.util.Set;
 /** A class that handles model and view creation for the basic omnibox suggestions. */
 @NullMarked
 public class BasicSuggestionProcessor extends BaseSuggestionViewProcessor {
-    /** Bookmarked state of a URL */
+    private static final String TAKEOVER_SEPARATOR = " - ";
+
+    /** Bookmarked state of a URL. */
     public interface BookmarkState {
         /**
          * @param url URL to check.
@@ -70,7 +75,7 @@ public class BasicSuggestionProcessor extends BaseSuggestionViewProcessor {
 
     @Override
     public PropertyModel createModel() {
-        return new PropertyModel(SuggestionViewProperties.ALL_KEYS);
+        return createPropertyModel(SuggestionViewProperties.ALL_KEYS);
     }
 
     @VisibleForTesting
@@ -97,23 +102,43 @@ public class BasicSuggestionProcessor extends BaseSuggestionViewProcessor {
                 return R.drawable.ic_suggestion_magnifier;
 
             case SuggestTemplateInfo.IconType.GLOBE_WITH_SEARCH_LOOP_VALUE:
-                // TODO(crbug.com/479890202): Replace with the correct symbol when it's available.
-                return R.drawable.ic_suggestion_magnifier;
+                return R.drawable.travel_explore_24dp;
 
             case SuggestTemplateInfo.IconType.BANANA_VALUE:
-                // TODO(crbug.com/479890202): Replace with the correct symbol when it's available.
-                return R.drawable.ic_suggestion_magnifier;
+                return R.drawable.create_image_24dp;
 
             case SuggestTemplateInfo.IconType.FAVICON_VALUE:
-                // TODO(crbug.com/479890202): Replace with the correct symbol when it's available.
-                return R.drawable.ic_suggestion_magnifier;
+                return R.drawable.ic_globe_24dp;
 
             case SuggestTemplateInfo.IconType.NOTES_SPARK_VALUE:
                 return R.drawable.notes_spark;
 
             case SuggestTemplateInfo.IconType.DRAFT_SPARK_VALUE:
-                // TODO(crbug.com/479890202): Replace with the correct symbol when it's available.
-                return R.drawable.ic_suggestion_magnifier;
+                return R.drawable.draft_spark_24dp;
+
+            case SuggestTemplateInfo.IconType.LIGHTBULB_VALUE:
+                return R.drawable.ic_lightbulb_24dp;
+
+            case SuggestTemplateInfo.IconType.ATTACH_FILE_VALUE:
+                return R.drawable.ic_attach_file_24dp;
+
+            case SuggestTemplateInfo.IconType.SCHOOL_VALUE:
+                return R.drawable.ic_school_24dp;
+
+            case SuggestTemplateInfo.IconType.INK_PEN_VALUE:
+                return R.drawable.ic_ink_pen_24dp;
+
+            case SuggestTemplateInfo.IconType.TAB_VALUE:
+                return R.drawable.tab;
+
+            case SuggestTemplateInfo.IconType.PHOTO_SPARK_VALUE:
+                return R.drawable.ic_photo_spark_24dp;
+
+            case SuggestTemplateInfo.IconType.BOLT_VALUE:
+                return R.drawable.bolt_24dp;
+
+            case SuggestTemplateInfo.IconType.IMAGE_CREATE_VALUE:
+                return R.drawable.image_create_24dp;
 
             default: // Icon type is specified, but not recognized
                 assert false : "Unrecognized IconType: " + iconType;
@@ -157,6 +182,10 @@ public class BasicSuggestionProcessor extends BaseSuggestionViewProcessor {
             } else if (starterPackId == StarterPackId.GEMINI) {
                 icon = R.drawable.ic_spark_4c_16dp;
             }
+        } else if (suggestion.getTakeoverAction() != null) {
+            var action = suggestion.getTakeoverAction();
+            icon = action.icon.chipIconRes;
+            allowTint = action.icon.tintWithTextColor;
         }
 
         if (icon == 0 && suggestion.isSearchSuggestion()) {
@@ -174,7 +203,7 @@ public class BasicSuggestionProcessor extends BaseSuggestionViewProcessor {
 
         return icon == 0
                 ? super.getFallbackIcon(suggestion)
-                : OmniboxDrawableState.forSmallIcon(mContext, icon, allowTint);
+                : OmniboxDrawableState.forSmallIcon(mUiContext.resourceProvider, icon, allowTint);
     }
 
     @Override
@@ -187,66 +216,88 @@ public class BasicSuggestionProcessor extends BaseSuggestionViewProcessor {
         final boolean isSearchSuggestion = suggestion.isSearchSuggestion();
         final boolean isDocumentSuggestion =
                 suggestion.getType() == OmniboxSuggestionType.DOCUMENT_SUGGESTION;
+        final boolean isTabSearch =
+                input.getPageClassification() == PageClassification.ANDROID_TAB_SEARCH_OVERLAY;
         SuggestionSpannable textLine2 = null;
         boolean urlHighlighted = false;
+        @ColorInt int textLine2Color = 0;
 
         if (!isSearchSuggestion && !isDocumentSuggestion) {
             if (!suggestion.getUrl().isEmpty()
                     && suggestion.getType() != OmniboxSuggestionType.STARTER_PACK
                     && UrlBarData.shouldShowUrl(suggestion.getUrl(), false)) {
-                SuggestionSpannable str = new SuggestionSpannable(suggestion.getDisplayText());
+                textLine2 = new SuggestionSpannable(suggestion.getDisplayText());
+                textLine2Color = mUiContext.resourceProvider.getSuggestionUrlTextColor();
                 urlHighlighted =
                         applyHighlightToMatchRegions(
-                                str, suggestion.getDisplayTextClassifications());
-                textLine2 = str;
+                                textLine2, suggestion.getDisplayTextClassifications());
             }
         } else {
             textLine2 = getSuggestionDescription(suggestion);
+            textLine2Color = mUiContext.resourceProvider.getSuggestionSecondaryTextColor();
         }
 
-        final SuggestionSpannable textLine1 =
+        SuggestionSpannable textLine1 =
                 getSuggestedQuery(
                         suggestion, !isSearchSuggestion && !isDocumentSuggestion, !urlHighlighted);
 
+        applyTextColor(textLine1, mUiContext.resourceProvider.getSuggestionPrimaryTextColor());
+        applyTextColor(textLine2, textLine2Color);
+
+        // Tab search on desktop is exempt from the standard single-line desktop layout.
+        if (!isTabSearch
+                && OmniboxCapabilities.isDesktopPlatform()
+                && !TextUtils.isEmpty(textLine2)) {
+            // Separate text and url with an emdash on Desktop. Desktop shows URLs as a single line.
+            var separator =
+                    mUiContext.resourceProvider.getString(
+                            R.string.autocomplete_match_description_separator);
+
+            textLine1 =
+                    new SuggestionSpannable(
+                            new SpannableStringBuilder()
+                                    .append(textLine1)
+                                    .append(separator)
+                                    .append(textLine2));
+            textLine2 = null;
+        }
+
         model.set(SuggestionViewProperties.IS_SEARCH_SUGGESTION, isSearchSuggestion);
-        model.set(SuggestionViewProperties.ALLOW_WRAP_AROUND, isSearchSuggestion);
+        model.set(SuggestionViewProperties.TEXT_LINE_1_WRAP, suggestion.shouldWrapPrimaryText());
+        model.set(SuggestionViewProperties.TEXT_LINE_2_WRAP, suggestion.shouldWrapSecondaryText());
         model.set(SuggestionViewProperties.TEXT_LINE_1_TEXT, textLine1);
         model.set(SuggestionViewProperties.TEXT_LINE_2_TEXT, textLine2);
 
-        if (OmniboxFeatures.sOmniboxItemDecoration.isEnabled()) {
-            String header = model.get(SuggestionCommonProperties.HEADER_TITLE);
-            // 1-based index for human-readable announcements.
-            int indexInGroup = model.get(SuggestionCommonProperties.INDEX_IN_GROUP) + 1;
-            int totalInGroup = model.get(SuggestionCommonProperties.TOTAL_IN_GROUP);
+        String header = model.get(SuggestionCommonProperties.HEADER_TITLE);
+        // 1-based index for human-readable announcements.
+        int indexInGroup = model.get(SuggestionCommonProperties.INDEX_IN_GROUP) + 1;
+        int totalInGroup = model.get(SuggestionCommonProperties.TOTAL_IN_GROUP);
 
-            if (totalInGroup > 0) {
-                String announcement;
-                String suggestionKindStr = mContext.getString(getSuggestionKindString(suggestion));
-                if (textLine2 != null && !TextUtils.isEmpty(textLine2.toString())) {
-                    announcement =
-                            OmniboxResourceProvider.getString(
-                                    mContext,
-                                    R.string
-                                            .acc_omnibox_suggestion_in_group_with_type_and_description,
-                                    textLine1.toString(),
-                                    textLine2.toString(),
-                                    suggestionKindStr,
-                                    String.valueOf(indexInGroup),
-                                    String.valueOf(totalInGroup),
-                                    header != null ? header : "");
-                } else {
-                    announcement =
-                            OmniboxResourceProvider.getString(
-                                    mContext,
-                                    R.string.acc_omnibox_suggestion_in_group_with_type,
-                                    textLine1.toString(),
-                                    suggestionKindStr,
-                                    String.valueOf(indexInGroup),
-                                    String.valueOf(totalInGroup),
-                                    header != null ? header : "");
-                }
-                model.set(SuggestionViewProperties.CONTENT_DESCRIPTION, announcement);
+        if (totalInGroup > 0) {
+            String announcement;
+            String suggestionKindStr = mContext.getString(getSuggestionKindString(suggestion));
+            if (textLine2 != null && !TextUtils.isEmpty(textLine2.toString())) {
+                announcement =
+                        mUiContext.resourceProvider.getString(
+                                R.string.acc_omnibox_suggestion_in_group_with_type_and_description,
+                                textLine1.toString(),
+                                textLine2.toString(),
+                                suggestionKindStr,
+                                String.valueOf(indexInGroup),
+                                String.valueOf(totalInGroup),
+                                header != null ? header : "");
+
+            } else {
+                announcement =
+                        mUiContext.resourceProvider.getString(
+                                R.string.acc_omnibox_suggestion_in_group_with_type,
+                                textLine1.toString(),
+                                suggestionKindStr,
+                                String.valueOf(indexInGroup),
+                                String.valueOf(totalInGroup),
+                                header != null ? header : "");
             }
+            model.set(SuggestionViewProperties.CONTENT_DESCRIPTION, announcement);
         }
 
         if (!isSearchSuggestion
@@ -277,6 +328,19 @@ public class BasicSuggestionProcessor extends BaseSuggestionViewProcessor {
         return null;
     }
 
+    private SuggestionSpannable getTakeoverActionSuggestedQuery(AutocompleteMatch suggestion) {
+        String contents = BidiFormatter.getInstance().unicodeWrap(suggestion.getDisplayText());
+        String description = suggestion.getDescription();
+        if (TextUtils.isEmpty(description)) return new SuggestionSpannable(contents);
+
+        SpannableStringBuilder builder = new SpannableStringBuilder();
+        boolean shouldSwap = suggestion.shouldSwapContentsAndDescription();
+        builder.append(shouldSwap ? description : contents);
+        builder.append(TAKEOVER_SEPARATOR);
+        builder.append(shouldSwap ? contents : description);
+        return new SuggestionSpannable(builder);
+    }
+
     /**
      * Get the first line for a text based omnibox suggestion.
      *
@@ -290,6 +354,10 @@ public class BasicSuggestionProcessor extends BaseSuggestionViewProcessor {
             AutocompleteMatch suggestion,
             boolean showDescriptionIfPresent,
             boolean shouldHighlight) {
+        if (suggestion.getTakeoverAction() != null) {
+            return getTakeoverActionSuggestedQuery(suggestion);
+        }
+
         String suggestedQuery = null;
         List<AutocompleteMatch.MatchClassification> classifications;
         if (showDescriptionIfPresent

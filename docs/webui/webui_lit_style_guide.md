@@ -95,7 +95,7 @@ line. For example:
   accessor isActive: boolean = false;
   accessor isDefault: boolean = false;
 
-  private browserProxy: BrowserProxy = BrowserProxyImpl.getInstance();
+  private browserProxy_: BrowserProxy = browserProxyFactory.getInstance();
 ```
 
 ### Leverage helper methods of the CrLitElement superclass.
@@ -353,19 +353,61 @@ ${this.items.map(item => html`...`)}
 
 ### Formatting
 
-Wrap the return statement of your `getHtml` function or `render` method in `//
-clang-format off` and `// clang-format on` comments. This prevents
-`clang-format` from mangling the HTML template string, ensuring it remains
-readable.
+A [Lit template formatter](../../ui/webui/resources/tools/lit_template_formatter/README.md)
+is currently being rolled out on an opt-in basis to format `.html.ts` template
+files via `git cl format`. Developers can either opt in for their folders (by
+adding a `.style.lit_template_formatter` file to the folder) or run the
+formatter manually on individual `.html.ts` files:
+
+```bash
+./third_party/node/linux/node-linux-x64/bin/node \
+  ui/webui/resources/tools/lit_template_formatter/main.js <path/to/file.html.ts>
+```
+
+### Templatized UI elements
+
+When binding properties (such as `.template` or `.items`) on generic/templatized
+elements (e.g., `<cr-lazy-list>` or `<cr-infinite-list>`) in a Lit template file
+(`.html.ts`), the `@webui-eslint/lit-element-expressions` ESLint rule checks
+property type compatibility.
+
+By default, the ESLint rule resolves element tags using `HTMLElementTagNameMap`,
+which declares generic components with `unknown` type parameters (e.g.,
+`CrLazyListElement<unknown>`). If a binding provides a strongly-typed callback (e.g.,
+`(item: MyItem, index: number) => TemplateResult`), ESLint will flag a type
+mismatch error because callback parameters of type `MyItem` are not assignable
+to parameters expecting `unknown`.
+
+To provide the more accurate type information to ESLint:
+
+1. Ensure the element in the HTML template has an `id` attribute (e.g.,
+   `id="list"`).
+2. Export a `TemplatizedDomNodes` interface in the **`.html.ts`** template file
+   (not in the `.ts` class file) mapping the element's `id` to its concrete
+   generic type.
+
+**Example:**
 
 ```ts
-export function getHtml(this: MyCrLitElement) {
-  // clang-format off
-  return html`
-    <!--_html_template_start_-->
-    <div>...</div>
-    <!--_html_template_end_-->`;
-  // clang-format on
+// my_element.html.ts
+import type {CrLazyListElement} from '//resources/cr_elements/cr_lazy_list/cr_lazy_list.js';
+import {html} from '//resources/lit/v3_0/lit.rollup.js';
+
+import type {MyItem} from './my_item.js';
+import type {MyElement} from './my_element.js';
+
+export interface TemplatizedDomNodes {
+  list: CrLazyListElement<MyItem>;
+}
+
+export function getHtml(this: MyElement) {
+  return html`<!--_html_template_start_-->
+<cr-lazy-list id="list" .items="${this.items}"
+    .template="${(item: MyItem, index: number) => html`
+      <div>${item.name}</div>
+    `}">
+</cr-lazy-list>
+<!--_html_template_end_-->`;
 }
 ```
 
@@ -426,20 +468,56 @@ rendering), prefer `this.$.<id>` to access them. This provides a strictly typed
 and consistent way to access elements compared to
 `this.shadowRoot.querySelector`.
 
+Because elements accessed via `this.$` are expected to always exist in the DOM,
+member properties on the `$` interface must not be optional or nullable (e.g.,
+`conditionalButton?: CrButtonElement` or
+`conditionalButton: CrButtonElement|null` are disallowed). For conditionally
+rendered elements that may not always be present in the DOM, use
+`this.shadowRoot.querySelector` instead.
+
 **Do not:**
+
+Don't add conditional/nullable/undefineable elements via the `$` interface.
+
+```html
+export function getHtml(this: MyElement) {
+  return html`
+${this.someCondition ? html`
+  <cr-button id="conditionalButton"></cr-button>
+` : ''}
+`;
+}
+```
+
 ```ts
-const button = this.shadowRoot.querySelector('#submitButton');
+// Declaring optional or nullable properties on the $ interface:
+export interface MyElement {
+  $: {
+    conditionalButton?: CrButtonElement, // <-- This is incorrect
+  }
+}
 ```
 
 **Do:**
+
+Do add elements that are guaranteed to always exist in the DOM to the `$`
+interface.
+
+```html
+export function getHtml(this: MyElement) {
+  return html`
+<cr-button id="submitButton">Submit</cr-button>
+`;
+}
+```
+
 ```ts
-// In your class definition
 export interface MyElement {
   $: {
-    submitButton: CrButtonElement,
+    submitButton: CrButtonElement, // <-- This is correct!
   }
 }
 
-// In your code
+// Later in your code
 const button = this.$.submitButton;
 ```

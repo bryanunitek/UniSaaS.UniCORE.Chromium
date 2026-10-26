@@ -14,11 +14,11 @@
 
 #include "base/memory/stack_allocated.h"
 #include "base/types/optional_ref.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "content/browser/devtools/devtools_device_request_prompt_info.h"
 #include "content/browser/devtools/devtools_throttle_handle.h"
 #include "content/browser/devtools/protocol/emulation_handler.h"
-#include "content/browser/interest_group/devtools_enums.h"
 #include "content/browser/preloading/prefetch/prefetch_status.h"
 #include "content/browser/preloading/prerender/prerender_final_status.h"
 #include "content/common/content_export.h"
@@ -29,6 +29,7 @@
 #include "net/filter/source_stream_type.h"
 #include "net/http/http_request_headers.h"
 #include "services/network/public/cpp/headers_matcher.h"
+#include "services/network/public/cpp/http_request_headers_update_params.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/cookie_manager.mojom-forward.h"
 #include "services/network/public/mojom/network_context.mojom-forward.h"
@@ -42,10 +43,6 @@
 #include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom-forward.h"
 
 class GURL;
-
-namespace base {
-class UnguessableToken;
-}
 
 namespace blink {
 struct UserAgentMetadata;
@@ -81,7 +78,6 @@ class BackForwardCacheCanStoreTreeResult;
 class BrowserContext;
 class DedicatedWorkerHost;
 class DevToolsAgentHostImpl;
-class FencedFrame;
 class FrameTree;
 class FrameTreeNode;
 class NavigationRequest;
@@ -123,16 +119,35 @@ void ApplyAuctionNetworkRequestOverrides(FrameTreeNode* frame_tree_node,
 // this function overrides the `Accept-Language` header, it sets
 // `devtools_accept_language_overridden` to true; otherwise, false. If
 // this function overrides the `Referrer` header, it sets `referrer_override` to
-// the new Referrer header value.
+// the new Referrer header value. Network overrides are only applied by sessions
+// whose client may attach to `url`.
 void ApplyNetworkRequestOverrides(
     FrameTreeNode* frame_tree_node,
+    const GURL& url,
     blink::mojom::BeginNavigationParams* begin_params,
     bool* report_raw_headers,
-    std::optional<std::vector<net::SourceStreamType>>*
-        devtools_accepted_stream_types,
     bool* devtools_user_agent_overridden,
     bool* devtools_accept_language_overridden,
     GURL* referrer_override);
+
+// Called on a navigation redirect to `redirect_url`. In `headers`, reverts the
+// extra headers set by sessions whose client may not attach to `redirect_url`
+// to the value set by a session that may, or else to `original_headers`, and
+// records the changes in `headers_update_params`. Likewise reverts emulation
+// overrides, clearing `devtools_user_agent_override` and
+// `devtools_accept_language_override` if no remaining session overrides them.
+// Sets `headers_reverted` to whether `headers` changed. Returns false if the
+// navigation must be blocked because such a session overrode the `Referer`,
+// which can't be reverted on redirect.
+bool RevertDisallowedNetworkOverridesOnRedirect(
+    FrameTreeNode* frame_tree_node,
+    const GURL& redirect_url,
+    const net::HttpRequestHeaders& original_headers,
+    net::HttpRequestHeaders* headers,
+    network::HttpRequestHeadersUpdateParams* headers_update_params,
+    bool* devtools_user_agent_override,
+    bool* devtools_accept_language_override,
+    bool* headers_reverted);
 
 // If this function overrides the `User-Agent` header, it sets the returned
 // `user_agent_overridden` to true; otherwise, false. If this function overrides
@@ -140,13 +155,18 @@ void ApplyNetworkRequestOverrides(
 // `accept_language_overridden` to true; otherwise, false.
 DevtoolsOverriddenOutputParams ApplyEmulationOverrides(
     DevToolsAgentHostImpl* agent_host,
-    net::HttpRequestHeaders* headers);
+    net::HttpRequestHeaders* headers,
+    const GURL& url);
 
 // Applies extra headers set via Network.setExtraHTTPHeaders to a WebSocket
 // handshake request. This is needed because WebSocket connections bypass the
 // normal URLLoader path where ApplyNetworkRequestOverrides is called.
-void ApplyExtraHeadersForWebSocket(const GlobalRenderFrameHostId& frame_id,
-                                   net::HttpRequestHeaders* headers);
+// Headers are only applied by sessions whose client may attach to `url`.
+void ApplyExtraHeadersForWebSocket(
+    const GlobalRenderFrameHostId& frame_id,
+    const std::optional<base::UnguessableToken>& devtools_worker_token,
+    const GURL& url,
+    net::HttpRequestHeaders* headers);
 
 // Returns true if devtools want |*override_out| to be used.
 // (A true return and |*override_out| being nullopt means no user agent client
@@ -154,7 +174,8 @@ void ApplyExtraHeadersForWebSocket(const GlobalRenderFrameHostId& frame_id,
 //  the behavior).
 bool ApplyUserAgentMetadataOverrides(
     FrameTreeNode* frame_tree_node,
-    std::optional<blink::UserAgentMetadata>* override_out);
+    std::optional<blink::UserAgentMetadata>* override_out,
+    const GURL& url);
 
 class WillCreateURLLoaderFactoryParams final {
   STACK_ALLOCATED();
@@ -214,6 +235,31 @@ void OnNavigationResponseReceived(
 void OnNavigationRequestFailed(
     const NavigationRequest& nav_request,
     const network::URLLoaderCompletionStatus& status);
+
+// The ways in which the Connection-Allowlist embedded-enforcement handshake
+// between an embedder and a framed document can go wrong. These mirror the
+// enforcement-time members of `Audits.ConnectionAllowlistError`; the
+// parse-time members are reported by the network service instead (see
+// `network::mojom::ConnectionAllowlistIssue`).
+enum class ConnectionAllowlistEmbeddedEnforcementIssue {
+  // The frame's `connectionallowlist` attribute was discarded because it was
+  // less strict than the allowlist an ancestor already requires.
+  kIFrameAttributeLoosensEmbeddingRequirement,
+  // The framed document's `Allow-Connection-Allowlist-From` response header
+  // could not be parsed.
+  kInvalidAllowConnectionAllowlistFrom,
+  // The framed document neither accepted the requirement via
+  // `Allow-Connection-Allowlist-From` nor delivered a `Connection-Allowlist`
+  // that is at least as strict, so it was not displayed.
+  kEmbeddingRequirementNotSatisfied,
+};
+
+// Reports a DevTools issue against the document being navigated to by
+// `nav_request` describing why its embedder's Connection-Allowlist requirement
+// could not be satisfied.
+void OnConnectionAllowlistEmbeddedEnforcementIssue(
+    const NavigationRequest& nav_request,
+    ConnectionAllowlistEmbeddedEnforcementIssue issue);
 
 // Entry function for creating, storing, and surfacing a
 // NavigationEntryMarkedSkippable generic issue in the DevTools panel
@@ -295,21 +341,6 @@ void OnAuctionWorkletNetworkRequestComplete(
     const std::string& request_id,
     const network::URLLoaderCompletionStatus& status);
 
-bool NeedInterestGroupAuctionEvents(FrameTreeNodeId frame_tree_node_id);
-
-void OnInterestGroupAuctionEventOccurred(
-    FrameTreeNodeId frame_tree_node_id,
-    base::Time event_time,
-    InterestGroupAuctionEventType type,
-    const std::string& unique_auction_id,
-    base::optional_ref<const std::string> parent_auction_id,
-    const base::DictValue& auction_config);
-void OnInterestGroupAuctionNetworkRequestCreated(
-    FrameTreeNodeId frame_tree_node_id,
-    InterestGroupAuctionFetchType type,
-    const std::string& request_id,
-    const std::vector<std::string>& devtools_auction_ids);
-
 bool ShouldBypassCSP(const NavigationRequest& nav_request);
 bool ShouldBypassCertificateErrors();
 
@@ -369,12 +400,12 @@ void OnPrefetchBodyDataReceived(FrameTreeNode* frame_tree_node,
 bool IsPrerenderAllowed(FrameTree& frame_tree);
 void WillInitiatePrerender(FrameTree& frame_tree);
 void DidActivatePrerender(const NavigationRequest& nav_request,
-                          const std::optional<base::UnguessableToken>&
-                              initiator_devtools_navigation_token);
+                          WebContents* initiator_web_contents);
 void DidUpdatePrerenderStatus(
     FrameTreeNodeId initiator_frame_tree_node_id,
     const base::UnguessableToken& initiator_devtools_navigation_token,
     blink::mojom::SpeculationAction action,
+    std::optional<blink::mojom::SpeculationAction> effective_action,
     const GURL& prerender_url,
     bool form_submission,
     std::optional<blink::mojom::SpeculationTargetHint> target_hint,
@@ -457,10 +488,6 @@ bool HandleCertificateError(WebContents* web_contents,
                             int cert_error,
                             const GURL& request_url,
                             CertErrorCallback callback);
-
-void FencedFrameCreated(
-    base::SafeRef<RenderFrameHostImpl> owner_render_frame_host,
-    FencedFrame* fenced_frame);
 
 void ReportCookieIssue(
     RenderFrameHostImpl* render_frame_host_impl,

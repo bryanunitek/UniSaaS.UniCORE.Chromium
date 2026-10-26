@@ -136,6 +136,10 @@ bool GeolocationPrivacySwitchController::IsGeolocationUsageAllowedForApps() {
   }
 }
 
+bool GeolocationPrivacySwitchController::IsReady() const {
+  return cached_access_level_.has_value();
+}
+
 std::vector<std::u16string> GeolocationPrivacySwitchController::GetActiveApps(
     size_t max_count) const {
   std::vector<std::u16string> apps;
@@ -162,8 +166,16 @@ GeolocationAccessLevel GeolocationPrivacySwitchController::PreviousAccessLevel()
       static_cast<GeolocationAccessLevel>(
           primary_user_pref_change_registrar_->prefs()->GetInteger(
               prefs::kUserPreviousGeolocationAccessLevel));
-  // Previous level should be distinct.
-  CHECK_NE(previous_level, AccessLevel());
+  if (previous_level == AccessLevel()) {
+    const GeolocationAccessLevel default_previous =
+        AccessLevel() == GeolocationAccessLevel::kAllowed
+            ? GeolocationAccessLevel::kDisallowed
+            : GeolocationAccessLevel::kAllowed;
+    primary_user_pref_change_registrar_->prefs()->SetInteger(
+        prefs::kUserPreviousGeolocationAccessLevel,
+        static_cast<int>(default_previous));
+    return default_previous;
+  }
   return previous_level;
 }
 
@@ -173,6 +185,10 @@ void GeolocationPrivacySwitchController::SetAccessLevel(
     return;
   }
   CHECK(primary_user_pref_change_registrar_);
+  if (primary_user_pref_change_registrar_->prefs()->IsManagedPreference(
+          prefs::kUserGeolocationAccessLevel)) {
+    return;
+  }
   primary_user_pref_change_registrar_->prefs()->SetInteger(
       prefs::kUserGeolocationAccessLevel, static_cast<int>(access_level));
 }

@@ -11,7 +11,7 @@
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/i18n/rtl.h"
+#include "base/i18n/icubridge/default_icu_locale.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -31,6 +31,7 @@
 #include "components/metrics/net/net_metrics_log_uploader.h"
 #include "components/metrics/persistent_synthetic_trial_observer.h"
 #include "components/metrics/server_urls.h"
+#include "components/metrics/startup_visibility.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -157,7 +158,7 @@ int32_t CastMetricsServiceClient::GetProduct() {
 }
 
 std::string CastMetricsServiceClient::GetApplicationLocale() {
-  return base::i18n::GetConfiguredLocale();
+  return std::string(base::i18n::GetDefaultIcuLocale().tag_string());
 }
 
 const network_time::NetworkTimeTracker*

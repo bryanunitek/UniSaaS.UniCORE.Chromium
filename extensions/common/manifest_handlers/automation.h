@@ -23,13 +23,15 @@ class AutomationManifestPermission;
 // The parsed form of the automation manifest entry.
 struct AutomationInfo : public Extension::ManifestData {
  public:
+  static const char* kManifestDataKey;
+
   static const AutomationInfo* Get(const Extension* extension);
   static std::unique_ptr<AutomationInfo> FromValue(
       const base::Value& value,
       std::vector<InstallWarning>* install_warnings,
       std::u16string* error);
 
-  static std::unique_ptr<base::Value> ToValue(const AutomationInfo& info);
+  static base::Value ToValue(const AutomationInfo& info);
 
   AutomationInfo(const AutomationInfo&) = delete;
   AutomationInfo& operator=(const AutomationInfo&) = delete;
@@ -43,8 +45,8 @@ struct AutomationInfo : public Extension::ManifestData {
   AutomationInfo();
   explicit AutomationInfo(bool desktop);
 
-  static std::unique_ptr<api::extensions_manifest_types::Automation>
-  AsManifestType(const AutomationInfo& info);
+  static api::extensions_manifest_types::Automation AsManifestType(
+      const AutomationInfo& info);
   friend class AutomationManifestPermission;
   friend class AutomationHandler;
 };

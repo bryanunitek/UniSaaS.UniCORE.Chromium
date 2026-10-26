@@ -6,7 +6,8 @@
  * @fileoverview Logic for the ActorTool to perform actions on elements.
  */
 
-import {getElementFromPoint} from '//ios/chrome/browser/intelligence/actor/tools/model/resources/actor_tool_utils.js';
+import type {ActionTarget, Coordinate} from '//ios/chrome/browser/intelligence/actor/tools/model/resources/actor_tool_utils.js';
+import {getElementFromPoint, isCoordinateTarget, isNodeIdTarget} from '//ios/chrome/browser/intelligence/actor/tools/model/resources/actor_tool_utils.js';
 import {getNodeById} from '//ios/chrome/browser/intelligence/proto_wrappers/resources/dom_node_ids.js';
 import {CrWebApi, gCrWeb} from '//ios/web/public/js_messaging/resources/gcrweb.js';
 
@@ -20,8 +21,6 @@ export enum ClickToolResultCode {
   INVALID_DOM_NODE_ID = 2,
   // The targeted element is disabled.
   ELEMENT_DISABLED = 3,
-  // The click event was not able to be dispatched.
-  CLICK_SUPPRESSED = 4,
 }
 // LINT.ThenChange(//ios/chrome/browser/intelligence/actor/tools/model/click_tool_java_script_feature.h:ClickToolResultCode)
 
@@ -62,111 +61,131 @@ function dispatchClickEvents(
     clientY: clientY,
   });
 
+  // Events are configured as cancelable so that pages can prevent default
+  // browser actions via `preventDefault()`.
   const touchEventInit: TouchEventInit = {
     bubbles: true,
-    cancelable: false,
+    cancelable: true,
     view: elementWindow,
     touches: [touch],
     targetTouches: [touch],
     changedTouches: [touch],
   };
 
+  const accepted: string[] = [];
+  const suppressed: string[] = [];
+
+  /**
+   * Dispatches a touch event sequence, and dispatches emulated mouse events if
+   * touches were not canceled.
+   * @param detail The click count detail for mouse events.
+   * @return True if touch events were not canceled and mouse events were
+   *     dispatched.
+   */
   const dispatchEvents = (detail: number): boolean => {
-    const mouseEventInit: MouseEventInit = {
-      bubbles: true,
-      cancelable: false,
-      view: elementWindow,
-      detail: detail,
-      clientX: clientX,
-      clientY: clientY,
-      button: button,
-    };
-    return element.dispatchEvent(
-               new TouchEvent('touchstart', touchEventInit)) &&
-        element.dispatchEvent(new TouchEvent('touchend', touchEventInit)) &&
-        element.dispatchEvent(new MouseEvent('mousemove', mouseEventInit)) &&
-        element.dispatchEvent(new MouseEvent('mousedown', mouseEventInit)) &&
-        element.dispatchEvent(new MouseEvent('mouseup', mouseEventInit)) &&
-        element.dispatchEvent(new MouseEvent('click', mouseEventInit));
+    accepted.push('touch');
+    const touchstartAllowed =
+        element.dispatchEvent(new TouchEvent('touchstart', touchEventInit));
+    const touchendAllowed =
+        element.dispatchEvent(new TouchEvent('touchend', touchEventInit));
+
+    // If either 'touchstart' or 'touchend' are canceled, don't dispatch mouse
+    // events per https://w3c.github.io/touch-events/#mouse-events.
+    const mouseEventsAllowed = touchstartAllowed && touchendAllowed;
+    if (mouseEventsAllowed) {
+      accepted.push('mouse', 'click');
+      const mouseEventInit: MouseEventInit = {
+        bubbles: true,
+        cancelable: true,
+        view: elementWindow,
+        detail: detail,
+        clientX: clientX,
+        clientY: clientY,
+        button: button,
+      };
+      element.dispatchEvent(new MouseEvent('mousemove', mouseEventInit));
+      element.dispatchEvent(new MouseEvent('mousedown', mouseEventInit));
+      element.dispatchEvent(new MouseEvent('mouseup', mouseEventInit));
+      element.dispatchEvent(new MouseEvent('click', mouseEventInit));
+    } else {
+      suppressed.push('mouse', 'click');
+    }
+    return mouseEventsAllowed;
   };
 
-  if (!dispatchEvents(/*detail=*/ 1)) {
-    return {
-      resultCode: ClickToolResultCode.CLICK_SUPPRESSED,
-      message: 'Failed to dispatch click event sequence.',
-    };
+  const firstMouseEventsAllowed = dispatchEvents(/*detail=*/ 1);
+
+  // For double click, dispatch a second touch event sequence followed by a
+  // dblclick event if both touch sequences permitted emulated mouse events.
+  if (clickCount === 2) {
+    // If the first click's touch sequence was canceled, no mouse events were
+    // dispatched, so the consecutive click count detail resets to 1 per
+    // https://developer.mozilla.org/en-US/docs/Web/API/UIEvent/detail.
+    const secondDetail = firstMouseEventsAllowed ? 2 : 1;
+    const secondMouseEventsAllowed = dispatchEvents(/*detail=*/ secondDetail);
+    // A 'dblclick' mouse event is only dispatched if both touch sequences
+    // permitted emulated mouse events.
+    if (firstMouseEventsAllowed && secondMouseEventsAllowed) {
+      accepted.push('dblclick');
+      const dblClickInit: MouseEventInit = {
+        bubbles: true,
+        cancelable: true,
+        view: elementWindow,
+        detail: 2,
+        clientX: clientX,
+        clientY: clientY,
+        button: button,
+      };
+      element.dispatchEvent(new MouseEvent('dblclick', dblClickInit));
+    } else {
+      suppressed.push('dblclick');
+    }
   }
 
-  // For double click, dispatch the same series of events followed by a dblclick
-  // event.
-  if (clickCount === 2) {
-    // This event sequence has detail=2 since we've already clicked once.
-    if (!dispatchEvents(/*detail=*/ 2)) {
-      return {
-        resultCode: ClickToolResultCode.CLICK_SUPPRESSED,
-        message: 'Failed to dispatch click event sequence again.',
-      };
-    }
-    const dblClickInit: MouseEventInit = {
-      bubbles: true,
-      cancelable: false,
-      view: elementWindow,
-      detail: 2,
-      clientX: clientX,
-      clientY: clientY,
-      button: button,
-    };
-    if (!element.dispatchEvent(new MouseEvent('dblclick', dblClickInit))) {
-      return {
-        resultCode: ClickToolResultCode.CLICK_SUPPRESSED,
-        message: 'Failed to dispatch dblclick event.',
-      };
-    }
+  const acceptedSummary = Array.from(new Set(accepted)).join(', ');
+  let message = `Dispatched ${acceptedSummary} events.`;
+  if (suppressed.length > 0) {
+    const suppressedSummary = Array.from(new Set(suppressed)).join(', ');
+    message += ` Suppressed: ${suppressedSummary}.`;
   }
 
   return {
     resultCode: ClickToolResultCode.OK,
-    message: 'Dispatched touch, mouse, and click events.',
+    message: message,
   };
 }
 
 /**
- * Simulates a click on a coordinate.
- * @param x The x-coordinate.
- * @param y The y-coordinate.
+ * Simulates a click on an element at the specified coordinates.
+ * @param coordinate The target coordinate.
  * @param clickType The type of click (0=UNKNOWN, 1=LEFT, 2=RIGHT).
  * @param clickCount The number of clicks (0=UNKNOWN, 1=SINGLE, 2=DOUBLE).
- * @param pixelType The type of pixels (0=UNSPECIFIED, 1=DIPS, 2=PHYSICAL).
- * @return an object containing the result of the click attempt.
+ * @return An object containing the result of the click attempt.
  */
 function clickByCoordinate(
-    x: number, y: number, clickType: number, clickCount: number,
-    pixelType: number): {
-  resultCode: number,
-  message: string,
-} {
-  const {element, clientX, clientY} = getElementFromPoint(x, y, pixelType);
-
-  if (!element) {
+    coordinate: Coordinate, clickType: number,
+    clickCount: number): {resultCode: number, message: string} {
+  const target = getElementFromPoint(coordinate);
+  if (!target.element) {
     return {
       resultCode: ClickToolResultCode.COORDINATES_OUT_OF_BOUNDS,
       message: 'Point is outside of the viewport.',
     };
   }
-  return dispatchClickEvents(element, clientX, clientY, clickType, clickCount);
+
+  return dispatchClickEvents(
+      target.element, target.clientX, target.clientY, clickType, clickCount);
 }
 
 /**
- * Simulates a click on an element specified by its DOM node ID.
- * @param nodeId The ID of the node.
+ * Simulates a click on an element with the given DOM node ID.
+ * @param nodeId The DOM node ID of the target element.
  * @param clickType The type of click (0=UNKNOWN, 1=LEFT, 2=RIGHT).
  * @param clickCount The number of clicks (0=UNKNOWN, 1=SINGLE, 2=DOUBLE).
  * @return an object containing the result of the click attempt.
  */
-function clickByNodeId(nodeId: number, clickType: number, clickCount: number): {
-  resultCode: number,
-  message: string,
-} {
+function clickByNodeId(nodeId: number, clickType: number, clickCount: number):
+    {resultCode: number, message: string} {
   const node = getNodeById(nodeId, window);
   if (!node) {
     return {
@@ -195,7 +214,27 @@ function clickByNodeId(nodeId: number, clickType: number, clickCount: number): {
   return dispatchClickEvents(element, clientX, clientY, clickType, clickCount);
 }
 
+/**
+ * Simulates a click on an element specified by an ActionTarget.
+ * @param target The action target (coordinate or node ID).
+ * @param clickType The type of click (0=UNKNOWN, 1=LEFT, 2=RIGHT).
+ * @param clickCount The number of clicks (0=UNKNOWN, 1=SINGLE, 2=DOUBLE).
+ * @return an object containing the result of the click attempt.
+ */
+function click(target: ActionTarget, clickType: number, clickCount: number):
+    {resultCode: number, message: string} {
+  if (isNodeIdTarget(target)) {
+    return clickByNodeId(target.contentNodeId, clickType, clickCount);
+  } else if (isCoordinateTarget(target)) {
+    return clickByCoordinate(target.coordinate, clickType, clickCount);
+  }
+
+  return {
+    resultCode: ClickToolResultCode.COORDINATES_OUT_OF_BOUNDS,
+    message: 'Invalid target.',
+  };
+}
+
 const clickToolApi = new CrWebApi('click_tool');
-clickToolApi.addFunction('clickByCoordinate', clickByCoordinate);
-clickToolApi.addFunction('clickByNodeId', clickByNodeId);
+clickToolApi.addFunction('click', click);
 gCrWeb.registerApi(clickToolApi);

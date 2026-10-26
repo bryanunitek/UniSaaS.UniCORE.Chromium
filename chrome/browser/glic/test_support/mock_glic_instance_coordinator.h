@@ -29,6 +29,11 @@ class MockGlicInstanceCoordinator
               (const std::string&),
               (override));
   MOCK_METHOD(GlicInstance*,
+              GetInstanceForConversationId,
+              (const std::string&),
+              (const, override));
+  MOCK_METHOD(GlicInstance*, GetInstanceForTaskId, (int), (const, override));
+  MOCK_METHOD(GlicInstance*,
               GetInstanceForTab,
               (const tabs::TabInterface*),
               (const, override));
@@ -36,12 +41,24 @@ class MockGlicInstanceCoordinator
               GetInstanceWithGlicWebContents,
               (content::WebContents*),
               (const, override));
+  MOCK_METHOD(GlicInstance*,
+              GetInstanceForTabGroup,
+              (tab_groups::TabGroupId),
+              (const, override));
+  MOCK_METHOD(GlicInstance*,
+              ShowInstanceForTabGroup,
+              (tab_groups::TabGroupId),
+              (override));
 
+  MOCK_METHOD(void,
+              Show,
+              (BrowserWindowInterface*, mojom::InvocationSource),
+              (override));
   MOCK_METHOD(void,
               Toggle,
               (BrowserWindowInterface*, bool, mojom::InvocationSource),
               (override));
-  MOCK_METHOD(bool, MaybeStartInitialWarming, (), (override));
+  MOCK_METHOD(bool, MaybeStartWarming, (GlicWarmingTrigger), (override));
   MOCK_METHOD(base::WeakPtr<GlicInstance>,
               Invoke,
               (GlicInvokeOptions),
@@ -71,6 +88,10 @@ class MockGlicInstanceCoordinator
               IsPanelShowingForBrowser,
               (const BrowserWindowInterface&),
               (const, override));
+  MOCK_METHOD(bool,
+              WouldToggleClose,
+              (BrowserWindowInterface*),
+              (const, override));
   MOCK_METHOD(base::CallbackListSubscription,
               AddGlobalShowHideCallback,
               (base::RepeatingClosure),
@@ -89,14 +110,6 @@ class MockGlicInstanceCoordinator
               (),
               (override));
 
-  MOCK_METHOD(void,
-              CreateNewConversationForTabs,
-              (const std::vector<tabs::TabInterface*>&),
-              (override));
-  MOCK_METHOD(void,
-              ShowInstanceForTabs,
-              (const std::vector<tabs::TabInterface*>&, const InstanceId&),
-              (override));
   MOCK_METHOD(std::vector<ConversationInfo>,
               GetRecentlyActiveInstances,
               (size_t, base::TimeDelta),

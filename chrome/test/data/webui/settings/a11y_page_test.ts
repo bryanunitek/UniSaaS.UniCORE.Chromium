@@ -8,24 +8,23 @@ import 'chrome://settings/lazy_load.js';
 // <if expr="is_win or is_linux or is_macosx">
 import {webUIListenerCallback} from 'chrome://resources/js/cr.js';
 import type {SettingsAxAnnotationsSectionElement} from 'chrome://settings/lazy_load.js';
+import {PageColors} from 'chrome://settings/lazy_load.js';
+import type {SettingsDropdownMenuElement} from 'chrome://settings/settings.js';
 import { assertFalse, assertTrue, assertEquals } from 'chrome://webui-test/chai_assert.js';
-import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
-import {isVisible} from 'chrome://webui-test/test_util.js';
+import {isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 // </if>
 // clang-format on
 
-import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {AccessibilityBrowserProxy, SettingsA11yPageElement} from 'chrome://settings/lazy_load.js';
-import {AccessibilityBrowserProxyImpl, ToastAlertLevel} from 'chrome://settings/lazy_load.js';
-import type {SettingsPrefsElement, SettingsToggleButtonElement} from 'chrome://settings/settings.js';
-import {CrSettingsPrefs, loadTimeData} from 'chrome://settings/settings.js';
-import {FakeSettingsPrivate} from 'chrome://webui-test/fake_settings_private.js';
+import {AccessibilityBrowserProxyImpl, getLanguageHelperInstance, LanguageHelperImpl, ToastAlertLevel} from 'chrome://settings/lazy_load.js';
+import type {SettingsToggleButtonElement} from 'chrome://settings/settings.js';
+import {loadTimeData, PrefsBrowserProxy, PrefService} from 'chrome://settings/settings.js';
 import type {MetricsTracker} from 'chrome://webui-test/metrics_test_support.js';
 import {fakeMetricsPrivate} from 'chrome://webui-test/metrics_test_support.js';
-import {fakeDataBind} from 'chrome://webui-test/polymer_test_util.js';
 import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
 
 import {getFakeLanguagePrefs} from './fake_language_settings_private.js';
+import {TestPrefsBrowserProxy} from './test_prefs_browser_proxy.js';
 
 
 class TestAccessibilityBrowserProxy extends TestBrowserProxy implements
@@ -52,65 +51,139 @@ class TestAccessibilityBrowserProxy extends TestBrowserProxy implements
   }
 }
 
+function getInitialPrefs(): chrome.settingsPrivate.PrefObject[] {
+  return [
+    ...getFakeLanguagePrefs(),
+    {
+      key: 'settings.a11y.focus_highlight',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: false,
+    },
+    {
+      key: 'settings.a11y.caretbrowsing.enabled',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: false,
+    },
+    {
+      key: 'settings.a11y.enable_accessibility_image_labels',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: false,
+    },
+    {
+      key: 'settings.a11y.enable_ax_tree_fixing',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: false,
+    },
+    {
+      key: 'settings.a11y.enable_main_node_annotations',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: false,
+    },
+    {
+      key: 'settings.a11y.overscroll_history_navigation',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: false,
+    },
+    {
+      key: 'settings.toast.alert_level',
+      type: chrome.settingsPrivate.PrefType.NUMBER,
+      value: ToastAlertLevel.ALL,
+    },
+    {
+      key: 'accessibility.captions.live_caption_enabled',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: false,
+    },
+    {
+      key: 'accessibility.captions.live_caption_mask_offensive_words',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: false,
+    },
+    {
+      key: 'accessibility.captions.live_caption_language',
+      type: chrome.settingsPrivate.PrefType.STRING,
+      value: 'en-US',
+    },
+    {
+      key: 'accessibility.captions.live_translate_enabled',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: false,
+    },
+    {
+      key: 'accessibility.captions.live_translate_target_language',
+      type: chrome.settingsPrivate.PrefType.STRING,
+      value: 'en',
+    },
+    {
+      key: 'settings.a11y.requested_page_colors',
+      type: chrome.settingsPrivate.PrefType.NUMBER,
+      value: PageColors.kNoPreference,
+    },
+    {
+      key: 'settings.a11y.apply_page_colors_only_on_increased_contrast',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: false,
+    },
+  ];
+}
+
 suite('A11yPage', () => {
   let a11yPage: SettingsA11yPageElement;
-  let settingsPrefs: SettingsPrefsElement;
   let browserProxy: TestAccessibilityBrowserProxy;
   let metrics: MetricsTracker;
+  let prefService: PrefService;
 
   setup(async function() {
     loadTimeData.overrideValues({
       axTreeFixingEnabled: true,
       mainNodeAnnotationsEnabled: true,
+      pageColorsSettingsEnabled: true,
     });
 
     metrics = fakeMetricsPrivate();
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    settingsPrefs = document.createElement('settings-prefs');
-    const settingsPrivate = new FakeSettingsPrivate(getFakeLanguagePrefs());
-    settingsPrefs.initialize(settingsPrivate);
-    document.body.appendChild(settingsPrefs);
 
-    await CrSettingsPrefs.initialized;
+    const initialPrefs = getInitialPrefs();
+    const prefsBrowserProxy = new TestPrefsBrowserProxy(initialPrefs);
+    PrefsBrowserProxy.setInstance(prefsBrowserProxy);
+    PrefService.resetInstanceForTesting();
+    prefService = PrefService.getInstance();
+    await prefService.whenInitialized();
+
+    // Set up languages helper.
+    LanguageHelperImpl.resetInstanceForTesting();
+    const languageHelper = getLanguageHelperInstance();
+    await languageHelper.whenReady();
+
     // Set up test browser proxy.
     browserProxy = new TestAccessibilityBrowserProxy();
     AccessibilityBrowserProxyImpl.setInstance(browserProxy);
 
-    // Set up languages helper.
-    const settingsLanguages = document.createElement('settings-languages');
-    settingsLanguages.prefs = settingsPrefs.prefs!;
-    fakeDataBind(settingsPrefs, settingsLanguages, 'prefs');
-    document.body.appendChild(settingsLanguages);
-
     a11yPage = document.createElement('settings-a11y-page');
-    a11yPage.prefs = settingsPrefs.prefs!;
-    fakeDataBind(settingsPrefs, a11yPage, 'prefs');
-
     document.body.appendChild(a11yPage);
-    flush();
-
-    return settingsLanguages.whenReady();
+    await microtasksFinished();
   });
 
   test('ax tree fixing toggle and pref', async () => {
     assertTrue(loadTimeData.getBoolean('axTreeFixingEnabled'));
 
     const toggle =
-        a11yPage.shadowRoot!.querySelector<SettingsToggleButtonElement>(
+        a11yPage.shadowRoot.querySelector<SettingsToggleButtonElement>(
             '#axTreeFixing');
     assertTrue(!!toggle);
-    await flushTasks();
 
     // The AX Tree Fixing pref is off by default, so the button should be
     // toggled off.
     assertFalse(
-        a11yPage.getPref<boolean>('settings.a11y.enable_ax_tree_fixing').value);
+        prefService.getPref<boolean>('settings.a11y.enable_ax_tree_fixing')
+            .value);
     assertFalse(toggle.checked);
 
     toggle.click();
-    await flushTasks();
+    await microtasksFinished();
     assertTrue(
-        a11yPage.getPref<boolean>('settings.a11y.enable_ax_tree_fixing').value);
+        prefService.getPref<boolean>('settings.a11y.enable_ax_tree_fixing')
+            .value);
     assertTrue(toggle.checked);
   });
 
@@ -122,9 +195,9 @@ suite('A11yPage', () => {
     // in a DOM.
     webUIListenerCallback('screen-reader-state-changed', false);
 
-    await flushTasks();
+    await microtasksFinished();
     let axAnnotationsSection =
-        a11yPage.shadowRoot!.querySelector<SettingsAxAnnotationsSectionElement>(
+        a11yPage.shadowRoot.querySelector<SettingsAxAnnotationsSectionElement>(
             '#AxAnnotationsSection');
     assertFalse(!!axAnnotationsSection);
 
@@ -132,34 +205,132 @@ suite('A11yPage', () => {
     // in a DOM.
     webUIListenerCallback('screen-reader-state-changed', true);
 
-    await flushTasks();
+    await microtasksFinished();
     axAnnotationsSection =
-        a11yPage.shadowRoot!.querySelector<SettingsAxAnnotationsSectionElement>(
+        a11yPage.shadowRoot.querySelector<SettingsAxAnnotationsSectionElement>(
             '#AxAnnotationsSection');
     assertTrue(!!axAnnotationsSection);
     assertTrue(isVisible(axAnnotationsSection));
   });
 
-  test('toast toggle mapping from enum', () => {
-    const toastToggle =
-        a11yPage.shadowRoot!.querySelector<SettingsToggleButtonElement>(
-            '#toastToggle');
-    assertTrue(!!toastToggle);
+  test('toast toggle mapping from enum', async () => {
+    const toastToggle = a11yPage.$.toastToggle;
 
     toastToggle.click();
+    await microtasksFinished();
     assertEquals(
         ToastAlertLevel.ACTIONABLE,
-        a11yPage.getPref('settings.toast.alert_level').value);
+        prefService.getPref('settings.toast.alert_level').value);
     assertFalse(toastToggle.checked);
 
     toastToggle.click();
+    await microtasksFinished();
     assertEquals(
         ToastAlertLevel.ALL,
-        a11yPage.getPref('settings.toast.alert_level').value);
+        prefService.getPref('settings.toast.alert_level').value);
     assertTrue(toastToggle.checked);
 
     // Logged metrics for both pref changes.
     assertEquals(2, metrics.count('Toast.FrequencyPrefChanged'));
+  });
+
+  test('focus highlight toggle records metric', async () => {
+    const toggle =
+        a11yPage.shadowRoot.querySelector<SettingsToggleButtonElement>(
+            'settings-toggle-button[pref-key="settings.a11y.focus_highlight"]');
+    assertTrue(!!toggle);
+    assertFalse(toggle.checked);
+    assertFalse(
+        prefService.getPref<boolean>('settings.a11y.focus_highlight').value);
+    assertEquals(
+        0, metrics.count('Accessibility.FocusHighlight.ToggleEnabled'));
+
+    toggle.click();
+    await microtasksFinished();
+    assertTrue(
+        prefService.getPref<boolean>('settings.a11y.focus_highlight').value);
+    assertEquals(
+        1, metrics.count('Accessibility.FocusHighlight.ToggleEnabled', true));
+
+    toggle.click();
+    await microtasksFinished();
+    assertFalse(
+        prefService.getPref<boolean>('settings.a11y.focus_highlight').value);
+    assertEquals(
+        1, metrics.count('Accessibility.FocusHighlight.ToggleEnabled', false));
+    assertEquals(
+        2, metrics.count('Accessibility.FocusHighlight.ToggleEnabled'));
+  });
+
+  test('page colors dropdown offers every enum value', () => {
+    // A value added to the mojom enum without a matching dropdown option is
+    // caught here.
+    const dropdown =
+        a11yPage.shadowRoot.querySelector<SettingsDropdownMenuElement>(
+            '#pageColorsDropdown');
+    assertTrue(!!dropdown);
+    assertEquals(PageColors.MAX_VALUE + 1, dropdown.menuOptions.length);
+  });
+
+  test('page colors dropdown writes pref', async () => {
+    const dropdown =
+        a11yPage.shadowRoot.querySelector<SettingsDropdownMenuElement>(
+            '#pageColorsDropdown');
+    assertTrue(!!dropdown);
+    assertEquals(
+        PageColors.kNoPreference,
+        prefService.getPref('settings.a11y.requested_page_colors').value);
+
+    const select = dropdown.$.dropdownMenu;
+    select.value = String(PageColors.kNightSky);
+    select.dispatchEvent(new CustomEvent('change'));
+    await microtasksFinished();
+
+    assertEquals(
+        PageColors.kNightSky,
+        prefService.getPref('settings.a11y.requested_page_colors').value);
+  });
+
+  test('increased contrast toggle follows the selected theme', async () => {
+    const toggle =
+        a11yPage.shadowRoot.querySelector<SettingsToggleButtonElement>(
+            '#applyPageColorsOnlyOnIncreasedContrast');
+    assertTrue(!!toggle);
+
+    // With no theme selected the toggle cannot change anything, because
+    // PageColorsController only consults the pref for the theme values.
+    assertTrue(toggle.disabled);
+
+    await prefService.setPrefValue(
+        'settings.a11y.requested_page_colors', PageColors.kDusk);
+    await microtasksFinished();
+    assertFalse(toggle.disabled);
+
+    toggle.click();
+    await microtasksFinished();
+    assertTrue(
+        prefService
+            .getPref<boolean>(
+                'settings.a11y.apply_page_colors_only_on_increased_contrast')
+            .value);
+
+    // "Off" still lets the web theme follow the operating system, so the
+    // toggle has nothing to act on there either.
+    await prefService.setPrefValue(
+        'settings.a11y.requested_page_colors', PageColors.kOff);
+    await microtasksFinished();
+    assertTrue(toggle.disabled);
+  });
+
+  test('page colors hidden when the feature is off', async () => {
+    loadTimeData.overrideValues({pageColorsSettingsEnabled: false});
+    const page = document.createElement('settings-a11y-page');
+    document.body.appendChild(page);
+    await microtasksFinished();
+
+    assertFalse(!!page.shadowRoot.querySelector('#pageColorsDropdown'));
+    assertFalse(!!page.shadowRoot.querySelector(
+        '#applyPageColorsOnlyOnIncreasedContrast'));
   });
   // </if>
 

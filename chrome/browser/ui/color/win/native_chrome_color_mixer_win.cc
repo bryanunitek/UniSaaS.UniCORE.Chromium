@@ -7,14 +7,15 @@
 #include <optional>
 
 #include "base/callback_list.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/win/windows_version.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/browser/win/mica_titlebar.h"
 #include "chrome/grit/theme_resources.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_mixer.h"
 #include "ui/color/color_provider.h"
@@ -25,6 +26,7 @@
 #include "ui/color/color_transform.h"
 #include "ui/color/win/accent_color_observer.h"
 #include "ui/gfx/color_utils.h"
+#include "ui/native_theme/native_theme.h"
 
 namespace {
 
@@ -59,19 +61,8 @@ struct FrameTransforms {
   std::optional<ui::ColorTransform> inactive;
 };
 
-FrameTransforms GetMicaFrameTransforms(const ui::ColorProviderKey& key) {
-  const auto mica_frame_color =
-      (key.color_mode == ui::ColorProviderKey::ColorMode::kDark)
-          ? SkColorSetRGB(0x20, 0x20, 0x20)
-          : SkColorSetRGB(0xE8, 0xE8, 0xE8);
-  return {mica_frame_color, mica_frame_color};
-}
-
 FrameTransforms GetSystemFrameTransforms(const ui::ColorProviderKey& key) {
   FrameTransforms frame_transforms;
-  if (ShouldDefaultThemeUseMicaTitlebar()) {
-    frame_transforms = GetMicaFrameTransforms(key);
-  }
   if (const auto* const accent_color_observer = ui::AccentColorObserver::Get();
       accent_color_observer->ShouldUseAccentColorForWindowFrame()) {
     if (const std::optional<SkColor> dwm_frame_color =
@@ -109,7 +100,15 @@ void EnsureColorProviderCacheWillBeResetWhenAccentColorStateChanges() {
       ui::AccentColorObserver::Get()->Subscribe(base::BindRepeating(
           // CAUTION: Do not bind directly to `ui::ColorProviderManager::Get()`
           // here, as tests may reset that value!
-          [] { ui::ColorProviderManager::Get().ResetColorProviderCache(); })));
+          [] {
+            if (base::FeatureList::IsEnabled(
+                    features::kThemeChangeOptimization)) {
+              ui::NativeTheme::GetInstanceForNativeUi()
+                  ->IncrementSystemColorVersion();
+            } else {
+              ui::ColorProviderManager::Get().ResetColorProviderCache();
+            }
+          })));
 }
 
 SkColor GetAccentBorderColor() {
@@ -186,7 +185,13 @@ void AddNativeHighContrastColors(ui::ColorMixer& mixer) {
   mixer[kColorTabBackgroundActiveFrameActive] = {ui::kColorNativeHighlight};
   mixer[kColorTabBackgroundActiveFrameInactive] = {
       kColorTabBackgroundActiveFrameActive};
+  mixer[kColorTabBackgroundInactiveHoverFrameActive] = {kColorToolbarText};
+  mixer[kColorTabBackgroundInactiveHoverFrameInactive] = {kColorToolbarText};
   mixer[kColorTabForegroundActiveFrameActive] = {ui::kColorNativeHighlightText};
+  mixer[kColorTabForegroundInactiveHoverFrameActive] = {
+      kColorTabForegroundActiveFrameActive};
+  mixer[kColorTabForegroundInactiveHoverFrameInactive] = {
+      kColorTabForegroundActiveFrameActive};
   mixer[kColorNewTabButtonCRBackgroundFrameActive] = {
       kColorTabBackgroundActiveFrameActive};
   mixer[kColorNewTabButtonCRBackgroundFrameInactive] = {
@@ -195,6 +200,21 @@ void AddNativeHighContrastColors(ui::ColorMixer& mixer) {
       kColorTabForegroundActiveFrameActive};
   mixer[kColorNewTabButtonForegroundFrameInactive] = {
       kColorTabForegroundActiveFrameActive};
+  mixer[kColorNewTabButtonCRForegroundFrameActive] = {
+      kColorTabForegroundActiveFrameActive};
+  mixer[kColorNewTabButtonCRForegroundFrameInactive] = {
+      kColorTabForegroundActiveFrameActive};
+  mixer[kColorTabSearchButtonCRForegroundFrameActive] = {
+      kColorTabForegroundActiveFrameActive};
+  mixer[kColorTabSearchButtonCRForegroundFrameInactive] = {
+      kColorTabForegroundActiveFrameActive};
+  mixer[kColorNewTabButtonInkDropFrameActive] = {kColorToolbarText};
+  mixer[kColorNewTabButtonInkDropFrameInactive] = {kColorToolbarText};
+  mixer[kColorTabStripControlButtonInkDrop] = {kColorToolbarText};
+  mixer[kColorTabStripControlButtonInkDropFrameInactive] = {kColorToolbarText};
+  mixer[kColorTabStripControlButtonInkDropRipple] = {kColorToolbarText};
+  mixer[kColorTabStripControlButtonInkDropRippleFrameInactive] = {
+      kColorToolbarText};
   mixer[kColorTaskManagerTableBackgroundSelectedFocused] = {
       ui::kColorNativeHighlight};
   mixer[kColorToolbar] = {ui::kColorNativeWindow};
@@ -203,6 +223,17 @@ void AddNativeHighContrastColors(ui::ColorMixer& mixer) {
   mixer[kColorToolbarButtonIconInactive] = {ui::kColorNativeGrayText};
   mixer[kColorToolbarContentAreaSeparator] = {kColorToolbarText};
   mixer[kColorToolbarInkDrop] = {ui::kColorNativeHighlight};
+  mixer[kColorToolbarInkDropHover] = {kColorToolbarInkDrop};
+  mixer[kColorToolbarInkDropRipple] = {kColorToolbarInkDrop};
+  mixer[kColorAppMenuChipInkDropHover] = {kColorToolbarInkDrop};
+  mixer[kColorAppMenuChipInkDropRipple] = {kColorToolbarInkDrop};
+  mixer[kColorAvatarButtonIncognitoHover] = {kColorToolbarInkDrop};
+  mixer[kColorAvatarButtonNormalRipple] = {kColorToolbarInkDrop};
+  mixer[kColorOmniboxChipInkDropHover] = {kColorToolbarInkDrop};
+  mixer[kColorOmniboxChipInkDropRipple] = {kColorToolbarInkDrop};
+  mixer[kColorOmniboxIconHover] = {kColorToolbarInkDrop};
+  mixer[kColorOmniboxActionIconHover] = {kColorToolbarInkDrop};
+  mixer[kColorOmniboxIconPressed] = {kColorToolbarInkDrop};
   mixer[kColorToolbarSeparator] = {ui::kColorNativeWindowText};
   mixer[kColorToolbarText] = {ui::kColorNativeBtnText};
   mixer[kColorToolbarTopSeparatorFrameActive] = {kColorToolbarSeparator};
@@ -245,15 +276,6 @@ void AddNativeNonHighContrastColors(ui::ColorMixer& mixer,
     mixer[ui::kColorSysStateHeaderHoverInactive] =
         ui::AlphaBlend(ui::kColorSysBase, ui::kColorSysHeaderInactive, 0x66);
     mixer[ui::kColorSysHeaderContainerInactive] = {ui::kColorSysBase};
-  }
-
-  if (ShouldDefaultThemeUseMicaTitlebar() && !key.app_controller) {
-    mixer[kColorNewTabButtonBackgroundFrameActive] = {SK_ColorTRANSPARENT};
-    mixer[kColorNewTabButtonBackgroundFrameInactive] = {SK_ColorTRANSPARENT};
-    mixer[kColorNewTabButtonInkDropFrameActive] =
-        ui::GetColorWithMaxContrast(ui::kColorFrameActive);
-    mixer[kColorNewTabButtonInkDropFrameInactive] =
-        ui::GetColorWithMaxContrast(ui::kColorFrameInactive);
   }
 }
 

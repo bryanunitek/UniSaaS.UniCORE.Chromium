@@ -23,7 +23,26 @@ import os
 from matplotlib import pylab as plt
 import numpy as np
 
-from parse_trace import LoadTrace, GetAllocatorDumps, ProcessNamesAndLabels
+import trace_utils
+
+
+def _SummarizeStatsForThreadCache(result_for_pid: dict, allocators: dict):
+  size_counts = []
+  for allocator in allocators:
+    if (
+      'malloc/partitions/allocator/thread_cache/buckets_alloc/' not in allocator
+    ):
+      continue
+    size = int(allocator[allocator.rindex('/') + 1 :])
+    count = trace_utils.GetAllocatorAttr(
+      allocators[allocator]['attrs'], 'count'
+    )
+    size_counts.append((size, count))
+  size_counts.sort()
+  if size_counts:
+    result_for_pid['data'] = np.array(
+      size_counts, dtype=[('size', int), ('count', int)]
+    )
 
 
 def _ParseTrace(trace: dict) -> dict:
@@ -36,36 +55,7 @@ def _ParseTrace(trace: dict) -> dict:
     {pid  -> {'name': str, 'labels': str, 'data': np.array}.
     Where the data array contains 'size' and 'count' columns.
   """
-  dumps = GetAllocatorDumps(trace)
-  pid_to_name, pid_to_labels = ProcessNamesAndLabels(trace)
-
-  result = {}
-  for dump in dumps:
-    pid = dump['pid']
-    allocators = dump['args']['dumps']['allocators']
-
-    # The browser process also has global dumps, we do not care about these.
-    if 'global' in allocators:
-      continue
-
-    result[pid] = {
-        'name': pid_to_name[pid],
-        'labels': pid_to_labels.get(pid, '')
-    }
-    size_counts = []
-    for allocator in allocators:
-      if ('malloc/partitions/allocator/thread_cache/buckets_alloc/' not in
-          allocator):
-        continue
-      size = int(allocator[allocator.rindex('/') + 1:])
-      count = int(allocators[allocator]['attrs']['count']['value'], 16)
-      size_counts.append((size, count))
-      size_counts.sort()
-      result[pid]['data'] = np.array(size_counts,
-                                     dtype=[('size', np.int),
-                                            ('count', np.int)])
-
-  return result
+  return trace_utils.ParseTrace(trace, _SummarizeStatsForThreadCache)
 
 
 def _PlotProcess(all_data: dict, pid: int, output_prefix: str):
@@ -81,8 +71,9 @@ def _PlotProcess(all_data: dict, pid: int, output_prefix: str):
 
   # Allocations vs size.
   plt.figure(figsize=(16, 8))
-  plt.title('Allocation count vs Size - %s - %s' %
-            (data['name'], data['labels']))
+  plt.title(
+    'Allocation count vs Size - %s - %s' % (data['name'], data['labels'])
+  )
   plt.xscale('log', base=2)
   plt.yscale('log', base=10)
   plt.stem(data['data']['size'], data['data']['count'])
@@ -94,12 +85,12 @@ def _PlotProcess(all_data: dict, pid: int, output_prefix: str):
   # CDF.
   plt.figure(figsize=(16, 8))
   plt.title('CDF of allocation size - %s - %s' % (data['name'], data['labels']))
-  cdf = np.cumsum(100. * data['data']['count']) / np.sum(data['data']['count'])
+  cdf = np.cumsum(100.0 * data['data']['count']) / np.sum(data['data']['count'])
 
   for value in [512, 1024, 2048, 4096, 8192]:
     index = np.where(data['data']['size'] == value)[0]
     cdf_value = cdf[index]
-    plt.axvline(x=value, ymin=0, ymax=cdf_value / 100., color='lightgrey')
+    plt.axvline(x=value, ymin=0, ymax=cdf_value / 100.0, color='lightgrey')
 
   plt.step(data['data']['size'], cdf, color='black', where='post')
   plt.ylim(ymin=0, ymax=100)
@@ -107,23 +98,23 @@ def _PlotProcess(all_data: dict, pid: int, output_prefix: str):
   plt.xscale('log', base=2)
   plt.xlabel('Size (log)')
   plt.ylabel('CDF (%)')
-  plt.savefig('%s_%d_cdf.png' % (output_prefix, pid),
-              bbox_inches='tight',
-              dpi=300)
+  plt.savefig(
+    '%s_%d_cdf.png' % (output_prefix, pid), bbox_inches='tight', dpi=300
+  )
   plt.close()
 
 
 def _CreateArgumentParser():
   parser = argparse.ArgumentParser()
   parser.add_argument(
-      '--trace',
-      type=str,
-      required=True,
-      help='Path to a trace.json[.gz] with memory-infra enabled.')
-  parser.add_argument('--output-dir',
-                      type=str,
-                      required=True,
-                      help='Output directory for graphs.')
+    '--trace',
+    type=str,
+    required=True,
+    help='Path to a trace.json[.gz] with memory-infra enabled.',
+  )
+  parser.add_argument(
+    '--output-dir', type=str, required=True, help='Output directory for graphs.'
+  )
   return parser
 
 
@@ -133,7 +124,7 @@ def main():
   args = parser.parse_args()
 
   logging.info('Loading the trace')
-  trace = LoadTrace(args.trace)
+  trace = trace_utils.LoadTrace(args.trace)
 
   logging.info('Parsing the trace')
   stats_per_process = _ParseTrace(trace)
@@ -141,8 +132,9 @@ def main():
   logging.info('Plotting the results')
   for pid in stats_per_process:
     if 'data' in stats_per_process[pid]:
-      _PlotProcess(stats_per_process, pid,
-                   os.path.join(args.output_dir, 'result'))
+      _PlotProcess(
+        stats_per_process, pid, os.path.join(args.output_dir, 'result')
+      )
 
 
 if __name__ == '__main__':

@@ -26,7 +26,7 @@ import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router, routes} from '../router.js';
 
 import type {FingerprintBrowserProxy, FingerprintInfo} from './fingerprint_browser_proxy.js';
@@ -73,7 +73,7 @@ export class SettingsFingerprintListSubpageElement extends
     };
   }
 
-  authToken: string|undefined;
+  declare authToken: string|undefined;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -81,9 +81,9 @@ export class SettingsFingerprintListSubpageElement extends
     Setting.kRemoveFingerprintV2,
   ]);
 
-  private fingerprints_: string[];
-  private showSetupFingerprintDialog_: boolean;
-  private allowAddAnotherFinger_: boolean;
+  declare private fingerprints_: string[];
+  declare private showSetupFingerprintDialog_: boolean;
+  declare private allowAddAnotherFinger_: boolean;
   private browserProxy_: FingerprintBrowserProxy;
 
   constructor() {

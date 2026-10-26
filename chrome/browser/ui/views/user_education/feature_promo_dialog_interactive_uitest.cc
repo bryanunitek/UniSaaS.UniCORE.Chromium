@@ -20,15 +20,14 @@
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button_view.h"
-#include "chrome/browser/ui/views/location_bar/intent_chip_button.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_controller.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
-#include "chrome/browser/ui/views/page_action/test_support/page_action_test_support.h"
+#include "chrome/browser/ui/views/page_action/page_action_view_interface.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_accessor.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
@@ -86,8 +85,7 @@ class FeaturePromoDialogTest : public TestBase {
     feature_ = GetFeatureForTest();
     scoped_feature_list_.InitWithFeatures(
         /* enabled_features =*/{*feature_},
-        /* disabled_features =*/
-        {feature_engagement::kIPHLiveCaptionFeature});
+        /* disabled_features =*/{});
 
     // TODO(crbug.com/40727458): fix cause of bubbles overflowing the
     // screen and remove this.
@@ -104,7 +102,7 @@ class FeaturePromoDialogTest : public TestBase {
   }
 
   void TearDownOnMainThread() override {
-    Profile* const profile = browser()->profile();
+    Profile* const profile = browser()->GetProfile();
     web_app::WebAppRegistrar& registrar =
         web_app::WebAppProvider::GetForTest(profile)->registrar_unsafe();
     for (const auto& app_id : registrar.GetAppIds()) {
@@ -200,29 +198,12 @@ IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest, InvokeUi_IPH_DesktopPwaInstall) {
       browser(),
       embedded_test_server()->GetURL("/banners/manifest_test_page.html")));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   auto* app_banner_manager =
       webapps::TestAppBannerManagerDesktop::FromWebContents(web_contents);
   app_banner_manager->WaitForInstallableCheck();
-  // TODO(crbug.com/376283433): The legacy page action has a bug that prevents
-  // it from displaying in "chip" mode (just the icon shows). We force the
-  // migrated page action to be collapsed for now to ensure consistency in the
-  // snapshot.
-  // This can be removed once the page action migration path is fully rolled
-  // out.
-  if (IsPageActionMigrated(PageActionIconType::kPwaInstall)) {
-    browser()
-        ->GetActiveTabInterface()
-        ->GetTabFeatures()
-        ->page_action_controller()
-        ->HideSuggestionChip(kActionInstallPwa);
-  }
-  auto* provider = BrowserView::GetBrowserViewForBrowser(browser())
-                       ->toolbar_button_provider();
-  EXPECT_TRUE(page_actions::GetIconLabelBubbleViewForTesting(
-                  provider->GetPageActionViewInterface(kActionInstallPwa),
-                  kActionInstallPwa)
-                  ->GetVisible());
+  EXPECT_TRUE(page_actions::PageActionTestAccessor(browser(), kActionInstallPwa)
+                  .GetVisible());
 
   browser()->GetWindow()->Activate();
   ui_test_utils::BrowserActivationWaiter(browser()).WaitForActivation();

@@ -47,7 +47,8 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
 
   out->use_custom_colors = data.use_custom_colors();
 
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
   out->use_overlay_scrollbar = data.use_overlay_scrollbar();
 #endif
 
@@ -121,9 +122,8 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
   out->autofill_shortcut_key_code =
       static_cast<ui::KeyboardCode>(data.autofill_shortcut_key_code());
   out->autofill_shortcut_modifiers = data.autofill_shortcut_modifiers();
-  if (!data.ReadAutofillTriggerString(&out->autofill_trigger_string)) {
-    return false;
-  }
+  out->autofill_at_memory_double_ctrl_trigger_enabled =
+      data.autofill_at_memory_double_ctrl_trigger_enabled();
 
   if (!data.ReadExplicitlyAllowedNetworkPorts(
           &out->explicitly_allowed_network_ports)) {
@@ -131,6 +131,14 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
   }
 
   out->view_source_line_wrap_enabled = data.view_source_line_wrap_enabled();
+
+  out->system_color_chooser_is_modal = data.system_color_chooser_is_modal();
+
+  out->is_global_privacy_control_setting_enabled =
+      data.is_global_privacy_control_setting_enabled();
+
+  out->global_privacy_control_devtools_override =
+      data.global_privacy_control_devtools_override();
 
   return true;
 }

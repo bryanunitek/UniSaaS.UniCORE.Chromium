@@ -9,6 +9,7 @@ import static java.util.Comparator.comparingInt;
 import androidx.annotation.IntDef;
 
 import org.chromium.base.Callback;
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.Token;
 import org.chromium.base.ValueChangedCallback;
 import org.chromium.base.metrics.RecordHistogram;
@@ -173,6 +174,12 @@ public class TabSwitcherGroupSuggestionService {
                 }
 
                 @Override
+                public void willCloseTabs(
+                        List<Tab> tabs, boolean isAllTabs, boolean allowUndo) {
+                    clearSuggestions();
+                }
+
+                @Override
                 public void willAddTab(Tab tab, @TabLaunchType int type) {
                     clearSuggestions();
                 }
@@ -187,32 +194,28 @@ public class TabSwitcherGroupSuggestionService {
     private final TabGroupObserver mTabGroupObserver =
             new TabGroupObserver() {
                 @Override
-                public void willMergeTabToGroup(
-                        Tab movedTab, int newRootId, @Nullable Token tabGroupId) {
+                public void didMergeTabToGroup(Tab movedTab, boolean isDestinationTab) {
                     clearSuggestions();
                 }
 
                 @Override
-                public void willMoveTabGroup(Token tabGroupId, int currentIndex) {
+                public void willMoveTabGroup(Token tabGroupId) {
                     clearSuggestions();
                 }
 
                 @Override
-                public void willMoveTabOutOfGroup(
-                        Tab movedTab, @Nullable Token destinationTabGroupId) {
+                public void willMoveTabOutOfGroup(Tab movedTab) {
                     clearSuggestions();
                 }
 
                 @Override
-                public void didCreateNewGroup(Tab destinationTab, TabModel tabModel) {
+                public void onTabGroupCreated(Token tabGroupId) {
                     clearSuggestions();
                 }
 
                 @Override
                 public void didRemoveTabGroup(
-                        int oldRootId,
-                        @Nullable Token oldTabGroupId,
-                        @DidRemoveTabGroupReason int removalReason) {
+                        Token oldTabGroupId, @DidRemoveTabGroupReason int removalReason) {
                     clearSuggestions();
                 }
 
@@ -394,7 +397,7 @@ public class TabSwitcherGroupSuggestionService {
     /** Records a histogram for a {@link SuggestionUiEvent}. */
     public static void recordGroupSuggestionHistogram(@SuggestionUiEvent int suggestionUiEvent) {
         RecordHistogram.recordEnumeratedHistogram(
-                SUGGESTION_UI_HISTOGRAM_NAME, suggestionUiEvent, SuggestionUiEvent.MAX_VALUE);
+                SUGGESTION_UI_HISTOGRAM_NAME, suggestionUiEvent, SuggestionUiEvent.MAX_VALUE + 1);
     }
 
     /** Forces a tab group suggestion for testing purposes. */
@@ -436,7 +439,7 @@ public class TabSwitcherGroupSuggestionService {
                         /* suggestedName= */ "",
                         /* promoHeader= */ "",
                         /* promoContents= */ "");
-        showSuggestion(groupSuggestion, tabIds, ignored -> {});
+        showSuggestion(groupSuggestion, tabIds, CallbackUtils.emptyCallback());
     }
 
     /**

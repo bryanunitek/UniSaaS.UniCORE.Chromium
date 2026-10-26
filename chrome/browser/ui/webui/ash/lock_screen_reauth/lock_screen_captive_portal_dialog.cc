@@ -17,12 +17,16 @@ namespace ash {
 LockScreenCaptivePortalDialog::LockScreenCaptivePortalDialog()
     : BaseLockDialog(
           GURL(captive_portal::CaptivePortalDetector::GetDefaultUrl()),
-          CalculateOobeDialogSizeForPrimaryDisplay()) {}
+          CalculateOobeDialogSizeForPrimaryDisplay()) {
+  // The dialog renders an untrusted, network-controlled portal page in the
+  // lock-screen profile with no download UI; never allow it to write files.
+  set_can_download(false);
+}
 
 LockScreenCaptivePortalDialog::~LockScreenCaptivePortalDialog() = default;
 
 void LockScreenCaptivePortalDialog::Show(Profile& profile) {
-  DCHECK(IsLockScreenBrowserContext(&profile));
+  CHECK(IsLockScreenBrowserContext(&profile), base::NotFatalUntil::M162);
   if (!is_running_) {
     ShowSystemDialogForBrowserContext(&profile);
     is_running_ = true;
@@ -77,7 +81,7 @@ bool LockScreenCaptivePortalDialog::IsDialogClosedForTesting(
   if (!is_running_) {
     return true;
   }
-  DCHECK(!on_closed_callback_for_testing_);
+  CHECK(!on_closed_callback_for_testing_, base::NotFatalUntil::M162);
   on_closed_callback_for_testing_ = std::move(callback);
   return false;
 }
@@ -87,7 +91,7 @@ bool LockScreenCaptivePortalDialog::IsDialogShownForTesting(
   if (is_running_) {
     return true;
   }
-  DCHECK(!on_shown_callback_for_testing_);
+  CHECK(!on_shown_callback_for_testing_, base::NotFatalUntil::M162);
   on_shown_callback_for_testing_ = std::move(callback);
   return false;
 }

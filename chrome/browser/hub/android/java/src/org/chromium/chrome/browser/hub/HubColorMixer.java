@@ -13,6 +13,7 @@ import androidx.annotation.IntDef;
 
 import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.modelutil.PropertyModel;
 
 import java.lang.annotation.Retention;
@@ -92,6 +93,12 @@ public interface HubColorMixer {
     NonNullObservableSupplier<Integer> getOverviewColorSupplier();
 
     /**
+     * Supplies the current bottom overview mode color (matching the bottom bar) if configured, or
+     * null otherwise.
+     */
+    @Nullable NonNullObservableSupplier<Integer> getBottomOverviewColorSupplier();
+
+    /**
      * Updates overview mode based on the provided reason for the state change.
      *
      * @param colorChangeReason The reason for changing state.
@@ -106,4 +113,18 @@ public interface HubColorMixer {
 
     /** Gets the observer for overview mode alpha changes. */
     OverviewModeAlphaObserver getOverviewModeAlphaObserver();
+
+    /** Data object representing an active color scheme blend transition. */
+    class ColorBlendProgress {
+        public final @HubColorScheme int startScheme;
+        public final @HubColorScheme int endScheme;
+        public final float fraction;
+
+        public ColorBlendProgress(
+                @HubColorScheme int startScheme, @HubColorScheme int endScheme, float fraction) {
+            this.startScheme = startScheme;
+            this.endScheme = endScheme;
+            this.fraction = fraction;
+        }
+    }
 }

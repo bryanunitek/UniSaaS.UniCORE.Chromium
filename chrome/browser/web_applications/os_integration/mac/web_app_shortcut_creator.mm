@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #import "chrome/browser/web_applications/os_integration/mac/web_app_shortcut_creator.h"
 
 #import <Cocoa/Cocoa.h>
@@ -20,10 +15,13 @@
 #include "base/apple/bridging.h"
 #include "base/apple/bundle_locations.h"
 #include "base/apple/foundation_util.h"
+#include "base/base_switches.h"
 #include "base/check.h"
 #include "base/check_is_test.h"
-#include "base/base_switches.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/safe_base_name.h"
@@ -33,6 +31,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/mac/mac_util.h"
+#include "base/memory/shared_memory_switch.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/process/launch.h"
 #include "base/strings/string_util.h"
@@ -48,7 +47,6 @@
 #include "chrome/browser/web_applications/os_integration/mac/icon_utils.h"
 #include "chrome/browser/web_applications/os_integration/mac/web_app_auto_login_util.h"
 #include "chrome/browser/web_applications/os_integration/mac/web_app_shortcut_mac.h"
-#include "base/memory/shared_memory_switch.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_test_override.h"
 #import "chrome/common/mac/app_mode_common.h"
 #include "components/variations/active_field_trials.h"
@@ -93,6 +91,10 @@ OSStatus SecCodeSignerAddSignatureWithErrors(SecCodeSignerRef signer,
 }  // extern "C"
 
 namespace web_app {
+
+bool ShouldUseSystemAppIconMasking() {
+  return base::mac::MacOSMajorVersion() >= 26;
+}
 
 BASE_FEATURE(kWebAppMaskableIconsOnMac, base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -216,7 +218,7 @@ bool AddPathToRPath(const base::FilePath& executable_path,
       LOG(ERROR) << "Reached end of commands before getting all commands";
       return false;
     }
-    memcpy(&cmd, &*commands_it, sizeof cmd);
+    UNSAFE_TODO(memcpy(&cmd, &*commands_it, sizeof cmd));
     if (commands.end() - commands_it < cmd.cmdsize) {
       LOG(ERROR) << "Command ends past the end of the load commands";
       return false;
@@ -226,9 +228,11 @@ bool AddPathToRPath(const base::FilePath& executable_path,
     if (cmd.cmd == LC_RPATH) {
       // Insert the new command, padding the extra space with `0` bytes.
       auto it = commands.insert(commands_it, new_rpath_command.cmdsize, 0);
-      memcpy(&*it, &new_rpath_command, sizeof new_rpath_command);
-      memcpy(&*it + sizeof new_rpath_command, new_rpath.value().data(),
-             new_rpath.value().size());
+      UNSAFE_TODO({
+        memcpy(&*it, &new_rpath_command, sizeof new_rpath_command);
+        memcpy(&*it + sizeof new_rpath_command, new_rpath.value().data(),
+               new_rpath.value().size());
+      });
 
       header.ncmds++;
       header.sizeofcmds += new_rpath_command.cmdsize;
@@ -428,7 +432,8 @@ NSData* AppShimEntitlements() {
   // The magic constant and length are expected to be big endian.
   uint32_t* entitlement_header = reinterpret_cast<uint32_t*>(entitlement_bytes);
   entitlement_header[0] = CFSwapInt32HostToBig(kSecCodeMagicEntitlement);
-  entitlement_header[1] = CFSwapInt32HostToBig(sizeof(entitlement_bytes) - 1);
+  UNSAFE_TODO(entitlement_header[1] =
+                  CFSwapInt32HostToBig(sizeof(entitlement_bytes) - 1));
 
   return [NSData dataWithBytes:static_cast<void*>(entitlement_bytes)
                         length:sizeof(entitlement_bytes) - 1];
@@ -446,7 +451,7 @@ WebAppShortcutCreator::WebAppShortcutCreator(
       info_(shortcut_info),
       use_ad_hoc_signing_for_web_app_shims_(
           use_ad_hoc_signing_for_web_app_shims) {
-  DCHECK(shortcut_info);
+  CHECK(shortcut_info, base::NotFatalUntil::M162);
 }
 
 WebAppShortcutCreator::~WebAppShortcutCreator() = default;
@@ -543,8 +548,8 @@ std::string WebAppShortcutCreator::GetAppBundleId() const {
 bool WebAppShortcutCreator::CreateShortcuts(
     ShortcutCreationReason creation_reason,
     ShortcutLocations creation_locations) {
-  DCHECK_NE(creation_locations.applications_menu_location,
-            APP_MENU_LOCATION_HIDDEN);
+  CHECK_NE(creation_locations.applications_menu_location,
+           APP_MENU_LOCATION_HIDDEN, base::NotFatalUntil::M162);
   std::vector<base::FilePath> updated_app_paths;
   if (!UpdateShortcuts(/*create_if_needed=*/true, &updated_app_paths)) {
     return false;
@@ -564,7 +569,7 @@ bool WebAppShortcutCreator::CreateShortcuts(
 bool WebAppShortcutCreator::UpdateShortcuts(
     bool create_if_needed,
     std::vector<base::FilePath>* updated_paths) {
-  DCHECK(updated_paths && updated_paths->empty());
+  CHECK(updated_paths && updated_paths->empty(), base::NotFatalUntil::M162);
 
   if (create_if_needed) {
     const base::FilePath applications_dir = chrome_apps_dir_;
@@ -759,8 +764,8 @@ bool WebAppShortcutCreator::BuildShortcut(
 void WebAppShortcutCreator::CreateShortcutsAt(
     const std::vector<base::FilePath>& dst_app_paths,
     std::vector<base::FilePath>* updated_paths) const {
-  DCHECK(updated_paths && updated_paths->empty());
-  DCHECK(!dst_app_paths.empty());
+  CHECK(updated_paths && updated_paths->empty(), base::NotFatalUntil::M162);
+  CHECK(!dst_app_paths.empty(), base::NotFatalUntil::M162);
 
   // CreateShortcutsAt() modifies the app shim on disk, first by deleting
   // the destination app shim (if it exists), then by copying a new app shim
@@ -1025,11 +1030,14 @@ bool WebAppShortcutCreator::UpdateIcon(const base::FilePath& app_path) const {
 
   IcnsEncoder icns_encoder;
   bool has_valid_icons = false;
+  const bool system_masks_icons = ShouldUseSystemAppIconMasking();
   if (!info_->favicon_maskable.empty() &&
       base::FeatureList::IsEnabled(kWebAppMaskableIconsOnMac)) {
     for (gfx::ImageFamily::const_iterator it = info_->favicon_maskable.begin();
          it != info_->favicon_maskable.end(); ++it) {
-      if (icns_encoder.AddImage(CreateAppleMaskedAppIcon(*it))) {
+      const gfx::Image& icon =
+          system_masks_icons ? *it : CreateAppleMaskedAppIcon(*it);
+      if (icns_encoder.AddImage(icon)) {
         has_valid_icons = true;
       }
     }
@@ -1038,7 +1046,7 @@ bool WebAppShortcutCreator::UpdateIcon(const base::FilePath& app_path) const {
   if (!has_valid_icons) {
     for (gfx::ImageFamily::const_iterator it = info_->favicon.begin();
          it != info_->favicon.end(); ++it) {
-      if (info_->is_diy_app) {
+      if (info_->is_diy_app && !system_masks_icons) {
         if (icns_encoder.AddImage(MaskDiyAppIcon(*it))) {
           has_valid_icons = true;
         }

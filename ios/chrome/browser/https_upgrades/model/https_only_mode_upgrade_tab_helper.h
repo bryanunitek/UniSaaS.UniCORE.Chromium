@@ -86,6 +86,10 @@ class HttpsOnlyModeUpgradeTabHelper
   void ResetState();
 
   // web::WebStatePolicyDecider implementation:
+  void ShouldAllowRequest(
+      NSURLRequest* request,
+      WebStatePolicyDecider::RequestInfo request_info,
+      web::WebStatePolicyDecider::PolicyDecisionCallback callback) override;
   void ShouldAllowResponse(
       NSURLResponse* response,
       WebStatePolicyDecider::ResponseInfo response_info,
@@ -111,10 +115,16 @@ class HttpsOnlyModeUpgradeTabHelper
   ui::PageTransition navigation_transition_type_ = ui::PAGE_TRANSITION_FIRST;
   bool navigation_is_renderer_initiated_ = false;
   web::Referrer referrer_;
-  // Set to true when a new navigation with a POST method is started.
-  // Used to check if the navigation should be upgraded when a response is
-  // received. Cleared when the current navigation finishes.
+  // Set to true when a new navigation with a POST method is started
+  // and updated during redirects (e.g. when a 3xx redirect converts a
+  // POST to a GET). Used to check if the navigation should be upgraded
+  // when a response is received. Cleared when the current navigation finishes.
   bool navigation_is_post_ = false;
+  // Set to true when a main frame navigation has started but not yet finished.
+  // Used to distinguish ShouldAllowRequest calls for redirects within an
+  // in-progress navigation from those for the initial request of a new
+  // navigation.
+  bool was_navigation_started_ = false;
 
   base::OneShotTimer timer_;
 

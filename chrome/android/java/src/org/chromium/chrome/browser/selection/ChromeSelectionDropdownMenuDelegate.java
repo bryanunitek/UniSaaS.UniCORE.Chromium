@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.selection;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Resources;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
@@ -16,6 +17,7 @@ import android.view.ViewGroup;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.KeyboardShortcuts;
 import org.chromium.components.browser_ui.widget.BrowserUiListMenuUtils;
 import org.chromium.content_public.browser.selection.SelectionDropdownMenuDelegate;
 import org.chromium.ui.hierarchicalmenu.FlyoutController;
@@ -25,7 +27,6 @@ import org.chromium.ui.listmenu.BasicListMenu;
 import org.chromium.ui.listmenu.ListItemType;
 import org.chromium.ui.listmenu.ListMenuItemProperties;
 import org.chromium.ui.listmenu.ListMenuUtils;
-import org.chromium.ui.listmenu.ListSectionDividerProperties;
 import org.chromium.ui.modelutil.MVCListAdapter;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
@@ -43,9 +44,23 @@ import java.util.List;
 @NullMarked
 public class ChromeSelectionDropdownMenuDelegate
         implements SelectionDropdownMenuDelegate, FlyoutHandler<AnchoredPopupWindow> {
+    private final @Nullable GlicSelectionMenuTracker mGlicSelectionMenuTracker;
     private @Nullable ItemClickListener mClickListener;
     private @Nullable View mRootView;
     private @Nullable HierarchicalMenuController<AnchoredPopupWindow> mHierarchicalMenuController;
+
+    public ChromeSelectionDropdownMenuDelegate() {
+        this(null);
+    }
+
+    /**
+     * @param glicSelectionMenuTracker Told when the menu is shown or dismissed and when an item is
+     *     clicked, or null if the menu can't show Ask Gemini.
+     */
+    public ChromeSelectionDropdownMenuDelegate(
+            @Nullable GlicSelectionMenuTracker glicSelectionMenuTracker) {
+        mGlicSelectionMenuTracker = glicSelectionMenuTracker;
+    }
 
     @Override
     public void show(
@@ -57,7 +72,11 @@ public class ChromeSelectionDropdownMenuDelegate
             int x,
             int y) {
         mRootView = rootView;
-        mClickListener = clickListener;
+        ItemClickListener listener =
+                mGlicSelectionMenuTracker == null
+                        ? clickListener
+                        : mGlicSelectionMenuTracker.wrapDropdownClickListener(clickListener);
+        mClickListener = listener;
         mHierarchicalMenuController = ListMenuUtils.createHierarchicalMenuController(context);
         mHierarchicalMenuController.setupCallbacks(
                 /* headerModelList= */ null, items, dismissMenuCallback);
@@ -69,15 +88,26 @@ public class ChromeSelectionDropdownMenuDelegate
         Rect dropdownRect = new Rect(windowX, windowY, windowX + 1, windowY + 1);
         BasicListMenu menu =
                 BrowserUiListMenuUtils.getBasicListMenu(
-                        context, items, (model, view) -> clickListener.onItemClick(model));
+                        context, items, (model, view) -> listener.onItemClick(model));
+
+        final View contentView = menu.getContentView();
+        int maxWidthPx = calculateMaxWidthPx(rootView);
+        int desiredContentWidth = calculateDesiredContentWidth(contentView, menu, maxWidthPx);
 
         AnchoredPopupWindow popupWindow =
-                new AnchoredPopupWindow(
-                        context,
-                        rootView,
-                        new ColorDrawable(Color.TRANSPARENT),
-                        menu.getContentView(),
-                        new RectProvider(dropdownRect));
+                new AnchoredPopupWindow.Builder(
+                                context,
+                                rootView,
+                                new ColorDrawable(Color.TRANSPARENT),
+                                menu::getContentView,
+                                new RectProvider(dropdownRect))
+                        .setVerticalOverlapAnchor(true)
+                        .setHorizontalOverlapAnchor(true)
+                        .setMaxWidth(maxWidthPx)
+                        .setDesiredContentWidth(desiredContentWidth)
+                        .setFocusable(true)
+                        .setOutsideTouchable(true)
+                        .build();
         AnchoredPopupWindow.LayoutObserver layoutObserver =
                 (positionBelow, x2, y2, width, height, anchorRect) ->
                         popupWindow.setAnimationStyle(
@@ -85,21 +115,26 @@ public class ChromeSelectionDropdownMenuDelegate
                                         ? R.style.StartIconMenuAnim
                                         : R.style.StartIconMenuAnimBottom);
         popupWindow.setLayoutObserver(layoutObserver);
-        popupWindow.setVerticalOverlapAnchor(true);
-        popupWindow.setHorizontalOverlapAnchor(true);
-        popupWindow.setMaxWidth(
-                context.getResources().getDimensionPixelSize(R.dimen.home_button_list_menu_width));
-        popupWindow.setFocusable(true);
-        popupWindow.setOutsideTouchable(true);
         popupWindow.addOnDismissListener(
                 () -> {
                     dismiss();
+                    if (mGlicSelectionMenuTracker != null) {
+                        mGlicSelectionMenuTracker.onDropdownMenuDismissed();
+                    }
                 });
 
         popupWindow.show();
+        if (mGlicSelectionMenuTracker != null) {
+            mGlicSelectionMenuTracker.onDropdownMenuShown(items);
+        }
 
         mHierarchicalMenuController.setupFlyoutController(
-                /* flyoutHandler= */ this, popupWindow, /* drillDownOverrideValue= */ null);
+                /* flyoutHandler= */ this,
+                popupWindow,
+                menu::addOnScrollListener,
+                /* drillDownOverrideValue= */ null);
+        mHierarchicalMenuController.setupBackPressBehaviorForPopupWindow(
+                popupWindow.getContentView(), this::dismiss);
     }
 
     @Override
@@ -131,6 +166,7 @@ public class ChromeSelectionDropdownMenuDelegate
 
     @Override
     public void setWindowFocus(AnchoredPopupWindow popupWindow, boolean hasFocus) {
+        popupWindow.setFocusable(hasFocus);
         ViewGroup contentView = (ViewGroup) popupWindow.getContentView();
         if (contentView == null) return;
 
@@ -139,7 +175,10 @@ public class ChromeSelectionDropdownMenuDelegate
 
     @Override
     public AnchoredPopupWindow createAndShowFlyoutPopup(
-            List<ListItem> items, View view, Runnable dismissRunnable) {
+            List<ListItem> items,
+            View view,
+            Runnable dismissRunnable,
+            View.OnScrollChangeListener scrollListener) {
         Context context = view.getContext();
         ModelList modelList = new ModelList();
         modelList.addAll(items);
@@ -148,7 +187,7 @@ public class ChromeSelectionDropdownMenuDelegate
                 BrowserUiListMenuUtils.getBasicListMenu(
                         context,
                         modelList,
-                        (model, unusedView) -> {
+                        (model, _) -> {
                             assert mClickListener != null;
                             mClickListener.onItemClick(model);
                         });
@@ -185,21 +224,15 @@ public class ChromeSelectionDropdownMenuDelegate
                                 })
                         .build();
 
+        menu.addOnScrollListener(scrollListener);
         popupMenu.show();
         return popupMenu;
     }
 
     @Override
     public ListItem getDivider() {
-        PropertyModel.Builder builder =
-                new PropertyModel.Builder(ListSectionDividerProperties.ALL_KEYS)
-                        .with(
-                                ListSectionDividerProperties.LEFT_PADDING_DIMEN_ID,
-                                R.dimen.list_menu_item_horizontal_padding)
-                        .with(
-                                ListSectionDividerProperties.RIGHT_PADDING_DIMEN_ID,
-                                R.dimen.list_menu_item_horizontal_padding);
-        return new ListItem(ListItemType.DIVIDER, builder.build());
+        // TODO(crbug.com/416222384): Update context menus to use incognito theming.
+        return BasicListMenu.buildMenuDivider(/* isIncognito= */ false);
     }
 
     @Override
@@ -220,15 +253,17 @@ public class ChromeSelectionDropdownMenuDelegate
                         .with(ListMenuItemProperties.CONTENT_DESCRIPTION, contentDescription)
                         .with(ListMenuItemProperties.GROUP_ID, groupId)
                         .with(ListMenuItemProperties.MENU_ITEM_ID, id)
-                        .with(ListMenuItemProperties.START_ICON_DRAWABLE, startIcon)
+                        .with(
+                                ListMenuItemProperties.SHORTCUT_TEXT,
+                                KeyboardShortcuts.getShortcutText(id))
+                        .with(ListMenuItemProperties.START_ICON_DRAWABLE, null)
                         .with(ListMenuItemProperties.ENABLED, enabled)
                         .with(ListMenuItemProperties.INTENT, intent)
-                        .with(
-                                ListMenuItemProperties.KEEP_START_ICON_SPACING_WHEN_HIDDEN,
-                                groupContainsIcon)
+                        .with(ListMenuItemProperties.KEEP_START_ICON_SPACING_WHEN_HIDDEN, false)
                         .with(
                                 ListMenuItemProperties.TEXT_APPEARANCE_ID,
                                 BrowserUiListMenuUtils.getDefaultTextAppearanceStyle())
+                        .with(ListMenuItemProperties.IS_TEXT_ELLIPSIZED_AT_END, true)
                         .with(ListMenuItemProperties.ORDER, order);
         if (isIconTintable) {
             modelBuilder.with(
@@ -236,5 +271,21 @@ public class ChromeSelectionDropdownMenuDelegate
                     BrowserUiListMenuUtils.getDefaultIconTintColorStateListId());
         }
         return new ListItem(ListItemType.MENU_ITEM, modelBuilder.build());
+    }
+
+    private static int calculateMaxWidthPx(View rootView) {
+        Resources res = rootView.getContext().getResources();
+        int viewportWidthPx = rootView.getWidth();
+        int maxWidthPx = res.getDimensionPixelSize(R.dimen.text_selection_context_menu_max_width);
+        int gutterPx =
+                res.getDimensionPixelSize(R.dimen.text_selection_context_menu_viewport_gutter);
+        return Math.min(viewportWidthPx - 2 * gutterPx, maxWidthPx);
+    }
+
+    private static int calculateDesiredContentWidth(
+            View contentView, BasicListMenu menu, int maxWidthPx) {
+        int lateralPadding = contentView.getPaddingLeft() + contentView.getPaddingRight();
+        int desiredContentWidth = menu.getMaxItemWidth() + lateralPadding;
+        return Math.min(desiredContentWidth, maxWidthPx);
     }
 }

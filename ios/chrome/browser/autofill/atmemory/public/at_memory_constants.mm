@@ -9,3 +9,46 @@ NSString* const kAtMemoryCloseButtonAccessibilityIdentifier =
 
 NSString* const kAtMemorySearchBarAccessibilityIdentifier =
     @"AtMemorySearchBar";
+
+NSString* const kAtMemoryBackButtonAccessibilityIdentifier =
+    @"AtMemoryBackButton";
+
+NSString* const kAtMemoryNoDataCellAccessibilityIdentifier =
+    @"AtMemoryNoDataCell";
+
+NSString* const kAtMemoryNoConnectionCellAccessibilityIdentifier =
+    @"AtMemoryNoConnectionCell";
+
+NSString* const kAtMemoryUnsupportedQueryCellAccessibilityIdentifier =
+    @"AtMemoryUnsupportedQueryCell";
+
+NSString* const kAtMemorySearchCellAccessibilityIdentifier =
+    @"AtMemorySearchCell";
+
+NSString* const kAtMemoryEmptyViewAccessibilityIdentifier =
+    @"AtMemoryEmptyView";
+
+NSString* const kAtMemoryFetchingCellAccessibilityIdentifier =
+    @"AtMemoryFetchingCell";
+
+NSString* const kAtMemoryManageEnhancedAutofillItemAccessibilityIdentifier =
+    @"AtMemoryManageEnhancedAutofillItem";
+
+NSString* const kAtMemoryGranularFillCellAccessibilityIdentifierPrefix =
+    @"AtMemoryGranularFillCell_";
+
+NSString* const
+    kAtMemoryGranularFillAttributeLabelAccessibilityIdentifierPrefix =
+        @"AtMemoryGranularFillAttributeLabel_";
+
+NSString* const kAtMemoryGranularFillChipButtonAccessibilityIdentifierPrefix =
+    @"AtMemoryGranularFillChipButton_";
+
+NSString* const kAtMemorySearchResultCellAccessibilityIdentifierPrefix =
+    @"AtMemorySearchResultCell_";
+
+NSString* const kAtMemorySearchResultInfoButtonAccessibilityIdentifierPrefix =
+    @"AtMemorySearchResultInfoButton_";
+
+NSString* const kAtMemoryNoticeOkButtonAccessibilityIdentifier =
+    @"AtMemoryNoticeOkButtonAccessibilityIdentifier";

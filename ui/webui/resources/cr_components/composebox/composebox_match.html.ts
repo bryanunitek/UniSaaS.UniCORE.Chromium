@@ -10,6 +10,7 @@ export function getHtml(this: ComposeboxMatchElement) {
   // clang-format off
   return html`<!--_html_template_start_-->
 <div class="container" aria-hidden="true" part="match-container">
+  <div id="image" style="${this.imageStyle_()}"></div>
   <div id="focusIndicator" part="match-focus-indicator"></div>
   <div id="iconContainer" part="match-icon-container">
     <div id="icon" part="match-icon"
@@ -17,7 +18,13 @@ export function getHtml(this: ComposeboxMatchElement) {
     </div>
   </div>
   <div id="textContainer" part="match-text-container">
-    ${this.match.contents}
+    <span id="primaryText" part="match-primary-text">${
+        this.match.suggestTemplate.primaryText.text}</span>
+    ${this.secondaryTextPlacement === 'below-primary-text' ? html`
+      <span id="secondaryText" part="match-secondary-text">
+        ${this.match.suggestTemplate.secondaryText?.text ?? ''}
+      </span>
+    ` : ''}
   </div>
   <cr-icon-button id="remove" class="action-icon icon-clear"
     part="match-remove-button"

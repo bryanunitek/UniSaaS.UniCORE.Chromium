@@ -98,6 +98,22 @@ void CheckShiftChar(ui::KeyboardCode key_code, char character, char lower) {
   EXPECT_EQ(ui::VKEY_SHIFT, it->key_code) << "Char: " << character;
 }
 
+void CheckKeyActionCode(char16_t key, const std::string& code, int location) {
+  base::DictValue action;
+  action.Set("value", base::UTF16ToUTF8(std::u16string(1, key)));
+  base::DictValue input_state;
+  input_state.Set("pressed", base::DictValue());
+  input_state.Set("modifiers", 0);
+  std::vector<KeyEvent> events;
+
+  ASSERT_EQ(kOk, ConvertKeyActionToKeyEvent(action, input_state,
+                                            /*is_key_down=*/true, &events)
+                     .code());
+  ASSERT_EQ(1u, events.size());
+  EXPECT_EQ(code, events[0].code);
+  EXPECT_EQ(location, events[0].location);
+}
+
 }  // namespace
 
 TEST(KeyConverter, SingleChar) {
@@ -141,6 +157,12 @@ TEST(KeyConverter, WebDriverSpecialNonCharKey) {
   builder.SetKeyCode(ui::VKEY_F1)->Generate(&key_events);
   std::u16string keys = u"\uE031";
   CheckEventsReleaseModifiers(keys, key_events);
+}
+
+TEST(KeyConverter, WebDriverActionSpecialKeyCodes) {
+  ui::ScopedKeyboardLayout keyboard_layout(ui::KEYBOARD_LAYOUT_ENGLISH_US);
+  CheckKeyActionCode(u'\uE019', "NumpadEqual", 3);
+  CheckKeyActionCode(u'\uE00B', "Pause", 0);
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -383,6 +405,34 @@ TEST(KeyConverter, ReleaseModifiers) {
   std::u16string keys = u"\uE008\uE009";
 
   CheckEvents(keys, key_events, true /* release_modifiers */, 0);
+}
+
+TEST(KeyConverter, SurrogatePairValid) {
+  const std::string emoji = "\xF0\x9F\x98\x80";
+  std::vector<KeyEvent> key_events;
+  KeyEventBuilder builder;
+  builder.SetText(emoji, emoji)
+      ->SetKeyCode(ui::VKEY_UNKNOWN)
+      ->Generate(&key_events);
+
+  std::u16string keys = {0xD83Du, 0xDE00u};
+  CheckEventsReleaseModifiers(keys, key_events);
+}
+
+TEST(KeyConverter, LoneLeadSurrogateRejected) {
+  int modifiers = 0;
+  std::vector<KeyEvent> events;
+  std::u16string keys = {0xD83Du};
+  Status status = ConvertKeysToKeyEvents(keys, true, &modifiers, &events);
+  EXPECT_EQ(kUnknownError, status.code());
+}
+
+TEST(KeyConverter, LoneTrailSurrogateRejected) {
+  int modifiers = 0;
+  std::vector<KeyEvent> events;
+  std::u16string keys = {0xDE00u};
+  Status status = ConvertKeysToKeyEvents(keys, true, &modifiers, &events);
+  EXPECT_EQ(kUnknownError, status.code());
 }
 
 TEST(KeyConverter, CommandA) {

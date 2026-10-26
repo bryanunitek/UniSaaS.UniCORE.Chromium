@@ -4,12 +4,21 @@
 
 #include "third_party/blink/renderer/platform/mediastream/audio_service_audio_processor_proxy.h"
 
+#include <cstdint>
+#include <optional>
+
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/location.h"
+#include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/threading/thread_checker.h"
 #include "base/timer/timer.h"
 #include "media/base/audio_processor_controls.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/webrtc/api/media_stream_interface.h"
 
 namespace blink {
 
@@ -30,6 +39,10 @@ void AudioServiceAudioProcessorProxy::SetControls(
   DCHECK(!processor_controls_);
   DCHECK(controls);
   processor_controls_ = controls;
+
+  if (voice_isolation_enabled_.has_value()) {
+    processor_controls_->SetVoiceIsolation(*voice_isolation_enabled_);
+  }
 
   stats_update_timer_.Start(
       FROM_HERE, kStatsUpdateInterval,
@@ -66,6 +79,23 @@ void AudioServiceAudioProcessorProxy::MaybeUpdateNumPreferredCaptureChannels(
       CrossThreadBindOnce(&AudioServiceAudioProcessorProxy::
                               SetPreferredNumCaptureChannelsOnMainThread,
                           weak_this_, num_channels));
+}
+
+void AudioServiceAudioProcessorProxy::SetVoiceIsolation(bool enabled) {
+  DCHECK_CALLED_ON_VALID_THREAD(main_thread_checker_);
+  if (voice_isolation_enabled_.has_value() &&
+      *voice_isolation_enabled_ == enabled) {
+    return;
+  }
+  voice_isolation_enabled_ = enabled;
+  if (processor_controls_) {
+    processor_controls_->SetVoiceIsolation(enabled);
+  }
+}
+
+std::optional<bool> AudioServiceAudioProcessorProxy::VoiceIsolation() const {
+  DCHECK_CALLED_ON_VALID_THREAD(main_thread_checker_);
+  return voice_isolation_enabled_;
 }
 
 void AudioServiceAudioProcessorProxy::RequestStats() {

@@ -52,6 +52,7 @@
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/buildflags/buildflags.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/device/public/cpp/test/fake_usb_device_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -931,40 +932,8 @@ TEST_F(SiteSettingsHelperTest, CreateChooserExceptionObject) {
   }
 }
 
-TEST_F(SiteSettingsHelperTest, ShowAutograntedRWSPermissions) {
-  TestingProfile profile;
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      permissions::features::kShowRelatedWebsiteSetsPermissionGrants);
-  HostContentSettingsMap* map =
-      HostContentSettingsMapFactory::GetForProfile(&profile);
-  content_settings::ContentSettingConstraints constraint;
-  constraint.set_session_model(content_settings::mojom::SessionModel::DURABLE);
-  constraint.set_decided_by_related_website_sets(true);
-  constexpr char kToplevelURL[] = "https://firstparty.com";
-  constexpr char kEmbeddedURL[] = "https://embedded.com";
-  map->SetContentSettingDefaultScope(GURL(kEmbeddedURL), GURL(kToplevelURL),
-                                     ContentSettingsType::STORAGE_ACCESS,
-                                     CONTENT_SETTING_BLOCK, constraint);
-
-  base::ListValue exceptions;
-  site_settings::GetExceptionsForContentType(
-      ContentSettingsType::STORAGE_ACCESS, &profile,
-      /*web_ui=*/nullptr,
-      /*incognito=*/false, &exceptions);
-  EXPECT_EQ(1U, exceptions.size());
-  EXPECT_EQ(exceptions[0].GetDict().Find("setting")->GetString(), "block");
-  EXPECT_EQ(exceptions[0].GetDict().Find("origin")->GetString(),
-            "https://[*.]embedded.com");
-  EXPECT_EQ(exceptions[0].GetDict().Find("embeddingOrigin")->GetString(),
-            "https://[*.]firstparty.com");
-}
-
 TEST_F(SiteSettingsHelperTest, HideAutograntedRWSPermissions) {
   TestingProfile profile;
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(
-      permissions::features::kShowRelatedWebsiteSetsPermissionGrants);
   HostContentSettingsMap* map =
       HostContentSettingsMapFactory::GetForProfile(&profile);
   content_settings::ContentSettingConstraints constraint;
@@ -1110,11 +1079,12 @@ class SiteSettingsHelperChooserExceptionTest : public testing::Test {
       "ajnpiorf3kprxsslcme5f2rkwfoxx24orkkudpf6roqxssxnjx7y4aacai/"};
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-  Profile* profile() { return &profile_; }
+  Profile* profile() { return profile_.get(); }
 
   void SetUp() override {
     TestingBrowserProcess::GetGlobal()->SetUpGlobalFeaturesForTesting(
         /*profile_manager=*/false);
+    profile_ = std::make_unique<TestingProfile>();
     SetUpUsbChooserContext();
 #if BUILDFLAG(IS_CHROMEOS)
     SetUpSmartCardPermissionContext();
@@ -1122,6 +1092,7 @@ class SiteSettingsHelperChooserExceptionTest : public testing::Test {
   }
 
   void TearDown() override {
+    profile_.reset();
     TestingBrowserProcess::GetGlobal()->TearDownGlobalFeaturesForTesting();
   }
 
@@ -1185,7 +1156,7 @@ class SiteSettingsHelperChooserExceptionTest : public testing::Test {
 
  private:
   content::BrowserTaskEnvironment task_environment_;
-  TestingProfile profile_;
+  std::unique_ptr<TestingProfile> profile_;
 #if BUILDFLAG(IS_CHROMEOS)
   base::test::ScopedFeatureList feature_list_{blink::features::kSmartCard};
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -1385,11 +1356,11 @@ TEST_F(PersistentPermissionsSiteSettingsHelperTest,
   auto file_write_grant = context->GetWritePermissionGrant(
       kTestOrigin, content::PathInfo(kTestPath),
       ChromeFileSystemAccessPermissionContext::HandleType::kFile,
-      ChromeFileSystemAccessPermissionContext::UserAction::kSave);
+      ChromeFileSystemAccessPermissionContext::AccessTrigger::kSave);
   auto file_read_grant = context->GetWritePermissionGrant(
       kTestOrigin, content::PathInfo(kTestPath2),
       ChromeFileSystemAccessPermissionContext::HandleType::kFile,
-      ChromeFileSystemAccessPermissionContext::UserAction::kSave);
+      ChromeFileSystemAccessPermissionContext::AccessTrigger::kSave);
 
   auto populated_grants =
       context->ConvertObjectsToGrants(context->GetGrantedObjects(kTestOrigin));
@@ -1551,10 +1522,13 @@ class SiteSettingsHelperIsolatedWebAppTest : public testing::Test {
   void SetUp() override {
     TestingBrowserProcess::GetGlobal()->SetUpGlobalFeaturesForTesting(
         /*profile_manager=*/false);
-    web_app::test::AwaitStartWebAppProviderAndSubsystems(&testing_profile_);
+    testing_profile_ = std::make_unique<TestingProfile>();
+    web_app::test::AwaitStartWebAppProviderAndSubsystems(
+        testing_profile_.get());
   }
 
   void TearDown() override {
+    testing_profile_.reset();
     TestingBrowserProcess::GetGlobal()->TearDownGlobalFeaturesForTesting();
   }
 
@@ -1568,14 +1542,14 @@ class SiteSettingsHelperIsolatedWebAppTest : public testing::Test {
     return bundle->InstallChecked(profile());
   }
 
-  Profile* profile() { return &testing_profile_; }
+  Profile* profile() { return testing_profile_.get(); }
 
   const std::string kAppName = "test IWA Name";
 
  private:
   content::BrowserTaskEnvironment task_environment_;
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
-  TestingProfile testing_profile_;
+  std::unique_ptr<TestingProfile> testing_profile_;
 };
 
 TEST_F(SiteSettingsHelperIsolatedWebAppTest,

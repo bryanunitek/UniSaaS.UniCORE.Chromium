@@ -6,7 +6,6 @@ package org.chromium.chrome.browser.ntp;
 
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
 
-import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.MediumTest;
 
 import org.junit.Assert;
@@ -22,6 +21,7 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.composeplate.ComposeplateUtils;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
@@ -31,14 +31,14 @@ import org.chromium.chrome.browser.suggestions.SiteSuggestion;
 import org.chromium.chrome.browser.suggestions.tile.TilesLinearLayout;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.NewTabPageTestUtils;
 import org.chromium.chrome.test.util.OmniboxTestUtils;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
 import org.chromium.chrome.test.util.browser.suggestions.SuggestionsDependenciesRule;
 import org.chromium.chrome.test.util.browser.suggestions.mostvisited.FakeMostVisitedSites;
-import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.ui.base.DeviceFormFactor;
 
 import java.lang.ref.WeakReference;
 import java.util.List;
@@ -50,12 +50,14 @@ import java.util.List;
     "disable-features=IPH_FeedHeaderMenu"
 })
 @Batch(Batch.PER_CLASS)
+// Tests the Java native NTP, which is not used on desktop (it uses the WebUI NTP).
+@Restriction(DeviceFormFactor.PHONE_OR_TABLET)
 public class NewTabPageMemoryLeakTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     @Rule public SuggestionsDependenciesRule mSuggestionsDeps = new SuggestionsDependenciesRule();
     @Rule public SigninTestRule mSigninTestRule = new SigninTestRule();
@@ -66,6 +68,7 @@ public class NewTabPageMemoryLeakTest {
     public void setUp() throws Exception {
         ComposeplateUtils.setIsEnabledForTesting(true);
         mActivityTestRule.startOnBlankPage();
+        NewTabPageTestUtils.fakeGoogleAiModeButtonUiConfig();
         var templateUrlService =
                 ThreadUtils.runOnUiThreadBlocking(
                         () ->
@@ -75,12 +78,7 @@ public class NewTabPageMemoryLeakTest {
 
         new OmniboxTestUtils(mActivityTestRule.getActivity());
 
-        EmbeddedTestServer testServer =
-                EmbeddedTestServer.createAndStartServer(
-                        ApplicationProvider.getApplicationContext());
-
-        List<SiteSuggestion> siteSuggestions =
-                NewTabPageTestUtils.createFakeSiteSuggestions(testServer);
+        List<SiteSuggestion> siteSuggestions = NewTabPageTestUtils.createFakeSiteSuggestions();
         FakeMostVisitedSites mostVisitedSites = new FakeMostVisitedSites();
         mostVisitedSites.setTileSuggestions(siteSuggestions);
         mSuggestionsDeps.getFactory().mostVisitedSites = mostVisitedSites;

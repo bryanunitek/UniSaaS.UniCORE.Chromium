@@ -19,7 +19,7 @@
 #include "base/test/task_environment.h"
 #include "crypto/apple/scoped_fake_keychain_v2.h"
 #include "crypto/apple/test_helpers.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/sign.h"
 #include "net/ssl/ssl_private_key.h"
 #include "net/ssl/ssl_private_key_test_util.h"
 #include "net/test/cert_test_util.h"
@@ -40,9 +40,9 @@ struct TestKey {
 
 const TestKey kTestKeys[] = {
     {"RSA", "client_1.pem", "client_1.pk8", EVP_PKEY_RSA},
-    {"ECDSA_P256", "client_4.pem", "client_4.pk8", EVP_PKEY_EC},
-    {"ECDSA_P384", "client_5.pem", "client_5.pk8", EVP_PKEY_EC},
-    {"ECDSA_P521", "client_6.pem", "client_6.pk8", EVP_PKEY_EC},
+    {"ECDSA_P256", "client_p256.pem", "client_p256.pk8", EVP_PKEY_EC},
+    {"ECDSA_P384", "client_p384.pem", "client_p384.pk8", EVP_PKEY_EC},
+    {"ECDSA_P521", "client_p521.pem", "client_p521.pk8", EVP_PKEY_EC},
 };
 
 std::string TestKeyToString(const testing::TestParamInfo<TestKey>& params) {
@@ -88,11 +88,35 @@ INSTANTIATE_TEST_SUITE_P(All,
                          testing::ValuesIn(kTestKeys),
                          TestKeyToString);
 
+TEST(SSLPlatformKeyMacInvalidTest, UnsupportedKeyType) {
+  base::test::TaskEnvironment task_environment;
+
+  scoped_refptr<X509Certificate> cert =
+      ImportCertFromFile(GetTestCertsDirectory(), "client_x25519.pem");
+  ASSERT_TRUE(cert);
+
+  // macOS does not support X25519 SecKeyRefs. However,
+  // `CreateSSLPrivateKeyForSecKey` only inspects the certificate's public key
+  // when checking the key type, so test rejection by pairing the certificate
+  // with an arbitrary other key.
+  base::FilePath pkcs8_path =
+      GetTestCertsDirectory().AppendASCII("client_1.pk8");
+  std::optional<std::vector<uint8_t>> pkcs8 = base::ReadFileToBytes(pkcs8_path);
+  ASSERT_TRUE(pkcs8);
+  base::apple::ScopedCFTypeRef<SecKeyRef> sec_key =
+      crypto::apple::SecKeyFromPKCS8(*pkcs8);
+  ASSERT_TRUE(sec_key);
+
+  scoped_refptr<SSLPrivateKey> key =
+      CreateSSLPrivateKeyForSecKey(cert.get(), sec_key.get());
+  EXPECT_FALSE(key);
+}
+
 namespace {
 
 constexpr char kTestKeychainAccessGroup[] = "test-keychain-access-group";
-constexpr crypto::SignatureVerifier::SignatureAlgorithm kAcceptableAlgos[] = {
-    crypto::SignatureVerifier::ECDSA_SHA256};
+constexpr crypto::sign::SignatureKind kAcceptableAlgos[] = {
+    crypto::sign::ECDSA_SHA256};
 
 const crypto::UnexportableKeyProvider::Config config = {
     .keychain_access_group = kTestKeychainAccessGroup,

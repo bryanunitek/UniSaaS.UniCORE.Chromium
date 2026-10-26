@@ -5,11 +5,13 @@
 import 'chrome://resources/cr_components/searchbox/searchbox_dropdown.js';
 import 'chrome://new-tab-page/strings.m.js';
 
-import {SelectionDirection, SelectionLineState, SelectionStep} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
 import {createAutocompleteResultForTesting, createSearchMatchForTesting} from 'chrome://resources/cr_components/searchbox/searchbox_browser_proxy.js';
 import type {SearchboxDropdownElement} from 'chrome://resources/cr_components/searchbox/searchbox_dropdown.js';
-import {assertEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {$$, microtasksFinished} from 'chrome://webui-test/test_util.js';
+
+import {createSuggestTemplateInfo} from './searchbox_test_utils.js';
 
 // TODO(crbug.com/455876602): Move dropdown-specific tests in searchbox_test.ts
 //  into this file.
@@ -17,6 +19,7 @@ suite('SearchboxDropdown', () => {
   let dropdown: SearchboxDropdownElement;
 
   setup(() => {
+    loadTimeData.overrideValues({askGSuggestionSidePanelDescription: false});
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     dropdown = document.createElement('cr-searchbox-dropdown');
     document.body.appendChild(dropdown);
@@ -25,8 +28,13 @@ suite('SearchboxDropdown', () => {
   test('hides matches that have `isHidden` field set to true', async () => {
     // Arrange.
     const matches = [
-      createSearchMatchForTesting({contents: 'bar', isHidden: true}),
-      createSearchMatchForTesting({contents: 'foo'}),
+      createSearchMatchForTesting({
+        suggestTemplate: createSuggestTemplateInfo({primaryText: 'bar'}),
+        isHidden: true,
+      }),
+      createSearchMatchForTesting({
+        suggestTemplate: createSuggestTemplateInfo({primaryText: 'foo'}),
+      }),
     ];
 
     // Act.
@@ -36,243 +44,77 @@ suite('SearchboxDropdown', () => {
     // Assert.
     const matchEls = dropdown.shadowRoot.querySelectorAll('cr-searchbox-match');
     assertEquals(1, matchEls.length);
-    const contentsEl = $$(matchEls[0]!, '#contents');
-    assertTrue(!!contentsEl);
-    assertEquals('foo', contentsEl.textContent.trim());
+    const primaryTextEl = $$(matchEls[0]!, '#primaryText');
+    assertTrue(!!primaryTextEl);
+    assertEquals('foo', primaryTextEl.textContent.trim());
     // The visible element's matchIndex must retain its original index (1),
     // even though it is the first (and only) visible element.
     assertEquals(1, matchEls[0]!.matchIndex);
   });
 
   test(
-      'stepSelection: forward navigation through SelectionLineState types',
+      'hides the AskG entrypoint description while a contextual suggestion ' +
+          'with the same description is selected',
       async () => {
-        const matches = [
-          createSearchMatchForTesting({
-            keywordChipHint: 'Search keyword',
-            actions: [{id: 1} as any],
-            supportsDeletion: true,
-          }),
-        ];
-        dropdown.result = createAutocompleteResultForTesting({matches});
-        await microtasksFinished();
+        // Arrange.
+        const [entrypointEl, contextualEl, otherEl] =
+            await createDescriptionDedupeDropdown(/*dedupe=*/ true);
+        assertTrue(entrypointEl!.hasAttribute('duplicate-description'));
+        assertTrue(contextualEl!.hasAttribute('duplicate-description'));
+        assertFalse(otherEl!.hasAttribute('duplicate-description'));
+        assertEquals('visible', descriptionVisibility(entrypointEl!));
 
-        // Initially at kDefaultSelection (line: -1, state: kNormal,
-        // actionIndex: 0).
-        // 1. First step forward -> line 0, state kNormal.
-        dropdown.stepSelection(
-            SelectionDirection.kForward, SelectionStep.kStateOrLine);
-        assertEquals(0, dropdown.selection.line);
-        assertEquals(SelectionLineState.kNormal, dropdown.selection.state);
+        // Act & Assert.
+        await dropdown.selectIndex(0);
+        assertEquals('visible', descriptionVisibility(entrypointEl!));
 
-        // 2. Second step forward -> line 0, state kKeywordMode.
-        dropdown.stepSelection(
-            SelectionDirection.kForward, SelectionStep.kStateOrLine);
-        assertEquals(0, dropdown.selection.line);
-        assertEquals(SelectionLineState.kKeywordMode, dropdown.selection.state);
+        await dropdown.selectIndex(1);
+        assertEquals('hidden', descriptionVisibility(entrypointEl!));
 
-        // 3. Third step forward -> line 0, state kFocusedButtonAction.
-        dropdown.stepSelection(
-            SelectionDirection.kForward, SelectionStep.kStateOrLine);
-        assertEquals(0, dropdown.selection.line);
-        assertEquals(
-            SelectionLineState.kFocusedButtonAction, dropdown.selection.state);
-        assertEquals(0, dropdown.selection.actionIndex);
-
-        // 4. Fourth step forward -> line 0, state
-        // kFocusedButtonRemoveSuggestion.
-        dropdown.stepSelection(
-            SelectionDirection.kForward, SelectionStep.kStateOrLine);
-        assertEquals(0, dropdown.selection.line);
-        assertEquals(
-            SelectionLineState.kFocusedButtonRemoveSuggestion,
-            dropdown.selection.state);
-
-        // 5. Fifth step forward -> wraps back to line 0, state kNormal.
-        dropdown.stepSelection(
-            SelectionDirection.kForward, SelectionStep.kStateOrLine);
-        assertEquals(0, dropdown.selection.line);
-        assertEquals(SelectionLineState.kNormal, dropdown.selection.state);
+        await dropdown.selectIndex(2);
+        assertEquals('visible', descriptionVisibility(entrypointEl!));
       });
 
-  test(
-      'stepSelection: backward navigation through SelectionLineState types',
-      async () => {
-        const matches = [
-          createSearchMatchForTesting({
-            keywordChipHint: 'Search keyword',
-            actions: [{id: 1} as any],
-            supportsDeletion: true,
-          }),
-        ];
-        dropdown.result = createAutocompleteResultForTesting({matches});
-        await microtasksFinished();
+  test('does not hide descriptions without the param', async () => {
+    const [entrypointEl, contextualEl] =
+        await createDescriptionDedupeDropdown(/*dedupe=*/ false);
+    assertFalse(entrypointEl!.hasAttribute('duplicate-description'));
+    assertFalse(contextualEl!.hasAttribute('duplicate-description'));
 
-        // Initially at kDefaultSelection (line: -1, state: kNormal,
-        // actionIndex: 0).
-        // 1. First step backward -> wraps to the last possible state: line 0,
-        // state kFocusedButtonRemoveSuggestion.
-        dropdown.stepSelection(
-            SelectionDirection.kBackward, SelectionStep.kStateOrLine);
-        assertEquals(0, dropdown.selection.line);
-        assertEquals(
-            SelectionLineState.kFocusedButtonRemoveSuggestion,
-            dropdown.selection.state);
-
-        // 2. Second step backward -> line 0, state kFocusedButtonAction.
-        dropdown.stepSelection(
-            SelectionDirection.kBackward, SelectionStep.kStateOrLine);
-        assertEquals(0, dropdown.selection.line);
-        assertEquals(
-            SelectionLineState.kFocusedButtonAction, dropdown.selection.state);
-
-        // 3. Third step backward -> line 0, state kKeywordMode.
-        dropdown.stepSelection(
-            SelectionDirection.kBackward, SelectionStep.kStateOrLine);
-        assertEquals(0, dropdown.selection.line);
-        assertEquals(SelectionLineState.kKeywordMode, dropdown.selection.state);
-
-        // 4. Fourth step backward -> line 0, state kNormal.
-        dropdown.stepSelection(
-            SelectionDirection.kBackward, SelectionStep.kStateOrLine);
-        assertEquals(0, dropdown.selection.line);
-        assertEquals(SelectionLineState.kNormal, dropdown.selection.state);
-
-        // 5. Fifth step backward -> wraps to the last possible state: line 0,
-        // state kFocusedButtonRemoveSuggestion.
-        dropdown.stepSelection(
-            SelectionDirection.kBackward, SelectionStep.kStateOrLine);
-        assertEquals(0, dropdown.selection.line);
-        assertEquals(
-            SelectionLineState.kFocusedButtonRemoveSuggestion,
-            dropdown.selection.state);
-      });
-
-  test('stepSelection: multiple matches forward and backward', async () => {
-    const matches = [
-      createSearchMatchForTesting({
-        keywordChipHint: 'Keyword 0',
-      }),
-      createSearchMatchForTesting({
-        supportsDeletion: true,
-      }),
-    ];
-    dropdown.result = createAutocompleteResultForTesting({matches});
-    await microtasksFinished();
-
-    // Initial selection is default.
-    // Step forward: Line 0, kNormal.
-    dropdown.stepSelection(
-        SelectionDirection.kForward, SelectionStep.kStateOrLine);
-    assertEquals(0, dropdown.selection.line);
-    assertEquals(SelectionLineState.kNormal, dropdown.selection.state);
-
-    // Step forward: Line 0, kKeywordMode.
-    dropdown.stepSelection(
-        SelectionDirection.kForward, SelectionStep.kStateOrLine);
-    assertEquals(0, dropdown.selection.line);
-    assertEquals(SelectionLineState.kKeywordMode, dropdown.selection.state);
-
-    // Step forward: Line 1, kNormal.
-    dropdown.stepSelection(
-        SelectionDirection.kForward, SelectionStep.kStateOrLine);
-    assertEquals(1, dropdown.selection.line);
-    assertEquals(SelectionLineState.kNormal, dropdown.selection.state);
-
-    // Step forward: Line 1, kFocusedButtonRemoveSuggestion.
-    dropdown.stepSelection(
-        SelectionDirection.kForward, SelectionStep.kStateOrLine);
-    assertEquals(1, dropdown.selection.line);
-    assertEquals(
-        SelectionLineState.kFocusedButtonRemoveSuggestion,
-        dropdown.selection.state);
-
-    // Step forward: Line 0, kNormal.
-    dropdown.stepSelection(
-        SelectionDirection.kForward, SelectionStep.kStateOrLine);
-    assertEquals(0, dropdown.selection.line);
-    assertEquals(SelectionLineState.kNormal, dropdown.selection.state);
-
-    // Step backward: Line 1, kFocusedButtonRemoveSuggestion.
-    dropdown.stepSelection(
-        SelectionDirection.kBackward, SelectionStep.kStateOrLine);
-    assertEquals(1, dropdown.selection.line);
-    assertEquals(
-        SelectionLineState.kFocusedButtonRemoveSuggestion,
-        dropdown.selection.state);
+    await dropdown.selectIndex(1);
+    assertEquals('visible', descriptionVisibility(entrypointEl!));
   });
 
-  test('stepSelection: edge case empty results', async () => {
-    dropdown.result = createAutocompleteResultForTesting({matches: []});
+  function descriptionVisibility(matchEl: HTMLElement): string {
+    return getComputedStyle($$(matchEl, '#secondaryText')!).visibility;
+  }
+
+  // Creates a dropdown with an AskG entrypoint-like match and a contextual
+  // suggestion sharing its description, plus a contextual suggestion with a
+  // different description.
+  async function createDescriptionDedupeDropdown(dedupe: boolean) {
+    loadTimeData.overrideValues({askGSuggestionSidePanelDescription: dedupe});
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    dropdown = document.createElement('cr-searchbox-dropdown');
+    document.body.appendChild(dropdown);
+
+    const withDescription = (secondaryText: string) =>
+        createSuggestTemplateInfo({secondaryText});
+    dropdown.result = createAutocompleteResultForTesting({
+      matches: [
+        createSearchMatchForTesting(
+            {suggestTemplate: withDescription('Opens in side panel')}),
+        createSearchMatchForTesting({
+          showSecondaryTextOnlyOnSelection: true,
+          suggestTemplate: withDescription('Opens in side panel'),
+        }),
+        createSearchMatchForTesting({
+          showSecondaryTextOnlyOnSelection: true,
+          suggestTemplate: withDescription('Ask Google about this page'),
+        }),
+      ],
+    });
     await microtasksFinished();
-
-    // Calling stepSelection with empty results should not change selection or
-    // crash.
-    const initialSelection = dropdown.selection;
-    dropdown.stepSelection(
-        SelectionDirection.kForward, SelectionStep.kStateOrLine);
-    assertEquals(initialSelection.line, dropdown.selection.line);
-    assertEquals(initialSelection.state, dropdown.selection.state);
-  });
-
-  test('stepSelection: SelectionStep.kWholeLine', async () => {
-    const matches = [
-      createSearchMatchForTesting({
-        keywordChipHint: 'Keyword 0',
-      }),
-      createSearchMatchForTesting({
-        supportsDeletion: true,
-      }),
-    ];
-    dropdown.result = createAutocompleteResultForTesting({matches});
-    await microtasksFinished();
-
-    // Start at line 0, kNormal.
-    dropdown.stepSelection(
-        SelectionDirection.kForward, SelectionStep.kStateOrLine);
-    assertEquals(0, dropdown.selection.line);
-    assertEquals(SelectionLineState.kNormal, dropdown.selection.state);
-
-    // Step SelectionStep.kWholeLine forward -> goes to Line 1, kNormal (skips
-    // Line 0 kKeywordMode).
-    dropdown.stepSelection(
-        SelectionDirection.kForward, SelectionStep.kWholeLine);
-    assertEquals(1, dropdown.selection.line);
-    assertEquals(SelectionLineState.kNormal, dropdown.selection.state);
-
-    // Step SelectionStep.kWholeLine forward -> wraps to Line 0, kNormal (skips
-    // Line 1 kFocusedButtonRemoveSuggestion).
-    dropdown.stepSelection(
-        SelectionDirection.kForward, SelectionStep.kWholeLine);
-    assertEquals(0, dropdown.selection.line);
-    assertEquals(SelectionLineState.kNormal, dropdown.selection.state);
-
-    // Step SelectionStep.kWholeLine backward -> wraps to Line 1, kNormal.
-    dropdown.stepSelection(
-        SelectionDirection.kBackward, SelectionStep.kWholeLine);
-    assertEquals(1, dropdown.selection.line);
-    assertEquals(SelectionLineState.kNormal, dropdown.selection.state);
-  });
-
-  test('stepSelection: SelectionStep.kAllLines', async () => {
-    const matches = [
-      createSearchMatchForTesting(),
-      createSearchMatchForTesting(),
-      createSearchMatchForTesting(),
-    ];
-    dropdown.result = createAutocompleteResultForTesting({matches});
-    await microtasksFinished();
-
-    // Step kAllLines forward -> goes to last line, kNormal.
-    dropdown.stepSelection(
-        SelectionDirection.kForward, SelectionStep.kAllLines);
-    assertEquals(2, dropdown.selection.line);
-    assertEquals(SelectionLineState.kNormal, dropdown.selection.state);
-
-    // Step kAllLines backward -> goes to first line, kNormal.
-    dropdown.stepSelection(
-        SelectionDirection.kBackward, SelectionStep.kAllLines);
-    assertEquals(0, dropdown.selection.line);
-    assertEquals(SelectionLineState.kNormal, dropdown.selection.state);
-  });
+    return dropdown.shadowRoot.querySelectorAll('cr-searchbox-match');
+  }
 });

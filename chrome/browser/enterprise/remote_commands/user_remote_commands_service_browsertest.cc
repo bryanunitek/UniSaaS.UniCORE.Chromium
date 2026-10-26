@@ -20,10 +20,8 @@
 #include "chrome/browser/policy/cloud/cloud_policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/platform_browser_test.h"
-#include "components/invalidation/impl/profile_identity_provider.h"
 #include "components/invalidation/profile_invalidation_provider.h"
 #include "components/invalidation/test_support/fake_invalidation_listener.h"
 #include "components/policy/core/browser/cloud/user_policy_signin_service_base.h"
@@ -39,11 +37,7 @@
 #include "components/policy/test_support/remote_commands_result_waiter.h"
 #include "components/policy/test_support/remote_commands_state.h"
 #include "components/policy/test_support/signature_provider.h"
-#include "components/prefs/pref_service.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
-#include "components/signin/public/identity_manager/identity_test_utils.h"
-#include "content/public/browser/storage_partition.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -55,7 +49,6 @@
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 using ::testing::_;
-using ::testing::InvokeWithoutArgs;
 
 namespace em = enterprise_management;
 
@@ -80,13 +73,7 @@ CreateInvalidationListenerForProjectNumber(int64_t project_number,
 
 std::unique_ptr<KeyedService> BuildFakeProfileInvalidationProvider(
     content::BrowserContext* context) {
-  Profile* profile = Profile::FromBrowserContext(context);
   return std::make_unique<invalidation::ProfileInvalidationProvider>(
-      profile->GetDefaultStoragePartition()
-          ->GetURLLoaderFactoryForBrowserProcess(),
-      std::make_unique<invalidation::ProfileIdentityProvider>(
-          IdentityManagerFactory::GetForProfile(profile)),
-      profile->GetPrefs(),
       base::BindRepeating(&CreateInvalidationListenerForProjectNumber));
 }
 
@@ -155,8 +142,7 @@ class UserRemoteCommandsServiceTest
     base::test::TestFuture<void> registered_signal;
     policy::MockCloudPolicyClientObserver observer;
     EXPECT_CALL(observer, OnRegistrationStateChanged(_))
-        .WillOnce(InvokeWithoutArgs(
-            [&registered_signal]() { registered_signal.SetValue(); }));
+        .WillOnce([&registered_signal]() { registered_signal.SetValue(); });
     client->AddObserver(&observer);
 
     ASSERT_FALSE(client->is_registered());

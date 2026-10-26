@@ -15,14 +15,17 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/browser_sync/browser_sync_switches.h"
 #include "components/history/content/browser/history_context_helper.h"
 #include "components/history/core/browser/browsing_history_driver.h"
 #include "components/history/core/browser/browsing_history_service.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_types.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/features.h"
 #include "components/sync/protocol/history_specifics.pb.h"
 #include "components/sync/service/sync_service_impl.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -33,7 +36,7 @@
 #include "url/gurl.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #endif
 
@@ -50,14 +53,10 @@ namespace {
 
 class TestBrowsingHistoryDriver : public history::BrowsingHistoryDriver {
  public:
-  explicit TestBrowsingHistoryDriver(history::WebHistoryService* web_history)
-      : web_history_(web_history) {}
+  TestBrowsingHistoryDriver() = default;
   ~TestBrowsingHistoryDriver() override = default;
 
   bool AllowHistoryDeletions() override { return true; }
-  history::WebHistoryService* GetWebHistoryService() override {
-    return web_history_;
-  }
 
   void OnRemoveVisits(
       const std::vector<history::ExpireHistoryArgs>& expire_list) override {}
@@ -66,9 +65,6 @@ class TestBrowsingHistoryDriver : public history::BrowsingHistoryDriver {
       const syncer::SyncService* sync_service,
       history::WebHistoryService* history_service,
       base::OnceCallback<void(bool)> callback) override {}
-
- private:
-  const raw_ptr<history::WebHistoryService> web_history_;
 };
 
 class TwoClientHistorySyncTest
@@ -79,6 +75,7 @@ class TwoClientHistorySyncTest
     std::vector<base::test::FeatureRef> enabled_features;
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
       enabled_features.push_back(syncer::kReplaceSyncPromosWithSignInPromos);
+      enabled_features.push_back(switches::kSyncEnableBookmarksInTransportMode);
     }
     // TODO(crbug.com/40248833): Use HTTPS URLs in tests to avoid having to
     // disable this feature.
@@ -95,24 +92,6 @@ class TwoClientHistorySyncTest
     host_resolver()->AddRule("*", "127.0.0.1");
 
     SyncTest::SetUpOnMainThread();
-  }
-
-  bool SetupClients() override {
-    if (!SyncTest::SetupClients()) {
-      return false;
-    }
-
-    // SyncTest doesn't create any tabs in the profiles/browsers it creates.
-    // Create an "empty" tab here, so that NavigateToURL() will have a non-null
-    // WebContents to navigate in.
-    for (int i = 0; i < num_clients(); ++i) {
-      if (!AddTabAtIndexToBrowser(GetBrowser(i), 0, GURL("about:blank"),
-                                  ui::PAGE_TRANSITION_AUTO_TOPLEVEL)) {
-        return false;
-      }
-    }
-
-    return true;
   }
 
   void NavigateToURL(
@@ -334,9 +313,12 @@ IN_PROC_BROWSER_TEST_P(TwoClientHistorySyncTest, SyncsVisitsDeletion) {
                                            ServiceAccessType::EXPLICIT_ACCESS);
   history::WebHistoryService* web_history_service =
       WebHistoryServiceFactory::GetForProfile(GetProfile(0));
-  TestBrowsingHistoryDriver driver(web_history_service);
+  TestBrowsingHistoryDriver driver;
+  // No device tracker is needed as the service is not used to call
+  // `GetSyncedDevicesForFiltering`.
   history::BrowsingHistoryService browsing_history_service(
-      &driver, history_service, GetSyncService(0));
+      &driver, history_service, web_history_service, GetSyncService(0),
+      /*device_info_tracker=*/nullptr);
 
   browsing_history_service.RemoveVisits(items_to_remove);
   // Note that this API applies deletions to all matching visits on the same
@@ -345,67 +327,6 @@ IN_PROC_BROWSER_TEST_P(TwoClientHistorySyncTest, SyncsVisitsDeletion) {
   // Wait for the deletions to apply to the second client: Both visits to the
   // first URL should be gone, but the second URL's visits should remain.
   EXPECT_TRUE(WaitForLocalHistory(1, {{url1, IsEmpty()}, {url2, SizeIs(2)}}));
-}
-
-IN_PROC_BROWSER_TEST_P(TwoClientHistorySyncTest,
-                       DoesNotSyncBrowsingTopicsEligibility) {
-  ASSERT_TRUE(SetupSync());
-
-  // Navigate to some URL.
-  GURL url1 =
-      embedded_test_server()->GetURL("synced1.com", "/sync/simple.html");
-  NavigateToURL(0, url1);
-
-  // (Hackily) mark the just-added history entry as eligible for browsing
-  // topics. This field should *not* be synced.
-  history::HistoryService* history_service =
-      HistoryServiceFactory::GetForProfile(GetProfile(0),
-                                           ServiceAccessType::EXPLICIT_ACCESS);
-
-  history::ContextID context_id =
-      history::ContextIDForWebContents(GetActiveWebContents(0));
-  int nav_entry_id = GetActiveWebContents(0)
-                         ->GetController()
-                         .GetLastCommittedEntry()
-                         ->GetUniqueID();
-
-  history_service->SetBrowsingTopicsAllowed(context_id, nav_entry_id, url1);
-
-  // Navigate somewhere else, to "complete" the first visit and populate its
-  // duration.
-  GURL url2 =
-      embedded_test_server()->GetURL("synced2.com", "/sync/simple.html");
-  NavigateToURL(0, url2);
-
-  // Ensure the visit arrived on the server, including the duration. The
-  // browsing-topics-allowed bit should *not* be here, but there's no real way
-  // to check for its absence on the server. Instead, we'll check that on the
-  // second client, below.
-  EXPECT_TRUE(WaitForServerHistory(UnorderedElementsAre(
-      AllOf(UrlIs(url1.spec()), HasVisitDuration()), UrlIs(url2))));
-
-  // Wait for the visit to arrive on the second client.
-  EXPECT_TRUE(WaitForLocalHistory(
-      1, {{url1, UnorderedElementsAre(VisitRowHasDuration())}}));
-
-  // Finally, check that the local visit (on the first client) has the
-  // browsing-topics-allowed bit set, but the synced visit (on the second
-  // client) does not.
-  std::vector<history::AnnotatedVisit> local_visits =
-      history_helper::GetAnnotatedVisitsForURLFromClient(0, url1);
-  ASSERT_EQ(local_visits.size(), 1u);
-  history::AnnotatedVisit local_visit = local_visits[0];
-  EXPECT_TRUE(local_visit.content_annotations.annotation_flags &
-              history::VisitContentAnnotationFlag::kBrowsingTopicsEligible);
-
-  std::vector<history::AnnotatedVisit> synced_visits =
-      history_helper::GetAnnotatedVisitsForURLFromClient(1, url1);
-  ASSERT_EQ(synced_visits.size(), 1u);
-  history::AnnotatedVisit synced_visit = synced_visits[0];
-  EXPECT_FALSE(synced_visit.content_annotations.annotation_flags &
-               history::VisitContentAnnotationFlag::kBrowsingTopicsEligible);
-  // Just as a sanity check: Other visit fields *did* arrive.
-  EXPECT_FALSE(synced_visit.visit_row.visit_duration.is_zero());
 }
 
 }  // namespace

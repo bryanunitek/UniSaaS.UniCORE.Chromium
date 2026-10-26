@@ -8,8 +8,11 @@
 #include <string_view>
 
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "services/webnn/ort/environment.h"
 #include "services/webnn/ort/logging.h"
 #include "services/webnn/ort/ort_data_type.h"
@@ -18,6 +21,7 @@
 #include "services/webnn/public/cpp/ep_device_info.h"
 #include "services/webnn/public/cpp/execution_providers_info.h"
 #include "services/webnn/public/cpp/webnn_trace.h"
+#include "services/webnn/public/mojom/features.mojom.h"
 #include "services/webnn/public/mojom/webnn_error.mojom.h"
 #include "services/webnn/public/mojom/webnn_service_introspection.mojom.h"
 #include "services/webnn/webnn_switches.h"
@@ -50,7 +54,7 @@ EpSelectionPolicyDelegate(const OrtEpDevice** ep_devices,
   CHECK(context_options)
       << "CreateContextOptions must be provided in state parameter";
   OrtHardwareDeviceType device_type =
-      ort::WebnnToOrtDeviceType(context_options->device);
+      WebnnToOrtDeviceType(context_options->device);
 
   // SAFETY: ORT guarantees that `ep_devices` is valid and contains
   // `num_devices` elements.
@@ -105,25 +109,6 @@ std::optional<GraphOptimizationLevel> StringToOrtGraphOptimizationLevel(
                << ". Supported values: DISABLE_ALL, BASIC, EXTENDED, ALL. "
                << "Letting ORT decide the optimization level.";
   return std::nullopt;
-}
-
-std::optional<uint32_t> GetBatchedMatMulKDimensionLimit(
-    const OrtEpDevice* first_selected_device) {
-  const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
-
-  std::string_view ep_name = ort_api->EpDevice_EpName(first_selected_device);
-  const auto iter = kKnownEPs.find(ep_name);
-  if (iter == kKnownEPs.end()) {
-    return std::nullopt;
-  }
-
-  OrtHardwareDeviceType hardware_device_type = ort_api->HardwareDevice_Type(
-      ort_api->EpDevice_Device(first_selected_device));
-  if (hardware_device_type != OrtHardwareDeviceType_NPU) {
-    return std::nullopt;
-  }
-
-  return iter->second.workarounds.npu_batched_matmul_k_dimension_limit;
 }
 
 ScopedOrtSessionOptions CreateBaseSessionOptions(
@@ -186,6 +171,24 @@ ScopedOrtSessionOptions CreateBaseSessionOptions(
       /*config_key=*/kOrtSessionOptionsConfigStrictShapeTypeInference,
       /*config_value=*/"1"));
 
+  // Enable Cast chain elimination optimization. We need to insert bool <->
+  // uint8 Cast nodes in some cases since WebNN doesn't support bool data type
+  // but ONNX models may use bool type for some control flow. This optimization
+  // can help eliminate unnecessary Cast operations in the chain for bool type.
+  //
+  // NOTE: CastChainElimination is a Level1 (ORT_ENABLE_BASIC) rewrite rule, and
+  // it is AND-gated by both this flag and the graph optimization level: ORT
+  // only registers it inside the Level1 rule set (see
+  // graph_transformer_utils.cc). So this flag is necessary but not sufficient -
+  // at ORT_DISABLE_ALL the Level1 rules are not registered and this elimination
+  // does NOT run even with the flag set. Since it runs pre-partition, the level
+  // must be >= BASIC for any EP (including compiling EPs) to receive a graph
+  // with the bool<->uint8 chains already folded.
+  CHECK_STATUS(ort_api->AddSessionConfigEntry(
+      session_options.get(),
+      /*config_key=*/kOrtSessionOptionsEnableCastChainElimination,
+      /*config_value=*/"1"));
+
   // Only set graph optimization level if user provides a valid input.
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kWebNNOrtGraphOptimizationLevel)) {
@@ -203,7 +206,120 @@ ScopedOrtSessionOptions CreateBaseSessionOptions(
   return session_options;
 }
 
+// Applies the session config entries required by `ep_name`. No-op for an EP
+// that is not in `kKnownEPs`.
+void ApplyEpConfigEntries(const OrtApi* ort_api,
+                          OrtSessionOptions* session_options,
+                          std::string_view ep_name) {
+  const auto ep_it = kKnownEPs.find(ep_name);
+  if (ep_it == kKnownEPs.end()) {
+    return;
+  }
+  for (const auto& [key, value] : ep_it->second.config_entries) {
+    CHECK_STATUS(ort_api->AddSessionConfigEntry(session_options, key.c_str(),
+                                                value.c_str()));
+  }
+}
+
+// Binds `target_ort_device` directly, bypassing the auto EP selection policy,
+// pins the session to that EP, and applies the EP's required config entries.
+// Shared by every path that targets a single specific device.
+void BindToTargetDevice(const OrtApi* ort_api,
+                        OrtSessionOptions* session_options,
+                        std::string_view ep_name,
+                        const OrtEnv* env,
+                        const OrtEpDevice* target_ort_device) {
+  CHECK_STATUS(ort_api->SessionOptionsAppendExecutionProvider_V2(
+      session_options, const_cast<OrtEnv*>(env), &target_ort_device,
+      /*num_ep_devices=*/1, /*ep_option_keys=*/nullptr,
+      /*ep_option_vals=*/nullptr, /*num_ep_options=*/0));
+
+  // Disable CPU EP fallback to ensure the session lands on the expected EP
+  // device.
+  CHECK_STATUS(ort_api->AddSessionConfigEntry(
+      session_options, kOrtSessionOptionsDisableCPUEPFallback, "1"));
+
+  // Setting the intra-op thread count to 1 stops ORT from eagerly spawning an
+  // intra-op thread pool per session. That pool only executes CPU kernels
+  // during graph execution, which never happens here since CPU EP fallback is
+  // disabled above.
+  CHECK_STATUS(ort_api->SetIntraOpNumThreads(session_options, 1));
+
+  ApplyEpConfigEntries(ort_api, session_options, ep_name);
+}
+
+// Builds the session options shared by both the GPU-process dispatch session
+// and the Compiler-process compile/warmup sessions.
+ScopedOrtSessionOptions CreateSessionOptionsForTargetDevice(
+    std::string_view ep_name,
+    const OrtEnv* env,
+    const OrtEpDevice* target_ort_device) {
+  const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
+  ScopedOrtSessionOptions session_options = CreateBaseSessionOptions(ep_name);
+  BindToTargetDevice(ort_api, session_options.get(), ep_name, env,
+                     target_ort_device);
+  return session_options;
+}
+
 }  // namespace
+
+ScopedOrtSessionOptions CreateTrivialModelSessionOptions(
+    const OrtEnv* env,
+    const OrtEpDevice* ep_device) {
+  const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
+  ScopedOrtSessionOptions session_options;
+  CHECK_STATUS(ort_api->CreateSessionOptions(
+      ScopedOrtSessionOptions::Receiver(session_options).get()));
+  BindToTargetDevice(ort_api, session_options.get(),
+                     ort_api->EpDevice_EpName(ep_device), env, ep_device);
+  return session_options;
+}
+
+void ApplySessionConfigEntriesFromCommandLine(
+    OrtSessionOptions* session_options,
+    const base::CommandLine& command_line) {
+  const std::string switch_value = command_line.GetSwitchValueASCII(
+      switches::kWebNNOrtSessionConfigEntriesForTesting);
+  if (switch_value.empty()) {
+    return;
+  }
+
+  std::vector<std::string_view> parts = base::SplitStringPiece(
+      switch_value, ",", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
+  CHECK_EQ(parts.size() % 2, 0u)
+      << "--" << switches::kWebNNOrtSessionConfigEntriesForTesting
+      << " must use the format <key>,<value>[,<key>,<value>...]; received \""
+      << switch_value << "\".";
+
+  const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
+
+  for (size_t i = 0; i < parts.size(); i += 2) {
+    const std::string key(base::TrimWhitespaceASCII(parts[i], base::TRIM_ALL));
+    const std::string value(parts[i + 1]);
+    CHECK(!key.empty()) << "--"
+                        << switches::kWebNNOrtSessionConfigEntriesForTesting
+                        << " requires a non-empty key; received \""
+                        << switch_value << "\".";
+
+    int has_entry = 0;
+    CHECK_STATUS(ort_api->HasSessionConfigEntry(session_options, key.c_str(),
+                                                &has_entry));
+    CHECK(!has_entry)
+        << "--" << switches::kWebNNOrtSessionConfigEntriesForTesting
+        << " cannot replace existing session configuration entry \"" << key
+        << "\" with value \"" << value << "\".";
+
+    // Keep the failing pair in the fatal diagnostic. CHECK_STATUS would only
+    // report ORT's status.
+    ScopedOrtStatus status(ort_api->AddSessionConfigEntry(
+        session_options, key.c_str(), value.c_str()));
+    CHECK(!status.is_valid())
+        << "Failed to apply --"
+        << switches::kWebNNOrtSessionConfigEntriesForTesting << " entry \""
+        << key << "," << value << "\" from \"" << switch_value
+        << "\": " << internal::OrtStatusErrorMessage(status.get());
+  }
+}
 
 // static
 base::expected<scoped_refptr<SessionOptions>, std::string>
@@ -215,8 +331,7 @@ SessionOptions::Create(mojom::CreateContextOptionsPtr context_options,
       env->GetRegisteredEpDevices();
   std::vector<const OrtEpDevice*> selected_ep_devices =
       Environment::SelectEpDevices(
-          registered_ep_devices,
-          ort::WebnnToOrtDeviceType(context_options->device));
+          registered_ep_devices, WebnnToOrtDeviceType(context_options->device));
   if (selected_ep_devices.empty()) {
     return base::unexpected("No execution provider device available.");
   }
@@ -227,24 +342,13 @@ SessionOptions::Create(mojom::CreateContextOptionsPtr context_options,
   ScopedOrtSessionOptions session_options =
       CreateBaseSessionOptions(ort_api->EpDevice_EpName(first_selected_device));
 
-  // Apply required session configs for selected EPs.
+  // Apply required session configs for each distinct selected EP.
   std::set<std::string_view> processed_ep_names;
   for (const auto* ep_device : selected_ep_devices) {
     CHECK(ep_device);
     std::string_view ep_name = ort_api->EpDevice_EpName(ep_device);
-    // Skip if we've already processed this EP.
-    if (processed_ep_names.contains(ep_name)) {
-      continue;
-    }
-    processed_ep_names.insert(ep_name);
-
-    const auto ep_it = kKnownEPs.find(ep_name);
-    if (ep_it == kKnownEPs.end()) {
-      continue;
-    }
-    for (const auto& [key, value] : ep_it->second.config_entries) {
-      CHECK_STATUS(ort_api->AddSessionConfigEntry(session_options.get(),
-                                                  key.c_str(), value.c_str()));
+    if (processed_ep_names.insert(ep_name).second) {
+      ApplyEpConfigEntries(ort_api, session_options.get(), ep_name);
     }
   }
 
@@ -254,66 +358,102 @@ SessionOptions::Create(mojom::CreateContextOptionsPtr context_options,
         session_options.get(), kOrtSessionOptionsDisableCPUEPFallback, "1"));
   }
 
+  // Apply the testing entries after WebNN and EP defaults. Existing entries
+  // cannot be replaced and fail fast with the conflicting key and value.
+  ApplySessionConfigEntriesFromCommandLine(
+      session_options.get(), *base::CommandLine::ForCurrentProcess());
+
   return base::MakeRefCounted<SessionOptions>(
       base::PassKey<SessionOptions>(), std::move(session_options),
-      std::move(env), selected_ep_devices.front(), std::move(context_options));
+      std::move(env), first_selected_device, std::move(context_options));
 }
 
 // static
-scoped_refptr<SessionOptions> SessionOptions::Create(
+scoped_refptr<SessionOptions> SessionOptions::CreateForDispatch(
     const EpDeviceInfo& target_device,
     scoped_refptr<Environment> env) {
+  CHECK(base::FeatureList::IsEnabled(mojom::features::kWebNNCompilerProcess));
+
   const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
 
-  // Ensure the specified EP device is registered in the environment.
-  const OrtEpDevice* target_ort_device = nullptr;
-  base::span<const OrtEpDevice* const> registered_devices =
-      env->GetRegisteredEpDevices();
-  for (const auto* registered_device : registered_devices) {
-    const OrtHardwareDevice* hardware_device =
-        ort_api->EpDevice_Device(registered_device);
-    std::string_view ep_name = ort_api->EpDevice_EpName(registered_device);
-    OrtHardwareDeviceType hardware_device_type =
-        ort_api->HardwareDevice_Type(hardware_device);
-    uint32_t device_id = ort_api->HardwareDevice_DeviceId(hardware_device);
+  // The target device was validated and registered during Environment
+  // initialization, so it must be present.
+  const OrtEpDevice* target_ort_device =
+      env->FindRegisteredEpDevice(target_device);
+  CHECK(target_ort_device);
 
-    if (target_device.ep_name == ep_name &&
-        WebnnToOrtDeviceType(target_device.device_type) ==
-            hardware_device_type &&
-        target_device.device_id == device_id) {
-      target_ort_device = registered_device;
-      break;
-    }
-  }
-  CHECK(target_ort_device) << "[WebNN] Target EP device not registered: "
-                           << target_device.ep_name
-                           << " with device type: " << target_device.device_type
-                           << " and ID: 0x" << std::hex
-                           << target_device.device_id;
+  ScopedOrtSessionOptions session_options = CreateSessionOptionsForTargetDevice(
+      target_device.ep_name, env->get(), target_ort_device);
 
-  ScopedOrtSessionOptions session_options =
-      CreateBaseSessionOptions(target_device.ep_name);
+  // Consume the compiled model with graph optimizations disabled. In the
+  // offline-compile flow the GPU process loads a model that the sandboxed
+  // Compiler process already fully optimized (it runs at ORT_ENABLE_ALL, see
+  // compiler_context_impl_ort.cc), so re-optimizing here would be wasted work.
+  // More importantly, this is a security boundary: the high-privilege GPU
+  // process must not run graph transformation over attacker-influenced input,
+  // so all transformation is confined to the sandboxed Compiler process. This
+  // overrides any --webnn-ort-graph-optimization-level switch applied in the
+  // base options, which is intended: the security boundary is not a
+  // debug-tunable knob.
+  CHECK_STATUS(ort_api->SetSessionGraphOptimizationLevel(session_options.get(),
+                                                         ORT_DISABLE_ALL));
 
-  // Disable CPU EP fallback to ensure the session will be created on the
-  // expected EP device.
+  // Disable model compilation in the GPU process, forcing all compilation on
+  // compiling EPs to only happen in the Compiler process. This way a
+  // compromised Compiler process can't cause the high-privilege GPU process to
+  // run less safe code than intended.
   CHECK_STATUS(ort_api->AddSessionConfigEntry(
-      session_options.get(), kOrtSessionOptionsDisableCPUEPFallback, "1"));
+      session_options.get(), kOrtSessionOptionsDisableModelCompile, "1"));
 
-  const auto ep_it = kKnownEPs.find(target_device.ep_name);
-  if (ep_it != kKnownEPs.end()) {
-    for (const auto& [key, value] : ep_it->second.config_entries) {
-      CHECK_STATUS(ort_api->AddSessionConfigEntry(session_options.get(),
-                                                  key.c_str(), value.c_str()));
-    }
-  }
+  // Enforce the model format to be ONNX so ORT-format models are rejected.
+  // Ensure that a compromised Compiler process cannot feed a crafted ORT-format
+  // model buffer to the GPU process.
+  CHECK_STATUS(ort_api->AddSessionConfigEntry(
+      session_options.get(), kOrtSessionOptionsConfigLoadModelFormat, "ONNX"));
 
-  // Directly bind the target device to the session options, bypassing the
-  // auto EP selection policy.
-  CHECK_STATUS(ort_api->SessionOptionsAppendExecutionProvider_V2(
-      session_options.get(), const_cast<OrtEnv*>(env->get()),
-      &target_ort_device,
-      /*num_ep_devices=*/1, /*ep_option_keys=*/nullptr,
-      /*ep_option_vals=*/nullptr, /*num_ep_options=*/0));
+  // Disable ahead-of-time function inlining to reduce the attack surface in the
+  // GPU process.
+  CHECK_STATUS(ort_api->AddSessionConfigEntry(
+      session_options.get(),
+      kOrtSessionOptionsDisableAheadOfTimeFunctionInlining, "1"));
+
+  // Block external initializer file reads. The all-zero volume GUID is never
+  // assigned by Windows, so ORT cannot resolve any external data path to a real
+  // file.
+  CHECK_STATUS(ort_api->AddSessionConfigEntry(
+      session_options.get(),
+      kOrtSessionOptionsModelExternalInitializersFileFolderPath,
+      "\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\"));
+
+  // Apply the testing entries only after dispatch hardening so none of the
+  // security settings above can be replaced.
+  ApplySessionConfigEntriesFromCommandLine(
+      session_options.get(), *base::CommandLine::ForCurrentProcess());
+
+  return base::MakeRefCounted<SessionOptions>(
+      base::PassKey<SessionOptions>(), std::move(session_options),
+      std::move(env), target_ort_device, /*context_options=*/nullptr);
+}
+
+// static
+scoped_refptr<SessionOptions> SessionOptions::CreateForCompilation(
+    const EpDeviceInfo& target_device,
+    scoped_refptr<Environment> env) {
+  CHECK(base::FeatureList::IsEnabled(mojom::features::kWebNNCompilerProcess));
+
+  // The target device was validated and registered during Environment
+  // initialization, so it must be present.
+  const OrtEpDevice* target_ort_device =
+      env->FindRegisteredEpDevice(target_device);
+  CHECK(target_ort_device);
+
+  ScopedOrtSessionOptions session_options = CreateSessionOptionsForTargetDevice(
+      target_device.ep_name, env->get(), target_ort_device);
+
+  // Apply the testing entries after WebNN, EP, and OrtEpDevice defaults.
+  // Existing entries cannot be replaced and fail fast.
+  ApplySessionConfigEntriesFromCommandLine(
+      session_options.get(), *base::CommandLine::ForCurrentProcess());
 
   return base::MakeRefCounted<SessionOptions>(
       base::PassKey<SessionOptions>(), std::move(session_options),
@@ -328,8 +468,6 @@ SessionOptions::SessionOptions(base::PassKey<SessionOptions>,
     : session_options_(std::move(session_options)),
       env_(std::move(env)),
       first_selected_device_(first_selected_device),
-      batched_matmul_k_dimension_limit_(
-          GetBatchedMatMulKDimensionLimit(first_selected_device)),
       context_options_(std::move(context_options)) {
   // Set the EP selection policy delegate if `context_options_` is provided.
   if (context_options_) {

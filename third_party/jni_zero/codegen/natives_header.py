@@ -6,9 +6,14 @@
 from codegen import convert_type
 from codegen import header_common
 import common
+import java_types
 
 
 def _return_type_cpp_non_mirror(java_type):
+  if java_type.is_safe_pointer():
+    # Marshalled to a Java wrapper object at the JNI boundary; see
+    # entry_point_method().
+    return java_type.to_backend_cpp_type()
   if converted_type := java_type.converted_type:
     return converted_type
   if java_type.is_primitive():
@@ -24,6 +29,8 @@ def _return_type_cpp_mirror(java_type):
 
 
 def _param_type_cpp_non_mirror(java_type, use_const=False):
+  if java_type.is_safe_pointer():
+    return java_type.to_backend_cpp_type()
   if converted_type := java_type.converted_type:
     # Drop & when the type is obviously a pointer to avoid "const char *&".
     if not java_type.is_primitive() and not converted_type.endswith('*'):
@@ -43,19 +50,6 @@ def _param_type_cpp_mirror(java_type, use_const=False):
     jobject_type = java_type.to_mirror_cpp()
     return f'const jni_zero::JavaRef<{jobject_type}>&'
   return _param_type_cpp_non_mirror(java_type, use_const)
-
-
-def _impl_forward_declaration(sb, native, params):
-  sb('// Forward declaration. To be implemented by the including .cc file.\n')
-  with sb.statement():
-    name = f'JNI_{native.java_class.name}_{native.capitalized_name}'
-    sb(f'static {_return_type_cpp_non_mirror(native.return_type)} {name}')
-    with sb.param_list() as plist:
-      plist.append('JNIEnv* env')
-      if not native.static:
-        plist.append('const jni_zero::JavaRef<jobject>& jcaller')
-      plist.extend(f'{_param_type_cpp_non_mirror(p.java_type)} {p.cpp_name()}'
-                   for p in params)
 
 
 def _entry_point_example(sb, native):
@@ -78,19 +72,27 @@ def _entry_point_example(sb, native):
                    f'{p.cpp_name()}' for p in params)
 
 
-def _prep_param(sb, param, native, include_forward_declaration):
+def _prep_param(sb, param, native):
   """Returns the snippet to use for the parameter."""
   orig_name = param.cpp_name()
   java_type = param.java_type
+
+  if java_type.is_safe_pointer():
+    assert java_type.java_class == java_types.JNI_PTR_CLASS, (
+        f'Only JniPtr is supported as a parameter in proxy native methods; '
+        f'got {java_type.java_class}.')
+    cpp_type = java_type.to_backend_cpp_type()
+    ret = f'{param.name}_converted'
+    with sb.statement():
+      sb(f'{cpp_type} {ret} = reinterpret_cast<{cpp_type}>({orig_name})')
+    return ret
 
   if java_type.converted_type:
     ret = f'{param.name}_converted'
     with sb.statement():
       sb(f'{java_type.converted_type} {ret} = ')
       convert_type.from_jni_expression(sb, orig_name, java_type)
-    if not include_forward_declaration:
-      ret = f'std::move({ret})'
-    return ret
+    return f'std::move({ret})'
 
   if java_type.is_primitive():
     return orig_name
@@ -113,6 +115,8 @@ def _prep_param(sb, param, native, include_forward_declaration):
 
 def _param_type_for_assert_message(param):
   param_type = param.java_type
+  if param_type.is_safe_pointer():
+    return param_type.to_backend_cpp_type()
   if param_type.converted_type:
     return param_type.converted_type
   if param_type.is_primitive():
@@ -151,19 +155,12 @@ def entry_point_method(sb,
                        native,
                        gen_jni_class,
                        output_file,
-                       include_forward_declaration=False,
                        marker_func_name=None):
   """The method called by JNI, or by multiplexing methods."""
   params = native.params
   cpp_class = native.first_param_cpp_type
   if cpp_class:
     params = params[1:]
-
-  if include_forward_declaration:
-    # Only non-class methods need to be forward-declared.
-    if not cpp_class:
-      _impl_forward_declaration(sb, native, params)
-      sb('\n')
 
   entry_point_declaration(sb, jni_mode, jni_obj, native, gen_jni_class)
 
@@ -183,10 +180,7 @@ def entry_point_method(sb,
       sb(f'{marker_func_name}();\n')
       sb('\n')
 
-    param_rvalues = [
-        _prep_param(sb, param, native, include_forward_declaration)
-        for param in params
-    ]
+    param_rvalues = [_prep_param(sb, param, native) for param in params]
     if not native.static:
       param_rvalues.insert(
           0, 'jni_zero::JavaRef<jobject>::CreateLeaky(env, jcaller)')
@@ -243,11 +237,32 @@ def entry_point_method(sb,
           sb(f'static_assert(false, "{msg}")')
 
     with sb.statement():
-      if not return_type.is_void():
+      if return_type.is_safe_pointer():
+        sb(f'{return_type.to_backend_cpp_type()} return_value = ')
+      elif not return_type.is_void():
         sb('auto return_value = ')
       sb('dependent_context(0)')
 
     if return_type.is_void():
+      return
+
+    if return_type.is_safe_pointer():
+      # Construct the Java wrapper object on the native side and return it as
+      # a local ref.
+      if return_type.java_class == java_types.JNI_UNIQUE_PTR_CLASS:
+        sb('auto _deleter = return_value.deleter_address();\n')
+        with sb.statement():
+          sb('return ::jni_zero::internal::CreateJavaJniUniquePtr(env, '
+             'reinterpret_cast<jlong>(return_value.release()), '
+             '_deleter).ReleaseLocal()')
+      elif return_type.java_class == java_types.JNI_RAW_PTR_CLASS:
+        with sb.statement():
+          sb('return ::jni_zero::internal::CreateJavaJniRawPtr(env, '
+             'reinterpret_cast<jlong>(return_value.get())).ReleaseLocal()')
+      else:
+        raise ValueError(
+            'JniPtr cannot be a @NativeMethods return type; this should have '
+            'been rejected during parsing.')
       return
 
     if not return_type.converted_type:
@@ -280,12 +295,11 @@ def entry_point_method(sb,
         sb('converted_ret')
 
 
-def natives_macro_definition(sb, jni_mode, jni_obj, gen_jni_class, output_file, *,
-                             enable_definition_macros):
+def natives_macro_definition(sb, jni_mode, jni_obj, gen_jni_class, output_file):
   class_name = jni_obj.java_class.name
   macro_name = f'DEFINE_JNI_FOR_{class_name}'
   marker_func_name = f'YouForgotToCallMacro_DEFINE_JNI_{class_name}'
-  if enable_definition_macros and jni_obj.natives:
+  if jni_obj.natives:
     with sb.section(
         'Example signatures (to be implemented by #including file).'):
       with sb.commented_section():
@@ -317,11 +331,8 @@ def natives_macro_definition(sb, jni_mode, jni_obj, gen_jni_class, output_file, 
                                marker_func_name=marker_func_name)
             # Needs to be included only once to be marked as used.
             marker_func_name = None
-  elif enable_definition_macros:
-    sb(f'// There are no Java->Native methods.\n')
-    sb(f'#define {macro_name}()\n')
   else:
-    sb(f'// Macro for transition to enable_definition_macros=true.\n')
+    sb(f'// There are no Java->Native methods.\n')
     sb(f'#define {macro_name}()\n')
 
 

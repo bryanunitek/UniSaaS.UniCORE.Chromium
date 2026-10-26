@@ -62,6 +62,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/devicetype_utils.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/events/event_constants.h"
@@ -74,9 +75,6 @@ namespace ash {
 namespace {
 
 constexpr int kQsDetailedViewHeight = 464;
-constexpr char kQuickSettingsPageCountOnClose[] =
-    "Ash.QuickSettings.PageCountOnClose";
-
 }  // namespace
 
 using message_center::MessageCenter;
@@ -440,46 +438,6 @@ TEST_P(UnifiedSystemTrayTest, TimeInQuickSettingsMetric) {
                                     /*count=*/2);
 }
 
-// Tests that the number of quick settings pages is recorded when the QS bubble
-// is closed.
-TEST_P(UnifiedSystemTrayTest, QuickSettingsPageCountMetric) {
-  base::HistogramTester histogram_tester;
-
-  // Show the bubble with one page and verify that nothing is recorded yet.
-  auto* tray = GetPrimaryUnifiedSystemTray();
-  tray->ShowBubble();
-  tray->bubble()
-      ->unified_system_tray_controller()
-      ->model()
-      ->pagination_model()
-      ->SetTotalPages(1);
-  histogram_tester.ExpectTotalCount(kQuickSettingsPageCountOnClose, 0);
-
-  // Close the bubble and verify that the metric is recorded.
-  tray->CloseBubble();
-  histogram_tester.ExpectTotalCount(kQuickSettingsPageCountOnClose, 1);
-  histogram_tester.ExpectBucketCount(kQuickSettingsPageCountOnClose,
-                                     /*sample=*/1,
-                                     /*expected_count=*/1);
-
-  // Show the bubble with two pages, and verify that the metric is recorded when
-  // the bubble is closed.
-  tray->ShowBubble();
-  tray->bubble()
-      ->unified_system_tray_controller()
-      ->model()
-      ->pagination_model()
-      ->SetTotalPages(2);
-  tray->CloseBubble();
-  histogram_tester.ExpectTotalCount(kQuickSettingsPageCountOnClose, 2);
-  histogram_tester.ExpectBucketCount(kQuickSettingsPageCountOnClose,
-                                     /*sample=*/2,
-                                     /*expected_count=*/1);
-  histogram_tester.ExpectBucketCount(kQuickSettingsPageCountOnClose,
-                                     /*sample=*/1,
-                                     /*expected_count=*/1);
-}
-
 // Tests that pressing the TOGGLE_CALENDAR accelerator once results in the
 // calendar view showing.
 TEST_P(UnifiedSystemTrayTest, PressCalendarAccelerator) {
@@ -717,16 +675,16 @@ TEST_P(UnifiedSystemTrayTest, TrayBackgroundColorAfterSwitchToTabletMode) {
       Shell::Get()->tablet_mode_controller();
 
   tablet_mode_controller->SetEnabledForTest(false);
-  EXPECT_EQ(tray->layer()->background_color(),
+  EXPECT_EQ(tray->layer()->AsSolidColor()->background_color().toSkColor(),
             ShelfConfig::Get()->GetShelfControlButtonColor(widget));
 
   tablet_mode_controller->SetEnabledForTest(true);
-  EXPECT_EQ(tray->layer()->background_color(),
+  EXPECT_EQ(tray->layer()->AsSolidColor()->background_color().toSkColor(),
             widget->GetColorProvider()->GetColor(
                 cros_tokens::kCrosSysSystemBaseElevated));
 
   tablet_mode_controller->SetEnabledForTest(false);
-  EXPECT_EQ(tray->layer()->background_color(),
+  EXPECT_EQ(tray->layer()->AsSolidColor()->background_color().toSkColor(),
             ShelfConfig::Get()->GetShelfControlButtonColor(widget));
 }
 
@@ -1011,13 +969,17 @@ TEST_F(PowerTrayViewTest, AccessibleName) {
 class UnifiedSystemTrayAccessibilityTest : public AshTestBase {
  public:
   // AshTestBase:
-  void SetUp() override {
+  void SetUpInitParams(AshTestHelper::InitParams& init_params) override {
+    AshTestBase::SetUpInitParams(init_params);
     // Force the channel to return version_info::Channel::BETA so that the
     // ChannelIndicatorView gets created.
     std::unique_ptr<TestShellDelegate> shell_delegate =
         std::make_unique<TestShellDelegate>();
     shell_delegate->set_channel(version_info::Channel::BETA);
-    set_shell_delegate(std::move(shell_delegate));
+    init_params.delegate = std::move(shell_delegate);
+  }
+
+  void SetUp() override {
     AshTestBase::SetUp();
 
     scoped_fake_power_status_ = std::make_unique<ScopedFakePowerStatus>();
@@ -1133,7 +1095,7 @@ class UnifiedSystemTrayAccessibilityTest : public AshTestBase {
                                  user_manager::UserType user_type) {
     // Create a fake user prefs map.
     ClearLogin();
-    SimulateUserLogin({user_email, user_type}, account_id);
+    SimulateUserLogin({.account_id = account_id, .user_type = user_type});
   }
 
  protected:

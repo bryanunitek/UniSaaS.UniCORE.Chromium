@@ -26,6 +26,7 @@
 #include "components/omnibox/browser/keyword_provider.h"
 #include "components/omnibox/browser/match_compare.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
+#include "components/omnibox/browser/page_classification_functions.h"
 #include "components/omnibox/browser/scoring_functor.h"
 #include "components/omnibox/browser/tab_matcher.h"
 #include "components/query_parser/query_parser.h"
@@ -118,7 +119,7 @@ std::pair<int, std::u16string> Score(
 }  // namespace
 
 TabGroupProvider::TabGroupProvider(AutocompleteProviderClient* client)
-    : AutocompleteProvider(AutocompleteProvider::TYPE_OPEN_TAB),
+    : AutocompleteProvider(AutocompleteProvider::Type::kOpenTab),
       client_(client) {}
 
 TabGroupProvider::~TabGroupProvider() = default;
@@ -127,8 +128,7 @@ TabGroupProvider::~TabGroupProvider() = default;
 void TabGroupProvider::Start(const AutocompleteInput& input,
                              bool minimal_changes) {
   Stop(AutocompleteStopReason::kClobbered);
-  if (input.current_page_classification() !=
-          ::metrics::OmniboxEventProto::ANDROID_HUB ||
+  if (!omnibox::IsAndroidHubOrTabSearch(input.current_page_classification()) ||
       client_->IsOffTheRecord()) {
     return;
   }
@@ -164,8 +164,9 @@ AutocompleteMatch TabGroupProvider::CreateTabGroupMatch(
     int score,
     const std::u16string& matching_url) {
   AutocompleteMatch match(this, score, /*deletable=*/false,
-                          AutocompleteMatchType::TAB_GROUP);
+                          omnibox::AutocompleteMatchType::kTabGroup);
   match.contents = group.title();
+  match.fill_into_edit = match.contents;
   auto contents_terms = FindTermMatches(input.text(), match.contents);
   match.contents_class = ClassifyTermMatches(
       contents_terms, match.contents.size(), ACMatchClassification::MATCH,

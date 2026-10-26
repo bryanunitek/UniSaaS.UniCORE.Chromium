@@ -75,6 +75,8 @@ class VIEWS_EXPORT DesktopWindowTreeHostLinux
   void Init(const Widget::InitParams& params) override;
   void OnNativeWidgetCreated(const Widget::InitParams& params) override;
   void InitModalType(ui::mojom::ModalType modal_type) override;
+  void PrepareForMoveLoop(Widget::MoveLoopSource source) override;
+  void SetBypassWindowManager(bool bypass) override;
   Widget::MoveLoopResult RunMoveLoop(
       const gfx::Vector2d& drag_offset,
       Widget::MoveLoopSource source,
@@ -102,6 +104,14 @@ class VIEWS_EXPORT DesktopWindowTreeHostLinux
  private:
   FRIEND_TEST_ALL_PREFIXES(DesktopWindowTreeHostPlatformImplTestWithTouch,
                            HitTest);
+  FRIEND_TEST_ALL_PREFIXES(DesktopWindowTreeHostPlatformImplTest,
+                           CaptionHoldSuppressesDataDrag);
+  FRIEND_TEST_ALL_PREFIXES(DesktopWindowTreeHostPlatformImplTest,
+                           CaptionClickReleaseEndsDragSuppression);
+  FRIEND_TEST_ALL_PREFIXES(DesktopWindowTreeHostPlatformImplTest,
+                           CaptionTouchHoldSuppressesDataDrag);
+  FRIEND_TEST_ALL_PREFIXES(DesktopWindowTreeHostPlatformImplTest,
+                           CaptionTouchEndsDragSuppression);
 
   // DesktopWindowTreeHostPlatform:
   base::flat_map<std::string, std::string> GetKeyboardLayoutMap() override;

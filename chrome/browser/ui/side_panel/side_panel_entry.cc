@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
 
+#include <string>
+
 #include "base/functional/callback_helpers.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -11,7 +13,11 @@
 #include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/side_panel/side_panel_metrics.h"
 
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(std::u16string, kSidePanelTitleKey)
+#else
 DEFINE_UI_CLASS_PROPERTY_KEY(bool, kShouldShowTitleInSidePanelHeaderKey, true)
+#endif
 
 SidePanelEntry::SidePanelEntry(
     Key key,
@@ -25,8 +31,9 @@ SidePanelEntry::SidePanelEntry(
       create_content_callback_(std::move(create_content_callback)),
       open_in_new_tab_url_callback_(std::move(open_in_new_tab_url_callback)),
       more_info_callback_(std::move(more_info_callback)),
-      default_content_width_callback_(default_content_width_callback) {
-  DCHECK(create_content_callback_);
+      default_content_width_callback_(
+          std::move(default_content_width_callback)) {
+  CHECK(create_content_callback_, base::NotFatalUntil::M162);
 }
 
 SidePanelEntry::SidePanelEntry(
@@ -39,8 +46,9 @@ SidePanelEntry::SidePanelEntry(
       create_content_callback_(std::move(create_content_callback)),
       open_in_new_tab_url_callback_(base::NullCallback()),
       more_info_callback_(base::NullCallback()),
-      default_content_width_callback_(default_content_width_callback) {
-  DCHECK(create_content_callback_);
+      default_content_width_callback_(
+          std::move(default_content_width_callback)) {
+  CHECK(create_content_callback_, base::NotFatalUntil::M162);
 }
 
 SidePanelEntry::SidePanelEntry(
@@ -50,7 +58,7 @@ SidePanelEntry::SidePanelEntry(
     : SidePanelEntry(SidePanelType::kContent,
                      key,
                      std::move(create_content_callback),
-                     default_content_width_callback) {}
+                     std::move(default_content_width_callback)) {}
 
 SidePanelEntry::~SidePanelEntry() = default;
 
@@ -96,6 +104,10 @@ void SidePanelEntry::OnEntryHidden() {
 }
 
 #if BUILDFLAG(IS_ANDROID)
+void SidePanelEntry::OnEntryShowDeferred() {
+  observers_.Notify(&SidePanelEntryObserver::OnEntryShowDeferred, this);
+}
+
 void SidePanelEntry::OnEntryHiddenWithReason(SidePanelEntryHideReason reason) {
   observers_.Notify(&SidePanelEntryObserver::OnEntryHiddenWithReason, this,
                     reason);

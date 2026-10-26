@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ash/arc/session/arc_requirement_checker.h"
 
+#include "base/check.h"
+#include "base/check_deref.h"
 #include "chrome/browser/ash/arc/arc_optin_uma.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/optin/arc_terms_of_service_default_negotiator.h"
@@ -15,11 +17,15 @@
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
+#include "chromeos/ash/components/signin/identity_manager_provider.h"
 #include "chromeos/ash/experiences/arc/arc_features.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
+#include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
+#include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
@@ -47,11 +53,18 @@ policy::DeviceManagementService* GetDeviceManagementService() {
   return connector->device_management_service();
 }
 
+// Returns the AccountId for `profile`, which is only ever annotated on the
+// original profile -- unwrap to it first in case `profile` is off-the-record.
+const AccountId& GetAccountId(Profile* profile) {
+  return CHECK_DEREF(
+      ash::AnnotatedAccountId::Get(profile->GetOriginalProfile()));
+}
+
 // Returns the Device Account Id. Assumes that |profile| is the only Profile
 // on Chrome OS.
 CoreAccountId GetDeviceAccountId(Profile* profile) {
   const auto* const identity_manager =
-      IdentityManagerFactory::GetForProfile(profile);
+      ash::IdentityManagerProvider::Get().Find(GetAccountId(profile));
 
   // The account is the same whether or not the user consented to browser sync.
   return identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
@@ -61,7 +74,7 @@ std::unique_ptr<ArcAndroidManagementChecker> CreateAndroidManagementChecker(
     Profile* profile,
     bool retry_on_error) {
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(profile);
+      ash::IdentityManagerProvider::Get().Find(GetAccountId(profile));
   const CoreAccountId device_account_id = GetDeviceAccountId(profile);
   return std::make_unique<ArcAndroidManagementChecker>(
       profile, identity_manager, device_account_id, retry_on_error,
@@ -81,10 +94,12 @@ ArcRequirementChecker::GetDefaultAndroidManagementCheckerFactory() {
 }
 
 ArcRequirementChecker::ArcRequirementChecker(
+    metrics::MetricsService* metrics_service,
     Profile* profile,
     ArcSupportHost* support_host,
     AndroidManagementCheckerFactory android_management_checker_factory)
-    : profile_(profile),
+    : metrics_service_(metrics_service),
+      profile_(profile),
       support_host_(support_host),
       android_management_checker_factory_(android_management_checker_factory) {}
 
@@ -130,11 +145,11 @@ void ArcRequirementChecker::EmulateRequirementCheckCompletionForTesting() {
 void ArcRequirementChecker::StartRequirementChecks(
     bool is_terms_of_service_negotiation_needed,
     StartRequirementChecksCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::kStopped);
-  DCHECK(profile_);
-  DCHECK(!terms_of_service_negotiator_);
-  DCHECK(!requirement_check_callback_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::kStopped, base::NotFatalUntil::M160);
+  CHECK(profile_, base::NotFatalUntil::M160);
+  CHECK(!terms_of_service_negotiator_, base::NotFatalUntil::M160);
+  CHECK(!requirement_check_callback_, base::NotFatalUntil::M160);
 
   state_ = State::kNegotiatingTermsOfService;
   requirement_check_callback_ = std::move(callback);
@@ -156,10 +171,10 @@ void ArcRequirementChecker::StartRequirementChecks(
         std::make_unique<ArcTermsOfServiceOobeNegotiator>();
   } else if (support_host_) {
     VLOG(1) << "Use default negotiator.";
+    CHECK(metrics_service_);
     terms_of_service_negotiator_ =
         std::make_unique<ArcTermsOfServiceDefaultNegotiator>(
-            profile_->GetPrefs(), support_host_,
-            g_browser_process->metrics_service());
+            profile_->GetPrefs(), support_host_, metrics_service_);
   } else {
     DCHECK(!g_ui_enabled) << "Negotiator is not created on production.";
     return;
@@ -172,11 +187,11 @@ void ArcRequirementChecker::StartRequirementChecks(
 
 void ArcRequirementChecker::StartBackgroundChecks(
     StartBackgroundChecksCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::kStopped);
-  DCHECK(!android_management_checker_);
-  DCHECK(!background_check_callback_);
-  DCHECK(!wait_for_policy_timer_.IsRunning());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::kStopped, base::NotFatalUntil::M160);
+  CHECK(!android_management_checker_, base::NotFatalUntil::M160);
+  CHECK(!background_check_callback_, base::NotFatalUntil::M160);
+  CHECK(!wait_for_policy_timer_.IsRunning(), base::NotFatalUntil::M160);
 
   state_ = State::kCheckingAndroidManagementBackground;
   background_check_callback_ = std::move(callback);
@@ -193,20 +208,23 @@ void ArcRequirementChecker::StartBackgroundChecks(
 }
 
 void ArcRequirementChecker::OnFirstPoliciesLoaded(policy::PolicyDomain domain) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::kWaitingForPoliciesBackground);
-  DCHECK_EQ(domain, policy::POLICY_DOMAIN_CHROME);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::kWaitingForPoliciesBackground,
+           base::NotFatalUntil::M160);
+  CHECK_EQ(domain, policy::POLICY_DOMAIN_CHROME, base::NotFatalUntil::M160);
 
   wait_for_policy_timer_.Stop();
   OnFirstPoliciesLoadedOrTimeout();
 }
 
 void ArcRequirementChecker::OnTermsOfServiceNegotiated(bool accepted) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::kNegotiatingTermsOfService);
-  DCHECK(profile_);
-  DCHECK(terms_of_service_negotiator_ || !g_ui_enabled);
-  DCHECK(requirement_check_callback_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::kNegotiatingTermsOfService,
+           base::NotFatalUntil::M160);
+  CHECK(profile_, base::NotFatalUntil::M160);
+  CHECK(terms_of_service_negotiator_ || !g_ui_enabled,
+        base::NotFatalUntil::M160);
+  CHECK(requirement_check_callback_, base::NotFatalUntil::M160);
   terms_of_service_negotiator_.reset();
 
   if (!accepted) {
@@ -224,8 +242,9 @@ void ArcRequirementChecker::OnTermsOfServiceNegotiated(bool accepted) {
 }
 
 void ArcRequirementChecker::StartAndroidManagementCheck() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::kNegotiatingTermsOfService);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::kNegotiatingTermsOfService,
+           base::NotFatalUntil::M160);
 
   state_ = State::kCheckingAndroidManagement;
 
@@ -253,10 +272,12 @@ void ArcRequirementChecker::StartAndroidManagementCheck() {
 
 void ArcRequirementChecker::OnAndroidManagementChecked(
     ArcAndroidManagementChecker::CheckResult result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::kCheckingAndroidManagement);
-  DCHECK(android_management_checker_ || !g_ui_enabled);
-  DCHECK(requirement_check_callback_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::kCheckingAndroidManagement,
+           base::NotFatalUntil::M160);
+  CHECK(android_management_checker_ || !g_ui_enabled,
+        base::NotFatalUntil::M160);
+  CHECK(requirement_check_callback_, base::NotFatalUntil::M160);
   android_management_checker_.reset();
   state_ = State::kStopped;
 
@@ -278,12 +299,13 @@ void ArcRequirementChecker::OnAndroidManagementChecked(
 
 void ArcRequirementChecker::OnBackgroundAndroidManagementChecked(
     ArcAndroidManagementChecker::CheckResult result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::kCheckingAndroidManagementBackground);
-  DCHECK(background_check_callback_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::kCheckingAndroidManagementBackground,
+           base::NotFatalUntil::M160);
+  CHECK(background_check_callback_, base::NotFatalUntil::M160);
 
   if (g_enable_check_android_management_in_tests.value_or(true)) {
-    DCHECK(android_management_checker_);
+    CHECK(android_management_checker_, base::NotFatalUntil::M160);
     android_management_checker_.reset();
   }
 
@@ -306,8 +328,9 @@ void ArcRequirementChecker::OnBackgroundAndroidManagementChecked(
 }
 
 void ArcRequirementChecker::WaitForPoliciesLoad() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::kWaitingForPoliciesBackground);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::kWaitingForPoliciesBackground,
+           base::NotFatalUntil::M160);
 
   auto* policy_service =
       profile_->GetProfilePolicyConnector()->policy_service();
@@ -327,9 +350,10 @@ void ArcRequirementChecker::WaitForPoliciesLoad() {
 }
 
 void ArcRequirementChecker::OnFirstPoliciesLoadedOrTimeout() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::kWaitingForPoliciesBackground);
-  DCHECK(background_check_callback_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::kWaitingForPoliciesBackground,
+           base::NotFatalUntil::M160);
+  CHECK(background_check_callback_, base::NotFatalUntil::M160);
 
   state_ = State::kStopped;
 

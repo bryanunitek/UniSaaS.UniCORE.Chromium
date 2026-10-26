@@ -14,6 +14,7 @@
 #include "base/time/time.h"
 #include "chrome/browser/command_updater.h"
 #include "ui/actions/action_id.h"
+#include "ui/actions/actions.h"
 #include "ui/base/window_open_disposition.h"
 
 class CommandObserver;
@@ -25,7 +26,7 @@ class ActionItem;
 namespace chrome {
 
 // Manages action mappings and command state tracking for experimental Action
-// API. Only used when features::kUseActionsForBrowserCommands is enabled.
+// API. Only used when features::ShouldUseActionsForBrowserCommands() is true.
 class CommandActionUpdater : public CommandUpdater {
  public:
   explicit CommandActionUpdater(actions::ActionItem* root_action_item);
@@ -34,10 +35,6 @@ class CommandActionUpdater : public CommandUpdater {
   // CommandUpdater implementation:
   bool SupportsCommand(int id) const override;
   bool IsCommandEnabled(int id) const override;
-  bool ExecuteCommand(int id, base::TimeTicks time_stamp) override;
-  bool ExecuteCommandWithDisposition(int id,
-                                     WindowOpenDisposition disposition,
-                                     base::TimeTicks time_stamp) override;
   void AddCommandObserver(int id, CommandObserver* observer) override;
   void RemoveCommandObserver(int id, CommandObserver* observer) override;
   void RemoveCommandObserver(CommandObserver* observer) override;
@@ -45,12 +42,20 @@ class CommandActionUpdater : public CommandUpdater {
   void DisableAllCommands() override;
   std::vector<int> GetAllIds() const override;
 
-  std::optional<actions::ActionId> GetActionId(int id) const;
+  static std::optional<actions::ActionId> GetActionId(int id);
 
  private:
+  bool ExecuteCommandWithDispositionAndContext(
+      int id,
+      WindowOpenDisposition disposition,
+      std::optional<actions::ActionInvocationContext> context,
+      base::TimeTicks time_stamp) override;
+
   actions::ActionItem* FindAction(actions::ActionId action_id) const;
-  void ExecuteAction(actions::ActionId action_id,
-                     WindowOpenDisposition disposition);
+  void ExecuteAction(
+      actions::ActionId action_id,
+      WindowOpenDisposition disposition,
+      std::optional<actions::ActionInvocationContext> context = std::nullopt);
   void OnActionChanged(int id, CommandObserver* observer);
 
   struct ObserverEntry {

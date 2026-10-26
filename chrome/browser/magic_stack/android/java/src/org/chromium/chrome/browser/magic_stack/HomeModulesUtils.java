@@ -11,14 +11,11 @@ import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.ENHANCED_SAFE_BROWSING_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.HISTORY_SYNC_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.NTP_THEME_PROMO;
-import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.PASSWORD_CHECKUP_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.PRICE_CHANGE;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.QUICK_DELETE_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SAFETY_HUB;
-import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SAVE_PASSWORDS_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SETUP_LIST_CELEBRATORY_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SETUP_LIST_TWO_CELL_CONTAINER;
-import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SIGN_IN_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SINGLE_TAB;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.TAB_GROUP_PROMO;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.TAB_GROUP_SYNC_PROMO;
@@ -32,6 +29,7 @@ import org.chromium.base.Log;
 import org.chromium.base.TimeUtils;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchDonationServiceUtils;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
@@ -78,9 +76,6 @@ public class HomeModulesUtils {
                             HISTORY_SYNC_PROMO,
                             ENHANCED_SAFE_BROWSING_PROMO,
                             ADDRESS_BAR_PLACEMENT_PROMO,
-                            SIGN_IN_PROMO,
-                            SAVE_PASSWORDS_PROMO,
-                            PASSWORD_CHECKUP_PROMO,
                             SETUP_LIST_TWO_CELL_CONTAINER,
                             SETUP_LIST_CELEBRATORY_PROMO,
                             NTP_THEME_PROMO));
@@ -135,14 +130,16 @@ public class HomeModulesUtils {
             case HISTORY_SYNC_PROMO:
             case ENHANCED_SAFE_BROWSING_PROMO:
             case ADDRESS_BAR_PLACEMENT_PROMO:
-            case SIGN_IN_PROMO:
-            case SAVE_PASSWORDS_PROMO:
-            case PASSWORD_CHECKUP_PROMO:
             case SETUP_LIST_TWO_CELL_CONTAINER:
             case SETUP_LIST_CELEBRATORY_PROMO:
                 // All tips use the same name.
                 return context.getString(R.string.educational_tip_module_name);
             case AUXILIARY_SEARCH:
+                // TODO(crbug.com/512359034): Remove this dependency on auxiliary search after we
+                // implement a better UX flow.
+                if (AuxiliarySearchDonationServiceUtils.isBrowsingDataDonationEnabled()) {
+                    return context.getString(R.string.auxiliary_search_browsing_data_module_name);
+                }
                 return context.getString(R.string.auxiliary_search_module_name);
             default:
                 assert false : "Module type not supported!";
@@ -325,8 +322,8 @@ public class HomeModulesUtils {
     }
 
     /**
-     * Updates the C++ boolean user pref for profile {@param profile} with key {@param cKey}, to
-     * have the same value as the Java SharedPreference with key {@param javaKey}.
+     * Updates the C++ boolean user pref for profile {@code profile} with key {@code cKey}, to have
+     * the same value as the Java SharedPreference with key {@code javaKey}.
      *
      * @param javaKey The key of the Java preference.
      * @param cKey The key of the C++ preference.

@@ -27,14 +27,57 @@ source_set("lib") {
 }
 
 if (!is_ios) {
+  source_set("shared_memory_data_source") {
+    sources = [
+      "shared_memory_user_stream_data_source.cc",
+      "shared_memory_user_stream_data_source.h",
+    ]
+
+    deps = [
+      "//base",
+      "//components/crash/core/common:shared_memory_user_stream",
+      "//third_party/crashpad/crashpad/handler",
+      "//third_party/crashpad/crashpad/minidump",
+    ]
+  }
+
+  if (is_win || is_linux || is_chromeos || is_android || is_mac) {
+    source_set("shared_memory_user_stream_args") {
+      sources = []
+      deps = [ "//base" ]
+
+      if (is_win || is_linux || is_chromeos || is_android) {
+        sources += [
+          "shared_memory_user_stream_args.cc",
+          "shared_memory_user_stream_args.h",
+        ]
+        public_deps = [ "//third_party/crashpad/crashpad/util" ]
+      }
+
+      if (is_mac) {
+        sources += [
+          "shared_memory_user_stream_mach_port.cc",
+          "shared_memory_user_stream_mach_port.h",
+        ]
+      }
+    }
+  }
+
   source_set("crashpad_handler_main") {
     sources = [ "crashpad_handler_main.cc" ]
 
     deps = [
+      ":shared_memory_data_source",
       "//base:debugging_buildflags",
+      "//components/crash/core/common:shared_memory_user_stream",
       "//components/gwp_asan/buildflags",
       "//third_party/crashpad/crashpad/handler",
+      "//third_party/crashpad/crashpad/minidump",
     ]
+
+    if (is_linux || is_chromeos || is_android || is_mac) {
+      deps += [ ":shared_memory_user_stream_args" ]
+    }
 
     if (is_linux || is_chromeos || is_mac) {
       deps += [ "//components/stability_report" ]
@@ -80,8 +123,11 @@ static_library("app") {
     "//build:branding_buildflags",
     "//build:chromeos_buildflags",
     "//components/crash/core/common:crash_key",
+    "//components/crash/core/common:shared_memory_user_stream",
     "//content/public/common:content_descriptors",
     "//third_party/crashpad/crashpad/client",
+    "//third_party/crashpad/crashpad/handler:common",
+    "//third_party/crashpad/crashpad/minidump",
     "//third_party/crashpad/crashpad/util",
   ]
 
@@ -92,7 +138,6 @@ static_library("app") {
 
   if (is_ios) {
     deps -= [ "//content/public/common:content_descriptors" ]
-    deps += [ "//third_party/crashpad/crashpad/handler:common" ]
     public_deps += [ "//third_party/crashpad/crashpad/client" ]
   }
 
@@ -105,6 +150,10 @@ static_library("app") {
       "//third_party/crashpad/crashpad/snapshot",
     ]
     libs = [ "log" ]
+  }
+
+  if (is_win || is_linux || is_chromeos || is_android || is_mac) {
+    deps += [ ":shared_memory_user_stream_args" ]
   }
 
   if (is_android || is_linux || is_chromeos) {
@@ -149,10 +198,6 @@ static_library("app") {
     sources += [ "crashpad_ios.mm" ]
     deps += [ "//third_party/crashpad/crashpad/minidump" ]
   }
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 if (is_win) {
@@ -173,6 +218,8 @@ if (is_win) {
     ]
 
     deps = [
+      ":shared_memory_data_source",
+      ":shared_memory_user_stream_args",
       "//base",
       "//components/app_launch_prefetch",
       "//components/gwp_asan/buildflags",
@@ -305,12 +352,35 @@ source_set("unit_tests") {
   testonly = true
   sources = []
   deps = [
+    ":app",
     ":lib",
     "//base",
     "//base/test:test_support",
+    "//components/crash/core/common",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/crashpad/crashpad/minidump",
   ]
+
+  if (!is_ios) {
+    sources += [ "shared_memory_user_stream_data_source_unittest.cc" ]
+    deps += [
+      ":crashpad_handler_main",
+      ":shared_memory_data_source",
+    ]
+
+    if (is_win || is_linux || is_chromeos || is_android || is_mac) {
+      deps += [ ":shared_memory_user_stream_args" ]
+    }
+
+    if (is_win || is_linux || is_chromeos || is_android) {
+      sources += [ "shared_memory_user_stream_args_unittest.cc" ]
+    }
+
+    if (is_mac) {
+      sources += [ "shared_memory_user_stream_mach_port_unittest.cc" ]
+    }
+  }
 
   if (is_win) {
     sources += [

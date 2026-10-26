@@ -29,9 +29,9 @@ void AIWritingAssistanceCreateClient<mojom::blink::AIWriter,
                      client_remote) {
   HeapMojoRemote<mojom::blink::AIManager>& ai_manager_remote =
       AIInterfaceProxy::GetAIManagerRemote(GetExecutionContext());
-  ai_manager_remote->CreateWriter(
-      std::move(client_remote), ToMojoWriterCreateOptions(options_),
-      monitor_ ? monitor_->BindRemote() : mojo::NullRemote());
+  ai_manager_remote->CreateWriter(std::move(client_remote),
+                                  ToMojoWriterCreateOptions(options_),
+                                  BindMonitorRemote());
 }
 
 template <>
@@ -147,7 +147,8 @@ void WriterBase::RecordCreateOptionMetrics(
 Writer::Writer(ScriptState* script_state,
                scoped_refptr<base::SequencedTaskRunner> task_runner,
                mojo::PendingRemote<mojom::blink::AIWriter> pending_remote,
-               WriterCreateOptions* options)
+               WriterCreateOptions* options,
+               uint64_t context_window)
     : AIWritingAssistanceBase<Writer,
                               mojom::blink::AIWriter,
                               mojom::blink::AIManagerCreateWriterClient,
@@ -158,6 +159,7 @@ Writer::Writer(ScriptState* script_state,
           task_runner,
           std::move(pending_remote),
           std::move(options),
+          context_window,
           /*echo_whitespace_input=*/false) {}
 
 void Writer::Trace(Visitor* visitor) const {

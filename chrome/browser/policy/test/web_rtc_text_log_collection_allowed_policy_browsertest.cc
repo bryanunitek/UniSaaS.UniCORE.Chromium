@@ -10,7 +10,6 @@
 #include "chrome/browser/media/webrtc/webrtc_logging_controller.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "components/policy/core/common/policy_map.h"
@@ -37,12 +36,12 @@ class WebRtcTextLogCollectionAllowedPolicyTest : public policy::PolicyTest {
   }
 
   const PrefService::Preference* GetPreference() const {
-    auto* service = user_prefs::UserPrefs::Get(browser()->profile());
+    auto* service = user_prefs::UserPrefs::Get(browser()->GetProfile());
     return service->FindPreference(prefs::kWebRtcTextLogCollectionAllowed);
   }
 
   void SetPreferenceValue(bool value) {
-    auto* service = user_prefs::UserPrefs::Get(browser()->profile());
+    auto* service = user_prefs::UserPrefs::Get(browser()->GetProfile());
     return service->SetBoolean(prefs::kWebRtcTextLogCollectionAllowed, value);
   }
 

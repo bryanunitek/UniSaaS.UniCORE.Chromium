@@ -44,6 +44,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom-shared.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 using ::testing::Contains;
@@ -238,7 +239,7 @@ IN_PROC_BROWSER_TEST_F(AppEventsObserverBrowserTest, ReportLaunchedApp) {
   apps::AppServiceProxyFactory::GetForProfile(profile())->LaunchAppWithParams(
       apps::AppLaunchParams(
           app_id, apps::LaunchContainer::kLaunchContainerWindow,
-          WindowOpenDisposition::CURRENT_TAB, apps::LaunchSource::kFromTest),
+          WindowOpenDisposition::kCurrentTab, apps::LaunchSource::kFromTest),
       base::IgnoreArgs<apps::LaunchResult>(run_loop.QuitClosure()));
   run_loop.Run();
 

@@ -20,6 +20,7 @@
 #include "chrome/browser/ash/login/saml/in_session_password_change_manager.h"
 #include "chrome/browser/ash/login/session/chrome_session_manager.h"
 #include "chrome/browser/ash/login/session/session_manager_delegate_impl.h"
+#include "chrome/browser/ash/login/users/account_id_annotator.h"
 #include "chrome/browser/ash/login/users/avatar/user_image_manager_registry.h"
 #include "chrome/browser/ash/login/users/policy_user_manager_controller.h"
 #include "chrome/browser/ash/login/users/profile_user_manager_controller.h"
@@ -28,6 +29,7 @@
 #include "chrome/browser/ash/net/secure_dns_manager.h"
 #include "chrome/browser/ash/net/system_proxy_manager.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
+#include "chrome/browser/ash/policy/core/device_attributes_impl.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/cros_settings_holder.h"
 #include "chrome/browser/ash/system/automatic_reboot_manager.h"
@@ -46,12 +48,10 @@
 #include "chrome/browser/sessions/session_restore.h"
 #include "chrome/browser/sessions/session_service_utils.h"
 #include "chrome/browser/sync/device_info_sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chromeos/ash/components/account_manager/account_manager_factory.h"
 #include "chromeos/ash/components/auto_sign_out/auto_sign_out_service.h"
@@ -69,8 +69,10 @@
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/keyed_service/content/browser_context_keyed_service_shutdown_notifier_factory.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/sync/base/command_line_switches.h"
+#include "components/user_manager/multi_user/multi_user_sign_in_policy_controller.h"
 #include "components/user_manager/user_manager.h"
 #include "components/user_manager/user_manager_impl.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -139,6 +141,8 @@ void BrowserProcessPlatformPart::InitializeUserManager() {
   auto* local_state = g_browser_process->local_state();
   user_manager_ = std::make_unique<user_manager::UserManagerImpl>(
       std::make_unique<ash::UserManagerDelegateImpl>(), local_state);
+  account_id_annotator_ = std::make_unique<ash::AccountIdAnnotator>(
+      g_browser_process->profile_manager(), user_manager_.get());
   profile_user_manager_controller_ =
       std::make_unique<ash::ProfileUserManagerController>(
           g_browser_process->profile_manager(), user_manager_.get());
@@ -146,7 +150,8 @@ void BrowserProcessPlatformPart::InitializeUserManager() {
       std::make_unique<ash::PolicyUserManagerController>(
           user_manager_.get(), ash::CrosSettings::Get(),
           ash::DeviceSettingsService::Get(),
-          browser_policy_connector_ash()->GetMinimumVersionPolicyHandler());
+          browser_policy_connector_ash()->GetMinimumVersionPolicyHandler(),
+          browser_policy_connector_ash()->GetDeviceLocalAccountPolicyService());
   user_image_manager_registry_ =
       std::make_unique<ash::UserImageManagerRegistry>(
           g_browser_process->local_state(),
@@ -188,6 +193,7 @@ void BrowserProcessPlatformPart::DestroyUserManager() {
   multi_user_sign_in_policy_controller_.reset();
   user_image_manager_registry_.reset();
   profile_user_manager_controller_.reset();
+  account_id_annotator_.reset();
   user_manager_.reset();
 }
 
@@ -212,7 +218,7 @@ void BrowserProcessPlatformPart::InitializeDeviceDisablingManager() {
           g_browser_process->local_state(), browser_policy_connector_ash(),
           device_restriction_schedule_controller_.get(),
           device_disabling_manager_delegate_.get(), ash::CrosSettings::Get(),
-          user_manager::UserManager::Get());
+          session_manager::SessionManager::Get());
   device_disabling_manager_->Init();
 }
 
@@ -328,7 +334,10 @@ void BrowserProcessPlatformPart::InitializePrimaryProfileServices(
   auto* user = user_manager::UserManager::Get()->FindUserAndModify(CHECK_DEREF(
       ash::AnnotatedAccountId::Get(primary_profile->GetOriginalProfile())));
   secure_dns_manager_ = std::make_unique<ash::SecureDnsManager>(
-      g_browser_process->local_state(), CHECK_DEREF(user),
+      g_browser_process->local_state(),
+      std::make_unique<policy::DeviceAttributesImpl>(
+          browser_policy_connector_ash()),
+      CHECK_DEREF(user),
       primary_profile->GetProfilePolicyConnector()->IsManaged());
 
   if (ash::features::IsAutoSignOutEnabled() &&
@@ -383,6 +392,7 @@ void BrowserProcessPlatformPart::InitializeTimezoneResolverManager() {
   timezone_resolver_manager_ =
       std::make_unique<ash::system::TimeZoneResolverManager>(
           g_browser_process->local_state(),
+          g_browser_process->shared_url_loader_factory(),
           ash::SystemLocationProvider::GetInstance(),
           session_manager::SessionManager::Get());
 }

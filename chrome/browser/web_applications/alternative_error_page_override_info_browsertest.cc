@@ -8,7 +8,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/with_feature_override.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
@@ -24,6 +23,7 @@
 #include "content/public/common/alternative_error_page_override_info.mojom.h"
 #include "content/public/common/content_client.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/mock_navigation_handle.h"
 #include "content/public/test/test_utils.h"
 #include "skia/ext/skia_utils_base.h"
 #include "ui/native_theme/native_theme.h"
@@ -45,12 +45,14 @@ class AlternativeErrorPageOverrideInfoBrowserTest
     const GURL app_url = embedded_test_server()->GetURL(html);
     web_app::NavigateViaLinkClickToURLAndWait(browser(), app_url);
     web_app::test::InstallPwaForCurrentUrl(browser());
-    content::BrowserContext* context = browser()->profile();
+    content::BrowserContext* context = browser()->GetProfile();
 
+    content::MockNavigationHandle navigation_handle(
+        app_url, /*render_frame_host=*/nullptr);
     return content::GetContentClientForTesting()
         ->browser()
         ->GetAlternativeErrorPageOverrideInfo(
-            app_url, /*render_frame_host=*/nullptr, context,
+            navigation_handle, /*render_frame_host=*/nullptr, context,
             net::ERR_INTERNET_DISCONNECTED);
   }
 
@@ -77,13 +79,15 @@ IN_PROC_BROWSER_TEST_P(AlternativeErrorPageOverrideInfoBrowserTest,
                        NoManifest) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL app_url = embedded_test_server()->GetURL("/simple.html");
-  content::BrowserContext* context = browser()->profile();
+  content::BrowserContext* context = browser()->GetProfile();
 
+  content::MockNavigationHandle navigation_handle(
+      app_url, /*render_frame_host=*/nullptr);
   content::mojom::AlternativeErrorPageOverrideInfoPtr info =
       content::GetContentClientForTesting()
           ->browser()
           ->GetAlternativeErrorPageOverrideInfo(
-              app_url, /*render_frame_host=*/nullptr, context,
+              navigation_handle, /*render_frame_host=*/nullptr, context,
               net::ERR_INTERNET_DISCONNECTED);
 
   // Expect mojom struct to be null.
@@ -140,13 +144,15 @@ IN_PROC_BROWSER_TEST_P(AlternativeErrorPageOverrideInfoBrowserTest,
   const GURL app_url = embedded_test_server()->GetURL("/title1.html");
   web_app::NavigateViaLinkClickToURLAndWait(browser(), app_url);
   web_app::test::InstallPwaForCurrentUrl(browser());
-  content::BrowserContext* context = browser()->profile();
+  content::BrowserContext* context = browser()->GetProfile();
 
+  content::MockNavigationHandle navigation_handle(
+      app_url, /*render_frame_host=*/nullptr);
   content::mojom::AlternativeErrorPageOverrideInfoPtr info =
       content::GetContentClientForTesting()
           ->browser()
           ->GetAlternativeErrorPageOverrideInfo(
-              app_url, /*render_frame_host=*/nullptr, context,
+              navigation_handle, /*render_frame_host=*/nullptr, context,
               net::ERR_INTERNET_DISCONNECTED);
 
   // Expect mojom struct customized with HTML page title.
@@ -164,7 +170,7 @@ IN_PROC_BROWSER_TEST_P(AlternativeErrorPageOverrideInfoBrowserTest,
       "manifest_test_page.html?manifest=manifest_one_icon.json");
   web_app::NavigateViaLinkClickToURLAndWait(browser(), app_url);
   web_app::test::InstallPwaForCurrentUrl(browser());
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   web_app::WebAppProvider* web_app_provider =
       web_app::WebAppProvider::GetForTest(profile);
   const std::optional<webapps::AppId> app_id =
@@ -172,11 +178,13 @@ IN_PROC_BROWSER_TEST_P(AlternativeErrorPageOverrideInfoBrowserTest,
           app_url,
           web_app::WebAppFilter::InstalledInOperatingSystemForTesting());
   WebAppIconWaiter(profile, app_id.value()).Wait();
+  content::MockNavigationHandle navigation_handle(
+      app_url, /*render_frame_host=*/nullptr);
   content::mojom::AlternativeErrorPageOverrideInfoPtr info =
       content::GetContentClientForTesting()
           ->browser()
           ->GetAlternativeErrorPageOverrideInfo(
-              app_url, /*render_frame_host=*/nullptr, profile,
+              navigation_handle, /*render_frame_host=*/nullptr, profile,
               net::ERR_INTERNET_DISCONNECTED);
 
   // Expect mojom struct with everything (except the icon) filled out.
@@ -197,6 +205,31 @@ IN_PROC_BROWSER_TEST_P(AlternativeErrorPageOverrideInfoBrowserTest,
       "You're offline");
   EXPECT_EQ(*info->alternative_error_page_params.Find("supplementary_icon"),
             "offlineIcon");
+}
+
+// Testing subframe navigation inside an installed app scope.
+IN_PROC_BROWSER_TEST_P(AlternativeErrorPageOverrideInfoBrowserTest,
+                       SubframeNavigation) {
+  EXPECT_TRUE(embedded_test_server()->Start());
+  const GURL app_url = embedded_test_server()->GetURL(
+      "/banners/"
+      "manifest_test_page.html?manifest=manifest_short_name_only.json");
+  web_app::NavigateViaLinkClickToURLAndWait(browser(), app_url);
+  web_app::test::InstallPwaForCurrentUrl(browser());
+  content::BrowserContext* context = browser()->GetProfile();
+
+  content::MockNavigationHandle navigation_handle(
+      app_url, /*render_frame_host=*/nullptr);
+  navigation_handle.set_is_in_primary_main_frame(false);
+  content::mojom::AlternativeErrorPageOverrideInfoPtr info =
+      content::GetContentClientForTesting()
+          ->browser()
+          ->GetAlternativeErrorPageOverrideInfo(
+              navigation_handle, /*render_frame_host=*/nullptr, context,
+              net::ERR_INTERNET_DISCONNECTED);
+
+  // Subframes should not use web app alternative error pages.
+  EXPECT_FALSE(info);
 }
 
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(

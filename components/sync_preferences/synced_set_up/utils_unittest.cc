@@ -576,6 +576,10 @@ TEST_F(SyncedSetUpUtilsTest, TestKeepLocalPrefsByChangeActivity) {
       synced_set_up::GetCrossDevicePrefsFromRemoteDevice(
           &pref_tracker_, &device_info_tracker_, local_device.get());
   EXPECT_TRUE(result.empty());
+  EXPECT_EQ(synced_set_up::GetBestMatchDeviceOsTypeAndFormFactor(
+                &pref_tracker_, &device_info_tracker_, local_device.get()),
+            std::make_pair(syncer::DeviceInfo::OsType::kUnknown,
+                           syncer::DeviceInfo::FormFactor::kUnknown));
 }
 
 // Tests that if a pref has multiple observed changes only the most recently
@@ -641,6 +645,11 @@ TEST_F(SyncedSetUpUtilsTest, TestReturnsMostRecentObservedPrefChanges) {
     ASSERT_NE(it, result.end());
     EXPECT_EQ(it->second, pref_value);
   }
+
+  EXPECT_EQ(synced_set_up::GetBestMatchDeviceOsTypeAndFormFactor(
+                &pref_tracker_, &device_info_tracker_, local_device.get()),
+            std::make_pair(syncer::DeviceInfo::OsType::kAndroid,
+                           syncer::DeviceInfo::FormFactor::kPhone));
 }
 
 }  // namespace sync_preferences

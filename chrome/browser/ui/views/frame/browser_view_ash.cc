@@ -16,13 +16,14 @@
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/controls/webview/webview.h"
 
-BrowserViewAsh::BrowserViewAsh(Browser* browser) : BrowserView(browser) {}
+BrowserViewAsh::BrowserViewAsh(BrowserWindowInterface* browser)
+    : BrowserView(browser) {}
 
 void BrowserViewAsh::Layout(PassKey) {
   LayoutSuperclass<BrowserView>(this);
 
   // In ChromeOS ash we round the bottom two corners of the browser frame.
-  DCHECK(GetWidget());
+  CHECK(GetWidget(), base::NotFatalUntil::M162);
   GetWidget()->non_client_view()->frame_view()->UpdateWindowRoundedCorners();
 }
 

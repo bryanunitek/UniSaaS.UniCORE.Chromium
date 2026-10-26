@@ -14,6 +14,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/geometry/insets.h"
@@ -70,11 +71,11 @@ void RichNudge::FlipPosition() {
 
 gfx::Rect RichNudge::GetAnchorRect() const {
   auto* parent = parent_window();
-  DCHECK(parent);
+  CHECK(parent, base::NotFatalUntil::M160);
   const auto parent_bounds = parent->GetBoundsInScreen();
 
   auto* widget = GetWidget();
-  DCHECK(widget);
+  CHECK(widget, base::NotFatalUntil::M160);
   auto size = widget->GetWindowBoundsInScreen().size();
   size.Enlarge(2 * kMargin, 2 * kMargin);
 

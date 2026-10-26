@@ -226,12 +226,6 @@ const CGFloat kFaviconBadgeSideLength = 24;
   // Do nothing by default. Subclasses can override this.
 }
 
-- (CGFloat)preferredHeightForContent {
-  CGFloat height = [super preferredHeightForContent];
-  height += self.customSpacingBeforeImage;
-  return height;
-}
-
 #pragma mark - ButtonStackActionDelegate
 
 - (void)didTapPrimaryActionButton {
@@ -258,6 +252,13 @@ const CGFloat kFaviconBadgeSideLength = 24;
     base::UmaHistogramEnumeration(
         "IOS.ConfirmationAlertSheet.Outcome",
         ConfirmationAlertSheetAction::kTertiaryButtonTapped);
+  }
+}
+
+- (void)didDismissButtonStackViewController {
+  if ([self.actionHandler
+          respondsToSelector:@selector(confirmationAlertDismissed)]) {
+    [self.actionHandler confirmationAlertDismissed];
   }
 }
 

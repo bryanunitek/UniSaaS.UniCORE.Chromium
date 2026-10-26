@@ -20,11 +20,11 @@
 #include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_everything_menu.h"
 #include "components/saved_tab_groups/public/saved_tab_group.h"
 #include "ui/base/models/menu_model.h"
-#include "ui/base/mojom/menu_source_type.mojom-forward.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/views/controls/menu/menu_delegate.h"
 
-class BookmarkMenuDelegate;
-class Browser;
+class AppMenuBookmarkDelegate;
+class BrowserWindowInterface;
 
 namespace views {
 class MenuButtonController;
@@ -39,7 +39,7 @@ class AppMenu final : public views::MenuDelegate,
                       public BookmarkMergedSurfaceServiceObserver,
                       public GlobalErrorObserver {
  public:
-  AppMenu(Browser* browser,
+  AppMenu(BrowserWindowInterface* browser,
           ui::MenuModel* model,
           int run_types,
           base::RepeatingClosure on_menu_closed_callback);
@@ -48,10 +48,17 @@ class AppMenu final : public views::MenuDelegate,
   ~AppMenu() override;
 
   // Shows the menu relative to the specified controller's button.
-  void RunMenu(views::MenuButtonController* host);
+  // TODO(crbug.com/543867698): Specify a reasonable source type instead of
+  // defaulting to kNone.
+  void RunMenu(
+      views::MenuButtonController* host,
+      ui::mojom::MenuSourceType source_type = ui::mojom::MenuSourceType::kNone);
 
   // Shows the menu with an anchor in the parent widget given its bounds.
-  void RunMenu(views::Widget* parent, const gfx::Rect& anchor_screen_bounds);
+  void RunMenu(
+      views::Widget* parent,
+      const gfx::Rect& anchor_screen_bounds,
+      ui::mojom::MenuSourceType source_type = ui::mojom::MenuSourceType::kNone);
 
   // Closes the menu if it is open, otherwise does nothing.
   void CloseMenu();
@@ -133,7 +140,7 @@ class AppMenu final : public views::MenuDelegate,
   // GlobalErrorObserver:
   void OnGlobalErrorsChanged() override;
 
-  views::View* GetZoomAppMenuViewForTest();
+  static views::View* GetZoomAppMenuViewForTest(views::MenuItemView* root);
 
  private:
   class CutCopyPasteView;
@@ -184,7 +191,7 @@ class AppMenu final : public views::MenuDelegate,
   CommandIDToEntry command_id_to_entry_;
 
   // Browser the menu is being shown for.
-  const raw_ptr<Browser, DanglingUntriaged> browser_;
+  const raw_ptr<BrowserWindowInterface, DanglingUntriaged> browser_;
 
   const raw_ptr<ui::MenuModel> model_;
 
@@ -192,15 +199,14 @@ class AppMenu final : public views::MenuDelegate,
   // If |selected_menu_model_| is non-null after the menu completes
   // ActivatedAt is invoked. This is done so that ActivatedAt isn't invoked
   // while the message loop is nested.
-  raw_ptr<ui::ButtonMenuItemModel, DanglingUntriaged> selected_menu_model_ =
-      nullptr;
+  raw_ptr<ui::ButtonMenuItemModel> selected_menu_model_ = nullptr;
   size_t selected_index_ = 0;
 
   std::vector<base::CallbackListSubscription>
       profile_menu_item_selected_subscription_list_;
 
   // Used for managing the bookmark menu items.
-  std::unique_ptr<BookmarkMenuDelegate> bookmark_menu_delegate_;
+  std::unique_ptr<AppMenuBookmarkDelegate> bookmark_menu_delegate_;
 
   // Menu corresponding to IDC_BOOKMARKS_MENU.
   raw_ptr<views::MenuItemView, DanglingUntriaged> bookmark_menu_ = nullptr;

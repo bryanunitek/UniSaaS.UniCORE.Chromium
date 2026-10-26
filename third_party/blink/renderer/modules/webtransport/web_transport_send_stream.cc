@@ -4,8 +4,11 @@
 
 #include "third_party/blink/renderer/modules/webtransport/web_transport_send_stream.h"
 
+#include <optional>
 #include <utility>
 
+#include "services/network/public/mojom/web_transport.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_web_transport_send_stream_stats.h"
 #include "third_party/blink/renderer/modules/webtransport/outgoing_stream_client.h"
 #include "third_party/blink/renderer/modules/webtransport/web_transport.h"
@@ -13,6 +16,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
@@ -21,11 +25,16 @@ WebTransportSendStream::WebTransportSendStream(
     WebTransport* web_transport,
     uint32_t stream_id,
     mojo::ScopedDataPipeProducerHandle handle)
-    : transport_(web_transport),
+    : WritableStream(script_state),
+      transport_(web_transport),
+      stream_id_(stream_id),
       outgoing_stream_(MakeGarbageCollected<OutgoingStream>(
           script_state,
           MakeGarbageCollected<OutgoingStreamClient>(web_transport, stream_id),
-          std::move(handle))) {}
+          std::move(handle))) {
+  outgoing_stream_->SetSendStatsFinalizedCallback(blink::BindOnce(
+      &WebTransportSendStream::OnSendStatsFinalized, WrapWeakPersistent(this)));
+}
 
 WebTransportSendStream::~WebTransportSendStream() = default;
 
@@ -39,26 +48,51 @@ void WebTransportSendStream::setSendGroup(WebTransportSendGroup* group,
         "The sendGroup belongs to a different WebTransport instance.");
     return;
   }
-  // TODO(crbug.com/487117768): Send priority update via Mojo.
-  send_group_ = group;
+  if (send_group_ == group) {
+    return;
+  }
+
+  SetSendGroup(group);
+  SendPriorityUpdate();
 }
 
 void WebTransportSendStream::setSendOrder(int64_t order) {
-  // TODO(crbug.com/487117768): Send priority update via Mojo.
-  send_order_ = order;
+  if (send_order_ != order) {
+    send_order_ = order;
+    SendPriorityUpdate();
+  }
 }
 
 void WebTransportSendStream::ApplySendStreamOptions(
     WebTransportSendGroup* send_group,
-    int64_t send_order,
-    ExceptionState& exception_state) {
-  if (send_group) {
-    setSendGroup(send_group, exception_state);
-    if (exception_state.HadException()) {
-      return;
-    }
+    int64_t send_order) {
+  SetSendGroup(send_group);
+  send_order_ = send_order;
+}
+
+void WebTransportSendStream::OnSendStatsFinalized() {
+  if (send_group_) {
+    send_group_->OnStreamStatsFinalized(*this);
   }
-  setSendOrder(send_order);
+}
+
+void WebTransportSendStream::SetSendGroup(WebTransportSendGroup* send_group) {
+  if (send_group_) {
+    send_group_->RemoveStream(*this);
+  }
+  send_group_ = send_group;
+  if (send_group_) {
+    send_group_->AddStream(*this);
+  }
+}
+
+void WebTransportSendStream::SendPriorityUpdate() {
+  transport_->SetStreamPriority(
+      stream_id_,
+      network::mojom::blink::WebTransportStreamPriority::New(
+          send_group_ ? std::make_optional<uint32_t>(send_group_->group_id())
+                      : std::nullopt,
+          send_order_));
 }
 
 ScriptPromise<WebTransportSendStreamStats> WebTransportSendStream::getStats(
@@ -66,14 +100,31 @@ ScriptPromise<WebTransportSendStreamStats> WebTransportSendStream::getStats(
   if (!script_state->ContextIsValid()) {
     return ScriptPromise<WebTransportSendStreamStats>();
   }
-  // TODO(crbug.com/487117768): Implement actual stats collection from the
-  // network service via Mojo. Currently returns zeroed stats regardless of
-  // stream state — this is a stub, matching WebTransportSendGroup::getStats().
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<WebTransportSendStreamStats>>(
+          script_state);
+  auto promise = resolver->Promise();
+  if (outgoing_stream_->AreSendStatsFinalized()) {
+    ResolveGetStats(resolver);
+    return promise;
+  }
+  transport_->RequestSendStreamStats(
+      Vector<uint32_t>({stream_id_}),
+      blink::BindOnce(&WebTransportSendStream::ResolveGetStats,
+                      WrapPersistent(this), WrapPersistent(resolver)));
+  return promise;
+}
+
+void WebTransportSendStream::ResolveGetStats(
+    ScriptPromiseResolver<WebTransportSendStreamStats>* resolver) const {
+  if (!resolver->GetExecutionContext()) {
+    return;
+  }
   auto* stats = MakeGarbageCollected<WebTransportSendStreamStats>();
-  stats->setBytesWritten(0);
-  stats->setBytesSent(0);
-  stats->setBytesAcknowledged(0);
-  return ToResolvedPromise<WebTransportSendStreamStats>(script_state, stats);
+  stats->setBytesWritten(outgoing_stream_->BytesWritten());
+  stats->setBytesSent(outgoing_stream_->BytesSent());
+  stats->setBytesAcknowledged(outgoing_stream_->BytesAcknowledged());
+  resolver->Resolve(stats);
 }
 
 void WebTransportSendStream::Trace(Visitor* visitor) const {

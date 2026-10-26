@@ -23,6 +23,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/global_features.h"
@@ -73,7 +74,6 @@
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/system_web_apps/test_support/test_system_web_app_manager.h"
 #include "chrome/browser/policy/system_features_disable_list_policy_handler.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/policy/core/common/system_features_disable_list_constants.h"
 #include "components/user_manager/scoped_user_manager.h"
@@ -393,7 +393,7 @@ class WebAppPolicyManagerTest : public WebAppPolicyManagerTestBase,
 };
 
 TEST_F(WebAppPolicyManagerTest, GetPolicyIdsForWebApp) {
-  const GURL kWebAppUrl = GURL("https://example.com/path/index.html");
+  const GURL kWebAppUrl = GURL("https://www.example.com/path/index.html");
   const GURL kInstallUrl = GURL("https://www.example.com/install_url.html");
   const GURL kManifestUrl = GURL("https://www.example.com/manifest.json");
 
@@ -1106,21 +1106,6 @@ TEST_F(WebAppPolicyManagerTest, WebAppSettingsForceInstallNewApps) {
 #if BUILDFLAG(IS_CHROMEOS)
 
 class WebAppPolicyManagerDisableListTest : public WebAppPolicyManagerTestBase {
- public:
-  WebAppPolicyManagerDisableListTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        chromeos::features::kSystemFeaturesDisableListHidden);
-  }
-
-  WebAppPolicyManagerDisableListTest(
-      const WebAppPolicyManagerDisableListTest&) = delete;
-  WebAppPolicyManagerDisableListTest& operator=(
-      const WebAppPolicyManagerDisableListTest&) = delete;
-
-  ~WebAppPolicyManagerDisableListTest() override = default;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(WebAppPolicyManagerDisableListTest, DisableSystemWebApps) {
@@ -1141,7 +1126,6 @@ TEST_F(WebAppPolicyManagerDisableListTest, DisableSystemWebApps) {
           .Append(static_cast<int>(policy::SystemFeature::kPrintJobs))
           .Append(static_cast<int>(policy::SystemFeature::kKeyShortcuts))
           .Append(static_cast<int>(policy::SystemFeature::kRecorder)));
-  base::RunLoop().RunUntilIdle();
 
   disabled_apps = policy_manager().GetDisabledSystemWebApps();
   EXPECT_THAT(

@@ -8,11 +8,11 @@
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/sad_tab.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
@@ -20,6 +20,7 @@
 #include "content/public/test/no_renderer_crashes_assertion.h"
 #include "content/public/test/test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/process/process.h"
@@ -68,13 +69,13 @@ IN_PROC_BROWSER_TEST_F(
   // Terminate the first tab (at index 0).
   const int target_tab_index = 0;
   content::WebContents* web_contents_to_kill =
-      browser()->tab_strip_model()->GetWebContentsAt(target_tab_index);
+      browser()->GetTabStripModel()->GetWebContentsAt(target_tab_index);
   ASSERT_TRUE(web_contents_to_kill);
 
   // Open a new tab to make the first one hidden.
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(url.spec() + "#2"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   ASSERT_EQ(web_contents_to_kill->GetVisibility(), content::Visibility::HIDDEN);
@@ -90,7 +91,7 @@ IN_PROC_BROWSER_TEST_F(
   // index and check its state.
   EXPECT_TRUE(base::test::RunUntil([&]() {
     content::WebContents* current_web_contents =
-        browser()->tab_strip_model()->GetWebContentsAt(target_tab_index);
+        browser()->GetTabStripModel()->GetWebContentsAt(target_tab_index);
     // It's possible for the WebContents to be briefly null during the swap.
     return current_web_contents && current_web_contents->WasDiscarded();
   }));
@@ -140,14 +141,19 @@ IN_PROC_BROWSER_TEST_F(SadTabHelperBrowserTest,
           /*process_id=*/-1, /*route_id=*/-1, prefetch_url,
           blink::mojom::PrerenderTriggerType::kLinkRelPrerender,
           content::Referrer(), url::Origin::Create(prefetch_url),
+          browser()
+              ->tab_strip_model()
+              ->GetActiveWebContents()
+              ->GetPrimaryMainFrame()
+              ->GetCurrentInitiatorNavigationState(),
           gfx::Size(640, 480));
 
   content::WebContents* prefetch_web_contents =
       prefetch_handle->contents()->no_state_prefetch_contents();
 
-  // Verify this WebContents has a SadTabHelper but is hidden and has no
-  // TabLifecycleUnitExternal (not in a TabStripModel).
-  ASSERT_TRUE(SadTabHelper::FromWebContents(prefetch_web_contents));
+  // Verify this WebContents is not a tab (so it has no SadTabHelper, which
+  // is owned by TabFeatures) and is hidden.
+  ASSERT_FALSE(tabs::TabInterface::MaybeGetFromContents(prefetch_web_contents));
   ASSERT_EQ(prefetch_web_contents->GetVisibility(),
             content::Visibility::HIDDEN);
 
@@ -156,7 +162,12 @@ IN_PROC_BROWSER_TEST_F(SadTabHelperBrowserTest,
   test_no_state_prefetch->WaitForStart();
   content::RenderProcessHost* render_process_host =
       prefetch_web_contents->GetPrimaryMainFrame()->GetProcess();
-  ASSERT_TRUE(render_process_host->IsReady());
+  content::RenderProcessHostWatcher ready_observer(
+      render_process_host,
+      content::RenderProcessHostWatcher::WATCH_FOR_PROCESS_READY);
+  if (!render_process_host->IsReady()) {
+    ASSERT_TRUE(ready_observer.Wait());
+  }
 
   // Terminate the prefetch renderer with the exit code that maps to
   // TERMINATION_STATUS_EVICTED_FOR_MEMORY.

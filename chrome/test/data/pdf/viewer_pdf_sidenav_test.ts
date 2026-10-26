@@ -38,8 +38,8 @@ const tests = [
 
     await microtasksFinished();
 
-    const icons = sidenav.shadowRoot.querySelector('#icons')!;
-    const content = sidenav.shadowRoot.querySelector('#content')!;
+    const icons = sidenav.$.icons;
+    const content = sidenav.$.content;
     const buttons = sidenav.shadowRoot.querySelectorAll('cr-icon-button');
     chrome.test.assertEq(3, buttons.length);
 
@@ -47,15 +47,15 @@ const tests = [
     const outlineButton = buttons[1]!;
     const attachmentButton = buttons[2]!;
 
-    const thumbnailBar = content.querySelector('viewer-thumbnail-bar')!;
-    const outline = content.querySelector('viewer-document-outline')!;
-    const attachmentBar = content.querySelector('viewer-attachment-bar')!;
+    const thumbnailBar = sidenav.$.thumbnailBar;
+    const outline = sidenav.$.outline;
+    const attachmentBar = sidenav.$.attachmentBar;
 
     // Verify the button types.
     chrome.test.assertEq(
-        'pdf:thumbnails', thumbnailButton.getAttribute('iron-icon'));
+        'pdf:image', thumbnailButton.getAttribute('iron-icon'));
     chrome.test.assertEq(
-        'pdf:doc-outline', outlineButton.getAttribute('iron-icon'));
+        'pdf:list-alt', outlineButton.getAttribute('iron-icon'));
     chrome.test.assertEq(
         'pdf:attach-file', attachmentButton.getAttribute('iron-icon'));
 
@@ -194,21 +194,20 @@ const tests = [
     ];
 
     await microtasksFinished();
-    const icons = sidenav.shadowRoot.querySelector('#icons')!;
-    const content = sidenav.shadowRoot.querySelector('#content')!;
+    const icons = sidenav.$.icons;
     const buttons = sidenav.shadowRoot.querySelectorAll('cr-icon-button');
     chrome.test.assertEq(2, buttons.length);
 
     const thumbnailButton = buttons[0]!;
     const outlineButton = buttons[1]!;
-    const thumbnailBar = content.querySelector('viewer-thumbnail-bar')!;
-    const outline = content.querySelector('viewer-document-outline')!;
+    const thumbnailBar = sidenav.$.thumbnailBar;
+    const outline = sidenav.$.outline;
 
     // Verify the button types.
     chrome.test.assertEq(
-        'pdf:thumbnails', thumbnailButton.getAttribute('iron-icon'));
+        'pdf:image', thumbnailButton.getAttribute('iron-icon'));
     chrome.test.assertEq(
-        'pdf:doc-outline', outlineButton.getAttribute('iron-icon'));
+        'pdf:list-alt', outlineButton.getAttribute('iron-icon'));
 
     function assertThumbnailView() {
       chrome.test.assertTrue(
@@ -289,20 +288,19 @@ const tests = [
 
     await microtasksFinished();
 
-    const icons = sidenav.shadowRoot.querySelector('#icons')!;
-    const content = sidenav.shadowRoot.querySelector('#content')!;
+    const icons = sidenav.$.icons;
     const buttons = sidenav.shadowRoot.querySelectorAll('cr-icon-button');
     chrome.test.assertEq(2, buttons.length);
 
     const thumbnailButton = buttons[0]!;
     const attachmentButton = buttons[1]!;
 
-    const thumbnailBar = content.querySelector('viewer-thumbnail-bar')!;
-    const attachmentBar = content.querySelector('viewer-attachment-bar')!;
+    const thumbnailBar = sidenav.$.thumbnailBar;
+    const attachmentBar = sidenav.$.attachmentBar;
 
     // Verify the button types.
     chrome.test.assertEq(
-        'pdf:thumbnails', thumbnailButton.getAttribute('iron-icon'));
+        'pdf:image', thumbnailButton.getAttribute('iron-icon'));
     chrome.test.assertEq(
         'pdf:attach-file', attachmentButton.getAttribute('iron-icon'));
 
@@ -413,6 +411,24 @@ const tests = [
     chrome.test.assertEq(0, sidenav.bookmarks.length);
     chrome.test.assertEq(2, sidenav.attachments.length);
     chrome.test.assertFalse(sidenav.$.icons.hidden);
+    chrome.test.succeed();
+  },
+
+  async function testThumbnailBarCollapsedState() {
+    const sidenav = createSidenav();
+    const thumbnailBar = sidenav.$.thumbnailBar;
+    chrome.test.assertFalse(thumbnailBar.sidenavCollapsed);
+    chrome.test.assertFalse(thumbnailBar.hidden);
+
+    sidenav.sidenavCollapsed = true;
+    await microtasksFinished();
+    chrome.test.assertTrue(thumbnailBar.sidenavCollapsed);
+    chrome.test.assertFalse(thumbnailBar.hidden);
+
+    sidenav.sidenavCollapsed = false;
+    await microtasksFinished();
+    chrome.test.assertFalse(thumbnailBar.sidenavCollapsed);
+    chrome.test.assertFalse(thumbnailBar.hidden);
     chrome.test.succeed();
   },
 ];

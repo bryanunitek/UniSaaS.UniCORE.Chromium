@@ -43,6 +43,8 @@ class CONTENT_EXPORT PipScreenCaptureCoordinatorImpl
       const PipScreenCaptureCoordinatorImpl&) = delete;
 
   // PipScreenCaptureCoordinator:
+  void OnPipInitiated(
+      const GlobalRenderFrameHostId& pip_owner_render_frame_host_id) override;
   void OnPipShown(
       WebContents& pip_web_contents,
       const GlobalRenderFrameHostId& pip_owner_render_frame_host_id) override;
@@ -86,6 +88,7 @@ class CONTENT_EXPORT PipScreenCaptureCoordinatorImpl
 
   std::optional<DesktopMediaID::Id> pip_window_id_;
   GlobalRenderFrameHostId pip_owner_render_frame_host_id_;
+  bool was_excluded_from_screen_capture_ = false;
   base::ObserverList<Observer> observers_;
   base::ObserverList<desktop_capture::PipScreenCaptureExclusionObserver>
       exclusion_observers_;

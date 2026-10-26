@@ -4,10 +4,12 @@
 
 #include "components/component_updater/installer_policies/history_search_strings_component_installer.h"
 
+#include <stdint.h>
+
 #include <array>
-#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -88,8 +90,7 @@ HistorySearchStringsComponentInstallerPolicy::GetRelativeInstallDir() const {
 
 void HistorySearchStringsComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(std::begin(kHistorySearchStringsPublicKeySHA256),
-               std::end(kHistorySearchStringsPublicKeySHA256));
+  hash->assign_range(kHistorySearchStringsPublicKeySHA256);
 }
 
 std::string HistorySearchStringsComponentInstallerPolicy::GetName() const {

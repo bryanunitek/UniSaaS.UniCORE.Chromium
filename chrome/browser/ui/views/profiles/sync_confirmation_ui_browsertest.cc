@@ -13,12 +13,11 @@
 #include "base/strings/strcat.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/types/strong_alias.h"
-#include "build/build_config.h"
 #include "chrome/browser/consent_auditor/consent_auditor_factory.h"
 #include "chrome/browser/consent_auditor/consent_auditor_test_utils.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
@@ -39,11 +38,13 @@
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/tribool.h"
-#include "content/public/common/content_features.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/widget/any_widget_observer.h"
 
 #if !BUILDFLAG(ENABLE_DICE_SUPPORT)
@@ -217,19 +218,17 @@ class SyncConfirmationStepControllerForTest
   void Show(StepSwitchFinishedCallback step_shown_callback,
             bool reset_state) override {
     // Reload the WebUI in the picker contents.
-    host()->ShowScreenInPickerContents(
+    host().ShowScreenInPickerContents(
         sync_confirmation_url_,
         base::BindOnce(
             &SyncConfirmationStepControllerForTest::OnSyncConfirmationLoaded,
             weak_ptr_factory_.GetWeakPtr(), std::move(step_shown_callback)));
   }
 
-  void OnNavigateBackRequested() override { NOTREACHED(); }
-
   void OnSyncConfirmationLoaded(
       StepSwitchFinishedCallback step_shown_callback) {
     SyncConfirmationUI* sync_confirmation_ui = static_cast<SyncConfirmationUI*>(
-        host()->GetPickerContents()->GetWebUI()->GetController());
+        host().GetPickerContents()->GetWebUI()->GetController());
 
     sync_confirmation_ui->InitializeMessageHandlerWithBrowser(nullptr);
 
@@ -309,7 +308,7 @@ class SyncConfirmationUIWindowPixelTest
         ProfilePicker::Params::ForTesting(
             GetParam().is_first_run ? ProfilePicker::EntryPoint::kFirstRun
                                     : ProfilePicker::EntryPoint::kOnStartup,
-            browser()->profile()->GetPath()),
+            browser()->GetProfile()->GetPath()),
         ProfileManagementFlowController::Step::kPostSignInFlow,
         /*step_controller_factory=*/
         base::BindRepeating([](ProfilePickerWebContentsHost* host) {
@@ -323,8 +322,9 @@ class SyncConfirmationUIWindowPixelTest
     views::Widget* widget = GetWidgetForScreenshot();
 
     auto* test_info = testing::UnitTest::GetInstance()->current_test_info();
-    const std::string screenshot_name =
-        base::StrCat({test_info->test_suite_name(), "_", test_info->name()});
+    const std::string baseline = "8481376";
+    const std::string screenshot_name = base::StrCat(
+        {test_info->test_suite_name(), "_", test_info->name(), "_", baseline});
 
     return VerifyPixelUi(widget, "SyncConfirmationUIWindowPixelTest",
                          screenshot_name) != ui::test::ActionResult::kFailed;
@@ -389,22 +389,56 @@ class SyncConfirmationUIDialogPixelTest
         views::test::AnyWidgetTestPasskey{},
         "SigninViewControllerDelegateViews");
 
-    auto* controller = browser()->GetFeatures().signin_view_controller();
+    auto* controller = SigninViewController::From(browser());
     controller->ShowModalSyncConfirmationDialog(
         sync_param.sync_style == SyncConfirmationStyle::kSigninInterceptModal,
         sync_param.is_sync_promo);
-    widget_waiter.WaitIfNeededAndGet();
+    views::Widget* widget = widget_waiter.WaitIfNeededAndGet();
     observer.Wait();
+
+    // Clear focus before waiting on the renderer so `VerifyPixelUi()` does not
+    // trigger an asynchronous blur of `#confirmButton[autofocus]` mid-capture.
+    if (auto* focus_manager = widget->GetFocusManager()) {
+      focus_manager->ClearFocus();
+    }
+
+    // Wait for the WebUI to exit `ScreenMode.PENDING` and force a full-frame
+    // repaint so partial damage from the button row or focus ring does not clip
+    // the SVG `<feGaussianBlur>` background gradient.
+    content::WebContents* web_contents =
+        controller->GetModalDialogWebContentsForTesting();
+    ASSERT_TRUE(web_contents);
+    EXPECT_EQ(true, content::EvalJs(web_contents, R"(
+      (async () => {
+        const componentName =
+            document.querySelector('sync-confirmation-app-refresh')
+                ? 'sync-confirmation-app-refresh'
+                : 'sync-confirmation-app';
+        await customElements.whenDefined(componentName);
+        const app = document.querySelector(componentName);
+        if (!app) {
+          return false;
+        }
+        while (app.isPending_ && app.isPending_()) {
+          await new Promise(resolve => requestAnimationFrame(resolve));
+        }
+        if (app.updateComplete) {
+          await app.updateComplete;
+        }
+        app.shadowRoot?.activeElement?.blur();
+        app.style.visibility = 'hidden';
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        app.style.visibility = '';
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        return true;
+      })();
+    )"));
   }
 };
 
 IN_PROC_BROWSER_TEST_P(SyncConfirmationUIDialogPixelTest, InvokeUi_default) {
-#if BUILDFLAG(IS_WIN)
-  if (base::FeatureList::IsEnabled(features::kInitialWebUI)) {
-    GTEST_SKIP() << "Skipping test because it fails with InitialWebUI enabled. "
-                    "See b/477426026.";
-  }
-#endif
+  set_baseline("8481376");
   ShowAndVerifyUi();
 }
 
@@ -457,7 +491,7 @@ class SyncConfirmationUITest
   // LoginUIService::Observer:
   void OnSyncConfirmationUIClosed(
       LoginUIService::SyncConfirmationUIClosedResult result) override {
-    browser()->GetFeatures().signin_view_controller()->CloseModalSignin();
+    SigninViewController::From(browser())->CloseModalSignin();
   }
 
   [[nodiscard]] AccountInfo FillAccountInfoWithEscapedHtmlCharacters(
@@ -529,11 +563,9 @@ IN_PROC_BROWSER_TEST_P(SyncConfirmationUITest,
   account_info = FillAccountInfoWithEscapedHtmlCharacters(account_info);
   identity_test_env()->UpdateAccountInfoForAccount(account_info);
 
-  browser()
-      ->GetFeatures()
-      .signin_view_controller()
-      ->ShowModalSyncConfirmationDialog(IsSigninIntercept(),
-                                        /*is_sync_promo=*/true);
+  SigninViewController::From(browser())->ShowModalSyncConfirmationDialog(
+      IsSigninIntercept(),
+      /*is_sync_promo=*/true);
   switch (GetAction()) {
     case SyncConfirmationUIAction::kTurnSyncOn:
       EXPECT_TRUE(

@@ -30,6 +30,8 @@ public class ListMenuButton extends ChromeImageButton {
     private final ListMenuHost mListMenuHost;
     private final Handler mHandler;
     private boolean mIsActive;
+    private boolean mMaintainPressedStateWhenMenuOpen = true;
+    private boolean mMaintainFocusStateWhenMenuOpen = true;
 
     private boolean mIsAttachedToWindowForTesting;
 
@@ -47,7 +49,7 @@ public class ListMenuButton extends ChromeImageButton {
 
     /**
      * Text that represents the item this menu button is related to. This will affect the content
-     * description of the view {@see #setContentDescription(CharSequence)}.
+     * description of the view {@link #setContentDescription(CharSequence)}.
      *
      * @param context The string representation of the list item this button represents.
      */
@@ -84,7 +86,7 @@ public class ListMenuButton extends ChromeImageButton {
     }
 
     /**
-     * @returns The {@link ListMenuHost} of the menu.
+     * @return The {@link ListMenuHost} of the menu.
      */
     public ListMenuHost getHost() {
         return mListMenuHost;
@@ -101,21 +103,53 @@ public class ListMenuButton extends ChromeImageButton {
         mListMenuHost.showMenu();
     }
 
+    /**
+     * Sets whether the button should maintain a pressed visual state while the menu popup is open.
+     * Defaults to true.
+     *
+     * @param maintain Whether to maintain the pressed state while open.
+     */
+    public void setMaintainPressedStateWhenMenuOpen(boolean maintain) {
+        mMaintainPressedStateWhenMenuOpen = maintain;
+        if (!maintain && mIsActive) {
+            setIsPressed(false);
+        }
+    }
+
+    /**
+     * Sets whether the button should maintain keyboard focus while the menu popup is open.
+     * Defaults to true.
+     *
+     * @param maintain Whether to maintain the focus state while open.
+     */
+    public void setMaintainFocusStateWhenMenuOpen(boolean maintain) {
+        mMaintainFocusStateWhenMenuOpen = maintain;
+        if (!maintain && mIsActive) {
+            clearFocus();
+        }
+    }
+
     /** Store the active state to set 'pressed' style to the button when the menu is open. */
     public void setIsPressed(boolean active) {
-        mIsActive = active;
+        mIsActive = mMaintainPressedStateWhenMenuOpen && active;
+        if (!mMaintainFocusStateWhenMenuOpen && active) {
+            clearFocus();
+        }
         mHandler.post(
                 new Runnable() {
                     @Override
                     public void run() {
-                        setPressed(active);
+                        if (!mMaintainFocusStateWhenMenuOpen && active) {
+                            clearFocus();
+                        }
+                        setPressed(mIsActive);
                     }
                 });
     }
 
     @Override
     public void setPressed(boolean pressed) {
-        super.setPressed(mIsActive || pressed);
+        super.setPressed((mMaintainPressedStateWhenMenuOpen && mIsActive) || pressed);
     }
 
     /**
@@ -125,6 +159,15 @@ public class ListMenuButton extends ChromeImageButton {
      */
     public void setMenuMaxWidth(int maxWidth) {
         mListMenuHost.setMenuMaxWidth(maxWidth);
+    }
+
+    /**
+     * Set the max height of the popup menu.
+     *
+     * @param maxHeight The max height of the popup.
+     */
+    public void setMenuMaxHeight(int maxHeight) {
+        mListMenuHost.setMenuMaxHeight(maxHeight);
     }
 
     /**

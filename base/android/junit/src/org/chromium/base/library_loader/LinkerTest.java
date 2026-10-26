@@ -6,8 +6,6 @@ package org.chromium.base.library_loader;
 
 import android.os.ParcelFileDescriptor;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -32,22 +30,32 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
 
 /** Tests for {@link Linker}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {LinkerTest.ShadowParcelFileDescriptorForLibInfo.class})
+@Config(shadows = {LinkerTest.ShadowParcelFileDescriptorForLibInfo.class})
 @SuppressWarnings("GuardedBy") // doNothing().when(...).methodLocked() cannot resolve |mLock|.
 public class LinkerTest {
     // This shadow is required for calling LibInfo.to/from Aidl. Since we don't actually have real
     // FDs underpining anything, we have to fake the functions LibInfo is calling.
     @Implements(ParcelFileDescriptor.class)
     public static class ShadowParcelFileDescriptorForLibInfo extends ShadowParcelFileDescriptor {
+        private boolean mDetached;
+
         @Implementation
         public static ParcelFileDescriptor fromFd(int fd) {
             return Shadow.newInstanceOf(ParcelFileDescriptor.class);
         }
 
+        @Override
+        @Implementation
+        public ParcelFileDescriptor dup() {
+            return Shadow.newInstanceOf(ParcelFileDescriptor.class);
+        }
+
         @Implementation
         public int detachFd() {
+            if (mDetached) {
+                throw new IllegalStateException("Already detached");
+            }
+            mDetached = true;
             return 1023;
         }
     }
@@ -71,7 +79,6 @@ public class LinkerTest {
     }
 
     @Test
-    @SmallTest
     public void testConsumer() {
         // Set up.
         Linker linker = Mockito.spy(new Linker());
@@ -90,7 +97,6 @@ public class LinkerTest {
     }
 
     @Test
-    @SmallTest
     public void testProducer() {
         // Set up.
         Linker linker = Mockito.spy(new Linker());
@@ -106,7 +112,6 @@ public class LinkerTest {
     }
 
     @Test
-    @SmallTest
     public void testConsumerReserveRandom() {
         // Set up.
         Linker linker = Mockito.spy(new Linker());
@@ -120,7 +125,6 @@ public class LinkerTest {
     }
 
     @Test
-    @SmallTest
     public void testReservingZeroFallsBackToRandom() {
         // Set up.
         Linker linker = Mockito.spy(new Linker());
@@ -134,7 +138,6 @@ public class LinkerTest {
     }
 
     @Test
-    @SmallTest
     public void testAppZygoteProducingRelro() {
         // Set up.
         Linker linker = Mockito.spy(new Linker());
@@ -153,7 +156,6 @@ public class LinkerTest {
     }
 
     @Test
-    @SmallTest
     public void testAppZygoteFailsToFindReservedAddressRange() {
         // Set up.
         Linker linker = Mockito.spy(new Linker());
@@ -170,12 +172,12 @@ public class LinkerTest {
     }
 
     @Test
-    @SmallTest
     public void testRelroSharingStatusHistogram() {
         // Set up.
         Linker linker = Mockito.spy(new Linker());
         Mockito.doNothing().when(linker).loadLinkerJniLibraryLocked();
         Mockito.when(mNativeMock.getRelroSharingResult()).thenReturn(1);
+        Mockito.when(mNativeMock.getRelroNotSharedPercentage()).thenReturn(3);
         Linker.LibInfo libInfo = Mockito.spy(new Linker.LibInfo());
         long someAddress = 1 << 12;
         libInfo.mLoadAddress = someAddress;
@@ -195,10 +197,13 @@ public class LinkerTest {
                 1,
                 RecordHistogram.getHistogramTotalCountForTesting(
                         "ChromiumAndroidLinker.RelroSharingStatus2"));
+        Assert.assertEquals(
+                1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "ChromiumAndroidLinker.RelroNotSharedPercentage", 3));
     }
 
     @Test
-    @SmallTest
     public void testBrowserExpectingRelroFromZygote() {
         // Set up.
         Linker linker = Mockito.spy(new Linker());
@@ -217,7 +222,6 @@ public class LinkerTest {
     }
 
     @Test
-    @SmallTest
     public void testPrivilegedProcessWithHint() {
         // Set up.
         Linker linker = Mockito.spy(new Linker());
@@ -236,5 +240,25 @@ public class LinkerTest {
         // Unfortunately there does not seem to be an elegant way to set |mLoadAddress| without
         // extracting creation of mLocalLibInfo from ensureInitialized(). Hence no checks are
         // present here involving the exact value of |mLoadAddress|.
+    }
+
+    @Test
+    public void testMultipleLibInfoFromAidlDoesNotInvalidateFd() {
+        Linker.LibInfo libInfo = new Linker.LibInfo();
+        libInfo.mLoadAddress = 1 << 12;
+        libInfo.mRelroFd = 1023;
+        IRelroLibInfo relros = libInfo.toAidl();
+        Assert.assertNotNull(relros.fd);
+
+        Linker.LibInfo remote1 = Linker.LibInfo.fromAidl(relros);
+        Assert.assertEquals(1023, remote1.mRelroFd);
+
+        // The original aidl relros.fd must not have been detached or closed so subsequent
+        // usages (e.g. sending to other child processes) remain valid.
+        Linker.LibInfo remote2 = Linker.LibInfo.fromAidl(relros);
+        Assert.assertEquals(1023, remote2.mRelroFd);
+
+        remote1.close();
+        remote2.close();
     }
 }

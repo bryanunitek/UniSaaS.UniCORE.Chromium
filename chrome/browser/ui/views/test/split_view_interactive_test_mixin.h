@@ -11,7 +11,9 @@
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/views/frame/contents_web_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_resize_area.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "chrome/browser/ui/views/test/split_view_browser_test_mixin.h"
@@ -50,7 +52,7 @@ class SplitViewInteractiveTestMixin : public SplitViewBrowserTestMixin<T> {
         SplitViewBrowserTestMixin<T>::Do([&, other_tab, layout, ratio]() {
           if (other_tab.has_value()) {
             SplitViewBrowserTestMixin<T>::browser()
-                ->tab_strip_model()
+                ->GetTabStripModel()
                 ->AddToNewSplit(
                     {other_tab.value()},
                     split_tabs::SplitTabVisualData(layout, ratio),
@@ -78,16 +80,16 @@ class SplitViewInteractiveTestMixin : public SplitViewBrowserTestMixin<T> {
     auto result = SplitViewBrowserTestMixin<T>::Steps(
         SplitViewBrowserTestMixin<T>::Check([index, this]() {
           return SplitViewBrowserTestMixin<T>::browser()
-              ->tab_strip_model()
+              ->GetTabStripModel()
               ->GetSplitForTab(index)
               .has_value();
         }),
         SplitViewBrowserTestMixin<T>::Do([index, this]() {
           auto split_id = SplitViewBrowserTestMixin<T>::browser()
-                              ->tab_strip_model()
+                              ->GetTabStripModel()
                               ->GetSplitForTab(index);
           SplitViewBrowserTestMixin<T>::browser()
-              ->tab_strip_model()
+              ->GetTabStripModel()
               ->RemoveSplit(split_id.value());
         }),
         SplitViewBrowserTestMixin<T>::WaitForHide(

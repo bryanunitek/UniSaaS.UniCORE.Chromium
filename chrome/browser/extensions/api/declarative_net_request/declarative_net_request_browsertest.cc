@@ -18,6 +18,7 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -67,21 +68,22 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/webui_config_map.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/fenced_frame_test_util.h"
-#include "content/public/test/privacy_sandbox_coordinator_test_util.h"
 #include "content/public/test/simple_url_loader_test_helper.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "content/public/test/web_transport_simple_test_server.h"
+#include "extensions/browser/api/constants.h"
 #include "extensions/browser/api/declarative_net_request/action_tracker.h"
 #include "extensions/browser/api/declarative_net_request/composite_matcher.h"
 #include "extensions/browser/api/declarative_net_request/constants.h"
@@ -100,6 +102,7 @@
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_action.h"
 #include "extensions/browser/extension_action_manager.h"
+#include "extensions/browser/extension_file_task_runner.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
@@ -145,11 +148,12 @@
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/webui/untrusted_web_ui_browsertest_util.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #endif
@@ -263,17 +267,14 @@ class DeclarativeNetRequestBrowserTest
   DeclarativeNetRequestBrowserTest() {
     feature_list_.InitWithFeatures(
         /*enabled_features=*/
-        {network::features::kInterestGroupStorage,
-         blink::features::kAdInterestGroupAPI, blink::features::kFledge,
-         blink::features::kFledgeBiddingAndAuctionServer,
-         blink::features::kFencedFrames,
+        {blink::features::kFencedFrames,
          blink::features::kFencedFramesAPIChanges,
-         blink::features::kFencedFramesDefaultMode,
          features::kPrivacySandboxAdsAPIsOverride},
         /*disabled_features=*/
         {// TODO(crbug.com/40248833): Use HTTPS URLs in tests to avoid
          // having to disable these features.
-         features::kHttpsUpgrades, features::kHttpsFirstModeIncognito});
+         features::kHttpsUpgrades, features::kHttpsFirstModeIncognito,
+         extensions_features::kDisableExtensionsOnChromeUrlsSwitch});
     net::test_server::RegisterDefaultHandlers(embedded_test_server());
   }
 
@@ -893,10 +894,6 @@ class DeclarativeNetRequestBrowserTest
     return https_server_.get();
   }
 
-  content::test::FencedFrameTestHelper& fenced_frame_test_helper() {
-    return fenced_frame_test_helper_;
-  }
-
  private:
   enum class RulesetScope { kDynamic, kSession };
   void UpdateRules(const ExtensionId& extension_id,
@@ -1099,8 +1096,6 @@ class DeclarativeNetRequestBrowserTest
         base::BindRepeating(&DeclarativeNetRequestBrowserTest::MonitorRequest,
                             base::Unretained(this)));
   }
-
-  content::test::FencedFrameTestHelper fenced_frame_test_helper_;
 
   base::test::ScopedFeatureList feature_list_;
   base::ScopedTempDir temp_dir_;
@@ -1537,17 +1532,6 @@ IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest,
     content::RenderFrameHost* child = GetFrameByName("third-party.com");
     EXPECT_TRUE(child);
     EXPECT_EQ(test_case.expect_scripts_loaded, WasFrameWithScriptLoaded(child));
-
-    // Check the requests made via fencedframes are also loaded/blocked as
-    // expected.
-    GURL fencedframe_url =
-        embedded_test_server()->GetURL("third-party.test", "/child_frame.html");
-    content::RenderFrameHost* fencedframe =
-        fenced_frame_test_helper().CreateFencedFrame(GetPrimaryMainFrame(),
-                                                     fencedframe_url);
-    EXPECT_TRUE(fencedframe);
-    EXPECT_EQ(test_case.expect_scripts_loaded,
-              WasFrameWithScriptLoaded(fencedframe));
   }
 
   // Test requests made outside of tabs (from a shared worker).
@@ -1989,6 +1973,46 @@ IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest,
     UninstallExtension(extension_id);
     WaitForExtensionsWithRulesetsCount(0);
     test_extension_enabled(false);
+  }
+}
+
+// Regression test for crbug.com/40807910: uninstalling an extension that has a
+// dynamic ruleset should delete its dynamic rules directory from disk.
+IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest,
+                       DynamicRulesDirectoryDeletedOnUninstall) {
+  set_config_flags(ConfigFlag::kConfig_HasBackgroundScript);
+
+  // Load an extension and add a dynamic rule so its dynamic rules directory is
+  // written to disk.
+  ASSERT_NO_FATAL_FAILURE(LoadExtensionWithRules({}));
+  const ExtensionId extension_id = last_loaded_extension_id();
+  TestRule rule = CreateGenericRule();
+  rule.condition->url_filter = std::string("dynamic.example");
+  ASSERT_NO_FATAL_FAILURE(AddDynamicRules(extension_id, {rule}));
+
+  const base::FilePath dynamic_rules_dir =
+      FileBackedRulesetSource::CreateDynamic(profile(), extension_id)
+          .json_path()
+          .DirName();
+  {
+    base::ScopedAllowBlockingForTesting scoped_allow_blocking;
+    ASSERT_TRUE(base::DirectoryExists(dynamic_rules_dir));
+  }
+
+  UninstallExtension(extension_id);
+  WaitForExtensionsWithRulesetsCount(0);
+
+  // The directory is deleted asynchronously on the extension file task runner;
+  // flush it before checking that the directory is gone.
+  {
+    base::RunLoop run_loop;
+    GetExtensionFileTaskRunner()->PostTaskAndReply(FROM_HERE, base::DoNothing(),
+                                                   run_loop.QuitClosure());
+    run_loop.Run();
+  }
+  {
+    base::ScopedAllowBlockingForTesting scoped_allow_blocking;
+    EXPECT_FALSE(base::DirectoryExists(dynamic_rules_dir));
   }
 }
 
@@ -3573,6 +3597,32 @@ IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest, DynamicRules) {
   EXPECT_TRUE(IsNavigationBlocked(yahoo_url));
 }
 
+// A privileged WebContents (see //chrome's PrivilegedWebContents) is exempt
+// from Declarative Net Request: a main-frame block rule that blocks an ordinary
+// tab does not fire for a privileged WebContents at the same URL.
+IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest,
+                       PrivilegedWebContentsExemptFromDNR) {
+  TestRule rule = CreateMainFrameBlockRule("block.example");
+  ASSERT_NO_FATAL_FAILURE(LoadExtensionWithRules({rule}));
+
+  const GURL url = embedded_test_server()->GetURL(
+      "block.example", "/pages_with_script/index.html");
+
+  // An ordinary tab navigation is blocked by the rule.
+  EXPECT_TRUE(IsNavigationBlocked(url));
+
+  // A privileged WebContents navigation to the same URL is not evaluated
+  // against the ruleset, so the page loads.
+  content::WebContents::CreateParams params(profile());
+  content::WebContents::PrivilegedParams privileged_params;
+  privileged_params.feature_id = 42;
+  params.privileged_params = privileged_params;
+  std::unique_ptr<content::WebContents> privileged =
+      content::WebContents::Create(params);
+  EXPECT_TRUE(content::NavigateToURL(privileged.get(), url));
+  EXPECT_TRUE(WasFrameWithScriptLoaded(privileged->GetPrimaryMainFrame()));
+}
+
 // Tests rules using the Redirect dictionary.
 IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest, Redirect) {
   TestRule rule1 = CreateGenericRule();
@@ -4262,10 +4312,10 @@ IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest,
 
   // Now create a new browser with the same profile as |browser()| and navigate
   // to |page_url|.
-  Browser* second_browser = CreateBrowser(profile());
+  BrowserWindowInterface* second_browser = CreateBrowser(profile());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(second_browser, page_url));
   content::WebContents* second_browser_contents =
-      second_browser->tab_strip_model()->GetActiveWebContents();
+      second_browser->GetTabStripModel()->GetActiveWebContents();
 
   int second_browser_tab_id =
       ExtensionTabUtil::GetTabId(second_browser_contents);
@@ -4324,12 +4374,12 @@ IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest,
   PrefsHelper helper(*ExtensionPrefs::Get(profile()));
   helper.SetUseActionCountAsBadgeText(extension_id, true);
 
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(incognito_browser, GURL("http://abc.com")));
 
   content::WebContents* incognito_contents =
-      incognito_browser->tab_strip_model()->GetActiveWebContents();
+      incognito_browser->GetTabStripModel()->GetActiveWebContents();
 
   const Extension* dnr_extension = last_loaded_extension();
   ExtensionAction* incognito_action =
@@ -4660,8 +4710,7 @@ IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest,
       SetExtensionActionOptions(
           extension->id(),
           base::StringPrintf("{tabUpdate: {tabId: %d, increment: 10}}", 999)),
-      ErrorUtils::FormatErrorMessage(declarative_net_request::kTabNotFoundError,
-                                     "999"));
+      ErrorUtils::FormatErrorMessage(kTabNotFoundError, "999"));
   EXPECT_EQ("11", action->GetDisplayBadgeText(tab_id));
 
   // The action count should continue to increment when an action is taken.
@@ -4885,7 +4934,7 @@ IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest,
   NavigateFrame(kFrameName1, get_url_for_host("def.com"));
 
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), page_url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), page_url, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   ASSERT_EQ(2, browser()->tab_strip_model()->count());
@@ -7149,324 +7198,80 @@ IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestWebTransportTest, BlockRequests) {
                                 kOpenWebTransportScript,
                                 webtransport_server_.server_address().port())));
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-// Tests that Protected Audience requests can have their headers modified by the
-// declarativeNetRequest API.
-IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest,
-                       ProtectedAudienceNetworkRequestsModifyHeaders) {
-  privacy_sandbox::ScopedPrivacySandboxAttestations scoped_attestations(
-      privacy_sandbox::PrivacySandboxAttestations::CreateForTesting());
-  // Mark all Privacy Sandbox APIs as attested since the test case is testing
-  // behaviors not related to attestations.
-  privacy_sandbox::PrivacySandboxAttestations::GetInstance()
-      ->SetAllPrivacySandboxAttestedForTesting(true);
-
-  static constexpr char kAddedHeaderName[] = "Header-Name";
-  static constexpr char kAddedHeaderValue[] = "Header-Value";
+// Tests that redirect rules are not applied to WebTransport handshakes and
+// no false-positive matched rules are recorded.
+IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestWebTransportTest, RedirectIgnored) {
+  set_config_flags(ConfigFlag::kConfig_HasBackgroundScript |
+                   ConfigFlag::kConfig_HasFeedbackPermission);
 
   ASSERT_TRUE(https_server()->Start());
 
-  PrivacySandboxSettingsFactory::GetForProfile(profile())
-      ->SetAllPrivacySandboxAllowedForTesting();
+  // Rule 1 is a redirect rule for echo1. Since redirect is unsupported for
+  // WebTransport, this rule should be ignored, the connection should succeed,
+  // and the rule should not be counted as matched.
+  TestRule rule1 = CreateGenericRule(1);
+  rule1.condition->url_filter = "echo1_redirect";
+  rule1.priority = kMinValidPriority;
+  rule1.action->type = "redirect";
+  rule1.action->redirect.emplace();
+  rule1.action->redirect->url = "https://other.com/";
 
-  NavigateToURL(https_server()->GetURL("/interest_group/fenced_frame.html"));
+  // Rule 2 is a block rule for echo2. This should successfully block the
+  // WebTransport handshake and be recorded in matched rules.
+  TestRule rule2 = CreateGenericRule(2);
+  rule2.condition->url_filter = "echo2_block";
+  rule2.priority = kMinValidPriority;
+  rule2.action->type = "block";
 
-  GURL bidding_logic_url =
-      https_server()->GetURL("/interest_group/bidding_logic.js");
-  GURL bidding_signals_url =
-      https_server()->GetURL("/interest_group/bidding_signals.cbor");
-  GURL decision_logic_url =
-      https_server()->GetURL("/interest_group/decision_logic.js");
-  GURL scoring_signals_url =
-      https_server()->GetURL("/interest_group/scoring_signals.cbor");
-  GURL bidder_report_url = https_server()->GetURL("/echo?bidder_report");
-  GURL decision_report_url = https_server()->GetURL("/echo?decision_report");
-
-  // Set up a coordinator and server key for the Origin shared by the bidding
-  // and scoring signals URLs, so can use it as a trusted scoring signals URL.
-  // This test does not set up decoding the encrypted request or sending an
-  // encrypted response to it, since all it checks is that headers can be added
-  // to the request it makes.
-  const url::Origin kCoordinatorOrigin =
-      url::Origin::Create(GURL("https://coordinator.test"));
-  ConfigureTestPrivacySandboxCoordinatorKeys(
-      GetActiveWebContents()
-          ->GetBrowserContext()
-          ->GetDefaultStoragePartition()
-          ->GetInterestGroupManager(),
-      content::InterestGroupManager::TrustedServerAPIType::kTrustedKeyValue,
-      kCoordinatorOrigin, {https_server()->GetOrigin()});
-
-  // URL of the winning ad. Isn't actually tested anywhere in this test, but a
-  // fenced frame is navigated to it, so best to use a URL with known behavior.
-  // A random hostname will end up trying to connect to localhost, which could
-  // end up talking to some other server running locally.
-  GURL ad_url = https_server()->GetURL("/echo");
-
-  // Add an interest group.
-  EXPECT_EQ("done", content::EvalJs(GetActiveWebContents(),
-                                    content::JsReplace(
-                                        R"(
-                              (function() {
-                                navigator.joinAdInterestGroup({
-                                  name: 'cars',
-                                  owner: $1,
-                                  biddingLogicURL: $2,
-                                  trustedBiddingSignalsURL: $3,
-                                  trustedBiddingSignalsCoordinator: $4,
-                                  userBiddingSignals: [],
-                                  ads: [{
-                                    renderURL: 'https://example.com/render',
-                                    metadata: {ad: 'metadata', here: [1, 2, 3]}
-                                  }]
-                                }, /*joinDurationSec=*/ 300);
-                                return 'done';
-                              })();
-                            )",
-                                        url::Origin::Create(bidding_logic_url),
-                                        bidding_logic_url, bidding_signals_url,
-                                        kCoordinatorOrigin)));
-
-  // Create an extension to add a header to all requests.
-  TestRule custom_response_header_rule = CreateModifyHeadersRule(
-      1 /* id */, 1 /* priority */, "*",
-      // request_headers
-      std::vector<TestHeaderInfo>(
-          {TestHeaderInfo(kAddedHeaderName, "set", kAddedHeaderValue)}),
-      std::nullopt);
-  // CreateModifyHeadersRule() applies to subframes only by default, so clear
-  // that.
-  custom_response_header_rule.condition->resource_types = std::nullopt;
-
-  ASSERT_NO_FATAL_FAILURE(
-      LoadExtensionWithRules({custom_response_header_rule}, "test_extension",
-                             {URLPattern::kAllUrlsPattern}));
-
-  std::string run_auction_command = content::JsReplace(
-      R"(
-         (async function() {
-           let config = await navigator.runAdAuction({
-             seller: $1,
-             decisionLogicURL: $2,
-             interestGroupBuyers: [$1],
-             trustedScoringSignalsURL: $3,
-             trustedScoringSignalsCoordinator: $4,
-           });
-           document.querySelector('fencedframe').config =
-              new FencedFrameConfig(config);
-           return config;
-         })()
-      )",
-      url::Origin::Create(decision_logic_url), decision_logic_url,
-      scoring_signals_url, kCoordinatorOrigin);
-
-  // The auction should return a unique URN URL.
-  GURL ad_urn(content::EvalJs(GetActiveWebContents(), run_auction_command)
-                  .ExtractString());
-  EXPECT_TRUE(ad_urn.SchemeIs(url::kUrnScheme));
-
-  // Wait to see both the report request of both worklets.
-  WaitForRequest(bidder_report_url);
-  WaitForRequest(decision_report_url);
-  // Clear observed URLs.
-  std::map<GURL, net::test_server::HttpRequest> requests =
-      GetAndResetRequestsToServer();
-
-  // Make sure the add headers rule was applied to all requests related to the
-  // auction.
-  for (const GURL& expected_url :
-       {bidding_logic_url, bidding_signals_url, decision_logic_url,
-        scoring_signals_url, bidder_report_url, decision_report_url}) {
-    auto request = requests.find(expected_url);
-    ASSERT_NE(request, requests.end());
-    auto added_header = request->second.headers.find(kAddedHeaderName);
-    ASSERT_NE(added_header, request->second.headers.end());
-    EXPECT_EQ(kAddedHeaderValue, added_header->second);
-  }
-}
-
-// Tests that Protected Audience requests can be blocked by the
-// declarativeNetRequest API.
-IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest,
-                       ProtectedAudienceNetworkRequestsBlockRequests) {
-  privacy_sandbox::ScopedPrivacySandboxAttestations scoped_attestations(
-      privacy_sandbox::PrivacySandboxAttestations::CreateForTesting());
-  // Mark all Privacy Sandbox APIs as attested since the test case is testing
-  // behaviors not related to attestations.
-  privacy_sandbox::PrivacySandboxAttestations::GetInstance()
-      ->SetAllPrivacySandboxAttestedForTesting(true);
-
-  ASSERT_TRUE(https_server()->Start());
-
-  PrivacySandboxSettingsFactory::GetForProfile(profile())
-      ->SetAllPrivacySandboxAllowedForTesting();
-
-  NavigateToURL(https_server()->GetURL("/interest_group/fenced_frame.html"));
-
-  GURL bidding_logic_url =
-      https_server()->GetURL("/interest_group/bidding_logic.js");
-  GURL decision_logic_url =
-      https_server()->GetURL("/interest_group/decision_logic.js");
-  GURL bidder_report_url = https_server()->GetURL("/echo?bidder_report");
-  GURL decision_report_url = https_server()->GetURL("/echo?decision_report");
-
-  // URL of the winning ad. Isn't actually tested anywhere in this test, but a
-  // fenced frame is navigated to it, so best to use a URL with known behavior.
-  // A random hostname will end up trying to connect to localhost, which could
-  // end up talking to some other server running locally.
-  GURL ad_url = https_server()->GetURL("/echo");
-
-  // Add an interest group.
-  EXPECT_EQ("done", content::EvalJs(
-                        GetActiveWebContents(),
-                        content::JsReplace(
-                            R"(
-                              (function() {
-                                navigator.joinAdInterestGroup({
-                                  name: 'cars',
-                                  owner: $1,
-                                  biddingLogicURL: $2,
-                                  userBiddingSignals: [],
-                                  ads: [{
-                                    renderURL: 'https://example.com/render',
-                                    metadata: {ad: 'metadata', here: [1, 2, 3]}
-                                  }]
-                                }, /*joinDurationSec=*/ 300);
-                                return 'done';
-                              })();
-                            )",
-                            url::Origin::Create(bidding_logic_url).Serialize(),
-                            bidding_logic_url)));
-
-  std::string run_auction_command = content::JsReplace(
-      R"(
-         (async function() {
-           let config = await navigator.runAdAuction({
-             seller: $1,
-             decisionLogicURL: $2,
-             interestGroupBuyers: [$1],
-           });
-           document.querySelector('fencedframe').config =
-              new FencedFrameConfig(config);
-           return config;
-         })()
-      )",
-      url::Origin::Create(decision_logic_url).Serialize(),
-      decision_logic_url.spec());
-
-  // Add a rule to block the bidder's report URL.
-  TestRule block_report_rule = CreateGenericRule();
-  block_report_rule.condition->url_filter = bidder_report_url.spec() + "^";
-  block_report_rule.id = 1;
   ASSERT_NO_FATAL_FAILURE(LoadExtensionWithRules(
-      {block_report_rule}, "test_extension2", {URLPattern::kAllUrlsPattern}));
+      {rule1, rule2}, "test_extension", {URLPattern::kAllUrlsPattern}));
 
-  // Run the auction.
-  GURL ad_urn =
-      GURL(content::EvalJs(GetActiveWebContents(), run_auction_command)
-               .ExtractString());
-  EXPECT_TRUE(ad_urn.SchemeIs(url::kUrnScheme));
+  NavigateToURL(https_server()->GetURL("/echo"));
 
-  // Wait for the decision script's report URL to be requested.
-  WaitForRequest(decision_report_url);
-  // The bidder script should be blocked. Unfortunately, there's no way to wait
-  // for the bidder script to not be requested. Instead, just wait for an
-  // addition "tiny timeout" delay, and make sure it was not requested.
-  base::RunLoop run_loop;
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, run_loop.QuitClosure(), TestTimeouts::tiny_timeout());
-  run_loop.Run();
-  EXPECT_EQ(0u, GetAndResetRequestsToServer().count(bidder_report_url));
+  static constexpr char kOpenWebTransportScript[] = R"((
+    async () =>
+    {
+      const testCases = ["echo1_redirect", "echo2_block"];
+
+      let blockedTestCases = [];
+
+      await Promise.allSettled(
+        testCases.map(testCase =>
+          new Promise(async (resolve) =>
+          {
+            try {
+              const transport = new WebTransport(
+                `https://localhost:%d/${testCase}`);
+              // `transport.ready` only resolves if the handshake with the local
+              // server succeeds. Any failure (whether blocked by DNR or
+              // redirected to the unreachable "https://other.com/") rejects and
+              // enters `catch`.
+              await transport.ready;
+              transport.close();
+            } catch (e) {
+              blockedTestCases.push(testCase);
+            }
+            resolve();
+          })
+        )
+      );
+      return blockedTestCases.sort().join();
+    }
+  )())";
+
+  content::RenderFrameHost* main_frame = GetPrimaryMainFrame();
+  EXPECT_EQ("echo2_block",
+            content::EvalJs(main_frame,
+                            base::StringPrintf(
+                                kOpenWebTransportScript,
+                                webtransport_server_.server_address().port())));
+
+  // Verify that only the block rule (rule 2) was recorded as matched. The
+  // redirect rule (rule 1) should not have matched.
+  EXPECT_EQ("2", GetRuleIdsMatched(last_loaded_extension_id(), base::Time()));
 }
 
-// Tests that if the declarativeNetRequest API tries to redirect Protected
-// Audience requests, the request is blocked by the Protected Audience logic,
-// which doesn't allow redirects, instead of being redirected.
-IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestBrowserTest,
-                       ProtectedAudienceNetworkRequestsBlockRedirect) {
-  privacy_sandbox::ScopedPrivacySandboxAttestations scoped_attestations(
-      privacy_sandbox::PrivacySandboxAttestations::CreateForTesting());
-  // Mark all Privacy Sandbox APIs as attested since the test case is testing
-  // behaviors not related to attestations.
-  privacy_sandbox::PrivacySandboxAttestations::GetInstance()
-      ->SetAllPrivacySandboxAttestedForTesting(true);
-
-  ASSERT_TRUE(https_server()->Start());
-
-  PrivacySandboxSettingsFactory::GetForProfile(profile())
-      ->SetAllPrivacySandboxAllowedForTesting();
-
-  NavigateToURL(https_server()->GetURL("/interest_group/fenced_frame.html"));
-
-  GURL bidding_logic_url =
-      https_server()->GetURL("/interest_group/bidding_logic.js");
-  GURL decision_logic_url =
-      https_server()->GetURL("/interest_group/decision_logic.js");
-  GURL bidder_report_url = https_server()->GetURL("/echo?bidder_report");
-  GURL decision_report_url = https_server()->GetURL("/echo?decision_report");
-
-  // Add an interest group.
-  EXPECT_EQ("done", content::EvalJs(
-                        GetActiveWebContents(),
-                        content::JsReplace(
-                            R"(
-          (function() {
-            navigator.joinAdInterestGroup({
-              name: 'cars',
-              owner: $1,
-              biddingLogicURL: $2,
-              userBiddingSignals: [],
-              ads: [{
-                renderURL: 'https://example.com/render',
-                metadata: {ad: 'metadata', here: [1, 2, 3]}
-              }]
-            }, /*joinDurationSec=*/ 300);
-            return 'done';
-          })();
-        )",
-                            url::Origin::Create(bidding_logic_url).Serialize(),
-                            bidding_logic_url)));
-
-  std::string run_auction_command = content::JsReplace(
-      R"(
-             (async function() {
-               let config = await navigator.runAdAuction({
-                 seller: $1,
-                 decisionLogicURL: $2,
-                 interestGroupBuyers: [$1],
-               });
-               document.querySelector('fencedframe').config =
-                  new FencedFrameConfig(config);
-               return config;
-             })()
-          )",
-      url::Origin::Create(decision_logic_url).Serialize(),
-      decision_logic_url.spec());
-
-  // Add an extension which redirects requests for the bidding script to a URL
-  // that serves an identical bidding script.
-  TestRule redirect_bidding_logic_rule = CreateGenericRule();
-  redirect_bidding_logic_rule.condition->url_filter =
-      bidding_logic_url.spec() + "^";
-  redirect_bidding_logic_rule.id = 2;
-  redirect_bidding_logic_rule.action->type = "redirect";
-  redirect_bidding_logic_rule.action->redirect.emplace();
-  redirect_bidding_logic_rule.action->redirect->url =
-      https_server()->GetURL("/interest_group/bidding_logic2.js").spec();
-
-  ASSERT_NO_FATAL_FAILURE(
-      LoadExtensionWithRules({redirect_bidding_logic_rule}, "test_extension3",
-                             {URLPattern::kAllUrlsPattern}));
-
-  // Redirecting a bidder script, even to another bidder script, should cause
-  // the request to fail, which causes the entire auction to fail, since there's
-  // only one bidder script.
-  EXPECT_EQ(base::Value(),
-            content::EvalJs(GetActiveWebContents(), run_auction_command));
-}
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // TODO(crbug.com/393191910): Port to desktop Android. These tests fail with
 // no logging and no stack.
 class DeclarativeNetRequestBackForwardCacheBrowserTest
@@ -7652,7 +7457,7 @@ IN_PROC_BROWSER_TEST_P(DeclarativeNetRequestControllableResponseTest,
       "google.com", "/pages_with_script/index.html");
 
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), page_url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), page_url, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB);
 
   controllable_http_response().WaitForRequest();
@@ -7720,7 +7525,8 @@ IN_PROC_BROWSER_TEST_P(DNRMatchResponseHeadersBrowserTest, BlockRequests) {
            {TestHeaderCondition("set-cookie", {}, {})})},
   };
 
-  // Load the extension.
+  // Load the extension. Host permissions are required since the allow rule
+  // matches on the value of the set-cookie header.
   std::vector<TestRule> rules;
   for (const auto& rule_data : rules_data) {
     TestRule rule = CreateGenericRule(rule_data.id);
@@ -7732,7 +7538,8 @@ IN_PROC_BROWSER_TEST_P(DNRMatchResponseHeadersBrowserTest, BlockRequests) {
     rule.condition->response_headers = rule_data.response_header_condition;
     rules.push_back(std::move(rule));
   }
-  ASSERT_NO_FATAL_FAILURE(LoadExtensionWithRules(std::move(rules)));
+  ASSERT_NO_FATAL_FAILURE(LoadExtensionWithRules(
+      std::move(rules), "test_extension", {URLPattern::kAllUrlsPattern}));
 
   struct {
     std::string hostname;
@@ -7767,6 +7574,80 @@ IN_PROC_BROWSER_TEST_P(DNRMatchResponseHeadersBrowserTest, BlockRequests) {
                              ? net::OK
                              : net::ERR_BLOCKED_BY_CLIENT;
     EXPECT_EQ(expected_code, nav_observer.last_net_error_code());
+  }
+}
+
+// Test that rules which match on the values of response headers (other than
+// CORS-safelisted response headers and Content-Encoding) are not matched if the
+// extension doesn't have host permissions for the request. Otherwise, whether
+// the request was blocked could reveal the header's value to the extension.
+IN_PROC_BROWSER_TEST_P(DNRMatchResponseHeadersBrowserTest,
+                       HeaderValueMatchingRequiresHostPermissions) {
+  // A rule that allows all requests to setcookie.com if the set-cookie header
+  // is present with value "cookie=oreo". This requires host permissions.
+  TestRule allow_rule = CreateGenericRule(kMinValidID);
+  allow_rule.action->type = std::string("allow");
+  allow_rule.condition->url_filter = std::string("setcookie.com");
+  allow_rule.condition->resource_types =
+      std::vector<std::string>({"main_frame"});
+  allow_rule.condition->response_headers = std::vector<TestHeaderCondition>(
+      {TestHeaderCondition("set-cookie", {"cookie=oreo"}, {})});
+
+  // A rule that blocks all requests to setcookie.com if the set-cookie header
+  // is present. This doesn't require host permissions since it doesn't check
+  // the value of the response header.
+  TestRule block_rule = CreateGenericRule(kMinValidID + 1);
+  block_rule.condition->url_filter = std::string("setcookie.com");
+  block_rule.condition->resource_types =
+      std::vector<std::string>({"main_frame"});
+  block_rule.condition->response_headers = std::vector<TestHeaderCondition>(
+      {TestHeaderCondition("set-cookie", {}, {})});
+
+  // A rule that blocks requests to contenttype.com with an HTML content type.
+  // This doesn't require host permissions since content-type is a
+  // CORS-safelisted response header.
+  TestRule content_type_rule = CreateGenericRule(kMinValidID + 2);
+  content_type_rule.condition->url_filter = std::string("contenttype.com");
+  content_type_rule.condition->resource_types =
+      std::vector<std::string>({"main_frame"});
+  content_type_rule.condition->response_headers =
+      std::vector<TestHeaderCondition>(
+          {TestHeaderCondition("Content-Type", {"text/html*"}, {})});
+
+  // Load the extension without any host permissions.
+  ASSERT_NO_FATAL_FAILURE(
+      LoadExtensionWithRules({allow_rule, block_rule, content_type_rule}));
+
+  struct {
+    std::string hostname;
+    std::string path;
+    bool expect_main_frame_loaded;
+  } test_cases[] = {
+      // Not blocked since there is no set-cookie header.
+      {"setcookie.com", "/pages_with_script/index.html", true},
+      // Blocked by `block_rule`.
+      {"setcookie.com", "/set-cookie?cookie=sugar", false},
+      // Also blocked by `block_rule`, since `allow_rule` can't be matched
+      // without host permissions. The outcome is the same regardless of the
+      // set-cookie header's value.
+      {"setcookie.com", "/set-cookie?cookie=oreo", false},
+      // Blocked by `content_type_rule`.
+      {"contenttype.com", "/pages_with_script/index.html", false},
+  };
+
+  for (const auto& test_case : test_cases) {
+    GURL url =
+        embedded_test_server()->GetURL(test_case.hostname, test_case.path);
+    SCOPED_TRACE(base::StringPrintf("Testing %s", url.spec().c_str()));
+
+    content::TestNavigationObserver nav_observer(GetActiveWebContents());
+    NavigateToURL(url);
+    EXPECT_EQ(test_case.expect_main_frame_loaded ? content::PAGE_TYPE_NORMAL
+                                                 : content::PAGE_TYPE_ERROR,
+              GetPageType());
+    EXPECT_EQ(test_case.expect_main_frame_loaded ? net::OK
+                                                 : net::ERR_BLOCKED_BY_CLIENT,
+              nav_observer.last_net_error_code());
   }
 }
 
@@ -8067,6 +7948,9 @@ IN_PROC_BROWSER_TEST_P(DNRMatchResponseHeadersBrowserTest, AllowAllRequests) {
   std::vector<TestHeaderCondition> blank_header_condition =
       std::vector<TestHeaderCondition>(
           {TestHeaderCondition("nonsense-header", {}, {})});
+  std::vector<TestHeaderCondition> header_value_condition =
+      std::vector<TestHeaderCondition>(
+          {TestHeaderCondition("nonsense-header", {"value"}, {})});
 
   struct RuleData {
     int id;
@@ -8078,7 +7962,7 @@ IN_PROC_BROWSER_TEST_P(DNRMatchResponseHeadersBrowserTest, AllowAllRequests) {
     std::optional<std::vector<TestHeaderCondition>>
         excluded_response_header_condition = std::nullopt;
   } rule_data[] = {
-      // Create 3 allowAllRequests rules:
+      // Create 4 allowAllRequests rules:
       // One with priority 3 that matches the main frame, in the onBeforeRequest
       // stage.
       {1, 3, "allowAllRequests", "page_with_two_frames.html", false,
@@ -8090,12 +7974,18 @@ IN_PROC_BROWSER_TEST_P(DNRMatchResponseHeadersBrowserTest, AllowAllRequests) {
       // One with priority 7 that matches frame 2, in the onBeforeRequest stage.
       {3, 7, "allowAllRequests", "frame=2", true,
        std::vector<std::string>({"sub_frame"})},
+      // One with priority 8 that matches frame 1 in the onHeadersReceived
+      // stage, but requires host permissions because it matches on a
+      // non-allowlisted header value (so it won't match since the extension is
+      // loaded without host permissions).
+      {4, 8, "allowAllRequests", "frame=1", true,
+       std::vector<std::string>({"sub_frame"}), header_value_condition},
 
       // Create 3 block rules, each blocking only a particular image file, with
       // different priorities.
-      {4, 2, "block", "image.png", true, std::vector<std::string>({"image"})},
-      {5, 4, "block", "image_2.png", true, std::vector<std::string>({"image"})},
-      {6, 6, "block", "image_3.png", true, std::vector<std::string>({"image"})},
+      {5, 2, "block", "image.png", true, std::vector<std::string>({"image"})},
+      {6, 4, "block", "image_2.png", true, std::vector<std::string>({"image"})},
+      {7, 6, "block", "image_3.png", true, std::vector<std::string>({"image"})},
   };
 
   std::vector<TestRule> rules;
@@ -8164,7 +8054,8 @@ IN_PROC_BROWSER_TEST_P(DNRMatchResponseHeadersBrowserTest, AllowAllRequests) {
   // Attempt to add images onto `frame_1`. `image.png` and `image_2.png` should
   // be added since the max priority matching allowAllRequests rule for
   // `frame_1` has id 2 (it "wins" over the rule with id 1 that has a lower
-  // priority), and its priority exceeds that of the block rules for `image.png`
+  // priority, while the rule with id 4 requires host permissions so it does not
+  // match), and its priority exceeds that of the block rules for `image.png`
   // and `image_2.png`.
   content::RenderFrameHost* frame_1 = GetFrameByName("frame1");
   EXPECT_TRUE(test_image_added(frame_1, "subresources/image.png"));

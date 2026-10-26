@@ -13,6 +13,9 @@ import './elements/viewer_password_dialog.js';
 import './elements/ink_text_annotations.js';
 import './elements/viewer_bottom_toolbar.js';
 import './elements/viewer_side_panel.js';
+import './elements/viewer_signature_bottom_toolbar.js';
+import './elements/viewer_signature_dialog.js';
+import './elements/viewer_signature_side_panel.js';
 import './elements/viewer_text_bottom_toolbar.js';
 import './elements/viewer_text_side_panel.js';
 // </if>
@@ -83,6 +86,9 @@ import type {DocumentDimensionsMessageData} from './pdf_viewer_utils.js';
 import {getSaveToDriveManageStorageUrl, getSaveToDriveOpenInDriveUrl} from './pdf_viewer_utils.js';
 // </if> enable_pdf_save_to_drive
 import {hasCtrlModifier, hasCtrlModifierOnly, shouldIgnoreKeyEvents, verifyPdfHeader} from './pdf_viewer_utils.js';
+// <if expr="enable_pdf_ink2">
+import {getTextStyleForShortcut} from './pdf_viewer_utils.js';
+// </if>
 // <if expr="enable_pdf_save_to_drive">
 import {recordSaveToDriveBubbleActionMetrics, recordSaveToDriveBubbleRetryMetrics, recordSaveToDriveMetrics, recordShowSaveToDriveBubbleMetrics} from './save_to_drive_metrics.js';
 // </if> enable_pdf_save_to_drive
@@ -148,7 +154,18 @@ function hasFixedCtrlModifierOnly(e: KeyboardEvent): boolean {
   return e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey;
 }
 
+// Like hasCtrlModifierOnly(), but allow the shift modifier.
+function hasCtrlModifierMaybeWithShift(e: KeyboardEvent): boolean {
+  let metaModifier = e.metaKey;
+  // <if expr="is_macosx">
+  metaModifier = e.ctrlKey;
+  // </if>
+  return hasCtrlModifier(e) && !e.altKey && !metaModifier;
+}
+
 const LOCAL_STORAGE_SIDENAV_COLLAPSED_KEY: string = 'sidenavCollapsed';
+
+export const LOCAL_STORAGE_TWO_UP_VIEW_ENABLED_KEY: string = 'twoUpViewEnabled';
 
 /**
  * The background color used for the regular viewer.
@@ -156,7 +173,7 @@ const LOCAL_STORAGE_SIDENAV_COLLAPSED_KEY: string = 'sidenavCollapsed';
 // LINT.IfChange(PdfBackgroundColor)
 const BACKGROUND_COLOR: number = 0xff282828;
 // clang-format off
-// LINT.ThenChange(//chrome/browser/resources/pdf/pdf_embedder.css:PdfBackgroundColor, //components/pdf/common/pdf_util.cc:PdfBackgroundColor)
+// LINT.ThenChange(//components/pdf/common/pdf_util.cc:PdfBackgroundColor)
 // clang-format on
 
 // <if expr="enable_pdf_ink2 or enable_pdf_save_to_drive">
@@ -244,9 +261,7 @@ export class PdfViewerElement extends PdfViewerBaseElement {
 
   static override get properties() {
     return {
-      // from PdfViewerBaseElement
-      showErrorDialog: {type: Boolean},
-      strings: {type: Object},
+      ...super.properties,
 
       // <if expr="enable_pdf_ink2">
       annotationMode_: {type: String},
@@ -281,6 +296,7 @@ export class PdfViewerElement extends PdfViewerBaseElement {
 
       // <if expr="enable_pdf_ink2">
       pdfInk2Enabled_: {type: Boolean},
+      pdfSignaturesEnabled_: {type: Boolean},
       pdfTextAnnotationsEnabled_: {type: Boolean},
       // </if>
 
@@ -292,6 +308,9 @@ export class PdfViewerElement extends PdfViewerBaseElement {
 
       showPasswordDialog_: {type: Boolean},
       showPropertiesDialog_: {type: Boolean},
+      // <if expr="enable_pdf_ink2">
+      showSignatureDialog_: {type: Boolean},
+      // </if>
       sidenavCollapsed_: {type: Boolean},
 
       // <if expr="enable_pdf_ink2">
@@ -358,6 +377,7 @@ export class PdfViewerElement extends PdfViewerBaseElement {
   private pdfGetSaveDataInBlocks_: boolean = false;
   // <if expr="enable_pdf_ink2">
   protected accessor pdfInk2Enabled_: boolean = false;
+  protected accessor pdfSignaturesEnabled_: boolean = false;
   protected accessor pdfTextAnnotationsEnabled_: boolean = false;
   // </if>
   // <if expr="enable_pdf_save_to_drive">
@@ -381,6 +401,9 @@ export class PdfViewerElement extends PdfViewerBaseElement {
   // </if>
   protected accessor showPasswordDialog_: boolean = false;
   protected accessor showPropertiesDialog_: boolean = false;
+  // <if expr="enable_pdf_ink2">
+  protected accessor showSignatureDialog_: boolean = false;
+  // </if>
   protected accessor sidenavCollapsed_: boolean;
 
   // <if expr="enable_pdf_ink2">
@@ -407,6 +430,35 @@ export class PdfViewerElement extends PdfViewerBaseElement {
             LOCAL_STORAGE_SIDENAV_COLLAPSED_KEY)!,
         10));
   }
+
+  // <if expr="enable_pdf_ink2 or enable_pdf_save_to_drive">
+  override connectedCallback() {
+    super.connectedCallback();
+    this.tracker.add(window, 'beforeunload', this.onBeforeUnload_.bind(this));
+    // <if expr="enable_pdf_ink2">
+    const mediaQuery = window.matchMedia('(min-width: 960px)');
+    this.useSidePanelForInk_ = mediaQuery.matches;
+    this.tracker.add(mediaQuery, 'change', () => {
+      this.useSidePanelForInk_ = mediaQuery.matches;
+      // If in DRAW or TEXT annotation mode, record opening the
+      // UI that's opened by making the window narrower/wider.
+      if (this.annotationMode_ !== AnnotationMode.OFF) {
+        record(
+            this.useSidePanelForInk_ ? UserAction.OPEN_INK2_SIDE_PANEL :
+                                       UserAction.OPEN_INK2_BOTTOM_TOOLBAR);
+      }
+    });
+    this.tracker.add(
+        Ink2Manager.getInstance(), 'undo-redo-state-changed',
+        this.handleUndoRedoStateChanged_.bind(this));
+    // </if> enable_pdf_ink2
+  }
+
+  override disconnectedCallback() {
+    this.tracker.removeAll();
+    super.disconnectedCallback();
+  }
+  // </if> enable_pdf_ink2 or enable_pdf_save_to_drive
 
   // <if expr="enable_pdf_ink2">
   override willUpdate(changedProperties: PropertyValues<this>) {
@@ -438,35 +490,6 @@ export class PdfViewerElement extends PdfViewerBaseElement {
     }
     // </if>
   }
-
-  // <if expr="enable_pdf_ink2 or enable_pdf_save_to_drive">
-  override connectedCallback() {
-    super.connectedCallback();
-    this.tracker.add(window, 'beforeunload', this.onBeforeUnload_.bind(this));
-    // <if expr="enable_pdf_ink2">
-    const mediaQuery = window.matchMedia('(min-width: 960px)');
-    this.useSidePanelForInk_ = mediaQuery.matches;
-    this.tracker.add(mediaQuery, 'change', () => {
-      this.useSidePanelForInk_ = mediaQuery.matches;
-      // If in DRAW or TEXT annotation mode, record opening the
-      // UI that's opened by making the window narrower/wider.
-      if (this.annotationMode_ !== AnnotationMode.OFF) {
-        record(
-            this.useSidePanelForInk_ ? UserAction.OPEN_INK2_SIDE_PANEL :
-                                       UserAction.OPEN_INK2_BOTTOM_TOOLBAR);
-      }
-    });
-    this.tracker.add(
-        Ink2Manager.getInstance(), 'undo-redo-state-changed',
-        this.handleUndoRedoStateChanged_.bind(this));
-    // </if> enable_pdf_ink2
-  }
-
-  override disconnectedCallback() {
-    this.tracker.removeAll();
-    super.disconnectedCallback();
-  }
-  // </if> enable_pdf_ink2 or enable_pdf_save_to_drive
 
   getBackgroundColor(): number {
     return BACKGROUND_COLOR;
@@ -546,6 +569,17 @@ export class PdfViewerElement extends PdfViewerBaseElement {
       return;
     }
 
+    // <if expr="enable_pdf_ink2">
+    if (this.isInTextAnnotationMode_()) {
+      const textStyle = getTextStyleForShortcut(e);
+      if (textStyle !== null) {
+        e.preventDefault();
+        Ink2Manager.getInstance().toggleTextStyle(textStyle);
+        return;
+      }
+    }
+    // </if>
+
     switch (e.key) {
       case 'a':
         // Take over Ctrl+A (but not other combinations like Ctrl-Shift-A).
@@ -563,6 +597,12 @@ export class PdfViewerElement extends PdfViewerBaseElement {
           this.maybeCreateTextAnnotation_();
         }
         return;
+      case 'v':
+        if ((e as ExtendedKeyEvent).fromPlugin && hasCtrlModifierOnly(e) &&
+            this.isInTextAnnotationMode_()) {
+          this.maybePasteTextAnnotation_();
+        }
+        return;
       // </if>
       default:
         break;
@@ -571,6 +611,21 @@ export class PdfViewerElement extends PdfViewerBaseElement {
     // Handle toolbar related key events.
     this.handleToolbarKeyEvent_(e);
   }
+
+  // <if expr="enable_pdf_ink2">
+  private maybePasteTextAnnotation_() {
+    // Ignore paste if focus is actively on some other element like
+    // a side panel/nav or toolbar.
+    const focused = this.shadowRoot.activeElement;
+    if (!!focused && !this.$.scroller.contains(focused)) {
+      return;
+    }
+
+    const annotations = this.shadowRoot.querySelector('ink-text-annotations');
+    assert(annotations);
+    annotations.pasteAnnotation();
+  }
+  // </if>
 
   /**
    * Helper for handleKeyEvent dealing with events that control toolbars.
@@ -601,23 +656,18 @@ export class PdfViewerElement extends PdfViewerBaseElement {
         return;
       // <if expr="enable_pdf_ink2">
       case 'z':
-        // <if expr="is_macosx">
-        if (e.metaKey && !e.ctrlKey && !e.altKey) {
+      case 'Z':
+        if (hasCtrlModifierMaybeWithShift(e)) {
           if (e.shiftKey) {
             this.$.toolbar.redo();
           } else {
             this.$.toolbar.undo();
           }
         }
-        // </if>  is_macosx
-        // <if expr="not is_macosx">
-        if (hasCtrlModifierOnly(e)) {
-          this.$.toolbar.undo();
-        }
-        // </if>  not is_macosx
         return;
       // <if expr="not is_macosx">
       case 'y':
+      case 'Y':
         if (hasCtrlModifierOnly(e)) {
           this.$.toolbar.redo();
         }
@@ -630,12 +680,14 @@ export class PdfViewerElement extends PdfViewerBaseElement {
   }
 
   // <if expr="enable_pdf_ink2">
-  private maybeCreateTextAnnotation_(location?: Point): Promise<void> {
-    if (this.textboxState_ !== TextBoxState.INACTIVE) {
-      return this.maybeCommitActiveTextbox_();
+  private async maybeCreateTextAnnotation_(location?: Point): Promise<void> {
+    const hasActive = this.isTextboxActive_();
+    if (hasActive) {
+      await this.maybeCommitActiveTextbox_();
     }
-    Ink2Manager.getInstance().initializeTextAnnotation(location);
-    return Promise.resolve();
+
+    Ink2Manager.getInstance().initializeTextAnnotation(
+        location, /*onlyExisting=*/ hasActive);
   }
 
   private recordEnterExitAnnotationModeMetrics_(
@@ -648,6 +700,9 @@ export class PdfViewerElement extends PdfViewerBaseElement {
         break;
       case AnnotationMode.TEXT:
         record(UserAction.EXIT_INK2_TEXT_ANNOTATION_MODE);
+        break;
+      case AnnotationMode.SIGNATURE:
+        record(UserAction.EXIT_INK2_SIGNATURE_MODE);
         break;
       case AnnotationMode.OFF:
         break;
@@ -663,6 +718,9 @@ export class PdfViewerElement extends PdfViewerBaseElement {
       case AnnotationMode.TEXT:
         record(UserAction.ENTER_INK2_TEXT_ANNOTATION_MODE);
         break;
+      case AnnotationMode.SIGNATURE:
+        record(UserAction.ENTER_INK2_SIGNATURE_MODE);
+        break;
       case AnnotationMode.OFF:
         break;
       default:
@@ -673,10 +731,14 @@ export class PdfViewerElement extends PdfViewerBaseElement {
 
   // <if expr="enable_pdf_ink2">
   // Handles the annotation mode being updated from the toolbar buttons.
-  protected async onAnnotationModeUpdated_(e: CustomEvent<AnnotationMode>) {
+  protected onAnnotationModeUpdated_(e: CustomEvent<AnnotationMode>) {
+    this.setAnnotationMode_(e.detail);
+  }
+
+  private async setAnnotationMode_(newAnnotationMode: AnnotationMode):
+      Promise<void> {
     assert(this.pdfInk2Enabled_);
 
-    const newAnnotationMode = e.detail;
     if (newAnnotationMode === this.annotationMode_) {
       return;
     }
@@ -703,6 +765,7 @@ export class PdfViewerElement extends PdfViewerBaseElement {
       await Ink2Manager.getInstance().initializeTextAnnotations();
     }
     this.annotationMode_ = newAnnotationMode;
+    this.showSignatureDialog_ = newAnnotationMode === AnnotationMode.SIGNATURE;
   }
   // </if> enable_pdf_ink2
 
@@ -712,23 +775,28 @@ export class PdfViewerElement extends PdfViewerBaseElement {
   }
 
   private async enterPresentationMode_(): Promise<void> {
-    // <if expr="enable_pdf_ink2">
-    // Exit annotation mode if it was enabled.
-    if (this.pdfInk2Enabled_ && this.annotationMode_ !== AnnotationMode.OFF) {
-      this.restoreAnnotationMode_ = this.annotationMode_;
-      this.$.toolbar.setAnnotationMode(AnnotationMode.OFF);
-    }
-    assert(this.annotationMode_ === AnnotationMode.OFF);
-    // </if>
-
     const scroller = this.$.scroller;
 
     this.viewport.saveZoomState();
 
-    await Promise.all([
+    // Initiate `requestFullscreen()` synchronously to capture the user gesture
+    // before any asynchronous operations (such as committing text annotations
+    // when exiting text annotation mode).
+    const fullscreenPromise = Promise.all([
       eventToPromise('fullscreenchange', scroller),
       scroller.requestFullscreen(),
     ]);
+
+    // <if expr="enable_pdf_ink2">
+    // Exit annotation mode if it was enabled.
+    if (this.pdfInk2Enabled_ && this.annotationMode_ !== AnnotationMode.OFF) {
+      this.restoreAnnotationMode_ = this.annotationMode_;
+      await this.setAnnotationMode_(AnnotationMode.OFF);
+    }
+    assert(this.annotationMode_ === AnnotationMode.OFF);
+    // </if>
+
+    await fullscreenPromise;
 
     this.forceFit(FittingType.FIT_TO_HEIGHT);
 
@@ -754,17 +822,18 @@ export class PdfViewerElement extends PdfViewerBaseElement {
 
     // Set zoom back to original zoom before presentation mode.
     this.viewport.restoreZoomState();
+  }
 
-    // <if expr="enable_pdf_ink2">
-    // Enter annotation mode again if it was enabled before entering
-    // Presentation mode.
+  // <if expr="enable_pdf_ink2">
+  private async maybeRestoreAnnotationMode_(): Promise<void> {
+    // Restore annotation mode if it was previously enabled.
     if (this.restoreAnnotationMode_ !== AnnotationMode.OFF) {
-      this.$.toolbar.setAnnotationMode(this.restoreAnnotationMode_);
+      await this.setAnnotationMode_(this.restoreAnnotationMode_);
       assert(this.annotationMode_ !== AnnotationMode.OFF);
       this.restoreAnnotationMode_ = AnnotationMode.OFF;
     }
-    // </if>
   }
+  // </if> enable_pdf_ink2
 
   private focusPlugin_() {
     // Focus the embed in this frame, so the browser routes keyboard events to
@@ -783,6 +852,9 @@ export class PdfViewerElement extends PdfViewerBaseElement {
     await eventToPromise('fullscreenchange', this.$.scroller);
 
     this.exitPresentationMode_();
+    // <if expr="enable_pdf_ink2">
+    await this.maybeRestoreAnnotationMode_();
+    // </if>
   }
 
   protected onPropertiesClick_() {
@@ -795,6 +867,23 @@ export class PdfViewerElement extends PdfViewerBaseElement {
     this.showPropertiesDialog_ = false;
   }
 
+  // <if expr="enable_pdf_ink2">
+  protected onSignatureDialogClose_() {
+    assert(this.showSignatureDialog_);
+    this.showSignatureDialog_ = false;
+  }
+  // </if>
+
+  /**
+   * @return Whether two up view was enabled when the user last toggled it,
+   *     and should be restored for this document.
+   */
+  private shouldRestoreTwoUpView_(): boolean {
+    const value = LocalStorageProxyImpl.getInstance().getItem(
+        LOCAL_STORAGE_TWO_UP_VIEW_ENABLED_KEY);
+    return value !== null && Boolean(Number.parseInt(value, 10));
+  }
+
   /**
    * Changes two up view mode for the controller. Controller will trigger
    * layout update later, which will update the viewport accordingly.
@@ -803,6 +892,8 @@ export class PdfViewerElement extends PdfViewerBaseElement {
     const twoUpViewEnabled = e.detail;
     assert(this.currentController);
     this.currentController.setTwoUpView(twoUpViewEnabled);
+    LocalStorageProxyImpl.getInstance().setItem(
+        LOCAL_STORAGE_TWO_UP_VIEW_ENABLED_KEY, twoUpViewEnabled ? '1' : '0');
     record(
         twoUpViewEnabled ? UserAction.TWO_UP_VIEW_ENABLE :
                            UserAction.TWO_UP_VIEW_DISABLE);
@@ -922,6 +1013,8 @@ export class PdfViewerElement extends PdfViewerBaseElement {
         loadTimeData.getBoolean('pdfGetSaveDataInBlocks');
     // <if expr="enable_pdf_ink2">
     this.pdfInk2Enabled_ = loadTimeData.getBoolean('pdfInk2Enabled');
+    this.pdfSignaturesEnabled_ =
+        loadTimeData.getBoolean('pdfSignaturesEnabled');
     this.pdfTextAnnotationsEnabled_ =
         loadTimeData.getBoolean('pdfTextAnnotationsEnabled');
     // </if>
@@ -1175,6 +1268,17 @@ export class PdfViewerElement extends PdfViewerBaseElement {
 
   override setDocumentDimensions(documentDimensions:
                                      DocumentDimensionsMessageData): void {
+    // Restore the two up view mode from the previous session before the
+    // initial layout is applied, so that the document is never laid out and
+    // painted in single page view first.
+    if (!this.documentDimensions &&
+        !documentDimensions.layoutOptions?.twoUpViewEnabled &&
+        this.shouldRestoreTwoUpView_()) {
+      assert(this.currentController);
+      this.currentController.setTwoUpView(true);
+      return;
+    }
+
     super.setDocumentDimensions(documentDimensions);
 
     // If the document dimensions are received, the password was correct and the
@@ -1197,6 +1301,7 @@ export class PdfViewerElement extends PdfViewerBaseElement {
     // Show the password dialog if it is not already shown. Otherwise, respond
     // to an incorrect password.
     if (!this.showPasswordDialog_) {
+      this.hadPassword_ = true;
       this.showPasswordDialog_ = true;
       this.sendScriptingMessage({type: 'passwordPrompted'});
     } else {
@@ -1227,8 +1332,16 @@ export class PdfViewerElement extends PdfViewerBaseElement {
   }
   // </if>
 
-  /** Handles updating viewport params based on the `newUrl` provided. */
-  private handleMaybeUpdateViewport_(newUrl: string) {
+  /**
+   * Handles updating viewport params based on the `newUrl` provided.
+   * @param streamUrl Unique identifier for a PDF Viewer instance.
+   * @param newUrl The new URL to parse viewport params from.
+   */
+  private handleMaybeUpdateViewport_(streamUrl: string, newUrl: string) {
+    if (streamUrl !== this.browserApi!.getStreamInfo().streamUrl) {
+      return;
+    }
+
     assert(this.paramsParser);
     this.paramsParser.getViewportFromUrlParams(newUrl).then(
         params => this.handleUrlParams(params));
@@ -1903,13 +2016,13 @@ export class PdfViewerElement extends PdfViewerBaseElement {
     record(UserAction.SAVE);
     switch (requestType) {
       case SaveRequestType.ANNOTATION:
-        record(UserAction.SAVE_WITH_ANNOTATION);
         // <if expr="enable_pdf_ink2">
-        if (this.pdfInk2Enabled_) {
-          record(UserAction.SAVE_WITH_INK2_ANNOTATION);
-        }
-        // </if>
+        record(UserAction.SAVE_WITH_INK2_ANNOTATION);
         break;
+        // </if>
+        // <if expr="not enable_pdf_ink2">
+        assertNotReached();
+        // </if>
       case SaveRequestType.ORIGINAL:
         record(
             this.hasCommittedEdits_() ? UserAction.SAVE_ORIGINAL :

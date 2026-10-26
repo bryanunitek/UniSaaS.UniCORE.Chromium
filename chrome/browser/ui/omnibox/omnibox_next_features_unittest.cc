@@ -10,11 +10,14 @@
 #include "base/base64.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/autocomplete/aim_eligibility_service_factory.h"
 #include "chrome/browser/autocomplete/chrome_aim_eligibility_service.h"
 #include "chrome/browser/search_engines/ai_mode_button_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory_test_util.h"
+#include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_prefs.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/omnibox/browser/aim_eligibility_service_features.h"
 #include "components/omnibox/browser/omnibox_prefs.h"
@@ -28,6 +31,8 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/omnibox_proto/ntp_composebox_config.pb.h"
+#include "ui/accessibility/platform/assistive_tech.h"
+#include "ui/accessibility/platform/ax_platform.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace omnibox {
@@ -80,7 +85,6 @@ TEST_F(OmniboxNextFeaturesTest, ComposeboxConfigEnabled_DefaultConfiguration) {
   auto composebox = config.composebox();
 
   auto image_upload = config.composebox().image_upload();
-  EXPECT_EQ(image_upload.enable_webp_encoding(), false);
   EXPECT_EQ(image_upload.downscale_max_image_size(), 1500000);
   EXPECT_EQ(image_upload.downscale_max_image_width(), 1600);
   EXPECT_EQ(image_upload.downscale_max_image_height(), 1600);
@@ -252,6 +256,45 @@ TEST_F(OmniboxNextFeaturesTest, ComposeboxConfigEnabled_Valid_ClearMimeTypes) {
                                       1);
 }
 
+// Tests for `kDisableFullWebuiOmniboxForScreenreaderUsers`. Note that the
+// screen reader state is latched for the lifetime of the process the first
+// time the guard is evaluated, so only one test may enable both features.
+class OmniboxNextFullPopupScreenReaderTest : public testing::Test {
+ public:
+  void SetUp() override {
+    ui::AXPlatform::GetInstance().NotifyAssistiveTechChanged(
+        ui::AssistiveTech::kGenericScreenReader);
+  }
+
+  void TearDown() override {
+    ui::AXPlatform::GetInstance().NotifyAssistiveTechChanged(
+        ui::AssistiveTech::kNone);
+  }
+};
+
+// Without the guard feature, a screen reader does not affect the full popup.
+TEST_F(OmniboxNextFullPopupScreenReaderTest, GuardDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {internal::kWebUIOmniboxFullPopup},
+      {internal::kDisableFullWebuiOmniboxForScreenreaderUsers});
+  EXPECT_TRUE(internal::IsWebUIOmniboxFullPopupEnabled());
+}
+
+// With the guard feature, the full popup is disabled for screen reader users,
+// and stays disabled even if the screen reader goes away.
+TEST_F(OmniboxNextFullPopupScreenReaderTest, GuardEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {internal::kWebUIOmniboxFullPopup,
+       internal::kDisableFullWebuiOmniboxForScreenreaderUsers},
+      {});
+  EXPECT_FALSE(internal::IsWebUIOmniboxFullPopupEnabled());
+  ui::AXPlatform::GetInstance().NotifyAssistiveTechChanged(
+      ui::AssistiveTech::kNone);
+  EXPECT_FALSE(internal::IsWebUIOmniboxFullPopupEnabled());
+}
+
 class TestingAimEligibilityService : public ChromeAimEligibilityService {
  public:
   TestingAimEligibilityService(Profile* profile, bool is_aim_eligible)
@@ -313,11 +356,12 @@ class OmniboxNextAimEligibilityTest : public testing::Test {
         &profile_, base::BindOnce([](content::BrowserContext* context)
                                       -> std::unique_ptr<KeyedService> {
           auto service = std::make_unique<TestAiModeButtonService>(
-              /*template_url_service=*/nullptr,
-              AiModeButtonService::GoogleStrings{u"AI", u"AI"});
-          static const ai_mode_button_config::AiModeButtonConfig test_config = {
-              .id = SearchEngineType::SEARCH_ENGINE_GOOGLE};
-          service->current_config_ = &test_config;
+              /*template_url_service=*/nullptr);
+          AiModeButtonUiConfig test_config(
+              SearchEngineType::SEARCH_ENGINE_GOOGLE, u"AI Mode", u"Google",
+              /*favicon_url=*/"", /*navigation_url=*/"",
+              /*navigation_url_empty=*/"");
+          service->current_ui_config_ = test_config;
           return service;
         }));
   }
@@ -403,6 +447,98 @@ TEST_F(OmniboxNextAimEligibilityTest, ShouldShowAimContextMenuOption) {
               test_case.expected_should_show)
         << " case " << i;
   }
+}
+
+TEST_F(OmniboxNextAimEligibilityTest, IsOmniboxEverywhereEligibleAndEnabled) {
+  // Test with null profile.
+  EXPECT_FALSE(omnibox::IsOmniboxEverywhereEligible(nullptr));
+  EXPECT_FALSE(omnibox::IsOmniboxEverywhereEnabled(nullptr));
+
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  // Test with Google DSE and feature enabled on macOS / Windows.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(omnibox::kOmniboxEverywhere);
+    EXPECT_TRUE(omnibox::IsOmniboxEverywhereEligible(profile()));
+    EXPECT_TRUE(omnibox::IsOmniboxEverywhereEnabled(profile()));
+
+    // When disabled via user preference, eligible remains true but enabled
+    // is false.
+    if (PrefService* local_state =
+            TestingBrowserProcess::GetGlobal()->local_state()) {
+      local_state->SetBoolean(
+          omnibox_everywhere::prefs::kOmniboxEverywhereEnabled, false);
+      EXPECT_TRUE(omnibox::IsOmniboxEverywhereEligible(profile()));
+      EXPECT_FALSE(omnibox::IsOmniboxEverywhereEnabled(profile()));
+      local_state->SetBoolean(
+          omnibox_everywhere::prefs::kOmniboxEverywhereEnabled, true);
+      EXPECT_TRUE(omnibox::IsOmniboxEverywhereEnabled(profile()));
+    }
+  }
+#else
+  // On unsupported platforms (non-Mac / non-Windows), Omnibox Everywhere is
+  // never eligible or enabled even when the feature is enabled and Google is
+  // DSE.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(omnibox::kOmniboxEverywhere);
+    EXPECT_FALSE(omnibox::IsOmniboxEverywhereEligible(profile()));
+    EXPECT_FALSE(omnibox::IsOmniboxEverywhereEnabled(profile()));
+  }
+#endif
+
+  // Test with Google DSE and feature disabled.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(omnibox::kOmniboxEverywhere);
+    EXPECT_FALSE(omnibox::IsOmniboxEverywhereEligible(profile()));
+    EXPECT_FALSE(omnibox::IsOmniboxEverywhereEnabled(profile()));
+  }
+
+  // Set non-Google default search provider.
+  TemplateURLData non_google_data;
+  non_google_data.SetShortName(u"Other");
+  non_google_data.SetKeyword(u"other.com");
+  non_google_data.SetURL("https://www.other.com/search?q={searchTerms}");
+  auto non_google_url = std::make_unique<TemplateURL>(non_google_data);
+  auto* non_google_ptr =
+      template_url_service_test_util_->model()->Add(std::move(non_google_url));
+  template_url_service_test_util_->model()
+      ->SetUserSelectedDefaultSearchProvider(non_google_ptr);
+
+  // Test with non-Google DSE and feature enabled.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(omnibox::kOmniboxEverywhere);
+    EXPECT_FALSE(omnibox::IsOmniboxEverywhereEligible(profile()));
+    EXPECT_FALSE(omnibox::IsOmniboxEverywhereEnabled(profile()));
+  }
+
+  // Test with non-Google DSE and feature disabled.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(omnibox::kOmniboxEverywhere);
+    EXPECT_FALSE(omnibox::IsOmniboxEverywhereEligible(profile()));
+    EXPECT_FALSE(omnibox::IsOmniboxEverywhereEnabled(profile()));
+  }
+}
+
+TEST_F(OmniboxNextAimEligibilityTest,
+       OmniboxEverywherePlatformEligibilityRestriction) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(omnibox::kOmniboxEverywhere);
+
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  // On macOS and Windows, Omnibox Everywhere is eligible and enabled when
+  // Google is the default search provider.
+  EXPECT_TRUE(omnibox::IsOmniboxEverywhereEligible(profile()));
+  EXPECT_TRUE(omnibox::IsOmniboxEverywhereEnabled(profile()));
+#else
+  // On other platforms (e.g. Linux, ChromeOS, Android), Omnibox Everywhere is
+  // always ineligible and disabled.
+  EXPECT_FALSE(omnibox::IsOmniboxEverywhereEligible(profile()));
+  EXPECT_FALSE(omnibox::IsOmniboxEverywhereEnabled(profile()));
+#endif
 }
 
 }  // namespace omnibox

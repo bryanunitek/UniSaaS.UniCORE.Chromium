@@ -27,8 +27,8 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
@@ -38,7 +38,6 @@ import org.chromium.chrome.browser.recent_tabs.ForeignSessionHelper.ForeignSessi
 import org.chromium.chrome.browser.recent_tabs.ForeignSessionHelper.ForeignSessionWindow;
 import org.chromium.chrome.browser.recent_tabs.RestoreTabsProperties.ScreenType;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
-import org.chromium.components.feature_engagement.EventConstants;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.sync_device_info.FormFactor;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
@@ -52,9 +51,7 @@ import java.util.List;
 
 /** Tests for RestoreTabsDialogMediator. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class RestoreTabsDialogMediatorUnitTest {
-    private static final String RESTORE_TABS_USED = EventConstants.RESTORE_TABS_PROMO_USED;
     private static final String TEST_CONTENT_DESRIPTION = "Test content description";
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -65,8 +62,8 @@ public class RestoreTabsDialogMediatorUnitTest {
     @Mock private Profile mProfile;
     @Mock private Tracker mTracker;
     @Mock private Context mContext;
-    @Mock private View mContent;
 
+    private final View mContent = new View(ContextUtils.getApplicationContext());
     private PropertyModel mModel = RestoreTabsProperties.createDefaultModel();
     private PropertyModel mDialogModel;
     private final RestoreTabsDialogMediator mMediator = new RestoreTabsDialogMediator();

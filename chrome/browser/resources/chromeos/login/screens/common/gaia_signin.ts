@@ -241,32 +241,40 @@ export class GaiaSigninElement extends GaiaSigninElementBase {
       emailDomain: {
         type: String,
       },
+
+      /**
+       * Whether we've processed 'authCompleted' message.
+       */
+      authCompleted: {
+        type: Boolean,
+        value: false,
+      },
     };
   }
 
-  private loadingFrameContents: boolean;
-  private isLoadingUiShown: boolean;
-  private navigationEnabled: boolean;
-  private isSaml: boolean;
-  private pinDialogParameters: OobeTypes.SecurityTokenPinDialogParameters|null;
-  private isSamlSsoVisible: boolean;
-  private videoEnabled: boolean;
-  private authDomain: string;
-  private authFlow: number;
-  private navigationButtonsHidden: boolean;
-  private canGaiaGoBack: boolean;
-  private firstSigninStep: boolean;
-  private isShown: boolean;
-  private isDefaultSsoProvider: boolean;
-  private isClosable: boolean;
-  private emailDomain: string;
+  declare private loadingFrameContents: boolean;
+  declare private isLoadingUiShown: boolean;
+  declare private navigationEnabled: boolean;
+  declare private isSaml: boolean;
+  declare private pinDialogParameters: OobeTypes.SecurityTokenPinDialogParameters|null;
+  declare private isSamlSsoVisible: boolean;
+  declare private videoEnabled: boolean;
+  declare private authDomain: string;
+  declare private authFlow: number;
+  declare private navigationButtonsHidden: boolean;
+  declare private canGaiaGoBack: boolean;
+  declare private firstSigninStep: boolean;
+  declare private isShown: boolean;
+  declare private isDefaultSsoProvider: boolean;
+  declare private isClosable: boolean;
+  declare private emailDomain: string;
+  declare private authCompleted: boolean;
   private authenticatorParams: null|any;
   private email: string;
   private loadingTimer: number|undefined;
   private loadAnimationGuardTimer: number|undefined;
   private videoTimer: number|undefined;
   private showViewProcessed: boolean;
-  private authCompleted: boolean;
   private pinDialogResultReported: boolean;
 
   constructor() {
@@ -302,11 +310,6 @@ export class GaiaSigninElement extends GaiaSigninElementBase {
      * guard timer.
      */
     this.showViewProcessed = false;
-
-    /**
-     * Whether we've processed 'authCompleted' message.
-     */
-    this.authCompleted = false;
 
     /**
      * Whether the result was reported to the handler for the most recent PIN

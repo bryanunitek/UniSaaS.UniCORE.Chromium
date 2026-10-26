@@ -45,6 +45,16 @@ gfx::NativeView TrackedElementViews::GetNativeView() const {
   return view()->GetWidget()->GetNativeView();
 }
 
+std::string TrackedElementViews::GetSecondaryIdentifier() const {
+  // Changing the secondary identifier destroys and recreates the element, so
+  // it's safe to always just read from the View property.
+  auto* const secondary_id =
+      view()->GetProperty(views::kElementSecondaryIdentifierKey);
+  return secondary_id && !secondary_id->empty()
+             ? *secondary_id
+             : TrackedElement::GetSecondaryIdentifier();
+}
+
 std::string TrackedElementViews::ToString() const {
   auto result = TrackedElement::ToString();
   result.append(" with view ");
@@ -370,12 +380,13 @@ ElementTrackerViews::GetAllMatchingViewsInAnyContext(ui::ElementIdentifier id,
   return it->second.GetAllViews(require_visible);
 }
 
-Widget* ElementTrackerViews::GetWidgetForContext(ui::ElementContext context) {
+Widget* ElementTrackerViews::GetPrimaryWindowWidgetForContext(
+    ui::ElementContext context) {
   for (auto& [id, data] : element_data_) {
     auto* const view =
         data.FindFirstViewInContext(context, /*require_visible=*/false);
     if (view) {
-      return view->GetWidget();
+      return view->GetWidget()->GetPrimaryWindowWidget();
     }
   }
   return nullptr;

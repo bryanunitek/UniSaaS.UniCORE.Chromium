@@ -7,8 +7,8 @@
 #include "base/functional/callback.h"
 #include "chrome/browser/extensions/api/bookmark_manager_private/bookmark_manager_private_api.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -42,22 +42,18 @@ BookmarksSidePanelCoordinator* BookmarksSidePanelCoordinator::From(
 }
 
 BookmarksSidePanelCoordinator::BookmarksSidePanelCoordinator(
-    BrowserWindowInterface& browser_window_interface)
-    : scoped_unowned_user_data_(
-          browser_window_interface.GetUnownedUserDataHost(),
-          *this) {}
-
-BookmarksSidePanelCoordinator::~BookmarksSidePanelCoordinator() = default;
-
-void BookmarksSidePanelCoordinator::CreateAndRegisterEntry(
-    SidePanelRegistry* global_registry) {
-  global_registry->Register(std::make_unique<SidePanelEntry>(
+    ui::UnownedUserDataHost& unowned_user_data_host,
+    SidePanelRegistry& global_registry)
+    : scoped_unowned_user_data_(unowned_user_data_host, *this) {
+  global_registry.Register(std::make_unique<SidePanelEntry>(
       SidePanelEntry::Key(SidePanelEntry::Id::kBookmarks),
       base::BindRepeating(
           &BookmarksSidePanelCoordinator::CreateBookmarksWebView,
           base::Unretained(this)),
       /*default_content_width_callback=*/base::NullCallback()));
 }
+
+BookmarksSidePanelCoordinator::~BookmarksSidePanelCoordinator() = default;
 
 std::unique_ptr<views::View>
 BookmarksSidePanelCoordinator::CreateBookmarksWebView(

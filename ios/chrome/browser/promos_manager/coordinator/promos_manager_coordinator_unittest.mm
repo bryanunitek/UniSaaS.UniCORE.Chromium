@@ -10,6 +10,7 @@
 #import "ios/chrome/app/application_delegate/fake_startup_information.h"
 #import "ios/chrome/app/profile/profile_init_stage.h"
 #import "ios/chrome/app/profile/profile_state.h"
+#import "ios/chrome/app/profile/profile_state_test_utils.h"
 #import "ios/chrome/browser/promos_manager/coordinator/bannered_promo_view_provider.h"
 #import "ios/chrome/browser/promos_manager/coordinator/promos_manager_coordinator+Testing.h"
 #import "ios/chrome/browser/promos_manager/coordinator/standard_promo_action_handler.h"
@@ -22,14 +23,13 @@
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
-#import "ios/chrome/browser/shared/public/commands/credential_provider_promo_commands.h"
 #import "ios/chrome/browser/shared/public/commands/docking_promo_commands.h"
 #import "ios/chrome/browser/shared/public/commands/picture_in_picture_commands.h"
 #import "ios/chrome/browser/shared/public/commands/promos_manager_commands.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_sign_in_commands.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/common/ui/confirmation_alert/confirmation_alert_action_handler.h"
@@ -54,8 +54,7 @@ class PromosManagerCoordinatorTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
-            std::make_unique<FakeAuthenticationServiceDelegate>()));
+        AuthenticationServiceFactory::GetDefaultFactory());
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateTestSyncService));
     profile_ = std::move(builder).Build();
@@ -67,12 +66,11 @@ class PromosManagerCoordinatorTest : public PlatformTest {
     startup_information_ = [[FakeStartupInformation alloc] init];
     [startup_information_ setIsColdStart:YES];
 
-    profile_state_ = OCMClassMock([ProfileState class]);
-    OCMStub([profile_state_ initStage]).andReturn(ProfileInitStage::kFinal);
-    OCMStub([profile_state_ profile]).andReturn(profile_.get());
+    profile_state_ = [[ProfileState alloc] initWithAppState:nil];
+    SetProfileStateInitStage(profile_state_, ProfileInitStage::kFinal);
+    profile_state_.profile = profile_.get();
 
-    scene_state_ = [[FakeSceneState alloc] initWithAppState:nil
-                                                    profile:profile_.get()];
+    scene_state_ = [[FakeSceneState alloc] initWithProfile:profile_.get()];
     scene_state_.profileState = profile_state_;
     scene_state_.scene = static_cast<UIWindowScene*>(
         [[[UIApplication sharedApplication] connectedScenes] anyObject]);
@@ -85,6 +83,7 @@ class PromosManagerCoordinatorTest : public PlatformTest {
     mock_pip_handler_ = nil;
     mock_promos_manager_handler_ = nil;
     scene_state_ = nil;
+    profile_state_ = nil;
     PlatformTest::TearDown();
   }
 
@@ -101,14 +100,21 @@ class PromosManagerCoordinatorTest : public PlatformTest {
     [browser->GetCommandDispatcher()
         startDispatchingToTarget:mock_promos_manager_handler_
                      forProtocol:@protocol(PromosManagerCommands)];
+    mock_scene_handler_ = OCMProtocolMock(@protocol(SceneCommands));
+    [browser->GetCommandDispatcher()
+        startDispatchingToTarget:mock_scene_handler_
+                     forProtocol:@protocol(SceneCommands)];
+    mock_scene_sign_in_handler_ =
+        OCMProtocolMock(@protocol(SceneSignInCommands));
+    [browser->GetCommandDispatcher()
+        startDispatchingToTarget:mock_scene_sign_in_handler_
+                     forProtocol:@protocol(SceneSignInCommands)];
 
     coordinator_ = [[PromosManagerCoordinator alloc]
-            initWithBaseViewController:view_controller_
-                               browser:browser
-                          sceneHandler:OCMStrictProtocolMock(
-                                           @protocol(SceneCommands))
-        credentialProviderPromoHandler:OCMStrictProtocolMock(@protocol(
-                                           CredentialProviderPromoCommands))];
+        initWithBaseViewController:view_controller_
+                           browser:browser
+                      sceneHandler:OCMStrictProtocolMock(
+                                       @protocol(SceneCommands))];
   }
 
   // Forces the test promo for display.
@@ -135,6 +141,8 @@ class PromosManagerCoordinatorTest : public PlatformTest {
   FakeSceneState* scene_state_;
   id mock_pip_handler_;
   id mock_promos_manager_handler_;
+  id mock_scene_handler_;
+  id mock_scene_sign_in_handler_;
 };
 
 }  // namespace
@@ -300,6 +308,29 @@ TEST_F(PromosManagerCoordinatorTest,
   [mockCoordinator displayPromoCallback];
 
   EXPECT_OCMOCK_VERIFY(mockCoordinator);
+}
+
+// Tests that confirmationAlertPrimaryAction safely handles when the promo
+// coordinator is stopped (clearing self.provider) during
+// standardPromoPrimaryAction.
+TEST_F(PromosManagerCoordinatorTest,
+       ConfirmationAlertPrimaryActionStopsCoordinator) {
+  CreatePromosManagerCoordinator();
+
+  id provider = OCMProtocolMock(@protocol(StandardPromoViewProvider));
+  coordinator_.provider = provider;
+
+  OCMStub([provider standardPromoPrimaryAction])
+      .andDo(^(NSInvocation* invocation) {
+        [coordinator_ stop];
+        // In production, calling `-stop` clears `_viewProviderPromos`, setting
+        // the weak `provider` property on the coordinator to nil.
+        coordinator_.provider = nil;
+      });
+
+  // Calling confirmationAlertPrimaryAction should not crash or DCHECK when
+  // `stop` clears `coordinator_.provider`.
+  [coordinator_ confirmationAlertPrimaryAction];
 }
 
 // TODO(crbug.com/40241101): Add unit tests for promoWasDisplayed being

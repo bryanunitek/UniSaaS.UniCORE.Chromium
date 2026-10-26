@@ -25,18 +25,20 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "build/config/linux/dbus/buildflags.h"
 #include "chrome/browser/browser_features.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/component_updater/crl_set_component_installer.h"
-#include "chrome/browser/component_updater/first_party_sets_component_installer.h"
 #include "chrome/browser/component_updater/pki_metadata_component_installer.h"
 #include "chrome/browser/enterprise/encryption/cache_encryption_provider_impl.h"
+#include "chrome/browser/glic/public/glic_request_headers.h"
 #include "chrome/browser/net/chrome_mojo_proxy_resolver_factory.h"
 #include "chrome/browser/net/convert_explicitly_allowed_network_ports_pref.h"
 #include "chrome/browser/net/default_dns_over_https_config_source.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/ssl/sct_reporting_service.h"
 #include "chrome/browser/ssl/ssl_config_service_manager.h"
+#include "chrome/browser/task_manager/sampling/task_manager_impl.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
@@ -45,6 +47,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/request_header_integrity/buildflags.h"
 #include "components/certificate_transparency/ct_known_logs.h"
+#include "components/contextual_tasks/public/features.h"
 #include "components/embedder_support/user_agent_utils.h"
 #include "components/enterprise/encryption/cache/utils.h"
 #include "components/net_log/net_export_file_writer.h"
@@ -104,7 +107,9 @@
 #include "chrome/browser/net/chrome_mojo_proxy_resolver_win.h"
 #elif BUILDFLAG(IS_MAC)
 #include "chrome/browser/net/chrome_mojo_proxy_resolver_mac.h"
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#elif BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
+#include "chrome/browser/net/chrome_mojo_proxy_resolver_linux.h"
+#endif
 
 #if BUILDFLAG(ENABLE_REQUEST_HEADER_INTEGRITY)
 #include "chrome/common/request_header_integrity/request_header_integrity_url_loader_throttle.h"  // nogncheck crbug.com/40147906
@@ -181,6 +186,17 @@ network::mojom::HttpAuthDynamicParamsPtr CreateHttpAuthDynamicParams(
        local_state->GetList(prefs::kAllHttpAuthSchemesAllowedForOrigins)) {
     auth_dynamic_params->patterns_allowed_to_use_all_schemes.push_back(
         item.GetString());
+  }
+  if (local_state->HasPrefPath(prefs::kAllHttpAuthSchemesAllowedForProxies)) {
+    for (const base::Value& item :
+         local_state->GetList(prefs::kAllHttpAuthSchemesAllowedForProxies)) {
+      auth_dynamic_params->patterns_allowed_to_use_all_schemes_for_proxies
+          .push_back(item.GetString());
+    }
+  // TODO(crbug.com/568728957): Remove once all users are on M161+.
+  } else if (CHROME_VERSION_MAJOR < 161) {
+    auth_dynamic_params->patterns_allowed_to_use_all_schemes_for_proxies =
+        auth_dynamic_params->patterns_allowed_to_use_all_schemes;
   }
   auth_dynamic_params->server_allowlist =
       local_state->GetString(prefs::kAuthServerAllowlist);
@@ -514,7 +530,7 @@ network::mojom::NetworkContext* SystemNetworkContextManager::GetContext() {
     // trying to create a new NetworkContext would fail, anyways, and hopefully
     // a new NetworkContext will be created on the next GetContext() call.
     content::GetNetworkService();
-    DCHECK(network_service_network_context_);
+    CHECK(network_service_network_context_, base::NotFatalUntil::M161);
   }
   return network_service_network_context_.get();
 }
@@ -549,11 +565,11 @@ SystemNetworkContextManager* SystemNetworkContextManager::CreateInstance(
 #if DCHECK_IS_ON()
   // Check that this function is not reentrant.
   static bool inside_this_function = false;
-  DCHECK(!inside_this_function);
+  CHECK(!inside_this_function, base::NotFatalUntil::M161);
   base::AutoReset now_inside_this_function(&inside_this_function, true);
 #endif  // DCHECK_IS_ON()
 
-  DCHECK(!g_system_network_context_manager);
+  CHECK(!g_system_network_context_manager, base::NotFatalUntil::M161);
   g_system_network_context_manager =
       new SystemNetworkContextManager(pref_service);
   return g_system_network_context_manager;
@@ -584,7 +600,7 @@ SystemNetworkContextManager* SystemNetworkContextManager::GetInstance() {
 
 // static
 void SystemNetworkContextManager::DeleteInstance() {
-  DCHECK(g_system_network_context_manager);
+  CHECK(g_system_network_context_manager, base::NotFatalUntil::M161);
   delete g_system_network_context_manager;
   g_system_network_context_manager = nullptr;
 }
@@ -646,6 +662,8 @@ SystemNetworkContextManager::SystemNetworkContextManager(
   pref_change_registrar_.Add(prefs::kBasicAuthOverHttpEnabled,
                              auth_pref_callback);
   pref_change_registrar_.Add(prefs::kAllHttpAuthSchemesAllowedForOrigins,
+                             auth_pref_callback);
+  pref_change_registrar_.Add(prefs::kAllHttpAuthSchemesAllowedForProxies,
                              auth_pref_callback);
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
@@ -727,6 +745,7 @@ void SystemNetworkContextManager::RegisterPrefs(PrefRegistrySimple* registry) {
 
   // Dynamic auth params.
   registry->RegisterListPref(prefs::kAllHttpAuthSchemesAllowedForOrigins);
+  registry->RegisterListPref(prefs::kAllHttpAuthSchemesAllowedForProxies);
   registry->RegisterBooleanPref(prefs::kDisableAuthNegotiateCnameLookup, false);
   registry->RegisterBooleanPref(prefs::kEnableAuthNegotiatePort, false);
   registry->RegisterBooleanPref(prefs::kBasicAuthOverHttpEnabled, true);
@@ -788,7 +807,27 @@ SystemNetworkContextManager::GetStubResolverConfigReader() {
   return &GetInstance()->stub_resolver_config_reader_;
 }
 
+// static
 void SystemNetworkContextManager::OnNetworkServiceCreated(
+    network::mojom::NetworkService* network_service,
+    PrefService* pref_service) {
+  // Create SystemNetworkContextManager if it has not been created yet. We need
+  // to set up global NetworkService state before anything else uses it and this
+  // is the first opportunity to initialize SystemNetworkContextManager with the
+  // NetworkService.
+  if (!HasInstance()) {
+    CreateInstance(pref_service);
+  }
+
+  GetInstance()->OnNetworkServiceCreatedInternal(network_service);
+
+  if (task_manager::TaskManagerImpl::IsCreated() &&
+      task_manager::TaskManagerImpl::GetInstance()->is_running()) {
+    network_service->EnableDataUseUpdates(true);
+  }
+}
+
+void SystemNetworkContextManager::OnNetworkServiceCreatedInternal(
     network::mojom::NetworkService* network_service) {
   // On network service restart, it's possible for |url_loader_factory_| to not
   // be disconnected yet (so any consumers of GetURLLoaderFactory() in network
@@ -955,8 +994,9 @@ void SystemNetworkContextManager::ConfigureDefaultNetworkContextParams(
   request_header_integrity::RequestHeaderIntegrityURLLoaderThrottle::
       UpdateCorsExemptHeaders(network_context_params);
 #endif  // BUILDFLAG(ENABLE_REQUEST_HEADER_INTEGRITY)
-
-  network_context_params->enable_brotli = true;
+  network_context_params->cors_exempt_header_list.push_back(
+      contextual_tasks::kContextualTasksSearchCapabilitiesHeaderName);
+  glic::UpdateCorsExemptHeaders(network_context_params);
 
   network_context_params->enable_zstd = true;
 
@@ -987,7 +1027,8 @@ void SystemNetworkContextManager::ConfigureDefaultNetworkContextParams(
     }
   }
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || \
+    (BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS))
   if (command_line.HasSwitch(switches::kUseSystemProxyResolver)) {
 #if BUILDFLAG(IS_WIN)
     network_context_params->system_proxy_resolver =
@@ -995,9 +1036,12 @@ void SystemNetworkContextManager::ConfigureDefaultNetworkContextParams(
 #elif BUILDFLAG(IS_MAC)
     network_context_params->system_proxy_resolver =
         ChromeMojoProxyResolverMac::CreateWithSelfOwnedReceiver();
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#else  // BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
+    network_context_params->system_proxy_resolver =
+        ChromeMojoProxyResolverLinux::CreateWithSelfOwnedReceiver();
+#endif
   }
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#endif
 
   network_context_params->pac_quick_check_enabled =
       local_state_->GetBoolean(prefs::kQuickCheckEnabled);
@@ -1039,12 +1083,12 @@ SystemNetworkContextManager::GetNetExportFileWriter() {
 }
 
 void SystemNetworkContextManager::UpdateTrustAnchorIDs(
-    std::vector<std::vector<uint8_t>> trust_anchor_ids,
-    std::vector<std::vector<uint8_t>> mtc_trust_anchor_ids,
-    int64_t mtc_update_time_seconds) {
+    base::span<const std::vector<uint8_t>> classic_trust_anchor_ids,
+    base::span<const std::vector<uint8_t>> mtc_standalone_only_trust_anchor_ids,
+    std::optional<SSLConfigServiceMtcLandmarkInfo> mtc_landmark_info) {
   ssl_config_service_manager_.UpdateTrustAnchorIDs(
-      std::move(trust_anchor_ids), std::move(mtc_trust_anchor_ids),
-      mtc_update_time_seconds);
+      classic_trust_anchor_ids, mtc_standalone_only_trust_anchor_ids,
+      std::move(mtc_landmark_info));
 }
 
 // static
@@ -1094,7 +1138,7 @@ void SystemNetworkContextManager::FlushProxyConfigMonitorForTesting() {
 }
 
 void SystemNetworkContextManager::FlushNetworkInterfaceForTesting() {
-  DCHECK(network_service_network_context_);
+  CHECK(network_service_network_context_, base::NotFatalUntil::M161);
   network_service_network_context_.FlushForTesting();
   if (url_loader_factory_) {
     url_loader_factory_.FlushForTesting();

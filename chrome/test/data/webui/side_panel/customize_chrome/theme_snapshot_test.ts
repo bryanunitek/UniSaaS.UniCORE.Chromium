@@ -5,8 +5,7 @@
 import 'chrome://customize-chrome-side-panel.top-chrome/theme_snapshot.js';
 
 import type {CustomizeChromePageRemote} from 'chrome://customize-chrome-side-panel.top-chrome/customize_chrome.mojom-webui.js';
-import {CustomizeChromePageCallbackRouter, CustomizeChromePageHandlerRemote} from 'chrome://customize-chrome-side-panel.top-chrome/customize_chrome.mojom-webui.js';
-import {CustomizeChromeApiProxy} from 'chrome://customize-chrome-side-panel.top-chrome/customize_chrome_api_proxy.js';
+import {browserProxyFactory, CustomizeChromePageHandlerRemote} from 'chrome://customize-chrome-side-panel.top-chrome/customize_chrome.mojom-webui.js';
 import type {ThemeSnapshotElement} from 'chrome://customize-chrome-side-panel.top-chrome/theme_snapshot.js';
 import {CustomizeThemeType} from 'chrome://customize-chrome-side-panel.top-chrome/theme_snapshot.js';
 import {assertEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
@@ -24,11 +23,11 @@ suite('ThemeSnapshotTest', () => {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     handler = installMock(
         CustomizeChromePageHandlerRemote,
-        (mock: CustomizeChromePageHandlerRemote) =>
-            CustomizeChromeApiProxy.setInstance(
-                mock, new CustomizeChromePageCallbackRouter()));
-    callbackRouterRemote = CustomizeChromeApiProxy.getInstance()
-                               .callbackRouter.$.bindNewPipeAndPassRemote();
+        (mock: CustomizeChromePageHandlerRemote) => {
+          const {instance, remote} = browserProxyFactory.createForTest(mock);
+          browserProxyFactory.setInstance(instance);
+          callbackRouterRemote = remote;
+        });
   });
 
   async function createThemeSnapshotElement(): Promise<void> {
@@ -61,11 +60,6 @@ suite('ThemeSnapshotTest', () => {
     assertEquals(
         CustomizeThemeType.CUSTOM_THEME, page.getAttribute('theme-type'));
     assertEquals(
-        $$<HTMLImageElement>(
-            themeSnapshotElement, '.snapshot-container #customThemeImage')!
-            .getAttribute('aria-labelledby'),
-        'customThemeTitle');
-    assertEquals(
         'foo',
         $$(themeSnapshotElement,
            '.snapshot-container #customThemeTitle')!.textContent.trim());
@@ -93,11 +87,6 @@ suite('ThemeSnapshotTest', () => {
     assertEquals(
         CustomizeThemeType.CLASSIC_CHROME, page.getAttribute('theme-type'));
     assertEquals(
-        $$<HTMLImageElement>(
-            themeSnapshotElement,
-            '#classicChromeBackground svg')!.getAttribute('aria-labelledby'),
-        'classicChromeThemeTitle');
-    assertEquals(
         'Default Chrome',
         $$(themeSnapshotElement,
            '.snapshot-container #classicChromeThemeTitle')!.textContent.trim());
@@ -121,10 +110,6 @@ suite('ThemeSnapshotTest', () => {
     assertTrue(!!page);
     assertEquals(
         CustomizeThemeType.UPLOADED_IMAGE, page.getAttribute('theme-type'));
-    assertEquals(
-        $$(themeSnapshotElement, '.snapshot-container #uploadedThemeImage')!
-            .getAttribute('aria-labelledby'),
-        'uploadedThemeTitle');
     assertEquals(
         'Uploaded image',
         $$(themeSnapshotElement,

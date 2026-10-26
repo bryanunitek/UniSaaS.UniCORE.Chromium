@@ -15,6 +15,7 @@
 #include "base/task/thread_pool.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/wrapper_shared_url_loader_factory.h"
+#include "third_party/blink/public/common/global_privacy_control/global_privacy_control_util.h"
 #include "third_party/blink/public/common/loader/loader_constants.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_fetch_handler_bypass_option.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_object.mojom.h"
@@ -198,7 +199,8 @@ DedicatedOrSharedWorkerGlobalScopeContextImpl::
             pending_resource_load_info_notifier,
         scoped_refptr<WebServiceWorkerProviderContext>
             service_worker_provider_context)
-    : service_worker_client_receiver_(
+    : WebDedicatedOrSharedWorkerGlobalScopeContext(renderer_preferences),
+      service_worker_client_receiver_(
           std::move(service_worker_client_receiver)),
       pending_service_worker_worker_client_registry_(
           std::move(pending_service_worker_worker_client_registry)),
@@ -207,7 +209,6 @@ DedicatedOrSharedWorkerGlobalScopeContextImpl::
       service_worker_container_host_(std::move(service_worker_container_host)),
       pending_subresource_loader_updater_(
           std::move(pending_subresource_loader_updater)),
-      renderer_preferences_(renderer_preferences),
       preference_watcher_pending_receiver_(
           std::move(preference_watcher_receiver)),
       throttle_provider_(std::move(throttle_provider)),
@@ -376,6 +377,12 @@ void DedicatedOrSharedWorkerGlobalScopeContextImpl::FinalizeRequest(
     WebURLRequest& request) {
   if (renderer_preferences_.enable_do_not_track) {
     request.SetHttpHeaderField(WebString::FromUtf8(kDoNotTrackHeader), "1");
+  }
+  if (IsGlobalPrivacyControlFeatureAndSettingEnabled(renderer_preferences_)) {
+    request.SetHttpHeaderField(WebString::FromUtf8(kGlobalPrivacyControlHeader),
+                               "1");
+    blink::MaybeRecordGlobalPrivacyControlSourceMetric(
+        blink::GPCSignalSourceType::kWorkerSubresourceFetch);
   }
 
   auto url_request_extra_data = base::MakeRefCounted<WebURLRequestExtraData>();

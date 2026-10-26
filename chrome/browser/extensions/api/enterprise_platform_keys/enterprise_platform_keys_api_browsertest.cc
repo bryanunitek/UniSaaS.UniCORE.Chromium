@@ -4,6 +4,7 @@
 
 #include "chrome/browser/extensions/api/enterprise_platform_keys/enterprise_platform_keys_api.h"
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -22,9 +23,8 @@
 #include "chrome/browser/ash/platform_keys/key_permissions/user_private_token_kpm_service_factory.h"
 #include "chrome/browser/extensions/api/platform_keys/platform_keys_test_base.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/extensions/api/enterprise_platform_keys.h"
-#include "chrome/common/extensions/chrome_extensions_client.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/dbus/attestation/keystore.pb.h"
@@ -38,6 +38,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using ash::attestation::TpmChallengeKeyFactory;
 using testing::_;
 using testing::NiceMock;
 
@@ -61,6 +62,37 @@ void FakeRunCheckNotRegister(::attestation::VerifiedAccessFlow flow_type,
           kChallengeResponse));
 }
 
+// Makes `TpmChallengeKeyFactory::Create()` return a fake that succeeds while
+// the returned override is alive.
+[[nodiscard]] std::pair<TpmChallengeKeyFactory::ScopedOneshotOverrideForTesting,
+                        ash::attestation::MockTpmChallengeKey*>
+SetMockTpmChallenger() {
+  auto mock_tpm_challenge_key =
+      std::make_unique<NiceMock<ash::attestation::MockTpmChallengeKey>>();
+  // Will be used with EXPECT_CALL.
+  ash::attestation::MockTpmChallengeKey* mock_ptr =
+      mock_tpm_challenge_key.get();
+  mock_tpm_challenge_key->EnableFake();
+  // NOTE: ScopedOneshotOverrideForTesting is non-movable. Relying on C++17 RVO.
+  return std::pair<TpmChallengeKeyFactory::ScopedOneshotOverrideForTesting,
+                   ash::attestation::MockTpmChallengeKey*>(
+      std::move(mock_tpm_challenge_key), mock_ptr);
+}
+
+// Same as `SetMockTpmChallenger()`, but the fake fails with
+// `kChallengeBadBase64Error`.
+[[nodiscard]] TpmChallengeKeyFactory::ScopedOneshotOverrideForTesting
+SetMockTpmChallengerBadBase64Error() {
+  auto mock_tpm_challenge_key =
+      std::make_unique<NiceMock<ash::attestation::MockTpmChallengeKey>>();
+  // Error text is "Challenge is not base64 encoded."
+  mock_tpm_challenge_key->EnableFakeError(
+      ash::attestation::TpmChallengeKeyResultCode::kChallengeBadBase64Error);
+  // transfer ownership inside factory
+  return TpmChallengeKeyFactory::ScopedOneshotOverrideForTesting(
+      std::move(mock_tpm_challenge_key));
+}
+
 class EPKChallengeKeyTestBase : public PlatformKeysTestBase {
  protected:
   EPKChallengeKeyTestBase()
@@ -70,10 +102,6 @@ class EPKChallengeKeyTestBase : public PlatformKeysTestBase {
 
   void SetUpOnMainThread() override {
     PlatformKeysTestBase::SetUpOnMainThread();
-
-    chrome_extensions_client_ =
-        std::make_unique<extensions::ChromeExtensionsClient>();
-    extensions::ExtensionsClient::Set(chrome_extensions_client_.get());
 
     extension_ = ExtensionBuilder("Test").Build();
 
@@ -91,34 +119,6 @@ class EPKChallengeKeyTestBase : public PlatformKeysTestBase {
                 base::BindRepeating(&EPKChallengeKeyTestBase::
                                         CreateKeyPermissionsManagerService,
                                     base::Unretained(this)));
-  }
-
-  void TearDownOnMainThread() override {
-    extensions::ExtensionsClient::Set(nullptr);
-    chrome_extensions_client_.reset();
-    PlatformKeysTestBase::TearDownOnMainThread();
-  }
-
-  void SetMockTpmChallenger() {
-    auto mock_tpm_challenge_key =
-        std::make_unique<NiceMock<ash::attestation::MockTpmChallengeKey>>();
-    // Will be used with EXPECT_CALL.
-    mock_tpm_challenge_key_ = mock_tpm_challenge_key.get();
-    mock_tpm_challenge_key->EnableFake();
-    // transfer ownership inside factory
-    ash::attestation::TpmChallengeKeyFactory::SetForTesting(
-        std::move(mock_tpm_challenge_key));
-  }
-
-  void SetMockTpmChallengerBadBase64Error() {
-    auto mock_tpm_challenge_key =
-        std::make_unique<NiceMock<ash::attestation::MockTpmChallengeKey>>();
-    // Error text is "Challenge is not base64 encoded."
-    mock_tpm_challenge_key->EnableFakeError(
-        ash::attestation::TpmChallengeKeyResultCode::kChallengeBadBase64Error);
-    // transfer ownership inside factory
-    ash::attestation::TpmChallengeKeyFactory::SetForTesting(
-        std::move(mock_tpm_challenge_key));
   }
 
   std::unique_ptr<KeyedService> CreateKeyPermissionsManagerService(
@@ -173,10 +173,7 @@ class EPKChallengeKeyTestBase : public PlatformKeysTestBase {
 
   scoped_refptr<const extensions::Extension> extension_;
   ash::platform_keys::MockKeyPermissionsManager key_permissions_manager_;
-  std::unique_ptr<extensions::ChromeExtensionsClient> chrome_extensions_client_;
   raw_ptr<PrefService, DanglingUntriaged> prefs_ = nullptr;
-  raw_ptr<ash::attestation::MockTpmChallengeKey, DanglingUntriaged>
-      mock_tpm_challenge_key_ = nullptr;
 };
 
 class EPKChallengeMachineKeyTest : public EPKChallengeKeyTestBase {
@@ -232,7 +229,7 @@ IN_PROC_BROWSER_TEST_F(EPKChallengeMachineKeyTest, PRE_Success) {
 }
 
 IN_PROC_BROWSER_TEST_F(EPKChallengeMachineKeyTest, Success) {
-  SetMockTpmChallenger();
+  auto scoped_tpm_challenge_key_override = SetMockTpmChallenger();
 
   base::ListValue allowlist;
   allowlist.Append(extension_->id());
@@ -253,7 +250,7 @@ IN_PROC_BROWSER_TEST_F(EPKChallengeMachineKeyTest,
 
 IN_PROC_BROWSER_TEST_F(EPKChallengeMachineKeyTest,
                        BadChallengeThenErrorMessageReturned) {
-  SetMockTpmChallengerBadBase64Error();
+  auto scoped_tpm_challenge_key_override = SetMockTpmChallengerBadBase64Error();
 
   base::ListValue allowlist;
   allowlist.Append(extension_->id());
@@ -273,13 +270,14 @@ IN_PROC_BROWSER_TEST_F(EPKChallengeMachineKeyTest,
 }
 
 IN_PROC_BROWSER_TEST_F(EPKChallengeMachineKeyTest, KeyNotRegisteredByDefault) {
-  SetMockTpmChallenger();
+  auto [scoped_tpm_challenge_key_override, mock_tpm_challenge_key] =
+      SetMockTpmChallenger();
 
   base::ListValue allowlist;
   allowlist.Append(extension_->id());
   prefs_->SetList(prefs::kAttestationExtensionAllowlist, std::move(allowlist));
 
-  EXPECT_CALL(*mock_tpm_challenge_key_, BuildResponse)
+  EXPECT_CALL(*mock_tpm_challenge_key, BuildResponse)
       .WillOnce(FakeRunCheckNotRegister);
 
   EXPECT_TRUE(api_test_utils::RunFunction(
@@ -318,7 +316,7 @@ IN_PROC_BROWSER_TEST_F(EPKChallengeUserKeyTest, PRE_Success) {
 }
 
 IN_PROC_BROWSER_TEST_F(EPKChallengeUserKeyTest, Success) {
-  SetMockTpmChallenger();
+  auto scoped_tpm_challenge_key_override = SetMockTpmChallenger();
 
   base::ListValue allowlist;
   allowlist.Append(extension_->id());
@@ -339,7 +337,7 @@ IN_PROC_BROWSER_TEST_F(EPKChallengeUserKeyTest,
 
 IN_PROC_BROWSER_TEST_F(EPKChallengeUserKeyTest,
                        BadChallengeThenErrorMessageReturned) {
-  SetMockTpmChallengerBadBase64Error();
+  auto scoped_tpm_challenge_key_override = SetMockTpmChallengerBadBase64Error();
 
   base::ListValue allowlist;
   allowlist.Append(extension_->id());
@@ -420,7 +418,8 @@ IN_PROC_BROWSER_TEST_P(EPKChallengeKeyTest, PRE_Success) {
 }
 
 IN_PROC_BROWSER_TEST_P(EPKChallengeKeyTest, Success) {
-  SetMockTpmChallenger();
+  auto [scoped_tpm_challenge_key_override, mock_tpm_challenge_key] =
+      SetMockTpmChallenger();
   AllowlistExtension();
 
   auto scope = std::get<0>(GetParam());
@@ -453,7 +452,7 @@ IN_PROC_BROWSER_TEST_P(EPKChallengeKeyTest, Success) {
     register_key.value().algorithm = algorithm_opt.value();
   }
 
-  EXPECT_CALL(*mock_tpm_challenge_key_,
+  EXPECT_CALL(*mock_tpm_challenge_key,
               BuildResponse(expected_va_flow_type, _, _, _, expect_register,
                             expect_crypto_key_type, _, _));
 

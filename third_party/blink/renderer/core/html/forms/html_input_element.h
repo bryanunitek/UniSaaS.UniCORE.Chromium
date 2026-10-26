@@ -27,7 +27,6 @@
 
 #include "base/gtest_prod_util.h"
 #include "build/build_config.h"
-#include "third_party/blink/public/common/webid/email_verification_state.h"
 #include "third_party/blink/public/mojom/input/focus_type.mojom-blink-forward.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -54,6 +53,7 @@ class KURL;
 class ListAttributeTargetObserver;
 class RadioButtonGroupScope;
 class ScriptObject;
+class UIEvent;
 struct DateTimeChooserParameters;
 
 class CORE_EXPORT HTMLInputElement
@@ -131,6 +131,7 @@ class CORE_EXPORT HTMLInputElement
   bool HasBeenPasswordField() const;
   void MaybeSetHasBeenPasswordField();
 
+  bool IsSwitch() const;
   bool IsCheckable() const;
   bool checkedForBinding() const { return Checked(); }
   void setCheckedForBinding(bool);
@@ -157,6 +158,8 @@ class CORE_EXPORT HTMLInputElement
 
   unsigned size() const;
   bool GetSizeWithDecoration(int& preferred_size) const;
+
+  String FilterBeforeTextInserted(const String& text) override;
 
   void setType(const AtomicString&);
 
@@ -278,8 +281,6 @@ class CORE_EXPORT HTMLInputElement
 
   void OnSearch();
 
-  void UpdateClearButtonVisibility();
-
   bool WillRespondToMouseClickEvents() override;
 
   // Returns the DataList element associated via the list attribute, if any.
@@ -352,6 +353,7 @@ class CORE_EXPORT HTMLInputElement
   HTMLImageLoader& EnsureImageLoader();
 
   bool SetupDateTimeChooserParameters(DateTimeChooserParameters&);
+  void ClosePopupView();
 
   bool SupportsInputModeAttribute() const;
 
@@ -359,8 +361,7 @@ class CORE_EXPORT HTMLInputElement
   bool ShouldDrawCapsLockIndicator() const;
   void SetShouldRevealPassword(bool value);
   bool ShouldRevealPassword() const { return should_reveal_password_; }
-  void SetEmailVerificationState(EmailVerificationState state);
-  EmailVerificationState GetEmailVerificationState() const;
+
   void DispatchSimulatedEnter();
   AXObject* PopupRootAXObject();
   void DidNotifySubtreeInsertionsToDocument() override;
@@ -371,8 +372,6 @@ class CORE_EXPORT HTMLInputElement
 
   bool IsPlaceholderVisible() const override { return is_placeholder_visible_; }
   void SetPlaceholderVisibility(bool) override;
-
-  unsigned SizeOfRadioGroup() const;
 
   bool SupportsPlaceholder() const final;
   String GetPlaceholderValue() const final;
@@ -392,12 +391,45 @@ class CORE_EXPORT HTMLInputElement
 
   ShadowRoot* EnsureShadowSubtree();
 
+  // Creating the UA shadow subtree is deferred to the next style/layout update
+  // for inputs inserted into an active document (many are removed again
+  // before that). While an input is in its Document's list of such inputs
+  // (Document::ScheduleShadowTreeCreation()), it remembers the low
+  // kShadowTreeCreationIndexBits bits of its position in that list, so that
+  // removal can find and take it out again in O(1) (or, with more than 2^16
+  // inputs pending in one document, in a few probes; see
+  // Document::UnscheduleShadowTreeCreation()).
+  static constexpr unsigned kShadowTreeCreationIndexBits = 16;
+  static constexpr wtf_size_t kShadowTreeCreationIndexHintRange =
+      wtf_size_t{1} << kShadowTreeCreationIndexBits;
+  bool IsShadowTreeCreationScheduled() const {
+    return is_shadow_tree_creation_scheduled_;
+  }
+  // The scheduled input's index in the Document's list, modulo
+  // kShadowTreeCreationIndexHintRange.
+  wtf_size_t ScheduledShadowTreeCreationIndexHint() const {
+    DCHECK(IsShadowTreeCreationScheduled());
+    return scheduled_shadow_tree_creation_index_hint_;
+  }
+  void SetScheduledShadowTreeCreationIndex(wtf_size_t index) {
+    is_shadow_tree_creation_scheduled_ = true;
+    scheduled_shadow_tree_creation_index_hint_ =
+        index & (kShadowTreeCreationIndexHintRange - 1);
+  }
+  void ClearScheduledShadowTreeCreation() {
+    is_shadow_tree_creation_scheduled_ = false;
+    scheduled_shadow_tree_creation_index_hint_ = 0;
+  }
+
   bool IsValidBuiltinCommand(HTMLElement& invoker,
                              CommandEventType command) override;
   bool HandleCommandInternal(HTMLElement& invoker,
-                             CommandEventType command) override;
+                             CommandEventType command,
+                             UIEvent* activate_event) override;
 
-  void SetFocused(bool is_focused, mojom::blink::FocusType) override;
+  void SetFocused(bool is_focused,
+                  mojom::blink::FocusType,
+                  BlurEventBehavior) override;
   bool IsKeyboardFocusableSlow(UpdateBehavior update_behavior =
                                    UpdateBehavior::kStyleAndLayout) const final;
 
@@ -467,6 +499,9 @@ class CORE_EXPORT HTMLInputElement
   void ResetImpl() final;
 
   EventDispatchHandlingState* LegacyPreActivationBehavior(Event&) final;
+  void RunActivationBehaviorBeforeDOMActivate(
+      Event&,
+      EventDispatchHandlingState*) final;
   void RunActivationBehavior(Event&, EventDispatchHandlingState*) final;
 
   bool IsURLAttribute(const Attribute&) const final;
@@ -505,9 +540,7 @@ class CORE_EXPORT HTMLInputElement
   void RemoveFromRadioButtonGroup();
   void AdjustStyle(ComputedStyleBuilder&) override;
 
-  void MaybeReportPiiMetrics();
-
-  void DidChangeIsCanvasOrInCanvasSubtree() final;
+  void DidChangeIsInCanvasSubtree(CanvasSubtreePropagation) final;
 
   AtomicString name_;
   // The value string in |value| value mode.
@@ -530,7 +563,12 @@ class CORE_EXPORT HTMLInputElement
   unsigned needs_to_update_view_value_ : 1;
   unsigned is_placeholder_visible_ : 1;
   unsigned has_been_password_field_ : 1;
-  unsigned scheduled_create_shadow_tree_ : 1;
+  // See ScheduledShadowTreeCreationIndexHint(). The flags above take 15 bits,
+  // so with these 1 + 16 the bit-fields fill exactly one 32-bit word (there
+  // is a static_assert in the constructor).
+  unsigned is_shadow_tree_creation_scheduled_ : 1;
+  unsigned scheduled_shadow_tree_creation_index_hint_
+      : kShadowTreeCreationIndexBits;
   Member<InputType> input_type_;
   Member<InputTypeView> input_type_view_;
   // The ImageLoader must be owned by this element because the loader code

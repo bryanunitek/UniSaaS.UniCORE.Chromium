@@ -6,21 +6,20 @@ package org.chromium.chrome.browser.incognito.reauth;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
-import static org.chromium.base.test.util.Batch.UNIT_TESTS;
-
 import android.content.Context;
 import android.content.Intent;
 
 import androidx.activity.OnBackPressedCallback;
-import androidx.test.filters.SmallTest;
 
 import org.junit.After;
 import org.junit.Before;
@@ -31,12 +30,13 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.ParameterizedRobolectricTestRunner;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.base.test.BaseRobolectricTestRule;
-import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.hub.HubManager;
 import org.chromium.chrome.browser.hub.PaneId;
 import org.chromium.chrome.browser.hub.PaneManager;
@@ -58,8 +58,6 @@ import java.util.Collection;
  * <p>TODO(crbug.com/40056462): Remove parameterization to improve readability of the tests.
  */
 @RunWith(ParameterizedRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@Batch(UNIT_TESTS)
 public class IncognitoReauthCoordinatorFactoryTest {
     public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -127,6 +125,7 @@ public class IncognitoReauthCoordinatorFactoryTest {
 
     @After
     public void tearDown() {
+        DeviceInfo.resetIsDesktopForTesting();
         IncognitoTabHostRegistry.getInstance().unregister(mIncognitoTabHostMock);
 
         verifyNoMoreInteractions(
@@ -142,7 +141,6 @@ public class IncognitoReauthCoordinatorFactoryTest {
     }
 
     @Test
-    @SmallTest
     public void testSeeOtherTabsRunnable_IsInvokedCorrectly_LayoutNotVisible() {
         Runnable seeOtherTabsRunnable =
                 mIncognitoReauthCoordinatorFactory.getSeeOtherTabsRunnable();
@@ -167,7 +165,25 @@ public class IncognitoReauthCoordinatorFactoryTest {
     }
 
     @Test
-    @SmallTest
+    @EnableFeatures(ChromeFeatureList.DISABLE_GRID_TAB_SWITCHER)
+    public void
+            testSeeOtherTabsRunnable_IsInvokedCorrectly_LayoutNotVisible_disabledOnDesktop_doesNotShowHub() {
+        if (!mIsTabbedActivity) return;
+
+        DeviceInfo.setIsDesktopForTesting(true);
+        Runnable seeOtherTabsRunnable =
+                mIncognitoReauthCoordinatorFactory.getSeeOtherTabsRunnable();
+        when(mLayoutManagerMock.isLayoutVisible(LayoutType.HUB)).thenReturn(false);
+        doNothing().when(mTabModelSelectorMock).selectModel(/* incognito= */ false);
+
+        seeOtherTabsRunnable.run();
+
+        verify(mLayoutManagerMock).isLayoutVisible(LayoutType.HUB);
+        verify(mTabModelSelectorMock, times(1)).selectModel(/* incognito= */ eq(false));
+        verify(mLayoutManagerMock, never()).showLayout(eq(LayoutType.HUB), anyBoolean());
+    }
+
+    @Test
     public void testSeeOtherTabsRunnable_IsInvokedCorrectly_LayoutVisible() {
         Runnable seeOtherTabsRunnable =
                 mIncognitoReauthCoordinatorFactory.getSeeOtherTabsRunnable();
@@ -192,7 +208,6 @@ public class IncognitoReauthCoordinatorFactoryTest {
     }
 
     @Test
-    @SmallTest
     public void testSeeOtherTabsRunnable_IsInvokedCorrectly_LayoutVisible_DelayedHubInit() {
         if (!mIsTabbedActivity) return;
 
@@ -228,7 +243,6 @@ public class IncognitoReauthCoordinatorFactoryTest {
     }
 
     @Test
-    @SmallTest
     public void testCloseAllIncognitoTabsRunnable_IsInvokedCorrectly() {
         Runnable closeAllIncognitoTabsRunnable =
                 mIncognitoReauthCoordinatorFactory.getCloseAllIncognitoTabsRunnable();
@@ -239,7 +253,6 @@ public class IncognitoReauthCoordinatorFactoryTest {
     }
 
     @Test
-    @SmallTest
     public void testBackPressRunnable_IsInvokedCorrectly_LayoutNotVisible() {
         Runnable backPressRunnable = mIncognitoReauthCoordinatorFactory.getBackPressRunnable();
         // Does the same thing as see other tabs runnable.
@@ -263,7 +276,6 @@ public class IncognitoReauthCoordinatorFactoryTest {
     }
 
     @Test
-    @SmallTest
     public void testBackPressRunnable_IsInvokedCorrectly_LayoutVisible() {
         Runnable backPressRunnable = mIncognitoReauthCoordinatorFactory.getBackPressRunnable();
         // Does the same thing as see other tabs runnable.
@@ -288,7 +300,6 @@ public class IncognitoReauthCoordinatorFactoryTest {
     }
 
     @Test
-    @SmallTest
     public void testCreateIncognitoReauthCoordinator_ForFullScreen_ReturnsFullScreenCoordinator() {
         IncognitoReauthCoordinator coordinator =
                 mIncognitoReauthCoordinatorFactory.createIncognitoReauthCoordinator(
@@ -301,7 +312,6 @@ public class IncognitoReauthCoordinatorFactoryTest {
     }
 
     @Test
-    @SmallTest
     public void
             testCreateIncognitoReauthCoordinator_ForTabSwitcher_ReturnsTabSwitcherCoordinator_ExceptForCct() {
         if (mIsTabbedActivity) {
@@ -330,7 +340,6 @@ public class IncognitoReauthCoordinatorFactoryTest {
     }
 
     @Test
-    @SmallTest
     public void testAreDependenciesReadyFor() {
         if (mIsTabbedActivity) {
             // The TabSwitcherCustomViewManager is set.

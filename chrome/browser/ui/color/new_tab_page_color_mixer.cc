@@ -31,9 +31,12 @@ constexpr SkColor kColorSysSurface_Light = SkColorSetRGB(0xFF, 0xFF, 0xFF);
 constexpr SkColor kColorGemSysColorPrimary_Light =
     SkColorSetRGB(0x0B, 0x57, 0xD0);
 constexpr SkColor kColorSysStateHoverOnSubtle_Light = SkColorSetARGB(0x0F, 0x1F, 0x1F, 0x1F);
+constexpr SkColor kColorSysStateRippleNeutralOnSubtle_Light =
+    SkColorSetARGB(0x14, 0x1F, 0x1F, 0x1F);
 constexpr SkColor kColorSysTonalOutline_Light = SkColorSetRGB(0xA8, 0xC7, 0xFA);
 constexpr SkColor kColorSysPrimary_Light = SkColorSetRGB(0x0B, 0x57, 0xD0);
 
+constexpr SkColor kColorSysOnSurface_Light = SkColorSetRGB(0x1F, 0x1F, 0x1F);
 constexpr SkColor kColorSysOnSurfaceSubtle_Light =
     SkColorSetRGB(0x47, 0x47, 0x47);
 
@@ -242,7 +245,9 @@ void AddGeneratedThemeComprehensiveColors(ui::ColorMixer& mixer) {
   mixer[kColorNewTabPageText] = SelectBasedOnDarkInput(
       element_background_color, gfx::kGoogleGrey200, gfx::kGoogleGrey900);
   // Styling for Doodle Share Button.
-  mixer[kColorNewTabPageDoodleShareButtonBackground] = element_background_color;
+  mixer[kColorNewTabPageDoodleShareButtonBackground] =
+      SelectBasedOnWhiteInput({kColorNewTabPageBackground}, gfx::kGoogleGrey100,
+                              element_background_color);
   mixer[kColorNewTabPageDoodleShareButtonIcon] = primary_foreground_color;
 
   // Action chips colors.
@@ -282,6 +287,10 @@ void AddSearchboxColors(ui::ColorMixer& mixer, const ui::ColorProviderKey& key) 
   mixer[kColorNewTabPageRealboxNextIconHover] = {
       kColorSysStateHoverOnSubtle_Light};
 
+#if BUILDFLAG(IS_ANDROID)
+  mixer[kColorNewTabPageComposeboxSubmitButtonBackground] = {
+      SkColorSetRGB(0x0B, 0x57, 0xD0)};
+#else
   if (base::FeatureList::IsEnabled(ntp_features::kEnergyEffect)) {
     mixer[kColorNewTabPageComposeboxSubmitButtonBackground] = {
         SkColorSetRGB(0x33, 0x6E, 0xF3)};
@@ -289,6 +298,7 @@ void AddSearchboxColors(ui::ColorMixer& mixer, const ui::ColorProviderKey& key) 
     mixer[kColorNewTabPageComposeboxSubmitButtonBackground] = {
         SkColorSetRGB(0x34, 0x6B, 0xF1)};
   }
+#endif
 
   mixer[kColorComposeboxBackground] = {SK_ColorWHITE};
   mixer[kColorComposeboxFileChipSpinner] = {kColorSysPrimary_Light};
@@ -296,6 +306,8 @@ void AddSearchboxColors(ui::ColorMixer& mixer, const ui::ColorProviderKey& key) 
       dark_mode ? SkColorSetRGB(0xE6, 0xE8, 0xF0)
                 : SkColorSetRGB(0x0A, 0x0A, 0x0A)};
   mixer[kColorComposeboxFontLight] = {SkColorSetRGB(0x1F, 0x1F, 0x1F)};
+  mixer[kColorComposeboxGhostCardBackground] = {
+      kColorSysStateRippleNeutralOnSubtle_Light};
   mixer[kColorComposeboxCancelButton] = {
       dark_mode ? SkColorSetRGB(0xAD, 0xAF, 0xB8)
                 : SkColorSetRGB(0x0A, 0x0A, 0x0A)};
@@ -324,9 +336,6 @@ void AddSearchboxColors(ui::ColorMixer& mixer, const ui::ColorProviderKey& key) 
       dark_mode ? SkColorSetRGB(0x4E, 0x50, 0x59)
                 : SkColorSetRGB(0xF0, 0xF2, 0xF5)};
   mixer[kColorComposeboxUploadButton] = {ui::kColorRefNeutral10};
-  mixer[kColorComposeboxUploadButtonDisabled] = {
-      dark_mode ? SkColorSetRGB(0x56, 0x59, 0x5E)
-                : SkColorSetRGB(0xAD, 0xAF, 0xB8)};
   mixer[kColorComposeboxFileChipBackground] = {kColorSysSurface3_Light};
   mixer[kColorComposeboxFileChipFaviconBackground] = {kColorSysSurface_Light};
   mixer[kColorComposeboxFileChipText] = {SkColorSetRGB(0x1F, 0x1F, 0x1F)};
@@ -364,6 +373,9 @@ void AddSearchboxColors(ui::ColorMixer& mixer, const ui::ColorProviderKey& key) 
   mixer[kColorComposeboxErrorScrimButtonText] = {ui::kColorSysOnPrimary};
   mixer[kColorComposeboxErrorScrimForeground] = {ui::kColorSysInverseSurface};
   mixer[kColorComposeboxLink] = {gfx::kGoogleBlue700};
+  mixer[kColorComposeboxAimChipHoverBackground] = {
+      kColorSysStateHoverOnSubtle_Light};
+  mixer[kColorComposeboxAimChipHoverText] = {kColorSysOnSurface_Light};
 
   mixer[kColorSearchboxAnswerIconBackground] = {
       SkColorSetRGB(0xD3, 0xE3, 0xFD)};
@@ -445,6 +457,8 @@ void AddNewTabPageColorMixer(ui::ColorProvider* provider,
   mixer[kColorNewTabPageAddShortcutForeground] =
       ui::SelectBasedOnDarkInput(kColorNewTabPageAddShortcutBackground,
                                  SK_ColorWHITE, gfx::kGoogleGrey900);
+  mixer[kColorNewTabPageAddShortcutBackgroundHovered] = {
+      kColorNewTabPageControlBackgroundHovered};
 
   AddSearchboxColors(mixer, key);
 
@@ -487,7 +501,7 @@ void AddNewTabPageColorMixer(ui::ColorProvider* provider,
   mixer[kColorNewTabFooterLogoBackground] = {SK_ColorWHITE};
 
   /* NewTabPageThreadsRail */
-  mixer[kColorNewTabPageThreadsRailBackground] = {kColorToolbar};
+  mixer[kColorNewTabPageThreadsRailBackground] = {ui::kColorSysBaseContainer};
   mixer[kColorNewTabPageThreadsRailIconButton] = {ui::kColorSysOnSurfaceSubtle};
 }
 
@@ -594,7 +608,7 @@ void AddWebThemeNewTabPageColors(ui::ColorMixer& mixer, bool dark_mode) {
       ui::SetAlpha(kColorNewTabPageBackgroundOverride,
                    /* 90% opacity */ 0.9 * SK_AlphaOPAQUE);
   mixer[kColorNewTabPageDoodleShareButtonBackground] = {
-      kColorNewTabPageBackgroundOverride};
+      dark_mode ? gfx::kGoogleGrey800 : gfx::kGoogleGrey100};
   mixer[kColorNewTabPageDoodleShareButtonIcon] = {primary_foreground_color};
 
   // Tab group colors.
@@ -640,5 +654,14 @@ void AddWebThemeNewTabPageColors(ui::ColorMixer& mixer, bool dark_mode) {
                                                          : gfx::kGoogleGrey800};
   mixer[kColorNewTabPageActionChipDeepSearchIcon] = {
       dark_mode ? SK_ColorWHITE : gfx::kGoogleGrey800};
+
+  // Isolated Tab colors.
+  // The Isolated Tab Page is designed to always remain in light mode.
+  mixer[kColorIsolatedTabPageBackground] = {SK_ColorWHITE};
+  mixer[kColorIsolatedTabPageCardBackground] = {
+      SkColorSetRGB(0xF8, 0xFA, 0xFD)};
+  mixer[kColorIsolatedTabPageLink] = {gfx::kGoogleBlue600};
+  mixer[kColorIsolatedTabPageNoticeBorder] = {gfx::kGoogleBlue100};
+  mixer[kColorIsolatedTabPageNoticeIcon] = {SK_ColorBLACK};
   // LINT.ThenChange(//chrome/browser/ui/color/material_new_tab_page_color_mixer.cc)
 }

@@ -5,30 +5,25 @@
 #ifndef IOS_CHROME_BROWSER_SUPERVISED_USER_MODEL_LIST_FAMILY_MEMBERS_SERVICE_FACTORY_H_
 #define IOS_CHROME_BROWSER_SUPERVISED_USER_MODEL_LIST_FAMILY_MEMBERS_SERVICE_FACTORY_H_
 
-#import "base/no_destructor.h"
 #import "components/supervised_user/core/browser/list_family_members_service.h"
-#import "ios/chrome/browser/shared/model/profile/profile_keyed_service_factory_ios.h"
+#import "ios/chrome/browser/shared/model/profile/typed_profile_keyed_service_factory_ios.h"
 
-class ProfileIOS;
+namespace supervised_user {
 
 // Singleton that owns ListFamilyMembersService objects and associates
 // them with Profiles.
-class ListFamilyMembersServiceFactory : public ProfileKeyedServiceFactoryIOS {
+class ListFamilyMembersServiceFactory final
+    : public TypedProfileKeyedServiceFactoryIOS<ListFamilyMembersServiceFactory,
+                                                ListFamilyMembersService> {
  public:
-  static supervised_user::ListFamilyMembersService* GetForProfile(
-      ProfileIOS* profile);
-
-  static ListFamilyMembersServiceFactory* GetInstance();
+  explicit ListFamilyMembersServiceFactory(PassKey key);
 
  private:
-  friend class base::NoDestructor<ListFamilyMembersServiceFactory>;
-
-  ListFamilyMembersServiceFactory();
-  ~ListFamilyMembersServiceFactory() override = default;
-
   // ProfileKeyedServiceFactoryIOS implementation.
   std::unique_ptr<KeyedService> BuildServiceInstanceFor(
-      ProfileIOS* profile) const override;
+      ProfileIOS* profile) const final;
 };
+
+}  // namespace supervised_user
 
 #endif  // IOS_CHROME_BROWSER_SUPERVISED_USER_MODEL_LIST_FAMILY_MEMBERS_SERVICE_FACTORY_H_

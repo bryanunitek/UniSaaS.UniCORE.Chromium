@@ -21,7 +21,6 @@ import "services/network/public/mojom/web_client_hints_types.mojom";
 import "services/network/public/mojom/web_sandbox_flags.mojom";
 import "services/viz/public/mojom/compositing/local_surface_id.mojom";
 import "third_party/blink/public/mojom/back_forward_cache_not_restored_reasons.mojom";
-import "third_party/blink/public/mojom/conversions/conversions.mojom";
 import "third_party/blink/public/mojom/fenced_frame/fenced_frame_config.mojom";
 import "third_party/blink/public/mojom/fetch/fetch_api_request.mojom";
 import "third_party/blink/public/mojom/frame/agent_cluster_key.mojom";
@@ -114,6 +113,14 @@ struct BeginNavigationParams {
   // the browser process.
   blink.mojom.LocalFrameToken? initiator_frame_token;
 
+  // A token identifying the state of the document that initiated the
+  // navigation. This must be set on renderer-initiated navigations.
+  blink.mojom.InitiatorStateToken? initiator_state_token;
+
+  // A token identifying the document that initiated the navigation. This must
+  // be set on renderer-initiated navigations.
+  blink.mojom.DocumentToken? initiator_document_token;
+
   // Additional HTTP request headers.
   string headers;
 
@@ -163,11 +170,6 @@ struct BeginNavigationParams {
   // conveying the result of the operation. Set on some child frame navigations.
   network.mojom.TrustTokenParams? trust_token_params;
 
-  // Carries optional information associated with conversion measurement for
-  // this navigation. Only set on navigations originating from anchors with
-  // relevant impression attributes set.
-  Impression? impression;
-
   // Timestamps of the renderer running beforeunload handlers on local frames
   // in preparation for navigating. Used for metrics.
   mojo_base.mojom.TimeTicks before_unload_start;
@@ -207,7 +209,12 @@ struct BeginNavigationParams {
   // ID of the tool invocation. This helps the browser to associate the
   // navigation with the tool that caused it.
   // This is null for navigations that were not triggered by a script tool.
-  mojo_base.mojom.UnguessableToken? script_tool_invocation_id;
+  blink.mojom.ToolInvocationToken? script_tool_invocation_id;
+
+  // The host of the entity that injected the script initiating this
+  // navigation, or empty if none. This is only populated when the initiator
+  // document's ScriptInjectionPolicy is kNavigationProtection.
+  string script_injector_host;
 };
 
 // Provided by the browser or the renderer -------------------------------------
@@ -399,6 +406,14 @@ struct OldPageInfo {
 struct IsolatedAppPermissionPolicyEntry {
   string feature;
   array<string> allowed_origins;
+};
+
+// Policy controlling script injection tracking and protections for a document.
+enum ScriptInjectionPolicy {
+  kNone,
+
+  // Prevents injected scripts from navigating the page without a user gesture.
+  kNavigationProtection,
 };
 
 // Used by commit IPC messages. Holds the parameters needed by the renderer to
@@ -772,6 +787,16 @@ struct CommitNavigationParams {
   // the renderer cannot independently determine if a frame is a MIME
   // handler (which requires browser-side state).
   bool is_secure_context_root = false;
+
+  // Policy controlling script injection tracking and protections for this
+  // document (e.g. preventing injected scripts from navigating the page without
+  // a user gesture).
+  ScriptInjectionPolicy script_injection_policy = kNone;
+
+  // Whether the committed document may bind
+  // network.mojom.RestrictedDeviceBoundSessionManager. Computed from facts that
+  // do not change for the document's life. Defaults to false.
+  bool can_use_device_bound_session_js_api = false;
 };
 
 // Parameters used to dispatch the `pageswap` event on the old Document for

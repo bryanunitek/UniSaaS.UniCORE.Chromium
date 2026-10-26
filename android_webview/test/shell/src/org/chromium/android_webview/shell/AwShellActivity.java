@@ -58,7 +58,6 @@ public class AwShellActivity extends Activity {
     private static final String TAG = "AwShellActivity";
     private static final String INITIAL_URL = ContentUrlConstants.ABOUT_BLANK_DISPLAY_URL;
     private AwBrowserContext mBrowserContext;
-    private AwDevToolsServer mDevToolsServer;
     private AwTestContainerView mAwTestContainerView;
     private WebContents mWebContents;
     private NavigationController mNavigationController;
@@ -131,10 +130,7 @@ public class AwShellActivity extends Activity {
 
     @Override
     public void onDestroy() {
-        if (mDevToolsServer != null) {
-            mDevToolsServer.setRemoteDebuggingEnabled(false);
-            mDevToolsServer = null;
-        }
+        AwDevToolsServer.setRemoteDebuggingEnabled(false);
         super.onDestroy();
     }
 
@@ -243,14 +239,17 @@ public class AwShellActivity extends Activity {
                     new AwBrowserContext(
                             AwBrowserContext.getDefault().getNativeBrowserContextPointer());
         }
-        final AwSettings awSettings =
-                new AwSettings(
-                        /* context= */ this,
-                        /* isAccessFromFileUrlsGrantedByDefault= */ false,
-                        /* supportsLegacyQuirks= */ false,
-                        /* allowEmptyDocumentPersistence= */ false,
-                        /* allowGeolocationOnInsecureOrigins= */ true,
-                        /* doNotUpdateSelectionOnMutatingSelectionRange= */ false);
+        testContainerView.initialize(
+                new AwContents(
+                        mBrowserContext,
+                        testContainerView,
+                        testContainerView.getContext(),
+                        testContainerView.getInternalAccessDelegate(),
+                        new AwTestContainerView.RoutingDrawFnAccess(),
+                        aw -> awContentsClient));
+
+        AwSettings awSettings = testContainerView.getAwContents().getSettings();
+
         // Required for WebGL conformance tests.
         awSettings.setMediaPlaybackRequiresUserGesture(false);
         // Allow zoom and fit contents to screen
@@ -259,21 +258,8 @@ public class AwShellActivity extends Activity {
         awSettings.setUseWideViewPort(true);
         awSettings.setLoadWithOverviewMode(true);
         awSettings.setLayoutAlgorithm(AwSettings.LAYOUT_ALGORITHM_TEXT_AUTOSIZING);
-
-        testContainerView.initialize(
-                new AwContents(
-                        mBrowserContext,
-                        testContainerView,
-                        testContainerView.getContext(),
-                        testContainerView.getInternalAccessDelegate(),
-                        new AwTestContainerView.RoutingDrawFnAccess(),
-                        awContentsClient,
-                        awSettings));
-        testContainerView.getAwContents().getSettings().setJavaScriptEnabled(true);
-        if (mDevToolsServer == null) {
-            mDevToolsServer = new AwDevToolsServer();
-            mDevToolsServer.setRemoteDebuggingEnabled(true);
-        }
+        awSettings.setJavaScriptEnabled(true);
+        AwDevToolsServer.setRemoteDebuggingEnabled(true);
         return testContainerView;
     }
 

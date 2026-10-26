@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -164,6 +165,7 @@ class TestSyncService : public SyncService {
       base::RepeatingCallback<void(const TypeEntitiesCount&)> callback)
       const override;
   const GURL& GetSyncServiceUrlForDebugging() const override;
+  base::FilePath GetLocalSyncBackendFolderForDebugging() const override;
   std::string GetUnrecoverableErrorMessageForDebugging() const override;
   base::Location GetUnrecoverableErrorLocationForDebugging() const override;
   void AddProtocolEventObserver(ProtocolEventObserver* observer) override;
@@ -171,7 +173,13 @@ class TestSyncService : public SyncService {
   void GetAllNodesForDebugging(
       base::OnceCallback<void(base::ListValue)> callback) override;
   DataTypeDownloadStatus GetDownloadStatusFor(DataType type) const override;
+  base::flat_set<std::string> GetCurrentDeviceCacheGuidsForAllGaiaIds()
+      const override;
+  void SetCurrentDeviceCacheGuidsForAllGaiaIds(
+      base::flat_set<std::string> guids);
+#if BUILDFLAG(IS_ANDROID)
   void SetInvalidationsForSessionsEnabled(bool enabled) override;
+#endif  // BUILDFLAG(IS_ANDROID)
   void SendExplicitPassphraseToPlatformClient() override;
   void GetTypesWithUnsyncedData(
       DataTypeSet requested_types,
@@ -222,6 +230,8 @@ class TestSyncService : public SyncService {
   GURL sync_service_url_;
 
   DataTypeSet unsynced_types_;
+
+  base::flat_set<std::string> current_device_cache_guids_for_all_gaia_ids_;
 
   std::map<DataType, LocalDataDescription> local_data_descriptions_;
 

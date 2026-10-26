@@ -8,10 +8,11 @@
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_test_api.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_test_base.h"
-#include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
+#include "components/autofill/core/browser/metrics/autofill_metrics_util.h"
 #include "components/autofill/core/browser/suggestions/addresses/address_suggestion_generator.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/test_utils/test_profiles.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/dense_set.h"
@@ -70,6 +71,7 @@ class CategoryResolvedKeyMetricsTest : public AutofillMetricsBaseTest,
         mojom::ActionPersistence::kFill, form.global_id(),
         form.fields().front().global_id(), &profile,
         AutofillTriggerSource::kPopup,
+        /*require_user_confirmation=*/false,
         /*blocked_fields=*/{});
   }
 
@@ -389,7 +391,8 @@ TEST_F(AutofillOnDidShowSuggestionsMetricsTest,
   FormData form = test::CreateTestAddressFormData();
 
   autofill_manager().OnFormsSeen(/*updated_forms=*/{form},
-                                 /*removed_forms=*/{});
+                                 /*removed_forms=*/{},
+                                 AutofillManagerTestApi::pass_key());
 
   autofill_manager().OnAskForValuesToFillTest(
       form, form.fields().front().global_id());
@@ -405,7 +408,7 @@ TEST_F(AutofillOnDidShowSuggestionsMetricsTest,
 
   base::HistogramTester histogram_tester;
 
-  autofill_manager().DidShowSuggestions(generated_suggestions, std::nullopt,
+  autofill_manager().DidShowSuggestions(generated_suggestions, /*metadata=*/{},
                                         form.global_id(),
                                         form.fields()[0].global_id(), {});
 
@@ -431,7 +434,8 @@ TEST_F(AutofillOnDidShowSuggestionsMetricsTest,
   FormData form = test::CreateTestAddressFormData();
 
   autofill_manager().OnFormsSeen(/*updated_forms=*/{form},
-                                 /*removed_forms=*/{});
+                                 /*removed_forms=*/{},
+                                 AutofillManagerTestApi::pass_key());
 
   autofill_manager().OnAskForValuesToFillTest(
       form, form.fields().front().global_id());
@@ -447,7 +451,7 @@ TEST_F(AutofillOnDidShowSuggestionsMetricsTest,
 
   base::HistogramTester histogram_tester;
 
-  autofill_manager().DidShowSuggestions(generated_suggestions, std::nullopt,
+  autofill_manager().DidShowSuggestions(generated_suggestions, /*metadata=*/{},
                                         form.global_id(),
                                         form.fields()[0].global_id(), {});
 

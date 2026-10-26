@@ -78,7 +78,7 @@ CGFloat const kIconSize = 32;
   iconContainerView.backgroundColor = [UIColor colorNamed:kGrey400Color];
 
   UIImageView* icon = [[UIImageView alloc]
-      initWithImage:CustomSymbolWithPointSize(kEnterpriseSymbol, kIconSize)];
+      initWithImage:SymbolWithPointSize(SymbolEnterprise, kIconSize)];
   icon.translatesAutoresizingMaskIntoConstraints = NO;
   icon.tintColor = [UIColor colorNamed:kSolidWhiteColor];
   [iconContainerView addSubview:icon];
@@ -96,7 +96,7 @@ CGFloat const kIconSize = 32;
   [outerView addSubview:iconContainerView];
   AddSameCenterXConstraint(outerView, iconContainerView);
   AddSameConstraintsToSidesWithInsets(
-      iconContainerView, outerView, LayoutSides::kTop | LayoutSides::kBottom,
+      iconContainerView, outerView, LayoutSides::kVertical,
       NSDirectionalEdgeInsetsMake(kTitleContainerTopPadding, 0, 0, 0));
 
   return outerView;

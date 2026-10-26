@@ -7,11 +7,9 @@ package org.chromium.chrome.browser.hub;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.hub.HubColorMixer.COLOR_MIXER;
 import static org.chromium.chrome.browser.hub.HubPaneHostProperties.PANE_ROOT_VIEW;
@@ -21,25 +19,25 @@ import android.app.Activity;
 import android.os.SystemClock;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
-import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 
-import androidx.test.ext.junit.rules.ActivityScenarioRule;
-
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.Robolectric;
+import org.robolectric.android.controller.ActivityController;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.ui.base.TestActivity;
@@ -54,31 +52,26 @@ import java.util.List;
 public class HubPaneHostViewUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Rule
-    public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
-            new ActivityScenarioRule<>(TestActivity.class);
-
-    @Mock Runnable mOnActionButton;
-    @Mock Callback<ViewGroup> mSnackbarContainerCallback;
+    @Mock private Callback<ViewGroup> mSnackbarContainerCallback;
     @Mock private HubColorMixer mColorMixer;
-    @Mock private VelocityTracker mVelocityTracker;
+    @Mock private View.OnClickListener mOnClickListener;
 
-    private Activity mActivity;
-    private HubPaneHostView mPaneHost;
+    private final ActivityController<TestActivity> mActivityController =
+            Robolectric.buildActivity(TestActivity.class).setup();
+    private final Activity mActivity = mActivityController.get();
+
+    private final HubPaneHostView mPaneHost =
+            (HubPaneHostView)
+                    LayoutInflater.from(mActivity)
+                            .inflate(R.layout.hub_pane_host_layout, null, false);
+
     private ViewGroup mSnackbarContainer;
     private PropertyModel mPropertyModel;
 
     @Before
     public void setUp() throws Exception {
-        mActivityScenarioRule.getScenario().onActivity(this::onActivity);
-    }
-
-    private void onActivity(TestActivity activity) {
-        mActivity = activity;
         mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
 
-        LayoutInflater inflater = LayoutInflater.from(mActivity);
-        mPaneHost = (HubPaneHostView) inflater.inflate(R.layout.hub_pane_host_layout, null, false);
         mSnackbarContainer = mPaneHost.findViewById(R.id.pane_host_view_snackbar_container);
         mActivity.setContentView(mPaneHost);
 
@@ -89,14 +82,18 @@ public class HubPaneHostViewUnitTest {
                 View.MeasureSpec.makeMeasureSpec(1000, View.MeasureSpec.EXACTLY));
         mPaneHost.layout(0, 0, 1000, 1000);
 
+        mPaneHost.setOnClickListener(mOnClickListener);
+
         mPropertyModel =
                 new PropertyModel.Builder(HubPaneHostProperties.ALL_KEYS)
                         .with(COLOR_MIXER, mColorMixer)
                         .build();
         PropertyModelChangeProcessor.create(mPropertyModel, mPaneHost, HubPaneHostViewBinder::bind);
+    }
 
-        // Inject mocked VelocityTracker.
-        mPaneHost.setVelocityTrackerForTesting(mVelocityTracker);
+    @After
+    public void tearDown() {
+        mActivityController.close();
     }
 
     @Test
@@ -177,85 +174,12 @@ public class HubPaneHostViewUnitTest {
 
     @Test
     @EnableFeatures(ChromeFeatureList.ENABLE_SWIPE_TO_SWITCH_PANE)
-    public void testSwipeLeft() {
-        HubPaneHostView.OnPaneSwipeListener onPaneSwipeListener =
-                Mockito.mock(HubPaneHostView.OnPaneSwipeListener.class);
-        mPaneHost.setOnPaneSwipeListener(onPaneSwipeListener);
-
-        int viewWidth = mPaneHost.getWidth();
-        int viewHeight = mPaneHost.getHeight();
-        long downTime = SystemClock.uptimeMillis();
-        float startX = mPaneHost.getSwipeEdgeGutterWidthForTesting() / 2f;
-        float endX = startX - viewWidth / 2f; // Significant left displacement
-
-        // Stub VelocityTracker behavior
-        doNothing().when(mVelocityTracker).computeCurrentVelocity(anyInt());
-        when(mVelocityTracker.getXVelocity()).thenReturn(-1000f);
-        when(mVelocityTracker.getYVelocity()).thenReturn(0f); // Ensure it's horizontal
-
-        mPaneHost.onInterceptTouchEvent(
-                MotionEvent.obtain(
-                        downTime, downTime, MotionEvent.ACTION_DOWN, startX, viewHeight / 2f, 0));
-        mPaneHost.onTouchEvent(
-                MotionEvent.obtain(
-                        downTime,
-                        downTime + 10,
-                        MotionEvent.ACTION_MOVE,
-                        endX,
-                        viewHeight / 2f,
-                        0));
-        mPaneHost.onTouchEvent(
-                MotionEvent.obtain(
-                        downTime, downTime + 20, MotionEvent.ACTION_UP, endX, viewHeight / 2f, 0));
-
-        verify(onPaneSwipeListener).onPaneSwipe(true);
-    }
-
-    @Test
-    @EnableFeatures(ChromeFeatureList.ENABLE_SWIPE_TO_SWITCH_PANE)
-    public void testSwipeRight() {
-        HubPaneHostView.OnPaneSwipeListener onPaneSwipeListener =
-                Mockito.mock(HubPaneHostView.OnPaneSwipeListener.class);
-        mPaneHost.setOnPaneSwipeListener(onPaneSwipeListener);
-
-        int viewWidth = mPaneHost.getWidth();
-        int viewHeight = mPaneHost.getHeight();
-        long downTime = SystemClock.uptimeMillis();
-        float startX = viewWidth - mPaneHost.getSwipeEdgeGutterWidthForTesting() / 2f;
-        float endX = startX + viewWidth / 2f; // Significant right displacement
-
-        // Stub VelocityTracker behavior
-        doNothing().when(mVelocityTracker).computeCurrentVelocity(anyInt());
-        when(mVelocityTracker.getXVelocity()).thenReturn(1000f);
-        when(mVelocityTracker.getYVelocity()).thenReturn(0f); // Ensure it's horizontal
-
-        mPaneHost.onInterceptTouchEvent(
-                MotionEvent.obtain(
-                        downTime, downTime, MotionEvent.ACTION_DOWN, startX, viewHeight / 2f, 0));
-        mPaneHost.onTouchEvent(
-                MotionEvent.obtain(
-                        downTime,
-                        downTime + 10,
-                        MotionEvent.ACTION_MOVE,
-                        endX,
-                        viewHeight / 2f,
-                        0));
-        mPaneHost.onTouchEvent(
-                MotionEvent.obtain(
-                        downTime, downTime + 20, MotionEvent.ACTION_UP, endX, viewHeight / 2f, 0));
-
-        verify(onPaneSwipeListener).onPaneSwipe(false);
-    }
-
-    @Test
-    @EnableFeatures(ChromeFeatureList.ENABLE_SWIPE_TO_SWITCH_PANE)
     public void testTap_performClick() {
-        HubPaneHostView spyPaneHost = Mockito.spy(mPaneHost);
-        int viewWidth = spyPaneHost.getWidth();
-        int viewHeight = spyPaneHost.getHeight();
+        int viewWidth = mPaneHost.getWidth();
+        int viewHeight = mPaneHost.getHeight();
         long downTime = SystemClock.uptimeMillis();
 
-        spyPaneHost.onInterceptTouchEvent(
+        mPaneHost.onTouchEvent(
                 MotionEvent.obtain(
                         downTime,
                         downTime,
@@ -263,7 +187,7 @@ public class HubPaneHostViewUnitTest {
                         viewWidth / 2f,
                         viewHeight / 2f,
                         0));
-        spyPaneHost.onTouchEvent(
+        mPaneHost.onTouchEvent(
                 MotionEvent.obtain(
                         downTime,
                         downTime + 10,
@@ -272,7 +196,34 @@ public class HubPaneHostViewUnitTest {
                         viewHeight / 2f,
                         0));
 
-        verify(spyPaneHost).performClick();
+        verify(mOnClickListener).onClick(mPaneHost);
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.ENABLE_SWIPE_TO_SWITCH_PANE)
+    public void testTap_unhandled_doesNotPerformClick() {
+        int viewWidth = mPaneHost.getWidth();
+        int viewHeight = mPaneHost.getHeight();
+        long downTime = SystemClock.uptimeMillis();
+
+        mPaneHost.onTouchEvent(
+                MotionEvent.obtain(
+                        downTime,
+                        downTime,
+                        MotionEvent.ACTION_DOWN,
+                        viewWidth / 2f,
+                        viewHeight / 2f,
+                        0));
+        mPaneHost.onTouchEvent(
+                MotionEvent.obtain(
+                        downTime,
+                        downTime + 10,
+                        MotionEvent.ACTION_UP,
+                        viewWidth / 2f,
+                        viewHeight / 2f,
+                        0));
+
+        verify(mOnClickListener, never()).onClick(any());
     }
 
     /** Order of children does not matter. */

@@ -17,12 +17,14 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browserservices.intents.CustomButtonParams.ButtonType;
 import org.chromium.chrome.browser.customtabs.features.partialcustomtab.PartialCustomTabSideSheetStrategy.MaximizeButtonCallback;
+import org.chromium.ui.base.ViewUtils;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyListModel;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModel.ReadableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.ReadableObjectPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
+import org.chromium.ui.modelutil.PropertyModel.WritableIntDefPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
@@ -36,7 +38,8 @@ public class CustomTabToolbarButtonsProperties {
             new WritableObjectPropertyKey<>();
 
     /** The type of the individual button. Can have {@link ButtonType}. */
-    public static final WritableIntPropertyKey TYPE = new WritableIntPropertyKey();
+    public static final WritableIntDefPropertyKey<ButtonType> TYPE =
+            new WritableIntDefPropertyKey<>(ButtonType.OTHER);
 
     /** OnClickListener for the individual button. */
     public static final WritableObjectPropertyKey<OnClickListener> CLICK_LISTENER =
@@ -98,7 +101,7 @@ public class CustomTabToolbarButtonsProperties {
 
         /** Default constructor to hide the button. */
         MinimizeButtonData() {
-            this(false, v -> {});
+            this(false, ViewUtils.emptyClickListener());
         }
     }
 
@@ -132,7 +135,7 @@ public class CustomTabToolbarButtonsProperties {
         }
 
         CloseButtonData() {
-            this(false, null, CLOSE_BUTTON_POSITION_DEFAULT, v -> {});
+            this(false, null, CLOSE_BUTTON_POSITION_DEFAULT, ViewUtils.emptyClickListener());
         }
     }
 
@@ -150,10 +153,6 @@ public class CustomTabToolbarButtonsProperties {
 
     /** Property key for the toolbar width. */
     public static final WritableIntPropertyKey TOOLBAR_WIDTH = new WritableIntPropertyKey();
-
-    /** Property key for whether the omnibox is enabled. */
-    public static final ReadableBooleanPropertyKey OMNIBOX_ENABLED =
-            new ReadableBooleanPropertyKey();
 
     /** Property key for whether the title is visible. */
     public static final ReadableBooleanPropertyKey TITLE_VISIBLE = new ReadableBooleanPropertyKey();
@@ -173,7 +172,6 @@ public class CustomTabToolbarButtonsProperties {
             boolean menuButtonVisible,
             boolean optionalButtonVisible,
             @Px int toolbarWidth,
-            boolean omniboxEnabled,
             boolean titleVisible,
             boolean isIncognito,
             ColorStateList tint) {
@@ -186,7 +184,6 @@ public class CustomTabToolbarButtonsProperties {
                         MENU_BUTTON_VISIBLE,
                         OPTIONAL_BUTTON_VISIBLE,
                         TOOLBAR_WIDTH,
-                        OMNIBOX_ENABLED,
                         TITLE_VISIBLE,
                         IS_INCOGNITO,
                         TINT)
@@ -198,7 +195,6 @@ public class CustomTabToolbarButtonsProperties {
                 .with(MENU_BUTTON_VISIBLE, menuButtonVisible)
                 .with(OPTIONAL_BUTTON_VISIBLE, optionalButtonVisible)
                 .with(TOOLBAR_WIDTH, toolbarWidth)
-                .with(OMNIBOX_ENABLED, omniboxEnabled)
                 .with(TITLE_VISIBLE, titleVisible)
                 .with(IS_INCOGNITO, isIncognito)
                 .with(TINT, tint)

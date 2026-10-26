@@ -134,10 +134,6 @@ std::vector<ash::AcceleratorData> GetDefaultAccelerators() {
     AppendAcceleratorData(accelerators,
                           ash::kDisableWithNewMappingAcceleratorData);
   }
-  if (ash::features::IsSameAppWindowCycleEnabled()) {
-    AppendAcceleratorData(accelerators,
-                          ash::kEnableWithSameAppWindowCycleAcceleratorData);
-  }
 
   if (ash::features::IsTilingWindowResizeEnabled()) {
     AppendAcceleratorData(accelerators,
@@ -159,14 +155,10 @@ std::vector<ash::AcceleratorData> GetDefaultAccelerators() {
     AppendAcceleratorData(accelerators, ash::kDeveloperAcceleratorData);
   }
 
-  if (ash::features::IsAppLaunchShortcutEnabled()) {
-    AppendAcceleratorData(accelerators, ash::kGeminiAcceleratorData);
-  }
+  AppendAcceleratorData(accelerators, ash::kGeminiAcceleratorData);
 
-  if (ash::features::IsToggleCameraShortcutEnabled()) {
-    AppendAcceleratorData(accelerators,
-                          ash::kToggleCameraAllowedAcceleratorData);
-  }
+  AppendAcceleratorData(accelerators,
+                        ash::kToggleCameraAllowedAcceleratorData);
 
   return accelerators;
 }

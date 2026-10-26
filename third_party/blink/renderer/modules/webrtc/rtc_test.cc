@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/uuid.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/webrtc/rtc_logging_utils.h"
 #include "third_party/blink/public/mojom/webrtc/rtc_logging.mojom-blink.h"
@@ -16,6 +17,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_exception.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_finish_diagnostic_logging_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_start_diagnostic_logging_options.h"
+#include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/navigator.h"
@@ -56,6 +58,18 @@ bool IsRangeError(ScriptState* script_state,
   return Has("name", "RangeError") && Has("message", message);
 }
 
+bool IsDOMException(ScriptState* script_state,
+                    ScriptValue value,
+                    const String& name,
+                    const String& message) {
+  auto* dom_exception =
+      V8DOMException::ToWrappable(script_state->GetIsolate(), value.V8Value());
+  if (!dom_exception) {
+    return false;
+  }
+  return dom_exception->name() == name && dom_exception->message() == message;
+}
+
 class MockRTCLoggingDispatcher : public mojom::blink::RTCLoggingDispatcher {
  public:
   MockRTCLoggingDispatcher() = default;
@@ -67,12 +81,14 @@ class MockRTCLoggingDispatcher : public mojom::blink::RTCLoggingDispatcher {
   }
 
   void StartDiagnosticLogging(
+      const base::Uuid& session_id,
       bool upload,
       const HashMap<String, String>& metadata,
       StartDiagnosticLoggingCallback callback) override {
+    uuid_ = String(session_id.AsLowercaseString());
     upload_ = upload;
     metadata_ = metadata;
-    std::move(callback).Run(uuid_);
+    std::move(callback).Run();
   }
 
   void FinishDiagnosticLogging(
@@ -97,7 +113,6 @@ class MockRTCLoggingDispatcher : public mojom::blink::RTCLoggingDispatcher {
     return finish_metadata_;
   }
   const String& uuid() const { return uuid_; }
-  void set_uuid(const String& uuid) { uuid_ = uuid; }
 
  private:
   mojo::Receiver<mojom::blink::RTCLoggingDispatcher> receiver_{this};
@@ -106,7 +121,7 @@ class MockRTCLoggingDispatcher : public mojom::blink::RTCLoggingDispatcher {
   HashMap<String, String> finish_metadata_;
   bool finish_called_ = false;
   bool cancel_called_ = false;
-  String uuid_ = "test-uuid";
+  String uuid_;
 };
 
 class RTCTest : public testing::Test {
@@ -140,6 +155,30 @@ class RTCTest : public testing::Test {
         mojom::blink::RTCLoggingDispatcher::Name_, {});
   }
 
+  template <typename Action>
+  void ExpectRejectsOnDetachedFrame(Action action, bool detach_first = false) {
+    RTC* rtc = nullptr;
+    if (!detach_first) {
+      rtc = GetRTC();
+    }
+    auto other_holder = std::make_unique<DummyPageHolder>();
+    ScriptState* other_script_state =
+        ToScriptStateForMainWorld(&other_holder->GetFrame());
+    ScriptState::Scope scope(other_script_state);
+    holder_->GetFrame().Detach(FrameDetachType::kRemove);
+    if (detach_first) {
+      rtc = GetRTC();
+    }
+    EXPECT_TRUE(action(rtc, GetScriptState()).IsEmpty());
+    auto promise = action(rtc, other_script_state);
+    ScriptPromiseTester tester(other_script_state, promise);
+    tester.WaitUntilSettled();
+    EXPECT_TRUE(tester.IsRejected());
+    EXPECT_TRUE(
+        IsDOMException(other_script_state, tester.Value(), "InvalidStateError",
+                       "No local DOM window; is this a detached window?"));
+  }
+
  public:
   test::TaskEnvironment task_environment;
   MockRTCLoggingDispatcher mock_dispatcher_;
@@ -161,6 +200,8 @@ TEST_F(RTCTest, StartDiagnosticLogging) {
 
   tester.WaitUntilSettled();
   EXPECT_TRUE(tester.IsFulfilled());
+  EXPECT_TRUE(
+      base::Uuid::ParseLowercase(tester.ValueAsString().Utf8()).is_valid());
   EXPECT_EQ(tester.ValueAsString(), mock_dispatcher().uuid());
   EXPECT_TRUE(mock_dispatcher().upload());
   EXPECT_EQ(mock_dispatcher().metadata().at("key"), "value");
@@ -174,6 +215,8 @@ TEST_F(RTCTest, StartDiagnosticLoggingDefaultOptions) {
 
   tester.WaitUntilSettled();
   EXPECT_TRUE(tester.IsFulfilled());
+  EXPECT_TRUE(
+      base::Uuid::ParseLowercase(tester.ValueAsString().Utf8()).is_valid());
   EXPECT_EQ(tester.ValueAsString(), mock_dispatcher().uuid());
   EXPECT_FALSE(mock_dispatcher().upload());
   EXPECT_TRUE(mock_dispatcher().metadata().empty());
@@ -303,6 +346,34 @@ TEST_F(RTCTest, CancelDiagnosticLogging) {
   tester.WaitUntilSettled();
   EXPECT_TRUE(tester.IsFulfilled());
   EXPECT_TRUE(mock_dispatcher().cancel_called());
+}
+
+TEST_F(RTCTest, StartDiagnosticLoggingOnDetachedFrame) {
+  auto* options = RTCStartDiagnosticLoggingOptions::Create();
+  ExpectRejectsOnDetachedFrame([&](RTC* rtc, ScriptState* state) {
+    return rtc->startDiagnosticLogging(state, options);
+  });
+}
+
+TEST_F(RTCTest, FinishDiagnosticLoggingOnDetachedFrame) {
+  auto* options = RTCFinishDiagnosticLoggingOptions::Create();
+  ExpectRejectsOnDetachedFrame([&](RTC* rtc, ScriptState* state) {
+    return rtc->finishDiagnosticLogging(state, options);
+  });
+}
+
+TEST_F(RTCTest, CancelDiagnosticLoggingOnDetachedFrame) {
+  ExpectRejectsOnDetachedFrame([](RTC* rtc, ScriptState* state) {
+    return rtc->cancelDiagnosticLogging(state);
+  });
+}
+
+TEST_F(RTCTest, CancelDiagnosticLoggingOnAlreadyDetachedFrame) {
+  ExpectRejectsOnDetachedFrame(
+      [](RTC* rtc, ScriptState* state) {
+        return rtc->cancelDiagnosticLogging(state);
+      },
+      /*detach_first=*/true);
 }
 
 }  // namespace

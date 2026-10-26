@@ -230,9 +230,9 @@ base::FilePath GenerateUniqueSavePath(const base::FilePath& path) {
       // Try a timestamp suffix.
       // Generate an ISO8601 compliant local timestamp suffix that avoids
       // reserved characters that are forbidden on some OSes like Windows.
-      unique_path = path.InsertBeforeExtensionASCII(
-          base::UnlocalizedTimeFormatWithPattern(base::Time::Now(),
-                                                 " - yyyy-MM-dd'T'HHmmss.SSS"));
+      std::string timestamp = base::TimeFormatAsIso8601(base::Time::Now());
+      base::ReplaceChars(timestamp, ":", "", &timestamp);
+      unique_path = path.InsertBeforeExtensionASCII(" - " + timestamp);
     }
     if (!filename_generation::TruncateFilename(&unique_path, limit))
       return base::FilePath();
@@ -309,7 +309,8 @@ void FileSystemEntryFunction::PrepareFilesForWritableApp(
       base::BindOnce(
           &FileSystemEntryFunction::RegisterFileSystemsAndSendResponse, this,
           paths),
-      base::BindOnce(&FileSystemEntryFunction::HandleWritableFileError, this));
+      base::BindOnce(&FileSystemEntryFunction::HandleWritableFileError, this),
+      root_path_);
 }
 
 void FileSystemEntryFunction::RegisterFileSystemsAndSendResponse(
@@ -375,8 +376,8 @@ ExtensionFunction::ResponseAction FileSystemGetWritableEntryFunction::Run() {
 
   std::string error;
   if (!app_file_handler_util::ValidateFileEntryAndGetPath(
-          filesystem_name, filesystem_path, source_process_id(), &path_,
-          &error)) {
+          filesystem_name, filesystem_path, source_process_id(), &path_, &error,
+          &root_path_)) {
     return RespondNow(Error(std::move(error)));
   }
 

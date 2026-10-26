@@ -4,12 +4,21 @@
 
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_impl.h"
 
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/browser/ui/views/frame/custom_corners_background.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
+#include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/views/view.h"
+#include "ui/views/view_class_properties.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/ui/views/frame/glass_frame_service.h"
+#endif
 
 // Proposed layout implementation.
 
@@ -80,16 +89,28 @@ void BrowserViewLayoutImpl::ProposedLayout::ApplyLayout(
     SetViewVisibility set_view_visibility) && {
   for (auto& child : root->children()) {
     if (const auto it = children.find(child); it != children.end()) {
-      // Need to tail-recurse here because otherwise, when we set the bounds of
-      // the immediate child, this will automatically trigger a layout on all
-      // of its children, which have not been properly arranged yet. This
-      // results in a potential double-layout, or in extreme cases, bugs like
-      // https://crbug.com/464220949
-      std::move(it->second).ApplyLayout(child, set_view_visibility);
-      child->SetBoundsRect(it->second.bounds);
-      if (it->second.visibility) {
-        set_view_visibility(child, *it->second.visibility);
+      ProposedLayout& child_layout = it->second;
+
+      // Position `child` before its children, so that they are laid out against
+      // up-to-date ancestor geometry. Otherwise, descendants that depend on
+      // their visible bounds (e.g. NativeViewHost) can see an empty ancestor
+      // and hide themselves. See https://crbug.com/571806192
+      child->SetBoundsRect(child_layout.bounds);
+      if (child_layout.visibility) {
+        set_view_visibility(child, *child_layout.visibility);
       }
+
+      // This order is only safe if `child` does not lay out its own children;
+      // otherwise resizing it above would immediately lay out its children
+      // before they have been arranged, resulting in double layouts or bugs
+      // like https://crbug.com/464220949
+      CHECK(child_layout.children.empty() ||
+            child->GetProperty(views::kViewDoesNotLayOutChildren))
+          << child->GetClassName()
+          << " has children positioned by BrowserViewLayout, so it must set "
+             "views::kViewDoesNotLayOutChildren.";
+      std::move(child_layout).ApplyLayout(child, set_view_visibility);
+
       children.erase(it);
     }
   }
@@ -119,9 +140,13 @@ std::string BrowserViewLayoutImpl::ProposedLayout::ToString(int depth) const {
 
 BrowserViewLayoutImpl::BrowserViewLayoutImpl(
     std::unique_ptr<BrowserViewLayoutDelegate> delegate,
-    Browser* browser,
     BrowserViewLayoutViews views)
-    : BrowserViewLayout(std::move(delegate), browser, std::move(views)) {}
+    : BrowserViewLayout(std::move(delegate), std::move(views)) {
+  glass_mode_subscription_ = this->delegate().AddOnGlassModeChangedCallback(
+      base::BindRepeating(&BrowserViewLayoutImpl::OnGlassModeChangedCallback,
+                          base::Unretained(this)),
+      /*current_state_out=*/&in_glass_mode_);
+}
 
 BrowserViewLayoutImpl::~BrowserViewLayoutImpl() = default;
 
@@ -327,6 +352,16 @@ void BrowserViewLayoutImpl::OnLayoutParamsChanged(
     const BrowserLayoutParams& old_params,
     const BrowserLayoutParams& new_params) {}
 
+void BrowserViewLayoutImpl::OnGlassModeChangedCallback(bool in_glass_mode) {
+  if (in_glass_mode == in_glass_mode_) {
+    return;
+  }
+  in_glass_mode_ = in_glass_mode;
+  OnGlassModeChanged();
+}
+
+void BrowserViewLayoutImpl::OnGlassModeChanged() {}
+
 // Dialog positioning.
 
 int BrowserViewLayoutImpl::GetDialogTop(const ProposedLayout& layout) const {
@@ -342,7 +377,7 @@ int BrowserViewLayoutImpl::GetDialogTop(const ProposedLayout& layout) const {
 int BrowserViewLayoutImpl::GetDialogBottom(const ProposedLayout& layout) const {
   const auto* const browser_view = views().browser_view.get();
   if (const auto contents_rect =
-          layout.GetBoundsFor(views().contents_container, browser_view)) {
+          layout.GetBoundsFor(views().multi_contents_view, browser_view)) {
     return contents_rect->bottom();
   }
   return browser_view->height();

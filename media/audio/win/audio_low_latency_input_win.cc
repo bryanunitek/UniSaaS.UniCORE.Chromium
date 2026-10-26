@@ -36,7 +36,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/threading/platform_thread.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
@@ -768,12 +767,9 @@ bool WASAPIAudioInputStream::UpdateFormats() {
     base::UmaHistogramEnumeration("Media.Audio.Capture.Win.AudioEngineFormat",
                                   mix_sample_format);
     if (mix_sample_format != kUnknownSampleFormat) {
-      // We are not sure if the Windows Audio Engine will ever choose 24bit over
-      // 32bit. Check if this is the case, and if so we choose S32 instead.
-      CHECK_NE(mix_sample_format, kSampleFormatS24, base::NotFatalUntil::M148);
-      sample_format_ = (mix_sample_format == kSampleFormatS24)
-                           ? kSampleFormatS32
-                           : mix_sample_format;
+      // The Windows Audio Engine should not choose 24bit over 32bit.
+      CHECK_NE(mix_sample_format, kSampleFormatS24);
+      sample_format_ = mix_sample_format;
 
       input_format_.SubFormat = GetSubFormat(mix_format);
 
@@ -794,8 +790,6 @@ bool WASAPIAudioInputStream::UpdateFormats() {
     } else {
       const uint32_t format_tag =
           EXTRACT_WAVEFORMATEX_ID(&mix_format.SubFormat);
-      base::UmaHistogramSparse(
-          "Media.Audio.Capture.Win.AudioEngineFormat.Unknown", format_tag);
       SendLogMessage(base::StringPrintf(
           "%s => (WARNING: unknown mix sample format (tag=%#x))", __func__,
           format_tag));
@@ -1006,7 +1000,7 @@ void WASAPIAudioInputStream::Start(AudioInputCallback* callback) {
 
   // Create and start the thread that will drive the capturing by waiting for
   // capture events.
-  DCHECK(!capture_thread_.get());
+  DCHECK(!capture_thread_);
   capture_thread_ = std::make_unique<base::DelegateSimpleThread>(
       this, "wasapi_capture_thread",
       base::SimpleThread::Options(base::ThreadType::kRealtimeAudio));
@@ -1941,7 +1935,7 @@ bool WASAPIAudioInputStream::DesiredFormatIsSupported(HRESULT* hr) {
       // Engine for its MixFormat. The MixFormat should in theory always be
       // supported and have the same bit depth, so we should not hit this
       // pathway.
-      CHECK(!use_device_sample_format_, base::NotFatalUntil::M148);
+      CHECK(!use_device_sample_format_);
       input_format->wBitsPerSample = closest_match->wBitsPerSample;
     }
 
@@ -2046,32 +2040,14 @@ HRESULT WASAPIAudioInputStream::InitializeAudioEngine() {
   // however cases when there are glitches anyway and it's avoided by setting a
   // larger buffer size. The larger size does not create higher latency for
   // properly implemented drivers.
-  HRESULT hr = S_OK;
-  const int max_initialize_retries =
-      base::FeatureList::IsEnabled(features::kWasapiInputDeviceInUseRetry) ? 2
-                                                                           : 0;
-  constexpr base::TimeDelta kRetryDelay = base::Milliseconds(50);
-
-  for (int attempt = 0; attempt <= max_initialize_retries; ++attempt) {
-    hr = audio_client_->Initialize(
-        AUDCLNT_SHAREMODE_SHARED, flags,
-        100 * 1000 * 10,  // Buffer duration, 100 ms expressed in 100-ns units.
-        0,                // Device period, n/a for shared mode.
-        reinterpret_cast<const WAVEFORMATEX*>(&input_format_),
-        AudioDeviceDescription::IsCommunicationsDevice(device_id_)
-            ? &kCommunicationsSessionId
-            : nullptr);
-
-    // If the device is in use, it might be Chrome's own asynchronous teardown
-    // lagging behind. Sleep briefly and try one more time.
-    if (hr == AUDCLNT_E_DEVICE_IN_USE && attempt < max_initialize_retries) {
-      base::PlatformThread::Sleep(kRetryDelay);
-      continue;
-    }
-
-    // Break on success or any other error.
-    break;
-  }
+  HRESULT hr = audio_client_->Initialize(
+      AUDCLNT_SHAREMODE_SHARED, flags,
+      100 * 1000 * 10,  // Buffer duration, 100 ms expressed in 100-ns units.
+      0,                // Device period, n/a for shared mode.
+      reinterpret_cast<const WAVEFORMATEX*>(&input_format_),
+      AudioDeviceDescription::IsCommunicationsDevice(device_id_)
+          ? &kCommunicationsSessionId
+          : nullptr);
 
   base::UmaHistogramBoolean(
       "Media.Audio.Capture.Win.InitError.SystemPermissionDenied",
@@ -2219,11 +2195,11 @@ void WASAPIAudioInputStream::MaybeReportFormatRelatedInitError(
 
   const FormatRelatedInitError format_related_error =
       hr == AUDCLNT_E_UNSUPPORTED_FORMAT
-          ? converter_.get()
+          ? converter_
                 ? FormatRelatedInitError::kUnsupportedFormatWithFormatConversion
                 : FormatRelatedInitError::kUnsupportedFormat
       // Otherwise |hr| == E_INVALIDARG.
-      : converter_.get()
+      : converter_
           ? FormatRelatedInitError::kInvalidArgumentWithFormatConversion
           : FormatRelatedInitError::kInvalidArgument;
   base::UmaHistogramEnumeration(

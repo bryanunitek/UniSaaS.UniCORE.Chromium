@@ -10,6 +10,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_32_google_apis_x64_foldable",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -25,7 +26,8 @@
         "precommit_args": [
           "--gerrit-issue=${patch_issue}",
           "--gerrit-patchset=${patch_set}",
-          "--buildbucket-id=${buildbucket_build_id}"
+          "--buildbucket-id=${buildbucket_build_id}",
+          "--bypass-skia-gold-functionality"
         ],
         "resultdb": {
           "enable": true,
@@ -34,7 +36,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -52,7 +54,7 @@
             }
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 3
+          "shards": 5
         },
         "test": "chrome_public_test_apk",
         "test_id_prefix": "ninja://chrome/android:chrome_public_test_apk/"
@@ -68,6 +70,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -87,7 +90,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -112,10 +115,13 @@
       {
         "args": [
           "--avd-config=../../tools/android/avd/proto/android_36_google_apis_x64.textpb",
+          "--test-launcher-filter-file=../../testing/buildbot/filters/android.phone.android_browsertests.filter",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "enable_rts_filtering": true,
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -135,7 +141,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -167,6 +173,7 @@
         ],
         "ci_only": true,
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -186,7 +193,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -217,6 +224,8 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "enable_rts_filtering": true,
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -236,7 +245,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -266,6 +275,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -285,7 +295,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -302,7 +312,8 @@
               "caches": "android_36_google_apis_x64"
             }
           },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 4
         },
         "test": "android_webview_unittests",
         "test_id_prefix": "ninja://android_webview/test:android_webview_unittests/"
@@ -310,9 +321,11 @@
       {
         "args": [
           "-v",
+          "-v",
           "--avd-config=../../tools/android/avd/proto/android_36_google_apis_x64.textpb"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -326,7 +339,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -357,6 +370,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -376,7 +390,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -406,6 +420,7 @@
         ],
         "ci_only": true,
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -425,7 +440,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -454,6 +469,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -473,7 +489,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -502,6 +518,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -521,7 +538,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -551,6 +568,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -575,7 +593,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -604,6 +622,8 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "enable_rts_filtering": true,
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -623,7 +643,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -653,6 +673,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -672,7 +693,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -701,6 +722,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -720,7 +742,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -750,6 +772,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -769,7 +792,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -798,6 +821,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -817,7 +841,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -846,6 +870,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -865,7 +890,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -896,6 +921,7 @@
         "ci_only": true,
         "description": "Run with android_36_google_apis_x64",
         "experiment_percentage": 100,
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -915,7 +941,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -944,6 +970,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -963,7 +990,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -992,6 +1019,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1011,7 +1039,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1038,10 +1066,13 @@
           "--git-revision=${got_revision}",
           "--avd-config=../../tools/android/avd/proto/android_36_google_apis_x64.textpb",
           "--emulator-debug-tags=all",
+          "--enable-leak-checks",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "enable_rts_filtering": true,
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1057,7 +1088,8 @@
         "precommit_args": [
           "--gerrit-issue=${patch_issue}",
           "--gerrit-patchset=${patch_set}",
-          "--buildbucket-id=${buildbucket_build_id}"
+          "--buildbucket-id=${buildbucket_build_id}",
+          "--bypass-skia-gold-functionality"
         ],
         "resultdb": {
           "enable": true,
@@ -1066,7 +1098,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1097,6 +1129,8 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "enable_rts_filtering": true,
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1121,7 +1155,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1151,6 +1185,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1170,7 +1205,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1200,6 +1235,8 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "enable_rts_filtering": true,
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1219,7 +1256,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1251,6 +1288,7 @@
         ],
         "ci_only": true,
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1270,7 +1308,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1302,6 +1340,7 @@
         ],
         "ci_only": true,
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1321,7 +1360,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1352,6 +1391,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1371,7 +1411,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1402,6 +1442,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1421,7 +1462,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1450,6 +1491,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1469,7 +1511,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1498,6 +1540,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1517,7 +1560,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1546,6 +1589,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1565,7 +1609,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1595,6 +1639,7 @@
         ],
         "ci_only": true,
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1614,7 +1659,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1643,6 +1688,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1662,7 +1708,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1691,6 +1737,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1710,7 +1757,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1739,6 +1786,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1758,7 +1806,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1787,6 +1835,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1806,7 +1855,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1835,6 +1884,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1854,7 +1904,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1885,6 +1935,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1904,7 +1955,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1933,6 +1984,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -1952,7 +2004,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -1981,6 +2033,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2000,7 +2053,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2029,6 +2082,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2048,7 +2102,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2078,6 +2132,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2097,7 +2152,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2126,6 +2181,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2145,7 +2201,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2174,6 +2230,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2193,7 +2250,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2222,6 +2279,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2241,7 +2299,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2272,6 +2330,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2291,7 +2350,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2321,6 +2380,7 @@
         ],
         "ci_only": true,
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2340,7 +2400,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2369,6 +2429,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2388,7 +2449,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2417,6 +2478,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2436,7 +2498,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2466,6 +2528,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2485,7 +2548,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2514,6 +2577,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2533,7 +2597,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2562,6 +2626,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2581,7 +2646,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2610,6 +2675,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2629,7 +2695,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2658,6 +2724,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2677,7 +2744,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2706,6 +2773,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2725,7 +2793,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2756,6 +2824,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2775,7 +2844,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2804,6 +2873,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2823,7 +2893,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2852,6 +2922,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2871,7 +2942,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2900,6 +2971,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2919,7 +2991,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2949,6 +3021,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -2968,7 +3041,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -2997,6 +3070,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3016,7 +3090,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3045,6 +3119,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3064,7 +3139,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3093,6 +3168,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3112,7 +3188,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3141,6 +3217,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3160,7 +3237,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3192,6 +3269,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3216,7 +3294,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3247,6 +3325,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3266,7 +3345,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3295,6 +3374,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3314,7 +3394,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3343,6 +3423,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3362,7 +3443,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3391,6 +3472,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3410,7 +3492,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3440,6 +3522,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3459,7 +3542,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3489,6 +3572,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3508,7 +3592,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3537,6 +3621,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3556,7 +3641,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3585,6 +3670,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3604,7 +3690,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3634,6 +3720,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3653,7 +3740,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3683,6 +3770,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3702,7 +3790,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3733,6 +3821,7 @@
         ],
         "ci_only": true,
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3752,7 +3841,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3781,6 +3870,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3800,7 +3890,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3829,6 +3919,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -3848,7 +3939,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3884,6 +3975,7 @@
           "--avd-config=../../tools/android/avd/proto/android_36_google_apis_x64.textpb"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--verbose"
@@ -3901,7 +3993,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3930,11 +4022,13 @@
           "always",
           "--test-type",
           "wdspec",
+          "--timeout-multiplier=4",
           "--avd-config=../../tools/android/avd/proto/android_36_google_apis_x64.textpb"
         ],
         "ci_only": true,
         "description": "Run with android_36_google_apis_x64",
         "experiment_percentage": 20,
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--verbose"
@@ -3952,7 +4046,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -3984,6 +4078,7 @@
         "ci_only": true,
         "description": "Run with android_36_google_apis_x64",
         "experiment_percentage": 100,
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--verbose"
@@ -4001,7 +4096,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -4030,6 +4125,7 @@
         ],
         "ci_only": true,
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -4044,7 +4140,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -4071,6 +4167,7 @@
           "--avd-config=../../tools/android/avd/proto/android_36_google_apis_x64.textpb"
         ],
         "description": "Run with android_36_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -4084,7 +4181,7 @@
         "swarming": {
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -4117,6 +4214,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_33_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -4143,7 +4241,7 @@
           ],
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",
@@ -4176,6 +4274,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_33_google_apis_x64",
+        "isolate_profile_data": true,
         "merge": {
           "args": [
             "--bucket",
@@ -4202,7 +4301,7 @@
           ],
           "dimensions": {
             "cores": "8",
-            "cpu": "x86-64",
+            "cpu": "x86-64-n4|x86-64",
             "device_os": null,
             "device_type": null,
             "os": "Ubuntu-22.04",

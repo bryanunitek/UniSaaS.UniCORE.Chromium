@@ -6,12 +6,20 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
+#include "base/base64.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "components/cast/message_port/platform_message_port.h"
 #include "components/cast/message_port/test_message_port_receiver.h"
+#include "components/cast_receiver/proto/display_info.pb.h"
+#include "components/cast_receiver/proto/exo_bootstrap.pb.h"
+#include "components/cast_receiver/proto/input_capabilities.pb.h"
 #include "components/cast_receiver/proto/input_event.pb.h"
+#include "components/cast_streaming/common/message_serialization.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace cast_receiver {
@@ -19,24 +27,124 @@ namespace cast_receiver {
 class StreamingReceiverChannelTest : public ::testing::Test {
  protected:
   StreamingReceiverChannelTest() {
-    std::unique_ptr<cast_api_bindings::MessagePort> client_port;
-    std::unique_ptr<cast_api_bindings::MessagePort> server_port;
-    cast_api_bindings::CreatePlatformMessagePortPair(&client_port,
-                                                     &server_port);
+    cast_api_bindings::CreatePlatformMessagePortPair(&client_port_, &server_port_);
+    client_port_->SetReceiver(&client_receiver_);
 
-    channel_ =
-        std::make_unique<StreamingReceiverChannel>(std::move(client_port));
-    receiver_port_ = std::move(server_port);
-    receiver_port_->SetReceiver(&receiver_);
+    DisplayInfo display_info;
+    display_info.set_width_px(1920);
+    display_info.set_height_px(1080);
+
+    base::RunLoop run_loop;
+    auto bootstrap_cb =
+        base::BindLambdaForTesting([&](ExoBootstrapMessage request) {
+          received_bootstrap_request_ = std::move(request);
+          run_loop.Quit();
+        });
+
+    channel_ = std::make_unique<StreamingReceiverChannel>(
+        std::move(server_port_), std::move(display_info),
+        std::move(bootstrap_cb));
+
+    // Send bootstrap request from client (simulated) with proposed labels.
+    ExoBootstrapMessage request;
+    request.set_session_id(12345);
+    request.mutable_bootstrap_action()->set_action(
+        BootstrapAction::START_BOOTSTRAP);
+    auto* bootstrap_info = request.mutable_bootstrap_info();
+
+    auto* event_res = bootstrap_info->add_resolutions();
+    event_res->mutable_service_identifier()->set_service_name("InputEvent");
+    event_res->add_transport_options()
+        ->mutable_data_channel_options()
+        ->set_label("test_input_event_label");
+
+    auto* caps_res = bootstrap_info->add_resolutions();
+    caps_res->mutable_service_identifier()->set_service_name(
+        "InputCapabilities");
+    caps_res->add_transport_options()
+        ->mutable_data_channel_options()
+        ->set_label("test_input_caps_label");
+
+    std::string serialized_request;
+    EXPECT_TRUE(request.SerializeToString(&serialized_request));
+
+    std::string cast_msg = cast_streaming::SerializeCastMessage(
+        "test-sender", "urn:x-cast:com.google.cast.exo.bootstrap",
+        base::Base64Encode(serialized_request));
+
+    EXPECT_TRUE(client_port_->PostMessage(cast_msg));
+
+    run_loop.Run();
   }
 
   base::test::SingleThreadTaskEnvironment task_environment_{
       base::test::TaskEnvironment::MainThreadType::IO,
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+
+  std::unique_ptr<cast_api_bindings::MessagePort> client_port_;
+  std::unique_ptr<cast_api_bindings::MessagePort> server_port_;
+  cast_api_bindings::TestMessagePortReceiver client_receiver_;
+
   std::unique_ptr<StreamingReceiverChannel> channel_;
-  std::unique_ptr<cast_api_bindings::MessagePort> receiver_port_;
-  cast_api_bindings::TestMessagePortReceiver receiver_;
+  ExoBootstrapMessage received_bootstrap_request_;
 };
+
+TEST_F(StreamingReceiverChannelTest, VerifyBootstrapResponse) {
+  EXPECT_EQ(received_bootstrap_request_.session_id(), 12345);
+
+  if (client_receiver_.buffer().size() < 1) {
+    ASSERT_TRUE(client_receiver_.RunUntilMessageCountEqual(1));
+  }
+
+  std::string sender_id;
+  std::string message_namespace;
+  std::string data;
+  ASSERT_TRUE(cast_streaming::DeserializeCastMessage(
+      client_receiver_.buffer()[0].first, &sender_id, &message_namespace,
+      &data));
+
+  EXPECT_EQ(sender_id, "test-sender");
+  EXPECT_EQ(message_namespace, "urn:x-cast:com.google.cast.exo.bootstrap");
+
+  std::string decoded_response;
+  ASSERT_TRUE(base::Base64Decode(data, &decoded_response));
+
+  ExoBootstrapMessage response;
+  ASSERT_TRUE(response.ParseFromString(decoded_response));
+
+  EXPECT_EQ(response.session_id(), 12345);
+  ASSERT_TRUE(response.has_bootstrap_action());
+  EXPECT_EQ(response.bootstrap_action().action(),
+            BootstrapAction::START_BOOTSTRAP);
+  ASSERT_TRUE(response.bootstrap_action().has_launch_info());
+  EXPECT_EQ(response.bootstrap_action()
+                .launch_info()
+                .display_info()
+                .width_px(),
+            1920);
+  EXPECT_EQ(response.bootstrap_action()
+                .launch_info()
+                .display_info()
+                .height_px(),
+            1080);
+
+  ASSERT_EQ(response.bootstrap_info().resolutions_size(), 2);
+  EXPECT_EQ(response.bootstrap_info().resolutions(0).service_identifier().service_name(),
+            "InputEvent");
+  EXPECT_EQ(response.bootstrap_info().resolutions(0)
+                .transport_options(0)
+                .data_channel_options()
+                .label(),
+            "test_input_event_label");
+
+  EXPECT_EQ(response.bootstrap_info().resolutions(1).service_identifier().service_name(),
+            "InputCapabilities");
+  EXPECT_EQ(response.bootstrap_info().resolutions(1)
+                .transport_options(0)
+                .data_channel_options()
+                .label(),
+            "test_input_caps_label");
+}
 
 TEST_F(StreamingReceiverChannelTest, SerializeMouseEvent) {
   InputEvent event;
@@ -56,11 +164,27 @@ TEST_F(StreamingReceiverChannelTest, SerializeMouseEvent) {
 
   channel_->SendInputEvent(event);
 
-  ASSERT_TRUE(receiver_.RunUntilMessageCountEqual(1));
-  std::string received_msg = receiver_.buffer()[0].first;
+  ASSERT_TRUE(client_receiver_.RunUntilMessageCountEqual(2));
+  std::string sender_id;
+  std::string message_namespace;
+  std::string data;
+  ASSERT_TRUE(cast_streaming::DeserializeCastMessage(
+      client_receiver_.buffer()[1].first, &sender_id, &message_namespace,
+      &data));
+
+  EXPECT_EQ(message_namespace, "test_input_event_label");
+
+  std::string decoded_list;
+  ASSERT_TRUE(base::Base64Decode(data, &decoded_list));
+
+  InputEventList event_list;
+  ASSERT_TRUE(event_list.ParseFromString(decoded_list));
+  EXPECT_EQ(event_list.transaction_id(), 1);
+  ASSERT_EQ(event_list.serialized_past_events_size(), 1);
 
   InputEvent received_event;
-  ASSERT_TRUE(received_event.ParseFromString(received_msg));
+  ASSERT_TRUE(received_event.ParseFromString(
+      event_list.serialized_past_events(0)));
 
   EXPECT_EQ(received_event.timestamp_ms(), 1000);
   ASSERT_TRUE(received_event.has_mouse_event());
@@ -98,11 +222,27 @@ TEST_F(StreamingReceiverChannelTest, SerializeKeyboardEvent) {
 
   channel_->SendInputEvent(event);
 
-  ASSERT_TRUE(receiver_.RunUntilMessageCountEqual(1));
-  std::string received_msg = receiver_.buffer()[0].first;
+  ASSERT_TRUE(client_receiver_.RunUntilMessageCountEqual(2));
+  std::string sender_id;
+  std::string message_namespace;
+  std::string data;
+  ASSERT_TRUE(cast_streaming::DeserializeCastMessage(
+      client_receiver_.buffer()[1].first, &sender_id, &message_namespace,
+      &data));
+
+  EXPECT_EQ(message_namespace, "test_input_event_label");
+
+  std::string decoded_list;
+  ASSERT_TRUE(base::Base64Decode(data, &decoded_list));
+
+  InputEventList event_list;
+  ASSERT_TRUE(event_list.ParseFromString(decoded_list));
+  EXPECT_EQ(event_list.transaction_id(), 1);
+  ASSERT_EQ(event_list.serialized_past_events_size(), 1);
 
   InputEvent received_event;
-  ASSERT_TRUE(received_event.ParseFromString(received_msg));
+  ASSERT_TRUE(received_event.ParseFromString(
+      event_list.serialized_past_events(0)));
 
   EXPECT_EQ(received_event.timestamp_ms(), 2000);
   ASSERT_TRUE(received_event.has_keyboard_event());
@@ -142,11 +282,27 @@ TEST_F(StreamingReceiverChannelTest, SerializeTouchEvent) {
 
   channel_->SendInputEvent(event);
 
-  ASSERT_TRUE(receiver_.RunUntilMessageCountEqual(1));
-  std::string received_msg = receiver_.buffer()[0].first;
+  ASSERT_TRUE(client_receiver_.RunUntilMessageCountEqual(2));
+  std::string sender_id;
+  std::string message_namespace;
+  std::string data;
+  ASSERT_TRUE(cast_streaming::DeserializeCastMessage(
+      client_receiver_.buffer()[1].first, &sender_id, &message_namespace,
+      &data));
+
+  EXPECT_EQ(message_namespace, "test_input_event_label");
+
+  std::string decoded_list;
+  ASSERT_TRUE(base::Base64Decode(data, &decoded_list));
+
+  InputEventList event_list;
+  ASSERT_TRUE(event_list.ParseFromString(decoded_list));
+  EXPECT_EQ(event_list.transaction_id(), 1);
+  ASSERT_EQ(event_list.serialized_past_events_size(), 1);
 
   InputEvent received_event;
-  ASSERT_TRUE(received_event.ParseFromString(received_msg));
+  ASSERT_TRUE(received_event.ParseFromString(
+      event_list.serialized_past_events(0)));
 
   EXPECT_EQ(received_event.timestamp_ms(), 3000);
   ASSERT_TRUE(received_event.has_touch_event());
@@ -182,11 +338,27 @@ TEST_F(StreamingReceiverChannelTest, SerializeKeyboardConfigurationChange) {
 
   channel_->SendInputEvent(event);
 
-  ASSERT_TRUE(receiver_.RunUntilMessageCountEqual(1));
-  std::string received_msg = receiver_.buffer()[0].first;
+  ASSERT_TRUE(client_receiver_.RunUntilMessageCountEqual(2));
+  std::string sender_id;
+  std::string message_namespace;
+  std::string data;
+  ASSERT_TRUE(cast_streaming::DeserializeCastMessage(
+      client_receiver_.buffer()[1].first, &sender_id, &message_namespace,
+      &data));
+
+  EXPECT_EQ(message_namespace, "test_input_event_label");
+
+  std::string decoded_list;
+  ASSERT_TRUE(base::Base64Decode(data, &decoded_list));
+
+  InputEventList event_list;
+  ASSERT_TRUE(event_list.ParseFromString(decoded_list));
+  EXPECT_EQ(event_list.transaction_id(), 1);
+  ASSERT_EQ(event_list.serialized_past_events_size(), 1);
 
   InputEvent received_event;
-  ASSERT_TRUE(received_event.ParseFromString(received_msg));
+  ASSERT_TRUE(received_event.ParseFromString(
+      event_list.serialized_past_events(0)));
 
   EXPECT_EQ(received_event.timestamp_ms(), 4000);
   ASSERT_TRUE(received_event.has_keyboard_configuration_change());
@@ -196,6 +368,89 @@ TEST_F(StreamingReceiverChannelTest, SerializeKeyboardConfigurationChange) {
   EXPECT_EQ(received_config.ime_long_name(), "ime_long_name");
   EXPECT_EQ(received_config.ime_short_name(), "ime_short_name");
   EXPECT_EQ(received_config.ime_layout_name(), "ime_layout_name");
+}
+
+TEST_F(StreamingReceiverChannelTest, SerializeInputCapabilities) {
+  InputCapabilities capabilities;
+  auto* device = capabilities.add_devices();
+  device->set_device_id("123");
+  device->set_display_name("Test Device");
+  device->set_type(INPUT_TYPE_KEYBOARD);
+  device->set_vendor_id(0x1111);
+  device->set_product_id(0x2222);
+  device->mutable_keyboard_metadata()->set_is_virtual(false);
+
+  channel_->SendInputCapabilities(capabilities);
+
+  ASSERT_TRUE(client_receiver_.RunUntilMessageCountEqual(2));
+  std::string sender_id;
+  std::string message_namespace;
+  std::string data;
+  ASSERT_TRUE(cast_streaming::DeserializeCastMessage(
+      client_receiver_.buffer()[1].first, &sender_id, &message_namespace,
+      &data));
+
+  EXPECT_EQ(message_namespace, "test_input_caps_label");
+
+  std::string decoded_caps;
+  ASSERT_TRUE(base::Base64Decode(data, &decoded_caps));
+
+  InputCapabilities received_caps;
+  ASSERT_TRUE(received_caps.ParseFromString(decoded_caps));
+
+  ASSERT_EQ(received_caps.devices_size(), 1);
+  const auto& received_device = received_caps.devices(0);
+  EXPECT_EQ(received_device.device_id(), "123");
+  EXPECT_EQ(received_device.display_name(), "Test Device");
+  EXPECT_EQ(received_device.type(), INPUT_TYPE_KEYBOARD);
+  EXPECT_EQ(received_device.vendor_id(), 0x1111);
+  EXPECT_EQ(received_device.product_id(), 0x2222);
+  EXPECT_FALSE(received_device.keyboard_metadata().is_virtual());
+}
+
+TEST_F(StreamingReceiverChannelTest, BufferPendingMessagesWhenReceiverNull) {
+  std::unique_ptr<cast_api_bindings::MessagePort> client_port;
+  std::unique_ptr<cast_api_bindings::MessagePort> server_port;
+  cast_api_bindings::CreatePlatformMessagePortPair(&client_port, &server_port);
+
+  cast_api_bindings::TestMessagePortReceiver client_receiver;
+  client_port->SetReceiver(&client_receiver);
+
+  auto channel = std::make_unique<StreamingReceiverChannel>(
+      std::move(server_port), std::nullopt, base::DoNothing());
+
+  // Post WebRTC control message before channel's SetReceiver is called.
+  EXPECT_TRUE(client_port->PostMessage("test_control_message"));
+
+  cast_api_bindings::TestMessagePortReceiver test_receiver;
+  channel->SetReceiver(&test_receiver);
+
+  ASSERT_TRUE(test_receiver.RunUntilMessageCountEqual(1));
+  EXPECT_EQ(test_receiver.buffer()[0].first, "test_control_message");
+}
+
+TEST_F(StreamingReceiverChannelTest, SystemMessageDoesNotOverwriteSenderId) {
+  // Simulate receiving an internal system message from "system-0" on another namespace.
+  std::string system_msg = cast_streaming::SerializeCastMessage(
+      "system-0", "urn:x-cast:com.google.cast.system", "{}");
+  EXPECT_TRUE(client_port_->PostMessage(system_msg));
+
+  // Send an input event.
+  InputEvent event;
+  event.set_timestamp_ms(2000);
+  channel_->SendInputEvent(event);
+
+  ASSERT_TRUE(client_receiver_.RunUntilMessageCountEqual(2));
+  std::string sender_id;
+  std::string message_namespace;
+  std::string data;
+  ASSERT_TRUE(cast_streaming::DeserializeCastMessage(
+      client_receiver_.buffer()[1].first, &sender_id, &message_namespace,
+      &data));
+
+  // Verify the input event was sent to "test-sender" (the phone) and NOT "system-0"!
+  EXPECT_EQ(sender_id, "test-sender");
+  EXPECT_EQ(message_namespace, "test_input_event_label");
 }
 
 }  // namespace cast_receiver

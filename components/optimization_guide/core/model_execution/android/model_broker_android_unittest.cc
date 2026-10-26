@@ -9,15 +9,20 @@
 #include "base/task/current_thread.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
-#include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
+#include "components/optimization_guide/core/model_execution/configs/summarize_solution_config.h"
 #include "components/optimization_guide/core/model_execution/on_device_features.h"
+#include "components/optimization_guide/core/model_execution/on_device_model_adaptation_loader.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_download_progress_manager.h"
+#include "components/optimization_guide/core/model_execution/on_device_prefs.h"
 #include "components/optimization_guide/core/model_execution/test/fake_model_assets.h"
 #include "components/optimization_guide/core/model_execution/test/fake_model_broker_android.h"
 #include "components/optimization_guide/core/model_execution/test/feature_config_builder.h"
 #include "components/optimization_guide/core/model_execution/test/mock_download_progress_observer.h"
 #include "components/optimization_guide/core/model_execution/test/request_builder.h"
 #include "components/optimization_guide/core/model_execution/test/response_holder.h"
+#include "components/optimization_guide/core/model_execution/usage_tracker.h"
+#include "components/optimization_guide/core/optimization_guide_features.h"
+#include "components/optimization_guide/proto/feature_configs.pb.h"
 #include "components/optimization_guide/proto/model_execution.pb.h"
 #include "components/optimization_guide/public/mojom/model_broker.mojom-shared.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -34,12 +39,10 @@ proto::OnDeviceBaseModelMetadata MatchingMetadata(
                                          {spec.selected_performance_hint});
 }
 
-// TODO: crbug.com/442914748 - Support text safety.
 proto::OnDeviceModelExecutionFeatureConfig UnsafeFeatureConfig(
     mojom::OnDeviceFeature feature) {
   proto::OnDeviceModelExecutionFeatureConfig cfg = SimpleTestFeatureConfig();
   cfg.set_feature(ToModelExecutionFeatureProto(feature));
-  cfg.set_can_skip_text_safety(true);
   return cfg;
 }
 
@@ -49,7 +52,6 @@ class ModelBrokerAndroidFeatureDisabledList {
     feature_list_.InitWithFeaturesAndParameters(
         {}, {
                 {features::kOptimizationGuideModelExecution},
-                {features::kOptimizationGuideOnDeviceModel},
             });
   }
   ~ModelBrokerAndroidFeatureDisabledList() = default;
@@ -64,7 +66,6 @@ class RequirePersistentModeForScamDetectionEnabledFeatureList {
     feature_list_.InitWithFeaturesAndParameters(
         {
             {features::kOptimizationGuideModelExecution, {}},
-            {features::kOptimizationGuideOnDeviceModel, {}},
             {features::kAICorePrompt, {}},
             {features::kAICoreScamDetection, {}},
             {features::kAICoreTest, {}},
@@ -80,7 +81,13 @@ class RequirePersistentModeForScamDetectionEnabledFeatureList {
 
 class ModelBrokerAndroidTest : public testing::Test {
  public:
-  ModelBrokerAndroidTest() = default;
+  ModelBrokerAndroidTest() {
+    // Most tests explicitly drive a single feature download. Avoid creating
+    // metadata downloaders for every installed AICore model unless a status
+    // test opts into that behavior.
+    fake_broker_.java_helper().settings().SetDefaultStatusCheckResult(
+        ModelStatus::kApiNotAvailable);
+  }
   ~ModelBrokerAndroidTest() override = default;
 
   void InstallTestFeatureConfig() {
@@ -108,8 +115,7 @@ class ModelBrokerAndroidTest : public testing::Test {
  protected:
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  OnDeviceBaseModelSpec spec_{
-      "Test", "0.0.1", proto::ON_DEVICE_MODEL_PERFORMANCE_HINT_UNSPECIFIED};
+  OnDeviceBaseModelSpec spec_{.model_name = "Test", .model_version = "0.0.1"};
   FakeModelBrokerAndroid fake_broker_{{
       .metadata = MatchingMetadata(spec_),
       .preinstall_base_model = false,
@@ -294,11 +300,10 @@ TEST_F(ModelBrokerAndroidTest, EnterprisePolicyDisallowsModel) {
 // been used.
 TEST_F(ModelBrokerAndroidTest, DownloadSuccessForAlreadyUsedFeature) {
   InstallTestFeatureConfig();
-  model_execution::prefs::RecordFeatureUsage(&fake_broker_.local_state(),
-                                             mojom::OnDeviceFeature::kTest);
-  task_environment_.FastForwardBy(
-      features::GetOnDeviceEligibleModelFeatureRecentUsePeriod() -
-      base::Days(1));
+  UsageTracker(&fake_broker_.local_state())
+      .RaisePriority(ToUseCaseName(mojom::OnDeviceFeature::kTest),
+                     UsageTracker::Priority::kBestEffort);
+  task_environment_.FastForwardBy(kRecentUsePeriod.Get() - base::Days(1));
 
   ModelBrokerClient client(fake_broker_.BindAndPassRemote(), nullptr);
   auto session =
@@ -357,6 +362,57 @@ TEST_F(ModelBrokerAndroidTest, DownloadProgressObserverAfterDownloadComplete) {
   observer.ExpectReceivedUpdate(0, kNormalizedDownloadProgressMax);
   observer.ExpectReceivedUpdate(kNormalizedDownloadProgressMax,
                                 kNormalizedDownloadProgressMax);
+}
+
+TEST_F(ModelBrokerAndroidTest, BuiltinConfigProvidesExpectedTokenLimits) {
+  ModelBrokerClient client(fake_broker_.BindAndPassRemote(), nullptr);
+  auto session =
+      DownloadModelAndCreateSession(client, mojom::OnDeviceFeature::kSummarize);
+  ASSERT_TRUE(session);
+  EXPECT_EQ(session->GetTokenLimits().min_context_tokens, 0u);
+  EXPECT_EQ(session->GetTokenLimits().max_context_tokens,
+            kAndroidMaxExecuteTokens);
+  EXPECT_EQ(session->GetTokenLimits().max_execute_tokens,
+            kAndroidMaxExecuteTokens);
+  EXPECT_EQ(session->GetTokenLimits().max_output_tokens,
+            kAndroidMaxOutputTokens);
+}
+
+TEST_F(ModelBrokerAndroidTest, ManifestConfigDoesNotWaitForAdaptation) {
+  ModelBrokerClient client(fake_broker_.BindAndPassRemote(), nullptr);
+  base::test::TestFuture<ModelBrokerClient::CreateSessionResult> future;
+  client.CreateSession(mojom::OnDeviceFeature::kSummarize,
+                       SessionConfigParams{}, future.GetCallback());
+
+  fake_broker_.java_helper().TriggerDownloaderOnAvailable(spec_.model_name,
+                                                          spec_.model_version);
+  const auto target =
+      GetOptimizationTargetForFeature(mojom::OnDeviceFeature::kSummarize);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return fake_broker_.model_provider()
+        .GetRegistrationMetadata(target)
+        .has_value();
+  }));
+
+  EXPECT_TRUE(future.Wait());
+  EXPECT_TRUE(future.Get());
+}
+
+TEST_F(ModelBrokerAndroidTest, ProvidesSummarizerFeatureRoutingConfig) {
+  ModelBrokerClient client(fake_broker_.BindAndPassRemote(), nullptr);
+
+  base::test::TestFuture<std::optional<mojo_base::ProtoWrapper>>
+      summarizer_future;
+  client.GetConfig(mojom::OnDeviceFeature::kSummarize,
+                   summarizer_future.GetCallback());
+  auto summarizer_wrapper = summarizer_future.Take();
+  ASSERT_TRUE(summarizer_wrapper);
+  auto summarizer_any = summarizer_wrapper->As<proto::Any>();
+  ASSERT_TRUE(summarizer_any);
+  proto::SummarizerFeatureConfig summarizer_config;
+  ASSERT_TRUE(summarizer_config.ParseFromString(summarizer_any->value()));
+  EXPECT_EQ(summarizer_config.default_use_case(),
+            ToUseCaseName(mojom::OnDeviceFeature::kSummarize));
 }
 
 // Test fixture for verifying model status check behavior with specific
@@ -479,6 +535,23 @@ TEST_F(ModelBrokerAndroidStatusCheckTest, BarrierWaitsForAllStatusChecks) {
            mojom::ModelUnavailableReason::kPendingAssets;
   });
   EXPECT_FALSE(future.IsReady());
+}
+
+TEST_F(ModelBrokerAndroidStatusCheckTest,
+       AvailableStatusFetchesModelSpecWithoutPriorUsage) {
+  fake_broker_.java_helper().settings().SetDefaultStatusCheckResult(
+      ModelStatus::kAvailable);
+  ModelBrokerClient client(fake_broker_.BindAndPassRemote(), nullptr);
+  // Subscribing does not raise usage priority, so only the kAvailable status
+  // path can start the metadata request that retrieves the model spec.
+  auto& subscriber = client.GetSubscriber(mojom::OnDeviceFeature::kSummarize);
+
+  fake_broker_.java_helper().TriggerDownloaderOnAvailable(spec_.model_name,
+                                                          spec_.model_version);
+
+  // The returned BaseModelSpec makes the summarize solution available.
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return !subscriber.unavailable_reason().has_value(); }));
 }
 
 class ModelBrokerAndroidRequirePersistentModeEnabledTest

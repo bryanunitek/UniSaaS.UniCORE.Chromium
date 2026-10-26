@@ -38,7 +38,8 @@ bool Merge(PendingLayer& home,
            LCDTextPreference lcd_text_preference = LCDTextPreference::kIgnored,
            PendingLayer::IsCompositedScrollFunction is_composited_scroll =
                DefaultIsCompositedScroll) {
-  return home.Merge(guest, lcd_text_preference, 1.f, is_composited_scroll);
+  return home.Merge(guest, lcd_text_preference, 1.f, is_composited_scroll)
+      .merged;
 }
 
 TEST(PendingLayerTest, Merge) {
@@ -184,7 +185,7 @@ TEST(PendingLayerTest, PendingLayerDontMergeSparseWithTransforms) {
 TEST(PendingLayerTest, DontMergeSparseInCompositedEffect) {
   auto* t1 = Create2DTranslation(t0(), 20, 25);
   auto* e1 =
-      CreateOpacityEffect(e0(), 1.0f, CompositingReason::kWillChangeOpacity);
+      CreateOpacityEffect(e0(), 1.0f, {CompositingReason::kWillChangeOpacity});
   auto* t2 = Create2DTranslation(t0(), 1000, 1000);
   auto& artifact = TestPaintArtifact()
                        .Chunk(*t1, c0(), *e1)
@@ -205,7 +206,7 @@ TEST(PendingLayerTest, DontMergeSparseInCompositedEffect) {
 TEST(PendingLayerTest, MergeSparseInNonCompositedEffect) {
   auto* t1 = Create2DTranslation(t0(), 20, 25);
   auto* t2 = Create2DTranslation(t0(), 1000, 1000);
-  auto* e1 = CreateOpacityEffect(e0(), 1.0f, CompositingReason::kNone);
+  auto* e1 = CreateOpacityEffect(e0(), 1.0f, {});
   auto& artifact = TestPaintArtifact()
                        .Chunk(*t1, c0(), *e1)
                        .Bounds(gfx::Rect(0, 0, 30, 40))
@@ -526,7 +527,7 @@ TEST_P(PendingLayerTextOpaquenessTest, UnitedClippedToOpaque) {
 
 TEST(PendingLayerTest, MergeCanvasSubtreeIncompatiblePropertyTreeState) {
   EffectPaintPropertyNode::State canvas_effect_state;
-  canvas_effect_state.is_in_canvas_subtree = true;
+  canvas_effect_state.is_in_drawable_canvas_subtree = true;
   auto* canvas_effect =
       EffectPaintPropertyNode::Create(e0(), std::move(canvas_effect_state));
 
@@ -549,8 +550,10 @@ TEST(PendingLayerTest, MergeCanvasSubtreeIncompatiblePropertyTreeState) {
 
   // Inside canvas subtree: force merge succeeds despite incompatible backface
   // visibility.
-  PendingLayer canvas_layer_a(artifact, artifact.GetPaintChunks()[0]);
-  PendingLayer canvas_layer_b(artifact, artifact.GetPaintChunks()[1]);
+  PendingLayer canvas_layer_a(artifact, artifact.GetPaintChunks()[0],
+                              /*canvas_drawable_id*/ 1);
+  PendingLayer canvas_layer_b(artifact, artifact.GetPaintChunks()[1],
+                              /*canvas_drawable_id*/ 1);
 
   EXPECT_FALSE(canvas_layer_a.GetPropertyTreeState()
                    .CanUpcastWith(canvas_layer_b.GetPropertyTreeState(),

@@ -44,26 +44,17 @@ void ViewTreeHostRootView::SchedulePaintInRect(const gfx::Rect& damage_rect) {
 std::unique_ptr<viz::CompositorFrame>
 ViewTreeHostRootView::CreateCompositorFrame(
     const viz::BeginFrameAck& begin_frame_ack,
-    UiResourceManager& resource_manager,
-    bool auto_update,
-    const gfx::Size& last_submitted_frame_size,
-    float last_submitted_frame_dsf) {
+    viz::ClientResourceProvider& client_resource_provider,
+    cc::ResourcePool& resource_pool,
+    bool auto_update) {
   TRACE_EVENT1("ui", "ViewTreeHostRootView::SubmitCompositorFrame", "damage",
                GetTotalDamage().ToString());
 
   auto frame = frame_factory_->CreateCompositorFrame(
       begin_frame_ack, GetContentRect(), GetTotalDamage(),
-      is_overlay_candidate_, resource_manager);
+      is_overlay_candidate_, client_resource_provider, resource_pool);
 
   ResetDamage();
-
-  // A change in the size of the compositor frame means we need to identify a
-  // new surface to submit the compositor frame to since the surface size is now
-  // different.
-  if (last_submitted_frame_size != frame->size_in_pixels() ||
-      last_submitted_frame_dsf != frame->device_scale_factor()) {
-    host_window()->AllocateLocalSurfaceId();
-  }
 
   return frame;
 }

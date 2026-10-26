@@ -23,6 +23,27 @@ CueTargetType TestCueTarget::GetType() const {
   return CueTargetType::kTestSource;
 }
 
+bool TestCueTarget::RequiresModelExecution() const {
+  return requires_model_execution || !generate_result.has_value();
+}
+
+bool TestCueTarget::OverridesUcbScoring() const {
+  return overrides_ucb_scoring;
+}
+
+bool TestCueTarget::DowngradesToQuietOnDismiss() const {
+  return downgrades_to_quiet_on_dismiss;
+}
+
+bool TestCueTarget::SupportsIntrusivenessImpl(
+    CueIntrusiveness intrusiveness) const {
+  return supported_intrusiveness.contains(intrusiveness);
+}
+
+bool TestCueTarget::IsPersistent() const {
+  return is_persistent;
+}
+
 bool TestCueTarget::IsEligible() const {
   return eligible;
 }
@@ -52,7 +73,20 @@ bool TestCueTarget::IsPageEligible(
   return page_eligible;
 }
 
-void TestCueTarget::OnClick(CueActionData data) {
+void TestCueTarget::OnChipShown() {
+  chip_shown = true;
+}
+
+void TestCueTarget::OnChipClicked() {
+  chip_clicked = true;
+}
+
+void TestCueTarget::OnAnchoredMessageShown(
+    page_actions::PageActionPriorityCategory priority) {
+  anchored_message_shown_priority = priority;
+}
+
+void TestCueTarget::OnAnchoredMessageClicked(CueActionData data) {
   click_data = std::move(data);
 }
 

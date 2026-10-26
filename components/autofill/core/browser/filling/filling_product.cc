@@ -20,7 +20,7 @@
 namespace autofill {
 
 // LINT.IfChange(FillingProductToString)
-std::string FillingProductToString(FillingProduct filling_product) {
+std::string_view FillingProductToString(FillingProduct filling_product) {
   switch (filling_product) {
     case FillingProduct::kNone:
       return "None";
@@ -76,6 +76,7 @@ FillingProduct GetFillingProductFromSuggestionType(SuggestionType type) {
     case SuggestionType::kVirtualCreditCardEntry:
       return FillingProduct::kCreditCard;
     case SuggestionType::kMerchantPromoCodeEntry:
+    case SuggestionType::kManageOffers:
       return FillingProduct::kMerchantPromoCode;
     case SuggestionType::kIbanEntry:
     case SuggestionType::kManageIban:
@@ -107,27 +108,29 @@ FillingProduct GetFillingProductFromSuggestionType(SuggestionType type) {
     case SuggestionType::kAtMemoryGenericError:
     case SuggestionType::kAtMemoryInactivityNudge:
     case SuggestionType::kAtMemoryNoConnection:
+    case SuggestionType::kAtMemoryOpenGemini:
     case SuggestionType::kAtMemorySearchAffordance:
+    case SuggestionType::kAtMemoryShortcutSettingsPromo:
     case SuggestionType::kAutocompleteAtMemoryButton:
     case SuggestionType::kBnplFootnote:
     case SuggestionType::kInsecureContextPaymentDisabledMessage:
     case SuggestionType::kLoadingThrobber:
-    case SuggestionType::kMixedFormMessage:
-    case SuggestionType::kOpenGemini:
     case SuggestionType::kPersonalContextNotice:
-    case SuggestionType::kSeePromoCodeDetails:
     case SuggestionType::kSeparator:
     case SuggestionType::kTitle:
-    case SuggestionType::kUndoOrClear:
+    case SuggestionType::kUndo:
       return FillingProduct::kNone;
     case SuggestionType::kAutofillAiOtherOrders:
+    case SuggestionType::kAutofillAiOtherShipments:
     case SuggestionType::kAutofillAiPrivateInferenceNotice:
+    case SuggestionType::kAutofillAiSourceAttribution:
     case SuggestionType::kFetchingAmbientData:
     case SuggestionType::kFillAutofillAi:
     case SuggestionType::kManageAutofillAi:
     case SuggestionType::kManageAutofillAiIdentityDocs:
     case SuggestionType::kManageAutofillAiShopping:
     case SuggestionType::kManageAutofillAiTravel:
+    case SuggestionType::kRemoveAutofillAi:
       return FillingProduct::kAutofillAi;
     case SuggestionType::kAllLoyaltyCardsEntry:
     case SuggestionType::kLoyaltyCardEntry:
@@ -135,9 +138,13 @@ FillingProduct GetFillingProductFromSuggestionType(SuggestionType type) {
       return FillingProduct::kLoyaltyCard;
     case SuggestionType::kIdentityCredential:
       return FillingProduct::kIdentityCredential;
+    case SuggestionType::kGmailOneTimePasswordEntry:
     case SuggestionType::kOneTimePasswordEntry:
+    case SuggestionType::kOpenGmailForOtps:
       return FillingProduct::kOneTimePassword;
+    case SuggestionType::kAtMemoryFetching:
     case SuggestionType::kAtMemorySearchResult:
+    case SuggestionType::kAtMemorySourceAttribution:
     case SuggestionType::kManageEnhancedAutofill:
       return FillingProduct::kAtMemory;
     case SuggestionType::kWebauthnCredential:

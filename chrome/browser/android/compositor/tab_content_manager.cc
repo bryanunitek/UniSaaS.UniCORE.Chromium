@@ -32,11 +32,7 @@
 #include "chrome/browser/android/compositor/retryable_task.h"
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sync/glue/synced_tab_delegate_android.h"
-#include "chrome/browser/sync/session_sync_service_factory.h"
 #include "chrome/browser/thumbnail/cc/thumbnail.h"
-#include "components/sync_sessions/features.h"
-#include "components/sync_sessions/session_sync_service.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
@@ -85,59 +81,6 @@ content::RenderWidgetHostView* GetRwhv(content::WebContents* web_contents) {
   return rwh ? rwh->GetView() : nullptr;
 }
 
-// Compresses `bitmap` to a jpg of a size (in both pixels and bytes) appropriate
-// for syncing, and runs `callback` with the result. In case of compression
-// failure, does not run the `callback`.
-void CompressScreenshotForSync(const SkBitmap& bitmap,
-                               base::OnceCallback<void(std::string)> callback) {
-  // Resize to roughly 500x500.
-  float scale = 500.0f / std::max(bitmap.width(), bitmap.height());
-  // Only downscale.
-  SkBitmap resized = bitmap;
-  if (scale < 1.0f) {
-    int new_width = std::round(bitmap.width() * scale);
-    int new_height = std::round(bitmap.height() * scale);
-    resized = skia::ImageOperations::Resize(
-        bitmap, skia::ImageOperations::RESIZE_BETTER, new_width, new_height);
-  }
-
-  // Compress to JPG, quality adjusted to be < 8kB.
-  // Use binary search with up to 4 steps between 1 and 50 to find a good
-  // quality that fits in the size limit.
-  int low = 1;
-  int high = 50;
-  std::optional<std::vector<uint8_t>> best_encoded_data;
-
-  const size_t kMaxSize = 8000;
-  const size_t kMinGoodEnoughSize = 7000;
-
-  for (int i = 0; i < 4; ++i) {
-    int quality = low + (high - low) / 2;
-    std::optional<std::vector<uint8_t>> data =
-        gfx::JPEGCodec::Encode(resized, quality);
-    if (data && data->size() <= kMaxSize) {
-      best_encoded_data = std::move(data);
-      low = quality + 1;
-
-      // Optimization: If the current attempt is close enough to the target
-      // size, stop searching.
-      if (best_encoded_data->size() > kMinGoodEnoughSize) {
-        break;
-      }
-    } else {
-      high = quality - 1;
-    }
-  }
-
-  // If compression failed or all attempts were > 8 kB, give up.
-  if (!best_encoded_data) {
-    return;
-  }
-
-  std::move(callback).Run(
-      std::string(best_encoded_data->begin(), best_encoded_data->end()));
-}
-
 }  // namespace
 
 namespace android {
@@ -147,10 +90,10 @@ class TabContentManager::TabReadbackRequest : public RetryableTask {
                      float thumbnail_scale,
                      TabReadbackCallback result_callback)
       : weak_web_contents_(web_contents->GetWeakPtr()),
-        thumbnail_scale_(thumbnail_scale),
         result_callback_(std::move(result_callback)),
         retry_strategy_(std::make_unique<RetryStrategy>(kMaxReadbackRetries,
-                                                        kReadbackRetryDelay)) {
+                                                        kReadbackRetryDelay)),
+        thumbnail_scale_(thumbnail_scale) {
     auto* rwhv = GetRwhv(web_contents);
     if (!rwhv) {
       std::move(result_callback_).Run(0.f, SkBitmap());
@@ -236,7 +179,7 @@ class TabContentManager::TabReadbackRequest : public RetryableTask {
   void OnRetryLoopFinished(bool success) {
     if (success) {
       // result_callback_ should have already been consumed on the success path.
-      DCHECK(!result_callback_);
+      CHECK(!result_callback_, base::NotFatalUntil::M161);
       return;
     }
 
@@ -252,11 +195,11 @@ class TabContentManager::TabReadbackRequest : public RetryableTask {
 
  private:
   base::WeakPtr<content::WebContents> weak_web_contents_;
-  const float thumbnail_scale_;
   TabReadbackCallback result_callback_;
-  bool drop_after_readback_{false};
   base::ScopedClosureRunner decrementor_;
   std::unique_ptr<RetryStrategy> retry_strategy_;
+  const float thumbnail_scale_;
+  bool drop_after_readback_{false};
 
   base::WeakPtrFactory<TabReadbackRequest> weak_factory_{this};
 };
@@ -298,17 +241,21 @@ void TabContentManager::SetUIResourceProvider(
 }
 
 scoped_refptr<cc::slim::Layer> TabContentManager::GetLiveLayer(int tab_id) {
+  TabAndroid* tab = GetTab(tab_id);
+  if (!tab) {
+    return nullptr;
+  }
+  return tab->GetContentLayer();
+}
+
+TabAndroid* TabContentManager::GetTab(int tab_id) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> jtab = Java_TabContentManager_getTabById(
       env, weak_java_tab_content_manager_.get(env), tab_id);
   if (!jtab) {
     return nullptr;
   }
-  TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
-  if (!tab) {
-    return nullptr;
-  }
-  return tab->GetContentLayer();
+  return TabAndroid::GetNativeTab(env, jtab);
 }
 
 ThumbnailLayer* TabContentManager::GetStaticLayer(int tab_id) {
@@ -326,7 +273,7 @@ ThumbnailLayer* TabContentManager::GetStaticLayer(int tab_id) {
 void TabContentManager::UpdateVisibleIds(const std::vector<int>& priority_ids,
                                          int primary_tab_id) {
   thumbnail_cache_.UpdateVisibleIds(priority_ids, primary_tab_id);
-  std::erase_if(static_layer_cache_, [&priority_ids](const auto& pair) {
+  base::EraseIf(static_layer_cache_, [&priority_ids](const auto& pair) {
     bool not_priority = !std::ranges::contains(priority_ids, pair.first);
     if (not_priority && pair.second) {
       pair.second->layer()->RemoveFromParent();
@@ -334,10 +281,9 @@ void TabContentManager::UpdateVisibleIds(const std::vector<int>& priority_ids,
     return not_priority;
   });
   for (int tab_id : priority_ids) {
-    auto static_layer = static_layer_cache_[tab_id];
+    scoped_refptr<ThumbnailLayer>& static_layer = static_layer_cache_[tab_id];
     if (!static_layer) {
       static_layer = ThumbnailLayer::Create();
-      static_layer_cache_[tab_id] = static_layer;
     }
     thumbnail::Thumbnail* thumbnail = thumbnail_cache_.Get(tab_id, false);
     if (thumbnail) {
@@ -384,9 +330,9 @@ void TabContentManager::CaptureThumbnail(
     bool return_bitmap,
     const base::android::JavaRef<jobject>& j_callback) {
   // Ensure capture only happens on UI thread.
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
-  DCHECK(tab_android);
+  CHECK(tab_android, base::NotFatalUntil::M161);
   const int tab_id = tab_android->GetAndroidId();
   bool has_pending_readback = pending_tab_readbacks_.contains(tab_id);
 
@@ -416,7 +362,7 @@ void TabContentManager::CacheTabWithBitmap(JNIEnv* env,
                                            TabAndroid* tab_android,
                                            const JavaRef<jobject>& bitmap,
                                            float thumbnail_scale) {
-  DCHECK(tab_android);
+  CHECK(tab_android, base::NotFatalUntil::M161);
   int tab_id = tab_android->GetAndroidId();
   GURL url = tab_android->GetURL();
 
@@ -441,11 +387,10 @@ void TabContentManager::InvalidateIfChanged(JNIEnv* env,
   thumbnail_cache_.InvalidateThumbnailIfChanged(tab_id, url);
 }
 
-void TabContentManager::UpdateVisibleIds(JNIEnv* env,
-                                         const JavaRef<jintArray>& priority,
-                                         int32_t primary_tab_id) {
-  std::vector<int> priority_ids;
-  base::android::JavaIntArrayToIntVector(env, priority, &priority_ids);
+void TabContentManager::UpdateVisibleIds(
+    JNIEnv* env,
+    const std::vector<int32_t>& priority_ids,
+    int32_t primary_tab_id) {
   UpdateVisibleIds(priority_ids, primary_tab_id);
 }
 
@@ -531,23 +476,6 @@ void TabContentManager::OnTabReadback(int tab_id,
   } else if (tracker) {
     tracker->MarkCaptureFailed();
   }
-
-  if (!bitmap.empty() &&
-      base::FeatureList::IsEnabled(sync_sessions::kSyncTabScreenshots)) {
-    // Check that tabs sync is active (in which case
-    // `service->GetOpenTabsUIDelegate()` returns non-null) before bothering to
-    // compress the screenshot.
-    sync_sessions::SessionSyncService* service = GetSessionSyncService(tab_id);
-    if (service && service->GetOpenTabsUIDelegate()) {
-      auto compression_done_callback = base::BindPostTaskToCurrentDefault(
-          base::BindOnce(&TabContentManager::AddTabScreenshotToSync,
-                         weak_factory_.GetWeakPtr(), tab_id));
-      base::ThreadPool::PostTask(
-          FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
-          base::BindOnce(&CompressScreenshotForSync, bitmap,
-                         std::move(compression_done_callback)));
-    }
-  }
 }
 
 void TabContentManager::SendThumbnailToJava(JavaBitmapCallback callback,
@@ -572,48 +500,6 @@ void TabContentManager::SendThumbnailToJava(JavaBitmapCallback callback,
   std::move(callback).Run(j_bitmap);
 }
 
-void TabContentManager::AddTabScreenshotToSync(int tab_id,
-                                               std::string compressed_data) {
-  JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> jtab = Java_TabContentManager_getTabById(
-      env, weak_java_tab_content_manager_.get(env), tab_id);
-  if (!jtab) {
-    return;
-  }
-  TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
-  if (!tab || !tab->web_contents()) {
-    return;
-  }
-  sync_sessions::SessionSyncService* service = GetSessionSyncService(tab_id);
-  if (!service) {
-    return;
-  }
-  SessionID session_id =
-      browser_sync::SyncedTabDelegateAndroid::SessionIdFromAndroidId(tab_id);
-  service->AddTabScreenshot(session_id, std::move(compressed_data),
-                            tab->web_contents()->GetLastCommittedURL());
-}
-
-sync_sessions::SessionSyncService* TabContentManager::GetSessionSyncService(
-    int tab_id) {
-  JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> jtab = Java_TabContentManager_getTabById(
-      env, weak_java_tab_content_manager_.get(env), tab_id);
-  if (!jtab) {
-    return nullptr;
-  }
-  TabAndroid* tab_android = TabAndroid::GetNativeTab(env, jtab);
-  if (!tab_android || !tab_android->web_contents()) {
-    return nullptr;
-  }
-  Profile* profile = Profile::FromBrowserContext(
-      tab_android->web_contents()->GetBrowserContext());
-  if (!profile) {
-    return nullptr;
-  }
-  return SessionSyncServiceFactory::GetForProfile(profile);
-}
-
 void TabContentManager::SetCaptureMinRequestTimeForTesting(JNIEnv* env,
                                                            int32_t time_ms) {
   thumbnail_cache_.SetCaptureMinRequestTimeForTesting(time_ms);
@@ -622,13 +508,6 @@ void TabContentManager::SetCaptureMinRequestTimeForTesting(JNIEnv* env,
 bool TabContentManager::IsTabCaptureInFlightForTesting(JNIEnv* env,
                                                        int32_t tab_id) {
   return in_flight_captures_.find(tab_id) != in_flight_captures_.end();
-}
-
-// static
-void TabContentManager::CompressScreenshotForSyncForTesting(  // IN-TEST
-    const SkBitmap& bitmap,
-    base::OnceCallback<void(std::string)> callback) {
-  CompressScreenshotForSync(bitmap, std::move(callback));
 }
 
 // ----------------------------------------------------------------------------
@@ -642,7 +521,7 @@ static int64_t JNI_TabContentManager_Init(JNIEnv* env,
                                           int32_t write_queue_max_size,
                                           bool save_jpeg_thumbnails) {
   // Ensure this and its thumbnail cache are created on the UI thread.
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   TabContentManager* manager = new TabContentManager(
       env, obj, default_cache_size, compression_queue_max_size,

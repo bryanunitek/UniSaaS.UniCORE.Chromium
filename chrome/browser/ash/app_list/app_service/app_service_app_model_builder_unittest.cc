@@ -24,7 +24,6 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/app_service_test.h"
-#include "chrome/browser/apps/icon_standardizer.h"
 #include "chrome/browser/ash/app_list/app_list_test_util.h"
 #include "chrome/browser/ash/app_list/chrome_app_list_item.h"
 #include "chrome/browser/ash/app_list/md_icon_normalizer.h"
@@ -39,8 +38,6 @@
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
 #include "chrome/browser/ash/login/demo_mode/demo_mode_test_helper.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_features.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_test_helper.h"
 #include "chrome/browser/extensions/chrome_app_icon.h"
 #include "chrome/browser/extensions/install_tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -51,7 +48,6 @@
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -59,7 +55,6 @@
 #include "chromeos/ash/components/dbus/cicerone/cicerone_client.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #include "chromeos/ash/components/dbus/seneschal/seneschal_client.h"
-#include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/account_id/account_id.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
@@ -86,6 +81,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/display/test/test_screen.h"
 #include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/image/icon_standardizer.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/image/image_unittest_util.h"
@@ -93,7 +89,6 @@
 using crostini::CrostiniTestHelper;
 using extensions::AppSorting;
 using extensions::ExtensionSystem;
-using plugin_vm::PluginVmTestHelper;
 using ::testing::_;
 using ::testing::Matcher;
 
@@ -284,7 +279,7 @@ class ExtensionAppTest : public AppServiceAppModelBuilderTest {
         extension, gfx::Size(size_in_dip, size_in_dip),
         image_future.GetCallback());
     output_image_skia =
-        apps::CreateStandardIconImage(image_future.Take().AsImageSkia());
+        gfx::CreateStandardAppIconImage(image_future.Take().AsImageSkia());
   }
 
   std::vector<uint8_t> GenerateExtensionAppCompressedIcon(std::string app_id) {
@@ -684,13 +679,7 @@ class CrostiniAppTest : public AppServiceAppModelBuilderTest {
   void TearDown() override {
     ResetBuilder();
     test_helper_.reset();
-    AppListTestBase::TearDown();
-
-    // |profile_| is initialized in AppListTestBase::SetUp but not destroyed in
-    // the ::TearDown method, but we need it to go away before shutting down
-    // DBusThreadManager to ensure all keyed services that might rely on DBus
-    // clients are destroyed.
-    DeleteProfile();
+    AppServiceAppModelBuilderTest::TearDown();
 
     ash::SeneschalClient::Shutdown();
     ash::ConciergeClient::Shutdown();
@@ -880,119 +869,6 @@ TEST_F(CrostiniAppTest, DisableCrostini) {
                                           crostini::kCrostiniDefaultVmName, "");
   CrostiniTestHelper::DisableCrostini(profile());
   EXPECT_EQ(0u, GetModelItemCount());
-}
-
-class PluginVmAppTest : public testing::Test {
- public:
-  void SetUp() override {
-    testing_profile_ = std::make_unique<TestingProfile>();
-    web_app::FakeWebAppProvider::Get(testing_profile_.get())->Start();
-    test_helper_ = std::make_unique<PluginVmTestHelper>(testing_profile_.get());
-    // We need to call this before creating the builder, otherwise
-    // |PluginVmApps| is disabled forever.
-    test_helper_->SetUserRequirementsToAllowPluginVm();
-
-    CreateBuilder();
-  }
-
-  void TearDown() override { ResetBuilder(); }
-
- protected:
-  // Required to ensure that the Plugin VM manager can be accessed in order to
-  // retrieve permissions.
-  struct ScopedDBusClients {
-    ScopedDBusClients() {
-      ash::CiceroneClient::InitializeFake();
-      ash::ConciergeClient::InitializeFake();
-      ash::SeneschalClient::InitializeFake();
-    }
-    ~ScopedDBusClients() {
-      ash::SeneschalClient::Shutdown();
-      ash::ConciergeClient::Shutdown();
-      ash::CiceroneClient::Shutdown();
-    }
-  } dbus_clients_;
-
-  // Destroys any existing builder in the correct order.
-  void ResetBuilder() {
-    scoped_callback_.reset();
-    builder_.reset();
-    controller_.reset();
-    model_updater_.reset();
-  }
-
-  // Creates a new builder, destroying any existing one.
-  void CreateBuilder() {
-    ResetBuilder();
-
-    app_service_test_.UninstallAllApps(testing_profile_.get());
-    testing_profile_->SetGuestSession(false);
-    app_service_test_.SetUp(testing_profile_.get());
-    model_updater_ = std::make_unique<FakeAppListModelUpdater>(
-        /*profile=*/nullptr, /*reorder_delegate=*/nullptr);
-    controller_ = std::make_unique<test::TestAppListControllerDelegate>();
-    builder_ = std::make_unique<AppServiceAppModelBuilder>(controller_.get());
-    scoped_callback_ = std::make_unique<
-        AppServiceAppModelBuilder::ScopedAppPositionInitCallbackForTest>(
-        builder_.get(), base::BindRepeating(&InitAppPosition));
-    builder_->Initialize(nullptr, testing_profile_.get(), model_updater_.get());
-
-    RemoveApps(apps::AppType::kPluginVm, testing_profile_.get(),
-               model_updater_.get());
-  }
-
-  void AllowPluginVm() {
-    // We cannot call test_helper_.AllowPluginVm() because we have called
-    // SetUserRequirementsToAllowPluginVm()
-    test_helper_->EnablePluginVmFeature();
-    test_helper_->EnterpriseEnrollDevice();
-    test_helper_->SetPolicyRequirementsToAllowPluginVm();
-  }
-
-  content::BrowserTaskEnvironment task_environment_;
-  std::unique_ptr<TestingProfile> testing_profile_;
-  std::unique_ptr<PluginVmTestHelper> test_helper_;
-
-  apps::AppServiceTest app_service_test_;
-  std::unique_ptr<AppServiceAppModelBuilder> builder_;
-  std::unique_ptr<
-      AppServiceAppModelBuilder::ScopedAppPositionInitCallbackForTest>
-      scoped_callback_;
-  std::unique_ptr<FakeAppListModelUpdater> model_updater_;
-  std::unique_ptr<test::TestAppListControllerDelegate> controller_;
-};
-
-TEST_F(PluginVmAppTest, PluginVmDisabled) {
-  EXPECT_FALSE(
-      plugin_vm::PluginVmFeatures::Get()->IsAllowed(testing_profile_.get()));
-  EXPECT_THAT(GetModelContent(model_updater_.get()), testing::IsEmpty());
-}
-
-TEST_F(PluginVmAppTest, EnableAndDisablePluginVm) {
-  EXPECT_THAT(GetModelContent(model_updater_.get()), testing::IsEmpty());
-
-  AllowPluginVm();
-
-  EXPECT_EQ(std::vector<std::string>{l10n_util::GetStringUTF8(
-                IDS_PLUGIN_VM_APP_NAME)},
-            GetModelContent(model_updater_.get()));
-
-  testing_profile_->ScopedCrosSettingsTestHelper()->SetBoolean(
-      ash::kPluginVmAllowed, false);
-
-  EXPECT_THAT(GetModelContent(model_updater_.get()), testing::IsEmpty());
-}
-
-TEST_F(PluginVmAppTest, PluginVmEnabled) {
-  AllowPluginVm();
-
-  // Reset the AppModelBuilder, so that it is created in a state where
-  // Plugin VM was enabled.
-  CreateBuilder();
-
-  EXPECT_EQ(std::vector<std::string>{l10n_util::GetStringUTF8(
-                IDS_PLUGIN_VM_APP_NAME)},
-            GetModelContent(model_updater_.get()));
 }
 
 }  // namespace app_list

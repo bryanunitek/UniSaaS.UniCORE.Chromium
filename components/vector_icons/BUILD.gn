@@ -8,6 +8,7 @@ _icons_gen_dir = "$root_build_dir/gen/components/vector_icons"
 
 if (current_toolchain == default_toolchain) {
   import("//build/util/branding.gni")
+
   aggregate_vector_icons("components_vector_icons") {
     icon_directory = "."
 
@@ -27,7 +28,7 @@ if (current_toolchain == default_toolchain) {
       "add_link.icon",
       "add_link_old.icon",
       "add_old.icon",
-      "add_weight500.icon",
+      "add_weight500_custom.icon",
       "ads_chrome_refresh_old.icon",
       "ads_click.icon",
       "ads_click_old.icon",
@@ -276,10 +277,11 @@ if (current_toolchain == default_toolchain) {
       "lock.icon",
       "lock_filled.icon",
       "lock_old.icon",
-      "loyalty.icon",
-      "loyalty_old.icon",
+      "loyalty_programs.icon",
+      "loyalty_programs_spark.icon",
       "magic_button_old.icon",
       "mail.icon",
+      "mail_asterisk.icon",
       "mail_filled.icon",
       "mark_email_read.icon",
       "mark_email_read_old.icon",
@@ -373,7 +375,6 @@ if (current_toolchain == default_toolchain) {
       "receipt_long_old.icon",
       "refresh.icon",
       "reload_chrome_refresh_old.icon",
-      "reload_custom.icon",
       "replay.icon",
       "replay_10.icon",
       "replay_10_old.icon",
@@ -399,6 +400,7 @@ if (current_toolchain == default_toolchain) {
       "select_window_off.icon",
       "select_window_off_chrome_refresh_old.icon",
       "select_window_old.icon",
+      "sell.icon",
       "send.icon",
       "send_old.icon",
       "sensors.icon",
@@ -416,6 +418,7 @@ if (current_toolchain == default_toolchain) {
       "settings_old.icon",
       "settings_outline_old.icon",
       "shield.icon",
+      "shield_question.icon",
       "shopping_bag.icon",
       "shopping_bag_old.icon",
       "shopping_bag_refresh_old.icon",
@@ -455,8 +458,10 @@ if (current_toolchain == default_toolchain) {
       "sync_saved_locally_off.icon",
       "sync_saved_locally_off_old.icon",
       "sync_saved_locally_old.icon",
+      "table_chart.icon",
       "tenancy_filled.icon",
       "tenancy_old.icon",
+      "text_select_end.icon",
       "thumb_down.icon",
       "thumb_down_filled.icon",
       "thumb_down_filled_old.icon",
@@ -479,6 +484,7 @@ if (current_toolchain == default_toolchain) {
       "usb_off.icon",
       "usb_off_chrome_refresh_old.icon",
       "usb_old.icon",
+      "video_frame_save.icon",
       "video_library.icon",
       "video_library_old.icon",
       "videocam.icon",
@@ -517,6 +523,7 @@ if (current_toolchain == default_toolchain) {
       "warning_off.icon",
       "warning_old.icon",
       "warning_outline_old.icon",
+      "wb_incandescent.icon",
       "work.icon",
       "work_old.icon",
     ]
@@ -527,6 +534,7 @@ if (current_toolchain == default_toolchain) {
 
     if (is_chrome_branded) {
       sources += [
+        "google_chrome/audio_spark.icon",
         "google_chrome/fast_forward_circle_spark.icon",
         "google_chrome/google_agentspace_monochrome_logo.icon",
         "google_chrome/google_agentspace_monochrome_logo_25.icon",
@@ -555,6 +563,7 @@ if (current_toolchain == default_toolchain) {
         "google_chrome/google_wallet.icon",
         "google_chrome/google_wallet_monochrome.icon",
         "google_chrome/gshield.icon",
+        "google_chrome/mic_detect_auto.icon",
         "google_chrome/page_insights.icon",
         "google_chrome/page_insights_color.icon",
         "google_chrome/pen_spark.icon",

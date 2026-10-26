@@ -6,21 +6,19 @@
 #define COMPONENTS_PRIVATE_AI_CONNECTION_TOKEN_ATTESTATION_H_
 
 #include <memory>
-#include <optional>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/types/expected.h"
 #include "components/private_ai/connection.h"
 #include "components/private_ai/phosphor/data_types.h"
+#include "components/private_ai/phosphor/token_manager.h"
+#include "components/version_info/channel.h"
 
 namespace private_ai {
 
 class PrivateAiLogger;
-
-namespace phosphor {
-class TokenManager;
-}
 
 // A decorator for `Connection` that ensures that client attestation request
 // is sent first before sending any other requests.
@@ -31,12 +29,12 @@ class ConnectionTokenAttestation : public Connection {
  public:
   // When `on_disconnect` callback is invoked, all follow-up `Send()` calls will
   // fail immediately without attempting to send a request over the wire.
-  ConnectionTokenAttestation(
-      std::unique_ptr<Connection> inner_connection,
-      proto::FeatureName feature_name,
-      phosphor::TokenManager* token_manager,
-      PrivateAiLogger* logger,
-      base::OnceCallback<void(StatusCode)> on_disconnect);
+  ConnectionTokenAttestation(std::unique_ptr<Connection> inner_connection,
+                             proto::FeatureName feature_name,
+                             phosphor::TokenManager* token_manager,
+                             PrivateAiLogger* logger,
+                             base::OnceCallback<void(StatusCode)> on_disconnect,
+                             version_info::Channel channel);
   ~ConnectionTokenAttestation() override;
 
   ConnectionTokenAttestation(const ConnectionTokenAttestation&) = delete;
@@ -75,7 +73,8 @@ class ConnectionTokenAttestation : public Connection {
   };
 
   void FetchToken();
-  void OnTokenFetched(std::optional<phosphor::BlindSignedAuthToken> auth_token);
+  void OnTokenFetched(base::expected<phosphor::BlindSignedAuthToken,
+                                     phosphor::TokenManager::Error> auth_token);
   void OnInnerConnectionResponse(
       OnRequestCallback original_callback,
       base::expected<proto::PrivateAiResponse, StatusCode> result);
@@ -85,6 +84,7 @@ class ConnectionTokenAttestation : public Connection {
   const proto::FeatureName feature_name_;
   raw_ptr<phosphor::TokenManager> token_manager_;
   raw_ptr<PrivateAiLogger> logger_;
+  const version_info::Channel channel_;
 
   // Called to trigger a disconnect and destruction of the connection.
   base::OnceCallback<void(StatusCode)> on_disconnect_;

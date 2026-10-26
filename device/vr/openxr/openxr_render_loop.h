@@ -38,7 +38,7 @@
 #include "third_party/openxr/src/include/openxr/openxr.h"
 #include "ui/gfx/geometry/rect_f.h"
 
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 #include "base/threading/thread.h"
 #endif
 
@@ -65,7 +65,7 @@ class XRThread : public base::android::JavaHandlerThread {
       : base::android::JavaHandlerThread(name) {}
   ~XRThread() override = default;
 };
-#elif BUILDFLAG(IS_WIN)
+#elif BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 class XRThread : public base::Thread {
  public:
   explicit XRThread(const char* name) : base::Thread(name) {}
@@ -121,7 +121,9 @@ class OpenXrRenderLoop : public XRThread,
   void CleanUp() override;
 
   void ClearPendingFrame();
-  void StartPendingFrame();
+  // Returns false if the session ended synchronously while starting the frame
+  // (see the .cc); callers should bail without touching `pending_frame_`.
+  bool StartPendingFrame();
 
   void StartRuntimeFinish(
       base::RepeatingCallback<void(mojom::XRVisibilityState)>
@@ -130,13 +132,11 @@ class OpenXrRenderLoop : public XRThread,
       base::OnceClosure end_callback,
       bool success);
 
-  // Will Submit if we have textures submitted from the Overlay (if it is
-  // visible), and WebXR (if it is visible).  We decide what to wait for during
-  // StartPendingFrame, may mark things as ready after SubmitFrameMissing and
-  // SubmitFrameWithTextureHandle (for WebXR), or SubmitOverlayTexture (for
-  // overlays), or SetOverlayAndWebXRVisibility (for WebXR and overlays).
-  // Finally, if we exit presentation while waiting for outstanding submits, we
-  // will clean up our pending-frame state.
+  // Submits the frame when WebXR (if visible) or the overlay (when WebXR is
+  // hidden) is ready. When WebXR is visible, composition does not block on
+  // `waiting_for_overlay_` and instead composites using the most recently
+  // submitted overlay texture. Finally, if presentation exits while waiting for
+  // outstanding submits, pending-frame state is cleaned up.
   void MaybeCompositeAndSubmit(const std::vector<LayerId>& updated_layers = {});
 
   // Sets all relevant internal state to mark that we have successfully received
@@ -146,9 +146,10 @@ class OpenXrRenderLoop : public XRThread,
 
   // XRPresentationProvider overrides:
 #if BUILDFLAG(IS_WIN)
-  void SubmitFrameWithTextureHandle(int16_t frame_index,
-                                    mojo::PlatformHandle texture_handle,
-                                    const gpu::SyncToken& sync_token) override;
+  void SubmitFrameWithTextureHandle(
+      int16_t frame_index,
+      gpu::ExportedSharedImage exported_shared_image,
+      const gpu::SyncToken& sync_token) override;
 #endif
   void SubmitFrameMissing(
       int16_t frame_index,
@@ -167,7 +168,7 @@ class OpenXrRenderLoop : public XRThread,
 
   // ImmersiveOverlay:
   void SubmitOverlayTexture(int16_t frame_id,
-                            gfx::GpuMemoryBufferHandle texture,
+                            gpu::ExportedSharedImage exported_shared_image,
                             const gpu::SyncToken& sync_token,
                             const gfx::RectF& left_bounds,
                             const gfx::RectF& right_bounds,
@@ -188,6 +189,10 @@ class OpenXrRenderLoop : public XRThread,
     bool overlay_submitted_ = false;
     bool waiting_for_webxr_ = false;
     bool waiting_for_overlay_ = false;
+    // True once `SendFrameData()` has dispatched the frame data to WebXR,
+    // allowing a deferred `pending_overlay_pose_callback_` to be answered
+    // without delaying WebXR frame start.
+    bool sent_to_webxr_ = false;
 
     mojom::XRFrameDataPtr frame_data_;
     mojom::XRRenderInfoPtr render_info_;
@@ -274,10 +279,15 @@ class OpenXrRenderLoop : public XRThread,
       scoped_refptr<viz::ContextProvider> context_provider);
   void OnContextLostCallback(
       scoped_refptr<viz::ContextProvider> context_provider);
+  void OnContextProviderRestarted(bool success);
 
   void OnWebXrTokenSignaled(int16_t frame_index,
                             std::vector<LayerId> updated_layers,
                             std::unique_ptr<gfx::GpuFence> gpu_fence);
+#if BUILDFLAG(IS_LINUX)
+  void OnWebXrWritesFlushed(int16_t frame_index,
+                            std::vector<LayerId> updated_layers);
+#endif
 
   void MaybeRejectSessionCallback();
 
@@ -298,6 +308,11 @@ class OpenXrRenderLoop : public XRThread,
   scoped_refptr<viz::ContextProvider> context_provider_;
   VizContextProviderFactoryAsync context_provider_factory_async_;
 
+  // Whether this context advertises GL_CHROMIUM_gpu_fence (backed by
+  // EGL_ANDROID_native_fence_sync). Set once in OnContextProviderCreated();
+  // when false SubmitFrameDrawnIntoTexture falls back to a CPU glFinish.
+  bool supports_gpu_fence_ = false;
+
   FPSMeter fps_meter_;
   SlidingTimeDeltaAverage webxr_js_time_;
   SlidingTimeDeltaAverage webxr_gpu_time_;
@@ -307,6 +322,10 @@ class OpenXrRenderLoop : public XRThread,
   bool is_presenting_ = false;  // True if we have a presenting session.
   bool webxr_visible_ = true;   // The browser may hide a presenting session.
   bool overlay_visible_ = false;
+  // True once an overlay texture has been successfully bound while the overlay
+  // is visible, allowing subsequent WebXR frames to composite it without
+  // waiting for a new overlay submission every frame.
+  bool has_valid_overlay_texture_ = false;
 
   std::optional<int16_t> delayed_get_frame_data_id_;
   base::OnceCallback<void()> delayed_get_frame_data_callback_;
@@ -317,6 +336,9 @@ class OpenXrRenderLoop : public XRThread,
 
   mojo::Remote<mojom::XRPresentationClient> submit_client_;
   SubmitOverlayTextureCallback overlay_submit_callback_;
+  // Deferred overlay pose callback waiting for WebXR to start and dispatch a
+  // frame so the overlay does not call `xrWaitFrame()` ahead of WebXR.
+  RequestNextOverlayPoseCallback pending_overlay_pose_callback_;
   RequestNotificationOnWebXrSubmittedCallback on_webxr_submitted_;
   bool webxr_has_pose_ = false;
   base::RepeatingCallback<void(mojom::XRVisibilityState)>

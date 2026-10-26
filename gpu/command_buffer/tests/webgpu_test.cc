@@ -25,6 +25,7 @@
 #include "gpu/webgpu/callback.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gl/gl_implementation.h"
 
 namespace gpu {
 
@@ -42,8 +43,12 @@ void CountCallback(int* count) {
 
 WebGPUTest::Options::Options() = default;
 
-std::map<std::pair<WGPUDevice, wgpu::ErrorType>, /* matched */ bool>
+// static
+std::map<std::pair<WGPUDevice, wgpu::ErrorType>, bool>
     WebGPUTest::s_expected_errors = {};
+
+// static
+std::map<WGPUDevice, bool> WebGPUTest::s_expected_devices_lost = {};
 
 WebGPUTest::WebGPUTest() = default;
 WebGPUTest::~WebGPUTest() = default;
@@ -112,6 +117,7 @@ void WebGPUTest::Initialize(const Options& options) {
 #endif
   }
   gpu_preferences.enable_unsafe_webgpu = options.enable_unsafe_webgpu;
+  gpu_preferences.use_webgpu_adapter = options.use_webgpu_adapter;
   if (!options.adapter_blocklist) {
     gpu_preferences.disabled_dawn_features_list = {"adapter_blocklist"};
   }
@@ -144,7 +150,7 @@ void WebGPUTest::Initialize(const Options& options) {
       &ra_options, wgpu::CallbackMode::AllowSpontaneous,
       [&](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter,
           wgpu::StringView message) {
-        if (!options.force_fallback_adapter) {
+        if (!options.force_fallback_adapter && !options.allow_no_adapter) {
           // If we don't force a particular adapter, we
           // should always find one.
           EXPECT_EQ(status, wgpu::RequestAdapterStatus::Success);
@@ -155,6 +161,7 @@ void WebGPUTest::Initialize(const Options& options) {
       });
   webgpu()->FlushCommands();
   while (!done) {
+    base::PlatformThread::Sleep(TestTimeouts::tiny_timeout());
     RunPendingTasks();
   }
 }
@@ -203,11 +210,10 @@ void WebGPUTest::WaitForCompletion(wgpu::Device device) {
 
 void WebGPUTest::WaitForFutureCompletion(wgpu::Device device,
                                          wgpu::FutureWaitInfo wait_info) {
-  // Perform a busy loop acting as an event loop checking for the Future to be
-  // completed.
   while (!wait_info.completed) {
     instance_.WaitAny(1, &wait_info, 0);
     webgpu()->FlushCommands();
+    base::PlatformThread::Sleep(TestTimeouts::tiny_timeout());
     RunPendingTasks();
   }
 }
@@ -243,8 +249,13 @@ wgpu::Device WebGPUTest::GetNewDevice(
 
   device_desc.SetDeviceLostCallback(
       wgpu::CallbackMode::AllowSpontaneous,
-      [](const wgpu::Device&, wgpu::DeviceLostReason reason,
+      [](const wgpu::Device& device, wgpu::DeviceLostReason reason,
          wgpu::StringView message) {
+        auto it = s_expected_devices_lost.find(device.Get());
+        if (it != s_expected_devices_lost.end() && !it->second) {
+          it->second = true;
+          return;
+        }
         if (reason == wgpu::DeviceLostReason::Destroyed) {
           return;
         }
@@ -459,6 +470,28 @@ TEST_F(WebGPUTest, ImplicitFallbackAdapterIsDisallowed) {
     adapter_.GetInfo(&info);
     // If we got an Adapter, it must not be a CPU adapter.
     EXPECT_NE(info.adapterType, wgpu::AdapterType::CPU);
+  }
+}
+
+// Web-facing Dawn GL adapters must only be created when Chrome's GL is backed
+// by ANGLE, so that Dawn GL inherits ANGLE's driver workarounds.
+TEST_F(WebGPUTest, OpenGLESAdapterRequiresANGLE) {
+  auto options = WebGPUTest::Options();
+  options.feature_level = wgpu::FeatureLevel::Compatibility;
+  options.enable_unsafe_webgpu = false;
+  options.adapter_blocklist = true;
+  options.use_webgpu_adapter = WebGPUAdapterName::kOpenGLES;
+  options.allow_no_adapter = true;
+  // Initialize attempts to create an adapter.
+  Initialize(options);
+
+  if (gl::GetGLImplementation() != gl::kGLImplementationEGLANGLE) {
+    // No web-facing adapter may be created on non-ANGLE GL.
+    EXPECT_EQ(adapter_, nullptr);
+  } else if (adapter_) {
+    wgpu::AdapterInfo info;
+    adapter_.GetInfo(&info);
+    EXPECT_EQ(info.backendType, wgpu::BackendType::OpenGLES);
   }
 }
 

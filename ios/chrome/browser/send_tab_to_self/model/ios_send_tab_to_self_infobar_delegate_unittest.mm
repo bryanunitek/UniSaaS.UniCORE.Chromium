@@ -9,12 +9,9 @@
 #import <memory>
 
 #import "base/memory/raw_ptr.h"
-#import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
-#import "base/test/scoped_feature_list.h"
 #import "components/infobars/core/infobar.h"
 #import "components/send_tab_to_self/fake_send_tab_to_self_model.h"
-#import "components/send_tab_to_self/features.h"
 #import "components/send_tab_to_self/send_tab_to_self_entry.h"
 #import "ios/chrome/browser/infobars/model/infobar_manager_impl.h"
 #import "ios/chrome/browser/infobars/model/infobar_utils.h"
@@ -22,14 +19,12 @@
 #import "ios/chrome/browser/shared/model/web_state_list/test/fake_web_state_list_delegate.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
-#import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/web/public/test/fakes/fake_browser_state.h"
 #import "ios/web/public/test/fakes/fake_navigation_manager.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "testing/gtest/include/gtest/gtest.h"
-#import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
@@ -42,9 +37,6 @@ namespace {
 class IOSSendTabToSelfInfoBarDelegateTest : public PlatformTest {
  public:
   IOSSendTabToSelfInfoBarDelegateTest() {
-    feature_list_.InitWithFeatures({kSendTabToSelfPropagateScrollPosition,
-                                    kSendTabToSelfPropagateFormFields},
-                                   {});
     auto fake_web_state = std::make_unique<web::FakeWebState>();
     web_state_ptr_ = fake_web_state.get();
     web_state_ptr_->SetBrowserState(&browser_state_);
@@ -65,8 +57,22 @@ class IOSSendTabToSelfInfoBarDelegateTest : public PlatformTest {
 
   web::FakeWebState* web_state() { return web_state_ptr_; }
 
+  web::FakeWebState* AddReceivedTabToWebStateList(
+      const SendTabToSelfEntry* entry,
+      int index,
+      base::Time creation_time = base::Time::Now()) {
+    auto tab = std::make_unique<web::FakeWebState>();
+    web::FakeWebState* tab_ptr = tab.get();
+    tab_ptr->SetBrowserState(&browser_state_);
+    tab_ptr->SetCurrentURL(entry->GetURL());
+    SendTabToSelfTabCardLabelData::CreateForWebState(
+        tab_ptr, entry->GetGUID(), entry->GetDeviceName(), creation_time);
+    web_state_list_->InsertWebState(
+        std::move(tab), WebStateList::InsertionParams::AtIndex(index));
+    return tab_ptr;
+  }
+
  protected:
-  base::test::ScopedFeatureList feature_list_;
   web::FakeBrowserState browser_state_;
   FakeWebStateListDelegate web_state_list_delegate_;
   std::unique_ptr<WebStateList> web_state_list_;
@@ -79,155 +85,74 @@ class IOSSendTabToSelfInfoBarDelegateTest : public PlatformTest {
 // Tests that the infobar delegate properties are correctly set.
 TEST_F(IOSSendTabToSelfInfoBarDelegateTest, Properties) {
   const SendTabToSelfEntry* entry =
-      model_.AddEntryRemotely(GURL("http://www.test.com"), "title", "device1",
+      model_.AddEntryRemotely(GURL("https://www.test.com"), "title", "device1",
                               PageContext(), NavigationHistory());
   auto delegate = IOSSendTabToSelfInfoBarDelegate::Create(
-      entry, &model_, mock_scene_commands_, web_state_list_.get());
+      entry, /*opened_tab_count=*/1, &model_, mock_scene_commands_,
+      web_state_list_.get());
   ConfirmInfoBarDelegate* confirm_delegate = delegate.get();
 
   EXPECT_EQ(ConfirmInfoBarDelegate::BUTTON_OK, confirm_delegate->GetButtons());
-  EXPECT_EQ(l10n_util::GetStringUTF16(IDS_SEND_TAB_TO_SELF_INFOBAR_MESSAGE),
+  EXPECT_EQ(u"Link received", confirm_delegate->GetTitleText());
+  EXPECT_EQ(l10n_util::GetStringFUTF16(
+                IDS_SEND_TAB_TO_SELF_INFOBAR_AUTO_OPEN_SUBTITLE,
+                base::UTF8ToUTF16(entry->GetDeviceName())),
             confirm_delegate->GetMessageText());
   EXPECT_EQ(
       l10n_util::GetStringUTF16(IDS_SEND_TAB_TO_SELF_INFOBAR_MESSAGE_URL),
       confirm_delegate->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_OK));
 }
 
-// Tests that Accept() correctly marks the entry as opened and opens the URL.
-TEST_F(IOSSendTabToSelfInfoBarDelegateTest, Accept) {
-  const SendTabToSelfEntry* entry =
-      model_.AddEntryRemotely(GURL("http://www.test.com"), "title", "device1",
-                              PageContext(), NavigationHistory());
-  auto delegate = IOSSendTabToSelfInfoBarDelegate::Create(
-      entry, &model_, mock_scene_commands_, web_state_list_.get());
-  ConfirmInfoBarDelegate* delegate_ptr = delegate.get();
+// Tests that the title text correctly reflects multiple tabs received.
+TEST_F(IOSSendTabToSelfInfoBarDelegateTest, PropertiesMultipleTabs) {
+  const SendTabToSelfEntry* entry1 =
+      model_.AddEntryRemotely(GURL("https://www.test1.com"), "title1",
+                              "device1", PageContext(), NavigationHistory());
+  const SendTabToSelfEntry* entry2 =
+      model_.AddEntryRemotely(GURL("https://www.test2.com"), "title2",
+                              "device1", PageContext(), NavigationHistory());
 
-  infobars::InfoBarManager* manager =
-      InfoBarManagerImpl::FromWebState(web_state());
-  manager->AddInfoBar(CreateConfirmInfoBar(std::move(delegate)));
-
-  std::string guid = entry->GetGUID();
-  OCMExpect([mock_scene_commands_
-      openURLInNewTab:[OCMArg checkWithBlock:^BOOL(OpenNewTabCommand* command) {
-        EXPECT_EQ(GURL("http://www.test.com"), command.URL);
-        EXPECT_NSEQ(nil, command.textFragment);
-        EXPECT_NSEQ(base::SysUTF8ToNSString(guid),
-                    command.sendTabToSelfEntryGUID);
-        return YES;
-      }]]);
-
-  EXPECT_TRUE(delegate_ptr->Accept());
-
-  EXPECT_EQ(guid, model_.last_opened_guid());
-
-  [(id)mock_scene_commands_ verify];
-}
-
-// Tests that Accept() correctly passes the text fragment if a scroll position
-// is present.
-TEST_F(IOSSendTabToSelfInfoBarDelegateTest, AcceptWithScrollPosition) {
-  base::test::ScopedFeatureList feature_list(
-      kSendTabToSelfPropagateScrollPosition);
-
-  PageContext page_context;
-  page_context.scroll_position.text_fragment.text_start = "start";
-  page_context.scroll_position.text_fragment.text_end = "end";
-
-  const SendTabToSelfEntry* entry =
-      model_.AddEntryRemotely(GURL("http://www.test.com"), "title", "device",
-                              page_context, NavigationHistory());
+  const base::Time now = base::Time::Now();
+  AddReceivedTabToWebStateList(entry1, 1, now);
+  AddReceivedTabToWebStateList(entry2, 2, now);
 
   auto delegate = IOSSendTabToSelfInfoBarDelegate::Create(
-      entry, &model_, mock_scene_commands_, web_state_list_.get());
-  ConfirmInfoBarDelegate* delegate_ptr = delegate.get();
-
-  infobars::InfoBarManager* manager =
-      InfoBarManagerImpl::FromWebState(web_state());
-  manager->AddInfoBar(CreateConfirmInfoBar(std::move(delegate)));
-
-  std::string guid = entry->GetGUID();
-  OCMExpect([mock_scene_commands_
-      openURLInNewTab:[OCMArg checkWithBlock:^BOOL(OpenNewTabCommand* command) {
-        EXPECT_EQ(GURL("http://www.test.com"), command.URL);
-        EXPECT_NSEQ(nil, command.textFragment);
-        EXPECT_NSEQ(base::SysUTF8ToNSString(guid),
-                    command.sendTabToSelfEntryGUID);
-        return YES;
-      }]]);
-
-  EXPECT_TRUE(delegate_ptr->Accept());
-
-  [(id)mock_scene_commands_ verify];
-}
-
-// Tests that Accept() (called when the user taps the primary button on the
-// infobar) correctly passes nil for the text fragment if no scroll
-// position is present.
-TEST_F(IOSSendTabToSelfInfoBarDelegateTest, AcceptWithoutScrollPosition) {
-  const SendTabToSelfEntry* entry =
-      model_.AddEntryRemotely(GURL("http://www.test.com"), "title", "device1",
-                              PageContext(), NavigationHistory());
-
-  auto delegate = IOSSendTabToSelfInfoBarDelegate::Create(
-      entry, &model_, mock_scene_commands_, web_state_list_.get());
-  ConfirmInfoBarDelegate* delegate_ptr = delegate.get();
-
-  infobars::InfoBarManager* manager =
-      InfoBarManagerImpl::FromWebState(web_state());
-  manager->AddInfoBar(CreateConfirmInfoBar(std::move(delegate)));
-
-  std::string guid = entry->GetGUID();
-  OCMExpect([mock_scene_commands_
-      openURLInNewTab:[OCMArg checkWithBlock:^BOOL(OpenNewTabCommand* command) {
-        EXPECT_EQ(GURL("http://www.test.com"), command.URL);
-        EXPECT_NSEQ(nil, command.textFragment);
-        EXPECT_NSEQ(base::SysUTF8ToNSString(guid),
-                    command.sendTabToSelfEntryGUID);
-        return YES;
-      }]]);
-
-  EXPECT_TRUE(delegate_ptr->Accept());
-
-  EXPECT_OCMOCK_VERIFY((id)mock_scene_commands_);
-}
-
-// Tests that Cancel() correctly dismisses the entry.
-TEST_F(IOSSendTabToSelfInfoBarDelegateTest, Cancel) {
-  const SendTabToSelfEntry* entry =
-      model_.AddEntryRemotely(GURL("http://www.test.com"), "title", "device1",
-                              PageContext(), NavigationHistory());
-  auto delegate = IOSSendTabToSelfInfoBarDelegate::Create(
-      entry, &model_, mock_scene_commands_, web_state_list_.get());
+      entry2, /*opened_tab_count=*/2, &model_, mock_scene_commands_,
+      web_state_list_.get());
   ConfirmInfoBarDelegate* confirm_delegate = delegate.get();
 
-  EXPECT_TRUE(confirm_delegate->Cancel());
-  EXPECT_EQ(entry->GetGUID(), model_.last_dismissed_guid());
+  EXPECT_EQ(u"2 links received", confirm_delegate->GetTitleText());
 }
 
-// Tests that Accept() directly activates the single received tab when auto-open
-// is enabled.
-TEST_F(IOSSendTabToSelfInfoBarDelegateTest, AcceptWithSingleTabReceived) {
-  base::test::ScopedFeatureList feature_list(
-      send_tab_to_self::kSendTabToSelfAutoOpen);
-
+// Tests that Cancel() correctly dismisses the entry without opening any tab.
+TEST_F(IOSSendTabToSelfInfoBarDelegateTest, Cancel) {
   const SendTabToSelfEntry* entry =
-      model_.AddEntryRemotely(GURL("http://www.test.com"), "title", "device1",
+      model_.AddEntryRemotely(GURL("https://www.test.com"), "title", "device1",
+                              PageContext(), NavigationHistory());
+  auto delegate = IOSSendTabToSelfInfoBarDelegate::Create(
+      entry, /*opened_tab_count=*/1, &model_, mock_scene_commands_,
+      web_state_list_.get());
+  ConfirmInfoBarDelegate* confirm_delegate = delegate.get();
+
+  EXPECT_EQ(0, web_state_list_->active_index());
+  EXPECT_TRUE(confirm_delegate->Cancel());
+  EXPECT_EQ(entry->GetGUID(), model_.last_dismissed_guid());
+  EXPECT_EQ("", model_.last_opened_guid());
+  EXPECT_EQ(0, web_state_list_->active_index());
+}
+
+// Tests that Accept() directly activates the single received tab.
+TEST_F(IOSSendTabToSelfInfoBarDelegateTest, AcceptWithSingleTabReceived) {
+  const SendTabToSelfEntry* entry =
+      model_.AddEntryRemotely(GURL("https://www.test.com"), "title", "device1",
                               PageContext(), NavigationHistory());
 
   // Create and insert a background tab simulating the remotely received tab.
-  // Attach SendTabToSelfTabCardLabelData to mark it as part of the batch.
-  auto received_tab = std::make_unique<web::FakeWebState>();
-  web::FakeWebState* received_tab_ptr = received_tab.get();
-  received_tab_ptr->SetBrowserState(&browser_state_);
-  received_tab_ptr->SetCurrentURL(GURL("http://www.test.com"));
-  SendTabToSelfTabCardLabelData::CreateForWebState(
-      received_tab_ptr, entry->GetGUID(), entry->GetDeviceName(),
-      base::Time::Now());
-  web_state_list_->InsertWebState(std::move(received_tab),
-                                  WebStateList::InsertionParams::AtIndex(1));
+  web::FakeWebState* received_tab_ptr = AddReceivedTabToWebStateList(entry, 1);
 
   auto delegate = IOSSendTabToSelfInfoBarDelegate::Create(
-      entry, &model_, mock_scene_commands_, web_state_list_.get());
+      entry, /*opened_tab_count=*/1, &model_, mock_scene_commands_,
+      web_state_list_.get());
   ConfirmInfoBarDelegate* delegate_ptr = delegate.get();
 
   infobars::InfoBarManager* manager =
@@ -241,42 +166,32 @@ TEST_F(IOSSendTabToSelfInfoBarDelegateTest, AcceptWithSingleTabReceived) {
   // (index 1) in the foreground without opening the Tab Grid.
   EXPECT_EQ(1, web_state_list_->active_index());
   EXPECT_EQ(received_tab_ptr, web_state_list_->GetActiveWebState());
+  EXPECT_EQ(model_.last_activated_guid(), entry->GetGUID());
+  EXPECT_EQ(model_.last_activated_entry_point(),
+            send_tab_to_self::ShareActivatedEntryPoint::kMobileMessageBanner);
+  EXPECT_EQ(nullptr,
+            SendTabToSelfTabCardLabelData::FromWebState(received_tab_ptr));
 }
 
 // Tests that Accept() activates the latest received tab directly without
 // opening the Tab Grid when multiple tabs are received.
 TEST_F(IOSSendTabToSelfInfoBarDelegateTest, AcceptWithMultipleTabsReceived) {
-  base::test::ScopedFeatureList feature_list(
-      send_tab_to_self::kSendTabToSelfAutoOpen);
-
   const SendTabToSelfEntry* entry1 =
-      model_.AddEntryRemotely(GURL("http://www.test1.com"), "title1", "device1",
-                              PageContext(), NavigationHistory());
+      model_.AddEntryRemotely(GURL("https://www.test1.com"), "title1",
+                              "device1", PageContext(), NavigationHistory());
   const SendTabToSelfEntry* entry2 =
-      model_.AddEntryRemotely(GURL("http://www.test2.com"), "title2", "device1",
-                              PageContext(), NavigationHistory());
+      model_.AddEntryRemotely(GURL("https://www.test2.com"), "title2",
+                              "device1", PageContext(), NavigationHistory());
 
   const base::Time now = base::Time::Now();
   // Simulate two background tabs arriving in the same batch with identical
   // creation timestamps.
-  auto tab1 = std::make_unique<web::FakeWebState>();
-  web::FakeWebState* tab1_ptr = tab1.get();
-  tab1_ptr->SetBrowserState(&browser_state_);
-  SendTabToSelfTabCardLabelData::CreateForWebState(
-      tab1_ptr, entry1->GetGUID(), entry1->GetDeviceName(), now);
-  web_state_list_->InsertWebState(std::move(tab1),
-                                  WebStateList::InsertionParams::AtIndex(1));
-
-  auto tab2 = std::make_unique<web::FakeWebState>();
-  web::FakeWebState* tab2_ptr = tab2.get();
-  tab2_ptr->SetBrowserState(&browser_state_);
-  SendTabToSelfTabCardLabelData::CreateForWebState(
-      tab2_ptr, entry2->GetGUID(), entry2->GetDeviceName(), now);
-  web_state_list_->InsertWebState(std::move(tab2),
-                                  WebStateList::InsertionParams::AtIndex(2));
+  AddReceivedTabToWebStateList(entry1, 1, now);
+  web::FakeWebState* tab2_ptr = AddReceivedTabToWebStateList(entry2, 2, now);
 
   auto delegate = IOSSendTabToSelfInfoBarDelegate::Create(
-      entry2, &model_, mock_scene_commands_, web_state_list_.get());
+      entry2, /*opened_tab_count=*/2, &model_, mock_scene_commands_,
+      web_state_list_.get());
   ConfirmInfoBarDelegate* delegate_ptr = delegate.get();
 
   infobars::InfoBarManager* manager =
@@ -289,20 +204,24 @@ TEST_F(IOSSendTabToSelfInfoBarDelegateTest, AcceptWithMultipleTabsReceived) {
   // inserted at the highest index (index 2) is activated directly.
   EXPECT_EQ(2, web_state_list_->active_index());
   EXPECT_EQ(tab2_ptr, web_state_list_->GetActiveWebState());
+  EXPECT_EQ(model_.last_activated_guid(), entry2->GetGUID());
+  EXPECT_EQ(model_.last_activated_entry_point(),
+            send_tab_to_self::ShareActivatedEntryPoint::kMobileMessageBanner);
+  EXPECT_EQ(nullptr, SendTabToSelfTabCardLabelData::FromWebState(tab2_ptr));
+  // Verify that unselected background tabs retain their label data.
+  EXPECT_NE(nullptr, SendTabToSelfTabCardLabelData::FromWebState(
+                         web_state_list_->GetWebStateAt(1)));
 }
 
 // Tests that Accept() ignores older previously received tabs and treats a
 // single new tab as a direct open.
 TEST_F(IOSSendTabToSelfInfoBarDelegateTest,
        AcceptWithPreviouslyReceivedTabIgnored) {
-  base::test::ScopedFeatureList feature_list(
-      send_tab_to_self::kSendTabToSelfAutoOpen);
-
   const SendTabToSelfEntry* old_entry =
-      model_.AddEntryRemotely(GURL("http://www.old.com"), "old_title",
+      model_.AddEntryRemotely(GURL("https://www.old.com"), "old_title",
                               "device1", PageContext(), NavigationHistory());
   const SendTabToSelfEntry* new_entry =
-      model_.AddEntryRemotely(GURL("http://www.new.com"), "new_title",
+      model_.AddEntryRemotely(GURL("https://www.new.com"), "new_title",
                               "device1", PageContext(), NavigationHistory());
 
   const base::Time now = base::Time::Now();
@@ -310,25 +229,15 @@ TEST_F(IOSSendTabToSelfInfoBarDelegateTest,
 
   // Insert an older tab simulating a previously received tab from an earlier
   // session or batch.
-  auto old_tab = std::make_unique<web::FakeWebState>();
-  web::FakeWebState* old_tab_ptr = old_tab.get();
-  old_tab_ptr->SetBrowserState(&browser_state_);
-  SendTabToSelfTabCardLabelData::CreateForWebState(
-      old_tab_ptr, old_entry->GetGUID(), old_entry->GetDeviceName(), old_time);
-  web_state_list_->InsertWebState(std::move(old_tab),
-                                  WebStateList::InsertionParams::AtIndex(1));
+  AddReceivedTabToWebStateList(old_entry, 1, old_time);
 
   // Insert the newest received tab with the current timestamp.
-  auto new_tab = std::make_unique<web::FakeWebState>();
-  web::FakeWebState* new_tab_ptr = new_tab.get();
-  new_tab_ptr->SetBrowserState(&browser_state_);
-  SendTabToSelfTabCardLabelData::CreateForWebState(
-      new_tab_ptr, new_entry->GetGUID(), new_entry->GetDeviceName(), now);
-  web_state_list_->InsertWebState(std::move(new_tab),
-                                  WebStateList::InsertionParams::AtIndex(2));
+  web::FakeWebState* new_tab_ptr =
+      AddReceivedTabToWebStateList(new_entry, 2, now);
 
   auto delegate = IOSSendTabToSelfInfoBarDelegate::Create(
-      new_entry, &model_, mock_scene_commands_, web_state_list_.get());
+      new_entry, /*opened_tab_count=*/1, &model_, mock_scene_commands_,
+      web_state_list_.get());
   ConfirmInfoBarDelegate* delegate_ptr = delegate.get();
 
   infobars::InfoBarManager* manager =
@@ -341,6 +250,10 @@ TEST_F(IOSSendTabToSelfInfoBarDelegateTest,
   // timestamp (index 2), activating it directly without opening Tab Grid.
   EXPECT_EQ(2, web_state_list_->active_index());
   EXPECT_EQ(new_tab_ptr, web_state_list_->GetActiveWebState());
+  EXPECT_EQ(model_.last_activated_guid(), new_entry->GetGUID());
+  EXPECT_EQ(model_.last_activated_entry_point(),
+            send_tab_to_self::ShareActivatedEntryPoint::kMobileMessageBanner);
+  EXPECT_EQ(nullptr, SendTabToSelfTabCardLabelData::FromWebState(new_tab_ptr));
 }
 
 }  // namespace

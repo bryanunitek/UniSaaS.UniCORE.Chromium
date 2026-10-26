@@ -36,7 +36,10 @@ namespace web_app {
 BASE_DECLARE_FEATURE(kSubAppsInstallLimit);
 extern const base::FeatureParam<int> kSubAppsInstallLimitParam;
 
-namespace {
+// Max number of sub apps that can be installed
+// via single call to add, excluding the enterprose policy case.
+BASE_DECLARE_FEATURE(kSubAppsPerPromptLimit);
+extern const base::FeatureParam<int> kSubAppsPerPromptLimitParam;
 
 struct SubAppInstallResult {
   SubAppInstallResult(GURL install_url,
@@ -53,14 +56,13 @@ struct SubAppInstallResult {
   webapps::InstallResultCode install_result_code;
 };
 
-}  // namespace
-
 // Internal enum to represent error codes of add function.
 // It is remapped to ukm and mojo corresponding enums.
 enum class AddCallErrorCode {
   kUserDeclined,
   kUserDeclinedEmbargo,
-  kLimitExceeded,
+  kTotalLimitExceeded,
+  kPerPromptLimitExceeded,
   kWebAppsNotUserInstallable,
 };
 
@@ -72,9 +74,12 @@ class SubAppsServiceImpl
   static constexpr char kSubAppsUninstallNotificationId[] =
       "sub_apps_uninstall_notification";
 
+  SubAppsServiceImpl(
+      content::RenderFrameHost& render_frame_host,
+      mojo::PendingReceiver<blink::mojom::SubAppsService> receiver,
+      base::SelfDeletingPassKey key);
   SubAppsServiceImpl(const SubAppsServiceImpl&) = delete;
   SubAppsServiceImpl& operator=(const SubAppsServiceImpl&) = delete;
-  ~SubAppsServiceImpl() override;
 
   // We only want to create this object when the Browser* associated with the
   // WebContents is an Isolated Web App and when the RFH is the main frame.
@@ -138,9 +143,7 @@ class SubAppsServiceImpl
 
   WebAppProvider& provider() const;
 
-  SubAppsServiceImpl(
-      content::RenderFrameHost& render_frame_host,
-      mojo::PendingReceiver<blink::mojom::SubAppsService> receiver);
+  ~SubAppsServiceImpl() override;
 
   int next_add_call_id_ = 0;
   std::map<int, AddCallInfo> add_call_info_;

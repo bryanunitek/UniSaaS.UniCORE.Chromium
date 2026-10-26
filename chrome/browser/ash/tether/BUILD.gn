@@ -14,8 +14,6 @@ static_library("tether") {
     "tether_service_factory.h",
   ]
 
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
-
   deps = [
     "//base",
     "//chrome/browser/ash/device_sync",
@@ -59,6 +57,7 @@ source_set("unit_tests") {
     "//chrome/browser/prefs",
     "//chrome/browser/ui/ash/network",
     "//chrome/test:test_support",
+    "//chrome/test/base:testing_browser_process",
     "//chromeos/ash/components/dbus/shill",
     "//chromeos/ash/components/multidevice:test_support",
     "//chromeos/ash/components/network",

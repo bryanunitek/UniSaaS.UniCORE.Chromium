@@ -51,7 +51,7 @@ class Service final : public mojom::AudioService {
   // its created on, and that thread must be AudioManager main thread.
   class AudioManagerAccessor {
    public:
-    virtual ~AudioManagerAccessor() {}
+    virtual ~AudioManagerAccessor() = default;
 
     // Must be called before destruction to cleanly shut down AudioManager.
     // Service must ensure AudioManager is not called after that.
@@ -125,7 +125,7 @@ class Service final : public mojom::AudioService {
 
 #if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
   // Manages Machine Learning models used within the audio
-  // service. It must outlive `stream_factory_`.
+  // service. It must outlive `stream_factory_` and `system_info_`.
   MlModelManagerImpl ml_model_manager_;
 #endif
   std::unique_ptr<AudioManagerAccessor> audio_manager_accessor_;

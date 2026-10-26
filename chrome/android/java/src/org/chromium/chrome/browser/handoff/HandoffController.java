@@ -33,7 +33,7 @@ import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.ActivityTabProvider.ActivityTabTabObserver;
 import org.chromium.chrome.browser.ExternalIntentUrlChecker;
 import org.chromium.chrome.browser.IntentHandler;
-import org.chromium.chrome.browser.document.ChromeLauncherActivity;
+import org.chromium.chrome.browser.intents.BrowserIntentUtils;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.url.GURL;
@@ -65,7 +65,7 @@ public class HandoffController implements Destroyable {
     private final Delegate mDelegate;
     private final ActivityTabTabObserver mActivityTabTabObserver;
     private final Callback<@Nullable Tab> mCurrentTabObserver =
-            tab -> updateHandoffState(HandoffEnableTrigger.TAB_SWITCH);
+            _ -> updateHandoffState(HandoffEnableTrigger.TAB_SWITCH);
 
     private @Nullable GURL mTabLastUrlSeen;
 
@@ -81,11 +81,9 @@ public class HandoffController implements Destroyable {
     private static class DelegateImpl implements Delegate {
         @Override
         public void setHandoffEnabled(Activity activity, boolean enabled) {
-            // TODO(crbug.com/444503472): Re-enabling setAllowHandoffWithoutPackageInstalled(true)
-            //  pending approval to open URLs in the receiver's default browser.
             HandoffActivityParams params =
                     new HandoffActivityParams.Builder()
-                            .setAllowHandoffWithoutPackageInstalled(false)
+                            .setAllowHandoffWithoutPackageInstalled(true)
                             .build();
             activity.setHandoffEnabled(enabled, params);
         }
@@ -104,7 +102,9 @@ public class HandoffController implements Destroyable {
             extras.putBoolean(Browser.EXTRA_CREATE_NEW_TAB, true);
 
             return new HandoffActivityData.Builder(
-                            new ComponentName(activity, ChromeLauncherActivity.class))
+                            new ComponentName(
+                                    activity,
+                                    BrowserIntentUtils.CHROME_LAUNCHER_ACTIVITY_CLASS_NAME))
                     .setFallbackUri(Uri.parse(url))
                     .setExtras(extras)
                     .build();

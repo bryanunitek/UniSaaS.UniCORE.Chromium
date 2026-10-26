@@ -31,11 +31,10 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_PLATFORM_WEB_RUNTIME_FEATURES_H_
 #define THIRD_PARTY_BLINK_PUBLIC_PLATFORM_WEB_RUNTIME_FEATURES_H_
 
+#include <string_view>
+
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_runtime_features_base.h"
-#include "third_party/blink/public/platform/web_string.h"
-
-#include <string>
 
 namespace blink {
 
@@ -43,6 +42,10 @@ namespace blink {
 // Stable features are enabled by default.
 class BLINK_PLATFORM_EXPORT WebRuntimeFeatures : public WebRuntimeFeaturesBase {
  public:
+  // MojoJS and related features are gated by protected memory, which needs to
+  // be explicitly initialized before use.
+  static void InitializeMojoJSPermissions();
+
   // Enable or disable features with status=experimental listed in
   // renderer/platform/runtime_enabled_features.json5.
   static void EnableExperimentalFeatures(bool);
@@ -57,10 +60,10 @@ class BLINK_PLATFORM_EXPORT WebRuntimeFeatures : public WebRuntimeFeaturesBase {
 
   // Enables or disables a feature by its string identifier from
   // renderer/platform/runtime_enabled_features.json5.
-  // Note: We use std::string instead of WebString because this API can
+  // Note: We use std::string_view instead of WebString because this API can
   // be called before blink::Initalize(). We can't create WebString objects
   // before blink::Initialize().
-  static void EnableFeatureFromString(const std::string& name, bool enable);
+  static void EnableFeatureFromString(std::string_view name, bool enable);
 
   // Update runtime features status from blink::features features status.
   static void UpdateStatusFromBaseFeatures();
@@ -72,6 +75,36 @@ class BLINK_PLATFORM_EXPORT WebRuntimeFeatures : public WebRuntimeFeaturesBase {
   static void EnableLocalNetworkAccessWebRTC(bool);
 
   WebRuntimeFeatures() = delete;
+
+ private:
+  friend class ScopedDisallowMojoJsForTesting;
+
+  // Helper for `ScopedDisallowMojoJsForTesting`, since setters for the
+  // RuntimeEnabledFeatures are protected.
+  static void SetMojoJSFeaturesEnabledForTesting(bool mojo_js,
+                                                 bool mojo_js_test);
+};
+
+// Scoper to disable the MojoJS and MojoJSTest runtime feature flags and revoke
+// the process-wide grants to use them. `RuntimeEnabledFeatures::Backup` isn't
+// quite sufficient here, as it is not aware of the additional protections.
+class BLINK_PLATFORM_EXPORT ScopedDisallowMojoJsForTesting {
+ public:
+  ScopedDisallowMojoJsForTesting();
+  ~ScopedDisallowMojoJsForTesting();
+
+  ScopedDisallowMojoJsForTesting(const ScopedDisallowMojoJsForTesting&) =
+      delete;
+  ScopedDisallowMojoJsForTesting& operator=(
+      const ScopedDisallowMojoJsForTesting&) = delete;
+
+ private:
+  const bool mojo_js_enabled_;
+  const bool mojo_js_test_enabled_;
+
+  const bool mojo_js_per_context_allowed_;
+  const bool mojo_js_runtime_feature_allowed_;
+  const bool mojo_js_test_runtime_feature_allowed_;
 };
 
 }  // namespace blink

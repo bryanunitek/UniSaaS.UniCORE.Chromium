@@ -17,9 +17,9 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/link_capturing/link_capturing_feature_test_support.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_process.h"
@@ -38,6 +38,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "ui/base/page_transition_types.h"
 
 namespace apps {
 
@@ -57,7 +58,8 @@ class AppInstallNavigationThrottleBrowserTest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
     ASSERT_TRUE(app_install_server_.SetUp());
 
-    apps::AppTypeInitializationWaiter(browser()->profile(), apps::AppType::kWeb)
+    apps::AppTypeInitializationWaiter(browser()->GetProfile(),
+                                      apps::AppType::kWeb)
         .Await();
   }
 
@@ -73,7 +75,7 @@ IN_PROC_BROWSER_TEST_F(AppInstallNavigationThrottleBrowserTest,
 
   auto [app_id, package_id] = app_install_server()->SetUpWebAppResponse();
 
-  auto* proxy = AppServiceProxyFactory::GetForProfile(browser()->profile());
+  auto* proxy = AppServiceProxyFactory::GetForProfile(browser()->GetProfile());
   ASSERT_TRUE(proxy->AppRegistryCache().IsAppTypeInitialized(AppType::kWeb));
 
   // Make install prompts auto accept for this block.
@@ -94,7 +96,7 @@ IN_PROC_BROWSER_TEST_F(AppInstallNavigationThrottleBrowserTest,
     // - NavigateAndTriggerInstallDialogCommand
 
     // Await install to complete.
-    web_app::WebAppTestInstallObserver(browser()->profile())
+    web_app::WebAppTestInstallObserver(browser()->GetProfile())
         .BeginListeningAndWait({app_id});
   }
 }
@@ -105,7 +107,7 @@ IN_PROC_BROWSER_TEST_F(AppInstallNavigationThrottleBrowserTest,
 
   auto [app_id, package_id] = app_install_server()->SetUpWebAppResponse();
 
-  auto* proxy = AppServiceProxyFactory::GetForProfile(browser()->profile());
+  auto* proxy = AppServiceProxyFactory::GetForProfile(browser()->GetProfile());
   ASSERT_TRUE(proxy->AppRegistryCache().IsAppTypeInitialized(AppType::kWeb));
 
   AutoAcceptInstallDialogScope auto_accept_scope;
@@ -120,7 +122,7 @@ IN_PROC_BROWSER_TEST_F(AppInstallNavigationThrottleBrowserTest,
   // - NavigateAndTriggerInstallDialogCommand
 
   // Await install to complete.
-  web_app::WebAppTestInstallObserver(browser()->profile())
+  web_app::WebAppTestInstallObserver(browser()->GetProfile())
       .BeginListeningAndWait({app_id});
 }
 
@@ -128,7 +130,7 @@ IN_PROC_BROWSER_TEST_F(AppInstallNavigationThrottleBrowserTest,
                        GeForceNowInstall) {
   // Set up a mock GeForce NOW app.
   webapps::AppId app_id =
-      web_app::test::InstallWebApp(browser()->profile(), []() {
+      web_app::test::InstallWebApp(browser()->GetProfile(), []() {
         auto info = web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(
             GURL("https://play.geforcenow.com/"));
         info->user_display_mode = web_app::mojom::UserDisplayMode::kStandalone;
@@ -162,7 +164,7 @@ IN_PROC_BROWSER_TEST_F(AppInstallNavigationThrottleBrowserTest,
   content::TestNavigationObserver observer(geforce_now_url);
   observer.StartWatchingNewWebContents();
 
-  NavigateParams params(browser()->profile(),
+  NavigateParams params(browser()->GetProfile(),
                         GURL("cros-apps://install-app?package_id=gfn:1234"),
                         ui::PAGE_TRANSITION_TYPED);
   Navigate(&params);
@@ -211,7 +213,7 @@ IN_PROC_BROWSER_TEST_F(AppInstallNavigationThrottleBrowserTest, NonSpecialUrl) {
 
   auto [app_id, package_id] = app_install_server()->SetUpWebAppResponse();
 
-  auto* proxy = AppServiceProxyFactory::GetForProfile(browser()->profile());
+  auto* proxy = AppServiceProxyFactory::GetForProfile(browser()->GetProfile());
   ASSERT_TRUE(proxy->AppRegistryCache().IsAppTypeInitialized(AppType::kWeb));
 
   // Make install prompts auto accept.
@@ -230,7 +232,7 @@ IN_PROC_BROWSER_TEST_F(AppInstallNavigationThrottleBrowserTest, NonSpecialUrl) {
   // - NavigateAndTriggerInstallDialogCommand
 
   // Await install to complete.
-  web_app::WebAppTestInstallObserver(browser()->profile())
+  web_app::WebAppTestInstallObserver(browser()->GetProfile())
       .BeginListeningAndWait({app_id});
 }
 

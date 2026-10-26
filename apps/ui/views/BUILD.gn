@@ -5,15 +5,13 @@
 import("//build/config/ui.gni")
 import("//extensions/buildflags/buildflags.gni")
 
-assert(enable_extensions)
+assert(enable_platform_apps)
 
 source_set("views") {
   sources = [
     "app_window_frame_view.cc",
     "app_window_frame_view.h",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   deps = [
     "//cc/paint",

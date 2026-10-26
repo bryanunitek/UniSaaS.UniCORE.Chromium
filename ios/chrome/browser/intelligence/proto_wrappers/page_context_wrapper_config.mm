@@ -27,7 +27,11 @@ PageContextWrapperConfig::PageContextWrapperConfig(
     bool extract_autofill,
     bool extract_autofill_credit_card_redactions,
     bool include_sensitive_payments_for_redaction,
-    bool block_unsafe_pages)
+    bool extract_autofill_otp_redactions,
+    bool extract_password_screenshot_redactions,
+    bool block_unsafe_pages,
+    bool include_same_site_only,
+    SnapshotCachePolicy snapshot_cache_policy)
     : use_refactored_extractor_(use_refactored_extractor),
       graft_cross_origin_frame_content_(graft_cross_origin_frame_content),
       use_rich_extraction_(use_rich_extraction),
@@ -39,25 +43,25 @@ PageContextWrapperConfig::PageContextWrapperConfig(
           extract_autofill_credit_card_redactions),
       include_sensitive_payments_for_redaction_(
           include_sensitive_payments_for_redaction),
-      block_unsafe_pages_(block_unsafe_pages) {}
+      extract_autofill_otp_redactions_(extract_autofill_otp_redactions),
+      extract_password_screenshot_redactions_(
+          extract_password_screenshot_redactions),
+      block_unsafe_pages_(block_unsafe_pages),
+      include_same_site_only_(include_same_site_only),
+      snapshot_cache_policy_(snapshot_cache_policy) {}
 
 bool PageContextWrapperConfig::use_refactored_extractor() const {
   return use_refactored_extractor_;
 }
 
 bool PageContextWrapperConfig::graft_cross_origin_frame_content() const {
-  return graft_cross_origin_frame_content_ || use_rich_extraction_ ||
-         use_rich_extraction_with_actionable_ || extract_paid_content_ ||
-         attempt_paid_content_json_fixing_ || extract_autofill_ ||
-         extract_autofill_credit_card_redactions_ ||
-         include_sensitive_payments_for_redaction_;
+  return graft_cross_origin_frame_content_ || use_rich_extraction();
 }
 
 bool PageContextWrapperConfig::use_rich_extraction() const {
   return use_rich_extraction_ || use_rich_extraction_with_actionable_ ||
          extract_paid_content_ || attempt_paid_content_json_fixing_ ||
-         extract_autofill_ || extract_autofill_credit_card_redactions_ ||
-         include_sensitive_payments_for_redaction_;
+         extract_autofill_;
 }
 
 bool PageContextWrapperConfig::use_rich_extraction_with_actionable() const {
@@ -65,11 +69,20 @@ bool PageContextWrapperConfig::use_rich_extraction_with_actionable() const {
 }
 
 bool PageContextWrapperConfig::extract_autofill() const {
-  return extract_autofill_ || extract_autofill_credit_card_redactions_;
+  return extract_autofill_;
 }
 
 bool PageContextWrapperConfig::extract_autofill_credit_card_redactions() const {
   return extract_autofill_credit_card_redactions_;
+}
+
+bool PageContextWrapperConfig::include_same_site_only() const {
+  return include_same_site_only_;
+}
+
+PageContextWrapperConfig::SnapshotCachePolicy
+PageContextWrapperConfig::snapshot_cache_policy() const {
+  return snapshot_cache_policy_;
 }
 
 std::string PageContextWrapperConfig::GetApcConfigVariant() const {
@@ -95,6 +108,14 @@ bool PageContextWrapperConfig::include_sensitive_payments_for_redaction()
   return include_sensitive_payments_for_redaction_;
 }
 
+bool PageContextWrapperConfig::extract_autofill_otp_redactions() const {
+  return extract_autofill_otp_redactions_;
+}
+
+bool PageContextWrapperConfig::extract_password_screenshot_redactions() const {
+  return extract_password_screenshot_redactions_;
+}
+
 bool PageContextWrapperConfig::block_unsafe_pages() const {
   return block_unsafe_pages_;
 }
@@ -109,7 +130,12 @@ PageContextWrapperConfigBuilder::PageContextWrapperConfigBuilder() {
   extract_autofill_ = false;
   extract_autofill_credit_card_redactions_ = false;
   include_sensitive_payments_for_redaction_ = false;
+  extract_autofill_otp_redactions_ = false;
+  extract_password_screenshot_redactions_ = false;
   block_unsafe_pages_ = true;
+  include_same_site_only_ = false;
+  snapshot_cache_policy_ = PageContextWrapperConfig::SnapshotCachePolicy::
+      kCaptureWhenVisibleOrUncached;
 }
 
 PageContextWrapperConfigBuilder::~PageContextWrapperConfigBuilder() = default;
@@ -132,6 +158,15 @@ PageContextWrapperConfigBuilder&
 PageContextWrapperConfigBuilder::SetUseRichExtraction(
     bool use_rich_extraction) {
   use_rich_extraction_ = use_rich_extraction;
+  return *this;
+}
+
+PageContextWrapperConfigBuilder&
+PageContextWrapperConfigBuilder::SetDefaultRichExtraction(
+    bool use_rich_extraction) {
+  use_rich_extraction_ = use_rich_extraction;
+  graft_cross_origin_frame_content_ = use_rich_extraction;
+  extract_paid_content_ = use_rich_extraction;
   return *this;
 }
 
@@ -179,16 +214,60 @@ PageContextWrapperConfigBuilder::SetIncludeSensitivePaymentsForRedaction(
 }
 
 PageContextWrapperConfigBuilder&
+PageContextWrapperConfigBuilder::SetExtractAutofillOtpRedactions(
+    bool extract_autofill_otp_redactions) {
+  extract_autofill_otp_redactions_ = extract_autofill_otp_redactions;
+  return *this;
+}
+
+PageContextWrapperConfigBuilder&
+PageContextWrapperConfigBuilder::SetExtractPasswordScreenshotRedactions(
+    bool extract_password_screenshot_redactions) {
+  extract_password_screenshot_redactions_ =
+      extract_password_screenshot_redactions;
+  return *this;
+}
+
+PageContextWrapperConfigBuilder&
 PageContextWrapperConfigBuilder::SetBlockUnsafePages(bool block_unsafe_pages) {
   block_unsafe_pages_ = block_unsafe_pages;
   return *this;
 }
 
+PageContextWrapperConfigBuilder&
+PageContextWrapperConfigBuilder::SetIncludeSameSiteOnly(
+    bool include_same_site_only) {
+  include_same_site_only_ = include_same_site_only;
+  return *this;
+}
+
+PageContextWrapperConfigBuilder&
+PageContextWrapperConfigBuilder::SetSnapshotCachePolicy(
+    PageContextWrapperConfig::SnapshotCachePolicy snapshot_cache_policy) {
+  snapshot_cache_policy_ = snapshot_cache_policy;
+  return *this;
+}
+
 PageContextWrapperConfig PageContextWrapperConfigBuilder::Build() const {
+  bool extract_autofill_credit_card_redactions =
+      extract_autofill_credit_card_redactions_ ||
+      IsPageContextAutofillCreditCardRedactionsEnabled();
+  bool include_sensitive_payments_for_redaction =
+      include_sensitive_payments_for_redaction_ ||
+      IsPageContextScreenshotSensitivePaymentRedactionEnabled();
+  bool extract_autofill_otp_redactions =
+      extract_autofill_otp_redactions_ ||
+      IsPageContextAutofillOtpRedactionsEnabled();
+  bool extract_password_screenshot_redactions =
+      extract_password_screenshot_redactions_ ||
+      IsPageContextScreenshotPasswordRedactionEnabled();
+
   return PageContextWrapperConfig(
       use_refactored_extractor_, graft_cross_origin_frame_content_,
       use_rich_extraction_, use_rich_extraction_with_actionable_,
       extract_paid_content_, attempt_paid_content_json_fixing_,
-      extract_autofill_, extract_autofill_credit_card_redactions_,
-      include_sensitive_payments_for_redaction_, block_unsafe_pages_);
+      extract_autofill_, extract_autofill_credit_card_redactions,
+      include_sensitive_payments_for_redaction, extract_autofill_otp_redactions,
+      extract_password_screenshot_redactions, block_unsafe_pages_,
+      include_same_site_only_, snapshot_cache_policy_);
 }

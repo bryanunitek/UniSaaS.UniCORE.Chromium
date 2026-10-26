@@ -66,11 +66,15 @@ public class FlatBufferTabStateSerializer implements TabStateSerializer {
     }
 
     @Override
-    public ByteBuffer serialize(TabState state, byte[] contentsStateBytes) {
+    public ByteBuffer serialize(TabState state) {
         FlatBufferBuilder fbb = new FlatBufferBuilder();
+        ByteBuffer contentsStateBuffer =
+                state.contentsState == null
+                        ? ByteBuffer.allocate(0).asReadOnlyBuffer()
+                        : state.contentsState.buffer().asReadOnlyBuffer();
+        contentsStateBuffer.rewind();
         int webContentsState =
-                TabStateFlatBufferV1.createWebContentsStateBytesVector(
-                        fbb, ByteBuffer.wrap(contentsStateBytes));
+                TabStateFlatBufferV1.createWebContentsStateBytesVector(fbb, contentsStateBuffer);
         int openerAppId =
                 fbb.createString(state.openerAppId == null ? NULL_STR : state.openerAppId);
         int url = fbb.createString(state.url == null ? NULL_STR : state.url.getSpec());
@@ -113,20 +117,19 @@ public class FlatBufferTabStateSerializer implements TabStateSerializer {
             state.isIncognito = mIsEncrypted;
             state.parentId = tabStateFlatBuffer.parentId();
             state.rootId = tabStateFlatBuffer.rootId();
-            state.openerAppId =
-                    NULL_STR.equals(tabStateFlatBuffer.openerAppId())
-                            ? null
-                            : tabStateFlatBuffer.openerAppId();
+            String openerAppId = tabStateFlatBuffer.openerAppId();
+            state.openerAppId = NULL_STR.equals(openerAppId) ? null : openerAppId;
             state.timestampMillis = tabStateFlatBuffer.timestampMillis();
             state.lastNavigationCommittedTimestampMillis =
                     tabStateFlatBuffer.lastNavigationCommittedTimestampMillis();
 
             Token tabGroupId = null;
             var flatBufferTabGroupId = tabStateFlatBuffer.tabGroupId();
-            if (flatBufferTabGroupId != null) {
+            if (flatBufferTabGroupId != null
+                    && (flatBufferTabGroupId.high() != 0 || flatBufferTabGroupId.low() != 0)) {
                 tabGroupId = new Token(flatBufferTabGroupId.high(), flatBufferTabGroupId.low());
             }
-            state.tabGroupId = (tabGroupId == null || tabGroupId.isZero()) ? null : tabGroupId;
+            state.tabGroupId = tabGroupId;
             state.userAgent = getTabUserAgentTypeFromFlatBuffer(tabStateFlatBuffer.userAgent());
             state.tabLaunchTypeAtCreation =
                     getLaunchTypeFromFlatBuffer(tabStateFlatBuffer.launchTypeAtCreation());
@@ -134,26 +137,23 @@ public class FlatBufferTabStateSerializer implements TabStateSerializer {
             state.tabHasSensitiveContent = tabStateFlatBuffer.tabHasSensitiveContent();
             state.isPinned = tabStateFlatBuffer.isPinned();
 
-            boolean isUrlNull = NULL_STR.equals(tabStateFlatBuffer.url());
-            state.url = isUrlNull ? null : new GURL(tabStateFlatBuffer.url());
+            String url = tabStateFlatBuffer.url();
+            state.url = NULL_STR.equals(url) ? null : new GURL(url);
             if (state.url != null && !state.url.isValid()) state.url = null;
 
+            @Nullable ByteBuffer rawBuffer = tabStateFlatBuffer.webContentsStateBytesAsByteBuffer();
             ByteBuffer webContentsStateBuffer =
-                    tabStateFlatBuffer.webContentsStateBytesAsByteBuffer() == null
-                            ? ByteBuffer.allocateDirect(0)
-                            : tabStateFlatBuffer.webContentsStateBytesAsByteBuffer().slice();
-            if (mIsEncrypted) {
+                    rawBuffer == null ? ByteBuffer.allocateDirect(0) : rawBuffer.slice();
+            if (mIsEncrypted || !webContentsStateBuffer.isDirect()) {
                 ByteBuffer buffer = ByteBuffer.allocateDirect(webContentsStateBuffer.remaining());
                 buffer.put(webContentsStateBuffer);
-                state.contentsState =
-                        new WebContentsState(
-                                buffer, WebContentsState.CONTENTS_STATE_CURRENT_VERSION);
-            } else {
-                state.contentsState =
-                        new WebContentsState(
-                                webContentsStateBuffer,
-                                WebContentsState.CONTENTS_STATE_CURRENT_VERSION);
+                buffer.rewind();
+                webContentsStateBuffer = buffer;
             }
+            state.contentsState =
+                    new WebContentsState(
+                            webContentsStateBuffer,
+                            WebContentsState.CONTENTS_STATE_CURRENT_VERSION);
             return state;
         } catch (IndexOutOfBoundsException e) {
             RecordHistogram.recordEnumeratedHistogram(
@@ -225,6 +225,8 @@ public class FlatBufferTabStateSerializer implements TabStateSerializer {
                 return TabLaunchType.FROM_READING_LIST;
             case TabLaunchTypeAtCreation.FROM_OMNIBOX:
                 return TabLaunchType.FROM_OMNIBOX;
+            case TabLaunchTypeAtCreation.FROM_OMNIBOX_BACKGROUND:
+                return TabLaunchType.FROM_OMNIBOX_BACKGROUND;
             case TabLaunchTypeAtCreation.UNSET:
                 return TabLaunchType.UNSET;
             case TabLaunchTypeAtCreation.FROM_SYNC_BACKGROUND:
@@ -249,6 +251,8 @@ public class FlatBufferTabStateSerializer implements TabStateSerializer {
                 return TabLaunchType.FROM_TIPS_NOTIFICATIONS;
             case TabLaunchTypeAtCreation.FROM_TAB_LIST_INTERFACE_BACKGROUND:
                 return TabLaunchType.FROM_TAB_LIST_INTERFACE_BACKGROUND;
+            case TabLaunchTypeAtCreation.FROM_SESSION_STARTUP_WITH_URLS_PREF:
+                return TabLaunchType.FROM_SESSION_STARTUP_WITH_URLS_PREF;
             case TabLaunchTypeAtCreation.SIZE:
                 return TabLaunchType.SIZE;
             case TabLaunchTypeAtCreation.UNKNOWN:
@@ -309,6 +313,8 @@ public class FlatBufferTabStateSerializer implements TabStateSerializer {
                 return TabLaunchTypeAtCreation.FROM_READING_LIST;
             case TabLaunchType.FROM_OMNIBOX:
                 return TabLaunchTypeAtCreation.FROM_OMNIBOX;
+            case TabLaunchType.FROM_OMNIBOX_BACKGROUND:
+                return TabLaunchTypeAtCreation.FROM_OMNIBOX_BACKGROUND;
             case TabLaunchType.UNSET:
                 return TabLaunchTypeAtCreation.UNSET;
             case TabLaunchType.FROM_SYNC_BACKGROUND:
@@ -335,6 +341,8 @@ public class FlatBufferTabStateSerializer implements TabStateSerializer {
                 return TabLaunchTypeAtCreation.FROM_TIPS_NOTIFICATIONS;
             case TabLaunchType.FROM_TAB_LIST_INTERFACE_BACKGROUND:
                 return TabLaunchTypeAtCreation.FROM_TAB_LIST_INTERFACE_BACKGROUND;
+            case TabLaunchType.FROM_SESSION_STARTUP_WITH_URLS_PREF:
+                return TabLaunchTypeAtCreation.FROM_SESSION_STARTUP_WITH_URLS_PREF;
             case TabLaunchType.SIZE:
                 return TabLaunchTypeAtCreation.SIZE;
             default:

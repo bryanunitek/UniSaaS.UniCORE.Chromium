@@ -4,24 +4,32 @@
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_encoded_video_frame_delegate.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <optional>
+#include <string>
 #include <utility>
+#include <variant>
 
+#include "base/check.h"
 #include "base/feature_list.h"
+#include "base/synchronization/lock.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_encoded_video_frame_type.h"
+#include "third_party/blink/renderer/core/typed_arrays/array_buffer/array_buffer_contents.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/modules/peerconnection/peer_connection_features.h"
 #include "third_party/blink/renderer/modules/peerconnection/peer_connection_util.h"
-#include "third_party/blink/renderer/platform/bindings/exception_code.h"
-#include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/bindings/v8_binding.h"
 #include "third_party/blink/renderer/platform/peerconnection/webrtc_util.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/webrtc/api/frame_transformer_factory.h"
 #include "third_party/webrtc/api/frame_transformer_interface.h"
+#include "third_party/webrtc/api/units/timestamp.h"
+#include "third_party/webrtc/api/video/video_frame_metadata.h"
 
 namespace blink {
-
-static constexpr char kRTCEncodedVideoFrameDetachKey[] = "RTCEncodedVideoFrame";
 
 const void* const RTCEncodedVideoFramesAttachment::kAttachmentKey =
     &RTCEncodedVideoFramesAttachment::kAttachmentKey;
@@ -40,14 +48,17 @@ V8RTCEncodedVideoFrameType::Enum RTCEncodedVideoFrameDelegate::Type() const {
   return webrtc_frame_ ? ComputeType() : post_neuter_metadata_.frame_type;
 }
 
-uint32_t RTCEncodedVideoFrameDelegate::RtpTimestamp() const {
+std::optional<uint32_t> RTCEncodedVideoFrameDelegate::RtpTimestamp() const {
   base::AutoLock lock(lock_);
-  if (!webrtc_frame_) {
-    return post_neuter_metadata_.rtp_timestamp;
+  std::optional<webrtc::RtpTimestampInfo> rtp_timestamp_info =
+      webrtc_frame_ ? std::make_optional(webrtc_frame_->GetRtpTimestampInfo())
+                    : post_neuter_metadata_.rtp_timestamp_info;
+  if (rtp_timestamp_info &&
+      std::holds_alternative<webrtc::RtpTimestampWithOffset>(
+          *rtp_timestamp_info)) {
+    return std::get<webrtc::RtpTimestampWithOffset>(*rtp_timestamp_info);
   }
-  webrtc::RtpTimestampInfo info = webrtc_frame_->GetRtpTimestampInfo();
-  CHECK(std::holds_alternative<webrtc::RtpTimestampWithOffset>(info));
-  return std::get<webrtc::RtpTimestampWithOffset>(info);
+  return std::nullopt;
 }
 
 std::optional<webrtc::Timestamp>
@@ -57,32 +68,10 @@ RTCEncodedVideoFrameDelegate::PresentationTimestamp() const {
                        : post_neuter_metadata_.presentation_timestamp;
 }
 
-DOMArrayBuffer* RTCEncodedVideoFrameDelegate::CreateDataBuffer(
-    v8::Isolate* isolate) const {
-  ArrayBufferContents contents;
-  {
-    base::AutoLock lock(lock_);
-    if (!webrtc_frame_) {
-      // WebRTC frame already passed, return a detached ArrayBuffer.
-      DOMArrayBuffer* buffer = DOMArrayBuffer::Create(
-          /*num_elements=*/static_cast<size_t>(0), /*element_byte_size=*/1);
-      ArrayBufferContents contents_to_drop;
-      NonThrowableExceptionState exception_state;
-      buffer->Transfer(isolate,
-                       V8AtomicString(isolate, kRTCEncodedVideoFrameDetachKey),
-                       contents_to_drop, exception_state);
-      return buffer;
-    }
-
-    auto data = webrtc_frame_->GetData();
-    contents = ArrayBufferContents(
-        data.size(), 1, ArrayBufferContents::kNotShared,
-        ArrayBufferContents::kDontInitialize,
-        ArrayBufferContents::AllocationFailureBehavior::kCrash);
-    CHECK(contents.IsValid());
-    contents.ByteSpan().copy_from(data);
-  }
-  return DOMArrayBuffer::Create(std::move(contents));
+DOMArrayBuffer* RTCEncodedVideoFrameDelegate::CreateDataBuffer() const {
+  base::AutoLock lock(lock_);
+  return webrtc_frame_ ? DOMArrayBuffer::Create(webrtc_frame_->GetData())
+                       : DOMArrayBuffer::Create(ArrayBufferContents());
 }
 
 void RTCEncodedVideoFrameDelegate::SetData(const DOMArrayBuffer* data) {
@@ -192,10 +181,8 @@ RTCEncodedVideoFrameDelegate::PassWebRtcFrame() {
       post_neuter_metadata_.capture_time = ComputeCaptureTime();
       post_neuter_metadata_.sender_capture_time_offset =
           ComputeSenderCaptureTimeOffset();
-      webrtc::RtpTimestampInfo info = webrtc_frame_->GetRtpTimestampInfo();
-      CHECK(std::holds_alternative<webrtc::RtpTimestampWithOffset>(info));
-      post_neuter_metadata_.rtp_timestamp =
-          std::get<webrtc::RtpTimestampWithOffset>(info);
+      post_neuter_metadata_.rtp_timestamp_info =
+          webrtc_frame_->GetRtpTimestampInfo();
       post_neuter_metadata_.presentation_timestamp =
           webrtc_frame_->GetPresentationTimestamp();
     }

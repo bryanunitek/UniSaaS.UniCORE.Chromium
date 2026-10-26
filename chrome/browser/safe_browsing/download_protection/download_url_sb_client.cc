@@ -12,6 +12,7 @@
 #include "components/safe_browsing/content/browser/client_report_util.h"
 #include "components/safe_browsing/content/browser/safe_browsing_navigation_observer_manager.h"
 #include "components/safe_browsing/content/browser/ui_manager.h"
+#include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
 #include "components/safe_browsing/core/browser/referrer_chain_provider.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "content/public/browser/browser_thread.h"
@@ -24,7 +25,9 @@ DownloadUrlSBClient::DownloadUrlSBClient(
     DownloadProtectionService* service,
     CheckDownloadCallback callback,
     const scoped_refptr<SafeBrowsingUIManager>& ui_manager,
-    const scoped_refptr<SafeBrowsingDatabaseManager>& database_manager)
+    const scoped_refptr<SafeBrowsingDatabaseManager>& database_manager,
+    base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+        v5_get_hash_protocol_manager)
     : SafeBrowsingDatabaseManager::Client(GetPassKey()),
       item_(item),
       sha256_hash_(item->GetHash()),
@@ -36,23 +39,25 @@ DownloadUrlSBClient::DownloadUrlSBClient(
       callback_(std::move(callback)),
       ui_manager_(ui_manager),
       start_time_(base::TimeTicks::Now()),
-      database_manager_(database_manager) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(item_);
-  DCHECK(service_);
+      database_manager_(database_manager),
+      v5_get_hash_protocol_manager_(v5_get_hash_protocol_manager) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(item_, base::NotFatalUntil::M162);
+  CHECK(service_, base::NotFatalUntil::M162);
   download_item_observation_.Observe(item_.get());
 }
 
 // Implements DownloadItem::Observer.
 void DownloadUrlSBClient::OnDownloadDestroyed(
     download::DownloadItem* download) {
-  DCHECK(download_item_observation_.IsObservingSource(item_.get()));
+  CHECK(download_item_observation_.IsObservingSource(item_.get()),
+        base::NotFatalUntil::M162);
   download_item_observation_.Reset();
   item_ = nullptr;
 }
 
 void DownloadUrlSBClient::StartCheck() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (!database_manager_.get() ||
       database_manager_->CheckDownloadUrl(url_chain_, this)) {
     CheckDone(SBThreatType::SB_THREAT_TYPE_SAFE);
@@ -77,8 +82,13 @@ void DownloadUrlSBClient::OnCheckDownloadUrlResult(
   Release();
 }
 
+base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+DownloadUrlSBClient::GetV5GetHashProtocolManager() {
+  return v5_get_hash_protocol_manager_;
+}
+
 DownloadUrlSBClient::~DownloadUrlSBClient() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 }
 
 void DownloadUrlSBClient::CheckDone(SBThreatType threat_type) {
@@ -117,7 +127,7 @@ void DownloadUrlSBClient::ReportMalware() {
 }
 
 void DownloadUrlSBClient::IdentifyReferrerChain() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   if (!item_)
     return;
 

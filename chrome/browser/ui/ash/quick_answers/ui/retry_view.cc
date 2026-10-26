@@ -79,7 +79,11 @@ RetryView::RetryView() {
   retry_label_button_->button_controller()->set_notify_action(
       views::ButtonController::NotifyAction::kOnPress);
 
-  SetDesign(Design::kCurrent);
+  first_line_label_->SetFontList(GetFirstLineFontList());
+  first_line_label_->SetLineHeight(GetFirstLineHeight());
+
+  second_line_label_->SetFontList(GetSecondLineFontList());
+  second_line_label_->SetLineHeight(GetSecondLineHeight());
 }
 
 RetryView::~RetryView() = default;
@@ -98,14 +102,6 @@ void RetryView::SetRetryButtonCallback(
   retry_button_callback_ = retry_button_callback;
 }
 
-void RetryView::SetDesign(Design design) {
-  first_line_label_->SetFontList(GetFirstLineFontList(design));
-  first_line_label_->SetLineHeight(GetFirstLineHeight(design));
-
-  second_line_label_->SetFontList(GetSecondLineFontList(design));
-  second_line_label_->SetLineHeight(GetSecondLineHeight(design));
-}
-
 void RetryView::OnRetryButtonPressed() {
   if (retry_button_callback_.is_null()) {
     return;
@@ -115,7 +111,7 @@ void RetryView::OnRetryButtonPressed() {
 }
 
 BEGIN_METADATA(RetryView)
-ADD_PROPERTY_METADATA(std::u16string_view, FirstLineText)
+ADD_PROPERTY_METADATA(std::u16string, FirstLineText)
 END_METADATA
 
 }  // namespace quick_answers

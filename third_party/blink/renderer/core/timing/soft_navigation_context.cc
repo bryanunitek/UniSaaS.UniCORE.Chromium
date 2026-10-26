@@ -4,7 +4,6 @@
 
 #include "third_party/blink/renderer/core/timing/soft_navigation_context.h"
 
-#include "base/feature_list.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/blink/renderer/core/dom/container_node.h"
 #include "third_party/blink/renderer/core/dom/node.h"
@@ -35,10 +34,6 @@ SoftNavigationContext::SoftNavigationContext(
       track_(perfetto::NamedTrack::FromPointer("blink::SoftNavigation", this)) {
   CHECK(initial_event_timing_);
   CHECK(initial_event_timing_->IsInteraction());
-  // If this trips in a unittest, you may need to set the timestamps on the
-  // events you're creating. E.g., when creating WebPointerEvent, invoke
-  // SetTimeStamp(base::TimeTicks::Now()). See crbug.com/490814752.
-  CHECK(!initial_event_timing_->GetStartTime().is_null());
 
   TRACE_EVENT_BEGIN("loading", "SoftNavigation", track_, TimeOrigin());
 
@@ -107,11 +102,7 @@ bool SoftNavigationContext::AddPaintedArea(PaintTimingRecord* record) {
   uint64_t painted_area = rect.size().GetArea();
 
   Node* node = record->GetNode();
-  // TODO(crbug.com/441914208): `node` can be null here, which is unexpected.
-  // Change this back to a CHECK when the root cause is understood and fixed.
-  if (!node) {
-    return false;
-  }
+  CHECK(node);
 
   painted_area_ += painted_area;
   TRACE_EVENT_INSTANT(
@@ -133,6 +124,11 @@ bool SoftNavigationContext::AddPaintedArea(PaintTimingRecord* record) {
 }
 
 bool SoftNavigationContext::SatisfiesSoftNavNonPaintCriteria() const {
+  // TODO(crbug.com/490814752): Event StartTime value seems to be missing in
+  // some unittests.  It should not be missing from any real events.
+  if (TimeOrigin().is_null()) {
+    return false;
+  }
   // These start false, and become true as we observe effects.
   if (!HasDomModification() || !HasUrl()) {
     return false;
@@ -211,7 +207,7 @@ void SoftNavigationContext::WriteIntoTrace(
   perfetto::TracedDictionary dict = std::move(context).WriteDictionary();
 
   dict.Add("softNavContextId", context_id_);
-  dict.Add("performanceTimelineNavigationId", navigation_id_);
+  dict.Add("performanceTimelineNavigationId", navigation_id_.web_exposed_id);
 
   dict.Add("URL", AttributionUrl());
   dict.Add("timeOrigin", TimeOrigin());
@@ -251,28 +247,22 @@ void SoftNavigationContext::EmitSoftNavigation() {
   CHECK(SatisfiesSoftNavNonPaintCriteria());
   was_emitted_ = true;
 
-  if (base::FeatureList::IsEnabled(kSoftNavigationTraceEvents)) {
-    // This trace event reports the TimeOrigin() value which we already report
-    // as part of the umbrella "SoftNavigation" trace, as an instant event.
-    // However, that other event reports all new *potential* soft navs, while
-    // this event only reports actually *emitted* soft navs.
-    // This is used by DevTools performance profiler to mark the perf timeline.
-    TRACE_EVENT_INSTANT("scheduler,devtools.timeline,loading",
-                        "SoftNavigationStart", track_, TimeOrigin(), "context",
-                        *this, "frame",
-                        GetFrameIdForTracing(window_->GetFrame()));
+  // This trace event reports the TimeOrigin() value which we already report
+  // as part of the umbrella "SoftNavigation" trace, as an instant event.
+  // However, that other event reports all new *potential* soft navs, while
+  // this event only reports actually *emitted* soft navs.
+  // This is used by DevTools performance profiler to mark the perf timeline.
+  TRACE_EVENT_INSTANT("scheduler,devtools.timeline,loading",
+                      "SoftNavigationStart", track_, TimeOrigin(), "context",
+                      *this, "frame",
+                      GetFrameIdForTracing(window_->GetFrame()));
 
-    // This trace event reports the when the soft nav heuristics were observerd,
-    // and thus when the new navigationId was created, and when the performance
-    // timeline is logically "sliced" into soft-nav sub-timelines.
-    TRACE_EVENT_INSTANT("scheduler,devtools.timeline,loading",
-                        "SoftNavigationEmitted", track_,
-                        soft_navigation_slicing_time_, "context", *this);
-  }
-
-  if (!RuntimeEnabledFeatures::SoftNavigationHeuristicsEnabled(window_)) {
-    return;
-  }
+  // This trace event reports the when the soft nav heuristics were observerd,
+  // and thus when the new navigationId was created, and when the performance
+  // timeline is logically "sliced" into soft-nav sub-timelines.
+  TRACE_EVENT_INSTANT("scheduler,devtools.timeline,loading",
+                      "SoftNavigationEmitted", track_,
+                      soft_navigation_slicing_time_, "context", *this);
 
   WindowPerformance* performance = DOMWindowPerformance::performance(*window_);
   CHECK(performance);
@@ -301,9 +291,6 @@ void SoftNavigationContext::EmitLcpPerformanceEntry(
     const AtomicString& id,
     const String& url,
     Element* element) {
-  if (!RuntimeEnabledFeatures::SoftNavigationHeuristicsEnabled(window_)) {
-    return;
-  }
   // This should not be called after we've been shut down.
   CHECK(!HasBeenShutdown());
 
@@ -313,7 +300,7 @@ void SoftNavigationContext::EmitLcpPerformanceEntry(
       /*start_time=*/paint_timing_info.presentation_time,
       /*render_time=*/paint_timing_info.presentation_time, paint_size,
       performance->MonotonicTimeToDOMHighResTimeStamp(load_time), id, url,
-      element, window_, performance->NavigationId());
+      element, window_, performance->NavigationId().web_exposed_id);
   lcp_entry->SetPaintTimingInfo(paint_timing_info);
 
   current_lcp_entry_ = lcp_entry;
@@ -322,7 +309,7 @@ void SoftNavigationContext::EmitLcpPerformanceEntry(
       /*start_time=*/performance->MonotonicTimeToDOMHighResTimeStamp(
           TimeOrigin()),
       /*render_time=*/paint_timing_info.presentation_time, current_lcp_entry_,
-      window_, performance->NavigationId(),
+      window_, performance->NavigationId().web_exposed_id,
       initial_event_timing_->interactionId());
   entry->SetPaintTimingInfo(paint_timing_info);
   performance->OnInteractionContentfulPaintUpdated(entry);

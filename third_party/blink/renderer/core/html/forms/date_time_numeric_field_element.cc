@@ -33,6 +33,7 @@
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 #include "third_party/blink/renderer/platform/text/text_run.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
@@ -97,23 +98,24 @@ int DateTimeNumericFieldElement::DefaultValueForStepUp() const {
 
 void DateTimeNumericFieldElement::SetFocused(
     bool value,
-    mojom::blink::FocusType focus_type) {
+    mojom::blink::FocusType focus_type,
+    BlurEventBehavior blur_event_behavior) {
   if (!value) {
     int type_ahead_value = TypeAheadValue();
     type_ahead_buffer_.Clear();
     if (type_ahead_value >= 0)
       SetValueAsInteger(type_ahead_value, kDispatchEvent);
   }
-  DateTimeFieldElement::SetFocused(value, focus_type);
+  DateTimeFieldElement::SetFocused(value, focus_type, blur_event_behavior);
 }
 
 String DateTimeNumericFieldElement::FormatValue(int value) const {
   Locale& locale = LocaleForOwner();
   if (hard_limits_.maximum > 999)
-    return locale.ConvertToLocalizedNumber(String::Format("%04d", value));
+    return locale.ConvertToLocalizedNumber(Format("{:04}", value));
   if (hard_limits_.maximum > 99)
-    return locale.ConvertToLocalizedNumber(String::Format("%03d", value));
-  return locale.ConvertToLocalizedNumber(String::Format("%02d", value));
+    return locale.ConvertToLocalizedNumber(Format("{:03}", value));
+  return locale.ConvertToLocalizedNumber(Format("{:02}", value));
 }
 
 void DateTimeNumericFieldElement::HandleKeyboardEvent(
@@ -174,6 +176,10 @@ int DateTimeNumericFieldElement::Maximum() const {
 
 String DateTimeNumericFieldElement::Placeholder() const {
   return placeholder_;
+}
+
+void DateTimeNumericFieldElement::ResetTypeAhead() {
+  type_ahead_buffer_.Clear();
 }
 
 void DateTimeNumericFieldElement::SetEmptyValue(EventBehavior event_behavior) {

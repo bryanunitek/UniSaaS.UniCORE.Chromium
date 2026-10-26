@@ -7,16 +7,15 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/containers/flat_map.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
-#include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "base/time/time.h"
 #include "base/version.h"
@@ -35,14 +34,15 @@
 #include "components/update_client/unzip/unzip_impl.h"
 #include "components/update_client/unzipper.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "url/gurl.h"
 
 namespace update_client {
 namespace {
 std::vector<GURL> MakeDefaultUrls() {
   return std::vector<GURL>{
-      GURL(base::StringPrintf("%s://%s%s", kPostInterceptScheme,
-                              kPostInterceptHostname, kPostInterceptPath))};
+      GURL(absl::StrFormat("%s://%s%s", kPostInterceptScheme,
+                           kPostInterceptHostname, kPostInterceptPath))};
 }
 }  // namespace
 
@@ -63,7 +63,7 @@ TestConfigurator::TestConfigurator(PrefService* pref_service)
       updater_state_provider_(base::BindRepeating(
           [](bool /*is_machine*/) { return UpdaterStateAttributes(); })),
       is_network_connection_metered_(false) {
-  std::ignore = crx_cache_root_temp_dir_.CreateUniqueTempDir();
+  CHECK(crx_cache_root_temp_dir_.CreateUniqueTempDir());
   crx_cache_ =
       base::MakeRefCounted<CrxCache>(crx_cache_root_temp_dir_.GetPath().Append(
           FILE_PATH_LITERAL("crx_cache")));
@@ -137,6 +137,11 @@ std::string TestConfigurator::GetLang() const {
 std::string TestConfigurator::GetOSLongName() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return "Fake Operating System";
+}
+
+std::string TestConfigurator::GetDeviceFormFactor() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return std::string();
 }
 
 base::flat_map<std::string, std::string> TestConfigurator::ExtraRequestParams()

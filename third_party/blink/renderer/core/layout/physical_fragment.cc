@@ -211,7 +211,7 @@ class FragmentTreeDumper {
       const PhysicalFragment* box = current.BoxFragment();
       if (box && !box->IsInlineBox()) {
         Vector<String> attributes;
-        if (current->IsHiddenForPaint()) {
+        if (current->IsHiddenDueToLayout()) {
           attributes.push_back("hidden");
         }
         Append(box, current.OffsetInContainerFragment(), attributes, indent);
@@ -328,7 +328,7 @@ PhysicalFragment::PhysicalFragment(FragmentBuilder* builder,
       type_(type),
       sub_type_(sub_type),
       style_variant_((unsigned)builder->style_variant_),
-      is_hidden_for_paint_(builder->is_hidden_for_paint_),
+      is_hidden_due_to_layout_(builder->is_hidden_due_to_layout_),
       has_floating_descendants_for_paint_(false),
       has_running_anchor_transform_animation_(
           builder->has_running_anchor_transform_animation_),
@@ -389,7 +389,7 @@ PhysicalFragment::PhysicalFragment(const PhysicalFragment& other)
       type_(other.type_),
       sub_type_(other.sub_type_),
       style_variant_(other.style_variant_),
-      is_hidden_for_paint_(other.is_hidden_for_paint_),
+      is_hidden_due_to_layout_(other.is_hidden_due_to_layout_),
       has_floating_descendants_for_paint_(
           other.has_floating_descendants_for_paint_),
       has_adjoining_object_descendants_(
@@ -673,17 +673,15 @@ LogicalRect PhysicalFragment::ConvertChildToLogical(
 
 String PhysicalFragment::ToString() const {
   StringBuilder output;
-  output.AppendFormat("Type: '%d' Size: '%s'", Type(),
-                      Size().ToString().Ascii().c_str());
+  FormatTo(output, "Type: '{}' Size: '{}'", Type(), Size().ToString());
   switch (Type()) {
     case kFragmentBox:
-      output.AppendFormat(", BoxType: '%s'",
-                          StringForBoxType(*this).Ascii().c_str());
+      FormatTo(output, ", BoxType: '{}'", StringForBoxType(*this));
       break;
     case kFragmentLineBox:
       break;
   }
-  return output.ToString();
+  return output.ReleaseString();
 }
 
 String PhysicalFragment::DumpFragmentTree(
@@ -736,6 +734,15 @@ PhysicalFragment::StickyDescendants() const {
       Persistent<GCedHeapVector<SplitAxisItem<LayoutBoxModelObject>>>, empty,
       (MakeGarbageCollected<
           GCedHeapVector<SplitAxisItem<LayoutBoxModelObject>>>()));
+  return *empty;
+}
+
+const GCedHeapVector<SnapArea>& PhysicalFragment::SnapAreas() const {
+  if (propagated_data_ && propagated_data_->snap_areas) {
+    return *propagated_data_->snap_areas;
+  }
+  DEFINE_STATIC_LOCAL(Persistent<GCedHeapVector<SnapArea>>, empty,
+                      (MakeGarbageCollected<GCedHeapVector<SnapArea>>()));
   return *empty;
 }
 

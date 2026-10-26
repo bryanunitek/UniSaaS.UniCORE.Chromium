@@ -9,11 +9,11 @@
 #include <vector>
 
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/browser/extensions/test_extension_system.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/create_application_shortcut_view_test_support.h"
@@ -50,7 +50,6 @@
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/manifest_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/blink/public/common/features.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/views/test/dialog_test.h"
 #include "ui/views/widget/any_widget_observer.h"
@@ -203,7 +202,7 @@ class AppHomePageHandlerTest : public InProcessBrowserTest {
  protected:
   std::unique_ptr<TestAppHomePageHandler> GetAppHomePageHandler() {
     content::WebContents* contents =
-        browser()->tab_strip_model()->GetWebContentsAt(0);
+        browser()->GetTabStripModel()->GetWebContentsAt(0);
     test_web_ui_.set_web_contents(contents);
 
     return std::make_unique<TestAppHomePageHandler>(&test_web_ui_, profile(),
@@ -225,7 +224,7 @@ class AppHomePageHandlerTest : public InProcessBrowserTest {
     return installed_app_id;
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   void UninstallTestWebApp(const webapps::AppId& app_id) {
     web_app::test::UninstallWebApp(profile(), app_id);
@@ -481,7 +480,7 @@ IN_PROC_BROWSER_TEST_F(AppHomePageHandlerTest, ShowWebAppSettings) {
   page_handler->ShowAppSettings(installed_app_id);
   // Wait for new web content to be created.
   nav_observer.GetWebContents();
-  GURL url = browser()->tab_strip_model()->GetActiveWebContents()->GetURL();
+  GURL url = browser()->GetTabStripModel()->GetActiveWebContents()->GetURL();
   EXPECT_EQ(url, GURL(chrome::kChromeUIWebAppSettingsURL + installed_app_id));
 }
 
@@ -586,10 +585,6 @@ class AppHomePageHandlerUpdateTest : public AppHomePageHandlerTest {
     AppHomePageHandlerTest::SetUpOnMainThread();
     EXPECT_TRUE(embedded_https_test_server().Start());
   }
-
- private:
-  base::test::ScopedFeatureList feature_list_{
-      blink::features::kWebAppMigrationApi};
 };
 
 IN_PROC_BROWSER_TEST_F(AppHomePageHandlerUpdateTest, HandlePageCalls) {
@@ -603,7 +598,7 @@ IN_PROC_BROWSER_TEST_F(AppHomePageHandlerUpdateTest, HandlePageCalls) {
 
   const GURL app_url =
       embedded_https_test_server().GetURL("/web_apps/updating/index.html");
-  Browser* app_browser =
+  BrowserWindowInterface* app_browser =
       web_app::InstallWebAppFromPageGetBrowser(browser(), app_url);
   const webapps::AppId app_id =
       web_app::AppBrowserController::From(app_browser)->app_id();
@@ -649,7 +644,7 @@ IN_PROC_BROWSER_TEST_F(AppHomePageHandlerUpdateTest, MigrationCalls) {
 
   const GURL from_url = embedded_https_test_server().GetURL(
       "/web_apps/migration/migrate_from/no_migration_info.html");
-  Browser* app_browser =
+  BrowserWindowInterface* app_browser =
       web_app::InstallWebAppFromPageGetBrowser(browser(), from_url);
   const webapps::AppId source_app_id =
       web_app::AppBrowserController::From(app_browser)->app_id();
@@ -669,7 +664,7 @@ IN_PROC_BROWSER_TEST_F(AppHomePageHandlerUpdateTest, MigrationCalls) {
   // migration.
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), to_url));
   web_app::test::WaitForLoadCompleteAndMaybeManifestSeen(
-      *browser()->tab_strip_model()->GetActiveWebContents());
+      *browser()->GetTabStripModel()->GetActiveWebContents());
   provider->command_manager().AwaitAllCommandsCompleteForTesting();
 
   // Trigger the dialog and accept the pending migration. The `model` is scoped
@@ -678,7 +673,7 @@ IN_PROC_BROWSER_TEST_F(AppHomePageHandlerUpdateTest, MigrationCalls) {
   views::NamedWidgetShownWaiter update_dialog_waiter(
       views::test::AnyWidgetTestPasskey{}, "WebAppUpdateReviewDialog");
   {
-    chrome::Reload(app_browser, WindowOpenDisposition::CURRENT_TAB);
+    chrome::Reload(app_browser, WindowOpenDisposition::kCurrentTab);
     WebAppMenuModel model(/*provider=*/nullptr, app_browser);
     model.Init();
     model.ExecuteCommand(IDC_WEB_APP_UPGRADE_DIALOG, /*event_flags=*/0);

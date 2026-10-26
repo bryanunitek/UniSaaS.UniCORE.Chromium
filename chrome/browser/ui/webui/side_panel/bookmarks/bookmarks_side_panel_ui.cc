@@ -8,12 +8,12 @@
 #include <utility>
 
 #include "base/check_is_test.h"
-#include "base/feature_list.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_features.h"
 #include "chrome/browser/commerce/shopping_service_factory.h"
+#include "chrome/browser/enterprise/isolated_mode/isolated_mode_settings_service_factory.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/page_image_service/image_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -27,6 +27,7 @@
 #include "chrome/browser/ui/webui/plural_string_handler.h"
 #include "chrome/browser/ui/webui/sanitized_image/sanitized_image_source.h"
 #include "chrome/browser/ui/webui/side_panel/bookmarks/bookmarks_page_handler.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/side_panel_bookmarks_resources.h"
 #include "chrome/grit/side_panel_bookmarks_resources_map.h"
@@ -43,7 +44,6 @@
 #include "components/page_image_service/image_service_handler.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
-#include "components/signin/public/base/signin_switches.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -51,6 +51,7 @@
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/webui/web_ui_util.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/style/platform_style.h"
 #include "ui/webui/webui_util.h"
 
@@ -125,7 +126,6 @@ BookmarksSidePanelUI::BookmarksSidePanelUI(content::WebUI* web_ui)
       {"editBookmarkListA11yLabel",
        IDS_BOOKMARKS_EDIT_BOOKMARK_LIST_A11Y_LABEL},
       {"cancelA11yLabel", IDS_CANCEL},
-      {"bookmarkNameA11yLabel", IDS_BOOKMARK_AX_EDITOR_NAME_LABEL},
       {"addCurrentTab", IDS_READ_LATER_ADD_CURRENT_TAB},
       {"emptyTitle", IDS_BOOKMARKS_EMPTY_STATE_TITLE},
       {"emptyBody", IDS_BOOKMARKS_EMPTY_STATE_BODY},
@@ -147,6 +147,9 @@ BookmarksSidePanelUI::BookmarksSidePanelUI(content::WebUI* web_ui)
       {"menuOpenIncognito", IDS_BOOKMARK_MANAGER_MENU_OPEN_INCOGNITO},
       {"menuOpenIncognitoWithCount",
        IDS_BOOKMARK_MANAGER_MENU_OPEN_ALL_INCOGNITO_WITH_COUNT},
+      {"menuOpenIsolated", IDS_BOOKMARK_MANAGER_MENU_OPEN_ISOLATED},
+      {"menuOpenIsolatedWithCount",
+       IDS_BOOKMARK_MANAGER_MENU_OPEN_ALL_ISOLATED_WITH_COUNT},
       {"menuOpenNewTabGroup", IDS_BOOKMARK_MANAGER_MENU_OPEN_IN_NEW_TAB_GROUP},
       {"menuOpenNewTabGroupWithCount",
        IDS_BOOKMARK_MANAGER_MENU_OPEN_ALL_NEW_TAB_GROUP_WITH_COUNT},
@@ -160,16 +163,8 @@ BookmarksSidePanelUI::BookmarksSidePanelUI(content::WebUI* web_ui)
       {"newFolderTitle", IDS_BOOKMARK_EDITOR_NEW_FOLDER_NAME},
       {"undoBookmarkDeletion", IDS_UNDO_BOOKMARK_DELETION},
       {"urlFolderDescription", IDS_BOOKMARKS_URL_FOLDER_DESCRIPTION},
-      {"editBookmark", IDS_BOOKMARKS_EDIT_BOOKMARK},
-      {"editMoveFolderTo", IDS_BOOKMARKS_EDIT_MOVE_TO},
-      {"editNewFolder", IDS_BOOKMARKS_EDIT_NEW_FOLDER},
-      {"editCancel", IDS_BOOKMARKS_EDIT_CANCEL},
-      {"editSave", IDS_BOOKMARKS_EDIT_SAVE},
-      {"editName", IDS_BOOKMARKS_EDIT_NAME},
-      {"editUrl", IDS_BOOKMARKS_EDIT_URL},
       {"disabledFeature", IDS_BOOKMARKS_DISABLED_FEATURE},
       {"backButtonLabel", IDS_BOOKMARKS_BACK_BUTTON_LABEL},
-      {"forwardButtonLabel", IDS_BOOKMARKS_FORWARD_BUTTON_LABEL},
       {"bookmarkMenuLabel", IDS_BOOKMARK_OPTIONS_LABEL},
       {"folderMenuLabel", IDS_FOLDER_OPTIONS_LABEL},
       {"openFolderLabel", IDS_BOOKMARKS_OPEN_FOLDER_LABEL},
@@ -183,7 +178,6 @@ BookmarksSidePanelUI::BookmarksSidePanelUI(content::WebUI* web_ui)
       {"a11yDescriptionPriceChange",
        IDS_BOOKMARK_ACCESSIBLE_DESCRIPTION_PRICE_CHANGE},
       {"checkboxA11yLabel", IDS_BOOKMARKS_CHECKBOX_LABEL},
-      {"editInvalidUrl", IDS_BOOKMARK_MANAGER_INVALID_URL},
       {"bookmarkFolderChildCount", IDS_BOOKMARK_FOLDER_CHILD_COUNT},
       {"primaryFilterHeading", IDS_BOOKMARKS_PRIMARY_FILTER_HEADING},
       {"secondaryFilterHeading", IDS_BOOKMARKS_SECONDARY_FILTER_HEADING},
@@ -207,10 +201,9 @@ BookmarksSidePanelUI::BookmarksSidePanelUI(content::WebUI* web_ui)
   source->AddBoolean("guestMode", profile->IsGuestSession());
   source->AddBoolean("incognitoMode", profile->IsIncognitoProfile());
   source->AddBoolean("isIncognitoModeAvailable", IsIncognitoModeAvailable());
-
   source->AddBoolean(
-      "isBookmarksMigrationUiChanges",
-      base::FeatureList::IsEnabled(switches::kBookmarksMigrateUiChanges));
+      "isIsolatedModeEnabled",
+      enterprise_isolated_mode::IsolatedModeReplacesIncognito(profile));
 
   source->AddBoolean("menuSimplification",
                      features::IsMenuSimplificationEnabled());
@@ -243,6 +236,7 @@ BookmarksSidePanelUI::BookmarksSidePanelUI(content::WebUI* web_ui)
 
   content::URLDataSource::Add(profile,
                               std::make_unique<SanitizedImageSource>(profile));
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 }
 
 BookmarksSidePanelUI::~BookmarksSidePanelUI() = default;

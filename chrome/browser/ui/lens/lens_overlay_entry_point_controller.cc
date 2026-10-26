@@ -10,6 +10,7 @@
 #include "base/system/sys_info.h"
 #include "chrome/browser/autocomplete/aim_eligibility_service_factory.h"
 #include "chrome/browser/command_updater.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_utils.h"
 #include "chrome/browser/lens/region_search/lens_region_search_controller.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
@@ -21,13 +22,13 @@
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/browser/ui/lens/lens_overlay_controller.h"
 #include "chrome/browser/ui/lens/lens_overlay_side_panel_coordinator.h"
 #include "chrome/browser/ui/lens/lens_search_controller.h"
-#include "chrome/browser/ui/lens/lens_url_matcher.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/page_action/page_action_triggers.h"
@@ -47,6 +48,7 @@
 #include "components/omnibox/browser/omnibox_prefs.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 
 namespace {
@@ -129,12 +131,10 @@ LensOverlayEntryPointController::LensOverlayEntryPointController(
 void LensOverlayEntryPointController::Initialize(
     BrowserWindowInterface* browser_window_interface,
     CommandUpdater* command_updater,
-    views::View* location_bar) {
+    LocationBar* location_bar) {
   browser_window_interface_ = browser_window_interface;
-  location_bar_ = location_bar;
-  if (location_bar_) {
-    focus_manager_observation_.Observe(location_bar_->GetFocusManager());
-    location_bar_->AddObserver(this);
+  if (location_bar) {
+    location_bar_observation_.Observe(location_bar);
   }
 
   pref_change_registrar_.Init(
@@ -164,34 +164,19 @@ void LensOverlayEntryPointController::Initialize(
   // Update all entry points.
   UpdateEntryPointsState(/*hide_if_needed=*/true);
 
-  edu_url_matcher_ = std::make_unique<lens::LensUrlMatcher>(
-      lens::features::GetLensOverlayEduUrlAllowFilters(),
-      lens::features::GetLensOverlayEduUrlBlockFilters(),
-      lens::features::GetLensOverlayEduUrlPathMatchAllowFilters(),
-      lens::features::GetLensOverlayEduUrlPathMatchBlockFilters(),
-      lens::features::GetLensOverlayEduUrlForceAllowedMatchPatterns(),
-      lens::features::GetLensOverlayEduHashedDomainBlockFilters());
-
-  if (lens::features::IsLensOverlayOptimizationFilterEnabled()) {
-    optimization_guide_decider_ =
-        OptimizationGuideKeyedServiceFactory::GetForProfile(
-            browser_window_interface_->GetProfile());
-    if (optimization_guide_decider_) {
-      optimization_guide_decider_->RegisterOptimizationTypes(
-          {optimization_guide::proto::OptimizationType::
-               LENS_OVERLAY_EDU_ACTION_CHIP_BLOCKLIST,
-           optimization_guide::proto::OptimizationType::
-               LENS_OVERLAY_EDU_ACTION_CHIP_ALLOWLIST});
-    }
+  optimization_guide_decider_ =
+      OptimizationGuideKeyedServiceFactory::GetForProfile(
+          browser_window_interface_->GetProfile());
+  if (optimization_guide_decider_) {
+    optimization_guide_decider_->RegisterOptimizationTypes(
+        {optimization_guide::proto::OptimizationType::
+             LENS_OVERLAY_EDU_ACTION_CHIP_BLOCKLIST,
+         optimization_guide::proto::OptimizationType::
+             LENS_OVERLAY_EDU_ACTION_CHIP_ALLOWLIST});
   }
 }
 
-LensOverlayEntryPointController::~LensOverlayEntryPointController() {
-  // Initialize may not have been called (e.g. for non-normal browser windows).
-  if (location_bar_) {
-    location_bar_->RemoveObserver(this);
-  }
-}
+LensOverlayEntryPointController::~LensOverlayEntryPointController() = default;
 
 bool LensOverlayEntryPointController::IsEnabled() const {
   // This class is initialized if and only if it is subscribed.
@@ -204,12 +189,16 @@ bool LensOverlayEntryPointController::IsEnabled() const {
   }
 
   // Disable in fullscreen without top-chrome.
-  if (!lens::features::GetLensOverlayEnableInFullscreen() &&
-      ExclusiveAccessManager::From(browser_window_interface_)
-          ->context()
-          ->IsFullscreen() &&
-      !browser_window_interface_->IsTabStripVisible()) {
-    return false;
+  if (!lens::features::GetLensOverlayEnableInFullscreen()) {
+    auto* const exclusive_access_manager =
+        ExclusiveAccessManager::From(browser_window_interface_);
+    if (exclusive_access_manager &&
+        exclusive_access_manager->context()->IsFullscreen() &&
+        (!browser_window_interface_->IsTabStripVisible() ||
+         exclusive_access_manager->fullscreen_controller()
+             ->IsWindowFullscreenForTabOrPending())) {
+      return false;
+    }
   }
 
   return true;
@@ -227,6 +216,8 @@ void LensOverlayEntryPointController::UpdateEntryPointsState(
   // Update the 3 dot menu entry point.
   command_updater_->UpdateCommandEnabled(IDC_CONTENT_CONTEXT_LENS_OVERLAY,
                                          visible);
+  command_updater_->UpdateCommandEnabled(IDC_ASK_GOOGLE_ABOUT_THIS_PAGE,
+                                         visible);
 
   // Update the pinnable toolbar entry point. Toolbar entry point is always
   // present, therefore, ignore the visibility check.
@@ -240,13 +231,11 @@ void LensOverlayEntryPointController::UpdateEntryPointsState(
 
   CHECK(browser_window_interface_);
 
-  if (IsPageActionMigrated(PageActionIconType::kLensOverlayHomework)) {
-    // `tab_interface` can be null early during browser startup.
-    if (auto* tab_interface =
-            browser_window_interface_->GetActiveTabInterface()) {
-      LensOverlayHomeworkPageActionController::From(*tab_interface)
-          ->UpdatePageActionIcon();
-    }
+  // `tab_interface` can be null early during browser startup.
+  if (auto* tab_interface =
+          browser_window_interface_->GetActiveTabInterface()) {
+    LensOverlayHomeworkPageActionController::From(*tab_interface)
+        ->UpdatePageActionIcon();
   }
 }
 
@@ -255,23 +244,23 @@ bool LensOverlayEntryPointController::IsUrlEduEligible(const GURL& url) const {
     return false;
   }
 
-  if (optimization_guide_decider_) {
-    bool allowed_by_allowlist =
-        optimization_guide_decider_->CanApplyOptimization(
-            url,
-            optimization_guide::proto::LENS_OVERLAY_EDU_ACTION_CHIP_BLOCKLIST,
-            /*optimization_metadata=*/nullptr) ==
-        optimization_guide::OptimizationGuideDecision::kTrue;
-    bool allowed_by_blocklist =
-        optimization_guide_decider_->CanApplyOptimization(
-            url,
-            optimization_guide::proto::LENS_OVERLAY_EDU_ACTION_CHIP_ALLOWLIST,
-            /*optimization_metadata=*/nullptr) ==
-        optimization_guide::OptimizationGuideDecision::kTrue;
-    return allowed_by_allowlist && allowed_by_blocklist;
+  if (!optimization_guide_decider_) {
+    return false;
   }
 
-  return edu_url_matcher_->IsMatch(url);
+  bool allowed_by_allowlist =
+      optimization_guide_decider_->CanApplyOptimization(
+          url,
+          optimization_guide::proto::LENS_OVERLAY_EDU_ACTION_CHIP_BLOCKLIST,
+          /*optimization_metadata=*/nullptr) ==
+      optimization_guide::OptimizationGuideDecision::kTrue;
+  bool allowed_by_blocklist =
+      optimization_guide_decider_->CanApplyOptimization(
+          url,
+          optimization_guide::proto::LENS_OVERLAY_EDU_ACTION_CHIP_ALLOWLIST,
+          /*optimization_metadata=*/nullptr) ==
+      optimization_guide::OptimizationGuideDecision::kTrue;
+  return allowed_by_allowlist && allowed_by_blocklist;
 }
 
 // static
@@ -290,9 +279,8 @@ void LensOverlayEntryPointController::InvokeAction(
     if (static_cast<page_actions::PageActionTrigger>(page_action_trigger) ==
             page_actions::PageActionTrigger::kKeyboard &&
         !lens::features::IsLensOverlayKeyboardSelectionEnabled()) {
-      active_tab->GetBrowserWindowInterface()
-          ->GetFeatures()
-          .lens_region_search_controller()
+      lens::LensRegionSearchController::From(
+          active_tab->GetBrowserWindowInterface())
           ->Start(active_tab->GetContents(), /*use_fullscreen_capture=*/true,
                   /*is_google_default_search_provider=*/true,
                   lens::AmbientSearchEntryPoint::
@@ -321,36 +309,24 @@ void LensOverlayEntryPointController::InvokeAction(
         lens::LensOverlayDismissalSource::kToolbar);
   } else {
     search_controller->OpenLensOverlay(
-        lens::LensOverlayInvocationSource::kToolbar);
+        lens::LensOverlayInvocationSource::kToolbar,
+        /*should_show_csb=*/!contextual_tasks::
+            AreContextualTasksUpdatedEntryPointsEnabled(
+                active_tab->GetBrowserWindowInterface()->GetProfile()));
   }
 }
 
-void LensOverlayEntryPointController::OnViewAddedToWidget(views::View* view) {
-  CHECK(location_bar_);
-  focus_manager_observation_.Observe(location_bar_->GetFocusManager());
-}
-
-void LensOverlayEntryPointController::OnViewRemovedFromWidget(
-    views::View* view) {
-  CHECK(location_bar_);
-  CHECK(location_bar_->GetFocusManager());
-  focus_manager_observation_.Reset();
-}
-
-void LensOverlayEntryPointController::OnDidChangeFocus(views::View* before,
-                                                       views::View* now) {
+void LensOverlayEntryPointController::OnLocationBarFocusChanged() {
   UpdatePageActionState();
 
-  if (IsPageActionMigrated(PageActionIconType::kLensOverlayHomework)) {
-    // `tab_interface` can be null early during browser startup.
-    if (auto* tab_interface =
-            browser_window_interface_->GetActiveTabInterface()) {
-      // The controller may be null during tab destruction, which triggers the
-      // focus change leading to this.
-      if (auto* controller =
-              LensOverlayHomeworkPageActionController::From(*tab_interface)) {
-        controller->UpdatePageActionIcon();
-      }
+  // `tab_interface` can be null early during browser startup.
+  if (auto* tab_interface =
+          browser_window_interface_->GetActiveTabInterface()) {
+    // The controller may be null during tab destruction, which triggers the
+    // focus change leading to this.
+    if (auto* controller =
+            LensOverlayHomeworkPageActionController::From(*tab_interface)) {
+      controller->UpdatePageActionIcon();
     }
   }
 }
@@ -376,12 +352,13 @@ void LensOverlayEntryPointController::OnTemplateURLServiceShuttingDown() {
 actions::ActionItem* LensOverlayEntryPointController::GetToolbarEntrypoint() {
   return actions::ActionManager::Get().FindAction(
       kActionSidePanelShowLensOverlayResults,
-      /*scope=*/browser_window_interface_->GetActions()->root_action_item());
+      /*scope=*/BrowserActions::From(browser_window_interface_)
+          ->root_action_item());
 }
 
 void LensOverlayEntryPointController::UpdatePageActionState() {
   // This may not have been initialized (e.g. for non-normal browser types).
-  if (!location_bar_) {
+  if (!location_bar()) {
     return;
   }
   CHECK(browser_window_interface_);
@@ -484,8 +461,7 @@ bool LensOverlayEntryPointController::ShouldShowPageAction(
   }
 
   if (!features::IsOmniboxEntrypointAlwaysVisible() &&
-      !location_bar_->Contains(
-          location_bar_->GetFocusManager()->GetFocusedView())) {
+      !location_bar()->IsFocusWithin()) {
     return false;
   }
 

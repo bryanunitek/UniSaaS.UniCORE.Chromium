@@ -120,6 +120,12 @@ inline constexpr char kChromeOsHelpViaWebUIURL[] =
 // widgets instead of using HTML.
 inline constexpr char kChromeNativeScheme[] = "chrome-native";
 
+// The chrome-experimental-site-token-provider: scheme is used to retrieve
+// site-specific tokens.
+inline constexpr char kChromeExperimentalSiteTokenProviderScheme[] =
+    "chrome-experimental-site-token-provider";
+inline constexpr char kChromeExperimentalSiteTokenHost[] = "token";
+
 // The URL of safe section in Chrome page (https://www.google.com/chrome).
 inline constexpr char16_t kChromeSafePageURL[] =
     u"https://www.google.com/chrome/#safe";
@@ -204,6 +210,10 @@ inline constexpr char16_t kDoNotTrackLearnMoreURL[] =
 #else
     u"https://support.google.com/chrome?p=settings_do_not_track";
 #endif
+
+// "Learn more" URL for Universal Opt-Out.
+inline constexpr char16_t kUniversalOptOutLearnMoreURL[] =
+    u"https://support.google.com/chrome?p=opt_out_request";
 
 // The URL for the "Learn more" page for interrupted downloads.
 inline constexpr char kDownloadInterruptedLearnMoreURL[] =
@@ -358,7 +368,7 @@ inline constexpr char16_t kMyActivityAiModeUrl[] =
 inline constexpr char16_t kMyActivitySearchServicesAppsUrl[] =
     u"https://myactivity.google.com/search-services/apps";
 
-#if !BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 // "Learn more" URL for On-Device AI.
 inline constexpr char16_t kOnDeviceAiLearnMoreUrl[] =
     u"https://support.google.com/chrome?p=on_device_genAI";
@@ -442,8 +452,15 @@ inline constexpr char16_t kCardBenefitsLearnMoreURL[] =
 
 // "Learn more" URL for the Gmail OTP filling setting.
 inline constexpr char16_t kGmailOtpFillingLearnMoreURL[] =
-    // TODO(crbug.com/484907871): Update with final URL
-    u"https://support.google.com/chrome/";
+    u"https://support.google.com/chrome?p=one_time_password";
+
+// URL for Gmail general settings.
+inline constexpr char16_t kGmailSettingsURL[] =
+    u"https://mail.google.com/mail/u/0/#settings/general";
+
+// URL for Gmail smart features settings.
+inline constexpr char16_t kGmailSmartFeaturesURL[] =
+    u"https://mail.google.com/mail/u/0/?ogwsfsd=true#settings";
 
 // "Learn more" URL for the performance intervention notification setting.
 inline constexpr char16_t kPerformanceInterventionLearnMoreUrl[] =
@@ -480,6 +497,10 @@ inline constexpr char kResetProfileSettingsLearnMoreURL[] =
 // "Learn more" URL for Safebrowsing
 inline constexpr char kSafeBrowsingHelpCenterURL[] =
     "https://support.google.com/chrome?p=cpn_safe_browsing";
+
+// "Learn more" URL for unsafe site warnings.
+inline constexpr char kUnsafeSiteWarningHelpCenterURL[] =
+    "https://support.google.com/chrome?p=cpn_safe_browsing_wv";
 
 // Updated "Info icon" URL for Safebrowsing
 inline constexpr char kSafeBrowsingHelpCenterUpdatedURL[] =

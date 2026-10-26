@@ -26,17 +26,6 @@ chromium-metrics-reviews@google.com.
 
 <enums>
 
-<enum name="AddIceCandidateResult">
-  <int value="0" label="Success"/>
-  <int value="1" label="Closed"/>
-  <int value="2" label="No remote description"/>
-  <int value="3" label="Null candidate"/>
-  <int value="4" label="Candidate not valid"/>
-  <int value="5" label="PeerConnection not ready"/>
-  <int value="6" label="Failed in addition"/>
-  <int value="7" label="Failed - not usable"/>
-</enum>
-
 <enum name="ClockdriftLevel">
   <int value="0" label="None"/>
   <int value="1" label="Probable"/>
@@ -155,16 +144,6 @@ chromium-metrics-reviews@google.com.
   <int value="21" label="host(named)_host(public)"/>
   <int value="22" label="host(private)_host(named)"/>
   <int value="23" label="host(public)_host(named)"/>
-</enum>
-
-<enum name="IceConnectionStates">
-  <int value="0" label="IceConnectionNew"/>
-  <int value="1" label="IceConnectionChecking"/>
-  <int value="2" label="IceConnectionConnected"/>
-  <int value="3" label="IceconnectionCompleted"/>
-  <int value="4" label="IceconnectionFailed"/>
-  <int value="5" label="IceconnectionDisconnected"/>
-  <int value="6" label="IceconnectionClosed"/>
 </enum>
 
 <enum name="IpAddressType">
@@ -298,9 +277,16 @@ chromium-metrics-reviews@google.com.
   <int value="32" label="IceCandidateCount"/>
   <int value="33" label="Bundle"/>
   <int value="34" label="Bandwidth"/>
+  <int value="35" label="Sframe"/>
+  <int value="36" label="MsidStream"/>
+  <int value="37" label="MsidTrack"/>
+  <int value="38" label="IceOptionsRemoved"/>
+  <int value="39" label="Rejected"/>
   <int value="40" label="RtpHeaderExtensionsRemoved"/>
   <int value="41" label="RtpHeaderExtensionsAdded"/>
   <int value="42" label="RtpHeaderExtensionsModified"/>
+  <int value="43" label="Cryptex"/>
+  <int value="44" label="RtcpXrRcvrRtt"/>
   <int value="60" label="AudioCodecsRemoved"/>
   <int value="61" label="AudioCodecsAdded"/>
   <int value="62" label="AudioCodecsReordered"/>
@@ -478,6 +464,17 @@ chromium-metrics-reviews@google.com.
   <int value="12" label="kExpiredLogFileDuringSession"/>
 </enum>
 
+<enum name="WebRtcFallbackSelectSourceResult">
+  <summary>
+    Combined SelectSource() results of the main and secondary capturers in
+    webrtc::FallbackDesktopCapturerWrapper::SelectSourceResult.
+  </summary>
+  <int value="0" label="MainSucceededSecondarySucceeded"/>
+  <int value="1" label="MainSucceededSecondaryFailed"/>
+  <int value="2" label="MainFailedSecondarySucceeded"/>
+  <int value="3" label="MainFailedSecondaryFailed"/>
+</enum>
+
 <enum name="WebRtcH264DecoderImplEvent">
   <int value="0" label="Init"/>
   <int value="1" label="Error"/>
@@ -545,6 +542,12 @@ chromium-metrics-reviews@google.com.
   <int value="-100222544" label="Hangouts"/>
   <int value="0" label="Undefined"/>
   <int value="2102772693" label="Duo"/>
+</enum>
+
+<enum name="WebRtcNeuralResidualEchoEstimatorInitResult">
+  <int value="0" label="Success"/>
+  <int value="1" label="Model load failed"/>
+  <int value="2" label="Destroyed before resolved"/>
 </enum>
 
 <enum name="WebRtcPeerConnectionUsagePattern">

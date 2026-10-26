@@ -18,7 +18,6 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.FakeTimeTestRule;
@@ -39,7 +38,6 @@ import java.util.concurrent.TimeUnit;
  * expected.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class WebappDataStorageTest {
     @Rule public FakeTimeTestRule mClockRule = new FakeTimeTestRule();
 
@@ -337,6 +335,16 @@ public class WebappDataStorageTest {
         assertEquals(scopeUrl, storage.getScope());
         assertEquals(manifestUrl, storage.getWebApkManifestUrl());
         assertEquals(webApkVersionCode, storage.getWebApkVersionCode());
+
+        String updatedScopeUrl = "updated_scope";
+        BrowserServicesIntentDataProvider updatedIntentDataProvider =
+                new WebApkIntentDataProviderBuilder(webApkPackageName, url)
+                        .setScope(updatedScopeUrl)
+                        .setManifestUrl(manifestUrl)
+                        .setWebApkVersionCode(webApkVersionCode + 1)
+                        .build();
+        storage.updateFromWebappIntentDataProvider(updatedIntentDataProvider);
+        assertEquals(updatedScopeUrl, storage.getScope());
     }
 
     /**

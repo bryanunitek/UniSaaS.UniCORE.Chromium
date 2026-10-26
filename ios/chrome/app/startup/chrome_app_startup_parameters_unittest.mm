@@ -6,14 +6,17 @@
 
 #import <Foundation/Foundation.h>
 
+#import "base/command_line.h"
 #import "base/strings/stringprintf.h"
 #import "base/test/metrics/histogram_tester.h"
 #import "base/test/scoped_feature_list.h"
 #import "components/password_manager/core/browser/manage_passwords_referrer.h"
 #import "ios/chrome/app/app_startup_parameters.h"
 #import "ios/chrome/app/startup/app_launch_metrics.h"
+#import "ios/chrome/app/startup/app_startup_utils.h"
 #import "ios/chrome/browser/default_browser/model/utils.h"
 #import "ios/chrome/browser/default_browser/model/utils_test_support.h"
+#import "ios/chrome/browser/flags/chrome_switches.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -35,8 +38,25 @@ void CheckLaunchSourceForURL(first_run::ExternalLaunch expectedSource,
   EXPECT_EQ(expectedSource, [params launchSource]);
 }
 
-typedef PlatformTest AppStartupParametersTest;
-TEST_F(PlatformTest, ParseURLWithEmptyURL) {
+// Test fixture for testing ChromeAppStartupParameters with the legacy startup
+// flow.
+class AppStartupParametersTest : public PlatformTest {
+ protected:
+  AppStartupParametersTest() {
+    ResetEnableNewStartupFlowEnabledForTesting();
+    scoped_feature_list_.InitAndDisableFeature(kEnableNewStartupFlow);
+    SaveEnableNewStartupFlowForNextStart();
+  }
+
+  ~AppStartupParametersTest() override {
+    ResetEnableNewStartupFlowEnabledForTesting();
+  }
+
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Tests that parsing an empty URL returns nil.
+TEST_F(AppStartupParametersTest, ParseURLWithEmptyURL) {
   NSURL* url = [NSURL URLWithString:@""];
   ChromeAppStartupParameters* params = [ChromeAppStartupParameters
       startupParametersWithURL:url
@@ -356,7 +376,7 @@ TEST_F(AppStartupParametersTest, ParseSearchWidgetKit) {
 
   EXPECT_EQ(params.externalURL.spec(), expected_url_string);
   EXPECT_EQ(params.postOpeningAction, FOCUS_OMNIBOX);
-  [params requestApplicationModeWithBlock:^(
+  [params fetchAppSwitcherParamsWithBlock:^(
               ApplicationModeForTabOpening applicationMode) {
     EXPECT_NE(applicationMode, ApplicationModeForTabOpening::INCOGNITO);
   }];
@@ -381,7 +401,7 @@ TEST_F(AppStartupParametersTest, ParseQuickActionsWidgetKitSearch) {
 
   EXPECT_EQ(params.externalURL.spec(), expected_url_string);
   EXPECT_EQ(params.postOpeningAction, FOCUS_OMNIBOX);
-  [params requestApplicationModeWithBlock:^(
+  [params fetchAppSwitcherParamsWithBlock:^(
               ApplicationModeForTabOpening applicationMode) {
     EXPECT_NE(applicationMode, ApplicationModeForTabOpening::INCOGNITO);
   }];
@@ -405,7 +425,7 @@ TEST_F(AppStartupParametersTest, ParseQuickActionsWidgetKitIncognito) {
 
   EXPECT_EQ(params.externalURL.spec(), expected_url_string);
   EXPECT_EQ(params.postOpeningAction, FOCUS_OMNIBOX);
-  [params requestApplicationModeWithBlock:^(
+  [params fetchAppSwitcherParamsWithBlock:^(
               ApplicationModeForTabOpening applicationMode) {
     EXPECT_EQ(applicationMode, ApplicationModeForTabOpening::INCOGNITO);
   }];
@@ -553,7 +573,7 @@ TEST_F(AppStartupParametersTest, ParseLockscreenLauncherSearch) {
 
   EXPECT_EQ(params.externalURL.spec(), expected_url_string);
   EXPECT_EQ(params.postOpeningAction, FOCUS_OMNIBOX);
-  [params requestApplicationModeWithBlock:^(
+  [params fetchAppSwitcherParamsWithBlock:^(
               ApplicationModeForTabOpening applicationMode) {
     EXPECT_NE(applicationMode, ApplicationModeForTabOpening::INCOGNITO);
   }];
@@ -576,7 +596,7 @@ TEST_F(AppStartupParametersTest, ParseLockscreenLauncherIncognito) {
 
   EXPECT_EQ(params.externalURL.spec(), expected_url_string);
   EXPECT_EQ(params.postOpeningAction, FOCUS_OMNIBOX);
-  [params requestApplicationModeWithBlock:^(
+  [params fetchAppSwitcherParamsWithBlock:^(
               ApplicationModeForTabOpening applicationMode) {
     EXPECT_EQ(applicationMode, ApplicationModeForTabOpening::INCOGNITO);
   }];
@@ -637,7 +657,7 @@ TEST_F(AppStartupParametersTest, ParseSearchPasswordsWidgetKit) {
 
   EXPECT_TRUE(params.externalURL.is_empty());
   EXPECT_EQ(params.postOpeningAction, SEARCH_PASSWORDS);
-  [params requestApplicationModeWithBlock:^(
+  [params fetchAppSwitcherParamsWithBlock:^(
               ApplicationModeForTabOpening applicationMode) {
     EXPECT_NE(applicationMode, ApplicationModeForTabOpening::INCOGNITO);
   }];
@@ -719,8 +739,7 @@ TEST_F(AppStartupParametersTest,
 // "appstoregeminipromo" action.
 TEST_F(AppStartupParametersTest, ExternalActionSchemeAppStoreGeminiPromo) {
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({kAppStoreInAppEvents, kPageActionMenu},
-                                       {});
+  scoped_feature_list.InitWithFeatures({kPageActionMenu}, {});
 
   base::HistogramTester histogram_tester;
   NSURL* url =
@@ -872,6 +891,35 @@ TEST_F(AppStartupParametersTest, GoogleOneDeepLinkDisabled) {
   EXPECT_EQ("https://one.google.com/deeplink", [params externalURL].spec());
   EXPECT_EQ("https://one.google.com/deeplink", [params completeURL].spec());
   EXPECT_EQ(NO_ACTION, [params postOpeningAction]);
+}
+
+// Tests that IsAppSwitcherAISummarizationTestingExternalURLEnabled returns
+// true only when both the feature and switch are enabled.
+TEST_F(AppStartupParametersTest,
+       AppSwitcherAISummarizationTestingExternalURLEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+
+  // 1. Both disabled.
+  scoped_feature_list.InitWithFeatures(
+      {}, {kPageActionMenu, kAppSwitcherAISummarization});
+  EXPECT_FALSE(IsAppSwitcherAISummarizationTestingExternalURLEnabled());
+
+  // 2. Feature enabled, switch not enabled.
+  scoped_feature_list.Reset();
+  scoped_feature_list.InitWithFeatures(
+      {kPageActionMenu, kAppSwitcherAISummarization}, {});
+  EXPECT_FALSE(IsAppSwitcherAISummarizationTestingExternalURLEnabled());
+
+  // 3. Both feature and switch enabled.
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
+      switches::kEnableAppSwitcherAISummarizationTestingExternalURL);
+  EXPECT_TRUE(IsAppSwitcherAISummarizationTestingExternalURLEnabled());
+
+  // 4. Switch enabled, but feature disabled.
+  scoped_feature_list.Reset();
+  scoped_feature_list.InitWithFeatures(
+      {}, {kPageActionMenu, kAppSwitcherAISummarization});
+  EXPECT_FALSE(IsAppSwitcherAISummarizationTestingExternalURLEnabled());
 }
 
 }  // namespace

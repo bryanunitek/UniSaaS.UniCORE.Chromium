@@ -11,7 +11,6 @@
 #include "base/values.h"
 #include "chrome/browser/devtools/device/tcp_device_provider.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -45,7 +44,7 @@ static std::string AllTargetsString(
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DiscoveryListChanges) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   PrefService* service = profile->GetPrefs();
   service->ClearPref(prefs::kDevToolsTCPDiscoveryConfig);
@@ -96,7 +95,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DiscoveryListChanges) {
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DefaultValues) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   PrefService* service = profile->GetPrefs();
   DevToolsAndroidBridge::Factory::GetForProfile(profile);
@@ -119,7 +118,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DefaultValues) {
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, TCPEnableChange) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   PrefService* service = profile->GetPrefs();
   service->ClearPref(prefs::kDevToolsTCPDiscoveryConfig);

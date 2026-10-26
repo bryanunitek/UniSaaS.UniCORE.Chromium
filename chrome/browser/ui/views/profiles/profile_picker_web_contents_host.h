@@ -79,14 +79,15 @@ class ProfilePickerWebContentsHost {
   // the sign-in Gaia page) in the native toolbar.
   virtual void SetNativeToolbarSigninButtonsVisible(bool visible) = 0;
 
-  // Changes the visibility of the "Don't sign in" button in the native toolbar.
-  // Safe to call even if the button was not instantiated (no-op in that case).
-  virtual void SetNativeToolbarDontSignInButtonVisible(bool visible) = 0;
-
   // Changes the visibility of the "Start browsing" button in the native
   // toolbar. Safe to call even if the button was not instantiated (no-op in
   // that case).
   virtual void SetNativeToolbarStartBrowsingButtonVisible(bool visible) = 0;
+
+  // Changes the visibility of the effects control button in the native
+  // toolbar. Safe to call even if the button was not instantiated (no-op in
+  // that case).
+  virtual void SetNativeToolbarEffectsControlButtonVisible(bool visible) = 0;
 
   // Returns the background colors that other `content::WebContents` that are
   // rendered by this host should use to match the toolbar.

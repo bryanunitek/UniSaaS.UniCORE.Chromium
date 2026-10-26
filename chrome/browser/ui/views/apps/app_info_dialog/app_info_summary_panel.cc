@@ -22,6 +22,7 @@
 #include "extensions/browser/launch_util.h"
 #include "extensions/browser/path_util.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 #include "extensions/common/manifest_handlers/shared_module_info.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -132,9 +133,10 @@ void AppInfoSummaryPanel::AddDescriptionAndLinksControl(
           ChromeLayoutProvider::Get()->GetDistanceMetric(
               DISTANCE_RELATED_CONTROL_VERTICAL_SMALL)));
 
-  if (!app_->description().empty()) {
+  if (!extensions::DescriptionInfo::GetDescription(*app_).empty()) {
     constexpr size_t kMaxLength = 400;
-    std::u16string text = base::UTF8ToUTF16(app_->description());
+    std::u16string text =
+        base::UTF8ToUTF16(extensions::DescriptionInfo::GetDescription(*app_));
     if (text.length() > kMaxLength) {
       text = text.substr(0, kMaxLength - 5);
       text += u" ... ";
@@ -262,7 +264,7 @@ extensions::LaunchType AppInfoSummaryPanel::GetLaunchType() const {
 
 void AppInfoSummaryPanel::SetLaunchType(
     extensions::LaunchType launch_type) const {
-  DCHECK(CanSetLaunchType());
+  CHECK(CanSetLaunchType(), base::NotFatalUntil::M162);
   extensions::SetLaunchType(profile_, app_->id(), launch_type);
 }
 
@@ -274,7 +276,7 @@ bool AppInfoSummaryPanel::CanSetLaunchType() const {
 }
 
 void AppInfoSummaryPanel::ShowAppHomePage() {
-  DCHECK(CanShowAppHomePage());
+  CHECK(CanShowAppHomePage(), base::NotFatalUntil::M162);
   OpenLink(extensions::ManifestURL::GetHomepageURL(app_));
   Close();
 }
@@ -284,7 +286,7 @@ bool AppInfoSummaryPanel::CanShowAppHomePage() const {
 }
 
 void AppInfoSummaryPanel::DisplayLicenses() {
-  DCHECK(CanDisplayLicenses());
+  CHECK(CanDisplayLicenses(), base::NotFatalUntil::M162);
   for (const auto& license_url : GetLicenseUrls()) {
     OpenLink(license_url);
   }
@@ -303,14 +305,14 @@ std::vector<GURL> AppInfoSummaryPanel::GetLicenseUrls() const {
   std::vector<GURL> license_urls;
   extensions::ExtensionRegistry* registry =
       extensions::ExtensionRegistry::Get(profile_);
-  DCHECK(registry);
+  CHECK(registry, base::NotFatalUntil::M162);
   const std::vector<extensions::SharedModuleInfo::ImportInfo>& imports =
       extensions::SharedModuleInfo::GetImports(app_);
 
   for (const auto& shared_module : imports) {
     const extensions::Extension* imported_module = registry->GetExtensionById(
         shared_module.extension_id, extensions::ExtensionRegistry::EVERYTHING);
-    DCHECK(imported_module);
+    CHECK(imported_module, base::NotFatalUntil::M162);
 
     GURL about_page = extensions::ManifestURL::GetAboutPage(imported_module);
     if (about_page != GURL()) {

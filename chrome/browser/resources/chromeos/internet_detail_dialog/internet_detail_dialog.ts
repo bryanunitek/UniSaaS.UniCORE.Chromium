@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import 'chrome://resources/ash/common/network/cr_policy_network_indicator_mojo.js';
-import 'chrome://resources/ash/common/network/network_apnlist.js';
 import 'chrome://resources/ash/common/network/network_choose_mobile.js';
 import 'chrome://resources/ash/common/network/network_icon.js';
 import 'chrome://resources/ash/common/network/network_ip_config.js';
@@ -122,17 +121,6 @@ export class InternetDetailDialogElement extends
       globalPolicy_: Object,
       apnExpanded_: Boolean,
 
-      /**
-       * Return true if apnRevamp feature flag is enabled.
-       */
-      isApnRevampEnabled_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.valueExists('apnRevamp') &&
-              loadTimeData.getBoolean('apnRevamp');
-        },
-      },
-
       isApnRevampAndAllowApnModificationPolicyEnabled_: {
         type: Boolean,
         value() {
@@ -164,18 +152,17 @@ export class InternetDetailDialogElement extends
     };
   }
 
-  guid: string;
-  private managedProperties_: ManagedProperties;
-  private deviceState_: OncMojo.DeviceStateProperties|null;
-  private showTechnologyBadge_: boolean;
-  private showConfigurableSections_: boolean;
-  private disabled_: boolean;
-  private globalPolicy_: GlobalPolicy;
-  private apnExpanded_: boolean;
-  private isApnRevampEnabled_: boolean;
-  private isApnRevampAndAllowApnModificationPolicyEnabled_: boolean;
-  private isNumCustomApnsLimitReached_: boolean;
-  private errorToastMessage_: string;
+  declare guid: string;
+  declare private managedProperties_: ManagedProperties;
+  declare private deviceState_: OncMojo.DeviceStateProperties|null;
+  declare private showTechnologyBadge_: boolean;
+  declare private showConfigurableSections_: boolean;
+  declare private disabled_: boolean;
+  declare private globalPolicy_: GlobalPolicy;
+  declare private apnExpanded_: boolean;
+  declare private isApnRevampAndAllowApnModificationPolicyEnabled_: boolean;
+  declare private isNumCustomApnsLimitReached_: boolean;
+  declare private errorToastMessage_: string;
   private didSetFocus_: boolean = false;
 
   /**
@@ -184,7 +171,8 @@ export class InternetDetailDialogElement extends
    */
   private propertiesReceived_: boolean = false;
   private networkConfig_: CrosNetworkConfigInterface;
-  private browserProxy_: InternetDetailDialogBrowserProxy;
+  private browserProxy_: InternetDetailDialogBrowserProxy =
+      InternetDetailDialogBrowserProxyImpl.getInstance();
 
   /** @override */
   constructor() {
@@ -209,7 +197,6 @@ export class InternetDetailDialogElement extends
   override connectedCallback() {
     super.connectedCallback();
 
-    this.browserProxy_ = InternetDetailDialogBrowserProxyImpl.getInstance();
     const dialogArgs = this.browserProxy_.getDialogArguments();
 
     ColorChangeUpdater.forDocument().start();
@@ -437,14 +424,8 @@ export class InternetDetailDialogElement extends
         this.isConnectedState_(managedProperties);
   }
 
-  private shouldShowApnList_(managedProperties: ManagedProperties): boolean {
-    return !this.isApnRevampEnabled_ &&
-        managedProperties.type === NetworkType.kCellular;
-  }
-
   private shouldShowApnSection_(managedProperties: ManagedProperties): boolean {
-    return this.isApnRevampEnabled_ &&
-        managedProperties.type === NetworkType.kCellular;
+    return managedProperties.type === NetworkType.kCellular;
   }
 
   private getApnRowSublabel_(
@@ -776,10 +757,6 @@ export class InternetDetailDialogElement extends
   }
 
   private shouldDisableApnButtons_(): boolean {
-    if (!this.isApnRevampEnabled_) {
-      return true;
-    }
-
     if (!this.isApnRevampAndAllowApnModificationPolicyEnabled_) {
       return this.isNumCustomApnsLimitReached_;
     }
@@ -789,9 +766,6 @@ export class InternetDetailDialogElement extends
   }
 
   private onShowErrorToast_(event: CustomEvent<string>) {
-    if (!this.isApnRevampEnabled_) {
-      return;
-    }
     this.errorToastMessage_ = event.detail;
     const errorToast =
         this.shadowRoot!.querySelector<CrToastElement>('#errorToast');

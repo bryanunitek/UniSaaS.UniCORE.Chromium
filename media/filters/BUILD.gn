@@ -5,17 +5,45 @@
 import("//media/gpu/args.gni")
 import("//media/media_options.gni")
 
-if (media_use_symphonia) {
-  rust_static_library("symphonia_glue") {
+if (media_use_symphonia_decoder) {
+  rust_static_library("symphonia_decoder_bridge") {
     # Needed because CXX generates unsafe code, for example using export_name
     # is inherently unsafe.
     allow_unsafe = true
 
-    crate_root = "symphonia_glue.rs"
-    sources = [ "symphonia_glue.rs" ]
-    cxx_bindings = [ "symphonia_glue.rs" ]
+    crate_root = "symphonia_decoder_bridge.rs"
+    sources = [ "symphonia_decoder_bridge.rs" ]
+    cxx_bindings = [ "symphonia_decoder_bridge.rs" ]
+    visibility = [ ":*" ]
+    deps = [
+      "//third_party/rust/symphonia_bundle_flac/v0_6:lib",
+      "//third_party/rust/symphonia_bundle_mp3/v0_6:lib",
+      "//third_party/rust/symphonia_codec_pcm/v0_6:lib",
+      "//third_party/rust/symphonia_codec_vorbis/v0_6:lib",
+      "//third_party/rust/symphonia_core/v0_6:lib",
+    ]
+  }
+}
+
+if (media_use_symphonia_demuxer) {
+  source_set("symphonia_source_bridge") {
+    sources = [ "symphonia_source_bridge.h" ]
+    visibility = [ ":*" ]
+    public_deps = [
+      "//base",
+      "//build/rust:cxx_cppdeps",
+    ]
+  }
+
+  rust_static_library("symphonia_demuxer_bridge") {
+    allow_unsafe = true
+
+    crate_root = "symphonia_demuxer_bridge.rs"
+    sources = [ "symphonia_demuxer_bridge.rs" ]
+    cxx_bindings = [ "symphonia_demuxer_bridge.rs" ]
     visibility = [ ":*" ]
     deps = [ "//third_party/rust/symphonia/v0_6:lib" ]
+    public_deps = [ ":symphonia_source_bridge" ]
   }
 }
 
@@ -148,14 +176,22 @@ source_set("filters") {
 
   if (media_use_iamf_tools) {
     deps += [ "//third_party/iamf_tools:iamf_tools_lib" ]
+    sources += [
+      "iamf_audio_decoder.cc",
+      "iamf_audio_decoder.h",
+    ]
   }
 
-  if (media_use_symphonia) {
+  if (media_use_symphonia_decoder) {
     sources += [
       "symphonia_audio_decoder.cc",
       "symphonia_audio_decoder.h",
     ]
-    deps += [ ":symphonia_glue" ]
+    deps += [ ":symphonia_decoder_bridge" ]
+  }
+
+  if (media_use_symphonia_demuxer) {
+    deps += [ ":symphonia_demuxer_bridge" ]
   }
 
   if (media_use_libvpx) {
@@ -358,12 +394,6 @@ source_set("unit_tests") {
     }
   }
 
-  # libvpx for running vpx test on chromecast doesn't support high bit depth.
-  # This may cause some unit tests failure. See b/65382374 for further context.
-  if (is_castos) {
-    defines = [ "LIBVPX_NO_HIGH_BIT_DEPTH" ]
-  }
-
   if (media_use_ffmpeg) {
     sources += [
       "audio_decoder_unittest.cc",
@@ -395,6 +425,7 @@ source_set("unit_tests") {
 
   if (media_use_libvpx) {
     sources += [ "vpx_video_decoder_unittest.cc" ]
+    deps += [ "//third_party/libvpx:libvpx_buildflags" ]
   }
 
   if (enable_dav1d_decoder) {
@@ -440,13 +471,21 @@ source_set("unit_tests") {
 
   # NOTE: if more rust tests that are not gated on Symphonia being enabled are
   # added to filters, this conditional can be dropped.
-  if (media_use_symphonia) {
+  if (media_use_symphonia_decoder) {
+    sources += [ "symphonia_audio_decoder_unittest.cc" ]
     deps += [ ":rust_unittests" ]
+  }
+  if (media_use_symphonia_demuxer) {
+    deps += [ ":symphonia_demuxer_bridge_unittests" ]
   }
 
   if (media_use_ffmpeg) {
     # Direct dependency required to inherit config.
     deps += [ "//third_party/ffmpeg" ]
+  }
+
+  if (media_use_iamf_tools) {
+    sources += [ "iamf_audio_decoder_unittest.cc" ]
   }
 }
 
@@ -456,16 +495,30 @@ source_set("unit_tests") {
 # NOTE: if more rust tests that are not gated on Symphonia being enabled are
 # added to filters, this conditional can more tightly scoped to Symphonia source
 # files.
-if (media_use_symphonia) {
+if (media_use_symphonia_decoder) {
   rust_static_library("rust_unittests") {
     testonly = true
     is_gtest_unittests = true
-    crate_root = "symphonia_glue_unittest.rs"
-    sources = [ "symphonia_glue_unittest.rs" ]
+    crate_root = "symphonia_decoder_bridge_unittest.rs"
+    sources = [ "symphonia_decoder_bridge_unittest.rs" ]
     deps = [
-      ":symphonia_glue",
+      ":symphonia_decoder_bridge",
       "//testing/rust_gtest_interop",
       "//third_party/rust/num_traits/v0_2:lib",
+      "//third_party/rust/symphonia/v0_6:lib",
+    ]
+  }
+}
+
+if (media_use_symphonia_demuxer) {
+  rust_static_library("symphonia_demuxer_bridge_unittests") {
+    testonly = true
+    is_gtest_unittests = true
+    crate_root = "symphonia_demuxer_bridge_unittest.rs"
+    sources = [ "symphonia_demuxer_bridge_unittest.rs" ]
+    deps = [
+      ":symphonia_demuxer_bridge",
+      "//testing/rust_gtest_interop",
       "//third_party/rust/symphonia/v0_6:lib",
     ]
   }

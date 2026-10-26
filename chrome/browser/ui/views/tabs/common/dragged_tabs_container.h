@@ -41,10 +41,10 @@ class DraggedTabsContainer : public TabDragTarget,
                              public gfx::AnimationDelegate {
  public:
   // The axes that the dragged tabs can move on.
-  enum class DragAxes { kVerticalOnly, kBoth };
+  enum class DragAxes { kVerticalOnly, kHorizontalOnly, kBoth };
 
   // How the dragged tabs should be laid out.
-  enum class DragLayout { kVertical, kSquash };
+  enum class DragLayout { kVertical, kHorizontal, kSquash };
 
   DraggedTabsContainer(views::View& host_view,
                        TabCollectionNode* collection_node,
@@ -80,6 +80,9 @@ class DraggedTabsContainer : public TabDragTarget,
 
   // Whether this container is currently handling a drag.
   bool IsHandlingDrag() const;
+
+  DragAxes drag_axes() const { return drag_axes_; }
+  void set_drag_axes(DragAxes drag_axes) { drag_axes_ = drag_axes; }
 
   // Returns the bounds of the box containing all dragged views, adjusted to
   // the point `point_in_container`. The returned bounds are not clamped to the
@@ -139,7 +142,8 @@ class DraggedTabsContainer : public TabDragTarget,
 
   // Handles a dragged tab that is parented within this target.
   // `point_in_container` is a point relative to this target's view.
-  void HandleTabDragInContainer(const gfx::Rect& dragged_tab_bounds);
+  void HandleTabDragInContainer(const gfx::Rect& dragged_tab_bounds,
+                                const gfx::Point& point_in_container);
 
   // Handles dragged tabs entering this container, applying the necessary
   // updates to reparent them into this.
@@ -159,6 +163,9 @@ class DraggedTabsContainer : public TabDragTarget,
   void AddViewToDragLayout(views::View* dragging_view,
                            const gfx::Rect& view_bounds,
                            bool is_source_dragged_view);
+  void AddViewToHorizontalDragLayout(views::View* dragging_view,
+                                     const gfx::Rect& view_bounds,
+                                     bool is_source_dragged_view);
   void AddViewToSquashedDragLayout(views::View* dragging_view,
                                    const gfx::Rect& view_bounds,
                                    bool is_source_dragged_view);
@@ -171,7 +178,18 @@ class DraggedTabsContainer : public TabDragTarget,
   // the last drag point.
   void UpdateDraggingViewTransforms(const gfx::Point& point_in_container);
 
+  // Updates the transformation applied to a single dragging view, according to
+  // the bounding box of all dragged views.
+  void UpdateDraggingViewTransform(views::View* dragged_view,
+                                   const DraggedViewVisualData& visual_data,
+                                   const gfx::Rect& bounding_box_for_point);
+
   bool IsHorizontalDragSupported() const;
+  bool IsVerticalDragSupported() const;
+
+  // Returns the bounds in `host_view_` coordinates to which dragged views
+  // should be clamped.
+  gfx::Rect GetDraggingViewsClampingBounds() const;
 
   // Returns the bounds of the box containing all dragged views, adjusted to
   // the point `point_in_container` and clamped to the bounds of the
@@ -237,7 +255,7 @@ class DraggedTabsContainer : public TabDragTarget,
       animating_views_start_offsets_;
   gfx::SlideAnimation drag_start_animation_;
 
-  const DragAxes drag_axes_;
+  DragAxes drag_axes_;
   const DragLayout drag_layout_;
 
   base::ScopedObservation<views::View, views::ViewObserver>
@@ -248,10 +266,17 @@ class DraggedTabsContainer : public TabDragTarget,
 
   TabDragScrollHandler scroll_handler_;
 
+  // The horizontal coordinate of the last tab reorder in container coordinates.
+  // Used to prevent jitter when dragging tabs horizontally.
+  std::optional<int> last_move_drag_x_ = std::nullopt;
+
   std::optional<base::CallbackListSubscription> on_scrolled_subscription_ =
       std::nullopt;
 
   base::OnceClosureList on_will_destroy_callback_list_;
+
+  // True while resetting drag state in ResetDragState().
+  bool is_resetting_drag_state_ = false;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_DRAGGED_TABS_CONTAINER_H_

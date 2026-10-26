@@ -55,7 +55,7 @@ class ScopedOverviewHideWindows;
 class ScopedOverviewWallpaperClipper;
 class SplitViewController;
 class SplitViewSetupView;
-class WindowOcclusionCalculator;
+class DesksWindowOcclusionCalculator;
 
 // An instance of this class is created during the initialization of an overview
 // session which manages and positions the overview UI on a per root window
@@ -81,7 +81,8 @@ class ASH_EXPORT OverviewGrid : public SplitViewObserver,
       aura::Window* root_window,
       const std::vector<raw_ptr<aura::Window, VectorExperimental>>& window_list,
       OverviewSession* overview_session,
-      base::WeakPtr<WindowOcclusionCalculator> window_occlusion_calculator);
+      base::WeakPtr<DesksWindowOcclusionCalculator>
+          window_occlusion_calculator);
 
   OverviewGrid(const OverviewGrid&) = delete;
   OverviewGrid& operator=(const OverviewGrid&) = delete;
@@ -104,13 +105,6 @@ class ASH_EXPORT OverviewGrid : public SplitViewObserver,
       bool animate,
       const base::flat_set<OverviewItemBase*>& ignored_items = {},
       OverviewTransition transition = OverviewTransition::kInOverview);
-
-  // Used when feature ContinuousOverviewScrollAnimation is enabled. Positions
-  // the windows according to the y_offset. Uses the same logic as
-  // `PositionWindows()` to determine the final state of each window. Minimized
-  // windows, and the save desk button, fade in accordingly based on the scroll
-  // offset.
-  void PositionWindowsContinuously(float y_offset);
 
   // Returns the `OverviewItemBase` if a window is contained in any of the
   // OverviewItems this grid owns. Returns nullptr if no such a OverviewItem
@@ -382,9 +376,7 @@ class ASH_EXPORT OverviewGrid : public SplitViewObserver,
   // Updates the visibility of the `no_windows_widget_`. If `no_items` is true,
   // the widget will be shown. If `no_items` is false or the desk templates grid
   // is visible, the widget will be hidden.
-  void UpdateNoWindowsWidget(bool no_items,
-                             bool animate,
-                             bool is_continuous_enter);
+  void UpdateNoWindowsWidget(bool no_items, bool animate);
 
   // Refreshes this grid's bounds. This will set bounds and update the overview
   // item positions depending on the current split view state.
@@ -764,16 +756,11 @@ class ASH_EXPORT OverviewGrid : public SplitViewObserver,
   // identify the unsupported window type to the user.
   int num_unsupported_windows_ = 0;
 
-  // Used when feature ContinuousOverviewScrollAnimation is enabled. When a
-  // continuous scroll starts, store the calculated target transforms here. For
-  // each scroll update, use this list to prevent unnecessary recalculations.
-  // For a scroll end, clear the list.
-  base::flat_map<OverviewItemBase*, gfx::Transform> cached_transforms_;
-
   std::optional<OverviewController::ScopedOcclusionPauser> rotation_pauser_;
   std::optional<OverviewController::ScopedOcclusionPauser> scroll_pauser_;
 
-  const base::WeakPtr<WindowOcclusionCalculator> window_occlusion_calculator_;
+  const base::WeakPtr<DesksWindowOcclusionCalculator>
+      window_occlusion_calculator_;
 
   // Set of tasks that get run on the UI thread while the enter-animation is
   // in progress. These tasks are not immediately necessary but may be after the

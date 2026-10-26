@@ -24,6 +24,7 @@ import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
 import org.chromium.components.dom_distiller.core.DomDistillerService;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -41,7 +42,6 @@ public class ReaderModeBottomSheetCoordinator {
     private final BottomSheetController mBottomSheetController;
     private final ReaderModeBottomSheetContent mBottomSheetContent;
     private final ReaderModeBottomSheetView mReaderModeBottomSheetView;
-    private final DomDistillerService mDomDistillerService;
     private final ThemeColorProvider mThemeColorProvider;
     private final ThemeColorProvider.ThemeColorObserver mThemeColorObserver;
     private final ThemeColorProvider.TintObserver mThemeTintObserver;
@@ -62,7 +62,7 @@ public class ReaderModeBottomSheetCoordinator {
         mContext = context;
         mBottomSheetController = bottomSheetController;
         mDestroyChecker = new DestroyChecker();
-        mDomDistillerService = DomDistillerServiceFactory.getForProfile(profile);
+        DomDistillerService domDistillerService = DomDistillerServiceFactory.getForProfile(profile);
         mThemeColorProvider = themeColorProvider;
 
         mReaderModeBottomSheetView =
@@ -79,7 +79,7 @@ public class ReaderModeBottomSheetCoordinator {
 
         mPropertyModel.set(
                 ReaderModeBottomSheetProperties.CONTENT_VIEW,
-                ReaderModePrefsView.create(mContext, mDomDistillerService.getDistilledPagePrefs()));
+                ReaderModePrefsView.create(mContext, domDistillerService.getDistilledPagePrefs()));
 
         // Expand the peeked bottom sheet when tapped.
         mReaderModeBottomSheetView.setOnClickListener(
@@ -90,16 +90,10 @@ public class ReaderModeBottomSheetCoordinator {
                     }
                 });
 
-        mThemeColorObserver =
-                (color, shouldAnimate) -> {
-                    updateThemeProperties();
-                };
+        mThemeColorObserver = (_, _) -> updateThemeProperties();
         mThemeColorProvider.addThemeColorObserver(mThemeColorObserver);
 
-        mThemeTintObserver =
-                (tint, activityFocusTint, brandedColorScheme) -> {
-                    updateThemeProperties();
-                };
+        mThemeTintObserver = (_, _, _) -> updateThemeProperties();
         mThemeColorProvider.addTintObserver(mThemeTintObserver);
 
         mBottomSheetContent = new ReaderModeBottomSheetContent(mReaderModeBottomSheetView);
@@ -145,6 +139,9 @@ public class ReaderModeBottomSheetCoordinator {
     }
 
     private class ReaderModeBottomSheetContent implements BottomSheetContent {
+        private static final BottomSheetType SHEET_TYPE =
+                new BottomSheetType.Builder().setSuppressible(true).build();
+
         private final View mContentView;
 
         ReaderModeBottomSheetContent(View contentView) {
@@ -175,6 +172,11 @@ public class ReaderModeBottomSheetCoordinator {
         }
 
         @Override
+        public BottomSheetType getSheetType() {
+            return SHEET_TYPE;
+        }
+
+        @Override
         public int getPeekHeight() {
             return ((ReaderModeBottomSheetView) mContentView).getPeekHeight();
         }
@@ -187,16 +189,6 @@ public class ReaderModeBottomSheetCoordinator {
         @Override
         public boolean swipeToDismissEnabled() {
             // Required to be false for tapping scrim to return bottomsheet to peek state.
-            return false;
-        }
-
-        @Override
-        public boolean hideOnScroll() {
-            // This bottom sheet is "persistent", but the default #hideOnScroll behavior is too
-            // buggy when the sheet interacts with the bottom controls. Correct implementation for
-            // this is to integrate BottomSheetManager directly with BottomControlsStacker, but the
-            // implementation is non-trivial. Instead, this sheet will be easily dismissable and
-            // come back on scroll up.
             return false;
         }
 
@@ -218,6 +210,11 @@ public class ReaderModeBottomSheetCoordinator {
         @Override
         public @StringRes int getSheetFullHeightAccessibilityStringId() {
             return R.string.reader_mode_bottom_sheet_full_height_content_description;
+        }
+
+        @Override
+        public boolean showHandlebar() {
+            return true;
         }
 
         @Override

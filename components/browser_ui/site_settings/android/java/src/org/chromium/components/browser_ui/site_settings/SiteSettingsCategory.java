@@ -82,6 +82,7 @@ public class SiteSettingsCategory {
         Type.AUTO_PICTURE_IN_PICTURE,
         Type.LOCAL_NETWORK,
         Type.LOOPBACK_NETWORK,
+        Type.HID_DEVICES,
         Type.NUM_ENTRIES
     })
     @Retention(RetentionPolicy.SOURCE)
@@ -126,9 +127,10 @@ public class SiteSettingsCategory {
         int AUTO_PICTURE_IN_PICTURE = 35;
         int LOCAL_NETWORK = 36;
         int LOOPBACK_NETWORK = 37;
+        int HID_DEVICES = 38;
 
         /** Number of handled categories used for calculating array sizes. */
-        int NUM_ENTRIES = 38;
+        int NUM_ENTRIES = 39;
     }
 
     private final BrowserContextHandle mBrowserContextHandle;
@@ -205,13 +207,30 @@ public class SiteSettingsCategory {
 
     public static @Nullable SiteSettingsCategory createFromPreferenceKey(
             BrowserContextHandle browserContextHandle, String preferenceKey) {
+        @Type int type = typeFromPreferenceKey(preferenceKey);
+        return type == Type.NUM_ENTRIES ? null : createFromType(browserContextHandle, type);
+    }
+
+    /**
+     * Returns whether {@code preferenceKey} names a category.
+     *
+     * <p>For callers that only need to know whether a string is a category at all, and so have no
+     * browser context to build one with. A settings Url is user editable, so the string it carries
+     * may name nothing.
+     */
+    public static boolean isValidPreferenceKey(@Nullable String preferenceKey) {
+        return typeFromPreferenceKey(preferenceKey) != Type.NUM_ENTRIES;
+    }
+
+    /**
+     * Returns the {@link Type} that {@code preferenceKey} names, or NUM_ENTRIES if it names none.
+     */
+    private static @Type int typeFromPreferenceKey(@Nullable String preferenceKey) {
         assert Type.ALL_SITES == 0;
         for (@Type int i = Type.ALL_SITES; i < Type.NUM_ENTRIES; i++) {
-            if (preferenceKey(i).equals(preferenceKey)) {
-                return createFromType(browserContextHandle, i);
-            }
+            if (preferenceKey(i).equals(preferenceKey)) return i;
         }
-        return null;
+        return Type.NUM_ENTRIES;
     }
 
     /** Convert Type into {@link ContentSettingsType}. */
@@ -277,6 +296,8 @@ public class SiteSettingsCategory {
                 return ContentSettingsType.SENSORS;
             case Type.SERIAL_PORT:
                 return ContentSettingsType.SERIAL_GUARD;
+            case Type.HID_DEVICES:
+                return ContentSettingsType.HID_GUARD;
             case Type.STORAGE_ACCESS:
                 return ContentSettingsType.STORAGE_ACCESS;
             case Type.SOUND:
@@ -308,6 +329,8 @@ public class SiteSettingsCategory {
                 return ContentSettingsType.BLUETOOTH_CHOOSER_DATA;
             case ContentSettingsType.SERIAL_GUARD:
                 return ContentSettingsType.SERIAL_CHOOSER_DATA;
+            case ContentSettingsType.HID_GUARD:
+                return ContentSettingsType.HID_CHOOSER_DATA;
             default:
                 return -1; // Conversion unavailable.
         }
@@ -375,6 +398,8 @@ public class SiteSettingsCategory {
                 return "sensors";
             case Type.SERIAL_PORT:
                 return "serial_port";
+            case Type.HID_DEVICES:
+                return "hid_devices";
             case Type.STORAGE_ACCESS:
                 return "storage_access";
             case Type.SOUND:
@@ -616,19 +641,20 @@ public class SiteSettingsCategory {
     protected String getMessageForEnablingOsPerAppPermission(Context context, String appName) {
         @ContentSettingsType.EnumType int type = this.getContentSettingsType();
         int permissionString = R.string.android_permission_off;
-        if (type == ContentSettingsType.GEOLOCATION
-                || type == ContentSettingsType.GEOLOCATION_WITH_OPTIONS) {
-            permissionString = R.string.android_location_permission_off;
-        } else if (type == ContentSettingsType.MEDIASTREAM_MIC) {
-            permissionString = R.string.android_microphone_permission_off;
-        } else if (type == ContentSettingsType.MEDIASTREAM_CAMERA) {
-            permissionString = R.string.android_camera_permission_off;
-        } else if (type == ContentSettingsType.AR) {
-            permissionString = R.string.android_ar_camera_permission_off;
-        } else if (type == ContentSettingsType.HAND_TRACKING) {
-            permissionString = R.string.android_hand_tracking_permission_off;
-        } else if (type == ContentSettingsType.NOTIFICATIONS) {
-            permissionString = R.string.android_notifications_permission_off;
+        switch (type) {
+            case ContentSettingsType.GEOLOCATION, ContentSettingsType.GEOLOCATION_WITH_OPTIONS ->
+                    permissionString = R.string.android_location_permission_off;
+            case ContentSettingsType.MEDIASTREAM_MIC ->
+                    permissionString = R.string.android_microphone_permission_off;
+            case ContentSettingsType.MEDIASTREAM_CAMERA ->
+                    permissionString = R.string.android_camera_permission_off;
+            case ContentSettingsType.AR ->
+                    permissionString = R.string.android_ar_camera_permission_off;
+            case ContentSettingsType.HAND_TRACKING ->
+                    permissionString = R.string.android_hand_tracking_permission_off;
+            case ContentSettingsType.NOTIFICATIONS ->
+                    permissionString = R.string.android_notifications_permission_off;
+            default -> {}
         }
         return context.getString(permissionString, appName);
     }

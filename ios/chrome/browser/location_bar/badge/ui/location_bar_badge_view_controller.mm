@@ -23,8 +23,6 @@
 #import "ios/chrome/browser/location_bar/ui_bundled/highlight_utils.h"
 #import "ios/chrome/browser/location_bar/ui_bundled/location_bar_constants.h"
 #import "ios/chrome/browser/location_bar/ui_bundled/location_bar_metrics.h"
-#import "ios/chrome/browser/price_insights/model/price_insights_model.h"
-#import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/reader_mode/ui/reader_mode_chip_visibility_delegate.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
@@ -56,9 +54,7 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
 }  // anonymous namespace
 
 @implementation LocationBarBadgeViewController {
-  /// Whether the contextual panel badge should be visible. The placeholder
-  /// view trumps the entrypoint when kLensOverlayPriceInsightsCounterfactual is
-  /// enabled.
+  /// Whether the contextual panel badge should be visible.
   BOOL _contextualPanelEntrypointShouldBeVisible;
   // Whether the location bar badge should be visible.
   BOOL _locationBarBadgeShouldBeVisible;
@@ -617,8 +613,7 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
         badgeType = LocationBarBadgeType::kContextualPanelEntryPointSample;
         break;
       case ContextualPanelItemType::PriceInsightsItem:
-        badgeType = LocationBarBadgeType::kPriceInsights;
-        break;
+        NOTREACHED();
       case ContextualPanelItemType::ReaderModeItem:
         badgeType = LocationBarBadgeType::kReaderMode;
         break;
@@ -634,20 +629,8 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
     NSString* accessibilityLabel =
         base::SysUTF8ToNSString(config->accessibility_label);
 
-    UIImage* image;
-    CGFloat symbolPointSize = kBadgeSymbolPointSize;
-    switch (config->image_type) {
-      case ContextualPanelItemConfiguration::EntrypointImageType::SFSymbol:
-        image = DefaultSymbolWithPointSize(
-            base::SysUTF8ToNSString(config->entrypoint_image_name),
-            symbolPointSize);
-        break;
-      case ContextualPanelItemConfiguration::EntrypointImageType::Image:
-        image = CustomSymbolWithPointSize(
-            base::SysUTF8ToNSString(config->entrypoint_image_name),
-            symbolPointSize);
-        break;
-    }
+    UIImage* image =
+        SymbolWithPointSize(config->entrypoint_symbol, kBadgeSymbolPointSize);
 
     LocationBarBadgeConfiguration* badgeConfig =
         [[LocationBarBadgeConfiguration alloc]
@@ -659,12 +642,6 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
     if (config->accessibility_hint.size() > 0) {
       badgeConfig.accessibilityHint =
           base::SysUTF8ToNSString(config->accessibility_hint);
-    }
-
-    if (config->item_type == ContextualPanelItemType::PriceInsightsItem) {
-      PriceInsightsItemConfiguration* priceInsightsConfig =
-          static_cast<PriceInsightsItemConfiguration*>(config);
-      badgeConfig.active = priceInsightsConfig->is_subscribed;
     }
 
     [self setBadgeConfig:badgeConfig];
@@ -682,20 +659,8 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
 
     _label.text = base::SysUTF8ToNSString(config->entrypoint_message);
 
-    UIImage* image;
-    CGFloat symbolPointSize = kBadgeSymbolPointSize;
-    switch (config->image_type) {
-      case ContextualPanelItemConfiguration::EntrypointImageType::SFSymbol:
-        image = DefaultSymbolWithPointSize(
-            base::SysUTF8ToNSString(config->entrypoint_image_name),
-            symbolPointSize);
-        break;
-      case ContextualPanelItemConfiguration::EntrypointImageType::Image:
-        image = CustomSymbolWithPointSize(
-            base::SysUTF8ToNSString(config->entrypoint_image_name),
-            symbolPointSize);
-        break;
-    }
+    UIImage* image =
+        SymbolWithPointSize(config->entrypoint_symbol, kBadgeSymbolPointSize);
 
     _badgeIcon.image = image;
   }
@@ -785,6 +750,11 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
 
   [self updateAccessibilityStatus];
 
+  if (_badgeConfig.badgeType == LocationBarBadgeType::kReaderMode) {
+    [self.layoutGuideCenter referenceView:_buttonContainer
+                                underName:kReaderModeOptionsEntrypointGuide];
+  }
+
   __weak LocationBarBadgeViewController* weakSelf = self;
 
   [UIView animateWithDuration:kBadgeDisplayingAnimationTime
@@ -805,6 +775,10 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
   [self transitionToContextualPanelOpenedState:NO];
 
   [self setLocationBarBadgeHidden:YES];
+  if (_badgeConfig.badgeType == LocationBarBadgeType::kReaderMode) {
+    [self.layoutGuideCenter referenceView:nil
+                                underName:kReaderModeOptionsEntrypointGuide];
+  }
   if (_badgeConfig.badgeType ==
       LocationBarBadgeType::kGeminiContextualCueChip) {
     if ([self.visibilityDelegate
@@ -935,42 +909,21 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
   [self updateAccessibilityStatus];
 }
 
-// Helper to determine if the badge is in the Price Insights "Available" state.
-- (BOOL)isAvailablePriceInsights {
-  return _badgeConfig.badgeType == LocationBarBadgeType::kPriceInsights &&
-         !_badgeConfig.isActive;
-}
-
-// Returns whether the badge style should be the active one.
-- (BOOL)isBadgeStyleActive {
-  return ![self isAvailablePriceInsights];
-}
-
 // Returns the foreground color for the unified container elements (icon and
 // text).
 - (UIColor*)foregroundColorForUnifiedContainer {
   CHECK(!IsChromeNextIaEnabled());
-  return [self isBadgeStyleActive] ? [UIColor colorNamed:kSolidWhiteColor]
-                                   : [UIColor colorNamed:kBlue600Color];
+  return [UIColor colorNamed:kSolidWhiteColor];
 }
 
 // Helper to refresh entrypoint visual elements for the unified container.
 - (void)refreshBadgeForUnifiedContainer {
-  ContextualPanelEntrypointState state =
-      [self isAvailablePriceInsights]
-          ? ContextualPanelEntrypointState::kAvailable
-          : ContextualPanelEntrypointState::kActive;
-  [self.visibilityDelegate setContextualPanelEntrypointState:state];
+  [self.visibilityDelegate setContextualPanelEntrypointState:
+                               ContextualPanelEntrypointState::kActive];
 
   if (IsChromeNextIaEnabled()) {
-    if ([self isBadgeStyleActive]) {
-      _label.textColor = [UIColor colorNamed:kSolidWhiteColor];
-      ConfigureIPHImageStyleForImageView(_badgeIcon);
-
-    } else {
-      _label.textColor = [UIColor colorNamed:kBlue600Color];
-      RemoveIPHImageStyleFromImageView(_badgeIcon);
-    }
+    _label.textColor = [UIColor colorNamed:kSolidWhiteColor];
+    ConfigureIPHImageStyleForImageView(_badgeIcon);
   } else {
     UIColor* foregroundColor = [self foregroundColorForUnifiedContainer];
     _badgeIcon.tintColor = foregroundColor;
@@ -983,10 +936,7 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
 
 // Helper to refresh entrypoint visual elements for the single badge container.
 - (void)refreshBadgeForSingleBadgeContainer {
-  BOOL shouldAccountForVisibleInfobarBadges =
-      _infobarBadgesCurrentlyShown && !IsReaderModeAvailable();
-  BOOL shouldShowMutedColors =
-      shouldAccountForVisibleInfobarBadges || _badgeTapped;
+  BOOL shouldShowMutedColors = _badgeTapped;
 
   _badgeIcon.tintColor = shouldShowMutedColors
                              ? [UIColor colorNamed:kGrey600Color]
@@ -995,10 +945,7 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
   _buttonContainer.layer.shadowOpacity =
       shouldShowMutedColors ? 0 : kBadgeContainerShadowOpacity;
 
-  UIColor* untappedBackgroundColor =
-      shouldAccountForVisibleInfobarBadges
-          ? nil
-          : [UIColor colorNamed:kBackgroundColor];
+  UIColor* untappedBackgroundColor = [UIColor colorNamed:kBackgroundColor];
   UIColor* buttonContainerBackgroundColor =
       _badgeTapped ? [UIColor colorNamed:kGrey100Color]
                    : untappedBackgroundColor;
@@ -1010,10 +957,8 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
   if (IsChromeNextIaEnabled()) {
     if (highlighted) {
       _badgeIcon.tintColor = [UIColor colorNamed:kBackgroundColor];
-    } else if ([self isBadgeStyleActive]) {
-      ConfigureIPHImageStyleForImageView(_badgeIcon);
     } else {
-      RemoveIPHImageStyleFromImageView(_badgeIcon);
+      ConfigureIPHImageStyleForImageView(_badgeIcon);
     }
   } else {
     _badgeIcon.tintColor = highlighted

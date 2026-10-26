@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.hub;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -16,6 +17,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.hub.HubColorMixer.COLOR_MIXER;
+import static org.chromium.chrome.browser.hub.HubToolbarProperties.CLOSE_BUTTON_VISIBLE;
 import static org.chromium.chrome.browser.hub.HubToolbarProperties.HAIRLINE_VISIBILITY;
 import static org.chromium.chrome.browser.hub.HubToolbarProperties.HUB_SEARCH_ENABLED_STATE;
 import static org.chromium.chrome.browser.hub.HubToolbarProperties.IS_INCOGNITO;
@@ -43,11 +45,11 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 
 import androidx.core.content.ContextCompat;
-import androidx.test.ext.junit.rules.ActivityScenarioRule;
 
 import com.google.android.material.color.MaterialColors;
 import com.google.android.material.tabs.TabLayout;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -60,6 +62,8 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.ParameterizedRobolectricTestRunner;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameter;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
+import org.robolectric.Robolectric;
+import org.robolectric.android.controller.ActivityController;
 
 import org.chromium.base.Callback;
 import org.chromium.base.DeviceInfo;
@@ -67,9 +71,7 @@ import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.util.CallbackHelper;
-import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.hub.HubToolbarProperties.PaneButtonLookup;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButton;
 import org.chromium.chrome.browser.ui.actions.button.DelegateButtonData;
@@ -102,10 +104,6 @@ public class HubToolbarViewUnitTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Rule
-    public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
-            new ActivityScenarioRule<>(TestActivity.class);
-
     @Rule public BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
 
     private final CallbackHelper mOnButtonHelper = new CallbackHelper();
@@ -115,6 +113,7 @@ public class HubToolbarViewUnitTest {
     @Captor ArgumentCaptor<PaneButtonLookup> mPaneButtonLookupCaptor;
 
     private SettableMonotonicObservableSupplier<Pane> mFocusedPaneSupplier;
+    private ActivityController<TestActivity> mActivityController;
     private Activity mActivity;
     private FrameLayout mToolbarContainer;
     private Button mActionButton;
@@ -132,7 +131,13 @@ public class HubToolbarViewUnitTest {
     public void setUp() throws Exception {
         DeviceInfo.setIsXrForTesting(mIsXrDevice);
 
-        mActivityScenarioRule.getScenario().onActivity(this::onActivity);
+        mActivityController = Robolectric.buildActivity(TestActivity.class).setup();
+        onActivity(mActivityController.get());
+    }
+
+    @After
+    public void tearDown() {
+        mActivityController.close();
     }
 
     private void onActivity(TestActivity activity) {
@@ -156,7 +161,10 @@ public class HubToolbarViewUnitTest {
         mColorMixer =
                 spy(
                         new HubColorMixerImpl(
-                                mActivity, ObservableSuppliers.alwaysTrue(), mFocusedPaneSupplier));
+                                mActivity,
+                                ObservableSuppliers.alwaysTrue(),
+                                mFocusedPaneSupplier,
+                                ObservableSuppliers.alwaysNull()));
         mPropertyModel =
                 new PropertyModel.Builder(HubToolbarProperties.ALL_KEYS)
                         .with(COLOR_MIXER, mColorMixer)
@@ -230,6 +238,32 @@ public class HubToolbarViewUnitTest {
 
         mPaneSwitcher.getTabAt(1).select();
         assertEquals(2, mOnButtonHelper.getCallCount());
+    }
+
+    @Test
+    public void testPaneSwitcherScrollPosition() {
+        HubToolbarView hubToolbarView = mToolbarContainer.findViewById(R.id.hub_toolbar);
+        // Verify setPaneSwitcherScrollPosition executes cleanly without crash.
+        hubToolbarView.setPaneSwitcherScrollPosition(0, 0.5f);
+    }
+
+    @Test
+    public void testPaneSwitcherBlockTabSelectionCallback() {
+        FullButtonData fullButtonData = makeTestButtonData();
+        mPropertyModel.set(
+                PANE_SWITCHER_BUTTON_DATA, Arrays.asList(fullButtonData, fullButtonData));
+        HubToolbarView hubToolbarView = mToolbarContainer.findViewById(R.id.hub_toolbar);
+
+        // When tab selection callback is blocked, tab.select() on an unselected tab should not
+        // trigger onPress.
+        hubToolbarView.setBlockTabSelectionCallback(true);
+        mPaneSwitcher.getTabAt(0).select();
+        assertEquals(0, mOnButtonHelper.getCallCount());
+
+        // When unblocked, selecting tab triggers onPress normally.
+        hubToolbarView.setBlockTabSelectionCallback(false);
+        mPaneSwitcher.getTabAt(1).select();
+        assertEquals(1, mOnButtonHelper.getCallCount());
     }
 
     @Test
@@ -314,10 +348,27 @@ public class HubToolbarViewUnitTest {
     @Test
     public void testMenuButtonWrapperVisibility() {
         mPropertyModel.set(MENU_BUTTON_VISIBLE, false);
-        assertEquals(View.INVISIBLE, mMenuButtonWrapper.getVisibility());
+        assertEquals(View.GONE, mMenuButtonWrapper.getVisibility());
 
         mPropertyModel.set(MENU_BUTTON_VISIBLE, true);
         assertEquals(View.VISIBLE, mMenuButtonWrapper.getVisibility());
+    }
+
+    @Test
+    public void testCloseButtonVisibility() {
+        View closeButton = mToolbarContainer.findViewById(R.id.toolbar_close_button);
+        if (mIsXrDevice) {
+            assertNull(closeButton);
+            return;
+        }
+
+        assertEquals(View.GONE, closeButton.getVisibility());
+
+        mPropertyModel.set(CLOSE_BUTTON_VISIBLE, true);
+        assertEquals(View.VISIBLE, closeButton.getVisibility());
+
+        mPropertyModel.set(CLOSE_BUTTON_VISIBLE, false);
+        assertEquals(View.GONE, closeButton.getVisibility());
     }
 
     @Test
@@ -385,9 +436,6 @@ public class HubToolbarViewUnitTest {
     }
 
     @Test
-    @DisableFeatures({
-        ChromeFeatureList.GRID_TAB_SWITCHER_SURFACE_COLOR_UPDATE,
-    })
     public void testUpdateSearchBoxColorScheme() {
         forceSetColorScheme(HubColorScheme.INCOGNITO);
         assertEquals(
@@ -408,6 +456,23 @@ public class HubToolbarViewUnitTest {
         assertEquals(
                 ColorStateList.valueOf(SemanticColorUtils.getColorSurfaceContainerHigh(mActivity)),
                 backgroundDrawable.getColor());
+    }
+
+    @Test
+    public void testUpdateCloseButtonColorScheme() {
+        if (mIsXrDevice) return;
+
+        ImageView closeButton = mToolbarContainer.findViewById(R.id.toolbar_close_button);
+
+        forceSetColorScheme(HubColorScheme.INCOGNITO);
+        assertEquals(
+                ColorStateList.valueOf(mActivity.getColor(R.color.default_icon_color_light)),
+                closeButton.getImageTintList());
+
+        forceSetColorScheme(HubColorScheme.DEFAULT);
+        assertEquals(
+                ColorStateList.valueOf(SemanticColorUtils.getDefaultIconColor(mActivity)),
+                closeButton.getImageTintList());
     }
 
     @Test

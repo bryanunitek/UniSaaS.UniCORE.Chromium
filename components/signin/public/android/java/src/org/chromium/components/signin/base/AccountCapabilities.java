@@ -85,11 +85,11 @@ public class AccountCapabilities {
     }
 
     /**
-     * @return canRunChromePrivacySandboxTrials capability value.
+     * @return canOverrideAccountInfo capability value.
      */
-    public @Tribool int canRunChromePrivacySandboxTrials() {
+    public @Tribool int canOverrideAccountInfo() {
         return getCapabilityByName(
-                AccountCapabilitiesConstants.CAN_RUN_CHROME_PRIVACY_SANDBOX_TRIALS_CAPABILITY_NAME);
+                AccountCapabilitiesConstants.CAN_OVERRIDE_ACCOUNT_INFO_CAPABILITY_NAME);
     }
 
     /**
@@ -175,15 +175,6 @@ public class AccountCapabilities {
     }
 
     /**
-     * @return isSubjectToChromePrivacySandboxRestrictedMeasurementNotice capability value.
-     */
-    public @Tribool int isSubjectToChromePrivacySandboxRestrictedMeasurementNotice() {
-        return getCapabilityByName(
-                AccountCapabilitiesConstants
-                        .IS_SUBJECT_TO_CHROME_PRIVACY_SANDBOX_RESTRICTED_MEASUREMENT_NOTICE);
-    }
-
-    /**
      * @return isSubjectToEnterpriseFeatures capability value.
      */
     public @Tribool int isSubjectToEnterpriseFeatures() {
@@ -197,6 +188,24 @@ public class AccountCapabilities {
     public @Tribool int isSubjectToParentalControls() {
         return getCapabilityByName(
                 AccountCapabilitiesConstants.IS_SUBJECT_TO_PARENTAL_CONTROLS_CAPABILITY_NAME);
+    }
+
+    /**
+     * @return isSubjectToParentalControlsViaBundle capability value.
+     */
+    public @Tribool int isSubjectToParentalControlsViaBundle() {
+        return getCapabilityByName(
+                AccountCapabilitiesConstants
+                        .IS_SUBJECT_TO_PARENTAL_CONTROLS_VIA_BUNDLE_CAPABILITY_NAME);
+    }
+
+    /**
+     * @return isSubjectToUniversalOptOut capability value.
+     */
+    public @Tribool int isSubjectToUniversalOptOut() {
+        return getCapabilityByName(
+                AccountCapabilitiesConstants
+                        .IS_SUBJECT_TO_UNIVERSAL_OPT_OUT_CAPABILITY_NAME);
     }
 
     /**

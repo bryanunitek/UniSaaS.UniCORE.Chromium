@@ -7,12 +7,13 @@
 
 #include <optional>
 
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/resources/transferable_resource.h"
+#include "mojo/public/cpp/bindings/deserialization_error.h"
 #include "services/viz/public/mojom/compositing/transferable_resource.mojom-shared.h"
 #include "skia/public/mojom/image_info_mojom_traits.h"
-#include "skia/public/mojom/surface_origin_mojom_traits.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "gpu/ipc/common/vulkan_ycbcr_info_mojom_traits.h"
@@ -24,19 +25,9 @@ namespace mojo {
 template <>
 struct StructTraits<viz::mojom::MetadataOverrideDataView,
                     viz::TransferableResource::MetadataOverride> {
-  static const std::optional<bool>& is_overlay_candidate(
-      const viz::TransferableResource::MetadataOverride& input) {
-    return input.is_overlay_candidate;
-  }
-
   static const std::optional<gfx::ColorSpace>& color_space(
       const viz::TransferableResource::MetadataOverride& input) {
     return input.color_space;
-  }
-
-  static const std::optional<GrSurfaceOrigin>& origin(
-      const viz::TransferableResource::MetadataOverride& input) {
-    return input.origin;
   }
 
   static const std::optional<SkAlphaType>& alpha_type(
@@ -44,8 +35,9 @@ struct StructTraits<viz::mojom::MetadataOverrideDataView,
     return input.alpha_type;
   }
 
-  static bool Read(viz::mojom::MetadataOverrideDataView data,
-                   viz::TransferableResource::MetadataOverride* out);
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::MetadataOverrideDataView data,
+      viz::TransferableResource::MetadataOverride* out);
 };
 
 template <>
@@ -90,11 +82,6 @@ struct StructTraits<viz::mojom::TransferableResourceDataView,
     return resource.synchronization_type;
   }
 
-  static bool is_low_latency_rendering(
-      const viz::TransferableResource& resource) {
-    return resource.is_low_latency_rendering;
-  }
-
 #if BUILDFLAG(IS_ANDROID)
   static bool is_backed_by_surface_view(
       const viz::TransferableResource& resource) {
@@ -134,8 +121,9 @@ struct StructTraits<viz::mojom::TransferableResourceDataView,
     return resource.metadata_override();
   }
 
-  static bool Read(viz::mojom::TransferableResourceDataView data,
-                   viz::TransferableResource* out);
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::TransferableResourceDataView data,
+      viz::TransferableResource* out);
 };
 
 }  // namespace mojo

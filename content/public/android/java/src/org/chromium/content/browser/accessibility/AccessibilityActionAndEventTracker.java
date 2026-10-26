@@ -391,8 +391,9 @@ public class AccessibilityActionAndEventTracker {
         if (nodeDescription == null) nodeDescription = toStringOrNull(info.getContentDescription());
         if (nodeDescription == null) nodeDescription = toStringOrNull(info.getHintText());
         if (nodeDescription == null) nodeDescription = toStringOrNull(info.getPaneTitle());
-        if (nodeDescription == null)
+        if (nodeDescription == null) {
             nodeDescription = toStringOrNull(info.getSupplementalDescription());
+        }
 
         if (nodeDescription != null && !nodeDescription.isEmpty()) {
             if (sb.length() > 0) {
@@ -460,6 +461,16 @@ public class AccessibilityActionAndEventTracker {
         }
         if ((contentChangeTypes & AccessibilityEvent.CONTENT_CHANGE_TYPE_ENABLED) != 0) {
             types.add("ENABLED");
+        }
+        if ((contentChangeTypes & AccessibilityEvent.CONTENT_CHANGE_TYPE_CHECKED) != 0) {
+            types.add("CHECKED");
+        }
+        if ((contentChangeTypes & AccessibilityEvent.CONTENT_CHANGE_TYPE_EXPANDED) != 0) {
+            types.add("EXPANDED");
+        }
+        if ((contentChangeTypes & AccessibilityEvent.CONTENT_CHANGE_TYPE_SUPPLEMENTAL_DESCRIPTION)
+                != 0) {
+            types.add("SUPPLEMENTAL_DESCRIPTION");
         }
         if ((contentChangeTypes & CONTENT_CHANGE_TYPE_SORT_DIRECTION) != 0) {
             types.add("SORT_DIRECTION");

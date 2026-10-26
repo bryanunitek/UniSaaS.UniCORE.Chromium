@@ -28,6 +28,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service_factory.h"
@@ -35,7 +36,7 @@
 #include "chrome/browser/extensions/api/certificate_provider/certificate_provider_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/notifications/request_pin_view_chromeos.h"
 #include "chrome/common/chrome_paths.h"
@@ -83,6 +84,7 @@
 #include "third_party/boringssl/src/include/openssl/pool.h"
 #include "third_party/boringssl/src/include/openssl/rsa.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -390,7 +392,7 @@ class CertificateProviderApiMockedExtensionTest
     // by completion of this request, so we don't wait for navigation to finish.
     ui_test_utils::NavigateToURLWithDisposition(
         browser(), GetHttpsClientCertUrl(),
-        WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        WindowOpenDisposition::kNewForegroundTab,
         ui_test_utils::BROWSER_TEST_NO_WAIT);
 
     content::WebContents* const https_contents = GetActiveWebContents();
@@ -906,15 +908,16 @@ IN_PROC_BROWSER_TEST_F(CertificateProviderApiTest,
   // made by the test.
   const std::string client_cert_fingerprint = GetCertFingerprint1(
       *ash::TestCertificateProviderExtension::GetCertificate());
-  Browser* const incognito_browser = CreateIncognitoBrowser(profile());
+  BrowserWindowInterface* const incognito_browser =
+      CreateIncognitoBrowser(profile());
   ASSERT_TRUE(incognito_browser);
   ui_test_utils::NavigateToURLWithDisposition(
       incognito_browser, GetHttpsClientCertUrl(),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   EXPECT_EQ(test_certificate_provider_extension.certificate_request_count(), 1);
   EXPECT_EQ(GetPageTextContent(
-                incognito_browser->tab_strip_model()->GetActiveWebContents()),
+                incognito_browser->GetTabStripModel()->GetActiveWebContents()),
             "got client cert with fingerprint: " + client_cert_fingerprint);
   CheckCertificateProvidedByExtension(
       *ash::TestCertificateProviderExtension::GetCertificate(), *extension);

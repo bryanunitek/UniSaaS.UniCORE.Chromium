@@ -43,6 +43,8 @@ class UpdateManifest {
     kVersionEntryNotADictionary,
   };
 
+  static std::string_view ErrorToString(JsonFormatError error);
+
   class ChannelMetadata {
    public:
     static base::expected<ChannelMetadata, std::monostate> ParseFromJson(
@@ -123,6 +125,9 @@ class UpdateManifest {
 
   UpdateManifest(const UpdateManifest& other);
   UpdateManifest& operator=(const UpdateManifest& other);
+
+  UpdateManifest(UpdateManifest&& other);
+  UpdateManifest& operator=(UpdateManifest&& other);
 
   ~UpdateManifest();
 

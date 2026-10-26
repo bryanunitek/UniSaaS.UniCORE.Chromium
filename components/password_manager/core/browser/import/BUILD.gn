@@ -19,6 +19,7 @@ source_set("importer") {
     ":csv",
     "//base",
     "//components/password_manager/core/browser:password_form",
+    "//components/password_manager/core/browser/password_store:password_store_interface",
   ]
 
   deps = [
@@ -28,7 +29,6 @@ source_set("importer") {
     "//components/password_manager/services/csv_password:service",
     "//components/sync/base",
   ]
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
 source_set("importer_unit_tests") {
@@ -70,15 +70,8 @@ source_set("csv") {
   ]
   public_deps = [
     "//base",
-    "//components/password_manager/core/browser:password_form",
-  ]
-
-  deps = [
-    "//components/affiliations/core/browser:affiliations",
-    "//components/password_manager/core/browser/form_parsing",
     "//url",
   ]
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
 source_set("csv_unit_tests") {

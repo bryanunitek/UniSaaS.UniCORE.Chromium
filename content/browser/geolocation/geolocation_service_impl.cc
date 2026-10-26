@@ -154,7 +154,7 @@ void GeolocationServiceImplContext::HandlePermissionResult(
 GeolocationServiceImpl::GeolocationServiceImpl(
     RenderFrameHost* render_frame_host)
     : render_frame_host_(render_frame_host) {
-  DCHECK(render_frame_host);
+  CHECK(render_frame_host, base::NotFatalUntil::M158);
 }
 
 GeolocationServiceImpl::~GeolocationServiceImpl() {
@@ -253,7 +253,7 @@ void GeolocationServiceImpl::CreateGeolocationWithPermissionResult(
         device::mojom::GeolocationClientId::kGeolocationServiceImpl,
         has_precise_permission);
   }
-  subscription_id_ =
+  permission_subscription_ =
       PermissionControllerImpl::FromBrowserContext(
           render_frame_host_->GetBrowserContext())
           ->SubscribeToPermissionResultChange(
@@ -279,10 +279,8 @@ void GeolocationServiceImpl::HandlePermissionResultChange(
   GeolocationPermissionLevel permission_level =
       GetPermissionLevel(permission_result);
   if (permission_level == GeolocationPermissionLevel::kDenied &&
-      subscription_id_.value()) {
-    PermissionControllerImpl::FromBrowserContext(
-        render_frame_host_->GetBrowserContext())
-        ->UnsubscribeFromPermissionResultChange(subscription_id_);
+      permission_subscription_) {
+    permission_subscription_.reset();
     // When kGeolocationProxy is enabled, DecrementActivityCount is managed
     // by the GeolocationProxy lifecycle.
     if (!base::FeatureList::IsEnabled(features::kGeolocationProxy)) {

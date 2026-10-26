@@ -9,11 +9,12 @@
 
 #import "base/functional/bind.h"
 #import "base/functional/callback.h"
+#import "base/strings/stringprintf.h"
 #import "base/types/expected.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/action_target.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/scroll_tool_java_script_feature.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
-#import "ios/chrome/browser/intelligence/actor/tools/utils/profile_context_resolver.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/web/public/js_messaging/web_frame.h"
 #import "ios/web/public/js_messaging/web_frames_manager.h"
@@ -24,45 +25,22 @@ namespace actor {
 ScrollToTool::~ScrollToTool() = default;
 
 // static
-base::expected<std::unique_ptr<ScrollToTool>, ToolExecutionResult>
-ScrollToTool::Create(const optimization_guide::proto::ScrollToAction& action,
-                     const ProfileContextResolver& profile_context_resolver) {
-  if (!action.has_tab_id()) {
-    return base::unexpected(
-        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
-  }
-
-  base::expected<ProfileContextResolver::TabResolutionResult,
-                 ToolExecutionResult>
-      resolution_result = profile_context_resolver.ResolveTab(action.tab_id());
-  if (!resolution_result.has_value()) {
-    return base::unexpected(resolution_result.error());
-  }
-
-  if (!action.has_target()) {
-    return base::unexpected(
-        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
-  }
-  const optimization_guide::proto::ActionTarget& target = action.target();
-  // Callers must either target by coordinate or (document_identifier, node_id).
-  if (target.has_content_node_id() && !target.has_document_identifier()) {
-    return base::unexpected(
-        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
-  }
-  bool can_target_by_coordinate = target.has_coordinate();
-  bool can_target_by_node_id =
-      target.has_content_node_id() && target.has_document_identifier();
-  if (!can_target_by_coordinate && !can_target_by_node_id) {
-    return base::unexpected(
-        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
-  }
-  if (can_target_by_coordinate && can_target_by_node_id) {
-    return base::unexpected(
-        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
-  }
-
+std::unique_ptr<ScrollToTool> ScrollToTool::Create(
+    base::WeakPtr<web::WebState> web_state,
+    const optimization_guide::proto::ScrollToAction& action) {
+  ActionTarget target = ActionTarget::FromProto(action.target());
   return std::unique_ptr<ScrollToTool>(
-      new ScrollToTool(action, resolution_result.value().web_state));
+      new ScrollToTool(web_state, std::move(target)));
+}
+
+void ScrollToTool::Validate(ToolExecutionCallback callback) {
+  if (!target_.is_valid()) {
+    std::move(callback).Run(
+        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
+    return;
+  }
+
+  std::move(callback).Run(ToolExecutionResult::Ok());
 }
 
 void ScrollToTool::Execute(ToolExecutionCallback callback) {
@@ -79,11 +57,10 @@ void ScrollToTool::Execute(ToolExecutionCallback callback) {
     return;
   }
 
-  ResolveTargetFrame(web_state_, frames_manager->GetMainWebFrame()->AsWeakPtr(),
-                     action_.target(),
-                     base::BindOnce(&ScrollToTool::OnTargetFrameResolved,
-                                    weak_ptr_factory_.GetWeakPtr(), action_,
-                                    std::move(callback)));
+  ResolveTargetFrame(
+      web_state_, frames_manager->GetMainWebFrame()->AsWeakPtr(), target_,
+      base::BindOnce(&ScrollToTool::OnTargetFrameResolved,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 base::WeakPtr<web::WebState> ScrollToTool::GetTargetWebState() const {
@@ -94,15 +71,17 @@ ToolType ScrollToTool::GetToolType() const {
   return ToolType::kScrollTo;
 }
 
-ScrollToTool::ScrollToTool(
-    const optimization_guide::proto::ScrollToAction& action,
-    base::WeakPtr<web::WebState> web_state)
-    : action_(action),
+std::string ScrollToTool::DebugString() const {
+  return base::StringPrintf("ScrollToTool[%s]", target_.DebugString().c_str());
+}
+
+ScrollToTool::ScrollToTool(base::WeakPtr<web::WebState> web_state,
+                           ActionTarget target)
+    : target_(std::move(target)),
       web_state_(web_state),
       js_feature_(ScrollToolJavaScriptFeature::GetInstance()) {}
 
 void ScrollToTool::OnTargetFrameResolved(
-    optimization_guide::proto::ScrollToAction action,
     ToolExecutionCallback callback,
     base::expected<ActionTargetJavaScriptFeature::TargetFrameResult,
                    ToolExecutionResult> result) {
@@ -122,11 +101,7 @@ void ScrollToTool::OnTargetFrameResolved(
 
   target_frame_ = target_web_frame->AsWeakPtr();
 
-  // Update the target with the potentially translated coordinates relative
-  // to the target frame.
-  *action.mutable_target() = target_frame.target;
-
-  js_feature_->ScrollTo(target_web_frame->AsWeakPtr(), action,
+  js_feature_->ScrollTo(target_web_frame->AsWeakPtr(), target_frame.target,
                         std::move(callback));
 }
 

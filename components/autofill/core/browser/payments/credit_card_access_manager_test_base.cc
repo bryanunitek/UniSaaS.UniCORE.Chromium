@@ -25,7 +25,7 @@
 #include "components/autofill/core/browser/payments/test/test_credit_card_otp_authenticator.h"
 #include "components/autofill/core/browser/payments/test_payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/test_payments_network_interface.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/sync/test/test_sync_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -157,7 +157,8 @@ const CreditCard* CreditCardAccessManagerTestBase::CreateServerCard(
     std::string server_id,
     const char16_t* cvc,
     CreditCard::RecordType record_type,
-    bool is_card_info_retrieval_enrolled) {
+    bool is_card_info_retrieval_enrolled,
+    int64_t instrument_id) {
   CreditCard server_card = CreditCard();
   test::SetCreditCardInfo(&server_card, "Elvis Presley", number.c_str(),
                           test::NextMonth().c_str(), test::NextYear().c_str(),
@@ -165,6 +166,7 @@ const CreditCard* CreditCardAccessManagerTestBase::CreateServerCard(
   server_card.set_guid(guid);
   server_card.set_record_type(record_type);
   server_card.set_server_id(server_id);
+  server_card.set_instrument_id(instrument_id);
   if (is_card_info_retrieval_enrolled) {
     server_card.set_card_info_retrieval_enrollment_state(
         CreditCard::CardInfoRetrievalEnrollmentState::kRetrievalEnrolled);
@@ -379,8 +381,9 @@ void CreditCardAccessManagerTestBase::
   test_api(credit_card_access_manager())
       .set_is_user_verifiable(is_user_verifiable);
   credit_card_access_manager().FetchCreditCard(
-      card, base::BindOnce(&TestAccessor::OnCreditCardFetched,
-                           accessor().GetWeakPtr()));
+      card, /*require_user_confirmation=*/false,
+      base::BindOnce(&TestAccessor::OnCreditCardFetched,
+                     accessor().GetWeakPtr()));
 
   // This checks risk-based authentication flow is successfully invoked,
   // because it is always the very first authentication flow in a VCN
@@ -537,8 +540,9 @@ void CreditCardAccessManagerTestBase::
 
 void CreditCardAccessManagerTestBase::FetchCreditCard(const CreditCard* card) {
   credit_card_access_manager().FetchCreditCard(
-      card, base::BindOnce(&TestAccessor::OnCreditCardFetched,
-                           accessor().GetWeakPtr()));
+      card, /*require_user_confirmation=*/false,
+      base::BindOnce(&TestAccessor::OnCreditCardFetched,
+                     accessor().GetWeakPtr()));
 }
 
 void CreditCardAccessManagerTestBase::ExpectCardRetrievalFailure(

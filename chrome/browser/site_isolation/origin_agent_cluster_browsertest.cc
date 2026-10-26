@@ -2,29 +2,45 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+#include <vector>
+
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/metrics/metrics_memory_details.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/page_load_metrics/browser/page_load_metrics_test_waiter.h"
+#include "components/subresource_filter/content/browser/child_frame_navigation_filtering_throttle.h"
+#include "components/subresource_filter/core/browser/subresource_filter_features.h"
+#include "components/subresource_filter/core/common/common_features.h"
+#include "components/subresource_filter/core/common/test_ruleset_utils.h"
 #include "components/variations/active_field_trials.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/process_selection_deferring_condition.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/test_utils.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "services/network/public/cpp/features.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 using base::Bucket;
@@ -115,7 +131,9 @@ class TestMemoryDetails : public MetricsMemoryDetails {
 class OriginAgentClusterBrowserTest : public InProcessBrowserTest {
  public:
   OriginAgentClusterBrowserTest()
-      : OriginAgentClusterBrowserTest(true /* enable_origin_agent_cluster_*/) {}
+      : OriginAgentClusterBrowserTest(
+            true /* enable_origin_agent_cluster_*/,
+            false /* enable_origin_keyed_processes */) {}
 
   OriginAgentClusterBrowserTest(const OriginAgentClusterBrowserTest&) = delete;
   OriginAgentClusterBrowserTest& operator=(
@@ -140,6 +158,8 @@ class OriginAgentClusterBrowserTest : public InProcessBrowserTest {
   }
 
   void SetUpOnMainThread() override {
+    host_resolver()->AddIPLiteralRuleWithDnsAliases(
+        "alias.bar.com", "127.0.0.1", {"ad.bar.com"});
     host_resolver()->AddRule("*", "127.0.0.1");
     embedded_test_server()->StartAcceptingConnections();
   }
@@ -153,25 +173,47 @@ class OriginAgentClusterBrowserTest : public InProcessBrowserTest {
   }
 
  protected:
-  explicit OriginAgentClusterBrowserTest(bool enable_oac)
+  explicit OriginAgentClusterBrowserTest(bool enable_oac,
+                                         bool enable_origin_keyed_processes)
       : enable_origin_agent_cluster_(enable_oac) {
+    // Origin-keyed processes can only be enabled if OAC is also enabled. This
+    // is checked here to avoid impossible test configurations.
+    CHECK(!enable_origin_keyed_processes || enable_oac);
     // To keep the tests easier to reason about, turn off both the spare
     // renderer process and process reuse for subframes in different
     // BrowsingInstances.
-    if (enable_origin_agent_cluster_) {
-      feature_list_.InitWithFeatures(
-          /* enable_features */ {features::kOriginIsolationHeader,
-                                 features::kDisableProcessReuse},
-          /* disable_features */ {features::kSpareRendererForSitePerProcess});
+    std::vector<base::test::FeatureRef> enabled_features = {
+        features::kDisableProcessReuse};
+    std::vector<base::test::FeatureRef> disabled_features = {
+        features::kSpareRendererForSitePerProcess};
+
+    // Origin isolation ads exclusion is enabled whenever logical OAC is enabled
+    // (regardless of whether origin-keyed processes are enabled). We do this to
+    // test that enabling the ads exclusion feature works correctly and does not
+    // cause crashes when origin-keyed processes are disabled by default.
+    if (enable_oac) {
+      enabled_features.push_back(features::kOriginIsolationHeader);
+      enabled_features.push_back(features::kExcludeAdsFromOriginIsolation);
+      enabled_features.push_back(
+          subresource_filter::kSafeBrowsingSubresourceFilter);
+      enabled_features.push_back(subresource_filter::kAdTagging);
+      enabled_features.push_back(
+          features::kSendCnameAliasesToSubresourceFilterFromBrowser);
     } else {
-      feature_list_.InitWithFeatures(
-          /* enable_features */ {features::kDisableProcessReuse},
-          /* disable_features */ {features::kOriginIsolationHeader,
-                                  features::kSpareRendererForSitePerProcess});
+      disabled_features.push_back(features::kOriginIsolationHeader);
+      disabled_features.push_back(features::kExcludeAdsFromOriginIsolation);
     }
+
+    if (enable_origin_keyed_processes) {
+      enabled_features.push_back(features::kOriginKeyedProcessesByDefault);
+    } else {
+      disabled_features.push_back(features::kOriginKeyedProcessesByDefault);
+    }
+
+    feature_list_.InitWithFeatures(enabled_features, disabled_features);
   }
 
- private:
+ protected:
   std::unique_ptr<net::test_server::HttpResponse> HandleResponse(
       const net::test_server::HttpRequest& request) {
     if (request.relative_url == "/origin_key_me") {
@@ -187,6 +229,13 @@ class OriginAgentClusterBrowserTest : public InProcessBrowserTest {
       response->set_content_type("text/html");
       response->AddCustomHeader("Origin-Agent-Cluster", "?1");
       response->set_content("<body><iframe id='test'></iframe></body>");
+      return std::move(response);
+    } else if (request.relative_url == "/site_key_me") {
+      auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+      response->set_code(net::HTTP_OK);
+      response->set_content_type("text/html");
+      response->AddCustomHeader("Origin-Agent-Cluster", "?0");
+      response->set_content("I like site keys!");
       return std::move(response);
     }
 
@@ -205,8 +254,9 @@ class OriginAgentClusterDisabledBrowserTest
     : public OriginAgentClusterBrowserTest {
  public:
   OriginAgentClusterDisabledBrowserTest()
-      : OriginAgentClusterBrowserTest(false /* enable_origin_agent_cluster_*/) {
-  }
+      : OriginAgentClusterBrowserTest(
+            false /* enable_origin_agent_cluster_*/,
+            false /* enable_origin_keyed_processes */) {}
   OriginAgentClusterDisabledBrowserTest(
       const OriginAgentClusterDisabledBrowserTest&) = delete;
   OriginAgentClusterDisabledBrowserTest& operator=(
@@ -214,6 +264,45 @@ class OriginAgentClusterDisabledBrowserTest
 
   ~OriginAgentClusterDisabledBrowserTest() override = default;
 };  // class OriginAgentClusterDisabledBrowserTest
+
+class OriginAgentClusterAdBrowserTest : public OriginAgentClusterBrowserTest {
+ public:
+  OriginAgentClusterAdBrowserTest(bool enable_oac,
+                                  bool enable_origin_keyed_processes)
+      : OriginAgentClusterBrowserTest(enable_oac,
+                                      enable_origin_keyed_processes) {}
+
+  void SetUpOnMainThread() override {
+    // For subdocument resources, allowlist rules are always checked.
+    auto rule = subresource_filter::testing::CreateSubstringRule("ad.bar.com");
+    rule.set_anchor_left(url_pattern_index::proto::ANCHOR_TYPE_SUBDOMAIN);
+    SetRulesetWithRules({rule});
+
+    OriginAgentClusterBrowserTest::SetUpOnMainThread();
+  }
+
+  void SetRulesetWithRules(const std::vector<proto::UrlRule>& rules) {
+    TestRulesetPair test_ruleset_pair;
+    ruleset_creator_.CreateRulesetWithRules(rules, &test_ruleset_pair);
+
+    TestRulesetPublisher test_ruleset_publisher(
+        g_browser_process->subresource_filter_ruleset_service());
+    ASSERT_NO_FATAL_FAILURE(
+        test_ruleset_publisher.SetRuleset(test_ruleset_pair.unindexed));
+  }
+
+ private:
+  TestRulesetCreator ruleset_creator_;
+};
+
+class OriginKeyedProcessByDefaultBrowserTest
+    : public OriginAgentClusterAdBrowserTest {
+ public:
+  OriginKeyedProcessByDefaultBrowserTest()
+      : OriginAgentClusterAdBrowserTest(
+            true /* enable_origin_agent_cluster_*/,
+            true /* enable_origin_keyed_processes */) {}
+};  // class OriginKeyedProcessByDefaultBrowserTest
 
 IN_PROC_BROWSER_TEST_F(OriginAgentClusterBrowserTest, Navigations) {
   GURL start_url(https_server()->GetURL("foo.com", "/iframe.html"));
@@ -504,4 +593,687 @@ IN_PROC_BROWSER_TEST_F(OriginAgentClusterBrowserTest,
 
   EXPECT_EQ(0, details->GetOacProcessCount());
   EXPECT_EQ(0, details->GetOacProcessCountPercent());
+}
+
+// Ad frames should not be origin-keyed by default.
+IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
+                       AdFramesDoNotOriginKey) {
+  GURL main_frame_url(https_server()->GetURL("foo.com", "/iframe_blank.html"));
+  GURL ad_url(https_server()->GetURL("ad.bar.com", "/title1.html"));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+
+  content::TestNavigationManager nav_manager(web_contents, ad_url);
+
+  EXPECT_TRUE(content::BeginNavigateIframeToURL(web_contents, "test", ad_url));
+
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  content::RenderFrameHost* child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  EXPECT_FALSE(content::HasOriginKeyedProcess(child));
+  EXPECT_TRUE(
+      content::HasOriginKeyedProcess(web_contents->GetPrimaryMainFrame()));
+}
+
+// An ad frame should not get origin isolation even if it is same-site to a
+// non-ad frame that has been origin-keyed.
+IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
+                       AdFrameSameSiteToOriginKeyedFrameIsSiteKeyed) {
+  GURL main_frame_url(
+      https_server()->GetURL("foo.com", "/two_iframes_blank.html"));
+  GURL ad_url(https_server()->GetURL("ad.bar.com", "/title1.html"));
+  GURL non_ad_url(https_server()->GetURL("other.bar.com", "/title1.html"));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+
+  // Create an iframe that will be same-site but cross-origin to the ad frame.
+  // This will not be tagged as an ad and will get origin isolation.
+  EXPECT_TRUE(
+      content::NavigateIframeToURL(web_contents, "iframe1", non_ad_url));
+
+  // Sanity check that the non-ad iframe got origin isolation.
+  content::RenderFrameHost* non_ad_child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  EXPECT_TRUE(content::HasOriginKeyedProcess(non_ad_child));
+
+  content::TestNavigationManager nav_manager(web_contents, ad_url);
+
+  EXPECT_TRUE(
+      content::BeginNavigateIframeToURL(web_contents, "iframe2", ad_url));
+
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  // The ad frame should not get origin isolation, even though it's same-site
+  // to an existing origin-isolated non-ad frame, because it is tagged as an ad
+  // and has no OAC header.
+  content::RenderFrameHost* child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 1);
+  EXPECT_FALSE(content::HasOriginKeyedProcess(child));
+}
+
+// An ad frame should get origin isolation anyway if it has an OAC header.
+IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
+                       AdFrameWithExplicitOriginAgentClusterHeader) {
+  GURL main_frame_url(https_server()->GetURL("foo.com", "/iframe_blank.html"));
+  GURL ad_url(https_server()->GetURL("ad.bar.com", "/origin_key_me"));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+
+  content::TestNavigationManager nav_manager(web_contents, ad_url);
+
+  EXPECT_TRUE(content::BeginNavigateIframeToURL(web_contents, "test", ad_url));
+
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  content::RenderFrameHost* child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  EXPECT_TRUE(content::HasOriginKeyedProcess(child));
+}
+
+// Verify that metrics for Ad Tag Readiness and Speculative RFH swaps due to
+// ad origin isolation exclusion are correctly recorded.
+IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
+                       MetricsAdTagReadinessAndExcludedAdsSpeculativeRFHSwap) {
+  base::HistogramTester histogram_tester;
+
+  GURL main_frame_url(https_server()->GetURL("foo.com", "/iframe_blank.html"));
+  GURL ad_url(https_server()->GetURL("ad.bar.com", "/title1.html"));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+
+  content::TestNavigationManager nav_manager(web_contents, ad_url);
+
+  EXPECT_TRUE(content::BeginNavigateIframeToURL(web_contents, "test", ad_url));
+
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  content::RenderFrameHost* child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  EXPECT_FALSE(content::HasOriginKeyedProcess(child));
+
+  // The ad tag calculation finished by process selection time.
+  histogram_tester.ExpectUniqueSample(
+      "Navigation.OriginAgentCluster.AdTagReadyAtProcessSelection", true, 1);
+
+  // The speculative RFH was wasted and discarded because the ad frame was
+  // excluded from origin isolation (switched from origin-keyed to site-keyed).
+  histogram_tester.ExpectBucketCount(
+      "Navigation.All.WastedSpeculativeRFH.ExcludedAdsFromOriginIsolation",
+      true, 1);
+}
+
+// Verify that non-ad navigations opting out via Origin-Agent-Cluster: ?0 do
+// NOT record true for ExcludedAdsFromOriginIsolation.
+IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
+                       NonAdOptOutDoesNotRecordExcludedAdsMetric) {
+  base::HistogramTester histogram_tester;
+
+  GURL main_frame_url(https_server()->GetURL("foo.com", "/iframe_blank.html"));
+  GURL opt_out_url(https_server()->GetURL("bar.com", "/site_key_me"));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+
+  content::TestNavigationManager nav_manager(web_contents, opt_out_url);
+
+  EXPECT_TRUE(
+      content::BeginNavigateIframeToURL(web_contents, "test", opt_out_url));
+
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  content::RenderFrameHost* child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  EXPECT_FALSE(content::HasOriginKeyedProcess(child));
+
+  // Since this is not an ad, ExcludedAdsFromOriginIsolation must never record
+  // true.
+  histogram_tester.ExpectBucketCount(
+      "Navigation.All.WastedSpeculativeRFH.ExcludedAdsFromOriginIsolation",
+      true, 0);
+}
+
+// Verify that if ad tagging calculation is not ready at process selection time,
+// the frame falls back to default origin-keyed isolation and records the ad tag
+// as not ready.
+IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
+                       AdTagNotReadyAtProcessSelectionRemainsOriginKeyed) {
+  base::HistogramTester histogram_tester;
+
+  GURL main_frame_url(https_server()->GetURL("foo.com", "/iframe_blank.html"));
+
+  // CNAME alias evaluation happens in WillProcessResponse, after process
+  // selection has occurred. This causes the ad tag to be discovered late, so it
+  // doesn't influence process selection.
+  GURL alias_url(https_server()->GetURL("alias.bar.com", "/title1.html"));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+
+  content::TestNavigationManager nav_manager(web_contents, alias_url);
+
+  EXPECT_TRUE(
+      content::BeginNavigateIframeToURL(web_contents, "test", alias_url));
+
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  content::RenderFrameHost* child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  // Because ad tagging wasn't ready at process selection time, it fell back to
+  // default origin isolation and stayed origin-keyed.
+  EXPECT_TRUE(content::HasOriginKeyedProcess(child));
+
+  // The ad tag calculation was not finished by process selection time.
+  histogram_tester.ExpectUniqueSample(
+      "Navigation.OriginAgentCluster.AdTagReadyAtProcessSelection", false, 1);
+
+  // Since it was origin-keyed from the start and stayed origin-keyed, the
+  // speculative RFH was not wasted due to ad exclusion.
+  histogram_tester.ExpectBucketCount(
+      "Navigation.All.WastedSpeculativeRFH.ExcludedAdsFromOriginIsolation",
+      true, 0);
+}
+
+// Verify that cross-site redirects to an ad frame do NOT record true for
+// ExcludedAdsFromOriginIsolation, as the speculative RFH was wasted due to the
+// cross-site redirect rather than the ad origin isolation exclusion.
+IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
+                       CrossSiteRedirectToAdDoesNotRecordExcludedAdsMetric) {
+  base::HistogramTester histogram_tester;
+
+  GURL main_frame_url(https_server()->GetURL("foo.com", "/iframe_blank.html"));
+  GURL ad_url(https_server()->GetURL("ad.bar.com", "/title1.html"));
+  GURL redirect_url(
+      https_server()->GetURL("a.com", "/server-redirect?" + ad_url.spec()));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+
+  content::TestNavigationManager nav_manager(web_contents, redirect_url);
+
+  EXPECT_TRUE(
+      content::BeginNavigateIframeToURL(web_contents, "test", redirect_url));
+
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  content::RenderFrameHost* child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  EXPECT_FALSE(content::HasOriginKeyedProcess(child));
+
+  // The speculative RFH was wasted due to the cross-site redirect from a.com
+  // to ad.bar.com, not because of the ad origin isolation exclusion.
+  histogram_tester.ExpectUniqueSample(
+      "Navigation.All.WastedSpeculativeRFH.ExcludedAdsFromOriginIsolation",
+      false, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Navigation.All.WastedSpeculativeRFH.ReplacementRFHCreatedNewProcess",
+      true, 1);
+}
+
+// A same-site, cross-origin child frame inside an ad frame should remain
+// site-keyed. This is done to reduce the process count in a common case without
+// adding too much attack surface.
+IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
+                       NestedSameSiteSubframeInsideAdFrameIsSiteKeyed) {
+  GURL main_frame_url(https_server()->GetURL("foo.com", "/iframe_blank.html"));
+  GURL ad_url(https_server()->GetURL("ad.bar.com", "/iframe_blank.html"));
+  GURL nested_url(https_server()->GetURL("other.bar.com", "/title1.html"));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+
+  // Navigate the outer iframe to an ad frame.
+  content::TestNavigationManager ad_nav_manager(web_contents, ad_url);
+  EXPECT_TRUE(content::BeginNavigateIframeToURL(web_contents, "test", ad_url));
+  ASSERT_TRUE(ad_nav_manager.WaitForNavigationFinished());
+  EXPECT_TRUE(content::WaitForLoadStop(web_contents));
+
+  content::RenderFrameHost* child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  EXPECT_FALSE(content::HasOriginKeyedProcess(child));
+
+  // Navigate the nested iframe inside the ad frame.
+  content::TestNavigationManager nav_manager(web_contents, nested_url);
+  EXPECT_TRUE(content::ExecJs(
+      child, content::JsReplace("document.getElementById('test').src = $1;",
+                                nested_url)));
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  content::RenderFrameHost* grandchild = ChildFrameAt(child, 0);
+
+  // The cross-origin same-site subframe should end up site-keyed as well.
+  EXPECT_FALSE(content::HasOriginKeyedProcess(grandchild));
+}
+
+// A nested child frame inside an ad frame that starts navigation to a
+// cross-site URL but redirects to a same-site URL should end up site-keyed.
+IN_PROC_BROWSER_TEST_F(
+    OriginKeyedProcessByDefaultBrowserTest,
+    NestedSubframeRedirectsToSameSiteSubframeInsideAdFrameIsSiteKeyed) {
+  GURL main_frame_url(https_server()->GetURL("foo.com", "/iframe_blank.html"));
+  GURL ad_url(https_server()->GetURL("ad.bar.com", "/iframe_blank.html"));
+  GURL final_same_site_url(
+      https_server()->GetURL("other.bar.com", "/title1.html"));
+  GURL initial_cross_site_url(https_server()->GetURL(
+      "c.com", "/server-redirect?" + final_same_site_url.spec()));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+
+  // Navigate the outer iframe to an ad frame.
+  content::TestNavigationManager ad_nav_manager(web_contents, ad_url);
+  EXPECT_TRUE(content::BeginNavigateIframeToURL(web_contents, "test", ad_url));
+  ASSERT_TRUE(ad_nav_manager.WaitForNavigationFinished());
+  EXPECT_TRUE(content::WaitForLoadStop(web_contents));
+
+  content::RenderFrameHost* child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  EXPECT_FALSE(content::HasOriginKeyedProcess(child));
+
+  // Navigate the nested iframe inside the ad frame to a cross-site URL that
+  // redirects to a same-site URL.
+  content::TestNavigationManager nav_manager(web_contents,
+                                             initial_cross_site_url);
+  EXPECT_TRUE(content::ExecJs(
+      child, content::JsReplace("document.getElementById('test').src = $1;",
+                                initial_cross_site_url)));
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  content::RenderFrameHost* grandchild = ChildFrameAt(child, 0);
+
+  // The redirected same-site subframe should end up site-keyed.
+  EXPECT_FALSE(content::HasOriginKeyedProcess(grandchild));
+}
+
+// A nested child frame inside an ad frame that starts navigation to a same-site
+// URL but redirects to a cross-site URL should end up origin-keyed.
+IN_PROC_BROWSER_TEST_F(
+    OriginKeyedProcessByDefaultBrowserTest,
+    NestedSubframeRedirectsToCrossSiteSubframeInsideAdFrameIsOriginKeyed) {
+  GURL main_frame_url(https_server()->GetURL("foo.com", "/iframe_blank.html"));
+  GURL ad_url(https_server()->GetURL("ad.bar.com", "/iframe_blank.html"));
+  GURL final_cross_site_url(https_server()->GetURL("c.com", "/title1.html"));
+  GURL initial_same_site_url(https_server()->GetURL(
+      "other.bar.com", "/server-redirect?" + final_cross_site_url.spec()));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+
+  // Navigate the outer iframe to an ad frame.
+  content::TestNavigationManager ad_nav_manager(web_contents, ad_url);
+  EXPECT_TRUE(content::BeginNavigateIframeToURL(web_contents, "test", ad_url));
+  ASSERT_TRUE(ad_nav_manager.WaitForNavigationFinished());
+  EXPECT_TRUE(content::WaitForLoadStop(web_contents));
+
+  content::RenderFrameHost* child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  EXPECT_FALSE(content::HasOriginKeyedProcess(child));
+
+  // Navigate the nested iframe inside the ad frame to a same-site URL that
+  // redirects to a cross-site URL.
+  content::TestNavigationManager nav_manager(web_contents,
+                                             initial_same_site_url);
+  EXPECT_TRUE(content::ExecJs(
+      child, content::JsReplace("document.getElementById('test').src = $1;",
+                                initial_same_site_url)));
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  content::RenderFrameHost* grandchild = ChildFrameAt(child, 0);
+
+  // The redirected cross-site subframe should be origin-keyed.
+  EXPECT_TRUE(content::HasOriginKeyedProcess(grandchild));
+}
+
+// A frame whose navigation starts at an ad URL and redirects to a non-ad URL
+// must be origin-keyed. The host filter ad bit is calculated again for each
+// redirect, so an attacker cannot use a redirect through an ad URL to force a
+// victim document into a site-keyed process.
+IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
+                       AdUrlRedirectsToNonAdUrlIsOriginKeyed) {
+  GURL main_frame_url(https_server()->GetURL("foo.com", "/iframe_blank.html"));
+  GURL victim_url(https_server()->GetURL("other.bar.com", "/title1.html"));
+  GURL ad_redirect_url(https_server()->GetURL(
+      "ad.bar.com", "/server-redirect?" + victim_url.spec()));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+
+  content::TestNavigationManager nav_manager(web_contents, ad_redirect_url);
+  EXPECT_TRUE(
+      content::BeginNavigateIframeToURL(web_contents, "test", ad_redirect_url));
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  content::RenderFrameHost* child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(child);
+  EXPECT_EQ(victim_url, child->GetLastCommittedURL());
+
+  // The final URL does not match the ad host filter, so the frame must get the
+  // default origin-keyed process.
+  EXPECT_TRUE(content::HasOriginKeyedProcess(child));
+}
+
+// This test is a regression test for a browser CHECK in
+// NavigationRequest::GetOriginForURLLoaderFactoryAfterResponse(). A non-ad
+// navigation to other.bar.com selects an origin-keyed process. Before this
+// navigation commits, a navigation in a site-keyed ad frame goes to the same
+// origin. The origin has an origin-keyed use in the BrowsingInstance, thus the
+// ad navigation must not record a site-keyed state for the origin. The browser
+// must not crash, and the two frames must use one origin-keyed SiteInstance.
+// Each frame must have script access to the other frame.
+IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
+                       AdStateDuringCommitOfOriginKeyedFrame) {
+  base::HistogramTester histograms;
+  GURL main_frame_url(
+      https_server()->GetURL("foo.com", "/two_iframes_blank.html"));
+  GURL ad_url(https_server()->GetURL("ad.bar.com", "/iframe_blank.html"));
+  // The two other.bar.com URLs have different paths. Thus, each
+  // TestNavigationManager monitors only one navigation.
+  GURL non_ad_url(https_server()->GetURL("other.bar.com", "/title1.html"));
+  GURL nested_url(https_server()->GetURL("other.bar.com", "/title2.html"));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+  content::RenderFrameHost* main_frame = web_contents->GetPrimaryMainFrame();
+
+  content::TestNavigationManager ad_nav_manager(web_contents, ad_url);
+  EXPECT_TRUE(
+      content::BeginNavigateIframeToURL(web_contents, "iframe2", ad_url));
+  ASSERT_TRUE(ad_nav_manager.WaitForNavigationFinished());
+  EXPECT_TRUE(content::WaitForLoadStop(web_contents));
+  content::RenderFrameHost* ad_child = ChildFrameAt(main_frame, 1);
+  ASSERT_FALSE(content::HasOriginKeyedProcess(ad_child));
+
+  // This frame is not an ad. Thus, it gets the default origin-keyed process.
+  // When WaitForResponse() returns, the browser selected the final
+  // RenderFrameHost and locked its process.
+  content::TestNavigationManager non_ad_nav_manager(web_contents, non_ad_url);
+  EXPECT_TRUE(
+      content::BeginNavigateIframeToURL(web_contents, "iframe1", non_ad_url));
+  ASSERT_TRUE(non_ad_nav_manager.WaitForResponse());
+
+  // nested_child is an ad because of its same-site ad parent. It must find the
+  // uncommitted origin-keyed non_ad_url navigation and also be origin-keyed. If
+  // it records a site-keyed state for other.bar.com, the non_ad_child commit
+  // below fails the CanAccessOrigin() CHECK, because its process is already
+  // origin-keyed.
+  content::TestNavigationManager nested_nav_manager(web_contents, nested_url);
+  EXPECT_TRUE(content::ExecJs(
+      ad_child, content::JsReplace("document.getElementById('test').src = $1;",
+                                   nested_url)));
+  ASSERT_TRUE(nested_nav_manager.WaitForNavigationFinished());
+  content::RenderFrameHost* nested_child = ChildFrameAt(ad_child, 0);
+  ASSERT_TRUE(nested_child);
+  EXPECT_TRUE(content::HasOriginKeyedProcess(nested_child));
+
+  ASSERT_TRUE(non_ad_nav_manager.WaitForNavigationFinished());
+  EXPECT_TRUE(non_ad_nav_manager.was_committed());
+
+  content::RenderFrameHost* non_ad_child = ChildFrameAt(main_frame, 0);
+  EXPECT_EQ(non_ad_url, non_ad_child->GetLastCommittedURL());
+  EXPECT_TRUE(content::HasOriginKeyedProcess(non_ad_child));
+  EXPECT_EQ(non_ad_child->GetSiteInstance(), nested_child->GetSiteInstance());
+  EXPECT_EQ(true, content::EvalJs(nested_child,
+                                  "try { top.frames[0].document.title; true; } "
+                                  "catch (e) { false; }"));
+
+  // The values are from NavigationRequest::AdExclusionResult. The ad frame is
+  // site-keyed (0). The nested frame is an ad, but it is origin-keyed because
+  // of the existing state (1). The non-ad frame is not an excluded ad (4).
+  histograms.ExpectBucketCount(
+      "Navigation.OriginAgentCluster.AdExclusionResult", 0, 1);
+  histograms.ExpectBucketCount(
+      "Navigation.OriginAgentCluster.AdExclusionResult", 1, 1);
+  histograms.ExpectBucketCount(
+      "Navigation.OriginAgentCluster.AdExclusionResult", 4, 1);
+  histograms.ExpectTotalCount("Navigation.OriginAgentCluster.AdExclusionResult",
+                              3);
+}
+
+namespace {
+
+// This condition sets the ad host filter tag on a navigation just before the
+// final process selection. This has the same effect as a subresource filter
+// result that occurs after
+// NavigationRequest::FreezeExcludeAdFromOriginKeyedProcess() and before the
+// final process selection.
+class AdTagDuringProcessSelectionCondition
+    : public content::ProcessSelectionDeferringCondition {
+ public:
+  explicit AdTagDuringProcessSelectionCondition(
+      content::NavigationHandle& navigation_handle)
+      : content::ProcessSelectionDeferringCondition(navigation_handle) {}
+  ~AdTagDuringProcessSelectionCondition() override = default;
+
+  Result OnWillSelectFinalProcess(base::OnceClosure resume) override {
+    navigation_handle().SetIsAdTaggedByHostFilter();
+    return Result::kProceed;
+  }
+};
+
+// Adds AdTagDuringProcessSelectionCondition to the navigation to `url`.
+class AdTagDuringProcessSelectionBrowserClient
+    : public ChromeContentBrowserClient {
+ public:
+  explicit AdTagDuringProcessSelectionBrowserClient(const GURL& url)
+      : url_(url) {}
+  ~AdTagDuringProcessSelectionBrowserClient() override = default;
+
+  std::vector<std::unique_ptr<content::ProcessSelectionDeferringCondition>>
+  CreateProcessSelectionDeferringConditionsForNavigation(
+      content::NavigationHandle& navigation_handle) override {
+    std::vector<std::unique_ptr<content::ProcessSelectionDeferringCondition>>
+        conditions = ChromeContentBrowserClient::
+            CreateProcessSelectionDeferringConditionsForNavigation(
+                navigation_handle);
+    if (navigation_handle.GetURL() == url_) {
+      conditions.push_back(
+          std::make_unique<AdTagDuringProcessSelectionCondition>(
+              navigation_handle));
+    }
+    return conditions;
+  }
+
+ private:
+  const GURL url_;
+};
+
+}  // namespace
+
+// This test is a regression test for a browser CHECK in
+// NavigationRequest::GetOriginForURLLoaderFactoryAfterResponse(). A non-ad
+// navigation to other.bar.com selects an origin-keyed process. A second
+// navigation to the same origin is not an ad when
+// NavigationRequest::FreezeExcludeAdFromOriginKeyedProcess() runs, thus it
+// does no global walk. Then, before the final process selection, the second
+// navigation gets the ad host filter tag. The second navigation must not record
+// a site-keyed state for the origin without a global walk. The browser must not
+// crash, and the two frames must use one origin-keyed SiteInstance.
+IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
+                       AdTagDuringProcessSelection) {
+  base::HistogramTester histograms;
+  GURL main_frame_url(
+      https_server()->GetURL("foo.com", "/two_iframes_blank.html"));
+  // The two other.bar.com URLs have different paths. Only the navigation to
+  // `late_ad_url` gets AdTagDuringProcessSelectionCondition.
+  GURL non_ad_url(https_server()->GetURL("other.bar.com", "/title1.html"));
+  GURL late_ad_url(https_server()->GetURL("other.bar.com", "/title2.html"));
+  AdTagDuringProcessSelectionBrowserClient browser_client(late_ad_url);
+  content::ScopedContentBrowserClientSetting browser_client_setting(
+      &browser_client);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+  content::RenderFrameHost* main_frame = web_contents->GetPrimaryMainFrame();
+
+  // This frame is not an ad. Thus, it gets the default origin-keyed process.
+  // When WaitForResponse() returns, the browser selected the final
+  // RenderFrameHost and locked its process.
+  content::TestNavigationManager non_ad_nav_manager(web_contents, non_ad_url);
+  EXPECT_TRUE(
+      content::BeginNavigateIframeToURL(web_contents, "iframe1", non_ad_url));
+  ASSERT_TRUE(non_ad_nav_manager.WaitForResponse());
+
+  // The URL does not match the ad host filter, and the frame has no ad
+  // ancestor. The navigation gets the ad tag only before the final process
+  // selection.
+  content::TestNavigationManager late_ad_nav_manager(web_contents, late_ad_url);
+  EXPECT_TRUE(
+      content::BeginNavigateIframeToURL(web_contents, "iframe2", late_ad_url));
+  ASSERT_TRUE(late_ad_nav_manager.WaitForNavigationFinished());
+  EXPECT_TRUE(late_ad_nav_manager.was_committed());
+
+  ASSERT_TRUE(non_ad_nav_manager.WaitForNavigationFinished());
+  EXPECT_TRUE(non_ad_nav_manager.was_committed());
+
+  content::RenderFrameHost* non_ad_child = ChildFrameAt(main_frame, 0);
+  content::RenderFrameHost* late_ad_child = ChildFrameAt(main_frame, 1);
+  EXPECT_EQ(non_ad_url, non_ad_child->GetLastCommittedURL());
+  EXPECT_EQ(late_ad_url, late_ad_child->GetLastCommittedURL());
+  EXPECT_TRUE(content::HasOriginKeyedProcess(non_ad_child));
+  EXPECT_TRUE(content::HasOriginKeyedProcess(late_ad_child));
+  EXPECT_EQ(non_ad_child->GetSiteInstance(), late_ad_child->GetSiteInstance());
+
+  // The values are from NavigationRequest::AdExclusionResult. The ad tag
+  // arrived after the ad decision, and the frame got an origin-keyed process
+  // (2). The non-ad frame is not an excluded ad (4).
+  histograms.ExpectBucketCount(
+      "Navigation.OriginAgentCluster.AdExclusionResult", 2, 1);
+  histograms.ExpectBucketCount(
+      "Navigation.OriginAgentCluster.AdExclusionResult", 4, 1);
+  histograms.ExpectTotalCount("Navigation.OriginAgentCluster.AdExclusionResult",
+                              2);
+}
+
+// This test is a regression test for a browser CHECK at commit. Navigation A to
+// other.bar.com is not an ad when its ad decision is frozen, thus it selects an
+// origin-keyed process. Then, while A is paused in WillProcessResponse(), it
+// gets the ad host filter tag. In production, this occurs when the subresource
+// filter throttle defers WillProcessResponse() for a slow ruleset check.
+// While A is paused, navigation B to the same origin is an ad from the start,
+// thus it does the global walk. The walk must find the paused navigation A, and
+// B must join A's origin-keyed SiteInstance. If B records a site-keyed state
+// for the origin, A's commit fails the CanAccessOrigin() CHECK.
+IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
+                       AdTagDuringWillProcessResponse) {
+  base::HistogramTester histograms;
+  GURL main_frame_url(
+      https_server()->GetURL("foo.com", "/two_iframes_blank.html"));
+  // The two other.bar.com URLs have different paths. Thus, each
+  // TestNavigationManager monitors only one navigation.
+  GURL late_ad_url(https_server()->GetURL("other.bar.com", "/title1.html"));
+  GURL early_ad_url(https_server()->GetURL("other.bar.com", "/title2.html"));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+  content::RenderFrameHost* main_frame = web_contents->GetPrimaryMainFrame();
+
+  // A is not an ad when its ad decision is frozen. Thus, it gets the default
+  // origin-keyed process. When WaitForResponse() returns, the browser selected
+  // the final RenderFrameHost, and A is paused in WillProcessResponse().
+  content::TestNavigationManager late_ad_nav_manager(web_contents, late_ad_url);
+  EXPECT_TRUE(
+      content::BeginNavigateIframeToURL(web_contents, "iframe1", late_ad_url));
+  ASSERT_TRUE(late_ad_nav_manager.WaitForResponse());
+  late_ad_nav_manager.GetNavigationHandle()->SetIsAdTaggedByHostFilter();
+
+  // B gets the ad tag before its response, so it is an excluded ad and does
+  // the global walk.
+  content::TestNavigationManager early_ad_nav_manager(web_contents,
+                                                      early_ad_url);
+  EXPECT_TRUE(
+      content::BeginNavigateIframeToURL(web_contents, "iframe2", early_ad_url));
+  ASSERT_TRUE(early_ad_nav_manager.WaitForRequestStart());
+  early_ad_nav_manager.GetNavigationHandle()->SetIsAdTaggedByHostFilter();
+  ASSERT_TRUE(early_ad_nav_manager.WaitForNavigationFinished());
+  EXPECT_TRUE(early_ad_nav_manager.was_committed());
+
+  // A commits after B. B's global walk recorded that other.bar.com stays
+  // origin-keyed in this BrowsingInstance, so A's commit to its origin-keyed
+  // process passes the CanAccessOrigin() CHECK.
+  ASSERT_TRUE(late_ad_nav_manager.WaitForNavigationFinished());
+  EXPECT_TRUE(late_ad_nav_manager.was_committed());
+
+  content::RenderFrameHost* late_ad_child = ChildFrameAt(main_frame, 0);
+  content::RenderFrameHost* early_ad_child = ChildFrameAt(main_frame, 1);
+  EXPECT_EQ(late_ad_url, late_ad_child->GetLastCommittedURL());
+  EXPECT_EQ(early_ad_url, early_ad_child->GetLastCommittedURL());
+  EXPECT_TRUE(content::HasOriginKeyedProcess(late_ad_child));
+  EXPECT_TRUE(content::HasOriginKeyedProcess(early_ad_child));
+  EXPECT_EQ(late_ad_child->GetSiteInstance(),
+            early_ad_child->GetSiteInstance());
+
+  // The values are from NavigationRequest::AdExclusionResult. B is an ad, but
+  // it is origin-keyed because of the existing state (1). A got the ad tag
+  // after the ad decision, and it got an origin-keyed process (2). Both child
+  // frames are ads, and main frames are not recorded, so there is no
+  // kNotAdExcluded (4) sample.
+  histograms.ExpectBucketCount(
+      "Navigation.OriginAgentCluster.AdExclusionResult", 1, 1);
+  histograms.ExpectBucketCount(
+      "Navigation.OriginAgentCluster.AdExclusionResult", 2, 1);
+  histograms.ExpectTotalCount("Navigation.OriginAgentCluster.AdExclusionResult",
+                              2);
+}
+
+class OriginAgentClusterOacOnlyBrowserTest
+    : public OriginAgentClusterAdBrowserTest {
+ public:
+  OriginAgentClusterOacOnlyBrowserTest()
+      : OriginAgentClusterAdBrowserTest(
+            true /* enable_origin_agent_cluster_*/,
+            false /* enable_origin_keyed_processes */) {}
+};
+
+// When origin-keyed processes are disabled by default (but logical OAC is
+// enabled), ad frames should not cause any crashes and should remain
+// site-keyed.
+IN_PROC_BROWSER_TEST_F(OriginAgentClusterOacOnlyBrowserTest,
+                       AdFrameWithOriginKeyedProcessesDisabled) {
+  GURL main_frame_url(https_server()->GetURL("foo.com", "/iframe_blank.html"));
+  GURL ad_url(https_server()->GetURL("ad.bar.com", "/title1.html"));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+
+  content::TestNavigationManager nav_manager(web_contents, ad_url);
+
+  EXPECT_TRUE(content::BeginNavigateIframeToURL(web_contents, "test", ad_url));
+
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  content::RenderFrameHost* child =
+      ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0);
+  EXPECT_FALSE(content::HasOriginKeyedProcess(child));
 }

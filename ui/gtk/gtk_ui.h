@@ -92,6 +92,7 @@ class GtkUi : public ui::LinuxUiAndTheme {
   bool PrimaryPasteEnabled() const override;
   int GetWindowDragThresholdPx() const override;
   std::vector<std::string> GetCmdLineFlagsForCopy() const override;
+  void SetShutdownCb(base::OnceClosure shutdown_cb) override;
 
   // ui::LinuxUiTheme:
   ui::NativeTheme* GetNativeTheme() const override;
@@ -104,6 +105,7 @@ class GtkUi : public ui::LinuxUiAndTheme {
   void GetInactiveSelectionFgColor(SkColor* color) const override;
   bool PreferDarkTheme() const override;
   void SetDarkTheme(bool dark) override;
+  void SetColorScheme(std::optional<bool> prefer_dark) override;
   void SetAccentColor(std::optional<SkColor> accent_color) override;
   std::unique_ptr<ui::NavButtonProvider> CreateNavButtonProvider(
       ui::FrameType type) override;
@@ -116,20 +118,6 @@ class GtkUi : public ui::LinuxUiAndTheme {
   using TintMap = std::map<int, color_utils::HSL>;
 
   void OnThemeChanged(GtkSettings* settings, GtkParamSpec* param);
-
-  // Sanitizes the "gtk-icon-theme-name" setting in GtkSettings if it is unsafe.
-  // Returns true if the setting was modified.
-  bool SanitizeIconThemeName();
-
-  // Sanitizes the "gtk-theme-name" setting in GtkSettings if it is unsafe.
-  // Returns true if the setting was modified.
-  bool SanitizeThemeName();
-
-  // Sanitizes the "gtk-key-theme-name" setting in GtkSettings if it is unsafe.
-  // Returns true if the setting was modified.
-  bool SanitizeKeyThemeName();
-
-  void OnKeyThemeNameChanged(GtkSettings* settings, GtkParamSpec* param);
 
   void OnCursorThemeNameChanged(GtkSettings* settings, GtkParamSpec* param);
 

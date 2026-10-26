@@ -23,13 +23,13 @@
 #include "chrome/browser/reading_list/reading_list_model_factory.h"
 #include "chrome/browser/ui/bookmarks/bookmark_stats.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/profiles/profile_view_utils.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/side_panel/reading_list/reading_list_ui.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
@@ -42,6 +42,7 @@
 #include "content/public/browser/web_ui.h"
 #include "ui/base/l10n/time_format.h"
 #include "ui/base/mojom/window_open_disposition.mojom.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/menus/simple_menu_model.h"
@@ -64,7 +65,7 @@ int64_t TimeToUS(const base::Time& time) {
 class ReadLaterItemContextMenu : public ui::SimpleMenuModel,
                                  public ui::SimpleMenuModel::Delegate {
  public:
-  ReadLaterItemContextMenu(Browser* browser,
+  ReadLaterItemContextMenu(BrowserWindowInterface* browser,
                            ReadingListModel* reading_list_model,
                            GURL url)
       : ui::SimpleMenuModel(this),
@@ -95,25 +96,28 @@ class ReadLaterItemContextMenu : public ui::SimpleMenuModel,
   void ExecuteCommand(int command_id, int event_flags) override {
     switch (command_id) {
       case IDC_CONTENT_CONTEXT_OPENLINKNEWTAB: {
-        content::OpenURLParams params(url_, content::Referrer(),
-                                      WindowOpenDisposition::NEW_BACKGROUND_TAB,
-                                      ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
+        content::OpenURLParams params =
+            content::OpenURLParams::CreateBrowserInitiated(
+                url_, WindowOpenDisposition::kNewBackgroundTab,
+                ui::PAGE_TRANSITION_AUTO_BOOKMARK);
         browser_->OpenURL(params, /*navigation_handle_callback=*/{});
         break;
       }
 
       case IDC_CONTENT_CONTEXT_OPENLINKNEWWINDOW: {
-        content::OpenURLParams params(url_, content::Referrer(),
-                                      WindowOpenDisposition::NEW_WINDOW,
-                                      ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
+        content::OpenURLParams params =
+            content::OpenURLParams::CreateBrowserInitiated(
+                url_, WindowOpenDisposition::kNewWindow,
+                ui::PAGE_TRANSITION_AUTO_BOOKMARK);
         browser_->OpenURL(params, /*navigation_handle_callback=*/{});
         break;
       }
 
       case IDC_CONTENT_CONTEXT_OPENLINKOFFTHERECORD: {
-        content::OpenURLParams params(url_, content::Referrer(),
-                                      WindowOpenDisposition::OFF_THE_RECORD,
-                                      ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
+        content::OpenURLParams params =
+            content::OpenURLParams::CreateBrowserInitiated(
+                url_, WindowOpenDisposition::kOffTheRecord,
+                ui::PAGE_TRANSITION_AUTO_BOOKMARK);
         browser_->OpenURL(params, /*navigation_handle_callback=*/{});
         break;
       }
@@ -145,7 +149,7 @@ class ReadLaterItemContextMenu : public ui::SimpleMenuModel,
     kMarkAsUnread,
     kDelete,
   };
-  const raw_ptr<Browser> browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
   raw_ptr<ReadingListModel> reading_list_model_;
   GURL url_;
 };
@@ -164,7 +168,7 @@ ReadingListPageHandler::ReadingListPageHandler(
       web_ui_(web_ui),
       clock_(base::DefaultClock::GetInstance()) {
   Profile* profile = Profile::FromWebUI(web_ui);
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M162);
 
   reading_list_model_ = ReadingListModelFactory::GetForBrowserContext(profile);
   reading_list_model_scoped_observation_.Observe(reading_list_model_.get());
@@ -193,8 +197,9 @@ void ReadingListPageHandler::OpenURL(
       click_modifiers->ctrl_key, click_modifiers->meta_key,
       click_modifiers->shift_key);
 
-  content::OpenURLParams params(url, content::Referrer(), open_location,
-                                ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
+  content::OpenURLParams params =
+      content::OpenURLParams::CreateBrowserInitiated(
+          url, open_location, ui::PAGE_TRANSITION_AUTO_BOOKMARK);
 
   auto* browser_window_interface =
       webui::GetBrowserWindowInterface(web_contents());
@@ -223,24 +228,23 @@ void ReadingListPageHandler::UpdateReadStatus(const GURL& url, bool read) {
 
 void ReadingListPageHandler::MarkCurrentTabAsRead() {
   BrowserWindowInterface* browser =
-      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+      webui::GetBrowserWindowInterface(web_contents());
   if (!browser) {
     return;
   }
 
-  chrome::MarkCurrentTabAsReadInReadLater(
-      browser->GetBrowserForMigrationOnly());
+  chrome::MarkCurrentTabAsReadInReadLater(browser);
   base::RecordAction(base::UserMetricsAction("DesktopReadingList.MarkAsRead"));
 }
 
 void ReadingListPageHandler::AddCurrentTab() {
   BrowserWindowInterface* browser =
-      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+      webui::GetBrowserWindowInterface(web_contents());
   if (!browser) {
     return;
   }
 
-  chrome::MoveCurrentTabToReadLater(browser->GetBrowserForMigrationOnly());
+  chrome::MoveCurrentTabToReadLater(browser);
   reading_list_model_->MarkAllSeen();
 
   base::RecordAction(
@@ -257,12 +261,14 @@ void ReadingListPageHandler::ShowContextMenuForURL(const GURL& url,
                                                    int32_t y) {
   auto embedder = reading_list_ui_->embedder();
   BrowserWindowInterface* browser =
-      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+      webui::GetBrowserWindowInterface(web_contents());
+  if (!browser) {
+    return;
+  }
   if (embedder) {
-    embedder->ShowContextMenu(
-        gfx::Point(x, y),
-        std::make_unique<ReadLaterItemContextMenu>(
-            browser->GetBrowserForMigrationOnly(), reading_list_model_, url));
+    embedder->ShowContextMenu(gfx::Point(x, y),
+                              std::make_unique<ReadLaterItemContextMenu>(
+                                  browser, reading_list_model_, url));
   }
 }
 
@@ -313,7 +319,7 @@ void ReadingListPageHandler::WebContentsDestroyed() {
 void ReadingListPageHandler::ReadingListModelCompletedBatchUpdates(
     const ReadingListModel* model) {
   CHECK(web_contents());
-  DCHECK(model == reading_list_model_);
+  CHECK(model == reading_list_model_, base::NotFatalUntil::M162);
 
   if (web_contents()->GetVisibility() == content::Visibility::HIDDEN) {
     return;
@@ -326,9 +332,10 @@ void ReadingListPageHandler::ReadingListModelCompletedBatchUpdates(
 
 void ReadingListPageHandler::ReadingListModelBeingDeleted(
     const ReadingListModel* model) {
-  DCHECK(model == reading_list_model_);
-  DCHECK(reading_list_model_scoped_observation_.IsObservingSource(
-      reading_list_model_.get()));
+  CHECK(model == reading_list_model_, base::NotFatalUntil::M162);
+  CHECK(reading_list_model_scoped_observation_.IsObservingSource(
+            reading_list_model_.get()),
+        base::NotFatalUntil::M162);
   reading_list_model_scoped_observation_.Reset();
   reading_list_model_ = nullptr;
 }
@@ -336,7 +343,7 @@ void ReadingListPageHandler::ReadingListModelBeingDeleted(
 void ReadingListPageHandler::ReadingListDidApplyChanges(
     ReadingListModel* model) {
   CHECK(web_contents());
-  DCHECK(model == reading_list_model_);
+  CHECK(model == reading_list_model_, base::NotFatalUntil::M162);
 
   if (web_contents()->GetVisibility() == content::Visibility::HIDDEN ||
       reading_list_model_->IsPerformingBatchUpdates()) {
@@ -397,7 +404,7 @@ ReadingListPageHandler::CreateReadLaterEntriesByStatusData() {
   for (const auto& url : reading_list_model_->GetKeys()) {
     scoped_refptr<const ReadingListEntry> entry =
         reading_list_model_->GetEntryByURL(url);
-    DCHECK(entry);
+    CHECK(entry, base::NotFatalUntil::M162);
     if (entry->IsRead()) {
       entries->read_entries.push_back(GetEntryData(entry.get()));
     } else {
@@ -456,7 +463,7 @@ void ReadingListPageHandler::UpdateCurrentPageActionButton() {
 
 std::unique_ptr<ui::SimpleMenuModel>
 ReadingListPageHandler::GetItemContextMenuModelForTesting(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     ReadingListModel* reading_list_model,
     GURL url) {
   return std::make_unique<ReadLaterItemContextMenu>(browser, reading_list_model,

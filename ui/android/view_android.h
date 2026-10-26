@@ -11,6 +11,7 @@
 
 #include "base/android/jni_array.h"
 #include "base/android/jni_weak_ref.h"
+#include "base/containers/linked_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
@@ -114,6 +115,10 @@ class UI_ANDROID_EXPORT ViewAndroid {
   void UpdateFrameInfo(const FrameInfo& frame_info);
   // content_offset is in dip.
   float content_offset() const { return frame_info_.content_offset; }
+  float content_offset_x() const { return content_offset_x_; }
+  void set_content_offset_x(float content_offset_x) {
+    content_offset_x_ = content_offset_x;
+  }
   gfx::SizeF viewport_size() const { return frame_info_.viewport_size; }
 
   // Returns the window at the root of this hierarchy, or |null|
@@ -218,6 +223,11 @@ class UI_ANDROID_EXPORT ViewAndroid {
 
   void SetTooltip(const std::u16string& text);
 
+  void SetTooltipFromKeyboard(const std::u16string& text,
+                              const gfx::Rect& bounds);
+
+  void ClearTooltipFromKeyboard();
+
   void SetCopyOutputCallback(CopyViewCallback callback);
   // Return the CopyOutputRequest back if view cannot perform readback.
   std::unique_ptr<viz::CopyOutputRequest> MaybeRequestCopyOfView(
@@ -255,6 +265,8 @@ class UI_ANDROID_EXPORT ViewAndroid {
   // visibility of the view so that we make sure that we do not send a touch
   // event to a prerendered (and hidden) view.
   bool IsCheckHitEligible() const;
+
+  void ReportScrollJankStats(uint32_t total_frames, uint32_t janky_frames);
 
  protected:
   void RemoveAllChildren(bool attached_to_window);
@@ -330,7 +342,49 @@ class UI_ANDROID_EXPORT ViewAndroid {
   const base::android::ScopedJavaLocalRef<jobject> GetViewAndroidDelegate(
       JNIEnv* env) const;
 
+  // Supports safe traversal of `children_` during synchronous mutations (e.g.
+  // child addition, removal, or reordering during event dispatch). Active
+  // iterators register themselves in `active_iters_` so mutating operations can
+  // update them in-place, preventing UAF and iterator invalidation.
+  class ScopedChildrenIter : public base::UnsafeLinkNode<ScopedChildrenIter> {
+   public:
+    enum class IterationType {
+      kForward,
+      kReverse,
+    };
+    explicit ScopedChildrenIter(ViewAndroid* view,
+                                IterationType type = IterationType::kForward);
+    ~ScopedChildrenIter();
+    ScopedChildrenIter(const ScopedChildrenIter&) = delete;
+    ScopedChildrenIter& operator=(const ScopedChildrenIter&) = delete;
+
+    // Returns the next element, or nullptr if there are no more elements.
+    // Always called *after* the previous element has been processed, so the
+    // loop body is free to mutate `children_` in between.
+    ViewAndroid* GetNext();
+
+   private:
+    friend class ViewAndroid;
+
+    // Called from `~ViewAndroid` to detach iterators that outlive their view.
+    void ViewDestroyed();
+
+    raw_ptr<ViewAndroid> view_;
+    IterationType type_;
+    std::list<raw_ptr<ViewAndroid, CtnExperimental>>::iterator it_;
+  };
+
+  // Safely advances any active iterators currently pointing to `child_it`
+  // before a mutation (e.g. Remove, MoveToFront) changes the list.
+  void StepIteratorsOver(
+      std::list<raw_ptr<ViewAndroid, CtnExperimental>>::iterator child_it);
+
   std::list<raw_ptr<ViewAndroid, CtnExperimental>> children_;
+
+  // Tracks all active iterators traversing the `children_` list, allowing
+  // real-time updates when the list structure changes (e.g. RemoveChild).
+  base::UnsafeLinkedList<ScopedChildrenIter> active_iters_;
+
   base::ObserverList<ViewAndroidObserver>::Unchecked observer_list_;
   scoped_refptr<cc::slim::Layer> layer_;
 
@@ -349,6 +403,9 @@ class UI_ANDROID_EXPORT ViewAndroid {
   gfx::Size physical_size_;
 
   FrameInfo frame_info_;
+
+  // Left content offset in device pixels.
+  float content_offset_x_ = 0.f;
 
   std::unique_ptr<EventForwarder> event_forwarder_;
 

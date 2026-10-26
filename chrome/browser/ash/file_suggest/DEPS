@@ -21,8 +21,15 @@ include_rules = [
   "+chrome/browser/ash/file_manager",
   "+chrome/browser/ash/login/users",
   "+chrome/browser/profiles",
-  "+chrome/browser/signin",
   "+chrome/browser/ui/ash/holding_space",
-  "+chrome/browser/ui/browser.h",
   "+chrome/test/base",
 ]
+
+specific_include_rules = {
+  "file_suggest_keyed_service_factory\\.cc": [
+    "+chrome/browser/browser_process.h",
+  ],
+  "mock_file_suggest_keyed_service\\.cc": [
+    "+chrome/browser/browser_process.h",
+  ],
+}

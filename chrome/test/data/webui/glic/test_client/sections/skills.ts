@@ -84,17 +84,64 @@ function updateSkillsListUi(skillPreviews: SkillPreview[]) {
     name.setAttribute('value', skill.name);
     li.appendChild(name);
 
+    // Enabled.
+    const enabledDivider = document.createElement('SPAN');
+    enabledDivider.innerText = ' : ';
+    li.appendChild(enabledDivider);
+
+    const enabled = document.createElement('SPAN');
+    enabled.className = 'skill-enabled';
+    enabled.setAttribute('value', String(skill.enabled));
+    enabled.innerText = skill.enabled ? 'Enabled' : 'Disabled';
+    li.appendChild(enabled);
+
+    // Creation Time.
+    if (skill.creationTime) {
+      const timeDivider = document.createElement('SPAN');
+      timeDivider.innerText = ' : ';
+      li.appendChild(timeDivider);
+
+      const creationTime = document.createElement('SPAN');
+      creationTime.className = 'skill-creation-time';
+      creationTime.setAttribute('value', skill.creationTime.toISOString());
+      creationTime.innerText = skill.creationTime.toISOString();
+      li.appendChild(creationTime);
+    }
+
     $.skillsList.appendChild(li);
   });
 }
 
 function initSkillPreviews() {
   const browser = getBrowser()!;
-  if (browser.getSkillPreviews) {
+  if (browser.skills) {
+    let currentSubscription: {unsubscribe: () => void}|undefined;
+    browser.skills()?.subscribeObserver?.({
+      next: (skills) => {
+        if (currentSubscription) {
+          currentSubscription.unsubscribe();
+          currentSubscription = undefined;
+        }
+        if (!skills) {
+          updateSkillsListUi([]);
+          return;
+        }
+        currentSubscription = skills.getSkillPreviews?.()?.subscribeObserver?.({
+          next: (skillPreviews: SkillPreview[]) => {
+            logMessage('skills previews updated.');
+            updateSkillsListUi(skillPreviews);
+          },
+          error: (err: any) => {
+            logMessage(`skill previews update error: ${err}`);
+          },
+        });
+      },
+    });
+  } else if (browser.getSkillPreviews) {
     const observableSkillPreviews = browser.getSkillPreviews()!;
     observableSkillPreviews.subscribeObserver!({
       next: (skillPreviews: SkillPreview[]) => {
-        logMessage(`skills previews updated.`);
+        logMessage('skills previews updated.');
         updateSkillsListUi(skillPreviews);
       },
       error: (err: any) => {
@@ -102,7 +149,7 @@ function initSkillPreviews() {
       },
     });
   } else {
-    logMessage('getSkillPreviews not supported');
+    logMessage('skills not supported');
   }
 }
 

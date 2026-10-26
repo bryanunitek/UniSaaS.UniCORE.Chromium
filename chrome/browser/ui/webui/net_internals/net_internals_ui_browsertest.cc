@@ -26,7 +26,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/net_internals/net_internals_ui.h"
 #include "chrome/common/channel_info.h"
@@ -260,10 +260,26 @@ class NetworkContextForTesting : public network::TestNetworkContext {
     it->second.emplace_back(std::move(dictionary));
   }
 
+  void GetProxySettings(GetProxySettingsCallback callback) override {
+    std::move(callback).Run(proxy_settings_.Clone());
+  }
+
+  void ClearBadProxiesCache(ClearBadProxiesCacheCallback callback) override {
+    proxy_settings_.Remove("badProxies");
+    if (callback) {
+      std::move(callback).Run();
+    }
+  }
+
+  void SetProxySettingsForTesting(base::DictValue proxy_settings) {
+    proxy_settings_ = std::move(proxy_settings);
+  }
+
  private:
   std::map<net::SharedDictionaryIsolationKey,
            std::vector<network::mojom::SharedDictionaryInfoPtr>>
       dictionaries_;
+  base::DictValue proxy_settings_;
 };
 
 }  // namespace
@@ -301,7 +317,10 @@ class NetInternalsTest::MessageHandler : public content::WebUIMessageHandler {
   // Register a test shared dictionary for testing.
   void RgisterTestSharedDictionary(const base::ListValue& list);
 
-  Browser* browser() { return net_internals_test_->browser(); }
+  // Sets mock proxy settings and bad proxies on the test network context.
+  void SetProxySettingsForTesting(const base::ListValue& list);
+
+  BrowserWindowInterface* browser() { return net_internals_test_->browser(); }
 
   raw_ptr<NetInternalsTest> net_internals_test_;
 
@@ -337,6 +356,11 @@ void NetInternalsTest::MessageHandler::RegisterMessages() {
       "registerTestSharedDictionary",
       base::BindRepeating(
           &NetInternalsTest::MessageHandler::RgisterTestSharedDictionary,
+          weak_factory_.GetWeakPtr()));
+  RegisterMessage(
+      "setProxySettingsForTesting",
+      base::BindRepeating(
+          &NetInternalsTest::MessageHandler::SetProxySettingsForTesting,
           weak_factory_.GetWeakPtr()));
 }
 
@@ -383,7 +407,7 @@ void NetInternalsTest::MessageHandler::DnsLookup(const base::ListValue& list) {
       base::BindOnce(&NetInternalsTest::MessageHandler::DnsLookupFinished,
                      weak_factory_.GetWeakPtr(), callback_id));
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetDefaultStoragePartition()
       ->GetNetworkContext()
       ->ResolveHost(network::mojom::HostResolverHost::NewHostPortPair(
@@ -423,6 +447,14 @@ void NetInternalsTest::MessageHandler::RgisterTestSharedDictionary(
           base::Seconds(*dict.FindInt("expiration")),
           ToTime(dict.FindString("last_used_time")->c_str()),
           *dict.FindInt("size"), hash_value));
+}
+
+void NetInternalsTest::MessageHandler::SetProxySettingsForTesting(
+    const base::ListValue& list) {
+  const std::string* proxy_settings_json = list[0].GetIfString();
+  CHECK(proxy_settings_json);
+  network_context_for_testing_.SetProxySettingsForTesting(
+      base::test::ParseJsonDict(*proxy_settings_json));
 }
 
 ////////////////////////////////////////////////////////////////////////////////

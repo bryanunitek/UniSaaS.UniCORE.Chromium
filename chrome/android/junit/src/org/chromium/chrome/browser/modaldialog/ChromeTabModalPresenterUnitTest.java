@@ -4,11 +4,22 @@
 
 package org.chromium.chrome.browser.modaldialog;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.app.Activity;
+import android.view.ViewGroup;
+import android.view.ViewGroup.MarginLayoutParams;
+import android.widget.FrameLayout;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -18,7 +29,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.UserDataHost;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
@@ -35,12 +45,14 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.toolbar.ToolbarManager;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
+import org.chromium.components.browser_ui.widget.scrim.ScrimProperties;
+import org.chromium.content_public.browser.WebContents;
+import org.chromium.ui.modelutil.PropertyModel;
 
 import java.util.function.Supplier;
 
 /** Tests for {@link ChromeTabModalPresenter}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ChromeTabModalPresenterUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -53,6 +65,7 @@ public class ChromeTabModalPresenterUnitTest {
     @Mock private FullscreenManager mFullscreenManager;
     @Mock private TabObscuringHandler mTabObscuringHandler;
     @Mock private ToolbarManager mToolbarManager;
+    @Mock private WebContents mWebContents;
 
     private final MonotonicObservableSupplier<ScrimManager> mScrimManagerSupplier =
             ObservableSuppliers.alwaysNull();
@@ -89,6 +102,22 @@ public class ChromeTabModalPresenterUnitTest {
         public void setBrowserControlsAccess(boolean restricted) {
             super.setBrowserControlsAccess(restricted);
         }
+
+        // Calls are verified on the spy; the real method needs a SelectionPopupController.
+        @Override
+        protected void saveOrRestoreTextSelection(
+                WebContents webContents, boolean save, boolean restoreFocus) {}
+
+        private ViewGroup mTestDialogContainer;
+
+        public void setDialogContainerForTesting(ViewGroup container) {
+            mTestDialogContainer = container;
+        }
+
+        @Override
+        protected ViewGroup getDialogContainer() {
+            return mTestDialogContainer != null ? mTestDialogContainer : super.getDialogContainer();
+        }
     }
 
     @Before
@@ -121,6 +150,7 @@ public class ChromeTabModalPresenterUnitTest {
                         mTabModelSelector,
                         mScrimManagerSupplier,
                         mEdgeToEdgeControllerSupplier);
+        mPresenter = spy(mPresenter);
     }
 
     @Test
@@ -163,5 +193,75 @@ public class ChromeTabModalPresenterUnitTest {
 
         // Simulate dismissing the dialog. This should not crash even though the tab is destroyed.
         mPresenter.setBrowserControlsAccess(false);
+    }
+
+    /**
+     * Simulates a dialog shown over {@link #mTab} being hidden, by calling
+     * setBrowserControlsAccess(false) with the given tab state.
+     */
+    private void simulateDialogHidden(boolean tabInteractable, Tab currentTab) {
+        mPresenter.setActiveTabForTesting(mTab);
+        when(mTab.getWebContents()).thenReturn(mWebContents);
+        when(mTab.isUserInteractable()).thenReturn(tabInteractable);
+        when(mTabModelSelector.getCurrentTab()).thenReturn(currentTab);
+        mPresenter.setBrowserControlsAccess(false);
+    }
+
+    @Test
+    public void testSetBrowserControlsAccess_TabInteractableAndSelected_RestoresFocus() {
+        simulateDialogHidden(/* tabInteractable= */ true, mTab);
+        verify(mPresenter)
+                .saveOrRestoreTextSelection(
+                        mWebContents, /* save= */ false, /* restoreFocus= */ true);
+    }
+
+    @Test
+    public void testSetBrowserControlsAccess_TabNotInteractable_DoesNotRestoreFocus() {
+        // E.g. the dialog is suspended because the tab switcher is showing.
+        simulateDialogHidden(/* tabInteractable= */ false, mTab);
+        verify(mPresenter)
+                .saveOrRestoreTextSelection(
+                        mWebContents, /* save= */ false, /* restoreFocus= */ false);
+        verify(mPresenter, never())
+                .saveOrRestoreTextSelection(any(), anyBoolean(), eq(/* restoreFocus= */ true));
+    }
+
+    @Test
+    public void testSetBrowserControlsAccess_TabNotSelected_DoesNotRestoreFocus() {
+        // E.g. another tab was selected while the dialog was showing.
+        simulateDialogHidden(/* tabInteractable= */ true, mock(Tab.class));
+        verify(mPresenter)
+                .saveOrRestoreTextSelection(
+                        mWebContents, /* save= */ false, /* restoreFocus= */ false);
+        verify(mPresenter, never())
+                .saveOrRestoreTextSelection(any(), anyBoolean(), eq(/* restoreFocus= */ true));
+    }
+
+    @Test
+    public void testTopControlsHeightChanged_UpdatesScrimTopMargin() {
+        ViewGroup container = new FrameLayout(mActivity);
+        container.setLayoutParams(
+                new MarginLayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        mPresenter.setDialogContainerForTesting(container);
+
+        PropertyModel scrimModel =
+                new PropertyModel.Builder(ScrimProperties.ALL_KEYS)
+                        .with(ScrimProperties.TOP_MARGIN, 56)
+                        .build();
+        mPresenter.setScrimModelForTesting(scrimModel);
+
+        when(mBrowserControlsVisibilityManager.getTopControlsHeight()).thenReturn(96);
+
+        mPresenter.onTopControlsHeightChanged(96, 0);
+
+        assertEquals(
+                "Dialog container top margin should be updated.",
+                96,
+                ((MarginLayoutParams) container.getLayoutParams()).topMargin);
+        assertEquals(
+                "Scrim top margin should be updated.",
+                96,
+                scrimModel.get(ScrimProperties.TOP_MARGIN));
     }
 }

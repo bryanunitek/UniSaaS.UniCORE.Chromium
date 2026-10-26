@@ -15,8 +15,6 @@ import android.graphics.drawable.Drawable;
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
-import jp.tomorrowkey.android.gifplayer.BaseGifImage;
-
 import org.chromium.base.Callback;
 import org.chromium.base.Log;
 import org.chromium.base.ObserverList;
@@ -25,7 +23,6 @@ import org.chromium.base.task.AsyncTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.logo.LogoBridge.Logo;
 import org.chromium.chrome.browser.logo.LogoBridge.LogoObserver;
 import org.chromium.chrome.browser.logo.LogoCoordinator.VisibilityObserver;
@@ -59,17 +56,26 @@ public class LogoMediator implements TemplateUrlServiceObserver {
 
     private static final String TAG = "Logo";
 
+    // This enum must match the numbering for NewTabPageLogoShown in enums.xml and
+    // LogoImpressionType in ntp_user_data_logger.h, which records the same histograms
+    // from the Android WebUI NTP and must therefore use an identical bucket layout.
+    // LINT.IfChange(LogoShownId)
     @IntDef({
         LogoShownId.STATIC_LOGO_SHOWN,
         LogoShownId.CTA_IMAGE_SHOWN,
+        LogoShownId.ANIMATED_LOGO_SHOWN,
         LogoShownId.LOGO_SHOWN_COUNT
     })
     @Retention(RetentionPolicy.SOURCE)
     private @interface LogoShownId {
         int STATIC_LOGO_SHOWN = 0;
         int CTA_IMAGE_SHOWN = 1;
-        int LOGO_SHOWN_COUNT = 2;
+        int ANIMATED_LOGO_SHOWN = 2;
+        int LOGO_SHOWN_COUNT = 3;
     }
+
+    // LINT.ThenChange(//chrome/browser/ui/search/ntp_user_data_logger.h:LogoImpressionType,
+    // //tools/metrics/histograms/metadata/new_tab_page/enums.xml:NewTabPageLogoShown)
 
     private static final String LOGO_SHOWN_TIME_UMA_NAME = "NewTabPage.LogoShownTime2";
 
@@ -249,7 +255,8 @@ public class LogoMediator implements TemplateUrlServiceObserver {
     boolean isDefaultGoogleLogoShown() {
         return mIsDefaultSearchEngineGoogle
                 && mShouldShowLogo
-                && mLogoModel.get(LogoProperties.VISIBILITY);
+                && mLogoModel.get(LogoProperties.VISIBILITY)
+                && mLogoModel.get(LogoProperties.LOGO) == null;
     }
 
     /**
@@ -287,14 +294,7 @@ public class LogoMediator implements TemplateUrlServiceObserver {
             RecordHistogram.recordEnumeratedHistogram(
                     LOGO_SHOWN_FROM_CACHE_UMA_NAME, logoType, LogoShownId.LOGO_SHOWN_COUNT);
 
-            // Deduplicate impression pings. While the mHasLogoLoadedForCurrentSearchEngine flag
-            // usually prevents this block from running twice, edge cases like toggling the Default
-            // Search Engine will reset the flag while keeping this Mediator alive.
-            if (cachedDoodle.logUrl != null
-                    && !cachedDoodle.logUrl.equals(mRecordedImpressionUrl)) {
-                mLogoBridge.recordImpression(cachedDoodle.logUrl);
-                mRecordedImpressionUrl = cachedDoodle.logUrl;
-            }
+            recordImpression(cachedDoodle);
             return;
         }
 
@@ -339,7 +339,7 @@ public class LogoMediator implements TemplateUrlServiceObserver {
 
     private void showSearchProviderInitialView() {
         mLogoModel.set(LogoProperties.DEFAULT_GOOGLE_LOGO_DRAWABLE, getDefaultGoogleLogoDrawable());
-
+        mLogoModel.set(LogoProperties.LOGO, null);
         mLogoModel.set(LogoProperties.SHOW_SEARCH_PROVIDER_INITIAL_VIEW, true);
     }
 
@@ -373,8 +373,9 @@ public class LogoMediator implements TemplateUrlServiceObserver {
      * @param drawable The updated drawable for default Google logo.
      */
     void updateDefaultGoogleLogo(Drawable drawable) {
-        mDefaultGoogleLogoDrawable = drawable;
+        assert mLogoModel.get(LogoProperties.LOGO) == null;
 
+        mDefaultGoogleLogoDrawable = drawable;
         mLogoModel.set(LogoProperties.DEFAULT_GOOGLE_LOGO_DRAWABLE, mDefaultGoogleLogoDrawable);
         mLogoModel.set(LogoProperties.SHOW_DEFAULT_GOOGLE_LOGO, true);
     }
@@ -409,46 +410,40 @@ public class LogoMediator implements TemplateUrlServiceObserver {
         }
 
         mImageFetcher.fetchGif(
-                ImageFetcher.Params.create(
+                ImageFetcher.Params.createFromTrustedSource(
                         mAnimatedLogoUrl, ImageFetcher.NTP_ANIMATED_LOGO_UMA_CLIENT_NAME),
                 (ImageDataFetchResult animatedLogoImageFetchResult) -> {
                     if (mLogoBridge == null || animatedLogoImageFetchResult.imageData == null) {
                         return;
                     }
 
-                    if (ChromeFeatureList.isEnabled(ChromeFeatureList.ANIMATED_GIF_REFACTOR)) {
-                        new AsyncTask<@Nullable Drawable>() {
-                            @Override
-                            protected @Nullable Drawable doInBackground() {
-                                try {
-                                    Drawable drawable =
-                                            ImageDecoder.decodeDrawable(
-                                                    ImageDecoder.createSource(
-                                                            ByteBuffer.wrap(
-                                                                    animatedLogoImageFetchResult
-                                                                            .imageData)));
-                                    if (!(drawable instanceof AnimatedImageDrawable)) {
-                                        Log.e(TAG, "Drawable is not animated.", drawable);
-                                        return null;
-                                    }
-                                    return drawable;
-                                } catch (IOException ex) {
-                                    Log.e(TAG, "Failed to parse logo", ex);
+                    new AsyncTask<@Nullable AnimatedImageDrawable>() {
+                        @Override
+                        protected @Nullable AnimatedImageDrawable doInBackground() {
+                            try {
+                                Drawable drawable =
+                                        ImageDecoder.decodeDrawable(
+                                                ImageDecoder.createSource(
+                                                        ByteBuffer.wrap(
+                                                                animatedLogoImageFetchResult
+                                                                        .imageData)));
+                                if (!(drawable instanceof AnimatedImageDrawable)) {
+                                    Log.e(TAG, "Drawable is not animated.", drawable);
                                     return null;
                                 }
+                                return (AnimatedImageDrawable) drawable;
+                            } catch (IOException ex) {
+                                Log.e(TAG, "Failed to parse logo", ex);
+                                return null;
                             }
+                        }
 
-                            @Override
-                            protected void onPostExecute(@Nullable Drawable result) {
-                                if (result == null) return;
-                                mLogoModel.set(LogoProperties.ANIMATED_LOGO, result);
-                            }
-                        }.executeWithTaskTraits(TaskTraits.USER_VISIBLE);
-                    } else {
-                        mLogoModel.set(
-                                LogoProperties.ANIMATED_LOGO,
-                                new BaseGifImage(animatedLogoImageFetchResult.imageData));
-                    }
+                        @Override
+                        protected void onPostExecute(@Nullable AnimatedImageDrawable result) {
+                            if (result == null) return;
+                            mLogoModel.set(LogoProperties.ANIMATED_LOGO, result);
+                        }
+                    }.executeWithTaskTraits(TaskTraits.USER_VISIBLE);
                 });
     }
 
@@ -498,21 +493,56 @@ public class LogoMediator implements TemplateUrlServiceObserver {
                         mOnLogoClickUrl = logo != null ? logo.onClickUrl : null;
                         mAnimatedLogoUrl = getAnimatedLogoUrl(logo);
 
-                        // The C++ LogoService fires this callback up to twice (once for disk cache,
-                        // once for network fetch). Deduplicate the impression pings to ensure we
-                        // only record exactly 1 impression per NTP session.
-                        if (logo != null
-                                && logo.logUrl != null
-                                && !logo.logUrl.equals(mRecordedImpressionUrl)) {
-                            mLogoBridge.recordImpression(logo.logUrl);
-                            mRecordedImpressionUrl = logo.logUrl;
-                        }
+                        recordImpression(logo);
 
                         logoObserver.onLogoAvailable(logo, fromCache);
                     }
                 };
 
         mLogoBridge.getCurrentLogo(wrapperCallback);
+    }
+
+    /**
+     * Resolves the impression log URL corresponding to the current visual state of the doodle logo.
+     *
+     * <p>In night mode, dark mode URLs are preferred ({@code darkCtaLogUrl}, then {@code
+     * darkLogUrl}). If no dark mode URLs are provided, or if in light mode, it falls back to light
+     * mode URLs ({@code ctaLogUrl}, then {@code logUrl}).
+     *
+     * @param logo The doodle logo containing impression URLs, or null.
+     * @return The impression URL string to ping, or null if unpopulated.
+     */
+    @VisibleForTesting
+    @Nullable
+    String getImpressionLogUrl(@Nullable Logo logo) {
+        if (logo == null) return null;
+
+        if (mIsNightMode) {
+            if (logo.darkCtaLogUrl != null) return logo.darkCtaLogUrl;
+            if (logo.darkLogUrl != null) return logo.darkLogUrl;
+        }
+
+        if (logo.ctaLogUrl != null) return logo.ctaLogUrl;
+        return logo.logUrl;
+    }
+
+    /**
+     * Records an impression for the given doodle logo if an impression URL is available and has not
+     * already been recorded in the current session.
+     *
+     * <p>Deduplicates impression pings across in-memory cache hits, C++ disk cache callbacks, and
+     * network fetch callbacks to ensure we record at most one impression per NTP session.
+     *
+     * @param logo The doodle logo struct containing impression URLs, or null.
+     */
+    private void recordImpression(@Nullable Logo logo) {
+        if (mLogoBridge == null || logo == null) return;
+
+        String impressionLogUrl = getImpressionLogUrl(logo);
+        if (impressionLogUrl != null && !impressionLogUrl.equals(mRecordedImpressionUrl)) {
+            mLogoBridge.recordImpression(impressionLogUrl);
+            mRecordedImpressionUrl = impressionLogUrl;
+        }
     }
 
     private @Nullable String getAnimatedLogoUrl(@Nullable Logo logo) {

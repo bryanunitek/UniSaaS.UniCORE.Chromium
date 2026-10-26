@@ -16,11 +16,10 @@
 #include "chrome/browser/ui/tabs/contents_observing_tab_feature.h"
 #include "components/tabs/public/tab_network_state.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
-#if !BUILDFLAG(IS_ANDROID)
-class Browser;
-#endif
+class BrowserUiController;
 
 namespace content {
 class NavigationEntry;
@@ -31,10 +30,6 @@ class Page;
 namespace tabs {
 class TabInterface;
 }  // namespace tabs
-
-namespace ui {
-class ImageModel;
-}  // namespace ui
 
 // TabUIHelper is used by UI code to obtain the title and favicon for a
 // WebContents. The values returned by TabUIHelper differ from the WebContents
@@ -60,10 +55,8 @@ class TabUIHelper : public tabs::ContentsObservingTabFeature {
 
   bool ShouldThemifyFavicon();
 
-#if !BUILDFLAG(IS_ANDROID)
   bool ShouldDisplayFavicon();
   bool IsMonochromeFavicon();
-#endif
 
   // Get the favicon of the tab. It will return a favicon from history service
   // if it needs to, otherwise, it will return the favicon of the WebContents.
@@ -92,9 +85,7 @@ class TabUIHelper : public tabs::ContentsObservingTabFeature {
       content::NavigationHandle* navigation_handle) override;
   void PrimaryMainFrameRenderProcessGone(
       base::TerminationStatus status) override;
-#if !BUILDFLAG(IS_ANDROID)
   void PrimaryPageChanged(content::Page& page) override;
-#endif
 
   void SetCreatedBySessionRestore(bool created_by_session_restore);
   bool is_created_by_session_restore_for_testing() {
@@ -112,15 +103,13 @@ class TabUIHelper : public tabs::ContentsObservingTabFeature {
   // Returns the amount of bytes saved from discarding the tab.
   std::optional<base::ByteSize> GetDiscardedMemorySavings();
 
+  void NotifyTabUIChanged(base::PassKey<BrowserUiController> pass_key);
+
   bool was_active_at_least_once_for_testing() const {
     return was_active_at_least_once_;
   }
 
   tabs::TabNetworkState GetTabNetworkState();
-
-#if !BUILDFLAG(IS_ANDROID)
-  void NotifyTabUIChanged(base::PassKey<Browser> pass_key);
-#endif
 
  private:
   void OnTabPinnedStatusChange(tabs::TabInterface* tab_interface,
@@ -130,6 +119,13 @@ class TabUIHelper : public tabs::ContentsObservingTabFeature {
   bool created_by_session_restore_ = false;
   bool needs_attention_ = false;
   base::CallbackListSubscription pin_tab_subscription_;
+
+  // Cached tab-background-aware default globe favicon, returned for tabs with
+  // no page-provided favicon. Created once (bound to this tab) so repeated
+  // GetFavicon() calls return an equal model -- TabData compares favicons by
+  // value -- while the bound generator still re-resolves the light/dark variant
+  // at raster time. crbug.com/544891511
+  ui::ImageModel default_favicon_model_;
 
   base::RepeatingClosureList tab_ui_change_callbacks_;
 

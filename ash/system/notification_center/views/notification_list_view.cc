@@ -5,6 +5,7 @@
 #include "ash/system/notification_center/views/notification_list_view.h"
 
 #include <algorithm>
+#include <ranges>
 #include <string>
 
 #include "ash/constants/ash_features.h"
@@ -22,7 +23,6 @@
 #include "ash/system/notification_center/views/notification_swipe_control_view.h"
 #include "ash/system/tray/tray_constants.h"
 #include "base/auto_reset.h"
-#include "base/containers/adapters.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
@@ -94,7 +94,7 @@ NotificationListView::NotificationListView(
     : views::AnimationDelegateViews(this),
       message_center_view_(message_center_view),
       animation_(std::make_unique<gfx::LinearAnimation>(this)),
-      message_view_width_(GetNotificationInMessageCenterWidth()) {
+      message_view_width_(kNotificationInMessageCenterWidth) {
   SetID(VIEW_ID_NOTIFICATION_BUBBLE_NOTIFICATION_LIST);
   if (!features::IsNotificationCenterControllerEnabled()) {
     message_center_observation_.Observe(MessageCenter::Get());
@@ -722,7 +722,7 @@ const MessageViewContainer* NotificationListView::GetNotificationById(
 
 MessageViewContainer* NotificationListView::GetNextRemovableNotification() {
   const auto i = std::ranges::find_if_not(
-      base::Reversed(children()),
+      std::views::reverse(children()),
       [](const views::View* v) { return AsMVC(v)->IsPinned(); });
   return (i == children().rend()) ? nullptr : AsMVC(*i);
 }

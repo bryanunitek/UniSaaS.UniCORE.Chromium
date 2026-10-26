@@ -11,20 +11,24 @@
 #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
 #include "chrome/browser/devtools/devtools_browser_context_manager.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/webui_url_constants.h"
+#include "components/webapps/isolated_web_apps/scheme.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/common/url_utils.h"
+#include "ui/base/base_window.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace {
@@ -33,20 +37,15 @@ NavigateParams CreateNavigateParams(Profile* profile,
                                     ui::PageTransition transition,
                                     bool new_window,
                                     bool background,
-                                    BrowserWindowInterface* bwi) {
-  Browser* browser = nullptr;
-  if (!new_window && bwi) {
-    browser = bwi->GetBrowserForMigrationOnly();
-  }
-
-  DCHECK(new_window || browser);
+                                    BrowserWindowInterface* browser) {
+  CHECK(new_window || browser, base::NotFatalUntil::M161);
   NavigateParams params(profile, url, transition);
   if (new_window) {
-    params.disposition = WindowOpenDisposition::NEW_WINDOW;
+    params.disposition = WindowOpenDisposition::kNewWindow;
   } else {
     params.disposition = (background)
-                             ? WindowOpenDisposition::NEW_BACKGROUND_TAB
-                             : WindowOpenDisposition::NEW_FOREGROUND_TAB;
+                             ? WindowOpenDisposition::kNewBackgroundTab
+                             : WindowOpenDisposition::kNewForegroundTab;
     params.browser = browser;
   }
   if (background) {
@@ -73,6 +72,10 @@ TargetHandler::~TargetHandler() {
 protocol::Response TargetHandler::SetRemoteLocations(
     std::unique_ptr<protocol::Array<protocol::Target::RemoteLocation>>
         locations) {
+  if (!is_trusted_) {
+    return protocol::Response::ServerError(
+        "Cannot set remote locations from untrusted client");
+  }
   remote_locations_.clear();
   if (!locations)
     return protocol::Response::Success();
@@ -118,8 +121,13 @@ protocol::Response TargetHandler::CreateTarget(
           "Failed to find browser context with id " + profile_id);
     }
   } else {
+    // This fails if the last used profile can't be loaded, for example because
+    // its directory can't be created or is scheduled for deletion.
     profile = ProfileManager::GetLastUsedProfile();
-    DCHECK(profile);
+    if (!profile) {
+      return protocol::Response::ServerError(
+          "Failed to load default browser context");
+    }
   }
 
   bool create_new_window = new_window.value_or(false);
@@ -172,6 +180,16 @@ protocol::Response TargetHandler::CreateTarget(
                        inner_url.SchemeIs(content::kChromeDevToolsScheme))) {
     return protocol::Response::ServerError(
         "Navigating to a URL with a privileged scheme is not allowed");
+  }
+
+  // Isolated Web Apps must be opened at their start_url with the requested URL
+  // routed via launchQueue. `windows.create` enforces this and
+  // `tabs.create`/`tabs.update`/`tabs.duplicate` reject `isolated-app://`
+  // outright; do the same here so an untrusted `chrome.debugger` client cannot
+  // deep-link an installed IWA to an arbitrary path.
+  if (!is_trusted_ && inner_url.SchemeIs(webapps::kIsolatedAppScheme)) {
+    return protocol::Response::ServerError(
+        "Navigating to an isolated-app:// URL is not allowed");
   }
 
   if (!may_read_local_files_ && inner_url.SchemeIsFile()) {
@@ -242,8 +260,7 @@ protocol::Response TargetHandler::CreateTarget(
     } else if (*window_state == protocol::Target::WindowStateEnum::Maximized) {
       params.browser->GetWindow()->Maximize();
     } else if (*window_state == protocol::Target::WindowStateEnum::Fullscreen) {
-      params.browser->GetFeatures()
-          .exclusive_access_manager()
+      ExclusiveAccessManager::From(params.browser)
           ->fullscreen_controller()
           ->ToggleBrowserFullscreenMode(/*user_initiated=*/false);
     } else {

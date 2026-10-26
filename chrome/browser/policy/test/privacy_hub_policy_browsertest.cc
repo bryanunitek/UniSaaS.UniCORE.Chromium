@@ -7,7 +7,6 @@
 #include "chrome/browser/ash/policy/handlers/configuration_policy_handler_ash.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chromeos/ash/components/geolocation/system_location_provider.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
@@ -22,7 +21,7 @@ class PrivacyHubPolicyTest
       public testing::WithParamInterface<std::optional<int>> {};
 
 IN_PROC_BROWSER_TEST_F(PrivacyHubPolicyTest, CheckDefault) {
-  const PrefService* const prefs = browser()->profile()->GetPrefs();
+  const PrefService* const prefs = browser()->GetProfile()->GetPrefs();
   EXPECT_FALSE(
       prefs->IsManagedPreference(ash::prefs::kUserGeolocationAccessLevel));
   EXPECT_EQ(static_cast<int>(ash::GeolocationAccessLevel::kAllowed),
@@ -42,7 +41,7 @@ IN_PROC_BROWSER_TEST_P(PrivacyHubPolicyTest, CheckPolicyToPrefMapping) {
                test_policy_value.Clone(), nullptr);
   UpdateProviderPolicy(policies);
 
-  const PrefService* const prefs = browser()->profile()->GetPrefs();
+  const PrefService* const prefs = browser()->GetProfile()->GetPrefs();
 
   if (test_policy_value.is_none()) {
     EXPECT_FALSE(

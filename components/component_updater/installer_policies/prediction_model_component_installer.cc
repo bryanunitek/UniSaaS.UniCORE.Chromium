@@ -6,10 +6,13 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -24,10 +27,23 @@
 #include "components/optimization_guide/core/delivery/prediction_model_component_configs.h"
 #include "components/optimization_guide/core/delivery/prediction_model_component_update_listener.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
+#include "components/optimization_guide/proto/models.pb.h"
+#include "third_party/zlib/google/zip.h"
 
 namespace component_updater {
 
 namespace {
+
+std::string GetTFLiteEngineVersionString() {
+  constexpr std::string_view kPrefix = "MODEL_ENGINE_VERSION_TFLITE_";
+  std::string_view name = optimization_guide::proto::ModelEngineVersion_Name(
+      optimization_guide::proto::ModelEngineVersion_MAX);
+  DCHECK(name.starts_with(kPrefix));
+  std::string version_str(name.substr(kPrefix.size()));
+  std::ranges::replace(version_str, '_', '.');
+  DCHECK(base::Version(version_str).IsValid());
+  return version_str;
+}
 
 class PredictionModelComponentInstallerPolicy
     : public ComponentInstallerPolicy {
@@ -60,7 +76,15 @@ class PredictionModelComponentInstallerPolicy
   update_client::CrxInstaller::Result OnCustomInstall(
       const base::DictValue& manifest,
       const base::FilePath& install_dir) override {
-    return update_client::CrxInstaller::Result(0);  // Nothing custom here.
+    base::FilePath model_crx_path = install_dir.AppendASCII("model.crx3");
+    if (base::PathExists(model_crx_path)) {
+      if (!zip::Unzip(model_crx_path, install_dir)) {
+        return update_client::CrxInstaller::Result(
+            update_client::InstallError::GENERIC_ERROR);
+      }
+      base::DeleteFile(model_crx_path);
+    }
+    return update_client::CrxInstaller::Result(0);
   }
 
   void OnCustomUninstall() override {
@@ -107,7 +131,8 @@ class PredictionModelComponentInstallerPolicy
   std::string GetName() const override { return config_.component_name(); }
 
   update_client::InstallerAttributes GetInstallerAttributes() const override {
-    return update_client::InstallerAttributes();
+    return update_client::InstallerAttributes{
+        {"tflite_engine_version", GetTFLiteEngineVersionString()}};
   }
 
   const optimization_guide::proto::OptimizationTarget optimization_target_;

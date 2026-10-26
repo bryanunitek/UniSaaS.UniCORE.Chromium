@@ -10,9 +10,7 @@
 #include <vector>
 
 #include "base/strings/string_util.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
-#include "components/history/core/browser/features.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/url_database.h"
 #include "components/history/core/browser/visit_annotations_database.h"
@@ -1061,6 +1059,76 @@ TEST_F(VisitDatabaseTest, GetVisibleVisitsInRange_RestrictToSyncedUrls) {
   EXPECT_EQ(visit2.visit_time, results[0].visit_time);
 }
 
+TEST_F(VisitDatabaseTest, GetVisibleVisitsInRange_ClientIds) {
+  GURL url1("http://www.google.com/url1");
+  URLRow url_row1(url1);
+  URLID url_id1 = AddURL(url_row1);
+  ASSERT_NE(0, url_id1);
+
+  // Visit 1: Local visit (empty originator_cache_guid).
+  VisitRow visit1(url_id1, base::Time::Now(), 0,
+                  ui::PageTransitionFromInt(ui::PAGE_TRANSITION_LINK |
+                                            ui::PAGE_TRANSITION_CHAIN_START |
+                                            ui::PAGE_TRANSITION_CHAIN_END),
+                  0, false, 0);
+  visit1.source = SOURCE_BROWSED;
+  visit1.originator_cache_guid = "";
+  ASSERT_TRUE(AddVisit(&visit1));
+
+  // Visit 2: Foreign visit from client_1.
+  VisitRow visit2(url_id1, base::Time::Now() + base::Seconds(1), 0,
+                  ui::PageTransitionFromInt(ui::PAGE_TRANSITION_LINK |
+                                            ui::PAGE_TRANSITION_CHAIN_START |
+                                            ui::PAGE_TRANSITION_CHAIN_END),
+                  0, false, 0);
+  visit2.source = SOURCE_BROWSED;
+  visit2.originator_cache_guid = "client_1";
+  ASSERT_TRUE(AddVisit(&visit2));
+
+  // Visit 3: Foreign visit from client_2.
+  VisitRow visit3(url_id1, base::Time::Now() + base::Seconds(2), 0,
+                  ui::PageTransitionFromInt(ui::PAGE_TRANSITION_LINK |
+                                            ui::PAGE_TRANSITION_CHAIN_START |
+                                            ui::PAGE_TRANSITION_CHAIN_END),
+                  0, false, 0);
+  visit3.source = SOURCE_BROWSED;
+  visit3.originator_cache_guid = "client_2";
+  ASSERT_TRUE(AddVisit(&visit3));
+
+  QueryOptions options;
+  options.duplicate_policy = QueryOptions::KEEP_ALL_DUPLICATES;
+  VisitVector results;
+
+  // By default (empty client_ids), all 3 visits should be returned.
+  GetVisibleVisitsInRange(options, &results);
+  ASSERT_EQ(3U, results.size());
+
+  // Filter for client_1 when local device GUID is not set or different.
+  options.client_ids = {"client_1"};
+  GetVisibleVisitsInRange(options, &results);
+  ASSERT_EQ(1U, results.size());
+  EXPECT_EQ(visit2.visit_time, results[0].visit_time);
+
+  // Set the local device cache GUID to "client_1".
+  SetLocalDeviceOriginatorCacheGuid("client_1");
+
+  // Filtering for "client_1" should now match both local visit1 and visit2.
+  options.client_ids = {"client_1"};
+  GetVisibleVisitsInRange(options, &results);
+  ASSERT_EQ(2U, results.size());
+
+  // Filtering for "client_2" should only match foreign visit3.
+  options.client_ids = {"client_2"};
+  GetVisibleVisitsInRange(options, &results);
+  ASSERT_EQ(1U, results.size());
+  EXPECT_EQ(visit3.visit_time, results[0].visit_time);
+
+  // Filtering for both "client_1" and "client_2" should match all 3 visits.
+  options.client_ids = {"client_1", "client_2"};
+  GetVisibleVisitsInRange(options, &results);
+  ASSERT_EQ(3U, results.size());
+}
+
 TEST_F(VisitDatabaseTest, VisitSource) {
   // Add visits.
   VisitRow visit_info1(111, Time::Now(), 0, ui::PAGE_TRANSITION_LINK, 0, false,
@@ -1222,36 +1290,45 @@ TEST_F(VisitDatabaseTest, GetVisibleVisitsForURL) {
   options = QueryOptions();  // Reset options to default.
 
   // Now try with only per-day de-duping -- the second visit should appear,
-  // since it's a duplicate of visit6 but on a different day.
+  // since it's a duplicate of visit 9 but on a different day. 404s are included
+  // by default, so we expect visit 9 instead of visit6.
   options.duplicate_policy = QueryOptions::REMOVE_DUPLICATES_PER_DAY;
   GetVisibleVisitsForURL(url_id, options, &results);
   ASSERT_EQ(3U, results.size());
-  EXPECT_THAT(results[0], MatchesVisitInfo(test_visit_rows[6]));
+#if !defined(ANDROID)
+  EXPECT_THAT(results[0], MatchesVisitInfo(test_visit_rows[8]));
+#else
+  // On Android, the ones with an `app_id` are chosen among the duplicates.
+  // Visit 8 is the most recent of those.
+  EXPECT_THAT(results[0], MatchesVisitInfo(test_visit_rows[7]));
+#endif
   EXPECT_THAT(results[1], MatchesVisitInfo(test_visit_rows[5]));
   EXPECT_THAT(results[2], MatchesVisitInfo(test_visit_rows[1]));
 
   // Now try without de-duping, expect to see all visible visits to url id 1.
   options.duplicate_policy = QueryOptions::KEEP_ALL_DUPLICATES;
   GetVisibleVisitsForURL(url_id, options, &results);
-  ASSERT_EQ(4U, results.size());
-  EXPECT_THAT(results[0], MatchesVisitInfo(test_visit_rows[6]));
-  EXPECT_THAT(results[1], MatchesVisitInfo(test_visit_rows[5]));
-  EXPECT_THAT(results[2], MatchesVisitInfo(test_visit_rows[1]));
-  EXPECT_THAT(results[3], MatchesVisitInfo(test_visit_rows[0]));
+  ASSERT_EQ(6U, results.size());
+  EXPECT_THAT(results[0], MatchesVisitInfo(test_visit_rows[8]));
+  EXPECT_THAT(results[1], MatchesVisitInfo(test_visit_rows[7]));
+  EXPECT_THAT(results[2], MatchesVisitInfo(test_visit_rows[6]));
+  EXPECT_THAT(results[3], MatchesVisitInfo(test_visit_rows[5]));
+  EXPECT_THAT(results[4], MatchesVisitInfo(test_visit_rows[1]));
+  EXPECT_THAT(results[5], MatchesVisitInfo(test_visit_rows[0]));
 
   // Now try with a `max_count` limit to get the newest 2 visits only.
   options.max_count = 2;
   GetVisibleVisitsForURL(url_id, options, &results);
   ASSERT_EQ(2U, results.size());
-  EXPECT_THAT(results[0], MatchesVisitInfo(test_visit_rows[6]));
-  EXPECT_THAT(results[1], MatchesVisitInfo(test_visit_rows[5]));
-
-  // Try `max_count` again, including 404s this time.
-  options.policy_for_404_visits = VisitQuery404sPolicy::kInclude404s;
-  GetVisibleVisitsForURL(url_id, options, &results);
-  ASSERT_EQ(2U, results.size());
   EXPECT_THAT(results[0], MatchesVisitInfo(test_visit_rows[8]));
   EXPECT_THAT(results[1], MatchesVisitInfo(test_visit_rows[7]));
+
+  // Try `max_count` again, excluding 404s this time.
+  options.policy_for_404_visits = VisitQuery404sPolicy::kExclude404s;
+  GetVisibleVisitsForURL(url_id, options, &results);
+  ASSERT_EQ(2U, results.size());
+  EXPECT_THAT(results[0], MatchesVisitInfo(test_visit_rows[6]));
+  EXPECT_THAT(results[1], MatchesVisitInfo(test_visit_rows[5]));
 
   // Now try getting the oldest 2 visits and make sure they're ordered oldest
   // first.
@@ -2373,28 +2450,17 @@ TEST_F(VisitDatabaseTest, ShouldFilterUserAndActorVisits) {
 
   struct TestCase {
     std::string name;
-    bool m3_enabled;
     bool include_user;
     bool include_actor;
     size_t expected_count;
   } cases[] = {
-      {"All History", true, true, true, 2},
-      {"User Only", true, true, false, 1},
-      {"Agent Only", true, false, true, 1},
-      {"M3 Disabled", false, false, true, 2},
+      {"All History", true, true, 2},
+      {"User Only", true, false, 1},
+      {"Agent Only", false, true, 1},
   };
 
   for (const auto& c : cases) {
     SCOPED_TRACE(c.name);
-    base::test::ScopedFeatureList feature_list;
-
-    if (c.m3_enabled) {
-      feature_list.InitAndEnableFeature(
-          history::kBrowsingHistoryActorIntegrationM3);
-    } else {
-      feature_list.InitAndDisableFeature(
-          history::kBrowsingHistoryActorIntegrationM3);
-    }
 
     QueryOptions options;
     options.include_user_visits = c.include_user;

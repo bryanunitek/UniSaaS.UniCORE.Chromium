@@ -30,14 +30,15 @@
 #include "media/base/video_encoder_metrics_provider.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_util.h"
+#include "media/gfx/paint_canvas_video_renderer.h"
 #include "media/media_buildflags.h"
 #include "media/muxers/muxer.h"
 #include "media/muxers/webm_muxer.h"
-#include "media/renderers/paint_canvas_video_renderer.h"
 #include "media/video/gpu_video_accelerator_factories.h"
 #include "media/video/video_encode_accelerator_adapter.h"
 #include "media/video/video_encoder_info.h"
 #include "media/video/vpx_video_encoder.h"
+#include "third_party/blink/public/platform/modules/mediastream/web_media_stream_sink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_graphics_context_3d_provider.h"
 #include "third_party/blink/renderer/modules/mediarecorder/media_recorder_encoder_wrapper.h"
@@ -1043,8 +1044,8 @@ void VideoTrackRecorderImpl::OnHardwareEncoderError(
 
 void VideoTrackRecorderImpl::ConnectToTrack(
     const VideoCaptureDeliverFrameCB& callback) {
-  track_->AddSink(this, callback, MediaStreamVideoSink::IsSecure::kNo,
-                  MediaStreamVideoSink::UsesAlpha::kDefault);
+  track_->AddSink(this, callback, WebMediaStreamSink::IsSecure::kNo,
+                  WebMediaStreamSink::UsesAlpha::kDefault);
 }
 
 void VideoTrackRecorderImpl::DisconnectFromTrack() {

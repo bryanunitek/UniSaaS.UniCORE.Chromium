@@ -50,7 +50,7 @@ void LazyLoadMediaObserver::StartMonitoringNearViewport(Document* root_document,
         *root_document,
         BindRepeating(&LazyLoadMediaObserver::LoadIfNearViewport,
                       WrapWeakPersistent(this)),
-        LocalFrameUkmAggregator::kLazyLoadIntersectionObserver,
+        LocalFrameMetricsAggregator::kLazyLoadIntersectionObserver,
         std::move(params));
   }
 
@@ -73,17 +73,21 @@ bool LazyLoadMediaObserver::LoadAllImagesAndBlockLoadEvent(
   for (const IntersectionObservation* observation :
        lazy_load_intersection_observer_->Observations()) {
     Element* element = observation->Target();
-    if (!IsDescendantOrSameDocument(element->GetDocument(), for_document)) {
+    // The observer may retain an observation after its weak target is garbage
+    // collected.
+    if (!element) {
       continue;
     }
-    if (auto* image_element = DynamicTo<HTMLImageElement>(element)) {
-      const_cast<HTMLImageElement*>(image_element)
-          ->LoadDeferredImageBlockingLoad();
-      resources_have_started_loading = true;
+    if (!IsDescendantOrSameDocument(element->GetDocument(), for_document)) {
+      continue;
     }
     to_be_unobserved.push_back(element);
   }
   for (Element* element : to_be_unobserved) {
+    if (auto* image_element = DynamicTo<HTMLImageElement>(element)) {
+      image_element->LoadDeferredImageBlockingLoad();
+      resources_have_started_loading = true;
+    }
     lazy_load_intersection_observer_->unobserve(element);
   }
   return resources_have_started_loading;

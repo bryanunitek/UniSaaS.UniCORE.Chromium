@@ -13,6 +13,7 @@ import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.isEnabled;
 import static androidx.test.espresso.matcher.ViewMatchers.withEffectiveVisibility;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
+import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
 import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.not;
@@ -22,23 +23,15 @@ import static org.junit.Assert.assertNull;
 
 import static org.chromium.base.test.transit.ViewFinder.waitForNoView;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
-import static org.chromium.ui.test.util.ViewUtils.waitForView;
+import static org.chromium.ui.test.util.ViewUtils.waitForVisibleView;
 
 import android.text.format.DateUtils;
-import android.view.ViewGroup;
 import android.widget.TextView;
 
-import androidx.test.espresso.ViewAction;
-import androidx.test.espresso.action.GeneralLocation;
-import androidx.test.espresso.action.GeneralSwipeAction;
-import androidx.test.espresso.action.Press;
-import androidx.test.espresso.action.Swipe;
-import androidx.test.espresso.contrib.RecyclerViewActions;
 import androidx.test.espresso.matcher.ViewMatchers.Visibility;
 import androidx.test.filters.MediumTest;
 
 import org.hamcrest.Matchers;
-import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -59,18 +52,13 @@ import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisableIf;
-import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.device_lock.DeviceLockActivityLauncherImpl;
 import org.chromium.chrome.browser.educational_tip.EducationalTipModuleUtils;
-import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.setup_list.SetupListManager;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
@@ -82,6 +70,7 @@ import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.NewTabPageTestUtils;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
 import org.chromium.chrome.test.util.browser.signin.SigninTestUtil;
+import org.chromium.components.externalauth.ExternalAuthUtils;
 import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.test.util.FakeAccountManagerFacade;
@@ -101,7 +90,8 @@ import java.util.List;
 @DoNotBatch(reason = "This test relies on native initialization")
 @RunWith(ParameterizedRunner.class)
 @ParameterAnnotations.UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
-@EnableFeatures(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)
+// Tests the Java native NTP, which is not used on desktop (it uses the WebUI NTP).
+@Restriction(DeviceFormFactor.PHONE_OR_TABLET)
 public class NewTabPageSigninPromoTest {
     @ParameterAnnotations.ClassParameter
     public static final List<ParameterSet> sClassParams =
@@ -117,15 +107,6 @@ public class NewTabPageSigninPromoTest {
                 isIdentityManagerMigrationEnabled);
     }
 
-    private static final int SIGNIN_PROMO_POSITION = 2;
-
-    // Espresso ViewAction that performs a swipe from center to left across the vertical center
-    // of the view. Used instead of ViewAction.swipeLeft which swipes from right edge to
-    // avoid conflict with gesture navigation UI which consumes the edge swipe.
-    private static final ViewAction SWIPE_LEFT =
-            new GeneralSwipeAction(
-                    Swipe.FAST, GeneralLocation.CENTER, GeneralLocation.CENTER_LEFT, Press.FINGER);
-
     private final FreshCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.freshChromeTabbedActivityRule();
     private final SigninTestRule mSigninTestRule = new SigninTestRule();
@@ -139,6 +120,7 @@ public class NewTabPageSigninPromoTest {
     @Rule public FakeTimeTestRule mFakeTimeTestRule = new FakeTimeTestRule();
 
     @Mock private SetupListManager mSetupListManager;
+    @Mock private ExternalAuthUtils mExternalAuthUtilsMock;
 
     private final SigninTestUtil.CustomDeviceLockActivityLauncher mDeviceLockActivityLauncher =
             new SigninTestUtil.CustomDeviceLockActivityLauncher();
@@ -150,12 +132,14 @@ public class NewTabPageSigninPromoTest {
         Mockito.when(mSetupListManager.isSetupListActive()).thenReturn(false);
         SetupListManager.setInstanceForTesting(mSetupListManager);
         EducationalTipModuleUtils.setEducationalTipActiveForTesting(false);
+
+        ExternalAuthUtils.setInstanceForTesting(mExternalAuthUtilsMock);
+        Mockito.lenient().when(mExternalAuthUtilsMock.canUseGooglePlayServices()).thenReturn(true);
+        Mockito.lenient()
+                .when(mExternalAuthUtilsMock.isGooglePlayServicesMissing(Mockito.any()))
+                .thenReturn(false);
     }
 
-    @After
-    public void tearDown() {
-        DeviceLockActivityLauncherImpl.setInstanceForTesting(null);
-    }
 
     private void openNewTabPage() {
         if (!mIsActivityStarted) {
@@ -172,42 +156,12 @@ public class NewTabPageSigninPromoTest {
     @Test
     @MediumTest
     @Feature({"FeedNewTabPage"})
-    // Restrict to Phones and Tablets because Desktop Android does not show feed in NTP.
-    @Restriction({DeviceFormFactor.PHONE_OR_TABLET})
-    @DisableFeatures(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)
-    public void testSignInPromo_AccountsNotReady_Legacy() {
-        try (var unused = mSigninTestRule.blockGetAccountsUpdate()) {
-            openNewTabPage();
-            // Check that the sign-in promo is not shown if accounts are not ready.
-            onView(withId(R.id.feed_stream_recycler_view))
-                    .perform(RecyclerViewActions.scrollToPosition(SIGNIN_PROMO_POSITION));
-            onView(withId(R.id.signin_promo_view_container)).check(doesNotExist());
-        }
-    }
-
-    @Test
-    @MediumTest
-    @Feature({"FeedNewTabPage"})
     public void testSignInPromo_AccountsNotReady() {
-        try (var unused = mSigninTestRule.blockGetAccountsUpdate()) {
+        try (var _ = mSigninTestRule.blockGetAccountsUpdate()) {
             openNewTabPage();
             // Check that the sign-in promo is not shown if accounts are not ready.
             onView(withId(R.id.signin_promo_view_container)).check(doesNotExist());
         }
-    }
-
-    @Test
-    @MediumTest
-    @Feature({"FeedNewTabPage"})
-    // Restrict to Phones and Tablets because Desktop Android does not show feed in NTP.
-    @Restriction({DeviceFormFactor.PHONE_OR_TABLET})
-    @DisableFeatures(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)
-    public void testSignInPromo_AccountsReady_Legacy() {
-        openNewTabPage();
-        // Check that the sign-in promo is displayed this time.
-        onView(withId(R.id.feed_stream_recycler_view))
-                .perform(RecyclerViewActions.scrollToPosition(SIGNIN_PROMO_POSITION));
-        verifySigninPromoShown();
     }
 
     @Test
@@ -217,26 +171,6 @@ public class NewTabPageSigninPromoTest {
         openNewTabPage();
         // Check that the sign-in promo is displayed this time.
         verifySigninPromoShown();
-    }
-
-    @Test
-    @MediumTest
-    @Feature({"FeedNewTabPage"})
-    // Restrict to Phones and Tablets because Desktop Android does not show feed in NTP.
-    @Restriction({DeviceFormFactor.PHONE_OR_TABLET})
-    @DisableFeatures(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)
-    public void testSignInPromo_NotShownAfterSignIn_Legacy() {
-        openNewTabPage();
-        // Check that the sign-in promo is displayed.
-        onView(withId(R.id.feed_stream_recycler_view))
-                .perform(RecyclerViewActions.scrollToPosition(SIGNIN_PROMO_POSITION));
-        verifySigninPromoShown();
-
-        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
-
-        onView(withId(R.id.feed_stream_recycler_view))
-                .perform(RecyclerViewActions.scrollToPosition(SIGNIN_PROMO_POSITION));
-        onView(withId(R.id.signin_promo_view_container)).check(doesNotExist());
     }
 
     @Test
@@ -266,23 +200,6 @@ public class NewTabPageSigninPromoTest {
     @Test
     @MediumTest
     @Feature({"FeedNewTabPage"})
-    // Restrict to Phones and Tablets because Desktop Android does not show feed in NTP.
-    @Restriction({DeviceFormFactor.PHONE_OR_TABLET})
-    @DisableFeatures(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)
-    public void testSignInPromoDisplayedWithAADCMinorAccount_Legacy() {
-        mSigninTestRule.addAccount(TestAccounts.AADC_MINOR_ACCOUNT);
-
-        openNewTabPage();
-        onView(withId(R.id.feed_stream_recycler_view))
-                .perform(RecyclerViewActions.scrollToPosition(SIGNIN_PROMO_POSITION));
-
-        // Check that the sign-in promo is displayed.
-        verifySigninPromoShown();
-    }
-
-    @Test
-    @MediumTest
-    @Feature({"FeedNewTabPage"})
     public void testSignInPromoDisplayedWithAADCMinorAccount() {
         mSigninTestRule.addAccount(TestAccounts.AADC_MINOR_ACCOUNT);
 
@@ -294,11 +211,6 @@ public class NewTabPageSigninPromoTest {
     @Test
     @MediumTest
     @Feature({"FeedNewTabPage"})
-    @EnableFeatures({
-        "EnableSeamlessSignin"
-                + ":seamless-signin-promo-type/twoButtons"
-                + "/seamless-signin-string-type/signinButton"
-    })
     // TODO(crbug.com/483105856): Test is flaky on desktop bots.
     @DisableIf.Device(DeviceFormFactor.DESKTOP)
     public void testSigninPromoLoadingState() {
@@ -314,21 +226,44 @@ public class NewTabPageSigninPromoTest {
         verifySigninPromoShown();
         assertNull(mSigninTestRule.getPrimaryAccount());
 
-        onView(withId(R.id.signin_promo_primary_button)).perform(scrollTo(), click());
+        onView(withId(R.id.signin_promo_primary_button)).perform(scrollTo());
+        waitForVisibleView(withId(R.id.signin_promo_primary_button));
+
+        // Before click: primary button, secondary CTA, and dismiss button are enabled.
         onView(withId(R.id.signin_promo_primary_button))
-                .check(matches(allOf(isDisplayed(), not(isEnabled()))));
+                .check(
+                        matches(
+                                allOf(
+                                        isDisplayed(),
+                                        isEnabled(),
+                                        withText(R.string.sync_promo_continue))));
+        onView(withId(R.id.account_picker_selected_account))
+                .check(matches(allOf(isDisplayed(), isEnabled())));
         onView(withId(R.id.signin_promo_dismiss_button))
-                .check(matches(withEffectiveVisibility(Visibility.INVISIBLE)));
+                .check(matches(allOf(isDisplayed(), isEnabled())));
+
+        onView(withId(R.id.signin_promo_primary_button)).perform(click());
+        onView(withId(R.id.signin_promo_primary_button))
+                .check(
+                        matches(
+                                allOf(
+                                        isDisplayed(),
+                                        not(isEnabled()),
+                                        withText(
+                                                R.string
+                                                        .signin_account_picker_bottom_sheet_signin_title))));
+        onView(withId(R.id.account_picker_selected_account)).check(matches(not(isEnabled())));
+        onView(withId(R.id.signin_promo_dismiss_button))
+                .check(
+                        matches(
+                                allOf(
+                                        not(isEnabled()),
+                                        withEffectiveVisibility(Visibility.INVISIBLE))));
     }
 
     @Test
     @MediumTest
     @Feature({"FeedNewTabPage"})
-    @EnableFeatures({
-        "EnableSeamlessSignin"
-                + ":seamless-signin-promo-type/twoButtons"
-                + "/seamless-signin-string-type/signinButton"
-    })
     // TODO(crbug.com/483438567): Test is flaky on desktop bots.
     @DisableIf.Device(DeviceFormFactor.DESKTOP)
     public void testSeamlessSigninFlow_WithFinalSnackbarUndoSignin() {
@@ -339,7 +274,9 @@ public class NewTabPageSigninPromoTest {
         assertNull(mSigninTestRule.getPrimaryAccount());
         // Click the sign-in button.
         // For landscape mode tests, scroll to ensure button is visible.
-        onView(withId(R.id.signin_promo_primary_button)).perform(scrollTo(), click());
+        onView(withId(R.id.signin_promo_primary_button)).perform(scrollTo());
+        waitForVisibleView(withId(R.id.signin_promo_primary_button));
+        onView(withId(R.id.signin_promo_primary_button)).perform(click());
         // Handle Automotive Device Lock (for Automotive Tests).
         SigninTestUtil.completeDeviceLockIfOnAutomotive(mDeviceLockActivityLauncher);
         // Wait for promo to disappear.
@@ -397,52 +334,6 @@ public class NewTabPageSigninPromoTest {
     @Test
     @MediumTest
     @Feature({"FeedNewTabPage"})
-    @DisabledTest(message = "https://crbug.com/40116614")
-    @DisableFeatures(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)
-    public void testSignInPromo_DismissBySwipe() {
-        openNewTabPage();
-        boolean dismissed =
-                ChromeSharedPreferences.getInstance()
-                        .readBoolean(ChromePreferenceKeys.SIGNIN_PROMO_NTP_PROMO_DISMISSED, false);
-        if (dismissed) {
-            ChromeSharedPreferences.getInstance()
-                    .writeBoolean(ChromePreferenceKeys.SIGNIN_PROMO_NTP_PROMO_DISMISSED, false);
-        }
-
-        // Verify that sign-in promo is displayed initially.
-        onView(withId(R.id.feed_stream_recycler_view))
-                .perform(RecyclerViewActions.scrollToPosition(SIGNIN_PROMO_POSITION));
-        verifySigninPromoShown();
-
-        // Swipe away the sign-in promo.
-        onView(withId(R.id.feed_stream_recycler_view))
-                .perform(
-                        RecyclerViewActions.actionOnItemAtPosition(
-                                SIGNIN_PROMO_POSITION, SWIPE_LEFT));
-
-        NewTabPage newTabPage = (NewTabPage) mActivityTestRule.getActivityTab().getNativePage();
-        ViewGroup view = (ViewGroup) newTabPage.getCoordinatorForTesting().getRecyclerView();
-        waitForNoView(withId(R.id.signin_promo_view_container));
-        waitForView(view, allOf(withId(R.id.header_title), isDisplayed()));
-
-        // Verify that sign-in promo is gone, but new tab page layout and header are displayed.
-        onView(withId(R.id.signin_promo_view_container)).check(doesNotExist());
-        onView(withId(R.id.header_title)).check(matches(isDisplayed()));
-        onView(withId(R.id.ntp_content)).check(matches(isDisplayed()));
-
-        // Reset state.
-        ChromeSharedPreferences.getInstance()
-                .writeBoolean(ChromePreferenceKeys.SIGNIN_PROMO_NTP_PROMO_DISMISSED, dismissed);
-    }
-
-    @Test
-    @MediumTest
-    @Feature({"FeedNewTabPage"})
-    @EnableFeatures({
-        "EnableSeamlessSignin"
-                + ":seamless-signin-promo-type/compact"
-                + "/seamless-signin-string-type/continueButton"
-    })
     public void testSignInPromo_shownIfTimeElapsedSinceFirstShownIsLessThanFirstShownLimit() {
         // Show the promo for the first time.
         openNewTabPage();
@@ -461,11 +352,26 @@ public class NewTabPageSigninPromoTest {
     @Test
     @MediumTest
     @Feature({"FeedNewTabPage"})
-    @EnableFeatures({
-        "EnableSeamlessSignin"
-                + ":seamless-signin-promo-type/compact"
-                + "/seamless-signin-string-type/continueButton"
-    })
+    public void
+            testSignInPromo_hiddenIfTimeElapsedSinceFirstShownExceedsFirstShownLimitButNotResetThreshold() {
+        // Show the promo for the first time.
+        openNewTabPage();
+        verifySigninPromoShown();
+
+        // Advance time beyond the first time shown limit, but not beyond the last time shown reset
+        // period.
+        mFakeTimeTestRule.advanceMillis(
+                (NtpSigninPromoDelegate.NTP_SYNC_PROMO_RESET_AFTER_DAYS - 1)
+                        * DateUtils.DAY_IN_MILLIS);
+
+        // Open a new tab, the promo should not be shown.
+        openNewTabPage();
+        onView(withId(R.id.signin_promo_view_container)).check(doesNotExist());
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"FeedNewTabPage"})
     public void
             testSignInPromo_shownIfTimeElapsedSinceFirstShownExceedsFirstShownLimitAndResetThreshold() {
         // Show the promo for the first time.

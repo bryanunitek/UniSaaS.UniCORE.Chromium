@@ -6,6 +6,7 @@
 
 #include <cstdio>
 
+#include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/platform_file.h"
@@ -16,7 +17,6 @@
 #include "base/posix/eintr_wrapper.h"
 #include "base/system/sys_info.h"
 #include "base/task/thread_pool.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/logging_chrome.h"
 #include "content/public/browser/browser_child_process_host_iterator.h"
 #include "content/public/browser/browser_thread.h"
@@ -55,7 +55,7 @@ void ReinitializeLoggingForProcessHost(ProcessHost* process_host,
 void LogFileSetUp(const base::CommandLine& command_line,
                   const base::FilePath& log_path,
                   const base::FilePath& target_path) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   // The |log_path| is the new log file after log rotation. so it shouldn't be
   // deleted even if it already exists.
@@ -99,7 +99,7 @@ void ForceLogRedirectionForTesting() {
 }
 
 void RedirectChromeLogging(const base::CommandLine& command_line) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   // Only redirect when on an actual device. To do otherwise conflicts with
   // --vmodule that developers may want to use.
@@ -113,8 +113,9 @@ void RedirectChromeLogging(const base::CommandLine& command_line) {
 
   g_chrome_logging_redirect_tried = true;
 
-  if (command_line.HasSwitch(switches::kDisableLoggingRedirect))
+  if (command_line.HasSwitch(ash::switches::kDisableLoggingRedirect)) {
     return;
+  }
 
   // Redirect logs to the session log directory, if set.  Otherwise
   // defaults to the profile dir.

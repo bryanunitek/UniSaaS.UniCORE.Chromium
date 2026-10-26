@@ -34,8 +34,6 @@ import static org.chromium.chrome.browser.autofill.editors.common.text_field.Tex
 
 import android.app.Activity;
 
-import androidx.test.filters.SmallTest;
-
 import org.hamcrest.Matcher;
 import org.junit.Before;
 import org.junit.Rule;
@@ -45,8 +43,8 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.PersonalDataManager;
@@ -61,7 +59,6 @@ import org.chromium.ui.test.util.BlankUiTestActivity;
 
 /** Unit tests for {@link ContactEditor}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ContactEditorTest {
     private static final AutofillProfile sProfile =
             AutofillProfile.builder()
@@ -131,7 +128,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void requestName_NewContact() {
         ContactEditor editor =
                 new ContactEditor(
@@ -141,7 +137,7 @@ public class ContactEditorTest {
                         /* saveToDisk= */ false,
                         mPersonalDataManager);
         editor.setEditorDialog(mEditorDialog);
-        editor.showEditPrompt(null, unused -> {});
+        editor.showEditPrompt(null, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -157,7 +153,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void requestPhone_NewContact() {
         ContactEditor editor =
                 new ContactEditor(
@@ -167,7 +162,7 @@ public class ContactEditorTest {
                         /* saveToDisk= */ false,
                         mPersonalDataManager);
         editor.setEditorDialog(mEditorDialog);
-        editor.showEditPrompt(null, unused -> {});
+        editor.showEditPrompt(null, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -183,7 +178,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void requestEmail_NewContact() {
         ContactEditor editor =
                 new ContactEditor(
@@ -193,7 +187,7 @@ public class ContactEditorTest {
                         /* saveToDisk= */ false,
                         mPersonalDataManager);
         editor.setEditorDialog(mEditorDialog);
-        editor.showEditPrompt(null, unused -> {});
+        editor.showEditPrompt(null, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -209,7 +203,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void requestAllFields_NewContact() {
         ContactEditor editor =
                 new ContactEditor(
@@ -219,7 +212,7 @@ public class ContactEditorTest {
                         /* saveToDisk= */ false,
                         mPersonalDataManager);
         editor.setEditorDialog(mEditorDialog);
-        editor.showEditPrompt(null, unused -> {});
+        editor.showEditPrompt(null, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -245,7 +238,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void requestName_ExistingContact() {
         ContactEditor editor =
                 new ContactEditor(
@@ -266,7 +258,7 @@ public class ContactEditorTest {
                         true,
                         false,
                         false);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -282,7 +274,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void requestPhone_ExistingContact() {
         ContactEditor editor =
                 new ContactEditor(
@@ -303,7 +294,7 @@ public class ContactEditorTest {
                         false,
                         true,
                         false);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -319,7 +310,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void requestEmail_ExistingContact() {
         ContactEditor editor =
                 new ContactEditor(
@@ -340,7 +330,7 @@ public class ContactEditorTest {
                         false,
                         false,
                         true);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -356,7 +346,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void requestAllFields_ExistingContact() {
         ContactEditor editor =
                 new ContactEditor(
@@ -377,7 +366,7 @@ public class ContactEditorTest {
                         true,
                         true,
                         true);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -403,7 +392,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void editName_CancelEditing() {
         ContactEditor editor =
                 new ContactEditor(
@@ -424,7 +412,7 @@ public class ContactEditorTest {
                         true,
                         false,
                         false);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -443,7 +431,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void editPhone_CancelEditing() {
         ContactEditor editor =
                 new ContactEditor(
@@ -464,7 +451,7 @@ public class ContactEditorTest {
                         false,
                         true,
                         false);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -483,7 +470,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void editEmail_CancelEditing() {
         ContactEditor editor =
                 new ContactEditor(
@@ -504,7 +490,7 @@ public class ContactEditorTest {
                         false,
                         false,
                         true);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -523,7 +509,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void editName_CommitChanges() {
         ContactEditor editor =
                 new ContactEditor(
@@ -544,7 +529,7 @@ public class ContactEditorTest {
                         true,
                         false,
                         false);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -561,7 +546,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void editPhone_CommitChanges() {
         ContactEditor editor =
                 new ContactEditor(
@@ -582,7 +566,7 @@ public class ContactEditorTest {
                         false,
                         true,
                         false);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -600,7 +584,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void editEmail_CommitChanges() {
         ContactEditor editor =
                 new ContactEditor(
@@ -621,7 +604,7 @@ public class ContactEditorTest {
                         false,
                         false,
                         true);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -638,7 +621,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void editAllFields_CommitChanges() {
         ContactEditor editor =
                 new ContactEditor(
@@ -659,7 +641,7 @@ public class ContactEditorTest {
                         true,
                         true,
                         true);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);
@@ -681,7 +663,6 @@ public class ContactEditorTest {
     }
 
     @Test
-    @SmallTest
     public void showEditPrompt_CorrectContactInfo_NoErrors() {
         ContactEditor editor =
                 new ContactEditor(
@@ -702,13 +683,12 @@ public class ContactEditorTest {
                         true,
                         true,
                         true);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         validateErrorMessages(editor.getEditorModelForTesting(), /* errorsPresent= */ false);
     }
 
     @Test
-    @SmallTest
     public void showEditPrompt_EditorErrorsSet_ErrorMessagesShown() {
         ContactEditor editor =
                 new ContactEditor(
@@ -734,13 +714,12 @@ public class ContactEditorTest {
                         true,
                         true,
                         true);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         validateErrorMessages(editor.getEditorModelForTesting(), /* errorsPresent= */ true);
     }
 
     @Test
-    @SmallTest
     public void showEditPrompt_FieldsAreEmpty_ErrorMessagesShown() {
         ContactEditor editor =
                 new ContactEditor(
@@ -761,13 +740,12 @@ public class ContactEditorTest {
                         true,
                         true,
                         true);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         validateErrorMessages(editor.getEditorModelForTesting(), /* errorsPresent= */ true);
     }
 
     @Test
-    @SmallTest
     public void showEditPrompt_EmptyInputToFields_ErrorMessagesShown() {
         ContactEditor editor =
                 new ContactEditor(
@@ -788,7 +766,7 @@ public class ContactEditorTest {
                         true,
                         true,
                         true);
-        editor.showEditPrompt(contact, unused -> {});
+        editor.showEditPrompt(contact, CallbackUtils.emptyCallback());
 
         PropertyModel editorModel = editor.getEditorModelForTesting();
         assertNotNull(editorModel);

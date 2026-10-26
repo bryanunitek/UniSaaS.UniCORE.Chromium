@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
@@ -198,7 +199,8 @@ class OriginTrialContextTest : public testing::Test {
 
  protected:
   test::TaskEnvironment task_environment_;
-  MockTokenValidator* token_validator_;
+  raw_ptr<MockTokenValidator, UnprotectedInRelease | DanglingUntriaged>
+      token_validator_;
   Persistent<NullExecutionContext> execution_context_;
 };
 
@@ -628,6 +630,32 @@ TEST_F(OriginTrialContextDevtoolsTest, DependentFeatureNotEnabled) {
   AddTokenWithResponse(kTrialName, OriginTrialTokenStatus::kSuccess);
 
   EXPECT_FALSE(IsFeatureEnabled(ot_feature));
+  HashMap<String, OriginTrialResult> origin_trial_results =
+      GetOriginTrialResultsForDevtools();
+  EXPECT_EQ(origin_trial_results.size(), 1u);
+  ExpectTrialResultContains(
+      origin_trial_results, kTrialName, OriginTrialStatus::kTrialNotAllowed,
+      {{OriginTrialTokenStatus::kSuccess, /* token_parsable */ true}});
+}
+
+TEST_F(OriginTrialContextDevtoolsTest,
+       RTCDiagnosticLoggingTrialNotAllowedWhenBaseFeatureDisabled) {
+  // The browser process rejects RTCLoggingDispatcher messages (and kills the
+  // renderer) when the RTCDiagnosticLogging base::Feature is disabled, so the
+  // origin trial must not be able to expose the API in that case.
+  static constexpr char kTrialName[] = "RTCDiagnosticLogging";
+
+  UpdateSecurityOrigin(kFrobulateEnabledOrigin);
+
+  base::test::ScopedFeatureList feature_list_;
+  feature_list_.InitAndDisableFeature(blink::features::kRTCDiagnosticLogging);
+
+  AddTokenWithResponse(kTrialName, OriginTrialTokenStatus::kSuccess);
+
+  EXPECT_FALSE(IsFeatureEnabled(
+      mojom::blink::OriginTrialFeature::kRTCDiagnosticLogging));
+  EXPECT_FALSE(IsFeatureEnabled(
+      mojom::blink::OriginTrialFeature::kRTCLegacyDiagnosticLogging));
   HashMap<String, OriginTrialResult> origin_trial_results =
       GetOriginTrialResultsForDevtools();
   EXPECT_EQ(origin_trial_results.size(), 1u);

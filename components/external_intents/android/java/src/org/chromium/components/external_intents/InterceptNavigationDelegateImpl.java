@@ -6,6 +6,7 @@ package org.chromium.components.external_intents;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
 
+import android.text.TextUtils;
 import android.util.Pair;
 
 import androidx.annotation.IntDef;
@@ -33,13 +34,13 @@ import org.chromium.components.navigation_interception.InterceptNavigationDelega
 import org.chromium.content_public.browser.ContentWebFeatureUsageUtils;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationController;
+import org.chromium.content_public.browser.NavigationEntry;
 import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.Visibility;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.content_public.common.ConsoleMessageLevel;
 import org.chromium.content_public.common.Referrer;
-import org.chromium.network.mojom.ReferrerPolicy;
 import org.chromium.ui.base.PageTransition;
 import org.chromium.url.GURL;
 import org.chromium.url.Origin;
@@ -195,8 +196,10 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
         cancelPendingShouldIgnoreCheck();
 
         if (mWebContents != null) {
-            assumeNonNull(mWebContentsObserver).observe(null);
-            mWebContentsObserver = null;
+            if (mWebContentsObserver != null) {
+                mWebContentsObserver.observe(null);
+                mWebContentsObserver = null;
+            }
             InterceptNavigationDelegateImplJni.get().clearWebContentsAssociation(mWebContents);
         }
         mWebContents = webContents;
@@ -205,7 +208,6 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
         // Lazily initialize the external navigation handler.
         if (mExternalNavHandler == null) {
             setExternalNavigationHandler(mClient.createExternalNavigationHandler());
-            if (mExternalNavHandler == null) return;
         }
 
         InterceptNavigationDelegateImplJni.get().associateWithWebContents(this, mWebContents);
@@ -214,14 +216,16 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
                 new WebContentsObserver(mWebContents) {
                     @Override
                     public void didStartNavigationInPrimaryMainFrame(NavigationHandle navigation) {
-                        assumeNonNull(mExternalNavHandler);
-                        mExternalNavHandler.onNavigationStarted(navigation.getNavigationId());
+                        if (mExternalNavHandler != null) {
+                            mExternalNavHandler.onNavigationStarted(navigation.getNavigationId());
+                        }
                     }
 
                     @Override
                     public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) {
-                        assumeNonNull(mExternalNavHandler);
-                        mExternalNavHandler.onNavigationFinished(navigation.getNavigationId());
+                        if (mExternalNavHandler != null) {
+                            mExternalNavHandler.onNavigationFinished(navigation.getNavigationId());
+                        }
                     }
                 };
     }
@@ -283,7 +287,7 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
                         navigationHandle.isRedirect(),
                         navigationHandle.hasUserGesture(),
                         navigationHandle.isRendererInitiated(),
-                        navigationHandle.getReferrerUrl(),
+                        navigationHandle.getReferrer(),
                         navigationHandle.isInPrimaryMainFrame(),
                         navigationHandle.getInitiatorOrigin(),
                         navigationHandle.isExternalProtocol(),
@@ -315,6 +319,7 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
             case OverrideUrlLoadingResultType.OVERRIDE_CLOSING_AFTER_AUTH:
                 shouldIgnore = true;
                 break;
+            case OverrideUrlLoadingResultType.OVERRIDE_WITH_REPARENT_TO_SAME_PWA:
             case OverrideUrlLoadingResultType.OVERRIDE_WITH_REPARENT_TO_BROWSER:
             case OverrideUrlLoadingResultType.NO_OVERRIDE:
             default:
@@ -342,6 +347,16 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
                 && !mClient.isTabDetached()) {
             // Reparenting task must be executed after runResultCallback has been called.
             mClient.startReparentingTaskToNewWindow();
+        }
+
+        if (!shouldIgnore
+                && result.getResultType()
+                        == OverrideUrlLoadingResultType.OVERRIDE_WITH_REPARENT_TO_SAME_PWA
+                && !mClient.isTabDetached()) {
+            // Reparenting task must be executed after runResultCallback has been called.
+            if (mExternalNavHandler != null) {
+                mExternalNavHandler.reparentTabToSamePwa();
+            }
         }
     }
 
@@ -409,8 +424,7 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
                         isRedirect,
                         hasUserGesture,
                         isRendererInitiated,
-                        GURL.emptyGURL()
-                        /* referrerUrl= */ ,
+                        /* referrer= */ null,
                         /* isInPrimaryMainFrame= */ false,
                         initiatorOrigin,
                         /* isExternalProtocol= */ true,
@@ -443,7 +457,7 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
             boolean isRedirect,
             boolean hasUserGesture,
             boolean isRendererInitiated,
-            GURL referrerUrl,
+            @Nullable Referrer referrer,
             boolean isInPrimaryMainFrame,
             @Nullable Origin initiatorOrigin,
             boolean isExternalProtocol,
@@ -464,7 +478,7 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
                 new ExternalNavigationParams.Builder(
                                 escapedUrl,
                                 mClient.isIncognito(),
-                                referrerUrl,
+                                referrer,
                                 pageTransition,
                                 isRedirect)
                         .setRedirectHandler(redirectHandler)
@@ -481,6 +495,7 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
                         .setNavigationId(navigationId)
                         .setIsTabInPWA(mClient.isTabInPWA())
                         .setIsTabInBrowser(mClient.isTabInBrowser())
+                        .setIsTabInPopup(mClient.isTabInPopup())
                         .setIsInDesktopWindowingMode(mClient.isInDesktopWindowingMode())
                         .build();
         if (!shouldRunAsync) return doShouldOverrideUrlLoading(params, isExternalProtocol);
@@ -642,7 +657,12 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
 
     private boolean isInitialNavigation() {
         if (mClient.getWebContents() == null) return true;
-        return mClient.getWebContents().getNavigationController().isInitialNavigation();
+        NavigationController controller = mClient.getWebContents().getNavigationController();
+        if (controller.isInitialNavigation()) return true;
+
+        NavigationEntry lastCommittedEntry =
+                controller.getEntryAtIndex(controller.getLastCommittedEntryIndex());
+        return lastCommittedEntry != null && lastCommittedEntry.isInitialEntry();
     }
 
     private boolean isTabOnInitialNavigationChain() {
@@ -664,7 +684,7 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
             return false;
         }
 
-        return mExternalNavHandler.shouldReparentTab(
+        return mExternalNavHandler.willReparentTab(
                 url,
                 mClient.isTabInPWA(),
                 isInitialNavigation(),
@@ -771,9 +791,8 @@ public class InterceptNavigationDelegateImpl extends InterceptNavigationDelegate
 
         int transitionType = PageTransition.LINK;
         final LoadUrlParams loadUrlParams = new LoadUrlParams(targetUrl, transitionType);
-        if (!params.getReferrerUrl().isEmpty()) {
-            Referrer referrer =
-                    new Referrer(params.getReferrerUrl().getSpec(), ReferrerPolicy.ALWAYS);
+        Referrer referrer = params.getReferrer();
+        if (referrer != null && !TextUtils.isEmpty(referrer.getUrl())) {
             loadUrlParams.setReferrer(referrer);
         }
         // Ideally this navigation would be part of the navigation chain that triggered it and get,

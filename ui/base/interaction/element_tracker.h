@@ -68,6 +68,13 @@ class COMPONENT_EXPORT(UI_BASE_INTERACTION) TrackedElement
   // used as the parent window for anchoring secondary UIs.
   virtual gfx::NativeView GetNativeView() const;
 
+  // Returns a secondary identifier that can be used to differentiate between
+  // elements with the same `identifier()`. The rule is that for a given
+  // identifier and context, every secondary id must be unique. How secondary
+  // IDs are assigned is up to the platform, and for the majority of elements,
+  // they will be auto-generated according to a specific pattern.
+  virtual std::string GetSecondaryIdentifier() const;
+
   // SafeCastable:
   std::string ToString() const override;
 
@@ -118,7 +125,7 @@ class COMPONENT_EXPORT(UI_BASE_INTERACTION) ElementTracker
   using Contexts = std::set<ElementContext>;
 
   // Identifier that should be used by each framework to create a
-  // TrackedElement from an element that does not alreayd have an identifier.
+  // TrackedElement from an element that does not already have an identifier.
   //
   // Currently, the identifier is not removed when the code that needs the
   // element completes, but in the future we may implement a ref-counting

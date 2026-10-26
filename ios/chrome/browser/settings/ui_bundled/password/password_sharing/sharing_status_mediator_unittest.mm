@@ -14,6 +14,7 @@
 #import "ios/chrome/browser/settings/ui_bundled/password/password_sharing/sharing_status_consumer.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
+#import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
@@ -21,7 +22,6 @@
 #import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
-#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
@@ -102,32 +102,37 @@ class SharingStatusMediatorTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
-            std::make_unique<FakeAuthenticationServiceDelegate>()));
+        AuthenticationServiceFactory::GetDefaultFactory());
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateTestSyncService));
 
-    profile_ = std::move(builder).Build();
+    profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
+  }
+
+  void TearDown() override {
+    profile_ = nullptr;
+    PlatformTest::TearDown();
   }
 
   id<SystemIdentity> fake_identity() { return fake_identity_; }
 
   AuthenticationService* GetAuthenticationService() {
-    return AuthenticationServiceFactory::GetForProfile(profile_.get());
+    return AuthenticationServiceFactory::GetForProfile(profile_);
   }
 
   ChromeAccountManagerService* GetAccountManagerService() {
-    return ChromeAccountManagerServiceFactory::GetForProfile(profile_.get());
+    return ChromeAccountManagerServiceFactory::GetForProfile(profile_);
   }
 
   FaviconLoader* GetFaviconLoader() {
-    return IOSChromeFaviconLoaderFactory::GetForProfile(profile_.get());
+    return IOSChromeFaviconLoaderFactory::GetForProfile(profile_);
   }
 
  private:
   web::WebTaskEnvironment task_environment_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
-  std::unique_ptr<TestProfileIOS> profile_;
+  TestProfileManagerIOS profile_manager_;
+  raw_ptr<TestProfileIOS> profile_ = nullptr;
   id<SystemIdentity> fake_identity_;
 };
 
@@ -167,8 +172,8 @@ TEST_F(SharingStatusMediatorTest, NotifiesSignedOutConsumerWithDefaultAvatar) {
           changePasswordURL:std::nullopt];
   mediator.consumer = consumer;
 
-  EXPECT_NSEQ(UIImagePNGRepresentation(DefaultSymbolTemplateWithPointSize(
-                  kPersonCropCircleSymbol, kProfileImageSize)),
+  EXPECT_NSEQ(UIImagePNGRepresentation(SymbolTemplateWithPointSize(
+                  SymbolPersonCropCircle, kProfileImageSize)),
               UIImagePNGRepresentation(consumer.senderImage));
 }
 
@@ -185,8 +190,8 @@ TEST_F(SharingStatusMediatorTest, NotifiesConsumerWithRecipientImage) {
   mediator.consumer = consumer;
 
   EXPECT_NSEQ(UIImagePNGRepresentation(CircularImageFromImage(
-                  DefaultSymbolTemplateWithPointSize(
-                      kPersonCropCircleSymbol, kAccountProfilePhotoDimension),
+                  SymbolTemplateWithPointSize(SymbolPersonCropCircle,
+                                              kAccountProfilePhotoDimension),
                   60.0)),
               UIImagePNGRepresentation(consumer.recipientImage));
 }

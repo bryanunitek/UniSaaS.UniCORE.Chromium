@@ -87,7 +87,47 @@ NSString* const kPageHTML = @"<html>"
 
 // Return the base menu depending on the environment.
 NSMutableArray* GetExpectedMenu() {
-  if (@available(iOS 18.1, *)) {
+  if (@available(iOS 27, *)) {
+    return [NSMutableArray arrayWithArray:@[
+      @"0:m:com.apple.menu.standard-edit",
+      @"1:c:cut:",
+      @"1:c:copy:",
+      @"1:c:paste:",
+      @"1:c:delete:",
+      @"1:c:select:",
+      @"1:c:selectAll:",
+      @"0:m:com.apple.menu.replace",
+      @"1:c:promptForReplace:",
+      @"1:c:transliterateChinese:",
+      @"1:c:_insertDrawing:",
+      @"1:c:showWritingTools:",
+      @"1:m:com.apple.menu.autofill",
+      @"2:m:com.apple.menu.insert-from-external-sources",
+      @"2:c:captureTextFromCamera:",
+      @"0:m:com.apple.menu.open",
+      @"0:m:com.apple.menu.format",
+      @"1:m:com.apple.menu.text-style",
+      @"2:c:toggleBoldface:",
+      @"2:c:toggleItalics:",
+      @"2:c:toggleUnderline:",
+      @"1:m:com.apple.menu.writing-direction",
+      @"2:c:makeTextWritingDirectionRightToLeft:",
+      @"2:c:makeTextWritingDirectionLeftToRight:",
+      @"1:c:_showTextFormattingOptions:",
+      @"0:m:com.apple.menu.lookup",
+      @"1:c:_define:",
+      @"1:c:_translate:",
+      @"1:c:findSelected:",
+      @"0:m:com.apple.menu.learn",
+      @"1:c:addShortcut:",
+      @"0:m:com.apple.command.speech",
+      @"1:c:_accessibilitySpeak:",
+      @"1:c:_accessibilitySpeakLanguageSelection:",
+      @"1:c:_accessibilityPauseSpeaking:",
+      @"0:m:com.apple.menu.share",
+      @"1:c:share:"
+    ]];
+  } else if (@available(iOS 18.1, *)) {
     return [NSMutableArray arrayWithArray:@[
       @"0:m:com.apple.menu.standard-edit",
       @"1:c:cut:",
@@ -127,87 +167,8 @@ NSMutableArray* GetExpectedMenu() {
       @"0:m:com.apple.menu.share",
       @"1:c:share:"
     ]];
-  } else if (@available(iOS 18, *)) {
-    return [NSMutableArray arrayWithArray:@[
-      @"0:m:com.apple.menu.standard-edit",
-      @"1:c:cut:",
-      @"1:c:copy:",
-      @"1:c:paste:",
-      @"1:c:delete:",
-      @"1:c:select:",
-      @"1:c:selectAll:",
-      @"0:m:com.apple.menu.replace",
-      @"1:c:promptForReplace:",
-      @"1:c:transliterateChinese:",
-      @"1:c:_insertDrawing:",
-      @"1:m:com.apple.menu.autofill",
-      @"2:m:com.apple.menu.insert-from-external-sources",
-      @"2:c:captureTextFromCamera:",
-      @"1:c:_startWritingTools:",
-      @"0:m:com.apple.menu.open",
-      @"0:m:com.apple.menu.format",
-      @"1:m:com.apple.menu.text-style",
-      @"2:c:toggleBoldface:",
-      @"2:c:toggleItalics:",
-      @"2:c:toggleUnderline:",
-      @"1:m:com.apple.menu.writing-direction",
-      @"2:c:makeTextWritingDirectionRightToLeft:",
-      @"2:c:makeTextWritingDirectionLeftToRight:",
-      @"1:c:_showTextFormattingOptions:",
-      @"0:m:com.apple.menu.lookup",
-      @"1:c:findSelected:",
-      @"1:c:_define:",
-      @"1:c:_translate:",
-      @"0:m:com.apple.menu.learn",
-      @"1:c:addShortcut:",
-      @"0:m:com.apple.command.speech",
-      @"1:c:_accessibilitySpeak:",
-      @"1:c:_accessibilitySpeakLanguageSelection:",
-      @"1:c:_accessibilityPauseSpeaking:",
-      @"0:m:com.apple.menu.share",
-      @"1:c:share:"
-    ]];
-  } else if (@available(iOS 17.4, *)) {
-    return [NSMutableArray arrayWithArray:@[
-      @"0:m:com.apple.menu.standard-edit",
-      @"1:c:cut:",
-      @"1:c:copy:",
-      @"1:c:paste:",
-      @"1:c:delete:",
-      @"1:c:select:",
-      @"1:c:selectAll:",
-      @"0:m:com.apple.menu.replace",
-      @"1:c:promptForReplace:",
-      @"1:c:transliterateChinese:",
-      @"1:c:_insertDrawing:",
-      @"1:m:com.apple.menu.autofill",
-      @"2:m:com.apple.menu.insert-from-external-sources",
-      @"2:c:captureTextFromCamera:",
-      @"0:m:com.apple.menu.open",
-      @"0:m:com.apple.menu.format",
-      @"1:m:com.apple.menu.text-style",
-      @"2:c:toggleBoldface:",
-      @"2:c:toggleItalics:",
-      @"2:c:toggleUnderline:",
-      @"1:m:com.apple.menu.writing-direction",
-      @"2:c:makeTextWritingDirectionRightToLeft:",
-      @"2:c:makeTextWritingDirectionLeftToRight:",
-      @"1:c:_showTextFormattingOptions:",
-      @"0:m:com.apple.menu.lookup",
-      @"1:c:findSelected:",
-      @"1:c:_define:",
-      @"1:c:_translate:",
-      @"0:m:com.apple.menu.learn",
-      @"1:c:addShortcut:",
-      @"0:m:com.apple.command.speech",
-      @"1:c:_accessibilitySpeak:",
-      @"1:c:_accessibilitySpeakLanguageSelection:",
-      @"1:c:_accessibilityPauseSpeaking:",
-      @"0:m:com.apple.menu.share",
-      @"1:c:share:"
-    ]];
   }
-  NSMutableArray* expectedMenuDescription = [NSMutableArray arrayWithArray:@[
+  return [NSMutableArray arrayWithArray:@[
     @"0:m:com.apple.menu.standard-edit",
     @"1:c:cut:",
     @"1:c:copy:",
@@ -216,12 +177,13 @@ NSMutableArray* GetExpectedMenu() {
     @"1:c:select:",
     @"1:c:selectAll:",
     @"0:m:com.apple.menu.replace",
-    @"1:c:_promptForReplace:",
-    @"1:c:_transliterateChinese:",
+    @"1:c:promptForReplace:",
+    @"1:c:transliterateChinese:",
     @"1:c:_insertDrawing:",
     @"1:m:com.apple.menu.autofill",
     @"2:m:com.apple.menu.insert-from-external-sources",
     @"2:c:captureTextFromCamera:",
+    @"1:c:_startWritingTools:",
     @"0:m:com.apple.menu.open",
     @"0:m:com.apple.menu.format",
     @"1:m:com.apple.menu.text-style",
@@ -233,20 +195,18 @@ NSMutableArray* GetExpectedMenu() {
     @"2:c:makeTextWritingDirectionLeftToRight:",
     @"1:c:_showTextFormattingOptions:",
     @"0:m:com.apple.menu.lookup",
-    @"1:c:_findSelected:",
+    @"1:c:findSelected:",
     @"1:c:_define:",
     @"1:c:_translate:",
     @"0:m:com.apple.menu.learn",
-    @"1:c:_addShortcut:",
+    @"1:c:addShortcut:",
     @"0:m:com.apple.command.speech",
     @"1:c:_accessibilitySpeak:",
     @"1:c:_accessibilitySpeakLanguageSelection:",
     @"1:c:_accessibilityPauseSpeaking:",
     @"0:m:com.apple.menu.share",
-    @"1:c:_share:"
+    @"1:c:share:"
   ]];
-
-  return expectedMenuDescription;
 }
 
 // Add Open In New Canvas on iPad
@@ -350,8 +310,7 @@ void RemoveShareMenu(NSMutableArray* menu) {
 
 - (UIMenu*)editMenuInteraction:(UIEditMenuInteraction*)interaction
           menuForConfiguration:(UIEditMenuConfiguration*)configuration
-              suggestedActions:(NSArray<UIMenuElement*>*)suggestedActions
-    API_AVAILABLE(ios(16.0)) {
+              suggestedActions:(NSArray<UIMenuElement*>*)suggestedActions {
   NSMutableArray* descriptions = [NSMutableArray array];
   for (UIMenuElement* element in suggestedActions) {
     [descriptions addObjectsFromArray:MenuDescription(element, 0)];
@@ -402,7 +361,7 @@ class BrowserEditMenuHandlerTest : public PlatformTest {
     ios::provider::test::SetPartialTranslateControllerFactory(factory);
   }
 
-  NSArray* GetMenuDescription() API_AVAILABLE(ios(16.0)) {
+  NSArray* GetMenuDescription() {
     EditMenuInteractionDelegate* delegate =
         [[EditMenuInteractionDelegate alloc] init];
     UIEditMenuInteraction* interaction =
@@ -466,6 +425,9 @@ TEST_F(BrowserEditMenuHandlerTest, CheckCustomizedMenuDescription) {
       &template_url_data, DefaultSearchManager::FROM_USER);
   SearchWithMediator* search_with_mediator = [[SearchWithMediator alloc]
       initWithTemplateURLService:template_url_service
+           aimEligibilityService:nullptr
+            cobrowseBrowserAgent:nullptr
+                     prefService:profile_->GetPrefs()
                        incognito:NO];
   search_with_mediator.sceneHandler = scene_handler;
 
@@ -550,6 +512,9 @@ TEST_F(BrowserEditMenuHandlerTest, SearchWithButtonTitle_Adjacent) {
 
   SearchWithMediator* search_with_mediator = [[SearchWithMediator alloc]
       initWithTemplateURLService:template_url_service
+           aimEligibilityService:nullptr
+            cobrowseBrowserAgent:nullptr
+                     prefService:profile_->GetPrefs()
                        incognito:NO];
 
   EXPECT_NSEQ([search_with_mediator buttonTitle], @"Google Search");
@@ -572,6 +537,9 @@ TEST_F(BrowserEditMenuHandlerTest, SearchWithButtonTitle_Default) {
 
   SearchWithMediator* search_with_mediator = [[SearchWithMediator alloc]
       initWithTemplateURLService:template_url_service
+           aimEligibilityService:nullptr
+            cobrowseBrowserAgent:nullptr
+                     prefService:profile_->GetPrefs()
                        incognito:NO];
 
   EXPECT_NSEQ([search_with_mediator buttonTitle], @"Search with Google");

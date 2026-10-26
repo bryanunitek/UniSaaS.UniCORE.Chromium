@@ -34,7 +34,6 @@
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/storage_partition_config.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
-#include "ui/base/models/tree_model.h"
 #include "url/origin.h"
 
 namespace web_app {
@@ -115,23 +114,19 @@ class StoragePartitionSizeEstimator : private ProfileObserver {
 
 }  // namespace
 
-GetIsolatedWebAppSizeJob::GetIsolatedWebAppSizeJob(
-    Profile* profile,
-    const webapps::AppId& app_id,
-    base::DictValue& debug_value,
-    ResultCallback result_callback)
-    : app_id_(app_id),
-      profile_(profile),
-      debug_value_(debug_value),
-      result_callback_(std::move(result_callback)) {
+GetIsolatedWebAppSizeJob::GetIsolatedWebAppSizeJob(Profile* profile,
+                                                   const webapps::AppId& app_id,
+                                                   base::DictValue& debug_value)
+    : app_id_(app_id), profile_(profile), debug_value_(debug_value) {
   CHECK(profile_);
   debug_value_->Set("profile", profile->GetDebugName());
 }
 
 GetIsolatedWebAppSizeJob::~GetIsolatedWebAppSizeJob() = default;
 
-void GetIsolatedWebAppSizeJob::Start(
-    WithAppResources* lock_with_app_resources) {
+void GetIsolatedWebAppSizeJob::Start(WithAppResources* lock_with_app_resources,
+                                     ResultCallback callback) {
+  result_callback_ = std::move(callback);
   CHECK(lock_with_app_resources);
   lock_with_app_resources_ = lock_with_app_resources;
 

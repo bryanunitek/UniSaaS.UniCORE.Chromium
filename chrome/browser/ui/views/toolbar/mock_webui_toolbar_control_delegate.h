@@ -37,6 +37,9 @@ class MockWebUIToolbarControlDelegate
               (),
               (override));
   MOCK_METHOD(views::View*, GetView, (), (override));
+  MOCK_METHOD(views::View*, GetInternalWebView, (), (override));
+  MOCK_METHOD(content::WebContents*, GetWebContents, (), (override));
+  MOCK_METHOD(WebUIToolbarUI*, GetWebUIToolbarUI, (), (const, override));
   MOCK_METHOD(void, AnnounceAlert, (const std::u16string&), (override));
   MOCK_METHOD(void, OnPreferredSizeChanged, (), (override));
   MOCK_METHOD(void,
@@ -52,13 +55,22 @@ class MockWebUIToolbarControlDelegate
               OnHomeControlStateChanged,
               (toolbar_ui_api::mojom::HomeControlStatePtr state),
               (override));
+  MOCK_METHOD(
+      void,
+      OnPerformanceInterventionControlStateChanged,
+      (toolbar_ui_api::mojom::PerformanceInterventionControlStatePtr state),
+      (override));
   MOCK_METHOD(void,
               OnAppMenuControlStateChanged,
               (toolbar_ui_api::mojom::AppMenuControlStatePtr state),
               (override));
   MOCK_METHOD(void,
+              OnOverflowButtonControlStateChanged,
+              (toolbar_ui_api::mojom::OverflowButtonControlStatePtr state),
+              (override));
+  MOCK_METHOD(void,
               OnBatterySaverControlStateChanged,
-              (bool is_showing),
+              (toolbar_ui_api::mojom::BatterySaverControlStatePtr state),
               (override));
   MOCK_METHOD(void,
               OnOmniboxViewStateChanged,
@@ -95,7 +107,7 @@ class MockWebUIToolbarControlDelegate
               OnPageActionChanged,
               (std::vector<toolbar_ui_api::mojom::PageActionStatePtr> state),
               (override));
-  MOCK_METHOD(const toolbar_ui_api::mojom::NavigationControlsState&,
+  MOCK_METHOD(const toolbar_ui_api::mojom::ToolbarState&,
               GetState,
               (),
               (const override));
@@ -104,8 +116,20 @@ class MockWebUIToolbarControlDelegate
               (toolbar_ui_api::mojom::AvatarControlStatePtr),
               (override));
   MOCK_METHOD(void,
+              OnGlicButtonStateChanged,
+              (toolbar_ui_api::mojom::GlicButtonStatePtr state),
+              (override));
+  MOCK_METHOD(void,
+              OnMediaControlStateChanged,
+              (toolbar_ui_api::mojom::MediaControlStatePtr),
+              (override));
+  MOCK_METHOD(void,
               OnFocusRequested,
               (toolbar_ui_api::mojom::FocusRequestTarget target),
+              (override));
+  MOCK_METHOD(void,
+              OverflowButtonClicked,
+              (ui::ElementIdentifier identifier),
               (override));
   MOCK_METHOD(std::optional<GURL>,
               ConsumeDroppedUrl,

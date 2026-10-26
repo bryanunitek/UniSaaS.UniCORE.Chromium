@@ -6,9 +6,8 @@
 
 #include <utility>
 
-#include "base/compiler_specific.h"
+#include "base/containers/to_vector.h"
 #include "base/logging.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "third_party/boringssl/src/include/openssl/bytestring.h"
 
 namespace device {
@@ -101,13 +100,11 @@ FidoAttestationStatement::CreateFromU2fRegisterResponse(
   }
 
   std::vector<std::vector<uint8_t>> x509_certificates;
-  x509_certificates.emplace_back(CBS_data(&cert),
-                                 UNSAFE_TODO(CBS_data(&cert) + CBS_len(&cert)));
+  x509_certificates.push_back(base::ToVector(bssl::Span<const uint8_t>(cert)));
 
   // The remaining bytes are the signature.
-  std::vector<uint8_t> signature(
-      CBS_data(&response),
-      UNSAFE_TODO(CBS_data(&response) + CBS_len(&response)));
+  std::vector<uint8_t> signature =
+      base::ToVector(bssl::Span<const uint8_t>(response));
   return std::make_unique<FidoAttestationStatement>(
       std::move(signature), std::move(x509_certificates));
 }
@@ -123,16 +120,14 @@ FidoAttestationStatement::~FidoAttestationStatement() = default;
 
 cbor::Value FidoAttestationStatement::AsCBOR() const {
   cbor::Value::MapValue attestation_statement_map;
-  attestation_statement_map[cbor::Value(kSignatureKey)] =
-      cbor::Value(signature_);
+  attestation_statement_map.emplace(kSignatureKey, signature_);
 
   std::vector<cbor::Value> certificate_array;
   for (const auto& cert : x509_certificates_) {
     certificate_array.push_back(cbor::Value(cert));
   }
 
-  attestation_statement_map[cbor::Value(kX509CertKey)] =
-      cbor::Value(std::move(certificate_array));
+  attestation_statement_map.emplace(kX509CertKey, std::move(certificate_array));
 
   return cbor::Value(std::move(attestation_statement_map));
 }
@@ -183,19 +178,18 @@ PackedAttestationStatement::~PackedAttestationStatement() = default;
 cbor::Value PackedAttestationStatement::AsCBOR() const {
   cbor::Value::MapValue attestation_statement_map;
   // alg
-  attestation_statement_map[cbor::Value(kAlgorithmKey)] =
-      cbor::Value(static_cast<int>(algorithm_));
+  attestation_statement_map.emplace(kAlgorithmKey,
+                                    static_cast<int>(algorithm_));
   // sig
-  attestation_statement_map[cbor::Value(kSignatureKey)] =
-      cbor::Value(signature_);
+  attestation_statement_map.emplace(kSignatureKey, signature_);
   // x5c (optional)
   if (!x509_certificates_.empty()) {
     std::vector<cbor::Value> certificate_array;
     for (const auto& cert : x509_certificates_) {
       certificate_array.push_back(cbor::Value(cert));
     }
-    attestation_statement_map[cbor::Value(kX509CertKey)] =
-        cbor::Value(std::move(certificate_array));
+    attestation_statement_map.emplace(kX509CertKey,
+                                      std::move(certificate_array));
   }
   return cbor::Value(std::move(attestation_statement_map));
 }

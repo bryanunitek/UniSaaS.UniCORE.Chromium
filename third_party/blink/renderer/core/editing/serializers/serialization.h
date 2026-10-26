@@ -83,8 +83,8 @@ DocumentFragment* CreateFragmentFromMarkup(
     ParserContentPolicy = kAllowScriptingContent);
 DocumentFragment* CreateFragmentFromMarkupWithContext(Document&,
                                                       const String& markup,
-                                                      unsigned fragment_start,
-                                                      unsigned fragment_end,
+                                                      wtf_size_t fragment_start,
+                                                      wtf_size_t fragment_end,
                                                       const String& base_url,
                                                       ParserContentPolicy);
 DocumentFragment* CreateFragmentForTransformToFragment(
@@ -96,9 +96,9 @@ bool IsPlainTextMarkup(Node*);
 
 // These methods are used by HTMLElement & ShadowRoot to replace the
 // children with respected fragment/text.
-void ReplaceChildrenWithFragment(ContainerNode*,
-                                 DocumentFragment*,
-                                 ExceptionState&);
+CORE_EXPORT void ReplaceChildrenWithFragment(ContainerNode*,
+                                             DocumentFragment*,
+                                             ExceptionState&);
 void ReplaceChildrenWithText(ContainerNode*, const String&, ExceptionState&);
 
 CORE_EXPORT String
@@ -124,8 +124,8 @@ CreateMarkup(const PositionInFlatTree& start,
 CORE_EXPORT DocumentFragment*
 CreateStrictlyProcessedFragmentFromMarkupWithContext(Document&,
                                                      const String& raw_markup,
-                                                     unsigned fragment_start,
-                                                     unsigned fragment_end,
+                                                     wtf_size_t fragment_start,
+                                                     wtf_size_t fragment_end,
                                                      const String& base_url);
 
 // Processes the HTML string and strips out certain security sensitive tags if
@@ -138,14 +138,18 @@ CreateStrictlyProcessedFragmentFromMarkupWithContext(Document&,
 CORE_EXPORT String CreateStrictlyProcessedMarkupWithContext(
     Document&,
     const String& raw_markup,
-    unsigned fragment_start,
-    unsigned fragment_end,
+    wtf_size_t fragment_start,
+    wtf_size_t fragment_end,
     const String& base_url,
     ChildrenOnly = kIncludeNode,
     ResolveUrls = ResolveUrls::kNone,
     const ShadowRootInclusion& = ShadowRootInclusion());
 
 void MergeWithNextTextNode(Text*, ExceptionState&);
+
+// Returns true if |node| or any of its ancestors is in a non-HTML namespace
+// (such as MathML or SVG) or has a "math" or "svg" tag name.
+CORE_EXPORT bool IsInForeignContentForSerialization(const Node& node);
 
 bool PropertyMissingOrEqualToNone(CSSPropertyValueSet*, CSSPropertyID);
 

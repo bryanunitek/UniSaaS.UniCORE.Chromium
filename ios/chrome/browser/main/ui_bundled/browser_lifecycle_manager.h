@@ -12,9 +12,19 @@
 class ProfileIOS;
 @protocol GeminiCommands;
 @protocol SceneCommands;
+@protocol SceneSignInCommands;
 @class SceneState;
 @protocol SettingsCommands;
 @class WrangledBrowser;
+
+// Command endpoints that BrowserLifecycleManager registers on the
+// CommandDispatcher of all Browsers it manages.
+struct BrowserCommandEndpoints {
+  __weak id<SceneCommands> sceneEndpoint = nil;
+  __weak id<SettingsCommands> settingsEndpoint = nil;
+  __weak id<GeminiCommands> geminiEndpoint = nil;
+  __weak id<SceneSignInCommands> sceneSignInEndpoint = nil;
+};
 
 // Manager for handling the creation and ownership of Browser instances and
 // their associated coordinators.
@@ -27,13 +37,11 @@ class ProfileIOS;
 //
 // `sceneState` is the scene state that will be associated with any Browsers
 // created.
-// `sceneEndpoint`, `settingsEndpoint` and `geminiEndpoint` are the objects that
-// methods in the respective command protocols should be dispatched to.
+// `commandEndpoints` contains the objects that methods in the respective
+// command protocols should be dispatched to.
 - (instancetype)initWithProfile:(ProfileIOS*)profile
                      sceneState:(SceneState*)sceneState
-                  sceneEndpoint:(id<SceneCommands>)sceneEndpoint
-               settingsEndpoint:(id<SettingsCommands>)settingsEndpoint
-                 geminiEndpoint:(id<GeminiCommands>)geminiEndpoint
+               commandEndpoints:(BrowserCommandEndpoints)commandEndpoints
     NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)init NS_UNAVAILABLE;
@@ -71,6 +79,10 @@ class ProfileIOS;
 // profile. This method should be called after the incognito profile
 // has been created.
 - (void)incognitoProfileCreated;
+
+// Prepares command dispatchers across all browsers for shutdown. Must be
+// called before UI coordinators stop so unregistering targets fail silently.
+- (void)prepareForShutdown;
 
 // Tells the receiver to clean up prior to deallocation. It is an error for an
 // instance of this class to deallocate without a call to this method first.

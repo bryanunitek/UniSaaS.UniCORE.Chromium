@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_CSP_CSP_DIRECTIVE_LIST_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_CSP_CSP_DIRECTIVE_LIST_H_
 
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/platform/crypto.h"
@@ -20,7 +21,9 @@ enum class ResourceType : uint8_t;
 
 struct CORE_EXPORT CSPOperativeDirective {
   CSPDirectiveName type;
-  const network::mojom::blink::CSPSourceList* source_list;
+  raw_ptr<const network::mojom::blink::CSPSourceList,
+          UnprotectedInRelease | DanglingUntriaged>
+      source_list;
 };
 
 CORE_EXPORT
@@ -80,7 +83,7 @@ bool CSPDirectiveListAllowInline(
     const String& content,
     const String& nonce,
     const String& context_url,
-    const OrdinalNumber& context_line,
+    const TextPosition& context_position,
     ReportingDisposition reporting_disposition);
 
 // Returns whether or not the Javascript code generation should call back the
@@ -89,6 +92,10 @@ CORE_EXPORT
 bool CSPDirectiveListShouldCheckEval(
     const network::mojom::blink::ContentSecurityPolicy& csp);
 
+// Returns whether this policy allows evaluating `content` as script. When
+// `trusted_types_enforced` is true (i.e. some enforced policy of the global
+// requires Trusted Types for 'script'), a 'trusted-types-eval' keyword in this
+// policy's script-src also allows eval.
 CORE_EXPORT
 bool CSPDirectiveListAllowEval(
     const network::mojom::blink::ContentSecurityPolicy& csp,
@@ -97,7 +104,8 @@ bool CSPDirectiveListAllowEval(
     ContentSecurityPolicy::ExceptionStatus exception_status,
     const String& content,
     const Vector<network::IntegrityMetadata>& script_hash_values,
-    bool csp_extended_script_src_hashes_enabled);
+    bool csp_extended_script_src_hashes_enabled,
+    bool trusted_types_enforced);
 
 CORE_EXPORT
 bool CSPDirectiveListAllowWasmCodeGeneration(
@@ -106,13 +114,6 @@ bool CSPDirectiveListAllowWasmCodeGeneration(
     ReportingDisposition reporting_disposition,
     ContentSecurityPolicy::ExceptionStatus exception_status,
     const String& content);
-
-CORE_EXPORT
-bool CSPDirectiveListAllowTrustedTypesEval(
-    const network::mojom::blink::ContentSecurityPolicy& csp,
-    ContentSecurityPolicy* policy,
-    ReportingDisposition reporting_disposition,
-    ContentSecurityPolicy::ExceptionStatus exception_status);
 
 CORE_EXPORT
 bool CSPDirectiveListShouldDisableEval(

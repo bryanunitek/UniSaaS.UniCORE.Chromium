@@ -303,17 +303,6 @@ void ContentSettingsRegistry::Init() {
            ContentSettingsInfo::INHERIT_IN_INCOGNITO,
            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
 
-  Register(ContentSettingsType::STORAGE_ACCESS_HEADER_ORIGIN_TRIAL,
-           "storage-access-header-origin-trial", CONTENT_SETTING_BLOCK,
-           WebsiteSettingsInfo::UNSYNCABLE,
-           /*allowlisted_primary_schemes=*/{},
-           /*valid_settings=*/{CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
-           WebsiteSettingsInfo::REQUESTING_ORIGIN_AND_TOP_SCHEMEFUL_SITE_SCOPE,
-           WebsiteSettingsRegistry::DESKTOP |
-               WebsiteSettingsRegistry::PLATFORM_ANDROID,
-           ContentSettingsInfo::DONT_INHERIT_IN_INCOGNITO,
-           PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
-
   // Content settings that aren't used to store any data. TODO(raymes): use a
   // different mechanism rather than content settings to represent these.
   // Since nothing is stored in them, there is no real point in them being a
@@ -359,16 +348,17 @@ void ContentSettingsRegistry::Init() {
            ContentSettingsInfo::INHERIT_IN_INCOGNITO,
            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
 
-  Register(ContentSettingsType::CLIPBOARD_READ_WRITE, "clipboard",
-           CONTENT_SETTING_ASK, WebsiteSettingsInfo::UNSYNCABLE,
-           /*allowlisted_primary_schemes=*/{kChromeUIScheme},
-           /*valid_settings=*/
-           {CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK, CONTENT_SETTING_ASK},
-           WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
-           WebsiteSettingsRegistry::DESKTOP |
-               WebsiteSettingsRegistry::PLATFORM_ANDROID,
-           ContentSettingsInfo::INHERIT_IF_LESS_PERMISSIVE,
-           PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
+  Register(
+      ContentSettingsType::CLIPBOARD_READ_WRITE, "clipboard",
+      CONTENT_SETTING_ASK, WebsiteSettingsInfo::UNSYNCABLE,
+      /*allowlisted_primary_schemes=*/{kChromeUIScheme, kChromeDevToolsScheme},
+      /*valid_settings=*/
+      {CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK, CONTENT_SETTING_ASK},
+      WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
+      WebsiteSettingsRegistry::DESKTOP |
+          WebsiteSettingsRegistry::PLATFORM_ANDROID,
+      ContentSettingsInfo::INHERIT_IF_LESS_PERMISSIVE,
+      PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
 
   Register(ContentSettingsType::PAYMENT_HANDLER, "payment-handler",
            CONTENT_SETTING_ALLOW, WebsiteSettingsInfo::UNSYNCABLE,
@@ -767,19 +757,6 @@ void ContentSettingsRegistry::Init() {
            ContentSettingsInfo::INHERIT_IF_LESS_PERMISSIVE,
            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
 
-  // TODO(crbug.com/368266657): Switch to CONTENT_SETTING_ASK once the prompt is
-  // implemented and replace INHERIT_IN_INCOGNITO -> INTERIT_IF_LESS_PERMISSIVE.
-  Register(ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS,
-           "direct-sockets-private-network-access", CONTENT_SETTING_ALLOW,
-           WebsiteSettingsInfo::UNSYNCABLE,
-           /*allowlisted_primary_schemes=*/{},
-           /*valid_settings=*/
-           {CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
-           WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
-           WebsiteSettingsRegistry::DESKTOP,
-           ContentSettingsInfo::INHERIT_IN_INCOGNITO,
-           PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
-
   Register(ContentSettingsType::CONTROLLED_FRAME, "controlled-frame",
            CONTENT_SETTING_ALLOW, WebsiteSettingsInfo::UNSYNCABLE,
            /*allowlisted_primary_schemes=*/{},
@@ -857,11 +834,11 @@ void ContentSettingsRegistry::Init() {
 
 void ContentSettingsRegistry::Register(
     ContentSettingsType type,
-    const std::string& name,
+    std::string_view name,
     ContentSetting initial_default_value,
     WebsiteSettingsInfo::SyncStatus sync_status,
-    const std::vector<std::string>& allowlisted_primary_schemes,
-    const std::set<ContentSetting>& valid_settings,
+    base::span<const std::string_view> allowlisted_primary_schemes,
+    base::span<const ContentSetting> valid_settings,
     WebsiteSettingsInfo::ScopingType scoping_type,
     WebsiteSettingsRegistry::Platforms platforms,
     ContentSettingsInfo::IncognitoBehavior incognito_behavior,
@@ -889,9 +866,11 @@ void ContentSettingsRegistry::Register(
   DCHECK(website_settings_registry_->Get(type)) << type;
 
   auto& info = content_settings_info_[type] =
-      std::make_unique<ContentSettingsInfo>(permission_setting_info,
-                                            delegate_ptr, valid_settings,
-                                            incognito_behavior);
+      std::make_unique<ContentSettingsInfo>(
+          permission_setting_info, delegate_ptr,
+          std::set<ContentSetting>(valid_settings.begin(),
+                                   valid_settings.end()),
+          incognito_behavior);
 
   if (type == ContentSettingsType::COOKIES) {
     info->set_third_party_cookie_allowed_secondary_schemes(

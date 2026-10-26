@@ -52,6 +52,7 @@
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/style/computed_style_base_constants.h"
+#include "third_party/blink/renderer/core/style/fill_layer.h"
 #include "third_party/blink/renderer/core/style/shadow_list.h"
 #include "third_party/blink/renderer/platform/geometry/length_functions.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
@@ -106,10 +107,10 @@ LayoutBoxModelObject::LayoutBoxModelObject(ContainerNode* node)
 
 LayoutBoxModelObject::~LayoutBoxModelObject() = default;
 
-void LayoutBoxModelObject::WillBeDestroyed() {
+void LayoutBoxModelObject::WillBeDestroyed(const ComputedStyle* style) {
   NOT_DESTROYED();
 
-  LayoutObject::WillBeDestroyed();
+  LayoutObject::WillBeDestroyed(style);
 
   if (HasLayer())
     DestroyLayer();
@@ -125,6 +126,7 @@ void LayoutBoxModelObject::WillBeDestroyed() {
 
 void LayoutBoxModelObject::StyleWillChange(
     StyleDifference diff,
+    const ComputedStyle* old_style,
     const ComputedStyle& new_style,
     StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
@@ -132,21 +134,21 @@ void LayoutBoxModelObject::StyleWillChange(
   // descendant PaintLayer's PaintingContainer, so we need to eagerly
   // invalidate the current PaintingContainer chain which may have painted
   // cached subsequences containing this object or descendant objects.
-  if (Style() &&
-      (IsStacked() != IsStacked(new_style) ||
-       IsStackingContext() != IsStackingContext(new_style)) &&
-      // ObjectPaintInvalidator requires this.
-      IsRooted()) {
+  if (old_style &&
+      (IsStacked(*old_style) != IsStacked(new_style) ||
+       IsStackingContext(*old_style) != IsStackingContext(new_style))) {
     ObjectPaintInvalidator(*this).SlowSetPaintingLayerNeedsRepaint();
   }
 
-  LayoutObject::StyleWillChange(diff, new_style, style_change_context);
+  LayoutObject::StyleWillChange(diff, old_style, new_style,
+                                style_change_context);
 }
 
 DISABLE_CFI_PERF
 void LayoutBoxModelObject::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
   bool had_transform_related_property = HasTransformRelatedProperty();
@@ -157,7 +159,8 @@ void LayoutBoxModelObject::StyleDidChange(
   bool could_contain_fixed = CanContainFixedPositionObjects();
   bool could_contain_absolute = CanContainAbsolutePositionObjects();
 
-  LayoutObject::StyleDidChange(diff, old_style, style_change_context);
+  LayoutObject::StyleDidChange(diff, old_style, new_style,
+                               style_change_context);
   UpdateFromStyle();
 
   // When an out-of-flow-positioned element changes its display between block
@@ -171,20 +174,21 @@ void LayoutBoxModelObject::StyleDidChange(
   // block/inline position.
   // Position changes and other types of display changes are handled elsewhere.
   if (old_style && IsOutOfFlowPositioned() && Parent() &&
-      (StyleRef().GetPosition() == old_style->GetPosition()) &&
-      (StyleRef().IsOriginalDisplayInlineType() !=
-       old_style->IsOriginalDisplayInlineType()))
+      (new_style.GetPosition() == old_style->GetPosition()) &&
+      (new_style.IsOriginalDisplayInlineType() !=
+       old_style->IsOriginalDisplayInlineType())) {
     Parent()->SetNeedsLayout(layout_invalidation_reason::kChildChanged,
                              kMarkContainerChain);
+  }
 
   if (Layer() && old_style->HasStickyConstrainedPosition()) {
     // Clear our sticky constraints if we are no longer sticky.
-    if (!StyleRef().HasStickyConstrainedPosition()) {
+    if (!new_style.HasStickyConstrainedPosition()) {
       ClearStickyConstraints(kPhysicalAxesBoth);
     } else {
       // When still sticky, clear out axes that no longer exist.
       const PhysicalAxes old_axes = StickyConstrainedAxes(*old_style);
-      const PhysicalAxes new_axes = StickyConstrainedAxes(StyleRef());
+      const PhysicalAxes new_axes = StickyConstrainedAxes(new_style);
       if (const PhysicalAxes remove_axes = old_axes ^ (old_axes & new_axes)) {
         ClearStickyConstraints(remove_axes);
       }
@@ -192,7 +196,7 @@ void LayoutBoxModelObject::StyleDidChange(
   }
 
   if (RuntimeEnabledFeatures::AnnotationSpaceOnStartEnabled() &&
-      StyleRef().GetTextEmphasisMark() != TextEmphasisMark::kNone) {
+      new_style.GetTextEmphasisMark() != TextEmphasisMark::kNone) {
     View()->SetContainsAnnotations();
   }
 
@@ -210,10 +214,10 @@ void LayoutBoxModelObject::StyleDidChange(
       CreateLayerAfterStyleChange();
     }
   } else if (Layer()) {
-    Layer()->UpdateFilters(diff, old_style, StyleRef());
-    Layer()->UpdateBackdropFilters(old_style, StyleRef());
-    Layer()->UpdateClipPath(old_style, StyleRef());
-    Layer()->UpdateOffsetPath(old_style, StyleRef());
+    Layer()->UpdateFilters(diff, old_style, new_style);
+    Layer()->UpdateBackdropFilters(old_style, new_style);
+    Layer()->UpdateClipPath(old_style, new_style);
+    Layer()->UpdateOffsetPath(old_style, new_style);
     // Calls DestroyLayer() which clears the layer.
     Layer()->RemoveOnlyThisLayerAfterStyleChange(old_style);
     if (EverHadLayout())
@@ -247,28 +251,30 @@ void LayoutBoxModelObject::StyleDidChange(
   }
 
   if (old_style && Parent()) {
-    LayoutBlock* block = InclusiveContainingBlock();
+    LayoutBox* container = InclusiveContainingBlock();
 
     if ((could_contain_fixed && !can_contain_fixed) ||
         (could_contain_absolute && !can_contain_absolute)) {
       // Clear our positioned objects list. Our absolute and fixed positioned
       // descendants will be inserted into our containing block's positioned
       // objects list during layout.
-      block->RemovePositionedObjects(nullptr);
+      container->RemovePositionedObjects(nullptr);
     }
     if (!could_contain_absolute && can_contain_absolute) {
       // Remove our absolute positioned descendants from their current
       // containing block.
       // They will be inserted into our positioned objects list during layout.
-      if (LayoutBlock* cb = block->ContainingBlockForAbsolutePosition())
+      if (LayoutBox* cb = container->ContainingBlockForAbsolutePosition()) {
         cb->RemovePositionedObjects(this);
+      }
     }
     if (!could_contain_fixed && can_contain_fixed) {
       // Remove our fixed positioned descendants from their current containing
       // block.
       // They will be inserted into our positioned objects list during layout.
-      if (LayoutBlock* cb = block->ContainingBlockForFixedPosition())
+      if (LayoutBox* cb = container->ContainingBlockForFixedPosition()) {
         cb->RemovePositionedObjects(this);
+      }
     }
   }
 
@@ -277,11 +283,8 @@ void LayoutBoxModelObject::StyleDidChange(
     // |LayoutBoxModelObject::StyleWillChange| but changes to stacking can
     // change the PaintingContainer so we need to ensure the new
     // PaintingContainer is also marked for repaint.
-    if (old_style &&
-        (IsStacked() != IsStacked(*old_style) ||
-         IsStackingContext() != IsStackingContext(*old_style)) &&
-        // ObjectPaintInvalidator requires this.
-        IsRooted()) {
+    if (old_style && (IsStacked() != IsStacked(*old_style) ||
+                      IsStackingContext() != IsStackingContext(*old_style))) {
       ObjectPaintInvalidator(*this).SlowSetPaintingLayerNeedsRepaint();
     }
 
@@ -298,11 +301,11 @@ void LayoutBoxModelObject::StyleDidChange(
       if (auto* body_object =
               DynamicTo<LayoutBoxModelObject>(body->GetLayoutObject())) {
         bool new_body_background_transfers =
-            body_object->BackgroundTransfersToView(Style());
+            body_object->BackgroundTransfersToView(&new_style);
         bool old_body_background_transfers =
             old_style && body_object->BackgroundTransfersToView(old_style);
         if (new_body_background_transfers != old_body_background_transfers &&
-            body_object->Style() && body_object->StyleRef().HasBackground()) {
+            body_object->Style().HasBackground()) {
           body_object->SetBackgroundNeedsFullPaintInvalidation();
         }
       }
@@ -310,7 +313,7 @@ void LayoutBoxModelObject::StyleDidChange(
   }
 
   if (old_style &&
-      old_style->BackfaceVisibility() != StyleRef().BackfaceVisibility()) {
+      old_style->BackfaceVisibility() != new_style.BackfaceVisibility()) {
     SetNeedsPaintPropertyUpdate();
   }
 
@@ -324,7 +327,7 @@ void LayoutBoxModelObject::StyleDidChange(
   }
 
   if (Element* element = DynamicTo<Element>(GetNode())) {
-    if (NeedsAnchorPositionScrollData(*element, StyleRef())) {
+    if (NeedsAnchorPositionScrollData(*element, new_style)) {
       element->EnsureAnchorPositionScrollData();
     } else {
       element->RemoveAnchorPositionScrollData();
@@ -470,13 +473,30 @@ bool LayoutBoxModelObject::ShouldBeHandledAsInline(
   return style.IsInInlinifyingDisplay() && !IsTablePart();
 }
 
+void LayoutBoxModelObject::ImageChanged(WrappedImagePtr image,
+                                        CanDeferInvalidation) {
+  NOT_DESTROYED();
+  for (const FillLayer* layer = &Style().MaskLayers(); layer;
+       layer = layer->NextForUsedValue()) {
+    if (layer->GetImage() && image == layer->GetImage()->Data()) {
+      // Since an invalid <mask> reference does not yield a paint property
+      // (see CSSMaskPainter), we need to update paint properties when such a
+      // reference changes.
+      SetNeedsPaintPropertyUpdate();
+      SetShouldDoFullPaintInvalidationWithoutLayoutChange(
+          PaintInvalidationReason::kImage);
+      break;
+    }
+  }
+}
+
 void LayoutBoxModelObject::UpdateFromStyle() {
   NOT_DESTROYED();
-  const ComputedStyle& style = StyleRef();
+  const ComputedStyle& style = Style();
   SetHasBoxDecorationBackground(style.HasBoxDecorationBackground());
   SetInline(ShouldBeHandledAsInline(style));
   SetPositionState(ToPositionedState(style.GetPosition()));
-  SetHorizontalWritingMode(style.IsHorizontalWritingMode());
+  SetIsHorizontalWritingMode(style.IsHorizontalWritingMode());
 
   const bool is_fixed_container = ComputeIsFixedContainer(style);
   SetCanContainFixedPositionObjects(is_fixed_container);
@@ -484,7 +504,7 @@ void LayoutBoxModelObject::UpdateFromStyle() {
       ComputeIsAbsoluteContainer(style, is_fixed_container));
   SetIsBackgroundAttachmentFixedObject(
       !BackgroundTransfersToView() &&
-      StyleRef().HasFixedAttachmentBackgroundImage());
+      Style().HasFixedAttachmentBackgroundImage());
 }
 
 void LayoutBoxModelObject::UpdateCanCompositeBackgroundAttachmentFixed(
@@ -503,7 +523,7 @@ PhysicalRect LayoutBoxModelObject::VisualOverflowRectIncludingFilters() const {
 PhysicalRect LayoutBoxModelObject::ApplyFiltersToRect(
     const PhysicalRect& rect) const {
   NOT_DESTROYED();
-  if (!HasReflection() && !StyleRef().HasFilter()) {
+  if (!HasReflection() && !Style().HasFilter()) {
     return rect;
   }
   gfx::RectF float_rect(rect);
@@ -520,7 +540,7 @@ PhysicalRect LayoutBoxModelObject::ApplyFiltersToRect(
   return PhysicalRect::EnclosingRect(float_rect);
 }
 
-LayoutBlock* LayoutBoxModelObject::StickyContainer() const {
+LayoutBox* LayoutBoxModelObject::StickyContainer() const {
   NOT_DESTROYED();
   return ContainingBlock();
 }
@@ -529,7 +549,7 @@ StickyConstraintsData LayoutBoxModelObject::ComputeStickyPositionConstraints(
     const PaintLayer& scroll_container_layer,
     PhysicalAxes scroll_axes) const {
   NOT_DESTROYED();
-  DCHECK(StyleRef().HasStickyConstrainedPosition());
+  DCHECK(Style().HasStickyConstrainedPosition());
 
   bool is_fixed_to_view = false;
   {
@@ -545,7 +565,7 @@ StickyConstraintsData LayoutBoxModelObject::ComputeStickyPositionConstraints(
   }
 
   // Skip anonymous containing blocks except for anonymous fieldset content box.
-  LayoutBlock* sticky_container = StickyContainer();
+  LayoutBox* sticky_container = StickyContainer();
   while (sticky_container->IsAnonymous()) {
     if (sticky_container->Parent() &&
         sticky_container->Parent()->IsFieldset()) {
@@ -559,9 +579,11 @@ StickyConstraintsData LayoutBoxModelObject::ComputeStickyPositionConstraints(
   const PhysicalOffset scroll_container_border_offset =
       scroll_container->BorderOutsets().Offset();
 
-  MapCoordinatesFlags flags = kIgnoreTransforms | kIgnoreScrollOffset |
-                              kIgnoreStickyOffset |
-                              kIgnoreScrollOriginAndOffset;
+  MapCoordinatesFlags flags = {
+      MapCoordinatesMode::kIgnoreTransforms,
+      MapCoordinatesMode::kIgnoreScrollOffset,
+      MapCoordinatesMode::kIgnoreStickyOffset,
+      MapCoordinatesMode::kIgnoreScrollOriginAndOffset};
 
   // Compute the sticky-container rect.
   PhysicalRect scroll_container_relative_containing_block_rect;
@@ -596,16 +618,14 @@ StickyConstraintsData LayoutBoxModelObject::ComputeStickyPositionConstraints(
       // allowed to move.
       LayoutUnit max_width = sticky_container->ContentLogicalWidth();
       scroll_container_relative_containing_block_rect.ContractEdges(
-          MinimumValueForLength(StyleRef().MarginTop(), max_width),
-          MinimumValueForLength(StyleRef().MarginRight(), max_width),
-          MinimumValueForLength(StyleRef().MarginBottom(), max_width),
-          MinimumValueForLength(StyleRef().MarginLeft(), max_width));
+          MinimumValueForLength(Style().MarginTop(), max_width),
+          MinimumValueForLength(Style().MarginRight(), max_width),
+          MinimumValueForLength(Style().MarginBottom(), max_width),
+          MinimumValueForLength(Style().MarginLeft(), max_width));
     }
   }
 
-  // The location container for boxes is not always the containing block.
-  LayoutObject* location_container =
-      IsLayoutInline() ? Container() : To<LayoutBox>(this)->LocationContainer();
+  const LayoutObject* container = Container();
 
   // Compute the sticky-box rect.
   PhysicalRect sticky_box_rect;
@@ -619,9 +639,8 @@ StickyConstraintsData LayoutBoxModelObject::ComputeStickyPositionConstraints(
           PhysicalRect(box.PhysicalLocation(), box.StitchedSize());
     }
 
-    scroll_container_relative_sticky_box_rect =
-        location_container->LocalToAncestorRect(sticky_box_rect,
-                                                scroll_container, flags);
+    scroll_container_relative_sticky_box_rect = container->LocalToAncestorRect(
+        sticky_box_rect, scroll_container, flags);
 
     // Make relative to the padding-box instead of border-box.
     scroll_container_relative_sticky_box_rect.Move(
@@ -633,9 +652,9 @@ StickyConstraintsData LayoutBoxModelObject::ComputeStickyPositionConstraints(
   // sticky-container, and between the sticky-container and their
   // scroll-container.
   //
-  // The respective search ranges are [location_container, sticky_container)
-  // and [sticky_container, scroll_container). Store the range endpoints so the
-  // nearest sticky ancestors can be recomputed on demand.
+  // Store the endpoints of the half-open ranges [container, sticky_container)
+  // and [sticky_container, scroll_container) so the nearest sticky ancestors
+  // can be recomputed on demand.
   const PhysicalRect constraining_rect =
       scroll_container->ComputeStickyConstrainingRect();
 
@@ -679,15 +698,15 @@ StickyConstraintsData LayoutBoxModelObject::ComputeStickyPositionConstraints(
     return MakeGarbageCollected<
         StickyPositionScrollingConstraints::PerAxisData>(
         axis, scroll_container_relative_containing_block_rect,
-        scroll_container_relative_sticky_box_rect, constraining_rect,
-        location_container, sticky_container, &scroll_container_layer,
-        is_fixed_to_view, min_inset, max_inset,
-        min_inset_for_get_computed_style, max_inset_for_get_computed_style);
+        scroll_container_relative_sticky_box_rect, constraining_rect, container,
+        sticky_container, &scroll_container_layer, is_fixed_to_view, min_inset,
+        max_inset, min_inset_for_get_computed_style,
+        max_inset_for_get_computed_style);
   };
 
-  const auto& style = StyleRef();
+  const auto& style = Style();
   const WritingDirectionMode sticky_container_writing_direction =
-      sticky_container->StyleRef().GetWritingDirection();
+      sticky_container->Style().GetWritingDirection();
 
   return StickyConstraintsData{
       compute_axis_data(PhysicalAxis::kHorizontal, style.Left(), style.Right(),
@@ -750,7 +769,8 @@ PhysicalOffset LayoutBoxModelObject::OffsetFromContainerInternal(
     MapCoordinatesFlags mode) const {
   NOT_DESTROYED();
   PhysicalOffset offset;
-  if (IsStickyPositioned() && !(mode & kIgnoreStickyOffset)) {
+  if (IsStickyPositioned() &&
+      !mode.Has(MapCoordinatesMode::kIgnoreStickyOffset)) {
     offset += StickyPositionOffset();
   }
   return offset + LayoutObject::OffsetFromContainerInternal(container, mode);
@@ -823,7 +843,7 @@ PhysicalOffset LayoutBoxModelObject::AdjustedPositionRelativeTo(
 PhysicalBoxStrut LayoutBoxModelObject::ComputedPaddingOutsets() const {
   NOT_DESTROYED();
 
-  const ComputedStyle& style = StyleRef();
+  const ComputedStyle& style = Style();
   if (!style.MayHavePadding()) {
     return PhysicalBoxStrut();
   }
@@ -851,7 +871,7 @@ LogicalRect LayoutBoxModelObject::LocalCaretRectForEmptyElement(
   NOT_DESTROYED();
   DCHECK(!SlowFirstChild() || SlowFirstChild()->IsPseudoElement());
 
-  const SimpleFontData* font_data = StyleRef().GetFont()->PrimaryFont();
+  const SimpleFontData* font_data = Style().GetFont()->PrimaryFont();
   const Node* node = GetNode();
 
   // Caret-shape only applies to text or elements that accept text input.
@@ -876,8 +896,8 @@ LogicalRect LayoutBoxModelObject::LocalCaretRectForEmptyElement(
     if (!Parent()) {
       reference_align = ETextAlign::kStart;
     } else {
-      reference_align = Parent()->StyleRef().GetTextAlign();
-      reference_style = &Parent()->StyleRef();
+      reference_align = Parent()->Style().GetTextAlign();
+      reference_style = &Parent()->Style();
     }
   }
 
@@ -1125,8 +1145,9 @@ bool LayoutBoxModelObject::BackgroundTransfersToView(
     return false;
   if (document_element_style->ShouldApplyAnyContainment(*document_element))
     return false;
-  if (StyleRef().ShouldApplyAnyContainment(*To<Element>(GetNode())))
+  if (Style().ShouldApplyAnyContainment(*To<Element>(GetNode()))) {
     return false;
+  }
   return true;
 }
 

@@ -43,14 +43,17 @@ bool OomInterventionTabHelper::IsEnabled() {
 OomInterventionTabHelper::OomInterventionTabHelper(
     content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
-      content::WebContentsUserData<OomInterventionTabHelper>(*web_contents),
       decider_(OomInterventionDecider::GetForBrowserContext(
           web_contents->GetBrowserContext())) {
   scoped_observation_.Observe(
       crash_reporter::CrashMetricsReporter::GetInstance());
 }
 
-OomInterventionTabHelper::~OomInterventionTabHelper() = default;
+OomInterventionTabHelper::~OomInterventionTabHelper() {
+  if (web_contents()) {
+    WebContentsDestroyed();
+  }
+}
 
 void OomInterventionTabHelper::OnHighMemoryUsage() {
   auto* config = OomInterventionConfig::GetInstance();
@@ -74,7 +77,6 @@ void OomInterventionTabHelper::DeclineIntervention() {
   intervention_state_ = InterventionState::DECLINED;
 
   if (decider_) {
-    DCHECK(!web_contents()->GetBrowserContext()->IsOffTheRecord());
     const std::string& host = web_contents()->GetVisibleURL().GetHost();
     decider_->OnInterventionDeclined(host);
   }
@@ -90,7 +92,11 @@ void OomInterventionTabHelper::DeclineInterventionSticky() {
 }
 
 void OomInterventionTabHelper::WebContentsDestroyed() {
+  if (IsLastVisibleWebContents(web_contents())) {
+    SetLastVisibleWebContents(nullptr);
+  }
   StopMonitoring();
+  Observe(nullptr);
 }
 
 void OomInterventionTabHelper::PrimaryMainFrameRenderProcessGone(
@@ -189,14 +195,14 @@ void OomInterventionTabHelper::DocumentOnLoadCompletedInPrimaryMainFrame() {
 }
 
 void OomInterventionTabHelper::OnCrashDumpProcessed(
-    int rph_id,
+    content::ChildProcessId rph_id,
     const crash_reporter::CrashMetricsReporter::ReportedCrashTypeSet&
         reported_counts) {
   if (rph_id != web_contents()
                     ->GetPrimaryPage()
                     .GetMainDocument()
                     .GetProcess()
-                    ->GetDeprecatedID()) {
+                    ->GetID()) {
     return;
   }
   if (!reported_counts.count(
@@ -205,13 +211,13 @@ void OomInterventionTabHelper::OnCrashDumpProcessed(
     return;
   }
 
+  // TODO(crbug.com/572186162): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(IsLastVisibleWebContents(web_contents()));
   if (near_oom_detected_time_) {
     ResetInterventionState();
   }
-
   if (decider_) {
-    DCHECK(!web_contents()->GetBrowserContext()->IsOffTheRecord());
     const std::string& host = web_contents()->GetVisibleURL().GetHost();
     decider_->OnOomDetected(host);
   }
@@ -255,7 +261,6 @@ void OomInterventionTabHelper::StartDetectionInRenderer() {
   if ((renderer_pause_enabled || navigate_ads_enabled ||
        purge_v8_memory_enabled) &&
       decider_) {
-    DCHECK(!web_contents()->GetBrowserContext()->IsOffTheRecord());
     const std::string& host = web_contents()->GetVisibleURL().GetHost();
     if (!decider_->CanTriggerIntervention(host)) {
       return;
@@ -266,9 +271,9 @@ void OomInterventionTabHelper::StartDetectionInRenderer() {
       web_contents()->GetPrimaryPage().GetMainDocument();
 
   content::RenderProcessHost* render_process_host = main_frame.GetProcess();
-  DCHECK(render_process_host);
+  CHECK(render_process_host, base::NotFatalUntil::M161);
   render_process_host->BindReceiver(intervention_.BindNewPipeAndPassReceiver());
-  DCHECK(!receiver_.is_bound());
+  CHECK(!receiver_.is_bound(), base::NotFatalUntil::M161);
   blink::mojom::DetectionArgsPtr detection_args =
       config->GetRendererOomDetectionArgs();
   intervention_->StartDetection(
@@ -286,5 +291,3 @@ void OomInterventionTabHelper::ResetInterfaces() {
   intervention_.reset();
   receiver_.reset();
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(OomInterventionTabHelper);

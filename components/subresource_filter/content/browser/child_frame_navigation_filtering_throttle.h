@@ -5,12 +5,13 @@
 #ifndef COMPONENTS_SUBRESOURCE_FILTER_CONTENT_BROWSER_CHILD_FRAME_NAVIGATION_FILTERING_THROTTLE_H_
 #define COMPONENTS_SUBRESOURCE_FILTER_CONTENT_BROWSER_CHILD_FRAME_NAVIGATION_FILTERING_THROTTLE_H_
 
+#include <stddef.h>
+
 #include <optional>
 #include <string>
 
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
-#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/subresource_filter/core/browser/async_document_subresource_filter.h"
@@ -72,9 +73,8 @@ class ChildFrameNavigationFilteringThrottle
   // for some computation to complete.
   virtual bool ShouldDeferNavigation() const = 0;
 
-  // Defines any necessary custom logic to execute after a LoadPolicy has been
-  // computed for navigations that will *not* be cancelled.
-  virtual void OnReadyToResumeNavigationWithLoadPolicy() = 0;
+  // Called after the final LoadPolicy has been computed for a redirect stage.
+  virtual void OnCalculatedLoadPolicyFinished() = 0;
 
   // Notifies the appropriate observer that the
   // ChildFrameNavigationFilteringThrottle has finished processing a request.
@@ -85,9 +85,16 @@ class ChildFrameNavigationFilteringThrottle
   content::NavigationThrottle::ThrottleCheckResult
   MaybeDeferToCalculateLoadPolicy();
 
+  bool matched_subdomain_disallow_rule() const {
+    return matched_subdomain_disallow_rule_;
+  }
+
   void OnCalculatedLoadPolicy(LoadPolicy policy);
-  void OnCalculatedLoadPolicyForUrl(LoadPolicy policy);
-  void OnCalculatedLoadPoliciesFromAliasUrls(std::vector<LoadPolicy> policies);
+  void OnCalculatedLoadPolicyForUrl(
+      size_t redirect_chain_size,
+      AsyncDocumentSubresourceFilter::LoadPolicyResult result);
+  void OnCalculatedLoadPoliciesFromAliasUrls(
+      std::vector<AsyncDocumentSubresourceFilter::LoadPolicyResult> results);
   void HandleDisallowedLoad();
 
   void DeferStart(DeferStage stage);
@@ -96,9 +103,9 @@ class ChildFrameNavigationFilteringThrottle
   void CancelNavigation();
   void ResumeNavigation();
 
-  // Must outlive this class.
-  raw_ptr<AsyncDocumentSubresourceFilter, DanglingUntriaged>
-      parent_frame_filter_;
+  // The filter is owned by an ancestor frame, which can be deleted before this
+  // throttle. Navigations fail open if the filter is no longer available.
+  base::WeakPtr<AsyncDocumentSubresourceFilter> parent_frame_filter_;
 
   int pending_load_policy_calculations_ = 0;
   DeferStage defer_stage_ = DeferStage::kNotDeferring;
@@ -119,6 +126,12 @@ class ChildFrameNavigationFilteringThrottle
 
   // Set to the least restrictive load policy by default.
   LoadPolicy load_policy_ = LoadPolicy::EXPLICITLY_ALLOW;
+
+  // Set to true if the URL (or any of its DNS aliases) evaluated for the
+  // current navigation step matched a domain/subdomain anchored DISALLOW or
+  // WOULD_DISALLOW rule. Reset on each redirect to reflect the final URL at
+  // commit time.
+  bool matched_subdomain_disallow_rule_ = false;
 
   // Callback to construct a console message based on a disallowed resource URL
   // without storing a copy of the message string.

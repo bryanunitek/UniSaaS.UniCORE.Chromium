@@ -50,6 +50,15 @@ WebContentsViewChildFrame::WebContentsViewChildFrame(
 
 WebContentsViewChildFrame::~WebContentsViewChildFrame() = default;
 
+WebContentsViewChildFrame::Type WebContentsViewChildFrame::GetType() const {
+  if (web_contents_->IsGuest()) {
+    CHECK(!web_contents_->GetSurfaceEmbedConnector());
+    return Type::kGuestView;
+  }
+  CHECK(web_contents_->GetSurfaceEmbedConnector());
+  return Type::kSurfaceEmbed;
+}
+
 WebContentsView* WebContentsViewChildFrame::GetOuterView() {
   if (auto* outer_web_contents = web_contents_->GetOuterWebContents()) {
     return outer_web_contents->GetView();
@@ -224,7 +233,15 @@ void WebContentsViewChildFrame::StoreFocus() {
 }
 
 void WebContentsViewChildFrame::FocusThroughTabTraversal(bool reverse) {
-  NOTREACHED();
+  if (GetType() == Type::kGuestView) {
+    NOTREACHED();
+  }
+
+  if (delegate_) {
+    delegate_->ResetStoredFocus();
+  }
+
+  web_contents_->GetRenderViewHost()->SetInitialFocus(reverse);
 }
 
 DropData* WebContentsViewChildFrame::GetDropData() const {
@@ -233,9 +250,10 @@ DropData* WebContentsViewChildFrame::GetDropData() const {
 
 void WebContentsViewChildFrame::UpdateDragOperation(
     ui::mojom::DragOperation operation,
-    bool document_is_handling_drag) {
+    bool document_is_handling_drag,
+    RenderWidgetHostImpl* source_rwh) {
   if (auto* view = GetOuterDelegateView()) {
-    view->UpdateDragOperation(operation, document_is_handling_drag);
+    view->UpdateDragOperation(operation, document_is_handling_drag, source_rwh);
   }
 }
 
@@ -245,9 +263,24 @@ void WebContentsViewChildFrame::GotFocus(
 }
 
 void WebContentsViewChildFrame::TakeFocus(bool reverse) {
-  // This is handled in RenderFrameHostImpl::TakeFocus we shouldn't
-  // end up here.
-  NOTREACHED();
+  if (GetType() == Type::kGuestView) {
+    // This is handled in RenderFrameHostImpl::TakeFocus we shouldn't
+    // end up here.
+    NOTREACHED();
+  }
+
+  // A top-level WebContents (WebContentsViewAura/Mac) forwards the focus
+  // to the embedder via WebContentsDelegate::TakeFocus. An embedded WebContents
+  // (WebContentsViewChildFrame) does not need that.
+
+  auto* surface_embed_connector = static_cast<SurfaceEmbedConnectorImpl*>(
+      web_contents_->GetSurfaceEmbedConnector());
+  CHECK(surface_embed_connector);
+
+  surface_embed_connector->ClearFocusOnInnerWebContents();
+  if (auto* delegate = surface_embed_connector->GetDelegate()) {
+    delegate->AdvanceFocusFromEmbedElement(reverse);
+  }
 }
 
 void WebContentsViewChildFrame::ShowContextMenu(

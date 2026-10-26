@@ -34,6 +34,10 @@ class UnguessableToken;
 @property(nonatomic, readonly, copy)
     NSArray<ComposeboxInputItem*>* containedItems;
 
+// The contained tab items in this collection.
+@property(nonatomic, readonly, copy)
+    NSArray<ComposeboxInputItem*>* containedTabItems;
+
 // The number of objects in the array.
 @property(nonatomic, readonly) size_t count;
 
@@ -42,6 +46,9 @@ class UnguessableToken;
 
 // Whether the collection has at least one image added.
 @property(nonatomic, readonly) BOOL hasImage;
+
+// Whether the collection has at least one file added.
+@property(nonatomic, readonly) BOOL hasFile;
 
 // Whether the collection contains a tab or a file attachment.
 @property(nonatomic, readonly) BOOL hasTabOrFile;

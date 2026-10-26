@@ -4,9 +4,13 @@
 
 #include "chrome/renderer/accessibility/read_anything/read_anything_node_utils.h"
 
+#include <algorithm>
 #include <cinttypes>
 
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "services/strings/grit/services_strings.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_enum_util.h"
 #include "ui/accessibility/ax_role_properties.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -16,6 +20,11 @@ namespace a11y {
 bool IsSuperscript(const ui::AXNode* ax_node) {
   return ax_node->data().GetTextPosition() ==
          ax::mojom::TextPosition::kSuperscript;
+}
+
+bool IsSubscript(const ui::AXNode* ax_node) {
+  return ax_node->data().GetTextPosition() ==
+         ax::mojom::TextPosition::kSubscript;
 }
 
 bool IsTextForReadAnything(const ui::AXNode* node, bool is_pdf, bool is_docs) {
@@ -36,6 +45,11 @@ bool IsTextForReadAnything(const ui::AXNode* node, bool is_pdf, bool is_docs) {
   return (GetHtmlTag(node, is_pdf, is_docs).length() == 0) || is_list_marker;
 }
 
+bool IsHeaderFooterRole(ax::mojom::Role role) {
+  return role == ax::mojom::Role::kSectionHeader ||
+         role == ax::mojom::Role::kSectionFooter;
+}
+
 bool IsIgnored(const ui::AXNode* const ax_node, bool is_pdf) {
   if (ax_node->IsIgnored()) {
     return true;
@@ -52,14 +66,15 @@ bool IsIgnored(const ui::AXNode* const ax_node, bool is_pdf) {
     // The text content of the aforementioned `kBanner` or `kContentInfo` node
     // is the same as the text content of its child static text node.
     const ui::AXNode* const parent = ax_node->GetParent();
-    if (const std::string_view text = ax_node->GetTextContentUTF8();
-        text == l10n_util::GetStringUTF8(IDS_PDF_OCR_RESULT_BEGIN)) {
-      if (role == ax::mojom::Role::kBanner ||
-          (parent && parent->GetRole() == ax::mojom::Role::kBanner)) {
-        return true;
-      }
-    } else if (text == l10n_util::GetStringUTF8(IDS_PDF_OCR_RESULT_END) &&
-               parent && parent->GetRole() == ax::mojom::Role::kContentInfo) {
+    if ((role == ax::mojom::Role::kBanner ||
+         (parent && parent->GetRole() == ax::mojom::Role::kBanner)) &&
+        ax_node->GetTextContentUTF8() ==
+            l10n_util::GetStringUTF8(IDS_PDF_OCR_RESULT_BEGIN)) {
+      return true;
+    }
+    if (parent && parent->GetRole() == ax::mojom::Role::kContentInfo &&
+        ax_node->GetTextContentUTF8() ==
+            l10n_util::GetStringUTF8(IDS_PDF_OCR_RESULT_END)) {
       return true;
     }
   }
@@ -67,6 +82,19 @@ bool IsIgnored(const ui::AXNode* const ax_node, bool is_pdf) {
   // Ignore interactive elements, except for text fields and aria-related
   // support fields.
   return (ui::IsControl(role) && !ui::IsTextField(role)) || ui::IsSelect(role);
+}
+
+bool IsPdfArtifact(const ui::AXNode* const ax_node) {
+  if (!features::IsPdfAccessibilityHeuristicEnhancementsEnabled()) {
+    return false;
+  }
+
+  for (const ui::AXNode* node = ax_node; node; node = node->GetParent()) {
+    if (IsHeaderFooterRole(node->GetRole())) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::string GetHtmlTag(const ui::AXNode* ax_node, bool is_pdf, bool is_docs) {
@@ -145,24 +173,30 @@ std::string GetHtmlTagForPDF(const ui::AXNode* ax_node,
 std::string GetHeadingHtmlTagForPDF(const ui::AXNode* ax_node,
                                     const std::string& html_tag) {
   // Sometimes whole paragraphs can be formatted as a heading. If the text is
-  // longer than 2 lines, assume it was meant to be a paragragh.
-  if (ax_node->GetTextContentLengthUTF8() > (2 * kMaxLineWidth)) {
+  // longer than 2 lines, assume it was meant to be a paragragh. Since the "ch"
+  // unit in CSS doesn't actually correspond exactly to the number of
+  // characters, use a larger multiplier to approximate 2 actual lines of RM.
+  int multiplier =
+      features::IsPdfAccessibilityHeuristicEnhancementsEnabled() ? 3 : 2;
+  if (ax_node->GetTextContentLengthUTF8() > (multiplier * kMaxLineWidth)) {
     return "p";
   }
 
-  // A single block of text could be incorrectly formatted with multiple heading
-  // nodes (one for each line of text) instead of a single paragraph node. This
-  // case should be detected to improve readability. If there are multiple
-  // consecutive nodes with the same heading level, assume that they are all a
-  // part of one paragraph.
-  ui::AXNode* next = ax_node->GetNextUnignoredSibling();
-  ui::AXNode* prev = ax_node->GetPreviousUnignoredSibling();
+  if (!features::IsPdfAccessibilityHeuristicEnhancementsEnabled()) {
+    // A single block of text could be incorrectly formatted with multiple
+    // heading nodes (one for each line of text) instead of a single paragraph
+    // node. This case should be detected to improve readability. If there are
+    // multiple consecutive nodes with the same heading level, assume that they
+    // are all a part of one paragraph.
+    ui::AXNode* next = ax_node->GetNextUnignoredSibling();
+    ui::AXNode* prev = ax_node->GetPreviousUnignoredSibling();
 
-  if ((next && next->GetStringAttribute(ax::mojom::StringAttribute::kHtmlTag) ==
-                   html_tag) ||
-      (prev && prev->GetStringAttribute(ax::mojom::StringAttribute::kHtmlTag) ==
-                   html_tag)) {
-    return "span";
+    if ((next && next->GetStringAttribute(
+                     ax::mojom::StringAttribute::kHtmlTag) == html_tag) ||
+        (prev && prev->GetStringAttribute(
+                     ax::mojom::StringAttribute::kHtmlTag) == html_tag)) {
+      return "span";
+    }
   }
 
   int32_t hierarchical_level =
@@ -209,32 +243,40 @@ std::u16string GetTextContent(const ui::AXNode* ax_node,
     }
   }
 
-  // TODO(crbug.com//40927698): Investigate how we can remove this. Possibly by
-  // improving distillation for pdfs.
-  if (is_pdf) {
+  if (is_pdf && !features::IsPdfAccessibilityHeuristicEnhancementsEnabled()) {
     std::u16string filtered_string(ax_node->GetTextContentUTF16());
-    // When we receive text from a pdf node, there are return characters at each
-    // visual line break in the page. If these aren't filtered, one of two
-    // things could happen:
-    // 1) part of the same sentence will be read as separate segments, causing
-    //    choppy speech (e.g. without filtering, 'This is a long sentence with
-    //    \n\r a line break.' will read and highlight "This is a long sentence
-    //    with" and "a line break" separately.
-    // 2) parts of the sentence are not highlighted at all because GetNextWord
-    //    using accessible text boundaries continues returning the line break
-    //    infinitely (and we thus break out of the infinite loop and instead
-    //    highlight nothing).
-    if (is_pdf && filtered_string.size() > 0) {
-      size_t pos = filtered_string.find_first_of(u"\n\r");
-      while (pos != std::string::npos && pos < filtered_string.size() - 2) {
-        filtered_string.replace(pos, 1, u" ");
-        pos = filtered_string.find_first_of(u"\n\r");
+    if (filtered_string.size() > 0) {
+
+      // When we receive text from a pdf node, there are return characters at
+      // each visual line break in the page. If these aren't filtered, one of
+      // two things could happen: 1) part of the same sentence will be read as
+      // separate segments, causing
+      //    choppy speech (e.g. without filtering, 'This is a long sentence with
+      //    \n\r a line break.' will read and highlight "This is a long sentence
+      //    with" and "a line break" separately.
+      // 2) parts of the sentence are not highlighted at all because GetNextWord
+      //    using accessible text boundaries continues returning the line break
+      //    infinitely (and we thus break out of the infinite loop and instead
+      //    highlight nothing).
+      if (filtered_string.size() > 2) {
+        std::replace_if(
+            filtered_string.begin(), filtered_string.end() - 2,
+            [](char16_t c) { return base::IsAsciiWhitespace(c) && c != ' '; },
+            ' ');
       }
     }
     return filtered_string;
   }
 
-  return ax_node->GetTextContentUTF16();
+  std::u16string text(ax_node->GetTextContentUTF16());
+  // Whitespace only characters should be treated as spaces to prevent
+  // reading mode from displaying paragraphs as a single block of text with
+  // no spaces. This is necessary for selection matching to work properly
+  // on a Readability distillation.
+  if (!text.empty() && base::ContainsOnlyChars(text, base::kWhitespaceUTF16)) {
+    std::ranges::replace(text, u'\u00A0', u' ');
+  }
+  return text;
 }
 
 std::u16string GetPrefixText(const ui::AXNode* ax_node,

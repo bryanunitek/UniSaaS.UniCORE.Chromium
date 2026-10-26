@@ -20,12 +20,22 @@
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/glic_experimental_opt_in_resources.h"
 #include "chrome/grit/glic_experimental_opt_in_resources_map.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
+#include "extensions/buildflags/buildflags.h"
 #include "net/base/url_util.h"
 #include "ui/webui/webui_util.h"
+
+#if !BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/grit/guest_view_shared_resources_map.h"  // nogncheck
+#endif
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/webui/theme_source.h"  // nogncheck
+#endif
 
 namespace glic {
 
@@ -88,9 +98,20 @@ GlicExperimentalOptInUI::GlicExperimentalOptInUI(content::WebUI* web_ui)
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       profile, chrome::kChromeUIGlicExperimentalOptInHost);
 
+#if !BUILDFLAG(IS_ANDROID)
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
+#endif
+
   webui::SetupWebUIDataSource(
       source, kGlicExperimentalOptInResources,
       IDR_GLIC_EXPERIMENTAL_OPT_IN_EXPERIMENTAL_OPT_IN_HTML);
+
+#if !BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  auto bindings = web_ui->GetBindings();
+  bindings.Put(content::BindingsPolicyValue::kSlimWebView);
+  web_ui->SetBindings(bindings);
+  source->AddResourcePaths(kGuestViewSharedResources);
+#endif  // !BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   GlicKeyedService* service =
       GlicKeyedServiceFactory::GetGlicKeyedService(profile);
@@ -124,6 +145,9 @@ GlicExperimentalOptInUI::GlicExperimentalOptInUI(content::WebUI* web_ui)
   source->AddBoolean(
       "glicDevEnabled",
       base::CommandLine::ForCurrentProcess()->HasSwitch(::switches::kGlicDev));
+  source->AddBoolean(
+      "glicOptInDialogA11yFixEnabled",
+      base::FeatureList::IsEnabled(features::kGlicOptInDialogA11yFix));
 
   static constexpr webui::LocalizedString kStrings[] = {
       {"offlineNoticeHeader", IDS_GLIC_OFFLINE_NOTICE_HEADER},
@@ -135,6 +159,11 @@ GlicExperimentalOptInUI::GlicExperimentalOptInUI(content::WebUI* web_ui)
       {"tryAgainButtonLabel", IDS_GLIC_ERROR_NOTICE_ACTION_BUTTON},
   };
   source->AddLocalizedStrings(kStrings);
+  source->AddLocalizedString(
+      "glicWindowTitle",
+      base::FeatureList::IsEnabled(features::kGlicOptInDialogA11yFix)
+          ? IDS_GLIC_EXPERIMENTAL_OPT_IN_TITLE
+          : IDS_GLIC_WINDOW_TITLE);
 }
 
 GlicExperimentalOptInUI::~GlicExperimentalOptInUI() = default;

@@ -417,7 +417,19 @@ CreatePendingSharedURLLoaderFactory(StoragePartitionImpl* storage_partition,
         ukm::kInvalidSourceIdObj, factory_builder, /*header_client=*/nullptr,
         /*bypass_redirect_checks=*/nullptr, /*disable_secure_dns=*/nullptr,
         /*factory_override=*/nullptr,
-        /*navigation_response_task_runner=*/nullptr);
+        /*navigation_response_task_runner=*/nullptr,
+        /*is_for_network_service=*/true);
+  }
+
+  if (factory_builder.RequiresFreshFactory()) {
+    network::mojom::URLLoaderFactoryParamsPtr params =
+        storage_partition->CreateURLLoaderFactoryParams();
+    auto factory =
+        std::move(factory_builder)
+            .Finish<mojo::PendingRemote<network::mojom::URLLoaderFactory>>(
+                storage_partition->GetNetworkContext(), std::move(params));
+    return std::make_unique<network::WrapperPendingSharedURLLoaderFactory>(
+        std::move(factory));
   }
 
   return std::make_unique<network::PendingSharedURLLoaderFactoryWithBuilder>(
@@ -938,8 +950,8 @@ void DownloadManagerImpl::CreateNewDownloadItemToStart(
 
   download::DownloadItemImpl* download = CreateActiveItem(id, *info);
   if (delegate_ && info->save_info) {
-    info->save_info->needs_obfuscation =
-        delegate_->ShouldObfuscateDownload(download);
+    info->needs_obfuscation = delegate_->ShouldObfuscateDownload(download);
+    info->save_info->needs_obfuscation = info->needs_obfuscation;
     info->save_info->total_bytes = info->total_bytes;
   }
   content::devtools_instrumentation::WillBeginDownload(info.get(), download);
@@ -1199,6 +1211,19 @@ void DownloadManagerImpl::InterceptNavigation(
   ui::PageTransition transition_type =
       static_cast<ui::PageTransition>(resource_request->transition_type);
 
+  // Capture the initiator's StoragePartitionConfig now so that the download is
+  // associated with the correct partition even if the initiating frame is
+  // detached before CheckDownloadAllowed() completes.
+  auto storage_partition_config =
+      StoragePartitionConfig::CreateDefault(browser_context_);
+  auto* ftn = FrameTreeNode::GloballyFindByID(frame_tree_node_id);
+  if (ftn && ftn->current_frame_host()) {
+    storage_partition_config = ftn->current_frame_host()
+                                   ->GetSiteInstance()
+                                   ->GetSecurityPrincipal()
+                                   .GetStoragePartitionConfig();
+  }
+
   WebContents::Getter web_contents_getter =
       base::BindRepeating(WebContents::FromFrameTreeNodeId, frame_tree_node_id);
 
@@ -1208,7 +1233,7 @@ void DownloadManagerImpl::InterceptNavigation(
           weak_factory_.GetWeakPtr(), frame_tree_node_id,
           std::move(resource_request), std::move(url_chain), cert_status,
           std::move(response_head), std::move(response_body),
-          std::move(url_loader_client_endpoints));
+          std::move(url_loader_client_endpoints), storage_partition_config);
 
   delegate_->CheckDownloadAllowed(
       std::move(web_contents_getter), url, method, std::move(request_initiator),
@@ -1216,11 +1241,21 @@ void DownloadManagerImpl::InterceptNavigation(
       mime_type, transition_type, std::move(on_download_checks_done));
 }
 
-int DownloadManagerImpl::RemoveDownloadsByURLAndTime(
+void DownloadManagerImpl::RemoveDownloadsByURLAndTime(
     const base::RepeatingCallback<bool(const GURL&)>& url_filter,
     base::Time remove_begin,
-    base::Time remove_end) {
-  int count = 0;
+    base::Time remove_end,
+    base::OnceClosure callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  if (!IsManagerInitialized()) {
+    on_initialized_callbacks_.push_back(
+        base::BindOnce(&DownloadManagerImpl::RemoveDownloadsByURLAndTime,
+                       weak_factory_.GetWeakPtr(), url_filter, remove_begin,
+                       remove_end, std::move(callback)));
+    return;
+  }
+
   auto it = downloads_by_guid_.begin();
   while (it != downloads_by_guid_.end()) {
     download::DownloadItemImpl* download = it->second;
@@ -1233,10 +1268,12 @@ int DownloadManagerImpl::RemoveDownloadsByURLAndTime(
         download->GetStartTime() >= remove_begin &&
         (remove_end.is_null() || download->GetStartTime() < remove_end)) {
       download->Remove();
-      count++;
     }
   }
-  return count;
+
+  if (callback) {
+    std::move(callback).Run();
+  }
 }
 
 bool DownloadManagerImpl::CanDownload(
@@ -1303,7 +1340,8 @@ download::DownloadItem* DownloadManagerImpl::CreateDownloadItem(
     bool opened,
     base::Time last_access_time,
     bool transient,
-    const std::vector<download::DownloadItem::ReceivedSlice>& received_slices) {
+    const std::vector<download::DownloadItem::ReceivedSlice>& received_slices,
+    const base::FilePath& display_name) {
   // Retrieve the in-progress download if it exists. Notice that this also
   // removes it from |in_progress_downloads_|.
   auto in_progress_download = RetrieveInProgressDownload(id);
@@ -1352,7 +1390,10 @@ download::DownloadItem* DownloadManagerImpl::CreateDownloadItem(
 #if BUILDFLAG(IS_ANDROID)
   if (target_path.IsContentUri()) {
     base::FilePath android_display_name =
-        in_progress_manager_->GetDownloadDisplayName(target_path);
+        base::FeatureList::IsEnabled(
+            download::features::kRetrieveDisplayNamesForHistoryDownloads)
+            ? display_name
+            : in_progress_manager_->GetDownloadDisplayName(target_path);
     if (!android_display_name.empty())
       item->SetDisplayName(android_display_name);
     else
@@ -1399,6 +1440,14 @@ void DownloadManagerImpl::PostInitialization(
         base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
             FROM_HERE, std::move(load_history_downloads_cb_));
       }
+      {
+        std::vector<base::OnceClosure> callbacks =
+            std::move(active_downloads_callbacks_);
+        for (auto& cb : callbacks) {
+          base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+              FROM_HERE, std::move(cb));
+        }
+      }
       break;
     case DOWNLOAD_INITIALIZATION_DEPENDENCY_NONE:
     default:
@@ -1407,7 +1456,8 @@ void DownloadManagerImpl::PostInitialization(
 
   // Download manager is only initialized if both history db and in progress
   // cache are initialized.
-  bool history_loaded = history_db_initialized_ || IsOffTheRecord();
+  bool history_loaded = history_db_initialized_ || IsOffTheRecord() ||
+                        !delegate_ || !delegate_->SupportsHistoryLoading();
   if (!history_loaded || !in_progress_cache_initialized_)
     return;
 
@@ -1451,6 +1501,12 @@ void DownloadManagerImpl::OnDownloadManagerInitialized() {
   in_progress_manager_->OnAllInprogressDownloadsLoaded();
   for (auto& observer : observers_)
     observer.OnManagerInitialized();
+
+  std::vector<base::OnceClosure> callbacks =
+      std::move(on_initialized_callbacks_);
+  for (auto& callback : callbacks) {
+    std::move(callback).Run();
+  }
 }
 
 bool DownloadManagerImpl::IsManagerInitialized() {
@@ -1512,6 +1568,19 @@ void DownloadManagerImpl::GetUninitializedActiveDownloadsIfAny(
     downloads->push_back(it.get());
 }
 
+void DownloadManagerImpl::WaitForActiveDownloadsInitialization(
+    base::OnceClosure callback) {
+  if (callback.is_null()) {
+    return;
+  }
+  if (in_progress_cache_initialized_) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(callback));
+    return;
+  }
+  active_downloads_callbacks_.push_back(std::move(callback));
+}
+
 void DownloadManagerImpl::OpenDownload(download::DownloadItemImpl* download) {
   if (delegate_)
     delegate_->OpenDownload(download);
@@ -1537,6 +1606,7 @@ void DownloadManagerImpl::InterceptNavigationOnChecksComplete(
     network::mojom::URLResponseHeadPtr response_head,
     mojo::ScopedDataPipeConsumerHandle response_body,
     network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
+    const StoragePartitionConfig& storage_partition_config,
     bool is_download_allowed) {
   if (!is_download_allowed) {
     DropDownload();
@@ -1547,17 +1617,12 @@ void DownloadManagerImpl::InterceptNavigationOnChecksComplete(
   int render_frame_id = -1;
   GURL site_url, tab_url, tab_referrer_url;
   RenderFrameHost* render_frame_host = nullptr;
-  auto storage_partition_config =
-      StoragePartitionConfig::CreateDefault(browser_context_);
   auto* ftn = FrameTreeNode::GloballyFindByID(frame_tree_node_id);
   if (ftn) {
     render_frame_host = ftn->current_frame_host();
     if (render_frame_host) {
       render_process_id = render_frame_host->GetProcess()->GetDeprecatedID();
       render_frame_id = render_frame_host->GetRoutingID();
-      storage_partition_config = render_frame_host->GetSiteInstance()
-                                     ->GetSecurityPrincipal()
-                                     .GetStoragePartitionConfig();
     }
     auto* web_contents = WebContentsImpl::FromFrameTreeNode(ftn);
     DCHECK(web_contents);
@@ -1620,7 +1685,9 @@ void DownloadManagerImpl::BeginResourceDownloadOnChecksComplete(
   DCHECK_EQ(params->url().SchemeIsBlob(), bool{blob_url_loader_factory});
   std::unique_ptr<network::PendingSharedURLLoaderFactory>
       pending_url_loader_factory;
-  if (blob_url_loader_factory) {
+  if (params->url_loader_factory()) {
+    pending_url_loader_factory = params->take_url_loader_factory();
+  } else if (blob_url_loader_factory) {
     DCHECK(params->url().SchemeIsBlob());
     pending_url_loader_factory = blob_url_loader_factory->Clone();
   } else if (params->url().SchemeIsFile()) {
@@ -1635,8 +1702,9 @@ void DownloadManagerImpl::BeginResourceDownloadOnChecksComplete(
   } else if (rfh && params->url().SchemeIs(content::kChromeUIScheme)) {
     pending_url_loader_factory =
         std::make_unique<network::WrapperPendingSharedURLLoaderFactory>(
-            CreateWebUIURLLoaderFactory(rfh, params->url().GetScheme(),
-                                        base::flat_set<std::string>()));
+            CreateWebUIURLLoaderFactoryWithoutOriginLock(
+                WebUIURLLoaderFactoryPasskey::GetPassKey(), rfh,
+                params->url().GetScheme(), base::flat_set<std::string>()));
   } else if (rfh && params->url().SchemeIsFileSystem()) {
     StoragePartitionImpl* storage_partition = GetStoragePartitionForConfig(
         browser_context_, storage_partition_config);

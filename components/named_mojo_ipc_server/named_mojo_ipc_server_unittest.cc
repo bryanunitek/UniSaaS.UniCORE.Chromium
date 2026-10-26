@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "base/command_line.h"
 #include "base/functional/bind.h"
@@ -36,7 +37,6 @@
 #include "components/named_mojo_ipc_server/named_mojo_ipc_test_util.h"
 #include "components/named_mojo_ipc_server/testing.test-mojom.h"
 #include "components/test/test_switches.h"
-#include "mojo/core/embedder/embedder.h"
 #include "mojo/core/embedder/scoped_ipc_support.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
@@ -195,7 +195,7 @@ void NamedMojoIpcServerTest::CreateIpcServer(EndpointOptions options) {
       options, base::BindRepeating([](test::mojom::Echo* impl,
                                       const ConnectionInfo&) { return impl; },
                                    this));
-  ipc_server_->set_on_server_endpoint_created_callback_for_testing(
+  ipc_server_->set_on_server_endpoint_created_callback(
       base::BindRepeating(&NamedMojoIpcServerTest::OnServerEndpointCreated,
                           base::Unretained(this)));
 }
@@ -217,10 +217,8 @@ base::Process NamedMojoIpcServerTest::LaunchClientProcess(
                              MessagePipeTypeToString(GetParam()));
   if (GetParam() == MessagePipeType::ISOLATED) {
     // Make sure the new process is a broker, because isolated connections are
-    // only supported between two brokers when ipcz is enabled.
-    if (mojo::core::IsMojoIpczEnabled()) {
-      cmd_line.AppendSwitch(switches::kInitializeMojoAsBroker);
-    }
+    // only supported between two brokers.
+    cmd_line.AppendSwitch(switches::kInitializeMojoAsBroker);
   }
   return base::SpawnMultiProcessTestChild(kEchoClientName, cmd_line,
                                           /* options= */ {});
@@ -409,6 +407,26 @@ TEST_P(NamedMojoIpcServerTest, IpcServerRestarted_NewIpcsCanBeMade) {
 
   child_process = LaunchClientProcess();
   WaitForProcessExit(child_process);
+}
+
+TEST_P(NamedMojoIpcServerTest, SendInvitationFlagsCallback_CalledPerClient) {
+  ipc_server_.reset();
+  std::vector<base::ProcessId> callback_pids;
+  EndpointOptions options;
+  options.send_invitation_flags_callback = base::BindLambdaForTesting(
+      [&](const ConnectionInfo& info) -> MojoSendInvitationFlags {
+        callback_pids.push_back(info.pid);
+        return MOJO_SEND_INVITATION_FLAG_NONE;
+      });
+  CreateIpcServer(std::move(options));
+  ipc_server_->StartServer();
+  WaitForServerEndpointCreated();
+
+  base::Process child_process = LaunchClientProcess();
+  base::ProcessId child_pid = child_process.Pid();
+  EXPECT_EQ(0, WaitForProcessExit(child_process));
+  EXPECT_EQ(child_pid, last_echo_string_peer_pid_);
+  EXPECT_THAT(callback_pids, testing::ElementsAre(child_pid));
 }
 
 #if BUILDFLAG(IS_LINUX)

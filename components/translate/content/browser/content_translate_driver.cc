@@ -4,14 +4,22 @@
 
 #include "components/translate/content/browser/content_translate_driver.h"
 
+#include "pdf/buildflags.h"
+#if BUILDFLAG(ENABLE_PDF)
+#include "components/translate/content/browser/pdf_translation_coordinator.h"
+#endif
+
 #include <memory>
 #include <string>
 #include <utility>
 
+#include "base/barrier_callback.h"
 #include "base/check.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/i18n/tag_converters.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
 #include "base/strings/utf_string_conversions.h"
@@ -20,9 +28,12 @@
 #include "components/google/core/common/google_util.h"
 #include "components/language/core/browser/url_language_histogram.h"
 #include "components/translate/content/browser/content_record_page_language.h"
+#include "components/translate/core/browser/translate_client.h"
 #include "components/translate/core/browser/translate_download_manager.h"
 #include "components/translate/core/browser/translate_manager.h"
 #include "components/translate/core/browser/translate_metrics_logger.h"
+#include "components/translate/core/common/translate_constants.h"
+#include "components/translate/core/common/translate_features.h"
 #include "components/translate/core/common/translate_metrics.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_controller.h"
@@ -34,19 +45,51 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
+#include "content/public/common/url_constants.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "url/gurl.h"
 
 namespace translate {
 
+using ::base::i18n::GetKnownLanguageTag;
+using ::base::i18n::GetLanguageTagFromString;
+using ::base::i18n::LanguageTag;
+
 namespace {
 
-// The maximum number of attempts we'll do to see if the page has finshed
+// The maximum number of attempts we'll do to see if the page has finished
 // loading before giving up the translation
 const int kMaxTranslateLoadCheckAttempts = 20;
+
+bool IsReadingModeSidePanel(const GURL& url) {
+  return url.SchemeIs(content::kChromeUIUntrustedScheme) &&
+         url.host() == kReadingModeSidePanelHost;
+}
+
+class ContentTranslateDriverUserData : public base::SupportsUserData::Data {
+ public:
+  explicit ContentTranslateDriverUserData(base::WeakPtr<ContentTranslateDriver> driver) : driver_(driver) {}
+  ContentTranslateDriver* driver() const { return driver_.get(); }
+ private:
+  const base::WeakPtr<ContentTranslateDriver> driver_;
+};
+
+const void* const kContentTranslateDriverUserDataKey = &kContentTranslateDriverUserDataKey;
+
 }  // namespace
+
+// static
+ContentTranslateDriver* ContentTranslateDriver::FromWebContents(content::WebContents* web_contents) {
+  if (!web_contents)
+    return nullptr;
+  auto* data = static_cast<ContentTranslateDriverUserData*>(
+      web_contents->GetUserData(kContentTranslateDriverUserDataKey));
+  return data ? data->driver() : nullptr;
+}
 
 ContentTranslateDriver::ContentTranslateDriver(
     content::WebContents& web_contents,
@@ -55,10 +98,25 @@ ContentTranslateDriver::ContentTranslateDriver(
       translate_manager_(nullptr),
       is_otr_context_(web_contents.GetBrowserContext()->IsOffTheRecord()),
       max_reload_check_attempts_(kMaxTranslateLoadCheckAttempts),
+      last_registered_page_id_(ukm::kInvalidSourceId),
+      active_page_seq_no_(0),
       next_page_seq_no_(0),
-      language_histogram_(url_language_histogram) {}
+      language_histogram_(url_language_histogram) {
+  web_contents.SetUserData(
+      kContentTranslateDriverUserDataKey,
+      std::make_unique<ContentTranslateDriverUserData>(
+          weak_pointer_factory_.GetWeakPtr()));
+}
 
 ContentTranslateDriver::~ContentTranslateDriver() {
+  // Reset `translate_manager_` first as a safeguard to ensure the raw pointer
+  // is cleared before dismantling user data and observer state during
+  // destruction.
+  translate_manager_ = nullptr;
+
+  if (web_contents()) {
+    web_contents()->RemoveUserData(kContentTranslateDriverUserDataKey);
+  }
   // Clear any remaining observers to avoid the CHECK in ObserverList's
   // destructor. This can happen if the WebContents is destroyed before
   // observers have a chance to unregister (e.g., Java-side cleanup callbacks
@@ -121,27 +179,86 @@ void ContentTranslateDriver::OnIsPageTranslatedChanged() {
     observer.OnIsPageTranslatedChanged(web_contents());
 }
 
+std::vector<mojom::TranslateAgent*> ContentTranslateDriver::GetTranslateAgents(
+    int page_seq_no) {
+  std::vector<mojom::TranslateAgent*> agents;
+  std::map<int, PageAgents>::const_iterator it =
+      translate_agents_.find(page_seq_no);
+  if (it == translate_agents_.end()) {
+    return agents;  // This page has navigated away.
+  }
+
+  if (!(GetContentsMimeType() == kPdfMimeType) &&
+      it->second.main_agent.is_bound()) {
+    agents.push_back(it->second.main_agent.get());
+  }
+#if !BUILDFLAG(IS_ANDROID)
+  if (it->second.side_panel_agent.is_bound() &&
+      (IsPdfTranslation() ||
+       (translate_manager_ && translate_manager_->translate_client() &&
+        translate_manager_->translate_client()->IsReadingModeOpen() &&
+        features::IsImprovedReadAloudEnabled()))) {
+    agents.push_back(it->second.side_panel_agent.get());
+  }
+#endif
+  return agents;
+}
+
 void ContentTranslateDriver::TranslatePage(int page_seq_no,
                                            std::string_view translate_script,
                                            std::string_view source_lang,
                                            std::string_view target_lang) {
-  auto it = translate_agents_.find(page_seq_no);
-  if (it == translate_agents_.end())
-    return;  // This page has navigated away.
+  std::vector<mojom::TranslateAgent*> agents = GetTranslateAgents(page_seq_no);
+  if (agents.empty()) {
+    return;
+  }
 
-  it->second->TranslateFrame(
-      std::string(translate_script), std::string(source_lang),
-      std::string(target_lang),
-      base::BindOnce(&ContentTranslateDriver::OnPageTranslated,
-                     base::Unretained(this)));
+  // Use a BarrierCallback to aggregate results from all agents and call
+  // OnAllPagesTranslated once all agents have finished translating.
+  auto barrier_callback = base::BarrierCallback<TranslationResult>(
+      agents.size(),
+      base::BindOnce(&ContentTranslateDriver::OnAllPagesTranslated,
+                     weak_pointer_factory_.GetWeakPtr()));
+
+  for (mojom::TranslateAgent* agent : agents) {
+    // Create a callback for each agent from the barrier callback.
+    auto single_agent_callback = base::BindOnce(
+        [](base::RepeatingCallback<void(TranslationResult)> barrier,
+           bool cancelled, const std::string& source_lang,
+           const std::string& translated_lang, TranslateErrors error_type) {
+          barrier.Run(
+              TranslationResult{cancelled,
+                                GetLanguageTagFromString(source_lang)
+                                    .value_or(GetKnownLanguageTag("und")),
+                                GetLanguageTagFromString(translated_lang)
+                                    .value_or(GetKnownLanguageTag("und")),
+                                error_type});
+        },
+        barrier_callback);
+
+    // TODO(b/527985575): Migrate TranslateFrame to use LanguageTag.
+    agent->TranslateFrame(
+        std::string(translate_script), std::string(source_lang),
+        std::string(target_lang),
+        mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+            std::move(single_agent_callback),
+            /*cancelled=*/true, std::string(source_lang),
+            std::string(target_lang), TranslateErrors::TRANSLATION_ERROR));
+  }
 }
 
 void ContentTranslateDriver::RevertTranslation(int page_seq_no) {
-  auto it = translate_agents_.find(page_seq_no);
+  std::map<int, PageAgents>::iterator it = translate_agents_.find(page_seq_no);
   if (it == translate_agents_.end())
     return;  // This page has navigated away.
 
-  it->second->RevertTranslation();
+  if (it->second.main_agent.is_bound()) {
+    it->second.main_agent->RevertTranslation();
+  }
+
+  if (it->second.side_panel_agent.is_bound()) {
+    it->second.side_panel_agent->RevertTranslation();
+  }
 }
 
 bool ContentTranslateDriver::IsIncognito() const {
@@ -228,6 +345,36 @@ void ContentTranslateDriver::InitiateTranslationIfReload(
                      0));
 }
 
+bool ContentTranslateDriver::IsPdfTranslation() {
+  return GetContentsMimeType() == kPdfMimeType &&
+         base::FeatureList::IsEnabled(translate::kEnableTranslatePdf);
+}
+
+void ContentTranslateDriver::MaybeTriggerPendingPdfTranslation() {
+  if (!IsPdfTranslation()) {
+    return;
+  }
+  std::optional<LanguageTag> pdf_source_lang =
+      translate_manager_->GetLanguageState()->pending_source_language();
+  std::optional<LanguageTag> pdf_target_lang =
+      translate_manager_->GetLanguageState()->pending_target_language();
+  if (!pdf_source_lang.has_value() || !pdf_target_lang.has_value()) {
+    return;
+  }
+
+  auto it = translate_agents_.find(active_page_seq_no_);
+  if (it == translate_agents_.end() ||
+      !it->second.side_panel_agent.is_bound()) {
+    return;
+  }
+
+  TranslatePage(active_page_seq_no_,
+                TranslateDownloadManager::GetInstance()->script()->data(),
+                pdf_source_lang->tag_string(), pdf_target_lang->tag_string());
+
+  translate_manager_->GetLanguageState()->ClearPendingTranslationLanguages();
+}
+
 // content::WebContentsObserver methods
 void ContentTranslateDriver::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
@@ -260,7 +407,7 @@ void ContentTranslateDriver::DidFinishNavigation(
     // The browser defers the RegisterPage() message on a prerendering page, so
     // this kind of data is noisy and should be filtered out.
     finish_navigation_time_ = base::TimeTicks();
-  } else if (navigation_handle->IsInPrimaryMainFrame()) {
+  } else {
     finish_navigation_time_ = base::TimeTicks::Now();
   }
 
@@ -285,7 +432,25 @@ void ContentTranslateDriver::DidFinishNavigation(
 }
 
 void ContentTranslateDriver::OnPageAway(int page_seq_no) {
-  translate_agents_.erase(page_seq_no);
+  std::map<int, PageAgents>::iterator it = translate_agents_.find(page_seq_no);
+  if (it == translate_agents_.end()) {
+    return;
+  }
+  it->second.main_agent.reset();
+  if (!it->second.side_panel_agent.is_bound()) {
+    translate_agents_.erase(it);
+  }
+}
+
+void ContentTranslateDriver::OnSidePanelAway(int page_seq_no) {
+  std::map<int, PageAgents>::iterator it = translate_agents_.find(page_seq_no);
+  if (it == translate_agents_.end()) {
+    return;
+  }
+  it->second.side_panel_agent.reset();
+  if (!it->second.main_agent.is_bound()) {
+    translate_agents_.erase(it);
+  }
 }
 
 void ContentTranslateDriver::AddReceiver(
@@ -297,41 +462,56 @@ void ContentTranslateDriver::RegisterPage(
     mojo::PendingRemote<translate::mojom::TranslateAgent> translate_agent,
     const translate::LanguageDetectionDetails& details,
     const bool page_level_translation_criteria_met) {
+  if (!web_contents()) {
+    return;
+  }
   base::TimeTicks language_determined_time = base::TimeTicks::Now();
+
+  int page_seq_no = UpdatePageSequenceNumber();
+  if (IsReadingModeSidePanel(details.url)) {
+    BindSidePanelTranslateAgent(page_seq_no, std::move(translate_agent));
+    return;
+  }
   ReportLanguageDeterminedDuration(finish_navigation_time_,
                                    language_determined_time);
 
   // If we have a language histogram (i.e. we're not in incognito), update it
   // with the detected language of every page visited.
-  if (language_histogram_ && details.is_model_reliable)
+  if (language_histogram_ && details.is_model_reliable) {
     language_histogram_->OnPageVisited(details.model_detected_language);
+  }
 
-  translate_agents_[++next_page_seq_no_].Bind(std::move(translate_agent));
-  translate_agents_[next_page_seq_no_].set_disconnect_handler(
-      base::BindOnce(&ContentTranslateDriver::OnPageAway,
-                     base::Unretained(this), next_page_seq_no_));
-  translate_manager_->set_current_seq_no(next_page_seq_no_);
+  BindMainTranslateAgent(page_seq_no, std::move(translate_agent));
 
   translate_manager_->GetLanguageState()->LanguageDetermined(
       details.adopted_language, page_level_translation_criteria_met);
 
-  if (web_contents()) {
+  if (IsPdfTranslation()) {
+#if BUILDFLAG(ENABLE_PDF)
+    content::RenderFrameHost* rfh = web_contents()->GetPrimaryMainFrame();
+    auto* coordinator =
+        PDFTranslationCoordinator::GetOrCreateForCurrentDocument(rfh);
+    coordinator->RunIfPdfIsTranslatable(base::BindOnce(
+        &TranslateManager::InitiateTranslation,
+        translate_manager_->GetWeakPtr(), details.adopted_language));
+#endif
+  } else {
     translate_manager_->InitiateTranslation(details.adopted_language);
-
-    // Save the page language on the navigation entry so it can be synced.
-    // TODO(crbug.com/40779913): The mojo IPC coming from the renderer might
-    // race with a navigation, so the page that sent this message might already
-    // be in the pending delete state after being navigated away from.
-    // Rearchitect the renderer-browser Mojo connection to be able to explicitly
-    // determine the document/content::Page with which this language
-    // determination event is associated, thus avoiding the potential for corner
-    // cases where the detected language is attributed to the wrong page.
-    auto* const entry = web_contents()->GetController().GetLastCommittedEntry();
-    SetPageLanguageInNavigation(details.adopted_language, entry);
   }
 
-  for (auto& observer : language_detection_observers())
+  // Save the page language on the navigation entry so it can be synced.
+  // TODO(crbug.com/40779913): The mojo IPC coming from the renderer might
+  // race with a navigation, so the page that sent this message might already
+  // be in the pending delete state after being navigated away from.
+  // Rearchitect the renderer-browser Mojo connection to be able to explicitly
+  // determine the document/content::Page with which this language
+  // determination event is associated, thus avoiding the potential for corner
+  // cases where the detected language is attributed to the wrong page.
+  auto* const entry = web_contents()->GetController().GetLastCommittedEntry();
+  SetPageLanguageInNavigation(details.adopted_language, entry);
+  for (LanguageDetectionObserver& observer : language_detection_observers()) {
     observer.OnLanguageDetermined(details);
+  }
 
   translate_manager_->GetActiveTranslateMetricsLogger()
       ->LogHTMLDocumentLanguage(details.html_root_language);
@@ -345,6 +525,38 @@ void ContentTranslateDriver::RegisterPage(
       details.contents.length() > 0);
 }
 
+void ContentTranslateDriver::OnAllPagesTranslated(
+    const std::vector<TranslationResult>& results) {
+  if (results.empty()) {
+    return;
+  }
+
+  bool any_cancelled = false;
+  TranslateErrors first_error = TranslateErrors::NONE;
+  LanguageTag source_lang = results.front().source_lang;
+  LanguageTag translated_lang = results.front().translated_lang;
+
+  for (const TranslationResult& result : results) {
+    if (result.cancelled) {
+      any_cancelled = true;
+    }
+    if (result.error_type != TranslateErrors::NONE &&
+        first_error == TranslateErrors::NONE) {
+      first_error = result.error_type;
+    }
+    if (source_lang == GetKnownLanguageTag("und")) {
+      source_lang = result.source_lang;
+    }
+    if (translated_lang == GetKnownLanguageTag("und")) {
+      translated_lang = result.translated_lang;
+    }
+  }
+
+  OnPageTranslated(
+      any_cancelled, std::string(source_lang.tag_string()),
+      std::string(translated_lang.tag_string()),
+      first_error);
+}
 void ContentTranslateDriver::OnPageTranslated(
     bool cancelled,
     const std::string& source_lang,
@@ -362,4 +574,60 @@ void ContentTranslateDriver::OnPageTranslated(
     observer.OnPageTranslated(source_lang, translated_lang, error_type);
 }
 
+int ContentTranslateDriver::UpdatePageSequenceNumber() {
+  ukm::SourceId page_id =
+      web_contents()->GetPrimaryMainFrame()->GetPageUkmSourceId();
+  if (active_page_seq_no_ == 0 || page_id != last_registered_page_id_) {
+    last_registered_page_id_ = page_id;
+    int old_page_seq_no = active_page_seq_no_;
+    active_page_seq_no_ = ++next_page_seq_no_;
+    translate_manager_->set_current_seq_no(active_page_seq_no_);
+
+    if (old_page_seq_no != 0) {
+      std::map<int, PageAgents>::iterator it =
+          translate_agents_.find(old_page_seq_no);
+      if (it != translate_agents_.end() &&
+          it->second.side_panel_agent.is_bound()) {
+        PageAgents& new_agents = translate_agents_[active_page_seq_no_];
+        new_agents.side_panel_agent = std::move(it->second.side_panel_agent);
+        new_agents.side_panel_agent.set_disconnect_handler(
+            base::BindOnce(&ContentTranslateDriver::OnSidePanelAway,
+                           base::Unretained(this), active_page_seq_no_));
+        if (!it->second.main_agent.is_bound()) {
+          translate_agents_.erase(it);
+        }
+      }
+    }
+  }
+  return active_page_seq_no_;
+}
+
+void ContentTranslateDriver::BindSidePanelTranslateAgent(
+    int page_seq_no,
+    mojo::PendingRemote<mojom::TranslateAgent> translate_agent) {
+  auto& agents = translate_agents_[page_seq_no];
+  agents.side_panel_agent.reset();
+  agents.side_panel_agent.Bind(std::move(translate_agent));
+  // Use a specific disconnect handler that doesn't erase the whole entry.
+  // base::Unretained(this) is safe here because `side_panel_agent` is owned
+  // by `translate_agents_`, which is owned by `this`. The callback is
+  // destroyed when the remote is destroyed, guaranteeing `this` outlives it.
+  agents.side_panel_agent.set_disconnect_handler(
+      base::BindOnce(&ContentTranslateDriver::OnSidePanelAway,
+                     base::Unretained(this), page_seq_no));
+}
+
+void ContentTranslateDriver::BindMainTranslateAgent(
+    int page_seq_no,
+    mojo::PendingRemote<mojom::TranslateAgent> translate_agent) {
+  auto& agents = translate_agents_[page_seq_no];
+  agents.main_agent.reset();
+  agents.main_agent.Bind(std::move(translate_agent));
+  // base::Unretained(this) is safe here because `main_agent` is owned by
+  // `translate_agents_`, which is owned by `this`. The callback is destroyed
+  // when the remote is destroyed, guaranteeing `this` outlives it.
+  agents.main_agent.set_disconnect_handler(
+      base::BindOnce(&ContentTranslateDriver::OnPageAway,
+                     base::Unretained(this), page_seq_no));
+}
 }  // namespace translate

@@ -17,6 +17,7 @@
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/platform/geometry/calculation_value.h"
 #include "third_party/blink/renderer/platform/geometry/length.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -83,7 +84,7 @@ class CSSToLengthConversionDataTest : public PageTestBase {
     DCHECK(root);
     if (options.css_zoom.has_value()) {
       root->SetInlineStyleProperty(CSSPropertyID::kZoom,
-                                   String::Format("%f", *options.css_zoom));
+                                   Format("{:f}", *options.css_zoom));
     }
     root->SetInlineStyleProperty(CSSPropertyID::kFontSize, "10px");
     root->SetInlineStyleProperty(CSSPropertyID::kFontFamily, "Ahem");
@@ -265,7 +266,7 @@ TEST_F(CSSToLengthConversionDataTest, StyleLessContainerUnitConversion) {
 TEST_F(CSSToLengthConversionDataTest, SetLineHeightSize) {
   CSSToLengthConversionData data = ConversionData();
   EXPECT_FLOAT_EQ(100.0f, ConvertPx(data, "1lh"));
-  Element* div = GetDocument().getElementById(AtomicString("div"));
+  Element* div = GetElementById("div");
   ASSERT_TRUE(div);
   SetLineHeightSize(*div, data);
   EXPECT_FLOAT_EQ(200.0f, ConvertPx(data, "1lh"));

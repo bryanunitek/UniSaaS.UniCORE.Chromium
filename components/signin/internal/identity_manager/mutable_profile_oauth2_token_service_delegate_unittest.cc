@@ -17,6 +17,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_util.h"
@@ -56,6 +57,7 @@
 #include "components/webdata/common/web_data_service_base.h"
 #include "components/webdata/common/web_database_service.h"
 #include "crypto/kdf.h"
+#include "crypto/sign.h"
 #include "google_apis/gaia/core_account_id.h"
 #include "google_apis/gaia/gaia_config.h"
 #include "google_apis/gaia/gaia_constants.h"
@@ -209,14 +211,15 @@ class MutableProfileOAuth2TokenServiceDelegateTest
   // `UnloadTokenDatabase` call is made.
   void LoadTokenDatabase(
       os_crypt_async::OSCryptAsync* os_crypt_override = nullptr) {
-    scoped_refptr<WebDatabaseService> web_database = new WebDatabaseService(
-        temp_dir_.GetPath().AppendASCII(kTestTokenDatabase),
-        base::SingleThreadTaskRunner::GetCurrentDefault(),
-        base::SingleThreadTaskRunner::GetCurrentDefault());
+    scoped_refptr<WebDatabaseService> web_database =
+        base::MakeRefCounted<WebDatabaseService>(
+            temp_dir_.GetPath().AppendASCII(kTestTokenDatabase),
+            base::SingleThreadTaskRunner::GetCurrentDefault(),
+            base::SingleThreadTaskRunner::GetCurrentDefault());
     web_database->AddTable(std::make_unique<TokenServiceTable>());
     web_database->LoadDatabase(os_crypt_override ? os_crypt_override
                                                  : os_crypt_.get());
-    token_web_data_ = new TokenWebData(
+    token_web_data_ = base::MakeRefCounted<TokenWebData>(
         web_database, base::SingleThreadTaskRunner::GetCurrentDefault());
     token_web_data_->Init(base::NullCallback());
   }
@@ -1751,7 +1754,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest, TokenReencryption) {
   // This closure sets up the environment for the test, and also creates a
   // cleanup at the end of the scope of the test.
   auto SetUpTestAndReturnScopedCleanup =
-      [this](bool new_encryption_enabled, bool expect_reencrypt,
+      [this](bool new_encryption_enabled,
              base::HistogramBase::Count32 expected_writes)
       -> base::ScopedClosureRunner {
     std::vector<std::pair<size_t, std::unique_ptr<os_crypt_async::KeyProvider>>>
@@ -1775,7 +1778,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest, TokenReencryption) {
     InitializeOAuth2ServiceDelegate();
 
     return base::ScopedClosureRunner(base::BindLambdaForTesting(
-        [this, expected_prefix, expect_reencrypt, expected_writes,
+        [this, expected_prefix, expected_writes,
          histograms = std::move(histograms), os_crypt = std::move(os_crypt)]() {
           UnloadTokenDatabase();
           {
@@ -1798,8 +1801,6 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest, TokenReencryption) {
           }
           test_service_observation_.Reset();
           oauth2_service_delegate_->Shutdown();
-          histograms->ExpectUniqueSample("Signin.ReencryptTokensInDb",
-                                         expect_reencrypt, 1u);
           histograms->ExpectUniqueSample("Signin.TokenTable.SetTokenResult",
                                          /*kSuccess*/ 0, expected_writes);
         }));
@@ -1809,7 +1810,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest, TokenReencryption) {
     // Expect two writes. They are both from the calls to `AddAuthTokenManually`
     // to set up the database.
     auto cleanup = SetUpTestAndReturnScopedCleanup(
-        /*new_encryption_enabled=*/false, /*expect_reencrypt=*/false,
+        /*new_encryption_enabled=*/false,
         /*expected_writes=*/2);
 
     // Verify DB is clean.
@@ -1837,7 +1838,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest, TokenReencryption) {
     // token. Two writes only indicates that the invalid token was not
     // re-encrypted to the database, as expected.
     auto cleanup = SetUpTestAndReturnScopedCleanup(
-        /*new_encryption_enabled=*/true, /*expect_reencrypt=*/true,
+        /*new_encryption_enabled=*/true,
         /*expected_writes=*/2);
 
     // Add another invalid token. This will be not re-encrypted, and removed
@@ -1860,8 +1861,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest, TokenReencryption) {
     // Expect no writes. The tokens have already been migrated to the new key so
     // no writes are needed.
     auto cleanup = SetUpTestAndReturnScopedCleanup(
-        /*new_encryption_enabled=*/true, /*expect_reencrypt=*/false,
-        /*expected_writes=*/0);
+        /*new_encryption_enabled=*/true, /*expected_writes=*/0);
 
     ResetObserverCounts();
     oauth2_service_delegate_->LoadCredentials(primary_account);
@@ -1878,8 +1878,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest, TokenReencryption) {
     // One write is expected here. The single token is migrated back to the old
     // key.
     auto cleanup = SetUpTestAndReturnScopedCleanup(
-        /*new_encryption_enabled=*/false, /*expect_reencrypt=*/true,
-        /*expected_writes=*/1);
+        /*new_encryption_enabled=*/false, /*expected_writes=*/1);
 
     ResetObserverCounts();
     oauth2_service_delegate_->LoadCredentials(primary_account);
@@ -2627,8 +2626,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest,
       std::optional<signin::BindingKeyRegistrationTokenResult>>
       future;
   EXPECT_FALSE(oauth2_service_delegate_->GenerateBindingKeyRegistrationToken(
-      {crypto::SignatureVerifier::ECDSA_SHA256}, "test_code",
-      future.GetCallback()));
+      {crypto::sign::ECDSA_SHA256}, "test_code", future.GetCallback()));
 }
 
 TEST_F(MutableProfileOAuth2TokenServiceDelegateTest,
@@ -2645,8 +2643,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest,
       std::optional<signin::BindingKeyRegistrationTokenResult>>
       future;
   EXPECT_TRUE(oauth2_service_delegate_->GenerateBindingKeyRegistrationToken(
-      {crypto::SignatureVerifier::ECDSA_SHA256}, "test_code",
-      future.GetCallback()));
+      {crypto::sign::ECDSA_SHA256}, "test_code", future.GetCallback()));
   EXPECT_FALSE(future.Get().has_value());
 }
 
@@ -2676,8 +2673,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest,
       std::optional<signin::BindingKeyRegistrationTokenResult>>
       future_1;
   EXPECT_TRUE(oauth2_service_delegate_->GenerateBindingKeyRegistrationToken(
-      {crypto::SignatureVerifier::ECDSA_SHA256}, "test_code_1",
-      future_1.GetCallback()));
+      {crypto::sign::ECDSA_SHA256}, "test_code_1", future_1.GetCallback()));
   EXPECT_FALSE(future_1.Get().has_value());
 
   // Revoking credentials removes the binding key and resets the registration
@@ -2693,8 +2689,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest,
       std::optional<signin::BindingKeyRegistrationTokenResult>>
       future_2;
   EXPECT_TRUE(oauth2_service_delegate_->GenerateBindingKeyRegistrationToken(
-      {crypto::SignatureVerifier::ECDSA_SHA256}, "test_code_2",
-      future_2.GetCallback()));
+      {crypto::sign::ECDSA_SHA256}, "test_code_2", future_2.GetCallback()));
   EXPECT_FALSE(future_2.Get().has_value());
 }
 
@@ -2731,8 +2726,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest,
       std::optional<signin::BindingKeyRegistrationTokenResult>>
       future_1;
   EXPECT_TRUE(oauth2_service_delegate_->GenerateBindingKeyRegistrationToken(
-      {crypto::SignatureVerifier::ECDSA_SHA256}, "test_code_1",
-      future_1.GetCallback()));
+      {crypto::sign::ECDSA_SHA256}, "test_code_1", future_1.GetCallback()));
   EXPECT_FALSE(future_1.Get().has_value());
 
   // Revoking all credentials removes all binding keys and resets the
@@ -2749,8 +2743,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest,
       std::optional<signin::BindingKeyRegistrationTokenResult>>
       future_2;
   EXPECT_TRUE(oauth2_service_delegate_->GenerateBindingKeyRegistrationToken(
-      {crypto::SignatureVerifier::ECDSA_SHA256}, "test_code_2",
-      future_2.GetCallback()));
+      {crypto::sign::ECDSA_SHA256}, "test_code_2", future_2.GetCallback()));
   EXPECT_FALSE(future_2.Get().has_value());
 }
 
@@ -2779,8 +2772,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest,
       std::optional<signin::BindingKeyRegistrationTokenResult>>
       future_1;
   EXPECT_TRUE(oauth2_service_delegate_->GenerateBindingKeyRegistrationToken(
-      {crypto::SignatureVerifier::ECDSA_SHA256}, "test_code_1",
-      future_1.GetCallback()));
+      {crypto::sign::ECDSA_SHA256}, "test_code_1", future_1.GetCallback()));
   EXPECT_FALSE(future_1.Get().has_value());
 
   // Invalidating the refresh token removes the binding key and resets the
@@ -2797,8 +2789,7 @@ TEST_F(MutableProfileOAuth2TokenServiceDelegateTest,
       std::optional<signin::BindingKeyRegistrationTokenResult>>
       future_2;
   EXPECT_TRUE(oauth2_service_delegate_->GenerateBindingKeyRegistrationToken(
-      {crypto::SignatureVerifier::ECDSA_SHA256}, "test_code_2",
-      future_2.GetCallback()));
+      {crypto::sign::ECDSA_SHA256}, "test_code_2", future_2.GetCallback()));
   EXPECT_FALSE(future_2.Get().has_value());
 }
 

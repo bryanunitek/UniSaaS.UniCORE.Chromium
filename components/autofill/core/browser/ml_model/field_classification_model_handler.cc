@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
@@ -33,10 +34,9 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/types/optional_ref.h"
-#include "base/types/zip.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/form_parsing/autofill_parsing_utils.h"
+#include "components/autofill/core/browser/form_parsing/autofill_parsing_util.h"
 #include "components/autofill/core/browser/form_parsing/field_candidates.h"
 #include "components/autofill/core/browser/form_parsing/form_field_parser.h"
 #include "components/autofill/core/browser/heuristic_source.h"
@@ -164,15 +164,12 @@ void FieldClassificationModelHandler::ApplySmallFormRules(
     bool ignore_small_forms) const {
   FieldCandidatesMap field_candidates_map;
   for (size_t i = 0; i < predicted_types.size(); ++i) {
-    FieldCandidates candidates;
-    candidates.AddFieldCandidate(
-        predicted_types[i],
+    field_candidates_map.try_emplace(
+        form.fields()[i].global_id(), predicted_types[i],
         // Arbitrary value to satisfy the API - not used.
         MatchInfo{.matched_attribute = MatchInfo::MatchAttribute::kName},
-        {/*is_name_or_high_quality_label_match=*/true,
-         /*parser_type=*/HeuristicParser::kName});
-    field_candidates_map.try_emplace(form.fields()[i].global_id(),
-                                     std::move(candidates));
+        FieldCandidatePriority{/*is_name_or_high_quality_label_match=*/true,
+                               /*parser_type=*/HeuristicParser::kName});
   }
 
   FormFieldParser::ClearCandidatesIfHeuristicsDidNotFindEnoughFields(
@@ -286,8 +283,8 @@ void FieldClassificationModelHandler::GetModelPredictionsForForm(
       state_->encoder.EncodeForm(form);
 
   if (prediction_log) {
-    for (auto [encoded_field, field_prediction] :
-         base::zip(encoded_input, prediction_log.value()->field_predictions)) {
+    for (auto [encoded_field, field_prediction] : std::views::zip(
+             encoded_input, prediction_log.value()->field_predictions)) {
       field_prediction->tokenized_field_representation = base::ToVector(
           encoded_field,
           [this](FieldClassificationModelEncoder::TokenId token_id) {
@@ -408,30 +405,33 @@ void FieldClassificationModelHandler::OnModelUpdated(
   }
   // The model was loaded or updated.
   state_.reset();
-  ModelState state;
+  optimization_guide::proto::AutofillFieldClassificationModelMetadata metadata;
   if (!model_info->model_metadata ||
-      !state.metadata.ParseFromString(model_info->model_metadata->value())) {
+      !metadata.ParseFromString(model_info->model_metadata->value())) {
     // The model should always come with metadata - but since this comes from
     // the server-side and might change in the future, it might fail.
     return;
   }
-  state.encoder = FieldClassificationModelEncoder(
-      state.metadata.input_token(), state.metadata.encoding_parameters());
+  FieldClassificationModelEncoder encoder(metadata.input_token(),
+                                          metadata.encoding_parameters());
   // Protobuf's `RepeatedPtrField::Clear()` only resets the size to 0
   // and does not free the underlying memory. See:
   // https://source.chromium.org/chromium/chromium/src/+/main:third_party/protobuf/src/google/protobuf/repeated_ptr_field.h;l=715-728;drc=84e9f8cb8ba9621be941c81af04d33df743f7de4
   // Since `metadata` is kept in memory indefinitely, we forcefully free the
   // memory by swapping it with an empty array.
-  state.metadata.clear_input_token();
+  metadata.clear_input_token();
   google::protobuf::RepeatedPtrField<std::string> empty_tokens;
-  state.metadata.mutable_input_token()->Swap(&empty_tokens);
+  metadata.mutable_input_token()->Swap(&empty_tokens);
 
   supported_types_.clear();
-  for (int type : state.metadata.output_type()) {
+  for (int type : metadata.output_type()) {
     supported_types_.insert(
         ToSafeFieldType(FieldType(type)).value_or(NO_SERVER_DATA));
   }
-  state_.emplace(std::move(state));
+  state_.emplace(ModelState{
+      .metadata = std::move(metadata),
+      .encoder = std::move(encoder),
+  });
 
   // Invalidate cached predictions, if any.
   predictions_cache_.Clear();
@@ -504,7 +504,7 @@ ModelPredictions FieldClassificationModelHandler::BuildModelPredictions(
     base::span<const FieldType> predicted_types) const {
   std::vector<std::pair<FieldGlobalId, FieldType>> field_predictions;
   field_predictions.reserve(predicted_types.size());
-  for (auto [field, type] : base::zip(form.fields(), predicted_types)) {
+  for (auto [field, type] : std::views::zip(form.fields(), predicted_types)) {
     field_predictions.emplace_back(field.global_id(), type);
   }
   return ModelPredictions(GetHeuristicSource(optimization_target_),
@@ -543,20 +543,18 @@ FieldClassificationModelHandler::CalculateModelInputHash(
 
 std::string FieldClassificationModelHandler::TokenIdToString(
     FieldClassificationModelEncoder::TokenId token_id) const {
-  if (token_id.value() == 0) {
-    // Padding token, always encoded as 0.
+  if (token_id == FieldClassificationModelEncoderDictionary::kPaddingTokenId) {
     return "";
   }
-  if (token_id.value() == 1) {
-    // Unknown, out-of-vocabulary token, always encoded as 1.
+  if (token_id == FieldClassificationModelEncoderDictionary::kUnknownTokenId) {
     return "[UNK]";
   }
   if (token_id == state_->encoder.GetClsToken()) {
     return "[CLS]";
   }
-  std::string token = state_->encoder.FindTokenById(token_id);
+  std::string_view token = state_->encoder.FindTokenById(token_id);
   if (!token.empty()) {
-    return token;
+    return std::string(token);
   }
   return "[INVALID]";
 }

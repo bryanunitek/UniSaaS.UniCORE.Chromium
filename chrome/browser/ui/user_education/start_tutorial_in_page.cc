@@ -6,7 +6,7 @@
 
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
@@ -15,16 +15,18 @@
 #include "chrome/browser/user_education/user_education_service_factory.h"
 #include "components/user_education/common/feature_promo/feature_promo_controller.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace {
 
 class StartTutorialInPageImpl : public StartTutorialInPage {
  public:
-  explicit StartTutorialInPageImpl(Browser* browser, Params params)
-      : browser_(browser->AsWeakPtr()), callback_(std::move(params.callback)) {
-    DCHECK(callback_);
-    DCHECK(browser_);
-    DCHECK(params.tutorial_id.has_value());
+  explicit StartTutorialInPageImpl(BrowserWindowInterface* browser,
+                                   Params params)
+      : browser_(browser->GetWeakPtr()), callback_(std::move(params.callback)) {
+    CHECK(callback_, base::NotFatalUntil::M162);
+    CHECK(browser_, base::NotFatalUntil::M162);
+    CHECK(params.tutorial_id.has_value(), base::NotFatalUntil::M162);
     tutorial_id_ = params.tutorial_id.value();
 
     auto* tutorial_service = GetTutorialService();
@@ -80,7 +82,7 @@ class StartTutorialInPageImpl : public StartTutorialInPage {
           UserEducationServiceFactory::GetForBrowserContext(
               browser_->GetProfile());
       if (service) {
-        return &service->tutorial_service();
+        return service->tutorial_service();
       }
     }
     return nullptr;
@@ -89,7 +91,7 @@ class StartTutorialInPageImpl : public StartTutorialInPage {
   void OnTutorialCompleted() { delete this; }
   void OnTutorialAborted() { delete this; }
 
-  const base::WeakPtr<Browser> browser_;
+  const base::WeakPtr<BrowserWindowInterface> browser_;
   user_education::TutorialIdentifier tutorial_id_;
   Callback callback_;
   THREAD_CHECKER(thread_checker_);
@@ -107,8 +109,9 @@ StartTutorialInPage::Params::~Params() = default;
 StartTutorialInPage::StartTutorialInPage() = default;
 StartTutorialInPage::~StartTutorialInPage() = default;
 
-base::WeakPtr<StartTutorialInPage> StartTutorialInPage::Start(Browser* browser,
-                                                              Params params) {
+base::WeakPtr<StartTutorialInPage> StartTutorialInPage::Start(
+    BrowserWindowInterface* browser,
+    Params params) {
   return (new StartTutorialInPageImpl(browser, std::move(params)))
       ->GetWeakPtr();
 }

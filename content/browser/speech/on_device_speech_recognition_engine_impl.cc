@@ -8,9 +8,12 @@
 #include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "components/optimization_guide/core/model_execution/model_broker_client.h"
+#include "components/optimization_guide/core/optimization_guide_logger.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
@@ -23,6 +26,7 @@
 #include "media/base/media_switches.h"
 #include "media/mojo/mojom/audio_data.mojom.h"
 #include "media/mojo/mojom/speech_recognizer.mojom.h"
+#include "services/on_device_model/public/cpp/features.h"
 
 namespace content {
 
@@ -31,6 +35,17 @@ constexpr char kWebSpeechTinyGemmaDuration[] =
     "Accessibility.WebSpeech.TinyGemma.Duration";
 constexpr char kWebSpeechGeminiNanoDuration[] =
     "Accessibility.WebSpeech.GeminiNano.Duration";
+
+std::string AsrFlagSnapshot() {
+  namespace f = on_device_model::features;
+  if (!base::FeatureList::IsEnabled(f::kOnDeviceModelAsrDecoderPrefill)) {
+    return "asr_decoder_prefill=disabled";
+  }
+  return base::StringPrintf(
+      "asr_decoder_prefill=enabled, asr_decoder_prefill_backoff=%d",
+      f::kOnDeviceModelAsrDecoderPrefillBackoff.Get());
+}
+
 }  // namespace
 
 OnDeviceSpeechRecognitionEngine::Core::Core(
@@ -47,7 +62,8 @@ OnDeviceSpeechRecognitionEngine::OnDeviceSpeechRecognitionEngine(
           &OnDeviceSpeechRecognitionEngine::OnAsrStreamCreated,
           weak_factory_.GetWeakPtr())));
   core_.AsyncCall(&Core::CreateModelClient)
-      .WithArgs(config_.initial_context.global_id, config_.quality);
+      .WithArgs(config_.initial_context.global_id, config_.quality,
+                config_.language);
 }
 
 OnDeviceSpeechRecognitionEngine::~OnDeviceSpeechRecognitionEngine() = default;
@@ -69,6 +85,8 @@ void OnDeviceSpeechRecognitionEngine::EndRecognition() {
                                    audio_duration_);
   }
 
+  core_.AsyncCall(&Core::LogRecognitionEnded).WithArgs(audio_duration_);
+
   core_.Reset();
   asr_stream_.reset();
   asr_stream_responder_.reset();
@@ -85,21 +103,50 @@ void OnDeviceSpeechRecognitionEngine::SetAudioParameters(
 void OnDeviceSpeechRecognitionEngine::TakeAudioChunk(const AudioChunk& data) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_checker_);
 
-  audio_duration_ += media::AudioTimestampHelper::FramesToTime(
-      data.NumSamples(), audio_parameters_.sample_rate());
+  const int channels = audio_parameters_.channels();
+  if (audio_parameters_.sample_rate() > 0) {
+    const int channel_count = channels > 0 ? channels : 1;
+    audio_duration_ += media::AudioTimestampHelper::FramesToTime(
+        data.NumSamples() / channel_count, audio_parameters_.sample_rate());
+  }
 
-  const size_t num_samples = data.NumSamples() * audio_parameters_.channels();
-  std::vector<int16_t> pcm_data_vector(num_samples);
-  auto source_bytes = data.data();
-  auto dest_bytes = base::as_writable_bytes(base::span(pcm_data_vector));
-  CHECK_EQ(source_bytes.size(), dest_bytes.size());
-  dest_bytes.copy_from(source_bytes);
-  accumulated_audio_data_.insert(accumulated_audio_data_.end(),
-                                 pcm_data_vector.begin(),
-                                 pcm_data_vector.end());
+  auto samples = data.SamplesData16AsSpan();
+  if (channels <= 1) {
+    accumulated_audio_data_.insert(accumulated_audio_data_.end(),
+                                   samples.begin(), samples.end());
+  } else {
+    while (!samples.empty()) {
+      const auto frame = samples.take_first(static_cast<size_t>(channels));
+      int32_t sum = 0;
+      for (const int16_t sample : frame) {
+        sum += sample;
+      }
+      accumulated_audio_data_.push_back(static_cast<int16_t>(sum / channels));
+    }
+  }
+
+  // Limit accumulated audio data buffer to max 10 seconds to avoid unbounded
+  // growth while model loads.
+  constexpr base::TimeDelta kMaxBufferDuration = base::Seconds(10);
+  constexpr int kFallbackSampleRateHz = 16000;
+  const int sample_rate = audio_parameters_.sample_rate() > 0
+                              ? audio_parameters_.sample_rate()
+                              : kFallbackSampleRateHz;
+  const size_t max_samples =
+      static_cast<size_t>(media::AudioTimestampHelper::TimeToFrames(
+          kMaxBufferDuration, sample_rate));
+  if (accumulated_audio_data_.size() > max_samples) {
+    accumulated_audio_data_.erase(
+        accumulated_audio_data_.begin(),
+        accumulated_audio_data_.begin() +
+            (accumulated_audio_data_.size() - max_samples));
+  }
 
   if (asr_stream_.is_bound()) {
-    asr_stream_->AddAudioChunk(ConvertAccumulatedAudioData());
+    auto chunk = ConvertAccumulatedAudioData();
+    if (chunk) {
+      asr_stream_->AddAudioChunk(std::move(chunk));
+    }
   }
 }
 
@@ -114,6 +161,8 @@ void OnDeviceSpeechRecognitionEngine::OnResponse(
   for (const auto& r : result) {
     auto web_speech_result = media::mojom::WebSpeechRecognitionResult::New();
     web_speech_result->is_provisional = !r->is_final;
+    web_speech_result->audio_start_time = r->audio_start_time;
+    web_speech_result->audio_end_time = r->audio_end_time;
 
     constexpr float kSpeechRecognitionConfidence = 1.0f;
     web_speech_result->hypotheses.emplace_back(
@@ -121,7 +170,9 @@ void OnDeviceSpeechRecognitionEngine::OnResponse(
             base::UTF8ToUTF16(r->transcript), kSpeechRecognitionConfidence));
     recognition_results.push_back(std::move(web_speech_result));
   }
-  delegate_->OnSpeechRecognitionEngineResults(std::move(recognition_results));
+  if (delegate_) {
+    delegate_->OnSpeechRecognitionEngineResults(std::move(recognition_results));
+  }
 }
 
 void OnDeviceSpeechRecognitionEngine::AudioChunksEnded() {
@@ -138,9 +189,15 @@ int OnDeviceSpeechRecognitionEngine::GetDesiredAudioChunkDurationMs() const {
 
 void OnDeviceSpeechRecognitionEngine::Core::CreateModelClient(
     GlobalRenderFrameHostId global_id,
-    media::mojom::SpeechRecognitionQuality quality) {
+    media::mojom::SpeechRecognitionQuality quality,
+    const std::string& language) {
+  language_ = language;
   RenderFrameHost* rfh = RenderFrameHost::FromID(global_id);
   if (!rfh) {
+    return;
+  }
+
+  if (!GetContentClient() || !GetContentClient()->browser()) {
     return;
   }
 
@@ -155,6 +212,7 @@ void OnDeviceSpeechRecognitionEngine::Core::CreateModelClient(
                 kOnDeviceSpeechRecognition;
 
   if (model_broker_client_) {
+    logger_ = model_broker_client_->logger();
     model_broker_client_->RequestAssetsFor(feature);
     model_broker_client_->GetSubscriber(feature).WaitForClient(base::BindOnce(
         &Core::OnModelClientAvailable, weak_factory_.GetWeakPtr()));
@@ -173,12 +231,35 @@ void OnDeviceSpeechRecognitionEngine::Core::SetAudioParameters(
   TryCreateSession();
 }
 
+void OnDeviceSpeechRecognitionEngine::Core::LogRecognitionEnded(
+    base::TimeDelta audio_duration) {
+  if (!logger_ || !logger_->ShouldEnableDebugLogs()) {
+    return;
+  }
+  OPTIMIZATION_GUIDE_LOGGER(
+      optimization_guide_common::mojom::LogSource::MODEL_EXECUTION,
+      logger_.get())
+      << "Terminated WebSpeech ASR stream after "
+      << base::NumberToString(audio_duration.InMilliseconds()) << "ms of audio";
+}
+
 void OnDeviceSpeechRecognitionEngine::Core::TryCreateSession() {
   if (!model_client_ || !sample_rate_hz_.has_value() || session_created_) {
     return;
   }
 
   session_created_ = true;
+
+  if (logger_ && logger_->ShouldEnableDebugLogs()) {
+    OPTIMIZATION_GUIDE_LOGGER(
+        optimization_guide_common::mojom::LogSource::MODEL_EXECUTION,
+        logger_.get())
+        << "Starting WebSpeech ASR session: ("
+        << base::StringPrintf("sample_rate=%dHz, language=%s, %s)",
+                              *sample_rate_hz_,
+                              language_.empty() ? "default" : language_.c_str(),
+                              AsrFlagSnapshot().c_str());
+  }
 
   auto params = on_device_model::mojom::SessionParams::New();
   params->capabilities.Put(on_device_model::CapabilityFlags::kAudioInput);
@@ -187,6 +268,9 @@ void OnDeviceSpeechRecognitionEngine::Core::TryCreateSession() {
 
   auto asr_options = on_device_model::mojom::AsrStreamOptions::New();
   asr_options->sample_rate_hz = *sample_rate_hz_;
+  if (!language_.empty()) {
+    asr_options->language = language_;
+  }
 
   mojo::PendingRemote<on_device_model::mojom::AsrStreamInput> asr_stream;
   mojo::PendingReceiver<on_device_model::mojom::AsrStreamResponder>
@@ -208,10 +292,19 @@ void OnDeviceSpeechRecognitionEngine::OnAsrStreamCreated(
         asr_stream_responder) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(main_sequence_checker_);
   asr_stream_.Bind(std::move(asr_stream));
+  asr_stream_.set_disconnect_handler(
+      base::BindOnce(&OnDeviceSpeechRecognitionEngine::OnRecognizerDisconnected,
+                     weak_factory_.GetWeakPtr()));
   asr_stream_responder_.Bind(std::move(asr_stream_responder));
   asr_stream_responder_.set_disconnect_with_reason_handler(base::BindOnce(
       &OnDeviceSpeechRecognitionEngine::OnResponderDisconnectedWithReason,
       weak_factory_.GetWeakPtr()));
+  if (!accumulated_audio_data_.empty()) {
+    auto chunk = ConvertAccumulatedAudioData();
+    if (chunk) {
+      asr_stream_->AddAudioChunk(std::move(chunk));
+    }
+  }
 }
 
 void OnDeviceSpeechRecognitionEngine::OnRecognizerDisconnected() {
@@ -225,16 +318,20 @@ void OnDeviceSpeechRecognitionEngine::OnResponderDisconnectedWithReason(
   media::mojom::SpeechRecognitionError error;
   error.code = media::mojom::SpeechRecognitionErrorCode::kServiceNotAllowed;
   error.details = media::mojom::SpeechAudioErrorDetails::kNone;
-  delegate_->OnSpeechRecognitionEngineError(error);
+  if (delegate_) {
+    delegate_->OnSpeechRecognitionEngineError(error);
+  }
   EndRecognition();
 }
 
 on_device_model::mojom::AudioDataPtr
 OnDeviceSpeechRecognitionEngine::ConvertAccumulatedAudioData() {
-  CHECK_EQ(audio_parameters_.channels(), 1);
+  if (accumulated_audio_data_.empty() || audio_parameters_.sample_rate() <= 0) {
+    return nullptr;
+  }
 
   auto signed_buffer = on_device_model::mojom::AudioData::New();
-  signed_buffer->channel_count = audio_parameters_.channels();
+  signed_buffer->channel_count = 1;
   signed_buffer->sample_rate = audio_parameters_.sample_rate();
   signed_buffer->frame_count =
       base::checked_cast<int32_t>(accumulated_audio_data_.size());

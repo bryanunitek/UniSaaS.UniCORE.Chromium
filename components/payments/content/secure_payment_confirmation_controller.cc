@@ -29,10 +29,10 @@
 namespace {
 
 constexpr char kTransactionOutcomeHistogramName[] =
-    "SecurePaymentRequest.Transaction.Outcome";
+    "PaymentRequest.SecurePaymentConfirmation.Transaction.Outcome";
 
 constexpr char kFallbackOutcomeHistogramName[] =
-    "SecurePaymentRequest.Fallback.Outcome";
+    "PaymentRequest.SecurePaymentConfirmation.Fallback.Outcome";
 
 }  // namespace
 
@@ -102,6 +102,7 @@ bool SecurePaymentConfirmationController::IsInteractive() const {
 
 void SecurePaymentConfirmationController::ShowPaymentHandlerScreen(
     const GURL& url,
+    const std::optional<gfx::Size>& preferred_web_contents_size,
     PaymentHandlerOpenWindowCallback callback) {
   // Payment handler screen is not supported.
   NOTREACHED();
@@ -127,7 +128,7 @@ void SecurePaymentConfirmationController::OnInitialized(
 void SecurePaymentConfirmationController::OnConfirm() {
   if (is_error_dialog_) {
     base::UmaHistogramEnumeration(kFallbackOutcomeHistogramName,
-                                  SecurePaymentRequestOutcome::kAccept);
+                                  SecurePaymentRequestOutcome::kAnotherWay);
 
     is_dialog_showing_ = false;
     // CloseDialog() -> Widget::Close() can potentially synchronously trigger
@@ -323,8 +324,7 @@ void SecurePaymentConfirmationController::
   model_.set_instrument_details_value(app->GetSublabel());
   model_.set_instrument_icon(app->icon_bitmap());
 
-  const mojom::PaymentItemPtr& total = request_->spec()->GetTotal(app);
-  std::u16string total_value = base::UTF8ToUTF16(total->amount->currency);
+  const mojom::PaymentItemPtr& total = app->GetTotalForSpc();
   model_.set_total_value(
       base::StrCat({base::UTF8ToUTF16(total->amount->currency), u" ",
                     CurrencyFormatter(total->amount->currency,
@@ -373,6 +373,9 @@ void SecurePaymentConfirmationController::
   view_ = SecurePaymentConfirmationView::Create(
       request_->state()->GetPaymentRequestDelegate()->GetPaymentUIObserver());
 
+  // view_->ShowDialog() can potentially trigger observers that destroy the
+  // payment window's WebContents and delete `this`.
+  auto weak_this = weak_ptr_factory_.GetWeakPtr();
   view_->ShowDialog(
       request_->web_contents(), model_.GetWeakPtr(),
       base::BindOnce(&SecurePaymentConfirmationController::OnConfirm,
@@ -383,6 +386,9 @@ void SecurePaymentConfirmationController::
                      weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&SecurePaymentConfirmationController::OnOptOut,
                      weak_ptr_factory_.GetWeakPtr()));
+  if (!weak_this) {
+    return;
+  }
 
   // For automated testing, SPC can be placed in an 'autoaccept' or
   // 'autoreject' mode, where the dialog should immediately be

@@ -15,6 +15,7 @@
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "services/on_device_model/public/mojom/download_observer.mojom.h"
+#include "third_party/blink/public/mojom/ai/ai_decision_model.mojom.h"
 #include "third_party/blink/public/mojom/ai/ai_language_model.mojom.h"
 #include "third_party/blink/public/mojom/ai/ai_manager.mojom.h"
 
@@ -81,18 +82,22 @@ class EchoAIManagerImpl : public blink::mojom::AIManager {
       blink::mojom::AIProofreaderCreateOptionsPtr options,
       mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
       override;
-  void CanCreateClassifier(blink::mojom::AIClassifierCreateOptionsPtr options,
-                           CanCreateClassifierCallback callback) override;
-  void CreateClassifier(
-      mojo::PendingRemote<blink::mojom::AIManagerCreateClassifierClient> client,
-      blink::mojom::AIClassifierCreateOptionsPtr options,
-      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
-      override;
   void CanCreateSemanticEmbedder(
       CanCreateSemanticEmbedderCallback callback) override;
   void CreateSemanticEmbedder(
       mojo::PendingRemote<blink::mojom::AIManagerCreateSemanticEmbedderClient>
-          client) override;
+          client,
+      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
+      override;
+  void CanCreateDecisionModel(
+      blink::mojom::AIDecisionModelCreateOptionsPtr options,
+      CanCreateDecisionModelCallback callback) override;
+  void CreateDecisionModel(
+      mojo::PendingRemote<blink::mojom::AIManagerCreateDecisionModelClient>
+          client,
+      blink::mojom::AIDecisionModelCreateOptionsPtr options,
+      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> monitor)
+      override;
 
   template <typename CanCreateCallback>
   void CanCreateClient(CanCreateCallback callback);
@@ -118,16 +123,24 @@ class EchoAIManagerImpl : public blink::mojom::AIManager {
             typename EchoAIClient>
   void ReturnAIClientCreationResult(mojo::Remote<AIClientRemote> client_remote);
 
+  void ReturnAIDecisionModelCreationResult(
+      mojo::Remote<blink::mojom::AIManagerCreateDecisionModelClient>
+          client_remote,
+      std::vector<blink::mojom::AIDecisionModelQuestionPtr> questions);
+
   void ReturnAILanguageModelCreationResult(
       mojo::Remote<blink::mojom::AIManagerCreateLanguageModelClient>
           client_remote,
       blink::mojom::AILanguageModelSamplingParamsPtr sampling_params,
       base::flat_set<blink::mojom::AILanguageModelPromptType>
           enabled_input_types,
+      base::flat_set<blink::mojom::AILanguageModelPromptType>
+          enabled_output_types,
       std::vector<blink::mojom::AILanguageModelPromptPtr> initial_prompts,
       uint32_t initial_context_usage,
       std::vector<blink::mojom::AILanguageModelToolDeclarationPtr> tools);
 
+  void RunAfterMockDownload(base::OnceClosure return_task);
   void DoMockDownloadingAndReturn(base::OnceClosure callback);
 
   // Returns whether the current mojo receiver triggered mock model download.

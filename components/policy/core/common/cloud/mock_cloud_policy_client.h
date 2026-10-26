@@ -97,7 +97,7 @@ class MockCloudPolicyClient : public CloudPolicyClient {
                const enterprise_management::ChildStatusReportRequest*,
                ResultCallback),
               (override));
-  MOCK_METHOD(void, CancelAppInstallReportUpload, (), (override));
+
   MOCK_METHOD(void,
               UpdateGcmId,
               (const std::string&, StatusCallback),
@@ -143,20 +143,14 @@ class MockCloudPolicyClient : public CloudPolicyClient {
               (std::unique_ptr<enterprise_management::UploadEuiccInfoRequest>,
                StatusCallback),
               (override));
-  MOCK_METHOD(void,
-              UploadSecurityEventReport,
-              (bool, base::DictValue, ResultCallback),
-              (override));
+
   MOCK_METHOD(void,
               UploadSecurityEvent,
               (bool,
                ::chrome::cros::reporting::proto::UploadEventsRequest request,
                ResultCallback),
               (override));
-  MOCK_METHOD(void,
-              UploadAppInstallReport,
-              (base::DictValue value, ResultCallback callback),
-              (override));
+
   MOCK_METHOD(void,
               ClientCertProvisioningRequest,
               (enterprise_management::ClientCertificateProvisioningRequest,
@@ -170,6 +164,10 @@ class MockCloudPolicyClient : public CloudPolicyClient {
   MOCK_METHOD(void,
               DeterminePromotionEligibility,
               (PromotionEligibilityCallback callback),
+              (override));
+  MOCK_METHOD(void,
+              GenerateChromeProfileChallenge,
+              (GenerateChromeProfileChallengeCallback callback),
               (override));
 
   // Sets the DMToken.

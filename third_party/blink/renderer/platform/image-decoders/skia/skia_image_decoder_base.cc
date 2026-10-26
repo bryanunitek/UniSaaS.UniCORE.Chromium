@@ -98,15 +98,16 @@ void SkiaImageDecoderBase::OnSetData(scoped_refptr<SegmentReader> data) {
           return;
         }
         if (!IgnoresColorSpace()) {
-          if (const skcms_ICCProfile* profile = codec_->getICCProfile()) {
-            SetEmbeddedColorProfile(std::make_unique<ColorProfile>(*profile));
-          }
+          SetEmbeddedColorProfile(skia::ColorProfile::Make(codec_.get()));
           if (codec_->getHdrMetadata() != skhdr::Metadata::MakeEmpty()) {
-            hdr_metadata_ = gfx::HDRMetadata(codec_->getHdrMetadata());
+            gfx::HDRMetadata skia_metadata(codec_->getHdrMetadata());
+            skia_metadata.MergeMetadataFrom(hdr_metadata_);
+            hdr_metadata_ = skia_metadata;
           }
         }
         segment_stream_ = segment_stream_ptr;
         orientation_ = static_cast<ImageOrientationEnum>(codec_->getOrigin());
+        OnSkCodecCreated();
         return;
       }
 
@@ -309,7 +310,8 @@ void SkiaImageDecoderBase::Decode(wtf_size_t index) {
       wtf_size_t required_previous_frame_index =
           frame.RequiredPreviousFrameIndex();
       if (required_previous_frame_index == kNotFound) {
-        if (!frame.AllocatePixelData(Size().width(), Size().height(),
+        const gfx::Size frame_size = FrameSizeAtIndex(current_frame_index);
+        if (!frame.AllocatePixelData(frame_size.width(), frame_size.height(),
                                      ColorSpaceForSkImages())) {
           SetFailedFrameIndex(current_frame_index);
           continue;
@@ -388,21 +390,20 @@ void SkiaImageDecoderBase::Decode(wtf_size_t index) {
       DCHECK_NE(color_type, kUnknown_SkColorType);
 
       sk_sp<SkColorSpace> color_space;
-      if (const ColorProfileTransform* transform = ColorTransform()) {
-        const skcms_ICCProfile* dst_profile = transform->DstProfile();
-        DCHECK(dst_profile);  // Always non-null ptr to `dst_profile_` field.
-        color_space = SkColorSpace::Make(*dst_profile);
+      if (NeedsDecodeTimeColorTransform()) {
+        color_space = ColorSpaceForSkImages();
       } else {
         // Explicitly ask for no color transformation.  This avoids transforming
         // into sRGB if/when `SkEncodedInfo::makeImageInfo` has set
         // `codec_->getInfo().colorSpace()` to sRGB as a fallback.
-        color_space = nullptr;
       }
 
-      SkImageInfo image_info = codec_->getInfo()
-                                   .makeColorType(color_type)
-                                   .makeAlphaType(alpha_type)
-                                   .makeColorSpace(color_space);
+      SkImageInfo image_info =
+          codec_->getInfo()
+              .makeWH(frame.Bitmap().width(), frame.Bitmap().height())
+              .makeColorType(color_type)
+              .makeAlphaType(alpha_type)
+              .makeColorSpace(color_space);
 
       SkCodec::Options options;
       options.fFrameIndex = current_frame_index;

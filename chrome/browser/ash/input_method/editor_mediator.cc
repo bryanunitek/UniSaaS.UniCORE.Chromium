@@ -9,6 +9,7 @@
 
 #include "ash/constants/ash_pref_names.h"
 #include "ash/shell.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/strings/utf_offset_string_conversions.h"
@@ -74,14 +75,21 @@ magic_boost::TransitionAction ConvertToMagicBoostTransitionAction(
 }  // namespace
 
 EditorMediator::EditorMediator(
+    const ApplicationLocaleStorage* application_locale_storage,
     Profile* profile,
+    manta::MantaService* manta_service,
     std::unique_ptr<EditorGeolocationProvider> editor_geolocation_provider)
-    : profile_(profile),
+    : application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      profile_(profile),
+      manta_service_(CHECK_DEREF(manta_service)),
       panel_manager_(this),
       editor_geolocation_provider_(std::move(editor_geolocation_provider)),
+      mako_bubble_coordinator_(&application_locale_storage_.get()),
       editor_context_(this, this, editor_geolocation_provider_.get()),
-      editor_switch_(
-          std::make_unique<EditorSwitch>(this, profile, &editor_context_)),
+      editor_switch_(std::make_unique<EditorSwitch>(this,
+                                                    profile,
+                                                    manta_service,
+                                                    &editor_context_)),
       metrics_recorder_(
           std::make_unique<EditorMetricsRecorder>(&editor_context_,
                                                   GetEditorOpportunityMode())),
@@ -149,8 +157,8 @@ void EditorMediator::OnFocus(int context_id) {
   }
 
   if (IsAllowedForUse() && !editor_service_connector_) {
-    editor_service_connector_ =
-        std::make_unique<EditorServiceConnector>(&editor_context_);
+    editor_service_connector_ = std::make_unique<EditorServiceConnector>(
+        &application_locale_storage_.get(), &editor_context_);
     ResetEditorConnections();
   }
 
@@ -342,7 +350,9 @@ EditorMediator::ServiceConnection::ServiceConnection(
       mediator);
   text_query_provider_ = std::make_unique<EditorTextQueryProvider>(
       text_query_provider_remote.InitWithNewEndpointAndPassReceiver(),
-      metrics_recorder, std::make_unique<EditorTextQueryFromManta>(profile));
+      metrics_recorder,
+      std::make_unique<EditorTextQueryFromManta>(
+          &mediator->manta_service_.get()));
   editor_client_connector_ = std::make_unique<EditorClientConnector>(
       editor_client_connector_receiver.InitWithNewEndpointAndPassRemote());
   editor_event_proxy_ = std::make_unique<EditorEventProxy>(

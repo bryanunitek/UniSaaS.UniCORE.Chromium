@@ -30,6 +30,10 @@ namespace glic::test {
 // that changes in Chrome aren't breaking Glic (though this relies on manual
 // intervention anytime Glic changes and so is not a replacement for full
 // end-to-end tests).
+// =============================================================================
+// DEPRECATED: Do not use this test fixture for new code.
+// Please use `chrome/browser/glic/test_support/glic_browser_test.h` instead.
+// =============================================================================
 class GlicActorUiTest : public test::InteractiveGlicTest {
  public:
   using InteractiveTestApi::MultiStep;
@@ -278,12 +282,12 @@ class GlicActorUiTest : public test::InteractiveGlicTest {
 
   void EnableScreenshotsInContext() { include_screenshot_ = true; }
 
+  // Label corresponds to the aria-label on the element in the page.
+  int32_t SearchAnnotatedPageContent(std::string_view label);
+
   std::unique_ptr<optimization_guide::proto::AnnotatedPageContent>
       annotated_page_content_;
   mojom::ScreenshotPtr viewport_screenshot_;
-
-  // Label corresponds to the aria-label on the element in the page.
-  int32_t SearchAnnotatedPageContent(std::string_view label);
 
  private:
   bool include_screenshot_ = false;

@@ -14,10 +14,16 @@ namespace commerce {
 class ShoppingService;
 }  // namespace commerce
 
+// Returns true if the layout should be wide based on trait collection or view
+// width.
+bool ShouldMagicStackHaveWideLayout(UITraitCollection* traitCollection,
+                                    CGFloat viewWidth);
+
 // Returns the amount that MagicStack modules are narrower than the ScrollView,
 // in order to allow peeking at the sides.
-CGFloat ModuleNarrowerWidthToAllowPeekingForTraitCollection(
-    UITraitCollection* traitCollection);
+CGFloat MagicStackModuleNarrowerWidthToAllowPeeking(
+    UITraitCollection* traitCollection,
+    CGFloat viewWidth);
 
 // True if the price tracking notification card feature is enabled.
 bool IsPriceTrackingPromoCardEnabled(commerce::ShoppingService* service,
@@ -29,5 +35,13 @@ bool isContentOversized(id<UITraitEnvironment> trait_environment);
 
 // Returns the dynamic height of the Magic Stack modules.
 CGFloat GetMagicStackHeight(id<UITraitEnvironment> trait_environment);
+
+// Calculates the target page index for pagination based on the current scroll
+// offset, scrolling velocity along the layout axis, effective page width, and
+// the total number of pages. Clamps the result to [0, totalPageCount - 1].
+NSUInteger MagicStackTargetPage(CGFloat currentOffset,
+                                CGFloat velocity,
+                                CGFloat pageWidth,
+                                NSUInteger totalPageCount);
 
 #endif  // IOS_CHROME_BROWSER_CONTENT_SUGGESTIONS_MAGIC_STACK_PUBLIC_MAGIC_STACK_UTILS_H_

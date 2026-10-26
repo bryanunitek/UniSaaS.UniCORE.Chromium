@@ -44,7 +44,7 @@ ActionTypeButtonGroup::~ActionTypeButtonGroup() = default;
 
 bool ActionTypeButtonGroup::HandleArrowKeyPressed(ActionTypeButton* button,
                                                   const ui::KeyEvent& event) {
-  DCHECK(event.type() == ui::EventType::kKeyPressed);
+  CHECK(event.type() == ui::EventType::kKeyPressed, base::NotFatalUntil::M160);
 
   const size_t selected_index = std::distance(
       buttons_.begin(), std::find(buttons_.begin(), buttons_.end(), button));
@@ -113,7 +113,8 @@ ActionTypeButton* ActionTypeButtonGroup::AddActionTypeButton(
     const gfx::VectorIcon& icon) {
   auto* button = AddChildView(
       std::make_unique<ActionTypeButton>(std::move(callback), label, icon));
-  button->set_delegate(this);
+  button->set_button_selected_callback(base::BindRepeating(
+      &ActionTypeButtonGroup::OnButtonSelected, base::Unretained(this)));
   buttons_.push_back(button);
   return button;
 }
@@ -144,10 +145,6 @@ void ActionTypeButtonGroup::OnButtonSelected(ash::OptionButtonBase* button) {
       action_type_button->RefreshColors();
     }
   }
-}
-
-void ActionTypeButtonGroup::OnButtonClicked(ash::OptionButtonBase* button) {
-  button->SetSelected(true);
 }
 
 void ActionTypeButtonGroup::OnActionTapButtonPressed() {

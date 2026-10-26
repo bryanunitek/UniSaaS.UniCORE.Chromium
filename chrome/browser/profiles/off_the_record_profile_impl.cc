@@ -32,10 +32,10 @@
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_core_service.h"
 #include "chrome/browser/download/download_core_service_factory.h"
+#include "chrome/browser/enterprise/isolated_mode/isolated_mode_settings_service_factory.h"
 #include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
 #include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
 #include "chrome/browser/heavy_ad_intervention/heavy_ad_service_factory.h"
-#include "chrome/browser/k_anonymity_service/k_anonymity_service_factory.h"
 #include "chrome/browser/notifications/platform_notification_service_factory.h"
 #include "chrome/browser/notifications/platform_notification_service_impl.h"
 #include "chrome/browser/origin_trials/origin_trials_factory.h"
@@ -48,6 +48,7 @@
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/reduce_accept_language/reduce_accept_language_factory.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ssl/stateful_ssl_host_state_delegate_factory.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/transition_manager/full_browser_transition_manager.h"
@@ -103,7 +104,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/global_features.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "chromeos/constants/pref_names.h"
 #endif
 
@@ -111,6 +111,7 @@
 #include "chrome/browser/extensions/extension_special_storage_policy.h"
 #include "chrome/browser/ui/webui/extensions/extension_icon_source.h"
 #include "extensions/browser/api/web_request/extension_web_request_event_router.h"
+#include "extensions/browser/process_manager.h"
 #endif
 
 #if BUILDFLAG(ENABLE_GUEST_VIEW)
@@ -131,7 +132,7 @@ namespace {
 profile_metrics::BrowserProfileType ComputeOffTheRecordProfileType(
     const Profile::OTRProfileID& otr_profile_id,
     const Profile* parent_profile) {
-  DCHECK(!parent_profile->IsOffTheRecord());
+  CHECK(!parent_profile->IsOffTheRecord(), base::NotFatalUntil::M162);
 
   if (otr_profile_id != Profile::OTRProfileID::PrimaryID()) {
     return profile_metrics::BrowserProfileType::kOtherOffTheRecordProfile;
@@ -139,6 +140,10 @@ profile_metrics::BrowserProfileType ComputeOffTheRecordProfileType(
 
   switch (profile_metrics::GetBrowserProfileType(parent_profile)) {
     case profile_metrics::BrowserProfileType::kRegular:
+      if (enterprise_isolated_mode::IsolatedModeReplacesIncognito(
+              parent_profile)) {
+        return profile_metrics::BrowserProfileType::kEnterpriseIsolated;
+      }
       return profile_metrics::BrowserProfileType::kIncognito;
 
     case profile_metrics::BrowserProfileType::kGuest:
@@ -148,7 +153,9 @@ profile_metrics::BrowserProfileType ComputeOffTheRecordProfileType(
       return profile_metrics::BrowserProfileType::kSystem;
 
     case profile_metrics::BrowserProfileType::kIncognito:
+    case profile_metrics::BrowserProfileType::kEnterpriseIsolated:
     case profile_metrics::BrowserProfileType::kOtherOffTheRecordProfile:
+    case profile_metrics::BrowserProfileType::kTopChromeWebUIProfile:
       NOTREACHED();
   }
 }
@@ -195,10 +202,14 @@ void OffTheRecordProfileImpl::Init() {
   BrowserContextDependencyManager::GetInstance()->CreateBrowserContextServices(
       this);
 
+  const IncognitoModePrefs::IncognitoModeType incognito_type =
+      IncognitoModePrefs::GetIncognitoModeType(profile_);
   // Always crash when incognito is not available.
   CHECK(!IsIncognitoProfile() ||
-        IncognitoModePrefs::GetAvailability(profile_->GetPrefs()) !=
-            policy::IncognitoModeAvailability::kDisabled);
+        incognito_type == IncognitoModePrefs::IncognitoModeType::kStandard);
+  // Always crash when isolated mode is not available.
+  CHECK(!IsEnterpriseIsolatedModeProfile() ||
+        incognito_type == IncognitoModePrefs::IncognitoModeType::kEnterprise);
 
   TrackZoomLevelsFromParent();
 
@@ -212,6 +223,15 @@ void OffTheRecordProfileImpl::Init() {
       this, std::make_unique<extensions::ExtensionIconSource>(profile_));
 
   extensions::WebRequestEventRouter::OnOTRBrowserContextCreated(profile_, this);
+
+  // ProcessManagerFactory does not override
+  // ServiceIsCreatedWithBrowserContext(), and previously IncognitoProcessManager
+  // was only created during CreateBrowserContextServices() as a side effect of
+  // eager ApiResourceManager services calling ProcessManager::Get() in their
+  // constructors. Explicitly instantiate ProcessManager here so it continues to
+  // observe ExtensionRegistry for split-mode extensions when the OTR profile is
+  // created.
+  extensions::ProcessManager::Get(this);
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   // The DomDistillerViewerSource is not a normal WebUI so it must be registered
@@ -236,6 +256,10 @@ void OffTheRecordProfileImpl::Init() {
 
   key_->SetProtoDatabaseProvider(
       GetDefaultStoragePartition()->GetProtoDatabaseProvider());
+
+  if (IsEnterpriseIsolatedModeProfile()) {
+    IdentityManagerFactory::GetForProfile(this)->OnNetworkInitialized();
+  }
 
   if (IsIncognitoProfile())
     base::RecordAction(base::UserMetricsAction("IncognitoMode_Started"));
@@ -452,7 +476,7 @@ OffTheRecordProfileImpl::GetSpecialStoragePolicy() {
 
 content::PlatformNotificationService*
 OffTheRecordProfileImpl::GetPlatformNotificationService() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   return PlatformNotificationServiceFactory::GetForProfile(this);
 }
 
@@ -536,7 +560,7 @@ base::Time OffTheRecordProfileImpl::GetStartTime() const {
 }
 
 ProfileKey* OffTheRecordProfileImpl::GetProfileKey() const {
-  DCHECK(key_);
+  CHECK(key_, base::NotFatalUntil::M162);
   return key_.get();
 }
 
@@ -601,13 +625,8 @@ class GuestSessionProfile : public OffTheRecordProfileImpl {
  public:
   explicit GuestSessionProfile(Profile* real_profile)
       : OffTheRecordProfileImpl(real_profile, OTRProfileID::PrimaryID()) {
-    if (new_guest_profile_impl_) {
-      CHECK_EQ(profile_metrics::BrowserProfileType::kGuest,
-               profile_metrics::GetBrowserProfileType(this));
-    } else {
-      profile_metrics::SetBrowserProfileType(
-          this, profile_metrics::BrowserProfileType::kGuest);
-    }
+    CHECK_EQ(profile_metrics::BrowserProfileType::kGuest,
+             profile_metrics::GetBrowserProfileType(this));
   }
 
   void InitChromeOSPreferences() override {
@@ -616,7 +635,8 @@ class GuestSessionProfile : public OffTheRecordProfileImpl {
         g_browser_process->GetFeatures()->application_locale_storage(),
         g_browser_process->platform_part()->GetTimezoneResolverManager());
     chromeos_preferences_->Init(
-        this, user_manager::UserManager::Get()->GetActiveUser());
+        user_manager::UserManager::Get()->GetActiveUser(), this,
+        PrefServiceSyncableFromProfile(this));
   }
 
  private:
@@ -689,11 +709,6 @@ content::FederatedIdentityAutoReauthnPermissionContextDelegate*
 OffTheRecordProfileImpl::GetFederatedIdentityAutoReauthnPermissionContext() {
   return FederatedIdentityAutoReauthnPermissionContextFactory::GetForProfile(
       this);
-}
-
-content::KAnonymityServiceDelegate*
-OffTheRecordProfileImpl::GetKAnonymityServiceDelegate() {
-  return KAnonymityServiceFactory::GetForProfile(this);
 }
 
 #if BUILDFLAG(IS_WIN)

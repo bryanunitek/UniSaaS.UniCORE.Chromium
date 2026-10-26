@@ -4,6 +4,9 @@
 
 #include "third_party/blink/renderer/core/trustedtypes/trusted_type_policy_factory.h"
 
+#include <iterator>
+
+#include "base/memory/raw_ptr_exclusion.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_trusted_html.h"
@@ -48,10 +51,11 @@ struct AttributeTypeEntry {
 typedef Vector<AttributeTypeEntry> AttributeTypeVector;
 
 AttributeTypeVector BuildAttributeVector() {
-  const QualifiedName any_element(g_null_atom, g_star_atom, g_null_atom);
   const struct {
-    const QualifiedName& element;
-    const QualifiedName attribute;
+    // RAW_PTR_EXCLUSION: Stack-scoped.
+    RAW_PTR_EXCLUSION const QualifiedName& element;
+    // RAW_PTR_EXCLUSION: Stack-scoped.
+    RAW_PTR_EXCLUSION const QualifiedName& attribute;
     SpecificTrustedType type;
   } kTypeTable[] = {{html_names::kEmbedTag, html_names::kSrcAttr,
                      SpecificTrustedType::kScriptURL},
@@ -66,31 +70,35 @@ AttributeTypeVector BuildAttributeVector() {
                     {svg_names::kScriptTag, svg_names::kHrefAttr,
                      SpecificTrustedType::kScriptURL},
                     {svg_names::kScriptTag, xlink_names::kHrefAttr,
-                     SpecificTrustedType::kScriptURL},
+                     SpecificTrustedType::kScriptURL}};
 
-#define FOREACH_EVENT_HANDLER(name)                 \
-  {any_element, QualifiedName(AtomicString(#name)), \
-   SpecificTrustedType::kScript},
-                    EVENT_HANDLER_LIST(FOREACH_EVENT_HANDLER)
+  // All event handler content attributes map to kScript on any element.
+  // Keeping them as plain strings and building the QualifiedNames in the
+  // loop below emits considerably less code than one table entry each.
+  static constexpr const char* kEventHandlerNames[] = {
+#define FOREACH_EVENT_HANDLER(name) #name,
+      EVENT_HANDLER_LIST(FOREACH_EVENT_HANDLER)
 #undef FOREACH_EVENT_HANDLER
   };
 
   AttributeTypeVector table;
+  table.ReserveInitialCapacity(std::size(kTypeTable) +
+                               std::size(kEventHandlerNames));
   for (const auto& entry : kTypeTable) {
-    // In legacy-Trusted-Types, we didn't record SVG elements properly in
-    // this function. So we can now use this to retain the old behaviour, until
-    // TrustedTypesHTML is perma-launched.
-    if (!RuntimeEnabledFeatures::TrustedTypesHTMLEnabled() &&
-        entry.element.NamespaceURI() == svg_names::kNamespaceURI) {
-      continue;
-    }
-
     // Attribute comparisons are case-insensitive, for both element and
     // attribute name. We rely on the fact that they're stored as lowercase.
     DCHECK(entry.element.LocalName().ContainsNoAsciiUpper());
     DCHECK(entry.attribute.LocalName().ContainsNoAsciiUpper());
     table.push_back(
         AttributeTypeEntry{entry.element, entry.attribute, entry.type});
+  }
+
+  const QualifiedName any_element(g_null_atom, g_star_atom, g_null_atom);
+  for (const char* name : kEventHandlerNames) {
+    const QualifiedName attribute{AtomicString(name)};
+    DCHECK(attribute.LocalName().ContainsNoAsciiUpper());
+    table.push_back(AttributeTypeEntry{any_element, attribute,
+                                       SpecificTrustedType::kScript});
   }
   return table;
 }
@@ -104,7 +112,8 @@ const AttributeTypeVector& GetAttributeTypeVector() {
 AttributeTypeVector BuildPropertyVector() {
   const QualifiedName any_element(g_null_atom, g_star_atom, g_null_atom);
   const struct {
-    const QualifiedName& element;
+    // RAW_PTR_EXCLUSION: Stack-scoped.
+    RAW_PTR_EXCLUSION const QualifiedName& element;
     const char* property;
     SpecificTrustedType type;
   } kTypeTable[] = {
@@ -122,14 +131,6 @@ AttributeTypeVector BuildPropertyVector() {
   };
   AttributeTypeVector table;
   for (const auto& entry : kTypeTable) {
-    // In legacy-Trusted-Types, we didn't record SVG elements properly in
-    // this function. So we can now use this to retain the old behaviour, until
-    // TrustedTypesHTML is perma-launched.
-    if (!RuntimeEnabledFeatures::TrustedTypesHTMLEnabled() &&
-        entry.element.NamespaceURI() == svg_names::kNamespaceURI) {
-      continue;
-    }
-
     // Elements are case-insensitive, but property names are not.
     // Properties don't have a namespace, so we're leaving that blank.
     DCHECK(entry.element.LocalName().ContainsNoAsciiUpper());
@@ -174,10 +175,9 @@ SpecificTrustedType FindEntryInAttributeTypeVector(
   // step 2, matches event handlers only against the HTML-known namespaces,
   // not against any namespace.
   //
-  // For legacy behaviour and for property type vectors, "*" should match any
-  // namespace. For attributes, it should only match HTML, SVG, and MathML.
+  // For property type vectors, "*" should match any namespace.
+  // For attributes, it should only match HTML, SVG, and MathML.
   bool matches_star_atom =
-      !RuntimeEnabledFeatures::TrustedTypesHTMLEnabled() ||
       (&attribute_type_vector == &GetPropertyTypeVector()) ||
       (element_namespace == html_names::xhtmlNamespaceURI ||
        element_namespace == svg_names::kNamespaceURI ||

@@ -16,6 +16,17 @@ namespace {
 
 class UserInterfaceStyleRecorderTest : public PlatformTest {
  protected:
+  void SetUp() override {
+    PlatformTest::SetUp();
+    // Flush any `UserInterfaceStyleRecorder` instances still alive from
+    // previous tests (e.g. via `ChromeOverlayWindow`) so they deregister from
+    // `UIApplicationDidBecomeActiveNotification` before `HistogramTester` is
+    // created.
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:UIApplicationDidBecomeActiveNotification
+                      object:nil];
+  }
+
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   base::test::ScopedRestoreDefaultTimezone timezone_{"UTC"};

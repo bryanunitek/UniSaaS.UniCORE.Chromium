@@ -530,7 +530,8 @@ bool ShouldIncludeBlockEndBorderPadding(const BoxFragmentBuilder& builder) {
     // Past the block-end, and therefore past block-end border+padding.
     return false;
   }
-  if (!builder.ShouldBreakInside() || builder.IsKnownToFitInFragmentainer() ||
+  if (!builder.ShouldBreakInsideForContent() ||
+      builder.IsKnownToFitInFragmentainer() ||
       builder.ShouldCloneBoxEndDecorations()) {
     return true;
   }
@@ -683,14 +684,15 @@ BreakStatus FinishFragmentation(BoxFragmentBuilder* builder) {
                                 final_block_size);
   builder->SetFragmentBlockSize(final_block_size);
 
-  if (builder->FoundColumnSpanner() || !space.HasBlockFragmentation())
+  if (!space.HasBlockFragmentation()) {
     return BreakStatus::kContinue;
+  }
 
   bool was_broken_by_child = builder->HasInflowChildBreakInside();
   if (!was_broken_by_child && space.IsNewFormattingContext())
     was_broken_by_child = builder->GetExclusionSpace().HasFragmentainerBreak();
 
-  if (space_left == kIndefiniteSize) {
+  if (space_left == kIndefiniteSize || builder->FoundColumnSpanner()) {
     // We don't know how much space is available (initial column balancing
     // pass), so we won't break. Mark that we're at the block end unless there's
     // a (forced) break inside, or if we were already at the block end before
@@ -715,7 +717,7 @@ BreakStatus FinishFragmentation(BoxFragmentBuilder* builder) {
     }
   }
 
-  if (builder->ShouldBreakInside()) {
+  if (builder->ShouldBreakInsideForContent()) {
     // We need to break before or inside one of our children (or have already
     // done so). Even if we fit within the remaining space, and even if the
     // child involved in the break were to be in a parallel flow, we still need
@@ -747,7 +749,7 @@ BreakStatus FinishFragmentation(BoxFragmentBuilder* builder) {
       // at the end. If block-size is unconstrained (or at least allowed to grow
       // a bit more), we're only at the end if no in-flow content inside broke.
       if (!was_broken_by_child || builder->IsKnownToFitInFragmentainer()) {
-        if (node.HasNonVisibleBlockOverflow() && builder->ShouldBreakInside()) {
+        if (node.HasNonVisibleBlockOverflow()) {
           // We have reached the end of a fragmentable node that clips overflow
           // in the block direction. If something broke inside at this point, we
           // need to relayout without fragmentation, so that we don't generate
@@ -892,15 +894,14 @@ bool HasBreakOpportunityBeforeNextChild(
   return fragment.BlockSize() != LayoutUnit();
 }
 
-BreakStatus BreakBeforeChildIfNeeded(
-    LayoutInputNode child,
-    const LayoutResult& layout_result,
-    LayoutUnit fragmentainer_block_offset,
-    LayoutUnit fragmentainer_block_size,
-    bool has_container_separation,
-    BoxFragmentBuilder* builder,
-    bool is_row_item,
-    FlexColumnBreakInfo* flex_column_break_info) {
+BreakStatus BreakBeforeChildIfNeeded(LayoutInputNode child,
+                                     const LayoutResult& layout_result,
+                                     LayoutUnit fragmentainer_block_offset,
+                                     LayoutUnit fragmentainer_block_size,
+                                     bool has_container_separation,
+                                     BoxFragmentBuilder* builder,
+                                     bool is_row_item,
+                                     ColumnBreakInfo* column_break_info) {
   const ConstraintSpace& space = builder->GetConstraintSpace();
   DCHECK(space.HasBlockFragmentation());
 
@@ -924,7 +925,7 @@ BreakStatus BreakBeforeChildIfNeeded(
   if (MovePastBreakpoint(space, child, layout_result,
                          fragmentainer_block_offset, fragmentainer_block_size,
                          appeal_before, builder, is_row_item,
-                         flex_column_break_info)) {
+                         column_break_info)) {
     return BreakStatus::kContinue;
   }
 
@@ -934,7 +935,7 @@ BreakStatus BreakBeforeChildIfNeeded(
   if (!AttemptSoftBreak(child, &layout_result, fragmentainer_block_offset,
                         fragmentainer_block_size, appeal_before, builder,
                         /*block_size_override=*/std::nullopt,
-                        flex_column_break_info)) {
+                        column_break_info)) {
     return BreakStatus::kNeedsEarlierBreak;
   }
 
@@ -1073,7 +1074,7 @@ bool MovePastBreakpoint(const ConstraintSpace& space,
                         BreakAppeal appeal_before,
                         BoxFragmentBuilder* builder,
                         bool is_row_item,
-                        FlexColumnBreakInfo* flex_column_break_info) {
+                        ColumnBreakInfo* column_break_info) {
   if (layout_result.Status() != LayoutResult::kSuccess) {
     // Layout aborted - no fragment was produced. There's nothing to move
     // past. We need to break before.
@@ -1120,7 +1121,7 @@ bool MovePastBreakpoint(const ConstraintSpace& space,
   bool move_past =
       MovePastBreakpoint(space, layout_result, fragmentainer_block_offset,
                          fragmentainer_block_size, appeal_before, builder,
-                         is_row_item, flex_column_break_info);
+                         is_row_item, column_break_info);
 
   if (move_past && builder && child.IsBlock() && !is_row_item) {
     // We're tentatively not going to break before this child, but we'll check
@@ -1131,8 +1132,7 @@ bool MovePastBreakpoint(const ConstraintSpace& space,
     // possible. We also only do this for non-row items since items in a row
     // will be parallel to one another.)
     UpdateEarlyBreakAtBlockChild(To<BlockNode>(child), layout_result,
-                                 appeal_before, builder,
-                                 flex_column_break_info);
+                                 appeal_before, builder, column_break_info);
   }
 
   return move_past;
@@ -1145,7 +1145,7 @@ bool MovePastBreakpoint(const ConstraintSpace& space,
                         BreakAppeal appeal_before,
                         BoxFragmentBuilder* builder,
                         bool is_row_item,
-                        FlexColumnBreakInfo* flex_column_break_info) {
+                        ColumnBreakInfo* column_break_info) {
   DCHECK_EQ(layout_result.Status(), LayoutResult::kSuccess);
 
   if (!space.HasKnownFragmentainerBlockSize()) {
@@ -1206,10 +1206,10 @@ bool MovePastBreakpoint(const ConstraintSpace& space,
         // it has the same appeal or higher than breaking before or breaking
         // earlier.
         if (appeal_inside >= appeal_before) {
-          if (flex_column_break_info) {
-            if (!flex_column_break_info->early_break ||
+          if (column_break_info) {
+            if (!column_break_info->early_break ||
                 appeal_inside >=
-                    flex_column_break_info->early_break->GetBreakAppeal()) {
+                    column_break_info->early_break->GetBreakAppeal()) {
               move_past = true;
             }
           } else if (!builder || !builder->HasEarlyBreak() ||
@@ -1250,7 +1250,7 @@ void UpdateEarlyBreakAtBlockChild(BlockNode child,
                                   const LayoutResult& layout_result,
                                   BreakAppeal appeal_before,
                                   BoxFragmentBuilder* builder,
-                                  FlexColumnBreakInfo* flex_column_break_info) {
+                                  ColumnBreakInfo* column_break_info) {
   // We may need to create early-breaks even if we have broken inside the child,
   // in case it establishes a parallel flow, in which case a break inside won't
   // help honor any break avoidance requests that come after this child. But
@@ -1266,15 +1266,15 @@ void UpdateEarlyBreakAtBlockChild(BlockNode child,
     const ConstraintSpace& space = builder->GetConstraintSpace();
     appeal_inside = CalculateBreakAppealInside(space, layout_result,
                                                breakpoint->GetBreakAppeal());
-    if (flex_column_break_info) {
-      if (!flex_column_break_info->early_break ||
-          flex_column_break_info->early_break->GetBreakAppeal() <=
+    if (column_break_info) {
+      if (!column_break_info->early_break ||
+          column_break_info->early_break->GetBreakAppeal() <=
               breakpoint->GetBreakAppeal()) {
         // Found a good breakpoint inside the child. Add the child to the early
         // break chain for the current column.
         auto* parent_break =
             MakeGarbageCollected<EarlyBreak>(child, appeal_inside, breakpoint);
-        flex_column_break_info->early_break = parent_break;
+        column_break_info->early_break = parent_break;
       }
     } else if (!builder->HasEarlyBreak() ||
                builder->GetEarlyBreak().GetBreakAppeal() <=
@@ -1294,12 +1294,12 @@ void UpdateEarlyBreakAtBlockChild(BlockNode child,
   if (appeal_before <= appeal_inside)
     return;
 
-  if (flex_column_break_info) {
-    if (flex_column_break_info->early_break &&
-        flex_column_break_info->early_break->GetBreakAppeal() > appeal_before) {
+  if (column_break_info) {
+    if (column_break_info->early_break &&
+        column_break_info->early_break->GetBreakAppeal() > appeal_before) {
       return;
     }
-    flex_column_break_info->early_break =
+    column_break_info->early_break =
         MakeGarbageCollected<EarlyBreak>(child, appeal_before);
     return;
   }
@@ -1320,15 +1320,15 @@ bool AttemptSoftBreak(LayoutInputNode child,
                       BreakAppeal appeal_before,
                       BoxFragmentBuilder* builder,
                       std::optional<LayoutUnit> block_size_override,
-                      FlexColumnBreakInfo* flex_column_break_info) {
+                      ColumnBreakInfo* column_break_info) {
   DCHECK(layout_result || block_size_override);
   // If there's a breakpoint with higher appeal among earlier siblings, we need
   // to abort and re-layout to that breakpoint.
   bool found_earlier_break = false;
-  if (flex_column_break_info) {
+  if (column_break_info) {
     found_earlier_break =
-        flex_column_break_info->early_break &&
-        flex_column_break_info->early_break->GetBreakAppeal() > appeal_before;
+        column_break_info->early_break &&
+        column_break_info->early_break->GetBreakAppeal() > appeal_before;
   } else {
     found_earlier_break =
         builder->HasEarlyBreak() &&
@@ -1350,6 +1350,18 @@ bool AttemptSoftBreak(LayoutInputNode child,
                    fragmentainer_block_size, appeal_before,
                    /*is_forced_break=*/false, builder, block_size_override);
   return true;
+}
+
+FragmentationLayoutInput GetFragmentationLayoutInputForChild(
+    BlockNode child,
+    const BlockBreakToken* child_break_token,
+    const EarlyBreak* early_break,
+    const BoxFragmentBuilder& builder) {
+  const EarlyBreak* early_break_in_child = nullptr;
+  if (early_break) {
+    early_break_in_child = EnterEarlyBreakInChild(child, *early_break);
+  }
+  return FragmentationLayoutInput(child_break_token, early_break_in_child);
 }
 
 const EarlyBreak* EnterEarlyBreakInChild(const BlockNode& child,
@@ -1491,44 +1503,13 @@ PhysicalOffset OffsetInStitchedFragments(
   LayoutUnit fragment_block_offset;
   const LayoutBox* layout_box = To<LayoutBox>(fragment.GetLayoutObject());
   const auto& first_fragment = *layout_box->GetPhysicalFragment(0);
-  if (first_fragment.GetBreakToken() &&
-      first_fragment.GetBreakToken()->IsRepeated()) {
-    // Repeated content isn't stitched.
-    stitched_block_size =
-        LogicalFragment(writing_direction, first_fragment).BlockSize();
-  } else {
+  if (!first_fragment.GetBreakToken() ||
+      !first_fragment.GetBreakToken()->IsRepeated()) {
     if (const auto* previous_break_token = FindPreviousBreakToken(fragment)) {
       fragment_block_offset = previous_break_token->ConsumedBlockSize();
     }
-    if (fragment.IsOnlyForNode()) {
-      stitched_block_size =
-          LogicalFragment(writing_direction, fragment).BlockSize();
-    } else {
-      wtf_size_t idx = layout_box->PhysicalFragmentCount();
-      DCHECK_GT(idx, 1u);
-      idx--;
-      // Calculating the stitched size is straight-forward if the node isn't
-      // overflowed: Just add the consumed block-size of the last break token
-      // and the block-size of the last fragment. If it is overflowed, on the
-      // other hand, we need to search backwards until we find the end of the
-      // block-end border edge.
-      while (idx) {
-        const PhysicalBoxFragment* walker =
-            layout_box->GetPhysicalFragment(idx);
-        stitched_block_size =
-            LogicalFragment(writing_direction, *walker).BlockSize();
-
-        // Look at the preceding break token.
-        idx--;
-        const BlockBreakToken* break_token =
-            layout_box->GetPhysicalFragment(idx)->GetBreakToken();
-        if (!break_token->IsAtBlockEnd()) {
-          stitched_block_size += break_token->ConsumedBlockSize();
-          break;
-        }
-      }
-    }
   }
+  stitched_block_size = layout_box->StitchedBlockSize();
   LogicalSize stitched_fragments_logical_size(
       LogicalFragment(writing_direction, fragment).InlineSize(),
       stitched_block_size);

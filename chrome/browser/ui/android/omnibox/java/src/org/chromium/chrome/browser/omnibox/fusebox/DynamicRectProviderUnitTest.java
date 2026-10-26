@@ -8,7 +8,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -22,23 +21,24 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.omnibox.R;
-import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.PopupState;
+import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.PopupState;
 import org.chromium.ui.widget.RectProvider;
 
 /** Unit tests for {@link DynamicRectProvider}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class DynamicRectProviderUnitTest {
-    public @Rule MockitoRule mockitoRule = MockitoJUnit.rule();
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-    private @Mock RectProvider mFloatingDelegate;
-    private @Mock RectProvider mBottomDelegate;
-    private @Mock RectProvider.Observer mObserver;
-    private @Mock Resources mResources;
+    @Mock private RectProvider mFloatingDelegate;
+    @Mock private RectProvider mAlternateFloatingDelegate;
+    @Mock private RectProvider mBottomDelegate;
+    @Mock private RectProvider.Observer mObserver;
+    @Mock private Resources mResources;
     private DynamicRectProvider mDynamicRectProvider;
 
     @Before
@@ -81,7 +81,7 @@ public class DynamicRectProviderUnitTest {
         mDynamicRectProvider.setPopupState(PopupState.FLOATING);
         mDynamicRectProvider.startObserving(mObserver);
         mDynamicRectProvider.startObserving(mObserver);
-        verify(mFloatingDelegate, times(1)).startObserving(any());
+        verify(mFloatingDelegate).startObserving(any());
     }
 
     @Test
@@ -89,7 +89,7 @@ public class DynamicRectProviderUnitTest {
         mDynamicRectProvider.startObserving(mObserver);
         mDynamicRectProvider.setPopupState(PopupState.FLOATING);
         mDynamicRectProvider.setPopupState(PopupState.FLOATING);
-        verify(mFloatingDelegate, times(1)).startObserving(any());
+        verify(mFloatingDelegate).startObserving(any());
     }
 
     @Test
@@ -98,7 +98,7 @@ public class DynamicRectProviderUnitTest {
         mDynamicRectProvider.startObserving(mObserver);
         mDynamicRectProvider.stopObserving();
         mDynamicRectProvider.stopObserving();
-        verify(mFloatingDelegate, times(1)).stopObserving();
+        verify(mFloatingDelegate).stopObserving();
     }
 
     @Test
@@ -120,5 +120,21 @@ public class DynamicRectProviderUnitTest {
     public void testGetRect_nullDelegate_returnsEmptyRect() {
         Rect rect = mDynamicRectProvider.getRect();
         assertTrue(rect.isEmpty());
+    }
+
+    @Test
+    public void testSetPopupState_floatingSupplier_switchesFloatingDelegates() {
+        RectProvider[] activeFloating = new RectProvider[] {mFloatingDelegate};
+        DynamicRectProvider provider =
+                new DynamicRectProvider(() -> activeFloating[0], mBottomDelegate);
+        provider.startObserving(mObserver);
+
+        provider.setPopupState(PopupState.FLOATING);
+        verify(mFloatingDelegate).startObserving(any());
+
+        activeFloating[0] = mAlternateFloatingDelegate;
+        provider.setPopupState(PopupState.FLOATING);
+        verify(mFloatingDelegate).stopObserving();
+        verify(mAlternateFloatingDelegate).startObserving(any());
     }
 }

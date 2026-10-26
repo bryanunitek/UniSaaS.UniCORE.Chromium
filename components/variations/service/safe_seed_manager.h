@@ -9,6 +9,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
+#include "components/metrics/startup_visibility.h"
 
 class PrefRegistrySimple;
 class PrefService;
@@ -68,18 +69,22 @@ class SafeSeedManager {
   // Stores the combined server and client state that control the active
   // variations state. May be called at most once per Chrome app launch. As an
   // optimization, should not be called when running in safe mode.
+  // `seed_data` and `base64_seed_signature` are passed by value so callers can
+  // transfer ownership when they no longer need them.
   //
   // Virtual for testing.
   virtual void SetActiveSeedState(
-      const std::string& seed_data,
-      const std::string& base64_seed_signature,
+      std::string seed_data,
+      std::string base64_seed_signature,
       int seed_milestone,
       std::unique_ptr<ClientFilterableState> client_filterable_state,
       base::Time seed_fetch_time);
 
   // Records that a fetch has started: pessimistically increments the
   // corresponding failure streak for safe mode.
-  void RecordFetchStarted();
+  // Throttling or other connectivity constraints in background sessions should
+  // not be counted towards variations safe mode.
+  void RecordFetchStarted(metrics::StartupVisibility startup_visibility);
 
   // Records a successful fetch: resets the failure streaks for safe mode.
   // Writes the currently active seed to the |seed_store| as a safe seed, if
@@ -91,8 +96,8 @@ class SafeSeedManager {
   // safe seed. Not set when running in safe mode.
   struct ActiveSeedState {
     ActiveSeedState(
-        const std::string& seed_data,
-        const std::string& base64_seed_signature,
+        std::string seed_data,
+        std::string base64_seed_signature,
         int seed_milestone,
         std::unique_ptr<ClientFilterableState> client_filterable_state,
         base::Time seed_fetch_time);

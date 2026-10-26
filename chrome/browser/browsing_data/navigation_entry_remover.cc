@@ -67,13 +67,13 @@ bool ShouldDeleteSerializedNavigationEntry(
 
 bool UrlMatcherForNavigationEntry(const base::flat_set<GURL>& urls,
                                   content::NavigationEntry* entry) {
-  return urls.find(entry->GetURL()) != urls.end();
+  return urls.contains(entry->GetURL());
 }
 
 bool UrlMatcherForSerializedNavigationEntry(
     const base::flat_set<GURL>& urls,
     const sessions::SerializedNavigationEntry& entry) {
-  return urls.find(entry.virtual_url()) != urls.end();
+  return urls.contains(entry.virtual_url());
 }
 
 base::flat_set<GURL> CreateUrlSet(const history::URLRows& deleted_rows) {
@@ -152,7 +152,7 @@ class TabRestoreDeletionHelper : public sessions::TabRestoreServiceObserver {
       sessions::TabRestoreService* service,
       const sessions::TabRestoreService::DeletionPredicate& predicate)
       : service_(service), deletion_predicate_(predicate) {
-    DCHECK(!service->IsLoaded());
+    CHECK(!service->IsLoaded(), base::NotFatalUntil::M161);
     service->AddObserver(this);
     service->LoadTabsFromLastSession();
   }
@@ -217,8 +217,8 @@ namespace browsing_data {
 
 void RemoveNavigationEntries(Profile* profile,
                              const history::DeletionInfo& deletion_info) {
-  DCHECK(!profile->IsOffTheRecord());
-  DCHECK(!deletion_info.is_from_expiration());
+  CHECK(!profile->IsOffTheRecord(), base::NotFatalUntil::M161);
+  CHECK(!deletion_info.is_from_expiration(), base::NotFatalUntil::M161);
 
   base::flat_set<GURL> url_set;
   if (!deletion_info.time_range().IsValid())

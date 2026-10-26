@@ -38,10 +38,10 @@ std::unique_ptr<views::BoxLayoutView> GetSubtitleDescriptionContainer() {
 }  // namespace
 
 WalletablePassConsentBubbleView::WalletablePassConsentBubbleView(
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     content::WebContents* web_contents,
     WalletablePassConsentBubbleController* controller)
-    : WalletablePassBubbleViewBase(anchor_view, web_contents, controller),
+    : WalletablePassBubbleViewBase(anchor, web_contents, controller),
       pass_category_(controller->pass_category()),
       controller_(controller->GetWeakPtr()) {
   set_fixed_width(kBubbleWidth);
@@ -125,9 +125,10 @@ void WalletablePassConsentBubbleView::AddedToWidget() {
   GetBubbleFrameView()->SetHeaderView(std::move(image_view));
 
   // Set title view
-  GetBubbleFrameView()->SetTitleView(
-      autofill::CreateWalletBubbleTitleView(l10n_util::GetStringUTF16(
-          IDS_WALLET_WALLETABLE_PASS_CONSENT_DIALOG_TITLE)));
+  GetBubbleFrameView()->SetTitleView(autofill::CreateWalletBubbleTitleView(
+      l10n_util::GetStringUTF16(
+          IDS_WALLET_WALLETABLE_PASS_CONSENT_DIALOG_TITLE),
+      /*is_branding_2026=*/false));
 }
 
 int WalletablePassConsentBubbleView::GetHeaderImageResourceId() const {

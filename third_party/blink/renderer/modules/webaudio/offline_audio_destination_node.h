@@ -26,9 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_OFFLINE_AUDIO_DESTINATION_NODE_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_OFFLINE_AUDIO_DESTINATION_NODE_H_
 
-#include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_destination_node.h"
-#include "third_party/blink/renderer/modules/webaudio/offline_audio_context.h"
 #include "third_party/blink/renderer/modules/webaudio/offline_audio_destination_handler.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 
@@ -42,24 +40,13 @@ class OfflineAudioDestinationNode final : public AudioDestinationNode {
  public:
   static OfflineAudioDestinationNode* Create(BaseAudioContext*,
                                              unsigned number_of_channels,
-                                             uint32_t frames_to_process,
                                              float sample_rate);
 
   OfflineAudioDestinationNode(BaseAudioContext&,
                               unsigned number_of_channels,
-                              uint32_t frames_to_process,
                               float sample_rate);
 
-  AudioBuffer* DestinationBuffer() const { return destination_buffer_.Get(); }
-
-  void SetDestinationBuffer(AudioBuffer* buffer) {
-    destination_buffer_ = buffer;
-  }
-
-  void Trace(Visitor* visitor) const override;
-
- private:
-  Member<AudioBuffer> destination_buffer_;
+  OfflineAudioDestinationHandler& GetAudioDestinationHandler() const override;
 };
 
 }  // namespace blink

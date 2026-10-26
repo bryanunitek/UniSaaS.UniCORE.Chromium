@@ -134,11 +134,11 @@ bool HistogramBase::HasFlags(int32_t flags) const {
   return (this->flags() & flags) == flags;
 }
 
-void HistogramBase::AddTimeMillisecondsGranularity(const TimeDelta& time) {
+void HistogramBase::AddTimeMillisecondsGranularity(TimeDelta time) {
   Add(saturated_cast<Sample32>(time.InMilliseconds()));
 }
 
-void HistogramBase::AddTimeMicrosecondsGranularity(const TimeDelta& time) {
+void HistogramBase::AddTimeMicrosecondsGranularity(TimeDelta time) {
   // Intentionally drop high-resolution reports on clients with low-resolution
   // clocks. High-resolution metrics cannot make use of low-resolution data and
   // reporting it merely adds noise to the metric. https://crbug.com/807615#c16
@@ -223,31 +223,6 @@ HistogramBase::CountAndBucketData HistogramBase::GetCountAndBucketData() const {
   }
 
   return CountAndBucketData(count, sum, std::move(buckets));
-}
-
-void HistogramBase::WriteAsciiBucketGraph(double x_count,
-                                          int line_length,
-                                          std::string* output) const {
-  int x_remainder = line_length - x_count;
-
-  while (0 < x_count--) {
-    output->append("-");
-  }
-  output->append("O");
-  while (0 < x_remainder--) {
-    output->append(" ");
-  }
-}
-
-const std::string HistogramBase::GetSimpleAsciiBucketRange(
-    Sample32 sample) const {
-  return StringPrintf("%d", sample);
-}
-
-void HistogramBase::WriteAsciiBucketValue(Count32 current,
-                                          double scaled_sum,
-                                          std::string* output) const {
-  StringAppendF(output, " (%d = %3.1f%%)", current, current / scaled_sum);
 }
 
 void HistogramBase::WriteAscii(std::string* output) const {

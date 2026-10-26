@@ -6,23 +6,28 @@
 
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sessions/session_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 #include "chrome/browser/ui/views/frame/multi_contents_drop_target_view.h"
+#include "components/sessions/core/session_id.h"
 #include "components/split_tabs/split_tab_visual_data.h"
 #include "components/tabs/public/split_tab_data.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/common/url_constants.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/url_constants.h"
 
-MultiContentsViewDelegateImpl::MultiContentsViewDelegateImpl(Browser& browser)
-    : browser_(browser), tab_strip_model_(*browser.tab_strip_model()) {}
+MultiContentsViewDelegateImpl::MultiContentsViewDelegateImpl(
+    BrowserWindowInterface& browser)
+    : browser_(browser), tab_strip_model_(*browser.GetTabStripModel()) {}
 
 void MultiContentsViewDelegateImpl::WebContentsFocused(
     content::WebContents* web_contents) {
@@ -70,7 +75,7 @@ void MultiContentsViewDelegateImpl::ResizeWebContents(double start_ratio,
         tab_strip_model_->GetActiveTab()->GetSplit().value();
 
     SessionService* const session_service =
-        SessionServiceFactory::GetForProfile(browser_->profile());
+        SessionServiceFactory::GetForProfile(browser_->GetProfile());
 
     if (!session_service) {
       return;
@@ -78,7 +83,7 @@ void MultiContentsViewDelegateImpl::ResizeWebContents(double start_ratio,
 
     const split_tabs::SplitTabVisualData* visual_data =
         tab_strip_model_->GetSplitData(split_id)->visual_data();
-    session_service->SetSplitTabData(browser_->session_id(), split_id,
+    session_service->SetSplitTabData(browser_->GetSessionID(), split_id,
                                      visual_data);
   }
 }
@@ -116,7 +121,7 @@ void MultiContentsViewDelegateImpl::HandleLinkDrop(
   NavigateParams params(&browser_.get(), filtered_urls.front(),
                         ui::PAGE_TRANSITION_LINK);
   params.tabstrip_index = new_tab_idx;
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   params.initiator_origin = event.data().GetRendererTaintedOrigin();
   if (active_tab->IsPinned()) {
     params.tabstrip_add_types |= AddTabTypes::ADD_PINNED;

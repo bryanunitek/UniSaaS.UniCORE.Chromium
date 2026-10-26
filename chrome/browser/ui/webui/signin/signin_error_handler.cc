@@ -7,15 +7,15 @@
 #include "base/functional/bind.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/signin/signin_ui_util.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "content/public/browser/web_ui.h"
 #include "url/gurl.h"
 
-SigninErrorHandler::SigninErrorHandler(Browser* browser) : browser_(browser) {
-  DCHECK(browser_);
+SigninErrorHandler::SigninErrorHandler(BrowserWindowInterface* browser)
+    : browser_(browser) {
+  CHECK(browser_, base::NotFatalUntil::M162);
   browser_collection_observation_.Observe(
       GlobalBrowserCollection::GetInstance());
 }
@@ -72,7 +72,7 @@ void SigninErrorHandler::HandleLearnMore(const base::ListValue& args) {
     return;
   }
   CloseDialog();
-  signin_ui_util::ShowSigninErrorLearnMorePage(browser_->profile());
+  signin_ui_util::ShowSigninErrorLearnMorePage(browser_->GetProfile());
 }
 
 void SigninErrorHandler::HandleInitializedWithSize(
@@ -92,5 +92,5 @@ void SigninErrorHandler::CloseDialog() {
 }
 
 void SigninErrorHandler::CloseBrowserModalSigninDialog() {
-  browser_->GetFeatures().signin_view_controller()->CloseModalSignin();
+  SigninViewController::From(browser_)->CloseModalSignin();
 }

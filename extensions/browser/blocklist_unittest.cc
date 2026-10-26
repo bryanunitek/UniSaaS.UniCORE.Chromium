@@ -5,8 +5,10 @@
 #include "extensions/browser/blocklist.h"
 
 #include "base/functional/bind.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_browser_context.h"
@@ -79,14 +81,19 @@ TEST_F(BlocklistTest, SafeBrowsing) {
   EXPECT_EQ(NOT_BLOCKLISTED, tester.GetBlocklistState(a));
 
   tester.EnableSafeBrowsing();
+  base::HistogramTester histogram_tester;
   tester.NotifyUpdate();
   base::RunLoop().RunUntilIdle();
   // Now it should be.
   EXPECT_EQ(BLOCKLISTED_MALWARE, tester.GetBlocklistState(a));
+  histogram_tester.ExpectBucketCount("Extensions.SafeBrowsing.BlocklistedCount",
+                                     1, 1);
 
   tester.Clear(true);
   // Safe browsing blocklist empty, now enabled.
   EXPECT_EQ(NOT_BLOCKLISTED, tester.GetBlocklistState(a));
+  histogram_tester.ExpectBucketCount("Extensions.SafeBrowsing.BlocklistedCount",
+                                     0, 1);
 }
 
 // Test getting different blocklist states from Blocklist.
@@ -141,7 +148,7 @@ TEST_F(BlocklistTest, GetBlocklistStates) {
 TEST_F(BlocklistTest, FetchBlocklistStates) {
   Blocklist blocklist(browser_context());
   scoped_refptr<FakeSafeBrowsingDatabaseManager> blocklist_db(
-      new FakeSafeBrowsingDatabaseManager(true));
+      base::MakeRefCounted<FakeSafeBrowsingDatabaseManager>(true));
   ScopedDatabaseManagerForTest scoped_blocklist_db(blocklist_db);
 
   ExtensionId a = AddExtension("a");

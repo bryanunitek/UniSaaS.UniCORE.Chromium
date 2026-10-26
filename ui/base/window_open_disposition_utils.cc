@@ -4,9 +4,7 @@
 
 #include "ui/base/window_open_disposition_utils.h"
 
-#include "base/feature_list.h"
 #include "build/build_config.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/events/event_constants.h"
 
 namespace ui {
@@ -26,18 +24,17 @@ WindowOpenDisposition DispositionFromClick(
   const bool new_tab_modifier = middle_button || ctrl_key;
   const bool split_view_modifier = ctrl_key;
 #endif
-  if (split_view_modifier && alt_key && !shift_key &&
-      base::FeatureList::IsEnabled(features::kSplitViewLinkOpen)) {
-    return WindowOpenDisposition::NEW_SPLIT_VIEW;
+  if (split_view_modifier && alt_key && !shift_key) {
+    return WindowOpenDisposition::kNewSplitView;
   }
   if (new_tab_modifier) {
-    return shift_key ? WindowOpenDisposition::NEW_FOREGROUND_TAB
-                     : WindowOpenDisposition::NEW_BACKGROUND_TAB;
+    return shift_key ? WindowOpenDisposition::kNewForegroundTab
+                     : WindowOpenDisposition::kNewBackgroundTab;
   }
   if (shift_key)
-    return WindowOpenDisposition::NEW_WINDOW;
+    return WindowOpenDisposition::kNewWindow;
   if (alt_key)
-    return WindowOpenDisposition::SAVE_TO_DISK;
+    return WindowOpenDisposition::kSaveToDisk;
   return disposition_for_current_tab;
 }
 

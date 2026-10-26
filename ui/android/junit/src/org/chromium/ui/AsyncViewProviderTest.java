@@ -18,7 +18,6 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -29,7 +28,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** Tests logic in the AsyncViewProvider class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @NullMarked
 public class AsyncViewProviderTest {
     private LinearLayout mRoot;
@@ -46,7 +44,7 @@ public class AsyncViewProviderTest {
     public void setUp() {
         mRoot =
                 (LinearLayout)
-                        LayoutInflater.from(RuntimeEnvironment.application)
+                        LayoutInflater.from(RuntimeEnvironment.getApplication())
                                 .inflate(MAIN_LAYOUT_RESOURCE_ID, null);
         mAsyncViewStub = mRoot.findViewById(STUB_ID);
         mAsyncViewStub.setLayoutResource(INFLATE_LAYOUT_RESOURCE_ID);

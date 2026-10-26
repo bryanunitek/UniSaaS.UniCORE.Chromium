@@ -10,9 +10,9 @@ import type {CrInputElement, SettingsSearchEngineEditDialogElement} from 'chrome
 import {loadTimeData, SearchEnginesBrowserProxyImpl} from 'chrome://settings/settings.js';
 import type {SearchEngine} from 'chrome://settings/settings.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
+import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import {createSampleSearchEngine, TestSearchEnginesBrowserProxy} from './test_search_engines_browser_proxy.js';
+import {createSampleSearchEngine, engineId, TestSearchEnginesBrowserProxy} from './test_search_engines_browser_proxy.js';
 // clang-format on
 
 suite('SearchEngineEditDialog', function() {
@@ -34,7 +34,6 @@ suite('SearchEngineEditDialog', function() {
     dialog = document.createElement('settings-search-engine-edit-dialog');
     dialog.model = engine;
     document.body.appendChild(dialog);
-    return flushTasks();
   }
 
   /**
@@ -48,12 +47,12 @@ suite('SearchEngineEditDialog', function() {
       engine: SearchEngine, expectedDialogTitle: string,
       expectedReadonly: boolean) {
     const policySubtitleContainer =
-        dialog.shadowRoot!.querySelector('#policySubtitleContainer');
+        dialog.shadowRoot.querySelector('#policySubtitleContainer');
     assertTrue(!!policySubtitleContainer);
     assertEquals(
         expectedDialogTitle,
-        dialog.shadowRoot!.querySelector(
-                              'div[slot="title"]')!.textContent.trim());
+        dialog.shadowRoot.querySelector(
+                             'div[slot="title"]')!.textContent.trim());
 
     // Check that the cr-input fields are pre-populated.
     assertEquals(engine.name, dialog.$.searchEngine.value);
@@ -75,8 +74,7 @@ suite('SearchEngineEditDialog', function() {
     // created by policy (crbug.com/348165485).
     if (expectedReadonly) {
       browserProxy.resetResolver('validateSearchEngineInput');
-      dialog.$.keyword.dispatchEvent(
-          new CustomEvent('input', {bubbles: true, composed: true}));
+      dialog.$.keyword.fire('input');
       assertEquals(0, browserProxy.getCallCount('validateSearchEngineInput'));
     }
   }
@@ -84,7 +82,9 @@ suite('SearchEngineEditDialog', function() {
   // Tests that the dialog calls 'searchEngineEditStarted' and
   // 'searchEngineEditCancelled' when closed from the 'cancel' button.
   test('DialogOpenAndCancel', async function() {
-    await browserProxy.whenCalled('searchEngineEditStarted');
+    // No model is set, so null is passed to signal a new engine.
+    const id = await browserProxy.whenCalled('searchEngineEditStarted');
+    assertEquals(null, id);
     dialog.$.cancel.click();
     await browserProxy.whenCalled('searchEngineEditCancelled');
   });
@@ -102,10 +102,9 @@ suite('SearchEngineEditDialog', function() {
      */
     function inputAndValidate(inputId: string): Promise<void> {
       const inputElement =
-          dialog.shadowRoot!.querySelector<CrInputElement>(`#${inputId}`)!;
+          dialog.shadowRoot.querySelector<CrInputElement>(`#${inputId}`)!;
       browserProxy.resetResolver('validateSearchEngineInput');
-      inputElement.dispatchEvent(
-          new CustomEvent('input', {bubbles: true, composed: true}));
+      inputElement.fire('input');
       return inputElement.value !== '' ?
           // Expecting validation only on non-empty values.
           browserProxy.whenCalled('validateSearchEngineInput') :
@@ -141,19 +140,21 @@ suite('SearchEngineEditDialog', function() {
   });
 
   test('DialogCloseWhenEnginesChangedModelEngineNotFound', function() {
-    dialog.model = createSampleSearchEngine({id: 0, name: 'G'});
+    dialog.model = createSampleSearchEngine({id: engineId('db:0'), name: 'G'});
     webUIListenerCallback('search-engines-changed', {
       activeSiteShortcuts: [],
-      inactiveSiteShortcuts: [createSampleSearchEngine({id: 1, name: 'H'})],
+      inactiveSiteShortcuts:
+          [createSampleSearchEngine({id: engineId('db:1'), name: 'H'})],
       activeFeatureShortcuts: [],
       inactiveFeatureShortcuts: [],
     });
     return browserProxy.whenCalled('searchEngineEditCancelled');
   });
 
-  test('DialogValidateInputsWhenEnginesChanged', function() {
+  test('DialogValidateInputsWhenEnginesChanged', async function() {
     dialog.model = createSampleSearchEngine({name: 'G'});
-    dialog.set('keyword_', 'G');
+    dialog.$.keyword.value = 'G';
+    await microtasksFinished();
     webUIListenerCallback('search-engines-changed', {
       activeSiteShortcuts: [],
       inactiveSiteShortcuts: [createSampleSearchEngine({name: 'G'})],
@@ -165,7 +166,7 @@ suite('SearchEngineEditDialog', function() {
 
   test('EditSearchEngineDialog_IsManaged', function() {
     const engine = createSampleSearchEngine({
-      id: 1,
+      id: engineId('db:1'),
       name: 'search_engine_active_E',
       displayName: 'E displayName',
       keyword: 'active E',
@@ -182,7 +183,7 @@ suite('SearchEngineEditDialog', function() {
 
   test('EditSearchEngineDialog_IsManaged_Readonly', function() {
     const engine = createSampleSearchEngine({
-      id: 2,
+      id: engineId('db:2'),
       name: 'search_engine_active_F',
       displayName: 'F displayName',
       keyword: 'active F',
@@ -199,7 +200,7 @@ suite('SearchEngineEditDialog', function() {
 
   test('EditSearchEngineDialog_Prepopulated_IsManaged', function() {
     const engine = createSampleSearchEngine({
-      id: 3,
+      id: engineId('db:3'),
       name: 'search_engine_default_B',
       displayName: 'B displayName',
       keyword: 'default B',
@@ -217,7 +218,7 @@ suite('SearchEngineEditDialog', function() {
 
   test('EditSearchEngineDialog_Prepopulated_IsManaged_Readonly', function() {
     const engine = createSampleSearchEngine({
-      id: 4,
+      id: engineId('db:4'),
       name: 'search_engine_default_D',
       displayName: 'D displayName',
       keyword: 'default D',
@@ -235,7 +236,7 @@ suite('SearchEngineEditDialog', function() {
 
   test('EditSearchEngineDialog_UrlLocked', function() {
     const engine = createSampleSearchEngine({
-      id: 5,
+      id: engineId('db:5'),
       name: 'search_engine_default_B',
       displayName: 'B displayName',
       keyword: 'default B',
@@ -277,25 +278,33 @@ suite('SearchEngineEditDialogInSearchEnginesPage', function() {
   });
 
   test('DialogCloseWhenEnginesChangedModelEngineNotFound', function() {
-    dialog.model = createSampleSearchEngine({id: 0, name: 'G'});
+    dialog.model = createSampleSearchEngine({id: engineId('db:0'), name: 'G'});
     webUIListenerCallback('search-engines-changed', {
       defaults: [],
       actives: [],
-      others: [createSampleSearchEngine({id: 1, name: 'H'})],
+      others: [createSampleSearchEngine({id: engineId('db:1'), name: 'H'})],
       extensions: [],
     });
     return browserProxy.whenCalled('searchEngineEditCancelled');
   });
 
-  test('DialogValidateInputsWhenEnginesChanged', function() {
+  test('DialogValidateInputsWhenEnginesChanged', async function() {
     dialog.model = createSampleSearchEngine({name: 'G'});
-    dialog.set('keyword_', 'G');
+    await microtasksFinished();
+    browserProxy.resetResolver('validateSearchEngineInput');
+
     webUIListenerCallback('search-engines-changed', {
       defaults: [],
       actives: [],
       others: [createSampleSearchEngine({name: 'G'})],
       extensions: [],
     });
-    return browserProxy.whenCalled('validateSearchEngineInput');
+
+    // This may be called 3 times, once for each of searchEngine, keyword,
+    // and queryUrl, but searchEngine comes first.
+    const args = await browserProxy.whenCalled('validateSearchEngineInput');
+    assertEquals(2, args.length);
+    assertEquals('searchEngine', args[0]);
+    assertEquals('G', args[1]);
   });
 });

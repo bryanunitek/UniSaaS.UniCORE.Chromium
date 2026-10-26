@@ -81,7 +81,8 @@ void OmniboxController::StartAutocomplete(
 }
 
 void OmniboxController::StopAutocomplete(bool clear_result) const {
-  TRACE_EVENT0("omnibox", "OmniboxController::StopAutocomplete");
+  TRACE_EVENT1("omnibox", "OmniboxController::StopAutocomplete", "clear_result",
+               clear_result);
   autocomplete_controller_->Stop(clear_result
                                      ? AutocompleteStopReason::kClobbered
                                      : AutocompleteStopReason::kInteraction);
@@ -115,7 +116,8 @@ void OmniboxController::StartZeroSuggestPrefetch() {
 void OmniboxController::OnResultChanged(AutocompleteController* controller,
                                         bool default_match_changed) {
   TRACE_EVENT0("omnibox", "OmniboxController::OnResultChanged");
-  DCHECK(controller == autocomplete_controller_.get());
+  CHECK(controller == autocomplete_controller_.get(),
+        base::NotFatalUntil::M162);
 
   // OnResultChanged will be also called upon the first user interaction
   // with the omnibox to show a new result.
@@ -176,8 +178,8 @@ void OmniboxController::ClearPopupKeywordMode() const {
   TRACE_EVENT0("omnibox", "OmniboxController::ClearPopupKeywordMode");
   if (IsPopupOpen()) {
     OmniboxPopupSelection selection = edit_model_->GetPopupSelection();
-    if (selection.state == OmniboxPopupSelection::KEYWORD_MODE) {
-      selection.state = OmniboxPopupSelection::NORMAL;
+    if (selection.state == OmniboxPopupSelection::LineState::kKeywordMode) {
+      selection.state = OmniboxPopupSelection::LineState::kNormal;
       edit_model_->SetPopupSelection(selection);
     }
   }
@@ -189,10 +191,6 @@ bool OmniboxController::IsSuggestionHidden(
 }
 
 bool OmniboxController::IsPopupOpen() const {
-  if (base::FeatureList::IsEnabled(omnibox::kWebUIOmniboxFullPopup)) {
-    return !autocomplete_controller()->result().empty();
-  }
-
   OmniboxPopupState state = popup_state_manager_->popup_state();
   if (popup_state_validation_callback_) {
     popup_state_validation_callback_.Run(state);

@@ -7,9 +7,12 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <limits>
 
 #include "base/check_op.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
+#include "cc/base/features.h"
 #include "cc/base/math_util.h"
 #include "cc/debug/debug_colors.h"
 #include "cc/layers/append_quads_context.h"
@@ -178,7 +181,6 @@ bool RenderSurfaceImpl::IsViewTransitionElement() const {
 // Returns true if this render surface is for an unbounded element.
 bool RenderSurfaceImpl::IsUnbounded() const {
   return layer_tree_impl_->settings().enable_unbounded_element &&
-         !layer_tree_impl_->settings().TreesInVizInClientProcess() &&
          OwningEffectNode() &&
          OwningEffectNode()->render_surface_reason ==
              RenderSurfaceReason::kUnboundedElement;
@@ -199,6 +201,10 @@ int RenderSurfaceImpl::ClipTreeIndex() const {
 
 int RenderSurfaceImpl::EffectTreeIndex() const {
   return effect_tree_index_;
+}
+
+const EffectTree* RenderSurfaceImpl::effect_tree() const {
+  return &layer_tree_impl_->property_trees()->effect_tree();
 }
 
 const EffectNode* RenderSurfaceImpl::OwningEffectNode() const {
@@ -284,8 +290,9 @@ gfx::Rect RenderSurfaceImpl::CalculateClippedAccumulatedContentRect() {
     return gfx::Rect();
 
   gfx::Rect clipped_accumulated_rect_in_local_space =
-      MathUtil::ProjectEnclosingClippedRect(
-          target_to_surface, clipped_accumulated_rect_in_target_space);
+      MathUtil::ProjectEnclosingClippedRectIgnoringError(
+          target_to_surface, clipped_accumulated_rect_in_target_space,
+          std::numeric_limits<float>::epsilon());
   // Bringing clipped accumulated rect back to local space may result
   // in inflation due to axis-alignment.
   clipped_accumulated_rect_in_local_space.Intersect(accumulated_content_rect());
@@ -416,8 +423,9 @@ void RenderSurfaceImpl::AccumulateContentRectFromContributingRenderSurface(
   // The content rect of contributing surface is in its own space. Instead, we
   // will use contributing surface's DrawableContentRect which is in target
   // space (local space for this render surface) as required.
-  accumulated_content_rect_.Union(
-      gfx::ToEnclosedRect(contributing_surface->DrawableContentRect()));
+  accumulated_content_rect_.Union(gfx::ToEnclosingRectIgnoringError(
+      contributing_surface->DrawableContentRect(),
+      std::numeric_limits<float>::epsilon()));
 
   // Now if contributing surface is a *matching* view transition element,
   // meaning that we're doing a capture, then above we ensure that we can use
@@ -447,7 +455,7 @@ bool RenderSurfaceImpl::AncestorPropertyChanged() const {
          property_trees->transform_tree()
              .Node(TransformTreeIndex())
              .transform_changed() ||
-         property_trees->effect_tree().Node(EffectTreeIndex()).effect_changed;
+         property_trees->effect_tree().Node(EffectTreeIndex()).effect_changed();
 }
 
 void RenderSurfaceImpl::NoteAncestorPropertyChanged() {
@@ -493,10 +501,12 @@ std::unique_ptr<viz::CompositorRenderPass> RenderSurfaceImpl::CreateRenderPass(
   // We never cache the capture render pass, so it's only specified here.
   pass->cache_render_pass = ShouldCacheRenderSurface();
 
-  // We only set the view transition tokens on a regular pass that don't match
-  // the capture phase tokens. The capture phase tokens will only be set on the
-  // view transition render pass.
-  if (!ViewTransitionElementResourceId().MatchesToken(
+  // We set the view transition resource id on a regular pass if we're not
+  // creating a separate capture render pass for it (either because its token
+  // doesn't match the capture phase tokens, or because it has no nested
+  // capture contributions to exclude).
+  if (!has_view_transition_capture_contributions() ||
+      !ViewTransitionElementResourceId().MatchesToken(
           capture_view_transition_tokens)) {
     pass->view_transition_element_resource_id =
         ViewTransitionElementResourceId();
@@ -511,9 +521,14 @@ RenderSurfaceImpl::CreateViewTransitionCaptureRenderPass(
   auto pass = CreateRenderPassCommon(view_transition_capture_render_pass_id(),
                                      view_transition_capture_content_rect_);
 
-  DCHECK(IsViewTransitionElement() ||
-         has_view_transition_capture_contributions());
-  pass->view_transition_element_resource_id = ViewTransitionElementResourceId();
+  DCHECK(has_view_transition_capture_contributions());
+  if (!base::FeatureList::IsEnabled(
+          features::kViewTransitionsAvoidDuplicateCaptureRenderPass) ||
+      ViewTransitionElementResourceId().MatchesToken(
+          capture_view_transition_tokens)) {
+    pass->view_transition_element_resource_id =
+        ViewTransitionElementResourceId();
+  }
   return pass;
 }
 
@@ -526,9 +541,6 @@ RenderSurfaceImpl::CreateRenderPassCommon(viz::CompositorRenderPassId id,
   damage_rect.Intersect(output_rect);
   pass->SetNew(id, output_rect, damage_rect,
                draw_properties_.screen_space_transform);
-  pass->filters = Filters();
-  pass->backdrop_filters = BackdropFilters();
-  pass->backdrop_filter_bounds = BackdropFilterBounds();
   pass->generate_mipmap = TrilinearFiltering();
   // The subtree size may be slightly larger than our content rect during
   // some animations, so we clamp it here.
@@ -657,7 +669,8 @@ void RenderSurfaceImpl::AppendQuads(const AppendQuadsContext& context,
       /*needs_blending=*/true, append_render_pass_id, mask_resource_id,
       mask_uv_rect, mask_texture_size, surface_contents_scale, gfx::PointF(),
       !layer_tree_impl_->settings().enable_edge_anti_aliasing,
-      OwningEffectNode()->backdrop_filter_quality, intersects_damage_under_);
+      OwningEffectNode()->backdrop_filter_quality, intersects_damage_under_,
+      Filters(), BackdropFilters(), BackdropFilterBounds());
 }
 
 bool RenderSurfaceImpl::ShouldClip() const {

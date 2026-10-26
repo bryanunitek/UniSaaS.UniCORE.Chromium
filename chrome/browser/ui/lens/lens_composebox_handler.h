@@ -13,7 +13,6 @@
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "ui/webui/resources/cr_components/composebox/composebox.mojom.h"
 #include "url/gurl.h"
 
@@ -32,7 +31,6 @@ class LensComposeboxHandler : public composebox::mojom::PageHandler,
       Profile* profile,
       content::WebContents* web_contents,
       mojo::PendingReceiver<composebox::mojom::PageHandler> pending_handler,
-      mojo::PendingRemote<composebox::mojom::Page> pending_page,
       mojo::PendingReceiver<searchbox::mojom::PageHandler>
           pending_searchbox_handler,
       mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page);
@@ -60,7 +58,7 @@ class LensComposeboxHandler : public composebox::mojom::PageHandler,
   void NotifyComposeboxQuerySubmittedWithContext() override;
   void CanShowNextboxAnimation(
       CanShowNextboxAnimationCallback callback) override;
-  void RecordNextboxAnimationImpression() override;
+  void RecordNextboxAnimationImpression(bool shown) override;
 
   // searchbox::mojom::PageHandler:
   void DeleteAutocompleteMatch(uint8_t line, const GURL& url) override;
@@ -84,7 +82,6 @@ class LensComposeboxHandler : public composebox::mojom::PageHandler,
 
   // These are located at the end of the list of member variables to ensure the
   // WebUI page is disconnected before other members are destroyed.
-  mojo::Remote<composebox::mojom::Page> page_;
   mojo::Receiver<composebox::mojom::PageHandler> handler_;
 };
 

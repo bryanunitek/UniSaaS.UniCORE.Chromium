@@ -20,6 +20,7 @@
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
+#include "extensions/common/extension_urls.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
 #include "url/url_constants.h"
@@ -37,12 +38,6 @@ using WebAccessibleResourcesMv2ManifestKeys =
     api::web_accessible_resources_mv2::ManifestKeys;
 
 namespace {
-
-const WebAccessibleResourcesInfo* GetResourcesInfo(const Extension* extension) {
-  return static_cast<const WebAccessibleResourcesInfo*>(
-      extension->GetManifestData(
-          WebAccessibleResourcesManifestKeys::kWebAccessibleResources));
-}
 
 URLPattern GetPattern(std::string relative_path, const Extension& extension) {
   URLPattern pattern(URLPattern::SCHEME_EXTENSION);
@@ -181,6 +176,40 @@ GURL GetInitiatorUrl(const std::optional<url::Origin>& initiator_origin) {
   return initiator_url;
 }
 
+// Returns true if `pattern` explicitly references the favicon path.
+// Generated paths like _favicon are not exposed by blanket wildcards (e.g.
+// "*").
+bool PatternExplicitlyReferencesFavicon(const URLPattern& pattern) {
+  // `GetPattern()` prepends '/' to every resource path, so "_favicon/*" is
+  // stored as "/_favicon/*".
+  std::string_view pattern_path = pattern.path();
+  if (!pattern_path.starts_with('/') ||
+      !pattern_path.substr(1).starts_with(kFaviconSourcePath)) {
+    return false;
+  }
+  std::string_view remainder =
+      pattern_path.substr(1 + std::string_view(kFaviconSourcePath).length());
+  return remainder.empty() || remainder.starts_with('/');
+}
+
+// Returns true if any pattern in `resources` explicitly matches the favicon
+// path.
+bool EntryExplicitlyMatchesFavicon(const Extension& extension,
+                                   const URLPatternSet& resources,
+                                   std::string_view relative_path) {
+  for (const URLPattern& pattern : resources) {
+    if (PatternExplicitlyReferencesFavicon(pattern)) {
+      URLPatternSet single_pattern_set;
+      single_pattern_set.AddPattern(pattern);
+      if (extension.ResourceMatches(single_pattern_set, relative_path,
+                                    /*case_sensitive=*/true)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Shared implementation for `IsResourceWebAccessible` and
 // `IsResourceWebAccessibleRedirect`.
 bool IsResourceWebAccessibleImpl(
@@ -188,17 +217,33 @@ bool IsResourceWebAccessibleImpl(
     const GURL& target_url,
     const std::optional<url::Origin>& initiator_origin,
     const GURL& upstream_url) {
-  const WebAccessibleResourcesInfo* info = GetResourcesInfo(&extension);
+  const auto* info = extension.GetManifestData<WebAccessibleResourcesInfo>();
   if (!info) {
     return false;
   }
+
+  const bool restrict_generated_paths = base::FeatureList::IsEnabled(
+      extensions_features::kRestrictGeneratedPathsInWebAccessibleResources);
+
+  // Generated background pages should never be web accessible.
+  if (restrict_generated_paths && IsGeneratedBackgroundPageURL(target_url)) {
+    return false;
+  }
+
+  const bool is_favicon =
+      restrict_generated_paths && IsGeneratedFaviconURL(target_url);
 
   GURL initiator_url = GetInitiatorUrl(initiator_origin);
   std::string relative_path = target_url.GetPath();
 
   // Look for the first match in the array of web accessible resources.
   for (const auto& entry : info->web_accessible_resources) {
-    if (extension.ResourceMatches(entry.resources, relative_path)) {
+    bool matches =
+        is_favicon ? EntryExplicitlyMatchesFavicon(extension, entry.resources,
+                                                   relative_path)
+                   : extension.ResourceMatches(entry.resources, relative_path,
+                                               /*case_sensitive=*/true);
+    if (matches) {
       bool result = true;
 
       // Prior to MV3, web-accessible resources were accessible by any site.
@@ -254,6 +299,10 @@ bool IsResourceWebAccessibleImpl(
 
 }  // namespace
 
+// static
+const char* WebAccessibleResourcesInfo::kManifestDataKey =
+    WebAccessibleResourcesManifestKeys::kWebAccessibleResources;
+
 WebAccessibleResourcesInfo::WebAccessibleResourcesInfo() = default;
 
 WebAccessibleResourcesInfo::~WebAccessibleResourcesInfo() = default;
@@ -288,20 +337,32 @@ bool WebAccessibleResourcesInfo::IsResourceWebAccessibleRedirect(
 // static
 bool WebAccessibleResourcesInfo::HasWebAccessibleResources(
     const Extension* extension) {
-  const WebAccessibleResourcesInfo* info = GetResourcesInfo(extension);
+  const auto* info = extension->GetManifestData<WebAccessibleResourcesInfo>();
   return info && (info->web_accessible_resources.size() > 0);
 }
 
 // static
 bool WebAccessibleResourcesInfo::ShouldUseDynamicUrl(const Extension* extension,
                                                      const std::string& path) {
-  const WebAccessibleResourcesInfo* info = GetResourcesInfo(extension);
+  const auto* info = extension->GetManifestData<WebAccessibleResourcesInfo>();
   if (!info) {
     return false;
   }
+  const bool restrict_generated_paths = base::FeatureList::IsEnabled(
+      extensions_features::kRestrictGeneratedPathsInWebAccessibleResources);
+  GURL target_url = extension->ResolveExtensionURL(path);
+  if (restrict_generated_paths && IsGeneratedBackgroundPageURL(target_url)) {
+    return false;
+  }
+  const bool is_favicon =
+      restrict_generated_paths && IsGeneratedFaviconURL(target_url);
   for (const auto& entry : info->web_accessible_resources) {
-    if (extension->ResourceMatches(entry.resources, path) &&
-        entry.use_dynamic_url) {
+    bool matches =
+        is_favicon
+            ? EntryExplicitlyMatchesFavicon(*extension, entry.resources, path)
+            : extension->ResourceMatches(entry.resources, path,
+                                         /*case_sensitive=*/true);
+    if (matches && entry.use_dynamic_url) {
       return true;
     }
   }
@@ -338,9 +399,7 @@ bool WebAccessibleResourcesHandler::Parse(Extension* extension,
   if (!info) {
     return false;
   }
-  extension->SetManifestData(
-      WebAccessibleResourcesManifestKeys::kWebAccessibleResources,
-      std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
 }
 base::span<const char* const> WebAccessibleResourcesHandler::Keys() const {

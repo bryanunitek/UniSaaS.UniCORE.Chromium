@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #include "third_party/blink/renderer/core/editing/markers/preview_stylus_gesture_marker_list_impl.h"
 
 #include "third_party/blink/renderer/core/editing/markers/marker_test_utilities.h"
@@ -12,7 +16,7 @@ class PreviewStylusGestureMarkerListImplTest : public EditingTestBase {
       : marker_list_(
             MakeGarbageCollected<PreviewStylusGestureMarkerListImpl>()) {}
 
-  DocumentMarker* CreateMarker(unsigned start_offset, unsigned end_offset) {
+  DocumentMarker* CreateMarker(wtf_size_t start_offset, wtf_size_t end_offset) {
     return MakeGarbageCollected<PreviewStylusGestureMarker>(
         start_offset, end_offset, Color::kBlack);
   }

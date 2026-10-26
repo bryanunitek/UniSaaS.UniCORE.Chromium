@@ -7,7 +7,6 @@
 <translation id="1049926623896334335">Tài liệu Word</translation>
 <translation id="1056775291175587022">Không có mạng</translation>
 <translation id="1056898198331236512">Cảnh báo</translation>
-<translation id="1060368002126861100">Để mở tệp bằng <ph name="APP_NAME" />, trước tiên, hãy di chuyển các tệp đó đến thư mục tệp Windows.</translation>
 <translation id="1062407476771304334">Thay thế</translation>
 <translation id="1119383441774809183">Hiện tin nhắn văn bản</translation>
 <translation id="1119447706177454957">Lỗi nội bộ</translation>
@@ -57,8 +56,6 @@
 <translation id="1404323374378969387">Tiếng Na Uy</translation>
 <translation id="1408504635543854729">Khám phá nội dung của thiết bị trong ứng dụng Tệp. Quản trị viên đã hạn chế nội dung và bạn không thể sửa đổi nội dung này.</translation>
 <translation id="1412476183660741812">Gói web đã ký</translation>
-<translation id="1433628812591023318">Để thả tệp vào Parallels Desktop, bạn phải chuyển tệp đó vào thư mục tệp Windows.</translation>
-<translation id="1435838927755162558">Chia sẻ thư mục với ứng dụng Parallels Desktop</translation>
 <translation id="1439919885608649279">Người với hoa</translation>
 <translation id="1458457385801829801">Ngắt kết nối <ph name="TARGET_NAME" /></translation>
 <translation id="1464781208867302907">Để xem các tùy chọn của thiết bị, hãy chuyển đến phần Cài đặt.</translation>
@@ -234,7 +231,6 @@
 <translation id="2728450421877450246">Tiếng Pháp</translation>
 <translation id="2732288874651063549">Quản lý nội dung được chia sẻ với <ph name="VM_NAME" /></translation>
 <translation id="2732839045120506979">Tiếng Việt (VNI)</translation>
-<translation id="2735623501230989521">Cho phép ứng dụng Parallels Desktop truy cập vào các tệp trong thư mục <ph name="FOLDER_NAME" /></translation>
 <translation id="2764206540577097904">Bạn đã dùng hết bộ nhớ cá nhân trên Google Workspace.</translation>
 <translation id="2771816809568414714">Pho mát</translation>
 <translation id="2783909841122647548">Gói Debian không còn được hỗ trợ cài đặt. <ph name="BEGIN_LINK" />Tìm hiểu thêm<ph name="END_LINK" /></translation>
@@ -267,7 +263,6 @@
 <translation id="303198083543495566">Địa lý</translation>
 <translation id="3044404008258011032">Để khôi phục, hãy kéo các mục này vào một thư mục mới bên ngoài thùng rác. Thư mục gốc "<ph name="PARENT_FOLDER_NAME" />" của những mục này đã bị xoá.</translation>
 <translation id="3047197340186497470">Tiếng Trung (Dayi)</translation>
-<translation id="3067790092342515856">Tệp Windows</translation>
 <translation id="3083975830683400843">Chromebit</translation>
 <translation id="3085752524577180175">Máy chủ SOCKS</translation>
 <translation id="3091469289665833668">Tiếng Romania</translation>
@@ -329,7 +324,6 @@
 <translation id="3529424493985988200">Hãy liên hệ với quản trị viên để biết chi tiết.</translation>
 <translation id="3548125359243647069">Bạn đã nhập sai mã PIN quá nhiều lần.</translation>
 <translation id="3549797760399244642">Truy cập drive.google.com...</translation>
-<translation id="3553048479571901246">Để mở tệp bằng <ph name="APP_NAME" />, trước tiên, hãy sao chép các tệp đó vào thư mục tệp Windows.</translation>
 <translation id="3556731189587832921">Tiếng Anh (Mỹ) bằng bàn phím quốc tế cho máy tính để bàn</translation>
 <translation id="3557414470514932909">Đang chuyển <ph name="FILE_NAME" /> vào thùng rác</translation>
 <translation id="3560848236447534728">Tiếng Armenia (phiên âm)</translation>
@@ -450,7 +444,6 @@
 <translation id="4477002475007461989">Tiếng Rumani</translation>
 <translation id="4508265954913339219">Kích hoạt không thành công</translation>
 <translation id="4509667233588080747">Tiếng Anh (Mỹ) bằng bàn phím quốc tế Workman</translation>
-<translation id="4527800702232535228">Thư mục này được chia sẻ với Parallels Desktop</translation>
 <translation id="4552678318981539154">Mua thêm dung lượng lưu trữ</translation>
 <translation id="4552759165874948005">Mạng <ph name="NETWORK_TYPE" />, cường độ tín hiệu <ph name="SIGNAL_STRENGTH" />%</translation>
 <translation id="4559767610552730302">Hiệu ứng Bokeh</translation>
@@ -484,7 +477,6 @@
 <translation id="4779136857077979611">Cơm nắm Onigiri</translation>
 <translation id="4784330909746505604">Bản trình bày PowerPoint</translation>
 <translation id="4788401404269709922"><ph name="NUMBER_OF_KB" /> KB</translation>
-<translation id="4789067489790477934">Cho phép ứng dụng Parallels Desktop truy cập vào các tệp trên Google Drive của bạn. Các thay đổi sẽ đồng bộ hóa với những thiết bị khác mà bạn có.</translation>
 <translation id="4790766916287588578">Tiếng Hindi bằng bàn phím InScript</translation>
 <translation id="4798645114741131062">Thiết bị ChromeOS Flex của bạn sẽ sớm ngừng nhận bản cập nhật. Hãy cân nhắc nâng cấp lên thiết bị ChromeOS.</translation>
 <translation id="4801956050125744859">Giữ cả hai</translation>
@@ -504,12 +496,10 @@
 <translation id="4880214202172289027">Thanh trượt âm lượng</translation>
 <translation id="4881695831933465202">Mở</translation>
 <translation id="4891091358278567964">Để khôi phục, hãy kéo các mục này vào một thư mục mới bên ngoài thùng rác. Các thư mục gốc của những mục này đã bị xoá.</translation>
-<translation id="4900532980794411603">Chia sẻ với ứng dụng Parallels Desktop</translation>
 <translation id="4902546322522096650">Mạng <ph name="NETWORK_INDEX" />/<ph name="NETWORK_COUNT" />, <ph name="NETWORK_NAME" />, <ph name="SECURITY_STATUS" />, Cường độ tín hiệu <ph name="SIGNAL_STRENGTH" />%, Kết nối</translation>
 <translation id="4906580650526544301">Mạng <ph name="NETWORK_INDEX" />/<ph name="NETWORK_COUNT" />, <ph name="PHONE_NAME" />, <ph name="PROVIDER_NAME" />, <ph name="CONNECTION_STATUS" />, Cường độ tín hiệu <ph name="SIGNAL_STRENGTH" />%, Pin điện thoại <ph name="BATTERY_STATUS" />%, Thông tin chi tiết</translation>
 <translation id="4935975195727477204">Hoa Gazania</translation>
 <translation id="4943368462779413526">Bóng đá</translation>
-<translation id="4961158930123534723">Đã chia sẻ 1 thư mục với ứng dụng Parallels Desktop</translation>
 <translation id="4965874878399872778">Đang kiểm tra tệp theo các chính sách bảo mật của tổ chức bạn...</translation>
 <translation id="496656650103537022">Đã khôi phục <ph name="FILE_NAME" /></translation>
 <translation id="4969785127455456148">Album</translation>
@@ -524,16 +514,15 @@
 <translation id="5011233892417813670">Chromebook</translation>
 <translation id="5024856940085636730">Một tác vụ đang diễn ra lâu hơn thông thường. Bạn có muốn hủy tác vụ này không?</translation>
 <translation id="5036141350290856713">Tiếng Nga (phiên âm)</translation>
-<translation id="5036159836254554629">Quản lý việc chia sẻ với ứng dụng Parallels Desktop</translation>
 <translation id="5038625366300922036">Xem thêm...</translation>
 <translation id="5044852990838351217">Tiếng Armenia</translation>
 <translation id="5045550434625856497">Mật khẩu sai</translation>
 <translation id="5059127710849015030">Tiếng Nepal (chuyển tự)</translation>
 <translation id="5068919226082848014">Pizza</translation>
+<translation id="5075336522277785691"><ph name="EXTENSION_NAME" /> đã thiết lập các quy tắc ghi đè proxy</translation>
 <translation id="5081517858322016911"><ph name="TOTAL_FILE_SIZE" /> dung lượng tệp sẽ bị xóa</translation>
 <translation id="508423945471810158">Đang di chuyển <ph name="NUMBER_OF_ITEMS" /> mục vào <ph name="FOLDER_NAME" /></translation>
 <translation id="509429900233858213">Đã xảy ra lỗi.</translation>
-<translation id="5102922915594634436">Quản lý các thư mục được đồng bộ hoá</translation>
 <translation id="5109254780565519649">Đã xảy ra lỗi. Một số mục có thể chưa được khôi phục.</translation>
 <translation id="5110329002213341433">Tiếng Anh (Canada)</translation>
 <translation id="5119780910075847424">Tính năng đồng bộ hoá đã tạm dừng</translation>
@@ -551,7 +540,7 @@
 <translation id="5181896909298187506">Không có tệp nào gần đây</translation>
 <translation id="5194713942430106590">Nhấp để sắp xếp cột theo thứ tự tăng dần.</translation>
 <translation id="5211614973734216083">Tiếng Faroe</translation>
-<translation id="5234764350956374838">Bỏ qua</translation>
+<translation id="5234764350956374838">Đóng</translation>
 <translation id="5253070652067921974">Người tạo:</translation>
 <translation id="5254207638927440400">Không thể di chuyển tệp. Tệp đang được sử dụng.</translation>
 <translation id="5257456363153333584">Chuồn chuồn</translation>
@@ -736,11 +725,9 @@
 <translation id="656398493051028875">Đang xóa "<ph name="FILENAME" />"...</translation>
 <translation id="6581162200855843583">Liên kết Google Drive</translation>
 <translation id="6588648400954570689">Cài đặt tính năng đồng bộ hoá tệp</translation>
-<translation id="6594855146910089723">Thư mục này được chia sẻ với Linux và Parallels Desktop</translation>
 <translation id="6607272825297743757">Thông tin tệp</translation>
-<translation id="6609332149380188670">Đã chia sẻ <ph name="NUMBER_OF_ITEMS" /> thư mục với ứng dụng Parallels Desktop</translation>
 <translation id="6629518321609546825">Nhập ít nhất 4 số</translation>
-<translation id="6643016212128521049">Xóa</translation>
+<translation id="6643016212128521049">Xoá</translation>
 <translation id="6650726141019353908">Bướm màu hồng</translation>
 <translation id="6657585470893396449">Mật khẩu</translation>
 <translation id="6658865850469097484">Các tệp đã nằm trong thùng rác hơn 30 ngày sẽ tự động bị xoá.</translation>
@@ -856,7 +843,6 @@
 <translation id="7436921188514130341">Ôi, hỏng! Đã xảy ra lỗi trong khi đổi tên.</translation>
 <translation id="7458955835361612701">Không có hình ảnh nào gần đây</translation>
 <translation id="7469894403370665791">Tự động kết nối vào mạng này</translation>
-<translation id="7486315294984620427">Để thả tệp vào Parallels Desktop, bạn phải sao chép tệp đó vào thư mục tệp Windows.</translation>
 <translation id="749452993132003881">Hiragana</translation>
 <translation id="7495372004724182530">Tiếng Malayalam (phiên âm)</translation>
 <translation id="7505167922889582512">Hiện các tệp bị ẩn</translation>
@@ -883,7 +869,6 @@
 <translation id="7663224033570512922">Tiếng Hindi</translation>
 <translation id="7665680517722058469">Thử nhập cụm từ tìm kiếm khác</translation>
 <translation id="7689532716264131859">Đã chuyển <ph name="NUMBER_OF_ITEMS" /> mục vào thùng rác</translation>
-<translation id="7693909743393669729">Thao tác định dạng ổ đĩa sẽ xóa toàn bộ dữ liệu lưu trữ trên ổ đĩa đó, đồng thời xóa tất cả phân vùng hiện có, bao gồm cả những phân vùng có thể không hiển thị. Bạn không thể hủy thao tác này sau khi thực hiện.</translation>
 <translation id="7695430100978772476">Không định dạng được <ph name="DRIVE_NAME" /></translation>
 <translation id="76959938259365003">Không dọn sạch được thùng rác.</translation>
 <translation id="7705251383879779343">Đã sao chép <ph name="FILE_NAME" />.</translation>
@@ -927,7 +912,6 @@
 <translation id="7901567919203965902">Bàn phím quốc tế Workman tiêu chuẩn Hoa Kỳ</translation>
 <translation id="7903984238293908205">Katakana</translation>
 <translation id="7908378463497120834">Rất tiếc, ít nhất một phân vùng trên thiết bị lưu trữ bên ngoài của bạn không thể kết nối được.</translation>
-<translation id="7908793776359722643">Thao tác định dạng một phân vùng sẽ xóa toàn bộ dữ liệu lưu trữ trên phân vùng đó. Bạn không thể hủy thao tác này sau khi thực hiện.</translation>
 <translation id="7911118814695487383">Linux</translation>
 <translation id="7920501309908018401">Các tệp trong Drive của tôi sẽ tự động đồng bộ hoá với Chromebook để bạn có thể truy cập các tệp này mà không cần kết nối Internet.</translation>
 <translation id="7925247922861151263">Không thể kiểm tra AAA</translation>

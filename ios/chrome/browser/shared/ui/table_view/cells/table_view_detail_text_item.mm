@@ -34,7 +34,7 @@
       [[TableViewCellContentConfiguration alloc] init];
   configuration.title = self.text;
   configuration.titleColor = self.textColor;
-  configuration.titleNumberOfLines = 1;
+  configuration.titleNumberOfLines = 2;
   configuration.subtitle = self.detailText;
   configuration.subtitleColor = self.detailTextColor;
   configuration.subtitleNumberOfLines = self.allowMultilineDetailText ? 0 : 1;
@@ -59,13 +59,13 @@
   switch (self.accessorySymbol) {
     case TableViewDetailTextCellAccessorySymbolChevron:
       cell.accessoryView = [[UIImageView alloc]
-          initWithImage:DefaultSymbolTemplateWithPointSize(
-                            kChevronForwardSymbol, kSymbolAccessoryPointSize)];
+          initWithImage:SymbolTemplateWithPointSize(SymbolChevronForward,
+                                                    kSymbolAccessoryPointSize)];
       break;
     case TableViewDetailTextCellAccessorySymbolExternalLink:
       cell.accessoryView = [[UIImageView alloc]
-          initWithImage:DefaultSymbolTemplateWithPointSize(
-                            kExternalLinkSymbol, kSymbolAccessoryPointSize)];
+          initWithImage:SymbolTemplateWithPointSize(SymbolExternalLink,
+                                                    kSymbolAccessoryPointSize)];
       break;
     case TableViewDetailTextCellAccessorySymbolNone:
       cell.accessoryView = nil;

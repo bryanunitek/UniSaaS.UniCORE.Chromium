@@ -46,21 +46,23 @@ class CONTENT_EXPORT PreloadingDecider
   ~PreloadingDecider() override;
 
   // Receives and processes on pointer down event for 'url' target link.
-  void OnPointerDown(const GURL& url);
+  // `renderer_enacted` is whether the renderer already enacted a speculation
+  // candidate for this interaction; see AnchorElementInteractionHost.
+  void OnPointerDown(const GURL& url, bool renderer_enacted);
 
   // Receives and processes on pointer hover event for 'url' target link.
   void OnPointerHover(const GURL& url,
                       blink::mojom::AnchorElementPointerDataPtr mouse_data,
-                      blink::mojom::SpeculationEagerness target_eagerness);
-
-  //  Receives and processes ML model score for 'url' target link.
-  void OnPreloadingHeuristicsModelDone(const GURL& url, float score);
+                      blink::mojom::SpeculationEagerness target_eagerness,
+                      bool renderer_enacted);
 
   // Receives and processes `url` selected by "moderate" viewport heuristic.
-  void OnModerateViewportHeuristicTriggered(const GURL& url);
+  void OnModerateViewportHeuristicTriggered(const GURL& url,
+                                            bool renderer_enacted);
 
   // Receives and processes `url` selected by "eager" viewport heuristic.
-  void OnEagerViewportHeuristicTriggered(const GURL& url);
+  void OnEagerViewportHeuristicTriggered(const GURL& url,
+                                         bool renderer_enacted);
 
   // Sets the new preloading decider observer for testing and returns the old
   // one.
@@ -85,6 +87,16 @@ class CONTENT_EXPORT PreloadingDecider
   // used under LCPTimingPredictorPrerender2.
   void OnLCPPredicted();
 
+  // Renderer-driven enactment.
+  //
+  // Executes a single candidate that the renderer's link-selection
+  // `heuristic` has already selected. The browser uses the heuristic to merge
+  // tags from the corresponding standby candidates and attribute the resulting
+  // prediction, but the renderer owns the enactment decision.
+  void EnactRendererSelectedCandidate(
+      blink::mojom::SpeculationCandidatePtr candidate,
+      blink::mojom::SpeculationHeuristic heuristic);
+
   // Returns true if the |url|, |action| pair is in the on-standby list.
   bool IsOnStandByForTesting(const GURL& url,
                              blink::mojom::SpeculationAction action) const;
@@ -101,16 +113,6 @@ class CONTENT_EXPORT PreloadingDecider
   friend class DocumentUserData<PreloadingDecider>;
   DOCUMENT_USER_DATA_KEY_DECL();
 
-  // Attempts preloading actions starting from the most advanced (prerendering)
-  // to least (preconnect), in response to `enacting_predictor` predicting a
-  // navigation to `url`. If `fallback_to_preconnect` is true, we preconnect if
-  // no other action is taken.
-  void MaybeEnactCandidate(const GURL& url,
-                           const PreloadingPredictor& enacting_predictor,
-                           PreloadingConfidence confidence,
-                           bool fallback_to_preconnect,
-                           EagernessSet eagerness_to_exclude);
-
   // Merges the tags of all suitable candidates that match the given
   // `lookup_key`.
   // Returns a vector of std::optional<string> of candidates which will be
@@ -123,30 +125,9 @@ class CONTENT_EXPORT PreloadingDecider
       PreloadingConfidence confidence,
       EagernessSet eagerness_to_exclude);
 
-  // Prefetches the |url| if it is safe and eligible to be prefetched.
-  // Returns false if no suitable (given |enacting_predictor|) on-standby
-  // candidate is found for the given |url|, or the Prefetcher does not
-  // accept the candidate.
-  bool MaybePrefetch(const GURL& url,
-                     const PreloadingPredictor& enacting_predictor,
-                     PreloadingConfidence confidence,
-                     EagernessSet eagerness_to_exclude);
-
   // Returns true if a prefetch was attempted for the |url| and is not failed or
   // discarded by Prefetcher yet, and we should wait for it to finish.
   bool ShouldWaitForPrefetchResult(const GURL& url);
-
-  // Performs "prerender" or "prerender-until-script" `action` for the `url` if
-  // it is safe and eligible to be prerendered. Returns false for the first bool
-  // if no suitable (given `enacting_predictor`) on-standby candidate is found
-  // for the given `url`, or the Prerenderer does not accept the candidate.
-  // Returns true for the second bool if a PreloadingPrediction has been added.
-  std::pair<bool, bool> MaybePrerenderForAction(
-      const GURL& url,
-      blink::mojom::SpeculationAction action,
-      const PreloadingPredictor& enacting_predictor,
-      PreloadingConfidence confidence,
-      EagernessSet eagerness_to_exclude);
 
   // Returns true if a prerender was attempted for the |url| and is not failed
   // or discarded by Prerenderer yet, and we should wait for it to finish.
@@ -175,14 +156,9 @@ class CONTENT_EXPORT PreloadingDecider
   void RemoveStandbyCandidate(const SpeculationCandidateKey key);
   void ClearStandbyCandidates();
 
-  // Helper functions to select a prerender/prefetch candidate to be
-  // triggered.
-  std::optional<
-      std::pair<SpeculationCandidateKey, blink::mojom::SpeculationCandidatePtr>>
-  GetMatchedPreloadingCandidate(const SpeculationCandidateKey& lookup_key,
-                                const PreloadingPredictor& enacting_predictor,
-                                PreloadingConfidence confidence,
-                                EagernessSet eagerness_to_exclude) const;
+  // Moves the candidates stored for |key| from |on_standby_candidates_| to
+  // |processed_candidates_|. No-op if |key| has no on-standby candidates.
+  void MarkCandidateAsProcessed(const SpeculationCandidateKey& key);
 
  private:
   // Grant the test suite access to private members.
@@ -190,6 +166,15 @@ class CONTENT_EXPORT PreloadingDecider
                            SpeculationRulesTagsMergingForNVSMatch);
   FRIEND_TEST_ALL_PREFIXES(PreloadingDeciderTest,
                            SpeculationRulesTagsMergingForNVSMatchWithNullTags);
+
+  // Handles a link-selection heuristic whose candidate enactment the renderer
+  // owns. The renderer only enacts when a speculation candidate matches, so
+  // this records the preloading prediction, and optionally preconnects, for
+  // the cases it leaves untouched.
+  void HandleRendererOwnedHeuristic(
+      const GURL& url,
+      const PreloadingPredictor& enacting_predictor,
+      bool fallback_to_preconnect);
 
   // This helper function encapsulates the shared logic for finding all
   // suitable candidates matching a lookup key, including No-Vary-Search logic.
@@ -242,12 +227,6 @@ class CONTENT_EXPORT PreloadingDecider
   // so that it does not span unit tests.
   class BehaviorConfig;
   std::unique_ptr<const BehaviorConfig> behavior_config_;
-
-  // Whether this page has ever received an ML model prediction. Once it has,
-  // the model predictions supersede the hover heuristic. We store this here,
-  // rather than per-BrowserContext, since even if the model is loaded, it may
-  // not run for some pages (e.g. insecure http).
-  bool ml_model_available_ = false;
 
   raw_ptr<PreloadingDeciderObserverForTesting> observer_for_testing_;
   Preconnector preconnector_;

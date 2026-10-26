@@ -53,7 +53,7 @@ TEST(ParseDolbyAc4CodecIdTest, DolbyAc4CodecIds) {
 }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_AC4_AUDIO)
 
-#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || BUILDFLAG(ENABLE_IAMF_TOOLS)
 TEST(ParseIamfCodecIdTest, IamfCodecIds) {
   EXPECT_TRUE(ParseIamfCodecId("iamf.000.000.opus", nullptr, nullptr));
   EXPECT_TRUE(ParseIamfCodecId("iamf.000.000.Opus", nullptr, nullptr));
@@ -114,7 +114,8 @@ TEST(ParseIamfCodecIdTest, IamfCodecIds) {
   EXPECT_FALSE(ParseIamfCodecId("iamf.000.00.ipcm", nullptr, nullptr));
   EXPECT_FALSE(ParseIamfCodecId("iamd.000.000.ipcm", nullptr, nullptr));
   EXPECT_FALSE(ParseIamfCodecId("ia.000.000.ipcm", nullptr, nullptr));
+  EXPECT_FALSE(ParseIamfCodecId("iamfhvc1.000.000.opus", nullptr, nullptr));
 }
-#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF)
+#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || ...
 
 }  // namespace media

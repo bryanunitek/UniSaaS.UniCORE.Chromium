@@ -21,7 +21,6 @@ import './nearby_share_receive_dialog.js';
 import {getContactManager} from '/shared/nearby_contact_manager.js';
 import type {ReceiveObserverReceiver, ShareTarget, TransferMetadata} from '/shared/nearby_share.mojom-webui.js';
 import type {NearbySettings} from '/shared/nearby_share_settings_mixin.js';
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {assertNotReached} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -31,7 +30,8 @@ import {flush, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/pol
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import {NearbyAccountManagerBrowserProxyImpl} from './nearby_account_manager_browser_proxy.js';
@@ -141,8 +141,8 @@ export class SettingsNearbyShareSubpageElement extends
     ];
   }
 
-  isSettingsRetreived: boolean;
-  settings: NearbySettings;
+  declare isSettingsRetreived: boolean;
+  declare settings: NearbySettings;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -154,19 +154,19 @@ export class SettingsNearbyShareSubpageElement extends
     Setting.kDevicesNearbyAreSharingNotificationOnOff,
   ]);
 
-  private inHighVisibility_: boolean;
-  private isQuickShareV2Enabled_: boolean;
-  private manageContactsUrl_: string;
-  private profileLabel_: string;
-  private profileName_: string;
+  declare private inHighVisibility_: boolean;
+  declare private isQuickShareV2Enabled_: boolean;
+  declare private manageContactsUrl_: string;
+  declare private profileLabel_: string;
+  declare private profileName_: string;
   private receiveObserver_: ReceiveObserverReceiver|null;
-  private shouldShowFastInititationNotificationToggle_: boolean;
-  private showDataUsageDialog_: boolean;
-  private showDeviceNameDialog_: boolean;
-  private showReceiveDialog_: boolean;
-  private showVisibilityDialog_: boolean;
-  private yourDevicesLabel_: string;
-  private contactsLabel_: string;
+  declare private shouldShowFastInititationNotificationToggle_: boolean;
+  declare private showDataUsageDialog_: boolean;
+  declare private showDeviceNameDialog_: boolean;
+  declare private showReceiveDialog_: boolean;
+  declare private showVisibilityDialog_: boolean;
+  declare private yourDevicesLabel_: string;
+  declare private contactsLabel_: string;
 
   constructor() {
     super();

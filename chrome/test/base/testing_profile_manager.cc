@@ -35,7 +35,7 @@
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 #include "components/account_id/account_id.h"
-#include "components/user_manager/fake_user_manager.h"
+#include "components/user_manager/test_helper.h"
 #else
 #include "components/policy/core/common/cloud/cloud_policy_manager.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -98,19 +98,17 @@ TestingProfile* TestingProfileManager::CreateTestingProfile(
 #endif  // !BUILDFLAG(IS_CHROMEOS)
   DCHECK(called_set_up_);
 
-  base::FilePath profile_path = GetProfilePath(profile_name);
-
   // Create the profile and register it.
   TestingProfile::Builder builder;
-  builder.SetDelegate(profile_manager_.get());
-  builder.SetPath(profile_path);
   builder.SetPrefService(std::move(prefs));
-  if (is_supervised_profile)
+  if (is_supervised_profile) {
     builder.SetIsSupervisedProfile();
+  }
   builder.SetProfileName(profile_name);
   builder.SetIsNewProfile(is_new_profile.value_or(false));
-  if (policy_service)
+  if (policy_service) {
     builder.SetPolicyService(std::move(*policy_service));
+  }
   if (user_cloud_policy_manager) {
 #if BUILDFLAG(IS_CHROMEOS)
     builder.SetUserCloudPolicyManagerAsh(std::move(user_cloud_policy_manager));
@@ -118,10 +116,34 @@ TestingProfile* TestingProfileManager::CreateTestingProfile(
     builder.SetUserCloudPolicyManager(std::move(user_cloud_policy_manager));
 #endif  // BUILDFLAG(IS_CHROMEOS)
   }
-
   builder.AddTestingFactories(std::move(testing_factories));
-
   builder.SetSharedURLLoaderFactory(shared_url_loader_factory);
+
+  return CreateTestingProfile(std::move(builder), user_name, avatar_id);
+}
+
+TestingProfile* TestingProfileManager::CreateTestingProfile(
+    const std::string& name,
+    TestingProfile::TestingFactories testing_factories,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory) {
+  DCHECK(called_set_up_);
+  return CreateTestingProfile(
+      name, std::unique_ptr<sync_preferences::PrefServiceSyncable>(),
+      base::UTF8ToUTF16(name), /*avatar_id=*/0, std::move(testing_factories),
+      /*is_supervised_profile=*/false, /*is_new_profile=*/std::nullopt,
+      /*policy_service=*/std::nullopt, shared_url_loader_factory);
+}
+
+TestingProfile* TestingProfileManager::CreateTestingProfile(
+    TestingProfile::Builder builder,
+    const std::u16string& user_name,
+    int avatar_id) {
+  std::string profile_name = builder.profile_name();
+  base::FilePath profile_path = GetProfilePath(profile_name);
+  bool is_supervised_profile = builder.is_supervised_profile();
+
+  builder.SetDelegate(profile_manager_.get());
+  builder.SetPath(profile_path);
 
   auto* profile_ptr =
       static_cast<TestingProfile*>(profile_manager_->CreateAndInitializeProfile(
@@ -148,18 +170,6 @@ TestingProfile* TestingProfileManager::CreateTestingProfile(
   }
 #endif
   return profile_ptr;
-}
-
-TestingProfile* TestingProfileManager::CreateTestingProfile(
-    const std::string& name,
-    TestingProfile::TestingFactories testing_factories,
-    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory) {
-  DCHECK(called_set_up_);
-  return CreateTestingProfile(
-      name, std::unique_ptr<sync_preferences::PrefServiceSyncable>(),
-      base::UTF8ToUTF16(name), /*avatar_id=*/0, std::move(testing_factories),
-      /*is_supervised_profile=*/false, /*is_new_profile=*/std::nullopt,
-      /*policy_service=*/std::nullopt, shared_url_loader_factory);
 }
 
 TestingProfile* TestingProfileManager::CreateGuestProfile(
@@ -252,9 +262,19 @@ void TestingProfileManager::DeleteAllTestingProfiles() {
     }
     storage.RemoveProfile(profile->GetPath());
   }
-  profile_manager_->profiles_info_.clear();
+  // Erase profiles one-by-one rather than calling `clear()`. `ProfileInfo`'s
+  // destructor synchronously triggers profile destruction, during which objects
+  // (like `ScopedProfileKeepAlive`) may call
+  // `ProfileManager::RemoveKeepAlive()`, which re-entrantly queries
+  // `profiles_info_`. `clear()` performs a post-order tree traversal and leaves
+  // dangling node pointers during element destruction, leading to
+  // use-after-free crashes. `erase()` unlinks each node from the tree before
+  // destroying the `ProfileInfo`, keeping the map valid for re-entrant lookups.
+  while (!profile_manager_->profiles_info_.empty()) {
+    profile_manager_->profiles_info_.erase(
+        profile_manager_->profiles_info_.begin());
+  }
 }
-
 
 void TestingProfileManager::DeleteGuestProfile() {
   DCHECK(called_set_up_);
@@ -288,12 +308,13 @@ base::FilePath TestingProfileManager::GetProfilePath(
 #if BUILDFLAG(IS_CHROMEOS)
   if (ash::IsUserBrowserContextBaseName(base::FilePath(profile_name))) {
     const std::string fake_email =
-        profile_name.find('@') == std::string::npos
+        (profile_name.find('@') == std::string::npos &&
+         profile_name != kGuestProfileName)
             ? base::ToLowerASCII(profile_name) + "@test"
             : profile_name;
     profile_path =
         profile_path.Append(ash::ProfileHelper::Get()->GetUserProfileDir(
-            user_manager::FakeUserManager::GetFakeUsernameHash(
+            user_manager::TestHelper::GetFakeUsernameHash(
                 AccountId::FromUserEmail(fake_email))));
   } else {
     profile_path = profile_path.AppendASCII(profile_name);

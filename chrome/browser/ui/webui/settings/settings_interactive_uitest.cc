@@ -7,7 +7,7 @@
 #include "base/test/run_until.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_switches.h"
@@ -28,7 +28,8 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "base/test/test_reg_util_win.h"
-#include "chrome/browser/win/isolated_browser_support.h"
+#include "chrome/browser/win/isolated_browser/isolated_browser_support.h"
+#include "chrome/common/chrome_paths_internal.h"
 #include "chrome/install_static/test/scoped_install_details.h"
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -128,7 +129,7 @@ IN_PROC_BROWSER_TEST_F(SettingsInteractiveUiTest,
           "settings-privacy-page-index",
           "settings-cookies-page",
           "settings-subpage",
-          "div#headerLine cr-icon-button[iron-icon='cr:help-outline']"};
+          "div#headerLine cr-icon-button[iron-icon='cr:help']"};
 
   auto util = WebContentsInteractionTestUtil::ForExistingTabInBrowser(
       browser(), kWebContentsInteractionTestUtilTestId);
@@ -202,7 +203,7 @@ IN_PROC_BROWSER_TEST_F(ThemeSettingsInteractiveUiTest,
                                ui::TrackedElement* element) {
                              auto* theme_service =
                                  ThemeServiceFactory::GetForProfile(
-                                     browser()->profile());
+                                     browser()->GetProfile());
                              ASSERT_FALSE(theme_service->UsingDefaultTheme());
                            }))
                        .Build())
@@ -220,7 +221,7 @@ IN_PROC_BROWSER_TEST_F(ThemeSettingsInteractiveUiTest,
                            [&](ui::InteractionSequence*, ui::TrackedElement*) {
                              auto* theme_service =
                                  ThemeServiceFactory::GetForProfile(
-                                     browser()->profile());
+                                     browser()->GetProfile());
                              EXPECT_TRUE(theme_service->UsingDefaultTheme());
                            }))
                        .Build())
@@ -233,11 +234,19 @@ IN_PROC_BROWSER_TEST_F(ThemeSettingsInteractiveUiTest,
 class SystemSettingsInteractiveUiTest : public SettingsInteractiveUiTest {
  protected:
   void SetUpInProcessBrowserTestFixture() override {
+    // Isolation state is only written successfully if using a default user data
+    // dir, so override it here.
+    chrome::SetUsingDefaultUserDataDirectoryForTesting(true);
     ASSERT_NO_FATAL_FAILURE(
         registry_override_manager_.OverrideRegistry(HKEY_CURRENT_USER));
     scoped_feature_list_.InitAndEnableFeature(
         features::kProcessIsolationSettings);
     SettingsInteractiveUiTest::SetUpInProcessBrowserTestFixture();
+  }
+
+  void TearDownInProcessBrowserTestFixture() override {
+    SettingsInteractiveUiTest::TearDownInProcessBrowserTestFixture();
+    chrome::SetUsingDefaultUserDataDirectoryForTesting(std::nullopt);
   }
 
   install_static::ScopedInstallDetails scoped_install_details_{

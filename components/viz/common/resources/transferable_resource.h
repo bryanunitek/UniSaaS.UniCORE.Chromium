@@ -20,6 +20,7 @@
 #include "third_party/skia/include/gpu/ganesh/GrTypes.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/color_space.h"
+#include "ui/gfx/display_color_spaces.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/hdr_metadata.h"
 
@@ -42,9 +43,7 @@ struct ReturnedResourceViz;
 
 struct VIZ_COMMON_EXPORT TransferableResource {
   struct VIZ_COMMON_EXPORT MetadataOverride {
-    std::optional<bool> is_overlay_candidate;
     std::optional<gfx::ColorSpace> color_space;
-    std::optional<GrSurfaceOrigin> origin;
     std::optional<SkAlphaType> alpha_type;
   };
 
@@ -168,10 +167,9 @@ struct VIZ_COMMON_EXPORT TransferableResource {
   // A gpu resource may be possible to use directly in an overlay if this is
   // true.
   bool GetIsOverlayCandidate() const {
-    return metadata_override_.is_overlay_candidate.value_or(
-        shared_image_
-            ? shared_image_->usage().Has(gpu::SHARED_IMAGE_USAGE_SCANOUT)
-            : false);
+    return shared_image_
+               ? shared_image_->usage().Has(gpu::SHARED_IMAGE_USAGE_SCANOUT)
+               : false;
   }
 
   // The color space that is used for pixel path operations (e.g, TexImage,
@@ -192,11 +190,12 @@ struct VIZ_COMMON_EXPORT TransferableResource {
         shared_image_ ? shared_image_->color_space() : gfx::ColorSpace());
   }
 
+  gfx::ContentColorUsage GetContentColorUsage() const;
+
   // Origin of the underlying resource.
   GrSurfaceOrigin GetOrigin() const {
-    return metadata_override_.origin.value_or(
-        shared_image_ ? shared_image_->surface_origin()
-                      : kTopLeft_GrSurfaceOrigin);
+    return shared_image_ ? shared_image_->surface_origin()
+                         : kTopLeft_GrSurfaceOrigin;
   }
 
   SkAlphaType GetAlphaType() const {
@@ -235,9 +234,6 @@ struct VIZ_COMMON_EXPORT TransferableResource {
   ResourceId id = kInvalidResourceId;
 
   gfx::HDRMetadata hdr_metadata;
-
-  // Indicates if the resource uses low latency rendering.
-  bool is_low_latency_rendering = false;
 
   // This defines when the display compositor returns resources. Clients may use
   // different synchronization types based on their needs.

@@ -20,6 +20,7 @@
 #include "components/guest_view/browser/slim_web_view/request_utils.h"
 #include "components/guest_view/browser/slim_web_view/slim_web_view_constants.h"
 #include "components/url_pattern/simple_url_pattern_matcher.h"
+#include "components/zoom/zoom_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_process_host.h"
@@ -29,6 +30,7 @@
 #include "content/public/common/content_features.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_util.h"
+#include "third_party/blink/public/common/page/page_zoom.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
 #include "url/gurl.h"
@@ -191,19 +193,19 @@ ParseOriginCheckParams(const base::DictValue& create_params) {
 std::string WindowOpenDispositionToString(
     WindowOpenDisposition window_open_disposition) {
   switch (window_open_disposition) {
-    case WindowOpenDisposition::IGNORE_ACTION:
+    case WindowOpenDisposition::kIgnoreAction:
       return "ignore";
-    case WindowOpenDisposition::SAVE_TO_DISK:
+    case WindowOpenDisposition::kSaveToDisk:
       return "save_to_disk";
-    case WindowOpenDisposition::CURRENT_TAB:
+    case WindowOpenDisposition::kCurrentTab:
       return "current_tab";
-    case WindowOpenDisposition::NEW_BACKGROUND_TAB:
+    case WindowOpenDisposition::kNewBackgroundTab:
       return "new_background_tab";
-    case WindowOpenDisposition::NEW_FOREGROUND_TAB:
+    case WindowOpenDisposition::kNewForegroundTab:
       return "new_foreground_tab";
-    case WindowOpenDisposition::NEW_WINDOW:
+    case WindowOpenDisposition::kNewWindow:
       return "new_window";
-    case WindowOpenDisposition::NEW_POPUP:
+    case WindowOpenDisposition::kNewPopup:
       return "new_popup";
     default:
       NOTREACHED() << "Unknown Window Open Disposition";
@@ -288,6 +290,12 @@ bool SlimWebViewGuest::HasAllowedOrigins() const {
   return !!allowed_origins_params_;
 }
 
+bool SlimWebViewGuest::HasAllowedOrigins(
+    RequestResourceType resource_type) const {
+  return allowed_origins_params_ &&
+         allowed_origins_params_->resource_types.contains(resource_type);
+}
+
 base::expected<void, std::string> SlimWebViewGuest::IsUrlAllowed(
     RequestResourceType resource_type,
     const GURL& url) const {
@@ -350,7 +358,7 @@ content::WebContents* SlimWebViewGuest::CreateCustomWebContents(
     WindowOpenDisposition disposition,
     const blink::mojom::WindowFeatures& window_features,
     const content::StoragePartitionConfig& partition_config,
-    content::SessionStorageNamespace* session_storage_namespace) {
+    content::SessionStorageNamespaceHandle* session_storage_namespace) {
   CHECK(!base::FeatureList::IsEnabled(features::kGuestViewMPArch));
 
   base::DictValue request_info;
@@ -596,6 +604,34 @@ void SlimWebViewGuest::LoadAbort(bool is_top_level,
   args.Set(guest_view::kReason, net::ErrorToShortString(error_code));
   DispatchEventToView(std::make_unique<GuestViewEvent>(
       slim_web_view::kEventLoadAbort, std::move(args)));
+}
+
+void SlimWebViewGuest::SetZoom(double zoom_factor) {
+  auto* zoom_controller = GetZoomController();
+  if (zoom_controller) {
+    double zoom_level = blink::ZoomFactorToZoomLevel(zoom_factor);
+    zoom_controller->SetZoomLevel(zoom_level);
+  }
+}
+
+double SlimWebViewGuest::GetZoom() const {
+  auto* zoom_controller = GetZoomController();
+  if (zoom_controller) {
+    double zoom_level = zoom_controller->GetZoomLevel();
+    return blink::ZoomLevelToZoomFactor(zoom_level);
+  }
+  return 1.0;
+}
+
+void SlimWebViewGuest::GuestZoomChanged(double old_zoom_level,
+                                        double new_zoom_level) {
+  double old_zoom_factor = blink::ZoomLevelToZoomFactor(old_zoom_level);
+  double new_zoom_factor = blink::ZoomLevelToZoomFactor(new_zoom_level);
+  base::DictValue args;
+  args.Set(slim_web_view::kOldZoomFactor, old_zoom_factor);
+  args.Set(slim_web_view::kNewZoomFactor, new_zoom_factor);
+  DispatchEventToView(std::make_unique<GuestViewEvent>(
+      slim_web_view::kEventZoomChange, std::move(args)));
 }
 
 }  // namespace guest_view

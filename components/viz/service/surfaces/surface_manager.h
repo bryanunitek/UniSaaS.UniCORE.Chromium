@@ -209,6 +209,12 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
   // |frame_sink_id|.
   bool HasBlockedEmbedder(const FrameSinkId& frame_sink_id) const;
 
+  // Returns whether any allocation group of |frame_sink_id| has an active
+  // embedder awaiting a surface it doesn't have yet. See
+  // SurfaceAllocationGroup::HasActiveEmbedderAwaitingNewerSurface().
+  bool HasActiveEmbedderAwaitingNewerSurface(
+      const FrameSinkId& frame_sink_id) const;
+
   // Indicates that the set of frame sinks being aggregated for display has
   // changed since the previous aggregation.
   void AggregatedFrameSinksChanged();
@@ -227,7 +233,11 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
   // surface processed calls `predicate` for each uncommitted frame from oldest
   // to newest. If predicate returns true, surface is committed. If not the
   // surface processing stops and we go to the next surface.
-  void CommitFramesInRangeRecursively(const SurfaceRange& range,
+  // |range| is passed by value because CommitFramesRecursively can
+  // synchronously activate a caller's pending frame, replacing
+  // active_frame_data_ and freeing the referenced_surfaces vector that the
+  // caller passed |range| out of.
+  void CommitFramesInRangeRecursively(SurfaceRange range,
                                       const CommitPredicate& predicate);
 
  private:
@@ -250,6 +260,20 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
     EXPIRED = 4,   // The surface was never embedded and expired.
     COPIED = 5,    // The surface was copied.
     COUNT
+  };
+
+  struct SurfaceReferenceInfo {
+    SurfaceReferenceInfo();
+    ~SurfaceReferenceInfo();
+
+    // Direct children referenced by this surface.
+    base::flat_set<SurfaceId> children;
+
+    // The timestamp of the first time this surface gets referenced.
+    base::TimeTicks timestamp;
+
+    // The number of surfaces that hold a reference to this surface.
+    uint32_t count = 0;
   };
 
   struct TemporaryReferenceData {
@@ -328,7 +352,7 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
       observer_list_;
   SEQUENCE_CHECKER(sequence_checker_);
 
-  base::flat_map<SurfaceId, base::TimeTicks> surfaces_to_destroy_;
+  SurfaceIdSet surfaces_to_destroy_;
 
   // Root SurfaceId that references display root surfaces. There is no Surface
   // with this id, it's for bookkeeping purposes only.
@@ -341,22 +365,13 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
   // Used for setting deadlines for surface synchronization.
   raw_ptr<const base::TickClock> tick_clock_;
 
-  // Keeps track of surface references for a surface. The graph of references is
-  // stored in parent to child direction. i.e the map stores all direct children
-  // of the surface specified by |SurfaceId|.
-  std::unordered_map<SurfaceId, base::flat_set<SurfaceId>, SurfaceIdHash>
+  // Keeps track of surface references and reference timestamps for a surface.
+  std::unordered_map<SurfaceId, SurfaceReferenceInfo, SurfaceIdHash>
       references_;
 
   // A map of surfaces that have temporary references.
   std::unordered_map<SurfaceId, TemporaryReferenceData, SurfaceIdHash>
       temporary_references_;
-
-  // A map of pair(the timestamp of the first time a surface gets referenced,
-  // the number of references that surface has).
-  std::unordered_map<SurfaceId,
-                     std::pair<base::TimeTicks, uint32_t>,
-                     SurfaceIdHash>
-      surface_referenced_timestamps_;
 
   // Range tracking information for temporary references. Each map entry is an
   // is an ordered list of SurfaceIds that have temporary references with the

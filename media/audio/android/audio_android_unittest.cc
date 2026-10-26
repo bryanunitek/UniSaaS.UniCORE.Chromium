@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "base/android/device_info.h"
 #include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
@@ -181,6 +182,7 @@ class MockJniDelegate : public JniDelegate {
 
   MOCK_METHOD(void, InitDeviceListener, (), (override));
   MOCK_METHOD(void, InitScoStateListener, (), (override));
+  MOCK_METHOD(bool, InitMicrophoneMuteStateListener, (), (override));
   MOCK_METHOD(std::vector<JniAudioDevice>, GetDevices, (bool), (override));
   MOCK_METHOD(std::optional<std::vector<JniAudioDevice>>,
               GetCommunicationDevices,
@@ -315,7 +317,7 @@ class FullDuplexAudioSinkSource
   FullDuplexAudioSinkSource& operator=(const FullDuplexAudioSinkSource&) =
       delete;
 
-  ~FullDuplexAudioSinkSource() override {}
+  ~FullDuplexAudioSinkSource() override = default;
 
   // AudioInputStream::AudioInputCallback implementation
   void OnError(Error error_code) override {}
@@ -464,6 +466,12 @@ class AudioAndroidOutputTest : public testing::TestWithParam<AudioApi> {
         break;
       case AudioApi::OpenSLES:
         break;
+    }
+
+    if (enable_aaudio_per_stream_device_selection &&
+        !base::android::device_info::is_desktop()) {
+      GTEST_SKIP()
+          << "Per-stream device selection is only supported on desktop.";
     }
 
     if (!enable_aaudio) {
@@ -826,6 +834,42 @@ class AudioAndroidInputTest : public AudioAndroidOutputTest {
   raw_ptr<AudioInputStream> audio_input_stream_;
   AudioParameters audio_input_parameters_;
 };
+
+TEST_F(AudioAndroidOutputTest, NotifiesMicrophoneMuteStateChanges) {
+  RunOnAudioThread(base::BindOnce(
+      [](AudioManagerAndroid* audio_manager) {
+        audio_manager->OnMicrophoneMuteStateChanged(/*env=*/nullptr,
+                                                    /*muted=*/false);
+
+        int callback_count = 0;
+        bool last_state = false;
+        auto subscription =
+            audio_manager->AddInputMuteStateChangeCallback(base::BindRepeating(
+                [](int* callback_count, bool* last_state, bool muted) {
+                  ++*callback_count;
+                  *last_state = muted;
+                },
+                &callback_count, &last_state));
+
+        audio_manager->OnMicrophoneMuteStateChanged(/*env=*/nullptr,
+                                                    /*muted=*/true);
+        EXPECT_TRUE(audio_manager->IsMicrophoneMuted());
+        EXPECT_EQ(callback_count, 1);
+        EXPECT_TRUE(last_state);
+
+        // Duplicate broadcasts should not result in duplicate notifications.
+        audio_manager->OnMicrophoneMuteStateChanged(/*env=*/nullptr,
+                                                    /*muted=*/true);
+        EXPECT_EQ(callback_count, 1);
+
+        audio_manager->OnMicrophoneMuteStateChanged(/*env=*/nullptr,
+                                                    /*muted=*/false);
+        EXPECT_FALSE(audio_manager->IsMicrophoneMuted());
+        EXPECT_EQ(callback_count, 2);
+        EXPECT_FALSE(last_state);
+      },
+      base::Unretained(audio_manager())));
+}
 
 // Get the default audio input parameters.
 TEST_P(AudioAndroidInputTest, GetDefaultInputStreamParameters) {
@@ -1215,6 +1259,15 @@ TEST_P(AudioAndroidInputTest, OpenAndCloseInputStream) {
 // closed, emitting a histogram value for successfully setting the
 // device ID if AAudioWithPerStreamDeviceSelection is enabled.
 TEST_P(AudioAndroidInputTest, OpenAndCloseInputStreamWithDevice) {
+  const bool is_per_stream_selection_enabled =
+      GetParam() == AudioApi::AAudioWithPerStreamDeviceSelection;
+
+  if (is_per_stream_selection_enabled &&
+      !base::android::device_info::is_desktop()) {
+    GTEST_SKIP() << "Per-stream device selection is only supported on "
+                 << "desktop.";
+  }
+
   std::optional<AudioDeviceDescription> device =
       GetFirstNonDefaultInputDevice();
   if (!device.has_value()) {
@@ -1226,7 +1279,7 @@ TEST_P(AudioAndroidInputTest, OpenAndCloseInputStreamWithDevice) {
   base::HistogramTester histogram_tester;
   OpenAudioInputStreamOnAudioThread();
 
-  if (GetParam() == AudioApi::AAudioWithPerStreamDeviceSelection) {
+  if (is_per_stream_selection_enabled) {
     constexpr std::string_view kHistogramPrefix =
         "Media.Audio.Android.AAudioSetDeviceId.Input.";
     const std::string kSuccessHistogram =

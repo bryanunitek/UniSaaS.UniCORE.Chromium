@@ -9,20 +9,19 @@
 #include "ash/public/cpp/window_properties.h"
 #include "ash/shell.h"
 #include "ash/wm/window_state.h"
+#include "base/check.h"
+#include "base/check_deref.h"
 #include "base/containers/flat_tree.h"
 #include "base/time/time.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/borealis/borealis_window_manager.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/crostini/crostini_features.h"
 #include "chrome/browser/ash/crostini/crostini_force_close_watcher.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
 #include "chrome/browser/ash/guest_os/guest_os_shelf_utils.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/shelf/app_service/app_service_app_window_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/app_service/app_service_app_window_shelf_item_controller.h"
@@ -30,13 +29,17 @@
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_controller.h"
 #include "chromeos/ash/components/borealis/borealis_util.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
 #include "components/exo/permission.h"
 #include "components/exo/shell_surface_util.h"
-#include "components/user_manager/user_manager.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "ui/aura/window.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+#include "ui/display/types/display_constants.h"
 #include "ui/wm/core/window_util.h"
 
 namespace {
@@ -74,7 +77,6 @@ void MoveWindowFromOldDisplayToNewDisplay(aura::Window* window,
 bool ShouldSkipWindow(aura::Window* window) {
   return wm::GetTransientParent(window) ||
          arc::GetWindowTaskOrSessionId(window).has_value() ||
-         plugin_vm::IsPluginVmAppWindow(window) ||
          ash::borealis::IsBorealisWindow(window);
 }
 
@@ -101,11 +103,14 @@ void AppServiceAppWindowCrostiniTracker::OnWindowVisibilityChanged(
   // Currently Crostini can only be used from the primary profile. In the
   // future, this may be replaced by some way of matching the container that
   // runs this app with the user that owns it.
-  const AccountId& primary_account_id =
-      user_manager::UserManager::Get()->GetPrimaryUser()->GetAccountId();
+  const session_manager::Session* primary_session =
+      session_manager::SessionManager::Get()->GetPrimarySession();
+  CHECK(primary_session);
+  const AccountId& primary_account_id = primary_session->account_id();
 
-  Profile* primary_account_profile =
-      ash::ProfileHelper::Get()->GetProfileByAccountId(primary_account_id);
+  Profile* primary_account_profile = Profile::FromBrowserContext(
+      ash::BrowserContextHelper::Get()->GetBrowserContextByAccountId(
+          primary_account_id));
 
   // Windows without an application id set will get filtered out here.
   const std::string& crostini_shelf_app_id = guest_os::GetGuestOsShelfAppId(
@@ -230,9 +235,12 @@ std::string AppServiceAppWindowCrostiniTracker::GetShelfAppId(
   // Currently Crostini can only be used from the primary profile. In the
   // future, this may be replaced by some way of matching the container that
   // runs this app with the user that owns it.
-  Profile* primary_account_profile =
-      ash::ProfileHelper::Get()->GetProfileByAccountId(
-          user_manager::UserManager::Get()->GetPrimaryUser()->GetAccountId());
+  const session_manager::Session* primary_session =
+      session_manager::SessionManager::Get()->GetPrimarySession();
+  CHECK(primary_session);
+  Profile* primary_account_profile = Profile::FromBrowserContext(
+      ash::BrowserContextHelper::Get()->GetBrowserContextByAccountId(
+          primary_session->account_id()));
   std::string shelf_app_id = guest_os::GetGuestOsShelfAppId(
       primary_account_profile, exo::GetShellApplicationId(window),
       exo::GetShellStartupId(window));
@@ -268,20 +276,20 @@ void AppServiceAppWindowCrostiniTracker::MaybeModifyInstance(
     Profile* profile,
     aura::Window* window,
     const std::string& app_id) const {
-  auto* proxy = apps::AppServiceProxyFactory::GetForProfile(profile);
-  DCHECK(proxy);
-  auto& instance_registry = proxy->InstanceRegistry();
-  std::string old_app_id = instance_registry.GetShelfId(window).app_id;
+  auto& app_service_instance_helper =
+      CHECK_DEREF(app_service_controller_->app_service_instance_helper());
+  std::string old_app_id =
+      app_service_instance_helper.GetShelfId(profile, window).app_id;
   if (old_app_id.empty() || app_id == old_app_id) {
     return;
   }
 
-  auto* app_service_instance_helper =
-      app_service_controller_->app_service_instance_helper();
-  DCHECK(app_service_instance_helper);
+  auto& proxy =
+      CHECK_DEREF(apps::AppServiceProxyFactory::GetForProfile(profile));
+  auto& instance_registry = proxy.InstanceRegistry();
   auto state = instance_registry.GetState(window);
-  app_service_instance_helper->OnInstances(old_app_id, window, std::string(),
-                                           apps::InstanceState::kDestroyed);
-  app_service_instance_helper->OnInstances(app_id, window, std::string(),
-                                           state);
+
+  app_service_instance_helper.OnInstances(old_app_id, window, std::string(),
+                                          apps::InstanceState::kDestroyed);
+  app_service_instance_helper.OnInstances(app_id, window, std::string(), state);
 }

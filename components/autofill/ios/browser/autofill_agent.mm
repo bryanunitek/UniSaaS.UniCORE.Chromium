@@ -10,6 +10,7 @@
 #import <cstdint>
 #import <memory>
 #import <optional>
+#import <ranges>
 #import <string>
 #import <tuple>
 #import <utility>
@@ -32,10 +33,10 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
 #import "base/time/time.h"
-#import "base/types/zip.h"
 #import "base/uuid.h"
 #import "base/values.h"
 #import "build/branding_buildflags.h"
+#import "components/autofill/core/browser/at_memory/at_memory_enablement_util.h"
 #import "components/autofill/core/browser/autofill_field.h"
 #import "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #import "components/autofill/core/browser/data_model/payments/credit_card.h"
@@ -56,6 +57,7 @@
 #import "components/autofill/core/common/form_field_data.h"
 #import "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #import "components/autofill/core/common/unique_ids.h"
+#import "components/autofill/ios/browser/autofill_client_ios.h"
 #import "components/autofill/ios/browser/autofill_driver_ios.h"
 #import "components/autofill/ios/browser/autofill_driver_ios_bridge.h"
 #import "components/autofill/ios/browser/autofill_java_script_feature.h"
@@ -74,6 +76,7 @@
 #import "components/prefs/ios/pref_observer_bridge.h"
 #import "components/prefs/pref_change_registrar.h"
 #import "components/prefs/pref_service.h"
+#import "components/strings/grit/components_strings.h"
 #import "components/ukm/ios/ukm_url_recorder.h"
 #import "ios/web/common/url_scheme_util.h"
 #import "ios/web/public/js_messaging/web_frame.h"
@@ -90,6 +93,7 @@
 #import "ui/gfx/image/image.h"
 #import "url/gurl.h"
 
+using autofill::AtMemoryAction;
 using autofill::AutofillFormFeaturesJavaScriptFeature;
 using autofill::AutofillJavaScriptFeature;
 using autofill::FieldDataManager;
@@ -101,10 +105,13 @@ using autofill::FormFieldData;
 using autofill::FormGlobalId;
 using autofill::FormHandlersJavaScriptFeature;
 using autofill::FormRendererId;
+using autofill::MayPerformAtMemoryAction;
 using autofill::Section;
 using autofill::Suggestion;
 using autofill::SuggestionType;
 using autofill::FieldPropertiesFlags::kAutofilledOnUserTrigger;
+using autofill::mojom::FieldActionType;
+using ActivityType = autofill::FormActivityParams::ActivityType;
 using base::NumberToString;
 using base::SysNSStringToUTF16;
 using base::SysNSStringToUTF8;
@@ -139,10 +146,7 @@ constexpr CGFloat kSuggestionIconWidth = 32;
 // Gets the icon that will be used for the specified suggestion.
 SuggestionIconType GetSuggestionIconType(const Suggestion& suggestion,
                                          BOOL hasValue) {
-  // TODO(crbug.com/40266549): Remove kClear when undo is fully enabled.
-  if ((suggestion.icon == Suggestion::Icon::kClear ||
-       suggestion.icon == Suggestion::Icon::kUndo) &&
-      base::FeatureList::IsEnabled(kAutofillUndoIos)) {
+  if (suggestion.icon == Suggestion::Icon::kUndo) {
     return SuggestionIconType::kUndoAutofill;
   } else if (suggestion.icon == Suggestion::Icon::kHome && hasValue) {
     return SuggestionIconType::kAccountHome;
@@ -211,10 +215,18 @@ bool HasGuid(const Suggestion::Payload& payload) {
   // The text entered by the user into the active field.
   NSString* _typedValue;
 
-  // Delegate for the most recent suggestions.
-  // The reference is weak because a weak pointer is sent to our
-  // BrowserAutofillManagerDelegate.
-  base::WeakPtr<autofill::AutofillSuggestionDelegate> _suggestionDelegate;
+  // Primary autofill suggestions carry their delegate directly in
+  // `FormSuggestionMetadata` for stateless routing. `_lastReceivedDelegate`,
+  // `_lastReceivedFormId`, and `_lastReceivedFieldId` serve as a passive
+  // fallback for unbound suggestions (e.g. bottom sheet, manual fill) targeting
+  // the currently active frame.
+  // As an invariant, `_lastReceivedDelegate != nullptr` implies that
+  // `_lastReceivedFormId` and `_lastReceivedFieldId` are populated.
+  base::WeakPtr<autofill::AutofillSuggestionDelegate> _lastReceivedDelegate;
+  // Note that the `_lastReceivedFormId` identifies the *browser* form, i.e.,
+  // the form after flattening the renderer form.
+  FormGlobalId _lastReceivedFormId;
+  FieldGlobalId _lastReceivedFieldId;
 
   // The autofill data that needs to be sent when the |webState_| is shown.
   std::optional<AutofillData> _pendingFormData;
@@ -288,6 +300,15 @@ bool HasGuid(const Suggestion::Payload& payload) {
 
   // Check for suggestions if the form activity is initiated by the user.
   if (!hasUserGesture) {
+    completion(NO);
+    return;
+  }
+
+  // kContentEditable is added for AtMemory. Suggestions are not available.
+  // A user uses AtMemory UI to run a search and then fill data manually to it.
+  if (formQuery.fieldType ==
+          autofill::FormActivityParams::FieldType::kContentEditable &&
+      base::FeatureList::IsEnabled(kAutofillSupportContentEditableIos)) {
     completion(NO);
     return;
   }
@@ -387,8 +408,21 @@ bool HasGuid(const Suggestion::Payload& payload) {
   }
 
   if (suggestion.type == SuggestionType::kAutocompleteAtMemoryButton) {
-    // TODO(crbug.com/527936416) - Clicking this chip should open the
-    // AtMemoryViewController.
+    if (_webState) {
+      web::WebFrame* frame =
+          AutofillJavaScriptFeature::GetInstance()
+              ->GetWebFramesManager(_webState)
+              ->GetFrameWithId(base::SysNSStringToUTF8(frameID));
+      if (frame &&
+          GURL::SchemeIsCryptographic(frame->GetSecurityOrigin().scheme())) {
+        if (autofill::AutofillDriverIOS* driver =
+                autofill::AutofillDriverIOS::FromWebStateAndWebFrame(_webState,
+                                                                     frame)) {
+          FieldGlobalId fieldId(driver->GetFrameToken(), fieldRendererID);
+          [self.delegate showAtMemoryForField:fieldId];
+        }
+      }
+    }
     if (SuggestionHandledCompletion c =
             std::exchange(_suggestionHandledCompletion, nil)) {
       c();
@@ -403,13 +437,27 @@ bool HasGuid(const Suggestion::Payload& payload) {
       suggestion.type == SuggestionType::kAddressFieldByFieldFilling ||
       suggestion.type == SuggestionType::kFillAutofillAi ||
       suggestion.type == SuggestionType::kAtMemorySearchAffordance ||
-      (base::FeatureList::IsEnabled(kAutofillUndoIos) &&
-       suggestion.type == SuggestionType::kUndoOrClear) ||
+      suggestion.type == SuggestionType::kUndo ||
       (base::FeatureList::IsEnabled(
            autofill::features::kAutofillEnableBottomSheetScanCardAndFill) &&
        suggestion.type == SuggestionType::kSaveAndFillCreditCardEntry)) {
+    // Pick the delegate and form/field IDs bound to the suggestion if
+    // available. Otherwise, fall back to the last received ones (e.g. for
+    // bottom sheet or manual fill).
+    base::WeakPtr<autofill::AutofillSuggestionDelegate> delegate;
+    FormGlobalId form_id;
+    FieldGlobalId field_id;
+    if (suggestion.metadata.suggestion_delegate) {
+      delegate = suggestion.metadata.suggestion_delegate;
+      form_id = suggestion.metadata.form_id;
+      field_id = suggestion.metadata.field_id;
+    } else {
+      delegate = _lastReceivedDelegate;
+      form_id = _lastReceivedFormId;
+      field_id = _lastReceivedFieldId;
+    }
 
-    if (_suggestionDelegate) {
+    if (delegate) {
       Suggestion autofill_suggestion(suggestion.type);
       autofill_suggestion.main_text.value =
           SysNSStringToUTF16(suggestion.value);
@@ -422,51 +470,17 @@ bool HasGuid(const Suggestion::Payload& payload) {
               : Suggestion::Payload();
 
       CHECK_GE(index, 0);
-      _suggestionDelegate->DidAcceptSuggestion(
-          autofill_suggestion, {.multi_index = {static_cast<size_t>(index)}});
+      const size_t suggestion_index =
+          suggestion.metadata.popup_suggestion_index.value_or(
+              static_cast<size_t>(index));
+      delegate->DidAcceptSuggestion(autofill_suggestion,
+                                    {.multi_index = {suggestion_index}},
+                                    form_id, field_id);
     }
     return;
   }
 
-  web::WebFramesManager* frames_manager =
-      AutofillJavaScriptFeature::GetInstance()->GetWebFramesManager(_webState);
-  web::WebFrame* frame =
-      frames_manager->GetFrameWithId(SysNSStringToUTF8(frameID));
-  if (!frame) {
-    // The frame no longer exists, so the field can not be filled.
-    if (SuggestionHandledCompletion c =
-            std::exchange(_suggestionHandledCompletion, nil)) {
-      c();
-    }
-    return;
-  }
-
-  if (suggestion.type == SuggestionType::kUndoOrClear &&
-      !base::FeatureList::IsEnabled(kAutofillUndoIos)) {
-    const auto callback = [](__weak AutofillAgent* agent,
-                             base::WeakPtr<web::WebFrame> frame,
-                             FormRendererId formId,
-                             SuggestionHandledCompletion completion,
-                             NSString* jsonString) {
-      if (frame) {
-        [agent onDidClearFields:jsonString inFrame:frame.get() inForm:formId];
-      }
-      // Only run the completion if set as it isn't impossible that the provided
-      // completion is nil.
-      if (completion) {
-        completion();
-      }
-    };
-
-    __weak __typeof(self) weakSelf = self;
-    AutofillJavaScriptFeature::GetInstance()->ClearAutofilledFieldsForForm(
-        frame, formRendererID, fieldRendererID,
-        base::BindOnce(callback, weakSelf, frame->AsWeakPtr(), formRendererID,
-                       std::exchange(_suggestionHandledCompletion, nil)));
-
-  } else {
-    NOTREACHED();
-  }
+  NOTREACHED();
 }
 
 - (SuggestionProviderType)type {
@@ -474,14 +488,22 @@ bool HasGuid(const Suggestion::Payload& payload) {
 }
 
 - (autofill::FillingProduct)mainFillingProduct {
-  return _suggestionDelegate ? _suggestionDelegate->GetMainFillingProduct()
-                             : autofill::FillingProduct::kNone;
+  // All suggestions in the list are currently tied to the same delegate,
+  // so we can pick the delegate from any suggestion to determine the
+  // main filling product.
+  for (FormSuggestion* suggestion in _mostRecentSuggestions) {
+    if (suggestion.metadata.suggestion_delegate) {
+      return suggestion.metadata.suggestion_delegate->GetMainFillingProduct();
+    }
+  }
+  // Use _lastReceivedDelegate as a fallback (e.g. for manual fill suggestions).
+  return _lastReceivedDelegate ? _lastReceivedDelegate->GetMainFillingProduct()
+                               : autofill::FillingProduct::kNone;
 }
 
 #pragma mark - AutofillDriverIOSBridge
 
 - (void)fillData:(const std::vector<autofill::FormFieldData::FillData>&)fields
-           section:(const Section&)section
            inFrame:(web::WebFrame*)frame
     withActionType:(autofill::mojom::FormActionType)actionType {
   base::DictValue fieldsData;
@@ -490,7 +512,6 @@ bool HasGuid(const Suggestion::Payload& payload) {
   for (const auto& field : fields) {
     base::DictValue fieldData;
     fieldData.Set("value", field.value);
-    fieldData.Set("section", section.ToString());
     fieldData.Set("hostFormId", static_cast<int>(*field.host_form_id));
     fieldData.Set("isAutofilled", field.is_autofilled);
     fieldsData.Set(NumberToString(*field.renderer_id), std::move(fieldData));
@@ -518,10 +539,16 @@ bool HasGuid(const Suggestion::Payload& payload) {
 // words, `field` need not be `document.activeElement`.
 - (void)fillSpecificFormField:(const FieldRendererId&)field
                     withValue:(const std::u16string)value
+                   actionType:(FieldActionType)actionType
                       inFrame:(web::WebFrame*)frame {
+  CHECK(actionType == FieldActionType::kReplaceAll ||
+        actionType == FieldActionType::kReplaceSelectionForAtMemory)
+      << "Unexpected action type: " << std::to_underlying(actionType);
   base::DictValue data;
   data.Set("renderer_id", static_cast<int>(field.value()));
   data.Set("value", value);
+  data.Set("should_insert_at_cursor",
+           actionType == FieldActionType::kReplaceSelectionForAtMemory);
 
   const auto callback =
       [](__weak AutofillAgent* agent, SuggestionHandledCompletion completion,
@@ -563,7 +590,7 @@ bool HasGuid(const Suggestion::Payload& payload) {
   for (const auto& form : forms) {
     base::DictValue fieldData;
     for (const auto [field, field_prediction] :
-         base::zip(form.data.fields(), form.fields)) {
+         std::views::zip(form.data.fields(), form.fields)) {
       fieldData.Set(NumberToString(field.renderer_id().value()),
                     base::Value(field_prediction.overall_type));
     }
@@ -574,12 +601,18 @@ bool HasGuid(const Suggestion::Payload& payload) {
       frame, std::move(predictionData));
 }
 
+- (void)scrollFieldIntoView:(const FieldRendererId&)field
+                    inFrame:(web::WebFrame*)frame {
+  AutofillJavaScriptFeature::GetInstance()->ScrollFieldIntoView(frame, field);
+}
+
 #pragma mark - AutofillClientIOSBridge
 
 - (void)showAutofillPopup:(const std::vector<Suggestion>&)popup_suggestions
        suggestionDelegate:
-           (const base::WeakPtr<autofill::AutofillSuggestionDelegate>&)
-               delegate {
+           (const base::WeakPtr<autofill::AutofillSuggestionDelegate>&)delegate
+                   formId:(FormGlobalId)formId
+                  fieldId:(FieldGlobalId)fieldId {
   if (popup_suggestions.empty() &&
       base::FeatureList::IsEnabled(
           autofill::features::
@@ -589,16 +622,12 @@ bool HasGuid(const Suggestion::Payload& payload) {
 
   // Convert the suggestions into an NSArray for the keyboard.
   NSMutableArray<FormSuggestion*>* suggestions = [[NSMutableArray alloc] init];
-  for (const Suggestion& popup_suggestion : popup_suggestions) {
-    // In the Chromium implementation the identifiers represent rows on the
-    // drop down of options. These include elements that aren't relevant to us
-    // such as separators ... see blink::WebAutofillClient::MenuItemIDSeparator
-    // for example. We can't include that enum because it's from WebKit, but
-    // fortunately almost all the entries we are interested in (profile or
-    // autofill entries) are zero or positive. Negative entries we are
-    // interested in is autofill::SuggestionType::kUndoOrClear, used to show the
-    // "clear form" button.
-    // TODO(crbug.com/40266549): Replace Clear Form with Undo
+  for (size_t index = 0; index < popup_suggestions.size(); ++index) {
+    const Suggestion& popup_suggestion = popup_suggestions[index];
+    // Convert Autofill popup suggestions into keyboard accessory suggestions
+    // (`FormSuggestion`). Only fillable or actionable types (e.g. address,
+    // credit card, autocomplete, undo) are processed; non-fillable items like
+    // headers or separators are omitted.
     NSString* value = nil;
     NSString* minorValue = nil;
     NSString* displayDescription = nil;
@@ -647,14 +676,11 @@ bool HasGuid(const Suggestion::Payload& payload) {
         }
         break;
 
-      case SuggestionType::kUndoOrClear:
-        if (!base::FeatureList::IsEnabled(kAutofillUndoIos)) {
-          // Show the "clear form" button.
-          value = SysUTF16ToNSString(popup_suggestion.main_text.value);
-        }
+      case SuggestionType::kUndo:
+        // There's no information to set, but this will not be discarded because
+        // `suggestionIconType` will be set below.
         break;
 
-      case SuggestionType::kAutocompleteAtMemoryButton:
       case SuggestionType::kFetchingAmbientData:
         value = SysUTF16ToNSString(popup_suggestion.main_text.value);
         break;
@@ -664,13 +690,20 @@ bool HasGuid(const Suggestion::Payload& payload) {
       case SuggestionType::kAllLoyaltyCardsEntry:
       case SuggestionType::kAllSavedPasswordsEntry:
       case SuggestionType::kAtMemoryAiDisclosure:
+      case SuggestionType::kAtMemoryFetching:
       case SuggestionType::kAtMemoryGenericError:
       case SuggestionType::kAtMemoryInactivityNudge:
       case SuggestionType::kAtMemoryNoConnection:
+      case SuggestionType::kAtMemoryOpenGemini:
       case SuggestionType::kAtMemorySearchAffordance:
       case SuggestionType::kAtMemorySearchResult:
+      case SuggestionType::kAtMemoryShortcutSettingsPromo:
+      case SuggestionType::kAtMemorySourceAttribution:
+      case SuggestionType::kAutocompleteAtMemoryButton:
       case SuggestionType::kAutofillAiOtherOrders:
+      case SuggestionType::kAutofillAiOtherShipments:
       case SuggestionType::kAutofillAiPrivateInferenceNotice:
+      case SuggestionType::kAutofillAiSourceAttribution:
       case SuggestionType::kBackupPasswordEntry:
       case SuggestionType::kBnplEntry:
       case SuggestionType::kBnplFootnote:
@@ -687,6 +720,7 @@ bool HasGuid(const Suggestion::Payload& payload) {
       case SuggestionType::kFillPassword:
       case SuggestionType::kFreeformFooter:
       case SuggestionType::kGeneratePasswordEntry:
+      case SuggestionType::kGmailOneTimePasswordEntry:
       case SuggestionType::kIbanEntry:
       case SuggestionType::kIdentityCredential:
       case SuggestionType::kInsecureContextPaymentDisabledMessage:
@@ -700,18 +734,18 @@ bool HasGuid(const Suggestion::Payload& payload) {
       case SuggestionType::kManageCreditCard:
       case SuggestionType::kManageIban:
       case SuggestionType::kManageLoyaltyCard:
+      case SuggestionType::kManageOffers:
       case SuggestionType::kManageEnhancedAutofill:
       case SuggestionType::kMaximizeCreditCardBenefitsEntry:
       case SuggestionType::kMerchantPromoCodeEntry:
-      case SuggestionType::kMixedFormMessage:
       case SuggestionType::kOneTimePasswordEntry:
-      case SuggestionType::kOpenGemini:
+      case SuggestionType::kOpenGmailForOtps:
       case SuggestionType::kPasswordEntry:
       case SuggestionType::kPasswordFieldByFieldFilling:
       case SuggestionType::kPendingStateSignin:
       case SuggestionType::kPersonalContextNotice:
+      case SuggestionType::kRemoveAutofillAi:
       case SuggestionType::kScanCreditCard:
-      case SuggestionType::kSeePromoCodeDetails:
       case SuggestionType::kSeparator:
       case SuggestionType::kTitle:
       case SuggestionType::kTroubleSigningInEntry:
@@ -739,6 +773,13 @@ bool HasGuid(const Suggestion::Payload& payload) {
         (popup_suggestion.field_by_field_filling_type_used
              ? *popup_suggestion.field_by_field_filling_type_used
              : autofill::FieldType::EMPTY_TYPE);
+
+    FormSuggestionMetadata metadata;
+    metadata.suggestion_delegate = delegate;
+    metadata.form_id = formId;
+    metadata.field_id = fieldId;
+    metadata.popup_suggestion_index = index;
+
     FormSuggestion* suggestion =
         [FormSuggestion suggestionWithValue:value
                                  minorValue:minorValue
@@ -748,7 +789,8 @@ bool HasGuid(const Suggestion::Payload& payload) {
                                     payload:popup_suggestion.payload
                 fieldByFieldFillingTypeUsed:fieldByFieldFillingTypeUsed
                              requiresReauth:NO
-                 acceptanceA11yAnnouncement:acceptanceA11yAnnouncement];
+                 acceptanceA11yAnnouncement:acceptanceA11yAnnouncement
+                                   metadata:metadata];
 
     suggestion.featureForIPH = SuggestionFeatureForIPH::kUnknown;
     suggestion.suggestionIconType = suggestionIconType;
@@ -769,27 +811,64 @@ bool HasGuid(const Suggestion::Payload& payload) {
           SuggestionFeatureForIPH::kAccountNameEmailSuggestion;
     }
 
-    // Put "clear form" entry at the front of the suggestions.
-    if (popup_suggestion.type == SuggestionType::kUndoOrClear) {
+    // Put the Undo suggestion at the front of the suggestions.
+    if (popup_suggestion.type == SuggestionType::kUndo) {
       [suggestions insertObject:suggestion atIndex:0];
     } else {
       [suggestions addObject:suggestion];
     }
   }
 
-  [self onSuggestionsReady:suggestions suggestionDelegate:delegate];
+  if (suggestions.count > 0 && _webState) {
+    autofill::AutofillClientIOS* client =
+        autofill::AutofillClientIOS::FromWebState(_webState);
+    if (client &&
+        MayPerformAtMemoryAction(AtMemoryAction::kTriggerSearchUI, *client)) {
+      FormSuggestionMetadata metadata;
+      metadata.suggestion_delegate = delegate;
+      metadata.form_id = formId;
+      metadata.field_id = fieldId;
+      FormSuggestion* atMemorySuggestion = [FormSuggestion
+                  suggestionWithValue:
+                      l10n_util::GetNSString(
+                          IDS_AUTOFILL_AT_MEMORY_SEARCH_AFFORDANCE_TITLE)
+                           minorValue:nil
+                   displayDescription:nil
+                                 icon:nil
+                                 type:autofill::SuggestionType::
+                                          kAutocompleteAtMemoryButton
+                              payload:autofill::Suggestion::Payload()
+          fieldByFieldFillingTypeUsed:autofill::FieldType::EMPTY_TYPE
+                       requiresReauth:NO
+           acceptanceA11yAnnouncement:nil
+                             metadata:metadata];
+      [suggestions addObject:atMemorySuggestion];
+    }
+  }
+
+  // Primary autofill suggestions carry their delegate directly in
+  // `FormSuggestionMetadata` for stateless routing. `_lastReceivedDelegate`,
+  // `_lastReceivedFormId`, and `_lastReceivedFieldId` are updated here as a
+  // passive fallback for unbound suggestions (e.g. bottom sheet, manual fill)
+  // targeting the currently active frame.
+  _lastReceivedDelegate = delegate;
+  _lastReceivedFormId = formId;
+  _lastReceivedFieldId = fieldId;
+
+  [self onSuggestionsReady:suggestions];
 
   // TODO(crbug.com/363958046): Pass the actually shown suggestions instead of
   // `popup_suggestions`.
   if (delegate) {
-    delegate->OnSuggestionsShown(popup_suggestions, std::nullopt);
+    delegate->OnSuggestionsShown(popup_suggestions, /*metadata=*/{});
   }
 }
 
 - (void)hideAutofillPopup {
-  [self
-      onSuggestionsReady:@[]
-      suggestionDelegate:base::WeakPtr<autofill::AutofillSuggestionDelegate>()];
+  _lastReceivedDelegate.reset();
+  _lastReceivedFormId = {};
+  _lastReceivedFieldId = {};
+  [self onSuggestionsReady:@[]];
 }
 
 - (bool)isLastQueriedField:(FieldGlobalId)fieldID {
@@ -896,15 +975,17 @@ bool HasGuid(const Suggestion::Payload& payload) {
   // If the event is a form_changed, then the event concerns the whole page and
   // not a particular form. The whole document's forms need to be extracted to
   // find the new forms.
-  if (params.type == "form_changed") {
+  if (params.type == ActivityType::kFormChanged) {
     driver->ScanForms();
     return;
   }
 
   // We are only interested in 'input' events in order to notify the autofill
   // manager for metrics purposes.
-  if (params.type != "input" ||
-      (params.field_type != "text" && params.field_type != "password")) {
+  if (params.type != ActivityType::kInput ||
+      (params.field_type != autofill::FormActivityParams::FieldType::kText &&
+       params.field_type !=
+           autofill::FormActivityParams::FieldType::kObfuscated)) {
     return;
   }
 
@@ -1081,32 +1162,15 @@ bool HasGuid(const Suggestion::Payload& payload) {
                    fieldToFormLookupMap:fieldToFormLookupMap];
   }
 
-  if (base::FeatureList::IsEnabled(
-          autofill::features::kAutofillAcrossIframesIos)) {
-    auto* driver =
-        autofill::AutofillDriverIOS::FromWebStateAndWebFrame(_webState, frame);
-    if (driver && driver->is_processed()) {
-      driver->ScanForms();
-    }
+  auto* driver =
+      autofill::AutofillDriverIOS::FromWebStateAndWebFrame(_webState, frame);
+  if (driver && driver->is_processed()) {
+    driver->ScanForms();
   }
 
   if (actionType == autofill::mojom::FormActionType::kFill) {
     [self recordFormFillingSuccessMetrics:!fillingResults.empty()];
   }
-}
-
-// Called when did clear fields.
-- (void)onDidClearFields:(NSString*)clearedFieldsAsJsonStr
-                 inFrame:(web::WebFrame*)frame
-                  inForm:(FormRendererId)formID {
-  const auto clearedIDs =
-      autofill::ExtractIDs<FieldRendererId>(clearedFieldsAsJsonStr);
-  if (!clearedIDs) {
-    return;
-  }
-
-  [self updateFieldManagerForClearedIDs:*clearedIDs inFrame:frame];
-  [self notifyAboutClearedFields:*clearedIDs inFrame:frame inForm:formID];
 }
 
 // Updates field managers with filling results.
@@ -1125,17 +1189,6 @@ bool HasGuid(const Suggestion::Payload& payload) {
                                  withValue:(const std::u16string&)value {
   FieldDataManagerFactoryIOS::FromWebFrame(frame)->UpdateFieldDataMap(
       fieldRendererID, value, kAutofilledOnUserTrigger);
-}
-
-// Updates field managers for cleared fields.
-- (void)updateFieldManagerForClearedIDs:
-            (const std::set<FieldRendererId>&)clearedFields
-                                inFrame:(web::WebFrame*)frame {
-  for (const auto fieldID : clearedFields) {
-    [self updateFieldManagerForSpecificField:fieldID
-                                     inFrame:frame
-                                   withValue:u""];
-  }
 }
 
 // Notifies the PasswordAutofillAgent that the value of a field has changed.
@@ -1167,20 +1220,6 @@ bool HasGuid(const Suggestion::Payload& payload) {
                                     frame:frame
                                 withValue:fillData.second];
     }
-  }
-}
-
-// Notifies that fields were cleared.
-- (void)notifyAboutClearedFields:(const std::set<FieldRendererId>&)clearedFields
-                         inFrame:(web::WebFrame*)frame
-                          inForm:(FormRendererId)formID {
-  CHECK(frame);
-
-  for (auto fieldID : clearedFields) {
-    [self notifyAboutValueChangeOnField:fieldID
-                                 inForm:formID
-                                  frame:frame
-                              withValue:u""];
   }
 }
 
@@ -1354,11 +1393,7 @@ bool HasGuid(const Suggestion::Payload& payload) {
       frame, std::move(extractForms).Then(std::move(completionHandler)));
 }
 
-- (void)onSuggestionsReady:(NSArray<FormSuggestion*>*)suggestions
-        suggestionDelegate:
-            (const base::WeakPtr<autofill::AutofillSuggestionDelegate>&)
-                delegate {
-  _suggestionDelegate = delegate;
+- (void)onSuggestionsReady:(NSArray<FormSuggestion*>*)suggestions {
   _mostRecentSuggestions = suggestions;
   if (SuggestionsAvailableCompletion completion =
           std::exchange(_suggestionsAvailableCompletion, nil)) {
@@ -1370,32 +1405,49 @@ bool HasGuid(const Suggestion::Payload& payload) {
 // specified form and field.
 - (void)queryAutofillForForm:(const FormData&)form
              fieldIdentifier:(FieldRendererId)fieldIdentifier
-                        type:(NSString*)type
+                        type:(ActivityType)type
                   typedValue:(NSString*)typedValue
                        frame:(base::WeakPtr<web::WebFrame>)frame
                     webState:(base::WeakPtr<web::WebState>)webState
            completionHandler:(SuggestionsAvailableCompletion)completion {
+  // If a query was already in flight, complete the previous completion callback
+  // with NO so it doesn't remain unresolved.
+  if (SuggestionsAvailableCompletion previousCompletion =
+          std::exchange(_suggestionsAvailableCompletion, nil)) {
+    previousCompletion(NO);
+  }
+
   if (!frame || !webState) {
-    completion(NO);
+    if (completion) {
+      completion(NO);
+    }
+    return;
+  }
+
+  if (!ContainsFocusableField(form, fieldIdentifier)) {
+    if (completion) {
+      completion(NO);
+    }
+    return;
+  }
+
+  auto* driver = autofill::AutofillDriverIOS::FromWebStateAndWebFrame(
+      _webState, frame.get());
+  DLOG_IF(WARNING, !driver) << "No AutofillDriverIOS found for WebFrame";
+  if (!driver) {
+    if (completion) {
+      completion(NO);
+    }
     return;
   }
 
   // Save the completion and go look for suggestions.
   _suggestionsAvailableCompletion = [completion copy];
   _typedValue = typedValue;
+  _lastQueriedFieldID = {form.host_frame(), fieldIdentifier};
 
   // Query the BrowserAutofillManager for suggestions. Results will arrive in
-  // -showAutofillPopup:suggestionDelegate:.
-  if (!ContainsFocusableField(form, fieldIdentifier)) {
-    return;
-  }
-  _lastQueriedFieldID = {form.host_frame(), fieldIdentifier};
-  auto* driver = autofill::AutofillDriverIOS::FromWebStateAndWebFrame(
-      _webState, frame.get());
-  DLOG_IF(WARNING, !driver) << "No AutofillDriverIOS found for WebFrame";
-  if (!driver) {
-    return;
-  }
+  // -showAutofillPopup:suggestionDelegate:formId:fieldId:.
   driver->AskForValuesToFill(form, _lastQueriedFieldID);
 }
 
@@ -1429,7 +1481,9 @@ bool HasGuid(const Suggestion::Payload& payload) {
   driver->set_processed(true);
 
   if (frame->IsMainFrame()) {
-    _suggestionDelegate.reset();
+    _lastReceivedDelegate.reset();
+    _lastReceivedFormId = {};
+    _lastReceivedFieldId = {};
     _suggestionsAvailableCompletion = nil;
     _suggestionHandledCompletion = nil;
     _mostRecentSuggestions = nil;

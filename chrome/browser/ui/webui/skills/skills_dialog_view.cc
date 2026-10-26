@@ -7,7 +7,9 @@
 #include <memory>
 
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/webui/chrome_web_contents_handler.h"
 #include "chrome/common/webui_url_constants.h"
+#include "components/skills/features.h"
 #include "components/zoom/zoom_controller.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -29,13 +31,34 @@ constexpr int kWebViewWidth = 512;
 constexpr int kWebViewMinHeight = 527;
 constexpr int kWebViewMaxHeight = 601;  // Extra space needed for errors and
                                         // multi-line user account info.
-gfx::Size kWebViewMinSize = gfx::Size(kWebViewWidth, kWebViewMinHeight);
-gfx::Size kWebViewMaxSize = gfx::Size(kWebViewWidth, kWebViewMaxHeight);
+constexpr int kWebViewMinHeight2 = 200;
+constexpr int kWebViewMaxHeight2 = 710;  // Extra space needed for errors and
+                                         // multi-line user account info.
+
+gfx::Size GetWebViewMinSize() {
+  const int min_height =
+      base::FeatureList::IsEnabled(features::kSkillsWebViewV2Enabled)
+          ? kWebViewMinHeight2
+          : kWebViewMinHeight;
+  return gfx::Size(kWebViewWidth, min_height);
+}
+
+gfx::Size GetWebViewMaxSize() {
+  const int max_height =
+      base::FeatureList::IsEnabled(features::kSkillsWebViewV2Enabled)
+          ? kWebViewMaxHeight2
+          : kWebViewMaxHeight;
+  return gfx::Size(kWebViewWidth, max_height);
+}
 }  // namespace
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(SkillsDialogView, kSkillsDialogElementId);
 
-SkillsDialogView::SkillsDialogView(Profile* profile) {
+SkillsDialogView::SkillsDialogView(Profile* profile, const GURL& url)
+    : views::WebContentsDelegateViews<SkillsDialogView,
+                                      ui::WebDialogWebContentsDelegate>(
+          profile,
+          std::make_unique<ChromeWebContentsHandler>()) {
   SetLayoutManager(std::make_unique<views::FillLayout>());
 
   // Create the webview.
@@ -43,21 +66,23 @@ SkillsDialogView::SkillsDialogView(Profile* profile) {
   web_view->SetProperty(views::kElementIdentifierKey, kSkillsDialogElementId);
   web_view_ = web_view.get();
 
-  web_view->SetPreferredSize(kWebViewMinSize);
+  web_view->SetPreferredSize(GetWebViewMinSize());
   web_view_->SetPaintToLayer();
   web_view_->layer()->SetFillsBoundsOpaquely(false);
   web_view_->layer()->SetRoundedCornerRadius(
       gfx::RoundedCornersF(kCornerRadius));
   web_view_->layer()->SetMasksToBounds(true);
   web_view_->GetWebContents()->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
-  web_view_->LoadInitialURL(GURL(std::string(chrome::kChromeUISkillsURL) +
-                                 chrome::kChromeUISkillsDialogPath));
+  web_view_->LoadInitialURL(url);
   web_view_->GetWebContents()->SetDelegate(this);
   zoom::ZoomController::CreateForWebContents(web_view_->GetWebContents());
   zoom::ZoomController::FromWebContents(web_view_->GetWebContents())
       ->SetZoomMode(zoom::ZoomController::ZOOM_MODE_DISABLED);
-  web_view_->EnableSizingFromWebContents(kWebViewMinSize, kWebViewMaxSize);
+  web_view_->EnableSizingFromWebContents(GetWebViewMinSize(),
+                                         GetWebViewMaxSize());
   AddChildView(std::move(web_view));
+
+  SetAcceleratorHandling(views::WebContentsAcceleratorHandling::kEnabled);
 }
 
 SkillsDialogView::~SkillsDialogView() {
@@ -76,17 +101,6 @@ void SkillsDialogView::ChildPreferredSizeChanged(views::View* child) {
 gfx::Size SkillsDialogView::CalculatePreferredSize(
     const views::SizeBounds& available_size) const {
   return GetLayoutManager()->GetPreferredSize(this, available_size);
-}
-
-bool SkillsDialogView::HandleKeyboardEvent(
-    content::WebContents* source,
-    const input::NativeWebKeyboardEvent& event) {
-  if (!web_view_) {
-    return false;
-  }
-
-  return unhandled_keyboard_event_handler_.HandleKeyboardEvent(
-      event, web_view_->GetFocusManager());
 }
 
 void SkillsDialogView::ResizeDueToAutoResize(content::WebContents* web_contents,

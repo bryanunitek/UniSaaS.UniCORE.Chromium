@@ -50,28 +50,33 @@ void IbanAccessManager::FetchValue(const Suggestion::Payload& payload,
   // saved IBAN from the PersonalDataManager.
   if (const Suggestion::Guid* guid = std::get_if<Suggestion::Guid>(&payload)) {
     const Iban* iban = GetPaymentsDataManager().GetIbanByGUID(guid->value());
-    if (iban) {
-      Iban iban_copy = *iban;
-      GetPaymentsDataManager().RecordUseOfIban(iban_copy);
-      if (auto* mandatory_reauth_manager =
-              GetPaymentsAutofillClient()
-                  .GetOrCreatePaymentsMandatoryReauthManager();
-          mandatory_reauth_manager &&
-          GetPaymentsAutofillClient().IsMandatoryReauthEnabled()) {
-        StartDeviceAuthenticationForFilling(
-            std::move(on_iban_fetched), iban_copy.value(),
-            NonInteractivePaymentMethodType::kLocalIban);
-      } else {
-        std::move(on_iban_fetched).Run(iban_copy.value());
-        if (auto* form_data_importer = client_->GetFormDataImporter()) {
-          form_data_importer->GetPaymentsFormDataImporter()
-              .SetPaymentMethodTypeIfNonInteractiveAuthenticationFlowCompleted(
-                  payments::MandatoryReauthManager::
-                      GetNonInteractivePaymentMethodType(
-                          Iban::RecordType::kLocalIban));
-        }
-      }
+    if (!iban) {
+      std::move(on_iban_fetched)
+          .Run(base::unexpected(FailureReason::kItemNotFound));
+      return;
     }
+    Iban iban_copy = *iban;
+    GetPaymentsDataManager().RecordUseOfIban(iban_copy);
+
+    if (auto* mandatory_reauth_manager =
+            GetPaymentsAutofillClient()
+                .GetOrCreatePaymentsMandatoryReauthManager();
+        mandatory_reauth_manager &&
+        GetPaymentsAutofillClient().IsMandatoryReauthEnabled()) {
+      StartDeviceAuthenticationForFilling(
+          std::move(on_iban_fetched), iban_copy.value(),
+          NonInteractivePaymentMethodType::kLocalIban);
+      return;
+    }
+
+    if (auto* form_data_importer = client_->GetFormDataImporter()) {
+      form_data_importer->GetPaymentsFormDataImporter()
+          .SetPaymentMethodTypeIfNonInteractiveAuthenticationFlowCompleted(
+              payments::MandatoryReauthManager::
+                  GetNonInteractivePaymentMethodType(
+                      Iban::RecordType::kLocalIban));
+    }
+    std::move(on_iban_fetched).Run(iban_copy.value());
     return;
   }
 
@@ -80,7 +85,11 @@ void IbanAccessManager::FetchValue(const Suggestion::Payload& payload,
   // The suggestion is now presumed to be a masked server IBAN.
   // If there are no server IBANs in the PersonalDataManager that have the same
   // instrument ID as the provided `instrument_id`, then abort the operation.
-  if (!GetPaymentsDataManager().GetIbanByInstrumentId(instrument_id)) {
+  const Iban* iban =
+      GetPaymentsDataManager().GetIbanByInstrumentId(instrument_id);
+  if (!iban) {
+    std::move(on_iban_fetched)
+        .Run(base::unexpected(FailureReason::kItemNotFound));
     return;
   }
 
@@ -91,11 +100,6 @@ void IbanAccessManager::FetchValue(const Suggestion::Payload& payload,
 
   // Construct `UnmaskIbanRequestDetails` and send `UnmaskIban` to fetch the
   // full value of the server IBAN.
-  const Iban* iban =
-      GetPaymentsDataManager().GetIbanByInstrumentId(instrument_id);
-  if (!iban) {
-    return;
-  }
   Iban iban_copy = *iban;
   GetPaymentsDataManager().RecordUseOfIban(iban_copy);
   payments::UnmaskIbanRequestDetails request_details;
@@ -165,6 +169,7 @@ void IbanAccessManager::OnUnmaskResponseReceived(
   error_context.type =
       AutofillErrorDialogType::kMaskedServerIbanUnmaskingTemporaryError;
   GetPaymentsAutofillClient().ShowAutofillErrorDialog(error_context);
+  std::move(on_iban_fetched).Run(base::unexpected(FailureReason::kFetchFailed));
 }
 
 void IbanAccessManager::OnServerIbanUnmaskCancelled() {
@@ -175,17 +180,15 @@ void IbanAccessManager::StartDeviceAuthenticationForFilling(
     OnIbanFetchedCallback on_iban_fetched,
     const std::u16string& value,
     NonInteractivePaymentMethodType non_interactive_payment_method_type) {
-  GetPaymentsAutofillClient()
-      .GetOrCreatePaymentsMandatoryReauthManager()
-      ->StartDeviceAuthentication(
+  payments::MandatoryReauthManager* mandatory_reauth_manager =
+      GetPaymentsAutofillClient().GetOrCreatePaymentsMandatoryReauthManager();
+  mandatory_reauth_manager->StartDeviceAuthentication(
+      non_interactive_payment_method_type,
+      base::BindOnce(
+          &IbanAccessManager::OnDeviceAuthenticationResponseForFilling,
+          weak_ptr_factory_.GetWeakPtr(), std::move(on_iban_fetched), value,
           non_interactive_payment_method_type,
-          base::BindOnce(
-              &IbanAccessManager::OnDeviceAuthenticationResponseForFilling,
-              weak_ptr_factory_.GetWeakPtr(), std::move(on_iban_fetched), value,
-              non_interactive_payment_method_type,
-              GetPaymentsAutofillClient()
-                  .GetOrCreatePaymentsMandatoryReauthManager()
-                  ->GetAuthenticationMethod()));
+          mandatory_reauth_manager->GetAuthenticationMethod()));
 }
 
 void IbanAccessManager::OnDeviceAuthenticationResponseForFilling(
@@ -203,6 +206,9 @@ void IbanAccessManager::OnDeviceAuthenticationResponseForFilling(
                 kFlowFailed);
   if (successful_auth) {
     std::move(on_iban_fetched).Run(value);
+  } else {
+    std::move(on_iban_fetched)
+        .Run(base::unexpected(FailureReason::kReauthFailed));
   }
 }
 

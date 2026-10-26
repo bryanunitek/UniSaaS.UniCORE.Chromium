@@ -25,6 +25,8 @@
 
 #include "third_party/blink/renderer/platform/audio/hrtf_panner.h"
 
+#include <cmath>
+
 #include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
@@ -61,16 +63,15 @@ int CalculateDesiredAzimuthIndexAndBlend(double azimuth,
 
   // Calculate the azimuth index and the blend (0 -> 1) for interpolation.
   const double desired_azimuth_index_float = azimuth / angle_between_azimuths;
-  int desired_azimuth_index = static_cast<int>(desired_azimuth_index_float);
+  const int desired_azimuth_index =
+      static_cast<int>(desired_azimuth_index_float);
   azimuth_blend =
       desired_azimuth_index_float - static_cast<double>(desired_azimuth_index);
 
   // We don't immediately start using this azimuth index, but instead approach
   // this index from the last index we rendered at.  This minimizes the clicks
   // and graininess for moving sources which occur otherwise.
-  desired_azimuth_index =
-      ClampTo(desired_azimuth_index, 0, number_of_azimuths - 1);
-  return desired_azimuth_index;
+  return ClampTo(desired_azimuth_index, 0, number_of_azimuths - 1);
 }
 
 }  // namespace
@@ -187,7 +188,7 @@ void HRTFPanner::Pan(double desired_azimuth,
   base::span<float> destination_r =
       output_bus->ChannelByType(AudioBus::kChannelRight)->MutableSpan();
 
-  double azimuth_blend;
+  double azimuth_blend = 0.0;
   const int desired_azimuth_index =
       CalculateDesiredAzimuthIndexAndBlend(azimuth, azimuth_blend);
 
@@ -224,25 +225,21 @@ void HRTFPanner::Pan(double desired_azimuth,
     }
   }
 
-  // This algorithm currently requires that we process in power-of-two size
-  // chunks of at least `RenderQuantumFrames()`.
-  DCHECK_EQ(1UL << static_cast<int>(log2(frames_to_process)),
-            frames_to_process);
-  DCHECK_GE(frames_to_process, RenderQuantumFrames());
-
   const unsigned kFramesPerSegment = RenderQuantumFrames();
-  const unsigned number_of_segments = frames_to_process / kFramesPerSegment;
+  for (unsigned offset = 0; offset < frames_to_process;
+       offset += kFramesPerSegment) {
+    const unsigned segment_frames =
+        std::min(kFramesPerSegment, frames_to_process - offset);
 
-  for (unsigned segment = 0; segment < number_of_segments; ++segment) {
     // Get the HRTFKernels and interpolated delays.
-    HRTFKernel* kernel_l1;
-    HRTFKernel* kernel_r1;
-    HRTFKernel* kernel_l2;
-    HRTFKernel* kernel_r2;
-    double frame_delay_l1;
-    double frame_delay_r1;
-    double frame_delay_l2;
-    double frame_delay_r2;
+    HRTFKernel* kernel_l1 = nullptr;
+    HRTFKernel* kernel_r1 = nullptr;
+    HRTFKernel* kernel_l2 = nullptr;
+    HRTFKernel* kernel_r2 = nullptr;
+    double frame_delay_l1 = 0.0;
+    double frame_delay_r1 = 0.0;
+    double frame_delay_l2 = 0.0;
+    double frame_delay_r2 = 0.0;
     database->GetKernelsFromAzimuthElevation(azimuth_blend, azimuth_index1_,
                                              elevation1_, kernel_l1, kernel_r1,
                                              frame_delay_l1, frame_delay_r1);
@@ -261,65 +258,68 @@ void HRTFPanner::Pan(double desired_azimuth,
 
     // Crossfade inter-aural delays based on transitions.
     const double frame_delay_l =
-        (1 - crossfade_x_) * frame_delay_l1 + crossfade_x_ * frame_delay_l2;
+        std::lerp(frame_delay_l1, frame_delay_l2, crossfade_x_);
     const double frame_delay_r =
-        (1 - crossfade_x_) * frame_delay_r1 + crossfade_x_ * frame_delay_r2;
+        std::lerp(frame_delay_r1, frame_delay_r2, crossfade_x_);
 
     // Calculate the source and destination pointers for the current segment.
-    const unsigned offset = segment * kFramesPerSegment;
-    base::span<const float> segment_source_l = source_l.subspan(offset);
-    base::span<const float> segment_source_r = source_r.subspan(offset);
-    base::span<float> segment_destination_l = destination_l.subspan(offset);
-    base::span<float> segment_destination_r = destination_r.subspan(offset);
+    base::span<const float> segment_source_l =
+        source_l.subspan(offset, segment_frames);
+    base::span<const float> segment_source_r =
+        source_r.subspan(offset, segment_frames);
+    base::span<float> segment_destination_l =
+        destination_l.subspan(offset, segment_frames);
+    base::span<float> segment_destination_r =
+        destination_r.subspan(offset, segment_frames);
 
     // First run through delay lines for inter-aural time difference.
     delay_line_l_.SetDelayFrames(frame_delay_l);
     delay_line_r_.SetDelayFrames(frame_delay_r);
     delay_line_l_.ProcessKRate(segment_source_l, segment_destination_l,
-                               kFramesPerSegment);
+                               segment_frames);
     delay_line_r_.ProcessKRate(segment_source_r, segment_destination_r,
-                               kFramesPerSegment);
+                               segment_frames);
 
     const bool needs_crossfading = crossfade_incr_;
 
     // Have the convolvers render directly to the final destination if we're not
     // cross-fading.
     base::span<float> convolution_destination_l1 =
-        needs_crossfading ? temp_l1_.as_span() : segment_destination_l;
+        needs_crossfading ? temp_l1_.as_span().first(segment_frames)
+                          : segment_destination_l;
     base::span<float> convolution_destination_r1 =
-        needs_crossfading ? temp_r1_.as_span() : segment_destination_r;
+        needs_crossfading ? temp_r1_.as_span().first(segment_frames)
+                          : segment_destination_r;
     base::span<float> convolution_destination_l2 =
-        needs_crossfading ? temp_l2_.as_span() : segment_destination_l;
+        needs_crossfading ? temp_l2_.as_span().first(segment_frames)
+                          : segment_destination_l;
     base::span<float> convolution_destination_r2 =
-        needs_crossfading ? temp_r2_.as_span() : segment_destination_r;
+        needs_crossfading ? temp_r2_.as_span().first(segment_frames)
+                          : segment_destination_r;
 
     // Now do the convolutions.
     // Note that we avoid doing convolutions on both sets of convolvers if we're
     // not currently cross-fading.
 
     if (crossfade_selection_ == kCrossfadeSelection1 || needs_crossfading) {
-      convolver_l1_.Process(
-          kernel_l1->FftFrame(), segment_destination_l.first(kFramesPerSegment),
-          convolution_destination_l1.first(kFramesPerSegment));
-      convolver_r1_.Process(
-          kernel_r1->FftFrame(), segment_destination_r.first(kFramesPerSegment),
-          convolution_destination_r1.first(kFramesPerSegment));
+      convolver_l1_.Process(kernel_l1->FftFrame(), segment_destination_l,
+                            convolution_destination_l1);
+      convolver_r1_.Process(kernel_r1->FftFrame(), segment_destination_r,
+                            convolution_destination_r1);
     }
 
     if (crossfade_selection_ == kCrossfadeSelection2 || needs_crossfading) {
-      convolver_l2_.Process(
-          kernel_l2->FftFrame(), segment_destination_l.first(kFramesPerSegment),
-          convolution_destination_l2.first(kFramesPerSegment));
-      convolver_r2_.Process(
-          kernel_r2->FftFrame(), segment_destination_r.first(kFramesPerSegment),
-          convolution_destination_r2.first(kFramesPerSegment));
+      convolver_l2_.Process(kernel_l2->FftFrame(), segment_destination_l,
+                            convolution_destination_l2);
+      convolver_r2_.Process(kernel_r2->FftFrame(), segment_destination_r,
+                            convolution_destination_r2);
     }
 
     if (needs_crossfading) {
       // Apply linear cross-fade.
       float x = crossfade_x_;
       const float incr = crossfade_incr_;
-      for (unsigned i = 0; i < kFramesPerSegment; ++i) {
+      for (unsigned i = 0; i < segment_frames; ++i) {
         segment_destination_l[i] = (1 - x) * convolution_destination_l1[i] +
                                    x * convolution_destination_l2[i];
         segment_destination_r[i] = (1 - x) * convolution_destination_r1[i] +

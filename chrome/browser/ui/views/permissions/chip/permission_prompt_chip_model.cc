@@ -6,11 +6,7 @@
 
 #include <algorithm>
 
-#include "base/check.h"
-#include "base/feature_list.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/permissions/permission_actions_history.h"
 #include "components/permissions/permission_request_manager.h"
 #include "components/permissions/permission_util.h"
 #include "components/permissions/request_type.h"
@@ -84,7 +80,6 @@ std::u16string GetQuietPermissionMessage(
 
 std::u16string GetLoudPermissionMessage(
     permissions::PermissionPrompt::Delegate* delegate) {
-
   const auto& requests = delegate->Requests();
   if (IsMicAndCameraRequest(requests)) {
     return l10n_util::GetStringUTF16(
@@ -112,14 +107,20 @@ bool ShouldPermissionBubbleExpand(
   return true;
 }
 
+base::WeakPtr<permissions::PermissionPrompt::Delegate> CheckDelegate(
+    base::WeakPtr<permissions::PermissionPrompt::Delegate> delegate) {
+  CHECK(delegate);
+  CHECK(!delegate->Requests().empty());
+  return delegate;
+}
+
 }  // namespace
 
 PermissionPromptChipModel::PermissionPromptChipModel(
     base::WeakPtr<permissions::PermissionPrompt::Delegate> delegate)
-    : delegate_(delegate),
+    : delegate_(CheckDelegate(delegate)),
       allowed_icon_(GetPermissionIconId(delegate.get())),
       blocked_icon_(GetBlockedPermissionIconId(delegate.get())) {
-
   if (delegate_->ShouldCurrentRequestUseQuietUI()) {
     prompt_style_ = PermissionPromptStyle::kQuietChip;
     should_bubble_start_open_ = false;
@@ -132,7 +133,8 @@ PermissionPromptChipModel::PermissionPromptChipModel(
     chip_theme_ = PermissionChipTheme::kLowVisibility;
   } else {
     prompt_style_ = PermissionPromptStyle::kChip;
-    should_bubble_start_open_ = true;
+    should_bubble_start_open_ =
+        ShouldLoudChipBubbleStartOpen(delegate_->Requests());
     should_display_blocked_icon_ = false;
     should_expand_ = true;
 
@@ -141,6 +143,13 @@ PermissionPromptChipModel::PermissionPromptChipModel(
   }
   accessibility_chip_text_ = l10n_util::GetStringUTF16(
       IDS_PERMISSIONS_REQUESTED_SCREENREADER_ANNOUNCEMENT);
+
+  // The requests are decided together, so the chip stays only if all of them
+  // allow it.
+  should_keep_chip_on_bubble_close_ =
+      std::ranges::all_of(delegate_->Requests(), [](const auto& request) {
+        return request->ShouldKeepChipOnBubbleClose();
+      });
 
   if (IsMicAndCameraRequest(delegate->Requests())) {
     content_settings_type_ = ContentSettingsType::MEDIASTREAM_CAMERA;
@@ -151,19 +160,29 @@ PermissionPromptChipModel::PermissionPromptChipModel(
 
 PermissionPromptChipModel::~PermissionPromptChipModel() = default;
 
+// static
+bool PermissionPromptChipModel::ShouldLoudChipBubbleStartOpen(
+    const std::vector<std::unique_ptr<permissions::PermissionRequest>>&
+        requests) {
+  return std::ranges::any_of(requests, [](const auto& request) {
+    return request->ShouldBubbleStartOpen();
+  });
+}
+
 void PermissionPromptChipModel::UpdateAutoCollapsePromptChipState(
     bool is_collapsed) {
   should_display_blocked_icon_ = is_collapsed;
   chip_theme_ = PermissionChipTheme::kLowVisibility;
 }
 
-bool PermissionPromptChipModel::IsExpandAnimationAllowed() {
+bool PermissionPromptChipModel::IsExpandAnimationAllowed() const {
   return ShouldExpand() && (ShouldBubbleStartOpen() ||
                             !delegate_->WasCurrentRequestAlreadyDisplayed());
 }
 
 void PermissionPromptChipModel::UpdateWithUserDecision(
     permissions::PermissionAction user_decision) {
+  CheckDelegate(delegate_);
   permissions::PermissionRequest::ChipTextType chip_text_type;
   permissions::PermissionRequest::ChipTextType accessibility_text_type;
   user_decision_ = user_decision;

@@ -7,7 +7,9 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/functional/callback_forward.h"
@@ -56,21 +58,35 @@ class AutofillWebDataService : public WebDataServiceBase {
   // Schedules a task to add form fields to the web database.
   virtual void AddFormFields(const std::vector<FormFieldData>& fields);
 
-  // Initiates the request for a vector of values which have been entered in
-  // form input fields named |name|. The method OnWebDataServiceRequestDone of
-  // |consumer| gets called back when the request is finished, with the vector
-  // included in the argument |result|.
+  // Initiates a request for autocomplete entries in the legacy
+  // non-label-sensitive table matching `name` and `prefix`.
+  // `consumer::OnWebDataServiceRequestDone` is called when the request
+  // finishes.
   virtual WebDataServiceBase::Handle GetFormValuesForElementName(
       const std::u16string& name,
       const std::u16string& prefix,
       int limit,
       WebDataServiceRequestCallback consumer);
 
+  // Asynchronously fetches Autofill suggestions.
+  //
+  // Queries for stored form values matching the field's `name`, `label`,
+  // and the user-typed `prefix`. Returns up to `limit` suggestions
+  // via the `consumer`'s OnWebDataServiceRequestDone callback.
+  virtual WebDataServiceBase::Handle GetFormValuesForElementNameAndLabel(
+      std::u16string_view name,
+      std::u16string_view label,
+      std::u16string_view prefix,
+      int limit,
+      WebDataServiceRequestCallback consumer);
+
   // Removes form elements recorded for Autocomplete from the database.
   void RemoveFormElementsAddedBetween(base::Time delete_begin,
                                       base::Time delete_end);
-  void RemoveFormValueForElementName(const std::u16string& name,
-                                     const std::u16string& value);
+  // Deletes autocomplete `value` entries with matching `name` and/or `label`.
+  virtual void RemoveFormValueForElementNameAndLabel(std::u16string_view name,
+                                                     std::u16string_view label,
+                                                     std::u16string_view value);
 
   // Schedules a task to add an Autofill profile to the web database.
   void AddAutofillProfile(
@@ -106,6 +122,14 @@ class AutofillWebDataService : public WebDataServiceBase {
   void AddOrUpdateEntityInstance(
       EntityInstance entity,
       base::OnceCallback<void(EntityInstanceChange)> on_success);
+
+  // Overload of `AddOrUpdateEntityInstance` that accepts an optional
+  // `legal_message_token`. The token is passed to the DB sequence and sync
+  // bridge to populate the sync specifics for pass upserts.
+  void AddOrUpdateEntityInstance(
+      EntityInstance entity,
+      std::optional<std::string> legal_message_token,
+      base::OnceCallback<void(EntityInstanceChange)> on_success);
   void RemoveEntityInstance(
       EntityInstance entity,
       base::OnceCallback<void(EntityInstanceChange)> on_success);
@@ -130,6 +154,12 @@ class AutofillWebDataService : public WebDataServiceBase {
   WebDataServiceBase::Handle GetCountOfValuesContainedBetween(
       base::Time begin,
       base::Time end,
+      WebDataServiceRequestCallback consumer);
+
+  // Queries table-level statistics for the autocomplete table.
+  // The callback `consumer` will be called with a
+  // `WDResult<AutocompleteTableStats>`.
+  virtual WebDataServiceBase::Handle GetAutocompleteTableStats(
       WebDataServiceRequestCallback consumer);
 
   // Schedules a task to update autocomplete entries in the web database.
@@ -289,6 +319,11 @@ class AutofillWebDataService : public WebDataServiceBase {
   // This is used for tests only. In production, server cards are set directly
   // by Chrome Sync code.
   void AddServerCreditCardForTesting(const CreditCard& credit_card);
+
+  // Copies data from the legacy `autofill` table to the new `autocomplete`
+  // table.
+  virtual void MigrateDataFromLegacyTable(
+      WebDataServiceRequestCallback consumer);
 
  protected:
   ~AutofillWebDataService() override;

@@ -89,6 +89,9 @@ class ExtensionPreferenceApiTest : public extensions::ExtensionApiTest {
                             .FindList("blocked_types")
                             ->front()
                             .GetString());
+    EXPECT_EQ("all",
+              (*blocked_types_pref[1].GetDict().FindList("blocked_types"))[1]
+                  .GetString());
     EXPECT_EQ(GetCookieControlsMode(prefs), CookieControlsMode::kOff);
     EXPECT_TRUE(prefs->GetBoolean(prefs::kEnableHyperlinkAuditing));
     EXPECT_TRUE(prefs->GetBoolean(prefs::kEnableReferrers));
@@ -107,9 +110,6 @@ class ExtensionPreferenceApiTest : public extensions::ExtensionApiTest {
                                       /* expected_controlled */ true);
     VerifyPrefValueAndControlledState(
         prefs::kPrivacySandboxM1AdMeasurementEnabled, base::Value(false),
-        /* expected_controlled */ true);
-    VerifyPrefValueAndControlledState(
-        prefs::kPrivacySandboxRelatedWebsiteSetsEnabled, base::Value(false),
         /* expected_controlled */ true);
   }
 
@@ -146,9 +146,6 @@ class ExtensionPreferenceApiTest : public extensions::ExtensionApiTest {
                                       /* expected_controlled */ false);
     VerifyPrefValueAndControlledState(
         prefs::kPrivacySandboxM1AdMeasurementEnabled, base::Value(true),
-        /* expected_controlled */ false);
-    VerifyPrefValueAndControlledState(
-        prefs::kPrivacySandboxRelatedWebsiteSetsEnabled, base::Value(true),
         /* expected_controlled */ false);
   }
 
@@ -228,7 +225,6 @@ IN_PROC_BROWSER_TEST_F(ExtensionPreferenceApiTest, Standard) {
   prefs->SetBoolean(prefs::kPrivacySandboxM1TopicsEnabled, true);
   prefs->SetBoolean(prefs::kPrivacySandboxM1FledgeEnabled, true);
   prefs->SetBoolean(prefs::kPrivacySandboxM1AdMeasurementEnabled, true);
-  prefs->SetBoolean(prefs::kPrivacySandboxRelatedWebsiteSetsEnabled, true);
 
   // The 'protectedContentEnabled' pref is only available as browser pref
   // associated with browser profile on ChromeOS and Windows, so pass a JSON

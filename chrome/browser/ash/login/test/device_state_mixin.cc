@@ -10,12 +10,12 @@
 #include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_paths.h"
 #include "ash/constants/ash_pref_names.h"
-#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/browser/ash/login/test/scoped_policy_update.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/chrome_paths.h"
@@ -51,16 +51,14 @@ cryptohome::SerializedInstallAttributes BuildInstallAttributes(
   cryptohome::SerializedInstallAttributes install_attrs;
   install_attrs.set_version(1);
 
-  for (const auto& it : install_attrs_) {
-    if (it.second.empty())
+  for (const auto& [name, value] : install_attrs_) {
+    if (value.empty()) {
       continue;
+    }
     cryptohome::SerializedInstallAttributes::Attribute* attr_entry =
         install_attrs.add_attributes();
-    const std::string& name = it.first;
-    const std::string& value = it.second;
     attr_entry->set_name(name);
-    attr_entry->mutable_value()->assign(
-        value.data(), UNSAFE_TODO(value.data() + value.size()));
+    attr_entry->set_value(value);
   }
   return install_attrs;
 }
@@ -74,7 +72,7 @@ void WriteFile(const base::FilePath& path, const std::string& blob) {
 DeviceStateMixin::DeviceStateMixin(InProcessBrowserTestMixinHost* host,
                                    State initial_state)
     : InProcessBrowserTestMixin(host), state_(initial_state) {
-  DCHECK(!g_instance_created);
+  CHECK(!g_instance_created, base::NotFatalUntil::M161);
   g_instance_created = true;
 }
 
@@ -157,8 +155,9 @@ void DeviceStateMixin::SetState(State state) {
 }
 
 void DeviceStateMixin::SetDeviceState() {
-  DCHECK(!is_setup_);
-  DCHECK(domain_.empty() || state_ == State::OOBE_COMPLETED_CLOUD_ENROLLED);
+  CHECK(!is_setup_, base::NotFatalUntil::M161);
+  CHECK(domain_.empty() || state_ == State::OOBE_COMPLETED_CLOUD_ENROLLED,
+        base::NotFatalUntil::M161);
   is_setup_ = true;
 
   WriteInstallAttrFile(state_);
@@ -252,7 +251,7 @@ void DeviceStateMixin::SetCachedDevicePolicy() {
   if (!session_manager_initialized_)
     return;
 
-  DCHECK(IsEnrolledState());
+  CHECK(IsEnrolledState(), base::NotFatalUntil::M161);
 
   device_policy_.SetDefaultSigningKey();
   device_policy_.Build();
@@ -266,7 +265,7 @@ void DeviceStateMixin::SetCachedDeviceLocalAccountPolicy(
       !device_local_account_policies_.count(account_id))
     return;
 
-  DCHECK(IsEnrolledState());
+  CHECK(IsEnrolledState(), base::NotFatalUntil::M161);
 
   policy::UserPolicyBuilder& builder =
       device_local_account_policies_[account_id];

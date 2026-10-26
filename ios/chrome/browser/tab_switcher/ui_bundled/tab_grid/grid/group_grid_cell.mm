@@ -27,7 +27,6 @@
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util.h"
-#import "ui/gfx/ios/uikit_util.h"
 
 namespace {
 
@@ -441,7 +440,7 @@ const CGFloat kTopBarLargeInset = 20;
   _closeIconView.contentMode = UIViewContentModeCenter;
   _closeIconView.hidden = [self isInSelectionMode];
   _closeIconView.image =
-      DefaultSymbolTemplateWithPointSize(kXMarkSymbol, kIconSymbolPointSize);
+      SymbolTemplateWithPointSize(SymbolXMark, kIconSymbolPointSize);
 
   _selectIconView = [[UIImageView alloc] init];
   _selectIconView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -528,11 +527,10 @@ const CGFloat kTopBarLargeInset = 20;
 
 - (UIImage*)selectIconImageForCurrentState {
   if (_state == GridCellStateEditingUnselected) {
-    return DefaultSymbolTemplateWithPointSize(kCircleSymbol,
-                                              kIconSymbolPointSize);
+    return SymbolTemplateWithPointSize(SymbolCircle, kIconSymbolPointSize);
   }
-  return DefaultSymbolTemplateWithPointSize(kCheckmarkCircleFillSymbol,
-                                            kIconSymbolPointSize);
+  return SymbolTemplateWithPointSize(SymbolCheckmarkCircleFill,
+                                     kIconSymbolPointSize);
 }
 
 - (void)configureCloseOrSelectIconConstraints {
@@ -623,7 +621,7 @@ const CGFloat kTopBarLargeInset = 20;
 // If window is not nil, register for updates to its interface style updates and
 // set the user interface style to be the same as the window.
 - (void)updateInterfaceStyleForWindow:(UIWindow*)window {
-  if (self.traitRegistration && self.registeredWindowScene) {
+  if (self.traitRegistration) {
     [self.registeredWindowScene
         unregisterForTraitChanges:self.traitRegistration];
     self.traitRegistration = nil;

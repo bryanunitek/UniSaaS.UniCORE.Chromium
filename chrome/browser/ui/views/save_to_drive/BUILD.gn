@@ -20,7 +20,6 @@ source_set("save_to_drive") {
     "get_account.cc",
   ]
   public_deps = [
-    "//chrome/browser:browser_public_dependencies",
     "//components/signin/public/identity_manager",
     "//content/public/browser",
   ]
@@ -69,7 +68,6 @@ source_set("unit_tests") {
     ":test_support",
     "//base",
     "//chrome/app:generated_resources_grit",
-    "//chrome/browser/ui",
     "//chrome/browser/ui/views:layout_provider",
     "//components/strings:components_strings_grit",
     "//testing/gtest",

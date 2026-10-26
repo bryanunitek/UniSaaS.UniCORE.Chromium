@@ -19,13 +19,19 @@ import "third_party/metrics_proto/omnibox_input_type.proto";
 // Stores information about an omnibox interaction.
 // Next tag: 29
 message OmniboxEventProto {
-  // The timestamp for the event, in seconds.
-  // This value comes from Chromium's TimeTicks::Now(), which is an abstract
-  // time value that is guaranteed to always be non-decreasing (regardless of
-  // Daylight Saving Time or any other changes to the system clock).
+  // A within-session timestamp for the event, in seconds.  Do not treat as
+  // an absolute timestamp.
+  //
   // These numbers are only comparable within a session.  To sequence events
-  // across sessions, order by the |session_id| from the
-  // ChromeUserMetricsExtension message.
+  // across sessions, order first by the |session_id| from the
+  // ChromeUserMetricsExtension message, then by time_sec.
+  //
+  // Even within a session, these timestamps may not perfectly reflect elapsed
+  // wall-clock time, as the clock can pause when the system is asleep.  (The
+  // timestamp value comes from Chromium's TimeTicks::Now(), which is an
+  // abstract time value that is guaranteed to always be non-decreasing,
+  // regardless of Daylight Saving Time or any other changes to the system
+  // clock.)
   int64 time_sec = 1;
 
   // The id of the originating tab for this omnibox interaction.
@@ -257,6 +263,12 @@ message OmniboxEventProto {
 
     // Composebox everywhere.
     COMPOSEBOX_EVERYWHERE = 39;
+
+    // The searchbox in the Tab Search Overlay Side UI (similar to Hub Search).
+    ANDROID_TAB_SEARCH_OVERLAY = 40;
+
+    // The New Tab Page Action Chips.
+    NTP_ACTION_CHIPS = 41;
 
     // When adding new classifications, please update the `OmniboxPageContext`
     // variants listed in chromium's
@@ -490,6 +502,8 @@ message OmniboxEventProto {
                                         // visits with similar embeddings to the
                                         // query.
       TAB_GROUP = 41;                   // Tab group suggestion result.
+      RECENTLY_CLOSED_TAB = 42;         // A recently closed tab that can be
+                                        // restored.
     }
 
     ResultType result_type = 2;

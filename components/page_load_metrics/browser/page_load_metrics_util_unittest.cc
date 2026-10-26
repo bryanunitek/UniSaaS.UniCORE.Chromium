@@ -10,6 +10,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "components/page_load_metrics/browser/fake_page_load_metrics_observer_delegate.h"
 #include "components/page_load_metrics/browser/features.h"
+#include "components/page_load_metrics/browser/soft_navigation_data.h"
 #include "components/page_load_metrics/common/page_load_metrics.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -190,56 +191,36 @@ TEST_F(PageLoadMetricsUtilTest, GetNonPrerenderingBackgroundStartTiming) {
 
 TEST_F(PageLoadMetricsUtilTest, CorrectEventAsNavigationOrActivationOrigined) {
   struct {
+    std::string description;
     PrerenderingState prerendering_state;
     std::optional<base::TimeDelta> activation_start;
     base::TimeDelta event;
     std::optional<base::TimeDelta> expected_result;
   } test_cases[] = {
-      // Not modified
-      {PrerenderingState::kNoPrerendering, std::nullopt, base::Seconds(2),
-       base::Seconds(2)},
-      // max(0, 2 - x), where x is time of activation start that may come in the
-      // future and should be greater than an already occurred event.
-      {PrerenderingState::kInPrerendering, std::nullopt, base::Seconds(2),
+      {"Not modified", PrerenderingState::kNoPrerendering, std::nullopt,
+       base::Seconds(2), base::Seconds(2)},
+      {"max(0, 2 - x), where x is time of activation start that may come in "
+       "the future and should be greater than an already occurred event.",
+       PrerenderingState::kInPrerendering, std::nullopt, base::Seconds(2),
        base::Seconds(0)},
-      {PrerenderingState::kActivatedNoActivationStart, std::nullopt,
+      {"activation start not yet available in browser, otherwise same as above",
+       PrerenderingState::kActivatedNoActivationStart, std::nullopt,
        base::Seconds(2), base::Seconds(0)},
-      // crash due to incorrect data
-      {PrerenderingState::kActivated, base::Seconds(10), base::Seconds(2),
-       base::Seconds(0)},
-      // max(0, 12 - 10)
-      {PrerenderingState::kActivated, base::Seconds(10), base::Seconds(12),
-       base::Seconds(2)},
+      {"crash due to incorrect data", PrerenderingState::kActivated,
+       base::Seconds(10), base::Seconds(2), base::Seconds(0)},
+      {"max(0, 12 - 10)", PrerenderingState::kActivated, base::Seconds(10),
+       base::Seconds(12), base::Seconds(2)},
   };
 
-  page_load_metrics::mojom::PageLoadTiming timing;
-  page_load_metrics::InitPageLoadTimingForTest(&timing);
   for (const auto& test_case : test_cases) {
+    SCOPED_TRACE(test_case.description);
     page_load_metrics::FakePageLoadMetricsObserverDelegate delegate;
     delegate.prerendering_state_ = test_case.prerendering_state;
     delegate.activation_start_ = test_case.activation_start;
 
-    auto test_expectation_runner =
-        [&](base::TimeDelta event,
-            std::optional<base::TimeDelta> expected_result) {
-            base::TimeDelta got = CorrectEventAsNavigationOrActivationOrigined(
-                delegate, timing, event);
-            EXPECT_EQ(expected_result, got);
-        };
-
-    test_expectation_runner(test_case.event, test_case.expected_result);
-
-    // Currently, multiple implementations of PageLoadMetricsObserver is
-    // ongoing. We'll left the old version for a while.
-    // TODO(crbug.com/40222513): Delete below.
-    timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
-    timing.activation_start = test_case.activation_start;
-    test_expectation_runner(test_case.event, test_case.expected_result);
-
-    // In some path, this function is called with old PageLoadTiming, which can
-    // lack activation_start. The result is the same for such case.
-    timing.activation_start = std::nullopt;
-    test_expectation_runner(test_case.event, test_case.expected_result);
+    EXPECT_EQ(test_case.expected_result,
+              CorrectEventAsNavigationOrActivationOrigined(delegate,
+                                                           test_case.event));
   }
 }
 
@@ -257,6 +238,46 @@ TEST_F(PageLoadMetricsUtilTest, CalculateLCPEntropyBucket) {
             CalculateLCPEntropyBucket(std::numeric_limits<double>::infinity()));
   EXPECT_EQ(
       0, CalculateLCPEntropyBucket(std::numeric_limits<double>::quiet_NaN()));
+}
+
+TEST_F(PageLoadMetricsUtilTest, WasSoftNavigationStartedInForeground) {
+  SoftNavigationData data;
+  data.metrics = mojom::SoftNavigationMetrics::New();
+  data.metrics->commit = mojom::SoftNavigationCommit::New();
+  data.metrics->commit->start_time = base::Milliseconds(100);
+
+  // No event timing -> false.
+  EXPECT_FALSE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      std::nullopt, data));
+
+  // Event in foreground, never backgrounded -> true.
+  EXPECT_TRUE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      base::Milliseconds(150), data));
+
+  // Backgrounded at 500ms (after start_time = 100ms):
+  data.first_background_time = base::Milliseconds(500);
+
+  // Event before backgrounding -> true.
+  EXPECT_TRUE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      base::Milliseconds(200), data));
+
+  // Event exactly at backgrounding -> true.
+  EXPECT_TRUE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      base::Milliseconds(500), data));
+
+  // Event after backgrounding -> false.
+  EXPECT_FALSE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      base::Milliseconds(501), data));
+
+  // Backgrounded at 50ms (before start_time = 100ms) -> started in background:
+  data.first_background_time = base::Milliseconds(50);
+  EXPECT_FALSE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      base::Milliseconds(200), data));
+
+  // Backgrounded at 100ms (at start_time = 100ms) -> started in background:
+  data.first_background_time = base::Milliseconds(100);
+  EXPECT_FALSE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      base::Milliseconds(200), data));
 }
 
 // A type to support parameterized testing for the category of the request.

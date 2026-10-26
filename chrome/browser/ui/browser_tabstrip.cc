@@ -4,26 +4,42 @@
 
 #include "chrome/browser/ui/browser_tabstrip.h"
 
+#include <optional>
+
 #include "base/command_line.h"
 #include "base/feature_list.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
-#include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tabs/tab_close_types_data.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/common/webui_url_constants.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 namespace chrome {
+
+GURL GetNewTabURL(const BrowserWindowInterface* browser) {
+  if (browser) {
+    if (auto* const app_browser_controller =
+            web_app::AppBrowserController::From(browser)) {
+      return app_browser_controller->GetAppNewTabUrl();
+    }
+  }
+  return ChromeUINewTabURLAsGURL();
+}
 
 content::WebContents* AddAndReturnTabAt(
     BrowserWindowInterface* browser,
@@ -31,17 +47,15 @@ content::WebContents* AddAndReturnTabAt(
     int idx,
     bool foreground,
     std::optional<tab_groups::TabGroupId> group,
-    bool pinned) {
-  // Time new tab page creation time.  We keep track of the timing data in
-  // WebContents, but we want to include the time it takes to create the
-  // WebContents object too.
-  base::TimeTicks new_tab_start_time = base::TimeTicks::Now();
-  const GURL resolved_url =
-      url.is_empty() ? browser->GetBrowserForMigrationOnly()->GetNewTabURL()
-                     : url;
+    bool pinned,
+    std::optional<NavigateParams::WindowAction> window_action) {
+  const GURL resolved_url = url.is_empty() ? GetNewTabURL(browser) : url;
   NavigateParams params(browser, resolved_url, ui::PAGE_TRANSITION_TYPED);
-  params.disposition = foreground ? WindowOpenDisposition::NEW_FOREGROUND_TAB
-                                  : WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  params.disposition = foreground ? WindowOpenDisposition::kNewForegroundTab
+                                  : WindowOpenDisposition::kNewBackgroundTab;
+  if (window_action) {
+    params.window_action = window_action.value();
+  }
   params.tabstrip_index = idx;
   params.group = group;
   if (pinned) {
@@ -56,10 +70,6 @@ content::WebContents* AddAndReturnTabAt(
     return nullptr;
   }
 
-  CoreTabHelper* core_tab_helper =
-      CoreTabHelper::FromWebContents(params.navigated_or_inserted_contents);
-  core_tab_helper->set_new_tab_start_time(new_tab_start_time);
-
   return params.navigated_or_inserted_contents;
 }
 
@@ -68,16 +78,17 @@ void AddTabAt(BrowserWindowInterface* browser,
               int idx,
               bool foreground,
               std::optional<tab_groups::TabGroupId> group,
-              bool pinned) {
+              bool pinned,
+              std::optional<NavigateParams::WindowAction> window_action) {
   /*void*/ AddAndReturnTabAt(browser, url, idx, foreground, std::move(group),
-                             pinned);
+                             pinned, window_action);
 }
 
 content::WebContents* AddSelectedTabWithURL(BrowserWindowInterface* browser,
                                             const GURL& url,
                                             ui::PageTransition transition) {
   NavigateParams params(browser, url, transition);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   params.web_app_navigation_data.emplace();
   params.web_app_navigation_data->SetNavigationCapturingForceOff(true);
   Navigate(&params);
@@ -94,9 +105,11 @@ content::WebContents* AddWebContents(
     NavigateParams::WindowAction window_action,
     bool user_gesture) {
   // No code for this yet.
-  DCHECK(disposition != WindowOpenDisposition::SAVE_TO_DISK);
+  CHECK(disposition != WindowOpenDisposition::kSaveToDisk,
+        base::NotFatalUntil::M162);
   // Can't create a new contents for the current tab - invalid case.
-  DCHECK(disposition != WindowOpenDisposition::CURRENT_TAB);
+  CHECK(disposition != WindowOpenDisposition::kCurrentTab,
+        base::NotFatalUntil::M162);
 
   NavigateParams params(browser, std::move(new_contents));
   params.source_contents = source_contents;
@@ -116,15 +129,12 @@ content::WebContents* AddWebContents(
   return params.navigated_or_inserted_contents;
 }
 
-void CloseWebContents(Browser* browser,
+void CloseWebContents(BrowserWindowInterface* browser,
                       content::WebContents* contents,
                       bool add_to_history) {
-  int index = browser->tab_strip_model()->GetIndexOfWebContents(contents);
-  if (index == TabStripModel::kNoTab) {
-    DUMP_WILL_BE_NOTREACHED()
-        << "CloseWebContents called for tab not in our strip";
-    return;
-  }
+  int index = browser->GetTabStripModel()->GetIndexOfWebContents(contents);
+  CHECK_NE(index, TabStripModel::kNoTab)
+      << "CloseWebContents called for tab not in our strip";
 
   uint32_t close_types = TabCloseTypes::CLOSE_NONE;
   if (auto* data = TabCloseTypesData::FromWebContents(contents)) {
@@ -136,7 +146,7 @@ void CloseWebContents(Browser* browser,
     close_types |= TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB;
   }
 
-  browser->tab_strip_model()->CloseWebContentsAt(index, close_types);
+  browser->GetTabStripModel()->CloseWebContents(contents, close_types);
 }
 
 void ConfigureTabGroupForNavigation(NavigateParams* nav_params) {
@@ -145,14 +155,14 @@ void ConfigureTabGroupForNavigation(NavigateParams* nav_params) {
   }
 
   if (!nav_params->browser ||
-      !nav_params->browser->GetBrowserForMigrationOnly()->SupportsWindowFeature(
-          Browser::WindowFeature::kFeatureTabStrip)) {
+      !WindowFeatureController::From(nav_params->browser)
+           ->SupportsWindowFeature(
+               WindowFeatureController::WindowFeature::kFeatureTabStrip)) {
     return;
   }
 
-  TabStripModel* model =
-      nav_params->browser->GetBrowserForMigrationOnly()->tab_strip_model();
-  DCHECK(model);
+  TabStripModel* model = nav_params->browser->GetTabStripModel();
+  CHECK(model, base::NotFatalUntil::M162);
 
   const int source_index =
       model->GetIndexOfWebContents(nav_params->source_contents);
@@ -170,8 +180,8 @@ void ConfigureTabGroupForNavigation(NavigateParams* nav_params) {
     return;
   }
 
-  if (nav_params->disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
-      nav_params->disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB) {
+  if (nav_params->disposition == WindowOpenDisposition::kNewForegroundTab ||
+      nav_params->disposition == WindowOpenDisposition::kNewBackgroundTab) {
     nav_params->group = model->GetTabGroupForTab(source_index);
   }
 }

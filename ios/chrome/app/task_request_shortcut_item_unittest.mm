@@ -7,6 +7,7 @@
 #import <UIKit/UIKit.h>
 
 #import "base/test/metrics/histogram_tester.h"
+#import "base/test/metrics/user_action_tester.h"
 #import "base/test/scoped_feature_list.h"
 #import "components/policy/core/common/policy_pref_names.h"
 #import "components/prefs/pref_service.h"
@@ -52,8 +53,7 @@ class TaskRequestForShortcutItemTest : public PlatformTest {
     profile_ = TestProfileIOS::Builder().Build();
 
     tab_opener_ = [[FakeTabOpener alloc] init];
-    fake_scene_state_ =
-        [[FakeSceneState alloc] initWithAppState:nil profile:profile_.get()];
+    fake_scene_state_ = [[FakeSceneState alloc] initWithProfile:profile_.get()];
     fake_scene_state_.controller = (SceneController*)tab_opener_;
   }
 
@@ -77,10 +77,11 @@ class TaskRequestForShortcutItemTest : public PlatformTest {
   FakeTabOpener* tab_opener_;
   FakeSceneState* fake_scene_state_;
   base::HistogramTester histogram_tester_;
+  base::UserActionTester user_action_tester_;
 };
 
-// Tests that execute calls TabOpening with the correct parameters for a search
-// shortcut.
+// Test that execute calls TabOpening with the correct parameters for a search
+// shortcut and records metrics only upon execution.
 TEST_F(TaskRequestForShortcutItemTest, TestExecuteSearchShortcut) {
   UIApplicationShortcutItem* shortcut =
       [[UIApplicationShortcutItem alloc] initWithType:kShortcutNewSearch
@@ -96,6 +97,11 @@ TEST_F(TaskRequestForShortcutItemTest, TestExecuteSearchShortcut) {
                    }
                isColdStart:NO];
 
+  histogram_tester_.ExpectTotalCount(kAppLaunchSource, 0);
+  EXPECT_EQ(user_action_tester_.GetActionCount(
+                "ApplicationShortcut.NewSearchPressed"),
+            0);
+
   [task execute];
 
   EXPECT_TRUE(tab_opener_.dismissModalsCalled);
@@ -107,6 +113,9 @@ TEST_F(TaskRequestForShortcutItemTest, TestExecuteSearchShortcut) {
 
   histogram_tester_.ExpectBucketCount(
       kAppLaunchSource, AppLaunchSource::LONG_PRESS_ON_APP_ICON, 1);
+  EXPECT_EQ(user_action_tester_.GetActionCount(
+                "ApplicationShortcut.NewSearchPressed"),
+            1);
 }
 
 // Tests that execute calls TabOpening with the correct parameters for an

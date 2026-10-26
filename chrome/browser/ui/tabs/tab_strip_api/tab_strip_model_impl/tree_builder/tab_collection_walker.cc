@@ -6,6 +6,7 @@
 
 #include "chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.h"
 #include "chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/tree_builder/walker_factory.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 
 namespace tabs_api {
 
@@ -21,8 +22,8 @@ mojom::ContainerPtr TabCollectionWalker::Walk() const {
       tabs_api::converters::BuildMojoTabCollectionData(target_->GetHandle());
 
   for (const auto& child : target_->GetChildren(pass_key_)) {
-    if (std::holds_alternative<std::unique_ptr<tabs::TabInterface>>(child)) {
-      auto* tab = std::get<std::unique_ptr<tabs::TabInterface>>(child).get();
+    if (std::holds_alternative<tabs::ScopedTab>(child)) {
+      auto* tab = std::get<tabs::ScopedTab>(child).get();
       auto result = factory_->WalkerForTab(tab).Walk();
       node->children.push_back(std::move(result));
     } else if (std::holds_alternative<std::unique_ptr<tabs::TabCollection>>(

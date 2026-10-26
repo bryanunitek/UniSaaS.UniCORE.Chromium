@@ -22,7 +22,6 @@
 #include "chrome/browser/download/offline_item_model_manager_factory.h"
 #include "chrome/browser/offline_items_collection/offline_content_aggregator_factory.h"
 #include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/download/public/common/download_danger_type.h"
@@ -58,7 +57,7 @@ const char kProviderNamespace[] = "mock_namespace";
 
 class MockDownloadDisplayController : public DownloadDisplayController {
  public:
-  MockDownloadDisplayController(Browser* browser,
+  MockDownloadDisplayController(BrowserWindowInterface* browser,
                                 DownloadBubbleUIController* bubble_controller)
       : DownloadDisplayController(nullptr, browser, bubble_controller) {
     bubble_controller->SetDownloadDisplayController(this);
@@ -149,7 +148,7 @@ class DownloadBubbleUIControllerTest : public InProcessBrowserTest {
     EXPECT_CALL(*manager, GetBrowserContext())
         .WillRepeatedly(Return(browser()->GetProfile()));
     EXPECT_CALL(*manager, RemoveObserver(_)).WillRepeatedly(Return());
-    browser()->profile()->SetDownloadManagerForTesting(std::move(manager));
+    browser()->GetProfile()->SetDownloadManagerForTesting(std::move(manager));
 
     auto delegate = std::make_unique<ChromeDownloadManagerDelegate>(
         browser()->GetProfile());
@@ -276,7 +275,7 @@ class DownloadBubbleUIControllerTest : public InProcessBrowserTest {
     EXPECT_CALL(*manager_, GetDownloadByGuid(id))
         .WillRepeatedly(Return(&(item(index))));
     content::DownloadItemUtils::AttachInfoForTesting(
-        &(item(index)), browser()->profile(), nullptr);
+        &(item(index)), browser()->GetProfile(), nullptr);
     mock_update_service_->AddModel(
         MockDownloadBubbleUpdateService::ModelType::kDownloadItem);
     controller().OnDownloadItemAdded(&item(index), may_show_animation);

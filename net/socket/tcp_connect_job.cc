@@ -7,13 +7,14 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <set>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "base/check_op.h"
-#include "base/containers/adapters.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
 #include "base/containers/to_vector.h"
@@ -37,8 +38,10 @@
 #include "net/log/net_log_event_type.h"
 #include "net/nqe/network_quality_estimator.h"
 #include "net/socket/socket_tag.h"
+#include "net/socket/ssl_client_socket.h"
 #include "net/socket/tcp_connect_job_connector.h"
 #include "net/socket/transport_connect_job.h"
+#include "net/ssl/ssl_config_service.h"
 #include "url/scheme_host_port.h"
 #include "url/url_constants.h"
 
@@ -61,6 +64,10 @@ HostPortPair ToLegacyDestinationEndpoint(
 bool IsDualRaceOptimisticDnsEnabled() {
   return base::FeatureList::IsEnabled(features::kOptimisticDnsForTcp) &&
          features::kUseStaleConnectorsForOptimisticDns.Get();
+}
+
+bool IsEchEnabled(SSLClientContext* ssl_client_context, std::string_view host) {
+  return ssl_client_context && ssl_client_context->IsEchEnabled(host);
 }
 
 // Returns true if the given `endpoint` is present in the provided `results`
@@ -757,7 +764,7 @@ TcpConnectJob::IPEndPointInfo TcpConnectJob::GetNextIPEndPoint(
           // hasn't been tried yet, which should tend to find any untried
           // addresses sooner.
           for (const auto& disallowed_endpoint :
-               base::Reversed(*disallowed_endpoints)) {
+               std::views::reverse(*disallowed_endpoints)) {
             if (!attempted_addresses_.contains(disallowed_endpoint)) {
               return base::unexpected(ERR_IO_PENDING);
             }
@@ -852,10 +859,8 @@ void TcpConnectJob::UpdateSvcbOptional() {
   if (!scheme_host_port || scheme_host_port->scheme() != url::kHttpsScheme) {
     // This is not a SVCB-capable request at all.
     is_svcb_optional_ = true;
-  } else if (!common_connect_job_params()->ssl_client_context ||
-             !common_connect_job_params()
-                  ->ssl_client_context->config()
-                  .ech_enabled) {
+  } else if (!IsEchEnabled(common_connect_job_params()->ssl_client_context,
+                           scheme_host_port->host())) {
     // ECH is not supported for this request.
     is_svcb_optional_ = true;
   } else {

@@ -9,6 +9,8 @@
 
 #include <string>
 
+#import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+
 @protocol GREYMatcher;
 class GURL;
 
@@ -91,10 +93,10 @@ id<GREYMatcher> ImageViewWithImage(UIImage* image);
 // bundle.
 id<GREYMatcher> ImageViewWithImageNamed(NSString* imageName);
 
-// Returns a matcher for an element with a custom symbol defined by its name and
-// point size in the main bundle.
-id<GREYMatcher> ImageViewWithCustomSymbolNameAndPointSize(NSString* symbolName,
-                                                          CGFloat pointSize);
+// Returns a matcher for an element with a symbol defined by `symbol` and
+// `pointSize`.
+id<GREYMatcher> ImageViewWithSymbolAndPointSize(Symbol symbol,
+                                                CGFloat pointSize);
 
 // Returns a matcher for element with an image corresponding to `image_id` and
 // accessibility trait UIAccessibilityTraitButton.
@@ -288,6 +290,9 @@ id<GREYMatcher> NavigationBarCloseButton();
 // Returns a matcher for the done button on the navigation bar.
 id<GREYMatcher> NavigationBarDoneButton();
 
+// Returns a matcher for the edit button on the navigation bar.
+id<GREYMatcher> NavigationBarEditButton();
+
 // Returns a matcher for the done button on the Bookmarks navigation bar.
 id<GREYMatcher> BookmarksNavigationBarDoneButton();
 
@@ -438,9 +443,6 @@ id<GREYMatcher> SettingsMenuNotificationsButton();
 
 // Returns a matcher for the voice search button on the main Settings screen.
 id<GREYMatcher> VoiceSearchButton();
-
-// Returns a matcher for the voice search button on the omnibox input accessory.
-id<GREYMatcher> VoiceSearchInputAccessoryButton();
 
 // Returns a matcher for the settings main menu view.
 id<GREYMatcher> SettingsCollectionView();
@@ -628,9 +630,6 @@ id<GREYMatcher> TabGroupActivityLabelOnGridCellAtIndex(unsigned int index);
 // Returns a matcher for the button that closes the tab grid.
 id<GREYMatcher> TabGridDoneButton();
 
-// Returns a matcher for the button that reverts the close all tabs action
-// in the tab grid.
-id<GREYMatcher> TabGridUndoCloseAllButton();
 
 // Returns a matcher for the cell that opens History in Recent Tabs.
 id<GREYMatcher> TabGridSelectShowHistoryCell();
@@ -831,12 +830,6 @@ id<GREYMatcher> SettingsActionButton();
 
 // Returns a matcher for the tab grid overflow menu button.
 id<GREYMatcher> TabGridOverflowMenuButton();
-
-// Returns a matcher for the legacy edit button.
-id<GREYMatcher> TabGridEditButton();
-
-// Returns a matcher for the legacy edit menu button to close all tabs.
-id<GREYMatcher> TabGridEditMenuCloseAllButton();
 
 // Returns a matcher for the overflow menu button to close all tabs.
 id<GREYMatcher> TabGridOverflowMenuCloseAllButton();

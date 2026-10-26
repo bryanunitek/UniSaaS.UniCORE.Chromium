@@ -9,6 +9,8 @@
 #include "components/segmentation_platform/embedder/tab_fetcher.h"
 #include "components/segmentation_platform/internal/execution/processing/feature_processor_state.h"
 #include "components/segmentation_platform/public/input_delegate.h"
+#include "components/sessions/core/session_id.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
@@ -22,10 +24,10 @@
 
 #else  // !BUILDFLAG(IS_ANDROID)
 
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/sync/browser_synced_tab_delegate.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -124,7 +126,7 @@ std::vector<TabFetcher::TabEntry> FetchTabs(const Profile* profile) {
           content::WebContents* const web_contents =
               tab_strip_model->GetWebContentsAt(i);
           auto* const tab_delegate =
-              BrowserSyncedTabDelegate::FromWebContents(web_contents);
+              BrowserSyncedTabDelegate::From(tab_strip_model->GetTabAtIndex(i));
           tabs.emplace_back(tab_delegate->GetSessionId(), web_contents,
                             nullptr);
         }
@@ -184,8 +186,8 @@ void LocalTabSource::AddLocalTabInfo(
     FeatureProcessorState& feature_processor_state,
     Tensor& inputs) {
   inputs[TabSessionSource::kInputLocalTabTimeSinceModified] =
-      ProcessedValue::FromFloat(
-          BucketizeExp(GetLocalTimeSinceModified(tab).InSeconds(), /*max_buckets*/50));
+      ProcessedValue::FromFloat(BucketizeExp(
+          GetLocalTimeSinceModified(tab).InSeconds(), /*max_buckets*/ 50));
 }
 
 }  // namespace segmentation_platform::processing

@@ -17,13 +17,12 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.chrome.browser.ntp_customization.theme.upload_image.BackgroundImageInfo;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase.PlatformType;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataThemeCollection;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.image_fetcher.ImageFetcher;
 import org.chromium.url.GURL;
 
-import java.io.File;
 import java.util.List;
 
 /**
@@ -126,17 +125,9 @@ public class NtpThemeCollectionManager {
         mNtpThemeCollectionBridge.setThemeCollectionImage(image);
     }
 
-    /** Sets the user-uploaded background image. */
-    public void selectLocalBackgroundImage() {
+    /** Cancels any in-flight theme collection selection or download. */
+    public void cancelPendingSelection() {
         resetSelectionState();
-        mNtpThemeCollectionBridge.selectLocalBackgroundImage();
-        mOtherBackgroundTypeSelected = true;
-    }
-
-    /** Resets the custom background. */
-    public void resetCustomBackground() {
-        resetSelectionState();
-        mNtpThemeCollectionBridge.resetCustomBackground();
         mOtherBackgroundTypeSelected = true;
     }
 
@@ -166,12 +157,6 @@ public class NtpThemeCollectionManager {
                     BackgroundImageInfo backgroundImageInfo =
                             NtpCustomizationUtils.getDefaultBackgroundImageInfo(mContext, bitmap);
 
-                    if (isNextThemeCollectionImage(info)) {
-                        NtpCustomizationUtils.saveDailyRefreshBackgroundInfo(
-                                info, bitmap, backgroundImageInfo);
-                        return;
-                    }
-
                     // We do not set the theme collection image as the background if the bottom
                     // sheet is dismissed; this is done to ensure proper theme color handling. Note
                     // that this does not affect the prepared daily refresh image, as we only save
@@ -186,11 +171,11 @@ public class NtpThemeCollectionManager {
 
                     String fileId = null;
                     if (NtpCustomizationUtils.isNTPCustomizationSyncEnabled()) {
-                        fileId = getFileName(info.backgroundUrl.getPath());
+                        fileId = NtpCustomizationUtils.getFileName(info.backgroundUrl.getPath());
                     }
                     NtpBackgroundDataThemeCollection backgroundData =
                             new NtpBackgroundDataThemeCollection(
-                                    PlatformType.ANDROID_LOCAL,
+                                    PlatformType.ANDROID,
                                     info,
                                     backgroundImageInfo,
                                     bitmap,
@@ -221,29 +206,6 @@ public class NtpThemeCollectionManager {
     /** Fetches the next image for a theme collection with daily refresh enabled. */
     private void fetchNextThemeCollectionImage() {
         mNtpThemeCollectionBridge.fetchNextThemeCollectionImage();
-    }
-
-    /**
-     * Determines if the updated background information is for the next daily refresh image.
-     *
-     * <p>This is true if the new image belongs to the same collection as the current one and daily
-     * refresh is enabled for both.
-     *
-     * @param info The incoming {@link CustomBackgroundInfo}.
-     */
-    private boolean isNextThemeCollectionImage(CustomBackgroundInfo info) {
-        if (mNtpCustomizationConfigManager.getBackgroundType() != THEME_COLLECTION) {
-            return false;
-        }
-
-        CustomBackgroundInfo currentInfo = mNtpCustomizationConfigManager.getCustomBackgroundInfo();
-        if (currentInfo == null) {
-            return false;
-        }
-
-        return currentInfo.isDailyRefreshEnabled
-                && info.isDailyRefreshEnabled
-                && currentInfo.collectionId.equals(info.collectionId);
     }
 
     /** Clears the state related to pending theme selections. */
@@ -282,25 +244,6 @@ public class NtpThemeCollectionManager {
 
         // Otherwise, the update should only be processed if it's for the daily refresh feature.
         return info.isDailyRefreshEnabled;
-    }
-
-    /** Returns a unique file name from the path. */
-    @VisibleForTesting
-    static @Nullable String getFileName(@Nullable String path) {
-        if (path == null || path.isEmpty()) {
-            return null;
-        }
-
-        // Find the position of the last File.separator ("/").
-        int lastFileSeparatorIndex = path.lastIndexOf(File.separator);
-
-        // If lastFileSeparatorIndex is -1, it means file separator wasn't found in the string.
-        if (lastFileSeparatorIndex == -1) {
-            return path;
-        }
-
-        // Extract everything after the last file separator.
-        return path.substring(lastFileSeparatorIndex + 1);
     }
 
     @Nullable CollectionImage getSelectingThemeCollectionImageForTesting() {

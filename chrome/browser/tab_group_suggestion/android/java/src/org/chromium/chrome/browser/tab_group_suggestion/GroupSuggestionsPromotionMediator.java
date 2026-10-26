@@ -9,7 +9,6 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.view.View;
 import android.view.View.OnClickListener;
 
-import androidx.annotation.NonNull;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
@@ -19,7 +18,7 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabGroupMergeNotificationType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.visited_url_ranking.url_grouping.GroupSuggestion;
 import org.chromium.components.visited_url_ranking.url_grouping.GroupSuggestions;
 import org.chromium.components.visited_url_ranking.url_grouping.GroupSuggestionsService;
@@ -35,23 +34,23 @@ import java.util.Locale;
 @NullMarked
 public class GroupSuggestionsPromotionMediator implements GroupSuggestionsService.Delegate {
 
-    private final @NonNull PropertyModel mModel;
-    private final @NonNull BottomSheetController mBottomSheetController;
-    private final @NonNull View mContainerView;
-    private final @NonNull GroupSuggestionsService mService;
-    private final @NonNull TabModel mTabModel;
-    private final @NonNull OnClickListener mOnAcceptClickListener;
-    private final @NonNull OnClickListener mOnRejectClickListener;
-    private final @NonNull EmptyBottomSheetObserver mBottomSheetObserver;
+    private final PropertyModel mModel;
+    private final BottomSheetController mBottomSheetController;
+    private final View mContainerView;
+    private final GroupSuggestionsService mService;
+    private final TabModel mTabModel;
+    private final OnClickListener mOnAcceptClickListener;
+    private final OnClickListener mOnRejectClickListener;
+    private final BottomSheetObserver mBottomSheetObserver;
 
     private @Nullable GroupSuggestionsBottomSheetContent mCurrentSheetContent;
 
     public GroupSuggestionsPromotionMediator(
-            @NonNull PropertyModel model,
+            PropertyModel model,
             GroupSuggestionsService service,
-            @NonNull BottomSheetController bottomSheetController,
-            @NonNull TabModel tabModel,
-            @NonNull View containerView) {
+            BottomSheetController bottomSheetController,
+            TabModel tabModel,
+            View containerView) {
         mModel = model;
         mService = service;
         mBottomSheetController = bottomSheetController;
@@ -98,7 +97,7 @@ public class GroupSuggestionsPromotionMediator implements GroupSuggestionsServic
                     mCurrentSheetContent = null;
                 };
         mBottomSheetObserver =
-                new EmptyBottomSheetObserver() {
+                new BottomSheetObserver() {
                     @Override
                     public void onSheetClosed(int reason) {
                         if (mCurrentSheetContent != null) {

@@ -27,6 +27,7 @@ enum class CompositorElementIdNamespace {
   kScroll,
   kStickyTranslation,
   kAnchorPositionScrollTranslation,
+  kElementCanvasTransform,
   kPrimaryEffect,
   kPrimaryTransform,
   kEffectFilter,
@@ -41,6 +42,7 @@ enum class CompositorElementIdNamespace {
   kViewTransitionScopeRoot,
   kViewTransitionElement,
   kElementCapture,
+  kUnboundedWrapperEffect,
   kDOMNodeId,
   // The following values are for internal usage only.
   kMax = kDOMNodeId,
@@ -86,9 +88,9 @@ DOMNodeId PLATFORM_EXPORT DOMNodeIdFromCompositorElementId(CompositorElementId);
 template <>
 struct PLATFORM_EXPORT HashTraits<CompositorElementId>
     : GenericHashTraits<CompositorElementId> {
-  static unsigned GetHash(const CompositorElementId& key) {
+  static uint32_t GetHash(const CompositorElementId& key) {
     // We define a new hash here rather than using `cc::ElementIdHash` since the
-    // latter produces a `size_t` rather than the `unsigned` needed for
+    // latter produces a `size_t` rather than the `uint32_t` needed for
     // `GenericHashTraits<T>::GetHash(const T&)`.
     return HashInt(key.GetInternalValue());
   }

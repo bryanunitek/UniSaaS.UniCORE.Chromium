@@ -31,6 +31,7 @@
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_base.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
@@ -65,9 +66,9 @@ AudioWorkletNode::AudioWorkletNode(
     param_handler_map.Set(param_name, WrapRefCounted(&audio_param->Handler()));
 
     if (options->hasParameterData()) {
-      for (const auto& key_value_pair : options->parameterData()) {
-        if (key_value_pair.first == param_name) {
-          audio_param->setValue(key_value_pair.second);
+      for (const auto& [param, val] : options->parameterData()) {
+        if (param == param_name) {
+          audio_param->setValue(val);
         }
       }
     }
@@ -98,11 +99,11 @@ AudioWorkletNode* AudioWorkletNode::Create(
     if (options->numberOfOutputs() != options->outputChannelCount().size()) {
       exception_state.ThrowDOMException(
           DOMExceptionCode::kIndexSizeError,
-          StrCat({"AudioWorkletNode cannot be created: Length of specified "
-                  "'outputChannelCount' (",
-                  String::Number(options->outputChannelCount().size()),
-                  ") does not match the given number of outputs (",
-                  String::Number(options->numberOfOutputs()), ")."}));
+          Format("AudioWorkletNode cannot be created: Length of specified "
+                 "'outputChannelCount' ({}) does not match the given number of "
+                 "outputs ({}).",
+                 options->outputChannelCount().size(),
+                 options->numberOfOutputs()));
       return nullptr;
     }
 
@@ -220,12 +221,6 @@ MessagePort* AudioWorkletNode::port() const {
 void AudioWorkletNode::FireProcessorError(
     const AudioWorkletProcessorErrorDetails& error_details) {
   DCHECK(IsMainThread());
-  DCHECK(error_details.error_state ==
-             AudioWorkletProcessorErrorState::kConstructionError ||
-         error_details.error_state ==
-             AudioWorkletProcessorErrorState::kProcessError ||
-         error_details.error_state ==
-             AudioWorkletProcessorErrorState::kProcessMethodUndefinedError);
   DCHECK(!error_details.error_message.empty());
 
   ErrorEvent* event = ErrorEvent::Create(

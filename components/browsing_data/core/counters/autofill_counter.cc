@@ -5,6 +5,7 @@
 #include "components/browsing_data/core/counters/autofill_counter.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -12,6 +13,7 @@
 #include "base/functional/bind.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #include "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
+#include "components/autofill/core/browser/data_manager/autofill_ai/entity_suppression_manager.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
@@ -37,9 +39,11 @@ AutofillCounter::AutofillCounter(
     autofill::PersonalDataManager* personal_data_manager,
     scoped_refptr<autofill::AutofillWebDataService> web_data_service,
     const autofill::EntityDataManager* entity_data_manager,
+    const autofill::EntitySuppressionManager* entity_suppression_manager,
     syncer::SyncService* sync_service)
     : personal_data_manager_(personal_data_manager),
       entity_data_manager_(entity_data_manager),
+      entity_suppression_manager_(entity_suppression_manager),
       web_data_service_(web_data_service),
       sync_tracker_(this, sync_service),
       suggestions_query_(0),
@@ -104,6 +108,15 @@ void AutofillCounter::Count() {
         });
   }
 
+  // AutofillAI entity suppressions. Deleting form data in [start, end] removes
+  // them, so count them too, even though they are not user-visible items, so
+  // the counter does not report "None" when the deletion would affect data.
+  num_suppressions_ =
+      entity_suppression_manager_
+          ? entity_suppression_manager_->CountSuppressionsCreatedBetween(start,
+                                                                         end)
+          : 0;
+
   CancelAllRequests();
 
   // Count the autocomplete suggestions (also called form elements in Autofill).
@@ -144,9 +157,9 @@ void AutofillCounter::OnWebDataServiceRequestDone(
   }
 
   // Autocomplete suggestions.
-  DCHECK_EQ(AUTOFILL_VALUE_RESULT, result->GetType());
+  DCHECK_EQ(INT64_RESULT, result->GetType());
   num_suggestions_ =
-      static_cast<const WDResult<int>*>(result.get())->GetValue();
+      static_cast<const WDResult<int64_t>*>(result.get())->GetValue();
 
   ReportResultIfReady();
 }
@@ -161,7 +174,7 @@ void AutofillCounter::ReportResultIfReady() {
   if (num_suggestions_.has_value()) {
     auto reported_result = std::make_unique<AutofillResult>(
         this, *num_suggestions_, num_credit_cards_, num_addresses_,
-        num_entities_, sync_tracker_.IsSyncActive());
+        num_entities_, num_suppressions_, sync_tracker_.IsSyncActive());
     ReportResult(std::move(reported_result));
   }
 }
@@ -173,11 +186,13 @@ AutofillCounter::AutofillResult::AutofillResult(const AutofillCounter* source,
                                                 ResultInt num_credit_cards,
                                                 ResultInt num_addresses,
                                                 ResultInt num_entities,
+                                                ResultInt num_suppressions,
                                                 bool autofill_sync_enabled_)
     : SyncResult(source, num_suggestions, autofill_sync_enabled_),
       num_credit_cards_(num_credit_cards),
       num_addresses_(num_addresses),
-      num_entities_(num_entities) {}
+      num_entities_(num_entities),
+      num_suppressions_(num_suppressions) {}
 
 AutofillCounter::AutofillResult::~AutofillResult() = default;
 

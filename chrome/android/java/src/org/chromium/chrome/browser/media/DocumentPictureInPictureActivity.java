@@ -15,6 +15,7 @@ import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.OutcomeReceiver;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -28,7 +29,7 @@ import androidx.appcompat.app.AppCompatDelegate;
 import org.jni_zero.CalledByNative;
 import org.jni_zero.NativeMethods;
 
-import org.chromium.base.AconfigFlaggedApiDelegate;
+import org.chromium.base.IntentUtils;
 import org.chromium.base.Log;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -40,10 +41,7 @@ import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.app.tab_activity_glue.PopupCreatorImpl;
 import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
-import org.chromium.chrome.browser.customtabs.PopupCreatorFactory;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.init.AsyncInitializationActivity;
 import org.chromium.chrome.browser.media.document_picture_in_picture_header.DocumentPictureInPictureHeaderCoordinator;
 import org.chromium.chrome.browser.media.document_picture_in_picture_header.DocumentPictureInPictureHeaderDelegate;
@@ -54,7 +52,6 @@ import org.chromium.chrome.browser.page_info.ChromePageInfoControllerDelegate;
 import org.chromium.chrome.browser.page_info.ChromePageInfoHighlight;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabUtils;
@@ -72,6 +69,7 @@ import org.chromium.components.thinwebview.ThinWebView;
 import org.chromium.components.thinwebview.ThinWebViewAttachParams;
 import org.chromium.components.thinwebview.ThinWebViewConstraints;
 import org.chromium.components.thinwebview.ThinWebViewFactory;
+import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.Visibility;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.common.ResourceRequestBody;
@@ -100,7 +98,7 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
             "org.chromium.chrome.browser.media.DocumentPictureInPicture.IsFromActivityRecreation";
     private WebContents mWebContents;
     private WebContents mParentWebContents;
-    private Tab mInitiatorTab;
+    private @MonotonicNonNull Tab mInitiatorTab;
     private @MonotonicNonNull ThinWebView mThinWebView;
     private @MonotonicNonNull TabObserver mInitiatorTabObserver;
     private @MonotonicNonNull PictureInPictureWindowOptions mWindowOptions;
@@ -159,16 +157,17 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
                 sParentWebContentsForTesting != null
                         ? sParentWebContentsForTesting
                         : mWebContents.getDocumentPictureInPictureOpener();
-        mInitiatorTab = TabUtils.fromWebContents(parentWebContents);
+        Tab initiatorTab = TabUtils.fromWebContents(parentWebContents);
         if (parentWebContents == null
-                || mInitiatorTab == null
+                || initiatorTab == null
                 // During activity recreation, the initiator tab activity may not be available
                 // because of the tab reparenting process.
-                || (TabUtils.getActivity(mInitiatorTab) == null && !mIsFromActivityRecreation)) {
+                || (TabUtils.getActivity(initiatorTab) == null && !mIsFromActivityRecreation)) {
             Log.e(TAG, "Parent web contents or initiator tab is null, finishing.");
             finish();
             return;
         }
+        mInitiatorTab = initiatorTab;
         mParentWebContents = parentWebContents;
 
         if (!verifyOpenerOrigin(intent, parentWebContents)) {
@@ -195,11 +194,11 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
             // It's guaranteed that savedInstanceState is not null if we are coming from activity
             // recreation.
             assert savedInstanceState != null;
-            return savedInstanceState.getParcelable(WEB_CONTENTS_KEY);
+            return IntentUtils.safeGetParcelable(savedInstanceState, WEB_CONTENTS_KEY);
         }
 
         intent.setExtrasClassLoader(WebContents.class.getClassLoader());
-        return intent.getParcelableExtra(WEB_CONTENTS_KEY);
+        return IntentUtils.safeGetParcelableExtra(intent, WEB_CONTENTS_KEY);
     }
 
     private @Nullable Bundle getWindowOptionsBundleFromInstanceStateOrIntent(
@@ -229,7 +228,7 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
         assert isContentsInitialized();
 
         mInitiatorTabObserver =
-                new EmptyTabObserver() {
+                new TabObserver() {
                     @Override
                     public void onClosingStateChanged(Tab tab, boolean closing) {
                         if (closing) {
@@ -269,21 +268,18 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
                         null);
 
         mAppThemeColorProvider =
-                new AppThemeColorProvider(this, getLifecycleDispatcher(), mAppHeaderCoordinator);
+                new AppThemeColorProvider(
+                        this, getLifecycleDispatcher(), getMultiWindowModeStateDispatcher());
         mAppThemeColorProvider.onIncognitoStateChanged(mInitiatorTab.isIncognitoBranded());
     }
 
     private void goIntoPinnedMode() {
-        if (!sIgnoreSdkVersionForTesting && Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA) {
-            Log.e(TAG, "SDK version is too low, minimum required is 36.");
-            finish();
+        if (sIgnoreSdkVersionForTesting) {
+            mIsPinned = true;
             return;
         }
-
-        final AconfigFlaggedApiDelegate aconfigFlaggedApiDelegate =
-                AconfigFlaggedApiDelegate.getInstance();
-        if (aconfigFlaggedApiDelegate == null) {
-            Log.e(TAG, "AconfigFlaggedApiDelegate is null");
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.CINNAMON_BUN) {
+            Log.e(TAG, "SDK version is too low, minimum required is 37.");
             finish();
             return;
         }
@@ -295,17 +291,25 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
             return;
         }
 
-        aconfigFlaggedApiDelegate
-                .requestPinnedWindowingLayer(appTask, getMainExecutor())
-                .then(
-                        (unused) -> mIsPinned = true,
-                        (e) -> {
-                            Log.e(
-                                    TAG,
-                                    "Failed to request pinned windowing layer."
-                                            + (e == null ? "" : e.getMessage()));
+        OutcomeReceiver<Integer, Exception> receiver =
+                new OutcomeReceiver<Integer, Exception>() {
+                    @Override
+                    public void onResult(Integer result) {
+                        if (result == AppTask.WINDOWING_LAYER_REQUEST_GRANTED) {
+                            mIsPinned = true;
+                        } else {
+                            Log.e(TAG, "Failed to pin the task with result: %d", result);
                             finish();
-                        });
+                        }
+                    }
+
+                    @Override
+                    public void onError(Exception e) {
+                        Log.e(TAG, "Failed to request pinned windowing layer.", e);
+                        finish();
+                    }
+                };
+        appTask.requestWindowingLayer(AppTask.WINDOWING_LAYER_PINNED, getMainExecutor(), receiver);
     }
 
     @Override
@@ -320,7 +324,6 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
             finish();
             return;
         }
-        PopupCreatorFactory.setInstance(new PopupCreatorImpl());
         ActivityWindowAndroid windowAndroid = getWindowAndroid();
         if (windowAndroid == null) {
             windowAndroid = createWindowAndroid();
@@ -361,18 +364,16 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
                         mParentWebContents,
                         mWebContents);
 
-        if (ChromeFeatureList.sAutoDocPipPermissionPromptAndroid.isEnabled()) {
-            WebContents webContents = mParentWebContents;
-            if (webContents != null
-                    && AutoPictureInPicturePermissionController.isAutoPictureInPictureInUse(
-                            webContents)) {
-                mThinWebView
-                        .getView()
-                        .post(
-                                () ->
-                                        AutoPictureInPicturePermissionController.showPromptIfNeeded(
-                                                this, mInitiatorTab, this::finish));
-            }
+        WebContents webContents = mParentWebContents;
+        if (webContents != null
+                && AutoPictureInPicturePermissionController.isAutoPictureInPictureInUse(
+                        webContents)) {
+            mThinWebView
+                    .getView()
+                    .post(
+                            () ->
+                                    AutoPictureInPicturePermissionController.showPromptIfNeeded(
+                                            this, mInitiatorTab, this::finish));
         }
 
         setupInitialBoundsListener(contentLayout);
@@ -409,12 +410,9 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
         int height = windowBounds.height();
 
         // Check if we need to show the permission prompt and thus might need to enlarge the window.
-        boolean isPermissionPromptNeeded = false;
-        if (ChromeFeatureList.sAutoDocPipPermissionPromptAndroid.isEnabled()) {
-            isPermissionPromptNeeded =
-                    AutoPictureInPicturePermissionController.isPermissionPromptNeeded(
-                            mParentWebContents);
-        }
+        boolean isPermissionPromptNeeded =
+                AutoPictureInPicturePermissionController.isPermissionPromptNeeded(
+                        mParentWebContents);
 
         // Enforce minimum dimensions if the prompt is needed and requested bounds are too small.
         if (isPermissionPromptNeeded) {
@@ -572,12 +570,12 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
 
                     @Override
                     public Profile getOriginalProfile() {
-                        return mInitiatorTab.getProfile().getOriginalProfile();
+                        return assumeNonNull(mInitiatorTab).getProfile().getOriginalProfile();
                     }
 
                     @Override
                     public @Nullable Profile getOffTheRecordProfile(boolean createIfNeeded) {
-                        if (!mInitiatorTab.getProfile().isOffTheRecord()) {
+                        if (!assumeNonNull(mInitiatorTab).getProfile().isOffTheRecord()) {
                             assert !createIfNeeded;
                             return null;
                         }
@@ -616,7 +614,7 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
      * <p>This requires that the parent WebContents is still valid, we are not recreating the
      * activity, and the API level is 30 or higher (required for {@code getCurrentWindowMetrics()}).
      */
-    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    @VisibleForTesting
     void saveBoundsToCache() {
         if (mParentWebContents != null
                 && !mParentWebContents.isDestroyed()
@@ -710,10 +708,7 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
             }
         }
 
-        if (ChromeFeatureList.sAutoDocPipPermissionPromptAndroid.isEnabled()
-                && mParentWebContents != null
-                && !mParentWebContents.isDestroyed()
-                && !mIsRecreating) {
+        if (mParentWebContents != null && !mParentWebContents.isDestroyed() && !mIsRecreating) {
             AutoPictureInPicturePermissionController.handleWindowDestruction(mParentWebContents);
         }
 
@@ -876,17 +871,32 @@ public class DocumentPictureInPictureActivity extends AsyncInitializationActivit
      * @param parentWebContents The opener's WebContents.
      * @return True if the origins match, or if verification is skipped; false on mismatch.
      */
-    private boolean verifyOpenerOrigin(Intent intent, WebContents parentWebContents) {
+    @VisibleForTesting
+    boolean verifyOpenerOrigin(Intent intent, WebContents parentWebContents) {
         if (mIsFromActivityRecreation) {
             return true; // Already verified on initial startup.
         }
         final String initialOpenerOriginStr = intent.getStringExtra(INITIAL_OPENER_ORIGIN_KEY);
-        if (initialOpenerOriginStr == null) {
-            Log.e(TAG, "No initial opener origin in intent! Finishing.");
+        if (initialOpenerOriginStr == null || initialOpenerOriginStr.isEmpty()) {
+            Log.e(TAG, "Missing or empty initial opener origin, finishing.");
             return false;
         }
-        final GURL currentOpenerUrl = parentWebContents.getLastCommittedUrl();
-        final String currentOpenerOriginStr = Origin.create(currentOpenerUrl).toString();
+        if (parentWebContents == null) {
+            Log.e(TAG, "Parent WebContents is null, finishing.");
+            return false;
+        }
+        final RenderFrameHost openerFrame = parentWebContents.getMainFrame();
+        final Origin currentOpenerOrigin =
+                openerFrame != null
+                        ? openerFrame.getLastCommittedOrigin()
+                        : (parentWebContents.getLastCommittedUrl() != null
+                                ? Origin.create(parentWebContents.getLastCommittedUrl())
+                                : null);
+        if (currentOpenerOrigin == null || currentOpenerOrigin.isOpaque()) {
+            Log.e(TAG, "Current opener origin is missing or opaque, finishing.");
+            return false;
+        }
+        final String currentOpenerOriginStr = currentOpenerOrigin.toString();
         if (!initialOpenerOriginStr.equals(currentOpenerOriginStr)) {
             Log.e(
                     TAG,

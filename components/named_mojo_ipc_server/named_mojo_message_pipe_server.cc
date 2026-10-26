@@ -19,7 +19,6 @@
 #include "components/named_mojo_ipc_server/connection_info.h"
 #include "components/named_mojo_ipc_server/endpoint_options.h"
 #include "components/named_mojo_ipc_server/named_mojo_server_endpoint_connector.h"
-#include "mojo/core/embedder/embedder.h"
 #include "mojo/public/cpp/platform/platform_channel_endpoint.h"
 #include "mojo/public/cpp/system/invitation.h"
 #include "mojo/public/cpp/system/isolated_connection.h"
@@ -127,37 +126,35 @@ void NamedMojoMessagePipeServer::OnClientConnected(
       std::holds_alternative<std::monostate>(options_.message_pipe_id);
 
   base::Process peer_process;
-  // A peer process is not needed to open a non-MojoIpcz isolated connection,
-  // and in fact some callers don't have the right ACL to open the peer process
-  // yet, so we only open the peer process if the connection is non-isolated, or
-  // MojoIpcz is enabled.
-  if (!is_isolated || mojo::core::IsMojoIpczEnabled()) {
 #if BUILDFLAG(IS_WIN)
-    // Open process with minimum permissions since the client process might have
-    // restricted its access with DACL.
-    peer_process = base::Process::OpenWithAccess(peer_pid, PROCESS_DUP_HANDLE);
+  // Open process with minimum permissions since the client process might have
+  // restricted its access with DACL.
+  peer_process = base::Process::OpenWithAccess(peer_pid, PROCESS_DUP_HANDLE);
 // Windows opens the process with a system call so we use PLOG to extract more
 // info. Other OSes (i.e. POSIX) don't do that.
 #define INVALID_PROCESS_LOG PLOG
 #else
-    peer_process = base::Process::Open(peer_pid);
+  peer_process = base::Process::Open(peer_pid);
 #define INVALID_PROCESS_LOG LOG
 #endif
-    if (!peer_process.IsValid()) {
-      // With MojoIpcz, connections can be made without a process handle to the
-      // client, as long as the client has a process handle to the server, so we
-      // don't return here.
-      INVALID_PROCESS_LOG(WARNING) << "Failed to open peer process";
-    }
-#undef INVALID_PROCESS_LOG
+  if (!peer_process.IsValid()) {
+    // Connections can be made without a process handle to the client, as long
+    // as the client has a process handle to the server, so we don't return
+    // here.
+    INVALID_PROCESS_LOG(WARNING) << "Failed to open peer process";
   }
+#undef INVALID_PROCESS_LOG
+
+  const MojoSendInvitationFlags send_invitation_flags =
+      options_.send_invitation_flags_callback
+          ? options_.send_invitation_flags_callback.Run(*info)
+          : options_.extra_send_invitation_flags;
 
   if (is_isolated) {
     // Create isolated connection.
     auto connection = std::make_unique<mojo::IsolatedConnection>();
-    mojo::ScopedMessagePipeHandle message_pipe =
-        connection->Connect(std::move(endpoint), std::move(peer_process),
-                            options_.extra_send_invitation_flags);
+    mojo::ScopedMessagePipeHandle message_pipe = connection->Connect(
+        std::move(endpoint), std::move(peer_process), send_invitation_flags);
     on_message_pipe_ready_.Run(std::move(message_pipe), std::move(info),
                                result.context, std::move(connection));
     return;
@@ -165,7 +162,7 @@ void NamedMojoMessagePipeServer::OnClientConnected(
 
   // Create non-isolated connection.
   mojo::OutgoingInvitation invitation;
-  invitation.set_extra_flags(options_.extra_send_invitation_flags);
+  invitation.set_extra_flags(send_invitation_flags);
   mojo::ScopedMessagePipeHandle message_pipe =
       std::holds_alternative<uint64_t>(options_.message_pipe_id)
           ? invitation.AttachMessagePipe(
@@ -179,8 +176,8 @@ void NamedMojoMessagePipeServer::OnClientConnected(
 }
 
 void NamedMojoMessagePipeServer::OnServerEndpointCreated() {
-  if (on_server_endpoint_created_callback_for_testing_) {
-    on_server_endpoint_created_callback_for_testing_.Run();
+  if (on_server_endpoint_created_callback_) {
+    on_server_endpoint_created_callback_.Run();
   }
 }
 

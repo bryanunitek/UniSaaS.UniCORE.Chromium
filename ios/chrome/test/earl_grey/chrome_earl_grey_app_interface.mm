@@ -8,6 +8,7 @@
 #import <WebKit/WebKit.h>
 
 #import <algorithm>
+#import <memory>
 #import <string>
 
 #import "base/apple/foundation_util.h"
@@ -17,6 +18,7 @@
 #import "base/files/file_util.h"
 #import "base/ios/ios_util.h"
 #import "base/json/json_writer.h"
+#import "base/no_destructor.h"
 #import "base/strings/string_number_conversions.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
@@ -84,6 +86,7 @@
 #import "ios/chrome/browser/sync/model/send_tab_to_self_sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/tips_notifications/model/utils.h"
+#import "ios/chrome/browser/tracing/ios_tracing_controller.h"
 #import "ios/chrome/browser/unified_consent/model/unified_consent_service_factory.h"
 #import "ios/chrome/browser/web/model/web_navigation_browser_agent.h"
 #import "ios/chrome/common/app_group/app_group_constants.h"
@@ -96,6 +99,7 @@
 #import "ios/chrome/test/app/tab_test_util.h"
 #import "ios/chrome/test/app/window_test_util.h"
 #import "ios/chrome/test/earl_grey/accessibility_util.h"
+#import "ios/chrome/test/earl_grey/duo_simulator_util.h"
 #import "ios/public/provider/chrome/browser/fullscreen/fullscreen_api.h"
 #import "ios/public/provider/chrome/browser/lens/lens_api.h"
 #import "ios/public/provider/chrome/browser/primes/primes_api.h"
@@ -106,7 +110,6 @@
 #import "ios/testing/verify_custom_webkit.h"
 #import "ios/web/common/features.h"
 #import "ios/web/common/uikit_ui_util.h"
-#import "ios/web/js_messaging/web_view_js_utils.h"
 #import "ios/web/public/browser_state_utils.h"
 #import "ios/web/public/js_messaging/content_world.h"
 #import "ios/web/public/js_messaging/web_frame.h"
@@ -122,6 +125,7 @@
 #import "ios/web/public/web_state.h"
 #import "net/base/apple/url_conversions.h"
 #import "services/metrics/public/cpp/ukm_recorder.h"
+#import "third_party/perfetto/include/perfetto/tracing/tracing.h"
 #import "ui/base/device_form_factor.h"
 
 using base::test::ios::kWaitForActionTimeout;
@@ -132,6 +136,16 @@ using collaboration::messaging::MessagingBackendService;
 using collaboration::messaging::MessagingBackendServiceFactory;
 
 namespace {
+
+struct ManualTracingState {
+  std::unique_ptr<perfetto::TracingSession> session;
+  base::FilePath trace_file_path;
+};
+
+ManualTracingState& GetManualTracingState() {
+  static base::NoDestructor<ManualTracingState> state;
+  return *state;
+}
 
 // The timeout for the MessagingBackendService initialization. This is taking
 // a long time on the bots, so the value is pretty large.
@@ -221,6 +235,90 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
 
 + (BOOL)isRTL {
   return UseRTLLayout();
+}
+
++ (NSString*)stopStartupTracing {
+  if (IOSTracingController::HasInstance()) {
+    base::FilePath path =
+        IOSTracingController::GetInstance().StopStartupTracingForTesting();
+    return base::apple::FilePathToNSString(path);
+  }
+  return nil;
+}
+
++ (BOOL)startManualTracing {
+  return [self startManualTracingWithCategoryFilter:nil];
+}
+
++ (BOOL)startManualTracingWithCategoryFilter:(NSString*)categoryFilter {
+  ManualTracingState& state = GetManualTracingState();
+  if (state.session) {
+    return NO;
+  }
+
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  perfetto::TraceConfig config =
+      categoryFilter.length > 0
+          ? IOSTracingController::GetInstance().CreateDeveloperTraceConfig(
+                base::SysNSStringToUTF8(categoryFilter))
+          : IOSTracingController::GetInstance().CreateDeveloperTraceConfig();
+  state.trace_file_path =
+      base::apple::GetUserDocumentPath().AppendASCII("manual_trace.pftrace");
+
+  // Remove any stale trace file from a previous session.
+  base::DeleteFile(state.trace_file_path);
+
+  base::File file(state.trace_file_path,
+                  base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
+  if (!file.IsValid()) {
+    return NO;
+  }
+
+  state.session =
+      perfetto::Tracing::NewTrace(perfetto::BackendType::kInProcessBackend);
+  state.session->Setup(config, file.TakePlatformFile());
+  state.session->StartBlocking();
+  return YES;
+}
+
++ (NSString*)stopManualTracing {
+  ManualTracingState& state = GetManualTracingState();
+  if (!state.session) {
+    return nil;
+  }
+
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  state.session->FlushBlocking(/*timeout_ms=*/10000);
+  state.session->StopBlocking();
+
+  state.session.reset();
+  return base::apple::FilePathToNSString(state.trace_file_path);
+}
+
++ (BOOL)isTraceFileReadyAtPath:(NSString*)filePathString {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::FilePath path = base::apple::NSStringToFilePath(filePathString);
+  std::optional<int64_t> file_size = base::GetFileSize(path);
+  return base::PathExists(path) && file_size.has_value() &&
+         file_size.value() > 0;
+}
+
++ (NSData*)traceDataForPath:(NSString*)filePathString {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::FilePath path = base::apple::NSStringToFilePath(filePathString);
+  std::string content;
+  if (!base::ReadFileToString(path, &content)) {
+    return nil;
+  }
+  return [NSData dataWithBytes:content.data() length:content.size()];
+}
+
++ (BOOL)removeTraceFileAtPath:(NSString*)filePathString {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::FilePath path = base::apple::NSStringToFilePath(filePathString);
+  return base::DeleteFile(path);
 }
 
 + (BOOL)isWindowedMode {
@@ -358,6 +456,21 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
   return chrome_test_util::IsLoading();
 }
 
++ (BOOL)isAnyWebStateLoading {
+  WebStateList* web_state_list =
+      chrome_test_util::GetMainBrowser()->GetWebStateList();
+  if (!web_state_list) {
+    return NO;
+  }
+  for (int i = 0; i < web_state_list->count(); ++i) {
+    web::WebState* web_state = web_state_list->GetWebStateAt(i);
+    if (web_state && web_state->IsLoading()) {
+      return YES;
+    }
+  }
+  return NO;
+}
+
 + (void)startReloading {
   WebNavigationBrowserAgent::FromBrowser(chrome_test_util::GetMainBrowser())
       ->Reload();
@@ -492,6 +605,25 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
   [handler openURLInNewTab:command];
 }
 
++ (void)openSendTabToSelfNewBackgroundTabWithURL:(NSString*)url
+                                    textFragment:(NSString*)textFragment
+                                       entryGUID:(NSString*)guid {
+  const GURL gurl = GURL(base::SysNSStringToUTF8(url));
+  OpenNewTabCommand* command =
+      [[OpenNewTabCommand alloc] initWithURL:gurl
+                                    referrer:web::Referrer()
+                                 inIncognito:NO
+                                inBackground:YES
+                                    appendTo:OpenPosition::kLastTab];
+  command.textFragment = textFragment;
+  command.sendTabToSelfEntryGUID = guid;
+
+  id<SceneCommands> handler = HandlerForProtocol(
+      chrome_test_util::GetCurrentBrowser()->GetCommandDispatcher(),
+      SceneCommands);
+  [handler openURLInNewTab:command];
+}
+
 + (void)simulateExternalAppURLOpeningWithURL:(NSURL*)URL {
   chrome_test_util::SimulateExternalAppURLOpeningWithURL(URL);
 }
@@ -602,8 +734,10 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
 }
 
 + (NSUInteger)windowCount [[nodiscard]] {
-  // If the scene API is in use, return the count of open sessions.
-  return UIApplication.sharedApplication.openSessions.count;
+  // If the scene API is in use, return the count of open sessions and
+  // connected scenes.
+  return std::max(UIApplication.sharedApplication.openSessions.count,
+                  UIApplication.sharedApplication.connectedScenes.count);
 }
 
 + (NSUInteger)foregroundWindowCount [[nodiscard]] {
@@ -632,15 +766,7 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
   if (@available(iOS 26.0, *)) {
     // For iOS26 windowing, ensure the new window doesn't fully overlap the
     // prior window.
-    BOOL should_skip_prominent_placement = NO;
-#if TARGET_OS_SIMULATOR
-    // Workaround Metal compositor crash on iOS 27.0 beta simulator.
-    should_skip_prominent_placement = base::ios::IsRunningOnOrLater(27, 0, 0) &&
-                                      !base::ios::IsRunningOnOrLater(27, 0, 1);
-#endif
-    if (!should_skip_prominent_placement) {
-      options.placement = [UIWindowSceneProminentPlacement prominentPlacement];
-    }
+    options.placement = [UIWindowSceneProminentPlacement prominentPlacement];
   }
 
   [UIApplication.sharedApplication
@@ -765,6 +891,26 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
 
 + (UIInterfaceOrientation)interfaceOrientation {
   return GetInterfaceOrientation();
+}
+
++ (BOOL)isDuoSimulator {
+  return IsDuoSimulator();
+}
+
++ (BOOL)dispatchSimulatedDuoHingeAngle:(double)angleInDegrees {
+  return DispatchSimulatedDuoHingeAngle(angleInDegrees);
+}
+
++ (BOOL)isSimulatedDuoHingePostureSettled:(double)angleInDegrees {
+  return IsSimulatedDuoHingePostureSettled(angleInDegrees);
+}
+
++ (BOOL)dispatchSimulatedDuoOrientation:(UIDeviceOrientation)orientation {
+  return DispatchSimulatedDuoOrientation(orientation);
+}
+
++ (BOOL)isSimulatedDuoOrientationSettled:(UIDeviceOrientation)orientation {
+  return IsSimulatedDuoOrientationSettled(orientation);
 }
 
 #pragma mark - WebState Utilities (EG2)
@@ -924,6 +1070,14 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
   [handler showSettingsFromViewController:nil];
 }
 
++ (void)showTabSwitcherInWindowWithNumber:(int)windowNumber {
+  SceneState* scene = [self sceneStateWithNumber:windowNumber];
+  Browser* browser = scene.browserProviderInterface.mainBrowserProvider.browser;
+  id<SceneCommands> handler =
+      HandlerForProtocol(browser->GetCommandDispatcher(), SceneCommands);
+  [handler displayTabGridInMode:TabGridOpeningMode::kDefault];
+}
+
 #pragma mark - URL Utilities (EG2)
 
 + (NSString*)displayTitleForURL:(NSString*)URL {
@@ -1020,6 +1174,33 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
   return model->GetEntryByGUID(base::SysNSStringToUTF8(guid)) != nullptr;
 }
 
++ (BOOL)hasSendTabToSelfTargetDevice:(NSString*)deviceName {
+  if (!deviceName.length) {
+    return NO;
+  }
+  ProfileIOS* original_profile = chrome_test_util::GetOriginalProfile();
+  if (!original_profile) {
+    return NO;
+  }
+  send_tab_to_self::SendTabToSelfSyncService* service =
+      SendTabToSelfSyncServiceFactory::GetForProfile(original_profile);
+  if (!service) {
+    return NO;
+  }
+  send_tab_to_self::SendTabToSelfModel* model =
+      service->GetSendTabToSelfModel();
+  if (!model || !model->IsReady()) {
+    return NO;
+  }
+  const std::string target_device_name = base::SysNSStringToUTF8(deviceName);
+  for (const auto& device : model->GetTargetDeviceInfoSortedList()) {
+    if (device.device_name == target_device_name) {
+      return YES;
+    }
+  }
+  return NO;
+}
+
 + (NSString*)textFragmentForSendTabToSelfEntryWithURL:(NSString*)URL {
   send_tab_to_self::SendTabToSelfSyncService* service =
       SendTabToSelfSyncServiceFactory::GetForProfile(
@@ -1077,10 +1258,6 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
   BOOL success =
       chrome_test_util::IsUrlPresentOnClient(URL, expectPresent, &error);
   return success && !error;
-}
-
-+ (void)triggerSyncCycleForType:(syncer::DataType)type {
-  chrome_test_util::TriggerSyncCycle(type);
 }
 
 + (void)
@@ -1349,6 +1526,10 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
   return base::FeatureList::IsEnabled(kTestFeature);
 }
 
++ (BOOL)isOverflowMenuHomeCustomizationEntrypointEnabled {
+  return base::FeatureList::IsEnabled(kOverflowMenuHomeCustomizationEntrypoint);
+}
+
 + (BOOL)isFullscreenSmoothScrollingSupported {
   return ios::provider::IsFullscreenSmoothScrollingSupported();
 }
@@ -1379,7 +1560,12 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
 }
 
 + (BOOL)areMultipleWindowsSupported {
-  return base::ios::IsMultipleScenesSupported();
+  if (!base::ios::IsMultipleScenesSupported()) {
+    return NO;
+  }
+  SceneState* sceneState = chrome_test_util::GetMainController()
+                               .appState.connectedScenes.firstObject;
+  return sceneState.multipleScenesAvailable;
 }
 
 + (BOOL)isUseLensToSearchForImageEnabled {
@@ -1398,20 +1584,24 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
   return IsCurrentLayoutBottomOmnibox(chrome_test_util::GetCurrentBrowser());
 }
 
-+ (BOOL)isComposeboxIOSEnabled {
-  return IsComposeboxIOSEnabled();
-}
-
 + (BOOL)isChromeNextEnabled {
   return IsChromeNextIaEnabled();
+}
+
++ (BOOL)isNextOldDesignEnabled {
+  return IsNextOldDesignEnabled();
 }
 
 + (BOOL)isOverflowMenuNTPRefactorEnabled {
   return IsOverflowMenuNTPRefactorEnabled();
 }
 
-+ (BOOL)isChromeNextShareIconVisible {
-  return IsChromeNextIaShareIconVisible();
++ (BOOL)isPinnedTabsEnabled {
+  return IsPinnedTabsEnabled();
+}
+
++ (BOOL)isAimCobrowseWebSelectionSearchEnabled {
+  return IsAimCobrowseWebSelectionSearchEnabled();
 }
 
 #pragma mark - ContentSettings
@@ -1874,6 +2064,10 @@ int watchRunNumber = 0;
     current = current.superview;
   }
   return NO;
+}
+
++ (void)induceCrash {
+  abort();
 }
 
 @end

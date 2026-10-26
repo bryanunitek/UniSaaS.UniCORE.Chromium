@@ -6,16 +6,15 @@
 #define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_DESKTOP_WINDOW_TREE_HOST_LINUX_H_
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "build/config/linux/dbus/buildflags.h"
 #include "chrome/browser/ui/views/frame/browser_desktop_window_tree_host.h"
 #include "ui/base/mojom/window_show_state.mojom-forward.h"
 #include "ui/linux/device_scale_factor_observer.h"
-#include "ui/views/widget/desktop_aura/desktop_window_tree_host_linux.h"  // nogncheck
+#include "ui/views/widget/desktop_aura/desktop_window_tree_host_linux.h"
 
 #if BUILDFLAG(USE_DBUS)
-#include "chrome/browser/ui/views/frame/dbus_appmenu.h"  // nogncheck
+#include "chrome/browser/ui/views/frame/dbus_appmenu.h"
 #endif
 
 class BrowserWidget;
@@ -110,8 +109,6 @@ class BrowserDesktopWindowTreeHostLinux
 
   base::ScopedObservation<ui::LinuxUi, ui::DeviceScaleFactorObserver>
       scale_observation_{this};
-
-  base::WeakPtrFactory<BrowserDesktopWindowTreeHostLinux> weak_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_DESKTOP_WINDOW_TREE_HOST_LINUX_H_

@@ -12,10 +12,11 @@
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_element.h"
 
 @protocol AppBarMutator;
+@protocol GeminiCommands;
 @class LayoutGuideCenter;
 @protocol SceneCommands;
+@class SceneLayoutState;
 @protocol TabGridCommands;
-@class LayoutState;
 
 // View controller for the App Bar.
 @interface AppBarViewController
@@ -24,7 +25,7 @@
                         FullscreenUIElement>
 
 // The layout state.
-@property(nonatomic, weak) LayoutState* layoutState;
+@property(nonatomic, weak) SceneLayoutState* layoutState;
 
 // The mutator.
 @property(nonatomic, weak) id<AppBarMutator> mutator;
@@ -38,14 +39,14 @@
 // Tab Grid handler.
 @property(nonatomic, weak) id<TabGridCommands> tabGridHandler;
 
+// Handler for Gemini commands.
+@property(nonatomic, weak) id<GeminiCommands> geminiHandler;
+
 // Dynamically updates the corner radius of the app bar.
 - (void)updateCornerRadius:(CGFloat)cornerRadius;
 
 // Updates the App Bar's subviews for a given rotation angle.
 - (void)updateForAngle:(CGFloat)angle;
-
-// Unhides the spotlight anchor view if `shouldShow`.
-- (void)toggleSpotlightView:(BOOL)shouldShow;
 
 // Shows the blue-ish background with a circular gradient.
 // If `centered` is YES, the gradient is centered. Otherwise, it is left-bottom

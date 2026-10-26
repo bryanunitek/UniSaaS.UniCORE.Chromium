@@ -11,9 +11,18 @@
 import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
 import '../controls/settings_toggle_button.js';
 import '../settings_page/settings_section.js';
-import '../settings_shared.css.js';
+
+import {getCss as getSettingsSharedCss} from '../settings_shared_lit.css.js';
+
 // clang-format off
 
+// <if expr="not is_chromeos">
+import '../controls/settings_dropdown_menu.js';
+
+import type {DropdownMenuOptionList} from '../controls/settings_dropdown_menu.js';
+import {PageColors} from '../page_colors.mojom-webui.js';
+
+// </if>
 // <if expr="is_win or is_linux or is_macosx">
 import './ax_annotations_section.js';
 // </if>
@@ -23,21 +32,22 @@ import './live_caption.js';
 import {CaptionsBrowserProxyImpl} from '/shared/settings/a11y_page/captions_browser_proxy.js';
 // </if>
 // clang-format on
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
-import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
+import {PrefService} from '/shared/settings/prefs2/pref_service.js';
+import {PrefServiceObserverMixinLit} from '/shared/settings/prefs2/pref_service_observer_mixin_lit.js';
+import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import {BaseMixin} from '../base_mixin.js';
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import {loadTimeData} from '../i18n_setup.js';
 import {routes} from '../route.js';
 import {Router} from '../router.js';
-import {SettingsViewMixin} from '../settings_page/settings_view_mixin.js';
+import {SettingsViewMixinLit} from '../settings_page/settings_view_mixin_lit.js';
 
 import type {AccessibilityBrowserProxy} from './a11y_browser_proxy.js';
 import {AccessibilityBrowserProxyImpl} from './a11y_browser_proxy.js';
-import {getTemplate} from './a11y_page.html.js';
+import {getHtml} from './a11y_page.html.js';
 
 
 /**
@@ -51,77 +61,73 @@ export enum ToastAlertLevel {
   COUNT = 1,
 }
 
-const SettingsA11yPageElementBase = SettingsViewMixin(
-    PrefsMixin(WebUiListenerMixin(BaseMixin(PolymerElement))));
+// <if expr="not is_chromeos">
+/**
+ * The values that actually force a theme onto web content. For the other
+ * values the web theme follows the operating system, so the "only on increased
+ * contrast" toggle has nothing to act on.
+ */
+const PAGE_COLORS_THEMES: PageColors[] = [
+  PageColors.kDusk,
+  PageColors.kDesert,
+  PageColors.kNightSky,
+  PageColors.kAquatic,
+  PageColors.kWhite,
+];
+// </if>
 
+const SettingsA11yPageElementBase = SettingsViewMixinLit(
+    PrefServiceObserverMixinLit(WebUiListenerMixinLit(CrLitElement)));
+
+// <if expr="not is_chromeos">
 export interface SettingsA11yPageElement {
   $: {
     toastToggle: SettingsToggleButtonElement,
   };
 }
+// </if>
 
 export class SettingsA11yPageElement extends SettingsA11yPageElementBase {
   static get is() {
-    return 'settings-a11y-page' as const;
+    return 'settings-a11y-page';
   }
 
-  static get template() {
-    return getTemplate();
+  static override get styles() {
+    return [
+      getSettingsSharedCss(),
+    ];
   }
 
-  static get properties() {
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
       // <if expr="not is_chromeos">
-      enableLiveCaption_: {
-        type: Boolean,
-        value: function() {
-          return loadTimeData.getBoolean('enableLiveCaption');
-        },
-      },
+      enableLiveCaption_: {type: Boolean},
+      numericUncheckedToastAlertValues_: {type: Array},
+      showPageColors_: {type: Boolean},
+      requestedA11yPageColorsPref_: {type: Object},
+      pageColorsOptions_: {type: Array},
       // </if>
 
       /**
        * Indicate whether a screen reader is enabled. Also, determine whether
        * to show accessibility labels settings.
        */
-      hasScreenReader_: {
-        type: Boolean,
-        value: false,
-      },
+      hasScreenReader_: {type: Boolean},
 
       /**
        * Whether to show the AxTreeFixing subpage.
        */
-      showAxTreeFixingSection_: {
-        type: Boolean,
-        value: () => {
-          return loadTimeData.getBoolean('axTreeFixingEnabled');
-        },
-      },
+      showAxTreeFixingSection_: {type: Boolean},
 
       // <if expr="is_win or is_linux or is_macosx">
       /**
        * Whether to show the AxAnnotations subpage.
        */
-      showAxAnnotationsSection_: {
-        type: Boolean,
-        computed: 'computeShowAxAnnotationsSection_(hasScreenReader_)',
-      },
-      // </if>
-
-      // <if expr="not is_chromeos">
-
-      /** Valid toast alert level option. */
-      toastAlertLevelEnum_: {
-        type: Object,
-        value: ToastAlertLevel,
-      },
-
-      numericUncheckedToastAlertValues_: {
-        type: Array,
-        value: () => [ToastAlertLevel.ACTIONABLE],
-      },
-
+      showAxAnnotationsSection_: {type: Boolean},
       // </if>
     };
   }
@@ -130,14 +136,51 @@ export class SettingsA11yPageElement extends SettingsA11yPageElementBase {
       AccessibilityBrowserProxyImpl.getInstance();
 
   // <if expr="not is_chromeos">
-  declare private enableLiveCaption_: boolean;
-  declare private numericUncheckedToastAlertValues_: ToastAlertLevel[];
+  protected accessor enableLiveCaption_: boolean =
+      loadTimeData.getBoolean('enableLiveCaption');
+  protected accessor numericUncheckedToastAlertValues_: ToastAlertLevel[] =
+      [ToastAlertLevel.ACTIONABLE];
+  protected accessor showPageColors_: boolean =
+      loadTimeData.getBoolean('pageColorsSettingsEnabled');
+  protected accessor requestedA11yPageColorsPref_:
+      chrome.settingsPrivate.PrefObject<PageColors>|undefined;
+  protected accessor pageColorsOptions_: DropdownMenuOptionList = [
+    {
+      value: PageColors.kNoPreference,
+      name: loadTimeData.getString('pageColorsOptionNoPreference'),
+    },
+    {
+      value: PageColors.kOff,
+      name: loadTimeData.getString('pageColorsOptionOff'),
+    },
+    {
+      value: PageColors.kDusk,
+      name: loadTimeData.getString('pageColorsOptionDusk'),
+    },
+    {
+      value: PageColors.kDesert,
+      name: loadTimeData.getString('pageColorsOptionDesert'),
+    },
+    {
+      value: PageColors.kNightSky,
+      name: loadTimeData.getString('pageColorsOptionNightSky'),
+    },
+    {
+      value: PageColors.kAquatic,
+      name: loadTimeData.getString('pageColorsOptionAquatic'),
+    },
+    {
+      value: PageColors.kWhite,
+      name: loadTimeData.getString('pageColorsOptionWhite'),
+    },
+  ];
   // </if>
 
-  declare private hasScreenReader_: boolean;
-  declare private showAxTreeFixingSection_: boolean;
+  protected accessor hasScreenReader_: boolean = false;
+  protected accessor showAxTreeFixingSection_: boolean =
+      loadTimeData.getBoolean('axTreeFixingEnabled');
   // <if expr="is_win or is_linux or is_macosx">
-  declare private showAxAnnotationsSection_: boolean;
+  protected accessor showAxAnnotationsSection_: boolean = false;
   // </if>
 
   override connectedCallback() {
@@ -149,9 +192,29 @@ export class SettingsA11yPageElement extends SettingsA11yPageElementBase {
     this.browserProxy_.getScreenReaderState().then(updateScreenReaderState);
     this.addWebUiListener(
         'screen-reader-state-changed', updateScreenReaderState);
+
+    // <if expr="not is_chromeos">
+    if (this.showPageColors_) {
+      this.mirrorPref(
+          'settings.a11y.requested_page_colors',
+          'requestedA11yPageColorsPref_');
+    }
+    // </if>
   }
 
-  private onA11yCaretBrowsingChange_(event: Event) {
+  // <if expr="is_win or is_linux or is_macosx">
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
+
+    const changedPrivateProperties =
+        changedProperties as Map<PropertyKey, unknown>;
+    if (changedPrivateProperties.has('hasScreenReader_')) {
+      this.showAxAnnotationsSection_ = this.computeShowAxAnnotationsSection_();
+    }
+  }
+  // </if>
+
+  protected onA11yCaretBrowsingChange_(event: Event) {
     if ((event.target as SettingsToggleButtonElement).checked) {
       chrome.metricsPrivate.recordUserAction(
           'Accessibility.CaretBrowsing.EnableWithSettings');
@@ -161,7 +224,7 @@ export class SettingsA11yPageElement extends SettingsA11yPageElementBase {
     }
   }
 
-  private onA11yImageLabelsChange_(event: Event) {
+  protected onA11yImageLabelsChange_(event: Event) {
     const a11yImageLabelsOn =
         (event.target as SettingsToggleButtonElement).checked;
     if (a11yImageLabelsOn) {
@@ -183,7 +246,7 @@ export class SettingsA11yPageElement extends SettingsA11yPageElementBase {
     return anyAxAnnotationsFeatureEnabled && this.hasScreenReader_;
   }
 
-  private onCaptionsClick_() {
+  protected onCaptionsClick_() {
     // <if expr="is_win or is_macosx">
     CaptionsBrowserProxyImpl.getInstance().openSystemCaptionsDialog();
     // </if>
@@ -194,7 +257,7 @@ export class SettingsA11yPageElement extends SettingsA11yPageElementBase {
   // </if>
 
   // <if expr="not is_chromeos">
-  private onFocusHighlightChange_(event: Event) {
+  protected onFocusHighlightSettingsBooleanControlChange_(event: Event) {
     chrome.metricsPrivate.recordBoolean(
         'Accessibility.FocusHighlight.ToggleEnabled',
         (event.target as SettingsToggleButtonElement).checked);
@@ -202,36 +265,43 @@ export class SettingsA11yPageElement extends SettingsA11yPageElementBase {
   // </if>
 
   // <if expr="is_chromeos">
-  private onManageSystemAccessibilityFeaturesClick_() {
+  protected onManageSystemAccessibilityFeaturesClick_() {
     window.location.href = 'chrome://os-settings/osAccessibility';
   }
   // </if>
 
   /** private */
-  private onMoreFeaturesLinkClick_() {
+  protected onMoreFeaturesLinkClick_() {
     window.open(
         'https://chrome.google.com/webstore/category/collection/3p_accessibility_extensions');
   }
 
   // <if expr="is_win or is_linux">
-  private onOverscrollHistoryNavigationChange_(event: Event) {
+  protected onOverscrollHistoryNavigationChange_(event: Event) {
     const enabled = (event.target as SettingsToggleButtonElement).checked;
     this.browserProxy_.recordOverscrollHistoryNavigationChanged(enabled);
   }
   // </if>
 
   // <if expr="is_macosx">
-  private onMacTrackpadGesturesLinkClick_() {
+  protected onMacTrackpadGesturesLinkClick_() {
     this.browserProxy_.openTrackpadGesturesSettings();
   }
   // </if>
 
   // <if expr="not is_chromeos">
-  private onToastAlertLevelChange_() {
+  protected onToastAlertLevelChange_() {
     chrome.metricsPrivate.recordEnumerationValue(
         'Toast.FrequencyPrefChanged',
-        this.getPref<number>('settings.toast.alert_level').value,
+        PrefService.getInstance()
+            .getPref<number>('settings.toast.alert_level')
+            .value,
         ToastAlertLevel.COUNT);
+  }
+
+  protected isPageColorsThemeSelected_(): boolean {
+    return this.requestedA11yPageColorsPref_ !== undefined &&
+        PAGE_COLORS_THEMES.includes(this.requestedA11yPageColorsPref_.value);
   }
   // </if>
 
@@ -249,17 +319,16 @@ export class SettingsA11yPageElement extends SettingsA11yPageElementBase {
   // SettingsViewMixin implementation.
   override getAssociatedControlFor(childViewId: string): HTMLElement {
     assert(childViewId === 'captions');
-    const control = this.shadowRoot!.querySelector<HTMLElement>('#captions');
+    const control = this.shadowRoot.querySelector<HTMLElement>('#captions');
     assert(
         control,
         `Failed to find associated control for child '${childViewId}'`);
     return control;
   }
 }
-
 declare global {
   interface HTMLElementTagNameMap {
-    [SettingsA11yPageElement.is]: SettingsA11yPageElement;
+    'settings-a11y-page': SettingsA11yPageElement;
   }
 }
 

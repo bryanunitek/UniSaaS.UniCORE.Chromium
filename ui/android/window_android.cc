@@ -12,17 +12,26 @@
 #include "base/android/jni_string.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/check.h"
+#include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/android/color_utils_android.h"
 #include "ui/android/display_android_manager.h"
+#include "ui/android/ui_android_features.h"
 #include "ui/android/view_android.h"
 #include "ui/android/window_android_compositor.h"
 #include "ui/android/window_android_observer.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/color/android/color_provider_bridge.h"
+#include "ui/color/color_provider.h"
+#include "ui/color/color_provider_manager.h"
+#include "ui/color/color_provider_utils.h"
 #include "ui/events/keycodes/keyboard_code_conversion_android.h"
 #include "ui/gfx/display_color_spaces.h"
+#include "ui/native_theme/native_theme.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "ui/android/ui_android_jni_headers/WindowAndroid_jni.h"
@@ -137,14 +146,22 @@ void WindowAndroid::RemoveObserver(WindowAndroidObserver* observer) {
 }
 
 void WindowAndroid::AttachCompositor(WindowAndroidCompositor* compositor) {
-  if (compositor_ && compositor != compositor_)
+  if (compositor_ && compositor != compositor_) {
     DetachCompositor();
+  }
 
   compositor_ = compositor;
-  observer_list_.Notify(&WindowAndroidObserver::OnAttachCompositor);
+  if (compositor_) {
+    JNIEnv* env = AttachCurrentThread();
+    compositor_->SetWindowOccluded(java_window_->isOccluded(env));
+    observer_list_.Notify(&WindowAndroidObserver::OnAttachCompositor);
+  }
 }
 
 void WindowAndroid::DetachCompositor() {
+  if (compositor_) {
+    compositor_->SetWindowOccluded(false);
+  }
   observer_list_.Notify(&WindowAndroidObserver::OnDetachCompositor);
   observer_list_.Clear();
   compositor_ = nullptr;
@@ -198,6 +215,13 @@ void WindowAndroid::Animate(base::TimeTicks begin_frame_time) {
 void WindowAndroid::OnVisibilityChanged(JNIEnv* env, bool visible) {
   observer_list_.Notify(&WindowAndroidObserver::OnRootWindowVisibilityChanged,
                         visible);
+}
+
+void WindowAndroid::OnOcclusionChanged(JNIEnv* env, bool occluded) {
+  TRACE_EVENT("ui", "WindowAndroid::OnOcclusionChanged", "occluded", occluded);
+  if (compositor_) {
+    compositor_->SetWindowOccluded(occluded);
+  }
 }
 
 void WindowAndroid::OnActivityStopped(JNIEnv* env) {
@@ -381,9 +405,8 @@ void WindowAndroid::ReleasePointerLock(ViewAndroid& view_android) {
 }
 
 void WindowAndroid::OnWindowPointerLockRelease(JNIEnv* env) {
-  DCHECK(pointer_locking_view_);
-  pointer_locking_view_->OnPointerLockRelease();
-  pointer_locking_view_ = nullptr;
+  CHECK(pointer_locking_view_);
+  std::exchange(pointer_locking_view_, nullptr)->OnPointerLockRelease();
 }
 
 void WindowAndroid::OnWindowPositionChanged(JNIEnv* env) {
@@ -429,6 +452,63 @@ void WindowAndroid::SetTestHooks(TestHooks* hooks) {
     compositor_->OnUpdateSupportedRefreshRates(
         test_hooks_->GetSupportedRates());
   }
+}
+
+const ui::ColorProvider* WindowAndroid::GetColorProvider() const {
+  return ui::ColorProviderManager::Get().GetColorProviderFor(
+      GetColorProviderKey());
+}
+
+ui::RendererColorMap WindowAndroid::GetRendererColorMap(
+    ui::ColorProviderKey::ColorMode color_mode,
+    ui::ColorProviderKey::ForcedColors forced_colors) const {
+  auto key = GetColorProviderKey();
+  key.color_mode = color_mode;
+  key.forced_colors = forced_colors;
+  const ui::ColorProvider* color_provider =
+      ui::ColorProviderManager::Get().GetColorProviderFor(key);
+  CHECK(color_provider);
+  return ui::CreateRendererColorMap(*color_provider);
+}
+
+ui::ColorProviderKey WindowAndroid::GetColorProviderKey() const {
+  return GetColorProviderKeyImpl(ColorProviderBridge::HasInstance());
+}
+
+ui::ColorProviderKey WindowAndroid::GetColorProviderKeyForTesting(
+    bool has_color_provider_bridge) const {
+  return GetColorProviderKeyImpl(has_color_provider_bridge);
+}
+
+ui::ColorProviderKey WindowAndroid::GetColorProviderKeyImpl(
+    bool has_color_provider_bridge) const {
+  auto key = ui::NativeTheme::GetInstanceForWeb()->GetColorProviderKey(nullptr);
+  // Keying ColorProviders by Context is only useful when Java can actually
+  // resolve per-Context theme colors.
+  if (base::FeatureList::IsEnabled(kAvoidPerContextColorProviders) &&
+      !has_color_provider_bridge) {
+    return key;
+  }
+  key.context_hash = GetContextHash();
+  JNIEnv* env = AttachCurrentThread();
+  key.context = JavaObjectWeakGlobalRef(env, GetContext());
+  return key;
+}
+
+base::android::ScopedJavaLocalRef<jobject> WindowAndroid::GetContext() const {
+  if (java_window_.is_null()) {
+    return nullptr;
+  }
+  JNIEnv* env = AttachCurrentThread();
+  return Java_WindowAndroid_getContextForNative(env, java_window_);
+}
+
+int64_t WindowAndroid::GetContextHash() const {
+  if (java_window_.is_null()) {
+    return 0;
+  }
+  JNIEnv* env = AttachCurrentThread();
+  return Java_WindowAndroid_getContextHashId(env, java_window_);
 }
 
 // ----------------------------------------------------------------------------

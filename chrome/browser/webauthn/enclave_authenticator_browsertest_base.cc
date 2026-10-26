@@ -20,11 +20,15 @@
 #include "base/test/bind.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "build/buildflag.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/webauthn/cmtg_device_key_provider_factory.h"
 #include "chrome/browser/webauthn/enclave_keys_waiter.h"
 #include "chrome/browser/webauthn/enclave_manager.h"
 #include "chrome/browser/webauthn/enclave_manager_factory.h"
@@ -35,6 +39,7 @@
 #include "chrome/browser/webauthn/test_util.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/keyed_service/core/keyed_service.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/sync/service/sync_service.h"
@@ -42,6 +47,9 @@
 #include "components/sync/test/fake_server.h"
 #include "components/trusted_vault/test/mock_trusted_vault_throttling_connection.h"
 #include "components/trusted_vault/trusted_vault_connection.h"
+#include "components/trusted_vault/trusted_vault_server_constants.h"
+#include "components/webauthn/core/browser/cryptauth_cmtg_device_key_provider.h"
+#include "components/webauthn/core/browser/fake_cmtg_device_key_provider.h"
 #include "components/webauthn/core/browser/passkey_model.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/test/browser_test_utils.h"
@@ -109,21 +117,30 @@ EnclaveAuthenticatorTestBase::EnclaveAuthenticatorTestBase()
   if (__builtin_available(macOS 13.5, *)) {
     fake_icloud_keychain_ = device::fido::icloud_keychain::NewFake();
   }
-  scoped_icloud_drive_override_ = OverrideICloudDriveEnabled(false);
+  scoped_icloud_keychain_override_ =
+      OverrideICloudKeychainConfiguredForPasskeys(false);
 #endif
   scoped_vmodule_.InitWithSwitches("device_event_log_impl=2");
+
+  cmtg_device_key_provider_fake_ =
+      std::make_unique<webauthn::FakeCmtgDeviceKeyProvider>();
 
   auto security_domain_service_callback =
       security_domain_service_->GetCallback();
   auto recovery_key_store_callback = recovery_key_store_->GetCallback();
+  auto cmtg_callback = cmtg_device_key_provider_fake_->GetCallback();
   url_loader_factory_.SetInterceptor(base::BindLambdaForTesting(
       [sds_callback = std::move(security_domain_service_callback),
        rks_callback = std::move(recovery_key_store_callback),
+       cmtg_callback = std::move(cmtg_callback),
        this](const network::ResourceRequest& request) {
         std::optional<std::pair<net::HttpStatusCode, std::string>> response =
             sds_callback.Run(request);
         if (!response) {
           response = rks_callback.Run(request);
+        }
+        if (!response) {
+          response = cmtg_callback.Run(request);
         }
         if (response) {
           url_loader_factory_.AddResponse(
@@ -178,11 +195,26 @@ void EnclaveAuthenticatorTestBase::SetUpOnMainThread() {
 
   identity_test_env_adaptor_ =
       std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
-          browser()->profile());
+          browser()->GetProfile());
   identity_test_env().SetAutomaticIssueOfAccessTokens(true);
 
+  // Use the real CMTG client, talking to `cmtg_device_key_provider_fake()`
+  // through `url_loader_factory_`.
+  CmtgDeviceKeyProviderFactory::GetInstance()->SetTestingFactory(
+      browser()->GetProfile(),
+      base::BindOnce(
+          [](network::TestURLLoaderFactory* url_loader_factory,
+             content::BrowserContext* context)
+              -> std::unique_ptr<KeyedService> {
+            return std::make_unique<webauthn::CryptauthCmtgDeviceKeyProvider>(
+                *IdentityManagerFactory::GetForProfile(
+                    Profile::FromBrowserContext(context)),
+                url_loader_factory->GetSafeWeakWrapper());
+          },
+          base::Unretained(&url_loader_factory_)));
+
   sync_harness_ = SyncServiceImplHarness::Create(
-      browser()->profile(), SyncServiceImplHarness::SigninType::FAKE_SIGNIN);
+      browser()->GetProfile(), SyncServiceImplHarness::SigninType::FAKE_SIGNIN);
   if (sync_feature_enabled_) {
     ASSERT_TRUE(sync_harness_->SetupSync());
   } else {
@@ -190,7 +222,7 @@ void EnclaveAuthenticatorTestBase::SetUpOnMainThread() {
   }
   syncer::SyncServiceImpl* sync_service =
       SyncServiceFactory::GetAsSyncServiceImplForProfileForTesting(
-          browser()->profile());
+          browser()->GetProfile());
   ASSERT_EQ(kSyncEmail, sync_service->GetAccountInfo().email);
   sync_service->GetUserSettings()->SetSelectedTypes(
       /*sync_everything=*/false,
@@ -212,13 +244,13 @@ EnclaveAuthenticatorTestBase::identity_test_env() {
 }
 
 webauthn::PasskeyModel& EnclaveAuthenticatorTestBase::passkey_model() {
-  return CHECK_DEREF(
-      PasskeyModelFactory::GetInstance()->GetForProfile(browser()->profile()));
+  return CHECK_DEREF(PasskeyModelFactory::GetInstance()->GetForProfile(
+      browser()->GetProfile()));
 }
 
 EnclaveManager& EnclaveAuthenticatorTestBase::enclave_manager() {
   return CHECK_DEREF(EnclaveManagerFactory::GetAsEnclaveManagerForProfile(
-      browser()->profile()));
+      browser()->GetProfile()));
 }
 
 void EnclaveAuthenticatorTestBase::EnableUVKeySupport(
@@ -239,7 +271,7 @@ void EnclaveAuthenticatorTestBase::OverrideUVKeyAvailability(bool available) {
 
 bool EnclaveAuthenticatorTestBase::IsUVPAA() {
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::DOMMessageQueue message_queue(web_contents);
   content::ExecuteScriptAsync(web_contents, kIsUVPAA);
 
@@ -316,11 +348,13 @@ void EnclaveAuthenticatorTestBase::SetMockVaultConnectionOnRequestDelegate(
     content::RenderFrameHost* rfh) {
   auto connection = std::make_unique<
       testing::NiceMock<trusted_vault::MockTrustedVaultThrottlingConnection>>();
-  EXPECT_CALL(*connection, DownloadAuthenticationFactorsRegistrationState(
-                               testing::_, testing::_, testing::_))
+  EXPECT_CALL(*connection,
+              DownloadAuthenticationFactorsRegistrationState(
+                  testing::_, trusted_vault::SecurityDomainId::kPasskeys,
+                  testing::_, testing::_))
       .WillOnce(
           [result = std::move(result)](
-              const CoreAccountInfo&,
+              const CoreAccountInfo&, trusted_vault::SecurityDomainId,
               base::OnceCallback<void(AuthenticationFactorsResult)> callback,
               base::RepeatingClosure _) mutable {
             std::move(callback).Run(std::move(result));
@@ -329,7 +363,7 @@ void EnclaveAuthenticatorTestBase::SetMockVaultConnectionOnRequestDelegate(
           });
   if (rfh == nullptr) {
     rfh = browser()
-              ->tab_strip_model()
+              ->GetTabStripModel()
               ->GetActiveWebContents()
               ->GetPrimaryMainFrame();
   }
@@ -357,6 +391,7 @@ void EnclaveAuthenticatorTestBase::SetTrustedVaultRecoverable(
 
 void EnclaveAuthenticatorTestBase::SetTrustedVaultSlowAndCacheCallback() {
   auto connection_callback = [this](const CoreAccountInfo&,
+                                    trusted_vault::SecurityDomainId,
                                     base::OnceCallback<void(
                                         AuthenticationFactorsResult)> callback,
                                     base::RepeatingClosure) {
@@ -365,12 +400,14 @@ void EnclaveAuthenticatorTestBase::SetTrustedVaultSlowAndCacheCallback() {
   };
   auto connection = std::make_unique<
       testing::NiceMock<trusted_vault::MockTrustedVaultThrottlingConnection>>();
-  EXPECT_CALL(*connection, DownloadAuthenticationFactorsRegistrationState(
-                               testing::_, testing::_, testing::_))
+  EXPECT_CALL(*connection,
+              DownloadAuthenticationFactorsRegistrationState(
+                  testing::_, trusted_vault::SecurityDomainId::kPasskeys,
+                  testing::_, testing::_))
       .WillOnce(connection_callback);
   GpmTrustedVaultConnectionProvider::SetOverrideForFrame(
       browser()
-          ->tab_strip_model()
+          ->GetTabStripModel()
           ->GetActiveWebContents()
           ->GetPrimaryMainFrame(),
       std::move(connection));

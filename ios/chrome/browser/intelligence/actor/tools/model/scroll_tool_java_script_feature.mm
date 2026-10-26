@@ -9,8 +9,10 @@
 #import "base/functional/callback_helpers.h"
 #import "base/memory/weak_ptr.h"
 #import "base/no_destructor.h"
+#import "base/timer/elapsed_timer.h"
 #import "base/values.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool_constants.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool_java_script_feature_util.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
 #import "ios/web/public/js_messaging/web_frame.h"
@@ -63,35 +65,34 @@ ScrollToolJavaScriptFeature::~ScrollToolJavaScriptFeature() = default;
 
 void ScrollToolJavaScriptFeature::Scroll(
     base::WeakPtr<web::WebFrame> target_frame,
-    const optimization_guide::proto::ScrollAction& action,
+    const ActionTarget& target,
+    optimization_guide::proto::ScrollAction_ScrollDirection direction,
+    float distance,
     ToolExecutionCallback callback) {
-  CHECK(action.has_target());
-  CHECK(action.has_direction() && action.has_distance());
-  ExecuteScrollAction(target_frame, action.target(),
+  ExecuteScrollAction(std::move(target_frame), target,
                       /*direction_and_distance=*/
-                      std::make_pair(action.direction(), action.distance()),
-                      std::move(callback));
+                      std::make_pair(direction, static_cast<int>(distance)),
+                      ActorJavaScriptCall::kScroll, std::move(callback));
 }
 
 void ScrollToolJavaScriptFeature::ScrollTo(
     base::WeakPtr<web::WebFrame> target_frame,
-    const optimization_guide::proto::ScrollToAction& action,
+    const ActionTarget& target,
     ToolExecutionCallback callback) {
-  CHECK(action.has_target());
-  ExecuteScrollAction(target_frame, action.target(),
+  ExecuteScrollAction(std::move(target_frame), target,
                       /*direction_and_distance=*/std::nullopt,
-                      std::move(callback));
+                      ActorJavaScriptCall::kScrollTo, std::move(callback));
 }
 
 void ScrollToolJavaScriptFeature::ExecuteScrollAction(
     base::WeakPtr<web::WebFrame> web_frame,
-    const optimization_guide::proto::ActionTarget& target,
+    const ActionTarget& target,
     std::optional<
         std::pair<optimization_guide::proto::ScrollAction_ScrollDirection, int>>
         direction_and_distance,
+    ActorJavaScriptCall call,
     ToolExecutionCallback callback) {
-  CHECK(target.has_coordinate() ||
-        (target.has_content_node_id() && target.has_document_identifier()));
+  CHECK(target.is_valid());
 
   if (!web_frame) {
     std::move(callback).Run(
@@ -100,17 +101,7 @@ void ScrollToolJavaScriptFeature::ExecuteScrollAction(
   }
 
   base::ListValue parameters;
-  std::string function_name;
-
-  if (target.has_content_node_id()) {
-    function_name = "scroll_tool.scrollByNodeId";
-    parameters.Append(target.content_node_id());
-  } else {
-    function_name = "scroll_tool.scrollByCoordinate";
-    parameters.Append(target.coordinate().x());
-    parameters.Append(target.coordinate().y());
-    parameters.Append(static_cast<int>(target.coordinate().pixel_type()));
-  }
+  parameters.Append(target.ToDictValue());
 
   if (direction_and_distance.has_value()) {
     parameters.Append(static_cast<int>(direction_and_distance->first));
@@ -119,14 +110,15 @@ void ScrollToolJavaScriptFeature::ExecuteScrollAction(
 
   auto [cb_for_js, cb_for_error] = base::SplitOnceCallback(std::move(callback));
   bool sent = CallJavaScriptFunction(
-      web_frame.get(), function_name, parameters,
+      web_frame.get(), "scroll_tool.scroll", parameters,
       base::BindOnce(
-          [](ToolExecutionCallback callback, const base::Value* result) {
+          [](ActorJavaScriptCall call, ToolExecutionCallback callback,
+             base::ElapsedTimer timer, const base::Value* result) {
             std::move(callback).Run(ParseJavaScriptResultWithResultCode(
-                &ToActionResultCode, result));
+                call, &ToActionResultCode, result, timer));
           },
-          std::move(cb_for_js)),
-      base::Milliseconds(web::kJavaScriptFunctionCallDefaultTimeout));
+          call, std::move(cb_for_js), base::ElapsedTimer()),
+      kActorJavaScriptExecutionTimeout);
 
   if (!sent) {
     std::move(cb_for_error)

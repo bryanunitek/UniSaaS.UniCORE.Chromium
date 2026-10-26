@@ -35,10 +35,6 @@ namespace content {
 class MockRenderThread;
 }
 
-namespace v8 {
-class ExtensionConfiguration;
-}
-
 namespace extensions {
 
 class ScriptContext;
@@ -83,6 +79,13 @@ class TestIPCMessageSender : public IPCMessageSender {
                     const std::string& event_name,
                     const base::DictValue& filter,
                     bool remove_lazy_listener));
+  MOCK_METHOD(void,
+              SendWebRequestEventHandlingDoneIPC,
+              (const std::optional<ExtensionId>& extension_id,
+               const std::string& event_name,
+               uint64_t request_id,
+               int web_view_instance_id),
+              (override));
   MOCK_METHOD2(
       SendBindAutomationIPC,
       void(ScriptContext* context,
@@ -130,7 +133,6 @@ class NativeExtensionBindingsSystemUnittest
   void SetUp() override;
   void TearDown() override;
   void OnWillDisposeContext(v8::Local<v8::Context> context) override;
-  v8::ExtensionConfiguration* GetV8ExtensionConfiguration() override;
   std::unique_ptr<TestJSRunner::Scope> CreateTestJSRunner() override;
 
   ScriptContext* CreateScriptContext(v8::Local<v8::Context> v8_context,

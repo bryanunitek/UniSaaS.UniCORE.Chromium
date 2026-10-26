@@ -9,6 +9,7 @@ import static org.chromium.build.NullUtil.assertNonNull;
 import android.view.KeyEvent;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.suggestions.SelectionController;
 
 import java.util.ArrayList;
@@ -24,6 +25,7 @@ public class LocationBarSelectionController extends SelectionController {
 
     private final List<SelectableView> mSelectableViews;
     private final List<SelectableView> mVisibleViewsHolder = new ArrayList<>();
+    private @Nullable Runnable mOnSelectionChanged;
 
     public interface SelectableView {
         default boolean isAutocompleteList() {
@@ -41,9 +43,23 @@ public class LocationBarSelectionController extends SelectionController {
      * @param selectableViews The list of views that this controller addresses/
      */
     public LocationBarSelectionController(List<SelectableView> selectableViews) {
-        super(Mode.WRAPPING);
+        super(TraversalMode.SATURATING);
         mSelectableViews = selectableViews;
         reset();
+    }
+
+    /**
+     * Sets the callback invoked whenever selection changes, and invokes it immediately to sync
+     * initial state.
+     *
+     * <p>Not passed in the constructor to avoid invoking callbacks before callers finish assigning
+     * this instance to their member fields.
+     *
+     * @param onSelectionChanged The callback to invoke when selection changes.
+     */
+    public void setSelectionChangedCallback(Runnable onSelectionChanged) {
+        mOnSelectionChanged = onSelectionChanged;
+        mOnSelectionChanged.run();
     }
 
     public SelectableView getSelectedView() {
@@ -55,6 +71,16 @@ public class LocationBarSelectionController extends SelectionController {
         return visibleViews.get(position);
     }
 
+    public boolean selectAutocompleteList() {
+        List<SelectableView> visibleViews = getVisibleViews();
+        for (int i = 0; i < visibleViews.size(); i++) {
+            if (visibleViews.get(i).isAutocompleteList()) {
+                return setPosition(i);
+            }
+        }
+        return false;
+    }
+
     @Override
     public void reset() {
         for (int i = 0; i < mSelectableViews.size(); i++) {
@@ -63,13 +89,22 @@ public class LocationBarSelectionController extends SelectionController {
         super.reset();
     }
 
-    boolean isAutocompleteSelected() {
+    boolean isAutocompleteListSelected() {
         return getSelectedView().isAutocompleteList();
     }
 
     @Override
     protected int getItemCount() {
         return getVisibleViews().size();
+    }
+
+    @Override
+    protected boolean setPosition(int newPosition) {
+        boolean result = super.setPosition(newPosition);
+        if (result && mOnSelectionChanged != null) {
+            mOnSelectionChanged.run();
+        }
+        return result;
     }
 
     @Override
@@ -89,5 +124,10 @@ public class LocationBarSelectionController extends SelectionController {
         }
 
         return mVisibleViewsHolder;
+    }
+
+    /* package */ @TraversalMode
+    int getSelectionModeForTesting() {
+        return mMode;
     }
 }

@@ -10,6 +10,7 @@
 #include "components/enterprise/browser/reporting/common_pref_names.h"
 #include "components/enterprise/browser/reporting/report_scheduler.h"
 #include "components/enterprise/browser/reporting/report_util.h"
+#include "components/enterprise/browser/reporting/reporting_features.h"
 #include "components/policy/core/common/policy_logger.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_namespace.h"
@@ -24,10 +25,12 @@ namespace enterprise_reporting {
 UserSecuritySignalsService::UserSecuritySignalsService(
     PrefService* profile_prefs,
     Delegate* delegate,
-    policy::PolicyService* policy_service)
+    policy::PolicyService* policy_service,
+    bool is_isolated_profile)
     : profile_prefs_(profile_prefs),
       delegate_(delegate),
-      policy_service_(policy_service) {
+      policy_service_(policy_service),
+      can_upload_signals_(!is_isolated_profile) {
   CHECK(profile_prefs_);
   CHECK(delegate_);
   CHECK(policy_service_);
@@ -38,7 +41,7 @@ UserSecuritySignalsService::~UserSecuritySignalsService() {
 }
 
 base::TimeDelta UserSecuritySignalsService::GetSecurityUploadCadence() {
-  return enterprise_signals::features::kProfileSignalsReportingInterval.Get();
+  return base::Hours(4);
 }
 
 void UserSecuritySignalsService::Start() {
@@ -53,7 +56,7 @@ void UserSecuritySignalsService::Start() {
       kUserSecuritySignalsReporting,
       base::BindRepeating(
           &UserSecuritySignalsService::OnStatePolicyValueChanged,
-          weak_factory_.GetWeakPtr()));
+          weak_factory_.GetWeakPtr(), /*is_initialization=*/false));
   pref_change_registrar_.Add(
       kUserSecurityAuthenticatedReporting,
       base::BindRepeating(
@@ -61,7 +64,7 @@ void UserSecuritySignalsService::Start() {
           weak_factory_.GetWeakPtr()));
 
   // Manually trigger a policy update to initialize things.
-  OnStatePolicyValueChanged();
+  OnStatePolicyValueChanged(/*is_initialization=*/true);
 }
 
 bool UserSecuritySignalsService::IsSecuritySignalsReportingEnabled() {
@@ -82,12 +85,13 @@ void UserSecuritySignalsService::OnReportUploaded() {
 
 void UserSecuritySignalsService::OnCookieChange(
     const net::CookieChangeInfo& change) {
-  if (!enterprise_signals::features::kTriggerOnCookieChange.Get()) {
-    return;
-  }
   // Only trigger a new upload if the cookie change could result in a new or
   // updated session.
   if (change.cause == net::CookieChangeCause::INSERTED) {
+    if (!can_upload_signals_) {
+      can_upload_signals_ = true;
+      StartPolicyObservation();
+    }
     TriggerReport(SecurityReportTrigger::kCookieChange);
   }
 }
@@ -127,7 +131,8 @@ void UserSecuritySignalsService::OnPolicyUpdated(
   TriggerReport(SecurityReportTrigger::kPolicyChange);
 }
 
-void UserSecuritySignalsService::OnStatePolicyValueChanged() {
+void UserSecuritySignalsService::OnStatePolicyValueChanged(
+    bool is_initialization) {
   if (!IsSecuritySignalsReportingEnabled()) {
     timer_.Stop();
     StopPolicyObservation();
@@ -138,14 +143,25 @@ void UserSecuritySignalsService::OnStatePolicyValueChanged() {
     return;
   }
 
-  // Make sure that we are observing the policy service.
-  StartPolicyObservation();
-
   // Make sure that cookie observation is properly set-up, as needed.
   OnCookiePolicyValueChanged();
 
-  // The policy is enabled and the timed loop isn't running. Send an upload
-  // immediately.
+  // In Isolated Mode, the profile opens without any login session. Ignore all
+  // startup/timer/policy triggers until the first account signs in via cookie.
+  if (!can_upload_signals_) {
+    return;
+  }
+
+  // Make sure that we are observing the policy service.
+  StartPolicyObservation();
+
+  if (base::FeatureList::IsEnabled(kUploadReportOnProfileOpen) &&
+      is_initialization) {
+    // Skip sending a report at start-up.
+    OnReportUploaded();
+    return;
+  }
+
   TriggerReport(SecurityReportTrigger::kTimer);
 }
 

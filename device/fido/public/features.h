@@ -29,6 +29,13 @@ extern const base::FeatureParam<PasskeyUnlockErrorUiExperimentArm>
     kPasskeyUnlockErrorUiExperimentArm;
 #endif
 
+#if BUILDFLAG(IS_MAC)
+// Enables unlocking passkeys using iCloud Keychain upon PasskeyUnlockManager
+// startup.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_DECLARE_FEATURE(kPasskeyUnlockICloudRecovery);
+#endif  // BUILDFLAG(IS_MAC)
+
 #if BUILDFLAG(IS_WIN)
 // Controls whether on Windows, U2F/CTAP2 requests are forwarded to the
 // native WebAuthentication API, where available.
@@ -46,15 +53,15 @@ BASE_DECLARE_FEATURE(kWebAuthnActorCheck);
 // (what's needed), but the closest approximation that we can detect.
 
 COMPONENT_EXPORT(FIDO_PUBLIC)
-BASE_DECLARE_FEATURE(kWebAuthnICloudKeychainForGoogle);
-COMPONENT_EXPORT(FIDO_PUBLIC)
-BASE_DECLARE_FEATURE(kWebAuthnICloudKeychainForActiveWithDrive);
-COMPONENT_EXPORT(FIDO_PUBLIC)
 BASE_DECLARE_FEATURE(kWebAuthnICloudKeychainForActiveWithoutDrive);
 COMPONENT_EXPORT(FIDO_PUBLIC)
-BASE_DECLARE_FEATURE(kWebAuthnICloudKeychainForInactiveWithDrive);
-COMPONENT_EXPORT(FIDO_PUBLIC)
 BASE_DECLARE_FEATURE(kWebAuthnICloudKeychainForInactiveWithoutDrive);
+
+// Controls whether Chrome on macOS checks if iCloud Keychain is configured for
+// passkeys via ASAuthorizationWebBrowserPublicKeyCredentialManager instead of
+// using iCloud Drive as a proxy.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_DECLARE_FEATURE(kWebAuthnICloudKeychainUseDeviceConfiguredForPasskeys);
 
 // Use insecure software unexportable keys to authenticate to the enclave.
 // For development purposes only.
@@ -68,15 +75,6 @@ BASE_DECLARE_FEATURE(kWebAuthnEnclaveAuthenticatorDelay);
 // Enable non-autofill sign-in UI for conditional mediation.
 COMPONENT_EXPORT(FIDO_PUBLIC)
 BASE_DECLARE_FEATURE(kWebAuthnAmbientSignin);
-
-enum class WebAuthnAmbientSigninDisplay {
-  kSuggestionChip,
-  kAnchoredMessage,
-};
-
-COMPONENT_EXPORT(FIDO_PUBLIC)
-extern const base::FeatureParam<WebAuthnAmbientSigninDisplay>
-    kWebAuthnAmbientSigninDisplayParam;
 
 // Enables publishing prelinking information on Android.
 #if BUILDFLAG(IS_ANDROID)
@@ -106,10 +104,10 @@ BASE_DECLARE_FEATURE(kWebAuthnEnclaveAttestation);
 COMPONENT_EXPORT(FIDO_PUBLIC)
 BASE_DECLARE_FEATURE(kWebAuthnCrossDeviceFallbackUrl);
 
-// Enables support for the WebAuthenticationRemoteDesktopAllowedOrigins
-// enterprise policy for Isolated Web Apps.
+// Support the WebAuthn remoteClientDataJSON extension, which lets an authorized
+// remote desktop client supply the clientDataJSON for a request.
 COMPONENT_EXPORT(FIDO_PUBLIC)
-BASE_DECLARE_FEATURE(kWebAuthnIWARemoteDesktopAllowedOriginsPolicy);
+BASE_DECLARE_FEATURE(kWebAuthnRemoteClientDataJson);
 
 // Enables to save keys from out of context ("opportunistic") retrieval.
 COMPONENT_EXPORT(FIDO_PUBLIC)
@@ -141,18 +139,10 @@ COMPONENT_EXPORT(FIDO_PUBLIC)
 BASE_DECLARE_FEATURE(kWebAuthnWinPrfOnCreate);
 #endif  // BUILDFLAG(IS_WIN)
 
-// Enable max priority mode in WebAuthn websocket connections to cloud services.
-COMPONENT_EXPORT(FIDO_PUBLIC)
-BASE_DECLARE_FEATURE(kWebAuthnSocketMaxPriorityMode);
-
 // Enables appending Google account session index (authuser=[index]) to the
 // GPM PIN reset URL.
 COMPONENT_EXPORT(FIDO_PUBLIC)
 BASE_DECLARE_FEATURE(kWebAuthnGpmPinResetUsesAccountIndex);
-
-// Omit unused parameters when building requests to the cloud enclave.
-COMPONENT_EXPORT(FIDO_PUBLIC)
-BASE_DECLARE_FEATURE(kWebAuthnStripUnusedEnclaveParameters);
 
 // Enables the new embedded recovery URL for GPM keychain recovery.
 COMPONENT_EXPORT(FIDO_PUBLIC)
@@ -163,6 +153,43 @@ BASE_DECLARE_FEATURE(kWebAuthnGpmPasskeyEmbeddedRecoveryUrl);
 COMPONENT_EXPORT(FIDO_PUBLIC)
 BASE_DECLARE_FEATURE(kWebAuthnEnclaveUseAuthDataFromEnclave);
 
+// Displays provider-specific vector icons (Google Password Manager,
+// Apple Passwords, Windows Hello, etc.) for passkey credentials in modal
+// requests.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_DECLARE_FEATURE(kWebAuthnModalProviderIcons);
+
+// Fall back to software keys when hardware unexportable keys (TPM / Secure
+// Enclave) are absent or do not support the required signing algorithm.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_DECLARE_FEATURE(kWebAuthnSoftwareKeysWhenTpmAbsent);
+
+// Only fall back to U2F registration on CTAP2 security keys when ES256 is the
+// first algorithm in pubKeyCredParams that the key supports.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_DECLARE_FEATURE(kWebAuthnU2fFallbackRequiresPreferredEs256);
+
+// Filters the list of public key algorithms sent in makeCredential requests to
+// those advertised by the authenticator in its getInfo response.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_DECLARE_FEATURE(kWebAuthnFilterAlgorithmsForAuthenticator);
+
+// Enables the local browser-based Google Password Manager passkey authenticator
+// on desktop, replacing the cloud enclave authenticator.
+COMPONENT_EXPORT(FIDO_PUBLIC)
+BASE_DECLARE_FEATURE(kWebAuthnLocalGpmPasskeys);
+
+enum class LocalGpmPasskeysMode {
+  // Only accounts that are not already registered with the enclave use the
+  // local authenticator.
+  kNewUsersOnly,
+  // All accounts use the local authenticator, regardless of enclave
+  // registration state.
+  kAllUsers,
+};
+COMPONENT_EXPORT(FIDO_PUBLIC)
+extern const base::FeatureParam<LocalGpmPasskeysMode>
+    kWebAuthnLocalGpmPasskeysMode;
 }  // namespace device
 
 #endif  // DEVICE_FIDO_PUBLIC_FEATURES_H_

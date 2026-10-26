@@ -10,12 +10,13 @@ import {MetricsReporterImpl} from '//resources/js/metrics_reporter/metrics_repor
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import type {AutocompleteMatch, AutocompleteResult, OmniboxPopupSelection} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
-import {RenderType, SelectionDirection, SelectionLineState, SelectionStep, SideType} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import {RenderType, SelectionLineState, SideType} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
 
 import {getCss} from './searchbox_dropdown.css.js';
 import {getHtml} from './searchbox_dropdown.html.js';
 import {kDefaultSelection} from './searchbox_match.js';
 import type {SearchboxMatchElement} from './searchbox_match.js';
+import {selectionsEqual} from './searchbox_selection_mixin.js';
 import {renderTypeToClass, sideTypeToClass} from './utils.js';
 
 // The '%' operator in JS returns negative numbers. This workaround avoids that.
@@ -53,14 +54,6 @@ export class SearchboxDropdownElement extends CrLitElement {
        * the width available to the dropdown.
        */
       canShowSecondarySide: {type: Boolean},
-
-      /**
-       * Whether the secondary side was at any point available to be shown.
-       */
-      hadSecondarySide: {
-        type: Boolean,
-        notify: true,
-      },
 
       /*
        * Whether the secondary side is currently available to be shown.
@@ -110,7 +103,6 @@ export class SearchboxDropdownElement extends CrLitElement {
   }
 
   accessor canShowSecondarySide: boolean = false;
-  accessor hadSecondarySide: boolean = false;
   accessor hasSecondarySide: boolean = false;
   accessor hasEmptyInput: boolean = false;
   accessor result: AutocompleteResult|null = null;
@@ -123,11 +115,19 @@ export class SearchboxDropdownElement extends CrLitElement {
       loadTimeData.valueExists('realboxVirtualFocusNavigation') &&
       loadTimeData.getBoolean('realboxVirtualFocusNavigation');
   private accessor showSecondarySide_: boolean = false;
+  // Hiding duplicate descriptions is only needed when the
+  // Omnibox_AskGSuggestionSidePanelDescription param is on, since that's when
+  // the AskG action match and contextual suggestions share a description.
+  private hideDuplicateDescriptions_: boolean =
+      loadTimeData.valueExists('askGSuggestionSidePanelDescription') &&
+      loadTimeData.getBoolean('askGSuggestionSidePanelDescription');
+  // Descriptions shown both by a match that only shows its description on
+  // selection (e.g. a contextual suggestion) and by one that always shows it.
+  private duplicateDescriptions_: Set<string> = new Set();
 
   /** The list of selectable match elements. */
   private selectableMatchElements_: SearchboxMatchElement[] = [];
 
-  private availableSelections_: OmniboxPopupSelection[] = [];
 
   override willUpdate(changedProperties: PropertyValues<this>) {
     super.willUpdate(changedProperties);
@@ -135,30 +135,35 @@ export class SearchboxDropdownElement extends CrLitElement {
     if (changedProperties.has('result')) {
       this.hasSecondarySide = this.computeHasSecondarySide_();
       this.hasEmptyInput = this.computeHasEmptyInput_();
+      this.duplicateDescriptions_ = this.computeDuplicateDescriptions_();
     }
 
     if (changedProperties.has('result') ||
         changedProperties.has('canShowSecondarySide')) {
       this.showSecondarySide_ = this.computeShowSecondarySide_();
     }
+
+    if (changedProperties.has('result') && this.virtualFocusEnabled) {
+      if (this.selection.state !== SelectionLineState.kNormal &&
+          this.selection.state !== SelectionLineState.kFocusedButtonAim) {
+        this.selection = {
+          line: this.selection.line,
+          state: SelectionLineState.kNormal,
+          actionIndex: 0,
+        };
+        this.fire('selection-changed', {value: this.selection});
+      }
+    }
   }
 
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
-
-    if (changedProperties.has('result')) {
-      this.availableSelections_ = this.getResultSelections();
-    }
 
     this.onResultRepaint_();
 
     // Update the list of selectable match elements.
     this.selectableMatchElements_ =
         [...this.shadowRoot.querySelectorAll('cr-searchbox-match')];
-  }
-
-  getCachedSelections(): OmniboxPopupSelection[] {
-    return this.availableSelections_;
   }
 
   //============================================================================
@@ -176,6 +181,9 @@ export class SearchboxDropdownElement extends CrLitElement {
   unselect() {
     this.selectedMatchIndex = -1;
     this.selection = kDefaultSelection;
+    if (this.virtualFocusEnabled) {
+      this.fire('selection-changed', {value: this.selection});
+    }
   }
 
   /** Focuses the selected match, if any. */
@@ -191,16 +199,19 @@ export class SearchboxDropdownElement extends CrLitElement {
   /** Selects the match at the given index. */
   selectIndex(index: number) {
     this.selectedMatchIndex = index;
-    if (this.virtualFocusEnabled && this.selection.line !== index) {
+    if (this.virtualFocusEnabled) {
       const match = this.result?.matches[index];
-      if (match && (!match.isHidden || match.allowedToBeDefaultMatch)) {
-        this.selection = {
-          line: index,
-          state: SelectionLineState.kNormal,
-          actionIndex: 0,
-        };
-      } else {
-        this.selection = kDefaultSelection;
+      const newSelection: OmniboxPopupSelection =
+          match && (!match.isHidden || match.allowedToBeDefaultMatch) ?
+          {
+            line: index,
+            state: SelectionLineState.kNormal,
+            actionIndex: 0,
+          } :
+          kDefaultSelection;
+      if (!selectionsEqual(this.selection, newSelection)) {
+        this.selection = newSelection;
+        this.fire('selection-changed', {value: this.selection});
       }
     }
     return this.updateComplete;
@@ -209,7 +220,7 @@ export class SearchboxDropdownElement extends CrLitElement {
   updateSelection(
       _oldSelection: OmniboxPopupSelection, selection: OmniboxPopupSelection) {
     this.selectIndex(selection.line);
-    this.fire('selection-changed', {value: selection});
+    this.selection = selection;
   }
 
   /**
@@ -240,131 +251,6 @@ export class SearchboxDropdownElement extends CrLitElement {
     this.selectedMatchIndex =
         remainder(next, this.selectableMatchElements.length);
     return this.updateComplete;
-  }
-
-  stepSelection(direction: SelectionDirection, step: SelectionStep) {
-    if (!this.result) {
-      return;
-    }
-    const available = this.getCachedSelections();
-    if (available.length === 0) {
-      return;
-    }
-    const current = this.selection;
-    const isNormal = (selection: OmniboxPopupSelection) =>
-        selection.state === SelectionLineState.kNormal;
-    const selectionsEqual =
-        (a: OmniboxPopupSelection, b: OmniboxPopupSelection) =>
-            a.line === b.line && a.state === b.state &&
-        a.actionIndex === b.actionIndex;
-
-    let fromIndex = available.findIndex(s => selectionsEqual(current, s));
-
-    // Fallback: If currently in keyword mode, the keyword chip might be hidden
-    // from the match list (as we have transitioned inside that engine search).
-    // Find the normal suggestion line as the starting point for navigation.
-    if (fromIndex < 0 && current.state === SelectionLineState.kKeywordMode) {
-      fromIndex = available.findIndex(
-          s => selectionsEqual(
-              {
-                ...current,
-                state: SelectionLineState.kNormal,
-              },
-              s));
-    }
-    let nextSelection = current;
-    if (fromIndex < 0) {
-      // Create a copy of the available selections array before modifying it
-      // to avoid modifying the cached array.
-      const availableCopy = [...available];
-      availableCopy.splice(0, 0, current);
-      fromIndex = 0;
-      nextSelectionFromAvailable(availableCopy);
-    } else {
-      nextSelectionFromAvailable(available);
-    }
-
-    function nextSelectionFromAvailable(
-        selectionsList: OmniboxPopupSelection[]) {
-      if (step === SelectionStep.kAllLines) {
-        const normalIndex = direction === SelectionDirection.kBackward ?
-            selectionsList.findIndex(isNormal) :
-            selectionsList.findLastIndex(isNormal);
-        nextSelection =
-            normalIndex < 0 ? current : selectionsList[normalIndex]!;
-      } else {
-        const getNextIndex = (idx: number): number => {
-          const stepSize = direction === SelectionDirection.kForward ? 1 : -1;
-          return remainder(idx + stepSize, selectionsList.length);
-        };
-
-        const originalIndex = fromIndex;
-        let index = getNextIndex(originalIndex);
-        do {
-          const candidate = selectionsList[index]!;
-          if (step === SelectionStep.kStateOrLine || isNormal(candidate)) {
-            nextSelection = candidate;
-            break;
-          }
-          index = getNextIndex(index);
-        } while (index !== originalIndex);
-      }
-    }
-
-    const oldSelection = this.selection;
-    this.selection = nextSelection;
-    this.updateSelection(oldSelection, nextSelection);
-  }
-
-  /**
-   * Returns a flat array of all selectable target states in the dropdown
-   * (including normal lines, keyword mode chips, action chips, and remove
-   * buttons) in order.
-   */
-  private getSelectionsForMatch_(match: AutocompleteMatch, matchIndex: number):
-      OmniboxPopupSelection[] {
-    if (match.isHidden && !match.allowedToBeDefaultMatch) {
-      return [];
-    }
-    const selections: OmniboxPopupSelection[] = [{
-      line: matchIndex,
-      state: SelectionLineState.kNormal,
-      actionIndex: 0,
-    }];
-    if (match.keywordChipHint && match.keywordChipHint.length > 0) {
-      selections.push({
-        line: matchIndex,
-        state: SelectionLineState.kKeywordMode,
-        actionIndex: 0,
-      });
-    }
-    if (match.actions) {
-      for (let actionIndex = 0; actionIndex < match.actions.length;
-           actionIndex++) {
-        selections.push({
-          line: matchIndex,
-          state: SelectionLineState.kFocusedButtonAction,
-          actionIndex: actionIndex,
-        });
-      }
-    }
-    if (match.supportsDeletion) {
-      selections.push({
-        line: matchIndex,
-        state: SelectionLineState.kFocusedButtonRemoveSuggestion,
-        actionIndex: 0,
-      });
-    }
-    return selections;
-  }
-
-  getResultSelections(): OmniboxPopupSelection[] {
-    if (!this.result) {
-      return [];
-    }
-    return this.result.matches.flatMap(
-        (match: AutocompleteMatch, matchIndex: number) =>
-            this.getSelectionsForMatch_(match, matchIndex));
   }
 
   //============================================================================
@@ -418,20 +304,42 @@ export class SearchboxDropdownElement extends CrLitElement {
   }
 
   private computeHasSecondarySide_(): boolean {
-    const hasSecondarySide =
-        !!this.groupIdsForSideType_(SideType.kSecondary).length;
-    if (!this.hadSecondarySide) {
-      this.hadSecondarySide = hasSecondarySide;
-    }
-    return hasSecondarySide;
+    return !!this.groupIdsForSideType_(SideType.kSecondary).length;
   }
 
   private computeHasEmptyInput_(): boolean {
     return !!this.result && this.result.input === '';
   }
 
+  private computeDuplicateDescriptions_(): Set<string> {
+    const onSelection = new Set<string>();
+    const always = new Set<string>();
+    if (this.hideDuplicateDescriptions_) {
+      for (const match of this.result?.matches ?? []) {
+        const description = match.suggestTemplate.secondaryText?.text;
+        if (description) {
+          (match.showSecondaryTextOnlyOnSelection ? onSelection : always)
+              .add(description);
+        }
+      }
+    }
+    return new Set([...onSelection].filter(d => always.has(d)));
+  }
+
   protected isSelected_(match: AutocompleteMatch): boolean {
-    return this.matchIndex_(match) === this.selectedMatchIndex;
+    const selectedIndex = this.virtualFocusEnabled ? this.selection.line :
+                                                     this.selectedMatchIndex;
+    return this.matchIndex_(match) === selectedIndex;
+  }
+
+  /**
+   * Whether a match of the other kind (showing its description only on
+   * selection or always) has the same description as the match. The CSS uses
+   * this to show only one copy at a time.
+   */
+  protected hasDuplicateDescription_(match: AutocompleteMatch): boolean {
+    return this.duplicateDescriptions_.has(
+        match.suggestTemplate.secondaryText?.text ?? '');
   }
 
   /**

@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -28,22 +29,25 @@
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/favicon/favicon_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/contextual_search/searchbox_context_data.h"
+#include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/omnibox/omnibox_popup_state_manager.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/location_bar/omnibox_popup_file_selector.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_aim_presenter.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_delegate.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_webui_base_content.h"
 #include "chrome/browser/ui/webui/cr_components/composebox/composebox_handler.h"
 #include "chrome/browser/ui/webui/new_tab_page/composebox/variations/composebox_fieldtrial.h"
+#include "chrome/browser/ui/webui/omnibox_everywhere/composebox_everywhere_handler.h"
+#include "chrome/browser/ui/webui/omnibox_everywhere/omnibox_everywhere_handler.h"
+#include "chrome/browser/ui/webui/omnibox_everywhere/omnibox_everywhere_ui.h"
 #include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_aim_handler.h"
 #include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_ui.h"
 #include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_web_contents_helper.h"
@@ -53,6 +57,7 @@
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/omnibox_popup_resources.h"
 #include "components/contextual_search/contextual_search_session_handle.h"
+#include "components/contextual_search/contextual_search_types.h"
 #include "components/contextual_search/input_state_model.h"
 #include "components/contextual_tasks/public/features.h"
 #include "components/favicon/core/favicon_service.h"
@@ -67,6 +72,7 @@
 #include "components/omnibox/composebox/composebox_query.mojom.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "third_party/omnibox_proto/input_type.pb.h"
@@ -81,6 +87,7 @@
 #include "ui/base/models/menu_model.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/image/image.h"
 
 namespace {
@@ -146,6 +153,16 @@ std::optional<ui::ColorId> TabSimpleMenuModel::GetSelectedBackgroundColorId(
 
 namespace {
 
+// Returns the pending searchbox context of the browser window of
+// `web_contents`, creating it if needed. The AI Mode popup sends this context
+// to its page when it is shown.
+SearchboxContextData::Context* GetOrCreatePendingSearchboxContext(
+    content::WebContents* web_contents) {
+  auto* browser = webui::GetBrowserWindowInterface(web_contents);
+  auto* data = browser ? SearchboxContextData::From(browser) : nullptr;
+  return data ? &data->GetOrCreatePendingContext() : nullptr;
+}
+
 bool IsStaticOmniboxCommandId(int command_id) {
   switch (command_id) {
     case IDC_OMNIBOX_CONTEXT_ADD_IMAGE:
@@ -158,6 +175,7 @@ bool IsStaticOmniboxCommandId(int command_id) {
     case IDC_OMNIBOX_CONTEXT_SET_MODEL_REGULAR:
     case IDC_OMNIBOX_CONTEXT_SET_MODEL_PRO_NO_GEN_UI:
     case IDC_OMNIBOX_CONTEXT_SHARED_TABS_SUBMENU:
+    case IDC_OMNIBOX_CONTEXT_SINGLE_TAB:
       return true;
     default:
       return false;
@@ -172,72 +190,86 @@ bool IsValidTab(GURL url) {
          !url.IsAboutBlank();
 }
 
-
 bool IsThinkingModel(omnibox::ModelMode model) {
   return model == omnibox::ModelMode::MODEL_MODE_GEMINI_PRO ||
          model == omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_NO_GEN_UI;
 }
 
-void HandleDriveUploadResponse(
-    bool was_ai_mode_open,
-    base::WeakPtr<content::WebContents> web_contents,
-    searchbox::mojom::DriveUploadResponsePtr response) {
-  if (!response || !web_contents) {
-    return;
+// Helper to resolve an IconResourceIds to its corresponding ImageModel.
+// LINT.IfChange(SearchboxConfigIcons)
+std::optional<ui::ImageModel> GetImageModelForIconResourceId(
+    omnibox::IconResourceIds icon_id) {
+  switch (icon_id) {
+    case omnibox::IconResourceIds::BOLT:
+      return ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled() ? kBoltIcon : kBoltOldIcon,
+          ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
+    case omnibox::IconResourceIds::AUTORENEW:
+      return ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled() ? kAutorenewIcon
+                                            : kAutorenewOldIcon,
+          ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
+    case omnibox::IconResourceIds::ACUTE:
+      return ui::ImageModel::FromVectorIcon(
+          kAcuteIcon, ui::kColorMenuIcon,
+          ui::SimpleMenuModel::kDefaultIconSize);
+    case omnibox::IconResourceIds::TIMER:
+      return ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled() ? kTimerIcon : kTimerOldIcon,
+          ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
+    case omnibox::IconResourceIds::BANANA:
+      return ui::ImageModel::FromResourceId(
+          IDR_OMNIBOX_POPUP_IMAGES_CREATE_IMAGES_PNG);
+    case omnibox::IconResourceIds::DRAFT_SPARK:
+      return ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled() ? kDraftSparkIcon
+                                            : kDraftSparkOldIcon,
+          ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
+    case omnibox::IconResourceIds::TRAVEL_EXPLORE:
+      return ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled() ? kTravelExploreIcon
+                                            : kTravelExploreOldIcon,
+          ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
+    case omnibox::IconResourceIds::ATTACH_FILE:
+      return ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled() ? kAttachFileIcon
+                                            : kAttachFileOldIcon,
+          ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
+    case omnibox::IconResourceIds::ADD_PHOTO_ALTERNATE:
+      return ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled() ? kAddPhotoAlternateIcon
+                                            : kAddPhotoAlternateOldIcon,
+          ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
+    case omnibox::IconResourceIds::DRIVE:
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+      return ui::ImageModel::FromVectorIcon(
+          vector_icons::kGoogleDriveMonochromeIcon, ui::kColorMenuIcon,
+          ui::SimpleMenuModel::kDefaultIconSize);
+#else
+      return ui::ImageModel();
+#endif
+    case omnibox::IconResourceIds::PHOTO_PRINTS:
+      return ui::ImageModel();
+    case omnibox::IconResourceIds::IMAGE_CREATE:
+      return ui::ImageModel::FromVectorIcon(
+          kImageCreateIcon, ui::kColorMenuIcon,
+          ui::SimpleMenuModel::kDefaultIconSize);
+    default:
+      return std::nullopt;
   }
+}
+// LINT.ThenChange(//ui/webui/resources/cr_components/composebox/searchbox_config_icons.html.ts:SearchboxConfigIcons)
 
-  std::vector<searchbox::mojom::SearchContextAttachmentPtr> file_attachments;
-  for (const auto& file : response->files) {
-    auto file_attachment = searchbox::mojom::FileAttachment::New();
-    file_attachment->uuid = file->token;
-    file_attachment->name = file->file_name;
-    file_attachment->mime_type = file->mime_type;
-    file_attachment->image_data_url = file->thumbnail_url;
-    file_attachment->icon_url = file->icon_url;
-
-    file_attachments.push_back(
-        searchbox::mojom::SearchContextAttachment::NewFileAttachment(
-            std::move(file_attachment)));
-  }
-
-  if (response->error.has_value()) {
-    auto file_attachment = searchbox::mojom::FileAttachment::New();
-    file_attachment->uuid = base::UnguessableToken::Create();
-    file_attachment->name = "";
-    file_attachment->mime_type = "";
-
-    contextual_search::ContextUploadErrorType error_type =
-        contextual_search::ContextUploadErrorType::kUnknown;
-    switch (response->error.value()) {
-      case searchbox::mojom::DriveUploadError::kMaxFilesExceeded:
-        error_type = contextual_search::ContextUploadErrorType::
-            kBrowserProcessingMaxFilesExceededError;
-        break;
-      case searchbox::mojom::DriveUploadError::kSizeLimitExceeded:
-        error_type = contextual_search::ContextUploadErrorType::
-            kBrowserProcessingFileTooLargeError;
-        break;
-    }
-    file_attachment->error_type = error_type;
-    file_attachments.push_back(
-        searchbox::mojom::SearchContextAttachment::NewFileAttachment(
-            std::move(file_attachment)));
-  }
-
-  bool has_files_or_errors = !file_attachments.empty();
-
-  OmniboxContextMenuController::UpdateSearchboxContext(
-      web_contents.get(), /*tab_info=*/std::nullopt,
-      /*tool_mode=*/std::nullopt, std::move(file_attachments));
-
-  auto* omnibox_controller =
-      OmniboxContextMenuController::GetOmniboxController(web_contents.get());
-  if (omnibox_controller && omnibox_controller->edit_model()) {
-    if (was_ai_mode_open || has_files_or_errors) {
-      omnibox_controller->edit_model()->OpenAiMode(
-          OmniboxEditModel::AimActivation::kContextMenu);
-    }
-  }
+void RecordSingleTabMenuItemAction(bool is_active_tab, bool selected) {
+  omnibox::SingleTabMenuItemAction action =
+      selected ? (is_active_tab
+                      ? omnibox::SingleTabMenuItemAction::kCurrentTabSelected
+                      : omnibox::SingleTabMenuItemAction::kRecentTabSelected)
+               : (is_active_tab
+                      ? omnibox::SingleTabMenuItemAction::kCurrentTabDeselected
+                      : omnibox::SingleTabMenuItemAction::kRecentTabDeselected);
+  base::UmaHistogramEnumeration(
+      "ContextualSearch.SingleTabMenuItem.Action.Omnibox", action);
 }
 
 }  // namespace
@@ -247,46 +279,61 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(OmniboxContextMenuController,
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(OmniboxContextMenuController,
                                       kFirstTabMenuItemIdForTesting);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(OmniboxContextMenuController,
+                                      kSecondTabMenuItemIdForTesting);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(OmniboxContextMenuController,
                                       kImageUploadMenuItemIdForTesting);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(OmniboxContextMenuController,
                                       kFileUploadMenuItemIdForTesting);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(OmniboxContextMenuController,
+                                      kSharedTabsSubmenuIdForTesting);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(OmniboxContextMenuController,
+                                      kSingleTabMenuItemIdForTesting);
 
 OmniboxContextMenuController::OmniboxContextMenuController(
     OmniboxPopupFileSelector* file_selector,
-    content::WebContents* web_contents)
+    content::WebContents* web_contents,
+    ContextualSearchboxHandler* contextual_searchbox_handler)
     : file_selector_(file_selector->GetWeakPtr()),
-      web_contents_(web_contents->GetWeakPtr()) {
+      web_contents_(web_contents->GetWeakPtr()),
+      contextual_searchbox_handler_(contextual_searchbox_handler) {
   menu_model_ = std::make_unique<TabSimpleMenuModel>(this);
-  next_command_id_ = kMinOmniboxContextMenuRecentTabsCommandId;
-  auto* composebox_handler =
-      GetOmniboxPopupUI() ? GetOmniboxPopupUI()->composebox_handler() : nullptr;
-  if (composebox_handler &&
+  auto* contextual_searchbox_handler_ptr = GetContextualSearchboxHandler();
+  if (contextual_searchbox_handler_ptr &&
       base::FeatureList::IsEnabled(omnibox::kAimUsePecApi)) {
     // Pre-populate `input_state_` synchronously from the cached model state
     // so dynamic items like recent tabs are available during initial menu
     // build. Otherwise, menu will not have tabs.
-    if (composebox_handler->input_state_model()) {
-      input_state_ = composebox_handler->input_state_model()->GetInputState();
+    if (contextual_searchbox_handler_ptr->input_state_model()) {
+      input_state_ = contextual_searchbox_handler_ptr->input_state_model()
+                         ->GetInputState();
+      input_state_subscription_ =
+          contextual_searchbox_handler_ptr->input_state_model()->Subscribe(
+              base::BindRepeating(
+                  &OmniboxContextMenuController::OnInputStateChanged,
+                  weak_ptr_factory_.GetWeakPtr()));
     }
-    composebox_handler->GetInputState(
+    contextual_searchbox_handler_ptr->GetInputState(
         base::BindOnce(&OmniboxContextMenuController::OnGetInputState,
                        weak_ptr_factory_.GetWeakPtr()));
-    InitializeMenuItemInfo();
   }
-  // Set remaining command ID start point. If max tabs
-  // is known, reserve command ID's now. Otherwise, tab
-  // command ID's will be dynamically added later for tabs.
-  std::optional<size_t> max_suggestions = GetMaxTabSuggestions();
-  min_tools_and_models_command_id_ =
-      kMinOmniboxContextMenuRecentTabsCommandId +
-      static_cast<int>(max_suggestions.value_or(0));
+  // TODO(crbug.com/558703434): Avoid redundant BuildMenu() call if
+  // GetInputState() already executed synchronously during construction.
   BuildMenu();
 }
 
 OmniboxContextMenuController::~OmniboxContextMenuController() = default;
 
 void OmniboxContextMenuController::InitializeMenuItemInfo() {
+  input_type_info_.clear();
+  tool_info_.clear();
+  model_info_.clear();
+
   for (omnibox::InputType input_type : input_state_.allowed_input_types) {
+    // Drive context input is unsupported in Loomnibox (Omnibox Everywhere)
+    // surfaces, so omit it from menu item info.
+    if (input_type == omnibox::InputType::INPUT_TYPE_DRIVE && IsLoomnibox()) {
+      continue;
+    }
     input_type_info_.insert(
         {input_type,
          {/*enabled=*/IsInputTypeEnabled(input_type),
@@ -298,19 +345,35 @@ void OmniboxContextMenuController::InitializeMenuItemInfo() {
     tool_info_.insert({tool,
                        {/*enabled=*/IsToolEnabled(tool),
                         /*menu_label=*/GetMenuLabelForTool(tool),
-                        /*menu_icon=*/GetIconForTool(tool)}});
+                        /*menu_icon=*/GetIconForTool(tool),
+                        /*tooltip=*/GetTooltipForTool(tool)}});
   }
 
   for (omnibox::ModelMode model : input_state_.allowed_models) {
     model_info_.insert({model,
                         {/*enabled=*/IsModelEnabled(model),
                          /*menu_label=*/GetMenuLabelForModel(model),
-                         /*menu_icon=*/GetIconForModel(model)}});
+                         /*menu_icon=*/GetIconForModel(model),
+                         /*tooltip=*/GetTooltipForModel(model)}});
   }
 }
 
 void OmniboxContextMenuController::BuildMenu() {
+  menu_model_->Clear();
+  shared_tabs_menu_model_.reset();
+  input_type_for_command_id_.clear();
+  tool_for_command_id_.clear();
+  model_for_command_id_.clear();
+  single_tab_command_id_.reset();
+  next_command_id_ = kMinOmniboxContextMenuRecentTabsCommandId;
+  std::optional<size_t> max_suggestions = GetMaxTabSuggestions();
+  min_tools_and_models_command_id_ =
+      kMinOmniboxContextMenuRecentTabsCommandId +
+      static_cast<int>(max_suggestions.value_or(0));
+
   if (base::FeatureList::IsEnabled(omnibox::kAimUsePecApi)) {
+    InitializeMenuItemInfo();
+
     auto is_browser_tab =
         [](const std::pair<omnibox::InputType, MenuItemInfo> p) {
           return p.first == omnibox::InputType::INPUT_TYPE_BROWSER_TAB;
@@ -373,16 +436,15 @@ void OmniboxContextMenuController::AddRecentTabItems() {
     return;
   }
 
-  auto* browser_window_interface =
-      webui::GetBrowserWindowInterface(web_contents_.get());
-  Profile* profile = browser_window_interface->GetProfile();
+  Profile* profile = GetProfile();
   const bool is_smart_tab_sharing_enabled =
       profile && contextual_tasks::ContextualTasksContextService::
                      GetIsSmartTabSharingEnabled(profile);
 
-  auto* handler = GetSearchboxHandler();
+  auto* contextual_searchbox_handler = GetContextualSearchboxHandler();
   const bool is_smart_tab_sharing_active =
-      handler && handler->IsSmartTabSharingActive();
+      contextual_searchbox_handler &&
+      contextual_searchbox_handler->IsSmartTabSharingActive();
 
   const bool include_tabs_submenu =
       base::FeatureList::IsEnabled(omnibox::kContextManagementInOmnibox) &&
@@ -397,7 +459,7 @@ void OmniboxContextMenuController::AddRecentTabItems() {
                          GetSmartTabSharingMegaplusMenuLabel());
     menu_model_->SetIconForCommandId(
         IDC_OMNIBOX_CONTEXT_SMART_TAB_SHARING,
-        ui::ImageModel::FromVectorIcon(kTabOldIcon, ui::kColorMenuIcon,
+        ui::ImageModel::FromVectorIcon(kScreensaverAutoIcon, ui::kColorMenuIcon,
                                        ui::SimpleMenuModel::kDefaultIconSize));
     menu_model_->SetMinorIcon(
         index,
@@ -413,6 +475,10 @@ void OmniboxContextMenuController::AddRecentTabItems() {
   ui::SimpleMenuModel* target_menu_model;
   size_t first_tab_index;
 
+  // The index of the current or most recent tab which is surfaced in the main
+  // menu when the single tab menu item arm is enabled.
+  const std::optional<size_t> single_tab_index = GetSingleTabIndex(tabs);
+
   // `target_menu_model` will either become the submenu, or a section in main
   // menu.
   if (include_tabs_submenu) {
@@ -422,9 +488,22 @@ void OmniboxContextMenuController::AddRecentTabItems() {
     target_menu_model = shared_tabs_menu_model_.get();
     first_tab_index = 0;
 
+    // Surface the current/recent tab directly in the main menu, above the
+    // "Add tabs" row, so it can be toggled without opening the flyout.
+    if (omnibox::IsSingleTabMenuItemInComposeboxEnabled() &&
+        single_tab_index.has_value()) {
+      AddSingleTabItem(tabs[*single_tab_index],
+                       next_command_id_ + static_cast<int>(*single_tab_index));
+    }
+
     // If Smart Tab Sharing is enabled but NOT active, put the toggle at the
     // top of the submenu.
     if (is_smart_tab_sharing_enabled) {
+      const bool show_headers = omnibox::kShowContextMenuHeaders.Get();
+      if (show_headers) {
+        shared_tabs_menu_model_->AddTitleWithStringId(
+            IDS_STS_MEGAPLUS_AUTOMATICALLY_ADD_TABS_HEADER);
+      }
       shared_tabs_menu_model_->AddItem(IDC_OMNIBOX_CONTEXT_SMART_TAB_SHARING,
                                        GetSmartTabSharingMegaplusMenuLabel());
       shared_tabs_menu_model_->SetIconForCommandId(
@@ -433,6 +512,10 @@ void OmniboxContextMenuController::AddRecentTabItems() {
               kScreensaverAutoIcon, ui::kColorMenuIcon,
               ui::SimpleMenuModel::kDefaultIconSize));
       shared_tabs_menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
+      if (show_headers) {
+        shared_tabs_menu_model_->AddTitleWithStringId(
+            IDS_STS_MEGAPLUS_MANUALLY_ADD_TABS_HEADER);
+      }
       first_tab_index = shared_tabs_menu_model_->GetItemCount();
     }
   } else {
@@ -447,24 +530,9 @@ void OmniboxContextMenuController::AddRecentTabItems() {
   }
 
   // Add tabs to the target destination in UI.
-  bool has_active_tab = std::ranges::any_of(
-      tabs, [](const TabInfo& tab) { return tab.is_active_tab; });
-
-  size_t tab_index = 0;
   for (const auto& tab : tabs) {
     target_menu_model->AddItemWithIcon(next_command_id_, tab.title,
                                        favicon::GetDefaultFaviconModel());
-    if (include_tabs_submenu) {
-      if (tab.is_active_tab) {
-        target_menu_model->SetMinorText(
-            target_menu_model->GetItemCount() - 1,
-            l10n_util::GetStringUTF16(IDS_COMPOSE_CURRENT_TAB));
-      } else if (!has_active_tab && tab_index == 0) {
-        target_menu_model->SetMinorText(
-            target_menu_model->GetItemCount() - 1,
-            l10n_util::GetStringUTF16(IDS_NTP_COMPOSEBOX_RECENT_TAB_SUFFIX));
-      }
-    }
     AddTabFavicon(next_command_id_, tab.url, tab.title);
     input_type_for_command_id_[next_command_id_] =
         omnibox::InputType::INPUT_TYPE_BROWSER_TAB;
@@ -485,7 +553,6 @@ void OmniboxContextMenuController::AddRecentTabItems() {
     }
 
     next_command_id_ += 1;
-    tab_index++;
   }
 
   // Add submenu name and icon.
@@ -506,18 +573,76 @@ void OmniboxContextMenuController::AddRecentTabItems() {
                                            ? ui::kColorMenuIcon
                                            : ui::kColorMenuIconDisabled,
                                        ui::SimpleMenuModel::kDefaultIconSize));
+    // ID for testing the submenu parent row. Tests must select this row to
+    // open the submenu before `kFirstTabMenuItemIdForTesting` becomes
+    // reachable.
+    menu_model_->SetElementIdentifierAt(menu_model_->GetItemCount() - 1,
+                                        kSharedTabsSubmenuIdForTesting);
   }
 
   min_tools_and_models_command_id_ =
       std::max(min_tools_and_models_command_id_, next_command_id_);
 
-  // ID for testing tab section.
-  target_menu_model->SetElementIdentifierAt(first_tab_index,
-                                            kFirstTabMenuItemIdForTesting);
+  // `first_tab_index` indicates the starting offset where tabs are inserted.
+  // Verify that at least one tab item was actually appended before setting the
+  // test identifier on the first tab element.
+  if (!tabs.empty() && target_menu_model->GetItemCount() > first_tab_index) {
+    // ID for testing tab section.
+    target_menu_model->SetElementIdentifierAt(first_tab_index,
+                                              kFirstTabMenuItemIdForTesting);
+  }
+  if (tabs.size() > 1 &&
+      target_menu_model->GetItemCount() > first_tab_index + 1) {
+    target_menu_model->SetElementIdentifierAt(first_tab_index + 1,
+                                              kSecondTabMenuItemIdForTesting);
+  }
 
-  if (!base::FeatureList::IsEnabled(omnibox::kAimUsePecApi)) {
+  if (!base::FeatureList::IsEnabled(omnibox::kAimUsePecApi) &&
+      (!tabs.empty() || include_tabs_submenu)) {
     AddSeparator();
   }
+}
+
+std::optional<size_t> OmniboxContextMenuController::GetSingleTabIndex(
+    const std::vector<TabInfo>& tabs) const {
+  if (tabs.empty()) {
+    return std::nullopt;
+  }
+  auto active_it = std::ranges::find_if(tabs, &TabInfo::is_active_tab);
+  if (active_it != tabs.end()) {
+    return static_cast<size_t>(std::distance(tabs.begin(), active_it));
+  }
+  // No valid active tab (e.g. the NTP is focused), so fall back to the first
+  // suggestion.
+  return 0;
+}
+
+void OmniboxContextMenuController::AddSingleTabItem(const TabInfo& tab,
+                                                    int tab_command_id) {
+  menu_model_->AddItemWithIcon(IDC_OMNIBOX_CONTEXT_SINGLE_TAB, tab.title,
+                               favicon::GetDefaultFaviconModel());
+  const size_t index = menu_model_->GetItemCount() - 1;
+  if (tab.is_checked) {
+    menu_model_->SetMinorIcon(
+        index,
+        ui::ImageModel::FromVectorIcon(
+            features::IsRoundedIconsEnabled() ? kCheckSmallIcon : kCheckOldIcon,
+            ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize));
+    menu_model_->SetMinorIconOnRight(
+        ui::MenuModel::MinorIconOnRightPasskey(index),
+        /*minor_icon_on_right=*/true);
+  }
+  menu_model_->SetElementIdentifierAt(index, kSingleTabMenuItemIdForTesting);
+  AddTabFavicon(IDC_OMNIBOX_CONTEXT_SINGLE_TAB, tab.url, tab.title);
+  single_tab_command_id_ = tab_command_id;
+}
+
+int OmniboxContextMenuController::ResolveCommandId(int command_id) const {
+  if (command_id == IDC_OMNIBOX_CONTEXT_SINGLE_TAB &&
+      single_tab_command_id_.has_value()) {
+    return *single_tab_command_id_;
+  }
+  return command_id;
 }
 
 void OmniboxContextMenuController::AddContextualInputItems() {
@@ -526,6 +651,11 @@ void OmniboxContextMenuController::AddContextualInputItems() {
     for (const auto input_type : input_state_.allowed_input_types) {
       // BROWSER_TAB input type is handled by `AddRecentTabItems()`.
       if (input_type == omnibox::InputType::INPUT_TYPE_BROWSER_TAB) {
+        continue;
+      }
+      // Drive context input is unsupported in Loomnibox (Omnibox Everywhere)
+      // surfaces, so omit it from the context menu.
+      if (input_type == omnibox::InputType::INPUT_TYPE_DRIVE && IsLoomnibox()) {
         continue;
       }
       auto& menu_item_info = input_type_info_[input_type];
@@ -560,9 +690,7 @@ void OmniboxContextMenuController::AddContextualInputItems() {
 }
 
 void OmniboxContextMenuController::AddToolItems() {
-  auto* browser_window_interface =
-      webui::GetBrowserWindowInterface(web_contents_.get());
-  Profile* profile = browser_window_interface->GetProfile();
+  Profile* profile = GetProfile();
 
   bool use_pec_api = base::FeatureList::IsEnabled(omnibox::kAimUsePecApi);
   if (!use_pec_api && (omnibox::IsDeepSearchEnabled(profile) ||
@@ -610,10 +738,7 @@ void OmniboxContextMenuController::AddToolItems() {
 }
 
 void OmniboxContextMenuController::AddModelPickerItems() {
-  bool is_aim_popup_open =
-      GetOmniboxController() &&
-      GetOmniboxController()->popup_state_manager()->popup_state() ==
-          OmniboxPopupState::kAim;
+  bool is_aim_popup_open = IsAimPopupOpen();
 
   auto model_section_config = GetModelSectionConfig();
   if (omnibox::kShowContextMenuHeaders.Get() && model_section_config &&
@@ -665,11 +790,7 @@ OmniboxContextMenuController::GetRecentTabs() const {
   std::vector<OmniboxContextMenuController::TabInfo> tabs;
 
   std::vector<contextual_search::FileInfo> uploaded_file_infos;
-  auto* session_handle =
-      GetOmniboxPopupUI()
-          ? GetOmniboxPopupUI()->GetOrCreateContextualSessionHandle()
-          : nullptr;
-  if (session_handle) {
+  if (auto* session_handle = GetOrCreateContextualSessionHandle()) {
     uploaded_file_infos = session_handle->GetUploadedContextFileInfos();
   }
 
@@ -697,15 +818,13 @@ OmniboxContextMenuController::GetRecentTabs() const {
     tab_data.is_active_tab = (tab == tab_strip_model->GetActiveTab());
 
     bool is_checked = false;
-    if (auto* omnibox_popup_ui = GetOmniboxPopupUI()) {
-      auto* composebox_handler = omnibox_popup_ui->composebox_handler();
-      if (composebox_handler) {
-        is_checked = std::ranges::any_of(
-            composebox_handler->selected_tabs,
-            [&](const auto& pair) { return tab_data.tab_id == pair.second; });
-      }
-      auto* omnibox_handler = omnibox_popup_ui->omnibox_handler();
-      if (!is_checked && omnibox_handler) {
+    if (auto* composebox_handler = GetComposeboxHandler()) {
+      is_checked = std::ranges::any_of(
+          composebox_handler->selected_tabs,
+          [&](const auto& pair) { return tab_data.tab_id == pair.second; });
+    }
+    if (!is_checked) {
+      if (auto* omnibox_handler = GetOmniboxHandler()) {
         is_checked = std::ranges::any_of(
             omnibox_handler->selected_tabs,
             [&](const auto& pair) { return tab_data.tab_id == pair.second; });
@@ -720,8 +839,8 @@ OmniboxContextMenuController::GetRecentTabs() const {
   }
 
   // Sort tabs by most recently active, up to `max_suggestions`
-  // number of tabs. Checked (selected) tabs are first; ties broken by most
-  // recent.
+  // number of tabs. Checked (selected) tabs are first, followed by the active
+  // tab, with remaining ties broken by most recent.
   std::optional<size_t> max_suggestions = GetMaxTabSuggestions();
   // Max tab suggestions allowed is infinite if nullopt is returned,
   // so use current number of tabs; otherwise, limit sorted tabs to
@@ -735,6 +854,9 @@ OmniboxContextMenuController::GetRecentTabs() const {
                       if (a.is_checked != b.is_checked) {
                         return a.is_checked > b.is_checked;
                       }
+                      if (a.is_active_tab != b.is_active_tab) {
+                        return a.is_active_tab > b.is_active_tab;
+                      }
                       return a.last_active > b.last_active;
                     });
   tabs.resize(max_tab_suggestions);
@@ -742,7 +864,25 @@ OmniboxContextMenuController::GetRecentTabs() const {
   return tabs;
 }
 
+std::u16string OmniboxContextMenuController::GetShareTabsTooltip() const {
+  if (!omnibox::IsContextMenuTooltipsInComposeboxEnabled()) {
+    return std::u16string();
+  }
+  int checked_count =
+      cached_recent_tabs_.has_value()
+          ? std::ranges::count_if(*cached_recent_tabs_, &TabInfo::is_checked)
+          : 0;
+  return l10n_util::GetStringUTF16(
+      checked_count > 0 ? IDS_COMPOSE_SHARING_TABS_WITH_GOOGLE
+                        : IDS_COMPOSE_ADD_OPEN_TABS_TO_ASK_ANYTHING);
+}
+
 bool OmniboxContextMenuController::IsTabContextEnabled() const {
+  if (base::FeatureList::IsEnabled(omnibox::kContextManagementInComposebox) &&
+      std::ranges::any_of(GetRecentTabs(), &TabInfo::is_checked)) {
+    return true;
+  }
+
   if (base::FeatureList::IsEnabled(omnibox::kAimUsePecApi)) {
     auto it = input_type_info_.find(omnibox::InputType::INPUT_TYPE_BROWSER_TAB);
     return it != input_type_info_.end() && it->second.enabled;
@@ -752,9 +892,16 @@ bool OmniboxContextMenuController::IsTabContextEnabled() const {
   if (!omnibox_controller) {
     return false;
   }
-  auto* omnibox_popup_ui = GetOmniboxPopupUI();
-  if (!omnibox_popup_ui || !omnibox_popup_ui->composebox_handler() ||
-      !omnibox_popup_ui->composebox_handler()->input_state_model()) {
+  auto* contextual_searchbox_handler = GetContextualSearchboxHandler();
+  if (!contextual_searchbox_handler ||
+      !contextual_searchbox_handler->input_state_model()) {
+    return false;
+  }
+
+  auto* model = contextual_searchbox_handler->input_state_model();
+  const auto& disabled_types = model->GetInputState().disabled_input_types;
+  if (std::ranges::contains(disabled_types,
+                            omnibox::InputType::INPUT_TYPE_BROWSER_TAB)) {
     return false;
   }
 
@@ -764,9 +911,7 @@ bool OmniboxContextMenuController::IsTabContextEnabled() const {
 void OmniboxContextMenuController::AddTabFavicon(int command_id,
                                                  const GURL& url,
                                                  const std::u16string& label) {
-  auto* browser_window_interface =
-      webui::GetBrowserWindowInterface(web_contents_.get());
-  Profile* profile = browser_window_interface->GetProfile();
+  Profile* profile = GetProfile();
   if (!profile) {
     return;
   }
@@ -803,7 +948,7 @@ void OmniboxContextMenuController::OnFaviconDataAvailable(
     target_menu_model = shared_tabs_menu_model_.get();
     index_in_menu = target_menu_model->GetIndexOfCommandId(command_id);
   }
-  DCHECK(index_in_menu.has_value());
+  CHECK(index_in_menu.has_value(), base::NotFatalUntil::M162);
   target_menu_model->SetIcon(index_in_menu.value(),
                              ui::ImageModel::FromImage(image_result.image));
   // Update the screen after updating the icon.
@@ -814,8 +959,28 @@ void OmniboxContextMenuController::OnFaviconDataAvailable(
 
 void OmniboxContextMenuController::OnGetInputState(
     const std::optional<omnibox::InputState>& input_state) {
+  if (!input_state_subscription_) {
+    auto* contextual_searchbox_handler = GetContextualSearchboxHandler();
+    if (contextual_searchbox_handler &&
+        contextual_searchbox_handler->input_state_model()) {
+      input_state_subscription_ =
+          contextual_searchbox_handler->input_state_model()->Subscribe(
+              base::BindRepeating(
+                  &OmniboxContextMenuController::OnInputStateChanged,
+                  weak_ptr_factory_.GetWeakPtr()));
+    }
+  }
   if (input_state) {
-    input_state_ = *input_state;
+    OnInputStateChanged(*input_state);
+  }
+}
+
+void OmniboxContextMenuController::OnInputStateChanged(
+    const omnibox::InputState& new_state) {
+  input_state_ = new_state;
+  BuildMenu();
+  if (menu_model_->menu_model_delegate()) {
+    menu_model_->menu_model_delegate()->OnMenuStructureChanged();
   }
 }
 
@@ -826,7 +991,8 @@ void OmniboxContextMenuController::AddTitleWithStringId(int localization_id) {
 void OmniboxContextMenuController::AddTabContext(const TabInfo& tab_info) {
   UpdateSearchboxContext(web_contents_.get(), /*tab_info=*/tab_info,
                          /*tool_mode=*/std::nullopt);
-  OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu);
+  OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu,
+             /*initial_state=*/nullptr);
 }
 
 // static
@@ -835,13 +1001,30 @@ void OmniboxContextMenuController::UpdateSearchboxContext(
     std::optional<TabInfo> tab_info,
     std::optional<omnibox::ToolMode> tool_mode,
     std::vector<searchbox::mojom::SearchContextAttachmentPtr> attachments) {
+  if (auto* omnibox_everywhere_ui = GetOmniboxEverywhereUI(web_contents)) {
+    auto initial_state =
+        omnibox_everywhere::mojom::ComposeboxInitialState::New();
+    if (tab_info) {
+      auto mojo_tab = searchbox::mojom::TabInfo::New();
+      mojo_tab->tab_id = tab_info->tab_id;
+      mojo_tab->title = base::UTF16ToUTF8(tab_info->title);
+      mojo_tab->url = tab_info->url;
+      initial_state->tab = std::move(mojo_tab);
+    }
+    if (tool_mode) {
+      initial_state->tool = *tool_mode;
+    }
+    omnibox_everywhere_ui->OpenComposebox(std::move(initial_state));
+    return;
+  }
+
   auto* browser_window_interface =
       webui::GetBrowserWindowInterface(web_contents);
   if (!browser_window_interface) {
     return;
   }
   SearchboxContextData* searchbox_context_data =
-      browser_window_interface->GetFeatures().searchbox_context_data();
+      SearchboxContextData::From(browser_window_interface);
   if (!searchbox_context_data) {
     return;
   }
@@ -855,6 +1038,11 @@ void OmniboxContextMenuController::UpdateSearchboxContext(
     tab_attachment->tab_id = tab_info->tab_id;
     tab_attachment->title = base::UTF16ToUTF8(tab_info->title);
     tab_attachment->url = tab_info->url;
+    tab_attachment->source =
+        searchbox::mojom::TabAttachmentSource::kContextMenu;
+    tab_attachment->from_single_tab_menu_item =
+        tab_info->from_single_tab_menu_item;
+    tab_attachment->is_active_tab = tab_info->is_active_tab;
     context->file_infos.push_back(
         searchbox::mojom::SearchContextAttachment::NewTabAttachment(
             std::move(tab_attachment)));
@@ -869,34 +1057,151 @@ void OmniboxContextMenuController::UpdateSearchboxContext(
   }
 
   auto* omnibox_controller = GetOmniboxController(web_contents);
-
-  if (omnibox_controller &&
+  if (omnibox_controller && omnibox_controller->popup_state_manager() &&
       omnibox_controller->popup_state_manager()->popup_state() ==
           OmniboxPopupState::kAim) {
     auto* omnibox_popup_ui = GetOmniboxPopupUI(web_contents);
     if (omnibox_popup_ui && omnibox_popup_ui->popup_aim_handler()) {
       omnibox_popup_ui->popup_aim_handler()->AddContext(std::move(context));
+      return;
     }
-  } else {
-    searchbox_context_data->SetPendingContext(std::move(context));
+    // The AI Mode page has not bound its handler yet. The show that the page
+    // receives once it binds takes the pending context.
+  }
+  searchbox_context_data->SetPendingContext(std::move(context));
+}
+
+// static
+void OmniboxContextMenuController::AddFileContext(
+    content::WebContents* web_contents,
+    lens::MimeType mime_type,
+    const std::string& image_data_url,
+    const std::string& file_name,
+    const std::string& mime_string,
+    base::expected<base::UnguessableToken,
+                   contextual_search::ContextUploadErrorType> result) {
+  if (!web_contents) {
+    return;
+  }
+
+  if (auto* omnibox_everywhere_ui = GetOmniboxEverywhereUI(web_contents)) {
+    auto file_info_mojom = searchbox::mojom::SelectedFileInfo::New();
+    file_info_mojom->file_name = file_name;
+    file_info_mojom->mime_type = mime_string;
+    file_info_mojom->is_deletable = true;
+    file_info_mojom->selection_time = base::Time::Now();
+    if (mime_type == lens::MimeType::kImage) {
+      file_info_mojom->image_data_url = image_data_url;
+    }
+    if (!result.has_value()) {
+      base::UnguessableToken error_token = base::UnguessableToken::Create();
+      omnibox_everywhere_ui->AddFileContext(error_token,
+                                            std::move(file_info_mojom));
+      omnibox_everywhere_ui->OnContextualInputStatusChanged(
+          error_token,
+          contextual_search::ContextUploadStatus::kValidationFailed,
+          result.error());
+    } else {
+      omnibox_everywhere_ui->AddFileContext(result.value(),
+                                            std::move(file_info_mojom));
+    }
+    return;
+  }
+
+  auto file_attachment = searchbox::mojom::FileAttachment::New();
+  file_attachment->uuid =
+      result.has_value() ? result.value() : base::UnguessableToken::Create();
+  file_attachment->name = file_name;
+  file_attachment->mime_type = mime_string;
+  if (!result.has_value()) {
+    file_attachment->error_type = result.error();
+  }
+  if (mime_type == lens::MimeType::kImage) {
+    file_attachment->image_data_url = image_data_url;
+  }
+  std::vector<searchbox::mojom::SearchContextAttachmentPtr> attachments;
+  attachments.push_back(
+      searchbox::mojom::SearchContextAttachment::NewFileAttachment(
+          std::move(file_attachment)));
+  UpdateSearchboxContext(web_contents, /*tab_info=*/std::nullopt,
+                         /*tool_mode=*/std::nullopt, std::move(attachments));
+}
+
+void OmniboxContextMenuController::HandleDriveUploadResponse(
+    bool was_ai_mode_open,
+    base::WeakPtr<content::WebContents> web_contents,
+    searchbox::mojom::DriveUploadResponsePtr response) {
+  if (!response || !web_contents) {
+    return;
+  }
+
+  std::vector<searchbox::mojom::SearchContextAttachmentPtr> file_attachments;
+  for (const auto& file : response->files) {
+    auto file_attachment = searchbox::mojom::FileAttachment::New();
+    file_attachment->uuid = file->token;
+    file_attachment->name = file->file_name;
+    file_attachment->mime_type = file->mime_type;
+    file_attachment->image_data_url = std::nullopt;
+    file_attachment->icon_url = file->icon_url;
+    if (file->thumbnail_url.has_value()) {
+      file_attachment->thumbnail_url = GURL(file->thumbnail_url.value());
+    }
+
+    file_attachments.push_back(
+        searchbox::mojom::SearchContextAttachment::NewFileAttachment(
+            std::move(file_attachment)));
+  }
+
+  if (response->error.has_value()) {
+    auto file_attachment = searchbox::mojom::FileAttachment::New();
+    file_attachment->uuid = base::UnguessableToken::Create();
+    file_attachment->name = "";
+    file_attachment->mime_type = "";
+
+    contextual_search::ContextUploadErrorType error_type =
+        contextual_search::ContextUploadErrorType::kUnknown;
+    switch (response->error.value()) {
+      case searchbox::mojom::DriveUploadError::kMaxFilesExceeded:
+        error_type = contextual_search::ContextUploadErrorType::
+            kBrowserProcessingMaxFilesExceededError;
+        break;
+      case searchbox::mojom::DriveUploadError::kSizeLimitExceeded:
+        error_type = contextual_search::ContextUploadErrorType::
+            kBrowserProcessingFileTooLargeError;
+        break;
+    }
+    file_attachment->error_type = error_type;
+    file_attachments.push_back(
+        searchbox::mojom::SearchContextAttachment::NewFileAttachment(
+            std::move(file_attachment)));
+  }
+
+  // Only update the search context and open AI mode if files or errors were
+  // received. Ignore cancellations to preserve the current search/query state.
+  bool has_files_or_errors = !file_attachments.empty();
+  if (has_files_or_errors) {
+    OmniboxContextMenuController::UpdateSearchboxContext(
+        web_contents.get(), /*tab_info=*/std::nullopt,
+        /*tool_mode=*/std::nullopt, std::move(file_attachments));
+  }
+
+  auto* omnibox_controller =
+      OmniboxContextMenuController::GetOmniboxController(web_contents.get());
+  if (omnibox_controller && omnibox_controller->edit_model()) {
+    if (was_ai_mode_open || has_files_or_errors) {
+      omnibox_controller->edit_model()->OpenAiMode(
+          OmniboxEditModel::AimActivation::kContextMenu);
+    }
   }
 }
 
 bool OmniboxContextMenuController::IsContentSharingEnabled() const {
-  auto* browser_window_interface =
-      webui::GetBrowserWindowInterface(web_contents_.get());
-  if (!browser_window_interface) {
-    return false;
-  }
-  Profile* profile = browser_window_interface->GetProfile();
+  Profile* profile = GetProfile();
   if (!profile) {
     return false;
   }
-  auto* session_handle =
-      GetOmniboxPopupUI()
-          ? GetOmniboxPopupUI()->GetOrCreateContextualSessionHandle()
-          : nullptr;
-  return omnibox::IsContentSharingEnabled(profile, session_handle);
+  return omnibox::IsContentSharingEnabled(profile,
+                                          GetOrCreateContextualSessionHandle());
 }
 
 std::optional<size_t> OmniboxContextMenuController::GetMaxTabSuggestions()
@@ -947,6 +1252,7 @@ bool OmniboxContextMenuController::IsTabCommandId(int command_id) const {
 
 omnibox::ContextType OmniboxContextMenuController::CommandIdToEnum(
     int command_id) const {
+  command_id = ResolveCommandId(command_id);
   // Translate to generic omnibox type for logging, etc.
   if (base::FeatureList::IsEnabled(omnibox::kAimUsePecApi)) {
     if (auto it = input_type_for_command_id_.find(command_id);
@@ -1044,6 +1350,11 @@ OmniboxContextMenuController::GetInputTypeConfig(
 
 bool OmniboxContextMenuController::IsInputTypeEnabled(
     omnibox::InputType input_type) const {
+  // Drive context input is unsupported in Loomnibox (Omnibox Everywhere)
+  // surfaces, so always report it as disabled.
+  if (input_type == omnibox::InputType::INPUT_TYPE_DRIVE && IsLoomnibox()) {
+    return false;
+  }
   return std::none_of(input_state_.disabled_input_types.begin(),
                       input_state_.disabled_input_types.end(),
                       [&](omnibox::InputType disabled_input_type) {
@@ -1140,6 +1451,18 @@ std::u16string OmniboxContextMenuController::GetMenuLabelForTool(
 
 ui::ImageModel OmniboxContextMenuController::GetIconForTool(
     omnibox::ToolMode tool) const {
+  if (base::FeatureList::IsEnabled(omnibox::kAimUseSearchboxConfigIconIds)) {
+    const auto* tool_config = GetToolConfig(tool);
+    if (tool_config && tool_config->has_icon() &&
+        tool_config->icon().has_icon_id()) {
+      auto icon = GetImageModelForIconResourceId(tool_config->icon().icon_id());
+      if (icon.has_value()) {
+        return *icon;
+      }
+    }
+    return ui::ImageModel();
+  }
+
   switch (tool) {
     case omnibox::ToolMode::TOOL_MODE_IMAGE_GEN:
       return ui::ImageModel::FromResourceId(
@@ -1157,6 +1480,18 @@ ui::ImageModel OmniboxContextMenuController::GetIconForTool(
     default:
       return ui::ImageModel();
   }
+}
+
+std::u16string OmniboxContextMenuController::GetTooltipForTool(
+    omnibox::ToolMode tool) const {
+  if (!omnibox::IsContextMenuTooltipsInComposeboxEnabled()) {
+    return std::u16string();
+  }
+  const auto* tool_config = GetToolConfig(tool);
+  if (tool_config && !tool_config->menu_tooltip().empty()) {
+    return base::UTF8ToUTF16(tool_config->menu_tooltip());
+  }
+  return std::u16string();
 }
 
 const omnibox::ModelConfig* OmniboxContextMenuController::GetModelConfig(
@@ -1203,6 +1538,20 @@ std::u16string OmniboxContextMenuController::GetMenuLabelForModel(
 
 ui::ImageModel OmniboxContextMenuController::GetIconForModel(
     omnibox::ModelMode model) const {
+  if (base::FeatureList::IsEnabled(omnibox::kAimUseSearchboxConfigIconIds)) {
+    const auto* model_config = GetModelConfig(model);
+    if (model_config && model_config->has_icon() &&
+        model_config->icon().has_icon_id()) {
+      auto icon =
+          GetImageModelForIconResourceId(model_config->icon().icon_id());
+      if (icon.has_value()) {
+        return *icon;
+      }
+    }
+  }
+
+  // Fallback to legacy hardcoded model mapping if flag is disabled or no icon
+  // is specified in config.
   switch (model) {
     case omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_AUTOROUTE:
       return ui::ImageModel::FromVectorIcon(
@@ -1211,16 +1560,32 @@ ui::ImageModel OmniboxContextMenuController::GetIconForModel(
           ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
     case omnibox::ModelMode::MODEL_MODE_GEMINI_REGULAR:
       return ui::ImageModel::FromVectorIcon(
-          features::IsRoundedIconsEnabled() ? kBoltIcon : kBoltOldIcon,
-          ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
+          kAcuteIcon, ui::kColorMenuIcon,
+          ui::SimpleMenuModel::kDefaultIconSize);
     case omnibox::ModelMode::MODEL_MODE_GEMINI_PRO:
     case omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_NO_GEN_UI:
       return ui::ImageModel::FromVectorIcon(
           features::IsRoundedIconsEnabled() ? kTimerIcon : kTimerOldIcon,
           ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
+    case omnibox::ModelMode::MODEL_MODE_GEMINI_FLASH_LATEST:
+      return ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled() ? kBoltIcon : kBoltOldIcon,
+          ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
     default:
       return ui::ImageModel();
   }
+}
+
+std::u16string OmniboxContextMenuController::GetTooltipForModel(
+    omnibox::ModelMode model) const {
+  if (!omnibox::IsContextMenuTooltipsInComposeboxEnabled()) {
+    return std::u16string();
+  }
+  const auto* model_config = GetModelConfig(model);
+  if (model_config && !model_config->menu_tooltip().empty()) {
+    return base::UTF8ToUTF16(model_config->menu_tooltip());
+  }
+  return std::u16string();
 }
 
 // static
@@ -1257,28 +1622,37 @@ OmniboxPopupUI* OmniboxContextMenuController::GetOmniboxPopupUI(
         return omnibox_popup_ui;
       }
     }
+    // If the WebContents already hosts a WebUI controller that is not
+    // OmniboxPopupUI (e.g. OmniboxEverywhereUI for Loomnibox), do not fall back
+    // to the browser window's LocationBar popup UI. Doing so would mistakenly
+    // return the in-browser popup UI and cause standalone menu items to be
+    // disabled when a browser window is open.
+    return nullptr;
   }
 
   // Fallback: If web_contents does not have WebUI (e.g. it is the active tab),
-  // try to find it through the active browser window's LocationBarView.
+  // try to find it through the active browser window's LocationBar.
   auto* browser_window_interface =
       webui::GetBrowserWindowInterface(web_contents);
   if (!browser_window_interface) {
     return nullptr;
   }
 
+  // The window can be absent in unit tests that stub out the browser.
+  BrowserWindow* const browser_window =
+      BrowserWindow::FromBrowser(browser_window_interface);
   LocationBar* location_bar =
-      browser_window_interface->GetFeatures().location_bar();
+      browser_window ? browser_window->GetLocationBar() : nullptr;
   if (!location_bar) {
     return nullptr;
   }
 
-  auto* location_bar_view = static_cast<LocationBarView*>(location_bar);
-  if (!location_bar_view) {
+  auto* presenter_delegate = location_bar->GetPresenterDelegate();
+  if (!presenter_delegate) {
     return nullptr;
   }
 
-  auto* presenter = location_bar_view->GetOmniboxPopupAimPresenter();
+  auto* presenter = presenter_delegate->GetOmniboxPopupAimPresenter();
   if (!presenter) {
     return nullptr;
   }
@@ -1300,33 +1674,52 @@ OmniboxPopupUI* OmniboxContextMenuController::GetOmniboxPopupUI() const {
   return GetOmniboxPopupUI(web_contents_.get());
 }
 
+void OmniboxContextMenuController::SetActiveToolMode(
+    omnibox::ToolMode tool_mode) {
+  if (auto* handler = GetContextualSearchboxHandler()) {
+    handler->SetActiveToolMode(tool_mode, /*is_set_by_aim=*/false);
+    handler->RecordToolSelectionAction(tool_mode);
+  } else if (auto* context =
+                 GetOrCreatePendingSearchboxContext(web_contents_.get())) {
+    context->mode = tool_mode;
+  }
+}
+
+void OmniboxContextMenuController::SetActiveModelMode(
+    omnibox::ModelMode model_mode) {
+  if (auto* handler = GetContextualSearchboxHandler()) {
+    handler->SetActiveModelMode(model_mode, /*is_set_by_aim=*/false);
+    handler->RecordModelSelectionAction(model_mode);
+  } else if (auto* context =
+                 GetOrCreatePendingSearchboxContext(web_contents_.get())) {
+    context->model = model_mode;
+  }
+}
+
 void OmniboxContextMenuController::ExecuteCommand(int id, int event_flags) {
+  const bool is_single_tab_item = (id == IDC_OMNIBOX_CONTEXT_SINGLE_TAB);
+  // The standalone single tab row behaves exactly like the flyout row for the
+  // same tab, so route it through that tab's command.
+  id = ResolveCommandId(id);
   if (id == IDC_OMNIBOX_CONTEXT_SHARED_TABS_SUBMENU) {
     // Shared tabs does not do anything as a button.
     return;
   }
   if (id == IDC_OMNIBOX_CONTEXT_SMART_TAB_SHARING) {
-    if (auto* handler = GetSearchboxHandler()) {
-      bool active = handler->IsSmartTabSharingActive();
-      handler->SetSmartTabSharingActive(!active);
+    if (auto* contextual_searchbox_handler = GetContextualSearchboxHandler()) {
+      bool active = contextual_searchbox_handler->IsSmartTabSharingActive();
+      contextual_searchbox_handler->SetSmartTabSharingActive(!active);
 
-      auto* omnibox_controller = GetOmniboxController();
-      bool is_aim_popup_open =
-          omnibox_controller &&
-          omnibox_controller->popup_state_manager()->popup_state() ==
-              OmniboxPopupState::kAim;
+      bool is_aim_popup_open = IsAimPopupOpen();
 
       if (!active || is_aim_popup_open) {
-        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu);
+        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu,
+                   /*initial_state=*/nullptr);
       }
     }
     return;
   }
-  auto* omnibox_controller = GetOmniboxController();
-  bool is_aim_popup_open =
-      omnibox_controller &&
-      omnibox_controller->popup_state_manager()->popup_state() ==
-          OmniboxPopupState::kAim;
+  bool is_aim_popup_open = IsAimPopupOpen();
   const std::string prefix = is_aim_popup_open
                                  ? kAimContextTypeHistogramPrefix
                                  : kClassicContextTypeHistogramPrefix;
@@ -1337,24 +1730,22 @@ void OmniboxContextMenuController::ExecuteCommand(int id, int event_flags) {
     int tab_index_in_menu = id - kMinOmniboxContextMenuRecentTabsCommandId;
     if (static_cast<size_t>(tab_index_in_menu) < tabs.size()) {
       // Get the tab ID based on the command ID in the simple menu.
-      const auto& tab_info = tabs[tab_index_in_menu];
+      auto& tab_info = tabs[tab_index_in_menu];
       bool was_uploaded = false;
       base::UnguessableToken file_token_to_delete;
       ContextualSearchboxHandler* active_handler = nullptr;
-      if (auto* omnibox_popup_ui = GetOmniboxPopupUI()) {
-        auto* composebox_handler = omnibox_popup_ui->composebox_handler();
-        if (composebox_handler) {
-          for (const auto& pair : composebox_handler->selected_tabs) {
-            if (tab_info.tab_id == pair.second) {
-              was_uploaded = true;
-              file_token_to_delete = pair.first;
-              active_handler = composebox_handler;
-              break;
-            }
+      if (auto* composebox_handler = GetComposeboxHandler()) {
+        for (const auto& pair : composebox_handler->selected_tabs) {
+          if (tab_info.tab_id == pair.second) {
+            was_uploaded = true;
+            file_token_to_delete = pair.first;
+            active_handler = composebox_handler;
+            break;
           }
         }
-        auto* omnibox_handler = omnibox_popup_ui->omnibox_handler();
-        if (!was_uploaded && omnibox_handler) {
+      }
+      if (!was_uploaded) {
+        if (auto* omnibox_handler = GetOmniboxHandler()) {
           for (const auto& pair : omnibox_handler->selected_tabs) {
             if (tab_info.tab_id == pair.second) {
               was_uploaded = true;
@@ -1365,25 +1756,59 @@ void OmniboxContextMenuController::ExecuteCommand(int id, int event_flags) {
           }
         }
       }
+      if (!was_uploaded && contextual_searchbox_handler_) {
+        for (const auto& pair : contextual_searchbox_handler_->selected_tabs) {
+          if (tab_info.tab_id == pair.second) {
+            was_uploaded = true;
+            file_token_to_delete = pair.first;
+            active_handler = contextual_searchbox_handler_;
+            break;
+          }
+        }
+      }
       // If was already staged for upload, delete it, as this function was
       // called because user clicked on tab again.:
       if (was_uploaded && active_handler) {
+        if (is_single_tab_item) {
+          RecordSingleTabMenuItemAction(tab_info.is_active_tab,
+                                        /*selected=*/false);
+        }
         active_handler->DeleteContextFromBrowser(file_token_to_delete,
                                                  /*from_automatic_chip=*/false);
         // Refresh omnibox popup UI.
-        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu);
+        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu,
+                   /*initial_state=*/nullptr);
       } else {  // If not staged for upload, then stage for upload.
+        if (is_single_tab_item) {
+          tab_info.from_single_tab_menu_item = true;
+          RecordSingleTabMenuItemAction(tab_info.is_active_tab,
+                                        /*selected=*/true);
+        }
         base::UmaHistogramExactLinear(
             "ContextualSearch.ContextAdded.ContextAddedMethod.Omnibox",
             /*ContextMenu*/ 0, 4);
+        if (base::FeatureList::IsEnabled(
+                omnibox::kContextManagementInComposebox)) {
+          base::UmaHistogramBoolean(
+              "ContextualSearch.AddTabsFlyout.TabSelected.Omnibox", true);
+        }
+        bool has_active_tab =
+            std::any_of(tabs.begin(), tabs.end(),
+                        [](const auto& tab) { return tab.is_active_tab; });
+        if (has_active_tab) {
+          base::UmaHistogramBoolean(
+              "ContextualSearch.TabPicker.SelectedTabIsActive.Omnibox",
+              tab_info.is_active_tab);
+        }
+        base::UmaHistogramExactLinear(
+            "ContextualSearch.TabPicker.SelectedTabPosition.Omnibox",
+            std::min(tab_index_in_menu, 20), 21);
         AddTabContext(tab_info);
       }
     }
     RecordContextMenuItemSelection(sliced_prefix, id);
   } else {
-    auto* omnibox_popup_ui = GetOmniboxPopupUI();
-    auto* composebox_handler =
-        omnibox_popup_ui ? omnibox_popup_ui->composebox_handler() : nullptr;
+    auto* contextual_searchbox_handler = GetContextualSearchboxHandler();
 
     bool use_input_state_model =
         base::FeatureList::IsEnabled(omnibox::kAimUsePecApi);
@@ -1401,47 +1826,55 @@ void OmniboxContextMenuController::ExecuteCommand(int id, int event_flags) {
     }
 
     if (is_aim_popup_open && is_file_upload_command) {
-      if (omnibox_popup_ui && omnibox_popup_ui->popup_aim_handler()) {
-        omnibox_popup_ui->popup_aim_handler()->SetPreserveContextOnClose(true);
+      if (auto* omnibox_popup_ui = GetOmniboxPopupUI()) {
+        if (omnibox_popup_ui->popup_aim_handler()) {
+          omnibox_popup_ui->popup_aim_handler()->SetPreserveContextOnClose(
+              true);
+        }
       }
     }
 
     if (use_input_state_model) {
       if (auto it = input_type_for_command_id_.find(id);
           it != input_type_for_command_id_.end()) {
-        if (it->second == omnibox::InputType::INPUT_TYPE_DRIVE) {
-          if (composebox_handler) {
-            composebox_handler->GetDriveDisclaimerStatus(base::BindOnce(
-                [](base::WeakPtr<content::WebContents> web_contents,
-                   bool is_aim_popup_open,
-                   searchbox::mojom::DriveDisclaimerStatus status) {
-                  // Abort only if the account is restricted/ineligible. If
-                  // unconsented (kNotAccepted), allow the click through so
-                  // OnDriveUploadClicked can trigger the ConsentKit disclaimer
-                  // onboarding dialog.
-                  if (status ==
-                      searchbox::mojom::DriveDisclaimerStatus::kRestricted) {
-                    return;
-                  }
-                  auto* omnibox_popup_ui =
-                      GetOmniboxPopupUI(web_contents.get());
-                  auto* handler = omnibox_popup_ui
-                                      ? omnibox_popup_ui->composebox_handler()
-                                      : nullptr;
-                  if (handler) {
-                    handler->OnDriveUploadClicked(
-                        base::BindOnce(&HandleDriveUploadResponse,
-                                       is_aim_popup_open, web_contents));
-                  }
-                },
-                web_contents_, is_aim_popup_open));
+        const omnibox::InputType input_type = it->second;
+        if (input_type == omnibox::InputType::INPUT_TYPE_DRIVE) {
+          // Drive context input is unsupported in Loomnibox (Omnibox
+          // Everywhere) surfaces, so no-op if triggered.
+          if (IsLoomnibox()) {
+            return;
+          }
+          if (contextual_searchbox_handler) {
+            contextual_searchbox_handler->GetDriveDisclaimerStatus(
+                base::BindOnce(
+                    [](base::WeakPtr<content::WebContents> web_contents,
+                       bool is_aim_popup_open,
+                       searchbox::mojom::DriveDisclaimerStatus status) {
+                      // Abort only if the account is restricted/ineligible. If
+                      // unconsented (kNotAccepted), allow the click through so
+                      // OnDriveUploadClicked can trigger the ConsentKit
+                      // disclaimer onboarding dialog.
+                      if (status == searchbox::mojom::DriveDisclaimerStatus::
+                                        kRestricted) {
+                        return;
+                      }
+                      auto* handler =
+                          GetContextualSearchboxHandler(web_contents.get());
+                      if (handler) {
+                        handler->OnDriveUploadClicked(
+                            base::BindOnce(&OmniboxContextMenuController::
+                                               HandleDriveUploadResponse,
+                                           is_aim_popup_open, web_contents));
+                      }
+                    },
+                    web_contents_, is_aim_popup_open));
           }
           RecordContextMenuItemSelection(sliced_prefix, id);
           return;
         }
         file_selector_->OpenFileUploadDialog(
             web_contents_.get(),
-            /*is_image=*/it->second ==
+            /*is_image=*/input_type ==
                 omnibox::InputType::INPUT_TYPE_LENS_IMAGE,
             GetEditModel(),
             OmniboxPopupFileSelector::CreateImageEncodingOptions(),
@@ -1451,29 +1884,36 @@ void OmniboxContextMenuController::ExecuteCommand(int id, int event_flags) {
 
       if (auto it = tool_for_command_id_.find(id);
           it != tool_for_command_id_.end()) {
-        if (composebox_handler) {
-          composebox_handler->SetActiveToolMode(it->second);
-          composebox_handler->RecordToolSelectionAction(it->second);
-        }
-
+        const omnibox::ToolMode tool_mode = it->second;
         RecordContextMenuItemSelection(sliced_prefix, id);
-        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu);
+        SetActiveToolMode(tool_mode);
+
+        auto initial_state =
+            omnibox_everywhere::mojom::ComposeboxInitialState::New();
+        initial_state->tool = tool_mode;
+        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu,
+                   std::move(initial_state));
         return;
       }
 
       if (auto it = model_for_command_id_.find(id);
           it != model_for_command_id_.end()) {
-        if (composebox_handler) {
-          composebox_handler->SetActiveModelMode(it->second);
-          composebox_handler->RecordModelSelectionAction(it->second);
-        }
-        if (is_aim_popup_open && omnibox_popup_ui &&
-            omnibox_popup_ui->popup_aim_handler()) {
-          omnibox_popup_ui->popup_aim_handler()->FocusInput();
+        const omnibox::ModelMode model_mode = it->second;
+        RecordContextMenuItemSelection(sliced_prefix, id);
+        SetActiveModelMode(model_mode);
+        if (is_aim_popup_open) {
+          if (auto* omnibox_popup_ui = GetOmniboxPopupUI()) {
+            if (omnibox_popup_ui->popup_aim_handler()) {
+              omnibox_popup_ui->popup_aim_handler()->FocusInput();
+            }
+          }
         }
 
-        RecordContextMenuItemSelection(sliced_prefix, id);
-        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu);
+        auto initial_state =
+            omnibox_everywhere::mojom::ComposeboxInitialState::New();
+        initial_state->model = model_mode;
+        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu,
+                   std::move(initial_state));
         return;
       }
     }
@@ -1496,36 +1936,36 @@ void OmniboxContextMenuController::ExecuteCommand(int id, int event_flags) {
             OmniboxPopupFileSelector::CreateImageEncodingOptions(),
             /*was_ai_mode_open=*/is_aim_popup_open);
         break;
-      case IDC_OMNIBOX_CONTEXT_CREATE_IMAGES:
-        if (composebox_handler) {
-          composebox_handler->SetActiveToolMode(
-              omnibox::ToolMode::TOOL_MODE_IMAGE_GEN);
-          composebox_handler->RecordToolSelectionAction(
-              omnibox::ToolMode::TOOL_MODE_IMAGE_GEN);
-        }
+      case IDC_OMNIBOX_CONTEXT_CREATE_IMAGES: {
+        SetActiveToolMode(omnibox::ToolMode::TOOL_MODE_IMAGE_GEN);
         RecordContextMenuItemSelection(sliced_prefix, id);
-        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu);
+        auto initial_state =
+            omnibox_everywhere::mojom::ComposeboxInitialState::New();
+        initial_state->tool = omnibox::ToolMode::TOOL_MODE_IMAGE_GEN;
+        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu,
+                   std::move(initial_state));
         break;
-      case IDC_OMNIBOX_CONTEXT_DEEP_RESEARCH:
-        if (composebox_handler) {
-          composebox_handler->SetActiveToolMode(
-              omnibox::ToolMode::TOOL_MODE_DEEP_SEARCH);
-          composebox_handler->RecordToolSelectionAction(
-              omnibox::ToolMode::TOOL_MODE_DEEP_SEARCH);
-        }
+      }
+      case IDC_OMNIBOX_CONTEXT_DEEP_RESEARCH: {
+        SetActiveToolMode(omnibox::ToolMode::TOOL_MODE_DEEP_SEARCH);
         RecordContextMenuItemSelection(sliced_prefix, id);
-        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu);
+        auto initial_state =
+            omnibox_everywhere::mojom::ComposeboxInitialState::New();
+        initial_state->tool = omnibox::ToolMode::TOOL_MODE_DEEP_SEARCH;
+        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu,
+                   std::move(initial_state));
         break;
-      case IDC_OMNIBOX_CONTEXT_CANVAS:
-        if (composebox_handler) {
-          composebox_handler->SetActiveToolMode(
-              omnibox::ToolMode::TOOL_MODE_CANVAS);
-          composebox_handler->RecordToolSelectionAction(
-              omnibox::ToolMode::TOOL_MODE_CANVAS);
-        }
+      }
+      case IDC_OMNIBOX_CONTEXT_CANVAS: {
+        SetActiveToolMode(omnibox::ToolMode::TOOL_MODE_CANVAS);
         RecordContextMenuItemSelection(sliced_prefix, id);
-        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu);
+        auto initial_state =
+            omnibox_everywhere::mojom::ComposeboxInitialState::New();
+        initial_state->tool = omnibox::ToolMode::TOOL_MODE_CANVAS;
+        OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu,
+                   std::move(initial_state));
         break;
+      }
       default:
         NOTREACHED();
     }
@@ -1533,6 +1973,7 @@ void OmniboxContextMenuController::ExecuteCommand(int id, int event_flags) {
 }
 
 bool OmniboxContextMenuController::IsCommandIdEnabled(int command_id) const {
+  command_id = ResolveCommandId(command_id);
   // `IDC_OMNIBOX_CONTEXT_SHARED_TABS_SUBMENU` is a structural submenu item
   // that behaves as a placeholder rather than an actionable clickable command.
   // It must be handled early to bypass the standard actionable command
@@ -1541,27 +1982,31 @@ bool OmniboxContextMenuController::IsCommandIdEnabled(int command_id) const {
     CHECK(
         base::FeatureList::IsEnabled(omnibox::kContextManagementInOmnibox) &&
         base::FeatureList::IsEnabled(omnibox::kContextManagementInComposebox));
-    auto* handler = GetSearchboxHandler();
-    return !handler || !handler->IsSmartTabSharingActive();
+    if (!IsTabContextEnabled()) {
+      return false;
+    }
+    auto* contextual_searchbox_handler = GetContextualSearchboxHandler();
+    return !contextual_searchbox_handler ||
+           !contextual_searchbox_handler->IsSmartTabSharingActive();
   }
   if (command_id == IDC_OMNIBOX_CONTEXT_SMART_TAB_SHARING) {
-    return true;
+    return IsTabContextEnabled();
   }
   if (command_id == ui::MenuModel::kTitleId) {
     return false;
   }
 
-  auto* omnibox_controller = GetOmniboxController();
-  if (!omnibox_controller) {
+  // For classic in-browser omnibox popup, require a valid OmniboxController.
+  if (GetOmniboxPopupUI() && !GetOmniboxController()) {
     return false;
   }
 
-  const OmniboxPopupState page_type =
-      omnibox_controller->popup_state_manager()->popup_state();
+  const OmniboxPopupState popup_state =
+      IsAimPopupOpen() ? OmniboxPopupState::kAim : OmniboxPopupState::kClassic;
   if (base::FeatureList::IsEnabled(omnibox::kAimUsePecApi)) {
-    const std::string prefix = page_type == OmniboxPopupState::kClassic
-                                   ? kClassicContextTypeHistogramPrefix
-                                   : kAimContextTypeHistogramPrefix;
+    const std::string prefix = IsAimPopupOpen()
+                                   ? kAimContextTypeHistogramPrefix
+                                   : kClassicContextTypeHistogramPrefix;
     const std::string sliced_prefix = base::StrCat({prefix, ".Shown"});
 
     // Command ID corresponds to tabs section/submenu item.
@@ -1579,19 +2024,16 @@ bool OmniboxContextMenuController::IsCommandIdEnabled(int command_id) const {
       }
       bool tab_context_enabled = IsTabContextEnabled();
       if (tab_context_enabled) {
-          int max_num_files = input_state_.allowed_models.empty()
-                                  ? kDefaultMaxNumFiles
-                                  : input_state_.max_total_inputs;
-          std::vector<contextual_search::FileInfo> file_infos;
-          if (auto* omnibox_popup_ui = GetOmniboxPopupUI()) {
-            if (auto* session_handle =
-                    omnibox_popup_ui->GetOrCreateContextualSessionHandle()) {
-              file_infos = session_handle->GetUploadedContextFileInfos();
-            }
-          }
-          if (static_cast<int>(file_infos.size()) >= max_num_files) {
-            return false;
-          }
+        int max_num_files = input_state_.allowed_models.empty()
+                                ? kDefaultMaxNumFiles
+                                : input_state_.max_total_inputs;
+        std::vector<contextual_search::FileInfo> file_infos;
+        if (auto* session_handle = GetOrCreateContextualSessionHandle()) {
+          file_infos = session_handle->GetUploadedContextFileInfos();
+        }
+        if (static_cast<int>(file_infos.size()) >= max_num_files) {
+          return false;
+        }
 
         base::UmaHistogramEnumeration(sliced_prefix,
                                       CommandIdToEnum(command_id));
@@ -1633,21 +2075,15 @@ bool OmniboxContextMenuController::IsCommandIdEnabled(int command_id) const {
     return true;
   }
 
-  auto* browser_window_interface =
-      webui::GetBrowserWindowInterface(web_contents_.get());
-  if (!browser_window_interface) {
+  ContextualSearchboxHandler* contextual_searchbox_handler =
+      GetContextualSearchboxHandler();
+  if (!contextual_searchbox_handler ||
+      !contextual_searchbox_handler->input_state_model()) {
     return false;
   }
 
-  auto* omnibox_popup_ui = GetOmniboxPopupUI();
-  if (!omnibox_popup_ui || !omnibox_popup_ui->composebox_handler() ||
-      !omnibox_popup_ui->composebox_handler()->input_state_model()) {
-    return false;
-  }
-
-  const auto& input_state = omnibox_popup_ui->composebox_handler()
-                                ->input_state_model()
-                                ->GetInputState();
+  const auto& input_state =
+      contextual_searchbox_handler->input_state_model()->GetInputState();
   const omnibox::ToolMode aim_tool_mode = input_state.active_tool;
   // If `allowed_models` is empty, the `input_state` is uninitialized and we
   // fallback to a default limit of 10. Otherwise, we use the limit provided by
@@ -1657,13 +2093,12 @@ bool OmniboxContextMenuController::IsCommandIdEnabled(int command_id) const {
                                 : input_state.max_total_inputs;
 
   std::vector<contextual_search::FileInfo> file_infos;
-  if (auto* session_handle =
-          omnibox_popup_ui->GetOrCreateContextualSessionHandle()) {
+  if (auto* session_handle = GetOrCreateContextualSessionHandle()) {
     file_infos = session_handle->GetUploadedContextFileInfos();
   }
 
   return IsCommandIdEnabledHelper(command_id, aim_tool_mode, file_infos,
-                                  max_num_files, page_type);
+                                  max_num_files, popup_state);
 }
 
 bool OmniboxContextMenuController::IsCommandIdEnabledHelper(
@@ -1671,8 +2106,8 @@ bool OmniboxContextMenuController::IsCommandIdEnabledHelper(
     omnibox::ToolMode aim_tool_mode,
     const std::vector<contextual_search::FileInfo>& file_infos,
     int max_num_files,
-    OmniboxPopupState page_type) const {
-  const std::string prefix = page_type == OmniboxPopupState::kClassic
+    OmniboxPopupState popup_state) const {
+  const std::string prefix = popup_state == OmniboxPopupState::kClassic
                                  ? kClassicContextTypeHistogramPrefix
                                  : kAimContextTypeHistogramPrefix;
   const std::string sliced_prefix = base::StrCat({prefix, ".Shown"});
@@ -1748,6 +2183,7 @@ bool OmniboxContextMenuController::IsCommandIdEnabledHelper(
 }
 
 bool OmniboxContextMenuController::IsCommandIdVisible(int command_id) const {
+  command_id = ResolveCommandId(command_id);
   // `IDC_OMNIBOX_CONTEXT_SHARED_TABS_SUBMENU` is a structural submenu item
   // that behaves as a placeholder rather than a clickable command. It must be
   // handled early to bypass the standard actionable command verification
@@ -1758,14 +2194,11 @@ bool OmniboxContextMenuController::IsCommandIdVisible(int command_id) const {
         base::FeatureList::IsEnabled(omnibox::kContextManagementInComposebox));
     return true;
   }
+
+  Profile* profile = GetProfile();
   if (command_id == IDC_OMNIBOX_CONTEXT_SMART_TAB_SHARING) {
-    auto* browser_window_interface =
-        webui::GetBrowserWindowInterface(web_contents_.get());
-    if (!browser_window_interface) {
-      return false;
-    }
-    return contextual_tasks::ContextualTasksContextService::
-        GetIsSmartTabSharingEnabled(browser_window_interface->GetProfile());
+    return profile && contextual_tasks::ContextualTasksContextService::
+                          GetIsSmartTabSharingEnabled(profile);
   }
 
   // When using the PEC API, whether or not an item is visible is controlled
@@ -1783,12 +2216,6 @@ bool OmniboxContextMenuController::IsCommandIdVisible(int command_id) const {
       command_id == IDC_OMNIBOX_CONTEXT_ADD_FILE ||
       command_id == IDC_OMNIBOX_CONTEXT_DEEP_RESEARCH ||
       command_id == IDC_OMNIBOX_CONTEXT_CREATE_IMAGES) {
-    auto* browser_window_interface =
-        webui::GetBrowserWindowInterface(web_contents_.get());
-    if (!browser_window_interface) {
-      return false;
-    }
-    Profile* profile = browser_window_interface->GetProfile();
     if (!profile) {
       return false;
     }
@@ -1806,22 +2233,152 @@ bool OmniboxContextMenuController::IsCommandIdVisible(int command_id) const {
   return true;
 }
 
-ContextualSearchboxHandler* OmniboxContextMenuController::GetSearchboxHandler()
-    const {
-  auto* omnibox_popup_ui = GetOmniboxPopupUI();
-  if (!omnibox_popup_ui) {
+std::u16string OmniboxContextMenuController::GetTooltipForCommandId(
+    int command_id) const {
+  if (!omnibox::IsContextMenuTooltipsInComposeboxEnabled()) {
+    return std::u16string();
+  }
+  if (command_id == IDC_OMNIBOX_CONTEXT_SHARED_TABS_SUBMENU) {
+    return GetShareTabsTooltip();
+  }
+  auto tool_it = tool_for_command_id_.find(command_id);
+  if (tool_it != tool_for_command_id_.end()) {
+    auto info_it = tool_info_.find(tool_it->second);
+    if (info_it != tool_info_.end()) {
+      return info_it->second.tooltip;
+    }
+  }
+  auto model_it = model_for_command_id_.find(command_id);
+  if (model_it != model_for_command_id_.end()) {
+    auto info_it = model_info_.find(model_it->second);
+    if (info_it != model_info_.end()) {
+      return info_it->second.tooltip;
+    }
+  }
+  return std::u16string();
+}
+
+// static
+OmniboxEverywhereUI* OmniboxContextMenuController::GetOmniboxEverywhereUI(
+    content::WebContents* web_contents) {
+  if (!web_contents) {
     return nullptr;
   }
-  if (omnibox_popup_ui->composebox_handler()) {
+  content::WebUI* webui = web_contents->GetWebUI();
+  return webui && webui->GetController()
+             ? webui->GetController()->GetAs<OmniboxEverywhereUI>()
+             : nullptr;
+}
+
+bool OmniboxContextMenuController::IsLoomnibox() const {
+  return GetOmniboxEverywhereUI(web_contents_.get()) != nullptr;
+}
+
+// static
+ContextualSearchboxHandler*
+OmniboxContextMenuController::GetContextualSearchboxHandler(
+    content::WebContents* web_contents) {
+  if (auto* omnibox_popup_ui = GetOmniboxPopupUI(web_contents)) {
+    return omnibox_popup_ui->GetContextualSearchboxHandler();
+  }
+  if (auto* omnibox_everywhere_ui = GetOmniboxEverywhereUI(web_contents)) {
+    return omnibox_everywhere_ui->GetContextualSearchboxHandler();
+  }
+  return nullptr;
+}
+
+// static
+contextual_search::ContextualSearchSessionHandle*
+OmniboxContextMenuController::GetOrCreateContextualSessionHandle(
+    content::WebContents* web_contents) {
+  if (!web_contents) {
+    return nullptr;
+  }
+  if (auto* omnibox_popup_ui = GetOmniboxPopupUI(web_contents)) {
+    return omnibox_popup_ui->GetOrCreateContextualSessionHandle();
+  }
+  if (auto* omnibox_everywhere_ui = GetOmniboxEverywhereUI(web_contents)) {
+    return omnibox_everywhere_ui->GetOrCreateContextualSessionHandle();
+  }
+  return nullptr;
+}
+
+contextual_search::ContextualSearchSessionHandle*
+OmniboxContextMenuController::GetOrCreateContextualSessionHandle() const {
+  return GetOrCreateContextualSessionHandle(web_contents_.get());
+}
+
+ContextualSearchboxHandler*
+OmniboxContextMenuController::GetContextualSearchboxHandler() const {
+  if (contextual_searchbox_handler_) {
+    return contextual_searchbox_handler_;
+  }
+  return GetContextualSearchboxHandler(web_contents_.get());
+}
+
+ContextualSearchboxHandler* OmniboxContextMenuController::GetComposeboxHandler()
+    const {
+  if (auto* omnibox_popup_ui = GetOmniboxPopupUI(web_contents_.get())) {
     return omnibox_popup_ui->composebox_handler();
   }
-  return omnibox_popup_ui->omnibox_handler();
+  if (auto* omnibox_everywhere_ui =
+          GetOmniboxEverywhereUI(web_contents_.get())) {
+    return omnibox_everywhere_ui->composebox_handler();
+  }
+  return nullptr;
+}
+
+ContextualSearchboxHandler* OmniboxContextMenuController::GetOmniboxHandler()
+    const {
+  if (auto* omnibox_popup_ui = GetOmniboxPopupUI(web_contents_.get())) {
+    return omnibox_popup_ui->omnibox_handler();
+  }
+  if (auto* omnibox_everywhere_ui =
+          GetOmniboxEverywhereUI(web_contents_.get())) {
+    return omnibox_everywhere_ui->omnibox_handler();
+  }
+  return nullptr;
+}
+
+bool OmniboxContextMenuController::IsAimPopupOpen() const {
+  auto* omnibox_controller = GetOmniboxController();
+  return omnibox_controller && omnibox_controller->popup_state_manager() &&
+         omnibox_controller->popup_state_manager()->popup_state() ==
+             OmniboxPopupState::kAim;
+}
+
+Profile* OmniboxContextMenuController::GetProfile() const {
+  if (web_contents_) {
+    // When embedded in a browser window, retrieve the Profile via
+    // BrowserWindowInterface.
+    if (auto* bwi = webui::GetBrowserWindowInterface(web_contents_.get())) {
+      if (auto* profile = bwi->GetProfile()) {
+        return profile;
+      }
+    }
+    // Standalone WebUI surfaces such as Omnibox Everywhere run in an
+    // independent desktop-level widget without an associated browser window,
+    // so fall back to the WebContents context.
+    return Profile::FromBrowserContext(web_contents_->GetBrowserContext());
+  }
+  return nullptr;
 }
 
 void OmniboxContextMenuController::OpenAiMode(
-    OmniboxEditModel::AimActivation activation) {
+    OmniboxEditModel::AimActivation activation,
+    omnibox_everywhere::mojom::ComposeboxInitialStatePtr initial_state) {
   if (OmniboxEditModel* edit_model = GetEditModel()) {
+    // Standard Omnibox retrieves tool/model state directly from the
+    // contextual_searchbox_handler. initial_state is only required for
+    // Omnibox Everywhere's standalone WebUI widget.
     edit_model->OpenAiMode(activation);
+  } else if (web_contents_) {
+    // Omnibox Everywhere does not utilize OmniboxEditModel; expand the WebUI
+    // composebox view directly upon context item / tool selection.
+    if (auto* omnibox_everywhere_ui =
+            GetOmniboxEverywhereUI(web_contents_.get())) {
+      omnibox_everywhere_ui->OpenComposebox(std::move(initial_state));
+    }
   } else {
     DLOG(WARNING) << "OpenAiMode called but no edit model present.";
   }

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
+
 #include <optional>
 
 #include "base/feature_list.h"
@@ -11,15 +13,16 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/accelerator_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/toolbar/bookmark_sub_menu_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
+#include "chrome/browser/ui/views/toolbar/test_support/app_menu_test_accessor.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/browser/ui/views/toolbar/webui_test_utils.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
 #include "chrome/grit/generated_resources.h"
@@ -37,6 +40,7 @@
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/interaction/interaction_sequence.h"
+#include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/interaction/element_tracker_views.h"
 
 using ::testing::_;
@@ -53,7 +57,6 @@ namespace {
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kPrimaryTabPageElementId);
 
 BASE_FEATURE(kMenuPromoTestFeature,
-             "MenuPromoTestFeature",
              base::FEATURE_ENABLED_BY_DEFAULT);
 }  // namespace
 
@@ -68,6 +71,7 @@ class BrowserAppMenuButtonInteractiveTest : public InteractiveFeaturePromoTest {
 
   void SetUpOnMainThread() override {
     InteractiveFeaturePromoTest::SetUpOnMainThread();
+    WaitForInitialWebUIToolbar(browser());
 
     // Register test features.
     registry()->RegisterFeature(std::move(
@@ -79,28 +83,8 @@ class BrowserAppMenuButtonInteractiveTest : public InteractiveFeaturePromoTest {
                 BookmarkSubMenuModel::kShowBookmarkSidePanelItem)));
   }
 
-  auto CheckAlertStatus(ui::ElementIdentifier element_id, bool is_alerted) {
-    return Check([this, element_id, is_alerted]() mutable {
-      auto* button = views::AsViewClass<BrowserAppMenuButton>(
-          views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
-              kToolbarAppMenuButtonElementId,
-              BrowserView::GetBrowserViewForBrowser(browser())
-                  ->GetElementContext()));
-      auto* model = button->app_menu_model();
-      EXPECT_EQ(model->IsElementIdAlerted(element_id), is_alerted);
-      return true;
-    });
-  }
-
   auto CloseMenu() {
-    return Do([this]() mutable {
-      auto* button = views::AsViewClass<BrowserAppMenuButton>(
-          views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
-              kToolbarAppMenuButtonElementId,
-              BrowserView::GetBrowserViewForBrowser(browser())
-                  ->GetElementContext()));
-      button->CloseMenu();
-    });
+    return Do([this]() mutable { AppMenuTestAccessor(browser()).CloseMenu(); });
   }
 
  private:
@@ -126,7 +110,8 @@ IN_PROC_BROWSER_TEST_F(BrowserAppMenuButtonInteractiveTest,
       SelectMenuItem(AppMenuModel::kBookmarksMenuItem),
       // Verify that the promo is still active and the item is highlighted.
       CheckPromoActive(kMenuPromoTestFeature, true),
-      CheckAlertStatus(BookmarkSubMenuModel::kShowBookmarkSidePanelItem, true),
+      CheckViewProperty(BookmarkSubMenuModel::kShowBookmarkSidePanelItem,
+                        &views::MenuItemView::is_alerted, true),
       CloseMenu(),
       // Open the menu again, this time without the IPH.
       PressButton(kToolbarAppMenuButtonElementId),
@@ -134,11 +119,15 @@ IN_PROC_BROWSER_TEST_F(BrowserAppMenuButtonInteractiveTest,
       // Verify that the promo is not still active and the item is not
       // highlighted.
       CheckPromoActive(kMenuPromoTestFeature, false),
-      CheckAlertStatus(BookmarkSubMenuModel::kShowBookmarkSidePanelItem,
-                       false));
+      CheckViewProperty(BookmarkSubMenuModel::kShowBookmarkSidePanelItem,
+                        &views::MenuItemView::is_alerted, false));
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserAppMenuButtonInteractiveTest, AnimationDisabled) {
+  if (features::IsWebUIAppMenuButtonEnabled()) {
+    GTEST_SKIP() << "GetAnimateOnStateChange() is specific to the Views "
+                    "BrowserAppMenuButton.";
+  }
   RunTestSequence(CheckView(kToolbarAppMenuButtonElementId,
                             [](BrowserAppMenuButton* button) {
                               return !button->GetAnimateOnStateChange();

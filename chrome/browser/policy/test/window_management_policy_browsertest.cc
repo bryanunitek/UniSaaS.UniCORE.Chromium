@@ -6,7 +6,6 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -73,7 +72,7 @@ IN_PROC_BROWSER_TEST_P(PolicyTestWindowManagement, DefaultSetting) {
   auto* tab = browser()->tab_strip_model()->GetActiveWebContents();
 
   HostContentSettingsMap* host_content_settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   EXPECT_EQ(CONTENT_SETTING_ASK,
             host_content_settings_map->GetDefaultContentSetting(
                 ContentSettingsType::WINDOW_MANAGEMENT, nullptr));
@@ -124,7 +123,7 @@ IN_PROC_BROWSER_TEST_P(PolicyTestWindowManagement, AllowedForUrlsSettings) {
   UpdateProviderPolicy(policies);
 
   HostContentSettingsMap* host_content_settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   EXPECT_EQ(CONTENT_SETTING_ASK,
             host_content_settings_map->GetDefaultContentSetting(
                 ContentSettingsType::WINDOW_MANAGEMENT, nullptr));
@@ -149,7 +148,7 @@ IN_PROC_BROWSER_TEST_P(PolicyTestWindowManagement, BlockedForUrlsSettings) {
   UpdateProviderPolicy(policies);
 
   HostContentSettingsMap* host_content_settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   EXPECT_EQ(CONTENT_SETTING_ASK,
             host_content_settings_map->GetDefaultContentSetting(
                 ContentSettingsType::WINDOW_MANAGEMENT, nullptr));

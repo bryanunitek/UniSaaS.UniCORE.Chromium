@@ -134,7 +134,19 @@ inline constexpr char kPinnedExtensions[] = "extensions.pinned_extensions";
 inline constexpr char kExtensionInstallTypeBlocklist[] =
     "extensions.extension_install_type_blocklist";
 
+// Boolean pref indicating whether policy-installed extensions that override
+// default search or New Tab Page settings are allowed in low-trust
+// environments.
+inline constexpr char
+    kExtensionForceInstallWithSearchOrNewTabOverridesEnabled[] =
+        "extensions.force_install_with_search_or_new_tab_overrides_enabled";
+
 // Properties in kExtensions dictionaries --------------------------------------
+
+// The time at which the extension was installed, used to record the time to
+// first extension action click metric. Only set on initial installation.
+inline constexpr char kPrefInstallTimeForActionMetric[] =
+    "install_time_for_action_metric";
 
 // Extension-controlled preferences.
 inline constexpr char kPrefPreferences[] = "preferences";
@@ -158,6 +170,11 @@ inline constexpr char kPrefIncognitoContentSettings[] =
 inline constexpr char kGlobalShortcutsUuid[] =
     "extensions.global_shortcuts.uuid";
 
+// A local state dictionary of the global shortcuts that have been offered to
+// org.freedesktop.portal.GlobalShortcuts, for all profiles.
+inline constexpr char kGlobalShortcutsPortalState[] =
+    "extensions.global_shortcuts.portal_state";
+
 // Boolean that specifies whether ExtensionInstallCloudPolicyChecks is enabled.
 // This pref is used by both the profile and the browser, it can be found in the
 // local state as well as the profile prefs.
@@ -174,6 +191,11 @@ inline constexpr char kEnterprisePromotionExpirationTime[] =
 // Web Store has been dismissed by the user by clicking the banner button.
 inline constexpr char kHasDismissedEnterprisePromotion[] =
     "extensions.has_dismissed_enterprise_promotion";
+
+// A pref that stores whether the extension was pinned to the toolbar by default
+// upon installation. This excludes extensions that are pinned by default due to
+// policies.
+inline constexpr char kWasPinnedByDefault[] = "was_pinned_by_default";
 
 }  // namespace pref_names
 }  // namespace extensions

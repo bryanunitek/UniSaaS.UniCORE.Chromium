@@ -14,6 +14,7 @@ load("//project.star", "settings")
 def chrome_internal_verifier(
         *,
         builder,
+        bucket = "try",
         cq_settings = None,
         **kwargs):
     """Registers an internal Chrome trybot in Chromium's CQ config
@@ -23,16 +24,22 @@ def chrome_internal_verifier(
       cq_settings - A struct containing the details of the tryjob verifier for the
         builder, obtained by calling the `try.cq_settings()` function.
     """
+    builder_full_path = "{}:{}/{}".format(
+        settings.chrome_project,
+        bucket,
+        builder,
+    )
     if cq_settings != None:
         location_filters = cq_settings.location_filters
         if cq_settings.add_default_filters:
             location_filters = (location_filters or []) + default_location_filters()
 
         branches.cq_tryjob_verifier(
-            builder = "{}:try/{}".format(settings.chrome_project, builder),
+            builder = builder_full_path,
             cancel_stale = cq_settings.cancel_stale,
             cq_group = "cq",
             disable_reuse = cq_settings.disable_reuse,
+            reuse_max_commit_distance = cq_settings.reuse_max_commit_distance,
             experiment_percentage = cq_settings.experiment_percentage,
             location_filters = location_filters,
             mode_allowlist = cq_settings.custom_cq_run_modes,
@@ -44,7 +51,7 @@ def chrome_internal_verifier(
         )
     else:
         branches.cq_tryjob_verifier(
-            builder = "{}:try/{}".format(settings.chrome_project, builder),
+            builder = builder_full_path,
             cq_group = "cq",
             includable_only = True,
             owner_whitelist = default_owner_whitelist_group_for_cq_bots(settings.chrome_project),
@@ -85,6 +92,14 @@ chrome_internal_verifier(
 )
 
 ### Optional builders ###
+
+chrome_internal_verifier(
+    builder = "ai_wpt-mac-arm64",
+)
+
+chrome_internal_verifier(
+    builder = "ai_wpt-mac-x64",
+)
 
 chrome_internal_verifier(
     # TODO(https://crbug.com/400712231): Turn on branches for this bot.
@@ -174,6 +189,7 @@ chrome_internal_verifier(
 )
 
 chrome_internal_verifier(
+    branch_selector = branches.selector.CROS_LTS_BRANCHES,
     builder = "chromeos-betty-chrome-gtest-and-tast",
 )
 
@@ -226,7 +242,8 @@ chrome_internal_verifier(
     builder = "cronet-arm64-gn2bp-debug",
     cq_settings = try_.cq_settings(
         location_filters = [
-            "components/cronet/gn2bp/.+",
+            "components/cronet/.+",
+            "third_party/protobuf/.+",
         ],
     ),
     # The limited traffic to the location_filters specified below makes this
@@ -292,6 +309,10 @@ chrome_internal_verifier(
 )
 
 chrome_internal_verifier(
+    builder = "fuchsia-starview-qemu-tests",
+)
+
+chrome_internal_verifier(
     builder = "fuchsia-webgl-astro",
 )
 
@@ -330,6 +351,10 @@ chrome_internal_verifier(
 
 chrome_internal_verifier(
     builder = "linux-autofill-captured-sites-rel",
+)
+
+chrome_internal_verifier(
+    builder = "linux-bluebird-rel",
 )
 
 chrome_internal_verifier(
@@ -418,36 +443,37 @@ chrome_internal_verifier(
     builder = "optimization_guide-ios-simulator",
 )
 
+optimization_guide_cq_settings = try_.cq_settings(
+    location_filters = [
+        "chrome/browser/ai/.+",
+        "components/on_device_translation/.+",
+        "components/optimization_guide/.+",
+        "services/on_device_model/.+",
+        "testing/buildbot/internal.optimization_guide.json",
+        "third_party/blink/web_tests/external/wpt/ai/.+",
+        "third_party/blink/web_tests/AIExpectations.*",
+    ],
+)
+optimization_guide_owner_whitelist = [
+    "google/optimization-guide-try-opt-in@google.com",
+]
+
 chrome_internal_verifier(
     builder = "optimization_guide-linux",
-    cq_settings = try_.cq_settings(
-        location_filters = [
-            "chrome/browser/ai/.+",
-            "components/optimization_guide/.+",
-            "services/on_device_model/.+",
-        ],
-    ),
-    owner_whitelist = [
-        "google/optimization-guide-try-opt-in@google.com",
-    ],
+    cq_settings = optimization_guide_cq_settings,
+    owner_whitelist = optimization_guide_owner_whitelist,
 )
 
 chrome_internal_verifier(
     builder = "optimization_guide-mac-arm64",
-    cq_settings = try_.cq_settings(
-        location_filters = [
-            "chrome/browser/ai/.+",
-            "components/optimization_guide/.+",
-            "services/on_device_model/.+",
-        ],
-    ),
-    owner_whitelist = [
-        "google/optimization-guide-try-opt-in@google.com",
-    ],
+    cq_settings = optimization_guide_cq_settings,
+    owner_whitelist = optimization_guide_owner_whitelist,
 )
 
 chrome_internal_verifier(
     builder = "optimization_guide-mac-x64",
+    cq_settings = optimization_guide_cq_settings,
+    owner_whitelist = optimization_guide_owner_whitelist,
 )
 
 chrome_internal_verifier(
@@ -456,16 +482,14 @@ chrome_internal_verifier(
 
 chrome_internal_verifier(
     builder = "optimization_guide-win64",
-    cq_settings = try_.cq_settings(
-        location_filters = [
-            "chrome/browser/ai/.+",
-            "components/optimization_guide/.+",
-            "services/on_device_model/.+",
-        ],
-    ),
-    owner_whitelist = [
-        "google/optimization-guide-try-opt-in@google.com",
-    ],
+    cq_settings = optimization_guide_cq_settings,
+    owner_whitelist = optimization_guide_owner_whitelist,
+)
+
+chrome_internal_verifier(
+    builder = "optimization_guide-win-arm64",
+    cq_settings = optimization_guide_cq_settings,
+    owner_whitelist = optimization_guide_owner_whitelist,
 )
 
 chrome_internal_verifier(
@@ -474,6 +498,16 @@ chrome_internal_verifier(
 
 chrome_internal_verifier(
     builder = "test-tablet",
+)
+
+chrome_internal_verifier(
+    bucket = "try.security",
+    builder = "vuln-scan-dispatcher",
+    cq_settings = try_.cq_settings(
+        experiment_percentage = 25,
+        on_default_cq = True,
+    ),
+    owner_whitelist = ["googlers"],
 )
 
 chrome_internal_verifier(

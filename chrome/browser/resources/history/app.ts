@@ -26,12 +26,11 @@ import '/strings.m.js';
 import {ColorChangeUpdater, COLORS_CSS_SELECTOR} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import {HelpBubbleMixinLit} from 'chrome://resources/cr_components/help_bubble/help_bubble_mixin_lit.js';
 import {HistoryResultType} from 'chrome://resources/cr_components/history/constants.js';
-import type {ForeignSessionPageCallbackRouter} from 'chrome://resources/cr_components/history/foreign_sessions.mojom-webui.js';
+import type {ForeignSession, ForeignSessionPageCallbackRouter} from 'chrome://resources/cr_components/history/foreign_sessions.mojom-webui.js';
 import {browserProxyFactory as foreignSessionBrowserProxyFactory} from 'chrome://resources/cr_components/history/foreign_sessions.mojom-webui.js';
-import type {PageCallbackRouter, QueryResult, QueryState} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
+import type {Device, PageCallbackRouter, QueryResult, QueryState, TimePeriodOption} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
 import type {Suggestion} from 'chrome://resources/cr_components/history_embeddings/filter_chips.js';
 import type {HistoryEmbeddingsMoreActionsClickEvent} from 'chrome://resources/cr_components/history_embeddings/history_embeddings.js';
-import {browserProxyFactory as historyEmbeddingsBrowserProxyFactory} from 'chrome://resources/cr_components/history_embeddings/history_embeddings.mojom-webui.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import type {CrDrawerElement} from 'chrome://resources/cr_elements/cr_drawer/cr_drawer.js';
 import type {CrLazyRenderLitElement} from 'chrome://resources/cr_elements/cr_lazy_render/cr_lazy_render_lit.js';
@@ -44,12 +43,13 @@ import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {hasKeyModifiers} from 'chrome://resources/js/util.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import {browserProxyFactory as userEducationProxyFactory} from 'chrome://resources/mojo/components/user_education/webui/user_education.mojom-webui.js';
 
 import {getCss} from './app.css.js';
 import {getHtml} from './app.html.js';
 import {BrowserProxyImpl} from './browser_proxy.js';
+import type {HistoryIdentityState} from './browser_proxy.js';
 import {HistoryPageViewHistogram, HistorySignInState, SyncState} from './constants.js';
-import type {ForeignSession, HistoryIdentityState} from './externs.js';
 import type {HistoryListElement} from './history_list.js';
 import type {HistoryToolbarElement} from './history_toolbar.js';
 import {convertDateToQueryValue} from './query_manager.js';
@@ -176,10 +176,14 @@ export class HistoryAppElement extends HistoryAppElementBase {
       nonEmbeddingsResultClicked_: {type: Boolean},
       numCharsTypedInSearch_: {type: Number},
       historyEmbeddingsDisclaimerLinkClicked_: {type: Boolean},
+      devices_: {type: Array},
       includeActorVisits_: {type: Boolean},
       includeUserVisits_: {type: Boolean},
-      isBrowsingHistoryActorIntegrationM3Enabled_: {type: Boolean},
+      clientIds_: {type: Array},
       isGlicWebActuationAvailable_: {type: Boolean},
+      isBrowsingHistoryFilterByDeviceEnabled_: {type: Boolean},
+      isBrowsingHistoryFilterByTimePeriodEnabled_: {type: Boolean},
+      timePeriodOptions_: {type: Array},
     };
   }
 
@@ -223,14 +227,21 @@ export class HistoryAppElement extends HistoryAppElementBase {
     after: null,
     includeUserVisits: true,
     includeActorVisits: true,
+    clientIds: [],
   };
   protected accessor selectedPage_: string = Page.HISTORY;
   protected accessor selectedTab_: number =
       loadTimeData.getInteger('lastSelectedTab') || 0;
   protected accessor showTabs_: boolean = false;
   protected accessor showHistoryClusters_: boolean = false;
-  protected accessor tabsIcons_: string[] =
-      ['images/list.svg', 'chrome://resources/images/icon_journeys.svg'];
+  protected accessor tabsIcons_: string[] = [
+    (document.documentElement.hasAttribute('webui-rounded-icons') ?
+         'images/list.svg' :
+         'images/list_old.svg'),
+    (document.documentElement.hasAttribute('webui-rounded-icons') ?
+         'chrome://resources/images/icon_journeys.svg' :
+         'chrome://resources/images/icon_journeys_old.svg'),
+  ];
   protected accessor tabsNames_: string[] = [
     loadTimeData.getString('historyListTabLabel'),
     loadTimeData.getString('historyClustersTabLabel'),
@@ -242,12 +253,17 @@ export class HistoryAppElement extends HistoryAppElementBase {
   protected accessor tabContentScrollOffset_: number = 0;
   protected accessor numCharsTypedInSearch_: number = 0;
   protected accessor nonEmbeddingsResultClicked_: boolean = false;
+  protected accessor devices_: Device[] = [];
   protected accessor includeActorVisits_: boolean = true;
   protected accessor includeUserVisits_: boolean = true;
-  protected accessor isBrowsingHistoryActorIntegrationM3Enabled_: boolean =
-      loadTimeData.getBoolean('isBrowsingHistoryActorIntegrationM3Enabled');
+  protected accessor clientIds_: string[] = [];
   protected accessor isGlicWebActuationAvailable_: boolean =
       loadTimeData.getBoolean('isGlicWebActuationAvailable');
+  protected accessor isBrowsingHistoryFilterByDeviceEnabled_: boolean =
+      loadTimeData.getBoolean('isBrowsingHistoryFilterByDeviceEnabled');
+  protected accessor isBrowsingHistoryFilterByTimePeriodEnabled_: boolean =
+      loadTimeData.getBoolean('isBrowsingHistoryFilterByTimePeriodEnabled');
+  protected accessor timePeriodOptions_: TimePeriodOption[] = [];
 
   private callbackRouter_: PageCallbackRouter;
   private foreignSessionCallbackRouter_: ForeignSessionPageCallbackRouter;
@@ -270,12 +286,19 @@ export class HistoryAppElement extends HistoryAppElementBase {
   override connectedCallback() {
     super.connectedCallback();
 
+    // <if expr="is_android">
+    this.addThemedColors_();
+    ColorChangeUpdater.forDocument().start();
+    // </if>
+
+    // <if expr="not is_android">
     const enableWebuiRefresh2026 =
         loadTimeData.getString('webuiRefresh2026') !== '';
     if (enableWebuiRefresh2026) {
       this.addThemedColors_();
       ColorChangeUpdater.forDocument().start();
     }
+    // </if>
 
     this.eventTracker_.add(document, 'click', onDocumentClick);
     this.eventTracker_.add(document, 'auxclick', onDocumentClick);
@@ -301,6 +324,13 @@ export class HistoryAppElement extends HistoryAppElementBase {
     BrowserProxyImpl.getInstance().getInitialIdentityState().then(
         (identityState: HistoryIdentityState) =>
             this.onIdentityStateChanged_(identityState));
+    BrowserProxyImpl.getInstance().getSyncedDevicesForFiltering().then(
+        ({devices}) => {
+          this.devices_ = devices;
+        });
+    BrowserProxyImpl.getInstance().getTimePeriodOptions().then(({options}) => {
+      this.timePeriodOptions_ = options;
+    });
 
     const mediaQuery = window.matchMedia('(max-width: 1023px)');
     this.hasDrawer_ = mediaQuery.matches;
@@ -399,8 +429,8 @@ export class HistoryAppElement extends HistoryAppElementBase {
       //    to show the help bubble comes immediately after registering the
       //    anchor.
       setTimeout(() => {
-        historyEmbeddingsBrowserProxyFactory.getInstance()
-            .handler.maybeShowFeaturePromo();
+        userEducationProxyFactory.getInstance().handler.maybeShowFeaturePromo(
+            {featureName: 'IPH_HistorySearch', key: null});
       }, 1000);
     }
   }
@@ -466,6 +496,27 @@ export class HistoryAppElement extends HistoryAppElementBase {
       searchField.getSearchInput().focus();
     }
 
+    if (loadTimeData.getBoolean('isCriticalActionsEnabled') &&
+        this.showFilterChips_()) {
+      const filterChipsEl =
+          this.shadowRoot.querySelector<CrLitElement>('#historyFilterChips');
+      if (filterChipsEl) {
+        filterChipsEl.updateComplete.then(() => {
+          const chipEl = filterChipsEl.shadowRoot.querySelector<HTMLElement>(
+              '#actorVisitsChip');
+          if (chipEl) {
+            this.registerHelpBubble(
+                'HistoryUI::kHistoryGeminiFilterChipElementId', chipEl);
+            setTimeout(() => {
+              userEducationProxyFactory.getInstance()
+                  .handler.maybeShowFeaturePromo(
+                      {featureName: 'IPH_CriticalActionFilterChip', key: null});
+            }, 1000);
+          }
+        });
+      }
+    }
+
     requestIdleCallback(function() {
       document.fonts.load('bold 12px Roboto');
     });
@@ -511,6 +562,13 @@ export class HistoryAppElement extends HistoryAppElementBase {
     if (document.body.classList.contains('loading')) {
       document.body.classList.remove('loading');
       this.onFirstRender_();
+      if (document.visibilityState === 'visible') {
+        requestAnimationFrame(() => {
+          BrowserProxyImpl.getInstance().recordTime(
+              'HistoryPage.TimeToFirstVisibleContent',
+              Math.round(performance.now()));
+        });
+      }
     }
   }
 
@@ -573,26 +631,26 @@ export class HistoryAppElement extends HistoryAppElementBase {
         HistoryResultType.END);
 
     // MetricsHandler uses a 100 bucket limit, so the max index is 99.
-    const maxIndex = 99;
+    const boundary = 100;
     const clampedIndex = Math.min(e.detail.index, 99);
     browserProxy.recordHistogram(
-        'History.SearchResultClicked.Index', clampedIndex, maxIndex);
+        'History.SearchResultClicked.Index', clampedIndex, boundary);
 
     switch (e.detail.resultType) {
       case HistoryResultType.TRADITIONAL:
         browserProxy.recordHistogram(
             'History.SearchResultClicked.Index.Traditional', clampedIndex,
-            maxIndex);
+            boundary);
         break;
       case HistoryResultType.GROUPED:
         browserProxy.recordHistogram(
             'History.SearchResultClicked.Index.Grouped', clampedIndex,
-            maxIndex);
+            boundary);
         break;
       case HistoryResultType.EMBEDDINGS:
         browserProxy.recordHistogram(
             'History.SearchResultClicked.Index.Embeddings', clampedIndex,
-            maxIndex);
+            boundary);
         break;
       case HistoryResultType.END:
         break;
@@ -944,21 +1002,41 @@ export class HistoryAppElement extends HistoryAppElementBase {
     this.historyClustersVisible_ = e.detail.value;
   }
 
-  protected onFilterChanged_(
-      e: CustomEvent<{userVisits: boolean, actorVisits: boolean}>) {
+  protected onFilterChanged_(e: CustomEvent<{
+    userVisits: boolean,
+    actorVisits: boolean,
+    clientIds: string[],
+  }>) {
     this.includeUserVisits_ = e.detail.userVisits;
     this.includeActorVisits_ = e.detail.actorVisits;
+    this.clientIds_ = e.detail.clientIds;
 
     this.fire('change-query', {
       search: this.queryState_.searchTerm,
       includeActorVisits: this.includeActorVisits_,
       includeUserVisits: this.includeUserVisits_,
+      clientIds: this.clientIds_,
     });
   }
 
+  protected showActorFilter_(): boolean {
+    return this.isGlicWebActuationAvailable_;
+  }
+
+  protected showDeviceFilter_(): boolean {
+    return this.isBrowsingHistoryFilterByDeviceEnabled_ &&
+        this.devices_.length > 1;
+  }
+
+  protected showTimePeriodFilter_(): boolean {
+    return this.isBrowsingHistoryFilterByTimePeriodEnabled_ &&
+        this.timePeriodOptions_.length > 0;
+  }
+
   protected showFilterChips_(): boolean {
-    return this.isBrowsingHistoryActorIntegrationM3Enabled_ &&
-        this.isGlicWebActuationAvailable_ && !this.getShowResultsByGroup_();
+    return (this.showActorFilter_() || this.showDeviceFilter_() ||
+            this.showTimePeriodFilter_()) &&
+        !this.getShowResultsByGroup_();
   }
 
   // TODO(crub.com/509908129): Add static stylesheet in history.html

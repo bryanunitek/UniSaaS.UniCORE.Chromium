@@ -15,6 +15,7 @@
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permissions_client.h"
 #include "content/public/browser/browser_context.h"
+#include "device/base/public/cpp/string_util.h"
 #include "device/bluetooth/bluetooth_device.h"
 #include "device/bluetooth/public/cpp/bluetooth_uuid.h"
 #include "third_party/blink/public/mojom/bluetooth/web_bluetooth.mojom.h"
@@ -307,9 +308,30 @@ std::u16string BluetoothChooserContext::GetObjectDisplayName(
   return base::UTF8ToUTF16(*object.FindString(kDeviceNameKey));
 }
 
+std::u16string BluetoothChooserContext::GetObjectDisplayNameForUI(
+    const base::DictValue& object) {
+  return device::ContainStringForDisplay(GetObjectDisplayName(object));
+}
+
 void BluetoothChooserContext::Shutdown() {
-  FlushScheduledSaveSettingsCalls();
   ObjectPermissionContextBase::Shutdown();
+  FlushScheduledSaveSettingsCalls();
+}
+
+std::vector<url::Origin> BluetoothChooserContext::RevokeEphemeralPermissions(
+    const ContentSettingsPattern& primary_pattern,
+    bool unconditional) {
+  std::vector<url::Origin> revoked_origins;
+  std::erase_if(scanned_devices_, [&](const auto& entry) {
+    const auto& [origin, address_to_id_map] = entry;
+    if (primary_pattern.Matches(origin.GetURL()) &&
+        (unconditional || !CanRequestObjectPermission(origin))) {
+      revoked_origins.push_back(origin);
+      return true;
+    }
+    return false;
+  });
+  return revoked_origins;
 }
 
 bool BluetoothChooserContext::IsValidDict(const base::DictValue& dict) {

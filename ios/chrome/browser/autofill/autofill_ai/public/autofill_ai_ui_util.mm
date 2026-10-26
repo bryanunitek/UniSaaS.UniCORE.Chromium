@@ -9,6 +9,8 @@
 #import "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
 #import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/strings/grit/components_strings.h"
+#import "ios/chrome/browser/autofill/model/message/autofill_legal_message_line.h"
+#import "ios/chrome/browser/net/model/crurl.h"
 #import "ios/chrome/browser/shared/ui/buildflags.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
@@ -19,6 +21,11 @@
 namespace {
 constexpr CGFloat kWalletLogoHeight = 26.0;
 constexpr CGFloat kWalletLogoSpacing = 6.0;
+
+// Delimiters marking a tappable link in a string. Must match the tags parsed
+// by `ParseStringWithLinks()` in ios/chrome/common/string_util.h.
+NSString* const kBeginLinkTag = @"BEGIN_LINK";
+NSString* const kEndLinkTag = @"END_LINK";
 }  // namespace
 
 namespace autofill {
@@ -27,57 +34,41 @@ UIImage* DefaultIconForAutofillAiEntityType(EntityTypeName entity_type_name,
                                             bool is_personal_context,
                                             CGFloat symbol_point_size,
                                             UIColor* tint_color) {
-  // TODO(crbug.com/523320919): Return different icons when is_personal_context
-  // is true.
-  // Identify if the symbol is custom (always true for personal context
-  // entities).
-  bool is_custom_symbol = is_personal_context;
-  NSString* symbol_name = nil;
+  Symbol symbol;
   UIColor* color = tint_color ?: [UIColor colorNamed:kTextPrimaryColor];
 
   switch (entity_type_name) {
     case EntityTypeName::kPassport:
-      symbol_name =
-          is_personal_context ? kPassportSparkSymbol : kPassportSymbol;
-      // Passport symbols are custom symbols.
-      is_custom_symbol = YES;
+      symbol = is_personal_context ? SymbolPassportSpark : SymbolPassport;
       break;
     case EntityTypeName::kDriversLicense:
     case EntityTypeName::kNationalIdCard:
-      symbol_name = is_personal_context ? kPersonTextRectangleSparkSymbol
-                                        : kPersonTextRectangleSymbol;
+      symbol = is_personal_context ? SymbolPersonTextRectangleSpark
+                                   : SymbolPersonTextRectangle;
       break;
     case EntityTypeName::kVehicle:
-      symbol_name = is_personal_context ? kCarSparkSymbol : kCarSymbol;
+      symbol = is_personal_context ? SymbolCarSpark : SymbolCar;
       break;
     case EntityTypeName::kKnownTravelerNumber:
     case EntityTypeName::kRedressNumber:
-      symbol_name = is_personal_context ? kPersonTextRectangle2SparkSymbol
-                                        : kPersonTextRectangle2Symbol;
-      // Known travel numbers and redress number symbols are custom symbols.
-      is_custom_symbol = YES;
+      symbol = is_personal_context ? SymbolPersonTextRectangle2Spark
+                                   : SymbolPersonTextRectangle2;
       break;
     case EntityTypeName::kFlightReservation:
-      symbol_name = kAirplaneUpSymbol;
-      // The flight reservation symbol is a custom symbol.
-      is_custom_symbol = YES;
+      symbol = is_personal_context ? SymbolAirplaneUpSpark : SymbolAirplaneUp;
       break;
     case EntityTypeName::kShipment:
-      symbol_name =
-          is_personal_context ? kTruckBoxSparkSymbol : kTruckBoxSymbol;
+      symbol = is_personal_context ? SymbolTruckBoxSpark : SymbolTruckBox;
       break;
     case EntityTypeName::kOrder:
-      symbol_name = is_personal_context ? kBagSparkSymbol : kBagSymbol;
+      symbol = is_personal_context ? SymbolBagSpark : SymbolBag;
       break;
     default:
       return nil;
   }
 
-  return SymbolWithPalette(
-      is_custom_symbol
-          ? CustomSymbolWithPointSize(symbol_name, symbol_point_size)
-          : DefaultSymbolWithPointSize(symbol_name, symbol_point_size),
-      @[ color ]);
+  return SymbolWithPalette(SymbolWithPointSize(symbol, symbol_point_size),
+                           @[ color ]);
 }
 
 NSString* DisplayNameForAutofillAiAttributeType(AttributeType attribute_type) {
@@ -189,13 +180,54 @@ NSString* GetDialogTitleForEditEntity(EntityTypeName entity_type_name) {
   }
 }
 
+NSString* WrapInLinkTags(NSString* text) {
+  return
+      [NSString stringWithFormat:@"%@%@%@", kBeginLinkTag, text, kEndLinkTag];
+}
+
+NSString* TextForDisclosureLegalMessageAppendingURLsTo(
+    AutofillLegalMessageLine* legal_message,
+    NSMutableArray<CrURL*>* urls) {
+  NSString* lineText = legal_message.messageText;
+  NSArray<NSValue*>* linkRanges = legal_message.linkRanges;
+  const std::vector<GURL>& linkURLs = legal_message.linkURLs;
+
+  NSMutableArray<NSString*>* fragments = [NSMutableArray array];
+  NSUInteger currentIndex = 0;
+  for (NSUInteger i = 0; i < linkRanges.count && i < linkURLs.size(); ++i) {
+    NSRange range = [linkRanges[i] rangeValue];
+    if (range.location == NSNotFound || range.location < currentIndex ||
+        NSMaxRange(range) > lineText.length) {
+      continue;
+    }
+
+    [fragments
+        addObject:[lineText substringWithRange:NSMakeRange(currentIndex,
+                                                           range.location -
+                                                               currentIndex)]];
+
+    NSString* linkText = [lineText substringWithRange:range];
+    const GURL& url = linkURLs[i];
+    if (url.is_valid()) {
+      [fragments addObject:WrapInLinkTags(linkText)];
+      [urls addObject:[[CrURL alloc] initWithGURL:url]];
+    } else {
+      [fragments addObject:linkText];
+    }
+
+    currentIndex = NSMaxRange(range);
+  }
+
+  [fragments addObject:[lineText substringFromIndex:currentIndex]];
+  return [fragments componentsJoinedByString:@""];
+}
+
 NSString* GetSaveEntityToWalletFooterText(NSString* user_email) {
   NSString* googleWallet =
       l10n_util::GetNSString(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
   NSString* linkText =
       l10n_util::GetNSString(IDS_AUTOFILL_MANAGE_YOUR_INFO_LINK);
-  NSString* formattedLink =
-      [NSString stringWithFormat:@"BEGIN_LINK%@END_LINK", linkText];
+  NSString* formattedLink = WrapInLinkTags(linkText);
   return l10n_util::GetNSStringF(GetSaveToWalletSubtitleStringId(),
                                  base::SysNSStringToUTF16(googleWallet),
                                  base::SysNSStringToUTF16(formattedLink),
@@ -206,8 +238,7 @@ NSString* GetSaveEntityToWalletFooterText(NSString* user_email) {
 NSString* GetUpdateEntitySavedInWalletFooterText(NSString* user_email) {
   NSString* googleWallet =
       l10n_util::GetNSString(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
-  NSString* formattedLink =
-      [NSString stringWithFormat:@"BEGIN_LINK%@END_LINK", googleWallet];
+  NSString* formattedLink = WrapInLinkTags(googleWallet);
   return l10n_util::GetNSStringF(
       IDS_AUTOFILL_AI_UPDATE_ENTITY_TO_WALLET_DIALOG_SUBTITLE,
       base::SysNSStringToUTF16(formattedLink),
@@ -224,14 +255,14 @@ GURL GetGoogleWalletPassesURL() {
 
 UIImage* GetWalletLogo(CGFloat point_size, UIColor* tint_color) {
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
-  NSString* symbol =
+  Symbol symbol =
       base::FeatureList::IsEnabled(features::kAutofillEnableGradientGoogleLogos)
-          ? kGoogleWalletIconV2Symbol
-          : kGoogleWalletIconSymbol;
-  return MakeSymbolMulticolor(CustomSymbolWithPointSize(symbol, point_size));
+          ? SymbolGoogleWalletIconV2
+          : SymbolGoogleWalletIcon;
+  return MakeSymbolMulticolor(SymbolWithPointSize(symbol, point_size));
 #else
   return SymbolWithPalette(
-      DefaultSymbolWithPointSize(kSparklesSymbol, point_size),
+      SymbolWithPointSize(SymbolSparkles, point_size),
       @[ tint_color ?: [UIColor colorNamed:kBlue600Color] ]);
 #endif
 }

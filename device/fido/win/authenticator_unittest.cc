@@ -10,11 +10,12 @@
 #include <vector>
 
 #include "base/run_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
-#include "crypto/sha2.h"
+#include "crypto/hash.h"
 #include "device/fido/authenticator_get_assertion_response.h"
 #include "device/fido/authenticator_make_credential_response.h"
 #include "device/fido/ctap_get_assertion_request.h"
@@ -114,12 +115,12 @@ class WinAuthenticatorTest : public testing::Test,
   }
 
  protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<FidoAuthenticator> authenticator_;
   std::unique_ptr<FakeWinWebAuthnApi> fake_webauthn_api_;
   base::test::TaskEnvironment task_environment;
   base::RunLoop signal_unknown_credential_run_loop_;
   base::RunLoop signal_all_accepted_credentials_run_loop_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Tests getting credential information for an empty allow-list request that has
@@ -149,6 +150,20 @@ TEST_F(WinAuthenticatorTest,
                    ->bBrowserInPrivateMode);
 }
 
+TEST_F(WinAuthenticatorTest,
+       GetCredentialInformationForRequest_IsAsynchronous) {
+  CtapGetAssertionRequest request(kRpId, /*client_data_json=*/"");
+  GetCredentialFuture future;
+
+  authenticator_->GetPlatformCredentialInfoForRequest(
+      std::move(request), CtapGetAssertionOptions(), future.GetCallback());
+
+  // Credential enumeration must not complete synchronously because the
+  // Windows API can display a first-use consent prompt.
+  EXPECT_FALSE(future.IsReady());
+  EXPECT_TRUE(future.Wait());
+}
+
 // Tests a request with the off the record flag on passes the
 // bBrowserInPrivateMode option to the Windows API.
 TEST_F(WinAuthenticatorTest, GetCredentialInformationForRequest_Incognito) {
@@ -170,6 +185,8 @@ TEST_F(WinAuthenticatorTest, GetCredentialInformationForRequest_Incognito) {
 // does not have valid credentials on a Windows version that supports silent
 // discovery.
 TEST_F(WinAuthenticatorTest, GetCredentialInformationForRequest_NoCredentials) {
+  // This allows this test to pass when run in Chrome Remote Desktop session.
+  fido::win::ScopedIsRdpSessionOverride scoped_rdp_override(false);
   CtapGetAssertionRequest request(kRpId, /*client_data_json=*/"");
   GetCredentialFuture future;
   authenticator_->GetPlatformCredentialInfoForRequest(
@@ -363,13 +380,9 @@ TEST_F(WinAuthenticatorTest, EnumeratePlatformCredentials_NotSupported) {
 
   base::test::TestFuture<std::vector<DiscoverableCredentialMetadata>> future;
   WinWebAuthnApiAuthenticator::EnumeratePlatformCredentials(
-      fake_webauthn_api_.get(), future.GetCallback());
+      fake_webauthn_api_.get(), /*rp_id=*/std::nullopt, future.GetCallback());
 
-  while (!future.IsReady()) {
-    base::RunLoop().RunUntilIdle();
-  }
-
-  EXPECT_TRUE(future.Get().empty());
+  EXPECT_TRUE(future.Take().empty());
 }
 
 TEST_F(WinAuthenticatorTest, EnumeratePlatformCredentials_Supported) {
@@ -381,11 +394,7 @@ TEST_F(WinAuthenticatorTest, EnumeratePlatformCredentials_Supported) {
 
   base::test::TestFuture<std::vector<DiscoverableCredentialMetadata>> future;
   WinWebAuthnApiAuthenticator::EnumeratePlatformCredentials(
-      fake_webauthn_api_.get(), future.GetCallback());
-
-  while (!future.IsReady()) {
-    base::RunLoop().RunUntilIdle();
-  }
+      fake_webauthn_api_.get(), /*rp_id=*/std::nullopt, future.GetCallback());
 
   std::vector<DiscoverableCredentialMetadata> creds = future.Take();
   ASSERT_EQ(creds.size(), 1u);
@@ -396,6 +405,30 @@ TEST_F(WinAuthenticatorTest, EnumeratePlatformCredentials_Supported) {
   EXPECT_EQ(cred.user.name, kUserName);
   EXPECT_EQ(cred.user.display_name, kUserDisplayName);
   EXPECT_EQ(cred.provider_name, kProviderName);
+}
+
+TEST_F(WinAuthenticatorTest, EnumeratePlatformCredentials_ScopedToRp) {
+  PublicKeyCredentialRpEntity rp(kRpId);
+  PublicKeyCredentialUserEntity user(kUserId, kUserName, kUserDisplayName);
+  fake_webauthn_api_->InjectDiscoverableCredential(kCredentialId, rp, user,
+                                                   kProviderName);
+
+  PublicKeyCredentialRpEntity other_rp("other-rp.example");
+  const std::vector<uint8_t> kOtherCredentialId = {10, 11, 12};
+  fake_webauthn_api_->InjectDiscoverableCredential(kOtherCredentialId, other_rp,
+                                                   user, kProviderName);
+
+  fake_webauthn_api_->set_supports_silent_discovery(true);
+
+  base::test::TestFuture<std::vector<DiscoverableCredentialMetadata>> future;
+  WinWebAuthnApiAuthenticator::EnumeratePlatformCredentials(
+      fake_webauthn_api_.get(), base::UTF8ToUTF16(std::string(kRpId)),
+      future.GetCallback());
+
+  std::vector<DiscoverableCredentialMetadata> creds = future.Take();
+  ASSERT_EQ(creds.size(), 1u);
+  EXPECT_EQ(creds[0].rp_id, kRpId);
+  EXPECT_EQ(creds[0].cred_id, kCredentialId);
 }
 
 TEST_F(WinAuthenticatorTest, MakeCredentialLargeBlob) {
@@ -857,7 +890,7 @@ TEST_F(WinAuthenticatorTest, PrfRoundtripOneValue) {
   const AuthenticatorMakeCredentialResponse& response =
       *std::get<1>(mc_future.Get());
   EXPECT_TRUE(response.prf_enabled);
-  EXPECT_EQ(response.prf_results->size(), crypto::kSHA256Length);
+  EXPECT_EQ(response.prf_results->size(), crypto::hash::kSha256Size);
   {
     // Get an assertion with the credential and the same evaluation point.
     CtapGetAssertionRequest ga_request(kRpId, test_data::kClientDataJson);
@@ -871,7 +904,7 @@ TEST_F(WinAuthenticatorTest, PrfRoundtripOneValue) {
     ASSERT_EQ(std::get<0>(ga_future.Get()), GetAssertionStatus::kSuccess);
     const AuthenticatorGetAssertionResponse& ga_response =
         std::get<1>(ga_future.Get()).at(0);
-    EXPECT_EQ(ga_response.hmac_secret->size(), crypto::kSHA256Length);
+    EXPECT_EQ(ga_response.hmac_secret->size(), crypto::hash::kSha256Size);
 
     // Since the function was evaluated over the same value, it should have the
     // same result.
@@ -890,7 +923,7 @@ TEST_F(WinAuthenticatorTest, PrfRoundtripOneValue) {
     ASSERT_EQ(std::get<0>(ga_future.Get()), GetAssertionStatus::kSuccess);
     const AuthenticatorGetAssertionResponse& ga_response =
         std::get<1>(ga_future.Get()).at(0);
-    EXPECT_EQ(ga_response.hmac_secret->size(), crypto::kSHA256Length);
+    EXPECT_EQ(ga_response.hmac_secret->size(), crypto::hash::kSha256Size);
 
     // Since the function was evaluated over the same value, it should have the
     // same result.
@@ -923,7 +956,7 @@ TEST_F(WinAuthenticatorTest, PrfRoundtripTwoValues) {
   const AuthenticatorMakeCredentialResponse& response =
       *std::get<1>(mc_future.Get());
   EXPECT_TRUE(response.prf_enabled);
-  EXPECT_EQ(response.prf_results->size(), crypto::kSHA256Length * 2);
+  EXPECT_EQ(response.prf_results->size(), crypto::hash::kSha256Size * 2);
   {
     // Get an assertion with the credential and the same evaluation points.
     CtapGetAssertionRequest ga_request(kRpId, test_data::kClientDataJson);
@@ -938,7 +971,7 @@ TEST_F(WinAuthenticatorTest, PrfRoundtripTwoValues) {
     ASSERT_EQ(std::get<0>(ga_future.Get()), GetAssertionStatus::kSuccess);
     const AuthenticatorGetAssertionResponse& ga_response =
         std::get<1>(ga_future.Get()).at(0);
-    EXPECT_EQ(ga_response.hmac_secret->size(), crypto::kSHA256Length * 2);
+    EXPECT_EQ(ga_response.hmac_secret->size(), crypto::hash::kSha256Size * 2);
 
     // Since the function was evaluated over the same values, it should have the
     // same result.
@@ -958,7 +991,7 @@ TEST_F(WinAuthenticatorTest, PrfRoundtripTwoValues) {
     ASSERT_EQ(std::get<0>(ga_future.Get()), GetAssertionStatus::kSuccess);
     const AuthenticatorGetAssertionResponse& ga_response =
         std::get<1>(ga_future.Get()).at(0);
-    EXPECT_EQ(ga_response.hmac_secret->size(), crypto::kSHA256Length * 2);
+    EXPECT_EQ(ga_response.hmac_secret->size(), crypto::hash::kSha256Size * 2);
 
     // Since the function was evaluated over the same value, it should have the
     // same result.

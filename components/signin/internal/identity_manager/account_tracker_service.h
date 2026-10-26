@@ -8,6 +8,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/files/file_path.h"
@@ -41,13 +42,13 @@ namespace signin {
 class IdentityManager;
 void SimulateSuccessfulFetchOfAccountInfo(IdentityManager*,
                                           const CoreAccountId&,
-                                          const std::string&,
+                                          std::string_view,
                                           const GaiaId&,
-                                          const std::string&,
-                                          const std::string&,
-                                          const std::string&,
-                                          const std::string&,
-                                          const std::string&);
+                                          std::string_view,
+                                          std::string_view,
+                                          std::string_view,
+                                          std::string_view,
+                                          std::string_view);
 void SimulateAccountImageFetch(signin::IdentityManager*,
                                const CoreAccountId&,
                                const std::string& image_url_with_size,
@@ -99,12 +100,12 @@ class AccountTrackerService {
   std::vector<AccountInfo> GetAccounts() const;
   AccountInfo GetAccountInfo(const CoreAccountId& account_id) const;
   AccountInfo FindAccountInfoByGaiaId(const GaiaId& gaia_id) const;
-  AccountInfo FindAccountInfoByEmail(const std::string& email) const;
+  AccountInfo FindAccountInfoByEmail(std::string_view email) const;
 
   // Picks the correct account_id for the specified account depending on the
   // migration state.
   CoreAccountId PickAccountIdForAccount(const GaiaId& gaia,
-                                        const std::string& email) const;
+                                        std::string_view email) const;
 
   // Seeds the account whose account_id is given by PickAccountIdForAccount()
   // with its corresponding gaia id and email address.  Returns the same
@@ -181,20 +182,23 @@ class AccountTrackerService {
   friend void signin::SimulateSuccessfulFetchOfAccountInfo(
       signin::IdentityManager*,
       const CoreAccountId&,
-      const std::string&,
+      std::string_view,
       const GaiaId&,
-      const std::string&,
-      const std::string&,
-      const std::string&,
-      const std::string&,
-      const std::string&);
+      std::string_view,
+      std::string_view,
+      std::string_view,
+      std::string_view,
+      std::string_view);
   friend void signin::SimulateAccountImageFetch(signin::IdentityManager*,
                                                 const CoreAccountId&,
                                                 const std::string&,
                                                 const gfx::Image&);
 
-  void NotifyAccountUpdated(const AccountInfo& account_info);
-  void NotifyAccountRemoved(const AccountInfo& account_info);
+  // `account_info` is passed by value because `on_account_updated_callback_`
+  // may synchronously call `StopTrackingAccount()` and erase the entry from
+  // `accounts_`.
+  void MaybeNotifyAccountUpdated(AccountInfo account_info);
+  void MaybeNotifyAccountRemoved(const AccountInfo& account_info);
 
   // Start tracking `account_id` (`account_id` must not be empty).
   void StartTrackingAccount(const CoreAccountId& account_id);
@@ -204,6 +208,7 @@ class AccountTrackerService {
   // Load the current state of the account info from the preferences file.
   void LoadFromPrefs();
   void SaveToPrefs(const AccountInfo& account);
+  void SaveToPrefsAndMaybeNotifyAccountUpdated(const AccountInfo& account);
 
   base::DictValue* FindOrCreateDictForAccount(ScopedListPrefUpdate& update,
                                               const CoreAccountId& account_id);

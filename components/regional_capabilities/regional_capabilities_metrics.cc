@@ -6,7 +6,6 @@
 
 #include "base/containers/flat_map.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/puma_histogram_functions.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "components/country_codes/country_codes.h"
@@ -101,6 +100,8 @@ std::string ToString(SearchEngineChoiceScreenConditions condition) {
       return "EligibleForRestore";
     case SearchEngineChoiceScreenConditions::kUnavailableCurrentLocation:
       return "UnavailableCurrentLocation";
+    case SearchEngineChoiceScreenConditions::kAlreadyCompletedImported:
+      return "AlreadyCompletedImported";
   }
   NOTREACHED();
 }
@@ -134,6 +135,7 @@ bool IsEligible(SearchEngineChoiceScreenConditions condition) {
     case SearchEngineChoiceScreenConditions::
         kHasNonHighlightablePrepopulatedSearchEngine:
     case SearchEngineChoiceScreenConditions::kManaged:
+    case SearchEngineChoiceScreenConditions::kAlreadyCompletedImported:
       return false;
   }
   NOTREACHED();
@@ -178,9 +180,6 @@ void RecordFunnelStage(
     metrics::ProfileMetricsService& profile_metrics_service) {
   profile_metrics_service.UmaHistogramEnumeration(
       "RegionalCapabilities.FunnelStage.Reported", stage);
-  base::PumaHistogramEnumeration(
-      base::PumaType::kRc, "PUMA.RegionalCapabilities.FunnelStage.Reported",
-      stage);
 }
 
 void RecordEligibilityFunnelStageDetails(
@@ -188,9 +187,6 @@ void RecordEligibilityFunnelStageDetails(
     metrics::ProfileMetricsService& profile_metrics_service) {
   profile_metrics_service.UmaHistogramEnumeration(
       "RegionalCapabilities.FunnelStage.Eligibility", conditions);
-  base::PumaHistogramEnumeration(
-      base::PumaType::kRc, "PUMA.RegionalCapabilities.FunnelStage.Eligibility",
-      conditions);
 }
 
 void RecordTriggeringFunnelStageDetails(
@@ -198,9 +194,6 @@ void RecordTriggeringFunnelStageDetails(
     metrics::ProfileMetricsService& profile_metrics_service) {
   profile_metrics_service.UmaHistogramEnumeration(
       "RegionalCapabilities.FunnelStage.Triggering", conditions);
-  base::PumaHistogramEnumeration(
-      base::PumaType::kRc, "PUMA.RegionalCapabilities.FunnelStage.Triggering",
-      conditions);
 }
 
 void RecordActiveRegionalProgram(
@@ -236,6 +229,13 @@ void RecordActiveRegionalProgramPerProfile(
     metrics::ProfileMetricsService& profile_metrics_service) {
   profile_metrics_service.UmaHistogramEnumeration(
       "RegionalCapabilities.ActiveRegionalProgram3", program);
+}
+
+void RecordDynamicCountryRegionalProgram(
+    ActiveRegionalProgram program,
+    metrics::ProfileMetricsService& profile_metrics_service) {
+  profile_metrics_service.UmaHistogramEnumeration(
+      "RegionalCapabilities.Debug.DynamicCountryRegionalProgram", program);
 }
 
 void RecordProgramSpecificExclusion(ProgramSpecificExclusion exclusion) {

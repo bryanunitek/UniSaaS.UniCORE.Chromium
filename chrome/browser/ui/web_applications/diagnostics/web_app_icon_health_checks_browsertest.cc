@@ -10,7 +10,6 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/apps/app_service/app_registry_cache_waiter.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/ui/web_applications/web_app_metrics.h"
@@ -39,7 +38,7 @@ class WebAppIconHealthChecksBrowserTest : public WebAppBrowserTestBase {
     ASSERT_TRUE(embedded_test_server()->Start());
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   ScopedRegistryUpdate CreateUpdateScope() {
     return WebAppProvider::GetForTest(profile())

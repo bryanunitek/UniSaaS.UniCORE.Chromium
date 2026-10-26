@@ -8,7 +8,6 @@
 
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
-#include "services/network/public/mojom/attribution.mojom-blink.h"
 #include "services/network/public/mojom/web_client_hints_types.mojom-blink.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
@@ -109,15 +108,6 @@ struct LazyLoadImageTestCase {
   bool should_preload;
 };
 
-struct AttributionSrcTestCase {
-  bool use_secure_document_url;
-  const char* base_url;
-  const char* input_html;
-  network::mojom::AttributionReportingEligibility expected_eligibility;
-  network::mojom::AttributionSupport attribution_support =
-      network::mojom::AttributionSupport::kWeb;
-};
-
 struct TokenStreamMatcherTestCase {
   ElementLocator locator;
   const char* input_html;
@@ -125,19 +115,6 @@ struct TokenStreamMatcherTestCase {
   bool should_preload;
 };
 
-struct SharedStorageWritableTestCase {
-  bool use_secure_document_url;
-  const char* base_url;
-  const char* input_html;
-  bool expected_shared_storage_writable_opted_in;
-};
-
-struct BrowsingTopicsWritableTestCase {
-  bool use_secure_document_url;
-  const char* base_url;
-  const char* input_html;
-  bool expected_browsing_topics;
-};
 
 class HTMLMockHTMLResourcePreloader : public ResourcePreloader {
  public:
@@ -286,47 +263,11 @@ class HTMLMockHTMLResourcePreloader : public ResourcePreloader {
     }
   }
 
-  void AttributionSrcRequestVerification(
-      Document* document,
-      network::mojom::AttributionReportingEligibility expected_eligibility,
-      network::mojom::AttributionSupport expected_support) {
-    ASSERT_TRUE(preload_request_.get());
-    Resource* resource = preload_request_->Start(document);
-    ASSERT_TRUE(resource);
-
-    EXPECT_EQ(
-        expected_eligibility,
-        resource->GetResourceRequest().GetAttributionReportingEligibility());
-
-    EXPECT_EQ(expected_support,
-              resource->GetResourceRequest().GetAttributionReportingSupport());
-  }
-
   void IsPotentiallyLCPElementFlagVerification(bool expected) {
     EXPECT_EQ(expected, preload_request_->IsPotentiallyLCPElement())
         << preload_request_->ResourceURL();
   }
 
-  void SharedStorageWritableRequestVerification(
-      Document* document,
-      bool expected_shared_storage_writable_opted_in) {
-    ASSERT_TRUE(preload_request_.get());
-    Resource* resource = preload_request_->Start(document);
-    ASSERT_TRUE(resource);
-
-    EXPECT_EQ(expected_shared_storage_writable_opted_in,
-              resource->GetResourceRequest().GetSharedStorageWritableOptedIn());
-  }
-
-  void BrowsingTopicsRequestVerification(Document* document,
-                                         bool expected_browsing_topics) {
-    ASSERT_TRUE(preload_request_.get());
-    Resource* resource = preload_request_->Start(document);
-    ASSERT_TRUE(resource);
-
-    EXPECT_EQ(expected_browsing_topics,
-              resource->GetResourceRequest().GetBrowsingTopics());
-  }
 
  protected:
   void Preload(std::unique_ptr<PreloadRequest> preload_request) override {
@@ -514,21 +455,6 @@ class HTMLPreloadScannerTest : public PageTestBase {
     preloader.LazyLoadImagePreloadVerification(test_case.should_preload);
   }
 
-  void Test(AttributionSrcTestCase test_case) {
-    SCOPED_TRACE(test_case.input_html);
-
-    GetPage().SetAttributionSupport(test_case.attribution_support);
-
-    HTMLMockHTMLResourcePreloader preloader(GetDocument().Url());
-    KURL base_url(test_case.base_url);
-    scanner_->AppendToEnd(String(test_case.input_html));
-    std::unique_ptr<PendingPreloadData> preload_data = scanner_->Scan(base_url);
-    preloader.TakePreloadData(std::move(preload_data));
-    preloader.AttributionSrcRequestVerification(&GetDocument(),
-                                                test_case.expected_eligibility,
-                                                test_case.attribution_support);
-  }
-
   void Test(TokenStreamMatcherTestCase test_case) {
     SCOPED_TRACE(test_case.input_html);
     RunSetUp(kViewportEnabled, kPreloadEnabled,
@@ -549,33 +475,6 @@ class HTMLPreloadScannerTest : public PageTestBase {
     EXPECT_EQ(test_case.should_preload ? 1 : 0, count);
   }
 
-  void Test(SharedStorageWritableTestCase test_case) {
-    SCOPED_TRACE(base::StringPrintf("Use secure doc URL: %d; HTML: '%s'",
-                                    test_case.use_secure_document_url,
-                                    test_case.input_html));
-
-    HTMLMockHTMLResourcePreloader preloader(GetDocument().Url());
-    KURL base_url(test_case.base_url);
-    scanner_->AppendToEnd(String(test_case.input_html));
-    std::unique_ptr<PendingPreloadData> preload_data = scanner_->Scan(base_url);
-    preloader.TakePreloadData(std::move(preload_data));
-    preloader.SharedStorageWritableRequestVerification(
-        &GetDocument(), test_case.expected_shared_storage_writable_opted_in);
-  }
-
-  void Test(BrowsingTopicsWritableTestCase test_case) {
-    SCOPED_TRACE(base::StringPrintf("Use secure doc URL: %d; HTML: '%s'",
-                                    test_case.use_secure_document_url,
-                                    test_case.input_html));
-
-    HTMLMockHTMLResourcePreloader preloader(GetDocument().Url());
-    KURL base_url(test_case.base_url);
-    scanner_->AppendToEnd(String(test_case.input_html));
-    std::unique_ptr<PendingPreloadData> preload_data = scanner_->Scan(base_url);
-    preloader.TakePreloadData(std::move(preload_data));
-    preloader.BrowsingTopicsRequestVerification(
-        &GetDocument(), test_case.expected_browsing_topics);
-  }
 
  protected:
   std::unique_ptr<HTMLPreloadScanner> scanner_;
@@ -633,6 +532,160 @@ TEST_F(HTMLPreloadScannerTest, testImages) {
 
   for (const auto& test_case : test_cases)
     Test(test_case);
+}
+
+TEST_F(HTMLPreloadScannerTest, testLinkRelStylesheetDisabled) {
+  PreloadScannerTestCase test_cases[] = {
+      {"http://example.test", "<link rel=stylesheet href='sheet.css'>",
+       "sheet.css", "http://example.test/", ResourceType::kCSSStyleSheet, 0},
+      // The real parser does not load disabled stylesheets, so the
+      // speculative parser must not fetch them either.
+      {"http://example.test", "<link rel=stylesheet href='sheet.css' disabled>",
+       nullptr, "http://example.test/", ResourceType::kCSSStyleSheet, 0},
+      {"http://example.test",
+       "<link rel=stylesheet href='sheet.css' disabled=''>", nullptr,
+       "http://example.test/", ResourceType::kCSSStyleSheet, 0},
+      // disabled only applies to stylesheets, not to rel=preload.
+      {"http://example.test",
+       "<link rel=preload as=style href='sheet.css' disabled>", "sheet.css",
+       "http://example.test/", ResourceType::kCSSStyleSheet, 0},
+  };
+
+  for (const auto& test_case : test_cases) {
+    Test(test_case);
+  }
+}
+
+TEST_F(HTMLPreloadScannerTest, testImageElement) {
+  PreloadScannerTestCase test_cases[] = {
+      // A bare <image> is rewritten to <img> by the tree builder.
+      {"http://example.test", "<image src='bla.gif'>", "bla.gif",
+       "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test", "<image srcset='bla.gif 320w, blabla.gif 640w'>",
+       "blabla.gif", "http://example.test/", ResourceType::kImage, 0},
+      // In SVG/MathML foreign content <image> is not rewritten and has no src
+      // loading.
+      {"http://example.test", "<svg><image src='bla.gif'></image></svg>",
+       nullptr, "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test", "<math><image src='bla.gif'></image></math>",
+       nullptr, "http://example.test/", ResourceType::kImage, 0},
+      // The rewrite resumes after the foreign content subtree closes.
+      {"http://example.test", "<svg></svg><image src='bla.gif'>", "bla.gif",
+       "http://example.test/", ResourceType::kImage, 0},
+  };
+
+  for (const auto& test_case : test_cases) {
+    Test(test_case);
+  }
+}
+
+TEST_F(HTMLPreloadScannerTest, testSVGImage) {
+  PreloadScannerTestCase test_cases[] = {
+      // SVG <image> loads via href/xlink:href, not src.
+      {"http://example.test", "<svg><image href='bla.gif'></image></svg>",
+       "bla.gif", "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test", "<svg><image xlink:href='bla.gif'></image></svg>",
+       "bla.gif", "http://example.test/", ResourceType::kImage, 0},
+      // href takes precedence over xlink:href regardless of order.
+      {"http://example.test",
+       "<svg><image href='a.gif' xlink:href='b.gif'></image></svg>", "a.gif",
+       "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test",
+       "<svg><image xlink:href='b.gif' href='a.gif'></image></svg>", "a.gif",
+       "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test", "<svg><image src='bla.gif'></image></svg>",
+       nullptr, "http://example.test/", ResourceType::kImage, 0},
+      // MathML <image> is an unknown element and does not load.
+      {"http://example.test", "<math><image href='bla.gif'></image></math>",
+       nullptr, "http://example.test/", ResourceType::kImage, 0},
+      // HTML <image> becomes <img>, which has no href attribute.
+      {"http://example.test", "<image href='bla.gif'>", nullptr,
+       "http://example.test/", ResourceType::kImage, 0},
+  };
+
+  for (const auto& test_case : test_cases) {
+    Test(test_case);
+  }
+}
+
+TEST_F(HTMLPreloadScannerTest, testSVGScript) {
+  PreloadScannerTestCase test_cases[] = {
+      // SVG <script> loads via href/xlink:href, not src.
+      {"http://example.test", "<svg><script href='bla.js'></script></svg>",
+       "bla.js", "http://example.test/", ResourceType::kScript, 0},
+      {"http://example.test",
+       "<svg><script xlink:href='bla.js'></script></svg>", "bla.js",
+       "http://example.test/", ResourceType::kScript, 0},
+      // href takes precedence over xlink:href regardless of order.
+      {"http://example.test",
+       "<svg><script href='a.js' xlink:href='b.js'></script></svg>", "a.js",
+       "http://example.test/", ResourceType::kScript, 0},
+      {"http://example.test",
+       "<svg><script xlink:href='b.js' href='a.js'></script></svg>", "a.js",
+       "http://example.test/", ResourceType::kScript, 0},
+      {"http://example.test", "<svg><script src='bla.js'></script></svg>",
+       nullptr, "http://example.test/", ResourceType::kScript, 0},
+      // HTML <script> has no href attribute.
+      {"http://example.test", "<script href='bla.js'></script>", nullptr,
+       "http://example.test/", ResourceType::kScript, 0},
+      {"http://example.test", "<svg></svg><script src='bla.js'></script>",
+       "bla.js", "http://example.test/", ResourceType::kScript, 0},
+  };
+
+  for (const auto& test_case : test_cases) {
+    Test(test_case);
+  }
+}
+
+TEST_F(HTMLPreloadScannerTest, testMathScript) {
+  PreloadScannerTestCase test_cases[] = {
+      // MathML script is an unknown element and does not load.
+      {"http://example.test", "<math><script src='bla.js'></script></math>",
+       nullptr, "http://example.test/", ResourceType::kScript, 0},
+      {"http://example.test",
+       "<math><font><script src='bla.js'></script></font></math>", nullptr,
+       "http://example.test/", ResourceType::kScript, 0},
+      // <font> with face/color/size breaks out of foreign content, making
+      // the script an HTML script.
+      {"http://example.test",
+       "<math><font face=''><script src='bla.js'></script></font></math>",
+       "bla.js", "http://example.test/", ResourceType::kScript, 0},
+      {"http://example.test",
+       "<math><font color='red'><script src='bla.js'></script></font></math>",
+       "bla.js", "http://example.test/", ResourceType::kScript, 0},
+      // Other HTML breakout tags work the same way.
+      {"http://example.test",
+       "<math><div><script src='bla.js'></script></div></math>", "bla.js",
+       "http://example.test/", ResourceType::kScript, 0},
+      {"http://example.test", "<math><img src='bla.gif'></math>", "bla.gif",
+       "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test", "<math></math><script src='bla.js'></script>",
+       "bla.js", "http://example.test/", ResourceType::kScript, 0},
+  };
+
+  for (const auto& test_case : test_cases) {
+    Test(test_case);
+  }
+}
+
+TEST_F(HTMLPreloadScannerTest, testPreloadScannerImprovementsDisabled) {
+  ScopedPreloadScannerImprovementsForTest scoped_feature(false);
+  PreloadScannerTestCase test_cases[] = {
+      {"http://example.test", "<image src='bla.gif'>", "bla.gif",
+       "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test", "<svg><image href='bla.gif'></image></svg>",
+       "bla.gif", "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test", "<svg></svg><image src='bla.gif'>", "bla.gif",
+       "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test", "<svg><script src='bla.js'></script></svg>",
+       "bla.js", "http://example.test/", ResourceType::kScript, 0},
+      {"http://example.test", "<math><script src='bla.js'></script></math>",
+       "bla.js", "http://example.test/", ResourceType::kScript, 0},
+  };
+
+  for (const auto& test_case : test_cases) {
+    Test(test_case);
+  }
 }
 
 TEST_F(HTMLPreloadScannerTest, testImagesWithViewport) {
@@ -988,9 +1041,6 @@ TEST_F(HTMLPreloadScannerTest, testRenderBlocking) {
       {"http://example.test",
        "<body><link rel=stylesheet href=http://example2.test></body>",
        RenderBlockingBehavior::kInBodyParserBlocking},
-      {"http://example.test",
-       "<link rel=stylesheet href=http://example2.test disabled>",
-       RenderBlockingBehavior::kNonBlocking},
   };
 
   for (const auto& test_case : test_cases) {
@@ -1101,6 +1151,34 @@ TEST_F(HTMLPreloadScannerTest, testPicture) {
 
   for (const auto& test_case : test_cases)
     Test(test_case);
+}
+
+TEST_F(HTMLPreloadScannerTest, testPictureVoidChildren) {
+  PreloadScannerTestCase test_cases[] = {
+      // Void elements cannot contain the <img>, so it remains a direct
+      // <picture> child and uses the picked <source>.
+      {"http://example.test",
+       "<picture><source srcset='srcset_bla.gif'><br><img "
+       "src='bla.gif'></picture>",
+       "srcset_bla.gif", "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test",
+       "<picture><source srcset='srcset_bla.gif'><br><img></picture>",
+       "srcset_bla.gif", "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test",
+       "<picture><source srcset='srcset_bla.gif'><wbr><img "
+       "src='bla.gif'></picture>",
+       "srcset_bla.gif", "http://example.test/", ResourceType::kImage, 0},
+      // A non-void element may contain the <img>, so the scanner
+      // conservatively stops treating it as a picture child.
+      {"http://example.test",
+       "<picture><source srcset='srcset_bla.gif'><div><img "
+       "src='bla.gif'></div></picture>",
+       "bla.gif", "http://example.test/", ResourceType::kImage, 0},
+  };
+
+  for (const auto& test_case : test_cases) {
+    Test(test_case);
+  }
 }
 
 TEST_F(HTMLPreloadScannerTest, testContext) {
@@ -1330,64 +1408,6 @@ TEST_F(HTMLPreloadScannerTest, testNonceDanglingMarkup) {
 
   for (const auto& test_case : test_cases) {
     SCOPED_TRACE(test_case.input_html);
-    Test(test_case);
-  }
-}
-
-TEST_F(HTMLPreloadScannerTest, testAttributionSrc) {
-  static constexpr bool kSecureDocumentUrl = true;
-  static constexpr bool kInsecureDocumentUrl = false;
-
-  static constexpr char kSecureBaseURL[] = "https://example.test";
-  static constexpr char kInsecureBaseURL[] = "http://example.test";
-
-  url_test_helpers::RegisterMockedURLLoad(
-      url_test_helpers::ToKURL("https://example.test/script"), "");
-  url_test_helpers::RegisterMockedURLLoad(
-      url_test_helpers::ToKURL("http://example.test/script"), "");
-
-  GetDocument().GetSettings()->SetScriptEnabled(true);
-
-  AttributionSrcTestCase test_cases[] = {
-      // Insecure context
-      {kInsecureDocumentUrl, kSecureBaseURL,
-       "<img src='/image' attributionsrc>",
-       network::mojom::AttributionReportingEligibility::kUnset},
-      {kInsecureDocumentUrl, kSecureBaseURL,
-       "<script src='/script' attributionsrc></script>",
-       network::mojom::AttributionReportingEligibility::kUnset},
-      // No attributionsrc attribute
-      {kSecureDocumentUrl, kSecureBaseURL, "<img src='/image'>",
-       network::mojom::AttributionReportingEligibility::kUnset},
-      {kSecureDocumentUrl, kSecureBaseURL, "<script src='/script'></script>",
-       network::mojom::AttributionReportingEligibility::kUnset},
-      // Irrelevant element type
-      {kSecureDocumentUrl, kSecureBaseURL,
-       "<video poster='/image' attributionsrc>",
-       network::mojom::AttributionReportingEligibility::kUnset},
-      // Not potentially trustworthy reporting origin
-      {kSecureDocumentUrl, kInsecureBaseURL,
-       "<img src='/image' attributionsrc>",
-       network::mojom::AttributionReportingEligibility::kUnset},
-      {kSecureDocumentUrl, kInsecureBaseURL,
-       "<script src='/script' attributionsrc></script>",
-       network::mojom::AttributionReportingEligibility::kUnset},
-      // Secure context, potentially trustworthy reporting origin,
-      // attributionsrc attribute
-      {kSecureDocumentUrl, kSecureBaseURL, "<img src='/image' attributionsrc>",
-       network::mojom::AttributionReportingEligibility::kEventSourceOrTrigger},
-      {kSecureDocumentUrl, kSecureBaseURL,
-       "<script src='/script' attributionsrc></script>",
-       network::mojom::AttributionReportingEligibility::kEventSourceOrTrigger},
-      {kSecureDocumentUrl, kSecureBaseURL, "<img src='/image' attributionsrc>",
-       network::mojom::AttributionReportingEligibility::kEventSourceOrTrigger,
-       network::mojom::AttributionSupport::kWebAndOs},
-  };
-
-  for (const auto& test_case : test_cases) {
-    RunSetUp(kViewportDisabled, kPreloadEnabled,
-             network::mojom::ReferrerPolicy::kDefault,
-             /*use_secure_document_url=*/test_case.use_secure_document_url);
     Test(test_case);
   }
 }
@@ -1872,44 +1892,6 @@ TEST_F(HTMLPreloadScannerTest, TokenStreamMatcher) {
   Test(test_case);
 }
 
-TEST_F(HTMLPreloadScannerTest, testSharedStorageWritable) {
-  WebRuntimeFeaturesBase::EnableSharedStorageAPI(true);
-  static constexpr bool kSecureDocumentUrl = true;
-  static constexpr bool kInsecureDocumentUrl = false;
-
-  static constexpr char kSecureBaseURL[] = "https://example.test";
-  static constexpr char kInsecureBaseURL[] = "http://example.test";
-
-  SharedStorageWritableTestCase test_cases[] = {
-      // Insecure context
-      {kInsecureDocumentUrl, kSecureBaseURL,
-       "<img src='/image' sharedstoragewritable>",
-       /*expected_shared_storage_writable_opted_in=*/false},
-      // No sharedstoragewritable attribute
-      {kSecureDocumentUrl, kSecureBaseURL, "<img src='/image'>",
-       /*expected_shared_storage_writable_opted_in=*/false},
-      // Irrelevant element type
-      {kSecureDocumentUrl, kSecureBaseURL,
-       "<video poster='/image' sharedstoragewritable>",
-       /*expected_shared_storage_writable_opted_in=*/false},
-      // Secure context, sharedstoragewritable attribute
-      // Base (initial) URL does not affect SharedStorageWritable eligibility
-      {kSecureDocumentUrl, kInsecureBaseURL,
-       "<img src='/image' sharedstoragewritable>",
-       /*expected_shared_storage_writable_opted_in=*/true},
-      // Secure context, sharedstoragewritable attribute
-      {kSecureDocumentUrl, kSecureBaseURL,
-       "<img src='/image' sharedstoragewritable>",
-       /*expected_shared_storage_writable_opted_in=*/true},
-  };
-
-  for (const auto& test_case : test_cases) {
-    RunSetUp(kViewportDisabled, kPreloadEnabled,
-             network::mojom::ReferrerPolicy::kDefault,
-             /*use_secure_document_url=*/test_case.use_secure_document_url);
-    Test(test_case);
-  }
-}
 
 class HTMLPreloadScannerDataUrlsTest
     : public HTMLPreloadScannerTest,
@@ -2086,44 +2068,6 @@ TEST_P(HTMLPreloadScannerLCPPLazyLoadImageTest,
         )HTML",
                                       nullptr, false});
       break;
-  }
-}
-
-TEST_F(HTMLPreloadScannerTest, testBrowsingTopics) {
-  WebRuntimeFeaturesBase::EnableTopicsAPI(true);
-  static constexpr bool kSecureDocumentUrl = true;
-  static constexpr bool kInsecureDocumentUrl = false;
-
-  static constexpr char kSecureBaseURL[] = "https://example.test";
-  static constexpr char kInsecureBaseURL[] = "http://example.test";
-
-  BrowsingTopicsWritableTestCase test_cases[] = {
-      // Insecure context
-      {kInsecureDocumentUrl, kSecureBaseURL,
-       "<img src='/image' browsingtopics>",
-       /*expected_browsing_topics=*/false},
-      // No browsingtopics attribute
-      {kSecureDocumentUrl, kSecureBaseURL, "<img src='/image'>",
-       /*expected_browsing_topics=*/false},
-      // Irrelevant element type
-      {kSecureDocumentUrl, kSecureBaseURL,
-       "<video poster='/image' browsingtopics>",
-       /*expected_browsing_topics=*/false},
-      // Secure context, browsingtopics attribute
-      // Base (initial) URL does not affect SharedStorageWritable eligibility
-      {kSecureDocumentUrl, kInsecureBaseURL,
-       "<img src='/image' browsingtopics>",
-       /*expected_browsing_topics=*/true},
-      // Secure context, browsingtopics attribute
-      {kSecureDocumentUrl, kSecureBaseURL, "<img src='/image' browsingtopics>",
-       /*expected_browsing_topics=*/true},
-  };
-
-  for (const auto& test_case : test_cases) {
-    RunSetUp(kViewportDisabled, kPreloadEnabled,
-             network::mojom::ReferrerPolicy::kDefault,
-             /*use_secure_document_url=*/test_case.use_secure_document_url);
-    Test(test_case);
   }
 }
 

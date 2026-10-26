@@ -6,31 +6,42 @@
 #define COMPONENTS_OPTIMIZATION_GUIDE_CORE_FEATURE_REGISTRY_ENTERPRISE_POLICY_REGISTRY_H_
 
 #include <memory>
+#include <string_view>
 #include <vector>
 
-#include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
+#include "base/component_export.h"
 
+class PrefRegistrySimple;
 class PrefService;
 
 namespace optimization_guide {
+
+// The possible values for the model execution enterprise policy.
+// LINT.IfChange(EnterprisePolicyValue)
+enum class EnterprisePolicyValue {
+  kAllow = 0,
+  kAllowWithoutLogging = 1,
+  kDisable = 2,
+};
+// LINT.ThenChange(//chrome/browser/resources/settings/ai_page/constants.ts:ModelExecutionEnterprisePolicyValue,
+// //chrome/browser/ui/android/autofill/internal/java/src/org/chromium/chrome/browser/ui/autofill/AtMemoryBottomSheetMediator.java:AllowLogging)
 
 // EnterprisePolicyPref holds configuration for an enterprise policy controlling
 // a model execution feature.
 class EnterprisePolicyPref {
  public:
   COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
-  explicit EnterprisePolicyPref(const char* name);
+  explicit EnterprisePolicyPref(std::string_view name);
 
-  const char* name() const { return name_; }
+  std::string_view name() const { return name_; }
 
   // Returns the current setting of the enterprise policy.
   COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
-  model_execution::prefs::ModelExecutionEnterprisePolicyValue GetValue(
-      const PrefService*) const;
+  EnterprisePolicyValue GetValue(const PrefService*) const;
 
  private:
   // The full pref path controlling the enterprise policy.
-  const char* name_;
+  std::string_view name_;
 };
 
 class EnterprisePolicyRegistry {
@@ -47,11 +58,14 @@ class EnterprisePolicyRegistry {
 
   // Registers an enterprise policy pref. Features should register themselves in
   // components/optimization_guide/core/feature_registry/feature_registration.cc.
+  // `name` must reference a string with static storage duration (e.g. a string
+  // literal), as `EnterprisePolicyPref` stores `name` as a non-owning
+  // `std::string_view`.
   // Note that this does not cause the pref to be immediately registered in the
   // pref service: RegisterProfilePrefs must be called to do so (only once all
   // features are done registering their enterprise policy via Register calls).
   COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
-  EnterprisePolicyPref Register(const char* name);
+  EnterprisePolicyPref Register(std::string_view name);
 
   // Registers all the prefs this registry holds into the pref registry.
   COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)

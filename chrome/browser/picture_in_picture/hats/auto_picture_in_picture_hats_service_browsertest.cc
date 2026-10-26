@@ -7,12 +7,13 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/picture_in_picture/hats/auto_picture_in_picture_hats_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/mock_hats_service.h"
 #include "chrome/browser/ui/hats/survey_config.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/test/browser_test.h"
 #include "media/base/media_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -92,7 +93,7 @@ INSTANTIATE_TEST_SUITE_P(All,
 
 IN_PROC_BROWSER_TEST_P(AutoPictureInPictureHatsBrowserTest,
                        ServiceCreationRespectsFeatureFlag) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   if (is_surveys_feature_enabled()) {
     ON_CALL(*GetMockHatsService(profile), CanShowAnySurvey(false))
         .WillByDefault(testing::Return(true));
@@ -119,7 +120,7 @@ class AutoPictureInPictureHatsEnabledBrowserTest
 
 IN_PROC_BROWSER_TEST_F(AutoPictureInPictureHatsEnabledBrowserTest,
                        TriggersSurveyOnWindowClose) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   auto* hats_service = GetMockHatsService(profile);
   ON_CALL(*hats_service, CanShowAnySurvey(false))
       .WillByDefault(testing::Return(true));
@@ -139,5 +140,5 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureHatsEnabledBrowserTest,
                                          _, _, _, _, _));
 
   autopip_hats_service->MaybeLaunchSurvey(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetActiveTabInterface()->GetContents());
 }

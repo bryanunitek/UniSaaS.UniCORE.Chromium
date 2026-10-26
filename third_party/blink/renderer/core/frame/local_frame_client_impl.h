@@ -38,10 +38,10 @@
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/receiver_set.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/public/common/subresource_load_metrics.h"
 #include "third_party/blink/public/mojom/devtools/devtools_agent.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/scroll/scroll_enums.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
@@ -80,9 +80,6 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
                               int32_t world_id) override;
   void WillReleaseScriptContext(v8::Local<v8::Context>,
                                 int32_t world_id) override;
-
-  // Returns true if we should allow register V8 extensions to be added.
-  bool AllowScriptExtensions() override;
 
   bool HasWebView() const override;
   bool IsForInitialWebUI() const override;
@@ -142,8 +139,9 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
       base::TimeTicks input_start_time,
       base::TimeTicks actual_navigation_start,
       const String& href_translate,
-      const std::optional<Impression>& impression,
       const LocalFrameToken* initiator_frame_token,
+      const InitiatorStateToken& initiator_state_token,
+      const DocumentToken& initiator_document_token,
       SourceLocation* source_location,
       mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>
           initiator_navigation_state_keep_alive_handle,
@@ -151,7 +149,8 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
       bool has_rel_opener,
       mojo::PendingReceiver<
           mojom::blink::NavigationResumeDeferredCommitListener>,
-      std::optional<base::UnguessableToken> script_tool_invocation_id) override;
+      std::optional<ToolInvocationToken> script_tool_invocation_id,
+      const String& script_injector_host) override;
   void DispatchWillSendSubmitEvent(HTMLFormElement*) override;
   void DidStartLoading() override;
   void DidStopLoading() override;
@@ -162,12 +161,14 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
           soft_navigation_heuristics_task_id) const override;
   void DidDispatchPingLoader(const KURL&) override;
   void DidChangePerformanceTiming() override;
-  void DidObserveUserInteraction(base::TimeTicks max_event_start,
-                                 base::TimeTicks max_event_queued_main_thread,
-                                 base::TimeTicks max_event_processing_start,
-                                 base::TimeTicks max_event_commit_finish,
-                                 base::TimeTicks max_event_end,
-                                 uint64_t interaction_offset) override;
+  void DidObserveUserInteraction(
+      base::TimeTicks max_event_start,
+      base::TimeTicks max_event_queued_main_thread,
+      base::TimeTicks max_event_processing_start,
+      base::TimeTicks max_event_commit_finish,
+      base::TimeTicks max_event_end,
+      PerformanceTimelineEntryIdInfo interaction_id,
+      PerformanceTimelineEntryIdInfo navigation_id) override;
   void DidChangeCpuTiming(base::TimeDelta) override;
   void DidObserveLoadingBehavior(LoadingBehaviorFlag) override;
   void DidObserveJavaScriptFrameworks(
@@ -177,9 +178,15 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
   void DidObserveNewFeatureUsage(const UseCounterFeature&) override;
   void DidObserveSoftNavigation(
       SoftNavigationMetricsForReporting metrics) override;
+  void DidObserveSoftNavigationFirstContentfulPaint(
+      uint64_t performance_timeline_navigation_id,
+      base::TimeDelta first_contentful_paint) override;
   void DidObserveSoftLargestContentfulPaint(
       const LargestContentfulPaintDetailsForReporting& lcp) override;
-  void DidObserveLayoutShift(double score, bool after_input_or_scroll) override;
+  void DidObserveLayoutShift(
+      double score,
+      bool after_input_or_scroll,
+      PerformanceTimelineEntryIdInfo navigation_id) override;
   void SelectorMatchChanged(const Vector<String>& added_selectors,
                             const Vector<String>& removed_selectors) override;
 
@@ -193,11 +200,6 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
   LocalFrame* CreateFrame(const AtomicString& name,
                           HTMLFrameOwnerElement*) override;
 
-  RemoteFrame* CreateFencedFrame(
-      HTMLFencedFrameElement*,
-      mojo::PendingAssociatedReceiver<mojom::blink::FencedFrameOwnerHost>)
-      override;
-
   WebPluginContainerImpl* CreatePlugin(HTMLPlugInElement&,
                                        const KURL&,
                                        const Vector<String>&,
@@ -209,7 +211,7 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
       const WebMediaPlayerSource&,
       WebMediaPlayerClient*) override;
   RemotePlaybackClient* CreateRemotePlaybackClient(HTMLMediaElement&) override;
-  void DidChangeScrollOffset() override;
+  void DidChangeScrollOffset(mojom::blink::ScrollType) override;
   void NotifyCurrentHistoryItemChanged() override;
   void DidUpdateCurrentHistoryItem() override;
 
@@ -299,6 +301,7 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
       override;
 
   bool IsDomStorageDisabled() const override;
+  bool AreDedicatedWorkersDisabled() const override;
 
  private:
   bool IsLocalFrameClientImpl() const override { return true; }

@@ -23,7 +23,7 @@ found in the LICENSE file.
         android:background="@drawable/default_icon_background"
         android:visibility="gone" />
 
-    <org.chromium.ui.widget.ChromeImageView
+    <ImageView
         android:id="@+id/title_icon"
         android:layout_width="36dp"
         android:layout_height="36dp"
@@ -53,7 +53,7 @@ found in the LICENSE file.
         android:background="@drawable/default_icon_background"
         android:visibility="gone" />
 
-    <org.chromium.ui.widget.ChromeImageView
+    <ImageView
         android:id="@+id/title_end_icon"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -63,5 +63,15 @@ found in the LICENSE file.
         android:layout_marginEnd="0dp"
         android:importantForAccessibility="no"
         android:focusable="false"
+        android:visibility="gone" />
+
+    <androidx.appcompat.widget.AppCompatImageButton
+        android:id="@+id/title_close_button"
+        android:src="@drawable/btn_close"
+        android:layout_width="@dimen/min_touch_target_size"
+        android:layout_height="@dimen/min_touch_target_size"
+        android:layout_marginEnd="0dp"
+        android:background="@drawable/default_icon_background"
+        android:contentDescription="@string/close"
         android:visibility="gone" />
 </LinearLayout>

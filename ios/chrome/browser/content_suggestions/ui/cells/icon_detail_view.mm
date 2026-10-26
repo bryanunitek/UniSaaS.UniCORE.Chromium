@@ -13,6 +13,7 @@
 #import "ios/chrome/browser/content_suggestions/ui/cells/icon_view_configuration.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_color_palette.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_color_updating.h"
+#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_trait.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/elements/gradient/gradient_view.h"
@@ -67,8 +68,7 @@ UIImageView* CheckmarkIcon() {
 
   config = [config configurationByApplyingConfiguration:colorConfig];
 
-  UIImage* image =
-      DefaultSymbolWithConfiguration(kCheckmarkCircleFillSymbol, config);
+  UIImage* image = SymbolWithConfiguration(SymbolCheckmarkCircleFill, config);
 
   UIImageView* icon = [[UIImageView alloc] initWithImage:image];
 
@@ -103,11 +103,8 @@ UIImageView* BadgeIcon(const IconDetailViewConfig* icon_detail_view_config) {
 
   config = [config configurationByApplyingConfiguration:color_config];
 
-  UIImage* image = icon_detail_view_config.badgeUsesDefaultSymbol
-                       ? DefaultSymbolWithConfiguration(
-                             icon_detail_view_config.badgeSymbolName, config)
-                       : CustomSymbolWithConfiguration(
-                             icon_detail_view_config.badgeSymbolName, config);
+  UIImage* image =
+      SymbolWithConfiguration(icon_detail_view_config.badgeSymbol, config);
 
   if (!icon_detail_view_config.badgeColorPalette) {
     image = MakeSymbolMulticolor(image);
@@ -279,8 +276,17 @@ UIView* BadgeIconInContainer(UIImageView* icon,
 - (void)applyBackgroundColors {
   NewTabPageColorPalette* colorPalette =
       [self.traitCollection objectForNewTabPageTrait];
-  _imageContainerView.backgroundColor =
-      colorPalette.tertiaryColor ?: [UIColor colorNamed:kGrey100Color];
+
+  if (colorPalette) {
+    _imageContainerView.backgroundColor = IsNewTabPageUICleanupEnabled()
+                                              ? colorPalette.primaryColor
+                                              : colorPalette.tertiaryColor;
+  } else {
+    _imageContainerView.backgroundColor =
+        [UIColor colorNamed:IsNewTabPageUICleanupEnabled()
+                                ? kNTPRedesignTileBackgroundColor
+                                : kGrey100Color];
+  }
   _config.ntpBackgroundColorPalette = colorPalette;
 }
 
@@ -351,9 +357,11 @@ UIView* BadgeIconInContainer(UIImageView* icon,
 
   BOOL isHeroLayout = _config.layoutType == IconDetailViewLayoutType::kHero;
 
-  // When the item is displayed in a hero-style layout, the icon is more
-  // prominently displayed via an icon container view.
-  if (isHeroLayout) {
+  // When the item is displayed in a hero-style layout without a trailing
+  // switch, the icon is prominently framed inside `_imageContainerView`. Items
+  // with `showSwitch` enabled display the compact `IconView` directly so more
+  // horizontal space is preserved for the text stack and `UISwitch`.
+  if (isHeroLayout && !_config.showSwitch) {
     _imageContainerView =
         [self imageInContainer:image
              useLargeContainer:(_config.backgroundImage != nil)];
@@ -375,7 +383,7 @@ UIView* BadgeIconInContainer(UIImageView* icon,
     }
 
     // Create the Badge Icon, if applicable.
-    if (_config.badgeSymbolName.length != 0) {
+    if (_config.badgeSymbol != SymbolNone) {
       UIImageView* badge = BadgeIcon(_config);
 
       UIView* badgeWithContainer = BadgeIconInContainer(
@@ -427,8 +435,23 @@ UIView* BadgeIconInContainer(UIImageView* icon,
 
   [arrangedSubviews addObject:textStack];
 
-  // For compact layout, display a chevron at the end of the item.
-  if (!isHeroLayout) {
+  if (_config.showSwitch) {
+    // Disable container-level accessibility aggregation so VoiceOver can focus
+    // the text labels and the interactive `UISwitch` as separate elements.
+    self.isAccessibilityElement = NO;
+    UISwitch* toggleSwitch = [[UISwitch alloc] init];
+    [toggleSwitch setContentHuggingPriority:UILayoutPriorityDefaultHigh
+                                    forAxis:UILayoutConstraintAxisHorizontal];
+    [toggleSwitch
+        setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                        forAxis:
+                                            UILayoutConstraintAxisHorizontal];
+    [toggleSwitch addTarget:self
+                     action:@selector(switchValueChanged:)
+           forControlEvents:UIControlEventValueChanged];
+    [arrangedSubviews addObject:toggleSwitch];
+  } else if (!isHeroLayout) {
+    // For compact layout, display a chevron at the end of the item.
     UIImageView* chevron = [[UIImageView alloc]
         initWithImage:[UIImage imageNamed:@"table_view_cell_chevron"]];
 
@@ -449,14 +472,28 @@ UIView* BadgeIconInContainer(UIImageView* icon,
   [self addSubview:contentStack];
   AddSameConstraints(contentStack, self);
 
-  // Set up the tap gesture recognizer.
-  _tapGestureRecognizer =
-      [[UITapGestureRecognizer alloc] initWithTarget:self
-                                              action:@selector(handleTap:)];
+  // Only attach a full-view tap gesture recognizer when `showSwitch` is
+  // disabled; when `showSwitch` is enabled, user interaction is handled
+  // exclusively by `toggleSwitch` rather than navigating on card tap.
+  if (!_config.showSwitch) {
+    // Set up the tap gesture recognizer.
+    _tapGestureRecognizer =
+        [[UITapGestureRecognizer alloc] initWithTarget:self
+                                                action:@selector(handleTap:)];
 
-  [self addGestureRecognizer:_tapGestureRecognizer];
+    [self addGestureRecognizer:_tapGestureRecognizer];
+  }
 
   [self applyBackgroundColors];
+}
+
+// Called when the trailing switch is toggled.
+- (void)switchValueChanged:(UISwitch*)sender {
+  if ([self.tapDelegate
+          respondsToSelector:@selector(
+                                 didToggleSwitchInIconDetailView:isOn:)]) {
+    [self.tapDelegate didToggleSwitchInIconDetailView:self isOn:sender.isOn];
+  }
 }
 
 // Called when the view is tapped. This method notifies the `tapDelegate`

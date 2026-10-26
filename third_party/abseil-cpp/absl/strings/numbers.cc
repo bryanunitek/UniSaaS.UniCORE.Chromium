@@ -256,7 +256,7 @@ inline char* EncodePadded16(uint64_t v, char* absl_nonnull buffer) {
   return buffer + 16;
 }
 
-inline ABSL_ATTRIBUTE_ALWAYS_INLINE char* absl_nonnull EncodeFullU32(
+ABSL_ATTRIBUTE_ALWAYS_INLINE inline char* absl_nonnull EncodeFullU32(
     uint32_t n, char* absl_nonnull out_str) {
   if (n < 10) {
     *out_str = static_cast<char>('0' + n);
@@ -279,7 +279,7 @@ inline ABSL_ATTRIBUTE_ALWAYS_INLINE char* absl_nonnull EncodeFullU32(
   return out_str + sizeof(bottom);
 }
 
-inline ABSL_ATTRIBUTE_ALWAYS_INLINE char* absl_nonnull EncodeFullU64(
+ABSL_ATTRIBUTE_ALWAYS_INLINE inline char* absl_nonnull EncodeFullU64(
     uint64_t i, char* absl_nonnull buffer) {
   if (i <= std::numeric_limits<uint32_t>::max()) {
     return EncodeFullU32(static_cast<uint32_t>(i), buffer);
@@ -304,7 +304,7 @@ inline ABSL_ATTRIBUTE_ALWAYS_INLINE char* absl_nonnull EncodeFullU64(
   return buffer + sizeof(mod_result);
 }
 
-inline ABSL_ATTRIBUTE_ALWAYS_INLINE char* absl_nonnull EncodeFullU128(
+ABSL_ATTRIBUTE_ALWAYS_INLINE inline char* absl_nonnull EncodeFullU128(
     uint128 i, char* absl_nonnull buffer) {
   if (absl::Uint128High64(i) == 0) {
     return EncodeFullU64(absl::Uint128Low64(i), buffer);
@@ -1124,15 +1124,15 @@ size_t numbers_internal::SixDigitsToBuffer(double d,
     case -4:
       out[2] = '0';
       ++out;
-      ABSL_FALLTHROUGH_INTENDED;
+      [[fallthrough]];
     case -3:
       out[2] = '0';
       ++out;
-      ABSL_FALLTHROUGH_INTENDED;
+      [[fallthrough]];
     case -2:
       out[2] = '0';
       ++out;
-      ABSL_FALLTHROUGH_INTENDED;
+      [[fallthrough]];
     case -1:
       out += 2;
       memcpy(out, &digits[0], 6);

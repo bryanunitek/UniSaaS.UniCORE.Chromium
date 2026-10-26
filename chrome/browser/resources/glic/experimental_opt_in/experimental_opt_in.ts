@@ -9,11 +9,19 @@ import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 
+// <if expr="not is_android">
 import {ColorChangeUpdater} from '//resources/cr_components/color_change_listener/colors_css_updater.js';
+// </if>
 import {loadTimeData} from '//resources/js/load_time_data.js';
 import {getRequiredElement} from '//resources/js/util.js';
+// <if expr="not enable_extensions_core">
+import {OriginCheckParams} from '/shared/guest_view/request_throttlers.js';
+
+// </if>
 
 import {ExperimentalOptInPageHandler} from './glic_experimental_opt_in.mojom-webui.js';
+import {isFullWebView} from './web_view_type.js';
+import type {WebViewType} from './web_view_type.js';
 
 const handler = ExperimentalOptInPageHandler.getRemote();
 
@@ -29,23 +37,33 @@ enum FailureType {
 const TRANSITION_DURATION_MS = 250;
 // Setup target height and width custom properties immediately at load to
 // prevent layout shifts.
+// <if expr="not is_android">
 const defaultHeight =
     loadTimeData.getInteger('glicExperimentalOptInDefaultHeight');
 const defaultWidth =
     loadTimeData.getInteger('glicExperimentalOptInDefaultWidth');
+const targetWidth = window.innerWidth > 0 ?
+    Math.min(defaultWidth, window.innerWidth) :
+    defaultWidth;
 document.documentElement.style.setProperty(
     '--glic-experimental-opt-in-height', `${defaultHeight}px`);
 document.documentElement.style.setProperty(
-    '--glic-experimental-opt-in-width', `${defaultWidth}px`);
+    '--glic-experimental-opt-in-width', `${targetWidth}px`);
+document.body.style.minHeight = `${defaultHeight}px`;
+// </if>
+// <if expr="is_android">
+document.documentElement.classList.add('android');
+document.documentElement.style.setProperty(
+    '--glic-experimental-opt-in-height', '100%');
+document.documentElement.style.setProperty(
+    '--glic-experimental-opt-in-width', '100%');
+// </if>
 document.documentElement.style.setProperty(
     '--glic-transition-duration', `${TRANSITION_DURATION_MS}ms`);
 
-// Set min-height on body to prevent collapse during loading when webview is
-// hidden and skeleton is absolute.
-document.body.style.minHeight = `${defaultHeight}px`;
-
 export class ExperimentalOptInApp {
-  private webview_: chrome.webviewTag.WebView;
+  private webview_: WebViewType;
+  private dialogRoot_: HTMLElement;
   private errorPanel_: HTMLElement;
   private errorIcon_: HTMLElement;
   private errorHeadline_: HTMLElement;
@@ -60,13 +78,19 @@ export class ExperimentalOptInApp {
   private loadingTimeoutId_: number|null = null;
 
   constructor() {
-    this.webview_ = getRequiredElement<chrome.webviewTag.WebView>('webview');
+    this.webview_ = getRequiredElement<WebViewType>('webview');
+    // <if expr="not is_android">
     // Allow a small margin of error (±2px) around the target width to prevent
     // subpixel rounding or zoom differences from failing the webview's internal
     // size-changed checks and collapsing the layout.
-    this.webview_.setAttribute('minwidth', String(defaultWidth - 2));
-    this.webview_.setAttribute('maxwidth', String(defaultWidth + 2));
+    this.webview_.setAttribute('minwidth', String(targetWidth - 2));
+    this.webview_.setAttribute('maxwidth', String(targetWidth + 2));
+    // </if>
+    // <if expr="is_android">
+    this.webview_.removeAttribute('autosize');
+    // </if>
 
+    this.dialogRoot_ = getRequiredElement('dialogRoot');
     this.errorPanel_ = getRequiredElement('errorPanel');
     this.errorIcon_ = getRequiredElement('errorIcon');
     this.errorHeadline_ = getRequiredElement('errorHeadline');
@@ -93,6 +117,8 @@ export class ExperimentalOptInApp {
 
     this.setupEventListeners_();
 
+    this.initDialogSemantics_();
+
     if (!this.hasError_) {
       this.tryLoad_();
     }
@@ -112,32 +138,41 @@ export class ExperimentalOptInApp {
       this.startWatchdog_();
     });
 
-    this.webview_.request.onBeforeRequest.addListener(
-        (details: {url: string, frameId: number}) => {
-          if (details.frameId !== 0) {
-            return {};
-          }
-          const url = URL.parse(details.url);
-          if (!url) {
-            console.error(
-                'Failed to parse URL in onBeforeRequest:', details.url);
-            return {cancel: true};
-          }
-          if (loadTimeData.getBoolean('glicDevEnabled')) {
-            return {};
-          }
-          if (url.protocol === 'http:' || url.protocol === 'https:') {
-            if (url.origin !== this.optInOrigin_) {
+    if (isFullWebView(this.webview_)) {
+      this.webview_.request.onBeforeRequest.addListener(
+          (details: {url: string, frameId: number}) => {
+            if (details.frameId !== 0) {
+              return {};
+            }
+            const url = URL.parse(details.url);
+            if (!url) {
+              console.error(
+                  'Failed to parse URL in onBeforeRequest:', details.url);
               return {cancel: true};
             }
-          }
-          return {};
-        },
-        {
-          urls: ['<all_urls>'],
-          types: ['main_frame'],
-        },
-        ['blocking']);
+            if (loadTimeData.getBoolean('glicDevEnabled')) {
+              return {};
+            }
+            if (url.protocol === 'http:' || url.protocol === 'https:') {
+              if (url.origin !== this.optInOrigin_) {
+                return {cancel: true};
+              }
+            }
+            return {};
+          },
+          {
+            urls: ['<all_urls>'],
+            types: ['main_frame'],
+          },
+          ['blocking']);
+    } else {
+      // <if expr="not enable_extensions_core">
+      const allowedOriginsParams = getAllowedOriginsParams(this.optInOrigin_);
+      if (allowedOriginsParams !== null) {
+        this.webview_.allowedOriginsParams = allowedOriginsParams;
+      }
+      // </if>
+    }
 
     this.webview_.addEventListener('contentload', () => {
       this.clearWatchdog_();
@@ -147,6 +182,7 @@ export class ExperimentalOptInApp {
       this.errorPanel_.hidden = true;
       this.webview_.classList.add('autosized');
       this.webview_.hidden = false;
+      this.focusWebview_();
       handler.onWebviewLoaded();
     });
 
@@ -219,6 +255,9 @@ export class ExperimentalOptInApp {
     // correctly.
     this.webview_.offsetHeight;
     this.webview_.classList.add('visible');
+    if (loadTimeData.getBoolean('glicOptInDialogA11yFixEnabled')) {
+      this.focusWebview_();
+    }
 
     setTimeout(() => {
       if (skeleton) {
@@ -226,6 +265,38 @@ export class ExperimentalOptInApp {
         skeleton.classList.remove('fade-out');
       }
     }, TRANSITION_DURATION_MS);
+  }
+
+  // Applies the dialog semantics used by screen readers to announce this
+  // WebUI, and moves focus into it. The Views dialog hosting this page is a
+  // tab-modal child widget, so without an explicitly labelled dialog container
+  // in the focused document there is nothing for the screen reader to
+  // announce when the dialog opens.
+  private initDialogSemantics_() {
+    if (!loadTimeData.getBoolean('glicOptInDialogA11yFixEnabled')) {
+      return;
+    }
+    const title = loadTimeData.getString('glicWindowTitle');
+    document.title = title;
+    this.dialogRoot_.setAttribute('role', 'dialog');
+    this.dialogRoot_.setAttribute('aria-modal', 'true');
+    this.dialogRoot_.setAttribute('aria-label', title);
+    this.dialogRoot_.setAttribute('tabindex', '-1');
+    this.dialogRoot_.focus();
+  }
+
+  private focusWebview_() {
+    if (!loadTimeData.getBoolean('glicOptInDialogA11yFixEnabled')) {
+      return;
+    }
+    if (!this.webview_.checkVisibility()) {
+      return;
+    }
+    try {
+      this.webview_.focus();
+    } catch (e) {
+      console.warn('[Glic Opt-in A11y] Failed to focus webview element:', e);
+    }
   }
 
   private clearWatchdog_() {
@@ -243,7 +314,9 @@ export class ExperimentalOptInApp {
     this.loadingTimeoutId_ = setTimeout(() => {
       if (!this.hasError_ && this.webview_.hidden === false) {
         this.hasError_ = true;
-        this.webview_.stop();
+        if (isFullWebView(this.webview_)) {
+          this.webview_.stop();
+        }
         // A timeout may be caused by general slowness or server issues, not
         // just the device being offline, but we show the same generic offline
         // error UI here.
@@ -258,13 +331,21 @@ export class ExperimentalOptInApp {
         'Glic.ExperimentalTriggering.OptIn.ErrorShown', type,
         FailureType.MAX_VALUE + 1);
     if (type === FailureType.OFFLINE) {
-      this.errorIcon_.setAttribute('icon', 'glic:offline');
+      this.errorIcon_.setAttribute(
+          'icon',
+          loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+              'glic:wifi-off' :
+              'glic:offline-old');
       this.errorHeadline_.textContent =
           loadTimeData.getString('offlineNoticeHeader');
       this.errorMessage_.textContent =
           loadTimeData.getString('experimentalOptInOfflineNoticeMessage');
     } else {
-      this.errorIcon_.setAttribute('icon', 'glic:error');
+      this.errorIcon_.setAttribute(
+          'icon',
+          loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+              'glic:error' :
+              'glic:error-old');
       this.errorHeadline_.textContent =
           loadTimeData.getString('errorNoticeHeader');
       this.errorMessage_.textContent =
@@ -296,7 +377,7 @@ export class ExperimentalOptInApp {
     }
 
     // Wait for cookie sync to complete before setting src
-    const { success } = await handler.syncCookies();
+    const {success} = await handler.syncCookies();
     if (!success) {
       console.error('Failed to sync cookies for glic webview');
       // If sync fails, check if it's because the user went offline during the
@@ -310,16 +391,36 @@ export class ExperimentalOptInApp {
     }
 
     if (this.webview_.getAttribute('src') === this.optInUrl_) {
-      // If the URL is already set, setting it again does nothing. Force a reload.
-      this.webview_.reload();
+      // If the URL is already set, setting it again does nothing. Force a
+      // reload.
+      if (isFullWebView(this.webview_)) {
+        this.webview_.reload();
+      } else {
+        // <if expr="not enable_extensions_core">
+        this.webview_.removeAttribute('src');
+        await this.webview_.updateComplete;
+        this.webview_.setAttribute('src', this.optInUrl_);
+        // </if>
+      }
     } else {
       this.webview_.setAttribute('src', this.optInUrl_);
     }
   }
 }
 
+// <if expr="not enable_extensions_core">
+function getAllowedOriginsParams(optInOrigin: string): OriginCheckParams|null {
+  if (loadTimeData.getBoolean('glicDevEnabled')) {
+    return null;
+  }
+  return new OriginCheckParams(['main_frame'], [optInOrigin]);
+}
+// </if>
+
 function init() {
+  // <if expr="not is_android">
   ColorChangeUpdater.forDocument().start();
+  // </if>
   new ExperimentalOptInApp();
 }
 

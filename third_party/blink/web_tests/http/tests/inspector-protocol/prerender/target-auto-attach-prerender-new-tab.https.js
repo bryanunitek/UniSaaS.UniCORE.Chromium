@@ -10,8 +10,7 @@
   const tabTargetSessionId =
       (await bp.Target.attachToTarget({targetId: tabTargetId, flatten: true}))
           .result.sessionId;
-  const tabTargetSession =
-      new TestRunner.Session(testRunner, tabTargetSessionId);
+  const tabTargetSession = testRunner.createSessionFor(tabTargetSessionId);
   const tp = tabTargetSession.protocol;
 
   const events = [];
@@ -47,6 +46,24 @@
 
   await navigateDone;
   await prerenderReady;
+
+  // Attach a second session that should remain connected when the initiator's
+  // auto-attached session is detached during activation.
+  const independentSessionId = (await tp.Target.attachToTarget({
+                                 targetId: attached.targetInfo.targetId,
+                                 flatten: true
+                               })).result.sessionId;
+  const independentSession =
+      testRunner.browserSession().createChild(independentSessionId);
+
+  const detachedPromise = tp.Target.onceDetachedFromTarget(
+      event => event.params.sessionId === attached.sessionId);
+  session.evaluate(`document.getElementById('link').click()`);
+  const detached = (await detachedPromise).params;
+  testRunner.log(`Detached auto-attached session: ${
+      detached.targetId === attached.targetInfo.targetId}`);
+  testRunner.log(`Independent session sees activated page: ${
+      !(await independentSession.evaluate('document.prerendering'))}`);
 
   testRunner.completeTest();
 });

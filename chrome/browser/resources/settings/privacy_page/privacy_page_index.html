@@ -17,8 +17,7 @@
   <template is="dom-if" if="[[isPrivacyGuideAvailable]]" restamp>
     <settings-section slot="view" id="privacyGuidePromo" page-title=""
         hidden$="[[!showPrivacyGuidePromo_]]">
-      <settings-privacy-guide-promo prefs="{{prefs}}">
-      </settings-privacy-guide-promo>
+      <settings-privacy-guide-promo></settings-privacy-guide-promo>
     </settings-section>
   </template>
 
@@ -34,7 +33,7 @@
         update-when-false>
       <!-- TODO(crbug.com/40267370): Make the page searchable.-->
       <settings-safety-hub-page slot="view" id="safetyHub" no-search
-          data-parent-view-id="safetyHubEntryPoint" prefs="{{prefs}}"
+          data-parent-view-id="safetyHubEntryPoint"
           route-path$="[[routes_.SAFETY_HUB.path]]">
       </settings-safety-hub-page>
     </template>
@@ -42,62 +41,9 @@
 
   <template is="dom-if" if="[[renderPrivacyView_(currentRoute, inSearchMode)]]"
       update-when-false>
-    <settings-privacy-page slot="view" id="privacy" prefs="{{prefs}}"
+    <settings-privacy-page slot="view" id="privacy"
         route-path$="[[routes_.PRIVACY.path]]">
     </settings-privacy-page>
-  </template>
-
-  <template is="dom-if" if="[[isAdPrivacyAvailable_]]" restamp>
-    <template is="dom-if" if="[[renderView_(
-        routes_.PRIVACY_SANDBOX, currentRoute, inSearchMode)]]"
-        update-when-false>
-      <settings-privacy-sandbox-page slot="view" id="privacySandbox"
-          data-parent-view-id="privacy" prefs="{{prefs}}"
-          route-path$="[[routes_.PRIVACY_SANDBOX.path]]">
-      </settings-privacy-sandbox-page>
-    </template>
-
-    <template is="dom-if" if="[[renderView_(
-        routes_.PRIVACY_SANDBOX_AD_MEASUREMENT, currentRoute, inSearchMode)]]"
-        update-when-false>
-      <settings-privacy-sandbox-ad-measurement-subpage slot="view"
-          id="privacySandboxAdMeasurement" data-parent-view-id="privacy"
-          prefs="{{prefs}}"
-          route-path$="[[routes_.PRIVACY_SANDBOX_AD_MEASUREMENT.path]]">
-      </settings-privacy-sandbox-ad-measurement-subpage>
-    </template>
-  </template>
-
-  <template is="dom-if" if="[[isPrivacySandboxTopicsAndFledgeAvailable_]]" restamp>
-    <template is="dom-if" if="[[renderView_(
-        routes_.PRIVACY_SANDBOX_FLEDGE, currentRoute, inSearchMode)]]"
-        update-when-false>
-      <settings-privacy-sandbox-fledge-subpage slot="view"
-          id="privacySandboxFledge" data-parent-view-id="privacy"
-          prefs="{{prefs}}"
-          route-path$="[[routes_.PRIVACY_SANDBOX_FLEDGE.path]]">
-      </settings-privacy-sandbox-fledge-subpage>
-    </template>
-
-    <template is="dom-if" if="[[renderView_(
-          routes_.PRIVACY_SANDBOX_TOPICS, currentRoute, inSearchMode)]]"
-          update-when-false>
-      <settings-privacy-sandbox-topics-subpage slot="view"
-          id="privacySandboxTopics" data-parent-view-id="privacy"
-          prefs="{{prefs}}"
-          route-path$="[[routes_.PRIVACY_SANDBOX_TOPICS.path]]">
-      </settings-privacy-sandbox-topics-subpage>
-    </template>
-
-    <template is="dom-if" if="[[renderView_(
-          routes_.PRIVACY_SANDBOX_MANAGE_TOPICS, currentRoute, inSearchMode)]]"
-          update-when-false>
-      <settings-privacy-sandbox-manage-topics-subpage slot="view"
-          id="privacySandboxManageTopics" data-parent-view-id="privacy"
-          prefs="{{prefs}}"
-          route-path$="[[routes_.PRIVACY_SANDBOX_MANAGE_TOPICS.path]]">
-      </settings-privacy-sandbox-manage-topics-subpage>
-    </template>
   </template>
 
   <!-- Keep entries below sorted based on the route name. -->
@@ -106,29 +52,17 @@
       routes_.COOKIES, currentRoute, inSearchMode)]]"
       update-when-false>
     <settings-cookies-page slot="view" id="cookies"
-        data-parent-view-id="privacy" prefs="{{prefs}}"
+        data-parent-view-id="privacy"
         route-path$="[[routes_.COOKIES.path]]">
     </settings-cookies-page>
   </template>
 
-  <template is="dom-if" if="[[!enableBundledSecuritySettings_]]">
-    <template is="dom-if" if="[[renderView_(
-        routes_.SECURITY, currentRoute, inSearchMode)]]" update-when-false>
-      <settings-security-page slot="view"
-          id="security" data-parent-view-id="privacy" prefs="{{prefs}}"
-          route-path$="[[routes_.SECURITY.path]]">
-      </settings-security-page>
-    </template>
-  </template>
-
-  <template is="dom-if" if="[[enableBundledSecuritySettings_]]">
-    <template is="dom-if" if="[[renderView_(
-        routes_.SECURITY, currentRoute, inSearchMode)]]" update-when-false>
-      <settings-security-page-v2 slot="view"
-          id="security" data-parent-view-id="privacy" prefs="{{prefs}}"
-          route-path$="[[routes_.SECURITY.path]]">
-      </settings-security-page-v2>
-    </template>
+  <template is="dom-if" if="[[renderView_(
+      routes_.SECURITY, currentRoute, inSearchMode)]]" update-when-false>
+    <settings-security-page slot="view"
+        id="security" data-parent-view-id="privacy"
+        route-path$="[[routes_.SECURITY.path]]">
+    </settings-security-page>
   </template>
 
   <template is="dom-if" if="[[enableSecurityKeysSubpage_]]">
@@ -146,7 +80,7 @@
       routes_.SITE_SETTINGS, currentRoute, inSearchMode)]]"
       update-when-false>
     <settings-site-settings-page slot="view" id="siteSettings"
-        data-parent-view-id="privacy" prefs="{{prefs}}"
+        data-parent-view-id="privacy"
         route-path$="[[routes_.SITE_SETTINGS.path]]">
     </settings-site-settings-page>
   </template>
@@ -361,15 +295,6 @@
   </template>
 
   <template is="dom-if" if="[[renderView_(
-      routes_.SITE_SETTINGS_INLINE_CUE_MENU, currentRoute, inSearchMode)]]"
-      update-when-false>
-    <settings-inline-cue-menu-page slot="view" id="siteSettingsInlineCueMenu"
-        route-path$="[[routes_.SITE_SETTINGS_INLINE_CUE_MENU.path]]"
-        data-parent-view-id="privacy">
-    </settings-inline-cue-menu-page>
-  </template>
-
-  <template is="dom-if" if="[[renderView_(
       routes_.SITE_SETTINGS_MIXEDSCRIPT, currentRoute, inSearchMode)]]"
       update-when-false>
     <settings-insecure-content-page slot="view"
@@ -392,7 +317,7 @@
       routes_.SITE_SETTINGS_JAVASCRIPT_OPTIMIZER, currentRoute, inSearchMode)]]"
       update-when-false>
     <settings-v8-page slot="view" id="siteSettingsJavascriptOptimizer"
-      data-parent-view-id="privacy" prefs="{{prefs}}"
+      data-parent-view-id="privacy"
       route-path$="[[routes_.SITE_SETTINGS_JAVASCRIPT_OPTIMIZER.path]]">
     </settings-v8-page>
   </template>
@@ -440,7 +365,7 @@
       routes_.SITE_SETTINGS_LOCATION, currentRoute, inSearchMode)]]"
       update-when-false>
     <settings-geolocation-page slot="view" id="siteSettingsLocation"
-        data-parent-view-id="privacy" prefs="{{prefs}}"
+        data-parent-view-id="privacy"
         route-path$="[[routes_.SITE_SETTINGS_LOCATION.path]]">
     </settings-geolocation-page>
   </template>
@@ -468,7 +393,7 @@
       update-when-false>
     <settings-notifications-page slot="view" id="siteSettingsNotifications"
         route-path$="[[routes_.SITE_SETTINGS_NOTIFICATIONS.path]]"
-        data-parent-view-id="privacy" prefs="{{prefs}}">
+        data-parent-view-id="privacy">
     </settings-notifications-page>
   </template>
 
@@ -487,7 +412,7 @@
       routes_.SITE_SETTINGS_PDF_DOCUMENTS, currentRoute, inSearchMode)]]"
       update-when-false>
     <settings-pdf-documents-page slot="view" id="siteSettingsPdfDocuments"
-        data-parent-view-id="privacy" prefs="{{prefs}}"
+        data-parent-view-id="privacy"
         route-path$="[[routes_.SITE_SETTINGS_PDF_DOCUMENTS.path]]">
     </settings-pdf-documents-page>
   </template>
@@ -506,7 +431,6 @@
       update-when-false>
     <settings-protected-content-page slot="view"
         id="siteSettingsProtectedContent" data-parent-view-id="privacy"
-        prefs="{{prefs}}"
         route-path$="[[routes_.SITE_SETTINGS_PROTECTED_CONTENT.path]]">
     </settings-protected-content-page>
   </template>
@@ -558,7 +482,7 @@
       update-when-false>
     <settings-sound-page slot="view"
         id="siteSettingsSound" data-parent-view-id="privacy"
-        prefs="{{prefs}}" route-path$="[[routes_.SITE_SETTINGS_SOUND.path]]">
+        route-path$="[[routes_.SITE_SETTINGS_SOUND.path]]">
     </settings-sound-page>
   </template>
 
@@ -566,7 +490,7 @@
       routes_.SITE_SETTINGS_SITE_DATA, currentRoute, inSearchMode)]]"
       update-when-false>
     <settings-site-data slot="view" id="siteSettingsSiteData"
-        data-parent-view-id="privacy" prefs="{{prefs}}"
+        data-parent-view-id="privacy"
         route-path$="[[routes_.SITE_SETTINGS_SITE_DATA.path]]">
     </settings-site-data>
   </template>
@@ -575,7 +499,7 @@
       routes_.SITE_SETTINGS_SITE_DETAILS, currentRoute, inSearchMode)]]"
       update-when-false>
     <site-details slot="view" id="siteSettingsSiteDetails"
-        data-parent-view-id="privacy" prefs="{{prefs}}"
+        data-parent-view-id="privacy"
         route-path$="[[routes_.SITE_SETTINGS_SITE_DETAILS.path]]">
     </site-details>
   </template>

@@ -22,6 +22,7 @@ import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.R;
+import org.chromium.chrome.browser.util.BrowserUiUtils;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.base.WindowAndroid.IntentCallback;
 import org.chromium.ui.permissions.PermissionCallback;
@@ -127,11 +128,16 @@ public class VoiceRecognitionIntentHandler {
     /** Checks if voice search is enabled for the given window. */
     public boolean isVoiceSearchEnabled() {
         if (mWindowAndroid == null) return false;
-        if (mWindowAndroid.getActivity().get() == null) return false;
-        if (!VoiceRecognitionUtil.isVoiceSearchPermittedByPolicy(false)) return false;
+        Activity activity = mWindowAndroid.getActivity().get();
+        if (activity == null) return false;
+        if (!VoiceRecognitionUtil.isVoiceSearchPermittedByPolicy(/* strictPolicyCheck= */ false)) {
+            return false;
+        }
 
         if (mIsVoiceSearchEnabledCached == null) {
-            mIsVoiceSearchEnabledCached = VoiceRecognitionUtil.isVoiceSearchEnabled(mWindowAndroid);
+            mIsVoiceSearchEnabledCached =
+                    !BrowserUiUtils.isAndroidAutoProjected(activity)
+                            && VoiceRecognitionUtil.isVoiceSearchEnabled(mWindowAndroid);
 
             if (!mRegisteredActivityStateListener) {
                 ApplicationStatus.registerApplicationStateListener(mApplicationStateListener);
@@ -184,10 +190,11 @@ public class VoiceRecognitionIntentHandler {
                     intent.putExtra(
                             RecognizerIntent.EXTRA_CALLING_PACKAGE,
                             activity.getComponentName().flattenToString());
-                    intent.putExtra(RecognizerIntent.EXTRA_WEB_SEARCH_ONLY, true);
+                    intent.putExtra(RecognizerIntent.EXTRA_WEB_SEARCH_ONLY, /* value= */ true);
 
                     if (!showSpeechRecognitionIntent(intent, source, callback)) {
-                        VoiceRecognitionUtil.isRecognitionIntentPresent(false);
+                        VoiceRecognitionUtil.isRecognitionIntentPresent(
+                                /* useCachedValue= */ false);
                         recordVoiceSearchFailureEvent(source);
                         callback.onAvailabilityImpacted();
                     }
@@ -197,7 +204,8 @@ public class VoiceRecognitionIntentHandler {
     /**
      * Checks if the RECORD_AUDIO permission has been granted, and requests it if it hasn't.
      *
-     * @param onPermissionResolved The callback to invoke once permission is resolved.
+     * @param callback Callback to notify if audio recording permission is unavailable.
+     * @param onPermissionGranted Action to execute when audio permission is granted.
      */
     private void ensureAudioPermissionGranted(
             RecognitionCallback callback, Runnable onPermissionGranted) {
@@ -257,19 +265,19 @@ public class VoiceRecognitionIntentHandler {
 
                     List<VoiceResult> results = convertBundleToVoiceResults(data.getExtras());
                     if (results == null || results.isEmpty()) {
-                        recordVoiceSearchResult(false);
+                        recordVoiceSearchResult(/* result= */ false);
                         callback.onCanceled();
                         return;
                     }
 
                     VoiceResult topResult = results.get(0);
                     if (TextUtils.isEmpty(topResult.getMatch())) {
-                        recordVoiceSearchResult(false);
+                        recordVoiceSearchResult(/* result= */ false);
                         callback.onCanceled();
                         return;
                     }
 
-                    recordVoiceSearchResult(true);
+                    recordVoiceSearchResult(/* result= */ true);
                     recordVoiceSearchConfidenceValue(topResult.getConfidence());
 
                     recordSuccessMetrics(source);
@@ -302,7 +310,7 @@ public class VoiceRecognitionIntentHandler {
         return results;
     }
 
-    /** Start tracking query duration by capturing when it started */
+    /** Start tracking query duration by capturing when it started. */
     private void startTrackingQueryDuration() {
         mQueryStartTimeMs = android.os.SystemClock.elapsedRealtime();
     }

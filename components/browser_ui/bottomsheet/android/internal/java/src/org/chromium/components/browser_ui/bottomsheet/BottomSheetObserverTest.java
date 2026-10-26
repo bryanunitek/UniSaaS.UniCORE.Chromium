@@ -22,13 +22,13 @@ import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import org.chromium.base.Callback;
 import org.chromium.base.MathUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager.ScrimClient;
@@ -45,24 +45,48 @@ import java.util.function.Supplier;
 @RunWith(BaseJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 public class BottomSheetObserverTest {
-    /** An observer used to record events that occur with respect to the bottom sheet. */
-    public static class TestSheetObserver extends EmptyBottomSheetObserver {
-        /** A {@link CallbackHelper} that can wait for the bottom sheet to be closed. */
-        public final CallbackHelper mClosedCallbackHelper = new CallbackHelper();
+    /**
+     * An observer used to record events that occur with respect to the bottom
+     * sheet.
+     */
+    public static class TestSheetObserver implements BottomSheetObserver {
+        /**
+         * A {@link CallbackHelper} that can wait for the bottom sheet to be
+         * closed.
+         */
+        public final CallbackHelper mClosedCallbackHelper =
+                new CallbackHelper();
 
-        /** A {@link CallbackHelper} that can wait for the bottom sheet to be opened. */
+        /**
+         * A {@link CallbackHelper} that can wait for the bottom sheet to be
+         * opened.
+         */
         public final CallbackHelper mOpenedCallbackHelper = new CallbackHelper();
 
-        /** A {@link CallbackHelper} that can wait for the onOffsetChanged event. */
-        public final CallbackHelper mOffsetChangedCallbackHelper = new CallbackHelper();
+        /**
+         * A {@link CallbackHelper} that can wait for the onOffsetChanged event.
+         */
+        public final CallbackHelper mOffsetChangedCallbackHelper =
+                new CallbackHelper();
 
-        /** A {@link CallbackHelper} that can wait for the onContainerBottomMarginChanged event. */
-        public final CallbackHelper mBottomMarginChangedCallbackHelper = new CallbackHelper();
+        /**
+         * A {@link CallbackHelper} that can wait for the
+         * onContainerBottomMarginChanged event.
+         */
+        public final CallbackHelper mBottomMarginChangedCallbackHelper =
+                new CallbackHelper();
 
-        /** A {@link CallbackHelper} that can wait for the onSheetContentChanged event. */
-        public final CallbackHelper mContentChangedCallbackHelper = new CallbackHelper();
+        /**
+         * A {@link CallbackHelper} that can wait for the onSheetContentChanged
+         * event.
+         */
+        public final CallbackHelper mContentChangedCallbackHelper =
+                new CallbackHelper();
 
-        /** A {@link CallbackHelper} that can wait for the sheet to be in its full state. */
+        /**
+         * A {@link CallbackHelper} that can wait for the sheet to be in its
+         * full state.
+         */
         public final CallbackHelper mFullCallbackHelper = new CallbackHelper();
 
         /** A {@link CallbackHelper} that can wait for the sheet to be hidden. */
@@ -161,7 +185,6 @@ public class BottomSheetObserverTest {
                                     new ScrimManager(
                                             sTestRule.getActivity(), rootView, ScrimClient.NONE);
                             Supplier<ScrimManager> scrimSupplier = () -> mScrimManager;
-                            Callback<View> initializedCallback = (v) -> {};
                             return new BottomSheetControllerImpl(
                                     scrimSupplier,
                                     sTestRule.getActivity().getWindow(),
@@ -187,6 +210,7 @@ public class BottomSheetObserverTest {
                     mObserver = new TestSheetObserver();
                     mBottomSheetController.addObserver(mObserver);
                 });
+        CriteriaHelper.pollUiThread(() -> mBottomSheetController.getContainerHeight() > 0);
     }
 
     @After
@@ -383,56 +407,55 @@ public class BottomSheetObserverTest {
     /** Test the onOffsetChanged event. */
     @Test
     @MediumTest
-    public void testOffsetChangedEvent() throws TimeoutException {
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> mTestSupport.setSheetState(BottomSheetController.SheetState.FULL, false));
-        CallbackHelper callbackHelper = mObserver.mOffsetChangedCallbackHelper;
+    public void testOffsetChangedEvent() {
+        // setSheetOffsetFromBottom() doesn't change the sheet state, which stays FULL. Any layout
+        // pass that re-settles the sheet (e.g. the toolbar resize on the sheet's first layout)
+        // moves it back to the full height and sends 1 to observers. Move the sheet and read the
+        // sent values in a single UI thread task so that no layout pass can run in between.
+        float[] heightFractions =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> {
+                            mTestSupport.setSheetState(
+                                    BottomSheetController.SheetState.FULL, false);
 
-        float hiddenHeight =
-                mTestSupport.getHiddenRatio() * mBottomSheetController.getContainerHeight();
-        float fullHeight =
-                mTestSupport.getFullRatio() * mBottomSheetController.getContainerHeight();
+                            float containerHeight = mBottomSheetController.getContainerHeight();
+                            float hiddenHeight = mTestSupport.getHiddenRatio() * containerHeight;
+                            float fullHeight = mTestSupport.getFullRatio() * containerHeight;
 
-        // The sheet's half state is not necessarily 50% of the way to the top.
-        float midPeekFull = (hiddenHeight + fullHeight) / 2f;
+                            // The sheet's half state is not necessarily 50% of the way to the top.
+                            float midPeekFull = (hiddenHeight + fullHeight) / 2f;
+
+                            return new float[] {
+                                setSheetOffsetAndGetHeightFraction(hiddenHeight),
+                                setSheetOffsetAndGetHeightFraction(fullHeight),
+                                setSheetOffsetAndGetHeightFraction(midPeekFull)
+                            };
+                        });
 
         // When in the hidden state, the transition value should be 0.
-        int callbackCount = callbackHelper.getCallCount();
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> mTestSupport.setSheetOffsetFromBottom(hiddenHeight, StateChangeReason.NONE));
-        callbackHelper.waitForCallback(callbackCount, 1);
-        assertEquals(0f, mObserver.getLastOffsetChangedValue(), MathUtils.EPSILON);
+        assertEquals(0f, heightFractions[0], MathUtils.EPSILON);
 
         // When in the full state, the transition value should be 1.
-        callbackCount = callbackHelper.getCallCount();
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> mTestSupport.setSheetOffsetFromBottom(fullHeight, StateChangeReason.NONE));
-        callbackHelper.waitForCallback(callbackCount, 1);
-        assertEquals(1f, mObserver.getLastOffsetChangedValue(), MathUtils.EPSILON);
+        assertEquals(1f, heightFractions[1], MathUtils.EPSILON);
 
-        // Halfway between peek and full should send 0.5 (adjusted for display pixel rounding and
-        // browser controls).
-        // We must wait for the sheet to transition out of FULL state into HALF state before
-        // calculating expectedMidFraction. While in FULL state, getOffsetFromBrowserControls()
-        // returns 0; once in HALF state, it returns the active controls offset needed for exact
-        // math.
-        callbackCount = callbackHelper.getCallCount();
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> mTestSupport.setSheetOffsetFromBottom(midPeekFull, StateChangeReason.NONE));
-        callbackHelper.waitForCallback(callbackCount, 1);
+        // Halfway between peek and full should send 0.5.
+        assertEquals(0.5f, heightFractions[2], MathUtils.EPSILON);
+    }
 
-        float containerHeight = mBottomSheetController.getContainerHeight();
-        float offsetWithControls =
-                mTestSupport.getCurrentOffsetPx() - mTestSupport.getOffsetFromBrowserControls();
-        float screenRatio = containerHeight > 0 ? offsetWithControls / containerHeight : 0;
-        float expectedMidFraction =
-                MathUtils.clamp(
-                        (screenRatio - mTestSupport.getHiddenRatio())
-                                / (mTestSupport.getFullRatio() - mTestSupport.getHiddenRatio()),
-                        0,
-                        1);
-
-        assertEquals(expectedMidFraction, mObserver.getLastOffsetChangedValue(), MathUtils.EPSILON);
+    /**
+     * Sets the sheet's offset and returns the height fraction that this sent to {@link
+     * BottomSheetObserver#onSheetOffsetChanged}. Must be called on the UI thread.
+     *
+     * @param offsetPx The offset from the bottom in pixels.
+     */
+    private float setSheetOffsetAndGetHeightFraction(float offsetPx) {
+        CallbackHelper callbackHelper = mObserver.mOffsetChangedCallbackHelper;
+        int callCount = callbackHelper.getCallCount();
+        mTestSupport.setSheetOffsetFromBottom(offsetPx, StateChangeReason.NONE);
+        assertTrue(
+                "onSheetOffsetChanged() should be called synchronously.",
+                callbackHelper.getCallCount() > callCount);
+        return mObserver.getLastOffsetChangedValue();
     }
 
     @Test

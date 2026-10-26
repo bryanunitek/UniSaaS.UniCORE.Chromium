@@ -90,7 +90,6 @@ enum PaintLayerIteration {
       kNegativeZOrderChildren | kNormalFlowChildren | kPositiveZOrderChildren
 };
 
-// TODO(crbug.com/332933527): Support anchors-valid.
 // If the size of this enum changes, make sure to update the bits needed for
 // `invisible_for_position_visibility_`.
 enum class LayerPositionVisibility : uint8_t {
@@ -102,6 +101,8 @@ enum class LayerPositionVisibility : uint8_t {
   kChainedAnchorsVisible = 1 << 2,
   // no-overflow.
   kNoOverflow = 1 << 3,
+  // anchor-valid.
+  kAnchorValid = 1 << 4,
 };
 
 // PaintLayer is an old object that handles lots of unrelated operations.
@@ -210,24 +211,10 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   bool IsSelfPaintingLayer() const { return is_self_painting_layer_; }
 
   bool IsTransparent() const {
-    return GetLayoutObject().StyleRef().HasOpacity() ||
-           GetLayoutObject().StyleRef().HasBlendMode() ||
+    return GetLayoutObject().Style().HasOpacity() ||
+           GetLayoutObject().Style().HasBlendMode() ||
            GetLayoutObject().HasMask();
   }
-
-  const PaintLayer* Root() const {
-    const PaintLayer* curr = this;
-    while (curr->Parent())
-      curr = curr->Parent();
-    return curr;
-  }
-
-  // This is the scroll offset that's actually used to display to the screen.
-  // It should only be used in paint/compositing type use cases (includes hit
-  // testing, intersection observer). Most other cases should use the unsnapped
-  // offset from LayoutBox (for layout) or the source offset from the
-  // ScrollableArea.
-  gfx::Vector2d PixelSnappedScrolledContentOffset() const;
 
   bool IsRootLayer() const { return is_root_layer_; }
 
@@ -794,7 +781,7 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
   unsigned static_block_edge_ : 2;
   unsigned static_align_self_direction_ : 1;
 
-  unsigned invisible_for_position_visibility_ : 4 = 0;
+  unsigned invisible_for_position_visibility_ : 5 = 0;
   unsigned descendant_needs_check_position_visibility_ : 1 = false;
 
   unsigned has_view_transition_name_ : 1 = false;
@@ -836,6 +823,7 @@ class CORE_EXPORT PaintLayer : public GarbageCollected<PaintLayer>,
                            DescendantDependentFlagsStopsAtThrottledFrames);
   FRIEND_TEST_ALL_PREFIXES(PaintLayerTest,
                            PaintLayerTransformUpdatedOnStyleTransformAnimation);
+  FRIEND_TEST_ALL_PREFIXES(PaintLayerTest, PaintLayerCanvasTransformUpdated);
   FRIEND_TEST_ALL_PREFIXES(
       PaintLayerOverlapTest,
       FixedUnderTransformDoesNotExpandBoundingBoxForOverlap);

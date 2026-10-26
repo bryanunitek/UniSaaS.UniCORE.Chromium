@@ -20,7 +20,7 @@
 #include "components/unexportable_keys/unexportable_key_service_impl.h"
 #include "components/unexportable_keys/unexportable_key_task_manager.h"
 #include "crypto/scoped_fake_unexportable_key_provider.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/sign.h"
 #include "crypto/unexportable_key.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -33,8 +33,8 @@ using testing::Invoke;
 using testing::Return;
 using ::unexportable_keys::UnexportableSigningKeyId;
 
-constexpr crypto::SignatureVerifier::SignatureAlgorithm
-    kAcceptableAlgorithms[] = {crypto::SignatureVerifier::ECDSA_SHA256};
+constexpr crypto::sign::SignatureKind kAcceptableAlgorithms[] = {
+    crypto::sign::ECDSA_SHA256};
 constexpr unexportable_keys::BackgroundTaskPriority kTaskPriority =
     unexportable_keys::BackgroundTaskPriority::kUserBlocking;
 }  // namespace
@@ -135,15 +135,9 @@ TEST_F(SessionBindingHelperTest, ReloadKeyAfterFailure) {
   const UnexportableSigningKeyId key_id = GenerateNewSigningKey();
   const std::vector<uint8_t> wrapped_key = GetWrappedKey(key_id);
   // Put a mock key service in front of the real one to simulate errors.
-  testing::StrictMock<unexportable_keys::MockUnexportableKeyService>
+  testing::NiceMock<unexportable_keys::MockUnexportableKeyService>
       mock_unexportable_key_service;
-  EXPECT_CALL(mock_unexportable_key_service, GetAlgorithm(key_id))
-      .WillRepeatedly(Return(unexportable_key_service().GetAlgorithm(key_id)));
-  EXPECT_CALL(mock_unexportable_key_service, GetWrappedKey(key_id))
-      .WillRepeatedly(Return(unexportable_key_service().GetWrappedKey(key_id)));
-  EXPECT_CALL(mock_unexportable_key_service, GetSubjectPublicKeyInfo(key_id))
-      .WillRepeatedly(
-          Return(unexportable_key_service().GetSubjectPublicKeyInfo(key_id)));
+  mock_unexportable_key_service.DelegateToService(unexportable_key_service());
   SessionBindingHelper helper(mock_unexportable_key_service, wrapped_key,
                               "session_id");
   {
@@ -165,13 +159,9 @@ TEST_F(SessionBindingHelperTest, ReloadKeyAfterFailure) {
     base::test::TestFuture<
         base::expected<std::string, SessionBindingHelper::Error>>
         sign_future;
-    EXPECT_CALL(mock_unexportable_key_service,
-                FromWrappedSigningKeySlowlyAsync(base::span(wrapped_key), _, _))
-        .WillOnce(RunOnceCallback<2>(key_id));
-    EXPECT_CALL(mock_unexportable_key_service, SignSlowlyAsync(key_id, _, _, _))
-        .WillOnce(Invoke(
-            &unexportable_key_service(),
-            &unexportable_keys::UnexportableKeyService::SignSlowlyAsync));
+    EXPECT_CALL(
+        mock_unexportable_key_service,
+        FromWrappedSigningKeySlowlyAsync(base::span(wrapped_key), _, _));
     helper.GenerateBindingKeyAssertion(
         "challenge", GURL("https://accounts.google.com/RotateBoundCookies"),
         sign_future.GetCallback());

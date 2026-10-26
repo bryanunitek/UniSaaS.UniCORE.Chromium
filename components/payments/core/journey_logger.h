@@ -16,6 +16,8 @@
 
 namespace payments {
 
+enum class PaymentHandlerPausedResolutionOutcome;
+
 // A class to keep track of different stats during a Payment Request journey. It
 // collects different metrics during the course of the checkout flow, like the
 // number of credit cards that the user added or edited. The metrics will be
@@ -85,10 +87,11 @@ class JourneyLogger {
     // .show() was allowed without a user activaiton.
     kActivationlessShow = 1 << 10,
 
-    // Correspond to the merchant specifying requestShipping,
-    // requestPayerName,
-    // requestPayerEmail, requestPayerPhone.
+    // Corresponds to the merchant specifying requestShipping.
     kRequestShipping = 1 << 11,
+    // Corresponds to the merchant specifying requestPayerName.
+    kRequestPayerName = 1 << 12,
+    // See more request payer options with higher bit-indexes below.
 
     // The merchent requested a Google Pay Authentication method.
     kRequestMethodGooglePayAuthentication = 1 << 13,
@@ -110,6 +113,19 @@ class JourneyLogger {
 
     // True when a NotShownReason is set.
     kCouldNotShow = 1 << 23,
+
+    // Whether PaymentRequest.canMakePayment() was called.
+    kCanMakePaymentCalled = 1 << 24,
+    // Whether PaymentRequest.hasEnrolledInstrument() was called.
+    kHasEnrolledInstrumentCalled = 1 << 25,
+    // Whether the PaymentRequest was initiated in a cross-site iframe.
+    kInitiatedInCrossSiteIframe = 1 << 26,
+
+    // See more request payer options with lower bit-indexes above.
+    // Corresponds to the merchant specifying requestPayerEmail.
+    kRequestPayerEmail = 1 << 27,
+    // Corresponds to the merchant specifying requestPayerPhone.
+    kRequestPayerPhone = 1 << 28,
 
     // Bits for secure-payment-confirmation method.
     kNoMatchingCredentials = 1 << 29,
@@ -137,6 +153,18 @@ class JourneyLogger {
     ABORT_REASON_USER_OPTED_OUT = 11,
     ABORT_REASON_INTERNAL_ERROR = 12,
     ABORT_REASON_MAX,
+  };
+
+  // The reason why the Payment Request was not shown.
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.payments
+  // GENERATED_JAVA_CLASS_NAME_OVERRIDE: NotShownReason
+  enum NotShownReason {
+    NOT_SHOWN_REASON_ALREADY_SHOWING = 0,
+    NOT_SHOWN_REASON_USER_ACTIVATION_REQUIRED = 1,
+    NOT_SHOWN_REASON_BACKGROUND_TAB = 2,
+    NOT_SHOWN_REASON_NO_SUPPORTED_PAYMENT_METHOD = 3,
+    NOT_SHOWN_REASON_USER_CANCEL = 4,
+    NOT_SHOWN_REASON_MAX,
   };
 
   // The categories of the payment methods.
@@ -247,7 +275,16 @@ class JourneyLogger {
   void SetAborted(AbortReason reason);
 
   // Records that the Payment Request was not shown to the user.
-  void SetNotShown();
+  void SetNotShown(NotShownReason reason);
+
+  // Records that PaymentRequest.canMakePayment() was called.
+  void SetCanMakePaymentCalled();
+
+  // Records that PaymentRequest.hasEnrolledInstrument() was called.
+  void SetHasEnrolledInstrumentCalled();
+
+  // Records that the PaymentRequest was initiated in a cross-site iframe.
+  void SetInitiatedInCrossSiteIframe();
 
   // Increments the bucket count for the given checkout step.
   void RecordCheckoutStep(CheckoutFunnelStep step);
@@ -255,12 +292,41 @@ class JourneyLogger {
   // Sets the UKM source id of the selected app when it gets invoked.
   void SetPaymentAppUkmSourceId(ukm::SourceId payment_app_source_id);
 
+  // Records that the service worker payment app opened a window.
+  void SetPaymentAppWindowOpened();
+
+  // Records that user interaction was captured in the payment app.
+  // Note: this may not be called for all types of apps, only those where Chrome
+  // can detect the interaction, e.g. service worker payment app
+  void SetPaymentAppUserInteractionCaptured();
+
+  // Records whether the service worker payment app resolved its respondWith()
+  // promise before opening a window or capturing user interaction.
+  void RecordRespondWithResolvedStatus();
+
+  // Records whether the service worker payment app rejected its respondWith()
+  // promise before opening a window or capturing user interaction.
+  void RecordRespondWithRejectedStatus();
+
+  // Records the outcome of a paused respondWith() promise resolution (either
+  // user gesture provided or window closed).
+  void RecordPaymentHandlerPausedResolutionOutcome(
+      PaymentHandlerPausedResolutionOutcome outcome);
+
   // Sets the reason why the browser window size check failed. The reason
   // will eventually be logged when the PaymentRequest is completed or aborted.
   // If this method is called multiple times, the last value will be used.
   void SetWindowSizeCheckRejectionReason(WindowSizeCheckRejectionReason reason);
 
   base::WeakPtr<JourneyLogger> GetWeakPtr();
+
+  bool was_payment_app_window_opened_for_testing() const {
+    return was_payment_app_window_opened_;
+  }
+
+  bool was_payment_app_user_interaction_captured_for_testing() const {
+    return was_payment_app_user_interaction_captured_;
+  }
 
  private:
   // Records that an event occurred.
@@ -321,6 +387,9 @@ class JourneyLogger {
 
   WindowSizeCheckRejectionReason window_size_check_rejection_reason_ =
       WindowSizeCheckRejectionReason::kNotRejectedOrNotShown;
+
+  bool was_payment_app_window_opened_ = false;
+  bool was_payment_app_user_interaction_captured_ = false;
 
   base::WeakPtrFactory<JourneyLogger> weak_ptr_factory_{this};
 };

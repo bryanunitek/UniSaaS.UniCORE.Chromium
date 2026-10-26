@@ -51,8 +51,6 @@ source_set("impl") {
   } else {
     deps += [ "//chrome/browser/web_applications/proto" ]
   }
-
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
 }
 
 source_set("unit_tests") {
@@ -67,6 +65,7 @@ source_set("unit_tests") {
     "//chrome/browser/content_settings:content_settings_factory",
     "//chrome/browser/history",
     "//chrome/test:test_support",
+    "//chrome/test/base:chrome_render_view_host_test_harness",
     "//components/content_settings/core/browser",
     "//components/history/core/browser",
     "//components/history/core/test",

@@ -8,7 +8,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/unified_consent/pref_names.h"
 #include "components/unified_consent/unified_consent_service.h"
@@ -23,7 +22,7 @@ class OptimizationGuidePermissionsUtilTest : public testing::Test {
         pref_service_.registry());
 
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kGoogleApiKeyConfigurationCheckOverride);
+        kGoogleApiKeyConfigurationCheckOverrideSwitch);
   }
 
   void SetUrlKeyedAnonymizedDataCollectionEnabled(bool enabled) {

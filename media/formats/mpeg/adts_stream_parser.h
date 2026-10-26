@@ -29,11 +29,8 @@ class MEDIA_EXPORT ADTSStreamParser : public MPEGAudioStreamParserBase {
 
  private:
   // MPEGAudioStreamParserBase overrides.
-  size_t GetMinHeaderSize() const override;
-  std::optional<Header> ParseFrameHeader(
-      base::span<const uint8_t> data) override;
-
-  size_t adts_parse_error_limit_ = 0;
+  Header FfiHeaderToHeader(
+      const formats::mpeg::MpegAudioHeaderInfo& ffi_header) const override;
 };
 
 }  // namespace media

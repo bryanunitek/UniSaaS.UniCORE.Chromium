@@ -21,26 +21,21 @@ namespace media {
 
 TextureSelector::TextureSelector(VideoPixelFormat pixfmt,
                                  viz::SharedImageFormat output_si_format,
-                                 ComD3D11VideoDevice video_device,
+                                 ComD3D11VideoDevice1 video_device,
                                  ComD3D11DeviceContext device_context,
-                                 bool shared_image_use_shared_handle)
+                                 bool shared_image_use_shared_handle,
+                                 gpu::GpuDriverBugWorkarounds workarounds)
     : pixel_format_(pixfmt),
       output_si_format_(output_si_format),
       video_device_(std::move(video_device)),
       device_context_(std::move(device_context)),
-      shared_image_use_shared_handle_(shared_image_use_shared_handle) {}
+      shared_image_use_shared_handle_(shared_image_use_shared_handle),
+      workarounds_(std::move(workarounds)) {}
 
 TextureSelector::~TextureSelector() = default;
 
-bool SupportsZeroCopy(const gpu::GpuPreferences& preferences,
-                      const gpu::GpuDriverBugWorkarounds& workarounds) {
-  if (!preferences.enable_zero_copy_dxgi_video)
-    return false;
-
-  if (workarounds.disable_dxgi_zero_copy_video)
-    return false;
-
-  return true;
+bool SupportsZeroCopy(const gpu::GpuDriverBugWorkarounds& workarounds) {
+  return !workarounds.disable_dxgi_zero_copy_video;
 }
 
 gfx::ColorSpace GetOutputColorSpace(const gfx::ColorSpace& input_color_space,
@@ -60,11 +55,10 @@ gfx::ColorSpace GetOutputColorSpace(const gfx::ColorSpace& input_color_space,
 
 // static
 std::unique_ptr<TextureSelector> TextureSelector::Create(
-    const gpu::GpuPreferences& gpu_preferences,
     const gpu::GpuDriverBugWorkarounds& workarounds,
     DXGI_FORMAT decoder_output_format,
     const FormatSupportChecker* format_checker,
-    ComD3D11VideoDevice video_device,
+    ComD3D11VideoDevice1 video_device,
     ComD3D11DeviceContext device_context,
     MediaLog* media_log,
     gfx::ColorSpace input_color_space,
@@ -72,7 +66,7 @@ std::unique_ptr<TextureSelector> TextureSelector::Create(
   VideoPixelFormat output_pixel_format;
   viz::SharedImageFormat output_si_format;
 
-  bool needs_texture_copy = !SupportsZeroCopy(gpu_preferences, workarounds);
+  bool needs_texture_copy = !SupportsZeroCopy(workarounds);
 
   auto supports_fmt = [format_checker](auto fmt) {
     return format_checker->CheckOutputFormatSupport(fmt);
@@ -81,12 +75,12 @@ std::unique_ptr<TextureSelector> TextureSelector::Create(
   switch (decoder_output_format) {
     case DXGI_FORMAT_YUY2:
     case DXGI_FORMAT_AYUV: {
-      MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder producing "
+      MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder producing "
                                  << DxgiFormatToString(decoder_output_format);
       // YUY2/AYUV output from decoder is always 8-bit 4:2:2/4:4:4 which we
       // prefer to be rendered in ARGB formats to avoid chroma downsampling. For
       // HDR contents, we should not let YUV to RGB conversion happens inside
-      // D3D11VideoDecoder, the only place for the conversion should be
+      // D3DVideoDecoder, the only place for the conversion should be
       // Gfx::ColorTransform or SwapChainPresenter. For color spaces that VP
       // isn't able to handle the correct color conversion, the current
       // workaround is to output a 4:2:0 YUV format and let viz handle the
@@ -97,11 +91,11 @@ std::unique_ptr<TextureSelector> TextureSelector::Create(
           supports_fmt(DXGI_FORMAT_B8G8R8A8_UNORM)) {
         output_pixel_format = PIXEL_FORMAT_ARGB;
         output_si_format = viz::SinglePlaneFormat::kBGRA_8888;
-        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected ARGB";
+        MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder: Selected ARGB";
       } else if (!needs_texture_copy || supports_fmt(DXGI_FORMAT_NV12)) {
         output_pixel_format = PIXEL_FORMAT_NV12;
         output_si_format = viz::MultiPlaneFormat::kNV12;
-        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected NV12";
+        MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder: Selected NV12";
       } else {
         MEDIA_LOG(INFO, media_log)
             << DxgiFormatToString(decoder_output_format) << " not supported";
@@ -110,16 +104,16 @@ std::unique_ptr<TextureSelector> TextureSelector::Create(
       break;
     }
     case DXGI_FORMAT_NV12: {
-      MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder producing "
+      MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder producing "
                                  << DxgiFormatToString(decoder_output_format);
       if (!needs_texture_copy || supports_fmt(DXGI_FORMAT_NV12)) {
         output_pixel_format = PIXEL_FORMAT_NV12;
         output_si_format = viz::MultiPlaneFormat::kNV12;
-        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected NV12";
+        MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder: Selected NV12";
       } else if (supports_fmt(DXGI_FORMAT_B8G8R8A8_UNORM)) {
         output_pixel_format = PIXEL_FORMAT_ARGB;
         output_si_format = viz::SinglePlaneFormat::kBGRA_8888;
-        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected ARGB";
+        MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder: Selected ARGB";
       } else {
         MEDIA_LOG(INFO, media_log)
             << DxgiFormatToString(decoder_output_format) << " not supported";
@@ -131,12 +125,12 @@ std::unique_ptr<TextureSelector> TextureSelector::Create(
     case DXGI_FORMAT_Y216:
     case DXGI_FORMAT_Y410:
     case DXGI_FORMAT_Y210: {
-      MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder producing "
+      MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder producing "
                                  << DxgiFormatToString(decoder_output_format);
       // Y416/Y216/Y410/Y210 output from decoder is always 10/12-bit 4:2:2/4:4:4
       // which we prefer to be rendered in ARGB formats to avoid chroma
       // downsampling. For HDR contents, we should not let YUV to RGB conversion
-      // happens inside D3D11VideoDecoder, the only place for the conversion
+      // happens inside D3DVideoDecoder, the only place for the conversion
       // should be Gfx::ColorTransform or SwapChainPresenter. For color spaces
       // that VP isn't able to handle the correct color conversion, the current
       // workaround is to output a 4:2:0 YUV format and let viz handle the
@@ -147,15 +141,15 @@ std::unique_ptr<TextureSelector> TextureSelector::Create(
           supports_fmt(DXGI_FORMAT_R10G10B10A2_UNORM)) {
         output_si_format = viz::SinglePlaneFormat::kRGBA_1010102;
         output_pixel_format = PIXEL_FORMAT_XB30;
-        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected XB30";
+        MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder: Selected XB30";
       } else if (!needs_texture_copy || supports_fmt(DXGI_FORMAT_P010)) {
         output_si_format = viz::MultiPlaneFormat::kP010;
         output_pixel_format = PIXEL_FORMAT_P010LE;
-        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected P010LE";
+        MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder: Selected P010LE";
       } else if (supports_fmt(DXGI_FORMAT_B8G8R8A8_UNORM)) {
         output_si_format = viz::SinglePlaneFormat::kBGRA_8888;
         output_pixel_format = PIXEL_FORMAT_ARGB;
-        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected ARGB";
+        MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder: Selected ARGB";
       } else {
         MEDIA_LOG(INFO, media_log)
             << DxgiFormatToString(decoder_output_format) << " not supported";
@@ -165,21 +159,21 @@ std::unique_ptr<TextureSelector> TextureSelector::Create(
     }
     case DXGI_FORMAT_P010:
     case DXGI_FORMAT_P016: {
-      MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder producing "
+      MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder producing "
                                  << DxgiFormatToString(decoder_output_format);
       // If device support P010 zero copy, then try P010 firstly.
       if (!needs_texture_copy || supports_fmt(DXGI_FORMAT_P010)) {
         output_si_format = viz::MultiPlaneFormat::kP010;
         output_pixel_format = PIXEL_FORMAT_P010LE;
-        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected P010LE";
+        MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder: Selected P010LE";
       } else if (supports_fmt(DXGI_FORMAT_R10G10B10A2_UNORM)) {
         output_si_format = viz::SinglePlaneFormat::kRGBA_1010102;
         output_pixel_format = PIXEL_FORMAT_XB30;
-        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected XB30";
+        MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder: Selected XB30";
       } else if (supports_fmt(DXGI_FORMAT_B8G8R8A8_UNORM)) {
         output_si_format = viz::SinglePlaneFormat::kBGRA_8888;
         output_pixel_format = PIXEL_FORMAT_ARGB;
-        MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder: Selected ARGB";
+        MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder: Selected ARGB";
       } else {
         MEDIA_LOG(INFO, media_log)
             << DxgiFormatToString(decoder_output_format) << " not supported";
@@ -189,7 +183,7 @@ std::unique_ptr<TextureSelector> TextureSelector::Create(
     }
     default: {
       MEDIA_LOG(INFO, media_log)
-          << "D3D11VideoDecoder does not support " << decoder_output_format;
+          << "D3DVideoDecoder does not support " << decoder_output_format;
       return nullptr;
     }
   }
@@ -201,25 +195,25 @@ std::unique_ptr<TextureSelector> TextureSelector::Create(
                          SharedImageFormatToDXGIFormat(output_si_format));
 
   if (needs_texture_copy) {
-    MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder is copying textures";
+    MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder is copying textures";
     return std::make_unique<CopyTextureSelector>(
         output_pixel_format, output_si_format, std::move(video_device),
-        std::move(device_context), shared_image_use_shared_handle);
+        std::move(device_context), shared_image_use_shared_handle, workarounds);
   } else {
-    MEDIA_LOG(INFO, media_log) << "D3D11VideoDecoder is binding textures";
+    MEDIA_LOG(INFO, media_log) << "D3DVideoDecoder is binding textures";
     return std::make_unique<TextureSelector>(
         output_pixel_format, output_si_format, std::move(video_device),
-        std::move(device_context), shared_image_use_shared_handle);
+        std::move(device_context), shared_image_use_shared_handle, workarounds);
   }
 }
 
-std::unique_ptr<Texture2DWrapper> TextureSelector::CreateTextureWrapper(
+std::unique_ptr<D3DTextureWrapper> TextureSelector::CreateTextureWrapper(
     ComD3D11Device device,
     gfx::ColorSpace color_space,
     gfx::Size size) {
   // TODO(liberato): If the output format is rgb, then create a pbuffer wrapper.
-  return std::make_unique<DefaultTexture2DWrapper>(
-      size, color_space, OutputSharedImageFormat(), device);
+  return std::make_unique<DefaultD3DTextureWrapper>(
+      size, color_space, OutputSharedImageFormat(), device, workarounds_);
 }
 
 bool TextureSelector::DoesDecoderOutputUseSharedHandle() const {
@@ -233,21 +227,23 @@ bool TextureSelector::WillCopyForTesting() const {
 CopyTextureSelector::CopyTextureSelector(
     VideoPixelFormat pixfmt,
     viz::SharedImageFormat output_si_format,
-    ComD3D11VideoDevice video_device,
+    ComD3D11VideoDevice1 video_device,
     ComD3D11DeviceContext device_context,
-    bool shared_image_use_shared_handle)
+    bool shared_image_use_shared_handle,
+    gpu::GpuDriverBugWorkarounds workarounds)
     : TextureSelector(pixfmt,
                       output_si_format,
                       std::move(video_device),
                       std::move(device_context),
-                      shared_image_use_shared_handle),
+                      shared_image_use_shared_handle,
+                      std::move(workarounds)),
       video_processor_proxy_(
           base::MakeRefCounted<VideoProcessorProxy>(this->video_device(),
                                                     this->device_context())) {}
 
 CopyTextureSelector::~CopyTextureSelector() = default;
 
-std::unique_ptr<Texture2DWrapper> CopyTextureSelector::CreateTextureWrapper(
+std::unique_ptr<D3DTextureWrapper> CopyTextureSelector::CreateTextureWrapper(
     ComD3D11Device device,
     gfx::ColorSpace input_color_space,
     gfx::Size size) {
@@ -280,9 +276,10 @@ std::unique_ptr<Texture2DWrapper> CopyTextureSelector::CreateTextureWrapper(
 
   return std::make_unique<CopyingTexture2DWrapper>(
       size, input_color_space, output_color_space,
-      std::make_unique<DefaultTexture2DWrapper>(
-          size, output_color_space, OutputSharedImageFormat(), device),
-      video_processor_proxy_, out_texture);
+      std::make_unique<DefaultD3DTextureWrapper>(size, output_color_space,
+                                                 OutputSharedImageFormat(),
+                                                 device, workarounds_),
+      video_processor_proxy_, out_texture, workarounds_);
 }
 
 bool CopyTextureSelector::DoesDecoderOutputUseSharedHandle() const {

@@ -16,9 +16,9 @@
 
 #include "base/barrier_closure.h"
 #include "base/base_switches.h"
+#include "base/bit_cast.h"
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
@@ -32,18 +32,22 @@
 #include "base/process/launch.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_view_util.h"
 #include "base/test/bind.h"
 #include "base/test/multiprocess_test.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread.h"
+#include "chromeos/ash/components/mojo_proxy/mojo_core/core/embedder/embedder.h"
+#include "chromeos/ash/components/mojo_proxy/mojo_core/core/embedder/scoped_ipc_support.h"
+#include "chromeos/ash/components/mojo_proxy/mojo_core/core/entrypoints.h"
+#include "chromeos/ash/components/mojo_proxy/mojo_core/public/c/system/thunks.h"
 #include "chromeos/ash/components/mojo_proxy/service/mojo_proxy_test.test-mojom-test-utils.h"
 #include "chromeos/ash/components/mojo_proxy/service/mojo_proxy_test.test-mojom.h"
 #include "chromeos/ash/components/mojo_proxy/service/switches.h"
-#include "mojo/core/embedder/embedder.h"
-#include "mojo/core/embedder/scoped_ipc_support.h"
 #include "mojo/core/ipcz_api.h"
 #include "mojo/core/test/test_switches.h"
+#include "mojo/public/c/system/thunks.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
@@ -84,15 +88,14 @@ std::string ReadWholeFile(base::File& file) {
 base::ReadOnlySharedMemoryRegion CreateMemory(std::string_view contents) {
   auto region = base::WritableSharedMemoryRegion::Create(contents.size());
   auto mapping = region.Map();
-  UNSAFE_TODO(memcpy(mapping.memory(), contents.data(), contents.size()));
+  base::span(mapping).copy_from(base::as_byte_span(contents));
   return base::WritableSharedMemoryRegion::ConvertToReadOnly(std::move(region));
 }
 
 // Returns the contents of a shared memory region as a string.
 std::string ReadMemory(base::ReadOnlySharedMemoryRegion region) {
   auto mapping = region.Map();
-  const char* data = static_cast<const char*>(mapping.memory());
-  return std::string{data, region.GetSize()};
+  return std::string(base::as_string_view(mapping));
 }
 
 // Returns the next message on a message pipe as a string.
@@ -204,11 +207,6 @@ class MojoProxyTest : public testing::Test {
 // Used to launch a test child process which will run a legacy Mojo app.
 class LegacyAppLauncher {
  public:
-  LegacyAppLauncher() {
-    // Make sure we're always launching from a process with ipcz enabled.
-    CHECK(mojo::core::IsMojoIpczEnabled());
-  }
-
   ~LegacyAppLauncher() {
     initial_remotes_.clear();
     if (app_process_.IsValid()) {
@@ -259,9 +257,9 @@ class LegacyAppLauncher {
     remote_app_endpoint.PrepareToPass(app_launch_options, app_command_line);
 
     // Disable Mojo initialization: the generic initialization path for
-    // mojo_unittests child processes will use default Mojo settings, but we
-    // want to forcibly disable ipcz in this process. The child can initialize
-    // Mojo instead by constructing a LegacyAppEnvironment (see below).
+    // mojo_unittests child processes would initialize //mojo, but the child
+    // must run the frozen legacy Mojo Core clone instead. It sets that up by
+    // constructing a LegacyAppEnvironment (see below).
     app_command_line.AppendSwitch(test_switches::kNoMojo);
     app_process_ = base::SpawnMultiProcessTestChild(
         std::string{test_child_name}, app_command_line, app_launch_options);
@@ -346,12 +344,22 @@ class LegacyAppEnvironment {
   LegacyAppEnvironment() {
     io_thread_.StartWithOptions(
         base::Thread::Options{base::MessagePumpType::IO, 0});
-    mojo::core::Init({
-        .is_broker_process = false,
-        .disable_ipcz = true,
-    });
-    ipc_support_.emplace(io_thread_.task_runner(),
-                         mojo::core::ScopedIPCSupport::ShutdownPolicy::CLEAN);
+
+    // Initialize the frozen legacy Mojo Core clone and route //mojo's Mojo C
+    // API (and with it Mojo bindings) to the clone through the embedder
+    // thunks. //mojo's own core is never initialized in this process.
+    //
+    // NOTE: `bit_cast` is valid as long as the clone's thunk table's layout
+    // stays identical to //mojo's. It fails to compile if the tables' sizes
+    // ever diverge (e.g., when //mojo grows a new thunk), at which point the
+    // clone's table needs to be re-padded to match.
+    mojo_legacy::core::Init({.is_broker_process = false});
+    const MojoSystemThunks2 thunks =
+        base::bit_cast<MojoSystemThunks2>(mojo_legacy::core::GetSystemThunks());
+    MojoEmbedderSetSystemThunks(&thunks);
+    ipc_support_.emplace(
+        io_thread_.task_runner(),
+        mojo_legacy::core::ScopedIPCSupport::ShutdownPolicy::CLEAN);
 
     auto endpoint = mojo::PlatformChannel::RecoverPassedEndpointFromCommandLine(
         *base::CommandLine::ForCurrentProcess());
@@ -362,7 +370,7 @@ class LegacyAppEnvironment {
     invitation_.reset();
     ipc_support_.reset();
     io_thread_.Stop();
-    mojo::core::ShutDown();
+    mojo_legacy::core::ShutDown();
   }
 
   mojo::PendingReceiver<mojom::TestService> GetInitialReceiver(uint64_t n) {
@@ -396,7 +404,7 @@ class LegacyAppEnvironment {
  private:
   base::test::TaskEnvironment task_environment_;
   base::Thread io_thread_{"IO thread"};
-  std::optional<mojo::core::ScopedIPCSupport> ipc_support_;
+  std::optional<mojo_legacy::core::ScopedIPCSupport> ipc_support_;
   std::vector<mojo::ScopedMessagePipeHandle> initial_pipes_;
   std::optional<mojo::IncomingInvitation> invitation_;
   std::vector<std::unique_ptr<TestServiceImpl>> service_impls_;

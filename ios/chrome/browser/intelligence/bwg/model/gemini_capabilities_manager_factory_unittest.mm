@@ -11,9 +11,9 @@
 #import "ios/chrome/browser/intelligence/bwg/model/fake_gemini_service.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_capabilities_manager.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_service_factory.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
@@ -32,8 +32,7 @@ class GeminiCapabilitiesManagerFactoryTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
-            std::make_unique<FakeAuthenticationServiceDelegate>()));
+        AuthenticationServiceFactory::GetDefaultFactory());
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateTestSyncService));
     builder.AddTestingFactory(GeminiServiceFactory::GetInstance(),
@@ -54,9 +53,20 @@ class GeminiCapabilitiesManagerFactoryTest : public PlatformTest {
 
 // Tests that the factory successfully creates a service instance.
 TEST_F(GeminiCapabilitiesManagerFactoryTest, ServiceCreatedSuccessfully) {
+  scoped_feature_list_.InitWithFeatures(
+      {kPageActionMenu, kAppSwitcherAISummarization}, {});
   auto profile = CreateProfile();
   EXPECT_THAT(GeminiCapabilitiesManagerFactory::GetForProfile(profile.get()),
               testing::NotNull());
+}
+
+// Tests that the factory returns nullptr when the feature is disabled.
+TEST_F(GeminiCapabilitiesManagerFactoryTest,
+       ServiceNotCreatedWhenFeatureDisabled) {
+  scoped_feature_list_.InitAndDisableFeature(kAppSwitcherAISummarization);
+  auto profile = CreateProfile();
+  EXPECT_THAT(GeminiCapabilitiesManagerFactory::GetForProfile(profile.get()),
+              testing::IsNull());
 }
 
 }  // namespace

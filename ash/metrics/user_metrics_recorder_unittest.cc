@@ -53,6 +53,17 @@ class UserMetricsRecorderTest : public NoSessionAshTestBase {
   base::HistogramTester histograms_;
 };
 
+class UserMetricsRecorderShelfItemTest : public UserMetricsRecorderTest {
+ public:
+  UserMetricsRecorderShelfItemTest() = default;
+
+  // UserMetricsRecorderTest:
+  void SetUpInitParams(AshTestHelper::InitParams& init_params) override {
+    UserMetricsRecorderTest::SetUpInitParams(init_params);
+    init_params.add_default_shelf_icon = false;
+  }
+};
+
 // Verifies the return value of IsUserInActiveDesktopEnvironment() for the
 // different login status values.
 TEST_F(UserMetricsRecorderTest, VerifyIsUserInActiveDesktopEnvironmentValues) {
@@ -75,8 +86,9 @@ TEST_F(UserMetricsRecorderTest, VerifyIsUserInActiveDesktopEnvironmentValues) {
 
   // Kiosk logins are not considered active.
   ClearLogin();
-  SimulateUserLogin({"app@kiosk-apps.device-local.localhost",
-                     user_manager::UserType::kKioskChromeApp});
+  SimulateUserLogin({.account_id = AccountId::FromUserEmail(
+                         "app@kiosk-apps.device-local.localhost"),
+                     .user_type = user_manager::UserType::kKioskChromeApp});
   EXPECT_FALSE(test_api().IsUserInActiveDesktopEnvironment());
 }
 
@@ -107,7 +119,8 @@ TEST_F(UserMetricsRecorderTest,
 
 // Verify the shelf item counts recorded by the
 // UserMetricsRecorder::RecordPeriodicMetrics() method.
-TEST_F(UserMetricsRecorderTest, ValuesRecordedByRecordShelfItemCounts) {
+TEST_F(UserMetricsRecorderShelfItemTest,
+       ValuesRecordedByRecordShelfItemCounts) {
   SimulateUserLogin(kRegularUserLoginInfo);
 
   // Make sure the shelf model is empty at first.

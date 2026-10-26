@@ -7,12 +7,12 @@
 
 #include <optional>
 
+#include "base/containers/circular_deque.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/threading/sequence_bound.h"
 #include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
-#include "components/optimization_guide/core/model_execution/model_broker_client.h"
 #include "content/browser/speech/speech_recognition_engine.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/speech_recognition_audio_forwarder_config.h"
@@ -25,8 +25,11 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/on_device_model/public/mojom/on_device_model.mojom.h"
 
+class OptimizationGuideLogger;
+
 namespace optimization_guide {
 class ModelBrokerClient;
+class ModelClient;
 }  // namespace optimization_guide
 
 namespace content {
@@ -72,12 +75,17 @@ class CONTENT_EXPORT OnDeviceSpeechRecognitionEngine
     ~Core();
 
     void CreateModelClient(GlobalRenderFrameHostId global_id,
-                           media::mojom::SpeechRecognitionQuality quality);
+                           media::mojom::SpeechRecognitionQuality quality,
+                           const std::string& language);
     void SetAudioParameters(int sample_rate_hz);
+
+    void LogRecognitionEnded(base::TimeDelta audio_duration);
 
    private:
     friend class OnDeviceSpeechRecognitionEngineTest;
     FRIEND_TEST(OnDeviceSpeechRecognitionEngine, Reinitialization);
+    FRIEND_TEST(OnDeviceSpeechRecognitionEngine, LanguagePropagation);
+    FRIEND_TEST(OnDeviceSpeechRecognitionEngine, EmptyLanguagePropagation);
 
     void OnModelClientAvailable(
         base::WeakPtr<optimization_guide::ModelClient> client);
@@ -86,8 +94,10 @@ class CONTENT_EXPORT OnDeviceSpeechRecognitionEngine
     mojo::Remote<on_device_model::mojom::Session> session_;
     base::WeakPtr<optimization_guide::ModelClient> model_client_;
     std::unique_ptr<optimization_guide::ModelBrokerClient> model_broker_client_;
+    base::WeakPtr<OptimizationGuideLogger> logger_;
 
     std::optional<int> sample_rate_hz_;
+    std::string language_;
     bool session_created_ = false;
 
     StreamCreatedCallback on_stream_created_callback_;
@@ -99,6 +109,9 @@ class CONTENT_EXPORT OnDeviceSpeechRecognitionEngine
   friend class OnDeviceSpeechRecognitionEngineTest;
   FRIEND_TEST(OnDeviceSpeechRecognitionEngine, ConvertAccumulatedAudioData);
   FRIEND_TEST(OnDeviceSpeechRecognitionEngine, Reinitialization);
+  FRIEND_TEST(OnDeviceSpeechRecognitionEngine, LanguagePropagation);
+  FRIEND_TEST(OnDeviceSpeechRecognitionEngine, EmptyLanguagePropagation);
+  FRIEND_TEST(OnDeviceSpeechRecognitionEngine, TakeAudioChunkStereo);
 
   void OnAsrStreamCreated(
       mojo::PendingRemote<on_device_model::mojom::AsrStreamInput> asr_stream,
@@ -116,7 +129,7 @@ class CONTENT_EXPORT OnDeviceSpeechRecognitionEngine
   mojo::Remote<on_device_model::mojom::AsrStreamInput> asr_stream_;
   mojo::Receiver<on_device_model::mojom::AsrStreamResponder>
       asr_stream_responder_{this};
-  std::vector<int16_t> accumulated_audio_data_;
+  base::circular_deque<int16_t> accumulated_audio_data_;
 
   base::TimeDelta audio_duration_;
 

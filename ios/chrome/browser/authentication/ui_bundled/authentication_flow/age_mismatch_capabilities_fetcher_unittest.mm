@@ -7,10 +7,8 @@
 #import "base/run_loop.h"
 #import "base/test/bind.h"
 #import "base/test/metrics/histogram_tester.h"
-#import "base/test/scoped_feature_list.h"
 #import "base/time/time.h"
 #import "components/signin/public/base/consent_level.h"
-#import "components/signin/public/base/signin_switches.h"
 #import "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/signin/public/identity_manager/identity_test_environment.h"
@@ -51,11 +49,6 @@ class AgeMismatchCapabilitiesFetcherTest
     : public PlatformTest,
       public ::testing::WithParamInterface<signin::Tribool> {
  public:
-  AgeMismatchCapabilitiesFetcherTest() {
-    feature_list_.InitAndEnableFeature(
-        switches::kEnforceCanSignInToChromeCapability);
-  }
-
   signin::Tribool ExpectedCapabilityValue() const { return GetParam(); }
 
   void SetUp() override {
@@ -99,7 +92,6 @@ class AgeMismatchCapabilitiesFetcherTest
  protected:
   web::WebTaskEnvironment task_environment_{
       web::WebTaskEnvironment::TimeSource::MOCK_TIME};
-  base::test::ScopedFeatureList feature_list_;
   signin::IdentityTestEnvironment identity_test_env_;
   std::unique_ptr<TestProfileIOS> profile_;
   AgeMismatchCapabilitiesFetcher* fetcher_ = nil;
@@ -121,12 +113,14 @@ TEST_P(AgeMismatchCapabilitiesFetcherTest,
       });
 
   fetcher_ = BuildAgeMismatchCapabilitiesFetcher();
-  EXPECT_EQ([fetcher_ canSignInToChromeCapabilityForAccount:account.account_id],
-            expected_capability);
+  EXPECT_EQ(
+      [fetcher_ canSignInToChromeCapabilityForAccount:account.GetAccountId()],
+      expected_capability);
 
   [fetcher_
       startFetchingCanSignInToChromeCapabilityWithCallback:std::move(callback)
-                                                forAccount:account.account_id];
+                                                forAccount:account
+                                                               .GetAccountId()];
   run_loop.Run();
 
   histogram_tester.ExpectTotalCount(
@@ -150,12 +144,13 @@ TEST_P(AgeMismatchCapabilitiesFetcherTest,
 
   [fetcher_
       startFetchingCanSignInToChromeCapabilityWithCallback:std::move(callback)
-                                                forAccount:account.account_id];
+                                                forAccount:account
+                                                               .GetAccountId()];
 
   // Simulate successful fetch before timeout.
   SetAccountInfoCanSignInToChromeCapability(account, expected_capability);
   identity_test_env_.SimulateSuccessfulFetchOfAccountInfo(
-      account.account_id, account.email, account.gaia,
+      account.GetAccountId(), account.GetEmail(), account.GetGaiaId(),
       /*hosted_domain=*/"", "full_name", "given_name", "locale",
       /*picture_url=*/"");
   run_loop.Run();
@@ -179,7 +174,8 @@ TEST_P(AgeMismatchCapabilitiesFetcherTest, TestCapabilityFetchDeadline) {
 
   [fetcher_
       startFetchingCanSignInToChromeCapabilityWithCallback:std::move(callback)
-                                                forAccount:account.account_id];
+                                                forAccount:account
+                                                               .GetAccountId()];
 
   // Fast forward time to trigger timeout.
   task_environment_.FastForwardBy(kCanSignInToChromeCapabilityFetchTimeout);
@@ -200,10 +196,10 @@ TEST_P(AgeMismatchCapabilitiesFetcherTest, TestConcurrentFetches) {
       identity_test_env_.MakeAccountAvailable("test2@gmail.com");
 
   EXPECT_EQ(
-      [fetcher_ canSignInToChromeCapabilityForAccount:account1.account_id],
+      [fetcher_ canSignInToChromeCapabilityForAccount:account1.GetAccountId()],
       signin::Tribool::kUnknown);
   EXPECT_EQ(
-      [fetcher_ canSignInToChromeCapabilityForAccount:account2.account_id],
+      [fetcher_ canSignInToChromeCapabilityForAccount:account2.GetAccountId()],
       signin::Tribool::kUnknown);
 
   base::RunLoop run_loop1;
@@ -223,20 +219,22 @@ TEST_P(AgeMismatchCapabilitiesFetcherTest, TestConcurrentFetches) {
 
   [fetcher_
       startFetchingCanSignInToChromeCapabilityWithCallback:std::move(callback1)
-                                                forAccount:account1.account_id];
+                                                forAccount:account1
+                                                               .GetAccountId()];
   [fetcher_
       startFetchingCanSignInToChromeCapabilityWithCallback:std::move(callback2)
-                                                forAccount:account2.account_id];
+                                                forAccount:account2
+                                                               .GetAccountId()];
 
   SetAccountInfoCanSignInToChromeCapability(account1, expected_capability);
   SetAccountInfoCanSignInToChromeCapability(account2, expected_capability);
 
   identity_test_env_.SimulateSuccessfulFetchOfAccountInfo(
-      account1.account_id, account1.email, account1.gaia,
+      account1.GetAccountId(), account1.GetEmail(), account1.GetGaiaId(),
       /*hosted_domain=*/"", "full_name", "given_name", "locale",
       /*picture_url=*/"");
   identity_test_env_.SimulateSuccessfulFetchOfAccountInfo(
-      account2.account_id, account2.email, account2.gaia,
+      account2.GetAccountId(), account2.GetEmail(), account2.GetGaiaId(),
       /*hosted_domain=*/"", "full_name", "given_name", "locale",
       /*picture_url=*/"");
 

@@ -202,7 +202,7 @@ class RawVideo::VP9Decoder {
                        base::WaitableEvent* done) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_sequence_);
     if (size_t cached_index = target_index % kNumCachedFrames;
-        UNSAFE_TODO(cached_frame_indices_[cached_index]) == target_index) {
+        cached_frame_indices_[cached_index] == target_index) {
       *decoded_frame_buffer = cached_frames_[cached_index];
       done->Signal();
       return;
@@ -230,7 +230,7 @@ class RawVideo::VP9Decoder {
       auto buffer = CreateBufferFromFrame(*last_decoded_frame_);
       last_decoded_frame_.reset();
       const size_t cached_index = i % kNumCachedFrames;
-      UNSAFE_TODO(cached_frame_indices_[cached_index]) = i;
+      cached_frame_indices_[cached_index] = i;
       cached_frames_[cached_index] = std::move(buffer);
       if (i == target_index) {
         *decoded_frame_buffer = cached_frames_[cached_index];
@@ -287,7 +287,7 @@ class RawVideo::VP9Decoder {
       GUARDED_BY_CONTEXT(decoder_sequence_);
   // frame_index -> file index
   static constexpr size_t kNumCachedFrames = 30;
-  size_t cached_frame_indices_[kNumCachedFrames];
+  std::array<size_t, kNumCachedFrames> cached_frame_indices_;
   std::array<std::vector<uint8_t>, kNumCachedFrames> cached_frames_;
 
   SEQUENCE_CHECKER(decoder_sequence_);
@@ -418,9 +418,10 @@ RawVideo::Metadata::~Metadata() = default;
 RawVideo::Metadata::Metadata(const Metadata&) = default;
 RawVideo::Metadata& RawVideo::Metadata::operator=(const Metadata&) = default;
 
-RawVideo::FrameData::FrameData(const std::vector<const uint8_t*>& plane_addrs,
-                               const std::vector<size_t>& strides,
-                               std::vector<uint8_t> buffer)
+RawVideo::FrameData::FrameData(
+    const std::vector<raw_ptr<const uint8_t>>& plane_addrs,
+    const std::vector<size_t>& strides,
+    std::vector<uint8_t> buffer)
     : plane_addrs(plane_addrs), strides(strides), buffer(std::move(buffer)) {}
 
 RawVideo::FrameData::FrameData(FrameData&& frame_data)
@@ -570,8 +571,9 @@ std::unique_ptr<RawVideo> RawVideo::Create(
         CreateMemoryMappedFile(video_frame_size * metadata.num_frames);
     for (size_t i = 0; i < metadata.num_frames; ++i) {
       auto buffer = vp9_decoder->DecodeFrame(i);
-      UNSAFE_TODO(memcpy(memory_mapped_file->data() + i * video_frame_size,
-                         buffer.data(), buffer.size()));
+      memory_mapped_file->mutable_bytes()
+          .subspan(i * video_frame_size, buffer.size())
+          .copy_from(buffer);
     }
   } else {
     memory_mapped_file =
@@ -605,15 +607,16 @@ std::unique_ptr<RawVideo> RawVideo::CreateNV12Video() const {
   LOG_ASSERT(new_memory_mapped_file) << "Failed creating memory mapped file";
   for (size_t i = 0; i < NumFrames(); ++i) {
     const FrameData i420_frame = GetFrame(i);
-    uint8_t* const nv12_frame =
-        UNSAFE_TODO(new_memory_mapped_file->data() + i * video_frame_size_);
+    base::span<uint8_t> nv12_frame =
+        new_memory_mapped_file->mutable_bytes().subspan(i * video_frame_size_,
+                                                        video_frame_size_);
     int ret = libyuv::I420ToNV12(
         i420_frame.plane_addrs[0], i420_frame.strides[0],
         i420_frame.plane_addrs[1], i420_frame.strides[1],
         i420_frame.plane_addrs[2], i420_frame.strides[2],
-        UNSAFE_TODO(nv12_frame + nv12_layout->planes()[0].offset),
+        nv12_frame.subspan(nv12_layout->planes()[0].offset).data(),
         nv12_layout->planes()[0].stride,
-        UNSAFE_TODO(nv12_frame + nv12_layout->planes()[1].offset),
+        nv12_frame.subspan(nv12_layout->planes()[1].offset).data(),
         nv12_layout->planes()[1].stride, Resolution().width(),
         Resolution().height());
     LOG_ASSERT(ret == 0) << "Failed converting from I420 to NV12";
@@ -662,12 +665,13 @@ std::unique_ptr<RawVideo> RawVideo::CreateExpandedVideo(
       CreateMemoryMappedFile(new_video_frame_size * NumFrames());
   CHECK(new_memory_mapped_file);
   for (size_t i = 0; i < NumFrames(); i++) {
-    uint8_t* const dst_frame = UNSAFE_TODO(new_memory_mapped_file->data() +
-                                           (i * new_video_frame_size));
+    base::span<uint8_t> dst_frame =
+        new_memory_mapped_file->mutable_bytes().subspan(
+            i * new_video_frame_size, new_video_frame_size);
     uint8_t* const dst_y_plane_visible_data =
-        UNSAFE_TODO(dst_frame + dst_planes[0].offset + dst_y_visible_offset);
+        dst_frame.subspan(dst_planes[0].offset + dst_y_visible_offset).data();
     uint8_t* const dst_uv_plane_visible_data =
-        UNSAFE_TODO(dst_frame + dst_planes[1].offset + dst_uv_visible_offset);
+        dst_frame.subspan(dst_planes[1].offset + dst_uv_visible_offset).data();
     FrameData src_frame = GetFrame(i);
     libyuv::NV12Copy(src_frame.plane_addrs[0], src_frame.strides[0],
                      src_frame.plane_addrs[1], src_frame.strides[1],
@@ -686,21 +690,21 @@ std::unique_ptr<RawVideo> RawVideo::CreateExpandedVideo(
 RawVideo::FrameData RawVideo::GetFrame(size_t frame_index) const {
   CHECK_LT(frame_index, NumFrames());
   std::vector<uint8_t> buffer;
-  const uint8_t* frame_addr;
+  base::span<const uint8_t> frame_span;
   if (vp9_decoder_) {
     buffer = vp9_decoder_->DecodeFrame(frame_index);
-    frame_addr = buffer.data();
+    frame_span = buffer;
   } else {
-    frame_addr = UNSAFE_TODO(memory_mapped_file_->data() +
-                             video_frame_size_ * frame_index);
+    frame_span = memory_mapped_file_->bytes().subspan(
+        video_frame_size_ * frame_index, video_frame_size_);
   }
 
   const auto& plane_layouts = FrameLayout().planes();
   const size_t num_planes = plane_layouts.size();
-  std::vector<const uint8_t*> plane_addrs(num_planes);
+  std::vector<raw_ptr<const uint8_t>> plane_addrs(num_planes);
   std::vector<size_t> strides(num_planes);
   for (size_t i = 0; i < num_planes; ++i) {
-    plane_addrs[i] = UNSAFE_TODO(frame_addr + plane_layouts[i].offset);
+    plane_addrs[i] = frame_span.subspan(plane_layouts[i].offset).data();
     strides[i] = plane_layouts[i].stride;
   }
   return RawVideo::FrameData(plane_addrs, strides, std::move(buffer));

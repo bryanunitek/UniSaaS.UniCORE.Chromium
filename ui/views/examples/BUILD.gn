@@ -10,6 +10,7 @@ import("//ui/gl/features.gni")
 if (is_mac) {
   import("//build/apple/tweak_info_plist.gni")
   import("//build/config/mac/rules.gni")
+  import("views_examples.gni")
 }
 
 component("views_examples_lib") {
@@ -70,6 +71,8 @@ component("views_examples_lib") {
     "flex_layout_multiple_order_example.h",
     "ink_drop_example.cc",
     "ink_drop_example.h",
+    "json_view_builder.cc",
+    "json_view_builder.h",
     "label_example.cc",
     "label_example.h",
     "layout_example_base.cc",
@@ -116,6 +119,8 @@ component("views_examples_lib") {
     "typography_example.h",
     "vector_example.cc",
     "vector_example.h",
+    "views_canvas_example.cc",
+    "views_canvas_example.h",
     "views_examples_export.h",
     "widget_example.cc",
     "widget_example.h",
@@ -136,9 +141,9 @@ component("views_examples_lib") {
     "//ui/actions",
     "//ui/base",
     "//ui/color",
+    "//ui/color:mixers",
     "//ui/events",
     "//ui/gfx",
-    "//ui/gfx:test_support",
     "//ui/gfx/geometry",
     "//ui/lottie",
     "//ui/menus",
@@ -146,6 +151,7 @@ component("views_examples_lib") {
     "//ui/native_theme",
     "//ui/resources",
     "//ui/resources:ui_test_pak",
+    "//ui/shell_dialogs",
     "//ui/strings:ui_strings",
     "//ui/views",
   ]
@@ -261,10 +267,8 @@ if (is_mac) {
     deps = [ "//base" ]
   }
 
-  # Update views_examples_mac_support.mm if the below changes.
-  views_examples_app_name = "Views Examples"
-  views_examples_version = "1.0.0.0"
-  views_examples_framework_name = "$views_examples_app_name Framework"
+  # views_examples_app_name, views_examples_version and
+  # views_examples_framework_name come from views_examples.gni.
 
   tweak_info_plist("views_examples_plist") {
     testonly = true
@@ -287,6 +291,7 @@ if (is_mac) {
       ":views_examples_framework_bundle_data",
       ":views_examples_main_header",
       ":views_examples_resources_bundle_data",
+      "//base:compiler_specific",
     ]
 
     if (is_component_build) {
@@ -494,6 +499,7 @@ test("views_examples_unittests") {
   sources = [
     "examples_unittest.cc",
     "examples_unittest_main.cc",
+    "json_view_builder_unittest.cc",
   ]
 
   deps = [
@@ -504,6 +510,7 @@ test("views_examples_unittests") {
     "//components/viz/host",
     "//components/viz/service",
     "//mojo/core/embedder",
+    "//ui/accessibility:test_support",
     "//ui/base",
     "//ui/base/ime/init",
     "//ui/compositor",
@@ -561,10 +568,12 @@ executable("lottie_viewer") {
     ":views_examples_proc",
     "//base",
     "//base/test:test_support",
+    "//cc/paint",
     "//skia",
     "//ui/base",
     "//ui/gfx",
     "//ui/gfx/geometry",
+    "//ui/lottie",
     "//ui/views",
   ]
 }

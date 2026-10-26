@@ -6,12 +6,14 @@
 
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
+#include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_paths.h"
@@ -20,7 +22,10 @@
 #include "components/user_data_importer/common/imported_bookmark_entry.h"
 #include "components/user_data_importer/common/importer_data_types.h"
 #include "components/user_data_importer/common/importer_url_row.h"
+#include "components/user_data_importer/content/fake_bookmark_html_parser.h"
 #include "content/public/test/browser_task_environment.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "sql/database.h"
 #include "sql/test/test_helpers.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -45,6 +50,7 @@ class FirefoxImporterTest : public testing::Test {
     user_data_importer::SourceProfile profile;
     profile.source_path = places_path;
 
+    base::RunLoop run_loop;
     EXPECT_CALL(*bridge_, NotifyStarted());
     EXPECT_CALL(*bridge_, NotifyItemStarted(user_data_importer::FAVORITES));
     EXPECT_CALL(*bridge_, AddBookmarks(_, _))
@@ -52,17 +58,24 @@ class FirefoxImporterTest : public testing::Test {
     EXPECT_CALL(*bridge_, SetFavicons(_))
         .WillOnce(::testing::SaveArg<0>(favicons));
     EXPECT_CALL(*bridge_, NotifyItemEnded(user_data_importer::FAVORITES));
-    EXPECT_CALL(*bridge_, NotifyEnded());
+    EXPECT_CALL(*bridge_, NotifyEnded())
+        .WillOnce(testing::InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
+
+    importer_->SetBookmarkHtmlParser(receiver_.BindNewPipeAndPassRemote());
     importer_->StartImport(profile, user_data_importer::FAVORITES,
                            bridge_.get());
+    run_loop.Run();
   }
 
- private:
+ protected:
   content::BrowserTaskEnvironment task_environment_;
   scoped_refptr<MockImporterBridge> bridge_ =
       base::MakeRefCounted<MockImporterBridge>();
   scoped_refptr<FirefoxImporter> importer_ =
       base::MakeRefCounted<FirefoxImporter>();
+  user_data_importer::FakeBookmarkHtmlParser fake_parser_;
+  mojo::Receiver<user_data_importer::mojom::BookmarkHtmlParser> receiver_{
+      &fake_parser_};
 };
 
 TEST_F(FirefoxImporterTest, ImportBookmarks_Firefox48) {
@@ -155,14 +168,23 @@ TEST_F(FirefoxImporterTest, ImportBookmarksWithCorruptedDb) {
   profile.source_path = source_temp_dir.GetPath();
   scoped_refptr<MockImporterBridge> bridge =
       base::MakeRefCounted<MockImporterBridge>();
+  base::RunLoop run_loop1;
   EXPECT_CALL(*bridge, NotifyStarted());
   EXPECT_CALL(*bridge, NotifyItemStarted(user_data_importer::FAVORITES));
   EXPECT_CALL(*bridge, AddBookmarks(_, _)).Times(0);
   EXPECT_CALL(*bridge, SetFavicons(_)).Times(0);
   EXPECT_CALL(*bridge, NotifyItemEnded(user_data_importer::FAVORITES));
-  EXPECT_CALL(*bridge, NotifyEnded());
+  EXPECT_CALL(*bridge, NotifyEnded())
+      .WillOnce(testing::InvokeWithoutArgs(&run_loop1, &base::RunLoop::Quit));
+
+  user_data_importer::FakeBookmarkHtmlParser fake_parser1;
+  mojo::Receiver<user_data_importer::mojom::BookmarkHtmlParser> receiver1{
+      &fake_parser1};
+  first_importer->SetBookmarkHtmlParser(receiver1.BindNewPipeAndPassRemote());
+
   first_importer->StartImport(profile, user_data_importer::FAVORITES,
                               bridge.get());
+  run_loop1.Run();
 
   // Part 2: Test GetWholeBookmarkFolder validation
   base::ScopedTempDir second_source_dir;
@@ -201,14 +223,62 @@ TEST_F(FirefoxImporterTest, ImportBookmarksWithCorruptedDb) {
   second_profile.source_path = second_source_dir.GetPath();
   scoped_refptr<MockImporterBridge> second_bridge =
       base::MakeRefCounted<MockImporterBridge>();
+  base::RunLoop run_loop2;
   EXPECT_CALL(*second_bridge, NotifyStarted());
   EXPECT_CALL(*second_bridge, NotifyItemStarted(user_data_importer::FAVORITES));
   EXPECT_CALL(*second_bridge, AddBookmarks(_, _)).Times(0);
   EXPECT_CALL(*second_bridge, SetFavicons(_)).Times(0);
   EXPECT_CALL(*second_bridge, NotifyItemEnded(user_data_importer::FAVORITES));
-  EXPECT_CALL(*second_bridge, NotifyEnded());
+  EXPECT_CALL(*second_bridge, NotifyEnded())
+      .WillOnce(testing::InvokeWithoutArgs(&run_loop2, &base::RunLoop::Quit));
+
+  user_data_importer::FakeBookmarkHtmlParser fake_parser2;
+  mojo::Receiver<user_data_importer::mojom::BookmarkHtmlParser> receiver2{
+      &fake_parser2};
+  second_importer->SetBookmarkHtmlParser(receiver2.BindNewPipeAndPassRemote());
+
   second_importer->StartImport(second_profile, user_data_importer::FAVORITES,
                                second_bridge.get());
+  run_loop2.Run();
+}
+
+TEST_F(FirefoxImporterTest, ImportBookmarksWithParserDisconnect) {
+  base::FilePath places_path;
+  ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &places_path));
+  places_path =
+      places_path.AppendASCII("import").AppendASCII("firefox").AppendASCII(
+          "48.0.2");
+  ASSERT_TRUE(base::DirectoryExists(places_path));
+  user_data_importer::SourceProfile profile;
+  profile.source_path = places_path;
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(*bridge_, NotifyStarted());
+  EXPECT_CALL(*bridge_, NotifyItemStarted(user_data_importer::FAVORITES));
+  EXPECT_CALL(*bridge_, AddBookmarks(_, _)).Times(0);
+  EXPECT_CALL(*bridge_, SetFavicons(_)).Times(0);
+  EXPECT_CALL(*bridge_, NotifyItemEnded(user_data_importer::FAVORITES));
+  // The items that follow the bookmarks must still be imported.
+  EXPECT_CALL(*bridge_,
+              NotifyItemStarted(user_data_importer::AUTOFILL_FORM_DATA));
+  EXPECT_CALL(*bridge_,
+              NotifyItemEnded(user_data_importer::AUTOFILL_FORM_DATA));
+  EXPECT_CALL(*bridge_, NotifyEnded())
+      .WillOnce(testing::InvokeWithoutArgs(&run_loop, &base::RunLoop::Quit));
+
+  // Bind a remote whose receiver is dropped immediately, so that the parser is
+  // disconnected and never replies.
+  mojo::PendingRemote<user_data_importer::mojom::BookmarkHtmlParser> parser;
+  std::ignore = parser.InitWithNewPipeAndPassReceiver();
+  importer_->SetBookmarkHtmlParser(std::move(parser));
+
+  importer_->StartImport(
+      profile,
+      user_data_importer::FAVORITES | user_data_importer::AUTOFILL_FORM_DATA,
+      bridge_.get());
+
+  // The import must still complete instead of stalling forever.
+  run_loop.Run();
 }
 
 TEST_F(FirefoxImporterTest, ImportHistorySchema) {

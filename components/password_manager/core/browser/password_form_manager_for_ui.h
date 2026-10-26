@@ -14,6 +14,7 @@
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_store/interactions_stats.h"
 #include "components/password_manager/core/browser/password_store/stored_credential.h"
+#include "components/password_manager/core/browser/password_string.h"
 
 namespace password_manager {
 
@@ -70,6 +71,9 @@ class PasswordFormManagerForUI {
   // Handles save-as-new or update of the form managed by this manager.
   virtual void Save() = 0;
 
+  // Returns true if the current UI represents a password update.
+  virtual bool IsPasswordUpdate() const = 0;
+
   // This method returns true if the current "update" is to a password that is
   // saved in Google Account.
   virtual bool IsUpdateAffectingPasswordsStoredInTheGoogleAccount() const = 0;
@@ -84,7 +88,7 @@ class PasswordFormManagerForUI {
   // password selection dropdown and clicks the save button. Updates the
   // password and modifies internal state accordingly.
   virtual void OnUpdatePasswordFromPrompt(
-      const std::u16string& new_password) = 0;
+      const PasswordString& new_password) = 0;
 
   // Called when the user chose not to update password.
   virtual void OnNopeUpdateClicked() = 0;

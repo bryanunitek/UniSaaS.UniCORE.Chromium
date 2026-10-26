@@ -16,6 +16,7 @@
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/platform/wtf/dtoa.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -134,13 +135,6 @@ bool CSSParserToken::HasStringBacking() const {
          token_type == kStringToken;
 }
 
-CSSParserToken CSSParserToken::CopyWithUpdatedString(
-    const StringView& string) const {
-  CSSParserToken copy(*this);
-  copy.InitValueFromStringView(string);
-  return copy;
-}
-
 bool CSSParserToken::ValueDataCharRawEqual(const CSSParserToken& other) const {
   if (ValueDataCharRaw() == other.ValueDataCharRaw() &&
       value_is_8bit_ == other.value_is_8bit_) {
@@ -252,8 +246,8 @@ void CSSParserToken::Serialize(StringBuilder& builder) const {
       break;
     }
     case kUnicodeRangeToken:
-      return builder.Append(
-          String::Format("U+%X-%X", UnicodeRangeStart(), UnicodeRangeEnd()));
+      FormatTo(builder, "U+{:X}-{:X}", UnicodeRangeStart(), UnicodeRangeEnd());
+      return;
     case kStringToken:
       return SerializeString(Value().ToString(), builder);
 

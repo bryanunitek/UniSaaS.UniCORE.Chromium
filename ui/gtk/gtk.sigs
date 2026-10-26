@@ -146,6 +146,7 @@ gboolean gtk_print_job_set_source_file(GtkPrintJob* job, const gchar* filename, 
 GtkPrintSettings* gtk_print_settings_copy(GtkPrintSettings* other);
 GtkPageOrientation gtk_print_settings_get_orientation(GtkPrintSettings* settings);
 GtkPageRange* gtk_print_settings_get_page_ranges(GtkPrintSettings* settings, gint *num_ranges);
+void gtk_print_settings_set_page_ranges(GtkPrintSettings* settings, GtkPageRange* page_ranges, gint num_ranges);
 const gchar* gtk_print_settings_get_printer(GtkPrintSettings* settings);
 GtkPrintPages gtk_print_settings_get_print_pages(GtkPrintSettings* settings);
 gint gtk_print_settings_get_resolution(GtkPrintSettings* settings);
@@ -194,6 +195,3 @@ void gtk_widget_set_state_flags(GtkWidget* widget, GtkStateFlags flags, gboolean
 void gtk_widget_show(GtkWidget* widget);
 void gtk_window_set_modal(GtkWindow* window, gboolean modal);
 void gtk_print_settings_set_printer(GtkPrintSettings* settings, const gchar* printer);
-GType gtk_settings_get_type(void);
-GType gtk_dialog_get_type(void);
-void gtk_dialog_set_default_response(GtkDialog* dialog, gint response_id);

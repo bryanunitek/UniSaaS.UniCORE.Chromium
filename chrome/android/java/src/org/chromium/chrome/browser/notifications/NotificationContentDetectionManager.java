@@ -63,7 +63,7 @@ public class NotificationContentDetectionManager {
     // origin. If this data is pruned from memory (e.g., Chrome is killed), the user will not be
     // able to restore the original notifications by tapping "Show original notification" on the
     // warning notification.
-    static final Map<String, SuspiciousNotificationWarningDetailsForOrigin>
+    private static final Map<String, SuspiciousNotificationWarningDetailsForOrigin>
             sWarningNotificationAttributesByOrigin = new HashMap<>();
 
     private static @Nullable NotificationContentDetectionManager sInstance;
@@ -440,8 +440,7 @@ public class NotificationContentDetectionManager {
             sWarningNotificationAttributesByOrigin.put(
                     notificationOrigin,
                     new SuspiciousNotificationWarningDetailsForOrigin(
-                            /* warningNotificationId= */ notificationId,
-                            new HashMap<String, WarningNotificationWrapperAttributes>()));
+                            /* warningNotificationId= */ notificationId, new HashMap<>()));
         }
         sWarningNotificationAttributesByOrigin
                 .get(notificationOrigin)
@@ -693,7 +692,7 @@ public class NotificationContentDetectionManager {
         RecordHistogram.recordEnumeratedHistogram(
                 SUSPICIOUS_NOTIFICATION_WARNING_INTERACTIONS_HISTOGRAM_NAME,
                 value,
-                SuspiciousNotificationWarningInteractions.MAX_VALUE);
+                SuspiciousNotificationWarningInteractions.MAX_VALUE + 1);
     }
 
     /**
@@ -719,7 +718,7 @@ public class NotificationContentDetectionManager {
             return "";
         }
 
-        return (String) notificationExtras.getString(extraType);
+        return notificationExtras.getString(extraType);
     }
 
     private static boolean getBooleanFromBackupBundle(
@@ -728,7 +727,7 @@ public class NotificationContentDetectionManager {
             return defaultValue;
         }
 
-        return (boolean) notificationExtras.getBoolean(extraType);
+        return notificationExtras.getBoolean(extraType);
     }
 
     private static void appendUnsubscribeButton(
@@ -921,5 +920,9 @@ public class NotificationContentDetectionManager {
                     channelId);
         }
         NotificationPlatformBridge.displayNotificationSilently(builder, notificationId);
+    }
+
+    static void clearWarningNotificationAttributesByOriginForTesting() {
+        sWarningNotificationAttributesByOrigin.clear();
     }
 }

@@ -216,6 +216,7 @@ class PageActionController {
     using AnchoredMessageCloseCallback = base::RepeatingClosure;
     using AnchoredMessageExpandCallback = base::RepeatingClosure;
     using AnchoredMessageCollapseCallback = base::RepeatingClosure;
+    using AnchoredMessageDowngradeCallback = base::RepeatingClosure;
     using ClickCallback = base::RepeatingCallback<void(PageActionTrigger)>;
 
     virtual void SetIsChipShowingChangedCallback(
@@ -229,6 +230,8 @@ class PageActionController {
     virtual void SetAnchoredMessageCollapseCallback(
         AnchoredMessageCollapseCallback callback) = 0;
     virtual void SetClickCallback(ClickCallback callback) = 0;
+    virtual void SetAnchoredMessageDowngradeCallback(
+        AnchoredMessageDowngradeCallback callback) = 0;
   };
 
   virtual ~PageActionController() = default;
@@ -311,6 +314,13 @@ class PageActionController {
   virtual void OverrideTooltip(actions::ActionId action_id,
                                const std::u16string& override_tooltip) = 0;
   virtual void ClearOverrideTooltip(actions::ActionId action_id) = 0;
+
+  virtual void OverrideBackgroundColor(
+      actions::ActionId action_id,
+      std::optional<ui::ColorId> override_background_color_id) = 0;
+  virtual void OverrideForegroundColor(
+      actions::ActionId action_id,
+      std::optional<ui::ColorId> override_foreground_color_id) = 0;
 
   // Functions to set configs for anchored messages.
   virtual void SetAnchoredMessageText(
@@ -437,6 +447,12 @@ class PageActionControllerImpl : public PageActionController,
   void OverrideTooltip(actions::ActionId action_id,
                        const std::u16string& override_tooltip) override;
   void ClearOverrideTooltip(actions::ActionId action_id) override;
+  void OverrideBackgroundColor(
+      actions::ActionId action_id,
+      std::optional<ui::ColorId> override_background_color_id) override;
+  void OverrideForegroundColor(
+      actions::ActionId action_id,
+      std::optional<ui::ColorId> override_foreground_color_id) override;
   void SetAnchoredMessageText(
       actions::ActionId action_id,
       const std::u16string& anchored_message_text) override;
@@ -472,6 +488,8 @@ class PageActionControllerImpl : public PageActionController,
  private:
   using PageActionModelsMap =
       std::map<actions::ActionId, std::unique_ptr<PageActionModelInterface>>;
+
+  bool IsPageActionSuppressedByOmnibox(actions::ActionId page_action_id);
 
   // Called by ScopedPageActionActivity when it's destroyed.
   void DecrementActivityCounter(actions::ActionId action_id) override;
@@ -528,6 +546,9 @@ class PageActionControllerImpl : public PageActionController,
 
   void PauseAnchoredMessageTimeout(actions::ActionId action_id);
   void ResumeAnchoredMessageTimeout(actions::ActionId action_id);
+
+  bool IsAnyPageActionBubbleShowing() const;
+  void OnPageActionAnchoredUiShown();
 
   const raw_ptr<PageActionModelFactory> page_action_model_factory_ = nullptr;
   const raw_ptr<PageActionMetricsRecorderFactory>

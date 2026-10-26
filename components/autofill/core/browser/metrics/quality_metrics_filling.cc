@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <string_view>
+#include <utility>
 
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
@@ -17,7 +18,7 @@
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/form_types.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
-#include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
+#include "components/autofill/core/browser/metrics/autofill_metrics_util.h"
 #include "components/autofill/core/browser/suggestions/suggestion_util.h"
 
 namespace autofill::autofill_metrics {
@@ -96,11 +97,11 @@ int GetFieldTypeAutofillDataUtilization(
 
   // Technically only 1 bit is required at this time. Reserving more bits for
   // potential future expansion.
-  static_assert(static_cast<int>(AutofillDataUtilization::kMaxValue) <=
+  static_assert(std::to_underlying(AutofillDataUtilization::kMaxValue) <=
                     (UINT16_MAX >> 10),
                 "AutofillDataUtilization value needs more than 6 bits");
 
-  return (field_type << 6) | static_cast<int>(data_utilization);
+  return (field_type << 6) | std::to_underlying(data_utilization);
 }
 
 // Records, for fields that were submitted with values that were found in the

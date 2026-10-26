@@ -9,8 +9,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -19,15 +17,11 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 
 /** Tests for {@link ViewFocusChangeSuppression}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
-@Config(manifest = Config.NONE)
 public class ViewFocusChangeSuppressionTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -49,14 +43,12 @@ public class ViewFocusChangeSuppressionTest {
     }
 
     @Test
-    @SmallTest
     public void testFromReturnsNonNull() {
         ViewFocusChangeSuppression suppression = ViewFocusChangeSuppression.from(mWebContents);
         assertNotNull(suppression);
     }
 
     @Test
-    @SmallTest
     public void testSameInstanceReturned() {
         ViewFocusChangeSuppression suppression1 = ViewFocusChangeSuppression.from(mWebContents);
         ViewFocusChangeSuppression suppression2 = ViewFocusChangeSuppression.from(mWebContents);
@@ -64,7 +56,6 @@ public class ViewFocusChangeSuppressionTest {
     }
 
     @Test
-    @SmallTest
     public void testSetAndGetSuppressed() {
         ViewFocusChangeSuppression suppression = ViewFocusChangeSuppression.from(mWebContents);
         assertFalse(suppression.isSuppressed());

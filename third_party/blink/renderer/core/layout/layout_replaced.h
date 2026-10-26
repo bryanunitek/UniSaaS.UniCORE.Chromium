@@ -61,7 +61,7 @@ class CORE_EXPORT LayoutReplaced : public LayoutBox {
   // or underflow the final content box by 1px.
   static PhysicalRect PreSnappedRectForPersistentSizing(const PhysicalRect&);
 
-  void RecalcVisualOverflow() override;
+  void RecalcVisualOverflow() final;
 
   // These values are specified to be 300 and 150 pixels in the CSS 2.1 spec.
   // http://www.w3.org/TR/CSS2/visudet.html#inline-replaced-width
@@ -84,7 +84,7 @@ class CORE_EXPORT LayoutReplaced : public LayoutBox {
 
   bool HasObjectFit() const {
     NOT_DESTROYED();
-    return StyleRef().GetObjectFit() !=
+    return Style().GetObjectFit() !=
            ComputedStyleInitialValues::InitialObjectFit();
   }
 
@@ -155,6 +155,7 @@ class CORE_EXPORT LayoutReplaced : public LayoutBox {
 
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
 
   PositionWithAffinity PositionForPoint(const PhysicalOffset&) const override;
@@ -178,9 +179,10 @@ class CORE_EXPORT LayoutReplaced : public LayoutBox {
   // ImageResourceObserver
   gfx::Size ComputeSpeculativeDecodeSize() const override;
 
+  virtual PhysicalRect ComputeContentsVisualOverflow() const;
+
  private:
-  void AddVisualEffectOverflow();
-  PhysicalBoxStrut ComputeVisualEffectOverflowOutsets();
+  PhysicalRect ComputeSelfVisualOverflow() const;
 
   // Computes a rect, relative to the element's content's natural size, that
   // should be used as the content source when rendering this element. This

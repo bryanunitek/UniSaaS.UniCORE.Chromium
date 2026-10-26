@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "ash/constants/ash_features.h"
+#include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -99,7 +100,7 @@ class GuestOsMountProviderInner : public CachedCallback<ScopedVolume, bool> {
         vm_type_(vm_type),
         prepare_(std::move(prepare)) {
     // This profile should be the user's primary profile, not an incognito one.
-    DCHECK(!profile->IsOffTheRecord());
+    CHECK(!profile->IsOffTheRecord(), base::NotFatalUntil::M160);
   }
 
   // Mount.
@@ -173,7 +174,7 @@ class GuestOsMountProviderInner : public CachedCallback<ScopedVolume, bool> {
 
 void GuestOsMountProvider::Mount(base::OnceCallback<void(bool)> callback) {
   const bool local_files_allowed =
-      policy::local_user_files::LocalUserFilesAllowed();
+      policy::local_user_files::LocalUserFilesAllowed(local_state_.get());
 
   // If SkyVaultV2 is enabled (GA version), block all VMs regardless of the
   // type.
@@ -211,6 +212,8 @@ void GuestOsMountProvider::Unmount() {
   callback_->Invalidate();
 }
 
-GuestOsMountProvider::GuestOsMountProvider() = default;
+GuestOsMountProvider::GuestOsMountProvider(PrefService* local_state)
+    : local_state_(CHECK_DEREF(local_state)) {}
+
 GuestOsMountProvider::~GuestOsMountProvider() = default;
 }  // namespace guest_os

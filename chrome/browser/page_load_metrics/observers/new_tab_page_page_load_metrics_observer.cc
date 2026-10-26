@@ -13,7 +13,7 @@
 namespace {
 
 const char kNewTabPageFirstContentfulPaintHistogram[] =
-    "NewTabPage.LoadTime.FirstContentfulPaint";
+    "NewTabPage.LoadTime.FirstContentfulPaint2";
 const char kNewTabPageLargestContentfulPaintHistogram[] =
     "NewTabPage.LoadTime.LargestContentfulPaint";
 

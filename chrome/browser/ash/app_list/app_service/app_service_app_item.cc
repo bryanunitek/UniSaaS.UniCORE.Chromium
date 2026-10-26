@@ -31,6 +31,7 @@
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/types_util.h"
+#include "content/public/browser/navigation_controller.h"
 #include "ui/display/screen.h"
 
 namespace {
@@ -50,6 +51,7 @@ bool IsNewInstall(const apps::AppUpdate& app_update) {
     case apps::AppType::kUnknown:
     case apps::AppType::kSystemWeb:
     case apps::AppType::kRemote:
+    case apps::AppType::kPluginVm:
       // Chrome, Settings, etc. are built-in.
       return false;
     case apps::AppType::kArc:
@@ -57,7 +59,6 @@ bool IsNewInstall(const apps::AppUpdate& app_update) {
     case apps::AppType::kChromeApp:
     case apps::AppType::kExtension:
     case apps::AppType::kWeb:
-    case apps::AppType::kPluginVm:
     case apps::AppType::kBorealis:
     case apps::AppType::kBruschetta:
       // Other app types are user-installed.
@@ -105,10 +106,10 @@ AppServiceAppItem::AppServiceAppItem(
 
     // Crostini and Bruschetta apps start in their respective folders.
     if (app_type_ == apps::AppType::kCrostini) {
-      DCHECK(folder_id().empty());
+      CHECK(folder_id().empty(), base::NotFatalUntil::M160);
       SetChromeFolderId(ash::kCrostiniFolderId);
     } else if (app_type_ == apps::AppType::kBruschetta) {
-      DCHECK(folder_id().empty());
+      CHECK(folder_id().empty(), base::NotFatalUntil::M160);
       SetChromeFolderId(ash::kBruschettaFolderId);
     }
   }

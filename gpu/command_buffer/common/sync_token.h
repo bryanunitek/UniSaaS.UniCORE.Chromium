@@ -33,6 +33,8 @@ struct GPU_COMMAND_BUFFER_COMMON_EXPORT SyncPointClientId {
            std::tie(other.namespace_id, other.command_buffer_id);
   }
 
+  bool operator==(const SyncPointClientId& other) const = default;
+
   CommandBufferNamespace namespace_id = CommandBufferNamespace::INVALID;
   CommandBufferId command_buffer_id;
 };
@@ -47,9 +49,6 @@ struct GPU_COMMAND_BUFFER_COMMON_EXPORT SyncToken {
   SyncToken(CommandBufferNamespace namespace_id,
             CommandBufferId command_buffer_id,
             uint64_t release_count);
-
-  SyncToken(const SyncToken& other);
-  SyncToken& operator=(const SyncToken& other);
 
   void Set(CommandBufferNamespace namespace_id,
            CommandBufferId command_buffer_id,

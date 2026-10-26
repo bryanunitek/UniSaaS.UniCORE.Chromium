@@ -38,10 +38,9 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
 
 }  // namespace
 
-@interface ConsistencyPromoSigninMediator () <
-    AuthenticationFlowDelegate,
-    AuthenticationServiceObserving,
-    IdentityManagerObserverBridgeDelegate> {
+@interface ConsistencyPromoSigninMediator () <AuthenticationFlowDelegate,
+                                              AuthenticationServiceObserving,
+                                              IdentityManagerObserving> {
   raw_ptr<ChromeAccountManagerService> _accountManagerService;
   raw_ptr<AuthenticationService> _authenticationService;
   raw_ptr<signin::IdentityManager> _identityManager;
@@ -89,10 +88,10 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
   self = [super init];
   if (self) {
     CHECK(identityManager);
-    CHECK(accountManagerService, base::NotFatalUntil::M144);
-    CHECK(authenticationService->SigninEnabled(), base::NotFatalUntil::M144);
-    CHECK(accountReconcilor, base::NotFatalUntil::M144);
-    CHECK(userPrefService, base::NotFatalUntil::M144);
+    CHECK(accountManagerService);
+    CHECK(authenticationService->SigninEnabled());
+    CHECK(accountReconcilor);
+    CHECK(userPrefService);
     _accountManagerService = accountManagerService;
     _authenticationService = authenticationService;
     _identityManager = identityManager;
@@ -125,10 +124,8 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
 
 - (void)dealloc {
   CHECK(!_accountManagerService && !_authenticationService &&
-            !_identityManager && !_accountReconcilor && !_prefService &&
-            !_identityManagerObserverBridge.get() &&
-            !_authServiceObserverBridge,
-        base::NotFatalUntil::M142)
+        !_identityManager && !_accountReconcilor && !_prefService &&
+        !_identityManagerObserverBridge.get() && !_authServiceObserverBridge)
       << "_accountManagerService: " << _accountManagerService
       << ", _authenticationService: " << _authenticationService
       << ", _identityManager: " << _identityManager
@@ -138,57 +135,59 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
       << _identityManagerObserverBridge.get();
 }
 
-- (void)disconnectWithResult:(SigninCoordinatorResult)signinResult {
-  switch (signinResult) {
-    case SigninCoordinatorResultSuccess: {
-      CHECK(_signingIdentity);
-      id<SystemIdentity> signingIdentity = _signingIdentity;
-      id<SystemIdentity> defaultIdentity = signin::GetDefaultIdentityOnDevice(
-          _identityManager, _accountManagerService);
-      DCHECK(defaultIdentity);
-      if (!_initializedWithDefaultAccount) {
-        // Added identity, from having no existing account.
+- (void)disconnectWithResult:
+    (const SigninCoordinatorResultOrIdentity&)signinResult {
+  if (signinResult.has_value()) {
+    CHECK(_signingIdentity);
+    id<SystemIdentity> signingIdentity = _signingIdentity;
+    id<SystemIdentity> defaultIdentity = signin::GetDefaultIdentityOnDevice(
+        _identityManager, _accountManagerService);
+    DCHECK(defaultIdentity);
+    if (!_initializedWithDefaultAccount) {
+      // Added identity, from having no existing account.
+      RecordConsistencyPromoUserAction(
+          signin_metrics::AccountConsistencyPromoAction::
+              SIGNED_IN_WITH_NO_DEVICE_ACCOUNT,
+          _accessPoint);
+    } else if (_addedGaiaIDs.contains(signingIdentity.gaiaId)) {
+      // Added identity.
+      RecordConsistencyPromoUserAction(
+          signin_metrics::AccountConsistencyPromoAction::
+              SIGNED_IN_WITH_ADDED_ACCOUNT,
+          _accessPoint);
+    } else if ([defaultIdentity isEqual:signingIdentity]) {
+      // Default identity.
+      RecordConsistencyPromoUserAction(
+          signin_metrics::AccountConsistencyPromoAction::
+              SIGNED_IN_WITH_DEFAULT_ACCOUNT,
+          _accessPoint);
+    } else {
+      // Other identity.
+      RecordConsistencyPromoUserAction(
+          signin_metrics::AccountConsistencyPromoAction::
+              SIGNED_IN_WITH_NON_DEFAULT_ACCOUNT,
+          _accessPoint);
+    }
+  } else {
+    switch (signinResult.error()) {
+      case SigninCoordinatorResultCanceledByUser: {
         RecordConsistencyPromoUserAction(
-            signin_metrics::AccountConsistencyPromoAction::
-                SIGNED_IN_WITH_NO_DEVICE_ACCOUNT,
+            signin_metrics::AccountConsistencyPromoAction::DISMISSED_BUTTON,
             _accessPoint);
-      } else if (_addedGaiaIDs.contains(signingIdentity.gaiaId)) {
-        // Added identity.
-        RecordConsistencyPromoUserAction(
-            signin_metrics::AccountConsistencyPromoAction::
-                SIGNED_IN_WITH_ADDED_ACCOUNT,
-            _accessPoint);
-      } else if ([defaultIdentity isEqual:signingIdentity]) {
-        // Default identity.
-        RecordConsistencyPromoUserAction(
-            signin_metrics::AccountConsistencyPromoAction::
-                SIGNED_IN_WITH_DEFAULT_ACCOUNT,
-            _accessPoint);
-      } else {
-        // Other identity.
-        RecordConsistencyPromoUserAction(
-            signin_metrics::AccountConsistencyPromoAction::
-                SIGNED_IN_WITH_NON_DEFAULT_ACCOUNT,
-            _accessPoint);
+        break;
       }
-      break;
+      case SigninCoordinatorResultDisabled:
+      case SigninCoordinatorResultInterrupted:
+      case SigninCoordinatorProfileSwitch: {
+        RecordConsistencyPromoUserAction(
+            signin_metrics::AccountConsistencyPromoAction::DISMISSED_OTHER,
+            _accessPoint);
+        break;
+      }
+      case SigninCoordinatorResultSuccess:
+      case SigninCoordinatorUINotAvailable:
+        NOTREACHED();
     }
-    case SigninCoordinatorResultCanceledByUser: {
-      RecordConsistencyPromoUserAction(
-          signin_metrics::AccountConsistencyPromoAction::DISMISSED_BUTTON,
-          _accessPoint);
-      break;
-    }
-    case SigninCoordinatorResultDisabled:
-    case SigninCoordinatorResultInterrupted:
-    case SigninCoordinatorProfileSwitch: {
-      RecordConsistencyPromoUserAction(
-          signin_metrics::AccountConsistencyPromoAction::DISMISSED_OTHER,
-          _accessPoint);
-      break;
-    }
-    case SigninCoordinatorUINotAvailable:
-      NOTREACHED();
   }
   _accountManagerService = nullptr;
   _authenticationService = nullptr;
@@ -299,6 +298,10 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
                                          signinAccount:accountId
                                           withCallback:&callback
                                            withTimeout:kSigninTimeout];
+  // TODO(crbug.com/570450501): Stub the tracker in tests and remove this check.
+  if (_webSigninTracker) {
+    _webSigninTracker->Start();
+  }
 }
 
 - (void)authenticationFlowWillSwitchProfileWithReadyCompletion:
@@ -359,18 +362,15 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
           _accessPoint);
       break;
   }
-  __weak __typeof(self) weakSelf = self;
-  _authenticationService->SignOut(
-      signin_metrics::ProfileSignout::kAbortSignin, ^() {
-        [weakSelf.delegate consistencyPromoSigninMediator:weakSelf
-                                           errorDidHappen:error
-                                             withIdentity:signinIdentity];
-      });
+  _authenticationService->SignOut(signin_metrics::ProfileSignout::kAbortSignin);
+  [self.delegate consistencyPromoSigninMediator:self
+                                 errorDidHappen:error
+                                   withIdentity:signinIdentity];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   if (_authenticationFlow) {
     // If the authentication is in progress, its callback will deal with

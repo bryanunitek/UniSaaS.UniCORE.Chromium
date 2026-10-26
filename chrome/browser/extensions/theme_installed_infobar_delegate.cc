@@ -17,7 +17,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -127,7 +126,7 @@ int ThemeInstalledInfoBarDelegate::GetButtons() const {
 
 std::u16string ThemeInstalledInfoBarDelegate::GetButtonLabel(
     InfoBarButton button) const {
-  DCHECK_EQ(BUTTON_CANCEL, button);
+  CHECK_EQ(BUTTON_CANCEL, button, base::NotFatalUntil::M161);
   return l10n_util::GetStringUTF16(IDS_THEME_INSTALL_INFOBAR_UNDO_BUTTON);
 }
 

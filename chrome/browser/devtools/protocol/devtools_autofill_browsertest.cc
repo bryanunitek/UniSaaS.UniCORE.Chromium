@@ -4,14 +4,15 @@
 
 #include "base/check_deref.h"
 #include "base/containers/to_vector.h"
+#include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/autofill/autofill_uitest_util.h"
 #include "chrome/browser/devtools/protocol/devtools_protocol_test_support.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/test/base/ui_test_utils.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/content/browser/test_autofill_manager_injector.h"
 #include "components/autofill/content/common/mojom/autofill_driver.mojom.h"
@@ -20,12 +21,13 @@
 #include "components/autofill/core/browser/foundations/browser_autofill_manager_test_api.h"
 #include "components/autofill/core/browser/foundations/mock_autofill_manager_observer.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/ui/addresses/autofill_address_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/unique_ids.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
@@ -125,6 +127,16 @@ class TestAutofillManager : public BrowserAutofillManager {
 class DevToolsAutofillTest : public DevToolsProtocolTestBase {
  public:
   DevToolsAutofillTest() = default;
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    DevToolsProtocolTestBase::SetUpCommandLine(command_line);
+#if BUILDFLAG(IS_ANDROID)
+    // Explicitly enable site isolation so that out-of-process iframe (OOPIF)
+    // targets are created on Android (where site isolation is disabled by
+    // default), matching desktop behavior for OOPIF tests.
+    command_line->AppendSwitch(::switches::kSitePerProcess);
+#endif
+  }
+
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
   }
@@ -219,7 +231,9 @@ class DevToolsAutofillTest : public DevToolsProtocolTestBase {
 
   AutofillProfile CreateTestProfile() {
     AutofillProfile profile = test::GetFullProfile();
-    AddTestProfile(browser()->GetProfile(), profile);
+    AddTestProfile(
+        Profile::FromBrowserContext(web_contents()->GetBrowserContext()),
+        profile);
     return profile;
   }
 
@@ -268,7 +282,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, SetAddresses) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(
       embedded_test_server()->GetURL("/autofill_creditcard_form.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
   Attach();
 
@@ -314,7 +328,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, TriggerCreditCardInIframe) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL(
       "/autofill_creditcard_form_in_iframe.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
   Attach();
 
@@ -377,7 +391,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, TriggerCreditCardInOOPIFIframe) {
   GURL url = embedded_test_server()->GetURL(
       "a.com", "/autofill_creditcard_form_in_oopif.html");
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
   Attach();
 
@@ -407,7 +421,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, TriggerCreditCardAcrossOOPIFs) {
   GURL url = embedded_test_server()->GetURL(
       "a.com", "/autofill_creditcard_form_in_oopif.html");
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
   Attach();
 
@@ -498,10 +512,9 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, AddressFormFilled) {
 
   // Assert the expected values used to build the address UI were sent to
   // devtools.
-  ASSERT_EQ(
-      field_types_added_to_address_ui,
-      GetExpectedFieldTypesToBuildAddressUiForCountryCode(base::UTF16ToUTF8(
-          profile.GetInfo(FieldType::ADDRESS_HOME_COUNTRY, "en-US"))));
+  ASSERT_EQ(field_types_added_to_address_ui,
+            GetExpectedFieldTypesToBuildAddressUiForCountryCode(
+                base::UTF16ToUTF8(profile.GetRawInfo(ADDRESS_HOME_COUNTRY))));
   // Assert that the filled fields sent to devtools match exactly the ones
   // filled by autofill.
   const base::ListValue* filled_fields =
@@ -524,7 +537,8 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, AddressFormFilled) {
         ff, FilledFieldHasAttributeWithValue(
                 "autofillType", base::JoinString(field_type_strings, ", ")));
     EXPECT_THAT(ff, FilledFieldHasAttributeWithValue16(
-                        "value", profile.GetInfo(af->Type(), "en-us")));
+                        "value",
+                        profile.GetInfo(af->Type().GetAddressType(), "en-us")));
     EXPECT_THAT(ff, FilledFieldHasAttributeWithValue16(
                         "frameId",
                         base::UTF8ToUTF16(
@@ -561,7 +575,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, AutofillInOOPIFs) {
   GURL url = embedded_test_server()->GetURL(
       "a.com", "/autofill_address_multi_form_in_oopif.html");
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
 
   EXPECT_TRUE(main_autofill_manager().WaitForFormWithNFields(10));
@@ -604,7 +618,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, AddressFormFilledInOOPIFs) {
   GURL url = embedded_test_server()->GetURL(
       "a.com", "/autofill_address_multi_form_in_oopif.html");
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
 
   Attach();
@@ -643,8 +657,8 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest,
       "chrome/test/data/autofill");
   ASSERT_TRUE(embedded_test_server()->Start());
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(),
+  ASSERT_TRUE(content::NavigateToURL(
+      web_contents(),
       embedded_test_server()->GetURL("a.com", "/autofill_test_form.html")));
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
   EXPECT_TRUE(main_autofill_manager().WaitForFormWithNFields(9));
@@ -667,8 +681,8 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest,
   WaitForNotification("Autofill.addressFormFilled", /*allow_existing=*/true);
 
   // Navigating from "a.com" to "b.com".
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(),
+  ASSERT_TRUE(content::NavigateToURL(
+      web_contents(),
       embedded_test_server()->GetURL("b.com", "/autofill_test_form.html")));
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
   EXPECT_TRUE(main_autofill_manager().WaitForFormWithNFields(9));
@@ -747,8 +761,46 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, TriggerAddressAutofill) {
     EXPECT_EQ("NY", state.ExtractString());
     content::EvalJsResult country = content::EvalJs(
         web_contents(), "document.getElementById('country').value");
-    EXPECT_EQ("US", country.ExtractString());
+    EXPECT_EQ(base::FeatureList::IsEnabled(
+                  autofill::features::kAutofillDisallowCountryCodeFilling)
+                  ? "United States"
+                  : "US",
+              country.ExtractString());
   }
+}
+
+// Tests that `Autofill.trigger` only responds once the renderer has applied the
+// fill, so that clients can read the filled values as soon as it returns. The
+// renderer reports the filled form to the browser while applying the fill, so
+// the browser must have received that report when the command responds.
+IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest,
+                       TriggerRespondsAfterFillIsApplied) {
+  embedded_test_server()->ServeFilesFromSourceDirectory(
+      "chrome/test/data/autofill");
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url(
+      embedded_test_server()->GetURL("/autofill_creditcard_form.html"));
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+  Attach();
+
+  EXPECT_TRUE(main_autofill_manager().WaitForFormsSeen(1));
+
+  base::DictValue params;
+  params.Set("fieldId", GetBackendNodeIdByIdAttribute("CREDIT_CARD_NUMBER"));
+  params.Set("card", GetTestCreditCard());
+
+  testing::NiceMock<MockAutofillManagerObserver> observer;
+  base::ScopedObservation<AutofillManager, AutofillManager::Observer>
+      observation(&observer);
+  observation.Observe(&main_autofill_manager());
+  EXPECT_CALL(observer, OnBeforeDidAutofillForm(_, _))
+      .Times(testing::AtLeast(1));
+
+  SendCommandSync("Autofill.trigger", std::move(params));
+  ASSERT_TRUE(result());
+  testing::Mock::VerifyAndClearExpectations(&observer);
+
+  EXPECT_EQ(GetFilledOutForm(""), GetTestCreditCard());
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, TriggerWithInvalidFieldId) {
@@ -832,7 +884,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, TriggerAddressAutofillInIframe) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL(
       "/autofill_address_multi_form_in_oopif.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
   Attach();
 
@@ -909,7 +961,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, TriggerWithBothCardAndAddress) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(
       embedded_test_server()->GetURL("/autofill_creditcard_form.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
   Attach();
 
@@ -944,7 +996,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAutofillTest, TriggerWithNeitherCardNorAddress) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(
       embedded_test_server()->GetURL("/autofill_creditcard_form.html"));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
   Attach();
 

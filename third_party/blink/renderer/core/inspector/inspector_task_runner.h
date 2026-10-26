@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_TASK_RUNNER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_TASK_RUNNER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
@@ -68,6 +69,8 @@ class CORE_EXPORT InspectorTaskRunner final
   void ProcessInterruptingTasks();
   void RequestQuitProcessingInterruptingTasks();
 
+  bool IsInterrupting() const { return is_interrupting_; }
+
  private:
   friend ThreadSafeRefCounted<InspectorTaskRunner>;
   explicit InspectorTaskRunner(
@@ -82,10 +85,12 @@ class CORE_EXPORT InspectorTaskRunner final
 
   base::Lock lock_;
   scoped_refptr<base::SingleThreadTaskRunner> isolate_task_runner_;
-  v8::Isolate* isolate_ GUARDED_BY(lock_) = nullptr;
+  raw_ptr<v8::Isolate, UnprotectedInRelease | DanglingUntriaged> isolate_
+      GUARDED_BY(lock_) = nullptr;
   bool quit_requested_ = false;
   base::ConditionVariable task_queue_cv_;
   Deque<Task> interrupting_task_queue_;
+  bool is_interrupting_ = false;
   bool disposed_ GUARDED_BY(lock_) = false;
 };
 

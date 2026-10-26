@@ -20,7 +20,9 @@
 #include "components/autofill/core/common/password_generation_util.h"
 #include "components/device_reauth/device_reauth_metrics_util.h"
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
+#include "components/password_manager/core/browser/password_store/actionable_error.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
+#include "components/password_manager/core/common/browser_assisted_login_type.h"
 #include "components/password_manager/core/common/credential_manager_types.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 
@@ -101,8 +103,9 @@ enum UIDismissalReason {
 // LINT.ThenChange(/tools/metrics/histograms/metadata/password/enums.xml:PasswordManagerUIDismissalReason)
 
 // Enum representing the different leak detection dialogs shown to the user.
-// Corresponds to LeakDetectionDialogType suffix in histogram_suffixes_list.xml
-// and PasswordLeakDetectionDialogType in enums.xml.
+// Corresponds to the DialogType token in
+// tools/metrics/histograms/metadata/password/histograms.xml and
+// PasswordLeakDetectionDialogType in enums.xml.
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
 // In case of adding a new type, NEXT VALUE: 4.
@@ -405,6 +408,24 @@ enum class GenerationDialogChoice {
   kMaxValue = kRejected
 };
 
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// Metric: "PasswordManager.SaveWithTrustedVaultError.Outcome"
+//
+// LINT.IfChange(SaveWithTrustedVaultErrorOutcome)
+enum class SaveWithTrustedVaultErrorOutcome {
+  kSavedSuccessfully = 0,
+  kMessageTimedOut = 1,
+  kUserDismissedPrompt = 2,
+  kDeviceLockCanceled = 3,
+  kNewStoreError = 4,
+  kNeverForThisSite = 5,
+  kKeyRetrievalFailedOrCanceled = 6,
+  kTabDestroyed = 7,
+  kMaxValue = kTabDestroyed,
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/password/enums.xml:SaveWithTrustedVaultErrorOutcome)
+
 enum class SignInState {
   // The user is signed out.
   kSignedOut = 0,
@@ -413,7 +434,6 @@ enum class SignInState {
   // The user has enabled Sync.
   kSyncing = 2,
 };
-
 
 // Represents different user interactions related to adding credential from the
 // setting. These values are persisted to logs. Entries should not be renumbered
@@ -626,35 +646,6 @@ enum class PasswordDropdownDuplicateCredentialsType {
   kMaxValue = kDuplicatePasswordsAndPasskeys,
 };
 
-// This enum describes the type of logins assisted by the browser. e.g. via
-// passwords, passkeys or federation.
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-//
-// LINT.IfChange(BrowserAssistedLoginType)
-// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.password_manager
-enum class BrowserAssistedLoginType {
-  kFedCmPassive = 0,
-  kFedCmActive = 1,
-  kNonFedCmOAuth = 2,
-  kUnknown = 3,
-  kPasswordFullyAssisted = 4,
-  kPasswordPartiallyAssisted = 5,
-  kPasswordManuallyEntered = 6,
-  kPasswordNeitherManuallyEnteredNorGPMAssisted = 7,
-  kPasskeyStoredInGPM = 8,
-  kPasskeyStoredInWindowsHello = 9,
-  kPasskeyStoredInICloudKeychain = 10,
-  kPasskeyStoredInChromeProfile = 11,
-  kPasskeyHybrid = 12,
-  kPasskeySecurityKey = 13,
-  kPasskeyHybridOrSecurityKey = 14,
-  kPasskeyUnknown = 15,
-
-  kMaxValue = kPasskeyUnknown,
-};
-// LINT.ThenChange(//tools/metrics/histograms/metadata/password/enums.xml:BrowserAssistedLoginType)
-
 std::string_view GetPasswordAccountStorageUsageLevelHistogramSuffix(
     password_manager::features_util::PasswordAccountStorageUsageLevel
         usage_level);
@@ -706,10 +697,18 @@ void LogGeneralUIDismissalReason(UIDismissalReason reason);
 // user-state-specific histogram.
 // If `log_adoption_metric` is true, additional histogram is recorded to
 // measure adoption among new users of password manager.
+// If `saving_blocked_error` is set, additional histogram
+// PasswordManager.SaveUIDismissalReason.{PasswordStoreError} is recorded.
 void LogSaveUIDismissalReason(
     UIDismissalReason reason,
     std::optional<features_util::PasswordAccountStorageUserState> user_state,
-    bool log_adoption_metric);
+    bool log_adoption_metric,
+    std::optional<ActionableError> saving_blocked_error);
+
+// Log the outcome of saving a password when saving is blocked by a trusted
+// vault error (logged on Android only).
+void LogSaveWithTrustedVaultErrorOutcome(
+    SaveWithTrustedVaultErrorOutcome outcome);
 
 // Log the |reason| a user dismissed the update password bubble.
 void LogUpdateUIDismissalReason(UIDismissalReason reason);

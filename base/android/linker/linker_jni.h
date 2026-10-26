@@ -79,19 +79,30 @@ static const size_t kAddressSpaceReservationSize = 192 * 1024 * 1024;
 
 // A simple scoped UTF String class that can be initialized from
 // a Java jstring handle. Modeled like std::string, which cannot
-// be used here.
+// be used here. Employs Small String Optimization (SSO) with an inline
+// buffer to avoid heap allocations and ART memory copies.
 class String {
  public:
   String(JNIEnv* env, jstring str);
+  String(const String&) = delete;
+  String& operator=(const String&) = delete;
 
-  inline ~String() { ::free(ptr_); }
+  inline ~String() {
+    if (ptr_ != buffer_) {
+      ::free(ptr_);
+    }
+  }
 
   inline const char* c_str() const { return ptr_ ? ptr_ : ""; }
   inline size_t size() const { return size_; }
 
  private:
+  // Sized to hold the paths of apks and .so files as this is the only
+  // application of this string.
+  static constexpr size_t kInlineBufferSize = 512;
   char* ptr_;
   size_t size_;
+  char buffer_[kInlineBufferSize];
 };
 
 inline uintptr_t PageStart(size_t page_size, uintptr_t x) {
@@ -290,10 +301,10 @@ class NativeLibInfo {
   //
   // The external NativeLibInfo can arrive from a different process.
   //
-  // Note on security: The RELRO region is treated as *trusted*, no untrusted
-  // user/website/network input can be processed in an isolated process before
-  // it sends the RELRO FD. This is because there is no way to check whether the
-  // process has a writable mapping of the region remaining.
+  // Note on security: The RELRO region is treated as *trusted* because the App
+  // Zygote does not host untrusted code/data before it sends the RELRO FD. The
+  // Linker does not check write protection of the region for simplicity. See
+  // //docs/security/android-sandbox.md#zygote.
   bool CompareRelroAndReplaceItBy(const NativeLibInfo& other_lib_info);
 
   void set_relro_info_for_testing(uintptr_t start, size_t size) {
@@ -345,13 +356,14 @@ class NativeLibInfo {
   // sized as the library's RELRO and with identical data.
   bool CreateSharedRelroFd();
 
-  // Assuming that RELRO-related information is populated, memory-maps the RELRO
-  // FD on top of the library's RELRO.
-  bool ReplaceRelroWithSharedOne() const;
+  // Assuming that RELRO-related information is populated, memory-maps the
+  // first |size| bytes of the RELRO FD on top of the library's RELRO.
+  bool ReplaceRelroWithSharedOne(size_t size) const;
 
-  // Returns true iff the RELRO address and size, along with the contents are
-  // equal among the two.
-  bool RelroIsIdentical(const NativeLibInfo& external_lib_info) const;
+  // Returns the size of the identical prefix between the current RELRO region
+  // and the one provided by |other_lib_info|. Truncates to page boundary.
+  // Returns 0 if |other_lib_info| cannot provide a useful region for sharing.
+  size_t FindRelroCommonPrefix(const NativeLibInfo& other_lib_info) const;
 
   static constexpr int kInvalidFd = -1;
   uintptr_t load_address_ = 0;

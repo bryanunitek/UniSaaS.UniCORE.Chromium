@@ -33,24 +33,9 @@ class PasswordsPrivateEventRouter : public KeyedService {
       const std::vector<api::passwords_private::ExceptionEntry>&
           exceptions) = 0;
 
-  // Notifies listeners after the passwords have been written to the export
-  // destination.
-  // |file_path| In case of successful export, this will describe the path
-  // to the written file.
-  // |folder_name| In case of failure to export, this will describe destination
-  // we tried to write on.
-  virtual void OnPasswordsExportProgress(
-      api::passwords_private::ExportProgressStatus status,
-      const std::string& file_path,
-      const std::string& folder_name) = 0;
-
   // Notifies listeners about a (possible) change to the active state for the
   // account-scoped password storage.
   virtual void OnAccountStorageActiveStateChanged(bool active) = 0;
-
-  // Notifies listeners about a (possible) change to the visibility state of the
-  // account storage toggle in settings.
-  virtual void OnShouldShowAccountStorageSettingToggleChanged(bool show) = 0;
 
   // Notifies listeners about a change to the information about insecure
   // credentials.

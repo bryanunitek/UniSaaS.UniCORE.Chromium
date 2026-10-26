@@ -11,10 +11,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/buildflags/buildflags.h"
-
-#if !BUILDFLAG(IS_ANDROID)
 #include "ui/native_window_tracker/native_window_tracker.h"
-#endif
 
 #if defined(USE_AURA)
 #include "ui/aura/window.h"
@@ -44,8 +41,8 @@ ExtensionInstallPromptShowParams::ExtensionInstallPromptShowParams(
     content::WebContents* contents)
     : profile_(Profile::FromBrowserContext(contents->GetBrowserContext())),
       parent_web_contents_(contents->GetWeakPtr()) {
-  DCHECK(profile_);
-  DCHECK(parent_web_contents_);
+  CHECK(profile_, base::NotFatalUntil::M161);
+  CHECK(parent_web_contents_, base::NotFatalUntil::M161);
 
   if (!parent_web_contents_->GetTopLevelNativeWindow()) {
     // WebContents were created without a top-level window. This can happen when
@@ -63,14 +60,10 @@ ExtensionInstallPromptShowParams::ExtensionInstallPromptShowParams(
     : profile_(profile),
       parent_web_contents_(nullptr),
       parent_window_(parent_window) {
-  DCHECK(profile);
-#if BUILDFLAG(IS_ANDROID)
-  DCHECK(!parent_window) << "Android does not support a parent window.";
-#else
+  CHECK(profile, base::NotFatalUntil::M161);
   if (parent_window_) {
     native_window_tracker_ = ui::NativeWindowTracker::Create(parent_window_);
   }
-#endif
 }
 
 ExtensionInstallPromptShowParams::~ExtensionInstallPromptShowParams() = default;
@@ -102,12 +95,10 @@ bool ExtensionInstallPromptShowParams::WasParentDestroyed() {
            !RootCheck(parent_web_contents_->GetTopLevelNativeWindow());
   }
 
-#if !BUILDFLAG(IS_ANDROID)
   if (native_window_tracker_) {
     return native_window_tracker_->WasNativeWindowDestroyed() ||
            !RootCheck(parent_window_);
   }
-#endif
 
   return false;
 }
@@ -123,14 +114,14 @@ ScopedDisableRootChecking::ScopedDisableRootChecking() {
 #if defined(USE_AURA)
   // There should be no need to support multiple ScopedDisableRootCheckings
   // at a time.
-  DCHECK(g_root_checking_enabled);
+  CHECK(g_root_checking_enabled, base::NotFatalUntil::M161);
   g_root_checking_enabled = false;
 #endif
 }
 
 ScopedDisableRootChecking::~ScopedDisableRootChecking() {
 #if defined(USE_AURA)
-  DCHECK(!g_root_checking_enabled);
+  CHECK(!g_root_checking_enabled, base::NotFatalUntil::M161);
   g_root_checking_enabled = true;
 #endif
 }

@@ -58,7 +58,6 @@ class PageActionView : public IconLabelBubbleView,
   std::u16string GetTooltipText() const override;
   std::u16string GetAccessibleName() const override;
   void SetVisible(bool visible) override;
-  IconLabelBubbleView* GetIconLabelBubbleViewNotMigrated() override;
 
   // Sets the controller for this view, and attaches this view in the
   // controller.
@@ -73,8 +72,12 @@ class PageActionView : public IconLabelBubbleView,
   // expanding and collapsing).
   bool IsChipVisible() const;
 
-  // Indicates whether this view is showing an anchored message
+  // Indicates whether this view is showing an anchored message. A message is
+  // not considered showing while it animates out.
   bool IsAnchoredMessageVisible() const;
+
+  // Returns whether this view is declared visible in its model.
+  bool GetDeclaredVisible() const;
 
   // Reports the chip visibility change state at the beginning of the animation.
   using ChipVisibilityChanged = base::RepeatingCallback<void(PageActionView*)>;
@@ -86,6 +89,12 @@ class PageActionView : public IconLabelBubbleView,
       base::RepeatingCallback<void(PageActionView*)>;
   base::CallbackListSubscription AddAnchoredMessageVisibilityChangedCallback(
       AnchoredMessageVisibilityCallback callback);
+
+  // Reports when the declared visibility changes in the model.
+  using VisibilityChangedCallback =
+      base::RepeatingCallback<void(PageActionView*)>;
+  base::CallbackListSubscription AddVisibilityChangedCallback(
+      VisibilityChangedCallback callback);
 
   // PageActionController::Delegate:
   // Reports the chip visibility change state at the end of the animation.
@@ -101,6 +110,8 @@ class PageActionView : public IconLabelBubbleView,
       base::RepeatingClosure callback) override;
   void SetClickCallback(
       base::RepeatingCallback<void(PageActionTrigger)> callback) override;
+  void SetAnchoredMessageDowngradeCallback(
+      base::RepeatingClosure callback) override;
 
   // PageActionModelObserver:
   void OnPageActionModelChanged(const PageActionModelInterface& model) override;
@@ -136,17 +147,29 @@ class PageActionView : public IconLabelBubbleView,
   views::View* GetLabelForTesting();
   gfx::SlideAnimation& GetSlideAnimationForTesting();
   AnchoredMessageBubbleView* GetAnchoredMessageForTesting();
+  SkColor GetForegroundColorForTesting() const { return GetForegroundColor(); }
+  SkColor GetBackgroundColorForTesting() const { return GetBackgroundColor(); }
+
+  // IconLabelBubbleView:
+  gfx::RoundedCornersF GetCornerRadii() const override;
+  void UpdateBackground() override;
 
   static PageActionPassKey PassKeyForTesting() { return PageActionPassKey(); }
 
  protected:
   static PageActionPassKey PassKey() { return PageActionPassKey(); }
 
+  // IconLabelBubbleView:
+  SkColor GetBackgroundColor() const override;
+  SkColor GetForegroundColor() const override;
+  bool PaintedOnSolidBackground() const override;
+
  private:
   // The image associated with the `action_item_` size may be different from the
   // size needed for the location bar page action icon. Therefore, we should to
   // update the image size if needed.
   void UpdateIconImage();
+  void UpdateTooltipText();
 
   void AnimateImage(const page_actions::PageActionAnimationParams& params,
                     SkColor icon_color);
@@ -164,14 +187,19 @@ class PageActionView : public IconLabelBubbleView,
   void MaybeRecordCollapsedMetrics(int label_width);
 
   void OnAnchoredMessageWidgetClose(views::Widget::ClosedReason closed_reason);
+  void OnAnchoredMessageClosed();
+  void SetIsShowingBubble(bool showing);
 
+  void UpdateAnchoredMessage(const PageActionModelInterface& model);
   void CreateAndShowAnchoredMessage(const PageActionModelInterface& model);
 
   void UpdateAnimationState(const PageActionModelInterface& model);
   void HandleSlideAndCrossfadeTransition(const PageActionModelInterface& model);
   void HandleSuggestionChipTransition(const PageActionModelInterface& model);
+  void CloseWidgetDeferred(base::WeakPtr<views::Widget> widget_to_close);
 
   base::WeakPtr<actions::ActionItem> action_item_ = nullptr;
+  raw_ptr<PageActionController> current_controller_ = nullptr;
   base::ScopedObservation<PageActionModelInterface, PageActionModelObserver>
       observation_{this};
 
@@ -195,6 +223,10 @@ class PageActionView : public IconLabelBubbleView,
   base::RepeatingCallbackList<void(PageActionView*)>
       anchored_message_visibility_changed_callbacks_;
 
+  // Client-provided callbacks for changes to declared visibility.
+  base::RepeatingCallbackList<void(PageActionView*)>
+      visibility_changed_callbacks_;
+
   // Used to notify when the chip state changes (expanded/hidden). The state is
   // only reported when there is not an ongoing animation. It's initialized to
   // base::DoNothing() for testing purpose.
@@ -210,6 +242,8 @@ class PageActionView : public IconLabelBubbleView,
 
   PageActionIconType type_;
   bool chip_shown_metric_recorded_ = false;
+  // Logical visibility. GetVisible() can be overridden by layouts/animations.
+  bool declared_visible_ = false;
 
   // Used to record click event histogram. It's initialized to base::DoNothing()
   // for testing purpose.
@@ -219,13 +253,18 @@ class PageActionView : public IconLabelBubbleView,
   // If set, ensures this view is highlighted.
   std::optional<views::Button::ScopedAnchorHighlight> highlight_;
 
-  raw_ptr<AnchoredMessageBubbleView> anchored_message_ = nullptr;
-  std::unique_ptr<views::Widget> anchored_message_widget_;
-
   base::RepeatingClosure anchored_message_close_callback_ = base::DoNothing();
   base::RepeatingClosure anchored_message_expand_callback_ = base::DoNothing();
   base::RepeatingClosure anchored_message_collapse_callback_ =
       base::DoNothing();
+  base::RepeatingClosure anchored_message_downgrade_callback_ =
+      base::DoNothing();
+
+  // Declared after the callbacks above so the widget is destroyed first, since
+  // destroying it can run them.
+  raw_ptr<AnchoredMessageBubbleView> anchored_message_ = nullptr;
+  std::unique_ptr<views::Widget> anchored_message_widget_;
+
   base::WeakPtrFactory<PageActionView> weak_factory_{this};
 };
 

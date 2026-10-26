@@ -17,7 +17,6 @@ import '../settings_shared.css.js';
 import './facegaze_icons.html.js';
 
 import type {CrSliderElement} from '//resources/ash/common/cr_elements/cr_slider/cr_slider.js';
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {FacialGesture} from 'chrome://resources/ash/common/accessibility/facial_gestures.js';
 import {MacroName} from 'chrome://resources/ash/common/accessibility/macro_names.js';
 import type {CrButtonElement} from 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
@@ -33,6 +32,7 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import type {KeyEvent, ShortcutInputProviderInterface} from '../device_page/input_device_settings_types.js';
 import {getShortcutInputProvider} from '../device_page/shortcut_input_mojo_interface_provider.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 
 import {getTemplate} from './facegaze_actions_add_dialog.html.js';
 import type {KeyCombination} from './facegaze_constants.js';
@@ -65,8 +65,8 @@ export class PageNavigation {
 }
 
 export class FaceGazeGestureConfidence {
-  gesture: FacialGesture;
-  confidence: number;
+  gesture: FacialGesture|null = null;
+  confidence: number = 0;
 }
 
 export const FACEGAZE_DEFINED_MACRO_FLOW:
@@ -126,16 +126,19 @@ export class FaceGazeAddActionDialogElement extends
     return {
       currentPage_: {
         type: Number,
+        value: AddDialogPage.SELECT_ACTION,
         observer: 'currentPageChanged_',
       },
 
       initialPage: {
         type: Object,
+        value: AddDialogPage.SELECT_ACTION,
         observer: 'initialPageChanged_',
       },
 
       commandPairToConfigure: {
         type: Object,
+        value: null,
         observer: 'commandPairToConfigureChanged_',
       },
 
@@ -166,7 +169,7 @@ export class FaceGazeAddActionDialogElement extends
 
       displayedActions_: {
         type: Array,
-        value: () => [],
+        value: () => FaceGazeActions,
       },
 
       selectedAction_: {
@@ -177,6 +180,7 @@ export class FaceGazeAddActionDialogElement extends
 
       keyCombination_: {
         type: Object,
+        value: null,
       },
 
       shortcutInputLabel_: {
@@ -222,6 +226,7 @@ export class FaceGazeAddActionDialogElement extends
 
       detectedGestureCount_: {
         type: Number,
+        value: 0,
       },
 
       disableActionNextButton_: {
@@ -251,48 +256,47 @@ export class FaceGazeAddActionDialogElement extends
     };
   }
 
-  initialPage: AddDialogPage = AddDialogPage.SELECT_ACTION;
-  commandPairToConfigure: FaceGazeCommandPair|null = null;
-  leftClickGestures: FacialGesture[] = [];
-  shortcutInput: ShortcutInputElement|null;
+  declare initialPage: AddDialogPage;
+  declare commandPairToConfigure: FaceGazeCommandPair|null;
+  declare leftClickGestures: FacialGesture[];
+  shortcutInput: ShortcutInputElement|null = null;
 
   // Internal state.
-  private selectedAction_: MacroName;
-  private keyCombination_: KeyCombination|null = null;
-  private selectedGesture_: FacialGesture|null = null;
-  private gestureThresholdValue_: number;
-  private currentPage_: AddDialogPage = AddDialogPage.SELECT_ACTION;
+  declare private selectedAction_: MacroName;
+  declare private keyCombination_: KeyCombination|null;
+  declare private selectedGesture_: FacialGesture|null;
+  declare private gestureThresholdValue_: number;
+  declare private currentPage_: AddDialogPage;
   private pageNavigation_: Record<AddDialogPage, PageNavigation> =
       FACEGAZE_DEFINED_MACRO_FLOW;
-  private detectedGestureCount_ = 0;
-  private disableActionNextButton_: boolean;
-  private disableCustomKeyboardNextButton_: boolean;
-  private disableGestureNextButton_: boolean;
-  private displayGesturePreviousButton_: boolean;
-  private displayThresholdPreviousButton_: boolean;
-  private displayedGestures_: FacialGesture[];
+  declare private detectedGestureCount_: number;
+  declare private disableActionNextButton_: boolean;
+  declare private disableCustomKeyboardNextButton_: boolean;
+  declare private disableGestureNextButton_: boolean;
+  declare private displayGesturePreviousButton_: boolean;
+  declare private displayThresholdPreviousButton_: boolean;
+  declare private displayedGestures_: FacialGesture[];
   private eventTracker_: EventTracker = new EventTracker();
   private holdingGesture_ = false;
-  private keyComboChangeButtonLabel_: string;
-  private localizedGestureCountLabel_: string;
-  private localizedGestureThresholdTitle_: string;
-  private localizedSelectGestureTitle_: string;
-  private shortcutInputLabel_: string;
-  private showCustomKeyboard_: boolean;
-  private showGestureThreshold_: boolean;
-  private showSelectAction_: boolean;
-  private showSelectGesture_: boolean;
-  private stream_: MediaStream|null;
-  private streamTrack_: MediaStreamTrack|null;
+  declare private keyComboChangeButtonLabel_: string;
+  declare private localizedGestureCountLabel_: string;
+  declare private localizedGestureThresholdTitle_: string;
+  declare private localizedSelectGestureTitle_: string;
+  declare private shortcutInputLabel_: string;
+  declare private showCustomKeyboard_: boolean;
+  declare private showGestureThreshold_: boolean;
+  declare private showSelectAction_: boolean;
+  declare private showSelectGesture_: boolean;
+  private stream_: MediaStream|null = null;
+  private streamTrack_: MediaStreamTrack|null = null;
 
-  private displayedActions_: MacroName[] = FaceGazeActions;
+  declare private displayedActions_: MacroName[];
 
-  private faceGazeSubpageBrowserProxy_: FaceGazeSubpageBrowserProxy;
+  private faceGazeSubpageBrowserProxy_: FaceGazeSubpageBrowserProxy =
+      FaceGazeSubpageBrowserProxyImpl.getInstance();
 
   constructor() {
     super();
-    this.faceGazeSubpageBrowserProxy_ =
-        FaceGazeSubpageBrowserProxyImpl.getInstance();
     this.addWebUiListener(
         'settings.sendGestureInfoToSettings',
         (gestureConfidences: FaceGazeGestureConfidence[]) =>

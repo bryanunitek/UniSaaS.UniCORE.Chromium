@@ -16,17 +16,19 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/media_galleries/gallery_watch_manager_observer.h"
 #include "chrome/browser/media_galleries/media_file_system_registry.h"
 #include "chrome/common/apps/platform_apps/api/media_galleries.h"
-#include "chrome/common/media_galleries/metadata_types.h"
-#include "chrome/services/media_gallery_util/public/mojom/media_parser.mojom.h"
+#include "components/media_gallery_util/metadata_types.h"
+#include "components/media_gallery_util/public/mojom/media_parser.mojom.h"
 #include "components/storage_monitor/media_storage_util.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/browser/extension_function.h"
+#include "extensions/common/event_args.h"
 
 namespace content {
 class BlobHandle;
@@ -68,7 +70,7 @@ class MediaGalleriesEventRouter : public extensions::BrowserContextKeyedAPI,
       const std::string& extension_id,
       extensions::events::HistogramValue histogram_value,
       const std::string& event_name,
-      base::ListValue event_args);
+      scoped_refptr<const extensions::EventArgs> event_args);
 
   // BrowserContextKeyedAPI implementation.
   static const char* service_name() { return "MediaGalleriesAPI"; }

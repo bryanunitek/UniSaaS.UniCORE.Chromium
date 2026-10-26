@@ -9,7 +9,7 @@
 
 #include <d3d11.h>
 #include <d3d12.h>
-#include <dxgi1_2.h>
+#include <dxgi1_4.h>
 #include <wrl/client.h>
 
 #include <memory>
@@ -76,7 +76,7 @@ class GPU_GLES2_EXPORT D3DImageBackingFactory
       DawnContextProvider* dawn_context_provider = nullptr);
 
   // Clears the current back buffer to |color| on the immediate context.
-  static bool ClearBackBufferToColor(IDXGISwapChain1* swap_chain,
+  static bool ClearBackBufferToColor(IDXGISwapChain3* swap_chain,
                                      const SkColor4f& color);
 
   struct GPU_GLES2_EXPORT SwapChainBackings {
@@ -135,7 +135,7 @@ class GPU_GLES2_EXPORT D3DImageBackingFactory
       bool is_thread_safe);
 
   bool CreateSwapChainInternal(
-      Microsoft::WRL::ComPtr<IDXGISwapChain1>& swap_chain,
+      Microsoft::WRL::ComPtr<IDXGISwapChain3>& swap_chain,
       Microsoft::WRL::ComPtr<ID3D11Texture2D>& back_buffer_texture,
       Microsoft::WRL::ComPtr<ID3D11Texture2D>& front_buffer_texture,
       viz::SharedImageFormat format,
@@ -159,11 +159,15 @@ class GPU_GLES2_EXPORT D3DImageBackingFactory
   // using Graphite.
   Microsoft::WRL::ComPtr<ID3D11Device> angle_d3d11_device_;
 
-  // Stores the maximum size dimension supported by an nv12 texture.
-  int max_nv12_dim_supported_ = 0;
+  // Maximum 2D texture dimension for the D3D feature level. Used for
+  // multi-planar formats (NV12, P010).
+  int max_2d_texture_dim_supported_ = 0;
 
   // Stores whether NV12 format is supported by the D3D device.
   bool d3d11_supports_nv12_;
+
+  // Stores whether P010 format is supported by the D3D device.
+  bool d3d11_supports_p010_;
 
   // Capabilities needed for getting the correct GL format for creating GL
   // textures.

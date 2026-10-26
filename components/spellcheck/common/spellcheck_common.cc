@@ -128,7 +128,8 @@ base::FilePath GetVersionedFileName(std::string_view input_language,
       {"cy-GB", "-1-0"},
 
       // April 2019: Initial check-in of Armenian.
-      {"hy", "-1-0"},
+      // Oct 2026: Regenerate with the current convert_dict.
+      {"hy", "-1-1"},
 
       // November 2019: Update Serbian-Latin and Serbian-Cyrillic
       {"sh", "-4-0"},
@@ -137,19 +138,31 @@ base::FilePath GetVersionedFileName(std::string_view input_language,
       // January 2020: Update fa-IR dictionaries from upstream.
       {"fa-IR", "-9-0"},
 
-      // March 2022: Update en-* dictionaries from upstream and add "Kyiv" to
-      // those dictionaries.
-      {"en-AU", "-10-1"},
-      {"en-CA", "-10-1"},
-      {"en-GB", "-10-1"},
-      {"en-GB-oxendict", "-10-1"},
-      {"en-US", "-10-1"},
+      // March 2022: Update en-* dictionaries from upstream and add "Kyiv".
+      // August 2026: Add "Googlebook".
+      {"en-AU", "-10-2"},
+      {"en-CA", "-10-2"},
+      {"en-GB", "-10-2"},
+      {"en-GB-oxendict", "-10-2"},
+      {"en-US", "-10-2"},
 
       // March 2022: Update uk-UA dictionary from upstream.
       {"uk-UA", "-5-0"},
 
       // Nov 2025: Initial check-in of Galician
-      {"gl", "-1-0"},
+      // Oct 2026: Regenerate with the current convert_dict.
+      {"gl", "-1-1"},
+
+      // Oct 2026: Regenerate with the current convert_dict, and add the words
+      // of the nb-NO .dic_delta file.
+      {"de-DE", "-3-1"},
+      {"fr-FR", "-3-1"},
+      {"hu-HU", "-3-1"},
+      {"nb-NO", "-3-1"},
+      {"nl-NL", "-3-1"},
+      {"pt-BR", "-3-1"},
+      {"ro-RO", "-3-1"},
+      {"ta-IN", "-3-1"},
   };
 
   // Generate the bdict file name using default version string or special

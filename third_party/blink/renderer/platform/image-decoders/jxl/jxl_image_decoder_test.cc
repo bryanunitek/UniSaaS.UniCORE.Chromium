@@ -4,17 +4,27 @@
 
 #include "third_party/blink/renderer/platform/image-decoders/jxl/jxl_image_decoder.h"
 
+#include <algorithm>
 #include <array>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/containers/span.h"
+#include "base/containers/to_vector.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/path_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/image-decoders/fast_shared_buffer_reader.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_animation.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_decoder_test_helpers.h"
 #include "third_party/blink/renderer/platform/image-decoders/segment_reader.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
+#include "third_party/fuzztest/src/fuzztest/fuzztest.h"
+#include "ui/gfx/hdr_metadata.h"
 
 namespace blink {
 
@@ -142,8 +152,56 @@ TEST_F(JXLImageDecoderTest, DecodeCmykWithIccProfile) {
   ImageFrame* frame = decoder->DecodeFrameBufferAtIndex(0);
   ASSERT_TRUE(frame);
   EXPECT_EQ(ImageFrame::kFrameComplete, frame->GetStatus());
-  EXPECT_TRUE(frame->HasAlpha());
+  EXPECT_FALSE(frame->HasAlpha());
   EXPECT_FALSE(decoder->Failed());
+
+  const auto expect_color_near = [&frame](int x, int y, SkColor expected) {
+    const SkColor actual = frame->Bitmap().getColor(x, y);
+    EXPECT_NEAR(SkColorGetR(actual), SkColorGetR(expected), 9);
+    EXPECT_NEAR(SkColorGetG(actual), SkColorGetG(expected), 9);
+    EXPECT_NEAR(SkColorGetB(actual), SkColorGetB(expected), 9);
+    EXPECT_EQ(SkColorGetA(actual), SkColorGetA(expected));
+  };
+  expect_color_near(192, 64, SkColorSetRGB(34, 31, 33));
+  expect_color_near(192, 192, SkColorSetRGB(236, 27, 68));
+  expect_color_near(320, 320, SkColorSetRGB(0, 182, 178));
+}
+
+// Test that a PQ image's intensity_target is reported as its peak luminance.
+// The two fixtures hold identical pixels and differ only in intensity_target.
+TEST_F(JXLImageDecoderTest, PqIntensityTargetIsContentLightLevel) {
+  const auto max_cll = [](const char* file) {
+    auto decoder = CreateJXLDecoder();
+    scoped_refptr<SharedBuffer> data =
+        ReadFileToSharedBuffer(kJxlTestDir, file);
+    CHECK(data);
+    decoder->SetData(data.get(), true);
+    CHECK(decoder->IsSizeAvailable());
+    const gfx::HDRMetadata& hdr_metadata = decoder->GetHDRMetadata();
+    return hdr_metadata.HasCLLI()
+               ? std::optional<float>(hdr_metadata.GetCLLI().fMaxCLL)
+               : std::nullopt;
+  };
+
+  EXPECT_EQ(max_cll("pq_intensity_target_600.jxl"), 600.f);
+  // 10000 cd/m2 is the PQ nominal peak that encoders write by default, and
+  // 255 is the codestream default when the field is absent; neither states
+  // the content's peak.
+  EXPECT_EQ(max_cll("pq_intensity_target_10000.jxl"), std::nullopt);
+  EXPECT_EQ(max_cll("pq_intensity_target_255.jxl"), std::nullopt);
+}
+
+// Test that an SDR image's intensity_target is not reported as HDR metadata.
+TEST_F(JXLImageDecoderTest, SdrImageHasNoContentLightLevel) {
+  auto decoder = CreateJXLDecoder();
+  scoped_refptr<SharedBuffer> data =
+      ReadFileToSharedBuffer(kJxlTestDir, "3x3_srgb_lossless.jxl");
+  ASSERT_TRUE(data);
+
+  decoder->SetData(data.get(), true);
+  ASSERT_TRUE(decoder->IsSizeAvailable());
+
+  EXPECT_FALSE(decoder->GetHDRMetadata().HasCLLI());
 }
 
 // Test grayscale+alpha fixture carrying an embedded ICC profile.
@@ -257,6 +315,88 @@ TEST_F(JXLImageDecoderTest, SmallestValidBitstream) {
   ASSERT_TRUE(frame);
   EXPECT_EQ(ImageFrame::kFrameComplete, frame->GetStatus());
   EXPECT_FALSE(decoder->Failed());
+}
+
+// A truncated animation must fail decoding, also when the final
+// "all data received" notification arrives without any new bytes (the
+// scanner has already consumed the whole buffer in an earlier call).
+TEST_F(JXLImageDecoderTest, TruncatedAnimationFlagOnlyFinalSetData) {
+  scoped_refptr<SharedBuffer> full_data =
+      ReadFileToSharedBuffer(kImagesDir, "5_frames_numbered.jxl");
+  ASSERT_TRUE(full_data);
+  const Vector<char> full = full_data->CopyAs<Vector<char>>();
+
+  // Cut the file mid-stream, past the header but before the last frames.
+  scoped_refptr<SharedBuffer> truncated_data =
+      SharedBuffer::Create(base::span(full).first(full.size() / 2));
+
+  auto decoder = CreateJXLDecoder();
+  // Stream in the truncated data; the scanner consumes all of it.
+  decoder->SetData(truncated_data.get(), false);
+  decoder->FrameCount();
+  EXPECT_FALSE(decoder->Failed());
+
+  // End of stream: same buffer, only the all-data-received flag flips.
+  decoder->SetData(truncated_data.get(), true);
+  decoder->FrameCount();
+  decoder->DecodeFrameBufferAtIndex(0);
+  EXPECT_TRUE(decoder->Failed());
+}
+
+// A file truncated before basic info must fail decoding, also when the
+// final "all data received" notification arrives without any new bytes.
+TEST_F(JXLImageDecoderTest, HeaderTruncatedFlagOnlyFinalSetData) {
+  scoped_refptr<SharedBuffer> full_data =
+      ReadFileToSharedBuffer(kImagesDir, "5_frames_numbered.jxl");
+  ASSERT_TRUE(full_data);
+  const Vector<char> full = full_data->CopyAs<Vector<char>>();
+
+  // Keep only a prefix that contains the codestream signature but ends
+  // before the basic info can be parsed.
+  scoped_refptr<SharedBuffer> truncated_data =
+      SharedBuffer::Create(base::span(full).first(3u));
+
+  auto decoder = CreateJXLDecoder();
+  decoder->SetData(truncated_data.get(), false);
+  decoder->FrameCount();
+  EXPECT_FALSE(decoder->IsSizeAvailable());
+
+  decoder->SetData(truncated_data.get(), true);
+  decoder->FrameCount();
+  decoder->DecodeFrameBufferAtIndex(0);
+  EXPECT_TRUE(decoder->Failed());
+}
+
+// Regression test: a 12-byte valid naked JXL codestream must decode to a
+// 256x128 black image, at any partial/full data split. See
+// crbug.com/507903802.
+TEST_F(JXLImageDecoderTest, SmallValidBitstream) {
+  // base64: /wrfBwiDBAwASyAY
+  static constexpr std::array<uint8_t, 12> kSmallValid = {
+      0xFF, 0x0A, 0xDF, 0x07, 0x08, 0x83, 0x04, 0x0C, 0x00, 0x4B, 0x20, 0x18};
+  const auto bytes = base::span(kSmallValid);
+
+  for (size_t split = 0; split < bytes.size(); ++split) {
+    SCOPED_TRACE(split);
+    auto decoder = CreateJXLDecoder();
+    scoped_refptr<SharedBuffer> partial_data =
+        SharedBuffer::Create(bytes.first(split));
+    decoder->SetData(partial_data.get(), false);
+    if (decoder->IsSizeAvailable()) {
+      decoder->DecodeFrameBufferAtIndex(0);
+    }
+
+    scoped_refptr<SharedBuffer> full_data = SharedBuffer::Create(bytes);
+    decoder->SetData(full_data.get(), true);
+    EXPECT_TRUE(decoder->IsSizeAvailable());
+    EXPECT_EQ(256, decoder->Size().width());
+    EXPECT_EQ(128, decoder->Size().height());
+
+    ImageFrame* frame = decoder->DecodeFrameBufferAtIndex(0);
+    ASSERT_TRUE(frame);
+    EXPECT_EQ(ImageFrame::kFrameComplete, frame->GetStatus());
+    EXPECT_FALSE(decoder->Failed());
+  }
 }
 
 // Regression test: a corrupt bitstream with trailing invalid bytes must be
@@ -583,6 +723,31 @@ TEST_F(JXLImageDecoderTest, AnimationRepetitionCount) {
       << "Animation should not report kAnimationNone";
 }
 
+TEST_F(JXLImageDecoderTest, AnimationDecodeSecondFrameFirst) {
+  auto decoder = CreateJXLDecoder();
+  scoped_refptr<SharedBuffer> data =
+      ReadFileToSharedBuffer(kImagesDir, "image_decoder_frame_one_crash.jxl");
+  ASSERT_TRUE(data);
+
+  decoder->SetData(data.get(), true);
+  ASSERT_GT(decoder->FrameCount(), 1u);
+  ImageFrame* frame = decoder->DecodeFrameBufferAtIndex(1);
+  ASSERT_TRUE(frame);
+  ASSERT_EQ(ImageFrame::kFrameComplete, frame->GetStatus());
+  EXPECT_FALSE(decoder->Failed());
+
+  auto sequential = CreateJXLDecoder();
+  sequential->SetData(data.get(), true);
+  ImageFrame* first_frame = sequential->DecodeFrameBufferAtIndex(0);
+  ASSERT_TRUE(first_frame);
+  ASSERT_EQ(ImageFrame::kFrameComplete, first_frame->GetStatus());
+  ImageFrame* sequential_frame = sequential->DecodeFrameBufferAtIndex(1);
+  ASSERT_TRUE(sequential_frame);
+  ASSERT_EQ(ImageFrame::kFrameComplete, sequential_frame->GetStatus());
+  EXPECT_EQ(HashBitmap(sequential_frame->Bitmap()),
+            HashBitmap(frame->Bitmap()));
+}
+
 // Test random frame access (not sequential).
 // JXL requires sequential decoding internally, but the API supports random
 // access by rewinding and re-decoding when needed.
@@ -847,6 +1012,57 @@ TEST_F(JXLImageDecoderTest, AnimationReferenceFrameBlending) {
   EXPECT_EQ(ImageFrame::kFrameComplete, first_frame->GetStatus());
 }
 
+// When the requested frame is ahead of the decoder and the decoder already
+// holds everything that frame depends on, Decode() decodes forward (skipping
+// output for the in-between frames) instead of seeking from the frame's decode
+// start. The in-between frames still update the decoder's reference frames, so
+// the forward-decoded frame must be pixel-identical to the authoritative
+// sequential decode. newtons_cradle.jxl uses reference-frame blending, so
+// later frames depend on earlier ones and exercise this path.
+TEST_F(JXLImageDecoderTest, AnimationForwardSkipMatchesSequential) {
+  auto baseline = CreateJXLDecoder();
+  scoped_refptr<SharedBuffer> data =
+      ReadFileToSharedBuffer(kImagesDir, "newtons_cradle.jxl");
+  ASSERT_TRUE(data);
+  baseline->SetData(data.get(), true);
+
+  const wtf_size_t frame_count = baseline->FrameCount();
+  ASSERT_GT(frame_count, 3u) << "Need several frames to jump forward over";
+
+  Vector<uint32_t> baseline_hashes;
+  for (wtf_size_t i = 0; i < frame_count; ++i) {
+    ImageFrame* frame = baseline->DecodeFrameBufferAtIndex(i);
+    ASSERT_TRUE(frame) << "Baseline frame " << i << " is null";
+    ASSERT_EQ(ImageFrame::kFrameComplete, frame->GetStatus());
+    baseline_hashes.push_back(HashBitmap(frame->Bitmap()));
+  }
+  ASSERT_FALSE(baseline->Failed());
+
+  // Fresh decoder: prime it on an early frame, then jump forward. Clearing the
+  // cache for the earlier frames forces a re-decode that leaves the decoder
+  // positioned between frames, which is where the forward-skip path applies.
+  auto decoder = CreateJXLDecoder();
+  decoder->SetData(data.get(), true);
+  ASSERT_EQ(frame_count, decoder->FrameCount());
+
+  const std::array<wtf_size_t, 3> forward_targets = {2u, frame_count / 2,
+                                                     frame_count - 1};
+  for (wtf_size_t target : forward_targets) {
+    decoder->ClearCacheExceptFrame(kNotFound);
+    ImageFrame* primed = decoder->DecodeFrameBufferAtIndex(0);
+    ASSERT_TRUE(primed) << "Priming frame 0 failed before target " << target;
+    ASSERT_EQ(ImageFrame::kFrameComplete, primed->GetStatus());
+
+    ImageFrame* frame = decoder->DecodeFrameBufferAtIndex(target);
+    ASSERT_TRUE(frame) << "Forward target " << target << " is null";
+    ASSERT_EQ(ImageFrame::kFrameComplete, frame->GetStatus());
+    EXPECT_EQ(baseline_hashes[target], HashBitmap(frame->Bitmap()))
+        << "Forward-decoded frame " << target
+        << " does not match sequential decode";
+  }
+  EXPECT_FALSE(decoder->Failed());
+}
+
 // Test progressive/pass rendering: during incremental data loading, frames
 // should have kFramePartial status (not kFrameEmpty). This prevents the
 // ImageDecoderWrapper from destroying the decoder between calls.
@@ -925,6 +1141,44 @@ TEST_F(JXLImageDecoderTest, ProgressiveRenderingFramePartialStatus) {
   EXPECT_FALSE(decoder->Failed());
 }
 
+// Regression test: progressive rendering must not stall on the first 4096
+// bytes. The jxl-rs codestream parser reads input eagerly into a 4096-byte
+// internal buffer while parsing headers, so the first process() call can
+// consume all available input without decoding any sections. The decoder
+// must keep processing (with empty input) to drain that internal buffer;
+// otherwise nothing renders until the total input exceeds the buffer size,
+// no matter how much DC data has already arrived.
+TEST_F(JXLImageDecoderTest, ProgressiveRenderingWithin4096Bytes) {
+  scoped_refptr<SharedBuffer> full_data =
+      ReadFileToSharedBuffer(kImagesDir, "fox-progressive.jxl");
+  ASSERT_TRUE(full_data);
+  Vector<char> full_data_vec = full_data->CopyAs<Vector<char>>();
+  ASSERT_GT(full_data_vec.size(), 4096u);
+
+  auto decoder = CreateJXLDecoder();
+
+  // Deliver the first 4096 bytes in a single chunk and then stall, like a
+  // slow network stream. The DC data of this image fits well within these
+  // bytes, so a partial image must be rendered.
+  scoped_refptr<SharedBuffer> partial_data =
+      SharedBuffer::Create(base::span(full_data_vec).first(4096u));
+  decoder->SetData(partial_data.get(), false);
+
+  ASSERT_TRUE(decoder->IsSizeAvailable());
+  ImageFrame* frame = decoder->DecodeFrameBufferAtIndex(0);
+  ASSERT_TRUE(frame);
+  EXPECT_EQ(ImageFrame::kFramePartial, frame->GetStatus())
+      << "Expected a partial frame from the first 4096 bytes";
+  EXPECT_FALSE(decoder->Failed());
+
+  // Completing the stream must produce a complete frame.
+  decoder->SetData(full_data.get(), true);
+  frame = decoder->DecodeFrameBufferAtIndex(0);
+  ASSERT_TRUE(frame);
+  EXPECT_EQ(ImageFrame::kFrameComplete, frame->GetStatus());
+  EXPECT_FALSE(decoder->Failed());
+}
+
 // Test that the decoder instance is preserved across incremental data updates.
 // This specifically tests the fix where early frame initialization with
 // kFramePartial status prevents ImageDecoderWrapper from destroying the
@@ -993,7 +1247,7 @@ TEST_F(JXLImageDecoderTest, IncrementalStillDecodeMatchesOneShot) {
   ImageFrame* one_shot_frame = one_shot->DecodeFrameBufferAtIndex(0);
   ASSERT_TRUE(one_shot_frame);
   ASSERT_EQ(ImageFrame::kFrameComplete, one_shot_frame->GetStatus());
-  const unsigned one_shot_hash = HashBitmap(one_shot_frame->Bitmap());
+  const uint32_t one_shot_hash = HashBitmap(one_shot_frame->Bitmap());
 
   Vector<char> full_data_vec = full_data->CopyAs<Vector<char>>();
   auto incremental = CreateJXLDecoder();
@@ -1035,7 +1289,7 @@ TEST_F(JXLImageDecoderTest, IncrementalAnimationDecodeMatchesOneShot) {
   const wtf_size_t frame_count = one_shot->FrameCount();
   ASSERT_EQ(5u, frame_count);
 
-  Vector<unsigned> one_shot_hashes;
+  Vector<uint32_t> one_shot_hashes;
   one_shot_hashes.ReserveInitialCapacity(frame_count);
   for (wtf_size_t i = 0; i < frame_count; ++i) {
     ImageFrame* frame = one_shot->DecodeFrameBufferAtIndex(i);
@@ -1220,4 +1474,200 @@ TEST_F(JXLImageDecoderTest, BppHistogramGrayscale) {
   TestJxlBppHistogram("/images/resources/3x3_gray_lossless.jxl");
 }
 
+// =============================================================================
+// Multi-threaded decoding tests
+// =============================================================================
+
+namespace {
+
+// Decodes all frames of `data` and returns one hash per frame.
+Vector<uint32_t> DecodeAllFrameHashes(scoped_refptr<SharedBuffer> data) {
+  auto decoder = CreateJXLDecoder();
+  decoder->SetData(data.get(), true);
+  Vector<uint32_t> hashes;
+  const wtf_size_t frame_count = decoder->FrameCount();
+  EXPECT_GT(frame_count, 0u);
+  for (wtf_size_t i = 0; i < frame_count; ++i) {
+    ImageFrame* frame = decoder->DecodeFrameBufferAtIndex(i);
+    EXPECT_TRUE(frame);
+    EXPECT_FALSE(decoder->Failed());
+    if (!frame || frame->GetStatus() != ImageFrame::kFrameComplete) {
+      return hashes;
+    }
+    hashes.push_back(HashBitmap(frame->Bitmap()));
+  }
+  return hashes;
+}
+
+void TestParallelDecode(const char* dir, const char* file) {
+  SCOPED_TRACE(file);
+  scoped_refptr<SharedBuffer> data = ReadFileToSharedBuffer(dir, file);
+  ASSERT_TRUE(data);
+  EXPECT_FALSE(DecodeAllFrameHashes(data).empty());
+}
+
+}  // namespace
+
+// Exercise multi-threaded VarDCT decoding.
+TEST_F(JXLImageDecoderTest, ParallelDecodeVarDct) {
+  TestParallelDecode(kJxlTestDir, "green_queen_vardct_e3.jxl");
+}
+
+// Exercise multi-threaded modular decoding.
+TEST_F(JXLImageDecoderTest, ParallelDecodeModular) {
+  TestParallelDecode(kJxlTestDir, "green_queen_modular_e3.jxl");
+}
+
+// Images with patches exercise cross-group references while decoding in
+// parallel.
+TEST_F(JXLImageDecoderTest, ParallelDecodePatches) {
+  TestParallelDecode(kJxlTestDir, "conformance_patches.jxl");
+}
+
+// Progressive AC images exercise multiple passes while decoding in parallel.
+TEST_F(JXLImageDecoderTest, ParallelDecodeProgressiveAc) {
+  TestParallelDecode(kJxlTestDir, "progressive_ac.jxl");
+}
+
+// Multi-frame animations decode every frame on the thread pool.
+TEST_F(JXLImageDecoderTest, ParallelDecodeAnimation) {
+  TestParallelDecode(kImagesDir, "newtons_cradle.jxl");
+}
+
+// Incremental input and partial flushes must converge to the same final image
+// as a one-shot multi-threaded decode.
+TEST_F(JXLImageDecoderTest, ParallelIncrementalDecode) {
+  scoped_refptr<SharedBuffer> full_data =
+      ReadFileToSharedBuffer(kJxlTestDir, "green_queen_vardct_e3.jxl");
+  ASSERT_TRUE(full_data);
+
+  Vector<uint32_t> one_shot_hashes = DecodeAllFrameHashes(full_data);
+  ASSERT_EQ(1u, one_shot_hashes.size());
+
+  auto decoder = CreateJXLDecoder();
+  const Vector<char> file_data = full_data->CopyAs<Vector<char>>();
+  const base::span<const char> source(file_data);
+  constexpr size_t kChunkSize = 16 * 1024;
+  scoped_refptr<SharedBuffer> partial_data = SharedBuffer::Create();
+  size_t offset = 0;
+  while (offset < file_data.size()) {
+    const size_t chunk =
+        std::min(kChunkSize, static_cast<size_t>(file_data.size()) - offset);
+    partial_data->Append(source.subspan(offset, chunk));
+    offset += chunk;
+    decoder->SetData(partial_data.get(), offset == file_data.size());
+    // Trigger partial decodes (and partial flushes) along the way.
+    decoder->DecodeFrameBufferAtIndex(0);
+    ASSERT_FALSE(decoder->Failed());
+  }
+
+  ImageFrame* frame = decoder->DecodeFrameBufferAtIndex(0);
+  ASSERT_TRUE(frame);
+  ASSERT_EQ(ImageFrame::kFrameComplete, frame->GetStatus());
+  EXPECT_FALSE(decoder->Failed());
+  EXPECT_EQ(one_shot_hashes[0], HashBitmap(frame->Bitmap()));
+}
+
+void FuzzJXLDecoder(ImageDecoder::AlphaOption alpha_option,
+                    ImageDecoder::HighBitDepthDecodingOption hbd_option,
+                    ColorBehavior color_behavior,
+                    cc::AuxImage aux_image_type,
+                    uint32_t max_decoded_bytes,
+                    ImageDecoder::AnimationOption animation_option,
+                    base::span<const uint8_t> data) {
+  auto decoder = std::make_unique<JXLImageDecoder>(
+      alpha_option, hbd_option, color_behavior, aux_image_type,
+      max_decoded_bytes, animation_option);
+
+  auto buffer = SharedBuffer::Create(data);
+  const bool kAllDataReceived = true;
+  decoder->SetData(buffer.get(), kAllDataReceived);
+  for (wtf_size_t frame = 0; frame < decoder->FrameCount(); ++frame) {
+    decoder->DecodeFrameBufferAtIndex(frame);
+    if (decoder->Failed()) {
+      return;
+    }
+  }
+}
+
+// Floor max_decoded_bytes at 1 MiB so it can no longer land small enough for
+// the decoder to reject the image in SetSize() before any decoding runs,
+// which previously wasted fuzzer iterations.
+constexpr uint32_t kMinMaxDecodedBytes = 1024 * 1024;
+
+// FuzzTest aborts if any seed exceeds the domain's max size (default 5000), so
+// this must be at least the largest file in that directory (currently
+// ~4.3 MiB; progressive_ac.png).
+constexpr base::ByteSize kMaxInputSize = base::MiB(5);
+
+using JXLFuzzArgs = std::tuple<ImageDecoder::AlphaOption,
+                               ImageDecoder::HighBitDepthDecodingOption,
+                               ColorBehavior,
+                               cc::AuxImage,
+                               uint32_t,
+                               ImageDecoder::AnimationOption,
+                               std::vector<uint8_t>>;
+
+// Uses every file in the corpus directory as a seed. Because the corpus
+// files are the data to be fuzzed, we need to append the decoder settings
+// to each testcase. Returns a std::vector<std::tuple<JXLFuzzArgs>> containing
+// the decoder settings, along with the image file.
+std::vector<JXLFuzzArgs> GetJXLSeeds() {
+  base::FilePath corpus_dir;
+  CHECK(base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &corpus_dir));
+  corpus_dir =
+      corpus_dir.AppendASCII("third_party/blink").AppendASCII(kJxlTestDir);
+  std::vector<std::vector<uint8_t>> files;
+
+// Test-level seeds are all replayed, with no time limit, every time the
+// FUZZ_TEST runs in unit-test mode, and decoding the whole directory takes
+// too long on sanitizer bots. So only use the whole directory in fuzzing
+// builds.
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+  for (const auto& [contents] :
+       fuzztest::ReadFilesFromDirectory(corpus_dir.AsUTF8Unsafe())) {
+    files.push_back(base::ToVector<uint8_t>(contents));
+  }
+#else
+  std::optional<std::vector<uint8_t>> basic_file =
+      base::ReadFileToBytes(corpus_dir.AppendASCII("basic.jxl"));
+  CHECK(basic_file) << "JXL seed not found!";
+  files.push_back(*std::move(basic_file));
+#endif
+  CHECK(!files.empty()) << "JXL seed corpus not found!";
+
+  std::vector<JXLFuzzArgs> seeds;
+  for (auto& file : files) {
+    seeds.emplace_back(
+        ImageDecoder::kAlphaPremultiplied, ImageDecoder::kDefaultBitDepth,
+        ColorBehavior::kTransformToSRGB, cc::AuxImage::kDefault,
+        std::numeric_limits<uint32_t>::max(),
+        ImageDecoder::AnimationOption::kUnspecified, std::move(file));
+  }
+  return seeds;
+}
+
+FUZZ_TEST(JXLImageDecoderFuzzTest, FuzzJXLDecoder)
+    .WithDomains(fuzztest::ElementOf<ImageDecoder::AlphaOption>(
+                     {ImageDecoder::kAlphaPremultiplied,
+                      ImageDecoder::kAlphaNotPremultiplied}),
+                 fuzztest::ElementOf<ImageDecoder::HighBitDepthDecodingOption>(
+                     {ImageDecoder::kDefaultBitDepth,
+                      ImageDecoder::kHighBitDepthToHalfFloat}),
+                 fuzztest::ElementOf<ColorBehavior>(
+                     {ColorBehavior::kIgnore, ColorBehavior::kTag,
+                      ColorBehavior::kTransformToSRGB}),
+                 fuzztest::ElementOf<cc::AuxImage>({cc::AuxImage::kDefault,
+                                                    cc::AuxImage::kGainmap}),
+                 fuzztest::InRange(kMinMaxDecodedBytes,
+                                   std::numeric_limits<uint32_t>::max()),
+                 fuzztest::ElementOf<ImageDecoder::AnimationOption>(
+                     {ImageDecoder::AnimationOption::kUnspecified,
+                      ImageDecoder::AnimationOption::kPreferAnimation,
+                      ImageDecoder::AnimationOption::kPreferStillImage}),
+                 // TODO(crbug.com/574556672): Switch to using WithSoftMaxSize
+                 // after performing FuzzTest benchmarking.
+                 fuzztest::Arbitrary<std::vector<uint8_t>>().WithMaxSize(
+                     kMaxInputSize.InBytes()))
+    .WithSeeds(&GetJXLSeeds);
 }  // namespace blink

@@ -12,6 +12,7 @@
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/test/test_url_loader_factory.h"
+#include "storage/browser/quota/quota_manager.h"
 
 namespace content {
 
@@ -29,12 +30,13 @@ const base::FilePath& TestStoragePartition::GetPath() const {
 network::mojom::NetworkContext* TestStoragePartition::GetNetworkContext() {
   return network_context_;
 }
-cert_verifier::mojom::CertVerifierServiceUpdater*
-TestStoragePartition::GetCertVerifierServiceUpdater() {
-  return nullptr;
+
+bool TestStoragePartition::IsNetworkContextInitialized() {
+  return network_context_ != nullptr;
 }
 
-storage::SharedStorageManager* TestStoragePartition::GetSharedStorageManager() {
+cert_verifier::mojom::CertVerifierServiceUpdater*
+TestStoragePartition::GetCertVerifierServiceUpdater() {
   return nullptr;
 }
 
@@ -73,6 +75,10 @@ TestStoragePartition::CreateURLLoaderNetworkObserverForNavigationRequest(
 
 storage::QuotaManager* TestStoragePartition::GetQuotaManager() {
   return quota_manager_;
+}
+
+storage::QuotaManagerProxy* TestStoragePartition::GetQuotaManagerProxy() {
+  return quota_manager_ ? quota_manager_->proxy() : nullptr;
 }
 
 BackgroundSyncContext* TestStoragePartition::GetBackgroundSyncContext() {
@@ -140,18 +146,6 @@ TestStoragePartition::GetPlatformNotificationContext() {
   return platform_notification_context_;
 }
 
-InterestGroupManager* TestStoragePartition::GetInterestGroupManager() {
-  return nullptr;
-}
-
-AttributionDataModel* TestStoragePartition::GetAttributionDataModel() {
-  return nullptr;
-}
-
-PrivateAggregationDataModel*
-TestStoragePartition::GetPrivateAggregationDataModel() {
-  return nullptr;
-}
 
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
 CdmStorageDataModel* TestStoragePartition::GetCdmStorageDataModel() {
@@ -161,12 +155,13 @@ CdmStorageDataModel* TestStoragePartition::GetCdmStorageDataModel() {
 
 network::mojom::DeviceBoundSessionManager*
 TestStoragePartition::GetDeviceBoundSessionManager() {
-  return device_bound_session_manager_;
+  return device_bound_session_manager_.get();
 }
 
-BrowsingTopicsSiteDataManager*
-TestStoragePartition::GetBrowsingTopicsSiteDataManager() {
-  return browsing_topics_site_data_manager_;
+void TestStoragePartition::OverrideDeviceBoundSessionManagerForTesting(
+    std::unique_ptr<network::mojom::DeviceBoundSessionManager>
+        device_bound_session_manager) {
+  device_bound_session_manager_ = std::move(device_bound_session_manager);
 }
 
 DevToolsBackgroundServicesContext*
@@ -239,6 +234,8 @@ void TestStoragePartition::Flush() {}
 
 void TestStoragePartition::ResetURLLoaderFactories() {}
 
+void TestStoragePartition::ClearBluetoothAllowedDevicesMap() {}
+
 void TestStoragePartition::AddObserver(DataRemovalObserver* observer) {
   data_removal_observer_count_++;
 }
@@ -250,8 +247,6 @@ void TestStoragePartition::RemoveObserver(DataRemovalObserver* observer) {
 int TestStoragePartition::GetDataRemovalObserverCount() {
   return data_removal_observer_count_;
 }
-
-void TestStoragePartition::ClearBluetoothAllowedDevicesMapForTesting() {}
 
 void TestStoragePartition::FlushNetworkInterfaceForTesting() {}
 

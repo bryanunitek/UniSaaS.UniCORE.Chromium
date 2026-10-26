@@ -18,7 +18,6 @@ static_library("extensions") {
 
   public_deps = [
     "//base",
-    "//chrome/browser:browser_public_dependencies",
     "//chrome/browser/profiles:profile",
     "//components/keyed_service/core",
     "//components/session_manager/core",
@@ -54,6 +53,7 @@ source_set("browser_tests") {
     "//chrome/browser/ash/extensions",
     "//chrome/browser/ash/login/lock:test_support",
     "//chrome/browser/ash/login/test:test_support",
+    "//chrome/browser/policy:extension_force_install_mixin",
     "//chrome/browser/profiles:profile",
     "//chrome/common:constants",
     "//chrome/test:test_support",

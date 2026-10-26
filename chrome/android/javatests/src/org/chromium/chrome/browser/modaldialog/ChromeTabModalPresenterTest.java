@@ -8,7 +8,6 @@ import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.click;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
-import static androidx.test.espresso.matcher.ViewMatchers.assertThat;
 import static androidx.test.espresso.matcher.ViewMatchers.hasDescendant;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
@@ -45,7 +44,8 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.DisabledTest;
+import org.chromium.base.test.util.Criteria;
+import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
@@ -58,8 +58,9 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.omnibox.UrlBar;
 import org.chromium.chrome.browser.omnibox.UrlFocusChangeListener;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
+import org.chromium.chrome.browser.tabmodel.TabClosingSource;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
@@ -84,8 +85,10 @@ import org.chromium.ui.modelutil.PropertyModel;
 // TODO(http://crbug.com/495529795): Enable side panel and fix this test.
 @DisableFeatures({ChromeFeatureList.ENABLE_ANDROID_SIDE_PANEL})
 public class ChromeTabModalPresenterTest {
-    private class TestObserver extends EmptyTabObserver
-            implements UrlFocusChangeListener, ModalDialogTestUtils.TestDialogDismissedObserver {
+    private class TestObserver
+            implements TabObserver,
+                    UrlFocusChangeListener,
+                    ModalDialogTestUtils.TestDialogDismissedObserver {
         public final CallbackHelper onUrlFocusChangedCallback = new CallbackHelper();
         public final CallbackHelper onDialogDismissedCallback = new CallbackHelper();
         public final CallbackHelper onTabInteractabilityChangedCallback = new CallbackHelper();
@@ -159,26 +162,17 @@ public class ChromeTabModalPresenterTest {
         final View dialogContainer = mTabModalPresenter.getDialogContainerForTest();
         final View controlContainer = mActivity.findViewById(R.id.control_container);
         final ViewGroup containerParent = mTabModalPresenter.getContainerParentForTest();
-        final ViewGroup rightParent = (ViewGroup) controlContainer.getParent();
-        // Dialog container may be located under secondary_ui_container, not at the same
-        // level in view hierarchy with Control container. |dialogViewInRightParent| in
-        // such case will be |secondary_ui_container| to compare its index against
-        // that of |controlContainer|.
-        //
-        // CoordinatorLayout +
-        //                   +--- secondary_ui_container +
-        //                   |                           +--- dialog_container
-        //                   +--- control_container
-        final View dialogViewInRightParent =
-                containerParent == rightParent ? dialogContainer : containerParent;
+        final ViewGroup parent = (ViewGroup) controlContainer.getParent();
+        final View dialogViewInParent =
+                containerParent == parent ? dialogContainer : containerParent;
 
         ensureDialogContainerVisible();
 
-        ThreadUtils.runOnUiThreadBlocking(
+        CriteriaHelper.pollUiThread(
                 () -> {
-                    assertThat(
-                            rightParent.indexOfChild(dialogViewInRightParent),
-                            Matchers.greaterThan(rightParent.indexOfChild(controlContainer)));
+                    Criteria.checkThat(
+                            parent.indexOfChild(dialogViewInParent),
+                            Matchers.greaterThan(parent.indexOfChild(controlContainer)));
                 });
 
         // When editing URL, it should be shown on top of the dialog.
@@ -186,22 +180,29 @@ public class ChromeTabModalPresenterTest {
         int callCount = mTestObserver.onUrlFocusChangedCallback.getCallCount();
         mOmnibox.requestFocus();
         mTestObserver.onUrlFocusChangedCallback.waitForCallback(callCount);
-        ThreadUtils.runOnUiThreadBlocking(
+        CriteriaHelper.pollUiThread(
                 () -> {
-                    assertThat(
-                            rightParent.indexOfChild(dialogViewInRightParent),
-                            Matchers.lessThan(rightParent.indexOfChild(controlContainer)));
+                    View suggestionsContainer =
+                            parent.findViewById(R.id.omnibox_suggestions_container);
+                    if (suggestionsContainer == null) {
+                        suggestionsContainer =
+                                parent.findViewById(R.id.omnibox_suggestions_container_stub);
+                    }
+                    Criteria.checkThat(suggestionsContainer, Matchers.notNullValue());
+                    Criteria.checkThat(
+                            parent.indexOfChild(dialogViewInParent),
+                            Matchers.lessThan(parent.indexOfChild(suggestionsContainer)));
                 });
 
         // When URL bar is not focused, the dialog should be shown on top of the toolbar again.
         callCount = mTestObserver.onUrlFocusChangedCallback.getCallCount();
         mOmnibox.clearFocus();
         mTestObserver.onUrlFocusChangedCallback.waitForCallback(callCount);
-        ThreadUtils.runOnUiThreadBlocking(
+        CriteriaHelper.pollUiThread(
                 () -> {
-                    assertThat(
-                            rightParent.indexOfChild(dialogViewInRightParent),
-                            Matchers.greaterThan(rightParent.indexOfChild(controlContainer)));
+                    Criteria.checkThat(
+                            parent.indexOfChild(dialogViewInParent),
+                            Matchers.greaterThan(parent.indexOfChild(controlContainer)));
                 });
 
         // Dismiss the dialog by clicking OK.
@@ -212,7 +213,6 @@ public class ChromeTabModalPresenterTest {
     @SmallTest
     @Feature({"ModalDialog"})
     @Restriction(DeviceFormFactor.PHONE)
-    @DisabledTest(message = "https://crbug.com/40895583")
     public void testSuspend_ToggleOverview() throws Exception {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> mActivity.getActivityTab().addObserver(mTestObserver));
@@ -238,8 +238,11 @@ public class ChromeTabModalPresenterTest {
         ChromeModalDialogTestUtils.checkBrowserControls(mActivity, true);
         checkCurrentPresenter(mManager, ModalDialogType.TAB);
 
-        //  Tab modal dialogs should be suspended on entering tab switcher.
-        onView(withId(R.id.tab_switcher_button)).perform(click());
+        // Tab modal dialogs should be suspended on entering tab switcher.
+        int callCount = mTestObserver.onTabInteractabilityChangedCallback.getCallCount();
+        View tabSwitcherBtn = BottomBarTestUtils.findViewById(mActivity, R.id.tab_switcher_button);
+        onView(is(tabSwitcherBtn)).perform(click());
+        mTestObserver.onTabInteractabilityChangedCallback.waitForCallback(callCount);
         checkPendingSize(mManager, ModalDialogType.TAB, 2);
         onView(withId(R.id.tab_modal_dialog_container))
                 .check(
@@ -264,7 +267,7 @@ public class ChromeTabModalPresenterTest {
         checkPendingSize(mManager, ModalDialogType.TAB, 2);
 
         // Exit overview mode. The first dialog should be showing again.
-        int callCount = mTestObserver.onTabInteractabilityChangedCallback.getCallCount();
+        callCount = mTestObserver.onTabInteractabilityChangedCallback.getCallCount();
         pressBack();
         mTestObserver.onTabInteractabilityChangedCallback.waitForCallback(callCount);
 
@@ -331,7 +334,10 @@ public class ChromeTabModalPresenterTest {
 
         // Close the only tab in the tab switcher. Verify that the queued tab modal dialogs are
         // cleared.
-        ChromeTabUtils.closeCurrentTab(InstrumentationRegistry.getInstrumentation(), mActivity);
+        ChromeTabUtils.closeCurrentTab(
+                InstrumentationRegistry.getInstrumentation(),
+                mActivity,
+                TabClosingSource.GRID_TAB_SWITCHER);
         checkPendingSize(mManager, ModalDialogType.TAB, 0);
         ChromeModalDialogTestUtils.checkBrowserControls(mActivity, false);
         checkCurrentPresenter(mManager, null);
@@ -340,7 +346,6 @@ public class ChromeTabModalPresenterTest {
     @Test
     @SmallTest
     @Feature({"ModalDialog"})
-    @DisabledTest(message = "https://crbug.com/40877195")
     @Restriction(DeviceFormFactor.PHONE)
     public void testSuspend_TabClosed() throws Exception {
         PropertyModel dialog1 = createDialog(mActivity, mManager, "1", null);
@@ -365,7 +370,11 @@ public class ChromeTabModalPresenterTest {
         checkCurrentPresenter(mManager, ModalDialogType.TAB);
 
         // Tab modal dialogs should be suspended on entering tab switcher.
-        onView(withId(R.id.tab_switcher_button)).perform(click());
+        // Use BottomBarTestUtils.findViewById to retrieve the active view reference from the bottom
+        // bar hierarchy and match by instance equality. Direct onView(withId(...)) can be ambiguous
+        // when multiple toolbars containing R.id.tab_switcher_button are inflated.
+        View tabSwitcherBtn = BottomBarTestUtils.findViewById(mActivity, R.id.tab_switcher_button);
+        onView(is(tabSwitcherBtn)).perform(click());
         checkPendingSize(mManager, ModalDialogType.APP, 0);
         checkPendingSize(mManager, ModalDialogType.TAB, 1);
         ChromeModalDialogTestUtils.checkBrowserControls(mActivity, false);

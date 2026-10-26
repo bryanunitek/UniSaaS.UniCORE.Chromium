@@ -5,27 +5,26 @@
 #include "base/files/file_path.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/devtools/devtools_window_testing.h"
-#include "chrome/browser/devtools/features.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -36,6 +35,7 @@
 #include "extensions/common/extension.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/chrome_debug_urls.h"
+#include "ui/base/window_open_disposition.h"
 
 using extensions::mojom::ManifestLocation;
 
@@ -88,15 +88,15 @@ PolicyMap MakeDeveloperToolsAvailabilityMap(int value) {
 // ui_test_utils::BROWSER_TEST_NO_WAIT flag passed in results this returning
 // right after the Browser::OpenURL() call without waiting for any load
 // events.
-void NavigateToURLNoWait(Browser* browser, const GURL& url) {
+void NavigateToURLNoWait(BrowserWindowInterface* browser, const GURL& url) {
   ui_test_utils::NavigateToURLWithDisposition(
-      browser, url, WindowOpenDisposition::CURRENT_TAB,
+      browser, url, WindowOpenDisposition::kCurrentTab,
       ui_test_utils::BROWSER_TEST_NO_WAIT);
 }
 
 // Utility to navigate the current tab of the browser to the specified page and
 // then kill it using chrome://kill, verifying that the page ends up crashed.
-void VerifyPageAllowsKill(Browser* browser, const GURL& url) {
+void VerifyPageAllowsKill(BrowserWindowInterface* browser, const GURL& url) {
   SCOPED_TRACE(base::StringPrintf("Verifying url allows kill: '%s'",
                                   url.spec().c_str()));
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser, url));
@@ -124,7 +124,7 @@ void VerifyPageAllowsKill(Browser* browser, const GURL& url) {
 // Utility to navigate the current tab of the browser to the specified page and
 // then attempt to kill it using chrome://kill, verifying that the kill is
 // blocked before any navigation is started.
-void VerifyPageBlocksKill(Browser* browser, const GURL& url) {
+void VerifyPageBlocksKill(BrowserWindowInterface* browser, const GURL& url) {
   SCOPED_TRACE(base::StringPrintf("Verifying url blocks kill: '%s'",
                                   url.spec().c_str()));
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser, url));
@@ -141,7 +141,7 @@ void VerifyPageBlocksKill(Browser* browser, const GURL& url) {
 
 // Utility to navigate the current tab of the browser to the specified page and
 // return true if a javascript URL can be run on it, false otherwise.
-bool PageAllowsJavascriptURL(Browser* browser, const GURL& url) {
+bool PageAllowsJavascriptURL(BrowserWindowInterface* browser, const GURL& url) {
   SCOPED_TRACE(base::StringPrintf("Checking url allows javascript URLs: '%s'",
                                   url.spec().c_str()));
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser, url));
@@ -167,28 +167,7 @@ bool PageAllowsJavascriptURL(Browser* browser, const GURL& url) {
 
 }  // namespace
 
-class DeveloperToolsPolicyWithDialogFeatureTest
-    : public PolicyTest,
-      public testing::WithParamInterface<bool> {
- public:
-  DeveloperToolsPolicyWithDialogFeatureTest() {
-    if (IsDialogFeatureEnabled()) {
-      scoped_feature_list_.InitAndEnableFeature(
-          features::kDevToolsShowPolicyDialog);
-    } else {
-      scoped_feature_list_.InitAndDisableFeature(
-          features::kDevToolsShowPolicyDialog);
-    }
-  }
-
-  bool IsDialogFeatureEnabled() const { return GetParam(); }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_P(DeveloperToolsPolicyWithDialogFeatureTest,
-                       DeveloperToolsDisabledByLegacyPolicy) {
+IN_PROC_BROWSER_TEST_F(PolicyTest, DeveloperToolsDisabledByLegacyPolicy) {
   // Verifies that access to the developer tools can be disabled by setting the
   // legacy DeveloperToolsDisabled policy.
 
@@ -212,22 +191,16 @@ IN_PROC_BROWSER_TEST_P(DeveloperToolsPolicyWithDialogFeatureTest,
   close_observer.Wait();
   // The existing devtools window should have closed.
   EXPECT_FALSE(DevToolsWindow::GetInstanceForInspectedWebContents(contents));
-  if (IsDialogFeatureEnabled()) {
-    // And it's not possible to open it again, but a dialog should be shown.
-    EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_DEV_TOOLS));
-    EXPECT_FALSE(DevToolsWindow::GetInstanceForInspectedWebContents(contents));
-    web_modal::WebContentsModalDialogManager* dialog_manager =
-        web_modal::WebContentsModalDialogManager::FromWebContents(contents);
-    EXPECT_TRUE(dialog_manager->IsDialogActive());
-    dialog_manager->CloseAllDialogs();
-  } else {
-    // And it's not possible to open it again.
-    EXPECT_FALSE(chrome::ExecuteCommand(browser(), IDC_DEV_TOOLS));
-    EXPECT_FALSE(DevToolsWindow::GetInstanceForInspectedWebContents(contents));
-  }
+  // And it's not possible to open it again, but a dialog should be shown.
+  EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_DEV_TOOLS));
+  EXPECT_FALSE(DevToolsWindow::GetInstanceForInspectedWebContents(contents));
+  web_modal::WebContentsModalDialogManager* dialog_manager =
+      web_modal::WebContentsModalDialogManager::FromWebContents(contents);
+  EXPECT_TRUE(dialog_manager->IsDialogActive());
+  dialog_manager->CloseAllDialogs();
 }
 
-IN_PROC_BROWSER_TEST_P(DeveloperToolsPolicyWithDialogFeatureTest,
+IN_PROC_BROWSER_TEST_F(PolicyTest,
                        DeveloperToolsDisabledByDeveloperToolsAvailability) {
   // Verifies that access to the developer tools can be disabled by setting the
   // DeveloperToolsAvailability policy.
@@ -249,19 +222,13 @@ IN_PROC_BROWSER_TEST_P(DeveloperToolsPolicyWithDialogFeatureTest,
   close_observer.Wait();
   // The existing devtools window should have closed.
   EXPECT_FALSE(DevToolsWindow::GetInstanceForInspectedWebContents(contents));
-  if (IsDialogFeatureEnabled()) {
-    // And it's not possible to open it again, but a dialog should be shown.
-    EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_DEV_TOOLS));
-    EXPECT_FALSE(DevToolsWindow::GetInstanceForInspectedWebContents(contents));
-    web_modal::WebContentsModalDialogManager* dialog_manager =
-        web_modal::WebContentsModalDialogManager::FromWebContents(contents);
-    EXPECT_TRUE(dialog_manager->IsDialogActive());
-    dialog_manager->CloseAllDialogs();
-  } else {
-    // And it's not possible to open it again.
-    EXPECT_FALSE(chrome::ExecuteCommand(browser(), IDC_DEV_TOOLS));
-    EXPECT_FALSE(DevToolsWindow::GetInstanceForInspectedWebContents(contents));
-  }
+  // And it's not possible to open it again, but a dialog should be shown.
+  EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_DEV_TOOLS));
+  EXPECT_FALSE(DevToolsWindow::GetInstanceForInspectedWebContents(contents));
+  web_modal::WebContentsModalDialogManager* dialog_manager =
+      web_modal::WebContentsModalDialogManager::FromWebContents(contents);
+  EXPECT_TRUE(dialog_manager->IsDialogActive());
+  dialog_manager->CloseAllDialogs();
 }
 
 IN_PROC_BROWSER_TEST_F(PolicyTest,
@@ -296,8 +263,7 @@ IN_PROC_BROWSER_TEST_F(PolicyTest,
 }
 
 // Test for https://b/263040629
-IN_PROC_BROWSER_TEST_P(DeveloperToolsPolicyWithDialogFeatureTest,
-                       AvailabilityWins) {
+IN_PROC_BROWSER_TEST_F(PolicyTest, AvailabilityWins) {
   // DeveloperToolsDisabled is true, but DeveloperToolsAvailability wins.
   PolicyMap policies;
   policies.Set(key::kDeveloperToolsAvailability, POLICY_LEVEL_MANDATORY,
@@ -325,40 +291,38 @@ IN_PROC_BROWSER_TEST_P(DeveloperToolsPolicyWithDialogFeatureTest,
   close_observer.Wait();
   // The existing devtools window should have closed.
   EXPECT_FALSE(DevToolsWindow::GetInstanceForInspectedWebContents(contents));
-  if (IsDialogFeatureEnabled()) {
-    // And it's not possible to open it again, but a dialog should be shown.
-    EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_DEV_TOOLS));
-    EXPECT_FALSE(DevToolsWindow::GetInstanceForInspectedWebContents(contents));
-    web_modal::WebContentsModalDialogManager* dialog_manager =
-        web_modal::WebContentsModalDialogManager::FromWebContents(contents);
-    EXPECT_TRUE(dialog_manager->IsDialogActive());
-    dialog_manager->CloseAllDialogs();
-  } else {
-    // And it's not possible to open it again.
-    EXPECT_FALSE(chrome::ExecuteCommand(browser(), IDC_DEV_TOOLS));
-    EXPECT_FALSE(DevToolsWindow::GetInstanceForInspectedWebContents(contents));
-  }
+  // And it's not possible to open it again, but a dialog should be shown.
+  EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_DEV_TOOLS));
+  EXPECT_FALSE(DevToolsWindow::GetInstanceForInspectedWebContents(contents));
+  web_modal::WebContentsModalDialogManager* dialog_manager =
+      web_modal::WebContentsModalDialogManager::FromWebContents(contents);
+  EXPECT_TRUE(dialog_manager->IsDialogActive());
+  dialog_manager->CloseAllDialogs();
 }
 
-IN_PROC_BROWSER_TEST_P(DeveloperToolsPolicyWithDialogFeatureTest,
+IN_PROC_BROWSER_TEST_F(PolicyTest,
                        ViewSourceDisabledByDeveloperToolsAvailability) {
-  // Verifies that entry points to ViewSource can be disabled by setting the
-  // DeveloperToolsAvailability policy.
+  // Verifies that entry points to ViewSource remain enabled and show a policy
+  // dialog when DeveloperToolsAvailability policy disallows DevTools.
 
   // Disable devtools via policy.
   UpdateProviderPolicy(
       MakeDeveloperToolsAvailabilityMap(2 /* DeveloperToolsDisallowed */));
-  // Verify that it's possible to ViewSource.
-  if (IsDialogFeatureEnabled()) {
-    EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_VIEW_SOURCE));
-  } else {
-    EXPECT_FALSE(chrome::ExecuteCommand(browser(), IDC_VIEW_SOURCE));
-  }
-}
 
-INSTANTIATE_TEST_SUITE_P(All,
-                         DeveloperToolsPolicyWithDialogFeatureTest,
-                         testing::Bool());
+  // Navigate to trigger UpdateTabState() and ensure IDC_VIEW_SOURCE remains
+  // enabled.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
+  EXPECT_TRUE(chrome::IsCommandEnabled(browser(), IDC_VIEW_SOURCE));
+
+  // Verify that executing ViewSource shows the policy dialog.
+  EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_VIEW_SOURCE));
+  content::WebContents* contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  web_modal::WebContentsModalDialogManager* dialog_manager =
+      web_modal::WebContentsModalDialogManager::FromWebContents(contents);
+  EXPECT_TRUE(dialog_manager->IsDialogActive());
+  dialog_manager->CloseAllDialogs();
+}
 
 IN_PROC_BROWSER_TEST_F(PolicyTest, DeveloperToolsDisabledExtensionsDevMode) {
   // Verifies that when DeveloperToolsDisabled policy is set, the "dev mode"

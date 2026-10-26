@@ -9,13 +9,16 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/global_features.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/browser/ui/webui/user_education_internals/user_education_internals_page_handler_impl.h"
 #include "chrome/common/chrome_version.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/user_education_internals_resources.h"
 #include "chrome/grit/user_education_internals_resources_map.h"
 #include "components/user_education/webui/whats_new_registry.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -24,14 +27,23 @@
 #include "ui/webui/tracked_element/tracked_element_handler_document_singleton.h"
 #include "ui/webui/webui_util.h"
 
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(UserEducationInternalsUI, kMenuElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(UserEducationInternalsUI,
+                                      kMenuItemElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(UserEducationInternalsUI,
+                                      kToolbarElementId);
+
 UserEducationInternalsUIConfig::UserEducationInternalsUIConfig()
     : DefaultInternalWebUIConfig(chrome::kChromeUIUserEducationInternalsHost) {}
 
 UserEducationInternalsUI::UserEducationInternalsUI(content::WebUI* web_ui)
     : ui::MojoWebUIController(web_ui, /*enable_chrome_send=*/true),
-      help_bubble_handler_factory_receiver_(this) {
+      help_bubble_handler_factory_receiver_(this),
+      user_education_handler_factory_receiver_(this) {
+  Profile* profile = Profile::FromWebUI(web_ui);
   auto* source = content::WebUIDataSource::CreateAndAdd(
-      Profile::FromWebUI(web_ui), chrome::kChromeUIUserEducationInternalsHost);
+      profile, chrome::kChromeUIUserEducationInternalsHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   int32_t version_to_request = CHROME_VERSION_MAJOR;
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -47,7 +59,9 @@ UserEducationInternalsUI::UserEducationInternalsUI(content::WebUI* web_ui)
                               IDR_USER_EDUCATION_INTERNALS_INDEX_HTML);
 
   ui::TrackedElementHandlerDocumentSingleton::Register(
-      this, std::vector<ui::ElementIdentifier>{kWebUIIPHDemoElementIdentifier});
+      this, std::vector<ui::ElementIdentifier>{
+                kWebUIIPHDemoElementIdentifier, kMenuElementId,
+                kMenuItemElementId, kToolbarElementId});
 }
 
 UserEducationInternalsUI::~UserEducationInternalsUI() = default;
@@ -56,9 +70,8 @@ void UserEducationInternalsUI::BindInterface(
     mojo::PendingReceiver<
         mojom::user_education_internals::UserEducationInternalsPageHandler>
         receiver) {
-  user_education_handler_ =
-      std::make_unique<UserEducationInternalsPageHandlerImpl>(
-          web_ui(), Profile::FromWebUI(web_ui()), std::move(receiver));
+  page_handler_ = std::make_unique<UserEducationInternalsPageHandlerImpl>(
+      web_ui(), Profile::FromWebUI(web_ui()), std::move(receiver));
 }
 
 void UserEducationInternalsUI::BindInterface(
@@ -70,6 +83,16 @@ void UserEducationInternalsUI::BindInterface(
   help_bubble_handler_factory_receiver_.Bind(std::move(pending_receiver));
 }
 
+void UserEducationInternalsUI::BindInterface(
+    mojo::PendingReceiver<
+        user_education::mojom::UserEducationMixedTrustHandlerFactory>
+        pending_receiver) {
+  if (user_education_handler_factory_receiver_.is_bound()) {
+    user_education_handler_factory_receiver_.reset();
+  }
+  user_education_handler_factory_receiver_.Bind(std::move(pending_receiver));
+}
+
 void UserEducationInternalsUI::CreateHelpBubbleHandler(
     mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> pending_client,
     mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler>
@@ -78,6 +101,13 @@ void UserEducationInternalsUI::CreateHelpBubbleHandler(
       std::move(pending_handler), std::move(pending_client),
       ui::TrackedElementHandlerDocumentSingleton::GetOrCreate(
           web_ui()->GetRenderFrameHost()));
+}
+
+void UserEducationInternalsUI::CreateUserEducationMixedTrustHandler(
+    mojo::PendingReceiver<user_education::mojom::UserEducationMixedTrustHandler>
+        pending_handler) {
+  user_education_handler_ = std::make_unique<UserEducationMixedTrustHandler>(
+      std::move(pending_handler), web_ui()->GetWebContents());
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(UserEducationInternalsUI)

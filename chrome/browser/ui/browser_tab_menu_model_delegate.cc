@@ -4,12 +4,10 @@
 
 #include "chrome/browser/ui/browser_tab_menu_model_delegate.h"
 
-#include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_tab_strip_model_delegate.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+#include "components/sessions/core/session_id.h"
 
 namespace chrome {
 
@@ -17,8 +15,10 @@ BrowserTabMenuModelDelegate::BrowserTabMenuModelDelegate(
     SessionID session_id,
     const Profile* profile,
     const web_app::AppBrowserController* app_controller,
-    tab_groups::TabGroupSyncService* tgss)
-    : session_id_(session_id),
+    tab_groups::TabGroupSyncService* tgss,
+    ui::UnownedUserDataHost& host)
+    : TabMenuModelDelegate(host),
+      session_id_(session_id),
       profile_(profile),
       app_controller_(app_controller),
       tab_group_sync_service_(tgss) {}

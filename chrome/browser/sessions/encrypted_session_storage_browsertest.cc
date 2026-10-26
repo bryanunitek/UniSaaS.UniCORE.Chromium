@@ -28,7 +28,6 @@
 #include "chrome/browser/sessions/session_service_test_helper.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/sessions/tab_restore_service_load_waiter.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_live_tab_context.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
@@ -46,9 +45,8 @@
 #include "chrome/browser/ui/waap/initial_web_ui_manager.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/collaboration/public/messaging/empty_messaging_backend_service.h"
@@ -59,6 +57,7 @@
 #include "components/sessions/core/command_storage_features.h"
 #include "components/sessions/core/command_storage_manager.h"
 #include "components/sessions/core/command_storage_manager_test_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "components/sessions/core/tab_restore_service.h"
 #include "components/sessions/core/tab_restore_service_impl.h"
 #include "components/tab_groups/tab_group_color.h"
@@ -77,9 +76,15 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ozone_buildflags.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_OZONE)
 #include "ui/ozone/public/ozone_platform.h"
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_switches.h"
 #endif
 
 namespace sessions {
@@ -139,7 +144,7 @@ class EncryptedSessionStorageBrowserTestBase : public InProcessBrowserTest {
   void AssertCommandStorageBackendFilesExist(SessionType session_type,
                                              Profile* profile = nullptr) {
     if (!profile) {
-      profile = browser()->profile();
+      profile = browser()->GetProfile();
     }
     base::ScopedAllowBlockingForTesting allow_blocking;
     sessions::CommandStorageManager* command_storage_manager = nullptr;
@@ -223,7 +228,7 @@ class EncryptedSessionStorageBrowserTestBase : public InProcessBrowserTest {
   }
 #if BUILDFLAG(IS_CHROMEOS)
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    command_line->AppendSwitch(switches::kCreateBrowserOnStartupForTests);
+    command_line->AppendSwitch(ash::switches::kCreateBrowserOnStartupForTests);
   }
 #endif
 
@@ -259,7 +264,7 @@ class EncryptedSessionStorageBrowserTestBase : public InProcessBrowserTest {
   // `url` and waits for all restored tabs to finish loading if
   // `no_memory_pressure` is true.
   BrowserWindowInterface* QuitBrowserAndRestore(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       const GURL& url = GURL(),
       bool no_memory_pressure = true) {
     Profile* profile = browser->GetProfile();
@@ -277,8 +282,7 @@ class EncryptedSessionStorageBrowserTestBase : public InProcessBrowserTest {
     helper.SetForceBrowserNotAliveWithNoWindows(true);
 
     profile->GetDefaultStoragePartition()
-        ->OverrideDeleteStaleSessionOnlyCookiesDelayForTesting(
-            base::Minutes(0));
+        ->OverrideDeleteStaleSessionCleanupDelayForTesting(base::Minutes(0));
 
     if (url.is_empty()) {
       chrome::NewEmptyWindow(profile);
@@ -335,9 +339,9 @@ class EncryptedSessionStorageBrowserTestBase : public InProcessBrowserTest {
         }
       }
       if (target_id.is_valid()) {
-        service->RestoreEntryById(
-            target_browser->GetFeatures().live_tab_context(), target_id,
-            WindowOpenDisposition::NEW_FOREGROUND_TAB);
+        service->RestoreEntryById(BrowserLiveTabContext::From(target_browser),
+                                  target_id,
+                                  WindowOpenDisposition::kNewForegroundTab);
       } else {
         chrome::RestoreTab(target_browser);
       }
@@ -355,7 +359,7 @@ class EncryptedSessionStorageBrowserTestBase : public InProcessBrowserTest {
     for (int i = 0; i < how_many; ++i) {
       ui_test_utils::NavigateToURLWithDisposition(
           browser, GetUrl(starting_url_index + i),
-          WindowOpenDisposition::NEW_FOREGROUND_TAB,
+          WindowOpenDisposition::kNewForegroundTab,
           ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
     }
     int tab_count = browser->GetTabStripModel()->count();
@@ -407,7 +411,7 @@ class SessionRestoreWithEncryptionTest
 IN_PROC_BROWSER_TEST_P(SessionRestoreWithEncryptionTest, BasicRestore) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetUrl(1)));
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GetUrl(2), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), GetUrl(2), WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   ASSERT_EQ(2, browser()->tab_strip_model()->count());
   AssertCommandStorageBackendFilesExist(SessionType::kSessionRestore);
@@ -438,7 +442,7 @@ IN_PROC_BROWSER_TEST_P(SessionRestoreWithEncryptionTest,
                        NavigationHistoryIsRestored) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetUrl(1)));
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GetUrl(2), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), GetUrl(2), WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   ASSERT_EQ(2, browser()->tab_strip_model()->count());
 
@@ -465,10 +469,10 @@ IN_PROC_BROWSER_TEST_P(SessionRestoreWithEncryptionTest,
 IN_PROC_BROWSER_TEST_P(SessionRestoreWithEncryptionTest, TabGroupsAreRestored) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetUrl(1)));
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GetUrl(2), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), GetUrl(2), WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GetUrl(3), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), GetUrl(3), WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   ASSERT_EQ(3, browser()->tab_strip_model()->count());
 
@@ -507,7 +511,7 @@ IN_PROC_BROWSER_TEST_P(SessionRestoreWithEncryptionTest,
                        PinnedTabsAreRestored) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetUrl(1)));
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GetUrl(2), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), GetUrl(2), WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   ASSERT_EQ(2, browser()->tab_strip_model()->count());
 
@@ -525,7 +529,7 @@ IN_PROC_BROWSER_TEST_P(SessionRestoreWithEncryptionTest,
 IN_PROC_BROWSER_TEST_P(SessionRestoreWithEncryptionTest, ActiveTabIsRestored) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetUrl(1)));
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GetUrl(2), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), GetUrl(2), WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   ASSERT_EQ(2, browser()->tab_strip_model()->count());
 
@@ -582,7 +586,14 @@ IN_PROC_BROWSER_TEST_P(TabRestoreWithEncryptionTest, BasicRestore) {
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
-IN_PROC_BROWSER_TEST_P(TabRestoreWithEncryptionTest, LargeSessionRestore) {
+// TODO(crbug.com/554734948): Flaky timeout on Linux debug builds.
+#if BUILDFLAG(IS_LINUX) && !defined(NDEBUG)
+#define MAYBE_LargeSessionRestore DISABLED_LargeSessionRestore
+#else
+#define MAYBE_LargeSessionRestore LargeSessionRestore
+#endif
+IN_PROC_BROWSER_TEST_P(TabRestoreWithEncryptionTest,
+                       MAYBE_LargeSessionRestore) {
   constexpr int kNumTabs = 20;
   AddFileSchemeTabs(browser(), kNumTabs);
   int starting_tab_count = browser()->tab_strip_model()->count();
@@ -590,11 +601,11 @@ IN_PROC_BROWSER_TEST_P(TabRestoreWithEncryptionTest, LargeSessionRestore) {
 
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(chrome::kChromeUINewTabURL),
-      WindowOpenDisposition::NEW_WINDOW,
+      WindowOpenDisposition::kNewWindow,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_BROWSER);
   EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
-  Browser* browser1 = browser();
+  BrowserWindowInterface* browser1 = browser();
   CloseBrowserSynchronously(browser1);
   EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
@@ -606,14 +617,14 @@ IN_PROC_BROWSER_TEST_P(TabRestoreWithEncryptionTest, LargeSessionRestore) {
   ui_test_utils::BrowserCreatedObserver observer;
   TabRestoreService* service =
       TabRestoreServiceFactory::GetForProfile(browser2->GetProfile());
-  service->RestoreMostRecentEntry(browser2->GetFeatures().live_tab_context());
-  Browser* restored_browser = observer.Wait();
+  service->RestoreMostRecentEntry(BrowserLiveTabContext::From(browser2));
+  BrowserWindowInterface* restored_browser = observer.Wait();
 
-  EXPECT_EQ(starting_tab_count, restored_browser->tab_strip_model()->count());
+  EXPECT_EQ(starting_tab_count, restored_browser->GetTabStripModel()->count());
   for (int i = 1; i < starting_tab_count; ++i) {
     EXPECT_EQ(
         GetUrl(i),
-        restored_browser->tab_strip_model()->GetWebContentsAt(i)->GetURL());
+        restored_browser->GetTabStripModel()->GetWebContentsAt(i)->GetURL());
   }
 }
 
@@ -777,13 +788,13 @@ class SessionRestoreAcrossStagesTest : public RestoreAcrossStagesTestBase {
     browser()->tab_strip_model()->ActivateTabAt(0);
 
     // Window 2 on the right side of the screen
-    Browser* window2 = CreateBrowser(browser()->GetProfile());
+    BrowserWindowInterface* window2 = CreateBrowser(browser()->GetProfile());
     window2->GetWindow()->SetBounds(kWindowBounds2);
 
     // Window 2 Tab 1 should be pinned and shows GetUrl(1)
     ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(window2,
                                                               GetUrl(1), 1);
-    window2->tab_strip_model()->SetTabPinned(0, true);
+    window2->GetTabStripModel()->SetTabPinned(0, true);
 
     // Window 2 Tab 2 should show GetUrl(2)
     chrome::AddSelectedTabWithURL(window2, GetUrl(2),
@@ -826,7 +837,7 @@ class SessionRestoreAcrossStagesTest : public RestoreAcrossStagesTestBase {
         << ", Expected size: " << kWindowBounds2.size().ToString();
 
     base::FilePath bounds_file =
-        browser()->profile()->GetPath().AppendASCII("saved_bounds.json");
+        browser()->GetProfile()->GetPath().AppendASCII("saved_bounds.json");
     SaveWindowBoundsToFile(bounds_file, browser(), window2);
   }
 
@@ -839,7 +850,7 @@ class SessionRestoreAcrossStagesTest : public RestoreAcrossStagesTestBase {
     auto windows = GetAllBrowserWindowInterfaces();
     std::vector<BrowserWindowInterface*> profile_windows;
     for (auto* window : windows) {
-      if (window->GetProfile() == browser()->profile()) {
+      if (window->GetProfile() == browser()->GetProfile()) {
         profile_windows.push_back(window);
       }
     }
@@ -863,7 +874,7 @@ class SessionRestoreAcrossStagesTest : public RestoreAcrossStagesTestBase {
     ASSERT_TRUE(w2) << "Window 2 (3 tabs) not found.";
 
     base::FilePath bounds_file =
-        browser()->profile()->GetPath().AppendASCII("saved_bounds.json");
+        browser()->GetProfile()->GetPath().AppendASCII("saved_bounds.json");
     auto [expected_bounds1, expected_bounds2] =
         ReadWindowBoundsFromFile(bounds_file);
 
@@ -923,13 +934,19 @@ class SessionRestoreAcrossStagesTest : public RestoreAcrossStagesTestBase {
 
 IN_PROC_BROWSER_TEST_P(SessionRestoreAcrossStagesTest, PRE_Restore) {
   SetUpSessionState();
-  browser()->profile()->SaveSessionState();
+  browser()->GetProfile()->SaveSessionState();
   AssertCommandStorageBackendFilesExist(SessionType::kSessionRestore);
 }
 
-IN_PROC_BROWSER_TEST_P(SessionRestoreAcrossStagesTest, Restore) {
+// TODO(crbug.com/553933982): Re-enable this test
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_Restore DISABLED_Restore
+#else
+#define MAYBE_Restore Restore
+#endif
+IN_PROC_BROWSER_TEST_P(SessionRestoreAcrossStagesTest, MAYBE_Restore) {
   AssertSessionState();
-  browser()->profile()->SaveSessionState();
+  browser()->GetProfile()->SaveSessionState();
   AssertCommandStorageBackendFilesExist(SessionType::kSessionRestore);
 }
 
@@ -943,11 +960,11 @@ class TabRestoreAcrossStagesTest : public RestoreAcrossStagesTestBase {
     CloseAboutBlankTabs(browser());
     GURL url1 = GetUrl(1);
     ui_test_utils::NavigateToURLWithDisposition(
-        browser(), url1, WindowOpenDisposition::CURRENT_TAB,
+        browser(), url1, WindowOpenDisposition::kCurrentTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
     GURL url2 = GetUrl(2);
     ui_test_utils::NavigateToURLWithDisposition(
-        browser(), url2, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        browser(), url2, WindowOpenDisposition::kNewForegroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
     EXPECT_EQ(2, browser()->tab_strip_model()->count());
@@ -987,13 +1004,13 @@ class TabRestoreAcrossStagesTest : public RestoreAcrossStagesTestBase {
 
 IN_PROC_BROWSER_TEST_P(TabRestoreAcrossStagesTest, PRE_Restore) {
   SetUpExpectedTabs();
-  browser()->profile()->SaveSessionState();
+  browser()->GetProfile()->SaveSessionState();
   AssertCommandStorageBackendFilesExist(SessionType::kTabRestore);
 }
 
 IN_PROC_BROWSER_TEST_P(TabRestoreAcrossStagesTest, Restore) {
   AssertExpectedTabs();
-  browser()->profile()->SaveSessionState();
+  browser()->GetProfile()->SaveSessionState();
   AssertCommandStorageBackendFilesExist(SessionType::kTabRestore);
 }
 

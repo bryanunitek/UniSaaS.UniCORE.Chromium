@@ -9,12 +9,13 @@
 #include "chrome/browser/extensions/extension_browsertest_platform_delegate.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/test/browser_test_utils.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace extensions {
 
@@ -25,7 +26,7 @@ ExtensionBrowserTestPlatformDelegate::ExtensionBrowserTestPlatformDelegate(
 Profile* ExtensionBrowserTestPlatformDelegate::GetProfile() {
   if (!profile_) {
     if (parent_->browser()) {
-      profile_ = parent_->browser()->profile();
+      profile_ = parent_->browser()->GetProfile();
     } else {
       profile_ = ProfileManager::GetLastUsedProfile();
     }
@@ -56,7 +57,7 @@ const Extension* ExtensionBrowserTestPlatformDelegate::LoadAndLaunchApp(
       /*num_expected_contents=*/uses_guest_view ? 2 : 1);
   apps::AppLaunchParams params(
       app->id(), apps::LaunchContainer::kLaunchContainerNone,
-      WindowOpenDisposition::NEW_WINDOW, apps::LaunchSource::kFromTest);
+      WindowOpenDisposition::kNewWindow, apps::LaunchSource::kFromTest);
   params.command_line = *base::CommandLine::ForCurrentProcess();
   apps::AppServiceProxyFactory::GetForProfile(GetProfile())
       ->BrowserAppLauncher()

@@ -27,6 +27,9 @@
                 "target_platform": "linux"
               },
               "legacy_gclient_config": {
+                "apply_configs": [
+                  "checkout_instrumented_libraries"
+                ],
                 "config": "chromium"
               }
             }
@@ -44,8 +47,7 @@
     }
   },
   "$build/flakiness": {
-    "check_for_flakiness": true,
-    "check_for_flakiness_with_resultdb": true
+    "check_for_flakiness": true
   },
   "$build/siso": {
     "configs": [

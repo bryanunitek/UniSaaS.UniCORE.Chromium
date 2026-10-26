@@ -72,6 +72,11 @@ public interface RenderFrameHost {
     @Nullable RenderFrameHost getMainFrame();
 
     /**
+     * @return Whether the frame is an outermost main frame.
+     */
+    boolean isOutermostMainFrame();
+
+    /**
      * Fetch the canonical URL associated with the fame.
      *
      * @param callback The callback to be notified once the canonical URL has been fetched.
@@ -116,6 +121,14 @@ public interface RenderFrameHost {
 
     /** Notifies the native RenderFrameHost about a user activation from the browser side. */
     void notifyUserActivation();
+
+    /**
+     * Consumes the transient bit of the User Activation v2 state across the frame tree of this
+     * RenderFrameHost.
+     *
+     * @return {@code true} if there was an active transient user activation to consume.
+     */
+    boolean consumeTransientUserActivation();
 
     /** Notifies the native RenderFrameHost about a successful WebAuthn assertion request. */
     void notifyWebAuthnAssertionRequestSucceeded();
@@ -273,4 +286,7 @@ public interface RenderFrameHost {
 
     /** Opens view-source tab for the document last committed in this RenderFrameHost. */
     void viewSource();
+
+    /** Returns whether this frame is cross-origin isolated. */
+    boolean isCrossOriginIsolated();
 }

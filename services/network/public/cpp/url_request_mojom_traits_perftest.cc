@@ -73,9 +73,6 @@ network::ResourceRequest CreateResourceRequest() {
   request.fetch_integrity = "dummy_fetch_integrity";
   request.expected_public_keys = {};
   request.keepalive = true;
-  request.browsing_topics = true;
-  request.ad_auction_headers = true;
-  request.shared_storage_writable_eligible = true;
   request.has_user_gesture = false;
   request.enable_load_timing = true;
   request.enable_upload_progress = false;
@@ -192,7 +189,7 @@ TEST(URLRequestMojomTraitsPerfTest,
              /*matches_all_origins=*/false,
              /*matches_opaque_src=*/false},
             {network::mojom::PermissionsPolicyFeature::
-                 kSharedStorage, /*allowed_origins=*/
+                 kFullscreen, /*allowed_origins=*/
              {*network::OriginWithPossibleWildcards::FromOrigin(
                  url::Origin::Create(GURL(kPolicyUrlA)))},
              /*self_if_matches=*/std::nullopt,

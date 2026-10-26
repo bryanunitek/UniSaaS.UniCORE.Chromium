@@ -8,13 +8,15 @@
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/with_feature_override.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
-#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_util.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry.h"
 #include "components/autofill/core/browser/webdata/mock_autofill_webdata_service.h"
+#include "components/autofill/core/common/autofill_debug_features.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -25,11 +27,16 @@ constexpr int kDbQueryId = 100;
 
 using ::testing::_;
 using ::testing::AllOf;
+using ::testing::Bool;
+using ::testing::Eq;
 using ::testing::Field;
 using ::testing::IsEmpty;
 using ::testing::IsTrue;
 using ::testing::Pair;
 using ::testing::SaveArg;
+using ::testing::Test;
+using ::testing::UnorderedElementsAre;
+using ::testing::WithParamInterface;
 using DbCallback = base::OnceCallback<void(WebDataServiceBase::Handle,
                                            std::unique_ptr<WDTypedResult>)>;
 
@@ -39,14 +46,14 @@ auto HasSingleSuggestionWithMainText(std::u16string text) {
                      Field(&Suggestion::Text::is_primary, IsTrue())));
 }
 
-class AutocompleteSuggestionGeneratorTest : public testing::Test {
+class AutocompleteSuggestionGeneratorTest : public Test {
  protected:
   AutocompleteSuggestionGeneratorTest() {
     web_data_service_ = base::MakeRefCounted<MockAutofillWebDataService>();
     RecreateGenerator();
   }
 
-  AutofillClient& client() { return autofill_client_; }
+  TestAutofillClient& client() { return autofill_client_; }
   base::test::TaskEnvironment& task_environment() { return task_environment_; }
 
   AutocompleteEntry GetAutocompleteEntry(
@@ -62,9 +69,8 @@ class AutocompleteSuggestionGeneratorTest : public testing::Test {
   }
   AutocompleteSuggestionGenerator& generator() { return *generator_; }
   void RecreateGenerator() {
-    generator_ = std::make_unique<AutocompleteSuggestionGenerator>(
-        web_data_service_,
-        base::FeatureList::IsEnabled(features::kAutofillAtMemory));
+    generator_ =
+        std::make_unique<AutocompleteSuggestionGenerator>(web_data_service_);
   }
 
  private:
@@ -108,7 +114,7 @@ TEST_F(AutocompleteSuggestionGeneratorTest, GenerateAutocompleteSuggestions) {
 
   EXPECT_CALL(suggestions_generated_callback,
               Run(Pair(SuggestionGenerator::SuggestionDataSource::kAutocomplete,
-                       testing::UnorderedElementsAre(
+                       UnorderedElementsAre(
                            HasSingleSuggestionWithMainText(u"SomePrefixOne"),
                            HasSingleSuggestionWithMainText(u"SomePrefixTwo")))))
       .WillOnce(SaveArg<0>(&saved_on_suggestions_generated_argument));
@@ -122,46 +128,6 @@ TEST_F(AutocompleteSuggestionGeneratorTest, GenerateAutocompleteSuggestions) {
       }));
 }
 
-// Tests that AutocompleteSuggestionGenerator::OnAutofillValuesReturned does not
-// crash on empty results.
-TEST_F(AutocompleteSuggestionGeneratorTest, EmptyResult) {
-  FormFieldData field_data =
-      test::CreateTestFormField(/*label=*/"", "Some Field Name", "SomePrefix",
-                                FormControlType::kInputText);
-  FormData form_data;
-  form_data.set_url(GURL("https://www.foo.com"));
-  form_data.set_fields({field_data});
-
-  base::MockCallback<
-      base::OnceCallback<void(SuggestionGenerator::ReturnedSuggestions)>>
-      suggestions_generated_callback;
-  SuggestionGenerator::ReturnedSuggestions
-      saved_on_suggestions_generated_argument;
-
-  EXPECT_CALL(
-      *web_data_service(),
-      GetFormValuesForElementName(field_data.name(), field_data.value(), _, _))
-      .WillOnce([&](auto, auto, int, DbCallback callback) {
-        task_environment().GetMainThreadTaskRunner()->PostTask(
-            FROM_HERE,
-            base::BindOnce(std::move(callback), kDbQueryId, nullptr));
-        return kDbQueryId;
-      });
-
-  EXPECT_CALL(suggestions_generated_callback,
-              Run(Pair(SuggestionGenerator::SuggestionDataSource::kAutocomplete,
-                       IsEmpty())))
-      .WillOnce(SaveArg<0>(&saved_on_suggestions_generated_argument));
-  generator().GenerateSuggestions(form_data, field_data,
-                                  /*form_structure=*/nullptr,
-                                  /*trigger_autofill_field=*/nullptr, client(),
-                                  suggestions_generated_callback.Get());
-  EXPECT_TRUE(
-      base::test::RunUntil([&saved_on_suggestions_generated_argument]() {
-        return saved_on_suggestions_generated_argument.first ==
-               SuggestionGenerator::SuggestionDataSource::kAutocomplete;
-      }));
-}
 
 // Tests that AutocompleteSuggestionGenerator does not generate suggestions for
 // CreditCard-classified fields.
@@ -210,78 +176,6 @@ TEST_F(AutocompleteSuggestionGeneratorTest,
                                   suggestions_generated_callback.Get());
 }
 
-TEST_F(AutocompleteSuggestionGeneratorTest,
-       GenerateAutocompleteSuggestionsWithAtMemoryButtonEnabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      /*enabled_features=*/
-      {features::kShowAutocompleteAtMemoryButton, features::kAutofillAtMemory},
-      /*disabled_features=*/{});
-  RecreateGenerator();
-
-  FormFieldData field_data =
-      test::CreateTestFormField(/*label=*/"", "Some Field Name", "SomePrefix",
-                                FormControlType::kInputText);
-  FormData form_data;
-  form_data.set_url(GURL("https://www.foo.com"));
-  form_data.set_fields({field_data});
-
-  std::vector<AutocompleteEntry> expected_values = {
-      GetAutocompleteEntry(field_data.name(), u"SomePrefixOne"),
-      GetAutocompleteEntry(field_data.name(), u"SomePrefixTwo")};
-  std::unique_ptr<WDTypedResult> mocked_results =
-      std::make_unique<WDResult<std::vector<AutocompleteEntry>>>(
-          AUTOFILL_VALUE_RESULT, expected_values);
-
-  base::MockCallback<
-      base::OnceCallback<void(SuggestionGenerator::ReturnedSuggestions)>>
-      suggestions_generated_callback;
-  SuggestionGenerator::ReturnedSuggestions
-      saved_on_suggestions_generated_argument;
-
-  // 1. Simulate the asynchronous response from the WebDataService. We need to
-  // intercept the web data service call and simulate its completion by posting
-  // a task to the main thread with our mocked results.
-  EXPECT_CALL(
-      *web_data_service(),
-      GetFormValuesForElementName(field_data.name(), field_data.value(), _, _))
-      .WillOnce([&](auto, auto, int, DbCallback callback) {
-        task_environment().GetMainThreadTaskRunner()->PostTask(
-            FROM_HERE, base::BindOnce(std::move(callback), kDbQueryId,
-                                      std::move(mocked_results)));
-        return kDbQueryId;
-      });
-
-  auto IsSeparator = []() {
-    return testing::Field(&Suggestion::type,
-                          testing::Eq(SuggestionType::kSeparator));
-  };
-  auto IsAtMemoryButton = []() {
-    return testing::Field(
-        &Suggestion::type,
-        testing::Eq(SuggestionType::kAutocompleteAtMemoryButton));
-  };
-
-  // 2. Set up expectations for GenerateSuggestions and execute it.
-  // We expect that the generated suggestions include a visual separator
-  // followed by an AtMemory button (since both flags are enabled!).
-  EXPECT_CALL(suggestions_generated_callback,
-              Run(Pair(SuggestionGenerator::SuggestionDataSource::kAutocomplete,
-                       testing::UnorderedElementsAre(
-                           HasSingleSuggestionWithMainText(u"SomePrefixOne"),
-                           HasSingleSuggestionWithMainText(u"SomePrefixTwo"),
-                           IsSeparator(), IsAtMemoryButton()))))
-      .WillOnce(SaveArg<0>(&saved_on_suggestions_generated_argument));
-
-  generator().GenerateSuggestions(form_data, field_data,
-                                  /*form_structure=*/nullptr,
-                                  /*trigger_autofill_field=*/nullptr, client(),
-                                  suggestions_generated_callback.Get());
-  EXPECT_TRUE(
-      base::test::RunUntil([&saved_on_suggestions_generated_argument]() {
-        return saved_on_suggestions_generated_argument.second.size() == 4;
-      }));
-}
 
 // Tests that if there are no autocomplete suggestions returned from the
 // database, we do not generate any suggestions at all, even if the "At Memory"
@@ -292,7 +186,8 @@ TEST_F(AutocompleteSuggestionGeneratorTest,
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitWithFeatures(
       /*enabled_features=*/
-      {features::kShowAutocompleteAtMemoryButton, features::kAutofillAtMemory},
+      {features::kShowAutocompleteAtMemoryButton, features::kAutofillAtMemory,
+       features::debug::kAtMemorySkipEnablementChecks},
       /*disabled_features=*/{});
   RecreateGenerator();
 
@@ -341,4 +236,529 @@ TEST_F(AutocompleteSuggestionGeneratorTest,
 }
 
 }  // namespace
+
+class AutocompleteSuggestionGeneratorLabelSensitiveTest
+    : public base::test::WithFeatureOverride,
+      public AutocompleteSuggestionGeneratorTest {
+ public:
+  AutocompleteSuggestionGeneratorLabelSensitiveTest()
+      : base::test::WithFeatureOverride(
+            features::kAutofillLabelSensitiveAutocomplete) {}
+
+  bool IsLabelSensitiveAutocompleteEnabled() const {
+    return IsParamFeatureEnabled();
+  }
+};
+
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
+    AutocompleteSuggestionGeneratorLabelSensitiveTest);
+
+TEST_P(AutocompleteSuggestionGeneratorLabelSensitiveTest,
+       GenerateLabelSensitiveAutocompleteSuggestions) {
+  const std::u16string kLabel = u"Field Label";
+  const std::u16string kName = u"Some Field Name";
+  const std::u16string kPrefix = u"SomePrefix";
+
+  FormFieldData field_data = test::CreateTestFormField(
+      kLabel, kName, kPrefix, FormControlType::kInputText);
+  FormData form_data;
+  form_data.set_url(GURL("https://www.foo.com"));
+  form_data.set_fields({field_data});
+
+  std::unique_ptr<WDTypedResult> mocked_results;
+  if (IsLabelSensitiveAutocompleteEnabled()) {
+    std::vector<AutocompleteSearchResultLabelSensitive> expected_values = {
+        AutocompleteSearchResultLabelSensitive(
+            u"SomePrefixOne", MatchingType::kLabel, kName, kLabel, 1),
+        AutocompleteSearchResultLabelSensitive(
+            u"SomePrefixTwo", MatchingType::kLabel, kName, kLabel, 1)};
+    mocked_results = std::make_unique<
+        WDResult<std::vector<AutocompleteSearchResultLabelSensitive>>>(
+        AUTOCOMPLETE_SEARCH_RESULT, expected_values);
+  } else {
+    std::vector<AutocompleteEntry> expected_values = {
+        GetAutocompleteEntry(kName, u"SomePrefixOne"),
+        GetAutocompleteEntry(kName, u"SomePrefixTwo")};
+    mocked_results = std::make_unique<WDResult<std::vector<AutocompleteEntry>>>(
+        AUTOFILL_VALUE_RESULT, expected_values);
+  }
+
+  base::MockCallback<
+      base::OnceCallback<void(SuggestionGenerator::ReturnedSuggestions)>>
+      suggestions_generated_callback;
+
+  if (IsLabelSensitiveAutocompleteEnabled()) {
+    EXPECT_CALL(*web_data_service(),
+                GetFormValuesForElementNameAndLabel(Eq(kName), Eq(kLabel),
+                                                    Eq(kPrefix), _, _))
+        .WillOnce([&](std::u16string_view, std::u16string_view,
+                      std::u16string_view, int, DbCallback callback) {
+          task_environment().GetMainThreadTaskRunner()->PostTask(
+              FROM_HERE, base::BindOnce(std::move(callback), kDbQueryId,
+                                        std::move(mocked_results)));
+          return kDbQueryId;
+        });
+  } else {
+    EXPECT_CALL(*web_data_service(),
+                GetFormValuesForElementName(kName, kPrefix, _, _))
+        .WillOnce([&](auto, auto, int, DbCallback callback) {
+          task_environment().GetMainThreadTaskRunner()->PostTask(
+              FROM_HERE, base::BindOnce(std::move(callback), kDbQueryId,
+                                        std::move(mocked_results)));
+          return kDbQueryId;
+        });
+  }
+
+  base::RunLoop loop;
+  EXPECT_CALL(suggestions_generated_callback,
+              Run(Pair(SuggestionGenerator::SuggestionDataSource::kAutocomplete,
+                       UnorderedElementsAre(
+                           HasSingleSuggestionWithMainText(u"SomePrefixOne"),
+                           HasSingleSuggestionWithMainText(u"SomePrefixTwo")))))
+      .WillOnce([&loop]() { loop.Quit(); });
+
+  generator().GenerateSuggestions(form_data, field_data,
+                                  /*form_structure=*/nullptr,
+                                  /*trigger_autofill_field=*/nullptr, client(),
+                                  suggestions_generated_callback.Get());
+
+  loop.Run();
+}
+
+// Tests that if the only entry returned exactly matches the user-typed prefix,
+// it is suppressed (in both legacy and label-sensitive modes).
+TEST_P(AutocompleteSuggestionGeneratorLabelSensitiveTest,
+       SingleExactPrefixMatchNotOffered) {
+  const std::u16string kLabel = u"Label";
+  const std::u16string kName = u"Some Field Name";
+  const std::u16string kPrefix = u"ExactMatch";
+
+  FormFieldData field_data = test::CreateTestFormField(
+      kLabel, kName, kPrefix, FormControlType::kInputText);
+  FormData form_data;
+  form_data.set_url(GURL("https://www.foo.com"));
+  form_data.set_fields({field_data});
+
+  std::unique_ptr<WDTypedResult> mocked_results;
+  if (IsLabelSensitiveAutocompleteEnabled()) {
+    std::vector<AutocompleteSearchResultLabelSensitive> expected_values = {
+        AutocompleteSearchResultLabelSensitive(
+            kPrefix, MatchingType::kNameAndLabel, kName, kLabel, 1)};
+    mocked_results = std::make_unique<
+        WDResult<std::vector<AutocompleteSearchResultLabelSensitive>>>(
+        AUTOCOMPLETE_SEARCH_RESULT, expected_values);
+  } else {
+    std::vector<AutocompleteEntry> expected_values = {
+        GetAutocompleteEntry(kName, kPrefix)};
+    mocked_results = std::make_unique<WDResult<std::vector<AutocompleteEntry>>>(
+        AUTOFILL_VALUE_RESULT, expected_values);
+  }
+
+  base::MockCallback<
+      base::OnceCallback<void(SuggestionGenerator::ReturnedSuggestions)>>
+      suggestions_generated_callback;
+  SuggestionGenerator::ReturnedSuggestions
+      saved_on_suggestions_generated_argument;
+
+  if (IsLabelSensitiveAutocompleteEnabled()) {
+    EXPECT_CALL(*web_data_service(),
+                GetFormValuesForElementNameAndLabel(Eq(kName), Eq(kLabel),
+                                                    Eq(kPrefix), _, _))
+        .WillOnce([&](std::u16string_view, std::u16string_view,
+                      std::u16string_view, int, DbCallback callback) {
+          task_environment().GetMainThreadTaskRunner()->PostTask(
+              FROM_HERE, base::BindOnce(std::move(callback), kDbQueryId,
+                                        std::move(mocked_results)));
+          return kDbQueryId;
+        });
+  } else {
+    EXPECT_CALL(*web_data_service(),
+                GetFormValuesForElementName(kName, kPrefix, _, _))
+        .WillOnce([&](auto, auto, int, DbCallback callback) {
+          task_environment().GetMainThreadTaskRunner()->PostTask(
+              FROM_HERE, base::BindOnce(std::move(callback), kDbQueryId,
+                                        std::move(mocked_results)));
+          return kDbQueryId;
+        });
+  }
+
+  EXPECT_CALL(suggestions_generated_callback,
+              Run(Pair(SuggestionGenerator::SuggestionDataSource::kAutocomplete,
+                       IsEmpty())))
+      .WillOnce(SaveArg<0>(&saved_on_suggestions_generated_argument));
+
+  generator().GenerateSuggestions(form_data, field_data,
+                                  /*form_structure=*/nullptr,
+                                  /*trigger_autofill_field=*/nullptr, client(),
+                                  suggestions_generated_callback.Get());
+  EXPECT_TRUE(
+      base::test::RunUntil([&saved_on_suggestions_generated_argument]() {
+        return saved_on_suggestions_generated_argument.first ==
+               SuggestionGenerator::SuggestionDataSource::kAutocomplete;
+      }));
+}
+
+// Tests that AutocompleteSuggestionGenerator::OnAutofillValuesReturned does not
+// crash on null results (in both legacy and label-sensitive modes).
+TEST_P(AutocompleteSuggestionGeneratorLabelSensitiveTest, NullResult) {
+  const std::u16string kLabel = u"Label";
+  const std::u16string kName = u"Some Field Name";
+  const std::u16string kPrefix = u"SomePrefix";
+
+  FormFieldData field_data = test::CreateTestFormField(
+      kLabel, kName, kPrefix, FormControlType::kInputText);
+  FormData form_data;
+  form_data.set_url(GURL("https://www.foo.com"));
+  form_data.set_fields({field_data});
+
+  base::MockCallback<
+      base::OnceCallback<void(SuggestionGenerator::ReturnedSuggestions)>>
+      suggestions_generated_callback;
+  SuggestionGenerator::ReturnedSuggestions
+      saved_on_suggestions_generated_argument;
+
+  if (IsLabelSensitiveAutocompleteEnabled()) {
+    EXPECT_CALL(*web_data_service(),
+                GetFormValuesForElementNameAndLabel(Eq(kName), Eq(kLabel),
+                                                    Eq(kPrefix), _, _))
+        .WillOnce([&](std::u16string_view, std::u16string_view,
+                      std::u16string_view, int, DbCallback callback) {
+          task_environment().GetMainThreadTaskRunner()->PostTask(
+              FROM_HERE,
+              base::BindOnce(std::move(callback), kDbQueryId, nullptr));
+          return kDbQueryId;
+        });
+  } else {
+    EXPECT_CALL(*web_data_service(),
+                GetFormValuesForElementName(kName, kPrefix, _, _))
+        .WillOnce([&](auto, auto, int, DbCallback callback) {
+          task_environment().GetMainThreadTaskRunner()->PostTask(
+              FROM_HERE,
+              base::BindOnce(std::move(callback), kDbQueryId, nullptr));
+          return kDbQueryId;
+        });
+  }
+
+  EXPECT_CALL(suggestions_generated_callback,
+              Run(Pair(SuggestionGenerator::SuggestionDataSource::kAutocomplete,
+                       IsEmpty())))
+      .WillOnce(SaveArg<0>(&saved_on_suggestions_generated_argument));
+
+  generator().GenerateSuggestions(form_data, field_data,
+                                  /*form_structure=*/nullptr,
+                                  /*trigger_autofill_field=*/nullptr, client(),
+                                  suggestions_generated_callback.Get());
+  EXPECT_TRUE(
+      base::test::RunUntil([&saved_on_suggestions_generated_argument]() {
+        return saved_on_suggestions_generated_argument.first ==
+               SuggestionGenerator::SuggestionDataSource::kAutocomplete;
+      }));
+}
+
+// Tests that AtMemory button and separator are properly appended when
+// suggestions are returned (in both legacy and label-sensitive modes).
+TEST_P(AutocompleteSuggestionGeneratorLabelSensitiveTest,
+       AtMemoryButton_AppendedWithSuggestions) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/
+      {features::kShowAutocompleteAtMemoryButton, features::kAutofillAtMemory,
+       features::debug::kAtMemorySkipEnablementChecks},
+      /*disabled_features=*/{});
+  RecreateGenerator();
+
+  const std::u16string kLabel = u"Label";
+  const std::u16string kName = u"Some Field Name";
+  const std::u16string kPrefix = u"SomePrefix";
+
+  FormFieldData field_data = test::CreateTestFormField(
+      kLabel, kName, kPrefix, FormControlType::kInputText);
+  FormData form_data;
+  form_data.set_url(GURL("https://www.foo.com"));
+  form_data.set_fields({field_data});
+
+  std::unique_ptr<WDTypedResult> mocked_results;
+  if (IsLabelSensitiveAutocompleteEnabled()) {
+    std::vector<AutocompleteSearchResultLabelSensitive> expected_values = {
+        AutocompleteSearchResultLabelSensitive(
+            u"SomePrefixOne", MatchingType::kLabel, kName, kLabel, 1),
+        AutocompleteSearchResultLabelSensitive(
+            u"SomePrefixTwo", MatchingType::kName, kName, kLabel, 1)};
+    mocked_results = std::make_unique<
+        WDResult<std::vector<AutocompleteSearchResultLabelSensitive>>>(
+        AUTOCOMPLETE_SEARCH_RESULT, expected_values);
+  } else {
+    std::vector<AutocompleteEntry> expected_values = {
+        GetAutocompleteEntry(kName, u"SomePrefixOne"),
+        GetAutocompleteEntry(kName, u"SomePrefixTwo")};
+    mocked_results = std::make_unique<WDResult<std::vector<AutocompleteEntry>>>(
+        AUTOFILL_VALUE_RESULT, expected_values);
+  }
+
+  base::MockCallback<
+      base::OnceCallback<void(SuggestionGenerator::ReturnedSuggestions)>>
+      suggestions_generated_callback;
+  SuggestionGenerator::ReturnedSuggestions
+      saved_on_suggestions_generated_argument;
+
+  if (IsLabelSensitiveAutocompleteEnabled()) {
+    EXPECT_CALL(*web_data_service(),
+                GetFormValuesForElementNameAndLabel(Eq(kName), Eq(kLabel),
+                                                    Eq(kPrefix), _, _))
+        .WillOnce([&](std::u16string_view, std::u16string_view,
+                      std::u16string_view, int, DbCallback callback) {
+          task_environment().GetMainThreadTaskRunner()->PostTask(
+              FROM_HERE, base::BindOnce(std::move(callback), kDbQueryId,
+                                        std::move(mocked_results)));
+          return kDbQueryId;
+        });
+  } else {
+    EXPECT_CALL(*web_data_service(),
+                GetFormValuesForElementName(kName, kPrefix, _, _))
+        .WillOnce([&](auto, auto, int, DbCallback callback) {
+          task_environment().GetMainThreadTaskRunner()->PostTask(
+              FROM_HERE, base::BindOnce(std::move(callback), kDbQueryId,
+                                        std::move(mocked_results)));
+          return kDbQueryId;
+        });
+  }
+
+  auto IsSeparator = []() {
+    return Field(&Suggestion::type, SuggestionType::kSeparator);
+  };
+  auto IsAtMemoryButton = []() {
+    return Field(&Suggestion::type,
+                 SuggestionType::kAutocompleteAtMemoryButton);
+  };
+
+  EXPECT_CALL(suggestions_generated_callback,
+              Run(Pair(SuggestionGenerator::SuggestionDataSource::kAutocomplete,
+                       UnorderedElementsAre(
+                           HasSingleSuggestionWithMainText(u"SomePrefixOne"),
+                           HasSingleSuggestionWithMainText(u"SomePrefixTwo"),
+                           IsSeparator(), IsAtMemoryButton()))))
+      .WillOnce(SaveArg<0>(&saved_on_suggestions_generated_argument));
+
+  generator().GenerateSuggestions(form_data, field_data,
+                                  /*form_structure=*/nullptr,
+                                  /*trigger_autofill_field=*/nullptr, client(),
+                                  suggestions_generated_callback.Get());
+  EXPECT_TRUE(
+      base::test::RunUntil([&saved_on_suggestions_generated_argument]() {
+        return saved_on_suggestions_generated_argument.second.size() == 4;
+      }));
+}
+
+// Tests that autocomplete suggestions are blocked for contact info fields when
+// the contact_info category is blocked by policy for the current origin.
+TEST_F(AutocompleteSuggestionGeneratorTest,
+       GenerateAutocompleteSuggestions_BlockedByPolicy_ContactInfo) {
+  base::test::ScopedFeatureList feature_list{
+      features::kAutofillEnableAutofillSettingsEnterprisePolicy};
+  FormFieldData field_data = test::CreateTestFormField(
+      /*label=*/"", "First Name", "SomePrefix", FormControlType::kInputText);
+  FormData form_data;
+  form_data.set_url(GURL("https://www.foo.com"));
+  form_data.set_fields({field_data});
+
+  AutofillField autofill_field(field_data);
+  autofill_field.SetTypeTo(AutofillType(NAME_FIRST), std::nullopt);
+
+  // Block contact_info policy category for the origin.
+  client().SetAutofillTypeBlockedByPolicy(
+      AutofillClient::AutofillPolicyDataCategory::kContactInfo, true);
+
+  base::MockCallback<
+      base::OnceCallback<void(SuggestionGenerator::ReturnedSuggestions)>>
+      suggestions_generated_callback;
+
+  // Expect an empty list of suggestions because the field's policy category is
+  // blocked.
+  EXPECT_CALL(suggestions_generated_callback,
+              Run(Pair(SuggestionGenerator::SuggestionDataSource::kAutocomplete,
+                       IsEmpty())));
+
+  generator().GenerateSuggestions(form_data, field_data,
+                                  /*form_structure=*/nullptr, &autofill_field,
+                                  client(),
+                                  suggestions_generated_callback.Get());
+}
+
+// Tests that autocomplete suggestions are NOT blocked for generic /
+// unclassified fields (or when trigger_autofill_field is null) when
+// contact_info is blocked.
+TEST_F(
+    AutocompleteSuggestionGeneratorTest,
+    GenerateAutocompleteSuggestions_AllowedForUncategorizedFieldsWhenContactInfoBlocked) {
+  base::test::ScopedFeatureList feature_list{
+      features::kAutofillEnableAutofillSettingsEnterprisePolicy};
+  FormFieldData field_data = test::CreateTestFormField(
+      /*label=*/"", "Search", "SomePrefix", FormControlType::kInputText);
+  FormData form_data;
+  form_data.set_url(GURL("https://www.foo.com"));
+  form_data.set_fields({field_data});
+
+  // Block contact_info policy category for the origin.
+  client().SetAutofillTypeBlockedByPolicy(
+      AutofillClient::AutofillPolicyDataCategory::kContactInfo, true);
+
+  std::vector<AutocompleteEntry> expected_values = {
+      GetAutocompleteEntry(field_data.name(), u"SomePrefixOne")};
+  std::unique_ptr<WDTypedResult> mocked_results =
+      std::make_unique<WDResult<std::vector<AutocompleteEntry>>>(
+          AUTOFILL_VALUE_RESULT, expected_values);
+
+  EXPECT_CALL(
+      *web_data_service(),
+      GetFormValuesForElementName(field_data.name(), field_data.value(), _, _))
+      .WillOnce([&](auto, auto, int, DbCallback callback) {
+        task_environment().GetMainThreadTaskRunner()->PostTask(
+            FROM_HERE, base::BindOnce(std::move(callback), kDbQueryId,
+                                      std::move(mocked_results)));
+        return kDbQueryId;
+      });
+
+  base::RunLoop loop;
+  base::MockCallback<
+      base::OnceCallback<void(SuggestionGenerator::ReturnedSuggestions)>>
+      suggestions_generated_callback;
+
+  EXPECT_CALL(suggestions_generated_callback,
+              Run(Pair(SuggestionGenerator::SuggestionDataSource::kAutocomplete,
+                       UnorderedElementsAre(
+                           HasSingleSuggestionWithMainText(u"SomePrefixOne")))))
+      .WillOnce([&loop]() { loop.Quit(); });
+
+  generator().GenerateSuggestions(form_data, field_data,
+                                  /*form_structure=*/nullptr,
+                                  /*trigger_autofill_field=*/nullptr, client(),
+                                  suggestions_generated_callback.Get());
+
+  loop.Run();
+}
+
+// Tests that autocomplete suggestions are blocked for payment-specific fields
+// (e.g. CREDIT_CARD_NAME_FULL) when the payments policy category is blocked.
+TEST_F(AutocompleteSuggestionGeneratorTest,
+       GenerateAutocompleteSuggestions_BlockedByPolicy_Payments) {
+  base::test::ScopedFeatureList feature_list{
+      features::kAutofillEnableAutofillSettingsEnterprisePolicy};
+  FormFieldData field_data = test::CreateTestFormField(
+      /*label=*/"", "Name on Card", "SomePrefix", FormControlType::kInputText);
+  FormData form_data;
+  form_data.set_url(GURL("https://www.foo.com"));
+  form_data.set_fields({field_data});
+
+  AutofillField autofill_field(field_data);
+  autofill_field.SetTypeTo(AutofillType(CREDIT_CARD_NAME_FULL), std::nullopt);
+
+  // Block only payments category by policy.
+  client().SetAutofillTypeBlockedByPolicy(
+      AutofillClient::AutofillPolicyDataCategory::kPayments, true);
+
+  base::MockCallback<
+      base::OnceCallback<void(SuggestionGenerator::ReturnedSuggestions)>>
+      suggestions_generated_callback;
+
+  // Expect empty suggestions because CREDIT_CARD_NAME_FULL maps to kPayments.
+  EXPECT_CALL(suggestions_generated_callback,
+              Run(Pair(SuggestionGenerator::SuggestionDataSource::kAutocomplete,
+                       IsEmpty())));
+
+  generator().GenerateSuggestions(form_data, field_data,
+                                  /*form_structure=*/nullptr, &autofill_field,
+                                  client(),
+                                  suggestions_generated_callback.Get());
+}
+
+// Tests that autocomplete suggestions remain active on address fields (e.g.
+// NAME_FIRST) when a different category (e.g. payments) is blocked by policy.
+TEST_F(AutocompleteSuggestionGeneratorTest,
+       GenerateAutocompleteSuggestions_AllowedWhenDifferentCategoryBlocked) {
+  base::test::ScopedFeatureList feature_list{
+      features::kAutofillEnableAutofillSettingsEnterprisePolicy};
+  FormFieldData field_data = test::CreateTestFormField(
+      /*label=*/"", "First Name", "SomePrefix", FormControlType::kInputText);
+  FormData form_data;
+  form_data.set_url(GURL("https://www.foo.com"));
+  form_data.set_fields({field_data});
+
+  AutofillField autofill_field(field_data);
+  autofill_field.SetTypeTo(AutofillType(NAME_FIRST), std::nullopt);
+
+  // Block payments by policy. Address/contact_info remains allowed.
+  client().SetAutofillTypeBlockedByPolicy(
+      AutofillClient::AutofillPolicyDataCategory::kPayments, true);
+
+  std::vector<AutocompleteEntry> expected_values = {
+      GetAutocompleteEntry(field_data.name(), u"SomePrefixOne")};
+  std::unique_ptr<WDTypedResult> mocked_results =
+      std::make_unique<WDResult<std::vector<AutocompleteEntry>>>(
+          AUTOFILL_VALUE_RESULT, expected_values);
+
+  EXPECT_CALL(
+      *web_data_service(),
+      GetFormValuesForElementName(field_data.name(), field_data.value(), _, _))
+      .WillOnce([&](auto, auto, int, DbCallback callback) {
+        task_environment().GetMainThreadTaskRunner()->PostTask(
+            FROM_HERE, base::BindOnce(std::move(callback), kDbQueryId,
+                                      std::move(mocked_results)));
+        return kDbQueryId;
+      });
+
+  base::RunLoop loop;
+  base::MockCallback<
+      base::OnceCallback<void(SuggestionGenerator::ReturnedSuggestions)>>
+      suggestions_generated_callback;
+
+  // Expect suggestions to be generated successfully since NAME_FIRST is
+  // contact_info.
+  EXPECT_CALL(suggestions_generated_callback,
+              Run(Pair(SuggestionGenerator::SuggestionDataSource::kAutocomplete,
+                       UnorderedElementsAre(
+                           HasSingleSuggestionWithMainText(u"SomePrefixOne")))))
+      .WillOnce([&loop]() { loop.Quit(); });
+
+  generator().GenerateSuggestions(form_data, field_data,
+                                  /*form_structure=*/nullptr, &autofill_field,
+                                  client(),
+                                  suggestions_generated_callback.Get());
+
+  loop.Run();
+}
+
+// Tests that if a field maps to multiple categories (e.g. NAME_FIRST maps to
+// both contact_info and identity_docs), autocomplete suggestions are blocked if
+// ANY category is blocked by policy (here, only identity_docs).
+TEST_F(AutocompleteSuggestionGeneratorTest,
+       GenerateAutocompleteSuggestions_BlockedByPolicy_MultiCategoryField) {
+  base::test::ScopedFeatureList feature_list{
+      features::kAutofillEnableAutofillSettingsEnterprisePolicy};
+  FormFieldData field_data = test::CreateTestFormField(
+      /*label=*/"", "First Name", "SomePrefix", FormControlType::kInputText);
+  FormData form_data;
+  form_data.set_url(GURL("https://www.foo.com"));
+  form_data.set_fields({field_data});
+
+  AutofillField autofill_field(field_data);
+  autofill_field.SetTypeTo(AutofillType(NAME_FIRST), std::nullopt);
+
+  // Block only identity_docs (contact_info remains unblocked).
+  client().SetAutofillTypeBlockedByPolicy(
+      AutofillClient::AutofillPolicyDataCategory::kIdentityDocs, true);
+
+  base::MockCallback<
+      base::OnceCallback<void(SuggestionGenerator::ReturnedSuggestions)>>
+      suggestions_generated_callback;
+
+  EXPECT_CALL(suggestions_generated_callback,
+              Run(Pair(SuggestionGenerator::SuggestionDataSource::kAutocomplete,
+                       IsEmpty())));
+
+  generator().GenerateSuggestions(form_data, field_data,
+                                  /*form_structure=*/nullptr, &autofill_field,
+                                  client(),
+                                  suggestions_generated_callback.Get());
+}
+
 }  // namespace autofill

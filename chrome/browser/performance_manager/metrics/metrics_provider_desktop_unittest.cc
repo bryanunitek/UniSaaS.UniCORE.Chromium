@@ -4,6 +4,8 @@
 
 #include "chrome/browser/performance_manager/metrics/metrics_provider_desktop.h"
 
+#include "base/byte_size.h"
+#include "base/system/sys_info.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
@@ -28,11 +30,10 @@ class PerformanceManagerMetricsProviderDesktopTest : public testing::Test {
                                        MemorySaverModeState::kDisabled));
   }
 
-  void SetDiskMetricsForTesting(int64_t free_bytes, int64_t total_bytes) {
-    provider()->SetDiskMetricsForTesting(
-        performance_manager::MetricsProviderDesktop::DiskMetrics{
-            .free_bytes = base::ByteCount(0),
-            .total_bytes = base::ByteCount(0)});
+  void SetDiskMetricsForTesting(base::SysInfo::DiskSpaceInfo disk_metrics) {
+    provider()->pending_disk_metrics_ = disk_metrics;
+    // Cancel any pending disk checks.
+    provider()->weak_factory_.InvalidateWeakPtrs();
   }
 
   void SetBatterySaverEnabled(bool enabled) {
@@ -88,7 +89,6 @@ class PerformanceManagerMetricsProviderDesktopTest : public testing::Test {
   }
 
   void TearDown() override {
-    provider()->SetDiskMetricsForTesting(std::nullopt);
     // Tests may teardown the environment before this is called to make some
     // assertions.
     if (user_performance_tuning_env_) {
@@ -313,9 +313,10 @@ TEST_F(PerformanceManagerMetricsProviderDesktopTest,
 TEST_F(PerformanceManagerMetricsProviderDesktopTest,
        RecordDiskMetricsWithZeroTotal) {
   InitProvider();
-  SetDiskMetricsForTesting(0, 0);
-  // The disk metrics task is posted during InitProvider. Run until it's done.
-  RunUntilIdle();
+  SetDiskMetricsForTesting(base::SysInfo::DiskSpaceInfo{
+      .total = base::ByteSize(0),
+      .available = base::ByteSize(0),
+  });
 
   base::HistogramTester tester;
   provider()->ProvideCurrentSessionData(nullptr);

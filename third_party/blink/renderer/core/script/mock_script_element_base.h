@@ -41,7 +41,6 @@ class MockScriptElementBase : public GarbageCollected<MockScriptElementBase>,
   MOCK_METHOD0(ChildTextContent, String());
   MOCK_CONST_METHOD0(ScriptTextInternalSlot, String());
   MOCK_CONST_METHOD0(HasSourceAttribute, bool());
-  MOCK_CONST_METHOD0(HasAttributionsrcAttribute, bool());
   MOCK_CONST_METHOD0(IsConnected, bool());
   MOCK_CONST_METHOD0(HasChildren, bool());
   MOCK_CONST_METHOD0(GetNonceForElement, const AtomicString&());
@@ -49,7 +48,7 @@ class MockScriptElementBase : public GarbageCollected<MockScriptElementBase>,
   MOCK_CONST_METHOD0(InitiatorName, AtomicString());
   MOCK_CONST_METHOD0(IsPotentiallyRenderBlocking, bool());
   MOCK_METHOD3(AllowInlineScriptForCSP,
-               bool(const AtomicString&, const OrdinalNumber&, const String&));
+               bool(const AtomicString&, const TextPosition&, const String&));
   MOCK_CONST_METHOD0(GetDocument, Document&());
   MOCK_CONST_METHOD0(GetExecutionContext, ExecutionContext*());
   MOCK_METHOD0(AsV8HTMLOrSVGScriptElement, V8HTMLOrSVGScriptElement*());

@@ -13,6 +13,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
+#include "base/test/bind.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
@@ -29,9 +30,10 @@
 #include "chrome/browser/push_messaging/push_messaging_app_identifier.h"
 #include "chrome/browser/push_messaging/push_messaging_service_factory.h"
 #include "chrome/browser/push_messaging/push_messaging_service_impl.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
@@ -72,6 +74,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/service_worker_test_helpers.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "content/public/test/test_utils.h"
 #include "extensions/test/result_catcher.h"
 #include "net/base/net_errors.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -223,10 +226,11 @@ class ServiceWorkerVersionStoppedRunningWaiter
 class IsolatedWebAppBrowserTest : public IsolatedWebAppBrowserTestHarness {
  protected:
   content::StoragePartition* default_storage_partition() {
-    return browser()->profile()->GetDefaultStoragePartition();
+    return browser()->GetProfile()->GetDefaultStoragePartition();
   }
 
-  content::RenderFrameHost* GetPrimaryMainFrame(Browser* browser) {
+  content::RenderFrameHost* GetPrimaryMainFrame(
+      BrowserWindowInterface* browser) {
     return browser->tab_strip_model()
         ->GetActiveWebContents()
         ->GetPrimaryMainFrame();
@@ -331,7 +335,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowserTest, SameOriginWindowOpen) {
   navigation_observer.StartWatchingNewWebContents();
   BrowserWaiter browser_waiter(nullptr);
   ASSERT_TRUE(ExecJs(app_frame, "window.open('/popup')"));
-  Browser* popup = browser_waiter.AwaitAdded(FROM_HERE);
+  BrowserWindowInterface* popup = browser_waiter.AwaitAdded(FROM_HERE);
   navigation_observer.WaitForNavigationFinished();
 
   ASSERT_NE(popup, nullptr);
@@ -397,7 +401,7 @@ IN_PROC_BROWSER_TEST_F(
           .BuildBundle();
   ASSERT_OK_AND_ASSIGN(IsolatedWebAppUrlInfo url_info, app->Install(profile()));
 
-  WebAppProvider::GetForTest(browser()->profile())
+  WebAppProvider::GetForTest(browser()->GetProfile())
       ->sync_bridge_unsafe()
       .SetAppUserDisplayModeForTesting(url_info.app_id(),
                                        mojom::UserDisplayMode::kBrowser);
@@ -490,12 +494,11 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowserTest, NoOpenInChrome) {
   content::RenderFrameHost* app_frame = OpenApp(url_info.app_id());
   BrowserWindowInterface* app_browser = GetBrowserFromFrame(app_frame);
 
-  EXPECT_FALSE(app_browser->GetBrowserForMigrationOnly()
-                   ->command_controller()
+  EXPECT_FALSE(chrome::BrowserCommandController::From(app_browser)
                    ->IsCommandEnabled(IDC_OPEN_IN_CHROME));
 
   auto app_menu_model = std::make_unique<WebAppMenuModel>(
-      /*provider=*/nullptr, app_browser->GetBrowserForMigrationOnly());
+      /*provider=*/nullptr, app_browser);
   app_menu_model->Init();
   ui::MenuModel* model = app_menu_model.get();
   size_t index = 0;
@@ -1030,7 +1033,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppBrowserCookieTest, Cookies) {
       isolated_web_app_dev_server().GetURL("localhost", "/cookie.html");
   GURL non_app_url = embedded_https_test_server().GetURL(
       kNonAppHost, "/web_apps/simple_isolated_app/cookie.html");
-  CookieSettingsFactory::GetForProfile(browser()->profile())
+  CookieSettingsFactory::GetForProfile(browser()->GetProfile())
       ->SetCookieSetting(non_app_url, CONTENT_SETTING_ALLOW);
 
   // Load a page that sets a cookie, then create a cross-origin iframe that
@@ -1153,7 +1156,7 @@ class IsolatedWebAppBrowserServiceWorkerPushTest
     IsolatedWebAppBrowserServiceWorkerTest::SetUpOnMainThread();
 
     notification_tester_ = std::make_unique<NotificationDisplayServiceTester>(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   void SendMessageAndWaitUntilHandled(
@@ -1190,7 +1193,7 @@ class IsolatedWebAppBrowserServiceWorkerPushTest
       int64_t service_worker_registration_id) {
     push_messaging::AppIdentifier app_identifier =
         PushMessagingAppIdentifier::FindByServiceWorker(
-            browser()->profile(), app_url(), service_worker_registration_id);
+            browser()->GetProfile(), app_url(), service_worker_registration_id);
     return app_identifier;
   }
 
@@ -1286,7 +1289,8 @@ var kApplicationServerKey = new Uint8Array([
   message.sender_id = GetTestApplicationServerKey();
   message.raw_data = "test";
   message.decrypted = true;
-  SendMessageAndWaitUntilHandled(browser()->profile(), app_identifier, message);
+  SendMessageAndWaitUntilHandled(browser()->GetProfile(), app_identifier,
+                                 message);
 
   version_started_waiter.AwaitVersionStartedRunning();
 
@@ -1835,6 +1839,96 @@ IN_PROC_BROWSER_TEST_P(IsolatedWebAppLaunchHandlingBrowserTest,
   EXPECT_FALSE(AppBrowserController::FindForWebApp(*profile(),
                                                    target_url_info.app_id()));
   EXPECT_EQ(browsers_before, GlobalBrowserCollection::GetInstance()->GetSize());
+}
+
+IN_PROC_BROWSER_TEST_P(IsolatedWebAppLaunchHandlingBrowserTest,
+                       CrossOriginWindowOpenPopup) {
+  std::unique_ptr<ScopedBundledIsolatedWebApp> source_app =
+      IsolatedWebAppBuilder(ManifestBuilder()).BuildBundle();
+  ASSERT_OK_AND_ASSIGN(IsolatedWebAppUrlInfo source_url_info,
+                       source_app->Install(profile()));
+
+  std::unique_ptr<ScopedBundledIsolatedWebApp> target_app =
+      IsolatedWebAppBuilder(
+          ManifestBuilder().SetLaunchHandlerClientMode(GetParam()))
+          .AddHtml("/something/weird.html", "meow")
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(IsolatedWebAppUrlInfo target_url_info,
+                       target_app->Install(profile()));
+
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(
+          OpenIsolatedWebApp(profile(), source_url_info.app_id()));
+
+  const size_t browsers_before =
+      GlobalBrowserCollection::GetInstance()->GetSize();
+
+  const GURL target_url =
+      target_url_info.origin().GetURL().Resolve("/something/weird.html");
+
+  std::unique_ptr<content::WebContentsDestroyedWatcher> destroyed_watcher;
+  base::CallbackListSubscription creation_subscription =
+      content::RegisterWebContentsCreationCallback(
+          base::BindLambdaForTesting([&](content::WebContents* wc) {
+            destroyed_watcher =
+                std::make_unique<content::WebContentsDestroyedWatcher>(wc);
+          }));
+  ASSERT_TRUE(content::ExecJs(
+      web_contents,
+      content::JsReplace("window.open($1, '_blank', 'popup')", target_url)));
+  ASSERT_TRUE(destroyed_watcher);
+  destroyed_watcher->Wait();
+
+  // The cross-origin `window.open()` popup must not open a window for the
+  // target app.
+  EXPECT_FALSE(AppBrowserController::FindForWebApp(*profile(),
+                                                   target_url_info.app_id()));
+  EXPECT_EQ(browsers_before, GlobalBrowserCollection::GetInstance()->GetSize());
+}
+
+IN_PROC_BROWSER_TEST_P(IsolatedWebAppLaunchHandlingBrowserTest,
+                       CrossOriginWindowOpenAboutBlankAndNavigatePopup) {
+  std::unique_ptr<ScopedBundledIsolatedWebApp> source_app =
+      IsolatedWebAppBuilder(ManifestBuilder()).BuildBundle();
+  ASSERT_OK_AND_ASSIGN(IsolatedWebAppUrlInfo source_url_info,
+                       source_app->Install(profile()));
+
+  std::unique_ptr<ScopedBundledIsolatedWebApp> target_app =
+      IsolatedWebAppBuilder(
+          ManifestBuilder().SetLaunchHandlerClientMode(GetParam()))
+          .AddHtml("/something/weird.html", "meow")
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(IsolatedWebAppUrlInfo target_url_info,
+                       target_app->Install(profile()));
+
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(
+          OpenIsolatedWebApp(profile(), source_url_info.app_id()));
+
+  const GURL target_url =
+      target_url_info.origin().GetURL().Resolve("/something/weird.html");
+
+  content::WebContentsAddedObserver web_contents_added_observer;
+  ASSERT_TRUE(content::ExecJs(
+      web_contents,
+      "window.popup = window.open('about:blank', '_blank', 'popup');"));
+  content::WebContents* popup_contents =
+      web_contents_added_observer.GetWebContents();
+  ASSERT_TRUE(popup_contents);
+
+  content::TestNavigationObserver nav_observer(popup_contents);
+  ASSERT_TRUE(content::ExecJs(
+      web_contents,
+      content::JsReplace("window.popup.location.href = $1;", target_url)));
+  nav_observer.Wait();
+
+  // The navigation to the cross-origin IWA must be blocked.
+  EXPECT_FALSE(nav_observer.last_navigation_succeeded());
+  EXPECT_EQ(net::ERR_BLOCKED_BY_CLIENT, nav_observer.last_net_error_code());
+
+  // No window for the target app should be created.
+  EXPECT_FALSE(AppBrowserController::FindForWebApp(*profile(),
+                                                   target_url_info.app_id()));
 }
 
 IN_PROC_BROWSER_TEST_P(IsolatedWebAppLaunchHandlingBrowserTest, PlainLaunch) {

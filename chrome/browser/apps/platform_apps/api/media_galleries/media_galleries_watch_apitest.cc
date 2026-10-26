@@ -20,7 +20,6 @@
 #include "chrome/browser/media_galleries/media_file_system_registry.h"
 #include "chrome/browser/media_galleries/media_galleries_preferences.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_paths.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/common/isolated_world_ids.h"
@@ -138,7 +137,7 @@ class MediaGalleriesGalleryWatchApiTest : public extensions::ExtensionApiTest {
   void GetBackgroundHostForTestExtension() {
     ASSERT_TRUE(extension_);
     background_main_frame_ =
-        extensions::ProcessManager::Get(browser()->profile())
+        extensions::ProcessManager::Get(browser()->GetProfile())
             ->GetBackgroundHostForExtension(extension_->id())
             ->main_frame_host();
     ASSERT_TRUE(background_main_frame_);
@@ -147,7 +146,7 @@ class MediaGalleriesGalleryWatchApiTest : public extensions::ExtensionApiTest {
   void CreateTestGallery() {
     MediaGalleriesPreferences* preferences =
         g_browser_process->media_file_system_registry()->GetPreferences(
-            browser()->profile());
+            browser()->GetProfile());
     base::RunLoop runloop;
     preferences->EnsureInitialized(runloop.QuitClosure());
     runloop.Run();

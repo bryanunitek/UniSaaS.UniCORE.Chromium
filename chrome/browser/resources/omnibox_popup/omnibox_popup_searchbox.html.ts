@@ -7,25 +7,28 @@ import {html} from '//resources/lit/v3_0/lit.rollup.js';
 import type {OmniboxPopupSearchboxElement} from './omnibox_popup_searchbox.js';
 
 export function getHtml(this: OmniboxPopupSearchboxElement) {
+  // clang-format off
   return html`
     <div id="inputWrapper" @focusout="${this.onInputWrapperFocusout}"
         @keydown="${this.onInputWrapperKeydown}">
       <cr-searchbox-input id="input"
-          exportparts="searchbox-input"
+          exportparts="searchbox-input, mirror"
+          url-emphasis-enabled
           ?dropdown-is-visible="${this.dropdownIsVisible}"
-          input-aria-live="${this.inputAriaLive}"
           ?multi-line-enabled="${this.multiLineEnabled}"
-          placeholder-text="${this.computePlaceholderText_()}"
+          placeholder-text=""
           searchbox-aria-description="${this.searchboxAriaDescription}"
           searchbox-icon="${this.searchboxIcon_}"
-          .selectedMatch="${this.selectedMatch}"
+          .selectedMatch="${this.computeSelectedMatchForInput_()}"
+          page-url="${this.computeCurrentPageUrl_()}"
+          .inputKeywordModel="${this.inputKeywordModel}"
           ?input-has-matches="${this.hasMatches()}"
           @focusin="${this.onInputFocusin_}"
+          @mousedown="${this.onInputMousedown_}"
           @searchbox-input-text-updated="${this.onSearchboxInputTextUpdated_}"
-          @input-focus-changed="${this.onInputFocusChanged}"
-          @input-mousedown="${this.onInputMousedown_}"
-          @input-keydown="${this.onInputKeydown_}"
-          @paste="${this.onInputPaste_}">
+          @paste="${this.onInputPaste_}"
+          @copy="${this.onInputCopy_}"
+          @cut="${this.onInputCut_}">
         ${
       this.shouldShowVoiceLens_(this.searchboxVoiceSearchEnabled_) ? html`
           <div slot="action-buttons"
@@ -48,18 +51,65 @@ export function getHtml(this: OmniboxPopupSearchboxElement) {
           </div>
         ` :
                                                                     ''}
+        ${
+      this.omniboxPopupDebugEnabled_ ? html`
+          <div slot="action-buttons"
+              class="searchbox-icon-button-container debug">
+            <button id="debugButton" class="searchbox-icon-button"
+                @click="${this.onDebugClick_}"
+                title="Inspect WebUI Omnibox">
+            </button>
+          </div>
+        ` :
+                                       ''}
+        ${
+      this.omniboxDogfoodFeedbackEnabled_ ? html`
+          <div slot="action-buttons"
+              class="searchbox-icon-button-container dogfood">
+            <button id="dogfoodFeedbackButton" class="searchbox-icon-button"
+                @click="${this.onDogfoodFeedbackClick_}"
+                title="Submit Omnibox Dogfood Feedback"
+                aria-label="Submit Omnibox Dogfood Feedback">
+            </button>
+          </div>
+        ` :
+                                            ''}
+        <cr-searchbox-compose-button id="composeButton" slot="compose-button"
+            ?dynamic="${this.searchboxDynamicAnimation_}"
+            ?has-user-input="${this.hasUserInput_}"
+            ?virtual-focus-enabled="${this.virtualFocusEnabled}"
+            ?hidden="${!this.aimButtonVisible_}"
+            label-text="${this.aimButtonConfig_.text}"
+            tooltip-title="${this.aimButtonConfig_.title}"
+            a11y-label="${this.aimButtonConfig_.a11yLabel}"
+            compose-icon="${this.aimButtonConfig_.icon}"
+            ?has-virtual-focus="${this.isAiModeVirtualFocused()}"
+            ?dropdown-is-visible="${this.dropdownIsVisible}"
+            @compose-click="${this.onComposeClick_}">
+        </cr-searchbox-compose-button>
       </cr-searchbox-input>
       <div class="dropdownContainer">
         <cr-searchbox-dropdown id="matches" part="searchbox-dropdown"
             exportparts="dropdown-content"
             role="listbox" .result="${this.result}"
             .selectedMatchIndex="${this.selectedMatchIndex}"
+            .virtualFocusEnabled="${this.isVirtualFocusEnabled_()}"
+            .selection="${this.selection}"
+            ?can-show-secondary-side="${this.canShowSecondarySide}"
+            ?has-secondary-side="${this.hasSecondarySide}"
+            @has-secondary-side-changed="${this.onHasSecondarySideChanged_}"
+            @selection-changed="${this.onSelectionChanged}"
             @selected-match-index-changed="${this.onSelectedMatchIndexChanged}"
             @match-focusin="${this.onMatchFocusin}"
             @match-click="${this.onMatchClick}"
+            @keyword-click="${this.onKeywordClick}"
             ?hidden="${!this.dropdownIsVisible}">
         </cr-searchbox-dropdown>
+        <omnibox-popup-contextual-entrypoint
+            .dropdownIsVisible="${this.dropdownIsVisible}">
+        </omnibox-popup-contextual-entrypoint>
       </div>
     </div>
   `;
+  // clang-format on
 }

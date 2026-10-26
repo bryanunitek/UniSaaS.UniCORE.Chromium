@@ -20,16 +20,19 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
+#include "components/optimization_guide/core/feature_registry/enterprise_policy_registry.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/feature_registry/feature_registration.h"
-#include "components/optimization_guide/core/model_execution/feature_keys.h"
-#include "components/optimization_guide/core/model_execution/manifest_broker/test/manifest_builder.h"
+#include "components/optimization_guide/core/feature_registry/mqls_feature_registry.h"
+#include "components/optimization_guide/core/model_execution/configs/manifest_builder.h"
 #include "components/optimization_guide/core/model_execution/model_execution_features.h"
-#include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
+#include "components/optimization_guide/core/model_execution/model_execution_features_controller.h"
 #include "components/optimization_guide/core/model_execution/optimization_guide_model_execution_error.h"
 #include "components/optimization_guide/core/model_execution/performance_class.h"
+#include "components/optimization_guide/core/model_execution/remote_model_execution_common.h"
 #include "components/optimization_guide/core/model_execution/test/fake_model_assets.h"
 #include "components/optimization_guide/core/model_execution/test/feature_config_builder.h"
 #include "components/optimization_guide/core/model_quality/model_execution_logging_wrappers.h"
@@ -37,7 +40,6 @@
 #include "components/optimization_guide/core/model_quality/model_quality_logs_uploader_service.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/optimization_guide/proto/manifest.pb.h"
 #include "components/optimization_guide/proto/model_quality_service.pb.h"
@@ -48,6 +50,7 @@
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
+#include "components/variations/variations_switches.h"
 #include "content/public/test/browser_test.h"
 #include "net/dns/mock_host_resolver.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -123,7 +126,7 @@ class ModelExecutionBrowserTestBase : public InProcessBrowserTest {
         net::EmbeddedTestServer::TYPE_HTTPS);
     net::EmbeddedTestServer::ServerCertificateConfig cert_config;
     cert_config.dns_names = {
-        switches::GetModelExecutionServiceURL().GetHost(),
+        GetModelExecutionServiceBaseURL().GetHost(),
     };
     model_execution_server_->SetSSLConfig(cert_config);
     model_execution_server_->RegisterRequestHandler(base::BindRepeating(
@@ -150,15 +153,18 @@ class ModelExecutionBrowserTestBase : public InProcessBrowserTest {
 
   void SetUpCommandLine(base::CommandLine* cmd) override {
     cmd->AppendSwitchASCII(
-        switches::kOptimizationGuideServiceModelExecutionURL,
+        kOptimizationGuideServiceModelExecutionURLSwitch,
         model_execution_server_
-            ->GetURL(switches::GetModelExecutionServiceURL().GetHost(), "/")
+            ->GetURL(GetModelExecutionServiceBaseURL().GetHost(), "/")
             .spec());
     cmd->AppendSwitchASCII(
-        switches::kModelQualityServiceURL,
+        kModelQualityServiceURLSwitch,
         model_quality_logs_server_
             ->GetURL(GetModelQualityLogsUploaderServiceURL().GetHost(), "/")
             .spec());
+    // Add a dummy variation ID so that the X-Client-Data header is appended to
+    // eligible requests to select Google servers.
+    cmd->AppendSwitchASCII(variations::switches::kForceVariationIds, "113355");
   }
 
   void SetUpBrowserContextKeyedServices(
@@ -204,7 +210,7 @@ class ModelExecutionBrowserTestBase : public InProcessBrowserTest {
   OptimizationGuideKeyedService* GetOptimizationGuideKeyedService(
       Profile* profile = nullptr) {
     if (!profile) {
-      profile = browser()->profile();
+      profile = browser()->GetProfile();
     }
     return OptimizationGuideKeyedServiceFactory::GetForProfile(profile);
   }
@@ -215,7 +221,7 @@ class ModelExecutionBrowserTestBase : public InProcessBrowserTest {
                     const proto::ComposeRequest& request_metadata,
                     Profile* profile = nullptr) {
     if (!profile) {
-      profile = browser()->profile();
+      profile = browser()->GetProfile();
     }
     base::RunLoop run_loop;
     ExecuteModelWithLogging(
@@ -402,8 +408,7 @@ class ModelExecutionEnabledBrowserTest : public ModelExecutionBrowserTestBase {
   void InitializeFeatureList() override {
     scoped_feature_list_.InitWithFeatures(
         {features::kOptimizationGuideModelExecution,
-         features::kModelQualityLogging,
-         features::kOptimizationGuideOnDeviceModel},
+         features::kModelQualityLogging},
         {});
   }
 
@@ -439,7 +444,8 @@ class ModelExecutionEnabledBrowserTest : public ModelExecutionBrowserTestBase {
 
 IN_PROC_BROWSER_TEST_F(ModelExecutionEnabledBrowserTest,
                        ModelExecutionDisabledInIncognito) {
-  Browser* otr_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* otr_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   proto::ComposeRequest request;
   request.mutable_generate_params()->set_user_input("a user typed this");
   ExecuteModel(UserVisibleFeatureKey::kCompose, request,
@@ -580,7 +586,7 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionEnabledBrowserTest,
 IN_PROC_BROWSER_TEST_F(ModelExecutionEnabledBrowserTest,
                        ModelExecutionFailsForUnsupportedLanguageResponse) {
   EnableSignin();
-  auto* prefs = browser()->profile()->GetPrefs();
+  auto* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetInteger(
       prefs::GetSettingEnabledPrefName(UserVisibleFeatureKey::kCompose),
       static_cast<int>(prefs::FeatureOptInState::kEnabled));
@@ -613,7 +619,7 @@ class ModelExecutionInternalsPageBrowserTest
  public:
   void SetUpCommandLine(base::CommandLine* cmd) override {
     ModelExecutionEnabledBrowserTest::SetUpCommandLine(cmd);
-    cmd->AppendSwitch(switches::kDebugLoggingEnabled);
+    cmd->AppendSwitch(kDebugLoggingEnabledSwitch);
   }
   void CheckInternalsLog(std::string_view message) {
     auto* logger =
@@ -654,7 +660,7 @@ IN_PROC_BROWSER_TEST_F(
     ModelExecutionEnabledBrowserTestWithExplicitBrowserSignin,
     PRE_EnableFeatureViaPref) {
   EnableSignin();
-  auto* prefs = browser()->profile()->GetPrefs();
+  auto* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetInteger(
       prefs::GetSettingEnabledPrefName(UserVisibleFeatureKey::kWallpaperSearch),
       static_cast<int>(prefs::FeatureOptInState::kEnabled));
@@ -707,7 +713,7 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_FALSE(IsSettingVisible(UserVisibleFeatureKey::kHistorySearch));
 #endif
 
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       prefs::GetSettingEnabledPrefName(UserVisibleFeatureKey::kHistorySearch),
       static_cast<int>(prefs::FeatureOptInState::kEnabled));
   EXPECT_TRUE(variations::IsInSyntheticTrialGroup(
@@ -839,7 +845,7 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionEnterprisePolicyBrowserTest,
   ASSERT_TRUE(
       g_browser_process->GetMetricsServicesManager()->IsMetricsConsentGiven());
 
-  auto* prefs = browser()->profile()->GetPrefs();
+  auto* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetInteger(
       prefs::GetSettingEnabledPrefName(UserVisibleFeatureKey::kCompose),
       static_cast<int>(optimization_guide::prefs::FeatureOptInState::kEnabled));
@@ -847,13 +853,12 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionEnterprisePolicyBrowserTest,
 
   // Enable without logging via the enterprise policy.
   policy::PolicyMap policies;
-  policies.Set(policy::key::kHelpMeWriteSettings,
-               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
-               policy::POLICY_SOURCE_CLOUD,
-               base::Value(static_cast<int>(
-                   model_execution::prefs::ModelExecutionEnterprisePolicyValue::
-                       kAllowWithoutLogging)),
-               nullptr);
+  policies.Set(
+      policy::key::kHelpMeWriteSettings, policy::POLICY_LEVEL_MANDATORY,
+      policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
+      base::Value(
+          static_cast<int>(EnterprisePolicyValue::kAllowWithoutLogging)),
+      nullptr);
   policy_provider_.UpdateChromePolicy(policies);
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(IsSettingVisible(UserVisibleFeatureKey::kCompose));
@@ -873,9 +878,7 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionEnterprisePolicyBrowserTest,
   policies.Set(
       policy::key::kHelpMeWriteSettings, policy::POLICY_LEVEL_MANDATORY,
       policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
-      base::Value(static_cast<int>(
-          model_execution::prefs::ModelExecutionEnterprisePolicyValue::kAllow)),
-      nullptr);
+      base::Value(static_cast<int>(EnterprisePolicyValue::kAllow)), nullptr);
   policy_provider_.UpdateChromePolicy(policies);
   prefs->SetInteger(
       prefs::GetSettingEnabledPrefName(UserVisibleFeatureKey::kCompose),
@@ -901,7 +904,7 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionEnterprisePolicyBrowserTest,
                        DisableThenEnableWallpaperSearch) {
   EnableSignin();
 
-  auto* prefs = browser()->profile()->GetPrefs();
+  auto* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetInteger(
       prefs::GetSettingEnabledPrefName(UserVisibleFeatureKey::kWallpaperSearch),
       static_cast<int>(prefs::FeatureOptInState::kEnabled));
@@ -914,13 +917,10 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionEnterprisePolicyBrowserTest,
 
   // Disable via the enterprise policy.
   policy::PolicyMap policies;
-  policies.Set(policy::key::kCreateThemesSettings,
-               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
-               policy::POLICY_SOURCE_CLOUD,
-               base::Value(static_cast<int>(
-                   model_execution::prefs::ModelExecutionEnterprisePolicyValue::
-                       kDisable)),
-               nullptr);
+  policies.Set(
+      policy::key::kCreateThemesSettings, policy::POLICY_LEVEL_MANDATORY,
+      policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
+      base::Value(static_cast<int>(EnterprisePolicyValue::kDisable)), nullptr);
   policy_provider_.UpdateChromePolicy(policies);
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(IsSettingVisible(UserVisibleFeatureKey::kWallpaperSearch));
@@ -931,9 +931,7 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionEnterprisePolicyBrowserTest,
   policies.Set(
       policy::key::kCreateThemesSettings, policy::POLICY_LEVEL_MANDATORY,
       policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
-      base::Value(static_cast<int>(
-          model_execution::prefs::ModelExecutionEnterprisePolicyValue::kAllow)),
-      nullptr);
+      base::Value(static_cast<int>(EnterprisePolicyValue::kAllow)), nullptr);
   policy_provider_.UpdateChromePolicy(policies);
   prefs->SetInteger(
       prefs::GetSettingEnabledPrefName(UserVisibleFeatureKey::kWallpaperSearch),

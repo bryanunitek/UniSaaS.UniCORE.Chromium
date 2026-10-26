@@ -15,14 +15,17 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/desktop_forcing_chrome_bookmark_test_client.h"
 #include "chrome/browser/bookmarks/managed_bookmark_service_factory.h"
+#include "chrome/browser/browser_features.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_garbage_collector_factory.h"
+#include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/external_provider_manager.h"
 #include "chrome/browser/extensions/shared_module_service_factory.h"
@@ -41,10 +44,12 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chrome/test/base/testing_profile_manager.h"
 #include "components/crx_file/crx_verifier.h"
 #include "components/policy/core/common/policy_service_impl.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
+#include "components/supervised_user/core/browser/supervised_user_test_environment.h"
 #include "components/sync/test/test_sync_service.h"
 #include "components/sync_preferences/pref_service_mock_factory.h"
 #include "components/sync_preferences/pref_service_syncable.h"
@@ -58,7 +63,6 @@
 #include "extensions/browser/pref_names.h"
 #include "extensions/browser/shared_module_service.h"
 #include "extensions/buildflags/buildflags.h"
-#include "extensions/common/extension_features.h"
 #include "extensions/common/extensions_client.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -82,27 +86,14 @@ std::unique_ptr<KeyedService> CreateTestSyncService(
 }
 
 // Create a testing profile according to |params|.
-std::unique_ptr<TestingProfile> BuildTestingProfile(
+TestingProfile* BuildTestingProfile(
+    TestingProfileManager& testing_profile_manager,
     ExtensionServiceTestBase::ExtensionServiceInitParams params,
-    base::ScopedTempDir& temp_dir,
     policy::PolicyService* policy_service) {
   TestingProfile::Builder profile_builder;
 
-  if (!temp_dir.CreateUniqueTempDir()) {
-    return nullptr;
-  }
-
-#if BUILDFLAG(IS_MAC)
-  // For tests, make sure we're working with the absolute profile path, so that
-  // path comparisons don't fail. See https://crbug.com/40916874 for
-  // details.
-  if (!temp_dir.Set(base::MakeAbsoluteFilePath(temp_dir.Take()))) {
-    return nullptr;
-  }
-#endif
-
   base::FilePath profile_dir =
-      temp_dir.GetPath().Append(FILE_PATH_LITERAL("TestingExtensionsPath"));
+      testing_profile_manager.GetProfilePath(profile_builder.profile_name());
   if (base::File::Error error = base::File::FILE_OK;
       !base::CreateDirectoryAndGetError(profile_dir, &error)) {
     LOG(ERROR) << "Failed to create profile directory: " << error;
@@ -180,10 +171,6 @@ std::unique_ptr<TestingProfile> BuildTestingProfile(
     }
   }
 
-  if (params.profile_is_supervised) {
-    profile_builder.SetIsSupervisedProfile();
-  }
-
   if (params.profile_is_guest) {
     profile_builder.SetGuestSession();
   }
@@ -227,8 +214,16 @@ std::unique_ptr<TestingProfile> BuildTestingProfile(
 
   profile_builder.AddTestingFactories(std::move(params.testing_factories));
 
-  profile_builder.SetPath(profile_dir);
-  return profile_builder.Build();
+  auto user_name = base::UTF8ToUTF16(profile_builder.profile_name());
+  TestingProfile* profile = testing_profile_manager.CreateTestingProfile(
+      std::move(profile_builder), user_name, /*avatar_id=*/0);
+
+  if (params.profile_is_supervised) {
+    supervised_user::SupervisedUserTestEnvironment::EnableSupervisedAccount(
+        IdentityManagerFactory::GetForProfile(profile));
+  }
+
+  return profile;
 }
 
 }  // namespace
@@ -287,9 +282,16 @@ ExtensionServiceTestBase::ExtensionServiceTestBase(
       std::vector<
           raw_ptr<policy::ConfigurationPolicyProvider, VectorExperimental>>{
           &policy_provider_});
-  // Allow unpacked extensions without developer mode for testing.
-  feature_list_.InitAndDisableFeature(
-      extensions_features::kExtensionDisableUnsupportedDeveloper);
+  feature_list_.InitWithFeatures(
+      /*enabled_features=*/{},
+      /*disabled_features=*/{
+          // Background Host creates a renderer host and holds it,
+          // but this test is configured to use in-process renderers.
+          // This combination is problematic on destruction order,
+          // so to workaround it, disabling to destroy profile on browser
+          // close. This should be fine, because the created renderer host
+          // is destroyed with ExtensionHost destroyed with Profile.
+          features::kDestroyProfileOnBrowserClose});
 }
 
 ExtensionServiceTestBase::~ExtensionServiceTestBase() = default;
@@ -302,8 +304,8 @@ void ExtensionServiceTestBase::InitializeExtensionService(
   const bool extensions_enabled = params.extensions_enabled;
   const bool enable_install_limiter = params.enable_install_limiter;
 
-  profile_ =
-      BuildTestingProfile(std::move(params), temp_dir_, policy_service_.get());
+  profile_ = BuildTestingProfile(*testing_profile_manager_, std::move(params),
+                                 policy_service_.get());
   extensions_install_dir_ =
       profile_->GetPath().AppendASCII(kInstallDirectoryName);
   unpacked_install_dir_ =
@@ -316,6 +318,11 @@ void ExtensionServiceTestBase::InitializeExtensionService(
 }
 
 bool ExtensionServiceTestBase::ShouldAllowMV2Extensions() {
+  return true;
+}
+
+bool ExtensionServiceTestBase::
+    ShouldAllowUnpackedExtensionsWithoutDeveloperMode() {
   return true;
 }
 
@@ -422,10 +429,16 @@ void ExtensionServiceTestBase::ValidateStringPref(
 
 void ExtensionServiceTestBase::SetUp() {
   is_setup_called_ = true;
+  CHECK(temp_dir_.CreateUniqueTempDir());
+
   LoadErrorReporter::GetInstance()->ClearErrors();
 
   // Force TabManager/TabLifecycleUnitSource creation.
   g_browser_process->resource_coordinator_parts();
+
+  testing_profile_manager_ = std::make_unique<TestingProfileManager>(
+      TestingBrowserProcess::GetGlobal());
+  CHECK(testing_profile_manager_->SetUp());
 
   // Update the webstore update url. Some tests leave it set to a non-default
   // webstore_update_url_. This can make extension_urls::IsWebstoreUpdateUrl
@@ -449,6 +462,11 @@ void ExtensionServiceTestBase::SetUp() {
   if (ShouldAllowMV2Extensions()) {
     mv2_enabler_.emplace();
   }
+
+  if (ShouldAllowUnpackedExtensionsWithoutDeveloperMode()) {
+    allow_unpacked_without_developer_mode_ =
+        ExtensionManagement::AllowUnpackedWithoutDeveloperModeForTesting();
+  }
 }
 
 void ExtensionServiceTestBase::TearDown() {
@@ -466,6 +484,7 @@ void ExtensionServiceTestBase::TearDown() {
   kiosk_chrome_app_manager_.reset();
 #endif
   DeleteProfile();
+  testing_profile_manager_.reset();
 }
 
 void ExtensionServiceTestBase::SetUpTestSuite() {
@@ -493,7 +512,8 @@ void ExtensionServiceTestBase::DeleteProfile() {
   service_ = nullptr;
   extensions_install_dir_ = base::FilePath();
   unpacked_install_dir_ = base::FilePath();
-  profile_.reset();
+  profile_ = nullptr;
+  testing_profile_manager_->DeleteAllTestingProfiles();
 }
 
 void ExtensionServiceTestBase::SetGuestSessionOnProfile(bool guest_session) {

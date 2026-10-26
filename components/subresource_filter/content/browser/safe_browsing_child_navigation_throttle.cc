@@ -87,24 +87,26 @@ bool SafeBrowsingChildNavigationThrottle::ShouldDeferNavigation() const {
   // allowed to get a response. As a result, we must defer while
   // we wait for the ruleset check to complete and pass handling the navigation
   // decision to the callback.
-  if (parent_frame_filter_->activation_state().activation_level ==
-      mojom::ActivationLevel::kEnabled) {
+  if (parent_frame_filter_ &&
+      parent_frame_filter_->activation_state().activation_level ==
+          mojom::ActivationLevel::kEnabled) {
     return true;
   }
 
   return false;
 }
 
-void SafeBrowsingChildNavigationThrottle::
-    OnReadyToResumeNavigationWithLoadPolicy() {
-  if (defer_stage_ == DeferStage::kWillStartOrRedirectRequest &&
-      ad_evidence_.has_value()) {
-    // Tag the navigation handle based on the current load policy + evidence
-    // before the request starts.
+void SafeBrowsingChildNavigationThrottle::OnCalculatedLoadPolicyFinished() {
+  if (ad_evidence_.has_value()) {
+    // Tag the navigation handle based on the current load policy + evidence.
     ad_evidence_->UpdateFilterListResult(
         InterpretLoadPolicyAsEvidence(load_policy_));
     if (ad_evidence_->IndicatesAdFrame()) {
       navigation_handle()->SetIsAdTagged();
+    }
+    if (matched_subdomain_disallow_rule()) {
+      CHECK(ad_evidence_->IndicatesAdFrame());
+      navigation_handle()->SetIsAdTaggedByHostFilter();
     }
   }
 }
@@ -119,6 +121,5 @@ void SafeBrowsingChildNavigationThrottle::NotifyLoadPolicy() const {
   observer_manager->NotifyChildFrameNavigationEvaluated(navigation_handle(),
                                                         load_policy_);
 }
-
 
 }  // namespace subresource_filter

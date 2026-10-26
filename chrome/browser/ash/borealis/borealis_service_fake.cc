@@ -33,9 +33,9 @@ BorealisAppUninstaller& BorealisServiceFake::AppUninstaller() {
   return *app_uninstaller_;
 }
 
-BorealisContextManager& BorealisServiceFake::ContextManager() {
-  CHECK(context_manager_);
-  return *context_manager_;
+BorealisDiskCleanupManager& BorealisServiceFake::DiskCleanupManager() {
+  CHECK(disk_cleanup_manager_);
+  return *disk_cleanup_manager_;
 }
 
 BorealisFeatures& BorealisServiceFake::Features() {
@@ -63,11 +63,6 @@ BorealisWindowManager& BorealisServiceFake::WindowManager() {
   return *window_manager_;
 }
 
-BorealisSurveyHandler& BorealisServiceFake::SurveyHandler() {
-  CHECK(survey_handler_);
-  return *survey_handler_;
-}
-
 void BorealisServiceFake::SetAppLauncherForTesting(
     BorealisAppLauncher* app_launcher) {
   app_launcher_ = app_launcher;
@@ -78,9 +73,9 @@ void BorealisServiceFake::SetAppUninstallerForTesting(
   app_uninstaller_ = app_uninstaller;
 }
 
-void BorealisServiceFake::SetContextManagerForTesting(
-    BorealisContextManager* context_manager) {
-  context_manager_ = context_manager;
+void BorealisServiceFake::SetDiskCleanupManagerForTesting(
+    BorealisDiskCleanupManager* disk_cleanup_manager) {
+  disk_cleanup_manager_ = disk_cleanup_manager;
 }
 
 void BorealisServiceFake::SetFeaturesForTesting(BorealisFeatures* features) {
@@ -99,11 +94,6 @@ void BorealisServiceFake::SetShutdownMonitorForTesting(
 void BorealisServiceFake::SetWindowManagerForTesting(
     BorealisWindowManager* window_manager) {
   window_manager_ = window_manager;
-}
-
-void BorealisServiceFake::SetSurveyHandlerForTesting(
-    BorealisSurveyHandler* survey_handler) {
-  survey_handler_ = survey_handler;
 }
 
 }  // namespace borealis

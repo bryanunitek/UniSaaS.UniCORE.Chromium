@@ -9,7 +9,9 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_attachment_tracker.h"
+#include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -87,7 +89,6 @@ void GlicTabObserverImpl::OnTabStripModelChanged(
 }
 
 void GlicTabObserverImpl::OnTabChangedAt(tabs::TabInterface* tab,
-                                         int index,
                                          TabChangeType change_type) {
   callback_.Run(TabMutationEvent{});
 }
@@ -140,4 +141,19 @@ TabCreationType GlicTabObserverImpl::DetermineTabCreationType(
   }
 
   return TabCreationType::kUnknown;
+}
+
+void GlicTabObserverImpl::TabGroupedStateChanged(
+    TabStripModel* tab_strip_model,
+    std::optional<tab_groups::TabGroupId> old_group,
+    std::optional<tab_groups::TabGroupId> new_group,
+    tabs::TabInterface* tab,
+    int index) {
+  if (old_group != new_group) {
+    if (new_group.has_value()) {
+      callback_.Run(TabGroupingChangedEvent{tab, /*is_added=*/true});
+    } else {
+      callback_.Run(TabGroupingChangedEvent{tab, /*is_added=*/false});
+    }
+  }
 }

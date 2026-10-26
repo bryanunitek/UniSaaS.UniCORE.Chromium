@@ -11,6 +11,10 @@
 #include "components/payments/content/secure_payment_confirmation_model.h"
 #include "components/payments/content/secure_payment_confirmation_view.h"
 
+namespace gfx {
+class Size;
+}
+
 namespace payments {
 
 class PaymentRequest;
@@ -46,9 +50,11 @@ class SecurePaymentConfirmationController
   void CloseDialog() override;
   void ShowErrorMessage() override;
   void ShowProcessingSpinner() override;
+  void ShowLoadingView() override {}
   bool IsInteractive() const override;
   void ShowPaymentHandlerScreen(
       const GURL& url,
+      const std::optional<gfx::Size>& preferred_web_contents_size,
       PaymentHandlerOpenWindowCallback callback) override;
   void ConfirmPaymentForTesting() override;
   bool ClickOptOutForTesting() override;

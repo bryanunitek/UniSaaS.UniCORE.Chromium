@@ -13,8 +13,8 @@ namespace contextual_tasks {
 const char kContextualTasksOnboardingTooltipDismissedCount[] =
     "contextual_tasks.onboarding_tooltip_dismissed_count";
 
-const char kContextualTasksLensSearchTooltipDismissedCount[] =
-    "contextual_tasks.lens_search_tooltip_dismissed_count";
+const char kContextualTasksAskGTooltipDismissedCount[] =
+    "contextual_tasks.ask_g_tooltip_dismissed_count";
 
 const char kContextualTasksShareOpenTabsEveryThread[] =
     "contextual_tasks.share_open_tabs_every_thread";

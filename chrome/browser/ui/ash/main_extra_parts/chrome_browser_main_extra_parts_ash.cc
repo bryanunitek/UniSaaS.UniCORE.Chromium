@@ -37,7 +37,6 @@
 #include "chrome/browser/ash/app_restore/full_restore_service.h"
 #include "chrome/browser/ash/auth/active_session_fingerprint_client_impl.h"
 #include "chrome/browser/ash/boca/boca_app_client_impl.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/geolocation/system_geolocation_source.h"
 #include "chrome/browser/ash/growth/campaigns_manager_client_impl.h"
 #include "chrome/browser/ash/growth/campaigns_manager_session.h"
@@ -92,7 +91,6 @@
 #include "chrome/browser/ui/ash/session/session_controller_client_impl.h"
 #include "chrome/browser/ui/ash/shelf/app_service/exo_app_type_resolver.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
-#include "chrome/browser/ui/ash/shell_delegate/tab_scrubber.h"
 #include "chrome/browser/ui/ash/shell_init/ash_shell_init.h"
 #include "chrome/browser/ui/ash/system/system_tray_client_impl.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
@@ -101,11 +99,13 @@
 #include "chrome/browser/ui/ash/web_view/ash_web_view_factory_impl.h"
 #include "chrome/browser/ui/ash/wm/tab_cluster_ui_client.h"
 #include "chrome/browser/ui/chromeos/screen_orientation/screen_orientation_delegate.h"
+#include "chrome/browser/ui/chromeos/tab_scrubber/tab_scrubber.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/ui/views/select_file_dialog_extension/select_file_dialog_extension.h"
 #include "chrome/browser/ui/views/select_file_dialog_extension/select_file_dialog_extension_factory.h"
 #include "chrome/browser/ui/webui/ash/settings/pref_names.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/dbus/resourced/resourced_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
@@ -166,8 +166,8 @@ class ChromeShelfControllerInitializer
   void OnSessionStateChanged() override {
     TRACE_EVENT0("ui",
                  "ChromeShelfControllerInitializer::OnSessionStateChanged");
-    DCHECK(!chrome_shelf_controller_);
-    DCHECK(!ChromeShelfController::instance());
+    CHECK(!chrome_shelf_controller_, base::NotFatalUntil::M162);
+    CHECK(!ChromeShelfController::instance(), base::NotFatalUntil::M162);
 
     if (session_manager::SessionManager::Get()->session_state() ==
         session_manager::SessionState::ACTIVE) {
@@ -316,8 +316,8 @@ void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
   screen_orientation_delegate_ =
       std::make_unique<ScreenOrientationDelegateChromeos>();
 
-  app_list_client_ =
-      std::make_unique<AppListClientImpl>(user_manager::UserManager::Get());
+  app_list_client_ = std::make_unique<AppListClientImpl>(
+      g_browser_process->local_state(), user_manager::UserManager::Get());
 
   // Must be available at login screen, so initialize before profile.
   accessibility_controller_client_ =
@@ -348,15 +348,22 @@ void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
   wallpaper_controller_client_ =
       std::make_unique<WallpaperControllerClientImpl>(
           CHECK_DEREF(g_browser_process->local_state()),
-          std::make_unique<wallpaper_handlers::WallpaperFetcherDelegateImpl>());
+          std::make_unique<wallpaper_handlers::WallpaperFetcherDelegateImpl>(
+              g_browser_process->GetFeatures()->application_locale_storage(),
+              g_browser_process->shared_url_loader_factory()));
   wallpaper_controller_client_->Init();
 
   session_controller_client_ = std::make_unique<SessionControllerClientImpl>(
       CHECK_DEREF(g_browser_process->local_state()));
   session_controller_client_->Init();
-  // By this point ash shell should have initialized its D-Bus signal
-  // listeners, so inform the session manager that Ash is initialized.
-  session_controller_client_->EmitAshInitialized();
+
+  // Emit the ash-initialized upstart signal to start Chrome OS tasks that
+  // expect that Ash is listening to D-Bus signals they emit. For example,
+  // hammerd, which handles detachable base state, communicates the base state
+  // purely by emitting D-Bus signals, and thus has to be run whenever Ash is
+  // started so Ash (DetachableBaseHandler in particular) gets the proper view
+  // of the current detachable base state.
+  ash::SessionManagerClient::Get()->EmitAshInitialized();
 
   system_tray_client_ = std::make_unique<SystemTrayClientImpl>(
       CHECK_DEREF(g_browser_process->platform_part()->GetSystemClock()),
@@ -369,7 +376,7 @@ void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
   if (ash::features::IsCoralFeatureEnabled()) {
     ash::TabClusterUIController* tab_cluster_ui_controller =
         ash::Shell::Get()->tab_cluster_ui_controller();
-    DCHECK(tab_cluster_ui_controller);
+    CHECK(tab_cluster_ui_controller, base::NotFatalUntil::M162);
     tab_cluster_ui_client_ =
         std::make_unique<TabClusterUIClient>(tab_cluster_ui_controller);
   }
@@ -431,8 +438,7 @@ void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
       ash::SystemGeolocationSource::
           CreateGeolocationSystemPermissionManagerOnAsh());
 
-  ui::HeatmapPalmDetector::SetInstance(
-      std::make_unique<ash::HeatmapPalmDetectorImpl>());
+  heatmap_palm_detector_ = std::make_unique<ash::HeatmapPalmDetectorImpl>();
 
   // Required by `read_write_cards_manager_` and
   // `mahi_media_app_content_manager_`.
@@ -478,9 +484,6 @@ void ChromeBrowserMainExtraPartsAsh::PostProfileInit(Profile* profile,
   media_client_ = std::make_unique<MediaClientImpl>();
   media_client_->Init();
 
-  // Passes (and continues passing) the current camera count to the PrivacyHub.
-  ash::privacy_hub_util::SetUpCameraCountObserver();
-
   app_access_notifier_ = std::make_unique<AppAccessNotifier>();
   ash::privacy_hub_util::SetAppAccessNotifier(app_access_notifier_.get());
 
@@ -508,6 +511,7 @@ void ChromeBrowserMainExtraPartsAsh::PostProfileInit(Profile* profile,
   ash_web_view_factory_ = std::make_unique<AshWebViewFactoryImpl>();
 
   quick_insert_client_ = std::make_unique<QuickInsertClientImpl>(
+      g_browser_process->local_state(),
       ash::Shell::Get()->quick_insert_controller(),
       user_manager::UserManager::Get());
 
@@ -534,7 +538,7 @@ void ChromeBrowserMainExtraPartsAsh::PostProfileInit(Profile* profile,
       ->SetPeripheralsAppDelegate(peripherals_app_delegate_.get());
 
   // Initialize TabScrubber after the Ash Shell has been initialized.
-  ash::TabScrubber::GetInstance();
+  tab_scrubber_ = std::make_unique<ash::TabScrubber>();
 }
 
 void ChromeBrowserMainExtraPartsAsh::PostBrowserStart() {
@@ -619,6 +623,7 @@ void ChromeBrowserMainExtraPartsAsh::PostMainMessageLoopRun() {
   login_screen_client_.reset();
   management_disclosure_client_.reset();
   graduation_manager_.reset();
+  tab_scrubber_.reset();
 
   ash::privacy_hub_util::SetAppAccessNotifier(nullptr);
   app_access_notifier_.reset();
@@ -629,6 +634,8 @@ void ChromeBrowserMainExtraPartsAsh::PostMainMessageLoopRun() {
     device::GeolocationSystemPermissionManager::GetInstance()->Shutdown();
   }
   device::GeolocationSystemPermissionManager::SetInstance(nullptr);
+
+  heatmap_palm_detector_.reset();
 
   settings_window_manager_.reset();
   system_tray_client_.reset();

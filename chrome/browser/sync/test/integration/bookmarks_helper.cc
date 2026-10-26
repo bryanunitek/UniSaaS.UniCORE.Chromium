@@ -258,8 +258,7 @@ std::optional<FaviconData> GetFaviconData(BookmarkModel* model,
                      node->icon_url() ? *node->icon_url() : GURL());
 }
 
-// Sets the favicon for |profile| and |node|. |profile| may be
-// |test()->verifier()|.
+// Sets the favicon for |profile| and |node|.
 void SetFaviconImpl(Profile* profile,
                     const BookmarkNode* node,
                     const GURL& icon_url,
@@ -282,8 +281,7 @@ void SetFaviconImpl(Profile* profile,
   observer.WaitUntilFaviconChangedToIconURL();
 }
 
-// Expires the favicon for |profile| and |node|. |profile| may be
-// |test()->verifier()|.
+// Expires the favicon for |profile| and |node|.
 void ExpireFaviconImpl(Profile* profile, const BookmarkNode* node) {
   favicon::FaviconService* favicon_service =
       FaviconServiceFactory::GetForProfile(profile,
@@ -301,8 +299,7 @@ void OnGotFaviconData(
   std::move(callback).Run();
 }
 
-// Deletes favicon mappings for |profile| and |node|. |profile| may be
-// |test()->verifier()|.
+// Deletes favicon mappings for |profile| and |node|.
 void DeleteFaviconMappingsImpl(Profile* profile,
                                const BookmarkNode* node,
                                FaviconSource favicon_source) {
@@ -318,9 +315,8 @@ void DeleteFaviconMappingsImpl(Profile* profile,
     favicon_service->DeleteFaviconMappings({node->url()},
                                            favicon_base::IconType::kFavicon);
   } else {
-    ApplyBookmarkFavicon(
-        node, favicon_service, /*icon_url=*/GURL(),
-        scoped_refptr<base::RefCountedString>(new base::RefCountedString()));
+    ApplyBookmarkFavicon(node, favicon_service, /*icon_url=*/GURL(),
+                         base::MakeRefCounted<base::RefCountedString>());
   }
 
   // Wait for the favicon for |node| to be deleted.
@@ -876,10 +872,11 @@ std::u16string IndexedSubsubfolderName(size_t i) {
 
 std::unique_ptr<syncer::LoopbackServerEntity> CreateBookmarkServerEntity(
     const std::u16string& title,
-    const GURL& url) {
+    const GURL& url,
+    const base::Uuid& uuid) {
   fake_server::EntityBuilderFactory entity_builder_factory;
   fake_server::BookmarkEntityBuilder bookmark_builder =
-      entity_builder_factory.NewBookmarkEntityBuilder(title);
+      entity_builder_factory.NewBookmarkEntityBuilder(title, uuid);
   return bookmark_builder.BuildBookmark(url);
 }
 
@@ -947,13 +944,15 @@ BookmarksMatchChecker::BookmarksMatchChecker() {
 
 bool BookmarksMatchChecker::IsExitConditionSatisfied(std::ostream* os) {
   *os << "Waiting for matching models";
-  return AllModelsMatch();
-}
-
-void BookmarksMatchChecker::WillStartWaiting() {
+  // Trigger favicon loading for all nodes across all models to ensure
+  // concurrent asynchronous lookups rather than sequential loading.
+  // AllModelsMatch() early-outs on the first missing favicon, so failing
+  // to eagerly load them here would cause the checker to sequentially wait for
+  // each node one-by-one.
   for (int i = 0; i < sync_datatype_helper::test()->num_clients(); ++i) {
     TriggerAllFaviconLoading(GetBookmarkModel(i));
   }
+  return AllModelsMatch();
 }
 
 SingleBookmarkModelStatusChangeChecker::SingleBookmarkModelStatusChangeChecker(
@@ -985,6 +984,7 @@ SingleBookmarksModelMatcherChecker::~SingleBookmarksModelMatcherChecker() =
 
 bool SingleBookmarksModelMatcherChecker::IsExitConditionSatisfied(
     std::ostream* os) {
+  *os << "Waiting for bookmark model to match: ";
   const auto all_bookmark_nodes = GetAllBookmarkNodes(bookmark_model());
 
   testing::StringMatchResultListener result_listener;
@@ -1195,8 +1195,7 @@ bool BookmarkModelMatchesFakeServerChecker::IsExitConditionSatisfied(
       return false;
     }
 
-    if (node->is_folder() != server_entity.folder() ||
-        node->is_folder() != (server_entity.specifics().bookmark().type() ==
+    if (node->is_folder() != (server_entity.specifics().bookmark().type() ==
                               sync_pb::BookmarkSpecifics::FOLDER)) {
       *os << " Node type mismatch for node: " << node->GetTitle();
       return false;

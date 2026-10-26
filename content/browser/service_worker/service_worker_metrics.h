@@ -25,6 +25,30 @@ enum class ServiceWorkerMainScriptRequestValidationResult {
   kMaxValue = kForgedMode,
 };
 
+// LINT.IfChange(ServiceWorkerMessageDispatchContextValidationResult)
+
+// Used for UMA. Append-only.
+enum class ServiceWorkerMessageDispatchContextValidationResult {
+  kAllowed = 0,
+  kDisallowed = 1,
+  kMaxValue = kDisallowed,
+};
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:ServiceWorkerMessageDispatchContextValidationResult)
+
+// LINT.IfChange(ServiceWorkerStartWorkerContextValidationDifference)
+
+// Used for UMA. Append-only.
+enum class ServiceWorkerStartWorkerContextValidationDifference {
+  kBothAllowed = 0,
+  kOldAllowedNewDisallowed = 1,
+  kOldDisallowedNewAllowed = 2,
+  kBothDisallowed = 3,
+  kMaxValue = kBothDisallowed,
+};
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:ServiceWorkerStartWorkerContextValidationDifference)
+
 // LINT.IfChange(ServiceWorkerAutoPreloadDispatchResult)
 
 // Used for UMA. Append-only.
@@ -60,6 +84,9 @@ class ServiceWorkerMetrics {
   };
 
   // Used for UMA. Append-only.
+  // Note: This enum is also used for behavioral checks, such as verifying
+  // if a service worker has a pending event that allows window interaction.
+  //
   // This class is used to indicate which event is fired/finished. Most events
   // have only one request that starts the event and one response that finishes
   // the event, but the fetch event has two responses, so there are two types of
@@ -117,6 +144,10 @@ class ServiceWorkerMetrics {
 
   static void RecordMainScriptRequestValidationResult(
       ServiceWorkerMainScriptRequestValidationResult result);
+  static void RecordMessageDispatchContextValidationResult(
+      ServiceWorkerMessageDispatchContextValidationResult result);
+  static void RecordStartWorkerContextValidationDifference(
+      ServiceWorkerStartWorkerContextValidationDifference result);
 
   // Not used for UMA.
   enum class StartSituation {

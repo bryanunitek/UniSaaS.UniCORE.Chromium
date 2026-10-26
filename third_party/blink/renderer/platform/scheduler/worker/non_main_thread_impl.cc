@@ -25,6 +25,7 @@
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/platform/heap/blink_gc_memory_dump_provider.h"
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/common/task_priority.h"
 #include "third_party/blink/renderer/platform/scheduler/worker/worker_scheduler_proxy.h"
 #include "third_party/blink/renderer/platform/scheduler/worker/worker_thread_scheduler.h"
@@ -55,7 +56,6 @@ NonMainThreadImpl::NonMainThreadImpl(const ThreadCreationParams& params)
 
   base::MessagePumpType message_pump_type = base::MessagePumpType::DEFAULT;
   if (params.thread_type == ThreadType::kCompositorThread &&
-      base::FeatureList::IsEnabled(features::kDirectCompositorThreadIpc) &&
       mojo::IsDirectReceiverSupported()) {
     message_pump_type = base::MessagePumpType::IO;
   }
@@ -98,6 +98,18 @@ void NonMainThreadImpl::ShutdownOnThread() {
   Scheduler()->Shutdown();
 }
 
+void NonMainThreadImpl::AddTaskTimeObserver(
+    base::sequence_manager::TaskTimeObserver* task_time_observer) {
+  GetNonMainThreadScheduler()->GetHelper().AddTaskTimeObserver(
+      task_time_observer);
+}
+
+void NonMainThreadImpl::RemoveTaskTimeObserver(
+    base::sequence_manager::TaskTimeObserver* task_time_observer) {
+  GetNonMainThreadScheduler()->GetHelper().RemoveTaskTimeObserver(
+      task_time_observer);
+}
+
 NonMainThreadImpl::SimpleThreadImpl::SimpleThreadImpl(
     const String& name_prefix,
     const base::SimpleThread ::Options& options,
@@ -120,6 +132,10 @@ NonMainThreadImpl::SimpleThreadImpl::SimpleThreadImpl(
       base::sequence_manager::SequenceManager::Settings::Builder()
           .SetMessagePumpType(message_pump_type)
           .SetPrioritySettings(CreatePrioritySettings())
+          // Stamp each task with its queue time so the Long Animation Frame
+          // congested-moment detection can measure queuing delay on workers.
+          .SetAddQueueTimeToTasks(
+              RuntimeEnabledFeatures::LongAnimationFrameWorkerEnabled())
           .Build());
   internal_task_queue_ = sequence_manager_->CreateTaskQueue(
       base::sequence_manager::TaskQueue::Spec(
@@ -141,8 +157,11 @@ void NonMainThreadImpl::SimpleThreadImpl::CreateScheduler() {
           TaskType::kWorkerThreadTaskQueueDefault);
 }
 
-NonMainThreadImpl::GCSupport::GCSupport(NonMainThreadImpl* thread) {
-  ThreadState* thread_state = ThreadState::AttachCurrentThread();
+NonMainThreadImpl::GCSupport::GCSupport(
+    NonMainThreadImpl* thread,
+    cppgc::StackStartMarker stack_start_marker) {
+  ThreadState* thread_state =
+      ThreadState::AttachCurrentThread(stack_start_marker);
   blink_gc_memory_dump_provider_ = std::make_unique<BlinkGCMemoryDumpProvider>(
       thread_state, base::SingleThreadTaskRunner::GetCurrentDefault(),
       BlinkGCMemoryDumpProvider::HeapType::kBlinkWorkerThread);
@@ -173,8 +192,10 @@ void NonMainThreadImpl::SimpleThreadImpl::Run() {
   run_loop_ = &run_loop;
   Thread::UpdateThreadTLS(thread_);
 
-  if (supports_gc_)
-    gc_support_ = std::make_unique<GCSupport>(thread_);
+  if (supports_gc_) {
+    cppgc::StackStartMarker stack_start_marker;
+    gc_support_ = std::make_unique<GCSupport>(thread_, stack_start_marker);
+  }
   run_loop_->Run();
   gc_support_.reset();
 

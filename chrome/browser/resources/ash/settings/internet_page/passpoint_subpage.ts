@@ -24,7 +24,7 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {castExists} from '../assert_extras.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router, routes} from '../router.js';
 
 import {PasspointListenerMixin} from './passpoint_listener_mixin.js';
@@ -81,18 +81,18 @@ export class SettingsPasspointSubpageElement extends PasspointListenerMixin
     };
   }
 
-  private app_: App|null;
+  declare private app_: App|null;
   private appHandler_: PageHandlerInterface;
-  private certs_: NetworkCertificate[];
-  private certificateAuthorityName_: string;
-  private domainsExpanded_: boolean;
-  private id_: string;
+  declare private certs_: NetworkCertificate[];
+  declare private certificateAuthorityName_: string;
+  declare private domainsExpanded_: boolean;
+  declare private id_: string;
   private networkConfig_: CrosNetworkConfigInterface;
-  private networks_: NetworkStateProperties[];
+  declare private networks_: NetworkStateProperties[];
   private passpointService_: PasspointServiceInterface;
-  private providerName_: string;
-  private showForgetDialog_: boolean;
-  private subscription_: PasspointSubscription|null;
+  declare private providerName_: string;
+  declare private showForgetDialog_: boolean;
+  declare private subscription_: PasspointSubscription|null;
 
   constructor() {
     super();

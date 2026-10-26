@@ -11,7 +11,7 @@
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/simple_message_box_internal.h"
 #include "chrome/browser/ui/webui/signin/signin_ui_error.h"
 #include "chrome/browser/ui/webui/signin/signin_utils_desktop.h"
@@ -111,7 +111,7 @@ IN_PROC_BROWSER_TEST_F(AccountsPolicyManagerBrowserTest,
   EXPECT_FALSE(entry);
 
   // The current profile should be different.
-  EXPECT_NE(browser()->profile()->GetPath(), default_profile_path);
+  EXPECT_NE(browser()->GetProfile()->GetPath(), default_profile_path);
 }
 
 IN_PROC_BROWSER_TEST_F(AccountsPolicyManagerBrowserTest,
@@ -164,7 +164,7 @@ IN_PROC_BROWSER_TEST_F(AccountsPolicyManagerBrowserTest,
   EXPECT_EQ(error.type(), SigninUIError::Type::kSigninCookiesDisallowed);
 
   // The current profile should be the default one.
-  EXPECT_EQ(browser()->profile()->GetPath(), default_profile_path);
+  EXPECT_EQ(browser()->GetProfile()->GetPath(), default_profile_path);
 
   // The user should still be signed in.
   EXPECT_TRUE(

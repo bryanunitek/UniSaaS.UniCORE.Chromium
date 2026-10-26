@@ -229,8 +229,9 @@ bool CommandService::AddKeybindingPref(const ui::Accelerator& accelerator,
   }
 
   // Media Keys are allowed to be used by named command only.
-  DCHECK(!accelerator.IsMediaKey() ||
-         !Command::IsActionRelatedCommand(command_name));
+  CHECK(!accelerator.IsMediaKey() ||
+            !Command::IsActionRelatedCommand(command_name),
+        base::NotFatalUntil::M161);
 
   ScopedDictPrefUpdate updater(profile_->GetPrefs(), prefs::kExtensionCommands);
   base::DictValue& bindings = updater.Get();
@@ -360,7 +361,7 @@ Command CommandService::FindCommandByName(const ExtensionId& extension_id,
         shortcut, ":", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
     CHECK(tokens.size() >= 2);
 
-    return Command(*command_name, std::u16string(), std::string(tokens[1]),
+    return Command(*command_name, std::u16string(), tokens[1],
                    global.value_or(false));
   }
 

@@ -6,20 +6,21 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/webui_url_constants.h"
+#include "base/check_deref.h"
 #include "base/containers/span.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part_ash.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/reporting_util.h"
 #include "chrome/browser/ui/webui/ash/enterprise_reporting/enterprise_reporting.mojom.h"
 #include "chrome/browser/ui/webui/ash/enterprise_reporting/enterprise_reporting_page_handler.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/grit/enterprise_reporting_resources.h"
 #include "chrome/grit/enterprise_reporting_resources_map.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -29,20 +30,20 @@
 namespace {
 // Returns the device information to be displayed on the
 // chrome://enterprise-reporting page.
-base::DictValue GetDeviceInfo(content::WebUI* web_ui) {
+base::DictValue GetDeviceInfo(
+    const policy::BrowserPolicyConnectorAsh& connector,
+    content::WebUI* web_ui) {
   base::DictValue device_info;
-  policy::BrowserPolicyConnectorAsh* connector =
-      g_browser_process->platform_part()->browser_policy_connector_ash();
 
   device_info.Set("revision", version_info::GetLastChange());
   device_info.Set("version", version_info::GetVersionNumber());
   device_info.Set(
       "clientId",
       reporting::GetUserClientId(Profile::FromWebUI(web_ui)).value_or(""));
-  device_info.Set("directoryId", connector->GetDirectoryApiID());
+  device_info.Set("directoryId", connector.GetDirectoryApiID());
   device_info.Set("enrollmentDomain",
-                  connector->GetEnterpriseEnrollmentDomain());
-  device_info.Set("obfuscatedCustomerId", connector->GetObfuscatedCustomerID());
+                  connector.GetEnterpriseEnrollmentDomain());
+  device_info.Set("obfuscatedCustomerId", connector.GetObfuscatedCustomerID());
 
   return device_info;
 }
@@ -50,18 +51,42 @@ base::DictValue GetDeviceInfo(content::WebUI* web_ui) {
 
 namespace ash::reporting {
 
-EnterpriseReportingUI::EnterpriseReportingUI(content::WebUI* web_ui)
-    : ui::MojoWebUIController(web_ui) {
-  DCHECK(base::FeatureList::IsEnabled(ash::features::kEnterpriseReportingUI));
+EnterpriseReportingUIConfig::EnterpriseReportingUIConfig(
+    const policy::BrowserPolicyConnectorAsh* connector)
+    : WebUIConfig(content::kChromeUIScheme,
+                  ash::kChromeUIEnterpriseReportingHost),
+      connector_(CHECK_DEREF(connector)) {}
+
+EnterpriseReportingUIConfig::~EnterpriseReportingUIConfig() = default;
+
+bool EnterpriseReportingUIConfig::IsWebUIEnabled(
+    content::BrowserContext* browser_context) {
+  return base::FeatureList::IsEnabled(ash::features::kEnterpriseReportingUI);
+}
+
+std::unique_ptr<content::WebUIController>
+EnterpriseReportingUIConfig::CreateWebUIController(content::WebUI* web_ui,
+                                                   const GURL& url) {
+  return std::make_unique<EnterpriseReportingUI>(&connector_.get(), web_ui);
+}
+
+EnterpriseReportingUI::EnterpriseReportingUI(
+    const policy::BrowserPolicyConnectorAsh* connector,
+    content::WebUI* web_ui)
+    : ui::MojoWebUIController(web_ui), connector_(CHECK_DEREF(connector)) {
+  CHECK(base::FeatureList::IsEnabled(ash::features::kEnterpriseReportingUI),
+        base::NotFatalUntil::M162);
   // Set up the chrome://enterprise-reporting source.
+  Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* html_source =
       content::WebUIDataSource::CreateAndAdd(
-          web_ui->GetWebContents()->GetBrowserContext(),
-          ash::kChromeUIEnterpriseReportingHost);
+          profile, ash::kChromeUIEnterpriseReportingHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   // Populate device info.
-  html_source->AddString("deviceInfo",
-                         base::WriteJson(GetDeviceInfo(web_ui)).value_or(""));
+  html_source->AddString(
+      "deviceInfo",
+      base::WriteJson(GetDeviceInfo(connector_.get(), web_ui)).value_or(""));
 
   // Add required resources.
   webui::SetupWebUIDataSource(
@@ -70,11 +95,6 @@ EnterpriseReportingUI::EnterpriseReportingUI(content::WebUI* web_ui)
 }
 
 EnterpriseReportingUI::~EnterpriseReportingUI() = default;
-
-bool EnterpriseReportingUIConfig::IsWebUIEnabled(
-    content::BrowserContext* browser_context) {
-  return base::FeatureList::IsEnabled(ash::features::kEnterpriseReportingUI);
-}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(EnterpriseReportingUI)
 
@@ -90,7 +110,7 @@ void EnterpriseReportingUI::BindInterface(
 void EnterpriseReportingUI::CreatePageHandler(
     mojo::PendingRemote<enterprise_reporting::mojom::Page> page,
     mojo::PendingReceiver<enterprise_reporting::mojom::PageHandler> receiver) {
-  DCHECK(page);
+  CHECK(page, base::NotFatalUntil::M162);
   // Ensure sequencing for `EnterpriseReportingPageHandler` in order to make it
   // capable of using weak pointers.
   page_handler_ = EnterpriseReportingPageHandler::Create(std::move(receiver),

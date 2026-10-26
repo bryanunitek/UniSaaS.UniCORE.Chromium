@@ -13,7 +13,6 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowPackageManager;
 
 import org.chromium.base.ContextUtils;
@@ -27,7 +26,6 @@ import java.util.List;
 
 /** Unit test for {@link DefaultBrowserStateProvider}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class DefaultBrowserStateProviderTest {
     DefaultBrowserStateProvider mProvider;
 
@@ -66,10 +64,10 @@ public class DefaultBrowserStateProviderTest {
     public void testIsChromePreStableInstalled() {
         List<ResolveInfo> infoList = new ArrayList<>();
         ShadowPackageManager packageManager =
-                Shadows.shadowOf(RuntimeEnvironment.application.getPackageManager());
+                Shadows.shadowOf(RuntimeEnvironment.getApplication().getPackageManager());
         // Setting android_manifest in the junit_binary build rule causes the current package to
         // appear in the PackageManager.
-        packageManager.deletePackage(RuntimeEnvironment.application.getPackageName());
+        packageManager.deletePackage(RuntimeEnvironment.getApplication().getPackageName());
 
         infoList.add(createResolveInfo(ChromePackageNameVariant.CHROME_STABLE_PACKAGE_NAME, 1));
         packageManager.addResolveInfoForIntent(PackageManagerUtils.BROWSER_INTENT, infoList);

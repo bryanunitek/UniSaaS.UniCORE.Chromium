@@ -19,6 +19,7 @@
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/throbber.h"
 #include "ui/views/layout/box_layout.h"
@@ -41,7 +42,7 @@ SaveIbanBubbleView::SaveIbanBubbleView(views::BubbleAnchor anchor_view,
                                        IbanBubbleController* controller)
     : AutofillLocationBarBubble(anchor_view, web_contents),
       controller_(controller) {
-  DCHECK(controller);
+  CHECK(controller, base::NotFatalUntil::M162);
   SetButtonLabel(ui::mojom::DialogButton::kOk,
                  controller->GetAcceptButtonText());
   SetButtonLabel(ui::mojom::DialogButton::kCancel,
@@ -309,7 +310,7 @@ bool SaveIbanBubbleView::Accept() {
   }
 
   if (controller_) {
-    DCHECK(nickname_textfield_);
+    CHECK(nickname_textfield_, base::NotFatalUntil::M162);
     controller_->OnAcceptButton(nickname_textfield_->GetText());
   }
 
@@ -336,7 +337,7 @@ std::unique_ptr<views::View> SaveIbanBubbleView::CreateLegalMessageView() {
       message_lines,
       v2_branding_enabled
           ? /*user_email=*/std::u16string()
-          : base::UTF8ToUTF16(controller()->GetAccountInfo().email),
+          : base::UTF8ToUTF16(controller()->GetAccountInfo().GetEmail()),
       v2_branding_enabled ? /*user_avatar=*/ui::ImageModel()
                           : GetProfileAvatar(controller()->GetAccountInfo()),
       base::BindRepeating(&SaveIbanBubbleView::LinkClicked,

@@ -4,39 +4,58 @@
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_stats_report.h"
 
-#include "base/compiler_specific.h"
-#include "base/feature_list.h"
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+
+#include "base/check.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
-#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/renderer/bindings/core/v8/iterable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_audio_playout_stats.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_audio_source_stats.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_certificate_stats.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_codec_stats.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_data_channel_state.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_data_channel_stats.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_dtls_role.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_dtls_transport_state.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_candidate_pair_stats.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_candidate_stats.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_candidate_type.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_role.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_server_transport_protocol.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_tcp_candidate_type.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_transport_state.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_inbound_rtp_stream_stats.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_media_source_stats.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_network_type.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_outbound_rtp_stream_stats.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_peer_connection_stats.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_received_rtp_stream_stats.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_quality_limitation_reason.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_remote_inbound_rtp_stream_stats.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_remote_outbound_rtp_stream_stats.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_sent_rtp_stream_stats.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_stats.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_stats_ice_candidate_pair_state.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_stats_type.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_transport_stats.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_video_source_stats.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/core/loader/document_load_timing.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/modules/mediastream/user_media_client.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_stats.h"
 #include "third_party/blink/renderer/platform/peerconnection/webrtc_util.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/webrtc/api/stats/rtc_stats.h"
 #include "third_party/webrtc/api/stats/rtc_stats_report.h"
 #include "third_party/webrtc/api/stats/rtcstats_objects.h"
@@ -54,14 +73,11 @@ T StatsConversionHelper(const T& value) {
 String StatsConversionHelper(const std::string& value) {
   return String::FromUtf8(value);
 }
-uint32_t StatsConversionHelper(const uint64_t& value) {
-  return base::saturated_cast<uint32_t>(value);
-}
 
 // Macro to reduce the transformation between WebRTC and v8 values
 // to a single line. Arguments are the webrtc stat and the equivalent
 // v8 setter function. Uses StatsConversionHelper to specialize for
-// std::string -> String::FromUtf8 and uint64_t -> uint32_t.
+// std::string -> String::FromUtf8.
 #define SET_STAT(webrtc_stat, v8_setter)            \
   if (webrtc_stat.has_value()) {                    \
     v8_setter(StatsConversionHelper(*webrtc_stat)); \
@@ -294,8 +310,6 @@ RTCOutboundRtpStreamStats* ToV8Stat(
            v8_stat->setRetransmittedBytesSent);
   SET_STAT(webrtc_stat.rtx_ssrc, v8_stat->setRtxSsrc);
   SET_STAT(webrtc_stat.target_bitrate, v8_stat->setTargetBitrate);
-  SET_STAT(webrtc_stat.total_encoded_bytes_target,
-           v8_stat->setTotalEncodedBytesTarget);
   SET_STAT(webrtc_stat.frame_width, v8_stat->setFrameWidth);
   SET_STAT(webrtc_stat.frame_height, v8_stat->setFrameHeight);
   SET_STAT(webrtc_stat.frames_per_second, v8_stat->setFramesPerSecond);
@@ -420,8 +434,6 @@ RTCAudioPlayoutStats* ToV8Stat(
     v8_stat->setSynthesizedSamplesEvents(base::saturated_cast<uint32_t>(
         *webrtc_stat.synthesized_samples_events));
   }
-  SET_STAT(webrtc_stat.synthesized_samples_events,
-           v8_stat->setSynthesizedSamplesEvents);
   SET_STAT(webrtc_stat.total_samples_duration,
            v8_stat->setTotalSamplesDuration);
   SET_STAT(webrtc_stat.total_playout_delay, v8_stat->setTotalPlayoutDelay);
@@ -487,7 +499,7 @@ RTCTransportStats* ToV8Stat(ScriptState* script_state,
   SET_STAT(webrtc_stat.selected_candidate_pair_changes,
            v8_stat->setSelectedCandidatePairChanges);
   SET_STAT(webrtc_stat.ccfb_messages_received,
-           v8_stat->setCcbfMessagesReceived);
+           v8_stat->setCcfbMessagesReceived);
   // https://w3c.github.io/webrtc-provisional-stats/#dom-rtctransportstats-rtcptransportstatsid
   SET_STAT(webrtc_stat.rtcp_transport_stats_id,
            v8_stat->setRtcpTransportStatsId);

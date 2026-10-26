@@ -29,17 +29,13 @@
 #include "gpu/ipc/service/command_buffer_stub.h"
 #include "gpu/ipc/service/gpu_ipc_service_export.h"
 #include "gpu/ipc/service/shared_image_stub.h"
-#include "ipc/ipc_sync_channel.h"
+#include "ipc/ipc_channel_proxy.h"
 #include "mojo/public/cpp/bindings/generic_pending_associated_receiver.h"
+#include "services/viz/privileged/mojom/gl/gpu_client_type.mojom.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/gpu_extra_info.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/gl/gl_share_group.h"
 #include "ui/gl/gpu_preference.h"
-
-namespace base {
-class WaitableEvent;
-}
 
 namespace gpu {
 class DCOMPTexture;
@@ -69,16 +65,13 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
       int32_t client_id,
       uint64_t client_tracing_id,
-      bool is_gpu_host,
-      bool enable_extra_handles_validation,
-      const gfx::GpuExtraInfo& gpu_extra_info,
+      viz::mojom::GpuClientType client_type,
       const gpu::GPUInfo& gpu_info,
       const gpu::GpuFeatureInfo& gpu_feature_info);
 
   // Init() sets up the underlying IPC channel.  Use a separate method because
   // we don't want to do that in tests.
-  void Init(mojo::MessagePipeHandle channel_handle,
-            base::WaitableEvent* shutdown_event);
+  void Init(mojo::MessagePipeHandle channel_handle);
 
   // Start receiving messages on the GpuChannel interface and scheduling
   // appropriate tasks as needed to handle them.
@@ -120,10 +113,7 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
     return io_task_runner_;
   }
 
-  bool is_gpu_host() const { return is_gpu_host_; }
-  bool enable_extra_handles_validation() const {
-    return enable_extra_handles_validation_;
-  }
+  viz::mojom::GpuClientType client_type() const { return client_type_; }
 
   // IPC::Listener implementation:
   void OnChannelError() override;
@@ -236,22 +226,20 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
              scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
              int32_t client_id,
              uint64_t client_tracing_id,
-             bool is_gpu_host,
-             bool enable_extra_handles_validation,
-             const gfx::GpuExtraInfo& gpu_extra_info,
+             viz::mojom::GpuClientType client_type,
              const gpu::GPUInfo& gpu_info,
              const gpu::GpuFeatureInfo& gpu_feature_info);
 
   void OnDestroyCommandBuffer(int32_t route_id);
 
   // Message handlers for control messages.
-  bool CreateSharedImageStub(const gfx::GpuExtraInfo& gpu_extra_info);
+  bool CreateSharedImageStub();
 
   // Immediately destroy this GpuChannel. Must only be called if the channel is
   // already disconnected.
   void Destroy();
 
-  std::unique_ptr<IPC::SyncChannel> sync_channel_;  // nullptr in tests.
+  std::unique_ptr<IPC::ChannelProxy> channel_proxy_;  // nullptr in tests.
 
   base::ProcessId client_pid_ = base::kNullProcessId;
 
@@ -295,8 +283,7 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
 
   std::unique_ptr<SharedImageStub> shared_image_stub_;
 
-  const bool is_gpu_host_;
-  const bool enable_extra_handles_validation_;
+  const viz::mojom::GpuClientType client_type_;
 
 #if BUILDFLAG(IS_WIN)
   // Set of active DCOMPTextures.

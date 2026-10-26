@@ -37,6 +37,7 @@
 #include "third_party/blink/public/mojom/frame/blocked_navigation_types.mojom.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom-forward.h"
 #include "third_party/blink/public/mojom/installedapp/related_application.mojom.h"
+#include "third_party/blink/public/mojom/manifest/application_context.mojom.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
 #include "third_party/blink/public/mojom/page/draggable_region.mojom-forward.h"
 #include "third_party/blink/public/mojom/picture_in_picture/picture_in_picture.mojom-forward.h"
@@ -99,6 +100,7 @@ class Origin;
 
 namespace blink {
 class WebGestureEvent;
+class WebMouseEvent;
 enum class ProtocolHandlerSecurityLevel;
 }  // namespace blink
 
@@ -110,10 +112,11 @@ class ColorChooser;
 #endif
 class EyeDropperListener;
 class FileSelectListener;
+class InitiatorNavigationState;
 class JavaScriptDialogManager;
 class RenderFrameHost;
 class RenderWidgetHost;
-class SessionStorageNamespace;
+class SessionStorageNamespaceHandle;
 class SiteInstance;
 class WebContents;
 struct ContextMenuParams;
@@ -336,18 +339,26 @@ class CONTENT_EXPORT WebContentsDelegate {
   virtual void PreHandleDragExit() {}
   virtual void HandleDragEnded() {}
 
+  // NOTE: For all the `PreHandle...Event()` functions below,
+  //  * Renderers expect consistent event streams, so if you mark e.g. a keydown
+  //    or mousedown event as handled, you should also handle the corresponding
+  //    keyup/mouseup.
+  //  * Doing anything complex to handle, especially if it results in deleting
+  //    objects, risks re-entrancy and UAF bugs. Keep your handlers simple.
+
   // Allows delegates to handle keyboard events before sending to the renderer.
   // See enum for description of return values.
   virtual KeyboardEventProcessingResult PreHandleKeyboardEvent(
       WebContents* source,
       const input::NativeWebKeyboardEvent& event);
 
-  // Allows delegates to handle unhandled keyboard messages coming back from
-  // the renderer. Returns true if the event was handled, false otherwise. A
-  // true value means no more processing should happen on the event. The default
-  // return value is false
-  virtual bool HandleKeyboardEvent(WebContents* source,
-                                   const input::NativeWebKeyboardEvent& event);
+  // Allows delegates to handle mouse events before sending to the renderer.
+  // Returns true if the |event| was handled and thus shouldn't be processed
+  // by the renderer's event handler.
+  // NOTE: Does not currently handle wheel events. These could be added if
+  // desired.
+  virtual bool PreHandleMouseEvent(WebContents* source,
+                                   const blink::WebMouseEvent& event);
 
   // Allows delegates to handle gesture events before sending to the renderer.
   // Returns true if the |event| was handled and thus shouldn't be processed
@@ -356,6 +367,13 @@ class CONTENT_EXPORT WebContentsDelegate {
   // and dispatched after the touches return without being "preventDefault()"ed.
   virtual bool PreHandleGestureEvent(WebContents* source,
                                      const blink::WebGestureEvent& event);
+
+  // Allows delegates to handle unhandled keyboard messages coming back from
+  // the renderer. Returns true if the event was handled, false otherwise. A
+  // true value means no more processing should happen on the event. The default
+  // return value is false
+  virtual bool HandleKeyboardEvent(WebContents* source,
+                                   const input::NativeWebKeyboardEvent& event);
 
   // Called when an external drag event enters the web contents window. Return
   // true to allow dragging and dropping on the web contents window or false to
@@ -403,7 +421,7 @@ class CONTENT_EXPORT WebContentsDelegate {
       WindowOpenDisposition disposition,
       const blink::mojom::WindowFeatures& window_features,
       const StoragePartitionConfig& partition_config,
-      SessionStorageNamespace* session_storage_namespace);
+      SessionStorageNamespaceHandle* session_storage_namespace);
 
   // Notifies the delegate about the creation of a new WebContents. This
   // typically happens when popups are created.
@@ -511,6 +529,9 @@ class CONTENT_EXPORT WebContentsDelegate {
   // both the value set by the AWC API and browser's "native" resizability.
   virtual bool GetCanResize();
 
+  // Returns whether the window is an always-on-top popup.
+  virtual bool GetIsAlwaysOnTopPopup();
+
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   // Returns whether the RFH can use Additional Windowing Controls (AWC) APIs.
   // https://github.com/explainers-by-googlers/additional-windowing-controls/blob/main/README.md
@@ -561,6 +582,11 @@ class CONTENT_EXPORT WebContentsDelegate {
   virtual blink::mojom::DisplayMode GetDisplayMode(
       const WebContents* web_contents);
 
+  // Reflects the application context in which the document's top-level browsing
+  // context is running.
+  virtual blink::mojom::ApplicationContext GetApplicationContext(
+      const WebContents* web_contents);
+
   // Returns the security level to use for Navigator.RegisterProtocolHandler().
   virtual blink::ProtocolHandlerSecurityLevel GetProtocolHandlerSecurityLevel(
       RenderFrameHost* requesting_frame);
@@ -580,16 +606,6 @@ class CONTENT_EXPORT WebContentsDelegate {
                                          const std::string& protocol,
                                          const GURL& url,
                                          bool user_gesture) {}
-
-  // Result of string search in the page. This includes the number of matches
-  // found and the selection rect (in screen coordinates) for the string found.
-  // If |final_update| is false, it indicates that more results follow.
-  virtual void FindReply(WebContents* web_contents,
-                         int request_id,
-                         int number_of_matches,
-                         const gfx::Rect& selection_rect,
-                         int active_match_ordinal,
-                         bool final_update) {}
 
 #if BUILDFLAG(IS_ANDROID)
   // Provides the rects of the current find-in-page matches.
@@ -714,6 +730,7 @@ class CONTENT_EXPORT WebContentsDelegate {
       const GURL& blocked_url,
       const GURL& initiator_url,
       const url::Origin& initiator_origin,
+      scoped_refptr<InitiatorNavigationState> initiator_navigation_state,
       blink::mojom::NavigationBlockedReason reason) {}
 
   // Reports that passive mixed content was found at the specified url.
@@ -895,11 +912,13 @@ class CONTENT_EXPORT WebContentsDelegate {
       base::OnceCallback<void(const SkBitmap&)> callback);
 
   // Gets the page content annotations for the given WebContents.
-  // The callback gets a serialized AnnotatedPageContent proto.
+  // The callback gets a serialized AnnotatedPageContent proto or an error
+  // message string if extraction failed or is unsupported by the embedder.
   virtual void GetAIPageContent(
       WebContents* web_contents,
       bool include_actionable_elements,
-      base::OnceCallback<void(const std::string&)> callback);
+      base::OnceCallback<void(base::expected<std::string, std::string>)>
+          callback);
 
 #if BUILDFLAG(IS_ANDROID)
   // Allow delegate to override how to take a snapshot of this WebContents into
@@ -964,6 +983,9 @@ class CONTENT_EXPORT WebContentsDelegate {
 
  protected:
   virtual ~WebContentsDelegate();
+
+  virtual void OnAttached(WebContents* source);
+  virtual void OnDetaching(WebContents* source);
 
  private:
   friend class WebContentsImpl;

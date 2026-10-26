@@ -26,6 +26,7 @@
 #include "ui/events/devices/input_device.h"
 #include "ui/events/devices/keyboard_device.h"
 #include "ui/events/devices/touchscreen_device.h"
+#include "ui/events/platform/wayland/wayland_event_watcher.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/linux/scoped_gbm_device.h"
 #include "ui/ozone/common/features.h"
@@ -48,6 +49,7 @@
 #include "ui/ozone/platform/wayland/host/wayland_data_drag_controller.h"
 #include "ui/ozone/platform/wayland/host/wayland_drm.h"
 #include "ui/ozone/platform/wayland/host/wayland_event_source.h"
+#include "ui/ozone/platform/wayland/host/wayland_idle_notify.h"
 #include "ui/ozone/platform/wayland/host/wayland_input_method_context.h"
 #include "ui/ozone/platform/wayland/host/wayland_keyboard.h"
 #include "ui/ozone/platform/wayland/host/wayland_output_manager.h"
@@ -94,6 +96,7 @@ constexpr uint32_t kMaxXdgToplevelDragVersion = 1;
 constexpr uint32_t kMaxXdgOutputManagerVersion = 3;
 constexpr uint32_t kMaxKeyboardShortcutsInhibitManagerVersion = 1;
 constexpr uint32_t kMaxWpContentTypeVersion = 1;
+constexpr uint32_t kMaxFixesVersion = 2;
 
 int64_t ConvertTimespecToMicros(const struct timespec& ts) {
   // On 32-bit systems, the calculation cannot overflow int64_t.
@@ -138,6 +141,9 @@ bool MinSupportedKernelForLinuxDrmSyncobj() {
 WaylandConnection::WaylandConnection() = default;
 
 WaylandConnection::~WaylandConnection() {
+  if (fixes_ && registry_) {
+    wl_fixes_destroy_registry(fixes_.get(), registry_.get());
+  }
   if (wayland_output_manager() && wayland_output_manager()->wayland_screen()) {
     wayland_output_manager()->wayland_screen()->ResetConnection();
   }
@@ -146,6 +152,8 @@ WaylandConnection::~WaylandConnection() {
 bool WaylandConnection::Initialize(bool use_threaded_polling) {
   // Register factories for classes that implement wl::GlobalObjectRegistrar<T>.
   // Keep alphabetical order for convenience.
+  RegisterGlobalObjectFactory(ExtIdleNotifier::kInterfaceName,
+                              &ExtIdleNotifier::Instantiate);
   RegisterGlobalObjectFactory(FractionalScaleManager::kInterfaceName,
                               &FractionalScaleManager::Instantiate);
   RegisterGlobalObjectFactory(GtkPrimarySelectionDeviceManager::kInterfaceName,
@@ -249,6 +257,12 @@ bool WaylandConnection::Initialize(bool use_threaded_polling) {
   // blocks until wl_display.sync is done. Use it to ensure the required globals
   // are emitted.
   while (!WlGlobalsReady()) {
+    if (int err = wl_display_get_error(display())) {
+      LOG(ERROR) << "Wayland connection error during initialization: "
+                 << WaylandEventWatcher::GetWaylandProtocolError(err,
+                                                                 display());
+      return false;
+    }
     RoundTripQueue();
   }
 
@@ -426,7 +440,8 @@ std::vector<TouchscreenDevice> WaylandConnection::CreateTouchscreenDevices()
 }
 
 void WaylandConnection::UpdateCursor() {
-  if (auto* pointer = seat_->pointer()) {
+  // The compositor may not have announced a wl_seat (see Initialize()).
+  if (auto* pointer = seat_ ? seat_->pointer() : nullptr) {
     cursor_ = std::make_unique<WaylandCursor>(pointer, this);
     cursor_->set_listener(listener_);
     cursor_position_ = std::make_unique<WaylandCursorPosition>();
@@ -583,6 +598,11 @@ void WaylandConnection::OnGlobalRemove(void* data,
   // output object exists and removes it.
   if (self->output_manager_) {
     self->output_manager_->RemoveWaylandOutput(name);
+  }
+
+  if (self->fixes_ && wl::get_version_of_object(self->fixes_.get()) >=
+                          WL_FIXES_ACK_GLOBAL_REMOVE_SINCE_VERSION) {
+    wl_fixes_ack_global_remove(self->fixes_.get(), registry, name);
   }
 }
 
@@ -768,6 +788,13 @@ void WaylandConnection::HandleGlobal(wl_registry* registry,
     }
     if (output_manager_) {
       output_manager_->InitializeAllXdgOutputs();
+    }
+  } else if (!fixes_ && UNSAFE_TODO(strcmp(interface, "wl_fixes")) == 0) {
+    fixes_ =
+        wl::Bind<wl_fixes>(registry, name, std::min(version, kMaxFixesVersion));
+    if (!fixes_) {
+      LOG(ERROR) << "Failed to bind to wl_fixes global";
+      return;
     }
   }
 

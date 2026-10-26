@@ -8,10 +8,12 @@
 #include "chrome/browser/ash/input_method/editor_geolocation_provider.h"
 #include "chrome/browser/ash/input_method/editor_mediator.h"
 #include "chrome/browser/ash/policy/handlers/configuration_policy_handler_ash.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/global_features.h"
+#include "chrome/browser/manta/manta_service_factory.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
@@ -24,8 +26,7 @@ class OrcaPolicyTest : public PolicyTest {
  public:
   OrcaPolicyTest() {
     feature_list_.InitWithFeatures(
-        /*enabled_features=*/{chromeos::features::kOrca,
-                              chromeos::features::kFeatureManagementOrca,
+        /*enabled_features=*/{chromeos::features::kFeatureManagementOrca,
                               ash::features::kOrcaForManagedUsers},
         // TODO: b:329215512: Remove the OrcaUseAccountCapabilities from the
         // disable list.
@@ -34,7 +35,7 @@ class OrcaPolicyTest : public PolicyTest {
   }
 
  public:
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
  protected:
   base::test::ScopedFeatureList feature_list_;
@@ -42,7 +43,8 @@ class OrcaPolicyTest : public PolicyTest {
 
 IN_PROC_BROWSER_TEST_F(OrcaPolicyTest, EnablesChromeOSHMWIfOrcaPolicyUnset) {
   ash::input_method::EditorMediator editor_mediator(
-      profile(),
+      g_browser_process->GetFeatures()->application_locale_storage(), profile(),
+      manta::MantaServiceFactory::GetForProfile(profile()),
       std::make_unique<ash::input_method::EditorGeolocationMockProvider>("au"));
 
   EXPECT_EQ(profile()->GetPrefs()->GetInteger(ash::prefs::kHmwManagedSettings),
@@ -55,7 +57,8 @@ IN_PROC_BROWSER_TEST_F(
     OrcaPolicyTest,
     EnablesChromeOSHMWAndFeedbackIfPolicySetToEnabledWithAIImprovement) {
   ash::input_method::EditorMediator editor_mediator(
-      profile(),
+      g_browser_process->GetFeatures()->application_locale_storage(), profile(),
+      manta::MantaServiceFactory::GetForProfile(profile()),
       std::make_unique<ash::input_method::EditorGeolocationMockProvider>("au"));
   PolicyMap policies;
 
@@ -73,7 +76,8 @@ IN_PROC_BROWSER_TEST_F(
     OrcaPolicyTest,
     EnablesChromeOSHMWButDisableFeedbackIfPolicySetToEnabledWithoutAIImprovement) {
   ash::input_method::EditorMediator editor_mediator(
-      profile(),
+      g_browser_process->GetFeatures()->application_locale_storage(), profile(),
+      manta::MantaServiceFactory::GetForProfile(profile()),
       std::make_unique<ash::input_method::EditorGeolocationMockProvider>("au"));
   PolicyMap policies;
 
@@ -90,7 +94,8 @@ IN_PROC_BROWSER_TEST_F(
 IN_PROC_BROWSER_TEST_F(OrcaPolicyTest,
                        DisableChromeOSHMWFeedbackIfPolicySetToDisabled) {
   ash::input_method::EditorMediator editor_mediator(
-      profile(),
+      g_browser_process->GetFeatures()->application_locale_storage(), profile(),
+      manta::MantaServiceFactory::GetForProfile(profile()),
       std::make_unique<ash::input_method::EditorGeolocationMockProvider>("au"));
   PolicyMap policies;
 

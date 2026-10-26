@@ -23,6 +23,7 @@ struct VectorIcon;
 class TestLocationBarModel : public LocationBarModel {
  public:
   TestLocationBarModel();
+  explicit TestLocationBarModel(ui::UnownedUserDataHost& host);
   ~TestLocationBarModel() override;
   TestLocationBarModel(const TestLocationBarModel&) = delete;
   TestLocationBarModel& operator=(const TestLocationBarModel&) = delete;
@@ -74,6 +75,9 @@ class TestLocationBarModel : public LocationBarModel {
       metrics::OmniboxEventProto::PageClassification page_classification) {
     page_classification_ = page_classification;
   }
+  void set_is_contextual_tasks_page(bool is_contextual_tasks_page) {
+    is_contextual_tasks_page_ = is_contextual_tasks_page;
+  }
 
  private:
   // If either of these is not explicitly set, the test class will return
@@ -85,13 +89,14 @@ class TestLocationBarModel : public LocationBarModel {
   security_state::SecurityLevel security_level_ = security_state::NONE;
   net::CertStatus cert_status_ = 0;
   raw_ptr<const gfx::VectorIcon> icon_ = nullptr;
-  bool should_display_url_ = false;
+  bool should_display_url_ = true;
   bool offline_page_ = false;
-  std::u16string secure_display_text_ = std::u16string();
-  std::u16string secure_accessibility_text_ = std::u16string();
+  std::u16string secure_display_text_;
+  std::u16string secure_accessibility_text_;
   bool should_prevent_elision_ = false;
   metrics::OmniboxEventProto::PageClassification page_classification_ =
       metrics::OmniboxEventProto::OTHER;
+  bool is_contextual_tasks_page_ = false;
 };
 
 #endif  // COMPONENTS_OMNIBOX_BROWSER_TEST_LOCATION_BAR_MODEL_H_

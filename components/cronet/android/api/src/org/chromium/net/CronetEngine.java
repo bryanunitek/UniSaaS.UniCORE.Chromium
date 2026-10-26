@@ -108,17 +108,25 @@ public abstract class CronetEngine {
         /**
          * A class which provides a method for loading the cronet native library. Apps needing to
          * implement custom library loading logic can inherit from this class and pass an instance
-         * to
-         * {@link CronetEngine.Builder#setLibraryLoader}. For example, this might be required to
+         * to {@link CronetEngine.Builder#setLibraryLoader}. For example, this might be required to
          * work around {@code UnsatisfiedLinkError}s caused by flaky installation on certain older
          * devices.
+         *
+         * @deprecated System.loadLibrary was unreliable on minSDK <= 23, and this method was used
+         *     to provide alternative, more reliable loaders. Now that Cronet's minSDK = 24 this
+         *     method is obsolete and is a no-op.
          */
+        @Deprecated
         public abstract static class LibraryLoader {
             /**
              * Loads the native library.
              *
              * @param libName name of the library to load
+             * @deprecated System.loadLibrary was unreliable on minSDK <= 23, and this method was
+             *     used to provide alternative, more reliable loaders. Now that Cronet's minSDK = 24
+             *     this method is obsolete and is a no-op.
              */
+            @Deprecated
             public abstract void loadLibrary(String libName);
         }
 
@@ -211,9 +219,12 @@ public abstract class CronetEngine {
          *
          * @param loader {@code LibraryLoader} to be used to load the native library.
          * @return the builder to facilitate chaining.
+         * @deprecated System.loadLibrary was unreliable on minSDK <= 23, and this method was used
+         *     to provide alternative, more reliable loaders. Now that Cronet's minSDK = 24 this
+         *     method is obsolete and is a no-op.
          */
+        @Deprecated
         public Builder setLibraryLoader(LibraryLoader loader) {
-            mBuilderDelegate.setLibraryLoader(loader);
             return this;
         }
 
@@ -631,44 +642,6 @@ public abstract class CronetEngine {
             }
         }
 
-        private static CronetProvider.@Nullable ProviderInfo getPreferredCronetProviderUsingVersion(
-                List<CronetProvider.ProviderInfo> providers) {
-            // Remove the disabled providers before sorting, as we shouldn't call getVersion() on a
-            // disabled provider.
-            for (Iterator<CronetProvider.ProviderInfo> i = providers.iterator(); i.hasNext(); ) {
-                CronetProvider.ProviderInfo providerInfo = i.next();
-                if (!providerInfo.provider.isEnabled()) {
-                    i.remove();
-                }
-            }
-
-            if (providers.isEmpty()) {
-                return null;
-            }
-
-            // Sort providers based on version and type.
-            return Collections.min(
-                    providers,
-                    new Comparator<CronetProvider.ProviderInfo>() {
-                        @Override
-                        public int compare(
-                                CronetProvider.ProviderInfo p1, CronetProvider.ProviderInfo p2) {
-                            // The fallback provider should always be at the end of the list.
-                            if (CronetProvider.PROVIDER_NAME_FALLBACK.equals(
-                                    p1.provider.getName())) {
-                                return 1;
-                            }
-                            if (CronetProvider.PROVIDER_NAME_FALLBACK.equals(
-                                    p2.provider.getName())) {
-                                return -1;
-                            }
-                            // A provider with higher version should go first.
-                            return -CronetProvider.compareVersions(
-                                    p1.provider.getVersion(), p2.provider.getVersion());
-                        }
-                    });
-        }
-
         private static CronetProvider.@Nullable ProviderInfo getPreferredCronetProviderUsingScore(
                 List<CronetProvider.ProviderInfo> providers) {
             // We don't need to check isEnabled() to get the score, therefore we can sort first
@@ -682,7 +655,7 @@ public abstract class CronetEngine {
                         public int compare(
                                 CronetProvider.ProviderInfo p1, CronetProvider.ProviderInfo p2) {
                             // A provider with higher score should go first.
-                            return -Integer.compare(p1.providerScore, p2.providerScore);
+                            return Integer.compare(p2.providerScore, p1.providerScore);
                         }
                     });
             for (Iterator<CronetProvider.ProviderInfo> i = providers.iterator(); i.hasNext(); ) {
@@ -698,9 +671,7 @@ public abstract class CronetEngine {
          * Returns a single provider which the sorting mechanism thinks is the best. The returned
          * provider is always guaranteed to be usable.
          *
-         * <p>Sorts providers based on the {@code USE_SCORE_BASED_PROVIDER_SELECTION_HTTP_FLAG_NAME}
-         * flag. If the flag is enabled, providers are sorted by version; otherwise, they are sorted
-         * by {@link providerInfo.score}.
+         * <p>Sorts providers based on {@link providerInfo.score}.
          *
          * @param context Android Context to use.
          * @param providers the list of enabled and disabled providers to filter out and sort.
@@ -718,9 +689,7 @@ public abstract class CronetEngine {
                                 + " Have you included all necessary jars?");
             }
             CronetProvider.ProviderInfo cronetProvider =
-                    CronetProvider.shouldUseScoreBasedProviderSelection(context)
-                            ? getPreferredCronetProviderUsingScore(providers)
-                            : getPreferredCronetProviderUsingVersion(providers);
+                    getPreferredCronetProviderUsingScore(providers);
             if (cronetProvider == null) {
                 throw new RuntimeException(
                         "All available Cronet providers are disabled."

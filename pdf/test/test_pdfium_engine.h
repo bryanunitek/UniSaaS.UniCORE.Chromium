@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <vector>
 
 #include "base/containers/span.h"
@@ -72,6 +73,15 @@ class TestPDFiumEngine : public PDFiumEngine {
 
   MOCK_METHOD(bool, CanEditText, (), (const override));
 
+  MOCK_METHOD(bool,
+              SetFocusedFormTextDirection,
+              (base::i18n::TextDirection),
+              (override));
+  MOCK_METHOD(std::optional<base::i18n::TextDirection>,
+              GetFocusedFormTextDirection,
+              (),
+              (const, override));
+
   MOCK_METHOD(bool, HasPermission, (DocumentPermission), (const override));
 
   MOCK_METHOD(void, SelectAll, (), (override));
@@ -80,6 +90,11 @@ class TestPDFiumEngine : public PDFiumEngine {
       const override;
 
   const DocumentMetadata& GetDocumentMetadata() const override;
+
+  MOCK_METHOD(std::string,
+              GetFileNameFromContentDisposition,
+              (),
+              (const override));
 
   int GetNumberOfPages() const override;
 
@@ -101,7 +116,7 @@ class TestPDFiumEngine : public PDFiumEngine {
 
   MOCK_METHOD(bool, IsPDFDocTagged, (), (const override));
 
-  MOCK_METHOD(bool, HasMeaningfulText, (), (const override));
+  MOCK_METHOD(bool, HasMeaningfulText, (), (override));
 
   MOCK_METHOD(bool, HasJavaScript, (), (const override));
 
@@ -129,7 +144,7 @@ class TestPDFiumEngine : public PDFiumEngine {
               DrawText,
               (int,
                InkTextId,
-               base::span<const InkTextInfo>,
+               base::span<const InkTextLine>,
                float,
                double,
                const InkTextBoxAttributes&),
@@ -150,10 +165,15 @@ class TestPDFiumEngine : public PDFiumEngine {
 
   MOCK_METHOD(void, DiscardText, (InkTextId), (override));
 
+  MOCK_METHOD(DocumentInkTextBoxesMap,
+              LoadTextAnnotationsFromPdf,
+              (),
+              (override));
+
   MOCK_METHOD(InkIdentifiers,
               ScanForInkAnnotations,
               (base::TimeDelta),
-              (const override));
+              (override));
 
   MOCK_METHOD((std::map<InkModeledShapeId, ink::PartitionedMesh>),
               LoadV2InkPathsForPage,

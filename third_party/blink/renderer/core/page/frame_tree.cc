@@ -34,6 +34,7 @@
 #include "third_party/blink/renderer/core/page/create_window.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -43,6 +44,15 @@ namespace {
 const unsigned kInvalidChildCount = ~0U;
 
 }  // namespace
+
+namespace features {
+
+// When enabled, override WebNavigationPolicy from click modifiers if
+// the navigation was triggered by a synthetic event in a sandboxed frame.
+// Killswitch, see https://crbug.com/544197473.
+BASE_FEATURE(kIgnoreSyntheticClicksForSandboxPropagation,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+}  // namespace features
 
 FrameTree::FrameTree(Frame* this_frame)
     : this_frame_(this_frame), scoped_child_count_(kInvalidChildCount) {}
@@ -206,6 +216,29 @@ FrameTree::FindResult FrameTree::FindOrCreateFrameForNavigation(
   DCHECK(IsA<LocalFrame>(this_frame_.Get()));
   LocalFrame* current_frame = To<LocalFrame>(this_frame_.Get());
 
+  // A sandboxed iframe with popup restrictions should not be able to
+  // open a new browsing context by emulating a user gesture in JS.
+  // (e.g. Ctrl+click). Ignore click modifiers by resetting the
+  // navigation policy to kNavigationPolicyCurrentTab.
+  if (request.GetNavigationPolicy() != kNavigationPolicyCurrentTab &&
+      request.GetTriggeringEventInfo() ==
+          mojom::blink::TriggeringEventInfo::kFromUntrustedEvent) {
+    bool should_ignore_synthetic_click_modifiers =
+        this_frame_->GetSecurityContext()->IsSandboxed(
+            network::mojom::blink::WebSandboxFlags::kPopups);
+    if (base::FeatureList::IsEnabled(
+            features::kIgnoreSyntheticClicksForSandboxPropagation)) {
+      should_ignore_synthetic_click_modifiers |=
+          this_frame_->GetSecurityContext()->IsSandboxed(
+              network::mojom::blink::WebSandboxFlags::
+                  kPropagatesToAuxiliaryBrowsingContexts);
+    }
+
+    if (should_ignore_synthetic_click_modifiers) {
+      request.SetNavigationPolicy(kNavigationPolicyCurrentTab);
+    }
+  }
+
   // A GetNavigationPolicy() value other than kNavigationPolicyCurrentTab at
   // this point indicates that a user event modified the navigation policy
   // (e.g., a ctrl-click). Let the user's action override any target attribute.
@@ -252,12 +285,7 @@ Frame* FrameTree::FindFrameForNavigationInternal(
     FrameLoadRequest* request) const {
   LocalFrame* current_frame = To<LocalFrame>(this_frame_.Get());
 
-  if (EqualIgnoringAsciiCase(name, "_current")) {
-    UseCounter::Count(current_frame->GetDocument(), WebFeature::kTargetCurrent);
-  }
-
-  if (EqualIgnoringAsciiCase(name, "_self") ||
-      EqualIgnoringAsciiCase(name, "_current") || name.empty()) {
+  if (EqualIgnoringAsciiCase(name, "_self") || name.empty()) {
     return current_frame;
   }
 
@@ -419,8 +447,7 @@ static void PrintFrames(const blink::Frame* frame,
     PrintIndent(indent);
   }
 
-  auto* local_frame = blink::DynamicTo<blink::LocalFrame>(frame);
-  blink::LocalFrameView* view = local_frame ? local_frame->View() : nullptr;
+  blink::FrameView* view = frame->View();
   printf("Frame %p %dx%d\n", frame, view ? view->Width() : 0,
          view ? view->Height() : 0);
   PrintIndent(indent);
@@ -428,17 +455,27 @@ static void PrintFrames(const blink::Frame* frame,
   PrintIndent(indent);
   printf("  frameView=%p\n", view);
   PrintIndent(indent);
-  printf("  document=%p\n", local_frame ? local_frame->GetDocument() : nullptr);
-  PrintIndent(indent);
-  UNSAFE_TODO(
-      printf("  uri=%s\n\n",
-             local_frame && local_frame->GetDocument()
-                 ? local_frame->GetDocument()->Url().GetString().Utf8().c_str()
-                 : nullptr));
+  if (auto* local_frame = blink::DynamicTo<blink::LocalFrame>(frame)) {
+    auto* document = local_frame->GetDocument();
+    printf("  document=%p\n", document);
+    if (document) {
+      PrintIndent(indent);
+      printf("  uri=%s\n", document->Url().GetString().Utf8().c_str());
+    }
+  } else {
+    printf("  document=remote\n");
+    if (auto* origin = frame->GetSecurityContext()->GetSecurityOrigin()) {
+      printf("  origin=%s\n", origin->ToString().Utf8().c_str());
+    } else {
+      printf("  origin=null\n");
+    }
+  }
+  printf("\n");
 
   for (blink::Frame* child = frame->Tree().FirstChild(); child;
-       child = child->Tree().NextSibling())
+       child = child->Tree().NextSibling()) {
     PrintFrames(child, targetFrame, indent + 1);
+  }
 }
 
 void ShowFrameTree(const blink::Frame* frame) {

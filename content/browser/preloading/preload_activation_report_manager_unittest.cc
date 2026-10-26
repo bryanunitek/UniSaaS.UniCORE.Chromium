@@ -4,6 +4,7 @@
 
 #include "content/browser/preloading/preload_activation_report_manager.h"
 
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/test_renderer_host.h"
@@ -35,6 +36,7 @@ class PreloadActivationReportManagerTest : public RenderViewHostTestHarness {
 };
 
 TEST_F(PreloadActivationReportManagerTest, ReportActivation) {
+  base::HistogramTester histogram_tester;
   auto* manager = PreloadActivationReportManager::GetOrCreateForBrowserContext(
       web_contents()->GetBrowserContext());
   ASSERT_TRUE(manager);
@@ -42,15 +44,19 @@ TEST_F(PreloadActivationReportManagerTest, ReportActivation) {
   GURL endpoint("https://example.com/beacon");
 
   EXPECT_EQ(manager->GetLoaderCountForTesting(), 0u);
-  manager->ReportActivation(endpoint, main_rfh());
+  manager->ReportActivation(endpoint, main_rfh(),
+                            PreloadActivationReportType::kPrefetch);
   EXPECT_EQ(manager->GetLoaderCountForTesting(), 1u);
+  histogram_tester.ExpectUniqueSample(
+      "Preloading.ActivationBeacon.ReportPreloadType",
+      PreloadActivationReportType::kPrefetch, 1);
 
   // Verify that a pending request was created in the factory.
   EXPECT_EQ(test_url_loader_factory_.NumPending(), 1);
   const network::ResourceRequest& request =
       test_url_loader_factory_.GetPendingRequest(0)->request;
   EXPECT_EQ(request.url, endpoint);
-  EXPECT_EQ(request.method, "HEAD");
+  EXPECT_EQ(request.method, "GET");
   EXPECT_TRUE(request.devtools_request_id.has_value());
 
   // Simulate successful response.
@@ -59,10 +65,37 @@ TEST_F(PreloadActivationReportManagerTest, ReportActivation) {
 
   // The loader should be destroyed.
   EXPECT_EQ(manager->GetLoaderCountForTesting(), 0u);
+  histogram_tester.ExpectUniqueSample(
+      "Preloading.ActivationBeacon.ReportSuccess", true, 1);
+}
+
+TEST_F(PreloadActivationReportManagerTest, ReportActivationNetworkError) {
+  base::HistogramTester histogram_tester;
+  auto* manager = PreloadActivationReportManager::GetOrCreateForBrowserContext(
+      web_contents()->GetBrowserContext());
+  ASSERT_TRUE(manager);
+
+  GURL endpoint("https://example.com/beacon");
+
+  manager->ReportActivation(endpoint, main_rfh(),
+                            PreloadActivationReportType::kPrerender);
+  histogram_tester.ExpectUniqueSample(
+      "Preloading.ActivationBeacon.ReportPreloadType",
+      PreloadActivationReportType::kPrerender, 1);
+
+  // Simulate failed response.
+  EXPECT_TRUE(test_url_loader_factory_.SimulateResponseForPendingRequest(
+      endpoint, network::URLLoaderCompletionStatus(net::ERR_FAILED),
+      network::mojom::URLResponseHead::New(), ""));
+
+  EXPECT_EQ(manager->GetLoaderCountForTesting(), 0u);
+  histogram_tester.ExpectUniqueSample(
+      "Preloading.ActivationBeacon.ReportSuccess", false, 1);
 }
 
 TEST_F(PreloadActivationReportManagerTest,
        ReportActivationRedirectSameOriginAllowed) {
+  base::HistogramTester histogram_tester;
   network::TestURLLoaderFactory custom_factory(
       /*observe_loader_requests=*/true);
   auto* manager = PreloadActivationReportManager::GetOrCreateForBrowserContext(
@@ -74,21 +107,25 @@ TEST_F(PreloadActivationReportManagerTest,
   GURL redirect_endpoint("https://example.com/beacon2");
 
   EXPECT_EQ(manager->GetLoaderCountForTesting(), 0u);
-  manager->ReportActivation(endpoint, main_rfh());
+  manager->ReportActivation(endpoint, main_rfh(),
+                            PreloadActivationReportType::kPrefetch);
   EXPECT_EQ(manager->GetLoaderCountForTesting(), 1u);
+  histogram_tester.ExpectUniqueSample(
+      "Preloading.ActivationBeacon.ReportPreloadType",
+      PreloadActivationReportType::kPrefetch, 1);
 
   // Verify that a pending request was created in the factory.
   ASSERT_EQ(custom_factory.NumPending(), 1);
   network::TestURLLoaderFactory::PendingRequest* pending_request =
       custom_factory.GetPendingRequest(0);
   EXPECT_EQ(pending_request->request.url, endpoint);
-  EXPECT_EQ(pending_request->request.method, "HEAD");
+  EXPECT_EQ(pending_request->request.method, "GET");
 
   // Simulate redirect.
   net::RedirectInfo redirect_info;
   redirect_info.status_code = 302;
   redirect_info.new_url = redirect_endpoint;
-  redirect_info.new_method = "HEAD";
+  redirect_info.new_method = "GET";
 
   auto redirect_head = network::mojom::URLResponseHead::New();
   redirect_head->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
@@ -126,10 +163,13 @@ TEST_F(PreloadActivationReportManagerTest,
   // The loader should be destroyed because it completed successfully.
   EXPECT_TRUE(base::test::RunUntil(
       [&]() { return manager->GetLoaderCountForTesting() == 0; }));
+  histogram_tester.ExpectUniqueSample(
+      "Preloading.ActivationBeacon.ReportSuccess", true, 1);
 }
 
 TEST_F(PreloadActivationReportManagerTest,
        ReportActivationRedirectCrossOriginBlocked) {
+  base::HistogramTester histogram_tester;
   auto* manager = PreloadActivationReportManager::GetOrCreateForBrowserContext(
       web_contents()->GetBrowserContext());
   ASSERT_TRUE(manager);
@@ -140,50 +180,6 @@ TEST_F(PreloadActivationReportManagerTest,
   net::RedirectInfo redirect_info;
   redirect_info.status_code = 302;
   redirect_info.new_url = redirect_endpoint;
-  redirect_info.new_method = "HEAD";
-
-  auto redirect_head = network::mojom::URLResponseHead::New();
-  redirect_head->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
-      net::HttpUtil::AssembleRawHeaders("HTTP/1.1 302 Found\r\n"
-                                        "Location: " +
-                                        redirect_endpoint.spec() + "\r\n\r\n"));
-
-  network::TestURLLoaderFactory::Redirects redirects;
-  redirects.emplace_back(redirect_info, std::move(redirect_head));
-
-  auto final_head = network::mojom::URLResponseHead::New();
-  final_head->headers =
-      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK\r\n\r\n");
-
-  test_url_loader_factory_.AddResponse(
-      endpoint, std::move(final_head), "",
-      network::URLLoaderCompletionStatus(net::OK), std::move(redirects));
-
-  EXPECT_EQ(manager->GetLoaderCountForTesting(), 0u);
-  manager->ReportActivation(endpoint, main_rfh());
-
-  // The loader should be destroyed immediately on redirect due to cross-origin
-  // block.
-  EXPECT_TRUE(base::test::RunUntil(
-      [&]() { return manager->GetLoaderCountForTesting() == 0; }));
-
-  // And the redirect_endpoint should NOT have been requested.
-  EXPECT_FALSE(test_url_loader_factory_.IsPending(redirect_endpoint.spec()));
-}
-
-TEST_F(PreloadActivationReportManagerTest,
-       ReportActivationRedirectSameOriginMethodChangedBlocked) {
-  auto* manager = PreloadActivationReportManager::GetOrCreateForBrowserContext(
-      web_contents()->GetBrowserContext());
-  ASSERT_TRUE(manager);
-
-  GURL endpoint("https://example.com/beacon");
-  GURL redirect_endpoint("https://example.com/beacon2");
-
-  net::RedirectInfo redirect_info;
-  redirect_info.status_code = 302;
-  redirect_info.new_url = redirect_endpoint;
-  // Change the method to GET, which should be blocked.
   redirect_info.new_method = "GET";
 
   auto redirect_head = network::mojom::URLResponseHead::New();
@@ -204,7 +200,62 @@ TEST_F(PreloadActivationReportManagerTest,
       network::URLLoaderCompletionStatus(net::OK), std::move(redirects));
 
   EXPECT_EQ(manager->GetLoaderCountForTesting(), 0u);
-  manager->ReportActivation(endpoint, main_rfh());
+  manager->ReportActivation(endpoint, main_rfh(),
+                            PreloadActivationReportType::kPrefetch);
+  histogram_tester.ExpectUniqueSample(
+      "Preloading.ActivationBeacon.ReportPreloadType",
+      PreloadActivationReportType::kPrefetch, 1);
+
+  // The loader should be destroyed immediately on redirect due to cross-origin
+  // block.
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return manager->GetLoaderCountForTesting() == 0; }));
+
+  // And the redirect_endpoint should NOT have been requested.
+  EXPECT_FALSE(test_url_loader_factory_.IsPending(redirect_endpoint.spec()));
+  histogram_tester.ExpectUniqueSample(
+      "Preloading.ActivationBeacon.ReportSuccess", false, 1);
+}
+
+TEST_F(PreloadActivationReportManagerTest,
+       ReportActivationRedirectSameOriginMethodChangedBlocked) {
+  base::HistogramTester histogram_tester;
+  auto* manager = PreloadActivationReportManager::GetOrCreateForBrowserContext(
+      web_contents()->GetBrowserContext());
+  ASSERT_TRUE(manager);
+
+  GURL endpoint("https://example.com/beacon");
+  GURL redirect_endpoint("https://example.com/beacon2");
+
+  net::RedirectInfo redirect_info;
+  redirect_info.status_code = 302;
+  redirect_info.new_url = redirect_endpoint;
+  // Change the method to POST, which should be blocked.
+  redirect_info.new_method = "POST";
+
+  auto redirect_head = network::mojom::URLResponseHead::New();
+  redirect_head->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
+      net::HttpUtil::AssembleRawHeaders("HTTP/1.1 302 Found\r\n"
+                                        "Location: " +
+                                        redirect_endpoint.spec() + "\r\n\r\n"));
+
+  network::TestURLLoaderFactory::Redirects redirects;
+  redirects.emplace_back(redirect_info, std::move(redirect_head));
+
+  auto final_head = network::mojom::URLResponseHead::New();
+  final_head->headers =
+      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK\r\n\r\n");
+
+  test_url_loader_factory_.AddResponse(
+      endpoint, std::move(final_head), "",
+      network::URLLoaderCompletionStatus(net::OK), std::move(redirects));
+
+  EXPECT_EQ(manager->GetLoaderCountForTesting(), 0u);
+  manager->ReportActivation(endpoint, main_rfh(),
+                            PreloadActivationReportType::kPrerender);
+  histogram_tester.ExpectUniqueSample(
+      "Preloading.ActivationBeacon.ReportPreloadType",
+      PreloadActivationReportType::kPrerender, 1);
 
   // The loader should be destroyed immediately on redirect due to method change
   // block.
@@ -213,6 +264,8 @@ TEST_F(PreloadActivationReportManagerTest,
 
   // And the redirect_endpoint should NOT have been requested.
   EXPECT_FALSE(test_url_loader_factory_.IsPending(redirect_endpoint.spec()));
+  histogram_tester.ExpectUniqueSample(
+      "Preloading.ActivationBeacon.ReportSuccess", false, 1);
 }
 
 }  // namespace content

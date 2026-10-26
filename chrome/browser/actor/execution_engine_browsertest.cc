@@ -8,11 +8,10 @@
 #include <string_view>
 #include <tuple>
 
+#include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
-#include "base/strings/strcat.h"
-#include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -20,34 +19,33 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_file_util.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
+#include "chrome/browser/actor/actor_surface_handle.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/actor/actor_test_util.h"
-#include "chrome/browser/actor/tools/click_tool_request.h"
+#include "chrome/browser/actor/site_policy.h"
 #include "chrome/browser/actor/tools/fake_tool_request.h"
-#include "chrome/browser/actor/tools/tab_management_tool_request.h"
 #include "chrome/browser/actor/tools/tool_callbacks.h"
+#include "chrome/browser/actor/tools/wait_tool.h"
+#include "chrome/browser/actor/ui/actor_task_unload_handler.h"
 #include "chrome/browser/actor/ui/event_dispatcher.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/download/download_test_file_activity_observer.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
-#include "chrome/browser/glic/test_support/non_interactive_glic_test.h"
+#include "chrome/browser/lookalikes/lookalike_test_helper.h"
 #include "chrome/browser/optimization_guide/browser_test_util.h"
 #include "chrome/browser/optimization_guide/mock_optimization_guide_keyed_service.h"
-#include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/file_system_access/file_system_access_test_utils.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_view_interface.h"
-#include "chrome/browser/ui/views/page_action/test_support/page_action_test_support.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_accessor.h"
 #include "chrome/common/actor.mojom.h"
 #include "chrome/common/actor/action_result.h"
 #include "chrome/common/chrome_features.h"
@@ -56,15 +54,18 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/actor/core/actor_features.h"
+#include "components/actor/core/actor_switches.h"
 #include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/javascript_dialogs/app_modal_dialog_controller.h"
 #include "components/javascript_dialogs/app_modal_dialog_queue.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/optimization_guide/content/browser/page_content_proto_provider.h"
 #include "components/optimization_guide/core/filters/optimization_hints_component_update_listener.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
+#include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -73,29 +74,34 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/download_test_observer.h"
+#include "content/public/test/hit_test_region_observer.h"
 #include "content/public/test/navigation_handle_observer.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_frame_navigation_observer.h"
-#include "content/public/test/test_navigation_observer.h"
-#include "content/public/test/test_utils.h"
-#include "net/base/features.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/gfx/geometry/point.h"
-#include "ui/gfx/geometry/point_conversions.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
+#include "components/safe_browsing/core/browser/db/fake_database_manager.h"
+#include "components/safe_browsing/core/common/features.h"
+#endif
+
 using ::base::test::TestFuture;
 using ::optimization_guide::proto::ClickAction;
 using ::testing::_;
+using ::testing::Conditional;
+using ::testing::Not;
 
 namespace actor {
 
@@ -163,6 +169,10 @@ class ExecutionEngineBrowserTest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
     host_resolver()->AddRule("*", "127.0.0.1");
+    embedded_test_server()->ServeFilesFromSourceDirectory(
+        "components/test/data");
+    embedded_https_test_server().ServeFilesFromSourceDirectory(
+        "components/test/data");
     ASSERT_TRUE(embedded_test_server()->Start());
     if (UseCertTestNames()) {
       embedded_https_test_server().SetSSLConfig(
@@ -248,8 +258,8 @@ class ExecutionEngineBrowserTest : public InProcessBrowserTest {
 // while acting on a tab, we override attempts by the page to create new
 // tabs, and instead navigate the existing tab.
 IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, ForceSameTabNavigation) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/target_blank_links.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/target_blank_links.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // Check specifically that it's the existing frame that navigates.
@@ -260,8 +270,8 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, ForceSameTabNavigation) {
 
 IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest,
                        ForceSameTabNavigationByScript) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/target_blank_links.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/target_blank_links.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // Check specifically that it's the existing frame that navigates.
@@ -271,7 +281,8 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, TwoClicks) {
-  const GURL url = embedded_test_server()->GetURL("/actor/two_clicks.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/two_clicks.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // Check initial background color is red
@@ -300,7 +311,8 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, TwoClicks) {
 }
 
 IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, TwoClicksInBackgroundTab) {
-  const GURL url = embedded_test_server()->GetURL("/actor/two_clicks.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/two_clicks.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // Check initial background color is red
@@ -312,7 +324,7 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, TwoClicksInBackgroundTab) {
 
   // Create a second tab, which will be in the foreground.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL("about:blank"), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), GURL("about:blank"), WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // The first tab should now be in the background.
@@ -354,9 +366,9 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, ClickLinkToBlockedSite) {
               mojom::ActionResultCode::kTriggeredNavigationBlocked);
 }
 
-// Ensure that the block list is only active while the actor task is in
-// progress.
-IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, AllowBlockedSiteWhenPaused) {
+// Ensure that the block list is still active while the actor task is paused.
+IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest,
+                       DisallowBlockedSiteWhenPaused) {
   const GURL start_url = embedded_https_test_server().GetURL(
       "example.com", "/actor/blocked_links.html");
   const GURL blocked_url = embedded_https_test_server().GetURL(
@@ -369,8 +381,8 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, AllowBlockedSiteWhenPaused) {
   EXPECT_TRUE(content::ExecJs(
       web_contents(), content::JsReplace("setBlockedSite($1);", blocked_url)));
 
-  // Pause the task as if the user took over. Blocked links should now be
-  // allowed.
+  // Pause the task as if the user took over. Blocked links should still be
+  // disallowed.
   actor_task().Pause(true);
 
   content::TestNavigationManager main_manager(web_contents(), blocked_url);
@@ -379,9 +391,9 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, AllowBlockedSiteWhenPaused) {
       web_contents(), "document.getElementById('directToBlocked').click()"));
 
   ASSERT_TRUE(main_manager.WaitForNavigationFinished());
-  EXPECT_TRUE(main_manager.was_committed());
-  EXPECT_TRUE(main_manager.was_successful());
-  EXPECT_EQ(web_contents()->GetURL(), blocked_url);
+  EXPECT_FALSE(main_manager.was_committed());
+  EXPECT_FALSE(main_manager.was_successful());
+  EXPECT_EQ(web_contents()->GetURL(), start_url);
 }
 
 IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest,
@@ -411,8 +423,8 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, FirstActionOnBlockedSite) {
 
   // Even though the first action failed, the tab should still be associated
   // with the task.
-  EXPECT_TRUE(
-      actor_task().GetLastActedTabs().contains(active_tab()->GetHandle()));
+  EXPECT_TRUE(actor_task().GetLastActedActorSurfaces().contains(
+      ActorSurfaceHandle::From(active_tab()->GetHandle())));
 }
 
 IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, PrerenderBlockedSite) {
@@ -478,8 +490,8 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest,
 
 // Regression test for https://crbug.com/502819675.
 IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, HistoryBackIsChecked) {
-  // Disable SafeBrowsing so that MayActOnUrl rejects every non-localhost URL
-  // with kSafeBrowsing.
+  // Disable SafeBrowsing so that IsAcceptableNavigationDestination rejects
+  // every non-localhost URL with kSafeBrowsing.
   safe_browsing::SetSafeBrowsingState(
       browser()->GetProfile()->GetPrefs(),
       safe_browsing::SafeBrowsingState::NO_SAFE_BROWSING);
@@ -502,7 +514,7 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, HistoryBackIsChecked) {
 
   // A `history.back()` navigation should be classified as renderer-initiated
   // (even though the initiator is std::nullopt), and should be blocked by
-  // MayActOnUrl.
+  // IsAcceptableNavigationDestination.
   content::NavigationHandleObserver navigation_handle_observer(web_contents(),
                                                                first_url);
   content::TestNavigationManager test_navigation_manager(web_contents(),
@@ -576,7 +588,8 @@ IN_PROC_BROWSER_TEST_F(ExecutionEnginePixelBrowserTest,
   // Render an HTML <select> element whose second item appears red.
   // The second item should appear when the element is clicked.
   EXPECT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("/actor/red_dropdown.html")));
+      browser(), embedded_https_test_server().GetURL(
+                     "example.com", "/actor/red_dropdown.html")));
   EXPECT_TRUE(WaitForRenderFrameReady(web_contents()->GetPrimaryMainFrame()));
   content::SimulateEndOfPaintHoldingOnPrimaryMainFrame(web_contents());
 
@@ -766,6 +779,8 @@ IN_PROC_BROWSER_TEST_P(ExecutionEngineDropdownCaptureOopifBrowserTest,
   content::RenderFrameHost* iframe =
       ChildFrameAt(web_contents()->GetPrimaryMainFrame(), 0);
   ASSERT_NE(iframe, nullptr);
+  EXPECT_TRUE(WaitForRenderFrameReady(iframe));
+  content::WaitForHitTestData(iframe);
 
   // Now click on the <select> in the out of process iframe, and then look for
   // red pixels.
@@ -814,8 +829,12 @@ class ExecutionEngineFileSystemAccessApiBrowserTest
       public testing::WithParamInterface<bool> {
  public:
   ExecutionEngineFileSystemAccessApiBrowserTest() {
-    scoped_feature_list_.InitWithFeatureState(
-        kGlicBlockFileSystemAccessApiFilePicker, should_block_file_picker());
+    scoped_feature_list_.InitWithFeatureStates(
+        {{kGlicBlockFileSystemAccessApiFilePicker, should_block_file_picker()},
+         // TODO(crbug.com/452061489): Fix tests that fail when the WebUI
+         // Omnibox is enabled and then remove these two Features.
+         {omnibox::internal::kWebUIOmniboxPopup, false},
+         {omnibox::internal::kWebUIOmniboxAimPopup, false}});
   }
 
   bool should_block_file_picker() { return GetParam(); }
@@ -834,13 +853,10 @@ class ExecutionEngineFileSystemAccessApiBrowserTest
     return result;
   }
 
-  bool IsUsageIndicatorVisible(Browser* browser) {
-    auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-    auto* provider = browser_view->toolbar_button_provider();
-    auto* icon_view = page_actions::GetIconLabelBubbleViewForTesting(
-        provider->GetPageActionViewInterface(kActionShowFileSystemAccess),
-        kActionShowFileSystemAccess);
-    return icon_view && icon_view->GetVisible();
+  bool IsUsageIndicatorVisible(BrowserWindowInterface* browser) {
+    return page_actions::PageActionTestAccessor(browser,
+                                                kActionShowFileSystemAccess)
+        .GetVisible();
   }
 
  private:
@@ -857,8 +873,8 @@ IN_PROC_BROWSER_TEST_P(ExecutionEngineFileSystemAccessApiBrowserTest,
       std::make_unique<SelectPredeterminedFileDialogFactory>(
           std::vector<base::FilePath>{test_file}));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(),
-      embedded_test_server()->GetURL("/actor/file_system_access.html")));
+      browser(), embedded_https_test_server().GetURL(
+                     "example.com", "/actor/file_system_access.html")));
 
   EXPECT_FALSE(IsUsageIndicatorVisible(browser()));
 
@@ -935,6 +951,23 @@ class ExecutionEngineSkipBeforeUnloadBrowserTest
     }
   }
 
+  void SetUpOnMainThread() override {
+    ExecutionEngineBrowserTest::SetUpOnMainThread();
+    // This test navigates via the Omnibox transition to exercise beforeunload
+    // handling. The leave site confirmation would intercept that navigation
+    // first, so it is suppressed here. This is process global state, so the
+    // previous value is restored at teardown.
+    previous_suppress_confirm_dialog_ =
+        ActorTaskTabCloseConfirmDialog::ShouldSuppressForTesting();
+    ActorTaskTabCloseConfirmDialog::SetSuppressForTesting(true);
+  }
+
+  void TearDownOnMainThread() override {
+    ActorTaskTabCloseConfirmDialog::SetSuppressForTesting(
+        previous_suppress_confirm_dialog_);
+    ExecutionEngineBrowserTest::TearDownOnMainThread();
+  }
+
   bool IsActorActive() const { return std::get<0>(GetParam()); }
   bool IsSkipFeatureEnabled() const { return std::get<1>(GetParam()); }
 
@@ -957,6 +990,7 @@ class ExecutionEngineSkipBeforeUnloadBrowserTest
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
+  bool previous_suppress_confirm_dialog_ = false;
 };
 
 // This test is to ensure that the beforeunload dialog is skipped when the
@@ -974,8 +1008,8 @@ IN_PROC_BROWSER_TEST_P(ExecutionEngineSkipBeforeUnloadBrowserTest,
     actor_keyed_service()->ResetForTesting();
   }
 
-  const GURL beforeunload_url =
-      embedded_test_server()->GetURL("/actor/beforeunload.html");
+  const GURL beforeunload_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/beforeunload.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), beforeunload_url));
 
   content::WebContents* web_contents =
@@ -983,7 +1017,8 @@ IN_PROC_BROWSER_TEST_P(ExecutionEngineSkipBeforeUnloadBrowserTest,
   content::PrepContentsForBeforeUnloadTest(web_contents);
   ASSERT_EQ(beforeunload_url, web_contents->GetLastCommittedURL());
 
-  const GURL target_url = embedded_test_server()->GetURL("/title1.html");
+  const GURL target_url =
+      embedded_https_test_server().GetURL("example.com", "/title1.html");
 
   bool should_skip_dialog = IsActorActive() && IsSkipFeatureEnabled();
 
@@ -1077,7 +1112,8 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineDownloadBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, CollectsToolVotes) {
-  const GURL url = embedded_test_server()->GetURL("/actor/two_clicks.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/two_clicks.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> button1_id =
@@ -1097,14 +1133,17 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, CollectsToolVotes) {
   ExpectOkResult(result);
 
   const TabObservationStrategy& strategy = result.GetStrategy();
-  EXPECT_EQ(strategy.GetScreenshotPolicy(active_tab()->GetHandle()),
+  EXPECT_EQ(strategy.GetScreenshotPolicy(
+                ActorSurfaceHandle::From(active_tab()->GetHandle())),
             ScreenshotPolicy::kRequested);
-  EXPECT_EQ(strategy.GetPageContentExtractionPolicy(active_tab()->GetHandle()),
+  EXPECT_EQ(strategy.GetPageContentExtractionPolicy(
+                ActorSurfaceHandle::From(active_tab()->GetHandle())),
             PageContentExtractionPolicy::kRequested);
 }
 
 IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, CollectsMultipleToolVotes) {
-  const GURL url = embedded_test_server()->GetURL("/actor/two_clicks.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/two_clicks.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   base::test::TestFuture<ToolCallback> on_invoke_future1;
@@ -1112,10 +1151,10 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, CollectsMultipleToolVotes) {
 
   std::unique_ptr<ToolRequest> tool1 = std::make_unique<FakeToolRequest>(
       on_invoke_future1.GetCallback(), base::OnceClosure(),
-      active_tab()->GetHandle());
+      ActorSurfaceHandle::From(active_tab()->GetHandle()));
   std::unique_ptr<ToolRequest> tool2 = std::make_unique<FakeToolRequest>(
       on_invoke_future2.GetCallback(), base::OnceClosure(),
-      active_tab()->GetHandle());
+      ActorSurfaceHandle::From(active_tab()->GetHandle()));
 
   ActResultFuture result;
   actor_task().Act(ToRequestList(tool1, tool2), result.GetCallback());
@@ -1142,11 +1181,288 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineBrowserTest, CollectsMultipleToolVotes) {
   // Screenshot: max(Skipped, Required) = Required.
   // Dom Extraction: max(Required, Skipped) = Required.
   const TabObservationStrategy& strategy = result.GetStrategy();
-  EXPECT_EQ(strategy.GetScreenshotPolicy(active_tab()->GetHandle()),
+  EXPECT_EQ(strategy.GetScreenshotPolicy(
+                ActorSurfaceHandle::From(active_tab()->GetHandle())),
             ScreenshotPolicy::kRequired);
-  EXPECT_EQ(strategy.GetPageContentExtractionPolicy(active_tab()->GetHandle()),
+  EXPECT_EQ(strategy.GetPageContentExtractionPolicy(
+                ActorSurfaceHandle::From(active_tab()->GetHandle())),
             PageContentExtractionPolicy::kRequired);
 }
+
+// Hosts that will trigger lookalike warnings. One causes an interstitial and
+// the other only a safety tip.
+constexpr char kLookalikeHostInterstitial[] = "google.com.example.com";
+constexpr char kLookalikeHostWarning[] = "accounts-google.com";
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+
+class ExecutionEngineUrlGatingBrowserTest : public InProcessBrowserTest {
+ public:
+  ExecutionEngineUrlGatingBrowserTest() = default;
+
+  ~ExecutionEngineUrlGatingBrowserTest() override = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+    SetUpBlocklist(command_line, "bar.com");
+  }
+
+  void SetUpOnMainThread() override {
+    InProcessBrowserTest::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
+    LookalikeTestHelper::SetUpLookalikeTestParams();
+    embedded_https_test_server().SetCertHostnames(
+        {"a.com", "b.com", "c.com", "bar.com", "*.bar.com",
+         kLookalikeHostInterstitial, kLookalikeHostWarning});
+    ASSERT_TRUE(embedded_https_test_server().Start());
+
+    // Optimization guide uses this histogram to signal initialization in tests.
+    optimization_guide::RetryForHistogramUntilCountReached(
+        &histogram_tester_for_init_,
+        "OptimizationGuide.HintsManager.HintCacheInitialized", 1);
+
+    InitActionBlocklist(browser()->GetProfile());
+
+    // Simulate the component loading, as the implementation checks it, but the
+    // actual list is set via the command line.
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+    optimization_guide::OptimizationHintsComponentUpdateListener::GetInstance()
+        ->MaybeUpdateHintsComponent(
+            {base::Version("123"),
+             temp_dir_.GetPath().Append(FILE_PATH_LITERAL("dont_care"))});
+  }
+
+  void TearDownOnMainThread() override {
+    LookalikeTestHelper::TearDownLookalikeTestParams();
+    InProcessBrowserTest::TearDownOnMainThread();
+  }
+
+ protected:
+  void CheckUrl(const GURL& url, bool expected_allowed) {
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+    auto* actor_service = ActorKeyedService::Get(browser()->GetProfile());
+    TaskId task_id =
+        actor_service->CreateTask(TestTaskSourceInfo(), &policy_checker_);
+    ActorTask* task = actor_service->GetTask(task_id);
+    ASSERT_TRUE(task);
+    WaitTool::SetNoDelayForTesting();
+    std::unique_ptr<ToolRequest> tool_request =
+        MakeWaitRequest(browser()->tab_strip_model()->GetActiveTab());
+    ASSERT_TRUE(tool_request->RequiresUrlCheckInCurrentTab());
+    ActResultFuture result;
+    task->Act(ToRequestList(tool_request), result.GetCallback());
+    // The result should not be provided synchronously.
+    EXPECT_FALSE(result.IsReady());
+    ASSERT_EQ(result.Get().size(), 1u);
+    EXPECT_THAT(result.Get()[0].result->code,
+                Conditional(expected_allowed, mojom::ActionResultCode::kOk,
+                            Not(mojom::ActionResultCode::kOk)));
+  }
+
+ private:
+  base::HistogramTester histogram_tester_for_init_;
+  base::ScopedTempDir temp_dir_;
+  // Must outlive any ActorTask created with it as the policy checker.
+  MockPolicyChecker policy_checker_{
+      EnterprisePolicyChecker::UrlBlockReason::kNotBlocked};
+};
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineUrlGatingBrowserTest, Basic) {
+  const GURL allowed_url =
+      embedded_https_test_server().GetURL("a.com", "/title1.html");
+  CheckUrl(allowed_url, true);
+}
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineUrlGatingBrowserTest,
+                       AllowIfNotInBlocklist) {
+  const GURL allowed_url =
+      embedded_https_test_server().GetURL("c.com", "/title1.html");
+  CheckUrl(allowed_url, true);
+}
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineUrlGatingBrowserTest,
+                       BlockIfInBlocklist) {
+  const GURL blocked_url =
+      embedded_https_test_server().GetURL("bar.com", "/title1.html");
+  CheckUrl(blocked_url, false);
+}
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineUrlGatingBrowserTest,
+                       BlockSubdomainIfInBlocklist) {
+  const GURL blocked_url =
+      embedded_https_test_server().GetURL("sub.bar.com", "/title1.html");
+  CheckUrl(blocked_url, false);
+}
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineUrlGatingBrowserTest, BlockLookalikes) {
+  const GURL lookalike_url = embedded_https_test_server().GetURL(
+      kLookalikeHostInterstitial, "/title1.html");
+  CheckUrl(lookalike_url, false);
+}
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineUrlGatingBrowserTest,
+                       TreatLookalikeWarningsAsBlocking) {
+  const GURL lookalike_url = embedded_https_test_server().GetURL(
+      kLookalikeHostWarning, "/title1.html");
+  CheckUrl(lookalike_url, false);
+}
+
+// This intentionally does not load a blocklist.
+class ExecutionEngineUrlGatingMissingBlocklistBrowserTest
+    : public InProcessBrowserTest {
+ public:
+  void SetUpOnMainThread() override {
+    InProcessBrowserTest::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
+    ASSERT_TRUE(embedded_https_test_server().Start());
+
+    // Register the optimization type for the blocklist, but we do not actually
+    // load a blocklist.
+    InitActionBlocklist(browser()->GetProfile());
+  }
+
+ protected:
+  // Must outlive any ActorTask created with it as the policy checker.
+  MockPolicyChecker policy_checker_{
+      EnterprisePolicyChecker::UrlBlockReason::kNotBlocked};
+};
+
+// If the blocklist doesn't exist, we allow the URL.
+IN_PROC_BROWSER_TEST_F(ExecutionEngineUrlGatingMissingBlocklistBrowserTest,
+                       FailOpen) {
+  const GURL url =
+      embedded_https_test_server().GetURL("bar.com", "/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  auto* actor_service = ActorKeyedService::Get(browser()->GetProfile());
+  TaskId task_id =
+      actor_service->CreateTask(TestTaskSourceInfo(), &policy_checker_);
+  ActorTask* task = actor_service->GetTask(task_id);
+  ASSERT_TRUE(task);
+  WaitTool::SetNoDelayForTesting();
+  std::unique_ptr<ToolRequest> tool_request =
+      MakeWaitRequest(browser()->tab_strip_model()->GetActiveTab());
+  ASSERT_TRUE(tool_request->RequiresUrlCheckInCurrentTab());
+  ActResultFuture result;
+  task->Act(ToRequestList(tool_request), result.GetCallback());
+  ExpectOkResult(result);
+}
+
+class ExecutionEngineUrlGatingSafeBrowsingBrowserTest
+    : public ExecutionEngineUrlGatingBrowserTest {
+ public:
+  ExecutionEngineUrlGatingSafeBrowsingBrowserTest() = default;
+  ~ExecutionEngineUrlGatingSafeBrowsingBrowserTest() override = default;
+
+ protected:
+  void CreatedBrowserMainParts(
+      content::BrowserMainParts* browser_main_parts) override {
+    fake_safe_browsing_database_manager_ =
+        base::MakeRefCounted<safe_browsing::FakeSafeBrowsingDatabaseManager>(
+            content::GetUIThreadTaskRunner({}));
+    safe_browsing_factory_.SetTestDatabaseManager(
+        fake_safe_browsing_database_manager_.get());
+    safe_browsing::SafeBrowsingService::RegisterFactory(
+        &safe_browsing_factory_);
+    ExecutionEngineUrlGatingBrowserTest::CreatedBrowserMainParts(
+        browser_main_parts);
+  }
+
+  void TearDown() override {
+    safe_browsing::SafeBrowsingService::RegisterFactory(nullptr);
+    ExecutionEngineUrlGatingBrowserTest::TearDown();
+  }
+
+  void AddDangerousUrl(const GURL& dangerous_url) {
+    fake_safe_browsing_database_manager_->AddDangerousUrl(
+        dangerous_url, safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_MALWARE);
+  }
+
+  void AddPhishingUrl(const GURL& phishing_url) {
+    fake_safe_browsing_database_manager_->AddDangerousUrl(
+        phishing_url, safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_PHISHING);
+  }
+
+ private:
+  scoped_refptr<safe_browsing::FakeSafeBrowsingDatabaseManager>
+      fake_safe_browsing_database_manager_;
+  safe_browsing::TestSafeBrowsingServiceFactory safe_browsing_factory_;
+};
+
+class ExecutionEngineUrlGatingDelayedWarningBrowserTest
+    : public ExecutionEngineUrlGatingSafeBrowsingBrowserTest {
+ public:
+  ExecutionEngineUrlGatingDelayedWarningBrowserTest() {
+    scoped_feature_list_.InitAndEnableFeature(safe_browsing::kDelayedWarnings);
+  }
+  ~ExecutionEngineUrlGatingDelayedWarningBrowserTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+class ExecutionEngineUrlGatingNoSafetyChecksBrowserTest
+    : public ExecutionEngineUrlGatingSafeBrowsingBrowserTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    ExecutionEngineUrlGatingSafeBrowsingBrowserTest::SetUpCommandLine(
+        command_line);
+    command_line->AppendSwitch(actor::switches::kDisableActorSafetyChecks);
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineUrlGatingSafeBrowsingBrowserTest,
+                       BlockDangerousSite) {
+  const GURL dangerous_url =
+      embedded_https_test_server().GetURL("c.com", "/title1.html");
+  AddDangerousUrl(dangerous_url);
+  CheckUrl(dangerous_url, false);
+}
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineUrlGatingDelayedWarningBrowserTest,
+                       BlockPhishingSiteWithDelayedWarning) {
+  const GURL phishing_url =
+      embedded_https_test_server().GetURL("c.com", "/title1.html");
+  AddPhishingUrl(phishing_url);
+  CheckUrl(phishing_url, false);
+}
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineUrlGatingSafeBrowsingBrowserTest,
+                       RequireSafeBrowsing) {
+  // Disable SafeBrowsing.
+  safe_browsing::SetSafeBrowsingState(
+      browser()->GetProfile()->GetPrefs(),
+      safe_browsing::SafeBrowsingState::NO_SAFE_BROWSING);
+
+  // This would otherwise be allowed, but since we don't have SafeBrowsing to
+  // check if it's dangerous, we assume it is unsafe.
+  const GURL normally_allowed_url =
+      embedded_https_test_server().GetURL("a.com", "/title1.html");
+  CheckUrl(normally_allowed_url, false);
+}
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineUrlGatingNoSafetyChecksBrowserTest,
+                       DontRequireSafeBrowsing) {
+  // Disable SafeBrowsing.
+  safe_browsing::SetSafeBrowsingState(
+      browser()->GetProfile()->GetPrefs(),
+      safe_browsing::SafeBrowsingState::NO_SAFE_BROWSING);
+
+  // SafeBrowsing is not mandatory in this configuration.
+  const GURL url = embedded_https_test_server().GetURL("a.com", "/title1.html");
+  CheckUrl(url, true);
+}
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineUrlGatingNoSafetyChecksBrowserTest,
+                       IgnoreBlocklist) {
+  // The blocklist is ignored in this configuration.
+  const GURL blocked_url =
+      embedded_https_test_server().GetURL("bar.com", "/title1.html");
+  CheckUrl(blocked_url, true);
+}
+
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 
 }  // namespace
 

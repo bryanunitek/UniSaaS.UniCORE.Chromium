@@ -46,6 +46,20 @@ TEST(VideoEncodeAcceleratorSupportedProfile, RoundTrip) {
   EXPECT_EQ(input, output);
 }
 
+TEST(VideoEncodeAcceleratorSupportedProfile, RoundTripChromaAndBitDepth) {
+  ::media::VideoEncodeAccelerator::SupportedProfile input;
+  input.profile = HEVCPROFILE_REXT;
+  input.max_resolution = gfx::Size(1920, 1080);
+  input.rate_control_modes = VideoEncodeAccelerator::kConstantMode;
+  input.chroma_sampling = VideoChromaSampling::k422;
+  input.bit_depth = 10;
+
+  ::media::VideoEncodeAccelerator::SupportedProfile output;
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<
+              mojom::VideoEncodeAcceleratorSupportedProfile>(input, output));
+  EXPECT_EQ(input, output);
+}
+
 TEST(VideoEncoderInfoStructTraitTest, RoundTrip) {
   ::media::VideoEncoderInfo input;
   input.implementation_name = "FakeVideoEncodeAccelerator";
@@ -262,6 +276,35 @@ TEST(VideoEncodeAcceleratorConfigStructTraitTest,
       ::media::VideoEncodeAccelerator::Config::ContentType::kCamera);
   input_config.manual_reference_buffer_control = true;
   input_config.inter_layer_pred = ::media::SVCInterLayerPredMode::kOn;
+
+  ::media::VideoEncodeAccelerator::Config output_config{};
+  EXPECT_FALSE(
+      mojo::test::SerializeAndDeserialize<mojom::VideoEncodeAcceleratorConfig>(
+          input_config, output_config));
+}
+
+TEST(VideoEncodeAcceleratorConfigStructTraitTest,
+     TooManySpatialLayers_Rejected) {
+  constexpr gfx::Size kBaseSize(320, 180);
+  constexpr uint32_t kBaseBitrateBps = 123456u;
+  const ::media::Bitrate kBitrate =
+      ::media::Bitrate::ConstantBitrate(kBaseBitrateBps);
+
+  ::media::VideoEncodeAccelerator::Config input_config(
+      ::media::PIXEL_FORMAT_NV12, kBaseSize, ::media::VP9PROFILE_PROFILE0,
+      kBitrate, 30,
+      ::media::VideoEncodeAccelerator::Config::StorageType::kGpuMemoryBuffer,
+      ::media::VideoEncodeAccelerator::Config::ContentType::kCamera);
+
+  ::media::VideoEncodeAccelerator::Config::SpatialLayer spatial_layer;
+  spatial_layer.width = kBaseSize.width();
+  spatial_layer.height = kBaseSize.height();
+  spatial_layer.bitrate_bps = kBaseBitrateBps;
+  spatial_layer.framerate = 30;
+  spatial_layer.num_of_temporal_layers = 1;
+
+  input_config.spatial_layers.assign(
+      ::media::VideoEncoderInfo::kMaxSpatialLayers + 1, spatial_layer);
 
   ::media::VideoEncodeAccelerator::Config output_config{};
   EXPECT_FALSE(

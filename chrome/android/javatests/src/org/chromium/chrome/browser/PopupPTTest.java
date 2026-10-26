@@ -44,10 +44,7 @@ import org.chromium.components.safe_browsing.SafeBrowsingApiBridge;
 public class PopupPTTest {
     @Rule
     public AutoResetCtaTransitTestRule mCtaTestRule =
-            ChromeTransitTestRules.autoResetCtaActivityRule();
-
-    private static final String METADATA_FOR_ABUSIVE_ENFORCEMENT =
-            "{\"matches\":[{\"threat_type\":\"13\",\"sf_absv\":\"\"}]}";
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     private WebPageStation mEntryPage;
 

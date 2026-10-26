@@ -19,7 +19,6 @@ import android.widget.FrameLayout;
 import androidx.core.view.AccessibilityDelegateCompat;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
-import androidx.test.filters.SmallTest;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.slider.Slider;
@@ -82,7 +81,6 @@ public class ReaderModePrefsViewUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testInitialState() {
         // Verify that the initial state of the view is correct.
         assertTrue(
@@ -95,7 +93,6 @@ public class ReaderModePrefsViewUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testThemeButtons() {
         when(mDistilledPagePrefs.getTheme())
                 .thenReturn(Theme.LIGHT, Theme.LIGHT, Theme.DARK, Theme.SEPIA);
@@ -139,14 +136,14 @@ public class ReaderModePrefsViewUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testFontFamilyButtons() {
         when(mDistilledPagePrefs.getFontFamily())
                 .thenReturn(
                         FontFamily.SANS_SERIF,
                         FontFamily.SANS_SERIF,
                         FontFamily.SERIF,
-                        FontFamily.MONOSPACE);
+                        FontFamily.MONOSPACE,
+                        FontFamily.LEXEND);
         // Test clicking the already selected font family.
         HistogramWatcher histogramSansSerif =
                 HistogramWatcher.newBuilder()
@@ -183,6 +180,18 @@ public class ReaderModePrefsViewUnitTest {
         histogramMonospace.assertExpected();
         mReaderModePrefsView.onChangeFontFamily(FontFamily.MONOSPACE);
 
+        HistogramWatcher histogramLexend =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "DomDistiller.Android.FontFamilySelected", FontFamily.LEXEND)
+                        .build();
+        mReaderModePrefsView.findViewById(R.id.font_lexend).performClick();
+        verify(mDistilledPagePrefs).setFontFamily(FontFamily.LEXEND);
+        Assert.assertEquals(
+                3, mActionTester.getActionCount("DomDistiller.Android.FontFamilyChanged"));
+        histogramLexend.assertExpected();
+        mReaderModePrefsView.onChangeFontFamily(FontFamily.LEXEND);
+
         // Test clicking the first option again.
         HistogramWatcher histogramSansSerif2 =
                 HistogramWatcher.newBuilder()
@@ -192,38 +201,17 @@ public class ReaderModePrefsViewUnitTest {
         mReaderModePrefsView.findViewById(R.id.font_sans_serif).performClick();
         verify(mDistilledPagePrefs).setFontFamily(FontFamily.SANS_SERIF);
         Assert.assertEquals(
-                3, mActionTester.getActionCount("DomDistiller.Android.FontFamilyChanged"));
+                4, mActionTester.getActionCount("DomDistiller.Android.FontFamilyChanged"));
         histogramSansSerif2.assertExpected();
     }
 
     @Test
-    @SmallTest
-    @EnableFeatures({
-        DomDistillerFeatures.READER_MODE_DISTILL_IN_APP,
-        DomDistillerFeatures.READER_MODE_SUPPORT_NEW_FONTS
-    })
-    public void testAdditionalFontFamilyButtonsVisibility_NewFontsEnabled() {
-        assertEquals(
-                View.VISIBLE, mReaderModePrefsView.findViewById(R.id.font_lexend).getVisibility());
-    }
-
-    @Test
-    @SmallTest
-    @DisableFeatures(DomDistillerFeatures.READER_MODE_SUPPORT_NEW_FONTS)
-    public void testAdditionalFontFamilyButtonsVisibility_NewFontsDisabled() {
-        assertEquals(
-                View.GONE, mReaderModePrefsView.findViewById(R.id.font_lexend).getVisibility());
-    }
-
-    @Test
-    @SmallTest
     @Config(qualifiers = "sw320dp")
     public void testFontScalingSliderPhone() {
         verifyFontScalingSlider(1.75f, 175);
     }
 
     @Test
-    @SmallTest
     @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
     @Config(qualifiers = "sw600dp")
     public void testFontScalingSliderTablet() {
@@ -275,7 +263,6 @@ public class ReaderModePrefsViewUnitTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures(DomDistillerFeatures.READER_MODE_TOGGLE_LINKS)
     public void testToggleLinksButton_Enabled() {
         View toggleLinksButton = mReaderModePrefsView.findViewById(R.id.toggle_links_button);
@@ -306,7 +293,6 @@ public class ReaderModePrefsViewUnitTest {
     }
 
     @Test
-    @SmallTest
     @DisableFeatures(DomDistillerFeatures.READER_MODE_TOGGLE_LINKS)
     public void testToggleLinksButton_Disabled() {
         View toggleLinksButton = mReaderModePrefsView.findViewById(R.id.toggle_links_button);
@@ -314,7 +300,6 @@ public class ReaderModePrefsViewUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testThemeButtonsAccessibility() {
         // Test container
         View themeContainer = mReaderModePrefsView.findViewById(R.id.theme_container);
@@ -351,7 +336,6 @@ public class ReaderModePrefsViewUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testFontFamilyButtonsAccessibility() {
         // Test container
         View fontFamilyButtonContainer =
@@ -365,14 +349,17 @@ public class ReaderModePrefsViewUnitTest {
         AccessibilityNodeInfoCompat.CollectionInfoCompat collectionInfo =
                 containerInfo.getCollectionInfo();
         assertNotNull(collectionInfo);
-        assertEquals(3, collectionInfo.getColumnCount());
+        assertEquals(4, collectionInfo.getColumnCount());
         assertEquals(1, collectionInfo.getRowCount());
         assertEquals(
                 AccessibilityNodeInfoCompat.CollectionInfoCompat.SELECTION_MODE_SINGLE,
                 collectionInfo.getSelectionMode());
 
         // Test buttons
-        int[] buttonIds = new int[] {R.id.font_sans_serif, R.id.font_serif, R.id.font_monospace};
+        int[] buttonIds =
+                new int[] {
+                    R.id.font_sans_serif, R.id.font_serif, R.id.font_monospace, R.id.font_lexend
+                };
         for (int i = 0; i < buttonIds.length; i++) {
             View button = mReaderModePrefsView.findViewById(buttonIds[i]);
             AccessibilityDelegateCompat buttonDelegate =

@@ -11,6 +11,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "components/affiliations/core/browser/match_type.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_data_test_api.h"
@@ -21,6 +22,7 @@
 #include "components/password_manager/core/browser/password_form_cache_impl.h"
 #include "components/password_manager/core/browser/password_form_manager.h"
 #include "components/password_manager/core/browser/password_save_manager_impl.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/stub_form_saver.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/browser/stub_password_manager_driver.h"
@@ -133,7 +135,7 @@ class UndoPasswordChangeControllerTest : public testing::Test {
         observed_form_.fields()[kPasswordFieldIndex].renderer_id();
 
     best_match_form_.username_value = failed_login_form_.username_value;
-    best_match_form_.match_type = PasswordForm::MatchType::kExact;
+    best_match_form_.match_type = affiliations::MatchType::kExact;
     controller_.OnNavigation(url::Origin::Create(GURL("https://example.com")),
                              ukm::UkmRecorder::GetNewSourceID());
   }
@@ -344,7 +346,8 @@ TEST_F(UndoPasswordChangeControllerTest,
 
 TEST_F(UndoPasswordChangeControllerTest,
        OnLoginPotentiallyFailed_BackupUsed_Ignored) {
-  failed_login_form_.password_value = kBackupPassword;
+  failed_login_form_.password_value =
+      PasswordString(std::u16string(kBackupPassword));
   best_match_form_.SetPasswordBackupNote(kBackupPassword);
   auto form_manager = CreateFormManager(best_match_form_);
 
@@ -385,8 +388,7 @@ TEST_F(UndoPasswordChangeControllerTest,
 TEST_F(UndoPasswordChangeControllerTest,
        OnLoginPotentiallyFailed_GroupedAffiliation_RecoveryTriggered) {
   best_match_form_.SetPasswordBackupNote(kBackupPassword);
-  best_match_form_.match_type =
-      password_manager::PasswordForm::MatchType::kGrouped;
+  best_match_form_.match_type = affiliations::MatchType::kGrouped;
   auto form_manager = CreateFormManager(best_match_form_);
   base::RunLoop run_loop;
 

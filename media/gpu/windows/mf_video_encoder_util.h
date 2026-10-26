@@ -113,6 +113,10 @@ static constexpr uint8_t kAV1MaxQuantizer = 56;
 // scenarios.
 static constexpr uint8_t kH264MinQuantizer = 16;
 static constexpr uint8_t kH264MaxQuantizer = 51;
+// Maximum quantizer applied by the H.264 SW bitrate controller for desktop
+// sources. It keeps minimum video quality at the expense of motion. The value
+// is determined by examining the subjective quality of the encoded video.
+static constexpr uint8_t kH264DesktopSWBRCMaxQuantizer = 35;
 
 #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
 // For H.265, ideally we may reuse Min/MaxQp for H.264 from
@@ -159,11 +163,13 @@ std::vector<Microsoft::WRL::ComPtr<IMFActivate>> EnumerateHardwareEncoders(
     VideoCodec codec);
 
 // Get the maximum supported framerate and resolution combinations for the given
-// codec and HMFT. If |allow_set_output_type| is true, it will try to set the
-// output type to get the maximum supported framerate and resolution; otherwise,
-// we merely query the maximum supported macroblocks per second for calculation.
+// codec and HMFT from |vendor|. If |allow_set_output_type| is true, it will try
+// to set the output type to get the maximum supported framerate and resolution;
+// otherwise, we merely query the maximum supported macroblocks per second for
+// calculation.
 std::vector<FramerateAndResolution> GetMaxFramerateAndResolutionsFromMFT(
     VideoCodec codec,
+    DriverVendor vendor,
     IMFTransform* encoder,
     bool allow_set_output_type);
 

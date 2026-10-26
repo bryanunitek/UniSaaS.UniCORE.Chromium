@@ -25,8 +25,6 @@
 
 #include "third_party/blink/renderer/modules/webaudio/audio_node.h"
 
-#include <inttypes.h>
-
 #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_node_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_channel_count_mode.h"
@@ -40,6 +38,7 @@
 #include "third_party/blink/renderer/modules/webaudio/script_processor_handler.h"
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 #if DEBUG_AUDIONODE_REFERENCES
@@ -76,12 +75,12 @@ void AudioNode::Dispose() {
 
   // Add the handler to the orphan list.  This keeps the handler alive until it
   // can be deleted at a safe point (in pre/post handler task).  If the graph is
-  // being processed, the handler must be added.  If the context is suspended,
-  // the handler still needs to be added in case the context is resumed.
+  // being processed, the handler must be added.  If the context is not closed,
+  // the handler still needs to be added in case rendering is paused or the
+  // context is later resumed.
   DCHECK(context());
   if (context()->IsPullingAudioGraph() ||
-      context()->ContextState() == V8AudioContextState::Enum::kSuspended ||
-      context()->ContextState() == V8AudioContextState::Enum::kInterrupted) {
+      context()->ContextState() != V8AudioContextState::Enum::kClosed) {
     context()->GetDeferredTaskHandler().AddRenderingOrphanHandler(
         std::move(handler_));
   }
@@ -168,18 +167,16 @@ AudioNode* AudioNode::connect(AudioNode* destination,
   if (output_index >= numberOfOutputs()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        StrCat({"output index (", String::Number(output_index),
-                ") exceeds number of outputs (",
-                String::Number(numberOfOutputs()), ")."}));
+        Format("output index ({}) exceeds number of outputs ({}).",
+               output_index, numberOfOutputs()));
     return nullptr;
   }
 
   if (destination && input_index >= destination->numberOfInputs()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        StrCat({"input index (", String::Number(input_index),
-                ") exceeds number of inputs (",
-                String::Number(destination->numberOfInputs()), ")."}));
+        Format("input index ({}) exceeds number of inputs ({}).", input_index,
+               destination->numberOfInputs()));
     return nullptr;
   }
 
@@ -207,15 +204,10 @@ AudioNode* AudioNode::connect(AudioNode* destination,
 
   SendLogMessage(
       __func__,
-      StrCat(
-          {"({output=[index:", String::Number(output_index),
-           ", type:", Handler().NodeTypeName(), ", handler:0x",
-           String::Format("%" PRIXPTR, reinterpret_cast<uintptr_t>(&Handler())),
-           "]} --> {input=[index:", String::Number(input_index),
-           ", type:", destination->Handler().NodeTypeName(), ", handler:0x",
-           String::Format("%" PRIXPTR,
-                          reinterpret_cast<uintptr_t>(&destination->Handler())),
-           "]})"}));
+      Format(
+          "({{output=[index:{}, type:{}]}} --> {{input=[index:{}, type:{}]}})",
+          output_index, Handler().NodeTypeName(), input_index,
+          destination->Handler().NodeTypeName()));
 
   AudioNodeWiring::Connect(Handler().Output(output_index),
                            destination->Handler().Input(input_index));
@@ -250,9 +242,8 @@ void AudioNode::connect(AudioParam* param,
   if (output_index >= numberOfOutputs()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        StrCat({"output index (", String::Number(output_index),
-                ") exceeds number of outputs (",
-                String::Number(numberOfOutputs()), ")."}));
+        Format("output index ({}) exceeds number of outputs ({}).",
+               output_index, numberOfOutputs()));
     return;
   }
 
@@ -432,8 +423,8 @@ void AudioNode::disconnect(AudioNode* destination,
   if (number_of_disconnections == 0) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidAccessError,
-        StrCat({"output (", String::Number(output_index),
-                ") is not connected to the given destination."}));
+        Format("output ({}) is not connected to the given destination.",
+               output_index));
   }
 
   Handler().UpdatePullStatusIfNeeded();
@@ -483,9 +474,9 @@ void AudioNode::disconnect(AudioNode* destination,
                                        input_index)) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidAccessError,
-        StrCat({"output (", String::Number(output_index),
-                ") is not connected to the input (",
-                String::Number(input_index), ") of the destination."}));
+        Format("output ({}) is not connected to the input ({}) of the "
+               "destination.",
+               output_index, input_index));
     return;
   }
 
@@ -564,8 +555,9 @@ void AudioNode::disconnect(AudioParam* destination_param,
   if (!DisconnectFromOutputIfConnected(output_index, *destination_param)) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidAccessError,
-        StrCat({"specified destination AudioParam and node output (",
-                String::Number(output_index), ") are not connected."}));
+        Format("specified destination AudioParam and node output ({}) are "
+               "not connected.",
+               output_index));
     return;
   }
 
@@ -627,9 +619,22 @@ void AudioNode::DidAddOutput(unsigned number_of_outputs) {
 
 void AudioNode::SendLogMessage(const String& function_name,
                                const String& message) {
-  WebRtcLogMessage(String::Format("[WA]AN::%s %s", function_name.Utf8().c_str(),
-                                  message.Utf8().c_str())
-                       .Utf8());
+  WebRtcLogMessage(StrCat({"[WA]AN::", function_name, " ", message}).Utf8());
+}
+
+bool AudioNode::HasOutputsConnected() const {
+  DCHECK(IsMainThread());
+  for (const auto& output : connected_nodes_) {
+    if (output && !output->empty()) {
+      return true;
+    }
+  }
+  for (const auto& output : connected_params_) {
+    if (output && !output->empty()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace blink

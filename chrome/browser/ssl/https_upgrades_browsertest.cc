@@ -13,6 +13,7 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/simple_test_clock.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/captive_portal/captive_portal_service_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -22,19 +23,20 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager_factory.h"
-#include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
 #include "chrome/browser/ssl/ask_before_http_dialog_controller.h"
 #include "chrome/browser/ssl/chrome_security_blocking_page_factory.h"
+#include "chrome/browser/ssl/chrome_security_state_util.h"
 #include "chrome/browser/ssl/generated_https_first_mode_pref.h"
 #include "chrome/browser/ssl/https_first_mode_settings_tracker.h"
 #include "chrome/browser/ssl/https_upgrades_interceptor.h"
 #include "chrome/browser/ssl/https_upgrades_navigation_throttle.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -42,21 +44,21 @@
 #include "components/captive_portal/content/captive_portal_service.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/embedder_support/pref_names.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
 #include "components/omnibox/browser/omnibox_client.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/core/browser/db/fake_database_manager.h"
-#include "components/safe_browsing/core/common/threat_enums.h"
+#include "components/safe_browsing/buildflags.h"
 #include "components/security_interstitials/content/stateful_ssl_host_state_delegate.h"
 #include "components/security_interstitials/core/features.h"
 #include "components/security_interstitials/core/https_only_mode_metrics.h"
 #include "components/security_interstitials/core/metrics_helper.h"
-#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "components/variations/active_field_trials.h"
 #include "components/variations/hashing.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -80,7 +82,19 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/url_constants.h"
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/test/base/scoped_channel_override.h"
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
+#include "components/safe_browsing/core/browser/db/fake_database_manager.h"
+#include "components/safe_browsing/core/common/threat_enums.h"
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 
 namespace {
 
@@ -192,6 +206,11 @@ enum class HttpsUpgradesTestType {
   // Enables HFM in Incognito mode. Runs testcases inside an Incognito
   // window.
   kHttpsFirstModeIncognito,
+
+  // Enables HFM in Enterprise Isolated Mode, which replaces Incognito. Runs
+  // testcases inside an Isolated Mode window. Behaves identically to
+  // kHttpsFirstModeIncognito apart from the warning strings.
+  kHttpsFirstModeIsolatedMode,
 
   // Enables HFM in balanced mode.
   kHttpsFirstBalancedMode,
@@ -316,6 +335,7 @@ class HttpsUpgradesBrowserTest
         break;
 
       case HttpsUpgradesTestType::kHttpsFirstModeIncognito:
+      case HttpsUpgradesTestType::kHttpsFirstModeIsolatedMode:
         feature_list_.InitWithFeatures(
             /*enabled_features=*/{features::kHttpsFirstModeIncognito,
                                   security_interstitials::features::
@@ -430,11 +450,10 @@ class HttpsUpgradesBrowserTest
     HttpsUpgradesInterceptor::SetHttpsPortForTesting(https_server()->port());
     HttpsUpgradesInterceptor::SetHttpPortForTesting(http_server()->port());
 
-    // Incognito tests swap out the default Browser instance for an Incognito
-    // window, and then should behave like kHttpsFirstMode type tests but
-    // without enabling the full HFM pref.
-    if (https_upgrades_test_type() ==
-        HttpsUpgradesTestType::kHttpsFirstModeIncognito) {
+    // Incognito and Isolated Mode tests swap out the default Browser instance
+    // for an off-the-record window, and then should behave like
+    // kHttpsFirstMode type tests but without enabling the full HFM pref.
+    if (IsIncognitoMode() || IsIsolatedMode()) {
       UseIncognitoBrowser();
       SetPref(false);
     }
@@ -442,7 +461,7 @@ class HttpsUpgradesBrowserTest
     if (https_upgrades_test_type() ==
         HttpsUpgradesTestType::kHttpsFirstModeAdvancedProtection) {
       safe_browsing::AdvancedProtectionStatusManagerFactory::GetForProfile(
-          browser()->profile())
+          browser()->GetProfile())
           ->SetAdvancedProtectionStatusForTesting(true);
     }
 
@@ -462,13 +481,16 @@ class HttpsUpgradesBrowserTest
   }
 
   void TearDownOnMainThread() override {
-    browser()->profile()->GetPrefs()->ClearPref(prefs::kHttpsOnlyModeEnabled);
-    browser()->profile()->GetPrefs()->ClearPref(
+    browser()->GetProfile()->GetPrefs()->ClearPref(
+        prefs::kHttpsOnlyModeEnabled);
+    browser()->GetProfile()->GetPrefs()->ClearPref(
         prefs::kHttpsOnlyModeAutoEnabled);
-    browser()->profile()->GetPrefs()->ClearPref(prefs::kHttpsUpgradeFallbacks);
-    browser()->profile()->GetPrefs()->ClearPref(
+    browser()->GetProfile()->GetPrefs()->ClearPref(
+        prefs::kHttpsUpgradeFallbacks);
+    browser()->GetProfile()->GetPrefs()->ClearPref(
         prefs::kHttpsUpgradeNavigations);
-    browser()->profile()->GetPrefs()->ClearPref(prefs::kHttpsFirstBalancedMode);
+    browser()->GetProfile()->GetPrefs()->ClearPref(
+        prefs::kHttpsFirstBalancedMode);
 
     HttpsUpgradesInterceptor::SetHttpsPortForTesting(0);
     HttpsUpgradesInterceptor::SetHttpPortForTesting(0);
@@ -476,6 +498,12 @@ class HttpsUpgradesBrowserTest
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     mock_cert_verifier_.SetUpCommandLine(command_line);
+
+    if (IsIsolatedMode()) {
+      command_line->AppendSwitch(
+          enterprise_isolated_mode::switches::
+              kForceEnterpriseIsolatedModeReplacesIncognito);
+    }
   }
 
   void SetUpInProcessBrowserTestFixture() override {
@@ -489,15 +517,31 @@ class HttpsUpgradesBrowserTest
   // Incognito testing support
   //
   // Returns the active Browser for the test type being run.
-  Browser* GetBrowser() const {
+  BrowserWindowInterface* GetBrowser() const {
     return incognito_browser_ ? incognito_browser_.get() : browser();
   }
   // Call to use an Incognito browser rather than the default.
   void UseIncognitoBrowser() {
     ASSERT_EQ(nullptr, incognito_browser_.get());
     incognito_browser_ = CreateIncognitoBrowser();
+    ASSERT_EQ(
+        IsIsolatedMode(),
+        incognito_browser_->GetProfile()->IsEnterpriseIsolatedModeProfile());
   }
-  bool IsIncognito() const { return incognito_browser_ != nullptr; }
+  // Returns true if the test is running in the off-the-record browser window,
+  // which is used by both the Incognito and the Isolated Mode test types.
+  bool IsIncognitoOrIsolatedBrowser() const {
+    return incognito_browser_ != nullptr;
+  }
+  bool IsIncognitoMode() const {
+    return https_upgrades_test_type() ==
+           HttpsUpgradesTestType::kHttpsFirstModeIncognito;
+  }
+  bool IsIsolatedMode() const {
+    return https_upgrades_test_type() ==
+           HttpsUpgradesTestType::kHttpsFirstModeIsolatedMode;
+  }
+
   bool OnlyInBalancedMode() const {
     return https_upgrades_test_type() ==
                HttpsUpgradesTestType::kHttpsFirstBalancedMode ||
@@ -516,22 +560,22 @@ class HttpsUpgradesBrowserTest
   HttpsUpgradesTestType https_upgrades_test_type() const { return GetParam(); }
 
   void SetPref(bool enabled) {
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(prefs::kHttpsOnlyModeEnabled, enabled);
   }
 
   bool GetPref() const {
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     return prefs->GetBoolean(prefs::kHttpsOnlyModeEnabled);
   }
 
   void SetBalancedPref(bool enabled) {
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(prefs::kHttpsFirstBalancedMode, enabled);
   }
 
   bool GetBalancedPref() const {
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     return prefs->GetBoolean(prefs::kHttpsFirstBalancedMode);
   }
 
@@ -552,7 +596,7 @@ class HttpsUpgradesBrowserTest
   bool IsStrictInterstitialEnabledForTest() const {
     return IsHttpsFirstModePrefEnabled() ||
            safe_browsing::AdvancedProtectionStatusManagerFactory::GetForProfile(
-               browser()->profile())
+               browser()->GetProfile())
                ->IsUnderAdvancedProtection();
   }
 
@@ -560,9 +604,10 @@ class HttpsUpgradesBrowserTest
   // that assume the HTTP interstitial will trigger (i.e., for fallback HTTP
   // navigations when HTTPS-First Mode is enabled).
   bool IsHttpsFirstModeInterstitialEnabledAcrossSites() const {
-    return IsHttpsFirstModePrefEnabled() || InBalancedMode() || IsIncognito() ||
+    return IsHttpsFirstModePrefEnabled() || InBalancedMode() ||
+           IsIncognitoOrIsolatedBrowser() ||
            safe_browsing::AdvancedProtectionStatusManagerFactory::GetForProfile(
-               browser()->profile())
+               browser()->GetProfile())
                ->IsUnderAdvancedProtection();
   }
 
@@ -594,7 +639,7 @@ class HttpsUpgradesBrowserTest
 
   void SetSiteEngagementScore(const GURL& url, double score) {
     site_engagement::SiteEngagementService* service =
-        site_engagement::SiteEngagementService::Get(browser()->profile());
+        site_engagement::SiteEngagementService::Get(browser()->GetProfile());
     service->ResetBaseScoreForURL(url, score);
     ASSERT_EQ(score, service->GetScore(url));
   }
@@ -672,8 +717,8 @@ class HttpsUpgradesBrowserTest
     SetSiteEngagementScore(GURL("https://google.com:12345"), 90);
 
     // Profile must be old enough.
-    browser()->profile()->SetCreationTimeForTesting(clock->Now() -
-                                                    base::Days(30));
+    browser()->GetProfile()->SetCreationTimeForTesting(clock->Now() -
+                                                       base::Days(30));
     hfm_service()->SetClockForTesting(clock);
 
     // There must be a lot of recorded navigations.
@@ -686,7 +731,7 @@ class HttpsUpgradesBrowserTest
     // This will start Typically Secure observation.
     GURL http_url("http://bad-https2.com/simple.html");
     content::WebContents* contents =
-        GetBrowser()->tab_strip_model()->GetActiveWebContents();
+        GetBrowser()->GetTabStripModel()->GetActiveWebContents();
     NavigateToURLWithLinkTransitionBlockUntilNavigationsComplete(
         contents, http_url, /*number_of_navigations=*/1);
     ExpectInterstitialOnlyIfPrefIsSetOrInBalancedMode(contents);
@@ -702,7 +747,7 @@ class HttpsUpgradesBrowserTest
   base::test::ScopedFeatureList* feature_list() { return &feature_list_; }
 
   HttpsFirstModeService* hfm_service() const {
-    return HttpsFirstModeServiceFactory::GetForProfile(browser()->profile());
+    return HttpsFirstModeServiceFactory::GetForProfile(browser()->GetProfile());
   }
 
   // Checks that the interstitial UKM has an entry for `url` and `result`.
@@ -739,9 +784,13 @@ class HttpsUpgradesBrowserTest
     EXPECT_EQ(0u, entries.size());
   }
 
-  void EnableCaptivePortalDetection(Browser* browser);
+  void EnableCaptivePortalDetection(BrowserWindowInterface* browser);
 
  private:
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+  chrome::ScopedChannelOverride channel_override_{
+      chrome::ScopedChannelOverride::Channel::kDev};
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
   // TODO(https://crbug.com/423465927): Explore a better approach to make the
   // existing tests run with the prewarm feature enabled.
   test::ScopedPrewarmFeatureList prewarm_feature_list_{
@@ -751,7 +800,8 @@ class HttpsUpgradesBrowserTest
   net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
   content::ContentMockCertVerifier mock_cert_verifier_;
   base::HistogramTester histograms_;
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> incognito_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged>
+      incognito_browser_ = nullptr;
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder_;
 
   // A clock that can be installed with
@@ -772,6 +822,7 @@ INSTANTIATE_TEST_SUITE_P(
         HttpsUpgradesTestType::kHttpsFirstModeForTypicallySecureUsers,
         HttpsUpgradesTestType::kAllAutoHFM,
         HttpsUpgradesTestType::kHttpsFirstModeIncognito,
+        HttpsUpgradesTestType::kHttpsFirstModeIsolatedMode,
         HttpsUpgradesTestType::kHttpsFirstBalancedMode,
         HttpsUpgradesTestType::kHttpsFirstModeAdvancedProtection,
         HttpsUpgradesTestType::kAll,
@@ -791,6 +842,8 @@ INSTANTIATE_TEST_SUITE_P(
           return "AllAutoHFM";
         case HttpsUpgradesTestType::kHttpsFirstModeIncognito:
           return "HttpsFirstModeIncognito";
+        case HttpsUpgradesTestType::kHttpsFirstModeIsolatedMode:
+          return "HttpsFirstModeIsolatedMode";
         case HttpsUpgradesTestType::kHttpsFirstBalancedMode:
           return "HttpsFirstBalancedMode";
         case HttpsUpgradesTestType::kHttpsFirstModeAdvancedProtection:
@@ -815,7 +868,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   GURL http_url = http_server()->GetURL("foo.com", "/simple.html");
   GURL https_url = https_server()->GetURL("foo.com", "/simple.html");
 
-  auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(NavigateToURLWithLinkTransition(contents, http_url, https_url));
   EXPECT_FALSE(chrome_browser_interstitials::IsShowingInterstitial(contents));
 
@@ -839,7 +892,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
                        UrlWithHttpsScheme_ShouldLoad) {
   GURL https_url = https_server()->GetURL("foo.com", "/simple.html");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(NavigateToURLWithLinkTransition(contents, https_url));
 
   // Verify that navigation event metrics were not recorded as the navigation
@@ -858,7 +911,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
 // that exact URL.
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, Localhost_ShouldNotUpgrade) {
   GURL localhost_url = http_server()->GetURL("localhost", "/simple.html");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(NavigateToURLWithLinkTransition(contents, localhost_url));
 
   // Verify that navigation event metrics were not recorded as the navigation
@@ -891,7 +944,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
           GetChromeTestDataDir().MaybeAsASCII(),
           local_ip_url.GetWithEmptyPath());
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   if (IsStrictInterstitialEnabledForTest()) {
     // HFM should attempt the upgrade, fail, and fallback to the interstitial.
@@ -936,7 +989,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
 
   GURL singlelabel_url = http_server()->GetURL("cl", "/simple.html");
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   if (IsStrictInterstitialEnabledForTest()) {
     // HFM should attempt the upgrade, fail, and fallback to the interstitial.
@@ -987,7 +1040,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, NonUniqueHost_RecordsMetrics) {
   // Note that we don't test with an RFC1918 IP because the test server
   // wouldn't receive the traffic (since it relies on DNS).
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   if (IsStrictInterstitialEnabledForTest()) {
     EXPECT_FALSE(NavigateToURLWithLinkTransition(contents, nonunique_url1));
     EXPECT_FALSE(NavigateToURLWithLinkTransition(contents, nonunique_url2));
@@ -1026,7 +1079,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
           GetChromeTestDataDir().MaybeAsASCII(),
           non_default_http_url.GetWithEmptyPath());
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   if (IsStrictInterstitialEnabledForTest()) {
     // HFM should attempt the upgrade, fail, and fallback to the interstitial.
@@ -1076,7 +1129,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
                        UrlWithHttpsScheme_BrokenSSL_ShouldNotFallback) {
   GURL https_url = https_server()->GetURL("bad-https.com", "/simple.html");
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_FALSE(NavigateToURLWithLinkTransition(contents, https_url));
   EXPECT_EQ(https_url, contents->GetLastCommittedURL());
 
@@ -1098,7 +1151,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
   GURL https_url = https_server()->GetURL("bad-https.com", "/simple.html");
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
@@ -1119,21 +1172,26 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
 // HTTPS-First Mode in Incognito should customize the interstitial.
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
                        IncognitoInterstitialVariation) {
-  // This test only applies to fully-enabled HFM and HFM-in-Incognito.
-  if (!IsHttpsFirstModePrefEnabled() && !IsIncognito()) {
+  // This test only applies to fully-enabled HFM, HFM-in-Incognito and
+  // HFM-in-Isolated-Mode.
+  if (!IsHttpsFirstModePrefEnabled() && !IsIncognitoOrIsolatedBrowser()) {
     return;
   }
 
   GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
   GURL https_url = https_server()->GetURL("bad-https.com", "/simple.html");
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
   if (IsHttpsFirstModePrefEnabled()) {
     EXPECT_EQ(HFMInterstitialType::kStandard, GetHFMInterstitialType(contents));
-  } else if (IsIncognito()) {
+  } else if (IsIsolatedMode()) {
+    // Test that HFM-in-Isolated-Mode overrides the default interstitial text.
+    EXPECT_EQ(HFMInterstitialType::kIsolatedMode,
+              GetHFMInterstitialType(contents));
+  } else if (IsIncognitoMode()) {
     // Test that HFM-in-Incognito overrides the default interstitial text.
     EXPECT_EQ(HFMInterstitialType::kIncognito,
               GetHFMInterstitialType(contents));
@@ -1195,8 +1253,8 @@ MakeInterceptorForSiteEngagementHeuristic() {
 IN_PROC_BROWSER_TEST_P(
     HttpsUpgradesBrowserTest,
     MAYBE_UrlWithHttpScheme_BrokenSSL_SiteEngagementHeuristic_ShouldInterstitial) {
-  // HFM+SE is not enabled in Incognito.
-  if (IsIncognito()) {
+  // HFM+SE is not enabled in Incognito or Isolated Mode.
+  if (IsIncognitoOrIsolatedBrowser()) {
     return;
   }
   // Disable the testing port configuration, as this test doesn't use the
@@ -1206,8 +1264,8 @@ IN_PROC_BROWSER_TEST_P(
   auto url_loader_interceptor = MakeInterceptorForSiteEngagementHeuristic();
 
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
-  Profile* profile = GetBrowser()->profile();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
+  Profile* profile = GetBrowser()->GetProfile();
   content::SSLHostStateDelegate* state = profile->GetSSLHostStateDelegate();
 
   // Set test clock.
@@ -1416,8 +1474,8 @@ IN_PROC_BROWSER_TEST_P(
 IN_PROC_BROWSER_TEST_P(
     HttpsUpgradesBrowserTest,
     UrlWithHttpScheme_BrokenSSL_SiteEngagementHeuristic_ShouldIgnoreUrlsWithNonDefaultPorts) {
-  // HFM+SE is not enabled in Incognito.
-  if (IsIncognito()) {
+  // HFM+SE is not enabled in Incognito or Isolated Mode.
+  if (IsIncognitoOrIsolatedBrowser()) {
     return;
   }
   // Advanced Protection users have HFM enabled unconditionally, which does not
@@ -1434,8 +1492,8 @@ IN_PROC_BROWSER_TEST_P(
   auto url_loader_interceptor = MakeInterceptorForSiteEngagementHeuristic();
 
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
-  Profile* profile = GetBrowser()->profile();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
+  Profile* profile = GetBrowser()->GetProfile();
   content::SSLHostStateDelegate* state = profile->GetSSLHostStateDelegate();
 
   // Set test clock.
@@ -1529,8 +1587,9 @@ IN_PROC_BROWSER_TEST_P(
 IN_PROC_BROWSER_TEST_P(
     HttpsUpgradesBrowserTest,
     PRE_UrlWithHttpScheme_BrokenSSL_ShouldInterstitial_TypicallySecureUser) {
-  // HFM-for-Typically-Secure-Users is not enabled in Incognito.
-  if (IsIncognito()) {
+  // HFM-for-Typically-Secure-Users is not enabled in Incognito or Isolated
+  // Mode.
+  if (IsIncognitoOrIsolatedBrowser()) {
     return;
   }
   if (https_upgrades_test_type() ==
@@ -1539,7 +1598,7 @@ IN_PROC_BROWSER_TEST_P(
   }
 
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
 
   if (!IsHttpsFirstModePrefEnabled() && !InBalancedMode()) {
@@ -1582,7 +1641,7 @@ IN_PROC_BROWSER_TEST_P(
     ExpectInterstitial(contents);
     expected_reasons.balanced++;
   } else if (safe_browsing::AdvancedProtectionStatusManagerFactory::
-                 GetForProfile(browser()->profile())
+                 GetForProfile(browser()->GetProfile())
                      ->IsUnderAdvancedProtection()) {
     ExpectInterstitial(contents);
     expected_reasons.advanced_protection++;
@@ -1605,7 +1664,7 @@ IN_PROC_BROWSER_TEST_P(
     ExpectInterstitial(contents);
     expected_reasons.balanced++;
   } else if (safe_browsing::AdvancedProtectionStatusManagerFactory::
-                 GetForProfile(browser()->profile())
+                 GetForProfile(browser()->GetProfile())
                      ->IsUnderAdvancedProtection()) {
     ExpectInterstitial(contents);
     expected_reasons.advanced_protection++;
@@ -1633,8 +1692,9 @@ IN_PROC_BROWSER_TEST_P(
 IN_PROC_BROWSER_TEST_P(
     HttpsUpgradesBrowserTest,
     MAYBE_UrlWithHttpScheme_BrokenSSL_ShouldInterstitial_TypicallySecureUser) {
-  // HFM-for-Typically-Secure-Users is not enabled in Incognito.
-  if (IsIncognito()) {
+  // HFM-for-Typically-Secure-Users is not enabled in Incognito or Isolated
+  // Mode.
+  if (IsIncognitoOrIsolatedBrowser()) {
     return;
   }
   if (https_upgrades_test_type() ==
@@ -1647,7 +1707,7 @@ IN_PROC_BROWSER_TEST_P(
   GetTestClock()->SetNow(base::Time::NowFromSystemTime() + base::Days(16));
 
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
 
   HttpsFirstModeService* hfm_service =
@@ -1696,7 +1756,7 @@ IN_PROC_BROWSER_TEST_P(
     } else if (InBalancedMode()) {
       expected_reasons.balanced++;
     } else if (safe_browsing::AdvancedProtectionStatusManagerFactory::
-                   GetForProfile(browser()->profile())
+                   GetForProfile(browser()->GetProfile())
                        ->IsUnderAdvancedProtection()) {
       expected_reasons.advanced_protection++;
     } else {
@@ -1728,7 +1788,7 @@ IN_PROC_BROWSER_TEST_P(
     } else if (InBalancedMode()) {
       expected_reasons.balanced++;
     } else if (safe_browsing::AdvancedProtectionStatusManagerFactory::
-                   GetForProfile(browser()->profile())
+                   GetForProfile(browser()->GetProfile())
                        ->IsUnderAdvancedProtection()) {
       expected_reasons.advanced_protection++;
     } else {
@@ -1771,8 +1831,9 @@ IN_PROC_BROWSER_TEST_P(
 IN_PROC_BROWSER_TEST_P(
     HttpsUpgradesBrowserTest,
     TypicallySecure_NonUniqueHostname_ShouldNotShowInterstitial) {
-  // HFM-for-Typically-Secure-Users is not enabled in Incognito.
-  if (IsIncognito()) {
+  // HFM-for-Typically-Secure-Users is not enabled in Incognito or Isolated
+  // Mode.
+  if (IsIncognitoOrIsolatedBrowser()) {
     return;
   }
   if (https_upgrades_test_type() ==
@@ -1794,7 +1855,7 @@ IN_PROC_BROWSER_TEST_P(
   // heuristic.
   GURL http_url("http://bad-https.com/simple.html");
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateToURLWithLinkTransitionBlockUntilNavigationsComplete(
       contents, http_url, /*number_of_navigations=*/1);
   MaybeExpectTypicallySecureInterstitial(contents);
@@ -1819,8 +1880,9 @@ IN_PROC_BROWSER_TEST_P(
 IN_PROC_BROWSER_TEST_P(
     HttpsUpgradesBrowserTest,
     TypicallySecure_NonUniqueHostnameFallbackShouldNotDisableTypicallySecureHeuristic) {
-  // HFM-for-Typically-Secure-Users is not enabled in Incognito.
-  if (IsIncognito()) {
+  // HFM-for-Typically-Secure-Users is not enabled in Incognito or Isolated
+  // Mode.
+  if (IsIncognitoOrIsolatedBrowser()) {
     return;
   }
   // Disable the testing port configuration, as this test doesn't use the
@@ -1838,7 +1900,7 @@ IN_PROC_BROWSER_TEST_P(
   // Before running the heuristic checks, also navigate to a non-unique
   // hostname. This will result in an interstitial iff strict mode is enabled.
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   NavigateToURLWithLinkTransitionBlockUntilNavigationsComplete(
       contents, GURL("http://nonunique-hostname-bad-https2/simple.html"),
       /*number_of_navigations=*/1);
@@ -1934,7 +1996,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
           }));
 
   GURL http_url("http://example.com");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
 }
 
@@ -1944,7 +2006,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
                        InterstitialBypassed_HttpFallbackLoaded) {
   GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
 
   if (IsHttpsFirstModeInterstitialEnabledAcrossSites()) {
@@ -1990,7 +2052,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   GURL http_url = http_server()->GetURL("foo.com", "/close-socket");
   GURL https_url = https_server()->GetURL("foo.com", "/close-socket");
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
@@ -2020,7 +2082,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
 
   GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
   GURL https_url = https_server()->GetURL("bad-https.com", "/simple.html");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   {
     // Set up an interceptor that will return ERR_NAME_NOT_RESOLVED. Navigating
@@ -2091,7 +2153,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   GURL redirecting_http_url =
       http_server()->GetURL("foo.com", www_redirect_path);
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   // Set up an interceptor that will return ERR_NAME_NOT_RESOLVED for
   // nonexistentsite.com.
@@ -2132,7 +2194,7 @@ IN_PROC_BROWSER_TEST_P(
 
   GURL http_url = http_server()->GetURL("blorp", "/simple.html");
   GURL https_url = https_server()->GetURL("blorp", "/simple.html");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   // Set up an interceptor that will return ERR_NAME_NOT_RESOLVED. Navigating
   // to the HTTP URL should get upgraded to HTTPS, and then fallback to HTTP
@@ -2170,13 +2232,13 @@ IN_PROC_BROWSER_TEST_P(
     ExemptNetErrorOnUpgrade_UniqueSingleLabelHostname_ShouldFallback) {
   // This test is only interesting when HTTPS-First Strict Mode is enabled.
   // Balanced Mode won't try to upgrade these requests at all.
-  if (!IsHttpsFirstModePrefEnabled() || IsIncognito()) {
+  if (!IsHttpsFirstModePrefEnabled() || IsIncognitoOrIsolatedBrowser()) {
     return;
   }
 
   GURL http_url = http_server()->GetURL("cl", "/simple.html");
   GURL https_url = https_server()->GetURL("cl", "/simple.html");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   // Set up an interceptor that will return ERR_NAME_NOT_RESOLVED. Navigating
   // to the HTTP URL should get upgraded to HTTPS, and then fallback to HTTP
@@ -2211,7 +2273,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
       https_server()->GetURL("foo.com", "/iframe_blank.html"));
   const GURL iframe_url(http_server()->GetURL("foo.com", "/simple.html"));
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(NavigateToURLWithLinkTransition(contents, parent_url));
 
   content::TestNavigationObserver nav_observer(contents, 1);
@@ -2234,7 +2296,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   const GURL iframe_url(http_server()->GetURL("bar.com", "/simple.html"));
 
   // Navigate to `parent_url` and bypass the HTTPS-Only Mode warning.
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, parent_url);
 
   if (IsHttpsFirstModeInterstitialEnabledAcrossSites()) {
@@ -2277,7 +2339,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, SlowHttps_ShouldInterstitial) {
   HttpsUpgradesInterceptor::SetHttpsPortForTesting(timeout_server.port());
 
   const GURL http_url = http_server()->GetURL("foo.com", "/simple.html");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
 
   if (IsHttpsFirstModeInterstitialEnabledAcrossSites()) {
@@ -2300,7 +2362,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, HttpPageHttpPost_NotUpgraded) {
       "/ssl/page_with_form_targeting_http_url.html", replacement_text);
 
   // Navigate to the page hosting the form on "foo.com".
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateToURLWithLinkTransitionBlockUntilNavigationsComplete(
       contents, http_server()->GetURL("bad-https.com", replacement_path), 1);
 
@@ -2338,7 +2400,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   GURL url = https_server()->GetURL("foo.com",
                                     "/server-redirect?" + target_url.spec());
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   // NavigateToURL() returns `false` because the final redirected URL does not
   // match `url`. Separately ensure the navigation succeeded using a navigation
@@ -2391,7 +2453,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   HttpsUpgradesInterceptor::SetHttpsPortForTesting(https_server.port());
 
   GURL http_url(http_server.GetURL("bad-https.com", "/"));
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
@@ -2499,7 +2561,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
       redirect_server_https.port());
 
   GURL http_url(redirect_server_http.GetURL("a.com", "/redirect"));
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
@@ -2553,7 +2615,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   HttpsUpgradesInterceptor::SetHttpsPortForTesting(downgrading_server.port());
 
   GURL url = downgrading_server.GetURL("foo.com", "/");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, url);
 
   if (IsHttpsFirstModeInterstitialEnabledAcrossSites()) {
@@ -2576,15 +2638,15 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   GURL http_url = http_server()->GetURL("foo.com", "/close-socket");
   GURL https_url = https_server()->GetURL("foo.com", "/close-socket");
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
-  auto* helper = SecurityStateTabHelper::FromWebContents(contents);
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
   if (IsHttpsFirstModeInterstitialEnabledAcrossSites()) {
     EXPECT_TRUE(IsShowingHttpsFirstModeInterstitial(contents));
 
-    EXPECT_EQ(security_state::WARNING, helper->GetSecurityLevel());
+    EXPECT_EQ(security_state::WARNING,
+              chrome_security_state::GetSecurityLevel(contents));
 
     // Proceed through the interstitial to navigate to the HTTP site.
     ProceedThroughHttpsFirstModeInterstitial(contents);
@@ -2594,7 +2656,8 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   // (as no connection was made).
   // TODO(crbug.com/40248833): Uncomment once upgrades are tracked
   // per-navigation.
-  // EXPECT_EQ(security_state::NONE, helper->GetSecurityLevel());
+  // EXPECT_EQ(security_state::NONE,
+  // chrome_security_state::GetSecurityLevel(contents));
 }
 
 // Tests that the security level is WARNING when the HTTPS-Only Mode
@@ -2606,22 +2669,23 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
   GURL https_url = https_server()->GetURL("bad-https.com", "/simple.html");
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
-  auto* helper = SecurityStateTabHelper::FromWebContents(contents);
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
   if (IsHttpsFirstModeInterstitialEnabledAcrossSites()) {
     EXPECT_TRUE(IsShowingHttpsFirstModeInterstitial(contents));
 
-    EXPECT_EQ(security_state::WARNING, helper->GetSecurityLevel());
+    EXPECT_EQ(security_state::WARNING,
+              chrome_security_state::GetSecurityLevel(contents));
 
     // Proceed through the interstitial to navigate to the HTTP page.
     ProceedThroughHttpsFirstModeInterstitial(contents);
   }
 
   // The security level should still be WARNING.
-  EXPECT_EQ(security_state::WARNING, helper->GetSecurityLevel());
+  EXPECT_EQ(security_state::WARNING,
+            chrome_security_state::GetSecurityLevel(contents));
 }
 
 // Regression test for crbug.com/40780767.
@@ -2659,7 +2723,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   // HTTPS server will have a cert error.
   GURL https_url = https_server()->GetURL("bad-https.com", "/simple.html");
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
 
   if (IsHttpsFirstModeInterstitialEnabledAcrossSites()) {
@@ -2679,8 +2743,8 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   // version of the site but with the DANGEROUS security level.
   ProceedThroughHttpsFirstModeInterstitial(contents);
   EXPECT_EQ(https_url, contents->GetLastCommittedURL());
-  auto* helper = SecurityStateTabHelper::FromWebContents(contents);
-  EXPECT_EQ(security_state::DANGEROUS, helper->GetSecurityLevel());
+  EXPECT_EQ(security_state::DANGEROUS,
+            chrome_security_state::GetSecurityLevel(contents));
 
   // Verify that navigation event metrics were correctly recorded. They should
   // only have been recorded for the initial navigation that resulted in the
@@ -2712,7 +2776,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, InterstitialLearnMoreLink) {
   GURL http_url = http_server()->GetURL("foo.com", "/close-socket");
   GURL https_url = https_server()->GetURL("foo.com", "/close-socket");
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
@@ -2768,7 +2832,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, BadHttpsFollowedByGoodHttps) {
   ASSERT_EQ(http_url.GetHost(), bad_https_url.GetHost());
   ASSERT_EQ(bad_https_url.GetHost(), good_https_url.GetHost());
 
-  auto* tab = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* tab = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   auto* profile = Profile::FromBrowserContext(tab->GetBrowserContext());
   auto* state = static_cast<StatefulSSLHostStateDelegate*>(
       profile->GetSSLHostStateDelegate());
@@ -2844,7 +2908,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, InterstitialGoBack) {
   GURL http_url = http_server()->GetURL("foo.com", "/close-socket");
   GURL https_url = https_server()->GetURL("foo.com", "/close-socket");
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
@@ -2877,7 +2941,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, CloseInterstitialTab) {
   GURL http_url = http_server()->GetURL("foo.com", "/close-socket");
   GURL https_url = https_server()->GetURL("foo.com", "/close-socket");
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
@@ -2902,7 +2966,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, CloseInterstitialTab) {
 // the next time they visit the host.
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, AllowlistEntryExpires) {
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
   content::SSLHostStateDelegate* state = profile->GetSSLHostStateDelegate();
 
@@ -2953,7 +3017,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, AllowlistEntryExpires) {
 // seven days in the future from now.
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, RevisitingBumpsExpiration) {
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
   content::SSLHostStateDelegate* state = profile->GetSSLHostStateDelegate();
 
@@ -3008,7 +3072,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, RevisitingBumpsExpiration) {
 // it is more strict).
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, PreferHstsOverHttpsFirstMode) {
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
 
   // URL for HTTPS server that will result in a certificate error.
@@ -3099,7 +3163,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   GURL downgrading_http_url =
       downgrading_https_url.ReplaceComponents(swap_http_scheme);
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   // Navigate to a "good" HTTPS site.
   EXPECT_TRUE(NavigateToURLWithLinkTransition(contents, good_https_url));
@@ -3115,8 +3179,8 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   // Simulate clicking the browser "back" button.
   EXPECT_TRUE(content::HistoryGoBack(contents));
   EXPECT_EQ(good_https_url, contents->GetLastCommittedURL());
-  auto* helper = SecurityStateTabHelper::FromWebContents(contents);
-  EXPECT_EQ(security_state::SECURE, helper->GetSecurityLevel());
+  EXPECT_EQ(security_state::SECURE,
+            chrome_security_state::GetSecurityLevel(contents));
 
   // Simulate clicking the browser "forward" button. The HistoryGoForward()
   // call returns `false` because it is an error page.
@@ -3146,7 +3210,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
                        EnterpriseAllowlistDisablesUpgrades) {
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   // Without any policy allowlist, navigate to HTTP URL on foo.com. It *should*
   // get upgraded to HTTPS.
@@ -3232,7 +3296,7 @@ IN_PROC_BROWSER_TEST_P(
   auto url_loader_interceptor = MakeInterceptorForSiteEngagementHeuristic();
 
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   auto* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
 
   // Without any policy allowlist, navigate to an HTTP URL. It should show the
@@ -3266,11 +3330,11 @@ IN_PROC_BROWSER_TEST_P(
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
                        EnterprisePolicyDisablesUpgrades) {
   // Disable HTTPS-Upgrades via enterprise policy.
-  auto* prefs = browser()->profile()->GetPrefs();
+  auto* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetBoolean(prefs::kHttpsUpgradesEnabled, false);
 
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   GURL http_url = http_server()->GetURL("foo.com", "/simple.html");
   GURL https_url = https_server()->GetURL("foo.com", "/simple.html");
 
@@ -3306,7 +3370,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
                        MAYBE_InsecureContentSettingDisablesUpgrades) {
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   GURL http_url = http_server()->GetURL("foo.com", "/simple.html");
   GURL https_url = https_server()->GetURL("foo.com", "/simple.html");
   auto* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
@@ -3376,7 +3440,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
                        MAYBE_InsecureContentSettingDisablesHFMForEngagedSites) {
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   GURL http_url = http_server()->GetURL("foo.com", "/simple.html");
   GURL https_url = https_server()->GetURL("foo.com", "/simple.html");
   auto* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
@@ -3464,7 +3528,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, crbug1431026) {
       "good-https.com",
       base::StrCat({"/server-redirect-301?", redirecting_http_url.spec()}));
 
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_FALSE(NavigateToURLWithLinkTransition(
       contents, initial_redirecting_good_https_url));
 
@@ -3484,11 +3548,11 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, crbug1431026) {
 // HTTP allowlist is cleared.
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
                        TogglingSettingClearsAllowlist) {
-  // The allowlist in an Incognito window is in-memory only, and is not cleared
-  // when the main profile's pref changes.
+  // The allowlist in an Incognito or Isolated Mode window is in-memory only,
+  // and is not cleared when the main profile's pref changes.
   // TODO(crbug.com/40937027): Add a test to cover the Incognito allowlisting
   // behavior explicitly.
-  if (IsIncognito()) {
+  if (IsIncognitoOrIsolatedBrowser()) {
     return;
   }
 
@@ -3499,7 +3563,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   }
 
   auto http_url = http_server()->GetURL("bad-https.com", "/simple.html");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   // Start by enabling HTTPS-First Mode.
   SetPref(true);
@@ -3539,8 +3603,9 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
 // Regression test for crbug.com/40949400.
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
                        IncognitoHasSeparateAllowlist) {
-  // This test only covers the case of HFM-in-Incognito.
-  if (!IsIncognito()) {
+  // This test only covers the cases of HFM-in-Incognito and
+  // HFM-in-Isolated-Mode.
+  if (!IsIncognitoOrIsolatedBrowser()) {
     return;
   }
   // In a regular window, add a host to the HTTP allowlist.
@@ -3549,13 +3614,14 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   // HTTPS-Upgrades may eventually have separate allowlists.
   SetPref(false);
   auto http_url = http_server()->GetURL("bad-https.com", "/simple.html");
-  auto* normal_tab = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* normal_tab = browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(NavigateToURLWithLinkTransition(normal_tab, http_url));
   EXPECT_FALSE(IsShowingHttpsFirstModeInterstitial(normal_tab));
 
   // In an Incognito window, navigating to that same host should still trigger
   // the HTTP interstitial, as the allowlist is not inherited.
-  auto* incognito_tab = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* incognito_tab =
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_FALSE(NavigateToURLWithLinkTransition(incognito_tab, http_url));
   EXPECT_TRUE(IsShowingHttpsFirstModeInterstitial(incognito_tab));
 }
@@ -3566,7 +3632,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
                        URLsTypedWithHttpSchemeNoUpgrades) {
   GURL http_url = http_server()->GetURL("foo.com", "/simple.html");
   GURL https_url = https_server()->GetURL("foo.com", "/simple.html");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   OmniboxClient* omnibox_client = BrowserWindow::FromBrowser(GetBrowser())
                                       ->GetLocationBar()
                                       ->GetOmniboxController()
@@ -3575,10 +3641,10 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   // Simulate the full URL was typed with an http scheme.
   content::TestNavigationObserver nav_observer(contents, 1);
   omnibox_client->OnAutocompleteAccept(
-      http_url, nullptr, WindowOpenDisposition::CURRENT_TAB,
-      ui::PAGE_TRANSITION_TYPED, AutocompleteMatchType::URL_WHAT_YOU_TYPED,
-      base::TimeTicks(), false, true, std::u16string(), AutocompleteMatch(),
-      AutocompleteMatch());
+      http_url, nullptr, WindowOpenDisposition::kCurrentTab,
+      ui::PAGE_TRANSITION_TYPED,
+      omnibox::AutocompleteMatchType::kUrlWhatYouTyped, base::TimeTicks(),
+      false, true, std::u16string(), AutocompleteMatch(), AutocompleteMatch());
   nav_observer.Wait();
 
   if (IsStrictInterstitialEnabledForTest()) {
@@ -3599,7 +3665,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
                        URLsAutocompletedWithHttpSchemeAreUpgraded) {
   GURL http_url = http_server()->GetURL("foo.com", "/simple.html");
   GURL https_url = https_server()->GetURL("foo.com", "/simple.html");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   OmniboxClient* omnibox_client = BrowserWindow::FromBrowser(GetBrowser())
                                       ->GetLocationBar()
                                       ->GetOmniboxController()
@@ -3608,8 +3674,8 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   // Simulate the full URL was autocompleted with an http scheme.
   content::TestNavigationObserver nav_observer(contents, 1);
   omnibox_client->OnAutocompleteAccept(
-      http_url, nullptr, WindowOpenDisposition::CURRENT_TAB,
-      ui::PAGE_TRANSITION_TYPED, AutocompleteMatchType::NAVSUGGEST,
+      http_url, nullptr, WindowOpenDisposition::kCurrentTab,
+      ui::PAGE_TRANSITION_TYPED, omnibox::AutocompleteMatchType::kNavsuggest,
       base::TimeTicks(), false, false, std::u16string(), AutocompleteMatch(),
       AutocompleteMatch());
   nav_observer.Wait();
@@ -3626,7 +3692,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   }
   GURL http_url = http_server()->GetURL("foo.com", "/simple.html");
   GURL https_url = https_server()->GetURL("foo.com", "/simple.html");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   OmniboxClient* omnibox_client = BrowserWindow::FromBrowser(GetBrowser())
                                       ->GetLocationBar()
                                       ->GetOmniboxController()
@@ -3643,10 +3709,10 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   // Simulate the full URL was typed with an http scheme.
   content::TestNavigationObserver nav_observer(contents, 1);
   omnibox_client->OnAutocompleteAccept(
-      http_url, nullptr, WindowOpenDisposition::CURRENT_TAB,
-      ui::PAGE_TRANSITION_TYPED, AutocompleteMatchType::URL_WHAT_YOU_TYPED,
-      base::TimeTicks(), false, true, std::u16string(), AutocompleteMatch(),
-      AutocompleteMatch());
+      http_url, nullptr, WindowOpenDisposition::kCurrentTab,
+      ui::PAGE_TRANSITION_TYPED,
+      omnibox::AutocompleteMatchType::kUrlWhatYouTyped, base::TimeTicks(),
+      false, true, std::u16string(), AutocompleteMatch(), AutocompleteMatch());
   nav_observer.Wait();
 
   // URL should not have been upgraded, and site should now be in the allowlist.
@@ -3654,6 +3720,56 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
   EXPECT_TRUE(state->IsHttpAllowedForHost(
       http_url.GetHost(),
       contents->GetPrimaryMainFrame()->GetStoragePartition()));
+}
+
+// Tests that when a URL typed with an explicit http:// scheme is redirected by
+// the server to other hosts, only the host of the originally typed URL is
+// added to the allowlist. The exemption applies to the navigation as a whole,
+// but server-chosen redirect targets must not be persistently allowlisted.
+IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest,
+                       URLsTypedWithHttpSchemeAllowlistOnlyInitialHost) {
+  if (IsHttpsFirstModeInterstitialEnabledAcrossSites()) {
+    return;
+  }
+  GURL final_url = http_server()->GetURL("baz.com", "/simple.html");
+  GURL hop_url =
+      http_server()->GetURL("bar.com", "/server-redirect?" + final_url.spec());
+  GURL initial_url =
+      http_server()->GetURL("foo.com", "/server-redirect?" + hop_url.spec());
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
+  OmniboxClient* omnibox_client = BrowserWindow::FromBrowser(GetBrowser())
+                                      ->GetLocationBar()
+                                      ->GetOmniboxController()
+                                      ->client();
+
+  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
+  content::SSLHostStateDelegate* state = profile->GetSSLHostStateDelegate();
+  auto* storage_partition =
+      contents->GetPrimaryMainFrame()->GetStoragePartition();
+
+  // None of the hosts should be in the allowlist yet.
+  EXPECT_FALSE(state->IsHttpAllowedForHost("foo.com", storage_partition));
+  EXPECT_FALSE(state->IsHttpAllowedForHost("bar.com", storage_partition));
+  EXPECT_FALSE(state->IsHttpAllowedForHost("baz.com", storage_partition));
+
+  // Simulate the full URL was typed with an http scheme. The server redirects
+  // through bar.com and baz.com.
+  content::TestNavigationObserver nav_observer(contents, 1);
+  omnibox_client->OnAutocompleteAccept(
+      initial_url, nullptr, WindowOpenDisposition::kCurrentTab,
+      ui::PAGE_TRANSITION_TYPED,
+      omnibox::AutocompleteMatchType::kUrlWhatYouTyped, base::TimeTicks(),
+      false, true, std::u16string(), AutocompleteMatch(), AutocompleteMatch());
+  nav_observer.Wait();
+
+  // None of the hops should have been upgraded.
+  EXPECT_EQ(final_url, contents->GetLastCommittedURL());
+
+  // The host the user typed should be in the allowlist, but the
+  // server-selected redirect targets should not.
+  EXPECT_TRUE(state->IsHttpAllowedForHost("foo.com", storage_partition));
+  EXPECT_FALSE(state->IsHttpAllowedForHost("bar.com", storage_partition));
+  EXPECT_FALSE(state->IsHttpAllowedForHost("baz.com", storage_partition));
 }
 
 // Returns a URL loader interceptor that responds to HTTPS URLs with a timeout
@@ -3772,7 +3888,7 @@ IN_PROC_BROWSER_TEST_F(
   GURL https_url = https_server()->GetURL("timeout-https.com", "/simple.html");
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   OmniboxClient* omnibox_client = BrowserWindow::FromBrowser(browser())
                                       ->GetLocationBar()
                                       ->GetOmniboxController()
@@ -3781,11 +3897,11 @@ IN_PROC_BROWSER_TEST_F(
   // Simulate a typed schemeless navigation.
   content::TestNavigationObserver nav_observer(contents, 1);
   omnibox_client->OnAutocompleteAccept(
-      http_url, nullptr, WindowOpenDisposition::CURRENT_TAB,
+      http_url, nullptr, WindowOpenDisposition::kCurrentTab,
       ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
                                 ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
-      AutocompleteMatchType::URL_WHAT_YOU_TYPED, base::TimeTicks(), true, false,
-      std::u16string(), AutocompleteMatch(), AutocompleteMatch());
+      omnibox::AutocompleteMatchType::kUrlWhatYouTyped, base::TimeTicks(), true,
+      false, std::u16string(), AutocompleteMatch(), AutocompleteMatch());
   nav_observer.Wait();
 
   // The navigation should have been upgraded to HTTPS, and failed there.
@@ -3822,7 +3938,7 @@ IN_PROC_BROWSER_TEST_F(
   GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   OmniboxClient* omnibox_client = BrowserWindow::FromBrowser(browser())
                                       ->GetLocationBar()
                                       ->GetOmniboxController()
@@ -3831,11 +3947,11 @@ IN_PROC_BROWSER_TEST_F(
   // Simulate a typed schemeless navigation.
   content::TestNavigationObserver nav_observer(contents, 1);
   omnibox_client->OnAutocompleteAccept(
-      http_url, nullptr, WindowOpenDisposition::CURRENT_TAB,
+      http_url, nullptr, WindowOpenDisposition::kCurrentTab,
       ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
                                 ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
-      AutocompleteMatchType::URL_WHAT_YOU_TYPED, base::TimeTicks(), true, false,
-      std::u16string(), AutocompleteMatch(), AutocompleteMatch());
+      omnibox::AutocompleteMatchType::kUrlWhatYouTyped, base::TimeTicks(), true,
+      false, std::u16string(), AutocompleteMatch(), AutocompleteMatch());
   nav_observer.Wait();
 
   // The navigation should have been upgraded to HTTPS, failed (cert error), and
@@ -3874,7 +3990,7 @@ IN_PROC_BROWSER_TEST_F(
   GURL https_url = https_server()->GetURL("example.com", "/simple.html");
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   OmniboxClient* omnibox_client = BrowserWindow::FromBrowser(browser())
                                       ->GetLocationBar()
                                       ->GetOmniboxController()
@@ -3883,11 +3999,11 @@ IN_PROC_BROWSER_TEST_F(
   // Simulate a typed schemeless navigation.
   content::TestNavigationObserver nav_observer(contents, 1);
   omnibox_client->OnAutocompleteAccept(
-      http_url, nullptr, WindowOpenDisposition::CURRENT_TAB,
+      http_url, nullptr, WindowOpenDisposition::kCurrentTab,
       ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
                                 ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
-      AutocompleteMatchType::URL_WHAT_YOU_TYPED, base::TimeTicks(), true, false,
-      std::u16string(), AutocompleteMatch(), AutocompleteMatch());
+      omnibox::AutocompleteMatchType::kUrlWhatYouTyped, base::TimeTicks(), true,
+      false, std::u16string(), AutocompleteMatch(), AutocompleteMatch());
   nav_observer.Wait();
 
   // The navigation should have been upgraded to HTTPS, and succeeded.
@@ -3935,7 +4051,7 @@ IN_PROC_BROWSER_TEST_F(
   GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   OmniboxClient* omnibox_client = BrowserWindow::FromBrowser(browser())
                                       ->GetLocationBar()
                                       ->GetOmniboxController()
@@ -3944,11 +4060,11 @@ IN_PROC_BROWSER_TEST_F(
   // Simulate a typed schemeless navigation.
   content::TestNavigationObserver nav_observer(contents, 1);
   omnibox_client->OnAutocompleteAccept(
-      http_url, nullptr, WindowOpenDisposition::CURRENT_TAB,
+      http_url, nullptr, WindowOpenDisposition::kCurrentTab,
       ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
                                 ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
-      AutocompleteMatchType::URL_WHAT_YOU_TYPED, base::TimeTicks(), true, false,
-      std::u16string(), AutocompleteMatch(), AutocompleteMatch());
+      omnibox::AutocompleteMatchType::kUrlWhatYouTyped, base::TimeTicks(), true,
+      false, std::u16string(), AutocompleteMatch(), AutocompleteMatch());
   nav_observer.Wait();
 
   // The navigation should have been upgraded to HTTPS, failed, and fell back to
@@ -3988,7 +4104,7 @@ IN_PROC_BROWSER_TEST_F(
   GURL http_url = http_server()->GetURL("timeout-https.com", "/simple.html");
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   OmniboxClient* omnibox_client = BrowserWindow::FromBrowser(browser())
                                       ->GetLocationBar()
                                       ->GetOmniboxController()
@@ -3997,11 +4113,11 @@ IN_PROC_BROWSER_TEST_F(
   // Simulate a typed schemeless navigation.
   content::TestNavigationObserver nav_observer(contents, 1);
   omnibox_client->OnAutocompleteAccept(
-      http_url, nullptr, WindowOpenDisposition::CURRENT_TAB,
+      http_url, nullptr, WindowOpenDisposition::kCurrentTab,
       ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
                                 ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
-      AutocompleteMatchType::URL_WHAT_YOU_TYPED, base::TimeTicks(), true, false,
-      std::u16string(), AutocompleteMatch(), AutocompleteMatch());
+      omnibox::AutocompleteMatchType::kUrlWhatYouTyped, base::TimeTicks(), true,
+      false, std::u16string(), AutocompleteMatch(), AutocompleteMatch());
   nav_observer.Wait();
 
   // The navigation should have been upgraded to HTTPS, failed (timeout), and
@@ -4045,12 +4161,13 @@ class HttpsUpgradesTypedSchemelessNavigationBalancedModeBrowserTest
 
   void SetUpOnMainThread() override {
     HttpsUpgradesTypedSchemelessNavigationTestBase::SetUpOnMainThread();
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kHttpsFirstBalancedMode,
-                                                 true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        prefs::kHttpsFirstBalancedMode, true);
   }
 
   void TearDownOnMainThread() override {
-    browser()->profile()->GetPrefs()->ClearPref(prefs::kHttpsFirstBalancedMode);
+    browser()->GetProfile()->GetPrefs()->ClearPref(
+        prefs::kHttpsFirstBalancedMode);
     HttpsUpgradesTypedSchemelessNavigationTestBase::TearDownOnMainThread();
   }
 };
@@ -4068,7 +4185,7 @@ IN_PROC_BROWSER_TEST_F(
   GURL https_url = https_server()->GetURL("timeout-https.com", "/simple.html");
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   OmniboxClient* omnibox_client = BrowserWindow::FromBrowser(browser())
                                       ->GetLocationBar()
                                       ->GetOmniboxController()
@@ -4077,11 +4194,11 @@ IN_PROC_BROWSER_TEST_F(
   // Simulate a typed schemeless navigation.
   content::TestNavigationObserver nav_observer(contents, 1);
   omnibox_client->OnAutocompleteAccept(
-      http_url, nullptr, WindowOpenDisposition::CURRENT_TAB,
+      http_url, nullptr, WindowOpenDisposition::kCurrentTab,
       ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
                                 ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
-      AutocompleteMatchType::URL_WHAT_YOU_TYPED, base::TimeTicks(), true, false,
-      std::u16string(), AutocompleteMatch(), AutocompleteMatch());
+      omnibox::AutocompleteMatchType::kUrlWhatYouTyped, base::TimeTicks(), true,
+      false, std::u16string(), AutocompleteMatch(), AutocompleteMatch());
   nav_observer.Wait();
 
   // The navigation should have been upgraded to HTTPS, and failed there.
@@ -4113,7 +4230,7 @@ IN_PROC_BROWSER_TEST_F(
   GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   OmniboxClient* omnibox_client = BrowserWindow::FromBrowser(browser())
                                       ->GetLocationBar()
                                       ->GetOmniboxController()
@@ -4122,11 +4239,11 @@ IN_PROC_BROWSER_TEST_F(
   // Simulate a typed schemeless navigation.
   content::TestNavigationObserver nav_observer(contents, 1);
   omnibox_client->OnAutocompleteAccept(
-      http_url, nullptr, WindowOpenDisposition::CURRENT_TAB,
+      http_url, nullptr, WindowOpenDisposition::kCurrentTab,
       ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
                                 ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
-      AutocompleteMatchType::URL_WHAT_YOU_TYPED, base::TimeTicks(), true, false,
-      std::u16string(), AutocompleteMatch(), AutocompleteMatch());
+      omnibox::AutocompleteMatchType::kUrlWhatYouTyped, base::TimeTicks(), true,
+      false, std::u16string(), AutocompleteMatch(), AutocompleteMatch());
   nav_observer.Wait();
 
   // The navigation should have been upgraded to HTTPS, failed (cert error), and
@@ -4207,14 +4324,15 @@ std::unique_ptr<content::URLLoaderInterceptor> MakeCaptivePortalInterceptor(
           }));
 }
 
-void HttpsUpgradesBrowserTest::EnableCaptivePortalDetection(Browser* browser) {
+void HttpsUpgradesBrowserTest::EnableCaptivePortalDetection(
+    BrowserWindowInterface* browser) {
   captive_portal::CaptivePortalService* captive_portal_service =
-      CaptivePortalServiceFactory::GetForProfile(browser->profile());
+      CaptivePortalServiceFactory::GetForProfile(browser->GetProfile());
   captive_portal_service->set_test_url(GURL(kCaptivePortalPingUrl));
 
   captive_portal::CaptivePortalService::set_state_for_testing(
       captive_portal::CaptivePortalService::NOT_TESTING);
-  browser->profile()->GetPrefs()->SetBoolean(
+  browser->GetProfile()->GetPrefs()->SetBoolean(
       embedder_support::kAlternateErrorPagesEnabled, true);
 }
 
@@ -4224,8 +4342,7 @@ void HttpsUpgradesBrowserTest::EnableCaptivePortalDetection(Browser* browser) {
 IN_PROC_BROWSER_TEST_P(
     HttpsUpgradesBrowserTest,
     CaptivePortal_LoginPageWithValidSSL_ShouldNotUpgradeUnlessInterstitialEnabled) {
-  if (https_upgrades_test_type() ==
-      HttpsUpgradesTestType::kHttpsFirstModeIncognito) {
+  if (IsIncognitoOrIsolatedBrowser()) {
     return;
   }
   auto interceptor =
@@ -4237,7 +4354,7 @@ IN_PROC_BROWSER_TEST_P(
   HttpsUpgradesInterceptor::SetHttpPortForTesting(0);
   EnableCaptivePortalDetection(browser());
 
-  auto* tab_strip = GetBrowser()->tab_strip_model();
+  auto* tab_strip = GetBrowser()->GetTabStripModel();
   auto* contents = tab_strip->GetActiveWebContents();
   size_t tab_count = tab_strip->count();
 
@@ -4291,8 +4408,7 @@ IN_PROC_BROWSER_TEST_P(
 IN_PROC_BROWSER_TEST_P(
     HttpsUpgradesBrowserTest,
     CaptivePortal_LoginPageWithoutValidSSL_ShouldNotUpgradeUnlessInterstitialEnabled) {
-  if (https_upgrades_test_type() ==
-      HttpsUpgradesTestType::kHttpsFirstModeIncognito) {
+  if (IsIncognitoOrIsolatedBrowser()) {
     return;
   }
   auto interceptor =
@@ -4304,7 +4420,7 @@ IN_PROC_BROWSER_TEST_P(
   HttpsUpgradesInterceptor::SetHttpPortForTesting(0);
   EnableCaptivePortalDetection(browser());
 
-  auto* tab_strip = GetBrowser()->tab_strip_model();
+  auto* tab_strip = GetBrowser()->GetTabStripModel();
   auto* contents = tab_strip->GetActiveWebContents();
   size_t tab_count = tab_strip->count();
 
@@ -4354,7 +4470,7 @@ IN_PROC_BROWSER_TEST_P(
 // the upgrade fails due to a certificate error.
 IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, UKM_CertError) {
   GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
 
   if (IsHttpsFirstModeInterstitialEnabledAcrossSites()) {
@@ -4379,7 +4495,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, UKM_TimerFired) {
   HttpsUpgradesInterceptor::SetHttpsPortForTesting(timeout_server.port());
 
   const GURL http_url = http_server()->GetURL("foo.com", "/simple.html");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, http_url);
 
   if (IsHttpsFirstModeInterstitialEnabledAcrossSites()) {
@@ -4412,7 +4528,7 @@ IN_PROC_BROWSER_TEST_P(HttpsUpgradesBrowserTest, UKM_RedirectLoop) {
   HttpsUpgradesInterceptor::SetHttpsPortForTesting(downgrading_server.port());
 
   GURL url = downgrading_server.GetURL("foo.com", "/");
-  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   NavigateAndWaitForFallback(contents, url);
 
   if (IsHttpsFirstModeInterstitialEnabledAcrossSites()) {
@@ -4442,14 +4558,14 @@ class HttpsUpgradesPrefsBrowserTest : public InProcessBrowserTest {
 
  protected:
   void SetUISetting(HttpsFirstModeSetting setting) {
-    extensions::settings_private::GeneratedPrefs prefs(browser()->profile());
+    extensions::settings_private::GeneratedPrefs prefs(browser()->GetProfile());
     prefs.SetPref(
         kGeneratedHttpsFirstModePref,
         std::make_unique<base::Value>(static_cast<int>(setting)).get());
   }
 
   bool GetPref() const {
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     return prefs->GetBoolean(prefs::kHttpsOnlyModeEnabled);
   }
 
@@ -4534,14 +4650,14 @@ class HttpsUpgradesBalancedModePrefsBrowserTest
   }
 
   void SetUISetting(HttpsFirstModeSetting setting) {
-    extensions::settings_private::GeneratedPrefs prefs(browser()->profile());
+    extensions::settings_private::GeneratedPrefs prefs(browser()->GetProfile());
     prefs.SetPref(
         kGeneratedHttpsFirstModePref,
         std::make_unique<base::Value>(static_cast<int>(setting)).get());
   }
 
   bool GetPref() const {
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     return prefs->GetBoolean(prefs::kHttpsFirstBalancedMode);
   }
 
@@ -4628,14 +4744,14 @@ using TypicallySecureUserBrowserTest = InProcessBrowserTest;
 IN_PROC_BROWSER_TEST_F(TypicallySecureUserBrowserTest,
                        PRE_RestoreCountsOnStartup_OneNavigation) {
   HttpsFirstModeService* hfm_service =
-      HttpsFirstModeServiceFactory::GetForProfile(browser()->profile());
+      HttpsFirstModeServiceFactory::GetForProfile(browser()->GetProfile());
   hfm_service->IncrementRecentNavigationCount();
 }
 
 IN_PROC_BROWSER_TEST_F(TypicallySecureUserBrowserTest,
                        RestoreCountsOnStartup_OneNavigation) {
   HttpsFirstModeService* hfm_service =
-      HttpsFirstModeServiceFactory::GetForProfile(browser()->profile());
+      HttpsFirstModeServiceFactory::GetForProfile(browser()->GetProfile());
   // A single navigation will not be persisted to the pref and won't be
   // restored on startup because navigations are persisted in batches of 10.
   EXPECT_EQ(0u, hfm_service->GetRecentNavigationCount());
@@ -4644,7 +4760,7 @@ IN_PROC_BROWSER_TEST_F(TypicallySecureUserBrowserTest,
 IN_PROC_BROWSER_TEST_F(TypicallySecureUserBrowserTest,
                        PRE_RestoreCountsOnStartup_TenNavigations) {
   HttpsFirstModeService* hfm_service =
-      HttpsFirstModeServiceFactory::GetForProfile(browser()->profile());
+      HttpsFirstModeServiceFactory::GetForProfile(browser()->GetProfile());
   // Increment repeatedly to force the counts to be persisted to the pref.
   for (size_t i = 0; i < 10; i++) {
     hfm_service->IncrementRecentNavigationCount();
@@ -4654,7 +4770,7 @@ IN_PROC_BROWSER_TEST_F(TypicallySecureUserBrowserTest,
 IN_PROC_BROWSER_TEST_F(TypicallySecureUserBrowserTest,
                        RestoreCountsOnStartup_TenNavigations) {
   HttpsFirstModeService* hfm_service =
-      HttpsFirstModeServiceFactory::GetForProfile(browser()->profile());
+      HttpsFirstModeServiceFactory::GetForProfile(browser()->GetProfile());
   EXPECT_EQ(10u, hfm_service->GetRecentNavigationCount());
 }
 
@@ -4675,7 +4791,7 @@ INSTANTIATE_TEST_SUITE_P(
 IN_PROC_BROWSER_TEST_P(
     HttpsUpgradesHeuristicsWithoutBalancedModeBrowserTest,
     UrlWithHttpScheme_BrokenSSL_SiteEngagementHeuristicWithoutBalancedMode_ShouldIgnore) {
-  ASSERT_FALSE(IsIncognito() || IsHttpsFirstModePrefEnabled());
+  ASSERT_FALSE(IsIncognitoOrIsolatedBrowser() || IsHttpsFirstModePrefEnabled());
 
   // Disable the testing port configuration, as this test doesn't use the
   // EmbeddedTestServer.
@@ -4684,8 +4800,8 @@ IN_PROC_BROWSER_TEST_P(
   auto url_loader_interceptor = MakeInterceptorForSiteEngagementHeuristic();
 
   content::WebContents* contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
-  Profile* profile = GetBrowser()->profile();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
+  Profile* profile = GetBrowser()->GetProfile();
   content::SSLHostStateDelegate* state = profile->GetSSLHostStateDelegate();
 
   // Set test clock.
@@ -4773,7 +4889,7 @@ IN_PROC_BROWSER_TEST_F(HttpsUpgradesSecureOriginAllowlistBrowserTest,
   GURL url_in_allowlist =
       embedded_test_server()->GetURL("test.example.com", "/simple.html");
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(NavigateToURLWithLinkTransition(contents, url_in_allowlist));
   EXPECT_FALSE(IsShowingHttpsFirstModeInterstitial(contents));
 }
@@ -4783,7 +4899,7 @@ IN_PROC_BROWSER_TEST_F(HttpsUpgradesSecureOriginAllowlistBrowserTest,
   GURL url_not_in_allowlist =
       embedded_test_server()->GetURL("not-example.com", "/simple.html");
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_FALSE(NavigateToURLWithLinkTransition(contents, url_not_in_allowlist));
   EXPECT_TRUE(IsShowingHttpsFirstModeInterstitial(contents));
 }
@@ -4810,7 +4926,7 @@ class HttpsUpgradesAdvancedProtectionBrowserTest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
     // Enable Advanced Protection for the profile via the testing API
     safe_browsing::AdvancedProtectionStatusManagerFactory::GetForProfile(
-        browser()->profile())
+        browser()->GetProfile())
         ->SetAdvancedProtectionStatusForTesting(true);
 
     host_resolver()->AddRule("*", "127.0.0.1");
@@ -4833,7 +4949,7 @@ IN_PROC_BROWSER_TEST_F(HttpsUpgradesAdvancedProtectionBrowserTest,
   GURL http_url = http_server()->GetURL("foo.com", "/simple.html");
   EXPECT_NE(http_url.IntPort(), 80);  // Ensure it's not the default port
 
-  auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
 
   EXPECT_FALSE(NavigateToURLWithLinkTransition(contents, http_url));
   EXPECT_TRUE(IsShowingHttpsFirstModeInterstitial(contents));
@@ -4874,7 +4990,7 @@ class HttpsUpgradesAskBeforeHttpDelayTest : public InProcessBrowserTest {
     HttpsUpgradesInterceptor::SetHttpPortForTesting(http_server_.port());
 
     // Enable HFM pref.
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(prefs::kHttpsOnlyModeEnabled, true);
   }
 
@@ -4913,7 +5029,7 @@ IN_PROC_BROWSER_TEST_F(HttpsUpgradesAskBeforeHttpDelayTest,
   HttpsUpgradesInterceptor::SetHttpsPortForTesting(timeout_server.port());
 
   const GURL http_url = http_server()->GetURL("foo.com", "/simple.html");
-  auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
 
   // Navigate to HTTP. It should upgrade to HTTPS and immediately fallback to
   // HTTP and show the interstitial because ask-before-http-fallback-delay is
@@ -4962,7 +5078,7 @@ class HttpsUpgradesSilentFallbackDelayTest : public InProcessBrowserTest {
     HttpsUpgradesInterceptor::SetHttpPortForTesting(http_server_.port());
 
     // Disable HFM pref.
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(prefs::kHttpsOnlyModeEnabled, false);
     prefs->SetBoolean(prefs::kHttpsFirstBalancedMode, false);
   }
@@ -5002,7 +5118,7 @@ IN_PROC_BROWSER_TEST_F(HttpsUpgradesSilentFallbackDelayTest,
   HttpsUpgradesInterceptor::SetHttpsPortForTesting(timeout_server.port());
 
   const GURL http_url = http_server()->GetURL("foo.com", "/simple.html");
-  auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
 
   // Navigate to HTTP. It should upgrade to HTTPS and immediately fallback to
   // HTTP because fallback-delay is 0ms.
@@ -5012,6 +5128,7 @@ IN_PROC_BROWSER_TEST_F(HttpsUpgradesSilentFallbackDelayTest,
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 }
 
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 // Fixture for testing interactions between HTTPS-Upgrades and Safe Browsing.
 class HttpsUpgradesSafeBrowsingTest : public InProcessBrowserTest {
  public:
@@ -5055,8 +5172,8 @@ class HttpsUpgradesSafeBrowsingTest : public InProcessBrowserTest {
     HttpsUpgradesInterceptor::SetHttpPortForTesting(http_server_.port());
 
     // Enable the HFM pref.
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kHttpsOnlyModeEnabled,
-                                                 true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        prefs::kHttpsOnlyModeEnabled, true);
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -5084,8 +5201,9 @@ class HttpsUpgradesSafeBrowsingTest : public InProcessBrowserTest {
 // Tests that if a navigation gets upgraded and the resulting URL is blocked by
 // Safe Browsing, we don't trigger fallback to HTTP and instead show the Safe
 // Browsing interstitial. Regression test for crbug.com/443741921.
+// TODO(crbug.com/553440870): Re-enable this test.
 IN_PROC_BROWSER_TEST_F(HttpsUpgradesSafeBrowsingTest,
-                       SafeBrowsingBlock_ShouldNotTriggerHFM) {
+                       DISABLED_SafeBrowsingBlock_ShouldNotTriggerHFM) {
   GURL http_url = http_server_.GetURL("malicious.com", "/simple.html");
   GURL https_url = https_server_.GetURL("malicious.com", "/simple.html");
 
@@ -5093,7 +5211,7 @@ IN_PROC_BROWSER_TEST_F(HttpsUpgradesSafeBrowsingTest,
   fake_db_manager_->AddDangerousUrl(
       https_url, safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_MALWARE);
 
-  auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
   content::TestNavigationObserver nav_observer(contents, 1);
 
   // Navigate to the HTTP URL.
@@ -5115,3 +5233,4 @@ IN_PROC_BROWSER_TEST_F(HttpsUpgradesSafeBrowsingTest,
   // HTTP.
   EXPECT_EQ(https_url, contents->GetVisibleURL());
 }
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)

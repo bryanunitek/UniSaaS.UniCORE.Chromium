@@ -97,10 +97,6 @@ class TabStripController {
       int index,
       CloseTabSource source,
       base::OnceCallback<void(CloseTabSource)> callback) = 0;
-
-  // Closes the tab at the specified index in the model.
-  virtual void CloseTab(int index) = 0;
-
   // Toggles audio muting for the tab at the specified index in the model.
   virtual void ToggleTabAudioMute(int index) = 0;
 
@@ -184,8 +180,12 @@ class TabStripController {
   // returns nullopt.
   virtual std::optional<tab_groups::TabGroupId> GetFocusedGroup() const = 0;
 
-  // Sets the group to be focused.
-  virtual void SetFocusedGroup(std::optional<tab_groups::TabGroupId> group) = 0;
+  // Enters focus mode for the given tab `group`.
+  virtual void EnterFocusMode(const tab_groups::TabGroupId& group) = 0;
+
+  // Exits focus mode.
+  void ExitFocusMode() { ExitFocusMode(std::nullopt); }
+  virtual void ExitFocusMode(std::optional<TabGroupFocusExitReason> reason) = 0;
 
   // Sets the title and color ID of the given `group`.
   virtual void SetVisualDataForGroup(

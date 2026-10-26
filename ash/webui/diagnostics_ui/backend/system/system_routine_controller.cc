@@ -16,9 +16,7 @@
 #include "ash/webui/diagnostics_ui/backend/system/connectivity_problem_formatter.h"
 #include "ash/webui/diagnostics_ui/backend/system/cros_healthd_helpers.h"
 #include "ash/webui/diagnostics_ui/backend/system/system_routine_controller_delegate.h"
-#include "base/compiler_specific.h"
 #include "base/containers/flat_set.h"
-#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -108,7 +106,7 @@ bool IsPowerRoutine(mojom::RoutineType routine_type) {
 }
 
 std::string ReadMojoHandleToJsonString(mojo::PlatformHandle handle) {
-  base::File file(handle.ReleaseFD());
+  base::File file(handle.TakeFD());
   std::vector<uint8_t> contents;
   contents.resize(file.GetLength());
   if (!file.ReadAndCheck(0, contents)) {
@@ -216,8 +214,7 @@ void SystemRoutineController::OnAvailableRoutinesFetched(
     const std::vector<healthd::DiagnosticRoutineEnum>& available_routines) {
   base::flat_set<healthd::DiagnosticRoutineEnum> healthd_routines(
       available_routines);
-  for (size_t i = 0; i < kRoutinePropertiesLength; i++) {
-    const RoutineProperties& routine = UNSAFE_TODO(kRoutineProperties[i]);
+  for (const RoutineProperties& routine : kRoutineProperties) {
     // Direct-path routines are not reported by cros_healthd; handled below.
     if (IsDirectNetworkRoutine(routine.type)) {
       continue;
@@ -584,17 +581,8 @@ void SystemRoutineController::ScheduleCheckRoutineStatus(
 void SystemRoutineController::ParsePowerRoutineResult(
     mojom::RoutineType routine_type,
     mojom::StandardRoutineResult result,
-    mojo::ScopedHandle output_handle) {
+    mojo::PlatformHandle output_handle) {
   if (!output_handle.is_valid()) {
-    OnPowerRoutineResult(routine_type,
-                         mojom::StandardRoutineResult::kExecutionError,
-                         /*percent_change=*/0, /*seconds_elapsed=*/0);
-    return;
-  }
-
-  mojo::PlatformHandle platform_handle =
-      mojo::UnwrapPlatformHandle(std::move(output_handle));
-  if (!platform_handle.is_valid()) {
     OnPowerRoutineResult(routine_type,
                          mojom::StandardRoutineResult::kExecutionError,
                          /*percent_change=*/0, /*seconds_elapsed=*/0);
@@ -603,7 +591,7 @@ void SystemRoutineController::ParsePowerRoutineResult(
 
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock()},
-      base::BindOnce(&ReadMojoHandleToJsonString, std::move(platform_handle)),
+      base::BindOnce(&ReadMojoHandleToJsonString, std::move(output_handle)),
       base::BindOnce(&SystemRoutineController::OnPowerRoutineResultFetched,
                      weak_factory_.GetWeakPtr(), routine_type));
 }

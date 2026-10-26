@@ -31,7 +31,7 @@ import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router, routes} from '../router.js';
 
 import type {KerberosAccount, KerberosAccountsBrowserProxy} from './kerberos_accounts_browser_proxy.js';
@@ -99,12 +99,12 @@ export class SettingsKerberosAccountsSubpageElement extends
     Setting.kSetActiveKerberosTicketV2,
   ]);
 
-  private accountToastText_: string;
-  private accounts_: KerberosAccount[];
-  private addAccountsAllowed_: boolean;
-  private isDarkModeActive_: boolean;
-  private selectedAccount_: KerberosAccount|null;
-  private showAddAccountDialog_: boolean;
+  declare private accountToastText_: string;
+  declare private accounts_: KerberosAccount[];
+  declare private addAccountsAllowed_: boolean;
+  declare private isDarkModeActive_: boolean;
+  declare private selectedAccount_: KerberosAccount|null;
+  declare private showAddAccountDialog_: boolean;
 
   private browserProxy_: KerberosAccountsBrowserProxy;
 

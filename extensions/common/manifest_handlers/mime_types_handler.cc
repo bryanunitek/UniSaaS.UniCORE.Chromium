@@ -27,7 +27,7 @@
 #include "extensions/common/install_warning.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
-#include "mime_types_handler.h"
+#include "extensions/common/manifest_handlers/mime_types_handler_permission.h"
 
 namespace keys = extensions::manifest_keys;
 namespace errors = extensions::manifest_errors;
@@ -85,8 +85,8 @@ bool ParseDictFormat(extensions::Extension* extension,
       continue;
     }
     if (!is_legacy_extension &&
-        !std::ranges::contains(MimeTypesHandler::GetPublicAllowedMIMETypeList(),
-                               mime_type)) {
+        !extensions::MimeTypesHandlerPermission::PermissionIDForMimeType(
+            mime_type)) {
       extension->AddInstallWarning(extensions::InstallWarning(
           base::StrCat({"mime_types_handler: ignoring unsupported "
                         "MIME type '",
@@ -107,18 +107,24 @@ bool ParseDictFormat(extensions::Extension* extension,
       continue;
     }
     handler.AddMIMEType(mime_type, handler_gurl,
-                        config->can_embed.value_or(false));
+                        config->can_embed.value_or(false),
+                        config->enabled.value_or(true));
   }
   return true;
 }
 
 // Stored on the Extension.
 struct MimeTypesHandlerInfo : public extensions::Extension::ManifestData {
+  static const char* kManifestDataKey;
+
   MimeTypesHandler handler_;
 
   MimeTypesHandlerInfo();
   ~MimeTypesHandlerInfo() override;
 };
+
+// static
+const char* MimeTypesHandlerInfo::kManifestDataKey = keys::kMimeTypesHandler;
 
 MimeTypesHandlerInfo::MimeTypesHandlerInfo() = default;
 MimeTypesHandlerInfo::~MimeTypesHandlerInfo() = default;
@@ -134,13 +140,6 @@ MimeTypesHandler::GetMIMETypeAllowlist() {
   return *allowlist_vector;
 }
 
-// static
-base::span<const std::string_view>
-MimeTypesHandler::GetPublicAllowedMIMETypeList() {
-  static constexpr std::string_view kAllowed[] = {"application/pdf"};
-  return kAllowed;
-}
-
 MimeTypesHandler::MimeTypeConfig::MimeTypeConfig() = default;
 MimeTypesHandler::MimeTypeConfig::MimeTypeConfig(const MimeTypeConfig&) =
     default;
@@ -153,10 +152,12 @@ MimeTypesHandler::~MimeTypesHandler() = default;
 
 void MimeTypesHandler::AddMIMEType(const std::string& mime_type,
                                    const GURL& handler_url,
-                                   bool can_embed) {
+                                   bool can_embed,
+                                   bool enabled) {
   auto& config = per_type_configs_[mime_type];
   config.handler_url = handler_url;
   config.can_embed = can_embed;
+  config.enabled = enabled;
 }
 
 std::vector<std::string> MimeTypesHandler::GetSupportedMimeTypes() const {
@@ -180,6 +181,11 @@ GURL MimeTypesHandler::GetHandlerUrl(const std::string& mime_type) const {
 bool MimeTypesHandler::CanEmbedMimeType(const std::string& mime_type) const {
   auto it = per_type_configs_.find(mime_type);
   return it != per_type_configs_.end() && it->second.can_embed;
+}
+
+bool MimeTypesHandler::EnabledByDefault(const std::string& mime_type) const {
+  auto it = per_type_configs_.find(mime_type);
+  return it != per_type_configs_.end() && it->second.enabled;
 }
 
 bool MimeTypesHandler::HasPlugin() const {
@@ -210,8 +216,7 @@ base::FilePath MimeTypesHandler::GetPluginPath() const {
 // static
 const MimeTypesHandler* MimeTypesHandler::Get(
     const extensions::Extension& extension) {
-  const MimeTypesHandlerInfo* info = static_cast<const MimeTypesHandlerInfo*>(
-      extension.GetManifestData(keys::kMimeTypesHandler));
+  const auto* info = extension.GetManifestData<MimeTypesHandlerInfo>();
   if (info) {
     return &info->handler_;
   }
@@ -253,7 +258,7 @@ bool MimeTypesHandlerParser::Parse(extensions::Extension* extension,
       return true;
     }
 
-    extension->SetManifestData(keys::kMimeTypesHandler, std::move(info));
+    extension->SetManifestData(std::move(info));
     return true;
   }
 
@@ -284,11 +289,32 @@ bool MimeTypesHandlerParser::Parse(extensions::Extension* extension,
   auto info = std::make_unique<MimeTypesHandlerInfo>();
   info->handler_.set_extension_id(extension->id());
   for (const std::string& mime_type : mime_types) {
-    info->handler_.AddMIMEType(mime_type, handler_gurl, /*can_embed=*/false);
+    // The legacy format has no can_embed key, so allowlisted handlers embed
+    // by default.
+    info->handler_.AddMIMEType(mime_type, handler_gurl,
+                               /*can_embed=*/info->handler_.IsPluginExtension(),
+                               /*enabled=*/true);
   }
 
-  extension->SetManifestData(keys::kMimeTypesHandler, std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
+}
+
+extensions::ManifestPermission* MimeTypesHandlerParser::CreatePermission() {
+  return new extensions::MimeTypesHandlerPermission();
+}
+
+extensions::ManifestPermission*
+MimeTypesHandlerParser::CreateInitialRequiredPermission(
+    const extensions::Extension* extension) {
+  const MimeTypesHandler* handler = MimeTypesHandler::Get(*extension);
+  // Plugin handlers are trusted by the allowlist and never prompt.
+  if (!handler || handler->IsPluginExtension()) {
+    return nullptr;
+  }
+  return new extensions::MimeTypesHandlerPermission(
+      extensions::MimeTypesHandlerPermission::MimeTypeSet(
+          handler->GetSupportedMimeTypes()));
 }
 
 base::span<const char* const> MimeTypesHandlerParser::Keys() const {

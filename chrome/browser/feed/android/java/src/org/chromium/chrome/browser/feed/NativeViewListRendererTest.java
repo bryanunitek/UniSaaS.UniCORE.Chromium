@@ -23,7 +23,6 @@ import android.widget.TextView;
 import androidx.appcompat.widget.AppCompatTextView;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -33,7 +32,6 @@ import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.xsurface.ListLayoutHelper;
@@ -42,7 +40,6 @@ import java.util.Arrays;
 
 /** Unit tests for {@link NativeViewListRenderer}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class NativeViewListRendererTest {
     static class DummyViewGroup extends ViewGroup {
         DummyViewGroup(Context context) {
@@ -79,13 +76,11 @@ public class NativeViewListRendererTest {
     }
 
     @Test
-    @SmallTest
     public void testBind_ReturninhgRecyclerView() {
         assertThat(mRenderer.bind(mManager), instanceOf(RecyclerView.class));
     }
 
     @Test
-    @SmallTest
     public void testOnCreateViewHolder() {
         mManager.addContents(
                 0,
@@ -104,7 +99,6 @@ public class NativeViewListRendererTest {
     }
 
     @Test
-    @SmallTest
     public void testOnBindViewHolder() {
         mManager.addContents(
                 0,
@@ -121,7 +115,6 @@ public class NativeViewListRendererTest {
     }
 
     @Test
-    @SmallTest
     public void testUnbind() {
         mManager.addContents(
                 0,

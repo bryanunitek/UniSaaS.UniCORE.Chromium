@@ -11,7 +11,7 @@
 #include "chrome/browser/interstitials/security_interstitial_page_test_utils.h"
 #include "chrome/browser/preloading/prerender/prerender_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -35,6 +35,7 @@
 #include "net/test/embedded_test_server/request_handler_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 using chrome_browser_interstitials::IsShowingSSLInterstitial;
@@ -124,7 +125,7 @@ class SSLPrerenderTest
 
  protected:
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   content::test::PrerenderTestHelper prerender_helper_;
@@ -314,7 +315,7 @@ IN_PROC_BROWSER_TEST_P(SSLPrerenderTest,
 
     // Submit a form targeting an insecure URL. The prerender should be
     // destroyed.
-    WebContents* tab = browser()->tab_strip_model()->GetActiveWebContents();
+    WebContents* tab = browser()->GetTabStripModel()->GetActiveWebContents();
     PrerenderHostObserver host_observer(*tab, kPrerenderHostId);
     ASSERT_TRUE(
         ExecJs(prerender_helper_.GetPrerenderedMainFrameHost(kPrerenderHostId),

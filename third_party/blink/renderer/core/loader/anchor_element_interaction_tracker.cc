@@ -9,6 +9,7 @@
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
 #include "third_party/blink/public/common/input/web_pointer_properties.h"
@@ -124,7 +125,43 @@ const ModerateViewportHeuristicConfig& GetViewportHeuristicConfig() {
                                            : *g_config_for_testing;
 }
 
+bool ShouldRunMobileViewportHeuristicImpl(const Document& document,
+                                          bool for_devtools_emulation) {
+#if BUILDFLAG(IS_ANDROID)
+  return IsMobileViewportContext(document);
+#elif BUILDFLAG(IS_IOS)
+  // Mobile viewport style is the platform default on iOS, so it does not
+  // imply DevTools mobile emulation.
+  return false;
+#else
+  // On desktop, a mobile viewport context implies DevTools mobile emulation;
+  // `for_devtools_emulation` acts as a kill-switch for that path.
+  return for_devtools_emulation && IsMobileViewportContext(document);
+#endif
+}
+
 }  // namespace
+
+bool ShouldRunModerateMobileViewportHeuristic(const Document& document) {
+  if (!base::FeatureList::IsEnabled(
+          features::kPreloadingModerateViewportHeuristics)) {
+    return false;
+  }
+  return ShouldRunMobileViewportHeuristicImpl(
+      document,
+      features::kPreloadingModerateViewportHeuristicsForDevToolsEmulation
+          .Get());
+}
+
+bool ShouldRunEagerMobileViewportHeuristic(const Document& document) {
+  if (!base::FeatureList::IsEnabled(
+          features::kPreloadingEagerViewportHeuristics)) {
+    return false;
+  }
+  return ShouldRunMobileViewportHeuristicImpl(
+      document,
+      features::kPreloadingEagerViewportHeuristicsForDevToolsEmulation.Get());
+}
 
 ModerateViewportHeuristicConfigTestingScope::
     ModerateViewportHeuristicConfigTestingScope()
@@ -322,21 +359,16 @@ AnchorElementInteractionTracker::AnchorElementInteractionTracker(
       interaction_host_.BindNewPipeAndPassReceiver(
           document.GetExecutionContext()->GetTaskRunner(
               TaskType::kInternalDefault)));
-  if (base::FeatureList::IsEnabled(
-          blink::features::kPreloadingModerateViewportHeuristics) ||
-      base::FeatureList::IsEnabled(
-          blink::features::kPreloadingEagerViewportHeuristics)) {
-    auto* anchor_metrics_sender =
-        AnchorElementMetricsSender::GetForFrame(GetDocument()->GetFrame());
-    auto* anchor_viewport_observer =
-        AnchorElementViewportPositionTracker::MaybeGetOrCreateFor(document);
-    // The viewport-based heuristic implemented by this class isn't as accurate
-    // when all anchors are not sampled in (i.e. not reported to
-    // `anchor_viewport_observer`), so we don't register for notifications (and
-    // don't run the heuristic) in that case.
-    if (anchor_viewport_observer && anchor_metrics_sender &&
-        anchor_metrics_sender->AllAnchorsSampledIn()) {
-      anchor_viewport_observer->AddObserver(this);
+  if (ShouldRunModerateMobileViewportHeuristic(document) ||
+      ShouldRunEagerMobileViewportHeuristic(document)) {
+    if (auto* anchor_metrics_sender =
+            AnchorElementMetricsSender::GetForFrame(GetDocument()->GetFrame());
+        anchor_metrics_sender && anchor_metrics_sender->AllAnchorsSampledIn()) {
+      if (auto* anchor_viewport_observer =
+              AnchorElementViewportPositionTracker::MaybeGetOrCreateFor(
+                  document)) {
+        anchor_viewport_observer->AddObserver(this);
+      }
     }
   }
 }
@@ -413,9 +445,10 @@ void AnchorElementInteractionTracker::OnPointerEvent(
     sender->MaybeReportAnchorElementPointerEvent(*anchor, pointer_event);
   }
 
-  // interaction_host_ might become unbound: Android's low memory detector
-  // sometimes call NotifyContextDestroyed to save memory. This unbinds mojo
-  // pipes using that ExecutionContext even if those pages can still navigate.
+  // Android's low-memory detector can destroy the execution context while
+  // keeping the frame alive, which unbinds this remote.
+  // TODO(crbug.com/538633734): Consider rebinding `interaction_host_` after an
+  // OOM purge so speculative loads and browser-side warmups can resume.
   if (!interaction_host_.is_bound()) {
     return;
   }
@@ -424,7 +457,16 @@ void AnchorElementInteractionTracker::OnPointerEvent(
     if (!pointer_event.IsLinkClickButton()) {
       return;
     }
-    interaction_host_->OnPointerDown(url);
+    // The renderer owns speculation candidate selection and enactment.
+    bool renderer_enacted = false;
+    if (auto* rules = DocumentSpeculationRules::FromIfExists(*GetDocument())) {
+      renderer_enacted = rules->OnPointerDownHeuristic(url);
+    }
+    // Notify the browser regardless: it still owns the generic pointerdown side
+    // effects (HTTP disk cache and service worker prewarm) that don't depend on
+    // speculation-rule candidate selection, and the preloading prediction when
+    // the renderer didn't enact anything.
+    interaction_host_->OnPointerDown(url, renderer_enacted);
     return;
   }
 
@@ -514,8 +556,16 @@ void AnchorElementInteractionTracker::OnClickEvent(
 }
 
 void AnchorElementInteractionTracker::HoverTimerFired(TimerBase*) {
+  // With renderer-side heuristics enabled, the renderer selects and enacts the
+  // matching candidate via DocumentSpeculationRules. The browser is still
+  // notified so it can perform generic hover side effects such as HTTP disk
+  // cache and service worker warmups.
   if (!interaction_host_.is_bound()) {
     return;
+  }
+  DocumentSpeculationRules* speculation_rules = nullptr;
+  if (Document* document = GetDocument()) {
+    speculation_rules = DocumentSpeculationRules::FromIfExists(*document);
   }
   const base::TimeTicks now = clock_->NowTicks();
   auto next_fire_time = base::TimeTicks::Max();
@@ -539,16 +589,24 @@ void AnchorElementInteractionTracker::HoverTimerFired(TimerBase*) {
         }
       }
 
+      bool renderer_enacted = false;
+      if (speculation_rules) {
+        renderer_enacted = speculation_rules->OnHoverHeuristic(
+            hover_event_candidate.key.first, hover_event_candidate.key.second);
+      }
+
       if (hover_event_candidate.key.second ==
-          blink::mojom::SpeculationEagerness::kEager) {
+          mojom::blink::SpeculationEagerness::kEager) {
         CHECK(base::FeatureList::IsEnabled(
             blink::features::kPreloadingEagerHoverHeuristics));
         interaction_host_->OnPointerHoverEager(hover_event_candidate.key.first,
-                                               std::move(pointer_data));
+                                               std::move(pointer_data),
+                                               renderer_enacted);
       } else if (hover_event_candidate.key.second ==
-                 blink::mojom::SpeculationEagerness::kModerate) {
+                 mojom::blink::SpeculationEagerness::kModerate) {
         interaction_host_->OnPointerHoverModerate(
-            hover_event_candidate.key.first, std::move(pointer_data));
+            hover_event_candidate.key.first, std::move(pointer_data),
+            renderer_enacted);
       } else {
         // `hover_event_candidates_` must be registered only for `eager` or
         // `moderate` eagerness.
@@ -606,14 +664,11 @@ KURL AnchorElementInteractionTracker::GetHrefEligibleForPreloading(
 void AnchorElementInteractionTracker::ViewportIntersectionUpdate(
     const HeapVector<Member<const HTMLAnchorElementBase>>& entered_viewport,
     const HeapVector<Member<const HTMLAnchorElementBase>>& left_viewport) {
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kPreloadingEagerViewportHeuristics)) {
-    return;
-  }
   // TODO(https://crbug.com/505056924): The state of IsPreloadingEligible may be
   // dynamically changed in the future changes, make sure the state is reflected
   // correctly at the point.
-  if (!IsPreloadingEligible()) {
+  if (!ShouldRunEagerMobileViewportHeuristic(*GetDocument()) ||
+      !IsPreloadingEligible()) {
     eager_viewport_heuristics_candidates_.clear();
     eager_viewport_heuristic_timer_.Stop();
     return;
@@ -652,14 +707,11 @@ void AnchorElementInteractionTracker::ViewportIntersectionUpdate(
 
 void AnchorElementInteractionTracker::AnchorPositionsUpdated(
     HeapVector<Member<AnchorPositionUpdate>>& position_updates) {
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kPreloadingModerateViewportHeuristics)) {
-    return;
-  }
   // TODO(https://crbug.com/505056924): The state of IsPreloadingEligible may be
   // dynamically changed in the future changes, make sure the state is reflected
   // correctly at the point.
-  if (!IsPreloadingEligible()) {
+  if (!ShouldRunModerateMobileViewportHeuristic(*GetDocument()) ||
+      !IsPreloadingEligible()) {
     largest_anchor_element_in_viewport_ = nullptr;
     moderate_viewport_heuristic_timer_.Stop();
     return;
@@ -755,30 +807,46 @@ bool AnchorElementInteractionTracker::IsPreloadingEligible() {
 
 void AnchorElementInteractionTracker::ModerateViewportHeuristicTimerFired(
     TimerBase* timer) {
-  CHECK(base::FeatureList::IsEnabled(
-      blink::features::kPreloadingModerateViewportHeuristics));
   if (!largest_anchor_element_in_viewport_ || !GetDocument()->GetFrame()) {
     return;
   }
 
-  // interaction_host_ might become unbound: Android's low memory detector
-  // sometimes call NotifyContextDestroyed to save memory. This unbinds mojo
-  // pipes using that ExecutionContext even if those pages can still navigate.
-  if (!interaction_host_.is_bound()) {
+  if (!ShouldRunModerateMobileViewportHeuristic(*GetDocument()) ||
+      !IsPreloadingEligible()) {
     return;
   }
 
-  if (IsPreloadingEligible()) {
-    interaction_host_->OnModerateViewportHeuristicTriggered(
-        largest_anchor_element_in_viewport_->Url());
+  const KURL& url = largest_anchor_element_in_viewport_->Url();
+  // The matching moderate candidate is enacted via DocumentSpeculationRules,
+  // and only when configured to enact (mirrors
+  // PreloadingDecider::OnModerateViewportHeuristicTriggered).
+  bool renderer_enacted = false;
+  if (features::kPreloadingModerateViewportHeuristicsEnactCandidates.Get()) {
+    if (auto* rules = DocumentSpeculationRules::FromIfExists(*GetDocument())) {
+      renderer_enacted = rules->OnViewportHeuristic(
+          url, mojom::blink::SpeculationEagerness::kModerate);
+    }
+  }
+
+  // Notify the browser regardless: it records the preloading prediction for
+  // this heuristic (and enacts the candidate on the legacy path).
+  // interaction_host_ might become unbound: Android's low memory detector
+  // sometimes call NotifyContextDestroyed to save memory. This unbinds mojo
+  // pipes using that ExecutionContext even if those pages can still navigate.
+  if (interaction_host_.is_bound()) {
+    interaction_host_->OnModerateViewportHeuristicTriggered(url,
+                                                            renderer_enacted);
   }
 }
 
 void AnchorElementInteractionTracker::EagerViewportHeuristicTimerFired(
     TimerBase*) {
-  CHECK(base::FeatureList::IsEnabled(
-      blink::features::kPreloadingEagerViewportHeuristics));
   if (!GetDocument()->GetFrame()) {
+    return;
+  }
+  if (!ShouldRunEagerMobileViewportHeuristic(*GetDocument()) ||
+      !IsPreloadingEligible()) {
+    eager_viewport_heuristics_candidates_.clear();
     return;
   }
 
@@ -794,12 +862,28 @@ void AnchorElementInteractionTracker::EagerViewportHeuristicTimerFired(
     next_fire_time = std::min(next_fire_time, candidate.timestamp);
   }
 
-  if (!interaction_host_.is_bound()) {
-    return;
-  }
+  if (!fired_candidates.empty()) {
+    // The candidates are enacted via DocumentSpeculationRules.
+    DocumentSpeculationRules* rules = nullptr;
+    if (Document* document = GetDocument()) {
+      rules = DocumentSpeculationRules::FromIfExists(*document);
+    }
 
-  if (!fired_candidates.empty() && IsPreloadingEligible()) {
-    interaction_host_->OnEagerViewportHeuristicTriggered(fired_candidates);
+    Vector<mojom::blink::AnchorElementInteractionTargetPtr> targets;
+    targets.reserve(fired_candidates.size());
+    for (const KURL& url : fired_candidates) {
+      const bool renderer_enacted =
+          rules && rules->OnViewportHeuristic(
+                       url, mojom::blink::SpeculationEagerness::kEager);
+      targets.push_back(mojom::blink::AnchorElementInteractionTarget::New(
+          url, renderer_enacted));
+    }
+
+    // Notify the browser regardless: it records the preloading predictions for
+    // this heuristic (and enacts the candidates on the legacy path).
+    if (interaction_host_.is_bound()) {
+      interaction_host_->OnEagerViewportHeuristicTriggered(std::move(targets));
+    }
   }
   RemoveAll(eager_viewport_heuristics_candidates_, fired_candidates);
   if (!next_fire_time.is_max()) {

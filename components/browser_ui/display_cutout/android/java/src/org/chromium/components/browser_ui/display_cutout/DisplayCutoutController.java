@@ -4,6 +4,7 @@
 
 package org.chromium.components.browser_ui.display_cutout;
 
+import static androidx.core.view.WindowInsetsCompat.Type.ime;
 import static androidx.core.view.WindowInsetsCompat.Type.navigationBars;
 import static androidx.core.view.WindowInsetsCompat.Type.statusBars;
 import static androidx.core.view.WindowInsetsCompat.Type.systemBars;
@@ -38,6 +39,7 @@ import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.insets.InsetObserver;
+import org.chromium.ui.mojom.VirtualKeyboardMode;
 
 /**
  * Controls the display safe area for a {@link WebContents} and the cutout mode for an {@link
@@ -467,13 +469,32 @@ public class DisplayCutoutController implements InsetObserver.WindowInsetObserve
      * back to Blink for CSS env(safe-area-inset-*).
      *
      * <p>In short-edges cutout mode we read the bar geometry via {@link
-     * WindowInsetsCompat#getInsetsIgnoringVisibility} so transient bar visibility changes (e.g.
-     * while the IME is showing) don't collapse the safe area; otherwise we use the visible
+     * WindowInsetsCompat#getInsetsIgnoringVisibility} so transient bar visibility changes don't
+     * collapse the safe area. A resizes-content IME already protects the covered bottom edge, so
+     * that edge is excluded from the safe area while the keyboard is visible. Otherwise we use the
      * system-bar insets to preserve the pre-flag behavior.
      *
      * @return the union of browser bar and cutout insets, or an empty Rect if no insets are
      *     available yet.
      */
+    /**
+     * Whether the visible IME should be excluded from the merged bottom safe area. In
+     * resizes-content and resizes-visual modes, including the unset default, the keyboard occludes
+     * the bottom edge, so keeping the navigation-bar inset would make fixed bottom UI anchored
+     * above the keyboard float a bar-height too high (crbug.com/407420295). With the
+     * VirtualKeyboard API (overlays-content) the author manages keyboard geometry via
+     * env(keyboard-inset-*) and expects the bar inset to stay stable.
+     */
+    private static boolean shouldExcludeImeFromSafeArea(
+            @VirtualKeyboardMode.EnumType int keyboardMode) {
+        // UNSET means the page never declared interactive-widget, and the Android platform default
+        // for that is resizes-visual, so it belongs with the resizing modes rather than with
+        // overlays-content. Most pages report UNSET.
+        return keyboardMode == VirtualKeyboardMode.UNSET
+                || keyboardMode == VirtualKeyboardMode.RESIZES_CONTENT
+                || keyboardMode == VirtualKeyboardMode.RESIZES_VISUAL;
+    }
+
     private Rect getBrowserSafeAreaInsets() {
         if (mInsetObserver == null) return new Rect();
 
@@ -486,6 +507,26 @@ public class DisplayCutoutController implements InsetObserver.WindowInsetObserve
             // CSS env(safe-area-inset-*) when bars are momentarily reported as not visible.
             Insets statusBarInsets = windowInsets.getInsetsIgnoringVisibility(statusBars());
             Insets navigationBarInsets = windowInsets.getInsetsIgnoringVisibility(navigationBars());
+            WebContents webContents = mDelegate.getWebContents();
+            if (windowInsets.isVisible(ime())
+                    && webContents != null
+                    && shouldExcludeImeFromSafeArea(webContents.getVirtualKeyboardMode())) {
+                // A resizes-content IME shrinks the content viewport to sit above the keyboard,
+                // and a resizes-visual IME occludes the bottom edge while the visual viewport
+                // shrinks above it; in both cases the keyboard already protects the part of the
+                // bottom edge it covers. Only the remainder of the navigation bar can still
+                // obstruct the page, which is normally none because the IME is far taller than
+                // the bar. Subtracting instead of zeroing keeps the page protected if the IME is
+                // ever reported shorter than the navigation bar, e.g. a floating or split
+                // keyboard, or a hardware keyboard that only shows a suggestion strip.
+                int imeBottom = windowInsets.getInsets(ime()).bottom;
+                navigationBarInsets =
+                        Insets.of(
+                                navigationBarInsets.left,
+                                navigationBarInsets.top,
+                                navigationBarInsets.right,
+                                Math.max(0, navigationBarInsets.bottom - imeBottom));
+            }
             barInsets = getMaxRect(toRect(statusBarInsets), toRect(navigationBarInsets));
         } else {
             barInsets = toRect(windowInsets.getInsets(systemBars()));
@@ -541,8 +582,12 @@ public class DisplayCutoutController implements InsetObserver.WindowInsetObserve
     }
 
     private boolean shouldUseBrowserEdgeToEdge() {
+        // Only the interactable tab may drive the activity-wide edge-to-edge state. A hidden
+        // tab (e.g. behind a child tab opened for a web search) releases its claim so the
+        // foreground tab's state wins, and re-applies it when shown again.
         return mDelegate.isShortEdgesCutoutModeEnabled()
                 && mDelegate.isDrawEdgeToEdgeEnabled()
+                && mDelegate.isInteractable()
                 && isInEdgeToEdgeCompatibleDisplayMode()
                 && shouldTreatViewportFitAsCover(mViewportFit);
     }
@@ -637,6 +682,16 @@ public class DisplayCutoutController implements InsetObserver.WindowInsetObserve
 
         attributes.layoutInDisplayCutoutMode = displayCutoutMode;
         setWindowAttributes(attributes);
+
+        // The cutout mode is an input to WindowInsetsUtils#shouldPadDisplayCutout, which decides
+        // whether the edge-to-edge layout pads the content away from the display cutout. Changing
+        // the window attributes does not dispatch window insets, so without this the layout keeps
+        // the padding decision it made under the previous mode: a page switching from
+        // viewport-fit=cover to a fitted value stays unpadded and keeps rendering underneath the
+        // cutout until something else happens to re-dispatch insets.
+        if (mInsetObserver != null) {
+            mInsetObserver.retriggerOnApplyWindowInsets();
+        }
     }
 
     /** Should be called when the associated UI surface is attached or detached to an activity. */

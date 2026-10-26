@@ -56,7 +56,7 @@ void TextCombinePainter::Paint(const PaintInfo& paint_info,
   //    PaintPhase::kOutline
   // These values come from |BoxFragmentPainter::PaintAllPhasesAtomically()|.
 
-  const ComputedStyle& style = text_combine.Parent()->StyleRef();
+  const ComputedStyle& style = text_combine.Parent()->Style();
   const bool has_text_decoration = style.HasAppliedTextDecorations();
   const bool has_emphasis_mark =
       style.GetTextEmphasisMark() != TextEmphasisMark::kNone;
@@ -88,7 +88,7 @@ void TextCombinePainter::Paint(const PaintInfo& paint_info,
         /* inline_context */ nullptr, TextDecorationLine::kNone, Color());
     decoration_painter.emplace(text_painter, /* inline_context */ nullptr,
                                paint_info, style, text_style, text_frame_rect,
-                               nullptr);
+                               nullptr, TextDecorationFragmentContext());
 
     // Paint underline and overline text decorations.
     decoration_painter->PaintExceptLineThrough(*decoration_info, text_style,
@@ -108,7 +108,7 @@ void TextCombinePainter::Paint(const PaintInfo& paint_info,
 
 // static
 bool TextCombinePainter::ShouldPaint(const LayoutTextCombine& text_combine) {
-  const auto& style = text_combine.Parent()->StyleRef();
+  const auto& style = text_combine.Parent()->Style();
   return style.HasAppliedTextDecorations() ||
          style.GetTextEmphasisMark() != TextEmphasisMark::kNone;
 }

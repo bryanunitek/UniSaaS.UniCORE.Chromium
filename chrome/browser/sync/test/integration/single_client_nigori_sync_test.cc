@@ -7,6 +7,7 @@
 
 #include "base/base64.h"
 #include "base/command_line.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
@@ -14,10 +15,10 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_ui_util.h"
 #include "chrome/browser/sync/test/integration/bookmarks_helper.h"
@@ -32,8 +33,9 @@
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/trusted_vault/trusted_vault_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/browser_sync/browser_sync_switches.h"
 #include "components/metrics/metrics_service.h"
@@ -71,6 +73,7 @@
 #include "components/trusted_vault/trusted_vault_service.h"
 #include "components/variations/synthetic_trial_registry.h"
 #include "components/variations/variations_test_utils.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_launcher.h"
 #include "google_apis/gaia/gaia_id.h"
@@ -88,6 +91,8 @@
 #include "chrome/browser/ash/sync/sync_error_notifier_factory.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "ui/message_center/message_center.h"
+#include "ui/message_center/public/cpp/notification.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/any_widget_observer.h"
 #include "ui/views/widget/widget.h"
@@ -126,7 +131,6 @@ MATCHER_P(IsDataEncryptedWith, key_params, "") {
       key_params.password);
   return encrypted_data.key_name() == nigori->GetKeyName();
 }
-
 
 syncer::CrossUserSharingKeys GenerateNewKeyPair() {
   syncer::CrossUserSharingKeys cross_user_sharing_keys =
@@ -254,8 +258,10 @@ class SingleClientNigoriSyncTest
  public:
   SingleClientNigoriSyncTest() : SyncTest(SINGLE_CLIENT) {
     if (GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTransportOnly) {
-      scoped_feature_list_.InitAndEnableFeature(
-          syncer::kReplaceSyncPromosWithSignInPromos);
+      scoped_feature_list_.InitWithFeatures(
+          {syncer::kReplaceSyncPromosWithSignInPromos,
+           switches::kSyncEnableBookmarksInTransportMode},
+          {});
     } else {
       // Skip sync-to-signin migration for sync-the-feature tests. This is to
       // avoid the sync state changing between the PRE_ tests.
@@ -429,7 +435,6 @@ INSTANTIATE_TEST_SUITE_P(
     SingleClientNigoriCrossUserSharingPublicPrivateKeyPairSyncTest,
     GetSyncTestModes(),
     testing::PrintToStringParamName());
-
 
 IN_PROC_BROWSER_TEST_P(SingleClientNigoriSyncTest,
                        ShouldCommitKeystoreNigoriWhenReceivedDefault) {
@@ -1083,9 +1088,11 @@ IN_PROC_BROWSER_TEST_P(
   // cross_user_sharing_public_key.
   const KeyParamsForTesting kCustomPassphraseKeyParams =
       Pbkdf2PassphraseKeyParamsForTesting("passphrase");
-  SetNigoriInFakeServer(
-      BuildCustomPassphraseNigoriSpecifics(kCustomPassphraseKeyParams),
-      GetFakeServer());
+  SetNigoriInFakeServer(BuildCustomPassphraseNigoriSpecifics(
+                            kCustomPassphraseKeyParams,
+                            /*old_key_params=*/KeystoreKeyParamsForTesting(
+                                GetFakeServer()->GetKeystoreKeys().back())),
+                        GetFakeServer());
 
   EXPECT_TRUE(PassphraseRequiredChecker(GetSyncService(0)).Wait());
   EXPECT_TRUE(GetSyncService(0)->GetUserSettings()->SetDecryptionPassphrase(
@@ -1421,7 +1428,6 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiAndDialogUIParamTest,
 
   ASSERT_TRUE(SetupClients());
   ASSERT_TRUE(GetBrowser(0));
-  NotificationDisplayServiceTester display_service(GetProfile(0));
 
   // SyncErrorNotifier needs explicit instantiation in tests, because the test
   // profile at hands doesn't exercise ChromeBrowserMainExtraPartsAsh.
@@ -1436,24 +1442,29 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiAndDialogUIParamTest,
       GetSyncService(0)->GetActiveDataTypes().Has(syncer::WIFI_CONFIGURATIONS));
 
   // Verify that a notification was displayed.
-  const std::string notification_id =
+  const std::string& notification_id =
       sync_error_notifier->GetNotificationIdForTesting();
-  std::optional<message_center::Notification> notification =
-      display_service.GetNotification(notification_id);
+  const message_center::Notification* notification =
+      message_center::MessageCenter::Get()->FindNotificationById(
+          notification_id);
   ASSERT_TRUE(notification);
-  EXPECT_THAT(notification->title(),
-              Eq(l10n_util::GetStringUTF16(
-                  IDS_SYNC_ERROR_PASSWORDS_BUBBLE_VIEW_TITLE)));
-  EXPECT_THAT(
-      notification->message(),
-      Eq(l10n_util::GetStringUTF16(
-          IDS_SYNC_NEEDS_KEYS_FOR_PASSWORDS_ERROR_BUBBLE_VIEW_MESSAGE)));
+  int expected_title_id =
+      GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTransportOnly
+          ? IDS_SYNC_ERROR_BUBBLE_VIEW_TITLE_2
+          : IDS_SYNC_ERROR_PASSWORDS_BUBBLE_VIEW_TITLE;
+  int expected_message_id =
+      GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTransportOnly
+          ? IDS_SYNC_NEEDS_KEYS_FOR_PASSWORDS_ERROR_BUBBLE_VIEW_MESSAGE_2
+          : IDS_SYNC_NEEDS_KEYS_FOR_PASSWORDS_ERROR_BUBBLE_VIEW_MESSAGE;
 
-  // Mimic the user clickling on the system notification, which opens up a
+  EXPECT_THAT(notification->title(),
+              Eq(l10n_util::GetStringUTF16(expected_title_id)));
+  EXPECT_THAT(notification->message(),
+              Eq(l10n_util::GetStringUTF16(expected_message_id)));
+
+  // Mimic the user clicking on the system notification, which opens up a
   // tab where the user can interact with the retrieval flow.
-  display_service.SimulateClick(NotificationHandler::Type::TRANSIENT,
-                                notification_id, /*action_index=*/std::nullopt,
-                                /*reply=*/std::nullopt);
+  message_center::MessageCenter::Get()->ClickOnNotification(notification_id);
 
   // Wait until successful completion.
   EXPECT_TRUE(WaitForTrustedVaultReauthCompletion());
@@ -1483,8 +1494,6 @@ IN_PROC_BROWSER_TEST_P(
       /*last_key_version=*/GetSecurityDomainsServer()->GetCurrentEpoch(),
       /*trigger=*/std::nullopt);
 
-  NotificationDisplayServiceTester display_service(GetProfile(0));
-
   // SyncErrorNotifier needs explicit instantiation in tests, because the test
   // profile at hands doesn't exercise ChromeBrowserMainExtraPartsAsh.
   const ash::SyncErrorNotifier* const sync_error_notifier =
@@ -1498,24 +1507,29 @@ IN_PROC_BROWSER_TEST_P(
                   .Wait());
 
   // Verify that a notification was displayed.
-  const std::string notification_id =
+  const std::string& notification_id =
       sync_error_notifier->GetNotificationIdForTesting();
-  std::optional<message_center::Notification> notification =
-      display_service.GetNotification(notification_id);
+  const message_center::Notification* notification =
+      message_center::MessageCenter::Get()->FindNotificationById(
+          notification_id);
   ASSERT_TRUE(notification);
-  EXPECT_THAT(notification->title(),
-              Eq(l10n_util::GetStringUTF16(
-                  IDS_SYNC_NEEDS_VERIFICATION_BUBBLE_VIEW_TITLE)));
-  EXPECT_THAT(
-      notification->message(),
-      Eq(l10n_util::GetStringUTF16(
-          IDS_SYNC_RECOVERABILITY_DEGRADED_FOR_PASSWORDS_ERROR_BUBBLE_VIEW_MESSAGE)));
+  int expected_title_id =
+      GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTransportOnly
+          ? IDS_SYNC_ERROR_BUBBLE_VIEW_TITLE_2
+          : IDS_SYNC_NEEDS_VERIFICATION_BUBBLE_VIEW_TITLE;
+  int expected_message_id =
+      GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTransportOnly
+          ? IDS_SYNC_RECOVERABILITY_DEGRADED_FOR_PASSWORDS_ERROR_BUBBLE_VIEW_MESSAGE_2
+          : IDS_SYNC_RECOVERABILITY_DEGRADED_FOR_PASSWORDS_ERROR_BUBBLE_VIEW_MESSAGE;
 
-  // Mimic the user clickling on the system notification, which opens up a
+  EXPECT_THAT(notification->title(),
+              Eq(l10n_util::GetStringUTF16(expected_title_id)));
+  EXPECT_THAT(notification->message(),
+              Eq(l10n_util::GetStringUTF16(expected_message_id)));
+
+  // Mimic the user clicking on the system notification, which opens up a
   // tab where the user can interact with the degraded recoverability flow.
-  display_service.SimulateClick(NotificationHandler::Type::TRANSIENT,
-                                notification_id, /*action_index=*/std::nullopt,
-                                /*reply=*/std::nullopt);
+  message_center::MessageCenter::Get()->ClickOnNotification(notification_id);
 
   // Wait until successful completion.
   EXPECT_TRUE(WaitForTrustedVaultReauthCompletion());
@@ -1593,7 +1607,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
   base::RunLoop run_loop;
   static_cast<trusted_vault::StandaloneTrustedVaultClient*>(
       GetSyncTrustedVaultClient())
-      ->WaitForFlushForTesting(run_loop.QuitClosure());
+      ->WaitForIdleForTesting(run_loop.QuitClosure());
   run_loop.Run();
 }
 
@@ -1628,7 +1642,7 @@ IN_PROC_BROWSER_TEST_P(
     PRE_ShouldClearEncryptionKeysFromTheWebWhenSigninCookiesCleared) {
   // TODO(crbug.com/40276245): TrustedVaultKeysChangedStateChecker may be not
   // sufficient and redundant in this test, consider rewriting it using
-  // StandaloneTrustedVaultClient::WaitForFlushForTesting().
+  // StandaloneTrustedVaultClient::WaitForIdleForTesting().
   ASSERT_TRUE(SetupClients());
 
   // Explicitly add signin cookie (normally it would be done during the keys
@@ -1683,69 +1697,6 @@ IN_PROC_BROWSER_TEST_P(
                   ->GetUserSettings()
                   ->IsTrustedVaultKeyRequiredForPreferredDataTypes());
   EXPECT_FALSE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::PASSWORDS));
-}
-
-IN_PROC_BROWSER_TEST_P(
-    SingleClientNigoriWithWebApiTest,
-    ShouldRemotelyTransitFromTrustedVaultToKeystorePassphrase) {
-  // Mimic the account being already using a trusted vault passphrase.
-  SetNigoriInFakeServer(BuildTrustedVaultNigoriSpecifics({kTestEncryptionKey}),
-                        GetFakeServer());
-
-  ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(GetSyncService(0)
-                  ->GetUserSettings()
-                  ->IsTrustedVaultKeyRequiredForPreferredDataTypes());
-  ASSERT_FALSE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::PASSWORDS));
-
-  // There needs to be an existing tab for the second tab (the retrieval flow)
-  // to be closeable via javascript.
-  chrome::AddTabAt(GetBrowser(0), GURL(url::kAboutBlankURL), /*index=*/0,
-                   /*foreground=*/true);
-
-  // Mimic opening a web page where the user can interact with the retrieval
-  // flow.
-  OpenTabForSyncKeyRetrieval(
-      GetBrowser(0),
-      trusted_vault::TrustedVaultUserActionTriggerForUMA::kProfileMenu);
-  ASSERT_THAT(GetBrowser(0)->tab_strip_model()->GetActiveWebContents(),
-              NotNull());
-
-  // Wait until the page closes, which indicates successful completion.
-  EXPECT_TRUE(
-      TabClosedChecker(GetBrowser(0)->tab_strip_model()->GetActiveWebContents())
-          .Wait());
-
-  // Mimic remote transition to keystore passphrase.
-  const std::vector<std::vector<uint8_t>>& keystore_keys =
-      GetFakeServer()->GetKeystoreKeys();
-  ASSERT_THAT(keystore_keys, SizeIs(1));
-  const KeyParamsForTesting kKeystoreKeyParams =
-      KeystoreKeyParamsForTesting(keystore_keys.back());
-  const KeyParamsForTesting kTrustedVaultKeyParams =
-      TrustedVaultKeyParamsForTesting(kTestEncryptionKey);
-  SetNigoriInFakeServer(
-      BuildKeystoreNigoriSpecifics(
-          /*keybag_keys_params=*/{kTrustedVaultKeyParams, kKeystoreKeyParams},
-          /*keystore_decryptor_params*/ {kKeystoreKeyParams},
-          /*keystore_key_params=*/kKeystoreKeyParams),
-      GetFakeServer());
-
-  // Ensure that client can decrypt with both |kTrustedVaultKeyParams|
-  // and |kKeystoreKeyParams|.
-  const password_manager::PasswordForm password_form1 =
-      passwords_helper::CreateTestPasswordForm(1, GetPasswordStoreType());
-  const password_manager::PasswordForm password_form2 =
-      passwords_helper::CreateTestPasswordForm(2, GetPasswordStoreType());
-
-  passwords_helper::InjectEncryptedServerPassword(
-      password_form1, kKeystoreKeyParams.password,
-      kKeystoreKeyParams.derivation_params, GetFakeServer());
-  passwords_helper::InjectEncryptedServerPassword(
-      password_form2, kTrustedVaultKeyParams.password,
-      kTrustedVaultKeyParams.derivation_params, GetFakeServer());
-
-  EXPECT_TRUE(WaitForPasswordForms({password_form1, password_form2}));
 }
 
 IN_PROC_BROWSER_TEST_P(
@@ -1887,7 +1838,7 @@ IN_PROC_BROWSER_TEST_P(
   base::RunLoop run_loop;
   static_cast<trusted_vault::StandaloneTrustedVaultClient*>(
       GetSyncTrustedVaultClient())
-      ->WaitForFlushForTesting(run_loop.QuitClosure());
+      ->WaitForIdleForTesting(run_loop.QuitClosure());
   run_loop.Run();
 }
 
@@ -2030,10 +1981,10 @@ IN_PROC_BROWSER_TEST_P(
 
   // Mimic a recovery method being added before or during sign-in, which should
   // be deferred until sign-in completes.
-  base::RunLoop run_loop;
+  base::test::TestFuture<bool> future;
   GetSyncTrustedVaultClient()->AddTrustedRecoveryMethod(
       kDefaultGaiaId, kTestRecoveryMethodPublicKey, kTestMethodTypeHint,
-      run_loop.QuitClosure());
+      future.GetCallback());
 
   ASSERT_TRUE(GetSecurityDomainsServer()->IsRecoverabilityDegraded());
 
@@ -2041,7 +1992,7 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_TRUE(SetupSync());
 
   // Wait until AddTrustedRecoveryMethod() completes.
-  run_loop.Run();
+  EXPECT_TRUE(future.Get());
 
   EXPECT_TRUE(TrustedVaultRecoverabilityDegradedStateChecker(GetSyncService(0),
                                                              /*degraded=*/false)
@@ -2086,10 +2037,10 @@ IN_PROC_BROWSER_TEST_P(
 
   // Mimic a recovery method being added during a persistent auth error, which
   // should be deferred until the auth error is resolved.
-  base::RunLoop run_loop;
+  base::test::TestFuture<bool> future;
   GetSyncTrustedVaultClient()->AddTrustedRecoveryMethod(
       kDefaultGaiaId, kTestRecoveryMethodPublicKey, kTestMethodTypeHint,
-      run_loop.QuitClosure());
+      future.GetCallback());
 
   // Mimic the auth error state being resolved.
   ASSERT_TRUE(GetSecurityDomainsServer()->IsRecoverabilityDegraded());
@@ -2101,7 +2052,7 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_FALSE(GetSyncService(0)->GetAuthError().IsPersistentError());
 
   // Wait until AddTrustedRecoveryMethod() completes.
-  run_loop.Run();
+  EXPECT_TRUE(future.Get());
 
   EXPECT_TRUE(TrustedVaultRecoverabilityDegradedStateChecker(GetSyncService(0),
                                                              /*degraded=*/false)
@@ -2194,9 +2145,11 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
       GetSecurityDomainsServer()->RotateTrustedVaultKey(
           /*last_trusted_vault_key=*/trusted_vault::
               GetConstantTrustedVaultKey());
-  SetNigoriInFakeServer(BuildTrustedVaultNigoriSpecifics(
-                            /*trusted_vault_keys=*/{new_trusted_vault_key}),
-                        GetFakeServer());
+  SetNigoriInFakeServer(
+      BuildTrustedVaultNigoriSpecifics(
+          /*trusted_vault_keys=*/{GetFakeServer()->GetKeystoreKeys().back(),
+                                  new_trusted_vault_key}),
+      GetFakeServer());
 
   // Inject password encrypted with trusted vault key and verify client is able
   // to decrypt it.
@@ -2247,9 +2200,11 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
           /*last_trusted_vault_key=*/trusted_vault::
               GetConstantTrustedVaultKey());
   // Trigger following key rotation client-side.
-  SetNigoriInFakeServer(BuildTrustedVaultNigoriSpecifics(
-                            /*trusted_vault_keys=*/{new_trusted_vault_key}),
-                        GetFakeServer());
+  SetNigoriInFakeServer(
+      BuildTrustedVaultNigoriSpecifics(
+          /*trusted_vault_keys=*/{GetFakeServer()->GetKeystoreKeys().back(),
+                                  new_trusted_vault_key}),
+      GetFakeServer());
 
   const int kTestMethodTypeHint = 8;
 
@@ -2262,11 +2217,11 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
                   .Wait());
 
   // Mimic a recovery method being added.
-  base::RunLoop run_loop;
+  base::test::TestFuture<bool> future;
   GetSyncTrustedVaultClient()->AddTrustedRecoveryMethod(
       kDefaultGaiaId, kTestRecoveryMethodPublicKey, kTestMethodTypeHint,
-      run_loop.QuitClosure());
-  run_loop.Run();
+      future.GetCallback());
+  EXPECT_TRUE(future.Get());
 
   // Verify that recovery method was added. Server rejects the request if client
   // didn't send all keys.
@@ -2294,9 +2249,11 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
       GetSecurityDomainsServer()->RotateTrustedVaultKey(
           /*last_trusted_vault_key=*/trusted_vault::
               GetConstantTrustedVaultKey());
-  SetNigoriInFakeServer(BuildTrustedVaultNigoriSpecifics(
-                            /*trusted_vault_keys=*/{trusted_vault_key1}),
-                        GetFakeServer());
+  SetNigoriInFakeServer(
+      BuildTrustedVaultNigoriSpecifics(
+          /*trusted_vault_keys=*/{GetFakeServer()->GetKeystoreKeys().back(),
+                                  trusted_vault_key1}),
+      GetFakeServer());
 
   // Ensure that client has finished following key rotation by verifying
   // passwords are decryptable.
@@ -2343,9 +2300,11 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
       GetSecurityDomainsServer()->RotateTrustedVaultKey(
           /*last_trusted_vault_key=*/trusted_vault::
               GetConstantTrustedVaultKey());
-  SetNigoriInFakeServer(BuildTrustedVaultNigoriSpecifics(
-                            /*trusted_vault_keys=*/{trusted_vault_key2}),
-                        GetFakeServer());
+  SetNigoriInFakeServer(
+      BuildTrustedVaultNigoriSpecifics(
+          /*trusted_vault_keys=*/{GetFakeServer()->GetKeystoreKeys().back(),
+                                  trusted_vault_key2}),
+      GetFakeServer());
 
   const KeyParamsForTesting trusted_vault_key_params2 =
       TrustedVaultKeyParamsForTesting(trusted_vault_key2);
@@ -2508,5 +2467,102 @@ IN_PROC_BROWSER_TEST_P(
 }
 
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+
+class SingleClientNigoriImplicitPassphraseMigrationSyncTest
+    : public SingleClientNigoriSyncTest {
+ public:
+  SingleClientNigoriImplicitPassphraseMigrationSyncTest() {
+    feature_list_.InitAndEnableFeature(
+        syncer::kSyncMigrateFromImplicitPassphrase);
+  }
+  ~SingleClientNigoriImplicitPassphraseMigrationSyncTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    /* no prefix */,
+    SingleClientNigoriImplicitPassphraseMigrationSyncTest,
+    GetSyncTestModes(),
+    testing::PrintToStringParamName());
+
+IN_PROC_BROWSER_TEST_P(SingleClientNigoriImplicitPassphraseMigrationSyncTest,
+                       PRE_ShouldMigrateFromImplicitPassphraseToKeystore) {
+  const KeyParamsForTesting kKeyParams =
+      Pbkdf2PassphraseKeyParamsForTesting("passphrase");
+  sync_pb::NigoriSpecifics specifics;
+  std::unique_ptr<syncer::CryptographerImpl> cryptographer =
+      syncer::CryptographerImpl::FromSingleKeyForTesting(
+          kKeyParams.password, kKeyParams.derivation_params);
+  *specifics.mutable_encryption_keybag() =
+      cryptographer->ExportEncryptedKeyBag();
+  SetNigoriInFakeServer(specifics, GetFakeServer());
+
+  const password_manager::PasswordForm password_form =
+      passwords_helper::CreateTestPasswordForm(0, GetPasswordStoreType());
+  passwords_helper::InjectEncryptedServerPassword(
+      password_form, kKeyParams.password, kKeyParams.derivation_params,
+      GetFakeServer());
+
+  ASSERT_TRUE(SetupSync());
+  ASSERT_TRUE(PassphraseRequiredChecker(GetSyncService(0)).Wait());
+  EXPECT_TRUE(GetSyncService(0)->GetUserSettings()->SetDecryptionPassphrase(
+      kKeyParams.password));
+  EXPECT_TRUE(WaitForPasswordForms({password_form}));
+}
+
+IN_PROC_BROWSER_TEST_P(SingleClientNigoriImplicitPassphraseMigrationSyncTest,
+                       ShouldMigrateFromImplicitPassphraseToKeystore) {
+  ASSERT_TRUE(SetupClients());
+  EXPECT_TRUE(
+      ServerPassphraseTypeChecker(syncer::PassphraseType::kKeystorePassphrase)
+          .Wait());
+  EXPECT_TRUE(PassphraseTypeChecker(GetSyncService(0),
+                                    syncer::PassphraseType::kKeystorePassphrase)
+                  .Wait());
+}
+
+IN_PROC_BROWSER_TEST_P(
+    SingleClientNigoriImplicitPassphraseMigrationSyncTest,
+    PRE_ShouldMigrateFromImplicitPassphraseToCustomPassphrase) {
+  const KeyParamsForTesting kKeyParams =
+      Pbkdf2PassphraseKeyParamsForTesting("passphrase");
+  sync_pb::NigoriSpecifics specifics;
+  std::unique_ptr<syncer::CryptographerImpl> cryptographer =
+      syncer::CryptographerImpl::FromSingleKeyForTesting(
+          kKeyParams.password, kKeyParams.derivation_params);
+  *specifics.mutable_encryption_keybag() =
+      cryptographer->ExportEncryptedKeyBag();
+  specifics.set_encrypt_everything(true);
+  SetNigoriInFakeServer(specifics, GetFakeServer());
+
+  const password_manager::PasswordForm password_form =
+      passwords_helper::CreateTestPasswordForm(0, GetPasswordStoreType());
+  passwords_helper::InjectEncryptedServerPassword(
+      password_form, kKeyParams.password, kKeyParams.derivation_params,
+      GetFakeServer());
+
+  ASSERT_TRUE(SetupSync());
+  ASSERT_TRUE(PassphraseRequiredChecker(GetSyncService(0)).Wait());
+  EXPECT_TRUE(GetSyncService(0)->GetUserSettings()->SetDecryptionPassphrase(
+      kKeyParams.password));
+  EXPECT_TRUE(WaitForPasswordForms({password_form}));
+}
+
+IN_PROC_BROWSER_TEST_P(SingleClientNigoriImplicitPassphraseMigrationSyncTest,
+                       ShouldMigrateFromImplicitPassphraseToCustomPassphrase) {
+  ASSERT_TRUE(SetupClients());
+  EXPECT_TRUE(
+      ServerPassphraseTypeChecker(syncer::PassphraseType::kCustomPassphrase)
+          .Wait());
+  EXPECT_TRUE(PassphraseTypeChecker(GetSyncService(0),
+                                    syncer::PassphraseType::kCustomPassphrase)
+                  .Wait());
+  EXPECT_TRUE(GetSyncService(0)
+                  ->GetUserSettings()
+                  ->GetExplicitPassphraseTime()
+                  .is_null());
+}
 
 }  // namespace

@@ -22,7 +22,7 @@ import type {AppMap} from '../../common/app_management/store.js';
 import {AppManagementStoreMixin} from '../../common/app_management/store_mixin.js';
 import {RouteObserverMixin} from '../../common/route_observer_mixin.js';
 import type {PrefsState} from '../../common/types.js';
-import type {Route} from '../../router.js';
+import type {Route} from '../../os_settings_routes.js';
 import {Router, routes} from '../../router.js';
 
 import {getTemplate} from './app_detail_view.html.js';
@@ -66,11 +66,11 @@ export class AppManagementAppDetailViewElement extends
 
   // Public API: Bidirectional data flow.
   /** Passed down to children. Do not access without using PrefsMixin. */
-  prefs: PrefsState;
+  declare prefs: PrefsState;
 
-  private app_: App;
-  private apps_: AppMap;
-  private selectedAppId_: string;
+  declare private app_: App;
+  declare private apps_: AppMap;
+  declare private selectedAppId_: string;
 
   override connectedCallback(): void {
     super.connectedCallback();

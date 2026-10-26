@@ -8,20 +8,20 @@
 #include <stddef.h>
 
 #include <algorithm>
-#include <iterator>
 #include <string>
 
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/sys_string_conversions.h"
-#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "media/midi/midi_service.h"
 #include "media/midi/task_service.h"
+#include "media/midi/ump_message_util.h"
 #include "third_party/abseil-cpp/absl/numeric/int128.h"
 
 using base::NumberToString;
@@ -37,10 +37,8 @@ namespace midi {
 
 namespace {
 
-// Maximum buffer size that CoreMIDI can handle for MIDIPacketList.
-const size_t kCoreMIDIMaxPacketListSize = 65536;
-// Pessimistic estimation on available data size of MIDIPacketList.
-const size_t kEstimatedMaxPacketDataSize = kCoreMIDIMaxPacketListSize / 2;
+// Maximum buffer size that CoreMIDI can handle for MIDIEventList.
+constexpr size_t kCoreMIDIMaxEventListSize = 65536;
 
 enum {
   kSessionTaskRunner = TaskService::kDefaultRunnerId,
@@ -139,7 +137,7 @@ MidiManagerMac::~MidiManagerMac() {
     return;
 
   // Finalization steps should be implemented after the UnbindInstance() call.
-  // Do not need to dispose |coremidi_input_| and |coremidi_output_| explicitly.
+  // Do not need to dispose midi_input_ and midi_output_ explicitly.
   // CoreMIDI automatically disposes them on the client disposal.
   base::AutoLock lock(midi_client_lock_);
   if (midi_client_)
@@ -183,8 +181,12 @@ void MidiManagerMac::InitializeCoreMIDI() {
   // Create input and output port. These MIDIPortRef references are not needed
   // to be disposed explicitly. CoreMIDI automatically disposes them on the
   // client disposal.
-  result = MIDIInputPortCreate(client, CFSTR("MIDI Input"), ReadMidiDispatch,
-                               this, &midi_input_);
+  result = MIDIInputPortCreateWithProtocol(
+      client, CFSTR("MIDI Input"), kMIDIProtocol_1_0, &midi_input_,
+      ^(const MIDIEventList* event_list, void* src_conn_refcon) {
+        this->ReceiveMidiEventList(reinterpret_cast<uintptr_t>(src_conn_refcon),
+                                   event_list);
+      });
   if (result != noErr || midi_input_ == 0u)
     return CompleteCoreMIDIInitialization(Result::INITIALIZATION_ERROR);
 
@@ -204,7 +206,7 @@ void MidiManagerMac::InitializeCoreMIDI() {
     AddOutputPort(GetPortInfoFromEndpoint(destination));
   }
   // Allocate maximum size of buffer that CoreMIDI can handle.
-  midi_buffer_.resize(kCoreMIDIMaxPacketListSize);
+  midi_buffer_.resize(kCoreMIDIMaxEventListSize);
 
   // Open connections from all sources. This loop also may miss new devices.
   sources_.resize(MIDIGetNumberOfSources());
@@ -301,32 +303,25 @@ void MidiManagerMac::ReceiveMidiNotify(const MIDINotification* message) {
   }
 }
 
-// static
-void MidiManagerMac::ReadMidiDispatch(const MIDIPacketList* packet_list,
-                                      void* read_proc_refcon,
-                                      void* src_conn_refcon) {
-  // This method is called on a separate high-priority thread owned by CoreMIDI.
-  // |manager| should be valid because we can ensure |midi_client_| is still
-  // alive here.
-  MidiManagerMac* manager = static_cast<MidiManagerMac*>(read_proc_refcon);
-  DCHECK(manager);
-  uint32_t port_index = reinterpret_cast<uintptr_t>(src_conn_refcon);
-
-  // Go through each packet and process separately.
-  const MIDIPacket* packet = &packet_list->packet[0];
-  for (size_t i = 0u; i < packet_list->numPackets; i++) {
-    // Each packet contains MIDI data for one or more messages (like note-on).
+void MidiManagerMac::ReceiveMidiEventList(uint32_t port_index,
+                                          const MIDIEventList* event_list) {
+  const MIDIEventPacket* packet = &event_list->packet[0];
+  for (uint32_t i = 0u; i < event_list->numPackets; ++i) {
     base::TimeTicks timestamp = MIDITimeStampToTimeTicks(packet->timeStamp);
+    // SAFETY: CoreMIDI's MIDIEventPacket contains a raw C-style array `words`
+    // of size `wordCount`. There is no safe C++ alternative provided by the
+    // SDK to access this data as a span, so we must construct it unsafely.
+    // CoreMIDI guarantees `words` has at least `wordCount` elements.
+    auto words_span =
+        UNSAFE_BUFFERS(base::span(packet->words, packet->wordCount));
 
-    manager->ReceiveMidiData(
-        // SAFETY: `packet->data` is a variable-length stream of MIDI messages.
-        // `packet->length` is the number of valid MIDI data bytes in this
-        // packet. For more details, see:
-        // https://developer.apple.com/documentation/coremidi/midipacket?language=objc
-        port_index, UNSAFE_BUFFERS(base::span(packet->data, packet->length)),
-        timestamp);
-
-    packet = MIDIPacketNext(packet);
+    DispatchMidiFromUmpWords(words_span, timestamp,
+                             [this, port_index](base::span<const uint8_t> data,
+                                                base::TimeTicks timestamp) {
+                               this->ReceiveMidiData(port_index, data,
+                                                     timestamp);
+                             });
+    packet = MIDIEventPacketNext(packet);
   }
 }
 
@@ -336,33 +331,62 @@ void MidiManagerMac::SendMidiData(MidiManagerClient* client,
                                   base::TimeTicks timestamp) {
   DCHECK(service()->task_service()->IsOnTaskRunner(kClientTaskRunner));
 
-  // Lookup the destination based on the port index.
   if (static_cast<size_t>(port_index) >= destinations_.size())
     return;
   MIDITimeStamp coremidi_timestamp = TimeTicksToMIDITimeStamp(timestamp);
   MIDIEndpointRef destination = destinations_[port_index];
 
-  size_t send_size;
-  for (size_t sent_size = 0u; sent_size < data.size(); sent_size += send_size) {
-    MIDIPacketList* packet_list =
-        UNSAFE_TODO(reinterpret_cast<MIDIPacketList*>(midi_buffer_.data()));
-    MIDIPacket* midi_packet = MIDIPacketListInit(packet_list);
-    // Limit the maximum payload size to kEstimatedMaxPacketDataSize that is
-    // half of midi_buffer data size. MIDIPacketList and MIDIPacket consume
-    // extra buffer areas for meta information, and available size is smaller
-    // than buffer size. Here, we simply assume that at least half size is
-    // available for data payload.
-    send_size = std::min(data.size() - sent_size, kEstimatedMaxPacketDataSize);
-    midi_packet = MIDIPacketListAdd(
-        packet_list,
-        kCoreMIDIMaxPacketListSize,
-        midi_packet,
-        coremidi_timestamp,
-        send_size,
-        &data[sent_size]);
-    DCHECK(midi_packet);
+  std::vector<uint32_t> ump_words;
+  TranslateMidiToUmpWords(data, 0, ump_words);
 
-    MIDISend(midi_output_, destination, packet_list);
+  if (ump_words.empty()) {
+    return;
+  }
+
+  size_t words_sent = 0;
+  while (words_sent < ump_words.size()) {
+    // SAFETY: CoreMIDI APIs (MIDIEventListInit, MIDIEventListAdd) require
+    // a raw MIDIEventList pointer. There is no safe C++ alternative
+    // provided by the SDK. `midi_buffer_` is allocated to
+    // kCoreMIDIMaxEventListSize, which is large enough to hold the list.
+    MIDIEventList* event_list =
+        UNSAFE_BUFFERS(reinterpret_cast<MIDIEventList*>(midi_buffer_.data()));
+    MIDIEventPacket* cur_packet =
+        MIDIEventListInit(event_list, kMIDIProtocol_1_0);
+
+    // Calculate the maximum number of UMP words that can fit into an empty
+    // MIDIEventList. We use offsetof to account for alignment padding.
+    const size_t header_overhead_bytes =
+        offsetof(MIDIEventList, packet) + offsetof(MIDIEventPacket, words);
+    const size_t max_words_per_list =
+        (kCoreMIDIMaxEventListSize - header_overhead_bytes) / sizeof(uint32_t);
+
+    // Calculate words to send, ensuring we don't split UMP packets.
+    size_t words_to_send = 0;
+    while (words_sent + words_to_send < ump_words.size()) {
+      uint32_t first_word = ump_words[words_sent + words_to_send];
+      size_t packet_len = GetUmpLengthInWords(first_word);
+      CHECK_GT(packet_len, 0u);
+
+      if (words_to_send + packet_len > max_words_per_list) {
+        break;  // Would exceed limit, send this list.
+      }
+      words_to_send += packet_len;
+    }
+
+    if (words_to_send == 0) {
+      break;
+    }
+
+    MIDIEventPacket* next_packet = MIDIEventListAdd(
+        event_list, kCoreMIDIMaxEventListSize, cur_packet, coremidi_timestamp,
+        words_to_send, &ump_words[words_sent]);
+
+    // Since we calculated the size to fit, this should NEVER fail.
+    CHECK(next_packet);
+
+    MIDISendEventList(midi_output_, destination, event_list);
+    words_sent += words_to_send;
   }
 
   AccumulateMidiBytesSent(client, data.size());

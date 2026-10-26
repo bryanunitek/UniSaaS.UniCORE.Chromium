@@ -6,14 +6,16 @@
 
 #include "ash/webui/settings/public/constants/routes.mojom.h"
 #include "ash/webui/settings/public/constants/routes_util.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
+#include "base/i18n/legacy_language_tag_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/values.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_api.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_observer_chromeos.h"
 #include "chrome/browser/speech/extension_api/tts_extension_api.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "content/public/browser/tts_controller.h"
 #include "content/public/browser/web_ui.h"
 #include "extensions/browser/event_router.h"
@@ -26,14 +28,17 @@
 
 namespace ash::settings {
 
-SelectToSpeakHandler::SelectToSpeakHandler() = default;
+SelectToSpeakHandler::SelectToSpeakHandler(
+    const ApplicationLocaleStorage* application_locale_storage)
+    : application_locale_storage_(CHECK_DEREF(application_locale_storage)) {}
 
 SelectToSpeakHandler::~SelectToSpeakHandler() = default;
 
 void SelectToSpeakHandler::HandleGetAppLocale(const base::ListValue& args) {
-  const std::string& app_locale = g_browser_process->GetApplicationLocale();
   AllowJavascript();
-  FireWebUIListener("app-locale-updated", base::Value(app_locale));
+  FireWebUIListener(
+      "app-locale-updated",
+      base::Value(application_locale_storage_->GetTag().tag_string()));
 }
 
 void SelectToSpeakHandler::OnVoicesChanged() {
@@ -52,19 +57,18 @@ void SelectToSpeakHandler::OnVoicesChanged() {
     std::string language_code;
     std::string language_and_country_code = voice.lang;
     if (!language_and_country_code.empty()) {
-      // Normalize underscores to hyphens because enhanced voices use
-      // underscores, and l10n_util::GetLanguage uses hyphens.
-      std::replace(language_and_country_code.begin(),
-                   language_and_country_code.end(), '_', '-');
-      language_code = l10n_util::GetLanguage(language_and_country_code);
+      language_code = base::i18n::GetLanguageSubtagUsingLanguageTag(
+          language_and_country_code);
       response.Set(
           "displayLanguage",
           l10n_util::GetDisplayNameForLocale(
-              language_code, g_browser_process->GetApplicationLocale(), true));
-      response.Set("displayLanguageAndCountry",
-                   l10n_util::GetDisplayNameForLocale(
-                       language_and_country_code,
-                       g_browser_process->GetApplicationLocale(), true));
+              language_code, application_locale_storage_->GetTag().tag_string(),
+              true));
+      response.Set(
+          "displayLanguageAndCountry",
+          l10n_util::GetDisplayNameForLocale(
+              language_and_country_code,
+              application_locale_storage_->GetTag().tag_string(), true));
     }
     for (auto& event : voice.events) {
       event_types.Append(TtsEventTypeToString(event));

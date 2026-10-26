@@ -30,17 +30,12 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.ThreadUtils;
-import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DoNotBatch;
+import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.settings.SettingsActivity;
-import org.chromium.chrome.browser.signin.SigninCheckerProvider;
-import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
 import org.chromium.components.browser_ui.site_settings.BinaryStatePermissionPreference;
 import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
@@ -50,8 +45,7 @@ import org.chromium.components.content_settings.ContentSettingSource;
 import org.chromium.components.content_settings.ContentSettingsType;
 
 /** Tests family link controls are reflected in UI */
-@DoNotBatch(
-        reason = "Activity must be destroyed between tests to ensure the child account is removed.")
+@Batch(Batch.PER_CLASS)
 @RunWith(ChromeJUnit4ClassRunner.class)
 public class FamilyLinkControlsTest {
 
@@ -60,8 +54,8 @@ public class FamilyLinkControlsTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     @Rule
     public final RuleChain mRuleChain =
@@ -71,21 +65,10 @@ public class FamilyLinkControlsTest {
 
     @Before
     public void setUp() {
-
         // Initialize the browser.
         SiteSettingsTestUtils.startSiteSettingsMenu("").finish();
 
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> SigninCheckerProvider.get(ProfileManager.getLastUsedRegularProfile()));
         mSigninTestRule.addChildTestAccountThenWaitForSignin();
-
-        // Wait for SigninChecker to be initialized
-        CriteriaHelper.pollUiThread(
-                () ->
-                        IdentityServicesProvider.get()
-                                .getSigninManager(ProfileManager.getLastUsedRegularProfile())
-                                .getIdentityManager()
-                                .hasPrimaryAccount());
     }
 
     @Test

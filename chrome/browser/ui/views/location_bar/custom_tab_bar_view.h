@@ -7,7 +7,6 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/location_bar/location_icon_view.h"
@@ -15,6 +14,7 @@
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
+#include "ui/gfx/text_constants.h"
 #include "ui/menus/simple_menu_model.h"
 #include "ui/views/accessible_pane_view.h"
 #include "ui/views/context_menu_controller.h"
@@ -30,6 +30,7 @@ class ImageButton;
 }  // namespace views
 
 class BrowserView;
+class BrowserWindowInterface;
 class CustomTabBarTitleOriginView;
 
 // For Desktop PWAs, a CustomTabBarView displays a read only title and origin
@@ -54,6 +55,13 @@ class CustomTabBarView : public views::AccessiblePaneView,
 
   LocationIconView* location_icon_view() { return location_icon_view_; }
 
+  // Returns true if the custom tab bar's security state does not match
+  // the currently visible state.
+  bool HasSecurityStateChanged() const;
+
+  // Populates child elements with page details from the current WebContents.
+  void UpdateContents();
+
   // views::AccessiblePaneView:
   gfx::Rect GetAnchorBoundsInScreen() const override;
   void SetVisible(bool visible) override;
@@ -65,7 +73,6 @@ class CustomTabBarView : public views::AccessiblePaneView,
 
   // TabstripModelObserver:
   void OnTabChangedAt(tabs::TabInterface* tab,
-                      int index,
                       TabChangeType change_type) override;
   void OnTabStripModelChanged(
       TabStripModel* tab_strip_model,
@@ -100,6 +107,7 @@ class CustomTabBarView : public views::AccessiblePaneView,
   void GoBackToAppForTesting();
   bool IsShowingOriginForTesting() const;
   bool IsShowingCloseButtonForTesting() const;
+  gfx::ElideBehavior GetLocationElideBehaviorForTesting() const;
 
  private:
   // Takes the web contents for the custom tab bar back to the app scope.
@@ -124,9 +132,6 @@ class CustomTabBarView : public views::AccessiblePaneView,
     return web_app::AppBrowserController::From(browser_);
   }
 
-  // Populates child elements with page details from the current WebContents.
-  void UpdateContents();
-
   bool GetShowTitle() const;
 
   SkColor title_bar_color_ = SK_ColorTRANSPARENT;
@@ -141,7 +146,7 @@ class CustomTabBarView : public views::AccessiblePaneView,
   raw_ptr<CustomTabBarTitleOriginView> title_origin_view_ = nullptr;
   std::unique_ptr<ui::SimpleMenuModel> context_menu_model_;
   std::unique_ptr<views::MenuRunner> context_menu_runner_;
-  raw_ptr<Browser> browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface> browser_ = nullptr;
 
   raw_ptr<views::FlexLayout> layout_manager_;
 

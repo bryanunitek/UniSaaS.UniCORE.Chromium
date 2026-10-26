@@ -7,13 +7,12 @@ package org.chromium.chrome.browser.omnibox;
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.ThreadUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.TimingMetric;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.suggestions.mostvisited.SuggestTileType;
-import org.chromium.components.metrics.OmniboxEventProtos.OmniboxEventProto.PageClassification;
+import org.chromium.components.metrics.OmniboxEventProtosIntDef.PageClassification;
 import org.chromium.components.omnibox.AutocompleteInput.RefineActionUsage;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteRequestType;
@@ -71,13 +70,27 @@ public class OmniboxMetrics {
     public static final String HISTOGRAM_SEARCH_PREFETCH_TOUCH_DOWN_PROCESS_TIME =
             "Android.Omnibox.SearchPrefetch.TouchDownProcessTime.NavigationPrefetch";
 
+    /**
+     * The amount of time from touch down on an omnibox suggestion to when a prefetch may start.
+     * Specifically, this compares the event time of the first ACTION_DOWN event to when
+     * `AutocompleteMediator.onSuggestionTouchDown` is reached.
+     */
+    public static final String HISTOGRAM_SEARCH_PREFETCH_SUGGESTION_TOUCH_DOWN_DELAY =
+            "Android.Omnibox.SearchPrefetch.TouchDownDelay.NavigationPrefetch";
+
     /** The number of prefetches started in an omnibox session via the touch down trigger. */
     public static final String HISTOGRAM_SEARCH_PREFETCH_NUM_PREFETCHES_STARTED_IN_OMNIBOX_SESSION =
             "Android.Omnibox.SearchPrefetch.NumPrefetchesStartedInOmniboxSession.NavigationPrefetch";
 
-    /** The result of prefetches started by touch down events within an omnibox session */
+    /** The result of prefetches started by touch down events within an omnibox session. */
     public static final String HISTOGRAM_SEARCH_PREFETCH_TOUCH_DOWN_PREFETCH_RESULT =
             "Android.Omnibox.SearchPrefetch.TouchDownPrefetchResult.NavigationPrefetch";
+
+    public static final String HISTOGRAM_AIM_ENTRYPOINT_ACTIVATED_USER_TEXT_PRESENT =
+            "Omnibox.AimEntrypoint.Activated.UserTextPresent";
+
+    public static final String HISTOGRAM_AIM_ENTRYPOINT_ACTIVATED_VIA_KEYBOARD =
+            "Omnibox.AimEntrypoint.Activated.ViaKeyboard";
 
     @IntDef({
         ActionInSuggestIntentResult.SUCCESS,
@@ -106,9 +119,9 @@ public class OmniboxMetrics {
     public @interface PrefetchResult {
         // The last prefetch started matches the suggestion navigated to.
         int HIT = 0;
-        // The last prefetch started does NOT match the suggesiton navigated to.
+        // The last prefetch started does NOT match the suggestion navigated to.
         int MISS = 1;
-        // No prefetches were stated in the omnibox session.
+        // No prefetches were started in the omnibox session.
         int NO_PREFETCH = 2;
         int COUNT = 3;
     }
@@ -156,7 +169,7 @@ public class OmniboxMetrics {
      * Record how long the Suggestion List needed to measure its content and children in wall time.
      */
     public static TimingMetric recordSuggestionListMeasureWallTime() {
-        return TimingMetric.shortThreadTime("Android.Omnibox.SuggestionList.MeasureTime3");
+        return TimingMetric.shortUptime("Android.Omnibox.SuggestionList.MeasureTime3");
     }
 
     /**
@@ -169,20 +182,17 @@ public class OmniboxMetrics {
 
     /** Record the amount of wall time needed to create a new suggestion view. */
     public static TimingMetric recordSuggestionViewCreateWallTime() {
-        return TimingMetric.shortThreadTime("Android.Omnibox.SuggestionView.CreateTime3");
+        return TimingMetric.shortUptime("Android.Omnibox.SuggestionView.CreateTime3");
     }
 
-    /** Record thread time spent inflating the Suggestion dropdown on async background thread. */
-    public static @Nullable TimingMetric recordSuggestionsDropdownAsyncInflationThreadTime() {
-        if (ThreadUtils.runningOnUiThread()) return null;
-        return TimingMetric.shortThreadTime(
-                "Android.Omnibox.SuggestionsDropdown.AsyncInflationTime2");
+    /** Record thread time spent inflating the Suggestion dropdown. */
+    public static @Nullable TimingMetric recordSuggestionsDropdownInflationThreadTime() {
+        return TimingMetric.shortThreadTime("Android.Omnibox.SuggestionsDropdown.InflationTime2");
     }
 
-    /** Record wall time spent inflating the Suggestion dropdown on async background thread. */
-    public static @Nullable TimingMetric recordSuggestionsDropdownAsyncInflationWallTime() {
-        if (ThreadUtils.runningOnUiThread()) return null;
-        return TimingMetric.shortUptime("Android.Omnibox.SuggestionsDropdown.AsyncInflationTime3");
+    /** Record wall time spent inflating the Suggestion dropdown. */
+    public static @Nullable TimingMetric recordSuggestionsDropdownInflationWallTime() {
+        return TimingMetric.shortUptime("Android.Omnibox.SuggestionsDropdown.InflationTime3");
     }
 
     /** Record thread time spent inflating the suggestions container. */
@@ -228,8 +238,8 @@ public class OmniboxMetrics {
     }
 
     /**
-     * Record the total cumulative thread time spent creating all views in the PrewarmingRecycled
-     * View Pool when async view inflation is disabled.
+     * Record the total cumulative thread time spent creating all views in the
+     * PreWarmingRecycledViewPool.
      */
     public static void recordPreWarmingViewsThreadTime(long totalThreadTimeMs) {
         RecordHistogram.recordMediumTimesHistogram(
@@ -237,21 +247,12 @@ public class OmniboxMetrics {
     }
 
     /**
-     * Record the total cumulative wall time spent creating all views in the PrewarmingRecycled View
-     * Pool when async view inflation is disabled.
+     * Record the total cumulative wall time spent creating all views in the
+     * PreWarmingRecycledViewPool.
      */
     public static void recordPreWarmingViewsWallTime(long totalWallTimeMs) {
         RecordHistogram.recordMediumTimesHistogram(
                 "Android.Omnibox.SuggestionsDropdown.PreWarmingViewsWallTime", totalWallTimeMs);
-    }
-
-    /**
-     * Record the number of views successfully pre-created in the PrewarmingRecycledViewPool when
-     * async view inflation is disabled.
-     */
-    public static void recordPreWarmedViewsCount(int count) {
-        RecordHistogram.recordExactLinearHistogram(
-                "Android.Omnibox.SuggestionsDropdown.PreWarmedViewsCount", count, 30);
     }
 
     /**
@@ -298,7 +299,7 @@ public class OmniboxMetrics {
      *
      * @param requestType The request type at session end.
      * @param focusResultedInNavigation Whether the user completed interaction with navigation.
-     * @param withAttachments Whether there were any attachemnts at session end.
+     * @param withAttachments Whether there were any attachments at session end.
      */
     public static void recordOmniboxFocusResultedInNavigation(
             @AutocompleteRequestType int requestType,
@@ -370,7 +371,8 @@ public class OmniboxMetrics {
      * @param pageClass Page classification.
      * @param wasScrolled Whether the suggestions list was scrolled.
      */
-    public static void recordSuggestionsListScrolled(int pageClass, boolean wasScrolled) {
+    public static void recordSuggestionsListScrolled(
+            @PageClassification int pageClass, boolean wasScrolled) {
         RecordHistogram.recordBooleanHistogram(
                 histogramName("Android.Omnibox.SuggestionsListScrolled", pageClass), wasScrolled);
     }
@@ -476,9 +478,18 @@ public class OmniboxMetrics {
     }
 
     /**
+     * Records the delay from physical touch down on a suggestion in the suggestions dropdown to the
+     * start of prefetch processing on the Java main thread.
+     */
+    public static void recordSuggestionTouchDownDelay(long delayMs) {
+        RecordHistogram.recordMediumTimesHistogram(
+                HISTOGRAM_SEARCH_PREFETCH_SUGGESTION_TOUCH_DOWN_DELAY, delayMs);
+    }
+
+    /**
      * Records the number of prefetches started by touch down events in an omnibox session.
      *
-     * @param numPrefetchesStarted the number of prefetches started wihin the omnibox session.
+     * @param numPrefetchesStarted the number of prefetches started within the omnibox session.
      */
     public static void recordNumPrefetchesStartedInOmniboxSession(int numPrefetchesStarted) {
         RecordHistogram.recordCount100Histogram(
@@ -524,63 +535,100 @@ public class OmniboxMetrics {
     }
 
     /**
+     * Records whether non-empty user text was present in the Omnibox when the AI Mode entrypoint
+     * was activated, unsliced and sliced by search engine party (1P Google vs 3P).
+     *
+     * @param isGoogle Whether the default search engine is Google.
+     * @param userTextPresent Whether non-empty user-entered text was present at activation.
+     */
+    public static void recordAimEntrypointActivatedUserTextPresent(
+            boolean isGoogle, boolean userTextPresent) {
+        recordAimEntrypointMetric(
+                HISTOGRAM_AIM_ENTRYPOINT_ACTIVATED_USER_TEXT_PRESENT, isGoogle, userTextPresent);
+    }
+
+    /**
+     * Records whether the AI Mode entrypoint was activated via keyboard (as opposed to touch or
+     * mouse click), unsliced and sliced by search engine party (1P Google vs 3P).
+     *
+     * @param isGoogle Whether the default search engine is Google.
+     * @param viaKeyboard Whether activation was triggered via keyboard navigation.
+     */
+    public static void recordAimEntrypointActivatedViaKeyboard(
+            boolean isGoogle, boolean viaKeyboard) {
+        recordAimEntrypointMetric(
+                HISTOGRAM_AIM_ENTRYPOINT_ACTIVATED_VIA_KEYBOARD, isGoogle, viaKeyboard);
+    }
+
+    private static void recordAimEntrypointMetric(String name, boolean isGoogle, boolean value) {
+        String partySuffix = isGoogle ? ".google" : ".3p";
+        RecordHistogram.recordBooleanHistogram(name, value);
+        RecordHistogram.recordBooleanHistogram(name + partySuffix, value);
+    }
+
+    /**
      * Translate the pageClass to a histogram suffix.
      *
      * @param prefix Histogram prefix.
      * @param pageClass Page classification to translate.
      * @return Metric name.
      */
-    private static String histogramName(String prefix, int pageClass) {
+    private static String histogramName(String prefix, @PageClassification int pageClass) {
         String suffix = "Other";
 
         switch (pageClass) {
-            case PageClassification.INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS_VALUE:
-            case PageClassification.NTP_REALBOX_VALUE:
-            case PageClassification.NTP_VALUE:
-            case PageClassification.NTP_ZPS_PREFETCH_VALUE:
-            case PageClassification.SEARCH_BUTTON_AS_STARTING_FOCUS_VALUE:
-            case PageClassification.START_SURFACE_HOMEPAGE_VALUE:
-            case PageClassification.START_SURFACE_NEW_TAB_VALUE:
+            case PageClassification.INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS:
+            case PageClassification.NTP_REALBOX:
+            case PageClassification.NTP:
+            case PageClassification.NTP_ZPS_PREFETCH:
+            case PageClassification.NTP_ACTION_CHIPS:
+            case PageClassification.SEARCH_BUTTON_AS_STARTING_FOCUS:
+            case PageClassification.START_SURFACE_HOMEPAGE:
+            case PageClassification.START_SURFACE_NEW_TAB:
                 suffix = "NTP";
                 break;
 
-            case PageClassification.LENS_SIDE_PANEL_SEARCHBOX_VALUE:
-            case PageClassification.SEARCH_RESULT_PAGE_DOING_SEARCH_TERM_REPLACEMENT_VALUE:
-            case PageClassification.SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT_VALUE:
-            case PageClassification.SEARCH_RESULT_PAGE_ON_CCT_VALUE:
-            case PageClassification.SEARCH_SIDE_PANEL_SEARCHBOX_VALUE:
-            case PageClassification.SRP_ZPS_PREFETCH_VALUE:
+            case PageClassification.LENS_SIDE_PANEL_SEARCHBOX:
+            case PageClassification.SEARCH_RESULT_PAGE_DOING_SEARCH_TERM_REPLACEMENT:
+            case PageClassification.SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT:
+            case PageClassification.SEARCH_RESULT_PAGE_ON_CCT:
+            case PageClassification.SEARCH_SIDE_PANEL_SEARCHBOX:
+            case PageClassification.SRP_ZPS_PREFETCH:
                 suffix = "SRP";
                 break;
 
-            case PageClassification.ANDROID_SEARCH_WIDGET_VALUE:
-            case PageClassification.ANDROID_SHORTCUTS_WIDGET_VALUE:
+            case PageClassification.ANDROID_SEARCH_WIDGET:
+            case PageClassification.ANDROID_SHORTCUTS_WIDGET:
                 suffix = "Widget";
                 break;
 
-            case PageClassification.ANDROID_HUB_VALUE:
+            case PageClassification.ANDROID_HUB:
                 suffix = "HUB";
                 break;
 
-            case PageClassification.BLANK_VALUE:
-            case PageClassification.CONTEXTUAL_SEARCHBOX_VALUE:
-            case PageClassification.HOME_PAGE_VALUE:
-            case PageClassification.JOURNEYS_VALUE:
-            case PageClassification.OTHER_ON_CCT_VALUE:
-            case PageClassification.OTHER_VALUE:
-            case PageClassification.OTHER_ZPS_PREFETCH_VALUE:
+            case PageClassification.ANDROID_TAB_SEARCH_OVERLAY:
+                suffix = "TabSearch";
+                break;
+
+            case PageClassification.BLANK:
+            case PageClassification.CONTEXTUAL_SEARCHBOX:
+            case PageClassification.HOME_PAGE:
+            case PageClassification.JOURNEYS:
+            case PageClassification.OTHER_ON_CCT:
+            case PageClassification.OTHER:
+            case PageClassification.OTHER_ZPS_PREFETCH:
                 // use default value for websites.
                 break;
 
-            case PageClassification.NTP_COMPOSEBOX_VALUE:
-            case PageClassification.NTP_OMNIBOX_COMPOSEBOX_VALUE:
-            case PageClassification.OTHER_OMNIBOX_COMPOSEBOX_VALUE:
-            case PageClassification.SRP_OMNIBOX_COMPOSEBOX_VALUE:
+            case PageClassification.NTP_COMPOSEBOX:
+            case PageClassification.NTP_OMNIBOX_COMPOSEBOX:
+            case PageClassification.OTHER_OMNIBOX_COMPOSEBOX:
+            case PageClassification.SRP_OMNIBOX_COMPOSEBOX:
                 suffix = "ComposeBox";
                 break;
 
-            case PageClassification.OBSOLETE_INSTANT_NTP_VALUE:
-            case PageClassification.OBSOLETE_INSTANT_NTP_WITH_FAKEBOX_AS_STARTING_FOCUS_VALUE:
+            case PageClassification.OBSOLETE_INSTANT_NTP:
+            case PageClassification.OBSOLETE_INSTANT_NTP_WITH_FAKEBOX_AS_STARTING_FOCUS:
                 assert false
                         : "Obsolete page classification. Please use the OMNIBOX variant instead.";
                 break;

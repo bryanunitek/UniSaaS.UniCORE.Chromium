@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "base/check_is_test.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -64,7 +65,7 @@ struct SharedImageInterfaceInProcess::SetUpOnGpuParams {
 
 scoped_refptr<SharedImageInterfaceInProcess>
 SharedImageInterfaceInProcess::Create(
-    SingleTaskSequence* task_sequence,
+    std::unique_ptr<SingleTaskSequence> task_sequence,
     const GpuPreferences& gpu_preferences,
     const GpuDriverBugWorkarounds& gpu_workarounds,
     const GpuFeatureInfo& gpu_feature_info,
@@ -75,7 +76,8 @@ SharedImageInterfaceInProcess::Create(
     bool always_create_native_gmb_handles /*=false*/) {
   // ensure Initialize() is called before pointer returned to caller
   auto sii = base::WrapRefCounted(new SharedImageInterfaceInProcess{
-      task_sequence, shared_image_manager, std::move(gpu_task_runner)});
+      std::move(task_sequence), shared_image_manager,
+      std::move(gpu_task_runner)});
   sii->Initialize(std::make_unique<SetUpOnGpuParams>(
       gpu_preferences, gpu_workarounds, gpu_feature_info, context_state,
       shared_image_manager, is_for_display_compositor));
@@ -92,16 +94,18 @@ SharedImageInterfaceInProcess::Create(
 }
 
 SharedImageInterfaceInProcess::SharedImageInterfaceInProcess(
-    SingleTaskSequence* task_sequence,
+    std::unique_ptr<SingleTaskSequence> task_sequence,
     SharedImageManager* shared_image_manager,
     scoped_refptr<base::SingleThreadTaskRunner> gpu_task_runner)
     : SharedImageInterfaceInProcessBase(
           CommandBufferNamespace::IN_PROCESS,
           DisplayCompositorMemoryAndTaskControllerOnGpu::NextCommandBufferId(),
           /*verify_creation_sync_token=*/false),
-      task_sequence_(task_sequence),
+      task_sequence_(std::move(task_sequence)),
       gpu_task_runner_(std::move(gpu_task_runner)),
-      shared_image_manager_(shared_image_manager) {}
+      shared_image_manager_(shared_image_manager) {
+  CHECK(task_sequence_);
+}
 
 void SharedImageInterfaceInProcess::Initialize(
     std::unique_ptr<SetUpOnGpuParams> params) {
@@ -256,7 +260,9 @@ bool SharedImageInterfaceInProcess::MakeContextCurrentOnGpuThread(
 
 void SharedImageInterfaceInProcess::MarkContextLostOnGpuThread() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
-  context_state_->MarkContextLost();
+  if (context_state_) {
+    context_state_->MarkContextLost();
+  }
 }
 
 void SharedImageInterfaceInProcess::ScheduleGpuTask(
@@ -265,6 +271,23 @@ void SharedImageInterfaceInProcess::ScheduleGpuTask(
     const SyncToken& release) {
   task_sequence_->ScheduleTask(std::move(task), std::move(sync_token_fences),
                                release);
+}
+
+// These functions are not used in production use-cases of
+// SharedImageInterfaceInProcess, but unit tests use this interface in place
+// of ClientSharedImageInterface and need them.
+bool SharedImageInterfaceInProcess::IsLost() const {
+  CHECK_IS_TEST();
+  return false;
+}
+bool SharedImageInterfaceInProcess::AddGpuChannelLostObserver(
+    GpuChannelLostObserver* observer) {
+  CHECK_IS_TEST();
+  return true;
+}
+void SharedImageInterfaceInProcess::RemoveGpuChannelLostObserver(
+    GpuChannelLostObserver* observer) {
+  CHECK_IS_TEST();
 }
 
 }  // namespace gpu

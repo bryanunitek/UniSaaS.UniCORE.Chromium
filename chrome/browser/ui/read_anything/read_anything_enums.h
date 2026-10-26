@@ -5,27 +5,11 @@
 #ifndef CHROME_BROWSER_UI_READ_ANYTHING_READ_ANYTHING_ENUMS_H_
 #define CHROME_BROWSER_UI_READ_ANYTHING_READ_ANYTHING_ENUMS_H_
 
-#include <optional>
-
+#include "base/notreached.h"
 #include "chrome/browser/ui/side_panel/side_panel_enums.h"
+#include "chrome/common/read_anything/read_anything.mojom.h"
 
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-// LINT.IfChange(ReadAnythingOpenTrigger)
-enum class ReadAnythingOpenTrigger {
-  kAppMenu = 0,
-  kMinValue = kAppMenu,
-  kReadAnythingContextMenu = 1,
-  kReadAnythingNavigationThrottle = 2,
-  kPinnedSidePanelEntryToolbarButton = 3,
-  kOmniboxChip = 4,
-  kTabSwitch = 5,
-  kReadAnythingTogglePresentationButton = 6,
-  kKeyboardShortcut = 7,
-  kListenToThisPageContextMenu = 8,
-  kMaxValue = kListenToThisPageContextMenu,
-};
-// LINT.ThenChange(//tools/metrics/histograms/enums.xml:ReadAnythingOpenTrigger)
+using read_anything::mojom::ReadAnythingOpenTrigger;
 
 enum class ReadAnythingCloseReason {
   kClosedByUser = 0,
@@ -79,11 +63,15 @@ inline SidePanelOpenTrigger ReadAnythingToSidePanelOpenTrigger(
       return SidePanelOpenTrigger::kReadAnythingKeyboardShortcut;
     case ReadAnythingOpenTrigger::kListenToThisPageContextMenu:
       return SidePanelOpenTrigger::kReadAnythingListenToThisPageContextMenu;
+    case ReadAnythingOpenTrigger::kUnknown:
+      return SidePanelOpenTrigger::kReadAnythingUnknown;
+    case ReadAnythingOpenTrigger::kPdfTranslation:
+      return SidePanelOpenTrigger::kPdfTranslation;
   }
 }
 
-inline std::optional<ReadAnythingOpenTrigger>
-SidePanelToReadAnythingOpenTrigger(SidePanelOpenTrigger trigger) {
+inline ReadAnythingOpenTrigger SidePanelToReadAnythingOpenTrigger(
+    SidePanelOpenTrigger trigger) {
   switch (trigger) {
     case SidePanelOpenTrigger::kAppMenu:
       return ReadAnythingOpenTrigger::kAppMenu;
@@ -91,7 +79,9 @@ SidePanelToReadAnythingOpenTrigger(SidePanelOpenTrigger trigger) {
       return ReadAnythingOpenTrigger::kReadAnythingContextMenu;
     case SidePanelOpenTrigger::kReadAnythingNavigationThrottle:
       return ReadAnythingOpenTrigger::kReadAnythingNavigationThrottle;
+    case SidePanelOpenTrigger::kToolbarButton:
     case SidePanelOpenTrigger::kPinnedEntryToolbarButton:
+    case SidePanelOpenTrigger::kOverflowMenu:
       return ReadAnythingOpenTrigger::kPinnedSidePanelEntryToolbarButton;
     case SidePanelOpenTrigger::kReadAnythingOmniboxChip:
       return ReadAnythingOpenTrigger::kOmniboxChip;
@@ -103,9 +93,33 @@ SidePanelToReadAnythingOpenTrigger(SidePanelOpenTrigger trigger) {
       return ReadAnythingOpenTrigger::kKeyboardShortcut;
     case SidePanelOpenTrigger::kReadAnythingListenToThisPageContextMenu:
       return ReadAnythingOpenTrigger::kListenToThisPageContextMenu;
-    default:
-      return std::optional<ReadAnythingOpenTrigger>();
+    case SidePanelOpenTrigger::kPdfTranslation:
+      return ReadAnythingOpenTrigger::kPdfTranslation;
+    case SidePanelOpenTrigger::kReadAnythingUnknown:
+    case SidePanelOpenTrigger::kSideSearchPageAction:
+    case SidePanelOpenTrigger::kNotesInPageContextMenu:
+    case SidePanelOpenTrigger::kComboboxSelected:
+    case SidePanelOpenTrigger::kSidePanelEntryDeregistered:
+    case SidePanelOpenTrigger::kIPHSideSearchAutoTrigger:
+    case SidePanelOpenTrigger::kContextMenuSearchOption:
+    case SidePanelOpenTrigger::kExtensionEntryRegistered:
+    case SidePanelOpenTrigger::kBookmarkBar:
+    case SidePanelOpenTrigger::kOpenedInNewTabFromSidePanel:
+    case SidePanelOpenTrigger::kExtension:
+    case SidePanelOpenTrigger::kNewTabPage:
+    case SidePanelOpenTrigger::kReadingListToast:
+    case SidePanelOpenTrigger::kNewTabFooter:
+    case SidePanelOpenTrigger::kNewTabPageCustomizationPromo:
+    case SidePanelOpenTrigger::kNewTabPageAutomaticCustomizeChrome:
+#if BUILDFLAG(IS_ANDROID)
+    case SidePanelOpenTrigger::kWindowResized:
+#endif
+    case SidePanelOpenTrigger::kGlicOpened:
+    case SidePanelOpenTrigger::kContextualTasks:
+    case SidePanelOpenTrigger::kUnknown:
+      return ReadAnythingOpenTrigger::kUnknown;
   }
+  NOTREACHED();
 }
 
 }  // namespace read_anything

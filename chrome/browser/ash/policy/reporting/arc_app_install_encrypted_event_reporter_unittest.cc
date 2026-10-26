@@ -11,14 +11,9 @@
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
-#include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/policy/reporting/app_install_event_log_manager_wrapper.h"
-#include "chrome/browser/ash/policy/reporting/arc_app_install_event_log.h"
-#include "chrome/browser/ash/policy/reporting/arc_app_install_event_log_manager.h"
 #include "chrome/browser/ash/policy/reporting/install_event_log_util.h"
-#include "chrome/browser/prefs/browser_prefs.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/network/network_handler_test_helper.h"
@@ -53,10 +48,7 @@ class AppInstallEventEncryptedReporterTest : public testing::Test {
     chromeos::PowerManagerClient::InitializeFake();
   }
 
-  void TearDown() override {
-    task_environment_.RunUntilIdle();
-    chromeos::PowerManagerClient::Shutdown();
-  }
+  void TearDown() override { chromeos::PowerManagerClient::Shutdown(); }
 
   em::AppInstallReportLogEvent CreateEventWithType(
       em::AppInstallReportLogEvent::EventType event_type) {

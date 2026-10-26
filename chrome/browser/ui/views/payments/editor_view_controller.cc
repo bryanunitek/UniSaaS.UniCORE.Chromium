@@ -9,7 +9,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view.h"
@@ -21,14 +20,10 @@
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/ime/text_input_type.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/models/combobox_model.h"
 #include "ui/color/color_id.h"
-#include "ui/color/color_provider.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
-#include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/styled_label.h"
@@ -397,7 +392,7 @@ views::View* EditorViewController::CreateInputField(views::View* editor_view,
     case EditorField::ControlType::CUSTOMFIELD: {
       std::unique_ptr<views::View> custom_view = CreateCustomFieldView(
           field.type, &focusable_field, valid, &error_message);
-      DCHECK(custom_view);
+      CHECK(custom_view, base::NotFatalUntil::M162);
 
       field_view->AddChildView(std::move(custom_view));
       field_view->SetPreferredSize(gfx::Size(field_width, kInputFieldHeight));
@@ -484,7 +479,8 @@ void EditorViewController::SaveButtonPressed(const ui::Event& event) {
   if (back_navigation_type_ == BackNavigationType::kOneStep) {
     dialog()->GoBack();
   } else {
-    DCHECK_EQ(BackNavigationType::kPaymentSheet, back_navigation_type_);
+    CHECK_EQ(BackNavigationType::kPaymentSheet, back_navigation_type_,
+             base::NotFatalUntil::M162);
     dialog()->GoBackToPaymentSheet();
   }
 }

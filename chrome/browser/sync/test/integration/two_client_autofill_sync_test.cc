@@ -4,6 +4,7 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
@@ -16,9 +17,10 @@
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/data_quality/addresses/profile_token_quality.h"
 #include "components/autofill/core/browser/data_quality/addresses/profile_token_quality_test_api.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
-#include "components/autofill/core/browser/webdata/autofill_table_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
+#include "components/autofill/core/browser/webdata/autofill_table_util.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "components/sync/base/features.h"
 #include "components/sync/engine/cycle/entity_change_metric_recording.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -44,7 +46,10 @@ using autofill_helper::UpdateProfile;
 
 class TwoClientAutofillProfileSyncTest : public SyncTest {
  public:
-  TwoClientAutofillProfileSyncTest() : SyncTest(TWO_CLIENT) {}
+  TwoClientAutofillProfileSyncTest() : SyncTest(TWO_CLIENT) {
+    features_override_.InitAndDisableFeature(
+        syncer::kReplaceSyncPromosWithSignInPromos);
+  }
 
   TwoClientAutofillProfileSyncTest(const TwoClientAutofillProfileSyncTest&) =
       delete;
@@ -76,6 +81,9 @@ class TwoClientAutofillProfileSyncTest : public SyncTest {
             identity_manager->GetPrimaryAccountInfo(
                 signin::ConsentLevel::kSignin)));
   }
+
+ private:
+  base::test::ScopedFeatureList features_override_;
 };
 
 IN_PROC_BROWSER_TEST_F(TwoClientAutofillProfileSyncTest,
@@ -437,9 +445,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientAutofillProfileSyncTest, ExceedsMaxLength) {
 
   std::u16string exceeds_max_length_string(
       autofill::kMaxDataLengthForDatabase + 1, '.');
-  UpdateProfile(0, GetAllAutoFillProfiles(0)[0]->guid(), autofill::NAME_FIRST,
-                exceeds_max_length_string);
-  UpdateProfile(0, GetAllAutoFillProfiles(0)[0]->guid(), autofill::NAME_LAST,
+  UpdateProfile(0, GetAllAutoFillProfiles(0)[0]->guid(), autofill::NAME_FULL,
                 exceeds_max_length_string);
   UpdateProfile(0, GetAllAutoFillProfiles(0)[0]->guid(),
                 autofill::EMAIL_ADDRESS, exceeds_max_length_string);
@@ -447,9 +453,8 @@ IN_PROC_BROWSER_TEST_F(TwoClientAutofillProfileSyncTest, ExceedsMaxLength) {
                 autofill::ADDRESS_HOME_LINE1, exceeds_max_length_string);
   // The values stored on clients 0 are already truncated.
   const AutofillProfile* profile = GetAllAutoFillProfiles(0)[0];
-  for (const auto type :
-       {autofill::NAME_FIRST, autofill::NAME_LAST, autofill::EMAIL_ADDRESS,
-        autofill::ADDRESS_HOME_LINE1}) {
+  for (const auto type : {autofill::NAME_FULL, autofill::EMAIL_ADDRESS,
+                          autofill::ADDRESS_HOME_LINE1}) {
     EXPECT_EQ(profile->GetRawInfo(type).size(),
               autofill::kMaxDataLengthForDatabase);
   }

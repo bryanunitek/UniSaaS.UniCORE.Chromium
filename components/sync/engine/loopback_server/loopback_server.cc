@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "base/containers/map_util.h"
+#include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
 #include "base/logging.h"
@@ -23,10 +24,9 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/task/sequenced_task_runner.h"
-#include "base/task/task_traits.h"
-#include "base/task/thread_pool.h"
 #include "components/sync/base/data_type.h"
+#include "components/sync/base/features.h"
+#include "components/sync/engine/loopback_server/loopback_server_bookmark_migration.h"
 #include "components/sync/engine/loopback_server/persistent_bookmark_entity.h"
 #include "components/sync/engine/loopback_server/persistent_permanent_entity.h"
 #include "components/sync/engine/loopback_server/persistent_tombstone_entity.h"
@@ -162,6 +162,12 @@ class UpdateSieve {
     return !datatypes_to_migrate->empty();
   }
 
+  // Configures the set of data types for which a full update (all non-deleted
+  // entities plus a GC directive) should be returned in this request cycle.
+  void SetForceFullUpdateTypes(DataTypeSet types) {
+    force_full_update_types_ = types;
+  }
+
   // Sets the progress markers in `get_updates_response` based on the highest
   // version between request progress markers and response entities.
   void SetProgressMarkers(
@@ -171,6 +177,9 @@ class UpdateSieve {
           get_updates_response->add_new_progress_marker();
       new_marker->set_data_type_id(GetSpecificsFieldNumberFromDataType(type));
       new_marker->set_token(response_version.ToString());
+      if (force_full_update_types_.Has(type)) {
+        new_marker->mutable_gc_directive()->set_version_watermark(0);
+      }
     }
   }
 
@@ -183,6 +192,9 @@ class UpdateSieve {
       return false;
     }
     DCHECK_NE(0U, response_version_map_.count(type));
+    if (force_full_update_types_.Has(type)) {
+      return !entity.IsDeleted();
+    }
     // If this is the initial download for the data type (i.e. there was no
     // progress token), then don't return tombstones.
     if (it->second.is_empty() && entity.IsDeleted()) {
@@ -194,13 +206,17 @@ class UpdateSieve {
   // Updates internal tracking of max versions to later be used to set response
   // progress markers.
   void UpdateProgressMarker(const LoopbackServerEntity& entity) {
-    DCHECK(ClientWantsItem(entity));
     DataType type = entity.GetDataType();
     response_version_map_[type].UpdateWithEntity(entity.GetVersion());
   }
 
  private:
   using DataTypeToVersionMap = std::map<DataType, ProgressMarkerToken>;
+
+  // Data types for which a full update response (all non-deleted entities and a
+  // GC directive) is forced for the current request because at least one entity
+  // has a newer version on the server than the client's progress marker.
+  DataTypeSet force_full_update_types_;
 
   static UpdateSieve::DataTypeToVersionMap MessageToVersionMap(
       const sync_pb::GetUpdatesMessage& get_updates_message,
@@ -250,13 +266,14 @@ bool SortByVersion(const LoopbackServerEntity* lhs,
 
 }  // namespace
 
-LoopbackServer::LoopbackServer(const base::FilePath& persistent_file)
+LoopbackServer::LoopbackServer(
+    const base::FilePath& persistent_file,
+    base::ImportantFileWriter::TaskRunnerOrBlockCurrentSequence
+        writer_task_runner)
     : persistent_file_(persistent_file),
-      writer_(
-          persistent_file_,
-          base::ThreadPool::CreateSequencedTaskRunner(
-              {base::MayBlock(), base::TaskShutdownBehavior::BLOCK_SHUTDOWN}),
-          kHistogramSuffix) {
+      writer_(persistent_file_,
+              std::move(writer_task_runner),
+              kHistogramSuffix) {
   DCHECK(!persistent_file_.empty());
   Init();
 }
@@ -272,6 +289,8 @@ void LoopbackServer::Init() {
 
   store_birthday_ = base::Time::Now().InMillisecondsSinceUnixEpoch();
   keystore_keys_.push_back(GenerateNewKeystoreKey());
+  bookmarks_migrated_to_client_tag_hash_ = base::FeatureList::IsEnabled(
+      syncer::kSyncMigrateLoopbackServerBookmarksToClientTagHash);
 
   const bool create_result = CreateDefaultPermanentItems();
   DCHECK(create_result) << "Permanent items were not created successfully.";
@@ -512,10 +531,34 @@ bool LoopbackServer::HandleGetUpdatesRequest(
     return false;
   }
 
+  // For data types configured as full update types, check if there is at least
+  // one entity with a newer version on the server.
+  syncer::DataTypeSet full_update_types_with_new_updates;
+  for (const auto& [id, entity] : entities_) {
+    DataType type = entity->GetDataType();
+    if (full_update_types_.Has(type) && sieve->ClientWantsItem(*entity)) {
+      full_update_types_with_new_updates.Put(type);
+    }
+  }
+  sieve->SetForceFullUpdateTypes(full_update_types_with_new_updates);
+
+  // Note that for data types configured as full update types and having new
+  // updates, ClientWantsItem() behavior will be changed after
+  // SetForceFullUpdateTypes() is called.
   std::vector<const LoopbackServerEntity*> wanted_entities;
   for (const auto& [id, entity] : entities_) {
     if (sieve->ClientWantsItem(*entity)) {
       wanted_entities.push_back(entity.get());
+    }
+
+    if (full_update_types_with_new_updates.Has(entity->GetDataType())) {
+      // For full update types, track the highest entity version (including
+      // tombstones) in the progress marker. Even if tombstones are filtered out
+      // from the response entries payload by GC directives, the progress marker
+      // version should advance.
+      // Note that below UpdateProgressMarker() is called for only
+      // `wanted_entities` while here it is called for every stored entity.
+      sieve->UpdateProgressMarker(*entity);
     }
   }
 
@@ -604,7 +647,7 @@ string LoopbackServer::CommitEntity(
   std::unique_ptr<LoopbackServerEntity> entity;
   if (client_entity.deleted()) {
     entity = PersistentTombstoneEntity::CreateFromEntity(client_entity);
-    if (entity) {
+    if (entity && !bookmarks_migrated_to_client_tag_hash_) {
       DeleteChildren(client_entity.id_string());
     }
   } else if (type == syncer::NIGORI) {
@@ -613,7 +656,8 @@ string LoopbackServer::CommitEntity(
     CHECK(server_entity);
     entity = PersistentPermanentEntity::CreateUpdatedNigoriEntity(
         client_entity, *server_entity);
-  } else if (type == syncer::BOOKMARKS) {
+  } else if (type == syncer::BOOKMARKS &&
+             !bookmarks_migrated_to_client_tag_hash_) {
     // TODO(pvalenzuela): Validate entity's parent ID.
     if (server_entity) {
       entity = PersistentBookmarkEntity::CreateUpdatedVersion(
@@ -872,13 +916,14 @@ bool LoopbackServer::ModifyBookmarkEntity(
     const sync_pb::EntitySpecifics& updated_specifics) {
   EntityMap::const_iterator iter = entities_.find(id);
   if (iter == entities_.end() ||
-      iter->second->GetDataType() != syncer::BOOKMARKS ||
       GetDataTypeFromSpecifics(updated_specifics) != syncer::BOOKMARKS) {
     return false;
   }
 
-  PersistentBookmarkEntity* entity =
-      static_cast<PersistentBookmarkEntity*>(iter->second.get());
+  PersistentBookmarkEntity* entity = iter->second->AsBookmarkEntity();
+  if (!entity) {
+    return false;
+  }
 
   entity->SetParentId(parent_id);
   entity->SetSpecifics(updated_specifics);
@@ -898,6 +943,8 @@ void LoopbackServer::SerializeState(sync_pb::LoopbackServerProto* proto) const {
   proto->set_version(kCurrentLoopbackServerProtoVersion);
   proto->set_store_birthday(store_birthday_);
   proto->set_last_version_assigned(version_);
+  proto->set_bookmarks_migrated_to_client_tag_hash(
+      bookmarks_migrated_to_client_tag_hash_);
   for (const std::vector<uint8_t>& key : keystore_keys_) {
     proto->add_keystore_keys(key.data(), key.size());
   }
@@ -913,18 +960,21 @@ bool LoopbackServer::DeSerializeState(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(proto.version(), kCurrentLoopbackServerProtoVersion);
 
+  bookmarks_migrated_to_client_tag_hash_ =
+      proto.bookmarks_migrated_to_client_tag_hash();
   store_birthday_ = proto.store_birthday();
   version_ = proto.last_version_assigned();
   for (int i = 0; i < proto.keystore_keys_size(); ++i) {
-    const auto& key = proto.keystore_keys(i);
+    const std::string& key = proto.keystore_keys(i);
     keystore_keys_.emplace_back(key.begin(), key.end());
   }
   for (int i = 0; i < proto.entities_size(); ++i) {
     std::unique_ptr<LoopbackServerEntity> entity =
         LoopbackServerEntity::CreateEntityFromProto(proto.entities(i));
-    // Silently drop entities that cannot be successfully deserialized.
-    if (entity) {
-      entities_[proto.entities(i).entity().id_string()] = std::move(entity);
+    // Silently drop entities that cannot be successfully deserialized or have
+    // a mismatched ID.
+    if (entity && entity->GetId() == proto.entities(i).entity().id_string()) {
+      entities_[entity->GetId()] = std::move(entity);
     }
   }
 
@@ -982,7 +1032,25 @@ bool LoopbackServer::LoadStateFromFile() {
   if (base::ReadFileToString(persistent_file_, &serialized)) {
     sync_pb::LoopbackServerProto proto;
     if (serialized.length() > 0 && proto.ParseFromString(serialized)) {
-      return DeSerializeState(proto);
+      bool was_migrated = false;
+      if (base::FeatureList::IsEnabled(
+              syncer::kSyncMigrateLoopbackServerBookmarksToClientTagHash) &&
+          !proto.bookmarks_migrated_to_client_tag_hash()) {
+        MigrateLoopbackServerLegacyBookmarks(&proto);
+        proto.set_bookmarks_migrated_to_client_tag_hash(true);
+        was_migrated = true;
+      }
+      if (!DeSerializeState(proto)) {
+        return false;
+      }
+      if (was_migrated) {
+        // Save a backup of the pre-migration state file before scheduling a
+        // rewrite with the migrated state.
+        base::CopyFile(persistent_file_,
+                       persistent_file_.AddExtension(FILE_PATH_LITERAL("bak")));
+        ScheduleSaveStateToFile();
+      }
+      return true;
     }
     DVLOG(1) << "Loopback sync cannot parse the persistent state file ("
              << persistent_file_ << ").";
@@ -1071,6 +1139,15 @@ void LoopbackServer::PopulateGcDirectiveMigrationResponse(
     }
   }
   response->set_changes_remaining(1);
+}
+
+void LoopbackServer::SetUpdateMode(DataType data_type, UpdateMode update_mode) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (update_mode == UpdateMode::kFull) {
+    full_update_types_.Put(data_type);
+  } else {
+    full_update_types_.Remove(data_type);
+  }
 }
 
 }  // namespace syncer

@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/sanitizers/sanitizers.gni")
 import("//build/util/process_version.gni")
 import("//chrome/updater/branding.gni")
 import("//testing/test.gni")
@@ -92,7 +93,10 @@ source_set("impl") {
     "//base",
     "//chrome/browser/prefs",
     "//chrome/browser/profiles:profile",
-    "//chrome/browser/ui",
+    "//chrome/browser/ui:browser_tabstrip",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/browser_window:create_browser_window",
+    "//chrome/browser/ui/tabs:tab_strip",
     "//chrome/common:channel_info",
     "//chrome/common:constants",
     "//components/policy/core/common",
@@ -103,6 +107,7 @@ source_set("impl") {
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "aperitif_unittest.mm",
     "auth_session_request_unittest.mm",
     "code_sign_clone_manager_unittest.mm",
     "dock_unittest.mm",
@@ -117,7 +122,14 @@ source_set("unit_tests") {
     "//build:branding_buildflags",
     "//chrome/common:non_code_constants",
     "//content/test:test_support",
+    "//sandbox/mac:seatbelt",
+    "//sandbox/policy",
+    "//sandbox/policy/mojom",
     "//testing/gtest",
+  ]
+  data_deps = [
+    "//chrome",
+    "//chrome:chrome_helper_app_aperitif",
   ]
   configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
@@ -131,6 +143,7 @@ source_set("browser_tests") {
     ":mac",
     "//base",
     "//chrome/browser:app_controller_mac",
+    "//chrome/browser/ui:browser_window_header",
     "//chrome/test:test_support",
     "//content/test:test_support",
     "//testing/gtest",

@@ -26,8 +26,6 @@ import androidx.test.filters.LargeTest;
 import androidx.test.filters.SmallTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 
-import com.google.common.collect.ImmutableMap;
-
 import org.hamcrest.Matchers;
 import org.junit.After;
 import org.junit.Assert;
@@ -38,6 +36,7 @@ import org.mockito.Mock;
 
 import org.chromium.base.RequiredCallback;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
@@ -71,7 +70,6 @@ import org.chromium.chrome.browser.overlay_panel.PanelState;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
@@ -85,6 +83,7 @@ import org.chromium.components.external_intents.ExternalNavigationHandler;
 import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.common.ContentFeatures;
+import org.chromium.network.mojom.ReferrerPolicy;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.PageTransition;
 import org.chromium.ui.base.ViewUtils;
@@ -96,7 +95,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-@DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287853
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // Explicitly not supported.
 // TODO(donnd): Create class with limited API to encapsulate the internals of simulations.
 
 /** Tests the Contextual Search Manager using instrumentation tests. */
@@ -119,10 +118,6 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     private static final String SIMPLE_SEARCH_NODE_ID = "search";
 
     /** Feature maps that we use for parameterized tests. */
-
-    /** This represents the current fully-launched configuration. */
-    private static final ImmutableMap<String, Boolean> ENABLE_NONE = ImmutableMap.of();
-
     private UserActionTester mActionTester;
 
     @Override
@@ -137,7 +132,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     public void tearDown() throws Exception {
         super.tearDown();
         if (mActionTester != null) mActionTester.tearDown();
-        mPanel.setEdgeToEdgeControllerSupplierForTesting(() -> null);
+        mPanel.setEdgeToEdgeControllerSupplierForTesting(SupplierUtils.ofNull());
     }
 
     // ============================================================================================
@@ -246,6 +241,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @DisableIf.Build(
             sdk_is_greater_than = Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
             message = "crbug.com/383144566")
+    @DisableIf.Device(DeviceFormFactor.AUTOMOTIVE) // crbug.com/574148554
     public void testPromotesToTab() throws Exception {
         // -------- SET UP ---------
         // Track Tab creation with this helper.
@@ -254,7 +250,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
         TabModelSelectorObserver observer =
                 new TabModelSelectorObserver() {
                     @Override
-                    public void onNewTabCreated(Tab tab, @TabCreationState int creationState) {
+                    public void onNewTabCreated(Tab tab) {
                         tabCreatedHelper.notifyCalled();
                     }
                 };
@@ -345,45 +341,48 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
 
         InstrumentationRegistry.getInstrumentation()
                 .runOnMainSync(
-                        new Runnable() {
-                            @Override
-                            public void run() {
-                                AtomicBoolean result = new AtomicBoolean(false);
-                                RequiredCallback<Boolean> resultCallback =
-                                        new RequiredCallback<>(
-                                                (Boolean shouldIgnore) -> {
-                                                    result.set(shouldIgnore);
-                                                });
-                                mPanel.getOverlayPanelContent()
-                                        .getInterceptNavigationDelegateForTesting()
-                                        .shouldIgnoreNavigation(
-                                                navigationHandle,
-                                                initialUrl,
-                                                false,
-                                                false,
-                                                false,
-                                                resultCallback);
-                                Assert.assertEquals(0, mActivityMonitor.getHits());
-                                Assert.assertFalse(result.get());
+                        () -> {
+                            AtomicBoolean result = new AtomicBoolean(false);
+                            RequiredCallback<Boolean> resultCallback =
+                                    new RequiredCallback<>(
+                                            (Boolean shouldIgnore) -> {
+                                                result.set(shouldIgnore);
+                                            });
+                            mPanel.getOverlayPanelContent()
+                                    .getInterceptNavigationDelegateForTesting()
+                                    .shouldIgnoreNavigation(
+                                            navigationHandle,
+                                            initialUrl,
+                                            false,
+                                            false,
+                                            false,
+                                            resultCallback);
+                            Assert.assertEquals(0, mActivityMonitor.getHits());
+                            Assert.assertFalse(result.get());
 
-                                resultCallback =
-                                        new RequiredCallback<>(
-                                                (Boolean shouldIgnore) -> {
-                                                    result.set(shouldIgnore);
-                                                });
-                                navigationHandle.didRedirect(redirectUrl, true);
-                                mPanel.getOverlayPanelContent()
-                                        .getInterceptNavigationDelegateForTesting()
-                                        .shouldIgnoreNavigation(
-                                                navigationHandle,
-                                                redirectUrl,
-                                                false,
-                                                false,
-                                                false,
-                                                resultCallback);
-                                Assert.assertEquals(1, mActivityMonitor.getHits());
-                                Assert.assertTrue(result.get());
-                            }
+                            resultCallback =
+                                    new RequiredCallback<>(
+                                            (Boolean shouldIgnore) -> {
+                                                result.set(shouldIgnore);
+                                            });
+                            navigationHandle.didRedirect(
+                                    redirectUrl,
+                                    true,
+                                    /* referrerUrl= */ GURL.emptyGURL(),
+                                    /* referrerPolicy= */ ReferrerPolicy.DEFAULT,
+                                    /* redirectResponseHeaders= */ new HashMap<>(),
+                                    /* redirectHttpStatusCode= */ 0);
+                            mPanel.getOverlayPanelContent()
+                                    .getInterceptNavigationDelegateForTesting()
+                                    .shouldIgnoreNavigation(
+                                            navigationHandle,
+                                            redirectUrl,
+                                            false,
+                                            false,
+                                            false,
+                                            resultCallback);
+                            Assert.assertEquals(1, mActivityMonitor.getHits());
+                            Assert.assertTrue(result.get());
                         });
     }
 
@@ -420,26 +419,23 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
 
         InstrumentationRegistry.getInstrumentation()
                 .runOnMainSync(
-                        new Runnable() {
-                            @Override
-                            public void run() {
-                                AtomicBoolean result = new AtomicBoolean(false);
-                                RequiredCallback<Boolean> resultCallback =
-                                        new RequiredCallback<>(
-                                                (Boolean shouldIgnore) -> {
-                                                    result.set(shouldIgnore);
-                                                });
-                                mPanel.getOverlayPanelContent()
-                                        .getInterceptNavigationDelegateForTesting()
-                                        .shouldIgnoreNavigation(
-                                                navigationHandle,
-                                                url,
-                                                false,
-                                                false,
-                                                false,
-                                                resultCallback);
-                                Assert.assertTrue(result.get());
-                            }
+                        () -> {
+                            AtomicBoolean result = new AtomicBoolean(false);
+                            RequiredCallback<Boolean> resultCallback =
+                                    new RequiredCallback<>(
+                                            (Boolean shouldIgnore) -> {
+                                                result.set(shouldIgnore);
+                                            });
+                            mPanel.getOverlayPanelContent()
+                                    .getInterceptNavigationDelegateForTesting()
+                                    .shouldIgnoreNavigation(
+                                            navigationHandle,
+                                            url,
+                                            false,
+                                            false,
+                                            false,
+                                            resultCallback);
+                            Assert.assertTrue(result.get());
                         });
 
         Assert.assertEquals(hasGesture ? 1 : 0, mActivityMonitor.getHits());
@@ -514,7 +510,10 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @SmallTest
     @Feature({"ContextualSearch"})
     // Previously flaky on phones: https://crbug.com/40540341
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481444937
+    @DisableIf.Device({
+        DeviceFormFactor.DESKTOP, // https://crbug.com/481444937
+        DeviceFormFactor.AUTOMOTIVE // crbug.com/574148554
+    })
     public void testPanelDismissedOnToggleFullscreen() throws Exception {
         // Simulate a resolving search and assert that the panel peeks.
         simulateResolveSearch("search");
@@ -637,6 +636,7 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
+    @DisableIf.Device(DeviceFormFactor.AUTOMOTIVE) // crbug.com/572590826: No geo: handler on AVD.
     // Previously disabled: https://crbug.com/40221759
     public void testQuickActionIntent() throws Exception {
         // Add a new filter to the activity monitor that matches the intent that should be fired.
@@ -750,7 +750,6 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481444937
     public void testContextualDictionaryDefinitions() throws Exception {
         runDictionaryCardTest(CardTag.CT_CONTEXTUAL_DEFINITION);
     }
@@ -931,7 +930,6 @@ public class ContextualSearchManagerTest extends ContextualSearchInstrumentation
     // TODO(crbug.com/473893732): Update the test for lock top control or use restriction.
     @DisableFeatures(ChromeFeatureList.LOCK_TOP_CONTROLS_ON_LARGE_TABLETS_V2)
     // Previously flaky and disabled 4/2021.  https://crbug.com/40750236
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481444937
     public void testTriggeringContextualSearchHidesFindInPageOverlay() throws Exception {
         MenuUtils.invokeCustomMenuActionSync(
                 InstrumentationRegistry.getInstrumentation(),

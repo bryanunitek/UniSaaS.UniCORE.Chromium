@@ -18,21 +18,21 @@
 #include "build/build_config.h"
 #include "chrome/browser/autofill/autocomplete_history_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/content/browser/test_autofill_manager_injector.h"
-#include "components/autofill/core/browser/data_manager/personal_data_manager_test_utils.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager_test_util.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
 #include "components/autofill/core/browser/single_field_fillers/autocomplete/autocomplete_history_manager.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/suggestions/suggestion_test_helpers.h"
-#include "components/autofill/core/browser/suggestions/suggestions_context.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/test_utils/test_autofill_clock.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_constants.h"
@@ -47,6 +47,8 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/switches.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/keyboard_code_conversion.h"
 
 namespace autofill {
@@ -136,7 +138,7 @@ class AutocompleteTest : public InProcessBrowserTest {
   // `disposition`.
   void NavigateToFile(const char* filename,
                       const WindowOpenDisposition& disposition =
-                          WindowOpenDisposition::NEW_FOREGROUND_TAB) {
+                          WindowOpenDisposition::kNewForegroundTab) {
     GURL url =
         embedded_test_server()->GetURL(base::StrCat({"/autofill/", filename}));
     NavigateParams params(active_browser_, url, ui::PAGE_TRANSITION_LINK);
@@ -164,7 +166,7 @@ class AutocompleteTest : public InProcessBrowserTest {
     // Simulate a mouse click to submit the form because form submissions not
     // triggered by user gestures are ignored.
     content::SimulateMouseClick(
-        active_browser_->tab_strip_model()->GetActiveWebContents(), 0,
+        active_browser_->GetTabStripModel()->GetActiveWebContents(), 0,
         blink::WebMouseEvent::Button::kLeft);
     ASSERT_TRUE(autofill_manager()->form_submitted_waiter().Wait(1));
 
@@ -173,19 +175,21 @@ class AutocompleteTest : public InProcessBrowserTest {
   }
 
   // The retention policy clean-up is run once per major version during
-  // initialization. This function triggers it by reinitializing the
-  // `autocomplete_history_manager()` and waiting for the cleanup to complete.
+  // initialization. This function triggers it by instantiating an
+  // `AutocompleteHistoryManager` and waiting for the cleanup to complete.
   void TriggerRetentionPolicyCleanup() {
     pref_service()->SetInteger(prefs::kAutocompleteLastVersionRetentionPolicy,
                                version_info::GetMajorVersionNumberAsInt() - 1);
-    autocomplete_history_manager()->Init(
+    AutocompleteHistoryManager manager(
         WebDataServiceFactory::GetAutofillWebDataForProfile(
             current_profile(), ServiceAccessType::EXPLICIT_ACCESS),
-        pref_service(), current_profile()->IsOffTheRecord());
+        pref_service());
     WaitForPendingDBTasks(*GetWebDataService());
   }
 
-  void set_active_browser(Browser* browser) { active_browser_ = browser; }
+  void set_active_browser(BrowserWindowInterface* browser) {
+    active_browser_ = browser;
+  }
 
   AutocompleteHistoryManager* autocomplete_history_manager() {
     return AutocompleteHistoryManagerFactory::GetForProfile(current_profile());
@@ -224,6 +228,34 @@ class AutocompleteTest : public InProcessBrowserTest {
     return suggestions;
   }
 
+  std::vector<Suggestion> GetAutocompleteSuggestionsWithLabel(
+      const std::string& input_name,
+      const std::string& label,
+      const std::string& prefix) {
+    base::RunLoop run_loop;
+    base::MockCallback<SingleFieldFillRouter::OnSuggestionsReturnedCallback>
+        mock_callback;
+    std::vector<Suggestion> suggestions;
+    EXPECT_CALL(mock_callback, Run)
+        .WillOnce(DoAll(SaveArg<1>(&suggestions),
+                        RunClosure(run_loop.QuitClosure())));
+    FormFieldData field = test::CreateTestFormField(
+        label, input_name, prefix, FormControlType::kInputText);
+    FormData form;
+    form.set_url(GURL("https://www.foo.com"));
+    form.set_fields({field});
+    autocomplete_history_manager()->OnGetSingleFieldSuggestions(
+        form, /*form_structure=*/nullptr, field,
+        /*trigger_autofill_field=*/nullptr, autofill_manager()->client(),
+        mock_callback.Get());
+
+    // Make sure the DB task gets executed.
+    WaitForPendingDBTasks(*GetWebDataService());
+    std::move(run_loop).Run();
+
+    return suggestions;
+  }
+
   scoped_refptr<AutofillWebDataService> GetWebDataService() {
     return WebDataServiceFactory::GetAutofillWebDataForProfile(
         current_profile(), ServiceAccessType::EXPLICIT_ACCESS);
@@ -231,14 +263,14 @@ class AutocompleteTest : public InProcessBrowserTest {
 
  private:
   content::WebContents* web_contents() {
-    return active_browser_->tab_strip_model()->GetActiveWebContents();
+    return active_browser_->GetTabStripModel()->GetActiveWebContents();
   }
 
   Profile* current_profile() { return active_browser_->GetProfile(); }
 
   test::AutofillBrowserTestEnvironment autofill_test_environment_;
   TestAutofillManagerInjector<TestAutofillManager> autofill_manager_injector_;
-  raw_ptr<Browser> active_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface> active_browser_ = nullptr;
 };
 
 // Tests that a user can save a simple Autocomplete value.
@@ -262,7 +294,7 @@ IN_PROC_BROWSER_TEST_F(AutocompleteTest,
 
   std::string prefix = "Some";
   std::string test_value = "SomeName!";
-  NavigateToFile(kSimpleFormFileName, WindowOpenDisposition::OFF_THE_RECORD);
+  NavigateToFile(kSimpleFormFileName, WindowOpenDisposition::kOffTheRecord);
   ASSERT_TRUE(autofill_manager()->forms_seen_waiter().Wait(1));
   FillInputAndSubmit(test_value);
   EXPECT_THAT(GetAutocompleteSuggestions(kDefaultAutocompleteInputId, ""),
@@ -352,6 +384,42 @@ IN_PROC_BROWSER_TEST_F(AutocompleteTest,
 
   // Verify that the entry is still there.
   EXPECT_THAT(GetAutocompleteSuggestions(kDefaultAutocompleteInputId, prefix),
+              SuggestionVectorMainTextsAre(Suggestion::Text(
+                  UTF8ToUTF16(test_value), Suggestion::Text::IsPrimary(true))));
+}
+
+class AutocompleteLabelSensitiveTest : public AutocompleteTest {
+ public:
+  AutocompleteLabelSensitiveTest() {
+    feature_list_.InitAndEnableFeature(
+        features::kAutofillLabelSensitiveAutocomplete);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Tests that autocomplete suggestions are offered based on matching label
+// even when input name/id differs, when `kAutofillLabelSensitiveAutocomplete`
+// is enabled.
+IN_PROC_BROWSER_TEST_F(AutocompleteLabelSensitiveTest,
+                       SuggestsByMatchingLabel) {
+  std::string prefix = "Some";
+  std::string test_value = "SomeName!";
+  NavigateToFile(kSimpleFormFileName);
+  ASSERT_TRUE(autofill_manager()->forms_seen_waiter().Wait(1));
+
+  // Save an autocomplete entry with label "First Name:" directly.
+  FormFieldData saved_field = test::CreateTestFormField(
+      /*label=*/"First Name:", /*name=*/"first_name_input",
+      /*value=*/test_value, FormControlType::kInputText);
+  GetWebDataService()->AddFormFields({saved_field});
+  WaitForPendingDBTasks(*GetWebDataService());
+
+  // Query a completely different input "other_input_id", but with the matching
+  // label "First Name:".
+  EXPECT_THAT(GetAutocompleteSuggestionsWithLabel("other_input_id",
+                                                  "First Name:", prefix),
               SuggestionVectorMainTextsAre(Suggestion::Text(
                   UTF8ToUTF16(test_value), Suggestion::Text::IsPrimary(true))));
 }

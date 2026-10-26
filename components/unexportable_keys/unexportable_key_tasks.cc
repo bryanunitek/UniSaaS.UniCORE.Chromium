@@ -17,12 +17,41 @@
 #include "components/unexportable_keys/background_task_type.h"
 #include "components/unexportable_keys/ref_counted_unexportable_key.h"
 #include "components/unexportable_keys/service_error.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/keypair.h"
+#include "crypto/sign.h"
 #include "crypto/unexportable_key.h"
 
 namespace unexportable_keys {
 
 namespace {
+
+bool IsKeyCompatibleWithAlgorithm(const crypto::keypair::PublicKey& key,
+                                  crypto::sign::SignatureKind algorithm) {
+  using enum crypto::sign::SignatureKind;
+  switch (algorithm) {
+    case RSA_PKCS1_SHA1:
+    case RSA_PKCS1_SHA256:
+    case RSA_PKCS1_SHA384:
+    case RSA_PKCS1_SHA512:
+    case RSA_PSS_SHA256:
+    case RSA_PSS_SHA384:
+    case RSA_PSS_SHA512:
+      return key.IsRsa();
+    case ECDSA_SHA1:
+    case ECDSA_SHA256:
+    case ECDSA_SHA384:
+    case ECDSA_SHA512:
+      return key.IsEc();
+    case ED25519:
+      return key.IsEd25519();
+    case MLDSA_44:
+      return key.IsMldsa44();
+    case MLDSA_65:
+      return key.IsMldsa65();
+    case MLDSA_87:
+      return key.IsMldsa87();
+  }
+}
 
 ServiceErrorOr<std::vector<scoped_refptr<RefCountedUnexportableSigningKey>>>
 GetAllKeysSlowly(crypto::UnexportableKeyProvider* key_provider,
@@ -45,8 +74,7 @@ GetAllKeysSlowly(crypto::UnexportableKeyProvider* key_provider,
 ServiceErrorOr<scoped_refptr<RefCountedUnexportableSigningKey>>
 GenerateSigningKeySlowly(
     crypto::UnexportableKeyProvider* key_provider,
-    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
-        acceptable_algorithms,
+    base::span<const crypto::sign::SignatureKind> acceptable_algorithms,
     void* task_ptr_for_tracing) {
   TRACE_EVENT("browser", "unexportable_keys::GenerateSigningKeySlowly",
               perfetto::Flow::FromPointer(task_ptr_for_tracing));
@@ -91,13 +119,18 @@ ServiceErrorOr<std::vector<uint8_t>> SignSlowlyWithRefCountedKey(
   // correctly. This is a very rare occurrence. Return an error if it does
   // happen to force the retry mechanism to kick in as it is very likely to
   // succeed on the next attempt.
-  crypto::SignatureVerifier verifier;
-  if (!verifier.VerifyInit(signing_key->key().Algorithm(), *signature,
-                           signing_key->key().GetSubjectPublicKeyInfo())) {
+  std::optional<crypto::keypair::PublicKey> public_key =
+      crypto::keypair::PublicKey::FromSubjectPublicKeyInfo(
+          signing_key->key().GetSubjectPublicKeyInfo());
+  if (!public_key) {
     return base::unexpected(ServiceError::kVerifySignatureFailed);
   }
-  verifier.VerifyUpdate(data);
-  if (!verifier.VerifyFinal()) {
+  if (!IsKeyCompatibleWithAlgorithm(*public_key,
+                                    signing_key->key().Algorithm())) {
+    return base::unexpected(ServiceError::kVerifySignatureFailed);
+  }
+  if (!crypto::sign::Verify(signing_key->key().Algorithm(), *public_key, data,
+                            *signature)) {
     return base::unexpected(ServiceError::kVerifySignatureFailed);
   }
   return *std::move(signature);
@@ -131,8 +164,7 @@ ServiceErrorOr<size_t> DeleteAllKeysSlowly(
 ServiceErrorOr<scoped_refptr<RefCountedUnexportableAttestationKey>>
 GenerateAttestationKeySlowly(
     crypto::UnexportableKeyProvider* key_provider,
-    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
-        acceptable_algorithms,
+    base::span<const crypto::sign::SignatureKind> acceptable_algorithms,
     void* task_ptr_for_tracing) {
   TRACE_EVENT("browser", "unexportable_keys::GenerateAttestationKeySlowly",
               perfetto::Flow::FromPointer(task_ptr_for_tracing));
@@ -180,28 +212,31 @@ ServiceErrorOr<crypto::AttestationStatement> CertifySlowly(
 GetAllKeysTask::GetAllKeysTask(
     std::unique_ptr<crypto::UnexportableKeyProvider> key_provider,
     BackgroundTaskPriority priority,
-    base::OnceCallback<void(GetAllKeysTask::ReturnType, size_t)> callback)
+    base::OnceCallback<void(GetAllKeysTask::ReturnType)> callback,
+    PreReplyCallback pre_reply)
     : internal::BackgroundTaskImpl<GetAllKeysTask::ReturnType>(
           base::BindRepeating(&GetAllKeysSlowly,
                               base::Owned(std::move(key_provider)),
                               this),
           std::move(callback),
+          std::move(pre_reply),
           priority,
           BackgroundTaskType::kGetAllKeys,
           /*max_retries=*/0) {}
 
 GenerateKeyTask::GenerateKeyTask(
     std::unique_ptr<crypto::UnexportableKeyProvider> key_provider,
-    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
-        acceptable_algorithms,
+    base::span<const crypto::sign::SignatureKind> acceptable_algorithms,
     BackgroundTaskPriority priority,
-    base::OnceCallback<void(GenerateKeyTask::ReturnType, size_t)> callback)
+    base::OnceCallback<void(GenerateKeyTask::ReturnType)> callback,
+    PreReplyCallback pre_reply)
     : internal::BackgroundTaskImpl<GenerateKeyTask::ReturnType>(
           base::BindRepeating(&GenerateSigningKeySlowly,
                               base::Owned(std::move(key_provider)),
                               base::ToVector(acceptable_algorithms),
                               this),
           std::move(callback),
+          std::move(pre_reply),
           priority,
           BackgroundTaskType::kGenerateKey,
           /*max_retries=*/0) {}
@@ -210,31 +245,35 @@ FromWrappedKeyTask::FromWrappedKeyTask(
     std::unique_ptr<crypto::UnexportableKeyProvider> key_provider,
     base::span<const uint8_t> wrapped_key,
     BackgroundTaskPriority priority,
-    base::OnceCallback<void(FromWrappedKeyTask::ReturnType, size_t)> callback)
+    base::OnceCallback<void(FromWrappedKeyTask::ReturnType)> callback,
+    PreReplyCallback pre_reply)
     : internal::BackgroundTaskImpl<FromWrappedKeyTask::ReturnType>(
           base::BindRepeating(&FromWrappedSigningKeySlowly,
                               base::Owned(std::move(key_provider)),
                               base::ToVector(wrapped_key),
                               this),
           std::move(callback),
+          std::move(pre_reply),
           priority,
           BackgroundTaskType::kFromWrappedKey,
           /*max_retries=*/0) {}
 
-SignTask::SignTask(
-    scoped_refptr<RefCountedUnexportableSigningKey> signing_key,
-    base::span<const uint8_t> data,
-    BackgroundTaskPriority priority,
-    size_t max_retries,
-    base::OnceCallback<void(SignTask::ReturnType, size_t)> callback)
+SignTask::SignTask(scoped_refptr<RefCountedUnexportableSigningKey> signing_key,
+                   base::span<const uint8_t> data,
+                   BackgroundTaskPriority priority,
+                   BackgroundTaskType type,
+                   size_t max_retries,
+                   base::OnceCallback<void(SignTask::ReturnType)> callback,
+                   PreReplyCallback pre_reply)
     : internal::BackgroundTaskImpl<SignTask::ReturnType>(
           base::BindRepeating(&SignSlowlyWithRefCountedKey,
                               std::move(signing_key),
                               base::ToVector(data),
                               this),
           std::move(callback),
+          std::move(pre_reply),
           priority,
-          BackgroundTaskType::kSign,
+          type,
           max_retries) {}
 
 bool SignTask::ShouldRetryBasedOnResult(
@@ -246,13 +285,15 @@ DeleteKeysTask::DeleteKeysTask(
     std::unique_ptr<crypto::UnexportableKeyProvider> key_provider,
     std::vector<scoped_refptr<RefCountedUnexportableSigningKey>> keys,
     BackgroundTaskPriority priority,
-    base::OnceCallback<void(DeleteKeysTask::ReturnType, size_t)> callback)
+    base::OnceCallback<void(DeleteKeysTask::ReturnType)> callback,
+    PreReplyCallback pre_reply)
     : internal::BackgroundTaskImpl<DeleteKeysTask::ReturnType>(
           base::BindRepeating(&DeleteKeysSlowly,
                               base::Owned(std::move(key_provider)),
                               std::move(keys),
                               this),
           std::move(callback),
+          std::move(pre_reply),
           priority,
           BackgroundTaskType::kDeleteKeys,
           /*max_retries=*/0) {}
@@ -260,29 +301,31 @@ DeleteKeysTask::DeleteKeysTask(
 DeleteAllKeysTask::DeleteAllKeysTask(
     std::unique_ptr<crypto::UnexportableKeyProvider> key_provider,
     BackgroundTaskPriority priority,
-    base::OnceCallback<void(DeleteAllKeysTask::ReturnType, size_t)> callback)
+    base::OnceCallback<void(DeleteAllKeysTask::ReturnType)> callback,
+    PreReplyCallback pre_reply)
     : internal::BackgroundTaskImpl<DeleteAllKeysTask::ReturnType>(
           base::BindRepeating(&DeleteAllKeysSlowly,
                               base::Owned(std::move(key_provider)),
                               this),
           std::move(callback),
+          std::move(pre_reply),
           priority,
           BackgroundTaskType::kDeleteAllKeys,
           /*max_retries=*/0) {}
 
 GenerateAttestationKeyTask::GenerateAttestationKeyTask(
     std::unique_ptr<crypto::UnexportableKeyProvider> key_provider,
-    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
-        acceptable_algorithms,
+    base::span<const crypto::sign::SignatureKind> acceptable_algorithms,
     BackgroundTaskPriority priority,
-    base::OnceCallback<void(GenerateAttestationKeyTask::ReturnType, size_t)>
-        callback)
+    base::OnceCallback<void(GenerateAttestationKeyTask::ReturnType)> callback,
+    PreReplyCallback pre_reply)
     : internal::BackgroundTaskImpl<GenerateAttestationKeyTask::ReturnType>(
           base::BindRepeating(&GenerateAttestationKeySlowly,
                               base::Owned(std::move(key_provider)),
                               base::ToVector(acceptable_algorithms),
                               this),
           std::move(callback),
+          std::move(pre_reply),
           priority,
           BackgroundTaskType::kGenerateAttestationKey,
           /*max_retries=*/0) {}
@@ -291,14 +334,16 @@ FromWrappedAttestationKeyTask::FromWrappedAttestationKeyTask(
     std::unique_ptr<crypto::UnexportableKeyProvider> key_provider,
     base::span<const uint8_t> wrapped_key,
     BackgroundTaskPriority priority,
-    base::OnceCallback<void(FromWrappedAttestationKeyTask::ReturnType, size_t)>
-        callback)
+    base::OnceCallback<void(FromWrappedAttestationKeyTask::ReturnType)>
+        callback,
+    PreReplyCallback pre_reply)
     : internal::BackgroundTaskImpl<FromWrappedAttestationKeyTask::ReturnType>(
           base::BindRepeating(&FromWrappedAttestationKeySlowly,
                               base::Owned(std::move(key_provider)),
                               base::ToVector(wrapped_key),
                               this),
           std::move(callback),
+          std::move(pre_reply),
           priority,
           BackgroundTaskType::kFromWrappedAttestationKey,
           /*max_retries=*/0) {}
@@ -309,7 +354,8 @@ CertifyTask::CertifyTask(
     base::span<const uint8_t> challenge,
     BackgroundTaskPriority priority,
     size_t max_retries,
-    base::OnceCallback<void(CertifyTask::ReturnType, size_t)> callback)
+    base::OnceCallback<void(CertifyTask::ReturnType)> callback,
+    PreReplyCallback pre_reply)
     : internal::BackgroundTaskImpl<CertifyTask::ReturnType>(
           base::BindRepeating(&CertifySlowly,
                               std::move(attestation_key),
@@ -317,6 +363,7 @@ CertifyTask::CertifyTask(
                               base::ToVector(challenge),
                               this),
           std::move(callback),
+          std::move(pre_reply),
           priority,
           BackgroundTaskType::kCertify,
           max_retries) {}

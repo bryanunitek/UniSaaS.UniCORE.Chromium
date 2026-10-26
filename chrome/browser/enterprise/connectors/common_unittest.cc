@@ -6,10 +6,15 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/enterprise/connectors/core/features.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
+#include "components/enterprise/isolated_mode/prefs.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/fake_download_item.h"
 #include "content/public/test/navigation_simulator.h"
@@ -123,7 +128,8 @@ TEST_F(CollectFrameUrlsTest, NestedFramesWithUninterestingUrl) {
   content::FocusWebContentsOnFrame(web_contents(), child_frame3);
 
   google::protobuf::RepeatedPtrField<std::string> frame_urls =
-      CollectFrameUrls(web_contents(), DeepScanAccessPoint::DOWNLOAD);
+      CollectFrameUrls(web_contents(), DeepScanAccessPoint::DOWNLOAD,
+                       std::nullopt);
 
   // Verify that the URL chain is listed in the right order and chain size
   // histogram is recorded properly. The uninteresting URL and the tab URL
@@ -143,7 +149,8 @@ TEST_F(CollectFrameUrlsTest, TabUrlOnly) {
   base::HistogramTester histogram_tester;
 
   google::protobuf::RepeatedPtrField<std::string> frame_urls =
-      CollectFrameUrls(web_contents(), DeepScanAccessPoint::DOWNLOAD);
+      CollectFrameUrls(web_contents(), DeepScanAccessPoint::DOWNLOAD,
+                       std::nullopt);
 
   // The URL chain should be empty since there are no iframes.
   EXPECT_EQ(0, frame_urls.size());
@@ -159,7 +166,7 @@ TEST_F(CollectFrameUrlsTest, NoWebContents) {
   base::HistogramTester histogram_tester;
 
   google::protobuf::RepeatedPtrField<std::string> frame_urls =
-      CollectFrameUrls(nullptr, DeepScanAccessPoint::DOWNLOAD);
+      CollectFrameUrls(nullptr, DeepScanAccessPoint::DOWNLOAD, std::nullopt);
 
   // Since there are no tabs, there should not be any URLs recorded.
   EXPECT_EQ(0, frame_urls.size());
@@ -197,5 +204,50 @@ TEST_F(CollectFrameUrlsTest, InitiatingFrame) {
   EXPECT_EQ(child_frame_url1.spec(), frame_urls[0]);
 }
 #endif  // BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+
+TEST(EnterpriseConnectorsCommonTest, GetProfileEmail) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      enterprise_isolated_mode::kEnableEnterpriseIsolatedMode);
+
+  content::BrowserTaskEnvironment task_environment;
+  TestingProfileManager profile_manager(TestingBrowserProcess::GetGlobal());
+  ASSERT_TRUE(profile_manager.SetUp());
+
+  EXPECT_EQ("", GetProfileEmail(static_cast<Profile*>(nullptr)));
+
+  TestingProfile* regular_profile = profile_manager.CreateTestingProfile(
+      "regular_profile", IdentityTestEnvironmentProfileAdaptor::
+                             GetIdentityTestEnvironmentFactories());
+  IdentityTestEnvironmentProfileAdaptor regular_adaptor(regular_profile);
+  regular_adaptor.identity_test_env()->MakePrimaryAccountAvailable(
+      "profile@example.com", signin::ConsentLevel::kSignin);
+  EXPECT_EQ("profile@example.com", GetProfileEmail(regular_profile));
+
+  TestingProfile* incognito_profile =
+      TestingProfile::Builder().BuildIncognito(regular_profile);
+  ASSERT_FALSE(incognito_profile->IsEnterpriseIsolatedModeProfile());
+  EXPECT_EQ("", GetProfileEmail(incognito_profile));
+
+  TestingProfile* isolated_original_profile =
+      profile_manager.CreateTestingProfile(
+          "isolated_original_profile",
+          IdentityTestEnvironmentProfileAdaptor::
+              GetIdentityTestEnvironmentFactories());
+  isolated_original_profile->GetPrefs()->SetInteger(
+      enterprise_isolated_mode::kEnterpriseIsolatedModeSettings,
+      static_cast<int>(
+          enterprise_isolated_mode::IsolatedModeSetting::kEnabled));
+  IdentityTestEnvironmentProfileAdaptor isolated_adaptor(
+      isolated_original_profile);
+  isolated_adaptor.identity_test_env()->MakePrimaryAccountAvailable(
+      "isolated@example.com", signin::ConsentLevel::kSignin);
+
+  TestingProfile* isolated_profile =
+      TestingProfile::Builder().BuildIncognito(isolated_original_profile);
+  ASSERT_TRUE(isolated_profile->IsEnterpriseIsolatedModeProfile());
+  ASSERT_EQ("isolated@example.com", GetProfileEmail(isolated_original_profile));
+  EXPECT_EQ("isolated@example.com", GetProfileEmail(isolated_profile));
+}
 
 }  // namespace enterprise_connectors

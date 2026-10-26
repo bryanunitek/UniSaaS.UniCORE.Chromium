@@ -99,6 +99,7 @@ class CORE_EXPORT HTMLIFrameElement : public HTMLFrameElementBase,
   // FrameOwner overrides:
   bool AllowFullscreen() const override { return allow_fullscreen_; }
   bool AllowPaymentRequest() const override { return allow_payment_request_; }
+
   // HTML attributes of the iframe element that need to be tracked by the
   // browser changed, such as 'id' and 'src'. This will send an IPC to the
   // browser about the updates.
@@ -106,6 +107,10 @@ class CORE_EXPORT HTMLIFrameElement : public HTMLFrameElementBase,
 
   AtomicString name_;
   AtomicString required_csp_;
+  // Raw value of the 'connectionallowlist' attribute (unparsed Connection-
+  // Allowlist structured-header syntax), used for Connection-Allowlist embedded
+  // enforcement. Parsed by the browser process.
+  AtomicString required_connection_allowlist_;
   AtomicString allow_;
   AtomicString required_policy_;  // policy attribute
   AtomicString id_;

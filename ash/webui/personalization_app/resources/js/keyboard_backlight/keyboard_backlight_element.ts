@@ -17,7 +17,6 @@ import type {SkColor} from 'chrome://resources/mojo/skia/public/mojom/skcolor.mo
 import type {CurrentBacklightState} from '../../personalization_app.mojom-webui.js';
 import {BacklightColor} from '../../personalization_app.mojom-webui.js';
 import {isMultiZoneRgbKeyboardSupported} from '../load_time_booleans.js';
-import {logKeyboardBacklightOpenZoneCustomizationUMA} from '../personalization_metrics_logger.js';
 import {WithPersonalizationStore} from '../personalization_store.js';
 import type {ColorInfo} from '../utils.js';
 import {getPresetColors, RAINBOW, WALLPAPER} from '../utils.js';
@@ -95,16 +94,16 @@ export class KeyboardBacklightElement extends WithPersonalizationStore {
     };
   }
 
-  private isMultiZoneRgbKeyboardSupported_: boolean;
-  private presetColors_: Record<string, ColorInfo>;
-  private presetColorIds_: string[];
-  private backlightColor_: BacklightColor|null|undefined;
-  private rainbowColorId_: string;
-  private wallpaperColorId_: string;
-  private ironSelectedColor_: HTMLElement;
-  private currentBacklightState_: CurrentBacklightState|null;
-  private wallpaperColor_: SkColor|null;
-  private isZoneCustomizationDialogOpen_: boolean;
+  declare private isMultiZoneRgbKeyboardSupported_: boolean;
+  declare private presetColors_: Record<string, ColorInfo>;
+  declare private presetColorIds_: string[];
+  declare private backlightColor_: BacklightColor|null|undefined;
+  declare private rainbowColorId_: string;
+  declare private wallpaperColorId_: string;
+  declare private ironSelectedColor_: HTMLElement;
+  declare private currentBacklightState_: CurrentBacklightState|null;
+  declare private wallpaperColor_: SkColor|null;
+  declare private isZoneCustomizationDialogOpen_: boolean;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -155,7 +154,6 @@ export class KeyboardBacklightElement extends WithPersonalizationStore {
     assert(
         this.isMultiZoneRgbKeyboardSupported_,
         'zone customization dialog only available if multi-zone is supported');
-    logKeyboardBacklightOpenZoneCustomizationUMA();
     this.isZoneCustomizationDialogOpen_ = true;
   }
 

@@ -12,6 +12,7 @@ import org.chromium.base.Callback;
 import org.chromium.base.RequiredCallback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.content_public.common.Referrer;
 import org.chromium.ui.base.PageTransition;
 import org.chromium.url.GURL;
 import org.chromium.url.Origin;
@@ -82,6 +83,7 @@ public class ExternalNavigationParams {
 
     private final GURL mUrl;
     private final boolean mIsIncognito;
+    private final @Nullable Referrer mReferrer;
     private final GURL mReferrerUrl;
     private final int mPageTransition;
     private final boolean mIsRedirect;
@@ -101,6 +103,7 @@ public class ExternalNavigationParams {
     private final boolean mIsTabInPWA;
     private final boolean mIsInDesktopWindowingMode;
     private final boolean mIsTabInBrowser;
+    private final boolean mIsTabInPopup;
 
     // Populated when an async action is taken, ensuring the callback gets called.
     private @Nullable RequiredCallback<AsyncActionTakenParams> mRequiredAsyncActionTakenCallback;
@@ -108,7 +111,7 @@ public class ExternalNavigationParams {
     private ExternalNavigationParams(
             GURL url,
             boolean isIncognito,
-            @Nullable GURL referrerUrl,
+            @Nullable Referrer referrer,
             int pageTransition,
             boolean isRedirect,
             RedirectHandler redirectHandler,
@@ -126,11 +129,16 @@ public class ExternalNavigationParams {
             long navigationId,
             boolean isTabInPWA,
             boolean isInDesktopWindowingMode,
-            boolean isTabInBrowser) {
+            boolean isTabInBrowser,
+            boolean isTabInPopup) {
         mUrl = url;
         mIsIncognito = isIncognito;
         mPageTransition = pageTransition;
-        mReferrerUrl = (referrerUrl == null) ? GURL.emptyGURL() : referrerUrl;
+        mReferrer = referrer;
+        mReferrerUrl =
+                (mReferrer != null && mReferrer.getUrl() != null)
+                        ? new GURL(mReferrer.getUrl())
+                        : GURL.emptyGURL();
         mIsRedirect = isRedirect;
         mRedirectHandler = redirectHandler;
         mOpenInNewTab = openInNewTab;
@@ -148,6 +156,7 @@ public class ExternalNavigationParams {
         mIsTabInPWA = isTabInPWA;
         mIsInDesktopWindowingMode = isInDesktopWindowingMode;
         mIsTabInBrowser = isTabInBrowser;
+        mIsTabInPopup = isTabInPopup;
     }
 
     public void onAsyncActionStarted() {
@@ -166,12 +175,23 @@ public class ExternalNavigationParams {
         return mIsIncognito;
     }
 
-    /** @return The referrer URL. */
+    /**
+     * @return The referrer URL.
+     */
     public GURL getReferrerUrl() {
         return mReferrerUrl;
     }
 
-    /** @return The page transition for the current navigation. */
+    /**
+     * @return The referrer.
+     */
+    public @Nullable Referrer getReferrer() {
+        return mReferrer;
+    }
+
+    /**
+     * @return The page transition for the current navigation.
+     */
     public int getPageTransition() {
         return mPageTransition;
     }
@@ -285,11 +305,18 @@ public class ExternalNavigationParams {
         return mIsTabInBrowser;
     }
 
+    /**
+     * @return whether the tab is a popup window.
+     */
+    public boolean isTabInPopup() {
+        return mIsTabInPopup;
+    }
+
     /** The builder for {@link ExternalNavigationParams} objects. */
     public static class Builder {
         private final GURL mUrl;
         private final boolean mIsIncognito;
-        private @Nullable GURL mReferrerUrl;
+        private @Nullable Referrer mReferrer;
         private int mPageTransition;
         private boolean mIsRedirect;
         private @Nullable RedirectHandler mRedirectHandler;
@@ -308,6 +335,7 @@ public class ExternalNavigationParams {
         private boolean mIsTabInPWA;
         private boolean mIsInDesktopWindowingMode;
         private boolean mIsTabInBrowser;
+        private boolean mIsTabInPopup;
 
         public Builder(GURL url, boolean isIncognito) {
             mUrl = url;
@@ -317,12 +345,12 @@ public class ExternalNavigationParams {
         public Builder(
                 GURL url,
                 boolean isIncognito,
-                GURL referrer,
+                @Nullable Referrer referrer,
                 int pageTransition,
                 boolean isRedirect) {
             mUrl = url;
             mIsIncognito = isIncognito;
-            mReferrerUrl = referrer;
+            mReferrer = referrer;
             mPageTransition = pageTransition;
             mIsRedirect = isRedirect;
         }
@@ -422,6 +450,12 @@ public class ExternalNavigationParams {
             return this;
         }
 
+        /** Sets whether the tab is a popup window. */
+        public Builder setIsTabInPopup(boolean v) {
+            mIsTabInPopup = v;
+            return this;
+        }
+
         /**
          * @return A fully constructed {@link ExternalNavigationParams} object.
          */
@@ -429,7 +463,7 @@ public class ExternalNavigationParams {
             return new ExternalNavigationParams(
                     mUrl,
                     mIsIncognito,
-                    mReferrerUrl,
+                    mReferrer,
                     mPageTransition,
                     mIsRedirect,
                     assertNonNull(mRedirectHandler),
@@ -447,7 +481,8 @@ public class ExternalNavigationParams {
                     mNavigationId,
                     mIsTabInPWA,
                     mIsInDesktopWindowingMode,
-                    mIsTabInBrowser);
+                    mIsTabInBrowser,
+                    mIsTabInPopup);
         }
     }
 }

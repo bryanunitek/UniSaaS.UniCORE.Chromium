@@ -5,10 +5,12 @@
 package org.chromium.chrome.browser.keyboard_accessory.button_group_component;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData;
 import org.chromium.ui.modelutil.ListModel;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.ReadableObjectPropertyKey;
+import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
 /**
@@ -27,9 +29,18 @@ class KeyboardAccessoryButtonGroupProperties {
                     new WritableObjectPropertyKey<>("button_selection_callback");
     static final WritableObjectPropertyKey<Runnable> AT_MEMORY_CALLBACK =
             new WritableObjectPropertyKey<>("at_memory_callback");
+    static final WritableBooleanPropertyKey AT_MEMORY_ENABLED =
+            new WritableBooleanPropertyKey("at_memory_enabled");
+    static final WritableObjectPropertyKey<@Nullable Integer> SELECTED_BUTTON =
+            new WritableObjectPropertyKey<>("selected_button");
 
     static final PropertyKey[] ALL_KEYS = {
-        TABS, ACTIVE_TAB, BUTTON_SELECTION_CALLBACKS, AT_MEMORY_CALLBACK
+        TABS,
+        ACTIVE_TAB,
+        BUTTON_SELECTION_CALLBACKS,
+        AT_MEMORY_CALLBACK,
+        AT_MEMORY_ENABLED,
+        SELECTED_BUTTON
     };
 
     private KeyboardAccessoryButtonGroupProperties() {}

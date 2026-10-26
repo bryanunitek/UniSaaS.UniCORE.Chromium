@@ -9,27 +9,43 @@
 
 use crate::message::MojomMessage;
 
+use super::cpp_interop::CppResponseSender;
 use super::endpoint_registry::InterfaceId;
-use super::router::MultiplexRouter;
+use super::multiplex_router::MultiplexRouter;
+use super::AssociatedRouterHandle;
 
-/// This type is identical to a `MultiplexRouterHandle`, but passed into
-/// handlers so they can send responses and register new associated endpoints.
-/// Unlike `MultiplexRouterHandle`, it does not implement `Drop` because it is
-/// frequently cloned, and short-lived.
-#[derive(Clone)]
-pub struct ResponseSender {
-    pub(super) router: MultiplexRouter,
-    pub(super) interface_id: InterfaceId,
+/// This type serves a similar purpose to a `MultiplexRouterHandle` but
+/// abstracts over the underlying router implementation (Rust or C++). It is
+/// passed into handlers so they can send responses and register new associated
+/// endpoints. Unlike `MultiplexRouterHandle`, it does not implement `Drop`.
+pub enum ResponseSender {
+    Rust(MultiplexRouter, InterfaceId),
+    // The C++ responder object encapsulates the interface ID already
+    Cpp(CppResponseSender),
 }
 
 impl ResponseSender {
+    pub(super) fn rust(router: MultiplexRouter, interface_id: InterfaceId) -> Self {
+        Self::Rust(router, interface_id)
+    }
+
+    pub(super) fn cpp(cpp_sender: CppResponseSender) -> Self {
+        Self::Cpp(cpp_sender)
+    }
+
     /// Send a response message through the router with the same interface ID
     /// as the incoming message.
     ///
-    /// This function returns `false` if the message wasn't sent, because one
-    /// end of the pipe was closed.
-    pub fn send_message(&self, msg: MojomMessage) {
-        self.router.send_message(msg, self.interface_id)
+    /// This consumes `self`, since a response may only be sent once.
+    ///
+    /// The message is silently dropped if one end of the pipe has been closed.
+    pub fn send_message(self, msg: MojomMessage) {
+        match self {
+            Self::Rust(multiplex_router, interface_id) => {
+                multiplex_router.send_message(msg, interface_id)
+            }
+            Self::Cpp(cpp_sender) => cpp_sender.send_message(msg),
+        }
     }
 }
 
@@ -38,8 +54,29 @@ impl crate::pending_associated_endpoint_parsing::Registrar for ResponseSender {
         &self,
         interface_id: Option<InterfaceId>,
         endpoint_info: Option<super::EndpointInfo>,
-    ) -> Option<super::MultiplexRouterHandle> {
-        let interface_id = self.router.add_associated_interface(interface_id, endpoint_info)?;
-        Some(super::MultiplexRouterHandle::from_parts(interface_id, &self.router))
+    ) -> Option<AssociatedRouterHandle> {
+        match self {
+            Self::Rust(multiplex_router, _) => {
+                let interface_id =
+                    multiplex_router.add_associated_interface(interface_id, endpoint_info)?;
+                let handle =
+                    super::MultiplexRouterHandle::from_parts(interface_id, multiplex_router);
+                Some(AssociatedRouterHandle::Rust(handle))
+            }
+            Self::Cpp(cpp_sender) => {
+                let handle = cpp_sender.register_new_endpoint(interface_id, endpoint_info)?;
+                Some(AssociatedRouterHandle::Cpp(handle))
+            }
+        }
+    }
+
+    fn associate_interface(
+        &self,
+        handle: super::cpp_interop::CppRouterHandle,
+    ) -> Option<InterfaceId> {
+        match self {
+            Self::Rust(multiplex_router, _) => multiplex_router.associate_interface(handle),
+            Self::Cpp(cpp_sender) => cpp_sender.associate_interface(handle),
+        }
     }
 }

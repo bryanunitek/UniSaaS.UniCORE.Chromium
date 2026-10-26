@@ -21,6 +21,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityOptionsCompat;
 import androidx.fragment.app.DialogFragment;
 import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager;
 
 import org.hamcrest.Matchers;
 import org.junit.Assert;
@@ -37,6 +38,7 @@ import org.chromium.chrome.browser.settings.SettingsActivity;
 
 import java.util.Locale;
 import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Collection of activity utilities. */
 public class ActivityTestUtils {
@@ -219,10 +221,12 @@ public class ActivityTestUtils {
     @SuppressWarnings("unchecked")
     public static <T extends Fragment> T waitForFragment(
             AppCompatActivity activity, String fragmentTag) {
-        CriteriaHelper.pollInstrumentationThread(
+        AtomicReference<T> fragmentRef = new AtomicReference<>();
+        CriteriaHelper.pollUiThread(
                 () -> {
                     Fragment fragment =
-                            activity.getSupportFragmentManager().findFragmentByTag(fragmentTag);
+                            findFragmentByTagRecursive(
+                                    activity.getSupportFragmentManager(), fragmentTag);
                     Criteria.checkThat(fragment, Matchers.notNullValue());
                     if (fragment instanceof DialogFragment) {
                         DialogFragment dialogFragment = (DialogFragment) fragment;
@@ -232,17 +236,31 @@ public class ActivityTestUtils {
                     } else {
                         Criteria.checkThat(fragment.getView(), Matchers.notNullValue());
                     }
+                    fragmentRef.set((T) fragment);
                 },
                 ACTIVITY_START_TIMEOUT_MS,
                 CONDITION_POLL_INTERVAL_MS);
-        return (T) activity.getSupportFragmentManager().findFragmentByTag(fragmentTag);
+        return fragmentRef.get();
+    }
+
+    private static Fragment findFragmentByTagRecursive(FragmentManager fm, String fragmentTag) {
+        Fragment fragment = fm.findFragmentByTag(fragmentTag);
+        if (fragment != null) return fragment;
+        for (Fragment parent : fm.getFragments()) {
+            if (parent != null && parent.isAdded()) {
+                fragment =
+                        findFragmentByTagRecursive(parent.getChildFragmentManager(), fragmentTag);
+                if (fragment != null) return fragment;
+            }
+        }
+        return null;
     }
 
     /**
-     * Waits until the specified fragment has been attached to the specified activity. Note that
-     * we don't guarantee that the fragment is visible. Some UI operations can happen too
-     * quickly and we can miss the time that a fragment is visible. This method allows you to get a
-     * reference to any fragment that was attached to the activity at any point.
+     * Waits until the specified fragment has been attached to the specified activity. Note that we
+     * don't guarantee that the fragment is visible. Some UI operations can happen too quickly and
+     * we can miss the time that a fragment is visible. This method allows you to get a reference to
+     * any fragment that was attached to the activity at any point.
      *
      * @param <T> A subclass of {@link Fragment}.
      * @param activity An instance or subclass of {@link SettingsActivity}.
@@ -252,14 +270,16 @@ public class ActivityTestUtils {
     @SuppressWarnings("unchecked")
     public static <T extends Fragment> T waitForFragmentToAttach(
             final SettingsActivity activity, final Class<T> fragmentClass) {
-        CriteriaHelper.pollInstrumentationThread(
+        AtomicReference<T> fragmentRef = new AtomicReference<>();
+        CriteriaHelper.pollUiThread(
                 () -> {
-                    Criteria.checkThat(
-                            activity.getMainFragment(), Matchers.instanceOf(fragmentClass));
+                    Fragment fragment = activity.getMainFragment();
+                    Criteria.checkThat(fragment, Matchers.instanceOf(fragmentClass));
+                    fragmentRef.set((T) fragment);
                 },
                 ACTIVITY_START_TIMEOUT_MS,
                 CONDITION_POLL_INTERVAL_MS);
-        return (T) activity.getMainFragment();
+        return fragmentRef.get();
     }
 
     /**

@@ -30,6 +30,8 @@
 
 #include "third_party/blink/renderer/core/css/css_default_style_sheets.h"
 
+#include "base/command_line.h"
+#include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/resources/grit/blink_resources.h"
 #include "third_party/blink/renderer/core/css/media_query_evaluator.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser.h"
@@ -41,11 +43,13 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/html_anchor_element.h"
+#include "third_party/blink/renderer/core/html/html_camera_element.h"
 #include "third_party/blink/renderer/core/html/html_capability_element_base.h"
 #include "third_party/blink/renderer/core/html/html_geolocation_element.h"
 #include "third_party/blink/renderer/core/html/html_html_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/html/html_install_element.h"
+#include "third_party/blink/renderer/core/html/html_microphone_element.h"
 #include "third_party/blink/renderer/core/html/html_user_media_element.h"
 #include "third_party/blink/renderer/core/html/media/html_audio_element.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
@@ -73,6 +77,7 @@ CSSDefaultStyleSheets& CSSDefaultStyleSheets::Instance() {
   DEFINE_STATIC_LOCAL(Persistent<CSSDefaultStyleSheets>,
                       css_default_style_sheets,
                       (MakeGarbageCollected<CSSDefaultStyleSheets>()));
+  CHECK(IsMainThread());
   return *css_default_style_sheets;
 }
 
@@ -82,6 +87,7 @@ static const MediaQueryEvaluator& ForcedColorsEval() {
   DEFINE_STATIC_LOCAL(
       Persistent<MediaQueryEvaluator>, forced_colors_eval,
       (MakeGarbageCollected<MediaQueryEvaluator>("ua-forced-colors")));
+  CHECK(IsMainThread());
   return *forced_colors_eval;
 }
 
@@ -107,6 +113,7 @@ StyleSheetContents* CSSDefaultStyleSheets::ParseUASheet(const String& str) {
 const MediaQueryEvaluator& CSSDefaultStyleSheets::ScreenEval() {
   DEFINE_STATIC_LOCAL(const Persistent<MediaQueryEvaluator>, static_screen_eval,
                       (MakeGarbageCollected<MediaQueryEvaluator>("screen")));
+  CHECK(IsMainThread());
   return *static_screen_eval;
 }
 
@@ -119,9 +126,15 @@ CSSDefaultStyleSheets::CSSDefaultStyleSheets()
 
   default_style_sheet_ = ParseUASheet(default_rules);
 
-  // Quirks-mode rules.
-  String quirks_rules = UncompressResourceAsASCIIString(IDR_UASTYLE_QUIRKS_CSS);
-  quirks_style_sheet_ = ParseUASheet(quirks_rules);
+  // Top Chrome WebUIs use don't need quirks CSS. Skip parsing it entirely to
+  // optimize renderer initialization time.
+  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+          blink::switches::kTopChromeWebUI)) {
+    // Quirks-mode rules.
+    String quirks_rules =
+        UncompressResourceAsASCIIString(IDR_UASTYLE_QUIRKS_CSS);
+    quirks_style_sheet_ = ParseUASheet(quirks_rules);
+  }
 
   InitializeDefaultStyles();
 }
@@ -177,6 +190,7 @@ void CSSDefaultStyleSheets::Reset() {
   view_source_style_sheet_.Clear();
   json_style_sheet_.Clear();
   default_view_transition_style_sheet_.Clear();
+  skeleton_style_sheet_.Clear();
   // Recreate the default style sheet to clean up possible SVG resources.
   String default_rules =
       StrCat({UncompressResourceAsASCIIString(IDR_UASTYLE_HTML_CSS),
@@ -225,7 +239,8 @@ void CSSDefaultStyleSheets::VerifyUniversalRuleCount() {
   }
 
   if (marker_style_sheet_ || scroll_button_style_sheet_ ||
-      scroll_marker_style_sheet_ || overscroll_style_sheet_) {
+      scroll_marker_style_sheet_ || overscroll_style_sheet_ ||
+      skeleton_style_sheet_) {
     default_pseudo_element_style_->CompactRulesIfNeeded();
     size_t expected_rule_count = 0u;
     if (marker_style_sheet_) {
@@ -242,6 +257,9 @@ void CSSDefaultStyleSheets::VerifyUniversalRuleCount() {
     }
     if (default_view_transition_style_sheet_) {
       expected_rule_count += 11u;
+    }
+    if (skeleton_style_sheet_) {
+      expected_rule_count += 2u;
     }
     DCHECK_EQ(default_pseudo_element_style_->UniversalRules().size(),
               expected_rule_count);
@@ -264,8 +282,10 @@ void CSSDefaultStyleSheets::InitializeDefaultStyles() {
 
   default_html_style_->AddRulesFromSheet(DefaultStyleSheet(), ScreenEval(),
                                          /*mixins=*/{});
-  default_html_quirks_style_->AddRulesFromSheet(QuirksStyleSheet(),
-                                                ScreenEval(), /*mixins=*/{});
+  if (QuirksStyleSheet()) {
+    default_html_quirks_style_->AddRulesFromSheet(QuirksStyleSheet(),
+                                                  ScreenEval(), /*mixins=*/{});
+  }
 
   default_html_style_->CompactRulesIfNeeded();
   default_html_quirks_style_->CompactRulesIfNeeded();
@@ -390,6 +410,10 @@ bool CSSDefaultStyleSheets::EnsureDefaultStyleSheetsForElement(
     CHECK((RuntimeEnabledFeatures::UserMediaElementEnabled(
                element.GetExecutionContext()) &&
            IsA<HTMLUserMediaElement>(element)) ||
+          (RuntimeEnabledFeatures::CameraAndMicrophoneElementsEnabled(
+               element.GetExecutionContext()) &&
+           (IsA<HTMLCameraElement>(element) ||
+            IsA<HTMLMicrophoneElement>(element))) ||
           (RuntimeEnabledFeatures::GeolocationElementEnabled(
                element.GetExecutionContext()) &&
            IsA<HTMLGeolocationElement>(element)) ||
@@ -545,6 +569,20 @@ bool CSSDefaultStyleSheets::EnsureDefaultStyleSheetsForPseudoElement(
       }
       default_pseudo_element_style_->AddRulesFromSheet(
           DefaultViewTransitionStyleSheet(), ScreenEval(), /*mixins=*/{});
+      default_pseudo_element_style_->CompactRulesIfNeeded();
+      return true;
+    }
+    case kPseudoIdSkeleton: {
+      if (skeleton_style_sheet_) {
+        return false;
+      }
+      skeleton_style_sheet_ = ParseUASheet(
+          UncompressResourceAsASCIIString(IDR_UASTYLE_SKELETON_CSS));
+      if (!default_pseudo_element_style_) {
+        default_pseudo_element_style_ = MakeGarbageCollected<RuleSet>();
+      }
+      default_pseudo_element_style_->AddRulesFromSheet(
+          SkeletonStyleSheet(), ScreenEval(), /*mixins=*/{});
       default_pseudo_element_style_->CompactRulesIfNeeded();
       return true;
     }
@@ -714,6 +752,7 @@ void CSSDefaultStyleSheets::Trace(Visitor* visitor) const {
   visitor->Trace(view_source_style_sheet_);
   visitor->Trace(json_style_sheet_);
   visitor->Trace(default_view_transition_style_sheet_);
+  visitor->Trace(skeleton_style_sheet_);
 
   visitor->Trace(rule_set_group_cache_);
 }

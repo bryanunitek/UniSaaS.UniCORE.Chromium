@@ -14,15 +14,15 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_data.h"
 
-class Browser;
+class BrowserWindowInterface;
 class TemplateURLService;
 
 namespace regional_capabilities {
@@ -34,13 +34,11 @@ namespace search_engines {
 class ChoiceScreenData;
 
 // Profile specific data related to the search engine choice.
-// `timestamp` is the search engine choice timestamp that's saved in the
-// `kDefaultSearchProviderChoiceScreenCompletionTimestamp` pref.
-// `chrome_version` is the Chrome version when the user made the choice.
+// `metadata` is the optional choice completion metadata (timestamp, Chrome
+// version, and regional program) if a choice screen was completed.
 // `default_search_engine` is the profile's default search engine.
 struct ChoiceData {
-  int64_t timestamp = 0;
-  std::string chrome_version;
+  std::optional<ChoiceCompletionMetadata> metadata;
   TemplateURLData default_search_engine;
 };
 
@@ -70,7 +68,7 @@ class SearchEngineChoiceDialogService : public KeyedService {
   // Returns whether the caller should proceed with adding a dialog to
   // `browser`. When `false` is returned, the dialog will not be registered and
   // the caller should not proceed with showing the dialog.
-  virtual bool RegisterDialog(Browser& browser,
+  virtual bool RegisterDialog(BrowserWindowInterface& browser,
                               base::OnceClosure close_dialog_callback);
 
   // This function is called when the user makes a search engine choice. It
@@ -110,7 +108,7 @@ class SearchEngineChoiceDialogService : public KeyedService {
   // `SearchEngineChoiceTabHelper::MaybeShowDialog()` instead. It will check a
   // few more things and ensure we log the event correctly.
   regional_capabilities::SearchEngineChoiceScreenConditions
-  ComputeDialogConditions(Browser& browser) const;
+  ComputeDialogConditions(BrowserWindowInterface& browser) const;
 
   // Returns the eligibility status for triggering the choice screen step in the
   // first run experience or profile creation flow.
@@ -122,11 +120,11 @@ class SearchEngineChoiceDialogService : public KeyedService {
 
   // Returns whether a Search Engine Choice dialog is currently open or not for
   // `browser`.
-  bool IsShowingDialog(Browser& browser) const;
+  bool IsShowingDialog(BrowserWindowInterface& browser) const;
 
   // Returns whether the Search Engine Choice dialog is either shown or
   // pending to be shown.
-  bool HasPendingDialog(Browser& browser) const;
+  bool HasPendingDialog(BrowserWindowInterface& browser) const;
 
   // Checks whether we need to display the Privacy Sandbox dialog
   // in context of the Search Engine Choice.
@@ -189,11 +187,11 @@ class SearchEngineChoiceDialogService : public KeyedService {
 
     // Returns whether the provided browser requested to open a dialog. Note
     // that the dialog might have since been closed.
-    bool IsRegistered(Browser& browser) const;
+    bool IsRegistered(BrowserWindowInterface& browser) const;
 
     // Returns whether a the provided browser is currently marked as having an
     // open dialog.
-    bool HasOpenDialog(Browser& browser) const;
+    bool HasOpenDialog(BrowserWindowInterface& browser) const;
 
     // Returns whether there is any browser currently marked as having an open
     // dialog, in the registry associated with the current profile.
@@ -202,7 +200,7 @@ class SearchEngineChoiceDialogService : public KeyedService {
     // Registers that the browser wants to show a dialog. Returns whether the
     // registration is accepted. If `false` is returned, the browser should
     // abandon showing the dialog.
-    bool RegisterBrowser(Browser& browser,
+    bool RegisterBrowser(BrowserWindowInterface& browser,
                          base::OnceClosure close_dialog_callback);
     void CloseAllDialogs();
 
@@ -218,7 +216,8 @@ class SearchEngineChoiceDialogService : public KeyedService {
     // the browser's dialog.
     // The callback might be null, indicating that the browser showed a dialog
     // in the past, but that is has since been closed.
-    base::flat_map<raw_ref<Browser>, base::OnceClosure> registered_browsers_;
+    base::flat_map<raw_ref<BrowserWindowInterface>, base::OnceClosure>
+        registered_browsers_;
 
     base::ScopedObservation<ProfileBrowserCollection, BrowserCollectionObserver>
         observation_{this};

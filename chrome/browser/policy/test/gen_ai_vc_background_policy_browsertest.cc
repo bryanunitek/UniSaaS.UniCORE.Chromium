@@ -9,7 +9,6 @@
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
@@ -21,7 +20,7 @@ using GenAIVcBackgroundPolicyTest = PolicyTest;
 
 IN_PROC_BROWSER_TEST_F(GenAIVcBackgroundPolicyTest,
                        EnableFeatureIfGenAIVcBackgroundPolicyUnset) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   profile->GetProfilePolicyConnector()->OverrideIsManagedForTesting(true);
   UpdateProviderPolicy(PolicyMap());
@@ -34,7 +33,7 @@ IN_PROC_BROWSER_TEST_F(GenAIVcBackgroundPolicyTest,
 }
 IN_PROC_BROWSER_TEST_F(GenAIVcBackgroundPolicyTest,
                        EnableFeatureIfGenAIVcBackgroundPolicyEnabled) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PolicyMap policies;
 
   profile->GetProfilePolicyConnector()->OverrideIsManagedForTesting(true);
@@ -58,7 +57,7 @@ IN_PROC_BROWSER_TEST_F(GenAIVcBackgroundPolicyTest,
 IN_PROC_BROWSER_TEST_F(
     GenAIVcBackgroundPolicyTest,
     EnableFeatureIfGenAIVcBackgroundPolicyEnabledWithoutLogging) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PolicyMap policies;
 
   profile->GetProfilePolicyConnector()->OverrideIsManagedForTesting(true);
@@ -81,7 +80,7 @@ IN_PROC_BROWSER_TEST_F(
 
 IN_PROC_BROWSER_TEST_F(GenAIVcBackgroundPolicyTest,
                        DisableFeatureIfGenAIVcBackgroundPolicyDisabled) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PolicyMap policies;
 
   profile->GetProfilePolicyConnector()->OverrideIsManagedForTesting(true);

@@ -7,12 +7,12 @@
 #include "base/functional/bind.h"
 #include "chrome/browser/glic/common/future_browser_features.h"
 #include "chrome/browser/glic/host/context/glic_sharing_utils.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
+#include "ui/base/base_window.h"
 #include "ui/views/widget/widget.h"
 
 #if BUILDFLAG(IS_MAC)
@@ -51,13 +51,14 @@ GlicFocusedBrowserManagerImpl::GlicFocusedBrowserManagerImpl(
 GlicFocusedBrowserManagerImpl::~GlicFocusedBrowserManagerImpl() {
   browser_subscriptions_.clear();
   widget_observation_.Reset();
-  glic_instance_->RemoveStateObserver(this);
 }
 
 void GlicFocusedBrowserManagerImpl::Initialize() {
   browser_collection_observation_.Observe(
       GlobalBrowserCollection::GetInstance());
-  glic_instance_->AddStateObserver(this);
+  panel_state_subscription_ = glic_instance_->GetPanelState().AddObserver(
+      base::BindRepeating(&GlicFocusedBrowserManagerImpl::PanelStateChanged,
+                          base::Unretained(this)));
   GlobalBrowserCollection::GetInstance()->ForEach(
       [this](BrowserWindowInterface* browser) {
         OnBrowserCreated(browser);
@@ -255,7 +256,7 @@ BrowserWindowInterface* GlicFocusedBrowserManagerImpl::ComputeActiveBrowser() {
     VLOG(1) << "ActiveBrowserCalc: No active browser";
     return nullptr;
   }
-  if (!(glic_instance_->IsActive() && glic_instance_->GetPanelState().kind ==
+  if (!(glic_instance_->IsActive() && glic_instance_->GetPanelState()->kind ==
                                           mojom::PanelStateKind::kDetached) &&
       !bwi->IsActive()) {
     VLOG(1) << "ActiveBrowserCalc: !IsActive()";

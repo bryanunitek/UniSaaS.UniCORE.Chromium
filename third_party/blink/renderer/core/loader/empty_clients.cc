@@ -122,25 +122,21 @@ void EmptyLocalFrameClient::BeginNavigation(
     base::TimeTicks,
     base::TimeTicks,
     const String&,
-    const std::optional<Impression>&,
     const LocalFrameToken* initiator_frame_token,
+    const InitiatorStateToken& initiator_state_token,
+    const DocumentToken& initiator_document_token,
     SourceLocation*,
     mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>,
     bool is_container_initiated,
     bool has_rel_opener,
     mojo::PendingReceiver<mojom::blink::NavigationResumeDeferredCommitListener>,
-    std::optional<base::UnguessableToken> script_tool_invocation_id) {}
+    std::optional<ToolInvocationToken> script_tool_invocation_id,
+    const String&) {}
 
 void EmptyLocalFrameClient::DispatchWillSendSubmitEvent(HTMLFormElement*) {}
 
 LocalFrame* EmptyLocalFrameClient::CreateFrame(const AtomicString&,
                                                HTMLFrameOwnerElement*) {
-  return nullptr;
-}
-
-RemoteFrame* EmptyLocalFrameClient::CreateFencedFrame(
-    HTMLFencedFrameElement*,
-    mojo::PendingAssociatedReceiver<mojom::blink::FencedFrameOwnerHost>) {
   return nullptr;
 }
 

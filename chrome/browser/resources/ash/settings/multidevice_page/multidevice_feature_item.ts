@@ -23,7 +23,7 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {castExists} from '../assert_extras.js';
 import {RouteOriginMixin} from '../common/route_origin_mixin.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router, routes} from '../router.js';
 
 import {MultiDeviceFeature} from './multidevice_constants.js';
@@ -90,13 +90,13 @@ export class SettingsMultideviceFeatureItemElement extends
     };
   }
 
-  feature: MultiDeviceFeature;
-  icon: string;
-  iconTooltip: string;
-  isSubFeature: boolean;
-  isFeatureIconHidden: boolean;
-  subpageRoute: Route|undefined;
-  subpageRouteUrlSearchParams: URLSearchParams|undefined;
+  declare feature: MultiDeviceFeature;
+  declare icon: string;
+  declare iconTooltip: string;
+  declare isSubFeature: boolean;
+  declare isFeatureIconHidden: boolean;
+  declare subpageRoute: Route|undefined;
+  declare subpageRouteUrlSearchParams: URLSearchParams|undefined;
 
   constructor() {
     super();

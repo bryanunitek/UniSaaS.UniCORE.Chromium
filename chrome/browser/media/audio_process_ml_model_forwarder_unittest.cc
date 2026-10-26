@@ -14,8 +14,8 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/common/pref_names.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/model_provider_registry.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
 #include "components/optimization_guide/proto/models.pb.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -23,6 +23,7 @@
 #include "content/public/browser/media_stream_request.h"
 #include "content/public/test/browser_task_environment.h"
 #include "media/base/media_switches.h"
+#include "media/media_buildflags.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -71,13 +72,13 @@ class AudioProcessMlModelForwarderTest : public testing::Test {
         remote_ml_model_manager_.BindNewPipeAndPassReceiver());
   }
 
-  std::unique_ptr<optimization_guide::ModelInfo> CreateModelInfo() {
+  optimization_guide::ModelInfo CreateModelInfo() {
     auto temp_file = std::make_unique<base::ScopedTempFile>();
     CHECK(temp_file->Create());
     model_files_.push_back(std::move(temp_file));
-    return optimization_guide::TestModelInfoBuilder()
-        .SetModelFilePath(model_files_.back()->path())
-        .Build();
+    return optimization_guide::ModelInfo{
+        .model_file_path = model_files_.back()->path(),
+    };
   }
 
   mojo::Remote<audio::mojom::MlModelManager> CreateNewMlModelManager(
@@ -114,8 +115,10 @@ std::string ModelForwarderTestParamsToString(
   std::string result;
   if (info.param.feature == &media::kWebRtcAudioNeuralResidualEchoEstimation) {
     result += "ResidualEchoEstimation";
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
   } else if (info.param.feature == &media::kWebRtcVoiceIsolationDenoiser) {
     result += "VoiceIsolationDenoiser";
+#endif
   } else {
     result += "UnknownFeature";
   }
@@ -139,6 +142,7 @@ class AudioProcessMlModelForwarderParameterizedTest
       disabled_features.push_back(*GetParam().feature);
     }
 
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
     const base::Feature* other_feature =
         (GetParam().feature == &media::kWebRtcAudioNeuralResidualEchoEstimation)
             ? &media::kWebRtcVoiceIsolationDenoiser
@@ -149,6 +153,7 @@ class AudioProcessMlModelForwarderParameterizedTest
     } else {
       disabled_features.push_back(*other_feature);
     }
+#endif
 
     feature_list_.InitWithFeatures(enabled_features, disabled_features);
   }
@@ -492,6 +497,7 @@ TEST_P(AudioProcessMlModelForwarderParameterizedTest,
 INSTANTIATE_TEST_SUITE_P(
     All,
     AudioProcessMlModelForwarderParameterizedTest,
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
     testing::Values(
         // ResidualEchoEstimation
         ModelForwarderTestParams{
@@ -551,6 +557,23 @@ INSTANTIATE_TEST_SUITE_P(
             optimization_guide::proto::
                 OPTIMIZATION_TARGET_WEBRTC_VOICE_ISOLATION_DENOISER,
             /*other_features_enabled=*/false}),
+#else
+    testing::Values(
+        ModelForwarderTestParams{
+            &media::kWebRtcAudioNeuralResidualEchoEstimation,
+            /*feature_enabled=*/true,
+            audio::mojom::MlModelType::kResidualEchoEstimation,
+            optimization_guide::proto::
+                OPTIMIZATION_TARGET_WEBRTC_NEURAL_RESIDUAL_ECHO_ESTIMATOR,
+            /*other_features_enabled=*/false},
+        ModelForwarderTestParams{
+            &media::kWebRtcAudioNeuralResidualEchoEstimation,
+            /*feature_enabled=*/false,
+            audio::mojom::MlModelType::kResidualEchoEstimation,
+            optimization_guide::proto::
+                OPTIMIZATION_TARGET_WEBRTC_NEURAL_RESIDUAL_ECHO_ESTIMATOR,
+            /*other_features_enabled=*/false}),
+#endif
     ModelForwarderTestParamsToString);
 
 }  // namespace

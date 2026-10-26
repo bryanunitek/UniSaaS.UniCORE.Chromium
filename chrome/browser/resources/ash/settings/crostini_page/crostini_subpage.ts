@@ -16,7 +16,6 @@ import '../guest_os/guest_os_confirmation_dialog.js';
 import './crostini_disk_resize_dialog.js';
 import './crostini_disk_resize_confirmation_dialog.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
@@ -28,8 +27,9 @@ import type {SettingsToggleButtonElement} from '../controls/settings_toggle_butt
 import {TERMINA_VM_TYPE} from '../guest_os/guest_os_browser_proxy.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
-import type {Route} from '../router.js';
 
 import {CrostiniBrowserProxyImpl} from './crostini_browser_proxy.js';
 import type {CrostiniBrowserProxy, CrostiniDiskInfo} from './crostini_browser_proxy.js';
@@ -156,21 +156,21 @@ export class SettingsCrostiniSubpageElement extends
   ]);
 
   private browserProxy_: CrostiniBrowserProxy;
-  private canDiskResize_: boolean;
-  private diskResizeButtonAriaLabel_: string;
-  private diskResizeButtonLabel_: string;
+  declare private canDiskResize_: boolean;
+  declare private diskResizeButtonAriaLabel_: string;
+  declare private diskResizeButtonLabel_: string;
   private diskResizeConfirmationState_: ConfirmationState;
-  private diskSizeLabel_: string;
-  private installerShowing_: boolean;
-  private readonly isArcAdbSideloadingSupported_: boolean;
-  private isAndroidEnabled_: boolean;
+  declare private diskSizeLabel_: string;
+  declare private installerShowing_: boolean;
+  declare private readonly isArcAdbSideloadingSupported_: boolean;
+  declare private isAndroidEnabled_: boolean;
   private isDiskUserChosenSize_: boolean;
-  private showArcAdbSideloading_: boolean;
-  private readonly showCrostiniExportImport_: boolean;
-  private showCrostiniMicPermissionDialog_: boolean;
-  private readonly showCrostiniPortForwarding_: boolean;
-  private showDiskResizeConfirmationDialog_: boolean;
-  private showDiskResizeDialog_: boolean;
+  declare private showArcAdbSideloading_: boolean;
+  declare private readonly showCrostiniExportImport_: boolean;
+  declare private showCrostiniMicPermissionDialog_: boolean;
+  declare private readonly showCrostiniPortForwarding_: boolean;
+  declare private showDiskResizeConfirmationDialog_: boolean;
+  declare private showDiskResizeDialog_: boolean;
 
   constructor() {
     super();

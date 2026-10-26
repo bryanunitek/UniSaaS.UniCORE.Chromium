@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/extensions/api/permissions/permissions_api.h"
+#include "extensions/browser/api/permissions/permissions_api.h"
 
 #include <memory>
 #include <optional>
@@ -46,9 +46,8 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/test_browser_window.h"
 #endif
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -820,7 +819,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // Open tab on a url requested by the extension.
   NavigateTo("http://www.requested.com");
   int tab_id = ExtensionTabUtil::GetTabId(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
 
   auto* permissions_manager = PermissionsManager::Get(profile());
 
@@ -874,7 +873,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // Open tab on a url requested by the extension.
   NavigateTo("http://www.requested.com");
   int tab_id = ExtensionTabUtil::GetTabId(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
 
   auto* permissions_manager = PermissionsManager::Get(profile());
 
@@ -956,7 +955,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // Open tab on a url not requested by the extension.
   NavigateTo("http://www.not-requested.com");
   int tab_id = ExtensionTabUtil::GetTabId(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
 
   auto* permissions_manager = PermissionsManager::Get(profile());
 
@@ -1013,7 +1012,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // Open tab on any url.
   NavigateTo("http://www.example.com");
   int tab_id = ExtensionTabUtil::GetTabId(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
 
   auto* permissions_manager = PermissionsManager::Get(profile());
 
@@ -1047,7 +1046,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // Open tab on a url not requested by the extension.
   NavigateTo("chrome://extensions");
   int tab_id = ExtensionTabUtil::GetTabId(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
 
   auto* permissions_manager = PermissionsManager::Get(profile());
 
@@ -1085,7 +1084,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // Verify there is no host access request.
   NavigateTo("http://www.optional.com");
   int tab_id = ExtensionTabUtil::GetTabId(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   EXPECT_FALSE(
       permissions_manager->HasActiveHostAccessRequest(tab_id, extension->id()));
 
@@ -1119,7 +1118,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // there is no host access request.
   NavigateTo("http://www.contentscript.com");
   int tab_id = ExtensionTabUtil::GetTabId(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   EXPECT_FALSE(
       permissions_manager->HasActiveHostAccessRequest(tab_id, extension->id()));
 
@@ -1152,7 +1151,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // Navigate to url requested by the extension.
   NavigateTo("http://www.requested.com");
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   int tab_id = ExtensionTabUtil::GetTabId(web_contents);
 
   // Block all extensions on requested.com.
@@ -1213,7 +1212,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // Navigate to url requested by the extension.
   NavigateTo("http://www.requested.com");
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   int tab_id = ExtensionTabUtil::GetTabId(web_contents);
 
   // Grant one-time host access.
@@ -1252,7 +1251,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // Open tab on a url requested by the extension.
   NavigateTo("http://www.requested.com");
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   int tab_id = ExtensionTabUtil::GetTabId(web_contents);
   std::string document_id =
       ExtensionApiFrameIdMap::GetDocumentId(web_contents->GetPrimaryMainFrame())
@@ -1312,7 +1311,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // Open tab on a url requested by the extension.
   NavigateTo("http://www.requested.com");
   int tab_id = ExtensionTabUtil::GetTabId(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
 
   auto* permissions_manager = PermissionsManager::Get(profile());
 
@@ -1417,7 +1416,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // Open tab on a url requested by the extension.
   NavigateTo("http://www.requested.com");
   int tab_id = ExtensionTabUtil::GetTabId(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
 
   auto* permissions_manager = PermissionsManager::Get(profile());
 
@@ -1527,7 +1526,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
   // Open tab on a url requested by the extension.
   NavigateTo("http://www.requested.com");
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   int tab_id = ExtensionTabUtil::GetTabId(web_contents);
   std::string document_id =
       ExtensionApiFrameIdMap::GetDocumentId(web_contents->GetPrimaryMainFrame())
@@ -1588,8 +1587,15 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
 
 // Test that adding and removing host access requests are throttled when
 // the cooldown is active.
+// TODO(crbug.com/565866457): Flaky on Debug, ASan, and MSan due to 200ms
+// real-time cooldown.
+#if !defined(NDEBUG) || defined(ADDRESS_SANITIZER) || defined(MEMORY_SANITIZER)
+#define MAYBE_HostAccessRequestCooldown DISABLED_HostAccessRequestCooldown
+#else
+#define MAYBE_HostAccessRequestCooldown HostAccessRequestCooldown
+#endif
 IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
-                       HostAccessRequestCooldown) {
+                       MAYBE_HostAccessRequestCooldown) {
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("Extension")
           .AddHostPermission("*://*.requested.com/*")
@@ -1598,7 +1604,7 @@ IN_PROC_BROWSER_TEST_F(PermissionsAPIHostAccessRequestsUnitTest,
 
   NavigateTo("http://www.requested.com");
   int tab_id = ExtensionTabUtil::GetTabId(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
 
   auto* permissions_manager = PermissionsManager::Get(profile());
 

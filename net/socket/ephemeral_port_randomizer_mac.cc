@@ -12,6 +12,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/rand_util.h"
+#include "base/threading/thread_local.h"
 #include "net/base/features.h"
 
 namespace net {
@@ -130,6 +131,21 @@ void EphemeralPortRandomizer::RecordPortUse(const IPEndPoint& peer_address,
   MaybeStartCleanupTimer();
 }
 
+base::DictValue EphemeralPortRandomizer::CreateNetLogTCPBindAttemptStartParams(
+    const IPEndPoint& peer_address,
+    int attempt_number) {
+  const auto& cache_entry = recent_ports_by_peer_.find(peer_address);
+  return base::DictValue()
+      .Set("remote_endpoint", peer_address.ToString())
+      .Set("attempt", attempt_number)
+      .Set("randomizer_range_first", port_range_.first)
+      .Set("randomizer_range_last", port_range_.last)
+      .Set("randomizer_recent_ports_by_remote_endpoint_size",
+           cache_entry == recent_ports_by_peer_.end()
+               ? 0
+               : static_cast<int>(cache_entry->second.size()));
+}
+
 // static
 EphemeralPortRandomizer::PortRange
 EphemeralPortRandomizer::ReadPortRangeFromSysctl() {
@@ -188,8 +204,13 @@ void EphemeralPortRandomizer::OnCleanupTimer() {
 
 // static
 EphemeralPortRandomizer& EphemeralPortRandomizer::GetInstance() {
-  static base::NoDestructor<EphemeralPortRandomizer> instance;
-  return *instance;
+  static base::NoDestructor<
+      base::ThreadLocalOwnedPointer<EphemeralPortRandomizer>>
+      slot;
+  if (!slot->Get()) {
+    slot->Set(base::WrapUnique(new EphemeralPortRandomizer()));
+  }
+  return *slot->Get();
 }
 
 }  // namespace net

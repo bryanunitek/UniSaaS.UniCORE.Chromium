@@ -4,6 +4,7 @@
 
 #import "ios/chrome/test/ios_chrome_scoped_testing_variations_service.h"
 
+#import "components/metrics/startup_visibility.h"
 #import "components/network_time/network_time_tracker.h"
 #import "components/variations/service/variations_service.h"
 #import "components/variations/service/variations_service_client.h"
@@ -77,6 +78,8 @@ IOSChromeScopedTestingVariationsService::
             TestingApplicationContext::GetGlobal()->GetVariationsService());
   TestingApplicationContext::GetGlobal()->SetVariationsService(nullptr);
   variations_service_.reset();
+  metrics_state_manager_.reset();
+  enabled_state_provider_.reset();
 }
 
 VariationsService* IOSChromeScopedTestingVariationsService::Get() {

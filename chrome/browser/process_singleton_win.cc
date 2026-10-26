@@ -245,8 +245,9 @@ base::File CreateLockFileWithTimeout(const base::FilePath& lock_file_path,
           lock_file_path.value().c_str(), GENERIC_WRITE, FILE_SHARE_READ,
           nullptr, CREATE_ALWAYS,
           FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+      // Read before the trace scope closes; its teardown can clobber it.
+      error = ::GetLastError();
     }
-    error = ::GetLastError();
 
     if (lock_file_handle != INVALID_HANDLE_VALUE) {
       LOG_IF(WARNING, error == ERROR_ALREADY_EXISTS)
@@ -254,7 +255,8 @@ base::File CreateLockFileWithTimeout(const base::FilePath& lock_file_path,
       UMA_HISTOGRAM_COUNTS_100(
           "Chrome.ProcessSingleton.CreateLockFileWithTimeout.RetryCount",
           retries);
-      return base::File(lock_file_handle);
+      lock_file = base::File(lock_file_handle);
+      return lock_file;
     }
 
     if (error != ERROR_SHARING_VIOLATION) {
@@ -282,7 +284,8 @@ base::File CreateLockFileWithTimeout(const base::FilePath& lock_file_path,
 
   // Timeout or fatal error.
   PLOG(ERROR) << "Lock file can not be created";
-  return base::File(base::File::OSErrorToFileError(error));
+  lock_file = base::File(base::File::OSErrorToFileError(error));
+  return lock_file;
 }
 
 }  // namespace
@@ -379,7 +382,8 @@ ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcess() {
   }
 
   // Get a handle to the process that created the window.
-  base::Process process = base::Process::Open(process_id);
+  base::Process process = base::Process::OpenWithAccess(
+      process_id, PROCESS_TERMINATE | SYNCHRONIZE);
 
   // Scan for every window to find a visible one.
   bool visible_window = false;

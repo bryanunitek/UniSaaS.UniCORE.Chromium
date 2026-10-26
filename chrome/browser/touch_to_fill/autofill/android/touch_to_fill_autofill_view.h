@@ -10,12 +10,15 @@ namespace autofill {
 class TouchToFillAutofillController;
 
 // The UI interface which prompts the user with notices or suggestions
-// using the Touch To Fill Autofill surface.
+// using the Touch To Fill surface for non-payments autofill data (e.g.
+// profiles, addresses).
 class TouchToFillAutofillView {
  public:
   virtual ~TouchToFillAutofillView() = default;
 
   virtual bool ShowPersonalContextNotice(
+      TouchToFillAutofillController* controller) = 0;
+  virtual bool ShowPrivateInferenceNotice(
       TouchToFillAutofillController* controller) = 0;
   virtual void Hide() = 0;
 };

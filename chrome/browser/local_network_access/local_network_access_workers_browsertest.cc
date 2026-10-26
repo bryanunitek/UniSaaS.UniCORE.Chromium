@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 #include "base/files/file_util.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/browser/local_network_access/local_network_access_browsertest_base.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/base/web_feature_histogram_tester.h"
@@ -18,8 +18,10 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/web_transport_simple_test_server.h"
+#include "extensions/buildflags/buildflags.h"
 #include "services/network/public/cpp/features.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #if BUILDFLAG(IS_CHROMEOS)
@@ -49,13 +51,13 @@ constexpr char kLnaPath[] =
     "?Access-Control-Allow-Origin: *";
 
 constexpr char kWorkerHtmlPath[] =
-    "/local_network_access/request-from-worker-as-public-address.html";
+    "/local_network_access/request-from-worker.html";
 
 constexpr char kSharedWorkerHtmlPath[] =
-    "/local_network_access/fetch-from-shared-worker-as-public-address.html";
+    "/local_network_access/fetch-from-shared-worker.html";
 
 constexpr char kServiceWorkerHtmlPath[] =
-    "/local_network_access/request-from-service-worker-as-public-address.html";
+    "/local_network_access/request-from-service-worker.html";
 
 class LocalNetworkAccessWorkersBrowserTest
     : public LocalNetworkAccessBrowserTestBase {};
@@ -83,7 +85,7 @@ class LocalNetworkAccessWorkersWebTransportBrowserTest
 IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersBrowserTest,
                        DedicatedWorkerDenyPermission) {
   ASSERT_TRUE(content::NavigateToURL(
-      web_contents(), https_server().GetURL("a.com", kWorkerHtmlPath)));
+      web_contents(), https_public_server().GetURL("a.com", kWorkerHtmlPath)));
 
   // Enable auto-deny of LNA permission request.
   bubble_factory()->set_response_type(
@@ -95,14 +97,14 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersBrowserTest,
   EXPECT_EQ("TypeError: Failed to fetch",
             content::EvalJs(web_contents(),
                             content::JsReplace(script_template, fetch_url)));
-  CheckCounter(WebFeature::kPrivateNetworkAccessWithinWorker, 1);
-  CheckCounter(WebFeature::kLocalNetworkAccessWithinDedicatedWorker, 1);
+  CheckCounter(WebFeature::kPrivateNetworkAccessWithinWorker, 0);
+  CheckCounter(WebFeature::kLocalNetworkAccessWithinDedicatedWorker, 0);
 }
 
 IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersBrowserTest,
                        DedicatedWorkerAcceptPermission) {
   ASSERT_TRUE(content::NavigateToURL(
-      web_contents(), https_server().GetURL("a.com", kWorkerHtmlPath)));
+      web_contents(), https_public_server().GetURL("a.com", kWorkerHtmlPath)));
 
   // Enable auto-accept of LNA permission request.
   bubble_factory()->set_response_type(
@@ -122,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersBrowserTest,
 IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersWebTransportBrowserTest,
                        DedicatedWorkerDenyPermission) {
   ASSERT_TRUE(content::NavigateToURL(
-      web_contents(), https_server().GetURL("a.com", kWorkerHtmlPath)));
+      web_contents(), https_public_server().GetURL("a.com", kWorkerHtmlPath)));
 
   // Enable auto-deny of LNA permission request.
   bubble_factory()->set_response_type(
@@ -135,14 +137,14 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersWebTransportBrowserTest,
       content::EvalJs(web_contents(), content::JsReplace(script_template,
                                                          webtransport_port())));
 
-  CheckCounter(WebFeature::kPrivateNetworkAccessWithinWorker, 1);
-  CheckCounter(WebFeature::kLocalNetworkAccessWithinDedicatedWorker, 1);
+  CheckCounter(WebFeature::kPrivateNetworkAccessWithinWorker, 0);
+  CheckCounter(WebFeature::kLocalNetworkAccessWithinDedicatedWorker, 0);
 }
 
 IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersWebTransportBrowserTest,
                        DedicatedWorkerAcceptPermission) {
   ASSERT_TRUE(content::NavigateToURL(
-      web_contents(), https_server().GetURL("a.com", kWorkerHtmlPath)));
+      web_contents(), https_public_server().GetURL("a.com", kWorkerHtmlPath)));
 
   // Enable auto-accept of LNA permission request.
   bubble_factory()->set_response_type(
@@ -159,8 +161,8 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersWebTransportBrowserTest,
       content::EvalJs(web_contents(),
                       content::JsReplace("webtransport_close_from_worker()")));
 
-  CheckCounter(WebFeature::kPrivateNetworkAccessWithinWorker, 1);
-  CheckCounter(WebFeature::kLocalNetworkAccessWithinDedicatedWorker, 1);
+  CheckCounter(WebFeature::kPrivateNetworkAccessWithinWorker, 0);
+  CheckCounter(WebFeature::kLocalNetworkAccessWithinDedicatedWorker, 0);
 }
 
 // TODO(crbug.com/406991278): Adding counters for LNA accesses within workers in
@@ -178,7 +180,8 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersWebTransportBrowserTest,
 IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersBrowserTest,
                        ServiceWorkerNoPermissionSet) {
   ASSERT_TRUE(content::NavigateToURL(
-      web_contents(), https_server().GetURL("a.com", kServiceWorkerHtmlPath)));
+      web_contents(),
+      https_public_server().GetURL("a.com", kServiceWorkerHtmlPath)));
 
   // Enable auto-accept of LNA permission requests (which shouldn't be checked).
   bubble_factory()->set_response_type(
@@ -208,7 +211,8 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersBrowserTest,
             base::Value(std::move(blocklist)));
   UpdateProviderPolicy(policies);
   ASSERT_TRUE(content::NavigateToURL(
-      web_contents(), https_server().GetURL("a.com", kServiceWorkerHtmlPath)));
+      web_contents(),
+      https_public_server().GetURL("a.com", kServiceWorkerHtmlPath)));
 
   EXPECT_EQ("ready", content::EvalJs(web_contents(), "setup();"));
   GURL fetch_url = https_server().GetURL("b.com", kLnaPath);
@@ -229,7 +233,8 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersBrowserTest,
             base::Value(std::move(allowlist)));
   UpdateProviderPolicy(policies);
   ASSERT_TRUE(content::NavigateToURL(
-      web_contents(), https_server().GetURL("a.com", kServiceWorkerHtmlPath)));
+      web_contents(),
+      https_public_server().GetURL("a.com", kServiceWorkerHtmlPath)));
 
   EXPECT_EQ("ready", content::EvalJs(web_contents(), "setup();"));
   GURL fetch_url = https_server().GetURL("b.com", kLnaPath);
@@ -342,7 +347,8 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersBrowserTest,
 IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersBrowserTest,
                        SharedWorkerDenyPermission) {
   ASSERT_TRUE(content::NavigateToURL(
-      web_contents(), https_server().GetURL("a.com", kSharedWorkerHtmlPath)));
+      web_contents(),
+      https_public_server().GetURL("a.com", kSharedWorkerHtmlPath)));
 
   GURL fetch_url = https_server().GetURL("b.com", kLnaPath);
   std::string_view script_template = "fetch_from_shared_worker($1);";
@@ -350,8 +356,8 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersBrowserTest,
   EXPECT_EQ("TypeError: Failed to fetch",
             content::EvalJs(web_contents(),
                             content::JsReplace(script_template, fetch_url)));
-  CheckCounter(WebFeature::kPrivateNetworkAccessWithinWorker, 1);
-  CheckCounter(WebFeature::kLocalNetworkAccessWithinSharedWorker, 1);
+  CheckCounter(WebFeature::kPrivateNetworkAccessWithinWorker, 0);
+  CheckCounter(WebFeature::kLocalNetworkAccessWithinSharedWorker, 0);
 }
 
 IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersBrowserTest,
@@ -364,7 +370,8 @@ IN_PROC_BROWSER_TEST_F(LocalNetworkAccessWorkersBrowserTest,
             base::Value(std::move(allowlist)));
   UpdateProviderPolicy(policies);
   ASSERT_TRUE(content::NavigateToURL(
-      web_contents(), https_server().GetURL("a.com", kSharedWorkerHtmlPath)));
+      web_contents(),
+      https_public_server().GetURL("a.com", kSharedWorkerHtmlPath)));
 
   // Enable auto-deny of LNA permission request.
   bubble_factory()->set_response_type(
@@ -389,7 +396,7 @@ class ChromeAppLocalNetworkAccessWorkersBrowserTest
         ->BrowserAppLauncher()
         ->LaunchAppWithParamsForTesting(apps::AppLaunchParams(
             extension->id(), apps::LaunchContainer::kLaunchContainerNone,
-            WindowOpenDisposition::NEW_WINDOW, apps::LaunchSource::kFromTest));
+            WindowOpenDisposition::kNewWindow, apps::LaunchSource::kFromTest));
   }
 
   // Install and launch ChromeApp with main html page taken from
@@ -459,7 +466,7 @@ class ChromeAppLocalNetworkAccessWorkersBrowserTest
     content::RunAllPendingInMessageLoop();
 
     extensions::AppWindowRegistry* app_registry =
-        extensions::AppWindowRegistry::Get(browser()->profile());
+        extensions::AppWindowRegistry::Get(browser()->GetProfile());
 
     extensions::AppWindow* window =
         app_registry->GetCurrentAppWindowForApp(extension->id());
@@ -480,8 +487,7 @@ IN_PROC_BROWSER_TEST_F(ChromeAppLocalNetworkAccessWorkersBrowserTest,
   GURL fetch_url = https_server().GetURL("b.com", kLnaPath);
 
   content::WebContents* web_contents = InstallAndLaunchChromeApp(
-      "request-from-worker-as-public-address-page.js",
-      "request-from-worker-as-public-address-worker.js");
+      "request-from-worker-page.js", "request-from-worker-worker.js");
 
   std::string_view script_template = "fetch_from_worker($1);";
   ASSERT_EQ("Access-Control-Allow-Origin: *",
@@ -497,8 +503,7 @@ IN_PROC_BROWSER_TEST_F(ChromeAppLocalNetworkAccessWorkersBrowserTest,
   GURL fetch_url = https_server().GetURL("b.com", kLnaPath);
 
   content::WebContents* web_contents = InstallAndLaunchChromeApp(
-      "fetch-from-shared-worker-as-public-address-page.js",
-      "fetch-from-shared-worker-as-public-address-worker.js");
+      "fetch-from-shared-worker-page.js", "fetch-from-shared-worker-worker.js");
 
   std::string_view script_template = "fetch_from_shared_worker($1);";
   ASSERT_EQ("Access-Control-Allow-Origin: *",

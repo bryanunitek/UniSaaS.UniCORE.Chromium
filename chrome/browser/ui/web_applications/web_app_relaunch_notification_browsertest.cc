@@ -14,7 +14,7 @@
 #include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
@@ -54,7 +54,7 @@ class WebAppRelaunchNotificationBrowserTest
     notification_observation_.Reset();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   auto GetAllNotifications() {
     base::test::TestFuture<std::set<std::string>, bool> get_displayed_future;

@@ -85,6 +85,9 @@ class CORE_EXPORT HTMLCapabilityElementBase
   bool IsRendered() const;
   bool granted() const { return PermissionsGranted(); }
 
+  bool IsIconOnly() const;
+  const String& AccessibleLabel() const;
+
   const Member<HTMLSpanElement>& permission_text_span_for_testing() const {
     return permission_text_span_;
   }
@@ -96,6 +99,8 @@ class CORE_EXPORT HTMLCapabilityElementBase
 
   // HTMLElement overrides.
   bool IsHTMLCapabilityElementBase() const final { return true; }
+  bool HasActivationBehavior() const override;
+  void RunActivationBehavior(Event&, EventDispatchHandlingState*) override;
 
  protected:
   // blink::HTMLElement:
@@ -139,6 +144,8 @@ class CORE_EXPORT HTMLCapabilityElementBase
     return permission_text_span_.Get();
   }
 
+  void SetPermissionText(const String& text);
+
   HTMLPermissionIconElement* permission_internal_icon() const {
     return permission_internal_icon_.Get();
   }
@@ -150,15 +157,12 @@ class CORE_EXPORT HTMLCapabilityElementBase
   scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunner();
 
   // LocalFrameView::LifecycleNotificationObserver
+  void DidFinishLayout() override;
   void DidFinishLifecycleUpdate(const LocalFrameView&) override;
 
   bool HasPendingPermissionRequest() const {
     return pending_request_created_.has_value();
   }
-
-  // Called on activation of an <install> element with attributes that fail
-  // installability checks.
-  void HandleInstallDataError();
 
  private:
   // TODO(crbug.com/1315595): remove this friend class once migration
@@ -206,6 +210,12 @@ class CORE_EXPORT HTMLCapabilityElementBase
                            InvalidUrlMakesElementInvalid);
   FRIEND_TEST_ALL_PREFIXES(HTMLInstallElementTestBase,
                            InvalidManifestIdMakesElementInvalid);
+  FRIEND_TEST_ALL_PREFIXES(HTMLInstallElementTestBase,
+                           ActivationWithManifestDataError);
+  FRIEND_TEST_ALL_PREFIXES(HTMLInstallElementTestBase,
+                           ManifestIdOnlyMakesElementInvalid);
+  FRIEND_TEST_ALL_PREFIXES(HTMLInstallElementTestBase,
+                           InvalidManifestUrlMakesElementInvalid);
   FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseClickingEnabledTest,
                            UnclickableBeforeRegistered);
   FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseIntersectionTest,
@@ -221,9 +231,14 @@ class CORE_EXPORT HTMLCapabilityElementBase
   FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseIntersectionTest,
                            ContainerDivClipPath);
   FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseIntersectionTest,
+                           ContainerDivSingularTransform);
+  FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseIntersectionTest,
                            IntersectionOccluderLogging);
   FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseIntersectionTest,
                            IntersectionVisibleOverlapsRecentAttachedInterval);
+  FRIEND_TEST_ALL_PREFIXES(
+      HTMLCapabilityElementBaseIntersectionTest,
+      IntersectionVisibleAfterRecentAttachedIntervalExpired);
   FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseFencedFrameTest,
                            NotAllowedInFencedFrame);
   FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseSimTest,
@@ -244,6 +259,8 @@ class CORE_EXPORT HTMLCapabilityElementBase
                            InvalidatePEPCAfterMoveContainer);
   FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseLayoutChangeTest,
                            InvalidatePEPCAfterTransformContainer);
+  FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseLayoutChangeTest,
+                           InvalidatePEPCAfterContainerLayoutMoveBeforePaint);
   FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseLayoutChangeTest,
                            InvalidatePEPCLayoutInAnimationFrameCallback);
   FRIEND_TEST_ALL_PREFIXES(HTMLCapabilityElementBaseDispatchValidationEventTest,
@@ -282,11 +299,6 @@ class CORE_EXPORT HTMLCapabilityElementBase
 
     // The element's attribute changed.
     kAttributeChanged,
-
-    // The <install> element's install attempt failed due to data error.
-    // TODO(crbug.com/481519343): Move DataError out of invalidReason. Revisit
-    // how to best surface this for <install>.
-    kInstallDataError,
   };
 
   // Define the different states of visibility depending on IntersectionObserver
@@ -504,6 +516,10 @@ class CORE_EXPORT HTMLCapabilityElementBase
   // Computes the intersection rect of the element with the viewport.
   gfx::Rect ComputeIntersectionRectWithViewport(const Page* page);
 
+  // Recomputes the intersection rect with the viewport and temporarily
+  // disables clicking if it has changed since the previous check.
+  void RefreshCachedIntersectionWithViewport();
+
   // When the element is first attached to layout and rendered on the page,
   // there would be events causing an extra unresponsive delay that we don't
   // want, for example: the IntersectionObserver will trigger a series of events
@@ -599,6 +615,8 @@ class CORE_EXPORT HTMLCapabilityElementBase
 
   // Whether the elements has entered fallback mode. See |EnableFallbackMode|.
   bool fallback_mode_ = false;
+
+  String accessible_label_;
 
  private:
   String GetActivationErrorMessage() const;

@@ -1,6 +1,8 @@
 // Copyright 2025 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+import type {VisualBrowserProxy} from '../app/visual_browser_proxy.js';
+import {VisualBrowserProxyImpl} from '../app/visual_browser_proxy.js';
 import type {Segment} from '../read_aloud/read_aloud_types.js';
 import {SpeechController} from '../read_aloud/speech_controller.js';
 import {isForwardArrow, isLineFocusShortcut, isVerticalArrow} from '../shared/keyboard_util.js';
@@ -13,8 +15,15 @@ import {LineFocusLineStyleMode, LineFocusNoneStyleMode, LineFocusWindowStyleMode
 import {getLineFocusValues, LineFocusMovement, LineFocusStyle, LineFocusType} from './read_anything_types.js';
 
 export interface LineFocusListener {
-  onLineFocusMove(newTop: number, newHeight: number, newFocalPoint: number):
-      void;
+  // Called when the line focus position has been changed due to a direct,
+  // intentional user movement. For example, scrolling or keyboard navigation.
+  onLineFocusContentPositionChange(
+      newTop: number, newHeight: number, newFocalPoint: number): void;
+
+  // Called when the line focus position has been changed due to an automatic
+  // adjustment. For example, changing settings such as font size or line focus
+  // type.
+  onLineFocusVisualPositionChange(newTop: number, newHeight: number): void;
   onNeedScrollForLineFocus(scrollDiff: number, instant?: boolean): void;
   onNeedScrollToTop(): void;
   onLineFocusModesChanged(): void;
@@ -28,16 +37,21 @@ export class LineFocusController implements MoveModeDelegate {
   private readonly listeners_: LineFocusListener[] = [];
   private speechController_ = SpeechController.getInstance();
   private logger_ = ReadAnythingLogger.getInstance();
+  private visualBrowserProxy_: VisualBrowserProxy =
+      VisualBrowserProxyImpl.getInstance();
 
   constructor(private model_: LineFocusModel = new LineFocusModel()) {
     const styleMode =
-        new LineFocusNoneStyleMode(LineFocusStyle.OFF, this.model_);
+        new LineFocusNoneStyleMode(LineFocusStyle.defaultValue(), this.model_);
     this.model_.setCurrentStyleMode(styleMode);
     this.model_.setCurrentMoveMode(new LineFocusNoneMoveMode(
         this.model_, styleMode, this, LineFocusMovement.STATIC));
   }
 
   getCurrentLineFocusType(): LineFocusType {
+    if (!this.isEnabled()) {
+      return LineFocusType.NONE;
+    }
     return this.model_.getCurrentStyleMode().getStyle().type;
   }
 
@@ -54,17 +68,18 @@ export class LineFocusController implements MoveModeDelegate {
   }
 
   isEnabled(): boolean {
-    return chrome.readingMode.isLineFocusEnabled &&
+    return this.visualBrowserProxy_.isLineFocusEnabled() &&
         this.model_.isSessionActive();
   }
 
   onKeyDown(e: KeyboardEvent, container: HTMLElement, height: number): boolean {
-    if (!chrome.readingMode.isLineFocusEnabled) {
+    if (!this.visualBrowserProxy_.isLineFocusEnabled()) {
       return false;
     }
 
     if (isLineFocusShortcut(e)) {
-      this.toggle_(container, height);
+      this.toggle(!this.isEnabled(), container, height);
+      this.logger_.logLineFocusToggled(this.isEnabled());
       return true;
     }
 
@@ -77,41 +92,42 @@ export class LineFocusController implements MoveModeDelegate {
   }
 
   onScrollEnd(newScrollTop: number) {
-    if (chrome.readingMode.isLineFocusEnabled) {
+    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
       this.model_.getCurrentMoveMode().onScrollEnd(newScrollTop);
     }
   }
 
   onMouseMove(y: number) {
-    if (chrome.readingMode.isLineFocusEnabled &&
+    if (this.visualBrowserProxy_.isLineFocusEnabled() &&
         !this.speechController_.isSpeechActive()) {
       this.model_.getCurrentMoveMode().onMouseMove(y);
     }
   }
 
   onMouseMoveInToolbar(y: number) {
-    if (chrome.readingMode.isLineFocusEnabled &&
+    if (this.visualBrowserProxy_.isLineFocusEnabled() &&
         !this.speechController_.isSpeechActive()) {
       this.model_.getCurrentMoveMode().onMouseMoveInToolbar(y);
     }
   }
 
   onAllMenusClose() {
-    // TODO(b/533169480): When line focus is enabled, ensure voice playback
-    // works seamlessly after onAllMenusClose is called.
+    // Notify listeners when all menus close so the visual Line Focus highlight
+    // adapts to layout changes made in settings menus (e.g. font size) while
+    // not resetting paused speech when changing voices or menu settings.
     if (this.isEnabled()) {
-      this.notifyMove();
+      this.notifyMoveWithVisualPositionChange();
     }
   }
 
   onWordBoundary(segments: Segment[]) {
-    if (chrome.readingMode.isLineFocusEnabled) {
+    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
       this.model_.getCurrentMoveMode().onWordBoundary(segments);
     }
   }
 
   onTextLocationsChange(container: HTMLElement, height: number) {
-    if (chrome.readingMode.isLineFocusEnabled) {
+    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
       this.model_.getCurrentMoveMode().onTextLocationsChange(container, height);
     }
   }
@@ -122,37 +138,38 @@ export class LineFocusController implements MoveModeDelegate {
     const lineFocusValues = getLineFocusValues();
     const lastEnabled = lineFocusValues[lastEnabledValue];
     if (lastEnabled) {
-      this.model_.setLastEnabledLineFocusStyle(lastEnabled.style);
-      const style = isOn ? lastEnabled.style : LineFocusStyle.OFF;
-      this.setStyleAndMovement_(style, lastEnabled.movement, container, height);
+      this.setStyleAndMovement_(
+          lastEnabled.style, lastEnabled.movement, container, height, isOn);
       this.listeners_.forEach(l => l.onLineFocusModesChanged());
     }
   }
 
   onStyleChange(style: LineFocusStyle, container: HTMLElement, height: number) {
     this.setStyleAndMovement_(
-        style, this.getCurrentLineFocusMovement(), container, height);
+        style, this.getCurrentLineFocusMovement(), container, height,
+        this.model_.isSessionActive());
   }
 
   onMovementChange(
       movement: LineFocusMovement, container: HTMLElement, height: number) {
     this.setStyleAndMovement_(
-        this.getCurrentLineFocusStyle(), movement, container, height);
+        this.getCurrentLineFocusStyle(), movement, container, height,
+        this.model_.isSessionActive());
   }
 
   private setStyleAndMovement_(
       style: LineFocusStyle, movement: LineFocusMovement,
-      container: HTMLElement, height: number) {
-    this.updateStrategies_(style, movement);
+      container: HTMLElement, height: number, isOn: boolean) {
+    this.updateStrategies_(style, movement, isOn);
     this.model_.getCurrentMoveMode().onActivated(container, height);
     // Propagating line focus should be last so it captures the newly activated
     // move mode above.
-    this.propagateLineFocus_(style, movement);
+    this.propagateLineFocus_(style, movement, isOn);
   }
 
   private updateStrategies_(
-      style: LineFocusStyle, movement: LineFocusMovement) {
-    if (style.type === LineFocusType.NONE) {
+      style: LineFocusStyle, movement: LineFocusMovement, isOn: boolean) {
+    if (!isOn) {
       const styleMode = new LineFocusNoneStyleMode(style, this.model_);
       this.model_.setCurrentStyleMode(styleMode);
       this.model_.setCurrentMoveMode(
@@ -172,24 +189,22 @@ export class LineFocusController implements MoveModeDelegate {
   }
 
   private propagateLineFocus_(
-      style: LineFocusStyle, movement: LineFocusMovement) {
-    if (!chrome.readingMode.isLineFocusEnabled) {
+      style: LineFocusStyle, movement: LineFocusMovement, isOn: boolean) {
+    if (!this.visualBrowserProxy_.isLineFocusEnabled()) {
       return;
     }
-    const lineFocusValue = this.lineFocusToEnumValue_(style, movement);
-    const lastNonDisabledLineFocus = this.lineFocusToEnumValue_(
-        this.model_.getLastEnabledLineFocusStyle(), movement);
+    const lineFocusValue = isOn ? this.lineFocusToEnumValue_(style, movement) :
+                                  this.visualBrowserProxy_.getLineFocusOff();
+    const lastNonDisabledLineFocus =
+        this.lineFocusToEnumValue_(style, movement);
     if (lineFocusValue !== null && lastNonDisabledLineFocus !== null) {
-      chrome.readingMode.onLineFocusChanged(
+      this.visualBrowserProxy_.onLineFocusChanged(
           lineFocusValue, lastNonDisabledLineFocus);
     }
   }
 
   private lineFocusToEnumValue_(
       style: LineFocusStyle, movement: LineFocusMovement): number|null {
-    if (style === LineFocusStyle.OFF) {
-      return chrome.readingMode.lineFocusOff;
-    }
     const lineFocusValues = getLineFocusValues();
     const key = Object.keys(lineFocusValues).find(key => {
       const lineFocus = lineFocusValues[Number(key)];
@@ -198,25 +213,41 @@ export class LineFocusController implements MoveModeDelegate {
     return key ? Number(key) : null;
   }
 
-  private toggle_(container: HTMLElement, height: number) {
-    if (!chrome.readingMode.isLineFocusEnabled) {
+  toggle(isOn: boolean, container: HTMLElement, height: number) {
+    if (!this.visualBrowserProxy_.isLineFocusEnabled()) {
+      return;
+    }
+    if (this.isEnabled() === isOn) {
       return;
     }
 
-    const lastStyle = this.model_.getLastEnabledLineFocusStyle();
-    const newStyle = this.isEnabled() ? LineFocusStyle.OFF : lastStyle;
+    const wasActive = this.model_.isSessionActive();
+    // Setting the style and movement must come *before* ending the session
+    // because setStyleAndMovement_ propagates the new value to the C++ which
+    // also handles logging the session. It checks the current line focus value
+    // there first, so if `onSessionEnd()` came first, it would not actually log
+    // the session.
     this.setStyleAndMovement_(
-        newStyle, this.getCurrentLineFocusMovement(), container, height);
-    this.logger_.logLineFocusToggled(this.isEnabled());
+        this.getCurrentLineFocusStyle(), this.getCurrentLineFocusMovement(),
+        container, height, isOn);
+    if (!isOn && wasActive) {
+      this.onSessionEnd();
+    }
     this.listeners_.forEach(l => l.onLineFocusModesChanged());
   }
 
   // MoveModeDelegate methods.
-  notifyMove(): void {
+  notifyMoveWithContentPositionChange(): void {
     this.listeners_.forEach(
-        l => l.onLineFocusMove(
+        l => l.onLineFocusContentPositionChange(
             this.model_.getTop(), this.model_.getWindowHeight(),
             this.model_.getFocalPoint()));
+  }
+
+  notifyMoveWithVisualPositionChange(): void {
+    this.listeners_.forEach(
+        l => l.onLineFocusVisualPositionChange(
+            this.model_.getTop(), this.model_.getWindowHeight()));
   }
 
   notifyScroll(scrollDiff: number, instant?: boolean): void {

@@ -21,6 +21,7 @@
 #include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
@@ -34,6 +35,7 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/side_panel/android/android_side_panel_enabled_fn.h"
 #else
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #endif
 
@@ -153,7 +155,7 @@ void GlicInstanceTracker::Clear() {
     if (!instance) {
       return false;
     }
-    return instance->GetPanelState().kind == state;
+    return instance->GetPanelState()->kind == state;
   });
 }
 
@@ -252,10 +254,7 @@ void SetGlicCapability(Profile* profile, bool enabled) {
 }
 
 void SetGlicCapability(AccountCapabilitiesTestMutator& mutator, bool enabled) {
-  if (base::FeatureList::IsEnabled(
-          switches::kGlicEligibilitySeparateAccountCapability)) {
-    mutator.set_can_use_gemini_in_chrome(enabled);
-  }
+  mutator.set_can_use_gemini_in_chrome(enabled);
   mutator.set_can_use_model_execution_features(enabled);
 }
 
@@ -266,16 +265,9 @@ ScopedGlicCapability::ScopedGlicCapability(Profile* profile, bool enabled)
       identity_manager->FindExtendedAccountInfoByAccountId(
           identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSignin));
 
-  if (base::FeatureList::IsEnabled(
-          switches::kGlicEligibilitySeparateAccountCapability)) {
-    original_enabled_ =
-        primary_account.GetAccountCapabilities().can_use_gemini_in_chrome() ==
-        signin::Tribool::kTrue;
-  } else {
-    original_enabled_ =
-        glic::GlicEnabling::CanUseAdultFeatures(
-            primary_account.GetAccountCapabilities());
-  }
+  original_enabled_ =
+      primary_account.GetAccountCapabilities().can_use_gemini_in_chrome() ==
+      signin::Tribool::kTrue;
 
   SetGlicCapability(profile_, enabled);
 }
@@ -382,6 +374,16 @@ bool IsSidePanelEnabled() {
 #else
   return false;
 #endif
+}
+
+BrowserWindowInterface* CreateBrowserWindow(Profile* profile) {
+  base::test::TestFuture<BrowserWindowInterface*> future;
+  CreateBrowserWindow(
+      BrowserWindowCreateParams(*profile, /*from_user_gesture=*/false),
+      future.GetCallback());
+  BrowserWindowInterface* window = future.Get();
+  CHECK(window);
+  return window;
 }
 
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kGlicHostElementId);

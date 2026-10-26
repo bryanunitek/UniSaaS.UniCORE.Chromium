@@ -45,7 +45,6 @@ NavigationController::LoadURLParams::LoadURLParams(const OpenURLParams& input)
       blob_url_loader_factory(input.blob_url_loader_factory),
       href_translate(input.href_translate),
       reload_type(input.reload_type),
-      impression(input.impression),
       is_pdf(input.is_pdf),
       has_rel_opener(input.has_rel_opener),
       internal_scroll_to_text_fragment(input.internal_scroll_to_text_fragment) {
@@ -89,5 +88,12 @@ NavigationController::LoadURLParams::~LoadURLParams() = default;
 NavigationController::LoadURLParams&
 NavigationController::LoadURLParams::operator=(
     NavigationController::LoadURLParams&&) = default;
+
+base::WeakPtr<NavigationHandle> NavigationController::LoadURLWithParams(
+    const LoadURLParams& params) {
+  // Callers of this overload cannot act on the reason a navigation failed to
+  // start, so collapse every error to a null handle.
+  return LoadURLWithParamsForResult(params).value_or(nullptr);
+}
 
 }  // namespace content

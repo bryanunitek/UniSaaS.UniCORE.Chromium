@@ -42,6 +42,7 @@
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
 #import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
+#import "ios/testing/test_tag_registry.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "ui/base/l10n/l10n_util.h"
 
@@ -165,6 +166,7 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
 }
 
 // Tests reopening a closed tab from a regular tab with history.
+TAG_SMOKE_TEST(RecentTabsTestCase, testOpenCloseTabFromRegularWithHistory);
 - (void)testOpenCloseTabFromRegularWithHistory {
   const GURL testPageURL = self.testServer->GetURL(kPageURL);
 
@@ -841,7 +843,6 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
                                      createFakeTabsForServerURL:self.testServer
                                                                     ->base_url()
                                                    numberOfTabs:numberOfTabs]];
-  [ChromeEarlGrey triggerSyncCycleForType:syncer::SESSIONS];
 
   OpenRecentTabsPanel();
 
@@ -899,7 +900,6 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
                                           self.testServer->base_url()
                                                     numberOfTabs:numberOfTabs]];
   }
-  [ChromeEarlGrey triggerSyncCycleForType:syncer::SESSIONS];
 
   OpenRecentTabsPanel();
 
@@ -968,6 +968,33 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
   const GURL testPageURL = self.testServer->GetURL(kPageURL);
   [ChromeEarlGrey verifyShareActionWithURL:testPageURL
                                  pageTitle:kTitleOfTestPage];
+}
+
+// Tests that sharing an item from the context menu twice in a row does not
+// cause a crash. This verifies that when a new SharingCoordinator is created,
+// the old one is stopped properly to prevent dangling WebStateList observers.
+- (void)testContextMenuRepeatedShare {
+  [self loadTestURL];
+  OpenRecentTabsPanel();
+
+  const GURL testPageURL = self.testServer->GetURL(kPageURL);
+
+  // First sharing attempt.
+  [self longPressTestURLTab];
+  [ChromeEarlGrey verifyShareActionWithURL:testPageURL
+                                 pageTitle:kTitleOfTestPage];
+
+  // Second sharing attempt.
+  [self longPressTestURLTab];
+  [ChromeEarlGrey verifyShareActionWithURL:testPageURL
+                                 pageTitle:kTitleOfTestPage];
+
+  // Close the recent tabs panel.
+  [self closeRecentTabs];
+
+  // Perform an action that mutates the WebStateList (e.g. open a new tab) to
+  // trigger any potential crash if dangling WebStateList observers exist.
+  [ChromeEarlGrey openNewTab];
 }
 
 #pragma mark Helper Methods

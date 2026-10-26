@@ -73,17 +73,20 @@ luci.bucket(
 builders.builder(
     name = "autosharder",
     bucket = "infra",
+    description_html = "Queries test suite runtimes and automatically updates shard counts to maintain target shard durations.",
     executable = "recipe:chromium/autosharder",
     # Run once daily at 2 AM Pacific/9 AM UTC (with DST)
     schedule = "0 9 * * *",
     triggered_by = [],
     pool = "luci.chromium.ci",
     builderless = True,
+    ssd = None,
     console_view_entry = consoles.console_view_entry(
         console_view = "infra",
         category = "autosharder",
         short_name = "auto",
     ),
+    contact_team_email = "chrome-dev-infra-team@google.com",
     notifies = [
         luci.notifier(
             name = "chromium-autosharder-notifier",
@@ -105,6 +108,7 @@ builders.builder(
             "android-x86-rel",
         ],
         "exclude_suites": [
+            "ash_pixeltests",
             "chrome_all_tast_tests",
         ],
         "target_runtime": 15.0,
@@ -119,6 +123,7 @@ try_.builder(
     executable = "recipe:chromium/autosharder_test",
     pool = "luci.chromium.try",
     builderless = True,
+    ssd = True,
     console_view_entry = consoles.console_view_entry(
         console_view = "infra",
         category = "autosharder",

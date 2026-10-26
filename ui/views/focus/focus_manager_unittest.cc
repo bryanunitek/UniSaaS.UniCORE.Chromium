@@ -12,12 +12,15 @@
 
 #include "base/command_line.h"
 #include "base/functional/callback_helpers.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/test/scoped_icu_locale.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/icu_test_util.h"
 #include "base/test/run_until.h"
 #include "build/build_config.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/accelerators/test_accelerator_target.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -47,6 +50,10 @@
 #include "ui/aura/client/focus_client.h"
 #include "ui/views/widget/native_widget_aura.h"
 #endif  // USE_AURA
+
+#if BUILDFLAG(IS_MAC)
+#include "ui/base/test/scoped_fake_full_keyboard_access.h"
+#endif  // BUILDFLAG(IS_MAC)
 
 namespace views {
 
@@ -152,7 +159,9 @@ TEST_F(FocusManagerTest, FocusChangeListener) {
   GetContentsView()->AddChildViewRaw(view2);
 
   TestFocusChangeListener listener;
+  EXPECT_FALSE(GetFocusManager()->HasFocusChangeListener(&listener));
   AddFocusChangeListener(&listener);
+  EXPECT_TRUE(GetFocusManager()->HasFocusChangeListener(&listener));
 
   // Required for VS2010:
   // http://connect.microsoft.com/VisualStudio/feedback/details/520043/error-converting-from-null-to-a-pointer-type-in-std-pair
@@ -173,6 +182,7 @@ TEST_F(FocusManagerTest, FocusChangeListener) {
   EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(view2, null_view));
 
   RemoveFocusChangeListener(&listener);
+  EXPECT_FALSE(GetFocusManager()->HasFocusChangeListener(&listener));
 }
 
 namespace {
@@ -832,7 +842,7 @@ class FocusManagerArrowKeyTraversalTest
     if (testing::UnitTest::GetInstance()->current_test_info()->value_param()) {
       is_rtl_ = GetParam();
       if (is_rtl_) {
-        base::i18n::SetICUDefaultLocale("he");
+        locale_override_.emplace(base::i18n::GetKnownLanguageTag("he"));
       }
     }
 
@@ -842,8 +852,7 @@ class FocusManagerArrowKeyTraversalTest
   bool is_rtl_ = false;
 
  private:
-  // Restores the locale to default when the destructor is called.
-  base::test::ScopedRestoreICUDefaultLocale restore_locale_;
+  std::optional<base::i18n::ScopedDefaultIcuLocale> locale_override_;
 };
 
 // Instantiate the Boolean which is used to toggle RTL in
@@ -1027,11 +1036,14 @@ TEST_F(FocusManagerTest, StoreFocusedViewFullKeyboardAccess) {
   EXPECT_EQ(nullptr, GetFocusManager()->GetFocusedView());
 
   // Turn off full keyboard access mode and restore focused view. Since view1 is
-  // no longer focusable, view3 should have focus.
+  // no longer focusable, it isn't restored, and focus doesn't move to another
+  // view either.
   GetFocusManager()->SetKeyboardAccessible(false);
   EXPECT_FALSE(GetFocusManager()->RestoreFocusedView());
-  EXPECT_EQ(view3, GetFocusManager()->GetFocusedView());
+  EXPECT_EQ(nullptr, GetFocusManager()->GetFocusedView());
 
+  view3->RequestFocus();
+  EXPECT_EQ(view3, GetFocusManager()->GetFocusedView());
   GetFocusManager()->StoreFocusedView(false);
   EXPECT_EQ(nullptr, GetFocusManager()->GetFocusedView());
 
@@ -1253,6 +1265,45 @@ TEST_F(FocusManagerTest, NavigateIntoAnchoredDialog) {
   bubble_widget->GetFocusManager()->AdvanceFocus(true);
   EXPECT_TRUE(parent3->HasFocus());
 }
+
+#if BUILDFLAG(IS_MAC)
+// Tests that activating a widget whose stored focus view isn't focusable in the
+// current mode (an ACCESSIBLE_ONLY view with Full Keyboard Access off) doesn't
+// move focus out of the widget into its focus traversable parent.
+// Regression test for crbug.com/576344604.
+TEST_F(FocusManagerTest,
+       ActivationDoesNotTraverseOutFromUnfocusableStoredView) {
+  ui::test::ScopedFakeFullKeyboardAccess::GetInstance()
+      ->set_full_keyboard_access_state(false);
+
+  View* anchor = GetContentsView()->AddChildView(std::make_unique<View>());
+  anchor->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+  View* parent_view = GetContentsView()->AddChildView(std::make_unique<View>());
+  parent_view->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+
+  auto* bubble = new FocusManagerTestBubbleDialogDelegateView(anchor);
+  View* bubble_view = bubble->AddChildView(std::make_unique<View>());
+  bubble_view->SetFocusBehavior(View::FocusBehavior::ACCESSIBLE_ONLY);
+  Widget* bubble_widget = BubbleDialogDelegateView::CreateBubble(bubble);
+  bubble_widget->SetFocusTraversableParent(GetWidget()->GetFocusTraversable());
+  bubble_widget->SetFocusTraversableParentView(anchor);
+  bubble->set_close_on_deactivate(false);
+  bubble_widget->ShowInactive();
+  ASSERT_TRUE(GetWidget()->IsActive());
+  ASSERT_FALSE(bubble_widget->IsActive());
+
+  // Like Widget::SetInitialFocus() does for a widget shown inactive.
+  FocusManager* bubble_focus_manager = bubble_widget->GetFocusManager();
+  bubble_focus_manager->SetStoredFocusView(bubble_view);
+  ASSERT_FALSE(bubble_focus_manager->keyboard_accessible());
+
+  bubble_widget->Activate();
+  EXPECT_TRUE(bubble_widget->IsActive());
+  EXPECT_EQ(nullptr, bubble_focus_manager->GetFocusedView());
+  EXPECT_FALSE(anchor->HasFocus());
+  EXPECT_FALSE(parent_view->HasFocus());
+}
+#endif  // BUILDFLAG(IS_MAC)
 
 TEST_F(FocusManagerTest, AnchoredDialogOnContainerView) {
   // The parent Widget has four focusable views, with the middle two views
@@ -1577,5 +1628,73 @@ TEST_F(RedirectToParentFocusManagerTest, NotProcessedAccelerator) {
 }
 
 #endif
+
+// Regression tests for crashes during callbacks.
+
+namespace {
+
+class MockFocusChangeListener : public FocusChangeListener {
+ public:
+  MockFocusChangeListener() = default;
+  ~MockFocusChangeListener() override = default;
+
+  MOCK_METHOD(void, OnWillChangeFocus, (View*, View*), (override));
+  MOCK_METHOD(void, OnDidChangeFocus, (View*, View*), (override));
+};
+
+}  // namespace
+
+TEST_F(FocusManagerTest,
+       ShouldNotCrashIfViewDestroyedDuringAdvance_WillChangeFocus) {
+  MockFocusChangeListener listener;
+
+  auto event_list = base::MakeRefCounted<FocusTestEventList>();
+  const int kView1ID = 1;
+  const int kView2ID = 2;
+  ViewTracker view1(GetContentsView()->AddChildView(
+      std::make_unique<SimpleTestView>(event_list, kView1ID)));
+  ViewTracker view2(GetContentsView()->AddChildView(
+      std::make_unique<SimpleTestView>(event_list, kView2ID)));
+  view1.view()->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+  view2.view()->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+  view1.view()->RequestFocus();
+  GetFocusManager()->AddFocusChangeListener(&listener);
+  EXPECT_CALL(listener, OnWillChangeFocus)
+      .WillOnce([this](View* prev, View* next) {
+        GetContentsView()->RemoveChildViewT(next);
+      });
+  GetFocusManager()->AdvanceFocus(false);
+  EXPECT_FALSE(view2);
+
+  GetFocusManager()->ClearFocus();
+  GetFocusManager()->RemoveFocusChangeListener(&listener);
+}
+
+TEST_F(FocusManagerTest,
+       ShouldNotCrashIfViewDestroyedDuringAdvance_DidChangeFocus) {
+  MockFocusChangeListener listener;
+
+  auto event_list = base::MakeRefCounted<FocusTestEventList>();
+  const int kView1ID = 1;
+  const int kView2ID = 2;
+  ViewTracker view1(GetContentsView()->AddChildView(
+      std::make_unique<SimpleTestView>(event_list, kView1ID)));
+  ViewTracker view2(GetContentsView()->AddChildView(
+      std::make_unique<SimpleTestView>(event_list, kView2ID)));
+  view1.view()->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+  view2.view()->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+  view1.view()->RequestFocus();
+  GetFocusManager()->AddFocusChangeListener(&listener);
+  EXPECT_CALL(listener, OnDidChangeFocus)
+      .WillOnce([this](View* prev, View* next) {
+        GetContentsView()->RemoveChildViewT(next);
+      });
+  EXPECT_CALL(listener, OnDidChangeFocus(testing::_, nullptr));
+  GetFocusManager()->AdvanceFocus(false);
+  EXPECT_FALSE(view2);
+
+  GetFocusManager()->ClearFocus();
+  GetFocusManager()->RemoveFocusChangeListener(&listener);
+}
 
 }  // namespace views

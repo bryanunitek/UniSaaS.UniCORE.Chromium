@@ -25,9 +25,10 @@
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_provider.h"
 #include "ui/color/color_provider_source_observer.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_delegate.h"
 #include "ui/compositor/layer_owner.h"
+#include "ui/compositor/layer_solid_color.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -78,7 +79,7 @@ std::vector<gfx::RectF> GetHelpBubbleAnchorBoundsInRootWindow(
 class MaskLayerOwner : public ui::LayerOwner, public ui::LayerDelegate {
  public:
   explicit MaskLayerOwner(const aura::Window* root_window)
-      : ui::LayerOwner(std::make_unique<ui::Layer>(ui::LAYER_TEXTURED)),
+      : ui::LayerOwner(std::make_unique<ui::LayerTextured>()),
         root_window_(root_window) {
     Init();
   }
@@ -171,7 +172,7 @@ class WelcomeTourScrim::Scrim : public aura::WindowObserver,
  public:
   explicit Scrim(aura::Window* root_window)
       : root_window_(root_window),
-        layer_owner_(std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR)),
+        layer_owner_(std::make_unique<ui::LayerSolidColor>()),
         mask_layer_owner_(root_window) {
     Init();
   }
@@ -209,7 +210,7 @@ class WelcomeTourScrim::Scrim : public aura::WindowObserver,
   // Invoked once to initialize `this` scrim.
   void Init() {
     // Configure static scrim layer properties.
-    layer_owner_.layer()->SetMaskLayer(mask_layer_owner_.layer());
+    layer_owner_.layer()->SetMaskLayer(mask_layer_owner_.layer()->AsTextured());
     layer_owner_.layer()->SetName(WelcomeTourScrim::kLayerName);
 
     // Configure dynamic scrim layer properties.
@@ -258,10 +259,11 @@ class WelcomeTourScrim::Scrim : public aura::WindowObserver,
 
   // Invoked to update color of the scrim layer.
   void UpdateColor() {
-    layer_owner_.layer()->SetColor(GetRootWindowController()
-                                       ->color_provider_source()
-                                       ->GetColorProvider()
-                                       ->GetColor(cros_tokens::kCrosSysScrim));
+    layer_owner_.layer()->AsSolidColor()->SetColor(
+        SkColor4f::FromColor(GetRootWindowController()
+                                 ->color_provider_source()
+                                 ->GetColorProvider()
+                                 ->GetColor(cros_tokens::kCrosSysScrim)));
   }
 
   // Pointer to the root window associated with `this` scrim.

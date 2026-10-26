@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 use alloc::vec::Vec;
-use core::ops::Deref;
 
 use crate::constants::*;
 use crate::values::{MapKey, Value};
@@ -49,7 +48,7 @@ pub(crate) fn append_value(val: &Value, out: &mut Vec<u8>) {
         Value::Int(v) => write_header(out, MAJOR_TYPE_NEGATIVE_INT, !v as u64),
         Value::Bytestring(s) => {
             write_header(out, MAJOR_TYPE_BYTE_STRING, s.len() as u64);
-            out.extend_from_slice(s.deref());
+            out.extend_from_slice(s);
         }
         Value::String(s) => {
             write_header(out, MAJOR_TYPE_TEXT_STRING, s.len() as u64);
@@ -63,15 +62,16 @@ pub(crate) fn append_value(val: &Value, out: &mut Vec<u8>) {
         }
         Value::Map(m) => {
             write_header(out, MAJOR_TYPE_MAP, m.len() as u64);
-            for (key, value) in m {
-                append_map_key(key, out);
-                append_value(value, out);
+
+            for entry in m {
+                append_map_key(&entry.key, out);
+                append_value(&entry.value, out);
             }
         }
         Value::Boolean(b) => write_header(
             out,
             MAJOR_TYPE_SIMPLE_VALUE,
-            if *b { SIMPLE_VALUE_TRUE as u64 } else { SIMPLE_VALUE_FALSE as u64 },
+            if *b { SIMPLE_VALUE_TRUE } else { SIMPLE_VALUE_FALSE } as u64,
         ),
         Value::Null => write_header(out, MAJOR_TYPE_SIMPLE_VALUE, SIMPLE_VALUE_NULL as u64),
         Value::Undefined => {
@@ -80,10 +80,6 @@ pub(crate) fn append_value(val: &Value, out: &mut Vec<u8>) {
         Value::InvalidUtf8(bytes) => {
             write_header(out, MAJOR_TYPE_TEXT_STRING, bytes.len() as u64);
             out.extend_from_slice(bytes);
-        }
-        Value::Float(f) => {
-            out.push(MAJOR_TYPE_SIMPLE_VALUE << 5 | SIMPLE_VALUE_FLOAT_64);
-            out.extend_from_slice(&f.to_bits().to_be_bytes());
         }
     }
 }

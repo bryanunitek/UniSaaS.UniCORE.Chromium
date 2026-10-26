@@ -4,13 +4,13 @@
 
 #include "third_party/blink/renderer/modules/webaudio/media_stream_audio_source_handler.h"
 
-#include <inttypes.h>
-
 #include "base/synchronization/lock.h"
 #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_output.h"
 #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
 
@@ -52,8 +52,8 @@ void MediaStreamAudioSourceHandler::SetFormat(uint32_t number_of_channels,
   DCHECK(IsMainThread());
   SendLogMessage(
       __func__,
-      String::Format("({number_of_channels=%u}, {source_sample_rate=%0.f})",
-                     number_of_channels, source_sample_rate));
+      Format("({{number_of_channels={}}}, {{source_sample_rate={:.0f}}})",
+             number_of_channels, source_sample_rate));
 
   {
     base::AutoLock locker(process_lock_);
@@ -70,18 +70,14 @@ void MediaStreamAudioSourceHandler::SetFormat(uint32_t number_of_channels,
     if (number_of_channels == 0 ||
         number_of_channels > BaseAudioContext::MaxNumberOfChannels()) {
       source_number_of_channels_ = 0;
-      SendLogMessage(
-          __func__,
-          String::Format("=> (ERROR: invalid channel count requested)"));
+      SendLogMessage(__func__, "=> (ERROR: invalid channel count requested)");
       return;
     }
 
     // Checks for invalid sample rate.
     if (source_sample_rate != Context()->sampleRate()) {
       source_number_of_channels_ = 0;
-      SendLogMessage(
-          __func__,
-          String::Format("=> (ERROR: invalid sample rate requested)"));
+      SendLogMessage(__func__, "=> (ERROR: invalid sample rate requested)");
       return;
     }
 
@@ -107,15 +103,14 @@ void MediaStreamAudioSourceHandler::Process(uint32_t number_of_frames) {
       output_bus->Zero();
       return;
     }
-    audio_source_provider_.get()->ProvideInput(
+    audio_source_provider_->ProvideInput(
         output_bus, base::checked_cast<int>(number_of_frames));
     if (!is_processing_) {
-      SendLogMessage(__func__, String::Format("({number_of_frames=%u})",
-                                              number_of_frames));
-      SendLogMessage(
-          __func__,
-          String::Format("=> (audio source is now alive and audio frames are "
-                         "sent to the output)"));
+      SendLogMessage(__func__,
+                     Format("({{number_of_frames={}}})", number_of_frames));
+      SendLogMessage(__func__,
+                     "=> (audio source is now alive and audio frames are sent "
+                     "to the output)");
       is_processing_ = true;
     }
   } else {
@@ -129,11 +124,7 @@ void MediaStreamAudioSourceHandler::Process(uint32_t number_of_frames) {
 
 void MediaStreamAudioSourceHandler::SendLogMessage(const String& function_name,
                                                    const String& message) {
-  WebRtcLogMessage(String::Format("[WA]MSASH::%s %s [this=0x%" PRIXPTR "]",
-                                  function_name.Utf8().c_str(),
-                                  message.Utf8().c_str(),
-                                  reinterpret_cast<uintptr_t>(this))
-                       .Utf8());
+  WebRtcLogMessage(StrCat({"[WA]MSASH::", function_name, " ", message}).Utf8());
 }
 
 }  // namespace blink

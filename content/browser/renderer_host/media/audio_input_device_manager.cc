@@ -33,7 +33,7 @@ void SendAudioLogMessage(const std::string& message) {
 }
 
 const char* TypeToString(blink::mojom::MediaStreamType type) {
-  DCHECK(blink::IsAudioInputMediaType(type));
+  CHECK(blink::IsAudioInputMediaType(type), base::NotFatalUntil::M158);
   switch (type) {
     case blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE:
       return "DEVICE_AUDIO_CAPTURE";
@@ -82,7 +82,7 @@ AudioInputDeviceManager::~AudioInputDeviceManager() {
 
 const blink::MediaStreamDevice* AudioInputDeviceManager::GetOpenedDeviceById(
     const base::UnguessableToken& session_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
   auto device = GetDevice(session_id);
   if (device == devices_.end())
     return nullptr;
@@ -90,23 +90,34 @@ const blink::MediaStreamDevice* AudioInputDeviceManager::GetOpenedDeviceById(
   return &(*device);
 }
 
+void AudioInputDeviceManager::SetSessionClosedCallback(
+    const base::UnguessableToken& session_id,
+    base::OnceClosure callback) {
+  CHECK_CURRENTLY_ON(BrowserThread::IO);
+  if (GetDevice(session_id) == devices_.end()) {
+    std::move(callback).Run();
+    return;
+  }
+  session_closed_callbacks_.insert_or_assign(session_id, std::move(callback));
+}
+
 void AudioInputDeviceManager::RegisterListener(
     MediaStreamProviderListener* listener) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK(listener);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
+  CHECK(listener, base::NotFatalUntil::M158);
   listeners_.AddObserver(listener);
 }
 
 void AudioInputDeviceManager::UnregisterListener(
     MediaStreamProviderListener* listener) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK(listener);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
+  CHECK(listener, base::NotFatalUntil::M158);
   listeners_.RemoveObserver(listener);
 }
 
 base::UnguessableToken AudioInputDeviceManager::Open(
     const blink::MediaStreamDevice& device) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
   // Generate a new id for this device.
   auto session_id = base::UnguessableToken::Create();
   SendAudioLogMessage(GetOpenLogString(session_id, device));
@@ -141,17 +152,25 @@ base::UnguessableToken AudioInputDeviceManager::Open(
 }
 
 void AudioInputDeviceManager::Close(const base::UnguessableToken& session_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
   SendAudioLogMessage("Close({session_id=" + session_id.ToString() + "})");
   auto device = GetDevice(session_id);
   if (device == devices_.end()) {
     // The asynchronous device query started by Open() may not have completed
     // yet. Drop the session so that OpenedOnIOThread() does not register it.
     pending_open_sessions_.erase(session_id);
+    session_closed_callbacks_.erase(session_id);
     return;
   }
   const blink::mojom::MediaStreamType stream_type = device->type;
   devices_.erase(device);
+
+  auto callback_it = session_closed_callbacks_.find(session_id);
+  if (callback_it != session_closed_callbacks_.end()) {
+    base::OnceClosure callback = std::move(callback_it->second);
+    session_closed_callbacks_.erase(callback_it);
+    std::move(callback).Run();
+  }
 
   // Post a callback through the listener on IO thread since
   // MediaStreamManager is expecting the callback asynchronously.
@@ -165,16 +184,17 @@ void AudioInputDeviceManager::OpenedOnIOThread(
     const blink::MediaStreamDevice& device,
     const std::optional<media::AudioParameters>& input_params,
     const std::optional<std::string>& matched_output_device_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK(!input_params || input_params->IsValid());
-  DCHECK(!matched_output_device_id || !matched_output_device_id->empty());
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
+  CHECK(!input_params || input_params->IsValid(), base::NotFatalUntil::M158);
+  CHECK(!matched_output_device_id || !matched_output_device_id->empty(),
+        base::NotFatalUntil::M158);
 
   if (!pending_open_sessions_.erase(session_id)) {
     // The session was closed while the device query was in flight.
     return;
   }
 
-  DCHECK(GetDevice(session_id) == devices_.end());
+  CHECK(GetDevice(session_id) == devices_.end(), base::NotFatalUntil::M158);
 
   SendAudioLogMessage("Opened({session_id=" + session_id.ToString() + "})");
   blink::MediaStreamDevice media_stream_device(device.type, device.id,
@@ -184,7 +204,7 @@ void AudioInputDeviceManager::OpenedOnIOThread(
       input_params.value_or(media::AudioParameters::UnavailableDeviceParams());
   media_stream_device.matched_output_device_id = matched_output_device_id;
 
-  DCHECK(media_stream_device.input.IsValid());
+  CHECK(media_stream_device.input.IsValid(), base::NotFatalUntil::M158);
 
   devices_.push_back(media_stream_device);
 
@@ -195,7 +215,7 @@ void AudioInputDeviceManager::OpenedOnIOThread(
 void AudioInputDeviceManager::ClosedOnIOThread(
     blink::mojom::MediaStreamType stream_type,
     const base::UnguessableToken& session_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M158);
   SendAudioLogMessage("Closed({session_id=" + session_id.ToString() + "})");
   for (auto& listener : listeners_)
     listener.Closed(stream_type, session_id);

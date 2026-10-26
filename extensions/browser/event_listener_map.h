@@ -13,9 +13,10 @@
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/functional/callback_forward.h"
+#include "base/functional/function_ref.h"
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/common/event_filter.h"
 #include "extensions/common/extension_id.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_database.mojom-forward.h"
@@ -169,7 +170,7 @@ class EventListenerMap {
 
   class Delegate {
    public:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
     virtual void OnListenerAdded(const EventListener* listener) = 0;
     virtual void OnListenerRemoved(const EventListener* listener) = 0;
     virtual void OnListenerUpdated(const EventListener* listener) = 0;
@@ -217,6 +218,14 @@ class EventListenerMap {
 
   // Returns true if there are any listeners on the event named `event_name`.
   bool HasListenerForEvent(const std::string& event_name) const;
+
+  // Returns `true` if there are any listeners of `event_name` that are not
+  // associated with `process_id`. `process_id` must be valid
+  // (`!process_id.is_null()`).
+  bool HasListenerForEventOutsideProcess(
+      content::BrowserContext* browser_context,
+      const std::string& event_name,
+      content::ChildProcessId process_id) const;
 
   // Returns true if there are any listeners on `event_name` from
   // `extension_id`.
@@ -267,11 +276,9 @@ class EventListenerMap {
                                  const base::DictValue& filtered);
 
  private:
-  // Removes all listeners for `extension_id` where `removal_predicate` is true.
-  void RemoveListenersForExtensionImpl(
-      const ExtensionId& extension_id,
-      base::RepeatingCallback<bool(const ExtensionId&, EventListener*)>
-          removal_predicate);
+  // Removes the listeners for which `removal_predicate` returns true.
+  void RemoveListenersIf(
+      base::FunctionRef<bool(const EventListener&)> removal_predicate);
 
   void CleanupListener(EventListener* listener);
   bool IsFilteredEvent(const Event& event) const;

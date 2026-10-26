@@ -34,6 +34,7 @@ export interface ItemDelegate {
   deleteItem(id: string): void;
   deleteItems(ids: string[]): Promise<void>;
   uninstallItem(id: string): Promise<void>;
+  openReviewPage(id: string): Promise<void>;
   setItemEnabled(id: string, isEnabled: boolean): Promise<void>;
   setItemAllowedIncognito(id: string, isAllowedIncognito: boolean): void;
   setItemAllowedUserScripts(id: string, isAllowedUserScripts: boolean): void;
@@ -79,6 +80,9 @@ export class DummyItemDelegate {
     return Promise.resolve();
   }
   uninstallItem(_id: string) {
+    return Promise.resolve();
+  }
+  openReviewPage(_id: string) {
     return Promise.resolve();
   }
   setItemEnabled(_id: string, _isEnabled: boolean) {
@@ -242,6 +246,11 @@ export class ExtensionsItemElement extends ExtensionsItemElementBase {
     this.delegate.deleteItem(this.data.id);
   }
 
+  protected onOpenReviewPageClick_() {
+    assert(this.delegate);
+    this.delegate.openReviewPage(this.data.id);
+  }
+
   protected onEnableToggleChange_() {
     assert(this.delegate);
     this.delegate.setItemEnabled(this.data.id, this.$.enableToggle.checked);
@@ -320,6 +329,9 @@ export class ExtensionsItemElement extends ExtensionsItemElementBase {
     let classes = this.isEnabled_() ? 'enabled' : 'disabled';
     if (this.inDevMode) {
       classes += ' dev-mode';
+    }
+    if (loadTimeData.getBoolean('cwsReviewPromptingEnabled')) {
+      classes += ' review-prompting-enabled';
     }
     return classes;
   }
@@ -407,6 +419,7 @@ export class ExtensionsItemElement extends ExtensionsItemElementBase {
     return this.data.disableReasons.corruptInstall ||
         this.data.disableReasons.suspiciousInstall ||
         this.data.disableReasons.unsupportedDeveloperExtension ||
+        this.isDisabledByAnotherExtension_() ||
         this.data.runtimeWarnings.length > 0 || !!this.data.blocklistText;
   }
 
@@ -453,6 +466,27 @@ export class ExtensionsItemElement extends ExtensionsItemElementBase {
     // the allowlist warning will still be shown in the item detail view.
     return this.hasAllowlistWarning_() && !this.hasSevereWarnings_() &&
         !this.hasMv2DeprecationWarning_();
+  }
+
+  protected showOpenReviewPageLink_(): boolean {
+    // `canShowReviewPrompt` covers eligibility. `showDescription_()` adds the
+    // warning conditions C++ doesn't track (MV2 deprecation, runtime warnings,
+    // allowlist); don't invite a review while any of them is showing.
+    return this.data.canShowReviewPrompt && this.showDescription_();
+  }
+
+  protected getDisabledByExtensionWarningText_(): string {
+    if (!this.data.disableReasons.disabledByExtensionName) {
+      return this.i18n('itemDisabledByExtensionGeneric');
+    }
+
+    return this.i18n(
+        'itemDisabledByExtension',
+        this.data.disableReasons.disabledByExtensionName);
+  }
+
+  protected isDisabledByAnotherExtension_(): boolean {
+    return this.data.disableReasons.disabledByAnotherExtension;
   }
 
   protected showErrorsAsWarningsButtonLabel_(): boolean {

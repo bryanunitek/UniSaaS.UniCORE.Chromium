@@ -12,7 +12,6 @@
 #include "chrome/browser/ash/app_list/app_list_model_updater.h"
 #include "chrome/browser/ash/app_list/chrome_app_list_item.h"
 #include "chrome/browser/ash/app_list/test/chrome_app_list_test_support.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
@@ -45,7 +44,7 @@ class AppServiceContextMenuBrowserTest : public InProcessBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(AppServiceContextMenuBrowserTest,
                        LaunchNewMenuItemDynamicallyChanges) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   auto web_app_install_info =
       web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(
           GURL("https://example.org"));

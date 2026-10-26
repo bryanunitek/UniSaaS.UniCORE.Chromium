@@ -13,24 +13,20 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/android/gurl_android.h"
+#include "url/origin.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/android/chrome_jni_headers/ServiceTabLauncher_jni.h"
 
 using base::android::AttachCurrentThread;
-using base::android::ConvertUTF8ToJavaString;
-using base::android::JavaRef;
-using base::android::ScopedJavaLocalRef;
 
 // Called by Java when the WebContents instance for a request Id is available.
 static void JNI_ServiceTabLauncher_OnWebContentsForRequestAvailable(
-    JNIEnv* env,
     int32_t request_id,
-    const JavaRef<jobject>& android_web_contents) {
-  ServiceTabLauncher::GetInstance()->OnTabLaunched(
-      request_id,
-      content::WebContents::FromJavaWebContents(android_web_contents));
+    content::WebContents* web_contents) {
+  ServiceTabLauncher::GetInstance()->OnTabLaunched(request_id, web_contents);
 }
 
 // static
@@ -46,10 +42,10 @@ void ServiceTabLauncher::LaunchTab(content::BrowserContext* browser_context,
                                    const content::OpenURLParams& params,
                                    TabLaunchedCallback callback) {
   WindowOpenDisposition disposition = params.disposition;
-  if (disposition != WindowOpenDisposition::NEW_WINDOW &&
-      disposition != WindowOpenDisposition::NEW_POPUP &&
-      disposition != WindowOpenDisposition::NEW_FOREGROUND_TAB &&
-      disposition != WindowOpenDisposition::NEW_BACKGROUND_TAB) {
+  if (disposition != WindowOpenDisposition::kNewWindow &&
+      disposition != WindowOpenDisposition::kNewPopup &&
+      disposition != WindowOpenDisposition::kNewForegroundTab &&
+      disposition != WindowOpenDisposition::kNewBackgroundTab) {
     // ServiceTabLauncher can currently only launch new tabs.
     NOTIMPLEMENTED();
     return;
@@ -57,19 +53,16 @@ void ServiceTabLauncher::LaunchTab(content::BrowserContext* browser_context,
 
   JNIEnv* env = AttachCurrentThread();
 
-  ScopedJavaLocalRef<jobject> post_data;
-
   // IDMap requires a pointer, so we move |callback| into a heap pointer.
   int request_id = tab_launched_callbacks_.Add(
       std::make_unique<TabLaunchedCallback>(std::move(callback)));
-  DCHECK_GE(request_id, 1);
+  CHECK_GE(request_id, 1, base::NotFatalUntil::M161);
 
   Java_ServiceTabLauncher_launchTab(
-      env, request_id, browser_context->IsOffTheRecord(),
-      url::GURLAndroid::FromNativeGURL(env, params.url),
-      static_cast<int>(disposition), params.referrer.url.spec(),
-      static_cast<int>(params.referrer.policy), params.extra_headers,
-      post_data);
+      env, request_id, browser_context->IsOffTheRecord(), params.url,
+      static_cast<int32_t>(disposition), params.referrer.url.spec(),
+      static_cast<int32_t>(params.referrer.policy), params.extra_headers,
+      nullptr, params.initiator_origin, params.is_renderer_initiated);
 }
 
 void ServiceTabLauncher::OnTabLaunched(int request_id,

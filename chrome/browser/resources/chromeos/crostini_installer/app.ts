@@ -164,27 +164,24 @@ class CrostiniInstallerAppElement extends PolymerElement {
     };
   }
 
-  private state_: State;
-  private error_: InstallerError|string;
-  private installerState_: InstallerState;
-  private installerProgress_: number;
-  private errorMessage_: string;
-  private minDisk_: string;
-  private maxDisk_: string;
-  private defaultDiskSizeTick_: number;
-  private diskSizeTicks_: DiskSliderTick[];
-  private chosenDiskSize_: number;
-  private isLowSpaceAvailable_: boolean;
-  private showDiskSlider_: boolean;
-  private username_: string;
-  private usernameError_: string;
-  private MAX_USERNAME_LENGTH: number;
-  private listenerIds_: number[];
-  private diskSpacePromise_: Promise<{
-    ticks: DiskSliderTick[],
-    defaultIndex: number,
-    isLowSpaceAvailable: boolean,
-  }>;
+  declare private state_: State;
+  declare private error_: InstallerError|string;
+  declare private installerState_: InstallerState;
+  declare private installerProgress_: number;
+  declare private errorMessage_: string;
+  declare private minDisk_: string;
+  declare private maxDisk_: string;
+  declare private defaultDiskSizeTick_: number;
+  declare private diskSizeTicks_: DiskSliderTick[];
+  declare private chosenDiskSize_: number;
+  declare private isLowSpaceAvailable_: boolean;
+  declare private showDiskSlider_: boolean;
+  declare private username_: string;
+  declare private usernameError_: string;
+  declare private MAX_USERNAME_LENGTH: number;
+  private listenerIds_: number[] = [];
+  private diskSpacePromise_ =
+      BrowserProxy.getInstance().handler.requestAmountOfFreeDiskSpace();
   private onNextButtonClickIsRunning_: boolean = false;
 
   override connectedCallback() {
@@ -212,10 +209,6 @@ class CrostiniInstallerAppElement extends PolymerElement {
       callbackRouter.onCanceled.addListener(() => this.closePage_()),
       callbackRouter.requestClose.addListener(() => this.cancelOrBack_(true)),
     ];
-
-    // Query the disk space sooner than later to minimize delay.
-    this.diskSpacePromise_ =
-        BrowserProxy.getInstance().handler.requestAmountOfFreeDiskSpace();
 
     document.addEventListener('keyup', event => {
       if (event.key === 'Escape') {

@@ -17,13 +17,13 @@
 #include "net/base/upload_bytes_element_reader.h"
 #include "net/base/upload_data_stream.h"
 #include "net/base/upload_file_element_reader.h"
+#include "net/cookies/cookie_setting_override.h"
 #include "net/cookies/cookie_util.h"
 #include "net/device_bound_sessions/session_usage.h"
 #include "net/http/http_connection_info.h"
 #include "net/http/http_response_info.h"
 #include "net/storage_access_api/status.h"
 #include "net/url_request/url_request.h"
-#include "services/network/attribution/attribution_request_helper.h"
 #include "services/network/chunked_data_pipe_upload_data_stream.h"
 #include "services/network/cookie_manager.h"
 #include "services/network/cookie_settings.h"
@@ -32,7 +32,6 @@
 #include "services/network/pervasive_resources/shared_resource_checker.h"
 #include "services/network/public/cpp/connection_allowlist.h"
 #include "services/network/public/cpp/connection_allowlist_parser.h"
-#include "services/network/public/cpp/cors/cors.h"
 #include "services/network/public/cpp/cors/origin_access_list.h"
 #include "services/network/public/cpp/data_element.h"
 #include "services/network/public/cpp/features.h"
@@ -55,9 +54,8 @@ namespace {
 
 // TODO(https://crbug.com/375352611): add the check for enabling third-party
 // cookies.
-constexpr uint64_t kAllowedDevToolsCookieSettingOverrides =
-    1u << static_cast<int>(
-        net::CookieSettingOverride::kForceDisableThirdPartyCookies);
+constexpr net::CookieSettingOverrides kAllowedDevToolsCookieSettingOverrides = {
+    net::CookieSettingOverride::kForceDisableThirdPartyCookies};
 
 const char* GetDestinationTypePartString(
     network::mojom::RequestDestination destination) {
@@ -77,15 +75,41 @@ const char* GetCertStatePartString(const net::SSLInfo& ssl_info) {
   return ssl_info.is_issued_by_known_root ? "KnownRootCert" : "UnknownRootCert";
 }
 
-// Returns true if the |credentials_mode| of the request allows sending
+// Returns true if the initiator is same-origin with `url`, if the request has
+// no initiator (e.g. browser navigation), if `disable_web_security` is enabled,
+// or if granted access via `origin_access_list`.
+bool IsSameOriginOrAccessAllowed(
+    const GURL& url,
+    const std::optional<url::Origin>& initiator,
+    const cors::OriginAccessList* origin_access_list,
+    bool disable_web_security) {
+  if (disable_web_security &&
+      base::FeatureList::IsEnabled(
+          features::kAllowSameOriginCredentialsWithDisableWebSecurity)) {
+    return true;
+  }
+  if (!initiator.has_value() || initiator->IsSameOriginWith(url)) {
+    return true;
+  }
+  return origin_access_list &&
+         origin_access_list->CheckAccessState(*initiator, url) ==
+             cors::OriginAccessList::AccessState::kAllowed;
+}
+
+// Returns true if the `credentials_mode` of the request allows sending
 // credentials.
-bool ShouldAllowCredentials(mojom::CredentialsMode credentials_mode) {
+bool ShouldAllowCredentials(mojom::CredentialsMode credentials_mode,
+                            const GURL& url,
+                            const std::optional<url::Origin>& initiator,
+                            const cors::OriginAccessList* origin_access_list,
+                            bool disable_web_security) {
   switch (credentials_mode) {
     case mojom::CredentialsMode::kInclude:
-    // TODO(crbug.com/40619226): Make this work with
-    // CredentialsMode::kSameOrigin.
-    case mojom::CredentialsMode::kSameOrigin:
       return true;
+
+    case mojom::CredentialsMode::kSameOrigin:
+      return IsSameOriginOrAccessAllowed(url, initiator, origin_access_list,
+                                         disable_web_security);
 
     case mojom::CredentialsMode::kOmit:
     case mojom::CredentialsMode::kOmitBug_775438_Workaround:
@@ -93,13 +117,24 @@ bool ShouldAllowCredentials(mojom::CredentialsMode credentials_mode) {
   }
 }
 
-// Returns true when the |credentials_mode| of the request allows sending client
+// Returns true when the `credentials_mode` of the request allows sending client
 // certificates.
-bool ShouldSendClientCertificates(mojom::CredentialsMode credentials_mode) {
+bool ShouldSendClientCertificates(
+    mojom::CredentialsMode credentials_mode,
+    const GURL& url,
+    const std::optional<url::Origin>& initiator,
+    const cors::OriginAccessList* origin_access_list,
+    bool disable_web_security) {
   switch (credentials_mode) {
     case mojom::CredentialsMode::kInclude:
-    case mojom::CredentialsMode::kSameOrigin:
       return true;
+
+    case mojom::CredentialsMode::kSameOrigin:
+      if (IsSameOriginOrAccessAllowed(url, initiator, origin_access_list,
+                                      disable_web_security)) {
+        return true;
+      }
+      return !base::FeatureList::IsEnabled(features::kOmitCorsClientCert);
 
     // TODO(crbug.com/40089326): Due to a bug, the default behavior does
     // not properly correspond to Fetch's "credentials mode", in that client
@@ -221,17 +256,33 @@ class FileElementReader : public net::UploadFileElementReader {
 }  // namespace
 
 bool ShouldForceIgnoreSiteForCookies(
-    const GURL& url,
+    const std::vector<GURL>& url_chain,
     const std::optional<url::Origin>& request_initiator,
     const net::SiteForCookies& site_for_cookies,
     const cors::OriginAccessList& origin_access_list) {
+  if (url_chain.empty()) {
+    return false;
+  }
+
+  // This decision may be queried again after a redirect. One authorization
+  // path must cover every hop so a request cannot gain or retain the SameSite
+  // bypass across an origin access boundary.
+
   // Ignore site for cookies in requests from an initiator covered by the
-  // same-origin-policy exclusions in `origin_access_list_` (typically requests
+  // same-origin-policy exclusions in `origin_access_list` (typically requests
   // initiated by Chrome Extensions).
-  if (request_initiator.has_value() &&
-      cors::OriginAccessList::AccessState::kAllowed ==
+  if (request_initiator.has_value()) {
+    bool initiator_can_access_entire_chain = true;
+    for (const GURL& url : url_chain) {
+      if (cors::OriginAccessList::AccessState::kAllowed !=
           origin_access_list.CheckAccessState(request_initiator.value(), url)) {
-    return true;
+        initiator_can_access_entire_chain = false;
+        break;
+      }
+    }
+    if (initiator_can_access_entire_chain) {
+      return true;
+    }
   }
 
   // Convert `site_for_cookies` into an origin (an opaque origin if
@@ -244,37 +295,41 @@ bool ShouldForceIgnoreSiteForCookies(
   url::Origin site_origin =
       url::Origin::Create(site_for_cookies.RepresentativeUrl());
 
-  // If `site_for_cookies` represents an origin that is granted access to the
-  // initiator and the target by `origin_access_list_` (typically such
-  // `site_for_cookies` represents a Chrome Extension), then we also should
-  // force ignoring of site for cookies if the initiator and the target are
-  // same-site.
+  // If `site_for_cookies` represents an origin (typically a Chrome Extension),
+  // it can force ignoring of site for cookies only if `origin_access_list`
+  // grants it access to the initiator and every URL in `url_chain`. The
+  // initiator must also be same-site to every URL in the chain. All URLs must
+  // pass this path; permissions from the two paths must not be combined across
+  // redirect hops.
   //
   // Ideally we would walk up the frame tree and check that each ancestor is
-  // first-party to the main frame (treating the `origin_access_list_`
+  // first-party to the main frame (treating the `origin_access_list`
   // exceptions as "first-party").  But walking up the tree is not possible in
   // //services/network and so we make do with just checking the direct
   // initiator of the request.
   //
-  // We also check same-siteness between the initiator and the requested URL,
+  // We also check that the initiator is same-site to every URL in the chain,
   // because setting `force_ignore_site_for_cookies` to true causes Strict
-  // cookies to be attached, and having the initiator be same-site to the
-  // request URL is a requirement for Strict cookies (see
+  // cookies to be attached, and this is a requirement for Strict cookies (see
   // net::cookie_util::ComputeSameSiteContext).
   if (!site_origin.opaque() && request_initiator.has_value()) {
-    bool site_can_access_target =
-        cors::OriginAccessList::AccessState::kAllowed ==
-        origin_access_list.CheckAccessState(site_origin, url);
     bool site_can_access_initiator =
         cors::OriginAccessList::AccessState::kAllowed ==
         origin_access_list.CheckAccessState(site_origin,
                                             request_initiator->GetURL());
-    net::SiteForCookies site_of_initiator =
-        net::SiteForCookies::FromOrigin(request_initiator.value());
-    bool are_initiator_and_target_same_site =
-        site_of_initiator.IsFirstParty(url);
-    if (site_can_access_initiator && site_can_access_target &&
-        are_initiator_and_target_same_site) {
+    if (site_can_access_initiator) {
+      net::SiteForCookies site_of_initiator =
+          net::SiteForCookies::FromOrigin(request_initiator.value());
+      for (const GURL& url : url_chain) {
+        bool site_can_access_target =
+            cors::OriginAccessList::AccessState::kAllowed ==
+            origin_access_list.CheckAccessState(site_origin, url);
+        bool are_initiator_and_target_same_site =
+            site_of_initiator.IsFirstParty(url);
+        if (!site_can_access_target || !are_initiator_and_target_same_site) {
+          return false;
+        }
+      }
       return true;
     }
   }
@@ -352,21 +407,13 @@ std::unique_ptr<net::UploadDataStream> CreateUploadDataStream(
 net::CookieSettingOverrides CalculateCookieSettingOverrides(
     net::CookieSettingOverrides factory_overrides,
     net::CookieSettingOverrides devtools_overrides,
-    const ResourceRequest& request,
-    bool emit_metrics) {
+    const ResourceRequest& request) {
   net::CookieSettingOverrides overrides(factory_overrides);
-  if (request.is_outermost_main_frame &&
-      network::cors::IsCorsEnabledRequestMode(request.mode)) {
-    overrides.Put(
-        net::CookieSettingOverride::kTopLevelStorageAccessGrantEligible);
-  }
 
   // Only apply the DevTools overrides if the request is from devtools enabled
   // context.
   if (request.devtools_request_id.has_value()) {
-    CHECK_EQ(devtools_overrides.ToEnumBitmask() &
-                 ~kAllowedDevToolsCookieSettingOverrides,
-             0u);
+    CHECK(kAllowedDevToolsCookieSettingOverrides.HasAll(devtools_overrides));
     overrides = base::Union(overrides, devtools_overrides);
   }
 
@@ -529,7 +576,6 @@ void ConfigureUrlRequest(const ResourceRequest& request,
   // They are non-empty when the values are given by the UA code, therefore
   // they should be ignored by CORS checks.
   net::HttpRequestHeaders merged_headers = request.headers;
-  merged_headers.MergeFrom(ComputeAttributionReportingHeaders(request));
   merged_headers.MergeFrom(request.cors_exempt_headers);
   // This should be ensured by the CorsURLLoaderFactory(), which is called
   // before URLLoaders are created.
@@ -547,12 +593,12 @@ void ConfigureUrlRequest(const ResourceRequest& request,
   // `url_request.storage_access_status()`.
   url_request.cookie_setting_overrides() = CalculateCookieSettingOverrides(
       factory_params.cookie_setting_overrides,
-      factory_params.devtools_cookie_setting_overrides, request,
-      /*emit_metrics=*/true);
+      factory_params.devtools_cookie_setting_overrides, request);
   url_request.SetLoadFlags(request.load_flags);
-  SetRequestCredentials(request.url, factory_params.client_security_state,
-                        request.mode, request.credentials_mode,
-                        request.request_initiator, url_request);
+  SetRequestCredentials(
+      request.url, factory_params.client_security_state, request.mode,
+      request.credentials_mode, request.request_initiator, url_request,
+      &origin_access_list, factory_params.disable_web_security);
   if (request.credentials_mode == mojom::CredentialsMode::kInclude) {
     url_request.set_storage_access_status(
         url_request.CalculateStorageAccessStatus());
@@ -607,19 +653,27 @@ void SetRequestCredentials(
     mojom::RequestMode request_mode,
     mojom::CredentialsMode credentials_mode,
     const std::optional<url::Origin>& initiator,
-    net::URLRequest& url_request) {
+    net::URLRequest& url_request,
+    const cors::OriginAccessList* origin_access_list,
+    bool disable_web_security) {
   bool policies_allow_credentials = WebPoliciesAllowCredentials(
       url, client_security_state, request_mode, initiator);
 
   bool allow_credentials =
-      ShouldAllowCredentials(credentials_mode) && policies_allow_credentials;
-
-  bool allow_client_certificates =
-      ShouldSendClientCertificates(credentials_mode) &&
+      ShouldAllowCredentials(credentials_mode, url, initiator,
+                             origin_access_list, disable_web_security) &&
       policies_allow_credentials;
 
-  // The decision not to include credentials is sticky. This is equivalent to
-  // checking the tainted origin flag in the fetch specification.
+  bool allow_client_certificates =
+      ShouldSendClientCertificates(credentials_mode, url, initiator,
+                                   origin_access_list, disable_web_security) &&
+      policies_allow_credentials;
+
+  // The decision not to include credentials is sticky. Under WHATWG Fetch 4.5
+  // (HTTP-redirect fetch) and 4.6 (HTTP-network-or-cache fetch, step 8), a
+  // cross-origin redirect sets response tainting to 'cors' or 'opaque',
+  // causing 'same-origin' credentials mode to evaluate includeCredentials to
+  // false.
   if (!allow_credentials) {
     url_request.set_disallow_credentials();
   }
@@ -691,6 +745,7 @@ mojom::URLResponseHeadPtr BuildResponseHead(
   response->did_send_available_dictionary =
       response_info.did_send_available_dictionary;
   response->did_use_shared_dictionary = response_info.did_use_shared_dictionary;
+  response->is_shared_resource = url_request.is_shared_resource();
   response->did_use_server_http_auth = response_info.did_use_server_http_auth;
   response->device_bound_session_usage =
       static_cast<network::mojom::DeviceBoundSessionUsage>(

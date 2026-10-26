@@ -18,9 +18,9 @@
 #include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/bind.h"
 #include "base/test/test_future.h"
 #include "base/test/test_timeouts.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/apps/platform_apps/shortcut_manager.h"
@@ -47,6 +47,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/profile_deletion_observer.h"
+#include "chrome/test/base/profile_destruction_waiter.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
@@ -56,6 +57,7 @@
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_consumer.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
@@ -202,15 +204,15 @@ class PasswordStoreConsumerVerifier
  public:
   void OnGetPasswordStoreResultsOrErrorFrom(
       password_manager::PasswordStoreInterface* store,
-      password_manager::LoginsResultOrError results_or_error) override {
-    if (std::holds_alternative<password_manager::PasswordStoreBackendError>(
-            results_or_error)) {
+      base::expected<std::vector<password_manager::StoredCredential>,
+                     password_manager::PasswordStoreBackendError>
+          results_or_error) override {
+    if (!results_or_error) {
       ADD_FAILURE() << "Error from password store";
       password_entries_ = std::vector<password_manager::PasswordForm>();
     } else {
-      password_entries_ = password_manager::ToPasswordForms(
-          std::get<password_manager::LoginsResult>(
-              std::move(results_or_error)));
+      password_entries_ =
+          password_manager::ToPasswordForms(std::move(*results_or_error));
     }
     run_loop_.Quit();
   }
@@ -347,7 +349,7 @@ IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest, DeleteInactiveProfile) {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   ProfileAttributesStorage& storage =
       profile_manager->GetProfileAttributesStorage();
-  base::FilePath current_profile_path = browser()->profile()->GetPath();
+  base::FilePath current_profile_path = browser()->GetProfile()->GetPath();
 
   // Create an additional profile.
   base::FilePath new_path = profile_manager->GenerateNextProfileDirectoryPath();
@@ -382,7 +384,7 @@ IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest, DeleteCurrentProfile) {
   [[maybe_unused]] Profile& new_profile =
       profiles::testing::CreateProfileSync(profile_manager, new_profile_path);
 
-  base::FilePath current_profile_path = browser()->profile()->GetPath();
+  base::FilePath current_profile_path = browser()->GetProfile()->GetPath();
   base::FilePath new_last_used_path = new_profile_path;
 
   ASSERT_EQ(2u, storage.GetNumberOfProfiles());
@@ -456,7 +458,7 @@ IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest, MAYBE_DeleteAllProfiles) {
 
 IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest, ProfileFromProfileKey) {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
-  Profile* profile1 = browser()->profile();
+  Profile* profile1 = browser()->GetProfile();
 
   // Create an additional profile.
   base::FilePath new_path = profile_manager->GenerateNextProfileDirectoryPath();
@@ -610,19 +612,19 @@ IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest, PRE_AddMultipleProfiles) {
   EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Open a browser window for the first profile.
-  base::test::TestFuture<Browser*> browser1_future;
+  base::test::TestFuture<BrowserWindowInterface*> browser1_future;
   profiles::SwitchToProfile(path_profile1, false,
                             browser1_future.GetCallback());
   EXPECT_TRUE(browser1_future.Wait());
   EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
-  EXPECT_EQ(path_profile1, browser1_future.Get()->profile()->GetPath());
+  EXPECT_EQ(path_profile1, browser1_future.Get()->GetProfile()->GetPath());
   // Open a browser window for the second profile.
-  base::test::TestFuture<Browser*> browser2_future;
+  base::test::TestFuture<BrowserWindowInterface*> browser2_future;
   profiles::SwitchToProfile(path_profile2, false,
                             browser2_future.GetCallback());
   EXPECT_TRUE(browser2_future.Wait());
   EXPECT_EQ(2U, GlobalBrowserCollection::GetInstance()->GetSize());
-  EXPECT_EQ(path_profile2, browser2_future.Get()->profile()->GetPath());
+  EXPECT_EQ(path_profile2, browser2_future.Get()->GetProfile()->GetPath());
 }
 
 IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest, AddMultipleProfiles) {
@@ -701,46 +703,30 @@ IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest, EphemeralProfile) {
   EXPECT_EQ(initial_profile_count + 1U, storage.GetNumberOfProfiles());
 
   // The second should though.
+  // `ProfileDeletionObserver` waits for the profile entry to be removed from
+  // `ProfileAttributesStorage`, while `ProfileDestructionWaiter` waits for the
+  // in-memory `Profile` object to be destroyed (which happens later, after
+  // async browsing data removal releases its keep-alive, when
+  // `kDestroyProfileOnBrowserClose` is enabled).
   ProfileDeletionObserver observer;
-  bool watch_started = false;
-  base::ScopedAllowBlockingForTesting allow_blocking;
-  base::FilePathWatcher watcher;
-  base::RunLoop run_loop;
-
-  if (base::FeatureList::IsEnabled(features::kDestroyProfileOnBrowserClose)) {
-    watch_started = watcher.Watch(
-        path_profile2, base::FilePathWatcher::Type::kNonRecursive,
-        base::BindLambdaForTesting([&run_loop, &path_profile2](
-                                       const base::FilePath& path, bool error) {
-          if (path != path_profile2)
-            return;
-          EXPECT_FALSE(error);
-          if (!base::PathExists(path))
-            run_loop.Quit();
-        }));
-    ASSERT_TRUE(watch_started);
-  }
-
+  ProfileDestructionWaiter destruction_waiter(browser_profile2->GetProfile());
   CloseBrowserSynchronously(browser_profile2);
   observer.Wait();
 
   EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ(initial_profile_count, storage.GetNumberOfProfiles());
 
-  if (watch_started) {
-    if (base::PathExists(path_profile2)) {
-      run_loop.Run();
-    }
-    // It is not possible to check the non-existence of the file here, as it may
-    // have been recreated by pending file tasks after being deleted.
-    // See crbug.com/40756611.
+  if (base::FeatureList::IsEnabled(features::kDestroyProfileOnBrowserClose)) {
+    destruction_waiter.Wait();
+  } else {
+    EXPECT_FALSE(destruction_waiter.destroyed());
   }
 }
 
 // The test makes sense on those platforms where the keychain exists.
 #if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest, DeletePasswords) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   ASSERT_TRUE(profile);
 
   password_manager::PasswordForm form;
@@ -748,7 +734,7 @@ IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest, DeletePasswords) {
   form.url = GURL("http://accounts.google.com/LoginAuth");
   form.signon_realm = "http://accounts.google.com/";
   form.username_value = u"my_username";
-  form.password_value = u"my_password";
+  form.password_value = password_manager::PasswordString(u"my_password");
   form.blocked_by_user = false;
 
   scoped_refptr<password_manager::PasswordStoreInterface> password_store =
@@ -783,7 +769,7 @@ IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest, DeletePasswords) {
 // profile counts in ProfileManager with respect to the creation and destruction
 // of incognito profiles.
 IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest, IncognitoProfile) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   ASSERT_TRUE(profile);
   EXPECT_FALSE(profile->HasPrimaryOTRProfile());
 
@@ -958,21 +944,21 @@ IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest, LastOpenedProfiles) {
   EXPECT_THAT(profile_manager->GetLastOpenedProfiles(), testing::SizeIs(1));
 
   // Create a browser for profile1.
-  Browser* browser1a = CreateBrowser(&profile1);
+  BrowserWindowInterface* browser1a = CreateBrowser(&profile1);
 
   EXPECT_THAT(profile_manager->GetLastOpenedProfiles(),
               testing::ElementsAre(testing::_, &profile1));
   EXPECT_TRUE(profile_manager->has_updated_last_opened_profiles());
 
   // And for profile2.
-  Browser* browser2 = CreateBrowser(&profile2);
+  BrowserWindowInterface* browser2 = CreateBrowser(&profile2);
 
   EXPECT_THAT(profile_manager->GetLastOpenedProfiles(),
               testing::ElementsAre(testing::_, &profile1, &profile2));
   EXPECT_TRUE(profile_manager->has_updated_last_opened_profiles());
 
   // Adding more browsers doesn't change anything.
-  Browser* browser1b = CreateBrowser(&profile1);
+  BrowserWindowInterface* browser1b = CreateBrowser(&profile1);
 
   EXPECT_THAT(profile_manager->GetLastOpenedProfiles(),
               testing::ElementsAre(testing::_, &profile1, &profile2));
@@ -1037,20 +1023,20 @@ IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest,
   EXPECT_THAT(profile_manager->GetLastOpenedProfiles(), testing::SizeIs(1));
 
   // Create a browser for profile1.
-  Browser* browser1 = CreateBrowser(&profile1);
+  BrowserWindowInterface* browser1 = CreateBrowser(&profile1);
 
   EXPECT_THAT(profile_manager->GetLastOpenedProfiles(),
               testing::ElementsAre(testing::_, &profile1));
 
   // And for profile2.
-  Browser* browser2a =
+  BrowserWindowInterface* browser2a =
       CreateBrowser(profile1.GetPrimaryOTRProfile(/*create_if_needed=*/true));
 
   EXPECT_THAT(profile_manager->GetLastOpenedProfiles(),
               testing::ElementsAre(testing::_, &profile1));
 
   // Adding more browsers doesn't change anything.
-  Browser* browser2b =
+  BrowserWindowInterface* browser2b =
       CreateBrowser(profile1.GetPrimaryOTRProfile(/*create_if_needed=*/true));
   EXPECT_THAT(profile_manager->GetLastOpenedProfiles(),
               testing::ElementsAre(testing::_, &profile1));
@@ -1078,7 +1064,7 @@ IN_PROC_BROWSER_TEST_P(ProfileManagerBrowserTest,
   EXPECT_NE(&profile, last_used_profile);
 
   // Create a browser for the profile.
-  Browser* browser = CreateBrowser(&profile);
+  BrowserWindowInterface* browser = CreateBrowser(&profile);
   last_used_profile = profile_manager->GetLastUsedProfile();
   EXPECT_NE(&profile, last_used_profile);
 
@@ -1143,7 +1129,7 @@ class ProfileManagerDestroyProfileBrowserTest
   void SetUpOnMainThread() override {
     ProfileManagerBrowserTestBase::SetUpOnMainThread();
     default_profile_keepalive_ = std::make_unique<ScopedProfileKeepAlive>(
-        browser()->profile(), ProfileKeepAliveOrigin::kBrowserWindow);
+        browser()->GetProfile(), ProfileKeepAliveOrigin::kBrowserWindow);
   }
 
   void TearDownOnMainThread() override {
@@ -1171,14 +1157,15 @@ IN_PROC_BROWSER_TEST_F(ProfileManagerDestroyProfileBrowserTest,
       profiles::testing::CreateProfileSync(profile_manager, dest_path2);
 
   // Create a browser for profile2.
-  Browser* browser2 = CreateBrowser(&profile2);
+  BrowserWindowInterface* browser2 = CreateBrowser(&profile2);
 
   EXPECT_TRUE(profile_manager->IsValidProfile(&profile1));
   EXPECT_TRUE(profile_manager->IsValidProfile(&profile2));
 
   // Close the browser for profile2.
+  ProfileDestructionWaiter waiter(&profile2);
   CloseBrowserSynchronously(browser2);
-  content::RunAllTasksUntilIdle();
+  waiter.Wait();
 
   EXPECT_TRUE(profile_manager->IsValidProfile(&profile1));
   EXPECT_FALSE(profile_manager->IsValidProfile(&profile2));
@@ -1220,7 +1207,7 @@ IN_PROC_BROWSER_TEST_F(ProfileManagerDestroyProfileBrowserTest,
   EXPECT_TRUE(base::PathExists(dest_path2));
 
   // Create a browser for profile2.
-  Browser* browser2 = CreateBrowser(&profile2);
+  BrowserWindowInterface* browser2 = CreateBrowser(&profile2);
 
   // All asynchronous profile loading must complete to prevent accidental
   // reconstruction of profile2's path. This happens because

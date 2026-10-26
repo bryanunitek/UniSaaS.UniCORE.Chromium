@@ -80,6 +80,19 @@ bool ProcessingInstruction::IsXSL() const {
   return is_xsl_;
 }
 
+void ProcessingInstruction::DisallowXSL() {
+  if (!is_xsl_) {
+    return;
+  }
+  DocumentXSLT::ProcessingInstructionRemovedFromDocument(GetDocument(), this);
+  is_xsl_ = false;
+  if (sheet_) {
+    ClearSheet();
+  }
+  ClearResource();
+  loading_ = false;
+}
+
 EventListener* ProcessingInstruction::EventListenerForXSLT() {
   if (!listener_for_xslt_) {
     return nullptr;
@@ -180,8 +193,9 @@ bool ProcessingInstruction::ValidateAttributeName(
     const AtomicString& name,
     ExceptionState& exception_state) const {
   if (!Document::IsValidAttributeLocalName(name)) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidCharacterError,
-                                      "Invalid attribute name: " + name);
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kInvalidCharacterError,
+        StrCat({"Invalid attribute name: ", name}));
     return false;
   }
   return true;

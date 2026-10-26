@@ -8,7 +8,7 @@
 #include "base/values.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -185,8 +185,8 @@ IN_PROC_BROWSER_TEST_F(UserScriptWorldBrowserTest,
            "mainWorldFlag": "<no flag>",
            "chromeKeys": ["csi", "loadTimes", "runtime", "test"],
            "runtimeKeys": ["ContextType", "OnInstalledReason",
-                           "OnRestartRequiredReason", "PlatformArch",
-                           "PlatformNaclArch", "PlatformOs",
+                           "OnLoadedReason", "OnRestartRequiredReason",
+                           "PlatformArch", "PlatformNaclArch", "PlatformOs",
                            "RequestUpdateCheckStatus",
                            "connect", "dynamicId", "id", "onConnect",
                            "onMessage", "sendMessage"]

@@ -75,6 +75,12 @@ class PaymentRequestTestController::ObserverConverter
   void OnAbortCalled() override { controller_->OnAbortCalled(); }
   void OnCompleteCalled() override { controller_->OnCompleteCalled(); }
   void OnInternalError() override { controller_->OnInternalError(); }
+  void OnPaymentRequestStateInitDone(PaymentRequestState* state) override {
+    if (state && controller_) {
+      state->set_bypass_user_interaction_for_testing(
+          controller_->bypass_user_interaction_for_testing());
+    }
+  }
 
   // PaymentUIObserver:
   void OnUIDisplayed() const override { controller_->OnUIDisplayed(); }
@@ -228,8 +234,8 @@ void PaymentRequestTestController::UpdateDelegateFactory() {
 
         // PaymentRequest is a DocumentService, whose lifetime is managed by the
         // RenderFrameHost passed into the delegate.
-        auto* request =
-            new PaymentRequest(std::move(delegate), std::move(receiver));
+        auto* request = base::MakeSelfDeleting<PaymentRequest>(
+            std::move(delegate), std::move(receiver));
         request->set_observer_for_test(observer_for_test);
         request->set_window_size_check_enabled_for_test(false);
       },

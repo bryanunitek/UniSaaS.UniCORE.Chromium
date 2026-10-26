@@ -26,7 +26,6 @@
 #include "ash/public/cpp/test/shell_test_api.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
-#include "ash/session/test_pref_service_provider.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
@@ -50,6 +49,7 @@
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
 #include "ash/wm/window_preview_view.h"
 #include "base/files/file_path.h"
+#include "base/json/values_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -209,18 +209,15 @@ size_t GetMaxVisibleItemCount(HoldingSpaceSectionId section_id) {
   return GetHoldingSpaceSection(section_id)->max_visible_item_count.value();
 }
 
-// Returns whether a context menu is currently showing.
-bool IsShowingContextMenu() {
-  return views::MenuController::GetActiveInstance();
-}
-
 // Returns the menu item matched by `id`.
-const views::MenuItemView* GetMenuItemByCommandId(HoldingSpaceCommandId id) {
-  if (!IsShowingContextMenu())
-    return nullptr;
-  if (auto* menu_item =
-          views::MenuController::GetActiveInstance()->GetSelectedMenuItem()) {
-    return menu_item->GetMenuItemByID(static_cast<int>(id));
+const views::MenuItemView* GetMenuItemByCommandId(views::Widget* menu_owner,
+                                                  HoldingSpaceCommandId id) {
+  views::MenuController* menu_controller =
+      views::MenuController::GetForOwnerWidget(menu_owner);
+  if (menu_controller) {
+    if (auto* menu_item = menu_controller->GetSelectedMenuItem()) {
+      return menu_item->GetMenuItemByID(static_cast<int>(id));
+    }
   }
   return nullptr;
 }
@@ -364,14 +361,15 @@ class HoldingSpaceTrayTestBase : public NoSessionAshTestBase {
     NoSessionAshTestBase::SetUp();
     test_api_ = std::make_unique<HoldingSpaceTestApi>();
 
-    auto pref_service = TestPrefServiceProvider::CreateUserPrefServiceSimple();
-    holding_space_prefs::MarkTimeOfFirstAvailability(pref_service.get());
-
     AccountId user_account = AccountId::FromUserEmail(kTestUser);
     HoldingSpaceController::Get()->RegisterClientAndModelForUser(
         user_account, client(), model());
 
-    SimulateUserLogin({}, user_account, std::move(pref_service));
+    auto init_prefs =
+        base::DictValue().Set("ash.holding_space.time_of_first_availability",
+                              base::TimeToValue(base::Time::Now()));
+    SimulateUserLogin({.account_id = user_account,
+                       .init_pref_service_value = std::move(init_prefs)});
   }
 
   void TearDown() override {
@@ -457,15 +455,17 @@ class HoldingSpaceTrayTestBase : public NoSessionAshTestBase {
   void SwitchToSecondaryUser(const std::string& user_id,
                              HoldingSpaceClient* client,
                              HoldingSpaceModel* model) {
-    auto pref_service = TestPrefServiceProvider::CreateUserPrefServiceSimple();
-    holding_space_prefs::MarkTimeOfFirstAvailability(pref_service.get());
-    holding_space_prefs::MarkTimeOfFirstAdd(pref_service.get());
-    holding_space_prefs::MarkTimeOfFirstPin(pref_service.get());
-
     AccountId user_account = AccountId::FromUserEmail(user_id);
     HoldingSpaceController::Get()->RegisterClientAndModelForUser(user_account,
                                                                  client, model);
-    SimulateUserLogin({user_id}, std::nullopt, std::move(pref_service));
+    base::Value now = base::TimeToValue(base::Time::Now());
+    auto init_prefs =
+        base::DictValue()
+            .Set("ash.holding_space.time_of_first_availability", now.Clone())
+            .Set("ash.holding_space.time_of_first_add", now.Clone())
+            .Set("ash.holding_space.time_of_first_pin", std::move(now));
+    SimulateUserLogin({.account_id = user_account,
+                       .init_pref_service_value = std::move(init_prefs)});
   }
 
   void UnregisterModelForUser(const std::string& user_id) {
@@ -2032,7 +2032,7 @@ TEST_F(HoldingSpaceTrayTest, HasExpectedBubbleTreatment) {
   // Background.
   auto* background = bubble->GetBackground();
   ASSERT_FALSE(background);
-  EXPECT_EQ(bubble->layer()->type(), ui::LAYER_NOT_DRAWN);
+  EXPECT_TRUE(bubble->layer()->AsNotDrawn());
   EXPECT_EQ(bubble->layer()->background_blur(), 0.f);
 
   // Border.
@@ -2881,7 +2881,8 @@ TEST_P(HoldingSpaceTraySuggestionsSectionTest, SuggestionsRemoval) {
   // `HoldingSpaceClient::RemoveSuggestions()` is called.
   EXPECT_CALL(*client(),
               RemoveSuggestions(std::vector<base::FilePath>({path})));
-  Click(GetMenuItemByCommandId(HoldingSpaceCommandId::kRemoveItem));
+  Click(GetMenuItemByCommandId(item_views.front()->GetWidget(),
+                               HoldingSpaceCommandId::kRemoveItem));
 }
 
 // Base class for tests of the holding space downloads section parameterized by
@@ -3487,8 +3488,9 @@ class HoldingSpaceTrayPrimaryAndSecondaryActionsTest
   }
 
   // Returns whether a context menu is showing with a command matching `id`.
-  bool HasContextMenuCommand(HoldingSpaceCommandId id) const {
-    return !!GetMenuItemByCommandId(id);
+  bool HasContextMenuCommand(views::View* view,
+                             HoldingSpaceCommandId id) const {
+    return !!GetMenuItemByCommandId(view ? view->GetWidget() : nullptr, id);
   }
 };
 
@@ -3567,7 +3569,7 @@ TEST_P(HoldingSpaceTrayPrimaryAndSecondaryActionsTest, HasExpectedActions) {
 
   // Right click the item view to show the context menu.
   RightClick(item_views.front());
-  EXPECT_TRUE(IsShowingContextMenu());
+  EXPECT_TRUE(views::MenuController::GetActiveInstance());
 
   // Verify context menu commands for in-progress holding space items.
   for (const HoldingSpaceCommandId& id : GetHoldingSpaceCommandIds()) {
@@ -3585,12 +3587,13 @@ TEST_P(HoldingSpaceTrayPrimaryAndSecondaryActionsTest, HasExpectedActions) {
         // No action necessary.
         break;
     }
-    EXPECT_EQ(HasContextMenuCommand(id), expect_context_menu_command);
+    EXPECT_EQ(HasContextMenuCommand(item_views.front(), id),
+              expect_context_menu_command);
   }
 
   // Press and release ESC to close the context menu.
   PressAndReleaseKey(ui::KeyboardCode::VKEY_ESCAPE);
-  EXPECT_FALSE(IsShowingContextMenu());
+  EXPECT_FALSE(views::MenuController::GetActiveInstance());
 
   // Hide progress for the holding space `item`.
   model()
@@ -3620,7 +3623,7 @@ TEST_P(HoldingSpaceTrayPrimaryAndSecondaryActionsTest, HasExpectedActions) {
 
   // Right click the item view to show the context menu.
   RightClick(item_views.front());
-  EXPECT_TRUE(IsShowingContextMenu());
+  EXPECT_TRUE(views::MenuController::GetActiveInstance());
 
   // Verify context menu commands for completed holding space items.
   for (const HoldingSpaceCommandId& id : GetHoldingSpaceCommandIds()) {
@@ -3645,7 +3648,8 @@ TEST_P(HoldingSpaceTrayPrimaryAndSecondaryActionsTest, HasExpectedActions) {
         // No action necessary.
         break;
     }
-    EXPECT_EQ(HasContextMenuCommand(id), expect_context_menu_command);
+    EXPECT_EQ(HasContextMenuCommand(item_views.front(), id),
+              expect_context_menu_command);
   }
 }
 

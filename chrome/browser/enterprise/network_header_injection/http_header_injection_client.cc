@@ -9,6 +9,8 @@
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/rand_util.h"
 #include "components/enterprise/network_header_injection/core/http_header_injection_service.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
@@ -115,26 +117,34 @@ void HttpHeaderInjectionClient::OnTargetBeforeSendHeadersComplete(
     return;
   }
 
-  std::optional<net::HttpRequestHeaders> final_headers = headers;
-
   if (!service_) {
-    std::move(callback).Run(net::OK, final_headers,
+    std::move(callback).Run(net::OK, headers,
                             std::move(extended_net_log_events));
     return;
   }
 
   net::HttpRequestHeaders headers_to_inject =
       service_->GetHeadersForUrl(request_url);
-  if (!headers_to_inject.IsEmpty()) {
-    if (!final_headers) {
-      final_headers = original_headers;
-    }
 
-    PopulateNetLogEvents(headers_to_inject, *final_headers,
-                         extended_net_log_events);
-
-    final_headers->MergeFrom(headers_to_inject);
+  bool modified = !headers_to_inject.IsEmpty();
+  if (base::ShouldRecordSubsampledMetric(0.001)) {
+    base::UmaHistogramBoolean("Enterprise.HttpHeaderInjection.RequestModified",
+                              modified);
   }
+
+  if (!modified) {
+    std::move(callback).Run(net::OK, headers,
+                            std::move(extended_net_log_events));
+    return;
+  }
+
+  std::optional<net::HttpRequestHeaders> final_headers =
+      headers.value_or(original_headers);
+
+  PopulateNetLogEvents(headers_to_inject, *final_headers,
+                       extended_net_log_events);
+
+  final_headers->MergeFrom(headers_to_inject);
 
   std::move(callback).Run(net::OK, final_headers,
                           std::move(extended_net_log_events));

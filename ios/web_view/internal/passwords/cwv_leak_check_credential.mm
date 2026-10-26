@@ -46,7 +46,8 @@
 }
 
 - (NSString*)password {
-  return base::SysUTF16ToNSString(_internalCredential->password());
+  return base::SysUTF16ToNSString(
+      _internalCredential->password().secure_value());
 }
 
 #pragma mark - NSObject

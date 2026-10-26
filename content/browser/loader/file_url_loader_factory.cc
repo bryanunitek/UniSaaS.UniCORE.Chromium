@@ -4,6 +4,7 @@
 
 #include "content/browser/loader/file_url_loader_factory.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -509,8 +510,9 @@ class FileURLLoader : public network::mojom::URLLoader {
         return;
       }
 
-      DCHECK_EQ(directory_loading_policy,
-                DirectoryLoadingPolicy::kRespondWithListing);
+      CHECK_EQ(directory_loading_policy,
+               DirectoryLoadingPolicy::kRespondWithListing,
+               base::NotFatalUntil::M160);
 
       net::RedirectInfo redirect_info;
       redirect_info.new_method = "GET";
@@ -595,14 +597,22 @@ class FileURLLoader : public network::mojom::URLLoader {
     mojo::ScopedDataPipeProducerHandle producer_handle;
     mojo::ScopedDataPipeConsumerHandle consumer_handle;
 
-    // Request the larger size data pipe for file:// URL loading.
-    uint32_t data_pipe_size = network::GetDataPipeDefaultAllocationSize(
-        network::DataPipeAllocationSize::kLargerSizeIfPossible);
+    // Request the larger size data pipe for file:// URL loading, but don't
+    // make it larger than the file: the pipe's shared memory is allocated up
+    // front, so a 2 MiB pipe for a small script or stylesheet costs more to
+    // create, map and tear down than the transfer itself. The size is always
+    // at least the MIME sniffing buffer so the initial read below fits.
+    const uint32_t max_data_pipe_size =
+        network::GetDataPipeDefaultAllocationSize(
+            network::DataPipeAllocationSize::kLargerSizeIfPossible);
     // This should already be static_asserted in network::features, but good
     // to double-check.
-    DCHECK(data_pipe_size >= net::kMaxBytesToSniff)
+    DCHECK(max_data_pipe_size >= net::kMaxBytesToSniff)
         << "Default file data pipe size must be at least as large as a "
            "MIME-type sniffing buffer.";
+    const uint32_t data_pipe_size =
+        base::checked_cast<uint32_t>(std::clamp<int64_t>(
+            info.size, net::kMaxBytesToSniff, max_data_pipe_size));
 
     if (mojo::CreateDataPipe(data_pipe_size, producer_handle,
                              consumer_handle) != MOJO_RESULT_OK) {
@@ -614,7 +624,7 @@ class FileURLLoader : public network::mojom::URLLoader {
     // is used to respond to a directory request, it must be because the URL
     // path didn't have a trailing path separator. In that case we finish with
     // a redirect above which will in turn be handled by FileURLDirectoryLoader.
-    DCHECK(!info.is_directory);
+    CHECK(!info.is_directory, base::NotFatalUntil::M160);
     if (observer) {
       observer->OnStart();
     }
@@ -863,8 +873,9 @@ void FileURLLoaderFactory::CreateLoaderAndStart(
   // |mode| should be kNoCors for the case of |shared_cors_origin_access_list_|
   // being nullptr. Only internal call sites, such as ExtensionDownloader, is
   // permitted to specify nullptr.
-  DCHECK(!network::cors::IsCorsEnabledRequestMode(request.mode) ||
-         shared_cors_origin_access_list_);
+  CHECK(!network::cors::IsCorsEnabledRequestMode(request.mode) ||
+            shared_cors_origin_access_list_,
+        base::NotFatalUntil::M160);
 
   // If kDisableWebSecurity flag is specified, make all requests pretend as
   // "no-cors" requests. Otherwise, call IsSameOriginWith for a file scheme

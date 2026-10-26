@@ -4,42 +4,142 @@
 
 #import "ios/chrome/browser/autofill/atmemory/utils/atmemory_ui_util.h"
 
-#import <algorithm>
+#import <UIKit/UIKit.h>
 
-#import "ios/chrome/common/ui/colors/semantic_color_names.h"
+#import <variant>
+
+#import "base/strings/sys_string_conversions.h"
+#import "components/autofill/core/browser/suggestions/suggestion.h"
+#import "components/autofill/core/browser/suggestions/suggestion_type.h"
+#import "components/autofill/ios/browser/autofill_client_ios.h"
+#import "ios/chrome/browser/autofill/atmemory/public/at_memory_constants.h"
+#import "ios/chrome/browser/autofill/atmemory/ui/at_memory_granular_fill_item.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
+#import "ios/web/public/web_state.h"
 
 namespace {
-// Size of the close button.
-constexpr CGFloat kCloseButtonSize = 44;
-
-// Size of the close button when liquid glass is disabled.
-constexpr CGFloat kCloseButtonSizePreLiquidGlass = 30;
+// Duration of the crossfade transition when updating subtitle messages.
+constexpr NSTimeInterval kMessageCrossfadeDuration = 0.15;
 }  // namespace
 
-namespace at_memory {
+using autofill::AutofillClientIOS;
+using autofill::Suggestion;
+using autofill::SuggestionType;
 
-// Returns the symbol configuration to use for the close button.
-UIImageSymbolConfiguration* GetCloseButtonSymbolConfiguration() {
-  if (@available(iOS 26, *)) {
-    return [UIImageSymbolConfiguration
-        configurationWithPointSize:kCloseButtonSize
-                            weight:UIImageSymbolWeightThin
-                             scale:UIImageSymbolScaleDefault];
+AtMemoryFailedToOpenReason GetAtMemoryFailedToOpenReason(Browser* browser) {
+  if (!browser || !browser->GetWebStateList()) {
+    return AtMemoryFailedToOpenReason::kNoBrowser;
   }
 
-  return [UIImageSymbolConfiguration
-      configurationWithPointSize:kCloseButtonSizePreLiquidGlass
-                          weight:UIImageSymbolWeightRegular
-                           scale:UIImageSymbolScaleMedium];
-}
-
-// Returns the foreground color to use for the close button color palette.
-UIColor* GetCloseButtonForegroundColor() {
-  if (@available(iOS 26, *)) {
-    return [UIColor colorNamed:kTextPrimaryColor];
+  web::WebState* web_state = browser->GetWebStateList()->GetActiveWebState();
+  if (!web_state) {
+    return AtMemoryFailedToOpenReason::kNoActiveWebState;
   }
 
-  return [[UIColor secondaryLabelColor] colorWithAlphaComponent:0.6];
+  AutofillClientIOS* autofill_client =
+      AutofillClientIOS::FromWebState(web_state);
+  if (!autofill_client) {
+    return AtMemoryFailedToOpenReason::kNoAutofillClient;
+  }
+
+  if (!autofill_client->GetAtMemoryManager()) {
+    return AtMemoryFailedToOpenReason::kNoAtMemoryManager;
+  }
+
+  if (!autofill_client->GetAutofillManagerForPrimaryMainFrame()) {
+    return AtMemoryFailedToOpenReason::kNoAutofillManager;
+  }
+
+  return AtMemoryFailedToOpenReason::kNone;
 }
 
-}  // namespace at_memory
+NSString* GetAtMemoryGranularFillTitle(const Suggestion& suggestion) {
+  const Suggestion::AtMemoryPayload* payload =
+      std::get_if<Suggestion::AtMemoryPayload>(&suggestion.payload);
+  if (!payload) {
+    return @"";
+  }
+  return base::SysUTF16ToNSString(payload->type_name);
+}
+
+NSArray<AtMemoryGranularFillItem*>* AtMemoryGranularFillItemsForSuggestion(
+    const Suggestion& suggestion) {
+  NSMutableArray<AtMemoryGranularFillItem*>* items =
+      [[NSMutableArray alloc] init];
+
+  for (size_t i = 0; i < suggestion.children.size(); ++i) {
+    const Suggestion& child = suggestion.children[i];
+    if (child.type != SuggestionType::kAtMemorySearchResult) {
+      continue;
+    }
+    const Suggestion::AtMemoryPayload* child_payload =
+        std::get_if<Suggestion::AtMemoryPayload>(&child.payload);
+    if (!child_payload || child_payload->value.empty()) {
+      continue;
+    }
+    [items addObject:[[AtMemoryGranularFillItem alloc]
+                         initWithAttributeName:base::SysUTF16ToNSString(
+                                                   child_payload->type_name)
+                                attributeValue:base::SysUTF16ToNSString(
+                                                   child_payload->value)
+                                         index:static_cast<NSInteger>(i)]];
+  }
+
+  return [items copy];
+}
+
+NSString* GetAtMemoryGranularFillCellAccessibilityIdentifier(
+    NSString* attribute_name) {
+  return [NSString
+      stringWithFormat:@"%@%@",
+                       kAtMemoryGranularFillCellAccessibilityIdentifierPrefix,
+                       attribute_name];
+}
+
+NSString* GetAtMemoryGranularFillAttributeLabelAccessibilityIdentifier(
+    NSString* attribute_name) {
+  return [NSString
+      stringWithFormat:
+          @"%@%@",
+          kAtMemoryGranularFillAttributeLabelAccessibilityIdentifierPrefix,
+          attribute_name];
+}
+
+NSString* GetAtMemoryGranularFillChipButtonAccessibilityIdentifier(
+    NSString* attribute_name) {
+  return [NSString
+      stringWithFormat:
+          @"%@%@", kAtMemoryGranularFillChipButtonAccessibilityIdentifierPrefix,
+          attribute_name];
+}
+
+NSString* GetAtMemorySearchResultCellAccessibilityIdentifier(NSString* title) {
+  return [NSString
+      stringWithFormat:@"%@%@",
+                       kAtMemorySearchResultCellAccessibilityIdentifierPrefix,
+                       title];
+}
+
+NSString* GetAtMemorySearchResultInfoButtonAccessibilityIdentifier(
+    NSString* title) {
+  return [NSString
+      stringWithFormat:
+          @"%@%@", kAtMemorySearchResultInfoButtonAccessibilityIdentifierPrefix,
+          title];
+}
+
+void PerformCrossfadeTransition(UIView* view, void (^animations)(void)) {
+  if (!animations) {
+    return;
+  }
+  if (!view) {
+    animations();
+    return;
+  }
+  [UIView transitionWithView:view
+                    duration:kMessageCrossfadeDuration
+                     options:UIViewAnimationOptionTransitionCrossDissolve
+                  animations:animations
+                  completion:nil];
+}

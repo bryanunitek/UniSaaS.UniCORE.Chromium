@@ -25,6 +25,7 @@ class NetworkPortalNotificationController;
 class NetworkPortalSigninController;
 class OobeDialogUtil;
 class PeripheralsAppDelegateImpl;
+class TabScrubber;
 class VideoConferenceManagerAsh;
 class VideoConferenceTrayController;
 
@@ -59,6 +60,10 @@ class GameModeController;
 
 namespace policy {
 class DisplaySettingsHandler;
+}
+
+namespace ui {
+class HeatmapPalmDetector;
 }
 
 class AccessibilityControllerClient;
@@ -183,6 +188,8 @@ class ChromeBrowserMainExtraPartsAsh : public ChromeBrowserMainExtraParts {
       mahi_media_app_content_manager_;
   std::optional<ash::LoginReadaheadPerformer> login_readahead_performer_;
 
+  std::unique_ptr<ui::HeatmapPalmDetector> heatmap_palm_detector_;
+
   std::unique_ptr<internal::ChromeShelfControllerInitializer>
       chrome_shelf_controller_initializer_;
   std::unique_ptr<DesksClient> desks_client_;
@@ -207,6 +214,7 @@ class ChromeBrowserMainExtraPartsAsh : public ChromeBrowserMainExtraParts {
   std::unique_ptr<ash::OobeDialogUtil> oobe_dialog_util_;
   std::unique_ptr<chromeos::ReadWriteCardsManager> read_write_cards_manager_;
   std::unique_ptr<ash::graduation::GraduationManager> graduation_manager_;
+  std::unique_ptr<ash::TabScrubber> tab_scrubber_;
 
   // Initialized in PostBrowserStart in all configs:
   std::unique_ptr<MobileDataNotifications> mobile_data_notifications_;

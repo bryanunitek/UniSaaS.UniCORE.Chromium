@@ -8,6 +8,7 @@
 #include <iosfwd>
 #include <limits>
 #include <string>
+#include <tuple>
 
 #include "base/component_export.h"
 #include "ui/gfx/geometry/vector2d_f.h"
@@ -18,6 +19,12 @@ namespace gfx {
 // corner radii in the order: top-left, top-right, bottom-right, bottom-left.
 class COMPONENT_EXPORT(GEOMETRY) RoundedCornersF {
  public:
+  static bool Compare(const RoundedCornersF& a, const RoundedCornersF& b) {
+    return std::tie(a.upper_left_, a.upper_right_, a.lower_right_,
+                    a.lower_left_) < std::tie(b.upper_left_, b.upper_right_,
+                                              b.lower_right_, b.lower_left_);
+  }
+
   // Creates an empty RoundedCornersF with all corners having zero radius.
   constexpr RoundedCornersF() : RoundedCornersF(0.0f) {}
 
@@ -61,6 +68,12 @@ class COMPONENT_EXPORT(GEOMETRY) RoundedCornersF {
            lower_right_ == 0.0f && lower_left_ == 0.0f;
   }
 
+  // Scales each corner radius by `scale`.
+  void Scale(float scale) {
+    Set(upper_left_ * scale, upper_right_ * scale, lower_right_ * scale,
+        lower_left_ * scale);
+  }
+
   friend bool operator==(const RoundedCornersF&,
                          const RoundedCornersF&) = default;
 
@@ -79,6 +92,12 @@ class COMPONENT_EXPORT(GEOMETRY) RoundedCornersF {
   float lower_right_ = 0.0f;
   float lower_left_ = 0.0f;
 };
+
+inline RoundedCornersF ScaleRoundedCorners(RoundedCornersF corners,
+                                           float scale) {
+  corners.Scale(scale);
+  return corners;
+}
 
 }  // namespace gfx
 

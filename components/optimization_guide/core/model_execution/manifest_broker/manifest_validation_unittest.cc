@@ -15,19 +15,17 @@
 #include "base/test/test_future.h"
 #include "base/trace_event/trace_event.h"
 #include "base/version.h"
+#include "components/optimization_guide/core/model_execution/configs/manifest_builder.h"
 #include "components/optimization_guide/core/model_execution/manifest_broker/manifest_broker_state.h"
 #include "components/optimization_guide/core/model_execution/manifest_broker/test/fake_manifest_broker.h"
-#include "components/optimization_guide/core/model_execution/manifest_broker/test/manifest_builder.h"
 #include "components/optimization_guide/core/model_execution/manifest_broker/test/scenario_builder.h"
 #include "components/optimization_guide/core/model_execution/manifest_broker/test/test_manifest_asset_manager_component_state.h"
 #include "components/optimization_guide/core/model_execution/model_broker_client.h"
-#include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
+#include "components/optimization_guide/core/model_execution/on_device_prefs.h"
 #include "components/optimization_guide/core/model_execution/test/fake_model_assets.h"
-#include "components/optimization_guide/core/model_execution/test/fake_model_broker.h"
 #include "components/optimization_guide/core/model_execution/test/feature_config_builder.h"
 #include "components/optimization_guide/core/model_execution/test/request_builder.h"
 #include "components/optimization_guide/core/model_execution/test/response_holder.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/proto/features/example_for_testing.pb.h"
 #include "components/optimization_guide/proto/manifest.pb.h"
@@ -154,16 +152,8 @@ TEST_F(ManifestValidatorTest,
 
   BuildValidationScenario(fake_.component_state(), {.version = "2.0"});
 
-  task_environment_.FastForwardBy(base::Seconds(5));
-  // TODO(crbug.com/504749700): The factory getting replaced causes session
-  // disconnect, which validator interprets as a service crash. This is benign,
-  // but not ideal.
-  EXPECT_EQ(GetValidationResult(),
-            OnDeviceModelValidationResult::kServiceCrash);
-
-  // TODO(crbug.com/504749700): We should still do the eval for the new version.
-  // task_environment_.FastForwardUntilNoTasksRemain();
-  // EXPECT_EQ(GetValidationResult(), OnDeviceModelValidationResult::kSuccess);
+  task_environment_.FastForwardUntilNoTasksRemain();
+  EXPECT_EQ(GetValidationResult(), OnDeviceModelValidationResult::kSuccess);
 }
 
 // Failure should be recorded.

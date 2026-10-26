@@ -6,23 +6,46 @@
 #define IOS_CHROME_BROWSER_INTELLIGENCE_ACTOR_MODEL_ACTOR_ENGINE_H_
 
 #import <memory>
-#import <optional>
 #import <vector>
 
-#import "base/functional/callback.h"
 #import "base/memory/raw_ptr.h"
 #import "base/memory/weak_ptr.h"
-#import "components/actor/core/aggregated_journal.h"
-#import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "components/actor/public/mojom/actor_types.mojom-forward.h"
+#import "components/origin_gating/core/checker_id.h"
+#import "ios/chrome/browser/intelligence/actor/model/actor_origin_gating_checker_delegate_ios.h"
 #import "ios/chrome/browser/intelligence/actor/public/actor_types.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/tool_delegate.h"
+#import "ios/web/public/navigation/navigation_manager.h"
 #import "ios/web/public/web_state_id.h"
+
+namespace origin_gating {
+class OriginGatingChecker;
+class OriginGatingConfiguration;
+class OriginGatingRegistration;
+}  // namespace origin_gating
+
+namespace web {
+class WebState;
+}  // namespace web
 
 namespace actor {
 
+class ActorTask;
+class ActorTaskFormFillingHandler;
 class ActorTool;
+class ActorToolFactory;
 class ActorToolRequest;
-class ToolDelegate;
 class ToolController;
+
+// Context passed to `OriginGatingChecker::ComputeGatingDecision` for
+// `GateableEvent::kPageAction` checks so tab-specific predicates can inspect
+// the target `WebState`.
+struct PageActionGatingContext : public origin_gating::GatingDecisionContext {
+  explicit PageActionGatingContext(base::WeakPtr<web::WebState> web_state);
+  ~PageActionGatingContext() override;
+
+  base::WeakPtr<web::WebState> web_state;
+};
 
 // Executes a sequence of actions moving through the state machine.
 //
@@ -32,7 +55,7 @@ class ToolController;
 //
 // Each action execution includes checks, UI updates, and the core work which is
 // the tool invocation.
-class ActorEngine {
+class ActorEngine : public ToolDelegate {
  public:
   // Delegate interface to receive granular tool execution progress updates
   // from the engine. This allows the owning `ActorTask` to track which specific
@@ -87,9 +110,9 @@ class ActorEngine {
   };
 
   ActorEngine(ExecutionUpdatesDelegate* execution_updates_delegate,
-              ToolDelegate* tool_delegate);
+              ActorTask* owner_task);
 
-  ~ActorEngine();
+  ~ActorEngine() override;
   ActorEngine(const ActorEngine&) = delete;
   ActorEngine& operator=(const ActorEngine&) = delete;
 
@@ -101,8 +124,45 @@ class ActorEngine {
   // Cancels any ongoing and pending actions.
   void CancelOngoingAndPendingActions(EngineResult reason);
 
+  // Asynchronously fails the current in-flight tool with `reason` and
+  // completes the action.
+  void FailCurrentTool(mojom::ActionResultCode reason);
+
+  // Pauses any ongoing actions being executed by the engine.
+  void PauseOngoingActions();
+
+  // Notifies the engine that the task was uninterrupted.
+  void DidUninterruptTask();
+
+  // ToolDelegate:
+  ActorTaskId GetTaskId() const override;
+  AggregatedJournal& GetJournal() const override;
+  ActorToolFactory& GetToolFactory() const override;
+  ActorTaskFormFillingHandler* GetActorTaskFormFillingHandler() override;
+  void InterruptFromTool() override;
+  void UninterruptFromTool() override;
+  bool IsWindowIdValid(int32_t window_id) override;
+  web::WebState* InsertWebState(
+      int32_t window_id,
+      const web::NavigationManager::WebLoadParams& load_params,
+      bool in_background) override;
+
+  // Returns the origin gating checker ID used for evaluating navigation
+  // and actuation policies.
+  origin_gating::CheckerId GetOriginGatingCheckerId() const;
+
+  // Returns the OriginGatingChecker instance for gating navigation actions.
+  origin_gating::OriginGatingChecker* GetOriginGatingChecker();
+
+  void IsAcceptableNavigationDestination(
+      const GURL& url,
+      ToolExecutionCallback callback) override;
+
  private:
   friend class ActorEngineTest;
+
+  // Helper to build the configuration and custom predicates for the checker.
+  static origin_gating::OriginGatingConfiguration CreateOriginGatingConfig();
 
   // Executes the next action.
   void ExecuteNextAction();
@@ -140,6 +200,16 @@ class ActorEngine {
   // Returns the index of the action currently in progress.
   size_t InProgressActionIndex() const;
 
+  // Callback invoked when the pre-execution origin gating check completes.
+  void OnPreExecutionGatingDecision(
+      base::WeakPtr<web::WebState> web_state,
+      std::unique_ptr<origin_gating::GatingDecisionContext> context,
+      origin_gating::GatingDecision decision);
+
+  // Proceeds to tool verification and UI pre-invoke after pre-execution checks
+  // pass.
+  void OnPreExecutionChecksComplete();
+
   // The current state of the execution engine.
   State state_;
 
@@ -162,17 +232,32 @@ class ActorEngine {
   // implementation.
   std::vector<ActionResult> action_results_;
 
-  // The state machine responsible for validating, creating, invoking and
-  // post-invocation of the current tool.
-  std::unique_ptr<ToolController> tool_controller_;
-
   // The delegate to notify of execution milestones.
-  raw_ptr<ExecutionUpdatesDelegate> execution_updates_delegate_;
+  raw_ptr<ExecutionUpdatesDelegate> execution_updates_delegate_ = nullptr;
 
-  // The ToolDelegate that provides access to Task level data objects. A raw_ptr
-  // is safe since the delegate is owned by the ActorTask which owns the
-  // ActorEngine.
-  raw_ptr<ToolDelegate> tool_delegate_;
+  // The ActorTask that owns this ActorEngine.
+  raw_ptr<ActorTask> owner_task_ = nullptr;
+
+  // Delegate and registration for origin gating.
+  ActorOriginGatingCheckerDelegateIOS origin_gating_delegate_;
+  std::unique_ptr<origin_gating::OriginGatingRegistration>
+      origin_gating_registration_;
+
+  // Handles the asynchronous gating decision for navigation destination checks.
+  void OnNavigationDestinationGatingDecision(
+      ToolExecutionCallback callback,
+      std::unique_ptr<origin_gating::GatingDecisionContext> context,
+      origin_gating::GatingDecision decision);
+
+  // The handler for form filling and login tasks.
+  std::unique_ptr<ActorTaskFormFillingHandler> form_filling_handler_;
+
+  // The state machine responsible for validating, creating, invoking and
+  // post-invocation of the current tool. Reused for every action so that it is
+  // never destroyed while one of its methods is on the stack. Declared after
+  // the members its tools reach through `ToolDelegate` so that it is destroyed
+  // first.
+  const std::unique_ptr<ToolController> tool_controller_;
 
   // Weak pointer factory.
   base::WeakPtrFactory<ActorEngine> weak_ptr_factory_{this};

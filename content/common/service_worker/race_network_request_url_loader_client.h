@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/time/time.h"
 #include "content/common/content_export.h"
 #include "content/common/service_worker/race_network_request_read_buffer_manager.h"
@@ -19,11 +20,19 @@
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/data_pipe_drainer.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
+#include "net/url_request/redirect_info.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace content {
+
+CONTENT_EXPORT BASE_DECLARE_FEATURE(
+    kServiceWorkerRaceNetworkRequestDeprecateTwoPhaseWrite);
+
+// Kill switch for crbug.com/559592113.
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kServiceWorkerAutoPreloadFixRedirectHang);
+
 // RaceNetworkRequestURLLoaderClient handles the response when the request is
 // triggered in the RaceNetworkRequest mode.
 // If the response from the RaceNetworkRequest mode is faster than the one from
@@ -239,6 +248,9 @@ class CONTENT_EXPORT ServiceWorkerRaceNetworkRequestURLLoaderClient
   // to trigger its self-destruction check.
   void MaybeCompleteRedirectResponse(bool run_completion_callback);
 
+  void HandleRedirect(const net::RedirectInfo& redirect_info,
+                      const network::mojom::URLResponseHeadPtr& head);
+
   void ForwardResponseToClient(
       network::mojom::URLResponseHeadPtr head,
       mojo::ScopedDataPipeConsumerHandle body,
@@ -254,6 +266,7 @@ class CONTENT_EXPORT ServiceWorkerRaceNetworkRequestURLLoaderClient
 
   network::mojom::URLResponseHeadPtr head_;
   std::optional<mojo_base::BigBuffer> cached_metadata_;
+  std::optional<net::RedirectInfo> redirect_info_;
 
   std::optional<RaceNetworkRequestReadBufferManager> read_buffer_manager_;
   std::optional<RaceNetworkRequestSimpleBufferManager> simple_buffer_manager_;

@@ -60,7 +60,6 @@
 #include "chrome/browser/resource_coordinator/lifecycle_unit_observer.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_source.h"
 #include "chrome/browser/resource_coordinator/utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
@@ -89,7 +88,7 @@ TabStatsTracker* g_tab_stats_tracker_instance = nullptr;
 void UmaHistogramCounts10000WithBatteryStateVariant(const char* histogram_name,
                                                     size_t value) {
   auto* power_monitor = base::PowerMonitor::GetInstance();
-  DCHECK(power_monitor->IsInitialized());
+  CHECK(power_monitor->IsInitialized(), base::NotFatalUntil::M161);
 
   base::UmaHistogramCounts10000(histogram_name, value);
 
@@ -244,87 +243,6 @@ void TabStatsTracker::TabStripInterface::ForEach(
 }
 
 #endif  // !BUILDFLAG(IS_ANDROID)
-
-// static
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kNumberOfTabsOnResumeHistogramName[] = "Tabs.NumberOfTabsOnResume";
-const char
-    TabStatsTracker::UmaStatsReportingDelegate::kMaxTabsInADayHistogramName[] =
-        "Tabs.MaxTabsInADay";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kMaxTabsPerWindowInADayHistogramName[] = "Tabs.MaxTabsPerWindowInADay";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kMaxWindowsInADayHistogramName[] = "Tabs.MaxWindowsInADay";
-const char
-    TabStatsTracker::UmaStatsReportingDelegate::kTabCountHistogramName[] =
-        "Tabs.TabCount";
-const char
-    TabStatsTracker::UmaStatsReportingDelegate::kWindowCountHistogramName[] =
-        "Tabs.WindowCount";
-const char
-    TabStatsTracker::UmaStatsReportingDelegate::kWindowWidthHistogramName[] =
-        "Tabs.WindowWidth";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kVerticalTabStripCollapseStateHistogramName[] =
-        "Tabs.VerticalTabs.CollapseState";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kKeyboardTabSwitchModeHistogramName[] =
-        "TabStrip.Tab.KeyboardTabSwitchMode";
-const char
-    TabStatsTracker::UmaStatsReportingDelegate::kPinnedTabCountHistogramName[] =
-        "Tabs.PinnedTabCount";
-
-// Daily discard/reload histograms.
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kDailyDiscardsExternalHistogramName[] = "Discarding.DailyDiscards.External";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kDailyDiscardsUrgentHistogramName[] = "Discarding.DailyDiscards.Urgent";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kDailyDiscardsProactiveHistogramName[] =
-        "Discarding.DailyDiscards.Proactive";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kDailyDiscardsSuggestedHistogramName[] =
-        "Discarding.DailyDiscards.Suggested";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kDailyDiscardsFrozenWithGrowingMemoryHistogramName[] =
-        "Discarding.DailyDiscards.FrozenWithGrowingMemory";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kDailyReloadsExternalHistogramName[] = "Discarding.DailyReloads.External";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kDailyReloadsUrgentHistogramName[] = "Discarding.DailyReloads.Urgent";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kDailyReloadsProactiveHistogramName[] = "Discarding.DailyReloads.Proactive";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kDailyReloadsSuggestedHistogramName[] = "Discarding.DailyReloads.Suggested";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kDailyReloadsFrozenWithGrowingMemoryHistogramName[] =
-        "Discarding.DailyReloads.FrozenWithGrowingMemory";
-
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kTabDuplicateCountSingleWindowHistogramName[] =
-        "Tabs.Duplicates.Count.SingleWindow";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kTabDuplicateCountAllProfileWindowsHistogramName[] =
-        "Tabs.Duplicates.Count.AllProfileWindows";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kTabDuplicatePercentageSingleWindowHistogramName[] =
-        "Tabs.Duplicates.Percentage.SingleWindow";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kTabDuplicatePercentageAllProfileWindowsHistogramName[] =
-        "Tabs.Duplicates.Percentage.AllProfileWindows";
-
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kTabDuplicateExcludingFragmentsCountSingleWindowHistogramName[] =
-        "Tabs.DuplicatesExcludingFragments.Count.SingleWindow";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kTabDuplicateExcludingFragmentsCountAllProfileWindowsHistogramName[] =
-        "Tabs.DuplicatesExcludingFragments.Count.AllProfileWindows";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kTabDuplicateExcludingFragmentsPercentageSingleWindowHistogramName[] =
-        "Tabs.DuplicatesExcludingFragments.Percentage.SingleWindow";
-const char TabStatsTracker::UmaStatsReportingDelegate::
-    kTabDuplicateExcludingFragmentsPercentageAllProfileWindowsHistogramName[] =
-        "Tabs.DuplicatesExcludingFragments.Percentage.AllProfileWindows";
 
 // When initialized, TabWatcher gets the list of existing windows/tabs. There
 // shouldn't be any if it's initialized at startup but this will ensure that the
@@ -493,7 +411,7 @@ TabStatsTracker::TabStatsTracker(PrefService* pref_service)
           // Empty to skip recording the daily event type histogram.
           /* histogram_name=*/std::string())),
       tab_watcher_(std::make_unique<TabWatcher>(*this)) {
-  DCHECK(pref_service);
+  CHECK(pref_service, base::NotFatalUntil::M161);
 
   AddObserverAndSetInitialState(tab_stats_data_store_.get());
 
@@ -836,7 +754,8 @@ void TabStatsTracker::OnTabReplaced(content::WebContents* old_contents,
 void TabStatsTracker::OnWebContentsDestroyed(
     content::WebContents* web_contents) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(web_contents_usage_observers_.contains(web_contents));
+  CHECK(web_contents_usage_observers_.contains(web_contents),
+        base::NotFatalUntil::M161);
   web_contents_usage_observers_.erase(
       web_contents_usage_observers_.find(web_contents));
   for (TabStatsObserver& tab_stats_observer : tab_stats_observers_) {
@@ -908,7 +827,6 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportDailyMetrics(
       tab_stats.tab_reload_counts[frozen_with_growing_memory_index]);
 
 #if !BUILDFLAG(IS_ANDROID)
-  // Record the keyboard tab switch mode for each profile.
   std::set<const Profile*> profiles;
   TabStripInterface::ForEach([&profiles](const TabStripInterface& tab_strip) {
     profiles.insert(tab_strip.GetProfile());
@@ -918,11 +836,18 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportDailyMetrics(
     if (profile->IsOffTheRecord()) {
       continue;
     }
+    // Record the keyboard tab switch mode for each profile.
     bool mru_enabled = profile->GetPrefs()->GetBoolean(prefs::kCtrlTabMru);
     base::UmaHistogramEnumeration(kKeyboardTabSwitchModeHistogramName,
                                   mru_enabled
                                       ? KeyboardTabSwitchMode::kMRU
                                       : KeyboardTabSwitchMode::kStandard);
+
+    // Record tab search pinned state for each profile.
+    bool is_tab_search_pinned =
+        profile->GetPrefs()->GetBoolean(prefs::kTabSearchPinnedToTabstrip);
+    base::UmaHistogramBoolean(kTabSearchIsPinnedHistogramName,
+                              is_tab_search_pinned);
   }
 #endif
 }
@@ -957,6 +882,13 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportHeartbeatMetrics(
         kTabCountHistogramName, tab_strip, tab_strip.GetTabCount());
     UmaHistogramCounts10000WithTabStripModeVariant(
         kPinnedTabCountHistogramName, tab_strip, tab_strip.GetPinnedTabCount());
+
+    const TabStripModel* tab_strip_model =
+        tab_strip.browser_window_interface()->GetTabStripModel();
+    const bool is_in_focus_mode =
+        tab_strip_model && tab_strip_model->GetFocusedGroup().has_value();
+    base::UmaHistogramBoolean(kFocusModeIsActiveHistogramName,
+                              is_in_focus_mode);
 
     auto* controller = tabs::VerticalTabStripStateController::From(
         tab_strip.browser_window_interface());

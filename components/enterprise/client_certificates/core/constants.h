@@ -5,9 +5,7 @@
 #ifndef COMPONENTS_ENTERPRISE_CLIENT_CERTIFICATES_CORE_CONSTANTS_H_
 #define COMPONENTS_ENTERPRISE_CLIENT_CERTIFICATES_CORE_CONSTANTS_H_
 
-#include <array>
 #include <cstdint>
-#include <vector>
 
 namespace client_certificates {
 
@@ -45,6 +43,13 @@ extern const char kCertificate[];
 // Number of days before a certificate's expiration date when it is considered
 // to be expiring soon.
 extern const int kDaysBeforeExpiration;
+
+// Key and values for the "common_name_source" field in
+// ManagedClientCertificateFor{User,Browser}Config policies.
+extern const char kCommonNameSourceKey[];
+extern const char kCommonNameSourceDeviceId[];
+extern const char kCommonNameSourceProfileId[];
+extern const char kCommonNameSourceComputerName[];
 
 }  // namespace client_certificates
 

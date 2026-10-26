@@ -4,6 +4,7 @@
 
 package org.chromium.ui.base;
 
+import org.chromium.base.MutableBooleanParamWithSafeDefault;
 import org.chromium.base.MutableFlagWithSafeDefault;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.cached_flags.BooleanCachedFeatureParam;
@@ -37,10 +38,33 @@ public class UiAndroidFeatureList {
             newMutableFlagWithSafeDefault(
                     UiAndroidFeatures.ANDROID_UPDATE_DISPLAY_FOR_CONTEXT, true);
 
+    public static final MutableFlagWithSafeDefault sBottomSheetRemeasureFix =
+            newMutableFlagWithSafeDefault(UiAndroidFeatures.BOTTOM_SHEET_REMEASURE_FIX, true);
+
+    public static final MutableFlagWithSafeDefault sPointerLockMouseDensityCompensation =
+            newMutableFlagWithSafeDefault(
+                    UiAndroidFeatures.POINTER_LOCK_MOUSE_DENSITY_COMPENSATION, true);
+
+    public static final MutableFlagWithSafeDefault sPointerLockMouseScaling =
+            newMutableFlagWithSafeDefault(UiAndroidFeatures.POINTER_LOCK_MOUSE_SCALING, true);
+
     public static final CachedFlag sAndroidUseDisplayTopology =
             newCachedFlag(
                     UiAndroidFeatures.ANDROID_USE_DISPLAY_TOPOLOGY,
                     /* defaultValue= */ false,
+                    /* defaultValueInTests= */ true);
+
+    public static final CachedFlag sConnectedDisplayDensityDebugLogs =
+            newCachedFlag(
+                    UiAndroidFeatures.CONNECTED_DISPLAY_DENSITY_DEBUG_LOGS,
+                    /* defaultValue= */ false,
+                    /* defaultValueInTests= */ false);
+
+    // A CachedFlag because InsetObserver may receive insets before native is initialized.
+    public static final CachedFlag sAndroidPreserveStatusBarInsetsWhenUnfocused =
+            newCachedFlag(
+                    UiAndroidFeatures.ANDROID_PRESERVE_STATUS_BAR_INSETS_WHEN_UNFOCUSED,
+                    /* defaultValue= */ true,
                     /* defaultValueInTests= */ true);
 
     public static final CachedFlag sAndroidWindowOcclusion =
@@ -56,14 +80,14 @@ public class UiAndroidFeatureList {
                     UiAndroidFeatureMap.getInstance(),
                     UiAndroidFeatures.ANDROID_WINDOW_OCCLUSION,
                     "occlusion_optimizations",
-                    false);
+                    true);
 
     public static final IntCachedFeatureParam sAndroidWindowOcclusionCalculateOcclusionRateLimitMs =
             new IntCachedFeatureParam(
                     UiAndroidFeatureMap.getInstance(),
                     UiAndroidFeatures.ANDROID_WINDOW_OCCLUSION,
                     "calculate_occlusion_rate_limit_ms",
-                    0);
+                    100);
 
     public static final IntCachedFeatureParam
             sAndroidWindowOcclusionMinimumVisibilitySizeThreshold =
@@ -71,7 +95,7 @@ public class UiAndroidFeatureList {
                             UiAndroidFeatureMap.getInstance(),
                             UiAndroidFeatures.ANDROID_WINDOW_OCCLUSION,
                             "minimum_visibility_size_threshold",
-                            0);
+                            10);
 
     public static final StringCachedFeatureParam sAndroidWindowOcclusionTrackingMode =
             new StringCachedFeatureParam(
@@ -121,10 +145,24 @@ public class UiAndroidFeatureList {
             newMutableFlagWithSafeDefault(
                     UiAndroidFeatures.SUPPORT_KEYBOARD, /* defaultValue= */ true);
 
+    public static final MutableFlagWithSafeDefault sSubmenuTypeOverride =
+            newMutableFlagWithSafeDefault(
+                    UiAndroidFeatures.SUBMENU_TYPE_OVERRIDE, /* defaultValue= */ false);
+
+    public static final MutableBooleanParamWithSafeDefault sSubmenuTypeOverrideForceDrilldown =
+            sSubmenuTypeOverride.newBooleanParam("force_drilldown", false);
+
+    public static final MutableFlagWithSafeDefault sAndroidResourceMemoryOptimization =
+            newMutableFlagWithSafeDefault(
+                    UiAndroidFeatures.ANDROID_RESOURCE_MEMORY_OPTIMIZATION,
+                    /* defaultValue= */ true);
+
     public static final List<CachedFlag> sFlagsCachedUiAndroid =
             List.of(
+                    sAndroidPreserveStatusBarInsetsWhenUnfocused,
                     sAndroidUseDisplayTopology,
                     sAndroidWindowOcclusion,
+                    sConnectedDisplayDensityDebugLogs,
                     sRefactorMinWidthContextOverride,
                     sUpdatePaddingForDisplayCalculation,
                     sMaximumWindowForGestureNavDetection);

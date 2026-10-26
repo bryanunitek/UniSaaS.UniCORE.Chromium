@@ -20,7 +20,6 @@
 #import "components/autofill/ios/browser/autofill_java_script_feature.h"
 #import "components/autofill/ios/browser/form_suggestion.h"
 #import "components/autofill/ios/browser/form_suggestion_provider.h"
-#import "components/autofill/ios/common/features.h"
 #import "components/autofill/ios/form_util/form_activity_params.h"
 #import "components/prefs/pref_service.h"
 #import "ios/chrome/browser/autofill/autofill_ai/public/autofill_ai_ui_util.h"
@@ -102,31 +101,25 @@ void RunSearchPipeline(NSArray<PipelineBlock>* blocks,
 UIImage* DefaultIconForType(FormSuggestion* suggestion,
                             web::WebState* web_state) {
   switch (suggestion.type) {
-    case autofill::SuggestionType::kUndoOrClear:
-      if (suggestion.suggestionIconType == SuggestionIconType::kUndoAutofill &&
-          base::FeatureList::IsEnabled(kAutofillUndoIos)) {
-        return SymbolWithPalette(
-            DefaultSymbolWithPointSize(kArrowUTurnBackwardSymbol,
-                                       kSymbolActionPointSize),
-            @[
-              [UIColor colorNamed:kTextPrimaryColor],
-            ]);
-      } else {
-        return nil;
-      }
+    case autofill::SuggestionType::kUndo:
+      return SymbolWithPalette(
+          SymbolWithPointSize(SymbolArrowUTurnBackward, kSymbolActionPointSize),
+          @[
+            [UIColor colorNamed:kTextPrimaryColor],
+          ]);
     case autofill::SuggestionType::kGeneratePasswordEntry:
       return MakeSymbolMulticolor(
-          CustomSymbolWithPointSize(kPasswordManagerSymbol, kSymbolPointSize));
+          SymbolWithPointSize(SymbolPasswordManager, kSymbolPointSize));
     case autofill::SuggestionType::kAddressEntry: {
       switch (suggestion.suggestionIconType) {
         case SuggestionIconType::kAccountHome:
           return SymbolWithPalette(
-              DefaultSymbolWithPointSize(kHomeSymbol, kSymbolPointSize), @[
+              SymbolWithPointSize(SymbolHome, kSymbolPointSize), @[
                 [UIColor colorNamed:kTextPrimaryColor],
               ]);
         case SuggestionIconType::kAccountWork:
           return SymbolWithPalette(
-              DefaultSymbolWithPointSize(kWorkSymbol, kSymbolPointSize), @[
+              SymbolWithPointSize(SymbolWork, kSymbolPointSize), @[
                 [UIColor colorNamed:kTextPrimaryColor],
               ]);
         default:
@@ -160,10 +153,9 @@ UIImage* DefaultIconForType(FormSuggestion* suggestion,
           /*tint_color=*/nil);
     }
     case autofill::SuggestionType::kAutocompleteAtMemoryButton:
-      return SymbolWithPalette(
-          CustomSymbolWithPointSize(kMagnifyingglassSparkSymbol,
-                                    kSymbolActionPointSize),
-          @[ [UIColor colorNamed:kTextPrimaryColor] ]);
+      return SymbolWithPalette(SymbolWithPointSize(SymbolMagnifyingglassSpark,
+                                                   kSymbolActionPointSize),
+                               @[ [UIColor colorNamed:kTextPrimaryColor] ]);
     case autofill::SuggestionType::kAutocompleteEntry:
     default:
       return nil;
@@ -311,8 +303,8 @@ bool IsRequestDedupingAllowed() {
         formRendererID:params.form_renderer_id
        fieldIdentifier:base::SysUTF8ToNSString(params.field_identifier)
        fieldRendererID:params.field_renderer_id
-             fieldType:base::SysUTF8ToNSString(params.field_type)
-                  type:base::SysUTF8ToNSString(params.type)
+             fieldType:params.field_type
+                  type:params.type
             typedValue:base::SysUTF8ToNSString(params.value)
                frameID:base::SysUTF8ToNSString(params.frame_id)
           onlyPassword:NO];
@@ -537,10 +529,6 @@ bool IsRequestDedupingAllowed() {
     BOOL shouldUpdateIcon = !suggestion.icon && defaultIcon;
 
     if (shouldUpdateIcon) {
-      // If we ever get suggestions with metadata here, we'll need to use a
-      // different [FormSuggestion suggestionWithValue:...] to perform the copy.
-      CHECK(!suggestion.metadata.is_single_username_form);
-
       FormSuggestion* suggestionCopy = [FormSuggestion
                   suggestionWithValue:suggestion.value
                            minorValue:suggestion.minorValue
@@ -550,7 +538,8 @@ bool IsRequestDedupingAllowed() {
                               payload:suggestion.payload
           fieldByFieldFillingTypeUsed:suggestion.fieldByFieldFillingTypeUsed
                        requiresReauth:suggestion.requiresReauth
-           acceptanceA11yAnnouncement:suggestion.acceptanceA11yAnnouncement];
+           acceptanceA11yAnnouncement:suggestion.acceptanceA11yAnnouncement
+                             metadata:suggestion.metadata];
       // TODO(crbug.com/452315148): Include `featureForIPH` in the
       // `FormSuggestion` constructor.
       suggestionCopy.featureForIPH = suggestion.featureForIPH;

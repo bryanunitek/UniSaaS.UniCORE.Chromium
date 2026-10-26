@@ -68,6 +68,13 @@ class OmniboxClient {
 
     // Don't search at all.
     kCancel,
+
+    // No dialog was ever shown. Confirmation turned out to be unnecessary.
+    // The pending navigation must proceed as originally requested. This is
+    // distinct from kCancel: the user made no choice because they were never
+    // asked. Conflating the two silently drops the navigation
+    // (See https://crbug.com/540532980).
+    kNoDialogShown,
   };
 
   OmniboxClient() = default;
@@ -228,6 +235,13 @@ class OmniboxClient {
   virtual std::optional<lens::ContextualInputData> GetContextualInputData()
       const;
 
+  // Returns true if there is previous submitted thread context (files, tabs,
+  // etc.) in the session. Only relevant for co-browsing / composebox sessions.
+  virtual bool HasPreviousSubmittedThreadContext() const;
+
+  // Returns true if an auto-suggested tab is present or showing.
+  virtual bool HasAutoSuggestedTab() const;
+
   // Asks the `ExtensionOmniboxEventRouter` to process `match` for it.
   // Some more processing is done to separate the keyword from the
   // text if in keyword mode. `observer` is the OmniboxNavigationObserver that
@@ -345,7 +359,7 @@ class OmniboxClient {
       TemplateURLRef::PostContent* post_content,
       WindowOpenDisposition disposition,
       ui::PageTransition transition,
-      AutocompleteMatchType::Type match_type,
+      omnibox::AutocompleteMatchType match_type,
       base::TimeTicks match_selection_timestamp,
       bool destination_url_entered_without_scheme,
       bool destination_url_entered_with_http_scheme,
@@ -353,12 +367,11 @@ class OmniboxClient {
       const AutocompleteMatch& match,
       const AutocompleteMatch& alternative_nav_match) = 0;
 
-  // Executes the given `action`. Returns the starter pack ID if the action
-  // requests entering keyword mode for a starter pack engine, or 0 otherwise.
-  int ExecuteAction(OmniboxAction* action,
-                    WindowOpenDisposition disposition,
-                    base::TimeTicks match_selection_timestamp,
-                    AutocompleteProviderClient& provider_client);
+  // Executes the given `action`.
+  void ExecuteAction(OmniboxAction* action,
+                     WindowOpenDisposition disposition,
+                     base::TimeTicks match_selection_timestamp,
+                     OmniboxAction::Client& action_client);
 
   // Called when the input is accepted with a thumbnail and no user text. This
   // is required because there is no verbatim match when the input is just an
@@ -378,7 +391,7 @@ class OmniboxClient {
   // activations of the AI Mode page action icon.
   virtual void OpenUrl(
       GURL gurl,
-      WindowOpenDisposition disposition = WindowOpenDisposition::CURRENT_TAB) {}
+      WindowOpenDisposition disposition = WindowOpenDisposition::kCurrentTab) {}
 
   // Even though IPH suggestions aren't selectable like normal matches, they can
   // have a 'learn more' or next-steps link. `OpenIphLink()` allows opening

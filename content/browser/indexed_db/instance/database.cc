@@ -27,9 +27,9 @@
 #include "base/trace_event/trace_event.h"
 #include "base/types/expected_macros.h"
 #include "base/unguessable_token.h"
+#include "build/build_config.h"
 #include "components/services/storage/indexed_db/locks/partitioned_lock_id.h"
 #include "components/services/storage/indexed_db/locks/partitioned_lock_manager.h"
-#include "components/services/storage/privileged/mojom/indexed_db_client_state_checker.mojom.h"
 #include "components/services/storage/privileged/mojom/indexed_db_internals_types.mojom.h"
 #include "content/browser/indexed_db/file_path_util.h"
 #include "content/browser/indexed_db/indexed_db_external_object.h"
@@ -46,6 +46,8 @@
 #include "content/browser/indexed_db/instance/transaction.h"
 #include "content/browser/indexed_db/status.h"
 #include "ipc/constants.mojom.h"
+#include "mojo/buildflags.h"
+#include "mojo/public/cpp/base/big_buffer.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
@@ -255,6 +257,14 @@ bool Database::OnlyHasOneClient() const {
                      });
 }
 
+bool Database::HasConnectionForClient(
+    const base::UnguessableToken& client_token) const {
+  return std::any_of(connections_.begin(), connections_.end(),
+                     [&client_token](Connection* connection) {
+                       return connection->client_token() == client_token;
+                     });
+}
+
 void Database::RequireBlockingTransactionClientsToBeActive(
     Transaction* current_transaction,
     std::vector<PartitionedLockManager::PartitionedLockRequest>&
@@ -280,8 +290,7 @@ void Database::RequireBlockingTransactionClientsToBeActive(
     // lock IDs, require that client to be active.
     if (connection->IsHoldingLocks(blocked_lock_ids)) {
       connection->DisallowInactiveClient(
-          storage::mojom::DisallowInactiveClientReason::
-              kTransactionIsAcquiringLocks,
+          DisallowInactiveClientReason::kTransactionIsAcquiringLocks,
           base::DoNothing());
     }
   }
@@ -738,13 +747,38 @@ Status Database::GetAllOperation(
       "Value wrapping threshold is higher than BigBuffer inline size; "
       "BigBuffer may use shared memory with LevelDB backing store");
 
-  const size_t max_values_before_sending = blink::mojom::kIDBGetAllChunkSize;
+  const size_t kMaxValuesBeforeSending = blink::mojom::kIDBGetAllChunkSize;
+
+  // Apply a limit to the number of shared memory handles sent over a single
+  // Mojo message on both Apple and non-Apple POSIX, for different reasons.
+  //
+  // Since SQLite does not wrap large values in blobs, the
+  // `mojo_base::BigBuffer` holding the value may be backed by shared memory. On
+  // POSIX save Apple, this uses FDs, which are capped by per-process system
+  // limits. To avoid holding too many at once and exhausting this resource,
+  // this code limits the number of shared memory handles sent in a single
+  // message and hopes the receiving side drains the queue promptly. On Apple,
+  // shared memory doesn't use FDs, but on the other hand the Mach Mojo channel
+  // has trouble holding too many handles in a single message (see
+  // crbug.com/553026855).
+  std::optional<uint32_t> max_shared_memory_values_in_chunk;
+  uint32_t shared_memory_values_in_chunk = 0;
+
+#if BUILDFLAG(IS_POSIX)
+  if (bucket_context_->IsUsingSqlite()) {
+    max_shared_memory_values_in_chunk = 125;
+  }
+#endif
 
   for (uint32_t i = 0; i < max_count; ++i) {
     // Periodically stream records if we have too many.
-    if (found_records.size() >= max_values_before_sending) {
+    if (found_records.size() >= kMaxValuesBeforeSending ||
+        (max_shared_memory_values_in_chunk.has_value() &&
+         shared_memory_values_in_chunk >=
+             max_shared_memory_values_in_chunk.value())) {
       result_sink->SendResults(std::move(found_records), /*done=*/false);
       found_records.clear();
+      shared_memory_values_in_chunk = 0;
     }
 
     // Cursor creation performs the first seek, returning a nullptr cursor when
@@ -793,6 +827,12 @@ Status Database::GetAllOperation(
           std::move(index_key));
     } else {
       NOTREACHED();
+    }
+
+    if (return_record->return_value &&
+        return_record->return_value->value->bits.storage_type() ==
+            mojo_base::BigBuffer::StorageType::kSharedMemory) {
+      ++shared_memory_values_in_chunk;
     }
 
     found_records.emplace_back(std::move(return_record));
@@ -1027,9 +1067,7 @@ const IndexedDBDataLossInfo& Database::GetDataLossInfo() const {
 
 std::unique_ptr<Connection> Database::CreateConnection(
     std::unique_ptr<DatabaseCallbacks> database_callbacks,
-    mojo::Remote<storage::mojom::IndexedDBClientStateChecker>
-        client_state_checker,
-    base::UnguessableToken client_token,
+    const storage::BucketClientInfo& client_info,
     int scheduling_priority,
     base::OnceClosure on_connection_closed) {
   auto connection = std::make_unique<Connection>(
@@ -1038,8 +1076,7 @@ std::unique_ptr<Connection> Database::CreateConnection(
                           weak_factory_.GetWeakPtr()),
       base::BindOnce(&Database::ConnectionClosed, weak_factory_.GetWeakPtr(),
                      std::move(on_connection_closed)),
-      std::move(database_callbacks), std::move(client_state_checker),
-      client_token, scheduling_priority);
+      std::move(database_callbacks), client_info, scheduling_priority);
   connections_.push_back(connection.get());
   return connection;
 }
@@ -1076,7 +1113,7 @@ void Database::SendVersionChangeToAllConnections(int64_t old_version,
     // matter which path it follows, the `SendVersionChangeToAllConnections`
     // method is executed asynchronously.
     connection->DisallowInactiveClient(
-        storage::mojom::DisallowInactiveClientReason::kVersionChangeEvent,
+        DisallowInactiveClientReason::kVersionChangeEvent,
         base::BindOnce(
             [](base::WeakPtr<Connection> connection, int64_t old_version,
                int64_t new_version, bool was_client_active) {

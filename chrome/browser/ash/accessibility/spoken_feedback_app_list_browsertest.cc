@@ -8,6 +8,7 @@
 #include "ash/app_list/views/apps_grid_view.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/constants/chrome_switches.h"
 #include "ash/public/cpp/tablet_mode.h"
 #include "ash/public/cpp/test/app_list_test_api.h"
 #include "ash/public/cpp/test/shell_test_api.h"
@@ -26,10 +27,9 @@
 #include "chrome/browser/ash/app_list/search/search_controller.h"
 #include "chrome/browser/ash/app_list/search/search_provider.h"
 #include "chrome/browser/ash/app_list/test/chrome_app_list_test_support.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/common/chrome_switches.h"
 #include "components/user_manager/user_names.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/test/browser_test.h"
@@ -209,7 +209,7 @@ class SpokenFeedbackAppListBaseTest : public LoggedInSpokenFeedbackTest {
 
     if (variant_ == kTestAsGuestUser) {
       command_line->AppendSwitch(switches::kGuestSession);
-      command_line->AppendSwitch(::switches::kIncognito);
+      command_line->AppendSwitch(ash::chrome_switches::kIncognito);
       command_line->AppendSwitchASCII(switches::kLoginProfile, "user");
       command_line->AppendSwitchASCII(
           switches::kLoginUser, user_manager::GuestAccountId().GetUserEmail());
@@ -374,8 +374,9 @@ class SpokenFeedbackAppListSearchTest : public SpokenFeedbackAppListBaseTest {
     // set of results shown in the search result UI.
     std::unique_ptr<app_list::SearchController> search_controller =
         std::make_unique<app_list::SearchController>(
+            g_browser_process->local_state(),
             app_list_client->GetModelUpdaterForTest(), app_list_client, nullptr,
-            browser()->profile());
+            browser()->GetProfile());
     search_controller->Initialize();
     // Disable ranking, which may override the explicitly set relevance scores
     // and best match status of results.

@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_WEBUI_SKILLS_SKILLS_PAGE_HANDLER_H_
 
 #include "base/scoped_observation.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/skills/skills_ui_tab_controller_interface.h"
 #include "chrome/browser/ui/webui/skills/skills.mojom.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -63,6 +64,7 @@ class SkillsPageHandler : public skills::mojom::PageHandler,
                       bool is_position_changed) override;
   void OnDiscoverySkillsUpdated(
       const FirstPartySkillData* first_party_skill_data) override;
+  void OnProvidedSkillsChanged(skills::SkillsProvider* provider) override;
   void OnSkillsServiceShuttingDown() override;
   void OnTemporarySkillDisplay(
       std::string_view skill_id,
@@ -82,6 +84,10 @@ class SkillsPageHandler : public skills::mojom::PageHandler,
   // complete within kMax1PDownloadTimeout seconds.
   void On1PDownloadTimeout();
   void OnSkillsEnabledPrefChanged();
+  mojom::BrowseSkillsInitialStatePtr GetDiscoverySkills(
+      const std::vector<skills::proto::TopicInfo>& topics_info_list,
+      const skills::SkillProtoList& skills_list);
+  void AppendProvidedSkills(mojom::BrowseSkillsInitialState* state);
   mojo::Receiver<skills::mojom::PageHandler> receiver_;
   mojo::Remote<skills::mojom::SkillsPage> page_;
   PrefChangeRegistrar pref_registrar_;

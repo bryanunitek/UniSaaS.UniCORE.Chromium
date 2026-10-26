@@ -29,7 +29,6 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.ParameterizedRobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowPackageManager;
 
 import org.chromium.base.FeatureOverrides;
@@ -47,7 +46,6 @@ import java.util.Collection;
 
 /** Tests for {@link LocationPermissionUpdater}. */
 @RunWith(ParameterizedRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class LocationPermissionUpdaterTest {
 
     @ParameterizedRobolectricTestRunner.Parameters
@@ -95,7 +93,7 @@ public class LocationPermissionUpdaterTest {
                 .apply();
         InstalledWebappBridgeJni.setInstanceForTesting(mNativeMock);
 
-        PackageManager pm = RuntimeEnvironment.application.getPackageManager();
+        PackageManager pm = RuntimeEnvironment.getApplication().getPackageManager();
         mShadowPackageManager = shadowOf(pm);
         mShadowPackageManager.installPackage(generateTestPackageInfo(PACKAGE_NAME));
         mShadowPackageManager.installPackage(generateTestPackageInfo(OTHER_PACKAGE_NAME));

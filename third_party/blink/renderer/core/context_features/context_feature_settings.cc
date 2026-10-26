@@ -4,9 +4,13 @@
 
 #include "third_party/blink/renderer/core/context_features/context_feature_settings.h"
 
-#include "base/memory/protected_memory.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_feature_checks.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
 namespace blink {
 
@@ -15,9 +19,6 @@ ContextFeatureSettings::ContextFeatureSettings(ExecutionContext& context)
 
 // static
 const char ContextFeatureSettings::kSupplementName[] = "ContextFeatureSettings";
-
-DEFINE_PROTECTED_DATA base::ProtectedMemory<bool>
-    ContextFeatureSettings::mojo_js_allowed_;
 
 // static
 ContextFeatureSettings* ContextFeatureSettings::From(
@@ -33,25 +34,8 @@ ContextFeatureSettings* ContextFeatureSettings::From(
 }
 
 // static
-void ContextFeatureSettings::InitializeMojoJSAllowedProtectedMemory() {
-  static base::ProtectedMemoryInitializer mojo_js_allowed_initializer(
-      mojo_js_allowed_, false);
-}
-
-// static
-void ContextFeatureSettings::AllowMojoJSForProcess() {
-  if (*mojo_js_allowed_) {
-    // Already allowed. No need to make protected memory writable.
-    return;
-  }
-
-  base::AutoWritableMemory mojo_js_allowed_writer(mojo_js_allowed_);
-  mojo_js_allowed_writer.GetProtectedData() = true;
-}
-
-// static
 void ContextFeatureSettings::CrashIfMojoJSNotAllowed() {
-  CHECK(*mojo_js_allowed_);
+  CHECK(IsMojoJSAllowedPerContextForProcess());
 }
 
 void ContextFeatureSettings::Trace(Visitor* visitor) const {
@@ -67,6 +51,53 @@ bool ContextFeatureSettings::isMojoJSEnabled() const {
     CrashIfMojoJSNotAllowed();
   }
   return enable_mojo_js_;
+}
+
+// static
+// Preconditions/permissions for unbounded elements are checked in:
+// - RenderFrameHostImpl::GetUnboundedElementAuth (browser side)
+// - ContextFeatureSettings::GetUnboundedElementAuth (renderer side)
+//
+// In the renderer, RenderFrameImpl::DidCreateScriptContext determines whether
+// the context is allowed to use UnboundedElement (either via open-web flag,
+// privileged WebUI/extension origin, or privileged main frame) and configures
+// ContextFeatureSettings via WebV8Features::EnableUnboundedElement(context,
+// privilege).
+ContextFeatureSettings::UnboundedElementAuth
+ContextFeatureSettings::GetUnboundedElementAuth(
+    const ExecutionContext* context) {
+  if (!RuntimeEnabledFeatures::UnboundedElementEnabled() || !context) {
+    return UnboundedElementAuth::kDenied;
+  }
+  const auto* settings =
+      Supplement<ExecutionContext>::From<ContextFeatureSettings>(context);
+  if (!settings || !settings->enable_unbounded_element_) {
+    return UnboundedElementAuth::kDenied;
+  }
+  if (settings->unbounded_element_privilege_ ==
+      UnboundedElementPrivilege::kPrivileged) {
+    return UnboundedElementAuth::kAllowedPrivileged;
+  }
+  if (RuntimeEnabledFeatures::UnsafeUnboundedElementOnTheOpenWebEnabled() ||
+      RuntimeEnabledFeatures::
+          UnsafeEscapingUnboundedElementOnTheOpenWebEnabled()) {
+    return UnboundedElementAuth::kAllowedOpenWeb;
+  }
+  if (context->IsFeatureEnabled(
+          network::mojom::blink::PermissionsPolicyFeature::kUnboundedElement)) {
+    // If the main frame is privileged, it opted this frame in via permissions
+    // policy, so user activation is not required.
+    return settings->unbounded_element_privilege_ ==
+                   UnboundedElementPrivilege::kIframePrivilegedByEmbedder
+               ? UnboundedElementAuth::kAllowedByPrivilegedMainFrame
+               : UnboundedElementAuth::kAllowedOpenWeb;
+  }
+  return UnboundedElementAuth::kDenied;
+}
+
+bool ContextFeatureSettings::isUnboundedElementEnabled() const {
+  return GetUnboundedElementAuth(GetSupplementable()) !=
+         UnboundedElementAuth::kDenied;
 }
 
 }  // namespace blink

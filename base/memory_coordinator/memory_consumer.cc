@@ -27,27 +27,26 @@ bool PassiveMemoryConsumer::IsPassive() const {
 
 void MemoryConsumer::ReleaseMemory() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (is_registering_) {
+    return;
+  }
   OnReleaseMemory();
 }
 
-void MemoryConsumer::UpdateMemoryLimit(int percentage) {
+void MemoryConsumer::UpdateMemoryLimit(MemoryLimit memory_limit) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  UpdateMemoryLimitNoNotification(percentage);
+  memory_limit_ = memory_limit;
+  if (is_registering_) {
+    return;
+  }
   OnUpdateMemoryLimit();
-}
-
-void MemoryConsumer::UpdateMemoryLimitNoNotification(int percentage) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // The percentage can never be negative (but it can be higher than 100).
-  CHECK_GE(percentage, 0);
-  memory_limit_ = percentage;
 }
 
 // MemoryConsumerRegistration ---------------------------------------
 
 MemoryConsumerRegistration::MemoryConsumerRegistration(
     std::string_view consumer_name,
-    std::optional<MemoryConsumerTraits> traits,
+    MemoryConsumerTraits traits,
     MemoryConsumer* consumer,
     CheckUnregister check_unregister)
     : consumer_name_(consumer_name),
@@ -109,12 +108,6 @@ void MemoryConsumerRegistration::OnBeforeMemoryConsumerRegistryDestroyed() {
   registry_->RemoveMemoryConsumer(consumer_name_, consumer_);
   registry_->RemoveDestructionObserver(PassKey(), this);
   registry_ = nullptr;
-}
-
-ByteSize ScaleByMemoryLimit(ByteSize baseline, int memory_limit) {
-  // Use int64_t here in order to get saturating behaviour if we get too big.
-  const int64_t tmp = static_cast<int64_t>(baseline.InBytes());
-  return ByteSize(static_cast<uint64_t>(ScaleByMemoryLimit(tmp, memory_limit)));
 }
 
 }  // namespace base

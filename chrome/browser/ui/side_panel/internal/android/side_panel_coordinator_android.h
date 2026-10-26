@@ -7,19 +7,19 @@
 
 #include <jni.h>
 
-#include "base/android/jni_weak_ref.h"
-#include "base/android/scoped_java_ref.h"
 #include "base/check.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/side_panel/internal/android/side_panel_deferred_entry_tracker.h"
-#include "chrome/browser/ui/side_panel/internal/android/side_panel_tab_list_observer_android.h"
+#include "chrome/browser/ui/side_panel/internal/android/side_panel_tab_model_observer.h"
 #include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui_base.h"
+#include "third_party/jni_zero/jni_zero.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 class BrowserWindowInterface;
 class SidePanelEntryWaiter;
+class TabAndroid;
 
 // Android implementation of `SidePanelUIBase`.
 //
@@ -40,7 +40,7 @@ class SidePanelCoordinatorAndroid : public SidePanelUIBase {
 
   SidePanelCoordinatorAndroid(
       JNIEnv* env,
-      const base::android::JavaRef<jobject>& java_coordinator,
+      const jni_zero::JavaRef<jobject>& java_coordinator,
       BrowserWindowInterface* browser);
 
   ~SidePanelCoordinatorAndroid() override;
@@ -49,16 +49,17 @@ class SidePanelCoordinatorAndroid : public SidePanelUIBase {
   SidePanelCoordinatorAndroid& operator=(const SidePanelCoordinatorAndroid&) =
       delete;
 
-  // Implements Java `SidePanelCoordinatorAndroid.Natives`. These methods are
-  // called from Java via JNI, see `SidePanelCoordinatorAndroidImpl.java`.
-  void Init(JNIEnv* env);
-  void Destroy(JNIEnv* env);
-  bool HasContentToShow(JNIEnv* env);
-  void OnPanelClosed(JNIEnv* env);
-  void OnPanelOpened(JNIEnv* env);
-  void OnPanelContentReplaced(JNIEnv* env);
-  void OnWillAutoClose(JNIEnv* env);
-  void OnWillAutoRestore(JNIEnv* env);
+  // Implements Java `SidePanelCoordinatorAndroidBridge.Natives`. These methods
+  // are called from Java via JNI, see `SidePanelCoordinatorAndroidBridge.java`.
+  void Init();
+  void Destroy();
+  void ClosePanel(bool suppress_animations);
+  bool HasContentToShow(TabAndroid* tab);
+  void OnPanelContainerUpdated(int old_width, int new_width);
+  void OnPanelContentReplaced();
+  void OnActiveChanged(bool active);
+  void OnWillAutoClose(bool is_showable);
+  void OnWillAutoRestore();
 
   // Implements `SidePanelUI`:
   void ShowFrom(SidePanelEntryKey entry_key,
@@ -67,17 +68,69 @@ class SidePanelCoordinatorAndroid : public SidePanelUIBase {
              bool suppress_animations) override;
   void Toggle(SidePanelEntryKey key,
               SidePanelOpenTrigger open_trigger) override;
+  void OnActiveTabChanged(content::WebContents* old_contents,
+                          content::WebContents* new_contents,
+                          bool tab_removed_for_deletion) override;
   content::WebContents* GetWebContentsForTest(SidePanelEntryId id) override;
   void DisableAnimationsForTesting() override;
   void SetNoDelaysForTesting(bool no_delays_for_testing) override;
 
-  // Other public functions:
-  void ClearDeferredEntryForTab(const tabs::TabHandle& tab_handle);
-  // Called when a tab is detached from this window's tab strip for reparenting
-  // into another window.
-  void OnTabReparented(tabs::TabInterface* tab);
+  /////////////////////////////////////////////////////////////////
+  //   Start of public functions for SidePanelTabModelObserver   //
+  /////////////////////////////////////////////////////////////////
 
-  // Functions for testing:
+  // Called when all tabs will be closed. The closure can be undone.
+  void OnAllTabsWillClose();
+
+  // Called right before all tabs are destroyed. This can't be undone.
+  void OnAllTabsWillBeDestroyed();
+
+  // Called when a tab is closed, but the closure can be undone.
+  void OnTabClosed(TabAndroid* tab);
+
+  // Called when the given `tab` is removed from this window's TabModel and
+  // _has_ become the active tab of another window.
+  void OnTabReparented(TabAndroid* tab);
+
+  // Called when the active tab changes.
+  void OnTabSelected(TabAndroid* new_tab);
+
+  // Called right before a tab is destroyed. This can't be undone.
+  void OnTabWillBeDestroyed(TabAndroid* tab);
+
+  /////////////////////////////////////////////////////////////////
+  //    End of public functions for SidePanelTabModelObserver    //
+  /////////////////////////////////////////////////////////////////
+
+  /////////////////////////////////////////////////////////////////
+  //            Start of functions for testing                   //
+  /////////////////////////////////////////////////////////////////
+
+  // See the Java
+  // `SidePanelContainerCoordinatorImpl#pauseContentReplacementForTesting`
+  // for documentation.
+  void PauseContentReplacementForTesting();
+
+  // See the Java
+  // `SidePanelContainerCoordinatorImpl#resumeContentReplacementForTesting`
+  // for documentation.
+  void ResumeContentReplacementForTesting();
+
+  // See the Java
+  // `SidePanelContainerCoordinator#simulateAutoCloseConditionForTesting`
+  // for documentation.
+  void SimulateAutoCloseConditionForTesting();
+
+  // See the Java
+  // `SidePanelContainerCoordinator#simulateAutoRestoreConditionForTesting`
+  // for documentation.
+  void SimulateAutoRestoreConditionForTesting();
+
+  // See the Java
+  // `SidePanelContainerCoordinatorImpl#simulateTopControlsHeightChangeForTesting`
+  // for documentation.
+  void SimulateTopControlsHeightChangeForTesting();
+
   SidePanelState GetStateForTesting();
   int GetContainerWidthForTesting();
   SidePanelEntryWaiter* GetWaiterForTesting() { return waiter(); }
@@ -85,6 +138,11 @@ class SidePanelCoordinatorAndroid : public SidePanelUIBase {
       const {
     return deferred_entry_tracker_;
   }
+  bool HasPendingReplacedEntryForTesting() const;
+
+  /////////////////////////////////////////////////////////////////
+  //            End of functions for testing                     //
+  /////////////////////////////////////////////////////////////////
 
  protected:
   // Implements `SidePanelUIBase`:
@@ -105,21 +163,43 @@ class SidePanelCoordinatorAndroid : public SidePanelUIBase {
   // Delegates to `SidePanelRegistry::ClearCachedEntryViews` in all
   // `SidePanelRegistry` instances accessible from this class, including
   // the window-scoped registry and all contextual (tab-scoped) registries.
-  void ClearCachedEntryViews();
+  void ClearCachedEntryViews(bool include_active_entry = false);
 
   UniqueKey GetCurrentKeyNonNull() const;
   SidePanelEntry* GetEntryForCurrentKeyNonNull() const;
 
-  base::android::ScopedJavaLocalRef<jobject> java_coordinator() const;
+  // The key for a `SidePanelEntry` that can be shown.
+  struct ShowableKey {
+    UniqueKey key;
+
+    // Set if `key` comes from `deferred_entry_tracker_`.
+    std::optional<SidePanelDeferredEntryTracker::DeferredReason>
+        deferred_reason;
+  };
+  std::optional<ShowableKey> GetKeyToShow(TabAndroid* tab) const;
+
+  jni_zero::ScopedJavaLocalRef<jobject> java_coordinator() const;
 
   // Starts opening the side panel.
   // This should only be called when the side panel isn't currently shown.
-  // `OnPanelOpened()` will be called when the side panel is fully opened.
+  // `FinishOpeningPanel()` will be called when the side panel is fully opened.
   void StartOpeningPanel(
       SidePanelEntry* entry,
       const UniqueKey& unique_key,
       bool suppress_animations,
       std::unique_ptr<SidePanelNativeViewAndroid> native_view);
+
+  // Completes the state updates for opening the side panel.
+  void FinishOpeningPanel();
+
+  // Starts closing the side panel.
+  // This should only be called when the side panel is currently shown.
+  // `FinishClosingPanel()` will be called when the side panel is fully closed.
+  void StartClosingPanel(SidePanelEntryHideReason hide_reason,
+                         bool suppress_animations);
+
+  // Completes the state updates for closing the side panel.
+  void FinishClosingPanel();
 
   // Starts replacing the entry shown in the side panel.
   // This should only be called when the side panel is already shown.
@@ -131,13 +211,22 @@ class SidePanelCoordinatorAndroid : public SidePanelUIBase {
       SidePanelOpenTrigger open_trigger,
       std::unique_ptr<SidePanelNativeViewAndroid> native_view);
 
-  // Immediately ends all ongoing animations.
+  // Immediately completes any pending UI changes on the Java side, including
+  // ongoing open/close animations and pending content replacement.
   //
-  // This will also complete all state updates scheduled at the end of the
-  // animations and ensure the side panel is in a stable state.
-  void EndAnimations();
+  // This will also complete all state updates scheduled at the end of those UI
+  // changes and ensure the side panel is in a stable state.
+  void CompletePendingUiChanges();
 
-  bool CanShowEntryForKey(const UniqueKey& key) const;
+  // Immediately completes any pending content replacement on the Java side.
+  void CompletePendingContentReplacement();
+
+  // Calls `CompletePendingUiChanges()` if pending UI changes involve an entry
+  // that belongs to `tab`, i.e. if:
+  // - The current entry belongs to `tab` and the side panel is opening/closing
+  //   with an animation, or
+  // - The pending replaced entry belongs to `tab`.
+  void CompletePendingUiChangesForTab(TabAndroid* tab);
 
   // The current state of the Side Panel.
   //
@@ -165,29 +254,32 @@ class SidePanelCoordinatorAndroid : public SidePanelUIBase {
   // error-prone.
   SidePanelState state_ = SidePanelState::kClosed;
 
-  // Tracks the `SidePanelEntryHideReason` for the current "close side panel" or
-  // "replace side panel content" operation.
-  std::optional<SidePanelEntryHideReason> pending_hide_reason_;
+  // Tracks the `SidePanelEntryHideReason` for the current (pending) "close side
+  // panel" operation since animations make the operation async.
+  std::optional<SidePanelEntryHideReason> pending_panel_close_reason_;
 
   // Tracks the entry that is being replaced since the "replace side panel
-  // content" operation is async on the Java side.
-  raw_ptr<SidePanelEntry> pending_replaced_entry_ = nullptr;
+  // content" operation can be async.
+  // See the Java
+  // `SidePanelContainerCoordinatorImpl#startReplacingPanelContent` for
+  // details.
+  struct PendingReplacedEntry {
+    UniqueKey key;
+    raw_ptr<SidePanelEntry> entry;
+    SidePanelEntryHideReason hide_reason;
+  };
+  std::optional<PendingReplacedEntry> pending_replaced_entry_;
 
   // A weak reference to the Java `SidePanelCoordinatorAndroid`, which is
   // the sole owner of the C++ `SidePanelCoordinatorAndroid`.
-  JavaObjectWeakGlobalRef java_coordinator_;
-
-  // Whether there is insufficient space to show the side panel.
-  bool has_insufficient_space_ = false;
+  jni_zero::ScopedJavaGlobalWeakRef java_coordinator_;
 
   SidePanelDeferredEntryTracker deferred_entry_tracker_{browser()};
-
-  std::optional<gfx::Rect> last_starting_bounds_;
 
   ui::ScopedUnownedUserData<SidePanelCoordinatorAndroid>
       scoped_unowned_user_data_;
 
-  SidePanelTabListObserverAndroid tab_list_observer_;
+  SidePanelTabModelObserver tab_model_observer_;
 };
 
 #endif  // CHROME_BROWSER_UI_SIDE_PANEL_INTERNAL_ANDROID_SIDE_PANEL_COORDINATOR_ANDROID_H_

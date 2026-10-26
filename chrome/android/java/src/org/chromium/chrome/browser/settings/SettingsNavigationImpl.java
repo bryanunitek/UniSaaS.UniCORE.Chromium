@@ -11,13 +11,17 @@ import android.os.Bundle;
 
 import androidx.fragment.app.Fragment;
 
+import org.chromium.base.ApplicationStatus;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.about_settings.AboutChromeSettings;
 import org.chromium.chrome.browser.about_settings.LegalInformationSettings;
 import org.chromium.chrome.browser.appearance.settings.AppearanceSettingsFragment;
 import org.chromium.chrome.browser.autofill.settings.AndroidPaymentAppsFragment;
+import org.chromium.chrome.browser.autofill.settings.AutofillAndPasswordsFragment;
 import org.chromium.chrome.browser.autofill.settings.AutofillBuyNowPayLaterFragment;
 import org.chromium.chrome.browser.autofill.settings.AutofillCardBenefitsFragment;
 import org.chromium.chrome.browser.autofill.settings.AutofillIdentityDocsFragment;
@@ -26,7 +30,6 @@ import org.chromium.chrome.browser.autofill.settings.AutofillProfilesFragment;
 import org.chromium.chrome.browser.autofill.settings.AutofillShoppingFragment;
 import org.chromium.chrome.browser.autofill.settings.AutofillTravelFragment;
 import org.chromium.chrome.browser.autofill.settings.FinancialAccountsManagementFragment;
-import org.chromium.chrome.browser.autofill.settings.HomeOfTransactionsFragment;
 import org.chromium.chrome.browser.autofill.settings.NonCardPaymentMethodsManagementFragment;
 import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFragment;
 import org.chromium.chrome.browser.autofill.settings.personal_context.AutofillPersonalContextFragment;
@@ -34,8 +37,9 @@ import org.chromium.chrome.browser.browsing_data.ClearBrowsingDataFragment;
 import org.chromium.chrome.browser.commerce.PriceNotificationSettingsFragment;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchSettingsFragment;
 import org.chromium.chrome.browser.download.settings.DownloadSettings;
-import org.chromium.chrome.browser.glic.GlicActorLoginPermissionsFragment;
-import org.chromium.chrome.browser.glic.GlicSettings;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.glic.actor_login.GlicActorLoginPermissionsFragment;
+import org.chromium.chrome.browser.glic.settings.GlicSettings;
 import org.chromium.chrome.browser.homepage.settings.HomepageSettings;
 import org.chromium.chrome.browser.image_descriptions.ImageDescriptionsSettings;
 import org.chromium.chrome.browser.language.settings.LanguageSettings;
@@ -46,15 +50,6 @@ import org.chromium.chrome.browser.prefetch.settings.StandardPreloadingSettingsF
 import org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings;
 import org.chromium.chrome.browser.privacy.settings.DoNotTrackSettings;
 import org.chromium.chrome.browser.privacy.settings.PrivacySettings;
-import org.chromium.chrome.browser.privacy_sandbox.AdMeasurementFragment;
-import org.chromium.chrome.browser.privacy_sandbox.FledgeAllSitesFragment;
-import org.chromium.chrome.browser.privacy_sandbox.FledgeBlockedSitesFragment;
-import org.chromium.chrome.browser.privacy_sandbox.FledgeFragment;
-import org.chromium.chrome.browser.privacy_sandbox.FledgeLearnMoreFragment;
-import org.chromium.chrome.browser.privacy_sandbox.PrivacySandboxSettingsFragment;
-import org.chromium.chrome.browser.privacy_sandbox.TopicsBlockedFragment;
-import org.chromium.chrome.browser.privacy_sandbox.TopicsFragment;
-import org.chromium.chrome.browser.privacy_sandbox.TopicsManageFragment;
 import org.chromium.chrome.browser.safe_browsing.settings.EnhancedProtectionSettingsFragment;
 import org.chromium.chrome.browser.safe_browsing.settings.SafeBrowsingSettingsFragment;
 import org.chromium.chrome.browser.safe_browsing.settings.StandardProtectionSettingsFragment;
@@ -67,8 +62,8 @@ import org.chromium.chrome.browser.ssl.HttpsFirstModeSettingsFragment;
 import org.chromium.chrome.browser.sync.settings.GoogleServicesSettings;
 import org.chromium.chrome.browser.sync.settings.ManageSyncSettings;
 import org.chromium.chrome.browser.sync.settings.PersonalizeGoogleServicesSettings;
-import org.chromium.chrome.browser.tasks.tab_management.TabArchiveSettingsFragment;
 import org.chromium.chrome.browser.tasks.tab_management.TabsSettings;
+import org.chromium.chrome.browser.tasks.tab_management.archived_tabs.TabArchiveSettingsFragment;
 import org.chromium.chrome.browser.toolbar.adaptive.settings.AdaptiveToolbarSettingsFragment;
 import org.chromium.chrome.browser.toolbar.settings.AddressBarSettingsFragment;
 import org.chromium.chrome.browser.tracing.settings.DeveloperSettings;
@@ -85,12 +80,12 @@ import org.chromium.components.browser_ui.site_settings.SingleCategorySettings;
 import org.chromium.components.browser_ui.site_settings.SingleWebsiteSettings;
 import org.chromium.components.browser_ui.site_settings.SiteSettings;
 import org.chromium.components.browser_ui.site_settings.StorageAccessSubpageSettings;
-import org.chromium.components.page_info.PageInfoAdPersonalizationSettings;
 import org.chromium.components.page_info.PageInfoCookiesSettings;
 
 /** Implementation class for launching a {@link SettingsActivity}. */
 @NullMarked
 public class SettingsNavigationImpl implements SettingsNavigation {
+    private boolean mUseSettingsActivityForTesting;
 
     /** Instantiated through SettingsNavigationFactory. */
     SettingsNavigationImpl() {}
@@ -108,20 +103,36 @@ public class SettingsNavigationImpl implements SettingsNavigation {
     @Override
     public void startSettings(
             Context context, @SettingsFragment int settingsFragment, boolean addToBackStack) {
-        Bundle fragmentArgs = null;
+        startSettings(
+                context,
+                getFragmentClassFromEnum(settingsFragment),
+                getFragmentArgsFromEnum(context, settingsFragment),
+                addToBackStack);
+    }
+
+    /**
+     * Returns the arguments the page named by {@code settingsFragment} needs, or null if it needs
+     * none.
+     *
+     * <p>Every {@link SettingsNavigation} that opens a page by its {@link SettingsFragment} id must
+     * pass these along, since some pages cannot be created without them.
+     *
+     * @param context The context the page is being opened from.
+     * @param settingsFragment The page being opened.
+     */
+    static @Nullable Bundle getFragmentArgsFromEnum(
+            Context context, @SettingsFragment int settingsFragment) {
         switch (settingsFragment) {
             case SettingsFragment.CLEAR_BROWSING_DATA:
-                fragmentArgs =
-                        ClearBrowsingDataFragment.createFragmentArgs(context.getClass().getName());
-                break;
+                return ClearBrowsingDataFragment.createFragmentArgs(context.getClass().getName());
             case SettingsFragment.ABOUT_CHROME:
             case SettingsFragment.ACCESSIBILITY:
             case SettingsFragment.ADAPTIVE_TOOLBAR:
             case SettingsFragment.ADDRESS_BAR:
-            case SettingsFragment.AD_MEASUREMENT:
             case SettingsFragment.ALL_SITES:
             case SettingsFragment.ANDROID_PAYMENT_APPS:
             case SettingsFragment.APPEARANCE:
+            case SettingsFragment.AUTOFILL_AND_PASSWORDS:
             case SettingsFragment.AUTOFILL_BUY_NOW_PAY_LATER:
             case SettingsFragment.AUTOFILL_CARD_BENEFITS:
             case SettingsFragment.AUTOFILL_IDENTITY_DOCS:
@@ -141,7 +152,6 @@ public class SettingsNavigationImpl implements SettingsNavigation {
             case SettingsFragment.GLIC_PERMISSIONS:
             case SettingsFragment.GOOGLE_SERVICES:
             case SettingsFragment.GROUPED_WEBSITES:
-            case SettingsFragment.HOME_OF_TRANSACTIONS:
             case SettingsFragment.HOMEPAGE:
             case SettingsFragment.HTTPS_FIRST_MODE:
             case SettingsFragment.IMAGE_DESCRIPTIONS:
@@ -160,14 +170,6 @@ public class SettingsNavigationImpl implements SettingsNavigation {
             case SettingsFragment.PRELOAD_PAGES_STANDARD:
             case SettingsFragment.PRICE_NOTIFICATION:
             case SettingsFragment.PRIVACY:
-            case SettingsFragment.PRIVACY_SANDBOX_FLEDGE:
-            case SettingsFragment.PRIVACY_SANDBOX_FLEDGE_ALL_SITES:
-            case SettingsFragment.PRIVACY_SANDBOX_FLEDGE_BLOCKED_SITES:
-            case SettingsFragment.PRIVACY_SANDBOX_FLEDGE_LEARN_MORE:
-            case SettingsFragment.PRIVACY_SANDBOX_SETTINGS:
-            case SettingsFragment.PRIVACY_SANDBOX_TOPICS:
-            case SettingsFragment.PRIVACY_SANDBOX_TOPICS_BLOCKED:
-            case SettingsFragment.PRIVACY_SANDBOX_TOPICS_MANAGE:
             case SettingsFragment.SAFE_BROWSING:
             case SettingsFragment.SAFE_BROWSING_ENHANCED:
             case SettingsFragment.SAFE_BROWSING_STANDARD:
@@ -188,8 +190,7 @@ public class SettingsNavigationImpl implements SettingsNavigation {
             case SettingsFragment.TRACING_CATEGORIES:
                 break;
         }
-        startSettings(
-                context, getFragmentClassFromEnum(settingsFragment), fragmentArgs, addToBackStack);
+        return null;
     }
 
     @Override
@@ -221,6 +222,37 @@ public class SettingsNavigationImpl implements SettingsNavigation {
             @Nullable Bundle fragmentArgs,
             boolean addToBackStack,
             @Nullable String tag) {
+        if (useSettingsInTab(context)) {
+            Activity activity = ContextUtils.activityFromContext(context);
+            // Some components pass a non-Activity context (e.g. AccessibilitySettings).
+            if (activity == null) {
+                activity = ApplicationStatus.getLastTrackedFocusedActivity();
+            }
+            // `activity` may be null in tests (e.g. Robolectric unit tests running with an
+            // Application context without a focused activity) or background services.
+            // SettingsHostFragment.get(null) will return null.
+            SettingsHostFragment settingsHostFragment = SettingsHostFragment.get(activity);
+            // SettingsHostFragment will be null if settings isn't open.
+            if (settingsHostFragment != null) {
+                SettingsNavigation hostNavigation = hostNavigation(settingsHostFragment);
+                if (hostNavigation != null) {
+                    hostNavigation.startSettings(
+                            context, fragment, fragmentArgs, addToBackStack, tag);
+                    return;
+                }
+                // A null `fragment` implies the main settings page, so pass null to
+                // showFragment().
+                Fragment targetFragment =
+                        fragment != null
+                                ? Fragment.instantiate(context, fragment.getName(), fragmentArgs)
+                                : null;
+                if (settingsHostFragment.showFragment(targetFragment, addToBackStack, tag)) {
+                    // The target fragment was shown in an existing settings tab.
+                    return;
+                }
+            }
+            // Fall through and use an Intent to open a settings tab.
+        }
         Intent intent = createSettingsIntent(context, fragment, fragmentArgs, addToBackStack, tag);
         IntentUtils.safeStartActivity(context, intent);
     }
@@ -258,7 +290,12 @@ public class SettingsNavigationImpl implements SettingsNavigation {
             @Nullable String tag) {
         String fragmentName = fragment == null ? null : fragment.getName();
         return SettingsIntentUtil.createIntent(
-                context, fragmentName, fragmentArgs, addToBackStack, tag);
+                context,
+                fragmentName,
+                fragmentArgs,
+                addToBackStack,
+                tag,
+                useSettingsInTab(context));
     }
 
     @Override
@@ -267,7 +304,7 @@ public class SettingsNavigationImpl implements SettingsNavigation {
         return createSettingsIntent(context, getFragmentClassFromEnum(fragment), fragmentArgs);
     }
 
-    private static @Nullable Class<? extends Fragment> getFragmentClassFromEnum(
+    static @Nullable Class<? extends Fragment> getFragmentClassFromEnum(
             @SettingsFragment int fragment) {
         switch (fragment) {
             case SettingsFragment.ABOUT_CHROME:
@@ -278,14 +315,14 @@ public class SettingsNavigationImpl implements SettingsNavigation {
                 return AdaptiveToolbarSettingsFragment.class;
             case SettingsFragment.ADDRESS_BAR:
                 return AddressBarSettingsFragment.class;
-            case SettingsFragment.AD_MEASUREMENT:
-                return AdMeasurementFragment.class;
             case SettingsFragment.ALL_SITES:
                 return AllSiteSettings.class;
             case SettingsFragment.ANDROID_PAYMENT_APPS:
                 return AndroidPaymentAppsFragment.class;
             case SettingsFragment.APPEARANCE:
                 return AppearanceSettingsFragment.class;
+            case SettingsFragment.AUTOFILL_AND_PASSWORDS:
+                return AutofillAndPasswordsFragment.class;
             case SettingsFragment.AUTOFILL_BUY_NOW_PAY_LATER:
                 return AutofillBuyNowPayLaterFragment.class;
             case SettingsFragment.AUTOFILL_CARD_BENEFITS:
@@ -326,8 +363,6 @@ public class SettingsNavigationImpl implements SettingsNavigation {
                 return GoogleServicesSettings.class;
             case SettingsFragment.GROUPED_WEBSITES:
                 return GroupedWebsitesSettings.class;
-            case SettingsFragment.HOME_OF_TRANSACTIONS:
-                return HomeOfTransactionsFragment.class;
             case SettingsFragment.HOMEPAGE:
                 return HomepageSettings.class;
             case SettingsFragment.HTTPS_FIRST_MODE:
@@ -346,8 +381,6 @@ public class SettingsNavigationImpl implements SettingsNavigation {
                 return ManageSyncSettings.class;
             case SettingsFragment.NON_CARD_PAYMENT_METHODS:
                 return NonCardPaymentMethodsManagementFragment.class;
-            case SettingsFragment.PAGE_INFO_AD_PERSONALIZATION:
-                return PageInfoAdPersonalizationSettings.class;
             case SettingsFragment.PAGE_INFO_COOKIES:
                 return PageInfoCookiesSettings.class;
             case SettingsFragment.PAYMENT_METHODS:
@@ -364,22 +397,6 @@ public class SettingsNavigationImpl implements SettingsNavigation {
                 return PriceNotificationSettingsFragment.class;
             case SettingsFragment.PRIVACY:
                 return PrivacySettings.class;
-            case SettingsFragment.PRIVACY_SANDBOX_FLEDGE:
-                return FledgeFragment.class;
-            case SettingsFragment.PRIVACY_SANDBOX_FLEDGE_ALL_SITES:
-                return FledgeAllSitesFragment.class;
-            case SettingsFragment.PRIVACY_SANDBOX_FLEDGE_BLOCKED_SITES:
-                return FledgeBlockedSitesFragment.class;
-            case SettingsFragment.PRIVACY_SANDBOX_FLEDGE_LEARN_MORE:
-                return FledgeLearnMoreFragment.class;
-            case SettingsFragment.PRIVACY_SANDBOX_SETTINGS:
-                return PrivacySandboxSettingsFragment.class;
-            case SettingsFragment.PRIVACY_SANDBOX_TOPICS:
-                return TopicsFragment.class;
-            case SettingsFragment.PRIVACY_SANDBOX_TOPICS_BLOCKED:
-                return TopicsBlockedFragment.class;
-            case SettingsFragment.PRIVACY_SANDBOX_TOPICS_MANAGE:
-                return TopicsManageFragment.class;
             case SettingsFragment.SAFE_BROWSING:
                 return SafeBrowsingSettingsFragment.class;
             case SettingsFragment.SAFE_BROWSING_ENHANCED:
@@ -421,16 +438,116 @@ public class SettingsNavigationImpl implements SettingsNavigation {
         return null;
     }
 
+    /**
+     * Returns the tab-scoped navigation bound to {@code settingsHostFragment}, or null when this
+     * instance should handle the call itself.
+     *
+     * <p>Under URL navigation the host fragment owns a {@link SettingsInTabNavigationDelegate}
+     * bound to its tab, which turns a navigation into a {@code Tab.loadUrl()} so the omnibox, the
+     * browser back stack and session restore all see it. This class cannot do that: it only knows
+     * how to swap fragments or fire an intent. Every entry point that can reach an open settings
+     * tab therefore has to ask the host first.
+     */
+    private @Nullable SettingsNavigation hostNavigation(SettingsHostFragment settingsHostFragment) {
+        if (!ChromeFeatureList.sSettingsInTabUrlNav.isEnabled()) return null;
+
+        SettingsNavigation navigation = settingsHostFragment.getSettingsNavigation();
+        // Only SettingsPageFragmentDelegateImpl binds a navigation to the host, and only ever a
+        // tab-scoped delegate. Handing this instance back to itself would recurse forever.
+        assert navigation != this : "Settings host must not be bound to this SettingsNavigation";
+        return navigation;
+    }
+
     @Override
     public void finishCurrentSettings(Fragment fragment) {
+        finishCurrentSettings(fragment, /* parentFragment= */ null, /* parentArgs= */ null);
+    }
+
+    @Override
+    public void finishCurrentSettings(
+            Fragment fragment,
+            @Nullable Class<? extends Fragment> parentFragment,
+            @Nullable Bundle parentArgs) {
+        // Branch on how settings is actually hosted, not on SettingsInTab, whose value depends on
+        // the current screen width and can change while settings is open. Otherwise the cast to
+        // SettingsActivity below can be reached for a tab-hosted fragment. See
+        // crbug.com/562619494.
+        //
+        // Prefer looking up the enclosing SettingsHostFragment directly from the fragment's parent
+        // hierarchy. When Chrome is in the background or during lifecycle transitions, the host
+        // fragment view may not report isShown(), which causes the activity-level lookup to return
+        // null.
         Activity activity = fragment.getActivity();
-        if (activity != null) {
-            ((SettingsActivity) activity).finishCurrentSettings(fragment);
+        SettingsHostFragment settingsHostFragment = SettingsHostFragment.get(fragment);
+        if (settingsHostFragment == null && activity != null) {
+            settingsHostFragment = SettingsHostFragment.get(activity);
+        }
+        if (settingsHostFragment != null) {
+            SettingsNavigation hostNavigation = hostNavigation(settingsHostFragment);
+            if (hostNavigation != null) {
+                hostNavigation.finishCurrentSettings(fragment, parentFragment, parentArgs);
+                return;
+            }
+            settingsHostFragment.finishCurrentSettings(fragment);
+            return;
+        }
+
+        if (activity instanceof SettingsActivity settingsActivity) {
+            settingsActivity.finishCurrentSettings(fragment);
         }
     }
 
     @Override
     public void executePendingNavigations(Activity activity) {
-        ((SettingsActivity) activity).executePendingNavigations();
+        // See the comment in finishCurrentSettings() above.
+        SettingsHostFragment settingsHostFragment = SettingsHostFragment.get(activity);
+        if (settingsHostFragment != null) {
+            // Ask the host for the same reason startSettings() and finishCurrentSettings() do.
+            // The tab-scoped delegate happens to flush the same fragment transactions today, but
+            // it is the one that knows what a pending navigation means for a tab, and leaving this
+            // entry point behind is how the two quietly drift apart.
+            SettingsNavigation hostNavigation = hostNavigation(settingsHostFragment);
+            if (hostNavigation != null) {
+                hostNavigation.executePendingNavigations(activity);
+                return;
+            }
+            settingsHostFragment.executePendingNavigations();
+            return;
+        }
+
+        if (activity instanceof SettingsActivity settingsActivity) {
+            settingsActivity.executePendingNavigations();
+        }
+    }
+
+    @Override
+    public void setUseSettingsActivityForTesting(boolean value) {
+        mUseSettingsActivityForTesting = value;
+        ResettersForTesting.register(() -> mUseSettingsActivityForTesting = false);
+    }
+
+    /**
+     * Returns whether settings should be displayed in a tab. Derives the answer from the live
+     * settings host when one exists (so the state remains fixed even if the screen width changes
+     * while settings is open), falling back to {@link SettingsInTab#shouldOpenSettingsInTab()} only
+     * when settings is not currently open.
+     */
+    private boolean useSettingsInTab(@Nullable Context context) {
+        // Always use SettingsActivity if requested by tests.
+        if (mUseSettingsActivityForTesting) {
+            return false;
+        }
+        Activity activity = ContextUtils.activityFromContext(context);
+        if (activity == null) {
+            activity = ApplicationStatus.getLastTrackedFocusedActivity();
+        }
+        if (activity instanceof SettingsHost host) {
+            return host.isShownInTab();
+        }
+        SettingsHostFragment settingsHostFragment = SettingsHostFragment.get(activity);
+        if (settingsHostFragment != null) {
+            return true;
+        }
+        return SettingsInTab.shouldOpenSettingsInTab();
     }
 }

@@ -6,7 +6,6 @@
 # See README.chromium for details.
 
 import("//components/proto_extras/proto_extras.gni")
-import("//third_party/libprotobuf-mutator/fuzzable_proto_library.gni")
 import("//third_party/protobuf/proto_library.gni")
 
 if (is_android) {
@@ -16,12 +15,10 @@ if (is_android) {
 _proto_files = [
   "aim_eligibility_client_request.proto",
   "aim_eligibility_response.proto",
-  "answer_data.proto",
-  "answer_type.proto",
   "chrome_aim_entry_point.proto",
   "chrome_searchbox_stats.proto",
   "entity_info.proto",
-  "feature_gate_constraints.proto",
+  "formatted_string.proto",
   "groups.proto",
   "icon.proto",
   "icon_resource_ids.proto",
@@ -36,11 +33,10 @@ _proto_files = [
   "navigational_intent.proto",
   "ntp_composebox_config.proto",
   "page_vertical.proto",
-  "rich_answer_template.proto",
-  "rich_suggest_template.proto",
   "rule_set.proto",
   "search_context.proto",
   "searchbox_config.proto",
+  "searchbox_tutorial.proto",
   "section_config.proto",
   "smart_compose_stats.proto",
   "suggest_inventory.proto",
@@ -48,13 +44,11 @@ _proto_files = [
   "tool_config.proto",
   "tool_mode.proto",
   "tool_rule.proto",
-  "tool_substate.proto",
-  "tool_substate_config.proto",
   "types.proto",
   "url_param.proto",
 ]
 
-fuzzable_proto_library("omnibox_proto") {
+proto_library("omnibox_proto") {
   sources = _proto_files
   proto_in_dir = "."
 }

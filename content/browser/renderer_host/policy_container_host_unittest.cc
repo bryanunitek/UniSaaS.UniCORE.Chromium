@@ -65,9 +65,6 @@ TEST(PolicyContainerPoliciesTest, CloneIsEqual) {
   connection_allowlists.enforced = enforced;
 
   std::vector<network::mojom::ContentSecurityPolicyPtr> csps;
-  auto csp = network::mojom::ContentSecurityPolicy::New();
-  csp->treat_as_public_address = true;
-  csps.push_back(std::move(csp));
 
   network::CrossOriginOpenerPolicy coop;
   network::mojom::WebSandboxFlags sandbox_flags =
@@ -103,7 +100,6 @@ TEST(PolicyContainerPoliciesTest, CloneIsEqual) {
   PolicyContainerPolicies policies(
       network::mojom::ReferrerPolicy::kAlways,
       network::mojom::IPAddressSpace::kUnknown,
-      /*allow_non_secure_local_network_access=*/true,
       /*is_web_secure_context=*/true, std::move(connection_allowlists),
       std::move(csps), coop, coep, std::move(dip), ip,
       network::IntegrityPolicy(), sandbox_flags,
@@ -123,8 +119,10 @@ TEST(PolicyContainerHostTest, ReferrerPolicy) {
   EXPECT_EQ(network::mojom::ReferrerPolicy::kDefault,
             policy_container->referrer_policy());
 
+  blink::InitiatorStateToken new_initiator_state_token;
   static_cast<blink::mojom::PolicyContainerHost*>(policy_container.get())
-      ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kAlways);
+      ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kAlways,
+                          new_initiator_state_token);
   EXPECT_EQ(network::mojom::ReferrerPolicy::kAlways,
             policy_container->referrer_policy());
 }

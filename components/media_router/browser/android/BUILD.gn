@@ -28,6 +28,7 @@ android_library("java") {
     "//third_party/androidx:androidx_media_media_java",
     "//third_party/androidx:androidx_mediarouter_mediarouter_java",
     "//third_party/jni_zero:jni_zero_java",
+    "//ui/android:ui_no_recycler_view_java",
   ]
   srcjar_deps = [ ":jni_headers" ]
   sources = [
@@ -109,7 +110,6 @@ android_library("test_support_java") {
     "//base:base_java_test_support",
     "//components/browser_ui/media/android:java",
     "//content/public/android:content_java",
-    "//content/public/test/android:content_java_test_support",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/androidx:androidx_fragment_fragment_java",
     "//third_party/hamcrest:hamcrest_java",
@@ -125,6 +125,7 @@ generate_jni("test_jni_headers") {
 
 robolectric_library("junit") {
   sources = [
+    "junit/src/org/chromium/components/media_router/BrowserMediaRouterDialogControllerTest.java",
     "junit/src/org/chromium/components/media_router/BrowserMediaRouterRouteTest.java",
     "junit/src/org/chromium/components/media_router/BrowserMediaRouterSinkObservationTest.java",
     "junit/src/org/chromium/components/media_router/BrowserMediaRouterTestBase.java",
@@ -158,32 +159,27 @@ robolectric_library("junit") {
     "//components/browser_ui/media/android:java",
     "//content/public/android:content_java",
     "//services/media_session/public/cpp/android:media_session_java",
-    "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/androidx:androidx_mediarouter_mediarouter_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",
+    "//ui/android:ui_no_recycler_view_java",
   ]
 }
 
 android_resources("java_resources") {
   sources = [
-    "java/res/drawable-hdpi/cast_playing_square.png",
     "java/res/drawable-hdpi/ic_cast_dark_off.png",
     "java/res/drawable-hdpi/ic_cast_dark_on.png",
     "java/res/drawable-hdpi/ic_notification_media_route.png",
-    "java/res/drawable-mdpi/cast_playing_square.png",
     "java/res/drawable-mdpi/ic_cast_dark_off.png",
     "java/res/drawable-mdpi/ic_cast_dark_on.png",
     "java/res/drawable-mdpi/ic_notification_media_route.png",
-    "java/res/drawable-xhdpi/cast_playing_square.png",
     "java/res/drawable-xhdpi/ic_cast_dark_off.png",
     "java/res/drawable-xhdpi/ic_cast_dark_on.png",
     "java/res/drawable-xhdpi/ic_notification_media_route.png",
-    "java/res/drawable-xxhdpi/cast_playing_square.png",
     "java/res/drawable-xxhdpi/ic_cast_dark_off.png",
     "java/res/drawable-xxhdpi/ic_cast_dark_on.png",
     "java/res/drawable-xxhdpi/ic_notification_media_route.png",
-    "java/res/drawable-xxxhdpi/cast_playing_square.png",
     "java/res/drawable-xxxhdpi/ic_notification_media_route.png",
     "java/res/drawable/ic_cast_dark_chrome.xml",
     "java/res/layout/caf_controller_media_route_button.xml",
@@ -198,6 +194,10 @@ android_resources("java_resources") {
 
 java_strings_grd("java_strings_grd") {
   grd_file = "java/strings/android_chrome_media_router_strings.grd"
+  inputs = process_file_template(
+          xtb_locales,
+          [ "java/strings/translations/android_chrome_media_router_strings_{{source_name_part}}.xtb" ])
+
   outputs = [ "values/android_chrome_media_router_strings.xml" ] + process_file_template(
                 android_bundle_locales_as_resources,
                 [ "values-{{source_name_part}}/android_chrome_media_router_strings.xml" ])

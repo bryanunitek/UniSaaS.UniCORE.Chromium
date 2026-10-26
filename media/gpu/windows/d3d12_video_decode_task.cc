@@ -6,7 +6,7 @@
 
 #include "base/task/thread_pool.h"
 #include "media/base/win/mf_helpers.h"
-#include "media/gpu/windows/d3d11_picture_buffer.h"
+#include "media/gpu/windows/d3d_picture_buffer.h"
 #include "third_party/microsoft_dxheaders/src/include/directx/d3dx12_core.h"
 
 namespace media {
@@ -14,7 +14,13 @@ namespace media {
 D3D12VideoDecoderTask::D3D12VideoDecoderTask() = default;
 
 D3D12VideoDecoderTask::~D3D12VideoDecoderTask() {
-  WaitForCompletion();
+  // The GPU may still be reading resources owned by this task (e.g.
+  // |command_allocator_|, |compressed_bitstream_|), so we must not let them be
+  // released until the fence has signaled. If the wait cannot be performed
+  // (only under catastrophic conditions such as being out of memory, where
+  // CreateEvent()/SetEventOnCompletion() fail), crash deterministically rather
+  // than freeing GPU-referenced resources out from under the driver.
+  CHECK(WaitForCompletion());
 }
 
 void D3D12VideoDecoderTask::SetFenceAndValue(scoped_refptr<D3D12Fence> fence,
@@ -26,7 +32,7 @@ void D3D12VideoDecoderTask::SetFenceAndValue(scoped_refptr<D3D12Fence> fence,
 bool D3D12VideoDecoderTask::WaitForCompletion() {
   const auto& [fence, value] = fence_and_value_;
   if (fence) {
-    bool ok = fence->WaitCPU(value) == D3D11StatusCode::kOk;
+    bool ok = fence->WaitCPU(value) == D3DStatusCode::kOk;
     if (ok) {
       fence_and_value_ = {nullptr, 0};
     }

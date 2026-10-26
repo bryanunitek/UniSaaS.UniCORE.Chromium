@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <set>
 #include <utility>
 #include <vector>
@@ -26,13 +27,19 @@
 #include "chrome/browser/sessions/session_service_utils.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
+#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_selection_state.h"
+#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/sessions/content/content_serialized_navigation_builder.h"
@@ -41,14 +48,17 @@
 #include "components/sessions/core/session_command.h"
 #include "components/sessions/core/session_constants.h"
 #include "components/sessions/core/session_id.h"
+#include "components/sessions/core/session_service_commands.h"
 #include "components/sessions/core/session_types.h"
 #include "components/split_tabs/split_tab_id.h"
 #include "components/split_tabs/split_tab_visual_data.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/split_tab_data.h"
 #include "components/tabs/public/tab_group.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
-#include "content/public/browser/session_storage_namespace.h"
+#include "content/public/browser/session_storage_namespace_handle.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 
 #if BUILDFLAG(IS_MAC)
@@ -132,16 +142,17 @@ class TaskRunnerData : public base::SupportsUserData::Data {
 // -------------------------------------------------------------
 class SessionServiceBaseUserData : public base::SupportsUserData::Data {
  public:
-  explicit SessionServiceBaseUserData(Browser::Type type) : type_(type) {}
+  explicit SessionServiceBaseUserData(BrowserWindowInterface::Type type)
+      : type_(type) {}
   ~SessionServiceBaseUserData() override = default;
   SessionServiceBaseUserData(const SessionServiceBaseUserData&) = delete;
   SessionServiceBaseUserData& operator=(const SessionServiceBaseUserData&) =
       delete;
 
-  Browser::Type type() const { return type_; }
+  BrowserWindowInterface::Type type() const { return type_; }
 
  private:
-  const Browser::Type type_;
+  const BrowserWindowInterface::Type type_;
 };
 
 }  // namespace
@@ -189,7 +200,7 @@ void SessionServiceBase::RemoveObserver(SessionServiceBaseObserver* observer) {
 }
 
 // static
-Browser::Type SessionServiceBase::GetBrowserTypeFromWebContents(
+BrowserWindowInterface::Type SessionServiceBase::GetBrowserTypeFromWebContents(
     content::WebContents* web_contents) {
   SessionServiceBaseUserData* data = static_cast<SessionServiceBaseUserData*>(
       web_contents->GetUserData(&kSessionServiceBaseUserDataKey));
@@ -198,7 +209,7 @@ Browser::Type SessionServiceBase::GetBrowserTypeFromWebContents(
   // possible that WebContents that are not tabs call into this code.
   // In that case, data will be null and we just return TYPE_NORMAL.
   if (!data) {
-    return Browser::Type::TYPE_NORMAL;
+    return BrowserWindowInterface::Type::TYPE_NORMAL;
   }
 
   return data->type();
@@ -276,13 +287,13 @@ void SessionServiceBase::TabInserted(WebContents* contents) {
                          session_tab_helper->session_id(), app_id);
   }
 
-  // Record the association between the SessionStorageNamespace and the
+  // Record the association between the SessionStorageNamespaceHandle and the
   // tab.
   //
   // TODO(ajwong): This should be processing the whole map rather than
   // just the default. This in particular will not work for tabs with only
   // isolated apps which won't have a default partition.
-  content::SessionStorageNamespace* session_storage_namespace =
+  content::SessionStorageNamespaceHandle* session_storage_namespace =
       contents->GetController().GetDefaultSessionStorageNamespace();
   ScheduleCommand(sessions::CreateSessionStorageAssociatedCommand(
       session_tab_helper->session_id(), session_storage_namespace->id()));
@@ -296,13 +307,15 @@ void SessionServiceBase::TabInserted(WebContents* contents) {
 }
 
 void SessionServiceBase::TabClosing(WebContents* contents) {
-  // Allow the associated sessionStorage to get deleted; it won't be needed
-  // in the session restore.
-  content::SessionStorageNamespace* session_storage_namespace =
-      contents->GetController().GetDefaultSessionStorageNamespace();
-  session_storage_namespace->SetShouldPersist(false);
   sessions::SessionTabHelper* session_tab_helper =
       sessions::SessionTabHelper::FromWebContents(contents);
+  if (ShouldDeleteSessionStorageOnTabClosing(session_tab_helper->window_id())) {
+    content::SessionStorageNamespaceHandle* session_storage_namespace =
+        contents->GetController().GetDefaultSessionStorageNamespace();
+    // Allow the associated sessionStorage to get deleted; the tab close is
+    // being committed and it won't be needed in session restore.
+    session_storage_namespace->SetShouldPersist(false);
+  }
   TabClosed(session_tab_helper->window_id(), session_tab_helper->session_id());
 }
 
@@ -361,8 +374,7 @@ void SessionServiceBase::SetLastActiveTime(SessionID window_id,
       sessions::CreateLastActiveTimeCommand(tab_id, last_active_time));
 }
 
-void SessionServiceBase::GetLastSession(
-    sessions::GetLastSessionCallback callback) {
+void SessionServiceBase::GetLastSession(LastSessionCallback callback) {
   // OnGotSessionCommands maps the SessionCommands to browser state, then run
   // the callback.
   return command_storage_manager_->GetLastSessionCommands(
@@ -570,23 +582,24 @@ void SessionServiceBase::OnBrowserActivated(BrowserWindowInterface* browser) {
 }
 
 void SessionServiceBase::OnGotSessionCommands(
-    sessions::GetLastSessionCallback callback,
+    LastSessionCallback callback,
     std::vector<std::unique_ptr<sessions::SessionCommand>> commands,
-    bool read_error) {
+    sessions::CommandStorageReadStatus status) {
   std::vector<std::unique_ptr<sessions::SessionWindow>> valid_windows;
   SessionID active_window_id = SessionID::InvalidValue();
   std::string platform_session_id;
   std::set<SessionID> discarded_window_ids;
 
-  sessions::RestoreSessionFromCommands(commands, &valid_windows,
-                                       &active_window_id, &platform_session_id,
-                                       &discarded_window_ids);
+  const sessions::SessionReplayResult replay_result =
+      sessions::RestoreSessionFromCommands(
+          commands, &valid_windows, &active_window_id, &platform_session_id,
+          &discarded_window_ids);
   RemoveUnusedRestoreWindows(&valid_windows);
 
   InitializePlatformSessionIfNeeded(platform_session_id, discarded_window_ids);
 
-  std::move(callback).Run(std::move(valid_windows), active_window_id,
-                          read_error);
+  std::move(callback).Run(std::move(valid_windows), active_window_id, status,
+                          replay_result);
 }
 
 void SessionServiceBase::BuildCommandsForTab(
@@ -663,63 +676,66 @@ void SessionServiceBase::BuildCommandsForTab(
   }
 
   // Record the association between the sessionStorage namespace and the tab.
-  content::SessionStorageNamespace* session_storage_namespace =
+  content::SessionStorageNamespaceHandle* session_storage_namespace =
       tab->GetController().GetDefaultSessionStorageNamespace();
   ScheduleCommand(sessions::CreateSessionStorageAssociatedCommand(
       session_tab_helper->session_id(), session_storage_namespace->id()));
 }
 
 void SessionServiceBase::BuildCommandsForBrowser(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     IdToRange* tab_to_available_range,
     std::set<SessionID>* windows_to_track) {
   DCHECK(is_saving_enabled_);
   DCHECK(browser);
-  DCHECK(browser->session_id().is_valid());
+  DCHECK(browser->GetSessionID().is_valid());
 
   command_storage_manager()->AppendRebuildCommand(
       sessions::CreateSetWindowBoundsCommand(
-          browser->session_id(), browser->GetWindow()->GetRestoredBounds(),
+          browser->GetSessionID(), browser->GetWindow()->GetRestoredBounds(),
           browser->GetWindow()->GetRestoredState()));
 
   command_storage_manager()->AppendRebuildCommand(
       sessions::CreateSetWindowTypeCommand(
-          browser->session_id(), WindowTypeForBrowserType(browser->type())));
+          browser->GetSessionID(),
+          WindowTypeForBrowserType(browser->GetType())));
 
-  if (!browser->app_name().empty()) {
+  if (!BrowserInitState::From(browser)->create_params().app_name.empty()) {
     command_storage_manager()->AppendRebuildCommand(
-        sessions::CreateSetWindowAppNameCommand(browser->session_id(),
-                                                browser->app_name()));
+        sessions::CreateSetWindowAppNameCommand(
+            browser->GetSessionID(),
+            BrowserInitState::From(browser)->create_params().app_name));
   }
 
   if (!WindowMetadataController::From(browser)->user_title().empty()) {
     command_storage_manager()->AppendRebuildCommand(
         sessions::CreateSetWindowUserTitleCommand(
-            browser->session_id(),
+            browser->GetSessionID(),
             WindowMetadataController::From(browser)->user_title()));
   }
 
   command_storage_manager()->AppendRebuildCommand(
       sessions::CreateSetWindowWorkspaceCommand(
-          browser->session_id(),
+          browser->GetSessionID(),
           BrowserWindow::FromBrowser(browser)->GetWorkspace()));
 
   command_storage_manager()->AppendRebuildCommand(
       sessions::CreateSetWindowVisibleOnAllWorkspacesCommand(
-          browser->session_id(),
+          browser->GetSessionID(),
           BrowserWindow::FromBrowser(browser)->IsVisibleOnAllWorkspaces()));
 
   command_storage_manager()->AppendRebuildCommand(
       sessions::CreateSetSelectedTabInWindowCommand(
-          browser->session_id(), browser->tab_strip_model()->active_index()));
+          browser->GetSessionID(),
+          browser->GetTabStripModel()->active_index()));
 
   // Set the visual data for each tab group.
-  TabStripModel* tab_strip = browser->tab_strip_model();
+  TabStripModel* tab_strip = browser->GetTabStripModel();
   if (tab_strip->SupportsTabGroups()) {
     TabGroupModel* group_model = tab_strip->group_model();
     tab_groups::TabGroupSyncService* tab_group_service =
         tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-            browser->profile());
+            browser->GetProfile());
 
     for (const tab_groups::TabGroupId& group_id :
          group_model->ListTabGroups()) {
@@ -741,28 +757,55 @@ void SessionServiceBase::BuildCommandsForBrowser(
     }
   }
 
-    for (split_tabs::SplitTabId split_id : tab_strip->ListSplits()) {
+  for (split_tabs::SplitTabId split_id : tab_strip->ListSplits()) {
+    command_storage_manager()->AppendRebuildCommand(
+        sessions::CreateSplitTabDataUpdateCommand(
+            split_id, tab_strip->GetSplitData(split_id)->visual_data()));
+  }
+
+  if (base::FeatureList::IsEnabled(features::kTabGroupsFocusing) &&
+      tab_strip->SupportsTabGroups()) {
+    std::optional<tab_groups::TabGroupId> focused_group =
+        tab_strip->GetFocusedGroup();
+    if (focused_group.has_value()) {
       command_storage_manager()->AppendRebuildCommand(
-          sessions::CreateSplitTabDataUpdateCommand(
-              split_id, tab_strip->GetSplitData(split_id)->visual_data()));
+          sessions::CreateAddWindowExtraDataCommand(
+              browser->GetSessionID(),
+              tabs::TabStripModelSelectionState::kFocusedTabGroupIdKey,
+              focused_group->ToString()));
     }
+  }
 
-    int index = 0;
-    for (const tabs::TabInterface* tab_interface : *tab_strip) {
-      WebContents* tab = tab_interface->GetContents();
-      DCHECK(tab);
-      const std::optional<tab_groups::TabGroupId> group_id =
-          tab_strip->GetTabGroupForTab(index);
-      const std::optional<split_tabs::SplitTabId> split_id =
-          tab_strip->GetSplitForTab(index);
+  if (const auto* const controller =
+          tabs::VerticalTabStripStateController::From(browser)) {
+    command_storage_manager()->AppendRebuildCommand(
+        sessions::CreateAddWindowExtraDataCommand(
+            browser->GetSessionID(),
+            tabs::VerticalTabStripStateController::kCollapsedKey,
+            base::ToString(controller->IsCollapsed())));
+    command_storage_manager()->AppendRebuildCommand(
+        sessions::CreateAddWindowExtraDataCommand(
+            browser->GetSessionID(),
+            tabs::VerticalTabStripStateController::kUncollapsedWidthKey,
+            base::NumberToString(controller->GetUncollapsedWidth())));
+  }
 
-      BuildCommandsForTab(browser->session_id(), tab, index, group_id, split_id,
-                          tab_interface->IsPinned(), tab_to_available_range);
+  int index = 0;
+  for (const tabs::TabInterface* tab_interface : *tab_strip) {
+    WebContents* tab = tab_interface->GetContents();
+    DCHECK(tab);
+    const std::optional<tab_groups::TabGroupId> group_id =
+        tab_strip->GetTabGroupForTab(index);
+    const std::optional<split_tabs::SplitTabId> split_id =
+        tab_strip->GetSplitForTab(index);
 
-      index++;
-    }
+    BuildCommandsForTab(browser->GetSessionID(), tab, index, group_id, split_id,
+                        tab_interface->IsPinned(), tab_to_available_range);
 
-  windows_to_track->insert(browser->session_id());
+    index++;
+  }
+
+  windows_to_track->insert(browser->GetSessionID());
 }
 
 void SessionServiceBase::BuildCommandsFromBrowsers(
@@ -779,8 +822,8 @@ void SessionServiceBase::BuildCommandsFromBrowsers(
         // about to be deleted, so we ignore it.
         if (ShouldTrackBrowser(browser) &&
             browser->GetTabStripModel()->count() && browser->GetWindow()) {
-          BuildCommandsForBrowser(browser->GetBrowserForMigrationOnly(),
-                                  tab_to_available_range, windows_to_track);
+          BuildCommandsForBrowser(browser, tab_to_available_range,
+                                  windows_to_track);
         }
         return true;
       });
@@ -819,7 +862,7 @@ bool SessionServiceBase::ShouldTrackBrowser(
     return false;
   }
 
-  if (browser->GetBrowserForMigrationOnly()->omit_from_session_restore()) {
+  if (BrowserInitState::From(browser)->omit_from_session_restore()) {
     return false;
   }
 
@@ -851,6 +894,11 @@ bool SessionServiceBase::ShouldTrackBrowser(
 
   return ShouldRestoreWindowOfType(
       WindowTypeForBrowserType(browser->GetType()));
+}
+
+bool SessionServiceBase::ShouldDeleteSessionStorageOnTabClosing(
+    SessionID window_id) const {
+  return true;
 }
 
 sessions::CommandStorageManager*

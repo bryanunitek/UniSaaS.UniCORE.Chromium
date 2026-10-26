@@ -78,8 +78,11 @@
   tabHelper->SetDelegate(self);
 
   GURL parentAccessURL = supervised_user::GetParentAccessURL(
-      GetApplicationContext()->GetApplicationLocaleStorage()->Get(), _targetURL,
-      _filteringBehaviorReason);
+      std::string(GetApplicationContext()
+                      ->GetApplicationLocaleStorage()
+                      ->GetTag()
+                      .tag_string()),
+      _targetURL, _filteringBehaviorReason);
   _mediator = [[ParentAccessMediator alloc] initWithWebState:std::move(webState)
                                              parentAccessURL:parentAccessURL];
   _mediator.delegate = self;
@@ -104,10 +107,21 @@
 }
 
 - (void)stop {
+  UIViewController* presentingViewController =
+      _viewController.presentingViewController;
+  if (presentingViewController) {
+    [presentingViewController dismissViewControllerAnimated:YES
+                                                 completion:^{
+                                                   [self stopCompleted];
+                                                 }];
+  } else {
+    [self stopCompleted];
+  }
+}
+
+- (void)stopCompleted {
   [_mediator disconnect];
   _mediator = nil;
-  [_viewController.presentingViewController dismissViewControllerAnimated:YES
-                                                               completion:nil];
   _viewController = nil;
   _snackbarCommandsHandler = nil;
 }

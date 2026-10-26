@@ -9,21 +9,19 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/enterprise/signin/profile_management_disclaimer_service.h"
 #include "chrome/browser/ui/profiles/profile_customization_synced_theme_waiter.h"
 #include "chrome/browser/ui/signin/signin_modal_dialog.h"
 #include "chrome/browser/ui/signin/signin_view_controller_delegate.h"
-#include "chrome/browser/ui/webui/signin/history_sync_optin_helper.h"
 #include "chrome/browser/ui/webui/signin/profile_customization_handler.h"
 #include "google_apis/gaia/core_account_id.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 // First run experience modal dialog shown after the user created a new profile
 // through the signin interception.
 //
 // First run consists of the following steps in order:
-// - Sync confirmation, if Sync can be enabled for this account
+// - History sync opt-in, if history sync can be enabled for this account
 // - Profile customization, if profile theme isn't overridden by a policy
 // - Profile switching IPH (outside of the dialog, after it closes)
 // If neither of the conditions is satisfied, the dialog never shows and
@@ -37,17 +35,16 @@ class SigninInterceptFirstRunExperienceDialog
   // numeric values should never be reused.
   // TODO(crbug.com/40209493): Add further buckets to track engagement
   // with the profile customization dialog (customized name / customized color).
+  //
+  // LINT.IfChange(SigninInterceptFREDialogEvent)
   enum class DialogEvent {
     // FRE started.
     kStart = 0,
-    // Sync confirmation was shown to the user.
-    kShowSyncConfirmation = 1,
-    // The user turned sync on.
-    kSyncConfirmationClickConfirm = 2,
-    // The user canceled sync.
-    kSyncConfirmationClickCancel = 3,
-    // The user clicked on sync settings.
-    kSyncConfirmationClickSettings = 4,
+    // Obsolete: Sync confirmation was replaced by History Sync opt-in.
+    // kShowSyncConfirmation = 1,
+    // kSyncConfirmationClickConfirm = 2,
+    // kSyncConfirmationClickCancel = 3,
+    // kSyncConfirmationClickSettings = 4,
     // Profile customization was shown to the user.
     kShowProfileCustomization = 5,
     // The user completed profile customization.
@@ -64,9 +61,10 @@ class SigninInterceptFirstRunExperienceDialog
 
     kMaxValue = kHistorySyncOptinReject
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:SigninInterceptFREDialogEvent)
 
   explicit SigninInterceptFirstRunExperienceDialog(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       const CoreAccountId& account_id,
       bool is_forced_intercept,
       base::OnceClosure on_close_callback);
@@ -85,7 +83,6 @@ class SigninInterceptFirstRunExperienceDialog
   void OnModalDialogClosed() override;
 
  private:
-  class InterceptTurnSyncOnHelperDelegate;
   class InterceptHistorySyncOptinHelperDelegate;
   friend class SigninInterceptFirstRunExperienceDialogBrowserTestBase;
 
@@ -93,13 +90,8 @@ class SigninInterceptFirstRunExperienceDialog
   // always appear in this order.
   enum class Step {
     kStart,
-    // Steps relevant for sync confirmation only.
-    kTurnOnSync,
-    kSyncConfirmation,
-    // Steps relevant for history sync optin screen only.
     kStartHistorySyncOptin,
     kShowHistorySyncScreen,
-    // Common steps.
     kWaitForSyncedTheme,
     kProfileCustomization,
     kProfileSwitchIPHAndCloseModal,
@@ -109,9 +101,6 @@ class SigninInterceptFirstRunExperienceDialog
   void DoNextStep(Step expected_current_step, Step step);
 
   // Actions executed right after moving to a corresponding step.
-  void DoTurnOnSync();
-  void DoSyncConfirmation();
-
   void DoStartHistorySync();
   void DoShowHistorySyncOptin();
 
@@ -126,7 +115,7 @@ class SigninInterceptFirstRunExperienceDialog
   void ProfileCustomizationCloseOnCompletion(
       ProfileCustomizationHandler::CustomizationResult customization_result);
 
-  const raw_ptr<Browser> browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
   const CoreAccountId account_id_;
   const bool is_forced_intercept_;
 

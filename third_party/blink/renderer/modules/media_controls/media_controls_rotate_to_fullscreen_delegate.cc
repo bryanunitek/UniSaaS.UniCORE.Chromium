@@ -112,7 +112,9 @@ void MediaControlsRotateToFullscreenDelegate::Invoke(
     return;
   }
   if (event->type() == event_type_names::kOrientationchange) {
-    OnScreenOrientationChange();
+    if (event->isTrusted()) {
+      OnScreenOrientationChange();
+    }
     return;
   }
 
@@ -133,7 +135,7 @@ void MediaControlsRotateToFullscreenDelegate::OnStateChange() {
         BindRepeating(
             &MediaControlsRotateToFullscreenDelegate::OnIntersectionChange,
             WrapWeakPersistent(this)),
-        LocalFrameUkmAggregator::kMediaIntersectionObserver,
+        LocalFrameMetricsAggregator::kMediaIntersectionObserver,
         IntersectionObserver::Params{.thresholds = {kIntersectionThreshold}});
     intersection_observer_->observe(video_element_);
   } else if (!needs_intersection_observer && intersection_observer_) {

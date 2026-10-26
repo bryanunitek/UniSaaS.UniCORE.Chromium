@@ -8,7 +8,9 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/functional/callback_forward.h"
@@ -102,7 +104,8 @@ class AutofillWebDataBackendImpl final
   void NotifyOnAutofillChangedBySync(syncer::DataType data_type) override;
   void NotifyOnServerCvcChanged(const ServerCvcChange& change) override;
   void NotifyOnEntityInstanceChanged(
-      const EntityInstanceChange& change) override;
+      const EntityInstanceChange& change,
+      std::optional<std::string_view> legal_message_token) override;
   void NotifyOnServerEntityMetadataChanged(
       const EntityInstanceMetadataChange& change) override;
   void NotifyOnValuableMetadataChanged(
@@ -124,9 +127,20 @@ class AutofillWebDataBackendImpl final
       const std::u16string& prefix,
       int limit,
       WebDatabase* db);
+  std::unique_ptr<WDTypedResult> GetFormValuesForElementNameAndLabel(
+      std::u16string_view name,
+      std::u16string_view label,
+      std::u16string_view prefix,
+      int limit,
+      WebDatabase* db);
 
-  // Function to remove expired Autocomplete entries, which deletes them from
-  // the Sqlite table, unlinks them from Sync and cleans up the metadata.
+  // Removes expired Autocomplete entries by deleting them from the Sqlite
+  // table, unlinking them from Sync, and cleaning up the metadata.
+  //
+  // Note: Unlinking and event emission occur only for the non-label-sensitive
+  // solution. The new label-sensitive solution is not synced at all, so
+  // event emission is not needed.
+  //
   // Returns the number of entries cleaned-up.
   std::unique_ptr<WDTypedResult> RemoveExpiredAutocompleteEntries(
       WebDatabase* db);
@@ -138,9 +152,11 @@ class AutofillWebDataBackendImpl final
 
   // Removes the Form-value |value| which has been entered in form input fields
   // named |name| from the database.
-  WebDatabase::State RemoveFormValueForElementName(const std::u16string& name,
-                                                   const std::u16string& value,
-                                                   WebDatabase* db);
+  WebDatabase::State RemoveFormValueForElementNameAndLabel(
+      std::u16string_view name,
+      std::u16string_view label,
+      std::u16string_view value,
+      WebDatabase* db);
 
   // Adds an Autofill profile to the web database.
   WebDatabase::State AddAutofillProfile(
@@ -162,14 +178,14 @@ class AutofillWebDataBackendImpl final
       WebDatabase* db);
 
   // Returns the Autofill profiles from the web database.
-  std::unique_ptr<WDTypedResult> GetAutofillProfiles(
-      WebDatabase* db);
+  std::unique_ptr<WDTypedResult> GetAutofillProfiles(WebDatabase* db);
 
   // Adds, updates, removes, or retrieves EntityInstances.
   // See the identically named functions in `EntityTable`, especially on why
   // RemoveEntityInstancesModifiedBetween() exists.
   WebDatabase::State AddOrUpdateEntityInstance(
       EntityInstance entity,
+      std::optional<std::string> legal_message_token,
       base::OnceCallback<void(EntityInstanceChange)> on_success,
       WebDatabase* db);
   WebDatabase::State RemoveEntityInstance(
@@ -200,6 +216,9 @@ class AutofillWebDataBackendImpl final
       base::Time begin,
       base::Time end,
       WebDatabase* db);
+
+  // Returns table-level statistics for the autocomplete table.
+  std::unique_ptr<WDTypedResult> GetAutocompleteTableStats(WebDatabase* db);
 
   // Updates autocomplete entries in the web database.
   WebDatabase::State UpdateAutocompleteEntries(
@@ -301,6 +320,11 @@ class AutofillWebDataBackendImpl final
   WebDatabase::State AddServerCreditCardForTesting(
       const CreditCard& credit_card,
       WebDatabase* db);
+
+  // Copies data from the legacy `autofill` table to the `autocomplete` table.
+  // Returns a boolean `WDResult` with true on success or if the legacy table
+  // does not exist, and false on database failure.
+  std::unique_ptr<WDTypedResult> MigrateDataFromLegacyTable(WebDatabase* db);
 
  protected:
   ~AutofillWebDataBackendImpl() override;

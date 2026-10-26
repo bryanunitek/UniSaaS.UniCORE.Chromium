@@ -12,6 +12,7 @@
 #include "gpu/config/gpu_feature_info.h"
 #include "media/base/audio_decoder.h"
 #include "media/base/audio_encoder.h"
+#include "media/base/decoder.h"
 #include "media/base/media_log.h"
 #include "media/base/media_switches.h"
 #include "media/gpu/chromeos/mailbox_video_frame_converter.h"
@@ -34,15 +35,7 @@ VideoDecoderType GetPreferredLinuxDecoderImplementation() {
     return VideoDecoderType::kUnknown;
   }
 
-  if (IsOutOfProcessVideoDecodingEnabled()) {
-    return VideoDecoderType::kOutOfProcess;
-  }
-
-#if BUILDFLAG(USE_VAAPI)
-  return VideoDecoderType::kVaapi;
-#elif BUILDFLAG(USE_V4L2_CODEC)
-  return VideoDecoderType::kV4L2;
-#endif
+  return ActiveLinuxVideoDecoderType();
 }
 
 std::vector<Fourcc> GetPreferredRenderableFourccs(
@@ -181,11 +174,7 @@ class GpuMojoMediaClientLinux final : public GpuMojoMediaClient {
 
     switch (decoder_type) {
       case VideoDecoderType::kOutOfProcess: {
-        auto frame_converter =
-            base::FeatureList::IsEnabled(kUseSharedImageInOOPVDProcess)
-                ? SimpleVideoFrameConverter::Create()
-                : MailboxVideoFrameConverter::Create(
-                      gpu_task_runner_, traits.get_command_buffer_stub_cb);
+        auto frame_converter = SimpleVideoFrameConverter::Create();
         return VideoDecoderPipeline::Create(
             gpu_workarounds_, traits.task_runner, /*frame_pool=*/nullptr,
             std::move(frame_converter),

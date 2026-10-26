@@ -229,6 +229,11 @@ void WebNNContextImpl::RecordContextBackendUma(ContextBackendUma backend_uma) {
 void WebNNContextImpl::OnDisconnect() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (is_lost_) {
+    return;
+  }
+  is_lost_ = true;
+
   // Explicitly reset all tensor and graph receivers before destruction since
   // destroying bound receivers can cause Mojo to DCHECK due to pending
   // callbacks or if destruction occurs on a different runner than the bound
@@ -285,21 +290,33 @@ void WebNNContextImpl::AddGraphImpl(scoped_refptr<WebNNGraphImpl> graph_impl) {
   graph_impls_.emplace(std::move(graph_impl));
 }
 
+void WebNNContextImpl::OpenWeightsFile(
+    base::OnceCallback<void(base::File,
+                            mojo::PendingRemote<mojom::WeightsFileSession>)>
+        callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(is_context_provider_in_renderer_);
+
+  base::OnceClosure task =
+      base::BindOnce(&WebNNContextProviderInRenderer::OpenWeightsFile,
+                     context_provider_in_renderer_,
+                     base::BindPostTaskToCurrentDefault(std::move(callback)));
+  if (!main_task_runner_->RunsTasksInCurrentSequence()) {
+    main_task_runner_->PostTask(FROM_HERE, std::move(task));
+  } else {
+    std::move(task).Run();
+  }
+}
+
 void WebNNContextImpl::CreateWeightsFile(
     base::OnceCallback<void(base::File)> callback) {
-  base::OnceClosure create_task;
-  if (is_context_provider_in_renderer_) {
-    create_task =
-        base::BindOnce(&WebNNContextProviderInRenderer::CreateWeightsFile,
-                       context_provider_in_renderer_,
-                       base::BindPostTaskToCurrentDefault(std::move(callback)));
-  }
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // CreateWeightsFile is only used by the GPU-process path.
+  DCHECK(!is_context_provider_in_renderer_);
 
-  if (!create_task) {
-    create_task = base::BindOnce(
-        &WebNNContextProviderImpl::CreateWeightsFile, context_provider_,
-        base::BindPostTaskToCurrentDefault(std::move(callback)));
-  }
+  base::OnceClosure create_task = base::BindOnce(
+      &WebNNContextProviderImpl::CreateWeightsFile, context_provider_,
+      base::BindPostTaskToCurrentDefault(std::move(callback)));
 
   if (!main_task_runner_->RunsTasksInCurrentSequence()) {
     main_task_runner_->PostTask(FROM_HERE, std::move(create_task));
@@ -313,12 +330,9 @@ void WebNNContextImpl::BuildGraph(
     WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
     base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
         constant_operands,
-    base::flat_map<OperandId, scoped_refptr<WebNNTensorImpl>>
-        constant_tensor_operands,
     BuildGraphCallback callback) {
   CreateGraphImpl(std::move(graph_info), std::move(compute_resource_info),
                   std::move(constant_operands),
-                  std::move(constant_tensor_operands),
                   base::BindOnce(&WebNNContextImpl::OnGraphBuilt, AsWeakPtr(),
                                  std::move(callback)));
 }
@@ -345,7 +359,6 @@ void WebNNContextImpl::CreateGraphBuilder(
 
 void WebNNContextImpl::CreateTensor(
     mojom::TensorInfoPtr tensor_info,
-    mojo_base::BigBuffer tensor_data,
     mojom::WebNNContext::CreateTensorCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -356,35 +369,6 @@ void WebNNContextImpl::CreateTensor(
     return;
   }
 
-  MLTensorUsage usage = tensor_info->usage;
-  if (usage.Has(MLTensorUsageFlags::kGraphConstant)) {
-    const base::expected<OperandDescriptor, std::string> validated_descriptor =
-        webnn::OperandDescriptor::Create(
-            properties_, tensor_info->descriptor.data_type(),
-            tensor_info->descriptor.shape(), "WebNNGraphConstant");
-    if (!validated_descriptor.has_value()) {
-      ReportBadMessageAndDisconnect(kBadMessageInvalidTensor);
-      return;
-    }
-
-    if (!properties_.data_type_limits.constant.Supports(
-            validated_descriptor.value())) {
-      ReportBadMessageAndDisconnect(kBadMessageInvalidTensor);
-      return;
-    }
-
-    if (tensor_data.size() != validated_descriptor->PackedByteLength()) {
-      ReportBadMessageAndDisconnect(kBadMessageInvalidTensor);
-      return;
-    }
-  } else {
-    // The renderer doesn't provide an initial value for non-constant tensors.
-    if (tensor_data.size() != 0) {
-      GetMojoReceiver().ReportBadMessage(kBadMessageInvalidTensor);
-      return;
-    }
-  }
-
   mojo::PendingAssociatedRemote<mojom::WebNNTensor> remote;
   auto receiver = remote.InitWithNewEndpointAndPassReceiver();
 
@@ -393,11 +377,6 @@ void WebNNContextImpl::CreateTensor(
     std::move(callback).Run(
         mojom::CreateTensorResult::NewError(std::move(result.error())));
     return;
-  }
-
-  if (usage.Has(MLTensorUsageFlags::kGraphConstant)) {
-    // The size of `tensor_data` was checked above.
-    result.value()->WriteTensorImpl(std::move(tensor_data));
   }
 
   auto success = mojom::CreateTensorSuccess::New(std::move(remote),
@@ -450,10 +429,11 @@ mojo_base::BigBuffer WebNNContextImpl::WriteDataToDataPipeOrBigBuffer(
   return mojo_base::BigBuffer(src_span);
 }
 
-void WebNNContextImpl::CreateTensorFromMailbox(mojom::TensorInfoPtr tensor_info,
-                                               const gpu::Mailbox& mailbox,
-                                               const gpu::SyncToken& fence,
-                                               CreateTensorCallback callback) {
+void WebNNContextImpl::CreateTensorFromMailbox(
+    mojom::TensorInfoPtr tensor_info,
+    const gpu::Mailbox& mailbox,
+    const std::vector<gpu::SyncToken>& fences,
+    CreateTensorCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   ScopedTrace scoped_trace("WebNNContextImpl::CreateTensorFromMailbox");
@@ -464,12 +444,6 @@ void WebNNContextImpl::CreateTensorFromMailbox(mojom::TensorInfoPtr tensor_info,
   }
 
   if (!ValidateTensor(properties_, tensor_info->descriptor).has_value()) {
-    ReportBadMessageAndDisconnect(kBadMessageInvalidTensor);
-    return;
-  }
-
-  // WebNN graph constants cannot be shared since they may not be readable.
-  if (tensor_info->usage.Has(MLTensorUsageFlags::kGraphConstant)) {
     ReportBadMessageAndDisconnect(kBadMessageInvalidTensor);
     return;
   }
@@ -490,12 +464,6 @@ void WebNNContextImpl::CreateTensorFromMailbox(mojom::TensorInfoPtr tensor_info,
     return;
   }
 
-  // Ensure the Mojo callback is posted back to the task runner. Running
-  // it directly on the GPU sequence can violate Mojo's sequence checks,
-  // even if executing on the same thread.
-  auto mojo_callback_wrapper =
-      base::BindPostTask(mojo_task_runner(), std::move(callback));
-
   // Must be a scheduled task since this depends on shared image creation task.
   RunOrScheduleTaskWithThisContext(
       base::BindOnce(
@@ -514,7 +482,8 @@ void WebNNContextImpl::CreateTensorFromMailbox(mojom::TensorInfoPtr tensor_info,
                 self.shared_image_manager_
                     ->ProduceWebNNTensor(mailbox, &self.memory_type_tracker_)
                     .release(),
-                OnTaskRunnerDeleter(self.main_task_runner()));
+                WebNNTensorImpl::OnTaskRunnerDeleterWithWait(
+                    self.main_task_runner()));
             if (!representation) {
               std::move(callback).Run(ToError<mojom::CreateTensorResult>(
                   mojom::Error::Code::kUnknownError,
@@ -547,9 +516,10 @@ void WebNNContextImpl::CreateTensorFromMailbox(mojom::TensorInfoPtr tensor_info,
                 mojom::CreateTensorResult::NewSuccess(std::move(success)));
             self.tensor_impls_.emplace(*std::move(result));
           },
-          std::move(tensor_info), mailbox, std::move(mojo_callback_wrapper),
+          std::move(tensor_info), mailbox,
+          WrapCallbackOnMojoSequence(std::move(callback)),
           std::move(scoped_trace)),
-      fence);
+      fences);
 }
 
 void WebNNContextImpl::Dispatch(
@@ -583,13 +553,6 @@ void WebNNContextImpl::Dispatch(
       return;
     }
 
-    // Input MLTensor is always dispatchable, which isn't allowed when used as
-    // a graph constant.
-    if (input_tensor->usage().Has(MLTensorUsageFlags::kGraphConstant)) {
-      ReportBadMessageAndDisconnect(kBadMessageInvalidTensor);
-      return;
-    }
-
     name_to_input_tensors.emplace_back(name, std::move(input_tensor));
   }
   base::flat_map<std::string, scoped_refptr<WebNNTensorImpl>>
@@ -613,13 +576,6 @@ void WebNNContextImpl::Dispatch(
       return;
     }
 
-    // Output MLTensor is always dispatchable, which isn't allowed when used as
-    // a graph constant.
-    if (output_tensor->usage().Has(MLTensorUsageFlags::kGraphConstant)) {
-      ReportBadMessageAndDisconnect(kBadMessageInvalidTensor);
-      return;
-    }
-
     name_to_output_tensors.emplace_back(name, std::move(output_tensor));
   }
 
@@ -634,7 +590,7 @@ void WebNNContextImpl::Dispatch(
 
   graph_impl->RunDispatch(
       std::move(name_to_input_tensor_map), std::move(name_to_output_tensor_map),
-      std::move(scoped_trace), GetMojoReceiver().GetBadMessageCallback());
+      std::move(scoped_trace), GetBadMessageCallbackOnMojoSequence());
 }
 
 void WebNNContextImpl::DestroyGraph(
@@ -694,21 +650,23 @@ void WebNNContextImpl::OnLost(const std::string& reason) {
 
 void WebNNContextImpl::RunOrScheduleTaskWithThisContext(
     RunOrScheduleTaskCallback task,
-    const gpu::SyncToken& fence) {
+    std::vector<gpu::SyncToken> fences) {
   // Safe to use std::ref because `this` owns gpu_task_scheduler_ and
   // its deletion drops all pending tasks before the context is destroyed.
-  RunOrScheduleTask(base::BindOnce(std::move(task), std::ref(*this)), fence);
+  RunOrScheduleTask(base::BindOnce(std::move(task), std::ref(*this)),
+                    std::move(fences));
 }
 
 void WebNNContextImpl::RunOrScheduleTask(base::OnceClosure task,
-                                         const gpu::SyncToken& fence,
+                                         std::vector<gpu::SyncToken> fences,
                                          const gpu::SyncToken& release) {
   if (gpu_task_scheduler_) {
-    gpu_task_scheduler_->ScheduleGpuTask(std::move(task), fence, release);
+    gpu_task_scheduler_->ScheduleGpuTask(std::move(task), std::move(fences),
+                                         release);
     return;
   }
 
-  DCHECK(!fence.HasData());
+  DCHECK(fences.empty());
   DCHECK(!release.HasData());
   DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
   std::move(task).Run();

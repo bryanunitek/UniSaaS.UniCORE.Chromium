@@ -251,7 +251,7 @@ void TestProgressiveDecodingContinuesAfterFullData(
   const ImageFrame* const frame_upfront =
       decoder_upfront->DecodeFrameBufferAtIndex(0);
   ASSERT_EQ(ImageFrame::kFrameComplete, frame_upfront->GetStatus());
-  const unsigned hash_upfront = HashBitmap(frame_upfront->Bitmap());
+  const uint32_t hash_upfront = HashBitmap(frame_upfront->Bitmap());
 
   auto decoder = CreatePNGDecoder();
   scoped_refptr<SharedBuffer> partial_data =
@@ -261,12 +261,12 @@ void TestProgressiveDecodingContinuesAfterFullData(
   EXPECT_EQ(1u, decoder->FrameCount());
   const ImageFrame* frame = decoder->DecodeFrameBufferAtIndex(0);
   EXPECT_EQ(frame->GetStatus(), ImageFrame::kFramePartial);
-  const unsigned hash_partial = HashBitmap(frame->Bitmap());
+  const uint32_t hash_partial = HashBitmap(frame->Bitmap());
 
   decoder->SetData(SharedBuffer::Create(full_data), true);
   frame = decoder->DecodeFrameBufferAtIndex(0);
   EXPECT_EQ(frame->GetStatus(), ImageFrame::kFrameComplete);
-  const unsigned hash_full = HashBitmap(frame->Bitmap());
+  const uint32_t hash_full = HashBitmap(frame->Bitmap());
 
   EXPECT_FALSE(decoder->Failed());
   EXPECT_NE(hash_full, hash_partial);
@@ -1159,7 +1159,7 @@ TEST(AnimatedPNGTests, Offset) {
   Vector<char> original_data = ReadFile(png_file);
   ASSERT_FALSE(original_data.empty());
 
-  Vector<unsigned> baseline_hashes;
+  Vector<uint32_t> baseline_hashes;
   scoped_refptr<SharedBuffer> original_data_buffer =
       SharedBuffer::Create(original_data);
   CreateDecodingBaseline(CreatePNGDecoder, original_data_buffer.get(),
@@ -1192,7 +1192,7 @@ TEST(AnimatedPNGTests, ExtraChunksBeforeIHDR) {
   Vector<char> original_data = ReadFile(png_file);
   ASSERT_FALSE(original_data.empty());
 
-  Vector<unsigned> baseline_hashes;
+  Vector<uint32_t> baseline_hashes;
   scoped_refptr<SharedBuffer> original_data_buffer =
       SharedBuffer::Create(original_data);
   CreateDecodingBaseline(CreatePNGDecoder, original_data_buffer.get(),
@@ -1693,18 +1693,19 @@ TEST(PNGTests, cicp) {
   scoped_refptr<SharedBuffer> data = ReadFileToSharedBuffer(png_file);
   ASSERT_TRUE(data);
 
-  auto decoder = CreatePNGDecoder();
+  auto decoder = CreatePNGDecoder(ImageDecoder::kAlphaNotPremultiplied,
+                                  ColorBehavior::kTag);
   decoder->SetData(data.get(), true);
   auto* frame = decoder->DecodeFrameBufferAtIndex(0);
   ASSERT_TRUE(frame);
   ASSERT_FALSE(decoder->Failed());
   ASSERT_TRUE(decoder->HasEmbeddedColorProfile());
-  ColorProfileTransform* transform = decoder->ColorTransform();
-  ASSERT_TRUE(transform);  // Guaranteed by `HasEmbeddedColorProfile`.
-  const skcms_ICCProfile* png_profile = transform->SrcProfile();
-  ASSERT_TRUE(png_profile);
-  EXPECT_TRUE(skcms_TransferFunction_isPQ(&png_profile->trc[0].parametric) ||
-              skcms_TransferFunction_isPQish(&png_profile->trc[0].parametric));
+  sk_sp<SkColorSpace> color_space = decoder->ColorSpaceForSkImages();
+  ASSERT_TRUE(color_space);
+  skcms_TransferFunction tf;
+  color_space->transferFn(&tf);
+  EXPECT_TRUE(skcms_TransferFunction_isPQ(&tf) ||
+              skcms_TransferFunction_isPQish(&tf));
 }
 
 TEST(PNGTests, IgnoringColorProfile) {
@@ -1752,6 +1753,22 @@ TEST(PNGTests, HDRMetadata) {
                   .01f);
 }
 
+TEST(PNGTests, ParseSmpte209450FromICC) {
+  const char* png_file = "/images/resources/smpte209450.png";
+  scoped_refptr<SharedBuffer> data = ReadFileToSharedBuffer(png_file);
+  ASSERT_TRUE(data);
+
+  auto decoder = CreatePNGDecoder(ImageDecoder::kAlphaNotPremultiplied,
+                                  ColorBehavior::kTag);
+  decoder->SetData(data.get(), true);
+  auto* frame = decoder->DecodeFrameBufferAtIndex(0);
+  ASSERT_TRUE(frame);
+  ASSERT_FALSE(decoder->Failed());
+
+  const gfx::HDRMetadata& hdr_metadata = decoder->GetHDRMetadata();
+  ASSERT_TRUE(hdr_metadata.HasAgtm());
+}
+
 TEST(AnimatedPNGTests, TrnsMeansAlpha) {
   const char* png_file =
       "/images/resources/"
@@ -1797,17 +1814,17 @@ TEST(AnimatedPNGTests, ApngTestSuiteDisposeOpNoneBasic) {
     auto* frame = decoder->DecodeFrameBufferAtIndex(i);
     ASSERT_TRUE(frame);
     ASSERT_FALSE(decoder->Failed());
-    SkColor actualColor = frame->Bitmap().getColor(0, 0);
+    SkColor actual_color = frame->Bitmap().getColor(0, 0);
     if (i == 0) {
-      EXPECT_EQ(SkColorGetA(actualColor), 0xFFu);
-      EXPECT_GE(SkColorGetR(actualColor), 0xFEu);
-      EXPECT_EQ(SkColorGetG(actualColor), 0x00u);
-      EXPECT_EQ(SkColorGetB(actualColor), 0x00u);
+      EXPECT_EQ(SkColorGetA(actual_color), 0xFFu);
+      EXPECT_GE(SkColorGetR(actual_color), 0xFEu);
+      EXPECT_EQ(SkColorGetG(actual_color), 0x00u);
+      EXPECT_EQ(SkColorGetB(actual_color), 0x00u);
     } else if ((i == 1) || (i == 2)) {
-      EXPECT_EQ(SkColorGetA(actualColor), 0xFFu);
-      EXPECT_EQ(SkColorGetR(actualColor), 0x00u);
-      EXPECT_GE(SkColorGetG(actualColor), 0xFEu);
-      EXPECT_EQ(SkColorGetB(actualColor), 0x00u);
+      EXPECT_EQ(SkColorGetA(actual_color), 0xFFu);
+      EXPECT_EQ(SkColorGetR(actual_color), 0x00u);
+      EXPECT_GE(SkColorGetG(actual_color), 0xFEu);
+      EXPECT_EQ(SkColorGetB(actual_color), 0x00u);
     }
   }
   EXPECT_FALSE(decoder->Failed());
@@ -1997,6 +2014,73 @@ TEST(PNGTests, PlteAfterInitialImageData) {
   // Not crashing when decoding the 1st frame is the main verification in this
   // test.
   std::ignore = decoder->DecodeFrameBufferAtIndex(0);
+}
+
+// An Adam7-interlaced PNG that has only been partially received should still
+// paint every pixel of the image - the pixels that have not been decoded yet
+// are approximated from the closest already-decoded Adam7 sample.  Otherwise
+// the partially decoded image is mostly transparent and therefore invisible.
+TEST(PNGTests, InterlacedPartialDecodeHasNoTransparentGaps) {
+  Vector<char> full_data =
+      ReadFile(kDecodersTestingDir, "interlaced-progressive.png");
+  ASSERT_FALSE(full_data.empty());
+
+  // Enough bytes to cover the first Adam7 pass (which samples every 8th pixel
+  // of every 8th row), but far from the whole image.
+  constexpr size_t kPartialSize = 3000u;
+  ASSERT_LT(kPartialSize, full_data.size());
+
+  auto decoder = CreatePNGDecoder();
+  decoder->SetData(
+      SharedBuffer::Create(base::span(full_data).first(kPartialSize)).get(),
+      /*all_data_received=*/false);
+
+  ImageFrame* frame = decoder->DecodeFrameBufferAtIndex(0);
+  ASSERT_TRUE(frame);
+  EXPECT_FALSE(decoder->Failed());
+  EXPECT_EQ(frame->GetStatus(), ImageFrame::kFramePartial);
+
+  const SkBitmap& bitmap = frame->Bitmap();
+  ASSERT_EQ(bitmap.width(), 128);
+  ASSERT_EQ(bitmap.height(), 128);
+
+  int transparent_pixels = 0;
+  for (int y = 0; y < bitmap.height(); ++y) {
+    for (int x = 0; x < bitmap.width(); ++x) {
+      if (SkColorGetA(bitmap.getColor(x, y)) == 0) {
+        ++transparent_pixels;
+      }
+    }
+  }
+  EXPECT_EQ(transparent_pixels, 0);
+}
+
+// Once all data is available an interlaced image has to decode to exactly the
+// same pixels as its non-interlaced counterpart, regardless of how the
+// intermediate passes are painted.
+TEST(PNGTests, InterlacedFullDecodeMatchesNonInterlaced) {
+  auto interlaced = CreatePNGDecoder();
+  interlaced->SetData(
+      ReadFileToSharedBuffer(kDecodersTestingDir, "interlaced-progressive.png")
+          .get(),
+      /*all_data_received=*/true);
+  ImageFrame* interlaced_frame = interlaced->DecodeFrameBufferAtIndex(0);
+  ASSERT_TRUE(interlaced_frame);
+  ASSERT_EQ(interlaced_frame->GetStatus(), ImageFrame::kFrameComplete);
+
+  auto non_interlaced = CreatePNGDecoder();
+  non_interlaced->SetData(
+      ReadFileToSharedBuffer(kDecodersTestingDir,
+                             "non-interlaced-progressive.png")
+          .get(),
+      /*all_data_received=*/true);
+  ImageFrame* non_interlaced_frame =
+      non_interlaced->DecodeFrameBufferAtIndex(0);
+  ASSERT_TRUE(non_interlaced_frame);
+  ASSERT_EQ(non_interlaced_frame->GetStatus(), ImageFrame::kFrameComplete);
+
+  EXPECT_EQ(HashBitmap(interlaced_frame->Bitmap()),
+            HashBitmap(non_interlaced_frame->Bitmap()));
 }
 
 }  // namespace

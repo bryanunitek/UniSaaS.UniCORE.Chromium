@@ -11,6 +11,7 @@
 
 #include "base/command_line.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
@@ -19,6 +20,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/sessions/chrome_tab_restore_service_client.h"
@@ -29,11 +32,11 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/session_sync_service_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
-#include "chrome/browser/ui/tabs/features.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/tabs/recent_tabs_builder.h"
 #include "chrome/browser/ui/tabs/recent_tabs_builder_test_helper.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -54,6 +57,7 @@
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/split_tabs/split_tab_visual_data.h"
+#include "components/strings/grit/components_strings.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/engine/data_type_activation_response.h"
@@ -70,6 +74,8 @@
 #include "content/public/test/test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/base/window_open_disposition.h"
 
 using ::testing::ElementsAre;
 
@@ -124,8 +130,6 @@ void VerifyModel(const ui::MenuModel* model, base::span<const ModelData> data) {
   ASSERT_TRUE(model);
   VerifyModel(*model, std::move(data));
 }
-
-}  // namespace
 
 class RecentTabsSubMenuModelTest : public InProcessBrowserTest {
  public:
@@ -189,16 +193,17 @@ class RecentTabsSubMenuModelTest : public InProcessBrowserTest {
 
   void AddTabToBrowser(const GURL& tab_url) {
     ui_test_utils::NavigateToURLWithDisposition(
-        browser(), tab_url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        browser(), tab_url, WindowOpenDisposition::kNewForegroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   }
 
-  Browser* AddBrowser(Browser* browser, const GURL& url) {
+  BrowserWindowInterface* AddBrowser(BrowserWindowInterface* browser,
+                                     const GURL& url) {
     ui_test_utils::BrowserCreatedObserver browser_created_observer;
     ui_test_utils::NavigateToURLWithDisposition(
-        browser, url, WindowOpenDisposition::NEW_WINDOW,
+        browser, url, WindowOpenDisposition::kNewWindow,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_BROWSER);
-    Browser* new_browser = browser_created_observer.Wait();
+    BrowserWindowInterface* new_browser = browser_created_observer.Wait();
     ui_test_utils::WaitUntilBrowserBecomeActive(new_browser);
     return new_browser;
   }
@@ -207,20 +212,48 @@ class RecentTabsSubMenuModelTest : public InProcessBrowserTest {
   std::unique_ptr<syncer::DataTypeProcessor> sync_processor_;
 };
 
+// Same as RecentTabsSubMenuModelTest, but with kCrossDeviceTabsInAppMenu
+// disabled, under which tabs from other devices are listed in the History
+// submenu.
+class RecentTabsSubMenuModelWithoutOtherDeviceTabsInAppMenuTest
+    : public RecentTabsSubMenuModelTest {
+ public:
+  RecentTabsSubMenuModelWithoutOtherDeviceTabsInAppMenuTest() {
+    feature_list_.InitAndDisableFeature(syncer::kCrossDeviceTabsInAppMenu);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Same as RecentTabsSubMenuModelTest, but with kCrossDeviceTabsInAppMenu
+// enabled, under which tabs from other devices are not listed in the History
+// submenu.
+class RecentTabsSubMenuModelWithOtherDeviceTabsInAppMenuTest
+    : public RecentTabsSubMenuModelTest {
+ private:
+  base::test::ScopedFeatureList feature_list_{
+      syncer::kCrossDeviceTabsInAppMenu};
+};
+
+// Appends the trailing "Your devices" section of the History submenu to
+// `data`. It is only shown when kCrossDeviceTabsInAppMenu is disabled;
+// otherwise tabs from other devices are listed in a dedicated app menu entry.
+void AppendYourDevicesSection(std::vector<ModelData>& data) {
+  if (base::FeatureList::IsEnabled(syncer::kCrossDeviceTabsInAppMenu)) {
+    return;
+  }
+  data.push_back({ui::MenuModel::TYPE_SEPARATOR, true});  // <separator>
+  data.push_back({ui::MenuModel::TYPE_TITLE, false});     // Your devices
+  // Sign-in or "See tabs from other devices" entry.
+  data.push_back({ui::MenuModel::TYPE_COMMAND, true});
+}
+
 class TestLogMetricsAppMenuModel : public AppMenuModel {
  public:
   using AppMenuModel::AppMenuModel;
 
-  void LogMenuAction(AppMenuAction action_id) override {
-    ++log_metrics_call_count_;
-  }
-
   void CallLogMenuMetrics(int command_id) { LogMenuMetrics(command_id); }
-
-  int log_metrics_call_count() const { return log_metrics_call_count_; }
-
- private:
-  int log_metrics_call_count_ = 0;
 };
 
 class FakeIconDelegate : public AppMenuIconController::Delegate {
@@ -228,6 +261,8 @@ class FakeIconDelegate : public AppMenuIconController::Delegate {
   void UpdateTypeAndSeverity(
       AppMenuIconController::TypeAndSeverity type_and_severity) override {}
 };
+
+}  // namespace
 
 IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
                        LogMenuMetricsForShowHistory) {
@@ -242,8 +277,10 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
   recent_tab_sub_menu_model.RegisterLogMenuMetricsCallback(
       base::BindRepeating(&TestLogMetricsAppMenuModel::CallLogMenuMetrics,
                           base::Unretained(&app_menu_model)));
+  base::HistogramTester histogram_tester;
   recent_tab_sub_menu_model.ExecuteCommand(IDC_SHOW_HISTORY, 0);
-  EXPECT_EQ(1, app_menu_model.log_metrics_call_count());
+  histogram_tester.ExpectUniqueSample("WrenchMenu.MenuAction",
+                                      MENU_ACTION_SHOW_HISTORY, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
@@ -259,9 +296,11 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
   recent_tab_sub_menu_model.RegisterLogMenuMetricsCallback(
       base::BindRepeating(&TestLogMetricsAppMenuModel::CallLogMenuMetrics,
                           base::Unretained(&app_menu_model)));
+  base::HistogramTester histogram_tester;
   recent_tab_sub_menu_model.ExecuteCommand(IDC_SHOW_HISTORY_CLUSTERS_SIDE_PANEL,
                                            0);
-  EXPECT_EQ(1, app_menu_model.log_metrics_call_count());
+  histogram_tester.ExpectUniqueSample(
+      "WrenchMenu.MenuAction", MENU_ACTION_SHOW_HISTORY_CLUSTER_SIDE_PANEL, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
@@ -277,9 +316,12 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
   recent_tab_sub_menu_model.RegisterLogMenuMetricsCallback(
       base::BindRepeating(&TestLogMetricsAppMenuModel::CallLogMenuMetrics,
                           base::Unretained(&app_menu_model)));
+  base::HistogramTester histogram_tester;
   recent_tab_sub_menu_model.ExecuteCommand(
       IDC_RECENT_TABS_LOGIN_FOR_DEVICE_TABS, 0);
-  EXPECT_EQ(1, app_menu_model.log_metrics_call_count());
+  histogram_tester.ExpectUniqueSample(
+      "WrenchMenu.MenuAction", MENU_ACTION_RECENT_TABS_LOGIN_FOR_DEVICE_TABS,
+      1);
 
   // Check that we arrive at the expected page.
   EXPECT_EQ(GURL(chrome::kChromeUISettingsURL).Resolve(chrome::kPeopleSubPage),
@@ -299,8 +341,10 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
   recent_tab_sub_menu_model.RegisterLogMenuMetricsCallback(
       base::BindRepeating(&TestLogMetricsAppMenuModel::CallLogMenuMetrics,
                           base::Unretained(&app_menu_model)));
+  base::HistogramTester histogram_tester;
   recent_tab_sub_menu_model.ExecuteCommand(IDC_RECENT_TABS_SEE_DEVICE_TABS, 0);
-  EXPECT_EQ(1, app_menu_model.log_metrics_call_count());
+  histogram_tester.ExpectUniqueSample(
+      "WrenchMenu.MenuAction", MENU_ACTION_RECENT_TABS_SEE_DEVICE_TABS, 1);
 
   // Check that we arrive at the expected page.
   EXPECT_EQ(GURL(chrome::kChromeUIHistoryURL)
@@ -321,11 +365,8 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest, NoTabs) {
       {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
       {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
       {ui::MenuModel::TYPE_COMMAND, false},   // Recently closed
-      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
-      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
-      {ui::MenuModel::TYPE_COMMAND, true},    // See tabs from other devices
-
   };
+  AppendYourDevicesSection(kData);
 
   VerifyModel(model, kData);
 }
@@ -353,7 +394,7 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
   RecentTabsSubMenuModel model(nullptr, browser());
 
   std::vector<ModelData> kData;
-  EXPECT_TRUE(browser()->GetFeatures().side_panel_ui());
+  EXPECT_TRUE(SidePanelUI::From(browser()));
   kData = {
       {ui::MenuModel::TYPE_COMMAND, true},    // History
       {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
@@ -361,10 +402,8 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
       {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
       {ui::MenuModel::TYPE_COMMAND, true},    // <tab for http://foo/2>
       {ui::MenuModel::TYPE_COMMAND, true},    // <tab for http://foo/1>
-      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
-      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
-      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
   };
+  AppendYourDevicesSection(kData);
 
   VerifyModel(model, kData);
 }
@@ -400,10 +439,8 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
       {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
       {ui::MenuModel::TYPE_SUBMENU, true},    // <group 1>
       {ui::MenuModel::TYPE_SUBMENU, true},    // <group 0>
-      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
-      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
-      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
   };
+  AppendYourDevicesSection(kData);
 
   VerifyModel(model, kData);
 
@@ -427,17 +464,7 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
   VerifyModel(model.GetSubmenuModelAt(5), kGroup0Data);
 }
 
-class RecentTabsSubMenuModelSplitTest : public RecentTabsSubMenuModelTest {
- public:
-  RecentTabsSubMenuModelSplitTest() {
-    scoped_feature_list_.InitAndEnableFeature(tabs::kSplitViewTabRestore);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
                        RecentlyClosedSplitsFromCurrentSession) {
   Init();
   ASSERT_TRUE(browser()->tab_strip_model()->SupportsTabGroups());
@@ -469,10 +496,8 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
       {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
       {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
       {ui::MenuModel::TYPE_SUBMENU, true},    // <split view submenu>
-      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
-      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
-      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
   };
+  AppendYourDevicesSection(kData);
 
   VerifyModel(model, kData);
 
@@ -487,19 +512,20 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
   VerifyModel(model.GetSubmenuModelAt(4), kSplitData);
 }
 
-IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
                        RecentlyClosedWindowWithSplit) {
   Init();
   DisableSync();
 
-  Browser* new_browser = AddBrowser(browser(), {GURL("about:blank?0")});
+  BrowserWindowInterface* new_browser =
+      AddBrowser(browser(), {GURL("about:blank?0")});
   ui_test_utils::NavigateToURLWithDisposition(
       new_browser, GURL("about:blank?1"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
-  new_browser->tab_strip_model()->ActivateTabAt(0);
-  new_browser->tab_strip_model()->AddToNewSplit(
+  new_browser->GetTabStripModel()->ActivateTabAt(0);
+  new_browser->GetTabStripModel()->AddToNewSplit(
       {1}, split_tabs::SplitTabVisualData(),
       split_tabs::SplitTabCreatedSource::kToolbarButton);
 
@@ -513,10 +539,8 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
       {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
       {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
       {ui::MenuModel::TYPE_SUBMENU, true},    // <window>
-      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
-      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
-      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
   };
+  AppendYourDevicesSection(kData);
 
   VerifyModel(model, kData);
 
@@ -537,16 +561,17 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
   VerifyModel(window_submenu->GetSubmenuModelAt(2), kSplitSubmenuData);
 }
 
-IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
                        RecentlyClosedWindowWithGroupsAndSplits) {
   Init();
   DisableSync();
 
-  Browser* new_browser = AddBrowser(browser(), {GURL("about:blank?0")});
+  BrowserWindowInterface* new_browser =
+      AddBrowser(browser(), {GURL("about:blank?0")});
   for (int i = 1; i <= 7; ++i) {
     ui_test_utils::NavigateToURLWithDisposition(
         new_browser, GURL("about:blank?" + base::NumberToString(i)),
-        WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        WindowOpenDisposition::kNewForegroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   }
 
@@ -559,17 +584,17 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
   // Tab 5: Group 2
   // Tab 6: Split 2
   // Tab 7: Split 2
-  new_browser->tab_strip_model()->AddToNewGroup({0, 1});
+  new_browser->GetTabStripModel()->AddToNewGroup({0, 1});
 
-  new_browser->tab_strip_model()->ActivateTabAt(2);
-  new_browser->tab_strip_model()->AddToNewSplit(
+  new_browser->GetTabStripModel()->ActivateTabAt(2);
+  new_browser->GetTabStripModel()->AddToNewSplit(
       {3}, split_tabs::SplitTabVisualData(),
       split_tabs::SplitTabCreatedSource::kToolbarButton);
 
-  new_browser->tab_strip_model()->AddToNewGroup({4, 5});
+  new_browser->GetTabStripModel()->AddToNewGroup({4, 5});
 
-  new_browser->tab_strip_model()->ActivateTabAt(6);
-  new_browser->tab_strip_model()->AddToNewSplit(
+  new_browser->GetTabStripModel()->ActivateTabAt(6);
+  new_browser->GetTabStripModel()->AddToNewSplit(
       {7}, split_tabs::SplitTabVisualData(),
       split_tabs::SplitTabCreatedSource::kToolbarButton);
 
@@ -583,10 +608,8 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
       {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
       {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
       {ui::MenuModel::TYPE_SUBMENU, true},    // <window>
-      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
-      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
-      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
   };
+  AppendYourDevicesSection(kData);
 
   VerifyModel(model, kData);
 
@@ -638,22 +661,23 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
   VerifyModel(window_submenu->GetSubmenuModelAt(5), kSplit2Data);
 }
 
-IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
                        RecentlyClosedWindowWithSplitAndRegularTabs) {
   Init();
   DisableSync();
 
-  Browser* new_browser = AddBrowser(browser(), {GURL("about:blank?0")});
+  BrowserWindowInterface* new_browser =
+      AddBrowser(browser(), {GURL("about:blank?0")});
   for (int i = 1; i <= 3; ++i) {
     ui_test_utils::NavigateToURLWithDisposition(
         new_browser, GURL("about:blank?" + base::NumberToString(i)),
-        WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        WindowOpenDisposition::kNewForegroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   }
 
   // Put Tab 1 and Tab 2 into a split. Tab 0 and Tab 3 remain regular tabs.
-  new_browser->tab_strip_model()->ActivateTabAt(1);
-  new_browser->tab_strip_model()->AddToNewSplit(
+  new_browser->GetTabStripModel()->ActivateTabAt(1);
+  new_browser->GetTabStripModel()->AddToNewSplit(
       {2}, split_tabs::SplitTabVisualData(),
       split_tabs::SplitTabCreatedSource::kToolbarButton);
 
@@ -667,10 +691,8 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
       {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
       {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
       {ui::MenuModel::TYPE_SUBMENU, true},    // <window>
-      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
-      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
-      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
   };
+  AppendYourDevicesSection(kData);
 
   VerifyModel(model, kData);
 
@@ -694,7 +716,7 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
   VerifyModel(window_submenu->GetSubmenuModelAt(3), kSplitSubmenuData);
 }
 
-IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
                        RecentlyClosedGroupWithSplit) {
   Init();
   ASSERT_TRUE(browser()->tab_strip_model()->SupportsTabGroups());
@@ -727,10 +749,8 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelSplitTest,
       {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
       {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
       {ui::MenuModel::TYPE_SUBMENU, true},    // <group>
-      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
-      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
-      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
   };
+  AppendYourDevicesSection(kData);
 
   VerifyModel(model, kData);
 
@@ -769,32 +789,31 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
       {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
       {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
       {ui::MenuModel::TYPE_COMMAND, false},   // Recently closed
-      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
-      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
-      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
   };
+  AppendYourDevicesSection(kDataBeforeLoad);
 
   VerifyModel(model, kDataBeforeLoad);
 
   // Add 2 tabs and close them.
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL("http://wnd/tab0"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB |
           ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL("http://wnd/tab1"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   browser()->tab_strip_model()->CloseSelectedTabs();
   browser()->tab_strip_model()->CloseSelectedTabs();
 
-  Browser* new_browser = AddBrowser(browser(), {GURL("http://wnd1/tab0")});
+  BrowserWindowInterface* new_browser =
+      AddBrowser(browser(), {GURL("http://wnd1/tab0")});
   ui_test_utils::NavigateToURLWithDisposition(
       new_browser, GURL("http://wnd1/tab1"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   chrome::GroupTab(new_browser);
   chrome::CloseWindow(new_browser);
@@ -810,10 +829,8 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
       {ui::MenuModel::TYPE_SUBMENU, true},    // <window>
       {ui::MenuModel::TYPE_COMMAND, true},    // <tab for http://wnd0/tab1>
       {ui::MenuModel::TYPE_COMMAND, true},    // <tab for http://wnd0/tab0>
-      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
-      {ui::MenuModel::TYPE_TITLE, false},     // Your devices
-      {ui::MenuModel::TYPE_COMMAND, true}     // recent tabs login
   };
+  AppendYourDevicesSection(kDataAfterLoad);
 
   VerifyModel(model, kDataAfterLoad);
 
@@ -835,9 +852,94 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
   VerifyModel(window_submenu->GetSubmenuModelAt(3), kGroupSubmenuData);
 }
 
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
+                       SavingBrowserHistoryDisabledPolicyChangeMidSession) {
+  Init();
+  DisableSync();
+  // Ensure the policy is explicitly false to start with.
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      prefs::kSavingBrowserHistoryDisabled, false);
+
+  TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
+
+  // Close some tabs to generate "Recently closed" entries.
+  content::WebContents* tab1 =
+      chrome::AddAndReturnTabAt(browser(), GURL("http://foo/1"), 0, true);
+  content::WebContents* tab2 =
+      chrome::AddAndReturnTabAt(browser(), GURL("http://foo/2"), 1, true);
+
+  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
+      browser(), GURL("http://foo/0"), 1);
+
+  chrome::CloseWebContents(browser(), tab1, true);
+  chrome::CloseWebContents(browser(), tab2, true);
+
+  // Construct the sub-menu model and attach a model delegate.
+  RecentTabsSubMenuModel model(nullptr, browser());
+  TestRecentTabsMenuModelDelegate delegate(&model);
+
+  // Expect standard menu layout with the two recently closed tabs.
+  // Note: We only verify the first 6 items and do not check the items of
+  // the remote devices, in case sync has not finished, which causes test
+  // flakiness.
+  std::vector<ModelData> kDataEnabled = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // History
+      {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
+      {ui::MenuModel::TYPE_COMMAND, true},    // tab 2
+      {ui::MenuModel::TYPE_COMMAND, true},    // tab 1
+  };
+  ASSERT_GE(model.GetItemCount(), kDataEnabled.size());
+  for (size_t i = 0; i < kDataEnabled.size(); ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_EQ(kDataEnabled[i].type, model.GetTypeAt(i));
+    EXPECT_EQ(kDataEnabled[i].enabled, model.IsEnabledAt(i));
+  }
+
+  // Enable the policy mid-session.
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      prefs::kSavingBrowserHistoryDisabled, true);
+
+  // The model delegate should have been notified of menu structure changes.
+  EXPECT_TRUE(delegate.got_changes());
+
+  // Expect recently closed tab entries to be wiped and the header to become a
+  // disabled command.
+  std::vector<ModelData> kDataDisabled = {
+      {ui::MenuModel::TYPE_COMMAND, true},  // History
+      {ui::MenuModel::TYPE_COMMAND, true},  // History Cluster
+  };
+  VerifyModel(model, kDataDisabled);
+
+  // Disable the policy again mid-session.
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      prefs::kSavingBrowserHistoryDisabled, false);
+
+  // Expect recently closed tabs to remain empty since they were wiped when
+  // the policy was activated.
+  // Note: We only verify the first 4 items and do not check the items of
+  // the remote devices, in case sync has not finished, which causes test
+  // flakiness.
+  std::vector<ModelData> kDataEmpty = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // History
+      {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_COMMAND, false},   // Recently closed
+  };
+  ASSERT_GE(model.GetItemCount(), kDataEmpty.size());
+  for (size_t i = 0; i < kDataEmpty.size(); ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_EQ(kDataEmpty[i].type, model.GetTypeAt(i));
+    EXPECT_EQ(kDataEmpty[i].enabled, model.IsEnabledAt(i));
+  }
+}
+
 // Test disabled "Recently closed" header with multiple sessions, multiple
 // windows, and multiple enabled tabs from other devices.
-IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest, OtherDevices) {
+IN_PROC_BROWSER_TEST_F(
+    RecentTabsSubMenuModelWithoutOtherDeviceTabsInAppMenuTest,
+    OtherDevices) {
   Init();
   EnableSync();
 
@@ -886,7 +988,9 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest, OtherDevices) {
   VerifyModel(model, kData);
 }
 
-IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest, OtherDevicesDynamicUpdate) {
+IN_PROC_BROWSER_TEST_F(
+    RecentTabsSubMenuModelWithoutOtherDeviceTabsInAppMenuTest,
+    OtherDevicesDynamicUpdate) {
   Init();
   EnableSync();
 
@@ -940,7 +1044,9 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest, OtherDevicesDynamicUpdate) {
   VerifyModel(model, kDataAfterUpdate);
 }
 
-IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest, MaxSessionsAndRecency) {
+IN_PROC_BROWSER_TEST_F(
+    RecentTabsSubMenuModelWithoutOtherDeviceTabsInAppMenuTest,
+    MaxSessionsAndRecency) {
   Init();
   EnableSync();
 
@@ -978,8 +1084,9 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest, MaxSessionsAndRecency) {
                           model.GetSubmenuModelAt(9)->GetLabelAt(0)));
 }
 
-IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
-                       MaxTabsPerSessionAndRecency) {
+IN_PROC_BROWSER_TEST_F(
+    RecentTabsSubMenuModelWithoutOtherDeviceTabsInAppMenuTest,
+    MaxTabsPerSessionAndRecency) {
   Init();
   EnableSync();
 
@@ -1022,91 +1129,10 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
           model.GetSubmenuModelAt(model.GetItemCount() - 1)->GetLabelAt(3)));
 }
 
-IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
-                       SavingBrowserHistoryDisabledPolicyChangeMidSession) {
-  Init();
-  DisableSync();
-  // Ensure the policy is explicitly false to start with.
-  browser()->profile()->GetPrefs()->SetBoolean(
-      prefs::kSavingBrowserHistoryDisabled, false);
-
-  TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
-
-  // Close some tabs to generate "Recently closed" entries.
-  content::WebContents* tab1 =
-      chrome::AddAndReturnTabAt(browser(), GURL("http://foo/1"), 0, true);
-  content::WebContents* tab2 =
-      chrome::AddAndReturnTabAt(browser(), GURL("http://foo/2"), 1, true);
-
-  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
-      browser(), GURL("http://foo/0"), 1);
-
-  chrome::CloseWebContents(browser(), tab1, true);
-  chrome::CloseWebContents(browser(), tab2, true);
-
-  // Construct the sub-menu model and attach a model delegate.
-  RecentTabsSubMenuModel model(nullptr, browser());
-  TestRecentTabsMenuModelDelegate delegate(&model);
-
-  // Expect standard menu layout with the two recently closed tabs.
-  // Note: We only verify the first 6 items and do not check the items of
-  // the remote devices, in case sync has not finished, which causes test
-  // flakiness.
-  std::vector<ModelData> kDataEnabled = {
-      {ui::MenuModel::TYPE_COMMAND, true},    // History
-      {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
-      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
-      {ui::MenuModel::TYPE_TITLE, false},     // Recently closed
-      {ui::MenuModel::TYPE_COMMAND, true},    // tab 2
-      {ui::MenuModel::TYPE_COMMAND, true},    // tab 1
-  };
-  ASSERT_GE(model.GetItemCount(), kDataEnabled.size());
-  for (size_t i = 0; i < kDataEnabled.size(); ++i) {
-    SCOPED_TRACE(i);
-    EXPECT_EQ(kDataEnabled[i].type, model.GetTypeAt(i));
-    EXPECT_EQ(kDataEnabled[i].enabled, model.IsEnabledAt(i));
-  }
-
-  // Enable the policy mid-session.
-  browser()->profile()->GetPrefs()->SetBoolean(
-      prefs::kSavingBrowserHistoryDisabled, true);
-
-  // The model delegate should have been notified of menu structure changes.
-  EXPECT_TRUE(delegate.got_changes());
-
-  // Expect recently closed tab entries to be wiped and the header to become a
-  // disabled command.
-  std::vector<ModelData> kDataDisabled = {
-      {ui::MenuModel::TYPE_COMMAND, true},  // History
-      {ui::MenuModel::TYPE_COMMAND, true},  // History Cluster
-  };
-  VerifyModel(model, kDataDisabled);
-
-  // Disable the policy again mid-session.
-  browser()->profile()->GetPrefs()->SetBoolean(
-      prefs::kSavingBrowserHistoryDisabled, false);
-
-  // Expect recently closed tabs to remain empty since they were wiped when
-  // the policy was activated.
-  // Note: We only verify the first 4 items and do not check the items of
-  // the remote devices, in case sync has not finished, which causes test
-  // flakiness.
-  std::vector<ModelData> kDataEmpty = {
-      {ui::MenuModel::TYPE_COMMAND, true},    // History
-      {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
-      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
-      {ui::MenuModel::TYPE_COMMAND, false},   // Recently closed
-  };
-  ASSERT_GE(model.GetItemCount(), kDataEmpty.size());
-  for (size_t i = 0; i < kDataEmpty.size(); ++i) {
-    SCOPED_TRACE(i);
-    EXPECT_EQ(kDataEmpty[i].type, model.GetTypeAt(i));
-    EXPECT_EQ(kDataEmpty[i].enabled, model.IsEnabledAt(i));
-  }
-}
-
 #if !BUILDFLAG(IS_CHROMEOS)
-IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest, OtherDevicesAvailability) {
+IN_PROC_BROWSER_TEST_F(
+    RecentTabsSubMenuModelWithoutOtherDeviceTabsInAppMenuTest,
+    OtherDevicesAvailability) {
   if (!syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     GTEST_SKIP();
   }
@@ -1157,3 +1183,61 @@ IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest, OtherDevicesAvailability) {
               kDataWithoutOtherDevices);
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelWithOtherDeviceTabsInAppMenuTest,
+                       OtherDevicesOmittedWhenOtherDeviceTabsInAppMenuEnabled) {
+  Init();
+  EnableSync();
+
+  RecentTabsBuilderTestHelper recent_tabs_builder;
+  recent_tabs_builder.AddSession();
+  recent_tabs_builder.AddWindow(0);
+  recent_tabs_builder.AddTabWithInfo(0, 0, base::Time::Now() - base::Minutes(1),
+                                     std::u16string());
+  RegisterRecentTabs(&recent_tabs_builder);
+
+  RecentTabsSubMenuModel model(nullptr, browser());
+
+  // The "Your devices" section, and the device's submenu, are gone.
+  std::vector<ModelData> kData = {
+      {ui::MenuModel::TYPE_COMMAND, true},    // History
+      {ui::MenuModel::TYPE_COMMAND, true},    // History Cluster
+      {ui::MenuModel::TYPE_SEPARATOR, true},  // <separator>
+      {ui::MenuModel::TYPE_COMMAND, false},   // Recently closed
+  };
+  VerifyModel(model, kData);
+  for (size_t i = 0; i < model.GetItemCount(); ++i) {
+    EXPECT_NE(l10n_util::GetStringUTF16(IDS_YOUR_DEVICES), model.GetLabelAt(i));
+  }
+
+  std::vector<RecentTabItem> recent_tabs =
+      RecentTabsBuilder::BuildRecentTabs(browser()->GetProfile(), browser());
+  for (const auto& item : recent_tabs) {
+    EXPECT_NE(l10n_util::GetStringUTF16(IDS_YOUR_DEVICES), item.title());
+    EXPECT_NE(RecentTabItem::Type::kDevice, item.type());
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(RecentTabsSubMenuModelTest,
+                       RecentlyClosedEphemeralGroupTabAndWindow) {
+  Init();
+  ASSERT_TRUE(browser()->tab_strip_model()->SupportsTabGroups());
+  DisableSync();
+
+  TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
+
+  AddTabToBrowser(GURL("http://foo/1"));
+  AddTabToBrowser(GURL("http://foo/2"));
+
+  // Put tabs 1 and 2 into an ephemeral group and close tab 2.
+  browser()->tab_strip_model()->AddToNewGroup({1, 2}, /*is_ephemeral=*/true);
+  browser()->tab_strip_model()->CloseWebContentsAt(
+      2, TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
+
+  RecentTabsSubMenuModel model(nullptr, browser());
+  // Index 4 is the first item under "Recently closed". It should be a command
+  // (tab) with no group minor icon.
+  ASSERT_GT(model.GetItemCount(), 4u);
+  EXPECT_EQ(ui::MenuModel::TYPE_COMMAND, model.GetTypeAt(4));
+  EXPECT_TRUE(model.GetMinorIconAt(4).IsEmpty());
+}

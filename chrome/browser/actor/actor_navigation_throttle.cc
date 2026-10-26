@@ -4,16 +4,13 @@
 
 #include "chrome/browser/actor/actor_navigation_throttle.h"
 
-#include <algorithm>
-
-#include "base/containers/fixed_flat_set.h"
 #include "base/types/pass_key.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
+#include "chrome/browser/actor/actor_surface_handle.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/actor/execution_engine.h"
 #include "chrome/browser/actor/site_policy.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/actor_webui.mojom.h"
 #include "chrome/common/chrome_features.h"
 #include "components/actor/core/actor_features.h"
 #include "components/actor/core/journal_details_builder.h"
@@ -23,26 +20,13 @@
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
 #include "content/public/browser/web_contents.h"
-#include "net/http/http_response_headers.h"
-#include "third_party/blink/public/common/mime_util/mime_util.h"
 #include "ui/base/page_transition_types.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#endif
+
 namespace actor {
-namespace {
-bool IsDangerousMimeType(std::string_view mime_type) {
-  static constexpr auto kBlockedTabularTypes =
-      base::MakeFixedFlatSet<std::string_view>({
-          "text/csv",
-          "text/comma-separated-values",
-          "text/tsv",
-          "text/tab-separated-values",
-      });
-  return kBlockedTabularTypes.contains(mime_type) ||
-         blink::IsJSONMimeType(mime_type) ||
-         blink::IsXMLMimeType(mime_type) ||
-         blink::IsSupportedJavascriptMimeType(mime_type);
-}
-}  // namespace
 
 // static
 void ActorNavigationThrottle::MaybeCreateAndAdd(
@@ -62,31 +46,33 @@ void ActorNavigationThrottle::MaybeCreateAndAdd(
 
   content::WebContents* web_contents = navigation_handle.GetWebContents();
 
-  const auto* tab = tabs::TabInterface::MaybeGetFromContents(web_contents);
-  if (!tab) {
-    return;
-  }
-  const tabs::TabHandle tab_handle = tab->GetHandle();
-
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
+  if (!profile) {
+    return;
+  }
 
   auto* actor_service = actor::ActorKeyedService::Get(profile);
   if (!actor_service) {
     return;
   }
 
-  const auto& tasks = actor_service->GetActiveTasks();
-  auto task_it = std::ranges::find_if(tasks, [tab_handle](const auto& t) {
-    const ActorTask* task = t.second;
-    return task->IsActingOnTab(tab_handle);
-  });
-  if (task_it == tasks.end()) {
+  const ActorSurfaceHandle actor_surface_handle =
+      ActorSurfaceHandle::From(web_contents);
+  const ActorTask* task =
+      actor_service->GetTaskFromActorSurface(actor_surface_handle);
+  if (!task) {
+    return;
+  }
+
+  if (!base::FeatureList::IsEnabled(
+          kGlicAttachNavigationThrottleToPausedTasks) &&
+      !task->IsActingOnActorSurface(actor_surface_handle)) {
     return;
   }
 
   registry.AddThrottle(std::make_unique<ActorNavigationThrottle>(
-      base::PassKey<ActorNavigationThrottle>(), registry, *task_it->second));
+      base::PassKey<ActorNavigationThrottle>(), registry, *task));
 }
 
 ActorNavigationThrottle ActorNavigationThrottle::CreateForTesting(
@@ -118,55 +104,44 @@ ActorNavigationThrottle::WillRedirectRequest() {
 
 content::NavigationThrottle::ThrottleCheckResult
 ActorNavigationThrottle::WillProcessResponse() {
-  if (base::FeatureList::IsEnabled(
-          kGlicBlockNavigationToDangerousContentTypes)) {
-    if (const net::HttpResponseHeaders* headers =
-            navigation_handle()->GetResponseHeaders();
-        headers) {
-      std::string mime_type;
-      if (headers->GetMimeType(&mime_type) && IsDangerousMimeType(mime_type)) {
-        GetJournal().Log(navigation_handle()->GetURL(), task_id_, "NavThrottle",
-                         JournalDetailsBuilder()
-                             .AddError("Navigate to disallowed content-type")
-                             .Add("mime_type", mime_type)
-                             .Build());
-
-        // If the navigation we're about to cancel is attributable to the
-        // actor's tool usage, consider the action a failure.
-        if (navigation_handle()->IsInPrimaryMainFrame() && execution_engine_) {
-          execution_engine_->FailCurrentTool(
-              mojom::ActionResultCode::kTriggeredNavigationBlocked);
-        }
-
-        return content::NavigationThrottle::CANCEL_AND_IGNORE;
-      }
-    }
-  }
-
-  if (!execution_engine_) {
+  // Proceed if the execution engine is already gone or if the user explicitly
+  // confirmed leaving the task. `StopTask()` defers `ActorTask` and
+  // `ExecutionEngine` destruction via `RunLater()` (`pending_delete_tasks_`),
+  // so `execution_engine_` can still be non-null when `WillProcessResponse()`
+  // runs; deferring on the stopping engine would cause `~ExecutionEngine()` to
+  // cancel the navigation via `CancelPendingNavigations()`.
+  if (!execution_engine_ || was_user_confirmed_leave_) {
     return content::NavigationThrottle::PROCEED;
   }
-  content::NavigationThrottle::ThrottleAction action =
-      execution_engine_->ShouldDeferNavigation(
-          *navigation_handle(),
-          base::BindOnce(
-              &ActorNavigationThrottle::OnNavigationConfirmationDecision,
-              weak_factory_.GetWeakPtr(), /*was_deferred=*/true));
-  if (action != content::NavigationThrottle::DEFER) {
-    OnNavigationConfirmationDecision(
-        /*was_deferred=*/false,
-        /*may_continue=*/action == content::NavigationThrottle::PROCEED);
+  execution_engine_->ShouldNavigationCommit(
+      *navigation_handle(),
+      base::BindOnce(&ActorNavigationThrottle::OnNavigationConfirmationDecision,
+                     weak_factory_.GetWeakPtr()));
+  return content::NavigationThrottle::DEFER;
+}
+
+content::NavigationThrottle::ThrottleCheckResult
+ActorNavigationThrottle::WillCommitWithoutUrlLoader() {
+  if (navigation_handle()->IsSameDocument()) {
+    return content::NavigationThrottle::PROCEED;
   }
-  return action;
+  if (!navigation_handle()->IsRendererInitiated()) {
+    return WillStartOrRedirectRequest(/*is_redirection=*/false);
+  }
+  if (!execution_engine_) {
+    return content::NavigationThrottle::CANCEL_AND_IGNORE;
+  }
+  execution_engine_->ShouldNavigationCommit(
+      *navigation_handle(),
+      base::BindOnce(&ActorNavigationThrottle::OnNavigationConfirmationDecision,
+                     weak_factory_.GetWeakPtr()));
+  return content::NavigationThrottle::DEFER;
 }
 
 void ActorNavigationThrottle::OnNavigationConfirmationDecision(
-    bool was_deferred,
-    bool may_continue) {
-  if (may_continue) {
-    if (was_deferred) {
-      Resume();
-    }
+    MayActOnUrlBlockReason block_reason) {
+  if (block_reason == MayActOnUrlBlockReason::kAllowed) {
+    Resume();
     return;
   }
   AggregatedJournal& journal = GetJournal();
@@ -177,11 +152,9 @@ void ActorNavigationThrottle::OnNavigationConfirmationDecision(
   // tool usage, consider the action a failure.
   if (navigation_handle()->IsInPrimaryMainFrame() && execution_engine_) {
     execution_engine_->FailCurrentTool(
-        mojom::ActionResultCode::kTriggeredNavigationBlocked);
+        BlockReasonToResultCode(block_reason, /*for_navigation=*/true));
   }
-  if (was_deferred) {
-    CancelDeferredNavigation(CANCEL_AND_IGNORE);
-  }
+  CancelDeferredNavigation(CANCEL_AND_IGNORE);
 }
 
 void ActorNavigationThrottle::OnUserLeaveDialogDecision(bool may_continue) {
@@ -272,13 +245,73 @@ ActorNavigationThrottle::WillStartOrRedirectRequest(bool is_redirection) {
                                        ::ui::PAGE_TRANSITION_AUTO_BOOKMARK) ||
         (transition & ::ui::PAGE_TRANSITION_HOME_PAGE);
 
+    // Omnibox navigations carry FROM_ADDRESS_BAR, but an accepted paste
+    // commits as LINK and a keyword search as KEYWORD.
+    if (transition & ::ui::PAGE_TRANSITION_FROM_ADDRESS_BAR) {
+      is_user_ui_navigation = true;
+    }
+
+    // Exclude session history navigations. A back/forward navigation replays
+    // the core transition of the entry it restores, so returning to a page the
+    // user originally typed arrives here as PAGE_TRANSITION_TYPED with the
+    // FORWARD_BACK qualifier. Without this exclusion both the Actor's own
+    // history tool (which calls GoBack() and GoForward()) and the user's
+    // Back/Forward buttons would be confirmed.
+    if (transition & ::ui::PAGE_TRANSITION_FORWARD_BACK) {
+      is_user_ui_navigation = false;
+    }
+
     if (!is_user_ui_navigation) {
       return content::NavigationThrottle::PROCEED;
     }
 
+#if !BUILDFLAG(IS_ANDROID)
+    if (!base::FeatureList::IsEnabled(features::kGlicConfirmTabClose)) {
+      return content::NavigationThrottle::PROCEED;
+    }
+#else
+    // On Android, only desktop form factors confirm user UI navigations.
+    if (!base::android::device_info::is_desktop()) {
+      return content::NavigationThrottle::PROCEED;
+    }
+#endif
+
+    // Typing in the omnibox starts a speculative prerender that carries the
+    // same transition as the navigation the user may eventually commit.
+    // Deferring it would prompt for typing alone, and letting it load is
+    // worse: prerender activation does not run NavigationThrottles, so the
+    // committed navigation would not be confirmed. Cancelling the prerender
+    // keeps the confirmation on the real navigation.
+    if (navigation_handle()->IsInPrerenderedMainFrame()) {
+      journal.Log(navigation_url, task_id_, "NavThrottle",
+                  JournalDetailsBuilder()
+                      .Add("navigate", "Cancel user UI prerender")
+                      .Build());
+      return content::NavigationThrottle::CANCEL_AND_IGNORE;
+    }
+
+    // A navigation to the current URL (ignoring the fragment) reloads the page
+    // instead of leaving it, so proceed without confirmation, as for Reload.
+    content::WebContents* web_contents = navigation_handle()->GetWebContents();
+    if (web_contents &&
+        navigation_url.EqualsIgnoringRef(web_contents->GetLastCommittedURL())) {
+      journal.Log(navigation_url, task_id_, "NavThrottle",
+                  JournalDetailsBuilder()
+                      .Add("navigate", "Same URL as current page")
+                      .Build());
+      // This navigation replaces any deferred one, so close its confirmation.
+      if (task->navigation_delegate()) {
+        task->navigation_delegate()->CancelNavigationConfirmation(
+            tabs::TabInterface::MaybeGetFromContents(web_contents));
+      }
+      return content::NavigationThrottle::PROCEED;
+    }
+
     if (task->navigation_delegate()) {
+      auto* tab = tabs::TabInterface::MaybeGetFromContents(
+          navigation_handle()->GetWebContents());
       if (task->navigation_delegate()->MaybeDeferNavigation(
-              navigation_url,
+              tab, navigation_url,
               base::BindOnce(
                   &ActorNavigationThrottle::OnUserLeaveDialogDecision,
                   weak_factory_.GetWeakPtr()))) {
@@ -303,17 +336,16 @@ ActorNavigationThrottle::WillStartOrRedirectRequest(bool is_redirection) {
     return content::NavigationThrottle::CANCEL_AND_IGNORE;
   }
 
-  ::actor::MayActOnUrl(
-      navigation_url, /*allow_insecure_http=*/true, GetProfile(), journal,
-      task_id_, execution_engine_->origin_gating_cache(),
-      task->policy_checker(),
-      base::BindOnce(&ActorNavigationThrottle::OnMayActOnUrlResult,
-                     weak_factory_.GetWeakPtr(), std::move(journal_entry)));
+  execution_engine_->IsAcceptableNavigationDestination(
+      navigation_url,
+      base::BindOnce(
+          &ActorNavigationThrottle::OnIsAcceptableNavigationDestinationResult,
+          weak_factory_.GetWeakPtr(), std::move(journal_entry)));
 
   return content::NavigationThrottle::DEFER;
 }
 
-void ActorNavigationThrottle::OnMayActOnUrlResult(
+void ActorNavigationThrottle::OnIsAcceptableNavigationDestinationResult(
     std::unique_ptr<AggregatedJournal::PendingAsyncEntry> journal_entry,
     MayActOnUrlBlockReason block_reason) {
   if (block_reason == MayActOnUrlBlockReason::kAllowed) {

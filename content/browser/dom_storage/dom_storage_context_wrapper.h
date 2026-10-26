@@ -38,7 +38,7 @@ class SpecialStoragePolicy;
 
 namespace content {
 
-class SessionStorageNamespaceImpl;
+class SessionStorageNamespaceHandleImpl;
 class StoragePartitionImpl;
 
 // This is owned by Storage Partition and encapsulates all its dom storage
@@ -89,9 +89,12 @@ class CONTENT_EXPORT DOMStorageContextWrapper
                           base::OnceClosure callback) override;
   void DeleteSessionStorage(const SessionStorageUsageInfo& usage_info,
                             base::OnceClosure callback) override;
-  scoped_refptr<SessionStorageNamespace> RecreateSessionStorage(
+  scoped_refptr<SessionStorageNamespaceHandle> RecreateSessionStorage(
       const std::string& namespace_id) override;
   void StartScavengingUnusedSessionStorage() override;
+  bool scavenging_started_for_testing() const {
+    return scavenging_started_for_testing_;
+  }
 
   // Used by content settings to alter the behavior around
   // what data to keep and what data to discard at shutdown.
@@ -132,18 +135,19 @@ class CONTENT_EXPORT DOMStorageContextWrapper
  private:
   friend class DOMStorageContextWrapperTest;
   friend class base::RefCountedThreadSafe<DOMStorageContextWrapper>;
-  friend class SessionStorageNamespaceImpl;  // For MaybeGetExistingNamespace()
+  // For MaybeGetExistingNamespace().
+  friend class SessionStorageNamespaceHandleImpl;
 
   ~DOMStorageContextWrapper() override;
 
   void MaybeBindSessionStorageControl(bool clear_on_open);
   void MaybeBindLocalStorageControl();
-  scoped_refptr<SessionStorageNamespaceImpl> MaybeGetExistingNamespace(
+  scoped_refptr<SessionStorageNamespaceHandleImpl> MaybeGetExistingNamespace(
       const std::string& namespace_id) const;
 
   // Note: can be called on multiple threads, protected by a mutex.
   void AddNamespace(const std::string& namespace_id,
-                    SessionStorageNamespaceImpl* session_namespace);
+                    SessionStorageNamespaceHandleImpl* session_namespace);
 
   // Note: can be called on multiple threads, protected by a mutex.
   void RemoveNamespace(const std::string& namespace_id);
@@ -168,15 +172,16 @@ class CONTENT_EXPORT DOMStorageContextWrapper
 
   // Since the tab restore code keeps a reference to the session namespaces
   // of recently closed tabs (see sessions::ContentPlatformSpecificTabData and
-  // sessions::TabRestoreService), a SessionStorageNamespaceImpl can outlive the
-  // destruction of the browser window. A session restore can also happen
-  // without the browser context being shutdown or destroyed in between. The
-  // design of SessionStorageNamespaceImpl assumes there is only one object per
-  // namespace. A session restore creates new objects for all tabs while the
-  // Profile wasn't destructed. This map allows the restored session to re-use
-  // the SessionStorageNamespaceImpl objects that are still alive thanks to the
-  // sessions component.
-  std::map<std::string, raw_ptr<SessionStorageNamespaceImpl, CtnExperimental>>
+  // sessions::TabRestoreService), a SessionStorageNamespaceHandleImpl can
+  // outlive the destruction of the browser window. A session restore can also
+  // happen without the browser context being shutdown or destroyed in between.
+  // The design of SessionStorageNamespaceHandleImpl assumes there is only one
+  // object per namespace. A session restore creates new objects for all tabs
+  // while the Profile wasn't destructed. This map allows the restored session
+  // to re-use the SessionStorageNamespaceHandleImpl objects that are still
+  // alive thanks to the sessions component.
+  std::map<std::string,
+           raw_ptr<SessionStorageNamespaceHandleImpl, CtnExperimental>>
       alive_namespaces_ GUARDED_BY(alive_namespaces_lock_);
   mutable base::Lock alive_namespaces_lock_;
 
@@ -191,6 +196,7 @@ class CONTENT_EXPORT DOMStorageContextWrapper
   mojo::Remote<storage::mojom::LocalStorageControl> local_storage_control_;
 
   std::optional<storage::StoragePolicyObserver> storage_policy_observer_;
+  bool scavenging_started_for_testing_ = false;
 };
 
 }  // namespace content

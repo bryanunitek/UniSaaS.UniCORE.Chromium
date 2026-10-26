@@ -77,11 +77,11 @@ bool ShouldDisableSiteIsolationDueToMemorySlow(
         features::kSiteIsolationMemoryThresholdsAndroid, param_name,
         default_memory_threshold_mb);
     return base::SysInfo::AmountOfTotalPhysicalMemory() <=
-           base::MiBU(base::saturated_cast<uint64_t>(memory_threshold_mb));
+           base::MiB(base::saturated_cast<uint64_t>(memory_threshold_mb));
   }
 
   if (base::SysInfo::AmountOfTotalPhysicalMemory() <=
-      base::MiBU(default_memory_threshold_mb)) {
+      base::MiB(default_memory_threshold_mb)) {
     return true;
   }
 #endif
@@ -122,7 +122,7 @@ bool ShouldDisableOriginIsolationDueToMemorySlow() {
         features::kOriginIsolationMemoryThresholdParamName,
         default_memory_threshold_mb);
     return base::SysInfo::AmountOfTotalPhysicalMemory() <=
-           base::MiBU(base::saturated_cast<uint64_t>(memory_threshold_mb));
+           base::MiB(base::saturated_cast<uint64_t>(memory_threshold_mb));
   }
   return false;
 #endif
@@ -190,6 +190,23 @@ bool SiteIsolationPolicy::IsIsolationForOAuthSitesEnabled() {
   // activates the field trial and assigns the client either to a control or an
   // experiment group - such assignment should be final.
   return base::FeatureList::IsEnabled(features::kSiteIsolationForOAuthSites);
+}
+
+// static
+bool SiteIsolationPolicy::IsOriginIsolationForJitlessExceptionsEnabled(
+    content::BrowserContext* browser_context) {
+  if (content::SiteIsolationPolicy::IsStrictOriginIsolationEnabled() ||
+      content::SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault(
+          browser_context)) {
+    // Origin isolation for Jitless exceptions isn't needed if
+    // origin isolation is enabled for everything, much like JS optimizer
+    // exceptions.
+    return false;
+  }
+  // Dynamic origin isolation is required for this to work.
+  return content::SiteIsolationPolicy::AreDynamicIsolatedOriginsEnabled() &&
+         base::FeatureList::IsEnabled(
+             site_isolation::features::kOriginIsolationForJitlessExceptions);
 }
 
 // static

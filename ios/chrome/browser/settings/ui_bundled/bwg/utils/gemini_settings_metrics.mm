@@ -35,6 +35,11 @@ void RecordGeminiSettingsPersonalization() {
       base::UserMetricsAction("Settings.GeminiSettings.GeminiPersonalization"));
 }
 
+void RecordGeminiSettingsUsageLimits() {
+  base::RecordAction(
+      base::UserMetricsAction("Settings.GeminiSettings.GeminiUsageLimits"));
+}
+
 void RecordGeminiSettingsItemShown(IOSGeminiSettingsItem item) {
   base::UmaHistogramEnumeration("IOS.Gemini.DynamicSettings.ItemShown", item);
 }
@@ -61,5 +66,27 @@ void RecordGeminiCameraSettingsToggled(bool enabled) {
   } else {
     base::RecordAction(base::UserMetricsAction(
         "MobileGeminiCameraSettingsGeminiCameraPermissionToggledOff"));
+  }
+}
+
+void RecordGeminiSuggestionsSettingsClose() {
+  base::RecordAction(
+      base::UserMetricsAction("MobileGeminiSuggestionsSettingsClose"));
+}
+
+void RecordGeminiSuggestionsSettingsBack() {
+  base::RecordAction(
+      base::UserMetricsAction("MobileGeminiSuggestionsSettingsBack"));
+}
+
+void RecordGeminiSuggestionsSettingsToggled(bool enabled) {
+  base::UmaHistogramBoolean(
+      "IOS.Gemini.Suggestions.Settings.SuggestionsToggled", enabled);
+  if (enabled) {
+    base::RecordAction(base::UserMetricsAction(
+        "MobileGeminiSuggestionsSettingsSuggestionsToggledOn"));
+  } else {
+    base::RecordAction(base::UserMetricsAction(
+        "MobileGeminiSuggestionsSettingsSuggestionsToggledOff"));
   }
 }

@@ -8,12 +8,12 @@ import static androidx.core.view.WindowInsetsCompat.Type.systemBars;
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
+import static androidx.test.espresso.matcher.RootMatchers.isDialog;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
 import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
 
 import static org.chromium.components.browser_ui.modaldialog.ModalDialogTestUtils.checkCurrentPresenter;
 import static org.chromium.components.browser_ui.modaldialog.ModalDialogTestUtils.checkDialogDismissalCause;
@@ -31,6 +31,7 @@ import android.widget.Button;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.test.espresso.Espresso;
 import androidx.test.espresso.matcher.BoundedMatcher;
@@ -39,6 +40,7 @@ import androidx.test.filters.SmallTest;
 
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
+import org.hamcrest.Matchers;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -52,6 +54,8 @@ import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.base.test.util.Criteria;
+import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.EnableFeatures;
@@ -112,13 +116,14 @@ public class AppModalPresenterTest {
                                     ModalDialogManager.ModalDialogType.APP,
                                     mEdgeToEdgeStateSupplier,
                                     /* isEdgeToEdgeEverywhereEnabled= */ false);
+                    View rootView = sActivity.getWindow().getDecorView().getRootView();
                     mInsetObserver =
                             new InsetObserver(
-                                    new ImmutableWeakReference<>(
-                                            sActivity.getWindow().getDecorView().getRootView()),
+                                    new ImmutableWeakReference<>(rootView),
                                     new ImmutableWeakReference<>(sActivity),
                                     /* enableKeyboardOverlayMode= */ true,
                                     /* enableExtraEdgeToEdgeLogging= */ false);
+                    ViewCompat.setOnApplyWindowInsetsListener(rootView, null);
                     mManager.setInsetObserver(mInsetObserver);
                 });
     }
@@ -149,15 +154,15 @@ public class AppModalPresenterTest {
         showDialogInRoot(mManager, dialog1, ModalDialogType.APP);
         showDialogInRoot(mManager, dialog2, ModalDialogType.APP);
         checkPendingSize(mManager, ModalDialogType.APP, 1);
-        onView(withText("1")).check(matches(isDisplayed()));
+        onView(withText("1")).inRoot(isDialog()).check(matches(isDisplayed()));
         checkCurrentPresenter(mManager, ModalDialogType.APP);
 
         // Perform back press. The first app modal dialog should be dismissed, and the second one
         // should be shown.
         Espresso.pressBack();
         checkPendingSize(mManager, ModalDialogType.APP, 0);
-        onView(withText("1")).check(doesNotExist());
-        onView(withText("2")).check(matches(isDisplayed()));
+        onView(withText("1")).inRoot(isDialog()).check(doesNotExist());
+        onView(withText("2")).inRoot(isDialog()).check(matches(isDisplayed()));
         checkCurrentPresenter(mManager, ModalDialogType.APP);
 
         // Perform a second back press. The second app modal dialog should be dismissed.
@@ -214,6 +219,47 @@ public class AppModalPresenterTest {
     @Test
     @SmallTest
     @Feature({"ModalDialog"})
+    public void testBackPressedCallback_alreadyAddedToDispatcher_reboundSafely()
+            throws TimeoutException {
+        PropertyModel dialog1 = createDialog(sActivity, mManager, "title 1", null);
+        PropertyModel dialog2 = createDialog(sActivity, mManager, "title 2", null);
+        CallbackHelper callbackHelper = new CallbackHelper();
+        final OnBackPressedCallback onBackPressedCallback =
+                new OnBackPressedCallback(true) {
+                    @Override
+                    public void handleOnBackPressed() {
+                        callbackHelper.notifyCalled();
+                    }
+                };
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    dialog1.set(
+                            ModalDialogProperties.APP_MODAL_DIALOG_BACK_PRESS_HANDLER,
+                            onBackPressedCallback);
+                });
+
+        showDialogInRoot(mManager, dialog1, ModalDialogType.APP);
+
+        // Dismiss dialog1 by pressing back
+        Espresso.pressBack();
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    dialog2.set(
+                            ModalDialogProperties.APP_MODAL_DIALOG_BACK_PRESS_HANDLER,
+                            onBackPressedCallback);
+                });
+
+        showDialogInRoot(mManager, dialog2, ModalDialogType.APP);
+
+        Espresso.pressBack();
+        callbackHelper.waitForCallback(0);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"ModalDialog"})
     @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/479879586
     public void testButton_negativeButtonFilled() throws Exception {
         PropertyModel dialog =
@@ -224,8 +270,12 @@ public class AppModalPresenterTest {
                         mTestObserver,
                         ModalDialogProperties.ButtonStyles.PRIMARY_OUTLINE_NEGATIVE_FILLED);
         showDialogInRoot(mManager, dialog, ModalDialogType.APP);
-        onView(withText(R.string.cancel)).check(matches(hasCurrentTextColor(Color.WHITE)));
-        onView(withText(R.string.ok)).check(matches(not(hasCurrentTextColor(Color.WHITE))));
+        onView(withText(R.string.cancel))
+                .inRoot(isDialog())
+                .check(matches(hasCurrentTextColor(Color.WHITE)));
+        onView(withText(R.string.ok))
+                .inRoot(isDialog())
+                .check(matches(not(hasCurrentTextColor(Color.WHITE))));
     }
 
     @Test
@@ -241,17 +291,21 @@ public class AppModalPresenterTest {
                         mTestObserver,
                         ModalDialogProperties.ButtonStyles.PRIMARY_FILLED_NEGATIVE_OUTLINE);
         showDialogInRoot(mManager, dialog, ModalDialogType.APP);
-        onView(withText(R.string.cancel)).check(matches(not(hasCurrentTextColor(Color.WHITE))));
-        onView(withText(R.string.ok)).check(matches(hasCurrentTextColor(Color.WHITE)));
+        onView(withText(R.string.cancel))
+                .inRoot(isDialog())
+                .check(matches(not(hasCurrentTextColor(Color.WHITE))));
+        onView(withText(R.string.ok))
+                .inRoot(isDialog())
+                .check(matches(hasCurrentTextColor(Color.WHITE)));
     }
 
     @Test
     @MediumTest
     @Feature({"ModalDialog"})
-    // TODO(crbug.com/428056054): Do not read color from system window bars on B+.
+    // TODO(crbug.com/428281050): Do not read color from system window bars on B+.
     @DisableIf.Build(
             sdk_is_greater_than = Build.VERSION_CODES.VANILLA_ICE_CREAM,
-            message = "crbug.com/428056054")
+            message = "crbug.com/428281050")
     public void testFullscreenDarkStyle() {
         PropertyModel dialog =
                 createDialogWithDialogStyle(
@@ -331,15 +385,25 @@ public class AppModalPresenterTest {
         showDialogInRoot(mManager, dialog, ModalDialogType.APP);
 
         // Verify dialog edges don't draw into insets' regions.
-        var view =
+        ModalDialogView view =
                 ((AppModalPresenter) mManager.getCurrentPresenterForTest())
                         .getDialogViewForTesting();
-        assertTrue(
-                "View is wider than expected.",
-                view.getWidth() <= (windowWidth - 2 * Math.max(rightInset, leftInset)));
-        assertTrue(
-                "View is taller than expected.",
-                view.getHeight() <= (windowHeight - 2 * Math.max(topInset, bottomInset)));
+        int maxExpectedWidth = windowWidth - 2 * Math.max(rightInset, leftInset);
+        int maxExpectedHeight = windowHeight - 2 * Math.max(topInset, bottomInset);
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(view.isLayoutRequested(), Matchers.is(false));
+                    Criteria.checkThat(view.getWidth(), Matchers.greaterThan(0));
+                    Criteria.checkThat(view.getHeight(), Matchers.greaterThan(0));
+                    Criteria.checkThat(
+                            "View is wider than expected.",
+                            view.getWidth(),
+                            Matchers.lessThanOrEqualTo(maxExpectedWidth));
+                    Criteria.checkThat(
+                            "View is taller than expected.",
+                            view.getHeight(),
+                            Matchers.lessThanOrEqualTo(maxExpectedHeight));
+                });
 
         // Exit edge-to-edge state.
         ThreadUtils.runOnUiThreadBlocking(() -> mEdgeToEdgeStateSupplier.set(false));

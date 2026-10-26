@@ -39,6 +39,7 @@
 #include "components/sync/base/features.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test_utils.h"
@@ -198,12 +199,12 @@ void AccessCodeCastIntegrationBrowserTest::SetUpOnMainThread() {
   identity_test_environment_ =
       std::make_unique<signin::IdentityTestEnvironment>();
   // In case of multiple BrowserContext created, we should reassign
-  // `media_router_` to the one associated with `browser()->profile()`.
+  // `media_router_` to the one associated with `browser()->GetProfile()`.
   if (browser()) {
     media_router_ = static_cast<TestMediaRouter*>(
         media_router::MediaRouterFactory::GetInstance()
             ->MediaRouterFactory::GetApiForBrowserContext(
-                browser()->profile()));
+                browser()->GetProfile()));
   }
 
   // Support multiple sites on the test server.
@@ -245,7 +246,7 @@ void AccessCodeCastIntegrationBrowserTest::SetUpPrimaryAccountWithHostedDomain(
 }
 
 void AccessCodeCastIntegrationBrowserTest::EnableAccessCodeCasting() {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       media_router::prefs::kAccessCodeCastEnabled, true);
   base::RunLoop().RunUntilIdle();
 }
@@ -572,7 +573,7 @@ void AccessCodeCastIntegrationBrowserTest::ExpectStartRouteCallFromTabMirroring(
   if (!media_router) {
     media_router = static_cast<TestMediaRouter*>(
         media_router::MediaRouterFactory::GetInstance()
-            ->GetApiForBrowserContext(browser()->profile()));
+            ->GetApiForBrowserContext(browser()->GetProfile()));
   }
   EXPECT_CALL(*media_router, CreateRouteInternal(media_source_id, sink_name, _,
                                                  web_contents, _, timeout));

@@ -22,31 +22,51 @@
 #include "base/check_op.h"
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/types/optional_ref.h"
 #include "components/autofill/core/browser/autofill_format_string.h"
-#include "components/autofill/core/browser/autofill_type.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_normalization_utils.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_normalization_util.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
-#include "components/autofill/core/browser/data_model/addresses/contact_info.h"
+#include "components/autofill/core/browser/data_model/addresses/name_info.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/country_info.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/date_info.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
-#include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/field_type_util.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_wallet_util.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/dense_set.h"
+#include "components/personal_context/proto/features/at_memory.pb.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
+#include "url/gurl.h"
 
 namespace autofill {
 
 namespace {
+
+// The URL to the overview of all passes stored in Google Wallet.
+constexpr char kWalletPassesPageURL[] =
+    "https://wallet.google.com/wallet/passes";
+
+// The URL to the management page of a specific private pass stored in Google
+// Wallet. The pass is identified by its pass ID, which needs to be URL encoded
+// into the placeholder in this URL.
+constexpr char kWalletPrivatePassPageURL[] =
+    "https://wallet.google.com/"
+    "wallet?p=walletpass&ppid=%s&utm_source=chrome&utm_medium=settings&utm_"
+    "campaign=enhanced_autofill";
+
+constexpr char kWalletTransactionsPageURL[] =
+    "https://wallet.google.com/wallet/transactions";
 
 // Returns the normalized value of the `attribute`. If `suffix_length` is
 // provided, only the suffix of that length is returned.
@@ -205,24 +225,31 @@ std::u16string AttributeInstance::GetInfo(
     std::string_view app_locale,
     base::optional_ref<const AutofillFormatString> format_string) const {
   FieldType field_type = GetNormalizedFieldType(unnormalized_field_type);
+  std::optional<AutofillFormatString> compatible_format_string =
+      format_string && AutofillFormatString::IsTypeCompatible(
+                           format_string->type, field_type)
+          ? format_string.CopyAsOptional()
+          : std::nullopt;
+
   return std::visit(
       absl::Overload{[&](const CountryInfo& country) {
                        return country.GetCountryName(app_locale);
                      },
                      [&](const DateInfo& date) {
-                       if (format_string &&
-                           format_string->type == FormatString_Type_ICU_DATE) {
-                         return date.GetIcuDate(format_string->value,
-                                                app_locale);
+                       if (compatible_format_string &&
+                           compatible_format_string->type ==
+                               FormatString_Type_ICU_DATE) {
+                         return date.GetIcuDate(app_locale);
                        }
-                       return date.GetDate(format_string ? format_string->value
-                                                         : u"YYYY-MM-DD");
+                       return date.GetDate(compatible_format_string
+                                               ? compatible_format_string->value
+                                               : u"YYYY-MM-DD");
                      },
                      [&](const NameInfo&) { return GetRawInfo(field_type); },
                      [&](const StateInfo&) { return GetRawInfo(field_type); },
                      [&](const std::u16string&) {
                        return Format(GetRawInfo(field_type), field_type,
-                                     format_string);
+                                     compatible_format_string);
                      }},
       info_);
 }
@@ -265,6 +292,29 @@ VerificationStatus AttributeInstance::GetVerificationStatus(
       info_);
 }
 
+personal_context::proto::TypedValue AttributeInstance::GetTypedValue() const {
+  personal_context::proto::TypedValue typed_value;
+  std::visit(
+      absl::Overload{[&typed_value](const CountryInfo& country) {
+                       std::string code = country.GetCountryCode();
+                       if (!code.empty()) {
+                         typed_value.set_country_code(std::move(code));
+                       }
+                     },
+                     [&typed_value](const DateInfo& date) {
+                       personal_context::proto::Date date_proto =
+                           date.GetDateProto();
+                       if (date_proto.year() != 0 || date_proto.month() != 0 ||
+                           date_proto.day() != 0) {
+                         *typed_value.mutable_date() = std::move(date_proto);
+                       }
+                     },
+                     [](const NameInfo&) {}, [](const StateInfo&) {},
+                     [](const std::u16string&) {}},
+      info_);
+  return typed_value;
+}
+
 void AttributeInstance::SetInfo(
     std::optional<FieldType> unnormalized_field_type,
     const std::u16string& value,
@@ -297,8 +347,8 @@ void AttributeInstance::SetInfo(
             if (!name.GetSupportedTypes().contains(field_type)) {
               return;
             }
-            name.SetInfoWithVerificationStatus(AutofillType(field_type), value,
-                                               app_locale, status);
+            name.SetInfoWithVerificationStatus(field_type, value, app_locale,
+                                               status);
           },
           [&](const StateInfo&) { SetRawInfo(field_type, value, status); },
           [&](std::u16string&) { SetRawInfo(field_type, value, status); }},
@@ -355,7 +405,7 @@ EntityInstance::EntityInstance(
     base::Time date_modified,
     int64_t use_count,
     base::Time use_date,
-    RecordType record_type,
+    RecordTypeData record_type_data,
     AreAttributesReadOnly are_attributes_read_only,
     std::string frecency_override)
     : type_(type),
@@ -365,7 +415,7 @@ EntityInstance::EntityInstance(
                 .date_modified = date_modified,
                 .use_count = use_count,
                 .use_date = use_date},
-      record_type_(record_type),
+      record_type_data_(std::move(record_type_data)),
       are_attributes_read_only_(are_attributes_read_only),
       frecency_override_(std::move(frecency_override)) {
   DCHECK(!attributes_.empty());
@@ -423,6 +473,40 @@ std::ostream& operator<<(std::ostream& os,
   return os;
 }
 
+std::ostream& operator<<(
+    std::ostream& os,
+    const EntityInstance::PersonalContextRecordTypePayload::Source::Type& t) {
+  using Type = EntityInstance::PersonalContextRecordTypePayload::Source::Type;
+  switch (t) {
+    case Type::kGmail:
+      os << "kGmail";
+      break;
+    case Type::kPhotos:
+      os << "kPhotos";
+      break;
+  }
+  return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os,
+    const EntityInstance::PersonalContextRecordTypePayload::Source& s) {
+  os << "Source(type: " << s.type() << ", url: \"" << s.url << "\"";
+  std::visit(absl::Overload{
+                 [&os](const EntityInstance::PersonalContextRecordTypePayload::
+                           GmailSourceMetadata& gmail) {
+                   os << ", title: \"" << gmail.title << "\", timestamp: \""
+                      << gmail.timestamp << "\"";
+                 },
+                 [&os](const EntityInstance::PersonalContextRecordTypePayload::
+                           PhotosSourceMetadata& photos) {
+                   os << ", timestamp: \"" << photos.timestamp << "\"";
+                 }},
+             s.metadata);
+  os << ")";
+  return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const EntityInstance& e) {
   os << "- name: " << '"' << e.type() << '"' << std::endl;
   os << "- nickname: " << '"' << e.nickname() << '"' << std::endl;
@@ -434,6 +518,23 @@ std::ostream& operator<<(std::ostream& os, const EntityInstance& e) {
   for (const AttributeInstance& a : e.attributes()) {
     os << "- attribute " << a << std::endl;
   }
+
+  std::visit(
+      absl::Overload{
+          [&os](const EntityInstance::PersonalContextRecordTypePayload& p) {
+            for (const EntityInstance::PersonalContextRecordTypePayload::Source&
+                     s : p.sources) {
+              os << "- source " << s << std::endl;
+            }
+          },
+          [&os](const EntityInstance::WalletRecordTypePayload& p) {
+            if (!p.management_url.is_empty()) {
+              os << "- management url: \"" << p.management_url << '"'
+                 << std::endl;
+            }
+          },
+          [](const auto&) {}},
+      e.record_type_data());
   return os;
 }
 
@@ -503,23 +604,7 @@ EntityInstance::EntityMergeability EntityInstance::GetEntityMergeability(
   // value of `this`.
   const bool is_same_entity = MatchesMergeConstraintsOf(newer);
 
-  const bool is_subset = [&]() {
-    return std::ranges::all_of(type_.attributes(), [&](AttributeType type) {
-      base::optional_ref<const AttributeInstance> attribute_1 = attribute(type);
-      base::optional_ref<const AttributeInstance> attribute_2 =
-          newer.attribute(type);
-      if (!attribute_2) {
-        return true;
-      }
-      if (!attribute_1) {
-        return false;
-      }
-      const std::optional<size_t> suffix_length =
-          DetermineSuffixLength(*attribute_1, *attribute_2);
-      return NormalizeAttributeValue(*attribute_1, suffix_length) ==
-             NormalizeAttributeValue(*attribute_2, suffix_length);
-    });
-  }();
+  const bool is_subset = newer.IsSubsetOf(*this);
 
   if (!is_same_entity) {
     return {{}, is_subset};
@@ -609,7 +694,7 @@ EntityInstance::EntityMergeability EntityInstance::GetEntityMergeability(
 }
 
 bool EntityInstance::IsServerInstance() const {
-  switch (record_type_) {
+  switch (record_type()) {
     case RecordType::kLocal:
       return false;
     case RecordType::kServerWallet:
@@ -672,12 +757,12 @@ bool EntityInstance::IsSubsetOf(const EntityInstance& other) const {
 bool EntityInstance::IsMaskedEntity() const {
   const bool masked =
       std::ranges::any_of(attributes_, &AttributeInstance::masked);
-  CHECK(!masked || IsMaskableRecordType(record_type_));
+  CHECK(!masked || IsMaskableRecordType(record_type()));
   return masked;
 }
 
 bool EntityInstance::IsUnmaskedEntity() const {
-  return IsMaskableRecordType(record_type_) &&
+  return IsMaskableRecordType(record_type()) &&
          std::ranges::any_of(
              attributes_, [](const AttributeInstance& attribute) {
                return !attribute.masked() && attribute.type().is_obfuscated();
@@ -693,8 +778,82 @@ EntityInstance EntityInstance::CopyWithNewEntityId(EntityId id) const {
 EntityInstance EntityInstance::CopyWithNewRecordType(
     RecordType record_type) const {
   EntityInstance new_entity = *this;
-  new_entity.record_type_ = record_type;
+  // Safeguard against the corner case of creating a copy with the same type.
+  if (this->record_type() == record_type) {
+    return new_entity;
+  }
+  // Adapt the record type specific payload.
+  switch (record_type) {
+    case RecordType::kLocal:
+      new_entity.record_type_data_ = LocalRecordTypePayload();
+      break;
+    case RecordType::kServerWallet:
+      // When converting from a different record type (e.g. local)
+      // the management URL is empty because it needs to be provisioned
+      // by the Google Wallet servers.
+      new_entity.record_type_data_ =
+          WalletRecordTypePayload{.management_url = GURL()};
+      break;
+    case RecordType::kPersonalContext:
+      // TODO(crbug.com/542083924): Converting to a pContext entity is currently
+      // not supported because no source can be specified. It is not needed at
+      // the moment since pContext entities don't support migrations.
+      NOTIMPLEMENTED();
+  }
   return new_entity;
+}
+
+EntityInstance::RecordType EntityInstance::record_type() const {
+  return std::visit(absl::Overload{[](const LocalRecordTypePayload&) {
+                                     return RecordType::kLocal;
+                                   },
+                                   [](const WalletRecordTypePayload&) {
+                                     return RecordType::kServerWallet;
+                                   },
+                                   [](const PersonalContextRecordTypePayload&) {
+                                     return RecordType::kPersonalContext;
+                                   }},
+                    record_type_data_);
+}
+
+GURL EntityInstance::WalletRecordTypePayload::GetManagementUrlWithFallback(
+    EntityType type,
+    const EntityId& guid) const {
+  if (base::FeatureList::IsEnabled(
+          features::kAutofillAiWalletServerProvidedDeepLink) &&
+      // `management_url` is supposed to be either valid or empty.
+      // We revalidate it here to protect the code against, e.g.,
+      // reading corrupted data from the local entity database.
+      IsValidWalletManagementUrl(management_url)) {
+    return management_url;
+  }
+  switch (type.name()) {
+    case EntityTypeName::kVehicle:
+    case EntityTypeName::kFlightReservation:
+      return GURL(kWalletPassesPageURL);
+    case EntityTypeName::kOrder:
+    case EntityTypeName::kShipment:
+      return GURL(kWalletTransactionsPageURL);
+    case EntityTypeName::kPassport:
+    case EntityTypeName::kDriversLicense:
+    case EntityTypeName::kNationalIdCard:
+    case EntityTypeName::kKnownTravelerNumber:
+    case EntityTypeName::kRedressNumber:
+      // Only deep link for private passes if the corresponding feature is
+      // enabled.
+      if (!base::FeatureList::IsEnabled(
+              features::kAutofillAiWalletPrivatePassesDeepLink)) {
+        return GURL(kWalletPassesPageURL);
+      }
+      // TODO(crbug.com/560061580): Remove guid from the parameters of
+      // `GetManagementUrlWithFallback` once
+      // kAutofillAiServerProvidedDeeplink is fully launched and supersedes
+      // kAutofillAiWalletPrivatePassesDeepLink.
+      return GURL(base::StringPrintf(
+          kWalletPrivatePassPageURL,
+          base::EscapeQueryParamValue(guid.value(), /*use_plus=*/false)));
+  }
+  NOTREACHED();
 }
 
 EntityInstance EntityInstance::CopyWithUpdatedAttribute(
@@ -732,6 +891,5 @@ bool EntityInstance::FrecencyOrder::operator()(
   return std::tuple(get_ranking_score(lhs), lhs.use_date()) >
          std::tuple(get_ranking_score(rhs), rhs.use_date());
 }
-
 
 }  // namespace autofill

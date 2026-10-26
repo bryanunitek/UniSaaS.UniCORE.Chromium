@@ -125,6 +125,7 @@ class MEDIA_EXPORT WASAPIAudioInputStream
     OPEN_RESULT_MAX = OPEN_RESULT_OK_WITH_RESAMPLING
   };
 
+
   using ActivateAudioInterfaceAsyncCallback =
       base::RepeatingCallback<HRESULT(LPCWSTR,
                                       REFIID,

@@ -12,6 +12,7 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/process/process_handle.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/task_traits.h"
@@ -29,7 +30,6 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
 #include "chrome/browser/ui/views/frame/browser_window_property_manager_win.h"
-#include "chrome/browser/ui/views/frame/opaque_browser_frame_view.h"
 #include "chrome/browser/ui/views/frame/system_menu_insertion_delegate_win.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/views/frame/windows_caption_button.h"
@@ -40,6 +40,7 @@
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
+#include "ui/base/mojom/menu_source_type.mojom-shared.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/theme_provider.h"
 #include "ui/base/win/hwnd_metrics.h"
@@ -50,21 +51,6 @@
 #include "ui/gfx/win/icon_util.h"
 #include "ui/gfx/win/msg_util.h"
 #include "ui/views/controls/menu/native_menu_win.h"
-#include "ui/views/view_utils.h"
-
-namespace {
-
-int GetTopAreaHeight(const BrowserFrameView* frame) {
-  if (auto* const opaque = views::AsViewClass<OpaqueBrowserFrameView>(frame)) {
-    return opaque->GetTopAreaHeight();
-  } else if (auto* const frame_win =
-                 views::AsViewClass<BrowserFrameViewWin>(frame)) {
-    return frame_win->TopAreaHeight(false);
-  }
-  return 0;
-}
-
-}  // namespace
 
 class VirtualDesktopHelper
     : public base::RefCountedDeleteOnSequence<VirtualDesktopHelper> {
@@ -135,7 +121,8 @@ VirtualDesktopHelper::VirtualDesktopHelper(const std::string& initial_workspace)
       initial_workspace_(initial_workspace) {}
 
 void VirtualDesktopHelper::Init(HWND hwnd) {
-  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M162);
   owning_task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&VirtualDesktopHelper::InitImpl, this, hwnd,
                                 initial_workspace_));
@@ -144,7 +131,8 @@ void VirtualDesktopHelper::Init(HWND hwnd) {
 VirtualDesktopHelper::~VirtualDesktopHelper() = default;
 
 std::string VirtualDesktopHelper::GetWorkspace() {
-  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M162);
   if (!workspace_.has_value()) {
     workspace_ = initial_workspace_;
   }
@@ -155,7 +143,8 @@ std::string VirtualDesktopHelper::GetWorkspace() {
 void VirtualDesktopHelper::UpdateWindowDesktopId(
     HWND hwnd,
     WorkspaceChangedCallback callback) {
-  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M162);
   owning_task_runner()->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(&VirtualDesktopHelper::GetWindowDesktopIdImpl, hwnd,
@@ -174,7 +163,8 @@ void VirtualDesktopHelper::SetInitialWorkspaceRemembered(bool remembered) {
 
 void VirtualDesktopHelper::SetWorkspace(WorkspaceChangedCallback callback,
                                         const std::string& workspace) {
-  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M162);
   // If GetWindowDesktopId() fails, |workspace| will be empty, and it's most
   // likely that the current value of |workspace_| is still correct, so don't
   // overwrite it.
@@ -191,7 +181,8 @@ void VirtualDesktopHelper::SetWorkspace(WorkspaceChangedCallback callback,
 
 void VirtualDesktopHelper::InitImpl(HWND hwnd,
                                     const std::string& initial_workspace) {
-  DCHECK(!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M162);
   // Virtual Desktops on Windows are best-effort and may not always be
   // available.
   if (FAILED(::CoCreateInstance(__uuidof(::VirtualDesktopManager), nullptr,
@@ -215,7 +206,8 @@ void VirtualDesktopHelper::InitImpl(HWND hwnd,
 std::string VirtualDesktopHelper::GetWindowDesktopIdImpl(
     HWND hwnd,
     Microsoft::WRL::ComPtr<IVirtualDesktopManager> virtual_desktop_manager) {
-  DCHECK(!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M162);
   if (!virtual_desktop_manager) {
     return std::string();
   }
@@ -298,7 +290,8 @@ void BrowserDesktopWindowTreeHostWin::ShowCustomSystemMenu(
 void BrowserDesktopWindowTreeHostWin::Init(
     const views::Widget::InitParams& params) {
   DesktopWindowTreeHostWin::Init(params);
-  virtual_desktop_helper_ = new VirtualDesktopHelper(params.workspace);
+  virtual_desktop_helper_ =
+      base::MakeRefCounted<VirtualDesktopHelper>(params.workspace);
   virtual_desktop_helper_->Init(GetHWND());
 }
 
@@ -351,13 +344,6 @@ bool BrowserDesktopWindowTreeHostWin::GetClientAreaInsets(
     return false;
   }
 
-  // Use default insets for popups and apps, unless we are custom drawing the
-  // titlebar.
-  if (!ShouldBrowserCustomDrawTitlebar(browser_view_) &&
-      !browser_view_->GetIsNormalType()) {
-    return false;
-  }
-
   if (GetWidget()->IsFullscreen()) {
     // In fullscreen mode there is no frame.
     *insets = gfx::Insets();
@@ -372,8 +358,7 @@ bool BrowserDesktopWindowTreeHostWin::GetClientAreaInsets(
     // area, Windows will draw a full native titlebar outside the client area.
     // (This doesn't occur in the maximized case.)
     int top_thickness = 0;
-    if (ShouldBrowserCustomDrawTitlebar(browser_view_) &&
-        GetWidget()->IsMaximized()) {
+    if (GetWidget()->IsMaximized()) {
       top_thickness = frame_thickness;
     }
     *insets = gfx::Insets::TLBR(top_thickness, frame_thickness, frame_thickness,
@@ -399,21 +384,7 @@ bool BrowserDesktopWindowTreeHostWin::GetDwmFrameInsetsInPixels(
   }
 
   // Don't extend the glass in at all if it won't be visible.
-  if (!ShouldUseNativeFrame() || GetWidget()->IsFullscreen() ||
-      ShouldBrowserCustomDrawTitlebar(browser_view_)) {
-    *insets = gfx::Insets();
-  } else {
-    // The glass should extend to the bottom of the tabstrip.
-    auto* const frame = browser_widget_->GetFrameView();
-    const int bottom =
-        GetTopAreaHeight(frame) +
-        browser_view_->GetFrameElementInfo().tabstrip_preferred_height;
-    const int tabstrip_region_bottom =
-        display::win::GetScreenWin()
-            ->DIPToClientPoint(GetHWND(), gfx::Point(0, bottom))
-            .y();
-    *insets = gfx::Insets::TLBR(tabstrip_region_bottom, 0, 0, 0);
-  }
+  *insets = gfx::Insets();
   return true;
 }
 
@@ -454,6 +425,11 @@ bool BrowserDesktopWindowTreeHostWin::PreHandleMSG(UINT message,
       if (UsesNativeSystemMenu()) {
         GetSystemMenu()->UpdateStates();
       }
+      // Delegate to the base class so that capture exclusion propagation and
+      // other native menu handlers in the base class can process the message.
+      DesktopWindowTreeHostWin::PreHandleMSG(message, w_param, l_param, result);
+      // We always return true to indicate the message was handled,
+      // regardless of the base class result.
       return true;
     case WM_SYSCOMMAND:
       if ((w_param & 0xFFF0) == SC_KEYMENU && l_param == ' ') {
@@ -525,9 +501,7 @@ views::FrameMode BrowserDesktopWindowTreeHostWin::GetFrameMode() const {
   }
 
   const views::FrameMode system_frame_mode =
-      ShouldBrowserCustomDrawTitlebar(browser_view_)
-          ? views::FrameMode::SYSTEM_DRAWN_NO_CONTROLS
-          : views::FrameMode::SYSTEM_DRAWN;
+      views::FrameMode::SYSTEM_DRAWN_NO_CONTROLS;
 
   // We don't theme popup or app windows, so regardless of whether or not a
   // theme is active for normal browser windows, we don't want to use the custom
@@ -570,8 +544,7 @@ bool BrowserDesktopWindowTreeHostWin::ShouldUseNativeFrame() const {
 bool BrowserDesktopWindowTreeHostWin::ShouldWindowContentsBeTransparent()
     const {
   CHECK(browser_view_);
-  return !ShouldBrowserCustomDrawTitlebar(browser_view_) &&
-         views::DesktopWindowTreeHostWin::ShouldWindowContentsBeTransparent();
+  return false;
 }
 
 void BrowserDesktopWindowTreeHostWin::ClientDestroyedWidget() {
@@ -661,20 +634,22 @@ SkBitmap GetBadgedIconBitmapForProfile(Profile* profile) {
 }
 
 void BrowserDesktopWindowTreeHostWin::SetWindowIcon(bool badged) {
-  // Hold onto the previous icon so that the currently displayed
-  // icon is valid until replaced with the new icon.
-  base::win::ScopedGDIObject<HICON> previous_icon = std::move(icon_handle_);
+  // Keep the previous badged icon alive until the window has switched away
+  // from it.
+  base::win::ScopedGDIObject<HICON> previous_badged_icon =
+      std::move(badged_icon_);
+  HICON icon = nullptr;
   if (badged) {
     CHECK(browser_view_);
-    icon_handle_ = IconUtil::CreateHICONFromSkBitmap(
+    badged_icon_ = IconUtil::CreateHICONFromSkBitmap(
         GetBadgedIconBitmapForProfile(browser_view_->browser()->GetProfile()));
+    icon = badged_icon_.get();
   } else {
-    icon_handle_.reset(GetAppIcon());
+    icon = GetAppIcon();
   }
   SendMessage(GetHWND(), WM_SETICON, ICON_SMALL,
-              reinterpret_cast<LPARAM>(icon_handle_.get()));
-  SendMessage(GetHWND(), WM_SETICON, ICON_BIG,
-              reinterpret_cast<LPARAM>(icon_handle_.get()));
+              reinterpret_cast<LPARAM>(icon));
+  SendMessage(GetHWND(), WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(icon));
 }
 
 void BrowserDesktopWindowTreeHostWin::ShowViewsSystemMenuAtDefaultLocation() {

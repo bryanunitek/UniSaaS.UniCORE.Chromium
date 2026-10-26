@@ -12,7 +12,8 @@
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/web_apps/protocol_handler_launch_dialog_view.h"
 #include "chrome/browser/ui/views/web_apps/sub_apps/sub_apps_install_dialog_controller.h"
@@ -37,6 +38,7 @@
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
 #include "third_party/blink/public/common/features.h"
 #include "ui/views/test/dialog_test.h"
+#include "ui/views/test/widget_test.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/any_widget_observer.h"
 #include "ui/views/widget/widget.h"
@@ -107,6 +109,29 @@ IN_PROC_BROWSER_TEST_F(
 }
 
 IN_PROC_BROWSER_TEST_F(ProtocolHandlerLaunchDialogBrowserTest,
+                       DefaultButtonAndInputProtection) {
+  views::NamedWidgetShownWaiter waiter(views::test::AnyWidgetTestPasskey{},
+                                       "ProtocolHandlerLaunchDialogView");
+  GURL protocol_url("web+test://test");
+  webapps::AppId test_app_id = InstallTestWebApp(browser()->GetProfile());
+
+  ShowWebAppProtocolLaunchDialog(protocol_url, browser()->GetProfile(),
+                                 test_app_id, base::DoNothing());
+
+  views::Widget* widget = waiter.WaitIfNeededAndGet();
+  ASSERT_NE(widget, nullptr);
+  views::DialogDelegate* dialog_delegate =
+      widget->widget_delegate()->AsDialogDelegate();
+  ASSERT_NE(dialog_delegate, nullptr);
+
+  EXPECT_EQ(dialog_delegate->GetDefaultDialogButton(),
+            static_cast<int>(ui::mojom::DialogButton::kCancel));
+  EXPECT_FALSE(dialog_delegate->ShouldAllowKeyEventsDuringInputProtection());
+
+  views::test::CancelDialog(widget);
+}
+
+IN_PROC_BROWSER_TEST_F(ProtocolHandlerLaunchDialogBrowserTest,
                        ProtocolHandlerIntentPickerDialog_DisallowAndRemember) {
   ProtocolHandlerLaunchDialogView::SetDefaultRememberSelectionForTesting(true);
   ShowDialogAndCloseWithReason(
@@ -152,9 +177,19 @@ class WebAppProtocolHandlerIntentPickerDialogInteractiveBrowserTest
     webapps::AppId test_app_id = InstallTestWebApp(browser()->GetProfile());
     ShowWebAppProtocolLaunchDialog(protocol_url, browser()->GetProfile(),
                                    test_app_id, base::DoNothing());
-    waiter.WaitIfNeededAndGet()->CloseWithReason(
-        views::Widget::ClosedReason::kEscKeyPressed);
+    widget_ = waiter.WaitIfNeededAndGet()->GetWeakPtr();
   }
+
+  void DismissUi() override {
+    if (widget_) {
+      views::test::WidgetDestroyedWaiter waiter(widget_.get());
+      widget_->CloseWithReason(views::Widget::ClosedReason::kEscKeyPressed);
+      waiter.Wait();
+    }
+  }
+
+ private:
+  base::WeakPtr<views::Widget> widget_;
 };
 
 IN_PROC_BROWSER_TEST_F(
@@ -281,11 +316,11 @@ IN_PROC_BROWSER_TEST_F(ProtocolHandlerLaunchDialogIwaTest,
   IsolatedWebAppUrlInfo parent_url_info =
       parent_bundle->InstallChecked(profile());
 
-  Browser* parent_browser =
+  BrowserWindowInterface* parent_browser =
       LaunchWebAppBrowserAndWait(parent_url_info.app_id());
   ASSERT_NE(parent_browser, nullptr);
   content::WebContents* parent_contents =
-      parent_browser->tab_strip_model()->GetActiveWebContents();
+      parent_browser->GetTabStripModel()->GetActiveWebContents();
 
   webapps::AppId sub_app_id = InstallSubAppAndWait(
       parent_contents, "/subapp/index.html",

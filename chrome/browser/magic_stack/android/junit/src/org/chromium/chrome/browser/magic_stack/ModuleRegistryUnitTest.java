@@ -14,11 +14,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import static org.chromium.chrome.browser.flags.ChromeFeatureList.HOME_MODULE_PREF_REFACTOR;
 import static org.chromium.chrome.browser.magic_stack.HomeModulesUtils.getEducationalTipModuleList;
 import static org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType.SINGLE_TAB;
-
-import androidx.test.filters.SmallTest;
 
 import org.junit.After;
 import org.junit.Before;
@@ -30,11 +27,9 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
 import org.chromium.chrome.browser.init.ActivityLifecycleDispatcherImpl;
 import org.chromium.chrome.browser.lifecycle.PauseResumeWithNativeObserver;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
@@ -48,7 +43,6 @@ import java.util.Set;
 
 /** Unit tests for {@link ModuleRegistry}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ModuleRegistryUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -81,7 +75,6 @@ public class ModuleRegistryUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testBuild() {
         mModuleRegistry.registerModule(REGISTERED_MODULE_TYPE, mModuleProviderBuilder);
 
@@ -94,7 +87,6 @@ public class ModuleRegistryUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testRegisterAdapter() {
         mModuleRegistry.registerModule(REGISTERED_MODULE_TYPE, mModuleProviderBuilder);
 
@@ -105,7 +97,6 @@ public class ModuleRegistryUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testDestroy() {
         mModuleRegistry.registerModule(REGISTERED_MODULE_TYPE, mModuleProviderBuilder);
         mModuleRegistry.destroy();
@@ -114,7 +105,6 @@ public class ModuleRegistryUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testOnPauseWithNative() {
         mModuleRegistry.registerModule(REGISTERED_MODULE_TYPE, mModuleProviderBuilder);
 
@@ -123,7 +113,6 @@ public class ModuleRegistryUnitTest {
     }
 
     @Test
-    @Features.DisableFeatures(HOME_MODULE_PREF_REFACTOR)
     public void testGetEnabledModuleList() {
         mModuleRegistry.registerModule(REGISTERED_MODULE_TYPE, mModuleProviderBuilder);
 
@@ -142,7 +131,6 @@ public class ModuleRegistryUnitTest {
     }
 
     @Test
-    @Features.EnableFeatures(HOME_MODULE_PREF_REFACTOR)
     public void testGetEnabledModuleSet_allCardsOff_restoresOnAndOffTypes() {
         registerModuleWithEligibility(ModuleType.SINGLE_TAB, true);
         registerModuleWithEligibility(ModuleType.PRICE_CHANGE, false);
@@ -167,13 +155,7 @@ public class ModuleRegistryUnitTest {
     }
 
     @Test
-    @Features.EnableFeatures(HOME_MODULE_PREF_REFACTOR)
     public void testGetModuleListShownInSettings() {
-        testGetModuleListShownInSettingsImpl();
-    }
-
-    @Test
-    public void testGetModuleListShownInSettings_featureDisabled() {
         testGetModuleListShownInSettingsImpl();
     }
 

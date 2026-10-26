@@ -61,7 +61,7 @@ void ResizeObserverEntry::PopulateFromLayoutBox(
     HeapVector<Member<ResizeObserverSize>>& content_box_size,
     HeapVector<Member<ResizeObserverSize>>& border_box_size,
     HeapVector<Member<ResizeObserverSize>>& device_pixel_content_box_size) {
-  const ComputedStyle& style = layout_box.StyleRef();
+  const ComputedStyle& style = layout_box.Style();
   const PhysicalRect content_rect(layout_box.PaddingOutsets().Offset(),
                                   layout_box.PhysicalContentBoxRect().size);
   content_rect_ =
@@ -94,13 +94,12 @@ void ResizeObserverEntry::PopulateFromSVGChild(
   if (!svg_graphics_element)
     return;
   const gfx::SizeF bounding_box_size = svg_graphics_element->GetBBox().size();
-  content_rect_ =
-      DOMRectReadOnly::FromRectF(gfx::RectF(gfx::PointF(), bounding_box_size));
+  content_rect_ = DOMRectReadOnly::FromRectF(gfx::RectF(bounding_box_size));
   ResizeObserverSize* size = ResizeObserverSize::Create(
       bounding_box_size.width(), bounding_box_size.height());
   content_box_size.push_back(size);
   border_box_size.push_back(size);
-  const ComputedStyle& style = layout_object.StyleRef();
+  const ComputedStyle& style = layout_object.Style();
   const gfx::SizeF scaled_bounding_box_size(
       gfx::ScaleSize(bounding_box_size, style.EffectiveZoom()));
   gfx::SizeF snapped_device_pixel_content_box(

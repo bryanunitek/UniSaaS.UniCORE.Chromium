@@ -39,15 +39,25 @@
 #include "components/device_signals/core/browser/signals_aggregator.h"
 #include "components/device_signals/core/browser/signals_types.h"
 #include "components/device_signals/core/browser/user_context.h"
+#include "components/device_signals/core/common/platform_utils.h"
 #include "components/device_signals/core/common/signals_features.h"  // nogncheck
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 #if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+#include "base/strings/string_number_conversions.h"
+#include "chrome/browser/enterprise/connectors/analysis/content_analysis_info.h"
 #include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client.h"
 #include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client_factory.h"
+#include "chrome/browser/enterprise/connectors/reporting/reporting_event_router_factory.h"
+#include "chrome/browser/enterprise/data_protection/data_protection_features.h"
+#include "components/download/public/common/download_item.h"
 #include "components/enterprise/common/proto/synced/browser_events.pb.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/deep_scanning_utils.h"
+#include "components/enterprise/connectors/core/common.h"
+#include "components/enterprise/connectors/core/reporting_event_router.h"
 #include "components/enterprise/connectors/core/reporting_utils.h"
 #include "components/policy/core/common/cloud/realtime_reporting_job_configuration.h"
+#include "content/public/browser/download_manager.h"
 #endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 
 #include "components/content_settings/core/common/pref_names.h"
@@ -62,11 +72,6 @@ namespace {
 using TriggeredRuleInfo = ::chrome::cros::reporting::proto::TriggeredRuleInfo;
 using MatchedDetector = ::chrome::cros::reporting::proto::MatchedDetector;
 
-// Constants used to build the report of a data masking event.
-constexpr char kKeyDetectorId[] = "detectorId";
-constexpr char kKeyDisplayName[] = "displayName";
-constexpr char kKeyDetectorType[] = "detectorType";
-constexpr char kKeyMatchedDetectors[] = "matchedDetectors";
 #endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -77,25 +82,6 @@ const char kEndpointVerificationStoreFailed[] =
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
-std::string EventResultToString(
-    api::enterprise_reporting_private::EventResult event_result) {
-  // Make sure the values returned by this function match the names in
-  // google3/chrome/cros/reporting/api/proto/browser_events.proto
-  if (event_result == api::enterprise_reporting_private::EventResult::kNone) {
-    return "EVENT_RESULT_UNKNOWN";
-  }
-  return ToString(event_result);
-}
-
-std::string DetectorTypeToString(
-    api::enterprise_reporting_private::DetectorType detector_type) {
-  // Make sure the values returned by this function match the names in
-  // google3/chrome/cros/reporting/api/proto/browser_events.proto
-  if (detector_type == api::enterprise_reporting_private::DetectorType::kNone) {
-    return "DETECTOR_TYPE_UNSPECIFIED";
-  }
-  return ToString(detector_type);
-}
 
 MatchedDetector::DetectorType ConvertToDetectorTypeProto(
     api::enterprise_reporting_private::DetectorType detector_type) {
@@ -175,62 +161,69 @@ void ReportDataMaskingEvent(
     return;
   }
 
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    chrome::cros::reporting::proto::DlpSensitiveDataEvent sensitive_data_event;
-    sensitive_data_event.set_url(data_masking_event.url);
-    sensitive_data_event.set_tab_url(data_masking_event.url);
-    sensitive_data_event.set_event_result(
-        ConvertToEventResultProto(data_masking_event.event_result));
-    *sensitive_data_event.mutable_triggered_rule_info() =
-        GetTriggeredRuleInfo(data_masking_event.triggered_rule_info);
-    sensitive_data_event.set_profile_identifier(
-        reporting_client->GetProfileIdentifier());
-    sensitive_data_event.set_profile_user_name(
-        reporting_client->GetProfileUserName());
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent sensitive_data_event;
+  sensitive_data_event.set_url(data_masking_event.url);
+  sensitive_data_event.set_tab_url(data_masking_event.url);
+  sensitive_data_event.set_event_result(
+      ConvertToEventResultProto(data_masking_event.event_result));
+  *sensitive_data_event.mutable_triggered_rule_info() =
+      GetTriggeredRuleInfo(data_masking_event.triggered_rule_info);
+  sensitive_data_event.set_profile_identifier(
+      reporting_client->GetProfileIdentifier());
+  sensitive_data_event.set_profile_user_name(
+      reporting_client->GetProfileUserName());
 
-    chrome::cros::reporting::proto::Event event;
-    *event.mutable_sensitive_data_event() = sensitive_data_event;
-    *event.mutable_time() =
-        enterprise_connectors::ToProtoTimestamp(base::Time::Now());
+  chrome::cros::reporting::proto::Event event;
+  *event.mutable_sensitive_data_event() = sensitive_data_event;
+  *event.mutable_time() =
+      enterprise_connectors::ToProtoTimestamp(base::Time::Now());
 
-    reporting_client->ReportEvent(std::move(event), settings.value());
-  } else {
-    base::DictValue event;
-    event.Set(enterprise_connectors::kKeyUrl, data_masking_event.url);
-    event.Set(enterprise_connectors::kKeyTabUrl,
-              std::move(data_masking_event.url));
-    event.Set(enterprise_connectors::kKeyEventResult,
-              EventResultToString(data_masking_event.event_result));
+  reporting_client->ReportEvent(std::move(event), settings.value());
+}
 
-    base::ListValue triggered_rule_info;
-    triggered_rule_info.reserve(data_masking_event.triggered_rule_info.size());
-    for (auto& rule : data_masking_event.triggered_rule_info) {
-      base::DictValue triggered_rule;
-      triggered_rule.Set(enterprise_connectors::kKeyTriggeredRuleId,
-                         std::move(rule.rule_id));
-      triggered_rule.Set(enterprise_connectors::kKeyTriggeredRuleName,
-                         std::move(rule.rule_name));
+std::string GetForceSaveToCloudDestinationString(
+    download::DownloadDangerType danger_type) {
+  switch (danger_type) {
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+      return "Google Drive";
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
+      return "OneDrive";
+    default:
+      return "";
+  }
+}
 
-      base::ListValue matched_detectors;
-      for (auto& detector : rule.matched_detectors) {
-        base::DictValue detector_value;
-        detector_value.Set(kKeyDetectorId, std::move(detector.detector_id));
-        detector_value.Set(kKeyDisplayName, std::move(detector.display_name));
-        detector_value.Set(kKeyDetectorType,
-                           DetectorTypeToString(detector.detector_type));
-        matched_detectors.Append(std::move(detector_value));
-      }
-      triggered_rule.Set(kKeyMatchedDetectors, std::move(matched_detectors));
+void ReportForceSaveToCloudEvent(
+    content::BrowserContext* browser_context,
+    download::DownloadItem* download_item,
+    const enterprise_connectors::ScanResult& scan_result) {
+  CHECK(browser_context);
+  CHECK(download_item);
 
-      triggered_rule_info.Append(std::move(triggered_rule));
-    }
-    event.Set(enterprise_connectors::kKeyTriggeredRuleInfo,
-              std::move(triggered_rule_info));
+  auto* reporting_event_router = enterprise_connectors::
+      ReportingEventRouterFactory::GetForBrowserContext(browser_context);
+  if (!reporting_event_router) {
+    return;
+  }
 
-    reporting_client->ReportRealtimeEvent(
-        enterprise_connectors::kKeySensitiveDataEvent,
-        std::move(settings.value()), std::move(event));
+  std::string destination =
+      GetForceSaveToCloudDestinationString(download_item->GetDangerType());
+  if (destination.empty()) {
+    return;
+  }
+
+  enterprise_connectors::DownloadContentAreaUserProvider info(*download_item);
+
+  for (const auto& file_metadata : scan_result.file_metadata) {
+    enterprise_connectors::MaybeReportDeepScanningVerdict(
+        reporting_event_router, &info, /*source=*/"", destination,
+        file_metadata.filename, file_metadata.sha256, file_metadata.mime_type,
+        enterprise_connectors::DataTransferEventTrigger::FILE_DOWNLOAD,
+        /*content_transfer_method=*/"", info.GetContentAreaAccountEmail(),
+        file_metadata.size,
+        enterprise_connectors::ScanRequestUploadResult::kSuccess,
+        file_metadata.scan_response,
+        enterprise_connectors::EventResult::FORCED_SAVE_TO_CLOUD);
   }
 }
 #endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
@@ -352,12 +345,12 @@ void StartSignalCollection(
     content::BrowserContext* browser_context,
     base::OnceCallback<void(device_signals::SignalsAggregationResponse)>
         callback) {
-  DCHECK(browser_context);
+  CHECK(browser_context, base::NotFatalUntil::M161);
   auto* profile = Profile::FromBrowserContext(browser_context);
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M161);
   auto* signals_aggregator =
       enterprise_signals::SignalsAggregatorFactory::GetForProfile(profile);
-  DCHECK(signals_aggregator);
+  CHECK(signals_aggregator, base::NotFatalUntil::M161);
 
   device_signals::UserContext user_context;
   user_context.user_id = user_id;
@@ -630,7 +623,7 @@ EnterpriseReportingPrivateGetContextInfoFunction::Run() {
   auto* connectors_service =
       enterprise_connectors::ConnectorsServiceFactory::GetInstance()
           ->GetForBrowserContext(browser_context());
-  DCHECK(connectors_service);
+  CHECK(connectors_service, base::NotFatalUntil::M161);
 
   context_info_fetcher_ =
       enterprise_signals::ContextInfoFetcher::CreateInstance(
@@ -738,7 +731,7 @@ EnterpriseReportingPrivateGetFileSystemInfoFunction::Run() {
     EXTENSION_FUNCTION_VALIDATE(base::IsStringUTF8(api_options_param.path));
     base::FilePath file_path =
         base::FilePath::FromUTF8Unsafe(api_options_param.path);
-    if (file_path.IsNetwork()) {
+    if (!device_signals::IsSupportedLocalPath(file_path)) {
       return RespondNow(Error("Network paths are not supported."));
     }
   }
@@ -974,6 +967,62 @@ EnterpriseReportingPrivateReportDataMaskingEventFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(params);
 
   ReportDataMaskingEvent(browser_context(), std::move(params->event));
+#endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+
+  return RespondNow(NoArguments());
+}
+
+// reportForceSaveToCloudEventHandled
+
+EnterpriseReportingPrivateReportForceSaveToCloudEventHandledFunction::
+    EnterpriseReportingPrivateReportForceSaveToCloudEventHandledFunction() =
+        default;
+EnterpriseReportingPrivateReportForceSaveToCloudEventHandledFunction::
+    ~EnterpriseReportingPrivateReportForceSaveToCloudEventHandledFunction() =
+        default;
+
+ExtensionFunction::ResponseAction
+EnterpriseReportingPrivateReportForceSaveToCloudEventHandledFunction::Run() {
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+  auto params = api::enterprise_reporting_private::
+      ReportForceSaveToCloudEventHandled::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
+
+  if (params->event.download_id.empty()) {
+    return RespondNow(Error("Download ID cannot be empty."));
+  }
+
+  if (params->event.event !=
+      api::enterprise_reporting_private::ForceSaveToCloudEventType::
+          kSavedToCloud) {
+    return RespondNow(Error("Unsupported event type."));
+  }
+
+  Profile* profile = Profile::FromBrowserContext(browser_context());
+
+  content::DownloadManager* manager =
+      profile->GetOriginalProfile()->GetDownloadManager();
+  if (!manager) {
+    return RespondNow(Error("Download not found."));
+  }
+
+  download::DownloadItem* download_item = nullptr;
+  uint32_t numeric_id = 0;
+  if (base::StringToUint(params->event.download_id, &numeric_id)) {
+    download_item = manager->GetDownload(numeric_id);
+  }
+
+  if (!download_item) {
+    return RespondNow(Error("Download not found."));
+  }
+
+  auto* scan_result = static_cast<enterprise_connectors::ScanResult*>(
+      download_item->GetUserData(enterprise_connectors::ScanResult::kKey));
+  if (!scan_result || scan_result->file_metadata.empty()) {
+    return RespondNow(Error("No scan result found for download."));
+  }
+
+  ReportForceSaveToCloudEvent(browser_context(), download_item, *scan_result);
 #endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 
   return RespondNow(NoArguments());

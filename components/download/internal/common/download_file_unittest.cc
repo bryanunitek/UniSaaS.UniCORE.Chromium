@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <string_view>
 #include <utility>
@@ -25,8 +26,10 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_file_util.h"
 #include "build/build_config.h"
+#include "components/download/internal/common/download_file_with_copy.h"
 #include "components/download/public/common/download_create_info.h"
 #include "components/download/public/common/download_destination_observer.h"
+#include "components/download/public/common/download_features.h"
 #include "components/download/public/common/download_file_impl.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/mock_input_stream.h"
@@ -70,10 +73,11 @@ int64_t GetBuffersLength(const char** buffers, size_t num_buffer) {
   return result;
 }
 
-std::string GetHexEncodedHashValue(crypto::SecureHash* hash_state) {
+std::string GetHexEncodedHashValue(
+    std::optional<crypto::hash::Hasher>& hash_state) {
   if (!hash_state)
     return std::string();
-  std::vector<uint8_t> hash_value(hash_state->GetHashLength());
+  std::array<uint8_t, crypto::hash::kSha256Size> hash_value;
   hash_state->Finish(hash_value);
   return base::HexEncode(hash_value);
 }
@@ -87,15 +91,14 @@ class MockDownloadDestinationObserver : public DownloadDestinationObserver {
   void DestinationError(
       DownloadInterruptReason reason,
       int64_t bytes_so_far,
-      std::unique_ptr<crypto::SecureHash> hash_state) override {
+      std::optional<crypto::hash::Hasher> hash_state) override {
     MockDestinationError(reason, bytes_so_far,
-                         GetHexEncodedHashValue(hash_state.get()));
+                         GetHexEncodedHashValue(hash_state));
   }
   void DestinationCompleted(
       int64_t total_bytes,
-      std::unique_ptr<crypto::SecureHash> hash_state) override {
-    MockDestinationCompleted(total_bytes,
-                             GetHexEncodedHashValue(hash_state.get()));
+      std::optional<crypto::hash::Hasher> hash_state) override {
+    MockDestinationCompleted(total_bytes, GetHexEncodedHashValue(hash_state));
   }
 
   MOCK_METHOD3(MockDestinationError,
@@ -1346,6 +1349,77 @@ TEST_F(DownloadFileTest, PropagatesUrlAndInitiatorToQuarantine) {
   DestroyDownloadFile(0);
 }
 
+// When the download source has no authority of its own (e.g. a data: URL), the
+// browser-validated request initiator should be reported to the quarantine
+// service as the source rather than the renderer-supplied referrer.
+TEST_F(DownloadFileTest, DataUrlSourcePassesInitiatorToQuarantine) {
+  ASSERT_TRUE(CreateDownloadFile(true));
+  base::FilePath initial_path(download_file_->FullPath());
+  base::FilePath path_1(initial_path.InsertBeforeExtensionASCII("_1"));
+
+  const url::Origin initiator =
+      url::Origin::Create(GURL("https://initiator.example.com/"));
+
+  EXPECT_CALL(quarantine_,
+              QuarantineFile(_, GURL("https://initiator.example.com/"),
+                             GURL("https://referrer.example.com/"),
+                             Eq(initiator), _, _))
+      .WillOnce(WithArg<5>(
+          [](quarantine::mojom::Quarantine::QuarantineFileCallback callback) {
+            std::move(callback).Run(
+                quarantine::mojom::QuarantineFileResult::OK);
+          }));
+
+  mojo::Receiver<quarantine::mojom::Quarantine> receiver(&quarantine_);
+  base::RunLoop loop_runner;
+  DownloadInterruptReason result_reason = DOWNLOAD_INTERRUPT_REASON_NONE;
+  download_file_->RenameAndAnnotate(
+      path_1, "12345678-ABCD-1234-DCBA-123456789ABC",
+      GURL("data:application/octet-stream;base64,SGVsbG8="),
+      GURL("https://referrer.example.com/"), initiator,
+      receiver.BindNewPipeAndPassRemote(),
+      base::BindOnce(
+          [](base::OnceClosure quit, DownloadInterruptReason* out,
+             DownloadInterruptReason reason, const base::FilePath&) {
+            *out = reason;
+            std::move(quit).Run();
+          },
+          loop_runner.QuitClosure(), &result_reason));
+  loop_runner.Run();
+  EXPECT_EQ(DOWNLOAD_INTERRUPT_REASON_NONE, result_reason);
+
+  FinishStream(DOWNLOAD_INTERRUPT_REASON_NONE, true, kEmptyHash);
+  DestroyDownloadFile(0);
+}
+
+TEST_F(DownloadFileTest, DownloadFileWithCopyMissingSourceDoesNotCreateFile) {
+  base::FilePath missing_source =
+      download_dir_.GetPath().AppendASCII("missing_source.bin");
+  base::FilePath target_path =
+      download_dir_.GetPath().AppendASCII("target.bin");
+  DownloadFileWithCopy file_with_copy(missing_source,
+                                      observer_factory_.GetWeakPtr());
+
+  EXPECT_CALL(*observer_, MockDestinationCompleted(-1, std::string()));
+
+  base::RunLoop loop_runner;
+  DownloadInterruptReason result_reason = DOWNLOAD_INTERRUPT_REASON_FILE_FAILED;
+  file_with_copy.RenameAndUniquify(
+      target_path,
+      base::BindOnce(
+          [](base::OnceClosure quit, DownloadInterruptReason* out,
+             DownloadInterruptReason reason, const base::FilePath&) {
+            *out = reason;
+            std::move(quit).Run();
+          },
+          loop_runner.QuitClosure(), &result_reason));
+  loop_runner.Run();
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(DOWNLOAD_INTERRUPT_REASON_NONE, result_reason);
+  EXPECT_FALSE(base::PathExists(missing_source));
+}
+
 #if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
 class DownloadFileTestWithObfuscation : public DownloadFileTest {
  protected:
@@ -1367,6 +1441,42 @@ class DownloadFileTestWithObfuscation : public DownloadFileTest {
 };
 
 TEST_F(DownloadFileTestWithObfuscation, ObfuscationEnabled) {
+  size_t length = strlen(kTestData1) + strlen(kTestData2) + strlen(kTestData3);
+  ASSERT_TRUE(CreateDownloadFile(length, true));
+  const char* chunks[] = {kTestData1, kTestData2, kTestData3};
+
+  EXPECT_CALL(*input_stream_, RegisterDataReadyCallback(_))
+      .Times(1)
+      .RetiresOnSaturation();
+
+  // Append dummy data for obfuscated size verification.
+  expected_data_ += std::string(CalculateObfuscationOverhead(3), '\0');
+  AppendDataToFile(chunks, 3);
+
+  // The download appends an empty chunk at the end of the file when completed,
+  // so we need to append its size.
+  expected_data_ += std::string(kObfuscationChunkOverhead, '\0');
+
+  // Original file hash should be returned, not the obfuscated hash.
+  FinishStream(DOWNLOAD_INTERRUPT_REASON_NONE, true, kDataHash);
+
+  // Verify that the file content is obfuscated.
+  std::string file_content;
+  ASSERT_TRUE(
+      base::ReadFileToString(download_file_->FullPath(), &file_content));
+  EXPECT_NE(file_content, std::string(kTestData1) + std::string(kTestData2) +
+                              std::string(kTestData3));
+  // Total size includes the 3 data chunks and the 1 empty termination chunk.
+  EXPECT_EQ(file_content.size(), length + CalculateObfuscationOverhead(4));
+
+  download_file_->Cancel();
+  DestroyDownloadFile(0, false);
+}
+
+TEST_F(DownloadFileTestWithObfuscation,
+       ObfuscationEnabledWithParallelDownloading) {
+  base::test::ScopedFeatureList parallel_feature(
+      features::kParallelDownloading);
   size_t length = strlen(kTestData1) + strlen(kTestData2) + strlen(kTestData3);
   ASSERT_TRUE(CreateDownloadFile(length, true));
   const char* chunks[] = {kTestData1, kTestData2, kTestData3};

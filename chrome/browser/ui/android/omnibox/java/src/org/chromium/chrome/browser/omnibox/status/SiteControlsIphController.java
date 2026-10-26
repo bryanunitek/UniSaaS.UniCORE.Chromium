@@ -6,21 +6,29 @@ package org.chromium.chrome.browser.omnibox.status;
 
 import android.view.View;
 
+import androidx.annotation.VisibleForTesting;
+
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
 import org.chromium.chrome.browser.user_education.IphCommandBuilder;
 import org.chromium.chrome.browser.user_education.UserEducationHelper;
 import org.chromium.components.feature_engagement.FeatureConstants;
 
+import java.util.concurrent.TimeUnit;
+
 /**
  * Controller to manage the In-Product Help (IPH) for Site Controls when it moves to the app menu.
  */
 @NullMarked
 public class SiteControlsIphController {
+    @VisibleForTesting
+    static final int AUTO_DISMISS_TIMEOUT_MS = (int) TimeUnit.SECONDS.toMillis(5);
+
     private final UserEducationHelper mUserEducationHelper;
     private final AppMenuHandler mAppMenuHandler;
-    private final View mToolbarMenuButton;
+    private final @Nullable View mToolbarMenuButton;
 
     /**
      * Constructor for {@link SiteControlsIphController}.
@@ -31,7 +39,7 @@ public class SiteControlsIphController {
      */
     public SiteControlsIphController(
             UserEducationHelper userEducationHelper,
-            View toolbarMenuButton,
+            @Nullable View toolbarMenuButton,
             AppMenuHandler appMenuHandler) {
         mUserEducationHelper = userEducationHelper;
         mToolbarMenuButton = toolbarMenuButton;
@@ -43,6 +51,9 @@ public class SiteControlsIphController {
      * controls" item.
      */
     public void showIph() {
+        if (mToolbarMenuButton == null || !mToolbarMenuButton.isShown()) {
+            return;
+        }
         mUserEducationHelper.requestShowIph(
                 new IphCommandBuilder(
                                 mToolbarMenuButton.getResources(),
@@ -50,6 +61,7 @@ public class SiteControlsIphController {
                                 R.string.iph_site_controls_text,
                                 R.string.iph_site_controls_text)
                         .setAnchorView(mToolbarMenuButton)
+                        .setAutoDismissTimeout(AUTO_DISMISS_TIMEOUT_MS)
                         .setOnShowCallback(
                                 () -> mAppMenuHandler.setMenuHighlight(R.id.info_menu_id))
                         .setOnDismissCallback(mAppMenuHandler::clearMenuHighlight)

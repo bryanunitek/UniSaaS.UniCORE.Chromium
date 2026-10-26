@@ -5,12 +5,14 @@
 #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_activation_tracker.h"
 
 #include "base/functional/bind.h"
+#include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/send_tab_to_self_sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -23,6 +25,8 @@
 
 namespace send_tab_to_self {
 namespace {
+
+using base::test::TestFuture;
 
 class SendTabToSelfActivationTrackerBrowserTest : public InProcessBrowserTest {
  public:
@@ -71,8 +75,8 @@ IN_PROC_BROWSER_TEST_F(SendTabToSelfActivationTrackerBrowserTest,
   content::WaitForLoadStop(target_contents);
 
   // Ensure Tab 0 is still active.
-  ASSERT_EQ(browser()->tab_strip_model()->active_index(), 0);
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 3);
+  ASSERT_EQ(browser()->GetTabStripModel()->active_index(), 0);
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 3);
 
   // Attach the activation tracker to Tab 2.
   SendTabToSelfActivationTracker::CreateForWebContents(target_contents,
@@ -81,7 +85,7 @@ IN_PROC_BROWSER_TEST_F(SendTabToSelfActivationTrackerBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(SendTabToSelfActivationTrackerBrowserTest,
                        RestoreTrackerOnRestart) {
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
 
   // Expect at least 3 tabs.
   ASSERT_GE(tab_strip->count(), 3);
@@ -102,10 +106,15 @@ IN_PROC_BROWSER_TEST_F(SendTabToSelfActivationTrackerBrowserTest,
   FakeSendTabToSelfModel* model = GetModel(browser()->GetProfile());
   ASSERT_EQ(model->activated_call_count(), 0);
 
+  TestFuture<void> activated_future;
+  model->SetMarkEntryActivatedCallback(activated_future.GetRepeatingCallback());
+
   // Activate the restored target tab.
   tab_strip->ActivateTabAt(target_index);
 
-  // Verify that the model was notified of the activation.
+  // Tab activation dispatches visibility changes asynchronously on macOS.
+  // Wait for the model activation callback before asserting.
+  EXPECT_TRUE(activated_future.Wait());
   EXPECT_EQ(model->last_activated_guid(), "test_guid");
   EXPECT_EQ(model->last_activated_entry_point(),
             ShareActivatedEntryPoint::kTabStrip);
@@ -136,8 +145,8 @@ IN_PROC_BROWSER_TEST_F(SendTabToSelfActivationTrackerBrowserTest,
   content::WaitForLoadStop(target_contents);
 
   // Ensure Tab 0 is still active.
-  ASSERT_EQ(browser()->tab_strip_model()->active_index(), 0);
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 3);
+  ASSERT_EQ(browser()->GetTabStripModel()->active_index(), 0);
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 3);
 
   // Attach the activation tracker to Tab 2.
   SendTabToSelfActivationTracker::CreateForWebContents(target_contents,
@@ -146,7 +155,7 @@ IN_PROC_BROWSER_TEST_F(SendTabToSelfActivationTrackerBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(SendTabToSelfActivationTrackerBrowserTest,
                        RestoreAndCloseTrackerOnRestart) {
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
 
   // Expect at least 3 tabs.
   ASSERT_GE(tab_strip->count(), 3);

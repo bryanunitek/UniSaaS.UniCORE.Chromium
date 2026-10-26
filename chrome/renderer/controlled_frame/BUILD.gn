@@ -14,10 +14,7 @@ source_set("controlled_frame") {
     "web_url_pattern_natives.h",
   ]
 
-  configs += [
-    "//build/config:precompiled_headers",
-    "//build/config/compiler:wexit_time_destructors",
-  ]
+  configs += [ "//build/config:precompiled_headers" ]
 
   deps = [
     "//base",
@@ -25,6 +22,26 @@ source_set("controlled_frame") {
     "//chrome/renderer/resources:resources_grit",
     "//extensions/renderer",
     "//third_party/blink/public:blink",
+    "//v8:v8_headers",
+  ]
+}
+
+source_set("browser_tests") {
+  testonly = true
+
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+  sources = [ "web_url_pattern_natives_browsertest.cc" ]
+
+  deps = [
+    ":controlled_frame",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test/base:chrome_render_view_test",
+    "//extensions/common:mojom",
+    "//extensions/renderer",
+    "//extensions/renderer:unit_test_support",
+    "//testing/gtest",
     "//v8:v8_headers",
   ]
 }

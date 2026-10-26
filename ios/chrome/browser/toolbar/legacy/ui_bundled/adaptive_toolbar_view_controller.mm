@@ -10,6 +10,7 @@
 #import "ios/chrome/browser/fullscreen/public/fullscreen_metrics.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_animator.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
+#import "ios/chrome/browser/ntp/shared/metrics/home_metrics.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
@@ -58,6 +59,7 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 // Whether a page is loading.
 @property(nonatomic, assign, getter=isLoading) BOOL loading;
 @property(nonatomic, assign) BOOL isNTP;
+@property(nonatomic, assign) BOOL isStartSurface;
 // The last progress of fullscreen registered. The progress range is between 0
 // and 1.
 @property(nonatomic, assign) CGFloat previousFullscreenProgress;
@@ -70,6 +72,7 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 @synthesize buttonFactory = _buttonFactory;
 @synthesize loading = _loading;
 @synthesize isNTP = _isNTP;
+@synthesize isStartSurface = _isStartSurface;
 
 #pragma mark - Public
 
@@ -91,8 +94,8 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 }
 
 - (void)triggerToolbarSlideInAnimationFromBelow:(BOOL)fromBelow {
-  // Toolbar slide-in animations are disabled on iPads.
-  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
+  // Toolbar slide-in animations are disabled when the tab strip is visible.
+  if (CanShowTabStrip(self)) {
     return;
   }
 
@@ -146,6 +149,8 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
     button.geminiHandler = nil;
     button.contextMenuInteractionEnabled = NO;
   }
+  self.browserCoordinatorHandler = nil;
+  self.popupMenuCommandsHandler = nil;
 }
 
 #pragma mark - UIViewController
@@ -356,6 +361,10 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   _isNTP = isNTP;
 }
 
+- (void)setIsStartSurface:(BOOL)isStartSurface {
+  _isStartSurface = isStartSurface;
+}
+
 - (void)updateTabGroupState:(ToolbarTabGroupState)tabGroupState {
   [self.view updateTabGroupState:tabGroupState];
 }
@@ -459,8 +468,8 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
       ToolbarCollapsedHeight(self.traitCollection.preferredContentSizeCategory);
   const CGFloat expandedCollapsedDelta = expandedHeight - collapsedHeight;
 
-  const CGFloat height =
-      AlignValueToPixel(collapsedHeight + expandedCollapsedDelta * progress);
+  const CGFloat height = AlignValueToLowerPixel(
+      collapsedHeight + expandedCollapsedDelta * progress);
 
   self.view.locationBarContainerHeight.constant = height;
   self.view.locationBarContainer.layer.cornerRadius = height / 2;
@@ -505,7 +514,7 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   for (LegacyToolbarButton* button in self.view.allButtons) {
     if (button != self.view.toolsMenuButton &&
         button != self.view.openNewTabButton) {
-      [button addTarget:self.browserCoordinatorHandler
+      [button addTarget:self
                     action:@selector(hideComposebox)
           forControlEvents:UIControlEventTouchUpInside];
     }
@@ -513,6 +522,10 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
                   action:@selector(recordUserMetrics:)
         forControlEvents:UIControlEventTouchUpInside];
   }
+}
+
+- (void)hideComposebox {
+  [self.browserCoordinatorHandler hideComposebox];
 }
 
 // Records the use of a button.
@@ -554,6 +567,7 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
     if (self.isNTP) {
       base::RecordAction(
           base::UserMetricsAction("MobileToolbarShowStackViewOnNTP"));
+      RecordHomeAction(IOSHomeActionType::kTabSwitcher, self.isStartSurface);
     }
     base::RecordAction(base::UserMetricsAction("MobileToolbarShowStackView"));
   } else if (sender == self.view.shareButton) {
@@ -567,7 +581,13 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
       base::RecordAction(
           base::UserMetricsAction("MobileToolbarNewTabShortcutOnNTP"));
     }
-    base::RecordAction(base::UserMetricsAction("MobileToolbarNewTabShortcut"));
+    if (self.buttonFactory.style == ToolbarStyle::kIncognito) {
+      base::RecordAction(
+          base::UserMetricsAction("MobileToolbarNewIncognitoTabShortcut"));
+    } else {
+      base::RecordAction(
+          base::UserMetricsAction("MobileToolbarNewTabShortcut"));
+    }
     base::RecordAction(base::UserMetricsAction("MobileTabNewTab"));
   } else {
     NOTREACHED();

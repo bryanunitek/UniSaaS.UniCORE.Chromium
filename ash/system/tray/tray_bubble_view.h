@@ -35,7 +35,7 @@ class Widget;
 
 namespace ash {
 
-class SystemShadow;
+class SystemDecoration;
 
 // Specialized bubble view for bubbles associated with a tray icon (e.g. the
 // Ash status area). Mostly this handles custom anchor location and arrow and
@@ -145,12 +145,8 @@ class ASH_EXPORT TrayBubbleView : public views::BubbleDialogDelegateView,
     int corner_radius = kBubbleCornerRadius;
     std::optional<gfx::Insets> insets;
     std::optional<gfx::Insets> margin;
-    // If the view has a large corner radius(e.g. slider bubble), we should
-    // paint the shadow on texture layer since `SystemShadowOnNinePatchLayer`
-    // has geometry limitations. See `SystemShadowOnTextureLayer` for details.
-    bool has_large_corner_radius = false;
-    bool has_shadow = true;
-    SystemShadow::Type shadow_type = kBubbleShadowType;
+    bool has_shadow = false;
+    SystemDecoration::ShadowType shadow_type = kBubbleShadowType;
     // Use half opaque widget instead of fully opaque.
     bool translucent = false;
     // Whether the view is fully transparent (only serves as a container).
@@ -238,7 +234,6 @@ class ASH_EXPORT TrayBubbleView : public views::BubbleDialogDelegateView,
                              const gfx::Rect& bounds) override;
 
   // views::View:
-  void AddedToWidget() override;
   gfx::Size CalculatePreferredSize(
       const views::SizeBounds& available_size) const override;
   void OnMouseEntered(const ui::MouseEvent& event) override;
@@ -337,7 +332,7 @@ class ASH_EXPORT TrayBubbleView : public views::BubbleDialogDelegateView,
   // keyboard.
   std::unique_ptr<EventHandler> reroute_event_handler_;
 
-  std::unique_ptr<SystemShadow> shadow_;
+  std::unique_ptr<SystemDecoration> shadow_;
 
   base::CallbackListSubscription name_changed_subscription_;
 };

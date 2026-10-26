@@ -8,31 +8,38 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/time/clock.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/browser/picture_in_picture/auto_picture_in_picture_safe_browsing_checker_client.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_window_occlusion_helper_base.h"
-#include "chrome/browser/picture_in_picture/auto_pip_setting_helper.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_user_data.h"
 #include "media/base/picture_in_picture_events_info.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "services/media_session/public/mojom/audio_focus.mojom.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 #if !BUILDFLAG(IS_ANDROID)
+#include "services/media_session/public/mojom/audio_focus.mojom.h"
 #include "ui/views/bubble/bubble_border.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+namespace base {
+class TickClock;
+}  // namespace base
 
 namespace permissions {
 class PermissionDecisionAutoBlockerBase;
 }  // namespace permissions
 
+namespace tabs {
+class TabInterface;
+}  // namespace tabs
+
 class AutoPictureInPictureHatsService;
+class AutoPictureInPictureSafeBrowsingCheckerClient;
 class AutoPictureInPictureTabObserverHelperBase;
+class AutoPipSettingHelper;
 class AutoPipSettingOverlayView;
 class HostContentSettingsMap;
 class MediaEngagementService;
@@ -47,23 +54,34 @@ class MediaEngagementService;
 //   - The website is capturing camera or microphone.
 class AutoPictureInPictureTabHelper
     : public content::WebContentsObserver,
-      public content::WebContentsUserData<AutoPictureInPictureTabHelper>,
 // On Android, audio focus is observed via MediaSessionInfoChanged.
 #if !BUILDFLAG(IS_ANDROID)
       public media_session::mojom::AudioFocusObserver,
 #endif  // !BUILDFLAG(IS_ANDROID)
       public media_session::mojom::MediaSessionObserver {
  public:
+  DECLARE_USER_DATA(AutoPictureInPictureTabHelper);
+
   // Delay used by `AutoPictureInPictureSafeBrowsingCheckerClient` to check
   // URL safety. If a check takes longer than `kSafeBrowsingCheckDelay`, the URL
   // will be considered not safe and enter AutoPiP requests will be denied.
   static constexpr base::TimeDelta kSafeBrowsingCheckDelay =
       base::Milliseconds(500);
 
+  AutoPictureInPictureTabHelper(tabs::TabInterface& tab,
+                                content::WebContents* web_contents);
   ~AutoPictureInPictureTabHelper() override;
   AutoPictureInPictureTabHelper(const AutoPictureInPictureTabHelper&) = delete;
   AutoPictureInPictureTabHelper& operator=(
       const AutoPictureInPictureTabHelper&) = delete;
+
+  static AutoPictureInPictureTabHelper* From(tabs::TabInterface* tab);
+  static const AutoPictureInPictureTabHelper* From(
+      const tabs::TabInterface* tab);
+  static AutoPictureInPictureTabHelper* FromWebContents(
+      content::WebContents* web_contents);
+  static const AutoPictureInPictureTabHelper* FromWebContents(
+      const content::WebContents* web_contents);
 
   // True if the current page has registered for auto picture-in-picture since
   // last navigation. Remains true even if the page unregisters for auto
@@ -133,17 +151,7 @@ class AutoPictureInPictureTabHelper
   bool AreAutoPictureInPicturePreconditionsMet() const;
 
   void set_auto_blocker_for_testing(
-      permissions::PermissionDecisionAutoBlockerBase* auto_blocker) {
-    auto_blocker_ = auto_blocker;
-    // If we're clearing the auto blocker, then also drop any setting helper we
-    // have, since it might also know about it.  This is intended during test
-    // cleanup to prevent dangling raw ptrs.
-#if !BUILDFLAG(IS_ANDROID)
-    if (auto_pip_setting_helper_ && !auto_blocker) {
-      auto_pip_setting_helper_.reset();
-    }
-#endif  //! BUILDFLAG(IS_ANDROID)
-  }
+      permissions::PermissionDecisionAutoBlockerBase* auto_blocker);
 
   // Create and return the allow/block overlay view if we should show it for
   // this pip window.  May be called multiple times per pip window instance,
@@ -219,8 +227,6 @@ class AutoPictureInPictureTabHelper
   }
 
  private:
-  explicit AutoPictureInPictureTabHelper(content::WebContents* web_contents);
-  friend class content::WebContentsUserData<AutoPictureInPictureTabHelper>;
   FRIEND_TEST_ALL_PREFIXES(AutoPictureInPictureTabHelperBrowserTest,
                            CannotAutopipViaHttp);
   FRIEND_TEST_ALL_PREFIXES(AutoPictureInPictureTabHelperBrowserTest,
@@ -248,9 +254,16 @@ class AutoPictureInPictureTabHelper
 
   void MaybeExitAutoPictureInPicture();
 
+  void MaybeExitAutoPictureInPictureIfTabIsActiveAndVisible();
+
+  bool IsTabActiveAndVisible() const;
+
   void MaybeStartOrStopObservers();
 
   bool IsEligibleForAutoPictureInPicture(bool should_record_blocking_metrics);
+
+  // Returns true if the primary main frame has an opaque security origin.
+  bool PrimaryMainFrameHasOpaqueOrigin() const;
 
   // Returns true if the tab:
   //   * Has audio focus
@@ -474,9 +487,9 @@ class AutoPictureInPictureTabHelper
   media::PictureInPictureEventsInfo::AutoPipReason auto_pip_trigger_reason_ =
       media::PictureInPictureEventsInfo::AutoPipReason::kUnknown;
 
-  // Set to true if auto picture in picture was blocked due to content setting
-  // or incognito, false otherwise. The value is used to prevent recording
-  // duplicate entries for blocking metrics.
+  // Set to true if auto picture in picture was blocked due to content setting,
+  // incognito or isolated mode, false otherwise. The value is used to prevent
+  // recording duplicate entries for blocking metrics.
   bool blocked_due_to_content_setting_ = false;
 
 #if BUILDFLAG(IS_ANDROID)
@@ -489,12 +502,15 @@ class AutoPictureInPictureTabHelper
   std::optional<bool> is_using_camera_or_microphone_for_testing_;
 #endif  // BUILDFLAG(IS_ANDROID)
 
+  ui::ScopedUnownedUserData<AutoPictureInPictureTabHelper>
+      scoped_unowned_user_data_;
+
   // WeakPtrFactory used only for requesting URL safety. This weak ptr factory
   // is invalidated during calls to `StopAndResetAsyncTasks`.
   base::WeakPtrFactory<AutoPictureInPictureTabHelper> async_tasks_weak_factory_{
       this};
 
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
+  base::WeakPtrFactory<AutoPictureInPictureTabHelper> weak_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_PICTURE_IN_PICTURE_AUTO_PICTURE_IN_PICTURE_TAB_HELPER_H_

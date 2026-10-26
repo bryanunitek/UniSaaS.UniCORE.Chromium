@@ -445,8 +445,10 @@ void AmbientController::OnActiveUserPrefServiceChanged(
                             weak_ptr_factory_.GetWeakPtr()));
   }
 
-  screensaver_images_policy_handler_ =
-      ScreensaverImagesPolicyHandler::Create(pref_service);
+  // delay policy_handle reset.
+  auto policy_handle =
+      std::exchange(screensaver_images_policy_handler_,
+                    ScreensaverImagesPolicyHandler::Create(pref_service));
 
   pref_change_registrar_->Add(
       ambient::prefs::kAmbientModeManagedScreensaverEnabled,
@@ -729,7 +731,7 @@ bool AmbientController::ShouldShowAmbientUi() const {
 }
 
 bool AmbientController::IsShowing() const {
-  const std::vector<RootWindowController*> root_window_controllers =
+  const auto root_window_controllers =
       RootWindowController::root_window_controllers();
 
   const bool has_at_least_one_widget = std::any_of(
@@ -787,7 +789,7 @@ void AmbientController::ReleaseWakeLock() {
 }
 
 void AmbientController::CloseAllWidgets(bool immediately) {
-  for (auto* root_window_controller :
+  for (ash::RootWindowController* root_window_controller :
        RootWindowController::root_window_controllers()) {
     root_window_controller->CloseAmbientWidget(immediately);
   }
@@ -1175,7 +1177,7 @@ void AmbientController::CreateAndShowWidgets() {
   }
   // Hide cursor.
   Shell::Get()->cursor_manager()->HideCursor();
-  for (auto* root_window_controller :
+  for (ash::RootWindowController* root_window_controller :
        RootWindowController::root_window_controllers()) {
     root_window_controller->CreateAmbientWidget();
   }

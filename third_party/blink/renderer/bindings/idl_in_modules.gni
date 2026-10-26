@@ -8,6 +8,10 @@ import("//third_party/blink/renderer/config.gni")
 # Statically-defined (not build-time-generated) IDL files in 'modules' component
 # for production.
 static_idl_files_in_modules = [
+  "//third_party/blink/renderer/modules/peerconnection/dedicated_worker_global_scope_rtc_rtp_sender_encoded_source.idl",
+  "//third_party/blink/renderer/modules/peerconnection/rtc_rtp_sender_encoded_source_event.idl",
+  "//third_party/blink/renderer/modules/peerconnection/rtc_rtp_sender_encoded_source.idl",
+
   "//third_party/blink/renderer/modules/ad_auction/ad_auction_data_config.idl",
   "//third_party/blink/renderer/modules/ad_auction/ad_request_config.idl",
   "//third_party/blink/renderer/modules/ad_auction/ads.idl",
@@ -28,7 +32,6 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/ai/proofreader.idl",
   "//third_party/blink/renderer/modules/ai/rewriter.idl",
   "//third_party/blink/renderer/modules/ai/summarizer.idl",
-  "//third_party/blink/renderer/modules/ai/classifier.idl",
   "//third_party/blink/renderer/modules/ai/writer.idl",
   "//third_party/blink/renderer/modules/animationworklet/animation_worklet_global_scope.idl",
   "//third_party/blink/renderer/modules/animationworklet/css_animation_worklet.idl",
@@ -112,6 +115,7 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/canvas/canvas2d/canvas_pattern.idl",
   "//third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d.idl",
   "//third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d_settings.idl",
+  "//third_party/blink/renderer/modules/canvas/canvas2d/draw_element_image_options.idl",
   "//third_party/blink/renderer/modules/canvas/canvas2d/mesh_2d_index_buffer.idl",
   "//third_party/blink/renderer/modules/canvas/canvas2d/mesh_2d_uv_buffer.idl",
   "//third_party/blink/renderer/modules/canvas/canvas2d/mesh_2d_vertex_buffer.idl",
@@ -216,6 +220,10 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/credentialmanagement/public_key_credential_user_entity.idl",
   "//third_party/blink/renderer/modules/credentialmanagement/registration_response_json.idl",
   "//third_party/blink/renderer/modules/credentialmanagement/remote_desktop_client_override.idl",
+  "//third_party/blink/renderer/modules/cross_origin_storage/cross_origin_storage_get_file_handle_hash.idl",
+  "//third_party/blink/renderer/modules/cross_origin_storage/cross_origin_storage_get_file_handle_options.idl",
+  "//third_party/blink/renderer/modules/cross_origin_storage/cross_origin_storage_manager.idl",
+  "//third_party/blink/renderer/modules/cross_origin_storage/navigator_cross_origin_storage.idl",
   "//third_party/blink/renderer/modules/crypto/crypto.idl",
   "//third_party/blink/renderer/modules/crypto/crypto_key.idl",
   "//third_party/blink/renderer/modules/crypto/encapsulation.idl",
@@ -344,6 +352,7 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/gamepad/gamepad_touch.idl",
   "//third_party/blink/renderer/modules/gamepad/navigator_gamepad.idl",
   "//third_party/blink/renderer/modules/gamepad/window_gamepad.idl",
+  "//third_party/blink/renderer/modules/global_privacy_control/navigator_global_privacy_control.idl",
   "//third_party/blink/renderer/modules/handwriting/handwriting_drawing.idl",
   "//third_party/blink/renderer/modules/handwriting/handwriting_drawing_segment.idl",
   "//third_party/blink/renderer/modules/handwriting/handwriting_hints.idl",
@@ -355,6 +364,7 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/handwriting/handwriting_segment.idl",
   "//third_party/blink/renderer/modules/handwriting/handwriting_stroke.idl",
   "//third_party/blink/renderer/modules/handwriting/navigator_handwriting_recognition_service.idl",
+  "//third_party/blink/renderer/modules/haptics/navigator_haptics.idl",
   "//third_party/blink/renderer/modules/hid/hid.idl",
   "//third_party/blink/renderer/modules/hid/hid_collection_info.idl",
   "//third_party/blink/renderer/modules/hid/hid_connection_event.idl",
@@ -408,7 +418,6 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/locks/lock_manager_snapshot.idl",
   "//third_party/blink/renderer/modules/locks/lock_options.idl",
   "//third_party/blink/renderer/modules/locks/navigator_locks.idl",
-  "//third_party/blink/renderer/modules/locks/shared_storage_worklet_navigator_locks.idl",
   "//third_party/blink/renderer/modules/managed_device/navigator_managed.idl",
   "//third_party/blink/renderer/modules/managed_device/navigator_managed_data.idl",
   "//third_party/blink/renderer/modules/manifest/image_resource.idl",
@@ -467,11 +476,13 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/mediastream/constrain_long_range.idl",
   "//third_party/blink/renderer/modules/mediastream/crop_target.idl",
   "//third_party/blink/renderer/modules/mediastream/double_range.idl",
+  "//third_party/blink/renderer/modules/mediastream/html_media_track_element_media_track.idl",
   "//third_party/blink/renderer/modules/mediastream/html_user_media_element_media_stream.idl",
   "//third_party/blink/renderer/modules/mediastream/input_device_info.idl",
   "//third_party/blink/renderer/modules/mediastream/long_range.idl",
   "//third_party/blink/renderer/modules/mediastream/media_device_info.idl",
   "//third_party/blink/renderer/modules/mediastream/media_devices.idl",
+  "//third_party/blink/renderer/modules/mediastream/media_track_element_constraints.idl",
   "//third_party/blink/renderer/modules/mediastream/media_stream.idl",
   "//third_party/blink/renderer/modules/mediastream/media_stream_constraints.idl",
   "//third_party/blink/renderer/modules/mediastream/media_stream_event.idl",
@@ -549,6 +560,7 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/payments/payment_details_modifier.idl",
   "//third_party/blink/renderer/modules/payments/payment_details_update.idl",
   "//third_party/blink/renderer/modules/payments/payment_entity_logo.idl",
+  "//third_party/blink/renderer/modules/payments/payment_handler_open_window_options.idl",
   "//third_party/blink/renderer/modules/payments/payment_handler_response.idl",
   "//third_party/blink/renderer/modules/payments/payment_item.idl",
   "//third_party/blink/renderer/modules/payments/payment_manager.idl",
@@ -567,6 +579,7 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/payments/payment_validation_errors.idl",
   "//third_party/blink/renderer/modules/payments/secure_payment_confirmation_request.idl",
   "//third_party/blink/renderer/modules/peerconnection/dedicated_worker_global_scope_rtc_transform.idl",
+  "//third_party/blink/renderer/modules/peerconnection/diagnostic_logging/rtc_diagnostic_logging.idl",
   "//third_party/blink/renderer/modules/peerconnection/rtc_answer_options.idl",
   "//third_party/blink/renderer/modules/peerconnection/rtc_certificate.idl",
   "//third_party/blink/renderer/modules/peerconnection/rtc_codec_specifics.idl",
@@ -585,6 +598,7 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/peerconnection/rtc_encoded_audio_frame_options.idl",
   "//third_party/blink/renderer/modules/peerconnection/rtc_encoded_audio_frame_metadata.idl",
   "//third_party/blink/renderer/modules/peerconnection/rtc_encoded_video_frame.idl",
+  "//third_party/blink/renderer/modules/peerconnection/rtc_encoded_video_frame_init.idl",
   "//third_party/blink/renderer/modules/peerconnection/rtc_encoded_video_frame_options.idl",
   "//third_party/blink/renderer/modules/peerconnection/rtc_encoded_frame_metadata.idl",
   "//third_party/blink/renderer/modules/peerconnection/rtc_encoded_video_frame_metadata.idl",
@@ -650,7 +664,6 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/permissions/permission_status.idl",
   "//third_party/blink/renderer/modules/permissions/permissions.idl",
   "//third_party/blink/renderer/modules/permissions/push_permission_descriptor.idl",
-  "//third_party/blink/renderer/modules/permissions/top_level_storage_access_permission_descriptor.idl",
   "//third_party/blink/renderer/modules/permissions/worker_navigator_permissions.idl",
   "//third_party/blink/renderer/modules/picture_in_picture/document_picture_in_picture.idl",
   "//third_party/blink/renderer/modules/picture_in_picture/html_video_element_picture_in_picture.idl",
@@ -758,25 +771,6 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/shapedetection/face_detector_options.idl",
   "//third_party/blink/renderer/modules/shapedetection/landmark.idl",
   "//third_party/blink/renderer/modules/shapedetection/text_detector.idl",
-  "//third_party/blink/renderer/modules/shared_storage/private_aggregation.idl",
-  "//third_party/blink/renderer/modules/shared_storage/private_aggregation_debug_mode_options.idl",
-  "//third_party/blink/renderer/modules/shared_storage/private_aggregation_histogram_contribution.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_private_aggregation_config.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_run_operation_method_options.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_modifier_method.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_modifier_method_options.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_set_method_options.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_set_method.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_append_method.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_delete_method.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_clear_method.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_url_with_metadata.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_worklet.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_worklet_global_scope.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_worklet_navigator.idl",
-  "//third_party/blink/renderer/modules/shared_storage/shared_storage_worklet_options.idl",
-  "//third_party/blink/renderer/modules/shared_storage/window_shared_storage.idl",
   "//third_party/blink/renderer/modules/speech/speech_grammar.idl",
   "//third_party/blink/renderer/modules/speech/speech_grammar_list.idl",
   "//third_party/blink/renderer/modules/speech/speech_recognition.idl",
@@ -839,7 +833,6 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/webaudio/audio_param_descriptor.idl",
   "//third_party/blink/renderer/modules/webaudio/audio_param_map.idl",
   "//third_party/blink/renderer/modules/webaudio/audio_playback_stats.idl",
-  "//third_party/blink/renderer/modules/webaudio/audio_playout_stats.idl",
   "//third_party/blink/renderer/modules/webaudio/audio_processing_event.idl",
   "//third_party/blink/renderer/modules/webaudio/audio_processing_event_init.idl",
   "//third_party/blink/renderer/modules/webaudio/audio_scheduled_source_node.idl",
@@ -1073,12 +1066,12 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/webgpu/gpu_compute_pass_timestamp_writes.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_compute_pipeline.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_compute_pipeline_descriptor.idl",
-  "//third_party/blink/renderer/modules/webgpu/gpu_copy_element_image_destination.idl",
-  "//third_party/blink/renderer/modules/webgpu/gpu_copy_element_image_source.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_depth_stencil_state.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_device.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_device_descriptor.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_device_lost_info.idl",
+  "//third_party/blink/renderer/modules/webgpu/gpu_draw_element_image_destination.idl",
+  "//third_party/blink/renderer/modules/webgpu/gpu_draw_element_image_source.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_error.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_extent_3d_dict.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_external_texture.idl",
@@ -1125,6 +1118,7 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/webgpu/gpu_render_pipeline.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_render_pipeline_descriptor.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_request_adapter_options.idl",
+  "//third_party/blink/renderer/modules/webgpu/gpu_resource_table.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_sampler.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_sampler_binding_layout.idl",
   "//third_party/blink/renderer/modules/webgpu/gpu_sampler_descriptor.idl",
@@ -1173,6 +1167,7 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/websockets/websocket.idl",
   "//third_party/blink/renderer/modules/websockets/websocket_close_info.idl",
   "//third_party/blink/renderer/modules/websockets/websocket_error.idl",
+  "//third_party/blink/renderer/modules/websockets/websocket_init.idl",
   "//third_party/blink/renderer/modules/websockets/websocket_open_info.idl",
   "//third_party/blink/renderer/modules/websockets/websocket_stream.idl",
   "//third_party/blink/renderer/modules/websockets/websocket_stream_options.idl",
@@ -1183,12 +1178,14 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/webtransport/web_transport_close_info.idl",
   "//third_party/blink/renderer/modules/webtransport/web_transport_congestion_control.idl",
   "//third_party/blink/renderer/modules/webtransport/web_transport_datagram_duplex_stream.idl",
+  "//third_party/blink/renderer/modules/webtransport/web_transport_datagrams_writable.idl",
   "//third_party/blink/renderer/modules/webtransport/web_transport_error.idl",
   "//third_party/blink/renderer/modules/webtransport/web_transport_error_init.idl",
   "//third_party/blink/renderer/modules/webtransport/web_transport_hash.idl",
   "//third_party/blink/renderer/modules/webtransport/web_transport_options.idl",
   "//third_party/blink/renderer/modules/webtransport/web_transport_receive_stream.idl",
   "//third_party/blink/renderer/modules/webtransport/web_transport_receive_stream_stats.idl",
+  "//third_party/blink/renderer/modules/webtransport/web_transport_reliability_mode.idl",
   "//third_party/blink/renderer/modules/webtransport/web_transport_send_group.idl",
   "//third_party/blink/renderer/modules/webtransport/web_transport_send_options.idl",
   "//third_party/blink/renderer/modules/webtransport/web_transport_send_stream.idl",
@@ -1362,6 +1359,23 @@ if (!target_os_is_android && !is_ios) {
   static_idl_files_in_modules += [ "//third_party/blink/renderer/modules/awc/additional_windowing_controls.idl" ]
 }
 
+# DecisionModel
+# This uses target_os rather than current_os (which is what is_android is set
+# from) for the case of generating the v8 context snapshot for android. When
+# generating the snapshot for android, blink is compiled with
+# current_os="linux" and target_os="android". Using target_os is necessary as
+# we need to compile in the same way as would happen when current_os="android".
+if (!target_os_is_android) {
+  static_idl_files_in_modules +=
+      [ "//third_party/blink/renderer/modules/ai/decision_model.idl" ]
+}
+
+# Window setShape API for allowlisted Isolated Web Apps (ChromeOS only).
+if (is_chromeos) {
+  static_idl_files_in_modules +=
+      [ "//third_party/blink/renderer/modules/set_shape/set_shape.idl" ]
+}
+
 # Installed App (getInstalledRelatedApps) is excluded on iOS because the
 # webapp infrastructure required for this API is not yet implemented.
 if (!is_ios) {
@@ -1386,7 +1400,6 @@ if (enable_compute_pressure) {
 static_idl_files_in_modules_for_testing = [
   "//third_party/blink/renderer/modules/accessibility/testing/accessibility_properties.idl",
   "//third_party/blink/renderer/modules/accessibility/testing/internals_accessibility.idl",
-  "//third_party/blink/renderer/modules/ad_auction/testing/internals_protected_audience.idl",
   "//third_party/blink/renderer/modules/credentialmanagement/testing/internals_fed_cm.idl",
   "//third_party/blink/renderer/modules/content_extraction/testing/internals_content_extraction.idl",
   "//third_party/blink/renderer/modules/device_posture/testing/internals_device_posture.idl",

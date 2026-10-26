@@ -10,6 +10,7 @@ import org.jni_zero.CalledByNative;
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
@@ -31,23 +32,29 @@ public class InstalledWebappBridge {
      * A POD class to store the combination of a permission setting and the origin the permission is
      * relevant for.
      *
-     * It would make more sense for this to be a subclass of
-     * {@link InstalledWebappPermissionManager} or a top level class. Unfortunately for the JNI
-     * tool to be able to handle passing a class over the JNI boundary the class either needs to be
-     * in this file or imported explicitly. Our presubmits don't like explicitly importing classes
-     * that we don't need to, so it's easier to just let the class live here.
+     * <p>It would make more sense for this to be a subclass of {@link
+     * InstalledWebappPermissionManager} or a top level class. Unfortunately for the JNI tool to be
+     * able to handle passing a class over the JNI boundary the class either needs to be in this
+     * file or imported explicitly. Our presubmits don't like explicitly importing classes that we
+     * don't need to, so it's easier to just let the class live here.
      */
     static class Permission {
         public final Origin origin;
+        // The primary permission setting. For Geolocation, this represents the approximate setting.
         public final @ContentSetting int setting;
+        // The precise permission setting. Only used for Geolocation.
+        public final @ContentSetting int preciseSetting;
 
-        public Permission(Origin origin, @ContentSetting int setting) {
+        public Permission(
+                Origin origin, @ContentSetting int setting, @ContentSetting int preciseSetting) {
             this.origin = origin;
             this.setting = setting;
+            this.preciseSetting = preciseSetting;
         }
     }
 
     public static void notifyPermissionsChange(@ContentSettingsType.EnumType int type) {
+        ThreadUtils.assertOnUiThread();
         if (sNativeInstalledWebappProvider == 0) return;
 
         InstalledWebappBridgeJni.get()
@@ -63,6 +70,9 @@ public class InstalledWebappBridge {
     @CalledByNative
     private static void setInstalledWebappProvider(long provider) {
         sNativeInstalledWebappProvider = provider;
+        if (provider != 0) {
+            InstalledWebappPermissionManager.ensureActivityStateListenerRegistered();
+        }
     }
 
     @CalledByNative
@@ -78,6 +88,11 @@ public class InstalledWebappBridge {
     @CalledByNative
     private static int getSettingFromPermission(Permission permission) {
         return permission.setting;
+    }
+
+    @CalledByNative
+    private static int getPreciseSettingFromPermission(Permission permission) {
+        return permission.preciseSetting;
     }
 
     @CalledByNative

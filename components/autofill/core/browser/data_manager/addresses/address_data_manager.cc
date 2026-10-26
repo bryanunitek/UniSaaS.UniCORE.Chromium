@@ -27,17 +27,18 @@
 #include "components/autofill/core/browser/data_manager/addresses/account_name_email_store.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_cleaner.h"
 #include "components/autofill/core/browser/data_manager/addresses/home_and_work_metadata_store.h"
+#include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/geo/alternative_state_name_map_updater.h"
 #include "components/autofill/core/browser/geo/autofill_country.h"
 #include "components/autofill/core/browser/metrics/autofill_settings_metrics.h"
 #include "components/autofill/core/browser/metrics/profile_token_quality_metrics.h"
 #include "components/autofill/core/browser/metrics/stored_profile_metrics.h"
+#include "components/autofill/core/browser/permissions/autofill_policy_service.h"
 #include "components/autofill/core/browser/strike_databases/addresses/address_on_typing_suggestion_strike_database.h"
 #include "components/autofill/core/browser/strike_databases/addresses/address_suggestion_strike_database.h"
 #include "components/autofill/core/browser/strike_databases/addresses/autofill_profile_migration_strike_database.h"
 #include "components/autofill/core/browser/strike_databases/addresses/autofill_profile_save_strike_database.h"
 #include "components/autofill/core/browser/strike_databases/addresses/autofill_profile_update_strike_database.h"
-#include "components/autofill/core/browser/webdata/addresses/contact_info_precondition_checker.h"
 #include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/common/autofill_clock.h"
@@ -99,7 +100,6 @@ void OrderProfiles(std::vector<const AutofillProfile*>& profiles,
 AddressDataManager::AddressDataManager(
     scoped_refptr<AutofillWebDataService> webdata_service,
     PrefService* pref_service,
-    PrefService* local_state,
     syncer::SyncService* sync_service,
     signin::IdentityManager* identity_manager,
     strike_database::StrikeDatabaseBase* strike_database,
@@ -113,13 +113,6 @@ AddressDataManager::AddressDataManager(
   if (webdata_service_) {
     // The `webdata_service_` is null when the TestPDM is used.
     webdata_service_observer_.Observe(webdata_service_.get());
-  }
-
-  if (sync_service_ && identity_manager_) {
-    contact_info_precondition_checker_ =
-        std::make_unique<ContactInfoPreconditionChecker>(
-            sync_service_, identity_manager_,
-            /*on_precondition_changed=*/base::DoNothing());
   }
 
   SetPrefService(pref_service);
@@ -157,7 +150,6 @@ AddressDataManager::~AddressDataManager() {
 
 void AddressDataManager::Shutdown() {
   // These classes' sync observers need to be unregistered.
-  contact_info_precondition_checker_.reset();
   address_data_cleaner_.reset();
   home_and_work_metadata_.reset();
   account_name_email_store_.reset();
@@ -624,7 +616,12 @@ void AddressDataManager::NotifyObservers() {
 }
 
 bool AddressDataManager::IsAutofillProfileEnabled() const {
-  return prefs::IsAutofillProfileEnabled(pref_service_);
+  if (!pref_service_) {
+    return false;
+  }
+  return !AutofillPolicyService::IsAutofillTypeBlockedByPolicyFromPref(
+      *pref_service_, GURL(),
+      AutofillClient::AutofillPolicyDataCategory::kContactInfo);
 }
 
 bool AddressDataManager::IsSyncFeatureEnabledForAutofill() const {
@@ -632,57 +629,8 @@ bool AddressDataManager::IsSyncFeatureEnabledForAutofill() const {
   // `IsUserSelectableTypeEnabled` once ConsentLevel::kSync and
   // SyncService::IsSyncFeatureEnabled() are deleted from the codebase.
   return sync_service_ != nullptr && sync_service_->IsSyncFeatureEnabled() &&
-         IsAutofillUserSelectableTypeEnabled();
-}
-
-bool AddressDataManager::IsAutofillUserSelectableTypeEnabled() const {
-  return sync_service_ != nullptr &&
          sync_service_->GetUserSettings()->GetSelectedTypes().Has(
              syncer::UserSelectableType::kAutofill);
-}
-
-bool AddressDataManager::IsAutofillSyncToggleAvailable() const {
-  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
-    return false;
-  }
-
-  if (!sync_service_) {
-    return false;
-  }
-
-  // Do not show the toggle if Sync is disabled on in error.
-  if (sync_service_->GetTransportState() ==
-          syncer::SyncService::TransportState::PAUSED ||
-      sync_service_->GetTransportState() ==
-          syncer::SyncService::TransportState::DISABLED) {
-    return false;
-  }
-
-  // Do not show the toggle for syncing users.
-  if (sync_service_->HasSyncConsent()) {
-    return false;
-  }
-
-  if (sync_service_->GetUserSettings()->IsTypeManagedByPolicy(
-          syncer::UserSelectableType::kAutofill)) {
-    return false;
-  }
-
-  // TODO(crbug.com/40897778): Provide the correct
-  // AccountManagedStatusFinderOutcome here. Currently it is not used, so
-  // `kPending` is a safe placeholder.
-  return contact_info_precondition_checker_ &&
-         contact_info_precondition_checker_->GetPreconditionState(
-             syncer::DataTypeController::PreconditionContext(
-                 signin::AccountManagedStatusFinderOutcome::kPending)) ==
-             syncer::DataTypeController::PreconditionState::kPreconditionsMet;
-}
-
-void AddressDataManager::SetAutofillSelectableTypeEnabled(bool enabled) {
-  if (sync_service_ != nullptr) {
-    sync_service_->GetUserSettings()->SetSelectedType(
-        syncer::UserSelectableType::kAutofill, enabled);
-  }
 }
 
 std::optional<CoreAccountInfo> AddressDataManager::GetPrimaryAccountInfo()

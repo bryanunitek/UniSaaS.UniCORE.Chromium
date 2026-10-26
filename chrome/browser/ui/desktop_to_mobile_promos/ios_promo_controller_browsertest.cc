@@ -12,9 +12,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/device_info_sync_service_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/desktop_to_mobile_promos/ios_promo_trigger_service.h"
 #include "chrome/browser/ui/desktop_to_mobile_promos/ios_promo_trigger_service_factory.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -182,7 +182,7 @@ IN_PROC_BROWSER_TEST_F(IOSPromoControllerBrowserTest,
                        {MobilePromoOnDesktopPromoType::kAllPromos}));
 
   // Set the last impression timestamp to now.
-  browser()->profile()->GetPrefs()->SetTime(
+  browser()->GetProfile()->GetPrefs()->SetTime(
       promos_prefs::kDesktopToiOSPasswordPromoLastImpressionTimestamp,
       base::Time::Now());
 
@@ -208,7 +208,7 @@ IN_PROC_BROWSER_TEST_F(IOSPromoControllerBrowserTest,
                        {MobilePromoOnDesktopPromoType::kAllPromos}));
 
   // Set the impression count to the maximum.
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       promos_prefs::kDesktopToiOSPasswordPromoImpressionsCounter, 10);
 
   views::Widget* widget =

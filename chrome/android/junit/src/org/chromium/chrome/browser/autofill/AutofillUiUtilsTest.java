@@ -10,14 +10,11 @@ import android.graphics.Bitmap;
 import android.text.SpannableStringBuilder;
 import android.widget.EditText;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -33,7 +30,6 @@ import java.util.Calendar;
 
 /** Tests the AutofillUiUtils's java code. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class AutofillUiUtilsTest {
     private Context mContext;
     private EditText mMonthInput;
@@ -43,7 +39,7 @@ public class AutofillUiUtilsTest {
 
     @Before
     public void setUp() {
-        mContext = RuntimeEnvironment.application;
+        mContext = RuntimeEnvironment.getApplication();
         mMonthInput = new EditText(mContext);
         mYearInput = new EditText(mContext);
         mThisMonth = Calendar.getInstance().get(Calendar.MONTH) + 1;
@@ -51,7 +47,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void testExpirationDateErrorWithInvalidMonthReturnsExpirationMonthErrorType() {
         mMonthInput.setText("20");
@@ -63,7 +58,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testExpirationDateErrorWithInvalidYearReturnsExpirationYearErrorType() {
         mMonthInput.setText(String.valueOf(mThisMonth));
         mYearInput.setText(String.valueOf(mTwoDigitThisYear - 1));
@@ -74,7 +68,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testExpirationDateErrorWithInvalidFutureYearReturnsExpirationYearErrorType() {
         mMonthInput.setText(String.valueOf(mThisMonth));
         mYearInput.setText(String.valueOf(mTwoDigitThisYear + 21));
@@ -85,7 +78,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testExpirationDateErrorWithCurrentYearAndCurrentMonthReturnsNoneErrorType() {
         mMonthInput.setText(String.valueOf(mThisMonth));
         mYearInput.setText(String.valueOf(mTwoDigitThisYear));
@@ -96,7 +88,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void
             testExpirationDateErrorWithEditingMonthAndNotFocusedYearReturnsNotEnoughInfoErrorType() {
@@ -115,7 +106,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void
             testExpirationDateErrorWithEditingMonthAndFocusedInvalidYearReturnsExpirationYearErrorType() {
@@ -134,7 +124,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void
             testExpirationDateErrorWithValidMonthAndIncompleteYearReturnsNotEnoughInfoErrorType() {
@@ -148,7 +137,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void testExpirationDateErrorWithValidMonthAndValidYearReturnsNoneErrorType() {
         mMonthInput.setText(String.valueOf(mThisMonth));
@@ -160,7 +148,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void testExpirationDateErrorWithMonthBeingEditedAndValidYearReturnsNotEnoughInfo() {
         mMonthInput.setText("");
@@ -173,7 +160,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void testExpirationDateErrorWithMonthSetToZeroAndValidYearReturnsNotEnoughInfo() {
         mMonthInput.setText("0");
@@ -186,7 +172,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void testGetMonthWithNonNumericInputReturnsNegativeOne() {
         mMonthInput.setText("MM");
@@ -197,7 +182,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void testGetMonthWithNegativeNumberInputReturnsNegativeOne() {
         mMonthInput.setText("-20");
@@ -208,7 +192,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void testGetMonthWithZeroAsInputReturnsNegativeOne() {
         mMonthInput.setText("0");
@@ -219,7 +202,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void testGetMonthWithThirteenAsInputReturnsNegativeOne() {
         mMonthInput.setText("13");
@@ -230,7 +212,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void testGetFourDigitYearWithNonNumericInputReturnsNegativeOne() {
         mYearInput.setText("YY");
@@ -241,7 +222,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     @SuppressLint("SetTextI18n")
     public void testGetFourDigitYearWithNegativeNumberInputReturnsNegativeOne() {
         mYearInput.setText("-20");
@@ -252,7 +232,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testGetFourDigitYearForCurrentTwoDigitYearReturnsCurrentFourDigitYear() {
         // Set the edit text value to be the current year in YY format.
         mYearInput.setText(String.valueOf(mTwoDigitThisYear));
@@ -263,7 +242,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testGetFourDigitYearForPreviousYearReturnsNegativeOne() {
         // Set the edit text value to be the current year in YY format.
         mYearInput.setText(String.valueOf(mTwoDigitThisYear - 1));
@@ -274,7 +252,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testGetFourDigitYearForTenYearsFromNowReturnsValidFourDigitYear() {
         // Set the edit text value to be the current year in YY format.
         mYearInput.setText(String.valueOf(mTwoDigitThisYear + 10));
@@ -285,7 +262,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testGetFourDigitYearForElevenYearsFromNowReturnsNegativeOne() {
         // Set the edit text value to be the current year in YY format.
         mYearInput.setText(String.valueOf(mTwoDigitThisYear + 11));
@@ -296,7 +272,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testSpannableStringForLegalMessageLinesAddsNewLineSeparator() {
         SpannableStringBuilder spannableString =
                 AutofillUiUtils.getSpannableStringForLegalMessageLines(
@@ -305,11 +280,10 @@ public class AutofillUiUtilsTest {
                         /* underlineLinks= */ false,
                         /* onClickCallback= */ null);
 
-        Assert.assertEquals("line1\nline2", spannableString.toString());
+        Assert.assertEquals("line1\n\nline2", spannableString.toString());
     }
 
     @Test
-    @SmallTest
     public void testResizeAndAddRoundedCornersAndGreyBorder() {
         Bitmap testImage = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888);
         IconSpecs testSpecs =
@@ -330,7 +304,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testCreditCardIconSpec() {
         Context context = ContextUtils.getApplicationContext();
         IconSpecs specs =
@@ -351,7 +324,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testValuableIconSpec() {
         Context context = ContextUtils.getApplicationContext();
         IconSpecs specs = IconSpecs.create(context, ImageType.VALUABLE_IMAGE, ImageSize.LARGE);
@@ -367,7 +339,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testVirtualCardShowsCapitalOneVirtualCardIcon() {
         Assert.assertTrue(
                 AutofillUiUtils.shouldShowCustomIcon(
@@ -375,7 +346,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testNonVirtualCardDoesNotShowCapitalOneVirtualCardIcon() {
         Assert.assertFalse(
                 AutofillUiUtils.shouldShowCustomIcon(
@@ -384,7 +354,6 @@ public class AutofillUiUtilsTest {
     }
 
     @Test
-    @SmallTest
     public void testBothVirtualAndNonVirtualCardsShowRichCardArt() {
         Assert.assertTrue(
                 AutofillUiUtils.shouldShowCustomIcon(

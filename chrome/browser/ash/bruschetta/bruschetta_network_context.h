@@ -65,6 +65,7 @@ class BruschettaNetworkContext
       int32_t request_id,
       const GURL& url,
       bool first_auth_attempt,
+      bool do_not_prompt_for_login,
       const net::AuthChallengeInfo& auth_info,
       const scoped_refptr<net::HttpResponseHeaders>& head_headers,
       mojo::PendingRemote<network::mojom::AuthChallengeResponder>
@@ -77,6 +78,8 @@ class BruschettaNetworkContext
       OnPlatformLocalNetworkPermissionRequiredCallback callback) override;
   void OnClearSiteData(
       const GURL& url,
+      const std::optional<net::SchemefulSite>& top_level_site,
+      const std::optional<base::UnguessableToken>& nonce,
       const std::string& header_value,
       int32_t load_flags,
       const std::optional<net::CookiePartitionKey>& cookie_partition_key,
@@ -87,15 +90,6 @@ class BruschettaNetworkContext
   void OnDataUseUpdate(int32_t network_traffic_annotation_id_hash,
                        base::ByteSize recv_bytes,
                        base::ByteSize sent_bytes) override;
-  void OnSharedStorageHeaderReceived(
-      const url::Origin& request_origin,
-      std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
-          methods_with_options,
-      const std::optional<std::string>& with_lock,
-      OnSharedStorageHeaderReceivedCallback callback) override;
-  void OnAdAuctionEventRecordHeaderReceived(
-      network::AdAuctionEventRecord event_record,
-      const std::optional<url::Origin>& top_frame_origin) override;
   void Clone(
       mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>
           listener) override;

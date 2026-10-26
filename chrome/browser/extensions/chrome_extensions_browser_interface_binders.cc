@@ -8,15 +8,14 @@
 #include "base/functional/callback_helpers.h"
 #include "build/branding_buildflags.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/omnibox/aim_eligibility/aim_eligibility.mojom.h"  // nogncheck
-#include "chrome/browser/ui/webui/omnibox/aim_eligibility/extension/aim_eligibility_extension_bridge.h"  // nogncheck
 #include "components/guest_view/buildflags/buildflags.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/service_worker_version_base_info.h"
+#include "extensions/browser/extension_mojo_binder_registry.h"
+#include "extensions/browser/extension_mojo_binder_registry_factory.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
@@ -24,8 +23,6 @@
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
-#include "ui/webui/color_change_listener/color_change_handler.h"
-#include "ui/webui/resources/cr_components/color_change_listener/color_change_listener.mojom.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "extensions/browser/api/mime_handler_private/mime_handler_private.h"
@@ -92,7 +89,7 @@ void BindMachineLearningService(
     content::RenderFrameHost* render_frame_host,
     mojo::PendingReceiver<
         chromeos::machine_learning::mojom::MachineLearningService> receiver) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   chromeos::machine_learning::ServiceConnection::GetInstance()
       ->BindMachineLearningService(std::move(receiver));
 }
@@ -132,14 +129,14 @@ void BindRemoteAppsFactory(
   ash::RemoteAppsManager* remote_apps_manager =
       ash::RemoteAppsManagerFactory::GetForProfile(
           Profile::FromBrowserContext(render_frame_host->GetBrowserContext()));
-  DCHECK(remote_apps_manager);
+  CHECK(remote_apps_manager, base::NotFatalUntil::M161);
   remote_apps_manager->BindFactoryInterface(std::move(pending_receiver));
 }
 
 void BindCfmServiceContext(
     content::RenderFrameHost* render_frame_host,
     mojo::PendingReceiver<chromeos::cfm::mojom::CfmServiceContext> receiver) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   chromeos::cfm::ServiceConnection::GetInstance()->BindServiceContext(
       std::move(receiver));
 #if BUILDFLAG(PLATFORM_CFM)
@@ -173,37 +170,13 @@ void BindBeforeUnloadControl(
 }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-void BindColorChangeListenerForExtension(
-    const extensions::ExtensionId& extension_id,
-    content::RenderFrameHost* frame_host,
-    mojo::PendingReceiver<color_change_listener::mojom::PageHandler>
-        pending_receiver) {
-  auto* color_change_handler =
-      ui::ColorChangeHandler::GetOrCreateForCurrentDocument(frame_host);
-  bool mojo_js_enabled = extensions::util::IsMojoJsEnabledForExtension(
-      extension_id, frame_host->GetBrowserContext());
-  color_change_handler->Bind(std::move(pending_receiver),
-                             /*allow_non_webui=*/mojo_js_enabled);
-}
-
-void BindAimEligibilityPageHandlerFactory(
-    content::BrowserContext* browser_context,
-    mojo::PendingReceiver<aim_eligibility::mojom::PageHandlerFactory>
-        receiver) {
-  auto* bridge = AimEligibilityExtensionBridge::Get(
-      Profile::FromBrowserContext(browser_context));
-  if (bridge) {
-    bridge->BindFactoryReceiver(std::move(receiver));
-  }
-}
-
 }  // namespace
 
 void PopulateChromeFrameBindersForExtension(
     mojo::BinderMapWithContext<content::RenderFrameHost*>* binder_map,
     content::RenderFrameHost* render_frame_host,
     const Extension* extension) {
-  DCHECK(extension);
+  CHECK(extension, base::NotFatalUntil::M161);
 
 #if BUILDFLAG(IS_CHROMEOS)
 
@@ -234,7 +207,9 @@ void PopulateChromeFrameBindersForExtension(
 // TODO(b/341493979): Deprecate after CfM LaCrOS migration is completed.
 #if BUILDFLAG(PLATFORM_CFM)
   if (chromeos::cfm::IsChromeboxForMeetingsHashedAppId(
-          extension->hashed_id().value())) {
+          extension->hashed_id().value_sha256()) ||
+      chromeos::cfm::IsChromeboxForMeetingsHashedAppId(
+          extension->hashed_id().value_sha1())) {
     binder_map->Add<ash::cfm::mojom::XuCamera>(
         [](content::RenderFrameHost* frame_host,
            mojo::PendingReceiver<ash::cfm::mojom::XuCamera> receiver) {
@@ -304,7 +279,9 @@ void PopulateChromeFrameBindersForExtension(
 
   // Only allow specific extensions to bind CfmServiceContext
   if (chromeos::cfm::IsChromeboxForMeetingsHashedAppId(
-          extension->hashed_id().value())) {
+          extension->hashed_id().value_sha256()) ||
+      chromeos::cfm::IsChromeboxForMeetingsHashedAppId(
+          extension->hashed_id().value_sha1())) {
     binder_map->Add<chromeos::cfm::mojom::CfmServiceContext>(
         &BindCfmServiceContext);
 
@@ -332,19 +309,9 @@ void PopulateChromeFrameBindersForExtension(
   binder_map->Add<mime_handler::BeforeUnloadControl>(&BindBeforeUnloadControl);
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-  if (extension->id() == extension_misc::kAimEligibilityExtensionId &&
-      extensions::Manifest::IsComponentLocation(extension->location())) {
-    binder_map->Add<aim_eligibility::mojom::PageHandlerFactory>(
-        base::BindRepeating(
-            [](content::RenderFrameHost* frame_host,
-               mojo::PendingReceiver<aim_eligibility::mojom::PageHandlerFactory>
-                   receiver) {
-              BindAimEligibilityPageHandlerFactory(
-                  frame_host->GetBrowserContext(), std::move(receiver));
-            }));
-    binder_map->Add<color_change_listener::mojom::PageHandler>(
-        base::BindRepeating(&BindColorChangeListenerForExtension,
-                            extension->id()));
+  if (auto* registry = ExtensionMojoBinderRegistryFactory::GetForBrowserContext(
+          render_frame_host->GetBrowserContext())) {
+    registry->PopulateFrameBinders(binder_map, render_frame_host, *extension);
   }
 }
 
@@ -353,6 +320,8 @@ void PopulateChromeServiceWorkerBindersForExtension(
         binder_map,
     content::BrowserContext* browser_context,
     const Extension* extension) {
+  CHECK(extension, base::NotFatalUntil::M161);
+
 #if BUILDFLAG(IS_CHROMEOS)
   if (extension->id() == extension_misc::kGoogleSpeechSynthesisExtensionId) {
     binder_map->Add<chromeos::tts::mojom::GoogleTtsStream>(base::BindRepeating(
@@ -383,18 +352,10 @@ void PopulateChromeServiceWorkerBindersForExtension(
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-  if (extension->id() == extension_misc::kAimEligibilityExtensionId &&
-      extensions::Manifest::IsComponentLocation(extension->location())) {
-    binder_map->Add<aim_eligibility::mojom::PageHandlerFactory>(
-        base::BindRepeating(
-            [](content::BrowserContext* context,
-               const content::ServiceWorkerVersionBaseInfo&,
-               mojo::PendingReceiver<aim_eligibility::mojom::PageHandlerFactory>
-                   receiver) {
-              BindAimEligibilityPageHandlerFactory(context,
-                                                   std::move(receiver));
-            },
-            browser_context));
+  if (auto* registry = ExtensionMojoBinderRegistryFactory::GetForBrowserContext(
+          browser_context)) {
+    registry->PopulateServiceWorkerBinders(binder_map, browser_context,
+                                           *extension);
   }
 }
 

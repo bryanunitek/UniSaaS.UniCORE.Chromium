@@ -7,41 +7,36 @@
 #include <memory>
 #include <optional>
 
-#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/string_util.h"
 #include "base/strings/to_string.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/regional_capabilities/regional_capabilities_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_turn_sync_on_delegate.h"
 #include "chrome/browser/ui/webui/intro/intro_ui.h"
 #include "chrome/browser/ui/webui/signin/history_sync_optin/history_sync_optin_ui.h"
 #include "chrome/browser/ui/webui/signin/history_sync_optin_helper.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
-#include "chrome/browser/ui/webui/signin/managed_user_profile_notice_ui.h"
 #include "chrome/browser/ui/webui/signin/signin_url_utils.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "chrome/browser/ui/webui/signin/sync_confirmation_ui.h"
 #include "chrome/browser/ui/webui/signin/turn_sync_on_helper.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
-#include "components/regional_capabilities/regional_capabilities_service.h"
 #include "components/signin/public/base/signin_metrics.h"
-#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/signin/public/identity_manager/tribool.h"
 #include "components/sync/base/features.h"
 #include "content/public/browser/context_menu_params.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "net/base/url_util.h"
 #include "ui/base/window_open_disposition.h"
@@ -59,7 +54,7 @@ bool ShouldOpenUrlAfterBrowserCreation(const GURL& url) {
 // not replace existing tabs.
 void OpenNewTabInBrowser(const GURL& url, BrowserWindowInterface* browser) {
   if (browser) {
-    browser->OpenGURL(url, WindowOpenDisposition::SINGLETON_TAB);
+    browser->OpenGURL(url, WindowOpenDisposition::kSingletonTab);
   }
 }
 
@@ -98,8 +93,8 @@ ProfilePickerPostSignInAdapter::ProfilePickerPostSignInAdapter(
       contents_(std::move(contents)),
       signin_access_point_(signin_access_point),
       profile_color_(profile_color) {
-  DCHECK(profile_);
-  DCHECK(contents_);
+  CHECK(profile_, base::NotFatalUntil::M162);
+  CHECK(contents_, base::NotFatalUntil::M162);
   // TODO(crbug.com/40216113): Consider renaming the enum entry -- this does not
   // have to be profile creation flow, it can be profile onboarding.
   profile_keep_alive_ = std::make_unique<ScopedProfileKeepAlive>(
@@ -117,7 +112,7 @@ ProfilePickerPostSignInAdapter::~ProfilePickerPostSignInAdapter() {
 
 void ProfilePickerPostSignInAdapter::Init(
     StepSwitchFinishedCallback step_switch_callback) {
-  DCHECK(!IsInitialized());
+  CHECK(!IsInitialized(), base::NotFatalUntil::M162);
   CHECK(!step_switch_callback->is_null());
   CHECK(step_switch_callback_->is_null());
   step_switch_callback_ = std::move(step_switch_callback);
@@ -129,7 +124,7 @@ void ProfilePickerPostSignInAdapter::Init(
       identity_manager->FindExtendedAccountInfo(account_info_);
   DCHECK(!account_info.IsEmpty())
       << "A profile with a valid account must be passed in.";
-  email_ = account_info.email;
+  email_ = account_info.GetEmail();
 
   on_post_signin_in_finished_callback_ =
       HistorySyncOptinHelper::FlowCompletedCallback(
@@ -151,7 +146,7 @@ void ProfilePickerPostSignInAdapter::Init(
   new TurnSyncOnHelper(
       profile_, signin_access_point_,
       signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO,
-      account_info.account_id,
+      account_info.GetAccountId(),
       TurnSyncOnHelper::SigninAbortedMode::KEEP_ACCOUNT,
       std::make_unique<ProfilePickerTurnSyncOnDelegate>(
           weak_ptr_factory_.GetWeakPtr(), profile_),
@@ -228,12 +223,15 @@ void ProfilePickerPostSignInAdapter::FinishAndOpenBrowser(
 }
 
 void ProfilePickerPostSignInAdapter::SwitchToSyncConfirmation() {
-  DCHECK(IsInitialized());
+  CHECK(IsInitialized(), base::NotFatalUntil::M162);
   if (!step_switch_callback_->is_null()) {
     std::move(step_switch_callback_.value()).Run(true);
   }
   host_->ShowScreen(
-      contents(), GetSyncConfirmationURL(/*loading=*/false),
+      contents(),
+      AppendSyncConfirmationQueryParams(
+          GURL(chrome::kChromeUISyncConfirmationURL),
+          SyncConfirmationStyle::kWindow, /*is_sync_promo=*/true),
       /*navigation_finished_closure=*/
       base::BindOnce(
           &ProfilePickerPostSignInAdapter::SwitchToSyncConfirmationFinished,
@@ -245,32 +243,44 @@ void ProfilePickerPostSignInAdapter::SwitchToSyncConfirmation() {
 void ProfilePickerPostSignInAdapter::SwitchToManagedUserProfileNotice(
     ManagedUserProfileNoticeUI::ScreenType type,
     signin::SigninChoiceCallback process_user_choice_callback) {
-  DCHECK(IsInitialized());
+  CHECK(IsInitialized(), base::NotFatalUntil::M162);
   if (!step_switch_callback_->is_null()) {
     std::move(step_switch_callback_.value()).Run(true);
   }
 
-  const bool is_in_search_engine_choice_region =
-      CHECK_DEREF(regional_capabilities::RegionalCapabilitiesServiceFactory::
-                      GetForProfile(profile_))
-          .IsInSearchEngineChoiceScreenRegion();
-  const bool use_refreshed_ui =
-      switches::IsFirstRunDesktopRefreshEnabled(
-          is_in_search_engine_choice_region);
+  ManagedUserProfileNoticeParams::CreateForWebContents(
+      contents(), /*browser=*/nullptr, type,
+      std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
+          GetAccountInfo(),
+          /*is_oidc_account=*/type ==
+              ManagedUserProfileNoticeUI::ScreenType::kEnterpriseOIDC,
+          /*user_already_signed_in=*/false,
+          /*profile_creation_required_by_policy=*/false,
+          /*show_link_data_option=*/false,
+          /*process_user_choice_callback=*/
+          std::move(process_user_choice_callback),
+          /*done_callback=*/base::OnceClosure()));
 
-  GURL managed_user_profile_notice_url =
-      use_refreshed_ui
-          ? ManagedUserProfileNoticeUI::GetURLForType(type)
-          : GURL(chrome::kChromeUIManagedUserProfileNoticeUrl);
+  host_->ShowScreen(
+      contents(), ManagedUserProfileNoticeUI::GetUrl(type, *profile_),
+      /*navigation_finished_closure=*/
+      base::BindOnce(
+          [](content::WebContents* web_contents) {
+            CHECK(
+                !ManagedUserProfileNoticeParams::FromWebContents(web_contents))
+                << "ManagedUserProfileNoticeParams were not consumed.";
+          },
+          contents()));
+}
 
-  host_->ShowScreen(contents(), managed_user_profile_notice_url,
-                    /*navigation_finished_closure=*/
-                    base::BindOnce(&ProfilePickerPostSignInAdapter::
-                                       SwitchToManagedUserProfileNoticeFinished,
-                                   // Unretained is enough as the callback is
-                                   // called by the owner of this instance.
-                                   base::Unretained(this), type,
-                                   std::move(process_user_choice_callback)));
+AccountInfo ProfilePickerPostSignInAdapter::GetAccountInfo() const {
+  AccountInfo extended_info =
+      IdentityManagerFactory::GetForProfile(profile_)->FindExtendedAccountInfo(
+          account_info_);
+  if (!extended_info.IsEmpty()) {
+    return extended_info;
+  }
+  return AccountInfo::Builder(account_info_).Build();
 }
 
 void ProfilePickerPostSignInAdapter::ShowSignInCelebration(
@@ -294,7 +304,7 @@ void ProfilePickerPostSignInAdapter::SwitchToSignInCelebrationFinished(
 
 void ProfilePickerPostSignInAdapter::SwitchToProfileSwitch(
     const base::FilePath& profile_path) {
-  DCHECK(IsInitialized());
+  CHECK(IsInitialized(), base::NotFatalUntil::M162);
   if (!step_switch_callback_->is_null()) {
     std::move(step_switch_callback_.value()).Run(true);
   }
@@ -333,11 +343,9 @@ std::optional<SkColor> ProfilePickerPostSignInAdapter::GetProfileColor() const {
   return profile_color_;
 }
 
-GURL ProfilePickerPostSignInAdapter::GetSyncConfirmationURL(bool loading) {
-  GURL url = GURL(chrome::kChromeUISyncConfirmationURL);
-  return AppendSyncConfirmationQueryParams(
-      loading ? url.Resolve(chrome::kChromeUISyncConfirmationLoadingPath) : url,
-      SyncConfirmationStyle::kWindow, /*is_sync_promo=*/true);
+GURL ProfilePickerPostSignInAdapter::GetLoadingScreenURL() const {
+  return GURL(chrome::kChromeUIHistorySyncOptinURL)
+      .Resolve(chrome::kChromeUIHistorySyncOptinLoadingPath);
 }
 
 std::unique_ptr<content::WebContents>
@@ -359,7 +367,7 @@ bool ProfilePickerPostSignInAdapter::HandleKeyboardEvent(
 }
 
 void ProfilePickerPostSignInAdapter::SwitchToSyncConfirmationFinished() {
-  DCHECK(IsInitialized());
+  CHECK(IsInitialized(), base::NotFatalUntil::M162);
   // Initialize the WebUI page once we know it's committed.
   SyncConfirmationUI* sync_confirmation_ui =
       static_cast<SyncConfirmationUI*>(contents()->GetWebUI()->GetController());
@@ -379,34 +387,6 @@ void ProfilePickerPostSignInAdapter::SwitchToHistorySyncOptinFinished() {
       // no effect when `browser` is set to null.
       /*should_close_modal_dialog=*/std::nullopt,
       std::move(on_post_signin_in_finished_callback_));
-}
-
-void ProfilePickerPostSignInAdapter::SwitchToManagedUserProfileNoticeFinished(
-    ManagedUserProfileNoticeUI::ScreenType type,
-    signin::SigninChoiceCallback process_user_choice_callback) {
-  DCHECK(IsInitialized());
-  // Initialize the WebUI page once we know it's committed.
-  ManagedUserProfileNoticeUI* managed_user_profile_notice_ui =
-      contents()
-          ->GetWebUI()
-          ->GetController()
-          ->GetAs<ManagedUserProfileNoticeUI>();
-
-  // Here `done_callback` does nothing because lifecycle of
-  // `managed_user_profile_notice_ui` is controlled by this class.
-  managed_user_profile_notice_ui->Initialize(
-      /*browser=*/nullptr, type,
-      std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
-          IdentityManagerFactory::GetForProfile(profile_)
-              ->FindExtendedAccountInfoByEmailAddress(email_),
-          /*is_oidc_account=*/type ==
-              ManagedUserProfileNoticeUI::ScreenType::kEnterpriseOIDC,
-          /*user_already_signed_in=*/false,
-          /*profile_creation_required_by_policy=*/false,
-          /*show_link_data_option=*/false,
-          /*process_user_choice_callback=*/
-          std::move(process_user_choice_callback),
-          /*done_callback=*/base::OnceClosure()));
 }
 
 bool ProfilePickerPostSignInAdapter::IsInitialized() const {

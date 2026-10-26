@@ -41,7 +41,9 @@
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -182,7 +184,7 @@ class AnnotationAgentImplTest : public SimTest {
         GetDocument().View()->GetPage()->GetVisualViewport();
     gfx::Rect rect_in_visual_viewport = viewport.RootFrameToViewport(
         node.GetLayoutObject()->AbsoluteBoundingBoxRect(
-            kTraverseDocumentBoundaries));
+            {MapCoordinatesMode::kTraverseDocumentBoundaries}));
     gfx::Rect viewport_rect(viewport.Size());
 
     bool is_contained = viewport_rect.Contains(rect_in_visual_viewport);
@@ -201,7 +203,7 @@ class AnnotationAgentImplTest : public SimTest {
         GetDocument().View()->GetPage()->GetVisualViewport();
     gfx::Rect rect_in_visual_viewport = viewport.RootFrameToViewport(
         node.GetLayoutObject()->AbsoluteBoundingBoxRect(
-            kTraverseDocumentBoundaries));
+            {MapCoordinatesMode::kTraverseDocumentBoundaries}));
     gfx::Rect viewport_rect(viewport.Size());
 
     bool is_contained = viewport_rect.Contains(rect_in_visual_viewport);
@@ -422,7 +424,7 @@ TEST_F(AnnotationAgentImplTest, SuccessfulAttachCreatesMarker) {
   )HTML");
   Compositor().BeginFrame();
 
-  Node* p = GetDocument().getElementById(AtomicString("text"))->firstChild();
+  Node* p = GetElementById("text")->firstChild();
 
   RangeInFlatTree* range_foo = CreateRangeToExpectedText(p, 5, 8, "FOO");
   auto* agent_foo = CreateAgentForRange(range_foo);
@@ -459,7 +461,7 @@ TEST_F(AnnotationAgentImplTest, RemovedAgentRemovesMarkers) {
   )HTML");
   Compositor().BeginFrame();
 
-  Node* p = GetDocument().getElementById(AtomicString("text"))->firstChild();
+  Node* p = GetElementById("text")->firstChild();
 
   RangeInFlatTree* range_foo = CreateRangeToExpectedText(p, 5, 8, "FOO");
   auto* agent_foo = CreateAgentForRange(range_foo);
@@ -500,7 +502,7 @@ TEST_F(AnnotationAgentImplTest, AgentFailsAttachment) {
   auto* agent = CreateAgentFailsAttach();
   ASSERT_TRUE(agent);
 
-  Node* p = GetDocument().getElementById(AtomicString("text"))->firstChild();
+  Node* p = GetElementById("text")->firstChild();
   RangeInFlatTree* range =
       CreateRangeToExpectedText(p, 0, 17, "TEST FOO PAGE BAR");
   ASSERT_EQ(NumMarkersInRange(*range), 0ul);
@@ -551,8 +553,7 @@ TEST_F(AnnotationAgentImplTest, AttachmentToOverlappingMarkerReportsToHost) {
   )HTML");
   Compositor().BeginFrame();
 
-  Node* text_node =
-      GetDocument().getElementById(AtomicString("text"))->firstChild();
+  Node* text_node = GetElementById("text")->firstChild();
 
   auto* agent = CreateAgentFailsAttach();
   ASSERT_TRUE(agent);
@@ -634,10 +635,8 @@ TEST_F(AnnotationAgentImplTest, AttachmentReportsRectsToHost) {
               ScrollOffset(0, 2700));
   }
 
-  Node* node_foo =
-      GetDocument().getElementById(AtomicString("foo"))->firstChild();
-  Node* node_bar =
-      GetDocument().getElementById(AtomicString("bar"))->firstChild();
+  Node* node_foo = GetElementById("foo")->firstChild();
+  Node* node_bar = GetElementById("bar")->firstChild();
 
   RangeInFlatTree* range_foo = CreateRangeToExpectedText(node_foo, 0, 3, "FOO");
   auto* agent_foo = CreateAgentForRange(range_foo);
@@ -696,7 +695,7 @@ TEST_F(AnnotationAgentImplTest, AgentScrollIntoView) {
   LoadAhem();
   Compositor().BeginFrame();
 
-  Element* element_foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* element_foo = GetElementById("foo");
 
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_foo->firstChild(), 0, 3, "FOO");
@@ -753,7 +752,7 @@ TEST_F(AnnotationAgentImplTest, AgentScrollIntoViewDoesNotApplyFocus) {
   LoadAhem();
   Compositor().BeginFrame();
 
-  Element* element_foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* element_foo = GetElementById("foo");
 
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_foo->firstChild(), 0, 3, "FOO");
@@ -818,7 +817,7 @@ TEST_F(AnnotationAgentImplTest, AgentScrollIntoViewAppliesFocusAndFocusable) {
   LoadAhem();
   Compositor().BeginFrame();
 
-  Element* element_foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* element_foo = GetElementById("foo");
 
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_foo->firstChild(), 0, 3, "FOO");
@@ -885,7 +884,7 @@ TEST_F(AnnotationAgentImplTest,
   LoadAhem();
   Compositor().BeginFrame();
 
-  Element* element_foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* element_foo = GetElementById("foo");
 
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_foo->firstChild(), 0, 3, "FOO");
@@ -956,7 +955,7 @@ TEST_F(AnnotationAgentImplTest, AgentScrollIntoViewZoomed) {
   // moves the visual viewport if the user pinch-zoomed in.
   WebView().SetPageScaleFactor(2);
 
-  Element* element_foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* element_foo = GetElementById("foo");
 
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_foo->firstChild(), 0, 3, "FOO");
@@ -1000,7 +999,7 @@ TEST_F(AnnotationAgentImplTest, ScrollIntoViewWithDirtyLayout) {
 
   Compositor().BeginFrame();
 
-  Element* element_text = GetDocument().getElementById(AtomicString("text"));
+  Element* element_text = GetElementById("text");
 
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_text->firstChild(), 0, 3, "FOO");
@@ -1049,7 +1048,7 @@ TEST_F(AnnotationAgentImplTest, ScrollIntoViewCollapsedRange) {
 
   Compositor().BeginFrame();
 
-  Element* element_text = GetDocument().getElementById(AtomicString("text"));
+  Element* element_text = GetElementById("text");
 
   const auto& range_start =
       Position(element_text->firstChild(), PositionAnchorType::kBeforeAnchor);
@@ -1101,8 +1100,7 @@ TEST_F(AnnotationAgentImplTest, OpenDetailsElement) {
 
   Compositor().BeginFrame();
 
-  Element* element_details =
-      GetDocument().getElementById(AtomicString("details"));
+  Element* element_details = GetElementById("details");
   ASSERT_FALSE(element_details->FastHasAttribute(html_names::kOpenAttr));
 
   auto* agent = CreateTextFinderAgent("foobar");
@@ -1160,7 +1158,7 @@ TEST_F(AnnotationAgentImplTest, OpenHiddenUntilFoundElement) {
 
   Compositor().BeginFrame();
 
-  Element* element = GetDocument().getElementById(AtomicString("section"));
+  Element* element = GetElementById("section");
 
   auto* agent = CreateTextFinderAgent("foobar");
 
@@ -1211,8 +1209,7 @@ TEST_F(AnnotationAgentImplTest, ActivatesContentVisibilityAuto) {
 
   EXPECT_TRUE(agent->IsAttached());
 
-  Node* node =
-      GetDocument().getElementById(AtomicString("section"))->firstChild();
+  Node* node = GetElementById("section")->firstChild();
   RangeInFlatTree* range = CreateRangeToExpectedText(node, 0, 6, "foobar");
   EXPECT_FALSE(DisplayLockUtilities::NeedsActivationForFindInPage(
       range->ToEphemeralRange()));
@@ -1297,7 +1294,7 @@ TEST_F(AnnotationAgentImplTest, TextFinderDoesntMutateDom) {
   )HTML");
   Compositor().BeginFrame();
 
-  Element* p = GetDocument().getElementById(AtomicString("text"));
+  Element* p = GetElementById("text");
   ASSERT_TRUE(p->FastHasAttribute(html_names::kHiddenAttr));
 
   auto* agent_foo =
@@ -1334,7 +1331,7 @@ TEST_F(AnnotationAgentImplTest, TextFinderDoesntAddMarkers) {
   RangeInFlatTree* doc_range = CreateRangeForWholeDocument(GetDocument());
   ASSERT_EQ(NumMarkersInRange(*doc_range), 0ul);
 
-  Node* p = GetDocument().getElementById(AtomicString("text"))->firstChild();
+  Node* p = GetElementById("text")->firstChild();
   RangeInFlatTree* range_foo = CreateRangeToExpectedText(p, 5, 8, "FOO");
   auto* agent_foo =
       CreateAgentForRange(range_foo, mojom::blink::AnnotationType::kTextFinder);
@@ -1367,8 +1364,8 @@ TEST_F(AnnotationAgentImplTest, TextFinderDoesntFindEmptyOverflowHidden) {
   )HTML");
   Compositor().BeginFrame();
 
-  Node* p = GetDocument().getElementById(AtomicString("text"))->firstChild();
-  Element* container = GetDocument().getElementById(AtomicString("container"));
+  Node* p = GetElementById("text")->firstChild();
+  Element* container = GetElementById("container");
   RangeInFlatTree* range_foo = CreateRangeToExpectedText(p, 0, 3, "FOO");
 
   // Empty container with `overflow: visible hidden` (y being hidden makes x
@@ -1505,8 +1502,8 @@ TEST_F(AnnotationAgentImplTest, TextFinderDoesntFindOpacityZero) {
   )HTML");
   Compositor().BeginFrame();
 
-  Node* p = GetDocument().getElementById(AtomicString("text"))->firstChild();
-  Element* container = GetDocument().getElementById(AtomicString("container"));
+  Node* p = GetElementById("text")->firstChild();
+  Element* container = GetElementById("container");
   RangeInFlatTree* range_foo = CreateRangeToExpectedText(p, 0, 3, "FOO");
 
   {
@@ -1565,8 +1562,8 @@ TEST_F(AnnotationAgentImplTest, TextFinderDoesntFindOffscreenFixed) {
   LoadAhem();
   Compositor().BeginFrame();
 
-  Element* p = GetDocument().getElementById(AtomicString("text"));
-  Element* container = GetDocument().getElementById(AtomicString("container"));
+  Element* p = GetElementById("text");
+  Element* container = GetElementById("container");
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(p->firstChild(), 0, 3, "FOO");
 
@@ -1668,7 +1665,7 @@ TEST_F(AnnotationAgentImplTest, GlicShouldAnimateScroll) {
   LoadAhem();
   Compositor().BeginFrame();
 
-  Element* element_foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* element_foo = GetElementById("foo");
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_foo->firstChild(), 0, 3, "FOO");
   auto* agent_foo =
@@ -1732,7 +1729,7 @@ TEST_F(AnnotationAgentImplTest, GlicShouldNotAnimateLongScroll) {
   LoadAhem();
   Compositor().BeginFrame();
 
-  Element* element_foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* element_foo = GetElementById("foo");
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_foo->firstChild(), 0, 3, "FOO");
   auto* agent_foo =
@@ -1791,7 +1788,7 @@ TEST_F(AnnotationAgentImplTest, GlicScrollConsidersDeviceScaleFactor) {
   LoadAhem();
   Compositor().BeginFrame();
 
-  Element* element_foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* element_foo = GetElementById("foo");
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_foo->firstChild(), 0, 3, "FOO");
   auto* agent_foo =
@@ -1865,7 +1862,7 @@ TEST_F(AnnotationAgentImplTest, GlicScrollIgnoresBrowserZoom) {
   LoadAhem();
   Compositor().BeginFrame();
 
-  Element* element_foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* element_foo = GetElementById("foo");
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_foo->firstChild(), 0, 3, "FOO");
   auto* agent_foo =
@@ -1973,8 +1970,7 @@ TEST_F(AnnotationAgentImplTest, GlicHighlight_SmokeTest) {
 
   Compositor().BeginFrame();
 
-  Node* text_node =
-      GetDocument().getElementById(AtomicString("text"))->firstChild();
+  Node* text_node = GetElementById("text")->firstChild();
 
   RangeInFlatTree* range = CreateRangeToExpectedText(text_node, 0, 4, "TEST");
   auto* agent = CreateAgentForRange(range, mojom::blink::AnnotationType::kGlic);
@@ -2031,8 +2027,7 @@ TEST_F(AnnotationAgentImplTest, GlicHighlight_StopOnAgentRemoval) {
 
   Compositor().BeginFrame();
 
-  Node* text_node =
-      GetDocument().getElementById(AtomicString("text"))->firstChild();
+  Node* text_node = GetElementById("text")->firstChild();
 
   RangeInFlatTree* range = CreateRangeToExpectedText(text_node, 0, 4, "TEST");
   auto* agent = CreateAgentForRange(range, mojom::blink::AnnotationType::kGlic);
@@ -2085,9 +2080,9 @@ TEST_F(AnnotationAgentImplTest, GlicHighlight_HighlightAfterTextRemoval) {
   test_host.FlushForTesting();
   ASSERT_TRUE(test_host.did_finish_attachment_rect_);
 
-  GetDocument().getElementById(AtomicString{"span"})->remove();
+  GetElementById("span")->remove();
   Compositor().BeginFrame();
-  Element* text_element = GetDocument().getElementById(AtomicString{"text"});
+  Element* text_element = GetElementById("text");
   EXPECT_EQ(GetDocument()
                 .Markers()
                 .MarkersFor(*To<Text>(text_element->firstChild()))
@@ -2118,7 +2113,7 @@ TEST_F(AnnotationAgentImplTest, GlicHighlight_MultipleAgentRemoval) {
 
   Compositor().BeginFrame();
 
-  Element* element_text = GetDocument().getElementById(AtomicString("text"));
+  Element* element_text = GetElementById("text");
 
   RangeInFlatTree* range =
       CreateRangeToExpectedText(element_text->firstChild(), 0, 4, "TEST");
@@ -2168,7 +2163,7 @@ TEST_F(AnnotationAgentImplTest, GlicHighlight_ResetStateOnNewTextNodes) {
 
   Compositor().BeginFrame();
 
-  Element* text1 = GetDocument().getElementById(AtomicString("text1"));
+  Element* text1 = GetElementById("text1");
   RangeInFlatTree* range1 =
       CreateRangeToExpectedText(text1->firstChild(), 0, 4, "TEST");
   auto* agent1 =
@@ -2201,7 +2196,7 @@ TEST_F(AnnotationAgentImplTest, GlicHighlight_ResetStateOnNewTextNodes) {
   // Add a second agent while the highlight from the first one is still
   // animating (removing the agent doesn't stop the animation) its marker
   // highlight. Ensure the new animation uses a fresh state.
-  Element* text2 = GetDocument().getElementById(AtomicString("text2"));
+  Element* text2 = GetElementById("text2");
   RangeInFlatTree* range2 =
       CreateRangeToExpectedText(text2->firstChild(), 0, 4, "PAGE");
   auto* agent2 =
@@ -2224,6 +2219,7 @@ TEST_F(AnnotationAgentImplTest, GlicHighlight_ResetStateOnNewTextNodes) {
 
 TEST_F(AnnotationAgentImplTest,
        GlicHighlight_HighLightStartsAfterScrollFinishes) {
+  ScopedEventTimingMatchingHTMLForTest feature_enabler(true);
   SimRequest request("https://example.com/test.html", "text/html");
   LoadURL("https://example.com/test.html");
   request.Complete(R"HTML(
@@ -2242,7 +2238,7 @@ TEST_F(AnnotationAgentImplTest,
   )HTML");
   Compositor().BeginFrame();
 
-  Element* element_foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* element_foo = GetElementById("foo");
 
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_foo->firstChild(), 0, 3, "FOO");
@@ -2305,7 +2301,7 @@ TEST_F(AnnotationAgentImplTest, GlicHighlight_InstantStartForInstantScroll) {
   )HTML");
   Compositor().BeginFrame();
 
-  Element* element_foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* element_foo = GetElementById("foo");
 
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_foo->firstChild(), 0, 3, "FOO");
@@ -2344,6 +2340,7 @@ TEST_F(AnnotationAgentImplTest, GlicHighlight_InstantStartForInstantScroll) {
 // Test that the highlight doesn't restart after subsequent scrollEnd events.
 TEST_F(AnnotationAgentImplTest,
        GlicHighlight_AnimationDoesNotRestartAfterSubsequentScroll) {
+  ScopedEventTimingMatchingHTMLForTest feature_enabler(true);
   SimRequest request("https://example.com/test.html", "text/html");
   LoadURL("https://example.com/test.html");
   request.Complete(R"HTML(
@@ -2367,7 +2364,7 @@ TEST_F(AnnotationAgentImplTest,
   )HTML");
   Compositor().BeginFrame();
 
-  Element* element_foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* element_foo = GetElementById("foo");
 
   RangeInFlatTree* range_foo =
       CreateRangeToExpectedText(element_foo->firstChild(), 0, 3, "FOO");
@@ -2394,6 +2391,7 @@ TEST_F(AnnotationAgentImplTest,
   // Max smooth scrolling is capped at 1500ms.
   task_environment().FastForwardBy(base::Seconds(2));
   Compositor().BeginFrame(1.0);
+  Compositor().BeginFrame();
   EXPECT_TRUE(ExpectInViewport(*element_foo));
   // Since the text node is in the viewport, we must have queued the first
   // RequestAnimationFrame.
@@ -2406,7 +2404,7 @@ TEST_F(AnnotationAgentImplTest,
   EXPECT_EQ(GetAlphaForGlicMarkerAt(0u), 1.f);
 
   // Scroll BAR into the viewport.
-  Element* element_bar = GetDocument().getElementById(AtomicString("bar"));
+  Element* element_bar = GetElementById("bar");
   EXPECT_TRUE(ExpectNotInViewport(*element_bar));
   ScrollIntoViewOptions* options = ScrollIntoViewOptions::Create();
   options->setBlock(V8ScrollLogicalPosition::Enum::kStart);
@@ -2468,21 +2466,21 @@ TEST_P(AnnotationAgentImplTestWithScrollingBehavior,
   GlicScrollBehaviorConfig config = GetParam();
   SimRequest request("https://example.com/test.html", "text/html");
   LoadURL("https://example.com/test.html");
-  request.Complete(String::Format(R"HTML(
+  request.Complete(Format(R"HTML(
       <!DOCTYPE html>
       <style>
-        #foo {
+        #foo {{
           position: absolute;
-          top: %dpx;
-        }
-        body {
-          height: %dpx;
+          top: {}px;
+        }}
+        body {{
+          height: {}px;
           margin: 0;
-        }
+        }}
       </style>
       <p id='foo'>FOO<p>
-    )HTML", config.element_top, config.body_height)
-  );
+    )HTML",
+                          config.element_top, config.body_height));
 
   Compositor().BeginFrame();
 
@@ -2491,7 +2489,7 @@ TEST_P(AnnotationAgentImplTestWithScrollingBehavior,
       GetDocument().GetPage()->GetChromeClient().GetWebView();
   web_view->GetSettings()->SetPrefersReducedMotion(true);
 
-  Element* foo_element = GetDocument().getElementById(AtomicString("foo"));
+  Element* foo_element = GetElementById("foo");
   RangeInFlatTree* range =
       CreateRangeToExpectedText(foo_element->firstChild(), 0, 3, "FOO");
   auto* agent = CreateAgentForRange(range, mojom::blink::AnnotationType::kGlic);

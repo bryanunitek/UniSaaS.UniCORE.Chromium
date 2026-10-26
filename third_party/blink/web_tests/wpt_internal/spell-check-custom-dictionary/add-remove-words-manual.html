@@ -24,6 +24,7 @@
   body { font: 14px/1.5 sans-serif; margin: 24px; max-width: 820px; }
   .editable { border: 1px solid #888; padding: 6px; margin: 6px 0; font-size: 16px; }
   textarea.editable { width: 100%; height: 3em; box-sizing: border-box; }
+  iframe.subframe { width: 100%; height: 110px; border: 1px dashed #888; margin: 6px 0; box-sizing: border-box; }
   .word { font-family: monospace; }
   .status { font-family: monospace; margin-left: 6px; }
   #env, .note { border: 1px solid #ccc; padding: 8px; margin-bottom: 16px; }
@@ -48,20 +49,38 @@
   <a href="https://explainers-by-googlers.github.io/user-dictionary-leaks/">user-dictionary-leaks</a>.
 </p>
 
-<!-- Test 1: basic add then remove on a single field. -->
+<!-- Test 1: basic add then remove on a single field. Covers both a Latin (LTR)
+     word and a Hebrew (RTL) word: matching is exact/verbatim. -->
 <fieldset>
-  <legend>1. Add suppresses the squiggle, remove restores it</legend>
-  <p>The misspelled nonsense word <span class="word">wugzz</span> below should
-     have a red spelling squiggle to start with.</p>
+  <legend>1. Add suppresses the squiggle, remove restores it (LTR and RTL)</legend>
+
+  <p><b>1a. Latin (LTR) word.</b> The misspelled nonsense word
+     <span class="word">wugzz</span> below should have a red spelling squiggle to
+     start with.</p>
   <div id="field1" class="editable" spellcheck="true" contenteditable>This wugzz is misspelled.</div>
   <button data-add='["wugzz"]'>addWords(["wugzz"])</button>
   <button data-remove='["wugzz"]'>removeWords(["wugzz"])</button>
+
+  <p class="note"><b>Precondition for 1b:</b> enable the <b>Hebrew</b> spellcheck
+     dictionary (Settings &rsaquo; Languages). Chrome only squiggles Hebrew text
+     when a Hebrew (<code>he</code>) or Persian (<code>fa</code>) dictionary is
+     on; with only Latin dictionaries enabled the word below is never flagged
+     and there is nothing to observe.</p>
+  <p><b>1b. Hebrew (RTL) word.</b> The misspelled Hebrew nonsense word
+     <span class="word">שלוס</span> below should have a red spelling squiggle to
+     start with.</p>
+  <div id="field1b" class="editable" spellcheck="true" dir="rtl" contenteditable>זה שלוס לא נכון.</div>
+  <button data-add='["שלוס"]'>addWords(["שלוס"])</button>
+  <button data-remove='["שלוס"]'>removeWords(["שלוס"])</button>
+
   <ol>
-    <li>Confirm <span class="word">wugzz</span> is underlined as misspelled.</li>
-    <li>Click <b>addWords</b>. The squiggle on <span class="word">wugzz</span> should disappear
+    <li>For <b>each</b> word (<span class="word">wugzz</span> and
+        <span class="word">שלוס</span>), confirm it is underlined as misspelled.</li>
+    <li>Click that word's <b>addWords</b> button. Its squiggle should disappear
         immediately, with no further interaction.</li>
-    <li>Click <b>removeWords</b>, then click back into this field. The squiggle should
-        come back as soon as you focus the field &mdash; <b>without you having to type</b>.</li>
+    <li>Click that word's <b>removeWords</b> button, then click back into the field.
+        The squiggle should come back as soon as you focus the field &mdash;
+        <b>without you having to type</b>.</li>
   </ol>
   <div class="verdict" data-test="basic"></div>
 </fieldset>
@@ -110,32 +129,60 @@
   <div class="verdict" data-test="language-agnostic"></div>
 </fieldset>
 
-<!-- Test 4: per-document cap: 5000 words, 99 bytes/word.
+<!-- Test 4: frame isolation. A same-origin iframe shares the renderer process,
+     and so the spell checker, with this page, but it is a separate document
+     with its own word set. Adding a word in one frame must not touch the
+     other frame's squiggles. Each frame's button calls its own document's
+     dictionary. -->
+<fieldset>
+  <legend>4. Changes stay in the calling frame</legend>
+  <p>The field on this page and the field inside the iframe below both contain
+     <span class="word">grobnik</span> and <span class="word">plimsy</span>.
+     The iframe is same-origin, so it runs in the same renderer process as this
+     page.</p>
+  <div id="field4" class="editable" spellcheck="true" contenteditable>grobnik and plimsy on the page.</div>
+  <button data-add='["grobnik"]'>page: addWords(["grobnik"])</button>
+  <iframe id="frame4" class="subframe" title="Same-origin iframe for Test 4"></iframe>
+  <ol>
+    <li>Confirm both words are squiggled in <b>both</b> fields.</li>
+    <li>Click <b>page: addWords(["grobnik"])</b>. The squiggle on
+        <span class="word">grobnik</span> should clear on the page, and must
+        <b>stay</b> in the iframe. Look at the iframe <b>without clicking into
+        it</b>: focusing it re-checks its field and would hide a failure.</li>
+    <li>Click <b>iframe: addWords(["plimsy"])</b> inside the iframe. The squiggle
+        on <span class="word">plimsy</span> should clear in the iframe, and must
+        <b>stay</b> on the page. Again, don't click into the page's field first.</li>
+    <li>If a squiggle clears in the frame that did <b>not</b> call
+        <code>addWords</code>, the change leaked into another frame: FAIL.</li>
+  </ol>
+  <div class="verdict" data-test="frame-isolation"></div>
+</fieldset>
+
+<!-- Test 5: per-document cap: 20000 words, 128 bytes/word.
      Scriptable enough that we can assert it doesn't throw and stays a no-op
      visually; the cap itself is enforced silently. -->
 <fieldset>
-  <legend>4. Per-document cap is enforced (5000 words / 99 bytes per word)</legend>
+  <legend>5. Per-document cap is enforced (20000 words / 128 bytes per word)</legend>
   <p><b>Run this test last.</b> The per-document word set is shared by every test on
      this page and persists for the document's lifetime, and the bulk step below fills
-     it permanently. If you run Test 4 before Tests 1&ndash;3, their <code>addWords</code>
+     it permanently. If you run Test 5 before Tests 1&ndash;4, their <code>addWords</code>
      calls will be silently rejected (cap full) and those tests will appear to fail.</p>
-  <p>The per-document set is capped at 5000 words and 99 bytes per word. Once the
+  <p>The per-document set is capped at 20000 words and 128 bytes per word. Once the
      cap is reached, further additions are <b>silently dropped</b>.</p>
   <p>Field A contains <span class="word">zzzzzqqqqq</span>; field B contains
-     <span class="word">capword</span>. Both start squiggled.</p>
+     <span class="word">capwordzz</span>. Both start squiggled.</p>
   <div id="field4" class="editable" spellcheck="true" contenteditable>zzzzzqqqqq is misspelled.</div>
-  <div id="field4b" class="editable" spellcheck="true" contenteditable>capword is misspelled.</div>
+  <div id="field4b" class="editable" spellcheck="true" contenteditable>capwordzz is misspelled.</div>
   <button data-add='["zzzzzqqqqq"]'>A: addWords(["zzzzzqqqqq"])</button>
-  <button id="bulk-add">Fill cap: addWords(6000 words + 1 over-long word)</button>
-  <button data-add='["capword"]'>B: addWords(["capword"])</button>
+  <button id="bulk-add">Fill cap: addWords(21000 words + 1 over-long word)</button>
+  <button data-add='["capwordzz"]'>B: addWords(["capwordzz"])</button>
   <ol>
     <li><b>Below the cap.</b> Click <b>A: addWords(["zzzzzqqqqq"])</b>. Its squiggle
         should clear &mdash; the dictionary works normally below the cap.</li>
     <li><b>Fill the cap.</b> Click <b>Fill cap</b>. The page must not throw and must
-        stay responsive, and the DevTools console should show exactly one warning:
-        <i>&ldquo;per-document word limit reached&hellip;&rdquo;</i></li>
-    <li><b>Above the cap.</b> Click <b>B: addWords(["capword"])</b>. The squiggle on
-        <span class="word">capword</span> should <b>stay</b> &mdash; the word is
+        stay responsive.</li>
+    <li><b>Above the cap.</b> Click <b>B: addWords(["capwordzz"])</b>. The squiggle on
+        <span class="word">capwordzz</span> should <b>stay</b> &mdash; the word is
         rejected because the per-document set is full. (If it clears, the cap is not
         being enforced.)</li>
   </ol>
@@ -192,15 +239,41 @@
     bulk.addEventListener('click', () => {
       try {
         const words = [];
-        for (let i = 0; i < 6000; i++) words.push('w' + i);
-        words.push('x'.repeat(200));  // over the 99-byte per-word limit
+        for (let i = 0; i < 21000; i++) words.push('w' + i);
+        words.push('x'.repeat(200));  // over the 128-byte per-word limit
         dict.addWords(words);
-        setStatus(bulk, 'addWords(6001) ok — no throw', false);
+        setStatus(bulk, 'addWords(21001) ok — no throw', false);
       } catch (e) {
         setStatus(bulk, `threw: ${e}`, true);
       }
     });
   }
+
+  // Test 4's iframe. srcdoc keeps it same-origin, and so in this renderer
+  // process. Its button calls the iframe document's own dictionary from a
+  // script running in the iframe.
+  document.getElementById('frame4').srcdoc = `<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+  body { font: 14px/1.5 sans-serif; margin: 6px; }
+  .editable { border: 1px solid #888; padding: 6px; margin: 0 0 6px; font-size: 16px; }
+  .status { font-family: monospace; margin-left: 6px; }
+</style>
+<div class="editable" spellcheck="true" contenteditable>grobnik and plimsy in the iframe.</div>
+<button id="add">iframe: addWords(["plimsy"])</button><span id="status" class="status"></span>
+<script>
+  document.getElementById('add').addEventListener('click', () => {
+    const status = document.getElementById('status');
+    try {
+      document.spellCheckCustomDictionary.addWords(['plimsy']);
+      status.textContent = 'addWords(1 word) ok';
+      status.style.color = '#1a6b1a';
+    } catch (e) {
+      status.textContent = 'threw: ' + e;
+      status.style.color = '#b00020';
+    }
+  });
+<\/script>`;
 
   // PASS / FAIL buttons per scenario.
   for (const v of document.querySelectorAll('.verdict')) {

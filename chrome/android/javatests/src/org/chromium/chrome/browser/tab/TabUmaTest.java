@@ -96,6 +96,7 @@ public class TabUmaTest {
                 new OneshotSupplierImpl<>(),
                 ObservableSuppliers.alwaysNull(),
                 new NoOpTopInsetProvider(),
+                new OneshotSupplierImpl<>(),
                 cta.getStartupMetricsTracker(),
                 /* exclusiveAccessManager= */ null,
                 /* backPressManager= */ null,
@@ -205,7 +206,6 @@ public class TabUmaTest {
             state.themeColor = 4;
             state.openerAppId = "test";
             state.tabLaunchTypeAtCreation = TabLaunchType.UNSET;
-            state.rootId = 1;
         }
         return state;
     }

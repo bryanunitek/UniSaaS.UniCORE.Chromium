@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -17,7 +18,9 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/account_settings/account_settings.h"
 #include "components/account_settings/mock_account_setting_service.h"
+#include "components/glic/glic_pref_names.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/personal_context/core/country_type.h"
 #include "components/personal_context/core/personal_context_debug_features.h"
@@ -110,6 +113,9 @@ class PersonalContextEligibilityServiceImplBrowserTest
         prefs::kPersonalContextAmbientAutofillNoticeShouldBeShown, false);
     pref_service_->SetBoolean(
         prefs::kPersonalContextInAutofillSettingsToggleStatus, true);
+    pref_service_->SetInteger(
+        ::glic::prefs::kGlicCompletedFre,
+        std::to_underlying(::glic::prefs::FreStatus::kCompleted));
 
     // Instantiate service locally via factory
     eligibility_service_ = static_cast<PersonalContextEligibilityServiceImpl*>(
@@ -199,7 +205,10 @@ IN_PROC_BROWSER_TEST_F(PersonalContextEligibilityServiceImplBrowserTest,
       .WillRepeatedly(Return(false));
 
   // Enablement check should update after change events
-  eligibility_service_->OnAccountSettingDataUpdated("any_setting");
+  eligibility_service_->OnAccountSettingDataUpdated(
+      account_settings::kAccountSettingContextWorkspace.name);
+  eligibility_service_->OnAccountSettingDataUpdated(
+      account_settings::kAccountSettingContextPhotos.name);
 
   EXPECT_EQ(eligibility_service_->GetEligibilityState(),
             PersonalContextEligibilityState::kDisabledNotEligible);
@@ -227,9 +236,25 @@ IN_PROC_BROWSER_TEST_F(PersonalContextEligibilityServiceImplBrowserTest,
   EXPECT_CALL(*mock_account_settings_service_, GetBoolean(testing::_))
       .WillRepeatedly(Return(false));
 
-  eligibility_service_->OnAccountSettingDataUpdated("any_setting");
+  eligibility_service_->OnAccountSettingDataUpdated(
+      account_settings::kAccountSettingContextWorkspace.name);
+  eligibility_service_->OnAccountSettingDataUpdated(
+      account_settings::kAccountSettingContextPhotos.name);
 
   eligibility_service_->RemoveObserver(&observer);
 }
+
+IN_PROC_BROWSER_TEST_F(PersonalContextEligibilityServiceImplBrowserTest,
+                       ConsentGlicFreGateDisablesService) {
+  SignIn(kAdultUserEmail);
+
+  pref_service_->SetInteger(
+      ::glic::prefs::kGlicCompletedFre,
+      std::to_underlying(::glic::prefs::FreStatus::kNotStarted));
+
+  EXPECT_EQ(eligibility_service_->GetEligibilityState(),
+            PersonalContextEligibilityState::kDisabledNotEligible);
+}
+
 }  // namespace
 }  // namespace personal_context

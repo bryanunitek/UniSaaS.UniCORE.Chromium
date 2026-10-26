@@ -27,9 +27,8 @@
 #include "components/optimization_guide/core/delivery/model_util.h"
 #include "components/optimization_guide/core/delivery/prediction_model_download_observer.h"
 #include "components/optimization_guide/core/delivery/prediction_model_store.h"
-#include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
+#include "components/optimization_guide/core/optimization_guide_permissions_util.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/services/unzip/public/cpp/unzip.h"
@@ -51,6 +50,13 @@ namespace {
 // model downloads that happen on startup with a clean profile.
 const char kDisableModelDownloadsForBenchmarking[] =
     "disable-optimization-guide-model-downloads-for-benchmarking";
+
+// Returns true if the verification of model downloads should be skipped.
+bool ShouldSkipModelDownloadVerificationForTesting() {
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  return command_line->HasSwitch(
+      kDisableModelDownloadVerificationForTestingSwitch);
+}
 
 // The SHA256 hash of the public key for the Optimization Guide Server that
 // we require models to come from.
@@ -205,9 +211,9 @@ bool PredictionModelDownloadManager::ShouldFetchModels() const {
           ::switches::kEnableBenchmarking)) {
     return false;
   }
-  return (switches::ShouldSkipGoogleApiKeyConfigurationCheck() ||
+  return (ShouldSkipGoogleApiKeyConfigurationCheck() ||
           google_apis::HasAPIKeyConfigured()) &&
-         local_state_->GetBoolean(prefs::kComponentUpdatesEnabled);
+         local_state_->GetBoolean(::prefs::kComponentUpdatesEnabled);
 }
 
 void PredictionModelDownloadManager::AddObserver(
@@ -304,7 +310,7 @@ bool PredictionModelDownloadManager::VerifyDownload(
     const base::FilePath& download_file_path,
     const base::FilePath& base_model_dir,
     bool delete_file_on_error) {
-  if (!switches::ShouldSkipModelDownloadVerificationForTesting()) {
+  if (!ShouldSkipModelDownloadVerificationForTesting()) {
     // Verify that the |download_file_path| contains a valid CRX file.
     std::string public_key;
     crx_file::VerifierResult verifier_result = crx_file::Verify(

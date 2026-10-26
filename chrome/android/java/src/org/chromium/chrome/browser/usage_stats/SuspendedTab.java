@@ -9,7 +9,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.view.View.OnClickListener;
 import android.view.ViewGroup.LayoutParams;
 import android.widget.TextView;
 
@@ -28,8 +27,8 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.build.annotations.RequiresNonNull;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.media.MediaCaptureDevicesDispatcherAndroid;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabUtils;
 import org.chromium.chrome.browser.tab.TabViewProvider;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
@@ -45,7 +44,7 @@ import java.util.function.Supplier;
  * domain name (FQDN) has been suspended via Digital Wellbeing.
  */
 @NullMarked
-public class SuspendedTab extends EmptyTabObserver implements UserData, TabViewProvider {
+public class SuspendedTab implements TabObserver, UserData, TabViewProvider {
     private static final String DIGITAL_WELLBEING_SITE_DETAILS_ACTION =
             "org.chromium.chrome.browser.usage_stats.action.SHOW_WEBSITE_DETAILS";
     private static final String EXTRA_FQDN_NAME =
@@ -200,20 +199,17 @@ public class SuspendedTab extends EmptyTabObserver implements UserData, TabViewP
         Context context = mTab.getContext();
         View settingsLink = mView.findViewById(R.id.suspended_tab_settings_button);
         settingsLink.setOnClickListener(
-                new OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        Intent intent = new Intent(DIGITAL_WELLBEING_SITE_DETAILS_ACTION);
-                        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        intent.putExtra(EXTRA_FQDN_NAME, mFqdn);
-                        intent.putExtra(
-                                Intent.EXTRA_PACKAGE_NAME,
-                                ContextUtils.getApplicationContext().getPackageName());
-                        try {
-                            context.startActivity(intent);
-                        } catch (ActivityNotFoundException e) {
-                            Log.e(TAG, "No activity found for site details intent", e);
-                        }
+                _ -> {
+                    Intent intent = new Intent(DIGITAL_WELLBEING_SITE_DETAILS_ACTION);
+                    intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    intent.putExtra(EXTRA_FQDN_NAME, mFqdn);
+                    intent.putExtra(
+                            Intent.EXTRA_PACKAGE_NAME,
+                            ContextUtils.getApplicationContext().getPackageName());
+                    try {
+                        context.startActivity(intent);
+                    } catch (ActivityNotFoundException e) {
+                        Log.e(TAG, "No activity found for site details intent", e);
                     }
                 });
     }

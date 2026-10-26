@@ -70,6 +70,9 @@
 #include "extensions/grit/extensions_renderer_generated_resources.h"
 #include "extensions/grit/extensions_renderer_resources.h"
 #include "extensions/renderer/api/messaging/native_renderer_messaging_service.h"
+#include "extensions/renderer/bindings/api_bindings_system.h"
+#include "extensions/renderer/bindings/api_event_handler.h"
+#include "extensions/renderer/bindings/listener_tracker.h"
 #include "extensions/renderer/content_watcher.h"
 #include "extensions/renderer/dom_activity_logger.h"
 #include "extensions/renderer/extension_frame_helper.h"
@@ -81,7 +84,6 @@
 #include "extensions/renderer/module_system.h"
 #include "extensions/renderer/native_extension_bindings_system.h"
 #include "extensions/renderer/renderer_extension_registry.h"
-#include "extensions/renderer/safe_builtins.h"
 #include "extensions/renderer/script_context.h"
 #include "extensions/renderer/script_context_set.h"
 #include "extensions/renderer/script_injection_manager.h"
@@ -105,7 +107,6 @@
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_frame.h"
 #include "third_party/blink/public/web/web_local_frame.h"
-#include "third_party/blink/public/web/web_script_controller.h"
 #include "third_party/blink/public/web/web_security_policy.h"
 #include "third_party/blink/public/web/web_settings.h"
 #include "third_party/blink/public/web/web_v8_features.h"
@@ -383,11 +384,6 @@ bool Dispatcher::ShouldNotifyServiceWorkerOnWebSocketActivity(
   return script_context &&
          ExtensionAPIEnabledForServiceWorkerScript(
              script_context->service_worker_scope(), script_context->url());
-}
-
-void Dispatcher::OnRenderThreadStarted(content::RenderThread* thread) {
-  blink::WebScriptController::RegisterExtension(
-      SafeBuiltins::CreateV8Extension());
 }
 
 void Dispatcher::OnRenderFrameCreated(content::RenderFrame* render_frame) {
@@ -723,6 +719,17 @@ void Dispatcher::DidStartServiceWorkerContextOnWorkerThread(
   const int thread_id = content::WorkerThread::GetCurrentId();
   CHECK_NE(thread_id, kMainThreadId);
   auto* service_worker_data = WorkerThreadDispatcher::GetServiceWorkerData();
+  if (service_worker_data) {
+    // The worker has finished running its top-level script, so every listener
+    // it registers synchronously has been added. Record before notifying the
+    // browser so the counts are in place once the worker is considered started.
+    service_worker_data->bindings_system()
+        ->api_system()
+        ->event_handler()
+        ->listener_tracker()
+        .RecordFilteredListenerCounts();
+  }
+
   if (base::FeatureList::IsEnabled(
           kSpeculativeFixForServiceWorkerDataInDidStartServiceWorkerContext)) {
     // `service_worker_data` can be nullptr if the extension is already unloaded
@@ -898,6 +905,7 @@ void Dispatcher::DispatchEventHelper(
           &NativeExtensionBindingsSystem::DispatchEventInContext,
           base::Unretained(bindings_system_.get()), event_name,
           std::cref(event_args), base::OwnedRef(std::move(filtering_info))));
+  bindings_system_->DidDispatchEvent(host_id, event_name, event_args);
 }
 
 void Dispatcher::InvokeModuleSystemMethod(content::RenderFrame* render_frame,
@@ -1006,6 +1014,8 @@ void Dispatcher::LoadExtensions(
   for (auto& param : loaded_extensions) {
     std::u16string error;
     ExtensionId id = param->id;
+    bool is_mojo_js_enabled_for_service_worker =
+        param->is_mojo_js_enabled_for_service_worker;
     std::optional<base::UnguessableToken> worker_activation_token =
         param->worker_activation_token;
     SetCurrentUserScriptAllowedState(kRendererProfileId, id,
@@ -1021,6 +1031,9 @@ void Dispatcher::LoadExtensions(
 
     RendererExtensionRegistry* extension_registry =
         RendererExtensionRegistry::Get();
+
+    extension_registry->SetMojoJsEnabledForServiceWorker(
+        id, is_mojo_js_enabled_for_service_worker);
 
     // The order of setting the token before inserting the extension is
     // intentional so that DidInitializeServiceWorkerContextOnWorkerThread()
@@ -1262,7 +1275,7 @@ void Dispatcher::WatchPages(const std::vector<std::string>& css_selectors) {
 }
 
 void Dispatcher::DispatchEvent(mojom::DispatchEventParamsPtr params,
-                               base::ListValue event_args,
+                               const scoped_refptr<const EventArgs>& event_args,
                                DispatchEventCallback callback) {
   CHECK_EQ(params->worker_thread_id, kMainThreadId);
   CHECK(params->host_id);
@@ -1295,7 +1308,8 @@ void Dispatcher::DispatchEvent(mojom::DispatchEventParamsPtr params,
         blink::mojom::UserActivationNotificationType::kExtensionEvent);
   }
 
-  DispatchEventHelper(*params->host_id, params->event_name, event_args,
+  CHECK(event_args);
+  DispatchEventHelper(*params->host_id, params->event_name, event_args->data,
                       std::move(params->filtering_info));
   std::move(callback).Run(event_has_listener_in_background_context);
 }
@@ -1404,7 +1418,17 @@ void Dispatcher::UpdateActiveExtensions() {
   // In single-process mode, the browser process reports the active extensions.
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
           ::switches::kSingleProcess)) {
+    std::set<std::string> active_component_extension_names;
+    for (const ExtensionId& id : active_extensions) {
+      const Extension* extension =
+          RendererExtensionRegistry::Get()->GetByID(id);
+      if (extension &&
+          extension->location() == mojom::ManifestLocation::kComponent) {
+        active_component_extension_names.insert(extension->name());
+      }
+    }
     crash_keys::SetActiveExtensions(active_extensions);
+    crash_keys::SetActiveComponentExtensions(active_component_extension_names);
   }
 }
 

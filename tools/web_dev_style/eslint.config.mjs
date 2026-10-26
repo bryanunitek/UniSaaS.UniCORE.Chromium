@@ -65,6 +65,17 @@ const noRestrictedSyntaxCases = [
     message:
         'Do not use the non-null assertion operator (!) on class property declarations. Initialize properties with dummy or default values instead.',
   },
+  {
+    selector: 'MemberExpression[computed=true] > Literal[value=/_$/]',
+    message:
+        'Do not use bracket access to access private properties or methods ending in an underscore. Validate the effects of a test input in the DOM instead.',
+  },
+  {
+    selector: 'MemberExpression[computed=true] >' +
+              ' TemplateLiteral > TemplateElement[value.raw=/_$/]',
+    message:
+        'Do not use bracket access to access private properties or methods ending in an underscore. Validate the effects of a test input in the DOM instead.',
+  },
 ];
 
 const noRestrictedImportsPaths = [
@@ -117,7 +128,8 @@ export default [
       // No point linting auto-generated files.
       'tools/typescript/definitions/**/*',
 
-      // Ignore generated checked-in JS file.
+      // Ignore generated checked-in JS files.
+      'components/variations/proto/devtools/client_variations.js',
       'ios/tools/documents_statistics_viewer/tsc/viewer.js',
 
       // No point checking minify_js expected output tests.
@@ -594,6 +606,18 @@ export default [
           paths: noRestrictedImportsPaths.filter(
               path => !path.name.includes('composebox')),
         }
+      ],
+    },
+  },
+  {
+    // TODO(crbug.com/546208720): Clean up bracket access of private properties/methods in
+    // `ui/file_manager`.
+    files: ['ui/file_manager/**/*.[jt]s'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        ...noRestrictedSyntaxCases.filter(
+            c => !c.message.includes('Do not use bracket access')),
       ],
     },
   },

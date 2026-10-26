@@ -6,6 +6,36 @@
 
 namespace media {
 
+namespace {
+
+// SEI payload types (T-REC H.265 Table D.1).
+constexpr int kSEIPayloadTypeMasteringDisplayColourVolume = 137;
+constexpr int kSEIPayloadTypeContentLightLevelInfo = 144;
+
+// SEI payload sizes in bytes.
+// Mastering display colour volume: 3 * 2 * 2 (display primaries) + 2 * 2 (white
+// point) + 4 (max luminance) + 4 (min luminance).
+constexpr int kSEIPayloadSizeMasteringDisplayColourVolume = 24;
+// Content light level: 2 (max content) + 2 (max picture average).
+constexpr int kSEIPayloadSizeContentLightLevelInfo = 4;
+
+// D.2.1 / 7.3.5 sei_message() header: writes the payload type and payload size
+// using the 0xFF continuation form (last byte < 0xFF).
+void BuildPackedH265SEIMessageHeader(H26xAnnexBBitstreamBuilder& builder,
+                                     int payload_type,
+                                     int payload_size) {
+  for (; payload_type >= 0xFF; payload_type -= 0xFF) {
+    builder.AppendBits(8, 0xFF);
+  }
+  builder.AppendBits(8, payload_type);
+  for (; payload_size >= 0xFF; payload_size -= 0xFF) {
+    builder.AppendBits(8, 0xFF);
+  }
+  builder.AppendBits(8, payload_size);
+}
+
+}  // namespace
+
 void BuildPackedH265ProfileTierLevel(
     H26xAnnexBBitstreamBuilder& builder,
     const H265ProfileTierLevel& profile_tier_level,
@@ -24,12 +54,55 @@ void BuildPackedH265ProfileTierLevel(
                        profile_tier_level.general_non_packed_constraint_flag);
     builder.AppendBits(1,
                        profile_tier_level.general_frame_only_constraint_flag);
-    CHECK_LT(profile_tier_level.general_profile_idc, 4);
-    // We are not using the encoder for still image encoding, so the
-    // general_one_picture_only_constraint_flag should always be set to 0. In
-    // that case simply appending 43 zero bits is fine.
-    builder.AppendBits(43, 0);  // general_reserved_zero_43bits
-    builder.AppendBits(1, 0);   // general_inbld_flag
+    // The 44 bits following the frame-only constraint flag carry the
+    // general_constraint_indicator_flags when a range extension capable
+    // profile is signalled (profile_idc >= 4, or one of the compatibility
+    // flags for those profiles is set), and are reserved zeroes otherwise.
+    constexpr uint32_t kRangeExtensionCompatibilityFlags =
+        0x0FF00000;  // general_profile_compatibility_flag[4]..[11].
+    if (profile_tier_level.general_profile_idc >= 4 ||
+        (profile_tier_level.general_profile_compatibility_flags &
+         kRangeExtensionCompatibilityFlags)) {
+      builder.AppendBits(1,
+                         profile_tier_level.general_max_12bit_constraint_flag);
+      builder.AppendBits(1,
+                         profile_tier_level.general_max_10bit_constraint_flag);
+      builder.AppendBits(1,
+                         profile_tier_level.general_max_8bit_constraint_flag);
+      builder.AppendBits(
+          1, profile_tier_level.general_max_422chroma_constraint_flag);
+      builder.AppendBits(
+          1, profile_tier_level.general_max_420chroma_constraint_flag);
+      builder.AppendBits(
+          1, profile_tier_level.general_max_monochrome_constraint_flag);
+      builder.AppendBits(1, profile_tier_level.general_intra_constraint_flag);
+      builder.AppendBits(
+          1, profile_tier_level.general_one_picture_only_constraint_flag);
+      builder.AppendBits(
+          1, profile_tier_level.general_lower_bit_rate_constraint_flag);
+      // general_max_14bit_constraint_flag is only present for the 12/14-bit
+      // profiles (profile_idc 5, 9, 10, 11, H.265 7.3.3); the remaining bits
+      // are reserved zeroes otherwise.
+      constexpr uint32_t k14BitProfileCompatibilityFlags =
+          0x04700000;  // general_profile_compatibility_flag[5],[9],[10],[11].
+      const int profile_idc = profile_tier_level.general_profile_idc;
+      if (profile_idc == 5 || profile_idc == 9 || profile_idc == 10 ||
+          profile_idc == 11 ||
+          (profile_tier_level.general_profile_compatibility_flags &
+           k14BitProfileCompatibilityFlags)) {
+        builder.AppendBits(
+            1, profile_tier_level.general_max_14bit_constraint_flag);
+        builder.AppendBits(33, 0);  // general_reserved_zero_33bits
+      } else {
+        builder.AppendBits(34, 0);  // general_reserved_zero_34bits
+      }
+    } else {
+      // We are not using the encoder for still image encoding, so the
+      // general_one_picture_only_constraint_flag should always be set to 0. In
+      // that case simply appending 43 zero bits is fine.
+      builder.AppendBits(43, 0);  // general_reserved_zero_43bits
+    }
+    builder.AppendBits(1, 0);  // general_inbld_flag
   }
   builder.AppendBits(8, profile_tier_level.general_level_idc);
   CHECK_EQ(max_num_sub_layers_minus1, 0);
@@ -146,9 +219,9 @@ void BuildPackedH265SPS(H26xAnnexBBitstreamBuilder& builder,
   builder.AppendBits(1, sps.sps_temporal_mvp_enabled_flag);
   builder.AppendBits(1, sps.strong_intra_smoothing_enabled_flag);
   builder.AppendBits(1, sps.vui_parameters_present_flag);
-  // The assumption here is that for now, only for Rec.601 and Rec.709 that
-  // VEA will set vui_parameters_present_flag & colour_description_present_flag
-  // to true.
+  // The VEA sets vui_parameters_present_flag & colour_description_present_flag
+  // to true whenever it has a specified colour space to signal (SDR Rec.601/709
+  // as well as HDR BT.2020 PQ/HLG for the main10 profile).
   if (sps.vui_parameters_present_flag &&
       sps.vui_parameters.colour_description_present_flag) {
     // E.2.1 VUI parameters syntax
@@ -169,7 +242,31 @@ void BuildPackedH265SPS(H26xAnnexBBitstreamBuilder& builder,
     builder.AppendBits(1, 0);  // vui_timing_info_present_flag
     builder.AppendBits(1, 0);  // bitstream_restriction_flag
   }
-  builder.AppendBits(1, 0);  // sps_extension_present_flag
+  // sps_range_extension() lives inside sps_extension_data() (7.3.2.2.2), so a
+  // range extension payload without sps_extension_present_flag would desync
+  // conformant parsers. Infer the present flag from the range extension flag.
+  const bool sps_extension_present_flag =
+      sps.sps_extension_present_flag || sps.sps_range_extension_flag;
+  builder.AppendBits(1, sps_extension_present_flag);
+  if (sps_extension_present_flag) {
+    builder.AppendBits(1, sps.sps_range_extension_flag);
+    builder.AppendBits(1, 0);  // sps_multilayer_extension_flag
+    builder.AppendBits(1, 0);  // sps_3d_extension_flag
+    builder.AppendBits(1, 0);  // sps_scc_extension_flag
+    builder.AppendBits(4, 0);  // sps_extension_4bits
+  }
+  if (sps.sps_range_extension_flag) {
+    // 7.3.2.2.2 Sequence parameter set range extension syntax
+    builder.AppendBits(1, sps.transform_skip_rotation_enabled_flag);
+    builder.AppendBits(1, sps.transform_skip_context_enabled_flag);
+    builder.AppendBits(1, sps.implicit_rdpcm_enabled_flag);
+    builder.AppendBits(1, sps.explicit_rdpcm_enabled_flag);
+    builder.AppendBits(1, sps.extended_precision_processing_flag);
+    builder.AppendBits(1, sps.intra_smoothing_disabled_flag);
+    builder.AppendBits(1, sps.high_precision_offsets_enabled_flag);
+    builder.AppendBits(1, sps.persistent_rice_adaptation_enabled_flag);
+    builder.AppendBits(1, sps.cabac_bypass_alignment_enabled_flag);
+  }
 
   builder.FinishNALU();
 }
@@ -242,8 +339,75 @@ void BuildPackedH265PPS(H26xAnnexBBitstreamBuilder& builder,
   builder.AppendUE(pps.log2_parallel_merge_level_minus2);
   builder.AppendBits(1, pps.slice_segment_header_extension_present_flag);
 
-  builder.AppendBits(1, pps.pps_extension_present_flag);
-  CHECK(!pps.pps_extension_present_flag);
+  // pps_range_extension() lives inside pps_extension_data() (7.3.2.3.1), so a
+  // range extension payload without pps_extension_present_flag would desync
+  // conformant parsers. Infer the present flag from the range extension flag.
+  const bool pps_extension_present_flag =
+      pps.pps_extension_present_flag || pps.pps_range_extension_flag;
+  builder.AppendBits(1, pps_extension_present_flag);
+  if (pps_extension_present_flag) {
+    builder.AppendBits(1, pps.pps_range_extension_flag);
+    builder.AppendBits(1, 0);  // pps_multilayer_extension_flag
+    builder.AppendBits(1, 0);  // pps_3d_extension_flag
+    builder.AppendBits(1, 0);  // pps_scc_extension_flag
+    builder.AppendBits(4, 0);  // pps_extension_4bits
+  }
+  if (pps.pps_range_extension_flag) {
+    // 7.3.2.3.1 Picture parameter set range extension syntax
+    if (pps.transform_skip_enabled_flag) {
+      builder.AppendUE(pps.log2_max_transform_skip_block_size_minus2);
+    }
+    builder.AppendBits(1, pps.cross_component_prediction_enabled_flag);
+    builder.AppendBits(1, pps.chroma_qp_offset_list_enabled_flag);
+    if (pps.chroma_qp_offset_list_enabled_flag) {
+      builder.AppendUE(pps.diff_cu_chroma_qp_offset_depth);
+      builder.AppendUE(pps.chroma_qp_offset_list_len_minus1);
+      for (int i = 0; i <= pps.chroma_qp_offset_list_len_minus1; i++) {
+        builder.AppendSE(pps.cb_qp_offset_list[i]);
+        builder.AppendSE(pps.cr_qp_offset_list[i]);
+      }
+    }
+    builder.AppendUE(pps.log2_sao_offset_scale_luma);
+    builder.AppendUE(pps.log2_sao_offset_scale_chroma);
+  }
+
+  builder.FinishNALU();
+}
+
+void BuildPackedH265SEI(
+    H26xAnnexBBitstreamBuilder& builder,
+    const std::optional<H26xSEIMasteringDisplayInfo>& mastering_display,
+    const std::optional<H26xSEIContentLightLevelInfo>& content_light_level) {
+  if (!mastering_display.has_value() && !content_light_level.has_value()) {
+    return;
+  }
+
+  builder.BeginNALU(H265NALU::PREFIX_SEI_NUT);
+
+  if (mastering_display.has_value()) {
+    // D.2.28 Mastering display colour volume SEI message syntax.
+    BuildPackedH265SEIMessageHeader(
+        builder, kSEIPayloadTypeMasteringDisplayColourVolume,
+        kSEIPayloadSizeMasteringDisplayColourVolume);
+    for (const auto& primary : mastering_display->display_primaries) {
+      builder.AppendBits(16, primary[0]);  // display_primaries_x[c]
+      builder.AppendBits(16, primary[1]);  // display_primaries_y[c]
+    }
+    builder.AppendBits(16, mastering_display->white_points[0]);
+    builder.AppendBits(16, mastering_display->white_points[1]);
+    builder.AppendBits(32, mastering_display->max_luminance);
+    builder.AppendBits(32, mastering_display->min_luminance);
+  }
+
+  if (content_light_level.has_value()) {
+    // D.2.35 Content light level information SEI message syntax.
+    BuildPackedH265SEIMessageHeader(builder,
+                                    kSEIPayloadTypeContentLightLevelInfo,
+                                    kSEIPayloadSizeContentLightLevelInfo);
+    builder.AppendBits(16, content_light_level->max_content_light_level);
+    builder.AppendBits(16,
+                       content_light_level->max_picture_average_light_level);
+  }
 
   builder.FinishNALU();
 }

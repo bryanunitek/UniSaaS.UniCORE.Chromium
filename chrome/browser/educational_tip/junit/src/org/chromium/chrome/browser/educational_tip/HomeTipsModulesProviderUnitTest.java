@@ -11,8 +11,6 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -20,7 +18,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -36,7 +33,6 @@ import java.util.List;
 
 /** Test relating to {@link HomeTipsModulesProvider} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class HomeTipsModulesProviderUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -57,12 +53,9 @@ public class HomeTipsModulesProviderUnitTest {
                         List.of(
                                 ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
                                 ModuleType.ADDRESS_BAR_PLACEMENT_PROMO));
-        when(mSetupListManager.getTwoCellContainerModuleTypes())
-                .thenReturn(List.of(ModuleType.SETUP_LIST_TWO_CELL_CONTAINER));
     }
 
     @Test
-    @SmallTest
     public void testRegisterTipModules_TwoCell() {
         when(mSetupListManager.isSetupListActive()).thenReturn(true);
         when(mSetupListManager.shouldShowTwoCellLayout()).thenReturn(true);
@@ -76,7 +69,6 @@ public class HomeTipsModulesProviderUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testRegisterTipModules_SetupListSingleCell() {
         when(mSetupListManager.isSetupListActive()).thenReturn(true);
         when(mSetupListManager.shouldShowTwoCellLayout()).thenReturn(false);
@@ -91,7 +83,6 @@ public class HomeTipsModulesProviderUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testRegisterTipModules_EducationalTips() {
         when(mSetupListManager.isSetupListActive()).thenReturn(false);
 
@@ -105,7 +96,6 @@ public class HomeTipsModulesProviderUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testGetModulesToRegister_returnsEducationalTipsWhenInactive() {
         Collection<Integer> expectedModules = EducationalTipModuleUtils.getModuleTypes();
         Collection<Integer> actualModules =
@@ -115,7 +105,6 @@ public class HomeTipsModulesProviderUnitTest {
     }
 
     @Test
-    @SmallTest
     public void
             testGetModulesToRegister_returnsTwoCellContainerWhenSetupListActiveAndTwoCellEnabled() {
         Collection<Integer> actualModules =

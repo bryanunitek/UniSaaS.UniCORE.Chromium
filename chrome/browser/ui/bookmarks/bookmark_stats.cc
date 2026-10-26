@@ -6,9 +6,18 @@
 
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
+#include "base/notreached.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node_data.h"
+#include "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api_data_model.mojom.h"
+#include "extensions/buildflags/buildflags.h"
+#include "url/gurl.h"
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "chrome/common/extensions/extension_constants.h"
+#include "chrome/common/extensions/extension_metrics.h"
+#include "extensions/browser/extension_registry.h"
+#endif
 
 using bookmarks::BookmarkNode;
 
@@ -20,11 +29,16 @@ bool IsBookmarkBarLocation(BookmarkLaunchLocation location) {
 }
 
 auto GetMetricProfile(const Profile* profile) {
-  DCHECK(profile);
-  DCHECK(profile->IsRegularProfile() || profile->IsIncognitoProfile());
-  return profile->IsRegularProfile()
-             ? profile_metrics::BrowserProfileType::kRegular
-             : profile_metrics::BrowserProfileType::kIncognito;
+  CHECK(profile, base::NotFatalUntil::M162);
+  CHECK(profile->IsRegularProfile() ||
+            profile->IsPrimaryOTRProfileWithRegularParent(),
+        base::NotFatalUntil::M162);
+  if (profile->IsRegularProfile()) {
+    return profile_metrics::BrowserProfileType::kRegular;
+  } else if (profile->IsIncognitoProfile()) {
+    return profile_metrics::BrowserProfileType::kIncognito;
+  }
+  return profile_metrics::BrowserProfileType::kEnterpriseIsolated;
 }
 
 }  // namespace
@@ -34,6 +48,39 @@ std::ostream& operator<<(std::ostream& out,
   return out << "BookmarkLaunchAction(location = "
              << static_cast<int>(launch_action.location)
              << ", action_time = " << launch_action.action_time << ")";
+}
+
+void RecordAppLaunchForBookmarkBar(Profile* profile, const GURL& url) {
+  CHECK(profile, base::NotFatalUntil::M162);
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  const extensions::Extension* extension =
+      extensions::ExtensionRegistry::Get(profile)
+          ->enabled_extensions()
+          .GetAppByURL(url);
+  if (extension) {
+    extensions::RecordAppLaunchType(extension_misc::APP_LAUNCH_BOOKMARK_BAR,
+                                    extension->GetType());
+  }
+#endif
+}
+
+void RecordBookmarkPageActionExecution(
+    toolbar_ui_api::mojom::PageActionTrigger trigger) {
+  BookmarkEntryPoint entry_point;
+  switch (trigger) {
+    case toolbar_ui_api::mojom::PageActionTrigger::kMouse:
+      entry_point = BookmarkEntryPoint::kStarMouse;
+      break;
+    case toolbar_ui_api::mojom::PageActionTrigger::kKeyboard:
+      entry_point = BookmarkEntryPoint::kStarKey;
+      break;
+    case toolbar_ui_api::mojom::PageActionTrigger::kGesture:
+      entry_point = BookmarkEntryPoint::kStarGesture;
+      break;
+    default:
+      NOTREACHED();
+  }
+  UMA_HISTOGRAM_ENUMERATION("Bookmarks.EntryPoint", entry_point);
 }
 
 void RecordBookmarkLaunch(BookmarkLaunchLocation location,

@@ -23,6 +23,7 @@
 #include "components/sync/test/sessions_hierarchy.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -32,9 +33,11 @@ using sessions_helper::DeleteForeignSession;
 using sessions_helper::ForeignSessionsMatchChecker;
 using sessions_helper::GetSessionData;
 using sessions_helper::NavigateTab;
+using sessions_helper::NavigateTabInWindow;
 using sessions_helper::OpenMultipleTabs;
 using sessions_helper::OpenTab;
 using sessions_helper::OpenTabAtIndex;
+using sessions_helper::OpenTabAtIndexInWindow;
 using sessions_helper::ScopedWindowMap;
 using sessions_helper::SyncedSessionVector;
 
@@ -59,12 +62,26 @@ class TwoClientSessionsSyncTest
     return ForeignSessionsMatchChecker(non_local_index, local_index).Wait();
   }
 
+  bool SetupClients() override {
+    if (!SyncTest::SetupClients()) {
+      return false;
+    }
+#if !BUILDFLAG(IS_ANDROID)
+    AddBrowser(1);
+#endif
+    return true;
+  }
+
   SyncTest::SetupSyncMode GetSetupSyncMode() const override {
     return GetParam();
   }
 
   GURL GetInitialURL() const override {
-    return chrome::ChromeUINewTabURLAsGURL();
+    // Return a lightweight unsynced WebUI URL so the initial tab is not synced
+    // (unlike the default about:blank). Avoid chrome://newtab/ because loading
+    // the full New Tab Page WebUI and its subframes significantly slows down
+    // test setup and teardown.
+    return GURL(chrome::kChromeUIVersionURL);
   }
 
  private:
@@ -179,13 +196,7 @@ IN_PROC_BROWSER_TEST_P(TwoClientSessionsSyncTest, DeleteIdleSession) {
   EXPECT_FALSE(GetSessionData(1, &sessions1));
 }
 
-// TODO(crbug.com/501729852): This test is flaky on Linux.
-#if (BUILDFLAG(IS_LINUX) && defined(MEMORY_SANITIZER))
-#define MAYBE_DeleteActiveSession DISABLED_DeleteActiveSession
-#else
-#define MAYBE_DeleteActiveSession DeleteActiveSession
-#endif
-IN_PROC_BROWSER_TEST_P(TwoClientSessionsSyncTest, MAYBE_DeleteActiveSession) {
+IN_PROC_BROWSER_TEST_P(TwoClientSessionsSyncTest, DeleteActiveSession) {
   ASSERT_TRUE(SetupSync());
 
   ASSERT_TRUE(CheckInitialState(0));
@@ -217,12 +228,13 @@ IN_PROC_BROWSER_TEST_P(TwoClientSessionsSyncTest, MultipleWindowsMultipleTabs) {
   ASSERT_TRUE(CheckInitialState(1));
 
   NavigateTab(0, GURL(kURL1));
-  EXPECT_TRUE(OpenTabAtIndex(0, 1, GURL(kURL2)));
+  EXPECT_TRUE(OpenTabAtIndex(0, /*tab_index=*/1, GURL(kURL2)));
 
-  // Add a second browser for profile 0. This browser ends up in index 2.
+  // Add a second browser for profile 0.
   AddBrowser(0);
-  NavigateTab(2, GURL(kURL3));
-  EXPECT_TRUE(OpenTabAtIndex(2, 1, GURL(kURL4)));
+  NavigateTabInWindow(0, /*window_index=*/1, GURL(kURL3));
+  EXPECT_TRUE(OpenTabAtIndexInWindow(0, /*window_index=*/1, /*tab_index=*/1,
+                                     GURL(kURL4)));
 
   EXPECT_TRUE(WaitForForeignSessionsToSync(0, 1));
 }

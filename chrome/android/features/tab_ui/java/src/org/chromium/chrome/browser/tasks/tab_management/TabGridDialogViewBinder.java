@@ -105,8 +105,8 @@ class TabGridDialogViewBinder {
             }
         } else if (CONTENT_TOP_MARGIN == propertyKey) {
             ViewGroup.LayoutParams params = viewHolder.contentView.getLayoutParams();
-            if (params instanceof FrameLayout.LayoutParams) {
-                ((FrameLayout.LayoutParams) params).topMargin = model.get(CONTENT_TOP_MARGIN);
+            if (params instanceof FrameLayout.LayoutParams frameLayoutParams) {
+                frameLayoutParams.topMargin = model.get(CONTENT_TOP_MARGIN);
                 ViewUtils.requestLayout(viewHolder.contentView, "TabGridDialogViewBinder.bind");
             }
         } else if (APP_HEADER_HEIGHT == propertyKey) {
@@ -178,10 +178,11 @@ class TabGridDialogViewBinder {
                 if (view.getWidth() == 0 || view.getHeight() == 0) {
                     // If layout hasn't happened post the scroll index change until layout happens.
                     view.post(
-                            () -> {
-                                setScrollIndex(
-                                        model.get(BROWSER_CONTROLS_STATE_PROVIDER), view, index);
-                            });
+                            () ->
+                                    setScrollIndex(
+                                            model.get(BROWSER_CONTROLS_STATE_PROVIDER),
+                                            view,
+                                            index));
                     return;
                 }
                 setScrollIndex(

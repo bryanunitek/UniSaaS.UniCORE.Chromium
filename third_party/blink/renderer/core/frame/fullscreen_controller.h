@@ -33,6 +33,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "cc/trees/layer_tree_host.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
@@ -71,6 +72,11 @@ class CORE_EXPORT FullscreenController {
   void DidEnterFullscreen();
   void DidExitFullscreen();
 
+  // Called when a pending fullscreen request was not granted by the browser
+  // (e.g. if an entry and exit coalesced while visual property updates were
+  // being throttled). Rejects any pending request and resets state to kInitial.
+  void DidFailToEnterFullscreen();
+
   // Called by Fullscreen (via ChromeClient) to notify that the fullscreen
   // element has changed.
   void FullscreenElementChanged(Element* old_element,
@@ -90,7 +96,7 @@ class CORE_EXPORT FullscreenController {
 
   void EnterFullscreenCallback(bool granted);
 
-  WebViewImpl* web_view_base_;
+  raw_ptr<WebViewImpl, UnprotectedInRelease | DanglingUntriaged> web_view_base_;
 
   // State is used to avoid unnecessary enter/exit requests.
   enum class State {

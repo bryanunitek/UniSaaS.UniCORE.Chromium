@@ -21,23 +21,6 @@ SkeletonPseudoElement::SkeletonPseudoElement(Element* originating_element)
            originating_element->GetDocument().documentElement());
 }
 
-bool SkeletonPseudoElement::LayoutObjectIsNeeded(const DisplayStyle&) const {
-  // The ::skeleton pseudo-element always generates a box. It is a container for
-  // the skeleton document tree inside its UA shadow root. The skeleton root
-  // element under the shadow root will generate a child box of this
-  // pseudo-element's box, and this pseudo-element's box will have LayoutView as
-  // its parent.
-  return true;
-}
-
-const ComputedStyle* SkeletonPseudoElement::CustomStyleForLayoutObject(
-    const StyleRecalcContext&) {
-  // Use initial styles without inheriting from the originating element so that
-  // any implicitly or explicitly inherited properties in the root element of
-  // the shadow tree will inherit the initial value.
-  return GetDocument().GetStyleResolver().InitialStyleForElement();
-}
-
 void SkeletonPseudoElement::AttachLayoutTree(AttachContext& context) {
   AttachContext skeleton_context(context);
   skeleton_context.parent = GetDocument().GetLayoutView();
@@ -53,9 +36,10 @@ void SetCanvasAndColorScheme(const Document& document,
   // that the background color here follows that.
   const ui::ColorProvider* color_provider =
       document.GetColorProviderForPainting(color_scheme);
-  Color color = StyleColor::ColorFromKeyword(CSSValueID::kCanvas, color_scheme,
-                                             color_provider,
-                                             /*can_expose_accent_color=*/false);
+  Color color = StyleColor::ColorFromKeyword(
+      CSSValueID::kCanvas,
+      /*theme_info=*/
+      {.color_provider = color_provider, .color_scheme = color_scheme});
   builder.SetDarkColorScheme(color_scheme == mojom::blink::ColorScheme::kDark);
   builder.SetBackgroundColor(StyleColor(color, CSSValueID::kCanvas));
 }
@@ -77,13 +61,13 @@ mojom::blink::ColorScheme SkeletonPseudoElement::SkeletonUsedColorScheme() {
 void SkeletonPseudoElement::DidRecalcStyle(const StyleRecalcChange) {
   if (LayoutObject* layout_object = GetLayoutObject()) {
     mojom::blink::ColorScheme used_color_scheme = SkeletonUsedColorScheme();
-    if (used_color_scheme != layout_object->StyleRef().UsedColorScheme()) {
-      ComputedStyleBuilder builder(layout_object->StyleRef());
+    if (used_color_scheme != layout_object->Style().UsedColorScheme()) {
+      ComputedStyleBuilder builder(layout_object->Style());
       // TODO(crbug.com/513276602): <meta> color-scheme elements do not have
       // an effect as the hosting document's page color-scheme is currently
       // used.
       SetCanvasAndColorScheme(GetDocument(), builder, used_color_scheme);
-      layout_object->SetStyle(builder.TakeStyle());
+      layout_object->SetStyle(*builder.TakeStyle());
     }
   }
 }
@@ -95,20 +79,12 @@ const ComputedStyle* SkeletonPseudoElement::AdjustedLayoutStyle(
   // a box for it which serves as a canvas for the skeleton document so that
   // the page we are navigating from is not seen through the skeleton.
   // SetCanvasAndColorScheme() sets the opaque background.
-  ComputedStyleBuilder builder =
-      GetDocument().GetStyleResolver().InitialStyleBuilderForElement();
-  builder.SetZIndex(0);
-  builder.SetForcesStackingContext(true);
-  builder.SetDisplay(EDisplay::kBlock);
-  builder.SetPosition(EPosition::kFixed);
-  builder.SetContain(kContainsStrict);
-  builder.SetTop(Length::Fixed(0));
-  builder.SetLeft(Length::Fixed(0));
-  builder.SetBottom(Length::Fixed(0));
-  builder.SetRight(Length::Fixed(0));
-
-  SetCanvasAndColorScheme(GetDocument(), builder, SkeletonUsedColorScheme());
-
+  mojom::blink::ColorScheme used_color_scheme = SkeletonUsedColorScheme();
+  if (style.UsedColorScheme() == used_color_scheme) {
+    return nullptr;
+  }
+  ComputedStyleBuilder builder(style);
+  SetCanvasAndColorScheme(GetDocument(), builder, used_color_scheme);
   return builder.TakeStyle();
 }
 

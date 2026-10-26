@@ -19,7 +19,9 @@ import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.components.metrics.OmniboxEventProtos.OmniboxEventProto.PageClassification;
+import org.chromium.components.metrics.OmniboxEventProtosIntDef.PageClassification;
+import org.chromium.components.omnibox.AimModelsProtoIntDef.ModelMode;
+import org.chromium.components.omnibox.ToolModeProtoIntDef.ToolMode;
 import org.chromium.components.search_engines.StarterPackId;
 import org.chromium.url.GURL;
 
@@ -78,18 +80,65 @@ public class AutocompleteInput implements UserData {
         int STANDBY_NO_FOCUS = 3;
     }
 
+    /**
+     * Represents the visual presentation state of the Omnibox UI during a session.
+     *
+     * <p>DisplayState separates how the Omnibox is visually drawn from whether autocomplete queries
+     * are actively being fetched (which is tracked by {@link AutocompleteState}).
+     */
+    @IntDef({
+        DisplayState.WEBSITE,
+        DisplayState.DRAFTING_NO_FOCUS,
+        DisplayState.DRAFTING,
+        DisplayState.SUGGESTIONS
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    @Target({ElementType.TYPE_USE})
+    public @interface DisplayState {
+        /**
+         * Disengaged web page view with no active Omnibox input session. Entered when browsing
+         * normal web content without URL bar interaction.
+         */
+        int WEBSITE = 0;
+
+        /**
+         * Active input session retaining draft text, but disengaged (no keyboard/focus ring, and
+         * text selection is not drawn). Entered when focus is lost due to clicking on the content
+         * area while modifications to the url text are present. While a selection should be saved,
+         * it will not be drawn.
+         */
+        int DRAFTING_NO_FOCUS = 1;
+
+        /**
+         * Active input session retaining draft text where text selection and/or cursor is drawn,
+         * but the suggestions popover is hidden. Entered when the URL bar first gains focus before
+         * suggestions arrive, or when suggestions drop to zero. Preserved across tab switches so
+         * backgrounded tabs restore in drafting mode without reopening the popover until new
+         * suggestions are received.
+         */
+        int DRAFTING = 2;
+
+        /**
+         * Active input session showing the suggestions popover dropdown list (or expanded Fusebox
+         * UI in AI mode). Entered when autocomplete suggestions are received or an expanded AI mode
+         * session is active.
+         */
+        int SUGGESTIONS = 3;
+    }
+
     public static class SiteSearchData {
         public final String keyword;
         public final String fullName;
         public final boolean enteredViaSpace;
         public final @StarterPackId int starterPackId;
+        public final boolean isStarterPackPreview;
 
         public SiteSearchData(String keyword, String fullName) {
-            this(keyword, fullName, false, StarterPackId.NONE);
+            this(keyword, fullName, false, StarterPackId.NONE, false);
         }
 
         public SiteSearchData(String keyword, String fullName, boolean enteredViaSpace) {
-            this(keyword, fullName, enteredViaSpace, StarterPackId.NONE);
+            this(keyword, fullName, enteredViaSpace, StarterPackId.NONE, false);
         }
 
         public SiteSearchData(
@@ -97,10 +146,20 @@ public class AutocompleteInput implements UserData {
                 String fullName,
                 boolean enteredViaSpace,
                 @StarterPackId int starterPackId) {
+            this(keyword, fullName, enteredViaSpace, starterPackId, false);
+        }
+
+        public SiteSearchData(
+                String keyword,
+                String fullName,
+                boolean enteredViaSpace,
+                @StarterPackId int starterPackId,
+                boolean isStarterPackPreview) {
             this.keyword = keyword;
             this.fullName = fullName;
             this.enteredViaSpace = enteredViaSpace;
             this.starterPackId = starterPackId;
+            this.isStarterPackPreview = isStarterPackPreview;
         }
 
         @Override
@@ -121,20 +180,23 @@ public class AutocompleteInput implements UserData {
     // LINT.IfChange(Members)
     private long mUrlFocusTime;
     private GURL mPageUrl;
-    private int mPageClassification;
+    private @PageClassification int mPageClassification;
     private String mPageTitle;
     private boolean mAllowExactKeywordMatch;
     private boolean mHasAttachments;
     private final SettableNonNullObservableSupplier<@AutocompleteState Integer>
             mAutocompleteStateSupplier =
                     ObservableSuppliers.createNonNull(AutocompleteState.ENABLED);
+    private final SettableNonNullObservableSupplier<@DisplayState Integer> mDisplayStateSupplier =
+            ObservableSuppliers.createNonNull(DisplayState.WEBSITE);
     private TextSelection mSelection;
     private @RefineActionUsage int mRefineActionUsage;
     private boolean mSuggestionsListScrolled;
     private @OmniboxFocusReason int mFocusReason;
-    private /* ModelMode */ int mModelMode;
+    private @ModelMode int mModelMode;
 
     private String mInitialUserText = "";
+    private @Nullable GURL mInitialPreviewMatchUrl;
     private final SettableNonNullObservableSupplier<String> mUserText =
             ObservableSuppliers.createNonNull("");
     private @Nullable String mPreviewText;
@@ -144,6 +206,8 @@ public class AutocompleteInput implements UserData {
             mRequestTypeSupplier =
                     ObservableSuppliers.createNonNull(AutocompleteRequestType.SEARCH);
     private final SettableNullableObservableSupplier<SiteSearchData> mSiteSearchData =
+            ObservableSuppliers.createNullable();
+    private final SettableNullableObservableSupplier<GURL> mPreviewMatchUrlSupplier =
             ObservableSuppliers.createNullable();
 
     // LINT.ThenChange(:CopyFrom)
@@ -164,7 +228,7 @@ public class AutocompleteInput implements UserData {
      * @param pageClassification The page classification to be used for this input.
      * @return The AutocompleteInput object.
      */
-    public AutocompleteInput setPageClassification(int pageClassification) {
+    public AutocompleteInput setPageClassification(@PageClassification int pageClassification) {
         mPageClassification = pageClassification;
         return this;
     }
@@ -184,6 +248,7 @@ public class AutocompleteInput implements UserData {
         mAllowExactKeywordMatch = other.mAllowExactKeywordMatch;
         mHasAttachments = other.mHasAttachments;
         mAutocompleteStateSupplier.set(other.getAutocompleteState());
+        mDisplayStateSupplier.set(other.getDisplayState());
         mSelection = other.mSelection; // Copied.
         mRefineActionUsage = other.mRefineActionUsage;
         mSuggestionsListScrolled = other.mSuggestionsListScrolled;
@@ -193,23 +258,23 @@ public class AutocompleteInput implements UserData {
         mPreviewText = other.mPreviewText;
         mAllowUserTextAutocompletion.set(other.mAllowUserTextAutocompletion.get());
         mInitialUserText = other.mInitialUserText;
+        mInitialPreviewMatchUrl = other.mInitialPreviewMatchUrl;
         mRequestTypeSupplier.set(other.mRequestTypeSupplier.get());
         mSiteSearchData.set(other.mSiteSearchData.get());
+        mPreviewMatchUrlSupplier.set(other.mPreviewMatchUrlSupplier.get());
     }
 
     // LINT.ThenChange(:Members)
 
-    private int getComposeboxEquivalentOfPageClassification() {
+    private @PageClassification int getComposeboxEquivalentOfPageClassification() {
         return switch (mPageClassification) {
             // LINT.IfChange(FuseboxSupportedPageClassifications)
-            case PageClassification.INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS_VALUE ->
-                    PageClassification.NTP_OMNIBOX_COMPOSEBOX_VALUE;
-            case PageClassification.SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT_VALUE ->
-                    PageClassification.SRP_OMNIBOX_COMPOSEBOX_VALUE;
-            case PageClassification.CO_BROWSING_COMPOSEBOX_VALUE ->
-                    PageClassification.CO_BROWSING_COMPOSEBOX_VALUE;
-            case PageClassification.OTHER_VALUE ->
-                    PageClassification.OTHER_OMNIBOX_COMPOSEBOX_VALUE;
+            case PageClassification.INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS ->
+                    PageClassification.NTP_OMNIBOX_COMPOSEBOX;
+            case PageClassification.SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT ->
+                    PageClassification.SRP_OMNIBOX_COMPOSEBOX;
+            case PageClassification.OTHER, PageClassification.ANDROID_SHORTCUTS_WIDGET ->
+                    PageClassification.OTHER_OMNIBOX_COMPOSEBOX;
             // LINT.ThenChange(/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxCoordinator.java:FuseboxSupportedPageClassifications)
             default -> {
                 // TODO(crbug.com/474808407): address the issue with top resumed activity change and
@@ -221,7 +286,7 @@ public class AutocompleteInput implements UserData {
                                     "Unrecognized page classification: %d",
                                     mPageClassification);
                 }
-                yield PageClassification.OTHER_OMNIBOX_COMPOSEBOX_VALUE;
+                yield PageClassification.OTHER_OMNIBOX_COMPOSEBOX;
             }
         };
     }
@@ -231,12 +296,12 @@ public class AutocompleteInput implements UserData {
      *
      * @return The raw page classification.
      */
-    public int getRawPageClassification() {
+    public @PageClassification int getRawPageClassification() {
         return mPageClassification;
     }
 
     /** Returns the current page classification. */
-    public int getPageClassification() {
+    public @PageClassification int getPageClassification() {
         return ToolModeUtils.isAimRequest(mRequestTypeSupplier.get())
                 ? getComposeboxEquivalentOfPageClassification()
                 : mPageClassification;
@@ -299,8 +364,8 @@ public class AutocompleteInput implements UserData {
     /**
      * Returns the supplier for the AutocompleteRequestType.
      *
-     * <p>Use sparingly - to install/remove observers. Readers should use {@see getRequestType()}.
-     * Writers should use {@see setRequestType()}.
+     * <p>Use sparingly - to install/remove observers. Readers should use {@link getRequestType()}.
+     * Writers should use {@link setRequestType()}.
      */
     public NonNullObservableSupplier<@AutocompleteRequestType Integer> getRequestTypeSupplier() {
         return mRequestTypeSupplier;
@@ -321,11 +386,26 @@ public class AutocompleteInput implements UserData {
     /**
      * Returns the supplier for the current keyword.
      *
-     * <p>Use sparingly - to install/remove observers. Readers should use {@see getKeyword()}.
-     * Writers should use {@see setSiteSearchData()}.
+     * <p>Use sparingly - to install/remove observers. Readers should use {@link getKeyword()}.
+     * Writers should use {@link setSiteSearchData()}.
      */
     public NullableObservableSupplier<SiteSearchData> getSiteSearchDataSupplier() {
         return mSiteSearchData;
+    }
+
+    /** Sets the preview match URL. */
+    public void setPreviewMatchUrl(@Nullable GURL url) {
+        mPreviewMatchUrlSupplier.set(url);
+    }
+
+    /** Returns the preview match URL. */
+    public @Nullable GURL getPreviewMatchUrl() {
+        return mPreviewMatchUrlSupplier.get();
+    }
+
+    /** Returns supplier of the preview match URL. */
+    public NullableObservableSupplier<GURL> getPreviewMatchUrlSupplier() {
+        return mPreviewMatchUrlSupplier;
     }
 
     /**
@@ -341,7 +421,7 @@ public class AutocompleteInput implements UserData {
     }
 
     /** Returns the Autocomplete Tool that is currently selected. */
-    public int getToolMode() {
+    public @ToolMode int getToolMode() {
         return ToolModeUtils.getToolModeForRequestType(getRequestType(), mHasAttachments);
     }
 
@@ -394,18 +474,34 @@ public class AutocompleteInput implements UserData {
     }
 
     /**
-     * Set the Initial Input - the default value to fall back to if the input is reset.
-     *
-     * <p>This is the default "revert-to" value.
+     * Sets the user text and preview match URL to be restored via {@link #restoreInitialInput()}.
      */
-    public AutocompleteInput setInitialUserText(String userText) {
+    public AutocompleteInput setInitialInput(String userText, @Nullable GURL previewMatchUrl) {
         mInitialUserText = userText;
+        mInitialPreviewMatchUrl = previewMatchUrl;
         return this;
     }
 
-    /** Returns the Initial Input - the default value to fall back to if the input is reset. */
+    /** Restores the user text and preview match URL to their initial values. */
+    public AutocompleteInput restoreInitialInput() {
+        setUserText(mInitialUserText);
+        setPreviewMatchUrl(mInitialPreviewMatchUrl);
+        return this;
+    }
+
+    /** Sets the user text to be restored via {@link #restoreInitialInput()}. */
+    public AutocompleteInput setInitialUserText(String userText) {
+        return setInitialInput(userText, null);
+    }
+
+    /** Returns the user text to be restored via {@link #restoreInitialInput()}. */
     public String getInitialUserText() {
         return mInitialUserText;
+    }
+
+    /** Returns the preview match URL to be restored via {@link #restoreInitialInput()}. */
+    public @Nullable GURL getInitialPreviewMatchUrl() {
+        return mInitialPreviewMatchUrl;
     }
 
     /** Returns whether exact keyword match is allowed with current input. */
@@ -498,11 +594,15 @@ public class AutocompleteInput implements UserData {
         return setPreviewText(null);
     }
 
-    /** Commits the preview text as the user text. */
+    /**
+     * Commits the preview text as the user text, retaining the selection of the committed preview
+     * text part.
+     */
     public AutocompleteInput commitPreviewText() {
-        if (hasPreviewText()) {
-            String textToCommit = mPreviewText;
-            setUserText(textToCommit);
+        if (mPreviewText != null) {
+            TextSelection selection =
+                    new TextSelection(mUserText.get().length(), mPreviewText.length());
+            setUserText(mPreviewText, selection);
         }
         return this;
     }
@@ -532,27 +632,19 @@ public class AutocompleteInput implements UserData {
 
     /** Returns whether current context enables suggestions caching. */
     public boolean isInCacheableContext() {
+        if (!OmniboxFeatures.sServeJavaCachedZeroSuggest.isEnabled()) return false;
         if (!isInZeroPrefixContext()) return false;
 
-        switch (mPageClassification) {
-            case PageClassification.ANDROID_SEARCH_WIDGET_VALUE:
-            case PageClassification.ANDROID_SHORTCUTS_WIDGET_VALUE:
-                return true;
-
-            case PageClassification.INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS_VALUE:
-                return OmniboxFeatures.isJumpStartOmniboxEnabled();
-
-            case PageClassification.SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT_VALUE:
-            case PageClassification.OTHER_VALUE:
-                return OmniboxFeatures.sJumpStartOmniboxCoverRecentlyVisitedPage.getValue();
-
-            default:
-                return false;
-        }
+        return mPageClassification == PageClassification.ANDROID_SEARCH_WIDGET
+                || mPageClassification == PageClassification.ANDROID_SHORTCUTS_WIDGET;
     }
 
     public void setHasAttachments(boolean hasAttachments) {
         mHasAttachments = hasAttachments;
+    }
+
+    public boolean hasAttachments() {
+        return mHasAttachments;
     }
 
     public AutocompleteInput setSelection(TextSelection selection) {
@@ -592,16 +684,19 @@ public class AutocompleteInput implements UserData {
         // Selection after all text
         mSelection = TextSelection.SELECT_END;
         mRefineActionUsage = RefineActionUsage.NOT_USED;
-        mPageClassification = PageClassification.BLANK_VALUE;
+        mPageClassification = PageClassification.BLANK;
         mFocusReason = OmniboxFocusReason.OMNIBOX_TAP;
         mUserText.set("");
         mPreviewText = null;
         mAllowUserTextAutocompletion.set(true);
         mRequestTypeSupplier.set(AutocompleteRequestType.SEARCH);
         mSiteSearchData.set(null);
+        mPreviewMatchUrlSupplier.set(null);
+        mInitialPreviewMatchUrl = null;
         mUrlFocusTime = 0;
         mSuggestionsListScrolled = false;
         mAutocompleteStateSupplier.set(AutocompleteState.ENABLED);
+        mDisplayStateSupplier.set(DisplayState.WEBSITE);
 
         return this;
     }
@@ -634,8 +729,8 @@ public class AutocompleteInput implements UserData {
     /**
      * Returns the supplier for the AutocompleteState.
      *
-     * <p>Use sparingly - to install/remove observers. Readers should use {@see
-     * getAutocompleteState()}. Writers should use {@see setAutocompleteState()}.
+     * <p>Use sparingly - to install/remove observers. Readers should use {@link
+     * #getAutocompleteState()}. Writers should use {@link #setAutocompleteState()}.
      */
     public NonNullObservableSupplier<@AutocompleteState Integer> getAutocompleteStateSupplier() {
         return mAutocompleteStateSupplier;
@@ -654,13 +749,29 @@ public class AutocompleteInput implements UserData {
         return this;
     }
 
+    /** Returns the current {@link DisplayState}. */
+    public @DisplayState int getDisplayState() {
+        return mDisplayStateSupplier.get();
+    }
+
+    /** Returns the supplier for the {@link DisplayState}. */
+    public NonNullObservableSupplier<@DisplayState Integer> getDisplayStateSupplier() {
+        return mDisplayStateSupplier;
+    }
+
+    /** Sets the {@link DisplayState}. */
+    public AutocompleteInput setDisplayState(@DisplayState int displayState) {
+        mDisplayStateSupplier.set(displayState);
+        return this;
+    }
+
     /** Returns the current model mode or MODEL_MODE_UNSPECIFIED if never set. */
-    public /* ModelMode */ int getModelMode() {
+    public @ModelMode int getModelMode() {
         return mModelMode;
     }
 
     /** Sets the ModelMode that should be used. */
-    public void setModelMode(int modelMode) {
+    public void setModelMode(@ModelMode int modelMode) {
         mModelMode = modelMode;
     }
 

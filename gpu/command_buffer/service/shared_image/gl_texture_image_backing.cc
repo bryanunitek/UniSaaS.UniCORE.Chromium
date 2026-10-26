@@ -17,6 +17,7 @@
 #include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/context_state.h"
+#include "gpu/command_buffer/service/gl_utils.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_factory.h"
@@ -236,7 +237,6 @@ bool GLTextureImageBacking::SupportsPixelReadbackWithFormat(
           format == viz::SinglePlaneFormat::kRGBA_8888 ||
           format == viz::SinglePlaneFormat::kBGRA_8888 ||
           format == viz::SinglePlaneFormat::kR_8 ||
-          format == viz::SinglePlaneFormat::kRG_88 ||
           format == viz::SinglePlaneFormat::kRGBX_8888 ||
           format == viz::SinglePlaneFormat::kBGRX_8888);
 }
@@ -252,10 +252,7 @@ bool GLTextureImageBacking::SupportsPixelUploadWithFormat(
           format == viz::SinglePlaneFormat::kRGBA_4444 ||
           format == viz::SinglePlaneFormat::kBGRA_8888 ||
           format == viz::SinglePlaneFormat::kR_8 ||
-          format == viz::SinglePlaneFormat::kRG_88 ||
           format == viz::SinglePlaneFormat::kRGBA_F16 ||
-          format == viz::SinglePlaneFormat::kR_16 ||
-          format == viz::SinglePlaneFormat::kRG_1616 ||
           format == viz::SinglePlaneFormat::kRGBX_8888 ||
           format == viz::SinglePlaneFormat::kBGRX_8888 ||
           format == viz::SinglePlaneFormat::kRGBA_1010102 ||
@@ -337,7 +334,7 @@ void GLTextureImageBacking::SetClearedRect(const gfx::Rect& cleared_rect) {
   ClearTrackingSharedImageBacking::SetClearedRect(cleared_rect);
 }
 
-void GLTextureImageBacking::Update(std::unique_ptr<gfx::GpuFence> in_fence) {}
+void GLTextureImageBacking::Update(gfx::GpuFenceHandle in_fence) {}
 
 bool GLTextureImageBacking::UploadFromMemory(
     const std::vector<SkPixmap>& pixmaps) {
@@ -484,11 +481,15 @@ std::unique_ptr<VideoImageRepresentation> GLTextureImageBacking::ProduceVideo(
     VideoDevice device) {
 #if BUILDFLAG(IS_WIN)
   DCHECK_EQ(textures_.size(), 1u);
-  DCHECK(device);
+  // The GL copy path requires a D3D11 device; a D3D12 command queue cannot use
+  // it.
+  const auto* d3d11_device =
+      std::get_if<Microsoft::WRL::ComPtr<ID3D11Device>>(&device);
+  CHECK(d3d11_device);
 
   return D3D11VideoImageCopyRepresentation::CreateFromGL(
-      textures_[0]->GetServiceId(), debug_label(), device.Get(), manager, this,
-      tracker);
+      textures_[0]->GetServiceId(), debug_label(), d3d11_device->Get(), manager,
+      this, tracker);
 #else
   return nullptr;
 #endif
@@ -504,18 +505,15 @@ void GLTextureImageBacking::InitializeGLTexture(
   // unfortunate, but is done in order to mirror other allocation checks done in
   // the command decoder.
   gl::GLApi* const api = gl::g_current_gl_context;
-  while (api->glGetErrorFn() != GL_NO_ERROR) {
-  }
+  DrainGLErrors(api);
 
   const std::string debug_label =
       "GLSharedImage_" + SharedImageBacking::debug_label();
   int num_planes = format().NumberOfPlanes();
   textures_.reserve(num_planes);
   for (int plane = 0; plane < num_planes; ++plane) {
-    auto plane_format = GLTextureHolder::GetPlaneFormat(format(), plane);
     textures_.push_back(base::MakeRefCounted<GLTextureHolder>(
-        plane_format, format().GetPlaneSize(plane, size()), is_passthrough_,
-        progress_reporter));
+        format(), plane, size(), is_passthrough_, progress_reporter));
     textures_[plane]->Initialize(format_info[plane],
                                  framebuffer_attachment_angle, pixel_data,
                                  debug_label);

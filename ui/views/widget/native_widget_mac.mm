@@ -17,6 +17,7 @@
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/callback.h"
 #include "base/lazy_instance.h"
+#include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/notimplemented.h"
 #include "base/strings/sys_string_conversions.h"
@@ -41,6 +42,7 @@
 #include "ui/events/gestures/gesture_types.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/font_list.h"
+#include "ui/gfx/geometry/clamp_float_geometry.h"
 #import "ui/gfx/mac/coordinate_conversion.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/native_theme/native_theme.h"
@@ -179,18 +181,30 @@ void NativeWidgetMac::OnWindowKeyStatusChanged(
     bool is_key,
     bool is_content_first_responder) {
   Widget* widget = GetWidget();
-  if (!widget || !widget->OnNativeWidgetActivationChanged(is_key)) {
+  if (!widget || !widget->ShouldHandleNativeWidgetActivationChanged(is_key)) {
     return;
   }
 
   if (is_key) {
+    // Like Aura, restore focus before notifying activation observers, so that
+    // a View that requested focus while the widget was inactive (see
+    // FocusManager::SetFocusedViewWithReason()) is focused before observers
+    // run, rather than being overridden by focus changes they make.
+    base::WeakPtr<Widget> weak_widget = widget->GetWeakPtr();
     widget->OnNativeFocus();
     // GetFocusManager() can be null for detached child widgets during
     // reparenting.
     if (FocusManager* focus_manager = widget->GetFocusManager()) {
       focus_manager->RestoreFocusedView();
     }
+    // Restoring focus may destroy the widget.
+    if (weak_widget) {
+      weak_widget->OnNativeWidgetActivationChanged(is_key);
+    }
   } else {
+    if (!widget->OnNativeWidgetActivationChanged(is_key)) {
+      return;
+    }
     widget->OnNativeBlur();
     if (FocusManager* focus_manager = widget->GetFocusManager()) {
       focus_manager->StoreFocusedView(false);
@@ -821,6 +835,24 @@ bool NativeWidgetMac::IsActive() const {
   return ns_window_host_ ? ns_window_host_->IsWindowKey() : false;
 }
 
+bool NativeWidgetMac::ShouldActivateOnFocusRequest() const {
+  if (!base::FeatureList::IsEnabled(
+          features::kMacActivateWidgetOnFocusRequest)) {
+    return false;
+  }
+  // Only activate when doing so is synchronous and has no side effects beyond
+  // making the window key:
+  // - Out-of-process windows (e.g. app shims) become key asynchronously.
+  // - Activating a hidden window would show it.
+  // - Activating while the app is inactive would steal focus from the app the
+  //   user is currently using.
+  // Otherwise, the view is focused without activating the window, which is the
+  // legacy Mac behavior.
+  NSWindow* window =
+      ns_window_host_ ? ns_window_host_->GetInProcessNSWindow() : nil;
+  return window && window.visible && window.canBecomeKeyWindow && NSApp.active;
+}
+
 void NativeWidgetMac::SetZOrderLevel(ui::ZOrderLevel order) {
   if (!GetNSWindowMojo()) {
     return;
@@ -928,7 +960,10 @@ void NativeWidgetMac::SetAspectRatio(const gfx::SizeF& aspect_ratio,
   if (!GetNSWindowMojo()) {
     return;
   }
-  GetNSWindowMojo()->SetAspectRatio(aspect_ratio, excluded_margin);
+  gfx::SizeF sanitized_aspect_ratio(
+      std::max(0.0f, gfx::ClampFloatGeometry(aspect_ratio.width())),
+      std::max(0.0f, gfx::ClampFloatGeometry(aspect_ratio.height())));
+  GetNSWindowMojo()->SetAspectRatio(sanitized_aspect_ratio, excluded_margin);
 }
 
 void NativeWidgetMac::FlashFrame(bool flash_frame) {

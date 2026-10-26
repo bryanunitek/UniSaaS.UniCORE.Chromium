@@ -21,13 +21,13 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_permission_descriptor.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_permission_name.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_push_permission_descriptor.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_top_level_storage_access_permission_descriptor.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -206,21 +206,6 @@ PermissionDescriptorPtr CreateVideoCapturePermissionDescriptor(
   return descriptor;
 }
 
-PermissionDescriptorPtr CreateTopLevelStorageAccessPermissionDescriptor(
-    const KURL& origin_as_kurl) {
-  auto descriptor =
-      CreatePermissionDescriptor(PermissionName::TOP_LEVEL_STORAGE_ACCESS);
-  scoped_refptr<SecurityOrigin> supplied_origin =
-      SecurityOrigin::Create(origin_as_kurl);
-  auto top_level_storage_access_extension =
-      mojom::blink::TopLevelStorageAccessPermissionDescriptor::New();
-  top_level_storage_access_extension->requestedOrigin = supplied_origin;
-  descriptor->extension =
-      mojom::blink::PermissionDescriptorExtension::NewTopLevelStorageAccess(
-          std::move(top_level_storage_access_extension));
-  return descriptor;
-}
-
 PermissionDescriptorPtr CreateFullscreenPermissionDescriptor(
     bool allow_without_user_gesture) {
   auto descriptor = CreatePermissionDescriptor(PermissionName::FULLSCREEN);
@@ -249,7 +234,24 @@ PermissionDescriptorPtr ParsePermissionDescriptor(
 
   switch (name.AsEnum()) {
     case V8PermissionName::Enum::kGeolocation:
-      return CreatePermissionDescriptor(PermissionName::GEOLOCATION);
+      if (RuntimeEnabledFeatures::ApproximateGeolocationPermissionEnabled(
+              ExecutionContext::From(script_state)) &&
+          !RuntimeEnabledFeatures::ApproximateGeolocationPermissionAPIEnabled(
+              ExecutionContext::From(script_state))) {
+        // The internal permission model of chromium stores two separate values
+        // for precise and approximate geolocation. However, only one permission
+        // ("geolocation") is exposed through the Permissions API, and the spec
+        // mandates that permissions.query() should return "granted" even if the
+        // internal states are approximate: granted, precise: prompt. So we just
+        // return the approximate permission state here. Note that the state of
+        // approximate location is always laxer than the state of precise
+        // location, and querying approximate location exactly answers the
+        // question "is any location access granted or prompt".
+        return CreatePermissionDescriptor(
+            PermissionName::GEOLOCATION_APPROXIMATE);
+      } else {
+        return CreatePermissionDescriptor(PermissionName::GEOLOCATION);
+      }
 
     case V8PermissionName::Enum::kGeolocationApproximate:
       if (!RuntimeEnabledFeatures::ApproximateGeolocationPermissionAPIEnabled(
@@ -403,25 +405,6 @@ PermissionDescriptorPtr ParsePermissionDescriptor(
         return nullptr;
       }
       return CreatePermissionDescriptor(PermissionName::LOCAL_FONTS);
-    }
-
-    case V8PermissionName::Enum::kTopLevelStorageAccess: {
-      TopLevelStorageAccessPermissionDescriptor*
-          top_level_storage_access_permission =
-              NativeValueTraits<TopLevelStorageAccessPermissionDescriptor>::
-                  NativeValue(script_state->GetIsolate(),
-                              raw_descriptor.V8Value(), exception_state);
-      if (exception_state.HadException()) {
-        return nullptr;
-      }
-      KURL origin_as_kurl{
-          top_level_storage_access_permission->requestedOrigin()};
-      if (!origin_as_kurl.IsValid()) {
-        exception_state.ThrowTypeError("The requested origin is invalid.");
-        return nullptr;
-      }
-
-      return CreateTopLevelStorageAccessPermissionDescriptor(origin_as_kurl);
     }
 
     case V8PermissionName::Enum::kCapturedSurfaceControl: {

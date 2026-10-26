@@ -6,7 +6,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/uuid.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
@@ -33,8 +33,8 @@ IN_PROC_BROWSER_TEST_F(PrefsInternalsTest, MAYBE_TestPrefsAreServed) {
   std::string guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
   GURL fake_homepage_url = GURL("http://example.com/" + guid);
   EXPECT_TRUE(fake_homepage_url.is_valid());
-  browser()->profile()->GetPrefs()->SetString(prefs::kHomePage,
-                                              fake_homepage_url.spec());
+  browser()->GetProfile()->GetPrefs()->SetString(prefs::kHomePage,
+                                                 fake_homepage_url.spec());
 
   // First, check that navigation succeeds.
   GURL kUrl(content::GetWebUIURL(chrome::kChromeUIPrefsInternalsHost));

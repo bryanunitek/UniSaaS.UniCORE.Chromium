@@ -103,39 +103,49 @@ corresponds to a [`Profile`](https://www.chromium.org/developers/design-document
   - [`common/`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/common)
     - [`form_data.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/common/form_data.h)
   - [`browser/`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser)
-    - [`autofill_client.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/autofill_client.h)
-      - [`//android_webview/browser/aw_autofill_client.h`](https://source.chromium.org/chromium/chromium/src/+/main:android_webview/browser/aw_autofill_client.h) (WebView implementation)
-      - [`//chrome/browser/ui/autofill/chrome_autofill_client.h`](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/ui/autofill/chrome_autofill_client.h) (Chrome implementation)
-    - [`autofill_driver.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/autofill_driver.h)
-      - [`../../content/browser/content_autofill_driver.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/autofill_driver.h) (non-iOS implementation)
-      - [`../../ios/browser/autofill_driver_ios.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/browser/autofill_driver_ios.h) (iOS implementation)
-    - [`autofill_driver_router.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/autofill_driver_router.h)
-    - [`autofill_external_delegate.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/autofill_external_delegate.h)
-    - [`autofill_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/autofill_manager.h)
-      - [`browser_autofill_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/browser_autofill_manager.h) (Chrome specialization)
-      - [`//components/android_autofill/browser/android_autofill_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/android_autofill/browser/android_autofill_manager.h) (WebView specialization)
     - [`crowdsourcing/autofill_crowdsourcing_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/crowdsourcing/autofill_crowdsourcing_manager.h)
+    - [`crowdsourcing/votes_uploader.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/crowdsourcing/votes_uploader.h)
+    - [`data_manager/autofill_ai/entity_data_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h)
+    - [`data_manager/personal_data_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/data_manager/personal_data_manager.h)
+      - [`data_manager/addresses/address_data_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/data_manager/addresses/address_data_manager.h) (owned by `PersonalDataManager`)
+      - [`data_manager/payments/payments_data_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/data_manager/payments/payments_data_manager.h) (owned by `PersonalDataManager`)
+    - [`data_manager/valuables/valuables_data_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/data_manager/valuables/valuables_data_manager.h)
     - [`data_model/`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/data_model)
-      - [`autofill_profile.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/data_model/autofill_profile.h)
-      - [`credit_card.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/data_model/credit_card.h)
-    - [`form_data_importer.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/form_data_importer.h)
+      - [`addresses/autofill_profile.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/data_model/addresses/autofill_profile.h)
+      - [`payments/credit_card.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/data_model/payments/credit_card.h)
+    - [`form_import/form_data_importer.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/form_import/form_data_importer.h)
+    - [`form_parsing/form_field_parser.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/form_parsing/form_field_parser.h)
     - [`form_structure.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/form_structure.h)
-    - [`personal_data_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/personal_data_manager.h)
+    - [`foundations/autofill_client.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/foundations/autofill_client.h)
+      - [`//components/autofill/content/browser/content_autofill_client.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/content/browser/content_autofill_client.h) (non-iOS base)
+        - [`//components/android_autofill/browser/android_autofill_client.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/android_autofill/browser/android_autofill_client.h) (WebView implementation)
+        - [`//chrome/browser/ui/autofill/chrome_autofill_client.h`](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/ui/autofill/chrome_autofill_client.h) (Chrome implementation)
+    - [`foundations/autofill_driver.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/foundations/autofill_driver.h)
+      - [`//components/autofill/content/browser/content_autofill_driver.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/content/browser/content_autofill_driver.h) (non-iOS implementation)
+      - [`//components/autofill/ios/browser/autofill_driver_ios.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/browser/autofill_driver_ios.h) (iOS implementation)
+    - [`foundations/autofill_driver_router.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/foundations/autofill_driver_router.h)
+    - [`foundations/autofill_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/foundations/autofill_manager.h)
+      - [`foundations/browser_autofill_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/foundations/browser_autofill_manager.h) (Chrome specialization)
+      - [`//components/android_autofill/browser/android_autofill_manager.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/android_autofill/browser/android_autofill_manager.h) (WebView specialization)
     - [`proto/`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/proto/) (Autofill server)
+    - [`ui/autofill_external_delegate.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/ui/autofill_external_delegate.h)
 - [`content/`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/content)
   - [`browser/`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/content/browser)
     - [`content_autofill_driver.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/content/browser/content_autofill_driver.h)
     - [`content_autofill_driver_factory.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/content/browser/content_autofill_driver_factory.h)
   - [`renderer/`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/content/renderer)
     - [`autofill_agent.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/content/renderer/autofill_agent.h)
-    - [`form_autofill_util.cc`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/content/renderer/autofill_agent.h)
+    - [`form_autofill_util.cc`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/content/renderer/form_autofill_util.cc)
 - [`ios/`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios)
   - [`browser/`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/browser)
     - [`autofill_agent.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/browser/autofill_agent.h)
+    - [`autofill_client_ios.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/browser/autofill_client_ios.h)
     - [`autofill_driver_ios.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/browser/autofill_driver_ios.h)
   - [`form_util/`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/form_util)
-    - [`form.ts`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/form_util/resources/form.ts)
-    - [`fill.ts`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/form_util/resources/fill.ts)
+    - [`resources/fill_util.ts`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/form_util/resources/fill_util.ts)
+    - [`resources/fill_web_form.ts`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/form_util/resources/fill_web_form.ts)
+    - [`resources/form_handlers.ts`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/form_util/resources/form_handlers.ts)
+    - [`resources/form_utils.ts`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/ios/form_util/resources/form_utils.ts)
 
 # Related directories
 
@@ -191,7 +201,7 @@ may sacrifice a little bit of correctness in favor of simplicity.
   * `ChromeAutofillClient`
     * One instance per `WebContents` (tab).
     * Responsibilities:
-      * Serves as bridge from platform aganostic `BrowserAutofillManager` to the
+      * Serves as bridge from platform agnostic `BrowserAutofillManager` to the
         OS specific logic.
     * Implements `AutofillClient` interface.
     * Has siblings `AndroidAutofillClient`, `ChromeAutofillClientIOS` and
@@ -201,15 +211,30 @@ may sacrifice a little bit of correctness in favor of simplicity.
       original profile's instance is used. This enables filling even in
       incognito mode. Imports are disabled in incognito mode by the
       `BrowserAutofillManager`.
+    * Owns `AddressDataManager` and `PaymentsDataManager`.
     * Responsibilities:
-      * Reading/writing/updating AutofillProfiles and payment information from
-        `AutofillTable` - an SQLite database used to persist data across browser
-        shutdown.
-      * Keeps a copy of `AutofillTable`'s data in memory, making them available
+      * Reading/writing/updating `AutofillProfile`s (`AddressDataManager`) and
+        payment information (`PaymentsDataManager`) from `AddressAutofillTable`
+        and `PaymentsAutofillTable` - an SQLite database used to persist data
+        across browser shutdown.
+      * Each keeps a copy of its table's data in memory, making it available
         to the rest of Autofill.
-      * Modifications triggered through the `PersonalDataManager` generally
-        happen asynchronously. For details, see
+      * Modifications triggered through the `AddressDataManager` and
+        `PaymentsDataManager` generally happen asynchronously. For details, see
         [go/pdm-autofill-table-interface](http://go/pdm-autofill-table-interface).
+  * `EntityDataManager` and `ValuablesDataManager`
+    * One `KeyedService` instance per `BrowserContext`. In incognito mode, the
+      original profile's instance is used.
+    * Not owned by `PersonalDataManager` despite the naming. Reached via
+      `AutofillClient::GetEntityDataManager()` and
+      `AutofillClient::GetValuablesDataManager()`, which may return null.
+    * Responsibilities:
+      * `EntityDataManager` loads and modifies `EntityInstance`s for
+        Autofill AI from `EntityTable` (modifications are asynchronous).
+      * `ValuablesDataManager` loads non-payments Google Wallet data such as
+        loyalty cards from `ValuablesTable`.
+      * Each keeps a copy of its table's data in memory, making it available
+        to the rest of Autofill.
 
 ## What's the difference between Autofill and Autocomplete?
 
@@ -254,12 +279,12 @@ may sacrifice a little bit of correctness in favor of simplicity.
     falling back to id attribute of the form control) and type (text, search,
     password, tel, ...)
 
-## How are field classified?
+## How are fields classified?
 
 * Local heuristics
   * See `components/autofill/core/browser/form_parsing/`.
-  * `FormField::ParseFormFields` is the global entry point for parsing fields
-    with heuristics.
+  * `FormFieldParser::ParseFormFields` is the global entry point for parsing
+    fields with heuristics.
   * Local heuristics are only applied if a form has at least 3 fields and at
     least 3 fields are classified with distinct field types. There are
     exceptions for a few field types (email addresses, promo codes, IBANs, CVV
@@ -288,7 +313,7 @@ may sacrifice a little bit of correctness in favor of simplicity.
       signature 1 is overridden to be 4 (`NAME_MIDDLE`).
     * The server prediction for the field with signature 8 in the form with
       signature 7 is overridden to be 9 (`EMAIL_ADDRESS`).
-    For more detail, see the documentation of [`ServerPredictionOverrides`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/server_prediction_overrides.h).
+    For more detail, see the documentation of [`ServerPredictionOverrides`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/crowdsourcing/server_prediction_overrides.h).
 * Autocomplete attribute
   * The autocomplete attribute is parsed in `ParseAutocompleteAttribute`.
   * The autocomplete attribute trumps local heuristics and crowd sourcing
@@ -308,7 +333,7 @@ and types derived from the autocomplete attribute are represented as [HtmlFieldT
   Such a tree of forms (and frames) is called a *frame-transcending form*.
 * Autofill treats every frame-transcending form like a single, ordinary form:
   [docs/security/autofill-across-iframes.md](https://source.chromium.org/chromium/chromium/src/+/main:docs/security/autofill-across-iframes.md)
-* [`AutofillDriverRouter`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/autofill_driver_router.h)
+* [`AutofillDriverRouter`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/foundations/autofill_driver_router.h)
   flattens each tree of forms by merging the fields of the `FormData` nodes
   into the root `FormData`, and routes events between the nodes' drivers to the
   root's driver and vice versa.
@@ -321,9 +346,9 @@ and types derived from the autocomplete attribute are represented as [HtmlFieldT
 Several important subsets of FieldTypes exist:
 * Supported types of a [form group](https://source.chromium.org/chromium/chromium/src/+/refs/heads/main:components/autofill/core/browser/data_model/form_group.h):
   Every form group defines which FieldTypes it maintains. For example:
-  * The supported type of [EmailInfo](https://source.chromium.org/chromium/chromium/src/+/refs/heads/main:components/autofill/core/browser/data_model/contact_info.h;l=87;drc=10009f6ff9f3b626979c9422321686f360df7cee) is [EMAIL_ADDRESS](https://source.chromium.org/chromium/chromium/src/+/refs/heads/main:components/autofill/core/browser/data_model/contact_info.cc;l=184;drc=59b1cf76cc21ae34bc99073e963f7d268b0a5c17).
+  * The supported type of [EmailInfo](https://source.chromium.org/chromium/chromium/src/+/refs/heads/main:components/autofill/core/browser/data_model/addresses/email_info.h) is [EMAIL_ADDRESS](https://source.chromium.org/chromium/chromium/src/+/refs/heads/main:components/autofill/core/browser/data_model/addresses/email_info.cc).
   * The supported types of AutofillProfile are all name, address, phone number, etc. types.
-* Stored types of AutofillProfile: The set of types stored in AutofillTable,
+* Stored types of AutofillProfile: The set of types stored in AddressAutofillTable,
   defined by `AutofillProfile::kDatabaseStoredTypes`.
   * Not all supported types of AutofillProfile are stored, since types following
     a standard format can unambiguously be derived from another type. See
@@ -340,11 +365,13 @@ See [go/autofill-new-fieldtypes-in-data-model-dd](http://go/autofill-new-fieldty
 
 ## How is data represented internally?
 
-* See `components/autofill/core/browser/data_model/`
+* See `components/autofill/core/browser/data_model/`, which is organized into
+  `addresses/`, `payments/`, `autofill_ai/`, `identity_credential/` and
+  `valuables/`.
   * For addresses, see
-    `components/autofill/core/browser/data_model/autofill_structured_address.h`
+    `components/autofill/core/browser/data_model/addresses/autofill_structured_address.h`
     and
-    `components/autofill/core/browser/data_model/autofill_structured_address_name.h`.
+    `components/autofill/core/browser/data_model/addresses/autofill_structured_address_name.h`.
   * Parsing = breaking a bigger concept (e.g. street address) into smaller
     concepts (e.g. street name and house number). See
     `AddressComponent::ParseValueAndAssignSubcomponents()`.
@@ -356,17 +383,20 @@ See [go/autofill-new-fieldtypes-in-data-model-dd](http://go/autofill-new-fieldty
   * Formatting = combining the smaller concepts (e.g. street name and house
     number) into a bigger one (street address). See
     `AddressComponent::FormatValueFromSubcomponents()`.
-    * This is driven by the implementations of `GetBestFormatString()`,
-      in particular `StreetAddress::GetBestFormatString()`.
+    * This is driven by the implementations of `GetFormatString()`.
   * Invariance: The children of a node cannot contain more information than the
-    parent node, or more more formally: every string in a node must be present
+    parent node, or more formally: every string in a node must be present
     in its parent (at least in a normalized form). If a subtree contains too
     much data, it is discarded via `AddressComponent::WipeInvalidStructure()`.
 
 ## Where is Autofill data persisted?
 
-* See
-  [`../../components/autofill/core/browser/webdata/autofill_table.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/webdata/autofill_table.h)
+* See [`//components/autofill/core/browser/webdata/`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/webdata/):
+  * [`addresses/address_autofill_table.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/webdata/addresses/address_autofill_table.h)
+  * [`autocomplete/autocomplete_table.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/webdata/autocomplete/autocomplete_table.h)
+  * [`autofill_ai/entity_table.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/webdata/autofill_ai/entity_table.h)
+  * [`payments/payments_autofill_table.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/webdata/payments/payments_autofill_table.h)
+  * [`valuables/valuables_table.h`](https://source.chromium.org/chromium/chromium/src/+/main:components/autofill/core/browser/webdata/valuables/valuables_table.h)
 
 ## What is a form submission?
 
@@ -376,14 +406,14 @@ assessment whether the form submission should be considered successful (meaning
 that the website accepted the submitted values, not that the HTTP request
 succeeded):
 
-* A **regular HTTP form submission** (`FormTracker::WillSubmitForm()`).
+* A **regular HTTP form submission** (`FormSubmissionTracker::WillSubmitForm()`).
   * Triggers `SubmissionSource::FORM_SUBMISSION`.
 * A **main-frame navigation** was initiated in the content area but not triggered by
-  a link click (`FormTracker::DidStartNavigation()`) - only if the frame has a
+  a link click (`FormSubmissionTracker::DidStartNavigation()`) - only if the frame has a
   `last_interacted_form_` or form-less element that the user interacted with.
   * Triggers `SubmissionSource::PROBABLY_FORM_SUBMITTED`.
 * After a **same document navigation**
-  (`FormTracker::DidFinishSameDocumentNavigation()`), the last interacted form
+  (`FormSubmissionTracker::DidFinishSameDocumentNavigation()`), the last interacted form
   is/becomes unfocusable or removed. The former condition is tested via
   `WebNode::IsFocusable()` and considers various styles (e.g. "display: none" on
   the node or a parent, "visibility: hidden") and attributes (e.g. "inert",
@@ -395,7 +425,7 @@ succeeded):
   * Triggers `SubmissionSource::XHR_SUCCEEDED` if the form is already
     inaccessible or removed and the XHR succeeds.
 * The **subframe** or non-primary main frame containing the form was
-  **detached** (`FormTracker::WillDetach()`)
+  **detached** (`FormSubmissionTracker::WillDetach()`)
   * Triggers `SubmissionSource::FRAME_DETACHED`.
 
 ## When are votes uploaded?
@@ -405,15 +435,15 @@ Autofill votes are theoretically uploaded
   (`BrowserAutofillManager::OnFormSubmittedImpl()`).
 
   In this case `observed_submission=true` is passed to
-  `BrowserAutofillManager::MaybeStartVoteUploadProcess`.
-* when a the user **removes focus** from a form (this could happen because the
+  `VotesUploader::MaybeStartVoteUploadProcess`.
+* when the user **removes focus** from a form (this could happen because the
   user clicks on a custom autofill dropdown rendered by the website or if the
   user just clicks on the background).
   (`BrowserAutofillManager::OnFocusOnNonFormFieldImpl()` ->
   `BrowserAutofillManager::ProcessPendingFormForUpload()`).
 
   `observed_submission=false` is passed.
-* when a the **form changes** (the structure, not the values) and we notice it
+* when a **form changes** (the structure, not the values) and we notice it
   (`BrowserAutofillManager::UpdatePendingForm()` ->
   `BrowserAutofillManager::ProcessPendingFormForUpload()`).
 
@@ -429,11 +459,12 @@ In case `observed_submission == false`, the votes are not directly passed to
 the `AutofillCrowdsourcingManager`. Instead they are cached until the cache is
 flushed. This enables us to override previous votes in case the user focuses
 and removes focus from a form multiple times while editing the fields' values.
-The cache is flushed on form submission.
+The cache is flushed on form submission or when the frame resets, becomes
+inactive, or is deleted.
 
 As the votes generation is asynchronous, it is not guaranteed that the results
 are available by the time the upload cache is flushed. In this case, votes are
-only uploaded on the next navigation.
+only uploaded on the next flush.
 
 <!-- TODO:
 ## How are addresses compared, updated or added?

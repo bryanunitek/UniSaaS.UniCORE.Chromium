@@ -47,13 +47,10 @@
 #import "ios/chrome/browser/policy/model/management_state.h"
 #import "ios/chrome/browser/policy/ui_bundled/management_util.h"
 #import "ios/chrome/browser/shared/coordinator/alert/action_sheet_coordinator.h"
-#import "ios/chrome/browser/shared/coordinator/alert/alert_coordinator.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
-#import "ios/chrome/browser/shared/model/profile/features.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
@@ -134,8 +131,6 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
   __weak id<AuthenticationFlowPerformerDelegate> _delegate;
   // Dialog for the managed confirmation dialog.
   ManagedProfileCreationCoordinator* _managedConfirmationScreenCoordinator;
-  // Dialog for the managed confirmation dialog.
-  AlertCoordinator* _managedConfirmationAlertCoordinator;
   // Used to fetch the signin restriction policies for a single
   // account without needing to register it for all policies.
   // This needs to be a member of the class because it works asynchronously and
@@ -163,8 +158,6 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
 - (void)interrupt {
   [self stopAgeMismatchSignoutCoordinator];
   [self stopManagedConfirmation];
-  [_managedConfirmationAlertCoordinator stop];
-  _managedConfirmationAlertCoordinator = nil;
   _delegate = nil;
   [self stopWatchdogTimer];
   [self stopReauthCoordinator];
@@ -182,7 +175,8 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
       IdentityManagerFactory::GetForProfile(
           browser->GetProfile()->GetOriginalProfile());
   CoreAccountInfo accountInfo =
-      identityManager->FindExtendedAccountInfoByGaiaId(identity.gaiaId);
+      identityManager->FindExtendedAccountInfoByGaiaId(identity.gaiaId)
+          .GetCoreAccountInfo();
   if (accountInfo.IsEmpty()) {
     accountInfo.gaia = identity.gaiaId;
     accountInfo.email = base::SysNSStringToUTF8(identity.userEmail);
@@ -198,11 +192,12 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
 }
 
 - (void)fetchUnsyncedDataWithSyncService:(syncer::SyncService*)syncService {
+  __weak __typeof(self) weakSelf = self;
   auto callback = base::BindOnce(
-      [](__typeof(_delegate) delegate, syncer::DataTypeSet set) {
-        [delegate didFetchUnsyncedDataWithUnsyncedDataTypes:set];
+      [](__typeof(self) strongSelf, syncer::DataTypeSet set) {
+        [strongSelf didFetchUnsyncedDataWithUnsyncedDataTypes:set];
       },
-      _delegate);
+      weakSelf);
   signin::FetchUnsyncedDataForSignOutOrProfileSwitching(syncService,
                                                         std::move(callback));
 }
@@ -220,7 +215,7 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
                                                      anchorRect:
                                                          (CGRect)anchorRect {
   // Sign-in related work should be done on regular browser.
-  CHECK_EQ(browser->type(), Browser::Type::kRegular, base::NotFatalUntil::M145);
+  CHECK_EQ(browser->type(), Browser::Type::kRegular);
   __weak __typeof(self) weakSelf = self;
   _leavingPrimaryAccountConfirmationDialogCoordinator =
       GetLeavingPrimaryAccountConfirmationDialog(
@@ -233,12 +228,13 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
 
 - (void)fetchManagedStatus:(ProfileIOS*)profile
                forIdentity:(id<SystemIdentity>)identity {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   SystemIdentityManager* systemIdentityManager =
       GetApplicationContext()->GetSystemIdentityManager();
   if (NSString* hostedDomain =
           systemIdentityManager->GetCachedHostedDomainForIdentity(identity)) {
-    [_delegate didFetchManagedStatus:hostedDomain];
+    [_delegate authenticationFlowPerformer:self
+                     didFetchManagedStatus:hostedDomain];
     return;
   }
 
@@ -307,12 +303,11 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
                            delegate:(id<AuthenticationFlowDelegate>)delegate
                   postSignInActions:(PostSignInActionSet)postSignInActions
                         accessPoint:(signin_metrics::AccessPoint)accessPoint {
-  CHECK(AreSeparateProfilesForManagedAccountsEnabled());
   std::optional<std::string> profileName =
       GetApplicationContext()
           ->GetAccountProfileMapper()
           ->FindProfileNameForGaiaID(identity.gaiaId);
-  CHECK(profileName.has_value(), base::NotFatalUntil::M150);
+  CHECK(profileName.has_value());
 
   __weak __typeof(self) weakSelf = self;
   auto profileSwitchReadyCompletion = base::BindOnce(
@@ -339,7 +334,7 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
   GetApplicationContext()
       ->GetAccountProfileMapper()
       ->MakePersonalProfileManagedWithGaiaID(identity.gaiaId);
-  [_delegate didMakePersonalProfileManaged];
+  [_delegate authenticationFlowPerformerDidMakePersonalProfileManaged:self];
 }
 
 - (void)showManagedConfirmationForHostedDomain:(NSString*)hostedDomain
@@ -349,35 +344,22 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
                     managedProfileCreationMode:
                         (signin::ManagedAccountSigninMode)mode {
   // Sign-in related work should be done on regular browser.
-  CHECK_EQ(browser->type(), Browser::Type::kRegular, base::NotFatalUntil::M145);
+  CHECK_EQ(browser->type(), Browser::Type::kRegular);
   [self checkNoDialog];
 
   base::RecordAction(
       base::UserMetricsAction("Signin_AuthenticationFlowPerformer_"
                               "ManagedConfirmationDialog_Presented"));
 
-  if (AreSeparateProfilesForManagedAccountsEnabled()) {
-    _managedConfirmationScreenCoordinator =
-        [[ManagedProfileCreationCoordinator alloc]
-            initWithBaseViewController:viewController
-                              identity:identity
-                          hostedDomain:hostedDomain
-                               browser:browser
-                                  mode:mode];
-    _managedConfirmationScreenCoordinator.delegate = self;
-    [_managedConfirmationScreenCoordinator start];
-    return;
-  }
-  __weak __typeof(self) weakSelf = self;
-  ProceduralBlock acceptBlock = ^{
-    [weakSelf managedConfirmationAlertAccepted:YES];
-  };
-  ProceduralBlock cancelBlock = ^{
-    [weakSelf managedConfirmationAlertAccepted:NO];
-  };
-  _managedConfirmationAlertCoordinator =
-      ManagedConfirmationDialogContentForHostedDomain(
-          hostedDomain, browser, viewController, acceptBlock, cancelBlock);
+  _managedConfirmationScreenCoordinator =
+      [[ManagedProfileCreationCoordinator alloc]
+          initWithBaseViewController:viewController
+                            identity:identity
+                        hostedDomain:hostedDomain
+                             browser:browser
+                                mode:mode];
+  _managedConfirmationScreenCoordinator.delegate = self;
+  [_managedConfirmationScreenCoordinator start];
 }
 
 - (void)showAgeMismatchDialogForIdentity:(id<SystemIdentity>)identity
@@ -400,19 +382,20 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
   [self stopReauthCoordinator];
 
   BOOL success = (result == ReauthResult::kSuccess);
-  [_delegate didCompleteReauthWithSuccess:success];
+  [_delegate authenticationFlowPerformer:self
+            didCompleteReauthWithSuccess:success];
 }
 
 - (void)confirmChangeProfile:
             (SigninChangeProfileConfirmationBlock)confirmChangeProfile
                  forIdentity:(id<SystemIdentity>)identity {
   if (!confirmChangeProfile) {
-    [_delegate didConfirmChangeProfileCanProceed:YES];
+    [self didConfirmChangeProfileCanProceed:YES];
     return;
   }
-  __weak __typeof(_delegate) delegate = _delegate;
+  __weak __typeof(self) weakSelf = self;
   confirmChangeProfile(^(BOOL canProceed) {
-    [delegate didConfirmChangeProfileCanProceed:canProceed];
+    [weakSelf didConfirmChangeProfileCanProceed:canProceed];
   });
 }
 
@@ -421,11 +404,21 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
 - (void)checkNoDialog {
   [super checkNoDialog];
   CHECK(!_managedConfirmationScreenCoordinator);
-  CHECK(!_managedConfirmationAlertCoordinator);
   CHECK(!_ageMismatchSignoutCoordinator);
 }
 
 #pragma mark - Private
+
+- (void)didFetchUnsyncedDataWithUnsyncedDataTypes:
+    (syncer::DataTypeSet)unsyncedDataTypes {
+  [_delegate authenticationFlowPerformer:self
+      didFetchUnsyncedDataWithUnsyncedDataTypes:unsyncedDataTypes];
+}
+
+- (void)didConfirmChangeProfileCanProceed:(BOOL)canProceed {
+  [_delegate authenticationFlowPerformer:self
+       didConfirmChangeProfileCanProceed:canProceed];
+}
 
 - (void)didFetchCanSignInToChromeCapability:(signin::Tribool)capability {
   [_delegate authenticationFlowPerformer:self
@@ -446,32 +439,12 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
   _managedConfirmationScreenCoordinator = nil;
 }
 
-// Called when `_managedConfirmationAlertCoordinator` is finished.
-// `accepted` is YES when the user confirmed or NO if the user canceled.
-- (void)managedConfirmationAlertAccepted:(BOOL)accepted {
-  CHECK(_managedConfirmationAlertCoordinator);
-  CHECK(!_managedConfirmationScreenCoordinator);
-  CHECK(!AreSeparateProfilesForManagedAccountsEnabled());
-  [_managedConfirmationAlertCoordinator stop];
-  _managedConfirmationAlertCoordinator = nil;
-  ManagedProfileCreationResult result;
-  if (accepted) {
-    if (AreSeparateProfilesForManagedAccountsEnabled()) {
-      result = ManagedProfileCreationResult::kSeparate;
-    } else {
-      result = ManagedProfileCreationResult::kMerge;
-    }
-  } else {
-    result = ManagedProfileCreationResult::kCancelled;
-  }
-  [self managedConfirmationDoneWithResult:result];
-}
-
 // Called when `_leavingPrimaryAccountConfirmationDialogCoordinator` is done.
 - (void)leavingPrimaryAccountConfirmationDone:(BOOL)continueFlow {
   [_leavingPrimaryAccountConfirmationDialogCoordinator stop];
   _leavingPrimaryAccountConfirmationDialogCoordinator = nil;
-  [_delegate didAcceptToLeavePrimaryAccount:continueFlow];
+  [_delegate authenticationFlowPerformer:self
+          didAcceptToLeavePrimaryAccount:continueFlow];
 }
 
 // Called when the user closed the "Managed profile creation" view.
@@ -482,20 +455,20 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
       base::RecordAction(
           base::UserMetricsAction("Signin_AuthenticationFlowPerformer_"
                                   "ManagedConfirmationDialog_Canceled"));
-      [_delegate didCancelManagedConfirmation];
+      [_delegate authenticationFlowPerformerDidCancelManagedConfirmation:self];
       return;
     case ManagedProfileCreationResult::kMerge:
       separate = NO;
       break;
     case ManagedProfileCreationResult::kSeparate:
       separate = YES;
-      CHECK(AreSeparateProfilesForManagedAccountsEnabled());
       break;
   }
   base::RecordAction(
       base::UserMetricsAction("Signin_AuthenticationFlowPerformer_"
                               "ManagedConfirmationDialog_Confirmed"));
-  [_delegate didAcceptManagedConfirmationWithBrowsingDataSeparate:separate];
+  [_delegate authenticationFlowPerformer:self
+      didAcceptManagedConfirmationWithBrowsingDataSeparate:separate];
 }
 
 // Called when separation policies have been fetched, and calls the delegate.
@@ -510,8 +483,9 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
         static_cast<policy::ProfileSeparationDataMigrationSettings>(
             *policies.profile_separation_data_migration_settings());
   }
-  [_delegate didFetchProfileSeparationPolicies:
-                 profile_separation_data_migration_settings];
+  [_delegate authenticationFlowPerformer:self
+       didFetchProfileSeparationPolicies:
+           profile_separation_data_migration_settings];
 }
 
 - (void)handleGetHostedDomain:(NSString*)hostedDomain error:(NSError*)error {
@@ -520,10 +494,12 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
     return;
   }
   if (error) {
-    [_delegate didFailFetchManagedStatus:error];
+    [_delegate authenticationFlowPerformer:self
+                 didFailFetchManagedStatus:error];
     return;
   }
-  [_delegate didFetchManagedStatus:hostedDomain];
+  [_delegate authenticationFlowPerformer:self
+                   didFetchManagedStatus:hostedDomain];
 }
 
 // Starts the watchdog timer with a timeout of
@@ -545,7 +521,7 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
                                    userInfo:nil];
 
   [self stopWatchdogTimer];
-  [_delegate didFailFetchManagedStatus:error];
+  [_delegate authenticationFlowPerformer:self didFailFetchManagedStatus:error];
 }
 
 #pragma mark - ManagedProfileCreationCoordinatorDelegate
@@ -555,7 +531,6 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
                                    result:(std::optional<
                                               signin::ManagedAccountSigninMode>)
                                               mode {
-  CHECK(!_managedConfirmationAlertCoordinator);
   CHECK_EQ(_managedConfirmationScreenCoordinator, coordinator);
   [self stopManagedConfirmation];
   ManagedProfileCreationResult result;
@@ -582,7 +557,8 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
 - (void)managedProfileCreationCoordinatorWantsToBeStopped:
     (ManagedProfileCreationCoordinator*)coordinator {
   CHECK_EQ(_managedConfirmationScreenCoordinator, coordinator);
-  [_delegate managedConfirmationCouldNotProceed];
+  [_delegate
+      authenticationFlowPerformerDidFailToProceedWithManagedConfirmation:self];
   [self stopManagedConfirmation];
 }
 
@@ -592,7 +568,7 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
     (AgeMismatchSignoutCoordinator*)coordinator {
   CHECK_EQ(coordinator, _ageMismatchSignoutCoordinator);
   [self stopAgeMismatchSignoutCoordinator];
-  [_delegate
+  [_delegate authenticationFlowPerformer:self
       didDismissAgeMismatchDialogWithCancelationReason:
           signin_ui::CancelationReason::kAgeMismatchCanceledStaySignedOut];
 }
@@ -601,8 +577,9 @@ policy::ProfileSeparationPolicies GetFakePolicyResponseForTesting() {
     (AgeMismatchSignoutCoordinator*)coordinator {
   CHECK_EQ(coordinator, _ageMismatchSignoutCoordinator);
   [self stopAgeMismatchSignoutCoordinator];
-  [_delegate didDismissAgeMismatchDialogWithCancelationReason:
-                 signin_ui::CancelationReason::kAgeMismatchCanceled];
+  [_delegate authenticationFlowPerformer:self
+      didDismissAgeMismatchDialogWithCancelationReason:
+          signin_ui::CancelationReason::kAgeMismatchCanceled];
 }
 
 - (void)stopAgeMismatchSignoutCoordinator {

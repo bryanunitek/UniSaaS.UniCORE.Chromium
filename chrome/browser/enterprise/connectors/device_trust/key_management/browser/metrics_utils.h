@@ -10,7 +10,7 @@
 #include "base/time/time.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/browser/commands/key_rotation_command.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/core/persistence/key_persistence_delegate.h"
-#include "components/enterprise/browser/device_trust/device_trust_key_manager.h"
+#include "components/enterprise/device_trust/core/device_trust_key_manager.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 
 namespace enterprise_connectors {
@@ -32,7 +32,8 @@ enum class DTKeyTrustLevel {
 enum class DTKeyType {
   kRsa = 0,
   kEc = 1,
-  kMaxValue = kEc,
+  kUnknown = 2,
+  kMaxValue = kUnknown,
 };
 
 // Possible outcomes of the key rotation process. These

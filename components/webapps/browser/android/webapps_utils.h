@@ -10,11 +10,10 @@
 class GURL;
 
 namespace content {
-class BrowserContext;
-}
+class WebContents;
+}  // namespace content
 
 namespace webapps {
-
 enum class WebApkInstallResult;
 
 class WebappsUtils {
@@ -37,6 +36,12 @@ class WebappsUtils {
 
   // Returns whether installation of auto-minted TWA is enabled.
   static bool IsAutoMintedTwaEnabled();
+
+  // Removes the navigation entries that come before the user entered scope, so
+  // that going back does not leave the web app. Does nothing if the current
+  // entry is outside scope or if there is nothing to remove.
+  static void PrunePreScopeNavigationHistory(content::WebContents* web_contents,
+                                             const GURL& scope);
 };
 
 }  // namespace webapps

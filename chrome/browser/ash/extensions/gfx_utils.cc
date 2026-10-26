@@ -6,13 +6,13 @@
 
 #include <vector>
 
+#include "ash/constants/ash_extension_constants.h"
 #include "base/containers/flat_map.h"
 #include "base/lazy_instance.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/grit/chromeos_app_icon_resources.h"
 #include "components/prefs/pref_service.h"
 #include "extensions/browser/extension_registry.h"
@@ -166,7 +166,7 @@ bool GetEquivalentInstalledArcApps(content::BrowserContext* context,
 
   // TODO(hidehiko): The icon is per launcher, so we should have more precise
   // check here.
-  DCHECK(arc_apps);
+  CHECK(arc_apps, base::NotFatalUntil::M160);
   prefs->GetAppsForPackage(arc_package_name).swap(*arc_apps);
   return !arc_apps->empty();
 }
@@ -197,7 +197,7 @@ const std::vector<std::string> GetEquivalentInstalledExtensions(
 
 bool ShouldApplyChromeBadge(content::BrowserContext* context,
                             const std::string& extension_id) {
-  DCHECK(context);
+  CHECK(context, base::NotFatalUntil::M160);
 
   Profile* profile = Profile::FromBrowserContext(context);
   // Only apply Chrome badge for the primary profile.
@@ -218,7 +218,7 @@ bool ShouldApplyChromeBadge(content::BrowserContext* context,
 
 bool ShouldApplyChromeBadgeToWebApp(content::BrowserContext* context,
                                     const std::string& web_app_id) {
-  DCHECK(context);
+  CHECK(context, base::NotFatalUntil::M160);
 
   Profile* profile = Profile::FromBrowserContext(context);
   // Only apply Chrome badge for the primary profile.
@@ -234,8 +234,8 @@ bool ShouldApplyChromeBadgeToWebApp(content::BrowserContext* context,
 }
 
 void ApplyBadge(gfx::ImageSkia* icon_out, ChromeAppIcon::Badge badge_type) {
-  DCHECK(icon_out);
-  DCHECK_NE(ChromeAppIcon::Badge::kNone, badge_type);
+  CHECK(icon_out, base::NotFatalUntil::M160);
+  CHECK_NE(ChromeAppIcon::Badge::kNone, badge_type, base::NotFatalUntil::M160);
 
   int badge_res = 0;
   switch (badge_type) {
@@ -254,7 +254,7 @@ void ApplyBadge(gfx::ImageSkia* icon_out, ChromeAppIcon::Badge badge_type) {
 
   const gfx::ImageSkia* badge_image =
       ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(badge_res);
-  DCHECK(badge_image);
+  CHECK(badge_image, base::NotFatalUntil::M160);
 
   gfx::ImageSkia resized_badge_image = *badge_image;
   if (badge_image->size() != icon_out->size()) {

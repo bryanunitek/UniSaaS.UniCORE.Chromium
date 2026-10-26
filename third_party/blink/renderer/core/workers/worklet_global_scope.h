@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-blink-forward.h"
@@ -61,7 +62,7 @@ class CORE_EXPORT WorkletGlobalScope : public WorkerOrWorkletGlobalScope {
   bool IsContextThread() const final;
   void AddConsoleMessageImpl(ConsoleMessage*, bool discard_duplicates) final;
   void AddInspectorIssue(AuditsIssue) final;
-  void ExceptionThrown(ErrorEvent*) final;
+  void ExceptionThrown(ErrorEvent*, SanitizeScriptErrors) final;
   CoreProbeSink* GetProbeSink() final;
   scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunner(TaskType) final;
   FrameOrWorkerScheduler* GetScheduler() final;
@@ -83,7 +84,9 @@ class CORE_EXPORT WorkletGlobalScope : public WorkerOrWorkletGlobalScope {
 
   // Returns `blob_url_store_pending_remote_` for use when instantiating the
   // PublicURLManager in threaded worklet contexts. This method should only be
-  // called once. See `blob_url_store_pending_remote_` for more details.
+  // called once. The returned remote may be invalid if blob storage is
+  // disabled for the creating frame (e.g., in PDF processes). See
+  // `blob_url_store_pending_remote_` for more details.
   mojo::PendingRemote<mojom::blink::BlobURLStore>
   TakeBlobUrlStorePendingRemote();
 
@@ -189,7 +192,8 @@ class CORE_EXPORT WorkletGlobalScope : public WorkerOrWorkletGlobalScope {
   // |frame_| is available only when |thread_type_| is kMainThread.
   Member<LocalFrame> frame_;
   // |worker_thread_| is available only when |thread_type_| is kOffMainThread.
-  WorkerThread* worker_thread_;
+  raw_ptr<WorkerThread, UnprotectedInRelease | DanglingUntriaged>
+      worker_thread_;
 
   // The token identifying the LocalFrame that caused this scope to be created.
   const LocalFrameToken frame_token_;
@@ -213,13 +217,15 @@ class CORE_EXPORT WorkletGlobalScope : public WorkerOrWorkletGlobalScope {
   std::unique_ptr<CodeCacheHost> code_cache_host_;
 
   // The interface through which the worklet may request interfaces from the
-  // browser. It's currently only set for SharedStorageWorklet.
+  // browser.
   blink::BrowserInterfaceBrokerProxyImpl browser_interface_broker_proxy_;
 
   // A PendingRemote for use in threaded worklets that gets created from the
   // parent frame's BrowserInterfaceBroker and used when instantiating the
   // worklet's PublicURLManager. This remote is used for Blob URL related
   // functionality such as registering, revoking, and navigating to Blob URLs.
+  // It may be invalid if blob storage is disabled for the creating frame
+  // (e.g., in PDF processes).
   mojo::PendingRemote<mojom::blink::BlobURLStore>
       blob_url_store_pending_remote_;
 };

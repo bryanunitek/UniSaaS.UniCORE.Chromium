@@ -20,11 +20,14 @@
 #include "base/test/scoped_run_loop_timeout.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "ui/base/interaction/element_identifier.h"
+#include "ui/base/interaction/element_state_observers.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/interaction/interaction_sequence.h"
 #include "ui/base/interaction/interaction_test_util.h"
 #include "ui/base/interaction/interactive_test_definitions.h"
 #include "ui/base/interaction/interactive_test_internal.h"
+#include "ui/base/interaction/polling_state_observer.h"
+#include "ui/base/interaction/state_observer.h"
 
 namespace ui::test {
 
@@ -248,7 +251,7 @@ InteractionSequence::StepBuilder InteractiveTestApi::Confirm(
 
 InteractionSequence::StepBuilder InteractiveTestApi::DumpElements() {
   return WithElement(kInteractiveTestPivotElementId,
-                     [this](ui::TrackedElement* el) {
+                     [this](TrackedElement* el) {
                        private_test_impl()
                            .DebugDumpElements(el->context())
                            .PrintTo(COMPACT_GOOGLE_LOG_INFO.stream());
@@ -257,7 +260,7 @@ InteractionSequence::StepBuilder InteractiveTestApi::DumpElements() {
 
 InteractionSequence::StepBuilder InteractiveTestApi::DumpElementsInContext() {
   return WithElement(kInteractiveTestPivotElementId,
-                     [this](ui::TrackedElement* el) {
+                     [this](TrackedElement* el) {
                        private_test_impl()
                            .DebugDumpContext(el->context())
                            .PrintTo(COMPACT_GOOGLE_LOG_INFO.stream());
@@ -332,6 +335,26 @@ InteractiveTestApi::StepBuilder InteractiveTestApi::EnsurePresent(
               internal::DescribeElement(element_to_check).c_str())));
 }
 
+InteractiveTestApi::MultiStep InteractiveTestApi::WaitForElementCount(
+    ElementIdentifier id,
+    size_t count) {
+  auto steps = Steps(
+      WithElement(internal::kInteractiveTestPivotElementId,
+                  [this, id](InteractionSequence* seq, TrackedElement* el) {
+                    private_test_impl().AddStateObserver(
+                        internal::kWaitForElementCountState.identifier(),
+                        el->context(),
+                        std::make_unique<internal::ElementCountStateObserver>(
+                            id, seq->IsCurrentStepInAnyContextForTesting()
+                                    ? ElementContext()
+                                    : el->context()));
+                  }),
+      WaitForState(internal::kWaitForElementCountState, count),
+      StopObservingState(internal::kWaitForElementCountState));
+  AddDescriptionPrefix(steps, "WaitForElementCount");
+  return steps;
+}
+
 InteractionSequence::StepBuilder InteractiveTestApi::NameElement(
     std::string_view name,
     AbsoluteElementSpecifier spec) {
@@ -399,6 +422,7 @@ bool InteractiveTestApi::RunTestSequenceImpl(
   builder.SetAbortedCallback(
       base::BindOnce(&internal::InteractiveTestPrivate::OnSequenceAborted,
                      base::Unretained(private_test_impl_.get())));
+  builder.SetDelegateForTesting(private_test_impl_.get());
   auto sequence = builder.Build();
 
   {
@@ -408,7 +432,7 @@ bool InteractiveTestApi::RunTestSequenceImpl(
             [](base::WeakPtr<InteractionSequence> sequence,
                base::WeakPtr<internal::InteractiveTestPrivate> impl) {
               std::ostringstream oss;
-              ui::ElementContext context;
+              ElementContext context;
               if (sequence) {
                 const auto data = sequence->BuildAbortedData(
                     InteractionSequence::AbortedReason::kSequenceTimedOut);
@@ -443,6 +467,7 @@ bool InteractiveTestApi::RunTestSequenceImpl(
                     oss << "\n * " << ctx;
                   }
                 }
+                oss << "\n";
                 impl->DebugDumpElements(context).PrintTo(oss);
                 if (!impl->deferred_failures_.empty()) {
                   oss << "\nSome previous steps failed:";
@@ -450,6 +475,7 @@ bool InteractiveTestApi::RunTestSequenceImpl(
                     oss << "\n" << failure;
                   }
                 }
+                impl->set_timed_out(true);
               }
               return oss.str();
             },
@@ -469,7 +495,7 @@ InteractiveTestApi::GetFindElementCallback(AbsoluteElementSpecifier spec) {
   return std::visit(
       absl::Overload{
           [](TrackedElement* el) {
-            CHECK(el) << "NameView(TrackedElement*): view must be set.";
+            CHECK(el) << "NameElement(TrackedElement*): element must be set.";
             return base::BindOnce(
                 [](const SafeElementReference& ref, TrackedElement*) {
                   LOG_IF(ERROR, !ref.get()) << "NameElement(TrackedElement*): "
@@ -504,6 +530,100 @@ InteractiveTestApi::GetFindElementCallback(AbsoluteElementSpecifier spec) {
       spec);
 }
 
+InteractiveTestApi::MultiStep InteractiveTestApi::WaitForElementMatchingImpl(
+    ui::ElementIdentifier id,
+    base::RepeatingCallback<bool(const TrackedElement*)> predicate,
+    bool poll) {
+  MultiStep steps;
+  if (poll) {
+    steps = Steps(
+        WithElement(
+            internal::kInteractiveTestPivotElementId,
+            [this, id, predicate](InteractionSequence* seq,
+                                  TrackedElement* el) {
+              private_test_impl().AddStateObserver(
+                  internal::kWaitForElementMatchingImplState.identifier(),
+                  el->context(),
+                  std::make_unique<PollingStateObserver<bool>>(
+                      [id,
+                       context = seq->IsCurrentStepInAnyContextForTesting()
+                                     ? ElementContext()
+                                     : el->context(),
+                       predicate] {
+                        return !!internal::ElementMatcherStateObserver::
+                                    GetMatchingElement(id, context, predicate);
+                      }));
+            }),
+        WaitForState(internal::kWaitForElementMatchingImplState, true),
+        StopObservingState(internal::kWaitForElementMatchingImplState));
+  } else {
+    steps =
+        Steps(WithElement(
+                  internal::kInteractiveTestPivotElementId,
+                  [this, id, predicate](InteractionSequence* seq,
+                                        TrackedElement* el) {
+                    private_test_impl().AddStateObserver(
+                        internal::kWaitForMatchingElementState.identifier(),
+                        el->context(),
+                        std::make_unique<internal::ElementMatcherStateObserver>(
+                            id,
+                            seq->IsCurrentStepInAnyContextForTesting()
+                                ? ElementContext()
+                                : el->context(),
+                            predicate));
+                  }),
+              WaitForState(internal::kWaitForMatchingElementState, true),
+              StopObservingState(internal::kWaitForMatchingElementState));
+  }
+  AddDescriptionPrefix(steps, "WaitForElementMatching()");
+  return steps;
+}
+
+InteractiveTestApi::MultiStep InteractiveTestApi::NameElementWithSecondaryId(
+    ui::ElementIdentifier id,
+    std::string_view secondary_id,
+    std::string_view name,
+    bool wait_for_present) {
+  MultiStep steps;
+  std::string to_find(secondary_id);
+  const auto predicate = [to_find](const ui::TrackedElement* el) {
+    return el->GetSecondaryIdentifier() == to_find;
+  };
+  auto name_step = NameElementMatching(id, name, predicate);
+  if (wait_for_present) {
+    // Don't allow waiting between finding the element and naming it.
+    steps += WithoutDelay(WaitForElementMatching(id, predicate),
+                          std::move(name_step));
+  } else {
+    steps += std::move(name_step);
+  }
+  AddDescriptionPrefix(steps, "NameElementWithSecondaryId()");
+  return steps;
+}
+
+InteractionSequence::StepBuilder InteractiveTestApi::NameElementMatchingImpl(
+    ui::ElementIdentifier id,
+    std::string_view name,
+    base::RepeatingCallback<bool(const TrackedElement*)> predicate) {
+  return WithElement(
+      internal::kInteractiveTestPivotElementId,
+      [id, name = std::string(name), predicate](InteractionSequence* seq,
+                                                TrackedElement* pivot) {
+        auto* const result =
+            internal::ElementMatcherStateObserver::GetMatchingElement(
+                id,
+                seq->IsCurrentStepInAnyContextForTesting() ? ElementContext()
+                                                           : pivot->context(),
+                predicate);
+        if (!result) {
+          LOG(ERROR) << "NameElement(): No element found.";
+          seq->FailForTesting();
+          return;
+        }
+        seq->NameElement(result, name);
+      });
+}
+
 // static
 void InteractiveTestApi::AddStep(InteractionSequence::Builder& builder,
                                  MultiStep multi_step) {
@@ -518,8 +638,56 @@ void InteractiveTestApi::AddStep(MultiStep& dest, StepBuilder src) {
 
 // static
 void InteractiveTestApi::AddStep(MultiStep& dest, MultiStep src) {
-  for (auto& step : src)
+  for (auto& step : src) {
     dest.emplace_back(std::move(step));
+  }
+}
+
+// static
+void InteractiveTestApi::AddStep(MultiStep& dest,
+                                 StepBuilder step,
+                                 int step_number) {
+  step.AddStepFrame(InteractionSequence::StepFrame("", step_number));
+  dest.emplace_back(std::move(step));
+}
+
+// static
+void InteractiveTestApi::AddStep(MultiStep& dest,
+                                 MultiStep steps,
+                                 int step_number) {
+  for (auto& step : steps) {
+    step.AddStepFrame(InteractionSequence::StepFrame("", step_number));
+    dest.emplace_back(std::move(step));
+  }
+}
+
+// static
+void InteractiveTestApi::AddStep(InteractionSequence::Builder& builder,
+                                 StepBuilder step,
+                                 int step_number) {
+  step.AddStepFrame(InteractionSequence::StepFrame("test", step_number));
+  builder.AddStep(std::move(step));
+}
+
+// static
+void InteractiveTestApi::AddStep(InteractionSequence::Builder& builder,
+                                 MultiStep steps,
+                                 int step_number) {
+  for (auto& step : steps) {
+    step.AddStepFrame(InteractionSequence::StepFrame("test", step_number));
+    builder.AddStep(std::move(step));
+  }
+}
+
+// static
+void InteractiveTestApi::AddStep(
+    InteractionSequence::Builder& builder,
+    std::unique_ptr<InteractionSequence::Step> step,
+    int step_number) {
+  if (step) {
+    step->step_stack.emplace_back("test", step_number);
+  }
+  builder.AddStep(std::move(step));
 }
 
 // static

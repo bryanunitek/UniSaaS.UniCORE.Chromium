@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <ranges>
 
 #include "ash/bubble/bubble_utils.h"
 #include "ash/drag_drop/drag_drop_util.h"
@@ -16,7 +17,6 @@
 #include "ash/style/dark_light_mode_controller_impl.h"
 #include "ash/style/typography.h"
 #include "ash/system/holding_space/holding_space_item_view.h"
-#include "base/containers/adapters.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
@@ -26,9 +26,9 @@
 #include "ui/color/color_provider.h"
 #include "ui/compositor/canvas_painter.h"
 #include "ui/compositor/compositor.h"
+#include "ui/decoration/shadow.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/gfx/shadow_util.h"
 #include "ui/gfx/skia_paint_util.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/label.h"
@@ -133,8 +133,9 @@ class DragImageLayoutManager : public views::LayoutManagerBase {
     // z-index than later views, like a deck of cards with the first `child`
     // stacked on top.
     std::vector<raw_ptr<views::View, VectorExperimental>> children;
-    for (views::View* child : base::Reversed(host->children()))
+    for (views::View* child : std::views::reverse(host->children())) {
       children.push_back(child);
+    }
     return children;
   }
 
@@ -165,7 +166,9 @@ class DragImageItemView : public views::View {
   gfx::Insets GetInsets() const final {
     // Add insets to accommodate the shadow so that the view's content will be
     // laid out within the appropriate shadow margins.
-    return gfx::Insets(-gfx::ShadowValue::GetMargin(GetShadowDetails().values));
+    return gfx::Insets(
+        -gfx::ShadowValue::GetMargin(ui::decoration::Shadow::MakeShadowValues(
+            drag_drop::kDragImageElevation)));
   }
 
   void OnPaintBackground(gfx::Canvas* canvas) override {
@@ -179,15 +182,13 @@ class DragImageItemView : public views::View {
     flags.setAntiAlias(true);
     flags.setColor(
         color_provider_->GetColor(drag_drop::kDragImageBackgroundColor));
-    flags.setLooper(gfx::CreateShadowDrawLooper(GetShadowDetails().values));
+    flags.setLooper(
+        gfx::CreateShadowDrawLooper(ui::decoration::Shadow::MakeShadowValues(
+            drag_drop::kDragImageElevation)));
     canvas->DrawRoundRect(bounds, kDragImageItemViewCornerRadius, flags);
   }
 
  private:
-  const gfx::ShadowDetails& GetShadowDetails() const {
-    return drag_drop::GetDragImageShadowDetails(kDragImageItemViewCornerRadius);
-  }
-
   const raw_ptr<const ui::ColorProvider> color_provider_;
 };
 

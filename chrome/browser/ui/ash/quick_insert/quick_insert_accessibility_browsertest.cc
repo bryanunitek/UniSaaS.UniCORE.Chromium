@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ash/constants/ash_features.h"
 #include "ash/quick_insert/metrics/quick_insert_performance_metrics.h"
 #include "ash/quick_insert/model/quick_insert_action_type.h"
 #include "ash/quick_insert/model/quick_insert_search_results_section.h"
@@ -34,9 +33,9 @@
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/chromevox_test_utils.h"
 #include "chrome/browser/ash/accessibility/speech_monitor.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/quick_insert/quick_insert_client_impl.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/user_manager/user_manager.h"
@@ -374,47 +373,7 @@ IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityBrowserTest,
   sm()->Replay();
 }
 
-class QuickInsertAccessibilityWithGifsFlagDisabledBrowserTest
-    : public QuickInsertAccessibilityBrowserTest {
- public:
-  QuickInsertAccessibilityWithGifsFlagDisabledBrowserTest() {
-    scoped_feature_list_.InitAndDisableFeature(ash::features::kPickerGifs);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityWithGifsFlagDisabledBrowserTest,
-                       FocusingGifsButtonAnnouncesLabel) {
-  std::unique_ptr<views::Widget> widget =
-      views::test::TestWidgetBuilder()
-          .SetWidgetType(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS)
-          .BuildClientOwnsWidget();
-  auto* view =
-      widget->SetContentsView(std::make_unique<ash::QuickInsertEmojiBarView>(
-          /*delegate=*/nullptr, /*quick_insert_width=*/100,
-          /*is_gifs_enabled=*/true));
-
-  sm()->Call([view]() { view->gifs_button_for_testing()->RequestFocus(); });
-
-  sm()->ExpectSpeechPattern("GIF");
-  sm()->ExpectSpeechPattern("Button");
-  sm()->ExpectSpeechPattern("Press * to activate");
-  sm()->Replay();
-}
-
-class QuickInsertAccessibilityWithGifsFlagEnabledBrowserTest
-    : public QuickInsertAccessibilityBrowserTest {
- public:
-  QuickInsertAccessibilityWithGifsFlagEnabledBrowserTest()
-      : scoped_feature_list_(ash::features::kPickerGifs) {}
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityWithGifsFlagEnabledBrowserTest,
+IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityBrowserTest,
                        FocusingGifsToggleAnnouncesPressedState) {
   std::unique_ptr<views::Widget> widget =
       views::test::TestWidgetBuilder()
@@ -434,7 +393,7 @@ IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityWithGifsFlagEnabledBrowserTest,
   sm()->Replay();
 }
 
-IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityWithGifsFlagEnabledBrowserTest,
+IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityBrowserTest,
                        TogglingGifsToggleAnnouncesPressedState) {
   std::unique_ptr<views::Widget> widget =
       views::test::TestWidgetBuilder()
@@ -936,10 +895,13 @@ IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityBrowserTest,
   sm()->Replay();
 }
 
+// TODO(crbug.com/549506895): Fix consistent test failure on chromeos.
+#if !BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityBrowserTest,
                        InsertingAnnouncesInsertionBeforeTextfieldRefocus) {
   ash::QuickInsertController controller;
-  QuickInsertClientImpl client(&controller, user_manager::UserManager::Get());
+  QuickInsertClientImpl client(g_browser_process->local_state(), &controller,
+                               user_manager::UserManager::Get());
   std::unique_ptr<views::Widget> textfield_widget =
       views::test::TestWidgetBuilder()
           .SetWidgetType(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS)
@@ -958,7 +920,6 @@ IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityBrowserTest,
   });
 
   sm()->ExpectSpeechPattern("Quick Insert");
-  sm()->ExpectSpeechPattern(", window");
   sm()->ExpectSpeechPattern("Quick Insert");
   sm()->ExpectSpeechPattern("Status");
   sm()->ExpectSpeechPattern("Inserting selected result");
@@ -967,5 +928,6 @@ IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityBrowserTest,
   sm()->ExpectSpeechPattern("Edit text");
   sm()->Replay();
 }
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace

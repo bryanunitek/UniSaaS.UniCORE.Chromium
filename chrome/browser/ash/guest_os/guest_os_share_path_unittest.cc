@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/guest_os/guest_os_share_path.h"
 
+#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
@@ -26,9 +27,7 @@
 #include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
 #include "chrome/browser/ash/guest_os/public/guest_os_service.h"
 #include "chrome/browser/ash/guest_os/public/types.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/browser_process_platform_part_test_api_chromeos.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -41,9 +40,10 @@
 #include "chromeos/ash/components/dbus/seneschal/fake_seneschal_client.h"
 #include "chromeos/ash/components/dbus/seneschal/seneschal_client.h"
 #include "chromeos/ash/components/dbus/seneschal/seneschal_service.pb.h"
-#include "chromeos/ash/components/dbus/vm_plugin_dispatcher/vm_plugin_dispatcher_client.h"
 #include "chromeos/ash/components/disks/disk_mount_manager.h"
 #include "chromeos/ash/components/disks/fake_disk_mount_manager.h"
+#include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
 #include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
 #include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
@@ -220,7 +220,6 @@ class GuestOsSharePathTest : public testing::Test {
     ash::ConciergeClient::InitializeFake();
     ash::DebugDaemonClient::InitializeFake();
     ash::SeneschalClient::InitializeFake();
-    ash::VmPluginDispatcherClient::InitializeFake();
 
     fake_concierge_client_ = ash::FakeConciergeClient::Get();
     fake_seneschal_client_ = ash::FakeSeneschalClient::Get();
@@ -230,7 +229,6 @@ class GuestOsSharePathTest : public testing::Test {
   GuestOsSharePathTest& operator=(const GuestOsSharePathTest&) = delete;
 
   ~GuestOsSharePathTest() override {
-    ash::VmPluginDispatcherClient::Shutdown();
     ash::SeneschalClient::Shutdown();
     ash::DebugDaemonClient::Shutdown();
     ash::ConciergeClient::Shutdown();
@@ -576,7 +574,7 @@ TEST_F(GuestOsSharePathTest, FailFuseboxRoot) {
 }
 
 TEST_F(GuestOsSharePathTest, SharePathErrorSeneschal) {
-  features_.InitWithFeatures({features::kCrostini}, {});
+  features_.InitWithFeatures({ash::features::kCrostini}, {});
   user_manager::UserManager::Get()->UserLoggedIn(
       account_id_, user_manager::TestHelper::GetFakeUsernameHash(account_id_));
   vm_tools::concierge::StartVmResponse start_vm_response;
@@ -633,7 +631,7 @@ TEST_F(GuestOsSharePathTest, SharePathErrorNotUnderDownloads) {
 }
 
 TEST_F(GuestOsSharePathTest, SharePathVmToBeRestarted) {
-  features_.InitWithFeatures({features::kCrostini}, {});
+  features_.InitWithFeatures({ash::features::kCrostini}, {});
   user_manager::UserManager::Get()->UserLoggedIn(
       account_id_, user_manager::TestHelper::GetFakeUsernameHash(account_id_));
   guest_os_share_path_->SharePath(

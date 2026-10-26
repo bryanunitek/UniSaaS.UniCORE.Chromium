@@ -17,9 +17,9 @@
 #include "base/test/bind.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -35,6 +35,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 namespace focus {
@@ -43,7 +44,7 @@ class FocusHandlerBrowserTest : public InProcessBrowserTest {
  protected:
   void NavigateToURLInNewTab(const GURL& url) {
     ui_test_utils::NavigateToURLWithDisposition(
-        browser(), url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        browser(), url, WindowOpenDisposition::kNewForegroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   }
 
@@ -52,12 +53,12 @@ class FocusHandlerBrowserTest : public InProcessBrowserTest {
   }
 
   int GetActiveTabIndex() {
-    return browser()->tab_strip_model()->active_index();
+    return browser()->GetTabStripModel()->active_index();
   }
 
   GURL GetActiveTabURL() {
     return browser()
-        ->tab_strip_model()
+        ->GetTabStripModel()
         ->GetActiveWebContents()
         ->GetLastCommittedURL();
   }
@@ -164,13 +165,14 @@ IN_PROC_BROWSER_TEST_F(FocusHandlerBrowserTest, IncognitoIsolation_NoMatch) {
   const GURL test_url("https://example.com/secret");
 
   // Create an incognito browser and navigate to a test URL
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   ui_test_utils::NavigateToURLWithDisposition(
-      incognito_browser, test_url, WindowOpenDisposition::CURRENT_TAB,
+      incognito_browser, test_url, WindowOpenDisposition::kCurrentTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // Verify the incognito tab exists
-  EXPECT_EQ(test_url, incognito_browser->tab_strip_model()
+  EXPECT_EQ(test_url, incognito_browser->GetTabStripModel()
                           ->GetActiveWebContents()
                           ->GetLastCommittedURL());
 
@@ -185,7 +187,7 @@ IN_PROC_BROWSER_TEST_F(FocusHandlerBrowserTest, IncognitoIsolation_NoMatch) {
   EXPECT_EQ(FocusStatus::kNoMatch, result.status);
 
   // Incognito browser should still be the active one (unchanged)
-  EXPECT_EQ(test_url, incognito_browser->tab_strip_model()
+  EXPECT_EQ(test_url, incognito_browser->GetTabStripModel()
                           ->GetActiveWebContents()
                           ->GetLastCommittedURL());
 }
@@ -198,9 +200,10 @@ IN_PROC_BROWSER_TEST_F(FocusHandlerBrowserTest,
   NavigateToURLInCurrentTab(test_url);
 
   // Create incognito browser and navigate to same URL
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   ui_test_utils::NavigateToURLWithDisposition(
-      incognito_browser, test_url, WindowOpenDisposition::CURRENT_TAB,
+      incognito_browser, test_url, WindowOpenDisposition::kCurrentTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // Try to focus from incognito profile context
@@ -214,7 +217,7 @@ IN_PROC_BROWSER_TEST_F(FocusHandlerBrowserTest,
   EXPECT_EQ(FocusStatus::kFocused, result.status);
 
   // Should focus the incognito tab, not the regular browser tab
-  EXPECT_EQ(test_url, incognito_browser->tab_strip_model()
+  EXPECT_EQ(test_url, incognito_browser->GetTabStripModel()
                           ->GetActiveWebContents()
                           ->GetLastCommittedURL());
 }
@@ -245,10 +248,10 @@ IN_PROC_BROWSER_TEST_F(FocusHandlerWebAppBrowserTest,
   webapps::AppId app_id = InstallTestApp("Test App");
   std::string manifest_id = GetManifestIdForApp(app_id);
 
-  Browser* app_browser =
+  BrowserWindowInterface* app_browser =
       web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
   ASSERT_TRUE(app_browser);
-  ASSERT_TRUE(app_browser->is_type_app());
+  ASSERT_EQ(app_browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
 
   base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
   command_line.AppendSwitchASCII(switches::kFocus, manifest_id);
@@ -270,9 +273,9 @@ IN_PROC_BROWSER_TEST_F(FocusHandlerWebAppBrowserTest,
   std::string manifest_id1 = GetManifestIdForApp(app_id1);
   std::string manifest_id2 = GetManifestIdForApp(app_id2);
 
-  Browser* app_browser1 =
+  BrowserWindowInterface* app_browser1 =
       web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id1);
-  Browser* app_browser2 =
+  BrowserWindowInterface* app_browser2 =
       web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id2);
   ASSERT_TRUE(app_browser1);
   ASSERT_TRUE(app_browser2);
@@ -323,7 +326,7 @@ IN_PROC_BROWSER_TEST_F(FocusHandlerWebAppBrowserTest,
   webapps::AppId app_id = InstallTestApp("Test App", "/app");
   std::string manifest_id = GetManifestIdForApp(app_id);
 
-  Browser* app_browser =
+  BrowserWindowInterface* app_browser =
       web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
   ASSERT_TRUE(app_browser);
 
@@ -349,7 +352,7 @@ IN_PROC_BROWSER_TEST_F(FocusHandlerWebAppBrowserTest,
   webapps::AppId app_id = InstallTestApp("Test App", "/app");
   std::string manifest_id = GetManifestIdForApp(app_id);
 
-  Browser* app_browser =
+  BrowserWindowInterface* app_browser =
       web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
   ASSERT_TRUE(app_browser);
 
@@ -371,7 +374,7 @@ IN_PROC_BROWSER_TEST_F(FocusHandlerWebAppBrowserTest,
   webapps::AppId app_id = InstallTestApp("Test App", "/app");
   std::string manifest_id = GetManifestIdForApp(app_id);
 
-  Browser* app_browser =
+  BrowserWindowInterface* app_browser =
       web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
   ASSERT_TRUE(app_browser);
 
@@ -440,9 +443,10 @@ IN_PROC_BROWSER_TEST_F(FocusHandlerBrowserTest,
   const GURL test_url("https://example.com/secret");
 
   // Create incognito browser and navigate to test URL.
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   ui_test_utils::NavigateToURLWithDisposition(
-      incognito_browser, test_url, WindowOpenDisposition::CURRENT_TAB,
+      incognito_browser, test_url, WindowOpenDisposition::kCurrentTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // Set up command line with focus and result file switches.

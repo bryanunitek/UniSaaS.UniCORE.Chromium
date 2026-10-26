@@ -8,7 +8,7 @@
 #include "third_party/blink/renderer/core/fileapi/blob.h"
 #include "third_party/blink/renderer/core/fileapi/public_url_manager.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
-#include "third_party/blink/renderer/core/url/dom_url.h"
+#include "third_party/blink/renderer/core/url/url.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
@@ -24,7 +24,15 @@ String URLFileAPI::createObjectURL(ScriptState* script_state,
   DCHECK(execution_context);
 
   UseCounter::Count(execution_context, WebFeature::kCreateObjectURLBlob);
-  return DOMURL::CreatePublicURL(execution_context, blob);
+  // Note: If blob URL creation is disabled in this context (such as in PDF
+  // processes where LocalFrameClient::IsDomStorageDisabled() is true),
+  // PublicURLManager is stopped and URL::CreatePublicURL() returns an empty
+  // string. An empty string was chosen rather than throwing a SecurityError to
+  // match the W3C File API specification when a blob URL cannot be generated,
+  // as well as the behavior of DOM storage in PDF processes (where localStorage
+  // returns null instead of throwing) and to avoid breaking extensions or
+  // scripts that do not expect createObjectURL to throw an exception.
+  return URL::CreatePublicURL(execution_context, blob);
 }
 
 // static

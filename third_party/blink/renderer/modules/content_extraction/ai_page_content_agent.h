@@ -25,6 +25,7 @@
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/hash_traits.h"
+#include "ui/accessibility/ax_enums.mojom-blink-forward.h"
 
 namespace blink {
 class Document;
@@ -115,6 +116,7 @@ class MODULES_EXPORT AIPageContentAgent final
       RecursionData(const ComputedStyle& document_style);
 
       bool is_aria_disabled = false;
+      bool is_aria_hidden = false;
       bool is_in_fixed_pos_subtree = false;
       // The nearest overflow container clips descendants. It may or may not be
       // user-scrollable, because `overflow:hidden` also creates a container.
@@ -132,10 +134,13 @@ class MODULES_EXPORT AIPageContentAgent final
              mojom::blink::AIPageContentMode::kActionableElements;
     }
     // Returns true if any descendant of `object` has a computed value of
-    // visible for `visibility`.
+    // visible for `visibility`. `ancestor_for_geometry_repair` is the nearest
+    // APC ancestor that started with an empty outer box.
     bool WalkChildren(const LayoutObject& object,
                       mojom::blink::AIPageContentNode& content_node,
-                      const RecursionData& recursion_data);
+                      const RecursionData& recursion_data,
+                      mojom::blink::AIPageContentNode*
+                          ancestor_for_geometry_repair = nullptr);
     void ProcessIframe(const LayoutIFrame& object,
                        mojom::blink::AIPageContentNode& content_node,
                        const RecursionData& recursion_data);
@@ -155,10 +160,14 @@ class MODULES_EXPORT AIPageContentAgent final
             frame_interaction_info);
     void MaybeAddPopupData(LocalFrame& frame,
                            mojom::blink::AIPageContentFrameData& frame_data);
+    void MaybeRemoveRedundantLabels(
+        mojom::blink::AIPageContentNode& root_node) const;
     void AddNodeInteractionInfo(
         const LayoutObject& object,
+        ax::mojom::blink::Role aria_role,
         mojom::blink::AIPageContentAttributes& attributes,
-        bool is_aria_disabled);
+        bool is_aria_disabled,
+        bool is_aria_hidden);
     void AddInteractionInfoForHitTesting(
         const Node* node,
         mojom::blink::AIPageContentNodeInteractionInfo& interaction_info) const;
@@ -169,6 +178,7 @@ class MODULES_EXPORT AIPageContentAgent final
                          mojom::blink::AIPageContentAttributes& attributes,
                          DOMNodeId accessibility_focused_node_id);
     void AddAnnotatedRoles(const LayoutObject& object,
+                           ax::mojom::blink::Role aria_role,
                            Vector<mojom::blink::AIPageContentAnnotatedRole>&
                                annotated_roles) const;
     void AddLabel(const LayoutObject& object,

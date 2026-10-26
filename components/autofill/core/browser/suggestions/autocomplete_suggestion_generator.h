@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 
+#include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -33,10 +34,13 @@ namespace autofill {
 class AutocompleteSuggestionGenerator : public SuggestionGenerator {
  public:
   explicit AutocompleteSuggestionGenerator(
-      scoped_refptr<AutofillWebDataService> profile_database,
-      bool at_memory_enabled);
+      scoped_refptr<AutofillWebDataService> profile_database);
   ~AutocompleteSuggestionGenerator() override;
 
+  // Generates autocomplete suggestions for the given `trigger_field` in `form`.
+  // No suggestions are generated if Autocomplete is disabled or if any of the
+  // field's data categories are blocked by enterprise policy or user settings
+  // for the current URL.
   void GenerateSuggestions(
       const FormData& form,
       const FormFieldData& trigger_field,
@@ -63,6 +67,7 @@ class AutocompleteSuggestionGenerator : public SuggestionGenerator {
   // `result` contains the Autocomplete suggestions retrieved from the DB that,
   // if valid, will be passed to the callback in `query_handler`.
   void OnAutofillValuesReturned(QueryHandler query_handler,
+                                bool is_at_memory_enabled,
                                 WebDataServiceBase::Handle current_handle,
                                 std::unique_ptr<WDTypedResult> result);
 
@@ -76,8 +81,6 @@ class AutocompleteSuggestionGenerator : public SuggestionGenerator {
   // is in flight.
   std::optional<WebDataServiceBase::Handle> pending_query_;
 
-  // Whether the AtMemory feature is enabled.
-  const bool at_memory_enabled_;
 
   base::WeakPtrFactory<AutocompleteSuggestionGenerator> weak_ptr_factory_{this};
 };

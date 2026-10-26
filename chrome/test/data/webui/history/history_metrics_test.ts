@@ -7,6 +7,7 @@ import 'chrome://history/history.js';
 import type {HistoryAppElement, HistoryEntry, HistoryItemElement} from 'chrome://history/history.js';
 import {BrowserProxyImpl, foreignSessionBrowserProxyFactory, HistoryPageViewHistogram, HistorySignInState, SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram, SyncState, VisitContextMenuAction} from 'chrome://history/history.js';
 import {webUIListenerCallback} from 'chrome://resources/js/cr.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
@@ -39,8 +40,11 @@ suite('Metrics', function() {
 
     actionMap = testProxy.actionMap;
     histogramMap = testProxy.histogramMap;
+  });
 
-    app = document.createElement('history-app');
+  teardown(() => {
+    document.body.classList.remove('loading');
+    delete (document as {visibilityState?: string}).visibilityState;
   });
 
   /**
@@ -53,6 +57,7 @@ suite('Metrics', function() {
     testProxy.handler.setResultFor('queryHistory', Promise.resolve({
       results: {info: createHistoryInfo(query), value: queryResults},
     }));
+    app = document.createElement('history-app');
     document.body.appendChild(app);
     await testProxy.handler.whenCalled('queryHistory');
     return microtasksFinished();
@@ -135,9 +140,7 @@ suite('Metrics', function() {
       },
     }));
 
-    app.dispatchEvent(new CustomEvent(
-        'change-query',
-        {bubbles: true, composed: true, detail: {search: 'goog'}}));
+    app.fire('change-query', {search: 'goog'});
     assertEquals(1, actionMap['Search']);
     const queryManager = app.shadowRoot.querySelector('history-query-manager');
     assertTrue(!!queryManager);
@@ -295,8 +298,7 @@ suite('Metrics', function() {
         ],
       },
     }));
-    app.dispatchEvent(new CustomEvent(
-        'query-history', {detail: true, bubbles: true, composed: true}));
+    app.fire('query-history', true);
     await testProxy.handler.whenCalled('queryHistoryContinuation');
 
     const recordedHistogram2 =
@@ -407,5 +409,61 @@ suite('Metrics', function() {
     const histogram = histogramMap['HistoryPage.NonActorContextMenuActions'];
     assertTrue(!!histogram);
     assertEquals(1, histogram[VisitContextMenuAction.REMOVE_BOOKMARK_CLICKED]);
+  });
+
+  test('review-gemini-activity-button-clicked-for-actor-visit', async () => {
+    loadTimeData.overrideValues({
+      myActivityGeminiAppsUrl: 'https://myactivity.google.com/product/gemini',
+      isCriticalActionsEnabled: true,
+    });
+    const historyEntry =
+        createHistoryEntry('2025-08-26 10:00', 'http://www.google.com');
+    historyEntry.isActorVisit = true;
+    await finishSetup([historyEntry]);
+    await microtasksFinished();
+
+    const item = app.$.history.shadowRoot.querySelector('history-item');
+    assertTrue(!!item);
+    await contextMenuButtonClick(item, '#menuReviewGeminiActivityButton');
+
+    const histogram = histogramMap['HistoryPage.ActorContextMenuActions'];
+    assertTrue(!!histogram);
+    assertEquals(
+        1, histogram[VisitContextMenuAction.REVIEW_GEMINI_ACTIVITY_CLICKED]);
+    assertEquals(
+        1, testProxy.actionMap['EntryMenuReviewGeminiActivity']);
+  });
+
+  test('HistoryPage.TimeToFirstVisibleContent', async () => {
+    document.body.classList.add('loading');
+    await finishSetup([]);
+
+    const [histogram, value] = await testProxy.whenCalled('recordTime');
+    assertEquals('HistoryPage.TimeToFirstVisibleContent', histogram);
+    assertTrue(value >= 0);
+    assertFalse(document.body.classList.contains('loading'));
+
+    // Subsequent queries should not record the histogram again.
+    testProxy.resetResolver('recordTime');
+    testProxy.handler.resetResolver('queryHistory');
+    testProxy.handler.setResultFor('queryHistory', Promise.resolve({
+      results: {info: createHistoryInfo('search'), value: []},
+    }));
+    app.fire('change-query', {search: 'search'});
+    await testProxy.handler.whenCalled('queryHistory');
+    await microtasksFinished();
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    assertEquals(0, testProxy.getCallCount('recordTime'));
+  });
+
+  test('HistoryPage.TimeToFirstVisibleContent_Hidden', async () => {
+    Object.defineProperty(
+        document, 'visibilityState', {value: 'hidden', configurable: true});
+    document.body.classList.add('loading');
+    await finishSetup([]);
+
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    assertEquals(0, testProxy.getCallCount('recordTime'));
+    assertFalse(document.body.classList.contains('loading'));
   });
 });

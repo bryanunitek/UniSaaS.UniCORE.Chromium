@@ -46,7 +46,6 @@
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_l10n_util.h"
 #include "extensions/common/file_util.h"
 #include "extensions/common/manifest.h"
@@ -262,7 +261,7 @@ void UnpackedInstaller::OnInstallChecksComplete(
   }
 
   std::u16string error_message;
-  if (errors.count(PreloadCheck::Error::kDisallowedByPolicy)) {
+  if (errors.contains(PreloadCheck::Error::kDisallowedByPolicy)) {
     error_message = policy_check_->GetErrorMessage();
   } else {
     error_message = requirements_check_->GetErrorMessage();
@@ -292,12 +291,6 @@ int UnpackedInstaller::GetFlags() {
     result |= Extension::REQUIRE_MODERN_MANIFEST_VERSION;
   }
 
-  if (base::FeatureList::IsEnabled(
-          extensions_features::
-              kAllowWithholdingExtensionPermissionsOnInstall)) {
-    result |= Extension::WITHHOLD_PERMISSIONS;
-  }
-
   if (installed_via_cdp_) {
     result |= Extension::INSTALLED_VIA_CDP;
   }
@@ -324,25 +317,29 @@ bool UnpackedInstaller::LoadExtension(mojom::ManifestLocation location,
   extension_ =
       file_util::LoadExtension(extension_path_, location, flags, error);
 
-  return extension() &&
+  return extension_ &&
          extension_l10n_util::ValidateExtensionLocales(
-             extension_path_, *extension()->manifest()->value(), error) &&
+             extension_path_, *extension_->manifest()->value(), error) &&
          IndexAndPersistRulesIfNeeded(error);
 }
 
 bool UnpackedInstaller::IndexAndPersistRulesIfNeeded(std::u16string* error) {
-  DCHECK(extension());
+  DCHECK(extension_);
 
-  base::expected<base::DictValue, std::string> index_result =
-      declarative_net_request::InstallIndexHelper::
-          IndexAndPersistRulesOnInstall(*extension_);
+  RulesetParseResult index_result = declarative_net_request::
+      InstallIndexHelper::IndexAndPersistRulesOnInstall(*extension_);
 
-  if (!index_result.has_value()) {
-    *error = base::UTF8ToUTF16(index_result.error());
+  if (index_result.error) {
+    *error = base::UTF8ToUTF16(*index_result.error);
     return false;
   }
 
-  ruleset_install_prefs_ = std::move(index_result.value());
+  if (!index_result.warnings.empty()) {
+    extension_->AddInstallWarnings(std::move(index_result.warnings));
+  }
+
+  ruleset_install_prefs_ = std::move(index_result.ruleset_install_prefs);
+
   return true;
 }
 

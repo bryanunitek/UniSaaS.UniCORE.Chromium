@@ -29,15 +29,12 @@
 #include "chrome/browser/gcm/instance_id/instance_id_profile_service_factory.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/notifications/notification_handler.h"
-#include "chrome/browser/permissions/crowd_deny_fake_safe_browsing_database_manager.h"
-#include "chrome/browser/permissions/crowd_deny_preload_data.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/push_messaging/push_messaging_app_identifier.h"
 #include "chrome/browser/push_messaging/push_messaging_service_factory.h"
 #include "chrome/browser/push_messaging/push_messaging_service_impl.h"
 #include "chrome/browser/push_messaging/push_messaging_unsubscribed_entry.h"
-#include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/channel_info.h"
@@ -64,6 +61,7 @@
 #include "components/push_messaging/push_messaging_constants.h"
 #include "components/push_messaging/push_messaging_features.h"
 #include "components/push_messaging/push_messaging_utils.h"
+#include "components/safe_browsing/buildflags.h"
 #include "components/site_engagement/content/site_engagement_score.h"
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "content/public/browser/browsing_data_remover.h"
@@ -82,6 +80,12 @@
 #include "third_party/blink/public/mojom/push_messaging/push_messaging_status.mojom.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/message_center/public/cpp/notification.h"
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "chrome/browser/permissions/crowd_deny_fake_safe_browsing_database_manager.h"
+#include "chrome/browser/permissions/crowd_deny_preload_data.h"
+#include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
+#endif
 
 namespace {
 
@@ -204,8 +208,8 @@ class PushMessagingBrowserTestBase
     host_resolver()->AddRule("*", "127.0.0.1");
     ASSERT_TRUE(https_server_->Start());
 
-    KeyedService* keyed_service =
-        gcm::GCMProfileServiceFactory::GetForProfile(GetBrowser()->profile());
+    KeyedService* keyed_service = gcm::GCMProfileServiceFactory::GetForProfile(
+        GetBrowser()->GetProfile());
     if (keyed_service) {
       gcm_service_ = static_cast<gcm::FakeGCMProfileService*>(keyed_service);
       gcm_driver_ = static_cast<instance_id::FakeGCMDriverForInstanceID*>(
@@ -213,10 +217,10 @@ class PushMessagingBrowserTestBase
     }
 
     notification_tester_ = std::make_unique<NotificationDisplayServiceTester>(
-        GetBrowser()->profile());
+        GetBrowser()->GetProfile());
 
     push_service_ =
-        PushMessagingServiceFactory::GetForProfile(GetBrowser()->profile());
+        PushMessagingServiceFactory::GetForProfile(GetBrowser()->GetProfile());
 
     LoadTestPage();
   }
@@ -228,7 +232,7 @@ class PushMessagingBrowserTestBase
 
   // Calls should be wrapped in the ASSERT_NO_FATAL_FAILURE() macro.
   void RestartPushService() {
-    Profile* profile = GetBrowser()->profile();
+    Profile* profile = GetBrowser()->GetProfile();
     PushMessagingServiceFactory::GetInstance()->SetTestingFactory(
         profile, BrowserContextKeyedServiceFactory::TestingFactory());
     ASSERT_EQ(nullptr, PushMessagingServiceFactory::GetForProfile(profile));
@@ -268,7 +272,7 @@ class PushMessagingBrowserTestBase
   content::EvalJsResult RunScript(const std::string& script,
                                   content::WebContents* web_contents) {
     if (!web_contents) {
-      web_contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      web_contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
     }
     return content::EvalJs(web_contents->GetPrimaryMainFrame(), script);
   }
@@ -279,7 +283,7 @@ class PushMessagingBrowserTestBase
 
   permissions::PermissionRequestManager* GetPermissionRequestManager() {
     return permissions::PermissionRequestManager::FromWebContents(
-        GetBrowser()->tab_strip_model()->GetActiveWebContents());
+        GetBrowser()->GetTabStripModel()->GetActiveWebContents());
   }
 
   // Calls should be wrapped in the ASSERT_NO_FATAL_FAILURE() macro.
@@ -369,7 +373,7 @@ class PushMessagingBrowserTestBase
 
   void SetSiteEngagementScore(const GURL& url, double score) {
     site_engagement::SiteEngagementService* service =
-        site_engagement::SiteEngagementService::Get(GetBrowser()->profile());
+        site_engagement::SiteEngagementService::Get(GetBrowser()->GetProfile());
     service->ResetBaseScoreForURL(url, score);
     EXPECT_EQ(score, service->GetScore(url));
   }
@@ -389,7 +393,7 @@ class PushMessagingBrowserTestBase
     return "/push_messaging/test_no_manifest.html";
   }
 
-  virtual Browser* GetBrowser() const { return browser(); }
+  virtual BrowserWindowInterface* GetBrowser() const { return browser(); }
 
   gcm::GCMProfileServiceFactory::ScopedTestingFactoryInstaller
       scoped_testing_factory_installer_;
@@ -480,7 +484,7 @@ void PushMessagingBrowserTestBase::SetupOrphanedPushSubscription(
 
   push_messaging::AppIdentifier app_identifier =
       PushMessagingAppIdentifier::FindByServiceWorker(
-          GetBrowser()->profile(), requesting_origin,
+          GetBrowser()->GetProfile(), requesting_origin,
           service_worker_registration_id);
   ASSERT_FALSE(app_identifier.is_null());
   *out_app_id = app_identifier.app_id();
@@ -516,14 +520,14 @@ void PushMessagingBrowserTestBase::LegacySubscribeSuccessfully(
   }
 
   PushMessagingAppIdentifier::PersistToPrefs(app_identifier,
-                                             GetBrowser()->profile());
+                                             GetBrowser()->GetProfile());
   push_service_->IncreasePushSubscriptionCount(1, false /* is_pending */);
   push_service_->DecreasePushSubscriptionCount(1, true /* was_pending */);
 
   {
     base::RunLoop run_loop;
     push_service_->StorePushSubscriptionForTesting(
-        GetBrowser()->profile(), requesting_origin,
+        GetBrowser()->GetProfile(), requesting_origin,
         service_worker_registration_id, subscription_id, kManifestSenderId,
         run_loop.QuitClosure());
     run_loop.Run();
@@ -561,7 +565,7 @@ PushMessagingBrowserTestBase::GetAppIdentifierForServiceWorkerRegistration(
   GURL origin = https_server()->GetURL("/").DeprecatedGetOriginAsURL();
   push_messaging::AppIdentifier app_identifier =
       PushMessagingAppIdentifier::FindByServiceWorker(
-          GetBrowser()->profile(), origin, service_worker_registration_id);
+          GetBrowser()->GetProfile(), origin, service_worker_registration_id);
   EXPECT_FALSE(app_identifier.is_null());
   return app_identifier;
 }
@@ -577,7 +581,7 @@ void PushMessagingBrowserTestBase::DeleteInstanceIDAsIfGCMStoreReset(
   // from clearing all subscriptions.
   instance_id::InstanceIDProfileService* instance_id_profile_service =
       instance_id::InstanceIDProfileServiceFactory::GetForProfile(
-          GetBrowser()->profile());
+          GetBrowser()->GetProfile());
   DCHECK(instance_id_profile_service);
   instance_id::InstanceIDDriver* instance_id_driver =
       instance_id_profile_service->driver();
@@ -746,7 +750,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest, SubscribeWithInvalidation) {
 
   push_messaging::AppIdentifier app_identifier =
       PushMessagingAppIdentifier::FindByServiceWorker(
-          GetBrowser()->profile(),
+          GetBrowser()->GetProfile(),
           https_server()->GetURL("/").DeprecatedGetOriginAsURL(),
           0LL /* service_worker_registration_id */);
 
@@ -1304,7 +1308,8 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest, PushEventNoServiceWorker) {
 
   // |app_identifier| should no longer be stored in prefs.
   push_messaging::AppIdentifier stored_app_identifier =
-      PushMessagingAppIdentifier::FindByAppId(GetBrowser()->profile(), app_id);
+      PushMessagingAppIdentifier::FindByAppId(GetBrowser()->GetProfile(),
+                                              app_id);
   EXPECT_TRUE(stored_app_identifier.is_null());
 }
 
@@ -1360,9 +1365,9 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest, PushEventWithoutPermission) {
   // PushMessagingServiceImpl's OnContentSettingChanged handler so that it
   // doesn't automatically unsubscribe, since we want to test the case where
   // there is still a subscription.
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->RemoveObserver(push_service());
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->ClearSettingsForOneType(ContentSettingsType::NOTIFICATIONS);
   base::RunLoop().RunUntilIdle();
 
@@ -1385,8 +1390,8 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest, PushEventWithoutPermission) {
   EXPECT_EQ("false - not subscribed", RunScript("hasSubscription()"));
   GURL origin = https_server()->GetURL("/").DeprecatedGetOriginAsURL();
   push_messaging::AppIdentifier app_identifier_afterwards =
-      PushMessagingAppIdentifier::FindByServiceWorker(GetBrowser()->profile(),
-                                                      origin, 0LL);
+      PushMessagingAppIdentifier::FindByServiceWorker(
+          GetBrowser()->GetProfile(), origin, 0LL);
   EXPECT_TRUE(app_identifier_afterwards.is_null());
   histogram_tester_.ExpectUniqueSample(
       "PushMessaging.UnregistrationReason",
@@ -1413,7 +1418,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
   // We'll need to specify the web_contents in which to eval script, since we're
   // going to run script in a background tab.
   content::WebContents* web_contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   // Set the site engagement score for the site. Setting it to 10 means it
   // should have a budget of 4, enough for two non-shown notification, which
@@ -1435,7 +1440,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
   // Open a blank foreground tab so site is no longer visible.
   ui_test_utils::NavigateToURLWithDisposition(
       GetBrowser(), GURL("about:blank"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB);
 
   // If the Service Worker push event handler shows a notification, we
@@ -1517,13 +1522,13 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
   // We'll need to specify the web_contents in which to eval script, since we're
   // going to run script in a background tab.
   content::WebContents* web_contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   SetSiteEngagementScore(web_contents->GetLastCommittedURL(), 5.0);
 
   ui_test_utils::NavigateToURLWithDisposition(
       GetBrowser(), GURL("about:blank"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB);
 
   // Send a missed notification to use up the budget.
@@ -1567,6 +1572,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
   ASSERT_EQ(0u, GetNotificationCount());
 }
 
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 class PushMessagingBrowserTestWithAbusiveOriginPermissionRevocation
     : public PushMessagingBrowserTestBase {
  public:
@@ -1651,8 +1657,8 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ("false - not subscribed", RunScript("hasSubscription()"));
   GURL origin = https_server()->GetURL("/").DeprecatedGetOriginAsURL();
   push_messaging::AppIdentifier app_identifier_afterwards =
-      PushMessagingAppIdentifier::FindByServiceWorker(GetBrowser()->profile(),
-                                                      origin, 0LL);
+      PushMessagingAppIdentifier::FindByServiceWorker(
+          GetBrowser()->GetProfile(), origin, 0LL);
   EXPECT_TRUE(app_identifier_afterwards.is_null());
 
   // 1st event - blink::mojom::PushUnregistrationReason::PERMISSION_REVOKED.
@@ -1701,6 +1707,7 @@ IN_PROC_BROWSER_TEST_F(
       "PushMessaging.DeliveryStatus",
       static_cast<int>(blink::mojom::PushEventStatus::SUCCESS), 1);
 }
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 
 IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTestBase,
                        PushEventIgnoresScheduledNotificationsForEnforcement) {
@@ -1715,14 +1722,14 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTestBase,
   // We'll need to specify the web_contents in which to eval script, since we're
   // going to run script in a background tab.
   content::WebContents* web_contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   // Initialize site engagement score to have no budget for silent pushes.
   SetSiteEngagementScore(web_contents->GetLastCommittedURL(), 0);
 
   ui_test_utils::NavigateToURLWithDisposition(
       GetBrowser(), GURL("about:blank"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB);
 
   gcm::IncomingMessage message;
@@ -1794,7 +1801,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
 IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
                        PushEventNotificationWithoutEventWaitUntil) {
   content::WebContents* web_contents =
-      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+      GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
   ASSERT_NO_FATAL_FAILURE(SubscribeSuccessfully());
   push_messaging::AppIdentifier app_identifier =
@@ -1871,12 +1878,12 @@ IN_PROC_BROWSER_TEST_P(PushMessagingPartitionedBrowserTest, CrossOriginFrame) {
   const GURL kEmbedderURL = https_server()->GetURL(
       "embedder.com", "/push_messaging/framed_test.html");
   const GURL kRequesterURL = https_server()->GetURL("requester.com", "/");
-  CookieSettingsFactory::GetForProfile(browser()->profile())
+  CookieSettingsFactory::GetForProfile(browser()->GetProfile())
       ->SetCookieSetting(kRequesterURL, CONTENT_SETTING_ALLOW);
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(GetBrowser(), kEmbedderURL));
 
-  auto* web_contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   LOG(ERROR) << web_contents->GetLastCommittedURL();
   auto* subframe =
       content::ChildFrameAt(web_contents->GetPrimaryMainFrame(), 0u);
@@ -1913,7 +1920,7 @@ IN_PROC_BROWSER_TEST_P(PushMessagingPartitionedBrowserTest, CrossOriginFrame) {
   // previously (in a first-party context) should see it as "granted", and be
   // able to use the Push and Web Notifications APIs.
 
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->SetContentSettingDefaultScope(kRequesterURL, kRequesterURL,
                                       ContentSettingsType::NOTIFICATIONS,
                                       CONTENT_SETTING_ALLOW);
@@ -1949,8 +1956,9 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest, UnsubscribeSuccess) {
       "PushMessaging.UnregistrationReason",
       static_cast<int>(blink::mojom::PushUnregistrationReason::JAVASCRIPT_API),
       1);
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 
   // Resolves false if there was no longer a subscription.
   EXPECT_EQ("unsubscribe result: false",
@@ -1959,8 +1967,9 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest, UnsubscribeSuccess) {
       "PushMessaging.UnregistrationReason",
       static_cast<int>(blink::mojom::PushUnregistrationReason::JAVASCRIPT_API),
       2);
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 
   // TODO(johnme): Test that doesn't reject if there was a network error (should
   // deactivate subscription locally anyway).
@@ -2172,12 +2181,13 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
   GURL origin = https_server()->GetURL("/").DeprecatedGetOriginAsURL();
   push_messaging::AppIdentifier app_identifier =
       PushMessagingAppIdentifier::FindByServiceWorker(
-          GetBrowser()->profile(), origin,
+          GetBrowser()->GetProfile(), origin,
           0LL /* service_worker_registration_id */);
   EXPECT_TRUE(app_identifier.is_null());
 
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 }
 
 IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
@@ -2203,10 +2213,12 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
       1);
 
   // There should not be any subscriptions left.
-  EXPECT_EQ(PushMessagingAppIdentifier::GetCount(GetBrowser()->profile()), 0u);
+  EXPECT_EQ(PushMessagingAppIdentifier::GetCount(GetBrowser()->GetProfile()),
+            0u);
 
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 }
 
 IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
@@ -2222,7 +2234,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
 
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->SetContentSettingDefaultScope(origin, GURL(),
                                         ContentSettingsType::NOTIFICATIONS,
                                         CONTENT_SETTING_BLOCK);
@@ -2230,9 +2242,10 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
   }
 
   // There should be no subscription but one unsubscribed entry.
-  EXPECT_EQ(PushMessagingAppIdentifier::GetCount(GetBrowser()->profile()), 0u);
+  EXPECT_EQ(PushMessagingAppIdentifier::GetCount(GetBrowser()->GetProfile()),
+            0u);
   EXPECT_THAT(
-      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
       ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin, origin)));
 
   // Unregister service worker and wait for callback.
@@ -2246,9 +2259,11 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
   }
 
   // There should be no subscription and no unsubscribed entry anymore.
-  EXPECT_EQ(PushMessagingAppIdentifier::GetCount(GetBrowser()->profile()), 0u);
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_EQ(PushMessagingAppIdentifier::GetCount(GetBrowser()->GetProfile()),
+            0u);
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -2265,7 +2280,7 @@ IN_PROC_BROWSER_TEST_F(
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
 
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->SetContentSettingDefaultScope(origin, GURL(),
                                         ContentSettingsType::NOTIFICATIONS,
                                         CONTENT_SETTING_BLOCK);
@@ -2273,9 +2288,10 @@ IN_PROC_BROWSER_TEST_F(
   }
 
   // There should be no subscription but one unsubscribed entry.
-  EXPECT_EQ(PushMessagingAppIdentifier::GetCount(GetBrowser()->profile()), 0u);
+  EXPECT_EQ(PushMessagingAppIdentifier::GetCount(GetBrowser()->GetProfile()),
+            0u);
   EXPECT_THAT(
-      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
       ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin, origin)));
 
   // Pretend as if the Service Worker database went away, and wait for callback
@@ -2289,9 +2305,11 @@ IN_PROC_BROWSER_TEST_F(
   }
 
   // There should be no subscription and no unsubscribed entry anymore.
-  EXPECT_EQ(PushMessagingAppIdentifier::GetCount(GetBrowser()->profile()), 0u);
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_EQ(PushMessagingAppIdentifier::GetCount(GetBrowser()->GetProfile()),
+            0u);
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 }
 
 IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
@@ -2301,7 +2319,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
   GURL origin = https_server()->GetURL("/").DeprecatedGetOriginAsURL();
   push_messaging::AppIdentifier app_identifier1 =
       PushMessagingAppIdentifier::FindByServiceWorker(
-          GetBrowser()->profile(), origin,
+          GetBrowser()->GetProfile(), origin,
           0LL /* service_worker_registration_id */);
   ASSERT_FALSE(app_identifier1.is_null());
 
@@ -2313,7 +2331,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
   // We should still be able to look up the app id.
   push_messaging::AppIdentifier app_identifier2 =
       PushMessagingAppIdentifier::FindByServiceWorker(
-          GetBrowser()->profile(), origin,
+          GetBrowser()->GetProfile(), origin,
           0LL /* service_worker_registration_id */);
   EXPECT_FALSE(app_identifier2.is_null());
   EXPECT_EQ(app_identifier1.app_id(), app_identifier2.app_id());
@@ -2330,12 +2348,13 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
   // We should no longer be able to look up the app id.
   push_messaging::AppIdentifier app_identifier3 =
       PushMessagingAppIdentifier::FindByServiceWorker(
-          GetBrowser()->profile(), origin,
+          GetBrowser()->GetProfile(), origin,
           0LL /* service_worker_registration_id */);
   EXPECT_TRUE(app_identifier3.is_null());
 
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 }
 
 IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
@@ -2351,7 +2370,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
   push_service()->SetContentSettingChangedCallbackForTesting(
       run_loop.QuitClosure());
 
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->ClearSettingsForOneType(ContentSettingsType::NOTIFICATIONS);
 
   run_loop.Run();
@@ -2367,10 +2386,11 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
           blink::mojom::PushUnregistrationReason::PERMISSION_REVOKED),
       1);
 
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              ElementsAre(Property(
-                  &PushMessagingUnsubscribedEntry::origin,
-                  https_server()->GetURL("/").DeprecatedGetOriginAsURL())));
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      ElementsAre(
+          Property(&PushMessagingUnsubscribedEntry::origin,
+                   https_server()->GetURL("/").DeprecatedGetOriginAsURL())));
 }
 
 IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
@@ -2387,7 +2407,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
       run_loop.QuitClosure());
 
   GURL origin = https_server()->GetURL("/").DeprecatedGetOriginAsURL();
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->SetContentSettingDefaultScope(origin, origin,
                                       ContentSettingsType::NOTIFICATIONS,
                                       CONTENT_SETTING_DEFAULT);
@@ -2406,7 +2426,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
       1);
 
   EXPECT_THAT(
-      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
       ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin, origin)));
 }
 
@@ -2424,7 +2444,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
       run_loop.QuitClosure());
 
   GURL origin = https_server()->GetURL("/").DeprecatedGetOriginAsURL();
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->SetContentSettingDefaultScope(origin, origin,
                                       ContentSettingsType::NOTIFICATIONS,
                                       CONTENT_SETTING_BLOCK);
@@ -2443,7 +2463,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
       1);
 
   EXPECT_THAT(
-      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
       ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin, origin)));
 }
 
@@ -2460,7 +2480,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
   push_service()->SetContentSettingChangedCallbackForTesting(
       run_loop.QuitClosure());
 
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->ClearSettingsForOneType(ContentSettingsType::NOTIFICATIONS);
 
   run_loop.Run();
@@ -2476,10 +2496,11 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
           blink::mojom::PushUnregistrationReason::PERMISSION_REVOKED),
       1);
 
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              ElementsAre(Property(
-                  &PushMessagingUnsubscribedEntry::origin,
-                  https_server()->GetURL("/").DeprecatedGetOriginAsURL())));
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      ElementsAre(
+          Property(&PushMessagingUnsubscribedEntry::origin,
+                   https_server()->GetURL("/").DeprecatedGetOriginAsURL())));
 }
 
 IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
@@ -2496,7 +2517,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
       run_loop.QuitClosure());
 
   GURL origin = https_server()->GetURL("/").DeprecatedGetOriginAsURL();
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->SetContentSettingDefaultScope(origin, GURL(),
                                       ContentSettingsType::NOTIFICATIONS,
                                       CONTENT_SETTING_DEFAULT);
@@ -2515,7 +2536,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
       1);
 
   EXPECT_THAT(
-      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
       ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin, origin)));
 }
 
@@ -2533,7 +2554,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
       run_loop.QuitClosure());
 
   GURL origin = https_server()->GetURL("/").DeprecatedGetOriginAsURL();
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->SetContentSettingDefaultScope(origin, GURL(),
                                       ContentSettingsType::NOTIFICATIONS,
                                       CONTENT_SETTING_BLOCK);
@@ -2552,7 +2573,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
       1);
 
   EXPECT_THAT(
-      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
       ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin, origin)));
 }
 
@@ -2570,7 +2591,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
       run_loop.QuitClosure());
 
   GURL origin = https_server()->GetURL("/").DeprecatedGetOriginAsURL();
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->SetContentSettingDefaultScope(origin, GURL(),
                                       ContentSettingsType::NOTIFICATIONS,
                                       CONTENT_SETTING_ALLOW);
@@ -2584,8 +2605,9 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
 
   histogram_tester_.ExpectTotalCount("PushMessaging.UnregistrationReason", 0);
 
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 }
 
 // This test is testing some non-trivial content settings rules and make sure
@@ -2606,10 +2628,10 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
       base::BarrierClosure(2, run_loop.QuitClosure()));
 
   GURL origin = https_server()->GetURL("/").DeprecatedGetOriginAsURL();
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->SetDefaultContentSetting(ContentSettingsType::NOTIFICATIONS,
                                  CONTENT_SETTING_ALLOW);
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->SetContentSettingDefaultScope(origin, GURL(),
                                       ContentSettingsType::NOTIFICATIONS,
                                       CONTENT_SETTING_DEFAULT);
@@ -2628,8 +2650,9 @@ IN_PROC_BROWSER_TEST_F(PushMessagingBrowserTest,
 
   histogram_tester_.ExpectTotalCount("PushMessaging.UnregistrationReason", 0);
 
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 }
 
 // Checks automatically unsubscribing due to a revoked permission after
@@ -2643,7 +2666,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // Simulate a user clearing site data (including Service Workers, crucially).
   content::BrowsingDataRemover* remover =
-      GetBrowser()->profile()->GetBrowsingDataRemover();
+      GetBrowser()->GetProfile()->GetBrowsingDataRemover();
   content::BrowsingDataRemoverCompletionObserver observer(remover);
   remover->RemoveAndReply(
       base::Time(), base::Time::Max(),
@@ -2658,14 +2681,15 @@ IN_PROC_BROWSER_TEST_F(
   // TODO(johnme): Get this test running on Android with legacy GCM
   // registrations, which have a different codepath due to sender_id being
   // required for unsubscribing there.
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->ClearSettingsForOneType(ContentSettingsType::NOTIFICATIONS);
 
   run_loop.Run();
 
   // |app_identifier| should no longer be stored in prefs.
   push_messaging::AppIdentifier stored_app_identifier =
-      PushMessagingAppIdentifier::FindByAppId(GetBrowser()->profile(), app_id);
+      PushMessagingAppIdentifier::FindByAppId(GetBrowser()->GetProfile(),
+                                              app_id);
   EXPECT_TRUE(stored_app_identifier.is_null());
 
   histogram_tester_.ExpectUniqueSample(
@@ -2717,21 +2741,24 @@ class PushMessagingIncognitoBrowserTest : public PushMessagingBrowserTestBase {
     prerender_helper_.RegisterServerRequestMonitor(https_server());
     PushMessagingBrowserTestBase::SetUpOnMainThread();
   }
-  Browser* GetBrowser() const override { return incognito_browser_; }
+  BrowserWindowInterface* GetBrowser() const override {
+    return incognito_browser_;
+  }
 
   content::WebContents* web_contents() {
-    return GetBrowser()->tab_strip_model()->GetActiveWebContents();
+    return GetBrowser()->GetTabStripModel()->GetActiveWebContents();
   }
 
  protected:
   content::test::PrerenderTestHelper prerender_helper_;
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> incognito_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged>
+      incognito_browser_ = nullptr;
 };
 
 // Regression test for https://crbug.com/40413606
 IN_PROC_BROWSER_TEST_F(PushMessagingIncognitoBrowserTest,
                        IncognitoGetSubscriptionDoesNotHang) {
-  ASSERT_TRUE(GetBrowser()->profile()->IsOffTheRecord());
+  ASSERT_TRUE(GetBrowser()->GetProfile()->IsOffTheRecord());
 
   ASSERT_EQ("ok - service worker registered",
             RunScript("registerServiceWorker()"));
@@ -2742,7 +2769,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingIncognitoBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(PushMessagingIncognitoBrowserTest, WarningToCorrectRFH) {
-  ASSERT_TRUE(GetBrowser()->profile()->IsOffTheRecord());
+  ASSERT_TRUE(GetBrowser()->GetProfile()->IsOffTheRecord());
 
   content::WebContentsConsoleObserver console_observer(web_contents());
   console_observer.SetPattern(kIncognitoWarningPattern);
@@ -2767,7 +2794,7 @@ IN_PROC_BROWSER_TEST_F(PushMessagingIncognitoBrowserTest, WarningToCorrectRFH) {
 // is fixed.
 IN_PROC_BROWSER_TEST_F(PushMessagingIncognitoBrowserTest,
                        DISABLED_WarningToCorrectRFH_Prerender) {
-  ASSERT_TRUE(GetBrowser()->profile()->IsOffTheRecord());
+  ASSERT_TRUE(GetBrowser()->GetProfile()->IsOffTheRecord());
 
   // Load an initial page.
   const GURL initial_url(https_server()->GetURL(GetTestURL()));
@@ -2977,7 +3004,8 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnInvalidationTest,
   EXPECT_EQ("unsubscribe result: true", RunScript("unsubscribePush()"));
 
   // There should be no subscription since we unsubscribed
-  EXPECT_EQ(PushMessagingAppIdentifier::GetCount(GetBrowser()->profile()), 0u);
+  EXPECT_EQ(PushMessagingAppIdentifier::GetCount(GetBrowser()->GetProfile()),
+            0u);
 
   // Create a |new_subscription| by resubscribing
   ASSERT_NO_FATAL_FAILURE(SubscribeSuccessfully());
@@ -3026,7 +3054,7 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnInvalidationTest,
   base::RunLoop run_loop;
   push_service()->SetContentSettingChangedCallbackForTesting(
       run_loop.QuitClosure());
-  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+  HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
       ->SetContentSettingDefaultScope(app_identifier.origin(), GURL(),
                                       ContentSettingsType::NOTIFICATIONS,
                                       CONTENT_SETTING_BLOCK);
@@ -3063,14 +3091,14 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnInvalidationTest,
 
   // Old subscription should be gone
   push_messaging::AppIdentifier deleted_identifier =
-      PushMessagingAppIdentifier::FindByAppId(GetBrowser()->profile(),
+      PushMessagingAppIdentifier::FindByAppId(GetBrowser()->GetProfile(),
                                               app_identifier.app_id());
   EXPECT_TRUE(deleted_identifier.is_null());
 
   // New subscription with a different app id should exist
   push_messaging::AppIdentifier new_identifier =
       PushMessagingAppIdentifier::FindByServiceWorker(
-          GetBrowser()->profile(), app_identifier.origin(),
+          GetBrowser()->GetProfile(), app_identifier.origin(),
           app_identifier.service_worker_registration_id());
   EXPECT_FALSE(new_identifier.is_null());
 
@@ -3104,7 +3132,7 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
     base::RunLoop run_loop;
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->SetContentSettingDefaultScope(app_identifier.origin(), GURL(),
                                         ContentSettingsType::NOTIFICATIONS,
                                         CONTENT_SETTING_BLOCK);
@@ -3118,7 +3146,7 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
     base::RunLoop run_loop;
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->SetContentSettingDefaultScope(app_identifier.origin(), GURL(),
                                         ContentSettingsType::NOTIFICATIONS,
                                         CONTENT_SETTING_ALLOW);
@@ -3146,9 +3174,10 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
 
   // The unsubscribed entry should not be deleted yet, since the subscription
   // has not been recreated.
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin,
-                                   app_identifier.origin())));
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin,
+                           app_identifier.origin())));
   EXPECT_EQ("false - not subscribed", RunScript("hasSubscription()"));
 
   // Now resubscribe from the worker.
@@ -3158,8 +3187,9 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
   EXPECT_EQ("true - subscribed", RunScript("hasSubscription()"));
 
   // Now the unsubscribed entry should have been deleted.
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 }
 
 IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
@@ -3182,7 +3212,7 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
     base::RunLoop run_loop;
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->SetContentSettingDefaultScope(app_identifier.origin(), GURL(),
                                         ContentSettingsType::NOTIFICATIONS,
                                         CONTENT_SETTING_ASK);
@@ -3196,7 +3226,7 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
     base::RunLoop run_loop;
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->SetContentSettingDefaultScope(app_identifier.origin(), GURL(),
                                         ContentSettingsType::NOTIFICATIONS,
                                         CONTENT_SETTING_ALLOW);
@@ -3224,9 +3254,10 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
 
   // The unsubscribed entry should not be deleted yet, since the subscription
   // has not been recreated.
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin,
-                                   app_identifier.origin())));
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin,
+                           app_identifier.origin())));
   EXPECT_EQ("false - not subscribed", RunScript("hasSubscription()"));
 
   // Now resubscribe from the worker.
@@ -3236,8 +3267,9 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
   EXPECT_EQ("true - subscribed", RunScript("hasSubscription()"));
 
   // Now the unsubscribed entry should have been deleted.
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 }
 
 IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
@@ -3260,7 +3292,7 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
     base::RunLoop run_loop;
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->ClearSettingsForOneType(ContentSettingsType::NOTIFICATIONS);
 
     run_loop.Run();
@@ -3273,7 +3305,7 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
     base::RunLoop run_loop;
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->SetContentSettingDefaultScope(app_identifier.origin(), GURL(),
                                         ContentSettingsType::NOTIFICATIONS,
                                         CONTENT_SETTING_ALLOW);
@@ -3301,9 +3333,10 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
 
   // The unsubscribed entry should not be deleted yet, since the subscription
   // has not been recreated.
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin,
-                                   app_identifier.origin())));
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin,
+                           app_identifier.origin())));
   EXPECT_EQ("false - not subscribed", RunScript("hasSubscription()"));
 
   // Now resubscribe from the worker.
@@ -3313,8 +3346,9 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
   EXPECT_EQ("true - subscribed", RunScript("hasSubscription()"));
 
   // Now the unsubscribed entry should have been deleted.
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 }
 
 IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
@@ -3327,7 +3361,7 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
     base::RunLoop run_loop;
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->SetContentSettingCustomScope(ContentSettingsPattern::Wildcard(),
                                        ContentSettingsPattern::Wildcard(),
                                        ContentSettingsType::NOTIFICATIONS,
@@ -3354,7 +3388,7 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
     base::RunLoop run_loop;
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->SetContentSettingCustomScope(ContentSettingsPattern::Wildcard(),
                                        ContentSettingsPattern::Wildcard(),
                                        ContentSettingsType::NOTIFICATIONS,
@@ -3367,15 +3401,16 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
   EXPECT_EQ("false - not subscribed", RunScript("hasSubscription()"));
 
   // There should be one unsubscribed entry.
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin,
-                                   app_identifier.origin())));
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin,
+                           app_identifier.origin())));
 
   {
     base::RunLoop run_loop;
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->SetContentSettingCustomScope(ContentSettingsPattern::Wildcard(),
                                        ContentSettingsPattern::Wildcard(),
                                        ContentSettingsType::NOTIFICATIONS,
@@ -3387,9 +3422,10 @@ IN_PROC_BROWSER_TEST_F(PushSubscriptionChangeEventOnResubscribeTest,
             RunScript("pushManagerPermissionState()"));
 
   // The unsubscribed entry should not be deleted.
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin,
-                                   app_identifier.origin())));
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      ElementsAre(Property(&PushMessagingUnsubscribedEntry::origin,
+                           app_identifier.origin())));
 
   EXPECT_EQ("false - not subscribed", RunScript("hasSubscription()"));
 
@@ -3436,7 +3472,7 @@ IN_PROC_BROWSER_TEST_F(
     base::RunLoop run_loop;
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->SetContentSettingDefaultScope(app_identifier.origin(), GURL(),
                                         ContentSettingsType::NOTIFICATIONS,
                                         CONTENT_SETTING_BLOCK);
@@ -3450,7 +3486,7 @@ IN_PROC_BROWSER_TEST_F(
     base::RunLoop run_loop;
     push_service()->SetContentSettingChangedCallbackForTesting(
         run_loop.QuitClosure());
-    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->profile())
+    HostContentSettingsMapFactory::GetForProfile(GetBrowser()->GetProfile())
         ->SetContentSettingDefaultScope(app_identifier.origin(), GURL(),
                                         ContentSettingsType::NOTIFICATIONS,
                                         CONTENT_SETTING_ALLOW);
@@ -3483,8 +3519,9 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(new_subscription->endpoint, got_new_endpoint);
 
   // Now the unsubscribed entry should have been deleted.
-  EXPECT_THAT(PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->profile()),
-              IsEmpty());
+  EXPECT_THAT(
+      PushMessagingUnsubscribedEntry::GetAll(GetBrowser()->GetProfile()),
+      IsEmpty());
 
   EXPECT_EQ("true - subscribed", RunScript("hasSubscription()"));
 }

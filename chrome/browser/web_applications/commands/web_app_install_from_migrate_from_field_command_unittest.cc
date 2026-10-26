@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/test/fake_web_app_origin_association_manager.h"
@@ -26,7 +25,6 @@
 #include "components/webapps/browser/install_result_code.h"
 #include "content/public/browser/web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
 
 namespace web_app {
@@ -35,13 +33,11 @@ namespace {
 class WebAppInstallFromMigrateFromFieldCommandTest : public WebAppTest {
  public:
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        blink::features::kWebAppMigrationApi);
     WebAppTest::SetUp();
 
     auto* provider = FakeWebAppProvider::Get(profile());
     auto association_manager =
-        std::make_unique<FakeWebAppOriginAssociationManager>();
+        std::make_unique<FakeWebAppOriginAssociationManager>(*profile());
     association_manager->set_pass_through(true);
     provider->SetOriginAssociationManager(std::move(association_manager));
 
@@ -52,9 +48,6 @@ class WebAppInstallFromMigrateFromFieldCommandTest : public WebAppTest {
   WebAppCommandManager& command_manager() {
     return provider().command_manager();
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(WebAppInstallFromMigrateFromFieldCommandTest, NoSourceAppInstalled) {

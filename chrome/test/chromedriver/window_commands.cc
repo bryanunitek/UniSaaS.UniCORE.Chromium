@@ -7,16 +7,18 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <cmath>
 #include <list>
 #include <map>
 #include <memory>
+#include <numbers>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/containers/adapters.h"
 #include "base/containers/flat_set.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
@@ -1336,11 +1338,15 @@ Status ProcessInputActionSequence(Session* session,
   const std::string& id = *maybe_id;
 
   if (type == "pointer") {
+    const base::Value* parameters_value = action_sequence.Find("parameters");
+    if (parameters_value && !parameters_value->is_dict()) {
+      return Status(kInvalidArgument, "'parameters' must be a dictionary");
+    }
     const base::DictValue* parameters = action_sequence.FindDict("parameters");
-    if (parameters) {
+    pointer_type = "mouse";
+    if (parameters && parameters->Find("pointerType")) {
       const std::string* maybe_pointer_type =
           parameters->FindString("pointerType");
-      // error check arguments
       if (!maybe_pointer_type ||
           (*maybe_pointer_type != "mouse" && *maybe_pointer_type != "pen" &&
            *maybe_pointer_type != "touch")) {
@@ -1349,8 +1355,6 @@ Status ProcessInputActionSequence(Session* session,
             "'pointerType' must be a string and one of mouse, pen or touch");
       }
       pointer_type = *maybe_pointer_type;
-    } else {
-      pointer_type = "mouse";
     }
   }
 
@@ -1561,6 +1565,11 @@ Status ProcessInputActionSequence(Session* session,
               return Status(kInvalidArgument,
                             "if 'origin' is a string, it must be either "
                             "'viewport' or 'pointer'");
+            if (*subtype == "scroll" && origin == "pointer") {
+              return Status(kInvalidArgument,
+                            "'pointer' origin is not supported for wheel "
+                            "scroll actions");
+            }
             action_dict.Set("origin", origin);
           }
         } else {
@@ -1641,6 +1650,36 @@ Status ProcessInputActionSequence(Session* session,
         return Status(kInvalidArgument,
                       "'twist' must be an integer in the range of [0,359]");
       action_dict.Set("twist", maybe_int_value.value());
+
+      if (type == "pointer" &&
+          (*subtype == "pointerDown" || *subtype == "pointerUp" ||
+           *subtype == "pointerMove")) {
+        if (const base::Value* angle = action_item.Find("altitudeAngle")) {
+          maybe_double_value = angle->GetIfDouble();
+          if (!maybe_double_value.has_value() ||
+              !std::isfinite(maybe_double_value.value()) ||
+              maybe_double_value.value() < 0 ||
+              maybe_double_value.value() > std::numbers::pi_v<double> / 2) {
+            return Status(
+                kInvalidArgument,
+                "'altitudeAngle' must be a number in the range of [0, pi/2]");
+          }
+          action_dict.Set("altitudeAngle", maybe_double_value.value());
+        }
+
+        if (const base::Value* angle = action_item.Find("azimuthAngle")) {
+          maybe_double_value = angle->GetIfDouble();
+          if (!maybe_double_value.has_value() ||
+              !std::isfinite(maybe_double_value.value()) ||
+              maybe_double_value.value() < 0 ||
+              maybe_double_value.value() > 2 * std::numbers::pi_v<double>) {
+            return Status(
+                kInvalidArgument,
+                "'azimuthAngle' must be a number in the range of [0, 2*pi]");
+          }
+          action_dict.Set("azimuthAngle", maybe_double_value.value());
+        }
+      }
     }
     action_list->push_back(std::move(action_dict));
   }
@@ -2001,7 +2040,7 @@ Status ExecuteReleaseActions(Session* session,
                              std::unique_ptr<base::Value>* value,
                              Timeout* timeout) {
   for (const InputCancelListEntry& entry :
-       base::Reversed(session->input_cancel_list)) {
+       std::views::reverse(session->input_cancel_list)) {
     if (entry.key_event) {
       base::DictValue* pressed = entry.input_state->FindDict("pressed");
       if (!pressed->Find(entry.key_event->key))
@@ -3046,4 +3085,28 @@ Status ExecuteClearDisplayFeatures(Session* session,
                                    Timeout* timeout) {
   return web_view->SendCommand("Emulation.clearDisplayFeaturesOverride",
                                base::DictValue());
+}
+
+Status ExecuteGetGlobalPrivacyControl(Session* session,
+                                      WebView* web_view,
+                                      const base::DictValue& params,
+                                      std::unique_ptr<base::Value>* value,
+                                      Timeout* timeout) {
+  base::DictValue result;
+  const Status status = session->chrome->Client()->SendCommandAndGetResult(
+      "Browser.getGlobalPrivacyControl", params, &result);
+  *value = std::make_unique<base::Value>(std::move(result));
+  return status;
+}
+
+Status ExecuteSetGlobalPrivacyControl(Session* session,
+                                      WebView* web_view,
+                                      const base::DictValue& params,
+                                      std::unique_ptr<base::Value>* value,
+                                      Timeout* timeout) {
+  base::DictValue result;
+  const Status status = session->chrome->Client()->SendCommandAndGetResult(
+      "Browser.setGlobalPrivacyControl", params, &result);
+  *value = std::make_unique<base::Value>(std::move(result));
+  return status;
 }

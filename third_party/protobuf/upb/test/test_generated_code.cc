@@ -12,16 +12,24 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 
 #include <gtest/gtest.h>
 #include "google/protobuf/test_messages_proto2.upb.h"
 #include "google/protobuf/test_messages_proto3.upb.h"
 #include "upb/base/status.h"
 #include "upb/base/string_view.h"
+#include "upb/mem/alloc.h"
+#include "upb/mem/arena.h"
 #include "upb/mem/arena.hpp"
 #include "upb/message/array.h"
 #include "upb/message/map.h"
+#include "upb/message/message.h"
 #include "upb/test/test.upb.h"
+#include "upb/test/test.upb_minitable.h"
+#include "upb/wire/decode.h"
+#include "upb/wire/encode.h"
 
 // Must be last.
 #include "upb/port/def.inc"
@@ -908,5 +916,121 @@ TEST(GeneratedCode, Maps) {
   key.str_val = test_str_view;
   val.str_val = test_str_view2;
 
-  upb_Map_Set(sb, key, val, arena.ptr());
+  ASSERT_TRUE(upb_Map_Set(sb, key, val, arena.ptr()));
+}
+
+TEST(GeneratedCode, MapWithRequiredFields) {
+  upb::Arena arena;
+  upb_test_ModelWithMaps* msg = upb_test_ModelWithMaps_new(arena.ptr());
+
+  auto im_required =
+      _upb_test_ModelWithMaps_map_im_required_mutable_upb_map(msg, arena.ptr());
+
+  ASSERT_NE(im_required, nullptr);
+
+  upb_MessageValue key, val;
+  key.int32_val = 0;
+  val.msg_val =
+      (const upb_Message*)upb_test_ModelWithRequiredFields_new(arena.ptr());
+
+  ASSERT_TRUE(upb_Map_Set(im_required, key, val, arena.ptr()));
+
+  // Serializing fails if we are checking required fields, but succeeds if we
+  // don't.
+  size_t size;
+  char* serialized = upb_test_ModelWithMaps_serialize_ex(
+      msg, kUpb_EncodeOption_CheckRequired, arena.ptr(), &size);
+  ASSERT_EQ(serialized, nullptr);
+
+  serialized = upb_test_ModelWithMaps_serialize_ex(msg, 0, arena.ptr(), &size);
+  ASSERT_NE(serialized, nullptr);
+
+  // Likewise, parsing fails if we are checking required fields, but succeeds
+  // if we don't.
+  upb_test_ModelWithMaps* msg2 = upb_test_ModelWithMaps_parse_ex(
+      serialized, size, nullptr, kUpb_DecodeOption_CheckRequired, arena.ptr());
+  ASSERT_EQ(msg2, nullptr);
+
+  msg2 = upb_test_ModelWithMaps_parse_ex(serialized, size, nullptr, 0,
+                                         arena.ptr());
+  ASSERT_NE(msg2, nullptr);
+}
+
+TEST(GeneratedCode, ReservedNames) {
+  upb_Arena* arena = upb_Arena_New();
+  upb_test_TestReserved* msg = upb_test_TestReserved_new(arena);
+
+  // Check that we can call the mangled accessors.
+  // If they weren't mangled, this would fail to compile because of
+  // collisions with the message-level functions.
+  upb_StringView val = upb_StringView_FromString("test");
+  upb_test_TestReserved_set_new_(msg, val);
+  upb_test_TestReserved_set_parse_(msg, val);
+  upb_test_TestReserved_set_parse_ex_(msg, val);
+  upb_test_TestReserved_set_serialize_(msg, val);
+  upb_test_TestReserved_set_serialize_ex_(msg, val);
+
+  EXPECT_TRUE(upb_StringView_IsEqual(val, upb_test_TestReserved_new_(msg)));
+  EXPECT_TRUE(upb_StringView_IsEqual(val, upb_test_TestReserved_parse_(msg)));
+  EXPECT_TRUE(
+      upb_StringView_IsEqual(val, upb_test_TestReserved_parse_ex_(msg)));
+  EXPECT_TRUE(
+      upb_StringView_IsEqual(val, upb_test_TestReserved_serialize_(msg)));
+  EXPECT_TRUE(
+      upb_StringView_IsEqual(val, upb_test_TestReserved_serialize_ex_(msg)));
+
+  upb_Arena_Free(arena);
+}
+
+TEST(GeneratedCode, OneofMessageSwitch) {
+  upb::Arena arena;
+  upb_test_OneofWithMessages* msg = upb_test_OneofWithMessages_new(arena.ptr());
+
+  // Set msg1
+  upb_test_MessageName* msg1 =
+      upb_test_OneofWithMessages_mutable_msg1(msg, arena.ptr());
+  upb_test_MessageName_set_field1(msg1, 10);
+
+  // Now parse a buffer that sets msg2.
+  upb_test_OneofWithMessages* msg_to_serialize =
+      upb_test_OneofWithMessages_new(arena.ptr());
+  upb_test_MessageName* msg2_val =
+      upb_test_OneofWithMessages_mutable_msg2(msg_to_serialize, arena.ptr());
+  upb_test_MessageName_set_field2(msg2_val, 20);
+
+  size_t size;
+  char* serialized = upb_test_OneofWithMessages_serialize(msg_to_serialize,
+                                                          arena.ptr(), &size);
+
+  // Parse into the first msg.
+  // Use a mini table to ensure we can use fasttable if enabled.
+  upb_DecodeStatus status = upb_Decode(serialized, size, (upb_Message*)msg,
+                                       &upb_0test__OneofWithMessages_msg_init,
+                                       nullptr, 0, arena.ptr());
+  ASSERT_EQ(status, kUpb_DecodeStatus_Ok);
+
+  // Now msg should have msg2 set, and msg1 should NOT be merged.
+  EXPECT_EQ(upb_test_OneofWithMessages_oneof_field_case(msg),
+            upb_test_OneofWithMessages_oneof_field_msg2);
+  const upb_test_MessageName* msg2_res = upb_test_OneofWithMessages_msg2(msg);
+  EXPECT_EQ(upb_test_MessageName_field2(msg2_res), 20);
+  EXPECT_EQ(upb_test_MessageName_field1(msg2_res), 0);
+}
+
+TEST(GeneratedCode, MutablePrefix) {
+  upb_Arena* arena = upb_Arena_New();
+  upb_test_TestReserved* msg = upb_test_TestReserved_new(arena);
+
+  // mutable_foo should be mangled to mutable_foo_ because foo exists.
+  upb_test_TestReserved* sub = upb_test_TestReserved_new(arena);
+  upb_test_TestReserved_set_mutable_foo_(msg, sub);
+
+  EXPECT_EQ(sub, upb_test_TestReserved_mutable_foo_(msg));
+
+  // The actual "mutable" accessor for field "foo" should still be available.
+  upb_test_TestReserved* mutable_foo =
+      upb_test_TestReserved_mutable_foo(msg, arena);
+  EXPECT_NE(nullptr, mutable_foo);
+
+  upb_Arena_Free(arena);
 }

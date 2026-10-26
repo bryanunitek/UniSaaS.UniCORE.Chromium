@@ -16,7 +16,8 @@
 #include "build/build_config.h"
 #include "chrome/browser/content_index/content_index_provider_impl.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_change_type.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -66,7 +67,7 @@ class ContentIndexTest : public InProcessBrowserTest,
 
     RunScript("RegisterServiceWorker()");
 
-    auto* provider = browser()->profile()->GetContentIndexProvider();
+    auto* provider = browser()->GetProfile()->GetContentIndexProvider();
     DCHECK(provider);
     provider_ = static_cast<ContentIndexProviderImpl*>(provider);
     provider_->AddObserver(this);
@@ -102,7 +103,6 @@ class ContentIndexTest : public InProcessBrowserTest,
 
   // TabStripModelObserver implementation:
   void OnTabChangedAt(tabs::TabInterface* tab,
-                      int index,
                       TabChangeType change_type) override {
     if (wait_for_tab_change_)
       std::move(wait_for_tab_change_).Run();

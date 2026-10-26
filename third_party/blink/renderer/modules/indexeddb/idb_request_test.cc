@@ -34,6 +34,8 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/run_loop.h"
+#include "base/test/gmock_callback_support.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -340,8 +342,6 @@ class BackendDatabaseWithMockedClose
 class IDBRequestTest : public testing::Test {
  protected:
   void SetUp() override {
-    BlobDataHandle::SetBlobRegistryForTesting(blob_registry_remote_.get());
-
     url_loader_mock_factory_ = URLLoaderMockFactory::GetSingletonInstance();
     WebURLResponse response;
     response.SetCurrentRequestUrl(KURL("blob:"));
@@ -351,7 +351,6 @@ class IDBRequestTest : public testing::Test {
 
   void TearDown() override {
     url_loader_mock_factory_->UnregisterAllURLsAndClearMemoryCache();
-    BlobDataHandle::SetBlobRegistryForTesting(nullptr);
   }
 
   void BuildTransaction(V8TestingScope& scope,
@@ -423,7 +422,9 @@ class IDBRequestTest : public testing::Test {
     // Set up the transaction.
     MockIDBDatabase database_backend;
     MockIDBTransaction transaction_backend;
-    EXPECT_CALL(transaction_backend, Commit(0)).Times(1);
+    base::RunLoop commit_run_loop;
+    EXPECT_CALL(transaction_backend, Commit(0))
+        .WillOnce(base::test::RunClosure(commit_run_loop.QuitClosure()));
     BuildTransaction(scope, database_backend, transaction_backend);
     ASSERT_TRUE(!scope.GetExceptionState().HadException());
     ASSERT_TRUE(transaction_);
@@ -457,7 +458,7 @@ class IDBRequestTest : public testing::Test {
           /*done=*/get_all_results.size() == i + 1);
     }
 
-    platform_->RunUntilIdle();
+    commit_run_loop.Run();
 
     // Verify the request completes with the expected results.
     EXPECT_EQ(request->readyState(), V8IDBRequestReadyState::Enum::kDone);
@@ -475,10 +476,8 @@ class IDBRequestTest : public testing::Test {
 
   // Setup the blob registry to test get all requests that include results with
   // IDB values wrapped in a blob.
-  FakeBlobRegistry fake_blob_registry_{/*support_binary_blob_bodies=*/true};
-  mojo::Remote<mojom::blink::BlobRegistry> blob_registry_remote_;
-  mojo::Receiver<mojom::blink::BlobRegistry> blob_registry_receiver_{
-      &fake_blob_registry_, blob_registry_remote_.BindNewPipeAndPassReceiver()};
+  ScopedFakeBlobRegistry fake_blob_registry_{
+      /*support_binary_blob_bodies=*/true};
 
   static constexpr int64_t kTransactionId = 1234;
   static constexpr int64_t kStoreId = 5678;
@@ -1239,7 +1238,7 @@ TEST_F(IDBRequestTestWithDeduplication, Basic) {
   {
     base::RunLoop run_loop;
     EXPECT_CALL(mock_idb_factory, Open(_, _, String("db1"), 1, _, _, _, false))
-        .WillOnce(testing::InvokeWithoutArgs([&]() { run_loop.Quit(); }));
+        .WillOnce([&]() { run_loop.Quit(); });
 
     factory->open(scope.GetScriptState(), "db1", 1, scope.GetExceptionState());
     ASSERT_TRUE(!scope.GetExceptionState().HadException());
@@ -1250,7 +1249,7 @@ TEST_F(IDBRequestTestWithDeduplication, Basic) {
   {
     base::RunLoop run_loop;
     EXPECT_CALL(mock_idb_factory, Open(_, _, String("db1"), 1, _, _, _, true))
-        .WillOnce(testing::InvokeWithoutArgs([&]() { run_loop.Quit(); }));
+        .WillOnce([&]() { run_loop.Quit(); });
 
     factory->open(scope.GetScriptState(), "db1", 1, scope.GetExceptionState());
     ASSERT_TRUE(!scope.GetExceptionState().HadException());
@@ -1324,7 +1323,7 @@ TEST_F(IDBRequestTestWithDeduplication, UpgradeInvalidatesCache) {
   {
     base::RunLoop run_loop;
     EXPECT_CALL(mock_idb_factory, Open(_, _, String("db1"), 2, _, _, _, false))
-        .WillOnce(testing::InvokeWithoutArgs([&]() { run_loop.Quit(); }));
+        .WillOnce([&]() { run_loop.Quit(); });
 
     Persistent<IDBOpenDBRequest> request = factory->open(
         scope.GetScriptState(), "db1", 2, scope.GetExceptionState());
@@ -1337,7 +1336,7 @@ TEST_F(IDBRequestTestWithDeduplication, UpgradeInvalidatesCache) {
   {
     base::RunLoop run_loop;
     EXPECT_CALL(mock_idb_factory, Open(_, _, String("db1"), 1, _, _, _, false))
-        .WillOnce(testing::InvokeWithoutArgs([&]() { run_loop.Quit(); }));
+        .WillOnce([&]() { run_loop.Quit(); });
 
     Persistent<IDBOpenDBRequest> request = factory->open(
         scope.GetScriptState(), "db1", 1, scope.GetExceptionState());
@@ -1408,7 +1407,7 @@ TEST_F(IDBRequestTestWithDeduplication, ShareCachedConnection) {
   {
     base::RunLoop run_loop;
     EXPECT_CALL(mock_idb_factory, Open(_, _, String("db1"), 1, _, _, _, true))
-        .WillOnce(testing::InvokeWithoutArgs([&]() { run_loop.Quit(); }));
+        .WillOnce([&]() { run_loop.Quit(); });
 
     Persistent<IDBOpenDBRequest> request = factory->open(
         scope.GetScriptState(), "db1", 1, scope.GetExceptionState());
@@ -1486,7 +1485,7 @@ TEST_F(IDBRequestTestWithDeduplication, LowerVersionDoesNotInvalidateCache) {
   {
     base::RunLoop run_loop;
     EXPECT_CALL(mock_idb_factory, Open(_, _, String("db1"), 1, _, _, _, false))
-        .WillOnce(testing::InvokeWithoutArgs([&]() { run_loop.Quit(); }));
+        .WillOnce([&]() { run_loop.Quit(); });
 
     Persistent<IDBOpenDBRequest> request = factory->open(
         scope.GetScriptState(), "db1", 1, scope.GetExceptionState());
@@ -1498,7 +1497,7 @@ TEST_F(IDBRequestTestWithDeduplication, LowerVersionDoesNotInvalidateCache) {
   {
     base::RunLoop run_loop;
     EXPECT_CALL(mock_idb_factory, Open(_, _, String("db1"), 2, _, _, _, true))
-        .WillOnce(testing::InvokeWithoutArgs([&]() { run_loop.Quit(); }));
+        .WillOnce([&]() { run_loop.Quit(); });
 
     Persistent<IDBOpenDBRequest> request = factory->open(
         scope.GetScriptState(), "db1", 2, scope.GetExceptionState());
@@ -1603,7 +1602,7 @@ TEST_F(IDBRequestTestWithDeduplication,
   {
     base::RunLoop run_loop;
     EXPECT_CALL(mock_idb_factory, DeleteDatabase(_, String("db1"), _))
-        .WillOnce(testing::InvokeWithoutArgs([&]() { run_loop.Quit(); }));
+        .WillOnce([&]() { run_loop.Quit(); });
 
     factory->deleteDatabase(scope.GetScriptState(), "db1",
                             scope.GetExceptionState());
@@ -1615,7 +1614,7 @@ TEST_F(IDBRequestTestWithDeduplication,
   {
     base::RunLoop run_loop;
     EXPECT_CALL(mock_idb_factory, Open(_, _, String("db1"), 1, _, _, _, false))
-        .WillOnce(testing::InvokeWithoutArgs([&]() { run_loop.Quit(); }));
+        .WillOnce([&]() { run_loop.Quit(); });
 
     Persistent<IDBOpenDBRequest> request3 = factory->open(
         scope.GetScriptState(), "db1", 1, scope.GetExceptionState());
@@ -2234,6 +2233,262 @@ TEST_F(IDBRequestTestWithDeduplication,
             db3->shared_connection_for_testing());  // Same backend connection
 
   // Clean up binder.
+  scope.GetExecutionContext()->GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::blink::IDBFactory::Name_, {});
+}
+
+// Regression test for crbug.com/548715588: Context destruction while shared
+// requests are pending should not promote requests or leave dangling state.
+TEST_F(IDBRequestTestWithDeduplication,
+       ContextDestroyedWithPendingSharedRequests) {
+  V8TestingScope scope(KURL("https://example.com"));
+  auto* factory = MakeGarbageCollected<IDBFactory>(scope.GetExecutionContext());
+
+  MockIDBFactory mock_idb_factory;
+  scope.GetExecutionContext()->GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::blink::IDBFactory::Name_,
+      BindRepeating(&MockIDBFactory::Bind, Unretained(&mock_idb_factory)));
+
+  // 1. Primary request R1
+  mojo::PendingAssociatedRemote<mojom::blink::IDBFactoryClient> client1;
+  mojo::PendingAssociatedRemote<mojom::blink::IDBDatabaseCallbacks>
+      callbacks_remote1;
+  Persistent<IDBOpenDBRequest> request1;
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(mock_idb_factory, Open(_, _, String("db1"), 1, _, _, _, false))
+        .WillOnce(
+            [&](mojo::PendingAssociatedRemote<mojom::blink::IDBFactoryClient>
+                    client,
+                mojo::PendingAssociatedRemote<
+                    mojom::blink::IDBDatabaseCallbacks> callbacks,
+                const String& name, int64_t version,
+                mojo::PendingAssociatedReceiver<mojom::blink::IDBTransaction>
+                    transaction_receiver,
+                int64_t transaction_id, int32_t priority,
+                bool request_shared_connection) {
+              client1 = std::move(client);
+              callbacks_remote1 = std::move(callbacks);
+              run_loop.Quit();
+            });
+
+    request1 = factory->open(scope.GetScriptState(), "db1", 1,
+                             scope.GetExceptionState());
+    ASSERT_TRUE(!scope.GetExceptionState().HadException());
+    run_loop.Run();
+    EXPECT_EQ(request1->readyState(), V8IDBRequestReadyState::Enum::kPending);
+  }
+
+  // 2. Shared requests R2 and R3
+  mojo::PendingAssociatedRemote<mojom::blink::IDBFactoryClient> client2;
+  mojo::PendingAssociatedRemote<mojom::blink::IDBDatabaseCallbacks>
+      callbacks_remote2;
+  Persistent<IDBOpenDBRequest> request2;
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(mock_idb_factory,
+                Open(_, _, String("db1"), IDBDatabaseMetadata::kNoVersion, _, _,
+                     _, true))
+        .WillOnce(
+            [&](mojo::PendingAssociatedRemote<mojom::blink::IDBFactoryClient>
+                    client,
+                mojo::PendingAssociatedRemote<
+                    mojom::blink::IDBDatabaseCallbacks> callbacks,
+                const String& name, int64_t version,
+                mojo::PendingAssociatedReceiver<mojom::blink::IDBTransaction>
+                    transaction_receiver,
+                int64_t transaction_id, int32_t priority,
+                bool request_shared_connection) {
+              client2 = std::move(client);
+              callbacks_remote2 = std::move(callbacks);
+              run_loop.Quit();
+            });
+
+    request2 =
+        factory->open(scope.GetScriptState(), "db1", scope.GetExceptionState());
+    ASSERT_TRUE(!scope.GetExceptionState().HadException());
+    run_loop.Run();
+    EXPECT_EQ(request2->readyState(), V8IDBRequestReadyState::Enum::kPending);
+  }
+
+  mojo::PendingAssociatedRemote<mojom::blink::IDBFactoryClient> client3;
+  mojo::PendingAssociatedRemote<mojom::blink::IDBDatabaseCallbacks>
+      callbacks_remote3;
+  Persistent<IDBOpenDBRequest> request3;
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(mock_idb_factory,
+                Open(_, _, String("db1"), IDBDatabaseMetadata::kNoVersion, _, _,
+                     _, true))
+        .WillOnce(
+            [&](mojo::PendingAssociatedRemote<mojom::blink::IDBFactoryClient>
+                    client,
+                mojo::PendingAssociatedRemote<
+                    mojom::blink::IDBDatabaseCallbacks> callbacks,
+                const String& name, int64_t version,
+                mojo::PendingAssociatedReceiver<mojom::blink::IDBTransaction>
+                    transaction_receiver,
+                int64_t transaction_id, int32_t priority,
+                bool request_shared_connection) {
+              client3 = std::move(client);
+              callbacks_remote3 = std::move(callbacks);
+              run_loop.Quit();
+            });
+
+    request3 =
+        factory->open(scope.GetScriptState(), "db1", scope.GetExceptionState());
+    ASSERT_TRUE(!scope.GetExceptionState().HadException());
+    run_loop.Run();
+    EXPECT_EQ(request3->readyState(), V8IDBRequestReadyState::Enum::kPending);
+  }
+
+  // 3. Destroy execution context. This invokes ContextDestroyed() on all
+  // observers. With the fix, requests are not promoted and all in-flight state
+  // is cleanly cleared without triggering any CHECKs on destruction.
+  scope.GetExecutionContext()->NotifyContextDestroyed();
+
+  // Clean up binder.
+  scope.GetExecutionContext()->GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::blink::IDBFactory::Name_, {});
+}
+
+// Regression test for crbug.com/550240487: When an open request is
+// optimistically bound to a cached connection, but the browser triggers an
+// upgrade, the request must rebind to the new upgrade connection without
+// crashing on CHECK(!shared_connection_target_).
+TEST_F(IDBRequestTestWithDeduplication,
+       UpgradeNeededAfterOptimisticBindToCachedConnection) {
+  V8TestingScope scope(KURL("https://example.com"));
+  MockIDBFactory mock_idb_factory;
+
+  scope.GetExecutionContext()->GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::blink::IDBFactory::Name_,
+      base::BindRepeating(&MockIDBFactory::Bind,
+                          base::Unretained(&mock_idb_factory)));
+
+  MockIDBDatabase mock_database1;
+  EXPECT_CALL(mock_database1, OnDisconnect()).Times(testing::AnyNumber());
+  MockIDBDatabase mock_database2;
+  EXPECT_CALL(mock_database2, OnDisconnect()).Times(testing::AnyNumber());
+
+  mojo::AssociatedRemote<mojom::blink::IDBDatabaseCallbacks>
+      database_callbacks_remote1;
+  mojo::AssociatedRemote<mojom::blink::IDBDatabaseCallbacks>
+      database_callbacks_remote2;
+
+  auto* factory = MakeGarbageCollected<IDBFactory>(scope.GetExecutionContext());
+
+  // 1. First open (v1) -> succeeds and is cached in factory.
+  Persistent<IDBOpenDBRequest> request1;
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(mock_idb_factory, Open(_, _, String("db1"), 1, _, _, _, false))
+        .WillOnce(
+            [&](mojo::PendingAssociatedRemote<mojom::blink::IDBFactoryClient>
+                    client,
+                mojo::PendingAssociatedRemote<
+                    mojom::blink::IDBDatabaseCallbacks> database_callbacks,
+                const String& name, int64_t version,
+                mojo::PendingAssociatedReceiver<mojom::blink::IDBTransaction>
+                    transaction_receiver,
+                int64_t transaction_id, int32_t priority,
+                bool request_shared_connection) {
+              mojo::AssociatedRemote<mojom::blink::IDBFactoryClient>
+                  client_remote(std::move(client));
+              database_callbacks_remote1.Bind(std::move(database_callbacks));
+              mojo::PendingAssociatedRemote<mojom::blink::IDBDatabase>
+                  pending_db;
+              mock_database1.Bind(
+                  pending_db.InitWithNewEndpointAndPassReceiver());
+              IDBDatabaseMetadata metadata;
+              metadata.name = name;
+              metadata.version = version;
+              client_remote->OpenSuccess(std::move(pending_db), metadata);
+              client_remote.FlushForTesting();
+              run_loop.Quit();
+            });
+
+    request1 = factory->open(scope.GetScriptState(), "db1", 1,
+                             scope.GetExceptionState());
+    ASSERT_TRUE(!scope.GetExceptionState().HadException());
+    run_loop.Run();
+    EXPECT_EQ(request1->readyState(), V8IDBRequestReadyState::Enum::kDone);
+  }
+
+  // 2. Second open (kNoVersion) -> optimistically binds to cached v1
+  // connection.
+  //    Browser responds with UpgradeNeeded (e.g. database needs upgrade to v2).
+  mojo::AssociatedRemote<mojom::blink::IDBFactoryClient> client2_remote;
+  int64_t version_change_transaction_id = 0;
+  Persistent<IDBOpenDBRequest> request2;
+  {
+    EXPECT_CALL(mock_idb_factory,
+                Open(_, _, String("db1"), IDBDatabaseMetadata::kNoVersion, _, _,
+                     _, true))
+        .WillOnce(
+            [&](mojo::PendingAssociatedRemote<mojom::blink::IDBFactoryClient>
+                    client,
+                mojo::PendingAssociatedRemote<
+                    mojom::blink::IDBDatabaseCallbacks> database_callbacks,
+                const String& name, int64_t version,
+                mojo::PendingAssociatedReceiver<mojom::blink::IDBTransaction>
+                    transaction_receiver,
+                int64_t transaction_id, int32_t priority,
+                bool request_shared_connection) {
+              client2_remote.Bind(std::move(client));
+              database_callbacks_remote2.Bind(std::move(database_callbacks));
+              version_change_transaction_id = transaction_id;
+
+              mojo::PendingAssociatedRemote<mojom::blink::IDBDatabase>
+                  pending_db;
+              mock_database2.Bind(
+                  pending_db.InitWithNewEndpointAndPassReceiver());
+              IDBDatabaseMetadata metadata;
+              metadata.name = name;
+              metadata.version = 2;
+              client2_remote->UpgradeNeeded(
+                  std::move(pending_db), /*old_version=*/1,
+                  mojom::blink::IDBDataLoss::None, String(""), metadata);
+            });
+
+    request2 =
+        factory->open(scope.GetScriptState(), "db1", scope.GetExceptionState());
+    ASSERT_TRUE(!scope.GetExceptionState().HadException());
+
+    base::RunLoop run_loop;
+    request2->addEventListener(
+        event_type_names::kUpgradeneeded,
+        MakeGarbageCollected<CallbackEventListener>(run_loop.QuitClosure()));
+    run_loop.Run();
+    EXPECT_EQ(request2->readyState(), V8IDBRequestReadyState::Enum::kDone);
+    EXPECT_TRUE(request2->transaction());
+  }
+
+  // 3. Complete the versionchange transaction.
+  {
+    base::RunLoop run_loop;
+    request2->transaction()->addEventListener(
+        event_type_names::kComplete,
+        MakeGarbageCollected<CallbackEventListener>(run_loop.QuitClosure()));
+    database_callbacks_remote2->Complete(version_change_transaction_id);
+    run_loop.Run();
+    EXPECT_EQ(request2->readyState(), V8IDBRequestReadyState::Enum::kPending);
+  }
+
+  // 4. Complete upgrade for request2 with OpenSuccess.
+  {
+    base::RunLoop run_loop;
+    request2->addEventListener(
+        event_type_names::kSuccess,
+        MakeGarbageCollected<CallbackEventListener>(run_loop.QuitClosure()));
+    IDBDatabaseMetadata metadata;
+    metadata.name = "db1";
+    metadata.version = 2;
+    client2_remote->OpenSuccess(mojo::NullAssociatedRemote(), metadata);
+    run_loop.Run();
+    EXPECT_EQ(request2->readyState(), V8IDBRequestReadyState::Enum::kDone);
+  }
+
   scope.GetExecutionContext()->GetBrowserInterfaceBroker().SetBinderForTesting(
       mojom::blink::IDBFactory::Name_, {});
 }

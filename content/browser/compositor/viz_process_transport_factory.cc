@@ -141,7 +141,7 @@ VizProcessTransportFactory::VizProcessTransportFactory(
       host_frame_sink_manager_(
           BrowserMainLoop::GetInstance()->host_frame_sink_manager()),
       resize_task_runner_(resize_task_runner) {
-  DCHECK(gpu_channel_establish_factory_);
+  CHECK(gpu_channel_establish_factory_, base::NotFatalUntil::M159);
   task_graph_runner_->Start("CompositorTileWorker1",
                             base::SimpleThread::Options());
   GetHostFrameSinkManager()->SetConnectionLostCallback(
@@ -194,33 +194,7 @@ void VizProcessTransportFactory::CreateLayerTreeFrameSink(
 #endif
 
 #if BUILDFLAG(IS_MAC)
-  // Create DisplayLinkMacMojo only after FrameSinkManager and display::Screen
-  // are available. FrameSinkManager is established in
-  // ConnectHostFrameSinkManager(), but display::Screen is not available in that
-  // function in Content Shell. (Note: display::Screen is available and not an
-  // issue there when running on Chrome.)
-  // CADisplayLink is not used in headless mode
-  // (use_external_begin_frame_control()).
-  if (!compositor->use_external_begin_frame_control() &&
-      !vsync_thread_task_posted_ && !display_link_mac_mojo_ &&
-      ui::DisplayLinkMac::SupportsDisplayLinkMacInBrowser()) {
-    vsync_thread_task_posted_ = true;
-    // Delay the creation of DisplayLinkMacMojo (which starts the dedicated
-    // browser-side VSyncThread) to prevent desktop startup performance
-    // regressions.
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE,
-        base::BindOnce(
-            [](base::WeakPtr<VizProcessTransportFactory> weak_this) {
-              if (weak_this && !weak_this->display_link_mac_mojo_) {
-                weak_this->display_link_mac_mojo_ =
-                    std::make_unique<ui::DisplayLinkMacMojo>(
-                        weak_this->GetHostFrameSinkManager());
-              }
-            },
-            weak_ptr_factory_.GetWeakPtr()),
-        base::Seconds(60));
-  }
+  CreateDisplayLinkMacMojoIfNeeded(compositor);
 #endif
 
   gpu_channel_establish_factory_->EstablishGpuChannel(
@@ -331,11 +305,9 @@ void VizProcessTransportFactory::DisableGpuCompositing(
     // The |guilty_compositor| is in the process of setting up its FrameSink
     // so removing it from |compositor_data_map_| would be both pointless and
     // the cause of a crash.
-    // Compositors with force_software_compositor() do not follow the global
-    // compositing mode, so they do not need to be changed.
-    if (compositor == guilty_compositor ||
-        compositor->force_software_compositor())
+    if (compositor == guilty_compositor) {
       continue;
+    }
 
     // Compositor expects to be not visible when releasing its FrameSink.
     bool visible = compositor->IsVisible();
@@ -366,8 +338,13 @@ void VizProcessTransportFactory::OnEstablishedGpuChannel(
   if (!compositor)
     return;
 
-  bool gpu_compositing =
-      !is_gpu_compositing_disabled_ && !compositor->force_software_compositor();
+  // Windows refuses to launch new processes while ending the user session.
+  // Do not treat the resulting null channel as an unexpected GPU failure.
+  if (!gpu_channel_host && GpuProcessHost::IsSessionEnding()) {
+    return;
+  }
+
+  bool gpu_compositing = !is_gpu_compositing_disabled_;
 
   if (gpu_compositing) {
     auto context_result = TryCreateContextsForGpuCompositing(gpu_channel_host);
@@ -446,6 +423,7 @@ void VizProcessTransportFactory::OnEstablishedGpuChannel(
   root_params->renderer_settings = viz::CreateRendererSettings();
 #if BUILDFLAG(IS_MAC)
   root_params->renderer_settings.display_id = compositor->display_id();
+  root_params->refresh_rate = compositor->refresh_rate();
 #endif
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(switches::kDisableFrameRateLimit))
@@ -508,7 +486,7 @@ void VizProcessTransportFactory::OnEstablishedGpuChannel(
 gpu::ContextResult
 VizProcessTransportFactory::TryCreateContextsForGpuCompositing(
     scoped_refptr<gpu::GpuChannelHost> gpu_channel_host) {
-  DCHECK(!is_gpu_compositing_disabled_);
+  CHECK(!is_gpu_compositing_disabled_, base::NotFatalUntil::M159);
 
   if (!gpu_channel_host && base::FeatureList::IsEnabled(
                                features::kShutdownForFailedChannelCreation)) {
@@ -585,6 +563,31 @@ VizProcessTransportFactory::TryCreateContextsForGpuCompositing(
 
   return gpu::ContextResult::kSuccess;
 }
+
+#if BUILDFLAG(IS_MAC)
+void VizProcessTransportFactory::CreateDisplayLinkMacMojoIfNeeded(
+    base::WeakPtr<ui::Compositor> compositor) {
+  // Headless mode (use_external_begin_frame_control()) does not use
+  // CADisplayLink.
+  if (compositor->use_external_begin_frame_control() ||
+      !ui::DisplayLinkMac::SupportsDisplayLinkMacInBrowser()) {
+    return;
+  }
+
+  // Create only one CADisplayLinkMojo/VSyncThread.
+  if (display_link_mac_mojo_) {
+    return;
+  }
+
+  // Create DisplayLinkMacMojo only after FrameSinkManager and display::Screen
+  // are available. FrameSinkManager is established in
+  // ConnectHostFrameSinkManager(), but display::Screen is not available in that
+  // function in Content Shell. (Note: display::Screen is available and not an
+  // issue there when running on Chrome.)
+  display_link_mac_mojo_ =
+      std::make_unique<ui::DisplayLinkMacMojo>(GetHostFrameSinkManager());
+}
+#endif
 
 VizProcessTransportFactory::CompositorData::CompositorData() = default;
 VizProcessTransportFactory::CompositorData::CompositorData(

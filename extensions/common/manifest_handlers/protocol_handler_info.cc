@@ -13,6 +13,7 @@
 #include "extensions/common/manifest_constants.h"
 #include "third_party/blink/public/common/custom_handlers/protocol_handler_utils.h"
 #include "third_party/blink/public/common/security/protocol_handler_security_level.h"
+#include "url/origin.h"
 
 namespace extensions {
 
@@ -26,6 +27,7 @@ namespace {
 bool IsValidProtocolHandler(const std::string& protocol,
                             const std::string& name,
                             const GURL& url,
+                            const url::Origin& extension_origin,
                             blink::ProtocolHandlerSecurityLevel security_level,
                             std::vector<InstallWarning>& warnings) {
   // Implementation of the protocol handler arguments normalization steps
@@ -62,19 +64,22 @@ bool IsValidProtocolHandler(const std::string& protocol,
     warnings.emplace_back(errors::kProtocolHandlerUntrustworthyScheme);
     is_valid = false;
   }
-  url::Origin url_origin = url::Origin::Create(url);
-  if (url.is_valid() && url_origin.opaque()) {
-    warnings.emplace_back(errors::kProtocolHandlerOpaqueOrigin);
-    is_valid = false;
-  }
 
-  // TODO(crbug.com/40482153): We need to do a better analysis of the
-  // check defined here, based on the security_level and the SameOrigin policy.
-  url::Origin origin;
-  if (security_level < blink::ProtocolHandlerSecurityLevel::kUntrustedOrigins &&
-      !origin.IsSameOriginWith(url)) {
-    warnings.emplace_back(errors::kProtocolHandlerIncompabibleOrigins);
-    is_valid = false;
+  // Check the URL's origin. Note that syntactically invalid URLs were checked
+  // above by IsValidCustomHandlerURLSyntax().
+  if (url.is_valid()) {
+    url::Origin url_origin = url::Origin::Create(url);
+    if (url_origin.opaque()) {
+      warnings.emplace_back(errors::kProtocolHandlerOpaqueOrigin);
+      is_valid = false;
+    } else if (!url.SchemeIsHTTPOrHTTPS() &&
+               !extension_origin.IsSameOriginWith(url)) {
+      // Extensions are allowed to register cross-origin HTTP(S) handler URLs,
+      // but non-HTTP(S) URLs (such as another extension's URLs) must be
+      // same-origin with the registering extension.
+      warnings.emplace_back(errors::kProtocolHandlerIncompabibleOrigins);
+      is_valid = false;
+    }
   }
 
   return is_valid;
@@ -87,14 +92,16 @@ bool SupportsProtocolHandlers() {
 
 }  // namespace
 
+// static
+const char* ProtocolHandlers::kManifestDataKey = keys::kProtocolHandlers;
+
 ProtocolHandlers::ProtocolHandlers() = default;
 ProtocolHandlers::~ProtocolHandlers() = default;
 
 // static
 const ProtocolHandlersInfo* ProtocolHandlers::GetProtocolHandlers(
     const Extension& extension) {
-  const ProtocolHandlers* info = static_cast<const ProtocolHandlers*>(
-      extension.GetManifestData(keys::kProtocolHandlers));
+  const ProtocolHandlers* info = extension.GetManifestData<ProtocolHandlers>();
   CHECK(!info || SupportsProtocolHandlers());
   return info ? &info->protocol_handlers : nullptr;
 }
@@ -135,7 +142,8 @@ std::unique_ptr<ProtocolHandlers> ParseEntryList(
     // of the HTML spec.
     // https://html.spec.whatwg.org/#normalize-protocol-handler-parameters
     if (IsValidProtocolHandler(handler.protocol, handler.name, handler.url,
-                               security_level, install_warnings)) {
+                               extension.origin(), security_level,
+                               install_warnings)) {
       info->protocol_handlers.push_back(handler);
     }
   }
@@ -154,7 +162,7 @@ bool ProtocolHandlersParser::Parse(Extension* extension,
   std::vector<InstallWarning> install_warnings;
   auto info = ParseEntryList(*extension, install_warnings);
   if (info) {
-    extension->SetManifestData(keys::kProtocolHandlers, std::move(info));
+    extension->SetManifestData(std::move(info));
   }
 
   extension->AddInstallWarnings(std::move(install_warnings));

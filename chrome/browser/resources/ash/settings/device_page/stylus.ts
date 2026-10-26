@@ -23,8 +23,8 @@ import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import type {PrefsState} from '../common/types.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
+import type {Route} from '../os_settings_routes.js';
 import {routes} from '../router.js';
-import type {Route} from '../router.js';
 
 import type {NoteAppInfo} from './device_page_browser_proxy.js';
 import {DevicePageBrowserProxyImpl} from './device_page_browser_proxy.js';
@@ -99,7 +99,7 @@ export class SettingsStylusElement extends SettingsStylusElementBase {
     };
   }
 
-  prefs: PrefsState;
+  declare prefs: PrefsState;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -107,11 +107,11 @@ export class SettingsStylusElement extends SettingsStylusElementBase {
     Setting.kStylusNoteTakingApp,
   ]);
 
-  private appChoices_: NoteAppInfo[];
+  declare private appChoices_: NoteAppInfo[];
   private browserProxy_: DevicePageBrowserProxy;
-  private readonly hasInternalStylus_: boolean;
-  private selectedApp_: NoteAppInfo|null;
-  private waitingForAndroid_: boolean;
+  declare private readonly hasInternalStylus_: boolean;
+  declare private selectedApp_: NoteAppInfo|null;
+  declare private waitingForAndroid_: boolean;
 
   constructor() {
     super();

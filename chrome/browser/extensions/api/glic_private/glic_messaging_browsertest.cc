@@ -12,8 +12,16 @@
 #include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/test_support/glic_browser_test.h"
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
+#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+#include "chrome/browser/glic/test_support/mock_glic_keyed_service.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/glic/glic_profile_manager.h"
+#include "chrome/browser/glic/suggestions/contextual_cueing_service_factory.h"
+#include "chrome/browser/actor/actor_keyed_service_factory.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #endif
 
 #include "chrome/browser/profiles/profile.h"
@@ -31,9 +39,11 @@
 #include "components/guest_view/browser/test_guest_view_manager.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "content/public/browser/prerender_host_id.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/prerender_test_util.h"
 #include "content/public/test/url_loader_interceptor.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/background_script_executor.h"
@@ -57,8 +67,8 @@ class GlicMessagingBrowserTest : public GlicPrivateApiTestBase {
          {extensions_features::kApiGlicPrivate, {}},
          {extensions_features::kApiGlicAccessFromGoogleWebpage, {}},
          {extensions_features::kApiGlicAccessFromPromotionPage, {}},
-         {features::kGlicActor,
-          {{"glic_actor_policy_control_exemption", "true"}}}
+         {features::kGlicActor, {}},
+         {features::kGlicActorPolicyControlExemption, {}}
 #if BUILDFLAG(IS_CHROMEOS)
          ,
          {syncer::kReplaceSyncPromosWithSignInPromos, {}}
@@ -87,9 +97,20 @@ class GlicMessagingAccessDisabledBrowserTest : public GlicPrivateApiTestBase {
 namespace {
 
 #if !BUILDFLAG(IS_ANDROID)
-content::EvalJsResult ExecuteInvoke(content::WebContents* web_contents,
-                                    const std::string& prompt_id,
-                                    const std::string& invocation_source) {
+content::EvalJsResult ExecuteInvoke(
+    const content::ToRenderFrameHost& target,
+    const std::string& prompt_id,
+    const std::string& invocation_source,
+    const std::optional<std::string>& conversation_id = std::nullopt,
+    const std::optional<std::string>& turn_id = std::nullopt) {
+  std::string extra_fields;
+  if (conversation_id) {
+    extra_fields +=
+        base::StringPrintf(", conversationId: '%s'", conversation_id->c_str());
+  }
+  if (turn_id) {
+    extra_fields += base::StringPrintf(", turnId: '%s'", turn_id->c_str());
+  }
   std::string script = base::StringPrintf(
       R"(
       (async () => {
@@ -100,7 +121,7 @@ content::EvalJsResult ExecuteInvoke(content::WebContents* web_contents,
           chrome.runtime.sendMessage(
               '%s', {type: 'glicPrivate.invoke', args: {
                 promptId: '%s',
-                invocationSource: '%s'
+                invocationSource: '%s'%s
               }}, (response) => {
                 if (chrome.runtime.lastError) {
                   resolve(chrome.runtime.lastError.message);
@@ -112,9 +133,9 @@ content::EvalJsResult ExecuteInvoke(content::WebContents* web_contents,
       })()
       )",
       extension_misc::kGlicExtensionId, prompt_id.c_str(),
-      invocation_source.c_str());
+      invocation_source.c_str(), extra_fields.c_str());
 
-  return content::EvalJs(web_contents, script);
+  return content::EvalJs(target, script);
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -144,7 +165,7 @@ content::EvalJsResult ExecuteActivateTabWithConversation(
 }
 
 content::EvalJsResult ExecuteGetState(
-    content::WebContents* web_contents,
+    const content::ToRenderFrameHost& target,
     const std::optional<std::string>& invocation_source) {
   std::string args_str = "undefined";
   if (invocation_source) {
@@ -172,7 +193,7 @@ content::EvalJsResult ExecuteGetState(
       )",
       extension_misc::kGlicExtensionId, args_str.c_str());
 
-  return content::EvalJs(web_contents, script);
+  return content::EvalJs(target, script);
 }
 
 }  // namespace
@@ -306,7 +327,7 @@ IN_PROC_BROWSER_TEST_F(GlicMessagingBrowserTest, InvokeAPI) {
       ExecuteInvoke(GetActiveWebContents(), "1", "universal-cart");
 
   std::string result_string = result.ExtractString();
-  EXPECT_EQ("Uncaught Error: local-glic-not-enabled", result_string);
+  EXPECT_EQ("local-glic-not-enabled", result_string);
 }
 
 
@@ -558,7 +579,7 @@ class GlicMessagingFullyEnabledBrowserTest
     : public glic::GlicBrowserTestMixin<GlicMessagingBrowserTest> {
  public:
   void SetUpOnMainThread() override {
-    GlicMessagingBrowserTest::SetUpOnMainThread();
+    glic::GlicBrowserTestMixin<GlicMessagingBrowserTest>::SetUpOnMainThread();
     SetupIdentityAndCapabilities();
   }
 };
@@ -668,8 +689,7 @@ IN_PROC_BROWSER_TEST_F(GlicMessagingFullyEnabledBrowserTest,
   {
     content::EvalJsResult result = ExecuteActivateTabWithConversation(
         GetActiveWebContents(), "test-conv-id");
-    EXPECT_EQ("error: Uncaught Error: local-conversation-not-found",
-              result.ExtractString());
+    EXPECT_EQ("error: local-conversation-not-found", result.ExtractString());
   }
 
   // Test missing arguments for activateTabWithConversation.
@@ -741,13 +761,12 @@ IN_PROC_BROWSER_TEST_F(GlicMessagingFullyEnabledBrowserTest,
   tabs::TabInterface* tab = GetTabListInterface()->GetActiveTab();
   ASSERT_NE(nullptr, tab);
   ASSERT_OK_AND_ASSIGN(auto* instance, OpenGlicForActiveTabAndDetach());
-  instance->UnbindEmbedder(tab);
+  instance->UnbindTab(tab);
   RegisterConversation(instance, "test-conv-no-bound");
 
   content::EvalJsResult result = ExecuteActivateTabWithConversation(
       GetActiveWebContents(), "test-conv-no-bound");
-  EXPECT_EQ("error: Uncaught Error: local-no-bound-tabs",
-            result.ExtractString());
+  EXPECT_EQ("error: local-no-bound-tabs", result.ExtractString());
 }
 
 IN_PROC_BROWSER_TEST_F(GlicMessagingFullyEnabledBrowserTest,
@@ -779,8 +798,7 @@ IN_PROC_BROWSER_TEST_F(GlicMessagingFullyEnabledBrowserTest,
 
   content::EvalJsResult result = ExecuteActivateTabWithConversation(
       second_tab->GetContents(), "test-conv-tab-not-in-window");
-  EXPECT_EQ("error: Uncaught Error: local-tab-not-in-window",
-            result.ExtractString());
+  EXPECT_EQ("error: local-tab-not-in-window", result.ExtractString());
 
   // Re-insert the detached tab back to the browser's tab strip model so that
   // it is properly destroyed during teardown, notifying observers and
@@ -790,14 +808,14 @@ IN_PROC_BROWSER_TEST_F(GlicMessagingFullyEnabledBrowserTest,
 }
 
 // -----------------------------------------------------------------------------
-// Verify that glicPrivate.invoke requires the calling frame to be the primary
-// main frame.
+// Verify that glicPrivate only accepts a subframe caller if all of its ancestor
+// frames are Gemini Web frames (gemini.google.com or a corp/staging host).
 //
 // If a connectable origin (e.g. *.google.com) subframe is embedded inside a
 // non-connectable top-level frame (e.g. example.com), the subframe can reach
 // the Glic component extension via frame-scoped externally_connectable.
 // However, calling glicPrivate.invoke from the subframe must be rejected by the
-// browser because it is not a primary main frame.
+// browser because it is embedded by an untrusted frame.
 // -----------------------------------------------------------------------------
 class GlicSubframeInvokeBrowserTest : public GlicPrivateApiTestBase {
  public:
@@ -805,8 +823,8 @@ class GlicSubframeInvokeBrowserTest : public GlicPrivateApiTestBase {
     scoped_feature_list_.InitWithFeaturesAndParameters(
         {{extensions_features::kApiGlicPrivate, {}},
          {extensions_features::kApiGlicAccessFromGoogleWebpage, {}},
-         {features::kGlicActor,
-          {{"glic_actor_policy_control_exemption", "true"}}}},
+         {features::kGlicActor, {}},
+         {features::kGlicActorPolicyControlExemption, {}}},
         {});
   }
 
@@ -920,13 +938,303 @@ IN_PROC_BROWSER_TEST_F(GlicSubframeInvokeBrowserTest,
 
   std::string result = content::EvalJs(subframe, invoke_script).ExtractString();
 
-  // The browser rejects the request because the calling document is not the
-  // tab's primary main frame.
-  EXPECT_EQ("error: Uncaught Error: local-invalid-document-id", result);
+  // The browser rejects the request because the calling document is embedded
+  // by a non-Google frame.
+  EXPECT_EQ("error: local-invalid-document-id", result);
 
   // Verify that the top-level frame remains example.com.
   EXPECT_EQ("example.com",
             tab->GetPrimaryMainFrame()->GetLastCommittedURL().host());
+}
+
+// A Google subframe embedded in gemini.google.com, e.g. Universal Cart, can
+// call glicPrivate.
+IN_PROC_BROWSER_TEST_F(GlicSubframeInvokeBrowserTest,
+                       SubframeInGeminiOuterTab) {
+  auto interceptor = CreateMockPromptResponseInterceptor("test prompt");
+
+  content::WebContents* tab = GetActiveWebContents();
+  ASSERT_TRUE(
+      NavigateToURL(tab, GURL("https://gemini.google.com/iframe.html")));
+  ASSERT_TRUE(content::NavigateIframeToURL(
+      tab, "test", GURL("https://www.google.com/empty.html")));
+  content::RenderFrameHost* subframe =
+      content::ChildFrameAt(tab->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(subframe);
+  ASSERT_FALSE(subframe->IsInPrimaryMainFrame());
+
+  std::string state_result =
+      ExecuteGetState(subframe, "universal-cart").ExtractString();
+  std::optional<base::Value> response = base::JSONReader::Read(state_result, 0);
+  ASSERT_TRUE(response && response->is_dict()) << state_result;
+  EXPECT_TRUE(response->GetDict().FindDict("state"));
+
+  EXPECT_EQ("success", ExecuteInvoke(subframe, "p1", "universal-cart"));
+}
+
+// A Google subframe embedded in a corp/staging Gemini Web host can also call
+// glicPrivate.
+IN_PROC_BROWSER_TEST_F(GlicSubframeInvokeBrowserTest,
+                       SubframeInCorpGeminiOuterTab) {
+  auto interceptor = CreateMockPromptResponseInterceptor("test prompt");
+
+  content::WebContents* tab = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(
+      tab, GURL("https://gemini-staging.corp.google.com/iframe.html")));
+  ASSERT_TRUE(content::NavigateIframeToURL(
+      tab, "test", GURL("https://www.google.com/empty.html")));
+  content::RenderFrameHost* subframe =
+      content::ChildFrameAt(tab->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(subframe);
+
+  EXPECT_EQ("success", ExecuteInvoke(subframe, "p1", "universal-cart"));
+}
+
+// A Google subframe cannot call glicPrivate if it is embedded by a Google
+// frame other than Gemini Web.
+IN_PROC_BROWSER_TEST_F(GlicSubframeInvokeBrowserTest,
+                       SubframeInNonGeminiGoogleOuterTab) {
+  auto interceptor = CreateMockPromptResponseInterceptor("test prompt");
+
+  content::WebContents* tab = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(tab, GURL("https://www.google.com/iframe.html")));
+  ASSERT_TRUE(content::NavigateIframeToURL(
+      tab, "test", GURL("https://www.google.com/empty.html")));
+  content::RenderFrameHost* subframe =
+      content::ChildFrameAt(tab->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(subframe);
+
+  EXPECT_EQ("local-invalid-document-id",
+            ExecuteGetState(subframe, "universal-cart"));
+  EXPECT_EQ("local-invalid-document-id",
+            ExecuteInvoke(subframe, "p1", "universal-cart"));
+}
+
+// A Google subframe cannot call glicPrivate if any of its ancestors is not a
+// Gemini Web frame, even if the top-level frame is.
+IN_PROC_BROWSER_TEST_F(GlicSubframeInvokeBrowserTest,
+                       SubframeWithNonGoogleAncestor) {
+  auto interceptor = CreateMockPromptResponseInterceptor("test prompt");
+
+  // Build the frame tree gemini.google.com -> example.com -> www.google.com.
+  content::WebContents* tab = GetActiveWebContents();
+  ASSERT_TRUE(
+      NavigateToURL(tab, GURL("https://gemini.google.com/iframe.html")));
+  ASSERT_TRUE(content::NavigateIframeToURL(
+      tab, "test", GURL("https://example.com/iframe.html")));
+  content::RenderFrameHost* middle_frame =
+      content::ChildFrameAt(tab->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(middle_frame);
+  ASSERT_TRUE(content::NavigateToURLFromRenderer(
+      content::ChildFrameAt(middle_frame, 0),
+      GURL("https://www.google.com/empty.html")));
+  content::RenderFrameHost* subframe = content::ChildFrameAt(middle_frame, 0);
+  ASSERT_TRUE(subframe);
+
+  EXPECT_EQ("local-invalid-document-id",
+            ExecuteGetState(subframe, "universal-cart"));
+  EXPECT_EQ("local-invalid-document-id",
+            ExecuteInvoke(subframe, "p1", "universal-cart"));
+}
+
+// A Google subframe cannot call glicPrivate if it is for an account other than
+// the primary account.
+IN_PROC_BROWSER_TEST_F(GlicSubframeInvokeBrowserTest,
+                       SubframeWithAccountMismatch) {
+  auto interceptor = CreateMockPromptResponseInterceptor("test prompt");
+
+  content::WebContents* tab = GetActiveWebContents();
+  ASSERT_TRUE(
+      NavigateToURL(tab, GURL("https://gemini.google.com/iframe.html")));
+  ASSERT_TRUE(content::NavigateIframeToURL(
+      tab, "test", GURL("https://www.google.com/empty.html?authuser=1")));
+  content::RenderFrameHost* subframe =
+      content::ChildFrameAt(tab->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(subframe);
+
+  EXPECT_EQ("local-account-mismatch",
+            ExecuteGetState(subframe, "universal-cart"));
+  EXPECT_EQ("local-account-mismatch",
+            ExecuteInvoke(subframe, "p1", "universal-cart"));
+}
+
+class GlicMessagingPrerenderBrowserTest : public GlicMessagingBrowserTest {
+ public:
+  GlicMessagingPrerenderBrowserTest()
+      : prerender_helper_(base::BindRepeating(
+            &GlicMessagingPrerenderBrowserTest::GetActiveWebContents,
+            base::Unretained(this))) {}
+
+ protected:
+  // Calls glicPrivate.getState() from the Glic extension's service worker on
+  // behalf of the document with `document_id`, like the extension does for
+  // messages from web pages. Returns "success" or the error message.
+  std::string GetStateForDocument(const std::string& document_id) {
+    std::string script = base::StringPrintf(
+        R"(
+        (async () => {
+          try {
+            await chrome.glicPrivate.getState('%s');
+            chrome.test.sendScriptResult('success');
+          } catch (e) {
+            chrome.test.sendScriptResult(e.message);
+          }
+        })()
+        )",
+        document_id.c_str());
+    base::Value result = BackgroundScriptExecutor::ExecuteScript(
+        profile(), extension_misc::kGlicExtensionId, script,
+        BackgroundScriptExecutor::ResultCapture::kSendScriptResult);
+    return result.is_string() ? result.GetString() : result.DebugString();
+  }
+
+  content::test::PrerenderTestHelper prerender_helper_;
+};
+
+// glicPrivate rejects documents outside the primary page, e.g. a prerendered
+// page, even if they would otherwise be allowed.
+IN_PROC_BROWSER_TEST_F(GlicMessagingPrerenderBrowserTest, PrerenderedPage) {
+  content::WebContents* tab = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(tab, GURL("https://gemini.google.com/empty.html")));
+  // Wake up the service worker by sending a message, so that
+  // GetStateForDocument() can run scripts in it.
+  ExecuteGetState(tab, std::nullopt);
+
+  const GURL prerender_url("https://gemini.google.com/empty.html?prerender");
+  content::PrerenderHostId host_id =
+      prerender_helper_.AddPrerender(prerender_url);
+  content::RenderFrameHost* prerendered_frame =
+      prerender_helper_.GetPrerenderedMainFrameHost(host_id);
+  ASSERT_TRUE(prerendered_frame);
+  ASSERT_FALSE(prerendered_frame->IsInPrimaryMainFrame());
+  const std::string document_id =
+      ExtensionApiFrameIdMap::GetDocumentId(prerendered_frame).ToString();
+
+  EXPECT_EQ("local-invalid-document-id", GetStateForDocument(document_id));
+
+  // The same document is accepted once it is activated as the primary page.
+  content::test::PrerenderHostObserver prerender_observer(*tab, host_id);
+  prerender_helper_.NavigatePrimaryPage(prerender_url);
+  ASSERT_TRUE(prerender_observer.was_activated());
+  EXPECT_EQ("success", GetStateForDocument(document_id));
+}
+
+namespace {
+std::unique_ptr<KeyedService> CreateMockGlicKeyedService(
+    content::BrowserContext* context) {
+  return std::make_unique<glic::MockGlicKeyedService>(
+      context,
+      IdentityManagerFactory::GetForProfile(
+          Profile::FromBrowserContext(context)),
+      g_browser_process->profile_manager(),
+      glic::GlicProfileManager::GetInstance(),
+      glic::ContextualCueingServiceFactory::GetForProfile(
+          Profile::FromBrowserContext(context)),
+      actor::ActorKeyedServiceFactory::GetActorKeyedService(context));
+}
+}  // namespace
+
+class GlicMessagingWebContinuityBrowserTest : public GlicPrivateApiTestBase {
+ public:
+  GlicMessagingWebContinuityBrowserTest() {
+    feature_list_.InitWithFeaturesAndParameters(
+        {{contextual_tasks::kContextualTasks, {}},
+         {extensions_features::kApiGlicPrivate, {}},
+         {extensions_features::kApiGlicAccessFromWebContinuity, {}},
+         {features::kGlicActor, {}},
+         {features::kGlicActorPolicyControlExemption, {}}},
+        {});
+    create_services_subscription_ =
+        BrowserContextDependencyManager::GetInstance()
+            ->RegisterCreateServicesCallbackForTesting(
+                base::BindRepeating(&GlicMessagingWebContinuityBrowserTest::
+                                        OnWillCreateBrowserContextServices,
+                                    base::Unretained(this)));
+  }
+
+  void SetUpBrowserContextKeyedServices(
+      content::BrowserContext* context) override {
+    GlicPrivateApiTestBase::SetUpBrowserContextKeyedServices(context);
+    // Bind the SigninClient to our TestURLLoaderFactory so that
+    // SetCookieAccounts() can intercept the ListAccounts request.
+    ChromeSigninClientFactory::GetInstance()->SetTestingFactory(
+        context, base::BindRepeating(&BuildChromeSigninClientWithURLLoader,
+                                     &test_url_loader_factory_));
+  }
+
+  void OnWillCreateBrowserContextServices(content::BrowserContext* context) {
+    glic::GlicKeyedServiceFactory::GetInstance()->SetTestingFactory(
+        context, base::BindRepeating(&CreateMockGlicKeyedService));
+  }
+
+  void SetUpOnMainThread() override {
+    GlicPrivateApiTestBase::SetUpOnMainThread();
+    auto* identity_manager = IdentityManagerFactory::GetForProfile(profile());
+    CoreAccountInfo primary =
+        identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
+    ASSERT_FALSE(primary.IsEmpty());
+    identity_adaptor_ =
+        std::make_unique<IdentityTestEnvironmentProfileAdaptor>(profile());
+    identity_adaptor_->identity_test_env()->SetTestURLLoaderFactory(
+        &test_url_loader_factory_);
+    identity_adaptor_->identity_test_env()->SetCookieAccounts(
+        {{primary.email, primary.gaia}});
+    identity_adaptor_->identity_test_env()->SetAutomaticIssueOfAccessTokens(
+        true);
+  }
+
+  void TearDownOnMainThread() override {
+    identity_adaptor_.reset();
+    GlicPrivateApiTestBase::TearDownOnMainThread();
+  }
+
+ protected:
+  glic::GlicTestEnvironment glic_test_environment_;
+  base::test::ScopedFeatureList feature_list_;
+  base::CallbackListSubscription create_services_subscription_;
+  network::TestURLLoaderFactory test_url_loader_factory_;
+  std::unique_ptr<IdentityTestEnvironmentProfileAdaptor> identity_adaptor_;
+};
+
+IN_PROC_BROWSER_TEST_F(GlicMessagingWebContinuityBrowserTest,
+                       InvokeWebContinuity) {
+  content::WebContents* tab =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(content::NavigateToURL(
+      tab, GURL("https://gemini.google.com/empty.html")));
+
+  glic::MockGlicKeyedService* mock_service = static_cast<glic::MockGlicKeyedService*>(
+      glic::GlicKeyedServiceFactory::GetGlicKeyedService(profile(),
+                                                         /*create=*/true));
+  ASSERT_TRUE(mock_service);
+
+  std::string cid = "c_123";
+  std::string turn_id = "t_456";
+  auto conversation_matcher = testing::VariantWith<glic::ConversationId>(
+      testing::AllOf(testing::Field(&glic::ConversationId::conversation_id,
+                                    testing::Eq(cid)),
+                     testing::Field(&glic::ConversationId::turn_id,
+                                    testing::Eq(std::make_optional(turn_id)))));
+
+  // Expect InvokeWithAutoSubmit to be called with kWebContinuity source and
+  // conversation.
+  EXPECT_CALL(
+      *mock_service,
+      InvokeWithAutoSubmit(
+          testing::_,
+          testing::AllOf(
+              testing::Property(
+                  &glic::GlicInvokeOptions::GetInvocationSource,
+                  testing::Eq(glic::mojom::InvocationSource::kWebContinuity)),
+              testing::Field(&glic::GlicInvokeOptions::target,
+                             testing::Field(&glic::Target::conversation,
+                                            conversation_matcher)))))
+      .Times(1);
+
+  // We don't need a prompt ID for web-continuity.
+  content::EvalJsResult result =
+      ExecuteInvoke(tab, "", "web-continuity", cid, turn_id);
+  EXPECT_EQ("success", result);
 }
 
 #endif  // !BUILDFLAG(IS_ANDROID)

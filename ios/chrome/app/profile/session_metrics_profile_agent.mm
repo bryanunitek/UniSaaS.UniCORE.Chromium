@@ -6,7 +6,6 @@
 
 #import "base/check.h"
 #import "base/metrics/histogram_functions.h"
-#import "base/metrics/puma_histogram_functions.h"
 #import "base/time/time.h"
 #import "components/activity_reporter/activity_reporter.h"
 #import "components/feature_engagement/public/event_constants.h"
@@ -124,12 +123,6 @@
   base::UmaHistogramCustomTimes("Session.TotalDurationMax1Day", duration,
                                 base::Milliseconds(1), base::Days(1), 50);
 
-  // Records true each time Session.TotalDuration is supposed to be recorded
-  // in a PUMA histogram. Allowing for the count to be collected.
-  base::PumaHistogramBoolean(
-      base::PumaType::kRc,
-      "PUMA.RegionalCapabilities.Session.TotalDuration.Recorded", true);
-
   _sessionStartTimestamp = base::TimeTicks();
   IOSProfileSessionDurationsServiceFactory::GetForProfile(profile)
       ->OnSessionEnded(duration);
@@ -165,12 +158,8 @@
 }
 
 - (void)onFeatureEngagementTrackerInitialized:(BOOL)success {
-  DCHECK(self.profileState.profile);
-  if (!IsRecordRecentActiveDaysEnabled()) {
-    return;
-  }
-
-  if (!success) {
+  if (!IsRecordRecentActiveDaysEnabled() || !self.profileState.profile ||
+      !success) {
     return;
   }
 
@@ -197,6 +186,7 @@
 
   localState->SetTime(prefs::kLastRecordedActiveDay, nowMidnight);
 
+  int activeDays28Count = -1;
   for (const auto& [config, count] : tracker->ListEvents(
            feature_engagement::kIPHiOSActiveDaysTrackingFeature)) {
     if (config.name == feature_engagement::events::kChromeActiveSessionDay) {
@@ -205,9 +195,15 @@
       } else if (config.window == 15) {
         base::UmaHistogramCounts100("IOS.PreviousActiveDays14", count);
       } else if (config.window == 29) {
+        activeDays28Count = count;
         base::UmaHistogramCounts100("IOS.PreviousActiveDays28", count);
       }
     }
+  }
+
+  if (activeDays28Count >= 0) {
+    localState->SetInteger(prefs::kLastRecordedActiveDaysInPast28Days,
+                           activeDays28Count);
   }
 
   tracker->NotifyEvent(feature_engagement::events::kChromeActiveSessionDay);

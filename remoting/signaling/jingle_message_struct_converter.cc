@@ -14,13 +14,11 @@
 #include "base/notreached.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "remoting/signaling/content_description.h"
 #include "remoting/signaling/jingle_data_structures.h"
-#include "remoting/signaling/jingle_message_xml_converter.h"
 #include "remoting/signaling/signaling_address.h"
 #include "remoting/signaling/signaling_id_util.h"
-#include "remoting/signaling/xmpp_constants.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
-#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
 
 namespace remoting {
 
@@ -52,9 +50,8 @@ SessionDescriptionStruct::SdpType ToSdpTypeStruct(
       return SessionDescriptionStruct::SdpType::kOffer;
     case SessionDescription::Type::kAnswer:
       return SessionDescriptionStruct::SdpType::kAnswer;
-    default:
-      NOTREACHED();
   }
+  return SessionDescriptionStruct::SdpType::kUnspecified;
 }
 
 SessionDescription::Type FromSdpTypeStruct(
@@ -66,9 +63,8 @@ SessionDescription::Type FromSdpTypeStruct(
       return SessionDescription::Type::kOffer;
     case SessionDescriptionStruct::SdpType::kAnswer:
       return SessionDescription::Type::kAnswer;
-    default:
-      NOTREACHED();
   }
+  return SessionDescription::Type::kUnspecified;
 }
 
 SessionTerminateStruct::Reason ToTerminateReasonStruct(
@@ -92,9 +88,8 @@ SessionTerminateStruct::Reason ToTerminateReasonStruct(
       return SessionTerminateStruct::Reason::kIncompatibleParameters;
     case SessionTerminate::Reason::kUnknownReason:
       return SessionTerminateStruct::Reason::kUnknownReason;
-    default:
-      NOTREACHED();
   }
+  return SessionTerminateStruct::Reason::kUnknownReason;
 }
 
 SessionTerminate::Reason FromTerminateReasonStruct(
@@ -118,9 +113,8 @@ SessionTerminate::Reason FromTerminateReasonStruct(
       return SessionTerminate::Reason::kIncompatibleParameters;
     case SessionTerminateStruct::Reason::kUnknownReason:
       return SessionTerminate::Reason::kUnknownReason;
-    default:
-      NOTREACHED();
   }
+  return SessionTerminate::Reason::kUnknownReason;
 }
 
 ErrorStanzaStruct::Condition ToErrorConditionStruct(
@@ -137,9 +131,9 @@ ErrorStanzaStruct::Condition ToErrorConditionStruct(
     case JingleMessageReply::UNSUPPORTED_INFO:
       return ErrorStanzaStruct::Condition::kUnsupportedInfo;
     case JingleMessageReply::UNSPECIFIED:
-    default:
       return ErrorStanzaStruct::Condition::kUnspecified;
   }
+  return ErrorStanzaStruct::Condition::kUnspecified;
 }
 
 JingleMessageReply::ErrorType FromErrorConditionStruct(
@@ -156,9 +150,9 @@ JingleMessageReply::ErrorType FromErrorConditionStruct(
     case ErrorStanzaStruct::Condition::kUnsupportedInfo:
       return JingleMessageReply::UNSUPPORTED_INFO;
     case ErrorStanzaStruct::Condition::kUnspecified:
-    default:
       return JingleMessageReply::UNSPECIFIED;
   }
+  return JingleMessageReply::UNSPECIFIED;
 }
 
 }  // namespace
@@ -441,7 +435,6 @@ IqStanzaStruct JingleMessageToStruct(const JingleMessage& message) {
   stanza.id = message.message_id;
   stanza.sender = SignalingAddressToJabberIdStruct(message.from);
   stanza.receiver = SignalingAddressToJabberIdStruct(message.to);
-  stanza.xml = message.ToSerializedXml();
 
   JingleMessageStruct jingle_struct;
   jingle_struct.session_id = message.sid;
@@ -479,59 +472,55 @@ bool JingleMessageFromStruct(const IqStanzaStruct& stanza,
                              JingleMessage* message,
                              std::string* error) {
   const auto* jingle_struct = std::get_if<JingleMessageStruct>(&stanza.payload);
-  if (jingle_struct) {
-    message->sid = jingle_struct->session_id;
-    for (const auto& attachment_struct : jingle_struct->attachments) {
-      message->attachments.push_back(AttachmentFromStruct(attachment_struct));
-    }
-
-    std::visit(absl::Overload{
-                   [&](const SessionInitiateStruct& arg) {
-                     message->SetPayload(SessionInitiateFromStruct(arg));
-                     message->initiator =
-                         JabberIdStructToSignalingAddress(arg.initiator).id();
-                   },
-                   [&](const SessionAcceptStruct& arg) {
-                     message->SetPayload(SessionAcceptFromStruct(arg));
-                   },
-                   [&](const SessionInfoStruct& arg) {
-                     message->SetPayload(SessionInfoFromStruct(arg));
-                   },
-                   [&](const TransportInfoStruct& arg) {
-                     message->SetPayload(TransportInfoFromStruct(arg));
-                   },
-                   [&](const SessionTerminateStruct& arg) {
-                     message->SetPayload(SessionTerminateFromStruct(arg));
-                   },
-                   [](std::monostate) { NOTREACHED(); }},
-               jingle_struct->action);
-  } else {
-    if (stanza.xml.length() > kMaxStanzaSize) {
-      *error = "Rejecting XML stanza: length exceeds limit.";
-      return false;
-    }
-    if (XmlContainsDtd(stanza.xml)) {
-      *error = "Rejecting XML with DTD.";
-      return false;
-    }
-    auto xml_stanza = base::WrapUnique<jingle_xmpp::XmlElement>(
-        jingle_xmpp::XmlElement::ForStr(stanza.xml));
-    if (!xml_stanza ||
-        !JingleMessageFromXml(xml_stanza.get(), message, error)) {
-      return false;
-    }
+  if (!jingle_struct) {
+    *error = "JingleMessageStruct payload is missing.";
+    return false;
   }
 
-  // Top-level overrides from struct.
-  if (!stanza.id.empty()) {
-    message->message_id = stanza.id;
+  message->message_id = stanza.id;
+  message->from = JabberIdStructToSignalingAddress(stanza.sender);
+  message->to = JabberIdStructToSignalingAddress(stanza.receiver);
+  if (message->from.empty() || message->to.empty()) {
+    *error = "Missing signaling address";
+    return false;
   }
-  if (!stanza.sender.local_part.empty()) {
-    message->from = JabberIdStructToSignalingAddress(stanza.sender);
+  message->sid = jingle_struct->session_id;
+  if (message->sid.empty()) {
+    *error = "sid attribute is missing";
+    return false;
   }
-  if (!stanza.receiver.local_part.empty()) {
-    message->to = JabberIdStructToSignalingAddress(stanza.receiver);
+  for (const auto& attachment_struct : jingle_struct->attachments) {
+    message->attachments.push_back(AttachmentFromStruct(attachment_struct));
   }
+
+  std::visit(
+      absl::Overload{
+          [&](const SessionInitiateStruct& arg) {
+            auto initiate = SessionInitiateFromStruct(arg);
+            message->description = std::make_unique<ContentDescription>(
+                initiate.authentication.value_or(JingleAuthentication()));
+            message->SetPayload(std::move(initiate));
+            message->initiator =
+                JabberIdStructToSignalingAddress(arg.initiator).id();
+          },
+          [&](const SessionAcceptStruct& arg) {
+            auto accept = SessionAcceptFromStruct(arg);
+            message->description = std::make_unique<ContentDescription>(
+                accept.authentication.value_or(JingleAuthentication()));
+            message->SetPayload(std::move(accept));
+          },
+          [&](const SessionInfoStruct& arg) {
+            message->SetPayload(SessionInfoFromStruct(arg));
+          },
+          [&](const TransportInfoStruct& arg) {
+            message->SetPayload(TransportInfoFromStruct(arg));
+          },
+          [&](const SessionTerminateStruct& arg) {
+            message->SetPayload(SessionTerminateFromStruct(arg));
+          },
+          [](std::monostate) { NOTREACHED(); }},
+      jingle_struct->action);
+
   return true;
 }
 
@@ -540,7 +529,6 @@ IqStanzaStruct JingleMessageReplyToStruct(const JingleMessageReply& reply) {
   stanza.id = reply.message_id;
   stanza.sender = SignalingAddressToJabberIdStruct(reply.from);
   stanza.receiver = SignalingAddressToJabberIdStruct(reply.to);
-  stanza.xml = reply.ToSerializedXml();
 
   if (reply.reply_type == JingleMessageReply::REPLY_RESULT) {
     stanza.payload = JingleReplyStruct();
@@ -568,17 +556,7 @@ bool JingleMessageReplyFromStruct(const IqStanzaStruct& stanza,
     reply->error_type = FromErrorConditionStruct(error_struct->condition);
     reply->text = error_struct->text;
   } else {
-    if (stanza.xml.length() > kMaxStanzaSize) {
-      return false;
-    }
-    if (XmlContainsDtd(stanza.xml)) {
-      return false;
-    }
-    auto xml_stanza = base::WrapUnique<jingle_xmpp::XmlElement>(
-        jingle_xmpp::XmlElement::ForStr(stanza.xml));
-    if (!xml_stanza || !JingleMessageReplyFromXml(xml_stanza.get(), reply)) {
-      return false;
-    }
+    return false;
   }
 
   // Top-level overrides from struct.

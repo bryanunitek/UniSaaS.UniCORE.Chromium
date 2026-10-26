@@ -7,11 +7,11 @@
 #include <algorithm>
 #include <string>
 
-#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
 #include "ash/strings/grit/ash_strings.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
@@ -29,19 +29,17 @@
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_limits_allowlist_policy_wrapper.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_policy_helpers.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_types.h"
-#include "chrome/browser/ash/child_accounts/time_limits/web_time_activity_provider.h"
 #include "chrome/browser/extensions/launch_util.h"
-#include "chrome/browser/notifications/notification_display_service.h"
-#include "chrome/browser/notifications/notification_display_service_factory.h"
-#include "chrome/browser/notifications/notification_handler.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "chromeos/ui/vector_icons/vector_icons.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
+#include "components/user_manager/user.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
@@ -50,6 +48,7 @@
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/vector_icon_types.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
@@ -202,11 +201,6 @@ AppActivityRegistry* AppTimeController::TestApi::app_registry() {
   return controller_->app_registry_.get();
 }
 
-WebTimeActivityProvider*
-AppTimeController::TestApi::web_time_activity_provider() {
-  return controller_->web_time_activity_provider_.get();
-}
-
 // static
 void AppTimeController::RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterInt64Pref(ash::prefs::kPerAppTimeLimitsLastResetTime, 0);
@@ -225,12 +219,7 @@ AppTimeController::AppTimeController(
                                                 this,
                                                 profile->GetPrefs())),
       on_policy_updated_callback_(on_policy_updated_callback) {
-  if (base::FeatureList::IsEnabled(
-          ash::features::kUnicornChromeActivityReporting)) {
-    web_time_activity_provider_ = std::make_unique<WebTimeActivityProvider>(
-        this, app_service_wrapper_.get());
-  }
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M160);
 }
 
 AppTimeController::~AppTimeController() {
@@ -333,7 +322,8 @@ void AppTimeController::RegisterProfilePrefObservers(
 }
 
 void AppTimeController::TimeLimitsPolicyUpdated(const std::string& pref_name) {
-  DCHECK_EQ(pref_name, ash::prefs::kPerAppTimeLimitsPolicy);
+  CHECK_EQ(pref_name, ash::prefs::kPerAppTimeLimitsPolicy,
+           base::NotFatalUntil::M160);
 
   const base::DictValue& policy =
       pref_registrar_->prefs()->GetDict(ash::prefs::kPerAppTimeLimitsPolicy);
@@ -373,7 +363,8 @@ void AppTimeController::TimeLimitsPolicyUpdated(const std::string& pref_name) {
 
 void AppTimeController::TimeLimitsAllowlistPolicyUpdated(
     const std::string& pref_name) {
-  DCHECK_EQ(pref_name, ash::prefs::kPerAppTimeLimitsAllowlistPolicy);
+  CHECK_EQ(pref_name, ash::prefs::kPerAppTimeLimitsAllowlistPolicy,
+           base::NotFatalUntil::M160);
 
   const base::DictValue& policy = pref_registrar_->prefs()->GetDict(
       ash::prefs::kPerAppTimeLimitsAllowlistPolicy);
@@ -388,7 +379,7 @@ void AppTimeController::ShowAppTimeLimitNotification(
     const AppId& app_id,
     const std::optional<base::TimeDelta>& time_limit,
     AppNotification notification) {
-  DCHECK_NE(AppNotification::kUnknown, notification);
+  CHECK_NE(AppNotification::kUnknown, notification, base::NotFatalUntil::M160);
 
   if (notification == AppNotification::kTimeLimitReached) {
     return;
@@ -527,7 +518,7 @@ void AppTimeController::SetLastResetTime(base::Time timestamp) {
   }
 
   PrefService* service = profile_->GetPrefs();
-  DCHECK(service);
+  CHECK(service, base::NotFatalUntil::M160);
   service->SetInt64(
       ash::prefs::kPerAppTimeLimitsLastResetTime,
       last_limits_reset_time_.ToDeltaSinceWindowsEpoch().InMicroseconds());
@@ -552,8 +543,8 @@ void AppTimeController::OpenFamilyLinkApp() {
   }
   // No Family Link Help app installed, so try to launch Play Store to Family
   // Link Help app install page.
-  DCHECK(
-      apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(profile_));
+  CHECK(apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(profile_),
+        base::NotFatalUntil::M160);
   apps::AppServiceProxyFactory::GetForProfile(profile_)->LaunchAppWithUrl(
       arc::kPlayStoreAppId, ui::EF_NONE, GURL(kFamilyLinkHelperAppPlayStoreURL),
       apps::LaunchSource::kFromChromeInternal);
@@ -564,15 +555,18 @@ void AppTimeController::ShowNotificationForApp(
     AppNotification notification,
     std::optional<base::TimeDelta> time_limit,
     std::optional<gfx::ImageSkia> icon) {
-  DCHECK(notification == AppNotification::kFiveMinutes ||
-         notification == AppNotification::kOneMinute ||
-         notification == AppNotification::kTimeLimitChanged ||
-         notification == AppNotification::kBlocked ||
-         notification == AppNotification::kAvailable);
+  CHECK(notification == AppNotification::kFiveMinutes ||
+            notification == AppNotification::kOneMinute ||
+            notification == AppNotification::kTimeLimitChanged ||
+            notification == AppNotification::kBlocked ||
+            notification == AppNotification::kAvailable,
+        base::NotFatalUntil::M160);
 
-  DCHECK(notification == AppNotification::kTimeLimitChanged ||
-         notification == AppNotification::kBlocked ||
-         notification == AppNotification::kAvailable || time_limit.has_value());
+  CHECK(notification == AppNotification::kTimeLimitChanged ||
+            notification == AppNotification::kBlocked ||
+            notification == AppNotification::kAvailable ||
+            time_limit.has_value(),
+        base::NotFatalUntil::M160);
 
   // Alright we have all the messages that we want.
   const std::u16string app_name_16 = base::UTF8ToUTF16(app_name);
@@ -584,46 +578,40 @@ void AppTimeController::ShowNotificationForApp(
   const std::u16string notification_source =
       l10n_util::GetStringUTF16(IDS_TIME_LIMIT_NOTIFICATION_DISPLAY_SOURCE);
 
-  std::string notification_id = GetNotificationIdFor(app_name, notification);
+  const user_manager::User& user = CHECK_DEREF(
+      BrowserContextHelper::Get()->GetUserByBrowserContext(profile_));
+  const std::string notification_id = CreateUserScopedNotificationId(
+      GetNotificationIdFor(app_name, notification), user.username_hash());
   message_center::RichNotificationData option_fields;
   option_fields.fullscreen_visibility =
       message_center::FullscreenVisibility::OVER_USER;
+  message_center::NotifierId notifier_id(
+      message_center::NotifierType::SYSTEM_COMPONENT, kFamilyLinkSourceId,
+      NotificationCatalogName::kAppTime);
+  notifier_id.profile_id = user.GetAccountId().GetUserEmail();
 
-  message_center::Notification message_center_notification =
-      CreateSystemNotification(
-          message_center::NOTIFICATION_TYPE_SIMPLE, notification_id, title,
-          message, notification_source, GURL(),
-          message_center::NotifierId(
-              message_center::NotifierType::SYSTEM_COMPONENT,
-              kFamilyLinkSourceId, NotificationCatalogName::kAppTime),
-          option_fields,
-          notification == AppNotification::kTimeLimitChanged
-              ? base::MakeRefCounted<
-                    message_center::HandleNotificationClickDelegate>(
-                    base::BindRepeating(&AppTimeController::OpenFamilyLinkApp,
-                                        weak_ptr_factory_.GetWeakPtr()))
-              : base::MakeRefCounted<message_center::NotificationDelegate>(),
-          chromeos::kNotificationSupervisedUserIcon,
-          message_center::SystemNotificationWarningLevel::NORMAL);
+  auto message_center_notification = CreateSystemNotificationPtr(
+      message_center::NOTIFICATION_TYPE_SIMPLE, notification_id, title, message,
+      notification_source, notifier_id, option_fields,
+      notification == AppNotification::kTimeLimitChanged
+          ? base::MakeRefCounted<
+                message_center::HandleNotificationClickDelegate>(
+                base::BindRepeating(&AppTimeController::OpenFamilyLinkApp,
+                                    weak_ptr_factory_.GetWeakPtr()))
+          : base::MakeRefCounted<message_center::NotificationDelegate>(),
+      chromeos::kNotificationSupervisedUserIcon,
+      message_center::SystemNotificationWarningLevel::NORMAL);
 
   if (icon.has_value()) {
-    message_center_notification.set_icon(
+    message_center_notification->set_icon(
         ui::ImageModel::FromImageSkia(icon.value()));
   }
 
-  auto* notification_display_service =
-      NotificationDisplayServiceFactory::GetForProfile(profile_);
-  if (!notification_display_service) {
-    return;
-  }
-
   // Close the existing notification with notification_id.
-  notification_display_service->Close(NotificationHandler::Type::TRANSIENT,
-                                      notification_id);
-
-  notification_display_service->Display(NotificationHandler::Type::TRANSIENT,
-                                        message_center_notification,
-                                        /*metadata=*/nullptr);
+  message_center::MessageCenter::Get()->RemoveNotification(notification_id,
+                                                           /*by_user=*/false);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(message_center_notification));
 }
 
 }  // namespace ash::app_time

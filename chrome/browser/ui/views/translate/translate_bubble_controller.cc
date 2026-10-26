@@ -21,7 +21,9 @@
 #include "chrome/browser/ui/translate/translate_bubble_model_impl.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
+#include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
 #include "chrome/browser/ui/views/translate/partial_translate_bubble_view.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/touch_to_search/core/browser/contextual_search_delegate_impl.h"
 #include "components/translate/content/browser/contextual_translate_delegate.h"
@@ -32,12 +34,14 @@
 #include "components/translate/core/browser/translate_ui_languages_manager.h"
 #include "components/translate/core/common/translate_constants.h"
 #include "components/translate/core/common/translate_errors.h"
+#include "components/translate/core/common/translate_features.h"
 #include "components/translate/core/common/translate_util.h"
 #include "content/public/browser/web_contents.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/actions/actions.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/gfx/text_elider.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 
 namespace {
 
@@ -139,6 +143,22 @@ views::Widget* TranslateBubbleController::ShowTranslateBubble(
   translate_bubble_view_->model()->ReportUIChange(true);
 
   action_item_->SetIsShowingBubble(true);
+
+  // Trigger PDF translate IPH
+  if (web_contents &&
+      base::FeatureList::IsEnabled(translate::kEnableTranslatePdf)) {
+    if (auto* translate_manager =
+            ChromeTranslateClient::GetManagerFromWebContents(web_contents)) {
+      if (translate_manager->GetLanguageState()->pdf_translatability_status() ==
+          translate::LanguageState::PdfTranslatabilityStatus::kTranslatable) {
+        if (auto* user_education =
+                BrowserUserEducationInterface::From(browser_window_)) {
+          user_education->MaybeShowFeaturePromo(
+              feature_engagement::kIPHPdfTranslateBubbleFeature);
+        }
+      }
+    }
+  }
 
   return bubble_widget;
 }
@@ -383,5 +403,3 @@ void TranslateBubbleController::OnPartialTranslateBubbleClosed() {
   partial_translate_bubble_view_ = nullptr;
   action_item_->SetIsShowingBubble(false);
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(TranslateBubbleController);

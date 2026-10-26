@@ -18,12 +18,13 @@
 #include "base/time/time.h"
 #include "base/types/expected.h"
 #include "chrome/browser/actor/actor_proto_conversion.h"
+#include "chrome/browser/actor/actor_surface_tab_helper.h"
 #include "chrome/browser/actor/actor_tab_data.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/actor/actor_task_delegate.h"
 #include "chrome/browser/actor/enterprise_policy_checker.h"
 #include "chrome/browser/actor/execution_engine.h"
-#include "chrome/browser/actor/tools/media_control_tool_request.h"
+#include "chrome/browser/actor/tools/scroll_tool_request.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/browser/actor/ui/event_dispatcher.h"
 #include "chrome/common/actor.mojom-forward.h"
@@ -190,29 +191,53 @@ optimization_guide::proto::Actions MakeScriptTool(
     const std::string& name,
     const std::string& input_arguments,
     std::optional<actor::TaskId> task_id = std::nullopt);
-optimization_guide::proto::Actions MakeMediaControl(
+optimization_guide::proto::Actions MakePlayMedia(
     tabs::TabHandle tab_handle,
-    MediaControl media_control,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakePauseMedia(
+    tabs::TabHandle tab_handle,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeSeekMedia(
+    tabs::TabHandle tab_handle,
+    base::TimeDelta seek_time,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeTranslatePage(
+    tabs::TabHandle tab_handle,
+    std::string target_language = "",
     std::optional<actor::TaskId> task_id = std::nullopt);
 
 /////////////////////////
 // ToolRequest action makers
 
-std::unique_ptr<ToolRequest> MakeClickRequest(content::RenderFrameHost& rfh,
-                                              int content_node_id);
+std::unique_ptr<ToolRequest> MakeClickRequest(
+    content::RenderFrameHost& rfh,
+    int content_node_id,
+    mojom::ClickType type = mojom::ClickType::kLeft,
+    mojom::ClickCount count = mojom::ClickCount::kSingle);
 std::unique_ptr<ToolRequest> MakeDirectElementActivationClickRequest(
     content::RenderFrameHost& rfh,
     int content_node_id);
-std::unique_ptr<ToolRequest> MakeClickRequest(tabs::TabInterface& tab,
-                                              const gfx::Point& click_point);
+std::unique_ptr<ToolRequest> MakeClickRequest(
+    tabs::TabInterface& tab,
+    const gfx::Point& click_point,
+    mojom::ClickType type = mojom::ClickType::kLeft,
+    mojom::ClickCount count = mojom::ClickCount::kSingle);
 std::unique_ptr<ToolRequest> MakeHistoryBackRequest(tabs::TabInterface& tab);
 std::unique_ptr<ToolRequest> MakeHistoryForwardRequest(tabs::TabInterface& tab);
+std::unique_ptr<ToolRequest> MakeReloadPageRequest(tabs::TabInterface& tab,
+                                                   bool bypass_cache = false);
 std::unique_ptr<ToolRequest> MakeMouseMoveRequest(content::RenderFrameHost& rfh,
                                                   int content_node_id);
 std::unique_ptr<ToolRequest> MakeMouseMoveRequest(tabs::TabInterface& tab,
                                                   const gfx::Point& move_point);
 std::unique_ptr<ToolRequest> MakeNavigateRequest(tabs::TabInterface& tab,
                                                  std::string_view target_url);
+std::unique_ptr<ToolRequest> MakePerformSearchRequest(tabs::TabInterface& tab,
+                                                      std::string_view query);
+std::unique_ptr<ToolRequest> MakeSiteBasedSearchRequest(
+    tabs::TabInterface& tab,
+    std::string_view query,
+    std::optional<std::string> document_identifier = std::nullopt);
 std::unique_ptr<ToolRequest> MakeTypeRequest(content::RenderFrameHost& rfh,
                                              int content_node_id,
                                              std::string_view text,
@@ -229,6 +254,11 @@ std::unique_ptr<ToolRequest> MakeScrollRequest(
     std::optional<int> content_node_id,
     float scroll_offset_x,
     float scroll_offset_y);
+std::unique_ptr<ToolRequest> MakeScrollPageRequest(
+    content::RenderFrameHost& rfh,
+    std::optional<int> content_node_id,
+    ScrollPageToolRequest::Granularity granularity,
+    ScrollPageToolRequest::Direction direction);
 std::unique_ptr<ToolRequest> MakeScrollToRequest(content::RenderFrameHost& rfh,
                                                  int content_node_id);
 std::unique_ptr<ToolRequest> MakeDragAndReleaseRequest(
@@ -253,9 +283,17 @@ std::unique_ptr<ToolRequest> MakeScriptToolRequest(
     content::RenderFrameHost& rfh,
     const std::string& name,
     const std::string& input_arguments);
-std::unique_ptr<ToolRequest> MakeMediaControlRequest(
+std::unique_ptr<ToolRequest> MakePlayMediaRequest(tabs::TabInterface& tab);
+std::unique_ptr<ToolRequest> MakePauseMediaRequest(tabs::TabInterface& tab);
+std::unique_ptr<ToolRequest> MakeSeekMediaRequest(tabs::TabInterface& tab,
+                                                  base::TimeDelta seek_time);
+std::unique_ptr<ToolRequest> MakeTranslatePageRequest(tabs::TabInterface& tab);
+std::unique_ptr<ToolRequest> MakeTranslatePageRequest(
     tabs::TabInterface& tab,
-    MediaControl media_control);
+    std::string_view target_language);
+std::unique_ptr<ToolRequest> MakeFindAndHighlightRequest(
+    tabs::TabInterface& tab,
+    const std::string& query);
 
 // A helper to create a vector of ToolRequests suitable for passing to
 // ExecutionEngine::Act. Note that this will necessarily move the ToolRequest
@@ -283,6 +321,9 @@ void ExpectOkResult(base::test::TestFuture<mojom::ActionResultPtr>& future);
 void ExpectOkResult(ActResultFuture& future);
 void ExpectErrorResult(ActResultFuture& future,
                        mojom::ActionResultCode expected_code);
+// Checks the standard disabled-target error and its reason-specific message.
+void ExpectElementDisabledResultWithReason(ActResultFuture& future,
+                                           std::string_view reason);
 
 // Sets up GLIC_ACTION_PAGE_BLOCK to block the given host via component updater.
 bool SetUpOptimizationGuideComponentBlocklist(const base::FilePath& path,
@@ -409,6 +450,13 @@ class MockActorTaskDelegate : public ActorTaskDelegate {
               (TaskId task_id, GmailOtpOptInCallback callback),
               (override));
 
+  MOCK_METHOD(void,
+              RequestToShowGmailOtpConfirmationDialog,
+              (TaskId task_id,
+               const std::string& verification_code,
+               GmailOtpConfirmationCallback callback),
+              (override));
+
   base::WeakPtr<MockActorTaskDelegate> GetWeakPtr() {
     return weak_factory_.GetWeakPtr();
   }
@@ -426,6 +474,7 @@ class MockPolicyChecker : public EnterprisePolicyChecker {
   ~MockPolicyChecker() override;
 
   UrlBlockReason Evaluate(const GURL& url) const override;
+  void set_reason(UrlBlockReason reason) { reason_ = reason; }
   void ValidateContentSentToRenderer(
       content::RenderFrameHost* frame,
       const std::string& content,
@@ -457,7 +506,9 @@ class ScopedMockTabObservationResult {
 };
 
 // Helper struct for unit tests that require a mock TabInterface and its
-// associated ActorTabData.
+// associated ActorTabData. When `web_contents` is provided, the tab also gets
+// an ActorSurfaceTabHelper so it has a surface in ActorSurfaceRegistry, as
+// real tabs do via TabFeatures.
 struct TestTabState {
   explicit TestTabState(content::WebContents* web_contents = nullptr);
   ~TestTabState();
@@ -470,6 +521,7 @@ struct TestTabState {
   tabs::MockTabInterface tab;
   ::ui::UnownedUserDataHost user_data_host;
   std::unique_ptr<ActorTabData> tab_data;
+  std::unique_ptr<ActorSurfaceTabHelper> actor_surface_tab_helper;
 };
 
 }  // namespace actor

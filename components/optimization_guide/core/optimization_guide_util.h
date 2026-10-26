@@ -11,14 +11,12 @@
 
 #include "base/strings/string_split.h"
 #include "base/time/time.h"
-#include "components/optimization_guide/core/model_execution/feature_keys.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
+#include "components/optimization_guide/core/optimization_guide_logger.h"
 #include "components/optimization_guide/core/optimization_guide_permissions_util.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/proto/common_types.pb.h"
-#include "components/optimization_guide/proto/features/common_quality_data.pb.h"
 #include "components/optimization_guide/proto/model_execution.pb.h"
-#include "components/optimization_guide/proto/models.pb.h"
 
 #define OPTIMIZATION_GUIDE_LOG(log_source, optimization_guide_logger, message) \
   do {                                                                         \
@@ -26,12 +24,10 @@
         optimization_guide_logger->ShouldEnableDebugLogs()) {                  \
       optimization_guide_logger->OnLogMessageAdded(                            \
           base::Time::Now(), log_source, __FILE__, __LINE__, message);         \
-    }                                                                          \
-    if (optimization_guide::switches::IsDebugLogsEnabled())                    \
       DVLOG(0) << message;                                                     \
+    }                                                                          \
   } while (0)
 
-class OptimizationGuideLogger;
 class PrefService;
 
 namespace network {
@@ -39,6 +35,10 @@ struct ResourceRequest;
 }  // namespace network
 
 namespace optimization_guide {
+
+namespace proto {
+enum ChromePlatform : int;
+}  // namespace proto
 
 enum class OptimizationGuideDecision;
 
@@ -115,11 +115,6 @@ void PopulateApiKeyRequestHeader(network::ResourceRequest* resource_request,
 void PopulateServerTimeoutRequestHeader(
     network::ResourceRequest* resource_request,
     base::TimeDelta timeout);
-
-// Returns whether model validator service should be started to validate various
-// model executions such as, TFLite, server-side AI, on-device AI models. Used
-// for integration testing purposes.
-bool ShouldStartModelValidator();
 
 }  // namespace optimization_guide
 

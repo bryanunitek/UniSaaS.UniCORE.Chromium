@@ -49,23 +49,12 @@
 #include "chrome/browser/download/android/service/download_task_scheduler.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/ash/plugin_vm/plugin_vm_image_download_client.h"
-#endif
-
 namespace {
 
 std::unique_ptr<download::Client> CreateBackgroundFetchDownloadClient(
     Profile* profile) {
   return std::make_unique<background_fetch::DownloadClient>(profile);
 }
-
-#if BUILDFLAG(IS_CHROMEOS)
-std::unique_ptr<download::Client> CreatePluginVmImageDownloadClient(
-    Profile* profile) {
-  return std::make_unique<plugin_vm::PluginVmImageDownloadClient>(profile);
-}
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
 std::unique_ptr<download::Client>
 CreateOptimizationGuidePredictionModelDownloadClient(Profile* profile) {
@@ -77,7 +66,7 @@ CreateOptimizationGuidePredictionModelDownloadClient(Profile* profile) {
 void DownloadOnProfileCreated(download::BlobContextGetterCallback callback,
                               Profile* profile) {
   auto blob_context_getter = profile->GetBlobStorageContext();
-  DCHECK(callback);
+  CHECK(callback, base::NotFatalUntil::M161);
   std::move(callback).Run(blob_context_getter);
 }
 
@@ -86,7 +75,7 @@ class DownloadBlobContextGetterFactory
     : public download::BlobContextGetterFactory {
  public:
   explicit DownloadBlobContextGetterFactory(SimpleFactoryKey* key) : key_(key) {
-    DCHECK(key_);
+    CHECK(key_, base::NotFatalUntil::M161);
   }
 
   DownloadBlobContextGetterFactory(const DownloadBlobContextGetterFactory&) =
@@ -109,14 +98,14 @@ class DownloadBlobContextGetterFactory
 
 void OnProfileCreated(download::URLLoaderFactoryGetterCallback callback,
                       Profile* profile) {
-  DCHECK(callback);
+  CHECK(callback, base::NotFatalUntil::M161);
   std::move(callback).Run(profile->GetURLLoaderFactory());
 }
 
 class URLLoaderFactoryGetter : public download::URLLoaderFactoryGetter {
  public:
   explicit URLLoaderFactoryGetter(SimpleFactoryKey* key) : key_(key) {
-    DCHECK(key_);
+    CHECK(key_, base::NotFatalUntil::M161);
   }
 
   URLLoaderFactoryGetter(const URLLoaderFactoryGetter&) = delete;
@@ -169,15 +158,6 @@ BackgroundDownloadServiceFactory::BuildServiceInstanceFor(
       download::DownloadClient::BACKGROUND_FETCH,
       std::make_unique<download::DeferredClientWrapper>(
           base::BindOnce(&CreateBackgroundFetchDownloadClient), key)));
-
-#if BUILDFLAG(IS_CHROMEOS)
-  if (!key->IsOffTheRecord()) {
-    clients->insert(std::make_pair(
-        download::DownloadClient::PLUGIN_VM_IMAGE,
-        std::make_unique<download::DeferredClientWrapper>(
-            base::BindOnce(&CreatePluginVmImageDownloadClient), key)));
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
   if (!key->IsOffTheRecord()) {
     clients->insert(std::make_pair(

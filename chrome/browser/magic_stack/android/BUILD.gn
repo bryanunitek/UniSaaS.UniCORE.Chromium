@@ -24,12 +24,13 @@ android_library("java") {
     ":java_resources",
     "//base:base_java",
     "//base:base_shared_preferences_java",
+    "//chrome/android:new_tab_page_utils_java",
     "//chrome/browser/android/lifecycle:java",
+    "//chrome/browser/auxiliary_search:java",
     "//chrome/browser/flags:java",
     "//chrome/browser/preferences:java",
     "//chrome/browser/profiles/android:java",
     "//chrome/browser/segmentation_platform:client_util_java",
-    "//chrome/browser/segmentation_platform:factory_java",
     "//chrome/browser/settings:java",
     "//chrome/browser/tab:java",
     "//chrome/browser/tabmodel:java",
@@ -42,7 +43,6 @@ android_library("java") {
     "//components/browser_ui/widget/android:java",
     "//components/browser_ui/widget/android:java_resources",
     "//components/cached_flags:java",
-    "//components/embedder_support/android:util_java",
     "//components/prefs/android:java",
     "//components/segmentation_platform/public:public_java",
     "//components/user_prefs/android:java",
@@ -66,6 +66,7 @@ android_resources("java_resources") {
   ]
   deps = [
     "//components/browser_ui/strings/android:browser_ui_strings_grd",
+    "//components/browser_ui/widget/android:java_resources",
     "//ui/android:ui_java_resources",
   ]
 }
@@ -95,6 +96,7 @@ robolectric_library("junit") {
     "//base:base_junit_test_support",
     "//base:base_shared_preferences_java",
     "//chrome/android:chrome_java",
+    "//chrome/android:new_tab_page_utils_java",
     "//chrome/browser/android/lifecycle:java",
     "//chrome/browser/educational_tip:java",
     "//chrome/browser/educational_tip:java_resources",
@@ -122,7 +124,6 @@ robolectric_library("junit") {
     "//third_party/androidx:androidx_preference_preference_java",
     "//third_party/androidx:androidx_recyclerview_recyclerview_java",
     "//third_party/androidx:androidx_test_core_java",
-    "//third_party/androidx:androidx_test_runner_java",
     "//third_party/jni_zero:jni_zero_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",

@@ -13,6 +13,7 @@
 #import "ios/chrome/browser/menu/ui_bundled/action_factory+protected.h"
 #import "ios/chrome/browser/policy/model/policy_util.h"
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
@@ -91,8 +92,7 @@
 }
 
 - (UIAction*)actionToOpenInNewIncognitoTabWithBlock:(ProceduralBlock)block {
-  UIImage* image =
-      CustomSymbolWithPointSize(kIncognitoSymbol, kSymbolActionPointSize);
+  UIImage* image = SymbolWithPointSize(SymbolIncognito, kSymbolActionPointSize);
   ProceduralBlock completionBlock =
       [self recordMobileWebContextMenuOpenTabActionWithBlock:block];
 
@@ -106,42 +106,38 @@
 - (UIAction*)actionToOpenInNewWindowWithURL:(const GURL&)URL
                              activityOrigin:
                                  (WindowActivityOrigin)activityOrigin {
-  id<SceneCommands> windowOpener =
-      HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
-
-  UIImage* image = DefaultSymbolWithPointSize(kNewWindowActionSymbol,
-                                              kSymbolActionPointSize);
   NSUserActivity* activity = ActivityToLoadURL(activityOrigin, URL);
-  return [self actionWithTitle:l10n_util::GetNSString(
-                                   IDS_IOS_CONTENT_CONTEXT_OPENINNEWWINDOW)
-                         image:image
-                          type:MenuActionType::OpenInNewWindow
-                         block:^{
-                           [windowOpener openNewWindowWithActivity:activity];
-                         }];
+  return [self actionToOpenInNewWindowWithActivity:activity];
 }
 
 - (UIAction*)actionToOpenInNewWindowWithActivity:(NSUserActivity*)activity {
-  id<SceneCommands> windowOpener =
-      HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
-
-  UIImage* image = DefaultSymbolWithPointSize(kNewWindowActionSymbol,
-                                              kSymbolActionPointSize);
-  return [self actionWithTitle:l10n_util::GetNSString(
-                                   IDS_IOS_CONTENT_CONTEXT_OPENINNEWWINDOW)
-                         image:image
-                          type:MenuActionType::OpenInNewWindow
-                         block:^{
-                           [windowOpener openNewWindowWithActivity:activity];
-                         }];
+  AttachMenuScenarioToActivity(activity, self.scenario);
+  base::WeakPtr<Browser> weakBrowser = self.browser->AsWeakPtr();
+  UIWindowSceneActivationAction* action = [UIWindowSceneActivationAction
+       actionWithIdentifier:nil
+            alternateAction:nil
+      configurationProvider:^UIWindowSceneActivationConfiguration*(
+          UIWindowSceneActivationAction* activationAction) {
+        Browser* browser = weakBrowser.get();
+        if (!browser || !browser->GetProfile()) {
+          return nil;
+        }
+        return CreateWindowSceneActivationConfiguration(
+            activity, browser->GetProfile(), browser->GetSceneState().scene);
+      }];
+  action.title =
+      l10n_util::GetNSString(IDS_IOS_CONTENT_CONTEXT_OPENINNEWWINDOW);
+  action.image =
+      SymbolWithPointSize(SymbolNewWindowAction, kSymbolActionPointSize);
+  return action;
 }
 
 - (UIAction*)actionOpenImageWithURL:(const GURL&)URL
                          completion:(ProceduralBlock)completion {
   UrlLoadParams params = UrlLoadParams::InCurrentTab(URL);
   base::WeakPtr<Browser> weakBrowser = self.browser->AsWeakPtr();
-  UIImage* image = DefaultSymbolWithPointSize(kOpenImageActionSymbol,
-                                              kSymbolActionPointSize);
+  UIImage* image =
+      SymbolWithPointSize(SymbolOpenImageAction, kSymbolActionPointSize);
   UIAction* action = [self
       actionWithTitle:l10n_util::GetNSString(IDS_IOS_CONTENT_CONTEXT_OPENIMAGE)
                 image:image
@@ -164,7 +160,7 @@
                                                (ProceduralBlock)completion {
   base::WeakPtr<Browser> weakBrowser = self.browser->AsWeakPtr();
   UIImage* image =
-      CustomSymbolWithPointSize(kPhotoBadgePlusSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolPhotoBadgePlus, kSymbolActionPointSize);
   UIAction* action =
       [self actionWithTitle:l10n_util::GetNSString(
                                 IDS_IOS_CONTENT_CONTEXT_OPENIMAGENEWTAB)
@@ -186,8 +182,8 @@
 - (UIAction*)actionToOpenNewTabWithBlock:(ProceduralBlock)block {
   UIAction* action =
       [self actionWithTitle:l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_NEW_TAB)
-                      image:DefaultSymbolWithPointSize(kNewTabActionSymbol,
-                                                       kSymbolActionPointSize)
+                      image:SymbolWithPointSize(SymbolNewTabAction,
+                                                kSymbolActionPointSize)
                        type:MenuActionType::OpenNewTab
                       block:block];
   if (IsIncognitoModeForced(self.browser->GetProfile()->GetPrefs())) {
@@ -200,8 +196,8 @@
   UIAction* action =
       [self actionWithTitle:l10n_util::GetNSString(
                                 IDS_IOS_TOOLS_MENU_NEW_INCOGNITO_TAB)
-                      image:CustomSymbolWithPointSize(kIncognitoSymbol,
-                                                      kSymbolActionPointSize)
+                      image:SymbolWithPointSize(SymbolIncognito,
+                                                kSymbolActionPointSize)
                        type:MenuActionType::OpenNewIncognitoTab
                       block:block];
   if (IsIncognitoModeDisabled(self.browser->GetProfile()->GetPrefs())) {
@@ -229,14 +225,13 @@
 - (UIAction*)actionToCloseCurrentTab {
   __weak id<BrowserCoordinatorCommands> handler = HandlerForProtocol(
       self.browser->GetCommandDispatcher(), BrowserCoordinatorCommands);
-  UIAction* action =
-      [self actionWithTitle:l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_CLOSE_TAB)
-                      image:DefaultSymbolWithPointSize(kXMarkSymbol,
-                                                       kSymbolActionPointSize)
-                       type:MenuActionType::CloseCurrentTabs
-                      block:^{
-                        [handler closeCurrentTab];
-                      }];
+  UIAction* action = [self
+      actionWithTitle:l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_CLOSE_TAB)
+                image:SymbolWithPointSize(SymbolXMark, kSymbolActionPointSize)
+                 type:MenuActionType::CloseCurrentTabs
+                block:^{
+                  [handler closeCurrentTab];
+                }];
   action.attributes = UIMenuElementAttributesDestructive;
   return action;
 }
@@ -246,8 +241,8 @@
       self.browser->GetCommandDispatcher(), QRScannerCommands);
   return [self
       actionWithTitle:l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_QR_SCANNER)
-                image:DefaultSymbolWithPointSize(kQRCodeFinderActionSymbol,
-                                                 kSymbolActionPointSize)
+                image:SymbolWithPointSize(SymbolQRCodeFinderAction,
+                                          kSymbolActionPointSize)
                  type:MenuActionType::ShowQRScanner
                 block:^{
                   [handler showQRScanner];
@@ -260,8 +255,8 @@
   return
       [self actionWithTitle:l10n_util::GetNSString(
                                 IDS_IOS_TOOLS_MENU_LENS_CAMERA_SEARCH)
-                      image:CustomSymbolWithPointSize(kCameraLensSymbol,
-                                                      kSymbolActionPointSize)
+                      image:SymbolWithPointSize(SymbolCameraLens,
+                                                kSymbolActionPointSize)
                        type:MenuActionType::LensCameraSearch
                       block:^{
                         OpenLensInputSelectionCommand* command =
@@ -292,10 +287,10 @@
 
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
   UIImage* image =
-      CustomSymbolWithPointSize(kGooglePhotosSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolGooglePhotos, kSymbolActionPointSize);
 #else
-  UIImage* image = DefaultSymbolWithPointSize(kSaveImageActionSymbol,
-                                              kSymbolActionPointSize);
+  UIImage* image =
+      SymbolWithPointSize(SymbolSaveImageAction, kSymbolActionPointSize);
 #endif
 
   return [self actionWithTitle:l10n_util::GetNSString(
@@ -315,8 +310,8 @@
       self.browser->GetCommandDispatcher(), BrowserCoordinatorCommands);
   return [self
       actionWithTitle:l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_VOICE_SEARCH)
-                image:DefaultSymbolWithPointSize(kMicrophoneSymbol,
-                                                 kSymbolActionPointSize)
+                image:SymbolWithPointSize(SymbolMicrophone,
+                                          kSymbolActionPointSize)
                  type:MenuActionType::StartVoiceSearch
                 block:^{
                   [handler startVoiceSearch];
@@ -328,15 +323,14 @@
       HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
   UIAction* action = [self
       actionWithTitle:l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_NEW_SEARCH)
-                image:DefaultSymbolWithPointSize(kSearchSymbol,
-                                                 kSymbolActionPointSize)
+                image:SymbolWithPointSize(SymbolSearch, kSymbolActionPointSize)
                  type:MenuActionType::StartNewSearch
                 block:^{
                   OpenNewTabCommand* command =
                       [OpenNewTabCommand commandWithIncognito:NO];
                   command.shouldFocusOmnibox = YES;
                   [UIView performWithoutAnimation:^{
-                    [handler openURLInNewTab:command];
+              [handler openURLInNewTab:command];
                   }];
                 }];
 
@@ -353,15 +347,15 @@
   UIAction* action =
       [self actionWithTitle:l10n_util::GetNSString(
                                 IDS_IOS_TOOLS_MENU_NEW_INCOGNITO_SEARCH)
-                      image:CustomSymbolWithPointSize(kIncognitoSymbol,
-                                                      kSymbolActionPointSize)
+                      image:SymbolWithPointSize(SymbolIncognito,
+                                                kSymbolActionPointSize)
                        type:MenuActionType::StartNewIncognitoSearch
                       block:^{
                         OpenNewTabCommand* command =
                             [OpenNewTabCommand commandWithIncognito:YES];
                         command.shouldFocusOmnibox = YES;
                         [UIView performWithoutAnimation:^{
-                          [handler openURLInNewTab:command];
+                  [handler openURLInNewTab:command];
                         }];
                       }];
 
@@ -381,6 +375,8 @@
           return;
         }
 
+        // TODO(b/541315801): C2PA: Clipboard images could have C2PA metadata;
+        // candidate to pass raw bytes.
         UIImage* image = [optionalImage.value().ToUIImage() copy];
         SearchImageWithLensCommand* command =
             [[SearchImageWithLensCommand alloc]
@@ -392,8 +388,8 @@
   return
       [self actionWithTitle:l10n_util::GetNSString(
                                 IDS_IOS_SEARCH_COPIED_IMAGE_WITH_LENS)
-                      image:DefaultSymbolWithPointSize(kClipboardActionSymbol,
-                                                       kSymbolActionPointSize)
+                      image:SymbolWithPointSize(SymbolClipboardAction,
+                                                kSymbolActionPointSize)
                        type:MenuActionType::SearchCopiedImage
                       block:^{
                         ClipboardRecentContent::GetInstance()
@@ -422,8 +418,8 @@
   return
       [self actionWithTitle:l10n_util::GetNSString(
                                 IDS_IOS_TOOLS_MENU_SEARCH_COPIED_IMAGE)
-                      image:DefaultSymbolWithPointSize(kClipboardActionSymbol,
-                                                       kSymbolActionPointSize)
+                      image:SymbolWithPointSize(SymbolClipboardAction,
+                                                kSymbolActionPointSize)
                        type:MenuActionType::SearchCopiedImage
                       block:^{
                         ClipboardRecentContent::GetInstance()
@@ -456,8 +452,8 @@
   return
       [self actionWithTitle:l10n_util::GetNSString(
                                 IDS_IOS_TOOLS_MENU_VISIT_COPIED_LINK)
-                      image:DefaultSymbolWithPointSize(kClipboardActionSymbol,
-                                                       kSymbolActionPointSize)
+                      image:SymbolWithPointSize(SymbolClipboardAction,
+                                                kSymbolActionPointSize)
                        type:MenuActionType::VisitCopiedLink
                       block:^{
                         ClipboardRecentContent::GetInstance()
@@ -490,8 +486,8 @@
   return
       [self actionWithTitle:l10n_util::GetNSString(
                                 IDS_IOS_TOOLS_MENU_SEARCH_COPIED_TEXT)
-                      image:DefaultSymbolWithPointSize(kClipboardActionSymbol,
-                                                       kSymbolActionPointSize)
+                      image:SymbolWithPointSize(SymbolClipboardAction,
+                                                kSymbolActionPointSize)
                        type:MenuActionType::SearchCopiedText
                       block:^{
                         ClipboardRecentContent::GetInstance()
@@ -504,8 +500,8 @@
   id<SceneCommands> handler =
       HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
   return [self actionWithTitle:@"Open AI menu"
-                         image:DefaultSymbolWithPointSize(
-                                   kMagicStackSymbol, kSymbolActionPointSize)
+                         image:SymbolWithPointSize(SymbolMagicStack,
+                                                   kSymbolActionPointSize)
                           type:MenuActionType::AIPrototyping
                          block:^{
                            [handler openAIMenu];

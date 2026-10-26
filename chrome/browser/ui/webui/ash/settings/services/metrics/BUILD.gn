@@ -17,7 +17,6 @@ static_library("metrics") {
   public_deps = [
     "//ash/webui/settings/public/constants:mojom",
     "//base",
-    "//chrome/browser:browser_public_dependencies",
     "//chrome/browser/ui/webui/ash/settings/search/mojom",
     "//components/metrics",
     "//components/prefs",
@@ -58,6 +57,7 @@ source_set("unit_tests") {
     "//chrome/browser/ui/webui/ash/settings/test_support",
     "//chrome/common:constants",
     "//chrome/test:test_support",
+    "//chrome/test/base:testing_browser_process",
     "//chromeos/ash/components/login/login_state",
     "//components/account_id",
     "//components/metrics",

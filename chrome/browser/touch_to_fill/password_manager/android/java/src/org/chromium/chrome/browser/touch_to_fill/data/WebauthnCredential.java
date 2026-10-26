@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.touch_to_fill.data;
 
 import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
 
 import org.chromium.build.annotations.NullMarked;
 
@@ -33,22 +34,22 @@ public class WebauthnCredential implements CredentialBase {
     }
 
     @CalledByNative
-    public String getRpId() {
+    public @JniType("std::string") String getRpId() {
         return mRpId;
     }
 
     @CalledByNative
-    public byte[] getCredentialId() {
+    public @JniType("std::vector<uint8_t>") byte[] getCredentialId() {
         return mCredentialId;
     }
 
     @CalledByNative
-    public byte[] getUserId() {
+    public @JniType("std::vector<uint8_t>") byte[] getUserId() {
         return mUserId;
     }
 
     @CalledByNative
-    public String getUsername() {
+    public @JniType("std::string") String getUsername() {
         return mUsername;
     }
 }

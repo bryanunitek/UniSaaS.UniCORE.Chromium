@@ -7,7 +7,6 @@ package org.chromium.chrome.browser.omnibox.suggestions;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
-import android.content.res.Resources;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.AttributeSet;
@@ -17,6 +16,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.accessibility.AccessibilityEvent;
 
+import androidx.annotation.Px;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
@@ -32,6 +32,8 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.OmniboxMetrics;
 import org.chromium.chrome.browser.omnibox.R;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
+import org.chromium.chrome.browser.omnibox.suggestions.SelectionController.TraversalMode;
 import org.chromium.components.omnibox.OmniboxFeatures;
 import org.chromium.ui.base.KeyNavigationUtil;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
@@ -66,17 +68,20 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
     private final RecyclerViewSelectionController mSelectionController;
     private final Handler mHandler;
     private final OmniboxViewHolderFactory mViewHolderFactory;
-    private @Nullable PreWarmingRecycledViewPool mRecycledViewPool;
+    private final PreWarmingRecycledViewPool mRecycledViewPool;
+    private final HeaderDecoration mHeaderDecoration;
 
+    private @Nullable SuggestionsOmtOverlayView mOmtOverlayView;
     private @Nullable OmniboxSuggestionsDropdownAdapter mAdapter;
     private @Nullable GestureObserver mGestureObserver;
     private @Nullable NavigationListener mNavigationListener;
+    private @Nullable OmniboxResourceProvider mResourceProvider;
     private float mChildVerticalTranslation;
     private float mChildAlpha = 1.0f;
 
-    private final int mBaseBottomPadding;
-    private final int mBaseTopPadding;
-    private @SelectionController.Mode int mSelectionMode;
+    private @Px int mBaseBottomPadding;
+    private @Px int mBaseTopPadding;
+    private @TraversalMode int mSelectionMode;
 
     /**
      * Interface that will receive notifications when the user is interacting with an item on the
@@ -115,6 +120,8 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
         private @Nullable Runnable mSuggestionDropdownOverscrolledToTopListener;
         private @Nullable Callback<Integer> mScrollOffsetListener;
 
+        // TODO(https://crbug.com/568621837): Extract SuggestionLayoutScrollListener out of
+        // OmniboxSuggestionsDropdown into its own top-level file.
         public SuggestionLayoutScrollListener(Context context) {
             super(context);
             mIsScrolledToTop = true;
@@ -129,9 +136,7 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
             super.onInitializeAccessibilityNodeInfoForItem(recycler, state, host, info);
             // Suppress the default "X of Y" announcement for the entire list for TalkBack to
             // avoid verbosity. Announcement of position within its group is already provided.
-            if (OmniboxFeatures.sOmniboxItemDecoration.isEnabled()) {
-                info.setCollectionItemInfo(null);
-            }
+            info.setCollectionItemInfo(null);
         }
 
         @Override
@@ -182,7 +187,7 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
         /* package */ int updateKeyboardVisibilityAndScroll(
                 int resultingDeltaY, int requestedDeltaY) {
             // Change keyboard visibility only once per gesture.
-            // This helps in situations where the user interacts with the horizontal caoursel (e.g.
+            // This helps in situations where the user interacts with the horizontal carousel (e.g.
             // the Most Visited Sites), where a horizontal finger swipe could result in a series of
             // keyboard show/hide events.
             if (mCurrentGestureAffectedKeyboardState) return resultingDeltaY;
@@ -281,6 +286,10 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
             mSuggestionDropdownOverscrolledToTopListener = listener;
         }
 
+        /**
+         * @param listener A listener invoked with the computed vertical scroll offset whenever the
+         *     list scrolls vertically.
+         */
         public void setScrollOffsetListener(Callback<Integer> listener) {
             mScrollOffsetListener = listener;
         }
@@ -290,6 +299,7 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
      * Constructs a new list designed for containing omnibox suggestions.
      *
      * @param context Context used for contained views.
+     * @param attrs Attribute set from layout inflation.
      */
     public OmniboxSuggestionsDropdown(Context context, AttributeSet attrs) {
         this(context, attrs, new SuggestionLayoutScrollListener(context));
@@ -302,57 +312,58 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
             SuggestionLayoutScrollListener suggestionLayoutScrollListener) {
         super(context, attrs, android.R.attr.dropDownListViewStyle);
 
-        try (TimingMetric metric =
-                        OmniboxMetrics.recordSuggestionsDropdownAsyncInflationThreadTime();
-                TimingMetric metric2 =
-                        OmniboxMetrics.recordSuggestionsDropdownAsyncInflationWallTime();
+        try (TimingMetric metric = OmniboxMetrics.recordSuggestionsDropdownInflationThreadTime();
+                TimingMetric metric2 = OmniboxMetrics.recordSuggestionsDropdownInflationWallTime();
                 TraceEvent tracing = TraceEvent.scoped("OmniboxSuggestionsDropdown.Constructor")) {
-            boolean runsOnExpectedThread =
-                    OmniboxFeatures.sAsyncViewInflation.isEnabled()
-                            ? !ThreadUtils.runningOnUiThread()
-                            : ThreadUtils.runningOnUiThread();
             OmniboxMetrics.recordSuggestionsDropdownInflationThreadMatchesExpectedThread(
-                    runsOnExpectedThread);
+                    !ThreadUtils.runningOnUiThread());
             mHandler = new Handler(Looper.getMainLooper());
 
-            setFocusable(true);
-            setFocusableInTouchMode(true);
+            setFocusable(/* focusable= */ true);
+            setFocusableInTouchMode(/* focusable= */ true);
             setId(R.id.omnibox_suggestions_dropdown);
 
             // By default RecyclerViews come with item animators.
             setItemAnimator(null);
             addItemDecoration(new SuggestionHorizontalDivider(context));
 
-            if (OmniboxFeatures.sOmniboxItemDecoration.isEnabled()) {
-                addItemDecoration(new GroupSeparatorDecoration(context));
-                addItemDecoration(new HeaderDecoration(context));
-            }
+            addItemDecoration(new GroupSeparatorDecoration(context));
+            mHeaderDecoration = new HeaderDecoration(context);
+            addItemDecoration(mHeaderDecoration);
 
             mLayoutScrollListener = suggestionLayoutScrollListener;
             setLayoutManager(mLayoutScrollListener);
 
-            mSelectionMode = SelectionController.Mode.WRAPPING_WITH_SENTINEL;
+            mSelectionMode = TraversalMode.WRAPPING_WITH_SENTINEL;
             mSelectionController =
                     new RecyclerViewSelectionController(mLayoutScrollListener, mSelectionMode);
             addOnChildAttachStateChangeListener(mSelectionController);
 
-            final Resources resources = context.getResources();
-            mBaseBottomPadding =
-                    resources.getDimensionPixelOffset(
-                            R.dimen.omnibox_suggestion_list_padding_bottom);
-            mBaseTopPadding =
-                    resources.getDimensionPixelOffset(R.dimen.omnibox_suggestion_list_padding_top);
-            this.setPaddingRelative(0, mBaseTopPadding, 0, mBaseBottomPadding);
-
             // Disable the scrollbar since it causes the hover events happening near the
             // scrollbar not dispatched to the underlying views.
-            setVerticalScrollBarEnabled(false);
+            setVerticalScrollBarEnabled(/* verticalScrollBarEnabled= */ false);
 
             mViewHolderFactory = new OmniboxViewHolderFactory();
-            if (OmniboxFeatures.sAsyncViewInflation.isEnabled()) {
-                mRecycledViewPool = new PreWarmingRecycledViewPool(mViewHolderFactory, context);
-            }
+            mRecycledViewPool = new PreWarmingRecycledViewPool(mViewHolderFactory, context);
         }
+    }
+
+    /**
+     * Sets the resource provider. This is primarily called during binding which occurs on the UI
+     * thread post inflation.
+     *
+     * @param resourceProvider Provider for omnibox resources.
+     */
+    public void setResourceProvider(OmniboxResourceProvider resourceProvider) {
+        if (mResourceProvider == resourceProvider || resourceProvider == null) return;
+        mResourceProvider = resourceProvider;
+        mHeaderDecoration.setHeaderStartPadding(mResourceProvider.getHeaderStartPadding());
+    }
+
+    /** Updates the dropdown visuals to reflect the resource provider's color scheme. */
+    public void updateVisualsForState() {
+        assert mResourceProvider != null;
+        mHeaderDecoration.setIsIncognito(mResourceProvider.isIncognito());
     }
 
     /**
@@ -365,14 +376,29 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
 
         // Set the recycled view pool AFTER the adapter is set. Otherwise,
         // RecyclerView.setAdapter() will clear the pre-warmed pool.
-        if (mRecycledViewPool != null) {
-            setRecycledViewPool(mRecycledViewPool);
-        }
+        setRecycledViewPool(mRecycledViewPool);
     }
 
     @Override
     protected void onSizeChanged(int w, int h, int oldW, int oldH) {
         mLayoutScrollListener.updateVisualScrollState();
+    }
+
+    @Override
+    protected void onVisibilityChanged(View changedView, int visibility) {
+        super.onVisibilityChanged(changedView, visibility);
+        if (mOmtOverlayView != null) {
+            // onVisibilityChanged is dispatched by the Android framework whenever this dropdown's
+            // visibility changes (via setVisibility) or whenever any ancestor container's
+            // visibility changes (e.g. parent container hidden/shown). Window-level visibility
+            // changes do not require explicit dropdown handling because:
+            // 1. Omnibox coordinator/mediator explicitly dismisses suggestions (setting dropdown
+            //    visibility to GONE) when the window loses focus or the activity pauses.
+            // 2. The overlay is a SurfaceView whose underlying platform surface is automatically
+            //    destroyed via surfaceDestroyed() when the window is hidden, cleanly unregistering
+            //    the native input receiver.
+            mOmtOverlayView.updateOverlayVisualState();
+        }
     }
 
     /** Get the Android View implementing suggestion list. */
@@ -382,9 +408,11 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
 
     /** Clean up resources and remove observers installed by this class. */
     public void destroy() {
-        if (mRecycledViewPool != null) {
-            mRecycledViewPool.destroy();
+        if (mOmtOverlayView != null) {
+            mOmtOverlayView.destroy();
+            mOmtOverlayView = null;
         }
+        mRecycledViewPool.clear();
         mGestureObserver = null;
     }
 
@@ -430,16 +458,22 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
         mSelectionController.reset();
     }
 
-    /** Keyboard select the first item in the suggestions list. */
-    public void selectFirstItem() {
-        if (mSelectionController.getItemCount() == 0) return;
-        mSelectionController.setPosition(0);
+    /**
+     * Keyboard select the first item in the suggestions list. Returns true if this selected an
+     * item, false if no item was selected.
+     */
+    public boolean selectFirstItem() {
+        if (mSelectionController.getItemCount() == 0) return false;
+        return mSelectionController.setPosition(0);
     }
 
-    /** Keyboard select the last item in the suggestions list. */
-    public void selectLastItem() {
-        if (mSelectionController.getItemCount() == 0) return;
-        mSelectionController.setPosition(mSelectionController.getItemCount() - 1);
+    /**
+     * Keyboard select the last item in the suggestions list. Returns true if this selected an item,
+     * false if no item was selected.
+     */
+    public boolean selectLastItem() {
+        if (mSelectionController.getItemCount() == 0) return false;
+        return mSelectionController.setPosition(mSelectionController.getItemCount() - 1);
     }
 
     /**
@@ -451,15 +485,12 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
     }
 
     /**
-     * Sets whether parking at sentinel is allowed.
+     * Sets the selection mode for the dropdown selection controller.
      *
-     * @param allow Whether parking at sentinel is allowed.
+     * @param mode The selection mode to use.
      */
-    public void setAllowParkingAtSentinel(boolean allow) {
-        mSelectionMode =
-                allow
-                        ? SelectionController.Mode.WRAPPING_WITH_SENTINEL
-                        : SelectionController.Mode.WRAPPING;
+    public void setSelectionMode(@TraversalMode int mode) {
+        mSelectionMode = mode;
         mSelectionController.setSelectionMode(mSelectionMode);
         mSelectionController.reset();
     }
@@ -491,6 +522,25 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
     }
 
     @Override
+    public void dispatchWindowFocusChanged(boolean hasWindowFocus) {
+        // When transferring a touch gesture from the background thread overlay SurfaceControl
+        // to the main Chrome window via transferTouchGesture, a transient window focus loss is
+        // reported on the main window.
+        // Standard View.onWindowFocusChanged(false) reacts to this by clearing the pressed state
+        // and cancelling pending tap runnables (prepress check), causing the first tap to be
+        // dropped.
+        // To prevent this cancellation, we ignore focus loss events on the dropdown subtree
+        // while a touch transfer is active.
+        if (!hasWindowFocus && mOmtOverlayView != null && mOmtOverlayView.isTouchTransferActive()) {
+            return;
+        }
+        super.dispatchWindowFocusChanged(hasWindowFocus);
+        if (mOmtOverlayView != null) {
+            mOmtOverlayView.updateOverlayVisualState();
+        }
+    }
+
+    @Override
     public void onChildAttachedToWindow(View child) {
         child.setAlpha(mChildAlpha);
         if (mChildVerticalTranslation != 0.0f) {
@@ -504,7 +554,7 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
         child.setAlpha(1.0f);
     }
 
-    /** Resests the tracked keyboard shown state to properly respond to scroll events. */
+    /** Resets the tracked keyboard shown state to properly respond to scroll events. */
     void resetScrollState() {
         mLayoutScrollListener.resetScrollState();
     }
@@ -518,6 +568,7 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
     }
 
     /**
+     * @param index Position index of the rendered zero-suggest item.
      * @return The Suggestion view at specific index.
      */
     public @Nullable View getDropdownItemViewForTest(int index) {
@@ -580,7 +631,11 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
             handleSelectionChange();
             return true;
         } else if (KeyNavigationUtil.isEnter(event)) {
-            if (selectedView != null && !hasAdditionalModifiers) {
+            if (selectedView != null) {
+                if (selectedView instanceof ActivatableSuggestionView) {
+                    return ((ActivatableSuggestionView) selectedView)
+                            .activate(event.getMetaState());
+                }
                 return selectedView.performClick();
             }
         }
@@ -619,6 +674,10 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
             if (mGestureObserver != null) {
                 mGestureObserver.onGesture(eventType == MotionEvent.ACTION_UP, ev.getEventTime());
             }
+        }
+        if (mOmtOverlayView != null
+                && (eventType == MotionEvent.ACTION_UP || eventType == MotionEvent.ACTION_CANCEL)) {
+            mOmtOverlayView.onGestureEnded();
         }
         return super.dispatchTouchEvent(ev);
     }
@@ -664,6 +723,18 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
         return mBaseTopPadding;
     }
 
+    /**
+     * Sets the top and bottom padding for the dropdown list.
+     *
+     * @param topPadding Top padding in pixels.
+     * @param bottomPadding Bottom padding in pixels.
+     */
+    public void setVerticalPadding(@Px int topPadding, @Px int bottomPadding) {
+        mBaseTopPadding = topPadding;
+        mBaseBottomPadding = bottomPadding;
+        this.setPaddingRelative(0, mBaseTopPadding, 0, mBaseBottomPadding);
+    }
+
     @VisibleForTesting
     @Override
     public @Nullable OmniboxSuggestionsDropdownAdapter getAdapter() {
@@ -672,5 +743,14 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
 
     SelectionController getSelectionControllerForTesting() {
         return mSelectionController;
+    }
+
+    /** Sets the active OMT overlay SurfaceView instance. */
+    void setOmtOverlayView(@Nullable SuggestionsOmtOverlayView view) {
+        mOmtOverlayView = view;
+    }
+
+    @Nullable SuggestionsOmtOverlayView getOmtOverlayViewForTesting() {
+        return mOmtOverlayView;
     }
 }

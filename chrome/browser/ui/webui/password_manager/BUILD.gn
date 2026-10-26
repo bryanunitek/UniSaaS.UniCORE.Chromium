@@ -22,6 +22,7 @@ source_set("password_manager_ui_handler") {
     ":mojo_bindings",
     "//chrome/browser/password_manager",
     "//chrome/browser/sync",
+    "//chrome/browser/ui/browser_window",
     "//components/password_manager/core/browser",
     "//components/password_manager/core/browser/export",
     "//components/password_manager/core/browser/features:password_features",
@@ -33,7 +34,6 @@ source_set("password_manager_ui_handler") {
 source_set("notification_card") {
   sources = [ "notification_card.cc" ]
   public = [ "notification_card.h" ]
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
   deps = [
     "//base",
     "//chrome/browser/profiles:profile",
@@ -52,7 +52,6 @@ source_set("notification_card") {
 source_set("notification_cards_handler") {
   sources = [ "notification_cards_handler.cc" ]
   public = [ "notification_cards_handler.h" ]
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
   deps = [
     ":notification_card",
     "//base",
@@ -60,12 +59,16 @@ source_set("notification_cards_handler") {
     "//chrome/browser/extensions/api/passwords_private",
     "//chrome/browser/lifetime",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/signin",
     "//chrome/browser/sync",
     "//chrome/browser/ui/webui/password_manager/notification_cards",
-    "//components/os_crypt/async/browser",
-    "//components/os_crypt/async/common",
+    "//chrome/browser/webauthn",
+    "//components/os_crypt/browser",
+    "//components/os_crypt/common",
     "//components/password_manager/core/common",
     "//components/prefs",
+    "//components/signin/public/base",
+    "//components/signin/public/identity_manager",
     "//content/public/browser",
     "//ui/base",
   ]
@@ -83,7 +86,6 @@ source_set("password_manager_ui") {
   public_deps = [
     ":mojo_bindings",
     ":password_manager_ui_handler",
-    "//chrome/browser:browser_public_dependencies",
     "//content/public/browser",
     "//mojo/public/cpp/bindings",
     "//ui/webui",
@@ -104,12 +106,17 @@ source_set("password_manager_ui") {
     "//chrome/browser/sync",
     "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/webui:extension_control_handler",
     "//chrome/browser/ui/webui:favicon_source",
+    "//chrome/browser/ui/webui:managed_ui_handler",
     "//chrome/browser/ui/webui:plural_string_handler",
+    "//chrome/browser/ui/webui:policy_indicator_localized_strings_provider",
+    "//chrome/browser/ui/webui:theme_source",
     "//chrome/browser/ui/webui/page_not_available_for_guest",
     "//chrome/browser/ui/webui/sanitized_image:sanitized_image_source",
     "//chrome/browser/ui/webui/settings",
     "//chrome/browser/web_applications",
+    "//chrome/browser/webauthn",
     "//chrome/common",
     "//components/favicon_base",
     "//components/password_manager/content/common",
@@ -142,10 +149,13 @@ source_set("unit_tests") {
     "//chrome/browser/password_manager:test_support",
     "//chrome/browser/sync",
     "//chrome/test:test_support",
+    "//chrome/test/base:chrome_render_view_host_test_harness",
+    "//chrome/test/base:testing_browser_process",
     "//components/affiliations/core/browser:test_support",
     "//components/password_manager/core/browser",
     "//components/password_manager/core/browser/features:password_features",
     "//components/password_manager/core/browser/password_store:test_support",
+    "//components/signin/public/base",
     "//content/test:test_support",
     "//testing/gmock",
     "//testing/gtest",

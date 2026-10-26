@@ -10,12 +10,12 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/infobars/confirm_infobar.h"
 #include "chrome/browser/ui/views/session_restore_infobar/session_restore_infobar_controller.h"
-#include "chrome/browser/ui/views/session_restore_infobar/session_restore_infobar_delegate.h"
+#include "chrome/browser/ui/views/session_restore_infobar/session_restore_infobar_manager.h"
 #include "chrome/browser/ui/webui/test_support/webui_interactive_test_mixin.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/branded_strings.h"
@@ -32,6 +32,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/animation/animation_test_api.h"
 #include "url/gurl.h"
 
 namespace session_restore_infobar {
@@ -63,7 +64,8 @@ class SessionRestoreInfobarInteractiveTest
  protected:
   bool IsDefaultContinueSession() const { return GetParam(); }
 
-  void CreateInfobar(Browser* browser, bool is_post_crash_launch) {
+  void CreateInfobar(BrowserWindowInterface* browser,
+                     bool is_post_crash_launch) {
     auto* controller =
         session_restore_infobar::SessionRestoreInfobarController::From(browser);
     controller->MaybeShowInfoBar(*browser->GetProfile(), is_post_crash_launch);
@@ -88,7 +90,8 @@ class SessionRestoreInfobarDefaultTest : public InteractiveBrowserTest {
       const SessionRestoreInfobarDefaultTest&) = delete;
 
  protected:
-  void CreateInfobar(Browser* browser, bool is_post_crash_launch) {
+  void CreateInfobar(BrowserWindowInterface* browser,
+                     bool is_post_crash_launch) {
     auto* controller =
         session_restore_infobar::SessionRestoreInfobarController::From(browser);
     controller->MaybeShowInfoBar(*browser->GetProfile(), is_post_crash_launch);
@@ -113,7 +116,8 @@ class SessionRestoreInfobarDefaultOffTest : public InteractiveBrowserTest {
       const SessionRestoreInfobarDefaultOffTest&) = delete;
 
  protected:
-  void CreateInfobar(Browser* browser, bool is_post_crash_launch) {
+  void CreateInfobar(BrowserWindowInterface* browser,
+                     bool is_post_crash_launch) {
     auto* controller =
         session_restore_infobar::SessionRestoreInfobarController::From(browser);
     controller->MaybeShowInfoBar(*browser->GetProfile(), is_post_crash_launch);
@@ -132,7 +136,7 @@ IN_PROC_BROWSER_TEST_F(SessionRestoreInfobarDefaultOffTest,
   RunTestSequence(
       WaitForShow(ConfirmInfoBar::kInfoBarElementId),
       CheckView(ConfirmInfoBar::kInfoBarElementId, [](ConfirmInfoBar* infobar) {
-        return static_cast<SessionRestoreInfoBarDelegate*>(infobar->delegate())
+        return static_cast<ConfirmInfoBarDelegate*>(infobar->delegate())
                    ->GetMessageText() ==
                l10n_util::GetStringUTF16(
                    IDS_SESSION_RESTORE_TURN_OFF_RESTORE_FROM_RESTART);
@@ -155,7 +159,7 @@ IN_PROC_BROWSER_TEST_F(SessionRestoreInfobarDefaultTest,
   RunTestSequence(
       WaitForShow(ConfirmInfoBar::kInfoBarElementId),
       CheckView(ConfirmInfoBar::kInfoBarElementId, [](ConfirmInfoBar* infobar) {
-        return static_cast<SessionRestoreInfoBarDelegate*>(infobar->delegate())
+        return static_cast<ConfirmInfoBarDelegate*>(infobar->delegate())
                    ->GetMessageText() ==
                l10n_util::GetStringUTF16(IDS_SESSION_RESTORE_TURN_ON);
       }));
@@ -173,7 +177,7 @@ IN_PROC_BROWSER_TEST_P(SessionRestoreInfobarInteractiveTest,
 // preferences are set to open the new tab page.
 IN_PROC_BROWSER_TEST_P(SessionRestoreInfobarInteractiveTest,
                        InfobarNotShownForOtherSettings) {
-  browser()->profile()->GetPrefs()->SetInteger(prefs::kRestoreOnStartup, 4);
+  browser()->GetProfile()->GetPrefs()->SetInteger(prefs::kRestoreOnStartup, 4);
 
   CreateInfobar(browser(), false);
   RunTestSequence(EnsureNotPresent(ConfirmInfoBar::kInfoBarElementId));
@@ -203,7 +207,7 @@ IN_PROC_BROWSER_TEST_F(SessionRestoreInfobarDefaultTest,
   RunTestSequence(
       WaitForShow(ConfirmInfoBar::kInfoBarElementId),
       CheckView(ConfirmInfoBar::kInfoBarElementId, [](ConfirmInfoBar* infobar) {
-        return static_cast<SessionRestoreInfoBarDelegate*>(infobar->delegate())
+        return static_cast<ConfirmInfoBarDelegate*>(infobar->delegate())
                    ->GetMessageText() ==
                l10n_util::GetStringUTF16(IDS_SESSION_RESTORE_TURN_ON);
       }));
@@ -252,7 +256,7 @@ IN_PROC_BROWSER_TEST_P(SessionRestoreInfobarInteractiveTest,
   RunTestSequence(WaitForShow(ConfirmInfoBar::kInfoBarElementId),
                   // Change the pref to open the new tab page.
                   Do([this]() {
-                    browser()->profile()->GetPrefs()->SetInteger(
+                    browser()->GetProfile()->GetPrefs()->SetInteger(
                         prefs::kRestoreOnStartup, 4);
                   }),
                   WaitForHide(ConfirmInfoBar::kInfoBarElementId));
@@ -310,7 +314,7 @@ IN_PROC_BROWSER_TEST_P(SessionRestoreInfobarInteractiveTest,
   RunTestSequence(WaitForShow(ConfirmInfoBar::kInfoBarElementId),
                   // Change the pref to continue where you left off.
                   Do([this]() {
-                    browser()->profile()->GetPrefs()->SetInteger(
+                    browser()->GetProfile()->GetPrefs()->SetInteger(
                         prefs::kRestoreOnStartup, 1);
                   }),
                   // The infobar should be hidden after the pref change.
@@ -343,14 +347,14 @@ IN_PROC_BROWSER_TEST_P(SessionRestoreInfobarInteractiveTest, MultipleMetrics) {
           : "SessionRestore.InfoBar.TurnOnSessionRestore";
 
   histogram_tester.ExpectBucketCount(
-      histogram_name, SessionRestoreInfoBarDelegate::InfobarAction::kShown, 1);
+      histogram_name, InfobarAction::kShown, 1);
 
   histogram_tester.ExpectBucketCount(
-      histogram_name, SessionRestoreInfoBarDelegate::InfobarAction::kDismissed,
+      histogram_name, InfobarAction::kDismissed,
       1);
 
   histogram_tester.ExpectBucketCount(
-      histogram_name, SessionRestoreInfoBarDelegate::InfobarAction::kIgnored,
+      histogram_name, InfobarAction::kIgnored,
       0);
 }
 
@@ -373,15 +377,28 @@ IN_PROC_BROWSER_TEST_P(SessionRestoreInfobarInteractiveTest, MetricsIgnored) {
           : "SessionRestore.InfoBar.TurnOnSessionRestore";
 
   histogram_tester.ExpectBucketCount(
-      histogram_name, SessionRestoreInfoBarDelegate::InfobarAction::kShown, 1);
+      histogram_name, InfobarAction::kShown, 1);
 
   histogram_tester.ExpectBucketCount(
-      histogram_name, SessionRestoreInfoBarDelegate::InfobarAction::kDismissed,
+      histogram_name, InfobarAction::kDismissed,
       0);
 
   histogram_tester.ExpectBucketCount(
-      histogram_name, SessionRestoreInfoBarDelegate::InfobarAction::kIgnored,
+      histogram_name, InfobarAction::kIgnored,
       1);
+}
+
+// Regression test for crbug.com/568176548: dismissing the session restore
+// infobar when animations are disabled must not destroy the InfoBarView while
+// InfoBarDismissed() is still on the stack before RemoveSelf() runs.
+IN_PROC_BROWSER_TEST_P(SessionRestoreInfobarInteractiveTest,
+                       DismissWithAnimationsDisabled) {
+  const auto render_mode = gfx::AnimationTestApi::SetRichAnimationRenderMode(
+      gfx::Animation::RichAnimationRenderMode::FORCE_DISABLED);
+  CreateInfobar(browser(), false);
+  RunTestSequence(WaitForShow(ConfirmInfoBar::kInfoBarElementId),
+                  PressButton(ConfirmInfoBar::kDismissButtonElementId),
+                  WaitForHide(ConfirmInfoBar::kInfoBarElementId));
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

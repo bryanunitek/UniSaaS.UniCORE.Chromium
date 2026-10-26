@@ -21,7 +21,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -38,7 +37,6 @@ import java.util.function.Supplier;
 
 /** Unit tests for {@link TabGroupCreationUiDelegate}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabGroupCreationUiDelegateUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -72,7 +70,6 @@ public class TabGroupCreationUiDelegateUnitTest {
         when(mTabModel.isIncognitoBranded()).thenReturn(false);
         mToken = Token.createRandom();
         when(mTab.getTabGroupId()).thenReturn(mToken);
-        when(mTab.getId()).thenReturn(1);
 
         mTabGroupCreationUiDelegate =
                 new TabGroupCreationUiDelegate(
@@ -116,7 +113,7 @@ public class TabGroupCreationUiDelegateUnitTest {
                         });
         mTabGroupCreationUiDelegate.newTabGroupFlow();
         openTabGroupUiContainer.get().run();
-        verify(mTabSwitcherPane).requestOpenTabGroupDialog(1);
+        verify(mTabSwitcherPane).requestOpenTabGroupDialog(mToken);
     }
 
     @Test
@@ -138,7 +135,7 @@ public class TabGroupCreationUiDelegateUnitTest {
                         });
         mTabGroupCreationUiDelegate.newTabGroupFlow();
         openTabGroupUiContainer.get().run();
-        verify(mTabSwitcherPane).requestOpenTabGroupDialog(1);
+        verify(mTabSwitcherPane).requestOpenTabGroupDialog(mToken);
     }
 
     @Test
@@ -162,6 +159,6 @@ public class TabGroupCreationUiDelegateUnitTest {
 
         verify(mPaneManager).focusPane(PaneId.TAB_SWITCHER);
         verify(mPaneManager).getPaneForId(PaneId.TAB_SWITCHER);
-        verify(mTabSwitcherPane, never()).requestOpenTabGroupDialog(anyInt());
+        verify(mTabSwitcherPane, never()).requestOpenTabGroupDialog(any());
     }
 }

@@ -18,57 +18,24 @@
   color: var(--color-side-panel-entry-icon);
 }
 
-.immersive-toolbar-container #play-pause,
-.immersive-toolbar-container #previousGranularity,
-.immersive-toolbar-container #nextGranularity {
+#toolbarContainer #play-pause,
+#toolbarContainer #previousGranularity,
+#toolbarContainer #nextGranularity {
   --cr-icon-button-focus-outline-color:
     var(--on-audio-player-focus-outline-color);
 }
 
-@media (forced-colors: active) {
-    #play-pause {
-    --cr-icon-button-fill-color: CanvasText;
-  }
-
-  cr-icon-button#color {
-    display: none;
-  }
-}
-
-.audio-background-inactive {
-  --audio-controls-background: transparent;
-  --audio-controls-right-margin: 2px;
-  --audio-controls-right-padding: 0px;
-}
-
-.audio-background-active {
-  --audio-controls-background: var(--color-sys-tonal-container);
-  --audio-controls-right-margin: 6px;
-  --audio-controls-right-padding: 4px;
-}
-
-.audio-background-immersive-enabled {
-  --audio-controls-background: var(--audio-player-background-color);
-  --audio-controls-right-margin: 8px;
-  --audio-controls-right-padding: 4px;
-}
-
 #audio-controls {
-  background: var(--audio-controls-background);
-  border-radius: 18px;
+  background: var(--audio-player-background-color);
+  border-radius: 100px;
   display: flex;
   flex-direction: row;
   align-items: center;
   height: fit-content;
-  margin-inline-end: var(--audio-controls-right-margin);
-  padding: 4px var(--audio-controls-right-padding) 4px 4px;
+  margin-inline-end: 8px;
+  padding: 0 6px;
   position: relative;
   z-index: 9998;
-}
-
-#audio-controls.audio-background-immersive-enabled {
-  border-radius: 100px;
-  padding: 0 6px;
 }
 
 .audio-controls {
@@ -77,68 +44,28 @@
 
 #audio-controls cr-icon-button {
   --cr-icon-button-fill-color: var(--audio-controls-icon-color-internal);
-}
-
-#audio-controls.audio-background-immersive-enabled cr-icon-button {
   margin: 4px 2px;
 }
 
-/* Separate CSS classes are needed instead of setting the style directly so
- * that when forced colors are active, the color menu isn't reshown through
- * the code used to manage toolbar overflows. */
-.hidden {
-  display: none;
-}
-
-.visibility-hidden {
-  visibility: hidden;
-}
-
-.granularity-container-when-active-true {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-}
-
-.granularity-container-when-active-false {
-  display: none;
-}
-
-#font-size-increase {
-  --cr-icon-button-fill-color: var(--color-sys-on-surface-subtle);
-}
-
-#font-size-decrease {
-  margin-inline-start: 12px;
-  --cr-icon-button-fill-color: var(--color-sys-on-surface-subtle);
-}
-
-#font-size-reset {
-  margin-inline-end: 4px;
-}
-
-.text-button {
+#line-focus-off {
+  --cr-button-text-color: var(--text-button-text-color);
+  background: var(--audio-player-background-color);
   border: none;
-  font-size: 13px;
+  margin-inline-end: auto;
+  position: relative;
+  z-index: 9998;
 }
 
-.toolbar-container {
-  --cr-icon-button-fill-color-default: var(--legacy-toolbar-icon-color);
-  --play-pause-icon-color: var(--legacy-audio-player-icon-color);
-  --rate-button-text-color: var(--legacy-toolbar-icon-color);
-  --audio-controls-icon-color-internal: var(--color-sys-on-surface-subtle);
+#granularity-container {
   display: flex;
   flex-direction: row;
   align-items: center;
-  overflow: visible;
-  padding: 6px 8px;
-  flex-wrap: var(--toolbar-flex-wrap);
 }
 
-.immersive-toolbar-container {
+#toolbarContainer {
   --cr-icon-button-fill-color-default: var(--toolbar-icon-color);
   --play-pause-icon-color: var(--audio-player-icon-color);
-  --rate-button-text-color: var(--audio-controls-icon-color);
+  --text-button-text-color: var(--audio-controls-icon-color);
   --audio-controls-icon-color-internal: var(--audio-controls-icon-color);
   background-color: var(--background-color);
   display: flex;
@@ -147,7 +74,6 @@
   justify-content: end;
   overflow: visible;
   padding: 16px;
-  flex-wrap: var(--toolbar-flex-wrap);
   font-family: var(--immersive-menu-font);
   font-size: var(--immersive-menu-font-size);
   font-style: normal;
@@ -157,59 +83,27 @@
   border: none;
 }
 
-.immersive-toolbar-container cr-icon-button {
-  --cr-icon-button-icon-size: 20px;
-  --cr-icon-button-size: 28px;
-  --cr-icon-button-hover-background-color:
-      var(--toolbar-icon-hover-background-color);
-  --cr-icon-button-focus-outline-color: var(--toolbar-focus-outline-color);
-}
-
-.announce-block {
-  width:1px;
-  height:1px;
-  overflow:hidden;
-  position: absolute;
-}
-
 /*
  * Based on styling for cr-icon-button.
  * The rate menu needs to use a text-based button instead of an icon-based
  * button in order for the rates to be properly localized. i.e. 1,5 vs. 1.5
  */
 #rate {
+  --cr-focus-outline-color: var(--on-audio-player-focus-outline-color);
+  --cr-button-text-color: var(--text-button-text-color);
   background-color: transparent;
   border: none;
   border-radius: 50%;
-  --cr-button-text-color: var(--rate-button-text-color);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 12px;
   font-weight: 500;
-  height: 24px;
-  margin: 4px;
+  height: 28px;
+  margin: 4px 2px;
   min-width: 0;
   padding: 0;
-  width: 24px;
-}
-
-.immersive-toolbar-container #rate {
-  --cr-focus-outline-color: var(--on-audio-player-focus-outline-color);
-  height: 28px;
   width: 28px;
-  margin: 4px 2px;
-}
-
-.separator {
-  border: 1px solid var(--color-side-panel-divider);
-  display: inline;
-  height: 20px;
-  margin: 6px 8px;
-  width: 0;
-  /* Ensure this stays above the line focus scrim. */
-  position: relative;
-  z-index: 9998;
 }
 
 .spinner {
@@ -218,14 +112,41 @@
   vertical-align: middle;
 }
 
-.more-options-icon {
-  margin: 8px 6px;
+#ai-playback-toggle {
+  --cr-icon-button-size: 32px;
+  background-color: var(--toggle-inactive-background-color);
+  --cr-icon-button-fill-color: var(--toolbar-icon-color);
+  border-radius: 50%;
 }
 
-#more-options-menu-dialog::part(dialog) {
-  min-width: 92px;
+#ai-playback-toggle:hover:not(.active) {
+  background-color: color-mix(
+      in srgb,
+      var(--toggle-active-background-color) 8%,
+      var(--toggle-inactive-background-color));
 }
 
-.immersive-font-size-menu::part(dialog) {
-  border-radius: var(--cornerRadii-medium-small, 12px);
+#ai-playback-toggle.active {
+  background-color: var(--toggle-active-background-color);
+  --cr-icon-button-fill-color: var(--background-color);
+  border-radius: 12px;
+}
+
+@media (forced-colors: active) {
+  cr-icon-button,
+  #audio-controls cr-icon-button,
+  #audio-controls #play-pause {
+    --cr-icon-button-fill-color: CanvasText;
+  }
+
+  #rate {
+    --cr-button-text-color: CanvasText;
+  }
+
+  #line-focus-off {
+    --cr-button-text-color: CanvasText;
+    background: transparent;
+    border: var(--cr-button-border,
+        1px solid var(--color-button-border, ButtonBorder));
+  }
 }

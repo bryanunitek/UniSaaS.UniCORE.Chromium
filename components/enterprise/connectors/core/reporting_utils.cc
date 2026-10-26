@@ -87,20 +87,6 @@ ProtoEventResult GetEventResult(EventResult event_result) {
   }
 }
 
-std::string ActionFromVerdictType(
-    safe_browsing::RTLookupResponse::ThreatInfo::VerdictType verdict_type) {
-  switch (verdict_type) {
-    case safe_browsing::RTLookupResponse::ThreatInfo::DANGEROUS:
-      return "BLOCK";
-    case safe_browsing::RTLookupResponse::ThreatInfo::WARN:
-      return "WARN";
-    case safe_browsing::RTLookupResponse::ThreatInfo::SAFE:
-      return "REPORT_ONLY";
-    case safe_browsing::RTLookupResponse::ThreatInfo::SUSPICIOUS:
-    case safe_browsing::RTLookupResponse::ThreatInfo::VERDICT_TYPE_UNSPECIFIED:
-      return "ACTION_UNKNOWN";
-  }
-}
 
 proto::TriggeredRuleInfo::Action ActionProtoFromVerdictType(
     safe_browsing::RTLookupResponse::ThreatInfo::VerdictType verdict_type) {
@@ -168,45 +154,6 @@ proto::UnscannedFileEvent::UnscannedReason ToProtoUnscannedReason(
   }
   if (unscanned_reason.empty()) {
     return proto::UnscannedFileEvent::UNSCANNED_REASON_UNKNOWN;
-  }
-  NOTREACHED();
-}
-
-proto::DataTransferEventTrigger ToProtoDataTransferEventTrigger(
-    const std::string& trigger) {
-  if (trigger == kFileDownloadDataTransferEventTrigger) {
-    return proto::DataTransferEventTrigger::FILE_DOWNLOAD;
-  }
-  if (trigger == kFileUploadDataTransferEventTrigger) {
-    return proto::DataTransferEventTrigger::FILE_UPLOAD;
-  }
-  if (trigger == kWebContentUploadDataTransferEventTrigger) {
-    return proto::DataTransferEventTrigger::WEB_CONTENT_UPLOAD;
-  }
-  if (trigger == kPagePrintDataTransferEventTrigger) {
-    return proto::DataTransferEventTrigger::PAGE_PRINT;
-  }
-  if (trigger == kClipboardCopyDataTransferEventTrigger) {
-    return proto::DataTransferEventTrigger::CLIPBOARD_COPY;
-  }
-  if (trigger == kUrlVisitedDataTransferEventTrigger) {
-    return proto::DataTransferEventTrigger::URL_VISITED;
-  }
-  if (trigger == kFileTransferDataTransferEventTrigger) {
-    return proto::DataTransferEventTrigger::FILE_TRANSFER;
-  }
-  if (trigger == kPageLoadDataTransferEventTrigger) {
-    return proto::DataTransferEventTrigger::PAGE_LOAD;
-  }
-  if (trigger == kMutationDataTransferEventTrigger) {
-    return proto::DataTransferEventTrigger::MUTATION;
-  }
-  if (trigger == kMouseActionDataTransferEventTrigger) {
-    return proto::DataTransferEventTrigger::MOUSE_ACTION;
-  }
-  if (trigger.empty()) {
-    return proto::DataTransferEventTrigger::
-        DATA_TRANSFER_EVENT_TRIGGER_TYPE_UNSPECIFIED;
   }
   NOTREACHED();
 }
@@ -285,6 +232,9 @@ proto::TriggeredRuleInfo::Action ActionProtoFromTriggerRuleAction(
     case TriggeredRule::Action::
         ContentAnalysisResponse_Result_TriggeredRule_Action_BLOCK:
       return proto::TriggeredRuleInfo::BLOCK;
+    case TriggeredRule::Action::
+        ContentAnalysisResponse_Result_TriggeredRule_Action_JUSTIFICATION_REQUIRED:
+      return proto::TriggeredRuleInfo::JUSTIFICATION_REQUIRED;
     case TriggeredRule::Action::
         ContentAnalysisResponse_Result_TriggeredRule_Action_KEEP_IN_MANAGED_CHROME:
       return proto::TriggeredRuleInfo::KEEP_IN_MANAGED_CHROME;
@@ -445,37 +395,9 @@ proto::TriggeredRuleInfo ConvertMatchedUrlNavigationRuleToTriggeredRuleInfo(
   triggered_rule_info.set_action(ActionProtoFromVerdictType(verdict_type));
   triggered_rule_info.set_has_watermarking(
       navigation_rule.has_watermark_message());
+  triggered_rule_info.set_has_screenshot_protection(
+      navigation_rule.block_screenshot());
   return triggered_rule_info;
-}
-
-void AddTriggeredRuleInfoToUrlFilteringInterstitialEvent(
-    const safe_browsing::RTLookupResponse& response,
-    base::DictValue& event) {
-  base::ListValue triggered_rule_info;
-
-  for (const safe_browsing::RTLookupResponse::ThreatInfo& threat_info :
-       response.threat_info()) {
-    base::DictValue triggered_rule;
-    triggered_rule.Set(kKeyTriggeredRuleName,
-                       threat_info.matched_url_navigation_rule().rule_name());
-    int rule_id = 0;
-    if (base::StringToInt(threat_info.matched_url_navigation_rule().rule_id(),
-                          &rule_id)) {
-      triggered_rule.Set(kKeyTriggeredRuleId, rule_id);
-    }
-    triggered_rule.Set(
-        kKeyUrlCategory,
-        threat_info.matched_url_navigation_rule().matched_url_category());
-    triggered_rule.Set(kKeyAction,
-                       ActionFromVerdictType(threat_info.verdict_type()));
-
-    if (threat_info.matched_url_navigation_rule().has_watermark_message()) {
-      triggered_rule.Set(kKeyHasWatermarking, true);
-    }
-
-    triggered_rule_info.Append(std::move(triggered_rule));
-  }
-  event.Set(kKeyTriggeredRuleInfo, std::move(triggered_rule_info));
 }
 
 std::optional<proto::PasswordBreachEvent> GetPasswordBreachEvent(
@@ -539,7 +461,7 @@ proto::SafeBrowsingPasswordReuseEvent GetPasswordReuseEvent(
 }
 
 proto::SafeBrowsingPasswordChangedEvent GetPasswordChangedEvent(
-    const std::string& user_name,
+    std::string_view user_name,
     const std::string& profile_identifier,
     const std::string& profile_username) {
   proto::SafeBrowsingPasswordChangedEvent event;
@@ -577,8 +499,12 @@ proto::SafeBrowsingInterstitialEvent GetInterstitialEvent(
     EventResult event_result,
     const std::string& profile_identifier,
     const std::string& profile_username,
-    const ReferrerChain& referrer_chain) {
+    const ReferrerChain& referrer_chain,
+    const std::string& tab_title) {
   proto::SafeBrowsingInterstitialEvent event;
+  if (!tab_title.empty()) {
+    event.set_tab_title(tab_title);
+  }
   event.set_url(url.spec());
   event.set_reason(GetInterstitialReason(reason));
   event.set_net_error_code(net_error_code);
@@ -599,8 +525,12 @@ proto::UrlFilteringInterstitialEvent GetUrlFilteringInterstitialEvent(
     const std::string& profile_identifier,
     const std::string& profile_username,
     const std::string& active_user,
-    const ReferrerChain& referrer_chain) {
+    const ReferrerChain& referrer_chain,
+    const std::string& tab_title) {
   proto::UrlFilteringInterstitialEvent event;
+  if (!tab_title.empty()) {
+    event.set_tab_title(tab_title);
+  }
   event.set_url(url.spec());
   EventResult event_result = GetEventResultFromThreatType(threat_type);
   event.set_clicked_through(event_result == EventResult::BYPASSED);
@@ -650,7 +580,7 @@ proto::UnscannedFileEvent GetUnscannedFileEvent(
     const std::string& file_name,
     const std::string& download_digest_sha256,
     const std::string& mime_type,
-    const std::string& trigger,
+    DataTransferEventTrigger trigger,
     const std::string& scan_id,
     const std::string& reason,
     const std::string& content_transfer_method,
@@ -667,7 +597,7 @@ proto::UnscannedFileEvent GetUnscannedFileEvent(
   event.set_file_name(file_name);
   event.set_download_digest_sha_256(download_digest_sha256);
   event.set_content_type(mime_type);
-  event.set_trigger(ToProtoDataTransferEventTrigger(trigger));
+  event.set_trigger(trigger);
   event.set_scan_id(scan_id);
   event.set_unscanned_reason(ToProtoUnscannedReason(reason));
 
@@ -701,7 +631,7 @@ proto::DlpSensitiveDataEvent GetDlpSensitiveDataEvent(
     const std::string& file_name,
     const std::string& download_digest_sha256,
     const std::string& mime_type,
-    const std::string& trigger,
+    DataTransferEventTrigger trigger,
     const std::string& scan_id,
     const std::string& content_transfer_method,
     const std::string& source_active_user_email,
@@ -722,7 +652,7 @@ proto::DlpSensitiveDataEvent GetDlpSensitiveDataEvent(
   event.set_file_name(file_name);
   event.set_download_digest_sha_256(download_digest_sha256);
   event.set_content_type(mime_type);
-  event.set_trigger(ToProtoDataTransferEventTrigger(trigger));
+  event.set_trigger(trigger);
   event.set_scan_id(scan_id);
 
   if (!content_transfer_method.empty()) {
@@ -773,7 +703,7 @@ proto::SafeBrowsingDangerousDownloadEvent GetDangerousDownloadEvent(
     const std::string& download_digest_sha256,
     const std::string& threat_type,
     const std::string& mime_type,
-    const std::string& trigger,
+    DataTransferEventTrigger trigger,
     const std::string& scan_id,
     const std::string& content_transfer_method,
     const std::string& profile_identifier,
@@ -791,7 +721,7 @@ proto::SafeBrowsingDangerousDownloadEvent GetDangerousDownloadEvent(
   event.set_download_digest_sha256(download_digest_sha256);
   event.set_threat_type(ToProtoThreatType(threat_type));
   event.set_content_type(mime_type);
-  event.set_trigger(ToProtoDataTransferEventTrigger(trigger));
+  event.set_trigger(trigger);
   event.set_scan_id(scan_id);
 
   if (!content_transfer_method.empty()) {
@@ -826,7 +756,7 @@ GetDataControlsSensitiveDataEvent(
     const std::string& source,
     const std::string& destination,
     const std::string& mime_type,
-    const std::string& trigger,
+    DataTransferEventTrigger trigger,
     const std::string& source_active_user_email,
     const std::string& content_area_account_email,
     const std::string& profile_identifier,
@@ -840,7 +770,7 @@ GetDataControlsSensitiveDataEvent(
   event.set_source(source);
   event.set_destination(destination);
   event.set_content_type(mime_type);
-  event.set_trigger(ToProtoDataTransferEventTrigger(trigger));
+  event.set_trigger(trigger);
 
   if (!content_area_account_email.empty()) {
     event.set_web_app_signed_in_account(content_area_account_email);
@@ -880,34 +810,6 @@ std::vector<std::string> GetLocalIpAddresses() {
   return ip_addresses;
 }
 
-void AddReferrerChainToEvent(
-    const google::protobuf::RepeatedPtrField<safe_browsing::ReferrerChainEntry>&
-        referrer_chain,
-    base::DictValue& event) {
-  base::ListValue referrers;
-  for (const auto& referrer : referrer_chain) {
-    if (!referrer.url().empty() || !referrer.ip_addresses().empty()) {
-      base::DictValue referrer_dict;
-      referrer_dict.Set("url", referrer.url());
-      if (referrer.ip_addresses().size() > 0) {
-        referrer_dict.Set("ip", referrer.ip_addresses()[0]);
-      }
-      referrers.Append(std::move(referrer_dict));
-    }
-  }
-  event.Set(kKeyReferrers, std::move(referrers));
-}
-
-void AddFrameUrlChainToEvent(
-    const google::protobuf::RepeatedPtrField<std::string>& frame_url_chain,
-    base::DictValue& event) {
-  base::ListValue iframe_urls;
-  for (const auto& frame_url : frame_url_chain) {
-    iframe_urls.Append(frame_url);
-  }
-  event.Set(kKeyIframeUrls, std::move(iframe_urls));
-}
-
 void MaybeTruncateLongUrls(proto::Event& event_variant) {
   switch (event_variant.event_case()) {
     case proto::Event::kPasswordReuseEvent: {
@@ -929,6 +831,9 @@ void MaybeTruncateLongUrls(proto::Event& event_variant) {
     }
     case proto::Event::kInterstitialEvent: {
       auto* event = event_variant.mutable_interstitial_event();
+      if (!event->tab_title().empty()) {
+        TRUNCATE_STRING_URL(event, tab_title);
+      }
       TRUNCATE_STRING_URL(event, url);
       TRUNCATE_REPEATED_STRING_URL(event, referral_urls);
       TRUNCATE_URL_INFO(event, url_info);
@@ -967,6 +872,9 @@ void MaybeTruncateLongUrls(proto::Event& event_variant) {
     }
     case proto::Event::kUrlFilteringInterstitialEvent: {
       auto* event = event_variant.mutable_url_filtering_interstitial_event();
+      if (!event->tab_title().empty()) {
+        TRUNCATE_STRING_URL(event, tab_title);
+      }
       TRUNCATE_STRING_URL(event, url);
       TRUNCATE_URL_INFO(event, url_info);
       TRUNCATE_REPEATED_STRING_URL(event, referrer_urls);
@@ -983,10 +891,9 @@ void MaybeTruncateLongUrls(proto::Event& event_variant) {
     case proto::Event::kExtensionTelemetryEvent:
     case proto::Event::kUrlNavigationEvent:
     case proto::Event::kSuspiciousUrlEvent:
-    case proto::Event::kPrototypeRawEvent:
-    case proto::Event::kTelomereEvent:
     case proto::Event::kSaasUsageReportEvent:
     case proto::Event::kBrowserLaunchEvent:
+    case proto::Event::kBrowserHistogramEvent:
     case proto::Event::EVENT_NOT_SET:
       break;
   }

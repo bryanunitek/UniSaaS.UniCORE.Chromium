@@ -8,6 +8,7 @@
 #include "base/functional/callback.h"
 #include "base/notreached.h"
 #include "build/build_config.h"
+#include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
@@ -23,10 +24,17 @@ namespace blink {
 
 class FontTableMatcher;
 
-class FontUniqueNameLookup {
+class PLATFORM_EXPORT FontUniqueNameLookup {
   USING_FAST_MALLOC(FontUniqueNameLookup);
 
  public:
+  enum class FontServiceConnectionState {
+    kNotSupported = 0,
+    kNotBound = 1,
+    kConnected = 2,
+    kDisconnected = 3,
+  };
+
   // Factory function to construct a platform specific font unique name lookup
   // instance. Client must not use this directly as it is thread
   // specific. Retrieve it from FontGlobalContext instead.
@@ -36,7 +44,11 @@ class FontUniqueNameLookup {
 
   FontUniqueNameLookup(const FontUniqueNameLookup&) = delete;
   FontUniqueNameLookup& operator=(const FontUniqueNameLookup&) = delete;
-  virtual ~FontUniqueNameLookup() = default;
+  // Out-of-line so that `font_table_matcher_` is destroyed inside this
+  // component. Subclasses outside it, such as in unit tests, would
+  // otherwise need the definition of FontTableMatcher and of the protobuf
+  // it holds.
+  virtual ~FontUniqueNameLookup();
 
   // Below: Methods for asynchronously retrieving the FontUniqueNameLookup
   // table. Currently needed on Windows, on other platforms the implementation
@@ -60,6 +72,13 @@ class FontUniqueNameLookup {
   // early in renderer startup, as opposed to PrepareFontUniqueNameLookup()
   // which is called when sync lookup is first needed.
   virtual void Init() {}
+
+  // Returns a local snapshot for crash diagnostics without binding a service or
+  // sending IPC. The connection can change immediately after this call.
+  virtual FontServiceConnectionState GetFontServiceConnectionStateForCrash()
+      const {
+    return FontServiceConnectionState::kNotSupported;
+  }
 
  protected:
   FontUniqueNameLookup();

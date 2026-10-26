@@ -7,13 +7,14 @@ import logging
 import urllib.parse
 
 # TODO(crbug.com/40641687): Figure out how to get httplib2 hermetically.
-import httplib2  # pylint: disable=import-error
+import httplib2
+
 
 from core import path_util
 from core.services import luci_auth
 
 path_util.AddPyUtilsToPath()
-from py_utils import retry_util  # pylint: disable=import-error
+from py_utils import retry_util
 
 
 # Some services pad JSON responses with a security prefix to prevent against
@@ -25,12 +26,16 @@ JSON_SECURITY_PREFIX = ")]}'"
 
 class RequestError(OSError):
   """Exception class for errors while making a request."""
+
   def __init__(self, request, response, content):
     self.request = request
     self.response = response
     self.content = content
-    message = u'%s returned HTTP Error %d: %s' % (
-        self.request, self.response.status, self.error_message)
+    message = '%s returned HTTP Error %d: %s' % (
+      self.request,
+      self.response.status,
+      self.error_message,
+    )
     # Note: the message is a unicode object, possibly with special characters,
     # so it needs to be turned into a str as expected by the constructor of
     # the base class.
@@ -85,8 +90,16 @@ def BuildRequestError(request, response, content):
 
 
 @retry_util.RetryOnException(ServerError, retries=3)
-def Request(url, method='GET', params=None, data=None, accept=None,
-            content_type='urlencoded', use_auth=False, retries=None):
+def Request(
+  url,
+  method='GET',
+  params=None,
+  data=None,
+  accept=None,
+  content_type='urlencoded',
+  use_auth=False,
+  retries=None,
+):
   """Perform an HTTP request of a given resource.
 
   Args:
@@ -145,7 +158,8 @@ def Request(url, method='GET', params=None, data=None, accept=None,
   logging.info('Making API request: %s', url)
   http = httplib2.Http()
   response, content = http.request(
-      url, method=method, body=body, headers=headers)
+    url, method=method, body=body, headers=headers
+  )
   if response.status != 200:
     raise BuildRequestError(url, response, content)
 

@@ -18,6 +18,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
+#include "base/notimplemented.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/lazy_thread_pool_task_runner.h"
 #include "base/task/sequenced_task_runner.h"
@@ -262,7 +263,8 @@ DevToolsFileWatcher::DevToolsFileWatcher(
 }
 
 DevToolsFileWatcher::~DevToolsFileWatcher() {
-  DCHECK(impl_task_runner()->RunsTasksInCurrentSequence());
+  CHECK(impl_task_runner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M161);
   shared_watcher_->RemoveListener(this);
 }
 
@@ -276,6 +278,15 @@ void DevToolsFileWatcher::InitSharedWatcher() {
 }
 
 void DevToolsFileWatcher::AddWatch(base::FilePath path) {
+#if BUILDFLAG(IS_ANDROID)
+  // DevToolsFileWatcher cannot watch files held by other Android apps.
+  // TODO(crbug.com/540021706): Implement watch logic for virtual document
+  // paths.
+  if (path.IsContentUri() || path.IsVirtualDocumentPath()) {
+    NOTIMPLEMENTED() << "Cannot watch this path: " << path.value();
+    return;
+  }
+#endif
   impl_task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&DevToolsFileWatcher::AddWatchOnImpl,
                                 base::Unretained(this), std::move(path)));

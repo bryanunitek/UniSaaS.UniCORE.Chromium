@@ -790,6 +790,12 @@ bool GuestViewBase::GuestCheckMediaAccessPermission(
   return false;
 }
 
+bool GuestViewBase::GuestShouldAllowRendererInitiatedCrossProcessNavigation(
+    bool is_outermost_main_frame_navigation) {
+  return ShouldAllowRendererInitiatedCrossProcessNavigation(
+      is_outermost_main_frame_navigation);
+}
+
 void GuestViewBase::LoadProgressChanged(double progress) {
   if (base::FeatureList::IsEnabled(features::kGuestViewMPArch)) {
     // The load state of the embedder does not affect the load state of the
@@ -1392,7 +1398,9 @@ bool GuestViewBase::IsPermissionRequestable(ContentSettingsType type) const {
 }
 
 std::optional<content::PermissionResult>
-GuestViewBase::OverridePermissionResult(ContentSettingsType type) const {
+GuestViewBase::OverridePermissionResult(
+    ContentSettingsType type,
+    const url::Origin& requesting_origin) const {
   return std::nullopt;
 }
 

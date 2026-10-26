@@ -7,23 +7,18 @@ package org.chromium.chrome.browser.feed;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 
-import androidx.test.filters.SmallTest;
-
 import com.google.protobuf.ByteString;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.components.feed.proto.FeedUiProto;
 
 /** Test for FeedLoggingParameters. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public final class FeedLoggingParametersTest {
     @Test
-    @SmallTest
     public void testFields() {
         FeedLoggingParameters params =
                 new FeedLoggingParameters(
@@ -41,7 +36,6 @@ public final class FeedLoggingParametersTest {
     }
 
     @Test
-    @SmallTest
     public void testFromProto() {
         FeedUiProto.LoggingParameters proto =
                 FeedUiProto.LoggingParameters.newBuilder()
@@ -61,7 +55,6 @@ public final class FeedLoggingParametersTest {
     }
 
     @Test
-    @SmallTest
     public void testFromProto_noRootEventId() {
         FeedUiProto.LoggingParameters proto =
                 FeedUiProto.LoggingParameters.newBuilder()

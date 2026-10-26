@@ -60,6 +60,7 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabHidingType;
 import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab.TabLaunchTypeUtils;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tabmodel.TabClosingSource;
@@ -75,6 +76,7 @@ import org.chromium.chrome.browser.toolbar.ControlContainer;
 import org.chromium.chrome.browser.toolbar.bottom.ScrollingBottomViewSceneLayer;
 import org.chromium.chrome.browser.toolbar.top.TopToolbarOverlayCoordinator;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeBottomChinSceneLayer;
+import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeTopScalpSceneLayer;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener.SwipeHandler;
 import org.chromium.components.embedder_support.util.UrlConstants;
@@ -133,9 +135,7 @@ public class LayoutManagerImpl
     private TabModelSelector mTabModelSelector;
 
     private final Callback<TabModel> mCurrentTabModelObserver =
-            (tabModel) -> {
-                tabModelSwitched(tabModel.isIncognitoBranded());
-            };
+            (tabModel) -> tabModelSwitched(tabModel.isIncognitoBranded());
     private TabModelSelectorTabObserver mTabModelSelectorTabObserver;
 
     // An observer for watching TabModels changes events.
@@ -218,14 +218,7 @@ public class LayoutManagerImpl
         @Override
         public void willAddTab(Tab tab, @TabLaunchType int type) {
             // Open the new tab
-            if (type == TabLaunchType.FROM_RESTORE
-                    || type == TabLaunchType.FROM_REPARENTING
-                    || type == TabLaunchType.FROM_REPARENTING_BACKGROUND
-                    || type == TabLaunchType.FROM_EXTERNAL_APP
-                    || type == TabLaunchType.FROM_LAUNCHER_SHORTCUT
-                    || type == TabLaunchType.FROM_STARTUP
-                    || type == TabLaunchType.FROM_APP_WIDGET
-                    || type == TabLaunchType.FROM_SYNC_BACKGROUND) {
+            if (TabLaunchTypeUtils.shouldSkipTabCreatingAnimation(type)) {
                 return;
             }
 
@@ -265,6 +258,14 @@ public class LayoutManagerImpl
         }
 
         @Override
+        public void willCloseTabs(List<Tab> tabs, boolean isAllTabs, boolean allowUndo) {
+            if (!isAllTabs) return;
+            assert !tabs.isEmpty();
+            boolean isIncognito = tabs.get(0).isIncognito();
+            tabsAllClosing(isIncognito);
+        }
+
+        @Override
         public void onFinishingTabClosure(Tab tab, @TabClosingSource int closingSource) {
             tabClosed(tab.getId(), tab.isIncognito(), false);
         }
@@ -290,24 +291,9 @@ public class LayoutManagerImpl
             tabClosed(tab.getId(), tab.isIncognito(), true);
         }
 
-        private boolean willAddedTabBeSelected(@TabLaunchType int launchType, boolean incognito) {
-            boolean isBackgroundLaunch;
-            switch (launchType) {
-                case TabLaunchType.FROM_LONGPRESS_BACKGROUND:
-                case TabLaunchType.FROM_LONGPRESS_BACKGROUND_IN_GROUP:
-                case TabLaunchType.FROM_RECENT_TABS:
-                case TabLaunchType.FROM_RESTORE_TABS_UI:
-                case TabLaunchType.FROM_SYNC_BACKGROUND:
-                case TabLaunchType.FROM_BROWSER_ACTIONS:
-                case TabLaunchType.FROM_COLLABORATION_BACKGROUND_IN_GROUP:
-                    isBackgroundLaunch = true;
-                    break;
-                default:
-                    isBackgroundLaunch = false;
-            }
-
-            return !isBackgroundLaunch
-                    || (!getTabModelSelector().isIncognitoSelected() && incognito);
+        boolean willAddedTabBeSelected(@TabLaunchType int launchType, boolean incognito) {
+            return TabLaunchTypeUtils.willAddedTabBeSelected(
+                    launchType, incognito, getTabModelSelector().isIncognitoSelected());
         }
     }
 
@@ -345,7 +331,7 @@ public class LayoutManagerImpl
      *
      * @param host A {@link LayoutManagerHost} instance.
      * @param contentContainer A {@link ViewGroup} for Android views to be bound to.
-     * @param tabContentManagerSupplier Supplier of the {@link TabContentManager} instance.
+     * @param tabContentManagerSupplier Supplier of the manager providing tab thumbnail snapshots.
      * @param toolbarThemeColorProvider {@link ToolbarThemeColorProvider} for the toolbar.
      */
     public LayoutManagerImpl(
@@ -378,6 +364,7 @@ public class LayoutManagerImpl
                     ScrollingBottomViewSceneLayer.class,
                     ContextualSearchPanel.class,
                     EdgeToEdgeBottomChinSceneLayer.class,
+                    EdgeToEdgeTopScalpSceneLayer.class,
                     StatusIndicatorCoordinator.getSceneOverlayClass()
                 };
 

@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "base/containers/circular_deque.h"
+#include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -34,6 +35,7 @@
 #include "components/viz/service/surfaces/surface_client.h"
 #include "components/viz/service/surfaces/surface_dependency_deadline.h"
 #include "components/viz/service/viz_service_export.h"
+#include "ui/gfx/display_color_spaces.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace gfx {
@@ -219,6 +221,9 @@ class VIZ_SERVICE_EXPORT Surface final : public FrameSinkObserver {
   const CompositorFrame& GetActiveFrame() const;
   const CompositorFrameMetadata& GetActiveFrameMetadata() const;
   const FrameIntervalInputs& GetFrameIntervalInputs() const;
+  gfx::ContentColorUsage GetActiveFrameContentColorUsage() const {
+    return active_frame_content_color_usage_;
+  }
 
   // ViewTransition needs to interpolate a new CompositorFrame from the active
   // one of this Surface. The interpolated new frame replaces the currently
@@ -335,6 +340,10 @@ class VIZ_SERVICE_EXPORT Surface final : public FrameSinkObserver {
     return pending_copy_surface_id_;
   }
 
+  const SurfaceDependencyDeadline* deadline_for_testing() const {
+    return deadline_.get();
+  }
+
   void ClearNonRootCopyRequests();
 
  private:
@@ -372,6 +381,7 @@ class VIZ_SERVICE_EXPORT Surface final : public FrameSinkObserver {
   // method will also update the observed sinks based on the referenced ranges
   // in the submitted compositor frame.
   void RecomputeActiveReferencedSurfaces();
+  void RecomputeActiveFrameContentColorUsage();
 
   void ActivatePendingFrame();
 
@@ -382,12 +392,23 @@ class VIZ_SERVICE_EXPORT Surface final : public FrameSinkObserver {
   // it can become pending or active.
   QueueFrameResult CommitFrame(FrameData frame);
 
-  // Resolve the activation deadline specified by |current_frame| into a wall
+  // Resolve the activation deadline specified by `current_frame` into a wall
   // time to be used by SurfaceDependencyDeadline.
   FrameDeadline ResolveFrameDeadline(const CompositorFrame& current_frame);
 
+  // Resolve per-dependency activation deadlines specified by `current_frame`
+  // into wall times to be used by SurfaceDependencyDeadline.
+  base::flat_map<SurfaceId, base::TimeTicks> ResolveDependencyDeadlines(
+      const CompositorFrame& current_frame);
+
+  // Resolves the view transition deadline into wall time to be used by
+  // SurfaceDependencyDeadline. Returns a null base::TimeTicks if there are no
+  // view transition dependencies or if no view transition deadline is specified.
+  base::TimeTicks ResolveViewTransitionDeadline(
+      const CompositorFrame& current_frame);
+
   // Updates the set of unresolved activation dependenices of the
-  // |current_frame|. If the deadline requested by the frame is 0 then no
+  // `current_frame`. If the deadline requested by the frame is 0 then no
   // dependencies will be added even if they're not yet available.
   void UpdateActivationDependencies(const CompositorFrame& current_frame);
 
@@ -417,6 +438,8 @@ class VIZ_SERVICE_EXPORT Surface final : public FrameSinkObserver {
   // A set of all valid SurfaceIds contained |last_surface_id_for_range_| to
   // avoid recompution.
   base::flat_set<SurfaceId> active_referenced_surfaces_;
+  gfx::ContentColorUsage active_frame_content_color_usage_ =
+      gfx::ContentColorUsage::kSRGB;
 
   // Allocation groups that this surface references by its active frame.
   base::flat_set<raw_ptr<SurfaceAllocationGroup, CtnExperimental>>

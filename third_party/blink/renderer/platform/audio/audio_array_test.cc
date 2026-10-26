@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #include "third_party/blink/renderer/platform/audio/audio_array.h"
 
 #include <limits>
@@ -61,6 +65,16 @@ TEST(AudioBusTest, HandleOOM) {
   // TryCreate should return nullptr instead of crashing.
   scoped_refptr<AudioBus> bus = AudioBus::TryCreate(2, 1ULL << 31);
   EXPECT_EQ(bus, nullptr);
+}
+
+TEST(AudioBusTest, TryCreateTooManyChannels) {
+  scoped_refptr<AudioBus> bus = AudioBus::TryCreate(33, 128);
+  EXPECT_EQ(bus, nullptr);
+}
+
+TEST(AudioBusDeathTest, CreateTooManyChannels) {
+  EXPECT_CHECK_DEATH(AudioBus::Create(33, 128, /*allocate=*/true));
+  EXPECT_CHECK_DEATH(AudioBus::Create(33, 128, /*allocate=*/false));
 }
 
 TEST(AudioBusTest, TryCreateBySampleRateConvertingInvalidSampleRate) {

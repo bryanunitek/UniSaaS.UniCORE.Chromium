@@ -11,8 +11,6 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/predictors/perform_network_context_prefetch.h"
 #include "chrome/browser/predictors/predictors_features.h"
@@ -21,6 +19,7 @@
 #include "chrome/browser/predictors/resource_prefetch_predictor.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/connection_allowlist_util.h"
 #include "content/public/browser/global_request_id.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
@@ -28,9 +27,11 @@
 #include "extensions/buildflags/buildflags.h"
 #include "net/base/load_flags.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/cpp/empty_url_loader_client.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/url_loader_factory_builder.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -99,8 +100,8 @@ struct PrefetchInfo {
       : url(url),
         stats(std::make_unique<PrefetchStats>(url)),
         manager(&manager) {
-    DCHECK(url.is_valid());
-    DCHECK(url.SchemeIsHTTPOrHTTPS());
+    CHECK(url.is_valid(), base::NotFatalUntil::M162);
+    CHECK(url.SchemeIsHTTPOrHTTPS(), base::NotFatalUntil::M162);
   }
 
   ~PrefetchInfo() = default;
@@ -135,10 +136,9 @@ struct PrefetchJob {
   PrefetchJob(PrefetchRequest prefetch_request, PrefetchInfo& info)
       : url(prefetch_request.url),
         destination(prefetch_request.destination),
-        creation_time(base::TimeTicks::Now()),
         info(info.weak_factory.GetWeakPtr()) {
-    DCHECK(url.is_valid());
-    DCHECK(url.SchemeIsHTTPOrHTTPS());
+    CHECK(url.is_valid(), base::NotFatalUntil::M162);
+    CHECK(url.SchemeIsHTTPOrHTTPS(), base::NotFatalUntil::M162);
     info.OnJobCreated();
   }
 
@@ -152,7 +152,6 @@ struct PrefetchJob {
 
   GURL url;
   network::mojom::RequestDestination destination;
-  base::TimeTicks creation_time;
 
   // PrefetchJob lives until the URL load completes, so it can outlive the
   // PrefetchManager and therefore the PrefetchInfo.
@@ -169,8 +168,8 @@ PrefetchManager::PrefetchManager(base::WeakPtr<Delegate> delegate,
       profile_(profile),
       use_network_context_prefetch_(base::FeatureList::IsEnabled(
           features::kPrefetchManagerUseNetworkContextPrefetch)) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(profile_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(profile_, base::NotFatalUntil::M162);
 }
 
 PrefetchManager::~PrefetchManager() = default;
@@ -180,10 +179,30 @@ void PrefetchManager::Start(const GURL& url,
   CHECK(
       base::FeatureList::IsEnabled(features::kLoadingPredictorPrefetch) ||
       base::FeatureList::IsEnabled(blink::features::kLCPPPrefetchSubresource));
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (use_network_context_prefetch_) {
     PerformNetworkContextPrefetch(profile_, url, std::move(requests));
+    return;
+  }
+
+  // Enforce the frame's Connection Allowlist if needed. If the
+  // initiator_frame_id is null, the request is browser-initiated which is out
+  // of scope for enforcement. If the initiator_frame_id does not map to a live
+  // frame, then there is no allowlist for that frame to enforce.
+  std::erase_if(requests, [&](const PrefetchRequest& request) {
+    if (!request.initiator_frame_id) {
+      return false;
+    }
+    if (auto* rfh =
+            content::RenderFrameHost::FromID(request.initiator_frame_id)) {
+      return !content::FrameConnectionAllowlistAllowsRequestAndReportIfNeeded(
+          rfh, request.url, /*is_redirect=*/false);
+    }
+    return true;
+  });
+
+  if (requests.empty()) {
     return;
   }
 
@@ -205,7 +224,7 @@ void PrefetchManager::Start(const GURL& url,
 }
 
 void PrefetchManager::Stop(const GURL& url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (use_network_context_prefetch_) {
     // The NetworkContext Prefetch() functionality does its own cleanup so
@@ -227,21 +246,19 @@ bool PrefetchManager::IsAvailableForPrefetch(
   return GetResourceTypeForPrefetch(destination).has_value();
 }
 
-// TODO(crbug.com/447954811, crbug.com/524282506): Enforce the connection
-// allowlist for prefetch requests.
-//
 // If `kPrefetchManagerUseNetworkContextPrefetch` feature is enabled,
 // `PrefetchManager` uses `NetworkContext::Prefetch`.
 // Else, it uses a URL loader factory for the browser process.
 //
-// Neither of them checks the connection allowlist of the prefetch initiator
-// `RenderFrameHost`.
+// Note that because the browser process URL loader factory is used, we cannot
+// enforce the Connection Allowlist in the network service. Enforcement instead
+// occurs in PrefetchManager::Start.
 void PrefetchManager::PrefetchUrl(
     std::unique_ptr<PrefetchJob> job,
     scoped_refptr<network::SharedURLLoaderFactory> factory) {
   CHECK(!use_network_context_prefetch_);
-  DCHECK(job);
-  DCHECK(job->info);
+  CHECK(job, base::NotFatalUntil::M162);
+  CHECK(job->info, base::NotFatalUntil::M162);
 
   PrefetchInfo& info = *job->info;
   url::Origin top_frame_origin = url::Origin::Create(info.url);
@@ -332,9 +349,6 @@ void PrefetchManager::PrefetchUrl(
     options |= network::mojom::kURLLoadOptionReadAndDiscardBody;
   }
 
-  base::UmaHistogramBoolean("Navigation.Prefetch.IsHttps",
-                            request.url.SchemeIsCryptographic());
-
   std::unique_ptr<blink::ThrottlingURLLoader> loader =
       blink::ThrottlingURLLoader::CreateLoaderAndStart(
           std::move(factory), std::move(throttles),
@@ -361,29 +375,11 @@ void PrefetchManager::OnPrefetchFinished(
     std::unique_ptr<blink::ThrottlingURLLoader> loader,
     std::unique_ptr<network::mojom::URLLoaderClient> client,
     const network::URLLoaderCompletionStatus& status) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   PrefetchInfo& info = *job->info;
   if (observer_for_testing_)
     observer_for_testing_->OnPrefetchFinished(info.url, job->url, status);
-
-  // TODO(ricea): Remove these histograms in October 2024 and make a note of the
-  // results in https://crbug.com/335524391.
-  if (status.error_code == net::OK &&
-      status.decoded_body_length.InBytes() > 0) {
-    if (status.decoded_body_length > status.encoded_body_length) {
-      // Assume it was compressed.
-      base::UmaHistogramCounts10000(
-          "Navigation.Prefetch.CompressedBodySize",
-          static_cast<int>(status.encoded_body_length.InBytes() / 1024));
-    } else {
-      // The cast to int will overflow if we prefetch a resource over a terabyte
-      // in size, but I'm hoping that will never happen.
-      base::UmaHistogramCounts10000(
-          "Navigation.Prefetch.UncompressedBodySize",
-          static_cast<int>(status.encoded_body_length.InBytes() / 1024));
-    }
-  }
 
   // Cannot access the fields of `status` after this point.
   loader.reset();
@@ -395,12 +391,7 @@ void PrefetchManager::OnPrefetchFinished(
 }
 
 void PrefetchManager::TryToLaunchPrefetchJobs() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-
-  // We assume that the number of jobs in the queue will be relatively small at
-  // any given time. We can revisit this as needed.
-  UMA_HISTOGRAM_COUNTS_100("Navigation.Prefetch.PrefetchJobQueueLength",
-                           queued_jobs_.size());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (queued_jobs_.empty() || inflight_jobs_count_ >= kMaxInflightPrefetches) {
     return;
@@ -420,12 +411,7 @@ void PrefetchManager::TryToLaunchPrefetchJobs() {
     queued_jobs_.pop_front();
     base::WeakPtr<PrefetchInfo> info = job->info;
     // |this| owns all infos.
-    DCHECK(info);
-
-    // Note: PrefetchJobs are put into |queued_jobs_| immediately on creation,
-    // so their creation time is also the time at which they started queueing.
-    UMA_HISTOGRAM_TIMES("Navigation.Prefetch.PrefetchJobQueueingTime",
-                        base::TimeTicks::Now() - job->creation_time);
+    CHECK(info, base::NotFatalUntil::M162);
 
     if (job->url.is_valid() && factory && !info->was_canceled)
       PrefetchUrl(std::move(job), factory);
@@ -433,10 +419,10 @@ void PrefetchManager::TryToLaunchPrefetchJobs() {
 }
 
 void PrefetchManager::AllPrefetchJobsForUrlFinished(PrefetchInfo& info) {
-  DCHECK(info.is_done());
+  CHECK(info.is_done(), base::NotFatalUntil::M162);
   auto it = prefetch_info_.find(info.url);
   CHECK(it != prefetch_info_.end());
-  DCHECK(&info == it->second.get());
+  CHECK(&info == it->second.get(), base::NotFatalUntil::M162);
 
   if (delegate_)
     delegate_->PrefetchFinished(std::move(info.stats));
@@ -458,7 +444,7 @@ std::optional<blink::mojom::ResourceType> GetResourceTypeForPrefetch(
       return blink::mojom::ResourceType::kFontResource;
     case network::mojom::RequestDestination::kAudio:
     case network::mojom::RequestDestination::kAudioWorklet:
-    case network::mojom::RequestDestination::kDictionary:
+    case network::mojom::RequestDestination::kCompressionDictionary:
     case network::mojom::RequestDestination::kDocument:
     case network::mojom::RequestDestination::kEmailVerification:
     case network::mojom::RequestDestination::kEmbed:
@@ -472,7 +458,6 @@ std::optional<blink::mojom::ResourceType> GetResourceTypeForPrefetch(
     case network::mojom::RequestDestination::kPaintWorklet:
     case network::mojom::RequestDestination::kReport:
     case network::mojom::RequestDestination::kServiceWorker:
-    case network::mojom::RequestDestination::kSharedStorageWorklet:
     case network::mojom::RequestDestination::kSharedWorker:
     case network::mojom::RequestDestination::kSpeculationRules:
     case network::mojom::RequestDestination::kText:

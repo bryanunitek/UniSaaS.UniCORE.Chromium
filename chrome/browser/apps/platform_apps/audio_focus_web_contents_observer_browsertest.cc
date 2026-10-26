@@ -7,7 +7,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/app_window/app_window.h"
@@ -76,7 +75,7 @@ IN_PROC_BROWSER_TEST_F(AudioFocusWebContentsObserverBrowserTest,
 
   // There should be two app windows, find the "other" one from the first.
   extensions::AppWindowRegistry* app_registry =
-      extensions::AppWindowRegistry::Get(browser()->profile());
+      extensions::AppWindowRegistry::Get(browser()->GetProfile());
   const auto& app_windows = app_registry->app_windows();
   ASSERT_EQ(2u, app_windows.size());
   extensions::AppWindow* app_window = *app_windows.begin();

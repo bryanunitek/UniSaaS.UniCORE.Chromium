@@ -57,11 +57,7 @@ typedef (HTMLScriptElement or SVGScriptElement) HTMLOrSVGScriptElement;
     [NewObject] Comment createComment(DOMString data);
     [NewObject, RaisesException] ProcessingInstruction createProcessingInstruction(DOMString target, DOMString data);
 
-    [NewObject, CEReactions, RaisesException] Node importNode(Node node, optional boolean deep = false);
-
-    // TODO(https://crbug.com/399124619): Merge all importnode variants, once Scoped Custom Element Registries
-    // are shipped unflagged
-    [NewObject, CEReactions, RaisesException, RuntimeEnabled=ScopedCustomElementRegistry] Node importNode(Node node, ImportNodeOptions options);
+    [NewObject, CEReactions, RaisesException] Node importNode(Node node, optional (boolean or ImportNodeOptions) options = false);
 
     [RaisesException, CEReactions] Node adoptNode(Node node);
 
@@ -90,7 +86,7 @@ typedef (HTMLScriptElement or SVGScriptElement) HTMLOrSVGScriptElement;
     // TODO(356601280): Merge the two setHTMLUnsafe variants into one, once the
     //   different RuntimeEnabled flags are both perma-enabled.
     [RuntimeEnabled=SanitizerAPI,RaisesException,CallWith=ExecutionContext,MeasureAs=ParseHTMLUnsafe,CEReactions] static Document parseHTMLUnsafe((DOMString or TrustedHTML) html, ParseHTMLUnsafeOptions options);
-    [RuntimeEnabled=TrustedTypesCreateParserOptions,RaisesException,CallWith=ExecutionContext,MeasureAs=ParseHTMLUnsafe,CEReactions] static Document parseHTMLUnsafe((DOMString or TrustedHTML) html, TrustedParserOptions options);
+    [RuntimeEnabled=TrustedTypesCreateParserOptions,RaisesException,CallWith=ExecutionContext,MeasureAs=ParseHTMLUnsafe,CEReactions] static Document parseHTMLUnsafe((DOMString or TrustedHTML) html, TrustedHTMLParserOptions options);
     [RuntimeEnabled=SanitizerAPI,RaisesException,CallWith=ExecutionContext,MeasureAs=ParseHTMLSafe,CEReactions] static Document parseHTML(DOMString html, optional SetHTMLOptions options = {});
 
     // resource metadata management
@@ -123,17 +119,9 @@ typedef (HTMLScriptElement or SVGScriptElement) HTMLOrSVGScriptElement;
     [CallWith=Isolate, CEReactions, RaisesException, MeasureAs=DocumentOpenTwoArgs] Document open(optional DOMString type = "text/html", optional DOMString replace = "");
     [CallWith=Isolate, RaisesException, MeasureAs=DocumentOpenThreeArgs] Window open(USVString url, DOMString name, DOMString features);
     [CEReactions, RaisesException] void close();
-    [CallWith=Isolate, CEReactions, RaisesException] void write(DOMString... text);
-    [CallWith=Isolate, CEReactions, RaisesException] void writeln(DOMString... text);
-
-    // TrustedTypes variants of the above.
-    [CallWith=Isolate, CEReactions, RaisesException] void write(TrustedHTML text);
-    [CallWith=Isolate, CEReactions, RaisesException] void writeln(TrustedHTML text);
-
-    // TODO(330516530): Merge all write/writeln variants, once TrustedTypesHTML
-    // is perma-enabled.
-    [CallWith=Isolate, CEReactions, RaisesException, RuntimeEnabled=TrustedTypesHTML] undefined write(TrustedHTML text1, (TrustedHTML or DOMString)... text);
-    [CallWith=Isolate, CEReactions, RaisesException, RuntimeEnabled=TrustedTypesHTML] undefined writeln(TrustedHTML text1, (TrustedHTML or DOMString)... text);
+    // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#dom-document-write
+    [CallWith=Isolate, CEReactions, RaisesException] void write((TrustedHTML or DOMString)... text);
+    [CallWith=Isolate, CEReactions, RaisesException] void writeln((TrustedHTML or DOMString)... text);
 
     // user interaction
     readonly attribute Window? defaultView;
@@ -221,13 +209,13 @@ typedef (HTMLScriptElement or SVGScriptElement) HTMLOrSVGScriptElement;
     // https://github.com/WICG/aom/blob/gh-pages/notification-api.md
     [RuntimeEnabled=AriaNotify,MeasureAs=AriaNotify] void ariaNotify(DOMString announcement, optional AriaNotificationOptions options = {});
 
-    [RuntimeEnabled=RouteMatching] readonly attribute RouteMap routeMap;
-
     // Event handler attributes
     [RuntimeEnabled=AutofillEvent] attribute EventHandler onautofill;
     attribute EventHandler onbeforecopy;
     attribute EventHandler onbeforecut;
     attribute EventHandler onbeforepaste;
+    // https://github.com/whatwg/html/pull/13050
+    [RuntimeEnabled=FocusResetEvent] attribute EventHandler onfocusreset;
     attribute EventHandler onfreeze;
     [Measure] attribute EventHandler onprerenderingchange;
     attribute EventHandler onresume;

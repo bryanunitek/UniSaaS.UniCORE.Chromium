@@ -16,7 +16,6 @@ import android.content.Intent;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
-import androidx.test.filters.MediumTest;
 
 import org.junit.After;
 import org.junit.Before;
@@ -33,7 +32,6 @@ import org.robolectric.shadows.ShadowToast;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.R;
@@ -63,11 +61,8 @@ import org.chromium.ui.widget.ToastManager;
  * <p>TODO(crbug.com/354912290): Update this test when the error UI will be implemented.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.PER_CLASS)
 @DisableFeatures({SigninFeatures.FORCE_HISTORY_OPT_IN_SCREEN})
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowToast.class})
+@Config(shadows = {ShadowToast.class})
 public class SigninAndHistorySyncActivityLauncherImplTest {
     @Rule
     public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
@@ -126,7 +121,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateBottomSheetSigninIntentOrShowError() {
         when(mSigninManagerMock.isSigninAllowed()).thenReturn(true);
 
@@ -145,7 +139,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateBottomSheetSigninIntentOrShowError_withAccountId() {
         when(mSigninManagerMock.isSigninAllowed()).thenReturn(true);
 
@@ -174,7 +167,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateBottomSheetSigninIntentOrShowError_signedInHistorySyncAllowed() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -197,7 +189,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateBottomSheetSigninIntentOrShowError_signinNotAllowed() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -221,7 +212,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateBottomSheetSigninIntentOrShowError_signinDisabledByPolicy() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -246,7 +236,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateBottomSheetSigninIntentOrShowError_signedInAndHistorySyncSuppressed() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -269,7 +258,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateBottomSheetSigninIntentOrShowError_signedInAndNoHistorySync() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -301,7 +289,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateFullscreenSigninIntent() {
         when(IdentityServicesProvider.get().getSigninManager(any())).thenReturn(mSigninManagerMock);
         when(mSigninManagerMock.isSigninAllowed()).thenReturn(true);
@@ -321,7 +308,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateFullscreenSigninIntent_signinNotAllowed() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -344,7 +330,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateFullscreenSigninIntent_alreadySignedIn() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -369,7 +354,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateFullscreenSigninIntent_switchAccountFlowAllowed() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -390,7 +374,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateFullscreenSigninIntentOrShowError_switchAccountFlowNotAllowed() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -413,7 +396,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateFullscreenSigninIntent_signedInAndHistorySyncNotAllowed() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -437,7 +419,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateFullscreenSigninIntent_signedInAndHistorySyncDeclinedOften() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -462,7 +443,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateFullscreenSigninIntentOrShowError() {
         when(IdentityServicesProvider.get().getSigninManager(any())).thenReturn(mSigninManagerMock);
         when(mSigninManagerMock.isSigninAllowed()).thenReturn(true);
@@ -482,7 +462,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateFullscreenSigninIntentOrShowError_signinNotAllowed() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -506,7 +485,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateFullscreenSigninIntentOrShowError_alreadySignedIn() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -531,7 +509,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateFullscreenSigninIntentOrShowError_signedInAndHistorySyncNotAllowed() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
@@ -556,7 +533,6 @@ public class SigninAndHistorySyncActivityLauncherImplTest {
     }
 
     @Test
-    @MediumTest
     public void testCreateFullscreenSigninIntentOrShowError_signedInAndHistorySyncDeclinedOften() {
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);

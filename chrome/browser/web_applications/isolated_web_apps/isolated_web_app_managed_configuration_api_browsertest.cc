@@ -8,7 +8,6 @@
 #include "base/values.h"
 #include "chrome/browser/device_api/managed_configuration_api.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/fake_iwa_runtime_data_provider_mixin.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
@@ -17,7 +16,7 @@
 #include "chrome/browser/web_applications/test/web_app_test_observers.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
-#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
+#include "components/webapps/isolated_web_apps/key_distribution/iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/test_support/signing_keys.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -78,7 +77,7 @@ class ManagedConfigurationAPIInIsolatedWebAppTest
   void SetConfiguration(const std::string& conf_url,
                         const std::string& conf_hash,
                         const std::string& origin_key) {
-    browser()->profile()->GetPrefs()->SetList(
+    browser()->GetProfile()->GetPrefs()->SetList(
         prefs::kManagedConfigurationPerOrigin,
         base::ListValue().Append(
             base::DictValue()

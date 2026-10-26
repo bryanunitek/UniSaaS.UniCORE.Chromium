@@ -35,16 +35,15 @@ chromium-metrics-reviews@google.com.
   <int value="4" label="An ad was found but data collection was rejected"/>
 </enum>
 
-<enum name="AdvancedProtectionEnabledStatus">
-  <int value="0" label="Advanced Protection enabled status unknown"/>
-  <int value="1" label="User not signed-in or isn't under Advanced Protection"/>
-  <int value="2" label="User is signed in and under Advanced Protection"/>
-  <int value="3"
-      label="User was under Advanced Protection but disabled it or signed out"/>
-  <int value="4"
-      label="User was signed out or wasn't under Advanced Protection but now
-             is"/>
+<!-- LINT.IfChange(AllowlistAsyncMatchResult) -->
+
+<enum name="AllowlistAsyncMatchResult">
+  <int value="0" label="Match"/>
+  <int value="1" label="No match"/>
+  <int value="2" label="Timeout"/>
 </enum>
+
+<!-- LINT.ThenChange(//components/safe_browsing/core/browser/db/allowlist_checker_client.h:AllowlistAsyncMatchResult) -->
 
 <enum name="AndroidRealTimeIsInAllowlistResult">
   <int value="0" label="NO"/>
@@ -189,8 +188,8 @@ chromium-metrics-reviews@google.com.
   <int value="15" label="URL suspicious"/>
   <int value="16" label="URL billing"/>
   <int value="17" label="APK download"/>
-  <int value="19" label="Blocked Ad redirect"/>
-  <int value="20" label="Blocked Ad popup"/>
+  <int value="19" label="(Obsolete) Blocked Ad redirect"/>
+  <int value="20" label="(Obsolete) Blocked Ad popup"/>
   <int value="21" label="Hash-prefix real-time experiment"/>
   <int value="22" label="Phishy site interactions"/>
   <int value="23" label="Safe Browsing warning shown to user"/>
@@ -198,7 +197,7 @@ chromium-metrics-reviews@google.com.
   <int value="25" label="dangerous download auto deleted"/>
   <int value="26" label="dangerous download canceled on profile closure"/>
   <int value="27" label="URL real-time and hash real-time discrepancy"/>
-  <int value="28" label="External app redirect"/>
+  <int value="28" label="(Obsolete) External app redirect"/>
   <int value="29" label="dangerous download warning (Android)"/>
   <int value="30" label="Service worker behaviors"/>
 </enum>
@@ -520,6 +519,19 @@ chromium-metrics-reviews@google.com.
   <int value="5" label="UnsetStillWaiting"/>
 </enum>
 
+<!-- LINT.IfChange(SafeBrowsingUpdateCategory) -->
+
+<enum name="SafeBrowsingUpdateCategory">
+  <int value="0" label="Post-migration partial update"/>
+  <int value="1" label="Post-migration full update"/>
+  <int value="2" label="New database partial update"/>
+  <int value="3" label="New database full update"/>
+  <int value="4" label="Regular partial update"/>
+  <int value="5" label="Regular full update"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/safe_browsing/core/browser/db/sb_store.h:SafeBrowsingUpdateCategory) -->
+
 <enum name="SafeBrowsingUrlScheme">
   <int value="0" label="Unknown scheme"/>
   <int value="1" label="about"/>
@@ -679,6 +691,33 @@ chromium-metrics-reviews@google.com.
 </enum>
 
 <!-- LINT.ThenChange(//components/safe_browsing/core/browser/db/v5_rice.h:V5DecodeResult) -->
+
+<!-- LINT.IfChange(SafeBrowsingV5GetHashOperationOutcome) -->
+
+<enum name="SafeBrowsingV5GetHashOperationOutcome">
+  <int value="0" label="Success"/>
+  <int value="1" label="NetworkError"/>
+  <int value="2" label="HttpError"/>
+  <int value="3" label="ParseError"/>
+  <int value="4" label="BackoffError"/>
+  <int value="5" label="LocalCacheHit"/>
+  <int value="6" label="RetriableError"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h:V5GetHashOperationOutcome) -->
+
+<!-- LINT.IfChange(SafeBrowsingV5GetHashParseFailureReason) -->
+
+<enum name="SafeBrowsingV5GetHashParseFailureReason">
+  <int value="1" label="NetworkError"/>
+  <int value="2" label="HttpError"/>
+  <int value="3" label="RetriableError"/>
+  <int value="4" label="ParseError"/>
+  <int value="5" label="NoCacheDurationError"/>
+  <int value="6" label="IncorrectFullHashLengthError"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/safe_browsing/core/browser/db/v5_search_hashes_util.h:V5GetHashParseFailureReason) -->
 
 <!-- LINT.IfChange(SafeBrowsingV5InputValidationResult) -->
 
@@ -840,9 +879,9 @@ chromium-metrics-reviews@google.com.
   <int value="14" label="Saved password reuse"/>
   <int value="15" label="Signed in sync password reuse"/>
   <int value="16" label="Signed in non sync password reuse"/>
-  <int value="17" label="Blocked ad redirect"/>
+  <int value="17" label="(Obsolete) Blocked ad redirect"/>
   <int value="18" label="Ad sample"/>
-  <int value="19" label="Blocked ad popup"/>
+  <int value="19" label="(Obsolete) Blocked ad popup"/>
   <int value="20" label="Suspicious site"/>
   <int value="21" label="Enterprise password reuse"/>
   <int value="22" label="Billing"/>
@@ -918,6 +957,34 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="A report has started"/>
   <int value="4" label="The trigger is in monitoring mode"/>
 </enum>
+
+<!-- LINT.IfChange(SuspiciousSiteWarningOutcome) -->
+
+<enum name="SuspiciousSiteWarningOutcome">
+  <int value="0" label="Unknown"/>
+  <int value="1" label="Bypassed"/>
+  <int value="2" label="Adhered"/>
+  <int value="3" label="DismissedBySystem"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/safe_browsing/core/browser/suspicious_site_warning_allowlist.h:SuspiciousSiteWarningOutcome) -->
+
+<!-- LINT.IfChange(SuspiciousSiteWarningUserInteraction) -->
+
+<enum name="SuspiciousSiteWarningUserInteraction">
+  <int value="0" label="Unknown"/>
+  <int value="1" label="Warning dialog shown"/>
+  <int value="2" label="Mark as safe button clicked"/>
+  <int value="3" label="Back to safety button clicked"/>
+  <int value="4" label="Dismissed"/>
+  <int value="5" label="Manual navigation"/>
+  <int value="6" label="Close tab"/>
+  <int value="7" label="Learn more clicked"/>
+  <int value="8" label="System back button/gesture used"/>
+  <int value="9" label="Destroyed"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/safe_browsing/core/browser/suspicious_site_warning_allowlist.h:SuspiciousSiteWarningUserInteraction) -->
 
 <!-- LINT.IfChange(SyncedEsbOutcome) -->
 

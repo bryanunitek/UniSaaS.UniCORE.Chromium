@@ -36,8 +36,7 @@ import * as SourcesModule from 'devtools/panels/sources/sources.js';
   }
 
   function localScopeObject() {
-    var localsSection = SourcesTestRunner.scopeChainSections()[0];
-    return localsSection.object;
+    return TestRunner.debuggerModel.debuggerPausedDetails().callFrames[1].scopeChain()[0].object();
   }
 
   function step1() {
@@ -49,7 +48,7 @@ import * as SourcesModule from 'devtools/panels/sources/sources.js';
   function step2(callFrames) {
     var pane = SourcesModule.CallStackSidebarPane.CallStackSidebarPane.instance();
     pane.selectNextCallFrameOnStack();
-    TestRunner.deprecatedRunAfterPendingDispatches(step3);
+    step3();
   }
 
   function step3() {

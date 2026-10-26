@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/supervised_user/extension_install_blocked_by_parent_dialog.h"
+
 #include <string>
 #include <utility>
 
 #include "chrome/browser/ui/extensions/extension_dialog_utils.h"
-#include "chrome/browser/ui/extensions/extensions_dialogs.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
@@ -50,7 +51,7 @@ void ShowExtensionInstallBlockedByParentDialog(
     const extensions::Extension* extension,
     content::WebContents* web_contents,
     base::OnceClosure done_callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   std::u16string extension_type = GetExtensionType(extension);
 
   auto dialog_model =

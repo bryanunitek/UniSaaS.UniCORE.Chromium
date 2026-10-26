@@ -8,7 +8,9 @@
 
 #include <algorithm>
 
+#include "base/containers/span.h"
 #include "base/hash/sha1.h"
+#include "base/no_destructor.h"
 #include "base/rand_util.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
@@ -44,10 +46,11 @@ bool GetMachineId(std::string* machine_id) {
 
 #else
 
-  static std::string calculated_id;
+  // Process-lifetime cache of a value computed at runtime.
+  static base::NoDestructor<std::string> calculated_id;
   static bool calculated = false;
   if (calculated) {
-    *machine_id = calculated_id;
+    *machine_id = *calculated_id;
     return true;
   }
 
@@ -60,7 +63,7 @@ bool GetMachineId(std::string* machine_id) {
     return false;
 
   calculated = true;
-  calculated_id = *machine_id;
+  *calculated_id = *machine_id;
   return true;
 
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -74,7 +77,7 @@ bool GetMachineIdImpl(const std::u16string& sid_string,
   machine_id->clear();
 
   // The ID should be the SID hash + the Hard Drive SNo. + checksum byte.
-  static const int kSizeWithoutChecksum = base::kSHA1Length + sizeof(int);
+  static const size_t kSizeWithoutChecksum = base::kSHA1Length + sizeof(int);
   std::vector<unsigned char> id_binary(kSizeWithoutChecksum + 1, 0);
 
   if (!sid_string.empty()) {
@@ -101,9 +104,10 @@ bool GetMachineIdImpl(const std::u16string& sid_string,
   }
 
   // Append the checksum byte.
-  if (!sid_string.empty() || (0 != volume_id))
-    rlz_lib::Crc8::Generate(id_binary.data(), kSizeWithoutChecksum,
+  if (!sid_string.empty() || (0 != volume_id)) {
+    rlz_lib::Crc8::Generate(base::span(id_binary).first(kSizeWithoutChecksum),
                             &id_binary[kSizeWithoutChecksum]);
+  }
 
   return rlz_lib::BytesToString(id_binary, machine_id);
 }

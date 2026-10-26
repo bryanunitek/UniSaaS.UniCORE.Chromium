@@ -14,6 +14,7 @@ source_set("background") {
 
   if (enable_background_contents) {
     sources += [
+      "background_contents_navigation_throttle.h",
       "background_contents_service.h",
       "background_contents_service_factory.h",
     ]
@@ -37,8 +38,6 @@ source_set("impl") {
     sources = [ "background_contents.cc" ]
   }
 
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
-
   deps = [
     ":background",
     "//chrome/browser/profiles",
@@ -49,6 +48,7 @@ source_set("impl") {
 
   if (enable_background_contents) {
     sources += [
+      "background_contents_navigation_throttle.cc",
       "background_contents_service.cc",
       "background_contents_service_factory.cc",
     ]
@@ -57,7 +57,7 @@ source_set("impl") {
       "//chrome/browser/apps/platform_apps",
       "//chrome/browser/extensions",
       "//chrome/browser/notifications",
-      "//chrome/browser/ui",
+      "//chrome/browser/ui:browser_tabstrip",
       "//components/pref_registry",
     ]
     if (is_chromeos) {
@@ -94,7 +94,6 @@ if (!is_android) {
         "//chrome/browser:browser_process",
         "//chrome/browser/notifications",
         "//chrome/browser/profiles",
-        "//chrome/browser/ui",
         "//chrome/common:constants",
         "//chrome/test:test_support",
         "//components/prefs",
@@ -109,9 +108,9 @@ if (!is_android) {
         ":background",
         "//base",
         "//chrome/browser/profiles",
-        "//chrome/browser/ui",
         "//chrome/common:constants",
         "//chrome/test:test_support",
+        "//chrome/test/base:testing_browser_process",
         "//components/prefs",
         "//content/test:test_support",
         "//testing/gmock",

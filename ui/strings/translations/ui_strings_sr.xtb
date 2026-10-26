@@ -11,7 +11,6 @@
 <translation id="1253734725326687145">Мета за додир је премештена у горњи десни угао. Додирните овде.</translation>
 <translation id="1266864766717917324">Није успело дељење: <ph name="CONTENT_TYPE" /></translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Пробајте да делите текст у мањим деловима.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Слева надесно</translation>
 <translation id="1383876407941801731">Претражи</translation>
@@ -38,7 +37,6 @@
 <translation id="1901303067676059328">Изабери &amp;све</translation>
 <translation id="19085484004813472">Ово је нова функција</translation>
 <translation id="2006524834898217237">Уверите се да је овај уређај повезан на интернет.</translation>
-<translation id="208586643495776849">Пробајте поново</translation>
 <translation id="2111134541987263231">Укључите <ph name="BEGIN_BOLD" />Дозволи у режиму без архивирања<ph name="END_BOLD" /></translation>
 <translation id="2141853158323869627">{DAYS,plural, =1{1 д}one{# д}few{# д}other{# д}}</translation>
 <translation id="2148716181193084225">Данас</translation>
@@ -85,7 +83,6 @@
 <translation id="3306688585798492231">Уграђени екран</translation>
 <translation id="335581015389089642">Говор</translation>
 <translation id="3372635229069101468">Кликните на <ph name="BEGIN_BOLD" />Детаљи<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Текст је превелик</translation>
 <translation id="3406306243914553062">HTML садржај</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{Још 1 дан}one{Још # дан}few{Још # дана}other{Још # дана}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> датотека</translation>
@@ -128,7 +125,6 @@
 <translation id="5046499563572181734">Додирните овде</translation>
 <translation id="5076340679995252485">&amp;Налепи</translation>
 <translation id="520299402983819650"><ph name="QUANTITY" /> PB</translation>
-<translation id="5278860589123563674">Слање није успело</translation>
 <translation id="5283101102242354279">Укључите додатак у режиму без архивирања:</translation>
 <translation id="528468243742722775">Заврши</translation>
 <translation id="5329858601952122676">&amp;Избриши</translation>

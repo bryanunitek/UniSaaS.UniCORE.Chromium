@@ -12,7 +12,6 @@
 namespace sql {
 class Database;
 class MetaTable;
-class Statement;
 }  // namespace sql
 
 namespace storage {
@@ -68,6 +67,8 @@ class LocalStorageSqlite : public DomStorageDatabase,
                           std::vector<MapLocator> maps_to_delete) override;
   DbStatus PurgeOrigins(std::set<url::Origin> origins) override;
   DbStatus CleanUpStaleData() override;
+  void Close() override;
+  void DetachFromSequence() override;
   void MakeAllCommitsFailForTesting() override;
   void SetDestructionCallbackForTesting(base::OnceClosure callback) override;
   DbStatus PutVersionForTesting(int64_t version) override;
@@ -98,8 +99,6 @@ class LocalStorageSqlite : public DomStorageDatabase,
   // base::trace_event::MemoryDumpProvider implementation:
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
-
-  void OnSqlError(int error, sql::Statement* statement);
 
   // `Open()` creates `database_`, `meta_table_` and `map_entries_table_`.
   std::unique_ptr<sql::Database> database_;

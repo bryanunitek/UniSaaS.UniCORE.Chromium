@@ -6,19 +6,23 @@
 #define CHROME_BROWSER_DICTATION_DICTATION_KEYED_SERVICE_H_
 
 #include <memory>
-#include <string>
 
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "chrome/browser/dictation/connector_component_extension.h"
 #include "chrome/browser/dictation/dictation_multiplexer.h"
+#include "chrome/browser/dictation/hotkey_manager.h"
+#include "chrome/browser/dictation/logging.h"
 #include "chrome/browser/dictation/metrics.h"
 #include "chrome/browser/dictation/onboarding_manager.h"
+#include "chrome/browser/dictation/reviewing_page_status_ui_controller.h"
 #include "chrome/browser/dictation/session_controller.h"
 #include "chrome/browser/dictation/session_controller_delegate.h"
+#include "chrome/browser/dictation/target.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
-#include "content/public/browser/global_dom_node_id.h"
 
 class Profile;
 
@@ -51,33 +55,51 @@ class DictationKeyedService : public KeyedService,
   void Shutdown() override;
 
   // SessionControllerDelegate:
+  content::BrowserContext* GetBrowserContext() const override;
   std::unique_ptr<StreamProvider> CreateStreamProvider(
       SessionController& controller) const override;
   std::unique_ptr<SessionUi> CreateUi(
       SessionController& controller) const override;
   void EndSession() override;
 
-  // Starts a new session from the given target. It's the caller's
-  // responsibility to ensure this never called while an existing session in
-  // progress.
+  // Returns true if the reviewing page status UI should be shown, and consumes
+  // the show state (starting the 60-minute cooldown for the active document).
+  bool ConsumeShowReviewingPageStatus() const;
+
+  // Enables or disables reviewing page status for testing.
+  void SetReviewingPageStatusEnabledForTesting(bool enabled);
+
+  // Called when onboarding is completed. Starts a new session from the given
+  // target. It's the caller's responsibility to ensure this is never called
+  // while an existing session is in progress.
+  void DidCompleteOnboarding(tabs::TabInterface& tab,
+                             const TargetDetails& target_details,
+                             DictationSessionEntryPoint entry_point);
+
+  // Called when the Dictation Connector component extension finishes
+  // installing.
+  void DidInstallConnector();
+
+  // If `target_details` has a null DOMNodeId, the focused element in the
+  // specified Document is used.
   //
-  // The new session will immediately start up a stream using the given
-  // target_id.
-  //
-  // If `target_id` has a null DOMNodeId, the focused element in the specified
-  // Document is used.
-  // TODO(b/531049588): Update tests to always provide a valid target_id, remove
+  // TODO(b/531049588): Update tests to always provide a valid target, remove
   // the "focused element" semantic, and CHECK that the provided target is
   // always non-null.
-  void StartSession(tabs::TabInterface& tab,
-                    const content::GlobalDOMNodeId& target_id,
-                    DictationSessionEntryPoint entry_point);
+  //
+  // TODO(amyasinghal): Update tests to call ContextMenuHandler or
+  // ToggleHotkeyHandler and remove StartSessionForTesting.
+  void StartSessionForTesting(tabs::TabInterface& tab,
+                              const TargetDetails& target_details,
+                              DictationSessionEntryPoint entry_point);
 
-  // Returns true if there is no active session.
   bool ShouldShowContextMenuItem() const;
 
   // Handles the context menu item click.
-  void ContextMenuHandler(const content::GlobalDOMNodeId& target_id);
+  void ContextMenuHandler(const TargetDetails& target_details);
+
+  // Handles the dictation hotkey press.
+  virtual void ToggleHotkeyHandler();
 
   // Returns null when no session is in progress.
   SessionController* session_controller() {
@@ -89,12 +111,45 @@ class DictationKeyedService : public KeyedService,
 
   DictationMultiplexer& multiplexer() { return multiplexer_; }
 
- private:
-  void OnPrefChanged();
+  // Updates audio level in the current session.
+  void UpdateAudioLevel(float audio_level);
 
-  // Returns true if dictation feature is enabled by all flags and policies and
-  // the system is fully initialized and ready to use.
-  bool IsEnabled() const;
+  bool IsEnabledAndReady() const;
+
+  HotkeyManager* hotkey_manager_for_testing() { return hotkey_manager_.get(); }
+
+  DictationLogBuffer& log_buffer() { return log_buffer_; }
+  const DictationLogBuffer& log_buffer() const { return log_buffer_; }
+
+  // Registers a callback invoked whenever the tab displaying the Dictation
+  // session UI changes. The callback is invoked immediately upon registration
+  // with the current session tab (or nullptr).
+  base::CallbackListSubscription AddDictationTabChangedCallback(
+      base::RepeatingCallback<void(tabs::TabInterface*)> callback);
+
+  // Returns the tab currently displaying the Dictation session UI
+  tabs::TabInterface* GetActiveDictationTab() const;
+
+ private:
+  // Starts a new session from the given target. It's the caller's
+  // responsibility to ensure this never called while an existing session in
+  // progress.
+  void StartSession(tabs::TabInterface& tab,
+                    const TargetDetails& target_details,
+                    DictationSessionEntryPoint entry_point,
+                    base::TimeTicks trigger_time);
+
+  void OnPrefChanged();
+  void UpdateHotkeyManager();
+
+  // Forwards session state changes to `hotkey_manager_`.
+  void OnSessionStateChanged(dictation::SessionState state);
+
+  // Handles triggering a session, either starting a new one
+  // or updating an existing session to start a new stream, possibly in a new
+  // tab.
+  void TriggerSession(const TargetDetails& target_details,
+                      DictationSessionEntryPoint entry_point);
 
   raw_ptr<Profile> profile_;
 
@@ -106,15 +161,27 @@ class DictationKeyedService : public KeyedService,
 
   OnboardingManager onboarding_manager_;
 
+  DictationLogBuffer log_buffer_;
+
+  ReviewingPageStatusUiController reviewing_page_status_ui_controller_;
+
+  std::unique_ptr<HotkeyManager> hotkey_manager_;
+
   struct SessionState {
-    SessionState(SessionControllerDelegate& delegate,
-                 const content::GlobalDOMNodeId& target_id);
+    SessionState(SessionControllerDelegate& delegate, tabs::TabInterface& tab);
     ~SessionState();
 
     SessionController controller_;
-    content::GlobalDOMNodeId target_id_;
+    base::WeakPtr<tabs::TabInterface> tab_;
+    // Subscription to `controller_`'s SessionState changes, used to register
+    // the global hotkey only while listening. Declared after `controller_` so
+    // that it is destroyed first.
+    base::CallbackListSubscription session_state_subscription_;
   };
   std::optional<SessionState> session_;
+
+  base::RepeatingCallbackList<void(tabs::TabInterface*)>
+      dictation_tab_changed_callbacks_;
 };
 
 }  // namespace dictation

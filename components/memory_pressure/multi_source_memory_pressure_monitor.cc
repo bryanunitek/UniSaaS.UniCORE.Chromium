@@ -12,6 +12,7 @@
 #include "base/trace_event/memory_pressure_level_proto.h"
 #include "base/trace_event/trace_event.h"
 #include "base/tracing_buildflags.h"
+#include "build/build_config.h"
 #include "components/memory_pressure/system_memory_pressure_evaluator.h"
 
 namespace memory_pressure {
@@ -27,17 +28,25 @@ MultiSourceMemoryPressureMonitor::MultiSourceMemoryPressureMonitor()
       dispatch_callback_(base::BindRepeating(
           &base::MemoryPressureListener::NotifyMemoryPressure)),
       aggregator_(this),
-      level_reporter_(current_pressure_level_) {
+      level_reporter_(current_pressure_level_,
+                      "Memory.PressureLevel2",
+#if BUILDFLAG(IS_APPLE)
+                      std::nullopt
+#else
+                      "Memory.PressureWindowDuration2."
+#endif
+      ) {
   CHECK(!g_monitor);
   g_monitor = this;
 }
 
 MultiSourceMemoryPressureMonitor::~MultiSourceMemoryPressureMonitor() {
-  // Destroy system evaluator early while the remaining members of this class
+  // Destroy system evaluators early while the remaining members of this class
   // still exist. MultiSourceMemoryPressureMonitor implements
   // MemoryPressureVoteAggregator::Delegate, and
   // delegate_->OnMemoryPressureLevelChanged() gets indirectly called during
   // ~SystemMemoryPressureEvaluator().
+  auxiliary_evaluators_.clear();
   system_evaluator_.reset();
 
   CHECK_EQ(g_monitor, this);
@@ -52,12 +61,26 @@ MultiSourceMemoryPressureMonitor* MultiSourceMemoryPressureMonitor::Get() {
 void MultiSourceMemoryPressureMonitor::MaybeStartPlatformVoter() {
   system_evaluator_ =
       SystemMemoryPressureEvaluator::CreateDefaultSystemEvaluator(this);
+  auxiliary_evaluators_ =
+      SystemMemoryPressureEvaluator::CreateDefaultAuxiliaryEvaluators(this);
 }
 
 std::unique_ptr<MemoryPressureVoter>
 MultiSourceMemoryPressureMonitor::CreateVoter() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return aggregator_.CreateVoter();
+}
+
+void MultiSourceMemoryPressureMonitor::SetDiskPressureState(
+    bool new_is_disk_pressure) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  level_reporter_.SetDiskPressureState(new_is_disk_pressure);
+}
+
+void MultiSourceMemoryPressureMonitor::SetOsPressureLevel(
+    base::MemoryPressureLevel new_os_pressure_level) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  level_reporter_.SetOsPressureLevel(new_os_pressure_level);
 }
 
 void MultiSourceMemoryPressureMonitor::OnMemoryPressureLevelChanged(

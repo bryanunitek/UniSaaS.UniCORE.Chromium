@@ -42,8 +42,7 @@ static base::LazyInstance<BackgroundInfo>::DestructorAtExit
     g_empty_background_info = LAZY_INSTANCE_INITIALIZER;
 
 const BackgroundInfo& GetBackgroundInfo(const Extension* extension) {
-  const BackgroundInfo* info = static_cast<const BackgroundInfo*>(
-      extension->GetManifestData(kBackground));
+  const BackgroundInfo* info = extension->GetManifestData<BackgroundInfo>();
   if (!info) {
     return g_empty_background_info.Get();
   }
@@ -51,6 +50,9 @@ const BackgroundInfo& GetBackgroundInfo(const Extension* extension) {
 }
 
 }  // namespace
+
+// static
+const char* BackgroundInfo::kManifestDataKey = kBackground;
 
 BackgroundInfo::BackgroundInfo()
     : is_persistent_(true),
@@ -116,6 +118,11 @@ bool BackgroundInfo::AllowJSAccess(const Extension* extension) {
 }
 
 // static
+bool BackgroundInfo::HasAsyncListenerRegistration(const Extension* extension) {
+  return GetBackgroundInfo(extension).async_listener_registration_;
+}
+
+// static
 bool BackgroundInfo::IsServiceWorkerBased(const Extension* extension) {
   return GetBackgroundInfo(extension)
       .background_service_worker_script_url_.has_value();
@@ -128,7 +135,8 @@ bool BackgroundInfo::Parse(Extension* extension, std::u16string* error) {
       !LoadBackgroundPage(extension, error) ||
       !LoadBackgroundServiceWorkerScript(extension, error) ||
       !LoadBackgroundPersistent(extension, error) ||
-      !LoadAllowJSAccess(extension, error)) {
+      !LoadAllowJSAccess(extension, error) ||
+      !LoadAsyncListenerRegistration(extension, error)) {
     return false;
   }
 
@@ -345,6 +353,29 @@ bool BackgroundInfo::LoadAllowJSAccess(const Extension* extension,
   return true;
 }
 
+bool BackgroundInfo::LoadAsyncListenerRegistration(const Extension* extension,
+                                                   std::u16string* error) {
+  const base::Value* async_listener_registration =
+      extension->manifest()->FindPath(
+          keys::kBackgroundAsyncListenerRegistration);
+  if (async_listener_registration == nullptr) {
+    return true;
+  }
+
+  if (!async_listener_registration->is_bool()) {
+    *error = errors::kInvalidBackgroundAsyncListenerRegistration;
+    return false;
+  }
+  async_listener_registration_ = async_listener_registration->GetBool();
+
+  if (async_listener_registration_ &&
+      !background_service_worker_script_url_.has_value()) {
+    *error = errors::kInvalidBackgroundAsyncListenerRegistrationNoServiceWorker;
+    return false;
+  }
+  return true;
+}
+
 BackgroundManifestHandler::BackgroundManifestHandler() = default;
 BackgroundManifestHandler::~BackgroundManifestHandler() = default;
 
@@ -375,7 +406,7 @@ bool BackgroundManifestHandler::Parse(Extension* extension,
     return false;
   }
 
-  extension->SetManifestData(kBackground, std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
 }
 
@@ -441,14 +472,16 @@ bool BackgroundManifestHandler::AlwaysParseForType(Manifest::Type type) const {
 }
 
 base::span<const char* const> BackgroundManifestHandler::Keys() const {
-  static constexpr const char* kKeys[] = {keys::kBackgroundAllowJsAccess,
-                                          keys::kBackgroundPage,
-                                          keys::kBackgroundPersistent,
-                                          keys::kBackgroundScripts,
-                                          keys::kBackgroundServiceWorkerScript,
-                                          keys::kBackgroundServiceWorkerType,
-                                          keys::kPlatformAppBackgroundPage,
-                                          keys::kPlatformAppBackgroundScripts};
+  static constexpr const char* kKeys[] = {
+      keys::kBackgroundAllowJsAccess,
+      keys::kBackgroundAsyncListenerRegistration,
+      keys::kBackgroundPage,
+      keys::kBackgroundPersistent,
+      keys::kBackgroundScripts,
+      keys::kBackgroundServiceWorkerScript,
+      keys::kBackgroundServiceWorkerType,
+      keys::kPlatformAppBackgroundPage,
+      keys::kPlatformAppBackgroundScripts};
   return kKeys;
 }
 

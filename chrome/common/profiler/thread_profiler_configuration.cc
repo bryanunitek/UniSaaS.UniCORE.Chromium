@@ -86,6 +86,10 @@ bool ThreadProfilerConfiguration::IsProfilerEnabledForCurrentProcess() const {
              GetProfilerProcessType(*base::CommandLine::ForCurrentProcess()));
 }
 
+bool ThreadProfilerConfiguration::IsBrowserTestModeEnabled() const {
+  return ::IsBrowserTestModeEnabled();
+}
+
 bool ThreadProfilerConfiguration::IsProfilerEnabledForCurrentProcessAndThread(
     sampling_profiler::ProfilerThreadType thread) const {
   return IsProfilerEnabledForCurrentProcess() &&
@@ -217,6 +221,14 @@ ThreadProfilerConfiguration::GenerateBrowserProcessConfiguration(
       base::CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(switches::kDisableStackProfiler))
     return {std::nullopt, std::nullopt};
+
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  // Chrome for Testing does not upload profiles, and the profiler can crash
+  // it on Windows (crbug.com/572877174).
+  if (!::IsBrowserTestModeEnabled()) {
+    return {std::nullopt, std::nullopt};
+  }
+#endif
 
   const std::optional<version_info::Channel> release_channel =
       GetReleaseChannel();

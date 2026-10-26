@@ -41,7 +41,9 @@ TEST(RequestDestinationTest, ToStringUseTheEmptyString) {
       {mojom::RequestDestination::kXslt, "xslt"},
       {mojom::RequestDestination::kFencedframe, "fencedframe"},
       {mojom::RequestDestination::kWebIdentity, "webidentity"},
-      {mojom::RequestDestination::kDictionary, "dictionary"},
+      {mojom::RequestDestination::kEmailVerification, "email-verification"},
+      {mojom::RequestDestination::kCompressionDictionary,
+       "compression-dictionary"},
       {mojom::RequestDestination::kSpeculationRules, "speculationrules"},
   };
 
@@ -84,7 +86,9 @@ TEST(RequestDestinationTest, ToStringUseFiveCharEmptyString) {
       {mojom::RequestDestination::kXslt, "xslt"},
       {mojom::RequestDestination::kFencedframe, "fencedframe"},
       {mojom::RequestDestination::kWebIdentity, "webidentity"},
-      {mojom::RequestDestination::kDictionary, "dictionary"},
+      {mojom::RequestDestination::kEmailVerification, "email-verification"},
+      {mojom::RequestDestination::kCompressionDictionary,
+       "compression-dictionary"},
       {mojom::RequestDestination::kSpeculationRules, "speculationrules"},
   };
 
@@ -94,6 +98,9 @@ TEST(RequestDestinationTest, ToStringUseFiveCharEmptyString) {
               RequestDestinationToString(
                   testcase.request_destination,
                   EmptyRequestDestinationOption::kUseFiveCharEmptyString));
+    EXPECT_EQ(testcase.expected_string,
+              RequestDestinationToStringForHistogram(
+                  testcase.request_destination));
   }
 }
 
@@ -128,7 +135,9 @@ TEST(RequestDestinationTest, FromStringUseTheEmptyString) {
       {"xslt", mojom::RequestDestination::kXslt},
       {"fencedframe", mojom::RequestDestination::kFencedframe},
       {"webidentity", mojom::RequestDestination::kWebIdentity},
-      {"dictionary", mojom::RequestDestination::kDictionary},
+      {"email-verification", mojom::RequestDestination::kEmailVerification},
+      {"compression-dictionary",
+       mojom::RequestDestination::kCompressionDictionary},
       {"speculationrules", mojom::RequestDestination::kSpeculationRules},
 
       {"unknown", std::nullopt},
@@ -173,7 +182,9 @@ TEST(RequestDestinationTest, FromStringUseFiveCharEmptyString) {
       {"xslt", mojom::RequestDestination::kXslt},
       {"fencedframe", mojom::RequestDestination::kFencedframe},
       {"webidentity", mojom::RequestDestination::kWebIdentity},
-      {"dictionary", mojom::RequestDestination::kDictionary},
+      {"email-verification", mojom::RequestDestination::kEmailVerification},
+      {"compression-dictionary",
+       mojom::RequestDestination::kCompressionDictionary},
       {"speculationrules", mojom::RequestDestination::kSpeculationRules},
 
       {"unknown", std::nullopt},

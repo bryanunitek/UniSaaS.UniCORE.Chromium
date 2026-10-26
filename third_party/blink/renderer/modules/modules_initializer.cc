@@ -57,6 +57,7 @@
 #include "third_party/blink/renderer/modules/device_orientation/device_orientation_absolute_controller.h"
 #include "third_party/blink/renderer/modules/device_orientation/device_orientation_controller.h"
 #include "third_party/blink/renderer/modules/device_orientation/device_orientation_inspector_agent.h"
+#include "third_party/blink/renderer/modules/dictation/dictation_agent_impl.h"
 #include "third_party/blink/renderer/modules/document_metadata/document_metadata_server.h"
 #include "third_party/blink/renderer/modules/document_picture_in_picture/picture_in_picture_controller_impl.h"
 #include "third_party/blink/renderer/modules/encryptedmedia/html_media_element_encrypted_media.h"
@@ -256,6 +257,9 @@ void ModulesInitializer::InitLocalFrame(LocalFrame& frame) const {
   frame.GetInterfaceRegistry()->AddInterface(
       BindRepeating(&InnerHtmlAgent::BindReceiver, WrapWeakPersistent(&frame)));
 
+  frame.GetInterfaceRegistry()->AddInterface(BindRepeating(
+      &DictationAgentImpl::BindReceiver, WrapWeakPersistent(&frame)));
+
   if (base::FeatureList::IsEnabled(features::kFrameMetadataObserver)) {
     frame.GetInterfaceRegistry()->AddInterface(
         BindRepeating(&FrameMetadataObserverRegistry::BindReceiver,
@@ -295,7 +299,7 @@ void ModulesInitializer::InitInspectorAgentSession(
     InspectedFrames* inspected_frames,
     Page* page) const {
   session->CreateAndAppend<InspectorIndexedDBAgent>(
-      inspected_frames, /*worker_global_scope=*/nullptr, session->V8Session());
+      inspected_frames, /*worker_global_scope=*/nullptr);
   session->CreateAndAppend<DeviceOrientationInspectorAgent>(inspected_frames);
   session->CreateAndAppend<InspectorDOMStorageAgent>(inspected_frames);
   session->CreateAndAppend<InspectorAccessibilityAgent>(inspected_frames,
@@ -309,7 +313,7 @@ void ModulesInitializer::InitWorkerInspectorAgentSession(
     DevToolsSession* session,
     WorkerGlobalScope* worker_global_scope) const {
   session->CreateAndAppend<InspectorIndexedDBAgent>(
-      /*inspected_frames=*/nullptr, worker_global_scope, session->V8Session());
+      /*inspected_frames=*/nullptr, worker_global_scope);
 }
 
 void ModulesInitializer::OnClearWindowObjectInMainWorld(

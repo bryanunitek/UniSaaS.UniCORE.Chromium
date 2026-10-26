@@ -16,7 +16,7 @@ using l10n_util::GetNSString;
 namespace {
 
 // Size of the `fallbackSymbolImage` for the Send Tab Promo card.
-const CGFloat kSymbolSize = 10;
+constexpr CGFloat kSymbolSize = 10;
 
 // Accessibility ID for the view containing the Send Tab Promo card.
 NSString* const kSendTabPromoViewID = @"kSendTabPromoViewID";
@@ -45,7 +45,7 @@ NSString* const kSendTabPromoViewID = @"kSendTabPromoViewID";
 #pragma mark - StandaloneModuleViewConfig
 
 - (UIImage*)fallbackSymbolImage {
-  return DefaultSymbolWithPointSize(kIPhoneAndArrowForwardSymbol, kSymbolSize);
+  return SymbolWithPointSize(SymbolIPhoneAndArrowForward, kSymbolSize);
 }
 
 - (NSString*)titleText {

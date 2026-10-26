@@ -34,6 +34,7 @@
 #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
 #include "third_party/blink/renderer/modules/webaudio/cross_thread_audio_worklet_processor_info.h"
 #include "third_party/blink/renderer/modules/webaudio/offline_audio_context.h"
+#include "third_party/blink/renderer/modules/webaudio/offline_audio_destination_handler.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
 #include "third_party/blink/renderer/platform/audio/denormal_disabler.h"
@@ -46,25 +47,23 @@ namespace blink {
 OfflineAudioDestinationNode::OfflineAudioDestinationNode(
     BaseAudioContext& context,
     unsigned number_of_channels,
-    uint32_t frames_to_process,
     float sample_rate)
     : AudioDestinationNode(context) {
-  SetHandler(OfflineAudioDestinationHandler::Create(
-      *this, number_of_channels, frames_to_process, sample_rate));
+  SetHandler(OfflineAudioDestinationHandler::Create(*this, number_of_channels,
+                                                    sample_rate));
 }
 
 OfflineAudioDestinationNode* OfflineAudioDestinationNode::Create(
     BaseAudioContext* context,
     unsigned number_of_channels,
-    uint32_t frames_to_process,
     float sample_rate) {
   return MakeGarbageCollected<OfflineAudioDestinationNode>(
-      *context, number_of_channels, frames_to_process, sample_rate);
+      *context, number_of_channels, sample_rate);
 }
 
-void OfflineAudioDestinationNode::Trace(Visitor* visitor) const {
-  visitor->Trace(destination_buffer_);
-  AudioDestinationNode::Trace(visitor);
+OfflineAudioDestinationHandler&
+OfflineAudioDestinationNode::GetAudioDestinationHandler() const {
+  return static_cast<OfflineAudioDestinationHandler&>(Handler());
 }
 
 }  // namespace blink

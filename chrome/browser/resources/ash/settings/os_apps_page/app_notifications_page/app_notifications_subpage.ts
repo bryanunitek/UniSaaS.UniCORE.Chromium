@@ -22,7 +22,7 @@ import {recordSettingChange} from '../../metrics_recorder.js';
 import type {App, AppNotificationsHandlerInterface} from '../../mojom-webui/app_notification_handler.mojom-webui.js';
 import {AppNotificationsObserverReceiver} from '../../mojom-webui/app_notification_handler.mojom-webui.js';
 import {Setting} from '../../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../../router.js';
+import type {Route} from '../../os_settings_routes.js';
 import {Router, routes} from '../../router.js';
 import {isAppInstalled} from '../os_apps_page.js';
 
@@ -76,7 +76,7 @@ export class AppNotificationsSubpage extends AppNotificationsSubpageBase {
     };
   }
 
-  prefs: PrefsState;
+  declare prefs: PrefsState;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -84,12 +84,12 @@ export class AppNotificationsSubpage extends AppNotificationsSubpageBase {
     Setting.kAppBadgingOnOff,
   ]);
 
-  private appList_: App[];
+  declare private appList_: App[];
   private appNotificationsObserverReceiver_: AppNotificationsObserverReceiver|
       null;
-  private isDndEnabled_: boolean;
+  declare private isDndEnabled_: boolean;
   private mojoInterfaceProvider_: AppNotificationsHandlerInterface;
-  private virtualDndPref_: chrome.settingsPrivate.PrefObject<boolean>;
+  declare private virtualDndPref_: chrome.settingsPrivate.PrefObject<boolean>;
 
   constructor() {
     super();

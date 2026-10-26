@@ -11,19 +11,18 @@ import '//resources/cr_elements/cr_url_list_item/cr_url_list_item.js';
 import {AnchorAlignment} from '//resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import type {CrActionMenuElement} from 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import {getFaviconForPageURL} from 'chrome://resources/js/icon.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import type {ContextInfo} from './contextual_tasks.mojom-webui.js';
-import type {BrowserProxy} from './contextual_tasks_browser_proxy.js';
-import {BrowserProxyImpl} from './contextual_tasks_browser_proxy.js';
+import type {ContextInfo} from './contextual_tasks_toolbar.mojom-webui.js';
+import type {ToolbarBrowserProxy} from './contextual_tasks_toolbar_browser_proxy.js';
+import {ToolbarBrowserProxyImpl} from './contextual_tasks_toolbar_browser_proxy.js';
 import {getCss} from './sources_menu.css.js';
 import {getHtml} from './sources_menu.html.js';
 import {recordAction} from './utils.js';
 
 export interface SourcesMenuElement {
-  $: {
-    menu: CrActionMenuElement,
-  };
+  $: {menu: CrActionMenuElement};
 }
 
 export class SourcesMenuElement extends CrLitElement {
@@ -42,12 +41,24 @@ export class SourcesMenuElement extends CrLitElement {
   static override get properties() {
     return {
       contextInfos: {type: Array},
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
   accessor contextInfos: ContextInfo[] = [];
-  private browserProxy_: BrowserProxy = BrowserProxyImpl.getInstance();
 
-  showAt(target: HTMLElement) {
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
+  private toolbarBrowserProxy_: ToolbarBrowserProxy =
+      ToolbarBrowserProxyImpl.getInstance();
+
+  private isUnboundedMenuEnabled_: boolean =
+      loadTimeData.valueExists('contextualTasksUnboundedMenuEnabled') &&
+      loadTimeData.getBoolean('contextualTasksUnboundedMenuEnabled');
+
+  async showAt(target: HTMLElement) {
+    if (this.isUnboundedMenuEnabled_) {
+      await this.$.menu.setUnbounded();
+    }
     this.$.menu.showAt(target, {
       noOffset: true,
       anchorAlignmentY: AnchorAlignment.AFTER_END,
@@ -68,7 +79,7 @@ export class SourcesMenuElement extends CrLitElement {
 
     recordAction('ContextualTasks.WebUI.UserAction.TabFromSourcesMenuClicked');
     const contextInfo = this.getContextInfoFromEvent_(e);
-    this.browserProxy_.handler.onTabClickedFromSourcesMenu(
+    this.toolbarBrowserProxy_.handler.onTabClickedFromSourcesMenu(
         contextInfo.tab!.tabId, contextInfo.tab!.url);
   }
 
@@ -76,14 +87,14 @@ export class SourcesMenuElement extends CrLitElement {
     this.close();
 
     const contextInfo = this.getContextInfoFromEvent_(e);
-    this.browserProxy_.handler.onFileClickedFromSourcesMenu(
+    this.toolbarBrowserProxy_.handler.onFileClickedFromSourcesMenu(
         contextInfo.file!.url);
   }
 
   protected onImageClick_(e: Event) {
     this.close();
     const contextInfo = this.getContextInfoFromEvent_(e);
-    this.browserProxy_.handler.onImageClickedFromSourcesMenu(
+    this.toolbarBrowserProxy_.handler.onImageClickedFromSourcesMenu(
         contextInfo.image!.url);
   }
 

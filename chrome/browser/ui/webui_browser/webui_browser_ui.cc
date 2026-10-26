@@ -4,6 +4,9 @@
 
 #include "chrome/browser/ui/webui_browser/webui_browser_ui.h"
 
+#include <array>
+
+#include "base/containers/to_vector.h"
 #include "base/notimplemented.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/contextual_search/contextual_search_service_factory.h"
@@ -40,6 +43,7 @@
 #include "components/contextual_search/contextual_search_session_handle.h"
 #include "components/favicon_base/favicon_url_parser.h"
 #include "components/guest_contents/browser/guest_contents_host_impl.h"
+#include "components/surface_embed/browser/surface_embed_handle.h"
 #include "components/surface_embed/common/features.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/web_contents.h"
@@ -127,6 +131,9 @@ WebUIBrowserUI::WebUIBrowserUI(content::WebUI* web_ui)
   source->AddLocalizedStrings(
       SearchboxHandler::GetWebUIDataSourceDict(profile));
 
+  source->AddInteger("tabStripInset",
+                     WebUIBrowserPageHandler::GetTabStripInsetWidth());
+
   source->AddBoolean(
       "enableSurfaceEmbed",
       base::FeatureList::IsEnabled(surface_embed::features::kSurfaceEmbed));
@@ -157,7 +164,7 @@ WebUIBrowserUI::WebUIBrowserUI(content::WebUI* web_ui)
     ui::TrackedElementHandlerDocumentSingleton::Register(
         this, GetKnownElementIdentifiers(),
         base::BindRepeating(
-            [](Browser* browser) {
+            [](BrowserWindowInterface* browser) {
               return BrowserElements::From(browser)->GetContext();
             },
             base::Unretained(browser_)));
@@ -185,8 +192,7 @@ void WebUIBrowserUI::BindInterface(
 }
 
 void WebUIBrowserUI::BindInterface(
-    mojo::PendingReceiver<searchbox::mojom::PageHandlerFactory>
-        receiver) {
+    mojo::PendingReceiver<searchbox::mojom::PageHandlerFactory> receiver) {
   searchbox_page_factory_receiver_.reset();
   searchbox_page_factory_receiver_.Bind(std::move(receiver));
 }
@@ -211,7 +217,7 @@ void WebUIBrowserUI::BindInterface(
   if (window) {
     BrowserWindowInterface* browser_window = window->browser();
     if (browser_window) {
-      auto* feature = browser_window->GetFeatures().bookmarks_service_feature();
+      auto* feature = BookmarksServiceFeature::From(browser_window);
       if (feature) {
         feature->Accept(std::move(receiver));
       }
@@ -227,8 +233,7 @@ void WebUIBrowserUI::BindInterface(
 
 void WebUIBrowserUI::BindInterface(
     mojo::PendingReceiver<tabs_api::mojom::TabStripService> receiver) {
-  auto* tab_strip_service_feature =
-      browser_->browser_window_features()->tab_strip_service_feature();
+  auto* tab_strip_service_feature = TabStripServiceFeature::From(browser_);
   CHECK(tab_strip_service_feature) << "Browser missing TabStripService";
   tab_strip_service_feature->Accept(std::move(receiver));
 }
@@ -236,16 +241,14 @@ void WebUIBrowserUI::BindInterface(
 void WebUIBrowserUI::BindInterface(
     mojo::PendingReceiver<tabs_api::mojom::TabStripExperimentService>
         receiver) {
-  auto* tab_strip_service_feature =
-      browser_->browser_window_features()->tab_strip_service_feature();
+  auto* tab_strip_service_feature = TabStripServiceFeature::From(browser_);
   CHECK(tab_strip_service_feature) << "Browser missing TabStripService";
   tab_strip_service_feature->AcceptExperimental(std::move(receiver));
 }
 
 void WebUIBrowserUI::BindInterface(
     mojo::PendingReceiver<tabs_api::mojom::TabDragService> receiver) {
-  auto* tab_drag_service_feature =
-      browser_->browser_window_features()->tab_drag_service_feature();
+  auto* tab_drag_service_feature = TabDragServiceFeature::From(browser_);
   CHECK(tab_drag_service_feature) << "Browser missing TabDragService";
   tab_drag_service_feature->AcceptDragService(
       std::move(receiver), web_ui()->GetWebContents()->GetNativeView());
@@ -253,8 +256,7 @@ void WebUIBrowserUI::BindInterface(
 
 void WebUIBrowserUI::BindInterface(
     mojo::PendingReceiver<tabs_api::mojom::TabStripUIController> receiver) {
-  auto* ui_controller =
-      browser_->browser_window_features()->tab_strip_ui_controller();
+  auto* ui_controller = tabs_api::TabStripUIControllerImpl::From(browser_);
   CHECK(ui_controller) << "Browser missing TabStripUIController";
   ui_controller->Bind(std::move(receiver));
 }
@@ -291,15 +293,16 @@ void WebUIBrowserUI::CreatePageHandler(
       ->Bind(std::move(page), std::move(receiver));
 }
 
-const std::vector<ui::ElementIdentifier>&
-WebUIBrowserUI::GetKnownElementIdentifiers() const {
-  static const std::vector<ui::ElementIdentifier> kKnownElementIdentifiers{
-      kContentsContainerViewElementId, kExtensionsMenuButtonElementId,
-      kToolbarActionViewElementId,     kLocationBarElementId,
-      kLocationIconElementId,          kToolbarAppMenuButtonElementId,
-      kToolbarAvatarButtonElementId,   kToolbarBackButtonElementId,
-      kToolbarForwardButtonElementId};
-  return kKnownElementIdentifiers;
+std::vector<ui::ElementIdentifier> WebUIBrowserUI::GetKnownElementIdentifiers()
+    const {
+  static constexpr auto kKnownElementIdentifiers =
+      std::to_array<ui::ElementIdentifier>(
+          {kContentsContainerViewElementId, kExtensionsMenuButtonElementId,
+           kToolbarActionViewElementId, kLocationBarElementId,
+           kLocationIconElementId, kToolbarAppMenuButtonElementId,
+           kToolbarAvatarButtonElementId, kToolbarBackButtonElementId,
+           kToolbarForwardButtonElementId});
+  return base::ToVector(kKnownElementIdentifiers);
 }
 
 void WebUIBrowserUI::BookmarkBarStateChanged(
@@ -312,18 +315,18 @@ void WebUIBrowserUI::BookmarkBarStateChanged(
 }
 
 void WebUIBrowserUI::ShowSidePanel(SidePanelEntryKey side_panel_entry_key) {
-  // Create guest contents.
+  // Create side panel contents.
   WebUIBrowserSidePanelUI* side_panel_ui =
       browser_window()->GetWebUIBrowserSidePanelUI();
   content::WebContents* web_contents =
       side_panel_ui->GetWebContentsForId(side_panel_entry_key.id());
   web_contents->SetColorProviderSource(browser_window());
   CHECK(web_contents);
-  auto* guest_handle =
-      guest_contents::GuestContentsHandle::CreateForWebContents(web_contents);
+  auto* embedded_handle =
+      surface_embed::SurfaceEmbedHandle::CreateForWebContents(web_contents);
 
   // Notify JS.
-  page_->ShowSidePanel(guest_handle->id(),
+  page_->ShowSidePanel(embedded_handle->id(),
                        SidePanelEntryIdToTitle(side_panel_entry_key.id()));
 }
 

@@ -77,9 +77,13 @@ bool IsValueOutOfRangeForProperty(CSSPropertyID property_id,
     case CSSPropertyID::kAnimationIterationCount:
     case CSSPropertyID::kBackgroundSize:
     case CSSPropertyID::kBlockSize:
+    case CSSPropertyID::kBorderBlockEndWidth:
+    case CSSPropertyID::kBorderBlockStartWidth:
     case CSSPropertyID::kBorderImageOutset:
     case CSSPropertyID::kBorderImageSlice:
     case CSSPropertyID::kBorderImageWidth:
+    case CSSPropertyID::kBorderInlineEndWidth:
+    case CSSPropertyID::kBorderInlineStartWidth:
     case CSSPropertyID::kColumnRuleWidth:
     case CSSPropertyID::kFlexGrow:
     case CSSPropertyID::kFlexShrink:
@@ -115,6 +119,23 @@ bool IsValueOutOfRangeForProperty(CSSPropertyID property_id,
       return value < 1 || value > 1000;
     default:
       return false;
+  }
+}
+
+// The numeric range a wrapped out-of-range value should carry so that its
+// computed value is clamped to the property's range at computed-value time
+// (CSS Typed OM 4.3.2), matching a parsed calc(). Almost all properties that
+// reach here are non-negative and clamp to [0, inf); the few that permit
+// negative values (restricted only to integers) keep the full range.
+CSSPrimitiveValue::ValueRange RangeForWrappedValue(CSSPropertyID property_id) {
+  switch (property_id) {
+    case CSSPropertyID::kOrder:
+    case CSSPropertyID::kReadingOrder:
+    case CSSPropertyID::kZIndex:
+    case CSSPropertyID::kMathDepth:
+      return CSSPrimitiveValue::ValueRange::kAll;
+    default:
+      return CSSPrimitiveValue::ValueRange::kNonNegative;
   }
 }
 
@@ -214,10 +235,13 @@ const CSSNumericLiteralValue* CSSUnitValue::ToCSSValue() const {
 const CSSPrimitiveValue* CSSUnitValue::ToCSSValueWithProperty(
     CSSPropertyID property_id) const {
   if (IsValueOutOfRangeForProperty(property_id, value_, unit_)) {
-    // Wrap out of range values with a calc.
+    // Wrap out of range values with a calc, carrying the property's numeric
+    // range so the computed value is clamped to it (e.g. a negative
+    // <percentage>/<number> for a non-negative property clamps to 0).
     CSSMathExpressionNode* node = ToCalcExpressionNode();
     node->SetIsNestedCalc();
-    return CSSMathFunctionValue::Create(node);
+    return CSSMathFunctionValue::Create(node,
+                                        RangeForWrappedValue(property_id));
   }
 
   return CSSNumericLiteralValue::Create(value_, unit_);

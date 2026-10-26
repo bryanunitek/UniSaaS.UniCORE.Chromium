@@ -60,7 +60,7 @@ class CONTENT_EXPORT NavigationEntryImpl : public NavigationEntry {
   // history item.
   struct TreeNode {
     // TODO(https://crbug.com/495931147): Remove this macro.
-    ADVANCED_MEMORY_SAFETY_CHECKS();
+    SANITIZED_OBJECT();
 
    public:
     TreeNode(TreeNode* parent, scoped_refptr<FrameNavigationEntry> frame_entry);
@@ -262,10 +262,10 @@ class CONTENT_EXPORT NavigationEntryImpl : public NavigationEntry {
   // exists, or else the existing one (which might be shared with other
   // NavigationEntries) is updated or replaced (based on |update_policy|) with
   // the given parameters.
-  // Does nothing if there is no entry already and |url| is about:blank, since
-  // that does not count as a real commit.
+  // Returns the added or updated FrameNavigationEntry, or nullptr if the
+  // parent TreeNode could not be found.
   enum class UpdatePolicy { kUpdate, kReplace };
-  void AddOrUpdateFrameEntry(
+  FrameNavigationEntry* AddOrUpdateFrameEntry(
       FrameTreeNode* frame_tree_node,
       UpdatePolicy update_policy,
       int64_t item_sequence_number,
@@ -490,8 +490,8 @@ class CONTENT_EXPORT NavigationEntryImpl : public NavigationEntry {
 
   void set_back_forward_cache_metrics(
       scoped_refptr<BackForwardCacheMetrics> metrics) {
-    DCHECK(metrics);
-    DCHECK(!back_forward_cache_metrics_);
+    CHECK(metrics, base::NotFatalUntil::M158);
+    CHECK(!back_forward_cache_metrics_, base::NotFatalUntil::M158);
     back_forward_cache_metrics_ = metrics;
   }
 

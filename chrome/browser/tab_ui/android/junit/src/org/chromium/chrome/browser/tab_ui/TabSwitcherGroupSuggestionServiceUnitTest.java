@@ -29,12 +29,14 @@ import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_group_suggestion.GroupSuggestionsServiceFactory;
 import org.chromium.chrome.browser.tabmodel.TabGroupObserver;
+import org.chromium.chrome.browser.tabmodel.TabGroupObserver.DidRemoveTabGroupReason;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabwindow.WindowId;
@@ -216,6 +218,7 @@ public class TabSwitcherGroupSuggestionServiceUnitTest {
     }
 
     @Test
+    @DisableFeatures(ChromeFeatureList.TAB_CLOSURE_METHOD_REFACTOR)
     public void testTabModelObserver() {
         verify(mTabModel).addObserver(mTabModelObserverCaptor.capture());
         TabModelObserver observer = mTabModelObserverCaptor.getValue();
@@ -247,29 +250,64 @@ public class TabSwitcherGroupSuggestionServiceUnitTest {
     }
 
     @Test
+    @EnableFeatures(ChromeFeatureList.TAB_CLOSURE_METHOD_REFACTOR)
+    public void testTabModelObserver_WillCloseTabs() {
+        verify(mTabModel).addObserver(mTabModelObserverCaptor.capture());
+        TabModelObserver observer = mTabModelObserverCaptor.getValue();
+
+        Tab mockTab = mock();
+
+        observer.didMoveTab(mockTab, 0, 1);
+        verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
+
+        reset(mSuggestionLifecycleObserverHandler);
+        observer.tabClosureUndone(mockTab);
+        verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
+
+        reset(mSuggestionLifecycleObserverHandler);
+        observer.tabRemoved(mockTab);
+        verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
+
+        reset(mSuggestionLifecycleObserverHandler);
+        observer.willCloseTabs(
+                Collections.singletonList(mockTab), /* isAllTabs= */ false, /* allowUndo= */ false);
+        verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
+
+        reset(mSuggestionLifecycleObserverHandler);
+        observer.willAddTab(mockTab, 0);
+        verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
+
+        reset(mSuggestionLifecycleObserverHandler);
+        observer.onTabClosePending(Collections.singletonList(mockTab), /* isAllTabs= */ false, 0);
+        verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
+    }
+
+    @Test
     public void testTabGroupObserver() {
         verify(mTabModel).addTabGroupObserver(mTabGroupObserverCaptor.capture());
         TabGroupObserver observer = mTabGroupObserverCaptor.getValue();
 
         Tab mockTab = mock();
 
-        observer.willMergeTabToGroup(mockTab, 0, null);
+        observer.didMergeTabToGroup(mockTab, /* isDestinationTab= */ false);
         verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
 
         reset(mSuggestionLifecycleObserverHandler);
-        observer.willMoveTabGroup(new Token(1L, 2L), 0);
+        observer.willMoveTabGroup(new Token(1L, 2L));
         verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
 
         reset(mSuggestionLifecycleObserverHandler);
-        observer.willMoveTabOutOfGroup(mockTab, null);
+        observer.willMoveTabOutOfGroup(mockTab);
+        verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
+
+        Token tabGroupId = new Token(1L, 2L);
+
+        reset(mSuggestionLifecycleObserverHandler);
+        observer.onTabGroupCreated(tabGroupId);
         verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
 
         reset(mSuggestionLifecycleObserverHandler);
-        observer.didCreateNewGroup(mockTab, mTabModel);
-        verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
-
-        reset(mSuggestionLifecycleObserverHandler);
-        observer.didRemoveTabGroup(0, null, 0);
+        observer.didRemoveTabGroup(tabGroupId, DidRemoveTabGroupReason.CLOSE);
         verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
 
         reset(mSuggestionLifecycleObserverHandler);

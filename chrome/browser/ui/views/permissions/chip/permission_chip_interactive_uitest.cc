@@ -2,26 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <algorithm>
 #include <memory>
 #include <variant>
 
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/time/time.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/permissions/quiet_notification_permission_ui_config.h"
-#include "chrome/browser/permissions/quiet_notification_permission_ui_state.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
-#include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/content_setting_bubble_contents.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/location_bar/location_icon_test_accessor.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
@@ -55,16 +54,13 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/permissions_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
-#include "net/dns/mock_host_resolver.h"
 #include "services/device/public/cpp/test/scoped_geolocation_overrider.h"
-#include "ui/accessibility/ax_action_data.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/test/test_event.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/interaction/element_tracker_views.h"
-#include "ui/views/test/ax_event_counter.h"
 #include "ui/views/test/button_test_api.h"
 #include "ui/views/test/views_test_utils.h"
 #include "ui/views/view_utils.h"
@@ -157,7 +153,7 @@ class PermissionChipInteractiveUITest : public InProcessBrowserTest {
 
   content::RenderFrameHost* GetActiveMainFrame() {
     return browser()
-        ->tab_strip_model()
+        ->GetTabStripModel()
         ->GetActiveWebContents()
         ->GetPrimaryMainFrame();
   }
@@ -167,13 +163,16 @@ class PermissionChipInteractiveUITest : public InProcessBrowserTest {
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), requesting_origin));
     test_api_->AddSimpleRequest(GetActiveMainFrame(), type);
     base::RunLoop().RunUntilIdle();
-    views::test::RunScheduledLayout(GetLocationBarView());
+    if (LocationBarView* lbv = BrowserView::GetBrowserViewForBrowser(browser())
+                                   ->GetLocationBarView()) {
+      views::test::RunScheduledLayout(lbv);
+    }
   }
 
-  LocationBarView* GetLocationBarView() {
+  LocationBar* GetLocationBar() {
     BrowserView* browser_view =
         BrowserView::GetBrowserViewForBrowser(browser());
-    return browser_view->toolbar()->location_bar_view();
+    return browser_view->toolbar()->location_bar();
   }
 
   ChipController* GetChipController() {
@@ -184,23 +183,31 @@ class PermissionChipInteractiveUITest : public InProcessBrowserTest {
     return lb->GetChipController();
   }
 
-  PermissionChipView* GetChip() {
-    return views::AsViewClass<PermissionChipView>(
-        views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
-            PermissionChipView::kPermissionRequestChipElementId,
-            views::ElementTrackerViews::GetContextForView(
-                BrowserView::GetBrowserViewForBrowser(browser()))));
-  }
+  PermissionChipInterface* GetChip() { return GetChipController()->chip(); }
 
-  void ClickOnChip(PermissionChipView* chip) {
+  void ClickOnChip(PermissionChipInterface* chip) {
     ASSERT_TRUE(chip != nullptr);
     ASSERT_TRUE(chip->GetVisible());
     ASSERT_FALSE(GetChipController()->GetBubbleWidget());
 
-    views::test::ButtonTestApi(chip).NotifyClick(
-        ui::MouseEvent(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
-                       ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON, 0));
-    base::RunLoop().RunUntilIdle();
+    chip->ExecuteForTesting();
+
+    // WebUIPermissionChip resolves the prompt bubble's anchor asynchronously,
+    // once the WebUI has registered the chip element over Mojo. Wait for it so
+    // that any pending prompt bubble is created by the time this returns.
+    ASSERT_TRUE(base::test::RunUntil([&] {
+      return !GetChipController()->is_waiting_for_anchor_for_testing();
+    }));
+  }
+
+  void ForceUpdateVisibility() {
+    // Force synchronous update of layout values. In the actual code,
+    // InvalidateLayout() is sufficient, but leaves stale visibility values for
+    // testing.
+    if (LocationBarView* lbv = BrowserView::GetBrowserViewForBrowser(browser())
+                                   ->GetLocationBarView()) {
+      lbv->DeprecatedLayoutImmediately();
+    }
   }
 
   // Create an <iframe> inside |parent_rfh|, and navigate it toward |url|.
@@ -235,32 +242,34 @@ class PermissionChipInteractiveUITest : public InProcessBrowserTest {
 
 class LocationBarIconOverrideTest : public PermissionChipInteractiveUITest {
  public:
-  LocationBarIconOverrideTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {}, {content_settings::features::kLeftHandSideActivityIndicators});
-  }
+  LocationBarIconOverrideTest() = default;
 
   bool IsLocationIconVisible() {
-    return BrowserView::GetBrowserViewForBrowser(browser())
-        ->GetLocationBarView()
-        ->location_icon_view()
-        ->GetVisible();
+    return LocationIconTestAccessor(browser()).IsVisible();
   }
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
+  void ExpectLocationIconVisibility(bool expected) {
+    if (BrowserView::GetBrowserViewForBrowser(browser())
+            ->GetLocationBarView()) {
+      EXPECT_EQ(expected, IsLocationIconVisible());
+    } else {
+      // With WebUI, we have to check asynchronously.
+      EXPECT_TRUE(base::test::RunUntil(
+          [&]() { return IsLocationIconVisible() == expected; }));
+    }
+  }
 };
 
 IN_PROC_BROWSER_TEST_F(LocationBarIconOverrideTest,
                        OverrideLocationBarIconDuringChipOnlyForOverrideFlags) {
   // Initially the location bar icon should be visible for any feature flag
   // configuration
-  EXPECT_TRUE(IsLocationIconVisible());
+  ExpectLocationIconVisibility(true);
 
   RequestPermission(permissions::RequestType::kGeolocation);
 
   // After a request, a chip is shown, which should override the lock icon.
-  EXPECT_FALSE(IsLocationIconVisible());
+  ExpectLocationIconVisibility(false);
 
   base::RunLoop().RunUntilIdle();
 
@@ -272,41 +281,29 @@ IN_PROC_BROWSER_TEST_F(LocationBarIconOverrideTest,
   test_api_->manager()->Accept(/*prompt_options=*/std::monostate());
 
   base::RunLoop().RunUntilIdle();
-
-  // Force synchronous update of layout values. In the actual code,
-  // InvalidateLayout() is sufficient, but leaves stale visibility values for
-  // testing.
-  BrowserView::GetBrowserViewForBrowser(browser())
-      ->GetLocationBarView()
-      ->DeprecatedLayoutImmediately();
+  ForceUpdateVisibility();
 
   // Test with confirmation chip.
   // Verify chip is still visible and has the confirmation text
   EXPECT_TRUE(GetChip()->GetVisible());
-  EXPECT_TRUE(GetChip()->GetText() ==
+  EXPECT_TRUE(GetChip()->GetTextForTesting() ==
               l10n_util::GetStringUTF16(
                   IDS_PERMISSIONS_PERMISSION_ALLOWED_CONFIRMATION));
 
-  EXPECT_FALSE(IsLocationIconVisible());
+  ExpectLocationIconVisibility(false);
 
   // Check collapse timer is running and fast forward fire callback. Then,
   // fast forward animation to trigger callback and wait until it completes.
   EXPECT_TRUE(GetChipController()->is_collapse_timer_running_for_testing());
   GetChipController()->fire_collapse_timer_for_testing();
-  GetChip()->animation_for_testing()->End();
+  GetChip()->EndAnimationForTesting();
   base::RunLoop().RunUntilIdle();
-
-  // Force synchronous update of layout values. In the actual code,
-  // InvalidateLayout() is sufficient, but leaves stale visibility values for
-  // testing.
-  BrowserView::GetBrowserViewForBrowser(browser())
-      ->GetLocationBarView()
-      ->DeprecatedLayoutImmediately();
+  ForceUpdateVisibility();
 
   // With any feature flag configuration, we have to ensure that the location
   // bar icon is visible after the chip collapsed.
   EXPECT_FALSE(GetChip()->GetVisible());
-  EXPECT_TRUE(IsLocationIconVisible());
+  ExpectLocationIconVisibility(true);
 }
 
 class ConfirmationChipEnabledInteractiveTest
@@ -322,23 +319,25 @@ IN_PROC_BROWSER_TEST_F(ConfirmationChipEnabledInteractiveTest,
 
   // Chip should be visible and show geolocation request
   EXPECT_TRUE(GetChip()->GetVisible());
-  EXPECT_TRUE(GetChip()->GetText() ==
+  EXPECT_TRUE(GetChip()->GetTextForTesting() ==
               l10n_util::GetStringUTF16(IDS_GEOLOCATION_PERMISSION_CHIP));
 
   test_api_->manager()->Accept(/*prompt_options=*/std::monostate());
 
   // Confirmation chip should be visible
   EXPECT_TRUE(GetChip()->GetVisible());
-  EXPECT_TRUE(GetChip()->GetText() ==
+  EXPECT_TRUE(GetChip()->GetTextForTesting() ==
               l10n_util::GetStringUTF16(
                   IDS_PERMISSIONS_PERMISSION_ALLOWED_CONFIRMATION));
-  EXPECT_EQ(GetChip()->theme(), PermissionChipTheme::kNormalVisibility);
+  EXPECT_EQ(GetChip()->GetThemeForTesting(),
+            PermissionChipTheme::kNormalVisibility);
 
   // Check collapse timer is running and fast forward fire callback. Then,
   // fast forward animation to trigger callback and wait until it completes.
   EXPECT_TRUE(GetChipController()->is_collapse_timer_running_for_testing());
   GetChipController()->fire_collapse_timer_for_testing();
-  GetChip()->animation_for_testing()->End();
+  GetChip()->EndAnimationForTesting();
+
   base::RunLoop().RunUntilIdle();
 
   // Chip should no longer be visible.
@@ -349,17 +348,18 @@ IN_PROC_BROWSER_TEST_F(ConfirmationChipEnabledInteractiveTest,
   base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(GetChip()->GetVisible());
-  EXPECT_EQ(GetChip()->GetText(),
-            l10n_util::GetStringUTF16(IDS_NOTIFICATION_PERMISSIONS_CHIP));
+  EXPECT_TRUE(GetChip()->GetTextForTesting() ==
+              l10n_util::GetStringUTF16(IDS_NOTIFICATION_PERMISSIONS_CHIP));
 
   test_api_->manager()->Deny(/*prompt_options=*/std::monostate());
 
   // After deny, the deny confirmation should be displayed
   EXPECT_TRUE(GetChip()->GetVisible());
-  EXPECT_EQ(GetChip()->GetText(),
-            l10n_util::GetStringUTF16(
-                IDS_PERMISSIONS_PERMISSION_NOT_ALLOWED_CONFIRMATION));
-  EXPECT_EQ(GetChip()->theme(), PermissionChipTheme::kLowVisibility);
+  EXPECT_TRUE(GetChip()->GetTextForTesting() ==
+              l10n_util::GetStringUTF16(
+                  IDS_PERMISSIONS_PERMISSION_NOT_ALLOWED_CONFIRMATION));
+  EXPECT_EQ(GetChip()->GetThemeForTesting(),
+            PermissionChipTheme::kLowVisibility);
 }
 
 IN_PROC_BROWSER_TEST_F(ConfirmationChipEnabledInteractiveTest,
@@ -374,16 +374,16 @@ IN_PROC_BROWSER_TEST_F(ConfirmationChipEnabledInteractiveTest,
 
   // Since a new request came in, the new request should be displayed
   EXPECT_TRUE(GetChip()->GetVisible());
-  EXPECT_EQ(GetChip()->GetText(),
-            l10n_util::GetStringUTF16(IDS_NOTIFICATION_PERMISSIONS_CHIP));
+  EXPECT_TRUE(GetChip()->GetTextForTesting() ==
+              l10n_util::GetStringUTF16(IDS_NOTIFICATION_PERMISSIONS_CHIP));
 
   test_api_->manager()->Deny(/*prompt_options=*/std::monostate());
 
   // After the deny, the deny confirmation should be displayed
   EXPECT_TRUE(GetChip()->GetVisible());
-  EXPECT_EQ(GetChip()->GetText(),
-            l10n_util::GetStringUTF16(
-                IDS_PERMISSIONS_PERMISSION_NOT_ALLOWED_CONFIRMATION));
+  EXPECT_TRUE(GetChip()->GetTextForTesting() ==
+              l10n_util::GetStringUTF16(
+                  IDS_PERMISSIONS_PERMISSION_NOT_ALLOWED_CONFIRMATION));
 }
 
 IN_PROC_BROWSER_TEST_F(ConfirmationChipEnabledInteractiveTest,
@@ -407,10 +407,10 @@ IN_PROC_BROWSER_TEST_F(ConfirmationChipEnabledInteractiveTest,
   page_info_bubble->CloseBubble();
 
   // Fast forward animation to trigger callback and wait until it completes.
-  GetChip()->animation_for_testing()->End();
+  GetChip()->EndAnimationForTesting();
   base::RunLoop().RunUntilIdle();
 
-  ASSERT_FALSE(GetChip()->GetVisible());
+  EXPECT_FALSE(GetChip()->GetVisible());
 }
 
 IN_PROC_BROWSER_TEST_F(ConfirmationChipEnabledInteractiveTest,
@@ -418,25 +418,25 @@ IN_PROC_BROWSER_TEST_F(ConfirmationChipEnabledInteractiveTest,
   RequestPermission(permissions::RequestType::kGeolocation);
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(GetChip()->GetVisible());
-  EXPECT_TRUE(GetChip()->GetText() ==
+  EXPECT_TRUE(GetChip()->GetTextForTesting() ==
               l10n_util::GetStringUTF16(IDS_GEOLOCATION_PERMISSION_CHIP));
 
   test_api_->manager()->Accept(/*prompt_options=*/std::monostate());
   EXPECT_TRUE(GetChip()->GetVisible());
-  EXPECT_TRUE(GetChip()->GetText() ==
+  EXPECT_TRUE(GetChip()->GetTextForTesting() ==
               l10n_util::GetStringUTF16(
                   IDS_PERMISSIONS_PERMISSION_ALLOWED_CONFIRMATION));
-  EXPECT_EQ(GetChip()->theme(), PermissionChipTheme::kNormalVisibility);
+  EXPECT_EQ(GetChip()->GetThemeForTesting(),
+            PermissionChipTheme::kNormalVisibility);
 
   // Simulate the user editing the omnibox.
-  OmniboxView* omnibox_view = GetLocationBarView()->GetOmniboxView();
+  OmniboxView* omnibox_view = GetLocationBar()->GetOmniboxView();
   omnibox_view->SetFocus(/*is_user_initiated=*/true);
   omnibox_view->SetUserText(u"Typing in the Omnibox...");
-  views::test::RunScheduledLayout(GetLocationBarView());
-  EXPECT_TRUE(GetLocationBarView()->IsEditingOrEmpty());
+  ForceUpdateVisibility();
+  EXPECT_TRUE(GetLocationBar()->IsEditingOrEmpty());
   EXPECT_FALSE(GetChip()->GetVisible());
 }
-
 
 class PageInfoChangedWithin1mUmaTest : public PermissionChipInteractiveUITest {
  public:
@@ -450,7 +450,7 @@ class PageInfoChangedWithin1mUmaTest : public PermissionChipInteractiveUITest {
                                                                   url_, 1);
     content::WebContents::FromRenderFrameHost(main_rfh)->Focus();
     content::WebContents* embedder_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     ASSERT_TRUE(embedder_contents);
 
     permissions::PermissionRequestObserver observer(embedder_contents);
@@ -468,7 +468,8 @@ class PageInfoChangedWithin1mUmaTest : public PermissionChipInteractiveUITest {
     OpenPageInfoBubble(browser());
     run_loop.Run();
     auto* bubble_view = static_cast<PageInfoBubbleView*>(
-        PageInfoBubbleView::GetPageInfoBubbleForTesting());
+        PageInfoBubbleView::GetPageInfoBubbleForTesting(
+            browser()->GetTabStripModel()->GetActiveWebContents()));
     EXPECT_TRUE(bubble_view);
 
     return bubble_view;
@@ -499,15 +500,11 @@ class PageInfoChangedWithin1mUmaTest : public PermissionChipInteractiveUITest {
   }
 
  private:
-  void OpenPageInfoBubble(Browser* browser) {
-    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-    LocationIconView* location_icon_view =
-        browser_view->toolbar()->location_bar_view()->location_icon_view();
-    ASSERT_TRUE(location_icon_view);
-    ui::test::TestEvent event;
-    location_icon_view->ShowBubble(event);
+  void OpenPageInfoBubble(BrowserWindowInterface* browser) {
+    LocationIconTestAccessor(browser).ShowBubble();
     views::BubbleDialogDelegateView* page_info =
-        PageInfoBubbleView::GetPageInfoBubbleForTesting();
+        PageInfoBubbleView::GetPageInfoBubbleForTesting(
+            browser->GetTabStripModel()->GetActiveWebContents());
     EXPECT_NE(nullptr, page_info);
     page_info->set_close_on_deactivate(false);
   }
@@ -595,13 +592,13 @@ IN_PROC_BROWSER_TEST_F(PageInfoChangedWithin1mUmaTest,
 
   test_api_->manager()->Deny(/*prompt_options=*/std::monostate());
 
-  content::WebContents* web_contents = GetLocationBarView()->GetWebContents();
+  content::WebContents* web_contents = GetLocationBar()->GetWebContents();
   const GURL& origin = permissions::PermissionUtil::GetLastCommittedOriginAsURL(
       web_contents->GetPrimaryMainFrame());
   permissions::OriginKeyedPermissionActionService* permission_action_service =
       permissions::PermissionsClient::Get()
           ->GetOriginKeyedPermissionActionService(
-              GetLocationBarView()->GetWebContents()->GetBrowserContext());
+              GetLocationBar()->GetWebContents()->GetBrowserContext());
 
   // Get recorded entry and manually change its time to 2 minutes ago.
   std::optional<permissions::PermissionActionTime> record =
@@ -1109,7 +1106,7 @@ IN_PROC_BROWSER_TEST_F(QuietChipFailFastInteractiveTest,
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/title1.html"));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::RenderFrameHost* main_rfh =
       ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(browser(), url,
                                                                 1);
@@ -1197,7 +1194,7 @@ IN_PROC_BROWSER_TEST_F(QuietChipFailFastInteractiveTest,
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/title1.html"));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::RenderFrameHost* main_rfh =
       ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(browser(), url,
                                                                 1);
@@ -1274,7 +1271,7 @@ IN_PROC_BROWSER_TEST_F(QuietChipFailFastInteractiveTest,
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/title1.html"));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::RenderFrameHost* main_rfh =
       ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(browser(), url,
                                                                 1);
@@ -1446,7 +1443,7 @@ IN_PROC_BROWSER_TEST_F(PermissionChipGestureGatedDisabledInteractiveUITest,
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/title1.html"));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::RenderFrameHost* main_rfh =
       ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(browser(), url,
                                                                 1);
@@ -1520,15 +1517,14 @@ IN_PROC_BROWSER_TEST_F(PermissionChipInteractiveUITest,
   EXPECT_EQ(false, content::EvalJs(main_rfh, kCheckNotifications));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(web_contents);
 
   auto* manager =
       permissions::PermissionRequestManager::FromWebContents(web_contents);
   permissions::PermissionRequestObserver observer(web_contents);
 
-  LocationBarView* location_bar =
-      BrowserView::GetBrowserViewForBrowser(browser())->GetLocationBarView();
+  LocationBar* location_bar = GetLocationBar();
   ASSERT_TRUE(location_bar);
   ChipController* chip_controller = location_bar->GetChipController();
   ChipExpansionObserver chip_expansion_observer(chip_controller->chip());
@@ -1602,11 +1598,11 @@ IN_PROC_BROWSER_TEST_F(PermissionChipInteractiveUITest,
   EXPECT_TRUE(test_api_->manager()->IsRequestInProgress());
 
   // Simulate the user editing the omnibox.
-  OmniboxView* omnibox_view = GetLocationBarView()->GetOmniboxView();
+  OmniboxView* omnibox_view = GetLocationBar()->GetOmniboxView();
+  ForceUpdateVisibility();
   omnibox_view->SetFocus(/*is_user_initiated=*/true);
   omnibox_view->SetUserText(u"Typing in the Omnibox...");
-  views::test::RunScheduledLayout(GetLocationBarView());
-  ASSERT_TRUE(GetLocationBarView()->IsEditingOrEmpty());
+  ASSERT_TRUE(GetLocationBar()->IsEditingOrEmpty());
 
   EXPECT_FALSE(test_api_->manager()->IsRequestInProgress());
   EXPECT_FALSE(GetChip()->GetVisible());
@@ -1640,7 +1636,7 @@ class GeolocationUsageObserverBrowsertest : public InProcessBrowserTest {
                      ContentSetting setting,
                      const GURL url) {
     HostContentSettingsMap* map =
-        HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+        HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
 
     map->SetContentSettingDefaultScope(url, url, type, setting);
   }
@@ -1653,7 +1649,7 @@ IN_PROC_BROWSER_TEST_F(GeolocationUsageObserverBrowsertest,
                        GetCurrentPosition) {
   ASSERT_TRUE(embedded_test_server()->Start());
   content::WebContents* embedder_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(embedder_contents);
   const GURL url(embedded_test_server()->GetURL("/empty.html"));
   content::RenderFrameHost* main_rfh =
@@ -1688,7 +1684,7 @@ IN_PROC_BROWSER_TEST_F(GeolocationUsageObserverBrowsertest,
                        WatchPositionAndClearWatch) {
   ASSERT_TRUE(embedded_test_server()->Start());
   content::WebContents* embedder_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(embedder_contents);
   const GURL url(embedded_test_server()->GetURL("/empty.html"));
   content::RenderFrameHost* main_rfh =
@@ -1730,7 +1726,7 @@ IN_PROC_BROWSER_TEST_F(GeolocationUsageObserverBrowsertest,
                        GetCurrentPositionWhileWatchingPosition) {
   ASSERT_TRUE(embedded_test_server()->Start());
   content::WebContents* embedder_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(embedder_contents);
   const GURL url(embedded_test_server()->GetURL("/empty.html"));
   content::RenderFrameHost* main_rfh =
@@ -1777,7 +1773,7 @@ IN_PROC_BROWSER_TEST_F(GeolocationUsageObserverBrowsertest,
                        StartGeolocationInDifferentTab) {
   ASSERT_TRUE(embedded_test_server()->Start());
   content::WebContents* embedder_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(embedder_contents);
   const GURL url(embedded_test_server()->GetURL("/empty.html"));
   content::RenderFrameHost* main_rfh =
@@ -1799,7 +1795,7 @@ IN_PROC_BROWSER_TEST_F(GeolocationUsageObserverBrowsertest,
 
   // Watch geolocation on different tab.
   // The usage will not record on main tab even they have the same origin.
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
   chrome::NewTabToRight(browser());
   EXPECT_EQ(2, tab_strip->count());
   tab_strip->ActivateTabAt(1);
@@ -1807,7 +1803,7 @@ IN_PROC_BROWSER_TEST_F(GeolocationUsageObserverBrowsertest,
       ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(browser(), url,
                                                                 1);
   content::WebContents* web_contents_2 =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   TestWebContentsObserver observer_2(web_contents_2);
   ASSERT_TRUE(content::ExecJs(rfh_tab_1, kWatchPosition));
   observer_2.Wait();
@@ -1819,7 +1815,7 @@ IN_PROC_BROWSER_TEST_F(GeolocationUsageObserverBrowsertest,
 IN_PROC_BROWSER_TEST_F(GeolocationUsageObserverBrowsertest, ReloadPage) {
   ASSERT_TRUE(embedded_test_server()->Start());
   content::WebContents* embedder_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(embedder_contents);
   const GURL url(embedded_test_server()->GetURL("/empty.html"));
   content::RenderFrameHost* main_rfh =

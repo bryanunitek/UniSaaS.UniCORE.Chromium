@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import type {BookmarkElement, BookmarksAppElement, BookmarksFolderNodeElement, BookmarksItemElement, BookmarksListElement, DndManager} from 'chrome://bookmarks/bookmarks.js';
-import {BookmarkManagerApiProxyImpl, BrowserProxyImpl, DragInfo, overrideFolderOpenerTimeoutDelay, setDebouncerForTesting} from 'chrome://bookmarks/bookmarks.js';
+import {BookmarkManagerApiProxyImpl, BrowserProxyImpl, DragInfo, overrideFolderOpenerTimeoutDelay, PermanentFolderType, setDebouncerForTesting} from 'chrome://bookmarks/bookmarks.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertNotReached, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {middleOfNode, topLeftOfNode} from 'chrome://webui-test/mouse_mock_interactions.js';
 import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
@@ -17,7 +17,6 @@ import {createFolder, createItem, findFolderNode, getAllFoldersOpenState, normal
 suite('drag and drop', function() {
   let app: BookmarksAppElement;
   let list: BookmarksListElement;
-  let rootFolderNode: BookmarksFolderNodeElement;
   let store: TestStore;
   let dndManager: DndManager;
   let bookmarkManagerApi: TestBookmarkManagerApiProxy;
@@ -30,7 +29,16 @@ suite('drag and drop', function() {
   }
 
   function getFolderNode(id: string) {
-    return findFolderNode(rootFolderNode, id) as BookmarksFolderNodeElement;
+    const topLevelNodes =
+        app.shadowRoot.querySelectorAll<BookmarksFolderNodeElement>(
+            'bookmarks-folder-node');
+    for (const node of topLevelNodes) {
+      const found = findFolderNode(node, id);
+      if (found) {
+        return found;
+      }
+    }
+    assertNotReached();
   }
 
   function getListItem(id: string) {
@@ -124,8 +132,10 @@ suite('drag and drop', function() {
               createItem('13'),
               createFolder('14', []),
               createFolder('15', []),
-            ]),
-        createFolder('2', []));
+            ],
+            {permanentFolderType: PermanentFolderType.kBookmarkBar}),
+        createFolder(
+            '2', [], {permanentFolderType: PermanentFolderType.kOther}));
     store = new TestStore({
       nodes: nodes,
       folderOpenState: getAllFoldersOpenState(nodes),
@@ -142,8 +152,6 @@ suite('drag and drop', function() {
     replaceBody(app);
     list =
         app.shadowRoot.querySelector<BookmarksListElement>('bookmarks-list')!;
-    rootFolderNode = app.shadowRoot.querySelector<BookmarksFolderNodeElement>(
-        'bookmarks-folder-node')!;
     dndManager = app.getDndManagerForTesting() as DndManager;
     dndManager!.setTimerProxyForTesting(new TestTimerProxy());
 
@@ -171,6 +179,53 @@ suite('drag and drop', function() {
     assertTrue(dragInfo.isDraggingFolderToDescendant('14', nodes));
     assertTrue(dragInfo.isDraggingFolderToDescendant('111', nodes));
     assertFalse(dragInfo.isDraggingFolderToDescendant('2', nodes));
+  });
+
+  test('dragInfo translates legacy ids in native drag data', function() {
+    // The bookmarkManagerPrivate API identifies nodes by their legacy id,
+    // which differs from the id used by the page.
+    const nodes = testTree(createFolder(
+        '1',
+        [
+          createFolder(
+              'folder-uuid-11',
+              [
+                createFolder(
+                    'folder-uuid-111', [], {legacy: {id: BigInt(111)}}),
+              ],
+              {legacy: {id: BigInt(11)}}),
+          createItem('item-uuid-12', {legacy: {id: BigInt(12)}}),
+        ],
+        {permanentFolderType: PermanentFolderType.kBookmarkBar}));
+    new TestStore({nodes: nodes}).replaceSingleton();
+
+    function createNativeDragData(
+        elements: Array<{id: string, parentId: string, url?: string}>,
+        sameProfile: boolean = true) {
+      return {
+        elements: elements.map(
+            e => ({...e, title: ''}) as chrome.bookmarks.BookmarkTreeNode),
+        sameProfile: sameProfile,
+      };
+    }
+
+    const dragInfo = new DragInfo();
+    dragInfo.setNativeDragData(
+        createNativeDragData([{id: '11', parentId: '1'}]));
+    assertTrue(dragInfo.isDraggingBookmark('folder-uuid-11'));
+    assertTrue(dragInfo.isDraggingChildBookmark('1'));
+    assertTrue(dragInfo.isDraggingFolderToDescendant('folder-uuid-111', nodes));
+    assertFalse(dragInfo.isDraggingFolderToDescendant('item-uuid-12', nodes));
+
+    dragInfo.setNativeDragData(createNativeDragData(
+        [{id: '12', parentId: '1', url: 'http://www.google.com/'}]));
+    assertTrue(dragInfo.isDraggingBookmark('item-uuid-12'));
+    assertFalse(dragInfo.isDraggingFolders());
+
+    // Nodes from another profile are not translated.
+    dragInfo.setNativeDragData(
+        createNativeDragData([{id: '11', parentId: '1'}], false));
+    assertDeepEquals(['11'], dragInfo.dragData!.elements.map(x => x.id));
   });
 
   test('drag in list', async function() {
@@ -534,7 +589,7 @@ suite('drag and drop', function() {
   });
 
   test('cannot start dragging unmodifiable items', function() {
-    store.data.nodes['2']!.unmodifiable = 'managed';
+    store.data.nodes['2']!.permanentFolderType = PermanentFolderType.kManaged;
     store.notifyObservers();
 
     let dragElement = getFolderNode('1');
@@ -546,8 +601,8 @@ suite('drag and drop', function() {
     assertFalse(dndManager.getDragInfoForTesting()!.isDragValid());
   });
 
-  test('cannot drag onto folders with unmodifiable children', async function() {
-    store.data.nodes['2']!.unmodifiable = 'managed';
+  test('cannot drag onto managed folders', async function() {
+    store.data.nodes['2']!.permanentFolderType = PermanentFolderType.kManaged;
     store.notifyObservers();
 
     const dragElement = getListItem('12');

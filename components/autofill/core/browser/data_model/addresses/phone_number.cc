@@ -7,18 +7,19 @@
 #include <limits.h>
 #include <stddef.h>
 
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/notreached.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
-#include "components/autofill/core/browser/data_model/data_model_utils.h"
+#include "components/autofill/core/browser/data_model/data_model_util.h"
 #include "components/autofill/core/browser/data_model/form_group.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/geo/autofill_country.h"
@@ -29,10 +30,9 @@ namespace autofill {
 
 namespace {
 
-// Returns the region code for this phone number, which is an ISO 3166 2-letter
-// country code.  The returned value is based on the `profile`; if the `profile`
-// does not have a country code associated with it, falls back to the country
-// code corresponding to the `app_locale`.
+// Returns the region code for `profile`, which is an ISO 3166 2-letter country
+// code. If the `profile` does not have a country code associated with it, falls
+// back to the country code corresponding to the `app_locale`.
 std::string GetRegion(const AutofillProfile& profile,
                       std::string_view app_locale) {
   std::u16string country_code = profile.GetRawInfo(ADDRESS_HOME_COUNTRY);
@@ -50,6 +50,8 @@ PhoneNumber::PhoneNumber(const PhoneNumber& number) : profile_(nullptr) {
   *this = number;
 }
 
+PhoneNumber::PhoneNumber(PhoneNumber&& number) noexcept = default;
+
 PhoneNumber::~PhoneNumber() = default;
 
 PhoneNumber& PhoneNumber::operator=(const PhoneNumber& number) {
@@ -61,6 +63,8 @@ PhoneNumber& PhoneNumber::operator=(const PhoneNumber& number) {
   cached_parsed_phone_ = number.cached_parsed_phone_;
   return *this;
 }
+
+PhoneNumber& PhoneNumber::operator=(PhoneNumber&& number) noexcept = default;
 
 bool PhoneNumber::operator==(const PhoneNumber& other) const {
   if (this == &other)
@@ -175,9 +179,8 @@ void PhoneNumber::GetMatchingTypes(std::u16string_view text,
 //   (650)2345678 -> 6502345678
 //   1-800-FLOWERS -> 18003569377
 // If the phone cannot be normalized, returns the stored value verbatim.
-std::u16string PhoneNumber::GetInfo(const AutofillType& autofill_type,
+std::u16string PhoneNumber::GetInfo(FieldType type,
                                     std::string_view app_locale) const {
-  FieldType type = autofill_type.GetAddressType();
   UpdateCacheIfNeeded(app_locale);
 
   // When the phone number autofill has stored cannot be normalized, it
@@ -209,12 +212,11 @@ std::u16string PhoneNumber::GetInfo(const AutofillType& autofill_type,
       // desirable in other regions. Closed bug crbug.com/98911 contains
       // additional context.
       std::string country_code = *profile_->GetAddressCountryCode();
-      if (country_code == "US" || country_code == "CA"){
-        std::string region_code = cached_parsed_phone_.GetRegionCode();
-        if ((region_code == "US" || region_code == "CA") &&
-            whole_number_[0] == u'+') {
-          whole_number_ = whole_number_.substr(1);
-        }
+      const std::string& region_code = cached_parsed_phone_.region();
+      if ((country_code == "US" || country_code == "CA") &&
+          (region_code == "US" || region_code == "CA") &&
+          whole_number_[0] == u'+') {
+        whole_number_.erase(whole_number_.begin());
       }
       return whole_number_;
     }
@@ -289,11 +291,11 @@ std::u16string PhoneNumber::GetInfo(const AutofillType& autofill_type,
   }
 }
 
-bool PhoneNumber::SetInfoWithVerificationStatus(const AutofillType& type,
+bool PhoneNumber::SetInfoWithVerificationStatus(FieldType type,
                                                 std::u16string_view value,
                                                 std::string_view app_locale,
                                                 VerificationStatus status) {
-  SetRawInfoWithVerificationStatus(type.GetAddressType(), value, status);
+  SetRawInfoWithVerificationStatus(type, value, status);
 
   if (number_.empty()) {
     return true;
@@ -319,18 +321,43 @@ VerificationStatus PhoneNumber::GetVerificationStatus(FieldType type) const {
 
 void PhoneNumber::UpdateCacheIfNeeded(std::string_view app_locale) const {
   std::string region = GetRegion(*profile_, app_locale);
-  if (!number_.empty() && cached_parsed_phone_.region() != region) {
-    // To enable filling of country calling codes for nationally formatted
-    // numbers, infer it from the `profile_`'s country information while parsing
-    // the number.
-    cached_parsed_phone_ = i18n::PhoneObject(
-        number_, region,
-        /*infer_country_code=*/profile_->HasInfo(ADDRESS_HOME_COUNTRY));
+  // To enable filling of country calling codes for nationally formatted
+  // numbers, infer it from the `profile_`'s country information while parsing
+  // the number.
+  const bool infer_country_code = profile_->HasRawInfo(ADDRESS_HOME_COUNTRY);
+  // Since nearly all profiles have a country, `infer_country_code` rarely
+  // changes. It is still compared so that adding a country to `profile_`
+  // doesn't keep a stale `cached_parsed_phone_` if `region` stays the same.
+  if (!number_.empty() &&
+      (cached_parsed_phone_.creation_region_hint() != region ||
+       cached_parsed_phone_.infer_country_code_from_region_hint() !=
+           infer_country_code)) {
+    cached_parsed_phone_ =
+        i18n::PhoneObject(number_, region, infer_country_code);
   }
 }
 
-PhoneNumber::PhoneCombineHelper::PhoneCombineHelper() = default;
+PhoneNumber::PhoneCombineHelper
+PhoneNumber::PhoneCombineHelper::FromObservedValues(
+    const base::flat_map<FieldType, std::u16string>& observed_values) {
+  PhoneCombineHelper combined_phone;
+  for (const auto& [type, value] : observed_values) {
+    if (GroupTypeOfFieldType(type) == FieldTypeGroup::kPhone) {
+      combined_phone.SetInfo(type, value);
+    }
+  }
+  return combined_phone;
+}
 
+PhoneNumber::PhoneCombineHelper::PhoneCombineHelper() = default;
+PhoneNumber::PhoneCombineHelper::PhoneCombineHelper(const PhoneCombineHelper&) =
+    default;
+PhoneNumber::PhoneCombineHelper::PhoneCombineHelper(PhoneCombineHelper&&) =
+    default;
+PhoneNumber::PhoneCombineHelper& PhoneNumber::PhoneCombineHelper::operator=(
+    const PhoneCombineHelper&) = default;
+PhoneNumber::PhoneCombineHelper& PhoneNumber::PhoneCombineHelper::operator=(
+    PhoneCombineHelper&&) = default;
 PhoneNumber::PhoneCombineHelper::~PhoneCombineHelper() = default;
 
 void PhoneNumber::PhoneCombineHelper::SetInfo(FieldType field_type,
@@ -367,20 +394,51 @@ void PhoneNumber::PhoneCombineHelper::SetInfo(FieldType field_type,
   }
 }
 
-bool PhoneNumber::PhoneCombineHelper::ParseNumber(
-    const AutofillProfile& profile,
-    std::string_view app_locale,
-    std::u16string* value) const {
-  if (IsEmpty())
-    return false;
-
-  if (!whole_number_.empty()) {
-    *value = whole_number_;
-    return true;
+std::optional<std::u16string> PhoneNumber::PhoneCombineHelper::ParseNumber(
+    const std::string& region) const {
+  if (IsEmpty()) {
+    return std::nullopt;
   }
 
-  return i18n::ConstructPhoneNumber(country_ + city_ + phone_,
-                                    GetRegion(profile, app_locale), value);
+  if (!whole_number_.empty()) {
+    return whole_number_;
+  }
+
+  if (std::u16string result; i18n::ConstructPhoneNumber(
+          base::StrCat({country_, city_, phone_}), region, &result)) {
+    return result;
+  }
+  return std::nullopt;
+}
+
+std::optional<std::u16string> PhoneNumber::PhoneCombineHelper::GetRegionCode()
+    const {
+  auto get_region =
+      [](std::u16string_view number) -> std::optional<std::u16string> {
+    constexpr std::string_view kUnknownRegion("ZZ");
+    const std::string region =
+        i18n::PhoneObject(number, std::string(kUnknownRegion),
+                          /*infer_country_code=*/false)
+            .region();
+    return region.empty() || region == kUnknownRegion
+               ? std::nullopt
+               : std::optional(base::UTF8ToUTF16(region));
+  };
+
+  // Prefer using the whole phone number over separate number components if
+  // available and try to determine its associated region. If no whole number is
+  // available, fall back to a combination of the components. This follows the
+  // logic of `PhoneCombineHelper::ParseNumber()` which should return a phone
+  // number that matches the region returned by this function.
+  if (!whole_number_.empty()) {
+    return get_region(whole_number_);
+  }
+  if (const std::u16string combined_number =
+          base::StrCat({country_, city_, phone_});
+      !combined_number.empty()) {
+    return get_region(combined_number);
+  }
+  return std::nullopt;
 }
 
 // static
@@ -388,16 +446,16 @@ bool PhoneNumber::ImportPhoneNumberToProfile(
     const PhoneNumber::PhoneCombineHelper& combined_phone,
     std::string_view app_locale,
     AutofillProfile& profile) {
-  std::u16string constructed_number;
   // If the phone number only consists of a single component, the
   // `PhoneCombineHelper` won't try to parse it. This happens during `SetInfo()`
   // in this case.
-  bool parsed_successfully =
-      combined_phone.ParseNumber(profile, app_locale, &constructed_number) &&
-      profile.SetInfoWithVerificationStatus(PHONE_HOME_WHOLE_NUMBER,
-                                            constructed_number, app_locale,
-                                            VerificationStatus::kObserved);
-  return parsed_successfully;
+  if (std::optional<std::u16string> constructed_number =
+          combined_phone.ParseNumber(GetRegion(profile, app_locale))) {
+    return profile.SetInfoWithVerificationStatus(
+        PHONE_HOME_WHOLE_NUMBER, *constructed_number, app_locale,
+        VerificationStatus::kObserved);
+  }
+  return false;
 }
 
 bool PhoneNumber::PhoneCombineHelper::IsEmpty() const {

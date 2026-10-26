@@ -4,24 +4,24 @@
 
 package org.chromium.chrome.browser.omnibox.fusebox;
 
+import android.widget.ImageView;
+
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.ui.widget.ButtonCompat;
-import org.chromium.ui.widget.ChromeImageView;
 
 /** A ViewHolder for the Fusebox component. */
 @NullMarked
 class FuseboxViewHolder {
     public final ConstraintLayout parentView;
     public final RecyclerView attachmentsView;
-    public final ChromeImageView plusButton;
+    public final ImageView plusButton;
     public final FuseboxPopup popup;
     public final ButtonCompat requestType;
-    public final ChromeImageView navigateButton;
-    public final ButtonCompat activationChip;
+    public final ImageView navigateButton;
 
     FuseboxViewHolder(ConstraintLayout parent, FuseboxPopup popup) {
         parentView = parent;
@@ -29,7 +29,6 @@ class FuseboxViewHolder {
         plusButton = parent.findViewById(R.id.fusebox_plus_button);
         requestType = parent.findViewById(R.id.fusebox_request_type);
         navigateButton = parent.findViewById(R.id.navigate_button);
-        activationChip = parent.findViewById(R.id.fusebox_activation_chip);
         this.popup = popup;
     }
 }

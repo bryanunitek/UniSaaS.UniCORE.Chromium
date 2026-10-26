@@ -28,12 +28,13 @@
 #include "extensions/browser/test_extension_registry_observer.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_builder.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/test/test_extension_dir.h"
 #include "net/dns/mock_host_resolver.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #endif
@@ -50,10 +51,19 @@ namespace extensions {
 // TODO(kalman): Test with host permissions.
 class ExternallyConnectableMessagingTest : public ExtensionApiTest {
  public:
-  ExternallyConnectableMessagingTest() {
-    feature_list_.InitWithFeaturesAndParameters(
-        content::GetBasicBackForwardCacheFeatureForTesting(),
-        content::GetDefaultDisabledBackForwardCacheFeaturesForTesting());
+  explicit ExternallyConnectableMessagingTest(
+      bool enable_auto_reject_incognito_connectability = true) {
+    if (enable_auto_reject_incognito_connectability) {
+      feature_list_.InitWithFeaturesAndParameters(
+          content::GetBasicBackForwardCacheFeatureForTesting(),
+          content::GetDefaultDisabledBackForwardCacheFeaturesForTesting());
+    } else {
+      feature_list_.InitWithFeaturesAndParameters(
+          content::GetBasicBackForwardCacheFeatureForTesting(),
+          content::GetDefaultDisabledBackForwardCacheFeaturesForTesting(
+              {extensions_features::
+                   kExtensionAutoRejectIncognitoConnectability}));
+    }
   }
 
   ~ExternallyConnectableMessagingTest() override = default;
@@ -587,6 +597,19 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
             CanConnectAndSendMessagesToMainFrame(not_connectable.get()));
 }
 
+// A subclass that allows prompting the user when a website in an incognito
+// window tries to connect to an app / extension that cannot be enabled in
+// incognito mode.
+// TODO(https://crbug.com/536089775): Remove these tests.
+class ExternallyConnectableMessagingIncognitoPromptTest
+    : public ExternallyConnectableMessagingTest {
+ public:
+  ExternallyConnectableMessagingIncognitoPromptTest()
+      : ExternallyConnectableMessagingTest(
+            /*enable_auto_reject_incognito_connectability=*/false) {}
+  ~ExternallyConnectableMessagingIncognitoPromptTest() override = default;
+};
+
 #if BUILDFLAG(ENABLE_PLATFORM_APPS)
 // Tests connection from incognito tabs when the user denies the connection
 // request. Spanning mode only. A separate test for apps and extensions.
@@ -596,7 +619,7 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
 // so it's not really our specific concern for web connectable.
 //
 // TODO(kalman): test messages from incognito extensions too.
-IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
+IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingIncognitoPromptTest,
                        FromIncognitoDenyApp) {
   // TODO(crbug.com/40937027): Convert test to use HTTPS and then remove.
   ScopedAllowHttpForHostnamesForTesting allow_http({"www.chromium.org"},
@@ -605,11 +628,11 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
   scoped_refptr<const Extension> app = LoadChromiumConnectableApp();
   ASSERT_TRUE(app->is_platform_app());
 
-  Browser* incognito_browser = OpenURLOffTheRecord(
+  BrowserWindowInterface* incognito_browser = OpenURLOffTheRecord(
       profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
       chromium_org_url());
   content::RenderFrameHost* incognito_frame =
-      incognito_browser->tab_strip_model()
+      incognito_browser->GetTabStripModel()
           ->GetActiveWebContents()
           ->GetPrimaryMainFrame();
 
@@ -639,7 +662,7 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
 }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_APPS)
 
-IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
+IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingIncognitoPromptTest,
                        FromIncognitoDenyExtensionAndApp) {
   // TODO(crbug.com/40937027): Convert test to use HTTPS and then remove.
   ScopedAllowHttpForHostnamesForTesting allow_http({"www.chromium.org"},
@@ -696,7 +719,7 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
 #if BUILDFLAG(ENABLE_PLATFORM_APPS)
 // Tests connection from incognito tabs when the extension doesn't have an event
 // handler for the connection event.
-IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
+IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingIncognitoPromptTest,
                        FromIncognitoNoEventHandlerInApp) {
   // TODO(crbug.com/40937027): Convert test to use HTTPS and then remove.
   ScopedAllowHttpForHostnamesForTesting allow_http({"www.chromium.org"},
@@ -705,11 +728,11 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
   scoped_refptr<const Extension> app = LoadChromiumConnectableApp(false);
   ASSERT_TRUE(app->is_platform_app());
 
-  Browser* incognito_browser = OpenURLOffTheRecord(
+  BrowserWindowInterface* incognito_browser = OpenURLOffTheRecord(
       profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
       chromium_org_url());
   content::RenderFrameHost* incognito_frame =
-      incognito_browser->tab_strip_model()
+      incognito_browser->GetTabStripModel()
           ->GetActiveWebContents()
           ->GetPrimaryMainFrame();
 
@@ -731,7 +754,7 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
 // request. Spanning mode only. Separate tests for apps and extensions.
 //
 // TODO(kalman): see comment above about split mode.
-IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
+IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingIncognitoPromptTest,
                        FromIncognitoAllowApp) {
   // TODO(crbug.com/40937027): Convert test to use HTTPS and then remove.
   ScopedAllowHttpForHostnamesForTesting allow_http({"www.chromium.org"},
@@ -740,11 +763,11 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
   scoped_refptr<const Extension> app = LoadChromiumConnectableApp();
   ASSERT_TRUE(app->is_platform_app());
 
-  Browser* incognito_browser = OpenURLOffTheRecord(
+  BrowserWindowInterface* incognito_browser = OpenURLOffTheRecord(
       profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
       chromium_org_url());
   content::RenderFrameHost* incognito_frame =
-      incognito_browser->tab_strip_model()
+      incognito_browser->GetTabStripModel()
           ->GetActiveWebContents()
           ->GetPrimaryMainFrame();
 
@@ -774,34 +797,34 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
 // Tests connection from incognito tabs when there are multiple tabs open to the
 // same origin. The user should only need to accept the connection request once.
 // Flaky: https://crbug.com/41446351.
-IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
+IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingIncognitoPromptTest,
                        DISABLED_FromIncognitoPromptApp) {
   scoped_refptr<const Extension> app = LoadChromiumConnectableApp();
   ASSERT_TRUE(app->is_platform_app());
 
   // Open an incognito browser with two tabs displaying "chromium.org".
-  Browser* incognito_browser = OpenURLOffTheRecord(
+  BrowserWindowInterface* incognito_browser = OpenURLOffTheRecord(
       profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
       chromium_org_url());
   content::RenderFrameHost* incognito_frame1 =
-      incognito_browser->tab_strip_model()
+      incognito_browser->GetTabStripModel()
           ->GetActiveWebContents()
           ->GetPrimaryMainFrame();
   infobars::ContentInfoBarManager* infobar_manager1 =
       infobars::ContentInfoBarManager::FromWebContents(
-          incognito_browser->tab_strip_model()->GetActiveWebContents());
+          incognito_browser->GetTabStripModel()->GetActiveWebContents());
 
   CHECK(OpenURLOffTheRecord(
             profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
             chromium_org_url()) == incognito_browser);
   content::RenderFrameHost* incognito_frame2 =
-      incognito_browser->tab_strip_model()
+      incognito_browser->GetTabStripModel()
           ->GetActiveWebContents()
           ->GetPrimaryMainFrame();
   infobars::ContentInfoBarManager* infobar_manager2 =
       infobars::ContentInfoBarManager::FromWebContents(
-          incognito_browser->tab_strip_model()->GetActiveWebContents());
-  EXPECT_EQ(2, incognito_browser->tab_strip_model()->count());
+          incognito_browser->GetTabStripModel()->GetActiveWebContents());
+  EXPECT_EQ(2, incognito_browser->GetTabStripModel()->count());
   EXPECT_NE(incognito_frame1, incognito_frame2);
 
   // Trigger a infobars in both tabs by trying to send messages.
@@ -825,7 +848,7 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
 
     ASSERT_TRUE(
         ui_test_utils::NavigateToURL(incognito_browser, chromium_org_url()));
-    incognito_frame2 = incognito_browser->tab_strip_model()
+    incognito_frame2 = incognito_browser->GetTabStripModel()
                            ->GetActiveWebContents()
                            ->GetPrimaryMainFrame();
     EXPECT_NE(incognito_frame1, incognito_frame2);
@@ -849,7 +872,7 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest, IllegalArguments) {
             content::EvalJs(web_contents, "assertions.tryIllegalArguments()"));
 }
 
-IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
+IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingIncognitoPromptTest,
                        FromIncognitoAllowExtension) {
   // TODO(crbug.com/40937027): Convert test to use HTTPS and then remove.
   ScopedAllowHttpForHostnamesForTesting allow_http({"www.chromium.org"},
@@ -893,6 +916,39 @@ IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
   // mode.
   EXPECT_EQ(0, alert_tracker.GetAndResetAlertCount());
 }
+
+#if BUILDFLAG(ENABLE_PLATFORM_APPS)
+// Tests that a web page attempting to connect from incognito will auto-reject.
+// See also https://crbug.com/536089775.
+IN_PROC_BROWSER_TEST_F(ExternallyConnectableMessagingTest,
+                       IncognitoAutoReject) {
+  ScopedAllowHttpForHostnamesForTesting allow_http({"www.chromium.org"},
+                                                   profile()->GetPrefs());
+
+  scoped_refptr<const Extension> app = LoadChromiumConnectableApp();
+  ASSERT_TRUE(app->is_platform_app());
+
+  BrowserWindowInterface* incognito_browser = OpenURLOffTheRecord(
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
+      chromium_org_url());
+  content::RenderFrameHost* incognito_frame =
+      incognito_browser->GetTabStripModel()
+          ->GetActiveWebContents()
+          ->GetPrimaryMainFrame();
+
+  IncognitoConnectability::ScopedAlertTracker alert_tracker(
+      IncognitoConnectability::ScopedAlertTracker::ALWAYS_ALLOW);
+
+  // Because kExtensionAutoRejectIncognitoConnectability is enabled,
+  // the connection request should be immediately denied without showing an
+  // interactive alert or prompt (even though the prompt would otherwise be
+  // accepted by the auto-accept above).
+  EXPECT_EQ(
+      COULD_NOT_ESTABLISH_CONNECTION_ERROR,
+      CanConnectAndSendMessagesToFrame(incognito_frame, app.get(), nullptr));
+  EXPECT_EQ(0, alert_tracker.GetAndResetAlertCount());
+}
+#endif  // BUILDFLAG(ENABLE_PLATFORM_APPS)
 
 // Tests a connection from an iframe within a tab which doesn't have
 // permission. Iframe should work.

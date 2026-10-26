@@ -23,11 +23,33 @@ SkAlpha PercentageToSkAlpha(int percent_value);
 SkColor GetDefaultFillColor();
 SkColor GetDefaultOutlineColor();
 int GetDefaultFontSize();
+std::string GetDefaultTimestampTimezone();
 SkColor GetFillColor(const PrefService* prefs);
 SkColor GetOutlineColor(const PrefService* prefs);
+
+// Log values for type of timezone in watermark timestamps. This is used to log
+// metrics as WatermarkTimestampTimezoneType, so numeric values must not be
+// changed.
+enum class TimestampTimezoneType {
+  // Default user's device wall-clock time.
+  kDefault = 0,
+
+  // Admin-configured user's device wall-clock time.
+  kUserDevice = 1,
+
+  // Admin-configured valid IANA time zone.
+  kValidIANATimeZone = 2,
+
+  // Invalid string received, fell back to default (user's device time).
+  kInvalidFallback = 3,
+
+  kMaxValue = kInvalidFallback,
+};
+
 // Returns the font size for the watermark.
 // This function always returns a positive integer (>= 1).
 int GetFontSize(const PrefService* prefs);
+std::string GetTimestampTimezone(const PrefService* prefs);
 
 }  // namespace enterprise_watermark
 

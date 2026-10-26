@@ -7,7 +7,6 @@ package org.chromium.chrome.browser.omnibox;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.Resources;
-import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.view.Gravity;
 import android.view.View;
@@ -21,11 +20,12 @@ import androidx.core.widget.ImageViewCompat;
 import org.chromium.base.TraceEvent;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxState;
+import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.FuseboxState;
 import org.chromium.chrome.browser.omnibox.status.StatusCoordinator;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator;
 import org.chromium.chrome.browser.toolbar.ToolbarVariationUtils;
-import org.chromium.components.embedder_support.util.UrlUtilities;
+import org.chromium.components.metrics.OmniboxEventProtosIntDef.PageClassification;
 import org.chromium.ui.base.ViewUtils;
 import org.chromium.ui.base.WindowAndroid;
 
@@ -87,13 +87,15 @@ class LocationBarPhone extends LocationBarLayout {
             UrlBarCoordinator urlCoordinator,
             StatusCoordinator statusCoordinator,
             LocationBarDataProvider locationBarDataProvider,
-            WindowAndroid windowAndroid) {
+            WindowAndroid windowAndroid,
+            OmniboxResourceProvider resourceProvider) {
         super.initialize(
                 autocompleteCoordinator,
                 urlCoordinator,
                 statusCoordinator,
                 locationBarDataProvider,
-                windowAndroid);
+                windowAndroid,
+                resourceProvider);
 
         if (isToolbarUiRefactorEnabled()) {
             mUrlObserver =
@@ -270,29 +272,17 @@ class LocationBarPhone extends LocationBarLayout {
                     getMaxUrlWidth(mLocationBarStatusView, maxComponentWidth, heightMeasureSpec);
             maxUrlWidth = Math.max(mMinUrlWidthPx, maxUrlWidth);
 
-            CharSequence text = mUrlBar.getText();
-            if (TextUtils.isEmpty(text)) {
-                text = mUrlBar.getHint();
-            }
-            // TODO(crbug.com/522366005): Clean up layout loop risk in custom spans and restore
-            // native CharSequence measurement.
-            // Ensure we measure plain text to strip any spans (like BoundsEllipsisSpan)
-            // that could trigger layout requests during measurement, causing layout loops.
-            String plainText = text != null ? text.toString() : "";
-
             int desiredUrlWidth =
-                    getUrlTextWidth(plainText)
+                    getUrlBarTextWidth()
                             + mUrlBar.getPaddingStart()
                             + mUrlBar.getPaddingEnd()
                             + mUrlCenteringSafetyMarginPx;
 
-            int finalUrlWidth;
             boolean fitsInCenteringSpace = desiredUrlWidth <= maxUrlWidth;
-            if (fitsInCenteringSpace) {
-                finalUrlWidth = desiredUrlWidth;
-            } else {
-                finalUrlWidth = Math.min(maxUrlWidth, Math.max(mMinUrlWidthPx, desiredUrlWidth));
-            }
+            int finalUrlWidth =
+                    fitsInCenteringSpace
+                            ? desiredUrlWidth
+                            : Math.min(maxUrlWidth, Math.max(mMinUrlWidthPx, desiredUrlWidth));
 
             updateUrlBarCenteringProperties(
                     /* centeringApplied= */ true,
@@ -340,6 +330,7 @@ class LocationBarPhone extends LocationBarLayout {
      * <p>If the URL does not fit, it is start-aligned, horizontal scrolling is enabled to allow
      * navigating the full text, and its layout width is capped.
      *
+     * @param centeringApplied Whether the location bar layout is centered on screen.
      * @param fitsInCenteringSpace True if the URL fits within the maximum allowed centering width.
      * @param finalUrlWidth The target width to set on the UrlBar's layout parameters.
      * @param urlBarLayoutParams The ConstraintLayout LayoutParams for the UrlBar.
@@ -411,12 +402,6 @@ class LocationBarPhone extends LocationBarLayout {
         }
     }
 
-    /** Returns the measured width of the given text. */
-    private int getUrlTextWidth(CharSequence text) {
-        if (TextUtils.isEmpty(text)) return 0;
-        return (int) Math.ceil(mUrlBar.getPaint().measureText(text, 0, text.length()));
-    }
-
     /** Calculates the maximum allowed width for the UrlBar. */
     private int getMaxUrlWidth(View statusView, int maxComponentWidth, int heightMeasureSpec) {
         if (statusView.getVisibility() == View.GONE) {
@@ -436,8 +421,8 @@ class LocationBarPhone extends LocationBarLayout {
             return false;
         }
 
-        // Do not center when the URL bar is focused or in transition.
-        if (mUrlBar == null || mUrlBarLaidOutAtFocusedWidth) {
+        // Do not center when the URL bar is focused.
+        if (mUrlBar == null || mUrlBar.hasFocus()) {
             return false;
         }
         if (mLocationBarDataProvider == null) {
@@ -445,12 +430,13 @@ class LocationBarPhone extends LocationBarLayout {
         }
 
         // Do not center in Android Hub or Custom Tabs.
+        @PageClassification
         int pageClassification = mLocationBarDataProvider.getPageClassification(false);
         if (!OmniboxViewUtil.isRegularTabContext(pageClassification)) {
             return false;
         }
 
-        return !UrlUtilities.isNtpUrl(mLocationBarDataProvider.getCurrentGurl());
+        return !OmniboxUrlUtils.isNtpUrl(mLocationBarDataProvider.getCurrentGurl());
     }
 
     private boolean isToolbarUiRefactorEnabled() {

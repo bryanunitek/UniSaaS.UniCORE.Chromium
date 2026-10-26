@@ -116,7 +116,6 @@
 #include "content/public/test/content_browser_test_content_browser_client.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/content_mock_cert_verifier.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/hit_test_region_observer.h"
 #include "content/public/test/navigation_handle_observer.h"
 #include "content/public/test/policy_container_utils.h"
@@ -1722,12 +1721,22 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, ProcessTransferAfterError) {
   EXPECT_EQ(2, shell()->web_contents()->GetController().GetEntryCount());
 
   // Ensure that we have created a new process for the subframe.
-  EXPECT_EQ(
-      " Site A ------------ proxies for B\n"
-      "   +--Site B ------- proxies for A\n"
-      "Where A = http://a.com/\n"
-      "      B = http://b.com/",
-      DepictFrameTree(root));
+  if (SiteIsolationPolicy::IsErrorPageIsolationEnabled(
+          /*in_main_frame=*/false)) {
+    EXPECT_EQ(
+        " Site A ------------ proxies for B\n"
+        "   +--Site B ------- proxies for A\n"
+        "Where A = http://a.com/\n"
+        "      B = chrome-error://chromewebdata/",
+        DepictFrameTree(root));
+  } else {
+    EXPECT_EQ(
+        " Site A ------------ proxies for B\n"
+        "   +--Site B ------- proxies for A\n"
+        "Where A = http://a.com/\n"
+        "      B = http://b.com/",
+        DepictFrameTree(root));
+  }
   EXPECT_NE(shell()->web_contents()->GetSiteInstance(),
             child->current_frame_host()->GetSiteInstance());
 
@@ -1745,6 +1754,8 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, ProcessTransferAfterError) {
   // TODO(mustaq): Why does the |back_load_observer.Wait()| below time out
   // without the user activation?
   EXPECT_TRUE(ExecJs(root, "// No-op script"));
+  RenderFrameDeletedObserver error_page_deleted_observer(
+      child->current_frame_host());
   NavigateIframeToURL(shell()->web_contents(), "child-0", url_b);
   EXPECT_TRUE(observer.last_navigation_succeeded());
   EXPECT_EQ(url_b, observer.last_navigation_url());
@@ -1756,18 +1767,42 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, ProcessTransferAfterError) {
             child->current_origin().Serialize() + '/');
 
   // Ensure that we have created a new process for the subframe.
-  EXPECT_EQ(
-      " Site A ------------ proxies for B\n"
-      "   +--Site B ------- proxies for A\n"
-      "Where A = http://a.com/\n"
-      "      B = http://b.com/",
-      DepictFrameTree(root));
+  if (SiteIsolationPolicy::IsErrorPageIsolationEnabled(
+          /*in_main_frame=*/false)) {
+    // With subframe error page isolation, the error page was in its own
+    // SiteInstanceGroup, so its RenderFrameHost was replaced and is now pending
+    // deletion. Its SiteInstanceGroup's proxies are only deleted once that
+    // RenderFrameHost is deleted, which happens asynchronously after its unload
+    // ACK. Wait for this to happen to avoid flakily observing leftover proxies.
+    // See https://crbug.com/566001008.
+    error_page_deleted_observer.WaitUntilDeleted();
+    EXPECT_EQ(
+        " Site A ------------ proxies for C\n"
+        "   +--Site C ------- proxies for A\n"
+        "Where A = http://a.com/\n"
+        "      C = http://b.com/",
+        DepictFrameTree(root));
+  } else {
+    EXPECT_EQ(
+        " Site A ------------ proxies for B\n"
+        "   +--Site B ------- proxies for A\n"
+        "Where A = http://a.com/\n"
+        "      B = http://b.com/",
+        DepictFrameTree(root));
+  }
   EXPECT_NE(shell()->web_contents()->GetSiteInstance(),
             child->current_frame_host()->GetSiteInstance());
 
-  // Make sure that the navigation replaced the error page and that going back
-  // ends up on the original site.
-  EXPECT_EQ(2, shell()->web_contents()->GetController().GetEntryCount());
+  // Navigating a subframe displaying an error page for b.com from cross-origin
+  // initiator (a.com) does not replace the entry, preventing cross-origin
+  // history length leaks. Thus, entry count is 3.
+  EXPECT_EQ(3, shell()->web_contents()->GetController().GetEntryCount());
+  {
+    TestNavigationObserver back_load_observer(shell()->web_contents());
+    shell()->web_contents()->GetController().GoBack();
+    back_load_observer.Wait();
+  }
+  // Going back a second time ends up on the original site.
   {
     RenderFrameDeletedObserver deleted_observer(child->current_frame_host());
     TestNavigationObserver back_load_observer(shell()->web_contents());
@@ -3821,90 +3856,6 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   EXPECT_EQ(named_frame_url, foo_root->current_url());
 }
 
-class SitePerProcessFencedFrameTest : public SitePerProcessBrowserTestBase {
- public:
-  SitePerProcessFencedFrameTest() {
-    fenced_frame_helper_ =
-        std::make_unique<content::test::FencedFrameTestHelper>();
-  }
-
-  void SetUpOnMainThread() override {
-    SitePerProcessBrowserTestBase::SetUpOnMainThread();
-    https_server_.ServeFilesFromSourceDirectory(GetTestDataFilePath());
-    ASSERT_TRUE(https_server_.Start());
-  }
-
- protected:
-  net::EmbeddedTestServer& https_server() { return https_server_; }
-
-  content::RenderFrameHost* CreateFencedFrame(content::RenderFrameHost* parent,
-                                              const GURL& url) {
-    if (fenced_frame_helper_) {
-      return fenced_frame_helper_->CreateFencedFrame(parent, url);
-    }
-
-    // FencedFrameTestHelper only supports the MPArch version of fenced frames.
-    // So need to maually create a fenced frame for the ShadowDOM version.
-    content::TestNavigationManager navigation(web_contents(), url);
-
-    constexpr char kAddFencedFrameScript[] = R"({
-        const fenced_frame = document.createElement('fencedframe');
-        fenced_frame.src = $1;
-        document.body.appendChild(fenced_frame);
-    })";
-    EXPECT_TRUE(ExecJs(parent, content::JsReplace(kAddFencedFrameScript, url)));
-    EXPECT_TRUE(navigation.WaitForNavigationFinished());
-
-    return ChildFrameAt(parent, 0);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-  std::unique_ptr<content::test::FencedFrameTestHelper> fenced_frame_helper_;
-  net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
-};
-
-IN_PROC_BROWSER_TEST_F(SitePerProcessFencedFrameTest,
-                       PopupFromFencedFrameDoesNotCreateProxy) {
-  GURL main_url(embedded_test_server()->GetURL("/title1.html"));
-  EXPECT_TRUE(NavigateToURL(shell(), main_url));
-
-  // It is safe to obtain the root frame tree node here, as it doesn't change.
-  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
-
-  // Create a fenced frame.
-  GURL fenced_frame_url(https_server().GetURL("/fenced_frames/title1.html"));
-  RenderFrameHost* fenced_frame_host = CreateFencedFrame(
-      web_contents()->GetPrimaryMainFrame(), fenced_frame_url);
-  EXPECT_NE(nullptr, fenced_frame_host);
-
-  // Open a popup named "foo" from the fenced frame.
-  Shell* popup_shell =
-      OpenPopup(fenced_frame_host, GURL(url::kAboutBlankURL), "foo", "", false);
-  EXPECT_TRUE(popup_shell);
-
-  // Check that the popup from the fenced frame didn't create a proxy.
-  // Opening popups from fenced frames forces noopener, which makes named
-  // frames not discoverable.
-  FrameTreeNode* popup_root =
-      static_cast<WebContentsImpl*>(popup_shell->web_contents())
-          ->GetPrimaryFrameTree()
-          .root();
-  EXPECT_EQ(nullptr, popup_root->opener());
-
-  SiteInstanceImpl* site_instance =
-      root->current_frame_host()->GetSiteInstance();
-  EXPECT_FALSE(popup_root->current_frame_host()
-                   ->browsing_context_state()
-                   ->GetRenderFrameProxyHost(site_instance->group()));
-
-  SiteInstanceImpl* embedder_site_instance =
-      static_cast<RenderFrameHostImpl*>(fenced_frame_host)->GetSiteInstance();
-  EXPECT_FALSE(popup_root->current_frame_host()
-                   ->browsing_context_state()
-                   ->GetRenderFrameProxyHost(embedder_site_instance->group()));
-}
-
 // Similar to DiscoverNamedFrameFromAncestorOfOpener, but check that if a
 // window is created without a name and acquires window.name later, it will
 // still be discoverable from its opener's ancestors.  Also, instead of using
@@ -4217,9 +4168,8 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
       rfh->lifecycle_state(),
       testing::AnyOf(
           testing::Eq(
-              RenderFrameHostImpl::LifecycleStateImpl::kRunningUnloadHandlers),
-          testing::Eq(
-              RenderFrameHostImpl::LifecycleStateImpl::kInBackForwardCache)));
+              RenderFrameHostLifecycleStateImpl::kRunningUnloadHandlers),
+          testing::Eq(RenderFrameHostLifecycleStateImpl::kInBackForwardCache)));
 
   // Without the mojo::AgentSchedulingGroupHost::DidUnloadRenderFrame and timer,
   // the process A will never shutdown. Simulate the process being killed now.
@@ -4769,6 +4719,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
     params->frame_token = frame_token;
     params->devtools_frame_token = base::UnguessableToken::Create();
     params->document_token = blink::DocumentToken();
+    params->initiator_state_token = blink::InitiatorStateToken();
     params->policy_container = CreateStubPolicyContainer();
     params->replication_state = blink::mojom::FrameReplicationState::New();
     agent_scheduling_group->CreateFrame(std::move(params));
@@ -4871,6 +4822,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, ParentDetachRemoteChild) {
     params->frame_token = frame_token;
     params->devtools_frame_token = base::UnguessableToken::Create();
     params->document_token = blink::DocumentToken();
+    params->initiator_state_token = blink::InitiatorStateToken();
     params->policy_container = CreateStubPolicyContainer();
     agent_scheduling_group->CreateFrame(std::move(params));
   }
@@ -6578,15 +6530,10 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   EXPECT_TRUE(pending_process->Shutdown(0));
   crash_observer.Wait();
 
-  // The navigation may or may not get canceled, depending on whether the
-  // feature ResumeNavigationWithSpeculativeRFHProcessGone is enabled. However
-  // the navigation will never commit and hence the b.com RVH should not be
-  // active.
+  // Since the navigation above didn't commit, the b.com RenderViewHost in the
+  // main tab should still not be active.
   EXPECT_FALSE(rvh->is_active());
-  if (!base::FeatureList::IsEnabled(
-          features::kResumeNavigationWithSpeculativeRFHProcessGone)) {
-    EXPECT_EQ(net::ERR_ABORTED, handle_observer.net_error_code());
-  }
+  EXPECT_EQ(net::ERR_ABORTED, handle_observer.net_error_code());
 
   // Navigate popup to b.com to recreate the b.com process.  When creating
   // opener proxies, |rvh| should be reused as a swapped out RVH.  In
@@ -10314,9 +10261,8 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
       rfh->lifecycle_state(),
       testing::AnyOf(
           testing::Eq(
-              RenderFrameHostImpl::LifecycleStateImpl::kRunningUnloadHandlers),
-          testing::Eq(
-              RenderFrameHostImpl::LifecycleStateImpl::kInBackForwardCache)));
+              RenderFrameHostLifecycleStateImpl::kRunningUnloadHandlers),
+          testing::Eq(RenderFrameHostLifecycleStateImpl::kInBackForwardCache)));
 
   ASSERT_FALSE(rfh_observer.deleted());
 
@@ -11078,7 +11024,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
 
   // Make sure the child frame keeps generating compositor frames.
   RenderFrameSubmissionObserver frame_counter(
-      child_view->host_->render_frame_metadata_provider());
+      child_view->host()->render_frame_metadata_provider());
   while (frame_counter.render_frame_count() < 10)
     frame_counter.WaitForAnyFrameSubmission();
 }
@@ -11739,54 +11685,59 @@ class GpuInfoUpdateObserver : public GpuDataManagerObserver {
 };
 
 // Checks if RenderInputRouterDelegate mojo connection is reset when GPU process
-// restarts. Disabled due to flake: crbug.com/439855865.
+// restarts.
+// TODO(crbug.com/439855865, crbug.com/544000851): Re-enable once
+// cc::slim::LayerTreeImpl resets frame_sink_ on GPU process crash so
+// HostFrameSinkManager reconnects on restart.
 IN_PROC_BROWSER_TEST_P(AndroidInputBrowserTest,
                        DISABLED_RestartingGPUProcessResetsMojoConnection) {
-  base::test::TestTraceProcessor ttp;
-  ttp.StartTrace("viz");
-  RenderFrameSubmissionObserver render_frame_submission_observer(
-      web_contents());
-  EXPECT_TRUE(NavigateToURL(
-      shell(), embedded_test_server()->GetURL("foo.com", "/title1.html")));
-  if (render_frame_submission_observer.render_frame_count() == 0) {
-    render_frame_submission_observer.WaitForAnyFrameSubmission();
+  // Return early if transferring input to Viz isn't supported.
+  if (!input::InputUtils::IsTransferInputToVizSupported()) {
+    return;
   }
 
+  EXPECT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL("foo.com", "/title1.html")));
+
   base::RunLoop run_loop;
-  // This observer is begin used here to signal if the GPU process has
+  // This observer is being used here to signal if the GPU process has
   // restarted.
   GpuInfoUpdateObserver gpu_observer(run_loop.QuitClosure());
-
-  RenderFrameSubmissionObserver render_frame_submission_observer2(
-      web_contents());
 
   // Kill GPU process explicitly, this should trigger a restart.
   KillGpuProcess();
   run_loop.Run();
 
-  if (render_frame_submission_observer2.render_frame_count() == 0) {
-    render_frame_submission_observer2.WaitForAnyFrameSubmission();
-  }
+  base::test::TestTraceProcessor ttp;
+  ttp.StartTrace("viz");
+
+  // Navigate to URL and synchronize with Viz to verify the mojo connection
+  // is established with the new GPU process.
+  EXPECT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL("bar.com", "/title2.html")));
+  mojo::ScopedAllowSyncCallForTesting allowed_for_testing;
+  bool enabled = false;
+  content::GetHostFrameSinkManager()
+      ->GetFrameSinkManagerTestApi()
+      .GetForceEnableZoomState(GetRenderWidgetHost()->GetFrameSinkId(),
+                               &enabled);
 
   absl::Status status = ttp.StopAndParseTrace();
   ASSERT_TRUE(status.ok()) << status.message();
 
   std::string query = R"(
-    SELECT COUNT(*) AS cnt
+    SELECT (COUNT(*) > 0) AS has_connection
     FROM slice
     WHERE name = 'InputManager::SetupRenderInputRouterDelegateConnection'
-    ORDER BY ts ASC
   )";
   auto result = ttp.RunQuery(query);
   ASSERT_TRUE(result.has_value());
 
-  // `result.value()` would look something like this: {{"cnt"}, {"<num>"}}.
-  EXPECT_THAT(
-      result.value(),
-      testing::ElementsAre(
-          testing::ElementsAre("cnt"),
-          testing::ElementsAre(
-              input::InputUtils::IsTransferInputToVizSupported() ? "2" : "0")));
+  // `result.value()` would look something like this: {{"has_connection"},
+  // {"<num>"}}.
+  EXPECT_THAT(result.value(),
+              testing::ElementsAre(testing::ElementsAre("has_connection"),
+                                   testing::ElementsAre("1")));
 }
 
 IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTouchActionTest,
@@ -13071,11 +13022,11 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   RenderFrameHostImpl* rfh_c =
       rfh_b->frame_tree_node()->render_manager()->speculative_frame_host();
 
-  EXPECT_EQ(RenderFrameHostImpl::LifecycleStateImpl::kActive,
+  EXPECT_EQ(RenderFrameHostLifecycleStateImpl::kActive,
             rfh_a->lifecycle_state());
-  EXPECT_EQ(RenderFrameHostImpl::LifecycleStateImpl::kActive,
+  EXPECT_EQ(RenderFrameHostLifecycleStateImpl::kActive,
             rfh_b->lifecycle_state());
-  EXPECT_EQ(RenderFrameHostImpl::LifecycleStateImpl::kSpeculative,
+  EXPECT_EQ(RenderFrameHostLifecycleStateImpl::kSpeculative,
             rfh_c->lifecycle_state());
 
   // 3) Deletion of B. The unload handler takes times to execute.
@@ -13084,9 +13035,9 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
       ExecJs(rfh_a, JsReplace("document.querySelector('iframe').remove();")));
   EXPECT_FALSE(delete_b.deleted());
   EXPECT_TRUE(delete_c.deleted());  // The speculative RFH is deleted.
-  EXPECT_EQ(RenderFrameHostImpl::LifecycleStateImpl::kActive,
+  EXPECT_EQ(RenderFrameHostLifecycleStateImpl::kActive,
             rfh_a->lifecycle_state());
-  EXPECT_EQ(RenderFrameHostImpl::LifecycleStateImpl::kRunningUnloadHandlers,
+  EXPECT_EQ(RenderFrameHostLifecycleStateImpl::kRunningUnloadHandlers,
             rfh_b->lifecycle_state());
 
   // The navigation has been canceled.
@@ -13127,13 +13078,13 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   RenderFrameHostImpl* rfh_d =
       rfh_c->frame_tree_node()->render_manager()->speculative_frame_host();
 
-  EXPECT_EQ(RenderFrameHostImpl::LifecycleStateImpl::kActive,
+  EXPECT_EQ(RenderFrameHostLifecycleStateImpl::kActive,
             rfh_a->lifecycle_state());
-  EXPECT_EQ(RenderFrameHostImpl::LifecycleStateImpl::kActive,
+  EXPECT_EQ(RenderFrameHostLifecycleStateImpl::kActive,
             rfh_b->lifecycle_state());
-  EXPECT_EQ(RenderFrameHostImpl::LifecycleStateImpl::kActive,
+  EXPECT_EQ(RenderFrameHostLifecycleStateImpl::kActive,
             rfh_c->lifecycle_state());
-  EXPECT_EQ(RenderFrameHostImpl::LifecycleStateImpl::kSpeculative,
+  EXPECT_EQ(RenderFrameHostLifecycleStateImpl::kSpeculative,
             rfh_d->lifecycle_state());
 
   // 3) Deletion of D. The unload handler takes times to execute.
@@ -13143,13 +13094,13 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   EXPECT_FALSE(delete_b.deleted());
   EXPECT_FALSE(delete_c.deleted());
   EXPECT_TRUE(delete_d.deleted());  // The speculative RFH is deleted.
-  EXPECT_EQ(RenderFrameHostImpl::LifecycleStateImpl::kActive,
+  EXPECT_EQ(RenderFrameHostLifecycleStateImpl::kActive,
             rfh_a->lifecycle_state());
-  EXPECT_EQ(RenderFrameHostImpl::LifecycleStateImpl::kReadyToBeDeleted,
+  EXPECT_EQ(RenderFrameHostLifecycleStateImpl::kReadyToBeDeleted,
             rfh_b->lifecycle_state());
   EXPECT_EQ(RenderFrameHost::LifecycleState::kPendingDeletion,
             rfh_b->GetLifecycleState());
-  EXPECT_EQ(RenderFrameHostImpl::LifecycleStateImpl::kRunningUnloadHandlers,
+  EXPECT_EQ(RenderFrameHostLifecycleStateImpl::kRunningUnloadHandlers,
             rfh_c->lifecycle_state());
   EXPECT_EQ(RenderFrameHost::LifecycleState::kPendingDeletion,
             rfh_c->GetLifecycleState());

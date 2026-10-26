@@ -4,8 +4,11 @@
 
 #include "chrome/updater/test/integration_tests_win.h"
 
+#include <inttypes.h>
 #include <regstr.h>
 #include <shlobj.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
@@ -14,13 +17,13 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
 #include "base/containers/to_vector.h"
 #include "base/file_version_info.h"
 #include "base/files/file_enumerator.h"
@@ -49,15 +52,18 @@
 #include "base/test/gmock_expected_support.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/types/expected_macros.h"
 #include "base/values.h"
 #include "base/version.h"
+#include "base/win/access_token.h"
 #include "base/win/elevation_util.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_variant.h"
+#include "base/win/sid.h"
 #include "base/win/win_util.h"
 #include "base/win/window_enumerator.h"
 #include "build/branding_buildflags.h"
@@ -465,7 +471,7 @@ base::Process LaunchOfflineInstallProcess(bool is_legacy_install,
 DISPID GetDispId(Microsoft::WRL::ComPtr<IDispatch> dispatch,
                  std::wstring name) {
   DISPID id = 0;
-  LPOLESTR name_ptr = &name[0];
+  LPOLESTR name_ptr = name.data();
   EXPECT_HRESULT_SUCCEEDED(dispatch->GetIDsOfNames(IID_NULL, &name_ptr, 1,
                                                    LOCALE_USER_DEFAULT, &id));
   VLOG(2) << __func__ << ": " << name << ": " << id;
@@ -477,12 +483,12 @@ void CallDispatchMethod(
     const std::wstring& method_name,
     const std::vector<base::win::ScopedVariant>& variant_params) {
   // IDispatch::Invoke() expects the parameters in reverse order.
-  std::vector<VARIANT> params = base::ToVector(base::Reversed(variant_params),
-                                               &base::win::ScopedVariant::Copy);
+  std::vector<VARIANT> params = base::ToVector(
+      std::views::reverse(variant_params), &base::win::ScopedVariant::Copy);
 
   DISPPARAMS dp = {};
   if (!params.empty()) {
-    dp.rgvarg = &params[0];
+    dp.rgvarg = params.data();
     dp.cArgs = params.size();
   }
 
@@ -909,7 +915,9 @@ void ExpectClean(UpdaterScope scope) {
                return files;
              }(),
              FILE_PATH_LITERAL(","));
-  ASSERT_NO_FATAL_FAILURE(ExpectEnterpriseCompanionAppNotInstalled());
+  if (IsSystemInstall(scope)) {
+    ASSERT_NO_FATAL_FAILURE(ExpectEnterpriseCompanionAppNotInstalled());
+  }
 }
 
 void ExpectCandidateUninstalled(UpdaterScope scope) {
@@ -1565,11 +1573,30 @@ void ExpectLegacyAppCommandWebSucceeds(UpdaterScope scope,
   constexpr size_t kMaxParameters = 9;
   ASSERT_LE(parameters.size(), kMaxParameters);
 
+  std::wstring pv;
+  ASSERT_EQ(ERROR_SUCCESS,
+            base::win::RegKey(UpdaterScopeToHKeyRoot(scope),
+                              GetAppClientsKey(kUpdaterAppId).c_str(),
+                              Wow6432(KEY_READ))
+                .ReadValue(kRegValuePV, &pv));
+  const bool supports_caller_sid = (pv == kUpdaterVersionUtf16);
+
+  ASSERT_OK_AND_ASSIGN(const base::win::AccessToken token,
+                       base::win::AccessToken::FromCurrentProcess(
+                           /*impersonation=*/false, TOKEN_QUERY));
+  ASSERT_NE(token.User(),
+            base::win::Sid(base::win::WellKnownSid::kLocalSystem));
+  ASSERT_OK_AND_ASSIGN(const std::wstring expected_sddl,
+                       token.User().ToSddlString());
+
   base::ScopedTempDir temp_dir;
   const std::wstring appid = base::UTF8ToWide(app_id);
   const std::wstring commandid = base::UTF8ToWide(command_id);
 
-  SetupAppCommand(scope, appid, commandid, L" /c \"exit %1\"", temp_dir);
+  SetupAppCommand(scope, appid, commandid,
+                  supports_caller_sid ? L" /c \"echo %CALLER_SID%& exit %1\""
+                                      : L" /c \"exit %1\"",
+                  temp_dir);
 
   Microsoft::WRL::ComPtr<IAppBundleWeb> bundle;
   InitializeBundle(scope, bundle);
@@ -1620,6 +1647,12 @@ void ExpectLegacyAppCommandWebSucceeds(UpdaterScope scope,
   EXPECT_HRESULT_SUCCEEDED(app_command_web->get_exitCode(&exit_code));
   EXPECT_EQ(exit_code, static_cast<DWORD>(expected_exit_code));
 
+  if (supports_caller_sid) {
+    base::win::ScopedBstr output;
+    ASSERT_HRESULT_SUCCEEDED(app_command_web->get_output(output.Receive()));
+    EXPECT_EQ(output.Get(), base::StrCat({expected_sddl, L"\r\n"}));
+  }
+
   // Now also run the AppCommand using the IDispatch methods.
   command_dispatch.Reset();
   ASSERT_HRESULT_SUCCEEDED(app->get_command(
@@ -1637,6 +1670,14 @@ void ExpectLegacyAppCommandWebSucceeds(UpdaterScope scope,
       GetDispatchProperty(command_dispatch, L"exitCode");
   EXPECT_EQ(V_UI4(command_exit_code.ptr()),
             static_cast<DWORD>(expected_exit_code));
+
+  if (supports_caller_sid) {
+    base::win::ScopedVariant command_output =
+        GetDispatchProperty(command_dispatch, L"output");
+    ASSERT_EQ(V_VT(command_output.ptr()), VT_BSTR);
+    EXPECT_EQ(V_BSTR(command_output.ptr()),
+              base::StrCat({expected_sddl, L"\r\n"}));
+  }
 
   DeleteAppClientKey(scope, appid);
 }

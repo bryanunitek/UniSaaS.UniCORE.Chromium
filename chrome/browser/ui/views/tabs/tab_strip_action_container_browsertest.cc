@@ -12,17 +12,17 @@
 #include "base/test/test_future.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
 #include "chrome/browser/actor/actor_test_util.h"
-#include "chrome/browser/actor/ui/actor_ui_state_manager_interface.h"
+#include "chrome/browser/actor/ui/actor_ui_state_manager.h"
 #include "chrome/browser/actor/ui/states/actor_task_nudge_state.h"
-#include "chrome/browser/glic/browser_ui/glic_actor_task_icon_manager.h"
-#include "chrome/browser/glic/browser_ui/glic_actor_task_icon_manager_factory.h"
 #include "chrome/browser/glic/glic_profile_manager.h"
+#include "chrome/browser/glic/glic_warming_checks.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
+#include "chrome/browser/glic/public/service/legacy_glic_activity_manager.h"
 #include "chrome/browser/glic/suggestions/contextual_cueing_features.h"
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/optimization_guide/browser_test_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -65,19 +65,19 @@ class TabStripActionContainerBrowserTest : public InProcessBrowserTest {
              {{features::kGlicActorUiTaskIconName, "true"}}},
             {glic::kContextualCueing, {}},
         },
-        {});
+        {features::kGlicHorizontalTabToolbarButton});
   }
 
   void SetUp() override {
     // This will temporarily disable preloading.
-    glic::GlicProfileManager::SetPrewarmingEnabledForTesting(false);
+    glic::SetPrewarmingEnabledForTesting(false);
 
     InProcessBrowserTest::SetUp();
   }
 
   void TearDown() override {
     InProcessBrowserTest::TearDown();
-    glic::GlicProfileManager::SetPrewarmingEnabledForTesting(true);
+    glic::SetPrewarmingEnabledForTesting(true);
   }
 
   void SetUpOnMainThread() override {
@@ -92,7 +92,7 @@ class TabStripActionContainerBrowserTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUpInProcessBrowserTestFixture();
   }
 
-  TabStripModel* tab_strip_model() { return browser()->tab_strip_model(); }
+  TabStripModel* tab_strip_model() { return browser()->GetTabStripModel(); }
 
   BrowserView* browser_view() {
     return BrowserView::GetBrowserViewForBrowser(browser());
@@ -106,7 +106,7 @@ class TabStripActionContainerBrowserTest : public InProcessBrowserTest {
  protected:
   glic::TabStripGlicButton* GlicNudgeButton() {
     return views::AsViewClass<glic::TabStripGlicButton>(
-        tab_strip_action_container()->GetGlicButton());
+        tab_strip_action_container()->GetGlicButtonForTesting());
   }
 
   glic::TabStripGlicActorTaskIcon* GlicActorTaskIcon() {
@@ -154,9 +154,7 @@ class TabStripActionContainerBrowserTest : public InProcessBrowserTest {
     }
   }
 
-  void ResetPrewarming() {
-    glic::GlicProfileManager::SetPrewarmingEnabledForTesting(true);
-  }
+  void ResetPrewarming() { glic::SetPrewarmingEnabledForTesting(true); }
 
   void ResetAnimation(int value) {
     if (tab_strip_action_container()->animation_session_for_testing()) {
@@ -189,7 +187,8 @@ class TabStripActionContainerBrowserTest : public InProcessBrowserTest {
         actor::TestTaskSourceInfo(), actor::NoEnterprisePolicyChecker());
     actor::ActorTask* task = actor_service()->GetTask(task_id);
     actor::ui::StartTask start_task_event(task_id);
-    actor_service()->GetActorUiStateManager()->OnUiEvent(start_task_event);
+    actor::ui::ActorUiStateManager::Get(browser()->GetProfile())
+        ->OnUiEvent(start_task_event);
 
     // Add tab to task.
     base::test::TestFuture<actor::mojom::ActionResultPtr> add_tab_future;
@@ -391,8 +390,7 @@ IN_PROC_BROWSER_TEST_F(
 
   actor_service()->GetTask(task_id2)->Pause(/*from_actor=*/true);
 
-  auto* manager = glic::GlicActorTaskIconManagerFactory::GetForProfile(
-      browser()->GetProfile());
+  auto* manager = glic::LegacyGlicActivityManager::Get(browser()->GetProfile());
   EXPECT_TRUE(RunUntil(
       [&]() { return manager->actor_task_list_bubble_rows().size() == 2; }));
   EXPECT_TRUE(
@@ -413,7 +411,8 @@ IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
   actor::TaskId task_id = actor_service->CreateTask(
       actor::TestTaskSourceInfo(), actor::NoEnterprisePolicyChecker());
   actor::ui::StartTask start_task_event(task_id);
-  actor_service->GetActorUiStateManager()->OnUiEvent(start_task_event);
+  actor::ui::ActorUiStateManager::Get(browser()->GetProfile())
+      ->OnUiEvent(start_task_event);
   actor_service->StopTask(task_id,
                           actor::ActorTask::StoppedReason::kTaskComplete);
 
@@ -438,8 +437,7 @@ IN_PROC_BROWSER_TEST_F(TabStripActionContainerBrowserTest,
 
   actor::TaskId task_id = CreateTask();
 
-  auto* manager = glic::GlicActorTaskIconManagerFactory::GetForProfile(
-      browser()->GetProfile());
+  auto* manager = glic::LegacyGlicActivityManager::Get(browser()->GetProfile());
 
   actor_service()->GetTask(task_id)->SetState(actor::ActorTask::State::kActing);
   actor_service()->GetTask(task_id)->Interrupt();

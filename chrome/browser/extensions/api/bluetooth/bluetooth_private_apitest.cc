@@ -12,7 +12,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "content/public/test/browser_test.h"
 #include "device/bluetooth/bluetooth_common.h"
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
@@ -106,10 +106,11 @@ class BluetoothPrivateApiTest : public ExtensionApiTest {
     pairing_event.device.vendor_id_source = bt::VendorIdSource::kUsb;
     pairing_event.device.type = bt::DeviceType::kPhone;
 
-    auto args = bt_private::OnPairing::Create(pairing_event);
-    std::unique_ptr<Event> event(new Event(events::BLUETOOTH_PRIVATE_ON_PAIRING,
-                                           bt_private::OnPairing::kEventName,
-                                           std::move(args)));
+    auto event_args = base::MakeRefCounted<EventArgs>(
+        bt_private::OnPairing::Create(pairing_event));
+    auto event = std::make_unique<Event>(events::BLUETOOTH_PRIVATE_ON_PAIRING,
+                                         bt_private::OnPairing::kEventName,
+                                         std::move(event_args));
     EventRouter::Get(profile())->DispatchEventToExtension(kTestExtensionId,
                                                           std::move(event));
   }

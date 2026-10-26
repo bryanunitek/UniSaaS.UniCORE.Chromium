@@ -171,7 +171,12 @@ void PageLoadMetricsForwardObserver::OnTimingUpdate(
     const mojom::PageLoadTiming& timing) {}
 
 // Soft navigations only happen in outermost top-level documents.
-void PageLoadMetricsForwardObserver::OnSoftNavigation() {}
+
+void PageLoadMetricsForwardObserver::OnSoftNavigationFirstContentfulPaint(
+    const mojom::SoftNavigationMetrics& soft_navigation_metrics) {}
+
+void PageLoadMetricsForwardObserver::OnSoftNavigationCompleted(
+    const SoftNavigationData& soft_navigation_data) {}
 
 void PageLoadMetricsForwardObserver::OnSoftNavigationLargestContentfulPaint(
     uint64_t num_soft_lcps) {}
@@ -320,6 +325,13 @@ void PageLoadMetricsForwardObserver::OnResourceDataUseObserved(
     content::RenderFrameHost* rfh,
     const std::vector<mojom::ResourceDataUpdatePtr>& resources) {}
 
+// OnSubresourceLoadMetricsObserved is called through
+// PageLoadTracker::UpdateMetrics, which already forwards raw UpdateMetrics
+// calls directly to parent_tracker_. So, we don't need to forward here.
+void PageLoadMetricsForwardObserver::OnSubresourceLoadMetricsObserved(
+    content::RenderFrameHost* rfh,
+    const blink::SubresourceLoadMetrics& subresource_load_metrics) {}
+
 void PageLoadMetricsForwardObserver::MediaStartedPlaying(
     const content::WebContentsObserver::MediaPlayerInfo& video_type,
     content::RenderFrameHost* render_frame_host) {
@@ -359,6 +371,14 @@ void PageLoadMetricsForwardObserver::OnLoadedResource(
   if (!parent_observer_)
     return;
   parent_observer_->OnLoadedResource(extra_request_complete_info);
+}
+
+void PageLoadMetricsForwardObserver::DidLoadResourceFromMemoryCache(
+    const MemoryResourceLoadInfo& memory_resource_load_info) {
+  if (!parent_observer_) {
+    return;
+  }
+  parent_observer_->DidLoadResourceFromMemoryCache(memory_resource_load_info);
 }
 
 void PageLoadMetricsForwardObserver::FrameReceivedUserActivation(
@@ -433,45 +453,13 @@ void PageLoadMetricsForwardObserver::OnStorageAccessed(
                                       access_type);
 }
 
-void PageLoadMetricsForwardObserver::OnPrefetchLikely() {
-  // This event is delivered only for the primary page.
-  // TODO(crbug.com/40895492): Investigate whether this should truly be
-  // unreachable. Note that all NOTREACHED()s were made non-fatal in this file,
-  // they are not all necessarily hit.
-  DUMP_WILL_BE_NOTREACHED();
-}
-
 void PageLoadMetricsForwardObserver::DidActivatePrerenderedPage(
     content::NavigationHandle* navigation_handle) {}
-
-void PageLoadMetricsForwardObserver::OnSharedStorageWorkletHostCreated() {
-  if (!parent_observer_)
-    return;
-  parent_observer_->OnSharedStorageWorkletHostCreated();
-}
-
-void PageLoadMetricsForwardObserver::OnSharedStorageSelectURLCalled() {
-  if (!parent_observer_) {
-    return;
-  }
-  parent_observer_->OnSharedStorageSelectURLCalled();
-}
 
 void PageLoadMetricsForwardObserver::OnCustomUserTimingMarkObserved(
     const std::vector<mojom::CustomUserTimingMarkPtr>& timings) {
   // This new API doesn't support FORWARD_OBSERVING that is discouraged for new
   // observers.
-}
-
-void PageLoadMetricsForwardObserver::OnAdAuctionComplete(
-    bool is_server_auction,
-    bool is_on_device_auction,
-    content::AuctionResult result) {
-  if (!parent_observer_) {
-    return;
-  }
-  parent_observer_->OnAdAuctionComplete(is_server_auction, is_on_device_auction,
-                                        result);
 }
 
 void PageLoadMetricsForwardObserver::OnPrimaryPageRenderProcessGone() {

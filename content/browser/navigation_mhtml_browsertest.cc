@@ -18,9 +18,11 @@
 #include "content/browser/bad_message.h"
 #include "content/browser/renderer_host/navigation_request.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/content_navigation_policy.h"
 #include "content/common/frame.mojom.h"
+#include "content/public/browser/download_utils.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -30,17 +32,23 @@
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "content/test/content_browser_test_utils_internal.h"
+#include "content/test/did_commit_navigation_interceptor.h"
+#include "content/test/frame_host_interceptor.h"
 #include "mojo/public/c/system/trap.h"
 #include "mojo/public/c/system/types.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/handle_signals_state.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
 #include "net/base/filename_util.h"
+#include "net/base/mime_util.h"
+#include "net/base/net_errors.h"
 #include "net/dns/mock_host_resolver.h"
+#include "net/http/http_response_headers.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/page_state/page_state.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 #include "url/url_constants.h"
 
 namespace content {
@@ -494,7 +502,6 @@ IN_PROC_BROWSER_TEST_F(NavigationMhtmlBrowserTest,
   auto params = mojom::DidCommitProvisionalLoadParams::New();
   params->url = GURL("https://victim.example/#poc");
   params->origin = url::Origin::Create(GURL("https://victim.example"));
-  params->navigation_token = base::UnguessableToken::Create();
   // Fill in other required params to avoid other validation failures.
   params->did_create_new_entry = false;
   params->method = "GET";
@@ -512,6 +519,85 @@ IN_PROC_BROWSER_TEST_F(NavigationMhtmlBrowserTest,
                                         std::move(same_doc_params));
 
   EXPECT_EQ(bad_message::RFH_INVALID_ORIGIN_ON_COMMIT, kill_waiter.Wait());
+}
+
+namespace {
+
+// Intercepts the synchronous about:blank commit of a child frame and replaces
+// the reported origin to test error handling for unexpected precursor origins.
+class SubframeSyncCommitOriginReplacer : public DidCommitNavigationInterceptor {
+ public:
+  SubframeSyncCommitOriginReplacer(WebContents* web_contents,
+                                   const url::Origin& origin)
+      : DidCommitNavigationInterceptor(web_contents), origin_(origin) {}
+
+  SubframeSyncCommitOriginReplacer(const SubframeSyncCommitOriginReplacer&) =
+      delete;
+  SubframeSyncCommitOriginReplacer& operator=(
+      const SubframeSyncCommitOriginReplacer&) = delete;
+
+  std::optional<bad_message::BadMessageReason> WaitForKill() {
+    return kill_waiter_->Wait();
+  }
+
+  bool did_intercept() const { return did_intercept_; }
+  int process_id() const { return process_id_; }
+
+ private:
+  bool WillProcessDidCommitNavigation(
+      RenderFrameHost* render_frame_host,
+      NavigationRequest* navigation_request,
+      mojom::DidCommitProvisionalLoadParamsPtr* params,
+      mojom::DidCommitProvisionalLoadInterfaceParamsPtr* interface_params)
+      override {
+    // Only target the synchronous about:blank commit of a child frame, which
+    // arrives without a browser-side NavigationRequest.
+    if (navigation_request || !render_frame_host->GetParent() ||
+        did_intercept_) {
+      return true;
+    }
+    did_intercept_ = true;
+    (*params)->origin = origin_;
+    process_id_ = render_frame_host->GetProcess()->GetDeprecatedID();
+    kill_waiter_ = std::make_unique<RenderProcessHostBadIpcMessageWaiter>(
+        render_frame_host->GetProcess());
+    return true;
+  }
+
+  const url::Origin origin_;
+  bool did_intercept_ = false;
+  int process_id_ = -1;
+  std::unique_ptr<RenderProcessHostBadIpcMessageWaiter> kill_waiter_;
+};
+
+}  // namespace
+
+// An MHTML subframe's synchronous about:blank commit inherits an opaque origin
+// derived from the main document. Ensure the browser rejects an opaque origin
+// whose precursor tuple does not match what the subframe could have inherited.
+IN_PROC_BROWSER_TEST_F(NavigationMhtmlBrowserTest,
+                       MhtmlSubframeOpaquePrecursorValidation) {
+  MhtmlArchive mhtml_archive;
+  mhtml_archive.AddHtmlDocument(GURL("http://example.com"),
+                                "<iframe src=\"about:blank\"></iframe>");
+  GURL mhtml_url = mhtml_archive.Write("index.mhtml");
+
+  url::Origin mismatched_origin =
+      url::Origin::Create(GURL("https://unrelated.example"))
+          .DeriveNewOpaqueOrigin();
+  SubframeSyncCommitOriginReplacer replacer(web_contents(), mismatched_origin);
+
+  // The result of NavigateToURL is not checked, since the main frame commits
+  // before the subframe's invalid commit terminates the renderer.
+  std::ignore = NavigateToURL(shell(), mhtml_url);
+  EXPECT_TRUE(replacer.did_intercept());
+
+  // The process must not be recorded as hosting the opaque origin with the
+  // mismatched precursor.
+  EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->HostsOrigin(
+      replacer.process_id(), mismatched_origin));
+
+  EXPECT_EQ(bad_message::RFH_INVALID_ORIGIN_ON_COMMIT, replacer.WaitForKill());
 }
 
 // Load iframe with the content-ID scheme. The resource is found in the MHTML
@@ -1020,6 +1106,160 @@ IN_PROC_BROWSER_TEST_F(NavigationMhtmlImprovementsBrowserTest,
       "Received bad user message: WebTransport is not allowed in MHTML "
       "documents.",
       kill_waiter.Wait());
+}
+
+// Verifies that an MHTML subframe cannot start a navigation with an opaque
+// initiator origin whose precursor doesn't correspond to anything that has
+// committed in the MHTML document's process.
+IN_PROC_BROWSER_TEST_F(NavigationMhtmlImprovementsBrowserTest,
+                       MhtmlSubframeBeginNavigationOpaqueInitiatorPrecursor) {
+  // Intercepts BeginNavigation to overwrite the initiator origin once
+  // activated. This simulates a renderer that lies about the initiator.
+  class BeginNavigationInitiatorReplacer : public FrameHostInterceptor {
+   public:
+    BeginNavigationInitiatorReplacer(WebContents* web_contents,
+                                     url::Origin initiator_to_inject)
+        : FrameHostInterceptor(web_contents),
+          initiator_to_inject_(std::move(initiator_to_inject)) {}
+
+    bool WillDispatchBeginNavigation(
+        RenderFrameHost* render_frame_host,
+        blink::mojom::CommonNavigationParamsPtr* common_params,
+        blink::mojom::BeginNavigationParamsPtr* begin_params,
+        mojo::PendingRemote<blink::mojom::BlobURLToken>* blob_url_token,
+        mojo::PendingAssociatedRemote<mojom::NavigationClient>*
+            navigation_client) override {
+      if (is_activated_) {
+        (*common_params)->initiator_origin = initiator_to_inject_;
+        is_activated_ = false;
+      }
+      return true;
+    }
+
+    void Activate() { is_activated_ = true; }
+
+   private:
+    url::Origin initiator_to_inject_;
+    bool is_activated_ = false;
+  };
+
+  // The interceptor must be created before the frames whose IPCs it will
+  // intercept. Use an opaque origin whose precursor is unrelated to anything
+  // the MHTML archive contains.
+  url::Origin injected_origin =
+      url::Origin::Create(GURL("https://other-precursor.example"))
+          .DeriveNewOpaqueOrigin();
+  BeginNavigationInitiatorReplacer injector(web_contents(), injected_origin);
+
+  MhtmlArchive mhtml_archive;
+  mhtml_archive.AddHtmlDocument(
+      GURL("http://example.com"),
+      "<iframe src=\"http://example.com/subframe.html\"></iframe>");
+  mhtml_archive.AddHtmlDocument(GURL("http://example.com/subframe.html"),
+                                "subframe content");
+  GURL mhtml_url = mhtml_archive.Write("index.mhtml");
+  EXPECT_TRUE(NavigateToURL(shell(), mhtml_url));
+
+  RenderFrameHostImpl* main_document = main_frame_host();
+  ASSERT_EQ(1u, main_document->child_count());
+  RenderFrameHostImpl* sub_document =
+      main_document->child_at(0)->current_frame_host();
+  ASSERT_TRUE(sub_document->IsMhtmlSubframe());
+
+  // Start a renderer-initiated navigation in the subframe and overwrite its
+  // initiator origin. The renderer should be terminated since the precursor
+  // doesn't match anything the process is allowed to host.
+  RenderProcessHostBadIpcMessageWaiter kill_waiter(sub_document->GetProcess());
+  injector.Activate();
+  ExecuteScriptAsync(sub_document, "window.location = 'about:blank';");
+  EXPECT_EQ(bad_message::INVALID_INITIATOR_ORIGIN, kill_waiter.Wait());
+}
+
+// Verifies that MHTML archives served with mixed-case MIME types (such as
+// "Multipart/Related" or "Message/RFC822") are recognized as MHTML documents
+// by the browser process, enforcing MHTML sandboxing and opaque origins on the
+// main frame and subframes.
+IN_PROC_BROWSER_TEST_F(NavigationMhtmlBrowserTest, MixedCaseMimeType) {
+  EXPECT_TRUE(embedded_test_server()->Start());
+  const GURL iframe_url =
+      embedded_test_server()->GetURL("example.com", "/cachetime");
+
+  auto default_mhtml_sandbox =
+      ~network::mojom::WebSandboxFlags::kPopups &
+      ~network::mojom::WebSandboxFlags::kPropagatesToAuxiliaryBrowsingContexts;
+  if (base::FeatureList::IsEnabled(blink::features::kMHTML_Improvements)) {
+    default_mhtml_sandbox &= ~network::mojom::WebSandboxFlags::kScripts;
+  }
+
+  for (const char* mime_type : {"Multipart/Related", "Message/RFC822"}) {
+    SCOPED_TRACE(mime_type);
+    MhtmlArchive mhtml_archive;
+    mhtml_archive.AddHtmlDocument(
+        GURL("http://example.com"),
+        base::StringPrintf("<iframe src=\"%s\"></iframe>",
+                           iframe_url.spec().c_str()));
+    mhtml_archive.AddHtmlDocument(iframe_url, "<iframe></iframe>");
+    GURL mhtml_url = mhtml_archive.Write("index.mhtml");
+
+    net::ScopedOverrideGetMimeTypeForTesting mime_override(mime_type);
+    NavigationHandleObserver iframe_navigation(web_contents(), iframe_url);
+    EXPECT_TRUE(NavigateToURL(shell(), mhtml_url));
+
+    RenderFrameHostImpl* main_document = main_frame_host();
+    EXPECT_TRUE(main_document->is_mhtml_document());
+    EXPECT_TRUE(main_document->GetLastCommittedOrigin().opaque());
+    EXPECT_EQ(default_mhtml_sandbox, main_document->active_sandbox_flags());
+
+    ASSERT_EQ(1u, main_document->child_count());
+    RenderFrameHostImpl* sub_document =
+        main_document->child_at(0)->current_frame_host();
+    EXPECT_TRUE(sub_document->is_mhtml_document());
+    EXPECT_TRUE(sub_document->GetLastCommittedOrigin().opaque());
+    EXPECT_EQ(default_mhtml_sandbox, sub_document->active_sandbox_flags());
+    EXPECT_EQ(iframe_url, sub_document->GetLastCommittedURL());
+    EXPECT_TRUE(iframe_navigation.has_committed());
+    EXPECT_FALSE(iframe_navigation.is_error());
+    EXPECT_EQ(1u, sub_document->child_count());
+  }
+}
+
+// Verifies that navigating a subframe to an MHTML archive with a mixed-case
+// MIME type ("Multipart/Related" or "Message/RFC822") is blocked by the
+// browser with net::ERR_BLOCKED_BY_RESPONSE rather than committing in the
+// renderer and hitting CHECK(frame_->IsMainFrame()).
+IN_PROC_BROWSER_TEST_F(NavigationMhtmlBrowserTest,
+                       SubframeMixedCaseMimeTypeBlocked) {
+  for (const char* mime_type : {"Multipart/Related", "Message/RFC822"}) {
+    SCOPED_TRACE(mime_type);
+    EXPECT_TRUE(
+        NavigateToURL(shell(), GetTestUrl("", "page_with_blank_iframe.html")));
+
+    MhtmlArchive mhtml_archive;
+    mhtml_archive.AddHtmlDocument(GURL("http://example.com"), "MHTML content");
+    GURL mhtml_url = mhtml_archive.Write("index.mhtml");
+
+    auto headers =
+        base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK");
+    EXPECT_TRUE(download_utils::MustDownload(
+        web_contents()->GetBrowserContext(), GURL("http://example.com/a.mhtml"),
+        headers.get(), mime_type));
+    EXPECT_FALSE(
+        download_utils::MustDownload(web_contents()->GetBrowserContext(),
+                                     mhtml_url, headers.get(), mime_type));
+
+    net::ScopedOverrideGetMimeTypeForTesting mime_override(mime_type);
+    NavigationHandleObserver subframe_navigation(web_contents(), mhtml_url);
+    EXPECT_TRUE(NavigateIframeToURL(web_contents(), "test_iframe", mhtml_url));
+    EXPECT_TRUE(subframe_navigation.has_committed());
+    EXPECT_TRUE(subframe_navigation.is_error());
+    EXPECT_EQ(net::ERR_BLOCKED_BY_RESPONSE,
+              subframe_navigation.net_error_code());
+    ASSERT_EQ(1u, main_frame_host()->child_count());
+    EXPECT_TRUE(main_frame_host()
+                    ->child_at(0)
+                    ->current_frame_host()
+                    ->IsErrorDocument());
+  }
 }
 
 }  // namespace content

@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "google_apis/calendar/calendar_api_requests.h"
@@ -16,7 +15,10 @@
 #include "google_apis/common/api_error_codes.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
-class Profile;
+
+namespace signin {
+class IdentityManager;
+}  // namespace signin
 
 namespace google_apis {
 class RequestSender;
@@ -29,7 +31,10 @@ class RefreshTokenWaiter;
 // Fetches calendar events using the Google Calendar public API.
 class BirchCalendarFetcher {
  public:
-  explicit BirchCalendarFetcher(Profile* profile);
+  // `url_loader_factory` is used for the calendar API requests.
+  BirchCalendarFetcher(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      signin::IdentityManager* identity_manager);
   BirchCalendarFetcher(const BirchCalendarFetcher&) = delete;
   BirchCalendarFetcher& operator=(const BirchCalendarFetcher&) = delete;
   virtual ~BirchCalendarFetcher();
@@ -51,7 +56,6 @@ class BirchCalendarFetcher {
   // Starts the network request.
   void StartRequest();
 
-  const raw_ptr<Profile> profile_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   std::unique_ptr<google_apis::RequestSender> sender_;
   google_apis::calendar::CalendarApiUrlGenerator url_generator_;

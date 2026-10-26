@@ -6,7 +6,6 @@
 # This utility minifies JS files with terser.
 #
 # Instance of 'node' has no 'RunNode' member (no-member)
-# pylint: disable=no-member
 
 import argparse
 import os
@@ -16,15 +15,23 @@ _HERE_PATH = os.path.dirname(__file__)
 _SRC_PATH = os.path.normpath(os.path.join(_HERE_PATH, '..', '..', '..', '..'))
 _CWD = os.getcwd()
 sys.path.append(os.path.join(_SRC_PATH, 'third_party', 'node'))
-import node
-import node_modules
+import node  # noqa: E402
+import node_modules  # noqa: E402
 
 
 def MinifyFile(input_file, output_file):
-  node.RunNode([
-      node_modules.PathToTerser(), input_file, '--mangle', '--compress',
-      '--comments', 'false', '--output', output_file
-  ])
+  node.RunNode(
+    [
+      node_modules.PathToTerser(),
+      input_file,
+      '--mangle',
+      '--compress',
+      '--comments',
+      'false',
+      '--output',
+      output_file,
+    ]
+  )
 
 
 def main(argv):
@@ -37,7 +44,7 @@ def main(argv):
   # input, because in non-optimized/pre-Terser builds the input file is copied
   # to the output location with gn copy().
   out_path = os.path.join(_CWD, args.output)
-  if (os.path.exists(out_path)):
+  if os.path.exists(out_path):
     os.remove(out_path)
 
   MinifyFile(os.path.join(_CWD, args.input), out_path)

@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_BROWSER_ACTUATOR_INTERNAL_BROWSER_ACTUATOR_SERVICE_IMPL_H_
 #define COMPONENTS_BROWSER_ACTUATOR_INTERNAL_BROWSER_ACTUATOR_SERVICE_IMPL_H_
 
+#include "base/sequence_checker.h"
 #include "components/browser_actuator/public/browser_actuator_service.h"
 
 namespace browser_actuator {
@@ -18,8 +19,11 @@ class BrowserActuatorServiceImpl : public BrowserActuatorService {
   BrowserActuatorServiceImpl& operator=(const BrowserActuatorServiceImpl&) =
       delete;
 
-  // BrowserActuatorService implementation.
+  // BrowserActuatorService:
   bool IsInitialized() const override;
+
+ private:
+  SEQUENCE_CHECKER(sequence_checker_);
 };
 
 }  // namespace browser_actuator

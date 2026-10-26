@@ -4,24 +4,40 @@
 
 #include "chrome/browser/component_updater/metadata_table_chromeos.h"
 
+#include <stddef.h>
+
 #include <algorithm>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <utility>
-#include <vector>
 
-#include "base/hash/sha1.h"
+#include "base/check.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "components/component_updater/component_updater_paths.h"
+#include "base/values.h"
+#include "components/account_id/account_id.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
-#include "components/user_manager/user_manager.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "content/public/browser/browser_thread.h"
+#include "crypto/obsolete/sha1.h"
 
 namespace component_updater {
+
+// Converts username to a hashed string.
+//
+// The result is converted to lowercase to stay compatible with
+// CryptoLib::HexEncodeToBuffer().
+//
+// Public so it can be friended by crypto/obsolete/sha1.
+std::string HashUsername(std::string_view username) {
+  return base::HexEncodeLower(
+      crypto::obsolete::Sha1::Hash(base::ToLowerASCII(username)));
+}
 
 namespace {
 
@@ -48,26 +64,10 @@ constexpr char kMetadataContentItemHashedUserIdKey[] = "hashed_user_id";
 // Key to the component name.
 constexpr char kMetadataContentItemComponentKey[] = "component";
 
-// Gets current active user.
-const user_manager::User* GetActiveUser() {
-  DCHECK(user_manager::UserManager::Get());
-
-  return user_manager::UserManager::Get()->GetActiveUser();
-}
-
-// Converts username to a hashed string.
-//
-// The result is converted to lowercase to stay compatible with
-// CryptoLib::HexEncodeToBuffer().
-std::string HashUsername(std::string_view username) {
-  return base::HexEncodeLower(
-      base::SHA1Hash(base::as_byte_span(base::ToLowerASCII(username))));
-}
-
 const std::string& GetRequiredStringFromDict(const base::Value& dict,
                                              std::string_view key) {
   const std::string* str = dict.GetDict().FindString(key);
-  DCHECK(str);
+  CHECK(str, base::NotFatalUntil::M161);
   return *str;
 }
 
@@ -75,8 +75,8 @@ const std::string& GetRequiredStringFromDict(const base::Value& dict,
 
 MetadataTable::MetadataTable(PrefService* pref_service)
     : pref_service_(pref_service) {
-  DCHECK(pref_service_);
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK(pref_service_, base::NotFatalUntil::M161);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   Load();
 }
@@ -94,32 +94,18 @@ void MetadataTable::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(kMetadataPrefPath);
 }
 
-bool MetadataTable::AddComponentForCurrentUser(
-    const std::string& component_name) {
-  const user_manager::User* active_user = GetActiveUser();
-  // Return immediately if action is performed when no user is signed in.
-  if (!active_user) {
-    return false;
-  }
-
-  const std::string hashed_user_id =
-      HashUsername(active_user->GetAccountId().GetUserEmail());
-  AddItem(hashed_user_id, component_name);
-  Store();
-  return true;
-}
-
 bool MetadataTable::DeleteComponentForCurrentUser(
     const std::string& component_name) {
-  const user_manager::User* active_user = GetActiveUser();
+  // TODO(crbug.com/278643115): Take the account_id from the callers.
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
   // Return immediately if action is performed when no user is signed in.
-  if (!active_user) {
+  if (!active_session) {
     return false;
   }
 
-  const std::string hashed_user_id =
-      HashUsername(active_user->GetAccountId().GetUserEmail());
-  if (!DeleteItem(hashed_user_id, component_name)) {
+  if (!DeleteItem(HashUsername(active_session->account_id().GetUserEmail()),
+                  component_name)) {
     return false;
   }
   Store();
@@ -137,12 +123,12 @@ bool MetadataTable::HasComponentForAnyUser(
 }
 
 MetadataTable::MetadataTable() : pref_service_(nullptr) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 }
 
 void MetadataTable::Load() {
-  DCHECK(pref_service_);
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK(pref_service_, base::NotFatalUntil::M161);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   const base::DictValue& dict = pref_service_->GetDict(kMetadataPrefPath);
   const base::ListValue* installed_items = dict.FindList(kMetadataContentKey);
@@ -155,8 +141,8 @@ void MetadataTable::Load() {
 }
 
 void MetadataTable::Store() {
-  DCHECK(pref_service_);
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK(pref_service_, base::NotFatalUntil::M161);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   ScopedDictPrefUpdate update(pref_service_, kMetadataPrefPath);
   update->Set(kMetadataContentKey, installed_items_.Clone());

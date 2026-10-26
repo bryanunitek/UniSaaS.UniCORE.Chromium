@@ -41,7 +41,6 @@
 #import "ios/chrome/browser/policy/model/management_state.h"
 #import "ios/chrome/browser/policy/ui_bundled/management_util.h"
 #import "ios/chrome/browser/shared/coordinator/alert/action_sheet_coordinator.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
@@ -94,16 +93,8 @@
 }
 
 - (void)signOutForAccountSwitchWithProfile:(ProfileIOS*)profile {
-  __weak __typeof(_delegate) weakDelegate = _delegate;
   AuthenticationServiceFactory::GetForProfile(profile)->SignOut(
-      signin_metrics::ProfileSignout::kSignoutForAccountSwitching, ^{
-        [weakDelegate didSignOutForAccountSwitch];
-      });
-}
-
-- (void)signOutImmediatelyFromProfile:(ProfileIOS*)profile {
-  AuthenticationServiceFactory::GetForProfile(profile)->SignOut(
-      signin_metrics::ProfileSignout::kAbortSignin, nil);
+      signin_metrics::ProfileSignout::kSignoutForAccountSwitching);
 }
 
 - (void)registerUserPolicy:(ProfileIOS*)profile

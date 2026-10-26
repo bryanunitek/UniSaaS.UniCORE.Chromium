@@ -15,6 +15,7 @@
 #include "base/check_deref.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/gtest_tags.h"
+#include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/test/base/ash/interactive/interactive_ash_test.h"
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
@@ -101,7 +102,7 @@ class ActiveAudioNodeStateObserver : public ui::test::ObservationStateObserver<
 
  private:
   uint64_t GetActiveNode() const {
-    DCHECK(source());
+    CHECK(source(), base::NotFatalUntil::M162);
     return is_input_ ? source()->GetPrimaryActiveInputNode()
                      : source()->GetPrimaryActiveOutputNode();
   }
@@ -192,7 +193,7 @@ class AudioSettingsInteractiveUiTest : public InteractiveAshTest {
   }
 
   auto MaybeWaitForInputDevice(const uint64_t device_id) {
-    DCHECK(audio_handler());
+    CHECK(audio_handler(), base::NotFatalUntil::M162);
     const uint64_t primary_node = audio_handler()->GetPrimaryActiveInputNode();
 
     return Steps(If(
@@ -204,7 +205,7 @@ class AudioSettingsInteractiveUiTest : public InteractiveAshTest {
   }
 
   auto MaybeWaitForOutputDevice(const uint64_t device_id) {
-    DCHECK(audio_handler());
+    CHECK(audio_handler(), base::NotFatalUntil::M162);
     const uint64_t primary_node = audio_handler()->GetPrimaryActiveOutputNode();
 
     return Steps(If(
@@ -228,10 +229,10 @@ class AudioSettingsInteractiveUiTest : public InteractiveAshTest {
   // and wait for it to exist.
   auto DoSetActiveDevice(uint64_t device_id) {
     return Steps(Do([this, device_id]() {
-      DCHECK(audio_handler());
+      CHECK(audio_handler(), base::NotFatalUntil::M162);
       const AudioDevice* audio_device =
           audio_handler()->GetDeviceFromId(device_id);
-      DCHECK(audio_device);
+      CHECK(audio_device, base::NotFatalUntil::M162);
       audio_handler()->SwitchToDevice(*audio_device, /*notify=*/true,
                                       DeviceActivateType::kActivateByUser);
       if (audio_device->is_input) {
@@ -556,6 +557,9 @@ IN_PROC_BROWSER_TEST_F(AudioSettingsInteractiveUiTest,
 // screen.
 IN_PROC_BROWSER_TEST_F(AudioSettingsInteractiveUiTest,
                        LaunchAudioSettingDisabledOnLockScreen) {
+  ScreenLockerTester::ScopedRequestLockScreenOverride
+      scoped_request_lock_screen_override;
+
   base::AddFeatureIdTagToTestResult(kAudioSettingsFeatureIdTag);
 
   RunTestSequence(

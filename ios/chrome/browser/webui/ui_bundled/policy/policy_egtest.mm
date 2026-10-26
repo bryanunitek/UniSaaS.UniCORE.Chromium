@@ -22,6 +22,7 @@
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
+#import "ios/chrome/browser/policy/model/policy_app_interface.h"
 #import "ios/chrome/browser/policy/model/policy_earl_grey_utils.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -39,19 +40,20 @@
 #import "ios/web/public/test/element_selector.h"
 #import "ui/base/l10n/l10n_util.h"
 
+// TODO(crbug.com/561971708): Enable kAssertOnJavaScriptErrors for these tests.
+
 namespace {
 // Ids of elements in chrome://policy
-NSString* const kReloadPoliciesButton = @"reload-policies";
-NSString* const kExportPoliciesButton = @"export-policies";
-NSString* const kViewLogsButton = @"view-logs";
-NSString* const kMoreActionsButton = @"more-actions-button";
+const char kReloadPoliciesButton[] = "reload-policies";
+const char kViewLogsButton[] = "view-logs";
+const char kMoreActionsButton[] = "more-actions-button";
 
 // Ids of elements in chrome://policy/logs
-NSString* const kRefreshLogsButton = @"logs-refresh";
-NSString* const kExportLogsButton = @"logs-dump";
+const char kRefreshLogsButton[] = "logs-refresh";
+const char kExportLogsButton[] = "logs-dump";
 
 // Ids of elements in chrome://policy/test
-NSString* const kApplyPoliciesButton = @"apply-policies";
+const char kApplyPoliciesButton[] = "apply-policies";
 
 std::vector<std::string> PopulateExpectedPolicy(const std::string& name,
                                                 const std::string& value) {
@@ -129,17 +131,41 @@ void VerifyPolicies(
 
 ElementSelector* ReloadPoliciesButton() {
   return [ElementSelector
-      selectorWithElementID:base::SysNSStringToUTF8(kReloadPoliciesButton)];
+      selectorWithCSSSelector:base::StringPrintf(
+          "policy-app%s#%s", kElementSelectorShadowDelimiter,
+          kReloadPoliciesButton)];
+}
+
+ElementSelector* MoreActionsButton() {
+  return [ElementSelector
+      selectorWithCSSSelector:base::StringPrintf(
+          "policy-app%s#%s", kElementSelectorShadowDelimiter,
+          kMoreActionsButton)];
+}
+
+ElementSelector* ViewLogsButton() {
+  return [ElementSelector
+      selectorWithCSSSelector:base::StringPrintf(
+          "policy-app%s#%s", kElementSelectorShadowDelimiter,
+          kViewLogsButton)];
 }
 
 ElementSelector* RefreshLogsButton() {
   return [ElementSelector
-      selectorWithElementID:base::SysNSStringToUTF8(kRefreshLogsButton)];
+      selectorWithCSSSelector:base::StringPrintf(
+          "policy-logs-app%s#%s", kElementSelectorShadowDelimiter,
+          kRefreshLogsButton)];
+}
+
+ElementSelector* ExportLogsButton() {
+  return [ElementSelector
+      selectorWithCSSSelector:base::StringPrintf(
+          "policy-logs-app%s#%s", kElementSelectorShadowDelimiter,
+          kExportLogsButton)];
 }
 
 ElementSelector* ApplyPoliciesButton() {
-  return [ElementSelector
-      selectorWithElementID:base::SysNSStringToUTF8(kApplyPoliciesButton)];
+  return [ElementSelector selectorWithElementID:kApplyPoliciesButton];
 }
 
 // Matcher for "Download" button on Download Manager UI.
@@ -214,7 +240,8 @@ id<GREYMatcher> DownloadButton() {
 - (void)testPolicyPageLoadsCorrectly {
   [ChromeEarlGrey loadURL:GURL(kChromeUIPolicyURL)];
   [ChromeEarlGrey waitForWebStateContainingElement:ReloadPoliciesButton()];
-  [ChromeEarlGrey tapWebStateElementWithID:kReloadPoliciesButton];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
+      performAction:chrome_test_util::TapWebElement(ReloadPoliciesButton())];
 
   // Open in new incognito tab.
   [ChromeEarlGrey openNewIncognitoTab];
@@ -227,7 +254,8 @@ id<GREYMatcher> DownloadButton() {
 - (void)testPolicyLogsPageLoadsCorrectly {
   [ChromeEarlGrey loadURL:GURL(kChromeUIPolicyLogsURL)];
   [ChromeEarlGrey waitForWebStateContainingElement:RefreshLogsButton()];
-  [ChromeEarlGrey tapWebStateElementWithID:kRefreshLogsButton];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
+      performAction:chrome_test_util::TapWebElement(RefreshLogsButton())];
 
   // Open in new incognito tab.
   [ChromeEarlGrey openNewIncognitoTab];
@@ -240,7 +268,8 @@ id<GREYMatcher> DownloadButton() {
 - (void)testPolicyTestPageLoadsCorrectly {
   [ChromeEarlGrey loadURL:GURL(kChromeUIPolicyTestURL)];
   [ChromeEarlGrey waitForWebStateContainingElement:ApplyPoliciesButton()];
-  [ChromeEarlGrey tapWebStateElementWithID:kApplyPoliciesButton];
+  [ChromeEarlGrey
+      tapWebStateElementWithID:base::SysUTF8ToNSString(kApplyPoliciesButton)];
 
   // Open in new incognito tab.
   [ChromeEarlGrey openNewIncognitoTab];
@@ -288,7 +317,7 @@ id<GREYMatcher> DownloadButton() {
 // Tests the chrome://policy page when there are policies set.
 - (void)testPoliciesShowOnPage {
   // Set policies
-  policy_test_utils::MergePolicy(false, "AutofillCreditCardEnabled");
+  policy_test_utils::MergePolicy(false, "DefaultSearchProviderEnabled");
   policy_test_utils::MergePolicy(1, "IncognitoModeAvailability");
 
   // Navigate to chrome://policy.
@@ -297,7 +326,7 @@ id<GREYMatcher> DownloadButton() {
   // Verify that the policy set is shown on the page.
   std::vector<std::vector<std::string>> expected_policies;
   expected_policies.push_back(
-      PopulateExpectedPolicy("AutofillCreditCardEnabled", "false"));
+      PopulateExpectedPolicy("DefaultSearchProviderEnabled", "false"));
   expected_policies.push_back(
       PopulateExpectedRestartPolicy("IncognitoModeAvailability", "1"));
   VerifyPolicies(expected_policies);
@@ -344,11 +373,65 @@ id<GREYMatcher> DownloadButton() {
 - (void)testViewLogsRedirectsToLogsPage {
   [ChromeEarlGrey loadURL:GURL(kChromeUIPolicyURL)];
   // Click the dropdown and wait until the button shows.
-  [ChromeEarlGrey tapWebStateElementWithID:kMoreActionsButton];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
+      performAction:chrome_test_util::TapWebElement(MoreActionsButton())];
   // Click "View Logs"
-  [ChromeEarlGrey tapWebStateElementWithID:kViewLogsButton];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
+      performAction:chrome_test_util::TapWebElement(ViewLogsButton())];
   // Verify that the logs page is opened.
   [ChromeEarlGrey waitForWebStateContainingElement:RefreshLogsButton()];
+}
+
+// Tests that status is updated when policies are updated.
+- (void)testStatusUpdatedOnPolicyUpdate {
+  [ChromeEarlGrey loadURL:GURL(kChromeUIPolicyURL)];
+  [ChromeEarlGrey waitForWebStateContainingElement:ReloadPoliciesButton()];
+
+  NSString* script =
+      @"(async () => {"
+       "  const {BrowserProxy} = await import('./browser_proxy.js');"
+       "  window.statusUpdatedData = null;"
+       "  BrowserProxy.listenForStatusUpdated((status) => {"
+       "    window.statusUpdatedData = status;"
+       "  });"
+       "  window.listenerReady = true;"
+       "})();"
+       "void 0;";
+  [ChromeEarlGrey evaluateJavaScriptForSideEffect:script];
+
+  bool listenerReady = base::test::ios::WaitUntilConditionOrTimeout(
+      base::test::ios::kWaitForPageLoadTimeout, ^{
+        base::Value res = [ChromeEarlGrey
+            evaluateJavaScript:@"window.listenerReady === true"];
+        return res.is_bool() && res.GetBool();
+      });
+  GREYAssertTrue(listenerReady, @"Failed to set up status updated listener.");
+
+  base::Value initialReceived =
+      [ChromeEarlGrey evaluateJavaScript:@"window.statusUpdatedData === null"];
+  GREYAssertTrue(initialReceived.is_bool() && initialReceived.GetBool(),
+                 @"Status update received prematurely.");
+
+  // Update a policy to trigger OnPolicyUpdated and SendStatus.
+  policy_test_utils::SetPolicy(false, "DefaultSearchProviderEnabled");
+
+  bool statusUpdated = base::test::ios::WaitUntilConditionOrTimeout(
+      base::test::ios::kWaitForPageLoadTimeout, ^{
+        base::Value res = [ChromeEarlGrey
+            evaluateJavaScript:@"window.statusUpdatedData !== null"];
+        return res.is_bool() && res.GetBool();
+      });
+  GREYAssertTrue(statusUpdated,
+                 @"BrowserProxy failed to receive StatusUpdated event.");
+
+  // Verify that the received status is a valid dictionary/object.
+  base::Value verifyResult = [ChromeEarlGrey
+      evaluateJavaScript:@"typeof window.statusUpdatedData === 'object' && "
+                         @"window.statusUpdatedData !== null"];
+  GREYAssertTrue(verifyResult.is_bool() && verifyResult.GetBool(),
+                 @"Status updated event did not provide a valid object.");
+
+  policy_test_utils::ClearPolicies();
 }
 
 // -----------------------------------------------------------------------------
@@ -362,8 +445,10 @@ id<GREYMatcher> DownloadButton() {
     EARL_GREY_TEST_SKIPPED(@"Disabled on iPad");
   }
   [ChromeEarlGrey loadURL:GURL(kChromeUIPolicyLogsURL)];
+  [ChromeEarlGrey waitForWebStateContainingElement:ExportLogsButton()];
   // Click "Export Logs to JSON" button
-  [ChromeEarlGrey tapWebStateElementWithID:kExportLogsButton];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
+      performAction:chrome_test_util::TapWebElement(ExportLogsButton())];
   // Verify the download button at the bottom shows.
   GREYAssert(WaitForDownloadButton(), @"Download button did not show up");
   [[EarlGrey selectElementWithMatcher:DownloadButton()]
@@ -381,6 +466,37 @@ id<GREYMatcher> DownloadButton() {
   [ChromeEarlGrey waitForWebStateContainingText:version];
   [ChromeEarlGrey waitForWebStateContainingText:last_change];
   [ChromeEarlGrey waitForWebStateContainingText:"iOS"];
+}
+
+// Tests that policy logs emitted from C++ are visible in the logs page.
+- (void)testPolicyLogsVisibleOnPage {
+  [PolicyAppInterface clearPolicyLogs];
+
+  NSString* testMessage = @"Test policy log message from C++";
+  [PolicyAppInterface logErrorPolicy:testMessage];
+
+  [ChromeEarlGrey loadURL:GURL(kChromeUIPolicyLogsURL)];
+  [ChromeEarlGrey waitForWebStateContainingElement:RefreshLogsButton()];
+  [ChromeEarlGrey
+      waitForWebStateContainingText:base::SysNSStringToUTF8(testMessage)];
+}
+
+// Tests that clicking the refresh button updates logs fetched by the logs page.
+- (void)testPolicyLogsRefresh {
+  [PolicyAppInterface clearPolicyLogs];
+
+  [ChromeEarlGrey loadURL:GURL(kChromeUIPolicyLogsURL)];
+  [ChromeEarlGrey waitForWebStateContainingElement:RefreshLogsButton()];
+
+  NSString* testMessage = @"Test policy log message after refresh";
+  [PolicyAppInterface logErrorPolicy:testMessage];
+
+  // Click refresh button in WebUI.
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
+      performAction:chrome_test_util::TapWebElement(RefreshLogsButton())];
+
+  [ChromeEarlGrey
+      waitForWebStateContainingText:base::SysNSStringToUTF8(testMessage)];
 }
 
 // -----------------------------------------------------------------------------
@@ -408,9 +524,6 @@ id<GREYMatcher> DownloadButton() {
   -(void)testPolicyPageUnmanaged {                 \
     [super testPolicyPageUnmanaged];               \
   }                                                \
-  -(void)testPolicyPageManagedWithCBCM {           \
-    [super testPolicyPageManagedWithCBCM];         \
-  }                                                \
   -(void)testPoliciesShowOnPage {                  \
     [super testPoliciesShowOnPage];                \
   }                                                \
@@ -431,6 +544,15 @@ id<GREYMatcher> DownloadButton() {
   }                                                \
   -(void)testVersionInformationIsCorrect {         \
     [super testVersionInformationIsCorrect];       \
+  }                                                \
+  -(void)testPolicyLogsVisibleOnPage {             \
+    [super testPolicyLogsVisibleOnPage];           \
+  }                                                \
+  -(void)testPolicyLogsRefresh {                   \
+    [super testPolicyLogsRefresh];                 \
+  }                                                \
+  -(void)testStatusUpdatedOnPolicyUpdate {         \
+    [super testStatusUpdatedOnPolicyUpdate];       \
   }
 
 @interface PolicyUIMojoDisabledTestCase : PolicyUITestCaseBase

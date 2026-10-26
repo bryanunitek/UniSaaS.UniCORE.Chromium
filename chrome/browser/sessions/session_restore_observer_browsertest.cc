@@ -20,7 +20,6 @@
 #include "chrome/browser/sessions/session_restore_test_helper.h"
 #include "chrome/browser/sessions/session_service_factory.h"
 #include "chrome/browser/sessions/session_service_test_helper.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
@@ -29,12 +28,14 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
 
 using content::WebContents;
 using content::NavigationHandle;
@@ -79,10 +80,10 @@ class SessionRestoreObserverTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     SessionStartupPref pref(SessionStartupPref::LAST);
-    SessionStartupPref::SetStartupPref(browser()->profile(), pref);
+    SessionStartupPref::SetStartupPref(browser()->GetProfile(), pref);
 #if BUILDFLAG(IS_CHROMEOS)
     SessionServiceTestHelper helper(
-        SessionServiceFactory::GetForProfile(browser()->profile()));
+        SessionServiceFactory::GetForProfile(browser()->GetProfile()));
     helper.SetForceBrowserNotAliveWithNoWindows(true);
 #endif
     ASSERT_TRUE(embedded_test_server()->Start());
@@ -163,7 +164,7 @@ IN_PROC_BROWSER_TEST_F(SessionRestoreObserverTest,
 IN_PROC_BROWSER_TEST_F(SessionRestoreObserverTest, MultipleTabSessionRestore) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetTestURL()));
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GetTestURL(), WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      browser(), GetTestURL(), WindowOpenDisposition::kNewBackgroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // The restored browser should have 2 tabs.

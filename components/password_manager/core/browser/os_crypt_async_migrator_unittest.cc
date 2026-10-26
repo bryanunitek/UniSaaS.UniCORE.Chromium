@@ -10,10 +10,12 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/mock_password_store_interface.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
@@ -27,7 +29,7 @@ namespace {
 PasswordForm CreateForm(std::string_view signon_realm) {
   PasswordForm form;
   form.signon_realm = std::string(signon_realm);
-  form.password_value = u"password";
+  form.password_value = PasswordString(u"password");
   form.in_store = PasswordForm::Store::kProfileStore;
   return form;
 }
@@ -92,7 +94,8 @@ TEST_P(OSCryptAsyncMigratorTest, StartCleaningEmptyStore) {
 
   EXPECT_CALL(observer, CleaningCompleted);
   static_cast<PasswordStoreConsumer*>(migrator())
-      ->OnGetPasswordStoreResultsOrErrorFrom(store(), LoginsResult());
+      ->OnGetPasswordStoreResultsOrErrorFrom(store(),
+                                             std::vector<StoredCredential>());
 
   if (GetParam() == password_manager::kAccountStore) {
     ASSERT_TRUE(prefs().GetBoolean(prefs::kAccountStoreMigratedToOSCryptAsync));
@@ -114,7 +117,7 @@ TEST_P(OSCryptAsyncMigratorTest, StartCleaningErrorInStore) {
   PasswordStoreBackendError error{
       PasswordStoreBackendErrorType::kUncategorized};
   static_cast<PasswordStoreConsumer*>(migrator())
-      ->OnGetPasswordStoreResultsOrErrorFrom(store(), error);
+      ->OnGetPasswordStoreResultsOrErrorFrom(store(), base::unexpected(error));
 
   ASSERT_FALSE(prefs().GetBoolean(prefs::kAccountStoreMigratedToOSCryptAsync));
   ASSERT_FALSE(prefs().GetBoolean(prefs::kProfileStoreMigratedToOSCryptAsync));

@@ -72,7 +72,8 @@ class SafeBrowsingUIManager : public BaseUIManager {
         content::WebContents* web_contents,
         const GURL& page_url,
         const std::string& threat_type,
-        safe_browsing::RTLookupResponse rt_lookup_response) = 0;
+        safe_browsing::RTLookupResponse rt_lookup_response,
+        bool is_bypassing_interstitial) = 0;
 
     // Gets the NoStatePrefetchContents instance associated with |web_contents|
     // if one exists (i.e., if |web_contents| is being prerendered).
@@ -135,7 +136,8 @@ class SafeBrowsingUIManager : public BaseUIManager {
   // HaTS service can later send it over if the user takes the survey.
   void AttachThreatDetailsAndLaunchSurvey(
       content::BrowserContext* browser_context,
-      std::unique_ptr<ClientSafeBrowsingReportRequest> report) override;
+      std::unique_ptr<ClientSafeBrowsingReportRequest> report,
+      bool is_tab_closed) override;
 
   // Calls |BaseUIManager::OnBlockingPageDone()| and triggers
   // |OnSecurityInterstitialProceeded| event if |proceed| is true.
@@ -152,6 +154,11 @@ class SafeBrowsingUIManager : public BaseUIManager {
   void MaybeSendClientSafeBrowsingWarningShownReport(
       std::unique_ptr<ClientSafeBrowsingReportRequest> report,
       content::WebContents* web_contents) override;
+
+  // Creates a safe browsing report for the given resource and calls
+  // MaybeSendClientSafeBrowsingWarningShownReport.
+  void CreateAndSendClientSafeBrowsingWarningShownReport(
+      const UnsafeResource& resource) override;
 
   // Creates the allowlist URL set for tests that create a blocking page
   // themselves and then simulate OnBlockingPageDone(). OnBlockingPageDone()
@@ -173,7 +180,8 @@ class SafeBrowsingUIManager : public BaseUIManager {
       content::WebContents* web_contents,
       const GURL& page_url,
       const std::string& threat_type,
-      safe_browsing::RTLookupResponse rt_lookup_response);
+      safe_browsing::RTLookupResponse rt_lookup_response,
+      bool is_bypassing_interstitial);
 
   const std::string app_locale() const override;
   history::HistoryService* history_service(
@@ -182,11 +190,6 @@ class SafeBrowsingUIManager : public BaseUIManager {
 
  protected:
   ~SafeBrowsingUIManager() override;
-
-  // Creates a safe browsing report for the given resource and calls
-  // MaybeSendClientSafeBrowsingWarningShownReport.
-  void CreateAndSendClientSafeBrowsingWarningShownReport(
-      const UnsafeResource& resource) override;
 
   // Helper method to ensure client safe browsing reports are only sent when the
   // user has opted in to extended reporting and is not currently in incognito

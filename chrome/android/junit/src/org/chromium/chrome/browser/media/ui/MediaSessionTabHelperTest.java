@@ -16,16 +16,14 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.components.browser_ui.media.AudioBecomingNoisyReceiver;
-import org.chromium.components.browser_ui.media.MediaFeatureList;
 import org.chromium.content.browser.MediaSessionImpl;
 import org.chromium.content.browser.MediaSessionImplJni;
 import org.chromium.content_public.browser.MediaSession;
@@ -33,7 +31,6 @@ import org.chromium.content_public.browser.test.mock.MockWebContents;
 
 /** Tests for {@link MediaSessionTabHelper} lazy-initialization and cleanup. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 // TODO(crbug.com/522397811): Add tests with ALLOW_MULTIPLE_MEDIA_NOTIFICATIONS enabled once
 // the feature is implemented.
 @DisableFeatures(ChromeFeatureList.ALLOW_MULTIPLE_MEDIA_NOTIFICATIONS)
@@ -99,8 +96,9 @@ public class MediaSessionTabHelperTest {
     }
 
     @Test
-    @DisableFeatures(MediaFeatureList.NO_PAUSE_MEDIA_ON_HEADPHONE_UNPLUG)
-    public void testAudioBecomingNoisy_PausesPlayback() {
+    public void testAudioBecomingNoisy_NonDesktopDevice_PausesPlayback() {
+        DeviceInfo.setIsDesktopForTesting(false);
+
         MediaNotificationTestTabHolder tabHolder =
                 new MediaNotificationTestTabHolder(1, "https://example.com", "Title");
         mHelper = tabHolder.mMediaSessionTabHelper;
@@ -121,14 +119,15 @@ public class MediaSessionTabHelperTest {
         org.chromium.components.browser_ui.media.AudioBecomingNoisyReceiver.getInstance()
                 .onReceive(context, intent);
 
-        // Verify that the media session is suspended (SuspendType.UI = 1)
-        verify(session).suspend(org.chromium.media_session.mojom.MediaSession.SuspendType.UI);
+        // Verify that the media session is suspended (SuspendType.SYSTEM = 0)
+        verify(session).suspend(org.chromium.media_session.mojom.MediaSession.SuspendType.SYSTEM);
         histogramWatcher.assertExpected();
     }
 
     @Test
-    @EnableFeatures(MediaFeatureList.NO_PAUSE_MEDIA_ON_HEADPHONE_UNPLUG)
-    public void testAudioBecomingNoisy_FeatureEnabled_DoesNotPause() {
+    public void testAudioBecomingNoisy_DesktopDevice_DoesNotPause() {
+        DeviceInfo.setIsDesktopForTesting(true);
+
         MediaNotificationTestTabHolder tabHolder =
                 new MediaNotificationTestTabHolder(1, "https://example.com", "Title");
         mHelper = tabHolder.mMediaSessionTabHelper;
@@ -147,13 +146,12 @@ public class MediaSessionTabHelperTest {
         org.chromium.components.browser_ui.media.AudioBecomingNoisyReceiver.getInstance()
                 .onReceive(context, intent);
 
-        // Verify that suspend is never called
+        // Verify that suspend is never called on desktop
         verify(session, never()).suspend(anyInt());
         histogramWatcher.assertExpected();
     }
 
     @Test
-    @DisableFeatures(MediaFeatureList.NO_PAUSE_MEDIA_ON_HEADPHONE_UNPLUG)
     public void testAudioBecomingNoisy_TimeToResumeMetric() {
         MediaNotificationTestTabHolder tabHolder =
                 new MediaNotificationTestTabHolder(1, "https://example.com", "Title");
@@ -187,7 +185,6 @@ public class MediaSessionTabHelperTest {
     }
 
     @Test
-    @DisableFeatures(MediaFeatureList.NO_PAUSE_MEDIA_ON_HEADPHONE_UNPLUG)
     public void testAudioBecomingNoisy_AlreadyPaused_DoesNotLogMetric() {
         MediaNotificationTestTabHolder tabHolder =
                 new MediaNotificationTestTabHolder(1, "https://example.com", "Title");

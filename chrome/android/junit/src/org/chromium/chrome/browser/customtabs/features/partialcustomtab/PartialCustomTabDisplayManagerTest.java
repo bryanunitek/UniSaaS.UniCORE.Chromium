@@ -16,7 +16,6 @@ import static androidx.browser.customtabs.CustomTabsIntent.ACTIVITY_SIDE_SHEET_R
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
@@ -28,6 +27,7 @@ import static org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider
 
 import android.app.Activity;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.InsetDrawable;
 
 import androidx.annotation.Px;
 
@@ -39,7 +39,6 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.CallbackUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
@@ -52,7 +51,6 @@ import java.util.function.Supplier;
 
 /** Tests for {@link PartialCustomTabDisplayManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class PartialCustomTabDisplayManagerTest {
     private static final int BOTTOM_SHEET_MAX_WIDTH_DP = 900;
 
@@ -457,8 +455,9 @@ public class PartialCustomTabDisplayManagerTest {
                         anyInt(),
                         eq(ACTIVITY_LAYOUT_STATE_SIDE_SHEET));
         clearInvocations(mPCCTTestRule.mOnActivityLayoutCallback);
-        verify(mPCCTTestRule.mCoordinatorLayout).setBackground(any(Drawable.class));
-        mPCCTTestRule.configInsetDrawableBg();
+        // The divider line is drawn.
+        Drawable coordinatorBackground = mPCCTTestRule.mCoordinatorLayout.getBackground();
+        assertTrue(coordinatorBackground instanceof InsetDrawable);
         mPCCTTestRule.configPortraitMode();
         displayManager.onConfigurationChanged(mPCCTTestRule.mConfiguration);
 
@@ -469,7 +468,7 @@ public class PartialCustomTabDisplayManagerTest {
                 PartialCustomTabType.BOTTOM_SHEET,
                 displayManager.getActiveStrategyType());
 
-        verify(mPCCTTestRule.mCoordinatorLayout).getPaddingRight();
+        mPCCTTestRule.assertCoordinatorInsetsReset(coordinatorBackground);
         verify(mPCCTTestRule.mOnActivityLayoutCallback)
                 .onActivityLayout(
                         anyInt(),
@@ -582,7 +581,6 @@ public class PartialCustomTabDisplayManagerTest {
     }
 
     @Test
-    @DisabledTest(message = "b/354044501")
     public void rotateInMaximizeMode() {
         mPCCTTestRule.configLandscapeMode();
         PartialCustomTabDisplayManager displayManager = createPcctDisplayManager();

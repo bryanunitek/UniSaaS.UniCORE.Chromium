@@ -38,7 +38,8 @@ class ChromeWebClient : public web::WebClient {
   std::string_view GetDataResource(
       int resource_id,
       ui::ResourceScaleFactor scale_factor) const override;
-  base::RefCountedMemory* GetDataResourceBytes(int resource_id) const override;
+  scoped_refptr<base::RefCountedMemory> GetDataResourceBytes(
+      int resource_id) const override;
   void GetAdditionalWebUISchemes(
       std::vector<std::string>* additional_schemes) override;
   void PostBrowserURLRewriterCreation(
@@ -84,6 +85,12 @@ class ChromeWebClient : public web::WebClient {
   web::CobaltController* GetCobaltController(
       web::BrowserState* browser_state) const override;
   bool IsSmoothScrollingSupported() const override;
+  web::UniversalOptOutState GetUniversalOptOutState(
+      web::BrowserState* browser_state) const override;
+  web::ExtensionController* GetExtensionController(
+      web::BrowserState* browser_state) const override API_AVAILABLE(ios(18.4));
+  bool ShouldBlockUniversalLinksForURL(web::BrowserState* browser_state,
+                                       const GURL& url) const override;
 
  private:
   // Reference to a view that is attached to a window.

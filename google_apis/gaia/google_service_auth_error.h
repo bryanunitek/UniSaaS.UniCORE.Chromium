@@ -117,6 +117,14 @@ class COMPONENT_EXPORT(GOOGLE_APIS) GoogleServiceAuthError {
     CREDENTIALS_REJECTED_BY_CLIENT,
     // Credentials are missing (e.g. could not be loaded from disk).
     CREDENTIALS_MISSING,
+    // The two reasons below are only reported when the server rejects a
+    // request sent with a bound refresh token. The server doesn't say why,
+    // so the cause is inferred from what the request carried.
+    //
+    // Failed to generate a token binding assertion locally.
+    TOKEN_BINDING_ASSERTION_GENERATION_FAILED,
+    // Server rejected the credentials after a token binding assertion was sent.
+    TOKEN_BINDING_ASSERTION_REJECTED_BY_SERVER,
 
     NUM_REASONS
   };
@@ -142,11 +150,7 @@ class COMPONENT_EXPORT(GOOGLE_APIS) GoogleServiceAuthError {
   friend bool operator==(const GoogleServiceAuthError&,
                          const GoogleServiceAuthError&);
 
-  // Construct a GoogleServiceAuthError from a State with no additional data.
-  explicit GoogleServiceAuthError(State s);
-
-  // Equivalent to calling GoogleServiceAuthError(NONE). Needs to exist and be
-  // public for Mojo bindings code.
+  // Equivalent to calling GoogleServiceAuthError::AuthErrorNone().
   GoogleServiceAuthError();
 
   GoogleServiceAuthError(const GoogleServiceAuthError& other);

@@ -11,9 +11,12 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/ash_switches.h"
+#include "ash/constants/chrome_switches.h"
 #include "ash/webui/diagnostics_ui/url_constants.h"
 #include "ash/webui/help_app_ui/url_constants.h"
 #include "ash/webui/os_feedback_ui/url_constants.h"
+#include "base/command_line.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -28,20 +31,18 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
 #include "base/values.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/os_feedback/os_feedback_screenshot_manager.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/webui/ash/os_feedback_dialog/os_feedback_dialog.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "components/feedback/content/content_tracing_manager.h"
 #include "components/feedback/content/feedback_uploader_factory.h"
@@ -50,6 +51,7 @@
 #include "components/feedback/feedback_uploader.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "components/user_manager/user_names.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "extensions/browser/api/feedback_private/feedback_private_api.h"
@@ -58,6 +60,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/window.h"
+#include "ui/base/base_window.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
@@ -86,7 +89,7 @@ constexpr char kFeedbackUserConsentKey[] = "feedbackUserCtlConsent";
 constexpr char kFeedbackUserConsentGrantedValue[] = "true";
 constexpr char kFeedbackUserConsentDeniedValue[] = "false";
 constexpr char kFeedbackBluetoothCategoryTag[] = "BluetoothReportWithLogs";
-const std::u16string kDescription = u"This is a fake description";
+constexpr char16_t kDescription[] = u"This is a fake description";
 constexpr int kPerformanceTraceId = 1;
 
 constexpr char kFakeKey[] = "fake key";
@@ -209,7 +212,7 @@ class ChromeOsFeedbackDelegateTest : public InProcessBrowserTest {
                      bool preload_system_logs = false) {
     // Will be called when preloading system logs is done.
     base::test::TestFuture<bool> fetch_future;
-    auto* profile_ = browser()->profile();
+    auto* profile_ = browser()->GetProfile();
     auto mock_private_delegate = std::make_unique<FakeFeedbackPrivateDelegate>(
         fetch_future.GetRepeatingCallback());
     auto mock_feedback_service =
@@ -260,7 +263,7 @@ class ChromeOsFeedbackDelegateTest : public InProcessBrowserTest {
     EXPECT_EQ(SendReportStatus::kSuccess, future.Get());
   }
 
-  Browser* LaunchFeedbackAppAndGetBrowser() {
+  BrowserWindowInterface* LaunchFeedbackAppAndGetBrowser() {
     // Install system apps, namely the Feedback App.
     ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
         ->InstallSystemAppsForTesting();
@@ -284,10 +287,9 @@ class ChromeOsFeedbackDelegateTest : public InProcessBrowserTest {
         ash::FindSystemWebAppBrowser(browser()->GetProfile(),
                                      ash::SystemWebAppType::OS_FEEDBACK,
                                      ash::BrowserType::kApp);
-    Browser* feedback_browser = feedback_browser_delegate
-                                    ? feedback_browser_delegate->GetBrowser()
-                                          .GetBrowserForMigrationOnly()
-                                    : nullptr;
+    BrowserWindowInterface* feedback_browser =
+        feedback_browser_delegate ? &feedback_browser_delegate->GetBrowser()
+                                  : nullptr;
 
     EXPECT_NE(feedback_browser, nullptr);
 
@@ -337,13 +339,6 @@ class ChromeOsFeedbackDelegateTest : public InProcessBrowserTest {
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-// Test GetApplicationLocale returns a valid locale.
-IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest, GetApplicationLocale) {
-  auto feedback_delegate =
-      ChromeOsFeedbackDelegate::CreateForTesting(browser()->GetProfile());
-  EXPECT_EQ(feedback_delegate.GetApplicationLocale(), "en-US");
-}
-
 // Test GetLastActivePageUrl returns last active page url if any.
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest, GetLastActivePageUrl) {
   EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 1u);
@@ -368,11 +363,33 @@ IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest, GetSignedInUserEmail) {
   EXPECT_EQ(feedback_delegate.GetSignedInUserEmail(), kSignedInUserEmail);
 }
 
+class ChromeOsFeedbackDelegateGuestModeBrowserTest
+    : public InProcessBrowserTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    command_line->AppendSwitch(ash::switches::kGuestSession);
+    command_line->AppendSwitchASCII(ash::switches::kLoginUser,
+                                    user_manager::kGuestUserName);
+    command_line->AppendSwitchASCII(ash::switches::kLoginProfile,
+                                    TestingProfile::kTestUserProfileDir);
+    command_line->AppendSwitch(ash::chrome_switches::kIncognito);
+  }
+};
+
+// Guest profiles have no annotated account (crbug.com/546860700), so
+// GetSignedInUserEmail() should report no signed-in email rather than crash.
+IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateGuestModeBrowserTest,
+                       GetSignedInUserEmail) {
+  auto feedback_delegate =
+      ChromeOsFeedbackDelegate::CreateForTesting(browser()->GetProfile());
+  EXPECT_EQ(feedback_delegate.GetSignedInUserEmail(), std::nullopt);
+}
+
 // Test IsWifiDebugLogsAllowed returns true when
 // - UserFeedbackWithLowLevelDebugDataAllowed = ["all"].
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
                        WifiDebugLogsAllowed_True_For_All) {
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kUserFeedbackWithLowLevelDebugDataAllowed,
       base::ListValue().Append("all"));
   auto feedback_delegate =
@@ -384,7 +401,7 @@ IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
 // - UserFeedbackWithLowLevelDebugDataAllowed = ["wifi"].
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
                        WifiDebugLogsAllowed_True_For_Wifi) {
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kUserFeedbackWithLowLevelDebugDataAllowed,
       base::ListValue().Append("wifi"));
   auto feedback_delegate =
@@ -396,7 +413,7 @@ IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
 // - UserFeedbackWithLowLevelDebugDataAllowed = ["wifi", "bluetooth"].
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
                        WifiDebugLogsAllowed_True_For_Wifi_And_Bluetooth) {
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kUserFeedbackWithLowLevelDebugDataAllowed,
       base::ListValue().Append("wifi").Append("bluetooth"));
   auto feedback_delegate =
@@ -408,7 +425,7 @@ IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
 // - UserFeedbackWithLowLevelDebugDataAllowed = [].
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
                        WifiDebugLogsAllowed_False_For_Empty) {
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kUserFeedbackWithLowLevelDebugDataAllowed, base::ListValue());
   auto feedback_delegate =
       ChromeOsFeedbackDelegate::CreateForTesting(browser()->GetProfile());
@@ -419,7 +436,7 @@ IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
 // - UserFeedbackWithLowLevelDebugDataAllowed = ["other"].
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
                        WifiDebugLogsAllowed_False_For_Other) {
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kUserFeedbackWithLowLevelDebugDataAllowed,
       base::ListValue().Append("other"));
   auto feedback_delegate =
@@ -694,7 +711,7 @@ IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest, NoScreenshot) {
 // Diagnostics app will launch the app as an independent SWA
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
                        OpenDiagnosticsApp_From_SWA) {
-  Browser* feedback_browser = LaunchFeedbackAppAndGetBrowser();
+  BrowserWindowInterface* feedback_browser = LaunchFeedbackAppAndGetBrowser();
   CHECK(feedback_browser);
 
   auto feedback_delegate =
@@ -760,7 +777,7 @@ IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest, OpenExploreApp) {
 // Test that the Metrics (Histograms) dialog opens
 // when OpenMetricsDialog is invoked.
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest, OpenMetricsDialog) {
-  Browser* feedback_browser = LaunchFeedbackAppAndGetBrowser();
+  BrowserWindowInterface* feedback_browser = LaunchFeedbackAppAndGetBrowser();
 
   gfx::NativeWindow feedback_window =
       feedback_browser->GetWindow()->GetNativeWindow();
@@ -786,7 +803,7 @@ IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest, OpenMetricsDialog) {
 // Feedback SWA.
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
                        OpenSystemInfoDialog_From_FeedbackSWA) {
-  Browser* feedback_browser = LaunchFeedbackAppAndGetBrowser();
+  BrowserWindowInterface* feedback_browser = LaunchFeedbackAppAndGetBrowser();
 
   gfx::NativeWindow feedback_window =
       feedback_browser->GetWindow()->GetNativeWindow();
@@ -901,7 +918,7 @@ IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
 //   The flag passed to FeedbackParams is true.
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
                        SendWifiDebugLogs_True_WhenAllowed) {
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kUserFeedbackWithLowLevelDebugDataAllowed,
       base::ListValue().Append("all"));
   ReportPtr report = Report::New();
@@ -931,7 +948,7 @@ IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
 //   The flag passed to FeedbackParams is false.
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
                        SendWifiDebugLogs_True_WhenNotAllowed) {
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kUserFeedbackWithLowLevelDebugDataAllowed, base::ListValue());
   ReportPtr report = Report::New();
   report->description = kDescription;
@@ -958,7 +975,7 @@ IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
 // Test that when send_wifi_debug_logs is false:
 //   The flag passed to FeedbackParams is false.
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest, SendWifiDebugLogs_False) {
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kUserFeedbackWithLowLevelDebugDataAllowed,
       base::ListValue().Append("all"));
   ReportPtr report = Report::New();
@@ -1018,7 +1035,7 @@ IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
 // window bounds.
 IN_PROC_BROWSER_TEST_F(ChromeOsFeedbackDelegateTest,
                        DontRestoreUnresizableSystemWebApp) {
-  Browser* feedback_browser = LaunchFeedbackAppAndGetBrowser();
+  BrowserWindowInterface* feedback_browser = LaunchFeedbackAppAndGetBrowser();
   aura::Window* feedback_window =
       feedback_browser->GetWindow()->GetNativeWindow();
 

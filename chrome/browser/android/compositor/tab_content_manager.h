@@ -7,8 +7,6 @@
 
 #include <jni.h>
 
-#include <map>
-
 #include "base/android/jni_android.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
@@ -25,9 +23,6 @@ namespace cc::slim {
 class Layer;
 }
 
-namespace sync_sessions {
-class SessionSyncService;
-}
 
 namespace ui {
 class UIResourceProvider;
@@ -63,6 +58,8 @@ class TabContentManager : public thumbnail::ThumbnailCacheObserver {
   // Get the live layer from the cache.
   scoped_refptr<cc::slim::Layer> GetLiveLayer(int tab_id);
 
+  TabAndroid* GetTab(int tab_id);
+
   // Returns the static ThumbnailLayer for a `tab_id`. Note that the lifecycle
   // of the thumbnail is managed by the ThumbnailCache and not the
   // ThumbnailLayer. When displaying a layer it is important that
@@ -88,7 +85,7 @@ class TabContentManager : public thumbnail::ThumbnailCacheObserver {
                           float thumbnail_scale);
   void InvalidateIfChanged(JNIEnv* env, int32_t tab_id, const GURL& url);
   void UpdateVisibleIds(JNIEnv* env,
-                        const base::android::JavaRef<jintArray>& priority,
+                        const std::vector<int32_t>& priority_ids,
                         int32_t primary_tab_id);
   void NativeRemoveTabThumbnail(int tab_id);
   void RemoveTabThumbnail(JNIEnv* env, int32_t tab_id);
@@ -109,15 +106,9 @@ class TabContentManager : public thumbnail::ThumbnailCacheObserver {
   void OnThumbnailAddedToCache(thumbnail::TabId tab_id) override;
   void OnFinishedThumbnailRead(thumbnail::TabId tab_id) override;
 
-  static void CompressScreenshotForSyncForTesting(
-      const SkBitmap& bitmap,
-      base::OnceCallback<void(std::string)> callback);
-
  private:
   class TabReadbackRequest;
-  // TODO(crbug.com/41314695) check sizes and consider using base::flat_map if
-  // these layer maps are small.
-  using ThumbnailLayerMap = std::map<int, scoped_refptr<ThumbnailLayer>>;
+  using ThumbnailLayerMap = base::flat_map<int, scoped_refptr<ThumbnailLayer>>;
   using TabReadbackRequestMap =
       absl::flat_hash_map<int, std::unique_ptr<TabReadbackRequest>>;
   using ThumbnailCaptureTrackerPtr =
@@ -141,10 +132,6 @@ class TabContentManager : public thumbnail::ThumbnailCacheObserver {
                            bool need_downsampling,
                            bool result,
                            const SkBitmap& bitmap);
-
-  sync_sessions::SessionSyncService* GetSessionSyncService(int tab_id);
-
-  void AddTabScreenshotToSync(int tab_id, std::string compressed_data);
 
   absl::flat_hash_map<thumbnail::TabId,
                       base::WeakPtr<thumbnail::ThumbnailCaptureTracker>>

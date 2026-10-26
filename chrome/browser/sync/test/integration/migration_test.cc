@@ -70,19 +70,6 @@ std::optional<sync_pb::SyncEntity> FindPreferenceEntityByPrefName(
   return std::nullopt;
 }
 
-// Utility functions to make a data type set out of a small number of
-// data types.
-
-// TODO(crbug.com/40911681): MakeSet() seems pretty redundant, can be replaced
-// with its body.
-syncer::DataTypeSet MakeSet(syncer::DataType type) {
-  return {type};
-}
-
-syncer::DataTypeSet MakeSet(syncer::DataType type1, syncer::DataType type2) {
-  return {type1, type2};
-}
-
 // An ordered list of data types sets to migrate.  Used by
 // RunMigrationTest().
 using MigrationList = base::circular_deque<syncer::DataTypeSet>;
@@ -103,11 +90,11 @@ MigrationList MakeList(syncer::DataTypeSet data_types1,
 }
 
 MigrationList MakeList(syncer::DataType type) {
-  return MakeList(MakeSet(type));
+  return MakeList(syncer::DataTypeSet{type});
 }
 
 MigrationList MakeList(syncer::DataType type1, syncer::DataType type2) {
-  return MakeList(MakeSet(type1), MakeSet(type2));
+  return MakeList(syncer::DataTypeSet{type1}, syncer::DataTypeSet{type2});
 }
 
 class MigrationCompletionChecker : public SingleClientStatusChangeChecker {
@@ -191,10 +178,12 @@ class MigrationTest : public SyncTest,
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
       scoped_feature_list_.InitWithFeatures(
           {syncer::kReplaceSyncPromosWithSignInPromos,
-           syncer::kSpellcheckSeparateLocalAndAccountDictionaries,
-           switches::kSyncEnableBookmarksInTransportMode,
+           switches::kEnablePreferencesAccountStorage,
            syncer::kSeparateLocalAndAccountSearchEngines,
-           syncer::kSeparateLocalAndAccountThemes},
+           syncer::kSpellcheckSeparateLocalAndAccountDictionaries,
+           syncer::kSeparateLocalAndAccountThemes,
+           switches::kSyncEnableBookmarksInTransportMode,
+           syncer::kReadingListEnableSyncTransportModeUponSignIn},
           {});
     }
   }
@@ -212,7 +201,7 @@ class MigrationTest : public SyncTest,
 
   enum TriggerMethod { MODIFY_PREF, MODIFY_BOOKMARK, TRIGGER_REFRESH };
 
-  syncer::DataTypeSet GetPreferredDataTypes() {
+  syncer::DataTypeSet GetPreferredDataTypesEligibleForMigration() {
     // SyncServiceImpl must already have been created before we can call
     // GetPreferredDataTypes().
     DCHECK(GetSyncService(0));
@@ -232,12 +221,10 @@ class MigrationTest : public SyncTest,
     // should not request that they be migrated.
     preferred_data_types.Remove(syncer::SUPERVISED_USER_SETTINGS);
 
-    // Autofill wallet and plus address will be unready during this test, so we
+    // Autofill wallet will be unready during this test, so we
     // should not request that it be migrated.
     preferred_data_types.RemoveAll(
-        {syncer::AUTOFILL_WALLET_DATA, syncer::AUTOFILL_WALLET_METADATA,
-         syncer::AUTOFILL_WALLET_OFFER, syncer::PLUS_ADDRESS,
-         syncer::PLUS_ADDRESS_SETTING});
+        {syncer::AUTOFILL_WALLET_DATA, syncer::AUTOFILL_WALLET_METADATA});
 
     // ARC package will be unready during this test, so we should not request
     // that it be migrated.
@@ -246,16 +233,22 @@ class MigrationTest : public SyncTest,
     // Doesn't make sense to migrate commit only types.
     preferred_data_types.RemoveAll(syncer::CommitOnlyTypes());
 
+    if (!UseGcDirective()) {
+      // NIGORI migration is disallowed for MIGRATION_DONE response.
+      preferred_data_types.Remove(syncer::NIGORI);
+    }
+
     return preferred_data_types;
   }
 
   // Returns a MigrationList with every enabled data type in its own
   // set.
-  MigrationList GetPreferredDataTypesList() {
+  MigrationList GetEligibleDataTypeMigrationList() {
     MigrationList migration_list;
-    const syncer::DataTypeSet preferred_data_types = GetPreferredDataTypes();
-    for (syncer::DataType type : preferred_data_types) {
-      migration_list.push_back(MakeSet(type));
+    const syncer::DataTypeSet types =
+        GetPreferredDataTypesEligibleForMigration();
+    for (syncer::DataType type : types) {
+      migration_list.push_back({type});
     }
     return migration_list;
   }
@@ -400,59 +393,73 @@ IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, BookmarksPrefsIndividually) {
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, BookmarksPrefsBoth) {
   RunSingleClientMigrationTest(
-      MakeList(MakeSet(syncer::BOOKMARKS, syncer::PREFERENCES)),
-      MODIFY_BOOKMARK);
+      MakeList({syncer::BOOKMARKS, syncer::PREFERENCES}), MODIFY_BOOKMARK);
 }
 
 // Two data types with one being nigori.
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, PrefsNigoriIndividiaully) {
+  if (!UseGcDirective()) {
+    GTEST_SKIP() << "NIGORI migration is disallowed for MIGRATION_DONE.";
+  }
   RunSingleClientMigrationTest(MakeList(syncer::PREFERENCES, syncer::NIGORI),
                                TRIGGER_REFRESH);
 }
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, PrefsNigoriBoth) {
-  RunSingleClientMigrationTest(
-      MakeList(MakeSet(syncer::PREFERENCES, syncer::NIGORI)), MODIFY_PREF);
+  if (!UseGcDirective()) {
+    GTEST_SKIP() << "NIGORI migration is disallowed for MIGRATION_DONE.";
+  }
+  RunSingleClientMigrationTest(MakeList({syncer::PREFERENCES, syncer::NIGORI}),
+                               MODIFY_PREF);
 }
 
 // The whole shebang -- all data types.
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, AllTypesIndividually) {
   ASSERT_TRUE(SetupClients());
-  RunSingleClientMigrationTest(GetPreferredDataTypesList(), MODIFY_BOOKMARK);
+  RunSingleClientMigrationTest(GetEligibleDataTypeMigrationList(),
+                               MODIFY_BOOKMARK);
 }
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest,
                        AllTypesIndividuallyTriggerRefresh) {
   ASSERT_TRUE(SetupClients());
-  RunSingleClientMigrationTest(GetPreferredDataTypesList(), TRIGGER_REFRESH);
+  RunSingleClientMigrationTest(GetEligibleDataTypeMigrationList(),
+                               TRIGGER_REFRESH);
 }
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, AllTypesAtOnce) {
   ASSERT_TRUE(SetupClients());
-  RunSingleClientMigrationTest(MakeList(GetPreferredDataTypes()), MODIFY_PREF);
+  RunSingleClientMigrationTest(
+      MakeList(GetPreferredDataTypesEligibleForMigration()), MODIFY_PREF);
 }
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest,
                        AllTypesAtOnceTriggerRefresh) {
   ASSERT_TRUE(SetupClients());
-  RunSingleClientMigrationTest(MakeList(GetPreferredDataTypes()),
-                               TRIGGER_REFRESH);
+  RunSingleClientMigrationTest(
+      MakeList(GetPreferredDataTypesEligibleForMigration()), TRIGGER_REFRESH);
 }
 
 // All data types plus nigori.
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest,
                        AllTypesWithNigoriIndividually) {
+  if (!UseGcDirective()) {
+    GTEST_SKIP() << "NIGORI migration is disallowed for MIGRATION_DONE.";
+  }
   ASSERT_TRUE(SetupClients());
-  MigrationList migration_list = GetPreferredDataTypesList();
-  migration_list.push_front(MakeSet(syncer::NIGORI));
+  MigrationList migration_list = GetEligibleDataTypeMigrationList();
+  migration_list.push_front({syncer::NIGORI});
   RunSingleClientMigrationTest(migration_list, MODIFY_BOOKMARK);
 }
 
 IN_PROC_BROWSER_TEST_P(MigrationSingleClientTest, AllTypesWithNigoriAtOnce) {
+  if (!UseGcDirective()) {
+    GTEST_SKIP() << "NIGORI migration is disallowed for MIGRATION_DONE.";
+  }
   ASSERT_TRUE(SetupClients());
-  syncer::DataTypeSet all_types = GetPreferredDataTypes();
+  syncer::DataTypeSet all_types = GetPreferredDataTypesEligibleForMigration();
   all_types.Put(syncer::NIGORI);
   RunSingleClientMigrationTest(MakeList(all_types), MODIFY_PREF);
 }
@@ -819,20 +826,22 @@ IN_PROC_BROWSER_TEST_P(MigrationTwoClientTest,
 // will only tell the client about the migrations one at a time.
 IN_PROC_BROWSER_TEST_P(MigrationTwoClientTest, MigrationHellWithoutNigori) {
   ASSERT_TRUE(SetupClients());
-  MigrationList migration_list = GetPreferredDataTypesList();
+  MigrationList migration_list = GetEligibleDataTypeMigrationList();
   // Let the first nudge be a datatype that's neither prefs nor bookmarks.
-  migration_list.push_front(MakeSet(syncer::THEMES));
-  ASSERT_EQ(MakeSet(syncer::NIGORI), migration_list.back());
-  migration_list.pop_back();
+  migration_list.push_front({syncer::THEMES});
+  base::Erase(migration_list, syncer::DataTypeSet{syncer::NIGORI});
   RunTwoClientMigrationTest(migration_list, MODIFY_BOOKMARK);
 }
 
 IN_PROC_BROWSER_TEST_P(MigrationTwoClientTest, MigrationHellWithNigori) {
+  if (!UseGcDirective()) {
+    GTEST_SKIP() << "NIGORI migration is disallowed for MIGRATION_DONE.";
+  }
   ASSERT_TRUE(SetupClients());
-  MigrationList migration_list = GetPreferredDataTypesList();
+  MigrationList migration_list = GetEligibleDataTypeMigrationList();
   // Let the first nudge be a datatype that's neither prefs nor bookmarks.
-  migration_list.push_front(MakeSet(syncer::THEMES));
-  ASSERT_EQ(MakeSet(syncer::NIGORI), migration_list.back());
+  migration_list.push_front({syncer::THEMES});
+  ASSERT_EQ(syncer::DataTypeSet{syncer::NIGORI}, migration_list.back());
   RunTwoClientMigrationTest(migration_list, MODIFY_BOOKMARK);
 }
 

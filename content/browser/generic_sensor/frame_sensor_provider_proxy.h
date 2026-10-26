@@ -49,6 +49,9 @@ class FrameSensorProviderProxy final
       RenderFrameHost* render_frame_host,
       RenderFrameHost::LifecycleState old_state,
       RenderFrameHost::LifecycleState new_state) override;
+  void OnWebContentsFocused(RenderWidgetHost* render_widget_host) override;
+  void OnWebContentsLostFocus(RenderWidgetHost* render_widget_host) override;
+  void OnFocusChangedInPage(const FocusedNodeDetails& details) override;
 
  private:
   explicit FrameSensorProviderProxy(RenderFrameHost* render_frame_host);
@@ -60,7 +63,6 @@ class FrameSensorProviderProxy final
 
   void OnHardwareCheckCompleted(
       device::mojom::SensorType type,
-      blink::mojom::PermissionStatus permission_status,
       bool user_gesture,
       mojo::PendingRemote<device::mojom::SensorClientController> controller,
       GetSensorCallback callback,
@@ -97,7 +99,8 @@ class FrameSensorProviderProxy final
   void UpdateSensorSessionControllers();
 
   mojo::RemoteSet<device::mojom::SensorClientController> client_controllers_;
-  PermissionController::SubscriptionId permission_subscription_id_;
+  std::unique_ptr<PermissionController::PermissionSubscription>
+      permission_subscription_;
   std::optional<bool> is_suspended_;
 
   base::WeakPtrFactory<FrameSensorProviderProxy> weak_factory_{this};

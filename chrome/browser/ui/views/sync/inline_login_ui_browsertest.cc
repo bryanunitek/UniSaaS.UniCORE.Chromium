@@ -21,7 +21,7 @@
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/signin/signin_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/webui/signin/inline_login_handler_impl.h"
@@ -32,9 +32,8 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/credential_provider/common/gcp_strings.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/test_chrome_web_ui_controller_factory.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -43,9 +42,10 @@
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
-#include "content/public/browser/session_storage_namespace.h"
+#include "content/public/browser/session_storage_namespace_handle.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_controller.h"
@@ -65,13 +65,14 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/window_open_disposition.h"
 
 using ::testing::_;
 using ::testing::AtLeast;
-using ::testing::InvokeWithoutArgs;
 using ::testing::Return;
 
 using guest_view::GuestViewManager;
@@ -94,14 +95,14 @@ struct ContentInfo {
   raw_ptr<content::StoragePartition> storage_partition;
 };
 
-ContentInfo NavigateAndGetInfo(Browser* browser,
+ContentInfo NavigateAndGetInfo(BrowserWindowInterface* browser,
                                const GURL& url,
                                WindowOpenDisposition disposition) {
   ui_test_utils::NavigateToURLWithDisposition(
       browser, url, disposition,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   content::WebContents* contents =
-      browser->tab_strip_model()->GetActiveWebContents();
+      browser->GetTabStripModel()->GetActiveWebContents();
   content::RenderProcessHost* process =
       contents->GetPrimaryMainFrame()->GetProcess();
   return ContentInfo(contents, process->GetDeprecatedID(),
@@ -195,7 +196,7 @@ class InlineLoginUIBrowserTest : public InProcessBrowserTest {};
 // crbug.com/41136981
 IN_PROC_BROWSER_TEST_F(InlineLoginUIBrowserTest, DSABLED_DifferentStorageId) {
   ContentInfo info = NavigateAndGetInfo(browser(), GetSigninPromoURL(),
-                                        WindowOpenDisposition::CURRENT_TAB);
+                                        WindowOpenDisposition::kCurrentTab);
   WaitUntilUIReady(browser());
 
   // Make sure storage partition of embedded webview is different from
@@ -230,11 +231,11 @@ IN_PROC_BROWSER_TEST_F(InlineLoginUIBrowserTest, OneProcessLimit) {
   content::RenderProcessHost::SetMaxRendererProcessCount(1);
 
   ContentInfo info1 = NavigateAndGetInfo(browser(), test_url_1,
-                                         WindowOpenDisposition::CURRENT_TAB);
+                                         WindowOpenDisposition::kCurrentTab);
   ContentInfo info2 = NavigateAndGetInfo(browser(), test_url_2,
-                                         WindowOpenDisposition::CURRENT_TAB);
+                                         WindowOpenDisposition::kCurrentTab);
   ContentInfo info3 = NavigateAndGetInfo(browser(), GetSigninPromoURL(),
-                                         WindowOpenDisposition::CURRENT_TAB);
+                                         WindowOpenDisposition::kCurrentTab);
 
   ASSERT_EQ(info1.pid, info2.pid);
   ASSERT_NE(info1.pid, info3.pid);
@@ -355,8 +356,9 @@ IN_PROC_BROWSER_TEST_F(InlineLoginHelperBrowserTest, WithAuthCode) {
       "foo@gmail.com", GaiaId("gaiaid-12345"), "password", "auth_code",
       /*signin_scoped_device_id=*/std::string());
   base::RunLoop run_loop;
-  EXPECT_CALL(helper, OnClientOAuthSuccess(_))
-      .WillOnce(testing::InvokeWithoutArgs([&run_loop]() { run_loop.Quit(); }));
+  EXPECT_CALL(helper, OnClientOAuthSuccess(_)).WillOnce([&run_loop]() {
+    run_loop.Quit();
+  });
 
   SimulateStartAuthCodeForOAuth2TokenExchangeSuccess(
       R"({
@@ -449,7 +451,7 @@ IN_PROC_BROWSER_TEST_F(InlineLoginUISafeIframeBrowserTest,
   WaitUntilUIReady(browser());
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_EQ(url, contents->GetVisibleURL());
 
   content::NavigationController& controller = contents->GetController();
@@ -569,7 +571,7 @@ IN_PROC_BROWSER_TEST_F(InlineLoginCorrectGaiaUrlBrowserTest,
       signin_metrics::AccessPoint::kMachineLogon;
   signin_metrics::Reason reason = signin_metrics::Reason::kFetchLstOnly;
 
-  static const std::string email = "foo@gmail.com";
+  const std::string email = "foo@gmail.com";
   auto signin_url =
       signin::GetEmbeddedReauthURLWithEmail(access_point, reason, email);
 

@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "ipcz/block_allocator_pool.h"
+#include "ipcz/metrics.h"
 #include "third_party/abseil-cpp/absl/base/macros.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/abseil-cpp/absl/numeric/bits.h"
@@ -122,6 +123,10 @@ Fragment BufferPool::AllocateBlock(size_t block_size) {
     absl::MutexLock lock(&mutex_);
     auto it = block_allocator_pools_.lower_bound(block_size);
     if (it == block_allocator_pools_.end()) {
+      metrics::RecordAllocateBlockResult(
+          metrics::BlockAllocationSource::kBufferPool,
+          /*block_size=*/block_size,
+          /*success=*/false);
       return {};
     }
 
@@ -131,7 +136,12 @@ Fragment BufferPool::AllocateBlock(size_t block_size) {
     pool = it->second.get();
   }
 
-  return pool->Allocate();
+  Fragment fragment = pool->Allocate();
+  metrics::RecordAllocateBlockResult(
+      metrics::BlockAllocationSource::kBufferPool,
+      /*block_size=*/block_size,
+      /*success=*/!fragment.is_null());
+  return fragment;
 }
 
 Fragment BufferPool::AllocateBlockBestEffort(size_t preferred_block_size) {

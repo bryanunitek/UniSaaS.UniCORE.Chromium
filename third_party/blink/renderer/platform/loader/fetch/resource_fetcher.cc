@@ -105,6 +105,7 @@
 #include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -533,10 +534,13 @@ network::mojom::RequestDestination ResourceFetcher::DetermineRequestDestination(
       return network::mojom::RequestDestination::kVideo;
     case ResourceType::kManifest:
       return network::mojom::RequestDestination::kManifest;
+    case ResourceType::kDictionary:
+      return RuntimeEnabledFeatures::CDTNewDestinationEnabled()
+                 ? network::mojom::RequestDestination::kCompressionDictionary
+                 : network::mojom::RequestDestination::kEmpty;
     case ResourceType::kRaw:
     case ResourceType::kLinkPrefetch:
     case ResourceType::kMock:
-    case ResourceType::kDictionary:
       return network::mojom::RequestDestination::kEmpty;
   }
   NOTREACHED();
@@ -960,6 +964,7 @@ void ResourceFetcher::DidLoadResourceFromMemoryCache(
     }
     resource_load_observer_->DidFinishLoading(
         request.InspectorId(), base::TimeTicks(), 0,
+        resource->GetResponse().EncodedBodyLength(),
         resource->GetResponse().DecodedBodyLength());
   }
 
@@ -1031,15 +1036,12 @@ Resource* ResourceFetcher::CreateResourceForStaticData(
   // Most off-main-thread resource fetches use Resource::kRaw and don't reach
   // this point, but off-main-thread module fetches might.
   if (IsMainThread()) {
-    if (Resource* old_resource =
-            MemoryCache::Get()->ResourceForURL(url, cache_identifier)) {
+    Resource* old_resource =
+        MemoryCache::Get()->ResourceForURL(url, cache_identifier);
+    if (old_resource) {
       // There's no reason to re-parse if we saved the data from the previous
       // parse.
       if (params.Options().data_buffering_policy != kDoNotBufferData) {
-        if (url.ProtocolIsData()) {
-          // Touch the strong reference to update LRU on cache hit.
-          MemoryCache::Get()->SaveDataURIStrongReference(old_resource);
-        }
         return old_resource;
       }
       MemoryCache::Get()->Remove(old_resource);
@@ -1138,13 +1140,6 @@ Resource* ResourceFetcher::CreateResourceForStaticData(
   }
 
   AddToMemoryCacheIfNeeded(params, resource);
-  if (url.ProtocolIsData()) {
-    // Keep a strong reference to data URI resources so they survive GC across
-    // navigations. Data URIs are immutable, so caching is always safe.
-    if (IsMainThread()) {
-      MemoryCache::Get()->SaveDataURIStrongReference(resource);
-    }
-  }
   return resource;
 }
 
@@ -1277,6 +1272,16 @@ void ResourceFetcher::RemovePreload(Resource* resource) {
   }
 }
 
+void ResourceFetcher::DidLoadResourceFromFontCache(
+    const AtomicString& font_name) {
+  if (font_name.empty() ||
+      !loaded_local_fonts_.insert(font_name).is_new_entry) {
+    return;
+  }
+  ++subresource_load_metrics_.number_of_subresource_loads_from_local_font_cache;
+  context_->UpdateSubresourceLoadMetrics(subresource_load_metrics_);
+}
+
 std::optional<ResourceRequestBlockedReason>
 ResourceFetcher::UpdateRequestForTransparentPlaceholderImage(
     FetchParameters& params) {
@@ -1382,8 +1387,13 @@ Resource* ResourceFetcher::RequestResource(FetchParameters& params,
   resource_request.SetInspectorId(identifier);
   resource_request.SetFromOriginDirtyStyleSheet(
       params.IsFromOriginDirtyStyleSheet());
+
+  // TODO(crbug.com/563000235): Centralize `SetSkipServiceWorker()` call here
+  // for Isolated World Resources.
+
   TRACE_EVENT_BEGIN(TRACE_DISABLED_BY_DEFAULT("network"), "ResourceLoad",
-                    perfetto::Track(identifier), "url", resource_request.Url());
+                    perfetto::NamedTrack("BlinkResourceID", identifier), "url",
+                    resource_request.Url());
   absl::Cleanup record_times = [start = base::TimeTicks::Now(), &params] {
     base::TimeDelta elapsed = base::TimeTicks::Now() - start;
     base::UmaHistogramMicrosecondsTimes("Blink.Fetch.RequestResourceTime2",
@@ -1655,7 +1665,8 @@ Resource* ResourceFetcher::RequestResource(FetchParameters& params,
   if (resource->InspectorId() != identifier ||
       (!resource->StillNeedsLoad() && !resource->IsLoading())) {
     TRACE_EVENT_END(TRACE_DISABLED_BY_DEFAULT("network"),
-                    perfetto::Track(identifier), "outcome", "Fail");
+                    perfetto::NamedTrack("BlinkResourceID", identifier),
+                    "outcome", "Fail");
   }
   return resource;
 }
@@ -1694,16 +1705,27 @@ void ResourceFetcher::InitializeRevalidation(
               revalidating_request.GetCacheMode());
     if (revalidating_request.GetCacheMode() ==
         mojom::blink::FetchCacheMode::kValidateCache) {
-      revalidating_request.SetHttpHeaderField(http_names::kCacheControl,
-                                              AtomicString("max-age=0"));
+      if (!base::FeatureList::IsEnabled(network::features::kSafeRevalidation)) {
+        revalidating_request.SetHttpHeaderField(http_names::kCacheControl,
+                                                AtomicString("max-age=0"));
+      }
     }
   }
-  if (!last_modified.empty()) {
-    revalidating_request.SetHttpHeaderField(http_names::kIfModifiedSince,
-                                            last_modified);
-  }
-  if (!e_tag.empty()) {
-    revalidating_request.SetHttpHeaderField(http_names::kIfNoneMatch, e_tag);
+  if (base::FeatureList::IsEnabled(network::features::kSafeRevalidation)) {
+    if (!last_modified.empty()) {
+      revalidating_request.SetRevalidationLastModified(last_modified);
+    }
+    if (!e_tag.empty()) {
+      revalidating_request.SetRevalidationEtag(e_tag);
+    }
+  } else {
+    if (!last_modified.empty()) {
+      revalidating_request.SetHttpHeaderField(http_names::kIfModifiedSince,
+                                              last_modified);
+    }
+    if (!e_tag.empty()) {
+      revalidating_request.SetHttpHeaderField(http_names::kIfNoneMatch, e_tag);
+    }
   }
 
   resource->SetRevalidatingRequest(revalidating_request);
@@ -1904,20 +1926,28 @@ Resource* ResourceFetcher::MatchPreload(
   }
 
   const Resource::MatchStatus match_status = resource->CanReuse(params);
-  if (match_status != Resource::MatchStatus::kOk) {
+  if (match_status != Resource::MatchStatus::kOk &&
+      match_status != Resource::MatchStatus::k304NotModified) {
     PrintPreloadMismatch(resource, match_status);
     return nullptr;
   }
 
   resource->MatchPreload(params);
   preloads_.erase(it);
-  matched_preloads_.push_back(resource);
 
-  auto record_it = preload_records_.find(resource->Url());
-  if (record_it != preload_records_.end()) {
-    record_it->value.used_time = base::TimeTicks::Now();
+  if (RuntimeEnabledFeatures::SpeculationMeasurementEnabled(
+          context_->GetFeatureContext())) {
+    auto record_it = preload_records_.find(resource->Url());
+    if (record_it != preload_records_.end()) {
+      record_it->value.used_time = base::TimeTicks::Now();
+    }
   }
 
+  if (match_status == Resource::MatchStatus::k304NotModified) {
+    return nullptr;
+  }
+
+  matched_preloads_.push_back(resource);
   return resource;
 }
 
@@ -1934,6 +1964,7 @@ void ResourceFetcher::PrintPreloadMismatch(Resource* resource,
 
   switch (status) {
     case Resource::MatchStatus::kOk:
+    case Resource::MatchStatus::k304NotModified:
       NOTREACHED();
     case Resource::MatchStatus::kUnknownFailure:
       builder.Append("due to an unknown reason.");
@@ -1974,6 +2005,15 @@ void ResourceFetcher::PrintPreloadMismatch(Resource* resource,
     case Resource::MatchStatus::kCrossWorldServiceWorkerResourceMismatch:
       builder.Append(
           "because it is a cross-world service worker resource mismatch.");
+      break;
+    case Resource::MatchStatus::kSkipServiceWorkerDoesNotMatch:
+      builder.Append("because the Service Worker skip policy does not match.");
+      break;
+    case Resource::MatchStatus::kPreventAllCrossWorldForCspReuse:
+      builder.Append("because it is a cross-world-for-csp resource mismatch.");
+      break;
+    case Resource::MatchStatus::kPreventAllCrossTargetWorldReuse:
+      builder.Append("because it is a cross-target-world resource mismatch.");
       break;
   }
   console_logger_->AddConsoleMessage(mojom::ConsoleMessageSource::kOther,
@@ -2455,8 +2495,7 @@ void ResourceFetcher::RecordPreconnect(const KURL& url,
   const String origin = SecurityOrigin::Create(url)->ToString();
   // Preconnects with distinct crossorigin values to the same origin are
   // reported separately.
-  const String key =
-      origin + "|" + String::Number(static_cast<int>(crossorigin));
+  const String key = Format("{}|{}", origin, static_cast<int>(crossorigin));
   auto it = preconnect_records_.find(key);
   if (it == preconnect_records_.end()) {
     PreconnectInfo info;
@@ -2668,6 +2707,7 @@ void ResourceFetcher::HandleLoaderFinish(Resource* resource,
     DCHECK(!IsDetached());
     resource_load_observer_->DidFinishLoading(
         resource->InspectorId(), response_end, encoded_data_length,
+        resource->GetResponse().EncodedBodyLength(),
         resource->GetResponse().DecodedBodyLength());
   }
   MaybeSaveResourceToStrongReference(resource);
@@ -3022,10 +3062,10 @@ void ResourceFetcher::UpdateImagePrioritiesAndSpeculativeDecodes() {
               resource->GetResourceRequest().Priority());
     resource->DidChangePriority(computed_load_priority,
                                 resource_priority.intra_priority_value);
-    TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("network"),
-                        "ResourcePrioritySet",
-                        perfetto::Track(resource->InspectorId()), "data",
-                        CreateTracedValueWithPriority(computed_load_priority));
+    TRACE_EVENT_INSTANT(
+        TRACE_DISABLED_BY_DEFAULT("network"), "ResourcePrioritySet",
+        perfetto::NamedTrack("BlinkResourceID", resource->InspectorId()),
+        "data", CreateTracedValueWithPriority(computed_load_priority));
     DCHECK(!IsDetached());
     resource_load_observer_->DidChangePriority(
         resource->InspectorId(), computed_load_priority,
@@ -3083,15 +3123,6 @@ ResourceFetcher::GetSubresourceBundleToken(const KURL& url) const {
     return std::nullopt;
   }
   return bundle->WebBundleToken();
-}
-
-std::optional<KURL> ResourceFetcher::GetSubresourceBundleSourceUrl(
-    const KURL& url) const {
-  SubresourceWebBundle* bundle = GetMatchingBundle(url);
-  if (!bundle) {
-    return std::nullopt;
-  }
-  return bundle->GetBundleUrl();
 }
 
 void ResourceFetcher::EmulateLoadStartedForInspector(
@@ -3213,10 +3244,15 @@ void ResourceFetcher::RevalidateStaleResource(Resource* stale_resource) {
   // requests.
   ResourceRequest request;
   request.CopyHeadFrom(stale_resource->GetResourceRequest());
-  // TODO(https://crbug.com/1405800): investigate whether it's correct to use a
-  // null `world` in the ResourceLoaderOptions below.
-  FetchParameters params(std::move(request),
-                         ResourceLoaderOptions(/*world=*/nullptr));
+  if (stale_resource->Options().TargetWorld()) {
+    // Do not revalidate Isolated World Resources, to limit the triggering
+    // points of Isolated World Resources to simplify security considerations.
+    // Perhaps such revalidation is safe, but prioritizing the safety for now.
+    return;
+  }
+  FetchParameters params(
+      std::move(request),
+      ResourceLoaderOptions(stale_resource->Options().WorldForCsp()));
   params.SetStaleRevalidation(true);
   params.MutableResourceRequest().SetSkipServiceWorker(true);
   // Stale revalidation resource requests should be very low regardless of
@@ -3250,8 +3286,8 @@ void ResourceFetcher::PopulateAndAddResourceTimingInfo(
 
   // Resource timing entries that correspond to resources fetched by extensions
   // are precluded.
-  if (resource->Options().world_for_csp &&
-      resource->Options().world_for_csp->IsIsolatedWorld()) {
+  if (resource->Options().WorldForCsp() &&
+      resource->Options().WorldForCsp()->IsIsolatedWorld()) {
     return;
   }
 
@@ -3740,10 +3776,10 @@ ResourceFetcher::ResourcePrepareHelper::ComputeLoadPriority(
 
 void ResourceFetcher::ResourcePrepareHelper::RecordTrace() {
   const ResourceRequest& resource_request = params_.GetResourceRequest();
-  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("network"),
-                      "ResourcePrioritySet",
-                      perfetto::Track(resource_request.InspectorId()),
-                      "priority", resource_request.Priority());
+  TRACE_EVENT_INSTANT(
+      TRACE_DISABLED_BY_DEFAULT("network"), "ResourcePrioritySet",
+      perfetto::NamedTrack("BlinkResourceID", resource_request.InspectorId()),
+      "priority", resource_request.Priority());
 }
 
 }  // namespace blink

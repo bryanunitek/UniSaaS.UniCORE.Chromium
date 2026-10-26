@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.ui.browser_window;
 import org.chromium.base.ObserverList;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ui.browser_window.AndroidBrowserWindowObserver.AndroidBrowserWindowInfo;
 
 /**
  * Notifies {@link AndroidBrowserWindowObserver}s of {@link AndroidBrowserWindow} lifecycle events.
@@ -33,9 +34,12 @@ final class AndroidBrowserWindowObserverNotifier {
     }
 
     void notifyBrowserWindowAdded(AndroidBrowserWindow window) {
-        long ptr = window.getOrCreateNativePtr();
+        long ptr = window.getOrCreateLegacyNativePtr();
+        var windowInfo =
+                new AndroidBrowserWindowInfo(
+                        ptr, window.getProfile(), window.getActivityWindowAndroid());
         for (var observer : mObservers) {
-            observer.onBrowserWindowAdded(ptr);
+            observer.onBrowserWindowAdded(windowInfo);
         }
     }
 
@@ -47,25 +51,38 @@ final class AndroidBrowserWindowObserverNotifier {
         }
 
         // Notify observers of window destruction.
-        long ptr = window.getNativePtr();
+        long ptr = window.getLegacyNativePtr();
         assert ptr != 0;
+        var windowInfo =
+                new AndroidBrowserWindowInfo(
+                        ptr, window.getProfile(), window.getActivityWindowAndroid());
         for (var observer : mObservers) {
-            observer.onBrowserWindowRemoved(ptr);
+            observer.onBrowserWindowRemoved(windowInfo);
         }
     }
 
     void updateActiveBrowserWindow(@Nullable AndroidBrowserWindow activeWindow) {
         if (mLastActiveBrowserWindow == activeWindow) return;
 
-        if (mLastActiveBrowserWindow != null && mLastActiveBrowserWindow.getNativePtr() != 0) {
+        if (mLastActiveBrowserWindow != null && mLastActiveBrowserWindow.getNativePtr() != null) {
+            var windowInfo =
+                    new AndroidBrowserWindowInfo(
+                            mLastActiveBrowserWindow.getLegacyNativePtr(),
+                            mLastActiveBrowserWindow.getProfile(),
+                            mLastActiveBrowserWindow.getActivityWindowAndroid());
             for (var observer : mObservers) {
-                observer.onBrowserWindowDeactivated(mLastActiveBrowserWindow.getNativePtr());
+                observer.onBrowserWindowDeactivated(windowInfo);
             }
         }
         mLastActiveBrowserWindow = activeWindow;
-        if (mLastActiveBrowserWindow != null && mLastActiveBrowserWindow.getNativePtr() != 0) {
+        if (mLastActiveBrowserWindow != null && mLastActiveBrowserWindow.getNativePtr() != null) {
+            var windowInfo =
+                    new AndroidBrowserWindowInfo(
+                            mLastActiveBrowserWindow.getLegacyNativePtr(),
+                            mLastActiveBrowserWindow.getProfile(),
+                            mLastActiveBrowserWindow.getActivityWindowAndroid());
             for (var observer : mObservers) {
-                observer.onBrowserWindowActivated(mLastActiveBrowserWindow.getNativePtr());
+                observer.onBrowserWindowActivated(windowInfo);
             }
         }
     }

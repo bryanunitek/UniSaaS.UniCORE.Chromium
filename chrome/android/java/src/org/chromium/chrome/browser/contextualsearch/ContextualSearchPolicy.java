@@ -32,6 +32,7 @@ import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.signin.services.UnifiedConsentServiceBridge;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.embedder_support.util.UrlUtilities;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.url.GURL;
@@ -132,7 +133,7 @@ class ContextualSearchPolicy {
 
     /**
      * Determines whether the current gesture can trigger a resolve request to use page context.
-     * This only checks the gesture, not privacy status -- {@see #shouldPreviousGestureResolve}.
+     * This only checks the gesture, not privacy status. See {@link #shouldPreviousGestureResolve}.
      */
     boolean isResolvingGesture() {
         return mSelectionController.getSelectionType() == SelectionType.TAP
@@ -307,6 +308,7 @@ class ContextualSearchPolicy {
      * @return Whether the Contextual Search feature was disabled by the user explicitly.
      */
     static boolean isContextualSearchDisabled(Profile profile) {
+        if (OmniboxCapabilities.isDesktopPlatform()) return true;
         return UserPrefs.get(profile)
                 .getString(Pref.CONTEXTUAL_SEARCH_ENABLED)
                 .equals(CONTEXTUAL_SEARCH_DISABLED);
@@ -317,6 +319,7 @@ class ContextualSearchPolicy {
      * @return Whether the Contextual Search feature was enabled by the user explicitly.
      */
     static boolean isContextualSearchEnabled(Profile profile) {
+        if (OmniboxCapabilities.isDesktopPlatform()) return false;
         return UserPrefs.get(profile)
                 .getString(Pref.CONTEXTUAL_SEARCH_ENABLED)
                 .equals(CONTEXTUAL_SEARCH_ENABLED);
@@ -328,6 +331,7 @@ class ContextualSearchPolicy {
      *     user).
      */
     static boolean isContextualSearchUninitialized(Profile profile) {
+        if (OmniboxCapabilities.isDesktopPlatform()) return false;
         return UserPrefs.get(profile).getString(Pref.CONTEXTUAL_SEARCH_ENABLED).isEmpty();
     }
 

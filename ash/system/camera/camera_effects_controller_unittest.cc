@@ -31,6 +31,7 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "media/capture/video/chromeos/mojom/cros_camera_service.mojom-shared.h"
 #include "media/capture/video/chromeos/mojom/effects_pipeline.mojom.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -283,23 +284,10 @@ TEST_F(CameraEffectsControllerTest, IsEffectControlAvailable) {
     EXPECT_TRUE(camera_effects_controller()->IsEffectControlAvailable(
         cros::mojom::CameraEffect::kBackgroundReplace));
   }
-
-  {
-    base::test::ScopedFeatureList scoped_feature_list;
-    scoped_feature_list.InitWithFeatures(
-        {features::kFeatureManagementVideoConference},
-        {features::kVcBackgroundReplace});
-    EXPECT_TRUE(camera_effects_controller()->IsEffectControlAvailable(
-        cros::mojom::CameraEffect::kBackgroundBlur));
-    EXPECT_TRUE(camera_effects_controller()->IsEffectControlAvailable(
-        cros::mojom::CameraEffect::kPortraitRelight));
-    EXPECT_FALSE(camera_effects_controller()->IsEffectControlAvailable(
-        cros::mojom::CameraEffect::kBackgroundReplace));
-  }
 }
 
 TEST_F(CameraEffectsControllerTest, BackgroundBlurOnEffectControlActivated) {
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
 
   // Activate the possible values of
   // `CameraEffectsController::BackgroundBlurPrefValue`, verify that the pref
@@ -337,7 +325,7 @@ TEST_F(CameraEffectsControllerTest, BackgroundBlurOnEffectControlActivated) {
 
 TEST_F(CameraEffectsControllerTest,
        PortraitRelightingOnEffectControlActivated) {
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
 
   // Initial state should be "off".
   EXPECT_FALSE(GetPortraitRelightingEffectState());
@@ -360,7 +348,7 @@ TEST_F(CameraEffectsControllerTest,
 }
 
 TEST_F(CameraEffectsControllerTest, PrefOnCameraEffectChanged) {
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
 
   // Initial state should be "off".
   EXPECT_EQ(GetBackgroundBlurPref(),
@@ -413,7 +401,7 @@ TEST_F(CameraEffectsControllerTest, PrefOnCameraEffectChanged) {
 }
 
 TEST_F(CameraEffectsControllerTest, ResourceDependencyFlags) {
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
 
   // Makes sure that all registered effects have the correct dependency flag.
   auto* background_blur =
@@ -421,17 +409,10 @@ TEST_F(CameraEffectsControllerTest, ResourceDependencyFlags) {
   EXPECT_EQ(VcHostedEffect::ResourceDependency::kCamera,
             background_blur->dependency_flags());
 
-  if (features::IsVcStudioLookEnabled()) {
-    auto* studio_look =
-        camera_effects_controller()->GetEffectById(VcEffectId::kStudioLook);
-    EXPECT_EQ(VcHostedEffect::ResourceDependency::kCamera,
-              studio_look->dependency_flags());
-  } else {
-    auto* portrait_relight = camera_effects_controller()->GetEffectById(
-        VcEffectId::kPortraitRelighting);
-    EXPECT_EQ(VcHostedEffect::ResourceDependency::kCamera,
-              portrait_relight->dependency_flags());
-  }
+  auto* studio_look =
+      camera_effects_controller()->GetEffectById(VcEffectId::kStudioLook);
+  EXPECT_EQ(VcHostedEffect::ResourceDependency::kCamera,
+            studio_look->dependency_flags());
 }
 
 TEST_F(CameraEffectsControllerTest, BackgroundBlurEnums) {
@@ -445,7 +426,7 @@ TEST_F(CameraEffectsControllerTest, BackgroundBlurEnums) {
 TEST_F(CameraEffectsControllerTest, BackgroundBlurMetricsRecord) {
   base::HistogramTester histogram_tester;
 
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
 
   // Update media status to make the video conference tray visible.
   VideoConferenceMediaState state;
@@ -506,7 +487,7 @@ TEST_F(CameraEffectsControllerTest, BackgroundBlurMetricsRecord) {
 }
 
 TEST_F(CameraEffectsControllerTest, CameraFramingSupportState) {
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
 
   // By default autozoom is not supported, so the effect is not added.
   EXPECT_FALSE(
@@ -526,7 +507,7 @@ TEST_F(CameraEffectsControllerTest, CameraFramingSupportState) {
 TEST_F(CameraEffectsControllerTest, CameraFramingToggle) {
   SetAutozoomSupportState(true);
 
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
 
   ASSERT_EQ(Shell::Get()->autozoom_controller()->GetState(),
             cros::mojom::CameraAutoFramingState::OFF);
@@ -541,10 +522,7 @@ TEST_F(CameraEffectsControllerTest, CameraFramingToggle) {
 }
 
 TEST_F(CameraEffectsControllerTest, SetBackgroundImageWithFileExists) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kVcBackgroundReplace};
-
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
   camera_effects_controller()->set_camera_background_img_dir_for_testing(
       camera_background_img_dir_);
   camera_effects_controller()->set_camera_background_run_dir_for_testing(
@@ -607,10 +585,7 @@ TEST_F(CameraEffectsControllerTest, SetBackgroundImageWithFileExists) {
 }
 
 TEST_F(CameraEffectsControllerTest, SetBackgroundImageWithFileDoesNotExist) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kVcBackgroundReplace};
-
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
   camera_effects_controller()->set_camera_background_img_dir_for_testing(
       camera_background_img_dir_);
   camera_effects_controller()->set_camera_background_run_dir_for_testing(
@@ -636,11 +611,50 @@ TEST_F(CameraEffectsControllerTest, SetBackgroundImageWithFileDoesNotExist) {
   EXPECT_EQ(GetBackgroundBlurPref(), state);
 }
 
-TEST_F(CameraEffectsControllerTest, SetBackgroundImageFromContent) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kVcBackgroundReplace};
+TEST_F(CameraEffectsControllerTest,
+       SetBackgroundImageReplacesExistingDestination) {
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
+  camera_effects_controller()->set_camera_background_img_dir_for_testing(
+      camera_background_img_dir_);
+  camera_effects_controller()->set_camera_background_run_dir_for_testing(
+      camera_background_run_dir_);
 
-  SimulateUserLogin({kTestAccount});
+  // Create the source image in the image dir.
+  const std::string image_contents = "image-contents";
+  ASSERT_TRUE(base::WriteFile(camera_background_img_dir_.Append(filename1_),
+                              image_contents));
+
+  // Create an unrelated file outside the run dir and point a symlink at it
+  // from where the destination image would be written. The copy should
+  // replace the symlink with a regular file rather than writing through it.
+  const std::string unrelated_contents = "unrelated-contents";
+  const base::FilePath unrelated_file =
+      file_tmp_dir_.GetPath().AppendASCII("unrelated_file");
+  ASSERT_TRUE(base::WriteFile(unrelated_file, unrelated_contents));
+  const base::FilePath run_filepath =
+      camera_background_run_dir_.Append(filename1_);
+  ASSERT_TRUE(base::CreateSymbolicLink(unrelated_file, run_filepath));
+
+  // Set background image.
+  base::test::TestFuture<bool> future_copy_succeeded;
+  camera_effects_controller()->SetBackgroundImage(
+      filename1_, future_copy_succeeded.GetCallback());
+  EXPECT_TRUE(future_copy_succeeded.Get());
+
+  // The destination should now be a regular file containing the image.
+  EXPECT_FALSE(base::IsLink(run_filepath));
+  std::string run_file_contents;
+  ASSERT_TRUE(base::ReadFileToString(run_filepath, &run_file_contents));
+  EXPECT_EQ(run_file_contents, image_contents);
+
+  // The unrelated file must be unchanged.
+  std::string unrelated_file_contents;
+  ASSERT_TRUE(base::ReadFileToString(unrelated_file, &unrelated_file_contents));
+  EXPECT_EQ(unrelated_file_contents, unrelated_contents);
+}
+
+TEST_F(CameraEffectsControllerTest, SetBackgroundImageFromContent) {
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
   camera_effects_controller()->set_camera_background_img_dir_for_testing(
       camera_background_img_dir_);
   camera_effects_controller()->set_camera_background_run_dir_for_testing(
@@ -753,10 +767,7 @@ TEST_F(CameraEffectsControllerTest, SetBackgroundImageFromContent) {
 }
 
 TEST_F(CameraEffectsControllerTest, GetBackgroundImageFileNames) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kVcBackgroundReplace};
-
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
   camera_effects_controller()->set_camera_background_img_dir_for_testing(
       camera_background_img_dir_);
   camera_effects_controller()->set_camera_background_run_dir_for_testing(
@@ -817,10 +828,7 @@ TEST_F(CameraEffectsControllerTest, GetBackgroundImageFileNames) {
 }
 
 TEST_F(CameraEffectsControllerTest, GetBackgroundImageInfo) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kVcBackgroundReplace};
-
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
   camera_effects_controller()->set_camera_background_img_dir_for_testing(
       camera_background_img_dir_);
   camera_effects_controller()->set_camera_background_run_dir_for_testing(
@@ -873,7 +881,7 @@ TEST_F(CameraEffectsControllerTest, NotEligibleForSeaPen) {
   // will not be constructed.
   GetSessionControllerClient()->set_is_eligible_for_background_replace(
       {false, false});
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
 
   // Update media status to make the video conference tray visible.
   VideoConferenceMediaState state;
@@ -899,7 +907,7 @@ TEST_F(CameraEffectsControllerTest, UpdateBackgroundBlurImageState) {
   // will not be constructed.
   GetSessionControllerClient()->set_is_eligible_for_background_replace(
       {false, false});
-  SimulateUserLogin({kTestAccount});
+  SimulateUserLogin(AccountId::FromUserEmail(kTestAccount));
 
   // Update media status to make the video conference tray visible.
   VideoConferenceMediaState state;

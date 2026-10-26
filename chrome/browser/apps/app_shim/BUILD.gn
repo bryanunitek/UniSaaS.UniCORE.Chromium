@@ -38,12 +38,7 @@ source_set("app_shim") {
     "web_app_shim_manager_delegate_mac.h",
   ]
 
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
-
-  public_deps = [
-    ":app_shim_listener",
-    "//chrome/browser:browser_public_dependencies",
-  ]
+  public_deps = [ ":app_shim_listener" ]
 
   deps = [
     "//apps",
@@ -60,6 +55,8 @@ source_set("app_shim") {
     "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/profiles:profile_util",
     "//chrome/browser/ui:ui_features",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/browser_window:create_browser_window",
     "//chrome/browser/ui/profiles",
     "//chrome/browser/ui/web_applications",
     "//chrome/browser/web_applications",

@@ -14,9 +14,12 @@ group("all") {
 
   deps = [
     ":remoting_console",
+    ":remoting_curtain",
     ":remoting_desktop",
     ":remoting_me2me_host",
     ":remoting_native_messaging_host",
+    ":remoting_network",
+    ":remoting_peer_connection",
     "//remoting/host/security_key:remote_security_key",
   ]
 }
@@ -83,6 +86,10 @@ windows_manifest("dpi_aware_uiaccess_require_admin_exe_manifest") {
   ]
 }
 
+source_set("core_resource") {
+  sources = [ "core_resource.h" ]
+}
+
 source_set("security_descriptor") {
   sources = [
     "security_descriptor.cc",
@@ -97,15 +104,6 @@ source_set("acl_util") {
     "acl_util.h",
   ]
   deps = [ "//base" ]
-}
-
-source_set("trust_util") {
-  sources = [
-    "trust_util.cc",
-    "trust_util.h",
-  ]
-  deps = [ "//base" ]
-  libs = [ "Wintrust.lib" ]
 }
 
 component("rdp_window") {
@@ -155,6 +153,10 @@ source_set("win") {
     "host_event_logger.h",
     "host_event_windows_event_logger.h",
     "host_service.h",
+    "host_window_win_util.cc",
+    "host_window_win_util.h",
+    "input_extra_info.cc",
+    "input_extra_info.h",
     "launch_process_with_token.cc",
     "launch_process_with_token.h",
     "mouse_cursor_monitor_win.cc",
@@ -179,16 +181,14 @@ source_set("win") {
     "windows_process_delegate.h",
     "wts_session_change_observer.cc",
     "wts_session_change_observer.h",
+    "wts_session_process_delegate.cc",
     "wts_session_process_delegate.h",
     "wts_terminal_monitor.cc",
     "wts_terminal_monitor.h",
     "wts_terminal_observer.h",
   ]
 
-  configs += [
-    "//build/config/compiler:wexit_time_destructors",
-    "//remoting/build/config:version",
-  ]
+  configs += [ "//remoting/build/config:version" ]
 
   if (is_clang) {
     # TODO(thakis): Remove this once midl.exe no longer produces nonstandard
@@ -198,7 +198,10 @@ source_set("win") {
 
   defines = [ "WEBRTC_CHROMIUM_BUILD" ]
 
-  public_deps = [ ":security_descriptor" ]
+  public_deps = [
+    ":core_resource",
+    ":security_descriptor",
+  ]
   deps = [
     ":rdp_window",
     "//base:i18n",
@@ -228,22 +231,33 @@ source_set("win") {
   if (!is_ios) {
     deps += [ "//components/policy:generated" ]
   }
+  libs = [
+    "shcore.lib",
+    "userenv.lib",
+  ]
 }
 
 source_set("unit_tests") {
   testonly = true
 
   sources = [
+    "chromoting_module_unittest.cc",
+    "default_audio_device_change_detector_unittest.cc",
     "desktop_event_handler_unittest.cc",
     "event_trace_data.cc",
     "event_trace_data.h",
     "event_trace_data_unittest.cc",
+    "host_window_win_util_unittest.cc",
+    "input_extra_info_unittest.cc",
     "mouse_cursor_monitor_win_unittest.cc",
     "rdp_client_unittest.cc",
     "unprivileged_process_delegate_unittest.cc",
+    "wts_session_process_delegate_unittest.cc",
+    "wts_terminal_monitor_unittest.cc",
   ]
 
   deps = [
+    ":chromoting_module",
     ":win",
     "//base/test:test_support",
     "//ipc",
@@ -341,8 +355,6 @@ message_compiler("messages") {
 }
 
 executable("remoting_console") {
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
-
   defines = host_predefines + [ "REMOTING_HOST_BINARY=BINARY_HOST_ME2ME" ]
 
   deps = [
@@ -367,42 +379,95 @@ executable("remoting_console") {
   }
 }
 
-executable("remoting_me2me_host") {
-  configs += [
-    "//build/config/compiler:wexit_time_destructors",
-    "//build/config/win:windowed",
-    "//remoting/build/config:remoting_me2me_host",
+template("remoting_me2me_host_executable") {
+  executable(target_name) {
+    forward_variables_from(invoker, [ "output_name" ])
+
+    configs += [
+      "//build/config/win:windowed",
+      "//remoting/build/config:remoting_me2me_host",
+    ]
+
+    defines = host_predefines + [ "REMOTING_HOST_BINARY=" + invoker.binary_id ]
+
+    deps = [
+      ":dpi_aware_exe_manifest",
+      ":remoting_core",
+      ":remoting_windows_resources",
+      "//base:clang_profiling_buildflags",
+      "//remoting/host:host_main_headers",
+    ]
+
+    sources = [
+      "$root_gen_dir/remoting/version.rc",
+      "entry_point.cc",
+    ]
+
+    if (!is_asan && !use_clang_profiling) {
+      no_default_deps = true
+      ldflags = [
+        "/ENTRY:HostEntryPoint",
+        # "/NODEFAULTLIB",
+      ]
+    }
+  }
+}
+
+remoting_me2me_host_executable("remoting_me2me_host") {
+  binary_id = "BINARY_HOST_ME2ME"
+  output_name = "remoting_host"
+}
+
+remoting_me2me_host_executable("remoting_network") {
+  binary_id = "BINARY_HOST_NETWORK"
+  output_name = "remoting_network"
+}
+
+remoting_me2me_host_executable("remoting_peer_connection") {
+  binary_id = "BINARY_HOST_PEER_CONNECTION"
+  output_name = "remoting_peer_connection"
+}
+
+remoting_me2me_host_executable("remoting_curtain") {
+  binary_id = "BINARY_HOST_CURTAIN"
+  output_name = "remoting_curtain"
+}
+
+config("rdp_desktop_session_clsid_config") {
+  defines = [ "RDP_DESKTOP_SESSION_CLSID=\"$rdp_desktop_session_clsid\"" ]
+}
+
+source_set("chromoting_module") {
+  sources = [
+    "chromoting_module.cc",
+    "chromoting_module.h",
+    "rdp_desktop_session.cc",
+    "rdp_desktop_session.h",
+    "rdp_desktop_session_class_factory.cc",
+    "rdp_desktop_session_class_factory.h",
   ]
 
-  defines = host_predefines + [ "REMOTING_HOST_BINARY=BINARY_HOST_ME2ME" ]
+  configs += [
+    "//remoting/build/config:host_implementation",
+    "//remoting/build/config:version",
+  ]
+
+  public_configs = [ ":rdp_desktop_session_clsid_config" ]
+
+  public_deps = [ ":remoting_lib_idl" ]
 
   deps = [
-    ":dpi_aware_exe_manifest",
-    ":remoting_core",
-    ":remoting_windows_resources",
-    "//base:clang_profiling_buildflags",
-    "//remoting/host:host_main_headers",
+    ":acl_util",
+    ":win",
+    "//base",
+    "//remoting/base",
+    "//remoting/host/base",
+    "//third_party/webrtc_overrides:webrtc_component",
   ]
-
-  sources = [
-    "$root_gen_dir/remoting/version.rc",
-    "entry_point.cc",
-  ]
-
-  output_name = "remoting_host"
-
-  if (!is_asan && !use_clang_profiling) {
-    no_default_deps = true
-    ldflags = [
-      "/ENTRY:HostEntryPoint",
-      # "/NODEFAULTLIB",
-    ]
-  }
 }
 
 shared_library("remoting_core") {
   configs += [
-    "//build/config/compiler:wexit_time_destructors",
     "//remoting/build/config:host_implementation",
     "//remoting/build/config:version",
   ]
@@ -412,8 +477,6 @@ shared_library("remoting_core") {
     "$root_gen_dir/remoting/host/win/remoting_host_messages.rc",
     "$root_gen_dir/remoting/version.rc",
     "chromoting_lib.rc",
-    "chromoting_module.cc",
-    "chromoting_module.h",
     "core.cc",
     "etw_trace_consumer.cc",
     "etw_trace_controller.cc",
@@ -423,12 +486,10 @@ shared_library("remoting_core") {
     "host_event_file_logger.cc",
     "host_event_windows_event_logger.cc",
     "host_service.cc",
-    "rdp_desktop_session.cc",
-    "rdp_desktop_session.h",
-    "wts_session_process_delegate.cc",
   ]
   deps = [
     ":acl_util",
+    ":chromoting_module",
     ":messages",
     ":remoting_lib_idl",
     ":remoting_lib_ps",
@@ -488,10 +549,7 @@ shared_library("remoting_core") {
 }
 
 executable("remoting_desktop") {
-  configs += [
-    "//build/config/compiler:wexit_time_destructors",
-    "//build/config/win:windowed",
-  ]
+  configs += [ "//build/config/win:windowed" ]
 
   defines = host_predefines + [ "REMOTING_HOST_BINARY=BINARY_DESKTOP" ]
 
@@ -523,8 +581,6 @@ executable("remoting_desktop") {
 }
 
 executable("remoting_native_messaging_host") {
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
-
   defines =
       host_predefines + [ "REMOTING_HOST_BINARY=BINARY_NATIVE_MESSAGING_HOST" ]
 

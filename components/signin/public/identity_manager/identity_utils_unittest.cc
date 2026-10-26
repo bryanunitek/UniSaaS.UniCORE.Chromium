@@ -4,10 +4,12 @@
 
 #include "components/signin/public/identity_manager/identity_utils.h"
 
+#include "base/containers/flat_set.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/with_feature_override.h"
+#include "build/build_config.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/testing_pref_service.h"
@@ -72,6 +74,8 @@ class IdentityUtilsTest : public testing::Test {
   IdentityManager* identity_manager() {
     return identity_test_env_.identity_manager();
   }
+
+  IdentityTestEnvironment* identity_test_env() { return &identity_test_env_; }
 
   sync_preferences::TestingPrefServiceSyncable* pref_service() {
     return &pref_service_;
@@ -181,12 +185,12 @@ TEST_F(IdentityUtilsTest, GetAllGaiaIdsForKeyedPreferences) {
 
   AccountInfo account_info = MakePrimaryAccountAvailable();
   gaia::ListedAccount cookie_for_primary_account;
-  cookie_for_primary_account.gaia_id = account_info.gaia;
+  cookie_for_primary_account.gaia_id = account_info.GetGaiaId();
 
   // No accounts in cookie, primary account in identity manager.
   EXPECT_THAT(GetAllGaiaIdsForKeyedPreferences(
                   identity_manager(), AccountsInCookieJarInfo(true, {})),
-              testing::UnorderedElementsAre(account_info.gaia));
+              testing::UnorderedElementsAre(account_info.GetGaiaId()));
 
   // Primary account is valid in cookies.
   EXPECT_THAT(GetAllGaiaIdsForKeyedPreferences(
@@ -194,32 +198,151 @@ TEST_F(IdentityUtilsTest, GetAllGaiaIdsForKeyedPreferences) {
                   AccountsInCookieJarInfo(
                       true, {cookie_for_primary_account, cookie_accounts[0],
                              cookie_accounts[1]})),
-              testing::UnorderedElementsAre(account_info.gaia, GaiaId("0"),
-                                            GaiaId("1")));
+              testing::UnorderedElementsAre(account_info.GetGaiaId(),
+                                            GaiaId("0"), GaiaId("1")));
 
   // Primary account is invalid in cookies.
   gaia::ListedAccount cookie_invalid_primary_account;
-  cookie_invalid_primary_account.gaia_id = account_info.gaia;
+  cookie_invalid_primary_account.gaia_id = account_info.GetGaiaId();
   cookie_invalid_primary_account.valid = false;
   EXPECT_THAT(
       GetAllGaiaIdsForKeyedPreferences(
           identity_manager(),
           AccountsInCookieJarInfo(true, {cookie_accounts[0], cookie_accounts[1],
                                          cookie_invalid_primary_account})),
-      testing::UnorderedElementsAre(account_info.gaia, GaiaId("0"),
+      testing::UnorderedElementsAre(account_info.GetGaiaId(), GaiaId("0"),
                                     GaiaId("1")));
 
   // Primary account is signed out in cookies.
   gaia::ListedAccount cookie_signed_out_primary_account;
-  cookie_signed_out_primary_account.gaia_id = account_info.gaia;
+  cookie_signed_out_primary_account.gaia_id = account_info.GetGaiaId();
   cookie_signed_out_primary_account.signed_out = true;
   EXPECT_THAT(
       GetAllGaiaIdsForKeyedPreferences(
           identity_manager(),
           AccountsInCookieJarInfo(true, {cookie_accounts[0], cookie_accounts[1],
                                          cookie_signed_out_primary_account})),
-      testing::UnorderedElementsAre(account_info.gaia, GaiaId("0"),
+      testing::UnorderedElementsAre(account_info.GetGaiaId(), GaiaId("0"),
                                     GaiaId("1")));
 }
+
+TEST_F(IdentityUtilsTest,
+       GetAllGaiaIdsForKeyedPreferencesWithSecondaryAccountWithRefreshToken) {
+  AccountInfo primary_account = MakePrimaryAccountAvailable();
+  AccountInfo secondary_account =
+      identity_test_env()->MakeAccountAvailable("secondary@gmail.com");
+
+  gaia::ListedAccount cookie_account;
+  cookie_account.gaia_id = GaiaId("cookie_gaia_id");
+
+  base::flat_set<GaiaId> gaia_ids = GetAllGaiaIdsForKeyedPreferences(
+      identity_manager(), AccountsInCookieJarInfo(true, {cookie_account}));
+
+  // Accounts with refresh tokens are kept even if they are not in the cookie
+  // jar.
+  EXPECT_THAT(gaia_ids,
+              testing::UnorderedElementsAre(primary_account.GetGaiaId(),
+                                            secondary_account.GetGaiaId(),
+                                            GaiaId("cookie_gaia_id")));
+}
+
+TEST_F(IdentityUtilsTest,
+       GetAllGaiaIdsForKeyedPreferencesWhenSignedOutWithRefreshToken) {
+  AccountInfo account =
+      identity_test_env()->MakeAccountAvailable("account@gmail.com");
+  ASSERT_FALSE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSignin));
+
+  EXPECT_THAT(GetAllGaiaIdsForKeyedPreferences(
+                  identity_manager(), AccountsInCookieJarInfo(true, {})),
+              testing::UnorderedElementsAre(account.GetGaiaId()));
+
+  identity_test_env()->RemoveRefreshTokenForAccount(account.GetAccountId());
+  EXPECT_THAT(GetAllGaiaIdsForKeyedPreferences(
+                  identity_manager(), AccountsInCookieJarInfo(true, {})),
+              testing::IsEmpty());
+}
+
+TEST_F(IdentityUtilsTest, GetOrderedAccountsForDisplayNoAccounts) {
+  EXPECT_TRUE(GetOrderedAccountsForDisplay(identity_manager()).empty());
+}
+
+TEST_F(IdentityUtilsTest, GetOrderedAccountsForDisplayPrimaryAccount) {
+  AccountInfo primary_account = MakePrimaryAccountAvailable();
+  std::vector<AccountInfo> accounts =
+      GetOrderedAccountsForDisplay(identity_manager());
+  ASSERT_EQ(accounts.size(), 1u);
+  EXPECT_EQ(accounts[0].GetAccountId(), primary_account.GetAccountId());
+}
+
+#if BUILDFLAG(IS_IOS)
+TEST_F(IdentityUtilsTest, GetOrderedAccountsForDisplayDeviceOrderOnIOS) {
+  AccountInfo account1 =
+      identity_test_env()->MakeAccountAvailable("alpha@example.com");
+  AccountInfo account2 =
+      identity_test_env()->MakeAccountAvailable("beta@example.com");
+
+  std::vector<AccountInfo> accounts =
+      GetOrderedAccountsForDisplay(identity_manager());
+  ASSERT_EQ(accounts.size(), 2u);
+  EXPECT_EQ(accounts[0].GetAccountId(), account1.GetAccountId());
+  EXPECT_EQ(accounts[1].GetAccountId(), account2.GetAccountId());
+
+  // Filter by pattern so only beta is allowed.
+  pref_service()->SetString(prefs::kGoogleServicesUsernamePattern, "beta@.*");
+  std::vector<AccountInfo> filtered_accounts =
+      GetOrderedAccountsForDisplay(identity_manager(), pref_service());
+  ASSERT_EQ(filtered_accounts.size(), 1u);
+  EXPECT_EQ(filtered_accounts[0].GetAccountId(), account2.GetAccountId());
+}
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+TEST_F(IdentityUtilsTest, GetOrderedAccountsForDisplayDeviceOrderOnAndroid) {
+  AccountInfo account1 =
+      identity_test_env()->MakeAccountAvailable("alpha@example.com");
+  AccountInfo account2 =
+      identity_test_env()->MakeAccountAvailable("beta@example.com");
+
+  std::vector<AccountInfo> accounts =
+      GetOrderedAccountsForDisplay(identity_manager());
+  ASSERT_EQ(accounts.size(), 2u);
+  EXPECT_EQ(accounts[0].GetAccountId(), account1.GetAccountId());
+  EXPECT_EQ(accounts[1].GetAccountId(), account2.GetAccountId());
+
+  // Filter by pattern so only beta is allowed.
+  pref_service()->SetString(prefs::kGoogleServicesUsernamePattern, "beta@.*");
+  std::vector<AccountInfo> filtered_accounts =
+      GetOrderedAccountsForDisplay(identity_manager(), pref_service());
+  ASSERT_EQ(filtered_accounts.size(), 1u);
+  EXPECT_EQ(filtered_accounts[0].GetAccountId(), account2.GetAccountId());
+}
+#endif
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+TEST_F(IdentityUtilsTest, GetOrderedAccountsForDisplayCookieOrderOnDesktop) {
+  AccountInfo account1 =
+      identity_test_env()->MakeAccountAvailable("alpha@example.com");
+  AccountInfo account2 =
+      identity_test_env()->MakeAccountAvailable("beta@example.com");
+
+  // Cookie jar specifies beta first, then alpha.
+  identity_test_env()->SetCookieAccounts(
+      {{std::string(account2.GetEmail()), account2.GetGaiaId()},
+       {std::string(account1.GetEmail()), account1.GetGaiaId()}});
+
+  std::vector<AccountInfo> accounts =
+      GetOrderedAccountsForDisplay(identity_manager());
+  ASSERT_EQ(accounts.size(), 2u);
+  EXPECT_EQ(accounts[0].GetAccountId(), account2.GetAccountId());
+  EXPECT_EQ(accounts[1].GetAccountId(), account1.GetAccountId());
+
+  // Filter by pattern so only alpha is allowed.
+  pref_service()->SetString(prefs::kGoogleServicesUsernamePattern, "alpha@.*");
+  std::vector<AccountInfo> filtered_accounts =
+      GetOrderedAccountsForDisplay(identity_manager(), pref_service());
+  ASSERT_EQ(filtered_accounts.size(), 1u);
+  EXPECT_EQ(filtered_accounts[0].GetAccountId(), account1.GetAccountId());
+}
+#endif
 
 }  // namespace signin

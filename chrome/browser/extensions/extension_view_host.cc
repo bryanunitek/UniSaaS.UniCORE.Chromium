@@ -6,13 +6,17 @@
 
 #include "chrome/browser/extensions/extension_view.h"
 #include "chrome/browser/file_select_helper.h"
-#include "chrome/browser/ui/autofill/chrome_autofill_client.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/autofill/autofill_client_provider.h"
+#include "chrome/browser/ui/autofill/autofill_client_provider_factory.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/process_util.h"
 #include "extensions/buildflags/buildflags.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -34,13 +38,16 @@ ExtensionViewHost::ExtensionViewHost(
                     host_type),
       delegate_(std::move(delegate)) {
   // Not used for panels, see PanelHost.
-  DCHECK(host_type == mojom::ViewType::kExtensionPopup ||
-         host_type == mojom::ViewType::kExtensionSidePanel);
+  CHECK(host_type == mojom::ViewType::kExtensionPopup ||
+            host_type == mojom::ViewType::kExtensionSidePanel,
+        base::NotFatalUntil::M161);
 
   // Attach WebContents helpers. Extension tabs automatically get them attached
   // in TabHelpers::AttachTabHelpers, but popups don't.
   // TODO(kalman): How much of TabHelpers::AttachTabHelpers should be here?
-  autofill::ChromeAutofillClient::CreateForWebContents(host_contents());
+  autofill::AutofillClientProviderFactory::GetForProfile(
+      Profile::FromBrowserContext(browser_context()))
+      .CreateClientForWebContents(host_contents());
 
   host_contents()->SetIgnoreZoomGestures(true);
 }
@@ -68,8 +75,11 @@ void ExtensionViewHost::LoadInitialURL() {
   }
 
 #if !BUILDFLAG(IS_ANDROID)
-  // Popups may spawn modal dialogs, which need positioning information.
-  if (extension_host_type() == mojom::ViewType::kExtensionPopup) {
+  // Popups and side panels may spawn modal dialogs (e.g. the directory upload
+  // confirmation for <input webkitdirectory>), which need positioning
+  // information.
+  if (extension_host_type() == mojom::ViewType::kExtensionPopup ||
+      extension_host_type() == mojom::ViewType::kExtensionSidePanel) {
     web_modal_handler_ = std::make_unique<ExtensionViewHostWebModalHandler>(
         host_contents(), view_->GetNativeView());
   }
@@ -107,13 +117,13 @@ content::WebContents* ExtensionViewHost::OpenURLFromTab(
         navigation_handle_callback) {
   // Allowlist the dispositions we will allow to be opened.
   switch (params.disposition) {
-    case WindowOpenDisposition::SINGLETON_TAB:
-    case WindowOpenDisposition::NEW_FOREGROUND_TAB:
-    case WindowOpenDisposition::NEW_BACKGROUND_TAB:
-    case WindowOpenDisposition::NEW_POPUP:
-    case WindowOpenDisposition::NEW_WINDOW:
-    case WindowOpenDisposition::SAVE_TO_DISK:
-    case WindowOpenDisposition::OFF_THE_RECORD: {
+    case WindowOpenDisposition::kSingletonTab:
+    case WindowOpenDisposition::kNewForegroundTab:
+    case WindowOpenDisposition::kNewBackgroundTab:
+    case WindowOpenDisposition::kNewPopup:
+    case WindowOpenDisposition::kNewWindow:
+    case WindowOpenDisposition::kSaveToDisk:
+    case WindowOpenDisposition::kOffTheRecord: {
       // Only allow these from hosts that are bound to a browser (e.g. popups).
       // Otherwise they are not driven by a user gesture.
       return delegate_->OpenURL(params, std::move(navigation_handle_callback));
@@ -146,7 +156,10 @@ bool ExtensionViewHost::HandleKeyboardEvent(
     content::WebContents* source,
     const input::NativeWebKeyboardEvent& event) {
   if (IsEscapeInPopup(event)) {
-    Close();
+    if (event.GetType() == input::NativeWebKeyboardEvent::Type::kRawKeyDown ||
+        event.GetType() == input::NativeWebKeyboardEvent::Type::kKeyDown) {
+      Close();
+    }
     return true;
   }
   return UnhandledKeyboardEvent(source, event);
@@ -160,6 +173,13 @@ void ExtensionViewHost::RunFileChooser(
   // element to click on, so this code only exists for extensions with a view.
   FileSelectHelper::RunFileChooser(render_frame_host, std::move(listener),
                                    params);
+}
+
+void ExtensionViewHost::EnumerateDirectory(
+    content::WebContents* web_contents,
+    scoped_refptr<content::FileSelectListener> listener,
+    const base::FilePath& path) {
+  FileSelectHelper::EnumerateDirectory(web_contents, std::move(listener), path);
 }
 
 std::unique_ptr<content::EyeDropper> ExtensionViewHost::OpenEyeDropper(
@@ -186,7 +206,7 @@ WindowController* ExtensionViewHost::GetExtensionWindowController() {
 void ExtensionViewHost::OnExtensionHostDocumentElementAvailable(
     content::BrowserContext* host_browser_context,
     ExtensionHost* extension_host) {
-  DCHECK(extension_host->extension());
+  CHECK(extension_host->extension(), base::NotFatalUntil::M161);
   if (host_browser_context != browser_context() ||
       extension_host->extension() != extension() ||
       extension_host->extension_host_type() !=
@@ -194,9 +214,10 @@ void ExtensionViewHost::OnExtensionHostDocumentElementAvailable(
     return;
   }
 
-  DCHECK_EQ(process_util::PersistentBackgroundPageState::kReady,
-            process_util::GetPersistentBackgroundPageState(*extension(),
-                                                           browser_context()));
+  CHECK_EQ(process_util::PersistentBackgroundPageState::kReady,
+           process_util::GetPersistentBackgroundPageState(*extension(),
+                                                          browser_context()),
+           base::NotFatalUntil::M161);
   // We only needed to wait for the background page to load, so stop observing.
   host_registry_observation_.Reset();
   LoadInitialURL();
@@ -205,7 +226,6 @@ void ExtensionViewHost::OnExtensionHostDocumentElementAvailable(
 bool ExtensionViewHost::IsEscapeInPopup(
     const input::NativeWebKeyboardEvent& event) const {
   return extension_host_type() == mojom::ViewType::kExtensionPopup &&
-         event.GetType() == input::NativeWebKeyboardEvent::Type::kRawKeyDown &&
          event.windows_key_code == ui::VKEY_ESCAPE;
 }
 

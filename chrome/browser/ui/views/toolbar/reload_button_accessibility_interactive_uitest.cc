@@ -5,6 +5,7 @@
 #include "base/test/run_until.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/toolbar/reload_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_accessibility_test.h"
@@ -27,7 +28,9 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/test/ui_controls.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/interaction/element_tracker_views.h"
@@ -174,12 +177,11 @@ IN_PROC_BROWSER_TEST_P(ReloadButtonAccessibilityTest,
 
       // Start navigation to slow page
       InstrumentNextTab(kNewTabId), Do([&]() {
-        browser()->OpenURL(
-            content::OpenURLParams(embedded_test_server()->GetURL("/slow"),
-                                   content::Referrer(),
-                                   WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                                   ui::PAGE_TRANSITION_TYPED, false),
-            /*navigation_handle_callback=*/{});
+        browser()->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
+                               embedded_test_server()->GetURL("/slow"),
+                               WindowOpenDisposition::kNewForegroundTab,
+                               ui::PAGE_TRANSITION_TYPED),
+                           /*navigation_handle_callback=*/{});
       }),
 
       // Wait for navigation to start and button to turn into Stop.
@@ -298,11 +300,11 @@ IN_PROC_BROWSER_TEST_P(ReloadButtonAccessibilityTest, MAYBE_MiddleClickReload) {
       WaitForReloadButtonReady(), WaitForShow(kReloadButtonElementId),
 
       // Ensure we have only 1 tab
-      Check([&]() { return browser()->tab_strip_model()->count() == 1; }),
+      Check([&]() { return browser()->GetTabStripModel()->count() == 1; }),
 
       // Setup state observer for tab count
       PollState(kTabCountState,
-                [this]() { return browser()->tab_strip_model()->count(); }),
+                [this]() { return browser()->GetTabStripModel()->count(); }),
 
       // Middle-click the reload button
       MoveMouseOverReloadButton(), ClickMouse(ui_controls::MIDDLE),
@@ -313,7 +315,7 @@ IN_PROC_BROWSER_TEST_P(ReloadButtonAccessibilityTest, MAYBE_MiddleClickReload) {
       // Verify a new tab was opened with the same URL
       Check([&]() {
         return browser()
-                   ->tab_strip_model()
+                   ->GetTabStripModel()
                    ->GetWebContentsAt(1)
                    ->GetVisibleURL() == url;
       }));

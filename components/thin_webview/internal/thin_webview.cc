@@ -21,7 +21,7 @@ using web_contents_delegate_android::WebContentsDelegateAndroid;
 
 namespace thin_webview::android {
 
-static int64_t JNI_ThinWebViewImpl_Init(
+static jni_zero::JniUniquePtr<ThinWebView> JNI_ThinWebViewImpl_Init(
     JNIEnv* env,
     const JavaRef<jobject>& obj,
     const JavaRef<jobject>& jcompositor_view,
@@ -30,9 +30,8 @@ static int64_t JNI_ThinWebViewImpl_Init(
       CompositorViewImpl::FromJavaObject(jcompositor_view);
   ui::WindowAndroid* window_android =
       ui::WindowAndroid::FromJavaWindowAndroid(jwindow_android);
-  ThinWebView* view =
-      new ThinWebView(env, obj, compositor_view, window_android);
-  return reinterpret_cast<intptr_t>(view);
+  return jni_zero::MakeUnique<ThinWebView>(env, obj, compositor_view,
+                                           window_android);
 }
 
 ThinWebView::ThinWebView(JNIEnv* env,
@@ -45,10 +44,6 @@ ThinWebView::ThinWebView(JNIEnv* env,
       web_contents_(nullptr) {}
 
 ThinWebView::~ThinWebView() = default;
-
-void ThinWebView::Destroy(JNIEnv* env) {
-  delete this;
-}
 
 void ThinWebView::PrimaryPageChanged(content::Page& page) {
   // Disable browser controls when used for thin webview.
@@ -63,7 +58,8 @@ void ThinWebView::SetWebContents(JNIEnv* env,
                                  const JavaRef<jobject>& jweb_contents,
                                  const JavaRef<jobject>& jweb_contents_delegate,
                                  bool enable_permission_requests,
-                                 bool support_theming) {
+                                 bool support_theming,
+                                 bool enable_browser_autofill) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(jweb_contents);
   WebContentsDelegateAndroid* delegate =
@@ -71,13 +67,14 @@ void ThinWebView::SetWebContents(JNIEnv* env,
           ? nullptr
           : new WebContentsDelegateAndroid(env, jweb_contents_delegate);
   SetWebContents(web_contents, delegate, enable_permission_requests,
-                 support_theming);
+                 support_theming, enable_browser_autofill);
 }
 
 void ThinWebView::SetWebContents(content::WebContents* web_contents,
                                  WebContentsDelegateAndroid* delegate,
                                  bool enable_permission_requests,
-                                 bool support_theming) {
+                                 bool support_theming,
+                                 bool enable_browser_autofill) {
   DCHECK(web_contents);
   Observe(web_contents);
   web_contents_ = web_contents->GetWeakPtr();
@@ -100,7 +97,7 @@ void ThinWebView::SetWebContents(content::WebContents* web_contents,
   }
 
   ThinWebViewInitializer::GetInstance()->AttachTabHelpers(
-      web_contents, enable_permission_requests);
+      web_contents, enable_permission_requests, enable_browser_autofill);
 }
 
 void ThinWebView::SetContextMenuPopulatorFactory(

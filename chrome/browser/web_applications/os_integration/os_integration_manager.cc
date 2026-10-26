@@ -95,8 +95,16 @@ const int kCurrentAppShortcutsVersion = APP_SHIM_VERSION_NUMBER;
 std::string CurrentAppShortcutsArch() {
   return base::SysInfo::OperatingSystemArchitecture();
 }
+
+std::string CurrentAppShortcutsOsVersion() {
+  return base::SysInfo::OperatingSystemVersion();
+}
 #else
 std::string CurrentAppShortcutsArch() {
+  return "";
+}
+
+std::string CurrentAppShortcutsOsVersion() {
   return "";
 }
 #if BUILDFLAG(IS_WIN)
@@ -143,14 +151,15 @@ bool OsIntegrationManager::AreOsHooksSuppressedForTesting() {
 // static
 void OsIntegrationManager::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
+  // LINT.IfChange(WebAppPrefs)
   // Indicates whether app shortcuts have been created.
   registry->RegisterIntegerPref(prefs::kAppShortcutsVersion,
                                 kCurrentAppShortcutsVersion);
   registry->RegisterStringPref(prefs::kAppShortcutsArch,
                                CurrentAppShortcutsArch());
-  // NOTE: If you add new prefs here that should be cleared during database
-  // corruption recovery, make sure to update
-  // `RemoveWebAppJob::RemoveForCorruptDatabase`.
+  registry->RegisterStringPref(prefs::kAppShortcutsOsVersion,
+                               CurrentAppShortcutsOsVersion());
+  // LINT.ThenChange(//chrome/browser/web_applications/web_app_utils.cc:WebAppPrefs)
 }
 
 // static
@@ -220,7 +229,7 @@ void OsIntegrationManager::Synchronize(
     const webapps::AppId& app_id,
     base::OnceClosure callback,
     std::optional<SynchronizeOsOptions> options) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   first_synchronize_called_ = true;
 
   // This is usually called to clean up OS integration states on the OS,
@@ -314,7 +323,7 @@ void OsIntegrationManager::Synchronize(
 void OsIntegrationManager::GetAppExistingShortCutLocation(
     ShortcutLocationCallback callback,
     std::unique_ptr<ShortcutInfo> shortcut_info) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   // Ownership of `shortcut_info` moves to the Reply, which is guaranteed to
   // outlive the const reference.
   const ShortcutInfo& shortcut_info_ref = *shortcut_info;
@@ -324,7 +333,8 @@ void OsIntegrationManager::GetAppExistingShortCutLocation(
                      std::cref(shortcut_info_ref)),
       base::BindOnce(
           [](ShortcutLocationCallback callback, ShortcutLocations locations) {
-            DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+            CHECK_CURRENTLY_ON(content::BrowserThread::UI,
+                               base::NotFatalUntil::M162);
             std::move(callback).Run(locations);
           },
           std::move(callback).Then(base::OnceClosure(
@@ -544,7 +554,7 @@ void OsIntegrationManager::ForceUnregisterOsIntegrationOnSubManager(
 }
 
 void OsIntegrationManager::UpdateShortcutsForAllAppsIfNeeded() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   // Updating shortcuts writes to user home folders, which can not be done in
   // tests without exploding disk space usage on the bots.
@@ -556,9 +566,12 @@ void OsIntegrationManager::UpdateShortcutsForAllAppsIfNeeded() {
       profile_->GetPrefs()->GetInteger(prefs::kAppShortcutsVersion);
   std::string last_arch =
       profile_->GetPrefs()->GetString(prefs::kAppShortcutsArch);
+  std::string last_os_version =
+      profile_->GetPrefs()->GetString(prefs::kAppShortcutsOsVersion);
 
   if (last_version == kCurrentAppShortcutsVersion &&
-      last_arch == CurrentAppShortcutsArch()) {
+      last_arch == CurrentAppShortcutsArch() &&
+      last_os_version == CurrentAppShortcutsOsVersion()) {
     // This either means this is a profile where installed shortcuts already
     // match the expected version and arch, or this could be a fresh profile.
     // For the latter, make sure to actually store version and arch in prefs,
@@ -576,7 +589,7 @@ void OsIntegrationManager::UpdateShortcutsForAllAppsIfNeeded() {
 }
 
 void OsIntegrationManager::UpdateShortcutsForAllAppsNow() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   base::ConcurrentClosures concurrent;
 
   SynchronizeOsOptions options;
@@ -604,6 +617,8 @@ void OsIntegrationManager::SetCurrentAppShortcutsVersion() {
                                    kCurrentAppShortcutsVersion);
   profile_->GetPrefs()->SetString(prefs::kAppShortcutsArch,
                                   CurrentAppShortcutsArch());
+  profile_->GetPrefs()->SetString(prefs::kAppShortcutsOsVersion,
+                                  CurrentAppShortcutsOsVersion());
 
   if (base::OnceClosure& callback =
           OnSetCurrentAppShortcutsVersionCallbackForTesting()) {
@@ -676,7 +691,8 @@ std::unique_ptr<ShortcutInfo> OsIntegrationManager::BuildShortcutInfoForWebApp(
 #if BUILDFLAG(IS_LINUX)
   const std::vector<WebAppShortcutsMenuItemInfo>& shortcuts_menu_item_infos =
       app->shortcuts_menu_item_infos();
-  DCHECK_LE(shortcuts_menu_item_infos.size(), kMaxApplicationDockMenuItems);
+  CHECK_LE(shortcuts_menu_item_infos.size(), kMaxApplicationDockMenuItems,
+           base::NotFatalUntil::M162);
   for (const auto& shortcuts_menu_item_info : shortcuts_menu_item_infos) {
     if (!shortcuts_menu_item_info.name.empty() &&
         !shortcuts_menu_item_info.url.is_empty()) {

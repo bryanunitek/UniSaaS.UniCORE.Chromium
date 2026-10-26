@@ -43,8 +43,10 @@ class LayerTreeHostImplDelegate {
   // LayerTreeHostImpl's SetNeedsRedraw() and SetNeedsOneBeginImplFrame().
   virtual void SetNeedsRedrawOnImplThread() = 0;
   virtual void SetNeedsOneBeginImplFrameOnImplThread() = 0;
+  virtual void NotifyInputEvent() = 0;
   virtual void SetNeedsCommitOnImplThread(BeginMainFrameReason reason,
-                                          bool urgent = false) = 0;
+                                          bool urgent = false,
+                                          bool unthrottled = false) = 0;
   virtual void SetNeedsPrepareTilesOnImplThread() = 0;
   virtual void SetVideoNeedsBeginFrames(bool needs_begin_frames) = 0;
   virtual void DidChangeBeginFrameSourcePaused(bool paused) = 0;

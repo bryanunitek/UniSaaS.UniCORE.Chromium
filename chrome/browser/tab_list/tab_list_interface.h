@@ -12,6 +12,7 @@
 
 #include "base/scoped_observation_traits.h"
 #include "build/android_buildflags.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
@@ -28,6 +29,10 @@ class WebContents;
 
 namespace gfx {
 class Range;
+}
+
+namespace split_tabs {
+class SplitTabVisualData;
 }
 
 namespace tab_groups {
@@ -72,7 +77,8 @@ class TabListInterface {
   virtual void ActivateTab(tabs::TabHandle tab) = 0;
 
   // Opens a new tab to the given `url`, inserting it at `index` in the tab
-  // strip. `index` may be ignored by the implementation if necessary.
+  // strip. `index` may be ignored by the implementation if necessary. If `url`
+  // is empty, the new tab page is loaded instead.
   virtual tabs::TabInterface* OpenTab(const GURL& url,
                                       int index,
                                       bool foreground = true) = 0;
@@ -112,7 +118,7 @@ class TabListInterface {
   virtual tabs::TabInterface* GetTab(int index) = 0;
 
   // Returns the index of the given `tab`, if it exists in the tab strip.
-  // Otherwise, returns -1.
+  // Otherwise, returns tab_list::kNoTabIndex (-1).
   virtual int GetIndexOfTab(tabs::TabHandle tab) = 0;
 
   // Highlights a set of tabs. This will clear any initially-selected tabs and
@@ -151,9 +157,16 @@ class TabListInterface {
   // support tab groups (e.g. legacy apps) returns an empty vector.
   virtual std::vector<tab_groups::TabGroupId> ListTabGroups() = 0;
 
+  // Returns a list of tab splits in this tab strip.
+  virtual std::set<split_tabs::SplitTabId> ListSplits() = 0;
+
   // Returns the visual data for a tab group, or nullopt on error.
   virtual std::optional<tab_groups::TabGroupVisualData> GetTabGroupVisualData(
       tab_groups::TabGroupId group_id) = 0;
+
+  // Returns the visual data for a split tab, or nullopt on error.
+  virtual std::optional<split_tabs::SplitTabVisualData> GetSplitTabVisualData(
+      split_tabs::SplitTabId split_id) = 0;
 
   // Returns the range of tab model indices this group contains. The returned
   // range will never be a reverse range. It will always be a forward range or
@@ -164,6 +177,12 @@ class TabListInterface {
   // nullopt on error (for example, if the tab list is empty).
   virtual std::optional<tab_groups::TabGroupId> CreateTabGroup(
       const std::vector<tabs::TabHandle>& tabs) = 0;
+
+  // Creates a new split view with the given `tabs` and `visual_data`, and
+  // returns the split ID. Returns nullopt on error.
+  virtual std::optional<split_tabs::SplitTabId> CreateSplit(
+      const std::vector<tabs::TabHandle>& tabs,
+      const split_tabs::SplitTabVisualData& visual_data) = 0;
 
   // Sets the visual data for a tab group. Implementations may choose to notify
   // observers of the change.
@@ -184,6 +203,9 @@ class TabListInterface {
   // Ungroups all `tabs`. Tabs will be moved to an index adjacent to the group
   // they were in.
   virtual void Ungroup(const std::set<tabs::TabHandle>& tabs) = 0;
+
+  // Unsplits all the tabs that are part of the split with `split_id`.
+  virtual void Unsplit(split_tabs::SplitTabId split_id) = 0;
 
   // Moves the tab group to `index`. The nearest valid index will be used.
   // The index assumes the group has already been removed from the tab strip.

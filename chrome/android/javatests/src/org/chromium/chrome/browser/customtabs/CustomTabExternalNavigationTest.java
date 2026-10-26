@@ -25,6 +25,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.CommandLineFlags;
@@ -143,7 +144,8 @@ public class CustomTabExternalNavigationTest {
         mTestAppActivityTestRule.startOnBlankPage();
         Context context = ApplicationProvider.getApplicationContext();
         Intent intent =
-                CustomTabsIntentTestUtils.createCustomTabIntent(context, url, false, builder -> {})
+                CustomTabsIntentTestUtils.createCustomTabIntent(
+                                context, url, false, CallbackUtils.emptyCallback())
                         .putExtra(AuthTabIntent.EXTRA_LAUNCH_AUTH_TAB, true)
                         .putExtra(AuthTabIntent.EXTRA_REDIRECT_SCHEME, CUSTOM_SCHEME)
                         .putExtra(
@@ -306,7 +308,7 @@ public class CustomTabExternalNavigationTest {
                 new ExternalNavigationParams.Builder(
                                 insideVerifiedOriginUrl,
                                 /* isIncognito= */ false,
-                                /* referrer= */ GURL.emptyGURL(),
+                                /* referrer= */ null,
                                 /* pageTransition= */ 0,
                                 /* isRedirect= */ false)
                         .setRedirectHandler(RedirectHandler.create())
@@ -320,7 +322,7 @@ public class CustomTabExternalNavigationTest {
                 new ExternalNavigationParams.Builder(
                                 outsideVerifiedOriginUrl,
                                 /* isIncognito= */ false,
-                                /* referrer= */ GURL.emptyGURL(),
+                                /* referrer */ null,
                                 /* pageTransition= */ 0,
                                 /* isRedirect= */ false)
                         .setRedirectHandler(RedirectHandler.create())
@@ -335,7 +337,7 @@ public class CustomTabExternalNavigationTest {
                 new ExternalNavigationParams.Builder(
                                 insideVerifiedOriginUrl,
                                 /* isIncognito= */ false,
-                                /* referrer= */ GURL.emptyGURL(),
+                                /* referrer= */ null,
                                 /* pageTransition= */ 0,
                                 /* isRedirect= */ false)
                         .setRedirectHandler(RedirectHandler.create())

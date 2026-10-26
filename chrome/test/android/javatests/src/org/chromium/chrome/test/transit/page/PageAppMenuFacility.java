@@ -13,9 +13,13 @@ import org.chromium.base.Token;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.tabbed_mode.TabbedAppMenuPropertiesDelegate;
 import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.test.transit.AppMenuSubmenuFacility;
 import org.chromium.chrome.test.transit.CtaAppMenuFacility;
+import org.chromium.chrome.test.transit.Journeys;
+import org.chromium.chrome.test.transit.TabGroupsSubmenuFacility;
 import org.chromium.chrome.test.transit.bookmarks.BookmarksPhoneStation;
 import org.chromium.chrome.test.transit.bookmarks.BookmarksTabletStation;
+import org.chromium.chrome.test.transit.hub.NewTabGroupDialogFacility;
 import org.chromium.chrome.test.transit.hub.TabGroupListBottomSheetFacility;
 import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageAppMenuFacility;
 import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
@@ -25,6 +29,7 @@ import org.chromium.chrome.test.transit.settings.SettingsStation;
 import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -51,6 +56,7 @@ public class PageAppMenuFacility<HostPageStationT extends CtaPageStation>
     protected @Nullable Item mReaderMode;
     protected Item mNewWindow;
     protected Item mBookmarks;
+    protected @Nullable Item mBookmarksParent;
     protected Item mSettings;
 
     @Override
@@ -130,6 +136,9 @@ public class PageAppMenuFacility<HostPageStationT extends CtaPageStation>
     public TabGroupListBottomSheetFacility<HostPageStationT> selectAddToGroupWithBottomSheet() {
         assertNotNull(mAddToGroup);
 
+        // "Add to tab group" menu item doesn't exist if the submenu is enabled in the app menu.
+        assert !TabbedAppMenuPropertiesDelegate.isSubmenusEnabled(mHostStation.getActivity());
+
         TabModel tabModel = mHostStation.getTabModel();
         Set<Token> tabGroupIds =
                 ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getAllTabGroupIds());
@@ -138,6 +147,30 @@ public class PageAppMenuFacility<HostPageStationT extends CtaPageStation>
                 .enterFacility(
                         new TabGroupListBottomSheetFacility<>(
                                 new ArrayList<>(tabGroupIds), /* isNewTabGroupRowVisible= */ true));
+    }
+
+    /**
+     * Select "Add to new group" from the app menu when no other valid destination groups exist.
+     * This opens the New Tab Group creation dialog directly without showing the bottom sheet.
+     */
+    public NewTabGroupDialogFacility<HostPageStationT> selectAddToNewGroupWithoutBottomSheet() {
+        assertNotNull(mAddToGroup);
+        assert !TabbedAppMenuPropertiesDelegate.isSubmenusEnabled(mHostStation.getActivity());
+        return Journeys.beginNewTabGroupUiFlow(mAddToGroup.scrollToAndSelectTo());
+    }
+
+    /**
+     * Select "Add to group" from the app menu when submenus are enabled. This opens the Tab Groups
+     * Submenu popup.
+     */
+    public TabGroupsSubmenuFacility<HostPageStationT> openTabGroupsSubmenu(
+            List<String> expectedGroups, List<String> excludedGroups) {
+        assertNotNull(mAddToGroup);
+        assert TabbedAppMenuPropertiesDelegate.isSubmenusEnabled(mHostStation.getActivity());
+        return mAddToGroup
+                .scrollToAndSelectWithoutClosingTo()
+                .enterFacility(
+                        new TabGroupsSubmenuFacility<>(this, expectedGroups, excludedGroups));
     }
 
     private TabbedAppMenuPropertiesDelegate getTabbedAppMenuPropertiesDelegate() {
@@ -152,6 +185,16 @@ public class PageAppMenuFacility<HostPageStationT extends CtaPageStation>
     /** Select "Bookmarks" from the app menu in tablets. */
     public BookmarksTabletStation openBookmarksTablet() {
         assert DeviceFormFactor.isNonMultiDisplayContextOnTablet(mHostStation.getActivity());
+        if (TabbedAppMenuPropertiesDelegate.isSubmenusEnabled(mHostStation.getActivity())) {
+            AppMenuSubmenuFacility<HostPageStationT> submenu =
+                    mBookmarksParent
+                            .scrollToAndSelectWithoutClosingTo()
+                            .enterFacility(new AppMenuSubmenuFacility<>());
+            return submenu.getBookmarksItem()
+                    .scrollToAndSelectTo()
+                    .exitFacilityAnd(this)
+                    .arriveAt(BookmarksTabletStation.newBuilder().initOpeningNewTab().build());
+        }
         return mBookmarks
                 .scrollToAndSelectTo()
                 .arriveAt(BookmarksTabletStation.newBuilder().initOpeningNewTab().build());
@@ -160,6 +203,10 @@ public class PageAppMenuFacility<HostPageStationT extends CtaPageStation>
     /** Select "Bookmarks" from the app menu in phones. */
     public BookmarksPhoneStation openBookmarksPhone() {
         assert !DeviceFormFactor.isNonMultiDisplayContextOnTablet(mHostStation.getActivity());
+
+        // Submenus aren't currently enabled on phones.
+        assert !TabbedAppMenuPropertiesDelegate.isSubmenusEnabled(mHostStation.getActivity());
+
         return mBookmarks.scrollToAndSelectTo().arriveAt(new BookmarksPhoneStation());
     }
 

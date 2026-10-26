@@ -6,10 +6,13 @@
 #define CHROME_BROWSER_DICTATION_TEST_UTIL_H_
 
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 
+#include "base/auto_reset.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/dictation/dictation_context.h"
 #include "chrome/browser/dictation/dictation_keyed_service.h"
@@ -19,13 +22,17 @@
 #include "chrome/browser/dictation/stream_provider.h"
 #include "chrome/browser/dictation/target.h"
 #include "chrome/common/extensions/api/dictation_private.h"
+#include "content/public/browser/global_dom_node_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/accelerators/accelerator.h"
+#include "ui/base/accelerators/global_accelerator_listener/global_accelerator_listener.h"
 
 class Profile;
 
 namespace content {
+class RenderFrameHost;
 class WebContents;
-}
+}  // namespace content
 
 namespace extensions {
 class Extension;
@@ -36,20 +43,27 @@ namespace dictation {
 inline constexpr std::string_view kDictationTestExtensionId =
     "dfihfgggpgemecjdjahibncmmjlfjggp";
 
-// A target ID that doesn't point to anything. Used only in unit tests where the
+// A target that doesn't point to anything. Used only in unit tests where the
 // target isn't actually used.
 // TODO(b/531049588): Do not use in new tests.
-content::GlobalDOMNodeId EmptyTargetId();
+TargetDetails EmptyTarget();
+inline TargetDetails EmptyTargetId() {
+  return EmptyTarget();
+}
 
 // Returns a target that points to the default element in the page. Currently
 // this will be the focused element in the primary main frame.
 // TODO(b/531049588): Do not use in new tests.
-content::GlobalDOMNodeId DefaultInPageTargetId(
-    content::WebContents* web_contents);
+TargetDetails DefaultInPageTarget(content::WebContents* web_contents);
+inline TargetDetails DefaultInPageTargetId(content::WebContents* web_contents) {
+  return DefaultInPageTarget(web_contents);
+}
 
 // Returns a ScopedFeatureList that enables Dictation with common params for
-// testing.
+// testing. `session_ends_on_stream_end` takes its default value if unspecified.
 base::test::ScopedFeatureList CreateEnablingFeatureList();
+base::test::ScopedFeatureList CreateEnablingFeatureList(
+    bool session_ends_on_stream_end);
 
 // Loads an extension that provides an implementation of the connector
 // extension in a "manual" mode usable from tests which prevents the extension
@@ -71,12 +85,18 @@ void ExtensionSendTranscriptUpdate(
 void ExtensionSendStreamStateUpdate(
     Profile* profile,
     DictationMultiplexer::StreamId stream_id,
-    extensions::api::dictation_private::StreamState state);
+    extensions::api::dictation_private::StreamState state,
+    std::optional<int> error_code = std::nullopt);
 
 // Blocks until the extension has received the OnStartStream event for the given
 // stream ID.
 void ExtensionWaitForStreamStart(Profile* profile,
                                  DictationMultiplexer::StreamId stream_id);
+
+// Blocks until the extension has received the OnEndStream event for the given
+// stream ID.
+void ExtensionWaitForStreamEnd(Profile* profile,
+                               DictationMultiplexer::StreamId stream_id);
 
 // Blocks until the extension has received the OnStartStream event for the given
 // stream ID, and returns the DictationContext containing the page context
@@ -92,6 +112,14 @@ DictationContext ExtensionGetUpdatedContext(
     Profile* profile,
     DictationMultiplexer::StreamId stream_id);
 
+// There's no great way to wait on the dictation target to have fully
+// committed text (i.e. visible to the page) so this function will poll until
+// the editable shows the expected text. Return the string for ergonomics so
+// that a failure can show up as a failing EXPECT_EQ.
+std::string GetEditableExpectedText(content::RenderFrameHost* render_frame_host,
+                                    std::string_view selector,
+                                    std::string_view expected);
+
 class MockStreamProvider : public StreamProvider {
  public:
   MockStreamProvider();
@@ -101,13 +129,17 @@ class MockStreamProvider : public StreamProvider {
               BindToTargetAndConnect,
               (std::unique_ptr<Target> target),
               (override));
-  MOCK_METHOD(void, Stop, (), (override));
+  MOCK_METHOD(void, Stop, (DictationStreamEndTrigger trigger), (override));
   MOCK_METHOD(void,
               OnTranscriptionUpdated,
               (const std::string& data, bool is_final),
               (override));
-  MOCK_METHOD(void, OnStreamStateChanged, (StreamState state), (override));
+  MOCK_METHOD(void,
+              OnStreamStateChanged,
+              (StreamState state, StreamErrorReason reason),
+              (override));
   MOCK_METHOD(StreamState, GetState, (), (const, override));
+  MOCK_METHOD(Target*, GetTarget, (), (override));
   MOCK_METHOD(const Target*, GetTarget, (), (const, override));
 };
 
@@ -116,7 +148,26 @@ class MockSessionUi : public SessionUi {
   MockSessionUi();
   ~MockSessionUi() override;
 
-  MOCK_METHOD(void, OnError, (StreamType stream_type), (override));
+  bool show_reviewing_page_status() const {
+    return show_reviewing_page_status_;
+  }
+  void set_show_reviewing_page_status(bool show) {
+    show_reviewing_page_status_ = show;
+  }
+
+  MOCK_METHOD(void,
+              OnError,
+              (StreamType stream_type, StreamErrorReason reason),
+              (override));
+  MOCK_METHOD(void, OnStopped, (), (override));
+  MOCK_METHOD(void, UpdateAudioLevel, (float audio_level), (override));
+  MOCK_METHOD(void,
+              OnStartedStream,
+              (content::GlobalDOMNodeId target_id),
+              (override));
+
+ private:
+  bool show_reviewing_page_status_ = false;
 };
 
 class MockSessionControllerDelegate : public SessionControllerDelegate {
@@ -124,6 +175,10 @@ class MockSessionControllerDelegate : public SessionControllerDelegate {
   MockSessionControllerDelegate();
   ~MockSessionControllerDelegate() override;
 
+  MOCK_METHOD(content::BrowserContext*,
+              GetBrowserContext,
+              (),
+              (const, override));
   MOCK_METHOD(std::unique_ptr<StreamProvider>,
               CreateStreamProvider,
               (SessionController & controller),
@@ -135,6 +190,63 @@ class MockSessionControllerDelegate : public SessionControllerDelegate {
   MOCK_METHOD(void, EndSession, (), (override));
 };
 
+// A ui::GlobalAcceleratorListener that doesn't touch the OS. Use with
+// ScopedFakeGlobalAcceleratorListener or pass directly to ScopedGlobalHotkey.
+class FakeGlobalAcceleratorListener : public ui::GlobalAcceleratorListener {
+ public:
+  FakeGlobalAcceleratorListener();
+  ~FakeGlobalAcceleratorListener() override;
+
+  // Simulates the OS reporting that `accelerator` was struck. The accelerator
+  // must be registered.
+  void Press(const ui::Accelerator& accelerator);
+
+  // When true, platform registration fails (as if another app owns the
+  // accelerator).
+  void set_fail_registration(bool fail) { fail_registration_ = fail; }
+  void set_handled_externally(bool handled) { handled_externally_ = handled; }
+
+  bool IsListeningFor(const ui::Accelerator& accelerator) const;
+
+  // ui::GlobalAcceleratorListener:
+  bool IsRegistrationHandledExternally() const override;
+
+ private:
+  // ui::GlobalAcceleratorListener:
+  void StartListening() override;
+  void StopListening() override;
+  bool StartListeningForAccelerator(
+      const ui::Accelerator& accelerator) override;
+  void StopListeningForAccelerator(const ui::Accelerator& accelerator) override;
+
+  bool fail_registration_ = false;
+  bool handled_externally_ = false;
+  std::set<ui::Accelerator> listening_;
+};
+
+// Installs a FakeGlobalAcceleratorListener for all HotkeyManagers for the
+// lifetime of this object, so that tests never register real OS-wide hotkeys.
+// Must be destroyed before `service` (e.g. in TearDownOnMainThread()). Ends any
+// active session on destruction so nothing remains registered with the fake.
+class ScopedFakeGlobalAcceleratorListener {
+ public:
+  explicit ScopedFakeGlobalAcceleratorListener(DictationKeyedService& service);
+  ScopedFakeGlobalAcceleratorListener(
+      const ScopedFakeGlobalAcceleratorListener&) = delete;
+  ScopedFakeGlobalAcceleratorListener& operator=(
+      const ScopedFakeGlobalAcceleratorListener&) = delete;
+  ~ScopedFakeGlobalAcceleratorListener();
+
+  FakeGlobalAcceleratorListener& listener() { return listener_; }
+
+ private:
+  const raw_ref<DictationKeyedService> service_;
+  FakeGlobalAcceleratorListener listener_;
+  base::AutoReset<ui::GlobalAcceleratorListener*> listener_override_;
+};
+
+// Uses a FakeGlobalAcceleratorListener so that tests never register real
+// OS-wide hotkeys.
 class MockDictationKeyedService : public DictationKeyedService {
  public:
   explicit MockDictationKeyedService(Profile* profile);
@@ -145,6 +257,15 @@ class MockDictationKeyedService : public DictationKeyedService {
       SessionController& controller) const override;
   std::unique_ptr<SessionUi> CreateUi(
       SessionController& controller) const override;
+
+  MOCK_METHOD(void, ToggleHotkeyHandler, (), (override));
+
+  FakeGlobalAcceleratorListener& fake_global_listener() {
+    return fake_global_listener_.listener();
+  }
+
+ private:
+  ScopedFakeGlobalAcceleratorListener fake_global_listener_{*this};
 };
 
 }  // namespace dictation

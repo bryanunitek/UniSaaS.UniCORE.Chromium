@@ -16,8 +16,15 @@ class ExceptionState;
 
 class AnalyserHandler final : public AudioHandler {
  public:
+  // Note: After calling Create, you must call InitializeAnalyserBuffers()
+  // to complete initialization and handle potential allocation failures,
+  // regardless of IsInitialized().
   static scoped_refptr<AnalyserHandler> Create(AudioNode&, float sample_rate);
   ~AnalyserHandler() override;
+
+  // Allocates internal analyser buffers. Returns true on success or false
+  // if memory allocation failed.
+  bool InitializeAnalyserBuffers();
 
   unsigned FftSize() const { return analyser_.FftSize(); }
   void SetFftSize(unsigned size, ExceptionState&);
@@ -59,12 +66,6 @@ class AnalyserHandler final : public AudioHandler {
   bool RequiresTailProcessing() const override;
   double TailTime() const override;
   double LatencyTime() const override { return 0; }
-  bool PropagatesSilence() const override {
-    // An AnalyserNode does actually propagate silence, but to get the
-    // time and FFT data updated correctly, process() needs to be
-    // called even if all the inputs are silent.
-    return false;
-  }
   void PullInputs(uint32_t frames_to_process) override;
   void UpdatePullStatusIfNeeded() override;
 

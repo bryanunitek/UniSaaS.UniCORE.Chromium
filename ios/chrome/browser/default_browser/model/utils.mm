@@ -13,18 +13,23 @@
 #import "base/metrics/histogram_functions.h"
 #import "base/metrics/user_metrics.h"
 #import "base/notreached.h"
+#import "base/numerics/clamped_math.h"
 #import "base/strings/strcat.h"
 #import "base/strings/string_number_conversions.h"
 #import "base/time/time.h"
 #import "components/feature_engagement/public/event_constants.h"
+#import "components/feature_engagement/public/feature_constants.h"
 #import "components/feature_engagement/public/tracker.h"
 #import "components/prefs/pref_service.h"
+#import "components/segmentation_platform/public/features.h"
 #import "ios/chrome/browser/default_browser/model/features.h"
+#import "ios/chrome/browser/default_browser/promo/contextual/public/contextual_default_browser_promo_constants.h"
 #import "ios/chrome/browser/default_browser/promo/public/features.h"
 #import "ios/chrome/browser/picture_in_picture/public/picture_in_picture_configuration.h"
 #import "ios/chrome/browser/picture_in_picture/public/picture_in_picture_constants.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ios/chrome/browser/shared/public/commands/contextual_default_browser_promo_commands.h"
 #import "ios/chrome/browser/shared/public/commands/picture_in_picture_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/signin_util.h"
@@ -47,6 +52,10 @@ NSString* kAppSpecificSettingsInstructionsVideo =
 // instructions for the default apps destination.
 NSString* kDefaultAppsSettingsInstructionsVideo =
     @"default_apps_settings_instructions_video";
+
+// The video file to use for the picture-in-picture default browser video
+// instructions with text.
+NSString* kTextInstructionsVideo = @"text_instructions_video";
 
 // Time threshold for the last URL open before no URL opens likely indicates
 // Chrome is no longer the default browser.
@@ -142,6 +151,9 @@ void showDefaultBrowserPictureInPictureInstructions(
       pip_param == kDefaultBrowserPictureInPictureParamEnabledDefaultApps
           ? kDefaultAppsSettingsInstructionsVideo
           : kAppSpecificSettingsInstructionsVideo;
+  if (IsDefaultBrowserPipTextVideoEnabled()) {
+    view_source = kTextInstructionsVideo;
+  }
   config.videoURL = [[NSBundle mainBundle] URLForResource:view_source
                                             withExtension:@"mp4"];
   config.title = l10n_util::GetNSString(
@@ -171,6 +183,28 @@ void SetObjectIntoStorageForKey(NSString* key, NSObject* data) {
 }
 
 void LogOpenHTTPURLFromExternalURL() {
+  if (!IsChromeLikelyDefaultBrowser()) {
+    IOSDefaultBrowserPromoSurface last_surface =
+        DefaultBrowserPromoLastActionSurface();
+    if (last_surface != IOSDefaultBrowserPromoSurface::kNone) {
+      base::UmaHistogramEnumeration(
+          "IOS.DefaultBrowser.Conversion.PromoSurface", last_surface);
+      GetApplicationContext()->GetLocalState()->ClearPref(
+          prefs::kIosDefaultBrowserPromoLastActionSurface);
+    }
+  }
+
+  base::UmaHistogramBoolean("IOS.DefaultBrowser.Conversion7",
+                            !IsChromeLikelyDefaultBrowserXDays(7));
+  base::UmaHistogramBoolean("IOS.DefaultBrowser.Conversion14",
+                            !IsChromeLikelyDefaultBrowserXDays(14));
+  base::UmaHistogramBoolean("IOS.DefaultBrowser.Conversion28",
+                            !IsChromeLikelyDefaultBrowserXDays(28));
+  base::UmaHistogramBoolean("IOS.DefaultBrowser.Conversion90",
+                            !IsChromeLikelyDefaultBrowserXDays(90));
+  base::UmaHistogramBoolean("IOS.DefaultBrowser.Conversion180",
+                            !IsChromeLikelyDefaultBrowserXDays(180));
+
   SetObjectIntoStorageForKey(kLastHTTPURLOpenTime, [NSDate date]);
 }
 
@@ -180,6 +214,18 @@ void LogToFETDefaultBrowserPromoShown(feature_engagement::Tracker* tracker) {
     return;
   }
   tracker->NotifyEvent(feature_engagement::events::kDefaultBrowserPromoShown);
+}
+
+void LogDefaultBrowserPromoOpportunityForGemini(
+    feature_engagement::Tracker* tracker) {
+  if (!tracker) {
+    return;
+  }
+  tracker->NotifyEvent(feature_engagement::events::kGeminiSessionTerminated);
+  bool would_trigger = tracker->WouldTriggerHelpUI(
+      feature_engagement::kIPHiOSPromoContextualDefaultBrowserGeminiFeature);
+  base::UmaHistogramBoolean(
+      "IOS.DefaultBrowserContextualPromo.Gemini.Opportunity", would_trigger);
 }
 
 bool HasDefaultBrowserBlueDotDisplayTimestamp() {
@@ -241,6 +287,110 @@ bool ShouldTriggerDefaultBrowserHighlightFeature(
   }
 
   return false;
+}
+
+// Struct used to count active overflow menu default browser promos across
+// windows (as the FET does not support showing multiple promos for the same
+// FET feature at the same time in a multi-window setup).
+struct DefaultBrowserPromoOverflowMenuActiveData
+    : public base::SupportsUserData::Data {
+  // The number of active menus across all windows.
+  int active_menus = 0;
+
+  // Key to use for this type in SupportsUserData.
+  static constexpr char key[] = "DefaultBrowserPromoOverflowMenuActiveData";
+};
+
+bool ShouldShowDefaultBrowserPromoOverflowMenu(
+    DefaultBrowserPromoOverflowMenuType type,
+    feature_engagement::Tracker* tracker) {
+  if (!tracker) {
+    return false;
+  }
+
+  if (IsChromeLikelyDefaultBrowser()) {
+    return false;
+  }
+
+  if (!IsDefaultBrowserPromoOverflowMenuEnabled() ||
+      CurrentDefaultBrowserPromoOverflowMenuType() != type) {
+    return false;
+  }
+
+  DefaultBrowserPromoOverflowMenuActiveData* data =
+      static_cast<DefaultBrowserPromoOverflowMenuActiveData*>(
+          tracker->GetUserData(DefaultBrowserPromoOverflowMenuActiveData::key));
+
+  // If the promo is already active in another window, increment the refcount
+  // without re-querying the FET.
+  if (data && data->active_menus > 0) {
+    data->active_menus++;
+    return true;
+  }
+
+  const base::Feature* feature = nullptr;
+  switch (type) {
+    case DefaultBrowserPromoOverflowMenuType::kDestination:
+      feature = &feature_engagement::
+                    kIPHiOSPromoOverflowMenuDestinationDefaultBrowserFeature;
+      break;
+    case DefaultBrowserPromoOverflowMenuType::kShortcuts:
+      feature = &feature_engagement::
+                    kIPHiOSPromoOverflowMenuShortcutsDefaultBrowserFeature;
+      break;
+  }
+
+  if (!tracker->ShouldTriggerHelpUI(*feature)) {
+    return false;
+  }
+
+  // Create user data struct on first trigger.
+  if (!data) {
+    auto new_data =
+        std::make_unique<DefaultBrowserPromoOverflowMenuActiveData>();
+    data = new_data.get();
+    tracker->SetUserData(DefaultBrowserPromoOverflowMenuActiveData::key,
+                         std::move(new_data));
+  }
+
+  data->active_menus++;
+  return true;
+}
+
+void DismissDefaultBrowserPromoOverflowMenu(
+    feature_engagement::Tracker* tracker) {
+  if (!tracker) {
+    return;
+  }
+
+  DefaultBrowserPromoOverflowMenuActiveData* data =
+      static_cast<DefaultBrowserPromoOverflowMenuActiveData*>(
+          tracker->GetUserData(DefaultBrowserPromoOverflowMenuActiveData::key));
+
+  CHECK(IsDefaultBrowserPromoOverflowMenuEnabled());
+  const base::Feature* feature = nullptr;
+  switch (CurrentDefaultBrowserPromoOverflowMenuType()) {
+    case DefaultBrowserPromoOverflowMenuType::kDestination:
+      feature = &feature_engagement::
+                    kIPHiOSPromoOverflowMenuDestinationDefaultBrowserFeature;
+      break;
+    case DefaultBrowserPromoOverflowMenuType::kShortcuts:
+      feature = &feature_engagement::
+                    kIPHiOSPromoOverflowMenuShortcutsDefaultBrowserFeature;
+      break;
+  }
+
+  if (data) {
+    data->active_menus--;
+    if (data->active_menus <= 0) {
+      if (feature) {
+        tracker->Dismissed(*feature);
+      }
+      tracker->RemoveUserData(DefaultBrowserPromoOverflowMenuActiveData::key);
+    }
+  } else if (feature) {
+    tracker->Dismissed(*feature);
+  }
 }
 
 NSInteger UserInteractionWithNonModalPromoCount() {
@@ -324,6 +474,66 @@ void LogDefaultBrowserPromoHistogramForAction(
   }
 }
 
+void LogDefaultBrowserFullscreenPromoOpportunity(std::optional<float> score) {
+  IOSDefaultBrowserVideoPromoOpportunity opportunity_bucket;
+  int opportunity_score = 0;
+
+  if (score.has_value()) {
+    float score_value = score.value();
+    opportunity_score = base::ClampRound(score_value * 100.0f);
+
+    if (score_value < 0.1f) {
+      opportunity_bucket =
+          IOSDefaultBrowserVideoPromoOpportunity::kScoreUnder0_1;
+    } else if (score_value < 0.2f) {
+      opportunity_bucket =
+          IOSDefaultBrowserVideoPromoOpportunity::kScore0_1To0_2;
+    } else if (score_value < 0.4f) {
+      opportunity_bucket =
+          IOSDefaultBrowserVideoPromoOpportunity::kScore0_2To0_4;
+    } else if (score_value < 0.6f) {
+      opportunity_bucket =
+          IOSDefaultBrowserVideoPromoOpportunity::kScore0_4To0_6;
+    } else {
+      opportunity_bucket =
+          IOSDefaultBrowserVideoPromoOpportunity::kScore0_6AndAbove;
+    }
+  } else {
+    // Fail-open: on model error, default to top bucket so promo can show.
+    opportunity_bucket =
+        IOSDefaultBrowserVideoPromoOpportunity::kScore0_6AndAbove;
+    opportunity_score = 100;
+  }
+
+  PrefService* local_state = GetApplicationContext()->GetLocalState();
+  if (local_state) {
+    int current_cohort =
+        segmentation_platform::features::
+            kDefaultBrowserPromoPropensityModelExperimentCohort.Get();
+    int logged_cohort = local_state->GetInteger(
+        prefs::kIosDefaultBrowserPromoOpportunityFirstTimeCohort);
+    // Log first-time opportunity metrics once per client per experiment cohort.
+    if (logged_cohort != current_cohort) {
+      base::UmaHistogramEnumeration(
+          "IOS.DefaultBrowserVideoPromo.Fullscreen.Opportunity.FirstTime",
+          opportunity_bucket);
+      base::UmaHistogramPercentage(
+          "IOS.DefaultBrowserVideoPromo.Fullscreen.OpportunityScore.FirstTime",
+          opportunity_score);
+      local_state->SetInteger(
+          prefs::kIosDefaultBrowserPromoOpportunityFirstTimeCohort,
+          current_cohort);
+    }
+  }
+
+  base::UmaHistogramEnumeration(
+      "IOS.DefaultBrowserVideoPromo.Fullscreen.Opportunity.Regular",
+      opportunity_bucket);
+  base::UmaHistogramPercentage(
+      "IOS.DefaultBrowserVideoPromo.Fullscreen.OpportunityScore.Regular",
+      opportunity_score);
+}
+
 const base::Feature& GetFeatureForPromoReason(
     NonModalDefaultBrowserPromoReason promo_reason) {
   switch (promo_reason) {
@@ -371,20 +581,46 @@ bool IsNonModalPromoMigrationDone() {
   return number.boolValue;
 }
 
-void RecordDefaultBrowserPromoLastAction(IOSDefaultBrowserPromoAction action) {
-  GetApplicationContext()->GetLocalState()->SetInteger(
-      prefs::kIosDefaultBrowserPromoLastAction, static_cast<int>(action));
+void RecordDefaultBrowserPromoLastAction(
+    IOSDefaultBrowserPromoAction action,
+    IOSDefaultBrowserPromoSurface surface) {
+  PrefService* local_state = GetApplicationContext()->GetLocalState();
+  local_state->SetInteger(prefs::kIosDefaultBrowserPromoLastAction,
+                          static_cast<int>(action));
+  if (action == IOSDefaultBrowserPromoAction::kActionButton &&
+      local_state->FindPreference(
+          prefs::kIosDefaultBrowserPromoLastActionSurface)) {
+    local_state->SetInteger(prefs::kIosDefaultBrowserPromoLastActionSurface,
+                            static_cast<int>(surface));
+  }
 }
 
 std::optional<IOSDefaultBrowserPromoAction> DefaultBrowserPromoLastAction() {
+  if (!GetApplicationContext() || !GetApplicationContext()->GetLocalState()) {
+    return std::nullopt;
+  }
   const PrefService::Preference* last_action =
       GetApplicationContext()->GetLocalState()->FindPreference(
           prefs::kIosDefaultBrowserPromoLastAction);
-  if (last_action->IsDefaultValue()) {
+  if (!last_action || last_action->IsDefaultValue()) {
     return std::nullopt;
   }
   int last_action_int = last_action->GetValue()->GetInt();
   return static_cast<IOSDefaultBrowserPromoAction>(last_action_int);
+}
+
+IOSDefaultBrowserPromoSurface DefaultBrowserPromoLastActionSurface() {
+  if (!GetApplicationContext() || !GetApplicationContext()->GetLocalState()) {
+    return IOSDefaultBrowserPromoSurface::kNone;
+  }
+  const PrefService::Preference* last_surface =
+      GetApplicationContext()->GetLocalState()->FindPreference(
+          prefs::kIosDefaultBrowserPromoLastActionSurface);
+  if (!last_surface || last_surface->IsDefaultValue()) {
+    return IOSDefaultBrowserPromoSurface::kNone;
+  }
+  return static_cast<IOSDefaultBrowserPromoSurface>(
+      last_surface->GetValue()->GetInt());
 }
 
 NSDate* LastTimeUserInteractedWithNonModalPromo() {
@@ -414,4 +650,27 @@ void OpenIOSDefaultBrowserSettingsPage(
     ui_application_to_use = [UIApplication sharedApplication];
   }
   [ui_application_to_use openURL:url options:{} completionHandler:nil];
+}
+
+void MaybeShowContextualDefaultBrowserPromo(
+    feature_engagement::Tracker* tracker,
+    id<ContextualDefaultBrowserPromoCommands> promo_handler) {
+  if (!tracker || !promo_handler) {
+    return;
+  }
+
+  if (IsChromeLikelyDefaultBrowser()) {
+    return;
+  }
+
+  if (!IsIOSDefaultBrowserContextualPromoEnabled()) {
+    return;
+  }
+
+  if (tracker->ShouldTriggerHelpUI(
+          feature_engagement::
+              kIPHiOSPromoContextualDefaultBrowserGeminiFeature)) {
+    [promo_handler showContextualDefaultBrowserPromoWithType:
+                       ContextualDefaultBrowserPromoType::kGemini];
+  }
 }

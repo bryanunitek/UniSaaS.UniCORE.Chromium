@@ -5,10 +5,13 @@
 #ifndef COMPONENTS_UPDATE_CLIENT_PROTOCOL_PARSER_H_
 #define COMPONENTS_UPDATE_CLIENT_PROTOCOL_PARSER_H_
 
-#include <cstdint>
+#include <stdint.h>
+
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/version.h"
@@ -123,7 +126,7 @@ class ProtocolParser {
   ProtocolParser();
 
   // Appends parse error details to |errors_| string.
-  void ParseError(const char* details, ...);
+  void ParseError(std::string_view details);
 
  private:
   virtual bool DoParse(std::string_view response, Results* results) = 0;

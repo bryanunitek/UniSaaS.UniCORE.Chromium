@@ -26,7 +26,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/mac/app_mode_common.h"
 #include "chrome/common/mac/app_shim.mojom.h"
@@ -43,7 +42,6 @@
 #include "mojo/public/cpp/platform/named_platform_channel.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/handle.h"
-#include "mojo/public/cpp/system/isolated_connection.h"
 #include "third_party/ipcz/include/ipcz/ipcz.h"
 
 // A test version of the AppShimController mojo client in chrome_main_app_mode.
@@ -136,7 +134,6 @@ class TestShimClient : public chrome::mojom::AppShim {
     return mojo::ScopedMessagePipeHandle(mojo::MessagePipeHandle(portals[1]));
   }
 
-  mojo::IsolatedConnection mojo_connection_;
   mojo::ScopedHandle secondary_ipcz_broker_;
   mojo::Receiver<chrome::mojom::AppShim> shim_receiver_{this};
   mojo::Remote<chrome::mojom::AppShimHost> host_;
@@ -154,32 +151,26 @@ TestShimClient::TestShimClient() {
        base::HexEncode(crypto::hash::Sha256(user_data_dir.value()))});
   mojo::PlatformChannelEndpoint endpoint = ConnectToBrowser(name_fragment);
 
-  mojo::ScopedMessagePipeHandle message_pipe;
-  if (mojo::core::IsMojoIpczEnabled()) {
-    // With MojoIpcz, we need to set up a secondary node in order to simulate an
-    // external shim connection.
-    message_pipe = ConnectIcpzToShim(std::move(endpoint));
+  // We need to set up a secondary node in order to simulate an external shim
+  // connection.
+  mojo::ScopedMessagePipeHandle message_pipe =
+      ConnectIcpzToShim(std::move(endpoint));
 
-    // It's important for the AppShimHost interface portals to be created on the
-    // secondary node too, since the fake shim passes the receiver endpoint back
-    // to the host in a reply over the primordial AppShim interface connecting
-    // the two nodes.
-    const IpczAPI& ipcz = mojo::core::GetIpczAPIForMojo();
-    IpczHandle remote, receiver;
-    const IpczResult result =
-        ipcz.OpenPortals(secondary_ipcz_broker_->value(), IPCZ_NO_FLAGS,
-                         nullptr, &remote, &receiver);
-    CHECK_EQ(IPCZ_RESULT_OK, result);
-    host_.Bind(mojo::PendingRemote<chrome::mojom::AppShimHost>(
-        mojo::ScopedMessagePipeHandle(mojo::MessagePipeHandle(remote)), 0));
-    host_receiver_ = mojo::PendingReceiver<chrome::mojom::AppShimHost>(
-        mojo::ScopedMessagePipeHandle(mojo::MessagePipeHandle(receiver)));
-  } else {
-    // Non-ipcz Mojo supports processes establishing IsolatedConnections to
-    // themselves.
-    message_pipe = mojo_connection_.Connect(std::move(endpoint));
-    host_receiver_ = host_.BindNewPipeAndPassReceiver();
-  }
+  // It's important for the AppShimHost interface portals to be created on the
+  // secondary node too, since the fake shim passes the receiver endpoint back
+  // to the host in a reply over the primordial AppShim interface connecting
+  // the two nodes.
+  const IpczAPI& ipcz = mojo::core::GetIpczAPIForMojo();
+  IpczHandle remote, receiver;
+  const IpczResult result =
+      ipcz.OpenPortals(secondary_ipcz_broker_->value(), IPCZ_NO_FLAGS, nullptr,
+                       &remote, &receiver);
+  CHECK_EQ(IPCZ_RESULT_OK, result);
+  host_.Bind(mojo::PendingRemote<chrome::mojom::AppShimHost>(
+      mojo::ScopedMessagePipeHandle(mojo::MessagePipeHandle(remote)), 0));
+  host_receiver_ = mojo::PendingReceiver<chrome::mojom::AppShimHost>(
+      mojo::ScopedMessagePipeHandle(mojo::MessagePipeHandle(receiver)));
+
   host_bootstrap_ = mojo::Remote<chrome::mojom::AppShimHostBootstrap>(
       mojo::PendingRemote<chrome::mojom::AppShimHostBootstrap>(
           std::move(message_pipe), 0));
@@ -266,7 +257,7 @@ void AppShimListenerBrowserTest::OnShimProcessConnected(
 IN_PROC_BROWSER_TEST_F(AppShimListenerBrowserTest, LaunchNormal) {
   test_client_ = std::make_unique<TestShimClient>();
   auto app_shim_info = chrome::mojom::AppShimInfo::New();
-  app_shim_info->profile_path = browser()->profile()->GetPath();
+  app_shim_info->profile_path = browser()->GetProfile()->GetPath();
   app_shim_info->app_id = "test_app";
   app_shim_info->app_url = GURL("https://example.com");
   app_shim_info->launch_type = chrome::mojom::AppShimLaunchType::kNormal;
@@ -286,7 +277,7 @@ IN_PROC_BROWSER_TEST_F(AppShimListenerBrowserTest, LaunchNormal) {
 IN_PROC_BROWSER_TEST_F(AppShimListenerBrowserTest, LaunchRegisterOnly) {
   test_client_ = std::make_unique<TestShimClient>();
   auto app_shim_info = chrome::mojom::AppShimInfo::New();
-  app_shim_info->profile_path = browser()->profile()->GetPath();
+  app_shim_info->profile_path = browser()->GetProfile()->GetPath();
   app_shim_info->app_id = "test_app";
   app_shim_info->app_url = GURL("https://example.com");
   app_shim_info->launch_type = chrome::mojom::AppShimLaunchType::kRegisterOnly;
@@ -360,6 +351,7 @@ IN_PROC_BROWSER_TEST_F(AppShimListenerBrowserTestSymlink,
   EXPECT_TRUE(base::ReadSymbolicLink(version_path_, &encoded_config));
   auto config =
       app_mode::ChromeConnectionConfig::DecodeFromPath(encoded_config);
-  EXPECT_EQ(version_info::GetVersionNumber(), config.framework_version);
-  EXPECT_EQ(mojo::core::IsMojoIpczEnabled(), config.is_mojo_ipcz_enabled);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(version_info::GetVersionNumber(), config->framework_version);
+  EXPECT_TRUE(config->is_mojo_ipcz_enabled);
 }

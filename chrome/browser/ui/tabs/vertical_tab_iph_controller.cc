@@ -35,9 +35,11 @@ VerticalTabIphController::VerticalTabIphController(
     : browser_window_interface_(interface),
       scoped_data_(interface->GetUnownedUserDataHost(), *this) {
   auto* tab_strip_model = browser_window_interface_->GetTabStripModel();
-  auto* profile = Profile::FromBrowserContext(tab_strip_model->profile());
-  if (!profile->GetPrefs()->GetBoolean(prefs::kVerticalTabsEnabledFirstTime)) {
-    browser_window_interface_->GetTabStripModel()->AddObserver(this);
+  auto* profile_prefs =
+      Profile::FromBrowserContext(tab_strip_model->profile())->GetPrefs();
+  if (!profile_prefs->GetBoolean(prefs::kVerticalTabsEnabledFirstTime) &&
+      !profile_prefs->GetBoolean(prefs::kVerticalTabsEnabled)) {
+    tab_strip_model->AddObserver(this);
   }
 }
 
@@ -56,12 +58,15 @@ void VerticalTabIphController::OnTabStripModelChanged(
 
 void VerticalTabIphController::MaybeShowPromo() {
   auto* tab_strip_model = browser_window_interface_->GetTabStripModel();
-  if (tab_strip_model->count() <= kMinTabsForVerticalTabPromo) {
+  auto* profile_prefs =
+      Profile::FromBrowserContext(tab_strip_model->profile())->GetPrefs();
+  if (profile_prefs->GetBoolean(prefs::kVerticalTabsEnabled) ||
+      profile_prefs->GetBoolean(prefs::kVerticalTabsEnabledFirstTime)) {
+    tab_strip_model->RemoveObserver(this);
     return;
   }
 
-  auto* profile = Profile::FromBrowserContext(tab_strip_model->profile());
-  if (profile->GetPrefs()->GetBoolean(prefs::kVerticalTabsEnabledFirstTime)) {
+  if (tab_strip_model->count() <= kMinTabsForVerticalTabPromo) {
     return;
   }
 
@@ -78,8 +83,13 @@ void VerticalTabIphController::MaybeShowPromo() {
 
   // If the unpinned tab is shrunk significantly compared to its standard
   // width show the IPH.
-  views::View* tab =
-      browser_view->tab_strip_view()->GetTabAnchorViewAt(first_unpinned_index);
+  tabs::TabInterface* first_unpinned_tab =
+      tab_strip_model->GetTabAtIndex(first_unpinned_index);
+  if (!first_unpinned_tab) {
+    return;
+  }
+  views::View* tab = browser_view->tab_strip_view()->GetTabAnchorView(
+      first_unpinned_tab->GetHandle());
   if (IsTabShrunk(tab)) {
     BrowserUserEducationInterface::From(browser_window_interface_)
         ->MaybeShowFeaturePromo(

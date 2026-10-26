@@ -10,6 +10,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "components/safe_browsing/core/browser/db/util.h"
+#include "components/safe_browsing/core/common/proto/safebrowsingv5.pb.h"
 
 namespace safe_browsing {
 class ListIdentifier;
@@ -19,23 +20,30 @@ class TestV4GetHashProtocolManagerFactory;
 
 class InsertingDatabaseFactory;
 class GURL;
+class Profile;
 
-// TODO(crbug.com/362791941): Handle v4 references.
 // This class wraps a couple of safe browsing utilities that enable updating
 // underlying SafeBrowsing lists to match URLs.
 class TestSafeBrowsingDatabaseHelper {
  public:
   // Use this constructor for more in-depth customization of the database
-  // helper. In particular, you can choose to:
-  // 1. Send a nullptr protocol manager factory, so that hash requests are not
-  //    mocked. Callers can consider mocking responses at the HTTP layer instead
-  //    using StartRedirectingV4RequestsForTesting in
-  //    v4_embedded_test_server_util.h.
+  // helper. In particular:
+  // 1. Full-hash request mocking:
+  //    - In V4: passing a nullptr `v4_get_hash_factory` prevents installing
+  //      `TestV4GetHashProtocolManagerFactory`, allowing the real V4 protocol
+  //      manager to run and mock responses at the HTTP layer via
+  //      `StartRedirectingV4RequestsForTesting`.
+  //    - In V5: the real production protocol manager always runs. For
+  //      in-memory cache mocking, use `AddFullHashToDbAndFullHashCache`; for
+  //      HTTP-layer mocking, use
+  //      `StartRedirectingV5SearchHashesRequestsForTesting`.
+  //      `v4_get_hash_factory` only applies to V4.
   //
-  // 2. Send a vector of additional lists to insert into the store map when
-  //    initializing the test database. This allows lists which need chrome
-  //    branding to function in non chrome branded tests (for developer
-  //    ergonomics).
+  // 2. Additional lists:
+  //    - Send a vector of additional `lists_to_insert` into the store map when
+  //      initializing the test database. This allows lists which need chrome
+  //      branding to function in non chrome branded tests (for developer
+  //      ergonomics).
   TestSafeBrowsingDatabaseHelper(
       std::unique_ptr<safe_browsing::TestV4GetHashProtocolManagerFactory>
           v4_get_hash_factory,
@@ -50,11 +58,14 @@ class TestSafeBrowsingDatabaseHelper {
   ~TestSafeBrowsingDatabaseHelper();
 
   // Only compatible with the kMock policy. Marks the hash prefix for the URL as
-  // bad in the local database and inserts it  into the full hash cache.
+  // bad in the local database and inserts it into the full hash cache.
   void AddFullHashToDbAndFullHashCache(
       const GURL& bad_url,
       const safe_browsing::ListIdentifier& list_id,
-      const safe_browsing::ThreatMetadata& threat_metadata);
+      const safe_browsing::ThreatMetadata& threat_metadata,
+      safe_browsing::V5::ThreatType threat_type,
+      bool is_warn_only,
+      Profile* profile);
 
   // Only marks the prefix as bad in the local database. Does not cache any full
   // hash response.

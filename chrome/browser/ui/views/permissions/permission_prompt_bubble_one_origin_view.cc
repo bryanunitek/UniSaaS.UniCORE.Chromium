@@ -7,30 +7,20 @@
 #include <algorithm>
 #include <memory>
 
-#include "base/check_is_test.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_ui_util.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/url_identity.h"
 #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_widget_sublevel.h"
-#include "chrome/browser/ui/views/title_origin_label.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
-#include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/media_effects/media_device_info.h"
-#include "components/permissions/features.h"
 #include "components/permissions/permission_request.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
@@ -38,34 +28,23 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/elide_url.h"
 #include "content/public/browser/web_contents.h"
-#include "extensions/common/constants.h"
-#include "third_party/blink/public/common/features.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
-#include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/views/bubble/bubble_frame_view.h"
-#include "ui/views/controls/button/image_button.h"
-#include "ui/views/controls/button/image_button_factory.h"
-#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/style/platform_style.h"
 #include "ui/views/view_class_properties.h"
-#include "ui/views/views_features.h"
 #include "ui/views/widget/widget.h"
 
 namespace {
 
 std::u16string GetAccessibleWindowTitleInternal(
     const std::u16string display_name,
-    std::vector<base::SafeRef<permissions::PermissionRequest>>
-        visible_requests) {
+    std::vector<permissions::PermissionRequest*> visible_requests) {
   // Generate one of:
   //   $origin wants to: $permission
   //   $origin wants to: $permission and $permission
@@ -79,7 +58,7 @@ std::u16string GetAccessibleWindowTitleInternal(
   // format of title, to provide for accurate i18n. See
   // https://crbug.com/41143728 for more details.
 
-  DCHECK(!visible_requests.empty());
+  CHECK(!visible_requests.empty(), base::NotFatalUntil::M162);
 
   if (visible_requests.size() == 1) {
     return l10n_util::GetStringFUTF16(
@@ -107,12 +86,12 @@ bool ShouldShowRequest(permissions::PermissionPrompt::Delegate& delegate,
   return true;
 }
 
-std::vector<base::SafeRef<permissions::PermissionRequest>> GetVisibleRequests(
+std::vector<permissions::PermissionRequest*> GetVisibleRequests(
     permissions::PermissionPrompt::Delegate& delegate) {
-  std::vector<base::SafeRef<permissions::PermissionRequest>> visible_requests;
+  std::vector<permissions::PermissionRequest*> visible_requests;
   for (const auto& request : delegate.Requests()) {
     if (ShouldShowRequest(delegate, request->request_type())) {
-      visible_requests.push_back(request->GetSafeRef());
+      visible_requests.push_back(request.get());
     }
   }
   return visible_requests;
@@ -143,9 +122,7 @@ PermissionPromptBubbleOneOriginView::PermissionPromptBubbleOneOriginView(
     base::WeakPtr<permissions::PermissionPrompt::Delegate> delegate,
     PermissionPromptStyle prompt_style)
     : PermissionPromptBubbleBaseView(web_contents, delegate, prompt_style) {
-  std::vector<std::string> requested_audio_capture_device_ids;
-  std::vector<std::string> requested_video_capture_device_ids;
-  std::vector<base::SafeRef<permissions::PermissionRequest>> visible_requests =
+  std::vector<permissions::PermissionRequest*> visible_requests =
       GetVisibleRequests(*delegate.get());
 
   SetAccessibleTitle(GetAccessibleWindowTitleInternal(
@@ -170,22 +147,9 @@ PermissionPromptBubbleOneOriginView::PermissionPromptBubbleOneOriginView(
 
   for (std::size_t i = 0; i < visible_requests.size(); i++) {
     AddRequestLine(visible_requests[i], i);
-    if (visible_requests[i]->request_type() ==
-            permissions::RequestType::kCameraStream ||
-        visible_requests[i]->request_type() ==
-            permissions::RequestType::kCameraPanTiltZoom) {
-      requested_video_capture_device_ids =
-          visible_requests[i]->GetRequestedVideoCaptureDeviceIds();
-    } else if (visible_requests[i]->request_type() ==
-               permissions::RequestType::kMicStream) {
-      requested_audio_capture_device_ids =
-          visible_requests[i]->GetRequestedAudioCaptureDeviceIds();
-    }
   }
 
-  MaybeAddMediaPreview(requested_audio_capture_device_ids,
-                       requested_video_capture_device_ids,
-                       visible_requests.size());
+  MaybeAddMediaPreview(visible_requests.size());
 }
 
 PermissionPromptBubbleOneOriginView::~PermissionPromptBubbleOneOriginView() =
@@ -196,16 +160,14 @@ void PermissionPromptBubbleOneOriginView::RunButtonCallback(int button_id) {
   auto button = GetPermissionDialogButton(button_id);
   if (button == PermissionDialogButton::kAccept ||
       button == PermissionDialogButton::kAcceptOnce) {
-    if (media_previews_.has_value()) {
-      media_previews_->UpdateDevicePreferenceRanking();
-    }
+    UpdateMediaDevicePreferenceRanking();
   }
 #endif
   PermissionPromptBubbleBaseView::RunButtonCallback(button_id);
 }
 
 void PermissionPromptBubbleOneOriginView::AddRequestLine(
-    const base::SafeRef<permissions::PermissionRequest>& request,
+    const permissions::PermissionRequest* request,
     std::size_t index) {
   ChromeLayoutProvider* provider = ChromeLayoutProvider::Get();
 
@@ -251,25 +213,14 @@ void PermissionPromptBubbleOneOriginView::AddRequestLine(
   }
 }
 
-void PermissionPromptBubbleOneOriginView::MaybeAddMediaPreview(
-    std::vector<std::string> requested_audio_capture_device_ids,
-    std::vector<std::string> requested_video_capture_device_ids,
-    size_t index) {
+void PermissionPromptBubbleOneOriginView::MaybeAddMediaPreview(size_t index) {
 #if !BUILDFLAG(IS_CHROMEOS)
-  // Unit tests call this without initializing the host window, but this should
-  // not happen in production code.
-  if (!GetNativeWindow()) {
-    CHECK_IS_TEST();
-    return;
-  }
-
-  if (requested_audio_capture_device_ids.empty() &&
-      requested_video_capture_device_ids.empty()) {
-    return;
-  }
-
   if (!camera_permission_label_ && !mic_permission_label_ &&
       !ptz_camera_permission_label_) {
+    return;
+  }
+
+  if (!PermissionPromptBaseView::MaybeAddMediaPreview(index)) {
     return;
   }
 
@@ -283,11 +234,6 @@ void PermissionPromptBubbleOneOriginView::MaybeAddMediaPreview(
     // Initialize mic label with the current number of cached audio devices.
     OnAudioDevicesChanged(cached_device_info->GetAudioDeviceInfos());
   }
-
-  media_previews_.emplace(
-      Profile::FromBrowserContext(web_contents()->GetBrowserContext()), this,
-      index, requested_audio_capture_device_ids,
-      requested_video_capture_device_ids);
 #endif
 }
 

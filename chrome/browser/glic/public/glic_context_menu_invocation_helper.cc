@@ -4,6 +4,7 @@
 #include "chrome/browser/glic/public/glic_context_menu_invocation_helper.h"
 
 #include "base/containers/span.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
@@ -14,9 +15,18 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/context_menu_params.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/geometry/rect.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/glic/glic_selection_observer.h"
+#include "chrome/browser/glic/selection/selection_overlay_controller.h"
+#include "chrome/browser/ui/tabs/page_context_eligibility_helper.h"
+#endif
 
 namespace glic {
 
@@ -44,8 +54,20 @@ void GlicContextMenuInvocationHelper::HandleContextualMenuClick(
 
     std::u16string_view trimmed_selection =
         base::TrimWhitespace(selection_text, base::TRIM_ALL);
+    bool is_page_eligible = false;
     if (base::FeatureList::IsEnabled(features::kGlicTextSelectionContextMenu) &&
         !trimmed_selection.empty()) {
+#if !BUILDFLAG(IS_ANDROID)
+      tabs::PageContextEligibilityHelper* helper =
+          tab ? tabs::PageContextEligibilityHelper::From(tab) : nullptr;
+      is_page_eligible =
+          helper &&
+          helper->IsPageContextEligible() ==
+              optimization_guide::PageContextEligibilityStatus::kEligible;
+#endif
+    }
+
+    if (is_page_eligible) {
       auto context = glic::mojom::AdditionalContext::New();
       context->source = glic::mojom::AdditionalContextSource::kTextSelection;
       context->tab_id = tab->GetHandle().raw_value();
@@ -61,9 +83,29 @@ void GlicContextMenuInvocationHelper::HandleContextualMenuClick(
 
       options.additional_context = glic::AdditionalTabContext(
           std::move(context), rfh_id, glic::PolicyCheck::kClipboard);
-      options.fre_override = glic::mojom::FreOverride::kTrustFirstClick;
+      options.fre_override =
+          features::kGlicTextSelectionContextMenuMessageFirstFre.Get()
+              ? glic::mojom::FreOverride::kTrustFirstInline
+              : glic::mojom::FreOverride::kTrustFirstClick;
 
-      glic_service->Invoke(std::move(options));
+#if !BUILDFLAG(IS_ANDROID)
+      if (auto* observer = GlicSelectionObserver::From(tab)) {
+        observer->UpdateSelectionStateFromContextMenu(
+            std::u16string(trimmed_selection));
+      }
+#endif
+
+      if (features::kGlicTextSelectionContextMenuAutoSubmit.Get()) {
+        // The selection itself is sent as additional context, so the prompt
+        // only provides the accompanying user message.
+        options.prompts.push_back(l10n_util::GetStringUTF8(
+            IDS_GLIC_SELECTION_AUTO_SEND_PROMPT_TELL_ME));
+        glic_service->InvokeWithAutoSubmit(
+            glic::InvokeWithAutoSubmitPasskeyProvider::GetPassKey(),
+            std::move(options));
+      } else {
+        glic_service->Invoke(std::move(options));
+      }
       return;
     }
 
@@ -83,6 +125,52 @@ void GlicContextMenuInvocationHelper::HandleContextualMenuClick(
       glic_service->Invoke(std::move(options));
     }
   }
+}
+
+// static
+void GlicContextMenuInvocationHelper::HandleSmartSuggestionClick(
+    content::RenderFrameHost& frame,
+    const content::ContextMenuParams& params) {
+#if !BUILDFLAG(IS_ANDROID)
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(&frame);
+  if (!web_contents ||
+      !GlicEnabling::IsEnabledForProfile(
+          Profile::FromBrowserContext(web_contents->GetBrowserContext()))) {
+    return;
+  }
+  tabs::PageContextEligibilityHelper* helper =
+      tabs::PageContextEligibilityHelper::From(
+          tabs::TabInterface::MaybeGetFromContents(web_contents));
+  if (!helper ||
+      helper->IsPageContextEligible() !=
+          optimization_guide::PageContextEligibilityStatus::kEligible) {
+    return;
+  }
+  auto* controller =
+      SelectionOverlayController::FromTabWebContents(web_contents);
+  if (!controller) {
+    return;
+  }
+
+  // A text selection takes precedence over an image.
+  // Selections in editable fields are ignored.
+  // TODO(b/559202240): Pre-select the image when `params` targets an image.
+  gfx::Rect selection_bounds;
+  auto interaction_options = selection::InteractionOptions::New();
+  if (!params.is_editable &&
+      !base::TrimWhitespace(params.selection_text, base::TRIM_ALL).empty()) {
+    selection_bounds =
+        web_contents->GetTextSelectionBounds(&frame).value_or(gfx::Rect());
+    if (!selection_bounds.IsEmpty()) {
+      interaction_options->hide_handles = true;
+      interaction_options->disable_multi_select = true;
+      interaction_options->skip_intro_animation = true;
+    }
+  }
+  controller->ShowWithSelection(&frame, selection_bounds,
+                                std::move(interaction_options));
+#endif
 }
 
 }  // namespace glic

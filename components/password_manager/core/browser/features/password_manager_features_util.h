@@ -15,8 +15,8 @@ class SyncService;
 namespace password_manager::features_util {
 
 // Represents the state of the user wrt. sign-in and account-scoped storage.
-// Used for metrics. Always keep this enum in sync with the corresponding
-// histogram_suffixes in histograms.xml!
+// Used for metrics. Always keep this enum in sync with the UserSyncingType
+// variants in tools/metrics/histograms/metadata/password/histograms.xml!
 enum class PasswordAccountStorageUserState {
   // Signed-out user (so account storage is disabled).
   kSignedOutUser,
@@ -75,10 +75,6 @@ PasswordAccountStorageUsageLevel ComputePasswordAccountStorageUsageLevel(
     const syncer::SyncService* sync_service);
 
 #if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
-
-// Whether the user toggle for account storage is shown in settings.
-bool ShouldShowAccountStorageSettingToggle(
-    const syncer::SyncService* sync_service);
 
 // Password change HaTS product-specific data fields.
 //

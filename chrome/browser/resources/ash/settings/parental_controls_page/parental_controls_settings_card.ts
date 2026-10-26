@@ -21,7 +21,7 @@ import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {isChild} from '../common/load_time_booleans.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {routes} from '../router.js';
 
 import type {ParentalControlsBrowserProxy} from './parental_controls_browser_proxy.js';
@@ -66,8 +66,8 @@ export class ParentalControlsSettingsCardElement extends
   ]);
 
   private browserProxy_: ParentalControlsBrowserProxy;
-  private readonly isChild_: boolean;
-  private online_: boolean;
+  declare private readonly isChild_: boolean;
+  declare private online_: boolean;
 
   constructor() {
     super();

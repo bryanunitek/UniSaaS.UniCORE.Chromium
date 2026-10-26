@@ -7,10 +7,8 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/values.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_api.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_observer_chromeos.h"
-#include "chrome/browser/ui/chrome_pages.h"
 #include "content/public/browser/tts_controller.h"
 #include "content/public/browser/web_ui.h"
 #include "extensions/browser/event_router.h"
@@ -67,7 +65,7 @@ void SettingsWithTtsPreviewHandler::FireTtsPreviewEvent() {
 
 void SettingsWithTtsPreviewHandler::HandlePreviewTtsVoice(
     const base::ListValue& args) {
-  DCHECK_EQ(2U, args.size());
+  CHECK_EQ(2U, args.size(), base::NotFatalUntil::M162);
   const std::string& text = args[0].GetString();
   const std::string& voice_id = args[1].GetString();
 

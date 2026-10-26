@@ -9,8 +9,6 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
-#include "components/optimization_guide/core/optimization_guide_util.h"
 #include "content/public/browser/browser_context.h"
 
 namespace optimization_guide {
@@ -18,7 +16,7 @@ namespace optimization_guide {
 // static
 ModelValidatorKeyedServiceFactory*
 ModelValidatorKeyedServiceFactory::GetInstance() {
-  DCHECK(ShouldStartModelValidator());
+  CHECK(ShouldStartModelValidator(), base::NotFatalUntil::M161);
   static base::NoDestructor<ModelValidatorKeyedServiceFactory> factory;
   return factory.get();
 }
@@ -35,7 +33,7 @@ ModelValidatorKeyedServiceFactory::ModelValidatorKeyedServiceFactory()
               // Ash Internals.
               .WithAshInternals(ProfileSelection::kOwnInstance)
               .Build()) {
-  DCHECK(ShouldStartModelValidator());
+  CHECK(ShouldStartModelValidator(), base::NotFatalUntil::M161);
   DependsOn(OptimizationGuideKeyedServiceFactory::GetInstance());
   DependsOn(IdentityManagerFactory::GetInstance());
 }

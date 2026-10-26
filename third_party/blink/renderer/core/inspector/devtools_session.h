@@ -7,7 +7,9 @@
 
 #include <memory>
 #include <type_traits>
+
 #include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
@@ -16,6 +18,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/inspector/inspector_session_state.h"
 #include "third_party/blink/renderer/core/inspector/protocol/forward.h"
+#include "third_party/blink/renderer/core/inspector/v8_session_holder.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_associated_receiver.h"
@@ -34,6 +37,7 @@ class DocumentLoader;
 class InspectorAgent;
 class LocalFrame;
 class InspectorAccessibilityAgent;
+class InspectorAdsAgent;
 class InspectorAuditsAgent;
 class InspectorCSSAgent;
 class InspectorCacheStorageAgent;
@@ -75,7 +79,7 @@ class CORE_EXPORT DevToolsSession
   ~DevToolsSession() override;
 
   void ConnectToV8(v8_inspector::V8Inspector*, int context_group_id);
-  v8_inspector::V8InspectorSession* V8Session() { return v8_session_.get(); }
+  V8SessionHolder V8Session() { return v8_session_; }
 
   template <typename Agent, typename... Args>
   Agent* CreateAndAppend(Args&&... args) {
@@ -107,6 +111,8 @@ class CORE_EXPORT DevToolsSession
   InspectorInjectedScriptManager* InjectedScriptManager() const {
     return injected_script_manager_.Get();
   }
+
+  bool client_is_trusted() const { return client_is_trusted_; }
 
  private:
   class IOSession;
@@ -148,7 +154,8 @@ class CORE_EXPORT DevToolsSession
 
   template <typename T>
   bool IsDomainAvailableToUntrustedClient() {
-    return std::disjunction_v<std::is_same<T, InspectorAuditsAgent>,
+    return std::disjunction_v<std::is_same<T, InspectorAdsAgent>,
+                              std::is_same<T, InspectorAuditsAgent>,
                               std::is_same<T, InspectorCSSAgent>,
                               std::is_same<T, InspectorCacheStorageAgent>,
                               std::is_same<T, InspectorAccessibilityAgent>,
@@ -175,8 +182,8 @@ class CORE_EXPORT DevToolsSession
   // DevToolsSession is not tied to ExecutionContext
   HeapMojoAssociatedRemote<mojom::blink::DevToolsSessionHost> host_remote_{
       nullptr};
-  IOSession* io_session_;
-  std::shared_ptr<v8_inspector::V8InspectorSession> v8_session_;
+  raw_ptr<IOSession, UnprotectedInRelease | DanglingUntriaged> io_session_;
+  V8SessionHolder v8_session_;
   std::unique_ptr<protocol::UberDispatcher> inspector_backend_dispatcher_;
   InspectorSessionState session_state_;
   HeapVector<Member<InspectorAgent>> agents_;

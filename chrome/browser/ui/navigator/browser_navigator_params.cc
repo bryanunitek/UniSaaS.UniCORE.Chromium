@@ -13,6 +13,8 @@
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 using content::GlobalRequestID;
 using content::NavigationController;
@@ -36,7 +38,7 @@ NavigateParams::NavigateParams(Profile* a_profile,
                                const GURL& a_url,
                                ui::PageTransition a_transition)
     : url(a_url),
-      disposition(WindowOpenDisposition::NEW_FOREGROUND_TAB),
+      disposition(WindowOpenDisposition::kNewForegroundTab),
       transition(a_transition),
       window_action(WindowAction::kShowWindow),
       initiating_profile(a_profile) {}
@@ -48,7 +50,7 @@ NavigateParams::~NavigateParams() = default;
 void NavigateParams::FillNavigateParamsFromOpenURLParams(
     const content::OpenURLParams& params) {
 #if DCHECK_IS_ON()
-  DCHECK(params.Valid());
+  CHECK(params.Valid(), base::NotFatalUntil::M162);
 #endif
 
   this->initiator_frame_token = params.initiator_frame_token;
@@ -78,7 +80,6 @@ void NavigateParams::FillNavigateParamsFromOpenURLParams(
   this->user_gesture = params.user_gesture;
   this->blob_url_loader_factory = params.blob_url_loader_factory;
   this->href_translate = params.href_translate;
-  this->impression = params.impression;
   this->internal_scroll_to_text_fragment =
       params.internal_scroll_to_text_fragment;
   this->started_by_ad = params.started_by_ad;

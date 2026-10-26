@@ -8,6 +8,7 @@
 #include "base/time/time.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
+#include "ui/base/window_open_disposition.h"
 
 BookmarkStatsTabHelper::~BookmarkStatsTabHelper() = default;
 
@@ -44,7 +45,7 @@ void BookmarkStatsTabHelper::DidFinishNavigation(
 
 void BookmarkStatsTabHelper::DidFirstVisuallyNonEmptyPaint() {
   if (launch_action_ &&
-      tab_disposition_ == WindowOpenDisposition::CURRENT_TAB &&
+      tab_disposition_ == WindowOpenDisposition::kCurrentTab &&
       launch_action_->location == BookmarkLaunchLocation::kAttachedBar) {
     base::UmaHistogramTimes(
         "Bookmarks.AttachedBar.CurrentTab.TimeToFirstVisuallyNonEmptyPaint",

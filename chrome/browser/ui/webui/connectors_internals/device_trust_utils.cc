@@ -13,9 +13,9 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "components/enterprise/browser/controller/chrome_browser_cloud_management_controller.h"
-#include "components/enterprise/browser/device_trust/device_trust_key_manager.h"
+#include "components/enterprise/device_trust/core/device_trust_key_manager.h"
 #include "components/policy/proto/device_management_backend.pb.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/sign.h"
 
 using BPKUR = enterprise_management::BrowserPublicKeyUploadRequest;
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) ||

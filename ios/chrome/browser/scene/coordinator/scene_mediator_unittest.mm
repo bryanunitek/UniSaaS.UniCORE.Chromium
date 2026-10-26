@@ -18,7 +18,7 @@
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_element.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/test/test_fullscreen_controller.h"
 #import "ios/chrome/browser/scene/ui/scene_consumer.h"
-#import "ios/chrome/browser/shared/coordinator/scene/state/layout_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -107,7 +107,7 @@ TEST_F(SceneMediatorTest, TestTriggerNewIAPromo) {
   feature_list.InitAndEnableFeatures(
       {feature_engagement::kIPHiOSNewIAPromoFeature});
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({kChromeNextIa, kComposeboxIpad}, {});
+  scoped_feature_list.InitWithFeatures({kChromeNextIa}, {});
 
   mediator_.appBarPositionAtLaunch = AppBarPosition::kBottom;
 
@@ -148,7 +148,7 @@ TEST_F(SceneMediatorTest, TestTriggerNewIAPromo_PositionNone) {
   feature_list.InitAndEnableFeatures(
       {feature_engagement::kIPHiOSNewIAPromoFeature});
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({kChromeNextIa, kComposeboxIpad}, {});
+  scoped_feature_list.InitWithFeatures({kChromeNextIa}, {});
 
   // Create a mock tracker.
   auto mock_tracker = std::make_unique<feature_engagement::test::MockTracker>();

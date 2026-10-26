@@ -12,8 +12,8 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager.h"
-#include "chrome/browser/favicon/favicon_utils.h"
 #include "components/enterprise/data_controls/core/browser/dlp_histogram_helper.h"
+#include "components/favicon/content/content_favicon_util.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
@@ -26,8 +26,9 @@ namespace {
 
 gfx::ImageSkia GetWindowIcon(aura::Window* window) {
   gfx::ImageSkia* image = window->GetProperty(aura::client::kWindowIconKey);
-  if (!image)
+  if (!image) {
     image = window->GetProperty(aura::client::kAppIconKey);
+  }
   return image ? *image : gfx::ImageSkia();
 }
 
@@ -43,7 +44,8 @@ static constexpr base::TimeDelta kDefaultCacheTimeout = base::Days(7);
 
 DlpConfidentialContent::DlpConfidentialContent(
     content::WebContents* web_contents)
-    : icon(favicon::TabFaviconFromWebContents(web_contents).AsImageSkia()),
+    : icon(favicon::GetTabFaviconMaybeDesaturatedOnError(web_contents)
+               .AsImageSkia()),
       title(web_contents->GetTitle()),
       url(web_contents->GetLastCommittedURL().GetWithoutRef()) {}
 
@@ -87,8 +89,9 @@ DlpConfidentialContents::DlpConfidentialContents() = default;
 
 DlpConfidentialContents::DlpConfidentialContents(
     const std::vector<content::WebContents*>& web_contents) {
-  for (auto* content : web_contents)
+  for (auto* content : web_contents) {
     Add(content);
+  }
 }
 
 DlpConfidentialContents::DlpConfidentialContents(
@@ -171,9 +174,12 @@ void DlpConfidentialContentsCache::Cache(
       std::make_unique<Entry>(content, restriction, base::TimeTicks::Now());
   StartEvictionTimer(entry.get());
   entries_.push_front(std::move(entry));
-  if (entries_.size() > cache_size_limit_) {
+  const bool evicted = entries_.size() > cache_size_limit_;
+  if (evicted) {
     entries_.pop_back();
   }
+  data_controls::DlpBooleanHistogram(
+      data_controls::dlp::kConfidentialContentsCacheEvictedOnFull, evicted);
   data_controls::DlpCountHistogram(
       data_controls::dlp::kConfidentialContentsCount, entries_.size(),
       cache_size_limit_);
@@ -183,11 +189,11 @@ bool DlpConfidentialContentsCache::Contains(
     content::WebContents* web_contents,
     DlpRulesManager::Restriction restriction) const {
   const GURL url = web_contents->GetLastCommittedURL();
-  return std::ranges::any_of(
-      entries_, [&](const std::unique_ptr<Entry>& entry) {
-        return entry->restriction == restriction &&
-               entry->content.url.EqualsIgnoringRef(url);
-      });
+  return std::ranges::any_of(entries_,
+                             [&](const std::unique_ptr<Entry>& entry) {
+                               return entry->restriction == restriction &&
+                                      entry->content.url.EqualsIgnoringRef(url);
+                             });
 }
 
 bool DlpConfidentialContentsCache::Contains(

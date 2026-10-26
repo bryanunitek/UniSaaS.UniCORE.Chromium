@@ -18,6 +18,7 @@
 #include "base/ios/scoped_critical_action.h"
 #endif
 
+#include "base/auto_reset.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -30,8 +31,6 @@
 #include "components/lens/proto/server/lens_overlay_response.pb.h"
 #include "net/base/backoff_entry.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "third_party/lens_server_proto/added_inputs.pb.h"
-#include "third_party/lens_server_proto/aim_communication.pb.h"
 #include "third_party/lens_server_proto/lens_overlay_cluster_info.pb.h"
 #include "third_party/lens_server_proto/lens_overlay_request_id.pb.h"
 #include "third_party/lens_server_proto/lens_overlay_server.pb.h"
@@ -44,6 +43,8 @@ class TemplateURLService;
 
 namespace lens {
 enum class RequestIdUpdateMode;
+class AddedInputs;
+class ClientToAimMessage;
 class ImageData;
 class LensOverlayClientContext;
 }  // namespace lens
@@ -74,7 +75,7 @@ using InteractionRequestBodyProtoCreatedCallback =
 
 namespace contextual_search {
 class ComposeboxQueryControllerTest;
-}
+}  // namespace contextual_search
 
 // TODO(crbug.com/449970296): Rename this class.
 class ComposeboxQueryController
@@ -87,6 +88,34 @@ class ComposeboxQueryController
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/lens/histograms.xml:ComposeboxImageUploadType)
 
+  // LINT.IfChange(LensComposeboxClusterInfoStatus)
+  enum class ClusterInfoStatus {
+    kSuccess = 0,
+    kHttpError = 1,
+    kProtoParseError = 2,
+    kBackgrounded = 3,
+    kMaxRetriesReached = 4,
+    kMaxValue = kMaxRetriesReached,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/lens/enums.xml:LensComposeboxClusterInfoStatus)
+
+  // LINT.IfChange(ContextUploadTerminalStatus)
+  enum class ContextUploadTerminalStatus {
+    kSuccess = 0,
+    kHttpError = 1,
+    kNeverIssued = 2,
+    kResponseAfterFileInfoDestroyed = 3,
+    kPendingChunkerRetry = 4,
+    kInFlightAtTeardown = 5,
+    kCancelled = 6,
+    kMaxValue = kCancelled,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/lens/enums.xml:ContextUploadTerminalStatus)
+
+  using GetAuthHeadersCallback = base::RepeatingCallback<void(
+      std::optional<size_t>,
+      base::OnceCallback<void(std::vector<std::string>)>)>;
+
   ComposeboxQueryController(
       signin::IdentityManager* identity_manager,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
@@ -96,7 +125,8 @@ class ComposeboxQueryController
       variations::VariationsClient* variations_client,
       std::unique_ptr<
           contextual_search::ContextualSearchContextController::ConfigParams>
-          config_params);
+          config_params,
+      GetAuthHeadersCallback get_auth_headers_callback);
   ~ComposeboxQueryController() override;
 
   // ContextualSearchContextController:
@@ -124,11 +154,16 @@ class ComposeboxQueryController
       const base::UnguessableToken& file_token) override;
   std::vector<raw_ptr<const contextual_search::FileInfo>> GetFileInfoList()
       override;
+  void SetAuthUserIndex(size_t auth_user_index) override;
   base::WeakPtr<ContextualSearchContextController> AsWeakPtr() override;
+  std::string search_session_id() const override;
+  std::optional<lens::LensOverlayVisualSearchInteractionData>
+  GetVisualSearchInteractionData(
+      const base::UnguessableToken& file_token,
+      const std::optional<std::string>& query_text) override;
 
-  // Returns a request id to use for the viewport image upload request for the
-  // given file info, setting the viewport request id on the file info if it is
-  // different from the request id.
+  // Returns the request id to use for the viewport image upload request for the
+  // given file token.
   virtual lens::LensOverlayRequestId GetRequestIdForViewportImage(
       const base::UnguessableToken& file_token);
 
@@ -141,6 +176,24 @@ class ComposeboxQueryController
   // the AddedInputs proto.
   static std::optional<std::string> MimeTypeStringFromFileInfo(
       const contextual_search::FileInfo& file_info);
+
+  static constexpr int kMaxC2paPixels = 3000000;
+
+  static bool HasC2paMetadata(base::span<const uint8_t> bytes);
+
+  // Checks if the MIME type matches a supported C2PA MIME type (JPEG, PNG,
+  // WebP, HEIC, HEIF).
+  static bool IsSupportedC2paMimeType(
+      std::optional<std::string_view> mime_type);
+
+  // Computes whether the image qualifies for C2PA bypass based on feature
+  // flags, MIME type, dimensions, and metadata. Returns an ImageData proto if
+  // successful.
+  static std::optional<lens::ImageData> MaybeCreateC2paBypassImageData(
+      base::span<const uint8_t> original_image_bytes,
+      int width,
+      int height,
+      std::optional<std::string_view> mime_type_string = std::nullopt);
 
   uint16_t get_num_context_uploading() {
     return static_cast<uint16_t>(pending_context_uploads_.size());
@@ -177,6 +230,15 @@ class ComposeboxQueryController
     kClusterInfoInvalid = 3,
   };
 
+  void set_get_auth_headers_callback_for_testing(
+      GetAuthHeadersCallback callback) {
+    get_auth_headers_callback_ = std::move(callback);
+  }
+
+  // Allows tests to bypass the official Google Chrome API key check.
+  static base::AutoReset<bool> SetIgnoreNonOfficialApiKeysForTesting(
+      bool ignore = true);
+
  protected:
   // Struct containing information about an individual network request.
   // TODO(crbug.com/441351005): Make this struct private and rename it.
@@ -197,6 +259,11 @@ class ComposeboxQueryController
     std::unique_ptr<lens::LensOverlayServerRequest> request_body;
     // The endpoint fetcher used for the request.
     std::unique_ptr<endpoint_fetcher::EndpointFetcher> endpoint_fetcher_;
+    // The current terminal status for this request. Initialized to kNeverIssued
+    // and updated as the request transitions through its lifecycle. Logged
+    // exactly once to UMA upon destruction.
+    ContextUploadTerminalStatus terminal_status =
+        ContextUploadTerminalStatus::kNeverIssued;
   };
 
   // Struct containing file information for a file upload.
@@ -205,6 +272,9 @@ class ComposeboxQueryController
    public:
     FileInfo();
     ~FileInfo() override;
+
+    // Marks this file and all its upload requests as cancelled.
+    void MarkAsCancelled();
 
     // Gets the request ID for this request for testing.
     std::optional<lens::LensOverlayRequestId> GetRequestIdForTesting() const {
@@ -221,6 +291,9 @@ class ComposeboxQueryController
     friend class ComposeboxQueryController;
     friend class ComposeboxQueryControllerIOS;
 
+    // Whether this file upload was explicitly cancelled.
+    bool is_cancelled_ = false;
+
     // The request ID for the viewport associated with this request, if it is
     // different from the request ID. Set by StartFileUploadFlow() when
     // use_separate_request_ids_for_viewport_images_ is true.
@@ -230,6 +303,12 @@ class ComposeboxQueryController
     // allowing stateless recontextualization updates to maintain sequence
     // monotonicity.
     std::optional<lens::LensOverlayRequestId> request_id_for_updates;
+
+    // Caches the latest viewport request ID generated for this context across
+    // turns, allowing recontextualization updates (including across page-only
+    // turns without a viewport screenshot) to maintain viewport sequence
+    // monotonicity when separate viewport request IDs are enabled.
+    std::optional<lens::LensOverlayRequestId> viewport_request_id_for_updates;
 
     // The headers to attach to the request. Will be set asynchronously after
     // StartFileUploadFlow() is called.
@@ -252,6 +331,10 @@ class ComposeboxQueryController
 
     // True if the file should be chunked for upload.
     bool is_chunked_upload = false;
+
+    // The request index in `upload_requests_` reserved for the final objects
+    // request of a chunked upload.
+    std::optional<size_t> chunked_upload_request_index;
 
     // The upload chunker delegate for the file.
     std::unique_ptr<lens::LensUploadChunker::Delegate> upload_chunker_delegate;
@@ -293,6 +376,7 @@ class ComposeboxQueryController
       std::optional<std::string> page_title,
       std::optional<std::string> file_name,
       UploadImageType image_type,
+      std::optional<std::string> mime_type_string,
       RequestBodyProtoCreatedCallback callback);
 
   // Returns the EndpointFetcher to use with the given params. Protected to
@@ -319,6 +403,11 @@ class ComposeboxQueryController
   // override.
   virtual void ResetRequestClusterInfoState();
 
+  // Returns whether the official Google Chrome API key is used, or if the
+  // check is bypassed for testing. Official API keys are required to make
+  // requests to the Lens Frontend server. Protected to allow tests to override.
+  virtual bool IsGoogleChromeApiKeyUsed() const;
+
   // Sends an interaction request. Protected to allow tests
   // to override.
   virtual void SendInteractionRequest(
@@ -329,6 +418,13 @@ class ComposeboxQueryController
       std::optional<lens::LensOverlaySelectionType> lens_overlay_selection_type,
       base::OnceCallback<void(lens::LensOverlayInteractionResponse)>
           interaction_response_callback);
+
+  // Handles the response from an upload request. Protected to allow access from
+  // tests.
+  void HandleUploadResponse(
+      const base::UnguessableToken& file_token,
+      size_t request_index,
+      std::unique_ptr<endpoint_fetcher::EndpointResponse> response);
 
   // The internal state of the query controller. Protected to allow tests to
   // access the state. Do not modify this state directly, use
@@ -417,6 +513,11 @@ class ComposeboxQueryController
   // Returns a mutable pointer to allow internal modifications.
   FileInfo* GetMutableFileInfo(const base::UnguessableToken& file_token);
 
+  // Builds the LensOverlayContextualInputs proto for the given context tokens.
+  std::unique_ptr<lens::LensOverlayContextualInputs> CreateContextualInputs(
+      const std::vector<base::UnguessableToken>& tokens,
+      bool send_upload_type);
+
   // Fetches the OAuth headers and calls the callback with the headers. If the
   // OAuth cannot be retrieved (like if the user is not logged in), the callback
   // will be called with an empty vector. Returns the access token fetcher
@@ -424,7 +525,8 @@ class ComposeboxQueryController
   using OAuthHeadersCreatedCallback =
       base::OnceCallback<void(std::vector<std::string>)>;
   std::unique_ptr<signin::PrimaryAccountAccessTokenFetcher>
-  CreateOAuthHeadersAndContinue(OAuthHeadersCreatedCallback callback);
+  CreateAuthHeadersAndContinue(std::optional<size_t> auth_user_index,
+                               OAuthHeadersCreatedCallback callback);
 
   // Gets an OAuth token for the cluster info request and proceeds with sending
   // a LensOverlayServerClusterInfoRequest to get the cluster info.
@@ -456,14 +558,18 @@ class ComposeboxQueryController
 
   // Handler for when the image from an image file upload is decoded. Creates
   // the request body proto and calls the callback with the request.
-  void ProcessDecodedImageAndContinue(lens::LensOverlayRequestId request_id,
-                                      const lens::ImageEncodingOptions& options,
-                                      RequestBodyProtoCreatedCallback callback,
-                                      std::optional<GURL> page_url,
-                                      std::optional<std::string> page_title,
-                                      std::optional<std::string> file_name,
-                                      UploadImageType image_type,
-                                      const SkBitmap& bitmap);
+  void ProcessDecodedImageAndContinue(
+      lens::LensOverlayRequestId request_id,
+      const lens::ImageEncodingOptions& options,
+      RequestBodyProtoCreatedCallback callback,
+      std::optional<GURL> page_url,
+      std::optional<std::string> page_title,
+      std::optional<std::string> file_name,
+      UploadImageType image_type,
+      std::optional<std::string> mime_type_string,
+      scoped_refptr<base::RefCountedData<std::vector<uint8_t>>>
+          original_image_data,
+      const SkBitmap& bitmap);
 
   // Creates the request body protos for the file and viewport upload requests
   // and calls the callbacks with the request.
@@ -531,12 +637,6 @@ class ComposeboxQueryController
       size_t request_index,
       std::unique_ptr<endpoint_fetcher::EndpointFetcher> endpoint_fetcher);
 
-  // Handles the response from an upload request.
-  void HandleUploadResponse(
-      const base::UnguessableToken& file_token,
-      size_t request_index,
-      std::unique_ptr<endpoint_fetcher::EndpointResponse> response);
-
   // Performs the fetch request.
   void PerformFetchRequest(
       lens::LensOverlayServerRequest* request,
@@ -577,16 +677,9 @@ class ComposeboxQueryController
       std::optional<lens::LensOverlaySelectionType> lens_overlay_selection_type,
       bool force_include_latest_interaction_request_data);
 
-  // Initiates the chunked upload flow. Fetches the required authentication
-  // headers before starting the chunker.
-  void PrepareChunkedUpload(
-      const base::UnguessableToken& file_token,
-      std::unique_ptr<lens::ContextualInputData> contextual_input_data);
-
-  // Callback executed when the OAuth access token headers are successfully
-  // fetched. Triggers MaybeStartUploadChunker to start the chunker.
-  void OnChunkedUploadHeadersReady(const base::UnguessableToken& file_token,
-                                   std::vector<std::string> headers);
+  // Prepares a chunked upload by reserving the final payload request slot and
+  // starting the upload chunker once headers and cluster info are ready.
+  void PrepareChunkedUpload(const base::UnguessableToken& file_token);
 
   // Checks if the OAuth headers and cluster info are both ready. If they are,
   // initializes and starts the LensUploadChunker.
@@ -631,6 +724,9 @@ class ComposeboxQueryController
   // The number of times fetching cluster info has failed.
   int cluster_info_retries_ = 0;
 
+  // The timestamp when the cluster info fetch was started.
+  std::optional<base::TimeTicks> cluster_info_fetch_start_time_;
+
   // The endpoint fetcher used for the cluster info request.
   std::unique_ptr<endpoint_fetcher::EndpointFetcher>
       cluster_info_endpoint_fetcher_;
@@ -661,6 +757,8 @@ class ComposeboxQueryController
 
   // Owned by the Profile, and thus guaranteed to outlive this instance.
   const raw_ptr<TemplateURLService> template_url_service_;
+
+  GetAuthHeadersCallback get_auth_headers_callback_;
 
   // Owned by the Profile, and thus guaranteed to outlive this instance.
   const raw_ptr<variations::VariationsClient> variations_client_;
@@ -715,6 +813,9 @@ class ComposeboxQueryController
   // `IsValidContextUploadStatusForMultimodalRequest()`, whereas
   // this tracks which of those active files are still uploading.
   std::set<base::UnguessableToken> pending_context_uploads_;
+
+  // The multi-login account index to use when fetching 1P auth headers.
+  size_t auth_user_index_ = 0;
 
   base::WeakPtrFactory<ComposeboxQueryController> weak_ptr_factory_{this};
 };

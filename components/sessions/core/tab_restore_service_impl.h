@@ -45,10 +45,11 @@ class SESSIONS_EXPORT TabRestoreServiceImpl : public TabRestoreService {
   void RemoveObserver(TabRestoreServiceObserver* observer) override;
   std::optional<SessionID> CreateHistoricalTab(LiveTab* live_tab,
                                                int index) override;
-  void BrowserClosing(LiveTabContext* context) override;
+  std::optional<SessionID> BrowserClosing(LiveTabContext* context) override;
   void BrowserClosed(LiveTabContext* context) override;
-  void CreateHistoricalGroup(LiveTabContext* context,
-                             const tab_groups::TabGroupId& id) override;
+  std::optional<SessionID> CreateHistoricalGroup(
+      LiveTabContext* context,
+      const tab_groups::TabGroupId& id) override;
   void CreateHistoricalSplit(LiveTabContext* context,
                              const split_tabs::SplitTabId& id) override;
   void GroupClosed(const tab_groups::TabGroupId& group) override;
@@ -62,7 +63,7 @@ class SESSIONS_EXPORT TabRestoreServiceImpl : public TabRestoreService {
       LiveTabContext* context) override;
   void RemoveEntryById(SessionID id) override;
   void RemoveLeastRecentlyUsedEntries(int num_to_remove) override;
-  std::vector<LiveTab*> RestoreEntryById(
+  std::optional<std::vector<LiveTab*>> RestoreEntryById(
       LiveTabContext* context,
       SessionID id,
       WindowOpenDisposition disposition) override;

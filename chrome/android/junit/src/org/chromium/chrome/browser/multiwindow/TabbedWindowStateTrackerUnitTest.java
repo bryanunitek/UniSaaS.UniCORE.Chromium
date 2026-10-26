@@ -15,7 +15,6 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.EnableFeatures;
@@ -27,12 +26,10 @@ import java.util.List;
 
 /** Unit tests for {@link TabbedWindowStateTracker}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @EnableFeatures(ChromeFeatureList.SESSION_RESTORE_AFTER_CRASH)
 public class TabbedWindowStateTrackerUnitTest {
     private static final int WINDOW_ID_0 = 0;
     private static final Rect WINDOW_BOUNDS_1 = new Rect(100, 100, 600, 400);
-    private static final Rect WINDOW_BOUNDS_2 = new Rect(200, 200, 700, 500);
 
     private TabbedWindowStateTracker mTracker;
 
@@ -58,6 +55,7 @@ public class TabbedWindowStateTrackerUnitTest {
         InitInfo initInfo =
                 new InitInfo(
                         /* nativeBrowserWindowPtr= */ 0,
+                        /* nativeBrowserWindow= */ null,
                         /* isVisible= */ true,
                         WINDOW_BOUNDS_1,
                         WINDOW_BOUNDS_1,
@@ -81,6 +79,7 @@ public class TabbedWindowStateTrackerUnitTest {
         InitInfo initInfo =
                 new InitInfo(
                         /* nativeBrowserWindowPtr= */ 0,
+                        /* nativeBrowserWindow= */ null,
                         /* isVisible= */ true,
                         WINDOW_BOUNDS_1,
                         WINDOW_BOUNDS_1,
@@ -103,6 +102,7 @@ public class TabbedWindowStateTrackerUnitTest {
         InitInfo initInfo =
                 new InitInfo(
                         /* nativeBrowserWindowPtr= */ 0,
+                        /* nativeBrowserWindow= */ null,
                         /* isVisible= */ true,
                         WINDOW_BOUNDS_1,
                         WINDOW_BOUNDS_1,

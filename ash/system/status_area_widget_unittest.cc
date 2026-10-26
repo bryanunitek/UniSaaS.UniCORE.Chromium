@@ -47,6 +47,8 @@
 #include "ash/wm/window_pin_util.h"
 #include "base/command_line.h"
 #include "base/functional/callback_helpers.h"
+#include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "chromeos/ash/components/network/cellular_metrics_logger.h"
@@ -150,8 +152,6 @@ TEST_F(StatusAreaWidgetTest, MultiDisplayIMENotActive) {
 }
 
 TEST_F(StatusAreaWidgetTest, HandleOnLocaleChange) {
-  base::i18n::SetRTLForTesting(false);
-
   StatusAreaWidget* status_area =
       StatusAreaWidgetTestHelper::GetStatusAreaWidget();
   TrayBackgroundView* ime_menu = status_area->ime_menu_tray();
@@ -159,33 +159,38 @@ TEST_F(StatusAreaWidgetTest, HandleOnLocaleChange) {
   TrayBackgroundView* dictation_button = status_area->dictation_button_tray();
   TrayBackgroundView* select_to_speak = status_area->select_to_speak_tray();
 
-  ime_menu->SetVisiblePreferred(true);
-  palette->SetVisiblePreferred(true);
-  dictation_button->SetVisiblePreferred(true);
-  select_to_speak->SetVisiblePreferred(true);
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(false);
 
-  // From left to right: `dictation_button`, `select_to_speak`, `ime_menu`,
-  // palette.
-  EXPECT_GT(palette->layer()->bounds().x(), ime_menu->layer()->bounds().x());
-  EXPECT_GT(ime_menu->layer()->bounds().x(),
-            select_to_speak->layer()->bounds().x());
-  EXPECT_GT(select_to_speak->layer()->bounds().x(),
-            dictation_button->layer()->bounds().x());
+    ime_menu->SetVisiblePreferred(true);
+    palette->SetVisiblePreferred(true);
+    dictation_button->SetVisiblePreferred(true);
+    select_to_speak->SetVisiblePreferred(true);
+
+    // From left to right: `dictation_button`, `select_to_speak`, `ime_menu`,
+    // palette.
+    EXPECT_GT(palette->layer()->bounds().x(), ime_menu->layer()->bounds().x());
+    EXPECT_GT(ime_menu->layer()->bounds().x(),
+              select_to_speak->layer()->bounds().x());
+    EXPECT_GT(select_to_speak->layer()->bounds().x(),
+              dictation_button->layer()->bounds().x());
+  }
 
   // Switch to RTL mode.
-  base::i18n::SetRTLForTesting(true);
-  // Trigger the LocaleChangeObserver, which should cause a layout of the menu.
-  ash::LocaleUpdateController::Get()->OnLocaleChanged();
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl_true(true);
+    // Trigger the LocaleChangeObserver, which should cause a layout of the
+    // menu.
+    ash::LocaleUpdateController::Get()->OnLocaleChanged();
 
-  // From left to right: palette, ime_menu_, select_to_speak,
-  // dictation_button_.
-  EXPECT_LT(palette->layer()->bounds().x(), ime_menu->layer()->bounds().x());
-  EXPECT_LT(ime_menu->layer()->bounds().x(),
-            select_to_speak->layer()->bounds().x());
-  EXPECT_LT(select_to_speak->layer()->bounds().x(),
-            dictation_button->layer()->bounds().x());
-
-  base::i18n::SetRTLForTesting(false);
+    // From left to right: palette, ime_menu_, select_to_speak,
+    // dictation_button_.
+    EXPECT_LT(palette->layer()->bounds().x(), ime_menu->layer()->bounds().x());
+    EXPECT_LT(ime_menu->layer()->bounds().x(),
+              select_to_speak->layer()->bounds().x());
+    EXPECT_LT(select_to_speak->layer()->bounds().x(),
+              dictation_button->layer()->bounds().x());
+  }
 }
 
 TEST_F(StatusAreaWidgetTest, OpenTrayBubble) {
@@ -254,14 +259,14 @@ TEST_F(StatusAreaWidgetTest, DateTrayRoundedCornerBehavior) {
             TrayBackgroundView::RoundedCornerBehavior::kStartRounded);
 }
 
-class LockedFullscreenStatusAreaWidgetTest
+class TrustedPinnedStatusAreaWidgetTest
     : public AshTestBase,
       public testing::WithParamInterface<bool> {
  protected:
-  bool IsLocked() const { return GetParam(); }
+  bool IsTrustedPinned() const { return GetParam(); }
 };
 
-TEST_P(LockedFullscreenStatusAreaWidgetTest,
+TEST_P(TrustedPinnedStatusAreaWidgetTest,
        TrayBubbleVisibilityWithPinnedWindow) {
   // Create a window for testing purposes.
   const std::unique_ptr<aura::Window> window = CreateWindowWithAppType();
@@ -275,12 +280,12 @@ TEST_P(LockedFullscreenStatusAreaWidgetTest,
   ASSERT_TRUE(unified_system_tray->IsBubbleShown());
 
   // Pin the window and verify tray bubble visibility.
-  PinWindow(window.get(), IsLocked());
-  EXPECT_EQ(unified_system_tray->IsBubbleShown(), !IsLocked());
+  PinWindow(window.get(), IsTrustedPinned());
+  EXPECT_EQ(unified_system_tray->IsBubbleShown(), !IsTrustedPinned());
 }
 
-INSTANTIATE_TEST_SUITE_P(LockedFullscreenStatusAreaWidgetTests,
-                         LockedFullscreenStatusAreaWidgetTest,
+INSTANTIATE_TEST_SUITE_P(TrustedPinnedStatusAreaWidgetTests,
+                         TrustedPinnedStatusAreaWidgetTest,
                          testing::Bool());
 
 class SystemTrayFocusTestObserver : public SystemTrayObserver {
@@ -760,15 +765,11 @@ TEST_F(StatusAreaWidgetCollapseStateTest,
 class StatusAreaWidgetEcheTest : public AshTestBase {
  protected:
   void SetUp() override {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kEcheSWA},
-        /*disabled_features=*/{});
     DCHECK(test_web_view_factory_.get());
     AshTestBase::SetUp();
   }
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
   // Calling the factory constructor is enough to set it up.
   std::unique_ptr<TestAshWebViewFactory> test_web_view_factory_ =
       std::make_unique<TestAshWebViewFactory>();

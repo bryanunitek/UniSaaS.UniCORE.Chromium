@@ -118,7 +118,6 @@ which _are_ valid. As a rule:
     * Start a thread in the Shepherding chat immediately
 * Is the bug eligible for [delegated triage](delegated-triage.md)?:
     * If it's a Graphics bug (including Skia, Dawn, ANGLE), put it in [hotlist 8198490](https://issues.chromium.org/hotlists/8198490)
-    * If it's a UI bug, put it in [hotlist 8210976](https://issues.chromium.org/hotlists/8210976)
     * If it's a BoringSSL bug, put it in [component 1590116](https://issues.chromium.org/components/1590116)
     * If it's a V8 (Javascript or WebAssembly) bug, put it in [hotlist 8308879](https://issues.chromium.org/hotlists/8308879)
     * If it only affects ChromeOS then move the issue into the ChromeOS security
@@ -138,6 +137,11 @@ which _are_ valid. As a rule:
       [Chromium > UI > Settings >
       Privacy](https://issues.chromium.org/components/1457044/edit).
     * You are now done triaging this bug, congratulations!
+* If the bug is a test bug which you don't want or need to act on but want out of your queue:
+    * Add it to [hotlist 8731053](https://issues.chromium.org/hotlists/8731053)
+    * Do not ever do this for a "real" bug - this hotlist is _only_ for test
+      bugs. It does not exempt bugs from SLO monitoring or do anything other
+      than hide them from your queue!
 
 Now, before reproducing or deeply understanding the issue, move on to...
 

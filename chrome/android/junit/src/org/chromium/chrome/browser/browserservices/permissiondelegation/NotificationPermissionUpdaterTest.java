@@ -28,7 +28,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowPackageManager;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -43,7 +42,6 @@ import org.chromium.components.permissions.PermissionsAndroidFeatureList;
 
 /** Tests for {@link NotificationPermissionUpdater}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @EnableFeatures(PermissionsAndroidFeatureList.APPROXIMATE_GEOLOCATION_PERMISSION)
 public class NotificationPermissionUpdaterTest {
     private static final Origin ORIGIN = Origin.create("https://www.website.com");
@@ -62,8 +60,7 @@ public class NotificationPermissionUpdaterTest {
 
     @Before
     public void setUp() {
-
-        PackageManager pm = RuntimeEnvironment.application.getPackageManager();
+        PackageManager pm = RuntimeEnvironment.getApplication().getPackageManager();
         mShadowPackageManager = shadowOf(pm);
         mShadowPackageManager.installPackage(generateTestPackageInfo(PACKAGE_NAME));
         mShadowPackageManager.installPackage(generateTestPackageInfo(OTHER_PACKAGE_NAME));
@@ -120,7 +117,6 @@ public class NotificationPermissionUpdaterTest {
     @Test
     @Feature("TrustedWebActivities")
     public void updatesPermission_onSubsequentCalls() {
-
         installTrustedWebActivityService(ORIGIN, PACKAGE_NAME);
         setNotificationPermission(ContentSetting.ALLOW);
         NotificationPermissionUpdater.onOriginVerified(ORIGIN, URL, PACKAGE_NAME);
@@ -162,7 +158,6 @@ public class NotificationPermissionUpdaterTest {
     @Test
     @Feature("TrustedWebActivities")
     public void doesntUnregister_whenOtherClientsRemain() {
-
         installTrustedWebActivityService(ORIGIN, PACKAGE_NAME);
         setNotificationPermission(ContentSetting.ALLOW);
 

@@ -57,6 +57,10 @@ UsedToolMode EnumTraits<UsedToolMode, omnibox::ToolMode>::ToMojom(
       return UsedToolMode::kAim;
     case omnibox::ToolMode::TOOL_MODE_AIM_GEN_PROMPT:
       return UsedToolMode::kAimGenPrompt;
+    case omnibox::ToolMode::TOOL_MODE_AGENT_TASK:
+      return UsedToolMode::kAgentTask;
+    case omnibox::ToolMode::TOOL_MODE_SEARCH_MORE:
+      return UsedToolMode::kSearchMore;
     case omnibox::ToolMode::TOOL_MODE_DISABLE_SUGGEST:
       return UsedToolMode::kDisableSuggest;
     case omnibox::ToolMode::TOOL_MODE_GEMINI_PRO:
@@ -90,6 +94,10 @@ omnibox::ToolMode EnumTraits<UsedToolMode, omnibox::ToolMode>::FromMojom(
       return omnibox::ToolMode::TOOL_MODE_AIM;
     case UsedToolMode::kAimGenPrompt:
       return omnibox::ToolMode::TOOL_MODE_AIM_GEN_PROMPT;
+    case UsedToolMode::kAgentTask:
+      return omnibox::ToolMode::TOOL_MODE_AGENT_TASK;
+    case UsedToolMode::kSearchMore:
+      return omnibox::ToolMode::TOOL_MODE_SEARCH_MORE;
     case UsedToolMode::kDisableSuggest:
       return omnibox::ToolMode::TOOL_MODE_DISABLE_SUGGEST;
     case UsedToolMode::kGeminiPro:
@@ -123,6 +131,12 @@ UsedModelMode EnumTraits<UsedModelMode, omnibox::ModelMode>::ToMojom(
       return UsedModelMode::kGeminiProAutoroute;
     case omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_NO_GEN_UI:
       return UsedModelMode::kGeminiProNoGenUi;
+    case omnibox::ModelMode::MODEL_MODE_GEMINI_FLASH_LATEST:
+      return UsedModelMode::kGeminiFlashLatest;
+    case omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_LATEST:
+      return UsedModelMode::kGeminiProLatest;
+    case omnibox::ModelMode::MODEL_MODE_GEMINI_PREVIEW:
+      return UsedModelMode::kGeminiPreview;
     // The proto compiler generates these sentinel values. We must handle them
     // to satisfy the compiler's exhaustiveness check (since we don't have a
     // default case), but they should never be encountered in practice.
@@ -148,6 +162,12 @@ omnibox::ModelMode EnumTraits<UsedModelMode, omnibox::ModelMode>::FromMojom(
       return omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_AUTOROUTE;
     case UsedModelMode::kGeminiProNoGenUi:
       return omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_NO_GEN_UI;
+    case UsedModelMode::kGeminiFlashLatest:
+      return omnibox::ModelMode::MODEL_MODE_GEMINI_FLASH_LATEST;
+    case UsedModelMode::kGeminiProLatest:
+      return omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_LATEST;
+    case UsedModelMode::kGeminiPreview:
+      return omnibox::ModelMode::MODEL_MODE_GEMINI_PREVIEW;
   }
   NOTREACHED();
 }
@@ -433,6 +453,18 @@ StructTraits<UsedToolConfigDataView, omnibox::ToolConfig>::menu_tooltip(
 }
 
 // static
+int32_t StructTraits<UsedToolConfigDataView, omnibox::ToolConfig>::icon(
+    const omnibox::ToolConfig& config) {
+  if (config.has_icon() && config.icon().has_icon_id()) {
+    int icon_id = static_cast<int>(config.icon().icon_id());
+    if (omnibox::IconResourceIds_IsValid(icon_id)) {
+      return icon_id;
+    }
+  }
+  return static_cast<int32_t>(omnibox::IconResourceIds::PLACE_WHITE);
+}
+
+// static
 bool StructTraits<UsedToolConfigDataView, omnibox::ToolConfig>::Read(
     UsedToolConfigDataView data,
     omnibox::ToolConfig* output) {
@@ -479,6 +511,13 @@ bool StructTraits<UsedToolConfigDataView, omnibox::ToolConfig>::Read(
   }
   output->set_menu_tooltip(menu_tooltip);
 
+  int32_t icon_id = data.icon();
+  if (omnibox::IconResourceIds_IsValid(icon_id) &&
+      icon_id != static_cast<int32_t>(omnibox::IconResourceIds::PLACE_WHITE)) {
+    output->mutable_icon()->set_icon_id(
+        static_cast<omnibox::IconResourceIds>(icon_id));
+  }
+
   return true;
 }
 
@@ -519,6 +558,18 @@ StructTraits<UsedModelConfigDataView, omnibox::ModelConfig>::menu_tooltip(
 }
 
 // static
+int32_t StructTraits<UsedModelConfigDataView, omnibox::ModelConfig>::icon(
+    const omnibox::ModelConfig& config) {
+  if (config.has_icon() && config.icon().has_icon_id()) {
+    int icon_id = static_cast<int>(config.icon().icon_id());
+    if (omnibox::IconResourceIds_IsValid(icon_id)) {
+      return icon_id;
+    }
+  }
+  return static_cast<int32_t>(omnibox::IconResourceIds::PLACE_WHITE);
+}
+
+// static
 bool StructTraits<UsedModelConfigDataView, omnibox::ModelConfig>::Read(
     UsedModelConfigDataView data,
     omnibox::ModelConfig* output) {
@@ -555,6 +606,13 @@ bool StructTraits<UsedModelConfigDataView, omnibox::ModelConfig>::Read(
     return false;
   }
   output->set_menu_tooltip(menu_tooltip);
+
+  int32_t icon_id = data.icon();
+  if (omnibox::IconResourceIds_IsValid(icon_id) &&
+      icon_id != static_cast<int32_t>(omnibox::IconResourceIds::PLACE_WHITE)) {
+    output->mutable_icon()->set_icon_id(
+        static_cast<omnibox::IconResourceIds>(icon_id));
+  }
 
   return true;
 }

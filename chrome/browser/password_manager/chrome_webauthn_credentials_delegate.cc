@@ -16,6 +16,7 @@
 #include "chrome/browser/webauthn/authenticator_request_dialog_model.h"
 #include "components/password_manager/core/browser/passkey_credential.h"
 #include "components/password_manager/core/browser/password_ui_utils.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "content/public/browser/web_contents.h"
 #include "device/fido/public/fido_types.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -51,8 +52,9 @@ using OnPasskeySelectedCallback =
     password_manager::WebAuthnCredentialsDelegate::OnPasskeySelectedCallback;
 
 ChromeWebAuthnCredentialsDelegate::ChromeWebAuthnCredentialsDelegate(
-    content::WebContents* web_contents)
-    : web_contents_(web_contents) {}
+    content::RenderFrameHost* frame_host)
+    : frame_host_(frame_host),
+      web_contents_(content::WebContents::FromRenderFrameHost(frame_host)) {}
 
 ChromeWebAuthnCredentialsDelegate::~ChromeWebAuthnCredentialsDelegate() =
     default;
@@ -68,7 +70,7 @@ void ChromeWebAuthnCredentialsDelegate::LaunchSecurityKeyOrHybridFlow() {
       ->TransitionToModalWebAuthnRequest();
 #else
   if (WebAuthnRequestDelegateAndroid* delegate =
-          WebAuthnRequestDelegateAndroid::GetRequestDelegate(web_contents_)) {
+          WebAuthnRequestDelegateAndroid::GetRequestDelegate(frame_host_)) {
     delegate->OnHybridSignInSelected();
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
@@ -86,7 +88,7 @@ void ChromeWebAuthnCredentialsDelegate::SelectPasskey(
 #if BUILDFLAG(IS_ANDROID)
   std::move(callback).Run();
   auto* request_delegate =
-      WebAuthnRequestDelegateAndroid::GetRequestDelegate(web_contents_);
+      WebAuthnRequestDelegateAndroid::GetRequestDelegate(frame_host_);
   if (!request_delegate) {
     return;
   }
@@ -132,6 +134,17 @@ std::optional<std::string> ChromeWebAuthnCredentialsDelegate::GetCableQrString()
 #else
   return std::nullopt;
 #endif
+}
+
+void ChromeWebAuthnCredentialsDelegate::OnPasskeyQrCodeSuggestionShown() {
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  ChromeAuthenticatorRequestDelegate* authenticator_delegate =
+      AuthenticatorRequestScheduler::GetRequestDelegate(web_contents_);
+  if (!authenticator_delegate) {
+    return;
+  }
+  authenticator_delegate->OnHybridPasskeyQrCodeShownInAutofill();
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 }
 
 base::expected<const std::vector<PasskeyCredential>*,

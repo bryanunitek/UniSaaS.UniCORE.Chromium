@@ -35,12 +35,9 @@ namespace content {
 //   ChildProcessHost::kInvalidUniqueID (there is no process yet).
 // - For a factory created to pass to the renderer for subresource requests from
 //   the frame: that renderer process's ID.
-// - For a factory created for a browser-initiated worker main script request:
-//   the ID of the process the worker will run in.
-//   TODO(crbug.com/41471904): We should specify kInvalidUniqueID for this
-//   worker main script case like the browser-initiated navigation case.
-// - For a factory created to pass to the renderer for subresource requests from
-//   the worker: that renderer process's ID.
+// - For a factory created for a worker main script request or to pass to the
+//   renderer for subresource requests from the worker: that renderer process's
+//   ID.
 //
 // `frame_tree_node_id` is the ID of the FrameTreeNode where the requests are
 // associated.

@@ -46,7 +46,6 @@ import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.RobolectricUtil;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.loading_modal.LoadingModalDialogCoordinator;
 import org.chromium.chrome.browser.password_manager.CredentialManagerLauncher.CredentialManagerBackendException;
@@ -78,10 +77,7 @@ import java.util.Set;
  * <p>Tests related to password checkup can be found in {@link PasswordManagerHelper}
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowSystemClock.class})
-@Batch(Batch.PER_CLASS)
+@Config(shadows = {ShadowSystemClock.class})
 public class PasswordManagerHelperTest {
     private static final String TEST_EMAIL_ADDRESS = "test@email.com";
     private static final String TEST_NO_EMAIL_ADDRESS = null;
@@ -547,9 +543,6 @@ public class PasswordManagerHelperTest {
                                 CommonStatusCodes.INTERNAL_ERROR)
                         .expectNoRecords(
                                 PasswordMetricsUtil
-                                        .ACCOUNT_GET_INTENT_ERROR_CONNECTION_RESULT_CODE_HISTOGRAM)
-                        .expectNoRecords(
-                                PasswordMetricsUtil
                                         .ACCOUNT_LAUNCH_CREDENTIAL_MANAGER_SUCCESS_HISTOGRAM)
                         .build();
         chooseToSyncPasswords();
@@ -579,9 +572,6 @@ public class PasswordManagerHelperTest {
                                 PasswordMetricsUtil.ACCOUNT_GET_INTENT_ERROR_HISTOGRAM,
                                 CredentialManagerError.OTHER_API_ERROR)
                         .expectNoRecords(PasswordMetricsUtil.ACCOUNT_GET_INTENT_API_ERROR_HISTOGRAM)
-                        .expectNoRecords(
-                                PasswordMetricsUtil
-                                        .ACCOUNT_GET_INTENT_ERROR_CONNECTION_RESULT_CODE_HISTOGRAM)
                         .expectNoRecords(
                                 PasswordMetricsUtil
                                         .ACCOUNT_LAUNCH_CREDENTIAL_MANAGER_SUCCESS_HISTOGRAM)

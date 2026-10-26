@@ -4,7 +4,9 @@
 
 #include "components/winhttp/network_fetcher.h"
 
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
+
 #include <limits>
 #include <optional>
 #include <string>
@@ -23,7 +25,6 @@
 #include "base/numerics/safe_math.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions_win.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -34,6 +35,7 @@
 #include "components/winhttp/proxy_info.h"
 #include "components/winhttp/scoped_hinternet.h"
 #include "components/winhttp/scoped_winttp_proxy_info.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "url/url_constants.h"
 
 namespace winhttp {
@@ -315,7 +317,7 @@ ScopedHInternet NetworkFetcher::OpenRequest() {
     flags |= WINHTTP_FLAG_SECURE;
   }
   return ScopedHInternet(::WinHttpOpenRequest(
-      connect_handle_.get(), verb_.data(),
+      connect_handle_.get(), verb_.c_str(),
       base::SysUTF8ToWide(path_for_request_).c_str(), nullptr,
       WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
 }
@@ -331,8 +333,8 @@ HRESULT NetworkFetcher::SendRequest(const std::string& data) {
 
   const uint32_t bytes_to_send =
       base::saturated_cast<uint32_t>(request_data_.size());
-  void* request_body = bytes_to_send ? const_cast<char*>(request_data_.c_str())
-                                     : WINHTTP_NO_REQUEST_DATA;
+  void* request_body =
+      bytes_to_send ? request_data_.data() : WINHTTP_NO_REQUEST_DATA;
   if (!::WinHttpSendRequest(request_handle_.get(),
                             WINHTTP_NO_ADDITIONAL_HEADERS, 0, request_body,
                             bytes_to_send, bytes_to_send, context())) {
@@ -413,7 +415,7 @@ HRESULT NetworkFetcher::ReadData() {
   static constexpr size_t kNumBytesToRead = 0x4000;  // 16KiB.
   read_buffer_.resize(kNumBytesToRead);
 
-  if (!::WinHttpReadData(request_handle_.get(), &read_buffer_.front(),
+  if (!::WinHttpReadData(request_handle_.get(), read_buffer_.data(),
                          read_buffer_.size(), nullptr)) {
     return HRESULTFromLastError();
   }
@@ -598,7 +600,7 @@ void __stdcall NetworkFetcher::WinHttpStatusCallback(HINTERNET handle,
       CHECK(info);
       CHECK_EQ(info_len, sizeof(uint32_t));
       info_string = base::ASCIIToWide(
-          base::StringPrintf("%#x", *static_cast<uint32_t*>(info)));
+          absl::StrFormat("%#x", *static_cast<uint32_t*>(info)));
       break;
     default:
       status_string = "unknown callback";
@@ -607,13 +609,12 @@ void __stdcall NetworkFetcher::WinHttpStatusCallback(HINTERNET handle,
 
   std::string msg;
   if (!status_string.empty()) {
-    base::StringAppendF(&msg, "status=%s", status_string.data());
+    absl::StrAppendFormat(&msg, "status=%s", status_string);
   } else {
-    base::StringAppendF(&msg, "status=%#lx", status);
+    absl::StrAppendFormat(&msg, "status=%#lx", status);
   }
   if (!info_string.empty()) {
-    base::StringAppendF(&msg, ", info=%s",
-                        base::SysWideToUTF8(info_string).c_str());
+    absl::StrAppendFormat(&msg, ", info=%s", base::SysWideToUTF8(info_string));
   }
   VLOG(3) << "WinHttp status callback:" << " handle=" << handle << ", " << msg;
 
@@ -633,7 +634,7 @@ void __stdcall NetworkFetcher::WinHttpStatusCallback(HINTERNET handle,
           base::BindOnce(&NetworkFetcher::HeadersAvailable, network_fetcher);
       break;
     case WINHTTP_CALLBACK_STATUS_READ_COMPLETE:
-      CHECK_EQ(info, &network_fetcher->read_buffer_.front());
+      CHECK_EQ(info, network_fetcher->read_buffer_.data());
       callback = base::BindOnce(&NetworkFetcher::ReadDataComplete,
                                 network_fetcher, size_t{info_len});
       break;

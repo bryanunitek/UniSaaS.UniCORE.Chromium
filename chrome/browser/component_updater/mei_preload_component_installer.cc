@@ -4,6 +4,8 @@
 
 #include "chrome/browser/component_updater/mei_preload_component_installer.h"
 
+#include <stdint.h>
+
 #include <memory>
 #include <string>
 #include <utility>
@@ -37,7 +39,7 @@ constexpr uint8_t kMeiPreloadPublicKeySHA256[32] = {
 constexpr char kMediaEngagementPreloadManifestName[] = "MEI Preload";
 
 void LoadPreloadedDataFromDisk(const base::FilePath& pb_path) {
-  DCHECK(!pb_path.empty());
+  CHECK(!pb_path.empty(), base::NotFatalUntil::M161);
   MediaEngagementPreloadedList::GetInstance()->LoadFromFile(pb_path);
 }
 
@@ -111,8 +113,7 @@ MediaEngagementPreloadComponentInstallerPolicy::GetRelativeInstallDir() const {
 
 void MediaEngagementPreloadComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(std::begin(kMeiPreloadPublicKeySHA256),
-               std::end(kMeiPreloadPublicKeySHA256));
+  hash->assign_range(kMeiPreloadPublicKeySHA256);
 }
 
 std::string MediaEngagementPreloadComponentInstallerPolicy::GetName() const {

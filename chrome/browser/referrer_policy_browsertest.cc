@@ -17,10 +17,11 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/system_network_context_manager.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_browsertest_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
@@ -241,7 +242,7 @@ class ReferrerPolicyTest : public InProcessBrowserTest {
     EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), start_url));
 
     if (renderer_or_browser_initiated == BROWSER_INITIATED) {
-      CHECK(disposition == WindowOpenDisposition::CURRENT_TAB);
+      CHECK(disposition == WindowOpenDisposition::kCurrentTab);
       NavigateParams params(browser(), redirect_url, ui::PAGE_TRANSITION_LINK);
       params.referrer = content::Referrer(
           tab->GetController().GetVisibleEntry()->GetURL(), referrer_policy);
@@ -266,7 +267,7 @@ class ReferrerPolicyTest : public InProcessBrowserTest {
           ->ForwardMouseEvent(mouse_event);
     }
 
-    if (disposition == WindowOpenDisposition::CURRENT_TAB) {
+    if (disposition == WindowOpenDisposition::kCurrentTab) {
       EXPECT_EQ(expected_title, title_watcher.WaitAndGetTitle());
     } else {
       tab = add_tab.Wait();
@@ -327,7 +328,7 @@ class ReferrerPolicyTest : public InProcessBrowserTest {
 // Content initiated navigation, from HTTP to HTTP.
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, Origin) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTP,
-                  REGULAR_LINK, NO_REDIRECT, WindowOpenDisposition::CURRENT_TAB,
+                  REGULAR_LINK, NO_REDIRECT, WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kNoButton,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -335,7 +336,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, Origin) {
 // Content initiated navigation, from HTTPS to HTTP.
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsDefault) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS,
-                  REGULAR_LINK, NO_REDIRECT, WindowOpenDisposition::CURRENT_TAB,
+                  REGULAR_LINK, NO_REDIRECT, WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kNoButton,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -343,7 +344,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsDefault) {
 // User initiated navigation, from HTTP to HTTP.
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, LeftClickOrigin) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTP,
-                  REGULAR_LINK, NO_REDIRECT, WindowOpenDisposition::CURRENT_TAB,
+                  REGULAR_LINK, NO_REDIRECT, WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kLeft,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -351,7 +352,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, LeftClickOrigin) {
 // User initiated navigation, from HTTPS to HTTP.
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsLeftClickOrigin) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS,
-                  REGULAR_LINK, NO_REDIRECT, WindowOpenDisposition::CURRENT_TAB,
+                  REGULAR_LINK, NO_REDIRECT, WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kLeft,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -360,7 +361,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsLeftClickOrigin) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, MiddleClickOrigin) {
   RunReferrerTest(
       network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTP, REGULAR_LINK,
-      NO_REDIRECT, WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      NO_REDIRECT, WindowOpenDisposition::kNewBackgroundTab,
       blink::WebMouseEvent::Button::kMiddle, EXPECT_ORIGIN_AS_REFERRER);
 }
 
@@ -368,7 +369,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, MiddleClickOrigin) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsMiddleClickOrigin) {
   RunReferrerTest(
       network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS, REGULAR_LINK,
-      NO_REDIRECT, WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      NO_REDIRECT, WindowOpenDisposition::kNewBackgroundTab,
       blink::WebMouseEvent::Button::kMiddle, EXPECT_ORIGIN_AS_REFERRER);
 }
 
@@ -376,7 +377,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsMiddleClickOrigin) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, TargetBlankOrigin) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTP,
                   LINK_WITH_TARGET_BLANK, NO_REDIRECT,
-                  WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                  WindowOpenDisposition::kNewForegroundTab,
                   blink::WebMouseEvent::Button::kLeft,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -385,7 +386,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, TargetBlankOrigin) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsTargetBlankOrigin) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS,
                   LINK_WITH_TARGET_BLANK, NO_REDIRECT,
-                  WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                  WindowOpenDisposition::kNewForegroundTab,
                   blink::WebMouseEvent::Button::kLeft,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -394,7 +395,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsTargetBlankOrigin) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, MiddleClickTargetBlankOrigin) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTP,
                   LINK_WITH_TARGET_BLANK, NO_REDIRECT,
-                  WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                  WindowOpenDisposition::kNewForegroundTab,
                   blink::WebMouseEvent::Button::kMiddle,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -403,7 +404,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, MiddleClickTargetBlankOrigin) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsMiddleClickTargetBlankOrigin) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS,
                   LINK_WITH_TARGET_BLANK, NO_REDIRECT,
-                  WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                  WindowOpenDisposition::kNewForegroundTab,
                   blink::WebMouseEvent::Button::kMiddle,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -414,7 +415,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, ContextMenuOrigin) {
       IDC_CONTENT_CONTEXT_OPENLINKNEWTAB);
   RunReferrerTest(
       network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTP, REGULAR_LINK,
-      NO_REDIRECT, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      NO_REDIRECT, WindowOpenDisposition::kNewForegroundTab,
       blink::WebMouseEvent::Button::kRight, EXPECT_ORIGIN_AS_REFERRER);
 }
 
@@ -430,7 +431,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, MAYBE_HttpsContextMenuOrigin) {
       IDC_CONTENT_CONTEXT_OPENLINKNEWTAB);
   RunReferrerTest(
       network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS, REGULAR_LINK,
-      NO_REDIRECT, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      NO_REDIRECT, WindowOpenDisposition::kNewForegroundTab,
       blink::WebMouseEvent::Button::kRight, EXPECT_ORIGIN_AS_REFERRER);
 }
 
@@ -438,7 +439,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, MAYBE_HttpsContextMenuOrigin) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, Redirect) {
   RunReferrerTest(
       network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTP, REGULAR_LINK,
-      SERVER_REDIRECT_FROM_HTTPS_TO_HTTP, WindowOpenDisposition::CURRENT_TAB,
+      SERVER_REDIRECT_FROM_HTTPS_TO_HTTP, WindowOpenDisposition::kCurrentTab,
       blink::WebMouseEvent::Button::kNoButton, EXPECT_ORIGIN_AS_REFERRER);
 }
 
@@ -446,7 +447,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, Redirect) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsRedirect) {
   RunReferrerTest(
       network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS, REGULAR_LINK,
-      SERVER_REDIRECT_FROM_HTTPS_TO_HTTP, WindowOpenDisposition::CURRENT_TAB,
+      SERVER_REDIRECT_FROM_HTTPS_TO_HTTP, WindowOpenDisposition::kCurrentTab,
       blink::WebMouseEvent::Button::kNoButton, EXPECT_ORIGIN_AS_REFERRER);
 }
 
@@ -454,7 +455,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsRedirect) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, LeftClickRedirect) {
   RunReferrerTest(
       network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTP, REGULAR_LINK,
-      SERVER_REDIRECT_FROM_HTTP_TO_HTTP, WindowOpenDisposition::CURRENT_TAB,
+      SERVER_REDIRECT_FROM_HTTP_TO_HTTP, WindowOpenDisposition::kCurrentTab,
       blink::WebMouseEvent::Button::kLeft, EXPECT_ORIGIN_AS_REFERRER);
 }
 
@@ -462,7 +463,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, LeftClickRedirect) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsLeftClickRedirect) {
   RunReferrerTest(
       network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS, REGULAR_LINK,
-      SERVER_REDIRECT_FROM_HTTPS_TO_HTTP, WindowOpenDisposition::CURRENT_TAB,
+      SERVER_REDIRECT_FROM_HTTPS_TO_HTTP, WindowOpenDisposition::kCurrentTab,
       blink::WebMouseEvent::Button::kLeft, EXPECT_ORIGIN_AS_REFERRER);
 }
 
@@ -471,7 +472,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsLeftClickRedirect) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, MiddleClickRedirect) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTP,
                   REGULAR_LINK, SERVER_REDIRECT_FROM_HTTPS_TO_HTTP,
-                  WindowOpenDisposition::NEW_BACKGROUND_TAB,
+                  WindowOpenDisposition::kNewBackgroundTab,
                   blink::WebMouseEvent::Button::kMiddle,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -481,7 +482,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, MiddleClickRedirect) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsMiddleClickRedirect) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS,
                   REGULAR_LINK, SERVER_REDIRECT_FROM_HTTPS_TO_HTTP,
-                  WindowOpenDisposition::NEW_BACKGROUND_TAB,
+                  WindowOpenDisposition::kNewBackgroundTab,
                   blink::WebMouseEvent::Button::kMiddle,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -491,7 +492,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsMiddleClickRedirect) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, TargetBlankRedirect) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTP,
                   LINK_WITH_TARGET_BLANK, SERVER_REDIRECT_FROM_HTTPS_TO_HTTP,
-                  WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                  WindowOpenDisposition::kNewForegroundTab,
                   blink::WebMouseEvent::Button::kLeft,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -501,7 +502,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, TargetBlankRedirect) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsTargetBlankRedirect) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS,
                   LINK_WITH_TARGET_BLANK, SERVER_REDIRECT_FROM_HTTPS_TO_HTTP,
-                  WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                  WindowOpenDisposition::kNewForegroundTab,
                   blink::WebMouseEvent::Button::kLeft,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -511,7 +512,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsTargetBlankRedirect) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, MiddleClickTargetBlankRedirect) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTP,
                   LINK_WITH_TARGET_BLANK, SERVER_REDIRECT_FROM_HTTPS_TO_HTTP,
-                  WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                  WindowOpenDisposition::kNewForegroundTab,
                   blink::WebMouseEvent::Button::kMiddle,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -522,7 +523,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest,
                        HttpsMiddleClickTargetBlankRedirect) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS,
                   LINK_WITH_TARGET_BLANK, SERVER_REDIRECT_FROM_HTTPS_TO_HTTP,
-                  WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                  WindowOpenDisposition::kNewForegroundTab,
                   blink::WebMouseEvent::Button::kMiddle,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -539,7 +540,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, MAYBE_ContextMenuRedirect) {
       IDC_CONTENT_CONTEXT_OPENLINKNEWTAB);
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTP,
                   REGULAR_LINK, SERVER_REDIRECT_FROM_HTTPS_TO_HTTP,
-                  WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                  WindowOpenDisposition::kNewForegroundTab,
                   blink::WebMouseEvent::Button::kRight,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -550,7 +551,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, HttpsContextMenuRedirect) {
       IDC_CONTENT_CONTEXT_OPENLINKNEWTAB);
   RunReferrerTest(network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS,
                   REGULAR_LINK, SERVER_REDIRECT_FROM_HTTPS_TO_HTTP,
-                  WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                  WindowOpenDisposition::kNewForegroundTab,
                   blink::WebMouseEvent::Button::kRight,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -561,7 +562,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, History) {
   // Navigate from A to B.
   GURL start_url = RunReferrerTest(
       network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS, REGULAR_LINK,
-      SERVER_REDIRECT_FROM_HTTPS_TO_HTTP, WindowOpenDisposition::CURRENT_TAB,
+      SERVER_REDIRECT_FROM_HTTPS_TO_HTTP, WindowOpenDisposition::kCurrentTab,
       blink::WebMouseEvent::Button::kLeft, EXPECT_ORIGIN_AS_REFERRER);
 
   // Navigate to C.
@@ -579,21 +580,21 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, History) {
   AddAllPossibleTitles(start_url, title_watcher.get());
 
   // Go back to B.
-  chrome::GoBack(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::GoBack(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_EQ(expected_title, title_watcher->WaitAndGetTitle());
 
   title_watcher = std::make_unique<content::TitleWatcher>(tab, expected_title);
   AddAllPossibleTitles(start_url, title_watcher.get());
 
   // Reload to B.
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_EQ(expected_title, title_watcher->WaitAndGetTitle());
 
   title_watcher = std::make_unique<content::TitleWatcher>(tab, expected_title);
   AddAllPossibleTitles(start_url, title_watcher.get());
 
   // Shift-reload to B.
-  chrome::ReloadBypassingCache(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::ReloadBypassingCache(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_EQ(expected_title, title_watcher->WaitAndGetTitle());
 }
 
@@ -602,7 +603,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, History) {
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, RequestTabletSite) {
   GURL start_url = RunReferrerTest(
       network::mojom::ReferrerPolicy::kOrigin, START_ON_HTTPS, REGULAR_LINK,
-      SERVER_REDIRECT_FROM_HTTP_TO_HTTP, WindowOpenDisposition::CURRENT_TAB,
+      SERVER_REDIRECT_FROM_HTTP_TO_HTTP, WindowOpenDisposition::kCurrentTab,
       blink::WebMouseEvent::Button::kLeft, EXPECT_ORIGIN_AS_REFERRER);
 
   std::u16string expected_title =
@@ -632,7 +633,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, RequestTabletSite) {
 // the load was triggered by the parent, or from the iframe itself, if the
 // navigations was started by the iframe.
 IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest, IFrame) {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kWebKitAllowRunningInsecureContent, true);
   content::WebContents* tab =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -695,7 +696,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest,
   RunReferrerTest(
       network::mojom::ReferrerPolicy::kOriginWhenCrossOrigin, START_ON_HTTPS,
       REGULAR_LINK, SERVER_REDIRECT_FROM_HTTPS_TO_HTTP,
-      WindowOpenDisposition::CURRENT_TAB, blink::WebMouseEvent::Button::kLeft,
+      WindowOpenDisposition::kCurrentTab, blink::WebMouseEvent::Button::kLeft,
       EXPECT_ORIGIN_AS_REFERRER);
 }
 
@@ -704,7 +705,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest,
   RunReferrerTest(
       network::mojom::ReferrerPolicy::kOriginWhenCrossOrigin, START_ON_HTTP,
       REGULAR_LINK, SERVER_REDIRECT_FROM_HTTP_TO_HTTPS,
-      WindowOpenDisposition::CURRENT_TAB, blink::WebMouseEvent::Button::kLeft,
+      WindowOpenDisposition::kCurrentTab, blink::WebMouseEvent::Button::kLeft,
       EXPECT_ORIGIN_AS_REFERRER);
 }
 
@@ -713,7 +714,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest,
   RunReferrerTest(network::mojom::ReferrerPolicy::kOriginWhenCrossOrigin,
                   START_ON_HTTP, REGULAR_LINK,
                   SERVER_REDIRECT_FROM_HTTP_TO_HTTP,
-                  WindowOpenDisposition::CURRENT_TAB,
+                  WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kLeft, EXPECT_FULL_REFERRER);
 }
 
@@ -723,7 +724,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest,
                        HttpLeftClickHTTPRedirectToHTTPSameOrigin) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kSameOrigin, START_ON_HTTP,
                   REGULAR_LINK, SERVER_REDIRECT_FROM_HTTP_TO_HTTP,
-                  WindowOpenDisposition::CURRENT_TAB,
+                  WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kLeft, EXPECT_FULL_REFERRER);
 }
 
@@ -731,7 +732,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest,
                        HttpLeftClickHTTPRedirectToHTTPSSameOrigin) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kSameOrigin, START_ON_HTTPS,
                   REGULAR_LINK, SERVER_REDIRECT_FROM_HTTPS_TO_HTTP,
-                  WindowOpenDisposition::CURRENT_TAB,
+                  WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kLeft, EXPECT_EMPTY_REFERRER);
 }
 
@@ -741,7 +742,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest,
                        HttpLeftClickHTTPRedirectToHTTPStrictOrigin) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kStrictOrigin, START_ON_HTTP,
                   REGULAR_LINK, SERVER_REDIRECT_FROM_HTTP_TO_HTTP,
-                  WindowOpenDisposition::CURRENT_TAB,
+                  WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kLeft,
                   EXPECT_ORIGIN_AS_REFERRER);
 }
@@ -750,7 +751,7 @@ IN_PROC_BROWSER_TEST_F(ReferrerPolicyTest,
                        HttpLeftClickHTTPSRedirectToHTTPStrictOrigin) {
   RunReferrerTest(network::mojom::ReferrerPolicy::kStrictOrigin, START_ON_HTTPS,
                   REGULAR_LINK, SERVER_REDIRECT_FROM_HTTPS_TO_HTTP,
-                  WindowOpenDisposition::CURRENT_TAB,
+                  WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kLeft, EXPECT_EMPTY_REFERRER);
 }
 
@@ -907,14 +908,14 @@ INSTANTIATE_TEST_SUITE_P(
 
 IN_PROC_BROWSER_TEST_P(ReferrerOverrideTest, SameOriginNavigation) {
   RunReferrerTest(GetParam().baseline_policy, START_ON_HTTP, REGULAR_LINK,
-                  NO_REDIRECT, WindowOpenDisposition::CURRENT_TAB,
+                  NO_REDIRECT, WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kNoButton,
                   GetParam().same_origin_nav, GetParam().expected_policy);
 }
 
 IN_PROC_BROWSER_TEST_P(ReferrerOverrideTest, CrossOriginNavigation) {
   RunReferrerTest(GetParam().baseline_policy, START_ON_HTTP, REGULAR_LINK,
-                  HTTPS_NO_REDIRECT, WindowOpenDisposition::CURRENT_TAB,
+                  HTTPS_NO_REDIRECT, WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kNoButton,
                   GetParam().cross_origin_nav, GetParam().expected_policy);
 }
@@ -922,7 +923,7 @@ IN_PROC_BROWSER_TEST_P(ReferrerOverrideTest, CrossOriginNavigation) {
 IN_PROC_BROWSER_TEST_P(ReferrerOverrideTest,
                        CrossOriginNavigationBrowserInitiated) {
   RunReferrerTest(GetParam().baseline_policy, START_ON_HTTP, REGULAR_LINK,
-                  HTTPS_NO_REDIRECT, WindowOpenDisposition::CURRENT_TAB,
+                  HTTPS_NO_REDIRECT, WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kLeft,
                   GetParam().cross_origin_nav, GetParam().expected_policy,
                   BROWSER_INITIATED);
@@ -930,7 +931,7 @@ IN_PROC_BROWSER_TEST_P(ReferrerOverrideTest,
 
 IN_PROC_BROWSER_TEST_P(ReferrerOverrideTest, CrossOriginDowngradeNavigation) {
   RunReferrerTest(GetParam().baseline_policy, START_ON_HTTPS, REGULAR_LINK,
-                  NO_REDIRECT, WindowOpenDisposition::CURRENT_TAB,
+                  NO_REDIRECT, WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kNoButton,
                   GetParam().cross_origin_downgrade_nav,
                   GetParam().expected_policy);
@@ -939,7 +940,7 @@ IN_PROC_BROWSER_TEST_P(ReferrerOverrideTest, CrossOriginDowngradeNavigation) {
 IN_PROC_BROWSER_TEST_P(ReferrerOverrideTest, CrossOriginRedirect) {
   RunReferrerTest(GetParam().baseline_policy, START_ON_HTTP, REGULAR_LINK,
                   SERVER_REDIRECT_FROM_HTTP_TO_HTTPS,
-                  WindowOpenDisposition::CURRENT_TAB,
+                  WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kNoButton,
                   GetParam().same_origin_to_cross_origin_redirect,
                   GetParam().expected_policy);
@@ -948,7 +949,7 @@ IN_PROC_BROWSER_TEST_P(ReferrerOverrideTest, CrossOriginRedirect) {
 IN_PROC_BROWSER_TEST_P(ReferrerOverrideTest, CrossOriginToSameOriginRedirect) {
   RunReferrerTest(GetParam().baseline_policy, START_ON_HTTP, REGULAR_LINK,
                   SERVER_REDIRECT_FROM_HTTPS_TO_HTTP,
-                  WindowOpenDisposition::CURRENT_TAB,
+                  WindowOpenDisposition::kCurrentTab,
                   blink::WebMouseEvent::Button::kNoButton,
                   GetParam().cross_origin_to_same_origin_redirect,
                   GetParam().expected_policy);

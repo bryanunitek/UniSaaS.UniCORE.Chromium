@@ -34,6 +34,7 @@
 #include "media/audio/fake_audio_log_factory.h"
 #include "media/audio/fake_audio_manager.h"
 #include "media/audio/test_audio_thread.h"
+#include "media/base/device_enumeration_outcome.h"
 #include "media/base/video_facing.h"
 #include "media/base/video_types.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
@@ -439,9 +440,12 @@ class MediaDevicesManagerTest : public ::testing::Test {
     ON_CALL(*mock_video_capture_provider_, GetDeviceInfosAsync(_))
         .WillByDefault(
             [&](VideoCaptureProvider::GetDeviceInfosCallback result_callback) {
-              video_capture_system_->GetDeviceInfosAsync(base::BindOnce(
-                  std::move(result_callback),
-                  media::mojom::DeviceEnumerationResult::kSuccess));
+              video_capture_system_->GetDeviceInfosAsync(
+                  media::mojom::VideoCaptureDeviceEnumerationMode::
+                      kDevicesWithCapabilities,
+                  base::BindOnce(
+                      std::move(result_callback),
+                      media::mojom::DeviceEnumerationResult::kSuccess));
             });
 
     video_capture_manager_ = new VideoCaptureManager(
@@ -486,6 +490,12 @@ class MediaDevicesManagerTest : public ::testing::Test {
     histogram_tester_.ExpectBucketCount(
         "Media.MediaDevicesManager.VideoDeviceEnumeration.Result",
         DeviceEnumerationResult::kUnknownError, error_count);
+    histogram_tester_.ExpectBucketCount(
+        "Media.Video.InputDeviceEnumerationOutcome",
+        media::DeviceEnumerationOutcome::kSuccessNonEmptyResult, success_count);
+    histogram_tester_.ExpectBucketCount(
+        "Media.Video.InputDeviceEnumerationOutcome",
+        media::DeviceEnumerationOutcome::kFailureEmptyResult, error_count);
   }
 
   void InitializeRenderFrameHost() {
@@ -511,7 +521,8 @@ class MediaDevicesManagerTest : public ::testing::Test {
     media_devices_manager_->video_capture_service_device_changed_observer_ =
         std::make_unique<
             MediaDevicesManager::VideoCaptureDevicesChangedObserver>(
-            /*disconnect_cb=*/base::BindRepeating([]() {}),
+            /*invalidate_cache_cb=*/base::BindRepeating([]() {}),
+            /*enumerate_system_devices_cb=*/base::BindRepeating([]() {}),
             /*listener_cb=*/base::BindRepeating([]() {}));
   }
 
@@ -596,6 +607,34 @@ TEST_F(MediaDevicesManagerTest, EnumerateNoCacheVideoInput) {
     run_loop.Run();
   }
   ExpectVideoEnumerationHistogramReport(kNumCalls);
+}
+
+TEST_F(MediaDevicesManagerTest, EnumerateNoCacheVideoEmptyResult) {
+  video_capture_device_factory_->SetToDefaultDevicesConfig(0);
+  EXPECT_CALL(*audio_manager_, MockGetAudioInputDeviceNames(_)).Times(0);
+  EXPECT_CALL(*video_capture_device_factory_, MockGetDevicesInfo())
+      .Times(kNumCalls);
+  EXPECT_CALL(*audio_manager_, MockGetAudioOutputDeviceNames(_)).Times(0);
+  EXPECT_CALL(*this, MockCallback(_)).Times(kNumCalls);
+  MediaDevicesManager::BoolDeviceTypes devices_to_enumerate;
+  devices_to_enumerate[static_cast<size_t>(MediaDeviceType::kMediaVideoInput)] =
+      true;
+  for (int i = 0; i < kNumCalls; i++) {
+    base::RunLoop run_loop;
+    media_devices_manager_->EnumerateDevices(
+        devices_to_enumerate,
+        base::BindOnce(&MediaDevicesManagerTest::EnumerateCallback,
+                       base::Unretained(this), &run_loop));
+    run_loop.Run();
+  }
+  histogram_tester_.ExpectTotalCount(
+      "Media.MediaDevicesManager.VideoDeviceEnumeration.Start", kNumCalls);
+  histogram_tester_.ExpectBucketCount(
+      "Media.MediaDevicesManager.VideoDeviceEnumeration.Result",
+      DeviceEnumerationResult::kSuccess, kNumCalls);
+  histogram_tester_.ExpectBucketCount(
+      "Media.Video.InputDeviceEnumerationOutcome",
+      media::DeviceEnumerationOutcome::kSuccessEmptyResult, kNumCalls);
 }
 
 TEST_F(MediaDevicesManagerTest, EnumerateNoCacheAudioOutput) {
@@ -1533,9 +1572,12 @@ TEST_F(MediaDevicesManagerTest, EnumerateVideoInputFailsOnce) {
           })
       .WillRepeatedly(
           [&](VideoCaptureProvider::GetDeviceInfosCallback result_callback) {
-            video_capture_system_->GetDeviceInfosAsync(base::BindOnce(
-                std::move(result_callback),
-                media::mojom::DeviceEnumerationResult::kSuccess));
+            video_capture_system_->GetDeviceInfosAsync(
+                media::mojom::VideoCaptureDeviceEnumerationMode::
+                    kDevicesWithCapabilities,
+                base::BindOnce(
+                    std::move(result_callback),
+                    media::mojom::DeviceEnumerationResult::kSuccess));
           });
   EXPECT_CALL(*video_capture_device_factory_, MockGetDevicesInfo())
       .Times(kNumCalls - 1);
@@ -1557,6 +1599,39 @@ TEST_F(MediaDevicesManagerTest, EnumerateVideoInputFailsOnce) {
   }
   ExpectVideoEnumerationHistogramReport(/*success_count=*/kNumCalls - 1,
                                         /*error_count=*/1);
+}
+
+TEST_F(MediaDevicesManagerTest,
+       EnumerateVideoInputInvalidatedDuringEnumeration) {
+  VideoCaptureProvider::GetDeviceInfosCallback saved_callback;
+  EXPECT_CALL(*mock_video_capture_provider_, GetDeviceInfosAsync(_))
+      .WillOnce([&](VideoCaptureProvider::GetDeviceInfosCallback callback) {
+        saved_callback = std::move(callback);
+      })
+      .WillRepeatedly(
+          [](VideoCaptureProvider::GetDeviceInfosCallback callback) {});
+
+  MediaDevicesManager::BoolDeviceTypes devices_to_enumerate;
+  devices_to_enumerate[static_cast<size_t>(MediaDeviceType::kMediaVideoInput)] =
+      true;
+
+  EXPECT_CALL(*this, MockCallback(_));
+  base::RunLoop run_loop;
+  media_devices_manager_->EnumerateDevices(
+      devices_to_enumerate,
+      base::BindOnce(&MediaDevicesManagerTest::EnumerateCallback,
+                     base::Unretained(this), &run_loop));
+
+  // Simulate an invalidation while GetDeviceInfosAsync is pending.
+  media_devices_manager_->OnDevicesChanged(
+      base::SystemMonitor::DEVTYPE_VIDEO_CAPTURE);
+
+  // Now respond to the pending GetDeviceInfosAsync.
+  std::move(saved_callback)
+      .Run(DeviceEnumerationResult::kErrorCaptureServiceCrash, {});
+
+  // The client request callback should still be invoked (not hang).
+  run_loop.Run();
 }
 
 TEST_F(MediaDevicesManagerTest, RegisterUnregisterDispatcherHosts) {

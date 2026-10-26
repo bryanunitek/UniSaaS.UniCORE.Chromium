@@ -26,6 +26,7 @@
 #include "third_party/blink/renderer/core/fileapi/blob.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/forms/form_data.h"
+#include "third_party/blink/renderer/core/streams/readable_stream.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_view.h"
 #include "third_party/blink/renderer/core/url/url_search_params.h"
@@ -352,7 +353,9 @@ Response* Response::redirect(ScriptState* script_state,
                              const String& url,
                              uint16_t status,
                              ExceptionState& exception_state) {
-  KURL parsed_url = ExecutionContext::From(script_state)->CompleteURL(url);
+  // The URL parser always encodes as UTF-8, so don't use CompleteURL(), which
+  // uses the document's encoding.
+  KURL parsed_url(ExecutionContext::From(script_state)->BaseURL(), url);
   if (!parsed_url.IsValid()) {
     exception_state.ThrowTypeError(StrCat({"Failed to parse URL from ", url}));
     return nullptr;
@@ -424,6 +427,10 @@ FetchResponseData* Response::CreateUnfilteredFetchResponseDataWithoutBody(
   response->SetResponseTime(fetch_api_response.response_time);
   response->SetCacheStorageCacheName(
       fetch_api_response.cache_storage_cache_name);
+  if (fetch_api_response.cache_storage_side_data_writer.is_valid()) {
+    response->SetCacheStorageSideDataWriter(
+        std::move(fetch_api_response.cache_storage_side_data_writer));
+  }
   response->SetConnectionInfo(fetch_api_response.connection_info);
   response->SetAlpnNegotiatedProtocol(
       AtomicString(fetch_api_response.alpn_negotiated_protocol));
@@ -431,6 +438,7 @@ FetchResponseData* Response::CreateUnfilteredFetchResponseDataWithoutBody(
   response->SetHasRangeRequested(fetch_api_response.has_range_requested);
   response->SetRequestIncludeCredentials(
       fetch_api_response.request_include_credentials);
+  response->SetTimingAllowPassed(fetch_api_response.timing_allow_passed);
 
   for (const auto& header : fetch_api_response.headers)
     response->HeaderList()->Append(header.key, header.value);
@@ -556,7 +564,7 @@ bool Response::IsBodyUsed() const {
 }
 
 String Response::MimeType() const {
-  return response_->MimeType();
+  return response_->HeaderList()->ExtractMIMEType();
 }
 
 String Response::ContentType() const {

@@ -20,7 +20,6 @@
 #import "ios/chrome/browser/overlays/model/public/web_content_area/alert_constants.h"
 #import "ios/chrome/browser/permissions/ui_bundled/permissions_app_interface.h"
 #import "ios/chrome/browser/permissions/ui_bundled/permissions_constants.h"
-#import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/earl_grey/chrome_actions.h"
@@ -121,14 +120,6 @@ void TapDoneButtonOnInfobarModal() {
 
 @implementation PermissionsTestCase
 
-- (AppLaunchConfiguration)appConfigurationForTestCase {
-  AppLaunchConfiguration config = [super appConfigurationForTestCase];
-  if ([self isRunningTest:@selector(testPermissionsWithReaderMode)]) {
-    config.features_enabled.push_back(kEnableReaderModeInUS);
-  }
-  return config;
-}
-
 - (void)setUp {
   [super setUp];
   // Disable translate to avoid the translate badge showing automatically.
@@ -180,13 +171,24 @@ void TapDoneButtonOnInfobarModal() {
       grey_ancestor(dialogMatcher), grey_accessibilityLabel(alertText), nil);
   [[EarlGrey selectElementWithMatcher:textMatcher]
       assertWithMatcher:grey_sufficientlyVisible()];
-  NSString* buttonText = l10n_util::GetNSString(
-      allow ? IDS_IOS_PERMISSIONS_ALERT_DIALOG_BUTTON_TEXT_GRANT
-            : IDS_IOS_PERMISSIONS_ALERT_DIALOG_BUTTON_TEXT_DENY);
+  id<GREYMatcher> buttonLabelMatcher =
+      allow
+          ? grey_anyOf(
+                grey_accessibilityLabel(l10n_util::GetNSString(
+                    IDS_IOS_PERMISSIONS_ALERT_DIALOG_BUTTON_TEXT_GRANT)),
+                grey_accessibilityLabel(l10n_util::GetNSString(
+                    IDS_IOS_PERMISSIONS_ALERT_DIALOG_BUTTON_TEXT_ALLOW_THIS_TIME)),
+                nil)
+          : grey_anyOf(
+                grey_accessibilityLabel(l10n_util::GetNSString(
+                    IDS_IOS_PERMISSIONS_ALERT_DIALOG_BUTTON_TEXT_DENY)),
+                grey_accessibilityLabel(l10n_util::GetNSString(
+                    IDS_IOS_PERMISSIONS_ALERT_DIALOG_BUTTON_TEXT_NEVER_ALLOW)),
+                nil);
 
-  id<GREYMatcher> buttonMatcher = grey_allOf(
-      grey_ancestor(dialogMatcher), grey_accessibilityLabel(buttonText),
-      grey_accessibilityTrait(UIAccessibilityTraitStaticText), nil);
+  id<GREYMatcher> buttonMatcher =
+      grey_allOf(grey_ancestor(dialogMatcher), buttonLabelMatcher,
+                 grey_accessibilityTrait(UIAccessibilityTraitStaticText), nil);
 
   [[[EarlGrey selectElementWithMatcher:buttonMatcher]
       assertWithMatcher:grey_sufficientlyVisible()] performAction:grey_tap()];
@@ -522,7 +524,7 @@ void TapDoneButtonOnInfobarModal() {
 - (void)testPermissionsAfterTabSwitch {
   // TODO(crbug.com/40921852): Failing on iOS17.
   if (@available(iOS 17.0, *)) {
-    XCTSkip(@"Failing on iOS17");
+    EARL_GREY_TEST_DISABLED(@"Failing on iOS17.");
   }
 
   GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
@@ -668,12 +670,15 @@ void TapDoneButtonOnInfobarModal() {
 
 // Tests that a supervised user account with parental controls enabled does not
 // have access to modify camera or microphone site permissions.
-- (void)testSupervisedUserPermissionsNoCameraOrMicAccess {
-  // TODO(crbug.com/40921852): Failing on iOS17.
-  if (@available(iOS 17.0, *)) {
-    XCTSkip(@"Failing on iOS17");
-  }
-
+// TODO(crbug.com/40921852): Failing on iOS17 on physical devices.
+#if TARGET_OS_SIMULATOR
+#define MAYBE_testSupervisedUserPermissionsNoCameraOrMicAccess \
+  testSupervisedUserPermissionsNoCameraOrMicAccess
+#else
+#define MAYBE_testSupervisedUserPermissionsNoCameraOrMicAccess \
+  DISABLED_testSupervisedUserPermissionsNoCameraOrMicAccess
+#endif
+- (void)MAYBE_testSupervisedUserPermissionsNoCameraOrMicAccess {
   // These settings are controlled in Family Link and would be updated through
   // Sync content settings.
   [ChromeEarlGrey setContentSetting:ContentSetting::CONTENT_SETTING_BLOCK

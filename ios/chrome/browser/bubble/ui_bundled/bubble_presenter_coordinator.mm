@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_presenter_coordinator.h"
 
 #import "base/notreached.h"
+#import "components/feature_engagement/public/event_constants.h"
 #import "components/feature_engagement/public/tracker.h"
 #import "components/omnibox/browser/omnibox_pref_names.h"
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_presenter.h"
@@ -17,7 +18,6 @@
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter.h"
-#import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/segmentation_platform/model/segmentation_platform_service_factory.h"
 #import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_util.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
@@ -88,6 +88,10 @@
       initWithPrefService:GetApplicationContext()->GetLocalState()
                  prefName:omnibox::kIsOmniboxInBottomPosition];
   [_bottomOmniboxEnabled setObserver:self];
+  if (_bottomOmniboxEnabled.value && engagementTracker) {
+    engagementTracker->NotifyEvent(
+        feature_engagement::events::kIOSBottomOmniboxUsed);
+  }
 }
 
 - (void)stop {
@@ -142,7 +146,7 @@
     case InProductHelpType::kDefaultSiteView: {
       [_presenter
           presentDefaultSiteViewTipBubbleWithSettingsMap:
-              ios::HostContentSettingsMapFactory::GetForProfile(profile)
+              ios::HostContentSettingsMapFactory::GetForProfile(profile).get()
                                         popupMenuHandler:popupMenuHandler];
       break;
     }
@@ -222,7 +226,6 @@
       break;
     }
     case InProductHelpType::kReaderModeOptions: {
-      CHECK(IsReaderModeAvailable());
       [_presenter presentReaderModeOptionsBubble];
       break;
     }
@@ -230,6 +233,15 @@
       CHECK(gemini::IsFeatureAvailable(gemini::Feature::kImageRemix,
                                        self.profile));
       CHECK(IsPageActionMenuEnabled());
+      // Early exit if PageActionMenuEntryPointCommands is not registered on
+      // the command dispatcher, as presenting the Image Remix Tool tip
+      // triggers asynchronously via a posted task and the handler may not be
+      // registered yet.
+      if (![commandDispatcher
+              dispatchingForProtocol:@protocol(
+                                         PageActionMenuEntryPointCommands)]) {
+        break;
+      }
       id<GeminiCommands> geminiHandler =
           HandlerForProtocol(commandDispatcher, GeminiCommands);
       id<PageActionMenuEntryPointCommands> pageActionMenuEntryPointHandler =
@@ -246,6 +258,14 @@
     }
     case InProductHelpType::kHomeBackgroundCustomization: {
       [_presenter presentHomeBackgroundCustomizationTipBubble];
+      break;
+    }
+    case InProductHelpType::kSendTabToSelfOmnibox: {
+      [_presenter presentSendTabToSelfOmniboxBubble];
+      break;
+    }
+    case InProductHelpType::kBottomOmnibox: {
+      [_presenter presentBottomOmniboxBubble];
       break;
     }
   }
@@ -267,6 +287,14 @@
 
 - (void)booleanDidChange:(id<ObservableBoolean>)observableBoolean {
   if (observableBoolean == _bottomOmniboxEnabled) {
+    if (_bottomOmniboxEnabled.value) {
+      feature_engagement::Tracker* engagementTracker =
+          feature_engagement::TrackerFactory::GetForProfile(self.profile);
+      if (engagementTracker) {
+        engagementTracker->NotifyEvent(
+            feature_engagement::events::kIOSBottomOmniboxUsed);
+      }
+    }
     [_presenter hideBubblesPointingToOmnibox];
   }
 }

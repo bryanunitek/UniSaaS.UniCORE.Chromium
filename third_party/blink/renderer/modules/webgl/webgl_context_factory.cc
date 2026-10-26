@@ -16,6 +16,7 @@
 #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context_webgpu.h"
 #include "third_party/blink/renderer/platform/graphics/predefined_color_space.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -79,8 +80,8 @@ CanvasRenderingContext* WebGLContextFactory::CreateInternal(
   std::unique_ptr<Extensions3DUtil> extensions_util =
       Extensions3DUtil::Create(gl);
   if (extensions_util->SupportsExtension("GL_EXT_debug_marker")) {
-    String context_label(UNSAFE_TODO(
-        String::Format("%s-%p", GetContextName(), context_provider.get())));
+    String context_label(
+        Format("{}-{}", GetContextName(), context_provider.get()));
     gl->PushGroupMarkerEXT(0, context_label.Ascii().c_str());
   }
 
@@ -93,8 +94,7 @@ CanvasRenderingContext* WebGLContextFactory::CreateInternal(
 
       host->HostDispatchEvent(WebGLContextEvent::Create(
           event_type_names::kWebglcontextcreationerror,
-          UNSAFE_TODO(
-              String::Format("Failed to create %s.", GetContextName()))));
+          StrCat({"Failed to create ", GetContextName(), "."})));
       return nullptr;
     }
 
@@ -142,10 +142,10 @@ CanvasRenderingContext* WebGLContextFactory::CreateInternalWebGPU(
 
   String init_error;
   if (!context->Initialize(execution_context, &init_error)) {
+    context->Dispose();
     host->HostDispatchEvent(WebGLContextEvent::Create(
         event_type_names::kWebglcontextcreationerror,
-        UNSAFE_TODO(String::Format("Failed to create %s: ", GetContextName())) +
-            init_error));
+        StrCat({"Failed to create ", GetContextName(), ": ", init_error})));
     return nullptr;
   }
 

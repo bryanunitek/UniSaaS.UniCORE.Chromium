@@ -9,27 +9,24 @@
 #include "base/strings/strcat.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/browser/ui/views/profiles/first_run_flow_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_management_step_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view_test_utils.h"
 #include "chrome/browser/ui/views/profiles/profiles_pixel_test_utils.h"
-#include "chrome/common/webui_url_constants.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/test_navigation_observer.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/page_transition_types.h"
 #include "ui/views/view_tracker.h"
-#include "url/gurl.h"
 
 namespace {
 struct FinishOrContinueTestParam {
   PixelTestParam pixel_test_param;
   bool is_feature_showcase_eligible = true;
+  bool sound_enabled = true;
 };
 
 const std::vector<FinishOrContinueTestParam>& GetTestParams() {
@@ -48,6 +45,8 @@ const std::vector<FinishOrContinueTestParam>& GetTestParams() {
                               .is_feature_showcase_eligible = eligible});
           }
         }
+        params.push_back({.pixel_test_param = {.test_suffix = "SoundDisabled"},
+                          .sound_enabled = false});
         return params;
       }());
   return *kParams;
@@ -64,6 +63,7 @@ class FirstRunFinishOrContinuePixelTest
         {{switches::kFirstRunDesktopRefresh, true},
          {switches::kFirstRunDesktopChoiceScreenRefresh, true},
          {switches::kFirstRunDesktopRevamp, true},
+         {switches::kFirstRunDesktopRevampSound, GetParam().sound_enabled},
          {switches::kDisableFirstRunAnimationsForTesting, true}});
   }
 
@@ -81,12 +81,13 @@ class FirstRunFinishOrContinuePixelTest
               return CreateFinishOrContinueStep(
                   host,
                   /*eligibility_callback=*/
-                  base::BindOnce([](bool eligible) { return eligible; },
-                                 eligible),
+                  base::BindRepeating([](bool eligible) { return eligible; },
+                                      eligible),
                   /*query_effects_callback=*/
                   base::BindRepeating([] { return false; }),
                   /*step_completed_callback=*/base::DoNothing(),
-                  /*play_all_set_sound_callback=*/base::DoNothing());
+                  /*play_all_set_sound_callback=*/base::DoNothing(),
+                  /*effects_button_shown_by_default=*/GetParam().sound_enabled);
             },
             GetParam().is_feature_showcase_eligible));
     profile_picker_view_tracker_.SetView(view);
@@ -104,8 +105,9 @@ class FirstRunFinishOrContinuePixelTest
     const testing::TestInfo* test_info =
         testing::UnitTest::GetInstance()->current_test_info();
     CHECK(test_info);
-    const std::string screenshot_name =
-        base::StrCat({test_info->test_suite_name(), "_", test_info->name()});
+    const std::string baseline = "8481376";
+    const std::string screenshot_name = base::StrCat(
+        {test_info->test_suite_name(), "_", test_info->name(), "_", baseline});
 
     return VerifyPixelUi(widget, "FirstRunFinishOrContinuePixelTest",
                          screenshot_name) != ui::test::ActionResult::kFailed;

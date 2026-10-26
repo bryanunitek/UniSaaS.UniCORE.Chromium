@@ -2,21 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// clang-format off
 import 'chrome://settings/settings.js';
 
 import {webUIListenerCallback} from 'chrome://resources/js/cr.js';
 import type {SiteShortcutsPageElement} from 'chrome://settings/settings.js';
-import {SearchEnginesBrowserProxyImpl, SearchEnginesInteractions} from 'chrome://settings/settings.js';
-import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
-import {loadTimeData} from 'chrome://settings/settings.js';
-import {isVisible} from 'chrome://webui-test/test_util.js';
+import {loadTimeData, SearchEnginesBrowserProxyImpl, SearchEnginesInteractions} from 'chrome://settings/settings.js';
 import type {CategorizedTemplateUrls} from 'chrome://settings/settings.js';
+import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import {createSampleSearchEngine, TestSearchEnginesBrowserProxy} from './test_search_engines_browser_proxy.js';
-
-// clang-format on
+import {createSampleSearchEngine, engineId, TestSearchEnginesBrowserProxy} from './test_search_engines_browser_proxy.js';
 
 /**
  * Generates sample CategorizedTemplateUrls for testing the updated UI.
@@ -26,28 +21,28 @@ function generateCategorizedTemplateUrls(): CategorizedTemplateUrls {
     activeSiteShortcuts: [
       createSampleSearchEngine({
         name: 'Prepopulated Site 1',
-        id: 10,
+        id: engineId('db:10'),
         url: 'https://site1.com/{searchTerms}',
         keyword: 's1',
         isPrepopulated: true,
       }),
       createSampleSearchEngine({
         name: 'Prepopulated Site 2',
-        id: 11,
+        id: engineId('db:11'),
         url: 'https://site1.com/{searchTerms}',
         keyword: 's1',
         isPrepopulated: true,
       }),
       createSampleSearchEngine({
         name: 'Active Site 1',
-        id: 12,
+        id: engineId('db:12'),
         url: 'https://site1.com/{searchTerms}',
         keyword: 's1',
         default: true,
       }),
       createSampleSearchEngine({
         name: 'Active Site 2',
-        id: 13,
+        id: engineId('db:13'),
         url: 'https://site2.com/{searchTerms}',
         keyword: 's2',
       }),
@@ -55,7 +50,7 @@ function generateCategorizedTemplateUrls(): CategorizedTemplateUrls {
     inactiveSiteShortcuts: [
       createSampleSearchEngine({
         name: 'Inactive Site 1',
-        id: 20,
+        id: engineId('db:20'),
         url: 'https://in1.com/{searchTerms}',
         keyword: 'in1',
       }),
@@ -70,7 +65,7 @@ suite('SiteShortcutsPageTest', function() {
   let browserProxy: TestSearchEnginesBrowserProxy;
   const categorizedData = generateCategorizedTemplateUrls();
 
-  setup(function() {
+  setup(async function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     browserProxy = new TestSearchEnginesBrowserProxy();
     browserProxy.setCategorizedTemplateUrls(categorizedData);
@@ -82,8 +77,8 @@ suite('SiteShortcutsPageTest', function() {
 
     page = document.createElement('settings-site-shortcuts-page');
     document.body.appendChild(page);
-
-    return flushTasks();
+    await browserProxy.whenCalled('getCategorizedTemplateUrls');
+    await microtasksFinished();
   });
 
   test('SectionsVisibleAndInitialState', async function() {
@@ -104,7 +99,7 @@ suite('SiteShortcutsPageTest', function() {
     // Expand the sections, which should show the add button and the lists.
     page.$.activeShortcutsRow.click();
     page.$.inactiveShortcutsRow.click();
-    await flushTasks();
+    await microtasksFinished();
 
     assertTrue(page.$.activeShortcutsRow.expanded);
     assertTrue(page.$.inactiveShortcutsRow.expanded);
@@ -143,7 +138,7 @@ suite('SiteShortcutsPageTest', function() {
     categorizedData.inactiveSiteShortcuts = [];
     browserProxy.setCategorizedTemplateUrls(categorizedData);
     webUIListenerCallback('search-engines-changed', categorizedData);
-    await flushTasks();
+    await microtasksFinished();
 
     // Updated state
     assertEquals(5, page.$.activeShortcutsList.engines.length);
@@ -161,7 +156,7 @@ suite('SiteShortcutsPageTest', function() {
     };
     browserProxy.setCategorizedTemplateUrls(emptyCategorizedData);
     webUIListenerCallback('search-engines-changed', emptyCategorizedData);
-    await flushTasks();
+    await microtasksFinished();
 
     assertFalse(isVisible(page.$.noActiveShortcutsFound));
     assertFalse(isVisible(page.$.noInactiveShortcutsFound));
@@ -170,7 +165,7 @@ suite('SiteShortcutsPageTest', function() {
     // messages.
     page.$.activeShortcutsRow.click();
     page.$.inactiveShortcutsRow.click();
-    await flushTasks();
+    await microtasksFinished();
 
     assertTrue(isVisible(page.$.noActiveShortcutsFound));
     assertTrue(isVisible(page.$.noInactiveShortcutsFound));
@@ -179,15 +174,15 @@ suite('SiteShortcutsPageTest', function() {
   test('AddSearchEngineOpensEditDialog', async function() {
     // Open the collapsed section.
     page.$.activeShortcutsRow.click();
-    await flushTasks();
+    await microtasksFinished();
 
     // Click on "Add".
     browserProxy.resetResolver('recordSearchEnginesPageHistogram');
     page.$.addSearchEngine.click();
-    await flushTasks();
+    await microtasksFinished();
 
     assertTrue(
-        !!page.shadowRoot!.querySelector('settings-search-engine-edit-dialog'));
+        !!page.shadowRoot.querySelector('settings-search-engine-edit-dialog'));
 
     const interaction =
         await browserProxy.whenCalled('recordSearchEnginesPageHistogram');
@@ -195,66 +190,66 @@ suite('SiteShortcutsPageTest', function() {
   });
 
   test('EditSearchEngineEventOpensEditDialog', async function() {
-    const testEngine = createSampleSearchEngine({id: 10, name: 'Edit Me'});
-    page.dispatchEvent(new CustomEvent('view-or-edit-search-engine', {
-      bubbles: true,
-      composed: true,
-      detail: {engine: testEngine, anchorElement: page.$.activeShortcutsRow},
-    }));
-    await flushTasks();
+    const testEngine =
+        createSampleSearchEngine({id: engineId('db:10'), name: 'Edit Me'});
+    page.fire('view-or-edit-search-engine', {
+      engine: testEngine,
+      anchorElement: page.$.activeShortcutsRow,
+    });
+    await microtasksFinished();
 
     assertTrue(
-        !!page.shadowRoot!.querySelector('settings-search-engine-edit-dialog'));
+        !!page.shadowRoot.querySelector('settings-search-engine-edit-dialog'));
   });
 
   test('DeleteSearchEngineEventOpensConfirmationDialog', async function() {
-    const testEngine = createSampleSearchEngine({id: 20, name: 'Delete Me'});
-    page.dispatchEvent(new CustomEvent('delete-search-engine', {
-      bubbles: true,
-      composed: true,
-      detail: {engine: testEngine, anchorElement: page.$.activeShortcutsRow},
-    }));
-    await flushTasks();
+    const testEngine =
+        createSampleSearchEngine({id: engineId('db:20'), name: 'Delete Me'});
+    page.fire('delete-search-engine', {
+      engine: testEngine,
+      anchorElement: page.$.activeShortcutsRow,
+    });
+    await microtasksFinished();
 
-    assertTrue(!!page.shadowRoot!.querySelector(
-        'settings-simple-confirmation-dialog'));
+    assertTrue(
+        !!page.shadowRoot.querySelector('settings-simple-confirmation-dialog'));
   });
 
   test('ConfirmDeleteCallsBrowserProxy', async function() {
-    const testEngine = createSampleSearchEngine({id: 20, name: 'Delete Me'});
-    page.dispatchEvent(new CustomEvent('delete-search-engine', {
-      bubbles: true,
-      composed: true,
-      detail: {engine: testEngine, anchorElement: page},
-    }));
-    await flushTasks();
+    const testEngine =
+        createSampleSearchEngine({id: engineId('db:20'), name: 'Delete Me'});
+    page.fire('delete-search-engine', {
+      engine: testEngine,
+      anchorElement: page,
+    });
+    await microtasksFinished();
 
     // Accept the dialog.
     const deleteDialog =
-        page.shadowRoot!.querySelector('settings-simple-confirmation-dialog');
+        page.shadowRoot.querySelector('settings-simple-confirmation-dialog');
     assertTrue(!!deleteDialog);
     deleteDialog.$.confirm.click();
-    await flushTasks();
+    await microtasksFinished();
 
     const args = await browserProxy.whenCalled('removeSearchEngine');
-    assertEquals(20, args);
+    assertEquals('db:20', args);
   });
 
   test('CancelDeleteDoesNotCallBrowserProxy', async function() {
-    const testEngine = createSampleSearchEngine({id: 20, name: 'Delete Me'});
-    page.dispatchEvent(new CustomEvent('delete-search-engine', {
-      bubbles: true,
-      composed: true,
-      detail: {engine: testEngine, anchorElement: page},
-    }));
-    await flushTasks();
+    const testEngine =
+        createSampleSearchEngine({id: engineId('db:20'), name: 'Delete Me'});
+    page.fire('delete-search-engine', {
+      engine: testEngine,
+      anchorElement: page,
+    });
+    await microtasksFinished();
 
     // Cancel the dialog.
     const deleteDialog =
-        page.shadowRoot!.querySelector('settings-simple-confirmation-dialog');
+        page.shadowRoot.querySelector('settings-simple-confirmation-dialog');
     assertTrue(!!deleteDialog);
     deleteDialog.$.cancel.click();
-    await flushTasks();
+    await microtasksFinished();
 
     assertEquals(0, browserProxy.getCallCount('removeSearchEngine'));
   });

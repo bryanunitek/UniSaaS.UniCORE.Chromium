@@ -27,7 +27,8 @@
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations_mixin.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_settings_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
@@ -40,6 +41,7 @@
 #include "components/browsing_data/content/browsing_data_model_test_util.h"
 #include "components/browsing_data/content/browsing_data_test_util.h"
 #include "components/browsing_data/content/shared_worker_info.h"
+#include "components/browsing_data/core/features.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/performance_manager/public/features.h"
@@ -51,12 +53,10 @@
 #include "components/privacy_sandbox/privacy_sandbox_settings.h"
 #include "components/services/storage/public/mojom/local_storage_control.mojom.h"
 #include "components/services/storage/public/mojom/storage_usage_info.mojom.h"
-#include "components/services/storage/shared_storage/shared_storage_manager.h"
 #include "components/unexportable_keys/features.h"
-#include "content/public/browser/attribution_data_model.h"
 #include "content/public/browser/dom_storage_context.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/network_service_instance.h"
-#include "content/public/browser/private_aggregation_data_model.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/storage_usage_info.h"
 #include "content/public/common/content_features.h"
@@ -158,106 +158,6 @@ void ProvideRequestHandlerKeyCommitmentsToNetworkService(
   run_loop.Run();
 }
 
-void JoinInterestGroup(const content::ToRenderFrameHost& adapter,
-                       net::EmbeddedTestServer* https_server,
-                       const std::string& owner_host) {
-  // join interest group
-  auto command = content::JsReplace(
-      R"(
-    (async () => {
-      try {
-        navigator.joinAdInterestGroup(
-            {
-              name: 'cars',
-              owner: $1,
-              biddingLogicURL: $2,
-              trustedBiddingSignalsURL: $3,
-              trustedBiddingSignalsKeys: ['key1'],
-              userBiddingSignals: {some: 'json', data: {here: [1, 2, 3]}},
-              ads: [{
-                renderURL: $4,
-                metadata: {ad: 'metadata', here: [1, 2, 3]},
-              }],
-            },
-            /*joinDurationSec=*/ 1000);
-      } catch (e) {
-        return e.toString();
-      }
-      return "Success";
-    })())",
-      https_server->GetURL(owner_host, "/"),
-      https_server->GetURL(owner_host, "/interest_group/bidding_logic.js"),
-      https_server->GetURL(owner_host,
-                           "/interest_group/trusted_bidding_signals.json"),
-      GURL("https://example.com/render"));
-  EXPECT_EQ("Success", EvalJs(adapter, command));
-}
-
-void RunAdAuction(const content::ToRenderFrameHost& adapter,
-                  net::EmbeddedTestServer* https_server,
-                  const std::string& seller_host,
-                  const std::string& buyer_host) {
-  std::string command = content::JsReplace(
-      R"(
-      (async function() {
-        try {
-          await navigator.runAdAuction({
-            seller: $1,
-            decisionLogicURL: $2,
-            interestGroupBuyers: [$3],
-          });
-        } catch (e) {
-          return e.toString();
-        }
-        return "Success";
-      })())",
-      https_server->GetURL(seller_host, "/"),
-      https_server->GetURL(seller_host, "/interest_group/decision_logic.js"),
-      https_server->GetURL(buyer_host, "/"));
-  EXPECT_EQ("Success", EvalJs(adapter, command));
-}
-
-void ExecuteScriptInSharedStorageWorklet(
-    const content::ToRenderFrameHost& execution_target,
-    const std::string& script,
-    GURL* out_module_script_url,
-    net::EmbeddedTestServer* https_server) {
-  CHECK(out_module_script_url);
-
-  base::StringPairs run_function_body_replacement;
-  run_function_body_replacement.emplace_back("{{RUN_FUNCTION_BODY}}", script);
-
-  std::string host =
-      execution_target.render_frame_host()->GetLastCommittedOrigin().host();
-
-  *out_module_script_url =
-      https_server->GetURL(host, net::test_server::GetFilePathWithReplacements(
-                                     "/shared_storage/customizable_module.js",
-                                     run_function_body_replacement));
-
-  EXPECT_TRUE(ExecJs(execution_target,
-                     content::JsReplace("sharedStorage.worklet.addModule($1)",
-                                        *out_module_script_url)));
-
-  testing::AssertionResult result =
-      ExecJs(execution_target,
-             "sharedStorage.run('test-operation', {keepAlive: true});");
-}
-
-void AccessTopics(const content::ToRenderFrameHost& adapter) {
-  std::string command =
-      R"(
-    (async () => {
-      try {
-        document.browsingTopics();
-      } catch (e) {
-        return e.toString();
-      }
-      return "Success";
-    })())";
-  EXPECT_EQ("Success", EvalJs(adapter, command));
-}
-
 class IdpTestServer {
  public:
   struct ConfigDetails {
@@ -290,7 +190,7 @@ class IdpTestServer {
       return BuildIdpHeaderResponse(request);
     }
 
-    if (request.all_headers.find(kIdpForbiddenHeader) != std::string::npos) {
+    if (request.all_headers.contains(kIdpForbiddenHeader)) {
       EXPECT_EQ(request.headers.at(kIdpForbiddenHeader), "?1");
     }
 
@@ -315,10 +215,9 @@ class IdpTestServer {
   std::unique_ptr<HttpResponse> BuildIdpHeaderResponse(
       const HttpRequest& request) {
     auto response = std::make_unique<BasicHttpResponse>();
-    if (request.relative_url.find("/header/signin") != std::string::npos) {
+    if (request.relative_url.contains("/header/signin")) {
       response->AddCustomHeader(kSetLoginHeader, kLoggedInHeaderValue);
-    } else if (request.relative_url.find("/header/signout") !=
-               std::string::npos) {
+    } else if (request.relative_url.contains("/header/signout")) {
       response->AddCustomHeader(kSetLoginHeader, kLoggedOutHeaderValue);
     } else {
       return nullptr;
@@ -476,7 +375,6 @@ void EnsurePageAccessedStorage(content::WebContents* web_contents) {
 
 using browsing_data_model_test_util::ValidateBrowsingDataEntries;
 using browsing_data_model_test_util::ValidateBrowsingDataEntriesNonZeroUsage;
-using OperationResult = storage::SharedStorageDatabase::OperationResult;
 using browsing_data_test_util::HasDataForType;
 using browsing_data_test_util::SetDataForType;
 
@@ -489,11 +387,6 @@ class BrowsingDataModelBrowserTest
         {features::kPrivacySandboxAdsAPIsOverride, {}},
         {features::kIsolatedWebApps, {}},
         {features::kIsolatedWebAppDevMode, {}},
-        {network::features::kSharedStorageAPI, {}},
-        {network::features::kInterestGroupStorage, {}},
-        {blink::features::kPrivateAggregationApi, {}},
-        {blink::features::kAdInterestGroupAPI, {}},
-        {blink::features::kFledge, {}},
         {blink::features::kFencedFrames, {}},
         {network::features::kBrowsingTopics, {}},
         {net::features::kThirdPartyStoragePartitioning, {}},
@@ -539,8 +432,6 @@ class BrowsingDataModelBrowserTest
   }
 
   void SetUpOnMainThread() override {
-    PrivacySandboxSettingsFactory::GetForProfile(browser()->GetProfile())
-        ->SetAllPrivacySandboxAllowedForTesting();
     // Mark all Privacy Sandbox APIs as attested since the test cases are
     // testing behaviors not related to attestations.
     privacy_sandbox::PrivacySandboxAttestations::GetInstance()
@@ -592,7 +483,7 @@ class BrowsingDataModelBrowserTest
   }
 
   content::StoragePartition* default_storage_partition() {
-    return browser()->profile()->GetDefaultStoragePartition();
+    return browser()->GetProfile()->GetDefaultStoragePartition();
   }
 
   content::WebContents* web_contents() {
@@ -635,84 +526,6 @@ class BrowsingDataModelBrowserTest
   testing::NiceMock<policy::MockConfigurationPolicyProvider> provider_;
 };
 
-IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
-                       SharedStorageHandledCorrectly) {
-  // Add origin shared storage.
-  auto* shared_storage_manager =
-      default_storage_partition()->GetSharedStorageManager();
-  ASSERT_NE(nullptr, shared_storage_manager);
-
-  base::test::TestFuture<OperationResult> future;
-  url::Origin testOrigin = url::Origin::Create(GURL("https://a.test"));
-  shared_storage_manager->Set(
-      testOrigin, u"key", u"value", future.GetCallback(),
-      storage::SharedStorageDatabase::SetBehavior::kDefault);
-  EXPECT_EQ(OperationResult::kSet, future.Get());
-
-  std::unique_ptr<BrowsingDataModel> browsing_data_model =
-      BuildBrowsingDataModel();
-  // Validate shared storage entry saved correctly.
-  base::test::TestFuture<uint64_t> test_entry_storage_size;
-  shared_storage_manager->FetchOrigins(base::BindLambdaForTesting(
-      [&](std::vector<::storage::mojom::StorageUsageInfoPtr>
-              storage_usage_info) {
-        ASSERT_EQ(1U, storage_usage_info.size());
-        test_entry_storage_size.SetValue(
-            storage_usage_info[0]->total_size_bytes);
-      }));
-
-  ValidateBrowsingDataEntries(
-      browsing_data_model.get(),
-      {{kTestHost,
-        blink::StorageKey::CreateFirstParty(testOrigin),
-        {{BrowsingDataModel::StorageType::kSharedStorage},
-         test_entry_storage_size.Get(),
-         /*cookie_count=*/0}}});
-
-  // Remove origin.
-  RemoveBrowsingDataForDataOwner(browsing_data_model.get(), kTestHost);
-
-  // Rebuild Browsing Data Model and verify entries are empty.
-  browsing_data_model = BuildBrowsingDataModel();
-  ValidateBrowsingDataEntries(browsing_data_model.get(), {});
-}
-
-IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
-                       SharedStorageAccessReportedCorrectly) {
-  // Navigate to test page.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
-  auto* content_settings =
-      content_settings::PageSpecificContentSettings::GetForFrame(
-          web_contents()->GetPrimaryMainFrame());
-
-  // Validate that the allowed browsing data model is empty.
-  ValidateBrowsingDataEntries(content_settings->allowed_browsing_data_model(),
-                              {});
-
-  // Create a SharedStorage entry.
-  std::string command = R"(
-  (async () => {
-    try {
-      await window.sharedStorage.set('age-group', 1);
-      return true;
-    } catch {
-      return false;
-    }
-  })();)";
-  EXPECT_EQ(true, EvalJs(web_contents(), command));
-
-  // Validate that the allowed browsing data model is populated with
-  // SharedStorage entry for `kTestHost`.
-  url::Origin testOrigin = https_test_server()->GetOrigin(kTestHost);
-  ValidateBrowsingDataEntries(
-      content_settings->allowed_browsing_data_model(),
-      {{kTestHost,
-        blink::StorageKey::CreateFirstParty(testOrigin),
-        {{BrowsingDataModel::StorageType::kSharedStorage},
-         /*storage_size=*/0,
-         /*cookie_count=*/0}}});
-}
-
 IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest, TrustTokenIssuance) {
   // Setup the test server to be able to issue trust tokens, and have it issue
   // some to the profile.
@@ -741,7 +554,7 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest, TrustTokenIssuance) {
   EXPECT_EQ(true, EvalJs(web_contents(), command));
 
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetDefaultStoragePartition()
       ->FlushNetworkInterfaceForTesting();
 
@@ -766,235 +579,6 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest, TrustTokenIssuance) {
 }
 
 IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
-                       InterestGroupsHandledCorrectly) {
-  // Check that no interest groups are joined at the beginning of the test.
-  std::unique_ptr<BrowsingDataModel> browsing_data_model =
-      BuildBrowsingDataModel();
-  ValidateBrowsingDataEntries(browsing_data_model.get(), {});
-  ASSERT_EQ(browsing_data_model->size(), 0u);
-
-  // Join an interest group.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
-  JoinInterestGroup(web_contents(), https_test_server(), kTestHost);
-
-  // Waiting for the browsing data model to be populated, otherwise the test is
-  // flaky.
-  do {
-    browsing_data_model = BuildBrowsingDataModel();
-    base::PlatformThread::Sleep(TestTimeouts::tiny_timeout());
-  } while (browsing_data_model->size() != 1);
-
-  // Validate that an interest group is added.
-  url::Origin testOrigin = https_test_server()->GetOrigin(kTestHost);
-  content::InterestGroupManager::InterestGroupDataKey data_key{testOrigin,
-                                                               testOrigin};
-  ValidateBrowsingDataEntries(
-      browsing_data_model.get(),
-      {{kTestHost,
-        data_key,
-        {{BrowsingDataModel::StorageType::kInterestGroup},
-         /*storage_size=*/1024,
-         /*cookie_count=*/0}}});
-
-  // Remove Interest Group.
-  RemoveBrowsingDataForDataOwner(browsing_data_model.get(), kTestHost);
-
-  // Rebuild Browsing Data Model and verify entries are empty.
-  browsing_data_model = BuildBrowsingDataModel();
-  ValidateBrowsingDataEntries(browsing_data_model.get(), {});
-}
-
-IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
-                       InterestGroupsAccessReportedCorrectly) {
-  // Navigate to test page.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
-  auto* content_settings =
-      content_settings::PageSpecificContentSettings::GetForFrame(
-          web_contents()->GetPrimaryMainFrame());
-
-  // Validate that the allowed browsing data model is empty.
-  auto* allowed_browsing_data_model =
-      content_settings->allowed_browsing_data_model();
-  ValidateBrowsingDataEntries(allowed_browsing_data_model, {});
-  ASSERT_EQ(allowed_browsing_data_model->size(), 0u);
-
-  // Join an interest group.
-  JoinInterestGroup(web_contents(), https_test_server(), kTestHost);
-  WaitForModelUpdate(allowed_browsing_data_model, 1);
-
-  // Validate that an interest group is reported to the browsing data model.
-  url::Origin testOrigin = https_test_server()->GetOrigin(kTestHost);
-  content::InterestGroupManager::InterestGroupDataKey data_key{testOrigin,
-                                                               testOrigin};
-  ValidateBrowsingDataEntries(
-      allowed_browsing_data_model,
-      {{kTestHost,
-        data_key,
-        {{BrowsingDataModel::StorageType::kInterestGroup},
-         /*storage_size=*/0,
-         /*cookie_count=*/0}}});
-}
-
-IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
-                       AuctionWinReportedCorrectly) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
-  JoinInterestGroup(web_contents(), https_test_server(), kTestHost);
-
-  // Run an auction on `kTestHost2`. A different host is used to ensure the
-  // correct host (`kTestHost`) is reported as having accessed storage.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), https_test_server()->GetURL(kTestHost2, "/echo")));
-
-  auto* content_settings =
-      content_settings::PageSpecificContentSettings::GetForFrame(
-          web_contents()->GetPrimaryMainFrame());
-
-  // Validate that the allowed browsing data model is empty.
-  auto* allowed_browsing_data_model =
-      content_settings->allowed_browsing_data_model();
-  ValidateBrowsingDataEntries(allowed_browsing_data_model, {});
-  ASSERT_EQ(allowed_browsing_data_model->size(), 0u);
-
-  RunAdAuction(web_contents(), https_test_server(), /*seller_host=*/kTestHost2,
-               /*buyer_host=*/kTestHost);
-  WaitForModelUpdate(allowed_browsing_data_model, 1);
-
-  url::Origin testOrigin = https_test_server()->GetOrigin(kTestHost);
-  content::InterestGroupManager::InterestGroupDataKey data_key{testOrigin,
-                                                               testOrigin};
-  ValidateBrowsingDataEntries(
-      allowed_browsing_data_model,
-      {{kTestHost,
-        data_key,
-        {{BrowsingDataModel::StorageType::kInterestGroup},
-         /*storage_size=*/0,
-         /*cookie_count=*/0}}});
-}
-
-IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
-                       AttributionReportingAccessReportedCorrectly) {
-  const GURL kTestCases[] = {
-      https_test_server()->GetURL(
-          "a.test", "/attribution_reporting/register_source_headers.html"),
-      https_test_server()->GetURL(
-          "a.test", "/attribution_reporting/register_trigger_headers.html")};
-
-  for (const auto& register_url : kTestCases) {
-    // Navigate to test page.
-    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
-    auto* content_settings =
-        content_settings::PageSpecificContentSettings::GetForFrame(
-            web_contents()->GetPrimaryMainFrame());
-
-    // Validate that the allowed browsing data model is empty.
-    auto* allowed_browsing_data_model =
-        content_settings->allowed_browsing_data_model();
-    ValidateBrowsingDataEntries(allowed_browsing_data_model, {});
-    ASSERT_EQ(allowed_browsing_data_model->size(), 0u);
-
-    // Register a source.
-    ASSERT_TRUE(ExecJs(web_contents(), content::JsReplace(R"(
-      const img = document.createElement('img');
-      img.attributionSrc = $1;)",
-                                                          register_url)));
-
-    WaitForModelUpdate(allowed_browsing_data_model, 1);
-
-    // Validate that an attribution reporting datakey is reported to the
-    // browsing data model.
-    url::Origin testOrigin = https_test_server()->GetOrigin(kTestHost);
-    content::AttributionDataModel::DataKey data_key{testOrigin};
-    ValidateBrowsingDataEntries(
-        allowed_browsing_data_model,
-        {{kTestHost,
-          data_key,
-          {{BrowsingDataModel::StorageType::kAttributionReporting},
-           /*storage_size=*/0,
-           /*cookie_count=*/0}}});
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
-                       PrivateAggregationHandledCorrectly) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
-
-  // Validate that there are no entries in the browsing data model.
-  std::unique_ptr<BrowsingDataModel> browsing_data_model =
-      BuildBrowsingDataModel();
-  ValidateBrowsingDataEntries(browsing_data_model.get(), {});
-
-  GURL out_script_url;
-  ExecuteScriptInSharedStorageWorklet(web_contents(), R"(
-      privateAggregation.contributeToHistogram({bucket: 1n, value: 2});
-    )",
-                                      &out_script_url, https_test_server());
-
-  do {
-    browsing_data_model = BuildBrowsingDataModel();
-    base::PlatformThread::Sleep(TestTimeouts::tiny_timeout());
-  } while (browsing_data_model->size() < 1);
-
-  // Validate that a private aggregation data key is added.
-  url::Origin test_origin = https_test_server()->GetOrigin(kTestHost);
-  content::PrivateAggregationDataModel::DataKey data_key{test_origin};
-
-  ValidateBrowsingDataEntries(
-      browsing_data_model.get(),
-      {{kTestHost,
-        data_key,
-        {{BrowsingDataModel::StorageType::kPrivateAggregation},
-         /*storage_size=*/100,
-         /*cookie_count=*/0}}});
-
-  // Remove datakey from aggregation service and private budgeter.
-  RemoveBrowsingDataForDataOwner(browsing_data_model.get(), kTestHost);
-
-  // Rebuild Browsing Data Model and verify entries are empty.
-  browsing_data_model = BuildBrowsingDataModel();
-  ValidateBrowsingDataEntries(browsing_data_model.get(), {});
-}
-
-IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
-                       TopicsAccessReportedCorrectly) {
-  // Navigate to test page.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url()));
-
-  auto* content_settings =
-      content_settings::PageSpecificContentSettings::GetForFrame(
-          web_contents()->GetPrimaryMainFrame());
-
-  // Validate that the allowed browsing data model is empty.
-  auto* allowed_browsing_data_model =
-      content_settings->allowed_browsing_data_model();
-  ValidateBrowsingDataEntries(allowed_browsing_data_model, {});
-  ASSERT_EQ(allowed_browsing_data_model->size(), 0u);
-
-  // Get Topics
-  AccessTopics(web_contents());
-
-  WaitForModelUpdate(allowed_browsing_data_model, 1);
-
-  // Validate Topics are reported correctly
-  url::Origin testOrigin = https_test_server()->GetOrigin(kTestHost);
-  ValidateBrowsingDataEntries(
-      allowed_browsing_data_model,
-      {{kTestHost,
-        testOrigin,
-        {{static_cast<BrowsingDataModel::StorageType>(
-             ChromeBrowsingDataModelDelegate::StorageType::kTopics)},
-         /*storage_size=*/0,
-         /*cookie_count=*/0}}});
-  ASSERT_EQ(allowed_browsing_data_model->size(), 1u);
-
-  // Clear Topic via BDM
-  RemoveBrowsingDataForDataOwner(allowed_browsing_data_model, kTestHost);
-
-  // Validate that the allowed browsing data model is cleared.
-  ValidateBrowsingDataEntries(allowed_browsing_data_model, {});
-  ASSERT_EQ(allowed_browsing_data_model->size(), 0u);
-}
-
-IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
                        IsolatedWebAppUsageInDefaultStoragePartitionModel) {
   // Check that no IWAs are installed at the beginning of the test.
   std::unique_ptr<BrowsingDataModel> browsing_data_model =
@@ -1002,7 +586,7 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
   ValidateBrowsingDataEntries(browsing_data_model.get(), {});
   ASSERT_EQ(browsing_data_model->size(), 0u);
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app1 =
       web_app::IsolatedWebAppBuilder(web_app::ManifestBuilder()).BuildBundle();
@@ -1096,7 +680,8 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
   SetDataForType("LocalStorage", web_contents());
 
   //  Flush storage size to disk.
-  auto* storage_partition = browser()->profile()->GetDefaultStoragePartition();
+  auto* storage_partition =
+      browser()->GetProfile()->GetDefaultStoragePartition();
   storage_partition->Flush();
 
   // To ensure that flushing is completed.
@@ -1281,7 +866,25 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
   }
 }
 
-IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
+class BrowsingDataModelSharedWorkerBrowserTest
+    : public BrowsingDataModelBrowserTest {
+ public:
+  BrowsingDataModelSharedWorkerBrowserTest() {
+    scoped_feature_list_.InitWithFeatureState(
+        browsing_data::features::kBrowsingDataModelSharedWorkerKeyWithoutURL,
+        GetParam());
+  }
+  ~BrowsingDataModelSharedWorkerBrowserTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         BrowsingDataModelSharedWorkerBrowserTest,
+                         ::testing::Bool());
+
+IN_PROC_BROWSER_TEST_P(BrowsingDataModelSharedWorkerBrowserTest,
                        SharedWorkerAccessReportedCorrectly) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(),
@@ -1299,29 +902,96 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
 
   SetDataForType("SharedWorker", web_contents());
   WaitForModelUpdate(allowed_browsing_data_model, /*expected_size=*/1);
+  ASSERT_TRUE(HasDataForType("SharedWorker", web_contents()));
 
-  // Validate Shared Worker is reported.
+  // Validate Shared Worker is reported with the appropriate DataKey.
   url::Origin testOrigin = https_test_server()->GetOrigin(kTestHost);
-  GURL::Replacements replacements;
-  replacements.SetPathStr("browsing_data/shared_worker.js");
-  GURL worker = testOrigin.GetURL().ReplaceComponents(replacements);
-  browsing_data::SharedWorkerInfo data_key(
-      worker, /*name=*/"", blink::StorageKey::CreateFirstParty(testOrigin),
-      blink::mojom::SharedWorkerSameSiteCookies::kAll);
-  ValidateBrowsingDataEntries(
-      allowed_browsing_data_model,
-      {{kTestHost,
-        data_key,
-        {{BrowsingDataModel::StorageType::kSharedWorker},
-         /*storage_size=*/0,
-         /*cookie_count=*/0}}});
+  auto storage_key = blink::StorageKey::CreateFirstParty(testOrigin);
+  if (GetParam()) {
+    ValidateBrowsingDataEntries(
+        allowed_browsing_data_model,
+        {{kTestHost,
+          storage_key,
+          {{BrowsingDataModel::StorageType::kSharedWorker},
+           /*storage_size=*/0,
+           /*cookie_count=*/0}}});
+  } else {
+    GURL::Replacements replacements;
+    replacements.SetPathStr("browsing_data/shared_worker.js");
+    GURL worker = testOrigin.GetURL().ReplaceComponents(replacements);
+    browsing_data::SharedWorkerInfo data_key(
+        worker, /*name=*/"", storage_key,
+        blink::mojom::SharedWorkerSameSiteCookies::kAll);
+    ValidateBrowsingDataEntries(
+        allowed_browsing_data_model,
+        {{kTestHost,
+          data_key,
+          {{BrowsingDataModel::StorageType::kSharedWorker},
+           /*storage_size=*/0,
+           /*cookie_count=*/0}}});
+  }
   ASSERT_EQ(allowed_browsing_data_model->size(), 1u);
 
-  // Delete Shared Worker
+  // Delete Shared Worker and verify that the running worker was terminated.
   RemoveBrowsingDataForDataOwner(allowed_browsing_data_model, kTestHost);
-  // Validate that the allowed browsing data model is empty.
   ValidateBrowsingDataEntries(allowed_browsing_data_model, {});
   ASSERT_EQ(allowed_browsing_data_model->size(), 0u);
+  ASSERT_FALSE(HasDataForType("SharedWorker", web_contents()));
+}
+
+IN_PROC_BROWSER_TEST_P(BrowsingDataModelSharedWorkerBrowserTest,
+                       SharedWorkerMultipleInstancesDeduplicated) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      https_test_server()->GetURL(kTestHost, "/browsing_data/site_data.html")));
+
+  auto* content_settings =
+      content_settings::PageSpecificContentSettings::GetForFrame(
+          web_contents()->GetPrimaryMainFrame());
+  auto* allowed_browsing_data_model =
+      content_settings->allowed_browsing_data_model();
+
+  // Start the primary test shared worker and two additional shared workers
+  // with distinct URLs and names under the same origin.
+  SetDataForType("SharedWorker", web_contents());
+  ASSERT_TRUE(content::ExecJs(web_contents(), R"(
+    Promise.all([
+      new Promise((resolve, reject) => {
+        window.sw1 = new SharedWorker('shared_worker.js?1', 'worker1');
+        window.sw1.onerror = reject;
+        window.sw1.port.onmessage = resolve;
+      }),
+      new Promise((resolve, reject) => {
+        window.sw2 = new SharedWorker('shared_worker.js?2', 'worker2');
+        window.sw2.onerror = reject;
+        window.sw2.port.onmessage = resolve;
+      }),
+    ])
+  )"));
+
+  if (GetParam()) {
+    // When keyed by StorageKey, all shared workers for the origin deduplicate
+    // into a single model entry.
+    WaitForModelUpdate(allowed_browsing_data_model, /*expected_size=*/1);
+    EXPECT_EQ(std::distance(allowed_browsing_data_model->begin(),
+                            allowed_browsing_data_model->end()),
+              1);
+  } else {
+    // When keyed by SharedWorkerInfo, each distinct URL/name creates a new map
+    // entry in the model.
+    ASSERT_TRUE(base::test::RunUntil([&]() {
+      return std::distance(allowed_browsing_data_model->begin(),
+                           allowed_browsing_data_model->end()) == 3;
+    }));
+  }
+
+  ASSERT_TRUE(HasDataForType("SharedWorker", web_contents()));
+
+  // Deleting browsing data for the host should terminate all running shared
+  // workers belonging to that StorageKey.
+  RemoveBrowsingDataForDataOwner(allowed_browsing_data_model, kTestHost);
+  ValidateBrowsingDataEntries(allowed_browsing_data_model, {});
+  ASSERT_FALSE(HasDataForType("SharedWorker", web_contents()));
 }
 
 IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
@@ -1356,7 +1026,8 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataModelBrowserTest,
   SetDataForType("LocalStorage", content::ChildFrameAt(web_contents(), 0));
 
   //  Flush storage size to disk.
-  auto* storage_partition = browser()->profile()->GetDefaultStoragePartition();
+  auto* storage_partition =
+      browser()->GetProfile()->GetDefaultStoragePartition();
   storage_partition->Flush();
 
   // To ensure that flushing is completed.

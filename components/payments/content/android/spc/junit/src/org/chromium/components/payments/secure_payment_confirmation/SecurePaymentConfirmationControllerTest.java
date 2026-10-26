@@ -28,6 +28,8 @@ import android.graphics.drawable.Drawable;
 import android.text.SpannableString;
 import android.text.style.ClickableSpan;
 
+import androidx.core.graphics.drawable.RoundedBitmapDrawable;
+
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -36,7 +38,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -73,7 +74,6 @@ import java.util.Locale;
 
 /** Unit tests for {@link SecurePaymentConfirmationController} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SecurePaymentConfirmationControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -111,8 +111,6 @@ public class SecurePaymentConfirmationControllerTest {
     private String mPaymentInstrumentLabelSecondary;
     private PaymentItem mTotal;
     private Drawable mPaymentIcon;
-    private Drawable mIssuerIcon;
-    private Drawable mNetworkIcon;
     private String mRelyingPartyId;
     private SecurePaymentConfirmationController mController;
 
@@ -230,7 +228,9 @@ public class SecurePaymentConfirmationControllerTest {
                         mPayeeOrigin, SchemeDisplay.OMIT_HTTP_AND_HTTPS),
                 storeItem.model.get(ItemProperties.SECONDARY_TEXT));
         ListItem paymentItem = itemList.get(1);
-        assertEquals(mPaymentIcon, paymentItem.model.get(ItemProperties.ICON));
+        assertEquals(
+                ((BitmapDrawable) mPaymentIcon).getBitmap(),
+                ((RoundedBitmapDrawable) paymentItem.model.get(ItemProperties.ICON)).getBitmap());
         assertEquals(
                 mPaymentInstrumentLabelPrimary, paymentItem.model.get(ItemProperties.PRIMARY_TEXT));
         assertEquals(

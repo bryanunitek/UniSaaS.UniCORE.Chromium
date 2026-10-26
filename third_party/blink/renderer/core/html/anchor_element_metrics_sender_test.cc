@@ -10,17 +10,24 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/time/time.h"
+#include "cc/base/features.h"
+#include "cc/test/scoped_browser_controls_linear_animation.h"
 #include "cc/trees/browser_controls_params.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/synthetic_web_input_event_builders.h"
+#include "third_party/blink/public/common/widget/device_emulation_params.h"
 #include "third_party/blink/public/mojom/loader/navigation_predictor.mojom-blink.h"
+#include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-blink.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
+#include "third_party/blink/renderer/core/exported/web_view_impl.h"
 #include "third_party/blink/renderer/core/frame/browser_controls.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
+#include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/html/anchor_element_metrics.h"
@@ -40,6 +47,7 @@
 #include "third_party/blink/renderer/platform/scheduler/test/fake_task_runner.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "ui/gfx/geometry/transform.h"
 
@@ -118,10 +126,6 @@ class MockAnchorElementMetricsHost
                                removed_elements.end());
   }
 
-  void ProcessPointerEventUsingMLModel(
-      mojom::blink::AnchorElementPointerEventForMLModelPtr pointer_event)
-      override {}
-
   void ShouldSkipUpdateDelays(
       ShouldSkipUpdateDelaysCallback callback) override {
     // We don't use this mechanism to disable the delay of reports, as the tests
@@ -148,7 +152,11 @@ class MockAnchorElementMetricsHost
   mojo::Receiver<mojom::blink::AnchorElementMetricsHost> receiver_{this};
 };
 
-class AnchorElementMetricsSenderTest : public SimTest {
+// TODO(crbug.com/489060623): Fix unit tests when running with snap animation
+// and remove ScopedBrowserControlsLinearAnimation.
+class AnchorElementMetricsSenderTest
+    : private cc::test::ScopedBrowserControlsLinearAnimation,
+      public SimTest {
  public:
   static constexpr int kViewportWidth = 400;
   static constexpr int kViewportHeight = 600;
@@ -163,7 +171,7 @@ class AnchorElementMetricsSenderTest : public SimTest {
     task_environment().FastForwardBy(base::Milliseconds(1));
     // Report all anchors to avoid non-deterministic behavior.
     std::map<std::string, std::string> nav_predictor_params;
-    nav_predictor_params["random_anchor_sampling_period"] = "1";
+    nav_predictor_params["RandomAnchorSamplingPeriod"] = "1";
     nav_predictor_params["intersection_observation_after_fcp_only"] = "false";
     // Set "eager" hover time to the same as "moderate" hover time to avoid test
     // flakiness.
@@ -302,7 +310,7 @@ class AnchorElementMetricsSenderTest : public SimTest {
     anchor->setInnerText(inner_text);
     anchor->setHref("https://foo.com");
     anchor->SetInlineStyleProperty(CSSPropertyID::kHeight,
-                                   String::Format("%dpx", height));
+                                   Format("{}px", height));
     anchor->SetInlineStyleProperty(CSSPropertyID::kDisplay, "block");
     document.body()->appendChild(anchor);
     return anchor;
@@ -737,11 +745,11 @@ TEST_F(AnchorElementMetricsSenderTest, AnchorElementLeftViewport) {
 
   SimRequest main_resource(source, "text/html");
   LoadURL(source);
-  main_resource.Complete(String::Format(
+  main_resource.Complete(Format(
       R"HTML(
         <body style="margin: 0px">
-        <div style="height: %dpx;"></div>
-        <a href="" style="width: 300px; height: %dpx;">foo</a>
+        <div style="height: {}px;"></div>
+        <a href="" style="width: 300px; height: {}px;">foo</a>
         </body>)HTML",
       2 * kViewportHeight, kViewportHeight / 2));
 
@@ -820,10 +828,10 @@ TEST_F(AnchorElementMetricsSenderTest,
 
   SimRequest main_resource(source, "text/html");
   LoadURL(source);
-  main_resource.Complete(String::Format(
+  main_resource.Complete(Format(
       R"HTML(
         <body style="margin: 0px">
-        <a href="" style="width: %dpx; height: %dpx;">foo</a>
+        <a href="" style="width: {}px; height: {}px;">foo</a>
         </body>)HTML",
       kViewportWidth, kViewportHeight / 2));
 
@@ -964,11 +972,11 @@ TEST_F(AnchorElementMetricsSenderTest, AnchorElementEnteredViewportLater) {
 
   SimRequest main_resource(source, "text/html");
   LoadURL(source);
-  main_resource.Complete(String::Format(
+  main_resource.Complete(Format(
       R"HTML(
         <body style="margin: 0px">
-        <div style="height: %dpx;"></div>
-        <a href="" style="width: 300px; height: %dpx;">foo</a>
+        <div style="height: {}px;"></div>
+        <a href="" style="width: 300px; height: {}px;">foo</a>
         </body>)HTML",
       2 * kViewportHeight, kViewportHeight / 2));
 
@@ -1072,7 +1080,7 @@ TEST_F(AnchorElementMetricsSenderTest, MaxIntersectionObservations) {
   scoped_feature_list.InitAndEnableFeatureWithParameters(
       features::kNavigationPredictor,
       {{"max_intersection_observations", "3"},
-       {"random_anchor_sampling_period", "1"},
+       {"RandomAnchorSamplingPeriod", "1"},
        {"intersection_observation_after_fcp_only", "false"}});
 
   String source("https://example.com/p1");
@@ -1150,7 +1158,7 @@ TEST_F(AnchorElementMetricsSenderTest, AnchorUnobservedByIntersectionObserver) {
   scoped_feature_list.InitAndEnableFeatureWithParameters(
       features::kNavigationPredictor,
       {{"max_intersection_observations", "1"},
-       {"random_anchor_sampling_period", "1"},
+       {"RandomAnchorSamplingPeriod", "1"},
        {"intersection_observation_after_fcp_only", "false"}});
 
   String source("https://example.com/p1");
@@ -1217,18 +1225,18 @@ TEST_F(AnchorElementMetricsSenderTest,
   scoped_feature_list.InitAndEnableFeatureWithParameters(
       features::kNavigationPredictor,
       {{"max_intersection_observations", "1"},
-       {"random_anchor_sampling_period", "1"},
+       {"RandomAnchorSamplingPeriod", "1"},
        {"intersection_observation_after_fcp_only", "false"}});
 
   String source("https://example.com/p1");
   SimRequest main_resource(source, "text/html");
   LoadURL(source);
-  main_resource.Complete(String::Format(R"html(
+  main_resource.Complete(Format(R"html(
     <body>
-      <div style="height: %dpx;"></div>
+      <div style="height: {}px;"></div>
     </body>
   )html",
-                                        kViewportHeight + 100));
+                                kViewportHeight + 100));
 
   AddAnchor("one", 100);
   ProcessEvents(1);
@@ -1271,6 +1279,58 @@ TEST_F(AnchorElementMetricsSenderTest, IntersectionObserverDelay) {
   EXPECT_EQ(intersection_observer->delay(), 252.0);
 }
 
+// Verifies that when kNavigationPredictorNewViewportFeatures is disabled,
+// position updates are not dispatched over Mojo while DevTools mobile
+// emulation is enabled on Desktop. Dispatching them would trigger the
+// browser-side ReportBadMessage (and renderer kill) for unexpected anchor
+// position update messages.
+TEST_F(AnchorElementMetricsSenderTest,
+       PositionUpdateNotReportedWhenFeatureDisabledInMobileEmulation) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kNavigationPredictorNewViewportFeatures);
+
+  DeviceEmulationParams emulation_params;
+  emulation_params.screen_type = mojom::EmulatedScreenType::kMobile;
+  WebView().EnableDeviceEmulation(emulation_params);
+  ASSERT_EQ(GetDocument().GetSettings()->GetViewportStyle(),
+            mojom::blink::ViewportStyle::kMobile);
+
+  String source("https://foo.com");
+  SimRequest main_resource(source, "text/html");
+  LoadURL(source);
+  main_resource.Complete(R"HTML(
+    <a href="https://bar.com">link</a>
+  )HTML");
+  Compositor().BeginFrame();
+  ProcessEvents(/*expected_anchors=*/1);
+
+  ASSERT_EQ(1u, hosts_.size());
+  ASSERT_THAT(hosts_[0]->positions_, testing::IsEmpty());
+  auto* anchor = To<HTMLAnchorElement>(GetDocument().links()->item(0));
+  auto* position_update = MakeGarbageCollected<
+      AnchorElementViewportPositionTracker::Observer::AnchorPositionUpdate>();
+  position_update->anchor_element = anchor;
+  position_update->vertical_position = 0.5f;
+  position_update->distance_from_pointer_down = std::nullopt;
+  position_update->size_in_viewport = 1;
+  HeapVector<Member<
+      AnchorElementViewportPositionTracker::Observer::AnchorPositionUpdate>>
+      position_updates;
+  position_updates.push_back(position_update);
+
+  AnchorElementMetricsSender* sender =
+      AnchorElementMetricsSender::From(GetDocument());
+  ASSERT_TRUE(sender);
+  static_cast<AnchorElementViewportPositionTracker::Observer*>(sender)
+      ->AnchorPositionsUpdated(position_updates);
+  sender->FireUpdateTimerForTesting();
+  sender->FlushMetricsHostForTesting();
+
+  EXPECT_THAT(hosts_[0]->positions_, testing::IsEmpty());
+  WebView().DisableDeviceEmulation();
+}
+
 TEST_F(AnchorElementMetricsSenderTest, PositionUpdate) {
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitAndEnableFeature(
@@ -1300,21 +1360,21 @@ TEST_F(AnchorElementMetricsSenderTest, PositionUpdate) {
   const int anchor_3_height = 1 * unit;
   const int pointer_down_y = 5 * unit;
 
-  main_resource.Complete(String::Format(
+  main_resource.Complete(Format(
       R"HTML(
     <body style="margin: 0px">
-      <div style="height: %dpx;"></div>
+      <div style="height: {}px;"></div>
       <a href="https://bar.com/1"
-         style="height: %dpx; display: block;">
+         style="height: {}px; display: block;">
         one
       </a>
-      <div style="height: %dpx;"></div>
+      <div style="height: {}px;"></div>
       <a href="https://bar.com/2"
-         style="height: %dpx; display: block;">
+         style="height: {}px; display: block;">
         two
       </a>
       <a href="https://bar.com/3"
-         style="height: %dpx; display: block;">
+         style="height: {}px; display: block;">
         three
       </a>
     </body>
@@ -1448,17 +1508,17 @@ TEST_F(AnchorElementMetricsSenderTest,
   String source("https://foo.com");
   SimRequest main_resource(source, "text/html");
   LoadURL(source);
-  main_resource.Complete(String::Format(R"HTML(
+  main_resource.Complete(Format(R"HTML(
     <body style="margin: 0px">
-      <div style="height: %dpx"></div>
+      <div style="height: {}px"></div>
       <a href="https://bar.com"
-         style="height: %dpx; display: block;">Bar</a>
-      <iframe height="%dpx;"></iframe>
-      <div style="height: %dpx;"></div>
+         style="height: {}px; display: block;">Bar</a>
+      <iframe height="{}px;"></iframe>
+      <div style="height: {}px;"></div>
     </body>
   )HTML",
-                                        div_1_height, anchor_height,
-                                        iframe_height, div_2_height));
+                                div_1_height, anchor_height, iframe_height,
+                                div_2_height));
   EXPECT_EQ(1u, GetDocument().links()->length());
 
   // Make the iframe remote, and add a local child to it (the child is a local
@@ -1474,12 +1534,12 @@ TEST_F(AnchorElementMetricsSenderTest,
   String iframe_source("https://foo.com/2");
   SimRequest iframe_resource(iframe_source, "text/html");
   frame_test_helpers::LoadFrameDontWait(local_child, KURL(iframe_source));
-  iframe_resource.Complete(String::Format(R"HTML(
+  iframe_resource.Complete(Format(R"HTML(
     <body>
-      <div height="%dpx"></div>
+      <div height="{}px"></div>
     </body>
   )HTML",
-                                          iframe_height * 2));
+                                  iframe_height * 2));
 
   Compositor().BeginFrame();
   ProcessEvents(/*expected_anchors=*/1);
@@ -1637,16 +1697,15 @@ TEST_F(AnchorElementMetricsSenderTest,
   String source("https://foo.com");
   SimRequest main_resource(source, "text/html");
   LoadURL(source);
-  main_resource.Complete(String::Format(R"HTML(
+  main_resource.Complete(Format(R"HTML(
     <body style="margin: 0px">
-      <div style="height: %dpx"></div>
+      <div style="height: {}px"></div>
       <a href="https://bar.com"
-         style="height: %dpx; display: block;">Bar</a>
-      <div style="height: %dpx;"></div>
+         style="height: {}px; display: block;">Bar</a>
+      <div style="height: {}px;"></div>
     </body>
   )HTML",
-                                        div_1_height, anchor_height,
-                                        div_2_height));
+                                div_1_height, anchor_height, div_2_height));
   EXPECT_EQ(1u, GetDocument().links()->length());
 
   Compositor().BeginFrame();
@@ -1738,15 +1797,15 @@ TEST_F(AnchorElementMetricsSenderTest, SubframeWithObservedAnchorsDetached) {
   SimRequest main_resource(source, "text/html");
   LoadURL(source);
   const int scroll_height_px = 100;
-  main_resource.Complete(String::Format(R"html(
+  main_resource.Complete(Format(R"html(
     <body>
-      <div style="height: %dpx;"></div>
+      <div style="height: {}px;"></div>
       <iframe width="400px" height="400px"></iframe>
       <a href="https://foo.com/one">one</a>
       <div style="height: 1000px;"></div>
     </body>
   )html",
-                                        scroll_height_px));
+                                scroll_height_px));
 
   String subframe_source("https://foo.com/iframe");
   SimRequest subframe_resource(subframe_source, "text/html");
@@ -1789,12 +1848,12 @@ TEST_F(AnchorElementMetricsSenderTest,
   String source("https://foo.com");
   SimRequest main_resource(source, "text/html");
   LoadURL(source);
-  main_resource.Complete(String::Format(R"html(
+  main_resource.Complete(R"html(
     <body>
       <iframe width="400px" height="400px"></iframe>
       <a href="https://foo.com/one">one</a>
     </body>
-  )html"));
+  )html");
 
   String subframe_source("https://foo.com/iframe");
   SimRequest subframe_resource(subframe_source, "text/html");
@@ -1832,11 +1891,11 @@ TEST_F(AnchorElementMetricsSenderTest,
   source = "https://foo.com/two";
   SimRequest main_resource_2(source, "text/html");
   LoadURL(source);
-  main_resource_2.Complete(String::Format(R"html(
+  main_resource_2.Complete(R"html(
     <body>
       <div>second page</div>
     </body>
-  )html"));
+  )html");
 
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(0u, mock_host->removed_anchor_ids_.size());
@@ -1849,18 +1908,18 @@ TEST_F(AnchorElementMetricsSenderTest,
   scoped_feature_list.InitAndEnableFeatureWithParameters(
       features::kNavigationPredictor,
       {{"max_intersection_observations", "1"},
-       {"random_anchor_sampling_period", "1"},
+       {"RandomAnchorSamplingPeriod", "1"},
        {"intersection_observation_after_fcp_only", "false"}});
 
   // Navigate the main frame.
   String source("https://foo.com");
   SimRequest main_resource(source, "text/html");
   LoadURL(source);
-  main_resource.Complete(String::Format(R"html(
+  main_resource.Complete(R"html(
     <body>
       <iframe width="400px" height="400px"></iframe>
     </body>
-  )html"));
+  )html");
 
   // Navigate the subframe.
   String subframe_source("https://foo.com/iframe");
@@ -1919,7 +1978,7 @@ TEST_F(AnchorElementMetricsSenderTest,
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeatureWithParameters(
       features::kNavigationPredictor,
-      {{"random_anchor_sampling_period", "1"},
+      {{"RandomAnchorSamplingPeriod", "1"},
        {"intersection_observation_after_fcp_only", "true"},
        {"post_fcp_observation_delay", "200ms"}});
 
@@ -1931,18 +1990,18 @@ TEST_F(AnchorElementMetricsSenderTest,
   SimRequest fcp_blocking_script_resource(fcp_blocking_script,
                                           "text/javascript");
 
-  main_resource.Complete(String::Format(R"html(
+  main_resource.Complete(Format(R"html(
     <body>
       <script>
-        window.onload = () => {
+        window.onload = () => {{
           const script = document.createElement("script");
-          script.src = "%s";
+          script.src = "{}";
           document.body.appendChild(script);
-        }
+        }}
       </script>
     </body>
   )html",
-                                        fcp_blocking_script.Utf8().c_str()));
+                                fcp_blocking_script));
   ProcessEvents(0);
   auto* tracker =
       AnchorElementViewportPositionTracker::MaybeGetOrCreateFor(GetDocument());
@@ -1988,7 +2047,7 @@ TEST_F(AnchorElementMetricsSenderTest, RegressionTestForCrbug384610894) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeaturesAndParameters(
       {{features::kNavigationPredictor,
-        {{"random_anchor_sampling_period", "1"},
+        {{"RandomAnchorSamplingPeriod", "1"},
          {"intersection_observation_after_fcp_only", "true"},
          {"post_fcp_observation_delay", "200ms"}}}},
       {features::kPreloadingModerateViewportHeuristics});
@@ -1996,11 +2055,11 @@ TEST_F(AnchorElementMetricsSenderTest, RegressionTestForCrbug384610894) {
   String source("https://foo.com");
   SimRequest main_resource(source, "text/html");
   LoadURL(source);
-  main_resource.Complete(String::Format(R"html(
+  main_resource.Complete(R"html(
     <body>
       <h1>Foo</h1>
     </body>
-  )html"));
+  )html");
   task_environment().FastForwardBy(base::Milliseconds(10));
   GetDocument().View()->UpdateAllLifecyclePhasesForTest();
   ASSERT_FALSE(PaintTiming::From(GetDocument())

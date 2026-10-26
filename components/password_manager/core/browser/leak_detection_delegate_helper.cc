@@ -15,6 +15,7 @@
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/password_store/psl_matching_helper.h"
+#include "crypto/process_bound_string.h"
 
 namespace password_manager {
 
@@ -49,12 +50,13 @@ void LeakDetectionDelegateHelper::ProcessLeakedPassword(
 
 void LeakDetectionDelegateHelper::OnGetPasswordStoreResultsOrErrorFrom(
     PasswordStoreInterface* store,
-    LoginsResultOrError results_or_error) {
-  if (std::holds_alternative<PasswordStoreBackendError>(results_or_error)) {
+    base::expected<std::vector<StoredCredential>, PasswordStoreBackendError>
+        results_or_error) {
+  if (!results_or_error) {
     barrier_closure_.Run();
     return;
   }
-  auto results = std::get<LoginsResult>(std::move(results_or_error));
+  std::vector<StoredCredential> results = std::move(*results_or_error);
   std::ranges::move(std::move(results), std::back_inserter(partial_results_));
   barrier_closure_.Run();
 }
@@ -70,9 +72,11 @@ void LeakDetectionDelegateHelper::ProcessResults() {
     return url1 == url2 || IsPublicSuffixDomainMatch(url1.spec(), url2.spec());
   };
 
+  crypto::SecureU16String credentials_password_value =
+      credentials_.password_value.secure_value();
   for (const auto& form : partial_results_) {
     if (CanonicalizeUsername(form.username_value) == canonicalized_username &&
-        form.password_value == credentials_.password_value) {
+        form.password_value == credentials_password_value) {
       PasswordStoreInterface& store =
           form.IsUsingAccountStore() ? *account_store_ : *profile_store_;
       // crbug.com/1381203: It's very important not to touch already leaked

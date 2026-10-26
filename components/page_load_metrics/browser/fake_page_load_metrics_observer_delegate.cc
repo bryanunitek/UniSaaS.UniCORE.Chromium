@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 #include "components/page_load_metrics/browser/fake_page_load_metrics_observer_delegate.h"
+
 #include "base/time/default_tick_clock.h"
+#include "components/page_load_metrics/browser/navigation_scenario.h"
 #include "components/page_load_metrics/common/page_load_metrics.mojom.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 
@@ -152,19 +154,9 @@ FakePageLoadMetricsObserverDelegate::GetNormalizedCLSData(
   return normalized_cls_data_;
 }
 
-const NormalizedCLSData& FakePageLoadMetricsObserverDelegate::
-    GetSoftNavigationIntervalNormalizedCLSData() const {
-  return normalized_cls_data_;
-}
-
 const InteractionToNextPaintCalculator&
 FakePageLoadMetricsObserverDelegate::GetInteractionToNextPaintCalculator()
     const {
-  return interaction_to_next_paint_calculator_;
-}
-
-const InteractionToNextPaintCalculator& FakePageLoadMetricsObserverDelegate::
-    GetSoftNavigationIntervalInteractionToNextPaintCalculator() const {
   return interaction_to_next_paint_calculator_;
 }
 
@@ -203,23 +195,8 @@ const LargestContentfulPaintHandler& FakePageLoadMetricsObserverDelegate::
   return experimental_largest_contentful_paint_handler_;
 }
 
-const ContentfulPaintTimingInfo&
-FakePageLoadMetricsObserverDelegate::GetSoftNavigationLargestContentfulPaint()
-    const {
-  return soft_navigation_contentful_paint_candidate_.MergeTextAndImageTiming();
-}
-
 ukm::SourceId FakePageLoadMetricsObserverDelegate::GetPageUkmSourceId() const {
   return ukm::kInvalidSourceId;
-}
-
-mojom::SoftNavigationMetrics&
-FakePageLoadMetricsObserverDelegate::GetSoftNavigationMetrics() const {
-  return *mojom::SoftNavigationMetrics::New();
-}
-
-uint64_t FakePageLoadMetricsObserverDelegate::GetSoftNavigationCount() const {
-  return 0;
 }
 
 ukm::SourceId
@@ -231,6 +208,11 @@ FakePageLoadMetricsObserverDelegate::GetUkmSourceIdForSameDocumentNavigation(
 bool FakePageLoadMetricsObserverDelegate::IsFirstNavigationInWebContents()
     const {
   return false;
+}
+
+NavigationScenario FakePageLoadMetricsObserverDelegate::GetNavigationScenario()
+    const {
+  return navigation_scenario_;
 }
 
 bool FakePageLoadMetricsObserverDelegate::IsOriginVisit() const {

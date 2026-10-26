@@ -5,8 +5,8 @@
 #include "cc/metrics/video_playback_roughness_reporter.h"
 
 #include <algorithm>
+#include <ranges>
 
-#include "base/containers/adapters.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
@@ -95,7 +95,7 @@ void VideoPlaybackRoughnessReporter::FrameSubmitted(
 void VideoPlaybackRoughnessReporter::FramePresented(TokenType token,
                                                     base::TimeTicks timestamp,
                                                     bool reliable_timestamp) {
-  for (auto& frame : base::Reversed(frames_)) {
+  for (auto& frame : std::views::reverse(frames_)) {
     if (token == frame.token) {
       if (frame.decode_time.has_value()) {
         auto time_since_decode = timestamp - frame.decode_time.value();
@@ -127,14 +127,14 @@ void VideoPlaybackRoughnessReporter::SubmitPlaybackRoughness() {
   measurement.frames = it->size;
   measurement.duration = it->intended_duration;
   measurement.roughness = it->roughness();
-  measurement.freezing = max_single_frame_error_;
+  measurement.freezing_ratio = max_freezing_ratio_;
   measurement.refresh_rate_hz = it->refresh_rate_hz;
   measurement.frame_size = it->frame_size;
   reporting_cb_.Run(measurement);
 
   worst_windows_.clear();
   windows_seen_ = 0;
-  max_single_frame_error_ = base::TimeDelta();
+  max_freezing_ratio_ = 0.0;
 }
 
 void VideoPlaybackRoughnessReporter::ReportWindow(
@@ -203,12 +203,17 @@ void VideoPlaybackRoughnessReporter::ProcessFrameWindow() {
 
       if (frame.actual_duration.has_value() &&
           frame.intended_duration.has_value()) {
-        error = frame.actual_duration.value() - frame.intended_duration.value();
-        win.intended_duration += frame.intended_duration.value();
+        error = *frame.actual_duration - *frame.intended_duration;
+        win.intended_duration += *frame.intended_duration;
+        if (frame.intended_duration->is_positive()) {
+          base::TimeDelta excess_duration = error;
+          double frame_freezing_ratio = excess_duration.InSecondsF() /
+                                        frame.intended_duration->InSecondsF();
+          max_freezing_ratio_ =
+              std::max(max_freezing_ratio_, frame_freezing_ratio);
+        }
       }
       total_error += error;
-      max_single_frame_error_ =
-          std::max(max_single_frame_error_, error.magnitude());
       mean_square_error_ms2 +=
           total_error.InMillisecondsF() * total_error.InMillisecondsF();
     }
@@ -226,7 +231,7 @@ void VideoPlaybackRoughnessReporter::ProcessFrameWindow() {
       } else {
         worst_windows_.clear();
         windows_seen_ = 0;
-        max_single_frame_error_ = base::TimeDelta();
+        max_freezing_ratio_ = 0.0;
       }
     } else {
       ReportWindow(win);
@@ -252,7 +257,7 @@ void VideoPlaybackRoughnessReporter::Reset() {
   frames_.clear();
   worst_windows_.clear();
   windows_seen_ = 0;
-  max_single_frame_error_ = base::TimeDelta();
+  max_freezing_ratio_ = 0.0;
 }
 
 }  // namespace cc

@@ -42,13 +42,15 @@ TEST_F(LayoutSVGForeignObjectTest, DivInForeignObject) {
 
   // LocalToAncestorPoint
   EXPECT_EQ(PhysicalOffset(150, 150),
-            div.LocalToAncestorPoint(PhysicalOffset(), &GetLayoutView(),
-                                     kTraverseDocumentBoundaries));
+            div.LocalToAncestorPoint(
+                PhysicalOffset(), &GetLayoutView(),
+                {MapCoordinatesMode::kTraverseDocumentBoundaries}));
 
   // MapAncestorToLocal
   EXPECT_EQ(PhysicalOffset(-150, -150),
-            div.AncestorToLocalPoint(&GetLayoutView(), PhysicalOffset(),
-                                     kTraverseDocumentBoundaries));
+            div.AncestorToLocalPoint(
+                &GetLayoutView(), PhysicalOffset(),
+                {MapCoordinatesMode::kTraverseDocumentBoundaries}));
 
   // Hit testing
   EXPECT_EQ(svg, HitTest(1, 1));
@@ -108,13 +110,15 @@ TEST_F(LayoutSVGForeignObjectTest, IframeInForeignObject) {
 
   // LocalToAncestorPoint
   EXPECT_EQ(PhysicalOffset(200, 200),
-            div.LocalToAncestorPoint(PhysicalOffset(), &GetLayoutView(),
-                                     kTraverseDocumentBoundaries));
+            div.LocalToAncestorPoint(
+                PhysicalOffset(), &GetLayoutView(),
+                {MapCoordinatesMode::kTraverseDocumentBoundaries}));
 
   // AncestorToLocalPoint
   EXPECT_EQ(PhysicalOffset(-200, -200),
-            div.AncestorToLocalPoint(&GetLayoutView(), PhysicalOffset(),
-                                     kTraverseDocumentBoundaries));
+            div.AncestorToLocalPoint(
+                &GetLayoutView(), PhysicalOffset(),
+                {MapCoordinatesMode::kTraverseDocumentBoundaries}));
 
   // Hit testing
   EXPECT_EQ(svg, HitTest(90, 90));
@@ -161,7 +165,7 @@ TEST_F(LayoutSVGForeignObjectTest, HitTestZoomedForeignObject) {
   EXPECT_EQ(gfx::RectF(10, 10, 100, 150), foreign_object.ObjectBoundingBox());
   EXPECT_EQ(AffineTransform(), foreign_object.LocalSVGTransform());
   AffineTransform zoom;
-  zoom.Scale(1 / foreign_object.StyleRef().EffectiveZoom());
+  zoom.Scale(1 / foreign_object.Style().EffectiveZoom());
   EXPECT_EQ(zoom, foreign_object.LocalToSVGParentTransform());
 
   // MapToVisualRectInAncestorSpace
@@ -177,12 +181,13 @@ TEST_F(LayoutSVGForeignObjectTest, HitTestZoomedForeignObject) {
   // LocalToAncestorPoint
   EXPECT_EQ(div_offset, div.GetLayoutObject()->LocalToAncestorPoint(
                             PhysicalOffset(), &GetLayoutView(),
-                            kTraverseDocumentBoundaries));
+                            {MapCoordinatesMode::kTraverseDocumentBoundaries}));
 
   // AncestorToLocalPoint
   EXPECT_EQ(PhysicalOffset(),
             div.GetLayoutObject()->AncestorToLocalPoint(
-                &GetLayoutView(), div_offset, kTraverseDocumentBoundaries));
+                &GetLayoutView(), div_offset,
+                {MapCoordinatesMode::kTraverseDocumentBoundaries}));
 
   EXPECT_EQ(svg, HitTest(20, 20));
   EXPECT_EQ(foreign, HitTest(280, 280));
@@ -223,15 +228,16 @@ TEST_F(LayoutSVGForeignObjectTest, HitTestViewBoxForeignObject) {
   const auto& div = *GetElementById("div");
 
   // LocalToAncestorPoint
-  EXPECT_EQ(
-      PhysicalOffset(128, 128),
-      div.GetLayoutObject()->LocalToAncestorPoint(
-          PhysicalOffset(), &GetLayoutView(), kTraverseDocumentBoundaries));
+  EXPECT_EQ(PhysicalOffset(128, 128),
+            div.GetLayoutObject()->LocalToAncestorPoint(
+                PhysicalOffset(), &GetLayoutView(),
+                {MapCoordinatesMode::kTraverseDocumentBoundaries}));
 
   // AncestorToLocalPoint
-  EXPECT_EQ(PhysicalOffset(), div.GetLayoutObject()->AncestorToLocalPoint(
-                                  &GetLayoutView(), PhysicalOffset(128, 128),
-                                  kTraverseDocumentBoundaries));
+  EXPECT_EQ(PhysicalOffset(),
+            div.GetLayoutObject()->AncestorToLocalPoint(
+                &GetLayoutView(), PhysicalOffset(128, 128),
+                {MapCoordinatesMode::kTraverseDocumentBoundaries}));
 
   EXPECT_EQ(svg, HitTest(20, 20));
   EXPECT_EQ(foreign, HitTest(120, 110));
@@ -392,7 +398,7 @@ TEST_F(LayoutSVGForeignObjectTest, BBoxPropagationZoomed) {
   UpdateAllLifecyclePhasesForTest();
 
   const auto& target = *GetLayoutObjectByElementId("target");
-  ASSERT_EQ(target.StyleRef().EffectiveZoom(), 2);
+  ASSERT_EQ(target.Style().EffectiveZoom(), 2);
 
   EXPECT_EQ(target.ObjectBoundingBox(), gfx::RectF(6, 5, 100, 50));
   EXPECT_EQ(target.DecoratedBoundingBox(), gfx::RectF(12, 10, 200, 100));

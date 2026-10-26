@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.tab.state;
 
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -21,19 +22,21 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.UserDataHost;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.chrome.browser.price_tracking.PriceTrackingFeatures;
-import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.TestProfile;
 import org.chromium.chrome.browser.tab.MockTab;
 import org.chromium.chrome.browser.tab.Tab;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Test relating to {@link PersistedTabData} */
 @RunWith(BaseJUnit4ClassRunner.class)
@@ -43,12 +46,11 @@ public class PersistedTabDataTest {
     private static final int CHANGED_VALUE = 51;
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    private final TestProfile mProfile = TestProfile.createRegular();
+
     @Mock ShoppingPersistedTabData mShoppingPersistedTabDataMock;
-    @Mock Profile mProfile;
-
-    @Mock private PersistedTabData.Natives mPersistedTabDataJni;
-
     @Mock Tab mTab;
+    @Mock private PersistedTabData.Natives mPersistedTabDataJni;
 
     @Before
     public void setUp() throws Exception {
@@ -233,6 +235,49 @@ public class PersistedTabDataTest {
                             });
                 });
         helper.waitForCallback(0);
+    }
+
+    @SmallTest
+    @Test
+    public void testDestroyedTab_DuringAsyncRestore() throws TimeoutException {
+        PersistedTabDataConfiguration.setUseTestConfig(true);
+        doReturn(true).when(mTab).isInitialized();
+        doReturn(false).when(mTab).isCustomTab();
+        doReturn(1).when(mTab).getId();
+
+        AtomicBoolean isDestroyed = new AtomicBoolean(false);
+        doAnswer(invocation -> isDestroyed.get()).when(mTab).isDestroyed();
+
+        CallbackHelper helper1 = new CallbackHelper();
+        CallbackHelper helper2 = new CallbackHelper();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    UserDataHost userDataHost = new UserDataHost();
+                    doReturn(userDataHost).when(mTab).getUserDataHost();
+
+                    PersistedTabData.from(
+                            mTab,
+                            () -> new MockPersistedTabData(mTab, INITIAL_VALUE),
+                            MockPersistedTabData.class,
+                            (res) -> {
+                                Assert.assertNull(res);
+                                helper1.notifyCalled();
+                            });
+                    PersistedTabData.from(
+                            mTab,
+                            () -> new MockPersistedTabData(mTab, INITIAL_VALUE),
+                            MockPersistedTabData.class,
+                            (res) -> {
+                                Assert.assertNull(res);
+                                helper2.notifyCalled();
+                            });
+                    isDestroyed.set(true);
+                });
+        helper1.waitForCallback(0);
+        helper2.waitForCallback(0);
+        Assert.assertFalse(
+                PersistedTabData.isCallbackCachedForTesting(mTab, MockPersistedTabData.class));
+        PersistedTabDataConfiguration.setUseTestConfig(false);
     }
 
     static class ThreadVerifierMockPersistedTabData extends MockPersistedTabData {

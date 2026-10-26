@@ -14,12 +14,12 @@ class AuthenticationService;
 class GeminiService;
 class GeminiTabHelper;
 class PrefService;
+class ReaderModeBrowserAgent;
 class ReaderModeTabHelper;
 class TemplateURLService;
 class HostContentSettingsMap;
 
 @protocol PageActionMenuCommands;
-@protocol ContextualSheetCommands;
 
 namespace web {
 class WebState;
@@ -36,6 +36,7 @@ class WebState;
                    geminiService:(GeminiService*)geminiService
                  geminiTabHelper:(GeminiTabHelper*)geminiTabHelper
              readerModeTabHelper:(ReaderModeTabHelper*)readerModeTabHelper
+          readerModeBrowserAgent:(ReaderModeBrowserAgent*)readerModeBrowserAgent
           hostContentSettingsMap:(HostContentSettingsMap*)hostContentSettingsMap
     NS_DESIGNATED_INITIALIZER;
 
@@ -53,9 +54,6 @@ class WebState;
 
 // The handler for sending page action menu commands.
 @property(nonatomic, weak) id<PageActionMenuCommands> pageActionMenuHandler;
-
-// Command handler for contextual sheet commands.
-@property(nonatomic, weak) id<ContextualSheetCommands> contextualSheetHandler;
 
 // Returns YES if the workspace policy check has not yet completed.
 - (BOOL)isGeminiEligibilityLoading;

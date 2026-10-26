@@ -215,11 +215,9 @@ public class MinidumpUploadServiceImpl extends SplitCompatIntentService.Impl {
                 } else {
                     Log.d(
                             TAG,
-                            "Giving up on trying to upload "
-                                    + minidumpFileName
-                                    + "after "
-                                    + tries
-                                    + " number of tries.");
+                            "Giving up on trying to upload %s after %d number of tries.",
+                            minidumpFileName,
+                            tries);
                 }
             } else {
                 Log.w(TAG, "Failed to rename minidump " + minidumpFileName);
@@ -318,7 +316,7 @@ public class MinidumpUploadServiceImpl extends SplitCompatIntentService.Impl {
     }
 
     /**
-     * Attempts to upload the specified {@param minidumpFile} directly. If Android doesn't allow a
+     * Attempts to upload the specified {@code minidumpFile} directly. If Android doesn't allow a
      * direct upload, then fallback to JobScheduler.
      *
      * <p>Note that the preferred way to upload minidump is only through JobScheduler, use this

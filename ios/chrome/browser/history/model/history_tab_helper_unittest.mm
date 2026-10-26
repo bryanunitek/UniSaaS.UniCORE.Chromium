@@ -11,10 +11,8 @@
 #import "base/strings/utf_string_conversions.h"
 #import "base/test/bind.h"
 #import "base/test/scoped_feature_list.h"
-#import "components/history/core/browser/features.h"
 #import "components/history/core/browser/history_service.h"
 #import "components/history/core/browser/history_types.h"
-#import "components/keyed_service/core/service_access_type.h"
 #import "ios/chrome/browser/history/model/history_service_factory.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
@@ -49,8 +47,7 @@ class HistoryTabHelperTest : public PlatformTest {
   // returns the response.  Spins the runloop until a response is received.
   void QueryURLAndVisits(const GURL& url) {
     history::HistoryService* service =
-        ios::HistoryServiceFactory::GetForProfile(
-            profile_.get(), ServiceAccessType::EXPLICIT_ACCESS);
+        ios::HistoryServiceFactory::GetForProfile(profile_.get());
 
     base::RunLoop loop;
     service->QueryURLAndVisits(
@@ -68,8 +65,7 @@ class HistoryTabHelperTest : public PlatformTest {
   // Adds an entry for the given `url` to the history database.
   void AddVisitForURL(const GURL& url) {
     history::HistoryService* service =
-        ios::HistoryServiceFactory::GetForProfile(
-            profile_.get(), ServiceAccessType::EXPLICIT_ACCESS);
+        ios::HistoryServiceFactory::GetForProfile(profile_.get());
     service->AddPage(
         url, base::Time::Now(), 0, 0, GURL(), history::RedirectList(),
         ui::PAGE_TRANSITION_MANUAL_SUBFRAME, history::SOURCE_BROWSED,
@@ -90,24 +86,7 @@ class HistoryTabHelperTest : public PlatformTest {
 
 }  // namespace
 
-class HistoryTabHelperVisitedFilteringTest
-    : public HistoryTabHelperTest,
-      public testing::WithParamInterface<bool> {
- public:
-  HistoryTabHelperVisitedFilteringTest() {
-    scoped_feature_list_.InitWithFeatureState(history::kVisitedLinksOn404,
-                                              GetParam());
-  }
-
-  void SetUp() override { HistoryTabHelperTest::SetUp(); }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-TEST_P(HistoryTabHelperVisitedFilteringTest, ShouldConsiderForNtpMostVisited) {
-  bool are_404s_eligible_for_history =
-      base::FeatureList::IsEnabled(history::kVisitedLinksOn404);
+TEST_F(HistoryTabHelperTest, ShouldConsiderForNtpMostVisited) {
   HistoryTabHelper* helper = HistoryTabHelper::FromWebState(&web_state_);
   GURL test_url("https://www.google.com/");
 
@@ -150,15 +129,10 @@ TEST_P(HistoryTabHelperVisitedFilteringTest, ShouldConsiderForNtpMostVisited) {
   history::HistoryAddPageArgs args_404 =
       helper->CreateHistoryAddPageArgs(item_404.get(), &context_404);
 
-  // If 404 error navigations are recorded in history, we should filter them out
+  // 404 error navigations are recorded in history, so we should filter them out
   // when determining NTP most visited.
-  EXPECT_EQ(args_404.consider_for_ntp_most_visited,
-            !are_404s_eligible_for_history);
+  EXPECT_FALSE(args_404.consider_for_ntp_most_visited);
 }
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         HistoryTabHelperVisitedFilteringTest,
-                         ::testing::Bool());
 
 // Tests that different urls can have different titles.
 TEST_F(HistoryTabHelperTest, MultipleURLsWithTitles) {
@@ -434,11 +408,7 @@ TEST_F(HistoryTabHelperTest, CreateAddPageArgsPopulatesResponseCodeCategory) {
             history::VisitResponseCodeCategory::k404);
 }
 
-// Tests that a 404 is recorded if history::kVisitedLinksOn404 is enabled.
-TEST_F(HistoryTabHelperTest, DidFinishNavigationFlagEnabledRecords404) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(history::kVisitedLinksOn404);
-
+TEST_F(HistoryTabHelperTest, DidFinishNavigationRecords404) {
   const GURL url("https://url.com");
 
   HistoryTabHelper* helper = HistoryTabHelper::FromWebState(&web_state_);
@@ -462,35 +432,4 @@ TEST_F(HistoryTabHelperTest, DidFinishNavigationFlagEnabledRecords404) {
   // Make sure the visit was recorded.
   QueryURLAndVisits(url);
   EXPECT_EQ(url, latest_row_result_.url());
-}
-
-// Tests that a 404 is not recorded if history::kVisitedLinksOn404 is
-// disabled .
-TEST_F(HistoryTabHelperTest, DidFinishNavigationFlagDisabledDoesNotRecord404) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(history::kVisitedLinksOn404);
-
-  const GURL url("https://url.com");
-
-  HistoryTabHelper* helper = HistoryTabHelper::FromWebState(&web_state_);
-  ASSERT_TRUE(helper);
-
-  web::FakeNavigationContext navigation_context;
-  navigation_context.SetHasCommitted(true);
-  navigation_context.SetResponseHeaders(
-      net::HttpResponseHeaders::TryToCreate("HTTP/1.1 404 Not Found\r\n\r\n"));
-
-  std::unique_ptr<web::NavigationItem> item = web::NavigationItem::Create();
-  navigation_manager_->SetLastCommittedItem(item.get());
-
-  // Navigate to `url`.
-  item->SetURL(url);
-  item->SetTimestamp(base::Time::Now());
-  navigation_context.SetUrl(url);
-  static_cast<web::WebStateObserver*>(helper)->DidFinishNavigation(
-      &web_state_, &navigation_context);
-
-  // Make sure the visit was not recorded.
-  QueryURLAndVisits(url);
-  EXPECT_NE(url, latest_row_result_.url());
 }

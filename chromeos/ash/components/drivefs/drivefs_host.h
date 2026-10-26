@@ -34,6 +34,10 @@ namespace network {
 class NetworkConnectionTracker;
 }  // namespace network
 
+namespace signin {
+class IdentityManager;
+}  // namespace signin
+
 namespace drivefs {
 namespace mojom {
 
@@ -106,15 +110,11 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_DRIVEFS) DriveFsHost {
         mojo::PendingReceiver<mojom::NativeMessagingPort> port,
         mojo::PendingRemote<mojom::NativeMessagingHost> host,
         mojom::DriveFsDelegate::ConnectToExtensionCallback callback) = 0;
-    virtual const std::string GetMachineRootID() = 0;
-    virtual void PersistMachineRootID(const std::string& id) = 0;
-    virtual void PersistNotification(
-        mojom::DriveFsNotificationPtr notification) = 0;
-    virtual void PersistSyncErrors(
-        mojom::MirrorSyncErrorListPtr error_list) = 0;
   };
 
+  // `identity_manager` must not be nullptr and must outlive this.
   DriveFsHost(const base::FilePath& profile_path,
+              signin::IdentityManager* identity_manager,
               Delegate* delegate,
               MountObserver* mount_observer,
               network::NetworkConnectionTracker* network_connection_tracker,
@@ -136,8 +136,6 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_DRIVEFS) DriveFsHost {
 
     virtual void OnUnmounted() {}
     virtual void OnSyncingStatusUpdate(const mojom::SyncingStatus& status) {}
-    virtual void OnMirrorSyncingStatusUpdate(
-        const mojom::SyncingStatus& status) {}
     virtual void OnFilesChanged(const std::vector<mojom::FileChange>& changes) {
     }
     virtual void OnError(const mojom::DriveError& error) {}

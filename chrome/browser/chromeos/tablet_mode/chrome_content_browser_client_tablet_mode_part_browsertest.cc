@@ -5,9 +5,9 @@
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -29,7 +29,7 @@ IN_PROC_BROWSER_TEST_F(ChromeContentBrowserClientTabletModePartTest,
   const int kDefaultFixedFontSize = kDefaultPrefs.default_fixed_font_size;
 
   // Set the browser font sizes to non-default values.
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PrefService* profile_prefs = profile->GetPrefs();
   profile_prefs->SetInteger(prefs::kWebKitDefaultFontSize,
                             kDefaultFontSize + 2);

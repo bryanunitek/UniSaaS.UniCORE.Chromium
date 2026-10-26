@@ -10,13 +10,16 @@ import static androidx.test.espresso.action.ViewActions.longClick;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.mockito.Mockito.verify;
+
 import android.app.Activity;
 import android.view.View;
 import android.widget.FrameLayout;
 
 import androidx.test.filters.SmallTest;
 
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
@@ -24,13 +27,13 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.R;
@@ -104,7 +107,7 @@ public class HomeButtonTest {
                                     homeButton,
                                     (metaState, buttonState) -> {},
                                     HomepageManager.getInstance()::onMenuClick,
-                                    () -> false,
+                                    SupplierUtils.alwaysFalse(),
                                     mThemeColorProvider,
                                     mIncognitoStateProvider,
                                     /* actionRegistry= */ null);
@@ -120,11 +123,11 @@ public class HomeButtonTest {
         onView(withId(mIdHomeButton)).perform(longClick());
 
         ModelList menu = mHomeButtonCoordinator.getMenuForTesting();
-        Assert.assertNotNull(ASSERT_MSG_MENU_IS_CREATED, menu);
-        Assert.assertEquals(ASSERT_MSG_MENU_SIZE, 1, menu.size());
+        assertNotNull(ASSERT_MSG_MENU_IS_CREATED, menu);
+        assertEquals(ASSERT_MSG_MENU_SIZE, 1, menu.size());
 
         // Test click on context menu item
         onView(withText(R.string.options_homepage_edit_title)).perform(click());
-        Mockito.verify(mSettingsNavigation).startSettings(sActivity, HomepageSettings.class);
+        verify(mSettingsNavigation).startSettings(sActivity, HomepageSettings.class);
     }
 }

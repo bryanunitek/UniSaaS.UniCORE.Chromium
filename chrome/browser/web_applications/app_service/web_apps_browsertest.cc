@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/web_applications/app_service/web_apps.h"
-
 #include <vector>
 
 #include "base/files/file_path.h"
@@ -13,7 +11,6 @@
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/intent_util.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_process.h"
@@ -40,7 +37,7 @@ IN_PROC_BROWSER_TEST_F(WebAppsBrowserTest, LaunchWithIntent) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL app_url(
       embedded_test_server()->GetURL("/web_share_target/charts.html"));
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
   const webapps::AppId app_id = InstallWebAppFromManifest(browser(), app_url);
 
   base::RunLoop run_loop;
@@ -58,7 +55,7 @@ IN_PROC_BROWSER_TEST_F(WebAppsBrowserTest, LaunchWithIntent) {
   apps::IntentPtr intent = apps_util::CreateShareIntentFromFiles(
       profile, std::move(file_paths), std::move(content_types));
   const int32_t event_flags =
-      apps::GetEventFlags(WindowOpenDisposition::NEW_WINDOW,
+      apps::GetEventFlags(WindowOpenDisposition::kNewWindow,
                           /*prefer_container=*/true);
   apps::AppServiceProxyFactory::GetForProfile(profile)->LaunchAppWithIntent(
       app_id, event_flags, std::move(intent),
@@ -72,7 +69,7 @@ IN_PROC_BROWSER_TEST_F(WebAppsBrowserTest, IntentWithoutFiles) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL app_url(
       embedded_test_server()->GetURL("/web_share_target/poster.html"));
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
   const webapps::AppId app_id = InstallWebAppFromManifest(browser(), app_url);
 
   base::RunLoop run_loop;
@@ -91,7 +88,7 @@ IN_PROC_BROWSER_TEST_F(WebAppsBrowserTest, IntentWithoutFiles) {
       /*share_title=*/"Subject");
 
   const int32_t event_flags =
-      apps::GetEventFlags(WindowOpenDisposition::NEW_WINDOW,
+      apps::GetEventFlags(WindowOpenDisposition::kNewWindow,
                           /*prefer_container=*/true);
   apps::AppServiceProxyFactory::GetForProfile(profile)->LaunchAppWithIntent(
       app_id, event_flags, std::move(intent),
@@ -108,12 +105,12 @@ IN_PROC_BROWSER_TEST_F(WebAppsBrowserTest, ExposeAppServicePublisherId) {
   // Install file handling web app.
   const webapps::AppId app_id = InstallWebAppFromManifest(browser(), app_url);
   const WebAppRegistrar& registrar =
-      WebAppProvider::GetForTest(browser()->profile())->registrar_unsafe();
+      WebAppProvider::GetForTest(browser()->GetProfile())->registrar_unsafe();
   const WebApp* web_app = registrar.GetAppById(app_id);
   ASSERT_TRUE(web_app);
 
   // Check the publisher_id is the app's start url.
-  apps::AppServiceProxyFactory::GetForProfile(browser()->profile())
+  apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile())
       ->AppRegistryCache()
       .ForOneApp(app_id, [&](const apps::AppUpdate& update) {
         EXPECT_EQ(web_app->start_url().spec(), update.PublisherId());
@@ -125,7 +122,7 @@ IN_PROC_BROWSER_TEST_F(WebAppsBrowserTest, LaunchAppIconKeyUnchanged) {
   const GURL app_url(embedded_test_server()->GetURL("/web_apps/basic.html"));
   const webapps::AppId app_id = InstallWebAppFromManifest(browser(), app_url);
   auto* proxy =
-      apps::AppServiceProxyFactory::GetForProfile(browser()->profile());
+      apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile());
 
   std::optional<apps::IconKey> original_key;
   proxy->AppRegistryCache().ForOneApp(
@@ -134,7 +131,7 @@ IN_PROC_BROWSER_TEST_F(WebAppsBrowserTest, LaunchAppIconKeyUnchanged) {
       });
 
   const int32_t event_flags =
-      apps::GetEventFlags(WindowOpenDisposition::NEW_WINDOW,
+      apps::GetEventFlags(WindowOpenDisposition::kNewWindow,
                           /*prefer_container=*/true);
   proxy->Launch(app_id, event_flags, apps::LaunchSource::kUnknown,
                 std::make_unique<apps::WindowInfo>(display::kDefaultDisplayId));

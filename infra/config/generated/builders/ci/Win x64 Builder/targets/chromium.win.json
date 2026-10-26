@@ -214,7 +214,8 @@
             "cpu": "x86-64",
             "os": "Windows-10-19045"
           },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 2
         },
         "test": "blink_unittests",
         "test_id_prefix": "ninja://third_party/blink/renderer/controller:blink_unittests/"
@@ -256,6 +257,7 @@
         "test_id_prefix": "ninja://third_party/boringssl:boringssl_ssl_tests/"
       },
       {
+        "enable_rts_filtering": true,
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
@@ -268,8 +270,13 @@
             "cpu": "x86-64",
             "os": "Windows-10-19045"
           },
+          "optional_dimensions": {
+            "30": {
+              "cpu": "x86-64-e4"
+            }
+          },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 97
+          "shards": 113
         },
         "test": "browser_tests",
         "test_id_prefix": "ninja://chrome/test:browser_tests/"
@@ -486,6 +493,7 @@
         "test_id_prefix": "ninja://ui/compositor:compositor_unittests/"
       },
       {
+        "enable_rts_filtering": true,
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
@@ -939,6 +947,7 @@
         "test_id_prefix": "ninja://chrome/installer/util:installer_util_unittests/"
       },
       {
+        "enable_rts_filtering": true,
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
@@ -951,8 +960,13 @@
             "cpu": "x86-64",
             "os": "Windows-10-19045"
           },
+          "optional_dimensions": {
+            "30": {
+              "cpu": "x86-64-e4"
+            }
+          },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 30
+          "shards": 24
         },
         "test": "interactive_ui_tests",
         "test_id_prefix": "ninja://chrome/test:interactive_ui_tests/"
@@ -1394,6 +1408,24 @@
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
+        "module_name": "//rlz:rlz_unittests",
+        "module_scheme": "gtest",
+        "name": "rlz_unittests",
+        "swarming": {
+          "dimensions": {
+            "cpu": "x86-64",
+            "os": "Windows-10-19045"
+          },
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "rlz_unittests",
+        "test_id_prefix": "ninja://rlz:rlz_unittests/"
+      },
+      {
+        "isolate_profile_data": true,
+        "merge": {
+          "script": "//testing/merge_scripts/standard_gtest_merge.py"
+        },
         "module_name": "//sandbox/win:sbox_integration_tests",
         "module_scheme": "gtest",
         "name": "sbox_integration_tests",
@@ -1572,6 +1604,7 @@
         "test_id_prefix": "ninja://storage:storage_unittests/"
       },
       {
+        "enable_rts_filtering": true,
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
@@ -1730,7 +1763,8 @@
             "cpu": "x86-64",
             "os": "Windows-10-19045"
           },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 2
         },
         "test": "unit_tests",
         "test_id_prefix": "ninja://chrome/test:unit_tests/"
@@ -2003,6 +2037,7 @@
           "--num-retries=3",
           "--write-run-histories-to=${ISOLATED_OUTDIR}/run_histories.json"
         ],
+        "enable_rts_filtering": true,
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -2244,7 +2279,7 @@
             "os": "Windows-10-19045"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 20
+          "shards": 23
         },
         "test": "headless_shell_wpt",
         "test_id_prefix": "ninja://:headless_shell_wpt/"
@@ -2629,7 +2664,8 @@
             "cpu": "x86-64",
             "os": "Windows-11"
           },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 2
         },
         "test": "blink_unittests",
         "test_id_prefix": "ninja://third_party/blink/renderer/controller:blink_unittests/"
@@ -2684,7 +2720,7 @@
             "os": "Windows-11"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 20
+          "shards": 40
         },
         "test": "browser_tests",
         "test_id_prefix": "ninja://chrome/test:browser_tests/"
@@ -3658,6 +3694,24 @@
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
+        "module_name": "//rlz:rlz_unittests",
+        "module_scheme": "gtest",
+        "name": "rlz_unittests",
+        "swarming": {
+          "dimensions": {
+            "cpu": "x86-64",
+            "os": "Windows-11"
+          },
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "rlz_unittests",
+        "test_id_prefix": "ninja://rlz:rlz_unittests/"
+      },
+      {
+        "isolate_profile_data": true,
+        "merge": {
+          "script": "//testing/merge_scripts/standard_gtest_merge.py"
+        },
         "module_name": "//sandbox/win:sbox_integration_tests",
         "module_scheme": "gtest",
         "name": "sbox_integration_tests",
@@ -3921,7 +3975,8 @@
             "cpu": "x86-64",
             "os": "Windows-11"
           },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 2
         },
         "test": "unit_tests",
         "test_id_prefix": "ninja://chrome/test:unit_tests/"
@@ -4593,7 +4648,7 @@
             "os": "Windows-11"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 14
+          "shards": 24
         },
         "test": "browser_tests",
         "test_id_prefix": "ninja://chrome/test:browser_tests/"
@@ -4615,7 +4670,7 @@
             "os": "Windows-11"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 3
+          "shards": 5
         },
         "test": "interactive_ui_tests",
         "test_id_prefix": "ninja://chrome/test:interactive_ui_tests/"

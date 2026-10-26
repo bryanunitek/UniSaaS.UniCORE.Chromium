@@ -18,11 +18,11 @@
 #include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component_test_api.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_test_utils.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_utils.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_test_util.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/geo/alternative_state_name_map.h"
-#include "components/autofill/core/browser/geo/alternative_state_name_map_test_utils.h"
+#include "components/autofill/core/browser/geo/alternative_state_name_map_test_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -939,8 +939,8 @@ TEST_P(MergeStatesWithCanonicalNamesTest, MergeTest) {
   SetTestValues(newer_address.Root(), newer_values);
 
   EXPECT_EQ(
-      test_case.is_mergeable,
-      older_address.Root()->IsMergeableWithComponent(*newer_address.Root()));
+      older_address.Root()->IsMergeableWithComponent(*newer_address.Root()),
+      test_case.is_mergeable);
 
   AddressComponentsStore expectation_address =
       i18n_model_definition::CreateAddressComponentModel();

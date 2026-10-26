@@ -29,6 +29,7 @@
 #import "ios/chrome/browser/shared/public/commands/contextual_panel_entrypoint_commands.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_panel_entrypoint_iph_commands.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_sheet_commands.h"
+#import "ios/chrome/browser/shared/public/commands/custom_leading_view_type.h"
 #import "ios/chrome/browser/shared/public/commands/fullscreen_commands.h"
 #import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/location_bar_badge_commands.h"
@@ -88,9 +89,6 @@
   } else {
     [self attachContextualPanelEntrypoint];
   }
-  id<GeminiCommands> geminiHandler =
-      HandlerForProtocol(_dispatcher, GeminiCommands);
-  _mediator.geminiHandler = geminiHandler;
   if (!IsChromeNextIaEnabled()) {
     [_dispatcher startDispatchingToTarget:_mediator
                               forProtocol:@protocol(LocationBarBadgeCommands)];
@@ -171,6 +169,16 @@
   return [self.viewController helpAnchorUsingBottomOmnibox:isBottomOmnibox];
 }
 
+- (void)locationBarBadgeMediator:(LocationBarBadgeMediator*)mediator
+    startGeminiEntryFlowWithStartupState:(GeminiStartupState*)startupState {
+  id<GeminiCommands> geminiHandler =
+      HandlerForProtocol(_dispatcher, GeminiCommands);
+  [geminiHandler startGeminiEntryFlowWithStartupState:startupState
+                                   baseViewController:self.baseViewController
+                             showSnackbarOnCompletion:YES
+                                           completion:nil];
+}
+
 #pragma mark - ContextualPanelEntrypointCommands
 
 - (void)notifyContextualPanelEntrypointIPHDismissed {
@@ -194,18 +202,23 @@
 #pragma mark - LocationBarBadgeCommands
 
 - (void)updateBadgeConfig:(LocationBarBadgeConfiguration*)config {
-  CHECK(IsChromeNextIaEnabled());
   [_mediator updateBadgeConfig:config];
 }
 
 - (void)updateColorForIPH {
-  CHECK(IsChromeNextIaEnabled());
   [_mediator updateColorForIPH];
 }
 
 - (void)markDisplayedBadgeAsUnread:(BOOL)read {
-  CHECK(IsChromeNextIaEnabled());
   [_mediator markDisplayedBadgeAsUnread:read];
+}
+
+- (void)setBadgeCustomLeadingViewType:(CustomLeadingViewType)type {
+  // No-op.
+}
+
+- (void)hideBadgeForType:(LocationBarBadgeType)type {
+  [_mediator hideBadgeForType:type];
 }
 
 #pragma mark - Private

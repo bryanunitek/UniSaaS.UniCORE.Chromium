@@ -16,6 +16,7 @@ import androidx.browser.customtabs.PostMessageBackend;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.TerminationStatus;
+import org.chromium.base.TriState;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
@@ -31,9 +32,9 @@ import org.chromium.content_public.browser.MessagePort;
 import org.chromium.content_public.browser.MessagePort.MessageCallback;
 import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.Page;
+import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
-import org.chromium.net.GURLUtils;
 import org.chromium.url.GURL;
 
 /**
@@ -44,13 +45,14 @@ public class PostMessageHandler implements OriginVerificationListener {
     private static final String TAG = "PostMessageHandler";
 
     // TODO(crbug.com/40257514): This should get moved into androidx.browser.
-    private static final String POST_MESSAGE_ORIGIN =
-            "androidx.browser.customtabs.POST_MESSAGE_ORIGIN";
+    static final String POST_MESSAGE_ORIGIN = "androidx.browser.customtabs.POST_MESSAGE_ORIGIN";
 
     private final MessageCallback mMessageCallback;
     private final PostMessageBackend mPostMessageBackend;
     private @Nullable WebContents mWebContents;
+    private @Nullable WebContentsObserver mWebContentsObserver;
     private MessagePort @Nullable [] mChannel;
+
     private @Nullable Uri mPostMessageSourceUri;
     private @Nullable Uri mPostMessageTargetUri;
 
@@ -66,7 +68,7 @@ public class PostMessageHandler implements OriginVerificationListener {
     public PostMessageHandler(PostMessageBackend postMessageBackend) {
         mPostMessageBackend = postMessageBackend;
         mMessageCallback =
-                (messagePayload, sentPorts) -> {
+                (messagePayload, sentPorts, senderOrigin) -> {
                     if (mChannel == null) {
                         Log.e(TAG, "Discarding postMessage as channel is null.");
                         return;
@@ -83,11 +85,13 @@ public class PostMessageHandler implements OriginVerificationListener {
                     }
 
                     Bundle bundle = null;
-                    GURL url = mWebContents.getMainFrame().getLastCommittedURL();
-                    if (url != null) {
-                        String origin = GURLUtils.getOrigin(url.getSpec());
+                    // For opaque origins (e.g., sandboxed iframes without allow-same-origin or
+                    // data: URLs), senderOrigin is serialized as the literal string "null" per
+                    // RFC 6454 and forwarded in POST_MESSAGE_ORIGIN to align with the web
+                    // platform's MessageEvent.origin.
+                    if (senderOrigin != null && !senderOrigin.isEmpty()) {
                         bundle = new Bundle();
-                        bundle.putString(POST_MESSAGE_ORIGIN, origin);
+                        bundle.putString(POST_MESSAGE_ORIGIN, senderOrigin);
                     }
                     assumeNonNull(messagePayload.getAsString());
                     mPostMessageBackend.onPostMessage(messagePayload.getAsString(), bundle);
@@ -103,46 +107,105 @@ public class PostMessageHandler implements OriginVerificationListener {
      */
     public void reset(final @Nullable WebContents webContents) {
         if (webContents == null || webContents.isDestroyed()) {
-            disconnectChannel();
+            closeChannelAndForgetWebContents();
             return;
         }
         // Can't reset with the same web contents twice.
         if (webContents.equals(mWebContents)) return;
+        if (mWebContents != null) {
+            closeChannelAndForgetWebContents();
+        }
         mWebContents = webContents;
-        new WebContentsObserver(webContents) {
-            private boolean mNavigatedOnce;
+        mWebContentsObserver =
+                new WebContentsObserver(webContents) {
+                    // A reset can attach to a WebContents that has already committed a document,
+                    // for example when a hidden tab is promoted or a tab is swapped in. Starting
+                    // from false there would misread the next genuine cross-document navigation as
+                    // the initial one and leave the channel alive across the document change.
+                    private boolean mNavigatedOnce =
+                            !GURL.isEmptyOrInvalid(webContents.getLastCommittedUrl());
 
-            @Override
-            public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) {
-                if (mNavigatedOnce && navigation.hasCommitted() && !navigation.isSameDocument()) {
-                    observe(null);
-                    mPostMessageSourceUri = null;
-                    disconnectChannel();
-                    return;
-                }
-                mNavigatedOnce = true;
-            }
+                    @Override
+                    public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) {
+                        if (mNavigatedOnce
+                                && navigation.hasCommitted()
+                                && !navigation.isSameDocument()) {
+                            mPostMessageSourceUri = null;
+                            mPostMessageTargetUri = null;
+                            closeChannel();
+                            return;
+                        }
+                        if (navigation.hasCommitted()) {
+                            mNavigatedOnce = true;
+                        }
+                    }
 
-            @Override
-            public void primaryMainFrameRenderProcessGone(
-                    @TerminationStatus int terminationStatus) {
-                disconnectChannel();
-            }
+                    @Override
+                    public void primaryMainFrameRenderProcessGone(
+                            @TerminationStatus int terminationStatus) {
+                        closeChannelAndForgetWebContents();
+                    }
 
-            @Override
-            public void documentLoadedInPrimaryMainFrame(
-                    Page page,
-                    GlobalRenderFrameHostId rfhId,
-                    @LifecycleState int rfhLifecycleState) {
-                if (mChannel != null || mPostMessageSourceUri == null) {
-                    return;
-                }
-                initializeWithWebContents(webContents);
-            }
-        };
+                    @Override
+                    public void webContentsDestroyed() {
+                        closeChannelAndForgetWebContents();
+                    }
+
+                    @Override
+                    public void documentLoadedInPrimaryMainFrame(
+                            Page page,
+                            GlobalRenderFrameHostId rfhId,
+                            @LifecycleState int rfhLifecycleState) {
+                        if (mChannel != null || mPostMessageSourceUri == null) {
+                            return;
+                        }
+                        initializeWithWebContents(webContents);
+                    }
+                };
+    }
+
+    private boolean isTargetOriginMatchingWebContents(WebContents webContents) {
+        String target = mPostMessageTargetUri == null ? "" : mPostMessageTargetUri.toString();
+        // An empty or "*" target origin is a wildcard, as understood by
+        // WebContents#postMessageToMainFrame and the postMessage specification, so there is
+        // nothing to match against.
+        if (target.isEmpty() || "*".equals(target)) {
+            return true;
+        }
+        RenderFrameHost mainFrame = webContents.getMainFrame();
+        if (mainFrame == null) {
+            return false;
+        }
+        // A sandboxed frame has an opaque security context even though its URL still looks like a
+        // regular https:// URL, so the URL comparison below would wrongly match. Reject those
+        // outright rather than handing a port to a document that cannot be attributed to an
+        // origin.
+        org.chromium.url.Origin committedOrigin = mainFrame.getLastCommittedOrigin();
+        if (committedOrigin != null && committedOrigin.isOpaque()) {
+            return false;
+        }
+        GURL url = mainFrame.getLastCommittedURL();
+        if (url == null || url.isEmpty() || !url.isValid()) {
+            return false;
+        }
+        Origin currentOrigin = Origin.create(url.getSpec());
+        Origin targetOrigin = Origin.create(mPostMessageTargetUri);
+        if (currentOrigin == null || targetOrigin == null) {
+            return false;
+        }
+        return currentOrigin.equals(targetOrigin);
     }
 
     private void initializeWithWebContents(final WebContents webContents) {
+        if (mPostMessageSourceUri == null || webContents.isDestroyed()) return;
+        if (!isTargetOriginMatchingWebContents(webContents)) {
+            closeChannel();
+            return;
+        }
+        // Replace any existing channel without tearing down the backend: onDisconnectChannel()
+        // unbinds the PostMessageService, which would make the onNotifyMessageChannelReady() call
+        // below a no-op and leave the client waiting forever.
+        closeChannelPort();
         mChannel = webContents.createMessageChannel();
         mChannel[0].setMessageCallback(mMessageCallback, null);
 
@@ -156,22 +219,56 @@ public class PostMessageHandler implements OriginVerificationListener {
         mPostMessageBackend.onNotifyMessageChannelReady(null);
     }
 
-    private void disconnectChannel() {
+    /**
+     * Drops the message channel without notifying the client. {@link MessagePort#close()} throws if
+     * the port has already been transferred, so guard against that.
+     */
+    private void closeChannelPort() {
         if (mChannel == null) return;
-        mChannel[0].close();
+        if (!mChannel[0].isClosed() && !mChannel[0].isTransferred()) {
+            mChannel[0].close();
+        }
         mChannel = null;
-        mWebContents = null;
+    }
+
+    /**
+     * Closes the message channel and notifies the client that it is gone, keeping the {@link
+     * WebContents}. The client can re-establish messaging for the new document by calling
+     * requestPostMessageChannel() again, which re-verifies the origin and re-enters {@link
+     * #initializeWithPostMessageUri}.
+     */
+    private void closeChannel() {
+        if (mChannel == null) return;
+        closeChannelPort();
         mPostMessageBackend.onDisconnectChannel(ContextUtils.getApplicationContext());
     }
 
     /**
+     * Closes the message channel and additionally drops the {@link WebContents}, for the cases
+     * where it can no longer host a channel at all (destroyed, swapped out, or renderer gone). No
+     * channel can be re-established until {@link #reset} supplies a new {@link WebContents}.
+     */
+    private void closeChannelAndForgetWebContents() {
+        closeChannel();
+        if (mWebContentsObserver != null) {
+            mWebContentsObserver.observe(null);
+            mWebContentsObserver = null;
+        }
+        mWebContents = null;
+        mPostMessageSourceUri = null;
+        mPostMessageTargetUri = null;
+    }
+
+    /**
      * Sets the postMessage postMessageUri for this session to the given {@link Uri}.
+     *
      * @param postMessageUri The postMessageUri value to be set.
      */
-    public void initializeWithPostMessageUri(Uri postMessageUri, @Nullable Uri targetOrigin) {
+    public void initializeWithPostMessageUri(
+            @Nullable Uri postMessageUri, @Nullable Uri targetOrigin) {
         mPostMessageSourceUri = postMessageUri;
         mPostMessageTargetUri = targetOrigin;
-        if (mWebContents != null && !mWebContents.isDestroyed()) {
+        if (mPostMessageSourceUri != null && mWebContents != null && !mWebContents.isDestroyed()) {
             initializeWithWebContents(mWebContents);
         }
     }
@@ -195,26 +292,26 @@ public class PostMessageHandler implements OriginVerificationListener {
         }
         PostTask.postTask(
                 TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        // It is still possible that the page has navigated while this task is in
-                        // the queue.
-                        // If that happens fail gracefully.
-                        if (mChannel == null || mChannel[0].isClosed()) return;
-                        mChannel[0].postMessage(new MessagePayload(message), null);
+                () -> {
+                    // It is still possible that the page has navigated, or that the port has been
+                    // transferred, while this task is in the queue. Both make postMessage() throw,
+                    // so fail gracefully.
+                    if (mChannel == null || mChannel[0].isClosed() || mChannel[0].isTransferred()) {
+                        return;
                     }
+                    mChannel[0].postMessage(new MessagePayload(message), null);
                 });
         return CustomTabsService.RESULT_SUCCESS;
     }
 
     @Override
     public void onOriginVerified(
-            String packageName, Origin origin, boolean result, @Nullable Boolean online) {
+            String packageName, Origin origin, boolean result, @TriState int online) {
         if (!result) return;
+        Uri targetOrigin = mPostMessageTargetUri != null ? mPostMessageTargetUri : origin.uri();
         initializeWithPostMessageUri(
                 OriginVerifier.getPostMessageUriFromVerifiedOrigin(packageName, origin),
-                mPostMessageTargetUri);
+                targetOrigin);
     }
 
     /**
@@ -223,7 +320,7 @@ public class PostMessageHandler implements OriginVerificationListener {
      *
      * @param postMessageTargetUri Uri to post the first message to.
      */
-    public void setPostMessageTargetUri(Uri postMessageTargetUri) {
+    public void setPostMessageTargetUri(@Nullable Uri postMessageTargetUri) {
         mPostMessageTargetUri = postMessageTargetUri;
     }
 
@@ -236,5 +333,13 @@ public class PostMessageHandler implements OriginVerificationListener {
      */
     public @Nullable Uri getPostMessageUriForTesting() {
         return mPostMessageSourceUri;
+    }
+
+    public @Nullable WebContents getWebContentsForTesting() {
+        return mWebContents;
+    }
+
+    public @Nullable WebContentsObserver getWebContentsObserverForTesting() {
+        return mWebContentsObserver;
     }
 }

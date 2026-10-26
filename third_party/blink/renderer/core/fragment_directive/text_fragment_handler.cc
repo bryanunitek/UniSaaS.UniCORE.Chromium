@@ -4,6 +4,8 @@
 
 #include "third_party/blink/renderer/core/fragment_directive/text_fragment_handler.h"
 
+#include <algorithm>
+
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "components/shared_highlighting/core/common/disabled_sites.h"
@@ -33,6 +35,7 @@
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/rect_conversions.h"
@@ -173,6 +176,17 @@ void TextFragmentHandler::RequestSelectorForViewportCenter(
   selector_ready_status_ =
       shared_highlighting::LinkGenerationReadyStatus::kRequestedBeforeReady;
 
+  // Skip selector generation if the page has not been scrolled.
+  LocalFrameView* view = GetFrame()->View();
+  ScrollableArea* scrollable_area = view ? view->GetScrollableArea() : nullptr;
+  if (!scrollable_area || scrollable_area->GetScrollOffset().y() <= 0) {
+    error_ = shared_highlighting::LinkGenerationError::kNotScrolled;
+    InvokeReplyCallback(
+        TextFragmentSelector(TextFragmentSelector::SelectorType::kInvalid),
+        error_);
+    return;
+  }
+
   if (!shared_highlighting::ShouldOfferLinkToText(
           GURL(GetFrame()->GetDocument()->Url()))) {
     error_ = shared_highlighting::LinkGenerationError::kBlockList;
@@ -182,7 +196,7 @@ void TextFragmentHandler::RequestSelectorForViewportCenter(
     return;
   }
 
-  RangeInFlatTree* range = GetRangeForViewportCenter();
+  RangeInFlatTree* range = GetRangeForReadingPosition();
 
   if (!range) {
     error_ = shared_highlighting::LinkGenerationError::kEmptySelection;
@@ -334,17 +348,22 @@ void TextFragmentHandler::StartGeneratingForCurrentSelection() {
                WrapWeakPersistent(this)));
 }
 
-RangeInFlatTree* TextFragmentHandler::GetRangeForViewportCenter() {
+RangeInFlatTree* TextFragmentHandler::GetRangeForReadingPosition() {
   LocalFrameView* view = GetFrame()->View();
   if (!view) {
     return nullptr;
   }
 
-  // Hit-test at the center of the visual viewport.
   VisualViewport& visual_viewport = GetFrame()->GetPage()->GetVisualViewport();
-  gfx::PointF center_in_viewport = visual_viewport.VisibleRect().CenterPoint();
+  const gfx::RectF visible_rect = visual_viewport.VisibleRect();
+  // Eye-tracking research indicates that users typically focus around the
+  // upper third (35%) of the viewport when reading digital content.
+  constexpr float kViewportHitTestYRatio = 0.35f;
+  const gfx::PointF hit_point_in_viewport(
+      visible_rect.CenterPoint().x(),
+      visible_rect.y() + visible_rect.height() * kViewportHitTestYRatio);
 
-  HitTestLocation location(view->ViewportToFrame(center_in_viewport));
+  HitTestLocation location(view->ViewportToFrame(hit_point_in_viewport));
 
   HitTestRequest::HitTestRequestType hit_type = HitTestRequest::kReadOnly |
                                                 HitTestRequest::kActive |

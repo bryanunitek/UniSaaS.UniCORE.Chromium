@@ -13,8 +13,11 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/types/strong_alias.h"
+#include "components/affiliations/core/browser/match_type.h"
 #include "components/password_manager/core/browser/password_store/password_store.h"
 #include "components/password_manager/core/browser/password_store/password_store_backend.h"
+#include "components/password_manager/core/browser/password_store/password_store_backend_error.h"
+#include "components/password_manager/core/browser/password_store/stored_credential.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -43,7 +46,7 @@ class FakePasswordStoreBackend : public PasswordStoreBackend {
   FakePasswordStoreBackend();
   explicit FakePasswordStoreBackend(
       IsAccountStore is_account_store,
-      scoped_refptr<base::SequencedTaskRunner> tapsk_runner = nullptr);
+      scoped_refptr<base::SequencedTaskRunner> task_runner = nullptr);
   FakePasswordStoreBackend(
       IsAccountStore is_account_store,
       UpdateAlwaysSucceeds update_always_succeeds,
@@ -52,6 +55,13 @@ class FakePasswordStoreBackend : public PasswordStoreBackend {
 
   void TriggerOnLoginsRetainedForAndroid(
       const std::vector<StoredCredential>& credentials);
+  // Note: On Android, affiliations are not computed in Chrome (they are
+  // provided by GMSCore/UPM), so the test backend directly injects affiliated
+  // and grouped realms. On Desktop, affiliations are computed in Chrome via
+  // `AffiliatedMatchHelper`.
+  // Do NOT enable this method on Desktop; instead, attach a
+  // `MockAffiliatedMatchHelper` via `SetAffiliatedMatchHelper()` and use
+  // `ExpectCallToGetAffiliatedAndGrouped()`.
 #if BUILDFLAG(IS_ANDROID)
   void SetAffiliatedAndGroupedRealms(
       const std::string& realm,
@@ -59,14 +69,13 @@ class FakePasswordStoreBackend : public PasswordStoreBackend {
       const std::vector<std::string>& grouped_realms = {});
 #endif
   void ReturnErrorOnRequest(
-      PasswordStoreBackendError password_store_backend_error);
+      std::optional<PasswordStoreBackendError> password_store_backend_error);
   void SetError(ActionableError error);
   void NotifyAboutError();
   void SetAffiliatedMatchHelper(AffiliatedMatchHelper* match_helper);
 
   IsAccountStore is_account_store() const { return is_account_store_; }
 
- private:
   // Implements PasswordStoreBackend interface.
   void InitBackend(RemoteChangesReceived remote_form_changes_received,
                    base::RepeatingClosure sync_enabled_or_disabled_cb,
@@ -109,19 +118,32 @@ class FakePasswordStoreBackend : public PasswordStoreBackend {
   // `base::SequencedTaskRunner::GetCurrentDefault` if none is injected.
   const scoped_refptr<base::SequencedTaskRunner>& GetTaskRunner() const;
 
-  BackendLoginsResult GetAllLoginsInternal();
-  BackendLoginsResult GetAutofillableLoginsInternal();
-  BackendLoginsResult FillMatchingLoginsInternal(
+  // Posts `task` to the task runner and replies with its result via `callback`.
+  // If `password_store_backend_error_` has been set (e.g. via
+  // `ReturnErrorOnRequest`), skips executing `task` and asynchronously returns
+  // the simulated error instead.
+  void PostTaskAndReplyWithResultOrSimulateError(
+      base::OnceCallback<PasswordStoreChangeList()> task,
+      PasswordChangesOrErrorReply callback);
+  void PostTaskAndReplyWithResultOrSimulateError(
+      base::OnceCallback<std::vector<StoredCredential>()> task,
+      BackendLoginsOrErrorReply callback);
+
+ private:
+  std::vector<StoredCredential> GetAllLoginsInternal();
+  std::vector<StoredCredential> GetAutofillableLoginsInternal();
+  std::vector<StoredCredential> FillMatchingLoginsInternal(
       const std::vector<PasswordFormDigest>& forms,
       bool include_psl);
-  BackendLoginsResult FillMatchingLoginsHelper(const PasswordFormDigest& form,
-                                               bool include_psl);
+  std::vector<StoredCredential> FillMatchingLoginsHelper(
+      const PasswordFormDigest& form,
+      bool include_psl);
 #if BUILDFLAG(IS_ANDROID)
-  BackendLoginsResult GetGroupedMatchingLoginsInternal(
+  std::vector<StoredCredential> GetGroupedMatchingLoginsInternal(
       const PasswordFormDigest& form_digest);
   void AddLoginsWithMatchType(const std::vector<std::string>& realms,
-                              PasswordForm::MatchType match_type,
-                              BackendLoginsResult& results);
+                              affiliations::MatchType match_type,
+                              std::vector<StoredCredential>& results);
 #endif
   PasswordStoreChangeList AddLoginInternal(const StoredCredential& cred);
   PasswordStoreChangeList UpdateLoginInternal(const StoredCredential& cred);

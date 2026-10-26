@@ -22,10 +22,10 @@ extern NSString* const kTabGridIncognitoTabsPageButtonIdentifier;
 extern NSString* const kTabGridRegularTabsPageButtonIdentifier;
 extern NSString* const kTabGridRemoteTabsPageButtonIdentifier;
 extern NSString* const kTabGridTabGroupsPageButtonIdentifier;
-extern NSString* const kTabGridDoneButtonIdentifier;
+extern NSString* const kTabGridExitTabGridButtonIdentifier;
+extern NSString* const kTabGridExitSelectionButtonIdentifier;
 extern NSString* const kTabGridSearchButtonIdentifier;
 extern NSString* const kTabGridCancelButtonIdentifier;
-extern NSString* const kTabGridUndoCloseAllButtonIdentifier;
 extern NSString* const kTabGridIncognitoTabsEmptyStateIdentifier;
 extern NSString* const kTabGridRegularTabsEmptyStateIdentifier;
 extern NSString* const kTabGridScrollViewIdentifier;
@@ -34,7 +34,6 @@ extern NSString* const kIncognitoTabGridIdentifier;
 extern NSString* const kInactiveTabGridIdentifier;
 extern NSString* const kInactiveTabGridCloseAllButtonIdentifier;
 
-extern NSString* const kTabGridEditButtonIdentifier;
 extern NSString* const kTabGridEditCloseTabsButtonIdentifier;
 extern NSString* const kTabGridEditSelectAllButtonIdentifier;
 extern NSString* const kTabGridEditAddToButtonIdentifier;
@@ -71,6 +70,14 @@ extern const CGFloat kTabGridFloatingButtonInsetIPad;
 // Intrinsic heights of the tab grid toolbars.
 extern const CGFloat kTabGridTopToolbarHeight;
 extern const CGFloat kTabGridBottomToolbarHeight;
+
+// Additional top padding for the top toolbar when there is no safe area top
+// inset (e.g. status bar is hidden or along the side).
+inline constexpr CGFloat kTabGridTopToolbarNoSafeAreaTopPadding = 12.0;
+
+// Additional horizontal padding for the top toolbar on Regular x Regular
+// devices.
+inline constexpr CGFloat kTabGridTopToolbarRegularHorizontalPadding = 6.0;
 
 // The Search bar original width ratio before any width modifiers.
 extern const CGFloat kTabGridSearchBarWidthRatio;

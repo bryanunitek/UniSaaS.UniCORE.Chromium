@@ -28,6 +28,9 @@ class GaiaId;
 // The avatar of the primary account. Not nil.
 @property(nonatomic, readonly) UIImage* primaryAccountAvatar;
 
+// The AI tier of the primary account, or 0 if none should be displayed.
+@property(nonatomic, readonly) NSInteger primaryAccountAITier;
+
 // The user full name of the primary account. May be nil.
 @property(nonatomic, readonly) NSString* primaryAccountUserFullName;
 

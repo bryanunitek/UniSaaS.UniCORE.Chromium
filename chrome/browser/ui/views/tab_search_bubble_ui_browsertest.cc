@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 
 #include "base/run_loop.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/bubble/webui_bubble_manager.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/tab_search_bubble_host.h"
 #include "chrome/browser/ui/webui/tab_search/tab_search_page_handler.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "ui/compositor/compositor.h"
 #include "ui/views/widget/widget_observer.h"

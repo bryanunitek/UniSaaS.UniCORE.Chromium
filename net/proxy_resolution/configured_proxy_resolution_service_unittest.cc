@@ -20,6 +20,7 @@
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
@@ -138,6 +139,30 @@ class ImmediateAfterActivityPollPolicy
   }
 };
 
+ProxyConfig::DynamicRoutingRule CreateDynamicRoutingRule(
+    std::string_view destination_pattern,
+    std::string_view proxy_uri,
+    ProxyServer::Scheme scheme = ProxyServer::SCHEME_HTTP) {
+  ProxyConfig::DynamicRoutingRule rule;
+  rule.destination_matchers.AddRuleFromString(destination_pattern);
+  rule.proxy_list.AddProxyChain(ProxyUriToProxyChain(proxy_uri, scheme));
+  return rule;
+}
+
+ProxyInfo ResolveProxySynchronously(ConfiguredProxyResolutionService* service,
+                                    const GURL& url) {
+  std::unique_ptr<ProxyResolutionRequest> request;
+  ProxyInfo info;
+  TestCompletionCallback callback;
+  int rv = service->ResolveProxy(url, std::string(), NetworkAnonymizationKey(),
+                                 handles::kInvalidNetworkHandle, &info,
+                                 callback.callback(), &request,
+                                 NetLogWithSource(), DEFAULT_PRIORITY);
+  EXPECT_THAT(rv, IsOk());
+  EXPECT_FALSE(request);
+  return info;
+}
+
 // This test fixture is used to partially disable the background polling done by
 // the ConfiguredProxyResolutionService (which it uses to detect whenever its
 // PAC script contents or WPAD results have changed).
@@ -153,9 +178,21 @@ class ImmediateAfterActivityPollPolicy
 //
 // The tests which verify the polling code re-enable the polling behavior but
 // are careful to avoid timing problems.
+class MockProxyConfigService;
+
 class ConfiguredProxyResolutionServiceTest : public ::testing::Test,
                                              public WithTaskEnvironment {
  protected:
+  // Holds the test service and its associated mock config service for test
+  // cases starting from a state with failed initial PAC auto-detection.
+  struct FailedAutodetectTestEnvironment {
+    // The resolution service under test.
+    std::unique_ptr<ConfiguredProxyResolutionService> service;
+
+    // Unowned pointer to the mock config service owned by `service`.
+    raw_ptr<MockProxyConfigService> config_service;
+  };
+
   ConfiguredProxyResolutionServiceTest()
       : WithTaskEnvironment(
             base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
@@ -181,6 +218,8 @@ class ConfiguredProxyResolutionServiceTest : public ::testing::Test,
   void AddDnsEntry(const GURL& dns_host, Error error) {
     mock_host_resolver_->rules()->AddRule(dns_host.GetHost(), error);
   }
+
+  FailedAutodetectTestEnvironment CreateServiceWithFailedAutodetect();
 
   std::unique_ptr<MockHostResolverBase> mock_host_resolver_{nullptr};
 
@@ -238,6 +277,38 @@ class MockProxyConfigService : public ProxyConfigService {
   ProxyConfigWithAnnotation config_;
   base::ObserverList<Observer, true>::Unchecked observers_;
 };
+
+ConfiguredProxyResolutionServiceTest::FailedAutodetectTestEnvironment
+ConfiguredProxyResolutionServiceTest::CreateServiceWithFailedAutodetect() {
+  auto config_service =
+      std::make_unique<MockProxyConfigService>(ProxyConfig::CreateAutoDetect());
+  auto* config_service_ptr = config_service.get();
+  auto factory = std::make_unique<MockAsyncProxyResolverFactory>(false);
+  auto* factory_ptr = factory.get();
+  auto service = std::make_unique<ConfiguredProxyResolutionService>(
+      std::move(config_service), std::move(factory), mock_host_resolver_.get(),
+      nullptr,
+      /*quick_check_enabled=*/true);
+
+  ProxyInfo info;
+  TestCompletionCallback callback;
+  std::unique_ptr<ProxyResolutionRequest> request;
+  int rv = service->ResolveProxy(
+      GURL("http://www.google.com"), std::string(), NetworkAnonymizationKey(),
+      handles::kInvalidNetworkHandle, &info, callback.callback(), &request,
+      NetLogWithSource(), DEFAULT_PRIORITY);
+  EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
+
+  EXPECT_EQ(PacFileData::TYPE_AUTO_DETECT,
+            factory_ptr->pending_requests()[0]->script_data()->type());
+  factory_ptr->pending_requests()[0]->CompleteNow(ERR_PAC_SCRIPT_FAILED,
+                                                  nullptr);
+  EXPECT_THAT(callback.WaitForResult(), IsOk());
+  EXPECT_TRUE(info.is_direct());
+  EXPECT_TRUE(service->has_script_poller_for_testing());
+
+  return {std::move(service), config_service_ptr};
+}
 
 // A test network delegate that exercises the OnResolveProxy callback.
 class TestResolveProxyDelegate : public ProxyDelegate {
@@ -458,6 +529,105 @@ ProxyList CreateProxyList(std::string_view pac_result_string) {
   ProxyList proxy_list;
   proxy_list.SetFromPacString(std::string(pac_result_string));
   return proxy_list;
+}
+
+// ProxyResolverFactory that delegates to MockAsyncProxyResolverFactory by
+// default, or fails synchronously when `synchronous_fail_` is set.
+class SyncFailProxyResolverFactory : public ProxyResolverFactory {
+ public:
+  explicit SyncFailProxyResolverFactory(bool resolvers_expect_pac_bytes)
+      : ProxyResolverFactory(resolvers_expect_pac_bytes),
+        async_factory_(resolvers_expect_pac_bytes) {}
+
+  // Returns ERR_PAC_SCRIPT_FAILED synchronously if `synchronous_fail_` is set,
+  // or forwards to `async_factory_` otherwise.
+  int CreateProxyResolver(
+      const scoped_refptr<PacFileData>& pac_script,
+      std::unique_ptr<ProxyResolver>* resolver,
+      CompletionOnceCallback callback,
+      std::unique_ptr<ProxyResolverFactory::Request>* request_handle) override {
+    if (synchronous_fail_) {
+      return ERR_PAC_SCRIPT_FAILED;
+    }
+    return async_factory_.CreateProxyResolver(
+        pac_script, resolver, std::move(callback), request_handle);
+  }
+
+  void set_synchronous_fail(bool synchronous_fail) {
+    synchronous_fail_ = synchronous_fail;
+  }
+
+  const MockAsyncProxyResolverFactory::RequestsList& pending_requests() const {
+    return async_factory_.pending_requests();
+  }
+
+ private:
+  bool synchronous_fail_ = false;
+  MockAsyncProxyResolverFactory async_factory_;
+};
+
+// Bundles the caller-owned state for a single proxy resolution request in
+// tests.
+struct TestResolveRequest {
+  std::unique_ptr<ProxyInfo> info = std::make_unique<ProxyInfo>();
+  std::unique_ptr<ProxyResolutionRequest> request;
+  NetLogWithSource net_log = NetLogWithSource::Make(NetLogSourceType::NONE);
+  CompletionOnceCallback callback;
+};
+
+// Starts two concurrent PAC requests and fails the first with
+// ERR_PAC_SCRIPT_TERMINATED while forcing synchronous PAC re-initialization.
+void SimulatePacTerminatedWithSyncReinit(TestResolveRequest& req1,
+                                         TestResolveRequest& req2) {
+  auto config_service =
+      std::make_unique<MockProxyConfigService>("http://foopy/proxy.pac");
+
+  MockAsyncProxyResolver resolver;
+  auto resolver_factory = std::make_unique<SyncFailProxyResolverFactory>(false);
+  auto* resolver_factory_ptr = resolver_factory.get();
+
+  ConfiguredProxyResolutionService service(
+      std::move(config_service), std::move(resolver_factory),
+      /*host_resolver_for_override_rules=*/nullptr, /*net_log=*/nullptr,
+      /*quick_check_enabled=*/true);
+
+  GURL url1("http://www.google.com/");
+  GURL url2("https://www.google.com/");
+
+  // Request 1: In-flight resolve request that will encounter
+  // ERR_PAC_SCRIPT_TERMINATED and trigger proxy re-initialization.
+  int rv1 = service.ResolveProxy(url1, std::string(), NetworkAnonymizationKey(),
+                                 handles::kInvalidNetworkHandle,
+                                 req1.info.get(), std::move(req1.callback),
+                                 &req1.request, req1.net_log, DEFAULT_PRIORITY);
+
+  // Request 2: Concurrent in-flight resolve request that will be paused in
+  // `pending_requests_` and restarted upon re-initialization.
+  int rv2 = service.ResolveProxy(url2, std::string(), NetworkAnonymizationKey(),
+                                 handles::kInvalidNetworkHandle,
+                                 req2.info.get(), std::move(req2.callback),
+                                 &req2.request, req2.net_log, DEFAULT_PRIORITY);
+
+  // Both requests should be waiting for PAC compilation now.
+  EXPECT_THAT(rv1, IsError(ERR_IO_PENDING));
+  EXPECT_THAT(rv2, IsError(ERR_IO_PENDING));
+
+  // Complete PAC script compilation so the service becomes ready and
+  // dispatches `url1` and `url2` to the resolver.
+  ASSERT_EQ(1u, resolver_factory_ptr->pending_requests().size());
+  EXPECT_EQ(GURL("http://foopy/proxy.pac"),
+            resolver_factory_ptr->pending_requests()[0]->script_data()->url());
+  resolver_factory_ptr->pending_requests()[0]->CompleteNowWithForwarder(
+      OK, &resolver);
+
+  // Both `url1` and `url2` are now running as in-flight jobs in the resolver.
+  JobMap jobs = GetPendingJobsForURLs(resolver, url1, url2);
+
+  // Force synchronous re-initialization failure and crash `url1`.
+  resolver_factory_ptr->set_synchronous_fail(true);
+  jobs[url1]->CompleteNow(ERR_PAC_SCRIPT_TERMINATED);
+  EXPECT_FALSE(req1.request);
+  EXPECT_FALSE(req2.request);
 }
 
 }  // namespace
@@ -1854,6 +2024,76 @@ TEST_F(ConfiguredProxyResolutionServiceTest,
   EXPECT_THAT(callback2.WaitForResult(), IsOk());
   EXPECT_FALSE(info.is_direct());
   EXPECT_EQ("[foopy_valid:8080]", info.proxy_chain().ToDebugString());
+}
+
+// Test what happens when the ProxyResolver fails with
+// ERR_PAC_SCRIPT_TERMINATED while multiple requests are in progress, and the
+// subsequent proxy re-initialization completes synchronously (e.g. fails and
+// falls back to DIRECT). Make sure no use-after-free occurs when each request
+// destroys itself in its completion callback (crbug.com/533534913).
+TEST_F(ConfiguredProxyResolutionServiceTest,
+       ProxyResolverTerminatedSyncReinitSelfDeletion) {
+  TestResolveRequest req1, req2;
+
+  int callback1_result = ERR_IO_PENDING;
+  req1.callback = base::BindLambdaForTesting([&](int rv) {
+    callback1_result = rv;
+    // Destroy the request inside the completion callback, simulating the
+    // behavior of consumers like HttpStreamFactory::JobController.
+    req1.request.reset();
+  });
+
+  int callback2_result = ERR_IO_PENDING;
+  req2.callback = base::BindLambdaForTesting([&](int rv) {
+    callback2_result = rv;
+    req2.request.reset();
+  });
+
+  SimulatePacTerminatedWithSyncReinit(req1, req2);
+
+  // `req1` fell back to DIRECT per-request as the error fallback for
+  // PAC runtime script crash (ERR_PAC_SCRIPT_TERMINATED).
+  EXPECT_THAT(callback1_result, IsOk());
+  EXPECT_TRUE(req1.info->is_direct());
+
+  // PAC re-initialization failed, so the entire service entered DIRECT fallback
+  // mode and restarted `req2` against this new DIRECT configuration.
+  EXPECT_THAT(callback2_result, IsOk());
+  EXPECT_TRUE(req2.info->is_direct());
+}
+
+// Verifies that cancelling the completing request from a sibling request's
+// callback during synchronous PAC re-initialization is handled safely.
+TEST_F(ConfiguredProxyResolutionServiceTest,
+       ProxyResolverTerminatedSyncReinitSiblingDeletion) {
+  TestResolveRequest req1, req2;
+  RecordingNetLogObserver net_log_observer;
+
+  bool callback1_called = false;
+  req1.callback =
+      base::BindLambdaForTesting([&](int rv) { callback1_called = true; });
+
+  int callback2_result = ERR_IO_PENDING;
+  req2.callback = base::BindLambdaForTesting([&](int rv) {
+    callback2_result = rv;
+    // Cancel `req1` while its completion frames are still on the stack.
+    req1.info.reset();
+    req1.request.reset();
+    req2.request.reset();
+  });
+
+  SimulatePacTerminatedWithSyncReinit(req1, req2);
+
+  EXPECT_THAT(callback2_result, IsOk());
+  EXPECT_TRUE(req2.info->is_direct());
+  EXPECT_FALSE(callback1_called);
+
+  auto entries1 = net_log_observer.GetEntriesForSource(req1.net_log.source());
+  ASSERT_EQ(5u, entries1.size());
+  EXPECT_TRUE(LogContainsBeginEvent(entries1, 0,
+                                    NetLogEventType::PROXY_RESOLUTION_SERVICE));
+  EXPECT_TRUE(LogContainsEndEvent(entries1, 4,
+                                  NetLogEventType::PROXY_RESOLUTION_SERVICE));
 }
 
 TEST_F(ConfiguredProxyResolutionServiceTest,
@@ -6891,5 +7131,277 @@ INSTANTIATE_TEST_SUITE_P(,
                                               .completes_synchronously = true},
 
                          }));
+
+TEST_F(ConfiguredProxyResolutionServiceTest, DynamicRoutingRuleApplied) {
+  ProxyConfig config = ProxyConfig::CreateDirect();
+  ProxyConfig::DynamicRoutingConfig dynamic_config;
+  dynamic_config.routing_rules.push_back(
+      CreateDynamicRoutingRule("www.google.com", "proxy1:80"));
+  config.set_dynamic_routing_config(dynamic_config);
+
+  auto service =
+      ConfiguredProxyResolutionService::CreateUsingSystemProxyResolver(
+          std::make_unique<MockProxyConfigService>(config),
+          /*host_resolver_for_override_rules=*/nullptr,
+          /*net_log=*/nullptr,
+          /*quick_check_enabled=*/true);
+
+  // Matching URL gets routed.
+  EXPECT_EQ("[proxy1:80]", ResolveProxySynchronously(
+                               service.get(), GURL("http://www.google.com"))
+                               .proxy_chain()
+                               .ToDebugString());
+
+  // Non-matching URL should go DIRECT.
+  EXPECT_TRUE(
+      ResolveProxySynchronously(service.get(), GURL("http://www.yahoo.com"))
+          .is_direct());
+}
+
+TEST_F(ConfiguredProxyResolutionServiceTest,
+       OverrideRulesPrecedesDynamicRoutingRules) {
+  mock_host_resolver_ = std::make_unique<MockHostResolver>();
+  ProxyConfig config = ProxyConfig::CreateDirect();
+
+  // Add ProxyOverrideRule for www.google.com -> override_proxy:80
+  ProxyConfig::ProxyOverrideRule override_rule;
+  override_rule.destination_matchers.AddRuleFromString("www.google.com");
+  override_rule.proxy_list.AddProxyChain(
+      ProxyUriToProxyChain("override_proxy:80", ProxyServer::SCHEME_HTTP));
+  config.set_proxy_override_rules({override_rule});
+
+  // Add DynamicRoutingRule for www.google.com -> dynamic_proxy:80
+  ProxyConfig::DynamicRoutingConfig dynamic_config;
+  dynamic_config.routing_rules.push_back(
+      CreateDynamicRoutingRule("www.google.com", "dynamic_proxy:80"));
+  config.set_dynamic_routing_config(dynamic_config);
+
+  auto service =
+      ConfiguredProxyResolutionService::CreateUsingSystemProxyResolver(
+          std::make_unique<MockProxyConfigService>(config),
+          mock_host_resolver_.get(),
+          /*net_log=*/nullptr,
+          /*quick_check_enabled=*/true);
+
+  // OverrideRule has higher priority than DynamicRoutingRule.
+  EXPECT_EQ(
+      "[override_proxy:80]",
+      ResolveProxySynchronously(service.get(), GURL("http://www.google.com"))
+          .proxy_chain()
+          .ToDebugString());
+}
+
+TEST_F(ConfiguredProxyResolutionServiceTest,
+       DynamicRoutingPvdOnlyUpdateDoesNotResetPac) {
+  ProxyConfig config = ProxyConfig::CreateDirect();
+  auto mock_config_service = std::make_unique<MockProxyConfigService>(config);
+  auto* mock_config_service_ptr = mock_config_service.get();
+
+  auto service =
+      ConfiguredProxyResolutionService::CreateUsingSystemProxyResolver(
+          std::move(mock_config_service),
+          /*host_resolver_for_override_rules=*/nullptr,
+          /*net_log=*/nullptr,
+          /*quick_check_enabled=*/true);
+
+  // Initial resolve: DIRECT.
+  EXPECT_TRUE(
+      ResolveProxySynchronously(service.get(), GURL("http://www.google.com"))
+          .is_direct());
+
+  // Update ProxyConfig with dynamic routing rule only (PvD update).
+  ProxyConfig::DynamicRoutingConfig dynamic_config;
+  dynamic_config.routing_rules.push_back(CreateDynamicRoutingRule(
+      "www.google.com", "pvd_proxy:443", ProxyServer::SCHEME_HTTPS));
+  config.set_dynamic_routing_config(dynamic_config);
+
+  mock_config_service_ptr->SetConfig(
+      ProxyConfigWithAnnotation(config, TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  // Resolve again: should immediately use pvd_proxy:443 without resetting.
+  EXPECT_EQ(
+      "[https://pvd_proxy:443]",
+      ResolveProxySynchronously(service.get(), GURL("http://www.google.com"))
+          .proxy_chain()
+          .ToDebugString());
+}
+
+TEST_F(ConfiguredProxyResolutionServiceTest,
+       DynamicRoutingUpdateInProgressPausesNetworkRequests) {
+  ProxyConfig config = ProxyConfig::CreateDirect();
+  auto mock_config_service = std::make_unique<MockProxyConfigService>(config);
+  auto* mock_config_service_ptr = mock_config_service.get();
+
+  auto service =
+      ConfiguredProxyResolutionService::CreateUsingSystemProxyResolver(
+          std::move(mock_config_service),
+          /*host_resolver_for_override_rules=*/nullptr,
+          /*net_log=*/nullptr,
+          /*quick_check_enabled=*/true);
+
+  // Set dynamic routing config with is_update_in_progress = true.
+  ProxyConfig::DynamicRoutingConfig dynamic_config;
+  dynamic_config.is_update_in_progress = true;
+  config.set_dynamic_routing_config(dynamic_config);
+
+  mock_config_service_ptr->SetConfig(
+      ProxyConfigWithAnnotation(config, TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  RecordingNetLogObserver net_log_observer;
+  NetLogWithSource net_log_with_source =
+      NetLogWithSource::Make(NetLogSourceType::NONE);
+
+  // Resolve request should return ERR_IO_PENDING while update is in progress.
+  std::unique_ptr<ProxyResolutionRequest> request;
+  ProxyInfo info;
+  TestCompletionCallback callback;
+  int rv = service->ResolveProxy(
+      GURL("http://www.google.com"), std::string(), NetworkAnonymizationKey(),
+      handles::kInvalidNetworkHandle, &info, callback.callback(), &request,
+      net_log_with_source, DEFAULT_PRIORITY);
+  EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
+
+  // Clear is_update_in_progress and supply dynamic routing rule.
+  dynamic_config.is_update_in_progress = false;
+  ProxyConfig::DynamicRoutingRule dynamic_rule = CreateDynamicRoutingRule(
+      "www.google.com", "pvd_proxy:443", ProxyServer::SCHEME_HTTPS);
+  dynamic_config.routing_rules.push_back(dynamic_rule);
+  config.set_dynamic_routing_config(dynamic_config);
+
+  mock_config_service_ptr->SetConfig(
+      ProxyConfigWithAnnotation(config, TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  // Now callback should finish and return OK with pvd_proxy:443.
+  EXPECT_THAT(callback.WaitForResult(), IsOk());
+  EXPECT_EQ("[https://pvd_proxy:443]", info.proxy_chain().ToDebugString());
+
+  auto entries = net_log_observer.GetEntries();
+  EXPECT_TRUE(LogContainsBeginEvent(entries, 0,
+                                    NetLogEventType::PROXY_RESOLUTION_SERVICE));
+  EXPECT_TRUE(LogContainsBeginEvent(
+      entries, 1,
+      NetLogEventType::
+          PROXY_RESOLUTION_SERVICE_WAITING_FOR_DYNAMIC_PROXY_CONFIGS));
+  EXPECT_TRUE(LogContainsEndEvent(
+      entries, 2,
+      NetLogEventType::
+          PROXY_RESOLUTION_SERVICE_WAITING_FOR_DYNAMIC_PROXY_CONFIGS));
+  EXPECT_TRUE(LogContainsEvent(
+      entries, 3, NetLogEventType::PROXY_RESOLUTION_DYNAMIC_RULE_APPLIED,
+      NetLogEventPhase::NONE));
+  EXPECT_EQ(entries[3].params, dynamic_rule.ToDict());
+  EXPECT_TRUE(LogContainsEvent(
+      entries, 4, NetLogEventType::PROXY_RESOLUTION_SERVICE_RESOLVED_PROXY_LIST,
+      NetLogEventPhase::NONE));
+  EXPECT_TRUE(LogContainsEndEvent(entries, 5,
+                                  NetLogEventType::PROXY_RESOLUTION_SERVICE));
+}
+
+TEST_F(ConfiguredProxyResolutionServiceTest,
+       DynamicRoutingConfigUpdate_PendingRequestCancelledInCallback) {
+  ProxyConfig config = ProxyConfig::CreateDirect();
+  auto mock_config_service = std::make_unique<MockProxyConfigService>(config);
+  MockProxyConfigService* mock_config_service_ptr = mock_config_service.get();
+
+  auto service =
+      ConfiguredProxyResolutionService::CreateUsingSystemProxyResolver(
+          std::move(mock_config_service),
+          /*host_resolver_for_override_rules=*/nullptr,
+          /*net_log=*/nullptr,
+          /*quick_check_enabled=*/true);
+
+  // Set dynamic routing config with is_update_in_progress = true.
+  ProxyConfig::DynamicRoutingConfig dynamic_config;
+  dynamic_config.is_update_in_progress = true;
+  config.set_dynamic_routing_config(dynamic_config);
+
+  mock_config_service_ptr->SetConfig(
+      ProxyConfigWithAnnotation(config, TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  ProxyInfo info1;
+  std::unique_ptr<ProxyResolutionRequest> req1;
+  ProxyInfo info2;
+  std::unique_ptr<ProxyResolutionRequest> req2;
+
+  int number_of_callbacks_run = 0;
+
+  auto cb1 = base::BindLambdaForTesting([&](int result) {
+    number_of_callbacks_run++;
+    if (req2) {
+      req2.reset();
+    }
+  });
+
+  auto cb2 = base::BindLambdaForTesting([&](int result) {
+    number_of_callbacks_run++;
+    if (req1) {
+      req1.reset();
+    }
+  });
+
+  int rv1 = service->ResolveProxy(GURL("http://www.google.com"), std::string(),
+                                  NetworkAnonymizationKey(),
+                                  handles::kInvalidNetworkHandle, &info1, cb1,
+                                  &req1, NetLogWithSource(), DEFAULT_PRIORITY);
+  EXPECT_EQ(rv1, ERR_IO_PENDING);
+
+  int rv2 = service->ResolveProxy(GURL("http://www.yahoo.com"), std::string(),
+                                  NetworkAnonymizationKey(),
+                                  handles::kInvalidNetworkHandle, &info2, cb2,
+                                  &req2, NetLogWithSource(), DEFAULT_PRIORITY);
+  EXPECT_EQ(rv2, ERR_IO_PENDING);
+
+  dynamic_config.is_update_in_progress = false;
+  config.set_dynamic_routing_config(dynamic_config);
+
+  mock_config_service_ptr->SetConfig(
+      ProxyConfigWithAnnotation(config, TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  // Exactly one callback ran, and it cancelled the other request before it
+  // could be processed.
+  EXPECT_EQ(number_of_callbacks_run, 1);
+}
+
+// Tests that when a failed automatic PAC configuration falls back to Direct
+// (with a background poller scheduled), a subsequent proxy config change to
+// Direct properly tears down the background poller rather than treating it as
+// an in-place dynamic routing update (crbug.com/551857769).
+TEST_F(ConfiguredProxyResolutionServiceTest,
+       UpdateConfigAfterFailedAutodetectResetsPollerOnDirectUpdate) {
+  auto [service, config_service] = CreateServiceWithFailedAutodetect();
+
+  // Now, system proxy config changes to Direct (non-automatic).
+  config_service->SetConfig(ProxyConfigWithAnnotation::CreateDirect());
+
+  // The poller must be reset because the new effective config has no automatic
+  // settings.
+  EXPECT_FALSE(service->has_script_poller_for_testing());
+}
+
+TEST_F(ConfiguredProxyResolutionServiceTest,
+       DynamicRoutingOnlyUpdatePreservesResolvedFallbackConfig) {
+  auto [service, config_service] = CreateServiceWithFailedAutodetect();
+
+  // Dynamic routing update arrives with the same underlying AutoDetect config.
+  ProxyConfig config = ProxyConfig::CreateAutoDetect();
+  ProxyConfig::DynamicRoutingConfig dynamic_config;
+  dynamic_config.routing_rules.push_back(CreateDynamicRoutingRule(
+      "www.google.com", "pvd_proxy:443", ProxyServer::SCHEME_HTTPS));
+  config.set_dynamic_routing_config(dynamic_config);
+
+  config_service->SetConfig(
+      ProxyConfigWithAnnotation(config, TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  // Poller is preserved and dynamic routing rule is applied.
+  EXPECT_TRUE(service->has_script_poller_for_testing());
+  EXPECT_EQ(
+      "[https://pvd_proxy:443]",
+      ResolveProxySynchronously(service.get(), GURL("http://www.google.com"))
+          .proxy_chain()
+          .ToDebugString());
+  EXPECT_TRUE(
+      ResolveProxySynchronously(service.get(), GURL("http://www.yahoo.com"))
+          .is_direct());
+}
 
 }  // namespace net

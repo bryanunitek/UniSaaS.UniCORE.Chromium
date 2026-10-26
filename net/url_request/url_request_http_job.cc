@@ -69,9 +69,6 @@
 #include "net/filter/filter_source_stream.h"
 #include "net/filter/source_stream.h"
 #include "net/filter/source_stream_type.h"
-#include "net/first_party_sets/first_party_set_entry.h"
-#include "net/first_party_sets/first_party_set_metadata.h"
-#include "net/first_party_sets/first_party_sets_cache_filter.h"
 #include "net/http/http_content_disposition.h"
 #include "net/http/http_log_util.h"
 #include "net/http/http_network_session.h"
@@ -130,24 +127,6 @@ bool ShouldForceIgnoreSiteForCookies(const URLRequest& request) {
   NetworkDelegate* network_delegate = request.network_delegate();
   return network_delegate &&
          network_delegate->ShouldForceIgnoreSiteForCookies(request);
-}
-
-base::DictValue FirstPartySetMetadataNetLogParams(
-    const FirstPartySetMetadata& first_party_set_metadata,
-    const int64_t* const fps_cache_filter) {
-  base::DictValue dict;
-  auto entry_or_empty =
-      [](const std::optional<FirstPartySetEntry>& entry) -> std::string {
-    return entry.has_value() ? entry->GetDebugString() : "none";
-  };
-
-  dict.Set("cache_filter",
-           fps_cache_filter ? base::NumberToString(*fps_cache_filter) : "none");
-  dict.Set("frame_entry",
-           entry_or_empty(first_party_set_metadata.frame_entry()));
-  dict.Set("top_frame_primary",
-           entry_or_empty(first_party_set_metadata.top_frame_entry()));
-  return dict;
 }
 
 base::DictValue CookieInclusionStatusNetLogParams(
@@ -477,28 +456,6 @@ void URLRequestHttpJob::Start() {
   request_info_.is_shared_resource = request_->is_shared_resource();
   request_info_.target_network = request_->target_network();
 
-  CookieStore* cookie_store = request()->context()->cookie_store();
-  const CookieAccessDelegate* delegate =
-      cookie_store ? cookie_store->cookie_access_delegate() : nullptr;
-
-  request_->net_log().BeginEvent(NetLogEventType::FIRST_PARTY_SETS_METADATA);
-
-  auto [first_party_set_metadata, match_info] =
-      cookie_util::ComputeFirstPartySetMetadata(SchemefulSite(request()->url()),
-                                                request()->isolation_info(),
-                                                delegate);
-
-  first_party_set_metadata_ = std::move(first_party_set_metadata);
-  request_info_.fps_cache_filter = match_info.clear_at_run_id;
-  request_info_.browser_run_id = match_info.browser_run_id;
-
-  request_->net_log().EndEvent(
-      NetLogEventType::FIRST_PARTY_SETS_METADATA, [&]() {
-        return FirstPartySetMetadataNetLogParams(
-            first_party_set_metadata_,
-            base::OptionalToPtr(request_info_.fps_cache_filter));
-      });
-
   // Privacy mode could still be disabled in SetCookieHeaderAndStart if we are
   // going to send previously saved cookies.
   request_info_.privacy_mode = DeterminePrivacyMode();
@@ -558,9 +515,13 @@ void URLRequestHttpJob::CloseConnectionOnDestruction() {
 }
 
 int URLRequestHttpJob::NotifyConnectedCallback(
+    base::WeakPtr<URLRequestHttpJob> job,
     const TransportInfo& info,
     CompletionOnceCallback callback) {
-  return URLRequestJob::NotifyConnected(info, std::move(callback));
+  if (!job) {
+    return ERR_ABORTED;
+  }
+  return job->NotifyConnected(info, std::move(callback));
 }
 
 PrivacyMode URLRequestHttpJob::DeterminePrivacyMode() const {
@@ -747,8 +708,9 @@ void URLRequestHttpJob::StartTransactionInternal() {
     }
 
     if (rv == OK) {
-      transaction_->SetConnectedCallback(base::BindRepeating(
-          &URLRequestHttpJob::NotifyConnectedCallback, base::Unretained(this)));
+      transaction_->SetConnectedCallback(
+          base::BindRepeating(&URLRequestHttpJob::NotifyConnectedCallback,
+                              weak_factory_.GetWeakPtr()));
       transaction_->SetRequestHeadersCallback(request_headers_callback_);
       transaction_->SetEarlyResponseHeadersCallback(
           early_response_headers_callback_);
@@ -944,8 +906,7 @@ void URLRequestHttpJob::SetCookieHeaderAndStart(
   if (service) {
     device_bound_sessions::DbscRequest request(request_);
     std::optional<device_bound_sessions::SessionService::DeferralParams>
-        deferral = service->ShouldDefer(request, &request_info_.extra_headers,
-                                        first_party_set_metadata_);
+        deferral = service->ShouldDefer(request, &request_info_.extra_headers);
     // If the request needs to be deferred while waiting for refresh, do not
     // start the transaction at this time. This may also kick off a refresh.
     if (deferral) {
@@ -963,14 +924,27 @@ void URLRequestHttpJob::SetCookieHeaderAndStart(
 
     base::UmaHistogramCounts100("Net.DeviceBoundSessions.RequestDeferralCount",
                                 device_bound_session_deferral_count_);
-    base::UmaHistogramEnumeration(
-        "Net.DeviceBoundSessions.RequestDeferralDecision3",
+    device_bound_sessions::SessionUsage max_usage =
         net::device_bound_sessions::GetMaxUsage(
-            request_->device_bound_session_usage()));
+            request_->device_bound_session_usage());
+    base::UmaHistogramEnumeration(
+        "Net.DeviceBoundSessions.RequestDeferralDecision3", max_usage);
     if (device_bound_session_deferral_count_ > 0) {
       base::UmaHistogramTimes(
           "Net.DeviceBoundSessions.TotalRequestDeferredDuration",
           base::TimeTicks::Now() - device_bound_session_first_deferral_);
+    }
+
+    if (device_bound_sessions::IsInScope(max_usage)) {
+      bool was_deferred =
+          (max_usage == device_bound_sessions::SessionUsage::kDeferred);
+      base::UmaHistogramBoolean(
+          "Net.DeviceBoundSessions.InScopeRequestWasDeferred", was_deferred);
+      if (request_info_.is_main_frame_navigation) {
+        base::UmaHistogramBoolean(
+            "Net.DeviceBoundSessions.InScopeNavigationRequestWasDeferred",
+            was_deferred);
+      }
     }
   }
 #endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
@@ -988,8 +962,7 @@ void URLRequestHttpJob::AnnotateAndMoveUserBlockedCookies(
   if (request()->network_delegate()) {
     can_get_cookies =
         request()->network_delegate()->AnnotateAndMoveUserBlockedCookies(
-            *request(), first_party_set_metadata_, maybe_included_cookies,
-            excluded_cookies);
+            *request(), maybe_included_cookies, excluded_cookies);
   }
 
   if (!can_get_cookies) {
@@ -1092,8 +1065,7 @@ void URLRequestHttpJob::SaveCookiesAndNotifyHeadersComplete(int result) {
     }
 
     // Check cookie accessibility with cookie_settings.
-    if (cookie && !CanSetCookie(*cookie, &options, first_party_set_metadata_,
-                                &returned_status)) {
+    if (cookie && !CanSetCookie(*cookie, &options, &returned_status)) {
       // Cookie allowed by cookie_settings checks could be blocked explicitly,
       // e.g. via Android Webview APIs, we need to manually add exclusion reason
       // in this case.
@@ -1162,6 +1134,13 @@ void URLRequestHttpJob::OnSetCookieResult(const CookieOptions& options,
 
 #if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
 void URLRequestHttpJob::ProcessDeviceBoundSessionsHeader() {
+  DCHECK(response_info_);
+  const SSLInfo& ssl_info = response_info_->ssl_info;
+  // Do not process DBSC headers on connections with certificate errors.
+  if (!ssl_info.is_valid() || IsCertStatusError(ssl_info.cert_status)) {
+    return;
+  }
+
   device_bound_sessions::SessionService* service =
       request_->context()->device_bound_session_service();
   if (!service) {
@@ -1169,8 +1148,7 @@ void URLRequestHttpJob::ProcessDeviceBoundSessionsHeader() {
   }
 
   device_bound_sessions::DbscRequest request(request_);
-  service->HandleResponseHeaders(request, GetResponseHeaders(),
-                                 first_party_set_metadata_);
+  service->HandleResponseHeaders(request, GetResponseHeaders());
 }
 #endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
 
@@ -1531,8 +1509,7 @@ std::unique_ptr<SourceStream> URLRequestHttpJob::SetUpSourceStream() {
 
   HttpResponseHeaders* headers = GetResponseHeaders();
   std::vector<SourceStreamType> types =
-      FilterSourceStream::GetContentEncodingTypes(
-          request_->accepted_stream_types(), *headers);
+      FilterSourceStream::GetContentEncodingTypes(*headers);
 
   if (types.size() > kMaxNestedSourceStreamDepth) {
     return nullptr;
@@ -1621,38 +1598,24 @@ bool URLRequestHttpJob::NeedsAuth() {
 }
 
 bool URLRequestHttpJob::NeedsRetryWithStorageAccess() {
-  // We use the Origin header's value directly, rather than
+  // The request is retryable if the Origin header was provided and matches the
+  // `Activate-Storage-Access` response header, the request may include cookies,
+  // and the prior request had the appropriate status without any of the
+  // storage-access-related overrides.
+  //
+  // Note: we use the Origin header's value directly, rather than
   // `request_.initiator()`, because the header may be "null" in some cases.
-  if (!request_->response_headers() ||
-      !request_->response_headers()->HasStorageAccessRetryHeader(
-          base::OptionalToPtr(request_info_.extra_headers.GetHeader(
-              HttpRequestHeaders::kOrigin)))) {
-    return false;
-  }
-
-  auto determine_storage_access_retry_outcome =
-      [&]() -> cookie_util::ActivateStorageAccessRetryOutcome {
-    using enum cookie_util::ActivateStorageAccessRetryOutcome;
-    if (!ShouldAddCookieHeader() ||
-        request_->storage_access_status() !=
-            cookie_util::StorageAccessStatus::kInactive ||
-        request_->cookie_setting_overrides().Has(
-            CookieSettingOverride::kStorageAccessGrantEligible) ||
-        request_->cookie_setting_overrides().Has(
-            CookieSettingOverride::kStorageAccessGrantEligibleViaHeader)) {
-      // We're not allowed to read cookies for this request, or this request
-      // already had all the relevant settings overrides, so retrying it
-      // wouldn't change anything.
-      return kFailureIneffectiveRetry;
-    }
-    return kSuccess;
-  };
-
-  auto outcome = determine_storage_access_retry_outcome();
-
-  base::UmaHistogramEnumeration(
-      "API.StorageAccessHeader.ActivateStorageAccessRetryOutcome", outcome);
-  return outcome == cookie_util::ActivateStorageAccessRetryOutcome::kSuccess;
+  return request_->response_headers() &&
+         request_->response_headers()->HasStorageAccessRetryHeader(
+             base::OptionalToPtr(request_info_.extra_headers.GetHeader(
+                 HttpRequestHeaders::kOrigin))) &&
+         ShouldAddCookieHeader() &&
+         request_->storage_access_status() ==
+             cookie_util::StorageAccessStatus::kInactive &&
+         !request_->cookie_setting_overrides().Has(
+             CookieSettingOverride::kStorageAccessGrantEligible) &&
+         !request_->cookie_setting_overrides().Has(
+             CookieSettingOverride::kStorageAccessGrantEligibleViaHeader);
 }
 
 void URLRequestHttpJob::SetSharedDictionaryGetter(
@@ -1752,9 +1715,19 @@ void URLRequestHttpJob::SetPlatformLocalNetworkAccessGranted() {
 
   int rv = transaction_->RestartIgnoringLastError(base::BindOnce(
       &URLRequestHttpJob::OnStartCompleted, base::Unretained(this)));
-  // RestartIgnoringLastError() always returns ERR_IO_PENDING. See
-  // HttpNetworkTransaction.
-  CHECK_EQ(rv, ERR_IO_PENDING);
+
+  base::UmaHistogramSparse(
+      "Net.LocalNetworkAccess.RestartIgnoringLastErrorResult", -rv);
+
+  if (rv == ERR_IO_PENDING) {
+    return;
+  }
+
+  // The transaction started synchronously, but we need to notify the
+  // URLRequest delegate via the message loop.
+  TaskRunner(priority_)->PostTask(
+      FROM_HERE, base::BindOnce(&URLRequestHttpJob::OnStartCompleted,
+                                weak_factory_.GetWeakPtr(), rv));
 }
 
 void URLRequestHttpJob::CancelPlatformLocalNetworkAccessRequest() {
@@ -1937,6 +1910,18 @@ void URLRequestHttpJob::RecordTimer() {
       transaction_->GetResponseInfo()->ssl_info.server_padding_received) {
     base::UmaHistogramMediumTimes("Net.HttpTimeToFirstByte.ServerPadding",
                                   to_start);
+
+    LoadTimingInfo load_timing_info;
+    if (transaction_->GetLoadTimingInfo(&load_timing_info)) {
+      // Only log this histogram if connection wasn't reused and request wasn't
+      // served from cache.
+      if (!load_timing_info.socket_reused &&
+          !transaction_->GetResponseInfo()->was_cached) {
+        base::UmaHistogramMediumTimes(
+            "Net.HttpTimeToFirstByte.ServerPaddingFirstConnectionOnly",
+            to_start);
+      }
+    }
   }
 }
 

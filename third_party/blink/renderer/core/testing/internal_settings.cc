@@ -26,11 +26,16 @@
 
 #include "third_party/blink/renderer/core/testing/internal_settings.h"
 
+#include "build/build_config.h"
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 #include "third_party/blink/renderer/platform/text/locale_to_script_mapping.h"
+#include "ui/native_theme/native_theme.h"
 
 namespace blink {
 
@@ -57,6 +62,16 @@ void InternalSettings::ResetToConsistentState() {
   InternalSettingsGenerated::ResetToConsistentState();
   GetSettings().GetGenericFontFamilySettings() =
       generic_font_family_settings_backup_;
+
+  if (did_set_accent_color_) {
+    ui::NativeTheme::GetInstanceForWeb()->set_user_color(
+        original_accent_color_);
+    ui::NativeTheme::GetInstanceForWeb()->NotifyOnNativeThemeUpdated();
+    Page::PlatformColorsChanged();
+    Page::ColorSchemeChanged();
+  }
+  did_set_accent_color_ = false;
+  original_accent_color_.reset();
 }
 
 void InternalSettings::setViewportStyle(const String& style,
@@ -70,7 +85,8 @@ void InternalSettings::setViewportStyle(const String& style,
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The viewport style type provided ('" + style + "') is invalid.");
+        StrCat(
+            {"The viewport style type provided ('", style, "') is invalid."}));
   }
 }
 
@@ -139,8 +155,8 @@ void InternalSettings::setTextTrackKindUserPreference(
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The user preference for text track kind " + preference +
-            ")' is invalid.");
+        StrCat({"The user preference for text track kind ", preference,
+                ")' is invalid."}));
     return;
   }
 
@@ -165,9 +181,10 @@ void InternalSettings::setEditingBehavior(const String& editing_behavior,
     GetSettings().SetEditingBehaviorType(
         mojom::EditingBehavior::kEditingChromeOSBehavior);
   } else {
-    exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
-                                      "The editing behavior type provided ('" +
-                                          editing_behavior + "') is invalid.");
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kSyntaxError,
+        StrCat({"The editing behavior type provided ('", editing_behavior,
+                "') is invalid."}));
   }
 }
 
@@ -218,7 +235,7 @@ void InternalSettings::setDisplayModeOverride(const String& display_mode,
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The display-mode token ('" + token + ")' is invalid.");
+        StrCat({"The display-mode token ('", token, ")' is invalid."}));
     return;
   }
 
@@ -238,7 +255,7 @@ void InternalSettings::setPrimaryPointerType(const String& pointer,
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The pointer type token ('" + token + ")' is invalid.");
+        StrCat({"The pointer type token ('", token, ")' is invalid."}));
     return;
   }
 
@@ -280,7 +297,7 @@ void InternalSettings::setPrimaryHoverType(const String& type,
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The hover type token ('" + token + ")' is invalid.");
+        StrCat({"The hover type token ('", token, ")' is invalid."}));
     return;
   }
 
@@ -302,7 +319,8 @@ void InternalSettings::setImageAnimationPolicy(
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The image animation policy provided ('" + policy + "') is invalid.");
+        StrCat({"The image animation policy provided ('", policy,
+                "') is invalid."}));
     return;
   }
 }
@@ -319,7 +337,8 @@ void InternalSettings::setAutoplayPolicy(const String& policy_str,
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The autoplay policy ('" + policy_str + ")' is invalid.");
+        StrCat({"The autoplay policy ('", policy_str, ")' is invalid."}));
+    return;
   }
 
   GetSettings().SetAutoplayPolicy(policy);
@@ -327,6 +346,28 @@ void InternalSettings::setAutoplayPolicy(const String& policy_str,
 
 void InternalSettings::setPreferCompositingToLCDTextEnabled(bool enabled) {
   GetSettings().SetPreferCompositingToLCDTextForTesting(enabled);
+}
+
+void InternalSettings::setAccentColor(const String& color_value) {
+  Color blink_color;
+  if (!blink_color.SetFromString(color_value)) {
+    return;
+  }
+  if (!did_set_accent_color_) {
+    did_set_accent_color_ = true;
+    original_accent_color_ = ui::NativeTheme::GetInstanceForWeb()->user_color();
+  }
+  SkColor accent_color = blink_color.toSkColor4f().toSkColor();
+  ui::NativeTheme::GetInstanceForWeb()->set_user_color(accent_color);
+  ui::NativeTheme::GetInstanceForWeb()->NotifyOnNativeThemeUpdated();
+  if (LocalFrame* frame = GetSupplementable()->DeprecatedLocalMainFrame()) {
+    if (Document* document = frame->GetDocument()) {
+      setWebAppScope(document->Url().GetString());
+    }
+  }
+  setIsInitialProfile(true);
+  Page::PlatformColorsChanged();
+  Page::ColorSchemeChanged();
 }
 
 }  // namespace blink

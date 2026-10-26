@@ -12,6 +12,11 @@ namespace switches {
 // involving a command line switch.
 const char kAllowPreCommitInput[] = "allow-pre-commit-input";
 
+// Minimum time interval (in milliseconds) at which async touchmove events
+// during scroll will be skipped during rAF signal when throttling is active.
+const char kAsyncTouchMoveThrottleTimeMs[] =
+    "async-touch-move-throttle-time-ms";
+
 // Set blink settings. Format is <name>[=<value],<name>[=<value>],...
 // The names are declared in Settings.json5. For boolean type, use "true",
 // "false", or omit '=<value>' part to set to true. For enum type, use the int
@@ -181,9 +186,8 @@ const char kJavaScriptFlags[] = "js-flags";
 const char kWebAudioBypassOutputBufferingOptOut[] =
     "web-audio-bypass-output-buffering-opt-out";
 
-// Override mechanism for ReduceAcceptLanguage. This feature is typically
-// controlled by base features, but requires an enterprise policy override.
-const char kDisableReduceAcceptLanguage[] = "disable-reduce-accept-language";
+const char kDisableBackForwardCacheForWebSockets[] =
+    "disable-back-forward-cache-for-web-sockets";
 
 // A switch that controls XSLT availability via enterprise policy.
 const char kXSLTEnabledPolicy[] = "xslt-enabled-policy";
@@ -192,6 +196,9 @@ const char kXSLTEnabledPolicy[] = "xslt-enabled-policy";
 // via enterprise policy.
 const char kRestrictBackgroundFetchFromServiceWorker[] =
     "restrict-background-fetch-from-service-worker";
+
+// A switch passed to renderer processes hosting Top Chrome WebUI.
+const char kTopChromeWebUI[] = "top-chrome-webui";
 
 }  // namespace switches
 }  // namespace blink

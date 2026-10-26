@@ -11,8 +11,8 @@
 #include "ash/wallpaper/views/wallpaper_view.h"
 #include "ui/aura/window.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/display/screen.h"
@@ -30,6 +30,10 @@ WallpaperWidgetController::WallpaperWidgetController(aura::Window* root_window)
 
 WallpaperWidgetController::~WallpaperWidgetController() {
   widget_->CloseNow();
+}
+
+ui::Layer* WallpaperWidgetController::wallpaper_underlay_layer() {
+  return wallpaper_underlay_layer_.get();
 }
 
 void WallpaperWidgetController::Init(bool locked) {
@@ -132,16 +136,15 @@ void WallpaperWidgetController::OnDisplayMetricsChanged(
 
 void WallpaperWidgetController::OnColorProviderChanged() {
   if (wallpaper_underlay_layer_) {
-    wallpaper_underlay_layer_->SetColor(
+    wallpaper_underlay_layer_->SetColor(SkColor4f::FromColor(
         GetColorProviderSource()->GetColorProvider()->GetColor(
-            cros_tokens::kCrosSysSystemBase));
+            cros_tokens::kCrosSysSystemBase)));
   }
 }
 
 void WallpaperWidgetController::CreateWallpaperUnderlayLayer() {
-  wallpaper_underlay_layer_ =
-      std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
-  wallpaper_underlay_layer_->SetName("WallpaperUnderlayLayer");
+  wallpaper_underlay_layer_ = std::make_unique<ui::LayerSolidColor>();
+  wallpaper_underlay_layer_->SetName("WallpaperWidget:WallpaperUnderlay");
   auto* wallpaper_view_layer = wallpaper_view_->layer();
   auto* wallpaper_view_layer_parent = wallpaper_view_layer->parent();
   wallpaper_view_layer_parent->Add(wallpaper_underlay_layer_.get());

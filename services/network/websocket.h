@@ -24,12 +24,14 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/network_delegate.h"
+#include "net/base/network_handle.h"
 #include "net/log/net_log.h"
 #include "net/storage_access_api/status.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/websockets/websocket_event_interface.h"
 #include "services/network/network_service.h"
 #include "services/network/public/mojom/client_security_state.mojom.h"
+#include "services/network/public/mojom/ip_address_space.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/websocket.mojom.h"
 #include "services/network/websocket_interceptor.h"
@@ -79,7 +81,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
       std::optional<WebSocketThrottler::PendingConnection>
           pending_connection_tracker,
       base::TimeDelta delay,
-      const std::optional<base::UnguessableToken>& throttling_profile_id);
+      const std::optional<base::UnguessableToken>& throttling_profile_id,
+      mojom::IPAddressSpace required_ip_address_space,
+      net::handles::NetworkHandle target_network);
 
   WebSocket(const WebSocket&) = delete;
   WebSocket& operator=(const WebSocket&) = delete;
@@ -244,9 +248,17 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocket : public mojom::WebSocket {
 
   const network::mojom::ClientSecurityStatePtr client_security_state_;
 
+  // The required IP address space specified in the WebSocket constructor
+  // (targetAddressSpace option). LocalNetworkAccessChecker enforces that the
+  // connection is actually made to the same IP address space.
+  const mojom::IPAddressSpace required_ip_address_space_;
+
   // For 3rd-party cookie permission checking. Also used by
   // RevokeIfNonceMatches() for handling network revocation.
   const net::IsolationInfo isolation_info_;
+
+  const net::handles::NetworkHandle target_network_ =
+      net::handles::kInvalidNetworkHandle;
 
   bool handshake_succeeded_ = false;
   const HasRawHeadersAccess has_raw_headers_access_;

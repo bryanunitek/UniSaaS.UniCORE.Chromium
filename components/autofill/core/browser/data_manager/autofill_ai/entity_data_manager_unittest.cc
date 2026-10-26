@@ -18,9 +18,10 @@
 #include "base/uuid.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/metrics/personal_context_metrics.h"
 #include "components/autofill/core/browser/network/autofill_ai/mock_autofill_ai_personal_context_access_manager.h"
-#include "components/autofill/core/browser/permissions/autofill_ai/autofill_ai_permission_utils.h"
-#include "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
+#include "components/autofill/core/browser/permissions/autofill_ai/autofill_ai_permission_util.h"
+#include "components/autofill/core/browser/test_utils/entity_data_test_util.h"
 #include "components/autofill/core/browser/webdata/autofill_ai/entity_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_backend.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_test_helper.h"
@@ -70,7 +71,7 @@ class EntityDataManagerTestBase : public testing::Test {
 
   void SetUp() override {
     PopulateDatabase(*helper().autofill_webdata_service());
-    helper().WaitUntilIdle();
+    WaitUntilIdle();
     client_ = std::make_unique<TestAutofillClient>();
     client_->set_entity_data_manager(BuildEntityDataManager());
   }
@@ -83,6 +84,11 @@ class EntityDataManagerTestBase : public testing::Test {
   virtual void PopulateDatabase(AutofillWebDataService& db) = 0;
 
   AutofillWebDataServiceTestHelper& helper() { return helper_; }
+
+  void WaitUntilIdle() {
+    helper().WaitUntilIdle();
+    task_environment_.RunUntilIdle();
+  }
 
   TestAutofillClient& client() { return *client_; }
 
@@ -98,13 +104,13 @@ class EntityDataManagerTestBase : public testing::Test {
   }
 
   base::span<const EntityInstance> GetEntityInstances() {
-    helper().WaitUntilIdle();
+    WaitUntilIdle();
     return entity_data_manager().GetEntityInstances();
   }
 
   base::optional_ref<const EntityInstance> GetEntityInstance(
       const EntityInstance::EntityId& guid) {
-    helper().WaitUntilIdle();
+    WaitUntilIdle();
     return entity_data_manager().GetEntityInstance(guid);
   }
 
@@ -163,6 +169,22 @@ TEST_F(EntityDataManagerTest_InitiallyEmpty, AddEntityInstance) {
   EXPECT_THAT(GetEntityInstances(), UnorderedElementsAre(pp, dl, fr));
 }
 
+// Tests that AddOrUpdateEntityInstance() with a `legal_message_token`
+// asynchronously adds entities.
+TEST_F(EntityDataManagerTest_InitiallyEmpty,
+       AddEntityInstanceWithLegalMessageToken) {
+  MockEntityDataManagerObserver observer;
+  base::ScopedObservation<EntityDataManager, MockEntityDataManagerObserver>
+      observation{&observer};
+  observation.Observe(&entity_data_manager());
+
+  EntityInstance pp = test::GetPassportEntityInstance();
+  EXPECT_CALL(observer, OnEntityInstancesChanged).Times(AtLeast(1));
+  entity_data_manager().AddOrUpdateEntityInstance(pp,
+                                                  "test_legal_message_token");
+  EXPECT_THAT(GetEntityInstances(), UnorderedElementsAre(pp));
+}
+
 // Tests that AddOrUpdateEntityInstance() correctly adds entities with an id
 // that's not formatted as GUID.
 TEST_F(EntityDataManagerTest_InitiallyEmpty, AddEntityInstanceNonGuidFormatId) {
@@ -193,7 +215,7 @@ TEST_F(EntityDataManagerTest_InitiallyEmpty, RecordEntityUsed) {
   EXPECT_EQ(pp.use_date(), base::Time::FromTimeT(0));
 
   base::Time use_date = base::Time::Now();
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
   entity_data_manager().RecordEntityUsed(pp.guid(), use_date);
 
   auto check_metadata = [&](const EntityInstance::EntityId& guid) {
@@ -211,7 +233,7 @@ TEST_F(EntityDataManagerTest_InitiallyEmpty, RecordEntityUsed) {
         backend->NotifyOnAutofillChangedBySync(
             syncer::DataType::AUTOFILL_VALUABLE);
       }));
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
   check_metadata(pp.guid());
 }
 
@@ -322,7 +344,7 @@ TEST_F(EntityDataManagerTest_InitiallyEmpty, ValidateEntityReauthRequirements) {
               UnorderedElementsAre(local_private_pass, wallet_private_pass,
                                    public_pass));
   entity_data_manager().SetReauthAvailability(false);
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
   ASSERT_THAT(GetEntityInstances(),
               UnorderedElementsAre(local_private_pass, public_pass));
 }
@@ -347,7 +369,7 @@ class EntityDataManagerTest_InitiallyPopulated
 
 // Tests that the constructor of EntityDataManager queries the database.
 TEST_F(EntityDataManagerTest_InitiallyPopulated, StorageMetrics) {
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
   EXPECT_THAT(GetEntityInstances(),
               UnorderedElementsAre(passport(), vehicle()));
 
@@ -386,6 +408,65 @@ TEST_F(EntityDataManagerTest_InitiallyEmpty, OptInMetric) {
       BucketsAre(Bucket(kOptedOut, 1), Bucket(kOptedIn, 1)));
 }
 
+// Tests that existing opted-in users have their notice timestamps populated
+// upon profile startup when the Private AI feature is enabled.
+TEST_F(EntityDataManagerTest_InitiallyEmpty,
+       PrivateInferenceNoticeMarkedAsShownForPreExistingOptedInUsers) {
+  EXPECT_TRUE(
+      client()
+          .GetPrefs()
+          ->GetTime(prefs::kAutofillAiPrivateInferenceNoticeShownTimestamp)
+          .is_null());
+  EXPECT_TRUE(
+      client()
+          .GetPrefs()
+          ->GetTime(
+              prefs::kAutofillAiPrivateInferenceNoticeAcknowledgedTimestamp)
+          .is_null());
+
+  // Opt in the user prior to enabling the Private AI feature.
+  client().SetUpPrefsAndIdentityForAutofillAi();
+  ASSERT_TRUE(GetObsoleteAutofillAiOptInStatus(client().GetPrefs(),
+                                               client().GetIdentityManager()));
+
+  // Enable the Private AI feature flag and simulate profile startup by
+  // recreating `EntityDataManager`.
+  base::test::ScopedFeatureList feature_list{features::kAutofillAiUsePrivateAi};
+  RecreateEntityDataManager_Discouraged();
+
+  EXPECT_FALSE(
+      client()
+          .GetPrefs()
+          ->GetTime(prefs::kAutofillAiPrivateInferenceNoticeShownTimestamp)
+          .is_null());
+  EXPECT_FALSE(
+      client()
+          .GetPrefs()
+          ->GetTime(
+              prefs::kAutofillAiPrivateInferenceNoticeAcknowledgedTimestamp)
+          .is_null());
+}
+
+// Tests that notice timestamps are not marked if the user was not opted in
+// before the Private AI feature is enabled.
+TEST_F(EntityDataManagerTest_InitiallyEmpty,
+       PrivateInferenceNoticeNotMarkedWhenNotOptedIn) {
+  base::test::ScopedFeatureList feature_list{features::kAutofillAiUsePrivateAi};
+  RecreateEntityDataManager_Discouraged();
+
+  EXPECT_TRUE(
+      client()
+          .GetPrefs()
+          ->GetTime(prefs::kAutofillAiPrivateInferenceNoticeShownTimestamp)
+          .is_null());
+  EXPECT_TRUE(
+      client()
+          .GetPrefs()
+          ->GetTime(
+              prefs::kAutofillAiPrivateInferenceNoticeAcknowledgedTimestamp)
+          .is_null());
+}
+
 // Tests that a change notification for AUTOFILL_VALUABLE from sync triggers a
 // reload of entities.
 TEST_F(EntityDataManagerTest_InitiallyEmpty, OnAutofillValuableChangedBySync) {
@@ -409,7 +490,7 @@ TEST_F(EntityDataManagerTest_InitiallyEmpty, OnAutofillValuableChangedBySync) {
         backend->NotifyOnAutofillChangedBySync(
             syncer::DataType::AUTOFILL_VALUABLE);
       }));
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
   // 3. Verify that the cache is reloaded.
   EXPECT_THAT(GetEntityInstances(), UnorderedElementsAre(vh));
 }
@@ -437,7 +518,7 @@ TEST_F(EntityDataManagerTest_InitiallyEmpty, OnOtherDataTypeChangedBySync) {
         backend->NotifyOnAutofillChangedBySync(
             syncer::DataType::AUTOFILL_PROFILE);
       }));
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
   // 3. Verify that the cache is NOT reloaded.
   EXPECT_THAT(GetEntityInstances(), IsEmpty());
 }
@@ -466,22 +547,16 @@ TEST_F(EntityDataManagerTest_InitiallyEmpty,
         backend->NotifyOnAutofillChangedBySync(
             syncer::DataType::AUTOFILL_VALUABLE_METADATA);
       }));
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
   // 3. Verify that the cache is reloaded.
   EXPECT_THAT(GetEntityInstances(), UnorderedElementsAre(vh));
-}
-
-TEST_F(
-    EntityDataManagerTest_InitiallyEmpty,
-    SyncablePrefIsOffAndAccountKeyPrefIsOn_FeatureOff_DoNotMigratePrefValue) {
-  histogram_tester().ExpectTotalCount("Autofill.Ai.OptIn.PrefMigration", 0);
 }
 
 // Tests that whenever pContext entities are prefetched, they are stored in the
 // data manager.
 TEST_F(EntityDataManagerTest_InitiallyEmpty, OnPrefetchContextComplete) {
   // Wait for the database to load to prevent additional observer events.
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
   MockEntityDataManagerObserver observer;
   base::ScopedObservation<EntityDataManager, MockEntityDataManagerObserver>
       observation{&observer};
@@ -502,7 +577,7 @@ TEST_F(EntityDataManagerTest_InitiallyEmpty, OnPrefetchContextComplete) {
 // data manager.
 TEST_F(EntityDataManagerTest_InitiallyEmpty, OnMaskedEntityTypeEvicted) {
   // Wait for the database to load to prevent additional observer events.
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
   MockEntityDataManagerObserver observer;
   base::ScopedObservation<EntityDataManager, MockEntityDataManagerObserver>
       observation{&observer};
@@ -565,7 +640,7 @@ TEST_F(EntityDataManagerTest_InitiallyEmpty,
   entity_data_manager().OnPrefetchContextComplete(
       pcontext_manager(),
       std::vector<EntityInstance>{flight_pc, passport_pc, license_pc});
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
 
   EXPECT_THAT(GetEntityInstances(),
               UnorderedElementsAre(flight_local, passport_wallet, license_pc));
@@ -598,7 +673,7 @@ TEST_F(EntityDataManagerTest_InitiallyEmpty,
       pcontext_manager(), std::vector<EntityInstance>{flight_pc});
 
   // Wait for the database
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
 
   EXPECT_THAT(entity_data_manager().GetEntityInstances(),
               UnorderedElementsAre(flight_local));
@@ -609,7 +684,7 @@ TEST_F(EntityDataManagerTest_InitiallyEmpty,
 TEST_F(
     EntityDataManagerTest_InitiallyEmpty,
     AddOrUpdateEntityInstance_FiltersDuplicateCachedPersonalContextEntities) {
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
   EntityInstance flight_pc =
       test::GetFlightReservationEntityInstanceWithRandomGuid(
           {.ticket_number = u"TICKET999",
@@ -627,9 +702,118 @@ TEST_F(
            .name = u"Jon Doe",
            .record_type = EntityInstance::RecordType::kLocal});
   entity_data_manager().AddOrUpdateEntityInstance(flight_local);
-  helper().WaitUntilIdle();
+  WaitUntilIdle();
 
   EXPECT_THAT(GetEntityInstances(), UnorderedElementsAre(flight_local));
+}
+
+// Tests that the record type that personal context entities are deduplicated
+// against is logged on every deduplication.
+TEST_F(EntityDataManagerTest_InitiallyEmpty,
+       DedupePersonalContextEntities_LogsAgainstRecordType) {
+  // Wait for the database to load, which also triggers a deduplication.
+  WaitUntilIdle();
+  entity_data_manager().OnPrefetchContextComplete(
+      pcontext_manager(),
+      std::vector<EntityInstance>{test::GetOrderEntityInstanceWithRandomGuid(
+          {.id = u"123",
+           .record_type = EntityInstance::RecordType::kPersonalContext})});
+  WaitUntilIdle();
+
+  entity_data_manager().AddOrUpdateEntityInstance(
+      test::GetOrderEntityInstanceWithRandomGuid(
+          {.id = u"123", .record_type = EntityInstance::RecordType::kLocal}));
+  WaitUntilIdle();
+
+  EXPECT_THAT(
+      histogram_tester().GetAllSamples(
+          "Autofill.Ai.PersonalContext.Deduplication.AgainstRecordType"),
+      BucketsAre(
+          Bucket(
+              PersonalContextDeduplicationAgainstRecordType::kNotDeduplicated,
+              1),
+          Bucket(PersonalContextDeduplicationAgainstRecordType::kLocal, 1)));
+}
+
+// Tests that a personal context entity that is a duplicate of both a local and
+// a Wallet entity is logged as a Wallet duplicate, also per entity type.
+TEST_F(EntityDataManagerTest_InitiallyEmpty,
+       DedupePersonalContextEntities_LogsWalletOverLocal) {
+  entity_data_manager().AddOrUpdateEntityInstance(
+      test::GetOrderEntityInstanceWithRandomGuid(
+          {.id = u"123", .record_type = EntityInstance::RecordType::kLocal}));
+  entity_data_manager().AddOrUpdateEntityInstance(
+      test::GetOrderEntityInstanceWithRandomGuid(
+          {.id = u"123",
+           .record_type = EntityInstance::RecordType::kServerWallet}));
+  WaitUntilIdle();
+
+  entity_data_manager().OnPrefetchContextComplete(
+      pcontext_manager(),
+      std::vector<EntityInstance>{test::GetOrderEntityInstanceWithRandomGuid(
+          {.id = u"123",
+           .record_type = EntityInstance::RecordType::kPersonalContext})});
+  WaitUntilIdle();
+
+  histogram_tester().ExpectUniqueSample(
+      "Autofill.Ai.PersonalContext.Deduplication.AgainstRecordType",
+      PersonalContextDeduplicationAgainstRecordType::kServerWallet, 1);
+  histogram_tester().ExpectUniqueSample(
+      "Autofill.Ai.PersonalContext.Deduplication.AgainstRecordType.Order",
+      PersonalContextDeduplicationAgainstRecordType::kServerWallet, 1);
+}
+
+// Tests that the funnel outcome of prefetched personal context entities depends
+// on whether they are duplicates of a local or Wallet entity.
+TEST_F(EntityDataManagerTest_InitiallyEmpty,
+       OnPrefetchContextComplete_LogsEntityFunnelOutcome) {
+  entity_data_manager().AddOrUpdateEntityInstance(
+      test::GetOrderEntityInstanceWithRandomGuid(
+          {.id = u"123", .record_type = EntityInstance::RecordType::kLocal}));
+  WaitUntilIdle();
+
+  entity_data_manager().OnPrefetchContextComplete(
+      pcontext_manager(),
+      std::vector<EntityInstance>{
+          test::GetOrderEntityInstanceWithRandomGuid(
+              {.id = u"123",
+               .record_type = EntityInstance::RecordType::kPersonalContext}),
+          test::GetOrderEntityInstanceWithRandomGuid(
+              {.id = u"456",
+               .record_type = EntityInstance::RecordType::kPersonalContext})});
+  WaitUntilIdle();
+
+  using enum PersonalContextPrefetchEntityFunnelOutcome;
+  EXPECT_THAT(histogram_tester().GetAllSamples(
+                  "Autofill.Ai.PersonalContext.Prefetch.EntityFunnel"),
+              BucketsAre(Bucket(kDeduplicated, 1), Bucket(kPassed, 1)));
+  EXPECT_THAT(histogram_tester().GetAllSamples(
+                  "Autofill.Ai.PersonalContext.Prefetch.EntityFunnel.Order"),
+              BucketsAre(Bucket(kDeduplicated, 1), Bucket(kPassed, 1)));
+}
+
+// Tests that the funnel outcome is only logged for the personal context
+// entities that were just added, not on every deduplication.
+TEST_F(EntityDataManagerTest_InitiallyEmpty,
+       DedupePersonalContextEntities_LogsFunnelOutcomeOnlyForAddedEntities) {
+  // Wait for the database to load, which also triggers a deduplication.
+  WaitUntilIdle();
+  entity_data_manager().OnPrefetchContextComplete(
+      pcontext_manager(),
+      std::vector<EntityInstance>{test::GetOrderEntityInstanceWithRandomGuid(
+          {.id = u"123",
+           .record_type = EntityInstance::RecordType::kPersonalContext})});
+  WaitUntilIdle();
+
+  // The local duplicate causes the removal of the personal context entity.
+  EntityInstance order_local = test::GetOrderEntityInstanceWithRandomGuid(
+      {.id = u"123", .record_type = EntityInstance::RecordType::kLocal});
+  entity_data_manager().AddOrUpdateEntityInstance(order_local);
+  ASSERT_THAT(GetEntityInstances(), UnorderedElementsAre(order_local));
+
+  histogram_tester().ExpectUniqueSample(
+      "Autofill.Ai.PersonalContext.Prefetch.EntityFunnel",
+      PersonalContextPrefetchEntityFunnelOutcome::kPassed, 1);
 }
 
 }  // namespace

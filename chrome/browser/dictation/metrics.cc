@@ -8,6 +8,10 @@
 
 namespace dictation {
 
+void RecordDictationFirstRunExitStatus(DictationFirstRunExitStatus status) {
+  base::UmaHistogramEnumeration(kFirstRunExitStatusHistogramName, status);
+}
+
 void RecordDictationIsEnabledOnProfileInit(bool is_enabled) {
   base::UmaHistogramBoolean(kIsEnabledOnProfileInitHistogramName, is_enabled);
 }
@@ -16,8 +20,25 @@ void RecordDictationSessionStartSource(DictationSessionEntryPoint entry_point) {
   base::UmaHistogramEnumeration(kSessionStartSourceHistogramName, entry_point);
 }
 
+void RecordDictationSessionUrlCategory(DictationUrlCategory category) {
+  base::UmaHistogramEnumeration(kSessionUrlCategoryHistogramName, category);
+}
+
 void RecordDictationStreamStartTrigger(DictationStreamStartTrigger trigger) {
   base::UmaHistogramEnumeration(kStreamStartTriggerHistogramName, trigger);
+}
+
+void RecordDictationStreamExitStatus(DictationStreamExitStatus status) {
+  base::UmaHistogramEnumeration(kStreamExitReasonHistogramName, status);
+}
+
+void RecordDictationStreamStartLatency(base::TimeDelta latency) {
+  base::UmaHistogramTimes(kStreamStartLatencyHistogramName, latency);
+}
+
+void RecordDictationStreamAbandonedBeforeListening(base::TimeDelta elapsed) {
+  base::UmaHistogramMediumTimes(kStreamAbandonedBeforeListeningHistogramName,
+                                elapsed);
 }
 
 }  // namespace dictation

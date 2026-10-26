@@ -13,21 +13,10 @@ luci.notifier(
 )
 
 luci.notifier(
-    name = "chrome-rust-experiments",
+    name = "chrome-fuzzing-infra",
     on_new_status = ["FAILURE", "INFRA_FAILURE"],
     notify_emails = [
-        "chrome-rust-experiments+bots@google.com",
-    ],
-)
-
-# Notifier for "package rust" step on *_upload_clang bots.
-luci.notifier(
-    name = "chrome-rust-toolchain",
-    # Watch for Rust failure regardless of the overall build status.
-    on_occurrence = ["SUCCESS", "FAILURE", "INFRA_FAILURE"],
-    failed_step_regexp = "package rust",
-    notify_emails = [
-        "chrome-rust-experiments+toolchain@google.com",
+        "chrome-test-infra-fuzzing-team+builder-alerts@google.com",
     ],
 )
 
@@ -227,9 +216,8 @@ luci.notifier(
 luci.notifier(
     name = "annotator-rel",
     notify_emails = [
-        "crmullins@chromium.org",
         "nicolaso@chromium.org",
-        "pastarmovj@chromium.org",
+        "radchuk@google.com",
     ],
     on_new_status = ["FAILURE"],
 )
@@ -311,6 +299,14 @@ luci.notifier(
     on_new_status = ["FAILURE"],
     notify_emails = [
         "web-windowing-team@google.com",
+    ],
+)
+
+luci.notifier(
+    name = "Linux Builder Default Remote Build",
+    on_new_status = ["FAILURE", "INFRA_FAILURE"],
+    notify_emails = [
+        "tikuta@google.com",
     ],
 )
 

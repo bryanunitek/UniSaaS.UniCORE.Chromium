@@ -209,6 +209,10 @@ bool SendTabToSelfActiveChecker::IsExitConditionSatisfied(std::ostream* os) {
   return service_->GetSendTabToSelfModel()->IsReady();
 }
 
+void SendTabToSelfActiveChecker::OnModelReady() {
+  CheckExitCondition();
+}
+
 void SendTabToSelfActiveChecker::OnEntriesAddedRemotely(
     base::span<const send_tab_to_self::SendTabToSelfEntry* const> new_entries) {
   CheckExitCondition();
@@ -240,27 +244,6 @@ bool SendTabToSelfMultiDeviceActiveChecker::IsExitConditionSatisfied(
 }
 
 void SendTabToSelfMultiDeviceActiveChecker::OnDeviceInfoChange() {
-  CheckExitCondition();
-}
-
-SendTabToSelfDeviceDisabledChecker::SendTabToSelfDeviceDisabledChecker(
-    syncer::DeviceInfoTracker* tracker,
-    const std::string& device_guid)
-    : tracker_(tracker), device_guid_(device_guid) {
-  observation_.Observe(tracker_);
-}
-
-SendTabToSelfDeviceDisabledChecker::~SendTabToSelfDeviceDisabledChecker() =
-    default;
-
-bool SendTabToSelfDeviceDisabledChecker::IsExitConditionSatisfied(
-    std::ostream* os) {
-  *os << "Waiting for device to have send_tab_to_self disabled";
-  const syncer::DeviceInfo* device_info = tracker_->GetDeviceInfo(device_guid_);
-  return device_info && !device_info->send_tab_to_self_receiving_enabled();
-}
-
-void SendTabToSelfDeviceDisabledChecker::OnDeviceInfoChange() {
   CheckExitCondition();
 }
 

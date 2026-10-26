@@ -72,6 +72,8 @@ class ChromeOmniboxClientIOS final : public OmniboxClientIOS {
                        bool default_match_changed,
                        bool should_prerender,
                        const BitmapFetchedCallback& on_bitmap_fetched) override;
+  void StartPrerender(const GURL& url, ui::PageTransition transition) override;
+  void CancelPrerender() override;
   void OnURLOpenedFromOmnibox(OmniboxLog* log) override;
   void DiscardNonCommittedNavigations() override;
   const std::u16string& GetTitle() const override;
@@ -81,7 +83,7 @@ class ChromeOmniboxClientIOS final : public OmniboxClientIOS {
       TemplateURLRef::PostContent* post_content,
       WindowOpenDisposition disposition,
       ui::PageTransition transition,
-      AutocompleteMatchType::Type match_type,
+      omnibox::AutocompleteMatchType match_type,
       base::TimeTicks match_selection_timestamp,
       bool destination_url_entered_without_scheme,
       bool destination_url_entered_with_http_scheme,

@@ -18,7 +18,9 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/task_runner.h"
 #include "build/build_config.h"
 #include "components/named_mojo_ipc_server/connection_info.h"
 #include "components/named_mojo_ipc_server/endpoint_options.h"
@@ -33,9 +35,8 @@
 #include "remoting/host/ipc_constants.h"
 #include "remoting/host/mojo_caller_security_checker.h"
 #include "remoting/protocol/client_stub.h"
-#include "remoting/protocol/host_stub.h"
+#include "remoting/protocol/ice_config_fetcher.h"
 #include "remoting/protocol/input_stub.h"
-#include "remoting/protocol/transport_context.h"
 #include "remoting/protocol/webrtc_connection_to_client.h"
 #include "remoting/signaling/signaling_id_util.h"
 
@@ -82,19 +83,15 @@ const net::BackoffEntry::Policy kDefaultBackoffPolicy = {
 }  // namespace
 
 ChromotingHost::ChromotingHost(
-    DesktopEnvironmentFactory* desktop_environment_factory,
+    std::unique_ptr<PeerSessionFactory> peer_session_factory,
     std::unique_ptr<protocol::SessionManager> session_manager,
     std::unique_ptr<protocol::SessionManager> secondary_session_manager,
-    scoped_refptr<protocol::TransportContext> transport_context,
-    scoped_refptr<base::SingleThreadTaskRunner> audio_task_runner,
     const DesktopEnvironmentOptions& options,
     const SessionPoliciesValidator& per_session_policies_validator,
     const LocalSessionPoliciesProvider* local_session_policies_provider)
-    : desktop_environment_factory_(desktop_environment_factory),
-      session_manager_(std::move(session_manager)),
+    : session_manager_(std::move(session_manager)),
       secondary_session_manager_(std::move(secondary_session_manager)),
-      transport_context_(transport_context),
-      audio_task_runner_(audio_task_runner),
+      peer_session_factory_(std::move(peer_session_factory)),
       status_monitor_(new HostStatusMonitor()),
       login_backoff_(&kDefaultBackoffPolicy),
       desktop_environment_options_(options),
@@ -106,11 +103,7 @@ ChromotingHost::ChromotingHost(
 ChromotingHost::~ChromotingHost() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // Disconnect all of the clients.
-  while (!clients_.empty()) {
-    clients_.begin()->second->DisconnectSession(
-        ErrorCode::OK, /* error_details= */ {}, FROM_HERE);
-  }
+  DisconnectAllClients(ErrorCode::OK);
 
   // Destroy the session manager(s) to unregister their SignalStrategy listeners
   session_manager_.reset();
@@ -121,6 +114,14 @@ ChromotingHost::~ChromotingHost() {
     for (auto& observer : status_monitor_->observers()) {
       observer.OnHostShutdown();
     }
+  }
+}
+
+void ChromotingHost::DisconnectAllClients(ErrorCode error) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  while (!clients_.empty()) {
+    clients_.begin()->second->DisconnectSession(
+        error, /* error_details= */ {}, FROM_HERE);
   }
 }
 
@@ -170,10 +171,6 @@ void ChromotingHost::BindChromotingHostServices(
 }
 #endif
 
-void ChromotingHost::AddExtension(std::unique_ptr<HostExtension> extension) {
-  extensions_.push_back(std::move(extension));
-}
-
 void ChromotingHost::SetAuthenticatorFactory(
     std::unique_ptr<protocol::AuthenticatorFactory> authenticator_factory) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -191,16 +188,16 @@ void ChromotingHost::OnSessionAuthenticating(ClientSession* client) {
   // and clear the backoff when a connection successfully
   // authenticates. This allows the backoff to protect from parallel
   // connection attempts as well as sequential ones.
-  if (login_backoff_.ShouldRejectRequest()) {
+  bool should_reject = login_backoff_.ShouldRejectRequest();
+  login_backoff_.InformOfRequest(false);
+  if (should_reject) {
     client->DisconnectSession(
         ErrorCode::HOST_OVERLOAD,
         base::StringPrintf("Disconnecting client %s due to an overload of "
                            "failed login attempts.",
                            client->client_jid().c_str()),
         FROM_HERE);
-    return;
   }
-  login_backoff_.InformOfRequest(false);
 }
 
 void ChromotingHost::OnSessionAuthenticated(ClientSession* client) {
@@ -211,7 +208,7 @@ void ChromotingHost::OnSessionAuthenticated(ClientSession* client) {
   std::string client_id;
   SplitSignalingIdResource(client->client_jid(), &client_id, nullptr);
 
-  // Disconnect all clients with the same client ID, except |client|.
+  // Disconnect all clients with the same client ID, except `client`.
   base::WeakPtr<ChromotingHost> self = weak_factory_.GetWeakPtr();
   auto [it, end] = clients_.equal_range(client_id);
   while (it != end) {
@@ -337,24 +334,13 @@ void ChromotingHost::OnIncomingSession(
 
   HOST_LOG << "Client connected: " << session->jid();
 
-  // Create a WebrtcConnectionToClient.
-  std::unique_ptr<protocol::ConnectionToClient> connection =
-      std::make_unique<protocol::WebrtcConnectionToClient>(
-          base::WrapUnique(session), transport_context_, audio_task_runner_);
-
-  // Create a ClientSession object.
-  std::vector<raw_ptr<HostExtension, VectorExperimental>> extension_ptrs;
-  for (const auto& extension : extensions_) {
-    extension_ptrs.push_back(extension.get());
-  }
-
   std::string client_id;
   SplitSignalingIdResource(session->jid(), &client_id, nullptr);
   clients_.emplace(
-      client_id, std::make_unique<ClientSession>(
-                     this, std::move(connection), desktop_environment_factory_,
-                     desktop_environment_options_, pairing_registry_,
-                     extension_ptrs, local_session_policies_provider_));
+      client_id,
+      std::make_unique<ClientSession>(
+          this, base::WrapUnique(session), peer_session_factory_.get(),
+          desktop_environment_options_, local_session_policies_provider_));
 }
 
 ClientSession* ChromotingHost::GetConnectedClientSession() const {

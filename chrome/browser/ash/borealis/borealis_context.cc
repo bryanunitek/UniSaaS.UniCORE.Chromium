@@ -14,9 +14,7 @@
 #include "base/scoped_observation.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
-#include "chrome/browser/ash/borealis/borealis_engagement_metrics.h"
 #include "chrome/browser/ash/borealis/borealis_metrics.h"
-#include "chrome/browser/ash/borealis/borealis_power_controller.h"
 #include "chrome/browser/ash/borealis/borealis_service.h"
 #include "chrome/browser/ash/borealis/borealis_service_factory.h"
 #include "chrome/browser/ash/borealis/borealis_shutdown_monitor.h"
@@ -80,7 +78,8 @@ class BorealisLifetimeObserver
   }
 
   void OnWindowManagerDeleted(BorealisWindowManager* window_manager) override {
-    DCHECK(observation_.IsObservingSource(window_manager));
+    CHECK(observation_.IsObservingSource(window_manager),
+          base::NotFatalUntil::M160);
     observation_.Reset();
   }
 
@@ -97,18 +96,12 @@ class BorealisLifetimeObserver
 
 BorealisContext::~BorealisContext() = default;
 
-void BorealisContext::NotifyUnexpectedVmShutdown() {
-  guest_os_stability_monitor_->LogUnexpectedVmShutdown();
-}
-
 BorealisContext::BorealisContext(Profile* profile)
     : profile_(profile),
       lifetime_observer_(std::make_unique<BorealisLifetimeObserver>(this)),
       guest_os_stability_monitor_(
           std::make_unique<guest_os::GuestOsStabilityMonitor>(
-              kBorealisStabilityHistogram)),
-      engagement_metrics_(std::make_unique<BorealisEngagementMetrics>(profile)),
-      power_controller_(std::make_unique<BorealisPowerController>(profile)) {}
+              kBorealisStabilityHistogram)) {}
 
 std::unique_ptr<BorealisContext>
 BorealisContext::CreateBorealisContextForTesting(Profile* profile) {

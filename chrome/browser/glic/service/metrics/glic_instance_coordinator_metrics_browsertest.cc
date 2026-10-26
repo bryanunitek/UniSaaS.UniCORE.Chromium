@@ -7,14 +7,17 @@
 #include "base/test/run_until.h"
 #include "build/build_config.h"
 #include "chrome/browser/glic/actor/glic_actor_task_manager.h"
+#include "chrome/browser/glic/glic_warming_checks.h"
 #include "chrome/browser/glic/host/glic_web_contents_warming_pool.h"
 #include "chrome/browser/glic/public/features.h"
+#include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/glic/service/glic_instance_coordinator_impl.h"
 #include "chrome/browser/glic/test_support/glic_browser_test.h"
 #include "chrome/browser/glic/test_support/glic_histogram_tester.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/memory_coordinator_browsertest_util.h"
 
 namespace glic {
 namespace {
@@ -23,11 +26,9 @@ class GlicInstanceCoordinatorMetricsBrowserTest : public GlicBrowserTest {
  public:
   GlicInstanceCoordinatorMetricsBrowserTest() {
     feature_list_.InitWithFeaturesAndParameters(
-        /*enabled_features=*/{{features::kGlicActor,
-                               {{features::kGlicActorPolicyControlExemption
-                                     .name,
-                                 "true"}}}},
-        /*disabled_features=*/{features::kGlicDefaultToLastActiveConversation});
+        /*enabled_features=*/{{features::kGlicActor, {}},
+                              {features::kGlicActorPolicyControlExemption, {}}},
+        /*disabled_features=*/{});
   }
 
  private:
@@ -39,15 +40,10 @@ IN_PROC_BROWSER_TEST_F(GlicInstanceCoordinatorMetricsBrowserTest,
   EXPECT_EQ(coordinator().GetVisibleInstanceCount(), 0);
 }
 
-// Detach is not supported on Android, and multiple windows/tabs don't work
-// yet in Android browsertests, preventing concurrent visibility testing.
-#if BUILDFLAG(IS_ANDROID)
-#define MAYBE_ConcurrentVisibility DISABLED_ConcurrentVisibility
-#else
-#define MAYBE_ConcurrentVisibility ConcurrentVisibility
-#endif
+// Detach is not supported on Android.
+#if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(GlicInstanceCoordinatorMetricsBrowserTest,
-                       MAYBE_ConcurrentVisibility) {
+                       ConcurrentVisibility) {
   GlicHistogramTester histogram_tester;
 
   // 1. Open Glic for active tab and detach it (making it floating).
@@ -68,6 +64,39 @@ IN_PROC_BROWSER_TEST_F(GlicInstanceCoordinatorMetricsBrowserTest,
                                       1);
   histogram_tester.ExpectTotalCount("Glic.ConcurrentVisibility.Duration", 1);
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+IN_PROC_BROWSER_TEST_F(GlicInstanceCoordinatorMetricsBrowserTest,
+                       ConcurrentVisibilityMultiWindow) {
+  GlicHistogramTester histogram_tester;
+
+  // 1. Open Glic side panel for the first window's active tab.
+  ASSERT_OK(OpenGlicForActiveTab());
+
+  // 2. Create a second window/browser.
+  BrowserWindowInterface* browser2 = CreateAdditionalBrowserWindow();
+
+  // 3. Get the active tab in the second window.
+  tabs::TabInterface* tab2 = TabListInterface::From(browser2)->GetActiveTab();
+
+  // 4. Open Glic side panel on the second window's active tab.
+  ASSERT_OK_AND_ASSIGN(GlicInstanceImpl * instance2, OpenGlicForTab(tab2));
+
+  // 5. Close Glic for the second window to end concurrent visibility.
+  PreventDeletionOnClose(instance2);
+  ASSERT_OK(CloseGlicForTabAndWait(tab2));
+
+  // Verify histograms.
+  histogram_tester.ExpectUniqueSample("Glic.ConcurrentVisibility.PeakCount", 2,
+                                      1);
+  histogram_tester.ExpectTotalCount("Glic.ConcurrentVisibility.Duration", 1);
+
+  // Clean up: close Glic for the first window's active tab.
+  ASSERT_OK(CloseGlicForTabAndWait(GetTabListInterface()->GetActiveTab()));
+
+  // Clean up: close the second window.
+  browser2->GetWindow()->Close();
+}
 
 IN_PROC_BROWSER_TEST_F(GlicInstanceCoordinatorMetricsBrowserTest,
                        MemoryPressure) {
@@ -77,8 +106,10 @@ IN_PROC_BROWSER_TEST_F(GlicInstanceCoordinatorMetricsBrowserTest,
   ASSERT_OK(OpenGlicForActiveTab());
 
   // Simulate memory pressure.
-  base::MemoryPressureListener::NotifyMemoryPressure(
-      base::MEMORY_PRESSURE_LEVEL_CRITICAL);
+  content::test::ScopedMemoryLimitOverride scoped_memory_limit_override(
+      GlicInstanceCoordinatorImpl::kMemoryConsumerName);
+  scoped_memory_limit_override.SetLimit(base::kCriticalMemoryPressureThreshold);
+  scoped_memory_limit_override.NotifyReleaseMemory();
 
   // Verify that memory histograms are recorded.
   // We use ExpectTotalCount because the actual values depend on the
@@ -99,7 +130,7 @@ class GlicInstanceCoordinatorMetricsPeriodicTest : public GlicBrowserTest {
     feature_list_.InitWithFeaturesAndParameters(
         /*enabled_features=*/{{features::kGlicRecordMemoryFootprintMetrics,
                                {{"period", "1s"}}}},
-        /*disabled_features=*/{features::kGlicDefaultToLastActiveConversation});
+        /*disabled_features=*/{});
   }
 
  private:
@@ -162,7 +193,7 @@ class GlicInstanceCoordinatorMetricsWarmingTest : public GlicBrowserTest {
         /*enabled_features=*/{{features::kGlicWebContentsWarming,
                                {{features::kGlicWebContentsWarmingDelay.name,
                                  "0ms"}}}},
-        /*disabled_features=*/{features::kGlicDefaultToLastActiveConversation});
+        /*disabled_features=*/{});
   }
 
  private:
@@ -173,31 +204,43 @@ IN_PROC_BROWSER_TEST_F(GlicInstanceCoordinatorMetricsWarmingTest,
                        MemoryPressureWithOnlyWarmedInstance) {
   GlicHistogramTester histogram_tester;
 
-  // 1. Ensure preload (warmed instance exists) and wait for it to load.
-  coordinator().GetWebContentsWarmingPoolForTesting().EnsurePreload();
+  // 1. Start initial warming (warmed instance exists) and wait for it to load.
+  ASSERT_TRUE(
+      coordinator().GetWebContentsWarmingPoolForTesting().MaybeStartWarming(
+          GlicWarmingTrigger::kStartup));
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return coordinator()
                .GetWebContentsWarmingPoolForTesting()
                .GetWarmedContainerForTesting() != nullptr;
   }));
 
-  content::WebContents* web_contents =
-      coordinator()
-          .GetWebContentsWarmingPoolForTesting()
-          .GetWarmedWebContents();
-  ASSERT_TRUE(web_contents);
-  content::WaitForLoadStop(web_contents);
+  {
+    // Note: The container is in the warming pool (no active GlicInstance or
+    // Host has been attached yet), so WebClient does not connect while warming.
+    // Wait for the warmed WebContents to finish loading instead.
+    auto warmed_contents = coordinator()
+                               .GetWebContentsWarmingPoolForTesting()
+                               .GetWarmedWebContents();
+    ASSERT_TRUE(warmed_contents);
+    content::WaitForLoadStop(warmed_contents->guest_contents
+                                 ? warmed_contents->guest_contents.get()
+                                 : warmed_contents->webui_contents.get());
+  }
 
   // 2. Simulate memory pressure.
-  base::MemoryPressureListener::NotifyMemoryPressure(
-      base::MEMORY_PRESSURE_LEVEL_CRITICAL);
+  content::test::ScopedMemoryLimitOverride scoped_memory_limit_override(
+      GlicInstanceCoordinatorImpl::kMemoryConsumerName);
+  scoped_memory_limit_override.SetLimit(base::kCriticalMemoryPressureThreshold);
+  scoped_memory_limit_override.NotifyReleaseMemory();
 
   // 3. Verify that memory histograms are recorded and values are > 0 where
   // expected. Client memory might be 0 if the guest hasn't loaded yet for the
   // warmed instance.
 
-  histogram_tester.ExpectSampleValueGreaterThan(
-      "Glic.Instance.AvgWebUIPrivateMemoryFootprint.CriticalPressure", 0);
+  if (!GlicKeyedService::Get(GetProfile())->IsNoWebviewEnabled()) {
+    histogram_tester.ExpectSampleValueGreaterThan(
+        "Glic.Instance.AvgWebUIPrivateMemoryFootprint.CriticalPressure", 0);
+  }
 
   histogram_tester.ExpectTotalCount(
       "Glic.Instance.AvgClientPrivateMemoryFootprint.CriticalPressure", 1);
@@ -304,6 +347,9 @@ IN_PROC_BROWSER_TEST_F(GlicInstanceCoordinatorMetricsHibernationTest,
   // Verify instance 1 is hibernated.
   EXPECT_TRUE(instance1->IsHibernated());
 
+  // Instance 1 was hibernated, so AwakeDuration should be recorded once.
+  histogram_tester.ExpectTotalCount("Glic.Host.AwakeDuration", 1);
+
   // 4. Now, activate the tab of instance 1 and open Glic to awaken it.
   GetTabListInterface()->ActivateTab(tab1->GetHandle());
   ASSERT_OK(OpenGlicForActiveTab());
@@ -316,6 +362,10 @@ IN_PROC_BROWSER_TEST_F(GlicInstanceCoordinatorMetricsHibernationTest,
   // count at 2.
   histogram_tester.ExpectBucketCount(
       "Glic.Instances.CountAwake.OnContentsCreated", 2, 3);
+
+  // Instance 2 was hibernated, so AwakeDuration should be recorded twice in
+  // total.
+  histogram_tester.ExpectTotalCount("Glic.Host.AwakeDuration", 2);
 }
 
 }  // namespace

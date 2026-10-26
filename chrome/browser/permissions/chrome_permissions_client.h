@@ -12,11 +12,13 @@
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "components/content_settings/core/common/content_settings.h"
+#include "components/permissions/embedded_permission_prompt_flow_model.h"
 #include "components/permissions/features.h"
 #include "components/permissions/permission_request_enums.h"
 #include "components/permissions/permission_uma_constants.h"
 #include "components/permissions/permissions_client.h"
 #include "components/permissions/resolvers/permission_prompt_options.h"
+#include "extensions/buildflags/buildflags.h"
 
 namespace content {
 class RenderFrameHost;
@@ -115,9 +117,15 @@ class ChromePermissionsClient : public permissions::PermissionsClient {
   std::optional<GURL> GetCanonicalOriginOverride(
       const GURL& requesting_origin,
       const GURL& embedding_origin) override;
+#if BUILDFLAG(ENABLE_EXTENSIONS) && !BUILDFLAG(IS_ANDROID)
   std::optional<GURL> GetEmbeddingOriginOverride(
       const GURL& requesting_origin,
       content::RenderFrameHost* render_frame_host) override;
+#endif
+  std::optional<content::PermissionResult> GetPermissionResultOverride(
+      content::RenderFrameHost* render_frame_host,
+      const GURL& requesting_origin,
+      ContentSettingsType permission) override;
 
   bool IsFromNewTabPage(content::WebContents* web_contents,
                         const GURL& requester,
@@ -129,6 +137,8 @@ class ChromePermissionsClient : public permissions::PermissionsClient {
 
   bool IsPrivilegedInternalWebUIForUIRouting(
       content::WebContents* web_contents) override;
+
+  bool IsOmniboxEverywhere(content::WebContents* web_contents) override;
 
 #if BUILDFLAG(IS_ANDROID)
   bool IsDseOrigin(content::BrowserContext* browser_context,
@@ -152,6 +162,11 @@ class ChromePermissionsClient : public permissions::PermissionsClient {
   std::unique_ptr<permissions::PermissionPrompt> CreatePrompt(
       content::WebContents* web_contents,
       permissions::PermissionPrompt::Delegate* delegate) override;
+  std::unique_ptr<
+      permissions::EmbeddedPermissionPromptFlowModel::PromptContentScrim>
+  CreatePromptContentScrim(
+      content::WebContents* web_contents,
+      permissions::EmbeddedPermissionPromptFlowModel* flow_model) override;
 #endif
 
   bool HasDevicePermission(ContentSettingsType type) const override;

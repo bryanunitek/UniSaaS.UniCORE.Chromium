@@ -13,9 +13,9 @@
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/extensions_container.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
@@ -30,7 +30,6 @@
 #include "components/vector_icons/vector_icons.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "content/public/common/content_features.h"
-#include "third_party/blink/public/common/features.h"
 #include "ui/base/accelerators/menu_label_accelerator_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
@@ -46,7 +45,7 @@
 
 namespace {
 
-bool ShouldAllowOpenInChrome(Browser* browser) {
+bool ShouldAllowOpenInChrome(BrowserWindowInterface* browser) {
   // Isolated Web Apps shouldn't be opened in Chrome.
   const bool is_isolated_web_app =
       web_app::AppBrowserController::IsIsolatedWebApp(browser);
@@ -69,11 +68,13 @@ void AddItemWithStringIdAndVectorIcon(ui::SimpleMenuModel* model,
 
 }  // namespace
 
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(WebAppMenuModel, kAppInfoMenuItem);
+
 constexpr int WebAppMenuModel::kUninstallAppCommandId;
 constexpr int WebAppMenuModel::kExtensionsMenuCommandId;
 
 WebAppMenuModel::WebAppMenuModel(ui::AcceleratorProvider* provider,
-                                 Browser* browser)
+                                 BrowserWindowInterface* browser)
     : AppMenuModel(provider, browser) {}
 
 WebAppMenuModel::~WebAppMenuModel() = default;
@@ -130,9 +131,6 @@ void WebAppMenuModel::Build() {
       app_browser_controller->AsWebAppBrowserController();
   if (app_controller && (app_controller->HasPendingUpdate() ||
                          app_controller->HasPendingMigration())) {
-    if (app_controller->HasPendingMigration()) {
-      CHECK(base::FeatureList::IsEnabled(blink::features::kWebAppMigrationApi));
-    }
     AddSeparator(ui::SPACING_SEPARATOR);
     gfx::ImageSkia icon = app_controller->GetAppMenuIcon();
     ui::ImageModel update_icon;
@@ -153,8 +151,9 @@ void WebAppMenuModel::Build() {
 
   AddItemWithStringIdAndVectorIcon(
       this, IDC_WEB_APP_MENU_APP_INFO, IDS_APP_CONTEXT_MENU_SHOW_INFO,
-      browser()->GetFeatures().location_bar_model()->GetVectorIcon());
+      LocationBarModel::From(browser())->GetVectorIcon());
   size_t app_info_index = GetItemCount() - 1;
+  SetElementIdentifierAt(app_info_index, kAppInfoMenuItem);
 
   CHECK(browser());
   content::WebContents* web_contents =
@@ -205,7 +204,7 @@ void WebAppMenuModel::Build() {
   }
   AddItemWithStringIdAndVectorIcon(this, IDC_COPY_URL, IDS_COPY_URL,
                                    features::IsRoundedIconsEnabled()
-                                       ? kLinkIcon
+                                       ? vector_icons::kLinkIcon
                                        : kLinkChromeRefreshOldIcon);
 
   if (ShouldAllowOpenInChrome(browser())) {
@@ -231,7 +230,7 @@ void WebAppMenuModel::Build() {
 // Chrome OS's app list is prominent enough to not need a separate uninstall
 // option in the app menu.
 #if !BUILDFLAG(IS_CHROMEOS)
-  DCHECK(app_browser_controller);
+  CHECK(app_browser_controller, base::NotFatalUntil::M162);
   if (app_browser_controller->IsInstalled()) {
     AddSeparator(ui::NORMAL_SEPARATOR);
     AddItemWithIcon(

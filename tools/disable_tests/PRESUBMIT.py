@@ -9,28 +9,34 @@ for more details on the presubmit API built into depot_tools.
 
 
 def _CommonChecks(input_api, output_api):
+  if not (
+    input_api.HasAffectedFiles(extensions='.py')
+    or input_api.HasAffectedFiles(path='tests')
+  ):
+    return []
   results = []
-  results.extend(
-      input_api.canned_checks.RunPylint(input_api, output_api, version='2.6'))
 
   commands = []
   commands.extend(
-      input_api.canned_checks.GetUnitTestsRecursively(
-          input_api,
-          output_api,
-          input_api.os_path.join(input_api.PresubmitLocalPath()),
-          files_to_check=[r'.+_test\.py$'],
-          files_to_skip=['integration_test.py']))
+    input_api.canned_checks.GetUnitTestsRecursively(
+      input_api,
+      output_api,
+      input_api.os_path.join(input_api.PresubmitLocalPath()),
+      files_to_check=[r'.+_test\.py$'],
+      files_to_skip=['integration_test.py'],
+    )
+  )
 
   # integration_test.py uses subcommands, so we can't use the standard unit test
   # presubmit API to run it.
   commands.append(
-      input_api.Command(
-          name='integration_test.py',
-          cmd=['integration_test.py', 'run'],
-          kwargs={},
-          message=output_api.PresubmitError,
-      ))
+    input_api.Command(
+      name='integration_test.py',
+      cmd=['integration_test.py', 'run'],
+      kwargs={},
+      message=output_api.PresubmitError,
+    )
+  )
 
   results.extend(input_api.RunTests(commands))
 

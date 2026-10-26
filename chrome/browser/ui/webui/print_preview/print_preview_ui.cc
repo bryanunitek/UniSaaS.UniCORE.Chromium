@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/print_preview/print_preview_ui.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
@@ -55,6 +56,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -65,7 +67,9 @@
 #include "printing/nup_parameters.h"
 #include "printing/print_job_constants.h"
 #include "printing/printing_features.h"
+#include "printing/printing_utils.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
+#include "ui/accessibility/ax_tree_update.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/gfx/geometry/rect.h"
@@ -77,7 +81,6 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ui/webui/print_preview/print_preview_handler_chromeos.h"
-#include "chrome/common/chrome_features.h"
 #endif
 
 #if !BUILDFLAG(OPTIMIZE_WEBUI)
@@ -94,6 +97,17 @@ using content::WebContents;
 namespace printing {
 
 namespace {
+
+// TODO(crbug.com/558757898): Remove flag once it is fully rolled out.
+// Enables sending non-modifiable (PDF) documents to the print compositor.
+BASE_FEATURE(kPdfWatermarkPrintCompositor, base::FEATURE_ENABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_CHROMEOS)
+// If enabled, update the layout setting values in print preview based on the
+// destination's page orientation capabilities.
+BASE_FEATURE(kUsePageOrientationCapabilityInPrintPreview,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif
 
 #if BUILDFLAG(IS_MAC)
 const char16_t kBasicPrintShortcut[] = u"(⌥⌘P)";
@@ -119,7 +133,7 @@ bool IsFirstInstanceSinceStartup() {
 }
 
 void StopWorker(int document_cookie) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (document_cookie <= 0) {
     return;
   }
@@ -231,7 +245,6 @@ void AddPrintPreviewStrings(content::WebUIDataSource* source) {
       {"printOnBothSidesLabel", IDS_PRINT_PREVIEW_PRINT_ON_BOTH_SIDES_LABEL},
       {"printButton", IDS_PRINT_PREVIEW_PRINT_BUTTON},
       {"printDestinationsTitle", IDS_PRINT_PREVIEW_PRINT_DESTINATIONS_TITLE},
-      {"printPagesLabel", IDS_PRINT_PREVIEW_PRINT_PAGES_LABEL},
 #if BUILDFLAG(IS_CHROMEOS)
       {"printerSetupInfoMessageDetailNoPrintersText",
        IDS_PRINT_PREVIEW_PRINTER_SETUP_INFO_MESSAGE_DETAIL_NO_PRINTERS_TEXT},
@@ -262,7 +275,7 @@ void AddPrintPreviewStrings(content::WebUIDataSource* source) {
       {"searchResultBubbleText", IDS_SEARCH_RESULT_BUBBLE_TEXT},
       {"searchResultsBubbleText", IDS_SEARCH_RESULTS_BUBBLE_TEXT},
       {"selectButton", IDS_PRINT_PREVIEW_BUTTON_SELECT},
-      {"seeMore", IDS_PRINT_PREVIEW_SEE_MORE},
+      {"seeMoreButton", IDS_PRINT_PREVIEW_SEE_MORE_BUTTON},
       {"seeMoreDestinationsLabel",
        IDS_PRINT_PREVIEW_SEE_MORE_DESTINATIONS_LABEL},
 #if BUILDFLAG(IS_CHROMEOS)
@@ -337,12 +350,11 @@ void AddPrintPreviewFlags(content::WebUIDataSource* source, Profile* profile) {
       "isEnterpriseManaged",
       policy::ManagementServiceFactory::GetForPlatform()->IsManaged());
 
-
 #if BUILDFLAG(IS_CHROMEOS)
   source->AddBoolean("isBorderlessPrintingEnabled", true);
-  source->AddBoolean("isUseManagedPrintJobOptionsInPrintPreviewEnabled",
+  source->AddBoolean("isUsePageOrientationCapabilityInPrintPreviewEnabled",
                      base::FeatureList::IsEnabled(
-                         ::features::kUseManagedPrintJobOptionsInPrintPreview));
+                         kUsePageOrientationCapabilityInPrintPreview));
 #endif
 }
 
@@ -397,6 +409,32 @@ PrintPreviewHandler* CreatePrintPreviewHandlers(content::WebUI* web_ui) {
   return handler_ptr;
 }
 
+// Checks if the print source is modifiable (HTML) or not (PDF).
+bool IsSourceModifiable(content::WebUI* web_ui) {
+  auto* dialog_controller = PrintPreviewDialogController::GetInstance();
+  CHECK(dialog_controller);
+  std::optional<bool> maybe_is_pdf =
+      dialog_controller->IsPrintingPdf(web_ui->GetWebContents());
+  CHECK(maybe_is_pdf.has_value());
+  return !maybe_is_pdf.value();
+}
+
+// Validates the metafile configuration.
+// If the compositor is active:
+// - Modifiable (HTML) content must NOT have a valid metafile parameter during
+//   the MetafileReadyForPrinting IPC because the document is composed
+//   page-by-page in prior IPCs.
+// - Non-modifiable (PDF) content MUST have a valid metafile because it is
+//   composed all at once before sending to the printer preview.
+bool IsValidMetafile(bool compositor_active,
+                     bool is_modifiable,
+                     bool has_valid_metafile) {
+  if (compositor_active) {
+    return has_valid_metafile != is_modifiable;
+  }
+  return has_valid_metafile;
+}
+
 }  // namespace
 
 PrintPreviewUIConfig::PrintPreviewUIConfig()
@@ -411,7 +449,7 @@ bool PrintPreviewUIConfig::IsWebUIEnabled(
 }
 
 bool PrintPreviewUIConfig::ShouldHandleURL(const GURL& url) {
-  return url.GetPath() == "/" || url.GetPath() == "/test_loader.html";
+  return url.path() == "/" || url.path() == "/test_loader.html";
 }
 
 PrintPreviewUIConfig::~PrintPreviewUIConfig() = default;
@@ -484,7 +522,7 @@ bool PrintPreviewUI::IsBound() const {
 }
 
 void PrintPreviewUI::ClearPreviewUIId() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (id_.is_empty()) {
     return;
@@ -525,7 +563,7 @@ void PrintPreviewUI::NotifyUIPreviewPageReady(
     return;
   }
 
-  DCHECK_NE(page_index, kInvalidPageIndex);
+  CHECK_NE(page_index, kInvalidPageIndex, base::NotFatalUntil::M162);
   SetPrintPreviewDataForIndex(base::checked_cast<int>(page_index),
                               std::move(data_bytes));
 
@@ -582,12 +620,11 @@ bool PrintPreviewUI::ShouldUseCompositor() const {
     return false;
   }
 
-  auto* dialog_controller = PrintPreviewDialogController::GetInstance();
-  CHECK(dialog_controller);
-  const mojom::RequestPrintPreviewParams* request_params =
-      dialog_controller->GetRequestParams(web_ui()->GetWebContents());
-  CHECK(request_params);
-  return request_params->is_modifiable;
+  if (base::FeatureList::IsEnabled(kPdfWatermarkPrintCompositor)) {
+    return true;
+  }
+
+  return IsSourceModifiable(web_ui());
 }
 
 void PrintPreviewUI::OnCompositePdfPageDone(
@@ -596,7 +633,7 @@ void PrintPreviewUI::OnCompositePdfPageDone(
     int32_t request_id,
     mojom::PrintCompositor::Status status,
     base::ReadOnlySharedMemoryRegion region) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (ShouldCancelRequest(id_, request_id)) {
     return;
@@ -623,7 +660,7 @@ void PrintPreviewUI::OnCompositePdfPageDone(
         LastPageComposited(page_index)) {
       uint32_t new_page_index =
           base::checked_cast<uint32_t>(current_page_index / pages_per_sheet_);
-      DCHECK_NE(new_page_index, kInvalidPageIndex);
+      CHECK_NE(new_page_index, kInvalidPageIndex, base::NotFatalUntil::M162);
       std::vector<base::ReadOnlySharedMemoryRegion> pdf_page_regions =
           TakePagesForNupConvert();
 
@@ -639,7 +676,7 @@ void PrintPreviewUI::OnCompositePdfPageDone(
       }
 
       auto* client = PdfNupConverterClient::FromWebContents(web_contents);
-      DCHECK(client);
+      CHECK(client, base::NotFatalUntil::M162);
       client->DoNupPdfConvert(
           document_cookie, pages_per_sheet_, page_size(), printable_rect,
           std::move(pdf_page_regions),
@@ -658,7 +695,7 @@ void PrintPreviewUI::OnNupPdfConvertDone(
     int32_t request_id,
     mojom::PdfNupConverter::Status status,
     base::ReadOnlySharedMemoryRegion region) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (status != mojom::PdfNupConverter::Status::SUCCESS) {
     DLOG(ERROR) << "Nup pdf page conversion failed with error " << status;
     OnPrintPreviewFailed(request_id);
@@ -675,7 +712,7 @@ void PrintPreviewUI::OnCompositeToPdfDone(
     int32_t request_id,
     mojom::PrintCompositor::Status status,
     base::ReadOnlySharedMemoryRegion region) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (ShouldCancelRequest(id_, request_id)) {
     return;
@@ -687,7 +724,10 @@ void PrintPreviewUI::OnCompositeToPdfDone(
     return;
   }
 
-  if (pages_per_sheet_ == 1) {
+  // For non-modifiable content (PDF), N-up conversion has already been handled
+  // in the renderer by PDFiumPrint. Thus, only modifiable content needs N-up
+  // conversion here.
+  if (pages_per_sheet_ == 1 || !IsSourceModifiable(web_ui())) {
     NotifyUIPreviewDocumentReady(
         request_id,
         base::RefCountedSharedMemoryMapping::CreateFromWholeRegion(region));
@@ -698,7 +738,7 @@ void PrintPreviewUI::OnCompositeToPdfDone(
     }
 
     auto* client = PdfNupConverterClient::FromWebContents(web_contents);
-    DCHECK(client);
+    CHECK(client, base::NotFatalUntil::M162);
 
     gfx::Rect printable_rect =
         PageSetup::GetSymmetricalPrintableArea(page_size_, printable_area_);
@@ -720,7 +760,7 @@ void PrintPreviewUI::OnCompositeToPdfDone(
 void PrintPreviewUI::OnPrepareForDocumentToPdfDone(
     int32_t request_id,
     mojom::PrintCompositor::Status status) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (ShouldCancelRequest(id_, request_id)) {
     return;
@@ -735,7 +775,7 @@ void PrintPreviewUI::OnNupPdfDocumentConvertDone(
     int32_t request_id,
     mojom::PdfNupConverter::Status status,
     base::ReadOnlySharedMemoryRegion region) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (status != mojom::PdfNupConverter::Status::SUCCESS) {
     DLOG(ERROR) << "Nup pdf document convert failed with error " << status;
     OnPrintPreviewFailed(request_id);
@@ -781,7 +821,7 @@ void PrintPreviewUI::AddPdfPageForNupConversion(
 bool PrintPreviewUI::ShouldCancelRequest(
     const base::UnguessableToken& preview_ui_id,
     int request_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (preview_ui_id.is_empty()) {
     return true;
@@ -824,7 +864,7 @@ void PrintPreviewUI::OnInitiatorClosed() {
 }
 
 void PrintPreviewUI::OnPrintPreviewRequest(int request_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (!initial_preview_start_time_.is_null()) {
     base::UmaHistogramTimes(
@@ -885,11 +925,7 @@ void PrintPreviewUI::DidGetDefaultPageLayout(
   // Save printable_area_in_points information for N-up conversion.
   printable_area_ = ToEnclosedRect(printable_area_in_points);
 
-  if (page_layout_in_points->margin_top < 0 ||
-      page_layout_in_points->margin_left < 0 ||
-      page_layout_in_points->margin_bottom < 0 ||
-      page_layout_in_points->margin_right < 0 ||
-      page_layout_in_points->content_width < 0 ||
+  if (page_layout_in_points->content_width < 0 ||
       page_layout_in_points->content_height < 0) {
     // Even though it early returns here, it doesn't block printing the page.
     return;
@@ -921,7 +957,7 @@ bool PrintPreviewUI::OnPendingPreviewPage(uint32_t page_index) {
 }
 
 void PrintPreviewUI::OnCancelPendingPreviewRequest() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (!id_.is_empty()) {
     GetPrintPreviewRequestIdMap()[id_] = -1;
@@ -930,6 +966,9 @@ void PrintPreviewUI::OnCancelPendingPreviewRequest() {
 
 void PrintPreviewUI::OnPrintPreviewFailed(int request_id) {
   OnCancelPendingPreviewRequest();
+  if (g_test_delegate) {
+    g_test_delegate->PreviewFailed();
+  }
   handler_->OnPrintPreviewFailed(request_id);
 }
 
@@ -947,7 +986,7 @@ void PrintPreviewUI::OnHidePreviewDialog() {
   }
   std::unique_ptr<content::WebContents> preview_contents =
       delegate->ReleaseWebContents();
-  DCHECK_EQ(preview_dialog, preview_contents.get());
+  CHECK_EQ(preview_dialog, preview_contents.get(), base::NotFatalUntil::M162);
   background_printing_manager->OwnPrintPreviewDialog(
       std::move(preview_contents));
   OnClosePrintPreviewDialog();
@@ -994,7 +1033,7 @@ void PrintPreviewUI::DidPrepareDocumentForPreview(int32_t document_cookie,
   // the document PDF at same time.  Need to indicate that this scenario
   // is at play for the compositor.
   auto* client = PrintCompositeClient::FromWebContents(web_contents);
-  DCHECK(client);
+  CHECK(client, base::NotFatalUntil::M162);
   if (client->GetIsDocumentConcurrentlyComposited(document_cookie)) {
     return;
   }
@@ -1041,7 +1080,7 @@ void PrintPreviewUI::DidPreviewPage(mojom::DidPreviewPageParamsPtr params,
     }
 
     auto* client = PrintCompositeClient::FromWebContents(web_contents);
-    DCHECK(client);
+    CHECK(client, base::NotFatalUntil::M162);
 
     content::RenderFrameHost* render_frame_host =
         PrintViewManager::FromWebContents(web_contents)->print_preview_rfh();
@@ -1074,15 +1113,13 @@ void PrintPreviewUI::MetafileReadyForPrinting(
   // Always try to stop the worker.
   StopWorker(params->document_cookie);
 
-  const bool composite_document_using_individual_pages = ShouldUseCompositor();
+  const bool use_compositor = ShouldUseCompositor();
+  const bool is_modifiable = IsSourceModifiable(web_ui());
   const base::ReadOnlySharedMemoryRegion& metafile =
       params->content->metafile_data_region;
 
-  // When the Print Compositor is active, the print document is composed from
-  // the individual pages, so |metafile| should be invalid.
-  // When it is inactive, the print document is composed from |metafile|.
-  // So if this comparison succeeds, that means the renderer sent bad data.
-  if (composite_document_using_individual_pages == metafile.IsValid()) {
+  // Validate that the metafile state matches expectations.
+  if (!IsValidMetafile(use_compositor, is_modifiable, metafile.IsValid())) {
     return;
   }
 
@@ -1091,7 +1128,7 @@ void PrintPreviewUI::MetafileReadyForPrinting(
     return;
   }
 
-  if (composite_document_using_individual_pages) {
+  if (use_compositor) {
     // Don't bother compositing if this request has been cancelled already.
     if (ShouldCancelRequest(id_, request_id)) {
       return;
@@ -1106,16 +1143,35 @@ void PrintPreviewUI::MetafileReadyForPrinting(
       return;
     }
 
-    // Page metafile is used to composite into the document at same time.
-    // Need to provide particulars of how many pages are required before
-    // document will be completed.
     auto* client = PrintCompositeClient::FromWebContents(web_contents);
-    client->FinishDocumentComposition(
-        params->document_cookie, params->expected_pages_count,
-        mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-            std::move(callback),
-            mojom::PrintCompositor::Status::kCompositingFailure,
-            base::ReadOnlySharedMemoryRegion()));
+    auto wrapped_callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+        std::move(callback),
+        mojom::PrintCompositor::Status::kCompositingFailure,
+        base::ReadOnlySharedMemoryRegion());
+
+    if (is_modifiable) {
+      // Page metafile is used to composite into the document at same time.
+      // Need to provide particulars of how many pages are required before
+      // document will be completed.
+      client->FinishDocumentComposition(params->document_cookie,
+                                        params->expected_pages_count,
+                                        std::move(wrapped_callback));
+    } else {
+      content::RenderFrameHost* render_frame_host =
+          PrintViewManager::FromWebContents(web_contents)->print_preview_rfh();
+      if (!render_frame_host) {
+        return;
+      }
+      if (!LooksLikePdf(
+              metafile.MapAt(0, std::min<size_t>(1024, metafile.GetSize()))
+                  .GetMemoryAsSpan<const uint8_t>())) {
+        return;
+      }
+      client->CompositeDocument(
+          params->document_cookie, *render_frame_host, *params->content,
+          /*is_pdf=*/true, ui::AXTreeUpdate(),
+          mojom::GenerateDocumentOutline::kNone, std::move(wrapped_callback));
+    }
   } else {
     NotifyUIPreviewDocumentReady(
         request_id,
@@ -1175,8 +1231,8 @@ void PrintPreviewUI::ClearAllPreviewDataForTest() {
 }
 
 void PrintPreviewUI::SetPreviewUIId() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(id_.is_empty());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(id_.is_empty(), base::NotFatalUntil::M162);
 
   id_ = base::UnguessableToken::Create();
   GetPrintPreviewRequestIdMap()[id_] = -1;

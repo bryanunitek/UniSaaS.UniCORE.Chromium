@@ -187,8 +187,8 @@ public class AwBackForwardCacheTest extends AwParameterizedTest {
         // Remove the escape character and the beginning and trailing quotes
         notRestoredReasons = notRestoredReasons.replace("\\", "");
         notRestoredReasons = notRestoredReasons.substring(1, notRestoredReasons.length() - 1);
-        JSONObject json_obj = new JSONObject(notRestoredReasons);
-        return json_obj.getJSONArray("reasons").getJSONObject(0).getString("reason");
+        JSONObject jsonObj = new JSONObject(notRestoredReasons);
+        return jsonObj.getJSONArray("reasons").getJSONObject(0).getString("reason");
     }
 
     private HistogramWatcher getNotRestoredReasonsHistogramWatcher(int reason) {
@@ -556,7 +556,6 @@ public class AwBackForwardCacheTest extends AwParameterizedTest {
         settings.setCssHexAlphaColorEnabled(false);
         settings.setScrollTopLeftInteropEnabled(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        settings.setAttributionBehavior(AwSettings.ATTRIBUTION_DISABLED);
         settings.setForceDarkMode(AwSettings.FORCE_DARK_OFF);
         settings.setForceDarkBehavior(AwSettings.FORCE_DARK_ONLY);
         settings.setShouldFocusFirstNode(true);
@@ -675,11 +674,6 @@ public class AwBackForwardCacheTest extends AwParameterizedTest {
                 () -> settings.setDisplayZoomControls(!settings.getDisplayZoomControls()));
         verifyPageEvictedWithSettingsChange(
                 () -> settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE));
-        verifyPageEvictedWithSettingsChange(
-                () -> {
-                    settings.setAttributionBehavior(
-                            AwSettings.ATTRIBUTION_WEB_SOURCE_AND_WEB_TRIGGER);
-                });
         verifyPageEvictedWithSettingsChange(
                 () -> settings.setForceDarkMode(AwSettings.FORCE_DARK_AUTO));
         verifyPageEvictedWithSettingsChange(

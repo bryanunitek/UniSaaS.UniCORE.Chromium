@@ -5,15 +5,16 @@
 #include "base/feature_list.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/optimization_guide/browser_test_util.h"
+#include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/search/search_tab_helper.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/model_execution/model_execution_features.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_prefs.h"
 #include "components/prefs/pref_service.h"
 #include "components/search/ntp_features.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -55,7 +56,7 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchBrowserTest,
 
   // Enable Wallpaper Search via Optimization Guide Prefs.
   // GM3 should enable itself when the browser restarts.
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       optimization_guide::prefs::GetSettingEnabledPrefName(
           optimization_guide::UserVisibleFeatureKey::kWallpaperSearch),
       static_cast<int>(optimization_guide::prefs::FeatureOptInState::kEnabled));
@@ -91,7 +92,7 @@ IN_PROC_BROWSER_TEST_P(WallpaperSearchServiceBrowserChromeAshTest,
 
   // Enable Wallpaper Search via Optimization Guide Prefs.
   // GM3 should enable itself when the browser restarts.
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       optimization_guide::prefs::GetSettingEnabledPrefName(
           optimization_guide::UserVisibleFeatureKey::kWallpaperSearch),
       static_cast<int>(optimization_guide::prefs::FeatureOptInState::kEnabled));

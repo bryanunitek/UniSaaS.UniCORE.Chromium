@@ -27,6 +27,8 @@
 #import "ios/web/navigation/wk_navigation_util.h"
 #import "ios/web/public/browser_state.h"
 #import "ios/web/public/favicon/favicon_url.h"
+#import "ios/web/public/js_messaging/web_frame.h"
+#import "ios/web/public/js_messaging/web_frames_manager.h"
 #import "ios/web/public/navigation/navigation_item.h"
 #import "ios/web/public/navigation/web_state_policy_decider.h"
 #import "ios/web/public/security/certificate_policy_cache.h"
@@ -52,6 +54,19 @@
 #import "url/url_constants.h"
 
 namespace web {
+
+// Converts a PermissionDecision to a WKPermissionDecision.
+WKPermissionDecision ConvertToWKPermissionDecision(
+    web::PermissionDecision decision) {
+  switch (decision) {
+    case web::PermissionDecisionShowDefaultPrompt:
+      return WKPermissionDecisionPrompt;
+    case web::PermissionDecisionGrant:
+      return WKPermissionDecisionGrant;
+    case web::PermissionDecisionDeny:
+      return WKPermissionDecisionDeny;
+  }
+}
 
 class WebStateImpl::RealizedWebState::PendingSession {
  public:
@@ -317,6 +332,13 @@ void WebStateImpl::RealizedWebState::OnNavigationFinished(
   // WebUI. Do not trigger external callbacks.
   if ([CRWErrorPageHelper isErrorPageFileURL:context->GetUrl()]) {
     return;
+  }
+
+  // Clear provisional WebUI if the navigation was cancelled/failed, or if it
+  // committed to a non-WebUI page.
+  if (web_ui_ && (!context->HasCommitted() ||
+                  !web::GetWebClient()->IsAppSpecificURL(context->GetUrl()))) {
+    ClearWebUI();
   }
 
   const bool same_document = context->IsSameDocument();
@@ -607,6 +629,20 @@ void WebStateImpl::RealizedWebState::OnAuthRequired(
     delegate_->OnAuthRequired(owner_, protection_space, std::move(callback));
   } else {
     std::move(callback).Run(nil);
+  }
+}
+
+void WebStateImpl::RealizedWebState::OnProxyAuthChallenge(
+    NSURLProtectionSpace* protection_space,
+    NSURLCredential* proposed_credential,
+    NSURLResponse* failure_response,
+    WebStateDelegate::ProxyAuthCallback callback) {
+  if (delegate_) {
+    delegate_->OnProxyAuthChallenge(owner_, protection_space,
+                                    proposed_credential, failure_response,
+                                    std::move(callback));
+  } else {
+    std::move(callback).Run(nil, nil, nil);
   }
 }
 
@@ -978,22 +1014,29 @@ void WebStateImpl::RealizedWebState::RequestPermissionsWithDecisionHandler(
     return;
   }
   if (delegate_) {
-    WebStatePermissionDecisionHandler web_state_decision_handler =
-        ^(PermissionDecision decision) {
-          switch (decision) {
-            case PermissionDecisionShowDefaultPrompt:
-              web_view_decision_handler(WKPermissionDecisionPrompt);
-              break;
-            case PermissionDecisionGrant:
-              web_view_decision_handler(WKPermissionDecisionGrant);
-              break;
-            case PermissionDecisionDeny:
-              web_view_decision_handler(WKPermissionDecisionDeny);
-              break;
-          }
-        };
-    delegate_->HandlePermissionsDecisionRequest(owner_, permissions,
-                                                web_state_decision_handler);
+    delegate_->HandlePermissionsDecisionRequest(
+        owner_, permissions, ^(PermissionDecision decision) {
+          web_view_decision_handler(ConvertToWKPermissionDecision(decision));
+        });
+  } else {
+    web_view_decision_handler(WKPermissionDecisionPrompt);
+  }
+}
+
+void WebStateImpl::RealizedWebState::
+    RequestGeolocationPermissionWithDecisionHandler(
+        const GURL& origin,
+        PermissionDecisionHandler web_view_decision_handler) {
+  if (!security_state::IsSchemeCryptographic(origin) &&
+      !security_state::IsOriginLocalhostOrFile(origin)) {
+    web_view_decision_handler(WKPermissionDecisionDeny);
+    return;
+  }
+  if (delegate_) {
+    delegate_->RequestGeolocationPermission(
+        owner_, origin, ^(PermissionDecision decision) {
+          web_view_decision_handler(ConvertToWKPermissionDecision(decision));
+        });
   } else {
     web_view_decision_handler(WKPermissionDecisionPrompt);
   }
@@ -1100,6 +1143,7 @@ std::unique_ptr<WebUIIOS> WebStateImpl::RealizedWebState::CreateWebUIIOS(
   }
 
   web_ui->SetController(std::move(controller));
+
   return web_ui;
 }
 

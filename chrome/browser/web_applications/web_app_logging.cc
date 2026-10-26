@@ -22,6 +22,7 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -112,8 +113,10 @@ void RotateLogFileBlocking(scoped_refptr<FileUtilsWrapper> utils,
     return;
   }
   std::optional<base::FilePath> rotated_filename;
-  std::string date_str =
-      base::UnlocalizedTimeFormatWithPattern(clock->Now(), "y-MM-dd");
+  base::Time::Exploded exploded;
+  clock->Now().LocalExplode(&exploded);
+  std::string date_str = base::StringPrintf(
+      "%04d-%02d-%02d", exploded.year, exploded.month, exploded.day_of_month);
   for (int free_index = -1; free_index < kMaxRotatedLogFileIndex;
        ++free_index) {
     std::string suffix = date_str;
@@ -267,12 +270,8 @@ void PersistableLog::Append(base::DictValue object) {
                        std::move(object)));
     return;
   }
-  log_.push_front(object.Clone());
-  if (base::saturated_cast<int>(log_.size()) > max_log_entries_in_memory_) {
-    log_.resize(max_log_entries_in_memory_);
-  }
-  current_log_for_disk_.Append(std::move(object));
   if (mode_ == PersistableLogMode::kPersistToDisk) {
+    current_log_for_disk_.Append(object.Clone());
     log_write_timer_.Reset();
     // Technically we can log frequently for a while and never write to disk, as
     // the timer won't trigger. To mitigate, flush if we reach 2x the max log
@@ -282,6 +281,10 @@ void PersistableLog::Append(base::DictValue object) {
         g_max_log_file_size_bytes) {
       MaybeWriteCurrentLog();
     }
+  }
+  log_.push_front(std::move(object));
+  if (base::saturated_cast<int>(log_.size()) > max_log_entries_in_memory_) {
+    log_.resize(max_log_entries_in_memory_);
   }
 }
 

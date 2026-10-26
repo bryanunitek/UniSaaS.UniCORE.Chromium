@@ -9,6 +9,7 @@
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate_factory.h"
 #include "chrome/browser/password_manager/password_manager_test_util.h"
+#include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/webauthn/enclave_manager_factory.h"
 #include "chrome/browser/webauthn/mock_enclave_manager.h"
@@ -18,9 +19,12 @@
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_store/stored_credential.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/signin/public/base/signin_prefs.h"
+#include "components/signin/public/identity_manager/account_info.h"
 #include "components/sync/test/mock_sync_service.h"
 #include "components/sync/test/test_sync_service.h"
 
@@ -33,14 +37,22 @@ std::unique_ptr<KeyedService> TestingSyncFactoryFunction(
 }
 }  // namespace
 
-class PromoCardMovePasswordsTest : public ChromeRenderViewHostTestHarness {
+class NotificationCardMovePasswordsTest
+    : public ChromeRenderViewHostTestHarness {
  public:
-  PromoCardMovePasswordsTest()
+  NotificationCardMovePasswordsTest()
       : ChromeRenderViewHostTestHarness(
             base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
 
+  TestingProfile::TestingFactories GetTestingFactories() const override {
+    return IdentityTestEnvironmentProfileAdaptor::
+        GetIdentityTestEnvironmentFactories();
+  }
+
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
+    identity_test_env_adaptor_ =
+        std::make_unique<IdentityTestEnvironmentProfileAdaptor>(profile());
     profile_store_ = CreateAndUseTestPasswordStore(profile());
     EnclaveManagerFactory::GetInstance()->SetTestingFactory(
         profile(),
@@ -61,13 +73,20 @@ class PromoCardMovePasswordsTest : public ChromeRenderViewHostTestHarness {
     fake_sync_service_ = nullptr;
     delegate_ = nullptr;
     profile_store_ = nullptr;
+    identity_test_env_adaptor_.reset();
     ChromeRenderViewHostTestHarness::TearDown();
   }
 
-  void EnableAccountStorage() {
-    fake_sync_service_->SetSignedIn(signin::ConsentLevel::kSignin);
-    ASSERT_TRUE(password_manager::features_util::IsAccountStorageActive(
+  AccountInfo EnableAccountStorage(
+      const std::string& email = "user@gmail.com") {
+    AccountInfo account_info =
+        identity_test_env_adaptor_->identity_test_env()
+            ->MakePrimaryAccountAvailable(email, signin::ConsentLevel::kSignin);
+    fake_sync_service_->SetSignedIn(signin::ConsentLevel::kSignin,
+                                    account_info.GetCoreAccountInfo());
+    EXPECT_TRUE(password_manager::features_util::IsAccountStorageActive(
         fake_sync_service_.get()));
+    return account_info;
   }
 
   void SavePassword(password_manager::PasswordForm::Store store_type =
@@ -75,7 +94,7 @@ class PromoCardMovePasswordsTest : public ChromeRenderViewHostTestHarness {
     password_manager::StoredCredential cred;
     cred.signon_realm = "https://example.com/";
     cred.username_value = u"username";
-    cred.password_value = u"password";
+    cred.password_value = password_manager::PasswordString(u"password");
     cred.in_store = store_type;
     profile_store_->AddLogin(std::move(cred));
     task_environment()->RunUntilIdle();
@@ -87,62 +106,69 @@ class PromoCardMovePasswordsTest : public ChromeRenderViewHostTestHarness {
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
+  std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
+      identity_test_env_adaptor_;
   raw_ptr<syncer::TestSyncService> fake_sync_service_;
   scoped_refptr<password_manager::TestPasswordStore> profile_store_;
   scoped_refptr<extensions::PasswordsPrivateDelegate> delegate_;
 };
 
-TEST_F(PromoCardMovePasswordsTest, NoPromoIfNoPasswords) {
+TEST_F(NotificationCardMovePasswordsTest, NoPromoIfNoPasswords) {
   EnableAccountStorage();
 
   ASSERT_THAT(pref_service()->GetList(
                   password_manager::prefs::kPasswordManagerPromoCardsList),
               IsEmpty());
-  std::unique_ptr<password_manager::PasswordPromoCardBase> promo =
+  std::unique_ptr<password_manager::PasswordNotificationCardBase> promo =
       std::make_unique<MovePasswordsPromo>(profile(), delegate());
 
-  EXPECT_FALSE(promo->ShouldShowPromo());
+  EXPECT_FALSE(
+      promo->ShouldShowCard(password_manager::NotificationCardPrefState{}));
 }
 
-TEST_F(PromoCardMovePasswordsTest, NoPromoIfAccountStorageDisabled) {
+TEST_F(NotificationCardMovePasswordsTest, NoPromoIfAccountStorageDisabled) {
   SavePassword();
+  sync_service()->SetSignedOut();
 
   ASSERT_THAT(pref_service()->GetList(
                   password_manager::prefs::kPasswordManagerPromoCardsList),
               IsEmpty());
-  std::unique_ptr<password_manager::PasswordPromoCardBase> promo =
+  std::unique_ptr<password_manager::PasswordNotificationCardBase> promo =
       std::make_unique<MovePasswordsPromo>(profile(), delegate());
 
-  EXPECT_FALSE(promo->ShouldShowPromo());
+  EXPECT_FALSE(
+      promo->ShouldShowCard(password_manager::NotificationCardPrefState{}));
 }
 
-TEST_F(PromoCardMovePasswordsTest, NoPromoIfNoLocalPasswords) {
+TEST_F(NotificationCardMovePasswordsTest, NoPromoIfNoLocalPasswords) {
   EnableAccountStorage();
   SavePassword(password_manager::PasswordForm::Store::kAccountStore);
 
   ASSERT_THAT(pref_service()->GetList(
                   password_manager::prefs::kPasswordManagerPromoCardsList),
               IsEmpty());
-  std::unique_ptr<password_manager::PasswordPromoCardBase> promo =
+  std::unique_ptr<password_manager::PasswordNotificationCardBase> promo =
       std::make_unique<MovePasswordsPromo>(profile(), delegate());
 
-  EXPECT_FALSE(promo->ShouldShowPromo());
+  EXPECT_FALSE(
+      promo->ShouldShowCard(password_manager::NotificationCardPrefState{}));
 }
 
-TEST_F(PromoCardMovePasswordsTest, PromoShownWithSavedLocalPasswords) {
+TEST_F(NotificationCardMovePasswordsTest, PromoShownWithSavedLocalPasswords) {
   EnableAccountStorage();
   SavePassword();
 
   ASSERT_THAT(pref_service()->GetList(
                   password_manager::prefs::kPasswordManagerPromoCardsList),
               IsEmpty());
-  std::unique_ptr<password_manager::PasswordPromoCardBase> promo =
+  std::unique_ptr<password_manager::PasswordNotificationCardBase> promo =
       std::make_unique<MovePasswordsPromo>(profile(), delegate());
 
-  EXPECT_TRUE(promo->ShouldShowPromo());
+  EXPECT_TRUE(
+      promo->ShouldShowCard(password_manager::NotificationCardPrefState{}));
 }
 
-TEST_F(PromoCardMovePasswordsTest, PromoShownIn7DaysAfterDismiss) {
+TEST_F(NotificationCardMovePasswordsTest, PromoShownIn7DaysAfterDismiss) {
   base::HistogramTester histogram_tester;
   EnableAccountStorage();
   SavePassword();
@@ -150,19 +176,43 @@ TEST_F(PromoCardMovePasswordsTest, PromoShownIn7DaysAfterDismiss) {
   ASSERT_THAT(pref_service()->GetList(
                   password_manager::prefs::kPasswordManagerPromoCardsList),
               IsEmpty());
-  std::unique_ptr<password_manager::PasswordPromoCardBase> promo =
+  std::unique_ptr<password_manager::PasswordNotificationCardBase> promo =
       std::make_unique<MovePasswordsPromo>(profile(), delegate());
-  EXPECT_TRUE(promo->ShouldShowPromo());
+  EXPECT_TRUE(
+      promo->ShouldShowCard(password_manager::NotificationCardPrefState{}));
 
-  promo->OnPromoCardShown();
-  promo->OnPromoCardDismissed();
-  EXPECT_FALSE(promo->ShouldShowPromo());
+  password_manager::NotificationCardPrefState dismissed_state;
+  dismissed_state.was_dismissed = true;
+  dismissed_state.last_time_shown = base::Time::Now();
+  EXPECT_FALSE(promo->ShouldShowCard(dismissed_state));
 
   // Check that in 7 days it's shown again even after dismissing.
   task_environment()->AdvanceClock(base::Days(7) + base::Seconds(1));
-  EXPECT_TRUE(promo->ShouldShowPromo());
 
-  histogram_tester.ExpectUniqueSample(
-      "PasswordManager.PromoCard.Shown",
-      password_manager::PromoCardType::kMovePasswords, 1);
+  // The pref state needs to hold the historical timestamp relative to the
+  // advanced clock
+  password_manager::NotificationCardPrefState past_dismissed_state;
+  past_dismissed_state.was_dismissed = true;
+  past_dismissed_state.last_time_shown =
+      base::Time::Now() - base::Days(7) - base::Seconds(1);
+  EXPECT_TRUE(promo->ShouldShowCard(past_dismissed_state));
+}
+
+TEST_F(NotificationCardMovePasswordsTest,
+       NoPromoIfBatchUploadRemainingLocalData) {
+  AccountInfo account_info = EnableAccountStorage();
+  SavePassword();
+
+  std::unique_ptr<password_manager::PasswordNotificationCardBase> promo =
+      std::make_unique<MovePasswordsPromo>(profile(), delegate());
+
+  EXPECT_TRUE(
+      promo->ShouldShowCard(password_manager::NotificationCardPrefState{}));
+
+  SigninPrefs(*pref_service())
+      .SetBatchUploadLastUploadRemainingLocalDataCount(account_info.GetGaiaId(),
+                                                       1);
+
+  EXPECT_FALSE(
+      promo->ShouldShowCard(password_manager::NotificationCardPrefState{}));
 }

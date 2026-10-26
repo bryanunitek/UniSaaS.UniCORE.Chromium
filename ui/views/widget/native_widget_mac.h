@@ -76,10 +76,10 @@ class VIEWS_EXPORT NativeWidgetMac : public internal::NativeWidgetPrivate,
   void OnWindowDidEndMove();
 
   // Called when the user will start resizing the window.
-  void OnWindowWillStartLiveResize();
+  virtual void OnWindowWillStartLiveResize();
 
   // Called when the user ends resizing the window.
-  void OnWindowDidEndLiveResize();
+  virtual void OnWindowDidEndLiveResize();
 
   // The vertical position from which sheets should be anchored, from the top
   // of the content view.
@@ -189,6 +189,7 @@ class VIEWS_EXPORT NativeWidgetMac : public internal::NativeWidgetPrivate,
   void Activate() override;
   void Deactivate() override;
   bool IsActive() const override;
+  bool ShouldActivateOnFocusRequest() const override;
   void SetZOrderLevel(ui::ZOrderLevel order) override;
   ui::ZOrderLevel GetZOrderLevel() const override;
   void SetActivationIndependence(bool independence) override;

@@ -10,10 +10,10 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bookmarks/bookmark_tab_helper.h"
 #include "chrome/browser/ui/bookmarks/bookmark_tab_helper_observer.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #import "chrome/browser/ui/cocoa/touchbar/browser_window_default_touch_bar.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_native_widget_mac.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/pref_names.h"
@@ -277,7 +277,7 @@ IN_PROC_BROWSER_TEST_F(BrowserWindowTouchBarControllerTest,
   [[maybe_unused]] TouchBarInvalidationWatcher* invalidationWatcher =
       [TouchBarInvalidationWatcher newWatcher];
 
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   DCHECK(prefs);
 
   EXPECT_FALSE(browser_touch_bar_controller());

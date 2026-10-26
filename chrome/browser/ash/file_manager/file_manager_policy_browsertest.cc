@@ -13,6 +13,7 @@
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_mock_time_task_runner.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/config/coverage/buildflags.h"
 #include "chrome/browser/ash/file_manager/file_manager_browsertest_base.h"
 #include "chrome/browser/ash/file_manager/file_manager_browsertest_utils.h"
@@ -52,6 +53,7 @@
 #include "storage/browser/file_system/external_mount_points.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/controls/textarea/textarea.h"
 
 using file_manager::test::TestCase;

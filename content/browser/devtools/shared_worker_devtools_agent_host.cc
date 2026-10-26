@@ -106,8 +106,7 @@ bool SharedWorkerDevToolsAgentHost::AttachSession(DevToolsSession* session) {
   session->CreateAndAddHandler<protocol::InspectorHandler>();
   session->CreateAndAddHandler<protocol::NetworkHandler>(
       GetId(), devtools_worker_token_, GetIOContext(), session,
-      GetProcessHost()->GetStoragePartition(), base::BindRepeating([] {}),
-      session->GetClient());
+      GetProcessHost()->GetStoragePartition(), session->GetClient());
   // TODO(crbug.com/40154954): support pushing updated loader factories down to
   // renderer.
   session->CreateAndAddHandler<protocol::FetchHandler>(
@@ -140,8 +139,8 @@ void SharedWorkerDevToolsAgentHost::WorkerReadyForInspection(
     mojo::PendingRemote<blink::mojom::DevToolsAgent> agent_remote,
     mojo::PendingReceiver<blink::mojom::DevToolsAgentHost>
         agent_host_receiver) {
-  DCHECK_EQ(WORKER_NOT_READY, state_);
-  DCHECK(worker_host_);
+  CHECK_EQ(WORKER_NOT_READY, state_, base::NotFatalUntil::M159);
+  CHECK(worker_host_, base::NotFatalUntil::M159);
   state_ = WORKER_READY;
   pending_agent_remote_ = std::move(agent_remote);
   pending_agent_host_receiver_ = std::move(agent_host_receiver);
@@ -154,15 +153,15 @@ void SharedWorkerDevToolsAgentHost::WorkerReadyForInspection(
 
 void SharedWorkerDevToolsAgentHost::WorkerRestarted(
     SharedWorkerHost* worker_host) {
-  DCHECK_EQ(WORKER_TERMINATED, state_);
-  DCHECK(!worker_host_);
+  CHECK_EQ(WORKER_TERMINATED, state_, base::NotFatalUntil::M159);
+  CHECK(!worker_host_, base::NotFatalUntil::M159);
   state_ = WORKER_NOT_READY;
   worker_host_ = worker_host;
 }
 
 void SharedWorkerDevToolsAgentHost::WorkerDestroyed() {
-  DCHECK_NE(WORKER_TERMINATED, state_);
-  DCHECK(worker_host_);
+  CHECK_NE(WORKER_TERMINATED, state_, base::NotFatalUntil::M159);
+  CHECK(worker_host_, base::NotFatalUntil::M159);
   state_ = WORKER_TERMINATED;
   for (auto* inspector : protocol::InspectorHandler::ForAgentHost(this))
     inspector->TargetCrashed();
@@ -196,6 +195,8 @@ void SharedWorkerDevToolsAgentHost::UpdateRendererChannel(bool force) {
 
 DevToolsAgentHostImpl::NetworkLoaderFactoryParamsAndInfo
 SharedWorkerDevToolsAgentHost::CreateNetworkFactoryParamsForDevTools() {
+  // TODO(crbug.com/573936235): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(worker_host_);
   return {GetStorageKey().origin(),
           instance_.DoesRequireCrossSiteRequestForCookies()
@@ -205,6 +206,8 @@ SharedWorkerDevToolsAgentHost::CreateNetworkFactoryParamsForDevTools() {
 }
 
 RenderProcessHost* SharedWorkerDevToolsAgentHost::GetProcessHost() {
+  // TODO(crbug.com/571021243): CHECK-exclusion: Convert to a CHECK once we
+  // are confident it won't be triggered.
   DCHECK(worker_host_);
   return worker_host_->GetProcessHost();
 }

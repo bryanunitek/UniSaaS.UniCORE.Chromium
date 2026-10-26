@@ -74,9 +74,10 @@ LayoutReplaced::~LayoutReplaced() = default;
 void LayoutReplaced::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutBox::StyleDidChange(diff, old_style, style_change_context);
+  LayoutBox::StyleDidChange(diff, old_style, new_style, style_change_context);
 
   // Replaced elements can have border-radius clips without clipping overflow;
   // the overflow clipping case is already covered in LayoutBox::StyleDidChange
@@ -86,7 +87,7 @@ void LayoutReplaced::StyleDidChange(
 
   const float old_zoom = old_style ? old_style->EffectiveZoom()
                                    : ComputedStyleInitialValues::InitialZoom();
-  if (StyleRef().EffectiveZoom() != old_zoom) {
+  if (new_style.EffectiveZoom() != old_zoom) {
     NaturalSizeChanged();
   }
 }
@@ -107,8 +108,7 @@ bool HitTestClippedOutByBorderShape(const LayoutBox& box,
   if (box.ShouldApplyOverflowClipMargin()) {
     border_rect.Expand(box.BorderOutsetsForClipping());
   }
-  Path hit_shape =
-      ComputeBorderShapeOuterPath(box.StyleRef(), border_rect, &box);
+  Path hit_shape = ComputeBorderShapeOuterPath(box.Style(), border_rect, &box);
   return !hit_test_location.Intersects(hit_shape);
 }
 
@@ -121,7 +121,7 @@ bool LayoutReplaced::HitTestClippedOutByBorder(
   PhysicalRect border_rect = PhysicalBorderBoxRect();
   border_rect.Move(border_box_location);
   return !hit_test_location.Intersects(
-      ContouredBorderGeometry::PixelSnappedContouredBorder(StyleRef(),
+      ContouredBorderGeometry::PixelSnappedContouredBorder(Style(),
                                                            border_rect));
 }
 
@@ -145,19 +145,22 @@ bool LayoutReplaced::NodeAtPoint(HitTestResult& result,
     // PaintLayer::HitTestFragmentsWithPhase() checked the fragments'
     // foreground rect for intersection if a layer is self painting,
     // so only do the overflow clip check here for non-self-painting layers.
-    if (!HasSelfPaintingLayer() &&
-        !hit_test_location.Intersects(OverflowClipRect(
-            accumulated_offset, kExcludeOverlayScrollbarSizeForHitTesting))) {
-      skip_children = true;
+    if (!HasSelfPaintingLayer()) {
+      PhysicalRect clip_rect =
+          OverflowClipRect(kExcludeOverlayScrollbarSizeForHitTesting);
+      clip_rect.Move(accumulated_offset);
+      if (!hit_test_location.Intersects(clip_rect)) {
+        skip_children = true;
+      }
     }
-    if (!skip_children && StyleRef().HasBorderShape()) {
+    if (!skip_children && Style().HasBorderShape()) {
       skip_children = HitTestClippedOutByBorderShape(*this, hit_test_location,
                                                      accumulated_offset);
-    } else if (!skip_children && StyleRef().HasBorderRadius()) {
+    } else if (!skip_children && Style().HasBorderRadius()) {
       PhysicalRect bounds_rect(accumulated_offset, StitchedSize());
       skip_children = !hit_test_location.Intersects(
           ContouredBorderGeometry::PixelSnappedContouredInnerBorder(
-              StyleRef(), bounds_rect));
+              Style(), bounds_rect));
     }
   }
 
@@ -168,12 +171,12 @@ bool LayoutReplaced::NodeAtPoint(HitTestResult& result,
 
   if (!result.GetHitTestRequest().IsHitTestVisualOverflow()) {
     // Check if the location is outside any border-shape or border-radius.
-    if (StyleRef().HasBorderShape()) {
+    if (Style().HasBorderShape()) {
       if (HitTestClippedOutByBorderShape(*this, hit_test_location,
                                          accumulated_offset)) {
         return false;
       }
-    } else if (StyleRef().HasBorderRadius()) {
+    } else if (Style().HasBorderRadius()) {
       if (HitTestClippedOutByBorder(hit_test_location, accumulated_offset)) {
         return false;
       }
@@ -236,27 +239,27 @@ void LayoutReplaced::Paint(const PaintInfo& paint_info) const {
   ReplacedPainter(*this).Paint(paint_info);
 }
 
-PhysicalBoxStrut LayoutReplaced::ComputeVisualEffectOverflowOutsets() {
+PhysicalRect LayoutReplaced::ComputeSelfVisualOverflow() const {
   NOT_DESTROYED();
-  const ComputedStyle& style = StyleRef();
-  DCHECK(style.HasVisualOverflowingEffect());
+  const ComputedStyle& style = Style();
+  if (!style.HasVisualOverflowingEffect()) {
+    return PhysicalRect();
+  }
+
+  const PhysicalRect border_box_rect = PhysicalBorderBoxRect();
 
   PhysicalBoxStrut outsets = style.BoxDecorationOutsets();
-
-  PhysicalRect border_rect(PhysicalOffset(), StitchedSize());
-  std::optional<BorderShapeReferenceRects> border_shape_rects;
-
   if (style.HasBorderShape()) {
-    border_shape_rects =
-        ComputeBorderShapeReferenceRects(border_rect, style, *this);
+    const std::optional<BorderShapeReferenceRects> border_shape_rects =
+        ComputeBorderShapeReferenceRects(border_box_rect, style, *this);
     const PhysicalRect outer_reference_rect =
-        border_shape_rects ? border_shape_rects->outer : border_rect;
+        border_shape_rects ? border_shape_rects->outer : border_box_rect;
     const PhysicalRect inner_reference_rect =
-        border_shape_rects ? border_shape_rects->inner : border_rect;
+        border_shape_rects ? border_shape_rects->inner : border_box_rect;
     // VisualOutsets() returns the complete border-shape overflow: both the
     // border path's visual extent and the precise box-shadow extent.
     outsets.Unite(BorderShapePainter::VisualOutsets(
-        style, border_rect, outer_reference_rect, inner_reference_rect));
+        style, border_box_rect, outer_reference_rect, inner_reference_rect));
   }
 
   if (style.HasOutline()) {
@@ -265,59 +268,44 @@ PhysicalBoxStrut LayoutReplaced::ComputeVisualEffectOverflowOutsets() {
         OutlineRects(&info, PhysicalOffset(),
                      style.OutlineRectsShouldIncludeBlockInkOverflow());
     PhysicalRect rect = UnionRect(outline_rects);
-    PhysicalSize size = StitchedSize();
-    bool outline_affected = rect.size != size;
-    SetOutlineMayBeAffectedByDescendants(outline_affected);
-
     if (!style.HasBorderShape() || style.OutlineStyleIsAuto()) {
       rect.Inflate(
           LayoutUnit(OutlinePainter::OutlineOutsetExtent(style, info)));
-      outsets.Unite(PhysicalBoxStrut(-rect.Y(), rect.Right() - size.width,
-                                     rect.Bottom() - size.height, -rect.X()));
+      outsets.Unite(PhysicalBoxStrut(rect, border_box_rect));
     }
   }
 
-  return outsets;
+  PhysicalRect self_visual_overflow = border_box_rect;
+  self_visual_overflow.Expand(outsets);
+  return self_visual_overflow;
 }
 
-void LayoutReplaced::AddVisualEffectOverflow() {
+PhysicalRect LayoutReplaced::ComputeContentsVisualOverflow() const {
   NOT_DESTROYED();
-  if (!StyleRef().HasVisualOverflowingEffect()) {
-    return;
-  }
-
-  // Add in the final overflow with shadows, outsets and outline combined.
-  PhysicalRect visual_effect_overflow = PhysicalBorderBoxRect();
-  PhysicalBoxStrut outsets = ComputeVisualEffectOverflowOutsets();
-  visual_effect_overflow.Expand(outsets);
-  AddSelfVisualOverflow(visual_effect_overflow);
-  UpdateHasSubpixelVisualEffectOutsets(outsets);
-}
-
-void LayoutReplaced::RecalcVisualOverflow() {
-  NOT_DESTROYED();
-  ClearVisualOverflow();
-  LayoutObject::RecalcVisualOverflow();
-  AddVisualEffectOverflow();
-
   // Replaced elements clip the content to the element's content-box by default.
   // But if the CSS overflow property is respected, the content may paint
   // outside the element's bounds as ink overflow (with overflow:visible for
-  // example). So we add |ReplacedContentRect()|, which provides the element's
-  // painting rectangle relative to it's bounding box in its visual overflow if
-  // the overflow property is respected.
+  // example). So we include |ReplacedContentRect()|, which provides the
+  // element's painting rectangle relative to its bounding box in its visual
+  // overflow if the overflow property is respected.
   // Note that |overflow_| is meant to track the maximum potential ink overflow.
   // The actual painted overflow (based on the values for overflow,
   // overflow-clip-margin and paint containment) is computed in
   // LayoutBox::VisualOverflowRect.
-  if (RespectsCSSOverflow())
-    AddContentsVisualOverflow(ReplacedContentRect());
+  return RespectsCSSOverflow() ? ReplacedContentRect() : PhysicalRect();
+}
+
+void LayoutReplaced::RecalcVisualOverflow() {
+  NOT_DESTROYED();
+  LayoutObject::RecalcVisualOverflow();
+  SetVisualOverflow(ComputeSelfVisualOverflow(),
+                    ComputeContentsVisualOverflow());
 }
 
 std::optional<PhysicalRect> LayoutReplaced::ComputeObjectViewBoxRect(
     const PhysicalNaturalSizingInfo& sizing_info) const {
   NOT_DESTROYED();
-  const BasicShape* object_view_box = StyleRef().ObjectViewBox();
+  const BasicShape* object_view_box = Style().ObjectViewBox();
   if (!object_view_box) [[likely]] {
     return std::nullopt;
   }
@@ -423,10 +411,10 @@ PhysicalRect LayoutReplaced::ComputeObjectFitAndPositionRect(
     const PhysicalRect& base_content_rect,
     const PhysicalNaturalSizingInfo& sizing_info) const {
   NOT_DESTROYED();
-  EObjectFit object_fit = StyleRef().GetObjectFit();
+  EObjectFit object_fit = Style().GetObjectFit();
 
   if (object_fit == EObjectFit::kFill &&
-      StyleRef().ObjectPosition() ==
+      Style().ObjectPosition() ==
           ComputedStyleInitialValues::InitialObjectPosition()) {
     return base_content_rect;
   }
@@ -475,9 +463,9 @@ PhysicalRect LayoutReplaced::ComputeObjectFitAndPositionRect(
   }
 
   const PhysicalOffset object_position(
-      MinimumValueForLength(StyleRef().ObjectPosition().X(),
+      MinimumValueForLength(Style().ObjectPosition().X(),
                             base_content_rect.Width() - object_size.width),
-      MinimumValueForLength(StyleRef().ObjectPosition().Y(),
+      MinimumValueForLength(Style().ObjectPosition().Y(),
                             base_content_rect.Height() - object_size.height));
 
   return {base_content_rect.offset + object_position, object_size};
@@ -631,7 +619,7 @@ bool LayoutReplaced::ClipsToContentBox() const {
   // TODO(khushalsagar): There can be more cases where the content clips to
   // content box. For instance, when padding is 0 and the reference box is the
   // padding box.
-  const auto& overflow_clip_margin = StyleRef().OverflowClipMargin();
+  const auto& overflow_clip_margin = Style().OverflowClipMargin();
   return GetOverflowClipAxes() == kOverflowClipBothAxis &&
          overflow_clip_margin &&
          overflow_clip_margin->GetReferenceBox() ==

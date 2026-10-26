@@ -132,6 +132,9 @@ class ContextualTasksServiceImpl : public ContextualTasksService,
   void OnThreadRemovedRemotelyInternal(
       ThreadType thread_filter,
       const std::vector<base::Uuid>& thread_ids);
+  void OnThreadRemovedRemotelyInternal(
+      ThreadType thread_filter,
+      const std::vector<std::string>& thread_server_ids);
 
   void SetAiThreadSyncBridgeForTesting(
       std::unique_ptr<AiThreadSyncBridge> bridge);
@@ -144,6 +147,8 @@ class ContextualTasksServiceImpl : public ContextualTasksService,
       const std::vector<proto::AiThreadEntity>& threads) override;
   void OnThreadRemovedRemotely(
       const std::vector<base::Uuid>& thread_ids) override;
+  void OnThreadRemovedRemotely(
+      const std::vector<std::string>& thread_server_ids) override;
 
   // GeminiThreadSyncBridge::Observer implementation.
   void OnGeminiThreadDataStoreLoaded() override;
@@ -178,7 +183,7 @@ class ContextualTasksServiceImpl : public ContextualTasksService,
   // The entry point for the decorator chain that enriches the context.
   std::unique_ptr<CompositeContextDecorator> composite_context_decorator_;
 
-  // Obsevers of the model.
+  // Observers of the model.
   base::ObserverList<ContextualTasksService::Observer> observers_;
 
   std::unique_ptr<AiThreadSyncBridge> ai_thread_sync_bridge_;

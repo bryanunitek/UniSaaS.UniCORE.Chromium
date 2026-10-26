@@ -11,6 +11,8 @@
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/web/web_range.h"
+#include "third_party/blink/renderer/core/clipboard/data_transfer.h"
+#include "third_party/blink/renderer/core/clipboard/data_transfer_access_policy.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/text.h"
@@ -23,6 +25,8 @@
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/html/forms/html_input_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
 #include "third_party/blink/renderer/core/layout/layout_block.h"
@@ -36,6 +40,7 @@
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/testing/fake_display_item_client.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/vector2d.h"
@@ -1460,6 +1465,57 @@ TEST_F(FrameSelectionTest, SelectedTextForClipboardEntersTextControls) {
   EXPECT_EQ("foo\nbar\nbaz", Selection().SelectedTextForClipboard());
 }
 
+class FrameSelectionAutofillPreviewTest
+    : public FrameSelectionTest,
+      public testing::WithParamInterface<bool> {};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         FrameSelectionAutofillPreviewTest,
+                         testing::Bool());
+
+TEST_P(FrameSelectionAutofillPreviewTest,
+       ClipboardAndDragExcludeSelectAutofillPreview) {
+  Selection().SetSelection(
+      SetSelectionTextToBody(
+          "<div contenteditable style='user-select: text !important; "
+          "-webkit-user-modify: read-write !important'>"
+          "<div>^before</div><input id='input' value='accepted'>"
+          "<select id='select'><option value='1'>One</option>"
+          "<option value='2'>Two</option></select><div>after|</div></div>"),
+      SetSelectionOptions());
+  auto* select = To<HTMLSelectElement>(GetElementById("select"));
+  if (GetParam()) {
+    select->setAttribute(html_names::kSizeAttr, AtomicString("2"));
+  }
+  auto* input = To<HTMLInputElement>(GetElementById("input"));
+  input->SetAutofillState(WebAutofillState::kAutofilled);
+  UpdateAllLifecyclePhasesForTest();
+  const String clipboard_text = Selection().SelectedTextForClipboard();
+  ASSERT_TRUE(clipboard_text.contains("before"));
+  ASSERT_TRUE(clipboard_text.contains("accepted"));
+  ASSERT_TRUE(clipboard_text.contains("One"));
+  ASSERT_TRUE(clipboard_text.contains("after"));
+  DataTransfer* data_transfer = DataTransfer::Create(
+      DataTransfer::kDragAndDrop, DataTransferAccessPolicy::kWritable,
+      DataObject::Create());
+  data_transfer->WriteSelection(Selection());
+  const String drag_text = data_transfer->getData("text/plain");
+
+  select->SetSuggestedValue("2");
+  ASSERT_TRUE(select->IsPreviewed());
+  ASSERT_EQ("1", select->Value());
+  test::RunPendingTasks();
+  UpdateAllLifecyclePhasesForTest();
+  Element* popover = select->GetAutofillPreviewElement();
+  ASSERT_TRUE(popover);
+  ASSERT_TRUE(popover->GetLayoutObject());
+  ASSERT_EQ("Two", popover->textContent());
+
+  EXPECT_EQ(clipboard_text, Selection().SelectedTextForClipboard());
+  data_transfer->WriteSelection(Selection());
+  EXPECT_EQ(drag_text, data_transfer->getData("text/plain"));
+}
+
 TEST_F(FrameSelectionTest, HasVisibleText) {
   Selection().SetSelection(
       SetSelectionTextToBody("<div contenteditable>^foo|</div>"),
@@ -1573,6 +1629,35 @@ TEST_F(FrameSelectionTest, PaintCaretRecordsSelectionWithNoSelectionHandles) {
   EXPECT_EQ(gfx::SelectionBound::HIDDEN, selection_data->start->type);
   EXPECT_TRUE(selection_data->end.has_value());
   EXPECT_EQ(gfx::SelectionBound::HIDDEN, selection_data->end->type);
+}
+
+// crbug.com/570740320
+TEST_F(FrameSelectionTest, PaintCaretDoesNotUpdateStyleAndLayout) {
+  Text* text = AppendTextNode("Hello, World!");
+  UpdateAllLifecyclePhasesForTest();
+
+  GetDocument().body()->setContentEditable("true", ASSERT_NO_EXCEPTION);
+  GetDocument().body()->Focus();
+  Selection().SetCaretEnabled(true);
+  Selection().SetSelection(
+      SelectionInDomTree::Builder().Collapse(Position(text, 0)).Build(),
+      SetSelectionOptions());
+  UpdateAllLifecyclePhasesForTest();
+  ASSERT_TRUE(Selection().ShouldPaintCaret(
+      *To<LayoutBlock>(GetDocument().body()->GetLayoutObject())));
+
+  GetDocument().body()->SetInlineStyleProperty(CSSPropertyID::kColor, "red");
+  ASSERT_TRUE(GetDocument().NeedsLayoutTreeUpdate());
+
+  PaintController paint_controller;
+  {
+    GraphicsContext context(paint_controller);
+    paint_controller.UpdateCurrentPaintChunkProperties(
+        root_paint_chunk_id_, *root_paint_property_client_,
+        PropertyTreeState::Root());
+    Selection().PaintCaret(context, PhysicalOffset());
+  }
+  EXPECT_TRUE(GetDocument().NeedsLayoutTreeUpdate());
 }
 
 // ===========================================================================

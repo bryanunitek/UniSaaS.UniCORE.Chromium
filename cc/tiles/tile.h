@@ -147,8 +147,6 @@ class CC_EXPORT Tile {
 
   bool HasRasterTask() const { return !!raster_task_.get(); }
 
-  bool HasMissingLCPCandidateImages() const;
-
   void set_solid_color_analysis_performed(bool performed) {
     is_solid_color_analysis_performed_ = performed;
   }
@@ -224,11 +222,6 @@ class CC_EXPORT Tile {
   bool deleted_ : 1 = false;
 
   Id id_;
-
-  // List of Rect-Transform pairs, representing unoccluded parts of the
-  // tile, to support raster culling. See Bug: 1071932
-  std::vector<std::pair<const gfx::Rect, const gfx::AxisTransform2d>>
-      raster_rects_;
 
   // The rect bounding the changes in this Tile vs the previous tile it
   // replaced.

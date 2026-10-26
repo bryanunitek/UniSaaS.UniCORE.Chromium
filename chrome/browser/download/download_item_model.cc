@@ -33,6 +33,7 @@
 #include "chrome/browser/download/download_stats.h"
 #include "chrome/browser/download/download_target_determiner.h"
 #include "chrome/browser/download/download_ui_model.h"
+#include "chrome/browser/download/download_ui_safe_browsing_util.h"
 #include "chrome/browser/download/offline_item_utils.h"
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/profiles/profile.h"
@@ -52,6 +53,7 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
+#include "extensions/buildflags/buildflags.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/time_format.h"
 #include "ui/base/text/bytes_formatting.h"
@@ -63,7 +65,7 @@
 #endif
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "ui/views/vector_icons.h"
 #endif
 
@@ -597,6 +599,10 @@ bool DownloadItemModel::HasUserGesture() const {
   return download_->HasUserGesture();
 }
 
+std::u16string DownloadItemModel::GetDownloadDomainForDisplay() const {
+  return DownloadUIModel::GetDownloadDomainForDisplay(download_);
+}
+
 void DownloadItemModel::OnDownloadUpdated(DownloadItem* download) {
   if (delegate_)
     delegate_->OnDownloadUpdated();
@@ -815,7 +821,7 @@ void DownloadItemModel::ExecuteCommand(DownloadCommands* download_commands,
       if (GetDangerType() == download::DOWNLOAD_DANGER_TYPE_ASYNC_SCANNING) {
         break;
       }
-      DCHECK(IsDangerous());
+      CHECK(IsDangerous(), base::NotFatalUntil::M161);
 #if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
       MaybeSendDownloadReport(/*did_proceed=*/true, download_);
 #endif
@@ -877,10 +883,10 @@ void DownloadItemModel::ExecuteCommand(DownloadCommands* download_commands,
       DownloadCoreService* download_core_service =
           DownloadCoreServiceFactory::GetForBrowserContext(
               content::DownloadItemUtils::GetBrowserContext(download_));
-      DCHECK(download_core_service);
+      CHECK(download_core_service, base::NotFatalUntil::M161);
       ChromeDownloadManagerDelegate* delegate =
           download_core_service->GetDownloadManagerDelegate();
-      DCHECK(delegate);
+      CHECK(delegate, base::NotFatalUntil::M161);
       LogDeepScanEvent(download_, safe_browsing::DeepScanEvent::kScanCanceled);
       delegate->CheckClientDownloadDone(
           download_->GetId(),
@@ -1049,6 +1055,15 @@ bool DownloadItemModel::IsEphemeralWarning() const {
     case download::DownloadItem::InsecureDownloadStatus::VALIDATED:
     case download::DownloadItem::InsecureDownloadStatus::SILENT_BLOCK:
       break;
+  }
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+  // When MaliciousApkDownloadCheck is enabled, only downloads blocked by Safe
+  // Browsing for dangerous content should be subject to ephemeral warnings
+  // and scheduled cancellation.
+  if (ShouldShowSafeBrowsingAndroidDownloadWarnings()) {
+    return GetDangerType() == download::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT;
   }
 #endif
 

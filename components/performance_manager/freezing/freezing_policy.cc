@@ -16,7 +16,6 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
-#include "base/not_fatal_until.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/process/process_metrics.h"
 #include "base/strings/stringprintf.h"
@@ -32,11 +31,16 @@
 #include "components/performance_manager/public/resource_attribution/origin_in_browsing_instance_context.h"
 #include "components/performance_manager/public/resource_attribution/resource_contexts.h"
 #include "components/performance_manager/public/resource_attribution/resource_types.h"
+#include "content/public/common/url_constants.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "components/memory_pressure/threshold_memory_pressure_evaluator.h"
+#endif
 
 namespace performance_manager {
 
@@ -261,7 +265,9 @@ FreezingPolicy::FreezingPolicy(
   }
 #if BUILDFLAG(IS_WIN)
   if (base::FeatureList::IsEnabled(
-          features::kInfiniteTabsFreezingOnMemoryPressure)) {
+          features::kInfiniteTabsFreezingOnMemoryPressure) ||
+      base::FeatureList::IsEnabled(
+          features::kDisablePeriodicUnfreezeOnCriticalMemoryPressure)) {
     memory_check_timer_.Start(
         FROM_HERE,
         features::kInfiniteTabsFreezingOnMemoryPressureInterval.Get(), this,
@@ -272,11 +278,45 @@ FreezingPolicy::FreezingPolicy(
 
 FreezingPolicy::~FreezingPolicy() = default;
 
+bool FreezingPolicy::IsPeriodicUnfreezeTimerRunningForTesting(
+    const PageNode* page_node) const {
+  return GetFreezingState(page_node).periodic_unfreeze_timer.IsRunning();
+}
+
+void FreezingPolicy::SetIsUnderMemoryPressureForTesting(
+    bool is_under_memory_pressure) {
+#if BUILDFLAG(IS_WIN)
+  memory_check_timer_.Stop();
+#endif
+  OnMemoryPressureStateChanged(
+      is_under_memory_pressure
+          ? base::MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_MODERATE
+          : base::MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_NONE);
+}
+
+void FreezingPolicy::SetMemoryPressureLevelForTesting(
+    base::MemoryPressureLevel memory_pressure_level) {
+#if BUILDFLAG(IS_WIN)
+  memory_check_timer_.Stop();
+#endif
+  OnMemoryPressureStateChanged(memory_pressure_level);
+}
+
 void FreezingPolicy::ToggleFreezingOnBatterySaverMode(bool is_enabled) {
   is_battery_saver_active_ = is_enabled;
   // Update frozen state for all connected sets of pages (toggling the state of
   // battery saver mode can affect the frozen state of any connected set).
-  UpdateAllPagesFrozenState();
+  UpdateAllPagesFrozenState(base::LiveTicks::Now());
+}
+
+void FreezingPolicy::SetFreezingEnabledByUser(bool enabled) {
+  if (is_freezing_enabled_by_user_ == enabled) {
+    return;
+  }
+  is_freezing_enabled_by_user_ = enabled;
+  const base::LiveTicks now = base::LiveTicks::Now();
+  UpdateAllPeriodicUnfreezeTimers(now);
+  UpdateAllPagesFrozenState(now);
 }
 
 void FreezingPolicy::AddFreezeVote(PageNode* page_node) {
@@ -425,6 +465,7 @@ void FreezingPolicy::UpdateFrozenState(
 
   const double high_cpu_proportion = features::kFreezingHighCPUProportion.Get();
 
+  const bool is_periodic_unfreezing_active = IsPeriodicUnfreezingActive();
   for (const PageNode* visited_page : connected_pages) {
     auto& page_freezing_state = GetFreezingState(visited_page);
 
@@ -435,7 +476,8 @@ void FreezingPolicy::UpdateFrozenState(
       all_pages_have_freeze_vote = false;
     }
 
-    if (page_freezing_state.IsInUnfreezePeriod(now)) {
+    if (is_periodic_unfreezing_active &&
+        page_freezing_state.IsInUnfreezePeriod(now)) {
       is_in_periodic_unfreeze = true;
     }
 
@@ -461,14 +503,18 @@ void FreezingPolicy::UpdateFrozenState(
              can_freeze_per_type_tracker.CanFreeze(
                  FreezingType::kBatterySaver)) {
     should_be_frozen = true;
-  } else if (can_freeze_per_type_tracker.CanFreeze(
+  } else if (is_freezing_enabled_by_user_ &&
+             can_freeze_per_type_tracker.CanFreeze(
                  FreezingType::kInfiniteTabs) &&
              !is_in_periodic_unfreeze &&
              base::FeatureList::IsEnabled(features::kInfiniteTabsFreezing)) {
     should_be_frozen = true;
-  } else if (can_freeze_per_type_tracker.CanFreeze(
+  } else if (is_freezing_enabled_by_user_ &&
+             can_freeze_per_type_tracker.CanFreeze(
                  FreezingType::kInfiniteTabs) &&
-             !is_in_periodic_unfreeze && is_under_memory_pressure_ &&
+             !is_in_periodic_unfreeze &&
+             memory_pressure_level_ !=
+                 base::MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_NONE &&
              base::FeatureList::IsEnabled(
                  features::kInfiniteTabsFreezingOnMemoryPressure)) {
     should_be_frozen = true;
@@ -522,16 +568,7 @@ void FreezingPolicy::OnCannotFreezeReasonChange(const PageNode* page_node,
   after_tracker.PopulateWithPageFreezingState(state);
 
   const base::LiveTicks now = base::LiveTicks::Now();
-
-  if (!after_tracker.CanFreeze(FreezingType::kInfiniteTabs)) {
-    // No need to run the periodic unfreeze timer when the tab isn't eligible
-    // for infinite tabs freezing.
-    state.periodic_unfreeze_timer.Stop();
-  } else if (!state.periodic_unfreeze_timer.IsRunning()) {
-    // Start a timer which fires when entering or exiting a periodic unfreeze
-    // period.
-    StartPeriodicUnfreezeTimer(page_node, now);
-  }
+  UpdatePeriodicUnfreezeTimer(page_node, now);
 
   if (before_tracker != after_tracker) {
     UpdateFrozenState(page_node, now);
@@ -611,7 +648,7 @@ void FreezingPolicy::OnPageNodeAdded(const PageNode* page_node) {
 void FreezingPolicy::OnBeforePageNodeRemoved(const PageNode* page_node) {
   if (page_node->GetType() == PageType::kTab) {
     if (page_node->IsVisible()) {
-      CHECK_GT(num_visible_tabs_, 0, base::NotFatalUntil::M140);
+      CHECK_GT(num_visible_tabs_, 0);
       --num_visible_tabs_;
     } else {
       std::erase(most_recently_used_, page_node);
@@ -619,21 +656,13 @@ void FreezingPolicy::OnBeforePageNodeRemoved(const PageNode* page_node) {
   }
 
   CHECK(page_node->GetMainFrameNodes().empty());
-  CHECK(!std::ranges::contains(most_recently_used_, page_node),
-        base::NotFatalUntil::M140);
+  CHECK(!std::ranges::contains(most_recently_used_, page_node));
   CheckMostRecentlyUsedListSize();
 }
 
 void FreezingPolicy::OnTypeChanged(const PageNode* page_node,
                                    PageType previous_type) {
-  CHECK_EQ(previous_type, PageType::kUnknown, base::NotFatalUntil::M140);
-  if (page_node->GetType() == PageType::kNonTabWebUI) {
-    // This Page is marked as a Non Tab WebUI, opt it out of freezing.
-    OnCannotFreezeReasonChange(page_node, /*add=*/true,
-                               CannotFreezeReason::kNonTabWebUI);
-    return;
-  }
-
+  CHECK_EQ(previous_type, PageType::kUnknown);
   if (page_node->GetType() != PageType::kTab) {
     return;
   }
@@ -677,9 +706,8 @@ void FreezingPolicy::OnIsVisibleChanged(const PageNode* page_node) {
   } else {
     // Page becomes hidden.
     if (page_node->GetType() == PageType::kTab) {
-      CHECK(!std::ranges::contains(most_recently_used_, page_node),
-            base::NotFatalUntil::M140);
-      CHECK_GT(num_visible_tabs_, 0, base::NotFatalUntil::M140);
+      CHECK(!std::ranges::contains(most_recently_used_, page_node));
+      CHECK_GT(num_visible_tabs_, 0);
       --num_visible_tabs_;
       most_recently_used_.push_front(page_node);
       OnCannotFreezeReasonChange(page_node, /*add=*/true,
@@ -784,7 +812,8 @@ void FreezingPolicy::OnPageIsHoldingWebLockChanged(const PageNode* page_node) {
                              CannotFreezeReason::kHoldingWebLock);
 }
 
-void FreezingPolicy::OnMainFrameUrlChanged(const PageNode* page_node) {
+void FreezingPolicy::OnMainFrameUrlChanged(const PageNode* page_node,
+                                           const GURL& previous_url) {
   const bool was_opted_out =
       GetFreezingState(page_node).cannot_freeze_reasons.Has(
           CannotFreezeReason::kOptedOut);
@@ -795,6 +824,16 @@ void FreezingPolicy::OnMainFrameUrlChanged(const PageNode* page_node) {
   if (was_opted_out != is_opted_out) {
     OnCannotFreezeReasonChange(page_node, /*add=*/is_opted_out,
                                CannotFreezeReason::kOptedOut);
+  }
+
+  const bool was_webui = GetFreezingState(page_node).cannot_freeze_reasons.Has(
+      CannotFreezeReason::kWebUI);
+  const GURL& url = page_node->GetMainFrameUrl();
+  const bool is_webui = url.SchemeIs(content::kChromeUIScheme) ||
+                        url.SchemeIs(content::kChromeUIUntrustedScheme);
+  if (was_webui != is_webui) {
+    OnCannotFreezeReasonChange(page_node, /*add=*/is_webui,
+                               CannotFreezeReason::kWebUI);
   }
 }
 
@@ -852,8 +891,7 @@ void FreezingPolicy::OnFrameNodeAdded(const FrameNode* frame_node) {
 
   // Clear `per_origin_pmf_after_freezing` since not all pages in the
   // browsing instance are frozen when a new page is added.
-  CHECK_EQ(frame_node->GetLifecycleState(), FrameNode::LifecycleState::kRunning,
-           base::NotFatalUntil::M140);
+  CHECK_EQ(frame_node->GetLifecycleState(), FrameNode::LifecycleState::kRunning);
   browsing_instance_state.per_origin_pmf_after_freezing.clear();
 
   // Update frozen state for browsing instances associated with the frame's
@@ -1043,13 +1081,12 @@ void FreezingPolicy::DiscardFrozenPagesWithGrowingMemoryOnMemoryMeasurement(
     } else {
       // Should have been cleared by OnPageLifecycleStateChanged() or
       // OnFrameNodeAdded().
-      CHECK(state.per_origin_pmf_after_freezing.empty(),
-            base::NotFatalUntil::M140);
+      CHECK(state.per_origin_pmf_after_freezing.empty());
     }
   }
 
   const base::ByteSize growth_threshold =
-      base::KiBU(base::checked_cast<uint64_t>(
+      base::KiB(base::checked_cast<uint64_t>(
           features::kFreezingMemoryGrowthThresholdToDiscardKb.Get()));
 
   // Traverse memory measurements to find pages to discard.
@@ -1243,14 +1280,54 @@ void FreezingPolicy::CheckMostRecentlyUsedListSize() {
   // visible tabs must be below or at the limit.
   CHECK_LE(
       num_visible_tabs_ + base::checked_cast<int>(most_recently_used_.size()),
-      features::kInfiniteTabsFreezing_NumProtectedTabs.Get(),
-      base::NotFatalUntil::M140);
+      features::kInfiniteTabsFreezing_NumProtectedTabs.Get());
+}
+
+bool FreezingPolicy::IsPeriodicUnfreezingActive() const {
+  if (!is_freezing_enabled_by_user_) {
+    return false;
+  }
+  if (memory_pressure_level_ ==
+          base::MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_CRITICAL &&
+      base::FeatureList::IsEnabled(
+          features::kDisablePeriodicUnfreezeOnCriticalMemoryPressure)) {
+    return false;
+  }
+  return base::FeatureList::IsEnabled(features::kInfiniteTabsFreezing) ||
+         (base::FeatureList::IsEnabled(
+              features::kInfiniteTabsFreezingOnMemoryPressure) &&
+          memory_pressure_level_ !=
+              base::MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_NONE);
+}
+
+void FreezingPolicy::UpdatePeriodicUnfreezeTimer(const PageNode* page_node,
+                                                 base::LiveTicks now) {
+  auto& state = GetFreezingState(page_node);
+  if (!IsPeriodicUnfreezingActive() ||
+      HasCannotFreezeReasonForType(state.cannot_freeze_reasons,
+                                   FreezingType::kInfiniteTabs)) {
+    state.periodic_unfreeze_timer.Stop();
+    return;
+  }
+
+  if (!state.periodic_unfreeze_timer.IsRunning()) {
+    StartPeriodicUnfreezeTimer(page_node, now);
+  }
+}
+
+void FreezingPolicy::UpdateAllPeriodicUnfreezeTimers(base::LiveTicks now) {
+  for (const PageNode* page_node : GetOwningGraph()->GetAllPageNodes()) {
+    UpdatePeriodicUnfreezeTimer(page_node, now);
+  }
 }
 
 void FreezingPolicy::StartPeriodicUnfreezeTimer(const PageNode* page_node,
                                                 base::LiveTicks now) {
+  if (!IsPeriodicUnfreezingActive()) {
+    return;
+  }
   auto& state = GetFreezingState(page_node);
-  CHECK(!state.periodic_unfreeze_timer.IsRunning(), base::NotFatalUntil::M141);
+  CHECK(!state.periodic_unfreeze_timer.IsRunning());
   state.periodic_unfreeze_timer.Start(
       FROM_HERE, state.GetDelayUntilNextUnfreezeStateChange(now),
       base::BindOnce(&FreezingPolicy::OnPeriodicUnfreezeTimer,
@@ -1260,7 +1337,7 @@ void FreezingPolicy::StartPeriodicUnfreezeTimer(const PageNode* page_node,
 void FreezingPolicy::OnPeriodicUnfreezeTimer(const PageNode* page_node) {
   const base::LiveTicks now = base::LiveTicks::Now();
   UpdateFrozenState(page_node, now);
-  StartPeriodicUnfreezeTimer(page_node, now);
+  UpdatePeriodicUnfreezeTimer(page_node, now);
 }
 
 void FreezingPolicy::RecordFreezingEligibilityUKM() {
@@ -1441,21 +1518,39 @@ void FreezingPolicy::CheckMemoryPressureForFreezing() {
 
   bool is_now_under_pressure = available_percent < kPressureThresholdPercent;
 
-  // If the pressure state hasn't changed, there's nothing to do.
-  if (is_now_under_pressure == is_under_memory_pressure_) {
-    return;
+  base::MemoryPressureLevel new_level =
+      base::MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_NONE;
+  // TODO(b/466015017): Standardize memory pressure handling and remove this
+  // direct dependency on //components/memory_pressure once the experiment
+  // concludes.
+  if (avail <= memory_pressure::ThresholdMemoryPressureEvaluator::
+                   kDefaultWinCriticalThreshold) {
+    new_level = base::MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_CRITICAL;
+  } else if (is_now_under_pressure) {
+    new_level = base::MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_MODERATE;
   }
 
-  // The state has changed. Update the flag and re-evaluate all pages.
-  is_under_memory_pressure_ = is_now_under_pressure;
-  UpdateAllPagesFrozenState();
+  OnMemoryPressureStateChanged(new_level);
 
 #endif  // BUILDFLAG(IS_WIN)
 }
 
-void FreezingPolicy::UpdateAllPagesFrozenState() {
-  const base::LiveTicks now = base::LiveTicks::Now();
+void FreezingPolicy::OnMemoryPressureStateChanged(
+    base::MemoryPressureLevel memory_pressure_level) {
+  if (memory_pressure_level == memory_pressure_level_) {
+    return;
+  }
 
+  const bool was_periodic_unfreezing_active = IsPeriodicUnfreezingActive();
+  const base::LiveTicks now = base::LiveTicks::Now();
+  memory_pressure_level_ = memory_pressure_level;
+  if (was_periodic_unfreezing_active != IsPeriodicUnfreezingActive()) {
+    UpdateAllPeriodicUnfreezeTimers(now);
+  }
+  UpdateAllPagesFrozenState(now);
+}
+
+void FreezingPolicy::UpdateAllPagesFrozenState(base::LiveTicks now) {
   base::flat_set<raw_ptr<const PageNode>> visited_pages;
   for (auto& [id, state] : browsing_instance_states_) {
     if (!visited_pages.contains(*state.pages.begin())) {

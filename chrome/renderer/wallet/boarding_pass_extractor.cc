@@ -5,7 +5,6 @@
 
 #include "chrome/renderer/wallet/boarding_pass_extractor.h"
 
-#include "base/metrics/histogram_macros.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_thread.h"
@@ -155,7 +154,8 @@ void BoardingPassExtractor::ExtractBoardingPassWithScript(
                      base::Unretained(this), std::move(callback)),
       blink::BackForwardCacheAware::kAllow,
       blink::mojom::WantResultOption::kWantResult,
-      blink::mojom::PromiseResultOption::kAwait);
+      blink::mojom::PromiseResultOption::kAwait,
+      /*script_injector_id=*/blink::WebString());
 }
 
 void BoardingPassExtractor::OnBoardingPassExtracted(
@@ -171,9 +171,6 @@ void BoardingPassExtractor::OnBoardingPassExtracted(
       render_frame()->GetWebFrame()->GetDocument().GetUkmSourceId())
       .SetDetected(!boarding_passes.empty())
       .Record(ukm_recorder_.get());
-
-  UMA_HISTOGRAM_BOOLEAN("Android.Wallet.BoardingPass.Detected",
-                        !boarding_passes.empty());
 
   std::move(callback).Run(std::move(boarding_passes));
 }

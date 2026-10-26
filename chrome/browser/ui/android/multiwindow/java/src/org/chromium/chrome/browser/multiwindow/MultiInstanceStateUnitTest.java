@@ -19,7 +19,6 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationStatus;
@@ -34,11 +33,11 @@ import java.util.Map;
 
 /** Unit tests for {@link MultiInstanceState}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class MultiInstanceStateUnitTest {
     private static final Map<AppTask, RecentTaskInfo> sTasks = new HashMap<>();
 
     private MultiInstanceState mMultiInstanceState;
+    private int mGetChromeTasksCount;
 
     private final String mBaseActivityClassName = BrowserActivity.class.getName();
 
@@ -101,6 +100,7 @@ public class MultiInstanceStateUnitTest {
 
     @Before
     public void setUp() {
+        mGetChromeTasksCount = 0;
         AndroidTaskUtils.setTaskInfosForTesting(sTasks);
         MultiInstanceState.maybeCreate(this::getChromeTasks, this::matchesBaseActivity);
         mMultiInstanceState = MultiInstanceState.getInstanceForTesting();
@@ -127,6 +127,7 @@ public class MultiInstanceStateUnitTest {
     }
 
     private List<AppTask> getChromeTasks() {
+        mGetChromeTasksCount++;
         return new ArrayList<>(sTasks.keySet());
     }
 
@@ -165,6 +166,30 @@ public class MultiInstanceStateUnitTest {
         BaseActivity baseActivity1 = createTaskAndLaunchActivity(29, new CustomTabActivity());
         createTaskAndLaunchActivity(31, new CustomTabActivity());
         assertInSingleInstanceMode("Base activity is not legit: " + baseActivity1);
+    }
+
+    @Test
+    public void testOnTaskVisibilityChanged_SkipsSupplierOnHideAndHandlesDestroyedTask() {
+        BaseActivity baseActivity1 = createTaskAndLaunchActivity(29, new BrowserActivity());
+        assertEquals(1, mGetChromeTasksCount);
+
+        // Resuming an already-active task should not query the AppTask supplier again.
+        mMultiInstanceState.onTaskVisibilityChanged(29, true);
+        assertEquals(1, mGetChromeTasksCount);
+
+        BaseActivity baseActivity2 = createTaskAndLaunchActivity(31, new BrowserActivity());
+        assertEquals(2, mGetChromeTasksCount);
+        assertInMultiInstanceMode("two browser tasks visible");
+
+        // Hiding an untracked task should not query the AppTask supplier.
+        mMultiInstanceState.onTaskVisibilityChanged(99, false);
+        assertEquals(2, mGetChromeTasksCount);
+
+        // Destroying baseActivity2 removes its task from sTasks before firing DESTROYED.
+        // Hiding an active task should remove it without querying the AppTask supplier.
+        baseActivity2.destroy();
+        assertEquals(2, mGetChromeTasksCount);
+        assertInSingleInstanceMode("destroyed task removed from active tasks");
     }
 
     private void assertInMultiInstanceMode(String msg) {

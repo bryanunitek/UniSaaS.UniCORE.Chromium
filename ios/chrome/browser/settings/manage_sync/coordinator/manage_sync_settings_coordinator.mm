@@ -36,6 +36,7 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signout_action_sheet/signout_action_sheet_coordinator.h"
+#import "ios/chrome/browser/composebox/public/features.h"
 #import "ios/chrome/browser/regional_capabilities/model/regional_capabilities_service_factory.h"
 #import "ios/chrome/browser/settings/bulk_upload/coordinator/bulk_upload_coordinator.h"
 #import "ios/chrome/browser/settings/bulk_upload/coordinator/bulk_upload_coordinator_delegate.h"
@@ -73,6 +74,7 @@
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/signin/model/system_identity_manager.h"
+#import "ios/chrome/browser/subscription_eligibility/model/subscription_eligibility_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
@@ -162,9 +164,8 @@ enum class ActionAfterReauth {
                                          browser:(Browser*)browser {
   if ((self = [super initWithBaseViewController:navigationController
                                         browser:browser])) {
-    CHECK(navigationController, base::NotFatalUntil::M142);
-    CHECK_EQ(browser->type(), Browser::Type::kRegular,
-             base::NotFatalUntil::M145);
+    CHECK(navigationController);
+    CHECK_EQ(browser->type(), Browser::Type::kRegular);
     _baseNavigationController = navigationController;
   }
   return self;
@@ -174,12 +175,15 @@ enum class ActionAfterReauth {
   ProfileIOS* profile = self.profile;
 
   self.mediator = [[ManageSyncSettingsMediator alloc]
-        initWithSyncService:self.syncService
-            identityManager:IdentityManagerFactory::GetForProfile(profile)
-      authenticationService:self.authService
-      accountManagerService:ChromeAccountManagerServiceFactory::GetForProfile(
-                                profile)
-                prefService:profile->GetPrefs()];
+                 initWithSyncService:self.syncService
+                     identityManager:IdentityManagerFactory::GetForProfile(
+                                         profile)
+               authenticationService:self.authService
+               accountManagerService:ChromeAccountManagerServiceFactory::
+                                         GetForProfile(profile)
+                         prefService:profile->GetPrefs()
+      subscriptionEligibilityService:SubscriptionEligibilityServiceFactory::
+                                         GetForProfile(profile)];
   self.mediator.commandHandler = self;
   self.mediator.syncErrorHandler = self;
   self.mediator.forcedSigninEnabled =
@@ -443,7 +447,19 @@ enum class ActionAfterReauth {
       GURL(base::FeatureList::IsEnabled(syncer::kSyncEnableNewSyncDashboardUrl)
                ? kNewSyncGoogleDashboardURL
                : kLegacySyncGoogleDashboardURL),
-      GetApplicationContext()->GetApplicationLocaleStorage()->Get());
+      std::string(GetApplicationContext()
+                      ->GetApplicationLocaleStorage()
+                      ->GetTag()
+                      .tag_string()));
+  OpenNewTabCommand* command = [OpenNewTabCommand commandWithURLFromChrome:url];
+  id<SceneCommands> handler =
+      HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
+  [handler closePresentedViewsAndOpenURL:command];
+}
+
+- (void)openConnectedAppsWebPage {
+  CHECK(IsComposeboxConnectedAppsSettingEnabled());
+  GURL url(kConnectedAppsURL);
   OpenNewTabCommand* command = [OpenNewTabCommand commandWithURLFromChrome:url];
   id<SceneCommands> handler =
       HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
@@ -466,6 +482,7 @@ enum class ActionAfterReauth {
                             rect:targetRect
                             view:self.viewController.view
         forceSnackbarOverToolbar:NO
+                  showUndoButton:NO
                       withSource:metricSignOut
                       completion:^(BOOL success, SceneState* scene_state) {
                         [weakSelf handleSignOutCompleted:success];
@@ -545,7 +562,7 @@ enum class ActionAfterReauth {
 
 - (void)openAccountMenu {
   if (_accountMenuCoordinator) {
-    // This can occurs in cause of double tap.
+    // This can occur in case of double tap.
     return;
   }
   _accountMenuCoordinator = [[AccountMenuCoordinator alloc]
@@ -670,7 +687,7 @@ enum class ActionAfterReauth {
       trusted_vault::TrustedVaultUserActionTriggerForUMA::kSettings;
   SigninTrustedVaultDialogIntent intent =
       SigninTrustedVaultDialogIntentDegradedRecoverability;
-  CHECK(!_trustedVaultReauthenticationCoordinator, base::NotFatalUntil::M145);
+  CHECK(!_trustedVaultReauthenticationCoordinator);
   _trustedVaultReauthenticationCoordinator =
       [[TrustedVaultReauthenticationCoordinator alloc]
           initWithBaseViewController:self.viewController
@@ -682,8 +699,14 @@ enum class ActionAfterReauth {
   [_trustedVaultReauthenticationCoordinator start];
 }
 
-- (void)openMDMErrodDialogWithSystemIdentity:(id<SystemIdentity>)identity {
-  self.authService->ShowMDMErrorDialogForIdentity(identity);
+- (void)openMDMErrorDialogWithSystemIdentity:(id<SystemIdentity>)identity {
+  [self.viewController preventUserInteraction];
+  __weak __typeof(self) weakSelf = self;
+  base::OnceCallback<void(bool)> callback = base::BindOnce(^void(bool) {
+    [weakSelf.viewController allowUserInteraction];
+  });
+  self.authService->ShowMDMErrorDialogForIdentity(identity,
+                                                  std::move(callback));
 }
 
 - (void)openBookmarksLimitExceededHelp {
@@ -767,7 +790,7 @@ enum class ActionAfterReauth {
 
 - (void)accountMenuCoordinatorWantsToBeStopped:
     (AccountMenuCoordinator*)coordinator {
-  CHECK_EQ(_accountMenuCoordinator, coordinator, base::NotFatalUntil::M140);
+  CHECK_EQ(_accountMenuCoordinator, coordinator);
   [self stopAccountMenuCoordinator];
 }
 
@@ -775,8 +798,7 @@ enum class ActionAfterReauth {
 
 - (void)syncEncryptionPassphraseTableViewControllerDidDisappear:
     (SyncEncryptionPassphraseTableViewController*)viewController {
-  CHECK_EQ(_syncEncryptionPassphraseTableViewController, viewController,
-           base::NotFatalUntil::M142);
+  CHECK_EQ(_syncEncryptionPassphraseTableViewController, viewController);
   _syncEncryptionPassphraseTableViewController.presentationDelegate = nil;
   [_syncEncryptionPassphraseTableViewController settingsWillBeDismissed];
   _syncEncryptionPassphraseTableViewController = nil;
@@ -786,8 +808,7 @@ enum class ActionAfterReauth {
 
 - (void)syncEncryptionTableViewControllerDidDismiss:
     (SyncEncryptionTableViewController*)viewController {
-  CHECK_EQ(_syncEncryptionTableViewController, viewController,
-           base::NotFatalUntil::M150);
+  CHECK_EQ(_syncEncryptionTableViewController, viewController);
   _syncEncryptionTableViewController.presentationDelegate = nil;
   [_syncEncryptionTableViewController settingsWillBeDismissed];
   _syncEncryptionTableViewController = nil;

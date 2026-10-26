@@ -17,8 +17,6 @@ import android.content.Context;
 import android.hardware.Sensor;
 import android.hardware.SensorManager;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -30,6 +28,9 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.components.sync_device_info.FormFactor;
+import org.chromium.components.sync_device_info.OsType;
+import org.chromium.components.sync_device_info.RemoteDeviceInfo;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.url.GURL;
 
@@ -65,8 +66,10 @@ public class SendTabToSelfGestureDetectorTest {
         when(mTab.getTitle()).thenReturn("Example Page");
 
         // Set up mock target devices so the bridge check passes
-        List<TargetDeviceInfo> mockDevices = new ArrayList<>();
-        mockDevices.add(new TargetDeviceInfo("device_name", "cache_guid", 1, "1000"));
+        List<RemoteDeviceInfo> mockDevices = new ArrayList<>();
+        mockDevices.add(
+                new RemoteDeviceInfo(
+                        "device_name", "cache_guid", FormFactor.DESKTOP, OsType.UNKNOWN, "1000"));
         when(mNativeMock.getAllTargetDeviceInfos(any())).thenReturn(mockDevices);
 
         // Default to offering the feature, which implies the user is signed in and has devices.
@@ -77,7 +80,6 @@ public class SendTabToSelfGestureDetectorTest {
     }
 
     @Test
-    @SmallTest
     public void testSingleSpikeDoesNotTrigger() {
         // A single shake spike should not be enough to trigger.
         mDetector.onSensorValuesChanged(new float[] {0f, 0f, 20f}, 1000L);
@@ -87,7 +89,6 @@ public class SendTabToSelfGestureDetectorTest {
     }
 
     @Test
-    @SmallTest
     public void testDoubleSpikeTriggers() {
         // Two shake spikes within a valid time window should trigger a tab share.
         mDetector.onSensorValuesChanged(new float[] {0f, 0f, 20f}, 1000L);
@@ -104,7 +105,6 @@ public class SendTabToSelfGestureDetectorTest {
     }
 
     @Test
-    @SmallTest
     public void testTooFastSpikesDoNotTrigger() {
         // Spikes happening too quickly (e.g. within 50ms) are likely noise and should not trigger.
         mDetector.onSensorValuesChanged(new float[] {0f, 0f, 20f}, 1000L);
@@ -115,7 +115,6 @@ public class SendTabToSelfGestureDetectorTest {
     }
 
     @Test
-    @SmallTest
     public void testTooSlowSpikesDoNotTrigger() {
         // Spikes happening too far apart (e.g. 600ms) should not be considered a single gesture.
         mDetector.onSensorValuesChanged(new float[] {0f, 0f, 20f}, 1000L);
@@ -126,7 +125,6 @@ public class SendTabToSelfGestureDetectorTest {
     }
 
     @Test
-    @SmallTest
     public void testResetAfterTrigger() {
         // Trigger the first gesture.
         mDetector.onSensorValuesChanged(new float[] {0f, 0f, 20f}, 1000L);
@@ -149,7 +147,6 @@ public class SendTabToSelfGestureDetectorTest {
     }
 
     @Test
-    @SmallTest
     public void testValidGesture_ModelNotReady_DoesNotTrigger() {
         // Simulate the model not being ready yet.
         when(mNativeMock.getEntryPointDisplayReason(any(), any())).thenReturn(null);
@@ -164,7 +161,6 @@ public class SendTabToSelfGestureDetectorTest {
     }
 
     @Test
-    @SmallTest
     public void testValidGesture_UserNotSignedIn_DoesNotTrigger() {
         // Simulate the user not being signed in.
         when(mNativeMock.getEntryPointDisplayReason(any(), any()))
@@ -180,7 +176,6 @@ public class SendTabToSelfGestureDetectorTest {
     }
 
     @Test
-    @SmallTest
     public void testValidGesture_NoTargetDevice_DoesNotTrigger() {
         // Simulate the user having no target devices.
         when(mNativeMock.getEntryPointDisplayReason(any(), any()))
@@ -196,7 +191,6 @@ public class SendTabToSelfGestureDetectorTest {
     }
 
     @Test
-    @SmallTest
     public void testValidGesture_AllPreconditionsMet_Triggers() {
         // Simulate the user being signed in and having target devices.
         when(mNativeMock.getEntryPointDisplayReason(any(), any()))
@@ -212,14 +206,12 @@ public class SendTabToSelfGestureDetectorTest {
     }
 
     @Test
-    @SmallTest
     public void testStartRegistersListener() {
         mDetector.start();
         verify(mSensorManager).registerListener(eq(mDetector), eq(mSensor), anyInt());
     }
 
     @Test
-    @SmallTest
     public void testStopUnregistersListener() {
         mDetector.start();
         mDetector.stop();
@@ -227,7 +219,6 @@ public class SendTabToSelfGestureDetectorTest {
     }
 
     @Test
-    @SmallTest
     public void testStartDoesNotRegisterIfSensorMissing() {
         when(mSensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)).thenReturn(null);
         SendTabToSelfGestureDetector detector =
@@ -238,7 +229,6 @@ public class SendTabToSelfGestureDetectorTest {
     }
 
     @Test
-    @SmallTest
     public void testStopDoesNothingIfNotStarted() {
         mDetector.stop();
         verify(mSensorManager, never()).unregisterListener(eq(mDetector));

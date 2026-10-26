@@ -19,9 +19,8 @@
             },
             {
                 "domain": "Browser",
-                "include": ["getVersion", "getHistograms", "getHistogram", "getBrowserCommandLine", "grantPermissions", "setDownloadBehavior", "cancelDownload", "resetPermissions", "crash", "crashGpuProcess", "setPermission",
-                "addPrivacySandboxCoordinatorKeyConfig"],
-                "async": ["addPrivacySandboxCoordinatorKeyConfig", "grantPermissions", "resetPermissions", "setPermission"]
+                "include": ["getVersion", "getHistograms", "getHistogram", "getBrowserCommandLine", "grantPermissions", "setDownloadBehavior", "cancelDownload", "resetPermissions", "crash", "crashGpuProcess", "setPermission", "getGlobalPrivacyControl", "setGlobalPrivacyControl", "addMockCamera"],
+                "async": ["grantPermissions", "resetPermissions", "setPermission"]
             },
             {
                 "domain": "DOM",
@@ -76,6 +75,10 @@
                 "domain": "DigitalCredentials"
             },
             {
+                "domain": "FindInPage",
+                "async": ["findFirst", "findNext", "findPrev"]
+            },
+            {
                 "domain": "Input",
                 "async": ["dispatchKeyEvent", "insertText", "imeSetComposition", "dispatchMouseEvent", "dispatchDragEvent", "dispatchTouchEvent", "cancelDragging", "synthesizePinchGesture", "synthesizeScrollGesture", "synthesizeTapGesture"]
             },
@@ -121,13 +124,12 @@
                   "setRequestInterception",
                   "continueInterceptedRequest",
                   "getResponseBody",
+                  "searchInResponseBody",
                   "getResponseBodyForInterception",
                   "setCacheDisabled",
                   "takeResponseBodyForInterceptionAsStream",
                   "getSecurityIsolationStatus",
                   "loadNetworkResource",
-                  "setAcceptedEncodings",
-                  "clearAcceptedEncodingsOverride",
                   "enableReportingApi",
                   "enableDeviceBoundSessions",
                   "fetchSchemefulSite",
@@ -147,6 +149,7 @@
                   "setCookies",
                   "continueInterceptedRequest",
                   "getResponseBody",
+                  "searchInResponseBody",
                   "getResponseBodyForInterception",
                   "takeResponseBodyForInterceptionAsStream",
                   "loadNetworkResource"
@@ -154,18 +157,18 @@
             },
             {
                 "domain": "Overlay",
-                "include": ["setInspectMode", "setPausedInDebuggerMessage"]
+                "include": ["enable", "setInspectMode", "setPausedInDebuggerMessage"]
             },
             {
                 "domain": "Page",
                 "include": ["enable", "disable", "reload", "navigate", "stopLoading", "getNavigationHistory", "navigateToHistoryEntry", "resetNavigationHistory", "captureScreenshot",
-                    "startScreencast", "stopScreencast", "screencastFrameAck", "handleJavaScriptDialog", "setColorPickerEnabled",
-                    "bringToFront", "setDownloadBehavior", "getAppManifest", "crash", "close", "setWebLifecycleState", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "setBypassCSP", "getAppId", "addCompilationCache", "setPrerenderingAllowed", "getAnnotatedPageContent",
+                    "startScreencast", "stopScreencast", "startScreenRecording", "stopScreenRecording", "screencastFrameAck", "handleJavaScriptDialog", "setColorPickerEnabled",
+                    "bringToFront", "setDownloadBehavior", "getAppManifest", "crash", "close", "setWebLifecycleState", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "setBypassCSP", "getAppId", "getSubApps", "getSiblingSubApps", "addCompilationCache", "setPrerenderingAllowed", "getAnnotatedPageContent",
                     "addScriptToEvaluateOnNewDocument", "removeScriptToEvaluateOnNewDocument", "addScriptToEvaluateOnLoad", "removeScriptToEvaluateOnLoad"],
                 "include_events": ["frameDetached", "colorPicked", "interstitialShown", "interstitialHidden", "javascriptDialogOpening",
                      "javascriptDialogClosed", "downloadWillBegin", "downloadProgress", "screencastVisibilityChanged", "screencastFrame",
                      "backForwardCacheNotUsed", "frameStartedLoading", "frameStoppedLoading", "frameStartedNavigating"],
-                "async": ["captureScreenshot", "navigate", "getAppManifest", "reload", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "getAppId", "getAnnotatedPageContent"]
+                "async": ["captureScreenshot", "navigate", "getAppManifest", "reload", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "getAppId", "getSubApps", "getSiblingSubApps", "getAnnotatedPageContent", "stopScreenRecording"]
             },
             {
                 "domain": "Preload",
@@ -189,8 +192,8 @@
             },
             {
                 "domain": "Storage",
-                "exclude": ["runBounceTrackingMitigations", "getRelatedWebsiteSets"],
-                "async": ["getUsageAndQuota", "clearDataForOrigin", "clearDataForStorageKey", "getCookies", "setCookies", "clearCookies", "overrideQuotaForOrigin", "getTrustTokens", "clearTrustTokens", "getInterestGroupDetails", "getSharedStorageMetadata", "getSharedStorageEntries", "setSharedStorageEntry", "deleteSharedStorageEntry", "clearSharedStorageEntries", "resetSharedStorageBudget", "getStorageBucketList"]
+                "exclude": ["runBounceTrackingMitigations", "getPrivateVerificationTokens", "getPrivateVerificationTokensIssuerConfigs", "clearPrivateVerificationTokens", "deletePrivateVerificationToken", "setPrivateVerificationTokensTracking"],
+                "async": ["getUsageAndQuota", "clearDataForOrigin", "clearDataForStorageKey", "getCookies", "setCookies", "clearCookies", "overrideQuotaForOrigin", "getTrustTokens", "clearTrustTokens", "getStorageBucketList"]
             },
             {
                 "domain": "SystemInfo",
@@ -207,7 +210,7 @@
             },
             {
                 "domain": "Tracing",
-                "async": ["start", "getCategories", "requestMemoryDump"]
+                "async": ["start", "getCategories", "requestMemoryDump", "getTrackEventDescriptor"]
             },
             {
                 "domain": "VisualDebugger",
@@ -251,6 +254,17 @@
             {
                 "domain": "WebMCP",
                 "async": ["invokeTool"]
+            },
+            {
+                "domain": "Debugger",
+                "include": [
+                    "SearchMatch",
+                    "setBreakpointByUrl",
+                    "removeBreakpoint"
+                ],
+                "exclude": [
+                    "setBreakpoint"
+                ]
             }
         ]
     },

@@ -5,7 +5,6 @@
 #include "chrome/browser/web_applications/commands/clear_browsing_data_command.h"
 
 #include "base/memory/raw_ptr.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/test/fake_web_app_origin_association_manager.h"
@@ -20,7 +19,6 @@
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "content/public/browser/web_contents.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
 
 namespace web_app {
@@ -28,12 +26,10 @@ namespace web_app {
 class ClearBrowsingDataCommandTest : public WebAppTest {
  protected:
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        blink::features::kWebAppMigrationApi);
     WebAppTest::SetUp();
 
     auto association_manager =
-        std::make_unique<FakeWebAppOriginAssociationManager>();
+        std::make_unique<FakeWebAppOriginAssociationManager>(*profile());
     association_manager->set_pass_through(true);
     fake_provider().SetOriginAssociationManager(std::move(association_manager));
 
@@ -45,9 +41,6 @@ class ClearBrowsingDataCommandTest : public WebAppTest {
     fake_provider().on_registry_ready().Post(FROM_HERE, run_loop.QuitClosure());
     run_loop.Run();
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(ClearBrowsingDataCommandTest, ClearLastLaunchTimeForAllTimes) {

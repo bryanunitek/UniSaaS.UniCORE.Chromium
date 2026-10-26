@@ -147,8 +147,7 @@ bool WebFontTypefaceFactory::CreateTypeface(
   CHECK(!typeface);
 
   if (!format_check.IsVariableFont() && !format_check.IsColorFont() &&
-      !format_check.IsCff2OutlineFont() &&
-      !format_check.IsEbdtEblcMonochromeFont()) {
+      !format_check.IsCff2OutlineFont()) {
     typeface = instantiator.make_system(data);
     if (typeface) {
       ReportInstantiationResult(
@@ -170,14 +169,11 @@ bool WebFontTypefaceFactory::CreateTypeface(
   struct {
     CheckFunction check_function;
     InstantionFunctionWithInstantiator instantiation_function;
-    std::optional<InstantiationResult> reportSuccess;
-    std::optional<InstantiationResult> reportFailure;
+    std::optional<InstantiationResult> report_success;
+    std::optional<InstantiationResult> report_failure;
   } instantiation_rules[] = {
       // We don't expect variable CBDT/CBLC or Sbix variable fonts for now.
       {&FontFormatCheck::IsCbdtCblcColorFont, &MakeFontationsFallbackPreferred,
-       InstantiationResult::kSuccessCbdtCblcColorFont, std::nullopt},
-      {&FontFormatCheck::IsEbdtEblcMonochromeFont,
-       &MakeFontationsFallbackPreferred,
        InstantiationResult::kSuccessCbdtCblcColorFont, std::nullopt},
       {&FontFormatCheck::IsColrCpalColorFontV1,
        &MakeFontationsFallbackPreferred,
@@ -202,10 +198,10 @@ bool WebFontTypefaceFactory::CreateTypeface(
   for (auto& rule : instantiation_rules) {
     if (std::invoke(rule.check_function, format_check)) {
       typeface = rule.instantiation_function(data, instantiator);
-      if (typeface && rule.reportSuccess.has_value()) {
-        ReportInstantiationResult(*rule.reportSuccess);
-      } else if (!typeface && rule.reportFailure.has_value()) {
-        ReportInstantiationResult(*rule.reportFailure);
+      if (typeface && rule.report_success.has_value()) {
+        ReportInstantiationResult(*rule.report_success);
+      } else if (!typeface && rule.report_failure.has_value()) {
+        ReportInstantiationResult(*rule.report_failure);
       }
       return typeface.get();
     }

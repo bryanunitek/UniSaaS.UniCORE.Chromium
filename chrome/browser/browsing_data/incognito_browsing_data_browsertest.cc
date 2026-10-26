@@ -23,7 +23,8 @@
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/media/clear_key_cdm_test_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -80,17 +81,17 @@ class IncognitoBrowsingDataBrowserTest
     UseIncognitoBrowser();
   }
 
-  Browser* GetRegularBrowser() { return browser(); }
+  BrowserWindowInterface* GetRegularBrowser() { return browser(); }
 
-  Browser* GetIncognitoBrowser() { return GetBrowser(); }
+  BrowserWindowInterface* GetIncognitoBrowser() { return GetBrowser(); }
 
   // Test a data type by creating a value in Incognito mode and checking it is
   // counted by the Incognito cookie counter and not by the regular mode one.
   // Then closing Incognito mode and ensuring it is not affecting a new
   // Incognito profile.
   void TestSiteData(const std::string& type) {
-    Browser* regular_browser = GetRegularBrowser();
-    Browser* incognito_browser = GetIncognitoBrowser();
+    BrowserWindowInterface* regular_browser = GetRegularBrowser();
+    BrowserWindowInterface* incognito_browser = GetIncognitoBrowser();
 
     EXPECT_TRUE(regular_browser->GetProfile()->IsRegularProfile());
     EXPECT_TRUE(incognito_browser->GetProfile()->IsIncognitoProfile());
@@ -133,8 +134,8 @@ class IncognitoBrowsingDataBrowserTest
   // Test that storage systems like filesystem, where just an access creates an
   // empty store, are counted and deleted correctly.
   void TestEmptySiteData(const std::string& type) {
-    Browser* regular_browser = GetRegularBrowser();
-    Browser* incognito_browser = GetIncognitoBrowser();
+    BrowserWindowInterface* regular_browser = GetRegularBrowser();
+    BrowserWindowInterface* incognito_browser = GetIncognitoBrowser();
 
     EXPECT_EQ(0, GetSiteDataCount(GetActiveWebContents(regular_browser)));
     EXPECT_EQ(0, GetSiteDataCount(GetActiveWebContents(incognito_browser)));
@@ -162,7 +163,8 @@ class IncognitoBrowsingDataBrowserTest
     ExpectTotalModelCount(incognito_browser, 0);
   }
 
-  inline void ExpectTotalModelCount(Browser* browser, size_t expected) {
+  inline void ExpectTotalModelCount(BrowserWindowInterface* browser,
+                                    size_t expected) {
     std::unique_ptr<BrowsingDataModel> browsing_data_model =
         GetBrowsingDataModel(browser->GetProfile());
 
@@ -181,7 +183,7 @@ class IncognitoBrowsingDataBrowserTest
 
   network::mojom::NetworkContext* network_context() const {
     return GetBrowser()
-        ->profile()
+        ->GetProfile()
         ->GetDefaultStoragePartition()
         ->GetNetworkContext();
   }
@@ -247,7 +249,7 @@ IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest, MediaDeviceIdSalt) {
 IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest,
                        VideoDecodePerfHistory) {
   media::VideoDecodePerfHistory* video_decode_perf_history =
-      GetBrowser()->profile()->GetVideoDecodePerfHistory();
+      GetBrowser()->GetProfile()->GetVideoDecodePerfHistory();
 
   // Save a video decode record. Note: we avoid using a web page to generate the
   // stats as this takes at least 5 seconds and even then is not a guarantee
@@ -300,7 +302,7 @@ IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest,
   // |is_power_efficient| should report true because the VideoDecodePerfHistory
   // optimistically returns true when it has no data.
   media::VideoDecodePerfHistory* regular_mode_video_decode_perf_history =
-      GetRegularBrowser()->profile()->GetVideoDecodePerfHistory();
+      GetRegularBrowser()->GetProfile()->GetVideoDecodePerfHistory();
   {
     base::RunLoop run_loop;
     regular_mode_video_decode_perf_history->GetPerfInfo(
@@ -316,7 +318,7 @@ IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest,
   // Restart Incognito.
   RestartIncognitoBrowser();
   video_decode_perf_history =
-      GetBrowser()->profile()->GetVideoDecodePerfHistory();
+      GetBrowser()->GetProfile()->GetVideoDecodePerfHistory();
 
   // Verify history no longer exists. Both |is_smooth| and |is_power_efficient|
   // should now report true because the VideoDecodePerfHistory optimistically
@@ -359,7 +361,7 @@ IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest, Cache) {
 
 IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest,
                        ExternalProtocolHandlerPerOriginPrefs) {
-  Profile* profile = GetBrowser()->profile();
+  Profile* profile = GetBrowser()->GetProfile();
   url::Origin test_origin = url::Origin::Create(GURL("https://example.test/"));
   const std::string serialized_test_origin = test_origin.Serialize();
   base::DictValue allowed_protocols_for_origin;
@@ -379,7 +381,7 @@ IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest,
   ASSERT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 
   RestartIncognitoBrowser();
-  profile = GetBrowser()->profile();
+  profile = GetBrowser()->GetProfile();
 
   block_state =
       ExternalProtocolHandler::GetBlockState("tel", &test_origin, profile);

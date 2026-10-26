@@ -18,7 +18,6 @@
 #include "base/version.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/content_settings/page_specific_content_settings_delegate.h"
-#include "chrome/browser/first_party_sets/scoped_mock_first_party_sets_handler.h"
 #include "chrome/browser/webid/federated_identity_permission_context.h"
 #include "chrome/browser/webid/federated_identity_permission_context_factory.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
@@ -29,6 +28,7 @@
 #include "components/content_settings/core/common/content_settings_constraints.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/content_settings/core/common/content_settings_utils.h"
+#include "components/content_settings/core/common/features.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/metrics/dwa/dwa_recorder.h"
 #include "components/permissions/constants.h"
@@ -54,8 +54,6 @@
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "net/base/schemeful_site.h"
-#include "net/first_party_sets/first_party_set_entry.h"
-#include "net/first_party_sets/global_first_party_sets.h"
 #include "net/storage_access_api/status.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
@@ -66,8 +64,6 @@ namespace {
 
 using testing::_;
 using testing::AllOf;
-using testing::Contains;
-using testing::Each;
 using testing::ElementsAre;
 using testing::ElementsAreArray;
 using testing::Field;
@@ -84,7 +80,6 @@ using PermissionStatus = blink::mojom::PermissionStatus;
 constexpr char kGrantIsImplicitHistogram[] =
     "API.StorageAccess.GrantIsImplicit";
 constexpr char kPromptResultHistogram[] = "Permissions.Action.StorageAccess";
-constexpr char kRequestOutcomeHistogram[] = "API.StorageAccess.RequestOutcome";
 constexpr int kImplicitGrantLimit = 5;  // Implicit grant limit for testing.
 constexpr int kDefaultDismissalsBeforeEmbargo = 3;
 
@@ -101,20 +96,6 @@ MATCHER_P2(DwaEntryMatches, outcome, requester, "") {
                   testing::UnorderedElementsAre(testing::Pair(
                       kDwaMetricsHash, static_cast<int64_t>(outcome))))),
       arg, result_listener);
-}
-
-MATCHER_P(DecidedByRelatedWebsiteSets, inner, "") {
-  return testing::ExplainMatchResult(
-      inner, arg.metadata.decided_by_related_website_sets(), result_listener);
-}
-
-MATCHER_P(IsExpired, inner, "") {
-  return testing::ExplainMatchResult(inner, arg.IsExpired(), result_listener);
-}
-
-MATCHER_P(ExpirationIs, inner, "") {
-  return testing::ExplainMatchResult(inner, arg.metadata.expiration(),
-                                     result_listener);
 }
 
 GURL GetTopLevelURL() {
@@ -195,6 +176,7 @@ class StorageAccessGrantPermissionContextTest
     metrics::dwa::DwaRecorder::Get()->Purge();
     ASSERT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
                 testing::IsEmpty());
+    StorageAccessGrantPermissionContext::SetImplicitGrantLimitForTesting(0);
     ChromeRenderViewHostTestHarness::TearDown();
   }
 
@@ -322,7 +304,6 @@ class StorageAccessGrantPermissionContextTest
       mock_permission_prompt_factory_;
   permissions::PermissionRequestID::RequestLocalId::Generator
       request_id_generator_;
-  first_party_sets::ScopedMockFirstPartySetsHandler first_party_sets_handler_;
 };
 
 TEST_F(StorageAccessGrantPermissionContextTest, InsecureOriginsDisallowed) {
@@ -350,60 +331,6 @@ TEST_F(StorageAccessGrantPermissionContextTest, OpaqueOriginDisallowed) {
   EXPECT_EQ(1, static_cast<content::MockRenderProcessHost*>(
                    web_contents()->GetPrimaryMainFrame()->GetProcess())
                    ->bad_msg_count());
-}
-
-TEST_F(StorageAccessGrantPermissionContextTest, FencedFrameDisallowed) {
-  NavigateAndCommit(GetTopLevelURL());
-
-  content::RenderFrameHost* fenced_frame_rfh =
-      content::RenderFrameHostTester::For(main_rfh())->AppendFencedFrame();
-
-  auto request_data = std::make_unique<permissions::PermissionRequestData>(
-      content::PermissionDescriptorUtil::
-          CreatePermissionDescriptorForPermissionType(
-              permissions::PermissionUtil::ContentSettingsTypeToPermissionType(
-                  ContentSettingsType::STORAGE_ACCESS)),
-      CreateFakeID(fenced_frame_rfh), /*user_gesture=*/true, GetRequesterURL(),
-      GetTopLevelURL());
-
-  content::PermissionResult result =
-      RequestPermission(std::move(request_data)).Take();
-
-  EXPECT_EQ(PermissionStatus::DENIED, result.status);
-  EXPECT_EQ(content::PermissionStatusSource::FENCED_FRAME, result.source);
-
-  EXPECT_EQ(1, static_cast<content::MockRenderProcessHost*>(
-                   fenced_frame_rfh->GetProcess())
-                   ->bad_msg_count());
-}
-
-TEST_F(StorageAccessGrantPermissionContextTest,
-       FencedFrameQueryReturnsDeniedEvenWithGrant) {
-  NavigateAndCommit(GetTopLevelURL());
-
-  // Set an explicit grant.
-  HostContentSettingsMap* settings_map =
-      HostContentSettingsMapFactory::GetForProfile(profile());
-  settings_map->SetContentSettingDefaultScope(
-      GetRequesterURL(), GetTopLevelURL(), ContentSettingsType::STORAGE_ACCESS,
-      CONTENT_SETTING_ALLOW);
-
-  content::RenderFrameHost* fenced_frame_rfh =
-      content::RenderFrameHostTester::For(main_rfh())->AppendFencedFrame();
-
-  // The permissions framework transforms all permissions statuses to `DENIED`
-  // within fenced frames.
-  EXPECT_EQ(
-      PermissionStatus::DENIED,
-      permission_context()
-          ->GetPermissionStatus(
-              content::PermissionDescriptorUtil::
-                  CreatePermissionDescriptorForPermissionType(
-                      permissions::PermissionUtil::
-                          ContentSettingsTypeToPermissionType(
-                              permission_context()->content_settings_type())),
-              fenced_frame_rfh, GetRequesterURL(), GetTopLevelURL())
-          .status);
 }
 
 TEST_F(StorageAccessGrantPermissionContextTest,
@@ -461,8 +388,6 @@ TEST_F(StorageAccessGrantPermissionContextTest,
   histogram_tester().ExpectUniqueSample(
       kPromptResultHistogram, /*sample=*/permissions::PermissionAction::GRANTED,
       1);
-  histogram_tester().ExpectUniqueSample(
-      kRequestOutcomeHistogram, /*sample=*/RequestOutcome::kGrantedByUser, 1);
 
   EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
               ElementsAre(Pointee(
@@ -494,8 +419,6 @@ TEST_F(StorageAccessGrantPermissionContextTest, PermissionDecided) {
 
   request_manager()->Dismiss(/*prompt_options=*/std::monostate());
   EXPECT_EQ(PermissionStatus::ASK, future.Get().status);
-  histogram_tester().ExpectUniqueSample(kRequestOutcomeHistogram,
-                                        RequestOutcome::kDismissedByUser, 1);
 
   EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
               ElementsAre(Pointee(
@@ -515,8 +438,6 @@ TEST_F(StorageAccessGrantPermissionContextTest,
             DecidePermission(MakePermissionRequestData(/*user_gesture=*/false))
                 .Get()
                 .status);
-  histogram_tester().ExpectUniqueSample(
-      kRequestOutcomeHistogram, RequestOutcome::kDeniedByPrerequisites, 1);
 
   EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
               ElementsAre(Pointee(
@@ -536,8 +457,6 @@ TEST_F(StorageAccessGrantPermissionContextTest,
                              /*simulate_user_gesture=*/false)
                 .Get()
                 .status);
-  histogram_tester().ExpectUniqueSample(
-      kRequestOutcomeHistogram, RequestOutcome::kDeniedByPrerequisites, 1);
 
   EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
               ElementsAre(Pointee(
@@ -557,8 +476,6 @@ TEST_F(StorageAccessGrantPermissionContextTest, PermissionGrantReused) {
   EXPECT_TRUE(
       RequestPermission(MakePermissionRequestData(/*user_gesture=*/true))
           .Wait());
-  histogram_tester().ExpectUniqueSample(
-      kRequestOutcomeHistogram, RequestOutcome::kReusedPreviousDecision, 1);
 
   EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
               ElementsAre(Pointee(
@@ -578,8 +495,6 @@ TEST_F(StorageAccessGrantPermissionContextTest, BlockReused) {
   EXPECT_TRUE(
       RequestPermission(MakePermissionRequestData(/*user_gesture=*/true))
           .Wait());
-  histogram_tester().ExpectUniqueSample(
-      kRequestOutcomeHistogram, RequestOutcome::kReusedPreviousDecision, 1);
 
   EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
               ElementsAre(Pointee(
@@ -602,8 +517,6 @@ TEST_F(StorageAccessGrantPermissionContextTest, FpsGrantReused) {
   EXPECT_TRUE(
       RequestPermission(MakePermissionRequestData(/*user_gesture=*/true))
           .Wait());
-  histogram_tester().ExpectUniqueSample(
-      kRequestOutcomeHistogram, RequestOutcome::kReusedImplicitGrant, 1);
 
   EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
               ElementsAre(Pointee(
@@ -645,8 +558,6 @@ TEST_F(StorageAccessGrantPermissionContextTest, AllowedByCookieSettings) {
             DecidePermission(MakePermissionRequestData(/*user_gesture=*/false))
                 .Get()
                 .status);
-  histogram_tester().ExpectUniqueSample(
-      kRequestOutcomeHistogram, RequestOutcome::kAllowedByCookieSettings, 1);
 
   EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
               ElementsAre(Pointee(
@@ -672,8 +583,6 @@ TEST_F(StorageAccessGrantPermissionContextTest, DeniedByCookieSettings) {
             DecidePermission(MakePermissionRequestData(/*user_gesture=*/false))
                 .Get()
                 .status);
-  histogram_tester().ExpectUniqueSample(
-      kRequestOutcomeHistogram, RequestOutcome::kDeniedByCookieSettings, 1);
 
   EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
               ElementsAre(Pointee(
@@ -736,9 +645,6 @@ TEST_F(StorageAccessGrantPermissionContextAPIWithImplicitGrantsTest,
                                       kImplicitGrantLimit);
   histogram_tester().ExpectBucketCount(kGrantIsImplicitHistogram,
                                        /*sample=*/true, kImplicitGrantLimit);
-  EXPECT_EQ(histogram_tester().GetBucketCount(
-                kRequestOutcomeHistogram, RequestOutcome::kGrantedByAllowance),
-            kImplicitGrantLimit);
 
   std::vector<Matcher<mojo::StructPtr<DwaEntry>>> expected_dwa_entries(
       kImplicitGrantLimit,
@@ -761,9 +667,6 @@ TEST_F(StorageAccessGrantPermissionContextAPIWithImplicitGrantsTest,
     request_manager()->Dismiss(/*prompt_options=*/std::monostate());
     EXPECT_EQ(PermissionStatus::ASK, future.Get().status);
   }
-  EXPECT_EQ(histogram_tester().GetBucketCount(kRequestOutcomeHistogram,
-                                              RequestOutcome::kDismissedByUser),
-            1);
 
   expected_dwa_entries.emplace_back(
       Pointee(DwaEntryMatches(RequestOutcome::kDismissedByUser,
@@ -800,9 +703,6 @@ TEST_F(StorageAccessGrantPermissionContextAPIWithImplicitGrantsTest,
   // We should have no prompts still and our latest result should be an allow.
   EXPECT_EQ(PermissionStatus::GRANTED, future.Get().status);
   EXPECT_FALSE(request_manager()->IsRequestInProgress());
-  EXPECT_EQ(histogram_tester().GetBucketCount(
-                kRequestOutcomeHistogram, RequestOutcome::kGrantedByAllowance),
-            6);
 
   expected_dwa_entries.emplace_back(
       Pointee(DwaEntryMatches(RequestOutcome::kGrantedByAllowance,
@@ -851,12 +751,6 @@ TEST_F(StorageAccessGrantPermissionContextAPIWithImplicitGrantsTest,
                 .Get()
                 .status);
   EXPECT_FALSE(request_manager()->IsRequestInProgress());
-  EXPECT_EQ(histogram_tester().GetBucketCount(
-                kRequestOutcomeHistogram, RequestOutcome::kGrantedByAllowance),
-            implicit_grant_limit);
-  EXPECT_EQ(histogram_tester().GetBucketCount(
-                kRequestOutcomeHistogram, RequestOutcome::kReusedImplicitGrant),
-            1);
 
   expected_dwa_entries.emplace_back(
       Pointee(DwaEntryMatches(RequestOutcome::kReusedImplicitGrant,
@@ -892,8 +786,6 @@ TEST_F(StorageAccessGrantPermissionContextTest, ExplicitGrantDenial) {
   histogram_tester().ExpectUniqueSample(
       kPromptResultHistogram, /*sample=*/permissions::PermissionAction::DENIED,
       1);
-  histogram_tester().ExpectUniqueSample(
-      kRequestOutcomeHistogram, /*sample=*/RequestOutcome::kDeniedByUser, 1);
 
   EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
               ElementsAre(Pointee(
@@ -965,8 +857,6 @@ TEST_F(StorageAccessGrantPermissionContextTest, ExplicitGrantAccept) {
                                         /*sample=*/false, 1);
   histogram_tester().ExpectUniqueSample(
       kPromptResultHistogram, permissions::PermissionAction::GRANTED, 1);
-  histogram_tester().ExpectUniqueSample(kRequestOutcomeHistogram,
-                                        RequestOutcome::kGrantedByUser, 1);
 
   EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
               ElementsAre(Pointee(
@@ -976,87 +866,6 @@ TEST_F(StorageAccessGrantPermissionContextTest, ExplicitGrantAccept) {
   EXPECT_THAT(page_specific_content_settings()->GetTwoSiteRequests(
                   ContentSettingsType::STORAGE_ACCESS),
               UnorderedElementsAre(Pair(GetRequesterSite(), true)));
-}
-
-class StorageAccessGrantPermissionContextAPIWithFirstPartySetsTest
-    : public StorageAccessGrantPermissionContextTest {
- public:
-  StorageAccessGrantPermissionContextAPIWithFirstPartySetsTest() = default;
-
-  void SetUp() override {
-    StorageAccessGrantPermissionContextTest::SetUp();
-
-    // Enable Related Website Sets (formerly First Party Sets).
-    profile()->GetPrefs()->SetBoolean(
-        prefs::kPrivacySandboxRelatedWebsiteSetsEnabled, true);
-    // Create a FPS with https://requester.example.com as the member and
-    // https://embedder.com as the primary.
-    first_party_sets_handler_.SetGlobalSets(
-        net::GlobalFirstPartySets::CreateForTesting(
-            base::Version("1.2.3"),
-            /*entries=*/
-            {{net::SchemefulSite(GetTopLevelURL()),
-              {net::FirstPartySetEntry(net::SchemefulSite(GetTopLevelURL()),
-                                       net::SiteType::kPrimary)}},
-             {net::SchemefulSite(GetRequesterURL()),
-              {net::FirstPartySetEntry(net::SchemefulSite(GetTopLevelURL()),
-                                       net::SiteType::kAssociated)}}},
-            /*aliases=*/{}));
-  }
-
- private:
-  first_party_sets::ScopedMockFirstPartySetsHandler first_party_sets_handler_;
-};
-
-TEST_F(StorageAccessGrantPermissionContextAPIWithFirstPartySetsTest,
-       ImplicitGrant_AutograntedWithinFPS) {
-  HostContentSettingsMap* settings_map =
-      HostContentSettingsMapFactory::GetForProfile(profile());
-  DCHECK(settings_map);
-
-  // Overriding the clock to test expiry time.
-  base::SimpleTestClock test_clock;
-  test_clock.SetNow(base::Time::Now());
-  settings_map->SetClockForTesting(&test_clock);
-
-  // Check no `SessionModel::DURABLE` setting with
-  // `decided_by_related_website_sets` exists yet.
-  ASSERT_THAT(settings_map->GetSettingsForOneType(
-                  ContentSettingsType::STORAGE_ACCESS,
-                  content_settings::mojom::SessionModel::DURABLE),
-              Each(DecidedByRelatedWebsiteSets(false)));
-
-  EXPECT_EQ(DecidePermission(MakePermissionRequestData(/*user_gesture=*/true))
-                .Get()
-                .status,
-            PermissionStatus::GRANTED);
-
-  histogram_tester().ExpectUniqueSample(
-      kRequestOutcomeHistogram, RequestOutcome::kGrantedByFirstPartySet, 1);
-  histogram_tester().ExpectUniqueSample(kGrantIsImplicitHistogram,
-                                        /*sample=*/true, 1);
-
-  EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
-              ElementsAre(Pointee(
-                  DwaEntryMatches(RequestOutcome::kGrantedByFirstPartySet,
-                                  net::SchemefulSite(GetRequesterURL())))));
-
-  DCHECK(settings_map);
-  // Check the `SessionModel::DURABLE` setting with
-  // `decided_by_related_website_sets` granted by FPS and its expiry.
-  EXPECT_THAT(
-      settings_map->GetSettingsForOneType(
-          ContentSettingsType::STORAGE_ACCESS,
-          content_settings::mojom::SessionModel::DURABLE),
-      Contains(AllOf(
-          DecidedByRelatedWebsiteSets(true), IsExpired(false),
-          ExpirationIs(
-              test_clock.Now() +
-              permissions::kStorageAccessAPIRelatedWebsiteSetsLifetime))));
-
-  EXPECT_THAT(page_specific_content_settings()->GetTwoSiteRequests(
-                  ContentSettingsType::STORAGE_ACCESS),
-              IsEmpty());
 }
 
 TEST_F(StorageAccessGrantPermissionContextTest, RepeatedDismissalsNotExposed) {
@@ -1152,9 +961,6 @@ TEST_P(StorageAccessGrantPermissionContextAPIWithFedCMConnectionTest,
   // Ensure no prompt is shown.
   ASSERT_FALSE(request_manager()->IsRequestInProgress());
   EXPECT_EQ(PermissionStatus::GRANTED, future.Get().status);
-
-  histogram_tester().ExpectUniqueSample(kRequestOutcomeHistogram,
-                                        RequestOutcome::kAllowedByFedCM, 1);
 
   EXPECT_THAT(metrics::dwa::DwaRecorder::Get()->GetEntriesForTesting(),
               ElementsAre(Pointee(

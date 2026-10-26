@@ -18,7 +18,6 @@
 #include "base/trace_event/process_memory_dump.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "cc/base/features.h"
 #include "cc/base/histograms.h"
 #include "cc/paint/display_item_list.h"
 #include "cc/paint/paint_canvas.h"
@@ -33,10 +32,10 @@
 #include "gpu/command_buffer/client/shared_image_interface.h"
 #include "gpu/command_buffer/common/shared_image_trace_utils.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
+#include "gpu/config/gpu_finch_features.h"
 #include "skia/ext/legacy_display_globals.h"
 #include "third_party/skia/include/core/SkPictureRecorder.h"
 #include "third_party/skia/include/core/SkSurface.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/axis_transform2d.h"
 #include "url/gurl.h"
 
@@ -52,8 +51,6 @@ GpuRasterBufferProvider::RasterBufferImpl::RasterBufferImpl(
     auto backing = std::make_unique<ResourcePool::Backing>(
         in_use_resource.size(), in_use_resource.format(),
         in_use_resource.color_space());
-    backing->is_using_raw_draw =
-        !client_->tile_overlay_candidate_ && client_->is_using_raw_draw_;
     in_use_resource.set_backing(std::move(backing));
   }
   backing_ = in_use_resource.backing();
@@ -108,9 +105,13 @@ GpuRasterBufferProvider::GpuRasterBufferProvider(
       max_tile_size_(max_tile_size),
       pending_raster_queries_(pending_raster_queries),
       raster_metric_probability_(raster_metric_probability),
-      is_using_raw_draw_(features::IsUsingRawDraw()),
       is_using_dmsaa_(
-          base::FeatureList::IsEnabled(features::kUseDMSAAForTiles)) {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID)
+          true
+#else
+          false
+#endif
+      ) {
   DCHECK(pending_raster_queries);
   DCHECK(compositor_context_provider);
   CHECK(worker_context_provider);
@@ -122,16 +123,6 @@ GpuRasterBufferProvider::GpuRasterBufferProvider(
     should_flush_tile_raster_commands_ =
         worker_context_provider->ContextCapabilities()
             .use_deferred_graphite_submit;
-
-#if BUILDFLAG(IS_ANDROID)
-    auto is_using_vulkan =
-        worker_context_provider->ContextCapabilities().using_vulkan_context;
-
-    // On Android, DMSAA on vulkan backend launch is controlled by
-    // kUseDMSAAForTiles.
-    is_using_dmsaa_ = !is_using_vulkan ||
-                      base::FeatureList::IsEnabled(features::kUseDMSAAForTiles);
-#endif
   }
 }
 
@@ -154,14 +145,12 @@ void GpuRasterBufferProvider::Flush() {
 bool GpuRasterBufferProvider::IsResourceReadyToDraw(
     const ResourcePool::InUsePoolResource& resource) {
   FlushIfNeeded();
-  const gpu::SyncToken& sync_token = resource.backing()->mailbox_sync_token;
-  // This SyncToken() should have been set by calling OrderingBarrier() before
-  // calling this.
-  DCHECK(sync_token.HasData());
-
-  // IsSyncTokenSignaled is thread-safe, no need for worker context lock.
-  return worker_context_provider_->ContextSupport()->IsSyncTokenSignaled(
-      sync_token);
+  if (auto shared_image = resource.backing()->shared_image()) {
+    return shared_image->IsSyncTokenSignaled(
+        worker_context_provider_->ContextSupport(),
+        resource.backing()->mailbox_sync_token);
+  }
+  return true;
 }
 
 bool GpuRasterBufferProvider::CanPartialRasterIntoProvidedResource() const {
@@ -173,25 +162,22 @@ uint64_t GpuRasterBufferProvider::SetReadyToDrawCallback(
     base::OnceClosure callback,
     uint64_t pending_callback_id) {
   FlushIfNeeded();
-  gpu::SyncToken latest_sync_token;
+
+  std::vector<scoped_refptr<gpu::ClientSharedImage>> shared_images;
+  std::vector<gpu::SyncToken> sync_tokens;
+
+  shared_images.reserve(resources.size());
+  sync_tokens.reserve(resources.size());
+
   for (const auto* in_use : resources) {
-    const gpu::SyncToken& sync_token = in_use->backing()->mailbox_sync_token;
-    if (sync_token.release_count() > latest_sync_token.release_count())
-      latest_sync_token = sync_token;
-  }
-  uint64_t callback_id = latest_sync_token.release_count();
-  DCHECK_NE(callback_id, 0u);
-
-  // If the callback is different from the one the caller is already waiting on,
-  // pass the callback through to SignalSyncToken. Otherwise the request is
-  // redundant.
-  if (callback_id != pending_callback_id) {
-    // Use the compositor context because we want this callback on the
-    // compositor thread.
-    compositor_context_provider_->ContextSupport()->SignalSyncToken(
-        latest_sync_token, std::move(callback));
+    shared_images.push_back(in_use->backing()->shared_image());
+    sync_tokens.push_back(in_use->backing()->mailbox_sync_token);
   }
 
+  uint64_t callback_id = gpu::ClientSharedImage::SignalLatestSyncToken(
+      std::move(shared_images), std::move(sync_tokens), std::move(callback),
+      compositor_context_provider_->SharedImageInterface(),
+      worker_context_provider_->ContextSupport(), pending_callback_id);
   return callback_id;
 }
 
@@ -302,8 +288,6 @@ void GpuRasterBufferProvider::RasterBufferImpl::RasterizeSource(
                                      gpu::SHARED_IMAGE_USAGE_RASTER_WRITE;
     if (client_->tile_overlay_candidate_) {
       flags |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
-    } else if (client_->is_using_raw_draw_) {
-      flags |= gpu::SHARED_IMAGE_USAGE_RAW_DRAW;
     }
     backing_->CreateSharedImage(sii, flags, "GpuRasterTile");
     mailbox_needs_clear = true;
@@ -322,17 +306,11 @@ void GpuRasterBufferProvider::RasterBufferImpl::RasterizeSource(
           ? (client_->is_using_dmsaa_ ? gpu::raster::kDMSAA
                                       : gpu::raster::kMSAA)
           : gpu::raster::kNoMSAA;
-  // With Raw Draw, the framebuffer will be the rasterization target. It cannot
-  // support LCD text, so disable LCD text for Raw Draw backings.
-  // TODO(penghuang): remove it when sktext::gpu::Slug can be serialized.
-  bool is_raw_draw_backing =
-      client_->is_using_raw_draw_ && !client_->tile_overlay_candidate_;
-  bool use_lcd_text = playback_settings.use_lcd_text && !is_raw_draw_backing;
 
   ri->BeginRasterCHROMIUM(
       raster_source->background_color(), mailbox_needs_clear,
-      playback_settings.msaa_sample_count, msaa_mode, use_lcd_text,
-      playback_settings.visible, backing_->color_space(),
+      playback_settings.msaa_sample_count, msaa_mode,
+      playback_settings.use_lcd_text, backing_->shared_image()->color_space(),
       playback_settings.hdr_headroom, backing_->shared_image()->mailbox().name);
 
   gfx::Vector2dF recording_to_raster_scale = transform.scale();

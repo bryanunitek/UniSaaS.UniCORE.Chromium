@@ -16,7 +16,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.IntentHandler;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.components.browser_ui.media.MediaNotificationInfo;
@@ -40,7 +39,7 @@ public class MediaSessionTabHelper implements MediaSessionHelper.Delegate, UserD
 
     @VisibleForTesting
     final TabObserver mTabObserver =
-            new EmptyTabObserver() {
+            new TabObserver() {
                 @Override
                 public void onContentChanged(Tab tab) {
                     assert tab == mTab;
@@ -127,9 +126,13 @@ public class MediaSessionTabHelper implements MediaSessionHelper.Delegate, UserD
 
     @Override
     public MediaNotificationInfo.Builder createMediaNotificationInfoBuilder() {
+        // The small icon must be a resource the system can resolve against this app's package,
+        // so it is supplied by the embedder rather than by MediaSessionHelper.
         return new MediaNotificationInfo.Builder()
                 .setInstanceId(assumeNonNull(mTab).getId())
-                .setId(R.id.media_playback_notification);
+                .setId(R.id.media_playback_notification)
+                .setNotificationSmallIcon(
+                        org.chromium.components.browser_ui.media.R.drawable.chrome_product_vd_24);
     }
 
     @Override
@@ -150,5 +153,10 @@ public class MediaSessionTabHelper implements MediaSessionHelper.Delegate, UserD
 
         MediaNotificationManager.activateAndroidMediaSession(
                 mTab.getId(), R.id.media_playback_notification);
+    }
+
+    @VisibleForTesting
+    public @Nullable MediaSessionHelper getMediaSessionHelperForTesting() {
+        return mMediaSessionHelper;
     }
 }

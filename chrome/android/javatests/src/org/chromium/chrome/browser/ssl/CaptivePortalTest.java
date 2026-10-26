@@ -17,12 +17,15 @@ import org.junit.runner.RunWith;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.params.ParameterizedCommandLineFlags;
 import org.chromium.base.test.params.ParameterizedCommandLineFlags.Switches;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ntp.RegularNewTabPageStation;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.browser.TabTitleObserver;
@@ -35,14 +38,16 @@ import java.lang.annotation.RetentionPolicy;
 
 /** Tests for the Captive portal interstitial. */
 @RunWith(ChromeJUnit4ClassRunner.class)
+@Batch(Batch.PER_CLASS)
 @MediumTest
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @ParameterizedCommandLineFlags({
     @Switches,
 })
+// TODO(b/555414915): Update Android tests with WebUI NTP enabled on AL.
+@DisableFeatures(ChromeFeatureList.USE_WEB_UI_NTP_ANDROID)
 public class CaptivePortalTest {
     private static final String CAPTIVE_PORTAL_INTERSTITIAL_TITLE_PREFIX = "Connect to";
-    private static final String SSL_INTERSTITIAL_TITLE = "Privacy error";
     private static final int INTERSTITIAL_TITLE_UPDATE_TIMEOUT_SECONDS = 5;
     private RegularNewTabPageStation mNtp;
 
@@ -84,8 +89,8 @@ public class CaptivePortalTest {
     }
 
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     private EmbeddedTestServer mServer;
 

@@ -27,6 +27,7 @@
 #include "content/browser/child_process_host_impl.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
+#include "content/browser/sandboxed_process_launcher_delegate.h"
 #include "content/browser/service_host/utility_sandbox_delegate.h"
 #include "content/common/features.h"
 #include "content/common/in_process_child_thread_params.h"
@@ -34,7 +35,6 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/render_process_host.h"
-#include "content/public/browser/sandboxed_process_launcher_delegate.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_descriptor_keys.h"
 #include "content/public/common/content_features.h"
@@ -43,6 +43,7 @@
 #include "content/public/common/zygote/zygote_buildflags.h"
 #include "device/vr/buildflags/buildflags.h"
 #include "media/base/media_switches.h"
+#include "media/capture/capture_switches.h"
 #include "media/media_buildflags.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
 #include "sandbox/policy/sandbox_type.h"
@@ -74,7 +75,6 @@
 #if BUILDFLAG(IS_WIN)
 #include "base/synchronization/waitable_event.h"
 #include "components/app_launch_prefetch/app_launch_prefetch.h"
-#include "media/capture/capture_switches.h"
 #include "services/audio/public/mojom/audio_service.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/webnn/public/mojom/webnn_compiler_service.mojom.h"
@@ -84,7 +84,6 @@
 #if BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
 #include "base/task/sequenced_task_runner.h"
 #include "components/viz/host/gpu_client.h"
-#include "media/capture/capture_switches.h"
 #include "services/video_capture/public/mojom/video_capture_service.mojom.h"
 #endif  // BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
 
@@ -179,13 +178,13 @@ UtilityProcessHost::UtilityProcessHost(Options options,
       gpu_client_(nullptr, base::OnTaskRunnerDeleter(nullptr)),
 #endif  // BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
       client_(std::move(client)) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   process_ =
       std::make_unique<BrowserChildProcessHostImpl>(PROCESS_TYPE_UTILITY, this);
 }
 
 UtilityProcessHost::~UtilityProcessHost() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (client_ && launch_state_ == LaunchState::kLaunchComplete) {
     client_->OnProcessTerminatedNormally();
   }
@@ -222,6 +221,13 @@ UtilityProcessHost::Options::WithExtraCommandLineSwitches(
   return *this;
 }
 
+UtilityProcessHost::Options&
+UtilityProcessHost::Options::WithExtraCommandLineSwitchKeyValues(
+    std::vector<std::pair<std::string, std::string>> switch_key_values) {
+  extra_switch_key_values_ = std::move(switch_key_values);
+  return *this;
+}
+
 #if BUILDFLAG(IS_WIN)
 UtilityProcessHost::Options& UtilityProcessHost::Options::WithPreloadLibraries(
     const std::vector<base::FilePath>& preloads) {
@@ -244,7 +250,7 @@ UtilityProcessHost::Options& UtilityProcessHost::Options::WithFileToPreload(
     std::variant<base::FilePath, base::ScopedFD> file) {
   auto [it, inserted] =
       file_data_->files_to_preload.try_emplace(std::move(key), std::move(file));
-  DCHECK(inserted);
+  CHECK(inserted, base::NotFatalUntil::M159);
   return *this;
 }
 #endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
@@ -326,7 +332,7 @@ bool UtilityProcessHost::StartProcess() {
   process_->SetMetricsName(options_.metrics_name_);
 
   if (RenderProcessHost::run_renderer_in_process()) {
-    DCHECK(g_utility_main_thread_factory);
+    CHECK(g_utility_main_thread_factory, base::NotFatalUntil::M159);
     // See comment in RenderProcessHostImpl::Init() for the background on why we
     // support single process mode this way.
     in_process_thread_.reset(g_utility_main_thread_factory(
@@ -355,7 +361,8 @@ bool UtilityProcessHost::StartProcess() {
 #else  // BUILDFLAG(IS_ANDROID)
 #if BUILDFLAG(IS_MAC)
   if (options_.sandbox_type_ == sandbox::mojom::Sandbox::kServiceWithJit) {
-    DCHECK_EQ(options_.child_flags_, ChildProcessHost::CHILD_RENDERER);
+    CHECK_EQ(options_.child_flags_, ChildProcessHost::CHILD_RENDERER,
+             base::NotFatalUntil::M159);
   }
 #endif  // BUILDFLAG(IS_MAC)
   int child_flags = options_.child_flags_;
@@ -428,6 +435,7 @@ bool UtilityProcessHost::StartProcess() {
       switches::kUseFakeDeviceForMediaStream,
       switches::kUseFakeMjpegDecodeAccelerator,
       switches::kUseFileForFakeVideoCapture,
+      switches::kVideoCaptureUseVirtualDevicesOnly,
       switches::kUseMockCertVerifierForTesting,
       switches::kMockCertVerifierDefaultResultForTesting,
       switches::kUtilityStartupDialog,
@@ -461,6 +469,7 @@ bool UtilityProcessHost::StartProcess() {
 #endif
 #if BUILDFLAG(ENABLE_VR)
       device::switches::kWebXrHandAnonymizationStrategy,
+      device::switches::kWebXrMaxFramebufferScale,
 #endif
 #if BUILDFLAG(IS_CHROMEOS)
       switches::kSchedulerBoostUrgent,
@@ -512,6 +521,10 @@ bool UtilityProcessHost::StartProcess() {
 
   for (const auto& extra_switch : options_.extra_switches_) {
     cmd_line->AppendSwitch(extra_switch);
+  }
+
+  for (const auto& [key, value] : options_.extra_switch_key_values_) {
+    cmd_line->AppendSwitchASCII(key, value);
   }
 
 #if BUILDFLAG(IS_WIN)

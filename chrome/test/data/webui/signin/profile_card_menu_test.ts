@@ -30,17 +30,17 @@ suite('ProfileCardMenuTest', function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     profileCardMenuElement = document.createElement('profile-card-menu');
     const testProfileState: ProfileState = {
-      profilePath: `profilePath`,
-      localProfileName: `profile`,
+      profilePath: 'profilePath',
+      localProfileName: 'profile',
       isSyncing: true,
       needsSignin: false,
-      gaiaName: `User`,
-      userName: `User@gmail.com`,
-      avatarIcon: `AvatarUrl`,
-      avatarBadge: ``,
-      profileCardButtonLabel: ``,
+      gaiaName: 'User',
+      userName: 'User@gmail.com',
+      avatarIcon: 'AvatarUrl',
+      avatarBadge: '',
+      profileCardButtonLabel: '',
       hasEnterpriseLabel: false,
-      hasAiRing: false,
+      hasAvatarRing: false,
     };
     profileCardMenuElement.profileState = testProfileState;
     document.body.appendChild(profileCardMenuElement);

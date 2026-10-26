@@ -9,6 +9,8 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/layout/grid/grid_item.h"
+#include "third_party/blink/renderer/core/layout/grid_lanes/grid_lane_data.h"
+#include "third_party/blink/renderer/core/layout/grid_lanes/track_opening.h"
 #include "third_party/blink/renderer/core/style/grid_area.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
@@ -31,57 +33,11 @@ class CORE_EXPORT GridLanesRunningPositions {
   STACK_ALLOCATED();
 
  public:
-  // Holds per-item data needed for stacking-axis alignment adjustment. More on
-  // stacking-axis alignment here:
-  // https://drafts.csswg.org/css-grid-3/#stacking-self-alignment
-  struct AlignmentCandidate {
-    DISALLOW_NEW();
-
-   public:
-    bool IsValid() const { return item != nullptr; }
-
-    void Trace(Visitor* visitor) const {
-      visitor->Trace(item);
-      visitor->Trace(layout_subtree);
-    }
-
-    Member<GridItemData> item;
-    wtf_size_t item_index{kNotFound};
-    // This is only needed for stretch aligned items as they will need to be
-    // relaid out once we know the final alignment candidate for a given track
-    // opening.
-    Member<GridLayoutSubtree> layout_subtree;
-    LayoutUnit available_alignment_space;
-  };
-
-  // Struct used to represent openings that occur in the tracks as a result of
-  // layouts with items of varying span sizes.
-  struct TrackOpening {
-    DISALLOW_NEW();
-
-   public:
-    TrackOpening() = default;
-    TrackOpening(LayoutUnit start_position, LayoutUnit end_position)
-        : start_position(start_position), end_position(end_position) {}
-
-    LayoutUnit Size() const { return end_position - start_position; }
-
-    void Trace(Visitor* visitor) const { visitor->Trace(alignment_candidate); }
-
-    // `start_position` and `end_position` the start and end of the opening in
-    // the stacking axis.
-    LayoutUnit start_position;
-    LayoutUnit end_position;
-
-    // The item directly above this opening, used for alignment in the stacking
-    // axis.
-    AlignmentCandidate alignment_candidate;
-  };
-
   GridLanesRunningPositions(const GridLayoutTrackCollection& track_collection,
                             const ComputedStyle& style,
                             LayoutUnit tie_threshold,
-                            bool is_stacking_axis_alignment_set = false)
+                            bool is_stacking_axis_alignment_set = false,
+                            bool has_main_gap_decorations = false)
       : track_collection_openings_(
             /*size=*/track_collection.EndLineOfImplicitGrid(),
             HeapVector<TrackOpening>(
@@ -95,11 +51,12 @@ class CORE_EXPORT GridLanesRunningPositions {
         grid_axis_direction_(style.GridLanesTrackSizingDirection()),
         is_dense_packing_(style.IsGridLanesPackDense()),
         is_reverse_track_direction_(style.IsReverseGridLanesTrackDirection()),
-        is_stacking_axis_alignment_set_(is_stacking_axis_alignment_set) {
+        is_stacking_axis_alignment_set_(is_stacking_axis_alignment_set),
+        has_main_gap_decorations_(has_main_gap_decorations) {
     // To avoid placing items in collapsed tracks, set such tracks to the max
     // size.
     for (wtf_size_t index : track_collection.CollapsedTrackIndexes()) {
-      track_collection_openings_[index].back().start_position =
+      track_collection_openings_[index].back().coordinates.start_position =
           LayoutUnit::Max();
     }
 
@@ -119,18 +76,20 @@ class CORE_EXPORT GridLanesRunningPositions {
   // item is placed across. The new running position accounts for the gap
   // between items if the user has specified one.
   //
-  // If stacking axis alignment is enabled, `grid_lanes_item` will be set as the
-  // item above the last unbounded opening in the track.
+  // If stacking axis alignment or gap decoration tracking is enabled,
+  // `grid_lanes_item` will be set as the item above the last unbounded opening
+  // in the track.
   //
-  // `max_running_position_for_span` should only be used in the case of
-  // dense-packing or the presence of stacking-axis alignment, and it is the
-  // current maximum running position of the tracks the item spans. This does
-  // not include the size of the item that we are laying out and placing, and is
-  // used to determine if a opening will be formed once the item is placed.
+  // `max_running_position_for_span` is the current maximum running position of
+  // the tracks the item spans. This does not include the size of the item that
+  // we are laying out and placing, and is used to determine if a opening will
+  // be formed once the item is placed. It is only used when
+  // `IsTrackingOpenings()` is true.
   //
-  // `item_index` is the index of the item's fragment in the container
-  // builder, and `layout_subtree` is the item's layout subtree (only
-  // non-null for subgrids).
+  // Without a lane graph, `item_index` indexes the item's fragment in the
+  // container builder. With a lane graph (gap decorations or fragmentation
+  // collection), complete item paths are inferred from `grid_lanes` instead.
+  // `layout_subtree` is the item's layout subtree (only non-null for subgrids).
   //
   // Example of how `max_running_position_for_span` is used when dense-packing
   // is enabled: |Track 1|Track 2|Track 3|
@@ -152,9 +111,11 @@ class CORE_EXPORT GridLanesRunningPositions {
   void UpdateRunningPositionsForSpan(
       GridItemData& grid_lanes_item,
       LayoutUnit new_running_position,
-      std::optional<LayoutUnit> max_running_position_for_span = std::nullopt,
+      LayoutUnit original_stacking_size,
+      LayoutUnit max_running_position_for_span,
       wtf_size_t item_index = kNotFound,
-      GridLayoutSubtree* layout_subtree = nullptr);
+      GridLayoutSubtree* layout_subtree = nullptr,
+      const GridLanesDataVector* grid_lanes = nullptr);
 
   // Returns the max-position for a given span.
   LayoutUnit GetMaxPositionForSpan(const GridSpan& span) const;
@@ -168,21 +129,40 @@ class CORE_EXPORT GridLanesRunningPositions {
       const GridArea& resolved_position,
       const GridTrackSizingDirection grid_axis_direction);
 
-  // If we can find an eligible track opening to fit the item that is higher
-  // than `auto_placement_stacking_axis_offset`, set `grid_lanes_item` to have
-  // the updated span location, adjust the track opening as needed (either
-  // erasing it or reducing the size), and return the running position at which
-  // the item will be placed. This method is only used when dense-packing is
-  // set. In the case where a multi-span item is densely-packed across the open
-  // ending of a track after the current running position, the running position
-  // of that track will be updated in this method. For an example, see the
-  // comment for `AccumulateTrackOpeningsToAccommodateItem`.
-  LayoutUnit GetEligibleTrackOpeningAndUpdateGridLanesItemSpan(
+  // If we can find an eligible track opening that is higher than
+  // `auto_placement_stacking_axis_offset`, or at the same running position but
+  // earlier in track-flow order, set `grid_lanes_item` to have the updated span
+  // location, adjust the track opening as needed (either erasing it or reducing
+  // the size), and return the running position at which the item will be
+  // placed. This method returns `std::nullopt` if no eligible track opening was
+  // found.
+  //
+  // This method is only used when dense-packing is set. In the case where a
+  // multi-span item is densely-packed across the open ending of a track after
+  // the current running position, the running position of that track will be
+  // updated in this method. For an example, see the comment for
+  // `AccumulateTrackOpeningsToAccommodateItem`.
+  //
+  // For a densely packed item, `parent_item_index_path_per_lane` receives one
+  // path per occupied lane. Each path identifies the item below the selected
+  // opening in that lane. An empty path means there is no item below in that
+  // lane, so the item is inserted at the root.
+  // `parent_item_index_path_per_lane` is empty for a non-densely-packed item.
+  //
+  // Without a lane graph, `item_index` identifies the item's fragment in the
+  // container builder. With a lane graph, the item's complete path is inferred
+  // from its parent path and `grid_lanes`.
+  std::optional<LayoutUnit> GetEligibleTrackOpeningAndUpdateGridLanesItemSpan(
       wtf_size_t start_offset,
       const LayoutUnit item_stacking_axis_contribution,
+      LayoutUnit original_stacking_size,
       const LayoutUnit auto_placement_stacking_axis_offset,
       const GridLayoutTrackCollection& track_collection,
-      GridItemData& grid_lanes_item);
+      GridItemData& grid_lanes_item,
+      wtf_size_t item_index = kNotFound,
+      GridLayoutSubtree* layout_subtree = nullptr,
+      const GridLanesDataVector* grid_lanes = nullptr,
+      Vector<ItemIndexPath>* parent_item_index_path_per_lane = nullptr);
 
   // If the span of `grid_lanes_item` is indefinite this method will find and
   // set the span where the item should be placed. Then, this method will return
@@ -240,13 +220,25 @@ class CORE_EXPORT GridLanesRunningPositions {
     return is_stacking_axis_alignment_set_;
   }
 
+  // Whether alignment candidates and their alignment spaces are recorded. Gap
+  // decorations use them to find empty openings, even when no item aligns.
+  bool IsTrackingAlignmentCandidates() const {
+    return is_stacking_axis_alignment_set_ || has_main_gap_decorations_;
+  }
+
   // Clamp the end position of the last (unbounded) `TrackOpening` in each
   // track to the actual stacking axis size, and subtract the trailing gap
   // from the start position in the last opening of each track, since we account
-  // for an extra gap behind each item when we update track openings.
-  void FinalizeTrackOpeningsForStackingAxisAlignment(
-      LayoutUnit stacking_axis_size,
-      LayoutUnit stacking_axis_gap);
+  // for an extra gap behind each item when we update track openings. This also
+  // records the size of the last (unbounded) `TrackOpening` in the alignment
+  // space of the item above it.
+  void FinalizeTrackOpenings(LayoutUnit stacking_axis_size,
+                             LayoutUnit stacking_axis_gap);
+
+  const HeapVector<TrackOpening>& GetTrackOpenings(
+      wtf_size_t track_index) const {
+    return track_collection_openings_[track_index];
+  }
 
   // Iterates over track openings one at a time, returning an item if it's the
   // last item above a track opening or if it's the last item in its track, and
@@ -284,24 +276,21 @@ class CORE_EXPORT GridLanesRunningPositions {
  private:
   friend class GridLanesLayoutAlgorithmTest;
 
-  // Returns the minimum alignment space available for `item` across all tracks
-  // in `span`.
-  LayoutUnit GetAvailableAlignmentSpaceForItem(const GridItemData* item,
-                                               const GridSpan& span) const;
+  bool IsTrackingOpenings() const {
+    return is_dense_packing_ || IsTrackingAlignmentCandidates();
+  }
 
-  // Struct to keep track of a span of tracks' start lines and their
-  // max-positions, where the max-position of a span represents the maximum
-  // running position of all tracks in a span. This will always be used in
-  // conjunction with a span size, so we can calculate the ending line using
-  // `start_line` and a given span size.
-  struct MaxPositionSpan {
-    bool operator==(const MaxPositionSpan& other) const {
-      return (start_line == other.start_line) && (max_pos == other.max_pos);
-    }
-
-    wtf_size_t start_line;
-    LayoutUnit max_pos;
-  };
+  // Records `item` as the item directly above `opening`. If stacking-axis
+  // alignment is set, the full alignment candidate is built. Otherwise, only
+  // the item and its alignment space are stored, which is all gap decorations
+  // need.
+  void SetItemAboveOpening(TrackOpening& opening,
+                           GridItemData& item,
+                           AlignmentSpace* alignment_space,
+                           LayoutUnit original_stacking_size,
+                           wtf_size_t item_index,
+                           GridLayoutSubtree* layout_subtree,
+                           const ItemIndexPath* item_index_path);
 
   // This struct is used to hold a path of eligible track openings.
   // `starting_track_index` refers to the first track index in the path, and
@@ -309,13 +298,22 @@ class CORE_EXPORT GridLanesRunningPositions {
   // element in `track_opening_indices` is the specific index within a track's
   // vector of openings. `start_position` refers to the highest possible
   // position that an item can be placed; this would be the lowest running
-  // position of all the openings in the path.
+  // position of all the openings in the path. `end_position` is the end of the
+  // intersection of all openings in the path.
   struct EligibleTrackOpeningPath {
     bool IsValid() const { return !track_opening_indices.empty(); }
+
+    // If the track opening consists only of unbounded openings at the end of
+    // the track, placing an item in this path would not actually densely-pack
+    // it.
+    bool ContainsTrackOpening() const {
+      return IsValid() && end_position != LayoutUnit::Max();
+    }
 
     wtf_size_t starting_track_index{0};
     Vector<wtf_size_t> track_opening_indices;
     LayoutUnit start_position{LayoutUnit::Max()};
+    LayoutUnit end_position{LayoutUnit::Max()};
   };
 
   // For testing only.
@@ -331,7 +329,7 @@ class CORE_EXPORT GridLanesRunningPositions {
     // To avoid placing items in collapsed tracks, set such tracks to the max
     // size.
     for (wtf_size_t index : collapsed_track_indexes) {
-      track_collection_openings_[index].back().start_position =
+      track_collection_openings_[index].back().coordinates.start_position =
           LayoutUnit::Max();
     }
   }
@@ -378,10 +376,23 @@ class CORE_EXPORT GridLanesRunningPositions {
       wtf_size_t track_to_check_for_openings,
       EligibleTrackOpeningPath& eligible_track_opening_result);
 
+  // Chooses the first eligible track opening path in track-flow order within
+  // `tie_threshold_` of `minimum_track_opening_running_position` that is higher
+  // than auto-placement, or at the same running position but earlier in
+  // track-flow order. Returns `std::nullopt` when auto-placement should be
+  // retained.
+  std::optional<wtf_size_t> ChooseFirstEligibleTrackOpeningPath(
+      const Vector<EligibleTrackOpeningPath>& eligible_track_opening_results,
+      LayoutUnit minimum_track_opening_running_position,
+      LayoutUnit auto_placement_stacking_axis_offset,
+      wtf_size_t initial_span_start_line) const;
+
   // The current running position for a given track is the start position of the
   // final opening.
   LayoutUnit GetRunningPositionForTrack(wtf_size_t track_index) const {
-    return track_collection_openings_[track_index].back().start_position;
+    return track_collection_openings_[track_index]
+        .back()
+        .coordinates.start_position;
   }
 
   // Computes the max running position for the given `span`. When
@@ -418,13 +429,18 @@ class CORE_EXPORT GridLanesRunningPositions {
   // axis or any individual item requires alignment in the stacking
   // axis.
   bool is_stacking_axis_alignment_set_{false};
+
+  // TODO(javiercon): Look into consolidating how alignment candidates are
+  // recorded for stacking-axis alignment and gap decorations, for example by
+  // always building the full alignment candidate and marking whether it needs
+  // to be aligned after placement.
+  //
+  // True when the container paints main gap decorations. Every opening is then
+  // kept with the item above it, so gap decorations can tell which openings are
+  // empty after placement.
+  bool has_main_gap_decorations_{false};
 };
 
 }  // namespace blink
-
-WTF_ALLOW_CLEAR_UNUSED_SLOTS_WITH_MEM_FUNCTIONS(
-    blink::GridLanesRunningPositions::TrackOpening)
-WTF_ALLOW_CLEAR_UNUSED_SLOTS_WITH_MEM_FUNCTIONS(
-    blink::GridLanesRunningPositions::AlignmentCandidate)
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_GRID_LANES_GRID_LANES_RUNNING_POSITIONS_H_

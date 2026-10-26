@@ -7,8 +7,6 @@
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
-#include "components/attribution_reporting/features.h"
-#include "content/browser/browsing_topics/test_util.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/features.h"
@@ -31,46 +29,12 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/mojom/browsing_topics/browsing_topics.mojom.h"
 #include "url/gurl.h"
 
 namespace content {
 
 namespace {
 constexpr char kBaseDataDir[] = "content/test/data/";
-
-constexpr char kAddFencedFrameScript[] = R"(
-  const fenced_frame = document.createElement('fencedframe');
-  document.body.appendChild(fenced_frame);
-)";
-
-class FixedTopicsContentBrowserClient
-    : public ContentBrowserTestContentBrowserClient {
- public:
-  bool HandleTopicsWebApi(
-      const url::Origin& context_origin,
-      content::RenderFrameHost* main_frame,
-      browsing_topics::ApiCallerSource caller_source,
-      bool get_topics,
-      bool observe,
-      std::vector<blink::mojom::EpochTopicPtr>& topics) override {
-    blink::mojom::EpochTopicPtr result_topic = blink::mojom::EpochTopic::New();
-    result_topic->topic = 1;
-    result_topic->config_version = "chrome.1";
-    result_topic->taxonomy_version = "1";
-    result_topic->model_version = "2";
-    result_topic->version = "chrome.1:1:2";
-
-    topics.push_back(std::move(result_topic));
-
-    return true;
-  }
-
-  int NumVersionsInTopicsEpochs(
-      content::RenderFrameHost* main_frame) const override {
-    return 1;
-  }
-};
 }  // namespace
 
 class PrivacySandboxAdsAPIsBrowserTestBase : public ContentBrowserTest {
@@ -93,11 +57,9 @@ class PrivacySandboxAdsAPIsBrowserTestBase : public ContentBrowserTest {
               return true;
             }));
 
-    browser_client_ = std::make_unique<FixedTopicsContentBrowserClient>();
   }
 
   void TearDownOnMainThread() override {
-    browser_client_.reset();
     url_loader_interceptor_.reset();
   }
 
@@ -110,8 +72,6 @@ class PrivacySandboxAdsAPIsBrowserTestBase : public ContentBrowserTest {
   }
 
  private:
-  std::unique_ptr<FixedTopicsContentBrowserClient> browser_client_;
-
   std::unique_ptr<URLLoaderInterceptor> url_loader_interceptor_;
 };
 
@@ -121,10 +81,8 @@ class PrivacySandboxAdsAPIsM1OverrideBrowserTest
   PrivacySandboxAdsAPIsM1OverrideBrowserTest() {
     feature_list_.InitWithFeatures(
         {features::kPrivacySandboxAdsAPIsM1Override,
-         network::features::kBrowsingTopics,
-         blink::features::kBrowsingTopicsDocumentAPI,
-         network::features::kInterestGroupStorage,
-         blink::features::kFencedFrames, network::features::kSharedStorageAPI},
+         network::features::kBrowsingTopics, blink::features::kFledge,
+         blink::features::kAdInterestGroupAPI, blink::features::kFencedFrames},
         /*disabled_features=*/{});
   }
 
@@ -138,22 +96,14 @@ IN_PROC_BROWSER_TEST_F(PrivacySandboxAdsAPIsM1OverrideBrowserTest,
 
   EXPECT_EQ(true, EvalJs(shell(),
                          "document.featurePolicy.features().includes('"
-                         "attribution-reporting')"));
-  EXPECT_EQ(true, EvalJs(shell(),
-                         "document.featurePolicy.features().includes('"
                          "browsing-topics')"));
-  EXPECT_EQ(true, EvalJs(shell(),
-                         "document.featurePolicy.features().includes('"
-                         "join-ad-interest-group')"));
 
-  EXPECT_EQ(true, ExecJs(root(), "sharedStorage !== undefined"));
   EXPECT_EQ(true, EvalJs(shell(), "document.browsingTopics !== undefined"));
   EXPECT_EQ(true, EvalJs(shell(), "navigator.runAdAuction !== undefined"));
   EXPECT_EQ(true,
             EvalJs(shell(), "navigator.joinAdInterestGroup !== undefined"));
-
-  EXPECT_TRUE(ExecJs(root(), kAddFencedFrameScript));
-  EXPECT_EQ(1U, root()->child_count());
+  EXPECT_EQ(true,
+            EvalJs(shell(), "window.HTMLFencedFrameElement !== undefined"));
 }
 
 class PrivacySandboxAdsAPIsM1OverrideNoFeatureBrowserTest
@@ -162,11 +112,9 @@ class PrivacySandboxAdsAPIsM1OverrideNoFeatureBrowserTest
   PrivacySandboxAdsAPIsM1OverrideNoFeatureBrowserTest() {
     feature_list_.InitWithFeatures(
         {features::kPrivacySandboxAdsAPIsM1Override},
-        {attribution_reporting::features::kConversionMeasurement,
-         network::features::kBrowsingTopics,
-         blink::features::kBrowsingTopicsDocumentAPI,
-         network::features::kInterestGroupStorage,
-         blink::features::kFencedFrames, network::features::kSharedStorageAPI});
+        {network::features::kBrowsingTopics,
+         blink::features::kAdInterestGroupAPI, blink::features::kFledge,
+         blink::features::kFencedFrames});
   }
 
  private:
@@ -179,24 +127,9 @@ IN_PROC_BROWSER_TEST_F(PrivacySandboxAdsAPIsM1OverrideNoFeatureBrowserTest,
 
   EXPECT_EQ(false, EvalJs(shell(),
                           "document.featurePolicy.features().includes('"
-                          "attribution-reporting')"));
-  EXPECT_EQ(false, EvalJs(shell(),
-                          "document.featurePolicy.features().includes('"
                           "browsing-topics')"));
-  EXPECT_EQ(false, EvalJs(shell(),
-                          "document.featurePolicy.features().includes('"
-                          "join-ad-interest-group')"));
-  EXPECT_EQ(false, EvalJs(shell(),
-                          "document.featurePolicy.features().includes('"
-                          "run-ad-auction')"));
-  EXPECT_EQ(false, EvalJs(shell(),
-                          "document.featurePolicy.features().includes('"
-                          "shared-storage')"));
-  EXPECT_EQ(false, EvalJs(shell(),
-                          "document.featurePolicy.features().includes('"
-                          "private-aggregation')"));
-  EXPECT_TRUE(ExecJs(root(), kAddFencedFrameScript));
-  EXPECT_EQ(0U, root()->child_count());
+  EXPECT_EQ(false,
+            EvalJs(shell(), "window.HTMLFencedFrameElement !== undefined"));
 }
 
 }  // namespace content

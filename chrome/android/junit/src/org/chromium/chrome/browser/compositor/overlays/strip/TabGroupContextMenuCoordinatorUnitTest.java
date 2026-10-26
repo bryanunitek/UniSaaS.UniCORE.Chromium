@@ -5,12 +5,15 @@
 package org.chromium.chrome.browser.compositor.overlays.strip;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -28,6 +31,7 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.EditText;
 import android.widget.ListAdapter;
 import android.widget.ListView;
@@ -41,11 +45,13 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
+import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowLooper;
 
-import org.chromium.base.MathUtils;
 import org.chromium.base.Token;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
@@ -56,6 +62,7 @@ import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.collaboration.CollaborationServiceFactory;
+import org.chromium.chrome.browser.compositor.overlays.strip.TabContextMenuCoordinator.TabStripLayoutType;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabManager;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
@@ -65,6 +72,8 @@ import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.NewWindowApp
 import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestrator;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestratorFactory;
 import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
+import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.MockTab;
 import org.chromium.chrome.browser.tab.Tab;
@@ -78,8 +87,8 @@ import org.chromium.chrome.browser.tabmodel.TabList;
 import org.chromium.chrome.browser.tabmodel.TabRemover;
 import org.chromium.chrome.browser.tabmodel.TabUngrouper;
 import org.chromium.chrome.browser.tasks.tab_management.TabOverflowMenuCoordinator.OnItemClickedCallback;
-import org.chromium.chrome.browser.tasks.tab_management.color_picker.ColorPickerContainer;
-import org.chromium.chrome.browser.tasks.tab_management.color_picker.ColorPickerCoordinator;
+import org.chromium.chrome.browser.tasks.tab_management.color_picker.TabGroupColorPickerContainer;
+import org.chromium.chrome.browser.tasks.tab_management.color_picker.TabGroupColorPickerCoordinator;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabModel;
 import org.chromium.components.browser_ui.util.motion.MotionEventTestUtils;
 import org.chromium.components.browser_ui.widget.list_view.FakeListViewTouchTracker;
@@ -92,6 +101,7 @@ import org.chromium.components.tab_group_sync.SavedTabGroup;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
 import org.chromium.components.tab_groups.TabGroupsFeatureMap;
 import org.chromium.ui.KeyboardVisibilityDelegate;
+import org.chromium.ui.UiUtils;
 import org.chromium.ui.base.LocalizationUtils;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.base.WindowAndroid;
@@ -101,18 +111,21 @@ import org.chromium.ui.listmenu.ListMenuItemProperties;
 import org.chromium.ui.listmenu.ListSectionDividerProperties;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
+import org.chromium.ui.widget.AnchoredPopupWindow;
 import org.chromium.ui.widget.RectProvider;
 import org.chromium.url.GURL;
 
 import java.lang.ref.WeakReference;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
 /** Unit tests for {@link TabGroupContextMenuCoordinator}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @EnableFeatures({
     ChromeFeatureList.DATA_SHARING,
+    ChromeFeatureList.TAB_GROUP_CONTEXT_MENU_LIVE_TITLE_UPDATE
 })
 @DisableFeatures({TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS})
 public class TabGroupContextMenuCoordinatorUnitTest {
@@ -241,22 +254,7 @@ public class TabGroupContextMenuCoordinatorUnitTest {
         when(mMultiInstanceManager.getInstanceInfo(ACTIVE))
                 .thenReturn(List.of(INSTANCE_INFO_1, INSTANCE_INFO_2));
         mSavedTabGroup.collaborationId = COLLABORATION_ID;
-        mOnItemClickedCallback =
-                TabGroupContextMenuCoordinator.getMenuItemClickedCallback(
-                        activity,
-                        () -> mTabModel,
-                        mMultiInstanceManager,
-                        mDataSharingTabManager,
-                        TabClosingSource.TABLET_TAB_STRIP);
-        mTabGroupContextMenuCoordinator =
-                TabGroupContextMenuCoordinator.createContextMenuCoordinator(
-                        mTabModel,
-                        mMultiInstanceManager,
-                        mWindowAndroid,
-                        mDataSharingTabManager,
-                        mReorderFunction,
-                        TabClosingSource.TABLET_TAB_STRIP);
-
+        initializeCoordinatorForTesting(TabStripLayoutType.HORIZONTAL);
         // Set group ids manually to bypass showMenu() call.
         mTabGroupContextMenuCoordinator.setGroupDataForTesting(TAB_GROUP_ID);
     }
@@ -264,6 +262,27 @@ public class TabGroupContextMenuCoordinatorUnitTest {
     @After
     public void tearDown() {
         mTabGroupContextMenuCoordinator.destroyMenuForTesting();
+    }
+
+    private void initializeCoordinatorForTesting(@TabStripLayoutType int layout) {
+        mOnItemClickedCallback =
+                TabGroupContextMenuCoordinator.getMenuItemClickedCallback(
+                        mActivity,
+                        () -> mTabModel,
+                        mMultiInstanceManager,
+                        mDataSharingTabManager,
+                        TabClosingSource.TABLET_TAB_STRIP,
+                        layout);
+        mTabGroupContextMenuCoordinator =
+                TabGroupContextMenuCoordinator.createContextMenuCoordinator(
+                        mTabModel,
+                        mMultiInstanceManager,
+                        mWindowAndroid,
+                        mDataSharingTabManager,
+                        mReorderFunction,
+                        TabClosingSource.TABLET_TAB_STRIP,
+                        layout,
+                        /* onMenuDismissedCallback= */ null);
     }
 
     @Test
@@ -416,8 +435,8 @@ public class TabGroupContextMenuCoordinatorUnitTest {
         assertNotNull(groupTitleEditText);
 
         // Verify color picker.
-        ColorPickerCoordinator colorPickerCoordinator =
-                mTabGroupContextMenuCoordinator.getColorPickerCoordinatorForTesting();
+        TabGroupColorPickerCoordinator colorPickerCoordinator =
+                mTabGroupContextMenuCoordinator.getTabGroupColorPickerCoordinatorForTesting();
         assertNotNull(colorPickerCoordinator);
     }
 
@@ -649,6 +668,166 @@ public class TabGroupContextMenuCoordinatorUnitTest {
 
     @Test
     @Feature("Tab Strip Group Context Menu")
+    public void testLiveUpdateGroupTitle_Debounced() {
+        mTabGroupContextMenuCoordinator.buildCustomView(mMenuView, /* isIncognito= */ false);
+        EditText groupTitleEditText =
+                mTabGroupContextMenuCoordinator.getGroupTitleEditTextForTesting();
+
+        // 1. Rapid typing within 50ms does not commit intermediate text (< 100ms debounce).
+        groupTitleEditText.setText("T");
+        ShadowLooper.idleMainLooper(50, TimeUnit.MILLISECONDS);
+        groupTitleEditText.setText("Test");
+        verify(mTabModel, never()).setTabGroupTitle(any(), any());
+
+        // 2. Waiting for the 100ms debounce commits the final text.
+        ShadowLooper.idleMainLooper(100, TimeUnit.MILLISECONDS);
+        verify(mTabModel).setTabGroupTitle(eq(TAB_GROUP_ID), eq("Test"));
+
+        // 3. Clearing the text deletes the title in TabModel without wiping the active EditText.
+        groupTitleEditText.setText("");
+        ShadowLooper.idleMainLooper(100, TimeUnit.MILLISECONDS);
+        verify(mTabModel).deleteTabGroupTitle(TAB_GROUP_ID);
+        assertEquals("", groupTitleEditText.getText().toString());
+    }
+
+    @Test
+    @Feature("Tab Strip Group Context Menu")
+    public void testLiveUpdateGroupTitle_RemoteUpdateClearsModifiedTitle() {
+        mTabGroupContextMenuCoordinator.buildCustomView(mMenuView, /* isIncognito= */ false);
+        mTabGroupContextMenuCoordinator.showMenu(new RectProvider(), TAB_GROUP_ID);
+        EditText groupTitleEditText =
+                mTabGroupContextMenuCoordinator.getGroupTitleEditTextForTesting();
+
+        // User was editing the field locally.
+        groupTitleEditText.setText("local edit");
+
+        // A remote sync update arrives while the menu is showing.
+        mTabGroupContextMenuCoordinator
+                .getTabGroupObserverForTesting()
+                .didChangeTabGroupTitle(TAB_GROUP_ID, "Remote Sync Title");
+        assertEquals("Remote Sync Title", groupTitleEditText.getText().toString());
+
+        // Dismiss menu without further user edits; verify local edit does not overwrite remote
+        // title.
+        mTabGroupContextMenuCoordinator.updateTabGroupTitle();
+        verify(mTabModel, never()).setTabGroupTitle(eq(TAB_GROUP_ID), eq("local edit"));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_VERTICAL_TABS)
+    @Config(qualifiers = "sw600dp")
+    @Feature("Vertical Tabs Tab Group Context Menu")
+    public void testKeyboardShowing_ForcesMenuLayoutUpdate() {
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.VERTICAL_TABS_ENABLED, true);
+        initializeCoordinatorForTesting(TabStripLayoutType.VERTICAL);
+        mTabGroupContextMenuCoordinator.setGroupDataForTesting(TAB_GROUP_ID);
+
+        mTabGroupContextMenuCoordinator.buildCustomView(mMenuView, /* isIncognito= */ false);
+        mTabGroupContextMenuCoordinator.showMenu(new RectProvider(), TAB_GROUP_ID);
+        assertTrue(
+                "Menu should be showing initially",
+                mTabGroupContextMenuCoordinator.isMenuShowing());
+        AnchoredPopupWindow menuWindow = mTabGroupContextMenuCoordinator.getMenuWindowForTesting();
+        assertNotNull(menuWindow);
+        assertNotEquals(
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING,
+                menuWindow.getSoftInputModeForTesting());
+
+        // Extract the internal listener that we defined/modified in the constructor.
+        KeyboardVisibilityDelegate.KeyboardVisibilityListener listener =
+                mTabGroupContextMenuCoordinator.getKeyboardVisibilityListenerForTesting();
+        assertNotNull("KeyboardVisibilityListener should not be null", listener);
+
+        // Clear all initialization/inflation tasks so the looper queue is completely empty.
+        ShadowLooper.getShadowMainLooper().runToEndOfTasks();
+        assertTrue(
+                "Looper must be idle before simulating the keyboard event",
+                ShadowLooper.getShadowMainLooper().isIdle());
+
+        // Simulate the keyboard surfacing (isShowing = true).
+        listener.keyboardVisibilityChanged(true);
+
+        // Check if a layout task was successfully scheduled on the looper.
+        assertFalse(
+                "The keyboard visibility change must schedule a layout task, making the looper"
+                    + " non-idle",
+                ShadowLooper.getShadowMainLooper().isIdle());
+
+        // Execute the posted layout task cleanly to finish the test cycle.
+        ShadowLooper.getShadowMainLooper().runToEndOfTasks();
+
+        assertTrue(
+                "Menu should remain displayable after layout update",
+                mTabGroupContextMenuCoordinator.isMenuShowing());
+
+        // Simulate the keyboard dismissing (isShowing = false).
+        listener.keyboardVisibilityChanged(false);
+
+        // For vertical tabs, dismissing the keyboard should NOT schedule a layout task to
+        // avoid jarring flip-flop jumping.
+        assertTrue(
+                "The keyboard dismissal on vertical strip must not schedule a layout task",
+                ShadowLooper.getShadowMainLooper().isIdle());
+    }
+
+    @Test
+    @Config(qualifiers = "sw600dp")
+    @Feature("Tab Strip Group Context Menu")
+    public void testKeyboardShowing_HorizontalStrip_ForcesMenuLayoutUpdate() {
+        mTabGroupContextMenuCoordinator.buildCustomView(mMenuView, /* isIncognito= */ false);
+        mTabGroupContextMenuCoordinator.showMenu(new RectProvider(), TAB_GROUP_ID);
+        assertTrue(
+                "Menu should be showing initially",
+                mTabGroupContextMenuCoordinator.isMenuShowing());
+        AnchoredPopupWindow menuWindow = mTabGroupContextMenuCoordinator.getMenuWindowForTesting();
+        assertNotNull(menuWindow);
+        assertEquals(
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING,
+                menuWindow.getSoftInputModeForTesting());
+
+        // Extract the internal listener that we defined/modified in the constructor.
+        KeyboardVisibilityDelegate.KeyboardVisibilityListener listener =
+                mTabGroupContextMenuCoordinator.getKeyboardVisibilityListenerForTesting();
+        assertNotNull("KeyboardVisibilityListener should not be null", listener);
+
+        // Clear all initialization/inflation tasks so the looper queue is completely empty.
+        ShadowLooper.getShadowMainLooper().runToEndOfTasks();
+        assertTrue(
+                "Looper must be idle before simulating the keyboard event",
+                ShadowLooper.getShadowMainLooper().isIdle());
+
+        // Simulate the keyboard surfacing (isShowing = true).
+        listener.keyboardVisibilityChanged(true);
+
+        // Check if a layout task was successfully scheduled on the looper.
+        assertFalse(
+                "The keyboard visibility change must schedule a layout task, making the looper"
+                        + " non-idle",
+                ShadowLooper.getShadowMainLooper().isIdle());
+
+        // Execute the posted layout task cleanly to finish the test cycle.
+        ShadowLooper.getShadowMainLooper().runToEndOfTasks();
+
+        assertTrue(
+                "Menu should remain displayable after layout update",
+                mTabGroupContextMenuCoordinator.isMenuShowing());
+
+        // Simulate the keyboard dismissing (isShowing = false) while menu remains open.
+        listener.keyboardVisibilityChanged(false);
+
+        // For horizontal tabs, dismissing the keyboard must schedule a layout task to restore
+        // menu height.
+        assertFalse(
+                "The keyboard dismissal on horizontal strip must schedule a layout task",
+                ShadowLooper.getShadowMainLooper().isIdle());
+
+        ShadowLooper.getShadowMainLooper().runToEndOfTasks();
+        assertTrue(mTabGroupContextMenuCoordinator.isMenuShowing());
+    }
+
+    @Test
+    @Feature("Tab Strip Group Context Menu")
     public void testMoveToNewWindow() {
         MultiWindowUtils.setInstanceCountForTesting(1);
         when(mMultiInstanceManager.getInstanceInfo(ACTIVE)).thenReturn(List.of(INSTANCE_INFO_1));
@@ -721,14 +900,34 @@ public class TabGroupContextMenuCoordinatorUnitTest {
         tab.setUrl(EXAMPLE_URL);
         when(mTabModel.getTabUngrouper()).thenReturn(mTabUngrouper);
         when(mTabModel.isTabInTabGroup(tab)).thenReturn(true);
-        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
+        when(mTabModel.containsTabGroup(TAB_GROUP_ID)).thenReturn(true);
         when(mTabModel.getTabGroupTitle(TAB_GROUP_ID)).thenReturn(UNSET_TAB_GROUP_TITLE);
-        when(mTabModel.getGroupLastShownTabId(TAB_GROUP_ID)).thenReturn(TAB_ID);
         when(mTabModel.getTabCountForGroup(eq(TAB_GROUP_ID))).thenReturn(1);
         List<Tab> tabsInGroup = Arrays.asList(tab);
         when(mTabModel.getTabsInGroup(eq(TAB_GROUP_ID))).thenReturn(tabsInGroup);
-        when(mTabModel.getRelatedTabList(eq(TAB_ID))).thenReturn(tabsInGroup);
         return tabsInGroup;
+    }
+
+    private void verifyGroupReorderOption(
+            ModelList modelList,
+            String expectedTitle,
+            Token expectedGroupId,
+            boolean expectedToStart) {
+        ListItem item = findItemByTitle(modelList, expectedTitle);
+        assertNotNull("Expected reorder item '" + expectedTitle + "' to be present", item);
+        item.model.get(ListMenuItemProperties.CLICK_LISTENER).onClick(mMenuView);
+        verify(mReorderFunction).accept(expectedGroupId, expectedToStart);
+        Mockito.clearInvocations((Object) mReorderFunction);
+    }
+
+    private @Nullable ListItem findItemByTitle(ModelList modelList, String title) {
+        for (int i = 0; i < modelList.size(); i++) {
+            ListItem item = modelList.get(i);
+            if (item.model.containsKey(TITLE) && title.equals(item.model.get(TITLE))) {
+                return item;
+            }
+        }
+        return null;
     }
 
     @SuppressWarnings("DirectInvocationOnMock")
@@ -998,6 +1197,102 @@ public class TabGroupContextMenuCoordinatorUnitTest {
 
     @Test
     @Feature("Tab Strip Group Context Menu")
+    @EnableFeatures(ChromeFeatureList.ANDROID_VERTICAL_TABS)
+    @Config(qualifiers = "sw600dp")
+    public void testVerticalTabs_moveGroupUpDown() {
+        initializeCoordinatorForTesting(TabStripLayoutType.VERTICAL);
+        mTabGroupContextMenuCoordinator.setGroupDataForTesting(TAB_GROUP_ID);
+        setUpReorderingMocks();
+
+        mTabGroupContextMenuCoordinator.showMenu(new RectProvider(), TAB_GROUP_ID);
+        ModelList modelList = mTabGroupContextMenuCoordinator.getModelListForTesting();
+
+        verifyGroupReorderOption(
+                modelList,
+                mActivity.getString(R.string.move_tab_group_up),
+                TAB_GROUP_ID,
+                /* expectedToStart= */ true);
+        verifyGroupReorderOption(
+                modelList,
+                mActivity.getString(R.string.move_tab_group_down),
+                TAB_GROUP_ID,
+                /* expectedToStart= */ false);
+    }
+
+    @Test
+    @Feature("Tab Strip Group Context Menu")
+    @EnableFeatures(ChromeFeatureList.ANDROID_VERTICAL_TABS)
+    @Config(qualifiers = "sw600dp")
+    public void testVerticalTabs_moveGroupUpDown_RTL() {
+        LocalizationUtils.setRtlForTesting(true);
+        initializeCoordinatorForTesting(TabStripLayoutType.VERTICAL);
+        mTabGroupContextMenuCoordinator.setGroupDataForTesting(TAB_GROUP_ID);
+        setUpReorderingMocks();
+
+        mTabGroupContextMenuCoordinator.showMenu(new RectProvider(), TAB_GROUP_ID);
+        ModelList modelList = mTabGroupContextMenuCoordinator.getModelListForTesting();
+
+        // In VT with RTL, "Move tab group up" should still move toward the start (true) without
+        // inversion.
+        verifyGroupReorderOption(
+                modelList,
+                mActivity.getString(R.string.move_tab_group_up),
+                TAB_GROUP_ID,
+                /* expectedToStart= */ true);
+        verifyGroupReorderOption(
+                modelList,
+                mActivity.getString(R.string.move_tab_group_down),
+                TAB_GROUP_ID,
+                /* expectedToStart= */ false);
+    }
+
+    @Test
+    @Feature("Tab Strip Group Context Menu")
+    @EnableFeatures(ChromeFeatureList.ANDROID_VERTICAL_TABS)
+    @Config(qualifiers = "sw600dp")
+    public void testVerticalTabs_moveGroup_boundaries_firstAndLastGroup() {
+        initializeCoordinatorForTesting(TabStripLayoutType.VERTICAL);
+        mTabGroupContextMenuCoordinator.setGroupDataForTesting(TAB_GROUP_ID);
+        mTabGroupContextMenuCoordinator.setIsGesturesEnabledForTesting(true);
+
+        List<Tab> tabsInGroup = setUpReorderingMocks();
+        when(mTabModel.indexOf(tabsInGroup.get(0))).thenReturn(0);
+        when(mTabModel.getCount()).thenReturn(3);
+
+        String moveUpTitle = mActivity.getString(R.string.move_tab_group_up);
+        String moveDownTitle = mActivity.getString(R.string.move_tab_group_down);
+
+        // First group cannot move up.
+        mTabGroupContextMenuCoordinator.showMenu(new RectProvider(), TAB_GROUP_ID);
+        ModelList firstGroupModelList = mTabGroupContextMenuCoordinator.getModelListForTesting();
+        assertNull(
+                "First group should not have 'Move tab group up'",
+                findItemByTitle(firstGroupModelList, moveUpTitle));
+        assertNotNull(
+                "First group should have 'Move tab group down'",
+                findItemByTitle(firstGroupModelList, moveDownTitle));
+        mTabGroupContextMenuCoordinator.destroyMenuForTesting();
+
+        // Last group cannot move down.
+        initializeCoordinatorForTesting(TabStripLayoutType.VERTICAL);
+        mTabGroupContextMenuCoordinator.setGroupDataForTesting(TAB_GROUP_ID);
+        mTabGroupContextMenuCoordinator.setIsGesturesEnabledForTesting(true);
+        when(mTabModel.indexOf(tabsInGroup.get(0))).thenReturn(2);
+        when(mTabModel.indexOf(tabsInGroup.get(tabsInGroup.size() - 1))).thenReturn(2);
+        when(mTabModel.getCount()).thenReturn(3);
+
+        mTabGroupContextMenuCoordinator.showMenu(new RectProvider(), TAB_GROUP_ID);
+        ModelList lastGroupModelList = mTabGroupContextMenuCoordinator.getModelListForTesting();
+        assertNotNull(
+                "Last group should have 'Move tab group up'",
+                findItemByTitle(lastGroupModelList, moveUpTitle));
+        assertNull(
+                "Last group should not have 'Move tab group down'",
+                findItemByTitle(lastGroupModelList, moveDownTitle));
+    }
+
+    @Test
+    @Feature("Tab Strip Group Context Menu")
     public void testListMenuItems_moveGroupItems_incognito() {
         when(mTabModel.isIncognitoBranded()).thenReturn(true);
         setUpReorderingMocks();
@@ -1165,7 +1460,7 @@ public class TabGroupContextMenuCoordinatorUnitTest {
 
     @Test
     @Feature("Tab Strip Group Context Menu")
-    public void testMenuWidthAndColorPicker_MainMenu() {
+    public void testMenuWidthAndTabGroupColorPicker_MainMenu() {
         mTabGroupContextMenuCoordinator.showMenu(new RectProvider(), TAB_GROUP_ID);
 
         // 1. Verify visibility of title editor and color picker.
@@ -1181,7 +1476,7 @@ public class TabGroupContextMenuCoordinatorUnitTest {
                 contentView.findViewById(R.id.color_picker_container).getVisibility());
 
         // 2. Verify menu width.
-        verifyMenuWidthAndColorPicker(contentView);
+        verifyMenuWidthAndTabGroupColorPicker(contentView);
     }
 
     @Test
@@ -1272,22 +1567,26 @@ public class TabGroupContextMenuCoordinatorUnitTest {
                 contentView.findViewById(R.id.color_picker_container).getVisibility());
 
         // 2. Verify menu width.
-        verifyMenuWidthAndColorPicker(contentView);
+        verifyMenuWidthAndTabGroupColorPicker(contentView);
     }
 
-    private void verifyMenuWidthAndColorPicker(View contentView) {
+    private void verifyMenuWidthAndTabGroupColorPicker(View contentView) {
         ListView listView = contentView.findViewById(R.id.tab_group_action_menu_list);
         // Hierarchy: ScrollView -> LinearLayout (container) -> FrameLayout -> ListView
         ViewGroup container = (ViewGroup) listView.getParent().getParent();
         int width = container.getLayoutParams().width;
 
-        ColorPickerContainer colorPicker = container.findViewById(R.id.color_picker_container);
+        TabGroupColorPickerContainer colorPicker =
+                container.findViewById(R.id.color_picker_container);
 
-        int minWidthPx = mActivity.getResources().getDimensionPixelSize(R.dimen.list_menu_width);
+        int minWidthPx = mActivity.getResources().getDimensionPixelSize(R.dimen.menu_width_min);
         int maxWidthPx =
                 mActivity
                         .getResources()
                         .getDimensionPixelSize(R.dimen.tab_strip_group_context_menu_max_width);
+        int marginPx =
+                mActivity.getResources().getDimensionPixelSize(R.dimen.menu_horizontal_margin);
+        int windowWidthPx = mActivity.getResources().getDisplayMetrics().widthPixels;
 
         int expectedWidth;
         int singleRowWidth = colorPicker.getSingleRowWidth();
@@ -1299,19 +1598,17 @@ public class TabGroupContextMenuCoordinatorUnitTest {
 
         // Also considers list item widths.
         ListAdapter listAdapter = listView.getAdapter();
-        int maxItemWidth = 0;
-        for (int i = 0; i < listAdapter.getCount(); i++) {
-            View listItem = listAdapter.getView(i, null, listView);
-            listItem.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
-            maxItemWidth = Math.max(maxItemWidth, listItem.getMeasuredWidth());
-        }
+        int[] contentDimensions =
+                UiUtils.computeListAdapterContentDimensions(listAdapter, listView);
+        expectedWidth = Math.max(expectedWidth, contentDimensions[0]);
 
-        expectedWidth = Math.max(expectedWidth, maxItemWidth);
         expectedWidth =
-                MathUtils.clamp(
+                UiUtils.computeMenuWidth(
                         expectedWidth + listView.getPaddingLeft() + listView.getPaddingRight(),
                         minWidthPx,
-                        maxWidthPx);
+                        maxWidthPx,
+                        marginPx,
+                        windowWidthPx);
 
         assertEquals("Menu width is incorrect", expectedWidth, width);
     }

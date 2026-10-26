@@ -115,7 +115,6 @@
 #include "gpu/ipc/client/command_buffer_proxy_impl.h"
 #include "gpu/ipc/client/gpu_channel_host.h"
 #include "ipc/ipc_channel.h"
-#include "ipc/ipc_channel_factory.h"
 #include "media/base/decoder_factory.h"
 #include "media/base/media.h"
 #include "media/base/media_switches.h"
@@ -143,6 +142,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/origin_trials/origin_trials_settings_provider.h"
 #include "third_party/blink/public/common/page/launching_process_state.h"
+#include "third_party/blink/public/common/scheme_registry.h"
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/cpu_performance.mojom.h"
@@ -182,6 +182,7 @@
 #if BUILDFLAG(IS_MAC)
 #include "base/mac/mac_util.h"
 #include "content/renderer/theme_helper_mac.h"
+#include "third_party/blink/public/platform/mac/web_scrollbar_theme.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -540,9 +541,10 @@ void RenderThreadImpl::Init() {
     int client_id = 0;
     CHECK(base::StringToInt(
         command_line.GetSwitchValueASCII(switches::kGpuClientId), &client_id));
-    gpu_ = viz::Gpu::Create(std::move(remote_gpu), GetIOTaskRunner(), client_id,
-                            std::move(initial_gpu_channel),
-                            std::move(gpu_channel_established_callback));
+    gpu_ = viz::Gpu::CreateWithMessagePipe(
+        std::move(remote_gpu), GetIOTaskRunner(), client_id,
+        viz::mojom::GpuClientType::kRenderer, std::move(initial_gpu_channel),
+        std::move(gpu_channel_established_callback));
   } else {
     // In the standard path, we create a new pipe and ask the browser to
     // connect it on demand.
@@ -652,8 +654,6 @@ void RenderThreadImpl::Init() {
   if (use_cached_routing_table_) {
     RequestNewItemsForFrameRoutingCache();
   }
-
-  blink::WebV8Features::InitializeMojoJSAllowedProtectedMemory();
 }
 
 RenderThreadImpl::~RenderThreadImpl() {
@@ -704,7 +704,7 @@ bool RenderThreadImpl::ShouldBeDestroyed() {
   return false;
 }
 
-IPC::SyncChannel* RenderThreadImpl::GetChannel() {
+IPC::ChannelProxy* RenderThreadImpl::GetChannel() {
   return channel();
 }
 
@@ -822,6 +822,10 @@ void RenderThreadImpl::InitializeWebKit(mojo::BinderMap* binders) {
 
   blink_platform_impl_ = std::make_unique<RendererBlinkPlatformImpl>(
       main_thread_scheduler_.get(), GetIOTaskRunner());
+  // Whether this process may enable MojoJS is tracked in protected memory,
+  // which has to be initialized before anything enables or queries the MojoJS
+  // runtime features below.
+  blink::WebRuntimeFeatures::InitializeMojoJSPermissions();
   // This, among other things, enables any feature marked "test" in
   // runtime_enabled_features. It is run before
   // SetRuntimeFeaturesDefaultsAndUpdateFromArgs() so that command line
@@ -898,10 +902,22 @@ void RenderThreadImpl::RegisterSchemes() {
   WebSecurityPolicy::RegisterURLSchemeAsAllowingWasmEvalCSP(
       chrome_untrusted_scheme);
 
+  const base::CommandLine& command_line =
+      *base::CommandLine::ForCurrentProcess();
+  if (command_line.HasSwitch(switches::kAllowFileAccessFromFiles)) {
+    WebSecurityPolicy::RegisterURLSchemeAsSupportingFetchAPI(
+        WebString::FromAscii(url::kFileScheme));
+  }
+
   if (base::FeatureList::IsEnabled(features::kWebUICodeCache)) {
     WebSecurityPolicy::RegisterURLSchemeAsCodeCacheWithHashing(chrome_scheme);
     WebSecurityPolicy::RegisterURLSchemeAsCodeCacheWithHashing(
         chrome_untrusted_scheme);
+  }
+  for (const std::string& scheme :
+       blink::CommonSchemeRegistry::CodeCacheAllowedSchemes()) {
+    WebSecurityPolicy::RegisterURLSchemeAsCodeCacheWithHashing(
+        WebString::FromAscii(scheme));
   }
 
   if (base::FeatureList::IsEnabled(features::kWebUIBundledCodeCache)) {
@@ -1460,8 +1476,7 @@ void RenderThreadImpl::UpdateScrollbarTheme(
     mojom::UpdateScrollbarThemeParamsPtr params) {
   blink::WebScrollbarTheme::UpdateScrollbarsWithNSDefaults(
       params->initial_button_delay, params->autoscroll_button_delay,
-      params->preferred_scroller_style, params->redraw,
-      params->jump_on_track_click);
+      params->redraw, params->jump_on_track_click);
   is_elastic_overscroll_enabled_on_root_ = params->scroll_view_rubber_banding;
   is_elastic_overscroll_supported_ = params->scroll_view_rubber_banding;
 }
@@ -1577,6 +1592,7 @@ RenderThreadImpl::SharedCompositorWorkerContextProvider(
   auto shared_memory_limits =
       support_gpu_rasterization ? gpu::SharedMemoryLimits::ForGPURasterContext()
                                 : gpu::SharedMemoryLimits();
+  base::TimeTicks create_start_time = base::TimeTicks::Now();
   shared_worker_context_provider_ =
       viz::ContextProviderCommandBuffer::CreateForRaster(
           std::move(gpu_channel_host), kGpuStreamIdWorker,
@@ -1588,10 +1604,15 @@ RenderThreadImpl::SharedCompositorWorkerContextProvider(
           viz::command_buffer_metrics::ContextType::RENDERER_RASTER_WORKER);
 
   auto result = shared_worker_context_provider_->BindToCurrentSequence();
+  const base::TimeDelta elapsed = base::TimeTicks::Now() - create_start_time;
   if (result != gpu::ContextResult::kSuccess) {
+    base::UmaHistogramTimes(
+        "GPU.CreateSharedWorkerContextProvider.Duration.Failure", elapsed);
     shared_worker_context_provider_ = nullptr;
     return nullptr;
   }
+  base::UmaHistogramTimes(
+      "GPU.CreateSharedWorkerContextProvider.Duration.Success", elapsed);
 
   return shared_worker_context_provider_;
 }

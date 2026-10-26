@@ -93,14 +93,15 @@ TEST_F(SigninReauthCoordinatorTest, ReauthCompletedSuccessfully) {
       [[SigninReauthCoordinator alloc]
           initWithBaseViewController:GetAnyKeyWindow().rootViewController
                              browser:browser_.get()
-                             account:account
+                             account:account.GetCoreAccountInfo()
                    signinAccessPoint:signin_metrics::AccessPoint::kWebSignin];
   __weak SigninReauthCoordinator* weak_reauth_coordinator = reauth_coordinator;
   reauth_coordinator.delegate = mock_delegate_;
   __block SigninCompletionBlock completion_block = nil;
   OCMExpect([mock_interaction_manager_
       startAuthActivityWithViewController:OCMOCK_ANY
-                                userEmail:base::SysUTF8ToNSString(account.email)
+                                userEmail:base::SysUTF8ToNSString(
+                                              account.GetEmail())
                                completion:AssignValueToVariable(
                                               completion_block)]);
   [reauth_coordinator start];
@@ -133,7 +134,7 @@ TEST_F(SigninReauthCoordinatorTest, ReauthCancelledByUser) {
       [[SigninReauthCoordinator alloc]
           initWithBaseViewController:GetAnyKeyWindow().rootViewController
                              browser:browser_.get()
-                             account:account
+                             account:account.GetCoreAccountInfo()
                    signinAccessPoint:signin_metrics::AccessPoint::kWebSignin];
   __weak SigninReauthCoordinator* weak_reauth_coordinator = reauth_coordinator;
   reauth_coordinator.delegate = mock_delegate_;
@@ -141,7 +142,8 @@ TEST_F(SigninReauthCoordinatorTest, ReauthCancelledByUser) {
   __block SigninCompletionBlock completion_block = nil;
   OCMExpect([mock_interaction_manager_
       startAuthActivityWithViewController:OCMOCK_ANY
-                                userEmail:base::SysUTF8ToNSString(account.email)
+                                userEmail:base::SysUTF8ToNSString(
+                                              account.GetEmail())
                                completion:AssignValueToVariable(
                                               completion_block)]);
   [reauth_coordinator start];
@@ -176,14 +178,15 @@ TEST_F(SigninReauthCoordinatorTest, ReauthInterrupted) {
       [[SigninReauthCoordinator alloc]
           initWithBaseViewController:GetAnyKeyWindow().rootViewController
                              browser:browser_.get()
-                             account:account
+                             account:account.GetCoreAccountInfo()
                    signinAccessPoint:signin_metrics::AccessPoint::kWebSignin];
   __weak SigninReauthCoordinator* weak_reauth_coordinator = reauth_coordinator;
   reauth_coordinator.delegate = mock_delegate_;
 
   OCMExpect([mock_interaction_manager_
       startAuthActivityWithViewController:OCMOCK_ANY
-                                userEmail:base::SysUTF8ToNSString(account.email)
+                                userEmail:base::SysUTF8ToNSString(
+                                              account.GetEmail())
                                completion:OCMOCK_ANY]);
   [reauth_coordinator start];
 
@@ -215,7 +218,7 @@ TEST_F(SigninReauthCoordinatorTest, ReauthCompletedSuccessfullyInExplicitFlow) {
       [[SigninReauthCoordinator alloc]
           initWithBaseViewController:GetAnyKeyWindow().rootViewController
                              browser:browser_.get()
-                             account:account
+                             account:account.GetCoreAccountInfo()
                    reauthAccessPoint:signin_metrics::ReauthAccessPoint::
                                          kAccountMenu];
   __weak SigninReauthCoordinator* weak_reauth_coordinator = reauth_coordinator;
@@ -224,7 +227,8 @@ TEST_F(SigninReauthCoordinatorTest, ReauthCompletedSuccessfullyInExplicitFlow) {
   __block SigninCompletionBlock completion_block = nil;
   OCMExpect([mock_interaction_manager_
       startAuthActivityWithViewController:OCMOCK_ANY
-                                userEmail:base::SysUTF8ToNSString(account.email)
+                                userEmail:base::SysUTF8ToNSString(
+                                              account.GetEmail())
                                completion:AssignValueToVariable(
                                               completion_block)]);
   [reauth_coordinator start];

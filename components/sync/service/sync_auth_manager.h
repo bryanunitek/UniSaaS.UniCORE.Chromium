@@ -7,7 +7,9 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
@@ -66,7 +68,8 @@ class SyncAuthManager : public signin::IdentityManager::Observer {
   // but if non-null, must outlive this object. `delegate` must not be null and
   // must outlive this object.
   SyncAuthManager(signin::IdentityManager* identity_manager,
-                  Delegate* delegate);
+                  Delegate* delegate,
+                  base::TimeDelta account_managed_status_finder_timeout);
 
   SyncAuthManager(const SyncAuthManager&) = delete;
   SyncAuthManager& operator=(const SyncAuthManager&) = delete;
@@ -106,6 +109,11 @@ class SyncAuthManager : public signin::IdentityManager::Observer {
   // Returns the state of the access token and token request, for display in
   // internals UI.
   SyncTokenStatus GetSyncTokenStatus() const;
+
+  // Requests an access token. runs `callback` with the result (can be called
+  // synchronously or asynchronously).
+  void FetchAccessToken(
+      base::OnceCallback<void(signin::AccessTokenInfo)> callback);
 
   // Called by SyncServiceImpl when Sync starts up and will try talking to
   // the server soon. This initiates fetching an access token.
@@ -148,6 +156,7 @@ class SyncAuthManager : public signin::IdentityManager::Observer {
     // The `account_changed_callback` will be called whenever an account's
     // managed-ness is determined asynchronously.
     ActiveAccount(signin::IdentityManager* identity_manager,
+                  base::TimeDelta managed_status_finder_timeout,
                   base::RepeatingClosure account_changed_callback);
     ~ActiveAccount();
 
@@ -169,6 +178,7 @@ class SyncAuthManager : public signin::IdentityManager::Observer {
     void AccountTypeDeterminedAsynchronously();
 
     const raw_ptr<signin::IdentityManager> identity_manager_;
+    const base::TimeDelta managed_status_finder_timeout_;
     base::RepeatingClosure account_changed_callback_;
     SyncAccountInfo account_info_;
     std::unique_ptr<signin::AccountManagedStatusFinder> managed_status_finder_;
@@ -210,6 +220,8 @@ class SyncAuthManager : public signin::IdentityManager::Observer {
                           signin::AccessTokenInfo access_token_info);
 
   void SetLastAuthError(const GoogleServiceAuthError& error);
+
+  void NotifyAccessTokenCallbacks(const signin::AccessTokenInfo& token);
 
   const raw_ptr<signin::IdentityManager> identity_manager_;
   base::ScopedObservation<signin::IdentityManager,
@@ -261,6 +273,9 @@ class SyncAuthManager : public signin::IdentityManager::Observer {
   // happen once during browser startup, so it's sufficient to have a single
   // retry (i.e. not per request).
   bool access_token_retried_ = false;
+
+  std::vector<base::OnceCallback<void(signin::AccessTokenInfo)>>
+      access_token_callbacks_;
 
   base::WeakPtrFactory<SyncAuthManager> weak_ptr_factory_{this};
 };

@@ -7,11 +7,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -50,7 +49,7 @@ IN_PROC_BROWSER_TEST_P(PageDiscarderBrowserTest, DiscardPageNodes) {
 
   content::RenderFrameHost* frame_host = NavigateToURLWithDisposition(
       browser(), embedded_test_server()->GetURL("/title1.html"),
-      WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      WindowOpenDisposition::kNewBackgroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   ASSERT_TRUE(frame_host);
   auto* contents = content::WebContents::FromRenderFrameHost(frame_host);
@@ -64,7 +63,7 @@ IN_PROC_BROWSER_TEST_P(PageDiscarderBrowserTest, DiscardPageNodes) {
   // this page.
   GraphOperations::VisitFrameTreePreOrder(
       page_node.get(), [&total](const FrameNode* frame_node) {
-        constexpr base::ByteSize kUsage = base::KiBU(1);
+        constexpr base::ByteSize kUsage = base::KiB(1);
         total += kUsage;
         FrameNodeImpl::FromNode(frame_node)
             ->SetPrivateFootprintEstimate(kUsage);

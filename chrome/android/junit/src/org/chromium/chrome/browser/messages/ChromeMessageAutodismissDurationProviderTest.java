@@ -4,23 +4,27 @@
 
 package org.chromium.chrome.browser.messages;
 
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.components.messages.MessageIdentifier;
-import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 
 /** Unit tests for {@link ChromeMessageAutodismissDurationProvider}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ChromeMessageAutodismissDurationProviderTest {
     @Before
     public void setUp() {
-        AccessibilityState.setIsPerformGesturesEnabledForTesting(false);
+        AccessibilityStateTestHelper.setIsPerformGesturesEnabledForTesting(false);
+    }
+
+    @After
+    public void tearDown() {
+        AccessibilityStateTestHelper.uninitializeForTesting();
     }
 
     @Test
@@ -38,7 +42,7 @@ public class ChromeMessageAutodismissDurationProviderTest {
 
     @Test
     public void testA11yDuration() {
-        AccessibilityState.setIsPerformGesturesEnabledForTesting(true);
+        AccessibilityStateTestHelper.setIsPerformGesturesEnabledForTesting(true);
         ChromeMessageAutodismissDurationProvider provider =
                 new ChromeMessageAutodismissDurationProvider();
         provider.setDefaultAutodismissDurationMsForTesting(500);
@@ -65,7 +69,7 @@ public class ChromeMessageAutodismissDurationProviderTest {
                 "Provider should return default non-a11y duration if custom duration is too short",
                 500,
                 provider.get(MessageIdentifier.TEST_MESSAGE, 250));
-        AccessibilityState.setIsPerformGesturesEnabledForTesting(true);
+        AccessibilityStateTestHelper.setIsPerformGesturesEnabledForTesting(true);
         Assert.assertEquals(
                 "Provider should return custom a11y duration if any gesture performing "
                         + "a11y services are running.",

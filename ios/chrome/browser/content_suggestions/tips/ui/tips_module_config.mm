@@ -9,6 +9,7 @@
 
 #import "base/strings/sys_string_conversions.h"
 #import "components/segmentation_platform/embedder/home_modules/tips_manager/constants.h"
+#import "components/segmentation_platform/public/features.h"
 #import "ios/chrome/browser/content_suggestions/public/content_suggestions_constants.h"
 #import "ios/chrome/browser/content_suggestions/tips/ui/tips_module_audience.h"
 #import "ios/chrome/browser/content_suggestions/ui/cells/icon_view_configuration.h"
@@ -60,6 +61,17 @@ NSString* const kAutofillPasswordsAccessibilityID =
 NSString* const kEnhancedSafeBrowsingAccessibilityID =
     @"kEnhancedSafeBrowsingAccessibilityID";
 
+// Accessibility ID for the NTP theme tip.
+NSString* const kNTPThemeAccessibilityID = @"kNTPThemeAccessibilityID";
+
+// Accessibility ID for the tips notifications tip.
+NSString* const kTipsNotificationsAccessibilityID =
+    @"kTipsNotificationsAccessibilityID";
+
+// Accessibility ID for the NTP customization tip.
+NSString* const kNTPCustomizationAccessibilityID =
+    @"kNTPCustomizationAccessibilityID";
+
 // Constants for the default badge shape configuration (circle).
 const CGFloat kDefaultBadgeSize = 20;
 
@@ -71,56 +83,56 @@ const CGFloat kProductImageBadgeBottomRightRadius = 8;
 // Constant for the symbol width.
 const CGFloat kSymbolWidth = 22;
 
-// This struct represents configuration information for a Tips-related symbol.
-struct SymbolConfig {
-  const std::string name;
-  bool is_default_symbol;
-};
+// Constant for the NTP theme tip icon width.
+constexpr CGFloat kNTPThemeIconWidth = 46;
 
-// Returns the `SymbolConfig` for the given `tip`.
-SymbolConfig GetSymbolConfigForTip(TipIdentifier tip) {
+// Name of the image resource for the NTP theme tip icon.
+NSString* const kNTPThemeTipIconImageName = @"ntp_theme_tip";
+
+// Returns the `Symbol` for the given `tip`.
+Symbol SymbolForTip(TipIdentifier tip) {
   switch (tip) {
     case TipIdentifier::kUnknown:
-      return {SysNSStringToUTF8(kListBulletClipboardSymbol), true};
+      return SymbolListBulletClipboard;
     case TipIdentifier::kLensSearch:
     case TipIdentifier::kLensShop:
     case TipIdentifier::kLensTranslate:
-      return {SysNSStringToUTF8(kCameraLensSymbol), false};
+      return SymbolCameraLens;
     case TipIdentifier::kAddressBarPosition:
-      return {SysNSStringToUTF8(kGlobeAmericasSymbol), true};
+      return SymbolGlobeAmericas;
     case TipIdentifier::kSavePasswords:
     case TipIdentifier::kAutofillPasswords:
 #if BUILDFLAG(IS_IOS_MACCATALYST)
-      return {SysNSStringToUTF8(kPasswordSymbol), false};
+      return SymbolPassword;
 #else
-      return {SysNSStringToUTF8(kMulticolorPasswordSymbol), false};
+      return SymbolMulticolorPassword;
 #endif  // BUILDFLAG(IS_IOS_MACCATALYST)
     case TipIdentifier::kEnhancedSafeBrowsing:
-      return {SysNSStringToUTF8(kPrivacySymbol), false};
+      return SymbolPrivacy;
+    case TipIdentifier::kNTPTheme:
+      return SymbolNone;
+    case TipIdentifier::kTipsNotifications:
+      return SymbolBellBadge;
+    case TipIdentifier::kNTPCustomization:
+      return SymbolHideAction;
   }
 }
 
-// Returns the `SymbolConfig` for the badge symbol of the given `tip`, or
+// Returns the `Symbol` for the badge symbol of the given `tip`, or
 // `std::nullopt` if the tip doesn't have a badge. `has_product_image` is used
 // to determine the correct badge for the shopping tip.
-std::optional<SymbolConfig> GetBadgeSymbolConfigForTip(TipIdentifier tip,
-                                                       bool has_product_image) {
+std::optional<Symbol> GetBadgeSymbolConfigForTip(TipIdentifier tip,
+                                                 bool has_product_image) {
   switch (tip) {
     case TipIdentifier::kLensShop: {
       if (has_product_image) {
-        SymbolConfig result = {SysNSStringToUTF8(kCameraLensSymbol), false};
-
-        return result;
+        return SymbolCameraLens;
       }
 
-      SymbolConfig result = {SysNSStringToUTF8(kCartSymbol), true};
-
-      return result;
+      return SymbolCart;
     }
     case TipIdentifier::kLensTranslate: {
-      SymbolConfig result = {SysNSStringToUTF8(kLanguageSymbol), false};
-
-      return result;
+      return SymbolLanguage;
     }
     default:
       return std::nullopt;
@@ -131,12 +143,9 @@ std::optional<SymbolConfig> GetBadgeSymbolConfigForTip(TipIdentifier tip,
 
 @interface TipsModuleConfig ()
 
-// Config for the shape and size of the SF Symbol used for this Tips module.
-@property(nonatomic, readonly) SymbolConfig symbolConfig;
-
 // Config for the shape and size of the SF Symbol used for the badge on this
 // Tips module.
-@property(nonatomic, readonly) std::optional<SymbolConfig> badgeSymbolConfig;
+@property(nonatomic, readonly) std::optional<Symbol> badgeSymbolConfig;
 
 @end
 
@@ -151,11 +160,7 @@ std::optional<SymbolConfig> GetBadgeSymbolConfigForTip(TipIdentifier tip,
 
 #pragma mark - Accessors
 
-- (SymbolConfig)symbolConfig {
-  return GetSymbolConfigForTip(self.identifier);
-}
-
-- (std::optional<SymbolConfig>)badgeSymbolConfig {
+- (std::optional<Symbol>)badgeSymbolConfig {
   return GetBadgeSymbolConfigForTip(self.identifier, [self productImage]);
 }
 
@@ -203,6 +208,12 @@ std::optional<SymbolConfig> GetBadgeSymbolConfigForTip(TipIdentifier tip,
       return GetNSString(IDS_IOS_MAGIC_STACK_TIP_AUTOFILL_PASSWORDS_TITLE);
     case TipIdentifier::kEnhancedSafeBrowsing:
       return GetNSString(IDS_IOS_MAGIC_STACK_TIP_SAFE_BROWSING_TITLE);
+    case TipIdentifier::kNTPTheme:
+    case TipIdentifier::kNTPCustomization:
+      return GetNSString(IDS_IOS_MAGIC_STACK_TIP_NTP_THEME_TITLE);
+    case TipIdentifier::kTipsNotifications:
+      // TODO(crbug.com/566958827): Add the correct strings once finalized.
+      return @"Get Chrome Tips";
   }
 }
 
@@ -226,6 +237,13 @@ std::optional<SymbolConfig> GetBadgeSymbolConfigForTip(TipIdentifier tip,
           IDS_IOS_MAGIC_STACK_TIP_AUTOFILL_PASSWORDS_DESCRIPTION);
     case TipIdentifier::kEnhancedSafeBrowsing:
       return GetNSString(IDS_IOS_MAGIC_STACK_TIP_SAFE_BROWSING_DESCRIPTION);
+    case TipIdentifier::kNTPTheme:
+      return GetNSString(IDS_IOS_MAGIC_STACK_TIP_NTP_THEME_DESCRIPTION);
+    case TipIdentifier::kTipsNotifications:
+      // TODO(crbug.com/566958827): Add the correct strings once finalized.
+      return @"Get notified about security updates, custom themes, and more.";
+    case TipIdentifier::kNTPCustomization:
+      return GetNSString(IDS_IOS_MAGIC_STACK_TIP_NTP_CUSTOMIZATION_DESCRIPTION);
   }
 }
 
@@ -251,6 +269,12 @@ std::optional<SymbolConfig> GetBadgeSymbolConfigForTip(TipIdentifier tip,
       return kAutofillPasswordsAccessibilityID;
     case TipIdentifier::kEnhancedSafeBrowsing:
       return kEnhancedSafeBrowsingAccessibilityID;
+    case TipIdentifier::kNTPTheme:
+      return kNTPThemeAccessibilityID;
+    case TipIdentifier::kTipsNotifications:
+      return kTipsNotificationsAccessibilityID;
+    case TipIdentifier::kNTPCustomization:
+      return kNTPCustomizationAccessibilityID;
   }
 }
 
@@ -258,18 +282,35 @@ std::optional<SymbolConfig> GetBadgeSymbolConfigForTip(TipIdentifier tip,
   return [self productImage];
 }
 
+- (Symbol)symbol {
+  return SymbolForTip(self.identifier);
+}
+
 - (NSString*)iconName {
-  return SysUTF8ToNSString(self.symbolConfig.name);
+  if (self.identifier == TipIdentifier::kNTPTheme) {
+    return kNTPThemeTipIconImageName;
+  }
+  return nil;
 }
 
 - (IconViewSourceType)iconSource {
+  if (self.identifier == TipIdentifier::kNTPTheme) {
+    return IconViewSourceType::kImage;
+  }
   return IconViewSourceType::kSymbol;
 }
 
 - (NSArray<UIColor*>*)symbolColorPalette {
   switch (self.identifier) {
+    case TipIdentifier::kTipsNotifications:
+      if (segmentation_platform::features::
+              IsMagicStackTipsNotificationTipIosActionableEnabled()) {
+        return @[ [UIColor colorNamed:kBlue600Color] ];
+      }
+      return @[ [UIColor whiteColor] ];
     case TipIdentifier::kAddressBarPosition:
     case TipIdentifier::kEnhancedSafeBrowsing:
+    case TipIdentifier::kNTPCustomization:
       return @[ [UIColor whiteColor] ];
     case TipIdentifier::kSavePasswords:
     case TipIdentifier::kAutofillPasswords:
@@ -297,24 +338,33 @@ std::optional<SymbolConfig> GetBadgeSymbolConfigForTip(TipIdentifier tip,
 #endif  // BUILDFLAG(IS_IOS_MACCATALYST)
     case TipIdentifier::kEnhancedSafeBrowsing:
       return [UIColor colorNamed:kBlue500Color];
+    case TipIdentifier::kTipsNotifications:
+      if (segmentation_platform::features::
+              IsMagicStackTipsNotificationTipIosActionableEnabled()) {
+        return nil;
+      }
+      return [UIColor colorNamed:kPink500Color];
+    case TipIdentifier::kNTPCustomization:
+      return [UIColor colorNamed:kPurple500Color];
+    case TipIdentifier::kNTPTheme:
+      return nil;
     default:
       return [UIColor colorNamed:kBackgroundColor];
   }
 }
 
-- (BOOL)usesDefaultSymbol {
-  return self.symbolConfig.is_default_symbol;
-}
-
 - (CGFloat)iconWidth {
+  if (self.identifier == TipIdentifier::kNTPTheme) {
+    return kNTPThemeIconWidth;
+  }
   return kSymbolWidth;
 }
 
-- (NSString*)badgeSymbolName {
+- (Symbol)badgeSymbol {
   if (!self.badgeSymbolConfig.has_value()) {
-    return nil;
+    return SymbolNone;
   }
-  return SysUTF8ToNSString(self.badgeSymbolConfig.value().name);
+  return self.badgeSymbolConfig.value();
 }
 
 - (NSArray<UIColor*>*)badgeColorPalette {
@@ -354,11 +404,10 @@ std::optional<SymbolConfig> GetBadgeSymbolConfigForTip(TipIdentifier tip,
   }
 }
 
-- (BOOL)badgeUsesDefaultSymbol {
-  if (!self.badgeSymbolConfig.has_value()) {
-    return NO;
-  }
-  return self.badgeSymbolConfig.value().is_default_symbol;
+- (BOOL)showSwitch {
+  return self.identifier == TipIdentifier::kTipsNotifications &&
+         segmentation_platform::features::
+             IsMagicStackTipsNotificationTipIosActionableEnabled();
 }
 
 #pragma mark - IconDetailViewTapDelegate
@@ -374,11 +423,14 @@ std::optional<SymbolConfig> GetBadgeSymbolConfigForTip(TipIdentifier tip,
   [self.audience didSelectTip:tip];
 }
 
+- (void)didToggleSwitchInIconDetailView:(IconDetailView*)view isOn:(BOOL)isOn {
+  [self.audience didToggleTipsNotificationsSwitch:isOn];
+}
+
 #pragma mark - Private
 
 - (UIImage*)productImage {
-  return [UIImage imageWithData:self.productImageData
-                          scale:[UIScreen mainScreen].scale];
+  return [UIImage imageWithData:self.productImageData];
 }
 
 @end

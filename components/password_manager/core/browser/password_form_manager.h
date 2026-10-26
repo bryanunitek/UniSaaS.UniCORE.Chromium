@@ -36,6 +36,7 @@
 #include "components/password_manager/core/browser/password_manager_metrics_recorder.h"
 #include "components/password_manager/core/browser/password_save_manager.h"
 #include "components/password_manager/core/browser/password_store/stored_credential.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/possible_username_data.h"
 #include "components/password_manager/core/browser/votes_uploader.h"
 #include "url/gurl.h"
@@ -215,9 +216,10 @@ class PasswordFormManager : public PasswordFormManagerForUI,
   bool IsMovableToAccountStore() const override;
 
   void Save() override;
+  bool IsPasswordUpdate() const override;
   bool IsUpdateAffectingPasswordsStoredInTheGoogleAccount() const override;
   void OnUpdateUsernameFromPrompt(const std::u16string& new_username) override;
-  void OnUpdatePasswordFromPrompt(const std::u16string& new_password) override;
+  void OnUpdatePasswordFromPrompt(const PasswordString& new_password) override;
 
   void OnNopeUpdateClicked() override;
   void OnNeverClicked() override;
@@ -238,16 +240,15 @@ class PasswordFormManager : public PasswordFormManagerForUI,
   static void PresaveGeneratedPasswordAsBackup(
       const PasswordFormManager& form_manager,
       PasswordForm form,
-      const std::u16string& generated_password);
+      const PasswordString& generated_password);
   void PresaveGeneratedPassword(const autofill::FormData& form_data,
-                                const std::u16string& generated_password);
+                                const PasswordString& generated_password);
   void PasswordNoLongerGenerated();
   bool HasGeneratedPassword() const;
   void SetGenerationPopupWasShown(
       autofill::password_generation::PasswordGenerationType type);
   void SetGenerationElement(autofill::FieldRendererId generation_element);
   bool HasLikelyChangeOrResetFormSubmitted() const;
-  bool IsPasswordUpdate() const;
   base::WeakPtr<PasswordManagerDriver> GetDriver() const;
   const PasswordForm* GetSubmittedForm() const;
   const PasswordForm* GetParsedObservedForm() const;
@@ -376,7 +377,7 @@ class PasswordFormManager : public PasswordFormManagerForUI,
 
   void PresaveGeneratedPasswordInternal(
       const autofill::FormData& form,
-      const std::u16string& generated_password);
+      const PasswordString& generated_password);
 
   // Returns a mutable pointer to the observed form if possible or nullptr
   // otherwise.
@@ -432,7 +433,8 @@ class PasswordFormManager : public PasswordFormManagerForUI,
   void DelayFillForServerSidePredictions();
 
   // Sends fill data to the renderer immediately regardless of whether server
-  // predictions are available.
+  // predictions are available. Note that this method can cause `this` to be
+  // destroyed, so no logic should be executed after calling `FillNow()`.
   void FillNow();
 
   // Checks if `best_candidate` has better signal than the username

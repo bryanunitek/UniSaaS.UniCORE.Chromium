@@ -9,12 +9,10 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_window.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/profiles/profile_management_step_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
@@ -52,6 +50,10 @@ std::string_view GetStepHistogramSuffix(
       return ".FeatureShowcase";
     case ProfileManagementFlowController::Step::kFinishOrContinue:
       return ".FinishOrContinue";
+    case ProfileManagementFlowController::Step::kDeviceSignalsDisclaimer:
+      return ".DeviceSignalsDisclaimer";
+    case ProfileManagementFlowController::Step::kWelcome:
+      return ".Welcome";
   }
 }
 // LINT.ThenChange(//tools/metrics/histograms/metadata/profile/histograms.xml:StepName)
@@ -65,7 +67,7 @@ ProfileManagementFlowController::ProfileManagementFlowController(
     : host_(host),
       clear_host_callback_(std::move(clear_host_callback)),
       flow_tracker_(flow_type_string) {
-  DCHECK(clear_host_callback_.value());
+  CHECK(clear_host_callback_.value(), base::NotFatalUntil::M162);
 }
 
 ProfileManagementFlowController::~ProfileManagementFlowController() {
@@ -95,7 +97,7 @@ void ProfileManagementFlowController::SwitchToStep(
       CombineCallbacks<StepSwitchFinishedCallback, bool>(std::move(callbacks));
 
   auto* new_step_controller = initialized_steps_.at(step).get();
-  DCHECK(new_step_controller);
+  CHECK(new_step_controller, base::NotFatalUntil::M162);
   new_step_controller->set_pop_step_callback(std::move(pop_step_callback));
   new_step_controller->Show(std::move(combined_step_switch_callbacks),
                             reset_state);
@@ -106,14 +108,24 @@ void ProfileManagementFlowController::SwitchToStep(
   }
 }
 
+bool ProfileManagementFlowController::CanNavigateBack() const {
+  auto it = initialized_steps_.find(flow_tracker_.tracked_step());
+  if (it == initialized_steps_.end()) {
+    return false;
+  }
+  return it->second->CanNavigateBack();
+}
+
 void ProfileManagementFlowController::OnNavigateBackRequested() {
-  DCHECK(initialized_steps_.contains(flow_tracker_.tracked_step()));
+  CHECK(initialized_steps_.contains(flow_tracker_.tracked_step()),
+        base::NotFatalUntil::M162);
   initialized_steps_.at(flow_tracker_.tracked_step())
       ->OnNavigateBackRequested();
 }
 
 void ProfileManagementFlowController::OnReloadRequested() {
-  DCHECK(initialized_steps_.contains(flow_tracker_.tracked_step()));
+  CHECK(initialized_steps_.contains(flow_tracker_.tracked_step()),
+        base::NotFatalUntil::M162);
   initialized_steps_.at(flow_tracker_.tracked_step())->OnReloadRequested();
 }
 
@@ -176,23 +188,24 @@ ProfileManagementFlowController::GetCurrentStepController() const {
 void ProfileManagementFlowController::FinishFlowAndRunInBrowser(
     Profile* profile,
     PostHostClearedCallback post_host_cleared_callback) {
-  DCHECK(clear_host_callback_.value());  // The host shouldn't be cleared yet.
+  CHECK(clear_host_callback_.value(),
+        base::NotFatalUntil::M162);  // The host shouldn't be cleared yet.
 
   // TODO(crbug.com/40246333): Handle the return value and don't open a browser
   // if it is already going to be opened.
   PreFinishWithBrowser();
 
-  base::OnceCallback<void(Browser*)> post_browser_open_callback;
+  base::OnceCallback<void(BrowserWindowInterface*)> post_browser_open_callback;
   // `clear_host_callback_` and `post_host_cleared_callback` may be run after
   // the `ProfileManagementFlowController` is deleted.
   if (post_host_cleared_callback->is_null()) {
-    post_browser_open_callback =
-        base::IgnoreArgs<Browser*>(std::move(clear_host_callback_.value()));
+    post_browser_open_callback = base::IgnoreArgs<BrowserWindowInterface*>(
+        std::move(clear_host_callback_.value()));
   } else {
     post_browser_open_callback =
         base::BindOnce(
             [](base::OnceClosure clear_host_closure,
-               Browser* browser) -> BrowserWindowInterface* {
+               BrowserWindowInterface* browser) -> BrowserWindowInterface* {
               std::move(clear_host_closure).Run();
               return browser;
             },

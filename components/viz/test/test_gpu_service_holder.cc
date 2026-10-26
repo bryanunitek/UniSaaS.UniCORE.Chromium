@@ -50,6 +50,12 @@
 #include "gpu/command_buffer/service/dawn_context_provider.h"
 #endif
 
+#if BUILDFLAG(IS_WIN)
+#include "ui/gl/dc_surface_solid_color_pool.h"
+#include "ui/gl/direct_composition_support.h"
+#include "ui/gl/gl_angle_util_win.h"
+#endif
+
 namespace viz {
 
 namespace {
@@ -266,6 +272,16 @@ scoped_refptr<gl::GLShareGroup> TestGpuServiceHolder::GetShareGroup() {
   return gpu_service_->share_group();
 }
 
+gpu::GraphiteSharedContext* TestGpuServiceHolder::GetGraphiteSharedContext()
+    const {
+#if BUILDFLAG(SKIA_USE_DAWN)
+  if (gpu_service_->dawn_context_provider()) {
+    return gpu_service_->dawn_context_provider()->GetGraphiteSharedContext();
+  }
+#endif
+  return nullptr;
+}
+
 void TestGpuServiceHolder::ScheduleGpuMainTask(base::OnceClosure callback) {
   DCHECK(gpu_main_task_sequence_);
   gpu_main_task_sequence_->ScheduleTask(
@@ -280,6 +296,31 @@ void TestGpuServiceHolder::ScheduleCompositorGpuTask(
   else
     ScheduleGpuMainTask(std::move(callback));
 }
+
+#if BUILDFLAG(IS_WIN)
+void TestGpuServiceHolder::InitializeDirectComposition() {
+  if (direct_composition_initialized_) {
+    return;
+  }
+  base::WaitableEvent completion;
+  gpu_main_thread_.task_runner()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](base::WaitableEvent* completion) {
+            if (auto d3d11_device = gl::QueryD3D11DeviceObjectFromANGLE()) {
+              auto solid_color_factory =
+                  gl::CreateDCSurfaceSolidColorPoolFactory(d3d11_device);
+              gl::InitializeDirectComposition(d3d11_device,
+                                              /*d3d12_command_queue=*/nullptr,
+                                              std::move(solid_color_factory));
+            }
+            completion->Signal();
+          },
+          &completion));
+  completion.Wait();
+  direct_composition_initialized_ = true;
+}
+#endif
 
 void TestGpuServiceHolder::InitializeOnGpuThread(
     const gpu::GpuPreferences& original_gpu_preferences,

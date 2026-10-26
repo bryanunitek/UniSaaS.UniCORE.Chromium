@@ -6,10 +6,11 @@
 
 #include <memory>
 
+#include "base/strings/strcat.h"
+#include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/feedback/show_feedback_page.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/global_media_controls/media_notification_service.h"
 #include "chrome/browser/ui/global_media_controls/media_notification_service_factory.h"
 #include "chrome/browser/ui/singleton_tabs.h"
@@ -19,17 +20,21 @@
 #include "components/media_router/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#include "chrome/browser/feedback/feedback_disabled_dialog.h"
+#endif
+
 namespace {
-global_media_controls::MediaItemManager* GetItemManagerFromBrowser(
-    Browser* browser) {
-  return MediaNotificationServiceFactory::GetForProfile(browser->profile())
-      ->media_item_manager();
+global_media_controls::MediaItemManager* GetItemManagerFromProfile(
+    Profile* profile) {
+  auto* service = MediaNotificationServiceFactory::GetForProfile(profile);
+  return service ? service->media_item_manager() : nullptr;
 }
 }  // namespace
 
 MediaToolbarButtonContextualMenu::MediaToolbarButtonContextualMenu(
-    Browser* browser)
-    : browser_(browser) {}
+    Profile* profile)
+    : profile_(profile) {}
 
 MediaToolbarButtonContextualMenu::~MediaToolbarButtonContextualMenu() = default;
 
@@ -41,7 +46,7 @@ MediaToolbarButtonContextualMenu::CreateMenuModel() {
       IDS_MEDIA_TOOLBAR_CONTEXT_SHOW_OTHER_SESSIONS);
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  if (chrome::CanShowFeedback(browser_->profile())) {
+  if (chrome::CanShowFeedback(profile_)) {
     menu_model->AddItemWithStringId(
         IDC_MEDIA_TOOLBAR_CONTEXT_REPORT_CAST_ISSUE,
         IDS_MEDIA_TOOLBAR_CONTEXT_REPORT_CAST_ISSUE);
@@ -52,7 +57,7 @@ MediaToolbarButtonContextualMenu::CreateMenuModel() {
 
 bool MediaToolbarButtonContextualMenu::IsCommandIdChecked(
     int command_id) const {
-  PrefService* pref_service = browser_->profile()->GetPrefs();
+  PrefService* pref_service = profile_->GetPrefs();
   switch (command_id) {
     case IDC_MEDIA_TOOLBAR_CONTEXT_SHOW_OTHER_SESSIONS:
       return pref_service->GetBoolean(
@@ -65,7 +70,7 @@ bool MediaToolbarButtonContextualMenu::IsCommandIdChecked(
 
 bool MediaToolbarButtonContextualMenu::IsCommandIdEnabled(
     int command_id) const {
-  PrefService* pref_service = browser_->profile()->GetPrefs();
+  PrefService* pref_service = profile_->GetPrefs();
   switch (command_id) {
     case IDC_MEDIA_TOOLBAR_CONTEXT_SHOW_OTHER_SESSIONS:
       // The pref may be managed by an enterprise policy and not modifiable by
@@ -95,17 +100,17 @@ void MediaToolbarButtonContextualMenu::ExecuteCommand(int command_id,
 }
 
 void MediaToolbarButtonContextualMenu::MenuClosed(ui::SimpleMenuModel* source) {
-  if (!browser_) {
+  if (!profile_) {
     return;
   }
-  auto* item_manager = GetItemManagerFromBrowser(browser_);
+  auto* item_manager = GetItemManagerFromProfile(profile_);
   if (item_manager) {
     item_manager->OnItemsChanged();
   }
 }
 
 void MediaToolbarButtonContextualMenu::ToggleShowOtherSessions() {
-  PrefService* pref_service = browser_->profile()->GetPrefs();
+  PrefService* pref_service = profile_->GetPrefs();
   pref_service->SetBoolean(
       media_router::prefs::kMediaRouterShowCastSessionsStartedByOtherDevices,
       !pref_service->GetBoolean(
@@ -115,8 +120,18 @@ void MediaToolbarButtonContextualMenu::ToggleShowOtherSessions() {
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 void MediaToolbarButtonContextualMenu::ReportIssue() {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  // Cast uses its own feedback page (chrome://cast-feedback) instead of the
+  // standard feedback dialog. However, when feedback submission is disabled,
+  // chrome://cast-feedback is not available; display the FeedbackDisabledDialog
+  // instead.
+  if (!chrome::CanSubmitFeedback(profile_)) {
+    chrome::ShowFeedbackDisabledDialog(gfx::NativeWindow(), profile_);
+    return;
+  }
+#endif
   ShowSingletonTab(
-      browser_,
+      profile_,
       GURL(base::StrCat({"chrome://", chrome::kChromeUICastFeedbackHost})));
 }
 #endif

@@ -17,7 +17,9 @@ import static androidx.test.espresso.matcher.ViewMatchers.withText;
 import androidx.preference.Preference;
 import androidx.test.filters.SmallTest;
 
+import org.junit.After;
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -27,7 +29,7 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.test.util.DoNotBatch;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
@@ -39,8 +41,9 @@ import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridge;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingState;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsInTab;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.browser_ui.settings.SettingsNavigation;
 import org.chromium.components.browser_ui.widget.RadioButtonWithDescription;
@@ -49,7 +52,7 @@ import org.chromium.components.policy.test.annotations.Policies;
 
 /** Tests for {@link SafeBrowsingSettingsFragment}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@DoNotBatch(reason = "This test launches a Settings activity")
+@Batch(Batch.PER_CLASS)
 public class SafeBrowsingSettingsFragmentTest {
     private static final String ASSERT_SAFE_BROWSING_STATE_RADIO_BUTTON_GROUP =
             "Incorrect Safe Browsing state in the radio button group.";
@@ -61,8 +64,8 @@ public class SafeBrowsingSettingsFragmentTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Rule
-    public SettingsActivityTestRule<SafeBrowsingSettingsFragment> mTestRule =
-            new SettingsActivityTestRule<>(SafeBrowsingSettingsFragment.class);
+    public SettingsTestRule<SafeBrowsingSettingsFragment> mTestRule =
+            new SettingsTestRule<>(SafeBrowsingSettingsFragment.class);
 
     @Mock private SettingsNavigation mSettingsNavigation;
 
@@ -71,6 +74,13 @@ public class SafeBrowsingSettingsFragmentTest {
     private SafeBrowsingSettingsFragment mSafeBrowsingSettingsFragment;
     private RadioButtonGroupSafeBrowsingPreference mSafeBrowsingPreference;
     private Preference mManagedDisclaimerText;
+
+    @After
+    public void tearDown() {
+        if (ProfileManager.isInitialized()) {
+            setSafeBrowsingState(SafeBrowsingState.STANDARD_PROTECTION);
+        }
+    }
 
     private void startSettings() {
         mTestRule.startSettingsActivity();
@@ -313,7 +323,7 @@ public class SafeBrowsingSettingsFragmentTest {
                     getEnhancedProtectionButton().getAuxButtonForTests().performClick();
                     Mockito.verify(mSettingsNavigation)
                             .startSettings(
-                                    mSafeBrowsingSettingsFragment.getContext(),
+                                    mSafeBrowsingSettingsFragment.getActivity(),
                                     EnhancedProtectionSettingsFragment.class,
                                     null,
                                     true);
@@ -331,7 +341,7 @@ public class SafeBrowsingSettingsFragmentTest {
                     getStandardProtectionButton().getAuxButtonForTests().performClick();
                     Mockito.verify(mSettingsNavigation)
                             .startSettings(
-                                    mSafeBrowsingSettingsFragment.getContext(),
+                                    mSafeBrowsingSettingsFragment.getActivity(),
                                     StandardProtectionSettingsFragment.class,
                                     null,
                                     true);
@@ -427,6 +437,9 @@ public class SafeBrowsingSettingsFragmentTest {
     @SmallTest
     @Feature({"SafeBrowsing"})
     public void testHelpButtonClicked() {
+        // Settings in a tab doesn't have a help button or menu.
+        Assume.assumeTrue(!SettingsInTab.shouldOpenSettingsInTab());
+
         startSettings();
         HelpAndFeedbackLauncherFactory.setInstanceForTesting(mHelpAndFeedbackLauncher);
         onView(withId(R.id.menu_id_targeted_help)).perform(click());

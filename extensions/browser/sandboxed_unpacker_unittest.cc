@@ -9,12 +9,15 @@
 
 #include "base/base64.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/features.h"
+#include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/pattern.h"
@@ -34,6 +37,7 @@
 #include "extensions/browser/extensions_test.h"
 #include "extensions/browser/install/crx_install_error.h"
 #include "extensions/browser/install/sandboxed_unpacker_failure_reason.h"
+#include "extensions/browser/install_stage.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_paths.h"
@@ -118,6 +122,11 @@ class MockSandboxedUnpackerClient : public SandboxedUnpackerClient {
     should_compute_hashes_ = should_compute_hashes;
   }
 
+  void set_stage_changed_callback(
+      base::RepeatingCallback<void(InstallationStage)> callback) {
+    stage_changed_callback_ = std::move(callback);
+  }
+
   void SetQuitClosure(base::OnceClosure quit_closure) {
     quit_closure_ = std::move(quit_closure);
   }
@@ -153,12 +162,19 @@ class MockSandboxedUnpackerClient : public SandboxedUnpackerClient {
     callback_runner_->PostTask(FROM_HERE, std::move(quit_closure_));
   }
 
+  void OnStageChanged(InstallationStage stage) override {
+    if (stage_changed_callback_) {
+      stage_changed_callback_.Run(stage);
+    }
+  }
+
   scoped_refptr<base::SequencedTaskRunner> callback_runner_;
   std::optional<CrxInstallError> error_;
   base::OnceClosure quit_closure_;
   base::FilePath temp_dir_;
   raw_ptr<bool> deleted_tracker_ = nullptr;
   bool should_compute_hashes_ = false;
+  base::RepeatingCallback<void(InstallationStage)> stage_changed_callback_;
 };
 
 class SandboxedUnpackerTest : public ExtensionsTest {
@@ -176,9 +192,11 @@ class SandboxedUnpackerTest : public ExtensionsTest {
     ASSERT_TRUE(extensions_dir_.CreateUniqueTempDir());
     in_process_utility_thread_helper_ =
         std::make_unique<content::InProcessUtilityThreadHelper>();
-    // It will delete itself.
-    client_ = new MockSandboxedUnpackerClient(
+    // `client_` is not owning; `sandboxed_unpacker_` holds the only reference
+    // and deletes the client when it is released.
+    auto client = base::MakeRefCounted<MockSandboxedUnpackerClient>(
         task_environment()->GetMainThreadTaskRunner());
+    client_ = client.get();
 
     InitSandboxedUnpacker();
 
@@ -220,6 +238,19 @@ class SandboxedUnpackerTest : public ExtensionsTest {
     base::FilePath crx_path = GetCrxFullPath(crx_name);
     extensions::CRXFileInfo crx_info(crx_path, GetTestVerifierFormat());
     crx_info.expected_hash = package_hash;
+
+    base::RunLoop run_loop;
+    client_->SetQuitClosure(run_loop.QuitClosure());
+
+    unpacker_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&SandboxedUnpacker::StartWithCrx,
+                                  sandboxed_unpacker_, crx_info));
+    // Wait for unpack
+    run_loop.Run();
+  }
+
+  void SetupUnpackerWithPath(const base::FilePath& crx_path) {
+    extensions::CRXFileInfo crx_info(crx_path, GetTestVerifierFormat());
 
     base::RunLoop run_loop;
     client_->SetQuitClosure(run_loop.QuitClosure());
@@ -503,6 +534,43 @@ TEST_F(SandboxedUnpackerTest, TestRewriteManifestInjections) {
   EXPECT_EQ(fingerprint, *differential_fingerprint);
 }
 
+// POSIX-only: on Windows, deleting an open file without `FILE_SHARE_DELETE`
+// fails, or the subsequent create fails while deletion is pending, so the
+// rewrite fails safely rather than unlinking an open inode.
+#if BUILDFLAG(IS_POSIX)
+TEST_F(SandboxedUnpackerTest, TestRewriteManifestUnlinksExistingFile) {
+  SetPublicKey("test_key");
+  SetExtensionRoot(extensions_dir_.GetPath());
+
+  const base::FilePath manifest_path =
+      extensions_dir_.GetPath().Append(kManifestFilename);
+  base::File retained_file(manifest_path, base::File::FLAG_CREATE |
+                                              base::File::FLAG_READ |
+                                              base::File::FLAG_WRITE);
+  ASSERT_TRUE(retained_file.IsValid());
+  ASSERT_TRUE(retained_file.WriteAtCurrentPosAndCheck(
+      base::byte_span_from_cstring("{\"v\":1}")));
+
+  std::optional<base::DictValue> manifest =
+      RewriteManifestFile(base::DictValue().Set("version", "1.2.3"));
+  ASSERT_TRUE(manifest.has_value());
+
+  std::string expected_contents;
+  ASSERT_TRUE(base::ReadFileToString(manifest_path, &expected_contents));
+
+  // Writing through a retained file descriptor opened before
+  // RewriteManifestFile() must not affect the rewritten manifest on disk.
+  ASSERT_EQ(0, retained_file.Seek(base::File::FROM_BEGIN, 0));
+  ASSERT_TRUE(retained_file.WriteAtCurrentPosAndCheck(
+      base::byte_span_from_cstring("{\"tampered\":true}")));
+  retained_file.Close();
+
+  std::string actual_contents;
+  ASSERT_TRUE(base::ReadFileToString(manifest_path, &actual_contents));
+  EXPECT_EQ(expected_contents, actual_contents);
+}
+#endif  // BUILDFLAG(IS_POSIX)
+
 TEST_F(SandboxedUnpackerTest, InvalidMessagesFile) {
   SetupUnpackerWithDirectory("invalid_messages_file.crx");
   // Check that there is no _locales folder.
@@ -535,6 +603,46 @@ TEST_F(SandboxedUnpackerTest, SkipHashCheck) {
   // Check that there is no error message.
   EXPECT_THAT(GetInstallErrorMessage(), testing::IsEmpty());
   EXPECT_EQ(CrxInstallErrorType::NONE, GetInstallErrorType());
+}
+
+// Signature validation must operate on the same bytes that are unpacked. If
+// the source file changes during installation, the unsigned content must not
+// be installed.
+TEST_F(SandboxedUnpackerTest, SourceCrxReplacedDuringInstall) {
+  // Stage a writable copy of a valid signed CRX as the install source.
+  base::ScopedTempDir source_dir;
+  ASSERT_TRUE(source_dir.CreateUniqueTempDir());
+  base::FilePath source_crx = source_dir.GetPath().AppendASCII("ext.crx");
+  ASSERT_TRUE(base::CopyFile(GetCrxFullPath("no_l10n.crx"), source_crx));
+
+  // Prepare a plain ZIP archive (not a signed CRX) to swap in as the source
+  // file at the point where the source is copied into the working directory.
+  base::FilePath unsigned_zip = source_dir.GetPath().AppendASCII("unsigned");
+  ASSERT_TRUE(zip::Zip(GetCrxFullPath("no_l10n"), unsigned_zip,
+                       /*include_hidden_files=*/true));
+  // OnStageChanged(InstallationStage::kCopying) is invoked in StartWithCrx()
+  // immediately before base::CopyFile() copies the source CRX into Chrome's
+  // temporary working directory. When the callback fires on the kCopying stage,
+  // overwrite source_crx with unsigned_zip so base::CopyFile() copies the
+  // unsigned ZIP into temp_crx_path for signature validation.
+  client_->set_stage_changed_callback(base::BindRepeating(
+      [](const base::FilePath& from, const base::FilePath& to,
+         InstallationStage stage) {
+        if (stage == InstallationStage::kCopying) {
+          EXPECT_TRUE(base::CopyFile(from, to));
+        }
+      },
+      unsigned_zip, source_crx));
+
+  SetupUnpackerWithPath(source_crx);
+
+  // The replacement archive has no valid CRX header, so validation must fail.
+  EXPECT_FALSE(InstallSucceeded());
+  ASSERT_EQ(CrxInstallErrorType::SANDBOXED_UNPACKER_FAILURE,
+            GetInstallErrorType());
+  EXPECT_EQ(
+      static_cast<int>(SandboxedUnpackerFailureReason::CRX_HEADER_INVALID),
+      GetInstallErrorDetail());
 }
 
 // The following tests simulate the utility services failling.

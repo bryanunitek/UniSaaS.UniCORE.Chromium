@@ -229,7 +229,7 @@ TEST_P(ScopeProximityTest, All) {
   auto* style_rule = DynamicTo<StyleRule>(rule);
   ASSERT_TRUE(style_rule);
 
-  Element* target = GetDocument().getElementById(AtomicString("target"));
+  Element* target = GetElementById("target");
   ASSERT_TRUE(target);
 
   SelectorChecker checker(SelectorChecker::kResolvingStyle);
@@ -318,7 +318,7 @@ TEST_P(MatchFlagsTest, All) {
   )HTML");
   UpdateAllLifecyclePhasesForTest();
 
-  Element* element = GetDocument().getElementById(AtomicString("target"));
+  Element* element = GetElementById("target");
   ASSERT_TRUE(element);
 
   CSSSelectorList* selector_list =
@@ -339,7 +339,7 @@ TEST_P(MatchFlagsTest, All) {
   using Bits = std::bitset<sizeof(MatchFlags) * 8>;
 
   SCOPED_TRACE(param.selector);
-  EXPECT_EQ(Bits(param.expected), Bits(result.flags));
+  EXPECT_EQ(Bits(param.expected), Bits(result.flags & ~kPrecomputedHoverMask));
 }
 
 class ImpactTest : public PageTestBase {
@@ -359,15 +359,9 @@ class ImpactTest : public PageTestBase {
     UpdateAllLifecyclePhasesForTest();
   }
 
-  Element& Outer() const {
-    return *GetDocument().getElementById(AtomicString("outer"));
-  }
-  Element& Middle() const {
-    return *GetDocument().getElementById(AtomicString("middle"));
-  }
-  Element& Inner() const {
-    return *GetDocument().getElementById(AtomicString("inner"));
-  }
+  Element& Outer() const { return *GetElementById("outer"); }
+  Element& Middle() const { return *GetElementById("middle"); }
+  Element& Inner() const { return *GetElementById("inner"); }
 
   using Impact = SelectorChecker::Impact;
 
@@ -386,7 +380,7 @@ class ImpactTest : public PageTestBase {
     SelectorChecker::MatchResult result;
     checker.Match(context, result);
 
-    return result.flags;
+    return result.flags & ~kPrecomputedHoverMask;
   }
 };
 
@@ -686,7 +680,7 @@ TEST_P(MatchFlagsShadowTest, Host) {
   )HTML");
   UpdateAllLifecyclePhasesForTest();
 
-  Element* host = GetDocument().getElementById(AtomicString("host"));
+  Element* host = GetElementById("host");
   ASSERT_TRUE(host);
   ASSERT_TRUE(host->GetShadowRoot());
 
@@ -728,18 +722,14 @@ class MatchFlagsScopeTest : public PageTestBase {
   }
 
   void SetStyle(String text) {
-    Element* style = GetDocument().getElementById(AtomicString("style"));
+    Element* style = GetElementById("style");
     DCHECK(style);
     style->setTextContent(text);
     UpdateAllLifecyclePhasesForTest();
   }
 
-  Element& Outer() const {
-    return *GetDocument().getElementById(AtomicString("outer"));
-  }
-  Element& Inner() const {
-    return *GetDocument().getElementById(AtomicString("inner"));
-  }
+  Element& Outer() const { return *GetElementById("outer"); }
+  Element& Inner() const { return *GetElementById("inner"); }
 
   bool AffectedByHover(Element& element) {
     return element.ComputedStyleRef().AffectedByHover();
@@ -1009,7 +999,7 @@ class PseudoChildMatchTest
   void SetUp() override {
     PageTestBase::SetUp();
     SetHtmlInnerHTML("<div id=a class=b></div>");
-    originating_element_ = GetDocument().getElementById(AtomicString("a"));
+    originating_element_ = GetElementById("a");
     CHECK(originating_element_);
   }
 
@@ -1165,7 +1155,7 @@ TEST_F(EasySelectorCheckerTest, IsEasy) {
   EXPECT_FALSE(IsEasy(".a > .b .c"));
   EXPECT_FALSE(IsEasy(".a ~ .b"));
   EXPECT_FALSE(IsEasy("&"));
-  EXPECT_FALSE(IsEasy(":not(.a)"));
+  EXPECT_TRUE(IsEasy(":not(.a)"));
   EXPECT_TRUE(IsEasy(":not(div)"));
 }
 
@@ -1194,6 +1184,9 @@ TEST_F(EasySelectorCheckerTest, SmokeTest) {
   EXPECT_FALSE(Matches("div#a #c.cls1", "b"));
   EXPECT_FALSE(Matches("#c .cls1", "c"));
   EXPECT_FALSE(Matches("div #a .cls1", "c"));
+  EXPECT_TRUE(Matches(":not(.cls1)", "b"));
+  EXPECT_FALSE(Matches(":not(.cls1)", "c"));
+  EXPECT_TRUE(Matches("div:not(.cls1)", "b"));
 }
 
 class SelectorCheckerTest : public PageTestBase {};
@@ -1207,7 +1200,7 @@ TEST_F(SelectorCheckerTest, PseudoScopeWithoutScope) {
   ASSERT_TRUE(selector_list);
   ASSERT_TRUE(selector_list->First());
 
-  Element* foo = GetDocument().getElementById(AtomicString("foo"));
+  Element* foo = GetElementById("foo");
   ASSERT_TRUE(foo);
 
   SelectorChecker checker(SelectorChecker::kResolvingStyle);
@@ -1256,11 +1249,9 @@ class LangTest : public PageTestBase {
         <div id="xml-bad-over-good" lang="en"></div>
         <div id="xml-good-over-bad" lang="en_US"></div>
       )HTML");
-    GetDocument()
-        .getElementById(AtomicString("xml-bad-over-good"))
+    GetElementById("xml-bad-over-good")
         ->setAttribute(xml_names::kLangAttr, AtomicString("en_US"));
-    GetDocument()
-        .getElementById(AtomicString("xml-good-over-bad"))
+    GetElementById("xml-good-over-bad")
         ->setAttribute(xml_names::kLangAttr, AtomicString("en"));
     UpdateAllLifecyclePhasesForTest();
   }

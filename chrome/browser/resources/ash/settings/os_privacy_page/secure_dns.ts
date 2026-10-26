@@ -22,7 +22,6 @@ import 'chrome://resources/ash/common/cr_elements/md_select.css.js';
 import '../controls/settings_toggle_button.js';
 import './secure_dns_input.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {ResolverOption, SecureDnsSetting, SecurityPageBrowserProxy} from '/shared/settings/security_page/security_page_browser_proxy.js';
 import {SecureDnsMode, SecureDnsUiManagementMode, SecurityPageBrowserProxyImpl} from '/shared/settings/security_page/security_page_browser_proxy.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
@@ -30,6 +29,8 @@ import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_
 import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 
 import {getTemplate} from './secure_dns.html.js';
 import type {SecureDnsInputElement} from './secure_dns_input.js';
@@ -140,17 +141,17 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
     };
   }
 
-  private secureDnsDescription_: string;
-  private secureDnsToggle_: chrome.settingsPrivate.PrefObject<boolean>;
-  private showSecureDnsOptions_: boolean;
-  private resolverOptions_: ResolverOption[];
-  private privacyPolicyString_: TrustedHTML;
-  private secureDnsInputValue_: string;
+  declare private secureDnsDescription_: string;
+  declare private secureDnsToggle_: chrome.settingsPrivate.PrefObject<boolean>;
+  declare private showSecureDnsOptions_: boolean;
+  declare private resolverOptions_: ResolverOption[];
+  declare private privacyPolicyString_: TrustedHTML;
+  declare private secureDnsInputValue_: string;
   private browserProxy_: SecurityPageBrowserProxy =
       SecurityPageBrowserProxyImpl.getInstance();
-  private showNetworkDefaultDescription_: boolean;
-  private showPrivacyPolicyDescription_: boolean;
-  private networkDefaultAriaDescribedBy_: string|null;
+  declare private showNetworkDefaultDescription_: boolean;
+  declare private showPrivacyPolicyDescription_: boolean;
+  declare private networkDefaultAriaDescribedBy_: string|null;
 
 
   override connectedCallback(): void {

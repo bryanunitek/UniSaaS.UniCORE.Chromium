@@ -5,15 +5,15 @@
 #import <memory>
 
 #import "base/base_paths.h"
-#import "base/i18n/time_formatting.h"
 #import "base/ios/ios_util.h"
 #import "base/path_service.h"
+#import "base/strings/stringprintf.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
 #import "base/test/ios/wait_util.h"
 #import "base/time/time.h"
 #import "build/branding_buildflags.h"
-#import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #import "components/autofill/core/common/autofill_features.h"
 #import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/autofill/ios/common/features.h"
@@ -216,9 +216,10 @@ void FillAndSubmitXframeCreditCardForm() {
 
   // Fill the credit card fields that are hosting in iframes.
   // Set the year to fill as 4 years from now.
+  base::Time::Exploded exploded;
+  (base::Time::Now() + base::Days(366 * 4)).LocalExplode(&exploded);
   NSString* year_to_fill =
-      base::SysUTF8ToNSString(base::UnlocalizedTimeFormatWithPattern(
-          base::Time::Now() + base::Days(366 * 4), "yyyy"));
+      base::SysUTF8ToNSString(base::StringPrintf("%04d", exploded.year));
   std::vector<std::tuple<NSString*, NSString*, NSString*>> typingInstructions =
       {std::make_tuple(@"cc-number-frame", @"CCNo", @"5454545454545454"),
        std::make_tuple(@"cc-exp-frame", @"CCExpiresMonth", @"12"),
@@ -259,13 +260,6 @@ void FillAndSubmitXframeCreditCardForm() {
 
   if ([self isRunningTest:@selector(DISABLED_testStickySavePromptJourney)]) {
     config.features_enabled.push_back(kAutofillStickyInfobarIos);
-  }
-  if ([self isRunningTest:@selector
-            (DISABLED_testOfferUpstream_FullData_PaymentsAccepts_Xframe)] ||
-      [self isRunningTest:@selector
-            (DISABLED_testUserData_LocalSave_UserAccepts_Xframe)]) {
-    config.features_enabled.push_back(
-        autofill::features::kAutofillAcrossIframesIos);
   }
   if ([self isRunningTest:@selector(
                               testLocalSaveBottomSheetStrikeLimitExperiment)]) {
@@ -825,7 +819,7 @@ void FillAndSubmitXframeCreditCardForm() {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   [[EarlGrey selectElementWithMatcher:
                  grey_accessibilityLabel(l10n_util::GetNSString(
-                     IDS_AUTOFILL_GOOGLE_PAY_LOGO_ACCESSIBLE_NAME))]
+                     IDS_AUTOFILL_GOOGLE_WALLET_LOGO_ACCESSIBLE_NAME))]
       assertWithMatcher:grey_sufficientlyVisible()];
 
   [[EarlGrey

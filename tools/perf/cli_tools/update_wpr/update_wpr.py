@@ -36,25 +36,29 @@ from telemetry.internal.browser import browser_options
 
 from py_utils import cloud_storage
 
-
 SRC_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+  os.path.join(os.path.dirname(__file__), '..', '..', '..', '..')
+)
 RESULTS2JSON = os.path.join(
-    SRC_ROOT, 'third_party', 'catapult', 'tracing', 'bin', 'results2json')
+  SRC_ROOT, 'third_party', 'catapult', 'tracing', 'bin', 'results2json'
+)
 HISTOGRAM2CSV = os.path.join(
-    SRC_ROOT, 'third_party', 'catapult', 'tracing', 'bin', 'histograms2csv')
+  SRC_ROOT, 'third_party', 'catapult', 'tracing', 'bin', 'histograms2csv'
+)
 RUN_BENCHMARK = os.path.join(SRC_ROOT, 'tools', 'perf', 'run_benchmark')
 DATA_DIR = os.path.join(SRC_ROOT, 'tools', 'perf', 'page_sets', 'data')
 RECORD_WPR = os.path.join(SRC_ROOT, 'tools', 'perf', 'record_wpr')
 DEFAULT_REVIEWERS = ['johnchen@chromium.org']
 MISSING_RESOURCE_RE = re.compile(
-    r'\[network\]: Failed to load resource: the server responded with a status '
-    r'of 404 \(\) ([^\s]+)')
+  r'\[network\]: Failed to load resource: the server responded with a status '
+  r'of 404 \(\) ([^\s]+)'
+)
 
 
 def _GetBranchName():
   branch_name = subprocess.check_output(
-      ['git', 'rev-parse', '--abbrev-ref', 'HEAD']).strip()
+    ['git', 'rev-parse', '--abbrev-ref', 'HEAD']
+  ).strip()
   if isinstance(branch_name, bytes):
     return branch_name.decode("utf-8")
   return branch_name
@@ -77,14 +81,16 @@ def _OpenBrowser(url):
 
 def _SendCLForReview(comment):
   subprocess.check_call(
-      ['git', 'cl', 'comments', '--publish', '--add-comment', comment])
+    ['git', 'cl', 'comments', '--publish', '--add-comment', comment]
+  )
 
 
 def _EnsureEditor():
   if 'EDITOR' not in os.environ:
     os.environ['EDITOR'] = cli_helpers.Prompt(
-        'Looks like EDITOR environment varible is not defined. Please enter '
-        'the command to view logs: ')
+      'Looks like EDITOR environment varible is not defined. Please enter '
+      'the command to view logs: '
+    )
 
 
 def _OpenEditor(filepath):
@@ -104,7 +110,8 @@ def _ExtractLogFile(out_file):
   # the log file, which ensures that it is not overridden by the next run.
   try:
     line = subprocess.check_output(
-      ['grep', 'Chrome log file will be saved in', out_file])
+      ['grep', 'Chrome log file will be saved in', out_file]
+    )
     os.rename(line.split()[-1], out_file + '.chrome.log')
   except subprocess.CalledProcessError as e:
     cli_helpers.Error('Could not find log file: {error}', error=e)
@@ -116,16 +123,21 @@ def _PrintResultsHTMLInfo(out_file):
   histogram_csv = out_file + '.hist.csv'
 
   cli_helpers.Run(
-      [RESULTS2JSON, results_file, histogram_json], env=_PrepareEnv())
+    [RESULTS2JSON, results_file, histogram_json], env=_PrepareEnv()
+  )
   cli_helpers.Run(
-      [HISTOGRAM2CSV, histogram_json, histogram_csv], env=_PrepareEnv())
+    [HISTOGRAM2CSV, histogram_json, histogram_csv], env=_PrepareEnv()
+  )
 
   cli_helpers.Info('Metrics results: file://{path}', path=results_file)
-  names = set([
+  names = set(
+    [
       'console:error:network',
       'console:error:js',
       'console:error:all',
-      'console:error:security'])
+      'console:error:security',
+    ]
+  )
   with open(histogram_csv) as f:
     for line in f.readlines():
       line = line.split(',')
@@ -155,17 +167,20 @@ def _CountLogLines(log_file, line_matcher_re=r'.*'):
 
 def _UploadArchiveToGoogleStorage(archive):
   """Uploads specified WPR archive to the GS."""
-  cli_helpers.Run([
-    'upload_to_google_storage.py', '--bucket=chrome-partner-telemetry',
-    archive])
+  cli_helpers.Run(
+    [
+      'upload_to_google_storage.py',
+      '--bucket=chrome-partner-telemetry',
+      archive,
+    ]
+  )
 
 
 def _GitAddArtifactHash(archive):
   """Stages changes into SHA1 file for commit."""
   archive_sha1 = archive + '.sha1'
   if not os.path.exists(archive_sha1):
-    cli_helpers.Error(
-        'Could not find upload artifact: {sha}', sha=archive_sha1)
+    cli_helpers.Error('Could not find upload artifact: {sha}', sha=archive_sha1)
     return False
   cli_helpers.Run(['git', 'add', archive_sha1])
   return True
@@ -182,22 +197,29 @@ def _PrintRunInfo(out_file, chrome_log_file=False, results_details=True):
   if chrome_log_file:
     cli_helpers.Info('Chrome Log: %s.chrome.log' % out_file)
   cli_helpers.Info('    Total output:   %d' % _CountLogLines(out_file))
-  cli_helpers.Info('    Total Console:  %d' %
-                   _CountLogLines(out_file, r'DevTools console'))
-  cli_helpers.Info('    [security]:     %d' %
-                   _CountLogLines(out_file, r'DevTools console .security.'))
-  cli_helpers.Info('    [network]:      %d' %
-                   _CountLogLines(out_file, r'DevTools console .network.'))
+  cli_helpers.Info(
+    '    Total Console:  %d' % _CountLogLines(out_file, r'DevTools console')
+  )
+  cli_helpers.Info(
+    '    [security]:     %d'
+    % _CountLogLines(out_file, r'DevTools console .security.')
+  )
+  cli_helpers.Info(
+    '    [network]:      %d'
+    % _CountLogLines(out_file, r'DevTools console .network.')
+  )
 
   chrome_log = '%s.chrome.log' % out_file
   if os.path.isfile(chrome_log):
-    cli_helpers.Info('    [javascript]:      %d' %
-                     _CountLogLines(chrome_log, r'Uncaught .*Error'))
+    cli_helpers.Info(
+      '    [javascript]:      %d'
+      % _CountLogLines(chrome_log, r'Uncaught .*Error')
+    )
 
   if results_details:
     missing_urls = _ExtractMissingURLsFromLog(out_file)
     if missing_urls:
-      cli_helpers.Info( 'Missing URLs in the archive:')
+      cli_helpers.Info('Missing URLs in the archive:')
       for missing_url in missing_urls:
         cli_helpers.Info(' - %s' % missing_url)
 
@@ -234,8 +256,9 @@ class WprUpdater(object):
     # {device_id} in the command.
     story_regex = '^%s$' % re.escape(self.story)
     command = [
-        c.format(src=SRC_ROOT, story=story_regex, device_id=self.device_id)
-        for c in command]
+      c.format(src=SRC_ROOT, story=story_regex, device_id=self.device_id)
+      for c in command
+    ]
     timestamp = datetime.datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
     log_path = os.path.join(self.output_dir, '%s_%s' % (log_name, timestamp))
     cli_helpers.CheckLog(command, log_path=log_path, env=_PrepareEnv())
@@ -266,8 +289,10 @@ class WprUpdater(object):
     existing = []
     for a in archive.values():
       used_in_other_stories = any(
-          a in config.values() for story, config in archives.items()
-          if story != self.story)
+        a in config.values()
+        for story, config in archives.items()
+        if story != self.story
+      )
       existing.append((os.path.join(DATA_DIR, a), used_in_other_stories))
     return existing
 
@@ -278,14 +303,19 @@ class WprUpdater(object):
       return
 
     ans = cli_helpers.Ask(
-          'For this story, should I erase all existing recordings that '
-          'aren\'t used by other stories? Select yes if this is your '
-          'first time re-recording this story.',
-          ['yes', 'no'], default='no')
+      'For this story, should I erase all existing recordings that '
+      'aren\'t used by other stories? Select yes if this is your '
+      'first time re-recording this story.',
+      ['yes', 'no'],
+      default='no',
+    )
     if ans == 'no':
       return
 
-    for archive, used_in_other_stories in self._GetWprArchivePathsAndUsageForStory():
+    for (
+      archive,
+      used_in_other_stories,
+    ) in self._GetWprArchivePathsAndUsageForStory():
       if used_in_other_stories:
         continue
 
@@ -326,12 +356,20 @@ class WprUpdater(object):
     if not self._IsDesktop():
       args.append('--device={device_id}')
 
-    args.extend([
-        '--output-format=html', '--show-stdout', '--reset-results',
-        '--story-filter={story}', '--browser-logging-verbosity=verbose',
-        '--pageset-repeat=%s' % self.repeat, '--output-dir', self.output_dir,
-        '--also-run-disabled-tests', '--legacy-json-trace-format'
-    ])
+    args.extend(
+      [
+        '--output-format=html',
+        '--show-stdout',
+        '--reset-results',
+        '--story-filter={story}',
+        '--browser-logging-verbosity=verbose',
+        '--pageset-repeat=%s' % self.repeat,
+        '--output-dir',
+        self.output_dir,
+        '--also-run-disabled-tests',
+        '--legacy-json-trace-format',
+      ]
+    )
     if live:
       args.append('--use-live-sites')
     out_file = self._CheckLog(args, log_name=log_name)
@@ -351,7 +389,9 @@ class WprUpdater(object):
 
   def _CreateBranch(self):
     new_branch_name = '%s-%d' % (
-        self._SanitizedBranchPrefix(), random.randint(0, 10000))
+      self._SanitizedBranchPrefix(),
+      random.randint(0, 10000),
+    )
     cli_helpers.Run(['git', 'new-branch', new_branch_name])
 
   def _FilterLogForDiff(self, log_filename):
@@ -371,20 +411,25 @@ class WprUpdater(object):
     Returns:
       Path to the filtered log.
     """
-    with open(log_filename,
-              encoding='utf-8') as src, tempfile.NamedTemporaryFile(
-                  encoding='utf-8',
-                  mode='w+',
-                  suffix='diff',
-                  dir=self.output_dir,
-                  delete=False) as dest:
+    with (
+      open(log_filename, encoding='utf-8') as src,
+      tempfile.NamedTemporaryFile(
+        encoding='utf-8',
+        mode='w+',
+        suffix='diff',
+        dir=self.output_dir,
+        delete=False,
+      ) as dest,
+    ):
       for line in src:
         # Remove timestamps.
         line = re.sub(
-            r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}', r'<timestamp>', line)
+          r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}', r'<timestamp>', line
+        )
         # Remove GUIDs.
         line = re.sub(
-            r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', r'<guid>', line)
+          r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', r'<guid>', line
+        )
         # Remove random letters in paths to temp dirs and files.
         line = re.sub(r'(/tmp/tmp)[^/\s]+', r'\1<random>', line)
         # Remove random port in localhost URLs.
@@ -397,9 +442,12 @@ class WprUpdater(object):
   def _GetTargetFromConfiguration(self, configuration):
     """Returns the target that should be used for a Pinpoint job."""
     if configuration == 'android-pixel6-perf':
-      return 'performance_test_suite_android_trichrome_chrome_google_64_32_bundle'
-    if configuration in ('linux-perf', 'win-10-perf',
-                         'mac-10_12_laptop_low_end-perf'):
+      return 'performance_test_suite_android_chrome_google_bundle'
+    if configuration in (
+      'linux-perf',
+      'win-10-perf',
+      'mac-10_12_laptop_low_end-perf',
+    ):
       return 'performance_test_suite'
     raise RuntimeError('Unknown configuration %s' % configuration)
 
@@ -407,31 +455,34 @@ class WprUpdater(object):
     """Creates, starts a Pinpoint job and returns its URL."""
     try:
       resp = pinpoint_service.NewJob(
-          base_git_hash='HEAD',
-          target=self._GetTargetFromConfiguration(configuration),
-          patch=self._GetBranchIssueUrl(),
-          bug_id=self.bug_id or '',
-          story=self.story,
-          extra_test_args='--pageset-repeat=%d' % self.repeat,
-          configuration=configuration,
-          benchmark='system_health.common_%s' %
-          ('desktop' if self._IsDesktop() else 'mobile'))
+        base_git_hash='HEAD',
+        target=self._GetTargetFromConfiguration(configuration),
+        patch=self._GetBranchIssueUrl(),
+        bug_id=self.bug_id or '',
+        story=self.story,
+        extra_test_args='--pageset-repeat=%d' % self.repeat,
+        configuration=configuration,
+        benchmark='system_health.common_%s'
+        % ('desktop' if self._IsDesktop() else 'mobile'),
+      )
     except request.RequestError as e:
       cli_helpers.Comment(
-          'Failed to start a Pinpoint job for {config} automatically:\n {err}',
-          config=configuration, err=e.content)
+        'Failed to start a Pinpoint job for {config} automatically:\n {err}',
+        config=configuration,
+        err=e.content,
+      )
       return None
 
     cli_helpers.Info(
-        'Started a Pinpoint job for {configuration} at {url}',
-        configuration=configuration, url=resp['jobUrl'])
+      'Started a Pinpoint job for {configuration} at {url}',
+      configuration=configuration,
+      url=resp['jobUrl'],
+    )
     return resp['jobUrl']
-
 
   def LiveRun(self):
     cli_helpers.Step('LIVE RUN: %s' % self.story)
-    out_file = self._RunBenchmark(
-        log_name='live', live=True)
+    out_file = self._RunBenchmark(log_name='live', live=True)
     _PrintRunInfo(out_file, chrome_log_file=self._IsDesktop())
     return out_file
 
@@ -441,24 +492,28 @@ class WprUpdater(object):
     else:
       cli_helpers.Comment(
         'No problem. All logs will remain in %s - feel free to remove that '
-        'directory when done.' % self.output_dir)
+        'directory when done.' % self.output_dir
+      )
 
   def RecordWpr(self):
     cli_helpers.Step('RECORD WPR: %s' % self.story)
     self._DeleteExistingWpr()
-    args = ([RECORD_WPR, self.bss, '--story-filter={story}'] +
-            self._BrowserArgs())
+    args = [
+      RECORD_WPR,
+      self.bss,
+      '--story-filter={story}',
+    ] + self._BrowserArgs()
     if not self._IsDesktop():
       args.append('--device={device_id}')
     out_file = self._CheckLog(args, log_name='record')
     _PrintRunInfo(
-        out_file, chrome_log_file=self._IsDesktop(), results_details=False)
-    self._LoadArchiveInfo() # record_wpr overwrote this file
+      out_file, chrome_log_file=self._IsDesktop(), results_details=False
+    )
+    self._LoadArchiveInfo()  # record_wpr overwrote this file
 
   def ReplayWpr(self):
     cli_helpers.Step('REPLAY WPR: %s' % self.story)
-    out_file = self._RunBenchmark(
-        log_name='replay', live=False)
+    out_file = self._RunBenchmark(log_name='replay', live=False)
     _PrintRunInfo(out_file, chrome_log_file=self._IsDesktop())
     return out_file
 
@@ -484,8 +539,9 @@ class WprUpdater(object):
       commit_message = 'Automated upload'
     else:
       commit_message = (
-          'Add %s system health story\n\nThis CL was created automatically '
-          'with tools/perf/update_wpr script' % self.story)
+        'Add %s system health story\n\nThis CL was created automatically '
+        'with tools/perf/update_wpr script' % self.story
+      )
     if self.bug_id:
       commit_message += '\n\nBug: %s' % self.bug_id
     if subprocess.call(['git', 'diff', '--quiet']):
@@ -493,11 +549,19 @@ class WprUpdater(object):
     commit_msg_file = os.path.join(self.output_dir, 'commit_message.tmp')
     with open(commit_msg_file, 'w') as fd:
       fd.write(commit_message)
-    return cli_helpers.Run([
-      'git', 'cl', 'upload',
-      '--reviewers', ','.join(self.reviewers),
-      '--force',  # to prevent message editor from appearing
-      '--message-file', commit_msg_file], ok_fail=True)
+    return cli_helpers.Run(
+      [
+        'git',
+        'cl',
+        'upload',
+        '--reviewers',
+        ','.join(self.reviewers),
+        '--force',  # to prevent message editor from appearing
+        '--message-file',
+        commit_msg_file,
+      ],
+      ok_fail=True,
+    )
 
   def StartPinpointJobs(self, configs=None):
     job_urls = []
@@ -518,21 +582,24 @@ class WprUpdater(object):
   def AutoRun(self):
     # Let the quest begin...
     cli_helpers.Comment(
-        'This script will help you update the recording of a story. It will go '
-        'through the following stages, which you can also invoke manually via '
-        'subcommand specified in parentheses:')
+      'This script will help you update the recording of a story. It will go '
+      'through the following stages, which you can also invoke manually via '
+      'subcommand specified in parentheses:'
+    )
     cli_helpers.Comment('  - help create a new branch if needed')
     cli_helpers.Comment('  - run story with live network connection (live)')
     cli_helpers.Comment('  - record story (record)')
     cli_helpers.Comment('  - replay the recording (replay)')
     cli_helpers.Comment('  - upload the recording to Google Storage (upload)')
     cli_helpers.Comment(
-        '  - upload CL with updated recording reference (review)')
+      '  - upload CL with updated recording reference (review)'
+    )
     cli_helpers.Comment('  - trigger pinpoint tryjobs (pinpoint)')
     cli_helpers.Comment('  - post links to these jobs on the CL')
     cli_helpers.Comment(
-        'Note that you can always enter prefix of the answer to any of the '
-        'questions asked below, e.g. "y" for "yes" or "j" for "just-replay".')
+      'Note that you can always enter prefix of the answer to any of the '
+      'questions asked below, e.g. "y" for "yes" or "j" for "just-replay".'
+    )
 
     # TODO(sergiyb): Detect if benchmark is not implemented and try to add it
     # automatically by copying the same benchmark without :<current-year> suffix
@@ -544,9 +611,11 @@ class WprUpdater(object):
     if branch == 'HEAD':
       cli_helpers.Comment('You are not on a branch.')
       if not cli_helpers.Ask(
-          'Should script create a new branch automatically?'):
+        'Should script create a new branch automatically?'
+      ):
         cli_helpers.Comment(
-            'Please create a new branch and start this script again')
+          'Please create a new branch and start this script again'
+        )
         return
       self._CreateBranch()
     else:
@@ -556,15 +625,21 @@ class WprUpdater(object):
       else:
         issue_message = 'without an associated issue'
       cli_helpers.Comment(
-          'You are on a branch {branch} {issue_message}. Please commit or '
-          'stash any changes unrelated to the updated story before '
-          'proceeding.', branch=branch, issue_message=issue_message)
+        'You are on a branch {branch} {issue_message}. Please commit or '
+        'stash any changes unrelated to the updated story before '
+        'proceeding.',
+        branch=branch,
+        issue_message=issue_message,
+      )
       is_update_wpr_branch = re.match(
-          r'%s-\d+' % self._SanitizedBranchPrefix(), branch)
+        r'%s-\d+' % self._SanitizedBranchPrefix(), branch
+      )
       ans = cli_helpers.Ask(
-          'Should the script create a new branch automatically, reuse '
-          'existing one or exit?', answers=['create', 'reuse', 'exit'],
-          default='reuse' if is_update_wpr_branch else 'create')
+        'Should the script create a new branch automatically, reuse '
+        'existing one or exit?',
+        answers=['create', 'reuse', 'exit'],
+        default='reuse' if is_update_wpr_branch else 'create',
+      )
       if ans == 'create':
         self._CreateBranch()
       elif ans == 'reuse':
@@ -575,17 +650,21 @@ class WprUpdater(object):
     # Live run.
     live_out_file = self.LiveRun()
     cli_helpers.Comment(
-        'Please inspect the live run results above for any errors.')
+      'Please inspect the live run results above for any errors.'
+    )
     ans = None
     while ans != 'continue':
       ans = cli_helpers.Ask(
-          'Should I continue with recording, view metric results in a browser, '
-          'view stdout/stderr output or stop?',
-          ['continue', 'metrics', 'output', 'stop'], default='continue')
+        'Should I continue with recording, view metric results in a browser, '
+        'view stdout/stderr output or stop?',
+        ['continue', 'metrics', 'output', 'stop'],
+        default='continue',
+      )
       if ans == 'stop':
         cli_helpers.Comment(
-            'Please update the story class to resolve the observed issues and '
-            'then run this script again.')
+          'Please update the story class to resolve the observed issues and '
+          'then run this script again.'
+        )
         return
       if ans == 'metrics':
         _OpenBrowser('file://%s.results.html' % live_out_file)
@@ -601,23 +680,31 @@ class WprUpdater(object):
       if action in ['record', 'just-replay']:
         replay_out_file = self.ReplayWpr()
         cli_helpers.Comment(
-            'Check that the console:error:all metrics above have low values '
-            'and are similar to the live run above.')
+          'Check that the console:error:all metrics above have low values '
+          'and are similar to the live run above.'
+        )
       if action == 'diff':
         diff_path = os.path.join(self.output_dir, 'live_replay.diff')
         with open(diff_path, 'w') as diff_file:
-          subprocess.call([
-            'diff', '--color', self._FilterLogForDiff(live_out_file),
-            self._FilterLogForDiff(replay_out_file)], stdout=diff_file)
+          subprocess.call(
+            [
+              'diff',
+              '--color',
+              self._FilterLogForDiff(live_out_file),
+              self._FilterLogForDiff(replay_out_file),
+            ],
+            stdout=diff_file,
+          )
         _OpenEditor(diff_path)
       if action == 'stop':
         return
       action = cli_helpers.Ask(
-          'Should I record and replay again, just replay, continue with uploading CL, stop '
-          'and exit, or would you prefer to see diff between live/replay '
-          'console logs?',
-          ['record', 'just-replay', 'continue', 'stop', 'diff'],
-          default='continue')
+        'Should I record and replay again, just replay, continue with uploading'
+        ' CL, stop and exit, or would you prefer to see diff between live/'
+        'replay console logs?',
+        ['record', 'just-replay', 'continue', 'stop', 'diff'],
+        default='continue',
+      )
 
     # Upload WPR and create a WIP CL for the new story.
     if not self.UploadWpr():
@@ -630,8 +717,9 @@ class WprUpdater(object):
     # seconds. Otherwise, pinpoint app may get an answer that the CL that we've
     # just uploaded does not exist yet.
     cli_helpers.Comment(
-        'Waiting 20 seconds for the Gerrit backends to sync, so that Pinpoint '
-        'app can detect the newly-created CL.')
+      'Waiting 20 seconds for the Gerrit backends to sync, so that Pinpoint '
+      'app can detect the newly-created CL.'
+    )
     time.sleep(20)
 
     # Trigger pinpoint jobs.
@@ -639,44 +727,52 @@ class WprUpdater(object):
     job_urls = []
     while True:
       new_job_urls, configs_to_trigger = self.StartPinpointJobs(
-          configs_to_trigger)
+        configs_to_trigger
+      )
       job_urls.extend(new_job_urls)
       if not configs_to_trigger or not cli_helpers.Ask(
-          'Do you want to try triggering the failed configs again?'):
+        'Do you want to try triggering the failed configs again?'
+      ):
         break
 
     if configs_to_trigger:
       if not cli_helpers.Ask(
-          'Some jobs failed to trigger. Do you still want to send created '
-          'CL for review?', default='no'):
+        'Some jobs failed to trigger. Do you still want to send created '
+        'CL for review?',
+        default='no',
+      ):
         return
 
     # Post a link to the triggered jobs, publish CL for review and open it.
     _SendCLForReview(
-        'Started the following Pinpoint jobs:\n%s' %
-        '\n'.join('  - %s' % url for url in job_urls))
+      'Started the following Pinpoint jobs:\n%s'
+      % '\n'.join('  - %s' % url for url in job_urls)
+    )
     cli_helpers.Comment(
-        'Posted a message with Pinpoint job URLs on the CL and sent it for '
-        'review. Opening the CL in a browser...')
+      'Posted a message with Pinpoint job URLs on the CL and sent it for '
+      'review. Opening the CL in a browser...'
+    )
     _OpenBrowser(self._GetBranchIssueUrl())
 
     # Hooray, you won! :-)
     cli_helpers.Comment(
-        'Thank you, you have successfully updated the recording for %s. Please '
-        'wait for LGTM and land the created CL.' % self.story)
+      'Thank you, you have successfully updated the recording for %s. Please '
+      'wait for LGTM and land the created CL.' % self.story
+    )
 
 
 class CrossbenchWprUpdater(object):
   """This class helps to update WPR archive files for the Crossbench tool.
 
-  Currently it supports `android-trichrome-chrome-google-64-32-bundle` browser
+  Currently it supports `android-chrome-bundle` browser
   type only. The assumption is a single Android device is attached to the
   machine, and the device is connected to the network.
   """
+
   _CB_TOOL = os.path.join(SRC_ROOT, 'third_party', 'crossbench', 'cb.py')
   _BUCKET = cloud_storage.PARTNER_BUCKET
   _CHROME_BROWSER = '--browser=%s'
-  _DEFAULT_BROWSER = 'android-trichrome-chrome-google-64-32-bundle'
+  _DEFAULT_BROWSER = 'android-chrome-bundle'
 
   def __init__(self, args):
     self.story = args.story
@@ -694,15 +790,17 @@ class CrossbenchWprUpdater(object):
 
   def _SetupOutput(self, args):
     timestamp = datetime.datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
-    self.output_dir = os.path.join(args.output_dir or tempfile.mkdtemp(),
-                                   timestamp)
+    self.output_dir = os.path.join(
+      args.output_dir or tempfile.mkdtemp(), timestamp
+    )
     if os.path.exists(self.output_dir):
       raise FileExistsError(f'{self.output_dir} already exists!')
     pathlib.Path(self.output_dir).mkdir(parents=True)
 
   def _LoadArchiveInfo(self):
     self.wpr_archive_info = archive_info.WprArchiveInfo.FromFile(
-        str(self.ArchiveFilePath(self.bss)), self._BUCKET)
+      str(self.ArchiveFilePath(self.bss)), self._BUCKET
+    )
 
   def _find_browser(self, browser_arg):
     options = browser_options.BrowserFinderOptions()
@@ -718,30 +816,33 @@ class CrossbenchWprUpdater(object):
   def AutoRun(self):
     story_msg = f'the {self.story} in ' if self.story else ''
     if not cli_helpers.Ask(
-        f'This script generates archive file for {story_msg} the '
-        f'{self.bss} benchmark. It will generate a commit in your current '
-        'branch. If you need to create a new branch or have uncommitted '
-        'changes, please stop the script and create a fresh branch. Do '
-        'you want to continue?',
-        answers={'yes': True, 'no': False},
-        default='no'):
+      f'This script generates archive file for {story_msg} the '
+      f'{self.bss} benchmark. It will generate a commit in your current '
+      'branch. If you need to create a new branch or have uncommitted '
+      'changes, please stop the script and create a fresh branch. Do '
+      'you want to continue?',
+      answers={'yes': True, 'no': False},
+      default='no',
+    ):
       return
     cb_wprgo = self.RecordWpr()
     self.ReplayWpr(cb_wprgo)
     if not cli_helpers.Ask(
-        f'The {cb_wprgo} file has been generated and replayed. Please '
-        f'see the Crossbench log file in {self.output_dir}. Are you sure '
-        'to upload the new archive file to the cloud?',
-        answers={'yes': True, 'no': False},
-        default='no'):
+      f'The {cb_wprgo} file has been generated and replayed. Please '
+      f'see the Crossbench log file in {self.output_dir}. Are you sure '
+      'to upload the new archive file to the cloud?',
+      answers={'yes': True, 'no': False},
+      default='no',
+    ):
       return
     if not self.UploadWpr(cb_wprgo):
       cli_helpers.Error(f'Unabled to upload {cb_wprgo} to the cloud!')
       return
     cli_helpers.Comment(
-        'Thank you, you have successfully updated the archive file. Please '
-        'run `git status` to review the chagnes, upload the CL and send it to '
-        f'{self.reviewers} for reviewing.')
+      'Thank you, you have successfully updated the archive file. Please '
+      'run `git status` to review the chagnes, upload the CL and send it to '
+      f'{self.reviewers} for reviewing.'
+    )
 
   def LiveRun(self):
     cb_output_dir = os.path.join(self.output_dir, 'cb_live')
@@ -800,14 +901,14 @@ class CrossbenchWprUpdater(object):
     args = args or []
     cb_output_dir = cb_output_dir or self.output_dir
     command = [
-        f'{self._CB_TOOL}',
-        self.bss,
-        '--repeat=1',
-        f'--browser={self.device_id}:{self.browser}',
-        '--verbose',
-        '--debug',
-        '--no-symlinks',
-        f'--out-dir={cb_output_dir}',
+      f'{self._CB_TOOL}',
+      self.bss,
+      '--repeat=1',
+      f'--browser={self.device_id}:{self.browser}',
+      '--verbose',
+      '--debug',
+      '--no-symlinks',
+      f'--out-dir={cb_output_dir}',
     ] + args
     if self.story:
       command += [f'--story={self.story}']
@@ -835,72 +936,95 @@ class CrossbenchWprUpdater(object):
 
 def Main(argv):
   parser = argparse.ArgumentParser()
-  parser.add_argument('-s',
-                      '--story',
-                      dest='story',
-                      required=False,
-                      help='Story to be recorded, replayed or uploaded. '
-                      'If you are recording a system_health benchmark, '
-                      'use desktop_system_health_story_set or '
-                      'mobile_system_health_story_set')
   parser.add_argument(
-      '-bss',
-      '--benchmark-or-story-set',
-      dest='bss',
-      required=True,
-      help='Benchmark or story set to be recorded, replayed or uploaded. '
-      'If you are recording a system health story, use '
-      'desktop_system_health_story_set or mobile_system_health_story_set.')
+    '-s',
+    '--story',
+    dest='story',
+    required=False,
+    help='Story to be recorded, replayed or uploaded. '
+    'If you are recording a system_health benchmark, '
+    'use desktop_system_health_story_set or '
+    'mobile_system_health_story_set',
+  )
   parser.add_argument(
-      '-d', '--device-id', dest='device_id',
-      help='Specify the device serial number listed by `adb devices`. When not '
-           'specified, the script runs in desktop mode.')
+    '-bss',
+    '--benchmark-or-story-set',
+    dest='bss',
+    required=True,
+    help='Benchmark or story set to be recorded, replayed or uploaded. '
+    'If you are recording a system health story, use '
+    'desktop_system_health_story_set or mobile_system_health_story_set.',
+  )
   parser.add_argument(
-      '-b', '--bug', dest='bug_id',
-      help='Bug ID to be referenced on created CL')
+    '-d',
+    '--device-id',
+    dest='device_id',
+    help='Specify the device serial number listed by `adb devices`. When not '
+    'specified, the script runs in desktop mode.',
+  )
   parser.add_argument(
-      '-r', '--reviewer', action='append', dest='reviewers',
-      help='Email of the reviewer(s) for the created CL.')
+    '-b', '--bug', dest='bug_id', help='Bug ID to be referenced on created CL'
+  )
   parser.add_argument(
-      '--pageset-repeat', type=int, default=1, dest='repeat',
-      help='Number of times to repeat the entire pageset.')
+    '-r',
+    '--reviewer',
+    action='append',
+    dest='reviewers',
+    help='Email of the reviewer(s) for the created CL.',
+  )
   parser.add_argument(
-      '--binary', default=None,
-      help='Path to the Chromium/Chrome binary relative to output directory. '
-           'Defaults to default Chrome browser installed if not specified.')
-  parser.add_argument('-cb',
-                      '--crossbench',
-                      action='store_true',
-                      dest='is_cb',
-                      default=False,
-                      help='Whether to use the Crossbench tool.')
+    '--pageset-repeat',
+    type=int,
+    default=1,
+    dest='repeat',
+    help='Number of times to repeat the entire pageset.',
+  )
   parser.add_argument(
-      '--out',
-      '--out-dir',
-      '--output-dir',
-      dest='output_dir',
-      default=None,
-      help='Path to generate log and archive files for Crossbench tool. '
-      'Defaults to generate a random folder in the system temp folder.')
+    '--binary',
+    default=None,
+    help='Path to the Chromium/Chrome binary relative to output directory. '
+    'Defaults to default Chrome browser installed if not specified.',
+  )
   parser.add_argument(
-      '--cb-wprgo',
-      '--cb-wprgo-file',
-      dest='cb_wprgo_file',
-      default=None,
-      help='Path to the target Crossbench WPRGO file.'
-      'Defaults to generate `archive.wprgo` file in the output folder.')
+    '-cb',
+    '--crossbench',
+    action='store_true',
+    dest='is_cb',
+    default=False,
+    help='Whether to use the Crossbench tool.',
+  )
+  parser.add_argument(
+    '--out',
+    '--out-dir',
+    '--output-dir',
+    dest='output_dir',
+    default=None,
+    help='Path to generate log and archive files for Crossbench tool. '
+    'Defaults to generate a random folder in the system temp folder.',
+  )
+  parser.add_argument(
+    '--cb-wprgo',
+    '--cb-wprgo-file',
+    dest='cb_wprgo_file',
+    default=None,
+    help='Path to the target Crossbench WPRGO file.'
+    'Defaults to generate `archive.wprgo` file in the output folder.',
+  )
 
   subparsers = parser.add_subparsers(
-      title='Mode in which to run this script', dest='command')
+    title='Mode in which to run this script', dest='command'
+  )
   subparsers.add_parser(
-      'auto', help='interactive mode automating updating a recording')
+    'auto', help='interactive mode automating updating a recording'
+  )
   subparsers.add_parser('live', help='run story on a live website')
   subparsers.add_parser('record', help='record story from a live website')
   subparsers.add_parser('replay', help='replay story from the recording')
   subparsers.add_parser('upload', help='upload recording to the Google Storage')
   subparsers.add_parser('review', help='create a CL with updated recording')
   subparsers.add_parser(
-      'pinpoint', help='trigger Pinpoint jobs to test the recording')
+    'pinpoint', help='trigger Pinpoint jobs to test the recording'
+  )
 
   args = parser.parse_args(argv)
 
@@ -913,7 +1037,7 @@ def Main(argv):
       _EnsureEditor()
       luci_auth.CheckLoggedIn()
       updater.AutoRun()
-    elif args.command =='live':
+    elif args.command == 'live':
       updater.LiveRun()
     elif args.command == 'record':
       updater.RecordWpr()

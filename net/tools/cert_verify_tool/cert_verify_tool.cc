@@ -219,6 +219,10 @@ class DummySystemTrustStore : public net::SystemTrustStore {
 
   int64_t chrome_root_store_version() const override { return 0; }
 
+  std::optional<base::Time> signer_set_timestamp() const override {
+    return std::nullopt;
+  }
+
   std::optional<base::Time> mtc_metadata_update_time() const override {
     return std::nullopt;
   }
@@ -231,6 +235,20 @@ class DummySystemTrustStore : public net::SystemTrustStore {
   const net::TrustStoreChrome::MtcAnchorExtraData* GetMTCAnchorData(
       base::span<const uint8_t> log_id) const override {
     return nullptr;
+  }
+
+  std::optional<bssl::VerifyCertificateChainDelegate::MTCCosigner>
+  GetMtcMirrorKey(base::span<const uint8_t> cosigner_id) const override {
+    return std::nullopt;
+  }
+
+  bool IsMtcCosignerPolicySatisfied(
+      const bssl::ParsedCertificate& target_cert,
+      base::Time current_time,
+      const bssl::MTCAnchor* mtc_anchor,
+      base::span<const std::vector<uint8_t>> valid_additional_cosigners,
+      const net::NetLogWithSource& net_log) const override {
+    return false;
   }
 
   std::optional<int32_t> GetCrsRootIdForCert(
@@ -259,8 +277,13 @@ std::unique_ptr<net::SystemTrustStore> CreateSystemTrustStore(
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
       std::cerr << impl_name
                 << ": using Chrome Root Store (--roots are in addition).\n";
+#if BUILDFLAG(IS_CHROMEOS)
+      return net::CreateChromeOnlySystemTrustStore(
+          std::make_unique<net::TrustStoreChrome>());
+#else
       return net::CreateSslSystemTrustStoreChromeRoot(
           std::make_unique<net::TrustStoreChrome>());
+#endif
 #else
       std::cerr << impl_name << ": not supported.\n";
       [[fallthrough]];

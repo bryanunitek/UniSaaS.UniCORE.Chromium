@@ -12,17 +12,20 @@
 #import "ios/chrome/browser/enterprise/cloud_content_scanning/model/download_protection_metrics.h"
 #import "ios/chrome/browser/enterprise/cloud_content_scanning/model/ios_content_analysis_request.h"
 #import "ios/chrome/browser/enterprise/connectors/connectors_service.h"
-#import "ios/chrome/browser/enterprise/connectors/connectors_service_factory.h"
 #import "ios/chrome/browser/enterprise/connectors/connectors_util.h"
-#import "ios/chrome/browser/enterprise/connectors/reporting/ios_reporting_event_router_factory.h"
 #import "ios/chrome/browser/enterprise/connectors/reporting/reporting_util.h"
 
 namespace enterprise_connectors {
 
-FilesRequestHandlerIOS::FilesRequestHandlerIOS(ProfileIOS* profile,
-                                               const base::FilePath& path,
-                                               CompletionCallback callback)
-    : profile_(profile), path_(path), callback_(std::move(callback)) {}
+FilesRequestHandlerIOS::FilesRequestHandlerIOS(
+    ConnectorsService* connectors_service,
+    ReportingEventRouter* reporting_event_router,
+    const base::FilePath& path,
+    CompletionCallback callback)
+    : connectors_service_(connectors_service),
+      reporting_event_router_(reporting_event_router),
+      path_(path),
+      callback_(std::move(callback)) {}
 
 FilesRequestHandlerIOS::~FilesRequestHandlerIOS() = default;
 
@@ -48,7 +51,7 @@ FilesRequestHandlerIOS::CreateFileRequest(
 void FilesRequestHandlerIOS::ReportWarningBypass(
     std::optional<std::u16string> user_justification,
     const ContentAnalysisInfoBase& info,
-    const std::string& trigger,
+    DataTransferEventTrigger trigger,
     const std::string& content_transfer_method) {
   if (!was_warned_) {
     return;
@@ -65,8 +68,7 @@ void FilesRequestHandlerIOS::ReportWarningBypass(
 bool FilesRequestHandlerIOS::UploadDataImpl() {
   // If the DLP download protection is not enabled or no files are passed to the
   // FilesRequestHandlerIOS, we call the callback directly.
-  if (path_.empty() || !IsDownloadConnectorEnabled(
-                           ConnectorsServiceFactory::GetForProfile(profile_))) {
+  if (path_.empty() || !IsDownloadConnectorEnabled(connectors_service_)) {
     result_.final_result = FinalContentAnalysisResult::SUCCESS;
     MaybeCompleteScanRequest();
     return false;
@@ -125,7 +127,7 @@ const base::TimeTicks FilesRequestHandlerIOS::GetFileScanStartTime(
 }
 
 ReportingEventRouter* FilesRequestHandlerIOS::GetReportingEventRouter() {
-  return IOSReportingEventRouterFactory::GetForProfile(profile_);
+  return reporting_event_router_;
 }
 
 void FilesRequestHandlerIOS::MaybeCompleteScanRequest() {
@@ -139,6 +141,12 @@ void FilesRequestHandlerIOS::MaybeCancelAndReport() {
   }
 
   handler_->ReportCanceledFile(/*index=*/0);
+}
+
+void FilesRequestHandlerIOS::StopFileWork() {
+  // No-op on iOS: only single file operations are supported, so there is no
+  // safe_browsing::FileOpeningJob opening files on background threads to
+  // signal.
 }
 
 void FilesRequestHandlerIOS::MarkFileAsReported(size_t index) {

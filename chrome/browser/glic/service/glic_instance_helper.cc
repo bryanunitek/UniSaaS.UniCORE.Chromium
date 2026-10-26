@@ -4,7 +4,9 @@
 
 #include "chrome/browser/glic/service/glic_instance_helper.h"
 
+#include "chrome/browser/glic/public/glic_perf_traits_tracker.h"
 #include "chrome/browser/glic/service/metrics/glic_instance_helper_metrics.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/tabs/public/tab_interface.h"
 
 namespace glic {
@@ -20,7 +22,7 @@ GlicInstanceHelper* GlicInstanceHelper::From(tabs::TabInterface* tab) {
 
 GlicInstanceHelper::GlicInstanceHelper(tabs::TabInterface* tab)
     : tab_(tab),
-      metrics_(std::make_unique<GlicInstanceHelperMetrics>()),
+      metrics_(std::make_unique<GlicInstanceHelperMetrics>(tab->GetProfile())),
       scoped_unowned_user_data_(tab->GetUnownedUserDataHost(), *this) {
 #if BUILDFLAG(IS_ANDROID)
   InitJavaObject();
@@ -80,11 +82,13 @@ void GlicInstanceHelper::OnPinnedByInstance(Instance* instance) {
   CHECK(instance);
   pinned_instances_.insert(instance);
   metrics_->OnPinnedByInstance(instance->id());
+  UpdateGlicPinnedToVisibleInstanceProperty();
 }
 
 void GlicInstanceHelper::OnUnpinnedByInstance(Instance* instance) {
   CHECK(instance);
   pinned_instances_.erase(instance);
+  UpdateGlicPinnedToVisibleInstanceProperty();
 }
 
 std::vector<GlicInstanceHelper::Instance*>
@@ -104,6 +108,25 @@ void GlicInstanceHelper::OnDaisyChainAction(DaisyChainFirstAction action) {
 base::CallbackListSubscription GlicInstanceHelper::SubscribeToDestruction(
     base::RepeatingCallback<void(tabs::TabInterface*)> callback) {
   return on_destroy_callback_list_.Add(std::move(callback));
+}
+
+void GlicInstanceHelper::OnPinnedInstanceVisibilityChanged(Instance* instance) {
+  UpdateGlicPinnedToVisibleInstanceProperty();
+}
+
+void GlicInstanceHelper::UpdateGlicPinnedToVisibleInstanceProperty() {
+  bool is_pinned_to_visible = false;
+  for (Instance* inst : pinned_instances_) {
+    if (inst->IsShowing()) {
+      is_pinned_to_visible = true;
+      break;
+    }
+  }
+  if (tab_ && tab_->GetContents()) {
+    GlicPerfTraitsTracker::GetInstance()
+        ->NotifyIsGlicPinnedToVisibleInstanceChanged(tab_->GetContents(),
+                                                     is_pinned_to_visible);
+  }
 }
 
 }  // namespace glic

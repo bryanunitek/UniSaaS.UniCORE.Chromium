@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_DOM_CSS_PSEUDO_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_CSS_PSEUDO_ELEMENT_H_
 
+#include "third_party/blink/public/mojom/input/focus_type.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/dom/node_rare_data_field.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 
@@ -18,6 +19,9 @@ class DOMPointInit;
 class DOMQuad;
 class DOMQuadInit;
 class DOMRectReadOnly;
+class ExceptionState;
+class Focusable;
+class FocusOptions;
 class V8UnionCSSPseudoElementOrDocumentOrElementOrText;
 class V8UnionCSSPseudoElementOrElement;
 
@@ -43,9 +47,13 @@ class CSSPseudoElement final : public ScriptWrappable {
                    const AtomicString& pseudo_argument = g_null_atom);
 
   // Parses the `type` to determine the PseudoId and if it's a currently
-  // supported pseudo-element. Optionally extracts the pseudo_argument.
+  // supported pseudo-element. Optionally extracts the pseudo_argument, in the
+  // form that identifies the pseudo-element of `originating_element` (e.g.
+  // `block-start` for `::scroll-button(up)` in horizontal writing modes).
+  // `originating_element` is null for sub-pseudo-elements.
   static std::pair<PseudoId, AtomicString> ConvertTypeToSupportedPseudoId(
-      const AtomicString& type);
+      const AtomicString& type,
+      Element* originating_element);
   // Returns true if the `pseudo_id` is a supported pseudo-element type
   // for CSSPseudoElement interface.
   static bool IsSupportedTypeForCSSPseudoElement(PseudoId pseudo_id);
@@ -76,6 +84,14 @@ class CSSPseudoElement final : public ScriptWrappable {
   // sub-pseudo-elements, parent will return a CSSPseudoElement while element
   // returns an Element.
   V8UnionCSSPseudoElementOrElement* parent() const { return parent_; }
+  // The selectorText attribute is the normalized selector text used to select
+  // this pseudo-element, including any argument. For example, "::after" or
+  // "::view-transition-group(name)". For sub-pseudo-elements this is only the
+  // last compound, e.g. "::marker" for `::before::marker`. For scroll buttons,
+  // the argument is the logical direction the button is identified by, since
+  // e.g. `::scroll-button(up)` and `::scroll-button(block-start)` return the
+  // same object in horizontal writing modes.
+  String selectorText() const;
   // The pseudo(type) method returns the CSSPseudoElement interface representing
   // the sub-pseudo-element referenced in its argument, if such a
   // sub-pseudo-element could exist and would be valid, and null otherwise.
@@ -83,6 +99,9 @@ class CSSPseudoElement final : public ScriptWrappable {
   // PseudoId-based overload: avoids string parsing, for internal use.
   CSSPseudoElement* pseudo(PseudoId pseudo_id,
                            const AtomicString& pseudo_argument = g_null_atom);
+  void focus(const FocusOptions* options);
+  Focusable* nextFocusable();
+  Focusable* previousFocusable();
 
   // Returns the CSSPseudoElement proxy chain for the given PseudoElement,
   // creating it if necessary. Handles nested pseudos (e.g. ::after::marker)
@@ -91,19 +110,23 @@ class CSSPseudoElement final : public ScriptWrappable {
 
   // GeometryUtils methods
   // https://drafts.csswg.org/cssom-view/#the-geometryutils-interface
-  HeapVector<Member<DOMQuad>> getBoxQuads(const BoxQuadOptions* options) const;
+  HeapVector<Member<DOMQuad>> getBoxQuads(const BoxQuadOptions* options,
+                                          ExceptionState&) const;
   DOMQuad* convertQuadFromNode(
       DOMQuadInit* quad,
       const V8UnionCSSPseudoElementOrDocumentOrElementOrText* from,
-      const ConvertCoordinateOptions* options) const;
+      const ConvertCoordinateOptions* options,
+      ExceptionState&) const;
   DOMQuad* convertRectFromNode(
       DOMRectReadOnly* rect,
       const V8UnionCSSPseudoElementOrDocumentOrElementOrText* from,
-      const ConvertCoordinateOptions* options) const;
+      const ConvertCoordinateOptions* options,
+      ExceptionState&) const;
   DOMPoint* convertPointFromNode(
       DOMPointInit* point,
       const V8UnionCSSPseudoElementOrDocumentOrElementOrText* from,
-      const ConvertCoordinateOptions* options) const;
+      const ConvertCoordinateOptions* options,
+      ExceptionState&) const;
 
   PseudoId GetPseudoId() const { return pseudo_id_; }
   const AtomicString& GetPseudoArgument() const { return pseudo_argument_; }
@@ -114,6 +137,8 @@ class CSSPseudoElement final : public ScriptWrappable {
   void Trace(Visitor* v) const final;
 
  private:
+  Focusable* FindAdjacentFocusable(mojom::blink::FocusType type);
+
   PseudoId pseudo_id_;
   AtomicString pseudo_argument_;
   Member<Element> element_;
@@ -141,8 +166,8 @@ struct PseudoElementCacheKey {
 template <>
 struct HashTraits<PseudoElementCacheKey>
     : SimpleClassHashTraits<PseudoElementCacheKey> {
-  static unsigned GetHash(const PseudoElementCacheKey& key) {
-    unsigned arg_hash =
+  static uint32_t GetHash(const PseudoElementCacheKey& key) {
+    uint32_t arg_hash =
         key.pseudo_argument.IsNull() ? 0 : key.pseudo_argument.Hash();
     return HashInts(key.pseudo_id, arg_hash);
   }

@@ -39,6 +39,7 @@
 #include "third_party/blink/renderer/core/animation/css_default_interpolation_type.h"
 #include "third_party/blink/renderer/core/animation/interpolable_length.h"
 #include "third_party/blink/renderer/core/animation/invalidatable_interpolation.h"
+#include "third_party/blink/renderer/core/animation/keyframe_effect.h"
 #include "third_party/blink/renderer/core/animation/string_keyframe.h"
 #include "third_party/blink/renderer/core/css/css_numeric_literal_value.h"
 #include "third_party/blink/renderer/core/css/css_test_helpers.h"
@@ -195,7 +196,6 @@ void ExpectProperty(CSSPropertyID property,
                     Interpolation* interpolation_value) {
   auto* interpolation = To<InvalidatableInterpolation>(interpolation_value);
   const PropertyHandle& property_handle = interpolation->GetProperty();
-  ASSERT_TRUE(property_handle.IsCSSProperty());
   ASSERT_EQ(property, property_handle.GetCSSProperty().PropertyID());
 }
 
@@ -204,9 +204,9 @@ Interpolation* FindValue(HeapVector<Member<Interpolation>>& values,
   for (auto& value : values) {
     const auto& property =
         To<InvalidatableInterpolation>(value.Get())->GetProperty();
-    if (property.IsCSSProperty() &&
-        property.GetCSSProperty().PropertyID() == id)
+    if (property.GetCSSProperty().PropertyID() == id) {
       return value.Get();
+    }
   }
   return nullptr;
 }
@@ -875,7 +875,7 @@ TEST_F(AnimationKeyframeEffectModel, CompositorSnapshotContainerRelative) {
       </div>
     </div>
   )HTML");
-  Element* target = GetDocument().getElementById(AtomicString("target"));
+  Element* target = GetElementById("target");
   ASSERT_TRUE(target);
 
   StringKeyframeVector keyframes = KeyframesAtZeroAndOne(

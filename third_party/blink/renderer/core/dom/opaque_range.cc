@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/range.h"
 #include "third_party/blink/renderer/core/dom/text.h"
+#include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/position.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect_list.h"
@@ -144,60 +145,50 @@ void OpaqueRange::disconnect() {
 }
 
 DOMRectList* OpaqueRange::getClientRects() const {
-  Range* range = BuildValueGeometryContext();
-  if (!range || range->collapsed()) {
+  EphemeralRange range = GetRangeForValue();
+  // A null range is also collapsed, so this covers unresolvable ranges too.
+  if (range.IsCollapsed()) {
     return MakeGarbageCollected<DOMRectList>();
   }
-  return range->getClientRects();
+  auto* dom_range = CreateRange(range);
+  DOMRectList* rects = dom_range->getClientRects();
+  dom_range->Dispose();
+  return rects;
 }
 
 DOMRect* OpaqueRange::getBoundingClientRect() const {
-  Range* range = BuildValueGeometryContext();
-  if (!range) {
+  EphemeralRange range = GetRangeForValue();
+  if (range.IsNull()) {
     return DOMRect::Create();
   }
-  return range->getBoundingClientRect();
+  auto* dom_range = CreateRange(range);
+  DOMRect* rect = dom_range->getBoundingClientRect();
+  dom_range->Dispose();
+  return rect;
 }
 
-Range* OpaqueRange::BuildValueGeometryContext() const {
+EphemeralRange OpaqueRange::GetRangeForValue() const {
   if (!element_ || !element_->isConnected()) {
-    return nullptr;
+    return EphemeralRange();
   }
 
   Document& doc = element_->GetDocument();
   doc.UpdateStyleAndLayout(DocumentUpdateReason::kJavaScript);
 
   if (!element_->GetLayoutObject()) {
-    return nullptr;
+    return EphemeralRange();
   }
 
-  Element* inner = element_->InnerEditorElement();
-  if (!inner) {
-    return nullptr;
+  auto [start_node, start_local] =
+      element_->ResolveValueOffset(start_offset_in_value_);
+  auto [end_node, end_local] =
+      element_->ResolveValueOffset(end_offset_in_value_);
+  if (!start_node || !end_node) {
+    return EphemeralRange();
   }
 
-  Text* text_node = nullptr;
-  // The element's text content is rendered in shadow-DOM text nodes under the
-  // inner editor. Iterate the children to locate the first text node.
-  // TODO(crbug.com/482337697): Aggregate text when it spans multiple nodes.
-  for (Node* n = inner->firstChild(); n; n = n->nextSibling()) {
-    if (auto* t = DynamicTo<Text>(n)) {
-      text_node = t;
-      break;
-    }
-  }
-  if (!text_node) {
-    return nullptr;
-  }
-
-  const unsigned len = text_node->data().length();
-  const unsigned start = std::min(start_offset_in_value_, len);
-  const unsigned end = std::min(end_offset_in_value_, len);
-
-  Range* range = Range::Create(doc);
-  range->setStart(Position(text_node, start));
-  range->setEnd(Position(text_node, end));
-  return range;
+  return EphemeralRange(Position(start_node, start_local),
+                        Position(end_node, end_local));
 }
 
 }  // namespace blink

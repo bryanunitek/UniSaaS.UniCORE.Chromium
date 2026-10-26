@@ -81,8 +81,8 @@ TEST_F(ProcessNodeImplTest, ProcessLifeCycle) {
   EXPECT_TRUE(process_node->GetPrivateFootprint().is_zero());
   EXPECT_TRUE(process_node->GetResidentSet().is_zero());
 
-  process_node->set_private_footprint(base::KiBU(10));
-  process_node->set_resident_set(base::KiBU(20));
+  process_node->set_private_footprint(base::KiB(10));
+  process_node->set_resident_set(base::KiB(20));
 
   // Kill it again.
   // Verify that the process is cleared, but the properties stick around.
@@ -91,8 +91,8 @@ TEST_F(ProcessNodeImplTest, ProcessLifeCycle) {
   EXPECT_EQ(self.Pid(), process_node->GetProcessId());
 
   EXPECT_EQ(launch_time, process_node->GetLaunchTime());
-  EXPECT_EQ(base::KiBU(10), process_node->GetPrivateFootprint());
-  EXPECT_EQ(base::KiBU(20), process_node->GetResidentSet());
+  EXPECT_EQ(base::KiB(10), process_node->GetPrivateFootprint());
+  EXPECT_EQ(base::KiB(20), process_node->GetResidentSet());
 
   // Resurrect again and verify the launch time and measurements
   // are cleared.
@@ -145,7 +145,6 @@ using ::testing::_;
 using ::testing::DoAll;
 using ::testing::InSequence;
 using ::testing::Invoke;
-using ::testing::InvokeWithoutArgs;
 using ::testing::Return;
 
 }  // namespace
@@ -160,11 +159,10 @@ TEST_F(ProcessNodeImplTest, ObserverWorks) {
 
   // Remove observers at the head and tail of the list inside a callback, and
   // expect that `obs` is still notified correctly.
-  EXPECT_CALL(head_obs, OnBeforeProcessNodeAdded(_))
-      .WillOnce(InvokeWithoutArgs([&] {
-        graph()->RemoveProcessNodeObserver(&head_obs);
-        graph()->RemoveProcessNodeObserver(&tail_obs);
-      }));
+  EXPECT_CALL(head_obs, OnBeforeProcessNodeAdded(_)).WillOnce([&] {
+    graph()->RemoveProcessNodeObserver(&head_obs);
+    graph()->RemoveProcessNodeObserver(&tail_obs);
+  });
   // `tail_obs` should not be notified as it was removed.
   EXPECT_CALL(tail_obs, OnBeforeProcessNodeAdded(_)).Times(0);
 
@@ -208,10 +206,9 @@ TEST_F(ProcessNodeImplTest, ObserverWorks) {
   EXPECT_EQ(raw_process_node, obs.TakeNotifiedProcessNode());
 
   // Re-entrant iteration should work.
-  EXPECT_CALL(obs, OnMainThreadTaskLoadIsLow(raw_process_node))
-      .WillOnce(InvokeWithoutArgs([&] {
-        process_node->set_priority(base::Process::Priority::kUserBlocking);
-      }));
+  EXPECT_CALL(obs, OnMainThreadTaskLoadIsLow(raw_process_node)).WillOnce([&] {
+    process_node->set_priority(base::Process::Priority::kUserBlocking);
+  });
   EXPECT_CALL(obs, OnPriorityChanged(raw_process_node, _));
   process_node->SetMainThreadTaskLoadIsLow(false);
 
@@ -235,7 +232,7 @@ TEST_F(ProcessNodeImplTest, ConstructionArguments_Browser) {
 
 TEST_F(ProcessNodeImplTest, ConstructionArguments_Renderer) {
   constexpr RenderProcessHostId kRenderProcessHostId =
-      RenderProcessHostId(0xF0B);
+      RenderProcessHostId(content::ChildProcessId(0xF0B));
   auto process_node = CreateNode<ProcessNodeImpl>(
       RenderProcessHostProxy::CreateForTesting(kRenderProcessHostId));
 
@@ -246,7 +243,7 @@ TEST_F(ProcessNodeImplTest, ConstructionArguments_Renderer) {
 
 TEST_F(ProcessNodeImplTest, ConstructionArguments_NonRenderer) {
   constexpr BrowserChildProcessHostId kBrowserChildProcessHostId =
-      BrowserChildProcessHostId(0xF0B);
+      BrowserChildProcessHostId(content::ChildProcessId(0xF0B));
   auto process_node = CreateNode<ProcessNodeImpl>(
       content::PROCESS_TYPE_GPU, BrowserChildProcessHostProxy::CreateForTesting(
                                      kBrowserChildProcessHostId));

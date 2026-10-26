@@ -19,6 +19,7 @@
 #include "components/split_tabs/split_tab_visual_data.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/controls/resize_area_delegate.h"
 #include "ui/views/layout/proposed_layout.h"
 #include "ui/views/view.h"
@@ -64,6 +65,9 @@ class MultiContentsView
   };
 
   static constexpr int kSplitViewContentInset = 8;
+  static constexpr float kSplitViewContentCornerRadius = 6;
+  static constexpr gfx::RoundedCornersF kSplitViewContentRoundedCorners{
+      kSplitViewContentCornerRadius};
 
   MultiContentsView(BrowserView* browser_view,
                     std::unique_ptr<MultiContentsViewDelegate> delegate);
@@ -159,7 +163,7 @@ class MultiContentsView
   void SetTargetContentBounds(
       std::optional<TargetContentBounds> target_content_bounds);
 
-  void SetIsAnimatingContent(bool is_animating);
+  void SetIsAnimatingContent(bool is_animating, bool is_origin_changing);
 
   // Returns accessible panes to be used in BrowserView to create the order of
   // pane traversal.
@@ -171,7 +175,8 @@ class MultiContentsView
   // views::View:
   void OnThemeChanged() override;
 
-  const std::vector<ContentsContainerView*>& contents_container_views() const {
+  const std::vector<raw_ptr<ContentsContainerView, DanglingUntriaged>>&
+  contents_container_views() const {
     return contents_container_views_;
   }
 
@@ -247,13 +252,13 @@ class MultiContentsView
   // available space after the layout.
   gfx::Rect CalculateDropTargetLayout(
       const gfx::Rect& available_space,
-      std::vector<views::ChildLayout>& child_layouts) const;
+      views::ProposedLayout::ChildLayoutList& child_layouts) const;
 
   // Adds separator layouts to the given list and returns the remaining
   // space after the layout.
   gfx::Rect CalculateSeparatorLayouts(
       const gfx::Rect& available_space,
-      std::vector<views::ChildLayout>& child_layouts) const;
+      views::ProposedLayout::ChildLayoutList& child_layouts) const;
 
   int GetInactiveIndex() const;
 
@@ -289,7 +294,8 @@ class MultiContentsView
 
   // Holds ContentsContainerViews, when not in a split view the second
   // ContentsContainerView is not visible.
-  std::vector<ContentsContainerView*> contents_container_views_;
+  std::vector<raw_ptr<ContentsContainerView, DanglingUntriaged>>
+      contents_container_views_;
 
   ContentsSeparators contents_separators_;
 

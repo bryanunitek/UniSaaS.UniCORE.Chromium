@@ -10,7 +10,9 @@
 #include <string>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/memory/raw_ptr.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/autofill/payments/offer_notification_bubble_controller_impl.h"
 #include "chrome/browser/ui/views/autofill/payments/offer_notification_bubble_views.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -21,14 +23,16 @@
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
 #include "components/autofill/core/browser/payments/autofill_offer_manager.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/test_utils/test_event_waiter.h"
 #include "content/public/test/content_mock_cert_verifier.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 
-class IconLabelBubbleView;
+namespace page_actions {
+class PageActionViewInterface;
+}  // namespace page_actions
 
 namespace autofill {
 
@@ -73,20 +77,10 @@ class OfferNotificationBubbleViewsTestBase
   // OfferNotificationBubbleControllerImpl::ObserverForTest:
   void OnBubbleShown() override;
 
-  // Also creates a credit card for the offer.
-  std::unique_ptr<AutofillOfferData> CreateCardLinkedOfferDataWithDomains(
+  std::unique_ptr<AutofillOfferData> CreateWalletDirectOfferDataWithDomains(
       const std::vector<GURL>& domains);
 
-  std::unique_ptr<AutofillOfferData> CreateGPayPromoCodeOfferDataWithDomains(
-      const std::vector<GURL>& domains);
-
-  void SetUpOfferDataWithDomains(AutofillOfferData::OfferType offer_type,
-                                 const std::vector<GURL>& domains);
-
-  // Also creates a credit card for the offer.
-  void SetUpCardLinkedOfferDataWithDomains(const std::vector<GURL>& domains);
-
-  void SetUpGPayPromoCodeOfferDataWithDomains(const std::vector<GURL>& domains);
+  void SetUpWalletDirectOfferDataWithDomains(const std::vector<GURL>& domains);
 
   TestAutofillManager* GetAutofillManager();
 
@@ -99,7 +93,7 @@ class OfferNotificationBubbleViewsTestBase
 
   OfferNotificationBubbleViews* GetOfferNotificationBubbleViews();
 
-  IconLabelBubbleView* GetOfferNotificationPageActionView();
+  page_actions::PageActionViewInterface* GetOfferNotificationPageActionView();
 
   bool IsIconVisible();
 
@@ -123,19 +117,13 @@ class OfferNotificationBubbleViewsTestBase
   // can be expected on UI elements if desired.
   std::string GetDefaultTestPromoCode() const;
 
-  // Returns the value prop string used for the default test GPay promo code,
-  // so that it can be expected on UI elements if desired.
-  std::string GetDefaultTestValuePropText() const;
-
-  // Returns the see details string used for the default test GPay promo code.
-  std::string GetDefaultTestSeeDetailsText() const;
-
-  // Returns the user instructions string used for the default GPay promo code
-  // data.
-  std::string GetDefaultTestUsageInstructionsText() const;
-
-  // Returns the offer details url string used for the default GPay promo code.
+  // Returns the offer details url string used for the default Wallet direct
+  // offer data.
   std::string GetDefaultTestDetailsUrlString() const;
+
+  // Returns the offer short title used for the default Wallet direct offer
+  // data, which is shown as the title of the offer notification bubble.
+  std::string GetDefaultTestOfferShortTitle() const;
 
  private:
   test::AutofillBrowserTestEnvironment autofill_test_environment_;
@@ -144,6 +132,10 @@ class OfferNotificationBubbleViewsTestBase
   std::unique_ptr<EventWaiter<DialogEvent>> event_waiter_;
   net::EmbeddedTestServer https_server_;
   content::ContentMockCertVerifier cert_verifier_;
+  base::test::ScopedFeatureList feature_list_;
+  base::AutoReset<bool> ignore_window_activation_for_testing_{
+      OfferNotificationBubbleControllerImpl::
+          IgnoreWindowActivationForTesting()};
 };
 
 }  // namespace autofill

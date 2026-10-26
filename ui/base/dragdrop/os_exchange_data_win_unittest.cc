@@ -288,6 +288,27 @@ TEST_F(OSExchangeDataWinTest, RemoveData) {
   EXPECT_EQ(GURL(base::AsStringPiece16(input2)), url_infos.front().url);
 }
 
+TEST_F(OSExchangeDataWinTest, GetURLsFromMultipleFiles) {
+  OSExchangeData data;
+  data.SetFilenames({
+      FileInfo(base::FilePath(FILE_PATH_LITERAL("C:\\first.pdf")),
+               base::FilePath()),
+      FileInfo(base::FilePath(FILE_PATH_LITERAL("C:\\second file.html")),
+               base::FilePath()),
+  });
+
+  OSExchangeData copy(data.provider().Clone());
+  EXPECT_TRUE(
+      copy.GetURLs(FilenameToURLPolicy::DO_NOT_CONVERT_FILENAMES).empty());
+
+  const auto url_infos = copy.GetURLs(FilenameToURLPolicy::CONVERT_FILENAMES);
+  ASSERT_EQ(2u, url_infos.size());
+  EXPECT_EQ(GURL("file:///C:/first.pdf"), url_infos[0].url);
+  EXPECT_EQ(GURL("file:///C:/second%20file.html"), url_infos[1].url);
+  EXPECT_TRUE(url_infos[0].title.empty());
+  EXPECT_TRUE(url_infos[1].title.empty());
+}
+
 TEST_F(OSExchangeDataWinTest, URLDataAccessViaCOM) {
   OSExchangeData data;
   GURL url("http://www.google.com/");
@@ -620,7 +641,7 @@ TEST_F(OSExchangeDataWinTest, VirtualFilesAsyncChunkedCopy) {
 
   // Create a large file (50MB) to exercise the chunked copy code path.
   // The chunk size is 16MB, so this will require multiple iterations.
-  constexpr base::ByteSize kLargeFileSizeBytes = base::MiBU(50);
+  constexpr base::ByteSize kLargeFileSizeBytes = base::MiB(50);
   const std::vector<uint8_t> large_content(kLargeFileSizeBytes.InBytes(), 'X');
 
   const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>

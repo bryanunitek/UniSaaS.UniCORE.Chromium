@@ -10,8 +10,6 @@
 #include "base/rand_util.h"
 #include "base/strings/strcat.h"
 #include "base/time/default_clock.h"
-#include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
-#include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/permissions/permission_actions_history_factory.h"
 #include "chrome/browser/permissions/prediction_service/passage_embedder_delegate.h"
 #include "chrome/browser/permissions/prediction_service/prediction_model_handler_provider.h"
@@ -27,6 +25,7 @@
 #include "components/permissions/features.h"
 #include "components/permissions/permission_actions_history.h"
 #include "components/permissions/permission_request.h"
+#include "components/permissions/permission_request_enums.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
 #include "components/permissions/prediction_service/permission_ui_selector.h"
@@ -106,7 +105,14 @@ ParsePredictionServiceMockLikelihood(const std::string& value) {
 }
 
 bool ShouldPredictionTriggerQuietUi(
-    PermissionUiSelector::PredictionGrantLikelihood likelihood) {
+    PermissionUiSelector::PredictionGrantLikelihood likelihood,
+    PermissionRequestRelevance relevance) {
+  if (base::FeatureList::IsEnabled(
+          permissions::features::kPermissionsAILikelihoodOrRelevance)) {
+    return likelihood == Unlikely || likelihood == VeryUnlikely ||
+           relevance == PermissionRequestRelevance::kVeryLow ||
+           relevance == PermissionRequestRelevance::kLow;
+  }
   if (base::FeatureList::IsEnabled(permissions::features::kPermissionsAIP92)) {
     return likelihood == Unlikely || likelihood == VeryUnlikely;
   }
@@ -353,7 +359,8 @@ void PermissionsAiUiSelector::SelectUiToUse(
     VLOG(1) << "[CPSS] Using likelihood override value that was provided via "
                "command line";
     if (ShouldPredictionTriggerQuietUi(
-            likelihood_override_for_testing_.value())) {
+            likelihood_override_for_testing_.value(),
+            PermissionRequestRelevance::kUnspecified)) {
       FinishRequest(Decision::UseQuietUi(
           QuietUiReason::kServicePredictedVeryUnlikelyGrant,
           Decision::ShowNoWarning()));
@@ -363,7 +370,7 @@ void PermissionsAiUiSelector::SelectUiToUse(
     return;
   }
 
-  DCHECK(!request_);
+  CHECK(!request_, base::NotFatalUntil::M162);
   PredictionRequestMetadata request_metadata = {
       .prediction_source = prediction_source,
       .request_type = request->request_type()};
@@ -595,7 +602,10 @@ void PermissionsAiUiSelector::LookupResponseReceived(
              "likelihood: "
           << last_request_grant_likelihood_.value();
 
-  if (ShouldPredictionTriggerQuietUi(last_request_grant_likelihood_.value())) {
+  if (ShouldPredictionTriggerQuietUi(
+          last_request_grant_likelihood_.value(),
+          last_permission_request_relevance_.value_or(
+              PermissionRequestRelevance::kUnspecified))) {
     FinishRequest(Decision::UseQuietUi(
         is_on_device_cpss_v1
             ? QuietUiReason::kOnDevicePredictedVeryUnlikelyGrant
@@ -612,8 +622,9 @@ bool PermissionsAiUiSelector::ShouldHoldBack(
     const PredictionRequestMetadata& request_metadata) const {
   permissions::RequestType request_type = request_metadata.request_type;
   PredictionSource prediction_source = request_metadata.prediction_source;
-  DCHECK(request_type == permissions::RequestType::kNotifications ||
-         request_type == permissions::RequestType::kGeolocation);
+  CHECK(request_type == permissions::RequestType::kNotifications ||
+            request_type == permissions::RequestType::kGeolocation,
+        base::NotFatalUntil::M162);
 
   // Holdback probability for this request.
   const double holdback_chance = base::RandDouble();
@@ -626,7 +637,8 @@ bool PermissionsAiUiSelector::ShouldHoldBack(
 
   switch (prediction_source) {
     case PredictionSource::kOnDeviceCpssV1Model:
-      DCHECK(cpss_v1_model_holdback_probability_.has_value());
+      CHECK(cpss_v1_model_holdback_probability_.has_value(),
+            base::NotFatalUntil::M162);
       should_holdback = holdback_chance < *cpss_v1_model_holdback_probability_;
       prediction_model = PredictionModelType::kOnDeviceCpssV1Model;
       break;
@@ -807,8 +819,9 @@ void PermissionsAiUiSelector::ExecuteOnDeviceAivXModel(
 
     switch (model_data.model_type) {
       case PredictionModelType::kOnDeviceAiV4Model: {
-        DCHECK(model_data.snapshot.has_value());
-        DCHECK(model_data.inner_text_embedding.has_value());
+        CHECK(model_data.snapshot.has_value(), base::NotFatalUntil::M162);
+        CHECK(model_data.inner_text_embedding.has_value(),
+              base::NotFatalUntil::M162);
         if (PermissionsAiv4Handler* aiv4_handler =
                 prediction_model_handler_provider->GetPermissionsAiv4Handler(
                     request_type)) {

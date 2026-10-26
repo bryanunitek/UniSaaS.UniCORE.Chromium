@@ -55,6 +55,9 @@ class PartitionItem {
   URLPatternSet accessible_resources_;
 };
 
+// static
+const char* WebviewInfo::kManifestDataKey = keys::kWebviewAccessibleResources;
+
 WebviewInfo::WebviewInfo(const ExtensionId& extension_id)
     : extension_id_(extension_id) {}
 
@@ -69,16 +72,15 @@ bool WebviewInfo::IsResourceWebviewAccessible(
     return false;
   }
 
-  const WebviewInfo* webview_info = static_cast<const WebviewInfo*>(
-      extension->GetManifestData(keys::kWebviewAccessibleResources));
+  const WebviewInfo* webview_info = extension->GetManifestData<WebviewInfo>();
   if (!webview_info) {
     return false;
   }
 
   for (const auto& item : webview_info->partition_items_) {
     if (item->Matches(partition_id) &&
-        extension->ResourceMatches(item->accessible_resources(),
-                                   relative_path)) {
+        extension->ResourceMatches(item->accessible_resources(), relative_path,
+                                   /*case_sensitive=*/true)) {
       return true;
     }
   }
@@ -90,8 +92,7 @@ bool WebviewInfo::IsResourceWebviewAccessible(
 bool WebviewInfo::HasWebviewAccessibleResources(
     const Extension& extension,
     const std::string& partition_id) {
-  const WebviewInfo* webview_info = static_cast<const WebviewInfo*>(
-      extension.GetManifestData(keys::kWebviewAccessibleResources));
+  const WebviewInfo* webview_info = extension.GetManifestData<WebviewInfo>();
   if (!webview_info) {
     return false;
   }
@@ -200,8 +201,7 @@ bool WebviewHandler::Parse(Extension* extension, std::u16string* error) {
     info->AddPartitionItem(std::move(partition_item));
   }
 
-  extension->SetManifestData(keys::kWebviewAccessibleResources,
-                             std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
 }
 

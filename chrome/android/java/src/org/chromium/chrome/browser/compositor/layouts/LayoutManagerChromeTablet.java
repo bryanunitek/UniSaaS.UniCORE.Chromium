@@ -28,11 +28,12 @@ import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelperMa
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelperManager.TabModelStartupInfo;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabManager;
 import org.chromium.chrome.browser.device.DeviceClassManager;
-import org.chromium.chrome.browser.glic.GlicButtonDelegate;
+import org.chromium.chrome.browser.glic.toolbar_button.GlicButtonDelegate;
 import org.chromium.chrome.browser.hub.HubLayoutDependencyHolder;
 import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager;
+import org.chromium.chrome.browser.multiwindow.MultiWindowModeStateDispatcher;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabObscuringHandler;
@@ -49,12 +50,14 @@ import org.chromium.chrome.browser.ui.side_ui.SideUiStateProvider;
 import org.chromium.chrome.browser.ui.vertical_tabs.VerticalTabUtils;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
+import org.chromium.components.browser_ui.widget.MenuOrKeyboardActionController;
 import org.chromium.ui.base.ActivityResultTracker;
-import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.base.ActivityWindowAndroid;
 import org.chromium.ui.dragdrop.DragAndDropDelegate;
 import org.chromium.ui.resources.dynamics.DynamicResourceLoader;
 import org.chromium.ui.xr.scenecore.XrSceneCoreSessionManager;
 
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 /** LayoutManagerChromeTablet is the specialization of LayoutManagerChrome for the tablet. */
@@ -84,7 +87,7 @@ public class LayoutManagerChromeTablet extends LayoutManagerChrome {
      * @param tabSwitcherSupplier Supplier for an interface to talk to the Grid Tab Switcher.
      * @param tabModelSelectorSupplier Supplier for an interface to talk to the Tab Model Selector.
      * @param browserControlsStateProvider The BrowserControlsStateProvider for top controls.
-     * @param tabContentManagerSupplier Supplier of the TabContentManager instance.
+     * @param tabContentManagerSupplier Supplier of the manager providing tab thumbnail snapshots.
      * @param toolbarThemeColorProvider ThemeColorProvider for the toolbar.
      * @param tabModelStartupInfoSupplier Supplier for the {@link TabModelStartupInfo} on startup.
      * @param lifecycleDispatcher ActivityLifecycleDispatcher to be passed to TabStrip helper.
@@ -98,6 +101,7 @@ public class LayoutManagerChromeTablet extends LayoutManagerChrome {
      * @param windowAndroid The @{@link WindowAndroid} instance to access Activity.
      * @param toolbarManager The ToolbarManager instance.
      * @param desktopWindowStateManager The DesktopWindowStateManager for the app header.
+     * @param multiWindowModeStateDispatcher The {@link MultiWindowModeStateDispatcher}.
      * @param actionConfirmationManager The {@link ActionConfirmationManager} for group actions.
      * @param dataSharingTabManager The {@link DataSharingTabManager} for shared groups.
      * @param bottomSheetController The {@link BottomSheetController} used to show bottom sheets.
@@ -113,11 +117,17 @@ public class LayoutManagerChromeTablet extends LayoutManagerChrome {
      *     button.
      * @param sideUiStateProviderSupplier Supplier of the {@link SideUiStateProvider}.
      * @param tabObscuringHandler The {@link TabObscuringHandler} to manage tab obscuring.
+     * @param canActivateTabLayoutToggleMenuSupplier Supplier indicating if tab layout toggle can be
+     *     activated.
+     * @param menuOrKeyboardActionController The {@link MenuOrKeyboardActionController} for
+     *     registering menu or keyboard action handlers.
+     * @param activityCreationUptimeMs The {@link android.os.SystemClock#uptimeMillis()} timestamp
+     *     when the hosting activity was created, or 0 if unavailable.
      */
     public LayoutManagerChromeTablet(
             LayoutManagerHost host,
             ViewGroup contentContainer,
-            Supplier<TabSwitcher> tabSwitcherSupplier,
+            Supplier<@Nullable TabSwitcher> tabSwitcherSupplier,
             Supplier<TabModelSelector> tabModelSelectorSupplier,
             BrowserControlsStateProvider browserControlsStateProvider,
             MonotonicObservableSupplier<TabContentManager> tabContentManagerSupplier,
@@ -129,9 +139,10 @@ public class LayoutManagerChromeTablet extends LayoutManagerChrome {
             DragAndDropDelegate dragAndDropDelegate,
             View controlContainerView,
             ViewStub tabHoverCardViewStub,
-            WindowAndroid windowAndroid,
+            ActivityWindowAndroid windowAndroid,
             ToolbarManager toolbarManager,
             @Nullable DesktopWindowStateManager desktopWindowStateManager,
+            @Nullable MultiWindowModeStateDispatcher multiWindowModeStateDispatcher,
             ActionConfirmationManager actionConfirmationManager,
             DataSharingTabManager dataSharingTabManager,
             BottomSheetController bottomSheetController,
@@ -144,7 +155,10 @@ public class LayoutManagerChromeTablet extends LayoutManagerChrome {
             GlicButtonDelegate glicClickHandler,
             LeadingButtonDelegate leadingButtonDelegate,
             OneshotSupplier<SideUiStateProvider> sideUiStateProviderSupplier,
-            TabObscuringHandler tabObscuringHandler) {
+            TabObscuringHandler tabObscuringHandler,
+            @Nullable BooleanSupplier canActivateTabLayoutToggleMenuSupplier,
+            MenuOrKeyboardActionController menuOrKeyboardActionController,
+            long activityCreationUptimeMs) {
         super(
                 host,
                 contentContainer,
@@ -178,6 +192,7 @@ public class LayoutManagerChromeTablet extends LayoutManagerChrome {
                         windowAndroid,
                         toolbarManager,
                         desktopWindowStateManager,
+                        multiWindowModeStateDispatcher,
                         actionConfirmationManager,
                         dataSharingTabManager,
                         bottomSheetController,
@@ -190,7 +205,10 @@ public class LayoutManagerChromeTablet extends LayoutManagerChrome {
                         glicClickHandler,
                         leadingButtonDelegate,
                         sideUiStateProviderSupplier,
-                        tabObscuringHandler);
+                        tabObscuringHandler,
+                        canActivateTabLayoutToggleMenuSupplier,
+                        menuOrKeyboardActionController,
+                        activityCreationUptimeMs);
         addSceneOverlay(mTabStripLayoutHelperManager);
         addObserver(mTabStripLayoutHelperManager.getTabSwitcherObserver());
         mDesktopWindowStateManager = desktopWindowStateManager;

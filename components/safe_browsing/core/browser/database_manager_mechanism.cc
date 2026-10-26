@@ -4,9 +4,13 @@
 
 #include "components/safe_browsing/core/browser/database_manager_mechanism.h"
 
+#include <utility>
+
+#include "base/metrics/histogram_functions.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
 #include "components/safe_browsing/core/browser/db/util.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
 #include "components/safe_browsing/core/browser/safe_browsing_lookup_mechanism.h"
 
 namespace safe_browsing {
@@ -16,11 +20,16 @@ DatabaseManagerMechanism::DatabaseManagerMechanism(
     const SBThreatTypeSet& threat_types,
     scoped_refptr<SafeBrowsingDatabaseManager> database_manager,
     CheckBrowseUrlType check_type,
-    bool check_allowlist)
+    bool check_allowlist,
+    base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+        v5_get_hash_protocol_manager,
+    scoped_refptr<base::SequencedTaskRunner> custom_callback_task_runner)
     : SafeBrowsingLookupMechanism(url, threat_types, database_manager),
       SafeBrowsingDatabaseManager::Client(GetPassKey()),
       check_allowlist_(check_allowlist),
-      check_type_(check_type) {}
+      check_type_(check_type),
+      v5_get_hash_protocol_manager_(v5_get_hash_protocol_manager),
+      custom_callback_task_runner_(std::move(custom_callback_task_runner)) {}
 
 DatabaseManagerMechanism::~DatabaseManagerMechanism() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -77,7 +86,9 @@ DatabaseManagerMechanism::StartBlocklistCheck() {
 
   bool is_safe_synchronously =
       database_manager_->CheckBrowseUrl(url_, threat_types_, this, check_type_);
-  if (!is_safe_synchronously) {
+  if (is_safe_synchronously) {
+    LogCheckResult(SBThreatType::SB_THREAT_TYPE_SAFE);
+  } else {
     is_async_blocklist_check_in_progress_ = true;
   }
   return StartCheckResult(is_safe_synchronously, GetThreatSource());
@@ -89,6 +100,7 @@ void DatabaseManagerMechanism::StartBlocklistCheckAfterAllowlistCheck() {
   bool is_safe_synchronously =
       database_manager_->CheckBrowseUrl(url_, threat_types_, this, check_type_);
   if (is_safe_synchronously) {
+    LogCheckResult(SBThreatType::SB_THREAT_TYPE_SAFE);
     CompleteCheck(std::make_unique<CompleteCheckResult>(
         url_, SBThreatType::SB_THREAT_TYPE_SAFE,
         /*threat_source=*/std::nullopt,
@@ -106,11 +118,27 @@ void DatabaseManagerMechanism::OnCheckBrowseUrlResult(
     SBThreatType threat_type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   is_async_blocklist_check_in_progress_ = false;
+  LogCheckResult(threat_type);
   CompleteCheck(std::make_unique<CompleteCheckResult>(
       url, threat_type, GetThreatSource(),
       /*url_real_time_lookup_response=*/nullptr));
   // NOTE: Calling CompleteCheck results in the synchronous destruction of this
   // object, so there is nothing safe to do here but return.
+}
+
+void DatabaseManagerMechanism::LogCheckResult(SBThreatType threat_type) {
+  base::UmaHistogramEnumeration("SafeBrowsing.CheckUrl.Result.HashDatabase",
+                                threat_type);
+}
+
+base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+DatabaseManagerMechanism::GetV5GetHashProtocolManager() {
+  return v5_get_hash_protocol_manager_;
+}
+
+scoped_refptr<base::SequencedTaskRunner>
+DatabaseManagerMechanism::GetCustomCallbackTaskRunner() {
+  return custom_callback_task_runner_;
 }
 
 }  // namespace safe_browsing

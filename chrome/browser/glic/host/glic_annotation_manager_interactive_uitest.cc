@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/glic/host/glic_annotation_manager.h"
+
 #include <memory>
 
 #include "base/callback_list.h"
@@ -15,11 +17,11 @@
 #include "chrome/browser/glic/glic_metrics.h"
 #include "chrome/browser/glic/host/context/glic_page_context_fetcher.h"
 #include "chrome/browser/glic/host/glic.mojom-shared.h"
-#include "chrome/browser/glic/host/glic_annotation_manager.h"
 #include "chrome/browser/glic/public/glic_instance_metrics_backwards_compatibility.h"
 #include "chrome/browser/glic/test_support/interactive_glic_test.h"
 #include "chrome/browser/glic/test_support/interactive_test_util.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
@@ -709,23 +711,24 @@ class MAYBE_GlicAnnotationManagerUiTest
   }
   ~MAYBE_GlicAnnotationManagerUiTest() override = default;
 
-#define FORWARD_METRICS_CALL(method, ...)                               \
-  GlicKeyedServiceFactory::GetGlicKeyedService(browser()->GetProfile()) \
-      ->metrics()                                                       \
-      ->method(__VA_ARGS__);                                            \
-  GetGlicInstanceImpl()->instance_metrics().method(__VA_ARGS__);
-
-  void OnUserInputSubmitted(mojom::WebClientMode mode) {
-    FORWARD_METRICS_CALL(OnUserInputSubmitted, mode);
+  // Mirrors the metrics calls made by GlicWebClientHandler.
+  void OnUserInputSubmitted(
+      mojom::WebClientMode mode,
+      mojom::PromptType prompt_type = mojom::PromptType::kUnspecified) {
+    GlicKeyedServiceFactory::GetGlicKeyedService(browser()->GetProfile())
+        ->metrics()
+        ->OnUserInputSubmitted();
+    GetGlicInstanceImpl()->instance_metrics().OnUserInputSubmitted(mode,
+                                                                   prompt_type);
   }
 
-  void OnResponseStarted() { FORWARD_METRICS_CALL(OnResponseStarted); }
+  void OnResponseStarted() {
+    GetGlicInstanceImpl()->instance_metrics().OnResponseStarted();
+  }
 
   void OnResponseStopped(mojom::ResponseStopCause cause) {
-    FORWARD_METRICS_CALL(OnResponseStopped, cause);
+    GetGlicInstanceImpl()->instance_metrics().OnResponseStopped(cause);
   }
-
-#undef FORWARD_METRICS_CALL
 
  private:
   base::test::ScopedFeatureList feature_list_;
@@ -1282,9 +1285,17 @@ IN_PROC_BROWSER_TEST_F(
       // contents isn't visible.
       CheckResult(
           [&]() {
-            return content::EvalJs(
-                       GetHost()->webui_contents()->GetInnerWebContents()[0],
-                       R"js(
+            content::RenderFrameHost* frame = FindGlicGuestMainFrame();
+            if (!frame && GetHost() && GetHost()->webui_contents() &&
+                !GetHost()->webui_contents()->GetInnerWebContents().empty()) {
+              frame = GetHost()
+                          ->webui_contents()
+                          ->GetInnerWebContents()[0]
+                          ->GetPrimaryMainFrame();
+            }
+            CHECK(frame);
+            return content::EvalJs(frame,
+                                   R"js(
               new Promise(resolve => {
                 window.scrollToPromise.catch(e => {
                   resolve(e.reason);
@@ -1404,7 +1415,7 @@ IN_PROC_BROWSER_TEST_F(MAYBE_GlicAnnotationManagerUiTest, RecordsSessionCount) {
 //  - not recorded if scrolling fails
 //  - recorded after scrolling starts
 //
-// This test manually calls `GlicMetrics` methods like `OnUserInputSubmitted`,
+// This test manually calls metrics methods like `OnUserInputSubmitted`,
 // `OnResponseStarted` and `OnResponseStopped` instead of doing it through
 // the test client for convenience and better control of timing. The order of
 // the method calls reflect the order of expected calls in practice.
@@ -1488,7 +1499,7 @@ class MAYBE_GlicAnnotationManagerTabContextPermissionUiTest
       // When GlicDefaultTabContextSetting is disabled, we rely on a pref to
       // determine if tab context permission is enabled.
       return Steps(Do([this, enabled]() {
-        browser()->profile()->GetPrefs()->SetBoolean(
+        browser()->GetProfile()->GetPrefs()->SetBoolean(
             glic::prefs::kGlicTabContextEnabled, enabled);
       }));
     }

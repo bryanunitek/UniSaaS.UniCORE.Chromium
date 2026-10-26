@@ -10,6 +10,7 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/actor/actor_task_delegate.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
+#include "chrome/browser/glic/host/glic_webui.mojom.h"
 #include "components/autofill/core/browser/integrators/actor/actor_form_filling_types.h"
 #include "url/origin.h"
 
@@ -18,6 +19,10 @@ namespace glic {
 // Access to the glic web client, from outside of the WebUI handler.
 class GlicWebClientAccess {
  public:
+  virtual ~GlicWebClientAccess() = default;
+  virtual mojom::WebClient* web_client() = 0;
+  virtual mojom::WebClientState web_client_state() const = 0;
+
   using PanelWillOpenCallback = mojom::WebClient::NotifyPanelWillOpenCallback;
 
   // Informs the web client that the panel will open. The panel should not be
@@ -50,10 +55,14 @@ class GlicWebClientAccess {
   // Informs the web client that an actor task list row was clicked.
   virtual void NotifyActorTaskListRowClicked(int32_t task_id) = 0;
 
-
   // Informs the web client that the browser wants to invoke Glic.
   virtual void Invoke(mojom::InvokeOptionsPtr options,
                       base::OnceClosure callback) = 0;
+
+  // Simulates a user input submission.
+  virtual void OnUserInputSubmittedForTesting(
+      mojom::WebClientMode mode,
+      mojom::PromptType prompt_type) = 0;
 };
 
 }  // namespace glic

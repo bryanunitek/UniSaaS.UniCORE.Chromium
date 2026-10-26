@@ -47,10 +47,12 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/checkbox.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/separator.h"
@@ -139,11 +141,11 @@ END_METADATA
 #if BUILDFLAG(IS_CHROMEOS)
 bool IsArcShortcutApp(Profile* profile, const std::string& app_id) {
   ArcAppListPrefs* arc_prefs = ArcAppListPrefs::Get(profile);
-  DCHECK(arc_prefs);
+  CHECK(arc_prefs, base::NotFatalUntil::M162);
 
   std::unique_ptr<ArcAppListPrefs::AppInfo> app_info =
       arc_prefs->GetApp(app_id);
-  DCHECK(app_info);
+  CHECK(app_info, base::NotFatalUntil::M162);
   return app_info->shortcut;
 }
 #endif
@@ -160,8 +162,9 @@ std::u16string GetWindowTitleForApp(Profile* profile,
   }
 #else
   // On non-ChromeOS, only Chrome app and web app types meaningfully exist.
-  DCHECK(app_type != apps::AppType::kChromeApp &&
-         app_type != apps::AppType::kWeb);
+  CHECK(
+      app_type != apps::AppType::kChromeApp && app_type != apps::AppType::kWeb,
+      base::NotFatalUntil::M162);
 #endif
   return l10n_util::GetStringFUTF16(IDS_PROMPT_APP_UNINSTALL_TITLE,
                                     base::UTF8ToUTF16(app_name));
@@ -263,19 +266,12 @@ void AppUninstallDialogView::InitializeView(Profile* profile,
     case apps::AppType::kUnknown:
     case apps::AppType::kRemote:
     case apps::AppType::kExtension:
+    case apps::AppType::kPluginVm:
       NOTREACHED();
     // TODO(crbug.com/376071296): Clean up the switch/case items below.
     case apps::AppType::kArc:
 #if BUILDFLAG(IS_CHROMEOS)
       InitializeViewForArcApp(profile, app_id);
-      break;
-#else
-      NOTREACHED();
-#endif
-    case apps::AppType::kPluginVm:
-#if BUILDFLAG(IS_CHROMEOS)
-      AddSubtitle(
-          l10n_util::GetStringUTF16(IDS_PLUGIN_VM_UNINSTALL_PROMPT_BODY));
       break;
 #else
       NOTREACHED();
@@ -338,7 +334,7 @@ void AppUninstallDialogView::InitializeCheckbox(const GURL& app_start_url) {
       is_google ? IDS_APP_UNINSTALL_PROMPT_REMOVE_DATA_CHECKBOX_FOR_GOOGLE
                 : IDS_APP_UNINSTALL_PROMPT_REMOVE_DATA_CHECKBOX_FOR_NON_GOOGLE,
       replacements, &offsets));
-  DCHECK_EQ(replacements.size(), offsets.size());
+  CHECK_EQ(replacements.size(), offsets.size(), base::NotFatalUntil::M162);
   const size_t offset = offsets.back();
 
   checkbox_label->AddStyleRange(
@@ -374,7 +370,7 @@ void AppUninstallDialogView::InitializeViewForExtension(
   const extensions::Extension* extension =
       extensions::ExtensionRegistry::Get(profile)->GetInstalledExtension(
           app_id);
-  DCHECK(extension);
+  CHECK(extension, base::NotFatalUntil::M162);
 
   extensions::ExtensionManagement* extension_management =
       extensions::ExtensionManagementFactory::GetForBrowserContext(profile);
@@ -512,13 +508,14 @@ void AppUninstallDialogView::InitializeViewForWebApp(
         version = update.Version();
       });
 
-  // In case of Sub Apps display parent Isolated Web App name.
+  // In case of Sub Apps display a subtitle explaining that uninstalling this
+  // app will not affect the parent app or other installed Sub Apps.
   if (auto parent_app_name = web_app::WebAppProvider::GetForWebApps(profile_)
                                  ->registrar_unsafe()
                                  .GetParentAppShortName(app_id)) {
-    AddSubtitle(
-        l10n_util::GetStringFUTF16(IDS_IWA_SUB_APPS_INSTALLER_PARENT_APP_NAME,
-                                   base::UTF8ToUTF16(*parent_app_name)));
+    AddSubtitle(l10n_util::GetStringFUTF16(IDS_IWA_SUB_APPS_UNINSTALL_INFO,
+                                           base::UTF8ToUTF16(*parent_app_name),
+                                           base::UTF8ToUTF16(app_name)));
     return;
   }
 

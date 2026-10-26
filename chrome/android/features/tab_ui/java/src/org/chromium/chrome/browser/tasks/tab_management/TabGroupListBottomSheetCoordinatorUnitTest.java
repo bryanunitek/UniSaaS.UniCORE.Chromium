@@ -21,6 +21,8 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
@@ -43,6 +45,9 @@ import org.chromium.components.data_sharing.DataSharingService;
 import org.chromium.components.tab_group_sync.SavedTabGroup;
 import org.chromium.components.tab_group_sync.SavedTabGroupTab;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
+import org.chromium.components.tab_group_sync.TabGroupUiActionHandler;
+import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.base.WindowAndroid.ActivityStateObserver;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -58,10 +63,13 @@ public class TabGroupListBottomSheetCoordinatorUnitTest {
     @Mock private BottomSheetController mBottomSheetController;
     @Mock private TabModel mTabModel;
     @Mock private TabGroupSyncService mTabGroupSyncService;
+    @Mock private TabGroupUiActionHandler mTabGroupUiActionHandler;
     @Mock private CollaborationService mCollaborationService;
     @Mock private DataSharingService mDataSharingService;
     @Mock private Profile mProfile;
     @Mock private Tab mTab;
+    @Mock private WindowAndroid mWindowAndroid;
+    @Captor private ArgumentCaptor<ActivityStateObserver> mActivityStateObserverCaptor;
     private final SavedTabGroup mSavedTabGroup = new SavedTabGroup();
     private final SavedTabGroupTab mSavedTabGroupTab = new SavedTabGroupTab();
     private Context mContext;
@@ -90,7 +98,9 @@ public class TabGroupListBottomSheetCoordinatorUnitTest {
                         mTabModel,
                         mBottomSheetController,
                         /* supportsShowNewGroup= */ true,
-                        /* destroyOnHide= */ false);
+                        /* destroyOnHide= */ false,
+                        mWindowAndroid,
+                        mTabGroupUiActionHandler);
     }
 
     @Test
@@ -156,6 +166,49 @@ public class TabGroupListBottomSheetCoordinatorUnitTest {
                 mTabModel,
                 mBottomSheetController,
                 /* supportsShowNewGroup= */ true,
-                /* destroyOnHide= */ false);
+                /* destroyOnHide= */ false,
+                /* windowAndroid= */ null,
+                /* tabGroupUiActionHandler= */ null);
+    }
+
+    @Test
+    public void testOnActivityPaused_closesSheetIfHostContent() {
+        verify(mWindowAndroid).addActivityStateObserver(mActivityStateObserverCaptor.capture());
+        ActivityStateObserver observer = mActivityStateObserverCaptor.getValue();
+
+        when(mBottomSheetController.getCurrentSheetContent())
+                .thenReturn(mock(TabGroupListBottomSheetView.class));
+        ArgumentCaptor<TabGroupListBottomSheetView> viewCaptor =
+                ArgumentCaptor.forClass(TabGroupListBottomSheetView.class);
+        mCoordinator.showBottomSheet(List.of(mTab));
+        verify(mBottomSheetController).requestShowContent(viewCaptor.capture(), eq(true));
+        TabGroupListBottomSheetView view = viewCaptor.getValue();
+
+        when(mBottomSheetController.getCurrentSheetContent()).thenReturn(view);
+        observer.onActivityPaused();
+
+        verify(mBottomSheetController).hideContent(eq(view), eq(true), eq(StateChangeReason.NONE));
+    }
+
+    @Test
+    public void testOnActivityPaused_doesNotCloseSheetIfNotHostContent() {
+        verify(mWindowAndroid).addActivityStateObserver(mActivityStateObserverCaptor.capture());
+        ActivityStateObserver observer = mActivityStateObserverCaptor.getValue();
+
+        when(mBottomSheetController.getCurrentSheetContent())
+                .thenReturn(mock(BottomSheetContent.class));
+        observer.onActivityPaused();
+
+        verify(mBottomSheetController, never())
+                .hideContent(any(), eq(true), eq(StateChangeReason.NONE));
+    }
+
+    @Test
+    public void testDestroy_removesObserver() {
+        verify(mWindowAndroid).addActivityStateObserver(mActivityStateObserverCaptor.capture());
+        ActivityStateObserver observer = mActivityStateObserverCaptor.getValue();
+
+        mCoordinator.destroy();
+        verify(mWindowAndroid).removeActivityStateObserver(eq(observer));
     }
 }

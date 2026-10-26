@@ -20,6 +20,7 @@
 #include "base/test/test_simple_task_runner.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
+#include "components/fcm/engine/chrome_build_info.h"
 #include "components/gcm_driver/crypto/gcm_encryption_provider.h"
 #include "components/gcm_driver/fake_gcm_app_handler.h"
 #include "components/gcm_driver/fake_gcm_client.h"
@@ -245,7 +246,7 @@ FakeGCMClient* GCMDriverTest::GetGCMClient() {
 }
 
 void GCMDriverTest::CreateDriver() {
-  GCMClient::ChromeBuildInfo chrome_build_info;
+  fcm::ChromeBuildInfo chrome_build_info;
   chrome_build_info.product_category_for_subtypes = "com.chrome.macosx";
   driver_ = std::make_unique<GCMDriverDesktop>(
       std::unique_ptr<GCMClientFactory>(new FakeGCMClientFactory(
@@ -867,16 +868,6 @@ TEST_F(GCMDriverFunctionalTest, MessagesDeleted) {
   EXPECT_EQ(FakeGCMAppHandler::MESSAGES_DELETED_EVENT,
             gcm_app_handler()->received_event());
   EXPECT_EQ(kTestAppID1, gcm_app_handler()->app_id());
-}
-
-TEST_F(GCMDriverFunctionalTest, LastTokenFetchTime) {
-  // GCM registration has to be performed otherwise GCM will not be started.
-  Register(kTestAppID1, ToSenderList("sender"), GCMDriverTest::WAIT);
-
-  EXPECT_EQ(base::Time(), driver()->GetLastTokenFetchTime());
-  base::Time fetch_time = base::Time::Now();
-  driver()->SetLastTokenFetchTime(fetch_time);
-  EXPECT_EQ(fetch_time, driver()->GetLastTokenFetchTime());
 }
 
 class GCMDriverInstanceIDTest : public GCMDriverTest {

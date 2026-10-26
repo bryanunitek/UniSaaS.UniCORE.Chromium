@@ -98,8 +98,6 @@ TEST_F(SystemTrayClientImplTest, ShowTouchpadSettings) {
 }
 
 TEST_F(SystemTrayClientImplTest, ShowMouseSettings) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({ash::features::kPeripheralCustomization}, {});
   base::UserActionTester user_action_tester;
   client_impl_->ShowMouseSettings();
   EXPECT_EQ(settings_window_manager_->last_url(),
@@ -109,8 +107,6 @@ TEST_F(SystemTrayClientImplTest, ShowMouseSettings) {
 }
 
 TEST_F(SystemTrayClientImplTest, ShowGraphicsTabletSettings) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({ash::features::kPeripheralCustomization}, {});
   base::UserActionTester user_action_tester;
   client_impl_->ShowGraphicsTabletSettings();
   EXPECT_EQ(settings_window_manager_->last_url(),
@@ -134,8 +130,6 @@ TEST_F(SystemTrayClientImplTest, ShowRemapKeysSettings) {
 }
 
 TEST_F(SystemTrayClientImplTest, ShowApnSubpage) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(ash::features::kApnRevamp);
   client_impl_->ShowApnSubpage(/*network_id=*/"guid");
   EXPECT_EQ(settings_window_manager_->last_url(),
             base::StrCat({chromeos::settings::GetOSSettingsUrl(
@@ -145,8 +139,6 @@ TEST_F(SystemTrayClientImplTest, ShowApnSubpage) {
 }
 
 TEST_F(SystemTrayClientImplTest, ShowKeyboardSettings) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(ash::features::kPeripheralCustomization);
   base::UserActionTester user_action_tester;
   client_impl_->ShowKeyboardSettings();
   EXPECT_EQ(settings_window_manager_->last_url(),
@@ -156,8 +148,6 @@ TEST_F(SystemTrayClientImplTest, ShowKeyboardSettings) {
 }
 
 TEST_F(SystemTrayClientImplTest, ShowPointingStickSettings) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(ash::features::kPeripheralCustomization);
   base::UserActionTester user_action_tester;
   client_impl_->ShowPointingStickSettings();
   EXPECT_EQ(settings_window_manager_->last_url(),

@@ -5,7 +5,8 @@
 #ifndef CHROME_BROWSER_COMPONENT_UPDATER_PKI_METADATA_COMPONENT_INSTALLER_H_
 #define CHROME_BROWSER_COMPONENT_UPDATER_PKI_METADATA_COMPONENT_INSTALLER_H_
 
-#include <cstdint>
+#include <stdint.h>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -17,9 +18,12 @@
 #include "components/component_updater/component_installer.h"
 #include "mojo/public/cpp/base/proto_wrapper.h"
 #include "net/base/hash_value.h"
+#include "net/cert/root_store_proto_lite/mtc_config.pb.h"
 #include "net/net_buildflags.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/protobuf/src/google/protobuf/repeated_field.h"
+
+struct SSLConfigServiceMtcLandmarkInfo;
 
 namespace component_updater {
 
@@ -29,15 +33,28 @@ class PKIMetadataComponentInstallerService final {
  public:
   class Observer : public base::CheckedObserver {
    public:
-    // Called after the CT Log list data is configured.
-    virtual void OnCTLogListConfigured() {}
+    // Called after the CT Log list data was processed. This may be called after
+    // the update was successfully configured or if the update was ignored due
+    // to an error.
+    virtual void OnCTLogListProcessed() {}
+
+#if BUILDFLAG(CHROME_KEY_PINNING_SUPPORTED)
+    // Called after the Key Pins list data is processed. This may be called
+    // after the update was successfully configured or if the update was ignored
+    // due to an error.
+    virtual void OnKeyPinsListProcessed() {}
+#endif
 
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
-    // Called after the Chrome Root Store data was configured.
-    virtual void OnChromeRootStoreConfigured() {}
+    // Called after the Chrome Root Store data was processed. This may be
+    // called after the update was successfully configured or if the update
+    // was ignored due to an error.
+    virtual void OnChromeRootStoreProcessed() {}
 
-    // Called after the MTC Metadata was configured.
-    virtual void OnMtcMetadataConfigured() {}
+    // Called after the MTC Metadata was processed. This may be called after
+    // the update was successfully configured or if the update was ignored due
+    // to an error.
+    virtual void OnMtcMetadataProcessed() {}
 #endif
   };
 
@@ -81,6 +98,10 @@ class PKIMetadataComponentInstallerService final {
   [[nodiscard]] bool WriteCTDataForTesting(const base::FilePath& path,
                                            const std::string& contents);
 
+  // If set to true, allows older CT log list updates to override newer CT log
+  // list updates.
+  void AllowOldCTUpdateForTesting(bool allowed);
+
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
   [[nodiscard]] bool WriteCRSDataForTesting(const base::FilePath& path,
                                             const std::string& contents);
@@ -98,22 +119,30 @@ class PKIMetadataComponentInstallerService final {
   // |ct_config_bytes| should be a serialized CTLogList proto message.
   void UpdateNetworkServiceCTListOnUI(const std::string& ct_config_bytes);
 
+#if BUILDFLAG(CHROME_KEY_PINNING_SUPPORTED)
   // Updates the network service pins list with the component delivered data.
   // |kp_config_bytes| should be a serialized KPConfig proto message.
   void UpdateNetworkServiceKPListOnUI(const std::string& kp_config_bytes);
 
+  // Notifies all observers that the key pinning list data has been processed.
+  void NotifyKeyPinsListProcessed();
+#endif
+
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
   static std::optional<mojo_base::ProtoWrapper> ParseChromeRootStore(
       const base::FilePath& crs_pb_path);
-  static std::optional<mojo_base::ProtoWrapper> ParseSignerSet(
-      const base::FilePath& signer_pb_path);
+  static std::optional<chrome_root_store::MtcConfig> ParseMtcConfig(
+      const base::FilePath& mtc_config_pb_path);
+
+  struct ChromeRootStoreAndMtcConfig {
+    std::optional<mojo_base::ProtoWrapper> chrome_root_store;
+    std::optional<mojo_base::ProtoWrapper> mtc_config;
+  };
 
   // Updates SystemNetworkContextManager and cert verifiers with the component
-  // delivered Chrome Root Store data and optional Signer Set data.
+  // delivered Chrome Root Store data and optional Mtc Config data.
   void UpdateChromeRootStoreOnUI(
-      std::pair<std::optional<mojo_base::ProtoWrapper>,
-                std::optional<mojo_base::ProtoWrapper>>
-          root_store_and_signer_set);
+      ChromeRootStoreAndMtcConfig root_store_and_mtc_config);
 
   // Updates SystemNetworkContextManager and cert verifiers with the component
   // delivered MTC Metadata. `mtc_metadata` should be a wrapped
@@ -121,15 +150,22 @@ class PKIMetadataComponentInstallerService final {
   void UpdateMtcMetadataOnUI(
       std::optional<mojo_base::ProtoWrapper> mtc_metadata);
 
+  // Returns the Trust Anchor IDs with trusted landmarks, if available.
+  std::optional<SSLConfigServiceMtcLandmarkInfo>
+  CalculateTrustAnchorIdsWithLandmarks();
+
   // Updates the network service with the Trust Anchor IDs, combining the
   // cached data from both the Chrome Root Store and the MTC Metadata.
   // (https://tlswg.org/tls-trust-anchor-ids/draft-ietf-tls-trust-anchor-ids.html)
   void UpdateTrustAnchorIDsImpl();
 
-  // Updates the network service with the Trust Anchor IDs in
-  // `chrome_root_store`.
-  void UpdateCRSTrustAnchorIDs(
+  // Updates the cached TAI data with the Trust Anchor IDs in
+  // `chrome_root_store`. Returns true if updated.
+  bool UpdateCRSTrustAnchorIDs(
       const mojo_base::ProtoWrapper& chrome_root_store);
+  // Updates the cached TAI data with the Trust Anchor IDs in
+  // `mtc_config`. Returns true if updated.
+  bool UpdateSignerSetTrustAnchorIDs(const mojo_base::ProtoWrapper& mtc_config);
 
   // Updates the network service with the Trust Anchor IDs in `mtc_metadata`,
   // and returns true on success. A false returns indicates a problem with the
@@ -139,15 +175,15 @@ class PKIMetadataComponentInstallerService final {
       const mojo_base::ProtoWrapper& mtc_metadata);
 
   // Notifies all observers that the Chrome Root Store data has been
-  // configured.
-  void NotifyChromeRootStoreConfigured();
+  // processed.
+  void NotifyChromeRootStoreProcessed();
 
-  // Notifies all observers that the MTC Metadata has been configured.
-  void NotifyMtcMetadataConfigured();
+  // Notifies all observers that the MTC Metadata has been processed.
+  void NotifyMtcMetadataProcessed();
 #endif
 
-  // Notifies all observers that the CT Log list data has been configured.
-  void NotifyCTLogListConfigured();
+  // Notifies all observers that the CT Log list data has been processed.
+  void NotifyCTLogListProcessed();
 
   // The install folder path. An empty path if the component is not ready.
   base::FilePath install_dir_;
@@ -159,23 +195,24 @@ class PKIMetadataComponentInstallerService final {
   // from both the CRS and MTC Metadata need to be merged together but are
   // updated separately, so the latest necessary data from each is cached.
   std::vector<std::vector<uint8_t>> crs_trust_anchor_ids_;
-  absl::flat_hash_set<std::vector<uint8_t>> crs_trusted_mtc_logids_;
+  absl::flat_hash_set<std::vector<uint8_t>> crs_trusted_mtc_ca_ids_;
 
-  struct MtcLogIdAndLandmarkTrustAnchorId {
-    MtcLogIdAndLandmarkTrustAnchorId();
-    ~MtcLogIdAndLandmarkTrustAnchorId();
-    MtcLogIdAndLandmarkTrustAnchorId(const MtcLogIdAndLandmarkTrustAnchorId&);
-    MtcLogIdAndLandmarkTrustAnchorId(MtcLogIdAndLandmarkTrustAnchorId&&);
+  struct MtcCaIdAndLandmarkTrustAnchorIds {
+    MtcCaIdAndLandmarkTrustAnchorIds();
+    ~MtcCaIdAndLandmarkTrustAnchorIds();
+    MtcCaIdAndLandmarkTrustAnchorIds(const MtcCaIdAndLandmarkTrustAnchorIds&);
+    MtcCaIdAndLandmarkTrustAnchorIds(MtcCaIdAndLandmarkTrustAnchorIds&&);
 
-    std::vector<uint8_t> anchor_log_id;
-    std::vector<uint8_t> landmark_trust_anchor_id;
+    std::vector<uint8_t> ca_id;
+    std::vector<std::vector<uint8_t>> landmark_trust_anchor_ids;
   };
-  std::vector<MtcLogIdAndLandmarkTrustAnchorId>
-      mtc_log_id_landmark_trust_anchor_ids_;
+  std::vector<MtcCaIdAndLandmarkTrustAnchorIds>
+      mtc_ca_id_landmark_trust_anchor_ids_;
 
-  // The time (as seconds since the unix epoch) that the latest MtcMetadata
-  // was generated.
-  int64_t mtc_metadata_update_time_seconds_ = 0;
+  // The time after which the MtcMetadata landmark info is no longer useful.
+  base::Time mtc_landmark_max_usable_time_;
+
+  bool allow_old_ct_log_list_updates_for_testing_ = false;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

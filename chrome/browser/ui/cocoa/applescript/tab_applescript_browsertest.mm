@@ -12,7 +12,6 @@
 #include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/devtools/devtools_window_testing.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #import "chrome/browser/ui/cocoa/applescript/applescript_test_utils.h"
 #import "chrome/browser/ui/cocoa/applescript/error_applescript.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -74,7 +73,7 @@ IN_PROC_BROWSER_TEST_F(TabAppleScriptTest, ViewSource) {
 }
 
 IN_PROC_BROWSER_TEST_F(TabAppleScriptTest, ExecuteJavascript) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   TabAppleScript* tab_applescript =

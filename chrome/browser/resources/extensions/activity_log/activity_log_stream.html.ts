@@ -2,10 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import type {CrInfiniteListElement} from '//resources/cr_elements/cr_infinite_list/cr_infinite_list.js';
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
 import type {ActivityLogStreamElement} from './activity_log_stream.js';
 import type {StreamItem} from './activity_log_stream_item.js';
+
+export interface TemplatizedDomNodes {
+  activityList: CrInfiniteListElement<StreamItem>;
+}
 
 export function getHtml(this: ActivityLogStreamElement) {
   // clang-format off
@@ -15,9 +20,12 @@ export function getHtml(this: ActivityLogStreamElement) {
       @search-changed="${this.onSearchChanged_}">
   </cr-search-field>
   <cr-button id="toggle-stream-button" @click="${this.onToggleButtonClick_}">
-    <span">
-      ${this.isStreamOn_ ?
-          html`$i18n{stopActivityStream}` : html`$i18n{startActivityStream}`}
+    <span>
+      ${this.isStreamOn_ ? html`
+        $i18n{stopActivityStream}
+      ` : html`
+        $i18n{startActivityStream}
+      `}
     </span>
   </cr-button>
   <cr-button class="clear-activities-button"
@@ -38,17 +46,16 @@ export function getHtml(this: ActivityLogStreamElement) {
     ?hidden="${!this.shouldShowEmptySearchMessage_()}">
   $i18n{noSearchResults}
 </div>
-<div class="activity-table-headings"
-    ?hidden="${this.isFilteredStreamEmpty_()}">
+<div class="activity-table-headings" ?hidden="${this.isFilteredStreamEmpty_()}">
   <span id="activity-type">$i18n{activityLogTypeColumn}</span>
   <span id="activity-key">$i18n{activityLogNameColumn}</span>
   <span id="activity-time">$i18n{activityLogTimeColumn}</span>
 </div>
-<cr-infinite-list .items="${this.filteredActivityStream_}" item-size="56"
-    chunk-size="10"
+<cr-infinite-list id="activityList" .items="${this.filteredActivityStream_}"
+    item-size="56" chunk-size="10"
     .template="${(item: StreamItem) => html`
-        <activity-log-stream-item .data="${item}">
-        </activity-log-stream-item>`}">
+      <activity-log-stream-item .data="${item}"></activity-log-stream-item>
+    `}">
 </cr-infinite-list>
 <!--_html_template_end_-->`;
   // clang-format on

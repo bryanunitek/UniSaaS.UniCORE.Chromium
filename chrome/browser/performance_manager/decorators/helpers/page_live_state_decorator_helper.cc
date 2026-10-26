@@ -6,7 +6,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/glic/public/glic_actuation_tracker.h"
+#include "chrome/browser/glic/public/glic_perf_traits_tracker.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "components/performance_manager/public/decorators/page_live_state_decorator.h"
 #include "components/performance_manager/public/features.h"
@@ -19,7 +19,6 @@
 
 #include "base/check.h"
 #include "base/feature_list.h"
-#include "base/not_fatal_until.h"
 #include "base/sequence_checker.h"
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
@@ -48,7 +47,7 @@ class ActiveTabTracker : public TabModelObserver {
   ActiveTabTracker& operator=(const ActiveTabTracker&) = delete;
   ~ActiveTabTracker() override = default;
 
-  void DidSelectTab(TabAndroid* tab, TabModel::TabSelectionType type) override {
+  void DidSelectTab(TabAndroid* tab) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     if (tab == active_tab_) {
       return;
@@ -114,7 +113,7 @@ class ActiveTabObserver : public TabModelListObserver {
   void OnTabModelRemoved(TabModel* tab_model) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     auto tracker_iter = tracker_map_.find(tab_model);
-    CHECK(tracker_iter != tracker_map_.end(), base::NotFatalUntil::M140)
+    CHECK(tracker_iter != tracker_map_.end())
         << "Untracked TabModel by ActiveTabObserver is removed";
     if (tracker_iter == tracker_map_.end()) {
       return;
@@ -241,6 +240,20 @@ class PageLiveStateDecoratorHelper::WebContentsObserver
                                                      capability_type, used);
   }
 
+#if BUILDFLAG(IS_ANDROID)
+  // On desktop, this is updated by TabLifecycleUnit.
+  // TODO(crbug.com/394889323): Unify the desktop and Android implementations.
+  void WasDiscarded() override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    PageLiveStateDecorator::SetIsDiscarded(web_contents(), true);
+  }
+
+  void PrimaryPageChanged(content::Page& page) override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    PageLiveStateDecorator::SetIsDiscarded(web_contents(), false);
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+
   void WebContentsDestroyed() override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     DetachAndDestroy();
@@ -283,13 +296,8 @@ PageLiveStateDecoratorHelper::PageLiveStateDecoratorHelper() {
 
   content::DevToolsAgentHost::AddObserver(this);
 
-  if (base::FeatureList::IsEnabled(features::kGlicActuationPriorityVoter)) {
-    actuating_changed_callback_subscription_ =
-        glic::GlicActuationTracker::GetInstance()->AddActuatingChangedCallback(
-            base::BindRepeating(
-                &PageLiveStateDecoratorHelper::OnGlicActuatingChanged,
-                base::Unretained(this)));
-  }
+  glic_perf_traits_observation_.Observe(
+      glic::GlicPerfTraitsTracker::GetInstance());
 }
 
 PageLiveStateDecoratorHelper::~PageLiveStateDecoratorHelper() {
@@ -386,11 +394,21 @@ void PageLiveStateDecoratorHelper::OnPageNodeCreatedForWebContents(
   new WebContentsObserver(web_contents, this);
 }
 
-void PageLiveStateDecoratorHelper::OnGlicActuatingChanged(
+void PageLiveStateDecoratorHelper::OnGlicActuationStateChanged(
     content::WebContents* web_contents,
     GlicActuationState state) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  PageLiveStateDecorator::SetGlicActuationState(web_contents, state);
+  if (base::FeatureList::IsEnabled(features::kGlicActuationPriorityVoter)) {
+    PageLiveStateDecorator::SetGlicActuationState(web_contents, state);
+  }
+}
+
+void PageLiveStateDecoratorHelper::OnIsGlicPinnedToVisibleInstanceChanged(
+    content::WebContents* web_contents,
+    bool is_pinned_to_visible) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  PageLiveStateDecorator::SetIsGlicPinnedToVisibleInstance(
+      web_contents, is_pinned_to_visible);
 }
 
 }  // namespace performance_manager

@@ -20,7 +20,6 @@ buildflag_header("buildflags") {
 
 component("cpp") {
   sources = [
-    "compiler_disconnect_reason.h",
     "context_properties.cc",
     "context_properties.h",
     "data_type_limits.cc",
@@ -35,8 +34,11 @@ component("cpp") {
     "range.h",
     "supported_data_types.h",
     "supported_tensors.h",
+    "webgpu_context_properties.h",
     "webnn_errors.cc",
     "webnn_errors.h",
+    "webnn_sandbox_init.cc",
+    "webnn_sandbox_init.h",
     "webnn_trace.cc",
     "webnn_trace.h",
     "webnn_types.h",
@@ -45,6 +47,7 @@ component("cpp") {
   public_deps = [
     ":buildflags",
     "//base",
+    "//services/webnn/public/mojom:features",
   ]
 
   deps = [
@@ -56,13 +59,6 @@ component("cpp") {
     sources += [
       "coreml_initializer.cc",
       "coreml_initializer.h",
-    ]
-  }
-
-  if (is_win || is_linux) {
-    sources += [
-      "webnn_sandbox_init.cc",
-      "webnn_sandbox_init.h",
     ]
   }
 
@@ -80,6 +76,7 @@ source_set("in_process_context_provider") {
   ]
 
   public_deps = [
+    ":cpp",
     "//base",
     "//mojo/public/cpp/system",
   ]
@@ -94,10 +91,13 @@ source_set("in_process_context_provider") {
 if (is_win) {
   component("win") {
     sources = [
+      "ep_device_info.cc",
       "ep_device_info.h",
       "execution_providers_info.h",
       "platform_functions_win.cc",
       "platform_functions_win.h",
+      "webnn_device_util.cc",
+      "webnn_device_util.h",
       "win_app_runtime_package_info.h",
     ]
 

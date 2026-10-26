@@ -2,6 +2,8 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//components/translate/features.gni")
+
 static_library("browser") {
   sources = [
     "content_record_page_language.cc",
@@ -39,8 +41,21 @@ static_library("browser") {
     "//content/public/common",
     "//google_apis",
     "//net",
+    "//pdf:buildflags",
     "//services/network/public/cpp",
+    "//ui/accessibility:ax_base",
   ]
+
+  if (enable_pdf_translation) {
+    sources += [
+      "pdf_translation_coordinator.cc",
+      "pdf_translation_coordinator.h",
+    ]
+    deps += [
+      "//components/pdf/browser",
+      "//pdf/mojom",
+    ]
+  }
 }
 
 source_set("unit_tests") {
@@ -54,12 +69,25 @@ source_set("unit_tests") {
   deps = [
     ":browser",
     "//base",
+    "//components/language/core/browser",
     "//components/prefs",
     "//components/prefs:test_support",
+    "//components/sync_preferences:test_support",
+    "//components/translate/core/browser:test_support",
     "//content/test:test_support",
+    "//pdf:buildflags",
     "//services/network:test_support",
     "//testing/gtest",
+    "//ui/accessibility:ax_base",
   ]
+
+  if (enable_pdf_translation) {
+    sources += [ "pdf_translation_coordinator_unittest.cc" ]
+    deps += [
+      "//components/pdf/browser",
+      "//pdf/mojom",
+    ]
+  }
 }
 
 static_library("test_support") {

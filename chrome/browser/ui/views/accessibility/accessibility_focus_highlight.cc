@@ -8,8 +8,9 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
@@ -17,7 +18,7 @@
 #include "content/public/browser/focused_node_details.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/compositor_animation_observer.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -85,7 +86,7 @@ bool AccessibilityFocusHighlight::no_fade_for_testing_ = false;
 AccessibilityFocusHighlight::AccessibilityFocusHighlight(
     BrowserView* browser_view)
     : browser_view_(browser_view) {
-  DCHECK(browser_view);
+  CHECK(browser_view, base::NotFatalUntil::M162);
 
   // Listen for preference changes.
   profile_pref_registrar_.Init(
@@ -154,12 +155,12 @@ SkColor AccessibilityFocusHighlight::GetHighlightColor() {
 void AccessibilityFocusHighlight::CreateOrUpdateLayer(gfx::Rect node_bounds) {
   // Find the layer of our owning BrowserView.
   views::Widget* widget = browser_view_->GetWidget();
-  DCHECK(widget);
+  CHECK(widget, base::NotFatalUntil::M162);
   ui::Layer* root_layer = widget->GetLayer();
 
   // Create the layer if needed.
   if (!layer_) {
-    layer_ = std::make_unique<ui::Layer>(ui::LAYER_TEXTURED);
+    layer_ = std::make_unique<ui::LayerTextured>();
     layer_->SetName("AccessibilityFocusHighlight");
     layer_->SetFillsBoundsOpaquely(false);
     root_layer->Add(layer_.get());
@@ -223,9 +224,9 @@ void AccessibilityFocusHighlight::RemoveLayer() {
 }
 
 void AccessibilityFocusHighlight::AddOrRemoveObservers() {
-  Browser* browser = browser_view_->browser();
+  BrowserWindowInterface* browser = browser_view_->browser();
   PrefService* prefs = browser->GetProfile()->GetPrefs();
-  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  TabStripModel* tab_strip_model = browser->GetTabStripModel();
 
   if (prefs->GetBoolean(prefs::kAccessibilityFocusHighlightEnabled)) {
     // Listen for focus changes. Automatically deregisters when destroyed,
@@ -393,8 +394,8 @@ void AccessibilityFocusHighlight::OnAnimationStep(base::TimeTicks timestamp) {
 
 void AccessibilityFocusHighlight::OnCompositingShuttingDown(
     ui::Compositor* compositor) {
-  DCHECK(compositor);
-  DCHECK_EQ(compositor, compositor_);
+  CHECK(compositor, base::NotFatalUntil::M162);
+  CHECK_EQ(compositor, compositor_, base::NotFatalUntil::M162);
   if (compositor == compositor_) {
     compositor->RemoveAnimationObserver(this);
     compositor_ = nullptr;

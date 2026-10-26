@@ -13,6 +13,7 @@
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/favicon/core/favicon_service.h"
+#include "components/permissions/embedded_permission_prompt_flow_model.h"
 #include "components/permissions/features.h"
 #include "components/permissions/origin_keyed_permission_action_service.h"
 #include "components/permissions/permission_prompt.h"
@@ -35,6 +36,7 @@ namespace content {
 class BrowserContext;
 class RenderFrameHost;
 class WebContents;
+struct PermissionResult;
 }  // namespace content
 
 namespace content_settings {
@@ -67,10 +69,13 @@ class PermissionsClient {
   // Return the permissions client.
   static PermissionsClient* Get();
 
-  // It returns whether the embedded permission prompt is enabled
-  // allowlisted surfaces, such as new tab page, contextual tasks, and omnibox
-  // popup.
-  static bool AllowEmbeddedPermissionPromptForAllowlistedSurfaces();
+  // Returns true if the surface is omnibox everywhere, or if the embedded
+  // permission prompt flag is enabled for allowlisted surfaces (such as
+  // contextual tasks, NTP, omnibox popup).
+  static bool AllowEmbeddedPermissionPromptForSurface(
+      content::WebContents* web_contents);
+
+  virtual bool IsOmniboxEverywhere(content::WebContents* web_contents);
 
   // Retrieves the HostContentSettingsMap for this context. The returned pointer
   // has the same lifetime as |browser_context|.
@@ -243,6 +248,15 @@ class PermissionsClient {
       const GURL& requesting_origin,
       content::RenderFrameHost* render_frame_host);
 
+  // Allows embedders to override the permission result for a specific
+  // RenderFrameHost (e.g. for PrivilegedWebContents). `requesting_origin` is
+  // the origin making the request. Returns std::nullopt if no embedder
+  // override applies.
+  virtual std::optional<content::PermissionResult> GetPermissionResultOverride(
+      content::RenderFrameHost* render_frame_host,
+      const GURL& requesting_origin,
+      ContentSettingsType permission);
+
   // Only verifies that WebUI is internal (chrome://) and trusted enough to skip
   // tab interface usage and use embedded permission prompt. Its identity is
   // determined by just `embedded_origin` instead of both `embedded_origin` and
@@ -322,6 +336,10 @@ class PermissionsClient {
       content::WebContents* web_contents,
       PermissionPrompt::Delegate* delegate);
 #endif
+
+  virtual std::unique_ptr<EmbeddedPermissionPromptFlowModel::PromptContentScrim>
+  CreatePromptContentScrim(content::WebContents* web_contents,
+                           EmbeddedPermissionPromptFlowModel* flow_model);
 
   // Returns true if the browser has the necessary permission(s) from the
   // platform to provide a particular permission-gated capability to sites. This

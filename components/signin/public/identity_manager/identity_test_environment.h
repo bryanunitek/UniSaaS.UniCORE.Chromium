@@ -13,6 +13,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "components/account_manager_core/account_manager_facade.h"
@@ -142,7 +143,7 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // See `MakePrimaryAccountAvailable()` for a method that also adds a refresh
   // token for the account, or `MakeAccountAvailable()` for the more openly
   // configurable equivalent.
-  CoreAccountInfo SetPrimaryAccount(const std::string& email,
+  CoreAccountInfo SetPrimaryAccount(std::string_view email,
                                     ConsentLevel consent_level);
 
   // Sets a refresh token for the primary account (which must already be set).
@@ -171,7 +172,7 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // Returns the AccountInfo of the newly-available account.
   //
   // See `MakeAccountAvailable()` for a more configurable equivalent.
-  AccountInfo MakePrimaryAccountAvailable(const std::string& email,
+  AccountInfo MakePrimaryAccountAvailable(std::string_view email,
                                           ConsentLevel consent_level);
 
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -336,7 +337,7 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // passing in a null callback, before the Wait* methods can be used again.
   void SetCallbackForNextAccessTokenRequest(base::OnceClosure callback);
 
-  // Updates the info for |account_info.account_id|, which must be a known
+  // Updates the info for |account_info.GetAccountId()|, which must be a known
   // account.
   void UpdateAccountInfoForAccount(AccountInfo account_info);
 
@@ -365,13 +366,13 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // Simulate account fetching using AccountTrackerService without sending
   // network requests.
   void SimulateSuccessfulFetchOfAccountInfo(const CoreAccountId& account_id,
-                                            const std::string& email,
+                                            std::string_view email,
                                             const GaiaId& gaia,
-                                            const std::string& hosted_domain,
-                                            const std::string& full_name,
-                                            const std::string& given_name,
-                                            const std::string& locale,
-                                            const std::string& picture_url);
+                                            std::string_view hosted_domain,
+                                            std::string_view full_name,
+                                            std::string_view given_name,
+                                            std::string_view locale,
+                                            std::string_view picture_url);
 
   // Simulates a log out failure with |auth_error| as the error.
   void SimulateGaiaLogOutFailure(const GoogleServiceAuthError& auth_error);
@@ -384,6 +385,8 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // Gets the number of calls to PrepareForFetchingAccountCapabilities() in the
   // account capabilities fetcher factory.
   int GetNumCallsToPrepareForFetchingAccountCapabilities();
+
+  base::WeakPtr<IdentityTestEnvironment> GetWeakPtr();
 
  private:
   friend class ::IdentityTestEnvironmentProfileAdaptor;

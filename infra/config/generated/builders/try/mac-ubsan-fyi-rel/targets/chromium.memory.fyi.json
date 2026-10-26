@@ -14,7 +14,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -34,7 +34,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -54,7 +54,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -75,7 +75,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -95,7 +95,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -115,7 +115,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -135,7 +135,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -161,7 +161,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -181,9 +181,10 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 2
         },
         "test": "blink_unittests",
         "test_id_prefix": "ninja://third_party/blink/renderer/controller:blink_unittests/"
@@ -201,7 +202,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -221,7 +222,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -241,7 +242,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
           "shards": 15
@@ -263,7 +264,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -283,7 +284,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -303,7 +304,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -323,7 +324,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -343,7 +344,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -363,7 +364,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -383,7 +384,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
           "shards": 3
@@ -404,7 +405,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
           "shards": 8
@@ -425,7 +426,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -445,7 +446,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -465,7 +466,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -485,7 +486,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -505,7 +506,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -526,7 +527,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -546,7 +547,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -566,7 +567,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -586,7 +587,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -606,7 +607,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -626,7 +627,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -646,7 +647,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -666,7 +667,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -686,7 +687,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -706,7 +707,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -726,7 +727,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -746,7 +747,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -766,7 +767,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -786,7 +787,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
           "shards": 3
@@ -807,7 +808,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -827,7 +828,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -848,7 +849,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -868,7 +869,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -888,7 +889,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -908,7 +909,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -928,7 +929,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -948,7 +949,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -968,7 +969,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -988,7 +989,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1008,7 +1009,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1028,7 +1029,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1048,7 +1049,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1068,7 +1069,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1088,7 +1089,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1108,7 +1109,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1128,7 +1129,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1148,12 +1149,32 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
         "test": "remoting_unittests",
         "test_id_prefix": "ninja://remoting:remoting_unittests/"
+      },
+      {
+        "args": [
+          "--test-launcher-print-test-stdio=always"
+        ],
+        "merge": {
+          "script": "//testing/merge_scripts/standard_gtest_merge.py"
+        },
+        "module_name": "//rlz:rlz_unittests",
+        "module_scheme": "gtest",
+        "name": "rlz_unittests",
+        "swarming": {
+          "dimensions": {
+            "cpu": "arm64",
+            "os": "Mac-26"
+          },
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "rlz_unittests",
+        "test_id_prefix": "ninja://rlz:rlz_unittests/"
       },
       {
         "args": [
@@ -1168,7 +1189,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1188,7 +1209,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1208,7 +1229,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1228,7 +1249,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1248,7 +1269,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1268,7 +1289,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1288,7 +1309,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1308,7 +1329,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
           "shards": 3
@@ -1329,7 +1350,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1349,7 +1370,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1369,7 +1390,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1389,9 +1410,10 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
+          "shards": 2
         },
         "test": "unit_tests",
         "test_id_prefix": "ninja://chrome/test:unit_tests/"
@@ -1409,7 +1431,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1429,7 +1451,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1449,7 +1471,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1469,7 +1491,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1489,7 +1511,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1509,7 +1531,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },
@@ -1529,7 +1551,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15|Mac-26"
+            "os": "Mac-26"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
         },

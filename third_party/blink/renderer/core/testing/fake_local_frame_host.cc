@@ -158,6 +158,10 @@ void FakeLocalFrameHost::UpdateFaviconURL(
 void FakeLocalFrameHost::DownloadURL(
     mojom::blink::DownloadURLParamsPtr params) {}
 
+void FakeLocalFrameHost::ShowCaptionSettings() {}
+
+void FakeLocalFrameHost::UpdateToVideoAdFrame() {}
+
 void FakeLocalFrameHost::FocusedElementChanged(
     bool is_editable_element,
     bool is_richly_editable_element,
@@ -231,6 +235,9 @@ void FakeLocalFrameHost::DidAddMessageToConsole(
 
 void FakeLocalFrameHost::FrameSizeChanged(const gfx::Size& frame_size) {}
 
+void FakeLocalFrameHost::FrameBoundsInLocalRootChanged(
+    const gfx::Rect& bounds) {}
+
 void FakeLocalFrameHost::DidInferColorScheme(
     blink::mojom::PreferredColorScheme preferred_color_scheme) {}
 
@@ -247,38 +254,9 @@ void FakeLocalFrameHost::DidChangeSrcDoc(
 void FakeLocalFrameHost::ReceivedDelegatedCapability(
     blink::mojom::DelegatedCapability delegated_capability) {}
 
-void FakeLocalFrameHost::SendFencedFrameReportingBeacon(
-    const String& event_data,
-    const String& event_type,
-    const Vector<blink::FencedFrame::ReportingDestination>& destinations,
-    bool cross_origin_exposed) {}
-
-void FakeLocalFrameHost::SendFencedFrameReportingBeaconToCustomURL(
-    const blink::KURL& destination_url,
-    bool cross_origin_exposed) {}
-
-void FakeLocalFrameHost::SetFencedFrameAutomaticBeaconReportEventData(
-    blink::mojom::AutomaticBeaconType event_type,
-    const String& event_data,
-    const Vector<blink::FencedFrame::ReportingDestination>& destinations,
-    bool once,
-    bool cross_origin_exposed) {}
-
 void FakeLocalFrameHost::SendLegacyTechEvent(
     const String& type,
     mojom::blink::LegacyTechEventCodeLocationPtr code_location) {}
-
-void FakeLocalFrameHost::SendPrivateAggregationRequestsForFencedFrameEvent(
-    const String& event_type) {}
-
-void FakeLocalFrameHost::CreateFencedFrame(
-    mojo::PendingAssociatedReceiver<mojom::blink::FencedFrameOwnerHost>,
-    mojom::blink::RemoteFrameInterfacesFromRendererPtr remote_frame_interfaces,
-    const RemoteFrameToken& frame_token,
-    const base::UnguessableToken& devtools_frame_token) {
-  NOTREACHED() << "At the moment, FencedFrame is not used in any unit tests, "
-                  "so this path should not be hit";
-}
 
 void FakeLocalFrameHost::StartDragging(
     const blink::WebDragData& drag_data,
@@ -290,7 +268,8 @@ void FakeLocalFrameHost::StartDragging(
 
 void FakeLocalFrameHost::IssueKeepAliveHandle(
     mojo::PendingReceiver<mojom::blink::NavigationStateKeepAliveHandle>
-        receiver) {}
+        receiver,
+    const blink::InitiatorStateToken& initiator_state_token) {}
 
 void FakeLocalFrameHost::NotifyStorageAccessed(
     blink::mojom::StorageTypeAccessed storageType,
@@ -305,5 +284,7 @@ void FakeLocalFrameHost::InitializeCrashReportContext(
     InitializeCrashReportContextCallback callback) {}
 
 void FakeLocalFrameHost::NotifyDocumentInteractive() {}
+
+void FakeLocalFrameHost::SuppressXSLTDeprecationBanner() {}
 
 }  // namespace blink

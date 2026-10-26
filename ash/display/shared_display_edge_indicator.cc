@@ -10,7 +10,7 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/screen_position_client.h"
 #include "ui/aura/window_event_dispatcher.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/animation/animation_container.h"
@@ -72,8 +72,10 @@ void SharedDisplayEdgeIndicator::AnimationProgressed(
     const gfx::Animation* animation) {
   int value = animation->CurrentValueBetween(0, 255);
   SkColor color = SkColorSetARGB(0xFF, value, value, value);
-  src_widget_->GetLayer()->SetColor(color);
-  dst_widget_->GetLayer()->SetColor(color);
+  src_widget_->GetLayer()->AsSolidColor()->SetColor(
+      SkColor4f::FromColor(color));
+  dst_widget_->GetLayer()->AsSolidColor()->SetColor(
+      SkColor4f::FromColor(color));
 }
 
 }  // namespace ash

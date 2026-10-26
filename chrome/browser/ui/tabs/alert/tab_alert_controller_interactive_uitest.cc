@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/tabs/alert/tab_alert_controller.h"
+
 #include <optional>
 
 #include "base/callback_list.h"
@@ -13,8 +15,8 @@
 #include "chrome/browser/glic/test_support/interactive_glic_test.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
-#include "chrome/browser/ui/tabs/alert/tab_alert_controller.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
@@ -31,7 +33,7 @@ namespace {
 class TabAlertControllerObserver
     : public ui::test::StateObserver<std::optional<tabs::TabAlert>> {
  public:
-  TabAlertControllerObserver(Browser* browser, int tab_index) {
+  TabAlertControllerObserver(BrowserWindowInterface* browser, int tab_index) {
     callback_subscription_ =
         tabs::TabAlertController::From(
             browser->tab_strip_model()->GetTabAtIndex(tab_index))
@@ -117,7 +119,8 @@ IN_PROC_BROWSER_TEST_F(DISABLED_TabAlertControllerInteractiveUiTest,
   }
 #endif
 
-  Browser* const browser2 = CreateBrowser(browser()->GetProfile());
+  BrowserWindowInterface* const browser2 =
+      CreateBrowser(browser()->GetProfile());
   RunTestSequence(
       LoadStartingPage(kFirstTabId, 0, browser()),
       LoadStartingPage(kSecondTabId, 0, browser2),

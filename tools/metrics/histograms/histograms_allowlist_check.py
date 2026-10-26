@@ -7,7 +7,8 @@ import os
 
 import setup_modules  # pylint: disable=unused-import
 
-import chromium_src.tools.metrics.histograms.print_histogram_names as print_histogram_names
+
+import chromium_src.tools.metrics.histograms.histogram_utils as histogram_utils
 
 
 class WellKnownAllowlistPath(enum.Enum):
@@ -23,8 +24,9 @@ class WellKnownAllowlistPath(enum.Enum):
   """
 
   # LINT.IfChange(AndroidWebViewHistogramsAllowlistPath)
-  ANDROID_WEBVIEW = os.path.join('android_webview', 'browser', 'metrics',
-                                 'aw_histograms_allowlist.cc')
+  ANDROID_WEBVIEW = os.path.join(
+    'android_webview', 'browser', 'metrics', 'aw_histograms_allowlist.cc'
+  )
 
   # LINT.ThenChange(//android_webview/browser/metrics/aw_histograms_allowlist.cc:AndroidWebViewHistogramsAllowlistPath)
 
@@ -59,28 +61,30 @@ def check_histograms_allowlist(output_api, allowlist_path, histograms_files):
     output_api: The output api type, generally provided by the PRESUBMIT system.
     allowlist_path: The path to the allowlist file to validate histograms
       against.
-    histograms_files: The list of histograms files to look for allowlisted
-      histograms in.
+    histograms_files: A list of filenames or file-like objects containing
+      histogram definitions. Files opened from filenames are closed after
+      parsing; caller-provided streams remain open.
   """
 
-  all_histograms = print_histogram_names.get_names(histograms_files)
+  all_histograms = histogram_utils.get_names(histograms_files)
 
   histograms_allowlist = get_histograms_allowlist_content(allowlist_path)
 
   errors = []
   for histogram in histograms_allowlist:
     if histogram not in all_histograms:
-      errors.append(f'{allowlist_path} contains unknown histogram '
-                    f'<{histogram}>')
+      errors.append(
+        f'{allowlist_path} contains unknown histogram <{histogram}>'
+      )
 
   if not errors:
     return []
 
   results = [
-      output_api.PresubmitError(
-          f'All histograms in {allowlist_path} must be valid.',
-          errors,
-      )
+    output_api.PresubmitError(
+      f'All histograms in {allowlist_path} must be valid.',
+      errors,
+    )
   ]
 
   return results

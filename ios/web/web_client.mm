@@ -8,6 +8,7 @@
 
 #import <string_view>
 
+#import "base/memory/ref_counted_memory.h"
 #import "base/notimplemented.h"
 #import "ios/web/common/features.h"
 #import "ios/web/public/init/web_main_parts.h"
@@ -62,7 +63,8 @@ std::string_view WebClient::GetDataResource(
   return std::string_view();
 }
 
-base::RefCountedMemory* WebClient::GetDataResourceBytes(int resource_id) const {
+scoped_refptr<base::RefCountedMemory> WebClient::GetDataResourceBytes(
+    int resource_id) const {
   return nullptr;
 }
 
@@ -157,7 +159,22 @@ CobaltController* WebClient::GetCobaltController(
   return nullptr;
 }
 
+ExtensionController* WebClient::GetExtensionController(
+    BrowserState* browser_state) const {
+  return nullptr;
+}
+
 bool WebClient::IsSmoothScrollingSupported() const {
+  return false;
+}
+
+UniversalOptOutState WebClient::GetUniversalOptOutState(
+    BrowserState* browser_state) const {
+  return UniversalOptOutState::kNotEligible;
+}
+
+bool WebClient::ShouldBlockUniversalLinksForURL(BrowserState* browser_state,
+                                                const GURL& url) const {
   return false;
 }
 

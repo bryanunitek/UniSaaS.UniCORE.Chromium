@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "base/callback_list.h"
@@ -20,7 +21,6 @@
 #include "components/skills/proto/skill.pb.h"
 #include "components/skills/public/skills_types.h"
 #include "components/sync/protocol/skill_specifics.pb.h"
-#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace syncer {
 class DataTypeControllerDelegate;
@@ -28,6 +28,7 @@ class DataTypeControllerDelegate;
 
 namespace skills {
 
+class SkillsProvider;
 struct Skill;
 
 // Core service in charge of performing CRUD operations for skills. Each profile
@@ -90,11 +91,16 @@ class SkillsService : public KeyedService {
     // Called when the service status is changed.
     virtual void OnStatusChanged() {}
 
+    // Called when the skills enablement status is changed.
+    virtual void OnSkillsEnabledChanged(bool enabled) {}
+
     // Called when the service has completed a download of 1P skills. Receives
     // new data or nullptr if data has not changed.
     virtual void OnDiscoverySkillsUpdated(
         const FirstPartySkillData* first_party_skill_data) {}
 
+    // Called when a skills provider notifies that its skills have changed.
+    virtual void OnProvidedSkillsChanged(SkillsProvider* provider) {}
     // Called when the service is shutting down. Observers should remove
     // themselves.
     virtual void OnSkillsServiceShuttingDown() {}
@@ -138,7 +144,8 @@ class SkillsService : public KeyedService {
       std::string_view description,
       base::Time creation_time,
       base::Time last_update_time,
-      sync_pb::SkillSource source) = 0;
+      sync_pb::SkillSource source,
+      bool enabled = true) = 0;
 
   // Updates an existing skill locally. Returns a skill if exists, nullptr
   // otherwise.
@@ -151,6 +158,12 @@ class SkillsService : public KeyedService {
   virtual void DeleteSkill(std::string_view skill_id,
                            UpdateSource update_source) = 0;
 
+  // Deletes all user skills whose last update time is within
+  // [`delete_begin`, `delete_end`). First-party and provided skills are not
+  // affected. The deletions are local and are propagated to sync.
+  virtual void DeleteSkillsModifiedBetween(base::Time delete_begin,
+                                           base::Time delete_end) = 0;
+
   // Returns the skill with the given ID or nullptr if not found (including
   // when the service is not in kReady state).
   virtual const Skill* GetSkillById(std::string_view skill_id) const = 0;
@@ -158,6 +171,11 @@ class SkillsService : public KeyedService {
   // Returns a const reference to the currently loaded skills. Returns an empty
   // list if the service is not in kReady state.
   virtual const std::vector<std::unique_ptr<Skill>>& GetSkills() const = 0;
+
+  // Returns a const reference to skills provided by registered SkillsProviders
+  // (e.g. enterprise policy skills), separate from sync-managed user skills.
+  virtual const std::unordered_map<std::string, std::unique_ptr<Skill>>&
+  GetProvidedSkills() const = 0;
 
   // Returns a const reference to the currently loaded 1p skills. If skills have
   // not been loaded yet, returns an empty list. The service does not have to be
@@ -212,6 +230,10 @@ class SkillsService : public KeyedService {
   // Notify that a glic panel associated with the skills service is being
   // opened.
   virtual void NotifyPanelWillOpen() = 0;
+
+  // Registers a skills provider with the service. The service takes ownership
+  // of the provider.
+  virtual void AddProvider(std::unique_ptr<SkillsProvider> provider) = 0;
 
   // Checks if the image url of a skill is valid.
   static bool IsValidSkillImageUrl(const GURL& gurl);

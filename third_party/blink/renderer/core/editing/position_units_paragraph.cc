@@ -34,7 +34,6 @@
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/layout/layout_text.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -42,8 +41,7 @@ namespace {
 
 bool NodeIsUserSelectAll(const Node* node) {
   return node && node->GetLayoutObject() &&
-         node->GetLayoutObject()->StyleRef().UsedUserSelect() ==
-             EUserSelect::kAll;
+         node->GetLayoutObject()->Style().UsedUserSelect() == EUserSelect::kAll;
 }
 
 template <typename Strategy>
@@ -115,7 +113,7 @@ PositionTemplate<Strategy> StartOfParagraphAlgorithm(
       previous_node_iterator = previousNode();
       continue;
     }
-    const ComputedStyle& style = layout_object->StyleRef();
+    const ComputedStyle& style = layout_object->Style();
     if (style.Visibility() != EVisibility::kVisible) {
       previous_node_iterator = previousNode();
       continue;
@@ -231,19 +229,14 @@ PositionTemplate<Strategy> EndOfParagraphAlgorithm(
       next_node_iterator = nextNode();
       continue;
     }
-    const ComputedStyle& style = layout_object->StyleRef();
+    const ComputedStyle& style = layout_object->Style();
     if (style.Visibility() != EVisibility::kVisible) {
-      if (RuntimeEnabledFeatures::
-              HandleDeletionAtStartAndEndBoundaryContainingHiddenElementEnabled()) {
-        // We should skip the children of hidden elements and
-        // place the position immediately after the anchor.
-        candidate_node = next_node_iterator;
-        candidate_type = PositionAnchorType::kAfterAnchor;
-        next_node_iterator =
-            Strategy::NextSkippingChildren(*next_node_iterator, start_block);
-      } else {
-        next_node_iterator = nextNode();
-      }
+      // We should skip the children of hidden elements and
+      // place the position immediately after the anchor.
+      candidate_node = next_node_iterator;
+      candidate_type = PositionAnchorType::kAfterAnchor;
+      next_node_iterator =
+          Strategy::NextSkippingChildren(*next_node_iterator, start_block);
       continue;
     }
 

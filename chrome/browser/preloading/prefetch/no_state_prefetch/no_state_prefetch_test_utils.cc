@@ -14,21 +14,22 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/common/content_switches.h"
@@ -40,6 +41,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/chrome_debug_urls.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
 
 using content::BrowserThread;
 using content::RenderViewHost;
@@ -397,19 +399,24 @@ TestNoStatePrefetchContentsFactory::ExpectedContents::~ExpectedContents() =
 PrerenderInProcessBrowserTest::PrerenderInProcessBrowserTest()
     : external_protocol_handler_delegate_(
           std::make_unique<NeverRunsExternalProtocolHandlerDelegate>()),
-      safe_browsing_factory_(
-          std::make_unique<safe_browsing::TestSafeBrowsingServiceFactory>()),
       no_state_prefetch_contents_factory_(nullptr),
       explicitly_set_browser_(nullptr),
-      autostart_test_server_(true) {}
+      autostart_test_server_(true) {
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+  safe_browsing_factory_ =
+      std::make_unique<safe_browsing::TestSafeBrowsingServiceFactory>();
+#endif
+}
 
 PrerenderInProcessBrowserTest::~PrerenderInProcessBrowserTest() = default;
 
 void PrerenderInProcessBrowserTest::TearDownInProcessBrowserTestFixture() {
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   safe_browsing::SafeBrowsingService::RegisterFactory(nullptr);
+#endif
 }
 
-content::SessionStorageNamespace*
+content::SessionStorageNamespaceHandle*
 PrerenderInProcessBrowserTest::GetSessionStorageNamespace() const {
   content::WebContents* web_contents = GetActiveWebContents();
   if (!web_contents) {
@@ -447,7 +454,7 @@ content::WebContents* PrerenderInProcessBrowserTest::GetActiveWebContents()
 NoStatePrefetchManager*
 PrerenderInProcessBrowserTest::GetNoStatePrefetchManager() const {
   return NoStatePrefetchManagerFactory::GetForBrowserContext(
-      current_browser()->profile());
+      current_browser()->GetProfile());
 }
 
 TestNoStatePrefetchContents*
@@ -466,6 +473,7 @@ net::EmbeddedTestServer* PrerenderInProcessBrowserTest::src_server() {
   return embedded_test_server();
 }
 
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 safe_browsing::FakeSafeBrowsingDatabaseManager*
 PrerenderInProcessBrowserTest::GetFakeSafeBrowsingDatabaseManager() {
   return static_cast<safe_browsing::FakeSafeBrowsingDatabaseManager*>(
@@ -474,19 +482,22 @@ PrerenderInProcessBrowserTest::GetFakeSafeBrowsingDatabaseManager() {
           ->database_manager()
           .get());
 }
+#endif
 
 void PrerenderInProcessBrowserTest::CreatedBrowserMainParts(
     content::BrowserMainParts* browser_main_parts) {
   InProcessBrowserTest::CreatedBrowserMainParts(browser_main_parts);
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   safe_browsing_factory_->SetTestDatabaseManager(
-      new safe_browsing::FakeSafeBrowsingDatabaseManager(
+      base::MakeRefCounted<safe_browsing::FakeSafeBrowsingDatabaseManager>(
           content::GetUIThreadTaskRunner({})));
   safe_browsing::SafeBrowsingService::RegisterFactory(
       safe_browsing_factory_.get());
+#endif
 }
 
 void PrerenderInProcessBrowserTest::SetUpOnMainThread() {
-  current_browser()->profile()->GetPrefs()->SetBoolean(
+  current_browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kPromptForDownload, false);
   embedded_test_server()->RegisterRequestMonitor(base::BindRepeating(
       &PrerenderInProcessBrowserTest::MonitorResourceRequest,
@@ -517,7 +528,9 @@ void PrerenderInProcessBrowserTest::SetUpOnMainThread() {
   no_state_prefetch_contents_factory_ = new TestNoStatePrefetchContentsFactory;
   no_state_prefetch_manager->SetNoStatePrefetchContentsFactoryForTest(
       no_state_prefetch_contents_factory_);
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   CHECK(safe_browsing_factory_->test_safe_browsing_service());
+#endif
 }
 
 void PrerenderInProcessBrowserTest::UseHttpsSrcServer() {

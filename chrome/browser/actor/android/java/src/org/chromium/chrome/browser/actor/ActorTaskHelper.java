@@ -9,14 +9,23 @@ import android.view.WindowManager;
 
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.base.ApplicationStatus;
 import org.chromium.base.Callback;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.actor.background_tabs.OffscreenRenderingManager;
+import org.chromium.chrome.browser.actor.foreground_service.ActorForegroundServiceController;
+import org.chromium.chrome.browser.actor.foreground_service.ActorForegroundServiceManager;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.StartStopWithNativeObserver;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+
+import java.util.List;
+import java.util.Set;
 
 /** Helper class that keeps the screen on while an Actor task is active. */
 @NullMarked
@@ -28,6 +37,7 @@ public class ActorTaskHelper implements ActorKeyedService.Observer, StartStopWit
     private final Callback<Profile> mProfileObserver = (p) -> updateKeepScreenOn();
     private @Nullable ActorKeyedService mActorService;
     private boolean mKeepScreenOn;
+    private @Nullable Tab mActingTab;
 
     /**
      * @param activity The {@link Activity} to manage flags for.
@@ -51,6 +61,10 @@ public class ActorTaskHelper implements ActorKeyedService.Observer, StartStopWit
     @Override
     public void onTaskStateChanged(int taskId, @ActorTaskState int newState) {
         updateKeepScreenOn();
+        if (mActingTab != null && ActorUtils.isCompletedState(newState)) {
+            OffscreenRenderingManager.getInstance().stopOffscreenRendering(mActingTab);
+            mActingTab = null;
+        }
     }
 
     private void updateKeepScreenOn() {
@@ -73,16 +87,44 @@ public class ActorTaskHelper implements ActorKeyedService.Observer, StartStopWit
     }
 
     @Override
-    public void onStartWithNative() {}
+    public void onStartWithNative() {
+        if (mActingTab != null) {
+            OffscreenRenderingManager.getInstance().stopOffscreenRendering(mActingTab);
+            mActingTab = null;
+        }
+    }
 
     @Override
     public void onStopWithNative() {
-        forEachRunningTask(
-                task -> {
-                    if (isTaskInCurrentWindow(task)) {
-                        task.pause();
-                    }
-                });
+        if (ActorUtils.isBackgroundActuationEnabled()) {
+            TabModelSelector selector = mTabModelSelectorSupplier.get();
+            assert selector != null;
+            ActorForegroundServiceController.get().transitionActiveTasksToBackground(selector);
+            if (!ApplicationStatus.hasVisibleActivities()) {
+                ActorForegroundServiceManager manager = ActorForegroundServiceManager.getInstance();
+                if (manager != null) {
+                    manager.resendWorkingNotifications();
+                }
+            }
+        } else if (DeviceInfo.isDesktop()) {
+            // TODO(b/537362347): Update method to remove usage of getCurrentActingTab() when
+            // refactoring for multi-task.
+            mActingTab = getCurrentActingTab();
+            if (mActingTab != null) {
+                OffscreenRenderingManager.getInstance()
+                        .startOffscreenRendering(
+                                mActingTab,
+                                mActivity.findViewById(android.R.id.content).getWidth(),
+                                mActivity.findViewById(android.R.id.content).getHeight());
+            }
+        } else {
+            forEachRunningTask(
+                    task -> {
+                        if (isTaskInCurrentWindow(task)) {
+                            task.pause();
+                        }
+                    });
+        }
     }
 
     @VisibleForTesting
@@ -131,6 +173,9 @@ public class ActorTaskHelper implements ActorKeyedService.Observer, StartStopWit
 
     /** Stops any active Actor tasks that belong to this window when the activity is destroyed. */
     public void onDestroy() {
+        if (ActorUtils.isBackgroundActuationEnabled()) {
+            return;
+        }
         forEachActiveTask(
                 task -> {
                     if (isTaskInCurrentWindow(task) && mActorService != null) {
@@ -141,6 +186,10 @@ public class ActorTaskHelper implements ActorKeyedService.Observer, StartStopWit
 
     /** Cleans up the helper, removing observers and clearing flags. */
     public void destroy() {
+        if (mActingTab != null) {
+            OffscreenRenderingManager.getInstance().stopOffscreenRendering(mActingTab);
+            mActingTab = null;
+        }
         mActivityLifecycleDispatcher.unregister(this);
         mProfileSupplier.removeObserver(mProfileObserver);
         if (mActorService != null) {
@@ -151,5 +200,64 @@ public class ActorTaskHelper implements ActorKeyedService.Observer, StartStopWit
             mActivity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             mKeepScreenOn = false;
         }
+    }
+
+    private @Nullable Tab getCurrentActingTab() {
+        maybeGetActorService();
+        if (mActorService == null) return null;
+
+        TabModelSelector selector = mTabModelSelectorSupplier.get();
+        if (selector == null) return null;
+
+        int tabId = getActiveTaskLastActedTabId();
+        return (tabId != Tab.INVALID_TAB_ID) ? selector.getTabById(tabId) : null;
+    }
+
+    private int getActiveTaskLastActedTabId() {
+        maybeGetActorService();
+        if (mActorService == null) return Tab.INVALID_TAB_ID;
+
+        // TODO(b/537362347): Update method to remove usage of getCurrentActingTab() when
+        // refactoring for multi-task.
+        ActorTask task = mActorService.getCurrentActiveTask();
+        if (task == null) return Tab.INVALID_TAB_ID;
+
+        Set<Integer> tabIds = task.getLastActedTabs();
+        if (!tabIds.isEmpty()) {
+            return tabIds.iterator().next();
+        }
+        return Tab.INVALID_TAB_ID;
+    }
+
+    /**
+     * Helper to find the tab in a list that was most recently acted on by a task.
+     *
+     * @param tabs List of candidate tabs.
+     * @param taskId The ID of the task, or null.
+     * @return The tab matching the task's last acted tabs, or the last tab in the list.
+     */
+    public static @Nullable Tab getLastActiveTabForTask(List<Tab> tabs, @Nullable Integer taskId) {
+        if (tabs == null || tabs.isEmpty()) {
+            return null;
+        }
+        if (taskId != null) {
+            Profile profile = tabs.get(0).getProfile();
+            if (profile != null) {
+                ActorKeyedService service =
+                        ActorKeyedServiceFactory.getForProfile(profile.getOriginalProfile());
+                if (service != null) {
+                    ActorTask task = service.getTask(taskId);
+                    if (task != null) {
+                        Set<Integer> lastActedTabs = task.getLastActedTabs();
+                        for (Tab tab : tabs) {
+                            if (lastActedTabs.contains(tab.getId())) {
+                                return tab;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return tabs.get(tabs.size() - 1);
     }
 }

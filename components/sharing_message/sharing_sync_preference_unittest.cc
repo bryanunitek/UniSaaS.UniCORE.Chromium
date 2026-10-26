@@ -42,7 +42,7 @@ class SharingSyncPreferenceTest : public testing::Test {
          kDeviceSenderIdAuthToken},
         /*chime_representative_target_id=*/std::string(),
         std::set<syncer::DeviceInfo::SharingFeature>{
-            syncer::DeviceInfo::SharingFeature::kClickToCallV2});
+            syncer::DeviceInfo::SharingFeature::kRemoteCopy});
   }
 
   void AddEnabledFeature(int feature) {
@@ -88,6 +88,24 @@ TEST_F(SharingSyncPreferenceTest, SyncAndRemoveLocalDevice) {
   // Clearing SharingInfo should trigger RefreshLocalDeviceInfoCount.
   sharing_sync_preference_.ClearLocalSharingInfo();
   EXPECT_EQ(2, fake_device_info_sync_service_.RefreshLocalDeviceInfoCount());
+  EXPECT_FALSE(SharingSyncPreference::GetLocalSharingInfoForSync(&prefs_));
+}
+
+TEST_F(SharingSyncPreferenceTest,
+       SetAndClearLocalSharingInfo_NullLocalDeviceInfoUpdatesPref) {
+  fake_device_info_sync_service_.GetLocalDeviceInfoProvider()->SetReady(false);
+  ASSERT_FALSE(fake_device_info_sync_service_.GetLocalDeviceInfoProvider()
+                   ->GetLocalDeviceInfo());
+
+  syncer::DeviceInfo::SharingInfo sharing_info = GetDefaultSharingInfo();
+  sharing_sync_preference_.SetLocalSharingInfo(sharing_info);
+  EXPECT_EQ(sharing_info,
+            SharingSyncPreference::GetLocalSharingInfoForSync(&prefs_));
+
+  // Simulate sign-out where LocalDeviceInfoProvider is cleared before
+  // ClearLocalSharingInfo() is invoked.
+  sharing_sync_preference_.ClearLocalSharingInfo();
+  EXPECT_FALSE(SharingSyncPreference::GetLocalSharingInfoForSync(&prefs_));
 }
 
 TEST_F(SharingSyncPreferenceTest, FCMRegistrationGetSet) {

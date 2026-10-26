@@ -73,12 +73,20 @@ void ServiceWorkerState::SetRendererState(RendererState renderer_state) {
   renderer_state_ = renderer_state;
 }
 
+void ServiceWorkerState::SetRegistrationState(
+    RegistrationState registration_state) {
+  registration_state_ = registration_state;
+}
+
 void ServiceWorkerState::Reset() {
+  const bool did_start_worker = browser_state_ == BrowserState::kActive;
+
   worker_id_.reset();
   browser_state_ = BrowserState::kNotActive;
   renderer_state_ = RendererState::kNotActive;
 
-  // NOTE: `worker_starting_` is intentionally NOT reset here.
+  // NOTE: `worker_starting_` is intentionally NOT reset here when the content
+  // layer may restart the worker.
   //
   // `Reset()` can be called when a worker stops, including when it stops in the
   // middle of a start attempt. In that case, `content::ServiceWorkerVersion`
@@ -93,6 +101,39 @@ void ServiceWorkerState::Reset() {
   //
   // The flag is correctly cleared only upon success (in
   // `NotifyObserversIfReady`) or failure (in `DidStartWorkerFail`).
+  //
+  // However, a worker can reach `kActive` on the browser side (the content
+  // start resolved as success) yet never become `IsReady()` when the
+  // renderer's `RendererDidStartServiceWorkerContext` is never called, hence
+  // never setting `renderer_state_` to `kActive`. Such a worker hits neither
+  // path: the success path is gated on `IsReady()`, and the failure path can no
+  // longer fire because the start already resolved as success. Nothing would
+  // clear `worker_starting_`, leaving the worker permanently non-startable by
+  // `ServiceWorkerTaskQueue::MaybeStartWorker` because `IsStarting()` stays
+  // true (see crbug.com/530077398), so clear it here.
+  //
+  // This does not reintroduce crbug.com/452178846:
+  // `browser_state_ == kActive` is only set from `DidStartWorkerForScope`, the
+  // extension's own `StartWorkerForScope` success callback. So once we observe
+  // `kActive`, that callback has already run and is no longer pending in the
+  // content layer's start requests.
+  if (did_start_worker) {
+    worker_starting_ = false;
+  }
+}
+
+void ServiceWorkerState::ResetForStorageWipe() {
+  // The wipe deleted the worker's registration.
+  registration_state_ = RegistrationState::kNotRegistered;
+
+  // A start request sent before the wipe is not aborted by
+  // `DeleteAndStartOver()` and can finish after `OnStorageWipedSync()`. Drop
+  // its callbacks so that its result can't fail tasks queued for the new
+  // registration. No result will arrive anymore, so also clear
+  // `worker_starting_` to allow starting the worker from the new registration.
+  weak_factory_.InvalidateWeakPtrs();
+  worker_starting_ = false;
+  Reset();
 }
 
 bool ServiceWorkerState::IsStarting() const {
@@ -102,6 +143,10 @@ bool ServiceWorkerState::IsStarting() const {
 bool ServiceWorkerState::IsReady() const {
   return browser_state_ == BrowserState::kActive &&
          renderer_state_ == RendererState::kActive && worker_id_.has_value();
+}
+
+bool ServiceWorkerState::IsRegistered() const {
+  return registration_state_ == RegistrationState::kRegistered;
 }
 
 void ServiceWorkerState::SetWorkerId(const WorkerId& worker_id) {

@@ -6,25 +6,41 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/command_line.h"
+#include "base/files/file_path.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/page_load_metrics/page_load_metrics_initialize.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profile_test_util.h"
+#include "chrome/browser/sessions/session_restore.h"
+#include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/omnibox/omnibox_controller.h"
+#include "chrome/browser/ui/startup/startup_browser_creator_impl.h"
+#include "chrome/browser/ui/startup/startup_types.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
+#include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view.h"
+#include "chrome/browser/ui/waap/initial_webui_profile_service.h"
+#include "chrome/browser/ui/waap/initial_webui_profile_service_factory.h"
 #include "chrome/browser/ui/waap/initial_webui_window_metrics_manager.h"
 #include "chrome/browser/ui/waap/waap_utils.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
-#include "chrome/browser/ui/webui/webui_toolbar/adapters/navigation_controls_state_fetcher_impl.h"
+#include "chrome/browser/ui/webui/webui_toolbar/adapters/toolbar_state_fetcher_impl.h"
 #include "chrome/browser/ui/webui/webui_toolbar/webui_toolbar_test_utils.h"
 #include "chrome/browser/ui/webui/webui_toolbar/webui_toolbar_ui.h"
 #include "chrome/common/chrome_features.h"
@@ -32,6 +48,7 @@
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/common/webui_url_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/profile_destruction_waiter.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
@@ -42,6 +59,7 @@
 #include "components/ukm/gmock_matchers.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "components/viz/common/features.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/spare_render_process_host_manager.h"
@@ -57,8 +75,11 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace waap {
 namespace {
@@ -95,9 +116,14 @@ class WebUIControllerInitalizer : protected content::WebContentsObserver {
 // webview class so that it's portable enough for use in test.
 class ToolbarDependencyProvider : public WebUIToolbarUI::DependencyProvider {
  public:
-  explicit ToolbarDependencyProvider(Browser* browser) : browser_(browser) {}
+  explicit ToolbarDependencyProvider(BrowserWindowInterface* browser)
+      : browser_(browser) {}
 
-  ~ToolbarDependencyProvider() = default;
+  ~ToolbarDependencyProvider() override = default;
+
+  base::WeakPtr<DependencyProvider> GetWeakPtr() override {
+    return weak_factory_.GetWeakPtr();
+  }
 
   // This might blow up in the future. We are implicitly assuming that the
   // delegate isn't going to be used in this test.
@@ -111,11 +137,10 @@ class ToolbarDependencyProvider : public WebUIToolbarUI::DependencyProvider {
     return nullptr;
   }
 
-  std::unique_ptr<toolbar_ui_api::NavigationControlsStateFetcher>
-  GetNavigationControlsStateFetcher() override {
-    return std::make_unique<toolbar_ui_api::NavigationControlsStateFetcherImpl>(
-        base::BindLambdaForTesting(
-            []() { return CreateValidNavigationControlsState(); }));
+  std::unique_ptr<toolbar_ui_api::ToolbarStateFetcher> GetToolbarStateFetcher()
+      override {
+    return std::make_unique<toolbar_ui_api::ToolbarStateFetcherImpl>(
+        base::BindLambdaForTesting([]() { return CreateValidToolbarState(); }));
   }
 
   std::unique_ptr<toolbar_ui_api::IconTableFetcher> GetIconTableFetcher()
@@ -125,16 +150,20 @@ class ToolbarDependencyProvider : public WebUIToolbarUI::DependencyProvider {
 
   CommandUpdater* GetCommandUpdater() override {
     return reinterpret_cast<CommandUpdater*>(
-        browser_->GetFeatures().browser_command_controller());
+        chrome::BrowserCommandController::From(browser_));
   }
+
+  OmniboxController* GetOmniboxController() override { return nullptr; }
 
  private:
   raw_ptr<BrowserWindowInterface> browser_;
+  base::WeakPtrFactory<DependencyProvider> weak_factory_{this};
 };
 
 class WebUIToolbarInitializer : public WebUIControllerInitalizer {
  public:
-  explicit WebUIToolbarInitializer(Browser* browser) : injector_(browser) {}
+  explicit WebUIToolbarInitializer(BrowserWindowInterface* browser)
+      : injector_(browser) {}
 
   ~WebUIToolbarInitializer() override = default;
 
@@ -158,7 +187,6 @@ class InitialWebUIBrowserTestBase : public InProcessBrowserTest {
     std::vector<base::test::FeatureRefAndParams> base_features = {
         {features::kInitialWebUI, {{"use_separate_process", "true"}}},
         {features::kWebUIReloadButton, {}},
-        {features::kInitialWebUIMetrics, {}},
         {features::kSkipIPCChannelPausingForNonGuests, {}},
         {features::kWebUIInProcessResourceLoadingV2, {}}};
 
@@ -268,6 +296,29 @@ IN_PROC_BROWSER_TEST_F(InitialWebUINavigationBrowserTest,
   EXPECT_TRUE(initial_webui_web_contents->GetPrimaryMainFrame()
                   ->GetProcess()
                   ->IsForTopChromeWebUI());
+
+  // Non-Initial WebUI populates default web-content generic font family maps
+  // (e.g. "Times New Roman"), whereas Initial WebUI clears them to avoid
+  // prewarming or loading unused default web fonts during startup.
+  const blink::web_pref::WebPreferences& non_initial_prefs =
+      non_initial_webui_web_contents->GetOrCreateWebPreferences();
+  EXPECT_FALSE(non_initial_prefs.standard_font_family_map.empty());
+  EXPECT_FALSE(non_initial_prefs.serif_font_family_map.empty());
+
+  const blink::web_pref::WebPreferences& initial_prefs =
+      initial_webui_web_contents->GetOrCreateWebPreferences();
+  EXPECT_TRUE(initial_prefs.standard_font_family_map.empty());
+  EXPECT_TRUE(initial_prefs.fixed_font_family_map.empty());
+  EXPECT_TRUE(initial_prefs.serif_font_family_map.empty());
+  EXPECT_TRUE(initial_prefs.sans_serif_font_family_map.empty());
+  EXPECT_TRUE(initial_prefs.cursive_font_family_map.empty());
+  EXPECT_TRUE(initial_prefs.fantasy_font_family_map.empty());
+  EXPECT_TRUE(initial_prefs.math_font_family_map.empty());
+
+  EXPECT_EQ("flex",
+            content::EvalJs(initial_webui_web_contents.get(),
+                            "getComputedStyle(document.querySelector("
+                            "'toolbar-app')).display"));
 }
 
 // Initial WebUI process should not be shared with non-Initial WebUI per
@@ -371,7 +422,6 @@ class InitialWebUINavigationTimelineBrowserTest : public InProcessBrowserTest {
     std::vector<base::test::FeatureRefAndParams> features = {
         {features::kInitialWebUI, {{"use_separate_process", "true"}}},
         {features::kWebUIReloadButton, {{"prewarm_webui", "false"}}},
-        {features::kInitialWebUIMetrics, {}},
         {features::kSkipIPCChannelPausingForNonGuests, {}},
         {features::kWebUIInProcessResourceLoadingV2, {}}};
     scoped_feature_list_.InitWithFeaturesAndParameters(
@@ -475,7 +525,6 @@ class PrewarmedWebUINavigationTimelineBrowserTest
     std::vector<base::test::FeatureRefAndParams> features = {
         {features::kInitialWebUI, {{"use_separate_process", "true"}}},
         {features::kWebUIReloadButton, {{"prewarm_webui", "true"}}},
-        {features::kInitialWebUIMetrics, {}},
         {features::kSkipIPCChannelPausingForNonGuests, {}},
         {features::kWebUIInProcessResourceLoadingV2, {}}};
     scoped_feature_list_.InitWithFeaturesAndParameters(
@@ -521,8 +570,8 @@ IN_PROC_BROWSER_TEST_F(PrewarmedWebUINavigationTimelineBrowserTest,
 
   // 2) Create a new browser window. This should trigger pre-warming of the
   // toolbar WebUI.
-  Browser::CreateParams params(browser()->GetProfile(), true);
-  Browser::Create(params);
+  CreateBrowserWindow(BrowserWindowCreateParams(browser()->GetProfile(),
+                                                /*from_user_gesture=*/true));
 
   // Wait for the navigation to commit and record UKM.
   if (ukm_recorder().GetEntriesByName(NavigationTimeline::kEntryName).empty()) {
@@ -565,14 +614,14 @@ IN_PROC_BROWSER_TEST_F(InitialWebUINavigationBrowserTest,
   base::StatisticsRecorder::HistogramWaiter waiter(expected_metric);
 
   // Create a new browser window without actively showing/painting it yet.
-  Browser::CreateParams params(browser()->GetProfile(), true);
-  Browser* new_browser = Browser::Create(params);
+  BrowserWindowCreateParams params(browser()->GetProfile(),
+                                   /*from_user_gesture=*/true);
+  BrowserWindowInterface* new_browser = CreateBrowserWindow(std::move(params));
 
   if (auto* manager = InitialWebUIWindowMetricsManager::From(new_browser)) {
     manager->SkipStartupForTesting();
     manager->SetWindowCreationInfo(
-        waap::NewWindowCreationSource::kBrowserInitiated,
-        base::TimeTicks::Now());
+        waap::NewWindowCreationSource::kNewEmptyWindow, base::TimeTicks::Now());
 
     base::TimeTicks t1 = base::TimeTicks::Now();
     manager->OnBrowserWindowFirstPresentation(t1);
@@ -587,9 +636,85 @@ IN_PROC_BROWSER_TEST_F(InitialWebUINavigationBrowserTest,
       "BrowserWindowToReloadButton.FirstPaintGap2",
       1);
   histogram_tester.ExpectTotalCount(
-      "InitialWebUI.NewWindow.BrowserInitiated.WithExistingWindow."
+      "InitialWebUI.NewWindow.NewEmptyWindow.WithExistingWindow."
       "BrowserWindowToReloadButton.FirstPaintGap2",
       1);
+}
+
+// Verifies the `NewWindowCreationSource` that each window creation entry point
+// assigns to the window it creates.
+class InitialWebUIWindowCreationSourceBrowserTest
+    : public InitialWebUIBrowserTestBase {
+ protected:
+  static waap::NewWindowCreationSource GetCreationSource(
+      BrowserWindowInterface* browser) {
+    auto* manager = InitialWebUIWindowMetricsManager::From(browser);
+    CHECK(manager);
+    return manager->GetCreationSourceForTesting();
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(InitialWebUIWindowCreationSourceBrowserTest,
+                       NewEmptyWindow) {
+  chrome::NewEmptyWindow(browser()->GetProfile(),
+                         /*should_trigger_session_restore=*/false);
+
+  BrowserWindowInterface* const new_browser =
+      ui_test_utils::GetBrowserNotInSet({browser()});
+  ASSERT_TRUE(new_browser);
+  EXPECT_EQ(GetCreationSource(new_browser),
+            waap::NewWindowCreationSource::kNewEmptyWindow);
+}
+
+IN_PROC_BROWSER_TEST_F(InitialWebUIWindowCreationSourceBrowserTest,
+                       MoveTabsToNewWindow) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
+      browser(), GURL(url::kAboutBlankURL),
+      WindowOpenDisposition::kNewForegroundTab,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
+  ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
+
+  chrome::MoveTabsToNewWindow(browser(), {1});
+
+  BrowserWindowInterface* const new_browser =
+      ui_test_utils::GetBrowserNotInSet({browser()});
+  ASSERT_TRUE(new_browser);
+  EXPECT_EQ(GetCreationSource(new_browser),
+            waap::NewWindowCreationSource::kMoveTabsToNewWindow);
+}
+
+// Non-process-startup browser launches don't happen on ChromeOS.
+#if !BUILDFLAG(IS_CHROMEOS)
+IN_PROC_BROWSER_TEST_F(InitialWebUIWindowCreationSourceBrowserTest, Launch) {
+  // Simulate a launch handled by the already running browser process, e.g.
+  // from an OS shortcut.
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  StartupBrowserCreatorImpl launch(base::FilePath(), command_line,
+                                   chrome::startup::IsFirstRun::kNo);
+  launch.Launch(browser()->GetProfile(), chrome::startup::IsProcessStartup::kNo,
+                /*restore_tabbed_browser=*/true);
+
+  BrowserWindowInterface* const new_browser =
+      ui_test_utils::GetBrowserNotInSet({browser()});
+  ASSERT_TRUE(new_browser);
+  EXPECT_EQ(GetCreationSource(new_browser),
+            waap::NewWindowCreationSource::kLaunch);
+}
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
+IN_PROC_BROWSER_TEST_F(InitialWebUIWindowCreationSourceBrowserTest,
+                       SessionRestoreFallback) {
+  // Nothing has been saved for this profile yet, so the restore finds no
+  // tabbed window and opens a fallback window instead.
+  BrowserWindowInterface* const new_browser = SessionRestore::RestoreSession(
+      browser()->GetProfile(), /*browser=*/nullptr,
+      SessionRestore::SYNCHRONOUS | SessionRestore::RESTORE_BROWSER |
+          SessionRestore::ALWAYS_CREATE_TABBED_BROWSER,
+      /*startup_tabs=*/{});
+  ASSERT_TRUE(new_browser);
+  ASSERT_NE(new_browser, browser());
+  EXPECT_EQ(GetCreationSource(new_browser),
+            waap::NewWindowCreationSource::kSessionRestoreFallback);
 }
 
 // TODO(crbug.com/490810407): Verify that `NavigationTimeline` UKM is recorded.
@@ -649,8 +774,11 @@ IN_PROC_BROWSER_TEST_F(InitialWebUIMetricsMappingBrowserTest,
   EXPECT_GE(total_webium_count, 1);
 }
 
-// TODO(crbug.com/491012584): Flaky on ChromeOS MSan.
-#if BUILDFLAG(IS_CHROMEOS) && defined(MEMORY_SANITIZER)
+// TODO(crbug.com/491012584, crbug.com/540625890): Flaky on ChromeOS MSan/ASan,
+// Win, and Mac.
+#if (BUILDFLAG(IS_CHROMEOS) &&                                     \
+     (defined(MEMORY_SANITIZER) || defined(ADDRESS_SANITIZER))) || \
+    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #define MAYBE_NormalRendererMetricsAreNotMapped \
   DISABLED_NormalRendererMetricsAreNotMapped
 #else
@@ -839,14 +967,14 @@ IN_PROC_BROWSER_TEST_F(InitialWebUISurfaceSyncBrowserTest,
   base::StatisticsRecorder::HistogramWaiter waiter(expected_metric);
 
   // Create a new window.
-  Browser::CreateParams params(browser()->GetProfile(), true);
-  Browser* new_browser = Browser::Create(params);
+  BrowserWindowCreateParams params(browser()->GetProfile(),
+                                   /*from_user_gesture=*/true);
+  BrowserWindowInterface* new_browser = CreateBrowserWindow(std::move(params));
 
   if (auto* manager = InitialWebUIWindowMetricsManager::From(new_browser)) {
     manager->SkipStartupForTesting();
     manager->SetWindowCreationInfo(
-        waap::NewWindowCreationSource::kBrowserInitiated,
-        base::TimeTicks::Now());
+        waap::NewWindowCreationSource::kNewEmptyWindow, base::TimeTicks::Now());
   }
 
   AddBlankTabAndShow(new_browser);
@@ -863,22 +991,31 @@ IN_PROC_BROWSER_TEST_F(InitialWebUISurfaceSyncBrowserTest,
 
 #if BUILDFLAG(IS_WIN)
 
+class InitialWebUIMinimizedWindowBrowserTest
+    : public InitialWebUIBrowserTestBase {
+ public:
+  InitialWebUIMinimizedWindowBrowserTest()
+      : InitialWebUIBrowserTestBase(
+            {{features::kWebUIReloadButton,
+              {{"WebUIReloadButtonDeferBrowserViewShow", "true"}}}}) {}
+};
+
 // Tests that the duration metrics are not recorded for windows created as
 // minimized.
-IN_PROC_BROWSER_TEST_F(InitialWebUINavigationBrowserTest,
+IN_PROC_BROWSER_TEST_F(InitialWebUIMinimizedWindowBrowserTest,
                        InitiallyMinimizedWindowSkipsMetrics) {
   base::HistogramTester histogram_tester;
 
   // Create a minimized browser window.
-  Browser::CreateParams params(browser()->GetProfile(), true);
+  BrowserWindowCreateParams params(browser()->GetProfile(),
+                                   /*from_user_gesture=*/true);
   params.initial_show_state = ui::mojom::WindowShowState::kMinimized;
-  Browser* new_browser = Browser::Create(params);
+  BrowserWindowInterface* new_browser = CreateBrowserWindow(std::move(params));
 
   if (auto* manager = InitialWebUIWindowMetricsManager::From(new_browser)) {
     manager->SkipStartupForTesting();
     manager->SetWindowCreationInfo(
-        waap::NewWindowCreationSource::kBrowserInitiated,
-        base::TimeTicks::Now());
+        waap::NewWindowCreationSource::kNewEmptyWindow, base::TimeTicks::Now());
   }
 
   // Show the window which should be shown minimized, and verify it.
@@ -900,7 +1037,7 @@ IN_PROC_BROWSER_TEST_F(InitialWebUINavigationBrowserTest,
   // Verify ShowRequestedToFirstPaint was not recorded.
   histogram_tester.ExpectTotalCount(
       "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow.BrowserWindow."
-      "ShowRequestedToFirstPaint.FromConstructor2",
+      "ShowRequestedToFirstPaint2",
       0);
 
   // Verify FirstPaintGap was not recorded.
@@ -912,9 +1049,9 @@ IN_PROC_BROWSER_TEST_F(InitialWebUINavigationBrowserTest,
 
 // Tests that the duration metrics should be skipped for the windows that are
 // restored as minimized.
-IN_PROC_BROWSER_TEST_F(InitialWebUINavigationBrowserTest,
+IN_PROC_BROWSER_TEST_F(InitialWebUIMinimizedWindowBrowserTest,
                        SessionRestoreMinimizedWindow) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   // Enable session restore and minimize the current window.
   SessionStartupPref pref(SessionStartupPref::LAST);
@@ -940,7 +1077,7 @@ IN_PROC_BROWSER_TEST_F(InitialWebUINavigationBrowserTest,
 
   chrome::NewEmptyWindow(profile);
 
-  Browser* restored_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* restored_browser = browser_created_observer.Wait();
   ASSERT_TRUE(restored_browser);
 
   // Verify the restored window is minimized.
@@ -1002,13 +1139,17 @@ IN_PROC_BROWSER_TEST_F(InitialWebUISameStartupPopupBrowserTest,
   ASSERT_TRUE(profile);
 
   // Create popup browser.
-  Browser::CreateParams popup_params(Browser::TYPE_POPUP, profile, true);
-  Browser* popup_browser = Browser::Create(popup_params);
+  BrowserWindowCreateParams popup_params(BrowserWindowInterface::TYPE_POPUP,
+                                         profile, /*from_user_gesture=*/true);
+  BrowserWindowInterface* popup_browser =
+      CreateBrowserWindow(std::move(popup_params));
   ASSERT_TRUE(popup_browser);
 
   // Create normal browser.
-  Browser::CreateParams normal_params(Browser::TYPE_NORMAL, profile, true);
-  Browser* normal_browser = Browser::Create(normal_params);
+  BrowserWindowCreateParams normal_params(BrowserWindowInterface::TYPE_NORMAL,
+                                          profile, /*from_user_gesture=*/true);
+  BrowserWindowInterface* normal_browser =
+      CreateBrowserWindow(std::move(normal_params));
   ASSERT_TRUE(normal_browser);
 
   auto* popup_manager = InitialWebUIWindowMetricsManager::From(popup_browser);
@@ -1057,5 +1198,109 @@ IN_PROC_BROWSER_TEST_F(InitialWebUISameStartupPopupBrowserTest,
   histogram_tester.ExpectTotalCount(
       "InitialWebUI.Startup.BrowserWindow.ShowRequestedToFirstPaint", 1);
 }
+
+// Profile creation and destruction without a full ChromeOS user session is not
+// supported on ChromeOS (Ash).
+#if !BUILDFLAG(IS_CHROMEOS)
+class InitialWebUIProfileServiceShutdownBrowserTest
+    : public InitialWebUIBrowserTestBase {
+ public:
+  InitialWebUIProfileServiceShutdownBrowserTest()
+      : InitialWebUIBrowserTestBase(
+            {{features::kWebUIReloadButton,
+              {{"WebUIReloadButtonPrewarmWebUI", "true"},
+               {"WebUIReloadButtonProfilePrewarming", "true"}}}}) {}
+};
+
+// Verifies that destroying a profile without taking the prewarmed toolbar
+// WebContents shuts down cleanly without crashing.
+//
+// When profile prewarming is enabled, `InitialWebUIProfileService` pre-creates
+// and holds a `WebContents`. If no browser window is created to consume it via
+// `TakeToolbarContents()`, the `WebContents` remains owned by the service until
+// profile destruction. It must be reset in
+// `InitialWebUIProfileService::Shutdown()` before the `BrowserContext` is
+// marked dead, preventing `DependencyManager::AssertContextWasntDestroyed`
+// assertions from observers during `WebContents` teardown.
+IN_PROC_BROWSER_TEST_F(InitialWebUIProfileServiceShutdownBrowserTest,
+                       DestroyProfileWithoutTakingToolbarContents) {
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  base::FilePath new_path =
+      profile_manager->user_data_dir().Append(FILE_PATH_LITERAL("Secondary"));
+  Profile& secondary_profile =
+      profiles::testing::CreateProfileSync(profile_manager, new_path);
+
+  auto* service =
+      InitialWebUIProfileServiceFactory::GetForProfile(&secondary_profile);
+  ASSERT_TRUE(service);
+  EXPECT_TRUE(service->has_toolbar_contents_for_testing());
+
+  ProfileDestructionWaiter waiter(&secondary_profile);
+  profile_manager->ClearFirstBrowserWindowKeepAlive(&secondary_profile);
+  waiter.Wait();
+}
+
+class InitialWebUIProfilePrewarmOmniboxBrowserTest
+    : public InitialWebUIBrowserTestBase {
+ public:
+  InitialWebUIProfilePrewarmOmniboxBrowserTest()
+      : InitialWebUIBrowserTestBase(
+            {{features::kWebUILocationBar, {}},
+             {features::kWebUIReloadButton,
+              {{"WebUIReloadButtonPrewarmWebUI", "true"},
+               {"WebUIReloadButtonProfilePrewarming", "true"},
+               {"WebUIReloadButtonPrewarmWebUIPreNavigate", "true"}}}}) {}
+};
+
+// Verifies that when a profile-prewarmed WebUI toolbar has finished navigation
+// before the first browser window is created, the WebUIToolbarUI is properly
+// initialized with a valid OmniboxController after WebUILocationBar::Init()
+// runs, rather than race-initializing prematurely in the WebUIToolbarWebView
+// constructor with a null controller (b/563226016).
+IN_PROC_BROWSER_TEST_F(InitialWebUIProfilePrewarmOmniboxBrowserTest,
+                       PrewarmedToolbarInitializesOmniboxController) {
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  base::FilePath new_path =
+      profile_manager->user_data_dir().Append(FILE_PATH_LITERAL("Secondary"));
+  Profile& secondary_profile =
+      profiles::testing::CreateProfileSync(profile_manager, new_path);
+
+  auto* service =
+      InitialWebUIProfileServiceFactory::GetForProfile(&secondary_profile);
+  ASSERT_TRUE(service);
+  ASSERT_TRUE(service->has_toolbar_contents_for_testing());
+
+  content::WebContents* prewarmed_contents =
+      service->toolbar_web_contents_for_testing();
+  ASSERT_TRUE(prewarmed_contents);
+
+  // Wait for the background prewarm navigation to commit.
+  content::TestNavigationObserver observer(prewarmed_contents);
+  observer.Wait();
+  ASSERT_TRUE(observer.last_navigation_succeeded());
+
+  // Create the first browser window for this profile, which will consume the
+  // prewarmed toolbar contents.
+  BrowserWindowInterface* new_browser = CreateBrowser(&secondary_profile);
+  ASSERT_TRUE(new_browser);
+
+  auto* toolbar_button_provider = ToolbarButtonProvider::From(new_browser);
+  ASSERT_TRUE(toolbar_button_provider);
+  auto* webview = toolbar_button_provider->GetWebUIToolbarViewForTesting();
+  ASSERT_TRUE(webview);
+  content::WebContents* web_contents = webview->web_contents();
+  ASSERT_TRUE(web_contents);
+  content::WebUI* web_ui = web_contents->GetWebUI();
+  ASSERT_TRUE(web_ui);
+  auto* webui = web_ui->GetController()->GetAs<WebUIToolbarUI>();
+  ASSERT_TRUE(webui);
+
+  // Verify that the OmniboxController was properly wired up and is non-null.
+  EXPECT_NE(nullptr, webui->omnibox_controller_for_testing());
+  EXPECT_TRUE(webui->is_initialized());
+  EXPECT_EQ(webview->GetOmniboxController(),
+            webui->omnibox_controller_for_testing());
+}
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace waap

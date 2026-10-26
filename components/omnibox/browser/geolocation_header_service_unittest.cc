@@ -17,6 +17,7 @@
 #include "components/content_settings/core/common/content_settings_utils.h"
 #include "components/content_settings/core/common/features.h"
 #include "components/omnibox/browser/autocomplete_match.h"
+#include "components/omnibox/browser/geolocation_header_service_test_api.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/permissions/test/test_permissions_client.h"
 #include "components/search_engines/search_engines_test_environment.h"
@@ -63,7 +64,6 @@ class GeolocationHeaderServiceTest : public testing::Test {
   GeolocationHeaderServiceTest() {
     scoped_feature_list_.InitWithFeatures(
         {omnibox::kPlatformAgnosticXGeo,
-         omnibox::kOmniboxXGeoPermissionGranularity,
          content_settings::features::kApproximateGeolocationPermission},
         {});
   }
@@ -275,7 +275,8 @@ TEST_F(GeolocationHeaderServiceTest, ApproximatePermission) {
                  /*is_precise=*/false);
 
   std::unique_ptr<GeolocationHeaderService> service = CreateService();
-  service->SetLocationAgeForTesting(base::Minutes(1));
+  GeolocationHeaderServiceTestApi(service.get())
+      .SetLocationAge(base::Minutes(1));
   GURL url(kGoogleUrl);
   SetDefaultSearchProviderUrl(url.spec());
 
@@ -327,7 +328,8 @@ TEST_F(GeolocationHeaderServiceTest, Serialization) {
                  /*is_precise=*/true);
 
   std::unique_ptr<GeolocationHeaderService> service = CreateService();
-  service->SetLocationAgeForTesting(base::Minutes(1));
+  GeolocationHeaderServiceTestApi(service.get())
+      .SetLocationAge(base::Minutes(1));
   GURL url(kGoogleUrl);
   SetupGoogleDseWithPermissions();
 
@@ -695,9 +697,7 @@ class GeolocationHeaderServiceInlineLocationTest
  public:
   GeolocationHeaderServiceInlineLocationTest() {
     feature_list_.InitWithFeatures(
-        {omnibox::kPlatformAgnosticXGeo,
-         omnibox::kOmniboxXGeoPermissionGranularity,
-         omnibox::kInlineLocationSignaling,
+        {omnibox::kPlatformAgnosticXGeo, omnibox::kInlineLocationSignaling,
          content_settings::features::kApproximateGeolocationPermission},
         {});
   }
@@ -728,8 +728,10 @@ TEST_F(GeolocationHeaderServiceInlineLocationTest, PrimeLocationCacheOnly) {
 
   // Wait for the call to complete (connection reset). If a non-cached location
   // was used, it would stay bound waiting for an update.
-  EXPECT_TRUE(base::test::RunUntil(
-      [&]() { return !service->is_geolocation_bound_for_testing(); }));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return !GeolocationHeaderServiceTestApi(service.get())
+                .is_geolocation_bound();
+  }));
 
   EXPECT_EQ(geolocation_overrider_.GetQueryCachedPositionCount(), 1u);
   EXPECT_EQ(geolocation_overrider_.GetQueryNextPositionCount(), 0u);
@@ -754,15 +756,18 @@ TEST_F(GeolocationHeaderServiceInlineLocationTest, PrimeLocationStandard) {
   service->PrimeLocation();
 
   // Verify it is waiting for update (connection remains bound)
-  EXPECT_TRUE(service->is_geolocation_bound_for_testing());
+  EXPECT_TRUE(
+      GeolocationHeaderServiceTestApi(service.get()).is_geolocation_bound());
 
   // Now simulate a fresh update.
   UpdateLocation(kTestLat, kTestLong, kTestAccuracy, base::Time::Now(),
                  /*is_precise=*/true);
 
   // Wait for the call to complete (connection reset)
-  EXPECT_TRUE(base::test::RunUntil(
-      [&]() { return !service->is_geolocation_bound_for_testing(); }));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return !GeolocationHeaderServiceTestApi(service.get())
+                .is_geolocation_bound();
+  }));
 
   EXPECT_EQ(geolocation_overrider_.GetQueryCachedPositionCount(), 0u);
   EXPECT_EQ(geolocation_overrider_.GetQueryNextPositionCount(), 1u);
@@ -793,7 +798,8 @@ TEST_F(GeolocationHeaderServiceTest, PrimeLocationFlagDisabled) {
   EXPECT_EQ(geolocation_overrider_.GetQueryCachedPositionCount(), 0u);
   EXPECT_EQ(geolocation_overrider_.GetQueryNextPositionCount(), 0u);
   EXPECT_FALSE(service->HasCachedLocation());
-  EXPECT_FALSE(service->is_geolocation_bound_for_testing());
+  EXPECT_FALSE(
+      GeolocationHeaderServiceTestApi(service.get()).is_geolocation_bound());
 
   // Now grant permission to the DSE and verify that PrimeLocation proceeds.
   SetupGoogleDseWithPermissions();
@@ -801,15 +807,18 @@ TEST_F(GeolocationHeaderServiceTest, PrimeLocationFlagDisabled) {
   service->PrimeLocation();
 
   // Verify it is waiting for update (connection remains bound)
-  EXPECT_TRUE(service->is_geolocation_bound_for_testing());
+  EXPECT_TRUE(
+      GeolocationHeaderServiceTestApi(service.get()).is_geolocation_bound());
 
   // Now simulate a fresh update.
   UpdateLocation(kTestLat, kTestLong, kTestAccuracy, base::Time::Now(),
                  /*is_precise=*/true);
 
   // Wait for the call to complete (connection reset)
-  EXPECT_TRUE(base::test::RunUntil(
-      [&]() { return !service->is_geolocation_bound_for_testing(); }));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return !GeolocationHeaderServiceTestApi(service.get())
+                .is_geolocation_bound();
+  }));
 
   EXPECT_EQ(geolocation_overrider_.GetQueryNextPositionCount(), 1u);
   EXPECT_TRUE(
@@ -837,7 +846,8 @@ TEST_F(GeolocationHeaderServiceTest, SearchEngineOptInOmitted) {
   EXPECT_FALSE(service->HasCachedLocation());
   EXPECT_FALSE(service->GetLocationHeader(url, /*for_automatic_sending=*/true)
                    .has_value());
-  EXPECT_FALSE(service->is_geolocation_bound_for_testing());
+  EXPECT_FALSE(
+      GeolocationHeaderServiceTestApi(service.get()).is_geolocation_bound());
 }
 
 // Verifies that if send_x_geo_header is explicitly set to false, it is
@@ -862,7 +872,8 @@ TEST_F(GeolocationHeaderServiceTest, SearchEngineOptInExplicitFalse) {
   EXPECT_FALSE(service->HasCachedLocation());
   EXPECT_FALSE(service->GetLocationHeader(url, /*for_automatic_sending=*/true)
                    .has_value());
-  EXPECT_FALSE(service->is_geolocation_bound_for_testing());
+  EXPECT_FALSE(
+      GeolocationHeaderServiceTestApi(service.get()).is_geolocation_bound());
 }
 
 // Verifies that if send_x_geo_header is explicitly set to true, it is opted-in.
@@ -954,7 +965,8 @@ TEST_F(GeolocationHeaderServiceTest, GoogleFallbackOptIn) {
 
   service->PrimeLocation();
   EXPECT_FALSE(service->HasCachedLocation());
-  EXPECT_FALSE(service->is_geolocation_bound_for_testing());
+  EXPECT_FALSE(
+      GeolocationHeaderServiceTestApi(service.get()).is_geolocation_bound());
 
   // Google fallback URL (e.g. /webhp)
   GURL fallback_url("https://www.google.com/webhp?#q=dinosaurs");
@@ -1075,7 +1087,7 @@ TEST_F(GeolocationHeaderServiceInlineLocationTest,
 }
 
 TEST_F(GeolocationHeaderServiceInlineLocationTest,
-       RecordInlineLocationSuggestionClicked_DsePermissionAsk) {
+       MaybeRecordInlineLocationSuggestionClicked_DsePermissionAsk) {
   std::unique_ptr<GeolocationHeaderService> service = CreateService();
   GURL url(kGoogleUrl);
   SetDefaultSearchProviderUrl(url.spec());
@@ -1087,29 +1099,29 @@ TEST_F(GeolocationHeaderServiceInlineLocationTest,
 
   // Normal non-inline location suggestion match -> should not log.
   AutocompleteMatch match(nullptr, 0, false,
-                          AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED);
-  service->RecordInlineLocationSuggestionClicked(match);
+                          omnibox::AutocompleteMatchType::kSearchWhatYouTyped);
+  service->MaybeRecordInlineLocationSuggestionClicked(match);
   histograms.ExpectTotalCount("Omnibox.InlineLocationSuggestion.Ask.Clicked",
                               0);
   histograms.ExpectTotalCount(
       "Omnibox.InlineLocationSuggestion.Ask.ParentClicked", 0);
 
   // Clicked inline location suggestion match.
-  AutocompleteMatch inline_match(nullptr, 0, false,
-                                 AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED);
+  AutocompleteMatch inline_match(
+      nullptr, 0, false, omnibox::AutocompleteMatchType::kSearchWhatYouTyped);
   inline_match.subtypes.insert(omnibox::SUBTYPE_LOCATION_SUGGEST_TRIGGER);
   inline_match.extra_headers[kXGeoHeader] = "dummy";
-  service->RecordInlineLocationSuggestionClicked(inline_match);
+  service->MaybeRecordInlineLocationSuggestionClicked(inline_match);
   histograms.ExpectUniqueSample("Omnibox.InlineLocationSuggestion.Ask.Clicked",
                                 true, 1);
   histograms.ExpectTotalCount(
       "Omnibox.InlineLocationSuggestion.Ask.ParentClicked", 0);
 
   // Parent clicked inline location suggestion match.
-  AutocompleteMatch parent_match(nullptr, 0, false,
-                                 AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED);
+  AutocompleteMatch parent_match(
+      nullptr, 0, false, omnibox::AutocompleteMatchType::kSearchWhatYouTyped);
   parent_match.subtypes.insert(omnibox::SUBTYPE_LOCATION_SUGGEST_TRIGGER);
-  service->RecordInlineLocationSuggestionClicked(parent_match);
+  service->MaybeRecordInlineLocationSuggestionClicked(parent_match);
   histograms.ExpectUniqueSample("Omnibox.InlineLocationSuggestion.Ask.Clicked",
                                 true, 1);
   histograms.ExpectUniqueSample(
@@ -1117,7 +1129,7 @@ TEST_F(GeolocationHeaderServiceInlineLocationTest,
 }
 
 TEST_F(GeolocationHeaderServiceInlineLocationTest,
-       RecordInlineLocationSuggestionClicked_DsePermissionDenied) {
+       MaybeRecordInlineLocationSuggestionClicked_DsePermissionDenied) {
   std::unique_ptr<GeolocationHeaderService> service = CreateService();
   GURL url(kGoogleUrl);
   SetDefaultSearchProviderUrl(url.spec());
@@ -1128,21 +1140,21 @@ TEST_F(GeolocationHeaderServiceInlineLocationTest,
   base::HistogramTester histograms;
 
   // Clicked inline location suggestion match.
-  AutocompleteMatch inline_match(nullptr, 0, false,
-                                 AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED);
+  AutocompleteMatch inline_match(
+      nullptr, 0, false, omnibox::AutocompleteMatchType::kSearchWhatYouTyped);
   inline_match.subtypes.insert(omnibox::SUBTYPE_LOCATION_SUGGEST_TRIGGER);
   inline_match.extra_headers[kXGeoHeader] = "dummy";
-  service->RecordInlineLocationSuggestionClicked(inline_match);
+  service->MaybeRecordInlineLocationSuggestionClicked(inline_match);
   histograms.ExpectUniqueSample("Omnibox.InlineLocationSuggestion.Deny.Clicked",
                                 true, 1);
   histograms.ExpectTotalCount(
       "Omnibox.InlineLocationSuggestion.Deny.ParentClicked", 0);
 
   // Parent clicked inline location suggestion match.
-  AutocompleteMatch parent_match(nullptr, 0, false,
-                                 AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED);
+  AutocompleteMatch parent_match(
+      nullptr, 0, false, omnibox::AutocompleteMatchType::kSearchWhatYouTyped);
   parent_match.subtypes.insert(omnibox::SUBTYPE_LOCATION_SUGGEST_TRIGGER);
-  service->RecordInlineLocationSuggestionClicked(parent_match);
+  service->MaybeRecordInlineLocationSuggestionClicked(parent_match);
   histograms.ExpectUniqueSample("Omnibox.InlineLocationSuggestion.Deny.Clicked",
                                 true, 1);
   histograms.ExpectUniqueSample(
@@ -1150,7 +1162,7 @@ TEST_F(GeolocationHeaderServiceInlineLocationTest,
 }
 
 TEST_F(GeolocationHeaderServiceInlineLocationTest,
-       RecordInlineLocationSuggestionClicked_DsePermissionAllowed) {
+       MaybeRecordInlineLocationSuggestionClicked_DsePermissionAllowed) {
   std::unique_ptr<GeolocationHeaderService> service = CreateService();
   GURL url(kGoogleUrl);
   SetDefaultSearchProviderUrl(url.spec());
@@ -1160,16 +1172,16 @@ TEST_F(GeolocationHeaderServiceInlineLocationTest,
 
   base::HistogramTester histograms;
 
-  AutocompleteMatch inline_match(nullptr, 0, false,
-                                 AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED);
+  AutocompleteMatch inline_match(
+      nullptr, 0, false, omnibox::AutocompleteMatchType::kSearchWhatYouTyped);
   inline_match.subtypes.insert(omnibox::SUBTYPE_LOCATION_SUGGEST_TRIGGER);
   inline_match.extra_headers[kXGeoHeader] = "dummy";
-  service->RecordInlineLocationSuggestionClicked(inline_match);
+  service->MaybeRecordInlineLocationSuggestionClicked(inline_match);
 
-  AutocompleteMatch parent_match(nullptr, 0, false,
-                                 AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED);
+  AutocompleteMatch parent_match(
+      nullptr, 0, false, omnibox::AutocompleteMatchType::kSearchWhatYouTyped);
   parent_match.subtypes.insert(omnibox::SUBTYPE_LOCATION_SUGGEST_TRIGGER);
-  service->RecordInlineLocationSuggestionClicked(parent_match);
+  service->MaybeRecordInlineLocationSuggestionClicked(parent_match);
 
   histograms.ExpectTotalCount("Omnibox.InlineLocationSuggestion.Ask.Clicked",
                               0);
@@ -1275,6 +1287,8 @@ TEST_F(GeolocationHeaderServiceInlineLocationTest, PrimeLocationTelemetryIlls) {
   // torn down.
   // RunUntilIdle is never good, use a different approach, wait for some
   // specific event.
-  ASSERT_TRUE(base::test::RunUntil(
-      [&]() { return !service->is_geolocation_bound_for_testing(); }));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return !GeolocationHeaderServiceTestApi(service.get())
+                .is_geolocation_bound();
+  }));
 }

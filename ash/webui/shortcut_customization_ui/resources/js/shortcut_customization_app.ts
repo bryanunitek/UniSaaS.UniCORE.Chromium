@@ -120,24 +120,30 @@ export class ShortcutCustomizationAppElement extends
         type: Boolean,
         value: false,
       },
+
+      keyboardSettingsLink: {
+        type: String,
+        value: keyboardSettingsLink,
+      },
     };
   }
 
-  protected restoreAllButtonHidden: boolean;
-  protected showRestoreAllDialog: boolean;
-  protected dialogShortcutTitle: string;
-  protected dialogAccelerators: AcceleratorInfo[];
-  protected dialogAction: number;
-  protected dialogSource: AcceleratorSource;
-  protected showEditDialog: boolean;
-  protected keyboardSettingsLink: string = keyboardSettingsLink;
-  protected isCustomizationAllowedByPolicy: boolean;
+  declare protected restoreAllButtonHidden: boolean;
+  declare protected showRestoreAllDialog: boolean;
+  declare protected dialogShortcutTitle: string;
+  declare protected dialogAccelerators: AcceleratorInfo[];
+  declare protected dialogAction: number;
+  declare protected dialogSource: AcceleratorSource;
+  declare protected showEditDialog: boolean;
+  declare protected keyboardSettingsLink: string;
+  declare protected isCustomizationAllowedByPolicy: boolean;
   protected acceleratorUpdateInProgress: boolean = false;
   private shortcutProvider: ShortcutProviderInterface = getShortcutProvider();
   private acceleratorlookupManager: AcceleratorLookupManager =
       AcceleratorLookupManager.getInstance();
-  private acceleratorsUpdatedReceiver: AcceleratorsUpdatedObserverReceiver;
-  private policyUpdatedReceiver: PolicyUpdatedObserverReceiver;
+  private policyUpdatedReceiver: PolicyUpdatedObserverReceiver|null = null;
+  private acceleratorsUpdatedReceiver: AcceleratorsUpdatedObserverReceiver|
+      null = null;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -179,8 +185,11 @@ export class ShortcutCustomizationAppElement extends
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    assert(this.policyUpdatedReceiver);
     this.policyUpdatedReceiver.$.close();
-    this.acceleratorsUpdatedReceiver.$.close();
+    if (this.acceleratorsUpdatedReceiver) {
+      this.acceleratorsUpdatedReceiver.$.close();
+    }
     this.removeEventListener('show-edit-dialog', this.showDialog);
     this.removeEventListener('edit-dialog-closed', this.onDialogClosed);
     this.removeEventListener(

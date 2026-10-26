@@ -43,12 +43,22 @@ public abstract class StripLayoutView implements VirtualView {
         void onClick(long time, StripLayoutView view, int motionEventButtonState, int modifiers);
     }
 
+    /** Handler for long click actions on VirtualViews. */
+    public interface StripLayoutViewOnLongClickHandler {
+        /**
+         * Handles the long click action on {@code view}.
+         *
+         * @param view The {@link StripLayoutView} receiving the long click.
+         */
+        void onLongClick(StripLayoutView view);
+    }
+
     /** Handler for keyboard focus on VirtualViews. */
     public interface StripLayoutViewOnKeyboardFocusHandler {
         /**
-         * Handles keyboard focus change on this {@param view}.
+         * Handles keyboard focus change on this {@code view}.
          *
-         * @param isFocused Whether {@param view} is now focused.
+         * @param isFocused Whether {@code view} is now focused.
          * @param view The {@link StripLayoutView} in question.
          */
         void onKeyboardFocus(boolean isFocused, StripLayoutView view);
@@ -57,7 +67,7 @@ public abstract class StripLayoutView implements VirtualView {
     /** Handler for accessibility focus on VirtualViews. */
     public interface StripLayoutViewOnAccessibilityFocusHandler {
         /**
-         * Handles accessibility focus on this {@param view}.
+         * Handles accessibility focus on this {@code view}.
          *
          * @param view The {@link StripLayoutView} in question.
          */
@@ -140,6 +150,7 @@ public abstract class StripLayoutView implements VirtualView {
     private final StripLayoutViewOnClickHandler mOnClickHandler;
     private final StripLayoutViewOnKeyboardFocusHandler mOnKeyboardFocusHandler;
     private final @Nullable StripLayoutViewOnAccessibilityFocusHandler mOnAccessibilityFocusHandler;
+    private @Nullable StripLayoutViewOnLongClickHandler mOnLongClickHandler;
 
     // Tab group share properties.
     private boolean mShowNotificationBubble;
@@ -148,8 +159,11 @@ public abstract class StripLayoutView implements VirtualView {
     private float mTrailingMargin;
 
     /**
+     * Creates a {@link StripLayoutView}.
+     *
      * @param incognito The incognito state of the view.
      * @param clickHandler StripLayoutViewOnClickHandler for this view.
+     * @param longClickHandler Handles long click actions for this view.
      * @param keyboardFocusHandler Handles keyboard focus gain/loss for this view.
      * @param accessibilityFocusHandler Handles accessibility focus for this view.
      * @param context The context for the view.
@@ -157,11 +171,13 @@ public abstract class StripLayoutView implements VirtualView {
     protected StripLayoutView(
             boolean incognito,
             StripLayoutViewOnClickHandler clickHandler,
+            @Nullable StripLayoutViewOnLongClickHandler longClickHandler,
             StripLayoutViewOnKeyboardFocusHandler keyboardFocusHandler,
             @Nullable StripLayoutViewOnAccessibilityFocusHandler accessibilityFocusHandler,
             Context context) {
         mIsIncognito = incognito;
         mOnClickHandler = clickHandler;
+        mOnLongClickHandler = longClickHandler;
         mOnKeyboardFocusHandler = keyboardFocusHandler;
         mOnAccessibilityFocusHandler = accessibilityFocusHandler;
         mContext = context;
@@ -449,6 +465,29 @@ public abstract class StripLayoutView implements VirtualView {
         mOnClickHandler.onClick(time, this, motionEventButtonState, modifiers);
     }
 
+    /**
+     * Sets the long click handler for this view.
+     *
+     * @param handler The handler for long click actions.
+     */
+    public void setOnLongClickHandler(@Nullable StripLayoutViewOnLongClickHandler handler) {
+        mOnLongClickHandler = handler;
+    }
+
+    @Override
+    public boolean hasLongClickAction() {
+        return mOnLongClickHandler != null;
+    }
+
+    @Override
+    public boolean handleLongClick() {
+        if (mOnLongClickHandler != null) {
+            mOnLongClickHandler.onLongClick(this);
+            return true;
+        }
+        return false;
+    }
+
     @Override
     public void onAccessibilityFocused() {
         if (mOnAccessibilityFocusHandler != null) {
@@ -519,7 +558,7 @@ public abstract class StripLayoutView implements VirtualView {
         return mKeyboardFocused;
     }
 
-    /** {@return The {@link ColorInt} of the keyboard focus ring color} */
+    /** Returns the {@link ColorInt} of the keyboard focus ring color. */
     public @ColorInt int getKeyboardFocusRingColor() {
         return ChromeColors.getKeyboardFocusRingColor(mContext, isIncognito());
     }

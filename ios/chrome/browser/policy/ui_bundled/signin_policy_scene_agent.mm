@@ -21,7 +21,7 @@
 #import "ios/chrome/browser/policy/model/policy_watcher_browser_agent.h"
 #import "ios/chrome/browser/policy/model/policy_watcher_browser_agent_observer_bridge.h"
 #import "ios/chrome/browser/scoped_ui_blocker/ui_bundled/scoped_ui_blocker.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_ui_provider.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/scene_ui_blocker_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
@@ -37,7 +37,7 @@
 
 @interface SigninPolicySceneAgent () <AuthenticationServiceObserving,
                                       FullscreenSigninCoordinatorDelegate,
-                                      IdentityManagerObserverBridgeDelegate,
+                                      IdentityManagerObserving,
                                       ProfileStateObserver,
                                       SceneUIBlockerStateObserver,
                                       UIBlockerManagerObserver> {
@@ -157,9 +157,9 @@
   [self handleSigninPromptsIfUIAvailable];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   // Consider showing the sign-in prompts when there is change in the
   // primary account.
@@ -187,8 +187,8 @@
 }
 
 - (void)dealloc {
-  CHECK(!_authenticationServiceObserverBridge, base::NotFatalUntil::M145);
-  CHECK(!_identityObserverBridge, base::NotFatalUntil::M145);
+  CHECK(!_authenticationServiceObserverBridge);
+  CHECK(!_identityObserverBridge);
 }
 
 - (void)tearDownObservers {
@@ -252,9 +252,10 @@
     // Use the UIBlockerExtent::kApplication extent since the sign-in policies
     // have to be pushed through the platform which concerns the entire app in
     // itself including all profiles.
+    SceneState* sceneState = self.sceneState;
     __block std::unique_ptr<ScopedUIBlocker> uiBlocker =
-        std::make_unique<ScopedUIBlocker>(self.sceneState,
-                                          UIBlockerExtent::kApplication);
+        ScopedUIBlocker::AppScoped(sceneState,
+                                   sceneState.profileState.appState);
 
     __weak __typeof(self) weakSelf = self;
     [self.sceneHandler dismissModalDialogsWithCompletion:^{
@@ -321,10 +322,9 @@
 
 #pragma mark - FullscreenSigninCoordinatorDelegate
 
-- (void)fullscreenSigninCoordinatorWantsToBeStopped:
-            (FullscreenSigninCoordinator*)coordinator
-                                             result:(SigninCoordinatorResult)
-                                                        result {
+- (void)
+    fullscreenSigninCoordinatorDone:(FullscreenSigninCoordinator*)coordinator
+                             result:(SigninCoordinatorResultOrIdentity)result {
   CHECK_EQ(coordinator, _fullscreenSigninCoordinator);
   [self stopFullScreenSigninCoordinator];
 }

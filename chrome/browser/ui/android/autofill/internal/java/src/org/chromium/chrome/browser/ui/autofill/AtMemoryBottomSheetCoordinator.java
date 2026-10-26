@@ -7,11 +7,11 @@ package org.chromium.chrome.browser.ui.autofill;
 import android.content.Context;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.autofill.AutofillSuggestion;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
 import java.util.List;
@@ -23,15 +23,18 @@ public class AtMemoryBottomSheetCoordinator {
     private final AtMemoryBottomSheetMediator mMediator;
     private final BottomSheetController mBottomSheetController;
 
-    public static final int ITEM_TYPE_SUGGESTION = 1;
-    public static final int ITEM_TYPE_SEARCH_TILE = 2;
-    public static final int ITEM_TYPE_ZERO_STATE = 3;
-
     private final BottomSheetObserver mBottomSheetObserver =
-            new EmptyBottomSheetObserver() {
+            new BottomSheetObserver() {
+                @Override
+                public void onSheetOpened(@BottomSheetController.StateChangeReason int reason) {
+                    if (mBottomSheetController.getCurrentSheetContent() != null
+                            && mBottomSheetController.getCurrentSheetContent() == mContent) {
+                        mMediator.onSheetOpened();
+                    }
+                }
+
                 @Override
                 public void onSheetClosed(@BottomSheetController.StateChangeReason int reason) {
-                    super.onSheetClosed(reason);
                     if (mBottomSheetController.getCurrentSheetContent() != null
                             && mBottomSheetController.getCurrentSheetContent() == mContent) {
                         onDismissed();
@@ -47,13 +50,15 @@ public class AtMemoryBottomSheetCoordinator {
 
         void onQueryTextChanged(String query);
 
-        void onSearchFocus(boolean hasFocus);
+        void requestExpandSheet(boolean expandInFullHeight);
 
-        void onSuggestionClicked(int position);
+        void onSuggestionAccepted(int position);
+
+        void onSuggestionDismissed(int position);
 
         void onChildSuggestionsShown(int parentPosition);
 
-        void onChildSuggestionClicked(int parentPosition, int childPosition);
+        void onChildSuggestionAccepted(int parentPosition, int childPosition);
 
         boolean isSearching();
     }
@@ -67,17 +72,18 @@ public class AtMemoryBottomSheetCoordinator {
 
         AtMemoryBottomSheetView view = new AtMemoryBottomSheetView(context);
 
-        mMediator = new AtMemoryBottomSheetMediator(context, profile, delegate, view);
+        mMediator = new AtMemoryBottomSheetMediator(context, delegate, view, profile);
 
         mContent = new AtMemoryBottomSheetContent(view, mBottomSheetController);
 
         setUpModelChangeProcessors(view);
     }
 
-    public void show(List<AutofillSuggestion> suggestions) {
+    public void show(List<AutofillSuggestion> suggestions, @Nullable String searchBarInitialValue) {
         mBottomSheetController.addObserver(mBottomSheetObserver);
+        mMediator.show(suggestions, searchBarInitialValue);
         if (mBottomSheetController.requestShowContent(mContent, /* animate= */ true)) {
-            mMediator.show(suggestions);
+            expand(/* expandInFullHeight= */ true);
         } else {
             onDismissed();
         }
@@ -87,8 +93,27 @@ public class AtMemoryBottomSheetCoordinator {
         mBottomSheetController.hideContent(mContent, /* animate= */ true);
     }
 
-    public void expandSheet() {
-        mBottomSheetController.expandSheet(/* animate= */ true);
+    /**
+     * Requests the sheet to recompute its height and transition to the half state. If the sheet is
+     * in the full state, this request is ignored unless {@code expandInFullHeight} is true.
+     *
+     * @param expandInFullHeight If true, forces the sheet to recompute its height and transition
+     *     even if it is in the full state.
+     */
+    public void expand(boolean expandInFullHeight) {
+        if (expandInFullHeight
+                || mBottomSheetController.getSheetState()
+                        != BottomSheetController.SheetState.FULL) {
+            // If attached to the window, post the expansion call to the view's message queue so
+            // that it runs after the current layout pass completes. This ensures the bottom sheet
+            // measures its content height correctly. Otherwise, expand directly (e.g. in tests).
+            if (mContent.getContentView().isAttachedToWindow()) {
+                mContent.getContentView()
+                        .post(() -> mBottomSheetController.expandSheet(/* animate= */ true));
+            } else {
+                mBottomSheetController.expandSheet(/* animate= */ true);
+            }
+        }
     }
 
     private void onDismissed() {

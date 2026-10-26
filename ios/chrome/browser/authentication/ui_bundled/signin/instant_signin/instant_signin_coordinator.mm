@@ -4,6 +4,8 @@
 
 #import "ios/chrome/browser/authentication/ui_bundled/signin/instant_signin/instant_signin_coordinator.h"
 
+#import <utility>
+
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/signin/public/base/consent_level.h"
@@ -72,7 +74,7 @@
                               contextStyle:contextStyle
                                accessPoint:accessPoint];
   if (self) {
-    CHECK(viewController, base::NotFatalUntil::M142);
+    CHECK(viewController);
     CHECK(continuationProvider);
     _identity = identity;
     _promoAction = promoAction;
@@ -94,8 +96,7 @@
   [super start];
   signin::IdentityManager* identityManager =
       IdentityManagerFactory::GetForProfile(self.profile->GetOriginalProfile());
-  CHECK(!identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin),
-        base::NotFatalUntil::M148);
+  CHECK(!identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   metrics::ProfileMetricsService* profileMetricsService =
       IOSProfileMetricsServiceFactory::GetForProfile(
           self.profile->GetOriginalProfile());
@@ -169,9 +170,9 @@
   } else {
     [self stopActivityOverlay];
   }
-  CHECK(!_addAccountSigninCoordinator, base::NotFatalUntil::M145);
-  CHECK(!_activityOverlayCoordinator, base::NotFatalUntil::M145);
-  CHECK(!_identityChooserCoordinator, base::NotFatalUntil::M145);
+  CHECK(!_addAccountSigninCoordinator);
+  CHECK(!_activityOverlayCoordinator);
+  CHECK(!_identityChooserCoordinator);
   _signinLogger = nil;
   // Methods on mediator's delegate should not be called anymore. If the sign-in
   // is progress, when calling the mediator disconnect method, it will call
@@ -218,8 +219,8 @@
   [self stopIdentityChooserCoordinator];
   if (!identity) {
     // If no identity was selected, the coordinator can be closed.
-    [self runCompletionWithSigninResult:SigninCoordinatorResultCanceledByUser
-                     completionIdentity:nil];
+    [self runCompletionWithSigninResult:
+              base::unexpected(SigninCoordinatorResultCanceledByUser)];
     return;
   }
   _identity = identity;
@@ -237,23 +238,22 @@
     case signin_ui::CancelationReason::kNotCanceled: {
       signin_metrics::RecordConsistencyPromoUserAction(_actionToRecordOnSuccess,
                                                        self.accessPoint);
-      [self runCompletionWithSigninResult:SigninCoordinatorResultSuccess
-                       completionIdentity:_identity];
+      [self runCompletionWithSigninResult:_identity];
       break;
     }
     case signin_ui::CancelationReason::kUserCanceled:
     case signin_ui::CancelationReason::kAgeMismatchCanceled:
     case signin_ui::CancelationReason::kAgeMismatchCanceledStaySignedOut:
-      [self runCompletionWithSigninResult:SigninCoordinatorResultCanceledByUser
-                       completionIdentity:nil];
+      [self runCompletionWithSigninResult:
+                base::unexpected(SigninCoordinatorResultCanceledByUser)];
       break;
     case signin_ui::CancelationReason::kFailed:
-      [self runCompletionWithSigninResult:SigninCoordinatorResultInterrupted
-                       completionIdentity:nil];
+      [self runCompletionWithSigninResult:
+                base::unexpected(SigninCoordinatorResultInterrupted)];
       break;
     case signin_ui::CancelationReason::kSignInNotAllowed:
-      [self runCompletionWithSigninResult:SigninCoordinatorResultDisabled
-                       completionIdentity:nil];
+      [self runCompletionWithSigninResult:base::unexpected(
+                                              SigninCoordinatorResultDisabled)];
       break;
   }
 }
@@ -265,15 +265,15 @@
   _mediator.delegate = nil;
   _mediator = nil;
   [self removeActivityOverlay];
-  [self runCompletionWithSigninResult:SigninCoordinatorProfileSwitch
-                   completionIdentity:_identity];
+  [self runCompletionWithSigninResult:base::unexpected(
+                                          SigninCoordinatorProfileSwitch)];
 }
 
 - (void)instantSigninMediatorSigninIsImpossible:
     (InstantSigninMediator*)mediator {
-  CHECK_EQ(mediator, _mediator, base::NotFatalUntil::M144);
-  [self runCompletionWithSigninResult:SigninCoordinatorResultInterrupted
-                   completionIdentity:nil];
+  CHECK_EQ(mediator, _mediator);
+  [self runCompletionWithSigninResult:base::unexpected(
+                                          SigninCoordinatorResultInterrupted)];
 }
 
 #pragma mark - Private
@@ -281,7 +281,9 @@
 // Starts the sign-in flow.
 - (void)startSignInOnlyFlow {
   [self showActivityOverlay];
-  signin_metrics::RecordSigninUserActionForAccessPoint(self.accessPoint);
+  if (self.accessPoint != signin_metrics::AccessPoint::kDeepLinkDefault) {
+    signin_metrics::RecordSigninUserActionForAccessPoint(self.accessPoint);
+  }
   // If this was triggered by the user tapping the default button in the sign-in
   // promo, give the user a chance to see the full email, by showing a snackbar.
   PostSignInActionSet postSigninActions;
@@ -322,11 +324,10 @@
                              continuationProvider:_continuationProvider];
   __weak __typeof(self) weakSelf = self;
   _addAccountSigninCoordinator.signinCompletion =
-      ^(SigninCoordinator* coordinator, SigninCoordinatorResult result,
-        id<SystemIdentity> resultIdentity) {
+      ^(SigninCoordinator* coordinator,
+        SigninCoordinatorResultOrIdentity result) {
         [weakSelf addAccountDoneWithCoordinator:coordinator
-                                         result:result
-                                 resultIdentity:resultIdentity];
+                                         result:std::move(result)];
       };
   [_addAccountSigninCoordinator start];
 }
@@ -334,24 +335,25 @@
 // Starts the sign-in flow if the identity has been selected, otherwise, it
 // ends this coordinator.
 - (void)addAccountDoneWithCoordinator:(SigninCoordinator*)coordinator
-                               result:(SigninCoordinatorResult)result
-                       resultIdentity:(id<SystemIdentity>)resultIdentity {
-  CHECK_EQ(_addAccountSigninCoordinator, coordinator,
-           base::NotFatalUntil::M151);
+                               result:
+                                   (SigninCoordinatorResultOrIdentity)result {
+  CHECK_EQ(_addAccountSigninCoordinator, coordinator);
   CHECK(_addAccountSigninCoordinator)
       << base::SysNSStringToUTF8([self description]);
   [self stopAddAccountSigninCoordinator];
-  switch (result) {
-    case SigninCoordinatorResultSuccess:
-      _identity = resultIdentity;
-      [self startSignInOnlyFlow];
-      break;
+  if (result.has_value()) {
+    _identity = result.value();
+    [self startSignInOnlyFlow];
+    return;
+  }
+  switch (result.error()) {
     case SigninCoordinatorResultDisabled:
     case SigninCoordinatorResultInterrupted:
     case SigninCoordinatorResultCanceledByUser:
     case SigninCoordinatorProfileSwitch:
-      [self runCompletionWithSigninResult:result completionIdentity:nil];
+      [self runCompletionWithSigninResult:std::move(result)];
       break;
+    case SigninCoordinatorResultSuccess:
     case SigninCoordinatorUINotAvailable:
       // InstantSigninCoordinator presents its child coordinators directly and
       // does not use `ShowSigninCommand`.

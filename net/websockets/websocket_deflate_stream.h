@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/circular_deque.h"
 #include "base/memory/scoped_refptr.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/net_export.h"
@@ -40,7 +41,7 @@ class NetLogWithSource;
 // a message m1 is read / written before the last frame of a message m2,
 // WebSocketDeflateStream will respect the order.
 //
-// [1]: http://tools.ietf.org/html/draft-ietf-hybi-permessage-compression-12
+// [1]: https://www.rfc-editor.org/rfc/rfc7692
 class NET_EXPORT_PRIVATE WebSocketDeflateStream : public WebSocketStream {
  public:
   static constexpr size_t kChunkSize = 32 * 1024;
@@ -119,6 +120,17 @@ class NET_EXPORT_PRIVATE WebSocketDeflateStream : public WebSocketStream {
   std::vector<scoped_refptr<IOBufferWithSize>> deflater_outputs_;
   // References of Inflater outputs kept until next ReadFrames().
   std::vector<scoped_refptr<IOBufferWithSize>> inflater_outputs_;
+
+  // Frames received from `stream_` that have not been processed yet.
+  // Non-empty only when a previous Inflate() call returned early because
+  // `inflater_` was choked. Their payloads are owned by `stream_` and remain
+  // valid until the next `stream_->ReadFrames()` call, which must not be made
+  // while this is non-empty.
+  base::circular_deque<std::unique_ptr<WebSocketFrame>> pending_input_frames_;
+
+  // The compressed data frame whose payload has been passed to `inflater_`
+  // but whose inflated output has not been fully emitted yet.
+  std::unique_ptr<WebSocketFrame> inflating_frame_;
 };
 
 }  // namespace net

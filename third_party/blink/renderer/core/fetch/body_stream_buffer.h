@@ -20,6 +20,7 @@
 #include "third_party/blink/renderer/core/streams/underlying_byte_source_base.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_v8_reference.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/self_keep_alive.h"
 #include "third_party/blink/renderer/platform/loader/fetch/bytes_consumer.h"
 
 namespace blink {
@@ -84,6 +85,15 @@ class CORE_EXPORT BodyStreamBuffer final
                     ExceptionState&);
   void Tee(BodyStreamBuffer**, BodyStreamBuffer**, ExceptionState&);
 
+  // Implements the Streams standard's "create a proxy" operation for this
+  // body: returns a new BodyStreamBuffer drawing from the same underlying
+  // data, while *this* buffer's stream stays in place and becomes locked and
+  // disturbed. The proxy is made from a ReadableStream exactly when this buffer
+  // is.
+  // https://streams.spec.whatwg.org/#readablestream-create-a-proxy
+  // Callable only when neither locked nor disturbed.
+  BodyStreamBuffer* CreateProxy(ExceptionState&);
+
   // UnderlyingByteSourceBase
   ScriptPromise<IDLUndefined> Pull(ReadableByteStreamController* controller,
                                    ExceptionState&) override;
@@ -144,6 +154,7 @@ class CORE_EXPORT BodyStreamBuffer final
 
   BytesConsumer* ReleaseHandle(ExceptionState&);
   void Abort();
+  void AbortLoader(FetchDataLoader::Client*);
   void Close(ExceptionState&);
   void GetError();
   void RaiseOOMError();
@@ -179,7 +190,7 @@ class CORE_EXPORT BodyStreamBuffer final
   bool stream_broken_ = false;
 
   // Used to remain alive when there's a loader_.
-  SelfKeepAlive<BodyStreamBuffer> keep_alive_;
+  SelfKeepAlive<BodyStreamBuffer> keep_alive_{{}};
 };
 
 }  // namespace blink

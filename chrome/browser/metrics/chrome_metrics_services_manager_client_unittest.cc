@@ -14,11 +14,19 @@
 #include "components/metrics/enabled_state_provider.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "components/metrics/metrics_state_manager.h"
+#include "components/metrics/startup_visibility.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/testing_pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "base/test/test_reg_util_win.h"
+#include "chrome/chrome_elf/nt_registry/nt_registry.h"
+#include "chrome/install_static/install_util.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+#endif  // BUILDFLAG(IS_WIN)
 
 using ::testing::NotNull;
 
@@ -179,3 +187,34 @@ TEST_F(IsClientInSampleTest, IsClientInSampleForCrashesTest) {
 #endif  // BUILDFLAG(IS_ANDROID)
 }
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_WIN)
+TEST_F(ChromeMetricsServicesManagerClientTest, OnFieldTrialsInitialized) {
+  registry_util::RegistryOverrideManager override_manager;
+  std::wstring hkcu_override_path;
+  ASSERT_NO_FATAL_FAILURE(override_manager.OverrideRegistry(
+      HKEY_CURRENT_USER, &hkcu_override_path));
+  nt::SetTestingOverride(nt::HKCU, hkcu_override_path);
+  absl::Cleanup reset_nt_override = [] {
+    nt::SetTestingOverride(nt::HKCU, std::wstring());
+  };
+
+  ChromeMetricsServicesManagerClient client(local_state());
+
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(
+        metrics::internal::kMetricsReportingFeature);
+    client.OnFieldTrialsInitialized();
+    EXPECT_TRUE(install_static::GetCollectStatsInSample());
+  }
+
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(
+        metrics::internal::kMetricsReportingFeature);
+    client.OnFieldTrialsInitialized();
+    EXPECT_FALSE(install_static::GetCollectStatsInSample());
+  }
+}
+#endif  // BUILDFLAG(IS_WIN)

@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "android_webview/browser/aw_origin_matched_header.h"
+#include "android_webview/browser/http_headers/aw_origin_matched_header.h"
 #include "android_webview/browser/network_service/aw_browser_context_io_thread_handle.h"
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
@@ -54,6 +54,12 @@ class AwProxyingURLLoaderFactoryTest : public testing::Test {
         /*security_options=*/std::nullopt,
         /*origin_matched_headers=*/
         std::vector<scoped_refptr<AwOriginMatchedHeader>>(),
+        /*profile_header_interceptors=*/
+        std::vector<
+            scoped_refptr<AwHeaderInterceptorStore::InterceptorEntry>>(),
+        /*web_contents_header_interceptors=*/
+        std::vector<
+            scoped_refptr<AwHeaderInterceptorStore::InterceptorEntry>>(),
         /*browser_context_handle=*/nullptr,
         /*navigation_id=*/std::nullopt);
 

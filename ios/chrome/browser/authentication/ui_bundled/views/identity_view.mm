@@ -151,7 +151,7 @@ constexpr CGFloat kEnterpriseIconPointSize = 20;
     // Enterprise icon
     _managementIconView = [[UIImageView alloc] init];
     _managementIconView.image = SymbolWithPalette(
-        CustomSymbolWithPointSize(kEnterpriseSymbol, kEnterpriseIconPointSize),
+        SymbolWithPointSize(SymbolEnterprise, kEnterpriseIconPointSize),
         @[ [UIColor colorNamed:kStaticGrey600Color] ]);
     _managementIconView.translatesAutoresizingMaskIntoConstraints = NO;
     _managementIconView.clipsToBounds = YES;
@@ -187,8 +187,7 @@ constexpr CGFloat kEnterpriseIconPointSize = 20;
     _managementIconTrailingMarginConstraint.active = YES;
     AddSameCenterYConstraint(self, _managementIconView);
 
-    AddSameConstraintsToSides(_title, _subtitle,
-                              LayoutSides::kLeading | LayoutSides::kTrailing);
+    AddSameConstraintsToSides(_title, _subtitle, LayoutSides::kHorizontal);
     _titleConstraintForNameAndEmail =
         [_subtitle.topAnchor constraintEqualToAnchor:_title.bottomAnchor
                                             constant:kDefaultStyle.titleOffset];

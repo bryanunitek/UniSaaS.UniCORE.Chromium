@@ -33,17 +33,16 @@ void GlicSplitButtonDelegate::HideGlicActorTaskIcon() {}
 bool GlicSplitButtonDelegate::GetIsShowingGlicActorTaskIconNudge() {
   return false;
 }
-bool GlicSplitButtonDelegate::IsGlicAdded() {
-  return false;
-}
 void GlicSplitButtonDelegate::SetGlicActorNudgeLabel(
     const std::u16string& nudge_label) {}
 void GlicSplitButtonDelegate::TriggerGlicActorNudge(
-    const std::u16string& nudge_text) {}
+    const std::u16string& nudge_label) {}
 void GlicSplitButtonDelegate::SetGlicActorNudgePressedState(bool pressed) {}
 void GlicSplitButtonDelegate::ShowActorTaskListBubble() {}
-void GlicSplitButtonDelegate::SetButtonController(
-    GlicButtonController* controller) {}
+void GlicSplitButtonDelegate::CloseActorTaskListBubble() {}
+bool GlicSplitButtonDelegate::IsActorTaskListBubbleShowing() {
+  return false;
+}
 void GlicSplitButtonDelegate::SetGlicShowState(bool show) {}
 void GlicSplitButtonDelegate::SetGlicPanelIsOpen(bool open) {}
 

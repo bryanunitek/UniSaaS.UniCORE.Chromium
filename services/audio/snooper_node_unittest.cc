@@ -5,6 +5,7 @@
 #include "services/audio/snooper_node.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -55,10 +56,8 @@ class AudioParametersBuilder {
  public:
   AudioParametersBuilder() = default;
 
-  AudioParametersBuilder& WithLayout(media::ChannelLayout layout,
-                                     int channels) {
-    layout_ = layout;
-    channels_ = channels;
+  AudioParametersBuilder& WithLayout(media::ChannelLayoutConfig config) {
+    config_ = config;
     return *this;
   }
   AudioParametersBuilder& WithRate(int rate) {
@@ -71,14 +70,12 @@ class AudioParametersBuilder {
   }
 
   media::AudioParameters Build() const {
-    return media::AudioParameters(
-        media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
-        media::ChannelLayoutConfig(layout_, channels_), rate_, frames_);
+    return media::AudioParameters(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
+                                  config_, rate_, frames_);
   }
 
  private:
-  media::ChannelLayout layout_ = media::CHANNEL_LAYOUT_STEREO;
-  int channels_ = 2;
+  media::ChannelLayoutConfig config_ = media::ChannelLayoutConfig::Stereo();
   int rate_ = 48000;
   int frames_ = 480;
 };
@@ -290,9 +287,10 @@ class SnooperNodeTest : public testing::TestWithParam<InputAndOutputParams> {
 
   // Post delayed tasks to schedule normal, uninterrupted input with the default
   // kInputAdvanceTime delay.
-  void ScheduleDefaultInputTasks(double skew = 1.0) {
+  void ScheduleDefaultInputTasks(double skew = 1.0,
+                                 base::TimeDelta duration = kTestDuration) {
     const base::TimeTicks start_time = task_runner_->NowTicks();
-    const base::TimeTicks end_time = start_time + kTestDuration;
+    const base::TimeTicks end_time = start_time + duration;
     const double time_step = skew / input_params().sample_rate();
     for (int position = 0;; position += input_params().frames_per_buffer()) {
       const base::TimeTicks task_time =
@@ -311,9 +309,10 @@ class SnooperNodeTest : public testing::TestWithParam<InputAndOutputParams> {
 
   // Post delayed tasks to schedule normal, uninterrupted output rendering to
   // occur at the default kCaptureDelay.
-  void ScheduleDefaultRenderTasks(double skew = 1.0) {
+  void ScheduleDefaultRenderTasks(double skew = 1.0,
+                                  base::TimeDelta duration = kTestDuration) {
     const base::TimeTicks start_time = task_runner_->NowTicks();
-    const base::TimeTicks end_time = start_time + kTestDuration;
+    const base::TimeTicks end_time = start_time + duration;
     const double time_step = skew / output_params().sample_rate();
     for (int position = 0;; position += output_params().frames_per_buffer()) {
       const base::TimeTicks task_time =
@@ -354,11 +353,13 @@ class SnooperNodeTest : public testing::TestWithParam<InputAndOutputParams> {
 };
 
 // The skew test here is generating 10 seconds of audio per iteration, with
-// 5*5=25 iterations. That's 250 seconds of audio being generated to check for
+// 3*3=9 iterations. That's 90 seconds of audio being generated to check for
 // skew-related issues. That's a lot of processing power needed! Thus, only
-// enable this test on optimized, non-debug builds, where it will run in a
-// reasonable amount of time. http://crbug.com/842428
-#ifdef NDEBUG
+// enable this test on optimized, non-debug, non-sanitizer builds, where it will
+// run in a reasonable amount of time. http://crbug.com/842428
+#if defined(NDEBUG) && !defined(ADDRESS_SANITIZER) &&           \
+    !defined(THREAD_SANITIZER) && !defined(MEMORY_SANITIZER) && \
+    !defined(UNDEFINED_SANITIZER)
 #define MAYBE_ContinuousAudioFlowAdaptsToSkew ContinuousAudioFlowAdaptsToSkew
 #else
 #define MAYBE_ContinuousAudioFlowAdaptsToSkew \
@@ -370,9 +371,9 @@ TEST_P(SnooperNodeTest, MAYBE_ContinuousAudioFlowAdaptsToSkew) {
   // Note: A skew of 0.999 or 1.001 is very extreme. This is like saying the
   // clocks drift 1 ms for every second that goes by. If the implementation can
   // handle that, it's very likely to do a perfect job in-the-wild.
-  for (double input_skew = 0.999; input_skew <= 1.001; input_skew += 0.0005) {
-    for (double output_skew = 0.999; output_skew <= 1.001;
-         output_skew += 0.0005) {
+  constexpr std::array<double, 3> kSkews = {0.999, 1.0, 1.001};
+  for (double input_skew : kSkews) {
+    for (double output_skew : kSkews) {
       SCOPED_TRACE(testing::Message() << "input_skew=" << input_skew
                                       << ", output_skew=" << output_skew);
 
@@ -409,12 +410,16 @@ TEST_P(SnooperNodeTest, MAYBE_ContinuousAudioFlowAdaptsToSkew) {
 // zero-fill gaps in the output, and don't throw-off the timing/synchronization
 // between input and output.
 TEST_P(SnooperNodeTest, HandlesMissingInput) {
+  // Only 6 seconds of audio are needed to test 5 quarter-second gaps occurring
+  // once per second.
+  constexpr base::TimeDelta kMissingInputDuration = base::Seconds(6);
+
   CreateNewPipeline();
 
   // Schedule all input tasks, with drops to occur once per second for 1/4
   // second duration.
   const base::TimeTicks start_time = task_runner()->NowTicks();
-  const base::TimeTicks end_time = start_time + kTestDuration;
+  const base::TimeTicks end_time = start_time + kMissingInputDuration;
   const double time_step = 1.0 / input_params().sample_rate();
   const int input_frames_in_one_second = input_params().sample_rate();
   // Drop duration: 1/4 second in terms of frames, aligned to frame buffer size.
@@ -440,7 +445,7 @@ TEST_P(SnooperNodeTest, HandlesMissingInput) {
         task_time - start_time);
   }
 
-  ScheduleDefaultRenderTasks();
+  ScheduleDefaultRenderTasks(/*skew=*/1.0, kMissingInputDuration);
   RunAllPendingTasks();
 
   // Check that there is silence in the drop positions, and that tones are
@@ -734,16 +739,17 @@ TEST_P(SnooperNodeTest, StereoIsMixedCorrectly) {
   // Set distinct frequencies for Left and Right channels.
   constexpr double kLeftFreq = 500.0;
   constexpr double kRightFreq = 1200.0;
+  constexpr base::TimeDelta kShortTestDuration = base::Seconds(1);
   group_member()->SetChannelTone(0, kLeftFreq);
   group_member()->SetChannelTone(1, kRightFreq);
 
-  ScheduleDefaultInputTasks();
-  ScheduleDefaultRenderTasks();
+  ScheduleDefaultInputTasks(/*skew=*/1.0, kShortTestDuration);
+  ScheduleDefaultRenderTasks(/*skew=*/1.0, kShortTestDuration);
   RunAllPendingTasks();
 
   // Check near the end of the recording.
   const int check_position =
-      consumer()->GetRecordedFrameCount() - output_params().sample_rate();
+      consumer()->GetRecordedFrameCount() - output_params().frames_per_buffer();
 
   // Left output channel should have the left tone.
   EXPECT_NEAR(kSourceVolume,
@@ -766,12 +772,6 @@ InputAndOutputParams MakeParams(const AudioParametersBuilder& input,
   return {input, output, std::move(name)};
 }
 
-// TODO(crbug.com/474107074): We have to temporarily split ChannelLayoutConfig
-// into a ChannelLayout and a channel count, due to the kEnableHighChannelCounts
-// feature flag being called in `GetConcurrentMaxChannels()` (we need to avoid
-// creating parameterized types that depend on feature list flags, directly or
-// indirectly). Once the flag has been removed, this will no longer be an issue
-// and this can go back to ChannelLayoutConfigs.
 INSTANTIATE_TEST_SUITE_P(
     All,
     SnooperNodeTest,
@@ -787,26 +787,34 @@ INSTANTIATE_TEST_SUITE_P(
                    BaseParams().WithRate(44100).WithFrames(441),
                    "Stereo48000_512ToStereo44100_441"),
         MakeParams(BaseParams()
-                       .WithLayout(media::CHANNEL_LAYOUT_MONO, 1)
+                       .WithLayout(media::ChannelLayoutConfig::Mono())
                        .WithRate(8000)
                        .WithFrames(64),
                    BaseParams(),
                    "Mono8kToStereo48k"),
         MakeParams(BaseParams(),
                    BaseParams()
-                       .WithLayout(media::CHANNEL_LAYOUT_MONO, 1)
+                       .WithLayout(media::ChannelLayoutConfig::Mono())
                        .WithRate(8000)
                        .WithFrames(80),
                    "Stereo48kToMono8k"),
-        MakeParams(BaseParams().WithLayout(media::CHANNEL_LAYOUT_5_1, 6),
-                   BaseParams().WithLayout(media::CHANNEL_LAYOUT_5_1, 6),
-                   "Surround5_1ToSurround5_1"),
-        MakeParams(BaseParams().WithLayout(media::CHANNEL_LAYOUT_5_1, 6),
-                   BaseParams(),
-                   "Surround5_1ToStereo"),
-        MakeParams(BaseParams().WithLayout(media::CHANNEL_LAYOUT_DISCRETE, 1),
-                   BaseParams().WithLayout(media::CHANNEL_LAYOUT_DISCRETE, 7),
-                   "Discrete1ToDiscrete7")),
+        MakeParams(
+            BaseParams().WithLayout(media::ChannelLayoutConfig::FromLayout<
+                                    media::CHANNEL_LAYOUT_5_1>()),
+            BaseParams().WithLayout(media::ChannelLayoutConfig::FromLayout<
+                                    media::CHANNEL_LAYOUT_5_1>()),
+            "Surround5_1ToSurround5_1"),
+        MakeParams(
+            BaseParams().WithLayout(media::ChannelLayoutConfig::FromLayout<
+                                    media::CHANNEL_LAYOUT_5_1>()),
+            BaseParams(),
+            "Surround5_1ToStereo"),
+        MakeParams(
+            BaseParams().WithLayout(
+                media::ChannelLayoutConfig(media::CHANNEL_LAYOUT_DISCRETE, 1)),
+            BaseParams().WithLayout(
+                media::ChannelLayoutConfig(media::CHANNEL_LAYOUT_DISCRETE, 7)),
+            "Discrete1ToDiscrete7")),
     [](const testing::TestParamInfo<InputAndOutputParams>& info) {
       return info.param.name;
     });

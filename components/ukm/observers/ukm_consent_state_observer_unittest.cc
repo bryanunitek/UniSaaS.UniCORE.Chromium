@@ -4,8 +4,12 @@
 
 #include "components/ukm/observers/ukm_consent_state_observer.h"
 
-#include "base/observer_list.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "components/metrics/metrics_features.h"
+#include "components/metrics/metrics_profile_pref_names.h"
+#include "components/metrics/metrics_reporting_choice_service.h"
+#include "components/signin/public/base/consent_level.h"
 #include "components/sync/engine/cycle/sync_cycle_snapshot.h"
 #include "components/sync/protocol/sync_enums.pb.h"
 #include "components/sync/service/sync_token_status.h"
@@ -18,8 +22,7 @@
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/components/kiosk/kiosk_test_utils.h"  // nogncheck
 #include "chromeos/components/mgs/managed_guest_session_test_utils.h"
-#include "components/user_manager/fake_user_manager.h"
-#include "components/user_manager/scoped_user_manager.h"
+#include "components/session_manager/test/user_session_test_environment.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace ukm {
@@ -61,13 +64,7 @@ class MockSyncService : public syncer::TestSyncService {
         true, base::Time::Now(), base::Time::Now(),
         sync_pb::SyncEnums::UNKNOWN_ORIGIN, base::Minutes(1), false));
 
-    NotifyObserversOfStateChanged();
-  }
-
-  void Shutdown() override {
-    for (auto& observer : observers_) {
-      observer.OnSyncShutdown(this);
-    }
+    FireStateChanged();
   }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -81,27 +78,9 @@ class MockSyncService : public syncer::TestSyncService {
     }
 
     GetUserSettings()->SetSelectedOsTypes(false, selected_os_types);
-    NotifyObserversOfStateChanged();
+    FireStateChanged();
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
- private:
-  // syncer::TestSyncService:
-  void AddObserver(syncer::SyncServiceObserver* observer) override {
-    observers_.AddObserver(observer);
-  }
-  void RemoveObserver(syncer::SyncServiceObserver* observer) override {
-    observers_.RemoveObserver(observer);
-  }
-
-  void NotifyObserversOfStateChanged() {
-    for (auto& observer : observers_) {
-      observer.OnStateChanged(this);
-    }
-  }
-
-  // The list of observers of the SyncService state.
-  base::ObserverList<syncer::SyncServiceObserver> observers_;
 };
 
 class TestUkmConsentStateObserver : public UkmConsentStateObserver {
@@ -148,6 +127,8 @@ class UkmConsentStateObserverTest : public testing::TestWithParam<bool> {
   void RegisterUrlKeyedAnonymizedDataCollectionPref(
       sync_preferences::TestingPrefServiceSyncable& prefs) {
     unified_consent::UnifiedConsentService::RegisterPrefs(prefs.registry());
+    metrics::MetricsReportingChoiceService::RegisterProfilePrefs(
+        prefs.registry());
   }
 
   void SetUrlKeyedAnonymizedDataCollectionEnabled(PrefService* prefs,
@@ -423,17 +404,29 @@ TEST_F(UkmConsentStateObserverTest, VerifyConflictingProfilesRevokesConsent) {
 // Test consent state for kiosk.
 class KioskUkmConsentStateObserverTest : public UkmConsentStateObserverTest {
  public:
+  void SetUp() override {
+    UkmConsentStateObserverTest::SetUp();
+    ash::test::UserSessionTestEnvironment::RegisterLocalStatePrefs(
+        local_state_.registry());
+    user_session_test_environment_ =
+        std::make_unique<ash::test::UserSessionTestEnvironment>(&local_state_);
+    chromeos::SetUpFakeChromeAppKioskSession();
+  }
+
+  void TearDown() override {
+    user_session_test_environment_.reset();
+    UkmConsentStateObserverTest::TearDown();
+  }
+
   bool is_ukm_collection_enabled() const { return GetParam(); }
+
+ private:
+  TestingPrefServiceSimple local_state_;
+  std::unique_ptr<ash::test::UserSessionTestEnvironment>
+      user_session_test_environment_;
 };
 
 TEST_P(KioskUkmConsentStateObserverTest, VerifyDefaultConsent) {
-  // Enter Kiosk session.
-  TestingPrefServiceSimple local_state;
-  user_manager::UserManager::RegisterPrefs(local_state.registry());
-  user_manager::ScopedUserManager user_manager(
-      std::make_unique<user_manager::FakeUserManager>(&local_state));
-  chromeos::SetUpFakeChromeAppKioskSession();
-
   sync_preferences::TestingPrefServiceSyncable prefs;
   RegisterUrlKeyedAnonymizedDataCollectionPref(prefs);
   TestUkmConsentStateObserver observer;
@@ -498,6 +491,191 @@ INSTANTIATE_TEST_SUITE_P(MgsUkmConsentStateObserverTest,
                          MgsUkmConsentStateObserverTest,
                          ::testing::Bool());
 
+#else  // !BUILDFLAG(IS_CHROMEOS)
+
+TEST_F(UkmConsentStateObserverTest, AppsConsentWithWebAppsOnly) {
+  sync_preferences::TestingPrefServiceSyncable prefs;
+  RegisterUrlKeyedAnonymizedDataCollectionPref(prefs);
+  SetUrlKeyedAnonymizedDataCollectionEnabled(&prefs, /*enabled=*/true);
+
+  MockSyncService sync;
+  sync.SetMaxTransportState(syncer::SyncService::TransportState::ACTIVE);
+  // Simulate syncer::APPS not being active (e.g., deprecated on non-ChromeOS),
+  // while syncer::WEB_APPS remains active.
+  sync.SetFailedDataTypes({syncer::APPS});
+
+  TestUkmConsentStateObserver observer;
+  observer.StartObserving(&sync, &prefs);
+
+  EXPECT_TRUE(observer.GetUkmConsentState().Has(APPS));
+  ExpectDwaAllowedForAllProfiles(observer, true);
+
+  // If WEB_APPS is not active, APPS consent should be false (even if legacy
+  // APPS is active).
+  sync.SetFailedDataTypes({syncer::WEB_APPS});
+  sync.FireStateChanged();
+
+  EXPECT_FALSE(observer.GetUkmConsentState().Has(APPS));
+}
+
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+class UkmConsentStateObserverMigrationTest
+    : public UkmConsentStateObserverTest {
+ public:
+  UkmConsentStateObserverMigrationTest() {
+    scoped_feature_list_.InitAndEnableFeature(
+        metrics::features::kRestructureMetricsConsentSettings);
+  }
+};
+
+TEST_F(UkmConsentStateObserverMigrationTest, Migration_SignedOut_MSBBEnabled) {
+  base::HistogramTester histogram_tester;
+  MockSyncService sync;
+  sync.SetSignedOut();
+
+  sync_preferences::TestingPrefServiceSyncable prefs;
+  RegisterUrlKeyedAnonymizedDataCollectionPref(prefs);
+  SetUrlKeyedAnonymizedDataCollectionEnabled(&prefs, true);
+
+  TestUkmConsentStateObserver observer;
+  observer.StartObserving(&sync, &prefs);
+
+  EXPECT_TRUE(prefs.GetBoolean(metrics::prefs::kAdvancedReportingEnabled));
+  EXPECT_TRUE(
+      prefs.GetBoolean(metrics::prefs::kAdvancedReportingProfileMigrationDone));
+
+  histogram_tester.ExpectUniqueSample(
+      "UKM.ConsentObserver.ConsentStateBeforeRestructure",
+      /*sample=*/2, 1);  // kMsbbEnabledWithAppAndExtensionSync
+}
+
+TEST_F(UkmConsentStateObserverMigrationTest, Migration_SignedIn_AllEnabled) {
+  base::HistogramTester histogram_tester;
+  MockSyncService sync;
+  sync.SetSignedIn(signin::ConsentLevel::kSignin);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  sync.SetAppSync(true);
+#endif
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  // Mark apps and extensions sync as supported (registered) and enabled.
+  syncer::UserSelectableTypeSet registered_types = {
+      syncer::UserSelectableType::kExtensions};
+  syncer::UserSelectableTypeSet selected_types = {
+      syncer::UserSelectableType::kExtensions};
+#if !BUILDFLAG(IS_CHROMEOS)
+  registered_types.Put(syncer::UserSelectableType::kApps);
+  selected_types.Put(syncer::UserSelectableType::kApps);
+#endif
+  sync.GetUserSettings()->SetRegisteredSelectableTypes(registered_types);
+  sync.GetUserSettings()->SetSelectedTypes(/*sync_everything=*/false,
+                                           selected_types);
+#endif
+
+  sync_preferences::TestingPrefServiceSyncable prefs;
+  RegisterUrlKeyedAnonymizedDataCollectionPref(prefs);
+  SetUrlKeyedAnonymizedDataCollectionEnabled(&prefs, true);
+
+  TestUkmConsentStateObserver observer;
+  observer.StartObserving(&sync, &prefs);
+
+  EXPECT_TRUE(prefs.GetBoolean(metrics::prefs::kAdvancedReportingEnabled));
+  EXPECT_TRUE(
+      prefs.GetBoolean(metrics::prefs::kAdvancedReportingProfileMigrationDone));
+
+  histogram_tester.ExpectUniqueSample(
+      "UKM.ConsentObserver.ConsentStateBeforeRestructure",
+      /*sample=*/2, 1);  // kMsbbEnabledWithAppAndExtensionSync
+}
+
+TEST_F(UkmConsentStateObserverMigrationTest, Migration_SignedIn_APPSDisabled) {
+  base::HistogramTester histogram_tester;
+  MockSyncService sync;
+  sync.SetSignedIn(signin::ConsentLevel::kSignin);
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  // Mark apps and extensions sync as supported, but only extensions enabled.
+  syncer::UserSelectableTypeSet registered_types = {
+      syncer::UserSelectableType::kExtensions};
+#if !BUILDFLAG(IS_CHROMEOS)
+  registered_types.Put(syncer::UserSelectableType::kApps);
+#endif
+  sync.GetUserSettings()->SetRegisteredSelectableTypes(registered_types);
+  sync.GetUserSettings()->SetSelectedTypes(
+      /*sync_everything=*/false, {syncer::UserSelectableType::kExtensions});
+#endif
+
+  sync_preferences::TestingPrefServiceSyncable prefs;
+  RegisterUrlKeyedAnonymizedDataCollectionPref(prefs);
+  SetUrlKeyedAnonymizedDataCollectionEnabled(&prefs, true);
+
+  TestUkmConsentStateObserver observer;
+  observer.StartObserving(&sync, &prefs);
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  // On mobile platforms, apps sync is not supported, so it is ignored. MSBB is
+  // enabled, so migration succeeds!
+  EXPECT_TRUE(prefs.GetBoolean(metrics::prefs::kAdvancedReportingEnabled));
+  histogram_tester.ExpectUniqueSample(
+      "UKM.ConsentObserver.ConsentStateBeforeRestructure",
+      /*sample=*/2, 1);  // kMsbbEnabledWithAppAndExtensionSync
+#else
+  // On desktop platforms, apps sync is supported but disabled, so migration
+  // fails!
+  EXPECT_FALSE(prefs.GetBoolean(metrics::prefs::kAdvancedReportingEnabled));
+  histogram_tester.ExpectUniqueSample(
+      "UKM.ConsentObserver.ConsentStateBeforeRestructure",
+      /*sample=*/1, 1);  // kMsbbEnabledWithoutAppOrExtensionSync
+#endif
+  EXPECT_TRUE(
+      prefs.GetBoolean(metrics::prefs::kAdvancedReportingProfileMigrationDone));
+}
+
+TEST_F(UkmConsentStateObserverMigrationTest, Migration_AlreadyDone) {
+  base::HistogramTester histogram_tester;
+  MockSyncService sync;
+  sync.SetSignedIn(signin::ConsentLevel::kSignin);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  sync.SetAppSync(true);
+#endif
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  syncer::UserSelectableTypeSet registered_types = {
+      syncer::UserSelectableType::kExtensions};
+  syncer::UserSelectableTypeSet selected_types = {
+      syncer::UserSelectableType::kExtensions};
+#if !BUILDFLAG(IS_CHROMEOS)
+  registered_types.Put(syncer::UserSelectableType::kApps);
+  selected_types.Put(syncer::UserSelectableType::kApps);
+#endif
+  sync.GetUserSettings()->SetRegisteredSelectableTypes(registered_types);
+  sync.GetUserSettings()->SetSelectedTypes(/*sync_everything=*/false,
+                                           selected_types);
+#endif
+
+  sync_preferences::TestingPrefServiceSyncable prefs;
+  RegisterUrlKeyedAnonymizedDataCollectionPref(prefs);
+  SetUrlKeyedAnonymizedDataCollectionEnabled(&prefs, true);
+
+  // Set post-migration states where user disabled advanced reporting.
+  prefs.SetBoolean(metrics::prefs::kAdvancedReportingEnabled, false);
+  prefs.SetBoolean(metrics::prefs::kAdvancedReportingProfileMigrationDone,
+                   true);
+
+  TestUkmConsentStateObserver observer;
+  observer.StartObserving(&sync, &prefs);
+
+  // Migration should not re-run.
+  EXPECT_FALSE(prefs.GetBoolean(metrics::prefs::kAdvancedReportingEnabled));
+  EXPECT_TRUE(
+      prefs.GetBoolean(metrics::prefs::kAdvancedReportingProfileMigrationDone));
+
+  histogram_tester.ExpectUniqueSample(
+      "UKM.ConsentObserver.ConsentStateBeforeRestructure",
+      /*sample=*/2, 1);  // kMsbbEnabledWithAppAndExtensionSync
+}
 
 }  // namespace ukm

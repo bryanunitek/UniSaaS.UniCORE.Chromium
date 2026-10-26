@@ -16,7 +16,6 @@
 #include "components/omnibox/browser/autocomplete_provider.h"
 #include "components/omnibox/browser/autocomplete_result.h"
 #include "components/omnibox/browser/fake_autocomplete_provider.h"
-#include "components/omnibox/browser/suggestion_group_util.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -40,7 +39,11 @@ class OmniboxRowGroupedViewBrowserTest : public OmniboxPopupViewViewsTest {
 
   void SetUpOnMainThread() override {
     OmniboxPopupViewViewsTest::SetUpOnMainThread();
-    provider_ = new FakeAutocompleteProvider(AutocompleteProvider::TYPE_SEARCH);
+    if (IsSkipped()) {
+      return;
+    }
+    provider_ =
+        new FakeAutocompleteProvider(AutocompleteProvider::Type::kSearch);
     controller()->autocomplete_controller()->providers_.push_back(provider_);
   }
 
@@ -50,7 +53,7 @@ class OmniboxRowGroupedViewBrowserTest : public OmniboxPopupViewViewsTest {
                                 bool is_contextual_search_suggestion = false,
                                 int relevance = 100) {
     AutocompleteMatch match(nullptr, relevance, false,
-                            AutocompleteMatchType::SEARCH_SUGGEST);
+                            omnibox::AutocompleteMatchType::kSearchSuggest);
     match.contents = description;
     match.contents_class.push_back({0, ACMatchClassification::NONE});
     match.description = description;
@@ -68,7 +71,7 @@ class OmniboxRowGroupedViewBrowserTest : public OmniboxPopupViewViewsTest {
     edit_model()->SetUserText(u"foo");
     AutocompleteInput input(
         u"foo", metrics::OmniboxEventProto::BLANK,
-        ChromeAutocompleteSchemeClassifier(browser()->profile()));
+        ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
     input.set_omit_asynchronous_matches(true);
     controller()->autocomplete_controller()->Start(input);
     ASSERT_TRUE(controller()->IsPopupOpen());

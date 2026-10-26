@@ -34,12 +34,11 @@ SingleFieldFillRouter::~SingleFieldFillRouter() = default;
 
 void SingleFieldFillRouter::OnWillSubmitForm(
     const FormData& form,
-    const FormStructure* form_structure,
-    bool is_autocomplete_enabled) {
+    const FormStructure* form_structure) {
   CHECK(!form_structure ||
         form.fields().size() == form_structure->field_count());
-  autocomplete_history_manager_->OnWillSubmitFormWithFields(
-      form.fields(), form_structure, is_autocomplete_enabled);
+  autocomplete_history_manager_->OnWillSubmitFormWithFields(form.fields(),
+                                                            form_structure);
   if (iban_manager_) {
     iban_manager_->OnWillSubmitFormWithFields();
   }
@@ -51,11 +50,12 @@ void SingleFieldFillRouter::CancelPendingQueries() {
 
 void SingleFieldFillRouter::OnRemoveCurrentSingleFieldSuggestion(
     const std::u16string& field_name,
+    const std::u16string& field_label,
     const std::u16string& value,
     SuggestionType type) {
   if (type == SuggestionType::kAutocompleteEntry) {
     autocomplete_history_manager_->OnRemoveCurrentSingleFieldSuggestion(
-        field_name, value, type);
+        field_name, field_label, value, type);
   }
 }
 
@@ -63,8 +63,7 @@ void SingleFieldFillRouter::OnSingleFieldSuggestionSelected(
     const Suggestion& suggestion) {
   SuggestionType type = suggestion.type;
   if (merchant_promo_code_manager_ &&
-      (type == SuggestionType::kMerchantPromoCodeEntry ||
-       type == SuggestionType::kSeePromoCodeDetails)) {
+      type == SuggestionType::kMerchantPromoCodeEntry) {
     merchant_promo_code_manager_->OnSingleFieldSuggestionSelected(suggestion);
   } else if (iban_manager_ && type == SuggestionType::kIbanEntry) {
     iban_manager_->OnSingleFieldSuggestionSelected(suggestion);

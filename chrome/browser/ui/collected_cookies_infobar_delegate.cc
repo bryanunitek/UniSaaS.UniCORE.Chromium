@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/collected_cookies_infobar_delegate.h"
 
+#include <memory>
+
 #include "base/check_op.h"
 #include "build/build_config.h"
 #include "chrome/browser/infobars/confirm_infobar_creator.h"
@@ -49,7 +51,7 @@ int CollectedCookiesInfoBarDelegate::GetButtons() const {
 
 std::u16string CollectedCookiesInfoBarDelegate::GetButtonLabel(
     InfoBarButton button) const {
-  DCHECK_EQ(BUTTON_OK, button);
+  CHECK_EQ(BUTTON_OK, button, base::NotFatalUntil::M162);
   return l10n_util::GetStringUTF16(IDS_COLLECTED_COOKIES_INFOBAR_BUTTON);
 }
 

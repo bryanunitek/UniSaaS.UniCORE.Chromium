@@ -21,6 +21,10 @@ bool DisableGeminiEligibilityCheck() {
   return false;
 }
 
+bool EnablePassageEmbedderGpuExecution() {
+  return false;
+}
+
 bool DisableAppGroupAccess() {
   return true;
 }
@@ -90,6 +94,13 @@ std::unique_ptr<commerce::ShoppingService> CreateShoppingService(
     ProfileIOS* profile) {
   return nullptr;
 }
+std::unique_ptr<gcm::GCMProfileService> CreateGCMProfileService(
+    ProfileIOS* profile) {
+  return nullptr;
+}
+std::unique_ptr<ExtensionService> CreateExtensionService(ProfileIOS* profile) {
+  return nullptr;
+}
 void DataSharingServiceHooks(
     data_sharing::DataSharingService* data_sharing_service) {}
 std::unique_ptr<ShareKitService> CreateShareKitService(
@@ -125,6 +136,11 @@ base::TimeDelta PasswordCheckMinimumDuration() {
 }
 
 std::unique_ptr<drive::DriveService> GetOverriddenDriveService() {
+  return nullptr;
+}
+
+std::unique_ptr<signin::AccountPreviewDataService>
+GetOverriddenAccountPreviewDataService() {
   return nullptr;
 }
 
@@ -170,5 +186,11 @@ void InjectFakeTabsInBrowser(Browser* browser) {
 id<ReauthenticationProtocol> GetFakeReauthenticationModule() {
   return nil;
 }
+
+bool ShouldPauseStartupAtBackgroundStage() {
+  return false;
+}
+
+void UnpauseStartupAtBackgroundStage() {}
 
 }  // namespace tests_hook

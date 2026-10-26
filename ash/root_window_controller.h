@@ -101,9 +101,10 @@ class ASH_EXPORT RootWindowController {
   // Returns the RootWindowController of the target root window.
   static RootWindowController* ForTargetRootWindow();
 
-  static std::vector<RootWindowController*> root_window_controllers() {
-    return root_window_controllers_ ? *root_window_controllers_
-                                    : std::vector<RootWindowController*>();
+  static std::vector<raw_ptr<RootWindowController>> root_window_controllers() {
+    return root_window_controllers_
+               ? *root_window_controllers_
+               : std::vector<raw_ptr<RootWindowController>>();
   }
 
   AshWindowTreeHost* ash_host() { return ash_host_.get(); }
@@ -137,9 +138,7 @@ class ASH_EXPORT RootWindowController {
     touch_hud_projection_ = hud;
   }
 
-  RootWindowLayoutManager* root_window_layout_manager() {
-    return root_window_layout_manager_;
-  }
+  RootWindowLayoutManager* GetRootWindowLayoutManager();
 
   bool is_shutting_down() const { return is_shutting_down_; }
 
@@ -282,8 +281,7 @@ class ASH_EXPORT RootWindowController {
   // Initializes the RootWindowController based on |root_window_type|.
   void Init(RootWindowType root_window_type);
 
-  void InitLayoutManagers(
-      std::unique_ptr<RootWindowLayoutManager> root_window_layout_manager);
+  void InitLayoutManagers();
 
   AccessibilityPanelLayoutManager* GetAccessibilityPanelLayoutManager() const;
 
@@ -311,12 +309,6 @@ class ASH_EXPORT RootWindowController {
   void OnFirstWallpaperWidgetSet();
 
   std::unique_ptr<AshWindowTreeHost> ash_host_;
-  // |ash_host_| as a WindowTreeHost.
-  raw_ptr<aura::WindowTreeHost, DanglingUntriaged> window_tree_host_;
-
-  // LayoutManagers are owned by the window they are installed on.
-  raw_ptr<RootWindowLayoutManager, DanglingUntriaged>
-      root_window_layout_manager_ = nullptr;
 
   std::unique_ptr<WallpaperWidgetController> wallpaper_widget_controller_;
 
@@ -369,7 +361,7 @@ class ASH_EXPORT RootWindowController {
 
   std::unique_ptr<WorkAreaInsets> work_area_insets_;
 
-  static std::vector<RootWindowController*>* root_window_controllers_;
+  static std::vector<raw_ptr<RootWindowController>>* root_window_controllers_;
 };
 
 }  // namespace ash

@@ -21,6 +21,7 @@
 // order.
 //
 // This class is thread-compatible.
+// This class is NOT exception-safe.
 //
 // Iterators point into the list and should be stable in the face of
 // mutations, except for an iterator pointing to an element that was just
@@ -146,66 +147,68 @@ class linked_hash_set {
 
   linked_hash_set() {}
 
-  explicit linked_hash_set(size_t bucket_count, const hasher& hash = hasher(),
+  explicit linked_hash_set(size_t reservation_size,
+                           const hasher& hash = hasher(),
                            const key_equal& eq = key_equal(),
                            const allocator_type& alloc = allocator_type())
-      : set_(bucket_count, Wrapped<hasher>(hash), Wrapped<key_equal>(eq),
+      : set_(reservation_size, Wrapped<hasher>(hash), Wrapped<key_equal>(eq),
              alloc),
         list_(alloc) {}
 
-  linked_hash_set(size_t bucket_count, const hasher& hash,
+  linked_hash_set(size_t reservation_size, const hasher& hash,
                   const allocator_type& alloc)
-      : linked_hash_set(bucket_count, hash, key_equal(), alloc) {}
+      : linked_hash_set(reservation_size, hash, key_equal(), alloc) {}
 
-  linked_hash_set(size_t bucket_count, const allocator_type& alloc)
-      : linked_hash_set(bucket_count, hasher(), key_equal(), alloc) {}
+  linked_hash_set(size_t reservation_size, const allocator_type& alloc)
+      : linked_hash_set(reservation_size, hasher(), key_equal(), alloc) {}
 
   explicit linked_hash_set(const allocator_type& alloc)
       : linked_hash_set(0, hasher(), key_equal(), alloc) {}
 
   template <class InputIt>
-  linked_hash_set(InputIt first, InputIt last, size_t bucket_count = 0,
+  linked_hash_set(InputIt first, InputIt last, size_t reservation_size = 0,
                   const hasher& hash = hasher(),
                   const key_equal& eq = key_equal(),
                   const allocator_type& alloc = allocator_type())
-      : linked_hash_set(bucket_count, hash, eq, alloc) {
+      : linked_hash_set(reservation_size, hash, eq, alloc) {
     insert(first, last);
   }
 
   template <class InputIter>
-  linked_hash_set(InputIter first, InputIter last, size_t bucket_count,
+  linked_hash_set(InputIter first, InputIter last, size_t reservation_size,
                   const hasher& hash, const allocator_type& alloc)
-      : linked_hash_set(first, last, bucket_count, hash, key_equal(), alloc) {}
+      : linked_hash_set(first, last, reservation_size, hash, key_equal(),
+                        alloc) {}
 
   template <class InputIter>
-  linked_hash_set(InputIter first, InputIter last, size_t bucket_count,
+  linked_hash_set(InputIter first, InputIter last, size_t reservation_size,
                   const allocator_type& alloc)
-      : linked_hash_set(first, last, bucket_count, hasher(), key_equal(),
+      : linked_hash_set(first, last, reservation_size, hasher(), key_equal(),
                         alloc) {}
 
   template <class InputIt>
   linked_hash_set(InputIt first, InputIt last, const allocator_type& alloc)
-      : linked_hash_set(first, last, /*bucket_count=*/0, hasher(), key_equal(),
-                        alloc) {}
+      : linked_hash_set(first, last, /*reservation_size=*/0, hasher(),
+                        key_equal(), alloc) {}
 
-  linked_hash_set(std::initializer_list<key_type> init, size_t bucket_count = 0,
-                  const hasher& hash = hasher(),
+  linked_hash_set(std::initializer_list<key_type> init,
+                  size_t reservation_size = 0, const hasher& hash = hasher(),
                   const key_equal& eq = key_equal(),
                   const allocator_type& alloc = allocator_type())
-      : linked_hash_set(init.begin(), init.end(), bucket_count, hash, eq,
+      : linked_hash_set(init.begin(), init.end(), reservation_size, hash, eq,
                         alloc) {}
 
-  linked_hash_set(std::initializer_list<key_type> init, size_t bucket_count,
+  linked_hash_set(std::initializer_list<key_type> init, size_t reservation_size,
                   const allocator_type& alloc)
-      : linked_hash_set(init, bucket_count, hasher(), key_equal(), alloc) {}
+      : linked_hash_set(init, reservation_size, hasher(), key_equal(), alloc) {}
 
-  linked_hash_set(std::initializer_list<key_type> init, size_t bucket_count,
+  linked_hash_set(std::initializer_list<key_type> init, size_t reservation_size,
                   const hasher& hash, const allocator_type& alloc)
-      : linked_hash_set(init, bucket_count, hash, key_equal(), alloc) {}
+      : linked_hash_set(init, reservation_size, hash, key_equal(), alloc) {}
 
   linked_hash_set(std::initializer_list<key_type> init,
                   const allocator_type& alloc)
-      : linked_hash_set(init, /*bucket_count=*/0, hasher(), key_equal(),
+      : linked_hash_set(init, /*reservation_size=*/0, hasher(), key_equal(),
                         alloc) {}
 
   linked_hash_set(const linked_hash_set& other)
@@ -234,6 +237,7 @@ class linked_hash_set {
     if (get_allocator() == other.get_allocator()) {
       *this = std::move(other);
     } else {
+      reserve(other.size());
       CopyFrom(std::move(other));
     }
   }
@@ -253,10 +257,33 @@ class linked_hash_set {
 
   linked_hash_set& operator=(linked_hash_set&& other) noexcept {
     if (this != &other) {
-      set_ = std::move(other.set_);
-      list_ = std::move(other.list_);
-      other.set_.clear();
-      other.list_.clear();
+      using AllocTraits = std::allocator_traits<Alloc>;
+      if constexpr (AllocTraits::propagate_on_container_move_assignment::
+                        value) {
+        set_ = std::move(other.set_);
+        list_ = std::move(other.list_);
+        other.clear();
+      } else if (AllocTraits::is_always_equal::value ||
+                 get_allocator() == other.get_allocator()) {
+        // The allocators are equal, so the list can take over other's nodes.
+        // std::list's move assignment can not be used here: with an allocator
+        // that does not propagate on move assignment it element-assigns, which
+        // is ill-formed for value types that are not assignable, such as
+        // linked_hash_map's std::pair<const K, V>.
+        clear();
+        set_ = std::move(other.set_);
+        list_.splice(list_.end(), other.list_);
+        other.set_.clear();
+      } else if constexpr (!AllocTraits::is_always_equal::value) {
+        // The list can not take over other's nodes, so move each element into
+        // a new node allocated with this set's allocator and rebuild the index
+        // over them, adopting other's hash and equality state. This is the
+        // same pattern as raw_hash_set::move_assign.
+        clear();
+        set_ = SetType(other.size(), other.set_.hash_function(),
+                       other.set_.key_eq(), get_allocator());
+        CopyFrom(std::move(other));
+      }
     }
     return *this;
   }
@@ -374,7 +401,8 @@ class linked_hash_set {
   std::pair<iterator, bool> insert(const key_arg<K>& k) {
     return InsertInternal(list_.end(), k);
   }
-  template <typename K = key_type, K* = nullptr>
+  template <typename K = key_type,
+            std::enable_if_t<!std::is_reference_v<K>, int> = 0>
   std::pair<iterator, bool> insert(key_arg<K>&& k) {
     return InsertInternal(list_.end(), std::move(k));
   }
@@ -387,11 +415,12 @@ class linked_hash_set {
   iterator insert(const_iterator hint, const key_arg<K>& k) {
     return InsertInternal(hint, k).first;
   }
-  template <
-      typename K = key_type, K* = nullptr,
-      std::enable_if_t<!std::is_convertible_v<key_arg<K>&&, const_iterator> &&
-                           !std::is_convertible_v<key_arg<K>&&, iterator>,
-                       int> = 0>
+  template <typename K = key_type,
+            std::enable_if_t<
+                !std::is_reference_v<K> &&
+                    !std::is_convertible_v<key_arg<K>&&, const_iterator> &&
+                    !std::is_convertible_v<key_arg<K>&&, iterator>,
+                int> = 0>
   iterator insert(const_iterator hint, key_arg<K>&& k) {
     return InsertInternal(hint, std::move(k)).first;
   }
@@ -448,7 +477,7 @@ class linked_hash_set {
 
   node_type extract(const_iterator position) {
     set_.erase(position);
-    ListType extracted_node_list;
+    ListType extracted_node_list(get_allocator());
     extracted_node_list.splice(extracted_node_list.end(), list_, position);
     return node_type(std::move(extracted_node_list));
   }
@@ -458,7 +487,7 @@ class linked_hash_set {
   node_type extract(const key_arg<K>& key) {
     auto node = set_.extract(key);
     if (node.empty()) return node_type();
-    ListType extracted_node_list;
+    ListType extracted_node_list(get_allocator());
     extracted_node_list.splice(extracted_node_list.end(), list_, node.value());
     return node_type(std::move(extracted_node_list));
   }
@@ -491,13 +520,19 @@ class linked_hash_set {
     for (auto& elem : other.list_) {
       set_.insert(list_.insert(list_.end(), std::move(elem)));
     }
+    if constexpr (!std::is_const_v<std::remove_reference_t<Other>>) {
+      // When moving from `other`, `std::move(elem)` above mutates the elements
+      // of `other.list_` in place, invalidating `other.set_`'s index over them.
+      // Clear `other` so its `set_` and `list_` remain consistent and empty.
+      other.clear();
+    }
     assert(set_.size() == list_.size());
   }
 
   template <typename... Args>
   std::pair<iterator, bool> EmplaceInternal(const_iterator hint,
                                             Args&&... args) {
-    ListType node_donor;
+    ListType node_donor(get_allocator());
     auto list_iter =
         node_donor.emplace(node_donor.end(), std::forward<Args>(args)...);
     auto ins = set_.insert(list_iter);

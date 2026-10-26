@@ -21,8 +21,7 @@
 //
 // Voters register themselves with VoteObservers, which issues them a private
 // VotingChannel using their VotingChannelFactory. Voters can then use their
-// VotingChannel to submit new votes (SubmitVote()), change an existing vote
-// (ChangeVote()) or invalidate an existing vote (InvalidateVote()).
+// VotingChannel to set, update, or remove votes (SetVote()).
 //
 // All votes submitted through a VotingChannel must be invalidated before the
 // channel is destroyed, and all VotingChannels issued by a
@@ -30,14 +29,16 @@
 // is all verified via debug checks.
 //
 // The VoteObserver will receive a notification that is tagged with the ID of
-// originating VotingChannel every time a vote is submitted (OnVoteSubmitted()),
-// changed (OnVoteChanged()) or invalidated (OnVoteInvalidated()).
+// originating VotingChannel every time a vote is set or removed (OnVoteSet()).
 //
 // None of these objects are thread-safe, and they should all be used from a
 // single sequence. In practice this will be the PM sequence.
 
 #include <cstring>
+#include <optional>
+#include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "base/check.h"
 #include "base/check_op.h"
@@ -49,6 +50,30 @@
 #include "base/types/pass_key.h"
 
 namespace performance_manager::voting {
+
+namespace internal {
+
+template <typename T>
+inline constexpr bool kIsVariant = false;
+template <typename... Ts>
+inline constexpr bool kIsVariant<std::variant<Ts...>> = true;
+
+// Returns true if `context` is a null pointer, or a variant currently holding
+// a null pointer (including a default-constructed variant whose first
+// alternative is a pointer). Other context types are never considered null.
+template <typename T>
+bool IsNullContext(const T& context) {
+  if constexpr (std::is_pointer_v<T>) {
+    return context == nullptr;
+  } else if constexpr (kIsVariant<T>) {
+    return std::visit([](const auto& alt) { return IsNullContext(alt); },
+                      context);
+  } else {
+    return false;
+  }
+}
+
+}  // namespace internal
 
 // Contains a single vote. Specifically allows copying, etc, so as to be STL
 // container friendly.
@@ -91,22 +116,11 @@ class VoteObserver {
 
   virtual ~VoteObserver();
 
-  // Invoked when a |vote| is submitted for |context|. |voter_id| identifies the
-  // voting channel.
-  virtual void OnVoteSubmitted(VoterId<VoteImpl> voter_id,
-                               const ContextType* context,
-                               const VoteImpl& vote) = 0;
-
-  // Invoked when the vote for |context| is changed to |new_vote|. |voter_id|
-  // identifies the voting channel.
-  virtual void OnVoteChanged(VoterId<VoteImpl> voter_id,
-                             const ContextType* context,
-                             const VoteImpl& new_vote) = 0;
-
-  // Invoked when a vote for |context| is invalided. |voter_id| identifies the
-  // voting channel.
-  virtual void OnVoteInvalidated(VoterId<VoteImpl> voter_id,
-                                 const ContextType* context) = 0;
+  // Invoked when the vote for |context| is set, changed, or removed (if
+  // std::nullopt). |voter_id| identifies the voting channel.
+  virtual void OnVoteSet(VoterId<VoteImpl> voter_id,
+                         ContextType context,
+                         const std::optional<VoteImpl>& vote) = 0;
 };
 
 template <class VoteImpl>
@@ -128,17 +142,20 @@ class VotingChannel {
   VotingChannel& operator=(VotingChannel&& rhs);
   ~VotingChannel();
 
-  // Submits a vote through this voting channel. Can only be called if this
-  // VotingChannel is valid.
-  void SubmitVote(const ContextType* context, const VoteImpl& vote);
+  // Sets or updates a vote through this voting channel. Can only be called if
+  // this VotingChannel is valid. Passing std::nullopt removes an existing vote.
+  void SetVote(ContextType context, const VoteImpl& vote);
+  void SetVote(ContextType context, const std::optional<VoteImpl>& vote);
 
-  // Modifies an existing vote. Can only be called if this VotingChannel is
-  // valid.
-  void ChangeVote(const ContextType* context, const VoteImpl& new_vote);
-
-  // Invalidates an existing vote. Can only be called if this VotingChannel is
-  // valid.
-  void InvalidateVote(const ContextType* context);
+  // Legacy aliases for SetVote, kept for backwards compatibility with existing
+  // voters.
+  void SubmitVote(ContextType context, const VoteImpl& vote) {
+    SetVote(context, vote);
+  }
+  void ChangeVote(ContextType context, const VoteImpl& new_vote) {
+    SetVote(context, new_vote);
+  }
+  void InvalidateVote(ContextType context) { SetVote(context, std::nullopt); }
 
   // Returns true if this VotingChannel is valid.
   bool IsValid() const;
@@ -162,7 +179,7 @@ class VotingChannel {
   VoterId<VoteImpl> voter_id_;
 
 #if DCHECK_IS_ON()
-  base::flat_map<const ContextType*, VoteImpl> votes_;
+  base::flat_map<ContextType, VoteImpl> votes_;
 #endif  // DCHECK_IS_ON()
 };
 
@@ -274,48 +291,26 @@ VotingChannel<VoteImpl>::~VotingChannel() {
 }
 
 template <class VoteImpl>
-void VotingChannel<VoteImpl>::SubmitVote(const ContextType* context,
-                                         const VoteImpl& vote) {
-  DCHECK(IsValid());
-
-#if DCHECK_IS_ON()
-  // Ensure that only one vote is submitted for a given |context| at any time.
-  bool inserted = votes_.emplace(context, vote).second;
-  DCHECK(inserted);
-#endif  // DCHECK_IS_ON()
-
-  factory_->GetObserver(PassKey())->OnVoteSubmitted(voter_id_, context, vote);
+void VotingChannel<VoteImpl>::SetVote(ContextType context,
+                                      const VoteImpl& vote) {
+  SetVote(context, std::make_optional(vote));
 }
 
 template <class VoteImpl>
-void VotingChannel<VoteImpl>::ChangeVote(const ContextType* context,
-                                         const VoteImpl& new_vote) {
+void VotingChannel<VoteImpl>::SetVote(ContextType context,
+                                      const std::optional<VoteImpl>& vote) {
   DCHECK(IsValid());
+  CHECK(!internal::IsNullContext(context));
 
 #if DCHECK_IS_ON()
-  // Ensure that a vote exists for this context.
-  auto it = votes_.find(context);
-  CHECK(it != votes_.end());
-
-  // Ensure the vote was actually changed.
-  DCHECK(new_vote != it->second);
-  it->second = new_vote;
+  if (vote.has_value()) {
+    votes_[context] = *vote;
+  } else {
+    votes_.erase(context);
+  }
 #endif  // DCHECK_IS_ON()
 
-  factory_->GetObserver(PassKey())->OnVoteChanged(voter_id_, context, new_vote);
-}
-
-template <class VoteImpl>
-void VotingChannel<VoteImpl>::InvalidateVote(const ContextType* context) {
-  DCHECK(IsValid());
-
-#if DCHECK_IS_ON()
-  // Ensure that an existing vote is invalidated.
-  size_t removed = votes_.erase(context);
-  DCHECK_EQ(removed, 1u);
-#endif  // DCHECK_IS_ON()
-
-  factory_->GetObserver(PassKey())->OnVoteInvalidated(voter_id_, context);
+  factory_->GetObserver(PassKey())->OnVoteSet(voter_id_, context, vote);
 }
 
 template <class VoteImpl>
@@ -354,8 +349,7 @@ void VotingChannel<VoteImpl>::Take(VotingChannel<VoteImpl>&& rhs) {
 
 #if DCHECK_IS_ON()
   // Track outstanding votes across moves.
-  votes_ =
-      std::exchange(rhs.votes_, base::flat_map<const ContextType*, VoteImpl>());
+  votes_ = std::exchange(rhs.votes_, base::flat_map<ContextType, VoteImpl>());
 #endif  // DCHECK_IS_ON()
 }
 

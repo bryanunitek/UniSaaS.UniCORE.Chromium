@@ -4,12 +4,12 @@
 
 #include "third_party/blink/renderer/modules/breakout_box/pushable_media_stream_audio_source.h"
 
-#include "base/compiler_specific.h"
+#include <ranges>
+
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "base/types/zip.h"
 #include "media/base/audio_bus.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom-blink.h"
@@ -68,7 +68,7 @@ class FakeMediaStreamAudioSink : public WebMediaStreamAudioSink {
 
     if (expected_data_) {
       for (auto [expected_ch, actual_ch] :
-           base::zip(expected_data_->AllChannels(), data.AllChannels())) {
+           std::views::zip(expected_data_->AllChannels(), data.AllChannels())) {
         EXPECT_EQ(actual_ch, expected_ch);
       }
     }
@@ -281,14 +281,14 @@ TEST_P(PushableMediaStreamAudioSourceTest, ConvertsFormatInternally) {
   interleaved_buffer->set_timestamp(kDefaultTimeStamp);
 
   // Create interleaved data, with negative values on the second channel.
-  float* interleaved_buffer_data =
-      reinterpret_cast<float*>(interleaved_buffer->channel_data()[0].get());
+  base::span<float> interleaved_buffer_data =
+      interleaved_buffer->interleaved_data_cast<float>();
   for (int i = 0; i < kFrames; ++i) {
     float value = static_cast<float>(i) / kFrames;
 
-    interleaved_buffer_data[0] = value;
-    UNSAFE_TODO(interleaved_buffer_data[1]) = -value;
-    UNSAFE_TODO(interleaved_buffer_data += 2);
+    auto frame = interleaved_buffer_data.take_first<kChannels>();
+    frame[0] = value;
+    frame[1] = -value;
   }
 
   // Create reference planar data.

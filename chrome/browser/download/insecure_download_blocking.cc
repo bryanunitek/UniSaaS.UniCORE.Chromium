@@ -30,6 +30,7 @@
 #include "net/base/url_util.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -83,8 +84,9 @@ const base::FeatureParam<std::string> kWarnExtensionList(
     "");
 
 const char kSafeExtensions[] =
-    ("txt,css,json,csv,tsv,jpg,jpeg,png,gif,tif,tiff,ico,webp,aac,midi,ogg,"
-     "wav,webm,mp3,webm,mp4,mpeg,mov,wmv");
+    ("txt,css,json,csv,tsv,"
+     "jpg,jpeg,png,gif,tif,tiff,ico,webp,avif,"
+     "aac,midi,ogg,wav,webm,mp3,mp4,m4a,flac,mpeg,mov,wmv");
 
 // Get appropriate enum value for the initiator/download security state combo
 // for histogram reporting. |dl_secure| signifies whether the download was
@@ -166,7 +168,7 @@ struct InsecureDownloadData {
     extension_ = path.FinalExtension();
 #endif
     if (!extension_.empty()) {
-      DCHECK_EQ(extension_[0], '.');
+      CHECK_EQ(extension_[0], '.', base::NotFatalUntil::M161);
       extension_ = extension_.substr(1);  // Omit leading dot.
     }
 
@@ -322,7 +324,7 @@ bool ContainsExtension(const std::string& extension_list,
   for (const auto& item :
        base::SplitStringPiece(extension_list, ",", base::TRIM_WHITESPACE,
                               base::SPLIT_WANT_NONEMPTY)) {
-    DCHECK_EQ(base::ToLowerASCII(item), item);
+    CHECK_EQ(base::ToLowerASCII(item), item, base::NotFatalUntil::M161);
     if (base::EqualsCaseInsensitiveASCII(extension, item))
       return true;
   }
@@ -389,8 +391,10 @@ bool IsDownloadPermittedByContentSettings(
 
   // When there's only one rule, it's the default wildcard rule.
   if (settings.size() == 1) {
-    DCHECK(settings[0].primary_pattern == ContentSettingsPattern::Wildcard());
-    DCHECK(settings[0].secondary_pattern == ContentSettingsPattern::Wildcard());
+    CHECK(settings[0].primary_pattern == ContentSettingsPattern::Wildcard(),
+          base::NotFatalUntil::M161);
+    CHECK(settings[0].secondary_pattern == ContentSettingsPattern::Wildcard(),
+          base::NotFatalUntil::M161);
     return settings[0].GetContentSetting() == CONTENT_SETTING_ALLOW;
   }
 

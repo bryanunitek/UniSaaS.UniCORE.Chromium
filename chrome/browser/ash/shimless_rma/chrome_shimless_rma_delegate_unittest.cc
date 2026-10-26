@@ -12,7 +12,6 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
@@ -30,6 +29,7 @@
 #include "chrome/browser/web_applications/isolated_web_apps/commands/install_isolated_web_app_command.h"
 #include "chrome/browser/web_applications/isolated_web_apps/install/isolated_web_app_install_source.h"
 #include "chrome/browser/web_applications/isolated_web_apps/iwa_permissions_policy_cache.h"
+#include "chrome/browser/web_applications/model/iwa_update_info.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app.h"
@@ -69,7 +69,8 @@ const char kDevIwaId[] =
 class ChromeShimlessRmaDelegateTest : public testing::Test {
  public:
   ChromeShimlessRmaDelegateTest()
-      : chrome_shimless_rma_delegate_(ChromeShimlessRmaDelegate(nullptr)),
+      : chrome_shimless_rma_delegate_(
+            TestingBrowserProcess::GetGlobal()->local_state()),
         task_environment_(content::BrowserTaskEnvironment::REAL_IO_THREAD) {}
   ~ChromeShimlessRmaDelegateTest() override = default;
 
@@ -82,13 +83,11 @@ class ChromeShimlessRmaDelegateTest : public testing::Test {
 
 // Validates a QrCode Bitmap is correctly converted to a string.
 TEST_F(ChromeShimlessRmaDelegateTest, GenerateQrCode) {
-  base::RunLoop run_loop;
   chrome_shimless_rma_delegate_.GenerateQrCode(
       "www.sample-url.com",
       base::BindLambdaForTesting([&](const std::string& qr_code_image) {
         EXPECT_FALSE(qr_code_image.empty());
       }));
-  run_loop.RunUntilIdle();
 }
 
 class FakeServiceWorkerContext : public content::FakeServiceWorkerContext {
@@ -130,6 +129,7 @@ class FakeWebAppCommandScheduler : public web_app::WebAppCommandScheduler {
       std::unique_ptr<ScopedKeepAlive> keep_alive,
       std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive,
       web_app::WebAppCommandScheduler::InstallIsolatedWebAppCallback callback,
+      std::optional<web_app::IwaUpdateInfo> optional_update_info,
       const base::Location& call_location) override {
     EXPECT_EQ(install_source.install_surface(),
               webapps::WebappInstallSource::IWA_SHIMLESS_RMA);
@@ -217,19 +217,19 @@ class ChromeShimlessRmaDelegatePrepareDiagnosticsAppProfileTest
             ash::features::kShimlessRMA3pDiagnosticsAllowPermissionPolicy,
         },
         {});
-    ASSERT_TRUE(testing_profile_manager_.SetUp());
-    profile_ = testing_profile_manager_.CreateTestingProfile(
+    profile_ = testing_profile_manager()->CreateTestingProfile(
         kShimlessRmaAppBrowserContextBaseName);
-
-    fake_diagnostics_app_profile_helper_delegate_ =
-        std::make_unique<FakeDiagnosticsAppProfileHelperDelegate>(profile_);
 
     InitializeExtensionSystem(profile_);
     ::web_app::test::AwaitStartWebAppProviderAndSubsystems(profile_);
 
-    chrome_shimless_rma_delegate_
-        .SetDiagnosticsAppProfileHelperDelegateForTesting(
-            fake_diagnostics_app_profile_helper_delegate_.get());
+    auto fake_diagnostics_app_profile_helper_delegate =
+        std::make_unique<FakeDiagnosticsAppProfileHelperDelegate>(profile_);
+    fake_diagnostics_app_profile_helper_delegate_ =
+        fake_diagnostics_app_profile_helper_delegate.get();
+    chrome_shimless_rma_delegate_ = std::make_unique<ChromeShimlessRmaDelegate>(
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        std::move(fake_diagnostics_app_profile_helper_delegate));
   }
 
   void InitializeExtensionSystem(Profile* profile) {
@@ -264,6 +264,8 @@ class ChromeShimlessRmaDelegatePrepareDiagnosticsAppProfileTest
   }
 
   void TearDown() override {
+    fake_diagnostics_app_profile_helper_delegate_ = nullptr;
+    chrome_shimless_rma_delegate_.reset();
     profile_ = nullptr;
     extensions::ExtensionServiceTestBase::TearDown();
   }
@@ -275,7 +277,7 @@ class ChromeShimlessRmaDelegatePrepareDiagnosticsAppProfileTest
   PrepareResult PrepareDiagnosticsAppBrowserContext(
       const base::FilePath& crx_path) {
     base::test::TestFuture<PrepareResult> future;
-    chrome_shimless_rma_delegate_.PrepareDiagnosticsAppBrowserContext(
+    chrome_shimless_rma_delegate_->PrepareDiagnosticsAppBrowserContext(
         crx_path, base::FilePath{kFakeIwaPath}, future.GetCallback());
     return future.Get();
   }
@@ -283,13 +285,11 @@ class ChromeShimlessRmaDelegatePrepareDiagnosticsAppProfileTest
  protected:
   raw_ptr<TestingProfile> profile_;
   base::test::ScopedFeatureList feature_list_;
-  TestingProfileManager testing_profile_manager_{
-      TestingBrowserProcess::GetGlobal()};
   variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
       variations::VariationsIdsProvider::Mode::kUseSignedInState};
-  std::unique_ptr<FakeDiagnosticsAppProfileHelperDelegate>
+  raw_ptr<FakeDiagnosticsAppProfileHelperDelegate>
       fake_diagnostics_app_profile_helper_delegate_;
-  ChromeShimlessRmaDelegate chrome_shimless_rma_delegate_{nullptr};
+  std::unique_ptr<ChromeShimlessRmaDelegate> chrome_shimless_rma_delegate_;
 };
 
 // Verify the whole flow of `PrepareDiagnosticsAppProfile`.

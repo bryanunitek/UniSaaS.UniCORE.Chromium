@@ -25,10 +25,11 @@
 namespace blink {
 
 class ComputedStyle;
+class CounterStyle;
 class CSSNumericLiteralValue;
 class CSSStyleValue;
 class CSSValue;
-class FlowTolerance;
+class FitTolerance;
 class FontFamily;
 class PositionArea;
 class StyleColor;
@@ -167,8 +168,8 @@ class CORE_EXPORT ComputedStyleUtils {
                                          const ComputedStyle&,
                                          bool force_computed_value = false);
   static CSSValue* ValueForGridPosition(const GridPosition&);
-  static CSSValue* ValueForFlowTolerance(const FlowTolerance&,
-                                         const ComputedStyle&);
+  static CSSValue* ValueForFitTolerance(const FitTolerance&,
+                                        const ComputedStyle&);
   static CSSValue* ValueForGridLanesDirection(const GridLanesDirection&,
                                               const ComputedStyle&);
   static std::optional<gfx::SizeF> UsedBoxSize(const LayoutObject&);
@@ -306,11 +307,19 @@ class CORE_EXPORT ComputedStyleUtils {
   static CSSValue* ValueForCounterDirectives(
       const ComputedStyle&,
       CountersAttachmentContext::Type type);
+  static const CSSValue* ValueForSymbolsFunction(const CounterStyle&);
   static CSSValue* ValueForShape(const ComputedStyle&,
                                  bool allow_visited_style,
                                  ShapeValue*,
                                  CSSValuePhase value_phase);
   static CSSValueList* ValueForBorderRadiusShorthand(const ComputedStyle&);
+  static const CSSValue* ValueForBorderRadiusCornerShorthand(
+      const CSSProperty& first_corner,
+      const CSSProperty& second_corner,
+      const ComputedStyle& style,
+      const LayoutObject* layout_object,
+      bool allow_visited_style,
+      CSSValuePhase value_phase);
   static CSSValueList* ValueForCornerShapeShorthand(const ComputedStyle&);
   static CSSValue* StrokeDashArrayToCSSValueList(const SVGDashArray*,
                                                  const ComputedStyle&);

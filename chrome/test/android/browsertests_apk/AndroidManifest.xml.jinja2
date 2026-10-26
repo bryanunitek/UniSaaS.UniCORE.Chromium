@@ -24,9 +24,16 @@
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
     {% block extra_uses_permissions %}
     {% endblock %}
+
+    <queries>
+        <intent>
+            <action android:name="org.chromium.chrome.browser.extensions.messaging.action.NATIVE_MESSAGING" />
+        </intent>
+    </queries>
 
     <application android:name="org.chromium.android_browsertests_apk.ChromeBrowserTestsApplication"
             android:label="ChromeBrowserTests"
@@ -175,11 +182,7 @@
 
         <!-- NOTE: If you change the values of "android:process" for any of the below services,
              you also need to update kHelperProcessExecutableName in chrome_constants.cc. -->
-        {% set num_sandboxed_services = 40 %}
-        <meta-data android:name="org.chromium.content.browser.NUM_SANDBOXED_SERVICES"
-                   android:value="{{ num_sandboxed_services }}"/>
-
-        {% for i in range(num_sandboxed_services) %}
+        {% for i in range(2) %}
         <service android:name="org.chromium.content.app.SandboxedProcessService{{ i }}"
                  android:process=":sandboxed_process{{ i }}"
                  android:isolatedProcess="true"

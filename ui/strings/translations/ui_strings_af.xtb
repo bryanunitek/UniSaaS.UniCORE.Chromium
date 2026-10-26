@@ -11,7 +11,6 @@
 <translation id="1253734725326687145">Raakteiken is regs bo geskuif. Tik hier.</translation>
 <translation id="1266864766717917324">Kon nie <ph name="CONTENT_TYPE" /> deel nie.</translation>
 <translation id="1269641567813814718">Windows</translation>
-<translation id="1291104554099683393">Probeer die teks in kleiner stukkies deel.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Links na regs</translation>
 <translation id="1383876407941801731">Soek</translation>
@@ -38,7 +37,6 @@
 <translation id="1901303067676059328">Kies almal</translation>
 <translation id="19085484004813472">Dit is 'n nuwe kenmerk</translation>
 <translation id="2006524834898217237">Maak seker dat hierdie toestel aan die internet gekoppel is.</translation>
-<translation id="208586643495776849">Probeer asseblief weer</translation>
 <translation id="2111134541987263231">Skakel <ph name="BEGIN_BOLD" />Laat toe in Incognito<ph name="END_BOLD" /> aan</translation>
 <translation id="2141853158323869627">{DAYS,plural, =1{1 d.}other{# d.}}</translation>
 <translation id="2148716181193084225">Vandag</translation>
@@ -85,7 +83,6 @@
 <translation id="3306688585798492231">Ingeboude skerm</translation>
 <translation id="335581015389089642">Spraak</translation>
 <translation id="3372635229069101468">Klik <ph name="BEGIN_BOLD" />Besonderhede<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Teks is te groot</translation>
 <translation id="3406306243914553062">HTML-inhoud</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 dag oor}other{# dae oor}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" />-lêer</translation>
@@ -128,7 +125,6 @@
 <translation id="5046499563572181734">Tik hier</translation>
 <translation id="5076340679995252485">Plak</translation>
 <translation id="520299402983819650"><ph name="QUANTITY" /> PB</translation>
-<translation id="5278860589123563674">Kon nie stuur nie</translation>
 <translation id="5283101102242354279">Skakel ’n uitbreiding in Incognito aan:</translation>
 <translation id="528468243742722775">Einde</translation>
 <translation id="5329858601952122676">Vee uit</translation>

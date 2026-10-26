@@ -4,22 +4,31 @@
 
 package org.chromium.chrome.browser.pdf;
 
+import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.SystemClock;
 import android.os.ext.SdkExtensions;
 import android.text.TextUtils;
 import android.view.View;
 
 import androidx.annotation.IntDef;
+import androidx.annotation.VisibleForTesting;
 import androidx.fragment.app.FragmentActivity;
 
 import org.jni_zero.CalledByNative;
 
 import org.chromium.base.ContentUriUtils;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.metrics.RecordUserAction;
+import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -80,6 +89,14 @@ public class PdfUtils {
         PdfToolbarAction.OTHER,
         PdfToolbarAction.ZOOM_IN,
         PdfToolbarAction.ZOOM_OUT,
+        PdfToolbarAction.FIT_TO_PAGE,
+        PdfToolbarAction.FIT_TO_WIDTH,
+        PdfToolbarAction.PAGE_NAVIGATION,
+        PdfToolbarAction.PRINT,
+        PdfToolbarAction.TWO_PAGE_VIEW,
+        PdfToolbarAction.SINGLE_PAGE_VIEW,
+        PdfToolbarAction.DOCUMENT_PROPERTIES,
+        PdfToolbarAction.ANNOTATION,
         PdfToolbarAction.NUM_ENTRIES
     })
     @Retention(RetentionPolicy.SOURCE)
@@ -87,12 +104,83 @@ public class PdfUtils {
         int OTHER = 0;
         int ZOOM_IN = 1;
         int ZOOM_OUT = 2;
+        int FIT_TO_PAGE = 3;
+        int FIT_TO_WIDTH = 4;
+        int PAGE_NAVIGATION = 5;
+        int PRINT = 6;
+        int TWO_PAGE_VIEW = 7;
+        int SINGLE_PAGE_VIEW = 8;
+        int DOCUMENT_PROPERTIES = 9;
+        int ANNOTATION = 10;
 
-        int NUM_ENTRIES = 3;
+        int NUM_ENTRIES = 11;
     }
     // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidPdfToolbarAction)
 
+    // LINT.IfChange(PdfSelectionMenuItem)
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+    @IntDef({
+        PdfSelectionMenuItem.OTHER,
+        PdfSelectionMenuItem.SHARE,
+        PdfSelectionMenuItem.WEB_SEARCH,
+        PdfSelectionMenuItem.TRANSLATE,
+        PdfSelectionMenuItem.NUM_ENTRIES
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface PdfSelectionMenuItem {
+        int OTHER = 0;
+        int SHARE = 1;
+        int WEB_SEARCH = 2;
+        int TRANSLATE = 3;
+
+        int NUM_ENTRIES = 4;
+    }
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidPdfSelectionMenuItem)
+
+    // LINT.IfChange(PdfHyperlinkClickResult)
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+    @IntDef({
+        PdfHyperlinkClickResult.SUCCESS_LOAD_INITIATED,
+        PdfHyperlinkClickResult.BLOCKED_INVALID_SCHEME,
+        PdfHyperlinkClickResult.IGNORED_V2_DISABLED,
+        PdfHyperlinkClickResult.NUM_ENTRIES
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface PdfHyperlinkClickResult {
+        int SUCCESS_LOAD_INITIATED = 0;
+        int BLOCKED_INVALID_SCHEME = 1;
+        int IGNORED_V2_DISABLED = 2;
+
+        int NUM_ENTRIES = 3;
+    }
+
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidPdfHyperlinkClickResult)
+
+    // LINT.IfChange(AndroidPdfFrozenStateWhenDisplayed)
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+    @IntDef({
+        AndroidPdfFrozenStateWhenDisplayed.NOT_FROZEN,
+        AndroidPdfFrozenStateWhenDisplayed.FROZEN_NO_UNSAVED_CHANGES,
+        AndroidPdfFrozenStateWhenDisplayed.FROZEN_WITH_UNSAVED_CHANGES,
+        AndroidPdfFrozenStateWhenDisplayed.NUM_ENTRIES
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface AndroidPdfFrozenStateWhenDisplayed {
+        int NOT_FROZEN = 0;
+        int FROZEN_NO_UNSAVED_CHANGES = 1;
+        int FROZEN_WITH_UNSAVED_CHANGES = 2;
+
+        int NUM_ENTRIES = 3;
+    }
+
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidPdfFrozenStateWhenDisplayed)
+
     private static final String TAG = "PdfUtils";
+    private static final String PDF_LAUNCHER_ACTIVITY_ALIAS =
+            "org.chromium.chrome.browser.document.PdfLauncherActivityAlias";
     private static final Set<String> TRANSIENT_PDF_SCHEMES =
             Set.of(
                     UrlConstants.HTTP_SCHEME,
@@ -102,6 +190,7 @@ public class PdfUtils {
     private static final Set<String> PERMANENT_PDF_SCHEMES =
             Set.of(UrlConstants.CONTENT_SCHEME, UrlConstants.FILE_SCHEME);
     private static boolean sShouldOpenPdfInlineForTesting;
+    private static @Nullable Boolean sInlinePdfV2EditEnabledForTesting;
 
     /**
      * Determines whether the navigation is to a pdf file.
@@ -170,6 +259,36 @@ public class PdfUtils {
         }
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                 && SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) >= 13;
+    }
+
+    /** Selectively updates whether Chrome is registered as a handler for PDF intents. */
+    public static void updatePdfLauncherActivityEnabled() {
+        PostTask.postTask(
+                TaskTraits.BEST_EFFORT_MAY_BLOCK,
+                () -> {
+                    Context context = ContextUtils.getApplicationContext();
+                    PackageManager packageManager = context.getPackageManager();
+                    ComponentName pdfComponentName =
+                            new ComponentName(context, PDF_LAUNCHER_ACTIVITY_ALIAS);
+
+                    boolean isEnabled =
+                            isPlatformSupportedForEdit()
+                                    && ChromeFeatureList.sPdfLauncherActivity.isEnabled();
+                    int newState =
+                            isEnabled
+                                    ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                                    : PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
+
+                    try {
+                        if (packageManager.getComponentEnabledSetting(pdfComponentName)
+                                != newState) {
+                            packageManager.setComponentEnabledSetting(
+                                    pdfComponentName, newState, PackageManager.DONT_KILL_APP);
+                        }
+                    } catch (IllegalArgumentException e) {
+                        // The component might not be present in some test APKs.
+                    }
+                });
     }
 
     /**
@@ -256,8 +375,37 @@ public class PdfUtils {
 
     static void setShouldOpenPdfInlineForTesting(boolean shouldOpenPdfInlineForTesting) {
         sShouldOpenPdfInlineForTesting = shouldOpenPdfInlineForTesting;
+        ResettersForTesting.register(() -> sShouldOpenPdfInlineForTesting = false);
     }
 
+    /**
+     * Generates a content URI for accessing the PDF. For Incognito mode, it creates a secure,
+     * thread-safe in-memory stream URI.
+     *
+     * @param pdfFilePath Path to the PDF file (might be a /proc/ path in Incognito).
+     * @param pdfFileName Name of the PDF file.
+     * @param tabId Unique identifier for the tab.
+     * @param isIncognito Whether the request is in Incognito mode.
+     * @return A Uri to access the PDF.
+     */
+    public static @Nullable Uri getContentUri(
+            String pdfFilePath, String pdfFileName, String tabId, boolean isIncognito) {
+        if (isIncognito) {
+            Uri uri = Uri.parse(pdfFilePath);
+            String scheme = uri.getScheme();
+            if (UrlConstants.CONTENT_SCHEME.equals(scheme)
+                    || UrlConstants.FILE_SCHEME.equals(scheme)) {
+                // PDF androidx library accepts file or content URI for local PDF opened in
+                // incognito.
+                return uri;
+            }
+            return PdfContentProvider.registerStream(tabId, pdfFilePath, pdfFileName);
+        } else {
+            return getUriFromFilePath(pdfFilePath);
+        }
+    }
+
+    @VisibleForTesting
     public static @Nullable Uri getUriFromFilePath(String pdfFilePath) {
         Uri uri = Uri.parse(pdfFilePath);
         String scheme = uri.getScheme();
@@ -269,29 +417,47 @@ public class PdfUtils {
             } else {
                 // Convert filepath to Uri for transient downloads.
                 File file = new File(pdfFilePath);
-                return ChromeFileProvider.generateUri(file);
+                Uri fileUri = ChromeFileProvider.generateUri(file);
+                if (fileUri != null) {
+                    return fileUri.buildUpon()
+                            .appendQueryParameter(
+                                    "reload", String.valueOf(SystemClock.elapsedRealtime()))
+                            .build();
+                }
+                return null;
             }
-        } catch (Exception e) {
+        } catch (IllegalArgumentException | NullPointerException e) {
             Log.e(TAG, "Couldn't generate Uri: " + e);
             return null;
         }
     }
 
     /**
-     * Record boolean histogram Android.Pdf.IsFrozenWhenDisplayed.
+     * Records the enumerated histogram Android.Pdf.FrozenStateWhenDisplayed for a native page that
+     * is about to be displayed, e.g. when its tab is selected from the tab switcher or tab strip.
      *
-     * @param nativePage When the native page is a pdf page, record whether it is frozen before the
-     *     tab is displayed.
+     * <p>Nothing is recorded for pages that are not PDF pages. For a frozen PDF page the unsaved
+     * changes state is the one captured when the page was frozen.
+     *
+     * @param nativePage The native page being displayed, or null if the tab has none.
      */
-    public static void recordIsPdfFrozen(@Nullable NativePage nativePage) {
-        if (nativePage == null) {
+    public static void recordPdfFrozenStateWhenDisplayed(@Nullable NativePage nativePage) {
+        if (nativePage == null || !nativePage.isPdf()) {
             return;
         }
-        if (!nativePage.isPdf()) {
-            return;
+        @AndroidPdfFrozenStateWhenDisplayed int state;
+        if (!nativePage.isFrozen()) {
+            state = AndroidPdfFrozenStateWhenDisplayed.NOT_FROZEN;
+        } else {
+            state =
+                    nativePage.hasUnsavedChanges()
+                            ? AndroidPdfFrozenStateWhenDisplayed.FROZEN_WITH_UNSAVED_CHANGES
+                            : AndroidPdfFrozenStateWhenDisplayed.FROZEN_NO_UNSAVED_CHANGES;
         }
-        RecordHistogram.recordBooleanHistogram(
-                "Android.Pdf.IsFrozenWhenDisplayed", nativePage.isFrozen());
+        RecordHistogram.recordEnumeratedHistogram(
+                "Android.Pdf.FrozenStateWhenDisplayed",
+                state,
+                AndroidPdfFrozenStateWhenDisplayed.NUM_ENTRIES);
     }
 
     /**
@@ -322,34 +488,113 @@ public class PdfUtils {
      * @return the decoded download url; or null if the original url is not a pdf page url.
      */
     public static @Nullable String decodePdfPageUrl(@Nullable String originalUrl) {
+        String decodedUrl = decodePdfPageUrlInternal(originalUrl);
+        if (originalUrl != null && originalUrl.startsWith(UrlConstants.PDF_URL)) {
+            recordIsPdfDownloadUrlDecoded(decodedUrl != null);
+        }
+        return decodedUrl;
+    }
+
+    private static @Nullable String decodePdfPageUrlInternal(@Nullable String originalUrl) {
         if (originalUrl == null || !originalUrl.startsWith(UrlConstants.PDF_URL)) {
             return null;
         }
         Uri uri = Uri.parse(originalUrl);
         try {
             // #getQueryParameter has already decoded the url.
-            String decodedUrl = uri.getQueryParameter(UrlConstants.PDF_URL_QUERY_PARAM);
-            recordIsPdfDownloadUrlDecoded(true);
-            return decodedUrl;
-        } catch (Exception e) {
-            recordIsPdfDownloadUrlDecoded(false);
+            return uri.getQueryParameter(UrlConstants.PDF_URL_QUERY_PARAM);
+        } catch (UnsupportedOperationException | NullPointerException e) {
             Log.e(TAG, "Unsupported encoding: " + e.getMessage());
             return null;
         }
     }
 
     /**
+     * Parse the page number from the "#page=N" fragment in the url, e.g.
+     * "https://example.com/a.pdf#page=3". This is the de-facto way to link to a specific page of a
+     * PDF and is supported by Chrome on other platforms. Returns the 1-based page number, or 0 if
+     * the url has no valid "page" fragment.
+     *
+     * @param url The pdf url, which may be a wrapped pdf page url, a content/file uri, or an
+     *     http(s) url.
+     * @return The 1-based page number, or 0 if not specified.
+     */
+    public static int getPageNumberFromUrl(@Nullable String url) {
+        if (url == null) {
+            return 0;
+        }
+        // The fragment may live on the url directly, or on the original download url that is
+        // encoded inside a wrapped pdf page url. Check the url first, then the decoded
+        // download url.
+        int pageNumber = parsePageNumberFromFragment(url);
+        if (pageNumber == 0) {
+            String decodedUrl = decodePdfPageUrl(url);
+            if (decodedUrl != null) {
+                pageNumber = parsePageNumberFromFragment(decodedUrl);
+            }
+        }
+        return pageNumber;
+    }
+
+    private static int parsePageNumberFromFragment(String url) {
+        String encodedFragment;
+        try {
+            encodedFragment = Uri.parse(url).getEncodedFragment();
+        } catch (Exception e) {
+            return 0;
+        }
+        if (TextUtils.isEmpty(encodedFragment)) {
+            return 0;
+        }
+        // The fragment uses the same "key=value&..." syntax as a query string, e.g.
+        // "nameddest=chapter1&page=3&zoom=100", so reuse Uri's query parser instead of
+        // splitting it manually.
+        String page;
+        try {
+            page =
+                    new Uri.Builder()
+                            .encodedQuery(encodedFragment)
+                            .build()
+                            .getQueryParameter("page");
+        } catch (UnsupportedOperationException e) {
+            return 0;
+        }
+        if (page == null) {
+            return 0;
+        }
+        try {
+            int pageNumber = Integer.parseInt(page.trim());
+            return pageNumber > 0 ? pageNumber : 0;
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /**
      * Extracts a valid HTTP(S) URL from a PDF page URL for re-downloading.
      *
-     * <p>This method decodes the provided {@code originalUrl} and verifies that the result uses a
-     * supported scheme (HTTP or HTTPS).
+     * <p>If the provided {@code originalUrl} is already a raw HTTP or HTTPS URL, it is returned
+     * directly without decoding. Otherwise, this method decodes the encoded PDF page URL and
+     * verifies that the resulting URL uses HTTP or HTTPS.
+     *
+     * <p>Warning: Because any HTTP(S) URL is allowed to pass through directly, this method does not
+     * validate whether the URL actually points to a PDF resource. Callers must independently verify
+     * that they are in a PDF context before using this method.
      *
      * @param originalUrl The original, potentially encoded, URL string to process.
-     * @return The decoded URL string if it is a valid HTTP(S) URL; {@code null} otherwise.
+     * @return The raw or decoded URL string if it is a valid HTTP(S) URL; {@code null} otherwise.
      */
-    public static @Nullable String getPdfReDownloadUrl(String originalUrl) {
-        String decodedUrl = decodePdfPageUrl(originalUrl);
+    public static @Nullable String getPdfReDownloadUrl(@Nullable String originalUrl) {
+        if (originalUrl == null) {
+            return null;
+        }
 
+        if (originalUrl.startsWith(UrlConstants.HTTP_URL_PREFIX)
+                || originalUrl.startsWith(UrlConstants.HTTPS_URL_PREFIX)) {
+            return originalUrl;
+        }
+
+        String decodedUrl = decodePdfPageUrlInternal(originalUrl);
         if (decodedUrl == null) {
             return null;
         }
@@ -360,6 +605,33 @@ public class PdfUtils {
         }
 
         return null;
+    }
+
+    /**
+     * Returns whether two PDF URLs (which may be raw HTTP(S)/content/file URLs or encoded {@code
+     * chrome-native://pdf/...} URLs) refer to the same PDF document URL.
+     *
+     * <p>Note: This method only normalizes and compares the URLs; it does not verify whether the
+     * URLs actually point to PDF resources. Callers are expected to ensure that the provided URLs
+     * represent PDF documents.
+     *
+     * @param url1 The first URL to compare.
+     * @param url2 The second URL to compare.
+     * @return True if both URLs resolve to the same canonical URL; false otherwise (including if
+     *     either URL is null).
+     */
+    public static boolean isPdfUrlMatch(@Nullable String url1, @Nullable String url2) {
+        if (url1 == null || url2 == null) {
+            return false;
+        }
+
+        String decodedUrl1 = decodePdfPageUrlInternal(url1);
+        String canonical1 = decodedUrl1 != null ? decodedUrl1 : url1;
+
+        String decodedUrl2 = decodePdfPageUrlInternal(url2);
+        String canonical2 = decodedUrl2 != null ? decodedUrl2 : url2;
+
+        return TextUtils.equals(canonical1, canonical2);
     }
 
     /**
@@ -409,6 +681,47 @@ public class PdfUtils {
         return isInlinePdfV2Enabled() && ChromeFeatureList.sInlinePdfV2Download.isEnabled();
     }
 
+    /**
+     * Checks whether form filling for inline PDF V2 feature is enabled.
+     *
+     * @return {@code true} if form filling for inline PDF V2 feature is enabled, {@code false}
+     *     otherwise.
+     */
+    public static boolean isInlinePdfV2FormFillingEnabled() {
+        return isInlinePdfV2Enabled() && ChromeFeatureList.sInlinePdfV2EnableFormFilling.getValue();
+    }
+
+    /**
+     * Checks whether edit mode for inline PDF V2 feature is enabled.
+     *
+     * @return {@code true} if edit mode for inline PDF V2 feature is enabled, {@code false}
+     *     otherwise.
+     */
+    public static boolean isInlinePdfV2EditEnabled() {
+        if (sInlinePdfV2EditEnabledForTesting != null) {
+            return sInlinePdfV2EditEnabledForTesting;
+        }
+        if (!isInlinePdfV2Enabled()) {
+            return false;
+        }
+        return isPlatformSupportedForEdit();
+    }
+
+    // Android 15 (Vanilla Ice Cream / Extension 13) only supports read-only viewing.
+    private static boolean isPlatformSupportedForEdit() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            return true;
+        }
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                && SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) >= 18;
+    }
+
+    static void setInlinePdfV2EditEnabledForTesting(
+            @Nullable Boolean inlinePdfV2EditEnabledForTesting) {
+        sInlinePdfV2EditEnabledForTesting = inlinePdfV2EditEnabledForTesting;
+        ResettersForTesting.register(() -> sInlinePdfV2EditEnabledForTesting = null);
+    }
+
     /** Returns {@code true} if {@link PdfViewFragment} is reused on activity restart. */
     public static boolean isReuseFragmentEnabled() {
         return ChromeFeatureList.sPdfReuseFragment.isEnabled();
@@ -421,6 +734,24 @@ public class PdfUtils {
     public static void recordToolbarAction(@PdfToolbarAction int action) {
         RecordHistogram.recordEnumeratedHistogram(
                 "Android.Pdf.ToolbarAction", action, PdfToolbarAction.NUM_ENTRIES);
+    }
+
+    public static void recordDiscardAnnotations() {
+        RecordUserAction.record("Android.Pdf.DiscardAnnotations");
+    }
+
+    public static void recordEditFabAction() {
+        RecordUserAction.record("Android.Pdf.EditFab");
+    }
+
+    public static void recordSelectionMenuItem(@PdfSelectionMenuItem int menuItem) {
+        RecordHistogram.recordEnumeratedHistogram(
+                "Android.Pdf.SelectionMenuItem", menuItem, PdfSelectionMenuItem.NUM_ENTRIES);
+    }
+
+    public static void recordHyperlinkClickResult(@PdfHyperlinkClickResult int result) {
+        RecordHistogram.recordEnumeratedHistogram(
+                "Android.Pdf.Hyperlink.ClickResult", result, PdfHyperlinkClickResult.NUM_ENTRIES);
     }
 
     public static void recordPdfLoadResultDetail(@PdfLoadResult int loadResult) {
@@ -450,11 +781,6 @@ public class PdfUtils {
                 "Android.Pdf.AssistContent.IsWorkProfile", isWorkProfile);
     }
 
-    public static void recordGetAssistantPackageResult(boolean success) {
-        RecordHistogram.recordBooleanHistogram(
-                "Android.Pdf.AssistContent.GetAssistantPackageResult", success);
-    }
-
     private static void recordIsPdfDownloadUrlEncoded(boolean encodeResult) {
         RecordHistogram.recordBooleanHistogram("Android.Pdf.DownloadUrlEncoded", encodeResult);
     }
@@ -465,6 +791,10 @@ public class PdfUtils {
 
     public static void recordIsUriNull(boolean isNull) {
         RecordHistogram.recordBooleanHistogram("Android.Pdf.UriIsNull", isNull);
+    }
+
+    public static void recordRecoveredFragmentUriMatches(boolean matches) {
+        RecordHistogram.recordBooleanHistogram("Android.Pdf.RecoveredFragmentUriMatches", matches);
     }
 
     /**
@@ -533,5 +863,37 @@ public class PdfUtils {
         // Fallback: block any other internal Chrome providers to prevent accidental exposure of
         // sensitive data (e.g. ChromeBrowserProvider).
         return false;
+    }
+
+    /**
+     * Deletes the transient PDF file if the PDF is from a downloadable web URL.
+     *
+     * <p>Content URIs (e.g. incognito PDFs wrapped by PdfContentProvider) cannot be deleted
+     * directly as files; their lifecycle is managed separately (see PdfPage#destroy()). We don't
+     * check for "file://" because: 1. Transient files we download always use raw file paths. 2.
+     * Local files (which may use "file://" or "content://") have a null redownloadUrl and are
+     * skipped below.
+     *
+     * @param filepath The filepath of the transient PDF file.
+     * @param url The native page URL or download URL of the PDF.
+     */
+    public static void maybeDeleteTransientFile(@Nullable String filepath, @Nullable String url) {
+        if (filepath != null && !filepath.startsWith(UrlConstants.CONTENT_URL_PREFIX)) {
+            String redownloadUrl = url != null ? getPdfReDownloadUrl(url) : null;
+            if (redownloadUrl != null) {
+                PostTask.postTask(
+                        TaskTraits.BEST_EFFORT_MAY_BLOCK,
+                        () -> {
+                            try {
+                                File file = new File(filepath);
+                                if (file.exists()) {
+                                    file.delete();
+                                }
+                            } catch (SecurityException ignored) {
+                                // Ignore exceptions if the transient file cannot be deleted.
+                            }
+                        });
+            }
+        }
     }
 }

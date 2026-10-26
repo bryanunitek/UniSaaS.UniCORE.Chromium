@@ -9,14 +9,14 @@ import static androidx.test.espresso.matcher.ViewMatchers.assertThat;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.Matchers.equalTo;
 import static org.junit.Assert.assertNotNull;
-import static org.mockito.ArgumentMatchers.any;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
-import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece.Type.ADDRESS_INFO;
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece.Type.TITLE;
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece.getType;
+import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabProperties.IS_DEFAULT_A11Y_FOCUS_REQUESTED;
 
 import org.junit.After;
 import org.junit.Before;
@@ -27,8 +27,8 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
@@ -40,35 +40,34 @@ import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.UserInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.UserInfoField;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.modelutil.ListObservable;
 
 /** Controller tests for the address accessory sheet. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class AddressAccessorySheetControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private Profile mProfile;
-    @Mock private AccessorySheetTabView mMockView;
     @Mock private ListObservable.ListObserver<Void> mMockItemListObserver;
 
+    private AccessorySheetTabView mView;
     private AddressAccessorySheetCoordinator mCoordinator;
     private AccessorySheetTabItemsModel mSheetDataPieces;
 
     @Before
     public void setUp() {
-        when(mMockView.getContext()).thenReturn(ContextUtils.getApplicationContext());
+        mView = new AccessorySheetTabView(ContextUtils.getApplicationContext(), null);
         mCoordinator =
                 new AddressAccessorySheetCoordinator(
-                        RuntimeEnvironment.application, mProfile, null);
+                        RuntimeEnvironment.getApplication(), mProfile, null);
         assertNotNull(mCoordinator);
         mSheetDataPieces = mCoordinator.getSheetDataPiecesForTesting();
     }
 
     @After
     public void tearDown() {
-        ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(false);
+        AccessibilityStateTestHelper.setAccessibilityEnabledForTesting(false);
     }
 
     @Test
@@ -80,24 +79,22 @@ public class AddressAccessorySheetControllerTest {
 
     @Test
     public void testSetsViewAdapterOnTabCreation() {
-        when(mMockView.getParent()).thenReturn(mMockView);
         KeyboardAccessoryData.Tab tab = mCoordinator.getTab();
         assertNotNull(tab);
         assertNotNull(tab.getListener());
-        tab.getListener().onTabCreated(mMockView);
-        verify(mMockView).setAdapter(any());
+        tab.getListener().onTabCreated(mView);
+        assertNotNull(mView.getAdapter());
     }
 
     @Test
     public void testRequestDefaultFocus() {
-        ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(true);
+        AccessibilityStateTestHelper.setAccessibilityEnabledForTesting(true);
 
-        when(mMockView.getParent()).thenReturn(mMockView);
         KeyboardAccessoryData.Tab tab = mCoordinator.getTab();
-        tab.getListener().onTabCreated(mMockView);
+        tab.getListener().onTabCreated(mView);
         tab.getListener().onTabShown();
 
-        verify(mMockView).requestDefaultA11yFocus();
+        assertTrue(mCoordinator.mModel.get(IS_DEFAULT_A11Y_FOCUS_REQUESTED));
     }
 
     @Test
@@ -161,7 +158,7 @@ public class AddressAccessorySheetControllerTest {
                                 .setDisplayText("Street")
                                 .setA11yDescription("Street")
                                 .setIsObfuscated(true)
-                                .setCallback(field -> {})
+                                .setCallback(CallbackUtils.emptyCallback())
                                 .build());
 
         mCoordinator.registerDataProvider(testProvider);

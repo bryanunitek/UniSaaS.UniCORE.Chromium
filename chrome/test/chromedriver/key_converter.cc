@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "chrome/test/chromedriver/key_converter.h"
 
 #include <stddef.h>
@@ -13,6 +12,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversion_utils.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/third_party/icu/icu_utf.h"
 #include "chrome/test/chromedriver/chrome/status.h"
 #include "chrome/test/chromedriver/chrome/ui_events.h"
 #include "chrome/test/chromedriver/keycode_text_conversion.h"
@@ -272,6 +272,7 @@ constexpr auto kNormalisedKeyValue = std::to_array<const char*>({
 // * Replaced "OSLeft" and "OSRight" with "MetaLeft" and "MetaRight", to be
 //   compatible with Chrome.
 //   TODO(johnchen@chromium.org): Find a better way to handle this.
+// clang-format off
 const struct {
   char16_t key;
   char16_t alternate_key;
@@ -348,6 +349,8 @@ const struct {
     {0xE012, 0,      "ArrowLeft"},
     {0xE014, 0,      "ArrowRight"},
     {0xE013, 0,      "ArrowUp"},
+    {0xE019, 0,      "NumpadEqual"},
+    {0xE00B, 0,      "Pause"},
     {0xE00C, 0,      "Escape"},
     {0xE031, 0,      "F1"},
     {0xE032, 0,      "F2"},
@@ -379,6 +382,7 @@ const struct {
     {0xE024, 0,      "NumpadMultiply"},
     {0xE027, 0,      "NumpadSubtract"},
 };
+// clang-format on
 
 // The "key location for key" table from W3C spec
 // (https://w3c.github.io/webdriver/#dfn-key-location). For simplicity, it is
@@ -386,8 +390,9 @@ const struct {
 int GetKeyLocation(uint32_t code_point) {
   if (code_point >= 0xe007 && code_point <= 0xe00a)
     return 1;
-  if (code_point >= 0xe01a && code_point <= 0xe029)
+  if (code_point >= 0xe019 && code_point <= 0xe029) {
     return 3;
+  }
   if (code_point == 0xe03d)
     return 1;
   if (code_point >= 0xe050 && code_point <= 0xe053)
@@ -414,6 +419,24 @@ Status ConvertKeysToKeyEvents(const std::u16string& client_keys,
   int sticky_modifiers = *modifiers;
   for (size_t i = 0; i < keys.size(); ++i) {
     char16_t key = keys[i];
+
+    if (CBU16_IS_TRAIL(key)) {
+      return Status(kUnknownError, "invalid surrogate pair in input");
+    }
+
+    if (CBU16_IS_LEAD(key)) {
+      if (i + 1 >= keys.size() || !CBU16_IS_TRAIL(keys[i + 1])) {
+        return Status(kUnknownError, "invalid surrogate pair in input");
+      }
+      std::string text = base::UTF16ToUTF8(keys.substr(i, 2));
+      KeyEventBuilder builder;
+      builder.SetModifiers(sticky_modifiers)
+          ->SetText(text, text)
+          ->SetKeyCode(ui::VKEY_UNKNOWN)
+          ->Generate(&key_events);
+      ++i;
+      continue;
+    }
 
     if (key == kWebDriverNullKey) {
       // Release all modifier keys and clear |stick_modifiers|.

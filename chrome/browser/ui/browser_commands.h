@@ -22,6 +22,7 @@
 #include "components/split_tabs/split_tab_id.h"
 #include "content/public/common/page_zoom.h"
 #include "printing/buildflags/buildflags.h"
+#include "ui/actions/actions.h"
 #include "ui/base/window_open_disposition.h"
 
 class BrowserWindowInterface;
@@ -40,6 +41,14 @@ class BookmarkModel;
 enum class BookmarkBarVisibilityState;
 }  // namespace bookmarks
 
+namespace lens {
+enum class LensOverlayInvocationSource;
+}  // namespace lens
+
+namespace omnibox {
+enum ChromeAimEntryPoint : int;
+}  // namespace omnibox
+
 namespace split_tabs {
 enum class SplitTabCreatedSource;
 }
@@ -53,9 +62,22 @@ bool SupportsCommand(BrowserWindowInterface* browser, int command);
 bool ExecuteCommand(BrowserWindowInterface* browser,
                     int command,
                     base::TimeTicks time_stamp = base::TimeTicks::Now());
-bool ExecuteCommandWithDisposition(BrowserWindowInterface* browser,
-                                   int command,
-                                   WindowOpenDisposition disposition);
+bool ExecuteCommandWithContext(
+    BrowserWindowInterface* browser,
+    int command,
+    actions::ActionInvocationContext context,
+    base::TimeTicks time_stamp = base::TimeTicks::Now());
+bool ExecuteCommandWithDisposition(
+    BrowserWindowInterface* browser,
+    int command,
+    WindowOpenDisposition disposition,
+    base::TimeTicks time_stamp = base::TimeTicks::Now());
+bool ExecuteCommandWithDispositionAndContext(
+    BrowserWindowInterface* browser,
+    int command,
+    WindowOpenDisposition disposition,
+    actions::ActionInvocationContext context,
+    base::TimeTicks time_stamp = base::TimeTicks::Now());
 void UpdateCommandEnabled(BrowserWindowInterface* browser, int command, bool enabled);
 void AddCommandObserver(BrowserWindowInterface*, int command, CommandObserver* observer);
 void RemoveCommandObserver(BrowserWindowInterface*, int command, CommandObserver* observer);
@@ -126,6 +148,11 @@ void SelectNextTab(
     TabStripUserGestureDetails gesture_detail = TabStripUserGestureDetails(
         TabStripUserGestureDetails::GestureType::kOther));
 void SelectPreviousTab(
+    BrowserWindowInterface* browser,
+    TabStripUserGestureDetails gesture_detail = TabStripUserGestureDetails(
+        TabStripUserGestureDetails::GestureType::kOther));
+bool IsCtrlTabMruEnabled(BrowserWindowInterface* browser);
+void CycleToMruTab(
     BrowserWindowInterface* browser,
     TabStripUserGestureDetails gesture_detail = TabStripUserGestureDetails(
         TabStripUserGestureDetails::GestureType::kOther));
@@ -209,8 +236,10 @@ bool GroupAllUngroupedTabs(BrowserWindowInterface* browser);
 bool CanGroupAllUngroupedTabs(BrowserWindowInterface* browser);
 // Creates a new tab at the end of the group which last had the active tab.
 void AddNewTabToRecentGroup(BrowserWindowInterface* browser);
-// Unfocuses the currently focused tab group, if any.
-void UnfocusTabGroup(BrowserWindowInterface* browser);
+// Exits tab group focus mode in `browser` if a group is currently focused,
+// recording `exit_reason` in metrics.
+void ExitFocusMode(BrowserWindowInterface* browser,
+                   TabGroupFocusExitReason exit_reason);
 
 void MuteSiteForKeyboardFocusedTab(BrowserWindowInterface* browser);
 bool HasKeyboardFocusedTab(const BrowserWindowInterface* browser);
@@ -254,6 +283,7 @@ bool CanGenerateQrCode(BrowserWindowInterface* browser);
 void GenerateQRCode(BrowserWindowInterface* browser);
 void SharingHub(BrowserWindowInterface* browser);
 void ScreenshotCapture(BrowserWindowInterface* browser);
+void ShowTtcMenuItem(BrowserWindowInterface* browser);
 void SavePage(BrowserWindowInterface* browser);
 bool CanSavePage(const BrowserWindowInterface* browser);
 void Print(BrowserWindowInterface* browser);
@@ -274,6 +304,7 @@ void FindInPage(BrowserWindowInterface* browser, bool find_next, bool forward_di
 void ShowTabSearch(BrowserWindowInterface* browser);
 void CloseTabSearch(BrowserWindowInterface* browser);
 void ToggleTabSearchPin(BrowserWindowInterface* browser);
+void ToggleTabScrollButtonsPin(BrowserWindowInterface* browser);
 void ToggleContextualTasksSidePanel(BrowserWindowInterface* browser);
 void ToggleContextualTasksSidePanelZeroState(BrowserWindowInterface* browser);
 void ToggleVerticalTabs(BrowserWindowInterface* browser);
@@ -307,6 +338,10 @@ void OpenFeedbackDialog(BrowserWindowInterface* browser,
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 void OpenReportUnsafeSiteDialog(BrowserWindowInterface* browser);
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#if BUILDFLAG(IS_WIN)
+void OpenMoveWindow(BrowserWindowInterface* browser);
+void OpenSizeWindow(BrowserWindowInterface* browser);
+#endif  // BUILDFLAG(IS_WIN)
 void ToggleBookmarkBar(BrowserWindowInterface* browser);
 void SetBookmarkBarVisibilityState(BrowserWindowInterface* browser,
                                    bookmarks::BookmarkBarVisibilityState state);
@@ -316,7 +351,10 @@ void ToggleShowAiModeOmniboxButton(BrowserWindowInterface* browser);
 void ToggleShowSearchTools(BrowserWindowInterface* browser);
 void ShowAppMenu(BrowserWindowInterface* browser);
 void ShowAvatarMenu(BrowserWindowInterface* browser);
-void OpenUpdateChromeDialog(BrowserWindowInterface* browser);
+void MaybeUpdateChrome(BrowserWindowInterface* browser);
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+void OpenScheduledRestartDialog(BrowserWindowInterface* browser);
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 bool CanRequestTabletSite(content::WebContents* current_tab);
 bool IsRequestingTabletSite(BrowserWindowInterface* browser);
 void ToggleRequestTabletSite(BrowserWindowInterface* browser);
@@ -357,6 +395,10 @@ void ProcessInterceptedChromeURLNavigationInIncognito(BrowserWindowInterface* br
                                                       const GURL& url);
 void ExecLensOverlay(BrowserWindowInterface* browser);
 void ExecLensRegionSearch(BrowserWindowInterface* browser);
+void ExecAskGoogleAboutThisPage(
+    BrowserWindowInterface* browser,
+    lens::LensOverlayInvocationSource invocation_source,
+    omnibox::ChromeAimEntryPoint entry_point);
 
 }  // namespace chrome
 

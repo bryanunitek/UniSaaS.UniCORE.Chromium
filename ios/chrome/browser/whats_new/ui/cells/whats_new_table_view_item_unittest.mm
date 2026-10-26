@@ -25,7 +25,7 @@ TEST_F(WhatsNewTableViewItemTest, ItemProperties) {
   item.title = title;
   item.detailText = detail_text;
   item.iconImage =
-      DefaultSymbolWithPointSize(kMagnifyingglassSymbol, kTestIconPointSize);
+      SymbolWithPointSize(SymbolMagnifyingglass, kTestIconPointSize);
   item.iconBackgroundColor = UIColor.blueColor;
 
   id cell = [[[item cellClass] alloc] init];
@@ -39,8 +39,9 @@ TEST_F(WhatsNewTableViewItemTest, ItemProperties) {
   EXPECT_NSEQ(title, whats_new_cell.textLabel.text);
   EXPECT_EQ(NO,
             whats_new_cell.textLabel.translatesAutoresizingMaskIntoConstraints);
-  UIFont* font = CreateDynamicFont(UIFontTextStyleBody, UIFontWeightSemibold);
-  EXPECT_EQ(font, whats_new_cell.textLabel.font);
+  UIFont* font =
+      PreferredFontForTextStyle(UIFontTextStyleBody, UIFontWeightSemibold);
+  EXPECT_NSEQ(font, whats_new_cell.textLabel.font);
   EXPECT_EQ(YES, whats_new_cell.textLabel.adjustsFontForContentSizeCategory);
   EXPECT_EQ(2, whats_new_cell.textLabel.numberOfLines);
 
@@ -50,11 +51,11 @@ TEST_F(WhatsNewTableViewItemTest, ItemProperties) {
       NO,
       whats_new_cell.detailTextLabel.translatesAutoresizingMaskIntoConstraints);
   UIFont* detailFont =
-      CreateDynamicFont(UIFontTextStyleFootnote, UIFontWeightRegular);
-  EXPECT_EQ(detailFont, whats_new_cell.detailTextLabel.font);
+      PreferredFontForTextStyle(UIFontTextStyleFootnote, UIFontWeightRegular);
+  EXPECT_NSEQ(detailFont, whats_new_cell.detailTextLabel.font);
   EXPECT_EQ(YES,
             whats_new_cell.detailTextLabel.adjustsFontForContentSizeCategory);
-  EXPECT_EQ(3, whats_new_cell.detailTextLabel.numberOfLines);
+  EXPECT_EQ(4, whats_new_cell.detailTextLabel.numberOfLines);
 
   // Check that the main background is set properly.
   UIImageView* main_background_image_view =
@@ -87,7 +88,7 @@ TEST_F(WhatsNewTableViewItemTest, ItemWithoutBackgroundImageView) {
   item.title = title;
   item.detailText = detail_text;
   item.iconImage =
-      DefaultSymbolWithPointSize(kMagnifyingglassSymbol, kTestIconPointSize);
+      SymbolWithPointSize(SymbolMagnifyingglass, kTestIconPointSize);
 
   id cell = [[[item cellClass] alloc] init];
   ASSERT_TRUE([cell isMemberOfClass:[WhatsNewTableViewCell class]]);
@@ -101,8 +102,9 @@ TEST_F(WhatsNewTableViewItemTest, ItemWithoutBackgroundImageView) {
 
   EXPECT_EQ(NO,
             whats_new_cell.textLabel.translatesAutoresizingMaskIntoConstraints);
-  UIFont* font = CreateDynamicFont(UIFontTextStyleBody, UIFontWeightSemibold);
-  EXPECT_EQ(font, whats_new_cell.textLabel.font);
+  UIFont* font =
+      PreferredFontForTextStyle(UIFontTextStyleBody, UIFontWeightSemibold);
+  EXPECT_NSEQ(font, whats_new_cell.textLabel.font);
   EXPECT_EQ(YES, whats_new_cell.textLabel.adjustsFontForContentSizeCategory);
   EXPECT_EQ(2, whats_new_cell.textLabel.numberOfLines);
 
@@ -112,11 +114,11 @@ TEST_F(WhatsNewTableViewItemTest, ItemWithoutBackgroundImageView) {
       NO,
       whats_new_cell.detailTextLabel.translatesAutoresizingMaskIntoConstraints);
   UIFont* detailFont =
-      CreateDynamicFont(UIFontTextStyleFootnote, UIFontWeightRegular);
-  EXPECT_EQ(detailFont, whats_new_cell.detailTextLabel.font);
+      PreferredFontForTextStyle(UIFontTextStyleFootnote, UIFontWeightRegular);
+  EXPECT_NSEQ(detailFont, whats_new_cell.detailTextLabel.font);
   EXPECT_EQ(YES,
             whats_new_cell.detailTextLabel.adjustsFontForContentSizeCategory);
-  EXPECT_EQ(3, whats_new_cell.detailTextLabel.numberOfLines);
+  EXPECT_EQ(4, whats_new_cell.detailTextLabel.numberOfLines);
 
   // Check that the main background is set properly.
   UIImageView* main_background_image_view =

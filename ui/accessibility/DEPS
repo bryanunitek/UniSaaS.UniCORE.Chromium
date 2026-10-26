@@ -1,7 +1,6 @@
 include_rules = [
   "+ash/constants",
   "+mojo/public",
-  "+third_party/cld_3",
   "+third_party/fuzztest",
   "+third_party/iaccessible2",
   "+third_party/isimpledom",
@@ -29,9 +28,6 @@ specific_include_rules = {
   "run_all_unittests.cc": [
     "+mojo/core/embedder",
     "+ui/accessibility/platform/provide_ax_platform_for_tests.h",
-  ],
-  "ax_assistant_util.h": [
-    "+ui/accessibility/mojom",
   ],
 
   # Normally we shouldn't depend on ui/accessibility/platform, but this

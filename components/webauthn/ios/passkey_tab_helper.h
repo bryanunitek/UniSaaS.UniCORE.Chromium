@@ -6,13 +6,16 @@
 #define COMPONENTS_WEBAUTHN_IOS_PASSKEY_TAB_HELPER_H_
 
 #import <optional>
+#import <string_view>
 #import <variant>
+#import <vector>
 
 #import "base/memory/weak_ptr.h"
 #import "base/scoped_observation.h"
 #import "base/time/time.h"
 #import "components/password_manager/core/browser/password_store/password_store_consumer.h"
 #import "components/password_manager/core/browser/password_store/password_store_interface.h"
+#import "components/webauthn/core/browser/device_authorization/device_authorization_types.h"
 #import "components/webauthn/core/browser/passkey_model.h"
 #import "components/webauthn/core/browser/remote_validation.h"
 #import "components/webauthn/ios/ios_passkey_client.h"
@@ -26,6 +29,10 @@
 namespace sync_pb {
 class WebauthnCredentialSpecifics;
 }  // namespace sync_pb
+
+namespace url {
+class Origin;
+}  // namespace url
 
 namespace web {
 class WebFrame;
@@ -58,7 +65,10 @@ class PasskeyTabHelper : public web::WebStateObserver,
     kCreateResolvedNonGpm,
     kIncognitoInterstitialShown,
     kCancelRequested,
-    kMaxValue = kCancelRequested,
+    kSignalUnknownCredentialRequested,
+    kSignalCurrentUserDetailsRequested,
+    kSignalAllAcceptedCredentialsRequested,
+    kMaxValue = kSignalAllAcceptedCredentialsRequested,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/webauthn/enums.xml)
 
@@ -80,10 +90,38 @@ class PasskeyTabHelper : public web::WebStateObserver,
   // Handles passkey registration requests. Yields if the request ID is missing.
   void HandleCreateRequestedEvent(RegistrationRequestParams params);
 
+  // Handles PublicKeyCredential.signal* requests. Validates whether the
+  // `origin` is allowed to make requests for `params.rp_id`. If yes, invokes
+  // the corresponding private continuation. Otherwise, returns.
+  void HandleSignalUnknownCredentialEvent(const url::Origin& origin,
+                                          SignalUnknownCredentialParams params);
+  void HandleSignalCurrentUserDetailsEvent(
+      const url::Origin& origin,
+      SignalCurrentUserDetailsParams params);
+  void HandleSignalAllAcceptedCredentialsEvent(
+      const url::Origin& origin,
+      SignalAllAcceptedCredentialsParams params);
+
   // Returns whether the tab helper's passkey model contains a passkey matching
   // the provided rp id and credential id.
   bool HasCredential(const std::string& rp_id,
                      const std::string& credential_id) const;
+
+  // Records a successful password login for the current web state to establish
+  // automatic passkey upgrade eligibility.
+  void RecordPasswordLogin(std::string_view username,
+                           const url::Origin& origin);
+
+  // Returns whether this tab has recorded a recent, unconsumed password login
+  // matching the username and relying party of `params`, the automatic
+  // passkey upgrade feature is enabled, and the tab is not off-the-record.
+  //
+  // This is a synchronous, read-only check used early during renderer IPC
+  // validation (`PasskeyJavaScriptFeature`) to permit conditional passkey
+  // creation without a user gesture before querying the password store.
+  // Does not consume eligibility or inspect stored credentials.
+  bool HasAutomaticPasskeyUpgradeEligibility(
+      const RegistrationRequestParams& params) const;
 
   // Requests a passkey to be created given the provided request ID. Fetches the
   // shared keys list and calls the CompletePasskeyCreation callback.
@@ -156,6 +194,16 @@ class PasskeyTabHelper : public web::WebStateObserver,
   void HandleCreateRequestedEvent(web::WebFrame* web_frame,
                                   RegistrationRequestParams params);
 
+  // Handles continuation of the Signal API events after the remote RP ID
+  // validation has been completed.
+  void HandleSignalUnknownCredential(const url::Origin& origin,
+                                     SignalUnknownCredentialParams params);
+  void HandleSignalCurrentUserDetails(const url::Origin& origin,
+                                      SignalCurrentUserDetailsParams params);
+  void HandleSignalAllAcceptedCredentials(
+      const url::Origin& origin,
+      SignalAllAcceptedCredentialsParams params);
+
   // Returns whether the passkey model contains a passkey from the
   // exclude credentials list from the provided parameters.
   bool HasExcludedPasskey(const RegistrationRequestParams& params) const;
@@ -173,14 +221,37 @@ class PasskeyTabHelper : public web::WebStateObserver,
                                SharedKeyList shared_key_list,
                                bool did_complete_uv);
 
+  // Callback which continues `StartPasskeyAssertion()` with the fetched
+  // device authorization keys. Defers the request to the renderer if they
+  // couldn't be fetched, and fetches the trusted vault keys otherwise.
+  void OnDeviceAuthorizationKeysFetched(
+      AssertionRequestParams params,
+      sync_pb::WebauthnCredentialSpecifics passkey,
+      std::string client_data_json,
+      bool did_complete_uv,
+      DeviceAuthFetchResult result);
+
+  // Fetches the trusted vault keys and continues with
+  // `CompletePasskeyAssertion()`. `device_authorization_keys` is empty for
+  // passkeys that aren't in the `security_domain_encrypted` format.
+  void FetchTrustedVaultKeysForAssertion(
+      AssertionRequestParams params,
+      sync_pb::WebauthnCredentialSpecifics passkey,
+      std::string client_data_json,
+      DeviceAuthorizationKeys device_authorization_keys,
+      bool did_complete_uv);
+
   // Callback which uses the provided passkey for assertion given the provided
-  // shared keys list and params. The parameters required to resolve the
-  // PublicKeyCredential request are sent to PasskeyJavaScriptFeature.
-  void CompletePasskeyAssertion(AssertionRequestParams params,
-                                sync_pb::WebauthnCredentialSpecifics passkey,
-                                std::string client_data_json,
-                                SharedKeyList shared_key_list,
-                                bool did_complete_uv);
+  // shared keys list, device authorization keys and params. The parameters
+  // required to resolve the PublicKeyCredential request are sent to
+  // PasskeyJavaScriptFeature.
+  void CompletePasskeyAssertion(
+      AssertionRequestParams params,
+      sync_pb::WebauthnCredentialSpecifics passkey,
+      std::string client_data_json,
+      DeviceAuthorizationKeys device_authorization_keys,
+      SharedKeyList shared_key_list,
+      bool did_complete_uv);
 
   // Starts remote validation for the given origin and RP ID. If validation
   // starts successfully, the loader is stored in `loaders_` with
@@ -192,8 +263,18 @@ class PasskeyTabHelper : public web::WebStateObserver,
       const std::string& passkey_request_id,
       base::OnceCallback<void(ValidationStatus)> callback);
 
+  // Performs remote RP ID validation for WebAuthn Signal requests. Generates a
+  // temporary request ID, tracks it, and runs `success_callback` on success.
+  void PerformRemoteSignalRpIdValidation(const url::Origin& origin,
+                                         const std::string& rp_id,
+                                         base::OnceClosure success_callback);
+
   // Callback for processing remote validation result for a pending request.
-  void OnRemoteRpIdValidationCompleted(PendingRequest request,
+  // Cleans up the loader for `request_id` and runs `success_callback` on
+  // successful `status`. Otherwise, runs `failure_callback`, if provided.
+  void OnRemoteRpIdValidationCompleted(std::string request_id,
+                                       base::OnceClosure success_callback,
+                                       base::OnceClosure failure_callback,
                                        ValidationStatus status);
 
   // Handles passkey assertion request after it passes validation.
@@ -205,10 +286,16 @@ class PasskeyTabHelper : public web::WebStateObserver,
       AssertionRequestParams params,
       IOSWebAuthnCredentialsDelegate* delegate);
 
-  // Whether automatic passkey upgrade is allowed.
+  // Returns whether automatic passkey upgrade is permitted after querying the
+  // `PasswordStore`.
+  //
+  // Verifies `HasAutomaticPasskeyUpgradeEligibility(params)` and checks that
+  // `logins` contains an unblocked password credential matching the user and
+  // domain active within `kPasskeyUpgradeRecencyThreshold`. If eligible, marks
+  // the tab's eligibility as consumed (single-use) and returns true.
   bool CanPerformAutomaticPasskeyUpgrade(
       const RegistrationRequestParams& params,
-      const std::vector<password_manager::StoredCredential>& logins) const;
+      const std::vector<password_manager::StoredCredential>& logins);
 
   // Handles passkey registration requests after it passes validation.
   void HandleRegistration(RegistrationRequestParams params);
@@ -219,11 +306,6 @@ class PasskeyTabHelper : public web::WebStateObserver,
 
   // Callback handling the user's decision from the interstitial.
   void OnInterstitialDecision(RegistrationRequestParams params, bool proceed);
-
-  // Callback handling the user's decision from the interstitial for a
-  // conditional create request.
-  void OnConditionalCreateInterstitialDecision(const std::string& request_id,
-                                               bool proceed);
 
   // Adds a passkey to the passkey model while enabling the passkey creation
   // infobar to be displayed if possible.
@@ -240,12 +322,14 @@ class PasskeyTabHelper : public web::WebStateObserver,
 
   // Utility function to reject a passkey request.
   void RejectPasskeyRequest(web::WebFrame* web_frame,
-                            const std::string& request_id);
+                            const std::string& request_id,
+                            WebAuthnError error);
 
   // Utility function to defer the passkey request back to the renderer.
-  void DeferToRenderer(web::WebFrame* web_frame,
-                       const std::string& request_id,
-                       PasskeyRequestParams::RequestType request_type) const;
+  void DeferToRendererForFrame(
+      web::WebFrame* web_frame,
+      const std::string& request_id,
+      PasskeyRequestParams::RequestType request_type) const;
 
   // If `request_id` exists in the `assertion_requests_` map, this function will
   // remove the parameters from the `assertion_requests_` map and return them.
@@ -277,7 +361,9 @@ class PasskeyTabHelper : public web::WebStateObserver,
   // PasswordStoreConsumer:
   void OnGetPasswordStoreResultsOrErrorFrom(
       password_manager::PasswordStoreInterface* store,
-      password_manager::LoginsResultOrError results_or_error) override;
+      base::expected<std::vector<password_manager::StoredCredential>,
+                     password_manager::PasswordStoreBackendError>
+          results_or_error) override;
 
   // PasskeyModel::Observer:
   void OnPasskeysChanged(
@@ -323,6 +409,16 @@ class PasskeyTabHelper : public web::WebStateObserver,
 
   // Flag to avoid duplicate queries to the password store.
   bool is_querying_password_store_ = false;
+
+  // Stores eligibility for automatic passkey upgrade scoped to this tab.
+  struct AutomaticUpgradeEligibility {
+    std::string username;
+    std::string domain_rp_id;
+    base::TimeTicks timestamp;
+    bool consumed = false;
+  };
+
+  std::optional<AutomaticUpgradeEligibility> automatic_upgrade_eligibility_;
 
   // This is necessary because this object could be deleted during any callback,
   // and we don't want to risk a UAF if that happens.

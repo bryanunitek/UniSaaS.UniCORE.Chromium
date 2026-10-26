@@ -7,11 +7,13 @@
 #include <algorithm>
 
 #include "base/containers/fixed_flat_set.h"
+#include "base/containers/span.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/accessibility/ax_action_data.h"
+#include "ui/accessibility/ax_role_properties.h"
 #include "ui/accessibility/ax_selection.h"
 #include "ui/accessibility/platform/ax_platform.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
@@ -193,6 +195,12 @@ std::optional<size_t> AXPlatformNodeDelegate::GetIndexInParent() const {
   AXPlatformNodeDelegate* parent = GetParentDelegate();
   if (!parent)
     return std::nullopt;
+
+  // An ignored node is left out of the children its parent exposes, so it has
+  // no index there.
+  if (IsIgnored()) {
+    return std::nullopt;
+  }
 
   for (size_t i = 0; i < parent->GetChildCount(); i++) {
     AXPlatformNode* child_node =
@@ -517,6 +525,10 @@ bool AXPlatformNodeDelegate::IsWebContent() const {
   return false;
 }
 
+bool AXPlatformNodeDelegate::IsTopLevelWebContentRoot() const {
+  return false;
+}
+
 bool AXPlatformNodeDelegate::HasVisibleCaretOrSelection() const {
   return IsDescendantOfAtomicTextField();
 }
@@ -559,7 +571,7 @@ std::vector<AXPlatformNode*> AXPlatformNodeDelegate::GetTargetNodesForRelation(
   // interest to ATs. The number of ids should be small.
 
   std::vector<AXPlatformNode*> nodes;
-  const std::vector<int32_t>& target_ids = GetIntListAttribute(attr);
+  base::span<const int32_t> target_ids = GetIntListAttribute(attr);
 
   for (int32_t target_id : target_ids) {
     AXPlatformNode* target = GetFromNodeID(target_id);
@@ -813,10 +825,11 @@ bool AXPlatformNodeDelegate::HasIntListAttribute(
   return GetData().HasIntListAttribute(attribute);
 }
 
-const std::vector<int32_t>& AXPlatformNodeDelegate::GetIntListAttribute(
+base::span<const int32_t> AXPlatformNodeDelegate::GetIntListAttribute(
     ax::mojom::IntListAttribute attribute) const {
-  if (node_)
+  if (node_) {
     return node_->GetIntListAttribute(attribute);
+  }
   return GetData().GetIntListAttribute(attribute);
 }
 
@@ -825,7 +838,8 @@ bool AXPlatformNodeDelegate::GetIntListAttribute(
     std::vector<int32_t>* value) const {
   bool found = HasIntListAttribute(attribute);
   if (found) {
-    *value = GetIntListAttribute(attribute);
+    base::span<const int32_t> int_list = GetIntListAttribute(attribute);
+    value->assign(int_list.begin(), int_list.end());
   }
   return found;
 }
@@ -837,7 +851,7 @@ bool AXPlatformNodeDelegate::HasStringListAttribute(
   return GetData().HasStringListAttribute(attribute);
 }
 
-const std::vector<std::string>& AXPlatformNodeDelegate::GetStringListAttribute(
+base::span<const std::string> AXPlatformNodeDelegate::GetStringListAttribute(
     ax::mojom::StringListAttribute attribute) const {
   if (node_)
     return node_->GetStringListAttribute(attribute);
@@ -849,7 +863,9 @@ bool AXPlatformNodeDelegate::GetStringListAttribute(
     std::vector<std::string>* value) const {
   bool found = HasStringListAttribute(attribute);
   if (found) {
-    *value = GetStringListAttribute(attribute);
+    base::span<const std::string> string_list =
+        GetStringListAttribute(attribute);
+    value->assign(string_list.begin(), string_list.end());
   }
   return found;
 }
@@ -998,15 +1014,15 @@ bool AXPlatformNodeDelegate::IsTable() const {
   return ui::IsTableLike(GetRole());
 }
 
-std::optional<int> AXPlatformNodeDelegate::GetTableRowCount() const {
+std::optional<int> AXPlatformNodeDelegate::GetTableDomRowCount() const {
   if (node_)
-    return node_->GetTableRowCount();
+    return node_->GetTableDomRowCount();
   return GetIntAttribute(ax::mojom::IntAttribute::kTableRowCount);
 }
 
-std::optional<int> AXPlatformNodeDelegate::GetTableColCount() const {
+std::optional<int> AXPlatformNodeDelegate::GetTableDomColCount() const {
   if (node_)
-    return node_->GetTableColCount();
+    return node_->GetTableDomColCount();
   return GetIntAttribute(ax::mojom::IntAttribute::kTableColumnCount);
 }
 
@@ -1104,27 +1120,27 @@ std::optional<int> AXPlatformNodeDelegate::GetTableCellIndex() const {
   return std::nullopt;
 }
 
-std::optional<int> AXPlatformNodeDelegate::GetTableCellColIndex() const {
+std::optional<int> AXPlatformNodeDelegate::GetTableCellDomColIndex() const {
   if (node_)
-    return node_->GetTableCellColIndex();
+    return node_->GetTableCellDomColIndex();
   return GetIntAttribute(ax::mojom::IntAttribute::kTableCellColumnIndex);
 }
 
-std::optional<int> AXPlatformNodeDelegate::GetTableCellRowIndex() const {
+std::optional<int> AXPlatformNodeDelegate::GetTableCellDomRowIndex() const {
   if (node_)
-    return node_->GetTableCellRowIndex();
+    return node_->GetTableCellDomRowIndex();
   return GetIntAttribute(ax::mojom::IntAttribute::kTableCellRowIndex);
 }
 
-std::optional<int> AXPlatformNodeDelegate::GetTableCellColSpan() const {
+std::optional<int> AXPlatformNodeDelegate::GetTableCellDomColSpan() const {
   if (node_)
-    return node_->GetTableCellColSpan();
+    return node_->GetTableCellDomColSpan();
   return GetIntAttribute(ax::mojom::IntAttribute::kTableCellColumnSpan);
 }
 
-std::optional<int> AXPlatformNodeDelegate::GetTableCellRowSpan() const {
+std::optional<int> AXPlatformNodeDelegate::GetTableCellDomRowSpan() const {
   if (node_)
-    return node_->GetTableCellRowSpan();
+    return node_->GetTableCellDomRowSpan();
   return GetIntAttribute(ax::mojom::IntAttribute::kTableCellRowSpan);
 }
 
@@ -1334,9 +1350,14 @@ std::string AXPlatformNodeDelegate::GetRootURL() const {
   return std::string();
 }
 
-std::string AXPlatformNodeDelegate::SubtreeToStringHelper(size_t level) {
+std::string AXPlatformNodeDelegate::SubtreeToStringHelper(
+    size_t level,
+    bool stop_at_document) {
   std::string result(level * 2, '+');
   result += ToString();
+  if (stop_at_document && ui::IsPlatformDocument(GetRole())) {
+    return result + " [document contents omitted]\n";
+  }
   result += '\n';
 
   // We can't use ChildrenBegin() and ChildrenEnd() here, because they both
@@ -1348,10 +1369,14 @@ std::string AXPlatformNodeDelegate::SubtreeToStringHelper(size_t level) {
   auto iter_end = ChildIteratorBase(this, GetChildCount());
   for (auto iter = iter_start; iter != iter_end; ++iter) {
     AXPlatformNodeDelegate& child = static_cast<AXPlatformNodeDelegate&>(*iter);
-    result += child.SubtreeToStringHelper(level + 1);
+    result += child.SubtreeToStringHelper(level + 1, stop_at_document);
   }
 
   return result;
+}
+
+BrowserAccessibility* AXPlatformNodeDelegate::ToBrowserAccessibility() {
+  return nullptr;
 }
 
 }  // namespace ui

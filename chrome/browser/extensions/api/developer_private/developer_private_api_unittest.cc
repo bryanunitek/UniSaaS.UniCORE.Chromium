@@ -24,12 +24,15 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "base/test/gtest_util.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/api/developer_private/developer_private_functions.h"
 #include "chrome/browser/extensions/api/developer_private/extension_info_generator.h"
 #include "chrome/browser/extensions/api/developer_private/profile_info_generator.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
+#include "chrome/browser/extensions/cws_info_service_factory.h"
 #include "chrome/browser/extensions/error_console/error_console.h"
 #include "chrome/browser/extensions/extension_action_test_util.h"
 #include "chrome/browser/extensions/extension_install_prompt_show_params.h"
@@ -62,6 +65,7 @@
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "extensions/browser/api_test_utils.h"
+#include "extensions/browser/cws_info_service.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/event_router_factory.h"
 #include "extensions/browser/extension_creator.h"
@@ -134,9 +138,9 @@ bool DoesItemChangedEventMatch(
     const ExtensionId& extension_id,
     const api::developer_private::EventType event_type,
     api::developer_private::ExtensionInfo* info_from_event) {
-  CHECK_GE(1u, event.event_args.size());
+  CHECK_GE(1u, event.args().size());
   std::optional<api::developer_private::EventData> event_data =
-      api::developer_private::EventData::FromValue(event.event_args[0]);
+      api::developer_private::EventData::FromValue(event.args()[0]);
   if (!event_data) {
     return false;
   }
@@ -183,9 +187,9 @@ bool WasUserSiteSettingsChangedEventDispatched(
   }
 
   const Event& event = *iter->second;
-  CHECK_GE(1u, event.event_args.size());
+  CHECK_GE(1u, event.args().size());
   auto site_settings =
-      api::developer_private::UserSiteSettings::FromValue(event.event_args[0]);
+      api::developer_private::UserSiteSettings::FromValue(event.args()[0]);
   if (!site_settings) {
     return false;
   }
@@ -435,6 +439,21 @@ base::FilePath GetUnpackedPath(TestExtensionDir& dir) {
   return absolute_file_path;
 #endif  // BUILDFLAG(IS_ANDROID)
 }
+
+class MockCWSInfoServiceForReview : public CWSInfoService {
+ public:
+  explicit MockCWSInfoServiceForReview(Profile* profile)
+      : CWSInfoService(profile) {}
+  ~MockCWSInfoServiceForReview() override = default;
+
+  std::optional<CWSInfo> GetCWSInfo(const Extension& extension) const override {
+    CWSInfo info;
+    info.is_present = true;
+    info.is_live = true;
+    info.violation_type = CWSViolationType::kNone;
+    return info;
+  }
+};
 
 }  // namespace
 
@@ -723,6 +742,13 @@ void DeveloperPrivateApiUnitTest::SetUp() {
 
   ExtensionServiceInitParams init_params;
   init_params.profile_is_supervised = ProfileIsSupervised();
+  init_params.testing_factories.emplace_back(
+      CWSInfoServiceFactory::GetInstance(),
+      base::BindRepeating([](content::BrowserContext* context)
+                              -> std::unique_ptr<KeyedService> {
+        return std::make_unique<MockCWSInfoServiceForReview>(
+            Profile::FromBrowserContext(context));
+      }));
   InitializeExtensionService(std::move(init_params));
   extension_action_test_util::CreateToolbarModelForProfile(profile());
 
@@ -768,7 +794,7 @@ TEST_F(DeveloperPrivateApiUnitTest,
   };
   TestExtensionPrefSetting(base::BindLambdaForTesting(pinned_to_toolbar),
                            "pinnedToToolbar", id,
-                           /*expected_default_value=*/false);
+                           /*expected_default_value=*/true);
 
   TestExtensionPrefSetting(
       base::BindRepeating(
@@ -1763,6 +1789,31 @@ TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateDevMode) {
     EXPECT_TRUE(profile_info->in_developer_mode);
     EXPECT_FALSE(profile_info->is_developer_mode_controlled_by_policy);
   }
+}
+
+TEST_F(DeveloperPrivateApiUnitTest,
+       DeveloperPrivateToggleExtensionsPinnedByDefault) {
+  base::HistogramTester histograms;
+  auto function1 = base::MakeRefCounted<
+      api::DeveloperPrivateUpdateProfileConfigurationFunction>();
+  base::ListValue args1 = base::ListValue().Append(
+      base::DictValue().Set("extensionsPinnedByDefault", false));
+  EXPECT_TRUE(RunFunction(function1, args1)) << function1->GetError();
+  EXPECT_FALSE(
+      profile()->GetPrefs()->GetBoolean(prefs::kExtensionsPinnedByDefault));
+  histograms.ExpectBucketCount("Extensions.Settings.DefaultPinningToggled",
+                               false, 1);
+
+  auto function2 = base::MakeRefCounted<
+      api::DeveloperPrivateUpdateProfileConfigurationFunction>();
+  base::ListValue args2 = base::ListValue().Append(
+      base::DictValue().Set("extensionsPinnedByDefault", true));
+  EXPECT_TRUE(RunFunction(function2, args2)) << function2->GetError();
+  EXPECT_TRUE(
+      profile()->GetPrefs()->GetBoolean(prefs::kExtensionsPinnedByDefault));
+  histograms.ExpectBucketCount("Extensions.Settings.DefaultPinningToggled",
+                               true, 1);
+  histograms.ExpectTotalCount("Extensions.Settings.DefaultPinningToggled", 2);
 }
 
 TEST_F(DeveloperPrivateApiUnitTest, LoadUnpackedFailsWithoutDevMode) {
@@ -3384,13 +3435,13 @@ TEST_F(DeveloperPrivateApiSupervisedUserUnitTest,
       content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
   base::FilePath path = data_dir().AppendASCII("simple_with_popup");
 
-    EXPECT_TRUE(supervised_user::AreExtensionsPermissionsEnabled(profile()));
-    auto function =
-        base::MakeRefCounted<api::DeveloperPrivateLoadUnpackedFunction>();
-    function->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
-    std::string error = api_test_utils::RunFunctionAndReturnError(
-        function.get(), "[]", profile());
-    EXPECT_THAT(error, testing::HasSubstr("Child account"));
+  EXPECT_TRUE(supervised_user::AreExtensionsPermissionsEnabled(profile()));
+  auto function =
+      base::MakeRefCounted<api::DeveloperPrivateLoadUnpackedFunction>();
+  function->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
+  std::string error = api_test_utils::RunFunctionAndReturnError(
+      function.get(), "[]", profile());
+  EXPECT_THAT(error, testing::HasSubstr("Child account"));
 }
 
 // Signing into transport mode and Sign outs are not supported for ChromeOS
@@ -3802,5 +3853,83 @@ TEST_F(DeveloperPrivateApiTransportModeUnitTest,
   EXPECT_FALSE(CanUploadToAccount(*extension));
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+
+TEST_F(DeveloperPrivateApiUnitTest,
+       DeveloperPrivateOpenReviewPage_PolicyDisabled) {
+  base::test::ScopedFeatureList feature_list{
+      extensions_features::kCWSReviewPromptingNativeUI};
+
+  profile()->GetPrefs()->SetBoolean(prefs::kExtensionReviewPromptsAllowed,
+                                    false);
+
+  scoped_refptr<const Extension> extension =
+      ExtensionBuilder("Test Extension")
+          .SetLocation(mojom::ManifestLocation::kInternal)
+          .AddFlags(Extension::FROM_WEBSTORE)
+          .Build();
+  registrar()->AddExtension(extension.get());
+
+  std::unique_ptr<content::WebContents> web_contents(
+      content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
+
+  base::ListValue args;
+  args.Append(extension->id());
+
+  auto function =
+      base::MakeRefCounted<api::DeveloperPrivateOpenReviewPageFunction>();
+  function->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
+  EXPECT_EQ("The extension is ineligible for review prompts.",
+            api_test_utils::RunFunctionAndReturnError(
+                function.get(), std::move(args), profile()));
+}
+
+TEST_F(DeveloperPrivateApiUnitTest,
+       DeveloperPrivateOpenReviewPage_FeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      extensions_features::kCWSReviewPromptingNativeUI);
+
+  scoped_refptr<const Extension> extension =
+      ExtensionBuilder("Test Extension")
+          .SetLocation(mojom::ManifestLocation::kInternal)
+          .AddFlags(Extension::FROM_WEBSTORE)
+          .Build();
+  registrar()->AddExtension(extension.get());
+
+  std::unique_ptr<content::WebContents> web_contents(
+      content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
+
+  base::ListValue args;
+  args.Append(extension->id());
+
+  auto function =
+      base::MakeRefCounted<api::DeveloperPrivateOpenReviewPageFunction>();
+  function->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
+  EXPECT_EQ("The extension is ineligible for review prompts.",
+            api_test_utils::RunFunctionAndReturnError(
+                function.get(), std::move(args), profile()));
+}
+
+TEST_F(DeveloperPrivateApiUnitTest,
+       DeveloperPrivateOpenReviewPage_NoWebContents) {
+  base::test::ScopedFeatureList feature_list{
+      extensions_features::kCWSReviewPromptingNativeUI};
+
+  scoped_refptr<const Extension> extension =
+      ExtensionBuilder("Test Extension")
+          .SetLocation(mojom::ManifestLocation::kInternal)
+          .AddFlags(Extension::FROM_WEBSTORE)
+          .Build();
+  registrar()->AddExtension(extension.get());
+
+  base::ListValue args;
+  args.Append(extension->id());
+
+  auto function =
+      base::MakeRefCounted<api::DeveloperPrivateOpenReviewPageFunction>();
+  EXPECT_EQ("Could not find a valid web contents.",
+            api_test_utils::RunFunctionAndReturnError(
+                function.get(), std::move(args), profile()));
+}
 
 }  // namespace extensions

@@ -155,7 +155,7 @@ void LocalStorageHistograms(Profile* profile, bool local_user_files_allowed) {
 // space on the cloud.
 bool ShouldFail(const std::map<base::FilePath, MigrationUploadError> errors,
                 int current_retry_count) {
-  DCHECK(!errors.empty());
+  CHECK(!errors.empty(), base::NotFatalUntil::M160);
 
   if (current_retry_count > kMaxRetryCount) {
     return true;
@@ -285,8 +285,8 @@ void LocalFilesMigrationManager::InitializeFromPrefs() {
     SetState(State::kFailure);
   }
 
-  local_user_files_allowed_ = LocalUserFilesAllowed();
-  migration_destination_ = GetMigrationDestination();
+  local_user_files_allowed_ = LocalUserFilesAllowed(local_state_.get());
+  migration_destination_ = GetMigrationDestination(local_state_.get());
 
   // For kDelete, retry cleanup even after kMaxRetryCount failures to ensure
   // policy-enforced deletion. Other destinations treat kFailure as final.
@@ -311,7 +311,8 @@ void LocalFilesMigrationManager::InitializeFromPrefs() {
     // If migration is not configured, check whether there are already no files
     // to migrate.
     if (!local_user_files_allowed_) {
-      DCHECK(!IsMigrationEnabled(migration_destination_));
+      CHECK(!IsMigrationEnabled(migration_destination_),
+            base::NotFatalUntil::M160);
       base::ThreadPool::PostTaskAndReplyWithResult(
           FROM_HERE, {base::MayBlock()},
           base::BindOnce(&IsMyFilesEmpty, profile),
@@ -350,9 +351,9 @@ void LocalFilesMigrationManager::InitializeFromPrefs() {
 
 void LocalFilesMigrationManager::OnLocalUserFilesPolicyChanged() {
   bool local_user_files_allowed_old = local_user_files_allowed_;
-  local_user_files_allowed_ = LocalUserFilesAllowed();
+  local_user_files_allowed_ = LocalUserFilesAllowed(local_state_.get());
   MigrationDestination migration_destination_old = migration_destination_;
-  migration_destination_ = GetMigrationDestination();
+  migration_destination_ = GetMigrationDestination(local_state_.get());
 
   if (local_user_files_allowed_ == local_user_files_allowed_old &&
       migration_destination_ == migration_destination_old) {
@@ -374,7 +375,8 @@ void LocalFilesMigrationManager::OnLocalUserFilesPolicyChanged() {
       CHECK(state_ == State::kUninitialized);
       // If migration is not configured, check whether there are already no
       // files to migrate.
-      DCHECK(!IsMigrationEnabled(migration_destination_));
+      CHECK(!IsMigrationEnabled(migration_destination_),
+            base::NotFatalUntil::M160);
       base::ThreadPool::PostTaskAndReplyWithResult(
           FROM_HERE, {base::MayBlock()},
           base::BindOnce(&IsMyFilesEmpty, profile),
@@ -408,7 +410,8 @@ void LocalFilesMigrationManager::OnMigrationStopped(bool log_file_deleted) {
 
   Profile* profile = Profile::FromBrowserContext(context_);
   if (IsMigrationMisconfigured(profile, migration_destination_)) {
-    DCHECK(IsCloudDestination(migration_destination_));
+    CHECK(IsCloudDestination(migration_destination_),
+          base::NotFatalUntil::M160);
     LOG(WARNING) << "Local files migration policy is set to use "
                  << (migration_destination_ ==
                              MigrationDestination::kGoogleDrive
@@ -656,7 +659,7 @@ void LocalFilesMigrationManager::StartMigration(
     CleanupLocalFiles();
     return;
   }
-  DCHECK(IsCloudDestination(migration_destination_));
+  CHECK(IsCloudDestination(migration_destination_), base::NotFatalUntil::M160);
 
   PrefService* pref_service = Profile::FromBrowserContext(context_)->GetPrefs();
   const base::Time start_time =
@@ -682,7 +685,7 @@ void LocalFilesMigrationManager::OnMigrationDone(
         migration_destination_, StateErrorContext::kMigrationDone, state_);
     return;
   }
-  DCHECK(IsCloudDestination(migration_destination_));
+  CHECK(IsCloudDestination(migration_destination_), base::NotFatalUntil::M160);
 
   const base::Time start_time =
       Profile::FromBrowserContext(context_)->GetPrefs()->GetTime(
@@ -724,7 +727,7 @@ void LocalFilesMigrationManager::ProcessErrors(
     base::FilePath error_log_path) {
   CHECK(state_ == State::kFailure);
   CHECK(!errors.empty());
-  DCHECK(IsCloudDestination(migration_destination_));
+  CHECK(IsCloudDestination(migration_destination_), base::NotFatalUntil::M160);
   notification_manager_->ShowMigrationErrorNotification(
       migration_destination_, upload_root_, error_log_path);
 }

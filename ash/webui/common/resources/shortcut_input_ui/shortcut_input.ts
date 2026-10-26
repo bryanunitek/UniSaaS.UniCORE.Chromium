@@ -86,21 +86,40 @@ export class ShortcutInputElement extends ShortcutInputElementBase {
         type: Boolean,
       },
 
+      isCapturing: {
+        type: Boolean,
+        value: false,
+      },
     };
   }
 
-  metaKey: MetaKey = MetaKey.kSearch;
-  hasFunctionKey: boolean = false;
-  shortcutInputProvider: ShortcutInputProviderInterface|null = null;
-  pendingKeyEvent: KeyEvent|null = null;
-  pendingPrerewrittenKeyEvent: KeyEvent|null = null;
-  modifiers: Modifier[] = [];
-  showSeparator: boolean = false;
-  isCapturing: boolean = false;
-  updateOnKeyPress: boolean = false;
-  displayPrerewrittenKeyEvents: boolean = false;
-  ignoreBlur: boolean = false;
-  shouldIgnoreKeyRelease: boolean = false;
+  constructor() {
+    super();
+    this.metaKey = MetaKey.kSearch;
+    this.hasFunctionKey = false;
+    this.shortcutInputProvider = null;
+    this.pendingKeyEvent = null;
+    this.pendingPrerewrittenKeyEvent = null;
+    this.modifiers = [];
+    this.showSeparator = false;
+    this.updateOnKeyPress = false;
+    this.displayPrerewrittenKeyEvents = false;
+    this.ignoreBlur = false;
+    this.shouldIgnoreKeyRelease = false;
+  }
+
+  declare metaKey: MetaKey;
+  declare hasFunctionKey: boolean;
+  declare shortcutInputProvider: ShortcutInputProviderInterface|null;
+  declare pendingKeyEvent: KeyEvent|null;
+  declare pendingPrerewrittenKeyEvent: KeyEvent|null;
+  declare modifiers: Modifier[];
+  declare showSeparator: boolean;
+  declare isCapturing: boolean;
+  declare updateOnKeyPress: boolean;
+  declare displayPrerewrittenKeyEvents: boolean;
+  declare ignoreBlur: boolean;
+  declare shouldIgnoreKeyRelease: boolean;
   private shortcutInputObserverReceiver: ShortcutInputObserverReceiver|null =
       null;
   private eventTracker: EventTracker = new EventTracker();

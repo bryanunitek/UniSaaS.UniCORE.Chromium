@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_KEYBOARD_ACCESSORY_ANDROID_MANUAL_FILLING_CONTROLLER_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "base/containers/flat_set.h"
@@ -51,6 +52,9 @@ class ManualFillingControllerImpl
       autofill::AccessoryAction action) override;
   void ShowAccessorySheetTab(
       const autofill::AccessoryTabType& tab_type) override;
+  void SetSelectedSuggestion(std::optional<int> suggestion_index) override;
+  bool Navigate(autofill::NavigationAction action) override;
+  bool AcceptFallback() override;
   void OnFillingTriggered(
       autofill::AccessoryTabType type,
       const autofill::AccessorySheetField& selection) override;
@@ -65,7 +69,6 @@ class ManualFillingControllerImpl
       base::OnceCallback<void(autofill::AccessorySheetData)> callback) override;
 
   gfx::NativeView container_view() const override;
-  bool IsLargeFormFactor() const override;
 
   // Returns a weak pointer for this object.
   base::WeakPtr<ManualFillingController> AsWeakPtr();

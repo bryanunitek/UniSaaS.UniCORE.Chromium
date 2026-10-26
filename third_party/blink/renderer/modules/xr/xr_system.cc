@@ -49,6 +49,7 @@
 #include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -82,11 +83,8 @@ const char kInvalidRequiredFeatures[] =
 const char kNoDevicesMessage[] = "No XR hardware found.";
 
 const char kImmersiveArModeNotValid[] =
-    "Failed to execute '%s' on 'XRSystem': The provided value 'immersive-ar' "
-    "is not a valid enum value of type XRSessionMode.";
-
-const char kTrackedImageWidthInvalid[] =
-    "trackedImages[%d].widthInMeters invalid, must be a positive number.";
+    "Failed to execute 'requestSession' on 'XRSystem': The provided value "
+    "'immersive-ar' is not a valid enum value of type XRSessionMode.";
 
 constexpr device::mojom::XRSessionFeature kDefaultImmersiveVrFeatures[] = {
     device::mojom::XRSessionFeature::REF_SPACE_VIEWER,
@@ -1267,8 +1265,7 @@ ScriptPromise<XRSession> XRSystem::requestSession(
   if (session_mode == device::mojom::blink::XRSessionMode::kImmersiveAr &&
       !IsImmersiveArAllowed()) {
     DVLOG(1) << __func__ << ": Immersive AR not allowed";
-    exception_state.ThrowTypeError(UNSAFE_TODO(
-        String::Format(kImmersiveArModeNotValid, "requestSession")));
+    exception_state.ThrowTypeError(kImmersiveArModeNotValid);
 
     // We haven't created the query yet, so we can't use it to implicitly log
     // our metrics for us, so explicitly log it here, as the query requires the
@@ -1357,8 +1354,10 @@ ScriptPromise<XRSession> XRSystem::requestSession(
       DCHECK(image->hasWidthInMeters()) << "required in IDL";
       if (std::isnan(image->widthInMeters()) ||
           image->widthInMeters() <= 0.0f) {
-        String message =
-            UNSAFE_TODO(String::Format(kTrackedImageWidthInvalid, index));
+        String message = Format(
+            "trackedImages[{}].widthInMeters invalid, must be a positive "
+            "number.",
+            index);
         query->RejectWithTypeError(message, &exception_state);
         return promise;
       }
@@ -1573,9 +1572,9 @@ void XRSystem::FinishSessionCreation(
       return;
     }
 
-    String error_message = UNSAFE_TODO(
-        String::Format("Could not create a session because: %s",
-                       GetConsoleMessage(result->get_failure_reason())));
+    String error_message =
+        StrCat({"Could not create a session because: ",
+                GetConsoleMessage(result->get_failure_reason())});
     AddConsoleMessage(mojom::blink::ConsoleMessageLevel::kError, error_message);
     query->RejectWithDOMException(DOMExceptionCode::kNotSupportedError,
                                   kSessionNotSupported, nullptr);

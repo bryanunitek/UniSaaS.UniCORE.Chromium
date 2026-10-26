@@ -4,20 +4,25 @@
 
 #include "chrome/browser/ui/views/picture_in_picture/document_pip_host.h"
 
+#include <vector>
+
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
-#include "chrome/browser/ssl/chrome_security_state_tab_helper.h"
 #include "chrome/browser/ui/views/picture_in_picture/document_pip_contents_view.h"
 #include "chrome/browser/ui/views/picture_in_picture/document_pip_widget_delegate.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "components/permissions/permission_request_manager.h"
-#include "components/security_state/content/security_state_tab_helper.h"
+#include "components/web_modal/modal_dialog_host.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/fullscreen_types.h"
+#include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "content/public/common/window_container_type.mojom.h"
@@ -30,12 +35,36 @@
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/display/screen.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/webview/webview.h"
+#include "ui/views/focus/focus_manager.h"
+#include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_observer.h"
 #include "ui/views/window/non_client_view.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/extensions/chrome_extension_web_contents_observer.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/extensions/tab_helper.h"
+#include "chrome/browser/extensions/window_controller_list.h"
+#include "chrome/browser/extensions/window_controller_list_observer.h"
+#include "chrome/browser/ui/views/picture_in_picture/document_pip_base_window.h"
+#include "components/sessions/content/session_tab_helper.h"
+#include "components/zoom/zoom_controller.h"
+#include "extensions/browser/view_type_utils.h"
+#include "extensions/common/extension_builder.h"
+#include "extensions/common/mojom/context_type.mojom.h"
+#include "extensions/common/mojom/view_type.mojom.h"
+#include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/base_window.h"
+#include "ui/views/test/mock_native_widget.h"
+#include "ui/views/window/frame_view.h"
+#endif
 
 namespace {
 
@@ -61,7 +90,7 @@ class RecordingOpenURLDelegate : public content::WebContentsDelegate {
  private:
   int call_count_ = 0;
   raw_ptr<content::WebContents> source_ = nullptr;
-  WindowOpenDisposition disposition_ = WindowOpenDisposition::UNKNOWN;
+  WindowOpenDisposition disposition_ = WindowOpenDisposition::kUnknown;
   GURL url_;
 };
 
@@ -91,7 +120,7 @@ class RecordingAddNewContentsDelegate : public content::WebContentsDelegate {
  private:
   int call_count_ = 0;
   raw_ptr<content::WebContents> source_ = nullptr;
-  WindowOpenDisposition disposition_ = WindowOpenDisposition::UNKNOWN;
+  WindowOpenDisposition disposition_ = WindowOpenDisposition::kUnknown;
   std::unique_ptr<content::WebContents> new_contents_;
 };
 
@@ -107,6 +136,63 @@ blink::mojom::PictureInPictureWindowOptions MakeDefaultPipOptions() {
 gfx::Rect MakeDefaultInitialBounds() {
   return gfx::Rect(20, 30, 400, 300);
 }
+
+class TestModalDialogHostObserver : public web_modal::ModalDialogHostObserver {
+ public:
+  TestModalDialogHostObserver() = default;
+  ~TestModalDialogHostObserver() override = default;
+
+  void OnPositionRequiresUpdate() override {
+    ++on_position_requires_update_count_;
+  }
+
+  void OnHostDestroying() override { ++on_host_destroying_count_; }
+
+  int on_position_requires_update_count() const {
+    return on_position_requires_update_count_;
+  }
+  int on_host_destroying_count() const { return on_host_destroying_count_; }
+
+ private:
+  int on_position_requires_update_count_ = 0;
+  int on_host_destroying_count_ = 0;
+};
+
+class DialogManagerDelegateTeardownObserver : public views::WidgetObserver {
+ public:
+  DialogManagerDelegateTeardownObserver(views::Widget* widget,
+                                        content::WebContents* child)
+      : child_(child) {
+    observation_.Observe(widget);
+  }
+  ~DialogManagerDelegateTeardownObserver() override = default;
+
+  void OnWidgetDestroying(views::Widget* widget) override {
+    on_widget_destroying_called_ = true;
+    if (child_) {
+      if (auto* manager =
+              web_modal::WebContentsModalDialogManager::FromWebContents(
+                  child_)) {
+        was_delegate_null_at_destruction_ = (manager->delegate() == nullptr);
+      }
+    }
+    observation_.Reset();
+  }
+
+  bool on_widget_destroying_called() const {
+    return on_widget_destroying_called_;
+  }
+  bool was_delegate_null_at_destruction() const {
+    return was_delegate_null_at_destruction_;
+  }
+
+ private:
+  raw_ptr<content::WebContents, DisableDanglingPtrDetection> child_ = nullptr;
+  bool on_widget_destroying_called_ = false;
+  bool was_delegate_null_at_destruction_ = false;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{
+      this};
+};
 
 }  // namespace
 
@@ -126,13 +212,6 @@ class DocumentPipHostTest : public ChromeViewsTestBase {
     opener_web_contents_ =
         content::WebContentsTester::CreateTestWebContents(&profile_, nullptr);
     ASSERT_TRUE(opener_web_contents_);
-
-    // In production the opener always has a SecurityStateTabHelper attached (by
-    // TabHelpers). DocumentPipFrameView reads it to render the origin chip's
-    // security icon and CHECK()s the invariant, so attach it here to satisfy
-    // that invariant and exercise the populated security-state path.
-    ChromeSecurityStateTabHelper::CreateForWebContents(
-        opener_web_contents_.get());
 
     // Host the opener WebContents inside a test top-level widget so that
     // `opener->GetTopLevelNativeWindow()` returns a real native window -
@@ -216,6 +295,371 @@ TEST_F(DocumentPipHostTest, Accessors) {
   EXPECT_EQ(300u, host->GetPipOptions().height);
 }
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+namespace {
+
+extensions::WindowController* FindExtensionWindow(int window_id) {
+  for (extensions::WindowController* controller :
+       *extensions::WindowControllerList::GetInstance()) {
+    if (controller->GetWindowId() == window_id) {
+      return controller;
+    }
+  }
+  return nullptr;
+}
+
+class PipExtensionWindowObserver
+    : public extensions::WindowControllerListObserver,
+      public content::WebContentsObserver {
+ public:
+  PipExtensionWindowObserver() {
+    observation_.Observe(extensions::WindowControllerList::GetInstance());
+  }
+
+  void OnWindowControllerAdded(
+      extensions::WindowController* controller) override {
+    ++added;
+    window_id = controller->GetWindowId();
+    auto* child = controller->GetActiveTab();
+    ASSERT_TRUE(child);
+    EXPECT_EQ(window_id,
+              sessions::SessionTabHelper::IdForWindowContainingTab(child).id());
+    EXPECT_TRUE(extensions::TabHelper::FromWebContents(child));
+    EXPECT_TRUE(zoom::ZoomController::FromWebContents(child));
+    Observe(child);
+  }
+
+  void OnWindowControllerRemoved(
+      extensions::WindowController* controller) override {
+    ++removed;
+    EXPECT_EQ(window_id, controller->GetWindowId());
+    EXPECT_EQ(web_contents(), controller->GetActiveTab());
+    EXPECT_TRUE(controller->window()->GetNativeWindow());
+    EXPECT_FALSE(FindExtensionWindow(window_id));
+  }
+
+  void OnWindowBoundsChanged(
+      extensions::WindowController* controller) override {
+    EXPECT_EQ(window_id, controller->GetWindowId());
+    ++bounds_changed;
+  }
+
+  void OnWindowFocusChanged(extensions::WindowController* controller,
+                            bool has_focus) override {
+    EXPECT_EQ(window_id, controller->GetWindowId());
+    focus_changes.push_back(has_focus);
+  }
+
+  void WebContentsDestroyed() override {
+    EXPECT_EQ(added, removed);
+    EXPECT_FALSE(FindExtensionWindow(window_id));
+    ++children_destroyed;
+  }
+
+  int added = 0;
+  int removed = 0;
+  int children_destroyed = 0;
+  int window_id = -1;
+  int bounds_changed = 0;
+  std::vector<bool> focus_changes;
+
+ private:
+  base::ScopedObservation<extensions::WindowControllerList,
+                          extensions::WindowControllerListObserver>
+      observation_{this};
+};
+
+}  // namespace
+
+TEST_F(DocumentPipHostTest, ExtensionWindowIdentityAndHelpers) {
+  PipExtensionWindowObserver observer;
+  auto* host = CreateHostAndOpenPipWindow();
+  auto* child = host->GetChildWebContents();
+  auto* controller = FindExtensionWindow(host->GetSessionId().id());
+  ASSERT_TRUE(controller);
+  EXPECT_EQ(1, observer.added);
+  EXPECT_TRUE(host->GetSessionId().is_valid());
+  EXPECT_TRUE(sessions::SessionTabHelper::IdForTab(child).is_valid());
+  EXPECT_NE(host->GetSessionId(), sessions::SessionTabHelper::IdForTab(child));
+  EXPECT_EQ(&profile_, controller->profile());
+  EXPECT_FALSE(controller->GetBrowserWindowInterface());
+  EXPECT_FALSE(controller->GetBrowser());
+  EXPECT_EQ(1, controller->GetTabCount());
+  EXPECT_EQ(child, controller->GetActiveTab());
+  EXPECT_EQ(child, controller->GetWebContentsAt(0));
+  EXPECT_FALSE(controller->GetWebContentsAt(-1));
+  EXPECT_FALSE(controller->GetWebContentsAt(1));
+  EXPECT_EQ(extensions::mojom::ViewType::kTabContents,
+            extensions::GetViewType(child));
+  EXPECT_TRUE(
+      extensions::ChromeExtensionWebContentsObserver::FromWebContents(child));
+  ASSERT_TRUE(extensions::TabHelper::FromWebContents(child));
+  EXPECT_TRUE(extensions::TabHelper::FromWebContents(child)->script_executor());
+  EXPECT_TRUE(zoom::ZoomController::FromWebContents(child));
+  host->Close();
+  EXPECT_EQ(1, observer.removed);
+  EXPECT_EQ(1, observer.children_destroyed);
+  EXPECT_FALSE(host->GetSessionId().is_valid());
+}
+
+TEST_F(DocumentPipHostTest, ExtensionWindowSerializationScrubsTabMetadata) {
+  auto* host = CreateHostAndOpenPipWindow();
+  auto* controller = FindExtensionWindow(host->GetSessionId().id());
+  ASSERT_TRUE(controller);
+  auto* child = host->GetChildWebContents();
+  const GURL url("https://example.test/pip");
+  content::WebContentsTester::For(child)->NavigateAndCommit(url);
+  child->UpdateTitleForEntry(child->GetController().GetLastCommittedEntry(),
+                             u"PiP title");
+
+  using extensions::WindowController;
+  constexpr auto context = extensions::mojom::ContextType::kPrivilegedExtension;
+  auto value = controller->CreateWindowValueForExtension(
+      nullptr, WindowController::kDontPopulateTabs, context);
+  EXPECT_EQ(controller->GetWindowId(), value.FindInt("id"));
+  EXPECT_EQ("popup", *value.FindString("type"));
+  EXPECT_EQ("normal", *value.FindString("state"));
+  EXPECT_EQ(false, value.FindBool("incognito"));
+  EXPECT_EQ(true, value.FindBool("alwaysOnTop"));
+  EXPECT_EQ(host->GetWidget()->IsActive(), value.FindBool("focused"));
+  const gfx::Rect bounds = host->GetWidget()->GetWindowBoundsInScreen();
+  EXPECT_EQ(bounds.x(), value.FindInt("left"));
+  EXPECT_EQ(bounds.y(), value.FindInt("top"));
+  EXPECT_EQ(bounds.width(), value.FindInt("width"));
+  EXPECT_EQ(bounds.height(), value.FindInt("height"));
+  EXPECT_FALSE(value.contains("tabs"));
+
+  value = controller->CreateWindowValueForExtension(
+      nullptr, WindowController::kPopulateTabs, context);
+  const auto* tabs = value.FindList("tabs");
+  ASSERT_TRUE(tabs);
+  ASSERT_EQ(1u, tabs->size());
+  const auto& tab = (*tabs)[0].GetDict();
+  EXPECT_EQ(sessions::SessionTabHelper::IdForTab(child).id(),
+            tab.FindInt("id"));
+  EXPECT_EQ(controller->GetWindowId(), tab.FindInt("windowId"));
+  EXPECT_EQ(0, tab.FindInt("index"));
+  EXPECT_EQ(true, tab.FindBool("active"));
+  EXPECT_EQ(true, tab.FindBool("selected"));
+  EXPECT_EQ(true, tab.FindBool("highlighted"));
+  EXPECT_FALSE(tab.contains("url"));
+  EXPECT_FALSE(tab.contains("title"));
+  EXPECT_FALSE(tab.contains("favIconUrl"));
+
+  auto extension =
+      extensions::ExtensionBuilder("tabs").AddAPIPermission("tabs").Build();
+  auto permitted_tabs = controller->CreateTabList(extension.get(), context);
+  ASSERT_EQ(1u, permitted_tabs.size());
+  const auto& permitted_tab = permitted_tabs[0].GetDict();
+  EXPECT_EQ(url.spec(), *permitted_tab.FindString("url"));
+  EXPECT_EQ("PiP title", *permitted_tab.FindString("title"));
+}
+
+TEST_F(DocumentPipHostTest, ExtensionWindowVisibilityAndOptionsWithoutBrowser) {
+  auto* host = CreateHostAndOpenPipWindow();
+  auto* controller = FindExtensionWindow(host->GetSessionId().id());
+  ASSERT_TRUE(controller);
+  auto extension = extensions::ExtensionBuilder("extension").Build();
+  EXPECT_TRUE(
+      controller->IsVisibleToTabsAPIForExtension(extension.get(), false));
+  EXPECT_TRUE(controller->IsVisibleToTabsAPIForExtension(nullptr, false));
+  auto app = extensions::ExtensionBuilder(
+                 "app", extensions::ExtensionBuilder::Type::PLATFORM_APP)
+                 .Build();
+  EXPECT_FALSE(controller->IsVisibleToTabsAPIForExtension(app.get(), true));
+  EXPECT_FALSE(controller->OpenOptionsPage(
+      extension.get(), GURL("https://example.test/options"), true));
+  using extensions::WindowController;
+  EXPECT_TRUE(
+      controller->MatchesFilter(WindowController::GetFilterFromWindowTypes(
+          {extensions::api::windows::WindowType::kPopup})));
+  EXPECT_FALSE(
+      controller->MatchesFilter(WindowController::GetFilterFromWindowTypes(
+          {extensions::api::windows::WindowType::kNormal})));
+}
+
+TEST_F(DocumentPipHostTest,
+       ExtensionWindowForwardsBoundsAndFocusNotifications) {
+  PipExtensionWindowObserver observer;
+  auto* host = CreateHostAndOpenPipWindow();
+  auto* controller = FindExtensionWindow(host->GetSessionId().id());
+  ASSERT_TRUE(controller);
+  observer.bounds_changed = 0;
+  const gfx::Rect bounds(45, 55, 450, 350);
+  controller->window()->SetBounds(bounds);
+  EXPECT_EQ(bounds, controller->window()->GetBounds());
+  EXPECT_GT(observer.bounds_changed, 0);
+
+  // Native activation delivery varies by platform; drive both host callbacks.
+  observer.focus_changes.clear();
+  host->OnWidgetActivationChanged(host->GetWidget(), false);
+  host->OnWidgetActivationChanged(host->GetWidget(), true);
+  EXPECT_EQ((std::vector<bool>{false, true}), observer.focus_changes);
+}
+
+TEST_F(DocumentPipHostTest, ExtensionWindowControllerUsesHostWidget) {
+  auto* host = CreateHostAndOpenPipWindow();
+  auto* controller = FindExtensionWindow(host->GetSessionId().id());
+  ASSERT_TRUE(controller);
+  EXPECT_EQ(host->GetWidget()->GetNativeWindow(),
+            controller->window()->GetNativeWindow());
+  controller->SetFullscreenMode(true, GURL("chrome-extension://example/"));
+  EXPECT_FALSE(host->GetWidget()->IsFullscreen());
+}
+
+TEST_F(DocumentPipHostTest, ExtensionWindowAdapterOperations) {
+  // Test adapter forwarding without the native window manager overriding the
+  // requested z-order.
+  test_views_delegate()->set_use_desktop_native_widgets(false);
+  // The in-process activation client needs another window to activate.
+  auto other_widget =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  other_widget->Show();
+  auto widget = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  DocumentPipBaseWindow base_window(*widget);
+  ui::BaseWindow* window = &base_window;
+  EXPECT_EQ(widget->GetNativeWindow(), window->GetNativeWindow());
+  EXPECT_EQ(widget->GetRestoredBounds(), window->GetRestoredBounds());
+  EXPECT_EQ(ui::mojom::WindowShowState::kNormal, window->GetRestoredState());
+  EXPECT_EQ(widget->IsActive(), window->IsActive());
+  EXPECT_EQ(widget->IsMaximized(), window->IsMaximized());
+  EXPECT_EQ(widget->IsMinimized(), window->IsMinimized());
+  EXPECT_EQ(widget->IsFullscreen(), window->IsFullscreen());
+
+  EXPECT_FALSE(window->IsVisible());
+  window->Show();
+  EXPECT_TRUE(window->IsVisible());
+  EXPECT_TRUE(window->IsActive());
+  window->Hide();
+  EXPECT_FALSE(window->IsVisible());
+  other_widget->Activate();
+  window->ShowInactive();
+  EXPECT_TRUE(window->IsVisible());
+  EXPECT_FALSE(window->IsActive());
+  window->Show();
+  EXPECT_TRUE(widget->IsVisible());
+  EXPECT_TRUE(window->IsActive());
+  window->ShowInactive();
+  EXPECT_TRUE(window->IsActive());
+  // Native deactivation is unsupported on macOS; forwarding is tested below.
+  other_widget->Activate();
+  EXPECT_FALSE(window->IsActive());
+  window->ShowInactive();
+  EXPECT_FALSE(window->IsActive());
+  window->Activate();
+  EXPECT_TRUE(window->IsActive());
+  window->Maximize();
+  EXPECT_FALSE(window->IsMaximized());
+  EXPECT_FALSE(window->IsFullscreen());
+  window->Minimize();
+  EXPECT_FALSE(window->IsMinimized());
+  window->Restore();
+  EXPECT_FALSE(window->IsMinimized());
+  window->FlashFrame(true);
+  window->FlashFrame(false);
+  window->SetZOrderLevel(ui::ZOrderLevel::kNormal);
+  EXPECT_EQ(ui::ZOrderLevel::kNormal, widget->GetZOrderLevel());
+  window->SetZOrderLevel(ui::ZOrderLevel::kFloatingWindow);
+  EXPECT_EQ(ui::ZOrderLevel::kFloatingWindow, window->GetZOrderLevel());
+}
+
+TEST_F(DocumentPipHostTest, ExtensionWindowAdapterForwardsDeactivation) {
+  auto widget = std::make_unique<views::Widget>();
+  auto native_widget =
+      std::make_unique<testing::NiceMock<views::MockNativeWidget>>(
+          widget.get());
+  ON_CALL(*native_widget, CreateFrameView).WillByDefault([]() {
+    return std::make_unique<views::FrameView>();
+  });
+  auto params = CreateParams(views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+                             views::Widget::InitParams::TYPE_WINDOW);
+  params.native_widget = native_widget.get();
+  widget->Init(std::move(params));
+
+  {
+    DocumentPipBaseWindow window(*widget);
+    EXPECT_CALL(*native_widget, Deactivate());
+    window.Deactivate();
+    EXPECT_CALL(*native_widget, IsActive()).WillOnce(testing::Return(false));
+    EXPECT_FALSE(window.IsActive());
+  }
+  widget.reset();
+}
+
+enum class ExtensionClosePath {
+  kHost,
+  kChild,
+  kWidget,
+  kNativeWidget,
+  kExtension,
+  kOpenerNavigation,
+  kOpenerDestruction,
+};
+
+class DocumentPipExtensionCloseTest
+    : public DocumentPipHostTest,
+      public testing::WithParamInterface<ExtensionClosePath> {};
+
+TEST_P(DocumentPipExtensionCloseTest,
+       UnregistersBeforeDestructionAndCanReopen) {
+  PipExtensionWindowObserver observer;
+  auto* host = CreateHostAndOpenPipWindow();
+  const SessionID window_id = host->GetSessionId();
+  const SessionID tab_id =
+      sessions::SessionTabHelper::IdForTab(host->GetChildWebContents());
+  switch (GetParam()) {
+    case ExtensionClosePath::kHost:
+      host->Close();
+      break;
+    case ExtensionClosePath::kChild:
+      host->CloseContents(host->GetChildWebContents());
+      break;
+    case ExtensionClosePath::kWidget:
+      host->GetWidget()->Close();
+      break;
+    case ExtensionClosePath::kNativeWidget:
+      host->GetWidget()->CloseNow();
+      break;
+    case ExtensionClosePath::kExtension:
+      FindExtensionWindow(window_id.id())->window()->Close();
+      break;
+    case ExtensionClosePath::kOpenerNavigation:
+      content::WebContentsTester::For(opener())->NavigateAndCommit(
+          GURL("https://example.test/next"));
+      break;
+    case ExtensionClosePath::kOpenerDestruction:
+      opener_web_contents_.reset();
+      break;
+  }
+  EXPECT_EQ(1, observer.removed);
+  EXPECT_EQ(1, observer.children_destroyed);
+  EXPECT_FALSE(FindExtensionWindow(window_id.id()));
+  if (opener()) {
+    host->Close();
+    EXPECT_EQ(1, observer.removed);
+    EXPECT_EQ(host, CreateHostAndOpenPipWindow());
+    EXPECT_NE(window_id, host->GetSessionId());
+    EXPECT_NE(tab_id, sessions::SessionTabHelper::IdForTab(
+                          host->GetChildWebContents()));
+    EXPECT_EQ(2, observer.added);
+    host->Close();
+    EXPECT_EQ(2, observer.removed);
+    EXPECT_EQ(2, observer.children_destroyed);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    DocumentPipExtensionCloseTest,
+    testing::Values(ExtensionClosePath::kHost,
+                    ExtensionClosePath::kChild,
+                    ExtensionClosePath::kWidget,
+                    ExtensionClosePath::kNativeWidget,
+                    ExtensionClosePath::kExtension,
+                    ExtensionClosePath::kOpenerNavigation,
+                    ExtensionClosePath::kOpenerDestruction));
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+
 // The host creates a Widget with a DocumentPipWidgetDelegate.
 TEST_F(DocumentPipHostTest, WidgetIsCreated) {
   DocumentPipHost* host = CreateHostAndOpenPipWindow();
@@ -226,13 +670,40 @@ TEST_F(DocumentPipHostTest, WidgetIsCreated) {
   EXPECT_FALSE(w->IsClosed());
 }
 
-// Regression test for crbug.com/519833771: opening the PiP window builds the
-// DocumentPipFrameView, which reads the opener's SecurityStateTabHelper to
-// render the origin chip security icon. With the helper attached (the
-// production invariant), this populated path must complete without crashing.
-TEST_F(DocumentPipHostTest, OpenPipWindow_PopulatesSecurityStateWithoutCrash) {
-  ASSERT_TRUE(SecurityStateTabHelper::FromWebContents(opener()));
+TEST_F(DocumentPipHostTest, WindowTitleUpdatesWithOpener) {
+  content::WebContentsTester::For(opener())->NavigateAndCommit(
+      GURL("https://example.com/"));
+  auto* entry = opener()->GetController().GetLastCommittedEntry();
+  ASSERT_TRUE(entry);
+  opener()->UpdateTitleForEntry(entry, u"Original\ntitle");
 
+  auto* host = CreateHostAndOpenPipWindow();
+  auto* widget = host->GetWidget();
+  ASSERT_TRUE(widget);
+  auto& root_accessibility = widget->GetRootView()->GetViewAccessibility();
+  EXPECT_EQ(u"Originaltitle", widget->widget_delegate()->GetWindowTitle());
+  EXPECT_EQ(u"Originaltitle", root_accessibility.GetCachedName());
+
+  opener()->UpdateTitleForEntry(entry, u"Updated\ntitle");
+  EXPECT_EQ(u"Updatedtitle", widget->widget_delegate()->GetWindowTitle());
+  EXPECT_EQ(u"Updatedtitle", root_accessibility.GetCachedName());
+
+  content::WebContentsTester::For(host->GetChildWebContents())
+      ->SetTitle(u"Child title");
+  host->NavigationStateChanged(host->GetChildWebContents(),
+                               content::INVALIDATE_TYPE_TITLE);
+  EXPECT_EQ(u"Updatedtitle", root_accessibility.GetCachedName());
+
+  host->Close();
+  opener()->UpdateTitleForEntry(entry, u"Title after PiP closes");
+  EXPECT_FALSE(host->GetWidget());
+}
+
+// Regression test for crbug.com/519833771: opening the PiP window builds the
+// DocumentPipFrameView, which computes the opener's security state to render
+// the origin chip security icon. This populated path must complete without
+// crashing.
+TEST_F(DocumentPipHostTest, OpenPipWindow_PopulatesSecurityStateWithoutCrash) {
   DocumentPipHost* host = CreateHostAndOpenPipWindow();
   ASSERT_TRUE(host);
 
@@ -421,7 +892,7 @@ TEST_F(DocumentPipHostTest, AddNewContents_BlocksWhenOpenerHasNoDelegate) {
   auto popup =
       content::WebContentsTester::CreateTestWebContents(&profile_, nullptr);
   host->AddNewContents(host->GetChildWebContents(), std::move(popup), GURL(),
-                       WindowOpenDisposition::NEW_POPUP,
+                       WindowOpenDisposition::kNewPopup,
                        blink::mojom::WindowFeatures(), /*user_gesture=*/false,
                        &was_blocked);
   EXPECT_TRUE(was_blocked);
@@ -437,13 +908,20 @@ TEST_F(DocumentPipHostTest, OpenURLFromTab_CurrentTabClosesPipWindow) {
   content::WebContents* child = host->GetChildWebContents();
   content::WebContentsDestroyedWatcher child_destroyed_watcher(child);
 
-  content::OpenURLParams params(
-      GURL("https://example.test/"), content::Referrer(),
-      WindowOpenDisposition::CURRENT_TAB, ui::PAGE_TRANSITION_LINK,
-      /*is_renderer_initiated=*/true);
+  content::OpenURLParams params =
+      content::OpenURLParams::CreateRendererInitiated(
+          GURL("https://example.test/"), WindowOpenDisposition::kCurrentTab,
+          ui::PAGE_TRANSITION_LINK, content::Referrer(),
+          child->GetPrimaryMainFrame()->GetCurrentInitiatorNavigationState());
   EXPECT_EQ(nullptr, host->OpenURLFromTab(child, params, base::NullCallback()));
 
   EXPECT_EQ(0, opener_delegate.call_count());
+  EXPECT_TRUE(host->GetWidget());
+  EXPECT_EQ(child, host->GetChildWebContents());
+  EXPECT_FALSE(child_destroyed_watcher.IsDestroyed());
+
+  content::RunAllTasksUntilIdle();
+
   EXPECT_EQ(nullptr, host->GetWidget());
   EXPECT_EQ(nullptr, host->GetChildWebContents());
   EXPECT_TRUE(child_destroyed_watcher.IsDestroyed());
@@ -459,16 +937,17 @@ TEST_F(DocumentPipHostTest, OpenURLFromTab_NewForegroundTabRoutesToOpener) {
   content::WebContents* child = host->GetChildWebContents();
   const GURL url("https://example.test/");
 
-  content::OpenURLParams params(url, content::Referrer(),
-                                WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                                ui::PAGE_TRANSITION_LINK,
-                                /*is_renderer_initiated=*/true);
+  content::OpenURLParams params =
+      content::OpenURLParams::CreateRendererInitiated(
+          url, WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_LINK, content::Referrer(),
+          child->GetPrimaryMainFrame()->GetCurrentInitiatorNavigationState());
   EXPECT_EQ(opener(),
             host->OpenURLFromTab(child, params, base::NullCallback()));
 
   EXPECT_EQ(1, opener_delegate.call_count());
   EXPECT_EQ(opener(), opener_delegate.source());
-  EXPECT_EQ(WindowOpenDisposition::NEW_FOREGROUND_TAB,
+  EXPECT_EQ(WindowOpenDisposition::kNewForegroundTab,
             opener_delegate.disposition());
   EXPECT_EQ(url, opener_delegate.url());
   EXPECT_TRUE(host->GetWidget());
@@ -614,6 +1093,24 @@ TEST_F(DocumentPipHostTest, IsContentsActive_ReturnsTrue) {
   EXPECT_TRUE(host->IsContentsActive(host->GetChildWebContents()));
 }
 
+TEST_F(DocumentPipHostTest, OpenPipWindowFocusesContents) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+
+  auto* contents_view = static_cast<DocumentPipWidgetDelegate*>(
+                            host->GetWidget()->widget_delegate())
+                            ->GetDocumentPipContentsView();
+  ASSERT_TRUE(contents_view);
+  if (!host->GetWidget()->IsActive()) {
+    host->OnWidgetActivationChanged(host->GetWidget(), /*active=*/true);
+  }
+  EXPECT_TRUE(contents_view->HasFocus() ||
+              contents_view->Contains(
+                  host->GetWidget()->GetFocusManager()->GetFocusedView()) ||
+              contents_view->Contains(
+                  host->GetWidget()->GetFocusManager()->GetStoredFocusView()));
+}
+
 // GetWindowBoundsInScreen returns the widget bounds when widget exists.
 TEST_F(DocumentPipHostTest, GetWindowBoundsInScreen_ReturnsWidgetBounds) {
   DocumentPipHost* host = CreateHostAndOpenPipWindow();
@@ -689,12 +1186,12 @@ TEST_F(DocumentPipHostTest, AddNewContents_ForwardsToOpenerDelegate) {
   content::WebContents* popup_ptr = popup.get();
   content::WebContents* result = host->AddNewContents(
       host->GetChildWebContents(), std::move(popup), GURL(),
-      WindowOpenDisposition::NEW_POPUP, blink::mojom::WindowFeatures(),
+      WindowOpenDisposition::kNewPopup, blink::mojom::WindowFeatures(),
       /*user_gesture=*/true, &was_blocked);
 
   EXPECT_EQ(1, opener_delegate.call_count());
   EXPECT_EQ(opener(), opener_delegate.source());
-  EXPECT_EQ(WindowOpenDisposition::NEW_POPUP, opener_delegate.disposition());
+  EXPECT_EQ(WindowOpenDisposition::kNewPopup, opener_delegate.disposition());
   EXPECT_EQ(popup_ptr, result);
   EXPECT_FALSE(was_blocked);
   opener()->SetDelegate(nullptr);
@@ -742,4 +1239,322 @@ TEST_F(DocumentPipHostTest, CheckMediaAccessPermission_NotGrantedByDefault) {
   EXPECT_FALSE(host->CheckMediaAccessPermission(
       child->GetPrimaryMainFrame(), url::Origin::Create(kUrl),
       blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE));
+}
+
+// --- Web modal dialog tests ---
+
+TEST_F(DocumentPipHostTest,
+       OpenPipWindow_CreatesAndWiresWebContentsModalDialogManager) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+
+  content::WebContents* child = host->GetChildWebContents();
+  ASSERT_TRUE(child);
+  auto* manager =
+      web_modal::WebContentsModalDialogManager::FromWebContents(child);
+  ASSERT_TRUE(manager);
+  EXPECT_EQ(host, manager->delegate());
+}
+
+TEST_F(DocumentPipHostTest, SetWebContentsBlocked_FocusesWhenUnblocked) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+
+  content::WebContents* child = host->GetChildWebContents();
+  ASSERT_TRUE(child);
+
+  auto* delegate = static_cast<DocumentPipWidgetDelegate*>(
+      host->GetWidget()->widget_delegate());
+  ASSERT_TRUE(delegate);
+  auto* contents_view = delegate->GetDocumentPipContentsView();
+  ASSERT_TRUE(contents_view);
+
+  // Clear focus first to ensure unblocking actively restores it.
+  host->GetWidget()->GetFocusManager()->ClearFocus();
+  EXPECT_FALSE(contents_view->HasFocus());
+
+  host->SetWebContentsBlocked(child, true);
+  EXPECT_FALSE(contents_view->HasFocus());
+
+  host->GetWidget()->Activate();
+  host->SetWebContentsBlocked(child, false);
+  if (contents_view->IsFocusable() && host->GetWidget()->IsActive()) {
+    EXPECT_TRUE(
+        contents_view->HasFocus() ||
+        contents_view->Contains(
+            host->GetWidget()->GetFocusManager()->GetFocusedView()) ||
+        contents_view->Contains(
+            host->GetWidget()->GetFocusManager()->GetStoredFocusView()));
+  }
+}
+
+TEST_F(DocumentPipHostTest, SetWebContentsBlocked_InactiveWidgetDoesNotFocus) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+
+  content::WebContents* child = host->GetChildWebContents();
+  ASSERT_TRUE(child);
+
+  auto* delegate = static_cast<DocumentPipWidgetDelegate*>(
+      host->GetWidget()->widget_delegate());
+  ASSERT_TRUE(delegate);
+  auto* contents_view = delegate->GetDocumentPipContentsView();
+  ASSERT_TRUE(contents_view);
+
+  host->GetWidget()->GetFocusManager()->ClearFocus();
+  host->GetWidget()->Deactivate();
+
+  views::FocusManager* focus_manager = host->GetWidget()->GetFocusManager();
+  views::View* focused_view_before_unblock = focus_manager->GetFocusedView();
+  views::View* stored_focus_before_unblock =
+      focus_manager->GetStoredFocusView();
+
+  host->SetWebContentsBlocked(child, true);
+  host->SetWebContentsBlocked(child, false);
+
+  if (!host->GetWidget()->IsActive()) {
+    EXPECT_FALSE(contents_view->HasFocus());
+    EXPECT_EQ(focused_view_before_unblock, focus_manager->GetFocusedView());
+    EXPECT_EQ(stored_focus_before_unblock, focus_manager->GetStoredFocusView());
+  }
+}
+
+TEST_F(DocumentPipHostTest, GetWebContentsModalDialogHost_ReturnsHost) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+
+  content::WebContents* child = host->GetChildWebContents();
+  ASSERT_TRUE(child);
+  EXPECT_EQ(host, host->GetWebContentsModalDialogHost(child));
+  EXPECT_TRUE(host->IsWebContentsVisible(child));
+}
+
+TEST_F(DocumentPipHostTest,
+       WebContentsModalDialogHost_CoordinateAndSizeCalculations) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+
+  EXPECT_EQ(host->GetWidget()->GetNativeView(), host->GetHostView());
+
+  auto* delegate = static_cast<DocumentPipWidgetDelegate*>(
+      host->GetWidget()->widget_delegate());
+  ASSERT_TRUE(delegate);
+  auto* contents_view = delegate->GetDocumentPipContentsView();
+  ASSERT_TRUE(contents_view);
+
+  EXPECT_EQ(contents_view->size(), host->GetMaximumDialogSize());
+
+  gfx::Rect contents_area =
+      contents_view->ConvertRectToWidget(contents_view->GetLocalBounds());
+  gfx::Size dialog_size(100, 80);
+  gfx::Point pos = host->GetDialogPosition(dialog_size);
+  int middle_x = contents_area.x() + contents_area.width() / 2;
+  int expected_x = middle_x - dialog_size.width() / 2;
+  int max_x = contents_area.right() - dialog_size.width();
+  expected_x = std::max(std::min(expected_x, max_x), contents_area.x());
+  EXPECT_EQ(gfx::Point(expected_x, contents_area.y()), pos);
+
+  // When the dialog is wider than the contents area, x should clamp to
+  // contents_area.x().
+  gfx::Size wide_dialog_size(contents_area.width() + 200, 80);
+  gfx::Point wide_pos = host->GetDialogPosition(wide_dialog_size);
+  EXPECT_EQ(contents_area.x(), wide_pos.x());
+  EXPECT_EQ(contents_area.y(), wide_pos.y());
+}
+
+TEST_F(DocumentPipHostTest, ClosePipWindow_UnsetsDialogManagerDelegate) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+
+  content::WebContents* child = host->GetChildWebContents();
+  ASSERT_TRUE(child);
+  auto* manager =
+      web_modal::WebContentsModalDialogManager::FromWebContents(child);
+  ASSERT_TRUE(manager);
+  EXPECT_EQ(host, manager->delegate());
+
+  DialogManagerDelegateTeardownObserver teardown_observer(host->GetWidget(),
+                                                          child);
+  host->CloseContents(child);
+  EXPECT_TRUE(teardown_observer.on_widget_destroying_called());
+  EXPECT_TRUE(teardown_observer.was_delegate_null_at_destruction());
+  EXPECT_EQ(nullptr, host->GetChildWebContents());
+}
+
+TEST_F(DocumentPipHostTest, WebContentsModalDialogHost_ObserversNotified) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+
+  TestModalDialogHostObserver test_observer;
+  host->AddObserver(&test_observer);
+
+  EXPECT_EQ(0, test_observer.on_position_requires_update_count());
+  EXPECT_EQ(0, test_observer.on_host_destroying_count());
+
+  host->GetWidget()->SetBounds(gfx::Rect(50, 50, 500, 400));
+  EXPECT_GT(test_observer.on_position_requires_update_count(), 0);
+  EXPECT_EQ(0, test_observer.on_host_destroying_count());
+
+  host->CloseContents(host->GetChildWebContents());
+  EXPECT_EQ(1, test_observer.on_host_destroying_count());
+}
+
+// --- Lifecycle & observer tests ---
+
+// When the opener navigates to a new primary page, the PiP window is torn
+// down (its child WebContents destroyed) but the host stays attached to the
+// opener.
+TEST_F(DocumentPipHostTest, PrimaryPageChanged_ClosesPipWindow) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+  content::WebContents* child = host->GetChildWebContents();
+  content::WebContentsDestroyedWatcher child_destroyed_watcher(child);
+
+  // Navigate the opener to a new primary page; this fires PrimaryPageChanged.
+  content::WebContentsTester::For(opener())->NavigateAndCommit(
+      GURL("https://opener.test/next"));
+
+  EXPECT_EQ(host, DocumentPipHost::FromWebContents(opener()));
+  EXPECT_EQ(nullptr, host->GetWidget());
+  EXPECT_EQ(nullptr, host->GetChildWebContents());
+  EXPECT_TRUE(child_destroyed_watcher.IsDestroyed());
+}
+
+// The public Close() entry point tears down the widget and child but keeps
+// the host attached to the opener, so a later CreateAndShowPipWindow() can
+// reopen.
+TEST_F(DocumentPipHostTest, Close_TearsDownWidgetKeepsHost) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+  content::WebContents* child = host->GetChildWebContents();
+  content::WebContentsDestroyedWatcher child_destroyed_watcher(child);
+
+  host->Close();
+
+  EXPECT_EQ(host, DocumentPipHost::FromWebContents(opener()));
+  EXPECT_EQ(nullptr, host->GetWidget());
+  EXPECT_EQ(nullptr, host->GetChildWebContents());
+  EXPECT_TRUE(child_destroyed_watcher.IsDestroyed());
+}
+
+// Close() is idempotent: calling it again after the window is already closed
+// is a safe no-op.
+TEST_F(DocumentPipHostTest, Close_IsIdempotent) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+
+  host->Close();
+  ASSERT_EQ(nullptr, host->GetWidget());
+
+  host->Close();
+  EXPECT_EQ(nullptr, host->GetWidget());
+}
+
+TEST_F(DocumentPipHostTest, WidgetCloseNow_TearsDownWidgetSynchronously) {
+  auto* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+  ASSERT_TRUE(host->GetWidget());
+  auto widget = host->GetWidget()->GetWeakPtr();
+  auto* child = host->GetChildWebContents();
+  ASSERT_TRUE(child);
+  content::WebContentsDestroyedWatcher child_destroyed_watcher(child);
+  DialogManagerDelegateTeardownObserver teardown_observer(host->GetWidget(),
+                                                          child);
+  TestModalDialogHostObserver modal_observer;
+  host->AddObserver(&modal_observer);
+
+  host->GetWidget()->CloseNow();
+
+  EXPECT_FALSE(widget);
+  EXPECT_EQ(host, DocumentPipHost::FromWebContents(opener()));
+  EXPECT_EQ(nullptr, host->GetWidget());
+  EXPECT_EQ(nullptr, host->GetChildWebContents());
+  EXPECT_TRUE(child_destroyed_watcher.IsDestroyed());
+  EXPECT_TRUE(teardown_observer.on_widget_destroying_called());
+  EXPECT_TRUE(teardown_observer.was_delegate_null_at_destruction());
+  EXPECT_EQ(1, modal_observer.on_host_destroying_count());
+
+  host->Close();
+  EXPECT_EQ(1, modal_observer.on_host_destroying_count());
+
+  EXPECT_EQ(host, CreateHostAndOpenPipWindow());
+  ASSERT_TRUE(host->GetWidget());
+  host->Close();
+  EXPECT_EQ(2, modal_observer.on_host_destroying_count());
+  host->RemoveObserver(&modal_observer);
+}
+
+TEST_F(DocumentPipHostTest, WidgetClose_UsesSynchronousCallback) {
+  auto* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+  ASSERT_TRUE(host->GetWidget());
+  auto widget = host->GetWidget()->GetWeakPtr();
+  content::WebContentsDestroyedWatcher child_destroyed_watcher(
+      host->GetChildWebContents());
+
+  host->GetWidget()->Close();
+
+  EXPECT_FALSE(widget);
+  EXPECT_EQ(nullptr, host->GetWidget());
+  EXPECT_EQ(nullptr, host->GetChildWebContents());
+  EXPECT_TRUE(child_destroyed_watcher.IsDestroyed());
+}
+
+// A second CreateAndShowPipWindow() while a window is already open is a
+// no-op: the existing widget/child are kept and the newly supplied child is
+// dropped.
+TEST_F(DocumentPipHostTest, CreateAndShowPipWindow_NoOpWhileAlreadyOpen) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+  views::Widget* first_widget = host->GetWidget();
+  content::WebContents* first_child = host->GetChildWebContents();
+  ASSERT_TRUE(first_widget);
+  ASSERT_TRUE(first_child);
+
+  auto second_child =
+      content::WebContentsTester::CreateTestWebContents(&profile_, nullptr);
+  content::WebContentsDestroyedWatcher second_child_watcher(second_child.get());
+  host->CreateAndShowPipWindow(std::move(second_child), MakeDefaultPipOptions(),
+                               MakeDefaultInitialBounds());
+
+  // The existing widget/child are unchanged, and the second child was
+  // dropped.
+  EXPECT_EQ(first_widget, host->GetWidget());
+  EXPECT_EQ(first_child, host->GetChildWebContents());
+  EXPECT_TRUE(second_child_watcher.IsDestroyed());
+}
+
+// ActivateContents forwards to the widget without crashing.
+TEST_F(DocumentPipHostTest, ActivateContents_DoesNotCrash) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+
+  host->ActivateContents(host->GetChildWebContents());
+}
+
+// A title-invalidation NavigationStateChanged refreshes the window title;
+// other invalidation types are ignored. Both paths must be crash-free.
+TEST_F(DocumentPipHostTest, NavigationStateChanged_TitleInvalidationIsSafe) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+
+  host->NavigationStateChanged(host->GetChildWebContents(),
+                               content::INVALIDATE_TYPE_TITLE);
+  host->NavigationStateChanged(host->GetChildWebContents(),
+                               content::INVALIDATE_TYPE_LOAD);
+}
+
+// SetForcedTucking toggles the tuck state (lazily creating the tucker)
+// without crashing, and remains safe to call after the window has been
+// closed.
+TEST_F(DocumentPipHostTest, SetForcedTucking_TogglesWithoutCrash) {
+  DocumentPipHost* host = CreateHostAndOpenPipWindow();
+  ASSERT_TRUE(host);
+
+  host->SetForcedTucking(true);
+  host->SetForcedTucking(false);
+
+  // After teardown there is no widget/tucker, but the call must stay safe.
+  host->Close();
+  host->SetForcedTucking(true);
 }

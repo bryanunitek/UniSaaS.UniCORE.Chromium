@@ -17,14 +17,19 @@ if (is_android) {
 # CDP to achieve the same results.
 
 mojom("core_test_automation") {
+  generate_blink = true
   generate_java = false
   testonly = true
   sources = [
     "cookie_manager/cookie_manager_automation.test-mojom",
+    "select_file_dialog/select_file_dialog_automation.test-mojom",
     "storage_access/storage_access_automation.test-mojom",
   ]
 
-  public_deps = [ "//services/network/public/mojom:cookies_mojom" ]
+  public_deps = [
+    "//mojo/public/mojom/base",
+    "//services/network/public/mojom:cookies_mojom",
+  ]
 
   overridden_deps = [ "//services/network/public/mojom:cookies_mojom" ]
   component_deps = [ "//third_party/blink/public/common" ]
@@ -34,13 +39,13 @@ mojom("core_test_automation") {
 }
 
 mojom("modules_test_automation") {
+  generate_blink = true
   generate_java = false
   testonly = true
   sources = [
     "compute_pressure/web_pressure_manager_automation.test-mojom",
     "device_posture/device_posture_provider_automation.test-mojom",
     "permissions/permission_automation.test-mojom",
-    "privacy_sandbox/web_privacy_sandbox_automation.test-mojom",
     "sensor/web_sensor_provider_automation.test-mojom",
     "webid/federated_auth_request_automation.test-mojom",
   ]

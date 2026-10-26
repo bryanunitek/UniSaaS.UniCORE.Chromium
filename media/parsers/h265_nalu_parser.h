@@ -146,6 +146,10 @@ class MEDIA_EXPORT H265NaluParser {
   // from AdvanceToNextNALU().
   std::vector<SubsampleEntry> GetCurrentSubsamples();
 
+  bool validate_extended_bitstream() const {
+    return validate_extended_bitstream_;
+  }
+
  protected:
   H264BitReader br_;
 
@@ -161,6 +165,11 @@ class MEDIA_EXPORT H265NaluParser {
   //   the start code as well as the trailing zero bits.
   // - the size in bytes of the start code is returned in |*start_code_size|.
   bool LocateNALU(size_t* nalu_size, size_t* start_code_size);
+
+  // Returns true if the two-byte NAL unit header at the start of |nalu_data|
+  // overlaps an encrypted subsample range. When it does, the header bits are
+  // ciphertext and must not be validated by value.
+  bool IsNaluHeaderEncrypted(base::span<const uint8_t> nalu_data) const;
 
   // Pointer to the current NALU in the stream.
   base::raw_span<const uint8_t, DanglingUntriaged> stream_;

@@ -35,7 +35,6 @@ import androidx.test.espresso.NoMatchingViewException;
 import androidx.test.espresso.UiController;
 import androidx.test.espresso.ViewAction;
 import androidx.test.espresso.matcher.ViewMatchers.Visibility;
-import androidx.test.filters.MediumTest;
 
 import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;
@@ -50,7 +49,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Shadows;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowActivity;
 
 import org.chromium.base.Callback;
@@ -59,6 +57,7 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeStringConstants;
@@ -76,6 +75,7 @@ import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.profiles.ProfileManagerUtilsJni;
+import org.chromium.chrome.browser.settings.MainSettings;
 import org.chromium.chrome.browser.settings.SettingsActivity;
 import org.chromium.chrome.browser.settings.SettingsIntentUtil;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
@@ -83,17 +83,15 @@ import org.chromium.components.autofill.VirtualCardEnrollmentLinkType;
 import org.chromium.components.autofill.VirtualCardEnrollmentState;
 import org.chromium.components.autofill.payments.LegalMessageLine;
 import org.chromium.components.browser_ui.settings.SettingsNavigation;
+import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
 import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.url.GURL;
 
 /** Unit tests for {@link AutofillServerCardEditor}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@DisableFeatures({
-    ChromeFeatureList.AUTOFILL_ENABLE_WALLET_BRANDING_V2,
-    ChromeFeatureList.SETTINGS_MULTI_COLUMN
-})
+@DisableFeatures(ChromeFeatureList.AUTOFILL_ENABLE_WALLET_BRANDING_V2)
+@EnableFeatures(ChromeFeatureList.CCT_DONT_OVERRIDE_INTENT_MIME_TYPE)
 public class AutofillServerCardEditorTest {
 
     private static final long NATIVE_AUTOFILL_PAYMENTS_METHODS_DELEGATE = 100L;
@@ -113,7 +111,7 @@ public class AutofillServerCardEditorTest {
     private static final CreditCard SAMPLE_VIRTUAL_CARD_ENROLLED_CARD =
             new CreditCard(
                     /* guid= */ "1",
-                    /* origin= */ "",
+                    /* isUserConfirmed= */ false,
                     /* isLocal= */ false,
                     /* isVirtual= */ false,
                     /* name= */ "John Doe",
@@ -141,7 +139,7 @@ public class AutofillServerCardEditorTest {
     private static final CreditCard SAMPLE_VIRTUAL_CARD_UNENROLLED_AND_ELIGIBLE_CARD =
             new CreditCard(
                     /* guid= */ "2",
-                    /* origin= */ "",
+                    /* isUserConfirmed= */ false,
                     /* isLocal= */ false,
                     /* isVirtual= */ false,
                     /* name= */ "John Doe",
@@ -170,7 +168,7 @@ public class AutofillServerCardEditorTest {
     private static final CreditCard SAMPLE_VIRTUAL_CARD_UNENROLLED_AND_NOT_ELIGIBLE_CARD =
             new CreditCard(
                     /* guid= */ "3",
-                    /* origin= */ "",
+                    /* isUserConfirmed= */ false,
                     /* isLocal= */ false,
                     /* isVirtual= */ false,
                     /* name= */ "John Doe",
@@ -212,6 +210,8 @@ public class AutofillServerCardEditorTest {
         ProfileManager.setLastUsedProfileForTesting(mProfile);
         ActorKeyedServiceFactory.setForTesting(mActorKeyedService);
         AutofillImageFetcherFactory.setInstanceForTesting(mImageFetcher);
+        SettingsIndexData.createInstance().resetNeedsIndexing();
+        MainSettings.setSkipPreferencesForTesting(true);
     }
 
     @After
@@ -219,6 +219,7 @@ public class AutofillServerCardEditorTest {
         if (mActivityScenario != null) {
             mActivityScenario.close();
         }
+        SettingsIndexData.reset();
     }
 
     private void initEditor(CreditCard card) {
@@ -245,7 +246,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void virtualCardEnrolled_virtualCardRemoveButtonShown() {
         initEditor(SAMPLE_VIRTUAL_CARD_ENROLLED_CARD);
 
@@ -259,7 +259,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void virtualCardUnenrolledAndEligible_virtualCardAddButtonShown() {
         initEditor(SAMPLE_VIRTUAL_CARD_UNENROLLED_AND_ELIGIBLE_CARD);
 
@@ -273,7 +272,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void virtualCardUnenrolledAndNotEligible_virtualCardLayoutNotShown() {
         initEditor(SAMPLE_VIRTUAL_CARD_UNENROLLED_AND_NOT_ELIGIBLE_CARD);
 
@@ -282,7 +280,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void
             virtualCardUnenrolledAndEligible_virtualCardAddButtonClicked_enrollAccepted_enrollmentSuccessful() {
         initEditor(SAMPLE_VIRTUAL_CARD_UNENROLLED_AND_ELIGIBLE_CARD);
@@ -398,7 +395,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void
             virtualCardUnenrolledAndEligible_virtualCardAddButtonClicked_enrollAccepted_enrollmentFailure() {
         initEditor(SAMPLE_VIRTUAL_CARD_UNENROLLED_AND_ELIGIBLE_CARD);
@@ -476,7 +472,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void virtualCardUnenrolledAndEligible_virtualCardAddButtonClicked_enrollRejected() {
         initEditor(SAMPLE_VIRTUAL_CARD_UNENROLLED_AND_ELIGIBLE_CARD);
 
@@ -550,7 +545,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void
             virtualCardUnenrolledAndEligible_virtualCardAddButtonClicked_enrollAccepted_editorExited() {
         initEditor(SAMPLE_VIRTUAL_CARD_UNENROLLED_AND_ELIGIBLE_CARD);
@@ -620,7 +614,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void virtualCardEnrolled_virtualCardRemoveButtonClicked_dialogShown() {
         initEditor(SAMPLE_VIRTUAL_CARD_ENROLLED_CARD);
 
@@ -643,7 +636,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void virtualCardEnrolled_virtualCardRemoveButtonClicked_unenrollCancelled() {
         initEditor(SAMPLE_VIRTUAL_CARD_ENROLLED_CARD);
 
@@ -690,7 +682,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void
             virtualCardEnrolled_virtualCardRemoveButtonClicked_unenrollAccepted_unenrollmentSuccessful() {
         initEditor(SAMPLE_VIRTUAL_CARD_ENROLLED_CARD);
@@ -763,7 +754,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void
             virtualCardEnrolled_virtualCardRemoveButtonClicked_unenrollAccepted_unenrollmentFailure() {
         initEditor(SAMPLE_VIRTUAL_CARD_ENROLLED_CARD);
@@ -821,7 +811,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void virtualCardEnrolled_virtualCardRemoveButtonClicked_unenrollAccepted_editorExited() {
         initEditor(SAMPLE_VIRTUAL_CARD_ENROLLED_CARD);
 
@@ -878,7 +867,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void testAutofillPaymentMethodsDelegateLifecycleEvents() {
         initEditor(SAMPLE_VIRTUAL_CARD_ENROLLED_CARD);
 
@@ -892,7 +880,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     public void testCustomUrlForServerCardEditPage() {
         initEditor(SAMPLE_VIRTUAL_CARD_ENROLLED_CARD);
 
@@ -916,7 +903,6 @@ public class AutofillServerCardEditorTest {
     }
 
     @Test
-    @MediumTest
     @CommandLineFlags.Add({ChromeSwitches.USE_SANDBOX_WALLET_ENVIRONMENT})
     public void testCustomUrlForServerCardEditPage_sandboxEnabled() {
         initEditor(SAMPLE_VIRTUAL_CARD_ENROLLED_CARD);

@@ -19,7 +19,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/after_startup_task_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
@@ -81,7 +80,7 @@ WebAppMetrics::WebAppMetrics(Profile* profile)
   }
 
   WebAppProvider* provider = WebAppProvider::GetForLocalAppsUnchecked(profile_);
-  DCHECK(provider);
+  CHECK(provider, base::NotFatalUntil::M162);
   provider->on_registry_ready().Post(
       FROM_HERE, base::BindOnce(&WebAppMetrics::CountUserInstalledApps,
                                 weak_ptr_factory_.GetWeakPtr()));
@@ -168,14 +167,16 @@ void WebAppMetrics::CountUserInstalledAppsForTesting() {
 }
 
 void WebAppMetrics::CountUserInstalledApps() {
-  DCHECK_EQ(kNumUserInstalledAppsNotCounted, num_user_installed_apps_);
+  CHECK_EQ(kNumUserInstalledAppsNotCounted, num_user_installed_apps_,
+           base::NotFatalUntil::M162);
 
   WebAppProvider* provider = WebAppProvider::GetForLocalAppsUnchecked(profile_);
 
   num_user_installed_apps_ =
       provider->registrar_unsafe().CountUserInstalledApps();
-  DCHECK_NE(kNumUserInstalledAppsNotCounted, num_user_installed_apps_);
-  DCHECK_GE(num_user_installed_apps_, 0);
+  CHECK_NE(kNumUserInstalledAppsNotCounted, num_user_installed_apps_,
+           base::NotFatalUntil::M162);
+  CHECK_GE(num_user_installed_apps_, 0, base::NotFatalUntil::M162);
 }
 
 }  // namespace web_app

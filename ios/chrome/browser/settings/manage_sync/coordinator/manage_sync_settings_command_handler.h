@@ -18,6 +18,9 @@
 // Opens the "Data from Chrome sync" web page.
 - (void)openDataFromChromeSyncWebPage;
 
+// Opens the "Connected Apps" web page.
+- (void)openConnectedAppsWebPage;
+
 // Sign-out and display a toast.
 - (void)signOutFromTargetRect:(CGRect)targetRect;
 
@@ -40,7 +43,8 @@
 // Open the view to manage account storage
 - (void)openAccountStorage;
 
-// Opens the account menu to switch account.
+// Opens the account menu to switch account. Assumes sign-in is enabled and
+// there is a primary account.
 - (void)openAccountMenu;
 
 // Close the manage sync settings view.

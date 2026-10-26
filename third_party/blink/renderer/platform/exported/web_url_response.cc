@@ -152,6 +152,7 @@ WebURLResponse WebURLResponse::Create(
   response.SetWasFetchedViaSPDY(head.was_fetched_via_spdy);
   response.SetWasFetchedViaServiceWorker(head.was_fetched_via_service_worker);
   response.SetFromSyntheticResponse(head.from_synthetic_response);
+  response.SetInterceptedByPlugin(head.intercepted_by_plugin);
   response.SetDidUseSharedDictionary(head.did_use_shared_dictionary);
   response.SetServiceWorkerResponseSource(head.service_worker_response_source);
   if (!head.service_worker_router_info.is_null()) {
@@ -495,6 +496,10 @@ void WebURLResponse::SetFromSyntheticResponse(bool value) {
   resource_response_->SetFromSyntheticResponse(value);
 }
 
+void WebURLResponse::SetInterceptedByPlugin(bool value) {
+  resource_response_->SetInterceptedByPlugin(value);
+}
+
 network::mojom::FetchResponseSource
 WebURLResponse::GetServiceWorkerResponseSource() const {
   return resource_response_->GetServiceWorkerResponseSource();
@@ -559,6 +564,20 @@ WebString WebURLResponse::CacheStorageCacheName() const {
 void WebURLResponse::SetCacheStorageCacheName(
     const WebString& cache_storage_cache_name) {
   resource_response_->SetCacheStorageCacheName(cache_storage_cache_name);
+}
+
+void WebURLResponse::SetCacheStorageSideDataWriter(
+    mojo::PendingRemote<network::mojom::CacheStorageSideDataWriter> remote) {
+  if (resource_response_->GetServiceWorkerResponseSource() ==
+          network::mojom::FetchResponseSource::kCacheStorage &&
+      remote.is_valid()) {
+    uint32_t version = remote.version();
+    resource_response_->SetCacheStorageSideDataWriter(
+        mojo::PendingRemote<network::mojom::blink::CacheStorageSideDataWriter>(
+            remote.PassPipe(), version));
+  } else {
+    resource_response_->SetCacheStorageSideDataWriter(mojo::NullRemote());
+  }
 }
 
 std::vector<WebString> WebURLResponse::CorsExposedHeaderNames() const {

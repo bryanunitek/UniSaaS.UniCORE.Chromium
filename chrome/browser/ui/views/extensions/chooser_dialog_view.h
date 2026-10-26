@@ -35,6 +35,7 @@ class ChooserDialogView : public views::DialogDelegateView,
   // views::DialogDelegate:
   bool IsDialogButtonEnabled(ui::mojom::DialogButton button) const override;
   views::View* GetInitiallyFocusedView() override;
+  bool ShouldAllowKeyEventsDuringInputProtection() const override;
 
   // views::TableViewObserver:
   void OnSelectionChanged() override;
@@ -44,5 +45,17 @@ class ChooserDialogView : public views::DialogDelegateView,
  private:
   raw_ptr<DeviceChooserContentView> device_chooser_content_view_;
 };
+
+namespace content {
+class WebContents;
+}
+
+namespace extensions {
+
+void ShowConstrainedDeviceChooserDialog(
+    content::WebContents* web_contents,
+    std::unique_ptr<permissions::ChooserController> controller);
+
+}  // namespace extensions
 
 #endif  // CHROME_BROWSER_UI_VIEWS_EXTENSIONS_CHOOSER_DIALOG_VIEW_H_

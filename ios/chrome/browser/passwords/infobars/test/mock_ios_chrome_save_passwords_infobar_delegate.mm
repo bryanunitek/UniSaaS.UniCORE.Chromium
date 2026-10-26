@@ -10,6 +10,8 @@
 #import "base/strings/sys_string_conversions.h"
 #import "components/password_manager/core/browser/mock_password_form_manager_for_ui.h"
 #import "components/password_manager/core/browser/password_manager_metrics_util.h"
+#import "components/password_manager/core/browser/password_string.h"
+#import "components/sync/test/test_sync_service.h"
 
 namespace {
 
@@ -42,19 +44,20 @@ MockIOSChromeSavePasswordInfoBarDelegate::Create(
     NSString* username,
     NSString* password,
     const GURL& url,
-    std::optional<std::string> account_to_store_password,
+    const syncer::SyncService* sync_service,
     password_manager::PasswordFormMetricsRecorder* metrics_recorder) {
   std::unique_ptr<password_manager::PasswordForm> form =
       std::make_unique<password_manager::PasswordForm>();
   form->username_value = base::SysNSStringToUTF16(username);
-  form->password_value = base::SysNSStringToUTF16(password);
+  form->password_value =
+      password_manager::PasswordString(base::SysNSStringToUTF16(password));
   auto url_ptr = std::make_unique<GURL>(url);
   std::unique_ptr<password_manager::MockPasswordFormManagerForUI> form_manager =
       CreateFormManager(form.get(), url_ptr.get(), metrics_recorder);
   password_manager::MockPasswordFormManagerForUI* mock_form_manager_ptr =
       form_manager.get();
   return base::WrapUnique(new MockIOSChromeSavePasswordInfoBarDelegate(
-      std::move(form), std::move(url_ptr), account_to_store_password,
+      std::move(form), std::move(url_ptr), sync_service,
       std::move(form_manager), mock_form_manager_ptr));
 }
 
@@ -62,24 +65,20 @@ MockIOSChromeSavePasswordInfoBarDelegate::
     MockIOSChromeSavePasswordInfoBarDelegate(
         std::unique_ptr<password_manager::PasswordForm> form,
         std::unique_ptr<GURL> url,
-        std::optional<std::string> account_to_store_password,
+        const syncer::SyncService* sync_service,
         std::unique_ptr<password_manager::MockPasswordFormManagerForUI>
             form_manager,
         password_manager::MockPasswordFormManagerForUI* mock_form_manager_ptr)
     : IOSChromeSavePasswordInfoBarDelegate(
-          account_to_store_password,
           /*password_update=*/false,
-          account_to_store_password.has_value()
-              ? password_manager::features_util::
-                    PasswordAccountStorageUserState::kSyncUser
-              : password_manager::features_util::
-                    PasswordAccountStorageUserState::kSignedOutUser,
           std::move(form_manager),
           ukm::kInvalidSourceId,
           /*is_replacement=*/false,
           /*sync_presenter_handler=*/nil,
+          /*settings_commands_handler=*/nil,
           /*profile_store=*/nullptr,
-          /*account_store=*/nullptr),
+          /*account_store=*/nullptr,
+          sync_service),
       form_(std::move(form)),
       url_(std::move(url)),
       mock_form_manager_(mock_form_manager_ptr) {}

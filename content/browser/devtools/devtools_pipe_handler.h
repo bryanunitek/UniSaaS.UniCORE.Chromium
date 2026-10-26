@@ -33,10 +33,10 @@ class DevToolsPipeHandler : public DevToolsAgentHostClient {
   void DispatchProtocolMessage(DevToolsAgentHost* agent_host,
                                base::span<const uint8_t> message) override;
   void AgentHostClosed(DevToolsAgentHost* agent_host) override;
-  bool MayAccessAllCookies() override;
   bool UsesBinaryProtocol() override;
   bool AllowUnsafeOperations() override;
   std::string GetTypeForMetrics() override;
+  PeerMetadata GetPeerMetadata() override;
 
   void Shutdown();
 

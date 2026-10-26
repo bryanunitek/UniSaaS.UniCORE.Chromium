@@ -14,15 +14,14 @@ export function getHtml(this: ComposeboxElement) {
   ${!this.disableComposeboxAnimation ? html`
     <search-animated-glow id="animatedSearchElement"
         animation-state="${this.animationState}"
+        glow-mode="inner-glow"
         .coloredTicTacVoiceAnimationEnabled=
             "${this.voiceSearchCoherenceEnabled}"
         .isListening="${this.isListening}"
-        .entrypointName="${this.entrypointName}"
         .requiresVoice="${this.shouldShowVoiceSearchAnimation()}"
         .transcript="${this.transcript}"
         .receivedSpeech="${this.receivedSpeech}"
         .energyEffectAnimationEnabled="${this.energyEffectAnimationEnabled}"
-        .isZeroState="${this.isZeroState}"
         .darkThemeColorsEnabled="${this.entrypointName !== ''}"
         .showingOnlyCarouselOnTopOfInput="${this.showFileCarousel
             && !this.inToolMode
@@ -69,7 +68,7 @@ export function getHtml(this: ComposeboxElement) {
   ${this.errorMessage ?
       html`<ntp-error-scrim id="errorScrim" part="error-scrim"
           ?compact-mode="${this.searchboxLayoutMode === 'Compact' &&
-                          this.files.size === 0}"
+                          !this.hasFiles()}"
           .errorMessage="${this.errorMessage}"
           @dismiss-error-scrim="${this.onDismissErrorScrim}">
       </ntp-error-scrim>`
@@ -78,10 +77,10 @@ export function getHtml(this: ComposeboxElement) {
         @keydown="${this.onKeydown}"
         @focusin="${this.onComposeboxFocusin_}"
         @focusout="${this.onComposeboxFocusout_}"
-        @dragenter="${this.dragAndDropHandler_.handleDragEnter}"
-        @dragover="${this.dragAndDropHandler_.handleDragOver}"
-        @dragleave="${this.dragAndDropHandler_.handleDragLeave}"
-        @drop="${this.dragAndDropHandler_.handleDrop}"
+        @dragenter="${this.dragAndDropHandler.handleDragEnter}"
+        @dragover="${this.dragAndDropHandler.handleDragOver}"
+        @dragleave="${this.dragAndDropHandler.handleDragLeave}"
+        @drop="${this.dragAndDropHandler.handleDrop}"
         @paste="${this.onPaste}">
       <div id="inputContainer" part="input-container">
         <cr-composebox-input id="composeboxInput"
@@ -164,7 +163,7 @@ export function getHtml(this: ComposeboxElement) {
                 @selected-match-index-changed="${this.onSelectedMatchIndexChanged}"
                 @match-focusin="${this.onMatchFocusin}"
                 @match-click="${this.onMatchClick}"
-                ?hidden="${!this.showDropdown || !this.dropdownNeeded}"
+                ?hidden="${this.shouldHideDropdown()}"
                 .lastQueriedInput="${this.lastQueriedInput}">
             </cr-composebox-dropdown>
             ${this.searchboxLayoutMode === 'TallBottomContext' || this.searchboxLayoutMode === '' || this.isOmniboxInCompactMode_ ? html`
@@ -172,7 +171,7 @@ export function getHtml(this: ComposeboxElement) {
             `: ''}
             ${this.shouldShowVoiceSearchAtBottom() ? html`
               <cr-icon-button id="voiceSearchButton" class="voice-icon" part="voice-icon"
-                  iron-icon="cr:mic" @click="${this.onVoiceSearchButtonClick}"
+                  iron-icon="cr:mic-filled" @click="${this.onVoiceSearchButtonClick}"
                   title="${this.i18n('voiceSearchButtonLabel')}">
               </cr-icon-button>
             ` : ''}
@@ -230,7 +229,6 @@ export function getHtml(this: ComposeboxElement) {
         .submitButtonIconType="${this.submitButtonIconType}"
         .dynamicTimeoutEnabled="${false}"
         .pageCallbackRouter="${this.searchboxCallbackRouter_}"
-        .metricSource="${this.composeboxSource}"
         exportparts="voice-close-button, voice-details-link, voice-stop-button, voice-submit-button">
     </cr-composebox-voice-search>
   ` : ''}

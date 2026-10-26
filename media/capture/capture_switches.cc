@@ -13,6 +13,11 @@ namespace switches {
 const char kVideoCaptureUseGpuMemoryBuffer[] =
     "video-capture-use-gpu-memory-buffer";
 
+// Makes the video capture service ignore devices from the wrapped factory and
+// expose only registered virtual devices.
+const char kVideoCaptureUseVirtualDevicesOnly[] =
+    "video-capture-use-virtual-devices-only";
+
 // This is for the same feature controlled by kVideoCaptureUseGpuMemoryBuffer.
 // kVideoCaptureUseGpuMemoryBuffer is settled by chromeos overlays. This flag is
 // necessary to overwrite the settings via chrome:// flag. The behavior of
@@ -35,6 +40,11 @@ bool IsMediaFoundationCameraUsageMonitoringEnabled() {
   return base::FeatureList::IsEnabled(
       features::kMediaFoundationCameraUsageMonitoring);
 }
+
+bool IsWinDeviceEnumerationWithoutActivationEnabled() {
+  return base::FeatureList::IsEnabled(
+      features::kWinDeviceEnumerationWithoutActivation);
+}
 #endif
 
 }  // namespace switches
@@ -53,6 +63,10 @@ BASE_FEATURE(kWebRtcPipeWireCamera, base::FEATURE_DISABLED_BY_DEFAULT);
 // Controls monitoring for camera usage by other applications.
 BASE_FEATURE(kMediaFoundationCameraUsageMonitoring,
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Avoids activating capture devices when only the device list is required.
+BASE_FEATURE(kWinDeviceEnumerationWithoutActivation,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace features

@@ -91,12 +91,17 @@
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/scheduler/public/event_loop.h"
 #include "third_party/blink/renderer/platform/testing/paint_test_configurations.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 namespace {
+
+constexpr char kRelativeUnitHistogram[] =
+    "Blink.Animation.RangeOffsetHasRelativeOrElementDependentLength";
 
 void ExpectRelativeErrorWithinEpsilon(double expected, double observed) {
   EXPECT_NEAR(1.0, observed / expected, std::numeric_limits<double>::epsilon());
@@ -217,6 +222,13 @@ class AnimationAnimationTestNoCompositing : public PaintTestConfigurations,
     timing.fill_mode = fill_mode;
     return MakeGarbageCollected<KeyframeEffect>(nullptr, MakeEmptyEffectModel(),
                                                 timing);
+  }
+
+  void SetAnimationTarget() {
+    SetBodyInnerHTML("<div id=target></div>");
+    UpdateAllLifecyclePhasesForTest();
+    To<KeyframeEffect>(animation->effect())
+        ->setTarget(GetElementById("target"));
   }
 
   void SimulateFrame(double time_ms) {
@@ -366,6 +378,54 @@ TEST_P(AnimationAnimationTestNoCompositing, InitialState) {
   EXPECT_FALSE(animation->pending());
   EXPECT_EQ(1, animation->playbackRate());
   EXPECT_TIME(0, GetStartTimeMs(animation));
+}
+
+TEST_P(AnimationAnimationTestNoCompositing,
+       RangeStartAcceptsRelativeUnitsAndRecordsPotentialRejection) {
+  ScopedAnimationRangeRejectRelativeLengthsForTest scoped_feature(false);
+  base::HistogramTester histogram_tester;
+  DummyExceptionStateForTesting exception_state;
+  SetAnimationTarget();
+
+  animation->setRangeStart(
+      MakeGarbageCollected<Animation::RangeBoundary>(String("2em")),
+      exception_state);
+
+  EXPECT_TRUE(animation->GetRangeStartInternal().has_value());
+  EXPECT_FALSE(exception_state.HadException());
+  histogram_tester.ExpectUniqueSample(kRelativeUnitHistogram, true, 1);
+}
+
+TEST_P(AnimationAnimationTestNoCompositing,
+       RangeStartRejectsRelativeUnitsAndRecordsPotentialRejection) {
+  ScopedAnimationRangeRejectRelativeLengthsForTest scoped_feature(true);
+  base::HistogramTester histogram_tester;
+  DummyExceptionStateForTesting exception_state;
+  SetAnimationTarget();
+
+  animation->setRangeStart(
+      MakeGarbageCollected<Animation::RangeBoundary>(String("2em")),
+      exception_state);
+
+  EXPECT_FALSE(animation->GetRangeStartInternal().has_value());
+  EXPECT_TRUE(exception_state.HadException());
+  histogram_tester.ExpectUniqueSample(kRelativeUnitHistogram, true, 1);
+}
+
+TEST_P(AnimationAnimationTestNoCompositing,
+       RangeStartAcceptsAbsoluteUnitsAndRecordsNoPotentialRejection) {
+  ScopedAnimationRangeRejectRelativeLengthsForTest scoped_feature(true);
+  base::HistogramTester histogram_tester;
+  DummyExceptionStateForTesting exception_state;
+  SetAnimationTarget();
+
+  animation->setRangeStart(
+      MakeGarbageCollected<Animation::RangeBoundary>(String("2px")),
+      exception_state);
+
+  EXPECT_TRUE(animation->GetRangeStartInternal().has_value());
+  EXPECT_FALSE(exception_state.HadException());
+  histogram_tester.ExpectUniqueSample(kRelativeUnitHistogram, false, 1);
 }
 
 TEST_P(AnimationAnimationTestNoCompositing, CurrentTimeDoesNotSetOutdated) {
@@ -1430,9 +1490,10 @@ TEST_P(AnimationAnimationTestCompositing,
   Animation* animation_not_composited =
       timeline->Play(keyframe_effect_not_composited);
 
-  SimulateFrame(0);
   UpdateAllLifecyclePhasesForTest();
-  EXPECT_EQ(animation_composited->CheckCanStartAnimationOnCompositorInternal(),
+  SimulateFrame(0);
+  animation_composited->CheckCanStartAnimationOnCompositorInternal();
+  EXPECT_EQ(animation_composited->GetCompositingDecisionState().disposition,
             CompositorAnimations::kNoFailure);
   const PaintArtifactCompositor* paint_artifact_compositor =
       GetDocument().View()->GetPaintArtifactCompositor();
@@ -1590,6 +1651,8 @@ int GenerateHistogramValue(CompositorAnimations::FailureReason reason) {
 }  // namespace
 
 TEST_P(AnimationAnimationTestCompositing, PreCommitRecordsHistograms) {
+  // TODO(crbug.com/521921832): Add tests for this case when V2 has full impl.
+  ScopedNewAnimationCompositingCheckingForTest new_checks(false);
   const std::string histogram_name =
       "Blink.Animation.CompositedAnimationFailureReason";
 
@@ -2729,6 +2792,211 @@ TEST_P(AnimationAnimationTestCompositing, HiddenAnimationsTickWhenVisible) {
                    animation->TimeToEffectChange().value());
 }
 
+// A static backdrop-filter, e.g. `none` throughout, isn't composited. That
+// must not make CompositorPropertyAnimationsHaveNoEffect() treat the effect as
+// having no visible change, because the transform is composited, and such an
+// effect wouldn't run on the compositor or tick on the main thread, so the
+// transform animation would freeze.
+TEST_P(AnimationAnimationTestCompositing,
+       TransformAnimationWithStaticBackdropFilterRunsOnCompositor) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      @keyframes anim {
+        from { transform: translateX(0); backdrop-filter: none; }
+        to { transform: translateX(100px); backdrop-filter: none; }
+      }
+      #target {
+        width: 10px;
+        height: 10px;
+        background: rebeccapurple;
+        animation: anim 30s;
+      }
+    </style>
+    <div id="target"></div>
+  )HTML");
+
+  Element* target = GetElementById("target");
+  ElementAnimations* element_animations = target->GetElementAnimations();
+  ASSERT_EQ(1u, element_animations->Animations().size());
+  Animation* animation = element_animations->Animations().begin()->key;
+
+  RunDocumentLifecycle();
+
+  const ComputedStyle& style = target->ComputedStyleRef();
+  EXPECT_TRUE(style.HasCurrentBackdropFilterAnimation());
+  EXPECT_FALSE(style.HasCurrentDynamicBackdropFilterAnimation());
+  const auto* properties =
+      target->GetLayoutObject()->FirstFragment().PaintProperties();
+  ASSERT_TRUE(properties);
+  EXPECT_TRUE(properties->Transform());
+  EXPECT_TRUE(!properties->Effect() ||
+              !properties->Effect()->HasActiveBackdropFilterAnimation());
+
+  const PaintArtifactCompositor* paint_artifact_compositor =
+      GetDocument().View()->GetPaintArtifactCompositor();
+  ASSERT_TRUE(paint_artifact_compositor);
+
+  EXPECT_EQ(animation->CheckCanStartAnimationOnCompositor(
+                paint_artifact_compositor, StartOnCompositorReason::kGeneric),
+            CompositorAnimations::kNoFailure);
+  EXPECT_FALSE(animation->CompositorPropertyAnimationsHaveNoEffectForTesting());
+  EXPECT_FALSE(animation->AnimationHasNoEffect());
+  EXPECT_TRUE(animation->HasActiveAnimationsOnCompositor());
+  EXPECT_EQ(2u, animation->TimelineInternal()->AnimationsNeedingUpdateCount());
+}
+
+// A static animation, i.e. one whose value can't change while it's in play,
+// doesn't need to tick on the main thread, even if it can't run on the
+// compositor for another reason, such as affecting an !important property.
+TEST_P(AnimationAnimationTestCompositing,
+       StaticAnimationAffectingImportantPropertyDoesNotTick) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      @keyframes anim {
+        from { mix-blend-mode: plus-lighter; }
+        to { mix-blend-mode: plus-lighter; }
+      }
+      #target {
+        width: 10px;
+        height: 10px;
+        background: rebeccapurple;
+        animation: anim 30s;
+        mix-blend-mode: normal !important;
+      }
+    </style>
+    <div id="target"></div>
+  )HTML");
+
+  Element* target = GetElementById("target");
+  ElementAnimations* element_animations = target->GetElementAnimations();
+  ASSERT_EQ(1u, element_animations->Animations().size());
+  Animation* animation = element_animations->Animations().begin()->key;
+
+  RunDocumentLifecycle();
+
+  const PaintArtifactCompositor* paint_artifact_compositor =
+      GetDocument().View()->GetPaintArtifactCompositor();
+  ASSERT_TRUE(paint_artifact_compositor);
+
+  EXPECT_EQ(animation->CheckCanStartAnimationOnCompositor(
+                paint_artifact_compositor, StartOnCompositorReason::kGeneric),
+            CompositorAnimations::kAnimationHasNoVisibleChange |
+                CompositorAnimations::kAffectsImportantProperty);
+  EXPECT_FALSE(animation->HasActiveAnimationsOnCompositor());
+  EXPECT_TRUE(animation->AnimationHasNoEffect());
+
+  // The no-effect animation doesn't count. The one animation is
+  // AnimationAnimationTestCompositing::animation_.
+  EXPECT_EQ(1u, animation->TimelineInternal()->AnimationsNeedingUpdateCount());
+
+  // The next effect change should be at the end because the animation's value
+  // can't change before then.
+  EXPECT_TIMEDELTA(ANIMATION_TIME_DELTA_FROM_SECONDS(30),
+                   animation->TimeToEffectChange().value());
+}
+
+// Having no visible change on the compositor, e.g. because the target is
+// hidden, doesn't make an animation static. An animation that also animates a
+// property that can't be composited still needs to tick on the main thread.
+TEST_P(AnimationAnimationTestCompositing,
+       HiddenAnimationWithDynamicMainThreadPropertyTicks) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      @keyframes anim {
+        from { opacity: 0; width: 10px; }
+        to { opacity: 1; width: 20px; }
+      }
+      #target {
+        width: 10px;
+        height: 10px;
+        background: rebeccapurple;
+        animation: anim 30s;
+      }
+    </style>
+    <div style="visibility: hidden;">
+      <div id="target"></div>
+    </div>
+  )HTML");
+
+  Element* target = GetElementById("target");
+  ElementAnimations* element_animations = target->GetElementAnimations();
+  ASSERT_EQ(1u, element_animations->Animations().size());
+  Animation* animation = element_animations->Animations().begin()->key;
+
+  RunDocumentLifecycle();
+
+  const PaintArtifactCompositor* paint_artifact_compositor =
+      GetDocument().View()->GetPaintArtifactCompositor();
+  ASSERT_TRUE(paint_artifact_compositor);
+
+  CompositorAnimations::FailureReasons disposition =
+      animation->CheckCanStartAnimationOnCompositor(
+          paint_artifact_compositor, StartOnCompositorReason::kGeneric);
+  EXPECT_TRUE(disposition & CompositorAnimations::kAnimationHasNoVisibleChange);
+  EXPECT_TRUE(disposition & CompositorAnimations::kUnsupportedCSSProperty);
+  EXPECT_FALSE(animation->HasActiveAnimationsOnCompositor());
+  EXPECT_FALSE(animation->AnimationHasNoEffect());
+  EXPECT_EQ(2u, animation->TimelineInternal()->AnimationsNeedingUpdateCount());
+
+  // The width animation ticks on the main thread.
+  EXPECT_TIMEDELTA(AnimationTimeDelta(),
+                   animation->TimeToEffectChange().value());
+}
+
+// The time to the next effect change of an animation depends on whether
+// animationiteration events are needed. If an animationiteration listener is
+// added while a static animation is pending, i.e. without a change in its
+// current time, the animation still needs to tick at its iteration boundaries
+// once it starts.
+TEST_P(AnimationAnimationTestCompositing,
+       StaticAnimationTicksForIterationListenerAddedWhilePending) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      @keyframes anim {
+        from { opacity: 0.5; }
+        to { opacity: 0.5; }
+      }
+      #target {
+        width: 10px;
+        height: 10px;
+        background: rebeccapurple;
+      }
+    </style>
+    <div id="target"></div>
+  )HTML");
+
+  Element* target = GetElementById("target");
+  target->setAttribute(html_names::kStyleAttr,
+                       AtomicString("animation: anim 1s infinite"));
+  // Create the animation without starting it.
+  GetDocument().UpdateStyleAndLayoutTree();
+  ElementAnimations* element_animations = target->GetElementAnimations();
+  ASSERT_TRUE(element_animations);
+  ASSERT_EQ(1u, element_animations->Animations().size());
+  Animation* animation = element_animations->Animations().begin()->key;
+  EXPECT_TRUE(animation->pending());
+  // Without animationiteration listeners, the infinite static animation never
+  // needs to tick.
+  EXPECT_TRUE(animation->effect()->TimeToForwardsEffectChange().is_max());
+
+  target->addEventListener(event_type_names::kAnimationiteration,
+                           MakeGarbageCollected<MockEventListener>());
+
+  // Start the animation in a frame at the same time, so its current time
+  // doesn't change.
+  GetPage().Animator().ServiceScriptedAnimations(
+      GetAnimationClock().CurrentTime());
+  RunDocumentLifecycle();
+  EXPECT_FALSE(animation->pending());
+  EXPECT_FALSE(animation->HasActiveAnimationsOnCompositor());
+  EXPECT_TRUE(animation->AnimationHasNoEffect());
+
+  // The animation needs to tick at the end of the first iteration to dispatch
+  // the animationiteration event.
+  EXPECT_TIMEDELTA(ANIMATION_TIME_DELTA_FROM_SECONDS(1),
+                   animation->TimeToEffectChange().value());
+}
+
 TEST_P(AnimationAnimationTestNoCompositing,
        GetEffectTimingDelayZeroUseCounter) {
   animation->setEffect(MakeAnimation(/* duration */ 1.0));
@@ -2758,11 +3026,12 @@ TEST_P(AnimationAnimationTestCompositing,
     <div id ='target'></div>
   )HTML");
 
-  Element* target = GetDocument().getElementById(AtomicString("target"));
+  Element* target = GetElementById("target");
   WeakPersistent<AnimationTimeline> timeline =
       MakeGarbageCollected<ViewTimeline>(&GetDocument(), target,
                                          ScrollSnapshotTimeline::ScrollAxis::kY,
-                                         TimelineInset());
+                                         TimelineInset(),
+                                         /*tree_scope=*/nullptr);
   const HeapHashSet<WeakMember<AnimationTimeline>>& timelines =
       GetDocument().GetDocumentAnimations().GetTimelinesForTesting();
   EXPECT_TRUE(timelines.Contains(timeline));
@@ -2850,9 +3119,9 @@ class ScriptedTimelineTriggerTest : public PageTestBase {
     test::RunPendingTasks();
   }
 
-  void Initialize(std::string activate = "play-forwards",
-                  std::string deactivate = "play-backwards",
-                  std::string post_setup_code = "") {
+  void Initialize(const StringView& activate = "play-forwards",
+                  const StringView& deactivate = "play-backwards",
+                  const StringView& post_setup_code = "") {
     const char html[] = R"HTML(
       <style>
       div {
@@ -2867,34 +3136,34 @@ class ScriptedTimelineTriggerTest : public PageTestBase {
 
     UpdateAllLifecyclePhasesForTest();
 
-    String make_animation_js = String::Format(
+    String make_animation_js = Format(
         R"JS(
-      function setupTriggeredAnimation() {
+      function setupTriggeredAnimation() {{
         const animation = new Animation(
           new KeyframeEffect(
             document.getElementById('target'),
             [
-              { left: "0px" },
-              { left: "100px" },
+              {{ left: "0px" }},
+              {{ left: "100px" }},
             ],
-            { duration: 300, fill: "none" }
+            {{ duration: 300, fill: "none" }}
           ));
 
-        let trigger = new TimelineTrigger([{
-          timeline: new ViewTimeline({
+        let trigger = new TimelineTrigger([{{
+          timeline: new ViewTimeline({{
             subject: document.getElementById('subject'), axis: "y"
-          }),
+          }}),
           activationRangeStart: "contain",
-          activationRangeEnd: "contain"}]);
+          activationRangeEnd: "contain"}}]);
                                        /* activate */ /* deactivate */
-        trigger.addAnimation(animation,    "%s",           "%s"       );
+        trigger.addAnimation(animation,    "{}",           "{}"       );
 
         // Run post-setup JS.
-        %s
-      }
+        {}
+      }}
       setupTriggeredAnimation();
     )JS",
-        activate.c_str(), deactivate.c_str(), post_setup_code.c_str());
+        activate, deactivate, post_setup_code);
 
     ExecuteScript(make_animation_js);
 
@@ -3111,14 +3380,14 @@ TEST_F(ScriptedTimelineTriggerTest, RemoveAnimationTarget) {
 
 TEST_F(ScriptedTimelineTriggerTest, ForbidScriptDuringActivation) {
   // Define 'then' getter. This runs synchronously.
-  std::string remove_animation_code =
+  StringView remove_animation_code(
       R"JS(Object.defineProperty(Animation.prototype, 'then', {
         get() {
           trigger.removeAnimation(animation);
           return undefined;
         }
       });
-      )JS";
+      )JS");
 
   Initialize(/* activate= */ "reset", /* deactivate= */ "none",
              /* post_sectup_code*/ remove_animation_code);

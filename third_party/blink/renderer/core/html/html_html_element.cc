@@ -86,20 +86,19 @@ bool NeedsLayoutStylePropagation(const ComputedStyle& layout_style,
          layout_style.Direction() != propagated_style.Direction();
 }
 
-const ComputedStyle* CreateLayoutStyle(const ComputedStyle& style,
+const ComputedStyle& CreateLayoutStyle(const ComputedStyle& style,
                                        const ComputedStyle& propagated_style) {
   ComputedStyleBuilder builder(style);
   builder.SetDirection(propagated_style.Direction());
   builder.SetWritingMode(propagated_style.GetWritingMode());
   builder.UpdateFontOrientation();
-  return builder.TakeStyle();
+  return *builder.TakeStyle();
 }
 
 }  // namespace
 
-const ComputedStyle* HTMLHtmlElement::LayoutStyleForElement(
-    const ComputedStyle* style) {
-  DCHECK(style);
+const ComputedStyle& HTMLHtmlElement::LayoutStyleForElement(
+    const ComputedStyle& style) {
   DCHECK(GetDocument().InStyleRecalc());
   DCHECK(GetLayoutObject());
   StyleResolver& resolver = GetDocument().GetStyleResolver();
@@ -109,8 +108,9 @@ const ComputedStyle* HTMLHtmlElement::LayoutStyleForElement(
     if (resolver.ShouldStopBodyPropagation(*body_element))
       return style;
     if (const ComputedStyle* body_style = body_element->GetComputedStyle()) {
-      if (NeedsLayoutStylePropagation(*style, *body_style))
-        return CreateLayoutStyle(*style, *body_style);
+      if (NeedsLayoutStylePropagation(style, *body_style)) {
+        return CreateLayoutStyle(style, *body_style);
+      }
     }
   }
   return style;
@@ -133,15 +133,16 @@ void HTMLHtmlElement::PropagateWritingModeAndDirectionFromBody() {
   if (!layout_object)
     return;
 
-  const ComputedStyle* const old_style = layout_object->Style();
-  const ComputedStyle* new_style =
+  const ComputedStyle& old_style = layout_object->Style();
+  const ComputedStyle& new_style =
       LayoutStyleForElement(layout_object->Style());
 
-  if (old_style == new_style)
+  if (&old_style == &new_style) {
     return;
+  }
 
-  const bool is_orthogonal = old_style->IsHorizontalWritingMode() !=
-                             new_style->IsHorizontalWritingMode();
+  const bool is_orthogonal = old_style.IsHorizontalWritingMode() !=
+                             new_style.IsHorizontalWritingMode();
 
   // We need to propagate the style to text children because the used
   // writing-mode and direction affects text children. Child elements,

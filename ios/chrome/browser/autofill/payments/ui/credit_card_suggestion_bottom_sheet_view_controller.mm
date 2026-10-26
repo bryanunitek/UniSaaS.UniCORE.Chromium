@@ -14,10 +14,10 @@
 #import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/autofill/ios/common/features.h"
 #import "components/grit/components_scaled_resources.h"
-#import "components/url_formatter/elide_url.h"
 #import "ios/chrome/browser/autofill/model/credit_card/credit_card_data.h"
 #import "ios/chrome/browser/autofill/payments/ui/credit_card_suggestion_bottom_sheet_delegate.h"
 #import "ios/chrome/browser/autofill/payments/ui/credit_card_suggestion_bottom_sheet_handler.h"
+#import "ios/chrome/browser/shared/ui/bottom_sheet/bottom_sheet_util.h"
 #import "ios/chrome/browser/shared/ui/bottom_sheet/table_view_bottom_sheet_view_controller+subclassing.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_detail_icon_item.h"
@@ -102,11 +102,9 @@ CGFloat const kTitleLogoHeight = 32;
   self.customSpacingBeforeImage = kSpacingBeforeImage;
   self.customSpacingAfterImage = kSpacingAfterImage;
   self.subtitleTextStyle = UIFontTextStyleFootnote;
-  std::u16string formattedURL =
-      url_formatter::FormatUrlForDisplayOmitSchemePathAndTrivialSubdomains(
-          _URL);
-  self.subtitleString = l10n_util::GetNSStringF(
-      IDS_IOS_PAYMENT_BOTTOM_SHEET_SUBTITLE, formattedURL);
+  self.subtitleString =
+      l10n_util::GetNSStringF(IDS_IOS_PAYMENT_BOTTOM_SHEET_SUBTITLE,
+                              FormatUrlForBottomSheetDisplay(_URL));
   self.customSpacing = kSpacing;
 
   // Set the properties read by the super when constructing the
@@ -118,7 +116,7 @@ CGFloat const kTitleLogoHeight = 32;
   self.configuration.secondaryActionString =
       l10n_util::GetNSString(IDS_IOS_PAYMENT_BOTTOM_SHEET_USE_KEYBOARD);
   self.configuration.secondaryActionImage =
-      DefaultSymbolWithPointSize(kKeyboardSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolKeyboard, kSymbolActionPointSize);
 
   [super viewDidLoad];
 
@@ -300,18 +298,16 @@ CGFloat const kTitleLogoHeight = 32;
 - (UIImage*)titleImage {
   UIImage* image;
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
-  NSString* symbol = kMulticolorChromeballSymbol;
+  Symbol symbol = SymbolMulticolorChromeball;
   if (self.showGooglePayLogo) {
     symbol = base::FeatureList::IsEnabled(
                  autofill::features::kAutofillEnableGradientGoogleLogos)
-                 ? kGooglePayV2Symbol
-                 : kGooglePaySymbol;
+                 ? SymbolGooglePayV2
+                 : SymbolGooglePay;
   }
-  image =
-      MakeSymbolMulticolor(CustomSymbolWithPointSize(symbol, kTitleLogoHeight));
+  image = MakeSymbolMulticolor(SymbolWithPointSize(symbol, kTitleLogoHeight));
 #else
-  image = DefaultSymbolTemplateWithPointSize(kDefaultBrowserSymbol,
-                                             kTitleLogoHeight);
+  image = SymbolTemplateWithPointSize(SymbolDefaultBrowser, kTitleLogoHeight);
 #endif  // BUILDFLAG(IOS_USE_BRANDED_ASSETS)
 
   return image;
@@ -356,7 +352,7 @@ CGFloat const kTitleLogoHeight = 32;
     [weakSelf.handler displayPaymentMethods];
   };
   UIImage* creditCardIcon =
-      DefaultSymbolWithPointSize(kCreditCardSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolCreditCard, kSymbolActionPointSize);
   return [UIAction
       actionWithTitle:l10n_util::GetNSString(
                           IDS_IOS_PAYMENT_BOTTOM_SHEET_MANAGE_PAYMENT_METHODS)
@@ -381,7 +377,7 @@ CGFloat const kTitleLogoHeight = 32;
   };
 
   UIImage* infoIcon =
-      DefaultSymbolWithPointSize(kInfoCircleSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolInfoCircle, kSymbolActionPointSize);
   return
       [UIAction actionWithTitle:l10n_util::GetNSString(
                                     IDS_IOS_PAYMENT_BOTTOM_SHEET_SHOW_DETAILS)
@@ -435,7 +431,8 @@ CGFloat const kTitleLogoHeight = 32;
 #pragma mark - ConfirmationAlertViewController
 
 - (void)customizeSubtitle:(UITextView*)subtitle {
-  subtitle.textContainerInset = UIEdgeInsetsZero;
+  subtitle.font =
+      PreferredFontForTextStyle(UIFontTextStyleFootnote, UIFontWeightSemibold);
 }
 
 @end

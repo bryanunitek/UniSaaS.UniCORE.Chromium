@@ -96,6 +96,13 @@ void AddAskBeforeHttpDialogText(ui::DialogModel::Builder& dialog_model,
         description_text, /*header=*/u"",
         AskBeforeHttpDialogController::kDescriptionTextId);
     return;
+  } else if (warning_reason == HttpWarningReason::kIsolatedMode) {
+    auto description_text = ui::DialogModelLabel::CreateWithReplacement(
+        IDS_ABH_PROMPT_ISOLATED_MODE_PRIMARY_PARAGRAPH, link);
+    dialog_model.AddParagraph(
+        description_text, /*header=*/u"",
+        AskBeforeHttpDialogController::kDescriptionTextId);
+    return;
   } else if (warning_reason == HttpWarningReason::kPref ||
              warning_reason == HttpWarningReason::kBalanced) {
 #if !BUILDFLAG(IS_ANDROID)
@@ -181,6 +188,12 @@ void AskBeforeHttpDialogController::ShowDialog(
   if (!web_contents) {
     return;
   }
+#if BUILDFLAG(IS_ANDROID)
+  ui::WindowAndroid* window = web_contents->GetTopLevelNativeWindow();
+  if (!window || !window->GetModalDialogManagerBridge()) {
+    return;
+  }
+#endif
   Observe(web_contents);
   // Track the source ID for the navigation that triggered the dialog.
   navigation_source_id_ = navigation_source_id;
@@ -225,6 +238,9 @@ void AskBeforeHttpDialogController::ShowDialog(
   // dialog being dismissed for this reason doesn't trigger a "back to
   // safety" action.
   tab_dialog_params->block_new_modal = false;
+  // Ensure the dialog persists if the tab is detached and reparented into
+  // another window.
+  tab_dialog_params->close_on_detach = false;
 
   auto* tab = tabs::TabInterface::MaybeGetFromContents(web_contents);
   CHECK(tab);
@@ -241,7 +257,6 @@ void AskBeforeHttpDialogController::ShowDialog(
   focused_view->RequestFocus();
 #else
   current_dialog_model_ = dialog_model.get();
-  ui::WindowAndroid* window = web_contents->GetTopLevelNativeWindow();
   ui::ModalDialogWrapper::ShowTabModal(std::move(dialog_model), window);
 #endif
 }
@@ -480,11 +495,12 @@ void AskBeforeHttpDialogController::OnHelpCenterLinkClicked(
     return;
   }
 
-  content::OpenURLParams params(
-      GURL(kLearnMoreLink), content::Referrer(),
-      ui::DispositionFromEventFlags(event.flags(),
-                                    WindowOpenDisposition::NEW_FOREGROUND_TAB),
-      ui::PAGE_TRANSITION_LINK, false);
+  content::OpenURLParams params =
+      content::OpenURLParams::CreateBrowserInitiated(
+          GURL(kLearnMoreLink),
+          ui::DispositionFromEventFlags(
+              event.flags(), WindowOpenDisposition::kNewForegroundTab),
+          ui::PAGE_TRANSITION_LINK);
   contents->OpenURL(params, /*navigation_handle_callback=*/{});
 }
 

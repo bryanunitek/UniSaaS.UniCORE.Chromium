@@ -19,6 +19,7 @@
 #import "base/task/thread_pool.h"
 #import "base/values.h"
 #import "components/actor/core/aggregated_journal.h"
+#import "components/actor/core/task_source_info.h"
 #import "components/actor/public/mojom/actor_types.mojom.h"
 #import "components/optimization_guide/optimization_guide_buildflags.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
@@ -33,8 +34,10 @@
 #import "ios/chrome/browser/ai_prototyping/utils/ai_prototyping_constants.h"
 #import "ios/chrome/browser/ai_prototyping/utils/json_action_parser.h"
 #import "ios/chrome/browser/ai_prototyping/utils/page_context_util.h"
+#import "ios/chrome/browser/intelligence/actor/model/actor_browser_agent.h"
 #import "ios/chrome/browser/intelligence/actor/model/actor_service.h"
 #import "ios/chrome/browser/intelligence/actor/model/actor_service_factory.h"
+#import "ios/chrome/browser/intelligence/actor/public/actor_task_intervention_delegate.h"
 #import "ios/chrome/browser/intelligence/actor/public/actor_types.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool_request.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
@@ -48,6 +51,7 @@
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service_factory.h"
 #import "ios/chrome/browser/optimization_guide/mojom/enhanced_calendar_service.mojom-forward.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 
@@ -107,7 +111,12 @@ std::string GetJournalLogsAsJson(actor::AggregatedJournal* journal) {
 
 }  // namespace
 
+@interface AIPrototypingMediator () <ActorTaskInterventionDelegate>
+@end
+
 @implementation AIPrototypingMediator {
+  // The browser.
+  raw_ptr<Browser> _browser;
   // Browser agent responsible for persisting and retrieving tab context data.
   raw_ptr<PersistTabContextBrowserAgent> _persistTabContextBrowserAgent;
   // The list of web states in the current browser window.
@@ -146,13 +155,15 @@ std::string GetJournalLogsAsJson(actor::AggregatedJournal* journal) {
   BOOL _storePageContextLocally;
 }
 
-- (instancetype)initWithWebStateList:(WebStateList*)webStateList
-       persistTabContextBrowserAgent:
-           (PersistTabContextBrowserAgent*)persistTabContextBrowserAgent {
+- (instancetype)initWithBrowser:(Browser*)browser
+    persistTabContextBrowserAgent:
+        (PersistTabContextBrowserAgent*)persistTabContextBrowserAgent {
+  DCHECK(browser);
   self = [super init];
   if (self) {
+    _browser = browser;
     _persistTabContextBrowserAgent = persistTabContextBrowserAgent;
-    _webStateList = webStateList;
+    _webStateList = browser->GetWebStateList();
 
     bool startOnDevice = false;
 
@@ -596,9 +607,13 @@ std::string GetJournalLogsAsJson(actor::AggregatedJournal* journal) {
   __weak __typeof(self) weakSelf = self;
 
   actor::ActorTaskId task_id = actorService->CreateTask(
-      "AI Prototyping Test Task", /*allow_incognito_web_states=*/false);
+      "AI Prototyping Test Task",
+      actor::TaskSourceInfo(actor::TaskSourceInfo::Client::kUnknown,
+                            /*id=*/std::nullopt),
+      /*allow_incognito_web_states=*/false);
   actorService->AddControlledWebState(task_id,
                                       _webStateList->GetActiveWebState());
+  actorService->SetTaskInterventionDelegate(task_id, self);
 
   actorService->PerformActions(
       task_id, actions, "Executing AI Prototyping actions",
@@ -657,6 +672,15 @@ std::string GetJournalLogsAsJson(actor::AggregatedJournal* journal) {
 }
 
 - (void)listTabs {
+  if ([self.consumer respondsToSelector:@selector(updateWindowId:)]) {
+    ActorBrowserAgent* agent = ActorBrowserAgent::FromBrowser(_browser);
+    if (agent) {
+      NSString* windowIdString =
+          [NSString stringWithFormat:@"%d", agent->browser_id().id()];
+      [self.consumer updateWindowId:windowIdString];
+    }
+  }
+
   NSMutableArray<NSDictionary*>* tabs = [NSMutableArray array];
   web::WebState* activeWebState = _webStateList->GetActiveWebState();
   if (!activeWebState) {
@@ -702,6 +726,7 @@ std::string GetJournalLogsAsJson(actor::AggregatedJournal* journal) {
       PageContextWrapperConfigBuilder()
           .SetUseRichExtraction(useRichExtraction)
           .SetUseRichExtractionWithActionable(actionableMode)
+          .SetIncludeSameSiteOnly(actionableMode)
           .Build();
 
   __weak __typeof(self) weakSelf = self;
@@ -743,6 +768,12 @@ std::string GetJournalLogsAsJson(actor::AggregatedJournal* journal) {
             [outputStr
                 appendFormat:@"Proto saved to:\n%@\n\n",
                              base::SysUTF8ToNSString(result.file_path.value())];
+            if (result.screenshot_file_path.has_value()) {
+              [outputStr
+                  appendFormat:@"Screenshot saved to:\n%@\n\n",
+                               base::SysUTF8ToNSString(
+                                   result.screenshot_file_path->value())];
+            }
           } else {
             [outputStr appendString:@"Warning: Failed to save to disk.\n\n"];
           }
@@ -775,6 +806,7 @@ std::string GetJournalLogsAsJson(actor::AggregatedJournal* journal) {
                                 completionCallback:std::move(completion)];
 
   _pageContextWrapper.shouldGetAnnotatedPageContent = YES;
+  _pageContextWrapper.shouldGetSnapshot = YES;
   [_pageContextWrapper populatePageContextFieldsAsync];
 }
 
@@ -895,6 +927,26 @@ std::string GetJournalLogsAsJson(actor::AggregatedJournal* journal) {
     @"is_main_frame" : @(isMainFrame),
     @"depth" : @(depth)
   };
+}
+
+#pragma mark - ActorTaskInterventionDelegate
+
+- (void)actorTask:(actor::ActorTaskId)taskID
+    selectFromSuggestions:(NSArray<ActorFormSuggestion*>*)suggestions
+        completionHandler:
+            (void (^)(ActorFormSuggestion* selectedSuggestion,
+                      BOOL shouldStorePermission))completionHandler {
+  completionHandler(suggestions.firstObject, NO);
+}
+
+- (void)actorTask:(actor::ActorTaskId)taskID
+    requestUserInterventionWithTitle:(NSString*)title
+                            subtitle:(NSString*)subtitle
+                          buttonText:(NSString*)buttonText
+                   completionHandler:(void (^)(void))completionHandler {
+  if (completionHandler) {
+    completionHandler();
+  }
 }
 
 @end

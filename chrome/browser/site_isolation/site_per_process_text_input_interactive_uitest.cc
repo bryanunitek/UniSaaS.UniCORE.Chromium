@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <memory>
+#include <ranges>
 #include <vector>
 
 #include "base/command_line.h"
@@ -11,9 +12,7 @@
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/types/zip.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
@@ -400,7 +399,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
       GetFrame(IndexVector{2, 2}),    GetFrame(IndexVector{2, 2, 0}),
       GetFrame(IndexVector{2, 2, 1}), GetFrame(IndexVector{3})};
 
-  for (const auto [frame, value] : base::zip(frames, values)) {
+  for (const auto [frame, value] : std::views::zip(frames, values)) {
     AddInputFieldToFrame(frame, "text", value, true);
   }
 
@@ -423,7 +422,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
   std::vector<content::RenderFrameHost*> frames{GetFrame(IndexVector{0}),
                                                 GetFrame(IndexVector{1})};
 
-  for (const auto [frame, value] : base::zip(frames, values)) {
+  for (const auto [frame, value] : std::views::zip(frames, values)) {
     AddInputFieldToFrame(frame, "text", value, true);
   }
 
@@ -665,7 +664,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
   for (auto* frame : frames)
     views.push_back(frame->GetView());
   std::vector<std::string> values{"a", "ab", "ac", "aca", "acb", "acd"};
-  for (const auto [frame, value] : base::zip(frames, values)) {
+  for (const auto [frame, value] : std::views::zip(frames, values)) {
     AddInputFieldToFrame(frame, "text", value, true);
   }
 
@@ -762,7 +761,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
   std::vector<content::RenderWidgetHostView*> views;
   for (auto* frame : frames)
     views.push_back(frame->GetView());
-  for (const auto [frame, value] : base::zip(frames, values)) {
+  for (const auto [frame, value] : std::views::zip(frames, values)) {
     AddInputFieldToFrame(frame, "text", value, true);
   }
 
@@ -784,7 +783,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
       };
 
   size_t count = 2;
-  for (const auto [value, view] : base::zip(values, views)) {
+  for (const auto [value, view] : std::views::zip(values, views)) {
     // First focus the <input>.
     send_tab_and_wait_for_value(value);
 
@@ -1280,7 +1279,8 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
 
   // For each frame, add <input>, set its value to expected word, select it, ask
   // for dictionary and verify the word returned from renderer matches.
-  for (const auto [frame, expected_word] : base::zip(frames, expected_words)) {
+  for (const auto [frame, expected_word] :
+       std::views::zip(frames, expected_words)) {
     AddInputFieldToFrame(frame, "text", expected_word.c_str(), true);
     // Focusing the <input> automatically selects the text.
     ASSERT_TRUE(ExecJs(frame, "document.querySelector('input').focus();"));
@@ -1424,5 +1424,42 @@ IN_PROC_BROWSER_TEST_F(
   test_complete_waiter.Run();
 }
 #endif  //  defined(MAC_OSX)
+
+// Test that an unfocused child frame cannot become the active view.
+IN_PROC_BROWSER_TEST_F(SitePerProcessTextInputManagerTest,
+                       UnfocusedChildFrameCannotBecomeActive) {
+  CreateIframePage("a(b)");
+  content::RenderFrameHost* main_frame = GetFrame(IndexVector{});
+  content::RenderFrameHost* child_frame = GetFrame(IndexVector{0});
+
+  AddInputFieldToFrame(main_frame, "password", "secret", true);
+  AddInputFieldToFrame(child_frame, "text", "child", true);
+
+  // Focus the input in the main frame.
+  content::TextInputManagerTypeObserver main_type_observer(
+      active_contents(), ui::TEXT_INPUT_TYPE_PASSWORD);
+  content::SimulateCharTyped(active_contents(), '\t');
+  main_type_observer.Wait();
+
+  EXPECT_EQ(main_frame->GetView(),
+            content::GetActiveViewFromWebContents(active_contents()));
+  EXPECT_EQ(ui::TEXT_INPUT_TYPE_PASSWORD,
+            content::GetTextInputTypeFromWebContents(active_contents()));
+
+  // Send a TextInputStateChanged update with a non-NONE type from the unfocused
+  // child frame.
+  auto modified_state = ui::mojom::TextInputState::New();
+  modified_state->type = ui::TEXT_INPUT_TYPE_TEXT;
+  modified_state->mode = ui::TEXT_INPUT_MODE_DEFAULT;
+  content::SendTextInputStateChangedToWidget(child_frame->GetRenderWidgetHost(),
+                                             std::move(modified_state));
+
+  // The active view must remain the main frame view since the child frame is
+  // not focused.
+  EXPECT_EQ(main_frame->GetView(),
+            content::GetActiveViewFromWebContents(active_contents()));
+  EXPECT_EQ(ui::TEXT_INPUT_TYPE_PASSWORD,
+            content::GetTextInputTypeFromWebContents(active_contents()));
+}
 
 #endif  // !BUILDFLAG(IS_ANDROID)

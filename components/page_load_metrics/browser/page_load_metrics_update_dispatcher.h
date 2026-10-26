@@ -119,9 +119,9 @@ class PageLoadMetricsUpdateDispatcher {
  public:
   // The Client class is updated when metrics managed by the dispatcher have
   // changed. Typically it owns the dispatcher.
-  class Client {
+  class Client : public SoftNavigationTracker::Client {
    public:
-    virtual ~Client() = default;
+    ~Client() override = default;
 
     virtual PrerenderingState GetPrerenderingState() const = 0;
     virtual bool IsPageMainFrame(content::RenderFrameHost* rfh) const = 0;
@@ -143,7 +143,11 @@ class PageLoadMetricsUpdateDispatcher {
     virtual void OnSubFrameRenderDataChanged(
         content::RenderFrameHost* rfh,
         const mojom::FrameRenderDataUpdate& render_data) = 0;
-    virtual void OnSoftNavigation() = 0;
+    void OnSoftNavigationFirstContentfulPaint(
+        const mojom::SoftNavigationMetrics& soft_navigation_metrics) override =
+        0;
+    void OnSoftNavigationCompleted(
+        const SoftNavigationData& soft_navigation_data) override = 0;
     virtual void OnSoftNavigationLargestContentfulPaint(
         uint64_t num_soft_lcps) = 0;
     virtual void UpdateFeaturesUsage(
@@ -159,6 +163,9 @@ class PageLoadMetricsUpdateDispatcher {
         const gfx::Rect& main_frame_viewport_rect) = 0;
     virtual void OnMainFrameAdRectsChanged(
         const base::flat_map<int, gfx::Rect>& main_frame_ad_rects) = 0;
+    virtual void OnSubresourceLoadMetricsObserved(
+        content::RenderFrameHost* rfh,
+        const blink::SubresourceLoadMetrics& subresource_load_metrics) = 0;
   };
 
   // The |client| instance must outlive this object.
@@ -173,6 +180,9 @@ class PageLoadMetricsUpdateDispatcher {
       const PageLoadMetricsUpdateDispatcher&) = delete;
 
   ~PageLoadMetricsUpdateDispatcher();
+
+  void OnHidden(base::TimeDelta background_time);
+  void OnShown(base::TimeDelta shown_time);
 
   void UpdateMetrics(
       content::RenderFrameHost* render_frame_host,
@@ -228,30 +238,6 @@ class PageLoadMetricsUpdateDispatcher {
     return interaction_to_next_paint_calculator_;
   }
 
-  // Access to accumulated metrics for the current soft navigation performance
-  // timeline. These are reset on each soft navigation.
-  const InteractionToNextPaintCalculator&
-  soft_navigation_interaction_to_next_paint() const {
-    return soft_navigation_interaction_to_next_paint_;
-  }
-
-  const NormalizedCLSData& soft_navigation_layout_shift_normalization() const {
-    return soft_navigation_layout_shift_normalization_.normalized_cls_data();
-  }
-
-  const ContentfulPaintTimingInfo& soft_navigation_largest_contentful_paint()
-      const {
-    return soft_navigation_largest_contentful_paint_.MergeTextAndImageTiming();
-  }
-
-  const mojom::SoftNavigationMetrics& soft_navigation_metrics() const {
-    return soft_navigation_tracker_.current_soft_navigation();
-  }
-
-  uint64_t soft_navigation_count() const {
-    return soft_navigation_tracker_.soft_navigation_count();
-  }
-
   const PageRenderData& main_frame_render_data() const {
     return main_frame_render_data_;
   }
@@ -271,6 +257,7 @@ class PageLoadMetricsUpdateDispatcher {
 
   // Ensures all pending updates will get dispatched.
   void FlushPendingTimingUpdates();
+  void FlushSoftNavigationMetrics();
 
  private:
   void UpdateMainFrameTiming(mojom::PageLoadTimingPtr new_timing,
@@ -293,12 +280,6 @@ class PageLoadMetricsUpdateDispatcher {
 
   void UpdateMainFrameFontLoadingMetrics(
       const mojom::FontLoadingMetrics& font_loading_metrics);
-
-  void UpdateSoftNavigationMetrics(
-      std::vector<mojom::SoftNavigationMetricsPtr> soft_navigation_metrics,
-      base::span<const mojom::EventTimingPtr> event_timings,
-      base::span<const mojom::LayoutShiftPtr> layout_shifts,
-      base::span<const mojom::LargestContentfulPaintTimingPtr> soft_lcps);
 
   void UpdatePageEventTiming(
       content::RenderFrameHost* render_frame_host,
@@ -393,6 +374,11 @@ class PageLoadMetricsUpdateDispatcher {
   std::map<content::FrameTreeNodeId, base::TimeDelta>
       subframe_navigation_start_offset_;
 
+  // SubresourceLoadMetrics per frame to ensure observers are only notified when
+  // metrics are newly observed or updated.
+  std::map<content::FrameTreeNodeId, blink::SubresourceLoadMetrics>
+      subresource_load_metrics_by_frame_;
+
   // Whether we have seen an input or scroll event in any frame. This comes to
   // us via PaintTimingDetector::OnInputOrScroll, which triggers on user scrolls
   // and most input types (but not mousemove or pinch zoom). More comments in
@@ -403,14 +389,6 @@ class PageLoadMetricsUpdateDispatcher {
   // calculate Interaction to Next Paint (INP). It will be reset every
   // time the page enters bfcache.
   InteractionToNextPaintCalculator interaction_to_next_paint_calculator_;
-
-  // These fields keep track of metrics on main frame for soft navigation
-  // intervals. A soft navigation interval is either the interval from page load
-  // start to 1st soft navigation, or an interval between 2 soft navigations,
-  // or the interval from the last soft navigation to the page load end.
-  InteractionToNextPaintCalculator soft_navigation_interaction_to_next_paint_;
-  LayoutShiftNormalization soft_navigation_layout_shift_normalization_;
-  ContentfulPaint soft_navigation_largest_contentful_paint_;
 
   SoftNavigationTracker soft_navigation_tracker_;
 };

@@ -31,6 +31,7 @@
 #include "components/private_ai/testing/fake_private_ai_oak_session_driver.h"
 #include "components/private_ai/testing/fake_secure_channel.h"
 #include "components/private_ai/testing/fake_token_manager.h"
+#include "components/version_info/channel.h"
 #include "services/network/test/test_network_context.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -50,8 +51,12 @@ class ClientImplIntegrationTest : public testing::Test {
     GURL url("wss://example.com?key=test-api-key");
 
     auto factory = std::make_unique<ConnectionFactoryImpl>(
-        url, &test_network_context_, &logger_, &oak_session_driver_,
-        &network_driver_);
+        url,
+        base::BindRepeating(
+            [](network::mojom::NetworkContext* context) { return context; },
+            base::Unretained(&test_network_context_)),
+        &logger_, &oak_session_driver_, &network_driver_,
+        version_info::Channel::UNKNOWN);
     factory_ptr_ = factory.get();
     factory->EnableTokenAttestation(&token_manager_);
     factory->SetSecureChannelFactoryForTesting(base::BindLambdaForTesting(
@@ -149,7 +154,8 @@ TEST_F(ClientImplIntegrationTest, AttestationFailure) {
 
   // 1. Attestation starts.
   // Simulate token fetch failure.
-  token_manager_.RespondToGetAuthToken(std::nullopt);
+  token_manager_.RespondToGetAuthToken(
+      base::unexpected(phosphor::TokenManager::Error::kTokenFetchFailed));
 
   // 2. Client should receive an error.
   auto result = future.Get();
@@ -257,16 +263,37 @@ TEST_F(ClientImplIntegrationTest, DisconnectDuringAttestation) {
   auto* channel = last_secure_channel();
   ASSERT_TRUE(channel);
 
-  // 2. Simulate channel disconnect before responding to attestation.
+  // 2. Simulate channel network error before responding to attestation.
   channel->send_back_error(StatusCode::kNetworkError);
 
-  // 3. The original request should fail with the disconnect error.
+  // 3. The original request should fail with the network error unchanged.
   ASSERT_TRUE(future.IsReady());
   auto result = future.Get();
   ASSERT_FALSE(result.has_value());
-  // Our heuristic correctly rewrites this early error (before first successful
-  // response) into kClientAttestationFailed.
-  EXPECT_EQ(result.error(), StatusCode::kClientAttestationFailed);
+  EXPECT_EQ(result.error(), StatusCode::kNetworkError);
+}
+
+TEST_F(ClientImplIntegrationTest, ServerCloseDuringAttestation) {
+  base::test::TestFuture<base::expected<std::string, StatusCode>> future;
+  client_->SendTextRequest(
+      proto::FeatureName::FEATURE_NAME_CHROME_ZERO_STATE_SUGGESTION, "hello",
+      future.GetCallback(), /*options=*/{});
+
+  // 1. Attestation starts.
+  token_manager_.RunPendingCallbacks();
+  auto* channel = last_secure_channel();
+  ASSERT_TRUE(channel);
+
+  // 2. Simulate server closing the connection before responding to attestation.
+  channel->send_back_error(StatusCode::kConnectionClosedByServer);
+
+  // 3. Our heuristic rewrites kConnectionClosedByServer (before first
+  // successful response) into kClientAttestationPresumedRejectedByServer.
+  ASSERT_TRUE(future.IsReady());
+  auto result = future.Get();
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(),
+            StatusCode::kClientAttestationPresumedRejectedByServer);
 }
 
 TEST_F(ClientImplIntegrationTest, ClientDestroyedDuringAttestation) {

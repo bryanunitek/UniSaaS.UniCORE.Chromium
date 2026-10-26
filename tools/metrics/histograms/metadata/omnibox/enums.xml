@@ -74,9 +74,11 @@ chromium-metrics-reviews@google.com.
   <int value="1" label="Dedicated Button"/>
   <int value="2" label="NTP Button"/>
   <int value="3" label="Implicit"/>
+  <int value="4" label="NTP Create Image Button"/>
+  <int value="5" label="NTP Gallery Button"/>
 </enum>
 
-<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:AiModeActivationSource,//ios/chrome/browser/composebox/shared/metrics/composebox_metrics_recorder.h:AiModeActivationSource) -->
+<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:AiModeActivationSource,//ios/chrome/browser/composebox/shared/metrics/composebox_metrics_constants.h:AiModeActivationSource) -->
 
 <!-- LINT.IfChange(AiModePageActionIconSource) -->
 
@@ -103,7 +105,7 @@ chromium-metrics-reviews@google.com.
   <int value="5" label="Deep Search"/>
 </enum>
 
-<!-- LINT.ThenChange(//components/omnibox/browser/android/java/src/org/chromium/components/omnibox/AutocompleteRequestType.java,//ios/chrome/browser/composebox/shared/metrics/composebox_metrics_recorder.h:AutocompleteRequestType)-->
+<!-- LINT.ThenChange(//components/omnibox/browser/android/java/src/org/chromium/components/omnibox/AutocompleteRequestType.java,//ios/chrome/browser/composebox/shared/metrics/composebox_metrics_constants.h:AutocompleteRequestType)-->
 
 <enum name="BooleanNonNull">
   <int value="0" label="Null"/>
@@ -131,7 +133,7 @@ chromium-metrics-reviews@google.com.
   <int value="5" label="Raw File"/>
 </enum>
 
-<!-- LINT.ThenChange(//ios/chrome/browser/composebox/shared/metrics/composebox_metrics_recorder.h:ComposeboxDragAndDropType, //tools/metrics/histograms/metadata/omnibox/histograms.xml:ComposeboxDragAndDropType) -->
+<!-- LINT.ThenChange(//ios/chrome/browser/composebox/shared/metrics/composebox_metrics_constants.h:ComposeboxDragAndDropType, //tools/metrics/histograms/metadata/omnibox/histograms.xml:ComposeboxDragAndDropType) -->
 
 <!-- LINT.IfChange(ContextUploadErrorType) -->
 
@@ -236,7 +238,7 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="Navigation, with attachments"/>
 </enum>
 
-<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/OmniboxMetrics.java:FocusResultedInNavigationTypes,//ios/chrome/browser/composebox/shared/metrics/composebox_metrics_recorder.h:FocusResultedInNavigationType) -->
+<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/OmniboxMetrics.java:FocusResultedInNavigationTypes,//components/omnibox/browser/searchbox_utils.h:FocusResultedInNavigationType) -->
 
 <!-- LINT.IfChange(FuseboxAttachmentButtonType) -->
 
@@ -252,7 +254,21 @@ chromium-metrics-reviews@google.com.
   <int value="8" label="Drive Files"/>
 </enum>
 
-<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:FuseboxAttachmentButtonType,//ios/chrome/browser/composebox/shared/metrics/composebox_metrics_recorder.h:FuseboxAttachmentButtonType) -->
+<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:FuseboxAttachmentButtonType,//ios/chrome/browser/composebox/shared/metrics/composebox_metrics_constants.h:FuseboxAttachmentButtonType) -->
+
+<!-- LINT.IfChange(FuseboxAttachmentReadResult) -->
+
+<enum name="FuseboxAttachmentReadResult">
+  <int value="0" label="Success"/>
+  <int value="1" label="Success after retry"/>
+  <int value="2" label="Empty (no stream or zero bytes)"/>
+  <int value="3" label="Short read (fewer bytes than provider-reported size)"/>
+  <int value="4" label="IOException while reading"/>
+  <int value="5" label="OutOfMemoryError while reading"/>
+  <int value="6" label="Bytes read but not decodable by platform decoder"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:FuseboxAttachmentReadResult) -->
 
 <!-- LINT.IfChange(FuseboxAttachmentSizeLimitCheck) -->
 
@@ -264,6 +280,18 @@ chromium-metrics-reviews@google.com.
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:FuseboxAttachmentSizeLimitCheck) -->
+
+<!-- LINT.IfChange(FuseboxTabAttachStartFailureReason) -->
+
+<enum name="FuseboxTabAttachStartFailureReason">
+  <int value="0" label="Session unavailable"/>
+  <int value="1" label="Attachment limit reached"/>
+  <int value="2" label="Fresh content required, tab not live"/>
+  <int value="3" label="Cache unavailable, tab not live"/>
+  <int value="4" label="Upload rejected by native"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:FuseboxTabAttachStartFailureReason) -->
 
 <!-- LINT.IfChange(GeolocationHeaderGetLocationOutcome) -->
 
@@ -331,6 +359,31 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(//components/search_engines/template_url_prepopulate_data_resolver.cc:MigrationMatch) -->
 
+<!-- LINT.IfChange(MobileFuseboxDriveDocumentType) -->
+
+<enum name="MobileFuseboxDriveDocumentType">
+  <int value="0" label="Other"/>
+  <int value="1" label="Google Docs"/>
+  <int value="2" label="Google Sheets"/>
+  <int value="3" label="Google Slides"/>
+  <int value="4" label="PDF"/>
+  <int value="5" label="Image"/>
+  <int value="6" label="Video"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:MobileFuseboxDriveDocumentType) -->
+
+<!-- LINT.IfChange(MobileFuseboxPickerOutcome) -->
+
+<enum name="MobileFuseboxPickerOutcome">
+  <int value="0" label="Attachment added"/>
+  <int value="1" label="Manual user exit"/>
+  <int value="2" label="Permission denied"/>
+  <int value="3" label="Local error"/>
+</enum>
+
+<!-- LINT.ThenChange(//ios/chrome/browser/composebox/shared/metrics/composebox_metrics_constants.h:MobileFuseboxPickerOutcome,//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:MobileFuseboxPickerOutcome) -->
+
 <!-- LINT.IfChange(OmniboxBuiltinEngineType) -->
 
 <enum name="OmniboxBuiltinEngineType">
@@ -370,6 +423,29 @@ chromium-metrics-reviews@google.com.
   <int value="5" label="Blurred"/>
 </enum>
 
+<!-- LINT.IfChange(OmniboxEverywhereInvocationSource) -->
+
+<enum name="OmniboxEverywhereInvocationSource">
+  <summary>The entry point used to invoke Omnibox Everywhere.</summary>
+  <int value="0" label="Global hotkey"/>
+  <int value="1" label="Status tray / menu bar icon"/>
+  <int value="2" label="Profile picker"/>
+  <int value="3" label="Shortcut"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_controller.h:OmniboxEverywhereInvocationSource) -->
+
+<!-- LINT.IfChange(OmniboxEverywhereScreenshareOption) -->
+
+<enum name="OmniboxEverywhereScreenshareOption">
+  <summary>The screensharing modality selected in Omnibox Everywhere.</summary>
+  <int value="0" label="Entire Screen"/>
+  <int value="1" label="Window"/>
+  <int value="2" label="Region Selection"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/webui/omnibox_everywhere/omnibox_everywhere_ui.h:OmniboxEverywhereScreenshareOption) -->
+
 <!-- LINT.IfChange(OmniboxInlineLocationSuggestionShown) -->
 
 <enum name="OmniboxInlineLocationSuggestionShown">
@@ -398,9 +474,12 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="GeminiPro"/>
   <int value="3" label="GeminiProAutoroute"/>
   <int value="4" label="GeminiProNoGenUi"/>
+  <int value="5" label="GeminiFlashLatest"/>
+  <int value="6" label="GeminiProLatest"/>
+  <int value="7" label="GeminiPreview"/>
 </enum>
 
-<!-- LINT.ThenChange(//components/omnibox/common/omnibox_metrics_utils.cc:ModelMode) -->
+<!-- LINT.ThenChange(//components/omnibox/common/omnibox_metrics_utils.cc:ModelMode,//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:ModelMode) -->
 
 <!-- LINT.IfChange(OmniboxPopupResultToContentReadyEarlyExitReason) -->
 
@@ -434,9 +513,26 @@ chromium-metrics-reviews@google.com.
   <int value="8" label="DisableSuggest"/>
   <int value="9" label="Aim"/>
   <int value="10" label="AimGenPrompt"/>
+  <int value="11" label="AgentTask"/>
+  <int value="12" label="SearchMore"/>
 </enum>
 
-<!-- LINT.ThenChange(//components/omnibox/common/omnibox_metrics_utils.cc:ToolMode) -->
+<!-- LINT.ThenChange(//components/omnibox/common/omnibox_metrics_utils.cc:ToolMode,//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:ToolMode) -->
+
+<!-- LINT.IfChange(OmniboxWebUIMatchActivationStatus) -->
+
+<enum name="OmniboxWebUIMatchActivationStatus">
+  <summary>
+    Status of an autocomplete match activation attempt from WebUI searchbox.
+  </summary>
+  <int value="0" label="Live result match"/>
+  <int value="1" label="Snapshot match"/>
+  <int value="2" label="Snapshot not found or evicted"/>
+  <int value="3" label="URL mismatch"/>
+  <int value="4" label="Index out of bounds"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/webui/cr_components/searchbox/searchbox_handler.h:OmniboxWebUIMatchActivationStatus) -->
 
 <enum name="OmniboxWebUIRendererProcessGoneStatus">
   <int value="0" label="Normal termination"/>
@@ -561,7 +657,7 @@ chromium-metrics-reviews@google.com.
   <int value="6" label="Duplicate prefetch request"/>
   <int value="7" label="Too many recent prefetches"/>
   <int value="8" label="Throttle prevented the prefetch"/>
-  <int value="9" label="SlowNetwork suppressed the prefetch"/>
+  <int value="9" label="SlowNetwork suppressed the prefetch (Obsolete)"/>
   <int value="10" label="Data saver enabled"/>
   <int value="11" label="Battery saver enabled"/>
 </enum>
@@ -647,6 +743,9 @@ chromium-metrics-reviews@google.com.
   <int value="9" label="kNotTriggeredThrottledByPrewarm">
     kNotTriggeredThrottledByPrewarm
   </int>
+  <int value="10" label="kNotTriggeredUnsupportedSearchMode">
+    kNotTriggeredUnsupportedSearchMode
+  </int>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/preloading/search_preload/search_preload_signal_result.h) -->
@@ -660,42 +759,6 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="responses received">
     Response was received asynchronously.
   </int>
-</enum>
-
-<enum name="SuggestionAnswerOptionalType">
-  <summary>
-    Type of Answer in omnibox suggestion list or No Answer, if not an answer.
-  </summary>
-  <int value="0" label="No Answer"/>
-  <int value="1" label="Dictionary"/>
-  <int value="2" label="Finance"/>
-  <int value="3" label="Knowledge graph"/>
-  <int value="4" label="Local"/>
-  <int value="5" label="Sports"/>
-  <int value="6" label="Sunrise"/>
-  <int value="7" label="Translation"/>
-  <int value="8" label="Weather"/>
-  <int value="9" label="When is"/>
-  <int value="10" label="Currency"/>
-  <int value="11" label="Local time"/>
-  <int value="12" label="Play install"/>
-</enum>
-
-<enum name="SuggestionAnswerType">
-  <summary>Type of Answer shown in omnibox suggestion list.</summary>
-  <int value="0" label="Invalid (unknown type)"/>
-  <int value="1" label="Dictionary"/>
-  <int value="2" label="Finance"/>
-  <int value="3" label="Knowledge graph"/>
-  <int value="4" label="Local"/>
-  <int value="5" label="Sports"/>
-  <int value="6" label="Sunrise"/>
-  <int value="7" label="Translation"/>
-  <int value="8" label="Weather"/>
-  <int value="9" label="When is"/>
-  <int value="10" label="Currency"/>
-  <int value="11" label="Local time"/>
-  <int value="12" label="Play install"/>
 </enum>
 
 <enum name="SuggestionPedalType">
@@ -786,6 +849,17 @@ chromium-metrics-reviews@google.com.
 </enum>
 
 <!-- LINT.ThenChange(//ui/webui/resources/cr_components/composebox/composebox_voice_search.ts:VoiceSearchError) -->
+
+<!-- LINT.IfChange(VoiceSearchQuerySource) -->
+
+<enum name="VoiceSearchQuerySource">
+  <int value="0" label="NTP Realbox Classic Voice Input"/>
+  <int value="1" label="NTP Composebox Voice Input"/>
+  <int value="2" label="Omnibox Composebox Voice Input"/>
+  <int value="3" label="Nextbox Composebox Voice Input"/>
+</enum>
+
+<!-- LINT.ThenChange(//ui/webui/resources/cr_components/composebox/composebox_voice_search.ts:VoiceSearchQuerySource) -->
 
 <!-- LINT.IfChange(VoiceSearchState) -->
 

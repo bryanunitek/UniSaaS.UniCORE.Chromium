@@ -15,6 +15,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_notifier_impl.h"
@@ -83,36 +84,42 @@ const char kOsPriorityPrefName[] = "os_priority_pref";
 // Assigning an id of 0 to all the test prefs.
 const TestSyncablePrefsDatabase::PrefsMap kSyncablePrefsDatabase = {
     {kStringPrefName,
-     {1, syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+     {1, syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone,
+      WriteBehavior::kWriteToBoth}},
     {kListPrefName,
-     {2, syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+     {2, syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone,
+      WriteBehavior::kWriteToBoth}},
     {kMergeableListPrefName,
      {3, syncer::PREFERENCES, PrefSensitivity::kNone,
-      MergeBehavior::kMergeableListWithRewriteOnUpdate}},
+      MergeBehavior::kMergeableListWithRewriteOnUpdate,
+      WriteBehavior::kWriteToBoth}},
     {kMergeableDictPrefName,
      {4, syncer::PREFERENCES, PrefSensitivity::kNone,
-      MergeBehavior::kMergeableDict}},
+      MergeBehavior::kMergeableDict, WriteBehavior::kWriteToBoth}},
     {kDefaultCharsetPrefName,
-     {5, syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+     {5, syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone,
+      WriteBehavior::kWriteToBoth}},
     {kBrowserPriorityPrefName,
      {6, syncer::PRIORITY_PREFERENCES, PrefSensitivity::kNone,
-      MergeBehavior::kNone}},
+      MergeBehavior::kNone, WriteBehavior::kWriteToBoth}},
     {kBrowserPrefName,
-     {7, syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+     {7, syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone,
+      WriteBehavior::kWriteToBoth}},
     {kBrowserPriorityPrefName,
      {8, syncer::PRIORITY_PREFERENCES, PrefSensitivity::kNone,
-      MergeBehavior::kNone}},
+      MergeBehavior::kNone, WriteBehavior::kWriteToBoth}},
 #if BUILDFLAG(IS_CHROMEOS)
     {kOsPrefName,
-     {9, syncer::OS_PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+     {9, syncer::OS_PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone,
+      WriteBehavior::kWriteToBoth}},
     {kOsPriorityPrefName,
      {10, syncer::OS_PRIORITY_PREFERENCES, PrefSensitivity::kNone,
-      MergeBehavior::kNone}},
+      MergeBehavior::kNone, WriteBehavior::kWriteToBoth}},
 #endif
     {kAlwaysSyncingPriorityPrefName,
      {11, syncer::PRIORITY_PREFERENCES,
       PrefSensitivity::kExemptFromUserControlWhileSignedIn,
-      MergeBehavior::kNone}},
+      MergeBehavior::kNone, WriteBehavior::kWriteToBoth}},
 };
 
 // Searches for a preference matching `name` and, if specified,`change_type`,
@@ -315,6 +322,23 @@ class PrefServiceSyncableTest : public testing::Test {
 
   raw_ptr<PrefModelAssociator> pref_sync_service_ = nullptr;
 };
+
+TEST_F(PrefServiceSyncableTest, ForkForIncognitoSharesRegisteredPrefTypes) {
+  constexpr char kInt64PrefName[] = "int64_pref_name";
+  constexpr char kTimePrefName[] = "time_pref_name";
+  prefs_.registry()->RegisterInt64Pref(kInt64PrefName, 0);
+
+  scoped_refptr<PrefRegistrySyncable> forked_registry =
+      prefs_.registry()->ForkForIncognito();
+  prefs_.registry()->RegisterTimePref(kTimePrefName, base::Time());
+
+  EXPECT_EQ(PrefRegistry::RegisteredPrefType::kOther,
+            forked_registry->GetRegisteredPrefType(kStringPrefName));
+  EXPECT_EQ(PrefRegistry::RegisteredPrefType::kInt64,
+            forked_registry->GetRegisteredPrefType(kInt64PrefName));
+  EXPECT_EQ(PrefRegistry::RegisteredPrefType::kTime,
+            forked_registry->GetRegisteredPrefType(kTimePrefName));
+}
 
 TEST_F(PrefServiceSyncableTest, CreatePrefSyncData) {
   prefs_.SetString(kStringPrefName, kExampleUrl0);

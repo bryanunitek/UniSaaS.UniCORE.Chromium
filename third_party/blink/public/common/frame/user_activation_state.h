@@ -104,11 +104,6 @@ class BLINK_COMMON_EXPORT UserActivationState {
 
   // Marks the user activation state as active, which sets the sticky state to
   // true and updates the transient state timestamp to "now".
-  //
-  // The |notification_type| parameter is used for histograms only.
-  //
-  // TODO(mustaq): When removing |notification_type|, explicitly pass
-  // |is_restricted| as a parameter here.
   void Activate(mojom::UserActivationNotificationType notification_type);
 
   // Used when propagating user activation state across cross-process

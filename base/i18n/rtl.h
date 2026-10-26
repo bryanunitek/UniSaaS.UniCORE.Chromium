@@ -5,6 +5,7 @@
 #ifndef BASE_I18N_RTL_H_
 #define BASE_I18N_RTL_H_
 
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -41,53 +42,12 @@ BASE_I18N_EXPORT std::string GetConfiguredLocale();
 // Canonicalize a string (eg. a POSIX locale string) to a Chrome locale name.
 BASE_I18N_EXPORT std::string GetCanonicalLocale(std::string_view locale);
 
-// Sets the default locale of ICU.
-// Once the application locale of Chrome in GetApplicationLocale is determined,
-// the default locale of ICU need to be changed to match the application locale
-// so that ICU functions work correctly in a locale-dependent manner.
-// This is handy in that we don't have to call GetApplicationLocale()
-// everytime we call locale-dependent ICU APIs as long as we make sure
-// that this is called before any locale-dependent API is called.
-BASE_I18N_EXPORT void SetICUDefaultLocale(std::string_view locale_string);
-
 // Returns true if the application text direction is right-to-left.
 BASE_I18N_EXPORT bool IsRTL();
-
-// A test utility function to set the application default text direction.
-// Prefer using ScopedRTLForTesting instead of this function directly.
-BASE_I18N_EXPORT void SetRTLForTesting(bool rtl);
-
-// A RAII wrapper for setting RTL in tests. Automatically restores the previous
-// RTL state when destroyed. This is the preferred way to set RTL state in
-// tests.
-class BASE_I18N_EXPORT ScopedRTLForTesting {
- public:
-  explicit ScopedRTLForTesting(bool rtl);
-  ~ScopedRTLForTesting();
-
-  // Not copyable or movable
-  ScopedRTLForTesting(const ScopedRTLForTesting&) = delete;
-  ScopedRTLForTesting& operator=(const ScopedRTLForTesting&) = delete;
-
- private:
-  bool previous_rtl_state_;
-};
-
-// Returns whether the text direction for the default ICU locale is RTL.  This
-// assumes that SetICUDefaultLocale has been called to set the default locale to
-// the UI locale of Chrome.
-// NOTE: Generally, you should call IsRTL() instead of this.
-BASE_I18N_EXPORT bool ICUIsRTL();
 
 // Gets the explicitly forced text direction for debugging. If no forcing is
 // applied, returns UNKNOWN_DIRECTION.
 BASE_I18N_EXPORT TextDirection GetForcedTextDirection();
-
-// Returns the text direction for |locale_name|.
-// As a startup optimization, this method checks the locale against a list of
-// Chrome-supported RTL locales.
-BASE_I18N_EXPORT TextDirection
-GetTextDirectionForLocaleInStartUp(const char* locale_name);
 
 // Returns the text direction for |locale_name|.
 BASE_I18N_EXPORT TextDirection

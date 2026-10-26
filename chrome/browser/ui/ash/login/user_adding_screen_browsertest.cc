@@ -11,7 +11,7 @@
 #include "ash/public/cpp/login_screen_test_api.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/ash/login/lock/screen_locker.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
@@ -24,6 +24,7 @@
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/multi_user/multi_user_sign_in_policy.h"
 #include "components/user_manager/user_manager.h"
@@ -117,8 +118,10 @@ IN_PROC_BROWSER_TEST_F(UserAddingScreenTest, CancelAdding) {
 
   EXPECT_TRUE(LoginDisplayHost::default_host() == nullptr);
   EXPECT_EQ(user_manager::UserManager::Get()->GetLoggedInUsers().size(), 1u);
-  EXPECT_EQ(user_manager::UserManager::Get()->GetActiveUser()->GetAccountId(),
-            users[0].account_id);
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ASSERT_TRUE(active_session);
+  EXPECT_EQ(active_session->account_id(), users[0].account_id);
 }
 
 IN_PROC_BROWSER_TEST_F(UserAddingScreenTest, UILogin) {
@@ -288,7 +291,7 @@ IN_PROC_BROWSER_TEST_F(UserAddingScreenTest, MAYBE_ScreenVisibilityAfterLock) {
 
   ScreenLockerTester screen_locker_tester;
   screen_locker_tester.Lock();
-  ScreenLocker::Hide();
+  ScreenLockerController::Get().HideLockScreen();
   screen_locker_tester.WaitForUnlock();
 
   UserAddingScreen::Get()->Start();
@@ -363,13 +366,12 @@ IN_PROC_BROWSER_TEST_F(UserAddingScreenTest, LockScreenWhileAddingUser) {
   EXPECT_EQ(session_manager::SessionManager::Get()->session_state(),
             session_manager::SessionState::ACTIVE);
 
-  UserAddingScreen::Get()->Start();
+  test::ShowUserAddingScreen();
   EXPECT_EQ(user_adding_started(), 1);
   EXPECT_EQ(session_manager::SessionManager::Get()->session_state(),
             session_manager::SessionState::LOGIN_SECONDARY);
-  base::RunLoop().RunUntilIdle();
 
-  ScreenLocker::HandleShowLockScreenRequest();
+  ScreenLockerController::Get().HandleShowLockScreenRequest();
 }
 
 }  // namespace ash

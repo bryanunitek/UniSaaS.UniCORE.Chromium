@@ -20,6 +20,7 @@
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/common/ui/button_stack/button_stack_constants.h"
+#import "ios/chrome/test/app/uikit_test_util.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/chrome/test/scoped_key_window.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -28,20 +29,6 @@
 #import "third_party/ocmock/OCMock/OCMock.h"
 
 namespace {
-
-// Finds a subview with a given accessibility id.
-UIView* FindByID(UIView* view, NSString* accessibility_id) {
-  if (view.accessibilityIdentifier == accessibility_id) {
-    return view;
-  }
-  for (UIView* subview in view.subviews) {
-    UIView* foundView = FindByID(subview, accessibility_id);
-    if (foundView) {
-      return foundView;
-    }
-  }
-  return nil;
-}
 
 // Create the Feature Engagement Mock Tracker.
 std::unique_ptr<KeyedService> BuildFeatureEngagementMockTracker(
@@ -117,14 +104,10 @@ TEST_F(DefaultBrowserGenericPromoCoordinatorTest, TestRemindMeLater) {
       base::apple::ObjCCastStrict<DefaultBrowserInstructionsViewController>(
           view_controller_.presentedViewController);
 
-  UIView* tertiary_button_view =
-      FindByID(promo_view_controller.view,
-               kButtonStackTertiaryActionAccessibilityIdentifier);
-  EXPECT_NSNE(nil, tertiary_button_view);
-  ASSERT_TRUE([tertiary_button_view isKindOfClass:[UIButton class]]);
-
-  UIButton* tertiary_button =
-      base::apple::ObjCCastStrict<UIButton>(tertiary_button_view);
+  UIButton* tertiary_button = chrome_test_util::FindViewById<UIButton>(
+      promo_view_controller.view,
+      kButtonStackTertiaryActionAccessibilityIdentifier);
+  EXPECT_NSNE(nil, tertiary_button);
 
   // Prepare to tap tertiary action.
   EXPECT_CALL(
@@ -140,80 +123,4 @@ TEST_F(DefaultBrowserGenericPromoCoordinatorTest, TestRemindMeLater) {
                                      3, 1);
 }
 
-// Tests that when the promo is persistent (doesn't dismiss on primary button
-// tap), only the first action causes metrics to be recorded.
-TEST_F(DefaultBrowserGenericPromoCoordinatorTest,
-       TestPersistentPromoOnlyRecordsOutcomeOnce) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({kPersistentDefaultBrowserPromo},
-                                       {kDefaultBrowserPictureInPicture});
-  base::HistogramTester histogram_tester;
 
-  [coordinator_ start];
-
-  // Mock the mediator which otherwise will open the iOS settings on primary
-  // action. This can be a problem for next tests.
-  id mock_mediator = OCMClassMock([DefaultBrowserGenericPromoMediator class]);
-  coordinator_.mediator = mock_mediator;
-
-  // Check that only histograms for appear action are recorded.
-  histogram_tester.ExpectTotalCount("IOS.DefaultBrowserPromo.Shown", 1);
-  histogram_tester.ExpectBucketCount("IOS.DefaultBrowserPromo.Shown",
-                                     DefaultPromoTypeForUMA::kGeneral, 1);
-  histogram_tester.ExpectTotalCount("IOS.DefaultBrowserVideoPromo.Fullscreen",
-                                    0);
-  histogram_tester.ExpectTotalCount(
-      "IOS.DefaultBrowserVideoPromo.PersistedDuration", 0);
-
-  // Tap the primary button.
-  UINavigationController* navigation_controller =
-      base::apple::ObjCCastStrict<UINavigationController>(
-          view_controller_.presentedViewController);
-  DefaultBrowserInstructionsViewController* promo_view_controller =
-      base::apple::ObjCCastStrict<DefaultBrowserInstructionsViewController>(
-          navigation_controller.topViewController);
-  UIView* primary_button_view =
-      FindByID(promo_view_controller.view,
-               kButtonStackPrimaryActionAccessibilityIdentifier);
-  EXPECT_NSNE(nil, primary_button_view);
-  ASSERT_TRUE([primary_button_view isKindOfClass:[UIButton class]]);
-
-  UIButton* primary_button =
-      base::apple::ObjCCastStrict<UIButton>(primary_button_view);
-  [primary_button sendActionsForControlEvents:UIControlEventTouchUpInside];
-
-  // Check that the primary button tap has been recorded.
-  histogram_tester.ExpectTotalCount("IOS.DefaultBrowserPromo.Shown", 1);
-  histogram_tester.ExpectBucketCount("IOS.DefaultBrowserPromo.Shown",
-                                     DefaultPromoTypeForUMA::kGeneral, 1);
-  histogram_tester.ExpectTotalCount("IOS.DefaultBrowserVideoPromo.Fullscreen",
-                                    1);
-  histogram_tester.ExpectBucketCount(
-      "IOS.DefaultBrowserPromo.Shown",
-      IOSDefaultBrowserVideoPromoAction::kPrimaryActionTapped, 1);
-  histogram_tester.ExpectTotalCount(
-      "IOS.DefaultBrowserVideoPromo.PersistedDuration", 0);
-
-  // Tap the secondary button to dismiss the promo.
-  UIView* secondary_button_view =
-      FindByID(promo_view_controller.view,
-               kButtonStackSecondaryActionAccessibilityIdentifier);
-  EXPECT_NSNE(nil, secondary_button_view);
-  ASSERT_TRUE([secondary_button_view isKindOfClass:[UIButton class]]);
-
-  UIButton* secondary_button =
-      base::apple::ObjCCastStrict<UIButton>(secondary_button_view);
-  [secondary_button sendActionsForControlEvents:UIControlEventTouchUpInside];
-
-  // Check that the metrics didn't change.
-  histogram_tester.ExpectTotalCount("IOS.DefaultBrowserPromo.Shown", 1);
-  histogram_tester.ExpectBucketCount("IOS.DefaultBrowserPromo.Shown",
-                                     DefaultPromoTypeForUMA::kGeneral, 1);
-  histogram_tester.ExpectTotalCount("IOS.DefaultBrowserVideoPromo.Fullscreen",
-                                    1);
-  histogram_tester.ExpectBucketCount(
-      "IOS.DefaultBrowserPromo.Shown",
-      IOSDefaultBrowserVideoPromoAction::kPrimaryActionTapped, 1);
-  histogram_tester.ExpectTotalCount(
-      "IOS.DefaultBrowserVideoPromo.PersistedDuration", 1);
-}

@@ -9,8 +9,8 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/with_feature_override.h"
 #include "base/values.h"
+#include "components/enterprise/isolated_mode/prefs.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/testing_pref_store.h"
 #include "components/safe_search_api/safe_search_util.h"
@@ -113,16 +113,9 @@ void SupervisedUserPrefStoreTestBase::TearDown() {
   service_.Shutdown();
 }
 
-class SupervisedUserPrefStoreTest : public base::test::WithFeatureOverride,
-                                    public SupervisedUserPrefStoreTestBase {
- protected:
-  SupervisedUserPrefStoreTest()
-      : base::test::WithFeatureOverride(
-            supervised_user::
-                kSupervisedUserMergeDeviceParentalControlsAndFamilyLinkPrefs) {}
-};
+using SupervisedUserPrefStoreTest = SupervisedUserPrefStoreTestBase;
 
-TEST_P(SupervisedUserPrefStoreTest, ConfigureSettings) {
+TEST_F(SupervisedUserPrefStoreTest, ConfigureSettings) {
   SupervisedUserPrefStoreFixture fixture(&service_, device_parental_controls_);
   EXPECT_FALSE(fixture.initialization_completed());
 
@@ -139,9 +132,12 @@ TEST_P(SupervisedUserPrefStoreTest, ConfigureSettings) {
           policy::policy_prefs::kIncognitoModeAvailability),
       Optional(static_cast<int>(policy::IncognitoModeAvailability::kDisabled)));
 
-  // kSupervisedModeManualHosts does not have a hardcoded value.
-  EXPECT_FALSE(fixture.changed_prefs()->FindDictByDottedPath(
-      prefs::kSupervisedUserManualHosts));
+  // kEnterpriseIsolatedModeSettings must also be disabled for supervised users.
+  EXPECT_THAT(
+      fixture.changed_prefs()->FindIntByDottedPath(
+          enterprise_isolated_mode::kEnterpriseIsolatedModeSettings),
+      Optional(static_cast<int>(
+          enterprise_isolated_mode::IsolatedModeSetting::kDisabled)));
 
   EXPECT_FALSE(
       fixture.changed_prefs()
@@ -172,19 +168,6 @@ TEST_P(SupervisedUserPrefStoreTest, ConfigureSettings) {
   fixture.changed_prefs()->clear();
   service_.SetActive(true);
   EXPECT_EQ(0u, fixture.changed_prefs()->size());
-
-  // kSupervisedModeManualHosts can be configured by the custodian.
-  base::DictValue hosts;
-  hosts.Set("example.com", true);
-  hosts.Set("moose.org", false);
-  service_.SetLocalSetting(supervised_user::kContentPackManualBehaviorHosts,
-                           hosts.Clone());
-  EXPECT_EQ(1u, fixture.changed_prefs()->size());
-
-  base::DictValue* manual_hosts = fixture.changed_prefs()->FindDictByDottedPath(
-      prefs::kSupervisedUserManualHosts);
-  ASSERT_TRUE(manual_hosts);
-  EXPECT_TRUE(*manual_hosts == hosts);
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // The custodian can allow sites and apps to request permissions.
@@ -217,7 +200,7 @@ TEST_P(SupervisedUserPrefStoreTest, ConfigureSettings) {
 #endif
 }
 
-TEST_P(SupervisedUserPrefStoreTest, IsEmptyAfterDeactivation) {
+TEST_F(SupervisedUserPrefStoreTest, IsEmptyAfterDeactivation) {
   SupervisedUserPrefStoreFixture fixture(&service_, device_parental_controls_);
   EXPECT_FALSE(fixture.initialization_completed());
 
@@ -236,7 +219,7 @@ TEST_P(SupervisedUserPrefStoreTest, IsEmptyAfterDeactivation) {
       << "Expected all prefs, including defaults, to be cleared.";
 }
 
-TEST_P(SupervisedUserPrefStoreTest, LocalOverridesAreClearedAfterDeactivation) {
+TEST_F(SupervisedUserPrefStoreTest, LocalOverridesAreClearedAfterDeactivation) {
   SupervisedUserPrefStoreFixture fixture(&service_, device_parental_controls_);
   EXPECT_FALSE(fixture.initialization_completed());
 
@@ -247,20 +230,17 @@ TEST_P(SupervisedUserPrefStoreTest, LocalOverridesAreClearedAfterDeactivation) {
   EXPECT_EQ(0u, fixture.changed_prefs()->size());
 
   service_.SetActive(true);
-  service_.SetLocalSetting(supervised_user::kSafeSitesEnabled,
+  service_.SetLocalSetting(supervised_user::kSigninAllowed,
                            base::Value(true));
   EXPECT_NE(0u, fixture.changed_prefs()->size())
       << "Expected default values to be set.";
-  EXPECT_EQ(fixture.changed_prefs()->FindBoolByDottedPath(
-                prefs::kSupervisedUserSafeSites),
-            base::Value(true));
 
   service_.SetActive(false);
   EXPECT_EQ(0u, fixture.changed_prefs()->size())
       << "Expected all prefs, including defaults, to be cleared.";
 }
 
-TEST_P(SupervisedUserPrefStoreTest, ActivateSettingsBeforeInitialization) {
+TEST_F(SupervisedUserPrefStoreTest, ActivateSettingsBeforeInitialization) {
   SupervisedUserPrefStoreFixture fixture(&service_, device_parental_controls_);
   EXPECT_FALSE(fixture.initialization_completed());
 
@@ -280,7 +260,7 @@ TEST_P(SupervisedUserPrefStoreTest, ActivateSettingsBeforeInitialization) {
   EXPECT_LT(0u, fixture.changed_prefs()->size());
 }
 
-TEST_P(SupervisedUserPrefStoreTest, CreatePrefStoreAfterInitialization) {
+TEST_F(SupervisedUserPrefStoreTest, CreatePrefStoreAfterInitialization) {
   service_backing_pref_store_->SetInitializationCompleted();
   service_.SetActive(true);
 
@@ -289,14 +269,9 @@ TEST_P(SupervisedUserPrefStoreTest, CreatePrefStoreAfterInitialization) {
 }
 
 #if BUILDFLAG(IS_ANDROID)
-TEST_P(SupervisedUserPrefStoreTest,
-       ContentFiltersServiceEnablesBrowserFilters) {
-  // TODO(crbug.com/519472830): Replace with equivalent test for the url service
-  // With this flag enabled, the prefs no longer exist: their equivalents are
-  // set via the url filtering service.
+TEST_F(SupervisedUserPrefStoreTest,
+       ContentFiltersServiceControlsIncognitoMode) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(
-      supervised_user::kSupervisedUserUseUrlFilteringService);
 
   SupervisedUserPrefStoreFixture fixture(&service_, device_parental_controls_);
   EXPECT_FALSE(fixture.initialization_completed());
@@ -309,9 +284,6 @@ TEST_P(SupervisedUserPrefStoreTest,
       fixture.changed_prefs()->FindIntByDottedPath(
           policy::policy_prefs::kIncognitoModeAvailability),
       Optional(static_cast<int>(policy::IncognitoModeAvailability::kDisabled)));
-  EXPECT_THAT(fixture.changed_prefs()->FindBoolByDottedPath(
-                  prefs::kSupervisedUserSafeSites),
-              Optional(true));
 
   // The other filter is not affecting incognito mode.
   device_parental_controls_.SetSearchContentFiltersEnabledForTesting(false);
@@ -321,7 +293,7 @@ TEST_P(SupervisedUserPrefStoreTest,
       Optional(static_cast<int>(policy::IncognitoModeAvailability::kDisabled)));
 }
 
-TEST_P(SupervisedUserPrefStoreTest, ContentFiltersServiceEnablesSearchFilters) {
+TEST_F(SupervisedUserPrefStoreTest, ContentFiltersServiceEnablesSearchFilters) {
   SupervisedUserPrefStoreFixture fixture(&service_, device_parental_controls_);
   EXPECT_FALSE(fixture.initialization_completed());
 
@@ -346,7 +318,7 @@ TEST_P(SupervisedUserPrefStoreTest, ContentFiltersServiceEnablesSearchFilters) {
       Optional(static_cast<int>(policy::IncognitoModeAvailability::kDisabled)));
 }
 
-TEST_P(SupervisedUserPrefStoreTest, InactiveSettingsServiceDoesNotAffectPrefs) {
+TEST_F(SupervisedUserPrefStoreTest, InactiveSettingsServiceDoesNotAffectPrefs) {
   SupervisedUserPrefStoreFixture fixture(&service_, device_parental_controls_);
   EXPECT_FALSE(fixture.initialization_completed());
 
@@ -379,10 +351,6 @@ TEST_P(SupervisedUserPrefStoreTest, InactiveSettingsServiceDoesNotAffectPrefs) {
 // Family Link and Device Parental Controls cooperate to block incognito mode
 // and force safe search.
 TEST_F(SupervisedUserPrefStoreTestBase, SearchAndIncognitoPrefsAreMerged) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      supervised_user::
-          kSupervisedUserMergeDeviceParentalControlsAndFamilyLinkPrefs);
   SupervisedUserPrefStoreFixture fixture(&service_, device_parental_controls_);
 
   service_backing_pref_store_->SetInitializationCompleted();
@@ -410,5 +378,3 @@ TEST_F(SupervisedUserPrefStoreTestBase, SearchAndIncognitoPrefsAreMerged) {
       policy::policy_prefs::kForceGoogleSafeSearch));
 }
 #endif  // BUILDFLAG(IS_ANDROID)
-
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(SupervisedUserPrefStoreTest);

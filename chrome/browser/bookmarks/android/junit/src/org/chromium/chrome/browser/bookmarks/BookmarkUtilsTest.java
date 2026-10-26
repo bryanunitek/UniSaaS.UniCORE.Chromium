@@ -15,10 +15,16 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import android.app.Activity;
+import android.content.res.Resources;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
 
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
 
@@ -31,17 +37,20 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.UserActionTester;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.R;
+import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs.BookmarkRowDisplayPref;
 import org.chromium.chrome.browser.commerce.ShoppingServiceFactory;
 import org.chromium.chrome.browser.commerce.ShoppingServiceFactoryJni;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.page_image_service.ImageServiceBridge;
 import org.chromium.chrome.browser.page_image_service.ImageServiceBridgeJni;
 import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManager;
@@ -70,9 +79,12 @@ import java.util.Collections;
 import java.util.List;
 
 /** Unit tests for {@link BookmarkUtils}. */
-@Batch(Batch.UNIT_TESTS)
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
+@DisableFeatures({
+    ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT,
+    ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_POPUP,
+    ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_DIALOG
+})
 public class BookmarkUtilsTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -295,6 +307,133 @@ public class BookmarkUtilsTest {
                 false);
 
         histograms.assertExpected();
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_POPUP)
+    public void testAddOrEditBookmark_desktopPopup() {
+        BookmarkModel.setInstanceForTesting(mBookmarkModel);
+
+        mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
+
+        doReturn("test title").when(mTab).getTitle();
+        doReturn(new GURL("https://test.com")).when(mTab).getOriginalUrl();
+
+        BookmarkUtils.addOrEditBookmark(
+                Collections.singletonList(null),
+                mBookmarkModel,
+                Collections.singletonList(mTab),
+                /* snackbarManager= */ null,
+                mBottomSheetController,
+                mActivity,
+                BookmarkType.NORMAL,
+                mBookmarkIdListCallback,
+                /* fromExplicitTrackUi= */ false,
+                mBookmarkManagerOpener,
+                mPriceDropNotificationManager,
+                false);
+
+        verify(mBookmarkIdListCallback).onResult(mBookmarkIdListCaptor.capture());
+        assertEquals(1, mBookmarkIdListCaptor.getValue().size());
+        assertNotNull(mBookmarkIdListCaptor.getValue().get(0));
+
+        verifyNoInteractions(mBottomSheetController);
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_POPUP)
+    public void testAddOrEditBookmark_desktopPopup_anchorsToVisibleMenuButton() {
+        BookmarkModel.setInstanceForTesting(mBookmarkModel);
+        mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
+
+        ViewGroup content = mActivity.findViewById(android.R.id.content);
+
+        // Simulate a hidden toolbar with a menu_button_wrapper (e.g. ToolbarTablet in tab
+        // switcher).
+        FrameLayout hiddenToolbar = new FrameLayout(mActivity);
+        hiddenToolbar.setVisibility(View.GONE);
+        View hiddenMenuButton = new View(mActivity);
+        hiddenMenuButton.setId(R.id.menu_button_wrapper);
+        hiddenToolbar.addView(hiddenMenuButton);
+        content.addView(hiddenToolbar);
+
+        // Simulate a visible hub toolbar with a menu_button_wrapper (e.g. HubToolbarView in tab
+        // switcher).
+        FrameLayout hubToolbar = new FrameLayout(mActivity);
+        hubToolbar.setVisibility(View.VISIBLE);
+        View visibleMenuButton = new View(mActivity);
+        visibleMenuButton.setId(R.id.menu_button_wrapper);
+        hubToolbar.addView(visibleMenuButton);
+        content.addView(hubToolbar);
+
+        doReturn("test title").when(mTab).getTitle();
+        doReturn(new GURL("https://test.com")).when(mTab).getOriginalUrl();
+
+        BookmarkUtils.addOrEditBookmark(
+                Collections.singletonList(null),
+                mBookmarkModel,
+                Collections.singletonList(mTab),
+                /* snackbarManager= */ null,
+                mBottomSheetController,
+                mActivity,
+                BookmarkType.NORMAL,
+                mBookmarkIdListCallback,
+                /* fromExplicitTrackUi= */ false,
+                mBookmarkManagerOpener,
+                mPriceDropNotificationManager,
+                false);
+
+        verify(mBookmarkIdListCallback).onResult(mBookmarkIdListCaptor.capture());
+        assertEquals(1, mBookmarkIdListCaptor.getValue().size());
+        assertNotNull(mBookmarkIdListCaptor.getValue().get(0));
+        verifyNoInteractions(mBottomSheetController);
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_POPUP)
+    public void testAddOrEditBookmark_existingBookmark_desktopPopup() {
+        BookmarkItem existingBookmark = mock(BookmarkItem.class);
+        BookmarkId bookmarkId = new BookmarkId(123, BookmarkType.NORMAL);
+        doReturn(bookmarkId).when(existingBookmark).getId();
+
+        BookmarkUtils.addOrEditBookmark(
+                Collections.singletonList(existingBookmark),
+                mBookmarkModel,
+                Collections.singletonList(mTab),
+                /* snackbarManager= */ null,
+                mBottomSheetController,
+                mActivity,
+                BookmarkType.NORMAL,
+                mBookmarkIdListCallback,
+                /* fromExplicitTrackUi= */ false,
+                mBookmarkManagerOpener,
+                mPriceDropNotificationManager,
+                false);
+
+        verify(mBookmarkManagerOpener, never()).startEditActivity(any(), any(), any());
+    }
+
+    @Test
+    public void testAddOrEditBookmark_existingBookmark_noDesktopPopup() {
+        BookmarkItem existingBookmark = mock(BookmarkItem.class);
+        BookmarkId bookmarkId = new BookmarkId(123, BookmarkType.NORMAL);
+        doReturn(bookmarkId).when(existingBookmark).getId();
+
+        BookmarkUtils.addOrEditBookmark(
+                Collections.singletonList(existingBookmark),
+                mBookmarkModel,
+                Collections.singletonList(mTab),
+                /* snackbarManager= */ null,
+                mBottomSheetController,
+                mActivity,
+                BookmarkType.NORMAL,
+                mBookmarkIdListCallback,
+                /* fromExplicitTrackUi= */ false,
+                mBookmarkManagerOpener,
+                mPriceDropNotificationManager,
+                false);
+
+        verify(mBookmarkManagerOpener).startEditActivity(mActivity, mProfile, bookmarkId);
     }
 
     @Test
@@ -575,5 +714,117 @@ public class BookmarkUtilsTest {
 
         // invalid url
         assertFalse(BookmarkUtils.isReadingListSupported(JUnitTestGURLs.INVALID_URL));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_DIALOG)
+    public void testIsDesktopBookmarksDialogEnabled_featureEnabled() {
+        assertTrue(BookmarkUtils.isDesktopBookmarksDialogEnabled());
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_DIALOG)
+    public void testIsDesktopBookmarksDialogEnabled_featureDisabled() {
+        assertFalse(BookmarkUtils.isDesktopBookmarksDialogEnabled());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT)
+    public void testIsDesktopBookmarksLayoutEnabled_featureEnabled() {
+        assertTrue(BookmarkUtils.isDesktopBookmarksLayoutEnabled());
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT)
+    public void testIsDesktopBookmarksLayoutEnabled_featureDisabled() {
+        assertFalse(BookmarkUtils.isDesktopBookmarksLayoutEnabled());
+    }
+
+    @Test
+    public void testGetTopLevelFolderDisplayOrderIndex() {
+        mBookmarkModel.setAreAccountBookmarkFoldersActive(true);
+
+        // Desktop / Bookmarks bar -> 0
+        assertEquals(
+                0,
+                BookmarkUtils.getTopLevelFolderDisplayOrderIndex(
+                        mBookmarkModel, mBookmarkModel.getDesktopFolderId()));
+        assertEquals(
+                0,
+                BookmarkUtils.getTopLevelFolderDisplayOrderIndex(
+                        mBookmarkModel, mBookmarkModel.getAccountDesktopFolderId()));
+
+        // Other bookmarks -> 1
+        assertEquals(
+                1,
+                BookmarkUtils.getTopLevelFolderDisplayOrderIndex(
+                        mBookmarkModel, mBookmarkModel.getOtherFolderId()));
+        assertEquals(
+                1,
+                BookmarkUtils.getTopLevelFolderDisplayOrderIndex(
+                        mBookmarkModel, mBookmarkModel.getAccountOtherFolderId()));
+
+        // Reading list -> 2
+        assertEquals(
+                2,
+                BookmarkUtils.getTopLevelFolderDisplayOrderIndex(
+                        mBookmarkModel, mBookmarkModel.getLocalOrSyncableReadingListFolder()));
+        assertEquals(
+                2,
+                BookmarkUtils.getTopLevelFolderDisplayOrderIndex(
+                        mBookmarkModel, mBookmarkModel.getAccountReadingListFolder()));
+
+        // Mobile bookmarks -> 3
+        assertEquals(
+                3,
+                BookmarkUtils.getTopLevelFolderDisplayOrderIndex(
+                        mBookmarkModel, mBookmarkModel.getMobileFolderId()));
+        assertEquals(
+                3,
+                BookmarkUtils.getTopLevelFolderDisplayOrderIndex(
+                        mBookmarkModel, mBookmarkModel.getAccountMobileFolderId()));
+
+        // Non-top-level folder -> 4
+        BookmarkId userFolder =
+                mBookmarkModel.addFolder(mBookmarkModel.getMobileFolderId(), 0, "User Folder");
+        assertEquals(
+                4, BookmarkUtils.getTopLevelFolderDisplayOrderIndex(mBookmarkModel, userFolder));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT)
+    public void testGetImageIconSize_desktopLayoutEnabled() {
+        Resources res = mActivity.getResources();
+        assertEquals(
+                res.getDimensionPixelSize(R.dimen.improved_bookmark_start_image_size_visual),
+                BookmarkViewUtils.getImageIconSize(res, BookmarkRowDisplayPref.VISUAL));
+        assertEquals(
+                res.getDimensionPixelSize(R.dimen.improved_bookmark_start_image_size_desktop),
+                BookmarkViewUtils.getImageIconSize(res, BookmarkRowDisplayPref.COMPACT));
+        assertEquals(
+                res.getDimensionPixelSize(R.dimen.improved_bookmark_row_outer_corner_radius),
+                BookmarkViewUtils.getImageIconCornerRadius(res, BookmarkRowDisplayPref.VISUAL));
+        assertEquals(
+                res.getDimensionPixelSize(
+                        R.dimen.improved_bookmark_start_image_corner_radius_desktop),
+                BookmarkViewUtils.getImageIconCornerRadius(res, BookmarkRowDisplayPref.COMPACT));
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT)
+    public void testGetImageIconSize_desktopLayoutDisabled() {
+        Resources res = mActivity.getResources();
+        assertEquals(
+                res.getDimensionPixelSize(R.dimen.improved_bookmark_start_image_size_visual),
+                BookmarkViewUtils.getImageIconSize(res, BookmarkRowDisplayPref.VISUAL));
+        assertEquals(
+                res.getDimensionPixelSize(R.dimen.improved_bookmark_start_image_size_compact),
+                BookmarkViewUtils.getImageIconSize(res, BookmarkRowDisplayPref.COMPACT));
+        assertEquals(
+                res.getDimensionPixelSize(R.dimen.improved_bookmark_row_outer_corner_radius),
+                BookmarkViewUtils.getImageIconCornerRadius(res, BookmarkRowDisplayPref.VISUAL));
+        assertEquals(
+                res.getDimensionPixelSize(R.dimen.improved_bookmark_icon_radius),
+                BookmarkViewUtils.getImageIconCornerRadius(res, BookmarkRowDisplayPref.COMPACT));
     }
 }

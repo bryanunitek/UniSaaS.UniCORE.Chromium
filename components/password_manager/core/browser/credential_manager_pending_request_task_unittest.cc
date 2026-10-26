@@ -6,12 +6,17 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/with_feature_override.h"
+#include "components/affiliations/core/browser/match_type.h"
+#include "components/device_reauth/device_auth_availability_checker.h"
 #include "components/device_reauth/device_authenticator.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/common/credential_manager_types.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
@@ -59,7 +64,19 @@ class MockPasswordManagerClient : public StubPasswordManagerClient {
               (const, override));
   MOCK_METHOD(bool,
               IsReauthBeforeFillingRequired,
+              (device_reauth::DeviceAuthAvailabilityChecker * checker),
+              (override));
+  MOCK_METHOD(bool,
+              IsReauthBeforeFillingRequiredLegacy,
               (device_reauth::DeviceAuthenticator * authenticator),
+              (override));
+  MOCK_METHOD(std::unique_ptr<device_reauth::DeviceAuthAvailabilityChecker>,
+              GetDeviceAuthAvailabilityChecker,
+              (),
+              (override));
+  MOCK_METHOD(std::unique_ptr<device_reauth::DeviceAuthenticator>,
+              GetDeviceAuthenticator,
+              (),
               (override));
   MOCK_METHOD(PrefService*, GetPrefs, (), (const, override));
 };
@@ -111,12 +128,12 @@ class CredentialManagerPendingRequestTaskTest : public ::testing::Test {
         .WillByDefault(Return(url::Origin::Create(url)));
 
     form_.username_value = u"Username";
-    form_.password_value = u"Password";
+    form_.password_value = PasswordString(u"Password");
     form_.url = url;
     form_.signon_realm = form_.url.spec();
     form_.scheme = PasswordForm::Scheme::kHtml;
     form_.skip_zero_click = false;
-    form_.match_type = PasswordForm::MatchType::kExact;
+    form_.match_type = affiliations::MatchType::kExact;
   }
   ~CredentialManagerPendingRequestTaskTest() override = default;
 
@@ -170,12 +187,12 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
   // different passwords from two store, both are passed to the UI.
   PasswordForm profile_form = form_;
   profile_form.in_store = PasswordForm::Store::kProfileStore;
-  profile_form.password_value = u"ProfilePassword";
+  profile_form.password_value = PasswordString(u"ProfilePassword");
   profile_store_->AddLogin(password_manager::FromPasswordForm(profile_form));
 
   PasswordForm account_form = form_;
   account_form.in_store = PasswordForm::Store::kAccountStore;
-  account_form.password_value = u"AccountPassword";
+  account_form.password_value = PasswordString(u"AccountPassword");
   account_store_->AddLogin(password_manager::FromPasswordForm(account_form));
   RunAllPendingTasks();
 
@@ -228,7 +245,7 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
   // for the same origin, the account store version is passed to the UI.
   GURL federation_url("https://google.com/");
   form_.federation_origin = url::SchemeHostPort(federation_url);
-  form_.password_value = std::u16string();
+  form_.password_value = PasswordString(std::u16string());
   form_.signon_realm = "federation://www.example.com/google.com";
 
   PasswordForm profile_form = form_;
@@ -285,7 +302,7 @@ TEST_F(CredentialManagerPendingRequestTaskTest, NoAutosigninForPSLMatches) {
   RunAllPendingTasks();
 
   std::vector<std::unique_ptr<PasswordForm>> expected_forms;
-  psl_form.match_type = PasswordForm::MatchType::kPSL;
+  psl_form.match_type = affiliations::MatchType::kPSL;
   psl_form.in_store = PasswordForm::Store::kProfileStore;
   expected_forms.push_back(std::make_unique<PasswordForm>(psl_form));
 
@@ -314,7 +331,7 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
   std::vector<std::unique_ptr<PasswordForm>> expected_forms;
   form_.in_store = PasswordForm::Store::kProfileStore;
   expected_forms.push_back(std::make_unique<PasswordForm>(form_));
-  psl_form.match_type = PasswordForm::MatchType::kPSL;
+  psl_form.match_type = affiliations::MatchType::kPSL;
   psl_form.in_store = PasswordForm::Store::kProfileStore;
   expected_forms.push_back(std::make_unique<PasswordForm>(psl_form));
 
@@ -330,9 +347,25 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
   RunAllPendingTasks();
 }
 
-TEST_F(CredentialManagerPendingRequestTaskTest,
+class CredentialManagerPendingRequestTaskReauthTest
+    : public base::test::WithFeatureOverride,
+      public CredentialManagerPendingRequestTaskTest {
+ public:
+  CredentialManagerPendingRequestTaskReauthTest()
+      : base::test::WithFeatureOverride(features::kDeviceReauthRefactor) {}
+
+  bool IsRefactorEnabled() const { return IsParamFeatureEnabled(); }
+};
+
+TEST_P(CredentialManagerPendingRequestTaskReauthTest,
        SilentRequestFailsIfBiometricReauthEnabled) {
   ON_CALL(*client(), IsReauthBeforeFillingRequired).WillByDefault(Return(true));
+  ON_CALL(*client(), IsReauthBeforeFillingRequiredLegacy)
+      .WillByDefault(Return(true));
+  EXPECT_CALL(*client(), IsReauthBeforeFillingRequired)
+      .Times(IsRefactorEnabled() ? 1 : 0);
+  EXPECT_CALL(*client(), IsReauthBeforeFillingRequiredLegacy)
+      .Times(IsRefactorEnabled() ? 0 : 1);
 
   form_.in_store = PasswordForm::Store::kProfileStore;
   profile_store_->AddLogin(password_manager::FromPasswordForm(form_));
@@ -353,9 +386,15 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
   RunAllPendingTasks();
 }
 
-TEST_F(CredentialManagerPendingRequestTaskTest,
+TEST_P(CredentialManagerPendingRequestTaskReauthTest,
        NoAutosigninIfBiometricReauthEnabled) {
   ON_CALL(*client(), IsReauthBeforeFillingRequired).WillByDefault(Return(true));
+  ON_CALL(*client(), IsReauthBeforeFillingRequiredLegacy)
+      .WillByDefault(Return(true));
+  EXPECT_CALL(*client(), IsReauthBeforeFillingRequired)
+      .Times(IsRefactorEnabled() ? 1 : 0);
+  EXPECT_CALL(*client(), IsReauthBeforeFillingRequiredLegacy)
+      .Times(IsRefactorEnabled() ? 0 : 1);
 
   profile_store_->AddLogin(password_manager::FromPasswordForm(form_));
   RunAllPendingTasks();
@@ -376,5 +415,8 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
       /*request_federations=*/{}, GetFormDigest());
   RunAllPendingTasks();
 }
+
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
+    CredentialManagerPendingRequestTaskReauthTest);
 
 }  // namespace password_manager

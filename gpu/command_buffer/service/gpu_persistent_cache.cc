@@ -134,6 +134,7 @@ std::string GetHistogramName(std::string_view prefix, std::string_view metric) {
 NOINLINE NOOPT void HandlePersistentCacheError(
     GpuProcessShmCount* use_shader_cache_shm_count,
     persistent_cache::TransactionError error) {
+  LOG(ERROR) << "Persistent cache error: " << static_cast<int>(error);
   switch (error) {
     case persistent_cache::TransactionError::kPermanent:
       if (use_shader_cache_shm_count) {
@@ -162,13 +163,22 @@ bool TimedWait(base::ConditionVariable& cond_var,
 }
 
 #if BUILDFLAG(USE_DAWN) || BUILDFLAG(SKIA_USE_DAWN)
-bool IsVkPipelineCache(std::string_view key_str) {
+bool IsDawnVkPipelineCache(std::string_view key_str) {
   // Dawn/Vulkan appends a suffix to the cache key intentionally.
   return key_str.ends_with("MonolithicVkPipelineCache");
 }
 #endif
 
-std::string_view GetCacheMetadataKey() {
+bool IsGaneshVkPipelineCache(std::string_view key_str) {
+  // Ganesh/Vulkan uses a 4-byte uint32_t key
+  // (GrVkGpu::kPipelineCache_PersistentCacheKeyType = 1).
+  constexpr uint32_t kGaneshVkPipelineCacheKey = 1;
+  return key_str.size() == sizeof(kGaneshVkPipelineCacheKey) &&
+         base::byte_span_from_ref(kGaneshVkPipelineCacheKey) ==
+             base::as_byte_span(key_str);
+}
+
+std::string GetCacheMetadataKey() {
   return version_info::GetProductNameAndVersionForUserAgent();
 }
 }  // namespace
@@ -433,11 +443,8 @@ void GpuPersistentCache::InitializeCache(
       auto cache,
       persistent_cache::PersistentCache::Bind(
           persistent_cache::Client::kShaderCache, std::move(pending_backend)),
-      [use_shader_cache_shm_count](persistent_cache::TransactionError error) {
-        // Treat any failure to bind to the cache as a permanent error.
-        HandlePersistentCacheError(
-            &use_shader_cache_shm_count->data,
-            persistent_cache::TransactionError::kPermanent);
+      [&](persistent_cache::TransactionError error) {
+        HandlePersistentCacheError(&use_shader_cache_shm_count->data, error);
       });
 
   disk_cache_ = base::MakeRefCounted<DiskCache>(
@@ -479,87 +486,64 @@ void GpuPersistentCache::InitializeCache(
 }
 
 #if BUILDFLAG(USE_DAWN) || BUILDFLAG(SKIA_USE_DAWN)
-size_t GpuPersistentCache::FindKey(std::span<const std::byte> key) {
-  std::string_view key_str(reinterpret_cast<const char*>(key.data()),
-                           key.size());
+size_t GpuPersistentCache::FindKey(std::string_view key) {
   size_t discovered_size = 0;
   auto buffer_provider = [&discovered_size](size_t content_size) {
     discovered_size = content_size;
     return base::span<uint8_t>();
   };
-  LoadImpl(key_str, std::move(buffer_provider));
+  CacheLoadResult result =
+      LoadImpl(key, std::move(buffer_provider), /*skip_memory_cache=*/false);
+  RecordCacheLoadResultHistogram(result);
+  if (IsCacheHitResult(result) && IsDawnVkPipelineCache(key)) {
+    base::UmaHistogramMemoryKB(
+        GetHistogramName(cache_prefix_, "VkPipelineCache.LoadedSize"),
+        base::ByteSize(discovered_size));
+  }
   return discovered_size;
+}
+
+size_t GpuPersistentCache::LoadData(std::string_view key,
+                                    base::span<uint8_t> dest) {
+  if (dest.empty()) {
+    return FindKey(key);
+  }
+
+  size_t discovered_size = 0;
+  auto buffer_provider = [dest, &discovered_size](size_t content_size) {
+    discovered_size = content_size;
+    if (dest.size() >= content_size) {
+      return dest.first(content_size);
+    }
+    return base::span<uint8_t>();
+  };
+
+  CacheLoadResult result =
+      LoadImpl(key, std::move(buffer_provider), /*skip_memory_cache=*/false);
+  if (!IsCacheHitResult(result)) {
+    RecordCacheLoadResultHistogram(result);
+  } else if (dest.size() < discovered_size) {
+    // If the buffer size provided is smaller than the data, return 0.
+    return 0;
+  }
+
+  return discovered_size;
+}
+
+size_t GpuPersistentCache::FindKey(std::span<const std::byte> key) {
+  std::string_view key_str(reinterpret_cast<const char*>(key.data()),
+                           key.size());
+  return FindKey(key_str);
 }
 
 size_t GpuPersistentCache::LoadData(std::span<const std::byte> key,
                                     std::span<std::byte> dest) {
   std::string_view key_str(reinterpret_cast<const char*>(key.data()),
                            key.size());
-  size_t discovered_size = 0;
-
-  auto buffer_provider = [dest, &discovered_size](size_t content_size) {
-    discovered_size = content_size;
-    if (dest.size() >= content_size) {
-      return UNSAFE_BUFFERS(base::span<uint8_t>(
-          reinterpret_cast<uint8_t*>(dest.data()), content_size));
-    }
-    return base::span<uint8_t>();
-  };
-
-  CacheLoadResult result = LoadImpl(key_str, std::move(buffer_provider));
-  if (!IsCacheHitResult(result) || dest.empty()) {
-    RecordCacheLoadResultHistogram(result);
-  }
-
-  return discovered_size;
-}
-
-size_t GpuPersistentCache::LoadData(const void* key,
-                                    size_t key_size,
-                                    void* value,
-                                    size_t value_size) {
-  std::string_view key_str(static_cast<const char*>(key), key_size);
-  size_t discovered_size = 0;
-
-  // A BufferProvider for PersistentCache that puts the size of the content, in
-  // bytes, into `discovered_size` and returns a view into the buffer at
-  // `value_out` if it is big enough or an empty span otherwise.
-  // SAFETY: Caller provides either null `value` or `value` plus `value_size`.
-  auto buffer_provider = [value = UNSAFE_BUFFERS(base::span(
-                              static_cast<uint8_t*>(value), value_size)),
-                          &discovered_size](size_t content_size) {
-    // Cache hit: retain the size.
-    discovered_size = content_size;
-
-    if (value.size() >= content_size) {
-      return value.first(content_size);
-    }
-    return base::span<uint8_t>();
-  };
-
-  CacheLoadResult result = LoadImpl(key_str, std::move(buffer_provider));
-  if (!IsCacheHitResult(result) || value_size == 0) {
-    // This function is called twice in the cache hit case, once to query the
-    // size of the buffer and again with a buffer to write into. To avoid
-    // skewing the metrics by generating two cache hit data points, only record
-    // a cache hit when there is no buffer provided.
-    RecordCacheLoadResultHistogram(result);
-
-    if (IsVkPipelineCache(key_str)) {
-      base::UmaHistogramMemoryKB(
-          GetHistogramName(cache_prefix_, "VkPipelineCache.LoadedSize"),
-          base::ByteSize(discovered_size));
-    }
-  }
-
-  // If the buffer size provided is smaller than the data, return 0.
-  // We exclude value_size == 0 because that is used to query the size of the
-  // cached data without reading it.
-  if (value_size > 0 && value_size < discovered_size) {
-    return 0;
-  }
-
-  return static_cast<GLsizeiptr>(discovered_size);
+  // SAFETY: `dest` is provided by the caller who is responsible.
+  base::span<uint8_t> dest_span = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<uint8_t*>(dest.data()), dest.size()));
+  return LoadData(key_str, dest_span);
 }
 #endif
 
@@ -578,8 +562,18 @@ sk_sp<SkData> GpuPersistentCache::load(const SkData& key) {
                    output_data->size()));
   };
 
-  CacheLoadResult result = LoadImpl(key_str, std::move(buffer_provider));
+  // Serialized VkPipelineCache entries are large and won't be loaded again
+  // until the GPU process restarts. Keeping such an entry in the memory cache
+  // isn't useful but does evict otherwise useful data.
+  const bool is_vk_pipeline_cache = IsGaneshVkPipelineCache(key_str);
+  CacheLoadResult result = LoadImpl(key_str, std::move(buffer_provider),
+                                    /*skip_memory_cache=*/is_vk_pipeline_cache);
   RecordCacheLoadResultHistogram(result);
+  if (IsCacheHitResult(result) && is_vk_pipeline_cache) {
+    base::UmaHistogramMemoryKB(
+        GetHistogramName(cache_prefix_, "VkPipelineCache.LoadedSize"),
+        base::ByteSize(output_data ? output_data->size() : 0));
+  }
 
   return output_data;
 }
@@ -610,7 +604,8 @@ int64_t GpuPersistentCache::GLBlobCacheGet(const void* key,
         return base::span<uint8_t>();
       };
 
-  CacheLoadResult result = LoadImpl(key_str, std::move(buffer_provider));
+  CacheLoadResult result = LoadImpl(key_str, std::move(buffer_provider),
+                                    /*skip_memory_cache=*/false);
   if (!IsCacheHitResult(result) || value_size == 0) {
     // This function is called twice in the cache hit case, once to query the
     // size of the buffer and again with a buffer to write into. To avoid
@@ -629,10 +624,15 @@ int64_t GpuPersistentCache::GLBlobCacheGet(const void* key,
   return discovered_size;
 }
 
-void GpuPersistentCache::PurgeMemory(
-    base::MemoryPressureLevel memory_pressure_level) {
+void GpuPersistentCache::OnUpdateMemoryLimit(base::MemoryLimit memory_limit) {
   if (memory_cache_) {
-    memory_cache_->PurgeMemory(memory_pressure_level);
+    memory_cache_->OnUpdateMemoryLimit(memory_limit);
+  }
+}
+
+void GpuPersistentCache::OnReleaseMemory(base::MemoryLimit memory_limit) {
+  if (memory_cache_) {
+    memory_cache_->OnReleaseMemory(memory_limit);
   }
 }
 
@@ -669,7 +669,8 @@ bool GpuPersistentCache::IsCacheHitResult(CacheLoadResult result) {
 
 GpuPersistentCache::CacheLoadResult GpuPersistentCache::LoadImpl(
     std::string_view key,
-    persistent_cache::BufferProvider buffer_provider) {
+    persistent_cache::BufferProvider buffer_provider,
+    bool skip_memory_cache) {
   const bool disk_cache_initialized = disk_cache_initialized_.IsSet();
   TRACE_EVENT1("gpu", "GpuPersistentCache::LoadImpl", "persistent_cache",
                disk_cache_initialized);
@@ -683,9 +684,13 @@ GpuPersistentCache::CacheLoadResult GpuPersistentCache::LoadImpl(
         disk_cache_initialized);
   }
 
-  UpdateCacheMetadataForLoad(key);
+  const bool use_memory_cache = memory_cache_ && !skip_memory_cache;
 
-  if (memory_cache_) {
+  if (use_memory_cache) {
+    // The metadata is only used to preload entries into the memory cache on
+    // startup, so don't record keys which are excluded from the memory cache.
+    UpdateCacheMetadataForLoad(key);
+
     if (auto memory_entry = memory_cache_->Find(key)) {
       base::span<uint8_t> output_buffer =
           buffer_provider(memory_entry->DataSize());
@@ -703,11 +708,11 @@ GpuPersistentCache::CacheLoadResult GpuPersistentCache::LoadImpl(
 
   // A BufferProvider for PersistentCache that returns one of:
   // 1.  a view into the buffer at `provided_buffer` if it is big enough
-  // 2.  an empty span if no memory_cache_ exists, or
+  // 2.  an empty span if the memory cache isn't used, or
   // 3.  a view into a new base::HeapArray (`local_allocated_buffer`)
   auto wrapped_buffer_provider =
-      [buffer_provider, memory_cache_exists = memory_cache_ != nullptr,
-       &provided_buffer, &local_allocated_buffer](size_t content_size) {
+      [buffer_provider, use_memory_cache, &provided_buffer,
+       &local_allocated_buffer](size_t content_size) {
         // First attempt to use the buffer_provider to allocate a buffer for the
         // result.
         provided_buffer = buffer_provider(content_size);
@@ -718,7 +723,7 @@ GpuPersistentCache::CacheLoadResult GpuPersistentCache::LoadImpl(
           return provided_buffer.first(content_size);  // Case 1.
         }
 
-        if (!memory_cache_exists) {
+        if (!use_memory_cache) {
           return base::span<uint8_t>();  // Case 2.
         }
 
@@ -735,9 +740,9 @@ GpuPersistentCache::CacheLoadResult GpuPersistentCache::LoadImpl(
     return disk_load_result;
   }
 
-  if (memory_cache_) {
+  if (use_memory_cache) {
     // Verify the assumptions above. There should always be data in one of the
-    // two buffers if the load was successful and a memory cache exists.
+    // two buffers if the load was successful and the memory cache is used.
     DCHECK(!local_allocated_buffer.empty() || !provided_buffer.empty());
 
     // After loading from the disk cache, copy the entry into the memory cache
@@ -756,33 +761,23 @@ GpuPersistentCache::CacheLoadResult GpuPersistentCache::LoadImpl(
 }
 
 #if BUILDFLAG(USE_DAWN) || BUILDFLAG(SKIA_USE_DAWN)
+void GpuPersistentCache::StoreData(std::string_view key,
+                                   base::span<const uint8_t> src) {
+  // Serialized VkPipelineCache entries won't be loaded again until the GPU
+  // process restarts. Storing this entry in the memory cache isn't useful but
+  // does evict otherwise useful data.
+  const bool skip_memory_cache = IsDawnVkPipelineCache(key);
+  StoreImpl(key, src, skip_memory_cache);
+}
+
 void GpuPersistentCache::StoreData(std::span<const std::byte> key,
                                    std::span<const std::byte> src) {
   std::string_view key_str(reinterpret_cast<const char*>(key.data()),
                            key.size());
-  base::span<const uint8_t> value_span = UNSAFE_BUFFERS(
+  // SAFETY: `src` is provided by the caller who is responsible.
+  base::span<const uint8_t> src_span = UNSAFE_BUFFERS(
       base::span(reinterpret_cast<const uint8_t*>(src.data()), src.size()));
-
-  // Serialized VkPipelineCache entries won't be loaded again until the GPU
-  // process restarts. Storing this entry in the memory cache isn't useful but
-  // does evict otherwise useful data.
-  const bool skip_memory_cache = IsVkPipelineCache(key_str);
-  StoreImpl(key_str, value_span, skip_memory_cache);
-}
-
-void GpuPersistentCache::StoreData(const void* key,
-                                   size_t key_size,
-                                   const void* value,
-                                   size_t value_size) {
-  std::string_view key_str(static_cast<const char*>(key), key_size);
-  base::span<const uint8_t> value_span = UNSAFE_BUFFERS(
-      base::span(static_cast<const uint8_t*>(value), value_size));
-
-  // Serialized VkPipelineCache entries won't be loaded again until the GPU
-  // process restarts. Storing this entry in the memory cache isn't useful but
-  // does evict otherwise useful data.
-  const bool skip_memory_cache = IsVkPipelineCache(key_str);
-  StoreImpl(key_str, value_span, skip_memory_cache);
+  return StoreData(key_str, src_span);
 }
 #endif
 
@@ -790,7 +785,8 @@ void GpuPersistentCache::store(const SkData& key, const SkData& data) {
   std::string_view key_str(static_cast<const char*>(key.data()), key.size());
   base::span<const uint8_t> value_span = UNSAFE_BUFFERS(
       base::span(static_cast<const uint8_t*>(data.bytes()), data.size()));
-  StoreImpl(key_str, value_span, /*skip_memory_cache=*/false);
+  const bool skip_memory_cache = IsGaneshVkPipelineCache(key_str);
+  StoreImpl(key_str, value_span, skip_memory_cache);
 }
 
 void GpuPersistentCache::GLBlobCacheSet(const void* key,
@@ -824,10 +820,10 @@ void GpuPersistentCache::StoreImpl(std::string_view key,
 
   // Record the cache key and value sizes infrequently.
   if (base::ShouldRecordSubsampledMetric(kRecordCacheEntrySizeFrequency)) {
-    base::UmaHistogramMemoryKB(GetHistogramName(cache_prefix_, "KeySize"),
-                               base::ByteSize(key.size()));
-    base::UmaHistogramMemoryKB(GetHistogramName(cache_prefix_, "ValueSize"),
-                               base::ByteSize(value.size()));
+    base::UmaHistogramCounts1M(GetHistogramName(cache_prefix_, "KeySize2"),
+                               key.size());
+    base::UmaHistogramCounts1M(GetHistogramName(cache_prefix_, "ValueSize2"),
+                               value.size());
   }
 
   scoped_refptr<MemoryCacheEntry> memory_cache_entry;
@@ -1058,14 +1054,24 @@ scoped_refptr<GpuPersistentCache> GpuPersistentCacheCollection::GetCache(
                   GetCacheHistogramPrefix(handle), std::move(memory_cache),
                   metadata_options_, async_write_options_));
   DCHECK(inserted);
+  iter->second->OnUpdateMemoryLimit(current_memory_limit_);
   return iter->second;
 }
 
-void GpuPersistentCacheCollection::PurgeMemory(
-    base::MemoryPressureLevel memory_pressure_level) {
+void GpuPersistentCacheCollection::OnUpdateMemoryLimit(
+    base::MemoryLimit memory_limit) {
+  base::AutoLock lock(mutex_);
+  current_memory_limit_ = memory_limit;
+  for (auto& [_, cache] : caches_) {
+    cache->OnUpdateMemoryLimit(memory_limit);
+  }
+}
+
+void GpuPersistentCacheCollection::OnReleaseMemory(
+    base::MemoryLimit memory_limit) {
   base::AutoLock lock(mutex_);
   for (auto& [_, cache] : caches_) {
-    cache->PurgeMemory(memory_pressure_level);
+    cache->OnReleaseMemory(memory_limit);
   }
 }
 

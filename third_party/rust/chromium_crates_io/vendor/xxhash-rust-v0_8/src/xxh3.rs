@@ -249,7 +249,7 @@ fn accumulate_512_wasm(acc: &mut Acc, input: &StripeLanes, secret: &StripeLanes)
     }
 }
 
-#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[cfg(all(any(target_arch = "aarch64", target_arch = "arm64ec"), target_feature = "neon"))]
 macro_rules! vld1q_u8 {
     ($ptr:expr) => {
         core::arch::aarch64::vld1q_u8($ptr)
@@ -273,7 +273,7 @@ fn accumulate_512_neon(acc: &mut Acc, input: &StripeLanes, secret: &StripeLanes)
     unsafe {
         #[cfg(target_arch = "arm")]
         use core::arch::arm::*;
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(any(target_arch = "aarch64", target_arch = "arm64ec"))]
         use core::arch::aarch64::*;
 
         let mut idx = 0usize;
@@ -304,7 +304,7 @@ fn accumulate_512_neon(acc: &mut Acc, input: &StripeLanes, secret: &StripeLanes)
 
             //xxhash does it with inline assembly, but idk if I want to embed it here
             let sum_1 = vmlal_u32(data_swap_1, vget_low_u32(data_key_lo), vget_low_u32(data_key_hi));
-            #[cfg(target_arch = "aarch64")]
+            #[cfg(any(target_arch = "aarch64", target_arch = "arm64ec"))]
             let sum_2 = vmlal_high_u32(data_swap_2, data_key_lo, data_key_hi);
             #[cfg(target_arch = "arm")]
             let sum_2 = vmlal_u32(data_swap_2, vget_high_u32(data_key_lo), vget_high_u32(data_key_hi));
@@ -441,7 +441,7 @@ fn scramble_acc_neon(acc: &mut Acc, secret: &StripeLanes) {
     unsafe {
         #[cfg(target_arch = "arm")]
         use core::arch::arm::*;
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(any(target_arch = "aarch64", target_arch = "arm64ec"))]
         use core::arch::aarch64::*;
 
         let xacc = acc.0.as_mut_ptr() as *mut uint64x2_t;
@@ -1046,6 +1046,7 @@ impl Xxh3Default {
         ((high as u128) << 64) | (low as u128)
     }
 
+    #[inline]
     ///Computes hash.
     pub fn digest(&self) -> u64 {
         //Separating digest mid sized allows us to inline this function, which benefits
@@ -1057,6 +1058,7 @@ impl Xxh3Default {
         }
     }
 
+    #[inline]
     ///Computes hash as 128bit integer.
     pub fn digest128(&self) -> u128 {
         //Separating digest mid sized allows us to inline this function, which benefits
@@ -1205,6 +1207,7 @@ impl Xxh3 {
         ((high as u128) << 64) | (low as u128)
     }
 
+    #[inline]
     ///Computes hash.
     pub fn digest(&self) -> u64 {
         //Separating digest mid sized allows us to inline this function, which benefits
@@ -1220,6 +1223,7 @@ impl Xxh3 {
         }
     }
 
+    #[inline]
     ///Computes hash as 128bit integer.
     pub fn digest128(&self) -> u128 {
         //Separating digest mid sized allows us to inline this function, which benefits
@@ -1272,8 +1276,8 @@ impl std::io::Write for Xxh3 {
 #[derive(Clone, Copy)]
 ///Hash builder for `Xxh3`
 pub struct Xxh3Builder {
-    seed: u64,
-    secret: [u8; DEFAULT_SECRET_SIZE],
+    seed: Option<u64>,
+    secret: Option<[u8; DEFAULT_SECRET_SIZE]>,
 }
 
 impl Xxh3Builder {
@@ -1281,29 +1285,39 @@ impl Xxh3Builder {
     ///Creates new instance with default params.
     pub const fn new() -> Self {
         Self {
-            seed: 0,
-            secret: DEFAULT_SECRET,
+            seed: None,
+            secret: None,
         }
     }
 
     #[inline(always)]
     ///Sets `seed` for `xxh3` algorithm
+    ///
+    ///This method overrides default secret with custom based on seed.
+    ///
+    ///To counter it, override secret using [Xxh3Builder::with_secret]
     pub const fn with_seed(mut self, seed: u64) -> Self {
-        self.seed = seed;
+        self.seed = Some(seed);
         self
     }
 
     #[inline(always)]
     ///Sets custom `secret` for `xxh3` algorithm
     pub const fn with_secret(mut self, secret: [u8; DEFAULT_SECRET_SIZE]) -> Self {
-        self.secret = secret;
+        self.secret = Some(secret);
         self
     }
 
     #[inline(always)]
     ///Creates `Xxh3` instance
     pub const fn build(self) -> Xxh3 {
-        Xxh3::with_custom_ops(self.seed, self.secret)
+        let (seed, secret) = match (self.seed, self.secret) {
+            (Some(seed), Some(secret)) => (seed, secret),
+            (Some(seed), None) => (seed, const_custom_default_secret(seed)),
+            (None, Some(secret)) => (0, secret),
+            (None, None) => (0, DEFAULT_SECRET),
+        };
+        Xxh3::with_custom_ops(seed, secret)
     }
 }
 

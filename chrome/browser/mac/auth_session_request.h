@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -20,7 +21,7 @@
 
 @class ASWebAuthenticationSessionRequest;
 
-class Browser;
+class BrowserWindowInterface;
 class Profile;
 
 // A class to manage the WebContents running an
@@ -36,7 +37,7 @@ class AuthSessionRequest
   static void CancelAuthSession(ASWebAuthenticationSessionRequest* request);
 
   // Canonicalizes a scheme string. Returns nullopt if it is invalid.
-  static std::optional<std::string> CanonicalizeScheme(std::string scheme);
+  static std::optional<std::string> CanonicalizeScheme(std::string_view scheme);
 
   // Create a throttle for the ongoing authentication session.
   void CreateAndAddNavigationThrottle(
@@ -51,13 +52,14 @@ class AuthSessionRequest
   // provided as the scheme to match on macOS 14.3 and earlier, and is empty and
   // unused otherwise.
   AuthSessionRequest(content::WebContents* web_contents,
-                     Browser* browser,
+                     BrowserWindowInterface* browser,
                      ASWebAuthenticationSessionRequest* request,
                      const std::string& matching_scheme);
 
   // Create a Browser and a WebContents to run the request.
-  static Browser* CreateBrowser(ASWebAuthenticationSessionRequest* request,
-                                Profile* profile);
+  static BrowserWindowInterface* CreateBrowser(
+      ASWebAuthenticationSessionRequest* request,
+      Profile* profile);
 
   // Returns a map that holds all the authentication sessions that are in
   // progress. The keys are the stringified uuids of the authentication
@@ -85,7 +87,7 @@ class AuthSessionRequest
   bool perform_cancellation_callback_ = true;
 
   // The browser containing the WebContents being used to service the request.
-  raw_ptr<Browser> browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface> browser_ = nullptr;
 
   // The request being serviced.
   ASWebAuthenticationSessionRequest* __strong request_;

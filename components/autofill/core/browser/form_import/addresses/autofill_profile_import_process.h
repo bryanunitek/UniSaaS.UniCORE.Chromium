@@ -79,6 +79,29 @@ enum class AutofillProfileImportType {
   kMaxValue = kHomeWorkNameEmailMerge
 };
 
+// LINT.IfChange(ProfileCountrySource)
+
+// Specifies the source of the country in the imported profile.
+enum class ProfileCountrySource {
+  // The submitted form contained a dedicated country field that contained a
+  // valid country which was used to set the profile country.
+  kExplicitlyObserved = 0,
+  // The profile country was inferred using variations services to get the
+  // latest reported country or, if not possible, using the app locale.
+  kDefaultCountryCodeForNewAddress = 1,
+  // The profile country was inferred from a phone number in international
+  // format in the submitted form.
+  kPhoneNumberRegionCode = 2,
+  // The profile has no country.
+  kNoCountry = 3,
+  // The profile country was set, but its exact origin cannot be determined.
+  kCountryMerged = 4,
+
+  kMaxValue = kCountryMerged,
+};
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/enums.xml:AutofillAddressProfileImportCountrySource)
+
 // Specifies the status of the imported phone number.
 enum class PhoneImportStatus {
   // Phone number is not present. Default.
@@ -103,8 +126,9 @@ struct ProfileImportMetadata {
 
   // Tracks if the form section contains an invalid country.
   bool observed_invalid_country = false;
-  // Whether the profile's country was complemented automatically.
-  bool did_complement_country = false;
+  // Source of the country in a profile.
+  ProfileCountrySource country_source =
+      ProfileCountrySource::kExplicitlyObserved;
   // Whether the form originally contained a phone number and if that phone
   // number is considered valid by libphonenumber.
   PhoneImportStatus phone_import_status = PhoneImportStatus::kNone;
@@ -300,13 +324,13 @@ class ProfileImportProcess {
   bool QualifiesForUpdateProfilePrompt(const ImportCandidate& candidate) const;
   bool QualifiesForMigrateProfilePrompt(const ImportCandidate& profile) const;
 
-  // Merges the `mergeable_profiles` with the `observed_profile_` and determines
-  // how the merged profile differs from the original one (see
+  // Merges `existing_profiles` with `observed_profile` and determines how
+  // the merged profile differs from the original one (see
   // `ImportCandidate::Change`). Constructs one `ImportCandidate` per
-  // `mergeable_profiles` and returns the result, preserving relative order.
-  // Assumes that mergeability has already been determined.
+  // mergeable profile and returns the result, preserving relative order.
   std::vector<ImportCandidate> GetImportCandidates(
-      base::span<const AutofillProfile*> mergeable_profiles) const;
+      base::span<const AutofillProfile* const> existing_profiles,
+      const AutofillProfile& observed_profile) const;
 
   // For new profile imports, sets the source of the `import_candidate_`
   // correctly, depending on the user's account storage eligiblity.

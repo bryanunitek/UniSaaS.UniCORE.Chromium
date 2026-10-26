@@ -9,6 +9,7 @@
 
 #include "base/auto_reset.h"
 #include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/rand_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
@@ -21,8 +22,11 @@
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_encoding_data.h"
 #include "third_party/blink/public/platform/web_navigation_body_loader.h"
+#include "third_party/blink/public/platform/web_policy_container.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/visited_link_state.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -31,6 +35,7 @@
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/scoped_page_pauser.h"
+#include "third_party/blink/renderer/core/testing/mock_policy_container_host.h"
 #include "third_party/blink/renderer/core/testing/scoped_fake_plugin_registry.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
@@ -84,7 +89,7 @@ class DecodedBodyLoader : public StaticDataNavigationBodyLoader {
     }
 
    private:
-    Client* client_;
+    raw_ptr<Client, UnprotectedInRelease | DanglingUntriaged> client_;
   };
 
   std::unique_ptr<DecodedDataPassthroughClient> client_;
@@ -114,7 +119,9 @@ class BodyLoaderTestDelegate : public URLLoaderTestDelegate {
 
  private:
   std::unique_ptr<StaticDataNavigationBodyLoader> body_loader_;
-  StaticDataNavigationBodyLoader* body_loader_raw_;
+  raw_ptr<StaticDataNavigationBodyLoader,
+          UnprotectedInRelease | DanglingUntriaged>
+      body_loader_raw_;
 };
 
 // This struct contains the three elements of the :visited links
@@ -374,12 +381,13 @@ class DocumentLoaderSimTest : public SimTest {
         .ToChecked();
   }
 
-  SimRequest* main_resource_for_reenter_ = nullptr;
+  raw_ptr<SimRequest, UnprotectedInRelease | DanglingUntriaged>
+      main_resource_for_reenter_ = nullptr;
   int reenter_call_count_ = 0;
 
  private:
   static void ReenterThunk(const v8::FunctionCallbackInfo<v8::Value>& info) {
-    v8::Local<v8::External> external_that = info.Data().As<v8::External>();
+    v8::Local<v8::External> external_that = info.DataV2().As<v8::External>();
     DocumentLoaderSimTest* that = static_cast<DocumentLoaderSimTest*>(
         external_that->Value(gin::kExternalPointerTypeTagDefaultTag));
     that->Reenter();
@@ -419,10 +427,10 @@ TEST_F(DocumentLoaderSimTest, ProcessDataBuffer_Streaming) {
   LoadURL("https://example.com");
 
   main_resource.Write("<html><body><div id='a'></div>");
-  EXPECT_TRUE(GetDocument().getElementById(AtomicString("a")));
+  EXPECT_TRUE(GetElementById("a"));
 
   main_resource.Write("<div id='b'></div>");
-  EXPECT_TRUE(GetDocument().getElementById(AtomicString("b")));
+  EXPECT_TRUE(GetElementById("b"));
 
   main_resource.Write("</body></html>");
   main_resource.Finish();
@@ -442,21 +450,21 @@ TEST_F(DocumentLoaderSimTest, ProcessDataBuffer_Buffered) {
   main_resource.Finish();
 
   // Chunks should be buffered, not processed yet.
-  EXPECT_FALSE(GetDocument().getElementById(AtomicString("a")));
-  EXPECT_FALSE(GetDocument().getElementById(AtomicString("b")));
+  EXPECT_FALSE(GetElementById("a"));
+  EXPECT_FALSE(GetElementById("b"));
 
   GetDocument().Loader()->ResumeParser();
 
   // All chunks should have been processed now.
-  EXPECT_TRUE(GetDocument().getElementById(AtomicString("a")));
-  EXPECT_TRUE(GetDocument().getElementById(AtomicString("b")));
+  EXPECT_TRUE(GetElementById("a"));
+  EXPECT_TRUE(GetElementById("b"));
 }
 
 // Test reentrancy into DocumentLoader during the initial `CommitData()` call.
 TEST_F(DocumentLoaderSimTest, ProcessDataBuffer_ReentrancyFromInitialCommit) {
   SimRequest main_resource("https://example.com", "text/html");
-  base::AutoReset<SimRequest*> main_resource_reset(&main_resource_for_reenter_,
-                                                   &main_resource);
+  base::AutoReset<raw_ptr<SimRequest, UnprotectedInRelease | DanglingUntriaged>>
+      main_resource_reset(&main_resource_for_reenter_, &main_resource);
   LoadURL("https://example.com");
 
   InstallReenterHelper(MainFrame());
@@ -466,15 +474,15 @@ TEST_F(DocumentLoaderSimTest, ProcessDataBuffer_ReentrancyFromInitialCommit) {
 
   main_resource.Finish();
 
-  EXPECT_TRUE(GetDocument().getElementById(AtomicString("reentered")));
+  EXPECT_TRUE(GetElementById("reentered"));
 }
 
 // Test reentrancy into DocumentLoader from a `CommitData()` call while draining
 // buffered data.
 TEST_F(DocumentLoaderSimTest, ProcessDataBuffer_ReentrancyDuringIteration) {
   SimRequest main_resource("https://example.com", "text/html");
-  base::AutoReset<SimRequest*> main_resource_reset(&main_resource_for_reenter_,
-                                                   &main_resource);
+  base::AutoReset<raw_ptr<SimRequest, UnprotectedInRelease | DanglingUntriaged>>
+      main_resource_reset(&main_resource_for_reenter_, &main_resource);
   LoadURL("https://example.com");
 
   // `BlockParser()` ensures DocumentLoader buffers data, which is necessary to
@@ -501,8 +509,8 @@ TEST_F(DocumentLoaderSimTest, ProcessDataBuffer_ReentrancyDuringIteration) {
   EXPECT_EQ(1, reenter_call_count_);
   main_resource.Finish();
 
-  EXPECT_TRUE(GetDocument().getElementById(AtomicString("chunk2")));
-  EXPECT_TRUE(GetDocument().getElementById(AtomicString("reentered")));
+  EXPECT_TRUE(GetElementById("chunk2"));
+  EXPECT_TRUE(GetElementById("reentered"));
 }
 
 TEST_F(DocumentLoaderSimTest, DocumentOpenUpdatesUrl) {
@@ -532,6 +540,42 @@ TEST_F(DocumentLoaderSimTest, DocumentOpenUpdatesUrl) {
   EXPECT_EQ(KURL("https://example.com"), child_document->Url());
   // Similarly, the URL of the DocumentLoader should also match.
   EXPECT_EQ(KURL("https://example.com"), child_document->Loader()->Url());
+}
+
+// A same-origin commit from an initial empty document keeps the window, so
+// the value must be set on a kept window too.
+TEST_F(DocumentLoaderSimTest, CanUseDeviceBoundSessionJsApiOnReusedWindow) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimRequest child_resource("https://example.com/child.html", "text/html");
+  LoadURL("https://example.com");
+  main_resource.Complete("<iframe src='child.html'></iframe>");
+
+  LocalFrame* child =
+      To<WebLocalFrameImpl>(MainFrame().FirstChild())->GetFrame();
+  ASSERT_TRUE(child->GetDocument()->IsInitialEmptyDocument());
+  LocalDOMWindow* initial_window = child->DomWindow();
+
+  const KURL url("https://example.com/child.html");
+  std::unique_ptr<WebNavigationParams> params =
+      WebNavigationParams::CreateWithEmptyHTMLForTesting(url);
+  params->storage_key =
+      BlinkStorageKey::CreateFirstParty(SecurityOrigin::Create(url));
+  // A commit that keeps the window expects a policy container, which the
+  // browser always sends.
+  MockPolicyContainerHost mock_policy_container_host;
+  params->policy_container = std::make_unique<WebPolicyContainer>(
+      WebPolicyContainerPolicies(),
+      mock_policy_container_host.BindNewEndpointAndPassDedicatedRemote());
+  params->can_use_device_bound_session_js_api = true;
+  child->Loader().CommitNavigation(std::move(params), nullptr);
+
+  EXPECT_EQ(initial_window, child->DomWindow());
+  EXPECT_TRUE(child->DomWindow()->CanUseDeviceBoundSessionJsApi());
+
+  // The iframe's own navigation to child.html is still queued. Let it commit
+  // and finish, so that `child_resource` is not pending at teardown.
+  test::RunPendingTasks();
+  child_resource.Complete("");
 }
 
 TEST_F(DocumentLoaderSimTest, FramePolicyIntegrityOnNavigationCommit) {
@@ -705,11 +749,28 @@ TEST_P(DocumentLoaderTest, SameOriginNavigation_WithStorageAccess) {
                   ->LastNavigationHadTrustedInitiator());
 
   histogram_tester.ExpectUniqueSample(
-      "API.StorageAccess.DocumentLoadedWithStorageAccess", /*sample=*/true,
-      /*expected_bucket_count=*/1);
-  histogram_tester.ExpectUniqueSample(
       "API.StorageAccess.DocumentInheritedStorageAccess", /*sample=*/true,
       /*expected_bucket_count=*/1);
+}
+
+TEST_P(DocumentLoaderTest, CanUseDeviceBoundSessionJsApiFromCommitParams) {
+  WebViewImpl* web_view_impl =
+      web_view_helper_.InitializeAndLoad("https://example.com/foo.html");
+  LocalFrame* local_frame =
+      To<LocalFrame>(web_view_impl->GetPage()->MainFrame());
+  EXPECT_FALSE(local_frame->DomWindow()->CanUseDeviceBoundSessionJsApi());
+
+  const KURL url(NullUrl(), "https://example.com/bar.html");
+  std::unique_ptr<WebNavigationParams> params =
+      WebNavigationParams::CreateWithEmptyHTMLForTesting(url);
+  params->can_use_device_bound_session_js_api = true;
+  local_frame->Loader().CommitNavigation(std::move(params), nullptr);
+  EXPECT_TRUE(local_frame->DomWindow()->CanUseDeviceBoundSessionJsApi());
+
+  // Each new document gets its own value.
+  local_frame->Loader().CommitNavigation(
+      WebNavigationParams::CreateWithEmptyHTMLForTesting(url), nullptr);
+  EXPECT_FALSE(local_frame->DomWindow()->CanUseDeviceBoundSessionJsApi());
 }
 
 TEST_P(DocumentLoaderTest, CrossOriginNavigation) {
@@ -738,9 +799,6 @@ TEST_P(DocumentLoaderTest, CrossOriginNavigation) {
                    .GetDocumentLoader()
                    ->LastNavigationHadTrustedInitiator());
 
-  histogram_tester.ExpectUniqueSample(
-      "API.StorageAccess.DocumentLoadedWithStorageAccess", /*sample=*/false,
-      /*expected_bucket_count=*/1);
   histogram_tester.ExpectUniqueSample(
       "API.StorageAccess.DocumentInheritedStorageAccess", /*sample=*/false,
       /*expected_bucket_count=*/1);
@@ -961,6 +1019,72 @@ TEST_P(DocumentLoaderTest, DecodedBodyDataWithBlockedParser) {
 
   // DecodedBodyLoader uppercases all data.
   EXPECT_EQ(MainFrame()->GetDocument().Body().TextContent(), "FOO");
+}
+
+// Commits `html` as `main_frame`'s document, optionally marking the response
+// plugin-intercepted as the browser does for responses claimed by a MIME
+// handler, and returns the committed document's body.
+Element* CommitHTMLForTest(WebLocalFrameImpl* main_frame,
+                           std::string_view html,
+                           bool intercepted_by_plugin) {
+  std::unique_ptr<WebNavigationParams> params =
+      WebNavigationParams::CreateWithHTMLStringForTesting(
+          base::span(html),
+          url_test_helpers::ToKURL("https://example.com/foo.html"));
+  params->response.SetInterceptedByPlugin(intercepted_by_plugin);
+  LocalFrame* local_frame = main_frame->GetFrame();
+  local_frame->Loader().CommitNavigation(std::move(params), nullptr);
+  frame_test_helpers::PumpPendingRequestsForFrameToLoad(main_frame);
+  return local_frame->GetDocument()->body();
+}
+
+// A document whose <meta> CSP forbids all inline style and whose body
+// carries an inline width. Whether the width applies discriminates the
+// plugin-intercepted inline-style exemption.
+constexpr char kInlineStylePageWithStrictCSP[] =
+    "<html><head><meta http-equiv=\"Content-Security-Policy\" "
+    "content=\"style-src 'none'\"></head>"
+    "<body style=\"width:100px\"></body></html>";
+
+// A plugin-intercepted response commits a browser-generated document whose
+// inline styles must be exempt from the CSP delivered with the intercepted
+// resource.
+TEST_P(DocumentLoaderTest, InterceptedByPluginAllowsInlineStyleUnderCSP) {
+  Element* body = CommitHTMLForTest(MainFrame(), kInlineStylePageWithStrictCSP,
+                                    /*intercepted_by_plugin=*/true);
+  ASSERT_TRUE(body);
+  EXPECT_EQ(100, body->OffsetWidth());
+}
+
+// Control for InterceptedByPluginAllowsInlineStyleUnderCSP: without the
+// plugin-intercepted bit, the same CSP must block the inline style. Guards
+// the test above from passing vacuously if the <meta> CSP were not applied.
+TEST_P(DocumentLoaderTest, CSPBlocksInlineStyleWithoutPluginInterception) {
+  Element* body = CommitHTMLForTest(MainFrame(), kInlineStylePageWithStrictCSP,
+                                    /*intercepted_by_plugin=*/false);
+  ASSERT_TRUE(body);
+  EXPECT_EQ(0, body->OffsetWidth());
+}
+
+// The exemption covers inline style only: a script-src policy on the same
+// plugin-intercepted document must still block inline script.
+TEST_P(DocumentLoaderTest, InterceptedByPluginKeepsScriptSrcEnforced) {
+  // Prove inline script executes in this harness, so the block below is
+  // CSP's doing rather than script being disabled.
+  Element* body = CommitHTMLForTest(
+      MainFrame(), "<body><script>document.title = 'ran';</script></body>",
+      /*intercepted_by_plugin=*/true);
+  ASSERT_TRUE(body);
+  ASSERT_EQ("ran", MainFrame()->GetFrame()->GetDocument()->title());
+
+  body = CommitHTMLForTest(
+      MainFrame(),
+      "<html><head><meta http-equiv=\"Content-Security-Policy\" "
+      "content=\"script-src 'none'\"></head>"
+      "<body><script>document.title = 'ran';</script></body></html>",
+      /*intercepted_by_plugin=*/true);
+  ASSERT_TRUE(body);
+  EXPECT_NE("ran", MainFrame()->GetFrame()->GetDocument()->title());
 }
 
 TEST_P(DocumentLoaderTest, EmbeddedCredentialsNavigation) {

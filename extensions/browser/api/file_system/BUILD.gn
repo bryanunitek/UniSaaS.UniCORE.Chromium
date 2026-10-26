@@ -4,8 +4,8 @@
 
 import("//extensions/buildflags/buildflags.gni")
 
-assert(enable_extensions,
-       "Cannot depend on extensions because enable_extensions=false.")
+assert(enable_platform_apps,
+       "Cannot depend on platform apps because enable_platform_apps=false.")
 
 source_set("file_system") {
   sources = [
@@ -17,8 +17,6 @@ source_set("file_system") {
     "saved_file_entry.h",
     "saved_files_service_interface.h",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   public_deps = [
     "//base",

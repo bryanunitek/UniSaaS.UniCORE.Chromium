@@ -11,15 +11,15 @@
 #include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_style.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/permissions/permission_util.h"
 #include "components/permissions/request_type.h"
 #include "components/permissions/test/mock_permission_request.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
-#include "ui/base/l10n/l10n_util.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/styled_label.h"
 #include "url/gurl.h"
@@ -52,7 +52,7 @@ class TestDelegateTwoOrigins : public permissions::PermissionPrompt::Delegate {
   }
 
   const std::vector<std::unique_ptr<permissions::PermissionRequest>>& Requests()
-      override {
+      const override {
     return requests_;
   }
 
@@ -120,7 +120,7 @@ class PermissionPromptBubbleTwoOriginsViewBrowserTest
   std::unique_ptr<PermissionPromptBubbleBaseView> CreateBubble(
       TestDelegateTwoOrigins* delegate) {
     return std::make_unique<PermissionPromptBubbleTwoOriginsView>(
-        browser()->tab_strip_model()->GetActiveWebContents(),
+        browser()->GetActiveTabInterface()->GetContents(),
         delegate->GetWeakPtr(), PermissionPromptStyle::kBubbleOnly);
   }
 };

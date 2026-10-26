@@ -15,6 +15,9 @@ external/wpt/webdriver/tests/
 external/wpt/virtual-keyboard/
 external/wpt/visual-viewport/
 
+external/wpt/html/semantics/forms/the-input-element/focus-dynamic-type-change-on-blur.html
+virtual/temporal-input-coarse-pointer/external/wpt/html/semantics/forms/the-input-element/focus-dynamic-type-change-on-blur.html
+
 external/wpt/FileAPI/idlharness.any.html
 external/wpt/FileAPI/idlharness.any.worker.html
 external/wpt/FileAPI/idlharness.html
@@ -175,7 +178,6 @@ external/wpt/orientation-event/idlharness.https.window.html
 external/wpt/orientation-sensor/idlharness.https.window.html
 external/wpt/page-lifecycle/idlharness.html
 external/wpt/paint-timing/idlharness.window.html
-external/wpt/parakeet/idlharness.tentative.https.window.html
 external/wpt/payment-handler/idlharness.https.any.html
 external/wpt/payment-handler/idlharness.https.any.serviceworker.html
 external/wpt/payment-handler/idlharness.https.any.sharedworker.html

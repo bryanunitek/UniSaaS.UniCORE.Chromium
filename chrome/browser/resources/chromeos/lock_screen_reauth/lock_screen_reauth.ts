@@ -80,6 +80,11 @@ class LockReauthElement extends LockReauthElementBase {
         value: '',
       },
 
+      isButtonsEnabled: {
+        type: Boolean,
+        value: false,
+      },
+
       /**
        * Whether the ‘verify user again’ screen is shown.
        */
@@ -145,31 +150,34 @@ class LockReauthElement extends LockReauthElementBase {
         type: Number,
         value: 0,
       },
+
+      /**
+       * The UI component that hosts IdP pages.
+       */
+      authenticator: {
+        type: Object,
+      },
     };
   }
 
-  email: string;
-  authDomain: string;
-  isButtonsEnabled: boolean;
-  isErrorDisplayed: boolean;
-  isSigninFrameDisplayed: boolean;
-  isSaml: boolean;
-  isDefaultSsoProvider: boolean;
-  isConfirmPassword: boolean;
-  isManualInput: boolean;
-  isPasswordChanged: boolean;
-  passwordConfirmAttempt: number;
-  passwordChangeAttempt: number;
+  declare email: string;
+  declare authDomain: string;
+  declare isButtonsEnabled: boolean;
+  declare isErrorDisplayed: boolean;
+  declare isSigninFrameDisplayed: boolean;
+  declare isSaml: boolean;
+  declare isDefaultSsoProvider: boolean;
+  declare isConfirmPassword: boolean;
+  declare isManualInput: boolean;
+  declare isPasswordChanged: boolean;
+  declare passwordConfirmAttempt: number;
+  declare passwordChangeAttempt: number;
+  declare authenticator?: Authenticator;
 
   /**
    * Saved authenticator load params.
    */
   private authenticatorParams: null|AuthParams = null;
-
-  /**
-   * The UI component that hosts IdP pages.
-   */
-  authenticator?: Authenticator;
 
   /**
    * Webview that view IdP page

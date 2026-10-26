@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 
 #include "base/functional/callback.h"
 #include "chrome/browser/controlled_frame/controlled_frame_test_base.h"
@@ -119,7 +120,12 @@ class ControlledFramePermissionRequestTestBase
   SetUpControlledFrame(const DisabledPermissionTestCase& test_case,
                        const DisabledPermissionTestParam& test_param);
 
- private:
+  void FocusControlledFrame(content::RenderFrameHost* app_frame,
+                            content::RenderFrameHost* controlled_frame,
+                            bool must_wait_document_focus = true,
+                            std::string_view selector = "controlledframe");
+
+ protected:
   void SetUpPermissionRequestEventListener(
       content::RenderFrameHost* app_frame,
       const std::string& expected_permission_name,

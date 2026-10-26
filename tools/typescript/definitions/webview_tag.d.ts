@@ -191,6 +191,11 @@ declare global {
         readonly newWidth: number;
       }
 
+      export interface ZoomChangeEvent extends Event {
+        readonly oldZoomFactor: number;
+        readonly newZoomFactor: number;
+      }
+
       export interface PermissionRequestEvent extends Event {
         readonly permission: PermissionType;
         request: MediaPermissionRequest|GeolocationPermissionRequest|
@@ -349,6 +354,14 @@ declare global {
         setUserAgentOverride(userAgent: string): void;
         getZoom(callback: (zoomFactor: number) => void): void;
         setZoom(zoomFactor: number, callback?: () => void): void;
+        loadDataWithBaseUrl(
+            dataUrl: string, baseUrl: string, virtualUrl?: string): void;
+        captureVisibleRegion(
+            options: extensionTypes.ImageDetails|undefined|null,
+            callback: (dataUrl: string) => void): void;
+        find(
+            searchText: string, options?: FindOptions,
+            callback?: (results?: FindCallbackResults) => void): void;
       }
 
       export function setAudioMuted(mute: boolean): void;

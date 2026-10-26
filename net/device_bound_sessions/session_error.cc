@@ -100,6 +100,9 @@ std::optional<DeletionReason> SessionError::GetDeletionReason() const {
     case kInvalidPreProvisionedKeyInitiatorMissing:
     case kPreProvisionedKeyAccessNotGranted:
     case kPreProvisionedKeyNotFound:
+    case kAttestationCertificationError:
+    case kAttestationSigningError:
+    case kFederatedRegistrationRedirected:
       NOTREACHED();
   }
 }
@@ -183,6 +186,9 @@ bool SessionError::IsServerError() const {
     case kInvalidPreProvisionedKeyInitiatorMissing:
     case kPreProvisionedKeyAccessNotGranted:
     case kPreProvisionedKeyNotFound:
+    case kAttestationCertificationError:
+    case kAttestationSigningError:
+    case kFederatedRegistrationRedirected:
       NOTREACHED();
   }
 }
@@ -278,6 +284,9 @@ std::optional<RefreshResult> SessionError::GetRefreshResult() const {
     case kInvalidPreProvisionedKeyInitiatorMissing:
     case kPreProvisionedKeyAccessNotGranted:
     case kPreProvisionedKeyNotFound:
+    case kAttestationCertificationError:
+    case kAttestationSigningError:
+    case kFederatedRegistrationRedirected:
       NOTREACHED();
   }
 }

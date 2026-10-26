@@ -4,15 +4,21 @@
 
 #include "third_party/blink/renderer/core/html/html_install_element.h"
 
+#include "base/notreached.h"
 #include "third_party/blink/public/mojom/web_install/web_install.mojom-blink.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/strings/grit/permission_element_strings.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_install_result.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_install_result_event_init.h"
 #include "third_party/blink/renderer/core/dom/attribute.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/html_capability_element_base.h"
 #include "third_party/blink/renderer/core/html/html_permission_icon_element.h"
+#include "third_party/blink/renderer/core/html/install_result_event.h"
+#include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mojo/mojo_binding_context.h"
@@ -23,6 +29,38 @@
 
 namespace blink {
 
+namespace {
+
+// TODO(crbug.com/534847491): Narrow kAbortError to user cancellation; the set
+// of result cases handled here may change.
+HTMLInstallElement::InstallResult ToInstallResult(
+    mojom::blink::WebInstallServiceResult result) {
+  switch (result) {
+    case mojom::blink::WebInstallServiceResult::kAbortError:
+      return HTMLInstallElement::InstallResult::kAbortError;
+    case mojom::blink::WebInstallServiceResult::kDataError:
+      return HTMLInstallElement::InstallResult::kDataError;
+    case mojom::blink::WebInstallServiceResult::kSuccess:
+      return HTMLInstallElement::InstallResult::kSuccess;
+  }
+  NOTREACHED();
+}
+
+V8InstallResult::Enum ToV8InstallResult(
+    HTMLInstallElement::InstallResult result) {
+  switch (result) {
+    case HTMLInstallElement::InstallResult::kAbortError:
+      return V8InstallResult::Enum::kAborted;
+    case HTMLInstallElement::InstallResult::kDataError:
+      return V8InstallResult::Enum::kInvalidData;
+    case HTMLInstallElement::InstallResult::kSuccess:
+      return V8InstallResult::Enum::kSuccess;
+  }
+  NOTREACHED();
+}
+
+}  // namespace
+
 HTMLInstallElement::HTMLInstallElement(Document& document)
     : HTMLCapabilityElementBase(document, html_names::kInstallTag),
       service_(document.GetExecutionContext()) {
@@ -32,15 +70,7 @@ HTMLInstallElement::HTMLInstallElement(Document& document)
   auto descriptor = mojom::blink::PermissionDescriptor::New();
   descriptor->name = mojom::blink::PermissionName::WEB_APP_INSTALLATION;
   permission_descriptors_.push_back(std::move(descriptor));
-  UseCounter::CountWebDXFeature(document, WebDXFeature::kDRAFT_InstallElement);
-}
-
-const String& HTMLInstallElement::InstallUrl() const {
-  return FastGetAttribute(html_names::kInstallurlAttr).GetString();
-}
-
-const String& HTMLInstallElement::ManifestId() const {
-  return FastGetAttribute(html_names::kManifestidAttr).GetString();
+  UseCounter::CountWebDXFeature(document, WebDXFeature::kInstall);
 }
 
 void HTMLInstallElement::Trace(Visitor* visitor) const {
@@ -49,22 +79,18 @@ void HTMLInstallElement::Trace(Visitor* visitor) const {
 }
 
 void HTMLInstallElement::UpdateAppearance() {
-  // If no attributes provided, check if current document is already installed.
-  if (InstallUrl().empty() && ManifestId().empty()) {
-    // TODO(crbug.com/485281836): For now, always return false while we discuss
-    // the appropriate long-term mitigation for width-based side channel
-    // attacks. ("Launch" is slightly wider than "Install").
+  if (IsInCanvasSubtree()) {
     OnIsInstalledResult(false);
     return;
   }
 
-  // TODO(crbug.com/477643920): Evaluate element behavior with illegal/invalid
-  // attributes. (Should we hide or grey out button, etc.).
-  mojom::blink::InstallOptionsPtr options = GetCheckedInstallOptions();
-
-  if (!options) {
-    // Illegal arguments will never be installed. Skip straight to the
-    // IsInstalled result so we can post the UpdateAppearanceTask.
+  // If no attributes were provided, check if the current document is already
+  // installed.
+  if (!FastHasAttribute(html_names::kManifestidAttr) &&
+      !FastHasAttribute(html_names::kManifestAttr)) {
+    // TODO(crbug.com/485281836): For now, always return false while we discuss
+    // the appropriate long-term mitigation for width-based side channel
+    // attacks. ("Launch" is slightly wider than "Install").
     OnIsInstalledResult(false);
     return;
   }
@@ -93,7 +119,7 @@ HTMLInstallElement::CreateEmbeddedPermissionRequestDescriptor() {
 void HTMLInstallElement::OnIsInstalledResult(bool is_installed) {
   // If this element points to an app that is already installed in the browser
   // process, the element will present itself as a launch button.
-  show_as_launch_ = is_installed;
+  show_as_launch_ = is_installed && !IsInCanvasSubtree();
 
   // This is posted as a task, as similar code in
   // `HTMLGeolocationElement::UpdateAppearance` would crash due to DCHECKs being
@@ -103,11 +129,15 @@ void HTMLInstallElement::OnIsInstalledResult(bool is_installed) {
   // <geolocation> too.
   GetDocument()
       .GetTaskRunner(TaskType::kInternalDefault)
-      ->PostTask(FROM_HERE, BindOnce(&HTMLInstallElement::UpdateAppearanceTask,
-                                     WrapWeakPersistent(this), is_installed));
+      ->PostTask(FROM_HERE,
+                 BindOnce(&HTMLInstallElement::UpdateAppearanceTask,
+                          WrapWeakPersistent(this), show_as_launch_));
 }
 
 void HTMLInstallElement::UpdateAppearanceTask(bool is_installed) {
+  is_installed = is_installed && !IsInCanvasSubtree();
+  show_as_launch_ = is_installed;
+
   // TODO(crbug.com/467103133): Render site-specific information.
   uint16_t message_id =
       GetTranslatedMessageID(is_installed ? IDS_PERMISSION_REQUEST_LAUNCH
@@ -127,17 +157,39 @@ void HTMLInstallElement::UpdateIcon(mojom::blink::PermissionName permission) {
 
 bool HTMLInstallElement::IsURLAttribute(const Attribute& attr) const {
   return attr.GetName() == html_names::kManifestidAttr ||
-         attr.GetName() == html_names::kInstallurlAttr ||
+         attr.GetName() == html_names::kManifestAttr ||
          HTMLElement::IsURLAttribute(attr);
 }
 
-void HTMLInstallElement::DefaultEventHandler(Event& event) {
-  // We'll handle activation here, and punt everything else through
-  // `HTMLCapabilityElementBase`.
-  if (event.type() == event_type_names::kDOMActivate) {
-    HandleActivation(event, blink::BindOnce(&HTMLInstallElement::OnActivated,
-                                            WrapWeakPersistent(this)));
+void HTMLInstallElement::DidChangeIsInCanvasSubtree(
+    CanvasSubtreePropagation propagation_behavior) {
+  HTMLCapabilityElementBase::DidChangeIsInCanvasSubtree(propagation_behavior);
+  UpdateAppearance();
+}
+
+void HTMLInstallElement::RunActivationBehavior(
+    Event& event,
+    EventDispatchHandlingState* handling_state) {
+  if (!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled()) {
+    HTMLCapabilityElementBase::RunActivationBehavior(event, handling_state);
     return;
+  }
+  if (event.defaultPrevented() || event.DefaultHandled()) {
+    return;
+  }
+  HandleActivation(event, blink::BindOnce(&HTMLInstallElement::OnActivated,
+                                          WrapWeakPersistent(this)));
+}
+
+void HTMLInstallElement::DefaultEventHandler(Event& event) {
+  if (!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled()) {
+    // We'll handle activation here, and punt everything else through
+    // `HTMLCapabilityElementBase`.
+    if (event.type() == event_type_names::kDOMActivate) {
+      HandleActivation(event, blink::BindOnce(&HTMLInstallElement::OnActivated,
+                                              WrapWeakPersistent(this)));
+      return;
+    }
   }
   HTMLCapabilityElementBase::DefaultEventHandler(event);
 }
@@ -172,79 +224,86 @@ void HTMLInstallElement::OnActivated() {
     return;
   }
 
-  // If no attributes provided, install current document.
-  if (InstallUrl().empty() && ManifestId().empty()) {
-    WebInstallService()->InstallFromElement(
-        /*options=*/nullptr, BindOnce(&HTMLInstallElement::OnInstallResult,
-                                      WrapWeakPersistent(this)));
+  if (FastHasAttribute(html_names::kInstallurlAttr)) {
+    DispatchInstallResultEvent(InstallResult::kDataError);
     return;
   }
 
-  mojom::blink::InstallOptionsPtr options = GetCheckedInstallOptions();
-  if (!options) {
-    // TODO(crbug.com/481519343): Add long-term solution for error handling (a
-    // separate error attribute linked to the install result, etc.).
-    // Disable the element to prevent future activations and inform the
-    // developer.
-    HandleInstallDataError();
-    DispatchEvent(
-        *Event::CreateCancelableBubble(event_type_names::kPromptdismiss));
+  // Only absent target attributes select the current-document flow. A present
+  // but empty manifest should instead reach attribute validation and fail.
+  if (!FastHasAttribute(html_names::kManifestidAttr) &&
+      !FastHasAttribute(html_names::kManifestAttr)) {
+    WebInstallService()->ElementInstallFromManifest(
+        /*options=*/nullptr,
+        BindOnce(&HTMLInstallElement::OnManifestInstallResult,
+                 WrapWeakPersistent(this)));
     return;
   }
 
-  WebInstallService()->InstallFromElement(
-      std::move(options),
-      BindOnce(&HTMLInstallElement::OnInstallResult, WrapWeakPersistent(this)));
+  // A manifest attribute was set (but may still be invalid). Initiate the
+  // browser's manifest install flow, which directly fetches the manifest file.
+  if (FastHasAttribute(html_names::kManifestAttr)) {
+    mojom::blink::ManifestInstallOptionsPtr options =
+        GetCheckedManifestInstallOptions();
+    if (!options) {
+      DispatchInstallResultEvent(InstallResult::kDataError);
+      return;
+    }
+
+    WebInstallService()->ElementInstallFromManifest(
+        std::move(options),
+        BindOnce(&HTMLInstallElement::OnManifestInstallResult,
+                 WrapWeakPersistent(this)));
+    return;
+  }
+
+  // If we get here, only the manifest ID was set, which is considered an error
+  // case.
+  DispatchInstallResultEvent(InstallResult::kDataError);
 }
 
-mojom::blink::InstallOptionsPtr HTMLInstallElement::GetCheckedInstallOptions() {
-  mojom::blink::InstallOptionsPtr options;
-
-  KURL install_url = KURL(InstallUrl());
-  if (!install_url.IsValid()) {
+mojom::blink::ManifestInstallOptionsPtr
+HTMLInstallElement::GetCheckedManifestInstallOptions() {
+  // Read the raw attribute, strip surrounding whitespace, and resolve the URL
+  // if possible.
+  KURL manifest_url = GetNonEmptyURLAttribute(html_names::kManifestAttr);
+  if (!manifest_url.IsValid()) {
     return nullptr;
   }
-  options = mojom::blink::InstallOptions::New();
-  options->install_url = install_url;
-  // TODO(crbug.com469801429): Evaluate how to handle manifestid validation
-  // and resolution.
-  // TODO(crbug.com/469940918): Evaluate whether to accept manifestid alone.
-  // manifestid is only used if installurl was also provided, as it's used
-  // for data validation on the installurl. manifestid match check is handled
-  // by WebInstallUrlCommand.
-  KURL manifest_id_url = KURL(ManifestId());
-  if (!ManifestId().empty()) {
+
+  auto options = mojom::blink::ManifestInstallOptions::New();
+  options->manifest_url = manifest_url;
+
+  // manifest ID is optional, but must be non-empty and valid when present.
+  if (FastHasAttribute(html_names::kManifestidAttr)) {
+    StringView manifest_id = StripLeadingAndTrailingHtmlSpaces(
+        FastGetAttribute(html_names::kManifestidAttr));
+    if (manifest_id.empty()) {
+      return nullptr;
+    }
+    KURL manifest_id_url = KURL(GetDocument().BaseURL(), manifest_id);
     if (!manifest_id_url.IsValid()) {
       return nullptr;
     }
     options->manifest_id = manifest_id_url;
   }
+
   return options;
 }
 
-void HTMLInstallElement::OnInstallResult(
-    mojom::blink::WebInstallServiceResult result,
-    const KURL& manifest_id) {
-  switch (result) {
-    case mojom::blink::WebInstallServiceResult::kAbortError:
-      DispatchEvent(
-          *Event::CreateCancelableBubble(event_type_names::kPromptdismiss));
-      break;
-    case mojom::blink::WebInstallServiceResult::kDataError:
-      // TODO(crbug.com/481519343): Revisit how to best surface this for
-      // <install> as a long-term solution (a separate error attribute linked to
-      // the install result, etc.).
-      // Disable the element to prevent future activations and inform the
-      // developer.
-      HandleInstallDataError();
-      DispatchEvent(
-          *Event::CreateCancelableBubble(event_type_names::kPromptdismiss));
-      break;
-    case mojom::blink::WebInstallServiceResult::kSuccess:
-      DispatchEvent(
-          *Event::CreateCancelableBubble(event_type_names::kPromptaction));
-      break;
-  }
+void HTMLInstallElement::DispatchInstallResultEvent(
+    const InstallResult result) {
+  auto* event_init = InstallResultEventInit::Create();
+  event_init->setResult(V8InstallResult(ToV8InstallResult(result)));
+  event_init->setBubbles(true);
+  EnqueueEvent(
+      *InstallResultEvent::Create(event_type_names::kInstallresult, event_init),
+      TaskType::kUserInteraction);
+}
+
+void HTMLInstallElement::OnManifestInstallResult(
+    mojom::blink::WebInstallServiceResult result) {
+  DispatchInstallResultEvent(ToInstallResult(result));
 }
 
 }  // namespace blink

@@ -16,7 +16,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/spellchecker/spellcheck_factory.h"
 #include "chrome/browser/spellchecker/spellcheck_service.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/spellcheck/browser/spellcheck_platform.h"
 #include "components/spellcheck/common/spellcheck_features.h"
@@ -35,7 +34,7 @@ class SpellCheckHostChromeImplWinBrowserTest : public InProcessBrowserTest {
   void SetUp() override { InProcessBrowserTest::SetUp(); }
 
   void SetUpOnMainThread() override {
-    content::BrowserContext* context = browser()->profile();
+    content::BrowserContext* context = browser()->GetProfile();
     renderer_ = std::make_unique<content::MockRenderProcessHost>(context);
 
     SpellCheckHostChromeImpl::Create(

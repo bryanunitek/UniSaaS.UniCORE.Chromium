@@ -44,6 +44,9 @@ def __step_config(ctx, step_config):
         # under components/policy/resources/templates/ directory.
         "components/policy/resources/policy_templates.py",
         "mojo/public/tools/bindings/minify_with_terser.py",
+        # Invokes dpkg-buildpackage which requires debhelper (dh) not present in
+        # the RBE worker container image.
+        "remoting/host/installer/linux/build_deb.py",
         "remoting/tools/build/remoting_copy_locales.py",
         "testing/libfuzzer/fuzzers/generate_v8_inspector_fuzzer_corpus.py",
         "testing/scripts/rust/generate_script.py",
@@ -55,6 +58,8 @@ def __step_config(ctx, step_config):
         "third_party/blink/renderer/modules/webcodecs/fuzzer_seed_corpus/generate_image_corpus.py",
         "third_party/cast_core/public/src/build/chromium/cast_core_grpc_generator_wrapper.py",
         "third_party/catapult/tracing/bin/generate_about_tracing_contents",
+        "third_party/chromium-bidi/tools/build/scripts/compile_ts.py",
+        "third_party/chromium-bidi/tools/build/scripts/rollup.py",
         # Requires JDK to run. Additionally, it dynamically parses .js_library
         # metadata files to determine JS source files to load at runtime, making
         # input tracking too complex for static analysis without Starlark handlers.
@@ -67,9 +72,9 @@ def __step_config(ctx, step_config):
         "third_party/dawn/webgpu-cts/scripts/copy_files.py",
         "third_party/dawn/webgpu-cts/scripts/gen_ts_dep_lists.py",
         "third_party/devtools-frontend/src/scripts/build/build_inspector_overlay.py",
+        "third_party/devtools-frontend/src/scripts/build/typescript/generate_indexer_tsconfig.py",
         "third_party/inspector_protocol/check_protocol_compatibility.py",
         "third_party/inspector_protocol/code_generator.py",
-        "third_party/inspector_protocol/concatenate_protocols.py",
         "third_party/libei/scanner.py",
         "third_party/lottie/minify_lottie.py",
         "third_party/perfetto/src/trace_processor/plugins/wattson/gen_wattson_curves.py",
@@ -82,7 +87,6 @@ def __step_config(ctx, step_config):
         "third_party/webgpu-cts/scripts/run_regenerate_internal_cts_html.py",
         "tools/grit/grit_info.py",
         "tools/grit/grit.py",
-        "tools/grit/pak_util.py",
         "tools/licenses/licenses.py",
 
         # merge_xml.py relies on expand_owners.py, which
@@ -95,12 +99,18 @@ def __step_config(ctx, step_config):
         "tools/polymer/css_to_wrapper.py",
         "tools/polymer/html_to_wrapper.py",
         "ui/webui/resources/tools/bundle_js.py",
-        "ui/webui/resources/tools/eslint_ts.py",
         "ui/webui/resources/tools/generate_code_cache.py",
-        "ui/webui/resources/tools/minify_js.py",
-        "ui/webui/resources/tools/stylelint.py",
-        "v8/third_party/inspector_protocol/check_protocol_compatibility.py",
         "v8/third_party/inspector_protocol/code_generator.py",
+        # compare-checked-in-headers.py in --update mode
+        # (regen_checked_in_generated_headers) reads and writes checked-in
+        # files under v8/src/gen/ in the source tree without declaring them as
+        # action inputs or outputs, making it incompatible with RBE sandboxes.
+        "v8/tools/compare-checked-in-headers.py",
+        # metagen.py executes `gn desc` at action runtime to query compile flags,
+        # which requires `.gn` and repository build files. Additionally, it
+        # parses C++ headers via libclang without declaring them as action inputs
+        # (relying on depfiles instead), making it incompatible with RBE sandboxes.
+        "v8/tools/metagen/metagen.py",
     ]
 
     for py_file in python_scripts:
@@ -115,6 +125,7 @@ def __step_config(ctx, step_config):
         "third_party/devtools-frontend/src/front_end/core/i18n/generate-locales-js.js",
         "third_party/devtools-frontend/src/node_modules/rollup/dist/bin/rollup",
         "third_party/devtools-frontend/src/scripts/build/build_ai_skills.mjs",
+        "third_party/devtools-frontend/src/scripts/build/compress_files.js",
         "third_party/devtools-frontend/src/scripts/build/generate_devtools_json.mjs",
         "third_party/devtools-frontend/src/scripts/build/generate_html_entrypoint.js",
         "third_party/devtools-frontend/src/scripts/component_docs/generate_docs.mjs",
@@ -139,12 +150,21 @@ def __step_config(ctx, step_config):
         })
 
     if config.get(ctx, "default-remote"):
-        step_config["rules"].append({
-            "name": "default",
-            "action": ".*",
-            "remote": True,
-            "timeout": "2m",
-        })
+        step_config["rules"].extend([
+            {
+                "name": "default-python",
+                "command_prefix": platform.python_bin,
+                "remote": True,
+                "remote_command": platform.remote_python_bin,
+                "timeout": "2m",
+            },
+            {
+                "name": "default",
+                "action": ".*",
+                "remote": True,
+                "timeout": "2m",
+            },
+        ])
 
     return step_config
 

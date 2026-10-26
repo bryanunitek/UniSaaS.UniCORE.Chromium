@@ -19,9 +19,9 @@
 
 class Profile;
 
-namespace crosapi {
-class TestControllerAsh;
-}  // namespace crosapi
+namespace printing {
+class PrintJobManager;
+}  // namespace printing
 
 namespace ash {
 
@@ -54,7 +54,9 @@ class CupsPrintJobManager : public KeyedService {
     ~Observer() override = default;
   };
 
-  static std::unique_ptr<CupsPrintJobManager> CreateInstance(Profile* profile);
+  static std::unique_ptr<CupsPrintJobManager> CreateInstance(
+      ::printing::PrintJobManager& print_job_manager,
+      Profile* profile);
 
   explicit CupsPrintJobManager(Profile* profile);
   CupsPrintJobManager(const CupsPrintJobManager&) = delete;
@@ -98,7 +100,6 @@ class CupsPrintJobManager : public KeyedService {
   raw_ptr<Profile, DanglingUntriaged> profile_;
 
  private:
-  friend class crosapi::TestControllerAsh;
   void RecordJobDuration(base::WeakPtr<CupsPrintJob> job);
 
   base::ObserverList<Observer> observers_;

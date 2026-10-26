@@ -41,7 +41,9 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/cpp/data_element.h"
 #include "services/network/public/mojom/network_context.mojom-blink-forward.h"
+#include "services/network/public/mojom/url_loader_factory.mojom-blink.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+#include "third_party/blink/public/common/frame/delegated_capability_request_token.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/associated_interfaces/associated_interfaces.mojom-blink.h"
 #include "third_party/blink/public/mojom/cache_storage/cache_storage.mojom-blink-forward.h"
@@ -72,6 +74,7 @@ namespace blink {
 class InterfaceRegistry;
 class ExceptionState;
 class FetchEvent;
+class FetchRespondWithObserver;
 class RespondWithObserver;
 class RequestInit;
 class ScriptState;
@@ -82,10 +85,32 @@ class ServiceWorkerRegistration;
 class ServiceWorkerThread;
 class WaitUntilObserver;
 class WebURLResponse;
-class WorkerClassicScriptLoader;
 struct GlobalScopeCreationParams;
 struct WebServiceWorkerError;
 struct WebServiceWorkerObjectInfo;
+// LINT.IfChange(ServiceWorkerRaceNetworkRequestLoaderState)
+enum class ServiceWorkerRaceNetworkRequestLoaderState : uint8_t {
+  // An invalid or empty token was provided.
+  kInvalidToken = 0,
+  // The token is non-empty, but was not found in the table (never registered or
+  // already removed).
+  kNotFound = 1,
+  // Registered at FetchEvent start, but fetch has not yet been initiated.
+  kNotInitiated = 2,
+  // The RaceNetworkRequest URLLoaderFactory was used for the fetch.
+  kRaceLoaderUsed = 3,
+  // The RaceNetworkRequest was disconnected before use, falling back to regular
+  // loader.
+  kFallbackDueToDisconnect = 4,
+  // The RaceNetworkRequest was already consumed, falling back to regular
+  // loader.
+  kFallbackDueToAlreadyConsumed = 5,
+  // No matching RaceNetworkRequest factory was found, falling back to regular
+  // loader.
+  kFallbackDueToNoFactory = 6,
+  kMaxValue = kFallbackDueToNoFactory,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:ServiceWorkerRaceNetworkRequestLoaderState)
 
 class MODULES_EXPORT ServiceWorkerGlobalScope final
     : public WorkerGlobalScope,
@@ -119,12 +144,19 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
 
   // ExecutionContext overrides:
   bool IsServiceWorkerGlobalScope() const override { return true; }
-  bool ShouldInstallV8Extensions() const final;
   void MaybeRecordNetworkRequestUrlForPushEvents(const KURL& url) override;
+  void MaybeRecordFetchError(int net_error_code,
+                             const FetchRequestData* request_data) override;
   bool IsInFencedFrame() const override;
   void NotifyWebSocketActivity() override;
 
   const blink::BlinkStorageKey& storage_key() const { return storage_key_; }
+
+  // Manages popup capability delegation from notification clicks.
+  // See crbug.com/542314185 for architectural details.
+  void AllowPopupCapabilityDelegation();
+  bool ConsumePopupCapabilityDelegation();
+  bool IsPopupCapabilityDelegationAllowed() const;
 
   // Implements WorkerGlobalScope:
   void Initialize(
@@ -252,16 +284,19 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       bool range_request,
       std::optional<network::DataElementChunkedDataPipe> request_body,
       base::TimeTicks event_dispatch_time,
-      base::TimeTicks respond_with_settled_time);
+      base::TimeTicks respond_with_settled_time,
+      mojom::blink::ServiceWorkerFetchHandlerErrorsPtr errors);
   void OnStreamingUploadCompletion(int fetch_event_id);
 
   // Responds to the fetch event with |response|.
-  void RespondToFetchEvent(int fetch_event_id,
-                           const KURL& request_url,
-                           bool range_request,
-                           mojom::blink::FetchAPIResponsePtr,
-                           base::TimeTicks event_dispatch_time,
-                           base::TimeTicks respond_with_settled_time);
+  void RespondToFetchEvent(
+      int fetch_event_id,
+      const KURL& request_url,
+      bool range_request,
+      mojom::blink::FetchAPIResponsePtr,
+      base::TimeTicks event_dispatch_time,
+      base::TimeTicks respond_with_settled_time,
+      mojom::blink::ServiceWorkerFetchHandlerErrorsPtr errors);
   // Responds to the fetch event with |response|, where body is
   // |body_as_stream|.
   void RespondToFetchEventWithResponseStream(
@@ -271,7 +306,8 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       mojom::blink::FetchAPIResponsePtr,
       mojom::blink::ServiceWorkerStreamHandlePtr,
       base::TimeTicks event_dispatch_time,
-      base::TimeTicks respond_with_settled_time);
+      base::TimeTicks respond_with_settled_time,
+      mojom::blink::ServiceWorkerFetchHandlerErrorsPtr errors);
 
   // RespondToAbortPaymentEvent will be called after the service worker
   // returns a response to a AbortPaymentEvent, and DidHandleAbortPaymentEvent
@@ -369,6 +405,17 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
   std::optional<mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>>
   FindRaceNetworkRequestURLLoaderFactory(
       const base::UnguessableToken& token) final;
+  ServiceWorkerRaceNetworkRequestLoaderState GetRaceNetworkRequestLoaderState(
+      const base::UnguessableToken& token) const;
+  void InsertNewItemToRaceNetworkRequestsForTesting(
+      int fetch_event_id,
+      const base::UnguessableToken& token,
+      mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
+          url_loader_factory,
+      const KURL& request_url);
+  void RemoveItemFromRaceNetworkRequestsForTesting(int fetch_event_id);
+  void OnRaceNetworkRequestDisconnectedForTesting(
+      const base::UnguessableToken& token);
 
   bool did_evaluate_script() { return did_evaluate_script_; }
 
@@ -377,14 +424,15 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
   bool AddEventListenerInternal(
       const AtomicString& event_type,
       EventListener*,
-      const AddEventListenerOptionsResolved*) override;
+      const AddEventListenerOptionsResolved&) override;
 
   // WorkerGlobalScope
   bool FetchClassicImportedScript(
       const KURL& script_url,
       KURL* out_response_url,
       String* out_source_code,
-      std::unique_ptr<Vector<uint8_t>>* out_cached_meta_data) override;
+      std::unique_ptr<Vector<uint8_t>>* out_cached_meta_data,
+      TextEncoding* out_response_encoding) override;
 
   ResourceLoadScheduler::ThrottleOptionOverride GetThrottleOptionOverride()
       const override;
@@ -395,29 +443,14 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       ExceptionState&) override;
   CachedMetadataHandler* CreateWorkerScriptCachedMetadataHandler(
       const KURL& script_url,
-      std::unique_ptr<Vector<uint8_t>> meta_data) override;
-  void ExceptionThrown(ErrorEvent*) override;
-
-  void DidReceiveResponseForClassicScript(
-      WorkerClassicScriptLoader* classic_script_loader);
-  void DidFetchClassicScript(WorkerClassicScriptLoader* classic_script_loader,
-                             const v8_inspector::V8StackTraceId& stack_id);
+      std::unique_ptr<Vector<uint8_t>> meta_data,
+      TextEncoding encoding) override;
+  void ExceptionThrown(ErrorEvent*, SanitizeScriptErrors) override;
 
   // Loads and runs the installed top-level classic worker script.
   void LoadAndRunInstalledClassicScript(
       const KURL& script_url,
       const v8_inspector::V8StackTraceId& stack_id);
-
-  // https://w3c.github.io/ServiceWorker/#run-service-worker-algorithm
-  void RunClassicScript(
-      const KURL& response_url,
-      network::mojom::ReferrerPolicy response_referrer_policy,
-      Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
-      DocumentPolicy::DocumentPolicyBundle response_document_policy,
-      const Vector<String>* response_origin_trial_tokens,
-      const String& source_code,
-      std::unique_ptr<Vector<uint8_t>> cached_meta_data,
-      const v8_inspector::V8StackTraceId&);
 
   // Counts the |script_size| and |cached_metadata_size| for UMA to measure the
   // number of scripts and the total bytes of scripts.
@@ -642,6 +675,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
           url_loader_factory,
       const KURL& request_url);
   void RemoveItemFromRaceNetworkRequests(int fetch_event_id);
+  void OnRaceNetworkRequestDisconnected(const base::UnguessableToken& token);
 
   Member<ServiceWorkerClients> clients_;
   Member<ServiceWorkerRegistration> registration_;
@@ -753,6 +787,8 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
     int range_count = 0;
   };
   HashMap<KURL, FetchEventCounts> unresponded_fetch_event_counts_;
+  HeapHashMap<int, Member<FetchRespondWithObserver>>
+      active_fetch_respond_with_observers_;
 
   // ServiceWorker event queue where all events are queued before
   // they are dispatched.
@@ -808,16 +844,79 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
 
   blink::BlinkStorageKey storage_key_;
 
-  struct RaceNetworkRequestInfo {
-    int fetch_event_id;
+  // Holds information and the loader factory remote for an in-flight
+  // RaceNetworkRequest.
+  //
+  // Managed by Oilpan GC (`GarbageCollected`) so that `HeapMojoRemote` can be
+  // safely stored inside `race_network_requests_` (`HeapHashMap`).
+  //
+  // Note on `pending_url_loader_factory_` vs `url_loader_factory_remote_`:
+  // - When `kServiceWorkerRaceNetworkRequestFallbackOnDisconnect` is ENABLED:
+  //   The loader factory remote is bound to `url_loader_factory_remote_`
+  //   (`HeapMojoRemote`) so that pipe disconnection can be detected via
+  //   `set_disconnect_handler`.
+  // - When `kServiceWorkerRaceNetworkRequestFallbackOnDisconnect` is DISABLED:
+  //   The loader factory remote remains un-bound in
+  //   `pending_url_loader_factory_`
+  //   (`mojo::PendingRemote`), avoiding binding overhead when disconnect
+  //   detection is not active.
+  class RaceNetworkRequestInfo final
+      : public GarbageCollected<RaceNetworkRequestInfo> {
+   public:
+    RaceNetworkRequestInfo(
+        ExecutionContext* execution_context,
+        int fetch_event_id,
+        mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
+            url_loader_factory,
+        bool fallback_on_disconnect_enabled);
+
+    void Trace(Visitor* visitor) const {
+      visitor->Trace(url_loader_factory_remote_);
+    }
+
+    int fetch_event_id() const { return fetch_event_id_; }
+    HeapMojoRemote<network::mojom::blink::URLLoaderFactory>& remote() {
+      return url_loader_factory_remote_;
+    }
+
+    // Takes and returns the URLLoaderFactory pending remote, unbinding it if
+    // bound (feature enabled) or moving `pending_url_loader_factory_` (feature
+    // disabled).
     mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
-        url_loader_factory;
-    bool IsValid() const { return url_loader_factory.is_valid(); }
+    TakePendingRemote();
+
+    // Returns true if either the bound HeapMojoRemote or the unbound
+    // PendingRemote is valid.
+    bool IsValid() const;
+
+    bool is_disconnected() const { return is_disconnected_; }
+    void HandleDisconnected();
+
+   private:
+    int fetch_event_id_;
+    bool is_disconnected_ = false;
+
+    // Holds the un-bound PendingRemote when
+    // `kServiceWorkerRaceNetworkRequestFallbackOnDisconnect` is disabled.
+    mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
+        pending_url_loader_factory_;
+
+    // Holds the bound HeapMojoRemote when
+    // `kServiceWorkerRaceNetworkRequestFallbackOnDisconnect` is enabled,
+    // enabling pipe disconnect detection via `set_disconnect_handler`.
+    HeapMojoRemote<network::mojom::blink::URLLoaderFactory>
+        url_loader_factory_remote_;
   };
+
   // TODO(crbug.com/918702) HashMap cannot use base::UnguessableToken as a
   // key. As a workaround uses String as a key instead.
-  HashMap<String, RaceNetworkRequestInfo> race_network_requests_;
+  HeapHashMap<String, Member<RaceNetworkRequestInfo>> race_network_requests_;
   HashMap<int, String> fetch_event_ids_to_token_map_;
+  // Maps a RaceNetworkRequest token (string representation of
+  // base::UnguessableToken) to its loader state, tracking whether the race
+  // URLLoaderFactory was actually used or fell back to the regular loader.
+  HashMap<String, ServiceWorkerRaceNetworkRequestLoaderState>
+      race_network_request_loader_states_;
 
   HeapMojoAssociatedRemote<mojom::blink::AssociatedInterfaceProvider>
       remote_associated_interfaces_{this};
@@ -826,6 +925,8 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
                              ServiceWorkerGlobalScope>
       associated_interfaces_receiver_{this, this};
   AssociatedInterfaceRegistry associated_inteface_registy_;
+
+  DelegatedCapabilityRequestToken popup_capability_token_;
 };
 
 template <>

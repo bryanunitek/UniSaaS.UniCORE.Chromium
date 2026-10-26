@@ -22,7 +22,6 @@
 #include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/shortcuts/shortcut_icon_generator.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
@@ -169,7 +168,7 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutBrowserTest,
   NavigateViaLinkClickToURLAndWait(browser(), GetInstallableAppURL());
   InstallDiyAppForCurrentUrl();
 
-  Browser* new_browser =
+  BrowserWindowInterface* new_browser =
       NavigateInNewWindowAndAwaitInstallabilityCheck(GetInstallableAppURL());
 
   EXPECT_EQ(GetAppMenuCommandState(IDC_CREATE_SHORTCUT, new_browser), kEnabled);
@@ -186,7 +185,7 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutBrowserTest,
   sync_bridge().SetAppUserDisplayModeForTesting(
       app_id, mojom::UserDisplayMode::kStandalone);
 
-  Browser* new_browser =
+  BrowserWindowInterface* new_browser =
       NavigateInNewWindowAndAwaitInstallabilityCheck(GetInstallableAppURL());
 
   EXPECT_EQ(GetAppMenuCommandState(IDC_CREATE_SHORTCUT, new_browser), kEnabled);
@@ -230,7 +229,8 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutBrowserTest,
 
   const webapps::AppId app_id = InstallDiyAppForCurrentUrl();
   ASSERT_FALSE(app_id.empty());
-  Browser* const app_browser = LaunchWebAppBrowserAndWait(app_id);
+  BrowserWindowInterface* const app_browser =
+      LaunchWebAppBrowserAndWait(app_id);
   CHECK(app_browser);
   CHECK(app_browser != browser());
 
@@ -312,19 +312,30 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutBrowserTest,
             mojom::UserDisplayMode::kStandalone);
 }
 
-// TODO(crbug.com/40908616): Re-enable this test
-IN_PROC_BROWSER_TEST_P(CreateShortcutBrowserTest,
-                       DISABLED_OpenShortcutWindowOnlyOnce) {
-  base::UserActionTester user_action_tester;
+IN_PROC_BROWSER_TEST_P(CreateShortcutBrowserTest, OpenShortcutWindowOnlyOnce) {
   NavigateViaLinkClickToURLAndWait(browser(), GetInstallableAppURL());
+  // Ensure any background commands started during navigation/startup finish.
+  provider().command_manager().AwaitAllCommandsCompleteForTesting();
 
   WebAppTestInstallObserver observer(profile());
-  // The "Create shortcut" call is executed twice, but the dialog
-  // must be shown only once.
+  observer.BeginListening();
+
+  base::AutoReset<InstallDialogTestResponse> auto_accept =
+      SetPwaInstallationAutoRespondForTesting(  // IN-TEST
+          InstallDialogTestResponse::kAcceptAndLaunch);
+
+  // The "Create shortcut" call is executed twice, but the dialog and install
+  // flow must be initiated only once.
   ASSERT_TRUE(chrome::ExecuteCommand(browser(), IDC_CREATE_SHORTCUT));
   ASSERT_TRUE(chrome::ExecuteCommand(browser(), IDC_CREATE_SHORTCUT));
 
   EXPECT_EQ(1u, provider().command_manager().GetCommandCountForTesting());
+
+  const webapps::AppId app_id = observer.Wait();
+  EXPECT_FALSE(app_id.empty());
+
+  provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  EXPECT_EQ(0u, provider().command_manager().GetCommandCountForTesting());
 }
 
 // Tests that Create Shortcut on sites where the title is a url generates a
@@ -378,7 +389,7 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutBrowserTest, InstallOverTabShortcutApp) {
   EXPECT_FALSE(registrar().AppMatches(app_installed_from_menu,
                                       WebAppFilter::IsCraftedApp()));
 
-  Browser* new_browser =
+  BrowserWindowInterface* new_browser =
       NavigateInNewWindowAndAwaitInstallabilityCheck(GetInstallableAppURL());
 
   EXPECT_EQ(GetAppMenuCommandState(IDC_CREATE_SHORTCUT, new_browser), kEnabled);

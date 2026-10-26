@@ -14,14 +14,14 @@
 // Page Menu Action Feature types.
 typedef NS_ENUM(NSInteger, PageActionMenuFeatureType);
 
+// Page Menu Action permission settings.
+enum class PageActionMenuPermissionSetting;
+
 // The mutator for the page action menu.
 @protocol PageActionMenuMutator
 
 // Returns whether Reader mode is currently active.
 - (BOOL)isReaderModeActive;
-
-// Returns whether Reader mode is available.
-- (BOOL)isReaderModeAvailable;
 
 // Returns Gemini floaty entry point configuration item.
 - (PageActionMenuContentEntryPoint*)geminiEntryPoint;
@@ -53,6 +53,12 @@ typedef NS_ENUM(NSInteger, PageActionMenuFeatureType);
 - (void)updatePermission:(BOOL)granted
               forFeature:(PageActionMenuFeatureType)featureType;
 
+// Updates the specified permission for the current site to `setting`. In
+// addition to the session permission state, this persists the site's content
+// setting, except for `kAllowOnce` which clears it.
+- (void)updatePermissionSetting:(PageActionMenuPermissionSetting)setting
+                     forFeature:(PageActionMenuFeatureType)featureType;
+
 // Returns array of currently active features to display.
 - (NSArray<PageActionMenuFeature*>*)activeFeatures;
 
@@ -61,9 +67,6 @@ typedef NS_ENUM(NSInteger, PageActionMenuFeatureType);
 
 // Reverts the page translation to show the original language.
 - (void)revertTranslation;
-
-// Opens the price insights contextual panel.
-- (void)openPriceInsightsPanel;
 
 // Opens the translation settings modal.
 - (void)openTranslateOptions;

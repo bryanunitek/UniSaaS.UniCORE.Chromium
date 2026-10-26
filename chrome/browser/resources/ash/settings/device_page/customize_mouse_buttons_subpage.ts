@@ -18,7 +18,7 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {castExists} from '../assert_extras.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './customize_mouse_buttons_subpage.html.js';
@@ -76,6 +76,11 @@ export class SettingsCustomizeMouseButtonsSubpageElement extends
     };
   }
 
+  constructor() {
+    super();
+    this.metaKey_ = MetaKey.kSearch;
+  }
+
   static get observers(): string[] {
     return [
       'onMouseListUpdated(mouseList.*)',
@@ -84,16 +89,16 @@ export class SettingsCustomizeMouseButtonsSubpageElement extends
     ];
   }
 
-  selectedMouse: Mouse;
-  mouseList: Mouse[];
-  mousePolicies: MousePolicies;
-  private buttonActionList_: ActionChoice[];
+  declare selectedMouse: Mouse;
+  declare mouseList: Mouse[];
+  declare mousePolicies: MousePolicies;
+  declare private buttonActionList_: ActionChoice[];
   private inputDeviceSettingsProvider_: InputDeviceSettingsProviderInterface =
       getInputDeviceSettingsProvider();
   private previousRoute_: Route|null = null;
-  private primaryRightPref_: chrome.settingsPrivate.PrefObject;
+  declare private primaryRightPref_: chrome.settingsPrivate.PrefObject;
   private isInitialized_: boolean = false;
-  private metaKey_: MetaKey = MetaKey.kSearch;
+  declare private metaKey_: MetaKey;
 
   override async connectedCallback(): Promise<void> {
     super.connectedCallback();

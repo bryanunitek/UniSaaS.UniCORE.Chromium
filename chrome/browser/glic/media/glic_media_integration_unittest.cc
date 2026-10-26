@@ -8,6 +8,7 @@
 #include "base/strings/string_util.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/accessibility/live_caption/live_caption_controller_factory.h"
 #include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/glic/media/glic_media_context.h"
@@ -16,6 +17,8 @@
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/prefs/browser_prefs.h"
+#include "chrome/browser/speech/speech_recognition_client_browser_interface.h"
+#include "chrome/browser/speech/speech_recognition_client_browser_interface_factory.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -30,7 +33,11 @@
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/web_contents_tester.h"
 #include "media/base/media_switches.h"
+#include "media/mojo/mojom/speech_recognition.mojom.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
 #include "chrome/browser/ash/test/glic_user_session_test_helper.h"
@@ -41,6 +48,39 @@
 using content::WebContents;
 
 namespace glic {
+
+// Glic media integration requires SODA which is currently not supported on
+// non-x86 Linux.
+#if !BUILDFLAG(IS_LINUX) || defined(ARCH_CPU_X86_FAMILY)
+
+namespace {
+
+class MockSpeechRecognitionBrowserObserver
+    : public media::mojom::SpeechRecognitionBrowserObserver {
+ public:
+  explicit MockSpeechRecognitionBrowserObserver(
+      mojo::PendingReceiver<media::mojom::SpeechRecognitionBrowserObserver>
+          receiver)
+      : receiver_(this, std::move(receiver)) {}
+  ~MockSpeechRecognitionBrowserObserver() override = default;
+
+  MOCK_METHOD(void, SpeechRecognitionAvailabilityChanged, (bool), (override));
+  MOCK_METHOD(void,
+              SpeechRecognitionLanguageChanged,
+              (const std::string&),
+              (override));
+  MOCK_METHOD(void,
+              SpeechRecognitionMaskOffensiveWordsChanged,
+              (bool),
+              (override));
+
+  void FlushForTesting() { receiver_.FlushForTesting(); }
+
+ private:
+  mojo::Receiver<media::mojom::SpeechRecognitionBrowserObserver> receiver_;
+};
+
+}  // namespace
 
 class GlicMediaIntegrationTest : public ChromeRenderViewHostTestHarness {
  public:
@@ -196,6 +236,8 @@ class GlicMediaIntegrationTest : public ChromeRenderViewHostTestHarness {
         glic::prefs::FreStatus::kCompleted);
   }
 
+  speech::MockSodaInstaller& soda_installer() { return soda_installer_; }
+
  private:
   GlicUnitTestEnvironment glic_test_env_;
   raw_ptr<TestingProfileManager> profile_manager_ = nullptr;
@@ -218,6 +260,9 @@ TEST_F(GlicMediaIntegrationTest, GetWithNullReturnsNull) {
 }
 
 TEST_F(GlicMediaIntegrationTest, GetReturnsNullIfSwitchIsOff) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(media::kHeadlessLiveCaption);
+
   EXPECT_EQ(GlicMediaIntegration::GetFor(web_contents()), nullptr);
   EXPECT_EQ(GetMediaTranscriptProvider(), nullptr);
 }
@@ -268,14 +313,19 @@ TEST_F(GlicMediaIntegrationTest, ContextContainsTranscript) {
   }
 
   {
-    // Expect a leaf node with the entire context when we query with the
-    // WebContents instead.
+    // AppendContext is a legacy path and no longer contains transcripts when
+    // kAnnotatedPageContentWithMediaData is enabled.
     optimization_guide::proto::ContentNode root_node;
     integration->AppendContext(web_contents(), &root_node);
     EXPECT_EQ(root_node.children_nodes_size(), 0);
-    EXPECT_TRUE(root_node.has_content_attributes());
-    EXPECT_EQ(root_node.content_attributes().text_data().text_content(),
-              "ABCDEFGHIJ");
+    if (base::FeatureList::IsEnabled(
+            optimization_guide::features::kAnnotatedPageContentWithMediaData)) {
+      EXPECT_FALSE(root_node.has_content_attributes());
+    } else {
+      EXPECT_TRUE(root_node.has_content_attributes());
+      EXPECT_EQ(root_node.content_attributes().text_data().text_content(),
+                "ABCDEFGHIJ");
+    }
   }
 }
 
@@ -284,13 +334,11 @@ TEST_F(GlicMediaIntegrationTest, ContextContainsNoTranscript) {
 
   // Send no strings.
 
-  // Expect a leaf node with no text.
+  // Expect no content attributes when there is no transcript.
   optimization_guide::proto::ContentNode root_node;
   integration->AppendContextForFrame(rfh(), &root_node);
   EXPECT_EQ(root_node.children_nodes_size(), 0);
-  EXPECT_TRUE(root_node.has_content_attributes());
-  EXPECT_EQ(root_node.content_attributes().text_data().text_content().length(),
-            0u);
+  EXPECT_FALSE(root_node.has_content_attributes());
 }
 
 TEST_F(GlicMediaIntegrationTest, ContextTruncatesUTF8Correctly) {
@@ -348,11 +396,52 @@ TEST_F(GlicMediaIntegrationTest, NullRenderFrameHostIsOkay) {
 TEST_F(GlicMediaIntegrationTest, PeerConnectionPreventsTranscription) {
   auto* integration = GetIntegration();
 
+  EXPECT_TRUE(live_caption_controller()->IsTranscriptionAllowed(rfh()));
+
   // This should prevent the transcription from being recorded.
   integration->OnPeerConnectionAddedForTesting(rfh());
 
   auto* context = GetContext();
-  EXPECT_TRUE(context->is_excluded_from_transcript_for_testing());
+  EXPECT_TRUE(context->IsExcludedFromTranscript());
+  EXPECT_FALSE(live_caption_controller()->IsTranscriptionAllowed(rfh()));
+  EXPECT_FALSE(live_caption_controller()->DispatchTranscription(
+      rfh(), nullptr,
+      media::SpeechRecognitionResult("some transcript", /*is_final=*/true)));
+}
+
+TEST_F(GlicMediaIntegrationTest,
+       PeerConnectionUpdatesSpeechRecognitionAvailability) {
+  auto* integration = GetIntegration();
+  soda_installer().NotifySodaInstalledForTesting();
+  soda_installer().NotifySodaInstalledForTesting(speech::LanguageCode::kEnUs);
+
+  auto* client_browser_interface =
+      SpeechRecognitionClientBrowserInterfaceFactory::GetForProfile(profile());
+  ASSERT_NE(client_browser_interface, nullptr);
+
+  mojo::PendingRemote<media::mojom::SpeechRecognitionBrowserObserver> remote;
+  testing::StrictMock<MockSpeechRecognitionBrowserObserver> observer(
+      remote.InitWithNewPipeAndPassReceiver());
+
+  EXPECT_CALL(observer, SpeechRecognitionAvailabilityChanged(true)).Times(1);
+  client_browser_interface->BindSpeechRecognitionBrowserObserver(
+      std::move(remote), rfh()->GetGlobalId());
+  observer.FlushForTesting();
+  testing::Mock::VerifyAndClearExpectations(&observer);
+
+  // Adding a peer connection should notify the observer that speech
+  // recognition is no longer available.
+  EXPECT_CALL(observer, SpeechRecognitionAvailabilityChanged(false)).Times(1);
+  integration->OnPeerConnectionAddedForTesting(rfh());
+  observer.FlushForTesting();
+  testing::Mock::VerifyAndClearExpectations(&observer);
+
+  // Removing the peer connection should notify the observer that speech
+  // recognition is available again.
+  EXPECT_CALL(observer, SpeechRecognitionAvailabilityChanged(true)).Times(1);
+  integration->OnPeerConnectionRemovedForTesting(rfh());
+  observer.FlushForTesting();
+  testing::Mock::VerifyAndClearExpectations(&observer);
 }
 
 TEST_F(GlicMediaIntegrationTest, PeerConnectionExcludesAllSubframes) {
@@ -376,15 +465,19 @@ TEST_F(GlicMediaIntegrationTest, PeerConnectionExcludesAllSubframes) {
   integration->OnPeerConnectionAddedForTesting(main_frame);
 
   // Verify both frames are excluded.
-  EXPECT_TRUE(main_context->is_excluded_from_transcript_for_testing());
-  EXPECT_TRUE(subframe_context->is_excluded_from_transcript_for_testing());
+  EXPECT_TRUE(main_context->IsExcludedFromTranscript());
+  EXPECT_TRUE(subframe_context->IsExcludedFromTranscript());
+  EXPECT_FALSE(live_caption_controller()->IsTranscriptionAllowed(main_frame));
+  EXPECT_FALSE(live_caption_controller()->IsTranscriptionAllowed(subframe));
 
   // Remove the peer connection.
   integration->OnPeerConnectionRemovedForTesting(main_frame);
 
   // Verify both frames are no longer excluded.
-  EXPECT_FALSE(main_context->is_excluded_from_transcript_for_testing());
-  EXPECT_FALSE(subframe_context->is_excluded_from_transcript_for_testing());
+  EXPECT_FALSE(main_context->IsExcludedFromTranscript());
+  EXPECT_FALSE(subframe_context->IsExcludedFromTranscript());
+  EXPECT_TRUE(live_caption_controller()->IsTranscriptionAllowed(main_frame));
+  EXPECT_TRUE(live_caption_controller()->IsTranscriptionAllowed(subframe));
 }
 
 TEST_F(GlicMediaIntegrationTest,
@@ -403,12 +496,18 @@ TEST_F(GlicMediaIntegrationTest,
   // Add a peer connection to the pip window.
   integration->OnPeerConnectionAddedForTesting(
       pip_web_contents->GetPrimaryMainFrame());
-  EXPECT_TRUE(main_context->is_excluded_from_transcript_for_testing());
+  EXPECT_TRUE(main_context->IsExcludedFromTranscript());
+  EXPECT_FALSE(live_caption_controller()->IsTranscriptionAllowed(rfh()));
+  EXPECT_FALSE(live_caption_controller()->IsTranscriptionAllowed(
+      pip_web_contents->GetPrimaryMainFrame()));
 
   // Remove the peer connection.
   integration->OnPeerConnectionRemovedForTesting(
       pip_web_contents->GetPrimaryMainFrame());
-  EXPECT_FALSE(main_context->is_excluded_from_transcript_for_testing());
+  EXPECT_FALSE(main_context->IsExcludedFromTranscript());
+  EXPECT_TRUE(live_caption_controller()->IsTranscriptionAllowed(rfh()));
+  EXPECT_TRUE(live_caption_controller()->IsTranscriptionAllowed(
+      pip_web_contents->GetPrimaryMainFrame()));
 }
 
 TEST_F(GlicMediaIntegrationTest, ExcludedOriginsStopTranscription) {
@@ -420,6 +519,8 @@ TEST_F(GlicMediaIntegrationTest, ExcludedOriginsStopTranscription) {
   SetCommittedOriginOnAllFrames(excluded_origin);
 
   // Verify that transcriptions are allowed initially.
+  EXPECT_TRUE(live_caption_controller()->IsTranscriptionAllowed(
+      web_contents()->GetPrimaryMainFrame()));
   EXPECT_TRUE(live_caption_controller()->DispatchTranscription(
       web_contents()->GetPrimaryMainFrame(), nullptr,
       media::SpeechRecognitionResult("some transcript", /*is_final=*/true)));
@@ -427,6 +528,8 @@ TEST_F(GlicMediaIntegrationTest, ExcludedOriginsStopTranscription) {
   // Setting the excluded origin list to include our origin should cause them to
   // start being ignored.
   integration->SetExcludedOrigins({excluded_origin});
+  EXPECT_FALSE(live_caption_controller()->IsTranscriptionAllowed(
+      web_contents()->GetPrimaryMainFrame()));
   EXPECT_FALSE(live_caption_controller()->DispatchTranscription(
       web_contents()->GetPrimaryMainFrame(), nullptr,
       media::SpeechRecognitionResult("some other transcript",
@@ -446,12 +549,11 @@ TEST_F(GlicMediaIntegrationTest, ExcludedOriginsDontReturnTranscriptions) {
   // Exclude the origin after adding the transcript.
   integration->SetExcludedOrigins({excluded_origin});
 
-  // Expect an empty transcript.
+  // Expect no content attributes when the origin is excluded.
   optimization_guide::proto::ContentNode root_node;
-  integration->AppendContext(web_contents(), &root_node);
+  integration->AppendContextForFrame(rfh(), &root_node);
   EXPECT_EQ(root_node.children_nodes_size(), 0);
-  EXPECT_TRUE(root_node.has_content_attributes());
-  EXPECT_EQ(root_node.content_attributes().text_data().text_content(), "");
+  EXPECT_FALSE(root_node.has_content_attributes());
 }
 
 TEST_F(GlicMediaIntegrationTest, DefaultExcludedOriginsStopTranscription) {
@@ -464,7 +566,10 @@ TEST_F(GlicMediaIntegrationTest, DefaultExcludedOriginsStopTranscription) {
       url::Origin::Create(GURL("https://www.youtube.com"));
   SetCommittedOriginOnAllFrames(youtube_origin);
 
-  // Dispatching a transcription should be stopped.
+  // Transcription should not be allowed and dispatching a transcription should
+  // be stopped.
+  EXPECT_FALSE(live_caption_controller()->IsTranscriptionAllowed(
+      web_contents()->GetPrimaryMainFrame()));
   EXPECT_FALSE(live_caption_controller()->DispatchTranscription(
       web_contents()->GetPrimaryMainFrame(), nullptr,
       media::SpeechRecognitionResult("some transcript", /*is_final=*/true)));
@@ -480,7 +585,10 @@ TEST_F(GlicMediaIntegrationTest, DefaultExcludedHttpOriginsStopTranscription) {
       url::Origin::Create(GURL("http://www.youtube.com"));
   SetCommittedOriginOnAllFrames(youtube_origin);
 
-  // Dispatching a transcription should be stopped.
+  // Transcription should not be allowed and dispatching a transcription should
+  // be stopped.
+  EXPECT_FALSE(live_caption_controller()->IsTranscriptionAllowed(
+      web_contents()->GetPrimaryMainFrame()));
   EXPECT_FALSE(live_caption_controller()->DispatchTranscription(
       web_contents()->GetPrimaryMainFrame(), nullptr,
       media::SpeechRecognitionResult("some transcript", /*is_final=*/true)));
@@ -494,6 +602,8 @@ TEST_F(GlicMediaIntegrationTest, NonExcludedOriginAllowsTranscription) {
       url::Origin::Create(GURL("https://example.com"));
   SetCommittedOriginOnAllFrames(other_origin);
 
+  EXPECT_TRUE(live_caption_controller()->IsTranscriptionAllowed(
+      web_contents()->GetPrimaryMainFrame()));
   EXPECT_TRUE(live_caption_controller()->DispatchTranscription(
       web_contents()->GetPrimaryMainFrame(), nullptr,
       media::SpeechRecognitionResult("some transcript", /*is_final=*/true)));
@@ -517,7 +627,7 @@ TEST_F(GlicMediaIntegrationTest,
 
   // Expect an empty transcript.
   optimization_guide::proto::ContentNode root_node;
-  integration->AppendContext(web_contents(), &root_node);
+  integration->AppendContextForFrame(rfh(), &root_node);
   EXPECT_EQ(root_node.children_nodes_size(), 0);
   EXPECT_FALSE(root_node.has_content_attributes());
 }
@@ -566,5 +676,7 @@ TEST_F(GlicMediaIntegrationTest, PrefToggleAddsAndRemovesListener) {
       media::SpeechRecognitionResult("transcript 3", /*is_final=*/true)));
   EXPECT_EQ(GetContext()->GetTranscriptChunks().size(), 1u);
 }
+
+#endif  // !BUILDFLAG(IS_LINUX) || defined(ARCH_CPU_X86_FAMILY)
 
 }  // namespace glic

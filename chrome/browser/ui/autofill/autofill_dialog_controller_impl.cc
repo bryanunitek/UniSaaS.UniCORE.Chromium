@@ -5,8 +5,10 @@
 #include "chrome/browser/ui/autofill/autofill_dialog_controller_impl.h"
 
 #include <string>
+#include <utility>
 
 #include "base/check_deref.h"
+#include "base/location.h"
 #include "base/memory/weak_ptr.h"
 
 namespace autofill {
@@ -17,24 +19,28 @@ AutofillDialogControllerImpl::AutofillDialogControllerImpl(
 
 AutofillDialogControllerImpl::~AutofillDialogControllerImpl() {
   // If the tab is killed then dismiss the dialog if it's showing.
+  min_show_time_ = base::TimeDelta();
   Dismiss();
 }
 
 void AutofillDialogControllerImpl::Show(
-    const std::u16string& title,
-    const std::u16string& description,
-    const std::u16string& button_text,
-    base::OnceClosure on_positive_button_clicked_callback) {
+    std::u16string title,
+    std::u16string description,
+    std::u16string positive_button_text,
+    std::u16string negative_button_text,
+    DialogResultCallback dialog_result_callback) {
   if (autofill_dialog_view_) {
     // A dialog is already showing. Ignore the new request.
     return;
   }
 
-  title_ = title;
-  description_ = description;
-  button_text_ = button_text;
-  on_positive_button_clicked_callback_ =
-      std::move(on_positive_button_clicked_callback);
+  min_show_time_ = base::TimeDelta();
+
+  title_ = std::move(title);
+  description_ = std::move(description);
+  positive_button_text_ = std::move(positive_button_text);
+  negative_button_text_ = std::move(negative_button_text);
+  dialog_result_callback_ = std::move(dialog_result_callback);
 
   if (view_factory_for_test_) {
     autofill_dialog_view_ = view_factory_for_test_.Run();
@@ -44,11 +50,48 @@ void AutofillDialogControllerImpl::Show(
   autofill_dialog_view_->Show();
 }
 
+void AutofillDialogControllerImpl::ShowLoadingDialog(
+    const std::u16string& title,
+    base::TimeDelta min_time) {
+  if (autofill_dialog_view_) {
+    // A dialog is already showing. Ignore the new request.
+    return;
+  }
+
+  min_show_time_ = min_time;
+  dialog_show_time_ = base::ElapsedTimer();
+
+  title_ = title;
+  description_ = u"";
+  negative_button_text_ = u"";
+  positive_button_text_ = u"";
+  dialog_result_callback_ = base::DoNothing();
+
+  if (view_factory_for_test_) {
+    autofill_dialog_view_ = view_factory_for_test_.Run();
+  } else {
+    autofill_dialog_view_ = AutofillDialogView::Create(this);
+  }
+  autofill_dialog_view_->ShowLoadingDialog();
+}
+
 void AutofillDialogControllerImpl::OnPositiveButtonClicked() {
-  std::move(on_positive_button_clicked_callback_).Run();
+  if (dialog_result_callback_) {
+    std::move(dialog_result_callback_).Run(Result::kAccepted);
+  }
+}
+
+void AutofillDialogControllerImpl::OnNegativeButtonClicked() {
+  if (dialog_result_callback_) {
+    std::move(dialog_result_callback_).Run(Result::kDeclined);
+  }
 }
 
 void AutofillDialogControllerImpl::OnDismissed() {
+  dismiss_timer_.Stop();
+  if (dialog_result_callback_) {
+    std::move(dialog_result_callback_).Run(Result::kUnknown);
+  }
   autofill_dialog_view_.reset();
 }
 
@@ -60,8 +103,12 @@ std::u16string AutofillDialogControllerImpl::GetDescriptionText() const {
   return description_;
 }
 
-std::u16string AutofillDialogControllerImpl::GetButtonText() const {
-  return button_text_;
+std::u16string AutofillDialogControllerImpl::GetNegativeButtonText() const {
+  return negative_button_text_;
+}
+
+std::u16string AutofillDialogControllerImpl::GetPositiveButtonText() const {
+  return positive_button_text_;
 }
 
 content::WebContents& AutofillDialogControllerImpl::GetWebContents() const {
@@ -72,6 +119,17 @@ void AutofillDialogControllerImpl::Dismiss() {
   if (!autofill_dialog_view_) {
     return;
   }
+
+  base::TimeDelta time_shown = dialog_show_time_.Elapsed();
+  if (time_shown < min_show_time_) {
+    if (!dismiss_timer_.IsRunning()) {
+      dismiss_timer_.Start(FROM_HERE, min_show_time_ - time_shown, this,
+                           &AutofillDialogControllerImpl::Dismiss);
+    }
+    return;
+  }
+
+  dismiss_timer_.Stop();
 
   autofill_dialog_view_->Dismiss();
   autofill_dialog_view_.reset();

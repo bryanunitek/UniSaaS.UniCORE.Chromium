@@ -357,6 +357,18 @@ bool ShouldAddStudy(const ProcessedStudy& processed_study,
     }
   }
 
+  // Check policy restrictions regardless of if the study has a filter or not.
+  // (E.g. if policies dictate that no studies should apply, then fitlerless
+  // studies should not apply).
+  // Note: a filterless study will default to having a policy_restriction of
+  // NONE.
+  if (!CheckStudyPolicyRestriction(study.filter(),
+                                    client_state.policy_restriction)) {
+    DVLOG(1) << "Filtered out study " << study.name()
+              << " due to policy restriction.";
+    return false;
+  }
+
   if (study.has_filter()) {
     if (!CheckStudyChannel(study.filter(), client_state.channel)) {
       DVLOG(1) << "Filtered out study " << study.name() << " due to channel.";
@@ -422,13 +434,6 @@ bool ShouldAddStudy(const ProcessedStudy& processed_study,
       return false;
     }
 
-    if (!CheckStudyPolicyRestriction(study.filter(),
-                                     client_state.policy_restriction)) {
-      DVLOG(1) << "Filtered out study " << study.name()
-               << " due to policy restriction.";
-      return false;
-    }
-
     if (!CheckStudyOSVersion(study.filter(), client_state.os_version)) {
       DVLOG(1) << "Filtered out study " << study.name()
                << " due to os_version.";
@@ -471,10 +476,12 @@ bool ShouldAddStudy(const ProcessedStudy& processed_study,
 std::vector<ProcessedStudy> FilterAndValidateStudies(
     const VariationsSeed& seed,
     const ClientFilterableState& client_state,
-    const VariationsLayers& layers) {
+    const VariationsLayers& layers,
+    std::optional<base::FunctionRef<bool(const Study&)>> study_filter) {
   DCHECK(client_state.version.IsValid());
 
   std::vector<ProcessedStudy> filtered_studies;
+  filtered_studies.reserve(seed.study_size());
 
   // Don't create two studies with the same name.
   // These `string_view`s contain pointers which point to memory owned by
@@ -482,6 +489,10 @@ std::vector<ProcessedStudy> FilterAndValidateStudies(
   std::set<std::string_view, std::less<>> created_studies;
 
   for (const Study& study : seed.study()) {
+    if (study_filter && !(*study_filter)(study)) {
+      continue;
+    }
+
     ProcessedStudy processed_study;
     if (!processed_study.Init(&study)) {
       continue;
@@ -501,6 +512,19 @@ std::vector<ProcessedStudy> FilterAndValidateStudies(
 
     filtered_studies.push_back(processed_study);
   }
+
+  // Reorder the studies so that kRuntimeMonitoringStudyName is processed
+  // first. (Note: stable_partition preserves the relative order of elements, so
+  // the order is still deterministic for a given seed).
+  // kRuntimeMonitoringStudyName is processed first because it is used to
+  // monitor the health of newly deployed seeds. This ensures that crash reports
+  // will properly report the newest group in case the application of a
+  // subsequent study is crashy.
+  std::ranges::stable_partition(
+      filtered_studies, [](const ProcessedStudy& study) {
+        return study.study()->name() == kRuntimeMonitoringStudyName;
+      });
+
   return filtered_studies;
 }
 

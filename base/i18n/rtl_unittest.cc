@@ -9,6 +9,7 @@
 #include <algorithm>
 
 #include "base/files/file_path.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
@@ -424,28 +425,6 @@ TEST_F(RTLTest, GetTextDirection) {
   EXPECT_EQ(LEFT_TO_RIGHT, GetTextDirectionForLocale("ja"));
 }
 
-TEST_F(RTLTest, GetTextDirectionForLocaleInStartUp) {
-  EXPECT_EQ(RIGHT_TO_LEFT, GetTextDirectionForLocaleInStartUp("ar"));
-  EXPECT_EQ(RIGHT_TO_LEFT, GetTextDirectionForLocaleInStartUp("ar_EG"));
-  EXPECT_EQ(RIGHT_TO_LEFT, GetTextDirectionForLocaleInStartUp("he"));
-  EXPECT_EQ(RIGHT_TO_LEFT, GetTextDirectionForLocaleInStartUp("he_IL"));
-  // iw is an obsolete code for Hebrew.
-  EXPECT_EQ(RIGHT_TO_LEFT, GetTextDirectionForLocaleInStartUp("iw"));
-  // Although we're not yet localized to Farsi and Urdu, we
-  // do have the text layout direction information for them.
-  EXPECT_EQ(RIGHT_TO_LEFT, GetTextDirectionForLocaleInStartUp("fa"));
-  EXPECT_EQ(RIGHT_TO_LEFT, GetTextDirectionForLocaleInStartUp("ur"));
-  EXPECT_EQ(LEFT_TO_RIGHT, GetTextDirectionForLocaleInStartUp("en"));
-  // Chinese in China with '-'.
-  EXPECT_EQ(LEFT_TO_RIGHT, GetTextDirectionForLocaleInStartUp("zh-CN"));
-  // Filipino : 3-letter code
-  EXPECT_EQ(LEFT_TO_RIGHT, GetTextDirectionForLocaleInStartUp("fil"));
-  // Russian
-  EXPECT_EQ(LEFT_TO_RIGHT, GetTextDirectionForLocaleInStartUp("ru"));
-  // Japanese that uses multiple scripts
-  EXPECT_EQ(LEFT_TO_RIGHT, GetTextDirectionForLocaleInStartUp("ja"));
-}
-
 TEST_F(RTLTest, UnadjustStringForLocaleDirection) {
   // These test strings are borrowed from WrapPathWithLTRFormatting
   const wchar_t* cases[] = {
@@ -566,25 +545,6 @@ TEST_F(RTLTest, SanitizeUserSuppliedString) {
     SanitizeUserSuppliedString(&unsanitized_text);
     EXPECT_EQ(sanitized_text, unsanitized_text);
   }
-}
-
-class SetICULocaleTest : public PlatformTest {};
-
-TEST_F(SetICULocaleTest, OverlongLocaleId) {
-  test::ScopedRestoreICUDefaultLocale restore_locale;
-  std::string id("fr-ca-x-foo");
-  std::string lid("fr_CA@x=foo");
-  while (id.length() < 152) {
-    id.append("-x-foo");
-    lid.append("-x-foo");
-  }
-  SetICUDefaultLocale(id);
-  EXPECT_STRNE("en_US", icu::Locale::getDefault().getName());
-  id.append("zzz");
-  lid.append("zzz");
-  SetICUDefaultLocale(id);
-  // ICU-21639 fix the long locale issue now.
-  EXPECT_STREQ(lid.c_str(), icu::Locale::getDefault().getName());
 }
 
 }  // namespace base::i18n

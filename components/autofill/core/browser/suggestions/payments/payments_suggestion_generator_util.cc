@@ -33,14 +33,13 @@
 #include "base/time/time.h"
 #include "base/types/optional_ref.h"
 #include "build/build_config.h"
-#include "components/autofill/core/browser/autofill_browser_util.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/autofill_wallet_usage_data.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/data_quality/autofill_data_util.h"
-#include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/field_type_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
@@ -82,6 +81,19 @@ constexpr char16_t kEllipsisDotSeparator[] = u"\u2022";
 constexpr char16_t kEllipsisOneSpace[] = u"\u2006";
 static constexpr int kPrefixLength = 2;
 static constexpr int kSuffixLength = 4;
+
+bool IsCardNumberFieldEmpty(const FormStructure* form_structure) {
+  if (!form_structure) {
+    return false;
+  }
+  return std::ranges::none_of(
+      form_structure->fields(),
+      [](const std::unique_ptr<AutofillField>& form_field) {
+        return form_field->Type().GetCreditCardType() ==
+                   FieldType::CREDIT_CARD_NUMBER &&
+               !SanitizedFieldIsEmpty(form_field->value());
+      });
+}
 
 // The priority ranking for deduplicating a duplicate card is:
 // 1. RecordType::kMaskedServerCard
@@ -394,14 +406,12 @@ void AdjustVirtualCardSuggestionContent(Suggestion& suggestion,
   }
 
   suggestion.type = SuggestionType::kVirtualCreditCardEntry;
-  // If a virtual card is non-acceptable, it needs to be displayed in
-  // grayed-out style.
   if (!suggestion.IsAcceptable()) {
     suggestion.acceptability =
-        Suggestion::Acceptability::kUnacceptableWithDeactivatedStyle;
+        Suggestion::Acceptability::kUnselectableAndUnacceptable;
   }
   suggestion.iph_metadata = Suggestion::IPHMetadata(
-      suggestion.HasDeactivatedStyle()
+      !suggestion.IsSelectable()
           ? &feature_engagement::
                 kIPHAutofillDisabledVirtualCardSuggestionFeature
           : &feature_engagement::kIPHAutofillVirtualCardSuggestionFeature);
@@ -841,8 +851,8 @@ Suggestion CreateBnplSuggestion(
   bnpl_suggestion.acceptability =
       amount_extraction_status.has_timed_out_for_page_load ||
               amount_extraction_status.seen_unsupported_currency_for_page_load
-          ? Suggestion::Acceptability::kUnacceptableWithDeactivatedStyle
-          : Suggestion::Acceptability::kAcceptable;
+          ? Suggestion::Acceptability::kUnselectableAndUnacceptable
+          : Suggestion::Acceptability::kSelectableAndAcceptable;
 
   return bnpl_suggestion;
 }
@@ -851,6 +861,13 @@ std::vector<CreditCard> GetTouchToFillCardsToSuggest(
     const AutofillClient& client,
     const FormFieldData& trigger_field,
     FieldType trigger_field_type) {
+  // Do not suggest credit cards if the payments data category is blocked by
+  // enterprise policy for the current website.
+  if (client.IsAutofillTypeBlockedByPolicy(
+          client.GetLastCommittedPrimaryMainFrameURL(),
+          AutofillClient::AutofillPolicyDataCategory::kPayments)) {
+    return {};
+  }
   // TouchToFill actually has a trigger field which must be classified in some
   // way, but we intentionally fetch suggestions irrelevant of them.
   std::vector<CreditCard> cards_to_suggest = GetOrderedCardsToSuggest(
@@ -871,16 +888,7 @@ bool ShouldCreateBnplSuggestionForTouchToFill(BrowserAutofillManager& manager,
     const FormStructure* form_structure = manager.FindCachedFormById(form_id);
     // Checks whether the credit card number field is empty. If the number field
     // is not empty, privacy restrictions prohibit showing the BNPL option.
-    passes_credit_card_number_check =
-        form_structure
-            ? std::ranges::none_of(
-                  form_structure->fields(),
-                  [](const std::unique_ptr<AutofillField>& form_field) {
-                    return form_field->Type().GetCreditCardType() ==
-                               FieldType::CREDIT_CARD_NUMBER &&
-                           !SanitizedFieldIsEmpty(form_field->value());
-                  })
-            : false;
+    passes_credit_card_number_check = IsCardNumberFieldEmpty(form_structure);
   }
   return base::FeatureList::IsEnabled(
              features::kAutofillEnableBuyNowPayLater) &&
@@ -953,9 +961,8 @@ std::vector<Suggestion> GetCreditCardSuggestionsForTouchToFill(
       bool acceptable =
           IsCardSuggestionAcceptable(credit_card, manager.client());
       suggestion.acceptability =
-          acceptable
-              ? Suggestion::Acceptability::kAcceptable
-              : Suggestion::Acceptability::kUnacceptableWithDeactivatedStyle;
+          acceptable ? Suggestion::Acceptability::kSelectableAndAcceptable
+                     : Suggestion::Acceptability::kUnselectableAndUnacceptable;
       suggestion.labels.push_back(std::vector<Suggestion::Text>{
           Suggestion::Text(l10n_util::GetStringUTF16(
               acceptable
@@ -979,7 +986,15 @@ std::vector<Suggestion> GetCreditCardSuggestionsForTouchToFill(
                                  .payments_data_manager()
                                  .GetBnplIssuers(),
                              /*extracted_amount_in_micros=*/std::nullopt));
-    manager.GetCreditCardFormEventLogger().OnBnplSuggestionShown();
+    if (payments::BnplManager* bnpl_manager =
+            manager.GetPaymentsBnplManager()) {
+      const FormStructure* form_structure = manager.FindCachedFormById(form_id);
+      bnpl_manager->SetIsCardNumberFieldEmpty(
+          IsCardNumberFieldEmpty(form_structure));
+    }
+    manager.GetCreditCardFormEventLogger().OnBnplSuggestionShown(
+        /*pay_later_tab_shown=*/base::FeatureList::IsEnabled(
+            features::kAutofillEnablePayNowPayLaterTabs));
     manager.client()
         .GetPersonalDataManager()
         .payments_data_manager()
@@ -1066,7 +1081,7 @@ bool IsCreditCardFooterSuggestion(
     case SuggestionType::kManageCreditCard:
     case SuggestionType::kMaximizeCreditCardBenefitsEntry:
     case SuggestionType::kScanCreditCard:
-    case SuggestionType::kUndoOrClear:
+    case SuggestionType::kUndo:
       return true;
     case SuggestionType::kAccountStoragePasswordEntry:
     case SuggestionType::kAddressEntry:
@@ -1075,15 +1090,21 @@ bool IsCreditCardFooterSuggestion(
     case SuggestionType::kAllLoyaltyCardsEntry:
     case SuggestionType::kAllSavedPasswordsEntry:
     case SuggestionType::kAtMemoryAiDisclosure:
+    case SuggestionType::kAtMemoryFetching:
     case SuggestionType::kAtMemoryGenericError:
     case SuggestionType::kAtMemoryInactivityNudge:
     case SuggestionType::kAtMemoryNoConnection:
+    case SuggestionType::kAtMemoryOpenGemini:
     case SuggestionType::kAtMemorySearchAffordance:
     case SuggestionType::kAtMemorySearchResult:
+    case SuggestionType::kAtMemoryShortcutSettingsPromo:
+    case SuggestionType::kAtMemorySourceAttribution:
     case SuggestionType::kAutocompleteAtMemoryButton:
     case SuggestionType::kAutocompleteEntry:
     case SuggestionType::kAutofillAiOtherOrders:
+    case SuggestionType::kAutofillAiOtherShipments:
     case SuggestionType::kAutofillAiPrivateInferenceNotice:
+    case SuggestionType::kAutofillAiSourceAttribution:
     case SuggestionType::kBackupPasswordEntry:
     case SuggestionType::kBnplEntry:
     case SuggestionType::kComposeDisable:
@@ -1102,6 +1123,7 @@ bool IsCreditCardFooterSuggestion(
     case SuggestionType::kFillPassword:
     case SuggestionType::kFreeformFooter:
     case SuggestionType::kGeneratePasswordEntry:
+    case SuggestionType::kGmailOneTimePasswordEntry:
     case SuggestionType::kIbanEntry:
     case SuggestionType::kIdentityCredential:
     case SuggestionType::kInsecureContextPaymentDisabledMessage:
@@ -1114,17 +1136,17 @@ bool IsCreditCardFooterSuggestion(
     case SuggestionType::kManageAutofillAiTravel:
     case SuggestionType::kManageIban:
     case SuggestionType::kManageLoyaltyCard:
+    case SuggestionType::kManageOffers:
     case SuggestionType::kManageEnhancedAutofill:
     case SuggestionType::kMerchantPromoCodeEntry:
-    case SuggestionType::kMixedFormMessage:
     case SuggestionType::kOneTimePasswordEntry:
-    case SuggestionType::kOpenGemini:
+    case SuggestionType::kOpenGmailForOtps:
     case SuggestionType::kPasswordEntry:
     case SuggestionType::kPasswordFieldByFieldFilling:
     case SuggestionType::kPendingStateSignin:
     case SuggestionType::kPersonalContextNotice:
+    case SuggestionType::kRemoveAutofillAi:
     case SuggestionType::kSaveAndFillCreditCardEntry:
-    case SuggestionType::kSeePromoCodeDetails:
     case SuggestionType::kTitle:
     case SuggestionType::kTroubleSigningInEntry:
     case SuggestionType::kViewPasswordDetails:
@@ -1280,9 +1302,10 @@ Suggestion CreateCreditCardSuggestion(
     autofill_metrics::CardMetadataLoggingContext& metadata_logging_context) {
   Suggestion suggestion(SuggestionType::kCreditCardEntry);
   suggestion.icon = credit_card.CardIconForAutofillSuggestion();
-  suggestion.acceptability = IsCardSuggestionAcceptable(credit_card, client)
-                                 ? Suggestion::Acceptability::kAcceptable
-                                 : Suggestion::Acceptability::kUnacceptable;
+  suggestion.acceptability =
+      IsCardSuggestionAcceptable(credit_card, client)
+          ? Suggestion::Acceptability::kSelectableAndAcceptable
+          : Suggestion::Acceptability::kSelectableButUnacceptable;
   suggestion.payload = Suggestion::Guid(credit_card.guid());
 
   // Manual fallback suggestions labels are computed as if the triggering field
@@ -1326,15 +1349,16 @@ Suggestion CreateCreditCardSuggestion(
         l10n_util::GetStringUTF16(IDS_AUTOFILL_A11Y_ANNOUNCE_FILLED_FORM);
   }
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
   // Newly-synced cards start with a `use_count()` of 1.
   if (credit_card.card_creation_source() ==
           CreditCard::CardCreationSource::kCreationSourceNonChromePayments &&
-      credit_card.usage_history().use_count() == 1 &&
-      base::FeatureList::IsEnabled(
-          features::kAutofillEnableDownstreamCardAwarenessIph)) {
+      credit_card.usage_history().use_count() == 1) {
     suggestion.iph_metadata = Suggestion::IPHMetadata(
         &feature_engagement::kIPHAutofillDownstreamCardAwarenessFeature);
   }
+#endif
 
   return suggestion;
 }
@@ -1469,8 +1493,9 @@ bool ShouldShowScanCreditCard(const FormStructure& form,
 
   bool is_card_number_field =
       trigger_field.Type().GetCreditCardType() == CREDIT_CARD_NUMBER &&
-      base::ContainsOnlyChars(StripCardNumberSeparators(trigger_field.value()),
-                              u"0123456789");
+      base::ContainsOnlyChars(
+          StripSeparatorsAndNormalizeDigits(trigger_field.value()),
+          u"0123456789");
 
   if (!is_card_number_field) {
     return false;

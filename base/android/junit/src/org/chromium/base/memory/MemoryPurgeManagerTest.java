@@ -6,14 +6,11 @@ package org.chromium.base.memory;
 
 import android.os.Looper;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.ApplicationState;
@@ -27,7 +24,6 @@ import java.util.concurrent.TimeUnit;
 
 /** Tests for MemoryPurgeManager. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class MemoryPurgeManagerTest {
     @Rule public FakeTimeTestRule mFakeTimeTestRule = new FakeTimeTestRule();
     private final Callable<Integer> mGetCount =
@@ -83,7 +79,6 @@ public class MemoryPurgeManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testSimple() throws Exception {
         int count = mGetCount.call();
         var manager = new MemoryPurgeManagerForTest(ApplicationState.HAS_RUNNING_ACTIVITIES);
@@ -112,7 +107,6 @@ public class MemoryPurgeManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testInitializedOnceInBackground() throws Exception {
         int count = mGetCount.call();
         var manager = new MemoryPurgeManagerForTest(ApplicationState.HAS_STOPPED_ACTIVITIES);
@@ -127,7 +121,6 @@ public class MemoryPurgeManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testDontTriggerForProcessesWithNoActivities() {
         var manager = new MemoryPurgeManagerForTest(ApplicationState.HAS_DESTROYED_ACTIVITIES);
         manager.start();
@@ -145,7 +138,6 @@ public class MemoryPurgeManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testMultiple() throws Exception {
         int count = mGetCount.call();
         var manager = new MemoryPurgeManagerForTest(ApplicationState.HAS_RUNNING_ACTIVITIES);
@@ -174,7 +166,6 @@ public class MemoryPurgeManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testNoEnoughTimeInBackground() {
         var manager = new MemoryPurgeManagerForTest(ApplicationState.HAS_RUNNING_ACTIVITIES);
         manager.start();
@@ -206,7 +197,6 @@ public class MemoryPurgeManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testSimpleSelfFreeze() throws Exception {
         int count = mGetCount.call();
         var manager = new MemoryPurgeManagerForTest(ApplicationState.HAS_RUNNING_ACTIVITIES);
@@ -231,7 +221,6 @@ public class MemoryPurgeManagerTest {
     }
 
     @Test
-    @SmallTest
     public void testNoEnoughTimeInBackgroundForSelfFreeze() {
         var manager = new MemoryPurgeManagerForTest(ApplicationState.HAS_RUNNING_ACTIVITIES);
         manager.start();

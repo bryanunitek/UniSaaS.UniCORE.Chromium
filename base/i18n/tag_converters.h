@@ -5,24 +5,16 @@
 #ifndef BASE_I18N_TAG_CONVERTERS_H_
 #define BASE_I18N_TAG_CONVERTERS_H_
 
-#include <algorithm>
+#include <memory>
 #include <optional>
 #include <string_view>
-#include <type_traits>
 
+#include "base/component_export.h"
 #include "base/containers/fixed_flat_set.h"
-#include "base/i18n/base_i18n_export.h"
-#include "base/i18n/internal/bcp47_parser.h"
-#include "base/i18n/internal/icu_bridge.rs.h"
-#include "base/i18n/internal/immutable_string.h"
 #include "base/i18n/language_tag.h"
 
-namespace base {
-class Value;
-}
-
-namespace base::i18n_internal {
-struct Icu4xLocale;
+namespace icu4x {
+class Locale;
 }
 
 namespace base::i18n {
@@ -40,9 +32,9 @@ namespace base::i18n {
 //     // Valid language tag
 //   }
 //
-// Examples of valid and invalid language tags:
+// Examples of valid language tags:
 // Valid: "en-US", "en-GB", "en-US-POSIX", "zh-Hans-CN", "und"
-class BASE_I18N_EXPORT LanguageTagConverter {
+class COMPONENT_EXPORT(LANGUAGE_TAG) LanguageTagConverter {
  public:
   LanguageTagConverter();
   ~LanguageTagConverter();
@@ -56,29 +48,23 @@ class BASE_I18N_EXPORT LanguageTagConverter {
   //
   // Returns: std::optional<LanguageTag> containing the parsed language tag
   //            or std::nullopt if parsing fails.
-  // We do run some normalization on the input language tag:
+  // Performs normalization on the input language tag:
   //  - Normalize case (e.g. "EN-US" -> "en-US").
   //  - Normalize separator (e.g. "en_US" -> "en-US").
   std::optional<LanguageTag> FromString(std::string_view tag) const;
   // Internal usage.
-  LanguageTag FromIcu4xLocale(
-      const i18n_internal::Icu4xLocale& icu_locale) const;
+  LanguageTag FromIcu4xCapiLocale(const icu4x::Locale& locale) const;
 
  private:
   class Impl;
   std::unique_ptr<Impl> impl_;
 };
 
-// Converts a LanguageTag to a string base::Value.
-BASE_I18N_EXPORT base::Value LanguageTagToValue(const LanguageTag& tag);
-
-// Parses a LanguageTag from a base::Value.
-// Returns std::nullopt if `value` is nullptr, not a string Value, or not a
-// valid BCP 47 language tag.
-BASE_I18N_EXPORT std::optional<LanguageTag> ValueToLanguageTag(
-    const base::Value* value);
-BASE_I18N_EXPORT std::optional<LanguageTag> ValueToLanguageTag(
-    const base::Value& value);
+// Helper function to obtain a `LanguageTag` from a string. It is just a
+// convenient function to avoid people having to call the `LanguageTagConverter`
+// singleton as it is quite verbose to do it.
+COMPONENT_EXPORT(LANGUAGE_TAG)
+std::optional<LanguageTag> GetLanguageTagFromString(std::string_view tag);
 
 }  // namespace base::i18n
 

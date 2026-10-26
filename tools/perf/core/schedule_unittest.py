@@ -19,7 +19,6 @@ from core import bot_platforms
 
 
 class ScheduleValidationTest(unittest.TestCase):
-
   def testInlineComments(self):
     with tempfile.TemporaryDirectory() as tmp_dir:
       benchmark_name = 'speedometer3.crossbench'
@@ -38,6 +37,25 @@ win-10-perf,2,1
       self.assertIn('win-10-perf', configs)
       self.assertEqual(len(configs), 2)
 
+  def testAllowedBenchmarks(self):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+      disallowed_csv = Path(tmp_dir) / 'speedometer3.crossbench.csv'
+      disallowed_csv.write_text(
+        'bot,repeat,shard\nlinux-rtx4070-perf,1,1\n', encoding='utf-8'
+      )
+      with self.assertRaisesRegex(
+        AssertionError, "Bot 'linux-rtx4070-perf' only allows benchmarks"
+      ):
+        bot_platforms.LoadScheduleFile(disallowed_csv, {})
+
+      allowed_csv = Path(tmp_dir) / 'blink-ai.crossbench.csv'
+      allowed_csv.write_text(
+        'bot,repeat,shard\nlinux-rtx4070-perf,1,1\n', encoding='utf-8'
+      )
+      configs = {}
+      bot_platforms.LoadScheduleFile(allowed_csv, configs)
+      self.assertIn('linux-rtx4070-perf', configs)
+
   def testScheduleFiles(self):
     schedule_dir = FILE_PATH.absolute().parent / 'schedule'
     if not schedule_dir.is_dir():
@@ -53,13 +71,17 @@ win-10-perf,2,1
   def verify_schedule(self, path):
     content = path.read_text(encoding='utf-8')
     assert content, "Unexpected empty file"
-    self.assertTrue(content.endswith('\n'),
-                    f"File {path.name} must end with a newline")
+    self.assertTrue(
+      content.endswith('\n'), f"File {path.name} must end with a newline"
+    )
     reader = bot_platforms.ReadCSV(path)
     assert reader.fieldnames, "Missing header"
     if 'flags' in reader.fieldnames:
-      self.assertEqual(reader.fieldnames[-1], 'flags',
-                       f"'flags' must be the last column in {path}")
+      self.assertEqual(
+        reader.fieldnames[-1],
+        'flags',
+        f"'flags' must be the last column in {path}",
+      )
     bots = set()
     row_count = 0
     for row in reader:
@@ -68,25 +90,43 @@ win-10-perf,2,1
       # Validate bot uniqueness
       self.assertIsNotNone(bot, f"Missing 'bot' column in {path}")
       self.assertIn(
-          bot, bot_platforms.PLATFORM_INFO.keys(),
-          f"Bot '{bot}' in {path.name} not found in "
-          f"bot_platforms.ALL_PLATFORM_NAMES")
+        bot,
+        bot_platforms.PLATFORM_INFO.keys(),
+        f"Bot '{bot}' in {path.name} not found in "
+        f"bot_platforms.ALL_PLATFORM_NAMES",
+      )
+      allowed_benchmarks = bot_platforms.PLATFORM_INFO[bot].get(
+        'allowed_benchmarks'
+      )
+      if allowed_benchmarks is not None:
+        self.assertIn(
+          path.stem,
+          allowed_benchmarks,
+          f"Bot '{bot}' only allows benchmarks {sorted(allowed_benchmarks)}, "
+          f"cannot schedule '{path.stem}' in {path.name}",
+        )
       self.assertNotIn(bot, bots, f"Duplicate bot '{bot}' in {path}")
       bots.add(bot)
       repeats = row.get('repeat')
       self.assertIsNotNone(repeats, f"Missing 'repeat' column in {path}")
-      repeats = int(repeats)
-      self.assertGreater(
-          repeats, 0, f"'repeats' value {repeats} must be positive in {path} "
-          f"for bot {bot}")
+      if repeats:
+        repeats = int(repeats)
+        self.assertGreater(
+          repeats,
+          0,
+          f"'repeats' value {repeats} must be positive in {path} for bot {bot}",
+        )
       shard = row.get('shard')
       self.assertIsNotNone(shard, f"Missing 'shard' column in {path}")
       shard = int(shard)
       self.assertGreater(
-          shard, 0, f"'shard' value {shard} must be positive in {path} "
-          f"for bot {bot}")
-    self.assertGreater(row_count, 0,
-                       f"No rows found in {path}, please remove file.")
+        shard,
+        0,
+        f"'shard' value {shard} must be positive in {path} for bot {bot}",
+      )
+    self.assertGreater(
+      row_count, 0, f"No rows found in {path}, please remove file."
+    )
 
   def testParse(self):
     schedule_dir = FILE_PATH.absolute().parent / 'schedule'
@@ -122,6 +162,7 @@ win-10-perf,2,1
     for name in sorted(list(legacy_keys)):
       with self.subTest(benchmark=name):
         self.assertEqual(legacy_map[name], csv_map[name])
+
 
 if __name__ == '__main__':
   unittest.main()

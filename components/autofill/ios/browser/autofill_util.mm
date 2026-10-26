@@ -14,6 +14,7 @@
 #import "base/strings/string_number_conversions.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
+#import "base/time/time.h"
 #import "base/types/optional_ref.h"
 #import "base/values.h"
 #import "components/autofill/core/browser/autofill_field.h"
@@ -43,7 +44,7 @@ using base::NumberToString;
 using base::StringToUint;
 
 // The timeout for any JavaScript call in this file.
-const int64_t kJavaScriptExecutionTimeoutInSeconds = 5;
+constexpr base::TimeDelta kJavaScriptExecutionTimeout = base::Seconds(5);
 
 // Runs |callback| with the NSString value of |res|.
 // |callback| must be non-null.
@@ -254,12 +255,6 @@ base::expected<FormData, ExtractFormDataFailure> ExtractFormData(
     return base::unexpected(ExtractFormDataFailure::kOriginMismatch);
   }
 
-  bool include_frame_metadata =
-      base::FeatureList::IsEnabled(features::kAutofillAcrossIframesIos);
-
-  const url::Origin frame_origin_object =
-      include_frame_metadata ? form_frame_origin : url::Origin();
-
   // Frame ID of the frame containing this form is mandatory.
   const std::string* host_frame_param = form.FindString("host_frame");
   if (!host_frame_param) {
@@ -278,8 +273,7 @@ base::expected<FormData, ExtractFormDataFailure> ExtractFormData(
     return base::unexpected(ExtractFormDataFailure::kInvalidHostFrame);
   }
 
-  if (base::FeatureList::IsEnabled(features::kAutofillAcrossIframesIos) &&
-      *host_frame_param != frame_id) {
+  if (*host_frame_param != frame_id) {
     // Invalidate parsing when the frame for which extraction was done
     // doesn't correspond to the frame where extraction actually happened.
     // This is to prevent associating the form data with the wrong frame.
@@ -311,9 +305,7 @@ base::expected<FormData, ExtractFormDataFailure> ExtractFormData(
     form_data.set_id_attribute(base::UTF8ToUTF16(*id_attribute));
   }
 
-  if (include_frame_metadata) {
-    form_data.set_child_frames(ExtractChildFrames(form));
-  }
+  form_data.set_child_frames(ExtractChildFrames(form));
 
   // Field list (mandatory) is extracted.
   const base::ListValue* fields_list = form.FindList("fields");
@@ -331,9 +323,7 @@ base::expected<FormData, ExtractFormDataFailure> ExtractFormData(
       // field level. Reuse the extracted values.
       field_data.set_host_form_id(form_data.renderer_id());
       field_data.set_host_frame(form_data.host_frame());
-      if (include_frame_metadata) {
-        field_data.set_origin(frame_origin_object);
-      }
+      field_data.set_origin(form_frame_origin);
 
       fields.push_back(std::move(field_data));
     } else {
@@ -342,14 +332,12 @@ base::expected<FormData, ExtractFormDataFailure> ExtractFormData(
   }
   form_data.set_fields(std::move(fields));
 
-  if (include_frame_metadata) {
-    FormSignature form_signature = CalculateFormSignature(form_data);
-    std::vector<FormFieldData> form_fields = form_data.ExtractFields();
-    for (FormFieldData& field : form_fields) {
-      field.set_host_form_signature(form_signature);
-    }
-    form_data.set_fields(std::move(form_fields));
+  FormSignature form_signature = CalculateFormSignature(form_data);
+  std::vector<FormFieldData> form_fields = form_data.ExtractFields();
+  for (FormFieldData& field : form_fields) {
+    field.set_host_form_signature(form_signature);
   }
+  form_data.set_fields(std::move(form_fields));
   return form_data;
 }
 
@@ -377,8 +365,10 @@ bool ExtractFormFieldData(const base::DictValue& field,
     FieldRendererId field_renderer_id;
     StringToUint(*renderer_id, &field_renderer_id.value());
     field_data->set_renderer_id(field_renderer_id);
+    field_data->set_form_control_ax_id(field_renderer_id.value());
   } else {
     field_data->set_renderer_id(FieldRendererId());
+    field_data->set_form_control_ax_id(0);
   }
 
   // Optional fields.
@@ -410,10 +400,6 @@ bool ExtractFormFieldData(const base::DictValue& field,
   }
   field_data->set_parsed_autocomplete(
       ParseAutocompleteAttribute(field_data->autocomplete_attribute()));
-
-  // TODO(crbug.com/40391162): Extract |is_checked|.
-  bool is_checkable = field.FindBool("is_checkable").value_or(false);
-  SetCheckStatus(field_data, is_checkable, false);
 
   field_data->set_is_focusable(
       field.FindBool("is_focusable").value_or(field_data->is_focusable()));
@@ -518,7 +504,7 @@ void ExecuteJavaScriptFunction(const std::string& name,
         name, parameters, base::BindOnce(^(const base::Value* res) {
           std::move(cb).Run(res);
         }),
-        base::Seconds(kJavaScriptExecutionTimeoutInSeconds));
+        kJavaScriptExecutionTimeout);
     if (!called) {
       std::move(cb).Run(nil);
     }

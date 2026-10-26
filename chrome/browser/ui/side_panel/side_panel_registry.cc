@@ -69,9 +69,10 @@ void SidePanelRegistry::ResetActiveEntry() {
   active_entry_.reset();
 }
 
-void SidePanelRegistry::ClearCachedEntryViews() {
+void SidePanelRegistry::ClearCachedEntryViews(bool include_active_entry) {
   for (auto const& entry : entries_) {
-    if (!active_entry_.has_value() || entry.get() != active_entry_.value()) {
+    if (include_active_entry || !active_entry_.has_value() ||
+        entry.get() != active_entry_.value()) {
       entry.get()->ClearCachedView();
     }
   }
@@ -110,22 +111,29 @@ bool SidePanelRegistry::Deregister(const SidePanelEntry::Key& key) {
     active_entry_.reset();
   }
 
-// TODO(crbug.com/489780669): Temporarily disabled until a coordinator is made.
-#if !BUILDFLAG(IS_ANDROID)
-  // TODO(https://crbug.com/360163254): This is nullptr in
+  const bool for_tab = get_scope_type() == SidePanelEntryScope::ScopeType::kTab;
+  // A tab-scoped registry's tab may be detached from any window (e.g. while
+  // being dragged between windows), in which case there is no side panel UI to
+  // close.
+  BrowserWindowInterface* const browser_window_interface =
+      for_tab ? std::get<raw_ptr<tabs::TabInterface>>(owner_)
+                    ->GetBrowserWindowInterface()
+              : std::get<raw_ptr<BrowserWindowInterface>>(owner_).get();
+  // TODO(https://crbug.com/360163254): side_panel_ui() is nullptr in
   // BrowserWithTestWindowTest. When the test suite goes away the nullptr check
   // can be removed.
-  if (auto* const side_panel_ui =
-          GetBrowserWindowInterface().GetFeatures().side_panel_ui()) {
-    const bool for_tab =
-        get_scope_type() == SidePanelEntryScope::ScopeType::kTab;
-    // If the entry with the same key and scope is showing, synchronously close.
-    if (side_panel_ui->IsSidePanelEntryShowing(key, for_tab)) {
-      side_panel_ui->Close(SidePanelEntryHideReason::kSidePanelClosed,
-                           /*suppress_animations=*/true);
+  if (browser_window_interface) {
+    if (auto* const side_panel_ui =
+            SidePanelUI::From(browser_window_interface)) {
+      // If the entry with the same key and scope is showing, synchronously
+      // close. A tab-scoped entry only shows for the active tab.
+      if (side_panel_ui->IsSidePanelEntryShowing(key, for_tab) &&
+          (!for_tab || GetTabInterface().IsActivated())) {
+        side_panel_ui->Close(SidePanelEntryHideReason::kSidePanelClosed,
+                             /*suppress_animations=*/true);
+      }
     }
   }
-#endif
 
   auto it = std::find_if(entries_.begin(), entries_.end(),
                          base::MatchesUniquePtr(entry));
@@ -149,13 +157,13 @@ void SidePanelRegistry::OnEntryShown(SidePanelEntry* entry) {
 
 const tabs::TabInterface& SidePanelRegistry::GetTabInterface() const {
   CHECK_EQ(SidePanelEntryScope::ScopeType::kTab, get_scope_type());
-  return *std::get<tabs::TabInterface*>(owner_);
+  return *std::get<raw_ptr<tabs::TabInterface>>(owner_);
 }
 
 const BrowserWindowInterface& SidePanelRegistry::GetBrowserWindowInterface()
     const {
   return get_scope_type() == SidePanelEntryScope::ScopeType::kTab
-             ? *std::get<tabs::TabInterface*>(owner_)
+             ? *std::get<raw_ptr<tabs::TabInterface>>(owner_)
                     ->GetBrowserWindowInterface()
-             : *std::get<BrowserWindowInterface*>(owner_);
+             : *std::get<raw_ptr<BrowserWindowInterface>>(owner_);
 }

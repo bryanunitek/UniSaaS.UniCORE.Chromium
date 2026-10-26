@@ -4,19 +4,9 @@
 
 #import "ios/chrome/browser/intelligence/actor/tools/model/page_stability_java_script_feature.h"
 
-#import "base/files/file_path.h"
-#import "base/path_service.h"
-#import "base/strings/sys_string_conversions.h"
-#import "base/test/ios/wait_util.h"
-#import "base/test/metrics/histogram_tester.h"
-#import "base/test/scoped_feature_list.h"
-#import "base/time/time_delta_from_string.h"
+#import "base/test/test_future.h"
+#import "base/time/time.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool_java_script_feature_test_base.h"
-#import "ios/chrome/browser/intelligence/features/features.h"
-#import "ios/web/public/test/js_test_util.h"
-#import "ios/web/public/test/web_view_interaction_test_util.h"
-#import "ios/web/public/web_state.h"
-#import "net/test/embedded_test_server/embedded_test_server.h"
 #import "testing/gtest/include/gtest/gtest.h"
 
 namespace actor {
@@ -24,116 +14,86 @@ namespace actor {
 class PageStabilityJavaScriptFeatureTest
     : public ActorToolJavaScriptFeatureTestBase {
  protected:
-  std::string kPageStabilityIntervalDurationParam = "300ms";
-  base::TimeDelta kPageStabilityIntervalDuration =
-      base::TimeDeltaFromString(kPageStabilityIntervalDurationParam).value();
-  std::string kPageStabilityThrottleThresholdParam = "100ms";
-  base::TimeDelta kPageStabilityThrottleThreshold =
-      base::TimeDeltaFromString(kPageStabilityThrottleThresholdParam).value();
+  PageStabilityJavaScriptFeatureTest() : ActorToolJavaScriptFeatureTestBase() {}
 
-  PageStabilityJavaScriptFeatureTest()
-      : test_server_(net::EmbeddedTestServer::TYPE_HTTP) {
-    scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        kPageStabilityMetrics,
-        {{"PageStabilityIntervalDuration", kPageStabilityIntervalDurationParam},
-         {"PageStabilityThrottleThreshold",
-          kPageStabilityThrottleThresholdParam}});
-  }
-
-  void SetUp() override {
-    ActorToolJavaScriptFeatureTestBase::SetUp();
-    test_server_.ServeFilesFromSourceDirectory(
-        base::FilePath("ios/testing/data/http_server_files/"));
-    ASSERT_TRUE(test_server_.Start());
-  }
-
-  void LoadTestPage() {
-    ASSERT_TRUE(LoadUrl(test_server_.GetURL("/actor/page_stability.html")));
-    ASSERT_NE(WaitForMainFrame(feature()), nullptr);
-  }
+  void SetUp() override { ActorToolJavaScriptFeatureTestBase::SetUp(); }
 
   PageStabilityJavaScriptFeature* feature() {
     return PageStabilityJavaScriptFeature::GetInstance();
   }
 
-  net::EmbeddedTestServer test_server_;
-  base::test::ScopedFeatureList scoped_feature_list_;
-  base::HistogramTester histogram_tester_;
+  void MockWaitForLcpJsFunction(const std::string& mock_return_value) {
+    MockJsFunction(feature(), "page_stability", "waitForLcp",
+                   mock_return_value);
+  }
 };
 
-TEST_F(PageStabilityJavaScriptFeatureTest, RecordsMutationMetrics) {
-  LoadTestPage();
-  ASSERT_NE(WaitForMainFrame(feature()), nullptr);
+// Test that WaitForLcp returns kFrameWentAway when target_frame is null.
+TEST_F(PageStabilityJavaScriptFeatureTest, WaitForLcp_InvalidatedWebFrame) {
+  base::test::TestFuture<ToolExecutionResult> future;
+  feature()->WaitForLcp(/*target_frame=*/nullptr, /*timeout=*/base::Seconds(1),
+                        future.GetCallback());
 
-  web::test::TapWebViewElementWithId(web_state(), "mutate");
-
-  base::test::ios::SpinRunLoopWithMinDelay(kPageStabilityIntervalDuration +
-                                           base::Milliseconds(100));
-  histogram_tester_.ExpectBucketCount(
-      "IOS.Actor.PageStability.InteractionMetrics.MutationCount", 1, 1);
-  histogram_tester_.ExpectTotalCount(
-      "IOS.Actor.PageStability.InteractionMetrics.TimeToFirstMutation", 1);
-  histogram_tester_.ExpectTotalCount(
-      "IOS.Actor.PageStability.InteractionMetrics.TimeToLastMutation", 1);
+  auto result = future.Get();
+  EXPECT_FALSE(result.IsOk());
+  EXPECT_EQ(result.code(), mojom::ActionResultCode::kFrameWentAway);
 }
 
-TEST_F(PageStabilityJavaScriptFeatureTest, RecordsZeroCountForNoMutations) {
-  LoadTestPage();
+// Test that WaitForLcp succeeds when JS returns lcpReceived = true.
+TEST_F(PageStabilityJavaScriptFeatureTest, WaitForLcp_Success) {
+  MockWaitForLcpJsFunction(/*mock_return_value=*/"{lcpReceived: true}");
+  base::test::TestFuture<ToolExecutionResult> future;
 
-  web::test::TapWebViewElementWithId(web_state(), "benign");
+  feature()->WaitForLcp(GetMainFrame(feature()), /*timeout=*/base::Seconds(1),
+                        future.GetCallback());
 
-  base::test::ios::SpinRunLoopWithMinDelay(kPageStabilityIntervalDuration +
-                                           base::Milliseconds(100));
-  histogram_tester_.ExpectBucketCount(
-      "IOS.Actor.PageStability.InteractionMetrics.MutationCount", 0, 1);
-  histogram_tester_.ExpectTotalCount(
-      "IOS.Actor.PageStability.InteractionMetrics.TimeToFirstMutation", 0);
-  histogram_tester_.ExpectTotalCount(
-      "IOS.Actor.PageStability.InteractionMetrics.TimeToLastMutation", 0);
+  auto result = future.Get();
+  EXPECT_TRUE(result.IsOk());
 }
 
-TEST_F(PageStabilityJavaScriptFeatureTest,
-       RecordsCumulativeCountForSustainedMutations) {
-  LoadTestPage();
+// Test that WaitForLcp succeeds even when JS returns lcpReceived = false.
+TEST_F(PageStabilityJavaScriptFeatureTest, WaitForLcp_LcpNotReceived) {
+  MockWaitForLcpJsFunction(/*mock_return_value=*/"{lcpReceived: false}");
+  base::test::TestFuture<ToolExecutionResult> future;
 
-  // Make any interaction with the page trigger 5 mutations over 200ms.
-  web::test::ExecuteJavaScript(
-      web_state(), "window.sustainedMutations = {duration: 200, count: 5};");
-  web::test::TapWebViewElementWithId(web_state(), "mutate");
+  feature()->WaitForLcp(GetMainFrame(feature()), /*timeout=*/base::Seconds(1),
+                        future.GetCallback());
 
-  base::test::ios::SpinRunLoopWithMinDelay(kPageStabilityIntervalDuration +
-                                           base::Milliseconds(100));
-  histogram_tester_.ExpectBucketCount(
-      "IOS.Actor.PageStability.InteractionMetrics.MutationCount", 5, 1);
-  histogram_tester_.ExpectTotalCount(
-      "IOS.Actor.PageStability.InteractionMetrics.TimeToFirstMutation", 1);
-  histogram_tester_.ExpectTotalCount(
-      "IOS.Actor.PageStability.InteractionMetrics.TimeToLastMutation", 1);
+  auto result = future.Get();
+  EXPECT_TRUE(result.IsOk());
 }
 
-TEST_F(PageStabilityJavaScriptFeatureTest,
-       RapidInteractionsAreThrottledToOneWindow) {
-  LoadTestPage();
+// Test that WaitForLcp returns kArgumentsInvalid when JS returns a dict missing
+// lcpReceived field.
+TEST_F(PageStabilityJavaScriptFeatureTest, WaitForLcp_MissingLcpReceivedField) {
+  MockWaitForLcpJsFunction(/*mock_return_value=*/"{}");
+  base::test::TestFuture<ToolExecutionResult> future;
 
-  // Trigger 5 interactions in rapid succession. They should be throttled but
-  // the total mutation count is still recorded.
-  web::test::ExecuteJavaScriptForFeature(
-      web_state(),
-      @"for (let i = 0; i < 5; i++) {"
-       "  setTimeout(() => {"
-       "    document.getElementById('mutate').click();"
-       "  }, i * 20);"
-       "}",
-      feature());
+  feature()->WaitForLcp(GetMainFrame(feature()), /*timeout=*/base::Seconds(1),
+                        future.GetCallback());
 
-  base::test::ios::SpinRunLoopWithMinDelay(kPageStabilityIntervalDuration +
-                                           base::Milliseconds(100));
-  histogram_tester_.ExpectBucketCount(
-      "IOS.Actor.PageStability.InteractionMetrics.MutationCount", 5, 1);
-  histogram_tester_.ExpectTotalCount(
-      "IOS.Actor.PageStability.InteractionMetrics.TimeToFirstMutation", 1);
-  histogram_tester_.ExpectTotalCount(
-      "IOS.Actor.PageStability.InteractionMetrics.TimeToLastMutation", 1);
+  auto result = future.Get();
+  EXPECT_FALSE(result.IsOk());
+  EXPECT_EQ(result.code(), mojom::ActionResultCode::kArgumentsInvalid);
+}
+
+// Test that WaitForLcp returns kArgumentsInvalid when JS returns a
+// non-dictionary result.
+TEST_F(PageStabilityJavaScriptFeatureTest, WaitForLcp_InvalidResult) {
+  MockWaitForLcpJsFunction(/*mock_return_value=*/"'unexpected string'");
+  base::test::TestFuture<ToolExecutionResult> future;
+
+  feature()->WaitForLcp(GetMainFrame(feature()), /*timeout=*/base::Seconds(1),
+                        future.GetCallback());
+
+  auto result = future.Get();
+  EXPECT_FALSE(result.IsOk());
+  EXPECT_EQ(result.code(), mojom::ActionResultCode::kArgumentsInvalid);
+}
+
+// Test that CancelWaitForLcp handles null frame safely without crashing.
+TEST_F(PageStabilityJavaScriptFeatureTest, CancelWaitForLcp_NullFrame) {
+  feature()->CancelWaitForLcp(/*target_frame=*/nullptr);
 }
 
 }  // namespace actor

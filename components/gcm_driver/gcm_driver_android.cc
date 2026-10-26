@@ -15,6 +15,7 @@
 #include "base/notimplemented.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "components/fcm/crypto/fcm_decryption_result.h"
 #include "third_party/jni_zero/default_conversions.h"
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/gcm_driver/android/jni_headers/GCMDriver_jni.h"
@@ -169,29 +170,6 @@ void GCMDriverAndroid::SetGCMRecording(
   callback.Run(stats);
 }
 
-void GCMDriverAndroid::SetAccountTokens(
-    const std::vector<GCMClient::AccountTokenInfo>& account_tokens) {
-  NOTIMPLEMENTED();
-}
-
-void GCMDriverAndroid::UpdateAccountMapping(
-    const AccountMapping& account_mapping) {
-  NOTIMPLEMENTED();
-}
-
-void GCMDriverAndroid::RemoveAccountMapping(const CoreAccountId& account_id) {
-  NOTIMPLEMENTED();
-}
-
-base::Time GCMDriverAndroid::GetLastTokenFetchTime() {
-  NOTIMPLEMENTED();
-  return base::Time();
-}
-
-void GCMDriverAndroid::SetLastTokenFetchTime(const base::Time& time) {
-  NOTIMPLEMENTED();
-}
-
 InstanceIDHandler* GCMDriverAndroid::GetInstanceIDHandlerInternal() {
   // Not supported for Android.
   return NULL;
@@ -250,8 +228,9 @@ void GCMDriverAndroid::SendImpl(const std::string& app_id,
   NOTIMPLEMENTED();
 }
 
-void GCMDriverAndroid::RecordDecryptionFailure(const std::string& app_id,
-                                               GCMDecryptionResult result) {
+void GCMDriverAndroid::RecordDecryptionFailure(
+    const std::string& app_id,
+    fcm::FcmDecryptionResult result) {
   recorder_.RecordDecryptionFailure(app_id, result);
 }
 

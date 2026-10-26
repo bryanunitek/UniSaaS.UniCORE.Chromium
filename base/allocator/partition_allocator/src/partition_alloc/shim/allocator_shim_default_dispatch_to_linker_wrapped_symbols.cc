@@ -85,6 +85,7 @@ const AllocatorDispatch AllocatorDispatch::default_dispatch = {
     &RealCalloc,            /* alloc_zero_initialized_function */
     &RealCalloc,            /* alloc_zero_initialized_unchecked_function */
     &RealMemalign,          /* alloc_aligned_function */
+    &RealMemalign,          /* alloc_aligned_unchecked_function */
     &RealRealloc,           /* realloc_function */
     &RealRealloc,           /* realloc_unchecked_function */
     &RealFree,              /* free_function */
@@ -99,6 +100,7 @@ const AllocatorDispatch AllocatorDispatch::default_dispatch = {
     nullptr,                       /* try_free_default_function */
     nullptr,                       /* aligned_malloc_function */
     nullptr,                       /* aligned_malloc_unchecked_function */
+    nullptr,                       /* aligned_calloc_unchecked_function */
     nullptr,                       /* aligned_realloc_function */
     nullptr,                       /* aligned_realloc_unchecked_function */
     nullptr,                       /* aligned_free_function */

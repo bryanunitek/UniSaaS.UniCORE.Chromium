@@ -10,7 +10,7 @@
 #include "base/time/time.h"
 #include "ui/aura/window.h"
 #include "ui/color/color_provider.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/wm/core/visibility_controller.h"
 #include "ui/wm/core/window_animations.h"
 #include "ui/wm/public/activation_delegate.h"
@@ -72,7 +72,7 @@ WindowDimmer::~WindowDimmer() {
   if (window_) {
     window_->RemoveObserver(this);
     // See class description for details on ownership.
-    delete window_;
+    delete window_.ExtractAsDangling();
   }
 }
 
@@ -84,7 +84,8 @@ void WindowDimmer::SetDimOpacity(float target_opacity) {
   dim_color_type_.reset();
 
   DCHECK(window_);
-  window_->layer()->SetColor(SkColorSetA(SK_ColorBLACK, 255 * target_opacity));
+  window_->layer()->AsSolidColor()->SetColor(
+      SkColor4f::FromColor(SkColorSetA(SK_ColorBLACK, 255 * target_opacity)));
 }
 
 void WindowDimmer::SetDimColor(ui::ColorId color_id) {
@@ -168,7 +169,8 @@ void WindowDimmer::UpdateDimColor() {
   auto dimming_color = color_provider_source->GetColorProvider()->GetColor(
       dim_color_type_.value());
   DCHECK_NE(SkColorGetA(dimming_color), SK_AlphaOPAQUE);
-  window_->layer()->SetColor(dimming_color);
+  window_->layer()->AsSolidColor()->SetColor(
+      SkColor4f::FromColor(dimming_color));
 }
 
 }  // namespace ash

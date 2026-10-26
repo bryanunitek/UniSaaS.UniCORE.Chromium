@@ -90,13 +90,6 @@ void CachedTextInputInfo::DidLayoutSubtree(const LayoutObject& layout_object) {
     return;
   }
 
-#if DCHECK_IS_ON()
-  // TODO(crbug.com/375143253): To investigate flaky failures.
-  if (layout_object_->is_destroyed_) [[unlikely]] {
-    DCHECK(false) << layout_object_;
-  }
-#endif  // DCHECK_IS_ON()
-
   if (layout_object_->IsDescendantOf(&layout_object)) {
     // `<span contenteditable>...</span>` reaches here.
     return Clear();
@@ -153,11 +146,11 @@ void CachedTextInputInfo::EnsureCached(const ContainerNode& container) const {
 
   // The initial buffer size can be critical for performance:
   // https://bugs.webkit.org/show_bug.cgi?id=81192
-  constexpr unsigned kInitialCapacity = 1 << 15;
+  constexpr wtf_size_t kInitialCapacity = 1 << 15;
 
   StringBuilder builder;
   if (needs_text) {
-    unsigned capacity = kInitialCapacity;
+    wtf_size_t capacity = kInitialCapacity;
     if (auto* block_flow =
             DynamicTo<LayoutBlockFlow>(container.GetLayoutObject())) {
       if (block_flow->GetInlineNodeData()) {
@@ -170,7 +163,7 @@ void CachedTextInputInfo::EnsureCached(const ContainerNode& container) const {
   }
 
   const Node* last_text_node = nullptr;
-  unsigned length = 0;
+  wtf_size_t length = 0;
   for (; !it.AtEnd(); it.Advance()) {
     const Node* node = it.GetTextState().PositionNode();
     if (last_text_node != node && IsA<Text>(node)) {
@@ -209,16 +202,16 @@ PlainTextRange CachedTextInputInfo::GetPlainTextRange(
   // |range| may not in |container|. See http://crbug.com/1161562
   if (container_start > range.StartPosition())
     return PlainTextRange();
-  const unsigned start_offset =
+  const wtf_size_t start_offset =
       RangeLength(EphemeralRange(container_start, range.StartPosition()));
-  const unsigned end_offset =
+  const wtf_size_t end_offset =
       range.IsCollapsed()
           ? start_offset
           : RangeLength(EphemeralRange(container_start, range.EndPosition()));
 // TODO(crbug.com/1256635): This DCHECK is triggered by Crostini on CrOS.
 #if !BUILDFLAG(IS_CHROMEOS)
   DCHECK_EQ(
-      static_cast<unsigned>(TextIterator::RangeLength(
+      static_cast<wtf_size_t>(TextIterator::RangeLength(
           EphemeralRange(container_start, range.EndPosition()), Behavior())),
       end_offset);
 #endif
@@ -249,12 +242,12 @@ void CachedTextInputInfo::LayoutObjectWillBeDestroyed(
   ClearIfNeeded(layout_object);
 }
 
-unsigned CachedTextInputInfo::RangeLength(const EphemeralRange& range) const {
+wtf_size_t CachedTextInputInfo::RangeLength(const EphemeralRange& range) const {
   const Node* const node = range.EndPosition().AnchorNode();
   if (range.StartPosition() == Position(*container_, 0) && IsA<Text>(node)) {
     const auto it = offset_map_.find(To<Text>(node));
     if (it != offset_map_.end()) {
-      const unsigned length =
+      const wtf_size_t length =
           it->value +
           TextIterator::RangeLength(
               EphemeralRange(Position(node, 0), range.EndPosition()),
@@ -262,9 +255,7 @@ unsigned CachedTextInputInfo::RangeLength(const EphemeralRange& range) const {
 // TODO(crbug.com/1256635): Revert https://crrev.com/c/3221041 to re-enable this
 // DCHECK on CrOS.
 #if !BUILDFLAG(IS_CHROMEOS)
-      DCHECK_EQ(
-          static_cast<unsigned>(TextIterator::RangeLength(range, Behavior())),
-          length)
+      DCHECK_EQ(TextIterator::RangeLength(range, Behavior()), length)
           << it->value << " " << range;
 #endif
       return length;

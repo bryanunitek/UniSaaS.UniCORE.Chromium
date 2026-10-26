@@ -11,7 +11,6 @@
 #include "base/time/time.h"
 #include "third_party/blink/public/platform/web_audio_latency_hint.h"
 #include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
-#include "third_party/blink/renderer/modules/webaudio/audio_context.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_destination_node.h"
 #include "third_party/blink/renderer/platform/audio/audio_callback_metric_reporter.h"
 #include "third_party/blink/renderer/platform/audio/audio_destination.h"
@@ -37,7 +36,6 @@ class MODULES_EXPORT RealtimeAudioDestinationHandler final
 
   // For AudioHandler.
   void Dispose() override;
-  AudioContext* Context() const override;
   void Initialize() override;
   void Uninitialize() override;
   void SetChannelCount(unsigned, ExceptionState&) override;
@@ -162,6 +160,8 @@ class MODULES_EXPORT RealtimeAudioDestinationHandler final
   // If true, attempt to update the echo cancellation reference the next time
   // the platform destination is started.
   bool update_echo_cancellation_on_next_start_ = false;
+
+  base::WeakPtr<RealtimeAudioDestinationHandler> weak_this_;
 
   base::WeakPtrFactory<RealtimeAudioDestinationHandler> weak_ptr_factory_{this};
 };

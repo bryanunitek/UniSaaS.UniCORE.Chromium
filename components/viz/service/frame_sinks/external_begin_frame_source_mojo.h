@@ -53,7 +53,6 @@ class VIZ_SERVICE_EXPORT ExternalBeginFrameSourceMojo
   // mojom::ExternalBeginFrameController implementation.
   void IssueExternalBeginFrame(
       const BeginFrameArgs& args,
-      bool force,
       base::OnceCallback<void(const BeginFrameAck&)> callback) override;
 
 #if BUILDFLAG(IS_MAC)
@@ -66,6 +65,10 @@ class VIZ_SERVICE_EXPORT ExternalBeginFrameSourceMojo
 
   const base::flat_set<FrameSinkId>& pending_frame_sinks_for_testing() const {
     return pending_frame_sinks_;
+  }
+
+  const std::optional<BeginFrameId>& original_frame_id_for_testing() const {
+    return original_frame_id_;
   }
 
  private:
@@ -100,11 +103,13 @@ class VIZ_SERVICE_EXPORT ExternalBeginFrameSourceMojo
   mojo::AssociatedReceiver<mojom::ExternalBeginFrameController> receiver_;
   mojo::AssociatedRemote<mojom::ExternalBeginFrameControllerClient>
       remote_client_;
-  // The frame source id as specified in BeginFrameArgs passed to
-  // IssueExternalBeginFrame. Note this is likely to be different from our
-  // source id, but this is what will be reported to FrameSinkObserver methods.
-  // This is only set after an external begin frame has actually been issued.
-  std::optional<uint64_t> original_source_id_;
+  // The frame id as specified in BeginFrameArgs passed to
+  // IssueExternalBeginFrame. Note its source id is likely to be different from
+  // our source id, but this is what will be reported to FrameSinkObserver
+  // methods. This is only set after an external begin frame has actually been
+  // issued. MaybeProduceFrameCallback() also builds its "display won't draw"
+  // nak from this.
+  std::optional<BeginFrameId> original_frame_id_;
 
   const bool wait_for_all_frame_sinks_;
 

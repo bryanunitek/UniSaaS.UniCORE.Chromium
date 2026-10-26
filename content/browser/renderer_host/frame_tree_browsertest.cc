@@ -11,17 +11,22 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_timeouts.h"
 #include "build/build_config.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
+#include "content/browser/renderer_host/ipc_utils.h"
 #include "content/browser/renderer_host/navigation_request.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/content_navigation_policy.h"
+#include "content/common/frame.mojom.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/dedicated_worker_service.h"
+#include "content/public/browser/document_user_data.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/page_user_data.h"
 #include "content/public/browser/site_isolation_policy.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
@@ -39,6 +44,7 @@
 #include "content/shell/common/shell_switches.h"
 #include "content/test/content_browser_test_utils_internal.h"
 #include "content/test/render_document_feature.h"
+#include "media/base/media_switches.h"
 #include "net/base/features.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/controllable_http_response.h"
@@ -607,6 +613,119 @@ IN_PROC_BROWSER_TEST_P(FrameTreeDiscardPendingNavigationTest,
   RenderFrameHostImplWrapper final_rfh(wc->GetPrimaryMainFrame());
   EXPECT_NE(initial_rfh.get(), final_rfh.get());
   EXPECT_EQ(new_url, root->current_url());
+}
+
+namespace {
+
+class TestDiscardPageUserData : public PageUserData<TestDiscardPageUserData> {
+ public:
+  ~TestDiscardPageUserData() override = default;
+
+ private:
+  explicit TestDiscardPageUserData(Page& page) : PageUserData(page) {}
+  friend PageUserData<TestDiscardPageUserData>;
+  PAGE_USER_DATA_KEY_DECL();
+};
+
+PAGE_USER_DATA_KEY_IMPL(TestDiscardPageUserData);
+
+class TestDiscardDocumentUserData
+    : public DocumentUserData<TestDiscardDocumentUserData> {
+ public:
+  ~TestDiscardDocumentUserData() override = default;
+
+ private:
+  explicit TestDiscardDocumentUserData(RenderFrameHost* rfh)
+      : DocumentUserData(rfh) {}
+  friend DocumentUserData<TestDiscardDocumentUserData>;
+  DOCUMENT_USER_DATA_KEY_DECL();
+};
+
+DOCUMENT_USER_DATA_KEY_IMPL(TestDiscardDocumentUserData);
+
+class SubframeDiscardNavigationObserver : public WebContentsObserver {
+ public:
+  SubframeDiscardNavigationObserver(WebContentsImpl* web_contents,
+                                    const GURL& expected_subframe_url)
+      : WebContentsObserver(web_contents),
+        web_contents_(web_contents),
+        expected_subframe_url_(expected_subframe_url) {}
+
+  void DidFinishNavigation(NavigationHandle* navigation_handle) override {
+    if (navigation_handle->GetURL() != expected_subframe_url_) {
+      return;
+    }
+    did_finish_subframe_navigation_ = true;
+    EXPECT_FALSE(navigation_handle->HasCommitted());
+    EXPECT_NE(nullptr, TestDiscardPageUserData::GetForPage(
+                           web_contents_->GetPrimaryPage()));
+    EXPECT_NE(nullptr, TestDiscardDocumentUserData::GetForCurrentDocument(
+                           web_contents_->GetPrimaryMainFrame()));
+  }
+
+  bool did_finish_subframe_navigation() const {
+    return did_finish_subframe_navigation_;
+  }
+
+ private:
+  raw_ptr<WebContentsImpl> web_contents_;
+  const GURL expected_subframe_url_;
+  bool did_finish_subframe_navigation_ = false;
+};
+
+}  // namespace
+
+// Regression test for crbug.com/568895475 and crbug.com/569705669. Ensures
+// that PageUserData and DocumentUserData attached to the primary page and main
+// frame remain valid when in-flight subframe navigations are aborted during
+// Discard() and while the tab remains in the discarded state.
+IN_PROC_BROWSER_TEST_P(
+    FrameTreeDiscardPendingNavigationTest,
+    DiscardPreservesUserDataDuringAndAfterSubframeNavigationReset) {
+  WebContentsImpl* wc = static_cast<WebContentsImpl*>(shell()->web_contents());
+  FrameTree& frame_tree = wc->GetPrimaryFrameTree();
+  FrameTreeNode* root = frame_tree.root();
+
+  const GURL original_url =
+      embedded_test_server()->GetURL("/frame_tree/top.html");
+  ASSERT_TRUE(NavigateToURL(shell(), original_url));
+  ASSERT_EQ(3UL, root->child_count());
+
+  TestDiscardPageUserData::CreateForPage(wc->GetPrimaryPage());
+  TestDiscardDocumentUserData::CreateForCurrentDocument(
+      wc->GetPrimaryMainFrame());
+  ASSERT_NE(nullptr, TestDiscardPageUserData::GetForPage(wc->GetPrimaryPage()));
+  ASSERT_NE(nullptr, TestDiscardDocumentUserData::GetForCurrentDocument(
+                         wc->GetPrimaryMainFrame()));
+
+  // Start a subframe navigation and pause it at request start so that
+  // ResetNavigationsForDiscard() synchronously aborts it during Discard().
+  const GURL subframe_url = embedded_test_server()->GetURL("/title1.html");
+  TestNavigationManager subframe_nav_manager(wc, subframe_url);
+  SubframeDiscardNavigationObserver discard_nav_observer(wc, subframe_url);
+  ASSERT_TRUE(BeginNavigateToURLFromRenderer(root->child_at(0), subframe_url));
+  ASSERT_TRUE(subframe_nav_manager.WaitForRequestStart());
+
+  DiscardFrameTree(frame_tree);
+  EXPECT_TRUE(discard_nav_observer.did_finish_subframe_navigation());
+  ASSERT_TRUE(subframe_nav_manager.WaitForNavigationFinished());
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return 0u == root->child_count(); }));
+
+  // While the tab is discarded, the primary PageImpl and RenderFrameHostImpl
+  // remain active, so PageUserData and DocumentUserData must still be present.
+  EXPECT_TRUE(root->was_discarded());
+  EXPECT_NE(nullptr, TestDiscardPageUserData::GetForPage(wc->GetPrimaryPage()));
+  EXPECT_NE(nullptr, TestDiscardDocumentUserData::GetForCurrentDocument(
+                         wc->GetPrimaryMainFrame()));
+
+  // Reloading the discarded tab commits a new document/page and clears the old
+  // user data.
+  wc->GetController().LoadIfNecessary();
+  EXPECT_TRUE(WaitForLoadStop(wc));
+  EXPECT_EQ(nullptr, TestDiscardPageUserData::GetForPage(wc->GetPrimaryPage()));
+  EXPECT_EQ(nullptr, TestDiscardDocumentUserData::GetForCurrentDocument(
+                         wc->GetPrimaryMainFrame()));
 }
 
 // Asserts that a process pinned with a keep-alive ref hosting only discarded
@@ -1529,6 +1648,46 @@ class CrossProcessFrameTreeBrowserTest : public ContentBrowserTest {
   }
 };
 
+IN_PROC_BROWSER_TEST_F(CrossProcessFrameTreeBrowserTest,
+                       DiscardedPageTerminatesOOPIFProcessImmediately) {
+  WebContentsImpl* wc = static_cast<WebContentsImpl*>(shell()->web_contents());
+  FrameTree& frame_tree = wc->GetPrimaryFrameTree();
+
+  // 1. Navigate to a page with a cross-site iframe.
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(b)"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  FrameTreeNode* root = frame_tree.root();
+  ASSERT_EQ(1U, root->child_count());
+
+  // 2. Ensure they are in different processes.
+  RenderProcessHost* oopif_process =
+      root->child_at(0)->current_frame_host()->GetProcess();
+  EXPECT_NE(root->current_frame_host()->GetProcess(), oopif_process);
+
+  // 3. Watch for the OOPIF process to exit.
+  RenderProcessHostWatcher process_exit_observer(
+      oopif_process, RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
+
+  // Ensure the subframe has a pagehide handler and a long unload timeout so
+  // that the test times out if the timeout bypass logic does not work.
+  RenderFrameHostImpl* subframe_rfh = root->child_at(0)->current_frame_host();
+  EXPECT_TRUE(
+      ExecJs(subframe_rfh, "window.addEventListener('pagehide', () => {});"));
+  subframe_rfh->SetSubframeUnloadTimeoutForTesting(
+      TestTimeouts::action_max_timeout());
+
+  // 4. Discard the frame tree.
+  frame_tree.Discard();
+  EXPECT_TRUE(root->was_discarded());
+
+  // Wait for the OOPIF process to exit. With the shutdown and unload timeouts
+  // bypassed on discard, this should exit immediately instead of timing out.
+  process_exit_observer.Wait();
+  EXPECT_TRUE(process_exit_observer.did_exit_normally());
+}
+
 // Ensure that we can complete a cross-process subframe navigation.
 IN_PROC_BROWSER_TEST_F(CrossProcessFrameTreeBrowserTest,
                        CreateCrossProcessSubframeProxies) {
@@ -1963,6 +2122,118 @@ IN_PROC_BROWSER_TEST_F(CrossProcessFrameTreeBrowserTest,
 
   EXPECT_FALSE(root->HasStickyUserActivation());
   EXPECT_FALSE(root->HasTransientUserActivation());
+}
+
+class PictureInPictureFrameTreeBrowserTest
+    : public CrossProcessFrameTreeBrowserTest {
+ public:
+  PictureInPictureFrameTreeBrowserTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {blink::features::kDocumentPictureInPictureUserActivation,
+         media::kDocumentPictureInPictureNavigation},
+        {});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Tests that user activation in a document picture-in-picture window only
+// propagates to the opener window when the activated frame is same-origin with
+// the opener's main frame.
+IN_PROC_BROWSER_TEST_F(PictureInPictureFrameTreeBrowserTest,
+                       UserActivationOpenerPropagationSameOriginOnly) {
+  // Load an a.com page that embeds a cross-origin b.com subframe.
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(b)"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  WebContentsImpl* opener_contents =
+      static_cast<WebContentsImpl*>(shell()->web_contents());
+  FrameTreeNode* opener_root = opener_contents->GetPrimaryFrameTree().root();
+  ASSERT_EQ(1U, opener_root->child_count());
+  FrameTreeNode* opener_child = opener_root->child_at(0);
+  ASSERT_FALSE(
+      opener_root->current_frame_host()
+          ->GetLastCommittedOrigin()
+          .IsSameOriginWith(
+              opener_child->current_frame_host()->GetLastCommittedOrigin()));
+
+  // Create a picture-in-picture window whose opener is the b.com subframe so
+  // that the picture-in-picture opener resolves to the embedding a.com page.
+  WebContents::CreateParams create_params(
+      opener_contents->GetBrowserContext(),
+      opener_child->current_frame_host()->GetSiteInstance());
+  create_params.picture_in_picture_options =
+      blink::mojom::PictureInPictureWindowOptions();
+  std::unique_ptr<WebContentsImpl> pip_contents =
+      WebContentsImpl::CreateWithOpener(create_params,
+                                        opener_child->current_frame_host());
+  ASSERT_EQ(&opener_contents->GetPrimaryFrameTree(),
+            pip_contents->GetDocumentPictureInPictureOpenerFrameTree());
+
+  // Navigate the picture-in-picture window to a b.com document so that its
+  // main frame is cross-origin with the opener's main frame.
+  GURL cross_origin_url(
+      embedded_test_server()->GetURL("b.com", "/title1.html"));
+  EXPECT_TRUE(NavigateToURL(pip_contents.get(), cross_origin_url));
+  FrameTreeNode* pip_root = pip_contents->GetPrimaryFrameTree().root();
+  ASSERT_FALSE(
+      pip_root->current_frame_host()->GetLastCommittedOrigin().IsSameOriginWith(
+          opener_root->current_frame_host()->GetLastCommittedOrigin()));
+
+  EXPECT_FALSE(opener_root->HasStickyUserActivation());
+  EXPECT_FALSE(opener_root->HasTransientUserActivation());
+
+  // Activating the cross-origin picture-in-picture main frame must not
+  // propagate to the opener.
+  EXPECT_TRUE(pip_root->UpdateUserActivationState(
+      blink::mojom::UserActivationUpdateType::kNotifyActivation,
+      blink::mojom::UserActivationNotificationType::kTest));
+  EXPECT_TRUE(pip_root->HasStickyUserActivation());
+  EXPECT_TRUE(pip_root->HasTransientUserActivation());
+  EXPECT_FALSE(opener_root->HasStickyUserActivation());
+  EXPECT_FALSE(opener_root->HasTransientUserActivation());
+
+  // Navigate the picture-in-picture window to a same-origin a.com document and
+  // verify that activation does propagate to the opener.
+  GURL same_origin_url(embedded_test_server()->GetURL("a.com", "/title1.html"));
+  EXPECT_TRUE(NavigateToURL(pip_contents.get(), same_origin_url));
+  pip_root = pip_contents->GetPrimaryFrameTree().root();
+  ASSERT_TRUE(
+      pip_root->current_frame_host()->GetLastCommittedOrigin().IsSameOriginWith(
+          opener_root->current_frame_host()->GetLastCommittedOrigin()));
+
+  EXPECT_TRUE(pip_root->UpdateUserActivationState(
+      blink::mojom::UserActivationUpdateType::kNotifyActivation,
+      blink::mojom::UserActivationNotificationType::kTest));
+  EXPECT_TRUE(opener_root->HasStickyUserActivation());
+  EXPECT_TRUE(opener_root->HasTransientUserActivation());
+}
+
+IN_PROC_BROWSER_TEST_F(PictureInPictureFrameTreeBrowserTest,
+                       VerifyCreateNewWindowParamsInvalidPipOptions) {
+  EXPECT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL("a.com", "/title1.html")));
+
+  RenderFrameHostImpl* rfh = static_cast<RenderFrameHostImpl*>(
+      shell()->web_contents()->GetPrimaryMainFrame());
+
+  // Create invalid params: NEW_POPUP with pip_options.
+  mojom::CreateNewWindowParamsPtr params = mojom::CreateNewWindowParams::New();
+  params->disposition = WindowOpenDisposition::kNewPopup;
+  params->pip_options = blink::mojom::PictureInPictureWindowOptions::New();
+
+  RenderProcessHostWatcher crash_observer(
+      rfh->GetProcess(), RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
+
+  // Call the validation function. It should return false and trigger bad
+  // message.
+  EXPECT_FALSE(VerifyCreateNewWindowParams(*rfh, *params));
+
+  // The process should be terminated.
+  crash_observer.Wait();
+  EXPECT_FALSE(crash_observer.did_exit_normally());
 }
 
 class BrowserContextGroupSwapFrameTreeBrowserTest : public ContentBrowserTest {

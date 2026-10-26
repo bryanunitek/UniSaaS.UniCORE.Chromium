@@ -11,9 +11,7 @@
 #include "device/fido/attestation_statement_formats.h"
 #include "device/fido/attested_credential_data.h"
 #include "device/fido/authenticator_data.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/large_blob.h"
-#include "device/fido/p256_public_key.h"
 #include "device/fido/public/fido_constants.h"
 #include "device/fido/public_key.h"
 
@@ -25,7 +23,7 @@ AuthenticatorMakeCredentialResponse::CreateFromU2fRegisterResponse(
     std::optional<FidoTransportProtocol> transport_used,
     base::span<const uint8_t, kRpIdHashLength> relying_party_id_hash,
     base::span<const uint8_t> u2f_data) {
-  auto public_key = P256PublicKey::ExtractFromU2fRegistrationResponse(
+  auto public_key = PublicKey::FromU2fRegistrationResponse(
       static_cast<int32_t>(CoseAlgorithmIdentifier::kEs256), u2f_data);
   if (!public_key)
     return std::nullopt;
@@ -81,7 +79,7 @@ AuthenticatorMakeCredentialResponse::~AuthenticatorMakeCredentialResponse() =
 
 std::vector<uint8_t>
 AuthenticatorMakeCredentialResponse::GetCBOREncodedAttestationObject() const {
-  return cbor::Writer::Write(AsCBOR(attestation_object))
+  return cbor::Writer::Write(attestation_object.AsCBOR())
       .value_or(std::vector<uint8_t>());
 }
 
@@ -140,7 +138,7 @@ std::vector<uint8_t> AsCTAPStyleCBORBytes(
   if (!unsigned_extension_outputs.empty()) {
     map.emplace(6, std::move(unsigned_extension_outputs));
   }
-  auto encoded_bytes = cbor::Writer::Write(cbor::Value(std::move(map)));
+  auto encoded_bytes = cbor::Writer::Write(map);
   DCHECK(encoded_bytes);
   return std::move(*encoded_bytes);
 }

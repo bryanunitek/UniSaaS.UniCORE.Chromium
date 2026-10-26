@@ -73,6 +73,7 @@ include_rules = [
   "+content/public/test/android/javatests",
 
   "+services/device/public/java",
+  "+device/gamepad/android/java",
 ]
 
 specific_include_rules = {
@@ -97,9 +98,6 @@ specific_include_rules = {
   "DigitalCredentialProviderTest\\.java": [
     "+content/public/android/java/src/org/chromium/content/browser/webid/IdentityCredentialsDelegate.java",
   ],
-  "Fido2CredentialRequestTest.java": [
-    "+content/public/android/java/src/org/chromium/content/browser/ClientDataJsonImpl.java",
-  ],
   "PageInfoPopupTest\\.java": [
     "+content/public/android/java/src/org/chromium/content_public/common/ContentSwitches.java",
   ],
@@ -107,6 +105,9 @@ specific_include_rules = {
     "+chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/ButtonData.java",
   ],
   "MessageTest\\.java": [
+    "+content/public/android/java/src/org/chromium/content/browser/accessibility/WebContentsAccessibilityImpl.java",
+  ],
+  "JavascriptTabModalDialogTest\\.java": [
     "+content/public/android/java/src/org/chromium/content/browser/accessibility/WebContentsAccessibilityImpl.java",
   ]
 }

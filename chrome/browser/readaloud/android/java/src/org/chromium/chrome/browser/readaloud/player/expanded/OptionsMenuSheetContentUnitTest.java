@@ -15,6 +15,7 @@ import android.app.Activity;
 import android.view.View;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -24,7 +25,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.readaloud.player.InteractionHandler;
@@ -39,7 +39,6 @@ import java.util.List;
 
 /** Unit tests for {@link OptionsMenuSheetContent}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class OptionsMenuSheetContentUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private BottomSheetController mBottomSheetController;
@@ -60,6 +59,7 @@ public class OptionsMenuSheetContentUnitTest {
                 new OptionsMenuSheetContent(
                         mActivity, mBottomSheetContent, mBottomSheetController, mModel);
         mMenu = mContent.getMenuForTesting();
+        mActivity.setContentView(mContent.getContentView());
     }
 
     @Test
@@ -102,15 +102,18 @@ public class OptionsMenuSheetContentUnitTest {
         // Click
         mContent.getMenuForTesting()
                 .getItem(OptionsMenuSheetContent.Item.VOICE)
-                .getChildAt(0)
+                .findViewById(R.id.readaloud_menu_item_row)
                 .performClick();
 
         assertEquals(View.VISIBLE, voiceMenu.getVisibility());
 
         // Skip to the end of the show animation
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false);
         mContent.getVoiceMenuShowAnimationForTesting().end();
         assertEquals(-mMenu.getWidth(), (int) mMenu.getTranslationX());
         assertEquals(0, (int) voiceMenu.getTranslationX());
+        assertEquals(View.INVISIBLE, mMenu.getVisibility());
+        assertTrue(voiceMenu.findViewById(R.id.readaloud_menu_back).hasFocus());
     }
 
     @Test
@@ -135,21 +138,27 @@ public class OptionsMenuSheetContentUnitTest {
         // Click
         mContent.getMenuForTesting()
                 .getItem(OptionsMenuSheetContent.Item.VOICE)
-                .getChildAt(0)
+                .findViewById(R.id.readaloud_menu_item_row)
                 .performClick();
 
         assertEquals(View.VISIBLE, voiceMenu.getVisibility());
 
         // Skip to the end of the show animation
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false);
         mContent.getVoiceMenuShowAnimationForTesting().end();
         assertEquals(-mMenu.getWidth(), (int) mMenu.getTranslationX());
         assertEquals(0, (int) voiceMenu.getTranslationX());
+        assertEquals(View.INVISIBLE, mMenu.getVisibility());
+        assertTrue(voiceMenu.findViewById(R.id.readaloud_menu_back).hasFocus());
 
         // Hide on back press
         mContent.onBackPressed();
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false);
         mContent.getVoiceMenuShowAnimationForTesting().end();
         assertEquals(mMenu.getWidth(), (int) voiceMenu.getTranslationX());
         assertEquals(View.GONE, voiceMenu.getVisibility());
         assertEquals(0, (int) mMenu.getTranslationX());
+        assertEquals(View.VISIBLE, mMenu.getVisibility());
+        assertTrue(mContent.getMenuForTesting().findViewById(R.id.readaloud_menu_back).hasFocus());
     }
 }

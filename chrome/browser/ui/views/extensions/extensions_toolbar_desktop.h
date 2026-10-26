@@ -30,7 +30,7 @@
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/views/widget/widget_observer.h"
 
-class Browser;
+class BrowserWindowInterface;
 class ExtensionsToolbarButton;
 class ToolbarActionViewModel;
 class ExtensionsMenuCoordinator;
@@ -41,7 +41,6 @@ class ExtensionsMenuCoordinator;
 class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
                                  public ExtensionsContainerViews,
                                  public ToolbarActionView::Delegate,
-                                 public views::WidgetObserver,
                                  public ExtensionsToolbarViewModel::Delegate,
                                  public ExtensionsToolbarViewModel::Observer {
   METADATA_HEADER(ExtensionsToolbarDesktop, ToolbarIconContainerView)
@@ -85,7 +84,7 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
   }
 
   explicit ExtensionsToolbarDesktop(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       DisplayMode display_mode = DisplayMode::kNormal);
   ExtensionsToolbarDesktop(const ExtensionsToolbarDesktop&) = delete;
   ExtensionsToolbarDesktop& operator=(const ExtensionsToolbarDesktop&) = delete;
@@ -139,12 +138,6 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
   // Get the view corresponding to the extension |id|, if any.
   ToolbarActionView* GetViewForId(const std::string& id);
 
-  // Pop out and show the extension corresponding to |extension_id|, then show
-  // the Widget when the icon is visible. If the icon is already visible the
-  // action will be posted immediately (not run synchronously).
-  void ShowWidgetForExtension(views::Widget* widget,
-                              const std::string& extension_id);
-
   // Check if the extensions menu is showing.
   // TODO(crbug.com/40811196): This method will be removed once extensions menu
   // under kExtensionsMenuAccessControl feature is fully rolled out and we can
@@ -173,9 +166,8 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
     return close_side_panel_button_;
   }
 
-  // Called when the side panel state has changed for an extensions side panel
-  // to pop out button reflecting the side panel being open.
-  void UpdateSidePanelState(bool is_active);
+  // ExtensionsContainerViews:
+  void UpdateSidePanelState(bool is_active) override;
 
   // ToolbarIconContainerView:
   void UpdateAllIcons() override;
@@ -193,11 +185,14 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
 
   // ExtensionsContainerViews:
   std::optional<extensions::ExtensionId> GetPoppedOutActionId() const override;
+  bool IsVisible() const override;
   bool IsActionVisibleOnToolbar(const std::string& action_id) const override;
   void UndoPopOut() override;
   void SetPopupOwner(ToolbarActionViewModel* popup_owner) override;
   void PopOutAction(const extensions::ExtensionId& action_id,
                     base::OnceClosure closure) override;
+  void ShowWidgetForExtension(views::Widget* widget,
+                              const std::string& extension_id) override;
   void CollapseConfirmation() override;
   void ShowContextMenuAsFallback(
       const extensions::ExtensionId& action_id) override;
@@ -207,6 +202,8 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
   views::FocusManager* GetFocusManagerForAccelerator() override;
   views::BubbleAnchor GetReferenceButtonForPopup(
       const extensions::ExtensionId& action_id) override;
+  views::BubbleAnchor GetExtensionsButtonAnchor() override;
+  views::BubbleBorder::Arrow GetPopupArrow() const override;
 
   // ToolbarActionView::Delegate:
   content::WebContents* GetCurrentWebContents() override;
@@ -247,6 +244,8 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
   void OnRequestAccessButtonParamsChanged(
       content::WebContents* web_contents) override;
   void OnToolbarControlStateUpdated() override;
+  void ShowPinnedByDefaultIPH(
+      const extensions::ExtensionId& extension_id) override;
 
  private:
   friend class ToolbarActionHoverCardBubbleViewUITest;
@@ -345,7 +344,7 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
   // from navigations.
   base::WeakPtr<content::WebContents> active_web_contents_;
 
-  const raw_ptr<Browser> browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
   const raw_ptr<ToolbarActionsModel> model_;
 
   DisplayMode display_mode_;

@@ -268,16 +268,16 @@ class CastWebContents : public mojom::CastWebContents {
   // Utility Methods
   // ===========================================================================
 
+  // Returns whether |feature_name| is enabled in the set of renderer features
+  // configured for this CastWebContents via AddRendererFeatures().
+  virtual bool HasRendererFeature(std::string_view feature_name) const = 0;
+
   // Asks the CastWebContents to bind an interface receiver using either its
   // registry or any registered InterfaceProvider.
   virtual bool TryBindReceiver(mojo::GenericPendingReceiver& receiver) = 0;
 
   // Locally-registered interfaces which are exposed to render frames.
   virtual InterfaceBundle* local_interfaces() = 0;
-
-  // Returns true if WebSQL database is configured enabled for this
-  // CastWebContents.
-  virtual bool is_websql_enabled() = 0;
 
   // Returns true if mixer audio is enabled.
   virtual bool is_mixer_audio_enabled() = 0;

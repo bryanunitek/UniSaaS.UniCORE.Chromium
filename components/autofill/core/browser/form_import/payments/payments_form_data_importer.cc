@@ -21,15 +21,18 @@
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/iban.h"
+#include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
+#include "components/autofill/core/browser/metrics/payments/wallet_reminder_notice_metrics.h"
 #include "components/autofill/core/browser/payments/credit_card_save_manager.h"
 #include "components/autofill/core/browser/payments/iban_save_manager.h"
 #include "components/autofill/core/browser/payments/mandatory_reauth_manager.h"
 #include "components/autofill/core/browser/payments/virtual_card_enrollment_flow.h"
 #include "components/autofill/core/browser/payments/virtual_card_enrollment_manager.h"
+#include "components/autofill/core/browser/payments/wallet_reminder_notice_manager.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "net/base/url_util.h"
@@ -102,9 +105,12 @@ PaymentsFormDataImporter::ExtractCreditCardFromForm(const FormStructure& form) {
   auto extract_if_credit_card_field = [&result,
                                        app_locale](const AutofillField& field) {
     std::u16string value = [&field] {
-      if (field.Type().GetCreditCardType() == FieldType::CREDIT_CARD_NUMBER) {
-        // Credit card numbers are sometimes obfuscated on form submission.
-        // Therefore, we give preference to the user input over the field value.
+      if (field.Type().GetCreditCardType() == FieldType::CREDIT_CARD_NUMBER ||
+          field.Type().GetCreditCardType() ==
+              FieldType::CREDIT_CARD_VERIFICATION_CODE) {
+        // Credit card numbers and CVCs are sometimes obfuscated on form
+        // submission. Therefore, we give preference to the user input over the
+        // field value.
         std::u16string user_input = field.user_input();
         base::TrimWhitespace(user_input, base::TRIM_ALL);
         if (!user_input.empty()) {
@@ -121,11 +127,11 @@ PaymentsFormDataImporter::ExtractCreditCardFromForm(const FormStructure& form) {
         !field.Type().GetGroups().contains(FieldTypeGroup::kCreditCard)) {
       return;
     }
-    std::u16string old_value = result.card.GetInfo(field.Type(), app_locale);
+    const FieldType field_type = field.Type().GetCreditCardType();
+    std::u16string old_value = result.card.GetInfo(field_type, app_locale);
     if (field.form_control_type() == FormControlType::kInputMonth) {
       // If |field| is an HTML5 month input, handle it as a special case.
-      DCHECK_EQ(CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR,
-                field.Type().GetCreditCardType());
+      DCHECK_EQ(CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR, field_type);
       result.card.SetInfoForMonthInputType(value);
     } else {
       // If the credit card number offset is within the range of the old value,
@@ -138,7 +144,7 @@ PaymentsFormDataImporter::ExtractCreditCardFromForm(const FormStructure& form) {
         value = old_value.replace(field.credit_card_number_offset(),
                                   value.size(), value);
       }
-      bool saved = result.card.SetInfo(field.Type(), value, app_locale);
+      bool saved = result.card.SetInfo(field_type, value, app_locale);
       if (!saved && field.IsSelectElement()) {
         // Saving with the option text (here `value`) may fail for the
         // expiration month. Attempt to save with the option value. First find
@@ -147,16 +153,16 @@ PaymentsFormDataImporter::ExtractCreditCardFromForm(const FormStructure& form) {
         if (auto it =
                 std::ranges::find(field.options(), value, &SelectOption::text);
             it != field.options().end()) {
-          result.card.SetInfo(field.Type(), it->value, app_locale);
+          result.card.SetInfo(field_type, it->value, app_locale);
         }
       }
     }
 
-    std::u16string new_value = result.card.GetInfo(field.Type(), app_locale);
+    std::u16string new_value = result.card.GetInfo(field_type, app_locale);
     // Skip duplicate field check if the field is a split credit card
     // number field.
     const bool skip_duplication_check =
-        field.Type().GetCreditCardType() == FieldType::CREDIT_CARD_NUMBER &&
+        field_type == FieldType::CREDIT_CARD_NUMBER &&
         field.credit_card_number_offset() > 0;
     result.has_duplicate_credit_card_field_type |=
         !skip_duplication_check && !old_value.empty() && old_value != new_value;
@@ -178,7 +184,9 @@ PaymentsFormDataImporter::ExtractCreditCardFromForm(const FormStructure& form) {
         }
         std::erase_if(fields, [&](const AutofillField* field) {
           return std::invoke(pred, *field) ||
-                 !result.card.GetInfo(field->Type(), app_locale).empty();
+                 !result.card
+                      .GetInfo(field->Type().GetCreditCardType(), app_locale)
+                      .empty();
         });
       };
 
@@ -310,31 +318,52 @@ bool PaymentsFormDataImporter::ProcessExtractedCreditCard(
     const std::optional<CreditCard>& extracted_credit_card,
     bool is_credit_card_upstream_enabled,
     ukm::SourceId ukm_source_id) {
-  if (!base::FeatureList::IsEnabled(
-          features::kAutofillPrioritizeSaveCardOverMandatoryReauth) &&
-      ProceedWithCardMandatoryReauthOptInIfApplicable()) {
-    return true;
-  }
-
   // All of following processing requires the extracted credit card to exist.
   if (!extracted_credit_card.has_value()) {
     return false;
   }
 
+  bool is_wallet_reminder_notice_eligible = false;
+  WalletReminderNoticeManager* wallet_reminder_notice_manager = nullptr;
+  if (base::FeatureList::IsEnabled(
+          features::kAutofillEnableWalletReminderNotice)) {
+    wallet_reminder_notice_manager =
+        client_->GetPaymentsAutofillClient()->GetWalletReminderNoticeManager();
+    is_wallet_reminder_notice_eligible =
+        wallet_reminder_notice_manager &&
+        wallet_reminder_notice_manager->IsWalletReminderNoticeEligible(
+            *extracted_credit_card);
+  }
+
   // If a virtual card was extracted from the form, we do not do anything with
-  // virtual cards beyond this point. If
-  // `kAutofillPrioritizeSaveCardOverMandatoryReauth` is enabled, try to offer
-  // mandatory re-auth before returning.
+  // virtual cards beyond this point. Try to offer mandatory re-auth or show the
+  // Wallet reminder notice before returning.
   if (credit_card_import_type_ ==
       PaymentsFormDataImporter::CreditCardImportType::kVirtualCard) {
-    return base::FeatureList::IsEnabled(
-               features::kAutofillPrioritizeSaveCardOverMandatoryReauth) &&
-           ProceedWithCardMandatoryReauthOptInIfApplicable();
+    if (ProceedWithCardMandatoryReauthOptInIfApplicable()) {
+      if (is_wallet_reminder_notice_eligible) {
+        autofill_metrics::LogWalletReminderNoticeShowResult(
+            autofill_metrics::WalletReminderNoticeShowResult::
+                kNotShownDueToMandatoryReauth,
+            WalletReminderNoticeManager::FlowType::kChromeDownstream);
+      }
+      return true;
+    } else if (is_wallet_reminder_notice_eligible) {
+      wallet_reminder_notice_manager->ShowWalletReminderNotice(
+          WalletReminderNoticeManager::FlowType::kChromeDownstream);
+    }
+    return false;
   }
 
   // Do not offer upload save for google domain.
   if (net::HasGoogleHost(submitted_form.main_frame_origin().GetURL()) &&
       is_credit_card_upstream_enabled) {
+    // The Wallet reminder notice can still be applicable even for Google
+    // domains.
+    if (is_wallet_reminder_notice_eligible) {
+      wallet_reminder_notice_manager->ShowWalletReminderNotice(
+          WalletReminderNoticeManager::FlowType::kChromeDownstream);
+    }
     return false;
   }
 
@@ -345,6 +374,12 @@ bool PaymentsFormDataImporter::ProcessExtractedCreditCard(
       virtual_card_enrollment_manager->ShouldOfferVirtualCardEnrollment(
           *extracted_credit_card, context.fetched_card_instrument_id,
           context.card_was_fetched_from_cache)) {
+    if (is_wallet_reminder_notice_eligible) {
+      autofill_metrics::LogWalletReminderNoticeShowResult(
+          autofill_metrics::WalletReminderNoticeShowResult::
+              kNotShownDueToVcnEnrollment,
+          WalletReminderNoticeManager::FlowType::kChromeDownstream);
+    }
     virtual_card_enrollment_manager->InitVirtualCardEnroll(
         *extracted_credit_card, VirtualCardEnrollmentSource::kDownstream,
         base::BindOnce(
@@ -357,14 +392,30 @@ bool PaymentsFormDataImporter::ProcessExtractedCreditCard(
   if (credit_card_save_manager_->ProceedWithSavingIfApplicable(
           submitted_form, *extracted_credit_card, credit_card_import_type_,
           is_credit_card_upstream_enabled, ukm_source_id)) {
+    if (is_wallet_reminder_notice_eligible) {
+      autofill_metrics::LogWalletReminderNoticeShowResult(
+          autofill_metrics::WalletReminderNoticeShowResult::
+              kNotShownDueToCardOrCvcSave,
+          WalletReminderNoticeManager::FlowType::kChromeDownstream);
+    }
     return true;
   }
 
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillPrioritizeSaveCardOverMandatoryReauth) &&
-      ProceedWithCardMandatoryReauthOptInIfApplicable()) {
-    // Try to offer mandatory re-auth as the last step.
+  if (ProceedWithCardMandatoryReauthOptInIfApplicable()) {
+    // Try to offer mandatory re-auth as the second-to-last step.
+    if (is_wallet_reminder_notice_eligible) {
+      autofill_metrics::LogWalletReminderNoticeShowResult(
+          autofill_metrics::WalletReminderNoticeShowResult::
+              kNotShownDueToMandatoryReauth,
+          WalletReminderNoticeManager::FlowType::kChromeDownstream);
+    }
     return true;
+  }
+
+  // Try to show the Wallet reminder notice as the last step.
+  if (is_wallet_reminder_notice_eligible) {
+    wallet_reminder_notice_manager->ShowWalletReminderNotice(
+        WalletReminderNoticeManager::FlowType::kChromeDownstream);
   }
 
   return false;
@@ -436,10 +487,21 @@ PaymentsFormDataImporter::TryMatchingExistingServerCard(
           AutofillMetrics::MASKED_SERVER_CARD_EXPIRATION_DATE_MATCHED);
 
       // Return that we found a masked server card with matching last four
-      // digits and copy over the user entered CVC so that future processing
-      // logic check if CVC upload save should be offered.
+      // digits and copy over the user entered CVC and cardholder name (if
+      // missing on the server card) so that future processing logic can check
+      // if CVC upload save or cardholder name fix flow should be offered.
       CreditCard server_card_with_cvc = *server_card;
       server_card_with_cvc.set_cvc(candidate.cvc());
+      if (!server_card->HasNameOnCard() && candidate.HasNameOnCard()) {
+        std::u16string candidate_name =
+            candidate.GetInfo(CREDIT_CARD_NAME_FULL, client_->GetAppLocale());
+        if (IsValidNameOnCard(candidate_name) &&
+            base::FeatureList::IsEnabled(
+                features::kAutofillEnableCardholderNameFixFlow)) {
+          server_card_with_cvc.SetInfo(CREDIT_CARD_NAME_FULL, candidate_name,
+                                       client_->GetAppLocale());
+        }
+      }
 
       // If `credit_card_import_type_` was local card, then a local card was
       // extracted from the form. If a server card is now also extracted from

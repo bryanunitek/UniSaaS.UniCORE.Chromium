@@ -22,10 +22,9 @@
 // UI updater.
 @property(nonatomic, weak) id<PopupMenuUIUpdating> UIUpdater;
 
-// An integer whose value is matching the overflow_menu::Destination,
-// representing the destination on the overflow menu that should be highlighted.
-// Return nil if no destination is highlighted (default scenario).
-- (NSNumber*)highlightDestination;
+// Prepares the UI configuration and actions for any active IPH session before
+// the overflow menu is presented.
+- (void)prepareToShowIPHInOverflowMenu;
 
 // Alerts the help coordinator that the overflow menu opened with the given
 // view controller, so it can show any necessary IPH.
@@ -43,6 +42,18 @@
 // Displays the Reminder Notifications IPH bubble on the tools menu button, if
 // permitted by the Feature Engagement Tracker.
 - (void)displayPopupMenuTabRemindersIPH;
+
+// Displays an IPH bubble on the tools menu button for Level Up Password Checkup
+// walkthrough.
+- (void)showLevelUpPasswordCheckupWalkthroughIPH;
+
+// Displays an IPH bubble on the tools menu button for Level Up Payment Methods
+// walkthrough.
+- (void)showLevelUpPaymentMethodsWalkthroughIPH;
+
+// Displays an IPH bubble on the tools menu button for Level Up Quick Delete
+// walkthrough.
+- (void)showLevelUpQuickDeleteWalkthroughIPH;
 
 @end
 

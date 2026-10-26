@@ -15,8 +15,9 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/split_tab_menu_model.h"
 #include "chrome/browser/ui/tabs/split_tab_util.h"
@@ -25,6 +26,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/contents_web_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
@@ -61,6 +63,7 @@
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/controls/menu/submenu_view.h"
+#include "ui/views/interaction/view_focus_observer.h"
 #include "ui/webui/tracked_element/tracked_element_handler.h"
 #include "ui/webui/tracked_element/tracked_element_web_ui.h"
 #include "url/gurl.h"
@@ -135,6 +138,10 @@ class SplitTabButtonInteractiveTest
       features.push_back(::features::kWebUIReloadButton);
       features.push_back(::features::kWebUISplitTabsButton);
     }
+    // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox is
+    // enabled and then remove these.
+    features.push_back(omnibox::internal::kWebUIOmniboxPopup);
+    features.push_back(omnibox::internal::kWebUIOmniboxAimPopup);
     return features;
   }
 
@@ -169,8 +176,8 @@ class SplitTabButtonInteractiveTest
 
   auto UpdateSplitTabButtonPinState(bool should_pin) {
     return Do([=, this]() {
-      browser()->profile()->GetPrefs()->SetBoolean(prefs::kPinSplitTabButton,
-                                                   should_pin);
+      browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kPinSplitTabButton,
+                                                      should_pin);
     });
   }
 
@@ -270,7 +277,7 @@ class SplitTabButtonInteractiveTest
   auto WaitForTabCount(int expected_count) {
     return Steps(
         PollState(kTabCountState,
-                  [this]() { return browser()->tab_strip_model()->count(); }),
+                  [this]() { return browser()->GetTabStripModel()->count(); }),
         WaitForState(kTabCountState, expected_count),
         StopObservingState(kTabCountState));
   }
@@ -280,7 +287,7 @@ class SplitTabButtonInteractiveTest
         PollState(kSplitLayout,
                   [this]() {
                     TabStripModel* const tab_strip_model =
-                        browser()->tab_strip_model();
+                        browser()->GetTabStripModel();
                     return tab_strip_model
                         ->GetSplitData(
                             tab_strip_model->GetActiveTab()->GetSplit().value())
@@ -296,7 +303,7 @@ class SplitTabButtonInteractiveTest
         PollState(kSplitRatio,
                   [this]() {
                     TabStripModel* const tab_strip_model =
-                        browser()->tab_strip_model();
+                        browser()->GetTabStripModel();
                     return tab_strip_model
                         ->GetSplitData(
                             tab_strip_model->GetActiveTab()->GetSplit().value())
@@ -311,7 +318,7 @@ class SplitTabButtonInteractiveTest
     return CheckResult(
         [=, this]() {
           tabs::TabInterface* const tab =
-              browser()->tab_strip_model()->GetTabAtIndex(tab_index);
+              browser()->GetTabStripModel()->GetTabAtIndex(tab_index);
           return tab->IsSplit();
         },
         expected_split_state);
@@ -348,7 +355,7 @@ class SplitTabButtonInteractiveTest
   auto CheckSplitTabButtonPinState(bool should_pin) {
     return CheckResult(
         [=, this]() {
-          return browser()->profile()->GetPrefs()->GetBoolean(
+          return browser()->GetProfile()->GetPrefs()->GetBoolean(
               prefs::kPinSplitTabButton);
         },
         should_pin);
@@ -371,8 +378,9 @@ class SplitTabButtonInteractiveTest
         IDS_ACCNAME_SPLIT_TABS_TOOLBAR_BUTTON_PINNED);
   }
 
-  static std::u16string GetSplitTabsButtonEnabledName(Browser* browser) {
-    TabStripModel* const tab_strip_model = browser->tab_strip_model();
+  static std::u16string GetSplitTabsButtonEnabledName(
+      BrowserWindowInterface* browser) {
+    TabStripModel* const tab_strip_model = browser->GetTabStripModel();
     tabs::TabInterface* const active_tab = tab_strip_model->GetActiveTab();
     if (!active_tab || !active_tab->IsSplit()) {
       return l10n_util::GetStringUTF16(
@@ -444,9 +452,9 @@ class SplitTabButtonInteractiveTest
                 [](SplitTabButtonInteractiveTest* test,
                    const ui::TrackedElement* el) {
                   const bool is_split =
-                      test->browser()->tab_strip_model()->GetActiveTab() &&
+                      test->browser()->GetTabStripModel()->GetActiveTab() &&
                       test->browser()
-                          ->tab_strip_model()
+                          ->GetTabStripModel()
                           ->GetActiveTab()
                           ->IsSplit();
                   const ax::mojom::Role role =
@@ -600,7 +608,7 @@ IN_PROC_BROWSER_TEST_P(SplitTabButtonInteractiveTest, ButtonIconUpdates) {
       CheckSplitTabButtonIcon(features::IsRoundedIconsEnabled()
                                   ? kSplitSceneLeftIcon
                                   : kSplitSceneLeftOldIcon),
-      ObserveState(kActiveTabChanged, browser()->tab_strip_model()),
+      ObserveState(kActiveTabChanged, browser()->GetTabStripModel()),
       FocusInactiveTabInSplit(), WaitForState(kActiveTabChanged, true),
       StopObservingState(kActiveTabChanged),
       EnsurePresent(kToolbarSplitTabsToolbarButtonElementId),
@@ -608,7 +616,7 @@ IN_PROC_BROWSER_TEST_P(SplitTabButtonInteractiveTest, ButtonIconUpdates) {
                                   ? kSplitSceneRightIcon
                                   : kSplitSceneRightOldIcon),
       Do([&]() {
-        TabStripModel* tab_strip_model = browser()->tab_strip_model();
+        TabStripModel* tab_strip_model = browser()->GetTabStripModel();
         split_tabs::SplitTabId split =
             tab_strip_model->GetActiveTab()->GetSplit().value();
         tab_strip_model->UpdateSplitLayout(
@@ -618,7 +626,7 @@ IN_PROC_BROWSER_TEST_P(SplitTabButtonInteractiveTest, ButtonIconUpdates) {
       CheckSplitTabButtonIcon(features::IsRoundedIconsEnabled()
                                   ? kSplitSceneDownIcon
                                   : kSplitSceneDownOldIcon),
-      ObserveState(kActiveTabChanged, browser()->tab_strip_model()),
+      ObserveState(kActiveTabChanged, browser()->GetTabStripModel()),
       FocusInactiveTabInSplit(), WaitForState(kActiveTabChanged, true),
       EnsurePresent(kToolbarSplitTabsToolbarButtonElementId),
       CheckSplitTabButtonIcon(features::IsRoundedIconsEnabled()
@@ -632,8 +640,12 @@ IN_PROC_BROWSER_TEST_P(SplitTabButtonInteractiveTest, EnterSplitView) {
       WaitForShow(kToolbarSplitTabsToolbarButtonElementId),
       WaitForElementNonzeroSize(kToolbarSplitTabsToolbarButtonElementId),
       WaitForAXNode(), DoWaitForLayout(), WaitForTabCount(1),
+      ObserveState(
+          views::test::kCurrentFocusedViewId,
+          BrowserView::GetBrowserViewForBrowser(browser())->GetWidget()),
       ClickSplitTabButton(), WaitForTabCount(2), CheckTabInSplit(0, true),
-      CheckTabInSplit(1, true));
+      CheckTabInSplit(1, true),
+      WaitForState(views::test::kCurrentFocusedViewId, kOmniboxElementId));
 }
 
 IN_PROC_BROWSER_TEST_P(SplitTabButtonInteractiveTest, ToggleMenu) {
@@ -678,7 +690,7 @@ IN_PROC_BROWSER_TEST_P(SplitTabButtonInteractiveTest,
                          SplitTabMenuModel::kReversePositionMenuItem),
       WaitForHide(SplitTabMenuModel::kReversePositionMenuItem),
       // Change the focus and reopen the menu
-      ObserveState(kActiveTabChanged, browser()->tab_strip_model()),
+      ObserveState(kActiveTabChanged, browser()->GetTabStripModel()),
       FocusInactiveTabInSplit(), WaitForState(kActiveTabChanged, true),
       ClickSplitTabButton(),
       WaitForShow(SplitTabMenuModel::kReversePositionMenuItem),
@@ -706,7 +718,7 @@ IN_PROC_BROWSER_TEST_P(SplitTabButtonInteractiveTest, ReverseSplitTabPosition) {
       // Reversing the tab positions should move the active tab to the left.
       ClickSplitTabButton(),
       WaitForShow(SplitTabMenuModel::kReversePositionMenuItem),
-      ObserveState(kActiveTabChanged, browser()->tab_strip_model()),
+      ObserveState(kActiveTabChanged, browser()->GetTabStripModel()),
       SelectMenuItem(SplitTabMenuModel::kReversePositionMenuItem),
       WaitForState(kActiveTabChanged, true),
       CheckSplitTabButtonIcon(features::IsRoundedIconsEnabled()
@@ -714,7 +726,8 @@ IN_PROC_BROWSER_TEST_P(SplitTabButtonInteractiveTest, ReverseSplitTabPosition) {
                                   : kSplitSceneRightOldIcon),
       CheckResult(
           [this]() {
-            TabStripModel* const tab_strip_model = browser()->tab_strip_model();
+            TabStripModel* const tab_strip_model =
+                browser()->GetTabStripModel();
             return tab_strip_model
                 ->GetWebContentsAt(tab_strip_model->active_index())
                 ->GetURL();
@@ -728,7 +741,7 @@ IN_PROC_BROWSER_TEST_P(SplitTabButtonInteractiveTest, ToggleOrientation) {
       InstrumentTab(kWebContents1Id),
       AddInstrumentedTab(kWebContents2Id, GetTestUrl("/links.html")),
       SelectTab(kTabStripElementId, 0), EnterSplitView(0, 1), Do([this]() {
-        TabStripModel* const tab_strip_model = browser()->tab_strip_model();
+        TabStripModel* const tab_strip_model = browser()->GetTabStripModel();
         tab_strip_model->UpdateSplitRatio(
             tab_strip_model->GetActiveTab()->GetSplit().value(), 0.7);
       }),
@@ -844,7 +857,8 @@ IN_PROC_BROWSER_TEST_P(SplitTabButtonInteractiveTest, ExitSplit) {
       WaitForHide(kToolbarSplitTabsToolbarButtonElementId),
       CheckTabInSplit(0, false), CheckTabInSplit(1, false),
       CheckResult(
-          [this]() { return browser()->tab_strip_model()->active_index(); }, 0),
+          [this]() { return browser()->GetTabStripModel()->active_index(); },
+          0),
       CheckMenuHistogram(SplitTabMenuModel::CommandId::kExitSplit));
 }
 

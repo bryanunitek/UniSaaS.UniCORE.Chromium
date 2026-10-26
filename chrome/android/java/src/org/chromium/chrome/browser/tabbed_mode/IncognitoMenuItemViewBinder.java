@@ -4,7 +4,10 @@
 
 package org.chromium.chrome.browser.tabbed_mode;
 
+import android.text.TextUtils;
 import android.view.View;
+import android.widget.ImageView;
+import android.widget.TextView;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
@@ -15,7 +18,6 @@ import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter.Highl
 import org.chromium.components.browser_ui.widget.text.TextViewWithCompoundDrawables;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
-import org.chromium.ui.widget.ChromeImageView;
 
 /** A custom binder used to bind the incognito menu item. */
 @NullMarked
@@ -24,10 +26,15 @@ class IncognitoMenuItemViewBinder {
     public static void bind(PropertyModel model, View view, PropertyKey key) {
         if (key == AppMenuItemProperties.MENU_ITEM_ID) {
             int id = model.get(AppMenuItemProperties.MENU_ITEM_ID);
-            assert id == R.id.new_incognito_tab_menu_id || id == R.id.new_incognito_window_menu_id;
+            // Non-incognito menu items can be present if incognito is policy-forced.
+            // This is for visibility so the user knows the options are disabled intentionally.
+            assert id == R.id.new_incognito_tab_menu_id
+                    || id == R.id.new_incognito_window_menu_id
+                    || id == R.id.new_tab_menu_id
+                    || id == R.id.new_window_menu_id;
             view.setId(id);
         } else if (key == AppMenuItemProperties.MANAGED) {
-            ChromeImageView image = view.findViewById(R.id.trailing_icon);
+            ImageView image = view.findViewById(R.id.trailing_icon);
             if (model.get(AppMenuItemProperties.MANAGED)) {
                 image.setImageResource(R.drawable.ic_domain);
                 image.setVisibility(View.VISIBLE);
@@ -40,6 +47,11 @@ class IncognitoMenuItemViewBinder {
         } else if (key == AppMenuItemProperties.TITLE_CONDENSED) {
             CharSequence titleCondensed = model.get(AppMenuItemProperties.TITLE_CONDENSED);
             view.findViewById(R.id.title).setContentDescription(titleCondensed);
+        } else if (key == AppMenuItemProperties.SHORTCUT_TEXT) {
+            TextView shortcutView = view.findViewById(R.id.menu_item_shortcut);
+            CharSequence shortcutText = model.get(AppMenuItemProperties.SHORTCUT_TEXT);
+            shortcutView.setText(shortcutText);
+            shortcutView.setVisibility(TextUtils.isEmpty(shortcutText) ? View.GONE : View.VISIBLE);
         } else if (key == AppMenuItemProperties.ICON) {
             ((TextViewWithCompoundDrawables) view.findViewById(R.id.title))
                     .setCompoundDrawablesRelative(
@@ -51,6 +63,7 @@ class IncognitoMenuItemViewBinder {
             // Setting |title| to non-focusable will allow TalkBack highlighting the whole view
             // of the menu item, not just title text.
             title.setFocusable(false);
+            view.setEnabled(enabled);
             view.setFocusable(enabled);
         } else if (key == AppMenuItemProperties.HIGHLIGHTED) {
             if (model.get(AppMenuItemProperties.HIGHLIGHTED)) {

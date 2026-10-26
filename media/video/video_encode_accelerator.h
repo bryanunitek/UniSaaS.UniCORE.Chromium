@@ -232,6 +232,8 @@ class MEDIA_EXPORT VideoEncodeAccelerator {
     bool is_software_codec = false;
     std::vector<VideoPixelFormat> gpu_supported_pixel_formats;
     bool supports_gpu_shared_images = false;
+    std::optional<VideoChromaSampling> chroma_sampling;
+    std::optional<uint8_t> bit_depth;
   };
   using SupportedProfiles = std::vector<SupportedProfile>;
   using FlushCallback = base::OnceCallback<void(bool)>;
@@ -527,14 +529,19 @@ class MEDIA_EXPORT VideoEncodeAccelerator {
   virtual void SetSharedImageInterfaceForTesting(
       scoped_refptr<gpu::SharedImageInterface> sii);
 
+  // Returns a heuristic estimate of the output buffer size needed for a single
+  // encoded frame with the given parameters, derived from the uncompressed
+  // frame size and the bitrate with an overshoot allowance. It is an estimate,
+  // not a hard upper bound.
+  static size_t EstimateBitstreamBufferSize(const Bitrate& bitrate,
+                                            uint32_t framerate,
+                                            VideoPixelFormat input_format,
+                                            const gfx::Size& coded_size);
+
  protected:
   // Do not delete directly; use Destroy() or own it with a unique_ptr, which
   // will Destroy() it properly by default.
   virtual ~VideoEncodeAccelerator();
-
-  static size_t EstimateBitstreamBufferSize(const Bitrate& bitrate,
-                                            uint32_t framerate,
-                                            const gfx::Size& coded_size);
 };
 
 MEDIA_EXPORT bool operator==(const VideoEncodeAccelerator::SupportedProfile& l,

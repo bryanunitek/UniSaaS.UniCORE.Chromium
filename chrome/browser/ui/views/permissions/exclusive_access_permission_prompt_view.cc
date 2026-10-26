@@ -7,14 +7,11 @@
 #include <string_view>
 
 #include "chrome/browser/platform_util.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/url_identity.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_widget_sublevel.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/permissions/features.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/interaction/element_identifier.h"
@@ -22,6 +19,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/controls/button/md_text_button.h"
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(ExclusiveAccessPermissionPromptView,
                                       kMainViewId);
@@ -131,7 +129,7 @@ void ExclusiveAccessPermissionPromptView::Show() {
 }
 
 void ExclusiveAccessPermissionPromptView::CreateWidget() {
-  DCHECK(GetNativeWindow());
+  CHECK(GetNativeWindow(), base::NotFatalUntil::M162);
   views::Widget* widget = views::BubbleDialogDelegateView::CreateBubble(this);
 
   widget->SetZOrderSublevel(ChromeWidgetSublevel::kSublevelSecurity);

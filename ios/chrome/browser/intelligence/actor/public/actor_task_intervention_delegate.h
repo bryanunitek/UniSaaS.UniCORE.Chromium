@@ -7,6 +7,10 @@
 
 #import <Foundation/Foundation.h>
 
+#import "ios/chrome/browser/intelligence/actor/public/actor_types.h"
+
+@class ActorFormSuggestion;
+
 // The ActorTask intervention delegate protocol (1-to-1). Used for blocking
 // interventions (likely user facing prompts, but can be programmatic in
 // headless Actor mode).
@@ -14,6 +18,26 @@
 
 // TODO(crbug.com/501043031): Remove @optional when API stabilizes.
 @optional
+
+// Prompts the user to select a suggestion from the list. The completion handler
+// is called with the selected suggestion, or with `nil` if the user closed the
+// prompt without making a selection. `shouldStorePermission` means the
+// credential can be used in future calls to the tool.
+- (void)actorTask:(actor::ActorTaskId)taskID
+    selectFromSuggestions:(NSArray<ActorFormSuggestion*>*)suggestions
+        completionHandler:
+            (void (^)(ActorFormSuggestion* selectedSuggestion,
+                      BOOL shouldStorePermission))completionHandler;
+
+// Prompts the user with an intervention card containing a title,
+// subtitle, and action button text. The `completionHandler` is only invoked
+// when the user confirms the action to resume the task. To abort, the user
+// should stop the execution.
+- (void)actorTask:(actor::ActorTaskId)taskID
+    requestUserInterventionWithTitle:(NSString*)title
+                            subtitle:(NSString*)subtitle
+                          buttonText:(NSString*)buttonText
+                   completionHandler:(void (^)(void))completionHandler;
 
 @end
 

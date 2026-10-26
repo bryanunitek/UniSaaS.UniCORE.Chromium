@@ -14,6 +14,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "content/browser/web_contents/web_contents_view_drag_security_info.h"
 #include "ui/events/android/drag_event_android.h"
 #include "url/android/gurl_android.h"
 #include "url/gurl.h"
@@ -97,48 +98,65 @@ ScopedJavaLocalRef<jobject> ToJavaDropData(const DropData& drop_data) {
                                          jcustom_data, jeffect_allowed);
 }  // ToJavaDropData
 
-namespace {
-void PopulateCustomDataFromEvent(JNIEnv* env,
-                                 const ui::DragEventAndroid& event,
-                                 DropData* drop_data) {
-  if (event.GetJavaCustomData().is_null()) {
-    return;
+std::optional<base::Value> ParseCustomDataFromEvent(
+    const ui::DragEventAndroid& event) {
+  base::android::ScopedJavaLocalRef<jstring> j_custom_data =
+      event.GetJavaCustomData();
+  if (j_custom_data.is_null()) {
+    return std::nullopt;
   }
+  JNIEnv* env = AttachCurrentThread();
   std::string custom_data_json =
-      base::android::ConvertJavaStringToUTF8(env, event.GetJavaCustomData());
+      base::android::ConvertJavaStringToUTF8(env, j_custom_data);
   if (custom_data_json.empty()) {
-    return;
+    return std::nullopt;
   }
   std::optional<base::Value> value =
-      base::JSONReader::Read(custom_data_json, 0);
+      base::JSONReader::Read(custom_data_json, base::JSON_PARSE_RFC);
   if (!value || !value->is_dict()) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+namespace {
+void PopulateCustomDataFromEvent(const ui::DragEventAndroid& event,
+                                 DropData* drop_data) {
+  std::optional<base::Value> value = ParseCustomDataFromEvent(event);
+  if (!value) {
     return;
   }
-  const base::DictValue* dict = value->GetIfDict();
-  for (auto item : *dict) {
-    const std::string* str = item.second.GetIfString();
-    if (!str) {
+  for (auto item : value->GetDict()) {
+    if (!item.second.is_string()) {
       continue;
     }
     drop_data->custom_data.emplace(base::UTF8ToUTF16(item.first),
-                                   base::UTF8ToUTF16(*str));
+                                   base::UTF8ToUTF16(item.second.GetString()));
   }
 }
 }  // namespace
 
-void PopulateDropDataFromEvent(const ui::DragEventAndroid& event,
-                               DropData* drop_data) {
+void PopulateDropDataFromEvent(
+    const ui::DragEventAndroid& event,
+    const WebContentsViewDragSecurityInfo& drag_security_info,
+    DropData* drop_data) {
   JNIEnv* env = AttachCurrentThread();
 
-  std::vector<std::vector<std::string>> filenames;
-  if (!event.GetJavaFilenames().is_null()) {
-    base::android::Java2dStringArrayTo2dStringVector(
-        env, event.GetJavaFilenames(), &filenames);
-  }
-  for (const auto& info : filenames) {
-    CHECK_EQ(info.size(), 2u);
-    drop_data->filenames.emplace_back(base::FilePath(info[0]),
-                                      base::FilePath(info[1]));
+  // If the image is not accessible from the frame, it means the drag contains a
+  // cross-origin image or otherwise restricted file data. To prevent this data
+  // from leaking to the renderer, we must not populate `filenames` or any
+  // future file-related fields.
+  if (drag_security_info.IsImageAccessibleFromFrame()) {
+    std::vector<std::vector<std::string>> filenames;
+    if (!event.GetJavaFilenames().is_null()) {
+      base::android::Java2dStringArrayTo2dStringVector(
+          env, event.GetJavaFilenames(), &filenames);
+    }
+    for (const auto& info : filenames) {
+      CHECK_EQ(info.size(), 2u);
+      drop_data->filenames.emplace_back(base::FilePath(info[0]),
+                                        base::FilePath(info[1]));
+    }
   }
 
   if (!event.GetJavaText().is_null()) {
@@ -155,7 +173,7 @@ void PopulateDropDataFromEvent(const ui::DragEventAndroid& event,
   }
 
   // Handle custom data.
-  PopulateCustomDataFromEvent(env, event, drop_data);
+  PopulateCustomDataFromEvent(event, drop_data);
 
   // Handle effectAllowed.
   if (!event.GetJavaEffectAllowed().is_null()) {

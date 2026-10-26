@@ -5,6 +5,7 @@
 #ifndef UI_ACCESSIBILITY_AX_TREE_MANAGER_H_
 #define UI_ACCESSIBILITY_AX_TREE_MANAGER_H_
 
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "ui/accessibility/ax_event_generator.h"
 #include "ui/accessibility/ax_export.h"
@@ -112,7 +113,16 @@ class AX_EXPORT AXTreeManager : public AXTreeObserver {
   // If this tree has a parent tree, returns the node in the parent tree that
   // hosts the current tree. Returns nullptr if this tree doesn't have a parent
   // tree.
+  //
+  // The host may be ignored. Use `GetUnignoredParentNodeFromParentTree` when
+  // the caller needs a node of the unignored tree.
   virtual AXNode* GetParentNodeFromParentTree() const;
+
+  // Same as `GetParentNodeFromParentTree`, except that an ignored host gives
+  // its own unignored parent. An ignored node never stands in the unignored
+  // tree, thus the root of this tree takes the place of such a host and shares
+  // the unignored parent of that host.
+  AXNode* GetUnignoredParentNodeFromParentTree() const;
 
   void Initialize(const AXTreeUpdate& initial_tree);
 
@@ -177,6 +187,8 @@ class AX_EXPORT AXTreeManager : public AXTreeObserver {
   // attributes accordingly when the parent connection changes.
   virtual void UpdateAttributesOnParent(AXNode* parent) {}
 
+  base::WeakPtr<AXTreeManager> GetWeakPtr();
+
  private:
   // True if this platform can access platform nodes.
   const bool is_platform_tree_manager_ = false;
@@ -213,6 +225,8 @@ class AX_EXPORT AXTreeManager : public AXTreeObserver {
   // destructors for non-static member fields are called in the reverse order of
   // declaration, do not move this member above other members.
   base::ScopedObservation<AXTree, AXTreeObserver> tree_observation_{this};
+
+  base::WeakPtrFactory<AXTreeManager> weak_ptr_factory_{this};
 };
 
 }  // namespace ui

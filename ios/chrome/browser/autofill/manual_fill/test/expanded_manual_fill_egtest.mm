@@ -6,9 +6,10 @@
 
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
-#import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #import "components/password_manager/core/browser/password_ui_utils.h"
 #import "components/password_manager/core/common/password_manager_features.h"
+#import "components/webauthn/ios/features.h"
 #import "ios/chrome/browser/autofill/manual_fill/public/manual_fill_constants.h"
 #import "ios/chrome/browser/autofill/manual_fill/test/manual_fill_matchers.h"
 #import "ios/chrome/browser/autofill/ui_bundled/autofill_app_interface.h"
@@ -87,11 +88,20 @@ id<GREYMatcher> KeyboardAccessoryPasswordSuggestionChip(
     EmbeddedTestServer* test_server) {
   NSString* username = @"concrete username";
   if ([ChromeEarlGrey isIPadIdiom]) {
-    // On iPad, the suggestion text is an attributed string containing the
-    // signon realm on the 2nd line.
+    // On iPad, the suggestion text is an attributed string containing either
+    // the credential type (`Password`) when passkey conditional login is
+    // enabled, or the signon realm on the second line when passkey conditional
+    // login is disabled.
     NSString* realm = base::SysUTF8ToNSString(password_manager::GetShownOrigin(
         url::Origin::Create(test_server->base_url())));
-    return grey_text([NSString stringWithFormat:@"%@\n%@", username, realm]);
+    NSString* passwordSubtext =
+        l10n_util::GetNSString(IDS_IOS_PASSWORD_SUBTEXT);
+    // TODO(crbug.com/460517275): remove the signon realm case once the
+    // kIOSPasskeyConditionalLoginWithShim feature is launched.
+    return grey_anyOf(
+        grey_text(
+            [NSString stringWithFormat:@"%@\n%@", username, passwordSubtext]),
+        grey_text([NSString stringWithFormat:@"%@\n%@", username, realm]), nil);
   } else {
     return grey_text(username);
   }
@@ -239,6 +249,17 @@ GREYElementInteraction* SearchAutofillFormButton(id<GREYMatcher> scroll_view) {
       onElementWithMatcher:scroll_view];
 }
 
+// Scrolls the web element with `element_id` into view so that subsequent tap
+// actions do not fail due to off-screen or obscured coordinates.
+void ScrollWebElementIntoView(std::string_view element_id) {
+  [ChromeEarlGrey
+      evaluateJavaScriptForSideEffect:
+          [NSString stringWithFormat:
+                        @"document.getElementById('%.*s').scrollIntoView();",
+                        static_cast<int>(element_id.size()),
+                        element_id.data()]];
+}
+
 }  // namespace
 
 // Test case for the expanded manual fill view.
@@ -301,6 +322,8 @@ GREYElementInteraction* SearchAutofillFormButton(id<GREYMatcher> scroll_view) {
 // manual fill view.
 - (void)openExpandedManualFillViewForDataType:(ManualFillDataType)dataType
                                   fieldToFill:(std::string)fieldToFill {
+  ScrollWebElementIntoView(fieldToFill);
+
   // Tap on the provided field.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
       performAction:chrome_test_util::TapWebElementWithId(fieldToFill)];
@@ -580,6 +603,7 @@ GREYElementInteraction* SearchAutofillFormButton(id<GREYMatcher> scroll_view) {
   LoadForm(self.testServer, ManualFillDataType::kOther);
 
   // Tap on a field that's not associated to password, payment or address.
+  ScrollWebElementIntoView(kOtherStuffFieldID);
   [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
       performAction:chrome_test_util::TapWebElementWithId(kOtherStuffFieldID)];
 
@@ -631,6 +655,7 @@ GREYElementInteraction* SearchAutofillFormButton(id<GREYMatcher> scroll_view) {
   // Now focus a password-related field.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
       performAction:grey_scrollToContentEdge(kGREYContentEdgeTop)];
+  ScrollWebElementIntoView(kPasswordFieldID);
   [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
       performAction:chrome_test_util::TapWebElementWithId(kPasswordFieldID)];
 

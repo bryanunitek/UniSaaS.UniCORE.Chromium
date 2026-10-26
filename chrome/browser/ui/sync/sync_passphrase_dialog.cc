@@ -13,7 +13,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/common/url_constants.h"
@@ -42,7 +41,7 @@ void OpenSyncDashboardAndCloseDialog(BrowserWindowInterface& browser,
                : chrome::kLegacySyncGoogleDashboardURL),
       g_browser_process->GetApplicationLocale());
   browser.OpenGURL(sync_dashboard_url,
-                   WindowOpenDisposition::NEW_FOREGROUND_TAB);
+                   WindowOpenDisposition::kNewForegroundTab);
   model->host()->Close();
 }
 
@@ -78,7 +77,7 @@ DEFINE_ELEMENT_IDENTIFIER_VALUE(kSyncPassphrasePasswordFieldId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kSyncPassphraseOkButtonFieldId);
 
 void ShowSyncPassphraseDialog(
-    Browser& browser,
+    BrowserWindowInterface& browser,
     base::RepeatingCallback<bool(std::u16string_view)> decrypt_data_callback) {
   ui::DialogModel::Builder dialog_builder;
 

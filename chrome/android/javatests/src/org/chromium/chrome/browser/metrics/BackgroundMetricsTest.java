@@ -5,8 +5,6 @@
 package org.chromium.chrome.browser.metrics;
 
 import androidx.test.filters.MediumTest;
-import androidx.test.platform.app.InstrumentationRegistry;
-import androidx.test.uiautomator.UiDevice;
 
 import org.junit.Assert;
 import org.junit.Rule;
@@ -18,6 +16,7 @@ import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.init.BrowserParts;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
@@ -36,6 +35,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
     MetricsSwitches.FORCE_ENABLE_METRICS_REPORTING
 })
+@DoNotBatch(reason = "AI automated batching was unsuccessful.")
 public final class BackgroundMetricsTest {
     // Note: these rules might conflict and so calls to their methods must be handled carefully.
     @Rule
@@ -53,9 +53,7 @@ public final class BackgroundMetricsTest {
     }
 
     public void pressHome() {
-        UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
-        device.pressHome();
-        ChromeApplicationTestUtils.waitUntilChromeInBackground();
+        ChromeApplicationTestUtils.fireHomeScreenIntent(mActivityTestRule.getActivity());
     }
 
     private void loadNative() {

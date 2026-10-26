@@ -5,87 +5,138 @@
 #ifndef CHROME_BROWSER_UI_OMNIBOX_OMNIBOX_EVERYWHERE_SERVICE_H_
 #define CHROME_BROWSER_UI_OMNIBOX_OMNIBOX_EVERYWHERE_SERVICE_H_
 
+#include <cstdint>
 #include <memory>
-#include <string>
+#include <optional>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/scoped_observation.h"
-#include "base/time/time.h"
-#include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "ui/base/accelerators/global_accelerator_listener/global_accelerator_listener.h"
-#include "ui/views/widget/widget_observer.h"
-
-namespace views {
-class Widget;
-}
-
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
+#include "ui/gfx/geometry/rect.h"
 #include "url/gurl.h"
 
-namespace content {
-class WebContents;
+class BrowserWindowInterface;
+class Profile;
+class ScopedProfileKeepAlive;
+class SkBitmap;
+
+namespace user_education {
+class FeaturePromoController;
 }
 
-class Profile;
+namespace content {
+class NavigationHandle;
+}
 
-class OmniboxEverywhereService : public KeyedService,
-                                 public ui::GlobalAcceleratorListener::Observer,
-                                 public views::WidgetObserver,
-                                 public WebUIContentsWrapper::Host {
+namespace omnibox_everywhere {
+class OmniboxEverywhereController;
+class OmniboxEverywhereUIManager;
+class OmniboxEverywhereFeaturePromoController;
+}
+
+class OmniboxEverywhereService : public KeyedService {
  public:
+  struct RegionCaptureSource {
+    enum class Type { kAllDisplays, kSpecificDisplay };
+    Type type = Type::kAllDisplays;
+    std::optional<int64_t> display_id;
+
+    static RegionCaptureSource AllDisplays() {
+      return {.type = Type::kAllDisplays};
+    }
+    static RegionCaptureSource ForDisplay(int64_t id) {
+      return {.type = Type::kSpecificDisplay, .display_id = id};
+    }
+  };
+
   explicit OmniboxEverywhereService(Profile* profile);
   OmniboxEverywhereService(const OmniboxEverywhereService&) = delete;
   OmniboxEverywhereService& operator=(const OmniboxEverywhereService&) = delete;
   ~OmniboxEverywhereService() override;
 
-  void TogglePopup();
-  void HidePopup();
-  bool IsPopupVisible() const;
+  user_education::FeaturePromoController* feature_promo_controller();
+  const user_education::FeaturePromoController* feature_promo_controller()
+      const;
+
+  virtual void HidePopup();
+  virtual bool IsPopupVisible() const;
+  virtual bool IsPopupVisibleForProfile() const;
+  Profile* profile() const { return profile_; }
+  virtual void MaybeShowLensPromo();
+  virtual void EndLensPromo();
+  virtual void OnLensSearchClicked();
+  virtual void ShowProfilePicker();
+  virtual void OnDrivePickerOpened();
+  virtual void OnDrivePickerClosed();
+  virtual void OnScreensharePickerOpened();
+  virtual void OnScreensharePickerClosed();
+  virtual void ShowScreenshotDisclosureDialog(base::OnceClosure on_accepted,
+                                              base::OnceClosure on_cancelled);
+  using RegionSelectedCallback =
+      base::OnceCallback<void(const SkBitmap& result_bitmap)>;
+  virtual void ShowRegionSelectOverlay(const SkBitmap& screenshot,
+                                       const RegionCaptureSource& source,
+                                       RegionSelectedCallback callback);
+  virtual void OnFileChooserOpened();
+  virtual void OnFileChooserClosed();
+  virtual void OnHotkeyDropdownOpened();
+  virtual void OnHotkeyDropdownClosed();
   void OpenUrl(const GURL& url,
                WindowOpenDisposition disposition,
-               ui::PageTransition transition = ui::PAGE_TRANSITION_LINK);
+               ui::PageTransition transition);
+  virtual void OpenUrl(const GURL& url,
+                       WindowOpenDisposition disposition,
+                       ui::PageTransition transition,
+                       base::OnceCallback<void(content::NavigationHandle&)>
+                           navigation_handle_callback);
+  // Opens `url` in a new browser window aligned with the popup widget.
+  virtual void OpenUrlWithInPlaceWindow(
+      const GURL& url,
+      ui::PageTransition transition,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback);
+
+  static gfx::Rect CalculateInPlaceWindowBounds(const gfx::Rect& popup_bounds,
+                                                const gfx::Rect& work_area);
+
+  // Acquires a ScopedProfileKeepAlive for this profile while the popup widget
+  // is active or being shown. Returns true if profile keep alive was acquired
+  // successfully, false otherwise.
+  bool AcquireProfileKeepAlive();
+
+  // Releases the ScopedProfileKeepAlive when the popup widget is hidden or
+  // closed.
+  void ReleaseProfileKeepAlive();
 
   // KeyedService:
   void Shutdown() override;
 
-  // ui::GlobalAcceleratorListener::Observer:
-  void OnKeyPressed(const ui::Accelerator& accelerator) override;
-  void ExecuteCommand(const std::string& accelerator_group_id,
-                      const std::string& command_id) override;
-
-  // views::WidgetObserver:
-  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
-  void OnWidgetDestroying(views::Widget* widget) override;
-
-  // WebUIContentsWrapper::Host:
-  void CloseUI() override;
-  void ShowUI() override;
-  void ResizeDueToAutoResize(content::WebContents* source,
-                             const gfx::Size& new_size) override;
-
-  views::Widget* GetWidgetForTesting() { return widget_.get(); }
-
-  void SetIsNavigating(bool is_navigating) { is_navigating_ = is_navigating; }
-  void SetWasActiveBeforePopup(bool was_active) {
-    was_active_before_popup_ = was_active;
+  void OnScreenshotDisclosureAcceptedForTesting(base::OnceClosure on_accepted) {
+    OnScreenshotDisclosureAccepted(std::move(on_accepted));
   }
 
  private:
-  void CreateAndShowWidget();
+  gfx::Rect GetInPlaceWindowBounds() const;
+  void NavigateInBrowserWindow(
+      BrowserWindowInterface* bwi,
+      const GURL& url,
+      WindowOpenDisposition disposition,
+      ui::PageTransition transition,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback);
+  void OnScreenshotDisclosureAccepted(base::OnceClosure on_accepted);
+
+  omnibox_everywhere::OmniboxEverywhereController* controller() const;
+  omnibox_everywhere::OmniboxEverywhereUIManager* ui_manager() const;
 
   raw_ptr<Profile> profile_;
-  std::unique_ptr<WebUIContentsWrapper> contents_wrapper_;
-  std::unique_ptr<views::Widget> widget_;
+  std::unique_ptr<omnibox_everywhere::OmniboxEverywhereFeaturePromoController>
+      feature_promo_controller_;
+  std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive_;
 
-  bool is_navigating_ = false;
-  bool was_active_before_popup_ = false;
-  base::TimeTicks last_key_press_time_;
-
-  base::ScopedObservation<views::Widget, views::WidgetObserver>
-      widget_observation_{this};
   base::WeakPtrFactory<OmniboxEverywhereService> weak_factory_{this};
 };
 

@@ -5,6 +5,8 @@
 #include "ash/webui/boca_ui/boca_ui.h"
 
 #include <memory>
+#include <string>
+#include <utility>
 
 #include "ash/constants/ash_features.h"
 #include "ash/webui/boca_ui/boca_app_page_handler.h"
@@ -14,8 +16,7 @@
 #include "ash/webui/common/chrome_os_webui_config.h"
 #include "ash/webui/grit/ash_boca_ui_resources.h"
 #include "ash/webui/grit/ash_boca_ui_resources_map.h"
-#include "chrome/browser/ash/boca/boca_manager_factory.h"
-#include "chrome/browser/profiles/profile.h"
+#include "base/check_deref.h"
 #include "chromeos/ash/components/boca/boca_app_client.h"
 #include "chromeos/ash/components/boca/gemini/gemini_status_fetcher.h"
 #include "chromeos/grit/chromeos_boca_app_bundle_resources.h"
@@ -31,8 +32,7 @@ namespace ash::boca {
 
 namespace {
 content::WebUIDataSource* CreateAndAddHostDataSource(
-    content::BrowserContext* browser_context,
-    BocaUIDelegate* delegate) {
+    content::BrowserContext* browser_context) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       browser_context, kChromeBocaAppUntrustedURL);
 
@@ -46,14 +46,31 @@ content::WebUIDataSource* CreateAndAddHostDataSource(
 
 }  // namespace
 
-BocaUI::BocaUI(content::WebUI* web_ui,
-               std::unique_ptr<BocaUIDelegate> delegate,
-               bool is_producer)
-    : UntrustedWebUIController(web_ui), is_producer_(is_producer) {
+BocaUI::BocaUI(
+    content::WebUI* web_ui,
+    std::unique_ptr<BocaUIDelegate> delegate,
+    BocaSessionManager* boca_session_manager,
+    bool is_producer,
+    HostContentSettingsMap* host_content_settings_map,
+    OnTaskSystemWebAppManager* on_task_system_web_app_manager,
+    std::string gaia_id,
+    signin::IdentityManager* identity_manager,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    PrefService* pref_service)
+    : UntrustedWebUIController(web_ui),
+      boca_session_manager_(CHECK_DEREF(boca_session_manager)),
+      is_producer_(is_producer),
+      host_content_settings_map_(CHECK_DEREF(host_content_settings_map)),
+      on_task_system_web_app_manager_(on_task_system_web_app_manager),
+      gaia_id_(std::move(gaia_id)),
+      identity_manager_(CHECK_DEREF(identity_manager)),
+      url_loader_factory_(std::move(url_loader_factory)),
+      pref_service_(CHECK_DEREF(pref_service)),
+      spotlight_service_(boca_session_manager) {
   content::BrowserContext* browser_context =
       web_ui->GetWebContents()->GetBrowserContext();
   content::WebUIDataSource* host_source =
-      CreateAndAddHostDataSource(browser_context, delegate.get());
+      CreateAndAddHostDataSource(browser_context);
 
   // Allow styles to include inline styling needed for Polymer elements and
   // the material 3 dynamic palette.
@@ -119,26 +136,24 @@ void BocaUI::Create(
   content::BrowserContext* context =
       web_ui()->GetWebContents()->GetBrowserContext();
   CHECK(context);
-  auto* const profile = Profile::FromWebUI(web_ui());
-  auto content_settings_handler =
-      std::make_unique<ContentSettingsHandler>(profile);
-  auto* const boca_manager =
-      ash::BocaManagerFactory::GetInstance()->GetForProfile(profile);
-  auto* const on_task_session_manager = boca_manager->GetOnTaskSessionManager();
-  auto* const system_web_app_manager =
-      on_task_session_manager
-          ? on_task_session_manager->GetOnTaskSystemWebAppManager()
-          : nullptr;
-  BocaAppClient::Get()->GetSessionManager()->OnAppWindowOpened();
+  auto content_settings_handler = std::make_unique<ContentSettingsHandler>(
+      &host_content_settings_map_.get());
+  boca_session_manager_->OnAppWindowOpened();
   page_handler_impl_ = std::make_unique<BocaAppHandler>(
       std::move(page_handler), std::move(page), web_ui(),
-      std::make_unique<ClassroomPageHandlerImpl>(),
+      &boca_session_manager_.get(),
+      std::make_unique<ClassroomPageHandlerImpl>(
+          CHECK_DEREF(boca_session_manager_->session_client_impl())),
       std::move(content_settings_handler),
-      TabInfoCollector::Create(web_ui(), is_producer_), system_web_app_manager,
-      BocaAppClient::Get()->GetSessionManager()->session_client_impl(),
-      boca_manager->GetGeminiStatusFetcher(), is_producer_);
+      TabInfoCollector::Create(web_ui(), is_producer_),
+      on_task_system_web_app_manager_,
+      boca_session_manager_->session_client_impl(),
+      std::make_unique<GeminiStatusFetcher>(gaia_id_, &identity_manager_.get(),
+                                            url_loader_factory_,
+                                            &pref_service_.get()),
+      is_producer_);
   page_handler_impl_->SetSpotlightService(&spotlight_service_);
-  if (ash::features::IsAnnotatorModeEnabled() && is_producer_) {
+  if (is_producer_) {
     ash::boca::util::EnableOrDisableMarkerMode(/*enable=*/true);
   }
 }

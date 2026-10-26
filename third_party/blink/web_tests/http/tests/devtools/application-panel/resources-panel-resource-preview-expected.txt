@@ -5,25 +5,24 @@ Application
   Manifest (selected)
     Identity
     Presentation
-    Protocol Handlers
+    Protocol handlers
     Icons
     Window Controls Overlay
   Service workers
   Storage
+  WebMCPNEW
 Storage
   Local storage
     http://127.0.0.1:8000
   Session storage
     http://127.0.0.1:8000
+  Extension storage
   IndexedDB
-  Web SQL
   Cookies
     http://127.0.0.1:8000
   Private state tokens
-  Interest groups
-  Shared storage
-    http://127.0.0.1:8000
   Cache storage
+  Storage buckets
 Background services
   Back/forward cache
   Background fetch
@@ -32,17 +31,17 @@ Background services
   Notifications
   Payment handler
   Periodic background sync
+  Speculative loads
+    Rules
+    Speculations
   Push messaging
   Reporting API
-Speculative loads
-  Rules
-  Speculations
-  This page
+    Crash report context
 Frames
   top
-    Images
+    Image
       image.png
-    Scripts
+    JavaScript
       json-value.js
     inspected-page.html
 log: visible view: unknown
@@ -51,25 +50,24 @@ Application
   Manifest
     Identity
     Presentation
-    Protocol Handlers
+    Protocol handlers
     Icons
     Window Controls Overlay
   Service workers
   Storage
+  WebMCPNEW
 Storage
   Local storage
     http://127.0.0.1:8000
   Session storage
     http://127.0.0.1:8000
+  Extension storage
   IndexedDB
-  Web SQL
   Cookies
     http://127.0.0.1:8000
   Private state tokens
-  Interest groups
-  Shared storage
-    http://127.0.0.1:8000
   Cache storage
+  Storage buckets
 Background services
   Back/forward cache
   Background fetch
@@ -78,17 +76,17 @@ Background services
   Notifications
   Payment handler
   Periodic background sync
+  Speculative loads
+    Rules
+    Speculations
   Push messaging
   Reporting API
-Speculative loads
-  Rules
-  Speculations
-  This page
+    Crash report context
 Frames
   top
-    Images
+    Image
       image.png
-    Scripts
+    JavaScript
       json-value.js (selected)
     inspected-page.html
 log: visible view: json
@@ -97,25 +95,24 @@ Application
   Manifest
     Identity
     Presentation
-    Protocol Handlers
+    Protocol handlers
     Icons
     Window Controls Overlay
   Service workers
   Storage
+  WebMCPNEW
 Storage
   Local storage
     http://127.0.0.1:8000
   Session storage
     http://127.0.0.1:8000
+  Extension storage
   IndexedDB
-  Web SQL
   Cookies
     http://127.0.0.1:8000
   Private state tokens
-  Interest groups
-  Shared storage
-    http://127.0.0.1:8000
   Cache storage
+  Storage buckets
 Background services
   Back/forward cache
   Background fetch
@@ -124,17 +121,17 @@ Background services
   Notifications
   Payment handler
   Periodic background sync
+  Speculative loads
+    Rules
+    Speculations
   Push messaging
   Reporting API
-Speculative loads
-  Rules
-  Speculations
-  This page
+    Crash report context
 Frames
   top
-    Images
+    Image
       image.png (selected)
-    Scripts
+    JavaScript
       json-value.js
     inspected-page.html
 log: visible view: image
@@ -143,25 +140,24 @@ Application
   Manifest
     Identity
     Presentation
-    Protocol Handlers
+    Protocol handlers
     Icons
     Window Controls Overlay
   Service workers
   Storage
+  WebMCPNEW
 Storage
   Local storage
     http://127.0.0.1:8000
   Session storage
     http://127.0.0.1:8000
+  Extension storage
   IndexedDB
-  Web SQL
   Cookies
     http://127.0.0.1:8000
   Private state tokens
-  Interest groups
-  Shared storage
-    http://127.0.0.1:8000
   Cache storage
+  Storage buckets
 Background services
   Back/forward cache
   Background fetch
@@ -170,17 +166,17 @@ Background services
   Notifications
   Payment handler
   Periodic background sync
+  Speculative loads
+    Rules
+    Speculations
   Push messaging
   Reporting API
-Speculative loads
-  Rules
-  Speculations
-  This page
+    Crash report context
 Frames
   top
-    Images
+    Image
       image.png
-    Scripts
+    JavaScript
       json-value.js (selected)
     inspected-page.html
 log: visible view: json

@@ -11,7 +11,7 @@
 #include "base/scoped_observation.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_variant.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/view_observer.h"
 
@@ -58,7 +58,7 @@ class ASH_EXPORT BlurredBackgroundShield : public views::ViewObserver {
   void StackLayerBelowHost();
   void UpdateBackgroundColor();
 
-  ui::Layer background_layer_ = ui::Layer(ui::LAYER_SOLID_COLOR);
+  ui::LayerSolidColor background_layer_;
   const raw_ptr<views::View> host_;
   ui::ColorVariant color_;
   const float blur_sigma_;

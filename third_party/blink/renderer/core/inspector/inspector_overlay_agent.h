@@ -33,6 +33,8 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
@@ -46,7 +48,6 @@
 #include "third_party/blink/renderer/core/inspector/inspector_overlay_host.h"
 #include "third_party/blink/renderer/core/inspector/protocol/overlay.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
-#include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/timer.h"
@@ -119,11 +120,12 @@ class CORE_EXPORT InspectTool : public GarbageCollected<InspectTool> {
   virtual void Trace(Visitor* visitor) const;
   virtual bool HideOnHideHighlight();
   virtual bool HideOnMouseMove();
-  virtual void OnAgentDisable() {}
+  virtual void Dispose() {}
 
  protected:
   Member<InspectorOverlayAgent> overlay_;
-  OverlayFrontend* frontend_ = nullptr;
+  raw_ptr<OverlayFrontend, UnprotectedInRelease | DanglingUntriaged> frontend_ =
+      nullptr;
 };
 
 class CORE_EXPORT Hinge final : public GarbageCollected<Hinge> {
@@ -193,6 +195,8 @@ class CORE_EXPORT InspectorOverlayAgent final
   static std::unique_ptr<InspectorContainerQueryContainerHighlightConfig>
   ToContainerQueryContainerHighlightConfig(
       protocol::Overlay::ContainerQueryContainerHighlightConfig*);
+  static std::unique_ptr<InspectorImcbHighlightConfig> ToImcbHighlightConfig(
+      protocol::Overlay::ImcbHighlightConfig*);
   static std::unique_ptr<InspectorFlexItemHighlightConfig>
   ToFlexItemHighlightConfig(protocol::Overlay::FlexItemHighlightConfig*);
   static std::unique_ptr<InspectorIsolationModeHighlightConfig>
@@ -205,7 +209,6 @@ class CORE_EXPORT InspectorOverlayAgent final
       protocol::Overlay::HighlightConfig*);
   InspectorOverlayAgent(WebLocalFrameImpl*,
                         InspectedFrames*,
-                        v8_inspector::V8InspectorSession*,
                         InspectorDOMAgent*);
   InspectorOverlayAgent(const InspectorOverlayAgent&) = delete;
   InspectorOverlayAgent& operator=(const InspectorOverlayAgent&) = delete;
@@ -301,6 +304,11 @@ class CORE_EXPORT InspectorOverlayAgent final
           inspected_element_anchor_config) override;
 
   // InspectorBaseAgent overrides.
+  void Init(CoreProbeSink*,
+            protocol::UberDispatcher*,
+            InspectorSessionState*,
+            V8SessionHolder,
+            ClientIsTrusted) override;
   void Restore() override;
   void Dispose() override;
 
@@ -374,8 +382,6 @@ class CORE_EXPORT InspectorOverlayAgent final
   Member<InspectorOverlayHost> overlay_host_;
   bool resize_timer_active_;
   HeapTaskRunnerTimer<InspectorOverlayAgent> resize_timer_;
-  bool disposed_;
-  v8_inspector::V8InspectorSession* v8_session_;
   Member<InspectorDOMAgent> dom_agent_;
   Member<FrameOverlay> frame_overlay_;
   Member<InspectTool> inspect_tool_;
@@ -390,8 +396,8 @@ class CORE_EXPORT InspectorOverlayAgent final
   bool is_page_scrolling_ = false;
   std::unique_ptr<cc::LayerTreeDebugState> original_layer_tree_debug_state_;
 
-  DOMNodeId backend_node_id_to_inspect_;
-  InspectorAgentState::Boolean enabled_;
+  DOMNodeIdType backend_node_id_to_inspect_;
+  bool enabled_ = false;
   InspectorAgentState::Boolean show_ad_highlights_;
   InspectorAgentState::Boolean show_debug_borders_;
   InspectorAgentState::Boolean show_fps_counter_;
@@ -401,7 +407,7 @@ class CORE_EXPORT InspectorOverlayAgent final
   InspectorAgentState::Boolean show_hit_test_borders_;
   InspectorAgentState::Boolean show_web_vitals_;
   InspectorAgentState::Boolean show_size_on_resize_;
-  InspectorAgentState::String paused_in_debugger_message_;
+  String paused_in_debugger_message_;
   InspectorAgentState::String inspect_mode_;
   InspectorAgentState::Bytes inspect_mode_protocol_config_;
 };

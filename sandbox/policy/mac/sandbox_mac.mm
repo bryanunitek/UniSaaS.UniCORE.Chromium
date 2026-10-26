@@ -28,6 +28,7 @@
 #include "sandbox/policy/mac/screen_ai.sb.h"
 #include "sandbox/policy/mac/speech_recognition.sb.h"
 #include "sandbox/policy/mac/utility.sb.h"
+#include "sandbox/policy/mac/webnn_model_compilation.sb.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
 
 namespace sandbox::policy {
@@ -75,9 +76,12 @@ std::string GetSandboxProfile(sandbox::mojom::Sandbox sandbox_type) {
         return kSeatbeltPolicyString_on_device_translation;
       case sandbox::mojom::Sandbox::kProxyResolver:
         return kSeatbeltPolicyString_proxy_resolver;
+      case sandbox::mojom::Sandbox::kWebNNModelCompilation:
+        return kSeatbeltPolicyString_webnn_model_compilation;
       // `kService` and `kUtility` are the same on OS_MAC, so fallthrough.
       case sandbox::mojom::Sandbox::kService:
       case sandbox::mojom::Sandbox::kServiceWithJit:
+      case sandbox::mojom::Sandbox::kPlatformRuntime:
       case sandbox::mojom::Sandbox::kUtility:
         return kSeatbeltPolicyString_utility;
       case sandbox::mojom::Sandbox::kRenderer:

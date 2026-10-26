@@ -8,26 +8,23 @@
 #include <list>
 
 #include "base/memory/raw_ptr.h"
-#include "base/observer_list.h"
+#include "base/scoped_observation.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_delegate.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/layout/animating_layout_manager.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/view.h"
+#include "ui/views/widget/widget_observer.h"
 
 // A general view container for any type of toolbar icons.
 class ToolbarIconContainerView : public views::View,
-                                 public views::ViewObserver {
+                                 public views::ViewObserver,
+                                 public views::WidgetObserver {
   METADATA_HEADER(ToolbarIconContainerView, views::View)
 
  public:
-  class Observer : public base::CheckedObserver {
-   public:
-    virtual void OnHighlightChanged() = 0;
-  };
-
   explicit ToolbarIconContainerView(bool uses_highlight,
                                     bool use_default_target_layout = true);
   ToolbarIconContainerView(const ToolbarIconContainerView&) = delete;
@@ -43,9 +40,6 @@ class ToolbarIconContainerView : public views::View,
   // Begins observing |button| for changes that should affect the container's
   // highlight state.
   void ObserveButton(views::Button* button);
-
-  void AddObserver(Observer* obs);
-  void RemoveObserver(const Observer* obs);
 
   views::View* main_item() { return main_item_; }
 
@@ -87,7 +81,7 @@ class ToolbarIconContainerView : public views::View,
 
    private:
     raw_ptr<views::View> parent_;
-    ui::Layer layer_;
+    ui::LayerTextured layer_;
   };
 
   class WidgetRestoreObserver;
@@ -96,6 +90,10 @@ class ToolbarIconContainerView : public views::View,
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
   void AddedToWidget() override;
+  void RemovedFromWidget() override;
+
+  // views::WidgetObserver:
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
   void UpdateHighlight();
 
@@ -119,9 +117,10 @@ class ToolbarIconContainerView : public views::View,
   // Tracks when the widget is restored and resets the layout.
   std::unique_ptr<WidgetRestoreObserver> restore_observer_;
 
-  std::list<base::CallbackListSubscription> subscriptions_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver>
+      widget_observation_{this};
 
-  base::ObserverList<Observer> observers_;
+  std::list<base::CallbackListSubscription> subscriptions_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TOOLBAR_TOOLBAR_ICON_CONTAINER_VIEW_H_

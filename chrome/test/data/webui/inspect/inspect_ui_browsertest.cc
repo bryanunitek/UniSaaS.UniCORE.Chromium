@@ -10,7 +10,6 @@
 #include "chrome/browser/devtools/device/devtools_android_bridge.h"
 #include "chrome/browser/devtools/features.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_settings_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -28,12 +27,12 @@
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/network/public/cpp/features.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/window_open_disposition.h"
 
 using content::WebContents;
 
@@ -85,7 +84,7 @@ IN_PROC_BROWSER_TEST_F(InspectUITest, SharedWorker) {
 
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(chrome::kChromeUIInspectURL),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   ASSERT_TRUE(RunTestCase("SharedWorker"));
@@ -94,7 +93,7 @@ IN_PROC_BROWSER_TEST_F(InspectUITest, SharedWorker) {
 // Flaky due to failure to bind a hardcoded port. crbug.com/41226327
 IN_PROC_BROWSER_TEST_F(InspectUITest, DISABLED_AndroidTargets) {
   DevToolsAndroidBridge* android_bridge =
-      DevToolsAndroidBridge::Factory::GetForProfile(browser()->profile());
+      DevToolsAndroidBridge::Factory::GetForProfile(browser()->GetProfile());
   AndroidDeviceManager::DeviceProviders providers;
   providers.push_back(new AdbDeviceProvider());
   android_bridge->set_device_providers_for_test(providers);
@@ -153,107 +152,6 @@ IN_PROC_BROWSER_TEST_F(InspectUITest, MAYBE_LaunchUIDevtools) {
                      "assertNativeUIButtonDisabled(false);"));
 }
 
-class InspectUISharedStorageTest : public InspectUITest {
- public:
-  InspectUISharedStorageTest() {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{network::features::kSharedStorageAPI,
-                              features::kPrivacySandboxAdsAPIsOverride},
-        /*disabled_features=*/{});
-  }
-
-  void SetUpOnMainThread() override {
-    host_resolver()->AddRule("*", "127.0.0.1");
-    https_server_.AddDefaultHandlers(GetChromeTestDataDir());
-    https_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_TEST_NAMES);
-    content::SetupCrossSiteRedirector(&https_server_);
-
-    ASSERT_TRUE(https_server_.Start());
-
-    InspectUITest::SetUpOnMainThread();
-
-    PrivacySandboxSettingsFactory::GetForProfile(browser()->profile())
-        ->SetAllPrivacySandboxAllowedForTesting();
-  }
-
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
-  net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
-};
-
-IN_PROC_BROWSER_TEST_F(InspectUISharedStorageTest, SharedStorageWorklet) {
-  privacy_sandbox::ScopedPrivacySandboxAttestations scoped_attestations(
-      privacy_sandbox::PrivacySandboxAttestations::CreateForTesting());
-  // Mark all Privacy Sandbox APIs as attested since the test case is testing
-  // behaviors not related to attestations.
-  privacy_sandbox::PrivacySandboxAttestations::GetInstance()
-      ->SetAllPrivacySandboxAttestedForTesting(true);
-
-  GURL main_frame_url = https_server_.GetURL("a.test", "/empty.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
-
-  const char kModuleScriptFile[] = "/shared_storage/simple_module.js";
-
-  GURL module_script_url = https_server_.GetURL("a.test", kModuleScriptFile);
-  EXPECT_TRUE(
-      content::ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
-                      content::JsReplace("sharedStorage.worklet.addModule($1)",
-                                         module_script_url)));
-
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUIInspectURL),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-
-  ASSERT_TRUE(RunTestCase("SharedStorageWorklet"));
-}
-
-class InspectUIFencedFrameTest : public InspectUITest {
- public:
-  content::test::FencedFrameTestHelper& fenced_frame_test_helper() {
-    return fenced_frame_helper_;
-  }
-
- protected:
-  content::test::FencedFrameTestHelper fenced_frame_helper_;
-};
-
-// TODO(crbug.com/40227465): Re-enable this test
-IN_PROC_BROWSER_TEST_F(InspectUIFencedFrameTest,
-                       DISABLED_FencedFrameInFrontEnd) {
-  ASSERT_TRUE(embedded_test_server()->Start());
-  TabStripModel* tab_strip_model = browser()->tab_strip_model();
-
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
-                                           GURL(chrome::kChromeUIInspectURL)));
-
-  const int inspect_ui_tab_idx = tab_strip_model->active_index();
-  content::WebContents* inspect_ui_contents =
-      tab_strip_model->GetActiveWebContents();
-
-  content::WebContents* front_end_tab =
-      LaunchUIDevtools(tab_strip_model->GetActiveWebContents()->GetWebUI());
-
-  tab_strip_model->ActivateTabAt(inspect_ui_tab_idx);
-
-  // Run an empty test, to load the mocha test file on the page.
-  ASSERT_TRUE(RunTestCase("Empty"));
-  // Ensure that "Inspect Native UI" button is disabled.
-  ASSERT_TRUE(ExecJs(inspect_ui_contents->GetPrimaryMainFrame(),
-                     "assertNativeUIButtonDisabled(true);"));
-
-  // Create a fenced frame into the front-end page.
-  const GURL fenced_frame_url =
-      embedded_test_server()->GetURL("/fenced_frames/title1.html");
-  ASSERT_TRUE(fenced_frame_test_helper().CreateFencedFrame(
-      front_end_tab->GetPrimaryMainFrame(), fenced_frame_url));
-
-  // Ensure that the fenced frame doesn't affect to the the front-end observer.
-  // "Inspect Native UI" button is still disabled.
-  ASSERT_TRUE(ExecJs(inspect_ui_contents->GetPrimaryMainFrame(),
-                     "assertNativeUIButtonDisabled(true);"));
-}
-
 class InspectUIRemoteDebuggingTest : public InspectUITest {
  public:
   InspectUIRemoteDebuggingTest() {
@@ -304,6 +202,38 @@ IN_PROC_BROWSER_TEST_F(InspectUIRemoteDebuggingTest,
   // After the test, the checkbox has been clicked twice, so the state is back
   // to disabled.
   EXPECT_FALSE(local_state->GetBoolean(prefs::kDevToolsRemoteDebuggingEnabled));
+}
+
+IN_PROC_BROWSER_TEST_F(InspectUIRemoteDebuggingTest, DynamicPolicyChange) {
+  PrefService* local_state = g_browser_process->local_state();
+
+  // 1. Start with remote debugging allowed and enabled.
+  local_state->SetBoolean(prefs::kDevToolsRemoteDebuggingAllowed, true);
+  local_state->SetBoolean(prefs::kDevToolsRemoteDebuggingEnabled, true);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
+                                           GURL(chrome::kChromeUIInspectURL)));
+  ASSERT_TRUE(RunTestCase("Empty"));
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  EXPECT_EQ(true,
+            content::EvalJs(web_contents,
+                            "assertRemoteDebuggingCheckbox(true, false);"));
+
+  // 2. Dynamically change policy to disallowed without re-navigating.
+  local_state->SetBoolean(prefs::kDevToolsRemoteDebuggingAllowed, false);
+  EXPECT_EQ(true,
+            content::EvalJs(web_contents,
+                            "assertRemoteDebuggingCheckbox(false, true);"));
+  EXPECT_FALSE(local_state->GetBoolean(prefs::kDevToolsRemoteDebuggingEnabled));
+
+  // 3. Dynamically change policy back to allowed without re-navigating.
+  // The UI should show AllowedAndDisabled because the enabled pref was cleared.
+  local_state->SetBoolean(prefs::kDevToolsRemoteDebuggingAllowed, true);
+  EXPECT_EQ(true,
+            content::EvalJs(web_contents,
+                            "assertRemoteDebuggingCheckbox(false, false);"));
 }
 
 }  // namespace

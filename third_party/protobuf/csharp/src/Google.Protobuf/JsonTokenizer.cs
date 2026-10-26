@@ -52,6 +52,13 @@ namespace Google.Protobuf
         }
 
         /// <summary>
+        /// The depth of recursion within JsonParser. This is not directly computable within the tokenizer itself,
+        /// as arrays contribute to the recursion depth for ListValue parsing, but not for "normal" message types.
+        /// This is maintained (and checked) by <see cref="JsonParser.Merge(IMessage, JsonTokenizer)"/>.
+        /// </summary>
+        internal int RecursionDepth { get; set; }
+
+        /// <summary>
         /// Returns the depth of the stack, purely in objects (not collections).
         /// Informally, this is the number of remaining unclosed '{' characters we have.
         /// </summary>
@@ -156,9 +163,13 @@ namespace Google.Protobuf
             {
                 this.tokens = tokens;
                 this.nextTokenizer = nextTokenizer;
+                // Inherit recursion depth from the parent tokenizer so that the
+                // JsonParser.RecursionLimit check applies across replayed Any
+                // bodies. Without this, deeply-nested google.protobuf.Any
+                // payloads can bypass the limit and cause a StackOverflowException.
+                this.RecursionDepth = nextTokenizer.RecursionDepth;
             }
 
-            // FIXME: Object depth not maintained...
             protected override JsonToken NextImpl()
             {
                 if (nextTokenIndex >= tokens.Count)

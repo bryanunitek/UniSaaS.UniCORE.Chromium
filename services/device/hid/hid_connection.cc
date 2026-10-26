@@ -8,6 +8,7 @@
 
 #include "base/memory/ref_counted_memory.h"
 #include "components/device_event_log/device_event_log.h"
+#include "services/device/public/cpp/device_features.h"
 #include "services/device/public/cpp/hid/hid_blocklist.h"
 #include "services/device/public/cpp/hid/hid_report_type.h"
 #include "services/device/public/cpp/hid/hid_report_utils.h"
@@ -138,6 +139,14 @@ void HidConnection::SendFeatureReport(
     std::move(callback).Run(false);
     return;
   }
+  if (base::FeatureList::IsEnabled(features::kHidValidateFeatureReportSize) &&
+      buffer->size() > device_info_->max_feature_report_size() + 1) {
+    HID_LOG(USER) << "Feature report buffer too long (" << buffer->size()
+                  << " > " << (device_info_->max_feature_report_size() + 1)
+                  << ").";
+    std::move(callback).Run(false);
+    return;
+  }
   DCHECK_GE(buffer->size(), 1u);
   uint8_t report_id = buffer->data()[0];
   if (device_info_->has_report_id() != (report_id != 0)) {
@@ -169,9 +178,15 @@ bool HidConnection::IsReportProtected(uint8_t report_id,
       }
       auto* collection_info =
           FindCollectionWithReport(device, report_id, report_type);
-      if (collection_info &&
-          collection_info->usage->usage_page == mojom::kPageFido) {
-        return false;
+      if (collection_info) {
+        if (base::FeatureList::IsEnabled(features::kWebHidRecursiveFiltering)) {
+          if (HasReportInCollectionWithUsagePage(
+                  *collection_info, report_id, report_type, mojom::kPageFido)) {
+            return false;
+          }
+        } else if (collection_info->usage->usage_page == mojom::kPageFido) {
+          return false;
+        }
       }
     }
 
@@ -202,7 +217,12 @@ bool HidConnection::IsReportProtected(uint8_t report_id,
   auto* collection_info =
       FindCollectionWithReport(device, report_id, report_type);
   if (collection_info) {
-    return IsAlwaysProtected(*collection_info->usage, report_type);
+    if (base::FeatureList::IsEnabled(features::kWebHidRecursiveFiltering)) {
+      return HasReportInAlwaysProtectedCollection(*collection_info, report_id,
+                                                  report_type);
+    } else {
+      return IsAlwaysProtected(*collection_info->usage, report_type);
+    }
   }
 
   return HasAlwaysProtectedCollectionFor(report_type);

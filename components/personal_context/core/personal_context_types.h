@@ -6,6 +6,7 @@
 #define COMPONENTS_PERSONAL_CONTEXT_CORE_PERSONAL_CONTEXT_TYPES_H_
 
 #include <optional>
+#include <string_view>
 
 #include "base/functional/callback_forward.h"
 #include "base/time/time.h"
@@ -27,20 +28,39 @@ enum class PersonalContextNonEligibilityReason {
   kNotOptedInToContext = 5,
   kNotPhotosAndWorkspaceAvailable = 6,
   kPersonalIntelligencePrefDisabled = 7,
-  kNotG1Subscriber = 8,
-  kNotAndroidPremiumDevice = 9,
-  kEligible = 10,
+  kNotGlicFirstRun = 8,
+  kFindAndFillWithGeminiSettingsDisabled = 9,
+  kNotG1SubscriberOrAndroidPremiumDevice = 10,
+  kEligible = 11,
   kMaxValue = kEligible
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/enums.xml:PersonalContextNonEligibilityReason)
+
+// Returns the string representation of non-eligibility reason.
+std::string_view PersonalContextNonEligibilityReasonToString(
+    PersonalContextNonEligibilityReason reason);
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(PersonalContextDecryptionStatus)
+enum class PersonalContextDecryptionStatus {
+  kSuccess = 0,
+  kNoKeyManager = 1,
+  kEmptyEncryptedEntity = 2,
+  kDecryptionFailed = 3,
+  kProtoParseFailed = 4,
+  kMaxValue = kProtoParseFailed,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/personal_context/enums.xml:PersonalContextDecryptionStatus)
 
 // Tracks the global eligibility state of the feature for the current profile.
 // Used by consuming features to determine both feature execution and UI
 // entrypoint visibility.
 enum class PersonalContextEligibilityState {
   kDisabledNotEligible = 0,  // Not eligible.
-  kDisabledNeedsOptIn = 1,   // Not eligible, requires account opt-in.
-  kEligible = 2              // Eligible.
+  // TODO(crbug.com/494149753): Set to 1 once
+  // `kPersonalContextForceEnablementStateParam` is removed.
+  kEligible = 2  // Eligible.
 };
 
 // Defines the result of a PersonalContextService::FetchContext operation.

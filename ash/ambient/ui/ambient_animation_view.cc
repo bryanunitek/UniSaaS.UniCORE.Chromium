@@ -47,6 +47,7 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/compositor.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/outsets.h"
@@ -84,18 +85,15 @@ constexpr int kTimeFontSizeDip = 32;
 constexpr SkColor kDarkModeShieldColor =
     SkColorSetA(gfx::kGoogleGrey900, SK_AlphaOPAQUE / 10);
 
-void LogCompositorThroughput(const AmbientUiSettings& ui_settings,
-                             int smoothness) {
+void LogCompositorThroughput(int smoothness) {
   // Use VLOG instead of DVLOG since this log is performance-related and
   // developers will almost certainly only care about this log on non-debug
   // builds.
   VLOG(1) << "Compositor throughput report: smoothness=" << smoothness;
-  ambient::RecordAmbientModeAnimationSmoothness(smoothness, ui_settings);
 }
 
 void OnCompositorThroughputReported(
     base::TimeTicks logging_start_time,
-    const AmbientUiSettings& ui_settings,
     const cc::FrameSequenceMetrics::CustomReportData& data) {
   base::TimeDelta duration = base::TimeTicks::Now() - logging_start_time;
   float duration_sec = duration.InSecondsF();
@@ -107,8 +105,7 @@ void OnCompositorThroughputReported(
           << " actual_fps="
           << (data.frames_expected_v3 - data.frames_dropped_v3) / duration_sec
           << " duration=" << duration;
-  metrics_util::ForSmoothnessV3(
-      base::BindRepeating(&LogCompositorThroughput, ui_settings))
+  metrics_util::ForSmoothnessV3(base::BindRepeating(&LogCompositorThroughput))
       .Run(data);
 }
 
@@ -212,6 +209,8 @@ void AmbientAnimationView::Init() {
   animation_container_view->SetUseDefaultFillLayout(true);
   // Purely for performance reasons. Gains 3-4 fps.
   animation_container_view->SetPaintToLayer();
+  animation_container_view->layer()->SetName(
+      "AmbientAnimationView:AnimationContainer");
   // In portrait mode, the landscape animation file is currently being used. Its
   // width is scaled down to match the width of the portrait screen, and it's
   // center-aligned leaving empty space on the top and bottom of the screen. To
@@ -428,8 +427,7 @@ void AmbientAnimationView::RestartThroughputTracking() {
   throughput_tracker_ = compositor->RequestNewCompositorMetricsTracker();
   throughput_tracker_->Start(
       base::BindOnce(&OnCompositorThroughputReported,
-                     /*logging_start_time=*/base::TimeTicks::Now(),
-                     static_resources_->GetUiSettings()));
+                     /*logging_start_time=*/base::TimeTicks::Now()));
 }
 
 void AmbientAnimationView::ApplyJitter() {

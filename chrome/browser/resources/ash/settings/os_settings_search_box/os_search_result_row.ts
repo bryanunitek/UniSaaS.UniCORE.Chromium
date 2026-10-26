@@ -193,12 +193,12 @@ export class OsSearchResultRowElement extends OsSearchResultRowElementBase {
     };
   }
 
-  selected: boolean;
-  override ariaLabel: string;
-  searchQuery: string;
-  searchResult: SearchResult;
-  listLength: number;
-  private resultText_: string;
+  declare selected: boolean;
+  declare ariaLabel: string;
+  declare searchQuery: string;
+  declare searchResult: SearchResult;
+  declare listLength: number;
+  declare private resultText_: string;
 
   private makeA11yAnnouncementIfSelectedAndUnfocused_(): void {
     if (!this.selected || this.lastFocused) {
@@ -576,7 +576,7 @@ export class OsSearchResultRowElement extends OsSearchResultRowElementBase {
     const settingsSearchResult = this.searchResult;
     chrome.metricsPrivate.recordEnumerationValue(
         'ChromeOS.Settings.SearchResultTypeSelected', settingsSearchResult.type,
-        SearchResultType.MAX_VALUE);
+        SearchResultType.MAX_VALUE + 1);
 
     interface MetricArg {
       metricName: string;
@@ -782,8 +782,8 @@ export class OsSearchResultRowElement extends OsSearchResultRowElementBase {
         return 'os-settings:personalization-menu';
       case SearchResultIcon.kPhone:
         return 'os-settings:connected-devices-android-phone';
-      case SearchResultIcon.kPluginVm:
-        return 'os-settings:plugin-vm';
+      case SearchResultIcon.kDeprecatedPluginVm:
+        return 'os-settings:apps-grid';
       case SearchResultIcon.kPointingStick:
         return 'os-settings:device-pointing-stick';
       case SearchResultIcon.kPower:

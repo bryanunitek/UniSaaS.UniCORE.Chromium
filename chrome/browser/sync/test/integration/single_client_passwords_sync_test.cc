@@ -20,6 +20,7 @@
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/sync/password_sync_bridge.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -41,10 +42,10 @@ namespace {
 
 using passwords_helper::CreateTestPasswordForm;
 using passwords_helper::GetAccountPasswordStoreInterface;
-using passwords_helper::ProfileContainsSamePasswordFormsAsVerifier;
 
 using password_manager::PasswordForm;
 using password_manager::PasswordStoreInterface;
+using password_manager::PasswordString;
 
 using syncer::MatchesLocalDataDescription;
 using syncer::MatchesLocalDataItemModel;
@@ -53,6 +54,7 @@ using testing::Contains;
 using testing::ElementsAre;
 using testing::Field;
 using testing::IsEmpty;
+using testing::Property;
 using testing::SizeIs;
 using testing::UnorderedElementsAre;
 
@@ -139,58 +141,26 @@ INSTANTIATE_TEST_SUITE_P(,
                          GetSyncTestModes(),
                          testing::PrintToStringParamName());
 
-class SingleClientPasswordsSyncTestWithVerifier
-    : public SingleClientPasswordsSyncTest {
- public:
-  SingleClientPasswordsSyncTestWithVerifier() = default;
-  ~SingleClientPasswordsSyncTestWithVerifier() override = default;
-
-  PasswordStoreInterface* GetVerifierPasswordStoreInterface() {
-    return passwords_helper::GetVerifierPasswordStoreInterface(GetStoreType());
-  }
-
-  int GetVerifierPasswordCount() const {
-    return passwords_helper::GetVerifierPasswordCount(GetStoreType());
-  }
-
-  bool UseVerifier() override {
-    // TODO(crbug.com/40152785): rewrite tests to not use verifier.
-    return true;
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(,
-                         SingleClientPasswordsSyncTestWithVerifier,
-                         GetSyncTestModes(),
-                         testing::PrintToStringParamName());
-
-IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTestWithVerifier, Sanity) {
+IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTest, Sanity) {
   ASSERT_TRUE(SetupSync());
 
   PasswordForm form = CreateTestPasswordForm(0, GetStoreType());
-  GetVerifierPasswordStoreInterface()->AddLogin(
-      password_manager::FromPasswordForm(form));
-  ASSERT_EQ(1, GetVerifierPasswordCount());
   GetPasswordStoreInterface()->AddLogin(
       password_manager::FromPasswordForm(form));
   ASSERT_EQ(1, GetPasswordCount());
 
-  ASSERT_TRUE(UpdatedProgressMarkerChecker(GetSyncService(0)).Wait());
-  ASSERT_TRUE(ProfileContainsSamePasswordFormsAsVerifier(0, GetStoreType()));
-  ASSERT_EQ(1, GetPasswordCount());
+  EXPECT_TRUE(ServerCountMatchStatusChecker(syncer::PASSWORDS, 1).Wait());
+  EXPECT_EQ(1, GetPasswordCount());
 }
 
 // Verifies that committed passwords contain the appropriate proto fields, and
 // in particular lack some others that could potentially contain unencrypted
 // data. In this test, custom passphrase is NOT set.
-IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTestWithVerifier,
+IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTest,
                        CommitWithoutCustomPassphrase) {
   ASSERT_TRUE(SetupSync());
 
   PasswordForm form = CreateTestPasswordForm(0, GetStoreType());
-  GetVerifierPasswordStoreInterface()->AddLogin(
-      password_manager::FromPasswordForm(form));
-  ASSERT_EQ(1, GetVerifierPasswordCount());
   GetPasswordStoreInterface()->AddLogin(
       password_manager::FromPasswordForm(form));
   ASSERT_EQ(1, GetPasswordCount());
@@ -215,15 +185,12 @@ IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTestWithVerifier,
 
 // Same as above but with custom passphrase set, which requires to prune commit
 // data even further.
-IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTestWithVerifier,
+IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTest,
                        CommitWithCustomPassphrase) {
   ASSERT_TRUE(SetupSync());
   GetSyncService(0)->GetUserSettings()->SetEncryptionPassphrase("hunter2");
 
   PasswordForm form = CreateTestPasswordForm(0, GetStoreType());
-  GetVerifierPasswordStoreInterface()->AddLogin(
-      password_manager::FromPasswordForm(form));
-  ASSERT_EQ(1, GetVerifierPasswordCount());
   GetPasswordStoreInterface()->AddLogin(
       password_manager::FromPasswordForm(form));
   ASSERT_EQ(1, GetPasswordCount());
@@ -241,7 +208,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTestWithVerifier,
 
 // Tests the scenario when a syncing user enables a custom passphrase. PASSWORDS
 // should be recommitted with the new encryption key.
-IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTestWithVerifier,
+IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTest,
                        ReencryptsDataWhenPassphraseIsSet) {
   ASSERT_TRUE(SetupSync());
   ASSERT_TRUE(
@@ -249,9 +216,6 @@ IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTestWithVerifier,
           .Wait());
 
   PasswordForm form = CreateTestPasswordForm(0, GetStoreType());
-  GetVerifierPasswordStoreInterface()->AddLogin(
-      password_manager::FromPasswordForm(form));
-  ASSERT_EQ(1, GetVerifierPasswordCount());
   GetPasswordStoreInterface()->AddLogin(
       password_manager::FromPasswordForm(form));
   ASSERT_EQ(1, GetPasswordCount());
@@ -528,7 +492,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientPasswordsWithAccountStorageSyncTest,
 
   // The account-storage opt-in is still present, so PASSWORDS should become
   // active.
-  PasswordSyncActiveChecker(GetSyncService(0)).Wait();
+  ASSERT_TRUE(PasswordSyncActiveChecker(GetSyncService(0)).Wait());
 
   // Now the password should be in both stores: The profile store does *not* get
   // cleared when Sync gets disabled.
@@ -597,24 +561,26 @@ IN_PROC_BROWSER_TEST_F(SingleClientPasswordsWithAccountStorageSyncTest,
       syncer::PersistentTombstoneEntity::CreateFromEntity(entity0));
 
   // Update `form1` locally.
-  form1.password_value = u"updated_password";
+  form1.password_value = PasswordString(u"updated_password");
   form1.date_created = base::Time::Now();
   passwords_helper::GetProfilePasswordStoreInterface(0)->UpdateLogin(
       password_manager::FromPasswordForm(form1));
 
   // The passwords are still existing locally.
-  PasswordFormsChecker(0, {form0, form1},
-                       password_manager::PasswordForm::Store::kProfileStore)
-      .Wait();
+  ASSERT_TRUE(
+      PasswordFormsChecker(0, {form0, form1},
+                           password_manager::PasswordForm::Store::kProfileStore)
+          .Wait());
 
   // Fix the authentication error, sync is available again.
   GetClient(0)->ExitSyncPausedStateForPrimaryAccount();
   ASSERT_TRUE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::PASSWORDS));
 
   // `form0` has been deleted locally, only `form1` remains.
-  PasswordFormsChecker(0, {form1},
-                       password_manager::PasswordForm::Store::kProfileStore)
-      .Wait();
+  ASSERT_TRUE(
+      PasswordFormsChecker(0, {form1},
+                           password_manager::PasswordForm::Store::kProfileStore)
+          .Wait());
 
   // `form1` was updated on the server.
   EXPECT_TRUE(ServerPasswordsEqualityChecker(
@@ -689,16 +655,17 @@ IN_PROC_BROWSER_TEST_F(SingleClientPasswordsWithAccountStorageSyncTest,
       passwords_helper::GetAccountPasswordStoreInterface(0);
   ASSERT_EQ(passwords_helper::GetAllLogins(account_store).size(), 0u);
 
-  PasswordFormsChecker(0, {form1, form2},
-                       password_manager::PasswordForm::Store::kProfileStore)
-      .Wait();
+  ASSERT_TRUE(
+      PasswordFormsChecker(0, {form1, form2},
+                           password_manager::PasswordForm::Store::kProfileStore)
+          .Wait());
   ASSERT_TRUE(ServerCountMatchStatusChecker(syncer::PASSWORDS, 0).Wait());
 
   GetSyncService(0)->TriggerLocalDataMigration({syncer::PASSWORDS});
 
-  PasswordFormsChecker(0, {},
-                       password_manager::PasswordForm::Store::kProfileStore)
-      .Wait();
+  ASSERT_TRUE(PasswordFormsChecker(
+                  0, {}, password_manager::PasswordForm::Store::kProfileStore)
+                  .Wait());
   EXPECT_TRUE(ServerCountMatchStatusChecker(syncer::PASSWORDS, 2).Wait());
 
   EXPECT_THAT(
@@ -711,10 +678,12 @@ IN_PROC_BROWSER_TEST_F(SingleClientPasswordsWithAccountStorageSyncTest,
               UnorderedElementsAre(
                   testing::Pointee(AllOf(
                       Field(&PasswordForm::username_value, u"username1"),
-                      Field(&PasswordForm::password_value, u"password1"))),
+                      Field(&PasswordForm::password_value,
+                            Property(&PasswordString::value, u"password1")))),
                   testing::Pointee(AllOf(
                       Field(&PasswordForm::username_value, u"username2"),
-                      Field(&PasswordForm::password_value, u"password2")))));
+                      Field(&PasswordForm::password_value,
+                            Property(&PasswordString::value, u"password2"))))));
 }
 
 IN_PROC_BROWSER_TEST_F(SingleClientPasswordsWithAccountStorageSyncTest,
@@ -745,30 +714,34 @@ IN_PROC_BROWSER_TEST_F(SingleClientPasswordsWithAccountStorageSyncTest,
       passwords_helper::GetAccountPasswordStoreInterface(0);
   ASSERT_EQ(passwords_helper::GetAllLogins(account_store).size(), 0u);
 
-  PasswordFormsChecker(0, {form1, form2},
-                       password_manager::PasswordForm::Store::kProfileStore)
-      .Wait();
+  ASSERT_TRUE(
+      PasswordFormsChecker(0, {form1, form2},
+                           password_manager::PasswordForm::Store::kProfileStore)
+          .Wait());
   ASSERT_TRUE(ServerCountMatchStatusChecker(syncer::PASSWORDS, 0).Wait());
 
   GetSyncService(0)->TriggerLocalDataMigrationForItems(
       {{syncer::PASSWORDS, {PasswordFormUniqueKey(form1)}}});
 
-  PasswordFormsChecker(0, {form2},
-                       password_manager::PasswordForm::Store::kProfileStore)
-      .Wait();
+  ASSERT_TRUE(
+      PasswordFormsChecker(0, {form2},
+                           password_manager::PasswordForm::Store::kProfileStore)
+          .Wait());
   EXPECT_TRUE(ServerCountMatchStatusChecker(syncer::PASSWORDS, 1).Wait());
 
   EXPECT_THAT(fake_server_->GetSyncEntitiesByDataType(syncer::PASSWORDS),
               ElementsAre(HasPasswordValue(fake_server_.get(), "password1")));
 
   EXPECT_THAT(passwords_helper::GetAllLogins(profile_store),
-              ElementsAre(testing::Pointee(
-                  AllOf(Field(&PasswordForm::username_value, u"username2"),
-                        Field(&PasswordForm::password_value, u"password2")))));
+              ElementsAre(testing::Pointee(AllOf(
+                  Field(&PasswordForm::username_value, u"username2"),
+                  Field(&PasswordForm::password_value,
+                        Property(&PasswordString::value, u"password2"))))));
   EXPECT_THAT(passwords_helper::GetAllLogins(account_store),
-              ElementsAre(testing::Pointee(
-                  AllOf(Field(&PasswordForm::username_value, u"username1"),
-                        Field(&PasswordForm::password_value, u"password1")))));
+              ElementsAre(testing::Pointee(AllOf(
+                  Field(&PasswordForm::username_value, u"username1"),
+                  Field(&PasswordForm::password_value,
+                        Property(&PasswordString::value, u"password1"))))));
 }
 
 #endif  // !BUILDFLAG(IS_CHROMEOS)
@@ -798,7 +771,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTest,
   form.signon_realm = "http://fake-site.com/";
   form.url = GURL("http://fake-site.com/");
   form.username_value = u"username";
-  form.password_value = u"new_password";
+  form.password_value = PasswordString(u"new_password");
   form.date_created = base::Time::Now();
   GetPasswordStoreInterface()->UpdateLogin(
       password_manager::FromPasswordForm(form));
@@ -865,7 +838,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTest,
   form.signon_realm = "http://fake-site.com/";
   form.url = GURL("http://fake-site.com/");
   form.username_value = u"username-with-note";
-  form.password_value = u"password";
+  form.password_value = PasswordString(u"password");
   form.notes.emplace_back(u"new note value",
                           /*date_created=*/base::Time::Now());
   form.in_store = GetStoreType();
@@ -950,7 +923,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTest,
   ASSERT_TRUE(SetupClients());
 
   ASSERT_TRUE(SetupSync());
-  PasswordSyncActiveChecker(GetSyncService(0)).Wait();
+  ASSERT_TRUE(PasswordSyncActiveChecker(GetSyncService(0)).Wait());
 
   // The local store should contain the note since the client should read the
   // backup when the note in the specifics data isn't set.
@@ -958,7 +931,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientPasswordsSyncTest,
               Contains(Pointee(AllOf(
                   Field(&PasswordForm::signon_realm, "http://fake-site.com/"),
                   Field(&PasswordForm::username_value, u"username"),
-                  Field(&PasswordForm::password_value, u"password"),
+                  Field(&PasswordForm::password_value,
+                        Property(&PasswordString::value, u"password")),
                   Field(&PasswordForm::notes,
                         Contains(Field(&password_manager::PasswordNote::value,
                                        u"some important note")))))));

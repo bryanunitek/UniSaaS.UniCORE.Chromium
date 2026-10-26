@@ -3,33 +3,24 @@
 // found in the LICENSE file.
 
 #include "base/memory/scoped_refptr.h"
-#include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
-#include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h"
-#include "chrome/browser/ui/views/omnibox/omnibox_result_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
-#include "chrome/browser/ui/views/theme_copying_widget.h"
-#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/test/base/ui_test_utils.h"
-#include "chrome/test/permissions/permission_request_manager_test_api.h"
+#include "chrome/common/chrome_features.h"
 #include "components/omnibox/browser/actions/omnibox_pedal.h"
 #include "components/omnibox/browser/actions/tab_switch_action.h"
 #include "components/omnibox/browser/autocomplete_match_classification.h"
 #include "components/omnibox/browser/omnibox_popup_selection.h"
-#include "components/omnibox/browser/test_scheme_classifier.h"
 #include "components/strings/grit/components_strings.h"
-#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 
 // This test is used to verify UI of dedicated row with screenshots verification
@@ -40,9 +31,10 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
  public:
   OmniboxSuggestionButtonRowBrowserTest() {
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features*/ {},
-        /*disabled_features*/ {omnibox::internal::kWebUIOmniboxPopup,
-                               omnibox::internal::kWebUIOmniboxAimPopup});
+        /*enabled_features=*/{},
+        /*disabled_features=*/{omnibox::internal::kWebUIOmniboxPopup,
+                               omnibox::internal::kWebUIOmniboxAimPopup,
+                               features::kWebUILocationBar});
   }
 
   OmniboxSuggestionButtonRowBrowserTest(
@@ -64,7 +56,7 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
     TermMatches termMatches = {{0, 0, 0}};
 
     AutocompleteMatch search_match(nullptr, 500, false,
-                                   AutocompleteMatchType::HISTORY_URL);
+                                   omnibox::AutocompleteMatchType::kHistoryUrl);
     search_match.allowed_to_be_default_match = true;
     search_match.contents = u"https://footube.com";
     search_match.description = u"The FooTube";
@@ -76,8 +68,8 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
     search_match.associated_keyword = u"match";
 
     auto tab_switch_action = base::MakeRefCounted<TabSwitchAction>(GURL());
-    AutocompleteMatch switch_to_tab_match(nullptr, 500, false,
-                                          AutocompleteMatchType::HISTORY_URL);
+    AutocompleteMatch switch_to_tab_match(
+        nullptr, 500, false, omnibox::AutocompleteMatchType::kHistoryUrl);
     switch_to_tab_match.contents = u"https://foobar.com";
     switch_to_tab_match.description = u"The Foo Of All Bars";
     switch_to_tab_match.contents_class = ClassifyTermMatches(
@@ -87,8 +79,8 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
     switch_to_tab_match.has_tab_match = true;
     switch_to_tab_match.actions.push_back(tab_switch_action);
 
-    AutocompleteMatch action_match(nullptr, 500, false,
-                                   AutocompleteMatchType::SEARCH_SUGGEST);
+    AutocompleteMatch action_match(
+        nullptr, 500, false, omnibox::AutocompleteMatchType::kSearchSuggest);
     action_match.contents = u"delete data";
     action_match.description = u"Search";
     action_match.description_class = ClassifyTermMatches(
@@ -106,7 +98,7 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
     action_match.actions.push_back(action_);
 
     AutocompleteMatch multiple_actions_match(
-        nullptr, 500, false, AutocompleteMatchType::HISTORY_URL);
+        nullptr, 500, false, omnibox::AutocompleteMatchType::kHistoryUrl);
     multiple_actions_match.contents = u"https://foobarzon.com";
     multiple_actions_match.description = u"The FooBarZon";
     multiple_actions_match.contents_class = ClassifyTermMatches(
@@ -141,32 +133,32 @@ class OmniboxSuggestionButtonRowBrowserTest : public DialogBrowserTest {
     OmniboxEditModel* model =
         GetLocationBar()->GetOmniboxController()->edit_model();
 
-    model->SetPopupSelection(
-        OmniboxPopupSelection(0, OmniboxPopupSelection::KEYWORD_MODE));
+    model->SetPopupSelection(OmniboxPopupSelection(
+        0, OmniboxPopupSelection::LineState::kKeywordMode));
     if (!VerifyActiveButtonText(popup_view, 0, u"Search")) {
       return false;
     }
 
-    model->SetPopupSelection(
-        OmniboxPopupSelection(1, OmniboxPopupSelection::FOCUSED_BUTTON_ACTION));
+    model->SetPopupSelection(OmniboxPopupSelection(
+        1, OmniboxPopupSelection::LineState::kFocusedButtonAction));
     if (!VerifyActiveButtonText(popup_view, 1, u"Switch")) {
       return false;
     }
 
-    model->SetPopupSelection(
-        OmniboxPopupSelection(2, OmniboxPopupSelection::FOCUSED_BUTTON_ACTION));
+    model->SetPopupSelection(OmniboxPopupSelection(
+        2, OmniboxPopupSelection::LineState::kFocusedButtonAction));
     if (!VerifyActiveButtonText(popup_view, 2, u"Delete")) {
       return false;
     }
 
-    model->SetPopupSelection(
-        OmniboxPopupSelection(3, OmniboxPopupSelection::KEYWORD_MODE));
+    model->SetPopupSelection(OmniboxPopupSelection(
+        3, OmniboxPopupSelection::LineState::kKeywordMode));
     if (!VerifyActiveButtonText(popup_view, 3, u"Search")) {
       return false;
     }
 
-    model->SetPopupSelection(
-        OmniboxPopupSelection(3, OmniboxPopupSelection::FOCUSED_BUTTON_ACTION));
+    model->SetPopupSelection(OmniboxPopupSelection(
+        3, OmniboxPopupSelection::LineState::kFocusedButtonAction));
     if (!VerifyActiveButtonText(popup_view, 3, u"Switch")) {
       return false;
     }

@@ -6,6 +6,7 @@ module blink.mojom;
 
 import "cc/mojom/browser_controls_params.mojom";
 import "services/viz/public/mojom/compositing/local_surface_id.mojom";
+import "third_party/blink/public/mojom/manifest/application_context.mojom";
 import "third_party/blink/public/mojom/manifest/display_mode.mojom";
 import "ui/display/mojom/screen_infos.mojom";
 import "ui/gfx/geometry/mojom/geometry.mojom";
@@ -21,6 +22,9 @@ struct VisualProperties {
 
   // Whether or not the widget can be resized.
   bool resizable = true;
+
+  // Whether or not the window is an always-on-top popup.
+  bool always_on_top_popup = false;
 
   // The minimum size for Blink if auto-resize is enabled.
   gfx.mojom.Size min_size_for_auto_resize;
@@ -66,8 +70,17 @@ struct VisualProperties {
   // Page scoped value.
   bool is_fullscreen_granted;
 
+  // The number of times fullscreen has been granted to this widget by the
+  // browser.
+  uint64 fullscreen_grant_count = 0;
+
   // The display mode. This will be replicated amongst subframes.
   DisplayMode display_mode = DisplayMode.kUndefined;
+
+  // How the top-level browsing context is presented to the user (a standalone
+  // web application window vs ordinary browser UI). This will be replicated
+  // amongst subframes.
+  ApplicationContext application_context = ApplicationContext.kNone;
 
   // The window show state.
   ui.mojom.WindowShowState window_show_state

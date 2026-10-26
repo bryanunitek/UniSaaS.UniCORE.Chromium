@@ -12,6 +12,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/subresource_filter/core/browser/verified_ruleset_dealer.h"
@@ -47,9 +48,16 @@ mojom::ActivationState ComputeActivationState(
 // while the DSF is retrieved on the |task_runner| in a deferred manner.
 class AsyncDocumentSubresourceFilter {
  public:
-  using LoadPolicyCallback = base::OnceCallback<void(LoadPolicy)>;
+  struct LoadPolicyResult {
+    LoadPolicy load_policy = LoadPolicy::ALLOW;
+    // Whether the matched rule is a domain/subdomain anchored rule. This is
+    // only set to true when `load_policy` is LoadPolicy::DISALLOW or
+    // LoadPolicy::WOULD_DISALLOW.
+    bool matched_subdomain_disallow_rule = false;
+  };
+  using LoadPolicyCallback = base::OnceCallback<void(LoadPolicyResult)>;
   using MultiLoadPolicyCallback =
-      base::OnceCallback<void(std::vector<LoadPolicy>)>;
+      base::OnceCallback<void(std::vector<LoadPolicyResult>)>;
 
   class Core;
 
@@ -174,6 +182,11 @@ class AsyncDocumentSubresourceFilter {
 
   bool has_activation_state() const { return activation_state_.has_value(); }
 
+  base::WeakPtr<AsyncDocumentSubresourceFilter> GetWeakPtr() {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
   // The |first_disallowed_load_callback|, if it is non-null, is invoked on the
   // first ReportDisallowedLoad() call.
   void set_first_disallowed_load_callback(base::OnceClosure callback) {
@@ -216,7 +229,7 @@ class AsyncDocumentSubresourceFilter::Core {
     return filter_ ? &filter_.value() : nullptr;
   }
 
-  std::vector<LoadPolicy> GetLoadPolicies(const std::vector<GURL>& urls);
+  std::vector<LoadPolicyResult> GetLoadPolicies(const std::vector<GURL>& urls);
 
  private:
   friend class AsyncDocumentSubresourceFilter;

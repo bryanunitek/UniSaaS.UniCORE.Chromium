@@ -59,19 +59,9 @@ bool FederatedIdentityAutoReauthnPermissionContext::
   }
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
-  const auto* tab_interface =
-      tabs::TabInterface::MaybeGetFromContents(web_contents);
   auto* actor_service = actor::ActorKeyedService::Get(profile);
-  return tab_interface && actor_service &&
-         actor_service->IsActiveOnTab(*tab_interface);
-}
-
-base::Time
-FederatedIdentityAutoReauthnPermissionContext::GetAutoReauthnEmbargoStartTime(
-    const url::Origin& relying_party_embedder) {
-  return permission_autoblocker_->GetEmbargoStartTime(
-      relying_party_embedder.GetURL(),
-      ContentSettingsType::FEDERATED_IDENTITY_AUTO_REAUTHN_PERMISSION);
+  return actor_service && actor_service->GetActingActorTaskForWebContents(
+                              web_contents) != nullptr;
 }
 
 void FederatedIdentityAutoReauthnPermissionContext::RecordEmbargoForAutoReauthn(

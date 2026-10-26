@@ -4,11 +4,14 @@
 
 #include "components/memory_pressure/system_memory_pressure_evaluator_mac.h"
 
-#include "base/apple/scoped_cftyperef.h"
-#include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
+#include <memory>
+#include <optional>
+#include <utility>
+
+#include "base/system/sys_info.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
+#include "components/memory_pressure/disk_space_memory_pressure_evaluator_mac.h"
 #include "components/memory_pressure/multi_source_memory_pressure_monitor.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -33,7 +36,7 @@ class TestSystemMemoryPressureEvaluator : public SystemMemoryPressureEvaluator {
 
   // Sets the raw macOS memory pressure level read by the memory pressure
   // evaluator.
-  int macos_pressure_level_for_testing_;
+  int macos_pressure_level_for_testing_ = DISPATCH_MEMORYPRESSURE_NORMAL;
 
   // Exposes the UpdatePressureLevel() method for testing.
   void UpdatePressureLevel() {
@@ -43,6 +46,18 @@ class TestSystemMemoryPressureEvaluator : public SystemMemoryPressureEvaluator {
  private:
   int GetMacMemoryPressureLevel() override {
     return macos_pressure_level_for_testing_;
+  }
+};
+
+class TestMacAuxiliaryDiskEvaluator : public DiskSpaceMemoryPressureEvaluator {
+ public:
+  explicit TestMacAuxiliaryDiskEvaluator(
+      std::unique_ptr<MemoryPressureVoter> voter)
+      : DiskSpaceMemoryPressureEvaluator(std::move(voter)) {}
+
+  void TriggerDiskSpaceCheckComplete(
+      std::optional<base::SysInfo::DiskSpaceInfo> disk_space_info) {
+    OnDiskSpaceCheckComplete(disk_space_info);
   }
 };
 
@@ -102,6 +117,68 @@ TEST(MacSystemMemoryPressureEvaluatorTest, MemoryPressureConversion) {
       DISPATCH_MEMORYPRESSURE_CRITICAL;
   evaluator.UpdatePressureLevel();
   EXPECT_EQ(base::MEMORY_PRESSURE_LEVEL_CRITICAL, evaluator.current_vote());
+}
+
+TEST(MacSystemMemoryPressureEvaluatorTest, OSTransitionsOnly) {
+  base::test::TaskEnvironment task_environment(
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME);
+  MultiSourceMemoryPressureMonitor monitor;
+  base::HistogramTester histogram_tester;
+
+  TestSystemMemoryPressureEvaluator evaluator(monitor.CreateVoter());
+  TestMacAuxiliaryDiskEvaluator disk_evaluator(monitor.CreateVoter());
+
+  // 1. Simulate OS transition: NONE -> MODERATE.
+  evaluator.macos_pressure_level_for_testing_ = DISPATCH_MEMORYPRESSURE_WARN;
+  evaluator.UpdatePressureLevel();
+
+  // No transition reported yet (just entered MODERATE).
+  histogram_tester.ExpectTotalCount(
+      "Memory.PressureWindowDuration2.ModerateToCritical", 0);
+
+  // Advance clock in MODERATE.
+  task_environment.FastForwardBy(base::Seconds(15));
+
+  // 2. Simulate OS transition: MODERATE -> CRITICAL (OS).
+  evaluator.macos_pressure_level_for_testing_ =
+      DISPATCH_MEMORYPRESSURE_CRITICAL;
+  evaluator.UpdatePressureLevel();
+
+  // Should report ModerateToCritical (15s) from OS signal.
+  histogram_tester.ExpectTimeBucketCount(
+      "Memory.PressureWindowDuration2.ModerateToCritical", base::Seconds(15),
+      1);
+
+  // 3. Now simulate disk pressure while OS is CRITICAL.
+  // Disk becomes low (should vote CRITICAL, but OS is already CRITICAL).
+  base::SysInfo::DiskSpaceInfo disk_space_info;
+  disk_space_info.available = base::MiB(100);
+  disk_evaluator.TriggerDiskSpaceCheckComplete(disk_space_info);
+
+  // Advance clock in CRITICAL (both OS and Disk are CRITICAL).
+  task_environment.FastForwardBy(base::Seconds(20));
+
+  // 4. Simulate Disk pressure goes away, but OS remains CRITICAL.
+  disk_space_info.available = base::MiB(500);
+  disk_evaluator.TriggerDiskSpaceCheckComplete(disk_space_info);
+
+  // No transition should be reported because OS level didn't change (remained
+  // CRITICAL).
+  histogram_tester.ExpectTotalCount(
+      "Memory.PressureWindowDuration2.CriticalToNone", 0);
+  histogram_tester.ExpectTotalCount(
+      "Memory.PressureWindowDuration2.CriticalToModerate", 0);
+
+  // Advance clock.
+  task_environment.FastForwardBy(base::Seconds(10));
+
+  // 5. Simulate OS transition: CRITICAL -> NONE.
+  evaluator.macos_pressure_level_for_testing_ = DISPATCH_MEMORYPRESSURE_NORMAL;
+  evaluator.UpdatePressureLevel();
+
+  // Should report CriticalToNone (20s from step 3-4 + 10s from step 4-5 = 30s).
+  histogram_tester.ExpectTimeBucketCount(
+      "Memory.PressureWindowDuration2.CriticalToNone", base::Seconds(30), 1);
 }
 
 }  // namespace mac

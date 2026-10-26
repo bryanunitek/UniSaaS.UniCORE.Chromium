@@ -20,6 +20,10 @@ namespace base {
 class SingleThreadTaskExecutor;
 }  // namespace base
 
+namespace gfx {
+class Size;
+}
+
 namespace payments {
 
 class PaymentUIObserver;
@@ -49,6 +53,7 @@ class TestContentPaymentRequestDelegate : public ContentPaymentRequestDelegate {
   void CloseDialog() override;
   void ShowErrorMessage() override;
   void ShowProcessingSpinner() override;
+  void ShowLoadingView() override;
   bool IsBrowserWindowActive() const override;
   void GetTwaPackageName(GetTwaPackageNameCallback callback) const override;
   PaymentRequestDialog* GetDialogForTesting() override;
@@ -61,6 +66,7 @@ class TestContentPaymentRequestDelegate : public ContentPaymentRequestDelegate {
   PrefService* GetPrefService() override;
   void EmbedPaymentHandlerWindow(
       const GURL& url,
+      const std::optional<gfx::Size>& preferred_web_contents_size,
       PaymentHandlerOpenWindowCallback callback) override;
   bool IsInteractive() const override;
   std::string GetInvalidSslCertificateErrorMessage() override;

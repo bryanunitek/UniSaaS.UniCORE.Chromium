@@ -8,6 +8,7 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_window.h"
 #include "components/permissions/permission_request_manager.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
 #include "third_party/skia/include/core/SkRegion.h"
@@ -15,6 +16,7 @@
 #include "ui/base/interaction/element_events.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/gfx/draggable_region.h"
 #include "ui/views/interaction/element_tracker_views.h"
 
 WebUIBrowserClientView::WebUIBrowserClientView(
@@ -59,11 +61,10 @@ void WebUIBrowserClientView::OnLocationIconMoved(ui::TrackedElement* element) {
   BrowserWindowInterface* const browser =
       web_contents_delegate_->window()->browser();
   CHECK(browser);
-  content::WebContents* contents =
-      browser->GetTabStripModel()->GetActiveWebContents();
-  if (contents) {
-    auto* manager =
-        permissions::PermissionRequestManager::FromWebContents(contents);
+  tabs::TabInterface* const active_tab = browser->GetActiveTabInterface();
+  if (active_tab) {
+    auto* manager = permissions::PermissionRequestManager::FromWebContents(
+        active_tab->GetContents());
     CHECK(manager);
     manager->UpdateAnchor();
   }
@@ -71,14 +72,7 @@ void WebUIBrowserClientView::OnLocationIconMoved(ui::TrackedElement* element) {
 
 void WebUIBrowserClientView::DraggableRegionsChanged(
     const std::vector<blink::mojom::DraggableRegionPtr>& regions) {
-  SkRegion draggable_region;
-  for (const blink::mojom::DraggableRegionPtr& region : regions) {
-    draggable_region.op(
-        SkIRect::MakeXYWH(region->bounds.x(), region->bounds.y(),
-                          region->bounds.width(), region->bounds.height()),
-        region->draggable ? SkRegion::kUnion_Op : SkRegion::kDifference_Op);
-  }
-  draggable_region_.swap(draggable_region);
+  draggable_region_ = gfx::DraggableRegionsToSkRegion(regions);
 }
 
 BEGIN_METADATA(WebUIBrowserClientView)

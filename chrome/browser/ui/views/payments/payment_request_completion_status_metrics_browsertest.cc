@@ -4,7 +4,6 @@
 
 #include <vector>
 
-#include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/views/payments/payment_request_browsertest_base.h"
@@ -12,9 +11,9 @@
 #include "components/payments/core/journey_logger.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/label.h"
-#include "url/gurl.h"
 
 namespace payments {
 
@@ -28,7 +27,13 @@ int toInt(Event2 event) {
 
 }  // namespace
 
-using PaymentRequestCompletionStatusMetricsTest = PaymentRequestBrowserTestBase;
+class PaymentRequestCompletionStatusMetricsTest
+    : public PaymentRequestBrowserTestBase {
+ protected:
+  PaymentRequestCompletionStatusMetricsTest() {
+    SetBypassUserInteractionForTesting();
+  }
+};
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestCompletionStatusMetricsTest, Completed) {
   base::HistogramTester histogram_tester;
@@ -353,7 +358,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCompletionStatusMetricsTest,
 
   // Reload the page containing the Payment Request.
   ResetEventWaiterForSequence({DialogEvent::DIALOG_CLOSED});
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   ASSERT_TRUE(WaitForObservedEvent());
 
   // Make sure the correct events were logged.
@@ -394,7 +399,8 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestInitiatedCompletionStatusMetricsTest,
       histogram_tester.GetAllSamples("PaymentRequest.Events2");
   ASSERT_EQ(1U, buckets.size());
   EXPECT_EQ(toInt(Event2::kInitiated) | toInt(Event2::kUserAborted) |
-                toInt(Event2::kRequestMethodOther),
+                toInt(Event2::kRequestMethodOther) |
+                toInt(Event2::kCanMakePaymentCalled),
             buckets[0].min);
 }
 

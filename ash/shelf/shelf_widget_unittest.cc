@@ -10,6 +10,7 @@
 #include "ash/keyboard/ui/test/keyboard_test_util.h"
 #include "ash/public/cpp/keyboard/keyboard_switches.h"
 #include "ash/public/cpp/shelf_config.h"
+#include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/public/cpp/tablet_mode.h"
 #include "ash/root_window_controller.h"
@@ -494,9 +495,20 @@ TEST_F(ShelfWidgetTest, HiddenShelfHitTestTouch) {
   }
 }
 
+class ShelfWidgetHitTest : public ShelfWidgetTest {
+ public:
+  ShelfWidgetHitTest() = default;
+
+  // ShelfWidgetTest:
+  void SetUpInitParams(AshTestHelper::InitParams& init_params) override {
+    ShelfWidgetTest::SetUpInitParams(init_params);
+    init_params.add_default_shelf_icon = false;
+  }
+};
+
 // Tests that the shelf lets mouse-events close to the edge fall through to the
 // window underneath.
-TEST_F(ShelfWidgetTest, ShelfEdgeOverlappingWindowHitTestMouse) {
+TEST_F(ShelfWidgetHitTest, ShelfEdgeOverlappingWindowHitTestMouse) {
   UpdateDisplay("500x400");
   ShelfWidget* shelf_widget = GetShelfWidget();
   gfx::Rect shelf_bounds = shelf_widget->GetWindowBoundsInScreen();
@@ -1104,7 +1116,7 @@ TEST_F(ShelfWidgetViewsVisibilityTest, LoginViewsLockViews) {
   ExpectVisible(SessionState::OOBE, kLoginShelf, kNone);
   ExpectVisible(SessionState::LOGIN_PRIMARY, kLoginShelf, kNone);
 
-  SimulateUserLogin({"user1@test.com"});
+  SimulateUserLogin(AccountId::FromUserEmail("user1@test.com"));
 
   ExpectVisible(SessionState::LOGGED_IN_NOT_ACTIVE, kLoginShelf, kNone);
   ExpectVisible(SessionState::ACTIVE, kShelf, kShelf);
@@ -1115,7 +1127,15 @@ TEST_F(ShelfWidgetViewsVisibilityTest, LoginViewsLockViews) {
 }
 
 class ShelfWidgetVirtualKeyboardTest : public AshTestBase {
+ public:
+  ShelfWidgetVirtualKeyboardTest() = default;
+
  protected:
+  void SetUpInitParams(AshTestHelper::InitParams& init_params) override {
+    AshTestBase::SetUpInitParams(init_params);
+    init_params.add_default_shelf_icon = false;
+  }
+
   void SetUp() override {
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
         keyboard::switches::kEnableVirtualKeyboard);

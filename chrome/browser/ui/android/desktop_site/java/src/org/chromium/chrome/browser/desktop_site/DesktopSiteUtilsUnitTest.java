@@ -19,10 +19,7 @@ import android.content.res.Resources;
 import android.os.Build;
 import android.util.DisplayMetrics;
 import android.view.Display;
-import android.view.Window;
 import android.view.WindowManager;
-
-import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.After;
 import org.junit.Assert;
@@ -33,13 +30,14 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.Robolectric;
 import org.robolectric.Shadows;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowPackageManager;
 import org.robolectric.util.ReflectionHelpers;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.SysUtils;
+import org.chromium.base.TriState;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.EnableFeatures;
@@ -69,7 +67,6 @@ import java.util.Map;
 
 /** Unit tests for {@link DesktopSiteUtils}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class DesktopSiteUtilsUnitTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -79,9 +76,6 @@ public class DesktopSiteUtilsUnitTest {
             new OverrideContextWrapperTestRule();
 
     @Mock private WebsitePreferenceBridge.Natives mWebsitePreferenceBridgeJniMock;
-    @Mock private Activity mActivity;
-    @Mock private Window mWindow;
-    @Mock private WindowManager.LayoutParams mLayoutParams;
     @Mock private DisplayMetrics mDisplayMetrics;
     @Mock private Profile mProfile;
     @Mock private DisplayAndroid mDisplayAndroid;
@@ -89,6 +83,8 @@ public class DesktopSiteUtilsUnitTest {
     @Mock private UserPrefs.Natives mUserPrefsJni;
     @Mock private PrefService mPrefService;
 
+    private Activity mActivity;
+    private WindowManager.LayoutParams mLayoutParams;
     private @ContentSetting int mRdsDefaultValue;
     private boolean mWindowSetting;
     private SharedPreferencesManager mSharedPreferencesManager;
@@ -144,9 +140,9 @@ public class DesktopSiteUtilsUnitTest {
 
         mSharedPreferencesManager = ChromeSharedPreferences.getInstance();
 
-        mResources = ApplicationProvider.getApplicationContext().getResources();
+        mActivity = Robolectric.buildActivity(Activity.class).get();
+        mResources = mActivity.getResources();
         mResources.getConfiguration().smallestScreenWidthDp = 600;
-        when(mActivity.getResources()).thenReturn(mResources);
 
         SysUtils.setAmountOfPhysicalMemoryKbForTesting(
                 7000 * ConversionUtils.KILOBYTES_PER_MEGABYTE);
@@ -180,8 +176,7 @@ public class DesktopSiteUtilsUnitTest {
                 .when(mWebsitePreferenceBridgeJniMock)
                 .getContentSetting(
                         mProfile, ContentSettingsType.REQUEST_DESKTOP_SITE, mGoogleUrl, mGoogleUrl);
-        when(mActivity.getWindow()).thenReturn(mWindow);
-        when(mWindow.getAttributes()).thenReturn(mLayoutParams);
+        mLayoutParams = mActivity.getWindow().getAttributes();
         mLayoutParams.width = -1;
         mDisplayMetrics.density = 1.0f;
         mDisplayMetrics.widthPixels = 800;
@@ -749,7 +744,7 @@ public class DesktopSiteUtilsUnitTest {
             Assert.assertTrue("Desktop site should be overridden.", shouldOverride);
         } finally {
             ReflectionHelpers.setStaticField(Build.class, "MANUFACTURER", originalManufacturer);
-            DesktopSiteUtils.sDesktopUAAllowedOnExternalDisplayForOem = null;
+            DesktopSiteUtils.sDesktopUAAllowedOnExternalDisplayForOem = TriState.NOT_SET;
         }
     }
 
@@ -772,7 +767,7 @@ public class DesktopSiteUtilsUnitTest {
             Assert.assertFalse("Desktop site should not be overridden.", shouldOverride);
         } finally {
             ReflectionHelpers.setStaticField(Build.class, "MANUFACTURER", originalManufacturer);
-            DesktopSiteUtils.sDesktopUAAllowedOnExternalDisplayForOem = null;
+            DesktopSiteUtils.sDesktopUAAllowedOnExternalDisplayForOem = TriState.NOT_SET;
         }
     }
 
@@ -798,7 +793,7 @@ public class DesktopSiteUtilsUnitTest {
             Assert.assertFalse("Desktop site should not be overridden.", shouldOverride);
         } finally {
             ReflectionHelpers.setStaticField(Build.class, "MANUFACTURER", originalManufacturer);
-            DesktopSiteUtils.sDesktopUAAllowedOnExternalDisplayForOem = null;
+            DesktopSiteUtils.sDesktopUAAllowedOnExternalDisplayForOem = TriState.NOT_SET;
         }
     }
 
@@ -814,7 +809,7 @@ public class DesktopSiteUtilsUnitTest {
             Assert.assertTrue("Desktop site should be overridden.", shouldOverride);
         } finally {
             ReflectionHelpers.setStaticField(Build.class, "MANUFACTURER", originalManufacturer);
-            DesktopSiteUtils.sDesktopUAAllowedOnExternalDisplayForOem = null;
+            DesktopSiteUtils.sDesktopUAAllowedOnExternalDisplayForOem = TriState.NOT_SET;
         }
     }
 }

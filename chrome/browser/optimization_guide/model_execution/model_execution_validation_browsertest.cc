@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/command_line.h"
 #include "base/strings/strcat.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
@@ -9,13 +10,15 @@
 #include "chrome/browser/optimization_guide/browser_test_util.h"
 #include "chrome/browser/optimization_guide/model_validator_keyed_service.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/optimization_guide/core/model_execution/model_execution_fetcher.h"
+#include "components/optimization_guide/core/model_execution/remote_model_execution_common.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
-#include "components/optimization_guide/core/optimization_guide_util.h"
+#include "components/optimization_guide/core/optimization_guide_logger.h"
 #include "components/optimization_guide/proto/string_value.pb.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
+#include "components/variations/variations_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
@@ -40,7 +43,7 @@ class ModelExecutionValidationBrowserTestBase : public InProcessBrowserTest {
     model_execution_server_ = std::make_unique<net::EmbeddedTestServer>(
         net::EmbeddedTestServer::TYPE_HTTPS);
     net::EmbeddedTestServer::ServerCertificateConfig cert_config;
-    cert_config.dns_names = {switches::GetModelExecutionServiceURL().GetHost()};
+    cert_config.dns_names = {GetModelExecutionServiceBaseURL().GetHost()};
     model_execution_server_->SetSSLConfig(cert_config);
     model_execution_server_->RegisterRequestHandler(
         base::BindRepeating(&ModelExecutionValidationBrowserTestBase::
@@ -52,10 +55,13 @@ class ModelExecutionValidationBrowserTestBase : public InProcessBrowserTest {
 
   void SetUpCommandLine(base::CommandLine* cmd) override {
     cmd->AppendSwitchASCII(
-        switches::kOptimizationGuideServiceModelExecutionURL,
+        kOptimizationGuideServiceModelExecutionURLSwitch,
         model_execution_server_
-            ->GetURL(switches::GetModelExecutionServiceURL().GetHost(), "/")
+            ->GetURL(GetModelExecutionServiceBaseURL().GetHost(), "/")
             .spec());
+    // Add a dummy variation ID so that the X-Client-Data header is appended to
+    // eligible requests to select Google servers.
+    cmd->AppendSwitchASCII(variations::switches::kForceVariationIds, "5678");
   }
 
   void SetUpBrowserContextKeyedServices(
@@ -143,8 +149,8 @@ class ModelExecutionValidationBrowserTest
  public:
   void SetUpCommandLine(base::CommandLine* cmd) override {
     ModelExecutionValidationBrowserTestBase::SetUpCommandLine(cmd);
-    cmd->AppendSwitch(switches::kDebugLoggingEnabled);
-    cmd->AppendSwitchASCII(switches::kModelExecutionValidate, "test_request");
+    cmd->AppendSwitch(kDebugLoggingEnabledSwitch);
+    cmd->AppendSwitchASCII(kModelExecutionValidateSwitch, "test_request");
   }
 };
 
@@ -168,7 +174,7 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionValidationBrowserTest,
       "OptimizationGuide.ModelExecution.Result.Test", true, 1);
   histogram_tester_.ExpectUniqueSample(
       "OptimizationGuide.ModelExecutionFetcher.RequestStatus.Test",
-      FetcherRequestStatus::kSuccess, 1);
+      ModelExecutionFetcherRequestStatus::kSuccess, 1);
 }
 
 // TODO(b/318433299, crbug.com/41493189): Flaky on linux-chromeos and win
@@ -193,7 +199,7 @@ IN_PROC_BROWSER_TEST_F(ModelExecutionValidationBrowserTest,
       "OptimizationGuide.ModelExecution.Result.Test", false, 1);
   histogram_tester_.ExpectUniqueSample(
       "OptimizationGuide.ModelExecutionFetcher.RequestStatus.Test",
-      FetcherRequestStatus::kResponseError, 1);
+      ModelExecutionFetcherRequestStatus::kResponseError, 1);
 }
 
 }  // namespace optimization_guide

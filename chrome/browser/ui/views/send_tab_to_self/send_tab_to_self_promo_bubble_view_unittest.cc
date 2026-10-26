@@ -8,7 +8,6 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/chrome_signin_client_test_util.h"
@@ -19,10 +18,10 @@
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
-#include "components/send_tab_to_self/features.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "components/strings/grit/components_strings.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "services/network/test/test_url_loader_factory.h"
@@ -35,7 +34,6 @@
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
 #include "chrome/browser/ui/signin/promos/bubble_signin_promo_view.h"
-#endif
 
 namespace send_tab_to_self {
 
@@ -96,15 +94,17 @@ class SendTabToSelfPromoBubbleViewTest : public ChromeViewsTestBase {
   void CreateSignInPromoBubble() {
     auto* bubble = new SendTabToSelfSignInPromoBubbleView(
         views::BubbleAnchor(anchor_widget_->GetContentsView()),
-        web_contents_.get());
+        web_contents_.get(),
+        SendTabToSelfSignInPromoBubbleView::PromoMode::kSignIn);
     bubble_widget_ = views::BubbleDialogDelegateView::CreateBubble(bubble);
     bubble_ = bubble;
   }
 
-  void CreateNoTargetDeviceBubble() {
-    auto* bubble = new SendTabToSelfNoTargetDeviceBubbleView(
+  void CreateReauthPromoBubble() {
+    auto* bubble = new SendTabToSelfSignInPromoBubbleView(
         views::BubbleAnchor(anchor_widget_->GetContentsView()),
-        web_contents_.get());
+        web_contents_.get(),
+        SendTabToSelfSignInPromoBubbleView::PromoMode::kReauth);
     bubble_widget_ = views::BubbleDialogDelegateView::CreateBubble(bubble);
     bubble_ = bubble;
   }
@@ -126,7 +126,6 @@ class SendTabToSelfPromoBubbleViewTest : public ChromeViewsTestBase {
     return identity_test_env_adaptor_->identity_test_env();
   }
 
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
   views::LabelButton* GetSignInButton() {
     CHECK(bubble_);
     CHECK(!bubble_->children().empty());
@@ -138,7 +137,6 @@ class SendTabToSelfPromoBubbleViewTest : public ChromeViewsTestBase {
     CHECK(button);
     return button;
   }
-#endif
 
   // Recursively searches for a views::Label child with the matching text.
   views::Label* FindLabelWithText(const std::u16string& text) {
@@ -173,80 +171,12 @@ class SendTabToSelfPromoBubbleViewTest : public ChromeViewsTestBase {
   raw_ptr<StubSendTabToSelfBubbleController> controller_;
 };
 
-// Test suite for the legacy/basic UI.
-class SendTabToSelfPromoBubbleViewBasicTest
-    : public SendTabToSelfPromoBubbleViewTest {
- public:
-  SendTabToSelfPromoBubbleViewBasicTest() {
-    feature_list_.InitAndDisableFeature(kSendTabToSelfEnhancedDesktopUI);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// Verifies that the basic (legacy) sign-in promo layout is loaded when the
-// enhanced UI feature is disabled.
-TEST_F(SendTabToSelfPromoBubbleViewBasicTest, LoadsBasicDesign) {
+// Verifies that the sign-in promo layout is loaded correctly when the user is
+// signed out.
+TEST_F(SendTabToSelfPromoBubbleViewTest, LoadsSignInPromoDesign) {
   CreateSignInPromoBubble();
 
-  // Title should match legacy title strictly.
-  EXPECT_EQ(bubble_->GetWindowTitle(),
-            l10n_util::GetStringUTF16(IDS_SEND_TAB_TO_SELF));
-
-  // Ok button (Sign In) should be visible and use legacy label.
-  ASSERT_TRUE(bubble_->GetOkButton());
-  EXPECT_EQ(
-      bubble_->GetOkButton()->GetText(),
-      l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_ACCOUNT_CHOOSER_SIGN_IN));
-
-  // Verify label contains the legacy sign-in body text string.
-  EXPECT_NE(nullptr, FindLabelWithText(l10n_util::GetStringUTF16(
-                         IDS_SEND_TAB_TO_SELF_SIGN_IN_PROMO_LABEL)));
-
-  // Frame view should not have a header view (legacy design has no header).
-  EXPECT_EQ(nullptr, bubble_->GetBubbleFrameView()->GetHeaderViewForTesting());
-}
-
-// Verifies that the "no target devices" layout is loaded when the user is
-// signed in but has no other active devices.
-// This test is independent of the enhanced UI feature flag.
-TEST_F(SendTabToSelfPromoBubbleViewTest, LoadsDeviceActivityDesign) {
-  identity_test_env()->MakePrimaryAccountAvailable(
-      "user@host.com", signin::ConsentLevel::kSignin);
-
-  CreateNoTargetDeviceBubble();
-
-  // Ok button should not be visible.
-  EXPECT_FALSE(bubble_->GetOkButton());
-
-  // Verify label contains the correct "no devices" notice.
-  EXPECT_NE(nullptr, FindLabelWithText(l10n_util::GetStringUTF16(
-                         IDS_SEND_TAB_TO_SELF_NO_TARGET_DEVICE_LABEL)));
-
-  // Frame view should not have a header view.
-  EXPECT_EQ(nullptr, bubble_->GetBubbleFrameView()->GetHeaderViewForTesting());
-}
-
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
-// Test suite for the enhanced UI.
-class SendTabToSelfPromoBubbleViewEnhancedTest
-    : public SendTabToSelfPromoBubbleViewTest {
- public:
-  SendTabToSelfPromoBubbleViewEnhancedTest() {
-    feature_list_.InitAndEnableFeature(kSendTabToSelfEnhancedDesktopUI);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// Verifies that the modernized/enhanced sign-in promo layout is loaded
-// correctly when the enhanced UI feature is enabled.
-TEST_F(SendTabToSelfPromoBubbleViewEnhancedTest, LoadsModernizedDesign) {
-  CreateSignInPromoBubble();
-
-  // Title should match modernized title strictly.
+  // Title should match sign-in promo title strictly.
   EXPECT_EQ(
       bubble_->GetWindowTitle(),
       l10n_util::GetStringUTF16(IDS_SEND_TAB_TO_SELF_SIGN_IN_PROMO_TITLE));
@@ -254,8 +184,8 @@ TEST_F(SendTabToSelfPromoBubbleViewEnhancedTest, LoadsModernizedDesign) {
   // Dialog button should be null.
   EXPECT_FALSE(bubble_->GetOkButton());
 
-  // Sign in button inside the content view should be visible and use modernized
-  // label.
+  // Sign in button inside the content view should be visible and use the
+  // sign-in promo label.
   auto* sign_in_button = GetSignInButton();
   ASSERT_TRUE(sign_in_button);
   EXPECT_EQ(sign_in_button->GetText(),
@@ -267,7 +197,7 @@ TEST_F(SendTabToSelfPromoBubbleViewEnhancedTest, LoadsModernizedDesign) {
 
 // Verifies that the account-aware sign-in promo layout is loaded with the
 // user's given name on the sign-in button when an account is available.
-TEST_F(SendTabToSelfPromoBubbleViewEnhancedTest, LoadsAccountAwareDesign) {
+TEST_F(SendTabToSelfPromoBubbleViewTest, LoadsAccountAwareDesign) {
   AccountInfo account_info = identity_test_env()->MakeAccountAvailable(
       "elisa@example.com", {.set_cookie = true});
   AccountInfo::Builder builder(account_info);
@@ -277,7 +207,7 @@ TEST_F(SendTabToSelfPromoBubbleViewEnhancedTest, LoadsAccountAwareDesign) {
 
   CreateSignInPromoBubble();
 
-  // Title should match modernized title strictly.
+  // Title should match sign-in promo title strictly.
   EXPECT_EQ(
       bubble_->GetWindowTitle(),
       l10n_util::GetStringUTF16(IDS_SEND_TAB_TO_SELF_SIGN_IN_PROMO_TITLE));
@@ -301,6 +231,35 @@ TEST_F(SendTabToSelfPromoBubbleViewEnhancedTest, LoadsAccountAwareDesign) {
   // Should have a single child (BubbleSignInPromoView).
   EXPECT_EQ(bubble_->children().size(), 1u);
 }
-#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
+// Verifies that the verify-it-is-you promo layout is loaded correctly when the
+// user has an account in a persistent auth error state.
+TEST_F(SendTabToSelfPromoBubbleViewTest, LoadsVerifyItsYouDesign) {
+  AccountInfo account_info = identity_test_env()->MakePrimaryAccountAvailable(
+      "user@host.com", signin::ConsentLevel::kSignin);
+  identity_test_env()->SetInvalidRefreshTokenForPrimaryAccount();
+
+  CreateReauthPromoBubble();
+
+  // Title should match verify title strictly.
+  EXPECT_EQ(bubble_->GetWindowTitle(),
+            l10n_util::GetStringUTF16(
+                IDS_SEND_TAB_TO_SELF_VERIFY_ITS_YOU_PROMO_TITLE));
+
+  // Dialog button should be null.
+  EXPECT_FALSE(bubble_->GetOkButton());
+
+  // Sign in button inside the content view should be visible and use verify
+  // label.
+  auto* sign_in_button = GetSignInButton();
+  ASSERT_TRUE(sign_in_button);
+  EXPECT_EQ(sign_in_button->GetText(),
+            l10n_util::GetStringUTF16(IDS_PROFILES_VERIFY_ACCOUNT_BUTTON));
+
+  // Verify body contains the verify text string.
+  EXPECT_NE(nullptr, FindLabelWithText(l10n_util::GetStringUTF16(
+                         IDS_SEND_TAB_TO_SELF_VERIFY_ITS_YOU_PROMO_LABEL)));
+}
 
 }  // namespace send_tab_to_self
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)

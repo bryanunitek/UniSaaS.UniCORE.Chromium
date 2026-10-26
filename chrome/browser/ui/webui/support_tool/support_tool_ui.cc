@@ -23,6 +23,7 @@
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/account_preview_data_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_ui_util.h"
 #include "chrome/browser/support_tool/data_collection_module.pb.h"
@@ -228,7 +229,8 @@ base::ListValue SupportToolMessageHandler::GetAccountsList() {
 
   // Guest session and incognito mode do not have a primary account (or an
   // IdentityManager).
-  if (profile->IsGuestSession() || profile->IsIncognitoProfile()) {
+  if (profile->IsGuestSession()
+      || profile->IsPrimaryOTRProfileWithRegularParent()) {
     return account_list;
   }
 
@@ -236,9 +238,10 @@ base::ListValue SupportToolMessageHandler::GetAccountsList() {
       IdentityManagerFactory::GetForProfile(profile);
   for (const auto& account : signin_ui_util::GetOrderedAccountsForDisplay(
            identity_manager,
-           /*restrict_to_accounts_eligible_for_sync=*/false)) {
+           AccountPreviewDataServiceFactory::GetForProfile(profile),
+           /*restrict_to_accounts_eligible_for_signin=*/false)) {
     if (!account.IsEmpty()) {
-      account_list.Append(account.email);
+      account_list.Append(account.GetEmail());
     }
   }
   return account_list;
@@ -283,9 +286,9 @@ void SupportToolMessageHandler::HandleStartDataCollection(
   CHECK_EQ(3U, args.size());
   const base::Value& callback_id = args[0];
   const base::DictValue* issue_details = args[1].GetIfDict();
-  DCHECK(issue_details);
+  CHECK(issue_details, base::NotFatalUntil::M162);
   const base::ListValue* data_collectors = args[2].GetIfList();
-  DCHECK(data_collectors);
+  CHECK(data_collectors, base::NotFatalUntil::M162);
   std::set<support_tool::DataCollectorType> included_data_collectors =
       GetIncludedDataCollectorTypes(data_collectors);
   // Send error message to UI if there's no selected data collectors to include.
@@ -334,7 +337,7 @@ void SupportToolMessageHandler::HandleStartDataExport(
     const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
   const base::ListValue* pii_items = args[0].GetIfList();
-  DCHECK(pii_items);
+  CHECK(pii_items, base::NotFatalUntil::M162);
   // Early return if the select file dialog is already active.
   if (select_file_dialog_) {
     return;

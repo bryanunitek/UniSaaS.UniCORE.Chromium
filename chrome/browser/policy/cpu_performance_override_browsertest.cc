@@ -6,7 +6,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -18,6 +18,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace policy {
 
@@ -68,12 +69,12 @@ class CpuPerformancePolicyTest : public PolicyTest {
   }
 
   void SetUserOverride(int tier) {
-    browser()->profile()->GetPrefs()->SetInteger(
+    browser()->GetProfile()->GetPrefs()->SetInteger(
         prefs::kCpuPerformanceTierOverride, tier);
     base::RunLoop().RunUntilIdle();
   }
 
-  void KillRendererProcessOfActiveTab(Browser* browser) {
+  void KillRendererProcessOfActiveTab(BrowserWindowInterface* browser) {
     auto* process = browser->tab_strip_model()
                         ->GetActiveWebContents()
                         ->GetPrimaryMainFrame()
@@ -84,7 +85,7 @@ class CpuPerformancePolicyTest : public PolicyTest {
     crash_observer.Wait();
   }
 
-  int GetCpuPerformanceFromJs(Browser* browser) {
+  int GetCpuPerformanceFromJs(BrowserWindowInterface* browser) {
     content::WebContents* web_contents =
         browser->tab_strip_model()->GetActiveWebContents();
     auto result = content::EvalJs(web_contents, "navigator.cpuPerformance");
@@ -129,7 +130,7 @@ IN_PROC_BROWSER_TEST_F(CpuPerformancePolicyTest, PolicyOverrideNormal) {
   SetPolicy(policy_override_tier());
 
   // Create a new normal browser.
-  Browser* new_browser = CreateBrowser(browser()->GetProfile());
+  BrowserWindowInterface* new_browser = CreateBrowser(browser()->GetProfile());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(new_browser, url()));
   EXPECT_EQ(policy_override_tier(), GetCpuPerformanceFromJs(new_browser));
 }
@@ -138,7 +139,7 @@ IN_PROC_BROWSER_TEST_F(CpuPerformancePolicyTest, PolicyOverrideIncognito) {
   SetPolicy(policy_override_tier());
 
   // Create a new incognito browser.
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, url()));
   EXPECT_EQ(policy_override_tier(), GetCpuPerformanceFromJs(incognito));
 }
@@ -158,7 +159,7 @@ IN_PROC_BROWSER_TEST_F(CpuPerformancePolicyTest, PolicyChangeNormalWindow) {
   KillRendererProcessOfActiveTab(browser());
 
   // Step 4: Open new tab in second window, in a new normal browser.
-  Browser* normal = CreateBrowser(browser()->GetProfile());
+  BrowserWindowInterface* normal = CreateBrowser(browser()->GetProfile());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(normal, url()));
 
   // New tab has overridden tier.
@@ -181,7 +182,7 @@ IN_PROC_BROWSER_TEST_F(CpuPerformancePolicyTest, PolicyChangeNormalTab) {
 
   // Step 4: Open second tab in the same window.
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), url(), WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
 
   // New tab has overridden tier.
@@ -197,7 +198,7 @@ IN_PROC_BROWSER_TEST_F(CpuPerformancePolicyTest, PolicyChangeIncognito) {
   SetPolicy(policy_override_tier());
 
   // Step 3: Open second window in a new incognito browser.
-  Browser* incognito2 = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito2 = CreateIncognitoBrowser();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito2, url()));
 
   // Old window still has hardware tier, new window has overridden tier.
@@ -210,7 +211,7 @@ IN_PROC_BROWSER_TEST_F(CpuPerformancePolicyTest, UserOverrideNormal) {
   SetUserOverride(user_override_tier());
 
   // Create a new normal browser.
-  Browser* new_browser = CreateBrowser(browser()->GetProfile());
+  BrowserWindowInterface* new_browser = CreateBrowser(browser()->GetProfile());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(new_browser, url()));
   EXPECT_EQ(user_override_tier(), GetCpuPerformanceFromJs(new_browser));
 }
@@ -223,7 +224,7 @@ IN_PROC_BROWSER_TEST_F(CpuPerformancePolicyTest, PolicyWinsOverUserOverride) {
   SetPolicy(policy_override_tier());
 
   // Create a new normal browser. Policy should win.
-  Browser* new_browser = CreateBrowser(browser()->GetProfile());
+  BrowserWindowInterface* new_browser = CreateBrowser(browser()->GetProfile());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(new_browser, url()));
   EXPECT_EQ(policy_override_tier(), GetCpuPerformanceFromJs(new_browser));
 }

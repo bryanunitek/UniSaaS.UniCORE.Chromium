@@ -14,7 +14,6 @@
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service_factory.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/metrics/cloned_install_detector.h"
 #include "components/metrics/metrics_pref_names.h"
@@ -232,7 +231,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Run 0, where we mark the profile as having made a search engine choice.
 IN_PROC_BROWSER_TEST_P(SearchEngineChoiceServiceRestoreBrowserTest,
                        PRE_PRE_StaticConditions) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   SearchEngineChoiceService* search_engine_choice_service =
       SearchEngineChoiceServiceFactory::GetForProfile(profile);
@@ -280,7 +279,7 @@ IN_PROC_BROWSER_TEST_P(SearchEngineChoiceServiceRestoreBrowserTest,
                .reset_count == 0;
   }));
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   SearchEngineChoiceService* search_engine_choice_service =
       SearchEngineChoiceServiceFactory::GetForProfile(profile);
   ASSERT_TRUE(search_engine_choice_service->GetClientForTesting()
@@ -323,7 +322,7 @@ IN_PROC_BROWSER_TEST_P(SearchEngineChoiceServiceRestoreBrowserTest,
                 .reset_count,
             1);
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   SearchEngineChoiceService* search_engine_choice_service =
       SearchEngineChoiceServiceFactory::GetForProfile(profile);
   ASSERT_FALSE(search_engine_choice_service->GetClientForTesting()

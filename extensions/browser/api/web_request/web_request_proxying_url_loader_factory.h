@@ -11,6 +11,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/callback_list.h"
@@ -79,8 +80,9 @@ class WebRequestProxyingURLLoaderFactory
     // For usual requests
     InProgressRequest(
         WebRequestProxyingURLLoaderFactory* factory,
-        uint64_t request_id,
-        int32_t network_service_request_id,
+        uint64_t profile_request_id,
+        int32_t request_id_for_network_service,
+        int32_t request_id_from_client,
         int32_t view_routing_id,
         int32_t frame_routing_id,
         uint32_t options,
@@ -93,7 +95,7 @@ class WebRequestProxyingURLLoaderFactory
             navigation_response_task_runner);
     // For CORS preflights
     InProgressRequest(WebRequestProxyingURLLoaderFactory* factory,
-                      uint64_t request_id,
+                      uint64_t profile_request_id,
                       int32_t frame_routing_id,
                       const network::ResourceRequest& request);
 
@@ -103,6 +105,7 @@ class WebRequestProxyingURLLoaderFactory
     ~InProgressRequest() override;
 
     void Restart();
+    void AuthorizeBypassRedirectChecks();
 
     // network::mojom::URLLoader:
     void FollowRedirect(
@@ -166,7 +169,9 @@ class WebRequestProxyingURLLoaderFactory
       kRejectedByOnHeadersReceivedForAuth,
       kRejectedByOnAuthRequired,
       kCompleted,
-      kMaxValue = kCompleted,
+      // The client's FollowRedirect() violated the URLLoader contract.
+      kRejectedByUnexpectedFollowRedirect,
+      kMaxValue = kRejectedByUnexpectedFollowRedirect,
     };
     // These two methods combined form the implementation of Restart().
     void UpdateRequestInfo();
@@ -200,6 +205,14 @@ class WebRequestProxyingURLLoaderFactory
         net::CompletionOnceCallback continuation);
     void OnRequestError(const network::URLLoaderCompletionStatus& status,
                         State state);
+
+    // Terminates a request whose client violated the URLLoader contract for
+    // FollowRedirect(), and reports `reason` as a bad message if the client is
+    // a renderer process. Deletes `this`.
+    void RejectFollowRedirect(
+        std::string_view reason,
+        net::Error error_code = net::ERR_INVALID_ARGUMENT);
+
     void OnNetworkError(const network::URLLoaderCompletionStatus& status);
     void OnClientDisconnected();
     void OnLoaderDisconnected(uint32_t custom_reason,
@@ -216,8 +229,17 @@ class WebRequestProxyingURLLoaderFactory
     const raw_ptr<WebRequestProxyingURLLoaderFactory> factory_;
     network::ResourceRequest request_;
     const std::optional<url::Origin> original_initiator_;
-    const uint64_t request_id_ = 0;
-    const int32_t network_service_request_id_ = 0;
+    // The request ID unique per BrowserContext. Used by the WebRequest API and
+    // extensions to identify this request across event callbacks.
+    const uint64_t profile_request_id_ = 0;
+    // The request ID forwarded to `target_factory_`. Used to correlate
+    // network-stack callbacks (such as `TrustedHeaderClient` and auth events)
+    // with this request.
+    const int32_t request_id_for_network_service_ = 0;
+    // The request ID supplied by the caller of `CreateLoaderAndStart()`. Used
+    // solely to preserve the extension-visible WebRequest ID across a request
+    // restart (e.g., via `ThrottlingURLLoader`).
+    const int32_t request_id_from_client_ = 0;
     const int32_t view_routing_id_ = IPC::mojom::kRoutingIdNone;
     const int32_t frame_routing_id_ = IPC::mojom::kRoutingIdNone;
     const uint32_t options_ = 0;
@@ -241,7 +263,16 @@ class WebRequestProxyingURLLoaderFactory
     mojo::ScopedDataPipeConsumerHandle current_body_;
     std::optional<mojo_base::BigBuffer> current_cached_metadata_;
     scoped_refptr<net::HttpResponseHeaders> override_headers_;
+
+    // A redirect *requested by an extension*, which this class then
+    // synthesizes. Empty if no extension asked to redirect the current hop.
+    // Not to be confused with `deferred_redirect_url_` below.
     GURL redirect_url_;
+
+    // The target of a redirect already forwarded to the `target_client_` via
+    // OnReceiveRedirect(), but not yet followed. Must be set for a legitimate
+    // call to `FollowRedirect()`.
+    std::optional<GURL> deferred_redirect_url_;
 
     // Holds any provided auth credentials through the extent of the request's
     // lifetime.
@@ -380,7 +411,8 @@ class WebRequestProxyingURLLoaderFactory
  private:
   void OnTargetFactoryError();
   void OnProxyBindingError();
-  void RemoveRequest(int32_t network_service_request_id, uint64_t request_id);
+  void RemoveRequest(int32_t request_id_for_network_service,
+                     uint64_t profile_request_id);
   void MaybeRemoveProxy();
 
   const raw_ptr<content::BrowserContext> browser_context_;

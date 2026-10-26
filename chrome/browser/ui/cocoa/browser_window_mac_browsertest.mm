@@ -8,6 +8,7 @@
 
 #include <memory>
 
+#include "base/test/run_until.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/app_controller_mac.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
@@ -26,6 +27,7 @@
 #include "testing/gtest_mac.h"
 #include "ui/accessibility/accessibility_switches.h"
 #import "ui/base/cocoa/window_size_constants.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/test/ns_ax_tree_validator.h"
 
 // Test harness for Mac-specific behaviors of BrowserWindow.
@@ -82,7 +84,7 @@ IN_PROC_BROWSER_TEST_F(BrowserWindowMacTest,
   [window addChildWindow:child_window ordered:NSWindowAbove];
 
   NSMenuItem* show_bookmark_bar_menu_item =
-      [[[[NSApp mainMenu] itemWithTag:kMacViewMenuId] submenu]
+      [[[[NSApp mainMenu] itemWithTag:IDC_VIEW_MENU] submenu]
           itemWithTag:IDC_SHOW_BOOKMARK_BAR];
 
   // Make sure both windows validate the bookmark bar menu item.
@@ -90,7 +92,7 @@ IN_PROC_BROWSER_TEST_F(BrowserWindowMacTest,
   EXPECT_TRUE(
       [child_window validateUserInterfaceItem:show_bookmark_bar_menu_item]);
 
-  browser()->command_controller()->UpdateCommandEnabled(
+  chrome::BrowserCommandController::From(browser())->UpdateCommandEnabled(
       show_bookmark_bar_menu_item.tag, false);
 
   // Make sure both windows find the bookmark bar menu item invalid. The child
@@ -165,10 +167,10 @@ IN_PROC_BROWSER_TEST_F(BrowserWindowMacTest, DisableCommandsWhenSheetAttached) {
       [[[[NSApp mainMenu] itemWithTag:AppMenuModel::kBookmarksMenuPlaceholder]
           submenu] itemWithTag:IDC_BOOKMARK_ALL_TABS];
   ASSERT_TRUE(bookmark_all_tabs_item);
-  NSMenuItem* print_item = [[[[NSApp mainMenu] itemWithTag:kMacFileMenuId]
+  NSMenuItem* print_item = [[[[NSApp mainMenu] itemWithTag:IDC_FILE_MENU]
       submenu] itemWithTag:IDC_PRINT];
   ASSERT_TRUE(print_item);
-  NSMenuItem* save_item = [[[[NSApp mainMenu] itemWithTag:kMacFileMenuId]
+  NSMenuItem* save_item = [[[[NSApp mainMenu] itemWithTag:IDC_FILE_MENU]
       submenu] itemWithTag:IDC_SAVE_PAGE];
   ASSERT_TRUE(save_item);
 
@@ -189,7 +191,8 @@ IN_PROC_BROWSER_TEST_F(BrowserWindowMacTest, DisableCommandsWhenSheetAttached) {
       BookmarkEditor::SHOW_TREE, base::DoNothing());
   editor->Show(browser()->GetWindow()->GetNativeWindow());
   auto* editor_raw = editor.release();
-  ASSERT_TRUE([AppController.sharedController keyWindowIsModal]);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return [AppController.sharedController keyWindowIsModal]; }));
 
   // These commands should be disabled when the sheet is attached.
   EXPECT_FALSE([window validateUserInterfaceItem:bookmark_all_tabs_item]);
@@ -198,7 +201,8 @@ IN_PROC_BROWSER_TEST_F(BrowserWindowMacTest, DisableCommandsWhenSheetAttached) {
 
   // Close the sheet dialog.
   editor_raw->GetWidget()->CloseNow();
-  ASSERT_FALSE([AppController.sharedController keyWindowIsModal]);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return ![AppController.sharedController keyWindowIsModal]; }));
 
   // These commands should be enabled again when the sheet is removed.
   EXPECT_TRUE([window validateUserInterfaceItem:bookmark_all_tabs_item]);

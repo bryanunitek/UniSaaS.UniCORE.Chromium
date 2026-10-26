@@ -4,7 +4,9 @@
 
 #include "gpu/command_buffer/service/dawn_context_provider.h"
 
+#include <atomic>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "base/check_op.h"
@@ -30,7 +32,6 @@
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "base/trace_event/process_memory_dump.h"
-#include "base/trace_event/trace_arguments.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "components/crash/core/common/crash_key.h"
@@ -86,9 +87,17 @@ void SetCrashKeyThreadSafe(crash_reporter::CrashKeyString<KeySize>& crash_key,
   crash_key.Set(message);
 }
 
-void SetDawnErrorCrashKey(std::string_view message) {
+void AppendDawnErrorCrashKey(std::string_view message) {
+  static base::NoDestructor<base::Lock> lock;
+  static base::NoDestructor<std::string> error_msg;
   static crash_reporter::CrashKeyString<1024> error_key("dawn-error");
-  SetCrashKeyThreadSafe(error_key, message);
+
+  base::AutoLock auto_lock(*lock.get());
+  if (!error_msg->empty()) {
+    error_msg->append("\n");
+  }
+  error_msg->append(message);
+  error_key.Set(*error_msg);
 }
 
 // Different versions of DumpWithoutCrashing for different reasons.
@@ -121,19 +130,62 @@ NOINLINE NOOPT void DumpWithoutCrashingOnGenericError(
   base::debug::DumpWithoutCrashing();
 }
 
-void DumpWithoutCrashingOnError(wgpu::ErrorType error_type,
-                                std::string_view message) {
-  SetDawnErrorCrashKey(message);
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(GraphiteDawnError)
+enum class GraphiteDawnError {
+  kOther = 0,
+  kDXGIError = 1,
+  kOutOfMemory = 2,
+  kValidation = 3,
+  kMaxValue = kValidation,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/gpu/enums.xml:GraphiteDawnError)
+
+void EmitErrorReport(wgpu::ErrorType error_type, std::string_view message) {
+  AppendDawnErrorCrashKey(message);
+  std::optional<GraphiteDawnError> uma_error;
 #if BUILDFLAG(IS_WIN)
+  // Errors reported after a DXGI error are generally fallout from device
+  // removal and should not generate additional crash reports.
+  static std::atomic_flag dxgi_error_received = ATOMIC_FLAG_INIT;
   if (message.find("DXGI_ERROR") != std::string_view::npos) {
-    DumpWithoutCrashingOnDXGIError(error_type, message);
-  } else if (message.find("The D3D11 debug layer") != std::string_view::npos) {
-    DumpWithoutCrashingOnD3D11DebugLayerError(error_type, message);
-  } else
-#endif
-  {
-    DumpWithoutCrashingOnGenericError(error_type, message);
+    uma_error = GraphiteDawnError::kDXGIError;
+    if (!dxgi_error_received.test_and_set()) {
+      DumpWithoutCrashingOnDXGIError(error_type, message);
+    }
+  } else if (!dxgi_error_received.test()) {
+    if (message.find("The D3D11 debug layer") != std::string_view::npos) {
+      DumpWithoutCrashingOnD3D11DebugLayerError(error_type, message);
+    } else {
+      DumpWithoutCrashingOnGenericError(error_type, message);
+    }
   }
+#else
+  DumpWithoutCrashingOnGenericError(error_type, message);
+#endif
+
+  // Emit only the 1st error to UMA.
+  static std::atomic_flag uma_error_emitted = ATOMIC_FLAG_INIT;
+  if (uma_error_emitted.test_and_set()) {
+    return;
+  }
+
+  if (!uma_error.has_value()) {
+    switch (error_type) {
+      case wgpu::ErrorType::OutOfMemory:
+        uma_error = GraphiteDawnError::kOutOfMemory;
+        break;
+      case wgpu::ErrorType::Validation:
+        uma_error = GraphiteDawnError::kValidation;
+        break;
+      default:
+        uma_error = GraphiteDawnError::kOther;
+        break;
+    }
+  }
+  base::UmaHistogramEnumeration("GPU.GraphiteDawn.Error", *uma_error);
 }
 
 // NOTE: Update the toggles in GpuInfoCollector whenever a toggle is disabled
@@ -282,6 +334,7 @@ std::vector<wgpu::FeatureName> GetRequiredFeatures(
   constexpr wgpu::FeatureName kOptionalFeatures[] = {
       wgpu::FeatureName::BGRA8UnormStorage,
       wgpu::FeatureName::BufferMapExtendedUsages,
+      wgpu::FeatureName::DawnAllowUndefinedLoadStoreOp,
       wgpu::FeatureName::DawnMultiPlanarFormats,
       wgpu::FeatureName::DualSourceBlending,
       wgpu::FeatureName::FramebufferFetch,
@@ -342,19 +395,6 @@ std::vector<wgpu::FeatureName> GetRequiredFeatures(
 
   return features;
 }
-
-class Platform : public webgpu::DawnPlatform {
- public:
-  using webgpu::DawnPlatform::DawnPlatform;
-
-  ~Platform() override = default;
-
-  const unsigned char* GetTraceCategoryEnabledFlag(
-      dawn::platform::TraceCategory category) override {
-    return TRACE_EVENT_API_GET_CATEGORY_GROUP_ENABLED(
-        TRACE_DISABLED_BY_DEFAULT("gpu.graphite.dawn"));
-  }
-};
 
 #if BUILDFLAG(IS_WIN)
 bool GetANGLED3D11DeviceLUID(LUID* luid) {
@@ -451,9 +491,7 @@ wgpu::BackendType DawnContextProvider::GetDefaultBackendType() {
     return wgpu::BackendType::Vulkan;
   }
 #if BUILDFLAG(IS_WIN)
-  return base::FeatureList::IsEnabled(features::kSkiaGraphiteDawnUseD3D12)
-             ? wgpu::BackendType::D3D12
-             : wgpu::BackendType::D3D11;
+  return wgpu::BackendType::D3D11;
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   return wgpu::BackendType::Vulkan;
 #elif BUILDFLAG(IS_APPLE)
@@ -480,7 +518,8 @@ bool DawnContextProvider::DefaultValidateAdapterFn(wgpu::BackendType,
 // Owns the dawn instance/adapter/device so that it's lifetime is not linked to
 // a specific DawnContextProvider.
 class DawnSharedContext : public base::RefCountedThreadSafe<DawnSharedContext>,
-                          public base::trace_event::MemoryDumpProvider {
+                          public base::trace_event::MemoryDumpProvider,
+                          public GraphiteSharedContext::Delegate {
  public:
   DawnSharedContext(gl::ProgressReporter* progress_reporter,
                     bool thread_safe_graphite_context);
@@ -567,8 +606,13 @@ class DawnSharedContext : public base::RefCountedThreadSafe<DawnSharedContext>,
   }
 #endif
 
+  // GraphiteSharedContext::Delegate implementation:
+  void MarkContextLost(error::ContextLostReason reason) override;
+  bool IsContextLost() const override;
+  void FlushBackend() override;
+  void ReportProgress() override;
+
   std::optional<error::ContextLostReason> GetResetStatus() const;
-  void MarkContextLost(error::ContextLostReason reason);
 
   std::unique_ptr<GraphiteSharedContext> CreateGraphiteSharedContext(
       const skgpu::graphite::ContextOptions& options,
@@ -591,10 +635,10 @@ class DawnSharedContext : public base::RefCountedThreadSafe<DawnSharedContext>,
 
     return std::make_unique<GraphiteSharedContext>(
         std::move(graphite_context), use_shader_cache_shm_count, is_thread_safe,
-        features::SkiaGraphiteMaxPendingRecordings(), GetBackendFlushCallback(),
+        features::SkiaGraphiteMaxPendingRecordings(),
+        features::SkiaGraphiteMaxTimeBetweenSubmits(),
         // DawnSharedContext is guaranteed to outlive GraphiteSharedContext.
-        base::BindRepeating(&DawnSharedContext::MarkContextLost,
-                            base::Unretained(this)));
+        this);
   }
 
   bool use_thread_safe_graphite_context() const {
@@ -670,7 +714,7 @@ class DawnSharedContext : public base::RefCountedThreadSafe<DawnSharedContext>,
           // errors reported via instance callback is related to Surface
           // creation. In that case, instead of triggering context loss, we
           // should let the call sites handle them gracefully.
-          SetDawnErrorCrashKey(view);
+          AppendDawnErrorCrashKey(view);
           base::debug::DumpWithoutCrashing();
         }
         break;
@@ -680,15 +724,6 @@ class DawnSharedContext : public base::RefCountedThreadSafe<DawnSharedContext>,
   }
 
   ~DawnSharedContext() override;
-
-  GraphiteSharedContext::FlushCallback GetBackendFlushCallback() {
-#if BUILDFLAG(IS_WIN)
-    return base::BindRepeating(&DawnSharedContext::FlushD3D11CommandsIfDelayed,
-                               base::Unretained(this));
-#else
-    return {};
-#endif
-  }
 
   void OnError(wgpu::ErrorType error_type, wgpu::StringView message);
 
@@ -729,7 +764,7 @@ class DawnSharedContext : public base::RefCountedThreadSafe<DawnSharedContext>,
   scoped_refptr<GpuPersistentCache> persistent_cache_;
   raw_ptr<dawn::platform::CachingInterface> caching_interface_ = nullptr;
 
-  Platform platform_;
+  webgpu::DawnPlatform platform_;
   std::unique_ptr<webgpu::DawnInstance> instance_;
   wgpu::Adapter adapter_;
   wgpu::Device device_;
@@ -1105,6 +1140,20 @@ void DawnSharedContext::MarkContextLost(error::ContextLostReason reason) {
   }
 }
 
+bool DawnSharedContext::IsContextLost() const {
+  return GetResetStatus().has_value();
+}
+
+void DawnSharedContext::FlushBackend() {
+#if BUILDFLAG(IS_WIN)
+  FlushD3D11CommandsIfDelayed();
+#endif
+}
+
+void DawnSharedContext::ReportProgress() {
+  platform_.ReportProgress();
+}
+
 void DawnSharedContext::OnError(wgpu::ErrorType error_type,
                                 wgpu::StringView message) {
 #if BUILDFLAG(IS_WIN)
@@ -1124,8 +1173,7 @@ void DawnSharedContext::OnError(wgpu::ErrorType error_type,
   }
 #endif
 
-  DumpWithoutCrashingOnError(error_type,
-                             static_cast<std::string_view>(message));
+  EmitErrorReport(error_type, static_cast<std::string_view>(message));
 
   error::ContextLostReason reason = error::kUnknown;
   switch (error_type) {

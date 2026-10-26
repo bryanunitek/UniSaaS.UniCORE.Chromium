@@ -7,6 +7,8 @@
 #include <memory>
 #include <unordered_set>
 
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/mock_tab_interface.h"
 #include "components/tabs/public/tab_interface.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -73,6 +75,28 @@ TEST_F(TabStripModelSelectionStateTest, AddAndRemoveTabFromSelection) {
   selection_state.RemoveTabFromSelection(tab1_.get());
   EXPECT_FALSE(selection_state.IsSelected(tab1_.get()));
   EXPECT_EQ(1u, selection_state.selected_tabs().size());
+  // Active and anchor tabs are reset when active tab is removed.
+  EXPECT_EQ(nullptr, selection_state.active_tab());
+  EXPECT_EQ(nullptr, selection_state.anchor_tab());
+}
+
+TEST_F(TabStripModelSelectionStateTest, RemoveAnchorTabWhenActiveDiffers) {
+  std::unordered_set<raw_ptr<TabInterface>> selected_tabs = {tab1_.get(),
+                                                             tab2_.get()};
+  // tab1_ is active, tab2_ is anchor.
+  TabStripModelSelectionState selection_state(selected_tabs, tab1_.get(),
+                                              tab2_.get());
+  EXPECT_EQ(tab1_.get(), selection_state.active_tab());
+  EXPECT_EQ(tab2_.get(), selection_state.anchor_tab());
+
+  // Removing tab2_ (the anchor tab) should update anchor_tab to tab1_ (the
+  // active tab).
+  selection_state.RemoveTabFromSelection(tab2_.get());
+  EXPECT_FALSE(selection_state.IsSelected(tab2_.get()));
+  EXPECT_EQ(1u, selection_state.selected_tabs().size());
+  EXPECT_EQ(tab1_.get(), selection_state.active_tab());
+  EXPECT_EQ(tab1_.get(), selection_state.anchor_tab());
+  EXPECT_TRUE(selection_state.Valid());
 }
 
 TEST_F(TabStripModelSelectionStateTest, SetActiveTab) {
@@ -159,6 +183,51 @@ TEST_F(TabStripModelSelectionStateTest, InvalidStates) {
   // Non-empty selection with null anchor tab is invalid.
   EXPECT_FALSE(
       TabStripModelSelectionState({tab1_.get()}, tab1_.get(), nullptr).Valid());
+
+  // Focused group with empty selection is invalid.
+  TabStripModelSelectionState empty_focused;
+  empty_focused.set_focused_group(tab_groups::TabGroupId::GenerateNew());
+  EXPECT_FALSE(empty_focused.Valid());
+}
+
+TEST_F(TabStripModelSelectionStateTest, FocusedGroupAccessorsAndEquality) {
+  const tab_groups::TabGroupId group = tab_groups::TabGroupId::GenerateNew();
+  TabStripModelSelectionState state1({tab1_.get()}, tab1_.get(), tab1_.get(),
+                                     group);
+  EXPECT_EQ(group, state1.focused_group());
+
+  TabStripModelSelectionState state2({tab1_.get()}, tab1_.get(), tab1_.get(),
+                                     group);
+  EXPECT_EQ(state1, state2);
+
+  state2.set_focused_group(std::nullopt);
+  EXPECT_EQ(std::nullopt, state2.focused_group());
+  EXPECT_NE(state1, state2);
+}
+
+TEST_F(TabStripModelSelectionStateTest, FocusedGroupValidity) {
+  const tab_groups::TabGroupId group1 = tab_groups::TabGroupId::GenerateNew();
+  const tab_groups::TabGroupId group2 = tab_groups::TabGroupId::GenerateNew();
+
+  EXPECT_CALL(*tab1_, GetGroup()).WillRepeatedly(testing::Return(group1));
+  EXPECT_CALL(*tab2_, GetGroup()).WillRepeatedly(testing::Return(group2));
+
+  // State with all tabs in group1 should be valid when focused on group1.
+  TabStripModelSelectionState state1({tab1_.get()}, tab1_.get(), tab1_.get(),
+                                     group1);
+  EXPECT_TRUE(state1.Valid());
+
+  // State with non-active tab2 (in group2) and active tab1 (in group1) should
+  // still be valid when focused_group is group1.
+  TabStripModelSelectionState state2({tab1_.get(), tab2_.get()}, tab1_.get(),
+                                     tab1_.get(), group1);
+  EXPECT_TRUE(state2.Valid());
+
+  // State with active tab2 (in group2) when focused_group is group1 should be
+  // invalid.
+  TabStripModelSelectionState state3({tab1_.get(), tab2_.get()}, tab2_.get(),
+                                     tab1_.get(), group1);
+  EXPECT_FALSE(state3.Valid());
 }
 
 }  // namespace tabs

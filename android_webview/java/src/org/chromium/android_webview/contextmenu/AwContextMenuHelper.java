@@ -54,6 +54,7 @@ public class AwContextMenuHelper {
     @VisibleForTesting
     public boolean showContextMenu(ContextMenuParams params, View view) {
         WindowAndroid windowAndroid = mWebContents.getTopLevelNativeWindow();
+        dismissContextMenu();
         mCurrentContextMenu = null;
 
         if (!params.isAnchor()
@@ -64,6 +65,7 @@ public class AwContextMenuHelper {
                 || windowAndroid.getActivity().get() == null
                 || windowAndroid.getContext().get() == null) {
             Log.w(TAG, "Could not create context menu");
+            params.destroy();
             return false;
         }
 
@@ -94,7 +96,10 @@ public class AwContextMenuHelper {
                         usePopupWindow,
                         hyperlinkMenuItems);
 
-        mCurrentContextMenu.displayMenu();
+        if (!mCurrentContextMenu.displayMenu()) {
+            mCurrentContextMenu = null;
+            return false;
+        }
         return true;
     }
 

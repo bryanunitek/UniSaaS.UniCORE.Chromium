@@ -33,12 +33,12 @@ class BindingsManagerFuchsia : public chromium::cast::ApiBindings,
   void AddBinding(std::string_view binding_name,
                   std::string_view binding_script) override;
 
- protected:
   // chromium::cast::ApiBindings implementation:
   void GetAll(GetAllCallback callback) override;
   void Connect(
       std::string port_name,
       fidl::InterfaceHandle<::fuchsia::web::MessagePort> message_port) override;
+  void SetOrigin(std::string origin) override;
 
  private:
   // Stores all bindings, keyed on the string-based IDs provided by the

@@ -14,7 +14,6 @@
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "components/optimization_guide/proto/features/contextual_cueing.pb.h"
 #include "components/tabs/public/tab_interface.h"
-#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/base/models/image_model.h"
 
 namespace content {
@@ -25,21 +24,22 @@ namespace page_content_annotations {
 class PageContentAnnotationsResult;
 }  // namespace page_content_annotations
 
+namespace page_actions {
+enum class PageActionPriorityCategory;
+}  // namespace page_actions
+
 namespace contextual_cueing {
 
 // LINT.IfChange(CueTargetType)
 enum class CueTargetType {
   kGlic = 0,
   kTestSource = 1,
-  kMaxValue = kTestSource
+  kIndigo = 2,
+  kContextualSearch = 3,
+  kAbaSearchJourney = 4,
+  kMaxValue = kAbaSearchJourney
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/contextual_cueing/enums.xml:CueTargetType)
-
-struct TargetStats {
-  int impressions = 0;
-  int clicks = 0;
-  int dismissals = 0;
-};
 
 // Level of UI prominence the orchestrator is willing to grant for this page
 // load. Determined by the controller based on global quotas and backoff state.
@@ -49,6 +49,7 @@ enum class CueIntrusiveness {
 };
 
 const char* GetName(CueTargetType type);
+const char* GetName(CueIntrusiveness intrusiveness);
 
 // Glic-specific click data. Conceptually this struct should carry everything
 // needed for invoking Glic from a contextual cue.
@@ -65,7 +66,24 @@ struct GlicCueActionData {
   GlicCueActionData& operator=(const GlicCueActionData&);
 };
 
-using CueActionData = std::variant<std::monostate, GlicCueActionData>;
+// ContextualSearch-specific click data.
+struct ContextualSearchCueActionData {
+  // Query to be submitted to contextual search upon opening.
+  std::string query;
+  // Tabs that should be shared as context with contextual search.
+  std::vector<tabs::TabHandle> tabs_to_share;
+
+  ContextualSearchCueActionData();
+  ~ContextualSearchCueActionData();
+  ContextualSearchCueActionData(const ContextualSearchCueActionData&);
+  ContextualSearchCueActionData(ContextualSearchCueActionData&&);
+  ContextualSearchCueActionData& operator=(
+      const ContextualSearchCueActionData&);
+};
+
+using CueActionData = std::variant<std::monostate,
+                                   GlicCueActionData,
+                                   ContextualSearchCueActionData>;
 
 struct CueAction {
   CueActionData data;
@@ -80,6 +98,30 @@ class CueTarget {
   // Returns the unique identifier for this target. Used as the key for UCB
   // scoring, backoff tracking, and metrics (impressions, clicks, dismissals).
   virtual CueTargetType GetType() const = 0;
+
+  // Whether this target relies on the backend Model Execution Service (MES)
+  // to generate cue content rather than generating content locally.
+  virtual bool RequiresModelExecution() const = 0;
+
+  // Whether this target should bypass UCB scoring and take absolute precedence
+  // when eligible. NOTE: This is a highly privileged override that is strictly
+  // intended for Indigo temporarily to ensure it always wins. It should not be
+  // used by other targets.
+  virtual bool OverridesUcbScoring() const;
+
+  // Whether this target should fall back to a suggestion chip instead of fully
+  // disappearing when the anchored message is dismissed.
+  virtual bool DowngradesToQuietOnDismiss() const;
+
+  // Whether the cue is persistent across UI interactions. If true, the cue
+  // remains visible when clicked or when a side panel is opened, and can also
+  // be initially shown even if a side panel is already open.
+  virtual bool IsPersistent() const;
+
+  // Returns true if this target supports the given intrusiveness level.
+  // Targets requiring MES are restricted to kLoud only. Non-MES targets
+  // can override SupportsIntrusivenessImpl() to declare supported levels.
+  bool SupportsIntrusiveness(CueIntrusiveness intrusiveness) const;
 
   // Synchronous profile-level gate (e.g., feature disabled, panel already
   // open). Called by the controller before constructing the async barrier.
@@ -131,8 +173,21 @@ class CueTarget {
       const page_content_annotations::PageContentAnnotationsResult& result,
       content::WebContents* active_web_contents) const = 0;
 
-  // Called when the user clicks the cue's action button.
-  virtual void OnClick(CueActionData data) = 0;
+  // Called when the cue's omnibox suggestion chip is shown to the user.
+  virtual void OnChipShown() {}
+
+  // Called when the user clicks the cue's omnibox suggestion chip.
+  virtual void OnChipClicked() {}
+
+  // Called when the cue's anchored message is shown to the user.
+  virtual void OnAnchoredMessageShown(
+      page_actions::PageActionPriorityCategory priority) {}
+
+  // Called when the user clicks the anchored message's action button.
+  virtual void OnAnchoredMessageClicked(CueActionData data) = 0;
+
+  // Whether this target supports editing prompt via the menu.
+  virtual bool SupportsEditPrompt() const;
 
   // Called when the user clicks the "edit prompt" menu item.
   virtual void OnEditPrompt(CueActionData data) = 0;
@@ -150,6 +205,11 @@ class CueTarget {
 
   virtual optimization_guide::proto::ContextualCueingSurface GetSurface()
       const = 0;
+
+ protected:
+  // Default for non-MES targets is to allow both kLoud and kQuiet.
+  // Subclasses may override to customize.
+  virtual bool SupportsIntrusivenessImpl(CueIntrusiveness intrusiveness) const;
 };
 
 }  // namespace contextual_cueing

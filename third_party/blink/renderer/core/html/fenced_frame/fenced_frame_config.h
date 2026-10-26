@@ -52,11 +52,7 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
     kLast = kNull,
   };
 
-  // Create an inner config with a given url, the url will be transparent.
-  static FencedFrameConfig* Create(const String& url);
-
   static FencedFrameConfig* Create(const KURL url,
-                                   const String& shared_storage_context,
                                    std::optional<KURL> urn_uuid,
                                    std::optional<gfx::Size> container_size,
                                    std::optional<gfx::Size> content_size,
@@ -66,11 +62,7 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
   static FencedFrameConfig* From(
       const FencedFrame::RedactedFencedFrameConfig& config);
 
-  // Construct an inner config with a given url, the url will be transparent.
-  explicit FencedFrameConfig(const String& url);
-
   explicit FencedFrameConfig(const KURL url,
-                             const String& shared_storage_context,
                              std::optional<KURL> urn_uuid,
                              std::optional<gfx::Size> container_size,
                              std::optional<gfx::Size> content_size,
@@ -87,12 +79,6 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
   V8UnionOpaquePropertyOrUSVString* url() const;
   V8UnionOpaquePropertyOrUnsignedLong* width() const;
   V8UnionOpaquePropertyOrUnsignedLong* height() const;
-
-  void setSharedStorageContext(const String& contextString);
-
-  // Unlike `setSharedStorageContext()`, `GetSharedStorageContext()` is not
-  // web-exposed.
-  String GetSharedStorageContext() const;
 
   // Get attribute's value ignoring visibility.
   template <Attribute attr>
@@ -155,9 +141,6 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
 
  private:
   KURL url_;
-
-  // `shared_storage_context_` can be set, but has no web-exposed getter here.
-  String shared_storage_context_;
 
   AttributeVisibility url_attribute_visibility_ = AttributeVisibility::kNull;
 
@@ -232,7 +215,7 @@ class CORE_EXPORT FencedFrameConfig final : public ScriptWrappable {
   // compatibility.
   bool deprecated_should_freeze_initial_size_ = false;
 
-  static_assert(__LINE__ == 235, R"(
+  static_assert(__LINE__ == 218, R"(
 If adding or modifying a field in FencedFrameConfig, be sure to also make
 the field serializable. To do that:
 

@@ -277,6 +277,12 @@ bool StructTraits<media::mojom::VideoFrameDataView,
     return false;
   }
 
+  gfx::ColorSpace color_space;
+  if (!input.ReadColorSpace(&color_space)) {
+    DLOG(ERROR) << "Failed to read color_space";
+    return false;
+  }
+
   scoped_refptr<media::VideoFrame> frame;
   if (data.is_shared_memory_data()) {
     media::mojom::SharedMemoryVideoFrameDataDataView shared_memory_data;
@@ -436,6 +442,13 @@ bool StructTraits<media::mojom::VideoFrameDataView,
       return false;
     }
 
+    if (color_space != shared_image->color_space()) {
+      DLOG(ERROR) << "color_space (" << color_space.ToString()
+                  << ") does not match shared_image color_space ("
+                  << shared_image->color_space().ToString() << ")";
+      return false;
+    }
+
     bool is_mappable = shared_image_data.is_mappable();
     if (is_mappable) {
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
@@ -443,9 +456,11 @@ bool StructTraits<media::mojom::VideoFrameDataView,
       // validation.
       const auto video_pixel_format =
           media::SharedImageFormatToVideoPixelFormat(shared_image->format());
-      if (video_pixel_format) {
+      if (!shared_image->is_software() &&
+          shared_image->GetGpuMemoryBufferType() == gfx::NATIVE_PIXMAP &&
+          video_pixel_format) {
         auto gmb_handle = shared_image->CloneGpuMemoryBufferHandle();
-        if (!gmb_handle.is_null() && gmb_handle.type == gfx::NATIVE_PIXMAP) {
+        if (!gmb_handle.is_null()) {
           if (!media::VerifyGpuMemoryBufferHandle(*video_pixel_format,
                                                   coded_size, gmb_handle)) {
             DLOG(ERROR)
@@ -473,7 +488,10 @@ bool StructTraits<media::mojom::VideoFrameDataView,
           timestamp);
     }
   } else if (data.is_opaque_data()) {
-    DCHECK(metadata.tracking_token.has_value());
+    if (!metadata.tracking_token.has_value()) {
+      DLOG(ERROR) << "Tracking token is unexpectedly missing";
+      return false;
+    }
     frame = media::VideoFrame::WrapTrackingToken(
         format, *metadata.tracking_token, coded_size, visible_rect,
         natural_size, timestamp);
@@ -675,12 +693,6 @@ bool StructTraits<media::mojom::VideoFrameDataView,
   }
 
   frame->set_metadata(metadata);
-
-  gfx::ColorSpace color_space;
-  if (!input.ReadColorSpace(&color_space)) {
-    DLOG(ERROR) << "Failed to read color_space";
-    return false;
-  }
   frame->set_color_space(color_space);
 
   gfx::HDRMetadata hdr_metadata;

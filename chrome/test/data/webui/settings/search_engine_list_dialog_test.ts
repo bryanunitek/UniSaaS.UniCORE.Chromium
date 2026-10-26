@@ -5,22 +5,25 @@
 // clang-format off
 import 'chrome://settings/settings.js';
 
-import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import type {SearchEngine, SettingsSearchEngineListDialogElement} from 'chrome://settings/settings.js';
+import type {CrButtonElement, SearchEngine, SettingsSearchEngineListDialogElement} from 'chrome://settings/settings.js';
 import {loadTimeData, SearchEnginesBrowserProxyImpl, ChoiceMadeLocation} from 'chrome://settings/settings.js';
-import {assertEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
+import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import {createSampleSearchEngine, TestSearchEnginesBrowserProxy} from './test_search_engines_browser_proxy.js';
+import {createSampleSearchEngine, engineId, TestSearchEnginesBrowserProxy} from './test_search_engines_browser_proxy.js';
 // clang-format on
 
 function generateActiveSiteShortcuts(): SearchEngine[] {
   const searchEngines0 = createSampleSearchEngine(
-      {canBeDefault: true, isPrepopulated: true, id: 0});
+      {canBeDefault: true, isPrepopulated: true, id: engineId('db:0')});
   const searchEngines1 = createSampleSearchEngine(
-      {canBeDefault: true, isPrepopulated: true, id: 1});
-  const searchEngines2 = createSampleSearchEngine(
-      {canBeDefault: true, isPrepopulated: false, default: true, id: 2});
+      {canBeDefault: true, isPrepopulated: true, id: engineId('db:1')});
+  const searchEngines2 = createSampleSearchEngine({
+    canBeDefault: true,
+    isPrepopulated: false,
+    default: true,
+    id: engineId('db:2'),
+  });
 
   return [searchEngines0, searchEngines1, searchEngines2];
 }
@@ -31,7 +34,10 @@ suite('SearchEngineListDialog', function() {
 
   setup(function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    loadTimeData.overrideValues({searchSettingsUpdate: true});
+    loadTimeData.overrideValues({
+      searchSettingsUpdate: true,
+      pickerWithMoreEngines: false,
+    });
 
     browserProxy = new TestSearchEnginesBrowserProxy();
     SearchEnginesBrowserProxyImpl.setInstance(browserProxy);
@@ -40,37 +46,40 @@ suite('SearchEngineListDialog', function() {
     document.body.appendChild(dialog);
     dialog.searchEngines = generateActiveSiteShortcuts();
 
-    return flushTasks();
+    return microtasksFinished();
   });
 
   test('Search engine list dialog shows engines', function() {
-    const radioButtons = dialog.shadowRoot!.querySelectorAll('cr-radio-button');
+    const radioButtons = dialog.shadowRoot.querySelectorAll('cr-radio-button');
     assertEquals(3, radioButtons.length);
 
     // The engine marked as default is selected.
-    const radioGroupElement =
-        dialog.shadowRoot!.querySelector('cr-radio-group');
+    const radioGroupElement = dialog.shadowRoot.querySelector('cr-radio-group');
     assertTrue(!!radioGroupElement);
-    assertEquals('2', radioGroupElement.selected);
+    assertEquals('db:2', radioGroupElement.selected);
+  });
+
+  test('More options entry point is hidden', function() {
+    assertFalse(
+        isVisible(dialog.shadowRoot.querySelector('#moreEnginesButton')));
   });
 
   test('Search engine list dialog sets default engine', async function() {
     browserProxy.resetResolver('setDefaultSearchEngine');
 
     // Initially, the engine marked as default is selected.
-    const radioGroupElement =
-        dialog.shadowRoot!.querySelector('cr-radio-group');
+    const radioGroupElement = dialog.shadowRoot.querySelector('cr-radio-group');
     assertTrue(!!radioGroupElement);
-    assertEquals('2', radioGroupElement.selected);
+    assertEquals('db:2', radioGroupElement.selected);
 
     // Simulate a user initiated change of the default search engine.
-    const radioButtons = dialog.shadowRoot!.querySelectorAll('cr-radio-button');
+    const radioButtons = dialog.shadowRoot.querySelectorAll('cr-radio-button');
     assertEquals(3, radioButtons.length);
     radioButtons[1]!.click();
-    await flush();
+    await microtasksFinished();
 
     const setAsDefaultButton =
-        dialog.shadowRoot!.querySelector<HTMLButtonElement>(
+        dialog.shadowRoot.querySelector<HTMLButtonElement>(
             '#setAsDefaultButton');
     assertTrue(!!setAsDefaultButton);
     setAsDefaultButton.click();
@@ -78,17 +87,16 @@ suite('SearchEngineListDialog', function() {
     // The other search engine in the list is now selected as default.
     const [id, choiceMadeLocation] =
         await browserProxy.whenCalled('setDefaultSearchEngine');
-    assertEquals(1, id);
+    assertEquals('db:1', id);
     assertEquals(choiceMadeLocation, ChoiceMadeLocation.SEARCH_SETTINGS);
-    assertEquals('1', radioGroupElement.selected);
+    assertEquals('db:1', radioGroupElement.selected);
   });
 
-  test('Search engine list dialog reacts to changes', function() {
+  test('Search engine list dialog reacts to changes', async function() {
     // Initially, the engine marked as default is selected.
-    const radioGroupElement =
-        dialog.shadowRoot!.querySelector('cr-radio-group');
+    const radioGroupElement = dialog.shadowRoot.querySelector('cr-radio-group');
     assertTrue(!!radioGroupElement);
-    assertEquals('2', radioGroupElement.selected);
+    assertEquals('db:2', radioGroupElement.selected);
 
     // Simulate setting a different default engine in a different tab.
     const activeSiteShortcuts = generateActiveSiteShortcuts();
@@ -98,9 +106,75 @@ suite('SearchEngineListDialog', function() {
     activeSiteShortcuts[2]!.default = false;
 
     dialog.searchEngines = activeSiteShortcuts;
-    flush();
+    await microtasksFinished();
 
     // The change in the other tab is reflected in the dialog.
-    assertEquals('0', radioGroupElement.selected);
+    assertEquals('db:0', radioGroupElement.selected);
+  });
+
+  test(
+      'Search engine list dialog shows policy icon for recommended engines',
+      async function() {
+        const activeSiteShortcuts = generateActiveSiteShortcuts();
+        assertEquals(3, activeSiteShortcuts.length);
+        activeSiteShortcuts[1]!.isRecommendedFromPolicy = true;
+
+        dialog.searchEngines = activeSiteShortcuts;
+        await microtasksFinished();
+
+        const radioButtons =
+            dialog.shadowRoot.querySelectorAll('cr-radio-button');
+        assertEquals(3, radioButtons.length);
+
+        // Engine 0 is not recommended from policy, so no policy indicator is
+        // shown.
+        assertFalse(!!radioButtons[0]!.querySelector('cr-policy-indicator'));
+
+        // Engine 1 is recommended from policy, so a policy indicator is shown.
+        const policyIndicator =
+            radioButtons[1]!.querySelector('cr-policy-indicator');
+        assertTrue(!!policyIndicator);
+        assertEquals('recommended', policyIndicator.indicatorType);
+        assertEquals('left', policyIndicator.tooltipPosition);
+
+        document.documentElement.dir = 'rtl';
+        dialog.requestUpdate();
+        await microtasksFinished();
+        assertEquals('right', policyIndicator.tooltipPosition);
+        document.documentElement.dir = 'ltr';
+
+        // Engine 2 is not recommended from policy.
+        assertFalse(!!radioButtons[2]!.querySelector('cr-policy-indicator'));
+      });
+});
+
+suite('SearchEngineListDialogWithMoreEngines', function() {
+  let dialog: SettingsSearchEngineListDialogElement;
+
+  setup(function() {
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    loadTimeData.overrideValues({
+      searchSettingsUpdate: true,
+      pickerWithMoreEngines: true,
+    });
+    SearchEnginesBrowserProxyImpl.setInstance(
+        new TestSearchEnginesBrowserProxy());
+
+    dialog = document.createElement('settings-search-engine-list-dialog');
+    document.body.appendChild(dialog);
+    dialog.searchEngines = generateActiveSiteShortcuts();
+
+    return microtasksFinished();
+  });
+
+  test('More options fires more-engines-click', async function() {
+    const moreEnginesButton =
+        dialog.shadowRoot.querySelector<CrButtonElement>('#moreEnginesButton');
+    assertTrue(!!moreEnginesButton);
+    assertTrue(isVisible(moreEnginesButton));
+
+    const moreEnginesClicked = eventToPromise('more-engines-click', dialog);
+    moreEnginesButton.click();
+    await moreEnginesClicked;
   });
 });

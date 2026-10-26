@@ -12,15 +12,12 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.enterTabSwitcher;
-import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.leaveTabSwitcher;
 import static org.chromium.chrome.test.util.ChromeTabUtils.getTabCountOnUiThread;
 
 import android.os.Build.VERSION_CODES;
 
 import androidx.test.filters.MediumTest;
 import androidx.test.platform.app.InstrumentationRegistry;
-import androidx.test.runner.lifecycle.ActivityLifecycleMonitor;
-import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry;
 
 import org.hamcrest.Matchers;
 import org.junit.After;
@@ -45,9 +42,6 @@ import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.ChromeTabbedActivity2;
 import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.layouts.LayoutManager;
-import org.chromium.chrome.browser.layouts.LayoutTestUtils;
-import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.multiwindow.MultiWindowTestHelper;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
@@ -55,7 +49,6 @@ import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.ui.base.DeviceFormFactor;
@@ -78,16 +71,15 @@ public class UndoTabModelTest {
     public AutoResetCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
-    private static final ActivityLifecycleMonitor sMonitor =
-            ActivityLifecycleMonitorRegistry.getInstance();
-
-    private WebPageStation mPage;
-
     @Before
     public void setUp() throws InterruptedException {
-        mPage = mActivityTestRule.startOnBlankPage();
+        mActivityTestRule.startOnBlankPage();
         CriteriaHelper.pollUiThread(
-                () -> mActivityTestRule.getActivity().getTabModelSelector().isTabStateInitialized());
+                () ->
+                        mActivityTestRule
+                                .getActivity()
+                                .getTabModelSelector()
+                                .isTabStateInitialized());
         // When closing the last tab we enter the tab switcher. Just start there to ensure
         // determinism.
         enterTabSwitcher(mActivityTestRule.getActivity());
@@ -121,29 +113,19 @@ public class UndoTabModelTest {
                                     .closeTabs(
                                             TabClosureParams.closeAllTabs()
                                                     .allowUndo(false)
+                                                    .tabClosingSource(
+                                                            TabClosingSource.GRID_TAB_SWITCHER)
                                                     .build(),
                                             /* allowDialog= */ false);
                             return selector.getModel(false).getCount();
                         });
         if (regularTabCount == 0) {
-            Tab tab = createTab(/* isIncognito= */ false);
+            createTab(/* isIncognito= */ false);
             ThreadUtils.runOnUiThreadBlocking(
                     () -> {
                         selector.selectModel(false);
                         selector.getModel(false).setIndex(0, TabSelectionType.FROM_USER);
                     });
-        }
-        LayoutManager layoutManager = cta.getLayoutManager();
-        boolean shouldLeaveTabSwitcher =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> {
-                            return layoutManager.isLayoutVisible(LayoutType.HUB)
-                                    && !layoutManager.isLayoutStartingToHide(LayoutType.HUB);
-                        });
-        if (shouldLeaveTabSwitcher) {
-            leaveTabSwitcher(cta);
-        } else {
-            LayoutTestUtils.waitForLayout(cta.getLayoutManager(), LayoutType.BROWSING);
         }
     }
 
@@ -257,7 +239,10 @@ public class UndoTabModelTest {
                     // Take action.
                     model.getTabRemover()
                             .closeTabs(
-                                    TabClosureParams.closeTab(tab).allowUndo(undoable).build(),
+                                    TabClosureParams.closeTab(tab)
+                                            .allowUndo(undoable)
+                                            .tabClosingSource(TabClosingSource.GRID_TAB_SWITCHER)
+                                            .build(),
                                     /* allowDialog= */ false);
                 });
 
@@ -605,6 +590,8 @@ public class UndoTabModelTest {
                                 .closeTabs(
                                         TabClosureParams.closeTabs(tabs)
                                                 .allowUndo(undoable)
+                                                .tabClosingSource(
+                                                        TabClosingSource.GRID_TAB_SWITCHER)
                                                 .build(),
                                         /* allowDialog= */ false),
                 undoable);
@@ -617,7 +604,11 @@ public class UndoTabModelTest {
                 () ->
                         model.getTabRemover()
                                 .closeTabs(
-                                        TabClosureParams.closeAllTabs().allowUndo(undoable).build(),
+                                        TabClosureParams.closeAllTabs()
+                                                .allowUndo(undoable)
+                                                .tabClosingSource(
+                                                        TabClosingSource.GRID_TAB_SWITCHER)
+                                                .build(),
                                         /* allowDialog= */ false),
                 undoable);
     }
@@ -720,10 +711,8 @@ public class UndoTabModelTest {
         }
 
         for (int i = 0; i < expectedToClose.length; i++) {
-            Tab tab = expectedToClose[i];
-            int finalI = i;
-            ThreadUtils.runOnUiThreadBlocking(
-                    () -> model.cancelTabClosure(expectedToClose[finalI].getId()));
+            final Tab tab = expectedToClose[i];
+            ThreadUtils.runOnUiThreadBlocking(() -> model.cancelTabClosure(tab.getId()));
         }
 
         willUndoTabClosureHelper.waitForCallback(0, expectedToClose.length);
@@ -836,7 +825,6 @@ public class UndoTabModelTest {
 
         // 5.
         commitTabClosure(model, tab0);
-        fullList = EMPTY;
         checkState(model, EMPTY, null, EMPTY, EMPTY, null);
 
         // 6.
@@ -1922,6 +1910,7 @@ public class UndoTabModelTest {
                             .closeTabs(
                                     TabClosureParams.closeTabs(List.of(tab0, tab1))
                                             .allowUndo(true)
+                                            .tabClosingSource(TabClosingSource.GRID_TAB_SWITCHER)
                                             .withUndoRunnable(undoRunnable)
                                             .build(),
                                     /* allowDialog= */ false);
@@ -1938,6 +1927,7 @@ public class UndoTabModelTest {
                             .closeTabs(
                                     TabClosureParams.closeAllTabs()
                                             .allowUndo(true)
+                                            .tabClosingSource(TabClosingSource.GRID_TAB_SWITCHER)
                                             .withUndoRunnable(undoRunnable)
                                             .build(),
                                     /* allowDialog= */ false);

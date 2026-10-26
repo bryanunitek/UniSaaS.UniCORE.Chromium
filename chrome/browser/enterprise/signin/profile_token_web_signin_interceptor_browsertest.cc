@@ -54,7 +54,7 @@ class MockDelegate : public ProfileTokenWebSigninInterceptor::Delegate {
               (override));
   MOCK_METHOD(void,
               ShowFirstRunExperienceInNewProfile,
-              (Browser*,
+              (BrowserWindowInterface*,
                const CoreAccountId&,
                WebSigninInterceptor::SigninInterceptionType),
               (override));
@@ -65,7 +65,7 @@ class MockDelegate : public ProfileTokenWebSigninInterceptor::Delegate {
 };
 
 MATCHER_P(HasSameAccountIdAs, other, "") {
-  return arg.account_id == other.account_id;
+  return arg.GetAccountId() == other.GetAccountId();
 }
 
 // Matches BubbleParameters fields excepting the color. This is useful in the

@@ -37,7 +37,7 @@ class OutOfFlowDescendant {
     // Need to locate the containing block manually here. OOF fragments in a
     // fragmentation context are direct children of the enclosing fragmentainer,
     // not the actual containing block.
-    const LayoutBlock* actual_containing_block = box_->ContainingBlock();
+    const LayoutBox* actual_containing_block = box_->ContainingBlock();
     const PhysicalBoxFragment& first_container_fragment =
         *actual_containing_block->GetPhysicalFragment(0);
     box_->SetLocation(
@@ -320,7 +320,7 @@ LayoutUnit BoxInlineSize(const LayoutBox& box) {
   // TODO(almaher): We can't assume all fragments will have the same inline
   // size.
   return ToLogicalSize(box.GetPhysicalFragment(0u)->Size(),
-                       box.StyleRef().GetWritingMode())
+                       box.Style().GetWritingMode())
       .inline_size;
 }
 
@@ -334,7 +334,7 @@ LayoutUnit BoxTotalBlockSize(const LayoutBox& box) {
   while (num_fragments > 0) {
     LayoutUnit block_size =
         ToLogicalSize(box.GetPhysicalFragment(num_fragments - 1)->Size(),
-                      box.StyleRef().GetWritingMode())
+                      box.Style().GetWritingMode())
             .block_size;
     if (block_size > LayoutUnit()) {
       total_block_size += block_size;

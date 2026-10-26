@@ -20,7 +20,6 @@ enum InspectorIssueCode {
   kContentSecurityPolicyIssue,
   kSharedArrayBufferIssue,
   kHeavyAdIssue,
-  kAttributionReportingIssue,
   kFederatedAuthRequestIssue,
   kBounceTrackingIssue,
   kCookieDeprecationMetadataIssue,
@@ -31,6 +30,7 @@ enum InspectorIssueCode {
   kUserReidentificationIssue,
   kPerformanceIssue,
   kEmailVerificationRequestIssue,
+  kWebInstallIssue,
 };
 
 // Information about a cookie that is affected by an issue.
@@ -78,36 +78,6 @@ struct HeavyAdIssueDetails {
   HeavyAdResolutionStatus resolution;
   HeavyAdReason reason;
   AffectedFrame frame;
-};
-
-enum AttributionReportingIssueType {
-  kPermissionPolicyDisabled,
-  kUntrustworthyReportingOrigin,
-  kInsecureContext,
-  kInvalidRegisterSourceHeader,
-  kInvalidRegisterTriggerHeader,
-  kSourceAndTriggerHeaders,
-  kSourceIgnored,
-  kTriggerIgnored,
-  kOsSourceIgnored,
-  kOsTriggerIgnored,
-  kInvalidRegisterOsSourceHeader,
-  kInvalidRegisterOsTriggerHeader,
-  kWebAndOsHeaders,
-  kNoWebOrOsSupport,
-  kNavigationRegistrationWithoutTransientUserActivation,
-  kInvalidInfoHeader,
-  kNoRegisterSourceHeader,
-  kNoRegisterTriggerHeader,
-  kNoRegisterOsSourceHeader,
-  kNoRegisterOsTriggerHeader,
-  kNavigationRegistrationUniqueScopeAlreadySet,
-};
-
-struct AttributionReportingIssueDetails {
-  AttributionReportingIssueType violation_type;
-  AffectedRequest? request;
-  string? invalid_parameter;
 };
 
 enum MixedContentResolutionStatus {
@@ -224,6 +194,7 @@ enum FederatedRequestResult {
   kTooManyRequests,
   kWellKnownHttpNotFound,
   kWellKnownNoResponse,
+  kWellKnownBlockedByConnectionAllowlist,
   kWellKnownInvalidResponse,
   kWellKnownListEmpty,
   kWellKnownInvalidContentType,
@@ -231,15 +202,18 @@ enum FederatedRequestResult {
   kWellKnownTooBig,
   kConfigHttpNotFound,
   kConfigNoResponse,
+  kConfigBlockedByConnectionAllowlist,
   kConfigInvalidResponse,
   kConfigInvalidContentType,
   kAccountsHttpNotFound,
   kAccountsNoResponse,
+  kAccountsBlockedByConnectionAllowlist,
   kAccountsInvalidResponse,
   kAccountsListEmpty,
   kAccountsInvalidContentType,
   kIdTokenHttpNotFound,
   kIdTokenNoResponse,
+  kIdTokenBlockedByConnectionAllowlist,
   kIdTokenInvalidResponse,
   kIdTokenIdpErrorResponse,
   kIdTokenCrossSiteIdpErrorResponse,
@@ -256,6 +230,7 @@ enum FederatedRequestResult {
   kUiDismissedNoEmbargo,
   kCorsError,
   kSuppressedBySegmentationPlatform,
+  kPopupBlockedByConnectionAllowlist,
 };
 
 struct FederatedRequestIssueDetails {
@@ -290,6 +265,19 @@ struct FederatedAuthUserInfoRequestIssueDetails {
 
 struct EmailVerificationRequestIssueDetails {
   EmailVerificationRequestResult status;
+};
+
+enum WebInstallIssueReason {
+  kManifestParsingOrNetworkError,
+  kStartUrlInvalid,
+  kManifestMissingNameOrShortName,
+  kManifestMissingId,
+  kNoManifest,
+};
+
+struct WebInstallIssueDetails {
+  url.mojom.Url? manifest_url;
+  WebInstallIssueReason reason;
 };
 
 struct BounceTrackingIssueDetails {
@@ -335,6 +323,7 @@ enum GenericIssueErrorType {
   kFormModelContextMissingToolDescription,
   kFormModelContextRequiredParameterMissingName,
   kFormModelContextParameterMissingName,
+  kGeolocationPromptWithoutUserGesture,
 };
 
 struct GenericIssueDetails {
@@ -380,7 +369,6 @@ struct InspectorIssueDetails {
   ContentSecurityPolicyIssueDetails? csp_issue_details;
   SharedArrayBufferIssueDetails? sab_issue_details;
   HeavyAdIssueDetails? heavy_ad_issue_details;
-  AttributionReportingIssueDetails? attribution_reporting_issue_details;
   FederatedRequestIssueDetails? federated_request_details;
   BounceTrackingIssueDetails? bounce_tracking_issue_details;
   PartitioningBlobURLIssueDetails? partitioning_blob_url_issue_details;
@@ -393,6 +381,7 @@ struct InspectorIssueDetails {
   UserReidentificationIssueDetails? user_reidentification_issue_details;
   PerformanceIssueDetails? performance_issue_details;
   EmailVerificationRequestIssueDetails? email_verification_request_details;
+  WebInstallIssueDetails? web_install_issue_details;
   mojo_base.mojom.UnguessableToken? issue_id;
 };
 

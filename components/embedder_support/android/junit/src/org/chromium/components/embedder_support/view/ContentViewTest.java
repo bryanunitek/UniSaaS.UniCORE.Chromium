@@ -29,7 +29,6 @@ import android.view.View;
 import android.view.ViewStructure;
 import android.view.autofill.AutofillValue;
 
-import androidx.test.filters.SmallTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.junit.Before;
@@ -42,6 +41,7 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.DeviceInfo;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.content_public.browser.GestureListenerManager;
 import org.chromium.content_public.browser.ViewFocusChangeSuppression;
@@ -83,7 +83,6 @@ public class ContentViewTest {
     }
 
     @Test
-    @SmallTest
     public void testHandwritingHoverIconShowsWhenOverridden() {
         PointerIcon pointerIcon = PointerIcon.getSystemIcon(mContext, PointerIcon.TYPE_GRAB);
         mContentView.setStylusWritingIconSupplier(() -> pointerIcon);
@@ -91,9 +90,8 @@ public class ContentViewTest {
     }
 
     @Test
-    @SmallTest
     public void testOnResolvePointerIconCallsParentWhenNotOverridden() {
-        mContentView.setStylusWritingIconSupplier(() -> null);
+        mContentView.setStylusWritingIconSupplier(SupplierUtils.ofNull());
         MotionEvent motionEvent = mock(MotionEvent.class);
         assertNull(mContentView.onResolvePointerIcon(motionEvent, 0));
         // Parent implementation gets location of motion event.
@@ -101,7 +99,6 @@ public class ContentViewTest {
     }
 
     @Test
-    @SmallTest
     public void testOnProvideAutofillVirtualStructureForwardsToDelegate() {
         when(mWebContents.getViewAndroidDelegate()).thenReturn(mViewDelegate);
         when(mViewDelegate.providesAutofillStructure()).thenReturn(true);
@@ -114,7 +111,6 @@ public class ContentViewTest {
     }
 
     @Test
-    @SmallTest
     public void testForwardsAutofillDataToDelegate() {
         when(mWebContents.getViewAndroidDelegate()).thenReturn(mViewDelegate);
         when(mViewDelegate.providesAutofillStructure()).thenReturn(true);
@@ -133,7 +129,6 @@ public class ContentViewTest {
     }
 
     @Test
-    @SmallTest
     @Config(sdk = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
     public void testIgnoreFakeTwoFingerSwipeEventsOnDesktop() {
         // This is a test for desktop-only hack.
@@ -189,7 +184,6 @@ public class ContentViewTest {
     }
 
     @Test
-    @SmallTest
     public void testInputSuppression() {
         // Enable suppression
         ViewFocusChangeSuppression.from(mWebContents).setSuppressed(true);

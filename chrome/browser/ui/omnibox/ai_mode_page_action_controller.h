@@ -14,13 +14,15 @@
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
+#include "chrome/browser/ui/page_action/page_action_observer.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/search_engines/search_engine_type.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "url/gurl.h"
 
 class BrowserWindowInterface;
-class LocationBarView;
+class LocationBar;
 class OmniboxController;
 class Profile;
 class SkBitmap;
@@ -34,12 +36,13 @@ namespace omnibox {
 
 // Controller for the AI mode page action icon. This class is responsible for
 // deciding whether the AI mode icon should be shown in the omnibox.
-class AiModePageActionController : public OmniboxEditModel::Observer {
+class AiModePageActionController : public OmniboxEditModel::Observer,
+                                   public page_actions::PageActionObserver {
  public:
   DECLARE_USER_DATA(AiModePageActionController);
   AiModePageActionController(BrowserWindowInterface& bwi,
                              Profile& profile,
-                             LocationBarView& location_bar_view);
+                             LocationBar& location_bar);
 
   ~AiModePageActionController() override;
   AiModePageActionController(const AiModePageActionController&) = delete;
@@ -51,7 +54,6 @@ class AiModePageActionController : public OmniboxEditModel::Observer {
                           OmniboxPopupSelection new_selection) override {}
   void OnMatchIconUpdated(size_t index) override {}
   void OnContentsChanged() override;
-  void OnKeywordStateChanged(bool is_keyword_selected) override {}
   void OnCharTyped(base::TimeTicks timestamp) override {}
 
   // Determines whether the AI mode page action should be shown and updates
@@ -71,8 +73,16 @@ class AiModePageActionController : public OmniboxEditModel::Observer {
       const OmniboxController& omnibox_controller);
 
   // Evaluates whether AI mode page action should be shown.
-  static bool ShouldShowPageAction(Profile* profile,
-                                   LocationBarView& location_bar_view);
+  static bool ShouldShowPageAction(Profile* profile, LocationBar& location_bar);
+
+  // Returns whether AI mode page action is presently shown.
+  bool IsVisible() const { return is_visible_; }
+
+  // PageActionObserver:
+  void OnPageActionIconShown(
+      const page_actions::PageActionState& page_action) override;
+  void OnPageActionIconHidden(
+      const page_actions::PageActionState& page_action) override;
 
  private:
   using ImageCacheKey = std::pair<SearchEngineType, std::string>;
@@ -127,17 +137,20 @@ class AiModePageActionController : public OmniboxEditModel::Observer {
 
   const raw_ref<BrowserWindowInterface> bwi_;
   const raw_ref<Profile> profile_;
-  const raw_ref<LocationBarView> location_bar_view_;
+  const raw_ref<LocationBar> location_bar_;
 
   ui::ScopedUnownedUserData<AiModePageActionController> scoped_data_;
 
   base::ScopedObservation<OmniboxEditModel, OmniboxEditModel::Observer>
       omnibox_edit_model_observation_{this};
 
+  PrefChangeRegistrar pref_change_registrar_;
   base::CallbackListSubscription ai_mode_config_subscription_;
 
   std::optional<ImageCacheKey> cached_image_key_;
   std::optional<ui::ImageModel> cached_image_model_;
+
+  bool is_visible_ = false;
 
   // Used to cancel pending favicon fetches when the config changes.
   base::WeakPtrFactory<AiModePageActionController> favicon_fetch_weak_factory_{

@@ -147,6 +147,8 @@ message ClientMetadata {
     optional string client_id = 5;
 
     reserved 6;
+
+    optional bool is_isolated_mode = 7;
   }
   optional Profile profile = 3;
 
@@ -289,7 +291,8 @@ message ContentAnalysisResponse {
         WARN = 2;
         BLOCK = 3;
         FORCE_SAVE_TO_CLOUD = 4;
-        KEEP_IN_MANAGED_CHROME = 5;
+        JUSTIFICATION_REQUIRED = 5;
+        KEEP_IN_MANAGED_CHROME = 6;
       }
       optional Action action = 1;
       optional string rule_name = 2;

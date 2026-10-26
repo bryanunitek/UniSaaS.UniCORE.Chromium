@@ -8,29 +8,29 @@
 #ifndef GOOGLE_PROTOBUF_JSON_INTERNAL_DESCRIPTOR_TRAITS_H__
 #define GOOGLE_PROTOBUF_JSON_INTERNAL_DESCRIPTOR_TRAITS_H__
 
-#include <array>
-#include <cfloat>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <limits>
-#include <optional>
 #include <string>
 #include <utility>
 
 #include "google/protobuf/type.pb.h"
+#include "google/protobuf/descriptor.pb.h"
 #include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/log/absl_log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/optional.h"
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/dynamic_message.h"
 #include "google/protobuf/json/internal/lexer.h"
 #include "google/protobuf/json/internal/untyped_message.h"
-#include "google/protobuf/message.h"
+#include "google/protobuf/json_enumvalue_options.pb.h"
 #include "google/protobuf/stubs/status_macros.h"
 
 
@@ -144,11 +144,11 @@ struct Proto2Descriptor {
 
   static absl::string_view TypeName(const Desc& d) { return d.full_name(); }
 
-  static std::optional<Field> FieldByNumber(const Desc& d, int32_t number) {
+  static absl::optional<Field> FieldByNumber(const Desc& d, int32_t number) {
     if (const auto* field = d.FindFieldByNumber(number)) {
       return field;
     }
-    return std::nullopt;
+    return absl::nullopt;
   }
 
   static Field MustHaveField(const Desc& d, int32_t number,
@@ -166,8 +166,8 @@ struct Proto2Descriptor {
     return *f;
   }
 
-  static std::optional<Field> FieldByName(const Desc& d,
-                                          absl::string_view name) {
+  static absl::optional<Field> FieldByName(const Desc& d,
+                                           absl::string_view name) {
     if (const auto* field = d.FindFieldByCamelcaseName(name)) {
       return field;
     }
@@ -183,7 +183,7 @@ struct Proto2Descriptor {
       }
     }
 
-    return std::nullopt;
+    return absl::nullopt;
   }
 
   static Field KeyField(const Desc& d) { return d.map_key(); }
@@ -194,11 +194,11 @@ struct Proto2Descriptor {
 
   static Field FieldByIndex(const Desc& d, size_t idx) { return d.field(idx); }
 
-  static std::optional<Field> ExtensionByName(const Desc& d,
-                                              absl::string_view name) {
+  static absl::optional<Field> ExtensionByName(const Desc& d,
+                                               absl::string_view name) {
     auto* field = d.file()->pool()->FindExtensionByName(name);
     if (field == nullptr) {
-      return std::nullopt;
+      return absl::nullopt;
     }
     return field;
   }
@@ -254,27 +254,44 @@ struct Proto2Descriptor {
   static absl::StatusOr<int32_t> EnumNumberByName(Field f,
                                                   absl::string_view name,
                                                   bool case_insensitive) {
-    if (case_insensitive) {
-      for (int i = 0; i < f->enum_type()->value_count(); ++i) {
-        const auto* ev = f->enum_type()->value(i);
-        if (absl::EqualsIgnoreCase(name, ev->name())) {
-          return ev->number();
-        }
-      }
-      return absl::InvalidArgumentError(
-          absl::StrFormat("unknown enum value: '%s'", name));
-    }
-
-    if (const auto* ev = f->enum_type()->FindValueByName(name)) {
+    if (const EnumValueDescriptor* ev = f->enum_type()->FindValueByName(name)) {
       return ev->number();
     }
 
+    if (case_insensitive) {
+      // Under case-insensitive mode, we generate a map containing all valid
+      // lower-case strings of the enum field.
+      const absl::flat_hash_map<std::string, int32_t>& alternate_names =
+          DescriptorPool::MemoizeProjection(
+              f->enum_type(), [](const EnumDescriptor* e) {
+                return MakeEnumJsonNameMapCaseless(e);
+              });
+      // Similarly, we need to perform a lookup with the enum string transformed
+      // to lower-case.
+      auto it = alternate_names.find(absl::AsciiStrToLower(name));
+      if (it != alternate_names.end()) {
+        return it->second;
+      }
+    } else {
+      const absl::flat_hash_map<std::string, int32_t>& alternate_names =
+          DescriptorPool::MemoizeProjection(
+              f->enum_type(),
+              [](const EnumDescriptor* e) { return MakeEnumJsonNameMap(e); });
+      auto it = alternate_names.find(name);
+      if (it != alternate_names.end()) {
+        return it->second;
+      }
+    }
     return absl::InvalidArgumentError(
         absl::StrFormat("unknown enum value: '%s'", name));
   }
 
   static absl::StatusOr<std::string> EnumNameByNumber(Field f, int32_t number) {
     if (const auto* ev = f->enum_type()->FindValueByNumber(number)) {
+      if (ev->options().HasExtension(pb::enumvalue::json)) {
+        return std::string(
+            ev->options().GetExtension(pb::enumvalue::json).string());
+      }
       return std::string(ev->name());
     }
     return absl::InvalidArgumentError(
@@ -313,6 +330,40 @@ struct Proto2Descriptor {
 
     return body(*dyn_desc);
   }
+
+ private:
+  static absl::flat_hash_map<std::string, int32_t> MakeEnumJsonNameMap(
+      const EnumDescriptor* e) {
+    absl::flat_hash_map<std::string, int32_t> alternate_names;
+
+    for (int i = 0; i < e->value_count(); ++i) {
+      const EnumValueDescriptor* ev = e->value(i);
+      if (ev->options().HasExtension(pb::enumvalue::json)) {
+        const pb::enumvalue::JsonEnumValueOptions opts =
+            ev->options().GetExtension(pb::enumvalue::json);
+        alternate_names[opts.string()] = ev->number();
+      }
+    }
+
+    return alternate_names;
+  }
+
+  static absl::flat_hash_map<std::string, int32_t> MakeEnumJsonNameMapCaseless(
+      const EnumDescriptor* e) {
+    absl::flat_hash_map<std::string, int32_t> alternate_names;
+
+    for (int i = 0; i < e->value_count(); ++i) {
+      const EnumValueDescriptor* ev = e->value(i);
+      if (ev->options().HasExtension(pb::enumvalue::json)) {
+        const pb::enumvalue::JsonEnumValueOptions opts =
+            ev->options().GetExtension(pb::enumvalue::json);
+        alternate_names[absl::AsciiStrToLower(opts.string())] = ev->number();
+      }
+      alternate_names[absl::AsciiStrToLower(ev->name())] = ev->number();
+    }
+
+    return alternate_names;
+  }
 };
 
 // Traits for proto3-ish deserialization.
@@ -325,9 +376,9 @@ struct Proto3Type {
   /// Functions for working with descriptors. ///
   static absl::string_view TypeName(const Desc& d) { return d.proto().name(); }
 
-  static std::optional<Field> FieldByNumber(const Desc& d, int32_t number) {
+  static absl::optional<Field> FieldByNumber(const Desc& d, int32_t number) {
     const auto* f = d.FindField(number);
-    return f == nullptr ? std::nullopt : std::make_optional(f);
+    return f == nullptr ? absl::nullopt : absl::make_optional(f);
   }
 
   static Field MustHaveField(const Desc& d, int32_t number,
@@ -345,10 +396,10 @@ struct Proto3Type {
     return *f;
   }
 
-  static std::optional<Field> FieldByName(const Desc& d,
-                                          absl::string_view name) {
+  static absl::optional<Field> FieldByName(const Desc& d,
+                                           absl::string_view name) {
     const auto* f = d.FindField(name);
-    return f == nullptr ? std::nullopt : std::make_optional(f);
+    return f == nullptr ? absl::nullopt : absl::make_optional(f);
   }
 
   static Field KeyField(const Desc& d) { return &d.FieldsByIndex()[0]; }
@@ -361,11 +412,11 @@ struct Proto3Type {
     return &d.FieldsByIndex()[idx];
   }
 
-  static std::optional<Field> ExtensionByName(const Desc& d,
-                                              absl::string_view name) {
+  static absl::optional<Field> ExtensionByName(const Desc& d,
+                                               absl::string_view name) {
     // type.proto cannot represent extensions, so this function always
     // fails.
-    return std::nullopt;
+    return absl::nullopt;
   }
 
   /// Functions for introspecting fields. ///

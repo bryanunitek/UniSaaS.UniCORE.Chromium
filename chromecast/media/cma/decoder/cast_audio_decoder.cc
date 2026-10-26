@@ -4,7 +4,6 @@
 
 #include "chromecast/media/api/cast_audio_decoder.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -19,6 +18,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chromecast/media/api/decoder_buffer_base.h"
 #include "chromecast/media/cma/base/decoder_buffer_adapter.h"
@@ -35,6 +35,11 @@
 #include "media/base/sample_format.h"
 #include "media/base/status.h"
 #include "media/filters/ffmpeg_audio_decoder.h"
+#include "media/media_buildflags.h"
+
+#if BUILDFLAG(ENABLE_SYMPHONIA)
+#include "media/filters/symphonia_audio_decoder.h"
+#endif
 
 namespace chromecast {
 namespace media {
@@ -79,11 +84,21 @@ class CastAudioDecoderImpl : public CastAudioDecoder {
         (output_format_ == kOutputSigned16 ? kSampleFormatS16
                                            : kSampleFormatPlanarF32);
 
-    decoder_ = std::make_unique<::media::FFmpegAudioDecoder>(task_runner_,
-                                                             &media_log_);
+    auto media_config =
+        media::DecoderConfigAdapter::ToMediaAudioDecoderConfig(input_config_);
+#if BUILDFLAG(ENABLE_SYMPHONIA)
+    if (::media::SymphoniaAudioDecoder::IsCodecSupported(
+            media_config.codec())) {
+      decoder_ = std::make_unique<::media::SymphoniaAudioDecoder>(task_runner_,
+                                                                  &media_log_);
+    } else
+#endif
+    {
+      decoder_ = std::make_unique<::media::FFmpegAudioDecoder>(task_runner_,
+                                                               &media_log_);
+    }
     decoder_->Initialize(
-        media::DecoderConfigAdapter::ToMediaAudioDecoderConfig(input_config_),
-        nullptr,
+        media_config, nullptr,
         base::BindRepeating(&CastAudioDecoderImpl::OnInitialized, weak_this_),
         base::BindRepeating(&CastAudioDecoderImpl::OnDecoderOutput, weak_this_),
         base::NullCallback());
@@ -277,23 +292,26 @@ class CastAudioDecoderImpl : public CastAudioDecoder {
       int num_frames) {
     int size =
         num_frames * bus->channels() * OutputFormatSizeInBytes(output_format_);
-    auto result = base::MakeRefCounted<::media::DecoderBuffer>(size);
+    auto output_data = base::HeapArray<uint8_t>::Uninit(size);
 
     if (output_format_ == kOutputSigned16) {
       bus->ToInterleavedBytesPartial<::media::SignedInt16SampleTypeTraits>(
-          0, result->writable_span());
+          0, output_data);
     } else if (output_format_ == kOutputPlanarFloat) {
       // Data in an AudioBus is already in planar float format; just copy each
       // channel into the result buffer in order.
-      float* ptr = reinterpret_cast<float*>(result->writable_data());
+      auto dest = output_data.as_span();
       for (auto channel : bus->AllChannels()) {
-        std::copy_n(channel.data(), num_frames, ptr);
-        UNSAFE_TODO(ptr += num_frames);
+        auto channel_data = base::as_byte_span(
+            base::allow_nonunique_obj,
+            channel.first(base::checked_cast<size_t>(num_frames)));
+        dest.take_first(channel_data.size()).copy_from(channel_data);
       }
     } else {
       NOTREACHED();
     }
 
+    auto result = ::media::DecoderBuffer::FromArray(std::move(output_data));
     result->set_duration(
         base::Microseconds(num_frames * base::Time::kMicrosecondsPerSecond /
                            output_config_.samples_per_second));

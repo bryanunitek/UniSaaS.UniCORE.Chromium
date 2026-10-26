@@ -41,6 +41,7 @@ class AXAuraObjCache;
 class AXVirtualViewWrapper;
 class View;
 class ViewAXPlatformNodeDelegate;
+class WidgetAXManager;
 
 namespace test {
 class AXVirtualViewTest;
@@ -211,11 +212,8 @@ class VIEWS_EXPORT AXVirtualView : public ViewAccessibility,
   // `ViewAccessibility` overrides.
   void NotifyEvent(ax::mojom::Event event_type,
                    bool send_native_event) override;
-  void NotifyDataChanged() override;
   void UpdateFocusableState() override;
   void UpdateInvisibleState() override;
-  void UpdateReadyToNotifyEvents() override;
-  void UpdateIgnoredState() override;
   void SetIsEnabled(bool enabled) override;
   void SetShowContextMenu(bool show_context_menu) override;
 
@@ -225,6 +223,11 @@ class VIEWS_EXPORT AXVirtualView : public ViewAccessibility,
   // Forwards a request from assistive technology to perform an action on this
   // virtual view to the owner view's accessible action handler.
   bool HandleAccessibleActionInOwnerView(const ui::AXActionData& action_data);
+
+  // `ViewAccessibility` overrides.
+  ui::AXNodeID GetOffsetContainerId() const override;
+  void UpdateReadyToNotifyEvents() override;
+  void UpdateIgnoredState() override;
 
  private:
   // Needed in order to access set_cache(), so that AXAuraObjCache can
@@ -257,6 +260,13 @@ class VIEWS_EXPORT AXVirtualView : public ViewAccessibility,
   void UpdateParentViewIsDrawnRecursive(const views::View* initial_view,
                                         bool parent_view_is_drawn);
 
+  // Called when the View that owns this virtual view changes, including when
+  // this virtual view is removed from the virtual tree.
+  void OnOwnerViewChanged();
+
+  // `ViewAccessibility` overrides.
+  void NotifyDataChanged() override;
+
   ui::AXPlatformNode::Pointer ax_platform_node_;
 
   // Weak. Owns us if not nullptr.
@@ -276,6 +286,7 @@ class VIEWS_EXPORT AXVirtualView : public ViewAccessibility,
   bool parent_view_is_drawn_ = true;
 
   friend class ViewAccessibility;
+  friend class WidgetAXManager;
 };
 
 }  // namespace views

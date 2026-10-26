@@ -41,13 +41,13 @@ struct DriveItem;
 - (void)mediator:(DriveFilePickerMediator*)mediator
     didAllowDismiss:(BOOL)allowDismiss;
 
-// Called when the mediator has actives or stops the search.
-- (void)mediator:(DriveFilePickerMediator*)mediator
-    didActivateSearch:(BOOL)searchActivated;
-
 // Called when the mediator picked Drive items (only in Composebox mode).
 - (void)mediator:(DriveFilePickerMediator*)mediator
     didPickDriveItems:(const std::vector<DriveItem>&)driveItems;
+
+// Called when the mediator reaches or tries to exceed the attachment limit (in
+// Composebox mode).
+- (void)mediatorDidReachAttachmentLimit:(DriveFilePickerMediator*)mediator;
 
 @end
 

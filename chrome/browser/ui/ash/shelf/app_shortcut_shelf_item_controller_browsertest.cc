@@ -14,12 +14,12 @@
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller_util.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "ui/display/types/display_constants.h"
@@ -119,7 +119,7 @@ IN_PROC_BROWSER_TEST_F(AppShortcutShelfItemControllerBrowserTest,
   EXPECT_EQ(3u, GetAppMenuItems(0).size());
 
   // Open a new tab in an existing app browser. There are still 3 window items.
-  AddBlankTabAndShow(app_browser1->GetBrowserForMigrationOnly());
+  AddBlankTabAndShow(app_browser1);
   EXPECT_EQ(3u, GetAppMenuItems(0).size());
 
   // Clicking the first item in the menu should activate the first app window.
@@ -162,8 +162,7 @@ IN_PROC_BROWSER_TEST_F(AppShortcutShelfItemControllerBrowserTest,
   EXPECT_EQ(4u, GetAppMenuItems(ui::EF_SHIFT_DOWN).size());
 
   // Open a new app tab in an existing app browser.
-  chrome::NewTab(app_browser1->GetBrowserForMigrationOnly(),
-                 NewTabTypes::kNoUserAction);
+  chrome::NewTab(app_browser1, NewTabTypes::kNoUserAction);
   EXPECT_EQ(5u, GetAppMenuItems(ui::EF_SHIFT_DOWN).size());
 
   // Clicking the third item in the menu should activate the first tab in the

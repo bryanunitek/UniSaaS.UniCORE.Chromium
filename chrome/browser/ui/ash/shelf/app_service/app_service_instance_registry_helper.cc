@@ -12,12 +12,12 @@
 #include "base/time/time.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/shelf/app_service/app_service_app_window_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ui/base/app_types.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "components/app_constants/constants.h"
@@ -36,7 +36,7 @@ AppServiceInstanceRegistryHelper::AppServiceInstanceRegistryHelper(
           controller->owner()->profile())),
       shelf_controller_helper_(std::make_unique<ShelfControllerHelper>(
           controller->owner()->profile())) {
-  DCHECK(controller_);
+  CHECK(controller_, base::NotFatalUntil::M162);
 }
 
 AppServiceInstanceRegistryHelper::~AppServiceInstanceRegistryHelper() = default;
@@ -489,13 +489,24 @@ bool AppServiceInstanceRegistryHelper::IsOpenedInBrowser(
 std::string AppServiceInstanceRegistryHelper::GetAppId(
     const aura::Window* window) const {
   for (Profile* profile : controller_->GetProfileList()) {
-    auto* proxy = apps::AppServiceProxyFactory::GetForProfile(profile);
-    std::string app_id = proxy->InstanceRegistry().GetShelfId(window).app_id;
+    std::string app_id = GetShelfId(profile, window).app_id;
     if (!app_id.empty()) {
       return app_id;
     }
   }
   return std::string();
+}
+
+ash::ShelfID AppServiceInstanceRegistryHelper::GetShelfId(
+    Profile* profile,
+    const aura::Window* window) const {
+  auto* proxy = apps::AppServiceProxyFactory::GetForProfile(profile);
+  ash::ShelfID shelf_id;
+  proxy->InstanceRegistry().ForInstancesWithWindow(
+      window, [&shelf_id](const apps::InstanceUpdate& update) {
+        shelf_id = ash::ShelfID(update.AppId(), update.LaunchId());
+      });
+  return shelf_id;
 }
 
 std::string AppServiceInstanceRegistryHelper::GetAppId(
@@ -569,7 +580,8 @@ void AppServiceInstanceRegistryHelper::RemoveTabWindow(
   aura::Window* top_level_window = it->second;
 
   auto browser_it = browser_window_to_tab_windows_.find(top_level_window);
-  DCHECK(browser_it != browser_window_to_tab_windows_.end());
+  CHECK(browser_it != browser_window_to_tab_windows_.end(),
+        base::NotFatalUntil::M162);
   browser_it->second.erase(window);
   if (browser_it->second.empty()) {
     browser_window_to_tab_windows_.erase(browser_it);

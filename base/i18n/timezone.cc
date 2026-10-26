@@ -8,6 +8,9 @@
 #include <string>
 
 #include "base/check.h"
+#include "base/features.h"
+#include "base/i18n/icu4c_tag_converter.h"  // nogncheck
+#include "base/i18n/language_tag.h"
 #include "base/i18n/unicodestring.h"
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
@@ -96,11 +99,19 @@ TimeZone TimeZone::FromString(std::string_view id) {
 
 // static
 TimeZone TimeZone::GMT() {
+  if (features::IsI18nOptimizationsEnabled()) {
+    return TimeZone(std::make_unique<Impl>(
+        base::WrapUnique(icu::TimeZone::getGMT()->clone())));
+  }
   return FromString("GMT");
 }
 
 // static
 TimeZone TimeZone::Unknown() {
+  if (features::IsI18nOptimizationsEnabled()) {
+    return TimeZone(std::make_unique<Impl>(
+        base::WrapUnique(icu::TimeZone::getUnknown().clone())));
+  }
   return FromString("Etc/Unknown");
 }
 
@@ -127,21 +138,27 @@ std::string TimeZone::GetRegion() const {
   return std::string();
 }
 
-std::u16string TimeZone::GetDisplayName(const LanguageTag& language_tag,
-                                        DisplayType style) const {
+// static
+TimeZone::DisplayNameOptions TimeZone::CreateDefaultDisplayNameOptions() {
+  return DisplayNameOptions{};
+}
+
+std::u16string TimeZone::GetDisplayName(
+    const LanguageTag& language_tag,
+    const DisplayNameOptions& options) const {
   icu::UnicodeString name;
-  UErrorCode status = U_ZERO_ERROR;
-  icu::Locale locale = icu::Locale::forLanguageTag(
-      std::string(language_tag.tag_string()).c_str(), status);
-  DCHECK(U_SUCCESS(status));
-  impl_->icu_timezone->getDisplayName(false, ToIcuDisplayType(style), locale,
-                                      name);
+  icu::Locale locale =
+      IcuLocaleConverter::GetInstance().FromLanguageTag(language_tag);
+  impl_->icu_timezone->getDisplayName(
+      options.is_day_light, ToIcuDisplayType(options.style), locale, name);
   return UnicodeStringToString16(name);
 }
 
-std::u16string TimeZone::GetDisplayName(DisplayType style) const {
+std::u16string TimeZone::GetDisplayName(
+    const DisplayNameOptions& options) const {
   icu::UnicodeString name;
-  impl_->icu_timezone->getDisplayName(false, ToIcuDisplayType(style),
+  impl_->icu_timezone->getDisplayName(options.is_day_light,
+                                      ToIcuDisplayType(options.style),
                                       icu::Locale::getDefault(), name);
   return UnicodeStringToString16(name);
 }
@@ -154,6 +171,11 @@ void TimeZone::GetOffset(base::Time time,
                          bool is_local,
                          base::TimeDelta& raw_offset,
                          base::TimeDelta& dst_offset) const {
+  if (time.is_inf()) {
+    raw_offset = GetRawOffset();
+    dst_offset = base::TimeDelta();
+    return;
+  }
   int32_t raw_ms = 0;
   int32_t dst_ms = 0;
   UErrorCode status = U_ZERO_ERROR;
@@ -169,6 +191,9 @@ bool TimeZone::UseDaylightTime() const {
 }
 
 bool TimeZone::InDaylightTime(base::Time time) const {
+  if (time.is_inf()) {
+    return false;
+  }
   UErrorCode status = U_ZERO_ERROR;
   bool in_daylight = impl_->icu_timezone->inDaylightTime(
       time.InMillisecondsFSinceUnixEpoch(), status);
@@ -183,8 +208,8 @@ bool TimeZone::operator==(const TimeZone& other) const {
   return *impl_->icu_timezone == *other.impl_->icu_timezone;
 }
 
-bool TimeZone::operator!=(const TimeZone& other) const {
-  return !(*this == other);
+std::strong_ordering TimeZone::operator<=>(const TimeZone& other) const {
+  return impl_->id <=> other.impl_->id;
 }
 
 TimeZone::TimeZone(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {

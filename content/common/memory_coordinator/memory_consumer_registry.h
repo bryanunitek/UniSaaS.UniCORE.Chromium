@@ -6,12 +6,12 @@
 #define CONTENT_COMMON_MEMORY_COORDINATOR_MEMORY_CONSUMER_REGISTRY_H_
 
 #include <memory>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "base/memory/raw_ref.h"
+#include "base/memory/raw_span.h"
 #include "base/memory_coordinator/memory_consumer.h"
 #include "base/memory_coordinator/memory_consumer_registry.h"
 #include "base/memory_coordinator/traits.h"
@@ -36,6 +36,10 @@ class CONTENT_EXPORT MemoryConsumerRegistry
 
   // MemoryConsumerGroupHost:
   void UpdateConsumers(std::vector<MemoryConsumerUpdate> updates) override;
+  void SetOverrideLimit(uint32_t consumer_id,
+                        base::MemoryLimit memory_limit) override;
+  void ClearOverrideLimit(uint32_t consumer_id,
+                          base::MemoryLimit policy_limit) override;
 
   // Returns the number of consumers with different IDs.
   size_t size() const { return consumer_groups_.size(); }
@@ -45,13 +49,13 @@ class CONTENT_EXPORT MemoryConsumerRegistry
   // identically.
   class ConsumerGroup {
    public:
-    explicit ConsumerGroup(std::optional<base::MemoryConsumerTraits> traits,
+    explicit ConsumerGroup(base::MemoryConsumerTraits traits,
                            std::string_view consumer_name);
 
     ~ConsumerGroup();
 
     void ReleaseMemory();
-    void UpdateMemoryLimit(int percentage);
+    void UpdateMemoryLimit(base::MemoryLimit memory_limit);
 
     // Adds/removes a consumer.
     void AddMemoryConsumer(base::MemoryConsumer* consumer);
@@ -61,24 +65,31 @@ class CONTENT_EXPORT MemoryConsumerRegistry
 
     bool empty() const { return memory_consumers_.empty(); }
 
-    std::optional<base::MemoryConsumerTraits> traits() const { return traits_; }
+    base::MemoryConsumerTraits traits() const { return traits_; }
 
    private:
-    std::optional<base::MemoryConsumerTraits> traits_;
+    base::MemoryConsumerTraits traits_;
 
-    int memory_limit_ = base::MemoryConsumer::kDefaultMemoryLimit;
+    base::MemoryLimit memory_limit_ = base::MemoryLimit::Default();
 
-    base::ObserverList<base::MemoryConsumer> memory_consumers_;
+    // Consumers added during an iteration are not notified by it: they already
+    // received the current limit when they registered.
+    base::ObserverList<base::MemoryConsumer> memory_consumers_{
+        base::ObserverListPolicy::EXISTING_ONLY};
     std::string consumer_name_;
   };
 
   // base::MemoryConsumerRegistry:
   void OnMemoryConsumerAdded(uint32_t consumer_id,
                              std::string_view consumer_name,
-                             std::optional<base::MemoryConsumerTraits> traits,
+                             base::MemoryConsumerTraits traits,
                              base::MemoryConsumer* consumer) override;
   void OnMemoryConsumerRemoved(uint32_t consumer_id,
                                base::MemoryConsumer* consumer) override;
+
+  // Returns true if the group with `consumer_id` is part of a batch currently
+  // being applied by UpdateConsumers().
+  bool IsUpdating(uint32_t consumer_id) const;
 
   const ProcessType process_type_;
   const ChildProcessId child_process_id_;
@@ -88,16 +99,11 @@ class CONTENT_EXPORT MemoryConsumerRegistry
   absl::flat_hash_map<uint32_t, std::unique_ptr<ConsumerGroup>>
       consumer_groups_;
 
-  // True if we are currently batch-updating consumers in UpdateConsumers().
-  // Used to defer the destruction of empty consumer groups to avoid
-  // Use-After-Free.
-  bool is_updating_ = false;
-
-  // Tracks IDs of consumer groups that became empty during a batch update.
-  // These groups will be destroyed at the end of UpdateConsumers().
-  // The ID is the uint32_t hash of the consumer name, matching the key in
-  // `consumer_groups_`.
-  std::vector<uint32_t> pending_removal_groups_;
+  // The batches currently being applied by UpdateConsumers(), outermost first.
+  // Each span refers to the `updates` argument of a live UpdateConsumers()
+  // frame. A group that appears in any of these must not be destroyed (its
+  // consumers may be iterated over) and must not be updated re-entrantly.
+  std::vector<base::raw_span<const MemoryConsumerUpdate>> in_flight_updates_;
 };
 
 }  // namespace content

@@ -43,11 +43,6 @@ class ExternalLoader;
 
 }  // namespace chromeos
 
-namespace crosapi {
-class BrowserManager;
-class CrosapiManager;
-}  // namespace crosapi
-
 namespace crostini {
 class CrostiniUnsupportedActionNotifier;
 }  // namespace crostini
@@ -65,7 +60,9 @@ namespace ash {
 
 class AccessibilityEventRewriterDelegateImpl;
 class ApnMigrator;
+class AshWebUIConfigManager;
 class AudioSurveyHandler;
+class AuthEventsRecorder;
 class BluetoothLogController;
 class BluetoothPrefStateObserver;
 class BrowserControllerImpl;
@@ -74,34 +71,50 @@ class CameraGeneralSurveyHandler;
 class ChromeAuthParts;
 class CrosUsbDetector;
 class DebugdNotificationHandler;
+class DozeModePowerStatusScheduler;
 class EventRewriterDelegateImpl;
 class FastTransitionObserver;
 class FwupdDownloadClientImpl;
 class GnubbyNotification;
-class HatsBluetoothRevampTriggerImpl;
+class BookmarkModelProvider;
+class ConsentAuditorProvider;
+class DeskSyncServiceProvider;
+class FaviconServiceProvider;
+class FeatureEngagementTrackerProvider;
+class HistoryServiceProvider;
+class IdentityManagerProvider;
+class MantaServiceProvider;
+class MediaDeviceSaltServiceProvider;
+class PasswordReuseManagerProvider;
+class SupervisedUserServiceProvider;
+class SyncServiceProvider;
+class TemplateURLServiceProvider;
+class TrustedVaultServiceProvider;
+class WifiConfigurationSyncServiceProvider;
 class IdleActionWarningObserver;
 class KioskController;
 class LoginScreenExtensionsStorageCleaner;
 class LowDiskNotification;
-class AuthEventsRecorder;
 class MagicBoostControllerImpl;
+class MisconfiguredUserCleaner;
 class NetworkChangeManagerClient;
 class NetworkPrefStateObserver;
 class NetworkThrottlingObserver;
-class MisconfiguredUserCleaner;
 class PowerMetricsReporter;
 class RendererFreezer;
 class ReportControllerInitializer;
+class ScreenLockerController;
+class ServicesCustomizationDocument;
 class SessionTerminationManager;
 class ShortcutMappingPrefService;
 class ShutdownPolicyForwarder;
 class SigninProfileHandler;
 class SuspendPerfReporter;
 class SystemTokenCertDBInitializer;
+class TokenHandleStoreFactory;
+class UserLoginPermissionTracker;
 class VideoConferenceAppServiceClient;
 class VideoConferenceAshFeatureClient;
-class DozeModePowerStatusScheduler;
-class UserLoginPermissionTracker;
 
 #if BUILDFLAG(USE_CUPS)
 class LocalPrinter;
@@ -191,8 +204,6 @@ class ChromeBrowserMainPartsAsh : public ChromeBrowserMainPartsLinux {
   std::unique_ptr<NetworkChangeManagerClient> network_change_manager_client_;
   std::unique_ptr<LobsterClientFactoryImpl> lobster_client_factory_;
   std::unique_ptr<DebugdNotificationHandler> debugd_notification_handler_;
-  std::unique_ptr<HatsBluetoothRevampTriggerImpl>
-      hats_bluetooth_revamp_trigger_;
 
   std::unique_ptr<internal::DBusServices> dbus_services_;
 
@@ -220,6 +231,26 @@ class ChromeBrowserMainPartsAsh : public ChromeBrowserMainPartsLinux {
       doze_mode_power_status_scheduler_;
 
   std::unique_ptr<apps::AppServiceRegistry> app_service_registry_;
+  std::unique_ptr<BookmarkModelProvider> bookmark_model_provider_;
+  std::unique_ptr<ConsentAuditorProvider> consent_auditor_provider_;
+  std::unique_ptr<DeskSyncServiceProvider> desk_sync_service_provider_;
+  std::unique_ptr<FaviconServiceProvider> favicon_service_provider_;
+  std::unique_ptr<FeatureEngagementTrackerProvider>
+      feature_engagement_tracker_provider_;
+  std::unique_ptr<HistoryServiceProvider> history_service_provider_;
+  std::unique_ptr<IdentityManagerProvider> identity_manager_provider_;
+  std::unique_ptr<MantaServiceProvider> manta_service_provider_;
+  std::unique_ptr<MediaDeviceSaltServiceProvider>
+      media_device_salt_service_provider_;
+  std::unique_ptr<PasswordReuseManagerProvider>
+      password_reuse_manager_provider_;
+  std::unique_ptr<SupervisedUserServiceProvider>
+      supervised_user_service_provider_;
+  std::unique_ptr<SyncServiceProvider> sync_service_provider_;
+  std::unique_ptr<TemplateURLServiceProvider> template_url_service_provider_;
+  std::unique_ptr<TrustedVaultServiceProvider> trusted_vault_service_provider_;
+  std::unique_ptr<WifiConfigurationSyncServiceProvider>
+      wifi_configuration_sync_service_provider_;
 
   std::unique_ptr<arc::ArcServiceLauncher> arc_service_launcher_;
   std::unique_ptr<arc::ArcPlatformSupportImpl> arc_platform_support_;
@@ -235,9 +266,6 @@ class ChromeBrowserMainPartsAsh : public ChromeBrowserMainPartsLinux {
   std::unique_ptr<ShortcutMappingPrefService> shortcut_mapping_pref_service_;
   std::unique_ptr<ChromeKeyboardControllerClient>
       chrome_keyboard_controller_client_;
-
-  std::unique_ptr<crosapi::CrosapiManager> crosapi_manager_;
-  std::unique_ptr<crosapi::BrowserManager> browser_manager_;
 
   std::unique_ptr<VideoConferenceAppServiceClient> vc_app_service_client_;
   std::unique_ptr<VideoConferenceAshFeatureClient> vc_ash_feature_client_;
@@ -322,9 +350,18 @@ class ChromeBrowserMainPartsAsh : public ChromeBrowserMainPartsLinux {
 
   std::unique_ptr<UserSessionManager> user_session_manager_;
 
+  std::unique_ptr<TokenHandleStoreFactory> token_handle_store_factory_;
+
 #if BUILDFLAG(USE_CUPS)
   std::unique_ptr<ash::LocalPrinter> local_printer_;
 #endif
+
+  std::unique_ptr<ScreenLockerController> screen_locker_controller_;
+
+  std::unique_ptr<ServicesCustomizationDocument>
+      services_customization_document_;
+
+  std::unique_ptr<AshWebUIConfigManager> ash_web_ui_config_manager_;
 
   base::WeakPtrFactory<ChromeBrowserMainPartsAsh> weak_ptr_factory_{this};
 };

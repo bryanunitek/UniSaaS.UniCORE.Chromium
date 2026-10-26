@@ -21,7 +21,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -48,7 +47,6 @@ import java.util.function.Supplier;
 
 /** Unit tests for the {@link TabGroupSyncRemoteObserver}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabGroupSyncRemoteObserverUnitTest {
     private static final Token TOKEN_1 = new Token(2, 3);
     private static final Token TOKEN_2 = new Token(4, 4);
@@ -87,9 +85,7 @@ public class TabGroupSyncRemoteObserverUnitTest {
                         mIsActiveWindowSupplier);
         mEnabledLocalObservers = true;
 
-        when(mTabModel.getGroupLastShownTabId(any())).thenReturn(Tab.INVALID_TAB_ID);
-        when(mTabModel.getGroupLastShownTabId(TOKEN_1)).thenReturn(TAB_ID_1);
-        when(mTabModel.tabGroupExists(TOKEN_1)).thenReturn(true);
+        when(mTabModel.containsTabGroup(TOKEN_1)).thenReturn(true);
         when(mPrefService.getBoolean(eq(Pref.AUTO_OPEN_SYNCED_TAB_GROUPS))).thenReturn(true);
         when(mIsActiveWindowSupplier.get()).thenReturn(true);
     }

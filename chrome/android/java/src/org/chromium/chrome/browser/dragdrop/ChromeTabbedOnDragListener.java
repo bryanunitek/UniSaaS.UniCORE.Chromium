@@ -4,9 +4,6 @@
 
 package org.chromium.chrome.browser.dragdrop;
 
-import static org.chromium.build.NullUtil.assertNonNull;
-import static org.chromium.build.NullUtil.assumeNonNull;
-
 import android.content.ClipDescription;
 import android.content.Context;
 import android.view.DragEvent;
@@ -81,8 +78,7 @@ public class ChromeTabbedOnDragListener implements OnDragListener {
                     return false;
                 }
                 Tab selectedTab = mTabModelSelector.getCurrentTab();
-                assumeNonNull(selectedTab);
-                if (selectedTab.getNativePage() instanceof NewTabPage) {
+                if (selectedTab != null && selectedTab.getNativePage() instanceof NewTabPage) {
                     mTabToEnableFakeBox = selectedTab;
                 }
                 return true;
@@ -139,7 +135,6 @@ public class ChromeTabbedOnDragListener implements OnDragListener {
 
     private boolean handleTabDrop(DragEvent dragEvent) {
         DragDropGlobalState globalState = DragDropGlobalState.getState(dragEvent);
-        assertNonNull(globalState);
         Tab draggedTab = ChromeDragDropUtils.getTabFromGlobalState(globalState);
         if (!validDragEvent(
                 globalState, draggedTab, /* isTabGroup= */ false, /* isMultiTab= */ false)) {
@@ -182,7 +177,6 @@ public class ChromeTabbedOnDragListener implements OnDragListener {
 
     private boolean handleMultiTabDrop(DragEvent dragEvent) {
         DragDropGlobalState globalState = DragDropGlobalState.getState(dragEvent);
-        assertNonNull(globalState);
         List<Tab> draggedTabs = ChromeDragDropUtils.getTabsFromGlobalState(globalState);
         if (!validDragEvent(
                 globalState, draggedTabs, /* isTabGroup= */ false, /* isMultiTab= */ true)) {
@@ -218,7 +212,6 @@ public class ChromeTabbedOnDragListener implements OnDragListener {
 
     private boolean handleGroupDrop(DragEvent dragEvent) {
         DragDropGlobalState globalState = DragDropGlobalState.getState(dragEvent);
-        assertNonNull(globalState);
         TabGroupMetadata tabGroupMetadata =
                 ChromeDragDropUtils.getTabGroupMetadataFromGlobalState(globalState);
 
@@ -253,12 +246,14 @@ public class ChromeTabbedOnDragListener implements OnDragListener {
         return true;
     }
 
-    @Contract("null, _, _, _, _ -> false; _, null, _, _, _ -> false")
+    @Contract("null, _, _, _ -> false; _, null, _, _ -> false")
     private boolean validDragEvent(
             @Nullable DragDropGlobalState globalState,
             @Nullable Object draggedData,
             boolean isTabGroup,
             boolean isMultiTab) {
+        // The global state may already have been cleared by the time a drop arrives, e.g. if the
+        // source window tore down its drag handler mid-drag. Reject the drop rather than crash.
         if (globalState == null || draggedData == null) {
             DragDropMetricUtils.recordDragDropResult(
                     DragDropResult.ERROR_CONTENT_NOT_FOUND,

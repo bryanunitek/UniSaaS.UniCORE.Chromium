@@ -84,12 +84,15 @@ suite('ExtensionDetailViewTest', function() {
 
   test('BackButton', () => {
     assertTrue(testIsVisible('#closeButton'));
-    const closeButton = item.shadowRoot.querySelector('#closeButton')!;
+    const closeButton = item.$.closeButton;
     assertTrue(closeButton.classList.contains('icon-arrow-back'));
 
     const computedStyle = getComputedStyle(closeButton);
     const iconImage = computedStyle.getPropertyValue('--cr-icon-image');
-    assertTrue(iconImage.includes('icon_arrow_back.svg'));
+    const isRounded =
+        document.documentElement.hasAttribute('webui-rounded-icons');
+    assertTrue(iconImage.includes(
+        isRounded ? 'icon_arrow_back.svg' : 'icon_arrow_back_old.svg'));
   });
 
   test('Layout', async () => {
@@ -823,7 +826,7 @@ suite('ExtensionDetailViewTest', function() {
     const id = 'a'.repeat(32);
     const recommendationsUrl =
         `https://chromewebstore.google.com/detail/${id}` +
-        `/related-recommendations`;
+        '/related-recommendations';
     await updateItemData({recommendationsUrl: recommendationsUrl});
 
     // Action menu is visible when the extension has a recommendations url.
@@ -901,6 +904,46 @@ suite('ExtensionDetailViewTest', function() {
             .querySelector<ExtensionsToggleRowElement>(
                 '#allow-user-scripts')!.getLabel(),
         'setItemAllowedUserScripts', [extensionData.id, true]);
+  });
+
+  test('RateExtensionLinkVisibility', async () => {
+    // Hidden when canShowReviewPrompt is false.
+    await updateItemData({
+      canShowReviewPrompt: false,
+    });
+    assertFalse(testIsVisible('#rateLink'));
+
+    // Visible when canShowReviewPrompt is true.
+    await updateItemData({
+      canShowReviewPrompt: true,
+    });
+    assertTrue(testIsVisible('#rateLink'));
+
+    // Positioned directly below #viewInStore in DOM order.
+    const viewInStore =
+        item.shadowRoot.querySelector<HTMLElement>('#viewInStore')!;
+    const rateLink = item.$.rateLink;
+    assertEquals(viewInStore.nextElementSibling, rateLink);
+
+    // Visible in developer mode as well.
+    item.inDevMode = true;
+    await microtasksFinished();
+    assertTrue(testIsVisible('#rateLink'));
+
+    item.inDevMode = false;
+    await microtasksFinished();
+    assertTrue(testIsVisible('#rateLink'));
+  });
+
+  test('RateExtensionLinkClick', async () => {
+    await updateItemData({
+      canShowReviewPrompt: true,
+    });
+    assertTrue(testIsVisible('#rateLink'));
+
+    const rateLink = item.$.rateLink;
+    await mockDelegate.testClickingCalls(
+        rateLink, 'openReviewPage', [extensionData.id]);
   });
 
 });

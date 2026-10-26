@@ -6,36 +6,95 @@ import 'chrome://contextual-tasks/top_toolbar.js';
 import 'chrome://contextual-tasks/sources_menu.js';
 
 import {BrowserProxyImpl} from 'chrome://contextual-tasks/contextual_tasks_browser_proxy.js';
+import {ToolbarBrowserProxyImpl} from 'chrome://contextual-tasks/contextual_tasks_toolbar_browser_proxy.js';
 import type {ContextualTasksFaviconGroupElement} from 'chrome://contextual-tasks/favicon_group.js';
-import type {SourcesMenuElement} from 'chrome://contextual-tasks/sources_menu.js';
 import type {TopToolbarElement} from 'chrome://contextual-tasks/top_toolbar.js';
-import type {CrActionMenuElement} from 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
+import type {UnboundedDialog} from 'chrome://contextual-tasks/utils.js';
 import type {CrIconElement} from 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import type {CrIconButtonElement} from 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {fakeMetricsPrivate} from 'chrome://webui-test/metrics_test_support.js';
 import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import {TestContextualTasksBrowserProxy} from './test_contextual_tasks_browser_proxy.js';
 import {assertHTMLElement} from './contextual_tasks_test_utils.js';
+import {TestContextualTasksBrowserProxy, TestToolbarBrowserProxy} from './test_contextual_tasks_browser_proxy.js';
+
+// clang-format off
+// <if expr="not is_android">
+import {LhsChipIdentifier} from 'chrome://contextual-tasks/toolbar_ui_api_data_model.mojom-webui.js';
+
+import {createFakePermissionChip as createFakeChip} from './test_contextual_tasks_browser_proxy.js';
+import type {TestContextualTasksToolbarUiService} from './test_contextual_tasks_browser_proxy.js';
+// </if>
+// clang-format on
 
 suite('TopToolbarTest', () => {
   let topToolbar: TopToolbarElement;
   let proxy: TestContextualTasksBrowserProxy;
+  let toolbarProxy: TestToolbarBrowserProxy;
 
   setup(() => {
     proxy = new TestContextualTasksBrowserProxy(
         'chrome://webui-test/contextual_tasks/test.html');
     BrowserProxyImpl.setInstance(proxy);
+    toolbarProxy = new TestToolbarBrowserProxy();
+    ToolbarBrowserProxyImpl.setInstance(toolbarProxy);
     loadTimeData.overrideValues({
       contextManagementInComposeboxEnabled: false,
       contextualTasksEnableSpatialModelToolbarLayout: false,
+      contextualTasksUnboundedMenuEnabled: false,
+      contextualTasksSidePanelRearchitectureEnabled: false,
     });
   });
 
-  (loadTimeData.getBoolean('isSmallDeviceFormFactor') ? suite.skip : suite)(
-      'Expand button enabled', () => {
+  test('updates contextInfos when onContextUpdated fires', async () => {
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    topToolbar = document.createElement('top-toolbar');
+    document.body.appendChild(topToolbar);
+    await microtasksFinished();
+
+    toolbarProxy.callbackRouterRemote.onContextUpdated([{
+      tab: {
+        url: 'https://example.com',
+        title: 'Example',
+        tabId: 1,
+        hasChromeTabData: false,
+      },
+    }]);
+    await microtasksFinished();
+
+    assertEquals(1, topToolbar.contextInfos.length);
+    assertEquals('Example', topToolbar.contextInfos[0]!.tab!.title);
+  });
+
+  test(
+      'updates expand button visibility when setExpandButtonEnabled fires',
+      async () => {
+        loadTimeData.overrideValues({expandButtonEnabled: false});
+        document.body.innerHTML = window.trustedTypes!.emptyHTML;
+        topToolbar = document.createElement('top-toolbar');
+        document.body.appendChild(topToolbar);
+        await microtasksFinished();
+
+        assertFalse(
+            !!topToolbar.shadowRoot.querySelector('#openInNewTabButton'));
+
+        toolbarProxy.callbackRouterRemote.setExpandButtonEnabled(true);
+        await microtasksFinished();
+
+        assertTrue(
+            !!topToolbar.shadowRoot.querySelector('#openInNewTabButton'));
+
+        toolbarProxy.callbackRouterRemote.setExpandButtonEnabled(false);
+        await microtasksFinished();
+
+        assertFalse(
+            !!topToolbar.shadowRoot.querySelector('#openInNewTabButton'));
+      });
+
+  (loadTimeData.getBoolean('isSmallDeviceFormFactor') ?
+       suite.skip :
+       suite)('Expand button enabled', () => {
     setup(() => {
       document.body.innerHTML = window.trustedTypes!.emptyHTML;
 
@@ -60,7 +119,7 @@ suite('TopToolbarTest', () => {
       assertHTMLElement(lightLogo);
       assertEquals(
           lightLogo.src,
-          'chrome://resources/cr_components/searchbox/icons/chrome_product.svg');
+          'chrome://resources/cr_components/searchbox/icons/chrome_product_cr23.svg');
       const darkLogo = topToolbar.shadowRoot.querySelector<HTMLImageElement>(
           '.chrome-logo-dark');
       assertHTMLElement(darkLogo);
@@ -84,7 +143,7 @@ suite('TopToolbarTest', () => {
       const historyButton = topToolbar.$.threadHistoryButton;
       assertTrue(!!historyButton);
       historyButton.click();
-      await proxy.handler.whenCalled('showThreadHistory');
+      await toolbarProxy.handler.whenCalled('showThreadHistory');
     });
 
     test('hides thread history button on SRP', async () => {
@@ -121,7 +180,7 @@ suite('TopToolbarTest', () => {
       const closeButton = topToolbar.$.closeButton;
       assertTrue(!!closeButton);
       closeButton.click();
-      await proxy.handler.whenCalled('closeSidePanel');
+      await toolbarProxy.handler.whenCalled('closeSidePanel');
     });
 
     test('toggles sources button visibility', async () => {
@@ -151,10 +210,11 @@ suite('TopToolbarTest', () => {
       assertTrue(!!sourcesButton.shadowRoot.querySelector('.favicon-item'));
     });
 
-    test('handles sources menu interactions', async () => {
+
+    test('handles tab sources menu interactions', async () => {
       const tab = {
-        title: 'Tab 1',
-        url: 'https://example.com',
+        title: 'Sample Tab',
+        url: 'https://example/sample.html',
         hasChromeTabData: false,
         tabId: 1,
       };
@@ -167,15 +227,12 @@ suite('TopToolbarTest', () => {
       sourcesButton.click();
       await microtasksFinished();
 
-      const sourcesMenuElement: SourcesMenuElement =
-          topToolbar.$.sourcesMenu.get();
+      const sourcesMenuElement = topToolbar.$.sourcesMenu.get();
       const crActionMenu =
-          sourcesMenuElement.shadowRoot.querySelector<CrActionMenuElement>(
-              'cr-action-menu');
+          sourcesMenuElement.shadowRoot.querySelector('cr-action-menu');
       assertTrue(!!crActionMenu);
       assertTrue(crActionMenu.open);
 
-      // The header is "Shared tabs and files".
       const headers = sourcesMenuElement.shadowRoot.querySelectorAll('.header');
       assertEquals(1, headers.length);
 
@@ -186,8 +243,8 @@ suite('TopToolbarTest', () => {
       tabItem.click();
 
       const [tabId, url] =
-          await proxy.handler.whenCalled('onTabClickedFromSourcesMenu');
-      assertEquals(tabId, 1);
+          await toolbarProxy.handler.whenCalled('onTabClickedFromSourcesMenu');
+      assertEquals(1, tabId);
       assertDeepEquals(url, tab.url);
     });
 
@@ -221,7 +278,7 @@ suite('TopToolbarTest', () => {
       fileItem.click();
 
       const url =
-          await proxy.handler.whenCalled('onFileClickedFromSourcesMenu');
+          await toolbarProxy.handler.whenCalled('onFileClickedFromSourcesMenu');
       assertDeepEquals(url, file.url);
     });
 
@@ -256,8 +313,8 @@ suite('TopToolbarTest', () => {
       assertTrue(!!imageItem);
       imageItem.click();
 
-      const url =
-          await proxy.handler.whenCalled('onImageClickedFromSourcesMenu');
+      const url = await toolbarProxy.handler.whenCalled(
+          'onImageClickedFromSourcesMenu');
       assertDeepEquals(url, image.url);
     });
 
@@ -271,14 +328,14 @@ suite('TopToolbarTest', () => {
       assertTrue(!!openInNewTabButton);
       assertFalse(openInNewTabButton.disabled);
       openInNewTabButton.click();
-      await proxy.handler.whenCalled('moveTaskUiToNewTab');
+      await toolbarProxy.handler.whenCalled('moveTaskUiToNewTab');
 
       topToolbar.enableOpenInNewTabButton = false;
       await microtasksFinished();
       assertTrue(openInNewTabButton.disabled);
-      proxy.handler.reset();
+      toolbarProxy.handler.reset();
       openInNewTabButton.click();
-      assertEquals(0, proxy.handler.getCallCount('moveTaskUiToNewTab'));
+      assertEquals(0, toolbarProxy.handler.getCallCount('moveTaskUiToNewTab'));
     });
 
     test('shows 3 tab icons without number for 3 tabs', async () => {
@@ -370,6 +427,145 @@ suite('TopToolbarTest', () => {
           sourcesButton.shadowRoot.querySelector<HTMLElement>('#more-items');
       assertTrue(!!moreItems);
     });
+
+    test(
+        'logo click does not trigger page info when flag disabled',
+        async () => {
+          document.body.innerHTML = window.trustedTypes!.emptyHTML;
+          loadTimeData.overrideValues({
+            contextualTasksSidePanelRearchitectureEnabled: false,
+          });
+          topToolbar = document.createElement('top-toolbar');
+          document.body.appendChild(topToolbar);
+          await microtasksFinished();
+
+          const logo = topToolbar.shadowRoot.querySelector<HTMLElement>(
+              '.top-toolbar-logo-button');
+          assertHTMLElement(logo);
+          assertFalse(logo.classList.contains('clickable'));
+
+          logo.click();
+          assertEquals(
+              0, toolbarProxy.handler.getCallCount('showPageInfoBubble'));
+        });
+
+    test(
+        'logo pointer click triggers page info when flag enabled', async () => {
+          document.body.innerHTML = window.trustedTypes!.emptyHTML;
+          loadTimeData.overrideValues({
+            contextualTasksSidePanelRearchitectureEnabled: true,
+          });
+          topToolbar = document.createElement('top-toolbar');
+          document.body.appendChild(topToolbar);
+          await microtasksFinished();
+
+          const logo = topToolbar.shadowRoot.querySelector<HTMLElement>(
+              '.top-toolbar-logo-button');
+          assertHTMLElement(logo);
+          assertTrue(logo.classList.contains('clickable'));
+
+          logo.dispatchEvent(new PointerEvent('click', {pointerType: 'mouse'}));
+          const isPointer =
+              await toolbarProxy.handler.whenCalled('showPageInfoBubble');
+          assertTrue(isPointer);
+        });
+
+    test('logo enter key triggers page info when flag enabled', async () => {
+      document.body.innerHTML = window.trustedTypes!.emptyHTML;
+      loadTimeData.overrideValues({
+        contextualTasksSidePanelRearchitectureEnabled: true,
+      });
+      topToolbar = document.createElement('top-toolbar');
+      document.body.appendChild(topToolbar);
+      await microtasksFinished();
+
+      const logo = topToolbar.shadowRoot.querySelector<HTMLElement>(
+          '.top-toolbar-logo-button');
+      assertHTMLElement(logo);
+
+      logo.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter'}));
+      const isPointer =
+          await toolbarProxy.handler.whenCalled('showPageInfoBubble');
+      assertFalse(isPointer);
+    });
+
+    test('logo space key triggers page info when flag enabled', async () => {
+      document.body.innerHTML = window.trustedTypes!.emptyHTML;
+      loadTimeData.overrideValues({
+        contextualTasksSidePanelRearchitectureEnabled: true,
+      });
+      topToolbar = document.createElement('top-toolbar');
+      document.body.appendChild(topToolbar);
+      await microtasksFinished();
+
+      const logo = topToolbar.shadowRoot.querySelector<HTMLElement>(
+          '.top-toolbar-logo-button');
+      assertHTMLElement(logo);
+
+      logo.dispatchEvent(new KeyboardEvent('keydown', {key: ' '}));
+      logo.dispatchEvent(new KeyboardEvent('keyup', {key: ' '}));
+      const isPointer =
+          await toolbarProxy.handler.whenCalled('showPageInfoBubble');
+      assertFalse(isPointer);
+    });
+
+    test(
+        'logo pointerdown triggers onLogoPointerDown when flag enabled',
+        async () => {
+          document.body.innerHTML = window.trustedTypes!.emptyHTML;
+          loadTimeData.overrideValues({
+            contextualTasksSidePanelRearchitectureEnabled: true,
+          });
+          topToolbar = document.createElement('top-toolbar');
+          document.body.appendChild(topToolbar);
+          await microtasksFinished();
+
+          const logo = topToolbar.shadowRoot.querySelector<HTMLElement>(
+              '.top-toolbar-logo-button');
+          assertHTMLElement(logo);
+
+          logo.dispatchEvent(new PointerEvent('pointerdown'));
+          await toolbarProxy.handler.whenCalled('onLogoPointerDown');
+        });
+
+    test(
+        'logo pointerdown does not trigger onLogoPointerDown when flag ' +
+            'disabled',
+        async () => {
+          document.body.innerHTML = window.trustedTypes!.emptyHTML;
+          loadTimeData.overrideValues({
+            contextualTasksSidePanelRearchitectureEnabled: false,
+          });
+          topToolbar = document.createElement('top-toolbar');
+          document.body.appendChild(topToolbar);
+          await microtasksFinished();
+
+          const logo = topToolbar.shadowRoot.querySelector<HTMLElement>(
+              '.top-toolbar-logo-button');
+          assertHTMLElement(logo);
+
+          logo.dispatchEvent(new PointerEvent('pointerdown'));
+          assertEquals(
+              0, toolbarProxy.handler.getCallCount('onLogoPointerDown'));
+        });
+
+    test('logo container has inline-end margin when flag enabled', async () => {
+      document.body.innerHTML = window.trustedTypes!.emptyHTML;
+      loadTimeData.overrideValues({
+        contextualTasksSidePanelRearchitectureEnabled: true,
+      });
+      topToolbar = document.createElement('top-toolbar');
+      topToolbar.title = 'Sample Thread Title';
+      document.body.appendChild(topToolbar);
+      await microtasksFinished();
+
+      const logoContainer = topToolbar.shadowRoot.querySelector<HTMLElement>(
+          '.top-toolbar-logo-container');
+      assertHTMLElement(logoContainer);
+      const computedStyle = getComputedStyle(logoContainer);
+      assertEquals('12px', computedStyle.marginInlineEnd);
+      assertEquals('12px', computedStyle.marginRight);
+    });
   });
 
   suite('Pinning', () => {
@@ -377,13 +573,49 @@ suite('TopToolbarTest', () => {
       document.body.innerHTML = window.trustedTypes!.emptyHTML;
       loadTimeData.overrideValues({
         enablePinButton: true,
+        enablePinButtonOnSrp: false,
         isAiPage: true,
+        isAimEligible: true,
         pinTooltip: 'Pin side panel',
         unpinTooltip: 'Unpin side panel',
       });
       topToolbar = document.createElement('top-toolbar');
       document.body.appendChild(topToolbar);
       await microtasksFinished();
+    });
+
+    test('hides pin button when not on AI page', async () => {
+      topToolbar.isAiPage = false;
+      await microtasksFinished();
+
+      const moreButton =
+          topToolbar.shadowRoot.querySelector<CrIconButtonElement>(
+              '#overflowMenuButton');
+      assertTrue(!!moreButton);
+      moreButton.click();
+      await microtasksFinished();
+
+      const menu = topToolbar.$.overflowMenu.get();
+      const pinButton =
+          menu.shadowRoot.querySelector<HTMLElement>('#pinButton');
+      assertFalse(!!pinButton);
+    });
+
+    test('hides pin button when pin button is not enabled', async () => {
+      topToolbar.isPinButtonEnabled = false;
+      await microtasksFinished();
+
+      const moreButton =
+          topToolbar.shadowRoot.querySelector<CrIconButtonElement>(
+              '#overflowMenuButton');
+      assertTrue(!!moreButton);
+      moreButton.click();
+      await microtasksFinished();
+
+      const menu = topToolbar.$.overflowMenu.get();
+      const pinButton =
+          menu.shadowRoot.querySelector<HTMLElement>('#pinButton');
+      assertFalse(!!pinButton);
     });
 
     test('handles pin button click', async () => {
@@ -404,12 +636,13 @@ suite('TopToolbarTest', () => {
           pinButton.innerText.trim(), loadTimeData.getString('pinTooltip'));
 
       pinButton.click();
-      await proxy.handler.whenCalled('pinSidePanel');
+      await toolbarProxy.handler.whenCalled('pinSidePanel');
     });
 
     test('handles unpin button click', async () => {
       // Simulate pinned state.
-      proxy.callbackRouterRemote.onSidePanelPinStateChanged(true);
+      toolbarProxy.callbackRouterRemote.onSidePanelPinStateChanged(true);
+      await toolbarProxy.callbackRouterRemote.$.flushForTesting();
       await microtasksFinished();
 
       const moreButton =
@@ -429,7 +662,48 @@ suite('TopToolbarTest', () => {
           pinButton.innerText.trim(), loadTimeData.getString('unpinTooltip'));
 
       pinButton.click();
-      await proxy.handler.whenCalled('unpinSidePanel');
+      await toolbarProxy.handler.whenCalled('unpinSidePanel');
+    });
+
+    test('updates pin state via Mojo', async () => {
+      toolbarProxy.callbackRouterRemote.onSidePanelPinStateChanged(true);
+      await toolbarProxy.callbackRouterRemote.$.flushForTesting();
+      await topToolbar.updateComplete;
+
+      // Note: isPinned property on topToolbar is protected. We check via unpin
+      // button in menu.
+      const moreButton =
+          topToolbar.shadowRoot.querySelector<CrIconButtonElement>(
+              '#overflowMenuButton');
+      assertTrue(!!moreButton);
+      moreButton.click();
+      await microtasksFinished();
+
+      const menu = topToolbar.$.overflowMenu.get();
+      const pinButton =
+          menu.shadowRoot.querySelector<HTMLElement>('#pinButton');
+      assertTrue(!!pinButton);
+      assertEquals(
+          pinButton.innerText.trim(), loadTimeData.getString('unpinTooltip'));
+
+      // Toggling back to unpinned should update the button text.
+      toolbarProxy.callbackRouterRemote.onSidePanelPinStateChanged(false);
+      await toolbarProxy.callbackRouterRemote.$.flushForTesting();
+      await topToolbar.updateComplete;
+      await microtasksFinished();
+
+      assertEquals(
+          pinButton.innerText.trim(), loadTimeData.getString('pinTooltip'));
+    });
+
+    test('pin state listener is removed on disconnect', async () => {
+      topToolbar.remove();
+
+      toolbarProxy.callbackRouterRemote.onSidePanelPinStateChanged(true);
+      await toolbarProxy.callbackRouterRemote.$.flushForTesting();
+      await topToolbar.updateComplete;
+
+      assertFalse((topToolbar as any).isPinned);
     });
   });
 
@@ -450,29 +724,6 @@ suite('TopToolbarTest', () => {
     });
 
     const isPhone = loadTimeData.getBoolean('isSmallDeviceFormFactor');
-    (isPhone ? test.skip : test)('handles more menu interactions', async () => {
-      const metrics = fakeMetricsPrivate();
-      const moreButton =
-          topToolbar.shadowRoot.querySelector<CrIconButtonElement>(
-              '#overflowMenuButton');
-      assertTrue(!!moreButton);
-      moreButton.click();
-      await microtasksFinished();
-
-      const menu = topToolbar.$.overflowMenu.get();
-      assertTrue(menu.shadowRoot.querySelector('cr-action-menu')!.open);
-
-      const buttons = menu.shadowRoot.querySelectorAll('button');
-      assertEquals(3, buttons.length);
-
-      assertEquals(
-          2,
-          metrics.count('ContextualTasks.WebUI.UserAction.OpenOverflowMenu'));
-      assertEquals(
-          1,
-          metrics.count(
-              'ContextualTasks.WebUI.UserAction.OpenOverflowMenu', true));
-    });
 
     test('menu button visibility independent of ai page state', async () => {
       const moreButton =
@@ -490,32 +741,38 @@ suite('TopToolbarTest', () => {
       assertFalse(moreButton.hidden);
     });
 
-    (isPhone ? test.skip :
-               test)('handles open in new tab click in menu', async () => {
-      topToolbar.enableOpenInNewTabButton = true;
-      await microtasksFinished();
-
-      const overflowMenuButton =
-          topToolbar.shadowRoot.querySelector<CrIconButtonElement>(
-              '#overflowMenuButton');
-      assertTrue(!!overflowMenuButton);
-      overflowMenuButton.click();
-      await microtasksFinished();
-
-      const menu = topToolbar.$.overflowMenu.get();
-      assertTrue(menu.shadowRoot.querySelector('cr-action-menu')!.open);
-
-      const buttons = menu.shadowRoot.querySelectorAll('button');
-      const openInNewTabButton = buttons[0];
-      assertTrue(!!openInNewTabButton);
-      assertFalse(openInNewTabButton.disabled);
-      openInNewTabButton.click();
-      await proxy.handler.whenCalled('moveTaskUiToNewTab');
-
-      topToolbar.enableOpenInNewTabButton = false;
-      await microtasksFinished();
-      assertTrue(openInNewTabButton.disabled);
+    test('close button does not have rounded-corner attribute', () => {
+      const closeButton = topToolbar.$.closeButton;
+      assertTrue(!!closeButton);
+      assertFalse(closeButton.hasAttribute('rounded-corner'));
     });
+
+    (isPhone ? test.skip : test)(
+        'handles open in new tab click in menu', async () => {
+          topToolbar.enableOpenInNewTabButton = true;
+          await microtasksFinished();
+
+          const overflowMenuButton =
+              topToolbar.shadowRoot.querySelector<CrIconButtonElement>(
+                  '#overflowMenuButton');
+          assertTrue(!!overflowMenuButton);
+          overflowMenuButton.click();
+          await microtasksFinished();
+
+          const menu = topToolbar.$.overflowMenu.get();
+          assertTrue(menu.shadowRoot.querySelector('cr-action-menu')!.open);
+
+          const buttons = menu.shadowRoot.querySelectorAll('button');
+          const openInNewTabButton = buttons[0];
+          assertTrue(!!openInNewTabButton);
+          assertFalse(openInNewTabButton.disabled);
+          openInNewTabButton.click();
+          await toolbarProxy.handler.whenCalled('moveTaskUiToNewTab');
+
+          topToolbar.enableOpenInNewTabButton = false;
+          await microtasksFinished();
+          assertTrue(openInNewTabButton.disabled);
+        });
 
     test('handles my activity click', async () => {
       const overflowMenuButton =
@@ -530,7 +787,7 @@ suite('TopToolbarTest', () => {
       const myActivityButton = buttons[1];
       assertTrue(!!myActivityButton);
       myActivityButton.click();
-      await proxy.handler.whenCalled('openMyActivityUi');
+      await toolbarProxy.handler.whenCalled('openMyActivityUi');
     });
 
     test('handles help click', async () => {
@@ -546,22 +803,23 @@ suite('TopToolbarTest', () => {
       const helpButton = buttons[2];
       assertTrue(!!helpButton);
       helpButton.click();
-      await proxy.handler.whenCalled('openFeedbackUi');
+      await toolbarProxy.handler.whenCalled('openFeedbackUi');
     });
 
     test('calls maybeTriggerPinningPromo when AI page is shown', async () => {
       topToolbar.isAiPage = false;
       await microtasksFinished();
-      proxy.handler.reset();
+      toolbarProxy.handler.reset();
 
       topToolbar.isAiPage = true;
       await microtasksFinished();
 
       // <if expr="is_android">
-      assertEquals(0, proxy.handler.getCallCount('maybeTriggerPinningPromo'));
+      assertEquals(
+          0, toolbarProxy.handler.getCallCount('maybeTriggerPinningPromo'));
       // </if>
       // <if expr="not is_android">
-      await proxy.handler.whenCalled('maybeTriggerPinningPromo');
+      await toolbarProxy.handler.whenCalled('maybeTriggerPinningPromo');
       // </if>
     });
 
@@ -571,33 +829,19 @@ suite('TopToolbarTest', () => {
           topToolbar.isAiPage = false;
           topToolbar.onboardingTooltipShowing = true;
           await microtasksFinished();
-          proxy.handler.reset();
+          toolbarProxy.handler.reset();
 
           topToolbar.isAiPage = true;
           await microtasksFinished();
 
           assertEquals(
-              0, proxy.handler.getCallCount('maybeTriggerPinningPromo'));
-        });
-
-    test(
-        'does not call maybeTriggerPinningPromo when lens search tooltip is showing',
-        async () => {
-          topToolbar.isAiPage = false;
-          topToolbar.lensSearchTooltipShowing = true;
-          await microtasksFinished();
-          proxy.handler.reset();
-
-          topToolbar.isAiPage = true;
-          await microtasksFinished();
-
-          assertEquals(
-              0, proxy.handler.getCallCount('maybeTriggerPinningPromo'));
+              0, toolbarProxy.handler.getCallCount('maybeTriggerPinningPromo'));
         });
   });
 
-  (loadTimeData.getBoolean('isSmallDeviceFormFactor') ? suite.skip : suite)(
-      'Menu for lens flows only', () => {
+  (loadTimeData.getBoolean('isSmallDeviceFormFactor') ?
+       suite.skip :
+       suite)('Menu for lens flows only', () => {
     setup(() => {
       document.body.innerHTML = window.trustedTypes!.emptyHTML;
 
@@ -699,14 +943,22 @@ suite('TopToolbarTest', () => {
     assertTrue(item2.classList.contains('favicon-item'));
     assertTrue(item2.classList.contains('file-icon'));
     assertEquals(item2.tagName, 'CR-ICON');
-    assertEquals((item2 as CrIconElement).icon, 'contextual_tasks:pdf');
+    assertEquals(
+        (item2 as CrIconElement).icon,
+        loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'contextual_tasks:drive-pdf-filled' :
+            'contextual_tasks:pdf-old');
 
     // Check item 3 (image).
     const item3 = items[2];
     assertHTMLElement(item3);  // Assert first
     assertTrue(item3.classList.contains('favicon-item'));
     assertEquals(item3.tagName, 'CR-ICON');
-    assertEquals((item3 as CrIconElement).icon, 'contextual_tasks:img_icon');
+    assertEquals(
+        (item3 as CrIconElement).icon,
+        loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'contextual_tasks:image' :
+            'contextual_tasks:img_icon-old');
 
     const moreItems =
         sourcesButton.shadowRoot.querySelector<HTMLElement>('#more-items');
@@ -714,62 +966,6 @@ suite('TopToolbarTest', () => {
     assertEquals(moreItems.innerText, '+1');
   });
 
-  suite('Reopen Tabs', () => {
-    setup(() => {
-      document.body.innerHTML = window.trustedTypes!.emptyHTML;
-      topToolbar = document.createElement('top-toolbar');
-      document.body.appendChild(topToolbar);
-    });
-
-    test('shows reopen tabs section', async () => {
-      // Initially not in the DOM.
-      let reopenTabs =
-          topToolbar.shadowRoot.querySelector<HTMLElement>('reopen-tabs');
-      assertFalse(!!reopenTabs);
-
-      // Show via mojo.
-      proxy.callbackRouterRemote.setShowReopenTabs(true);
-      await microtasksFinished();
-      reopenTabs =
-          topToolbar.shadowRoot.querySelector<HTMLElement>('reopen-tabs');
-      assertHTMLElement(reopenTabs);
-    });
-
-    test('handles reopen tabs click', async () => {
-      proxy.callbackRouterRemote.setShowReopenTabs(true);
-      await microtasksFinished();
-
-      const reopenTabs =
-          topToolbar.shadowRoot.querySelector<HTMLElement>('reopen-tabs');
-      assertHTMLElement(reopenTabs);
-
-      const reopenButton =
-          reopenTabs.shadowRoot!.querySelector<HTMLElement>('cr-button');
-      assertHTMLElement(reopenButton);
-      reopenButton.click();
-
-      await proxy.handler.whenCalled('reopenTabs');
-    });
-
-    test('handles reopen tabs dismiss click', async () => {
-      proxy.callbackRouterRemote.setShowReopenTabs(true);
-      await microtasksFinished();
-
-      let reopenTabs =
-          topToolbar.shadowRoot.querySelector<HTMLElement>('reopen-tabs');
-      assertHTMLElement(reopenTabs);
-
-      const dismissButton =
-          reopenTabs.shadowRoot!.querySelector<HTMLElement>('#reopenDismiss');
-      assertHTMLElement(dismissButton);
-      dismissButton.click();
-
-      await microtasksFinished();
-      reopenTabs =
-          topToolbar.shadowRoot.querySelector<HTMLElement>('reopen-tabs');
-      assertFalse(!!reopenTabs);
-    });
-  });
 
   test('hides new thread button when isAimEligible is false', async () => {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
@@ -795,6 +991,13 @@ suite('TopToolbarTest', () => {
     assertTrue(!!overflowMenuButton);
     assertFalse(overflowMenuButton.classList.contains('active'));
 
+    const menu = topToolbar.$.overflowMenu.get();
+    // Stubbed so the test never depends on real platform surface support.
+    // The unbounded lifecycle itself is covered by unbounded_menu_test.ts.
+    const dialogEl = menu.$.menu.getDialog() as UnboundedDialog;
+    dialogEl.showUnboundedElement = () => Promise.resolve();
+    dialogEl.hideUnboundedElement = () => Promise.resolve();
+
     // Open overflow menu
     overflowMenuButton.click();
     await microtasksFinished();
@@ -802,10 +1005,348 @@ suite('TopToolbarTest', () => {
     assertTrue(overflowMenuButton.classList.contains('active'));
 
     // Close overflow menu
-    const menu = topToolbar.$.overflowMenu.get();
     menu.close();
     await microtasksFinished();
 
     assertFalse(overflowMenuButton.classList.contains('active'));
+  });
+
+  test('closes overflow menu when the side panel loses focus', async () => {
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    topToolbar = document.createElement('top-toolbar');
+    document.body.appendChild(topToolbar);
+    await microtasksFinished();
+
+    const overflowMenuButton =
+        topToolbar.shadowRoot.querySelector<HTMLElement>('#overflowMenuButton');
+    assertTrue(!!overflowMenuButton);
+
+    overflowMenuButton.click();
+    await microtasksFinished();
+    assertTrue(topToolbar.$.overflowMenu.get().$.menu.open);
+
+    // Clicking outside of the side panel (e.g. on the page contents, the Lens
+    // crop frame, or a search result) blurs the side panel's window.
+    window.dispatchEvent(new Event('blur'));
+    await microtasksFinished();
+    assertFalse(topToolbar.$.overflowMenu.get().$.menu.open);
+  });
+
+  // <if expr="not is_android">
+  suite('Permission Dashboard Integration', () => {
+    let toolbarUiService: TestContextualTasksToolbarUiService;
+
+    setup(async () => {
+      loadTimeData.overrideValues({
+        contextualTasksSidePanelRearchitectureEnabled: true,
+      });
+      document.body.innerHTML = window.trustedTypes!.emptyHTML;
+      toolbarUiService = toolbarProxy.toolbarUiService;
+      topToolbar = document.createElement('top-toolbar');
+      document.body.appendChild(topToolbar);
+      await microtasksFinished();
+    });
+
+    test(
+        'hides and shows permission-dashboard, and hides and shows logo' +
+            ' container based on state of request chip',
+        async () => {
+          const topRow = topToolbar.shadowRoot.querySelector('#top-row');
+          assertTrue(!!topRow);
+          const logoContainer =
+              topRow.querySelector<HTMLElement>('.top-toolbar-logo-container');
+          assertHTMLElement(logoContainer);
+          const dashboard = topRow.querySelector<HTMLElement&{delegate: any}>(
+              'permission-dashboard');
+          assertHTMLElement(dashboard);
+
+          // Initial state: `G` logo shows and permission-dashboard is hidden.
+          assertTrue(dashboard.hidden);
+          assertEquals('none', getComputedStyle(dashboard).display);
+          assertFalse(logoContainer.hidden);
+          assertEquals('flex', getComputedStyle(logoContainer).display);
+
+          // Create request chip.
+          const fakeState = {
+            indicatorChip: createFakeChip(),
+            requestChip:
+                createFakeChip({isVisible: true, iconName: 'kMicIcon'}),
+            isDividerVisible: false,
+          };
+
+          // Verify `topToolbar` DOM (dashboard visible, logo container hidden)
+          // when request chip shows.
+          topToolbar.permissionDashboardState = fakeState;
+          await microtasksFinished();
+
+          assertFalse(dashboard.hidden);
+          assertEquals('flex', getComputedStyle(dashboard).display);
+          assertTrue(!!dashboard.delegate);
+          assertTrue(logoContainer.hidden);
+          assertEquals('none', getComputedStyle(logoContainer).display);
+
+          // Remove the visible chip, so that the permission dashboard is hidden
+          // and the `G` logo is restored.
+          topToolbar.permissionDashboardState = {
+            indicatorChip: createFakeChip(),
+            requestChip: createFakeChip(),
+            isDividerVisible: false,
+          };
+          await microtasksFinished();
+
+          assertTrue(dashboard.hidden);
+          assertEquals('none', getComputedStyle(dashboard).display);
+          assertFalse(logoContainer.hidden);
+          assertEquals('flex', getComputedStyle(logoContainer).display);
+
+          // Set state to dashboard to null. It should remain hidden.
+          topToolbar.permissionDashboardState = null;
+          await microtasksFinished();
+
+          assertTrue(dashboard.hidden);
+          assertEquals('none', getComputedStyle(dashboard).display);
+          assertFalse(logoContainer.hidden);
+          assertEquals('flex', getComputedStyle(logoContainer).display);
+        });
+
+    test(
+        'hides and shows permission-dashboard, and hides and shows logo' +
+            ' container based on state of indicator chip',
+        async () => {
+          const topRow = topToolbar.shadowRoot.querySelector('#top-row');
+          assertTrue(!!topRow);
+          const logoContainer =
+              topRow.querySelector<HTMLElement>('.top-toolbar-logo-container');
+          assertHTMLElement(logoContainer);
+          const dashboard = topRow.querySelector<HTMLElement&{delegate: any}>(
+              'permission-dashboard');
+          assertHTMLElement(dashboard);
+
+          // Initial state: `G` logo shows and permission-dashboard is hidden.
+          assertTrue(dashboard.hidden);
+          assertEquals('none', getComputedStyle(dashboard).display);
+          assertFalse(logoContainer.hidden);
+          assertEquals('flex', getComputedStyle(logoContainer).display);
+
+          // Create indicator chip.
+          const fakeState = {
+            indicatorChip:
+                createFakeChip({isVisible: true, iconName: 'kCameraIcon'}),
+            requestChip: createFakeChip(),
+            isDividerVisible: false,
+          };
+
+          // Verify `topToolbar` DOM (dashboard visible, logo container hidden)
+          // when indicator chip shows.
+          topToolbar.permissionDashboardState = fakeState;
+          await microtasksFinished();
+
+          assertFalse(dashboard.hidden);
+          assertEquals('flex', getComputedStyle(dashboard).display);
+          assertTrue(!!dashboard.delegate);
+          assertTrue(logoContainer.hidden);
+          assertEquals('none', getComputedStyle(logoContainer).display);
+
+          // Remove the visible chip, so that the permission dashboard is hidden
+          // and the `G` logo is restored.
+          topToolbar.permissionDashboardState = {
+            indicatorChip: createFakeChip(),
+            requestChip: createFakeChip(),
+            isDividerVisible: false,
+          };
+          await microtasksFinished();
+
+          assertTrue(dashboard.hidden);
+          assertEquals('none', getComputedStyle(dashboard).display);
+          assertFalse(logoContainer.hidden);
+          assertEquals('flex', getComputedStyle(logoContainer).display);
+        });
+
+    test(
+        'loads initial state and updates on onPermissionDashboardStateChanged',
+        async () => {
+          await toolbarUiService.whenCalled('getInitialState');
+
+          const topRow = topToolbar.shadowRoot.querySelector('#top-row');
+          assertTrue(!!topRow);
+          const dashboard =
+              topRow.querySelector<HTMLElement>('permission-dashboard');
+          assertHTMLElement(dashboard);
+          assertTrue(dashboard.hidden);
+
+          // Push an update over the observer callback router.
+          const observerRemote = toolbarProxy.bindToolbarUiObserverRemote();
+          const pushedState = {
+            indicatorChip: createFakeChip(),
+            requestChip:
+                createFakeChip({isVisible: true, iconName: 'kMicIcon'}),
+            isDividerVisible: false,
+          };
+          observerRemote.onPermissionDashboardStateChanged(pushedState);
+          await observerRemote.$.flushForTesting();
+          await microtasksFinished();
+
+          assertDeepEquals(pushedState, topToolbar.permissionDashboardState);
+          assertFalse(dashboard.hidden);
+        });
+
+    test('forwards permission chip delegate calls to service', async () => {
+      topToolbar.permissionDashboardState = {
+        indicatorChip: createFakeChip(),
+        requestChip: createFakeChip({isVisible: true, iconName: 'kMicIcon'}),
+        isDividerVisible: false,
+      };
+      await microtasksFinished();
+
+      const topRow = topToolbar.shadowRoot.querySelector('#top-row');
+      assertTrue(!!topRow);
+      const dashboard = topRow.querySelector<HTMLElement&{delegate: any}>(
+          'permission-dashboard');
+      assertTrue(!!dashboard);
+      assertTrue(!!dashboard.delegate);
+
+      dashboard.delegate.onChipClicked(
+          LhsChipIdentifier.kPermissionRequest, true);
+      assertDeepEquals(
+          [LhsChipIdentifier.kPermissionRequest, true],
+          await toolbarUiService.whenCalled('onChipClicked'));
+
+      dashboard.delegate.onChipPointerEntered(
+          LhsChipIdentifier.kPermissionRequest);
+      assertEquals(
+          LhsChipIdentifier.kPermissionRequest,
+          await toolbarUiService.whenCalled('onChipPointerEntered'));
+
+      dashboard.delegate.onChipPointerExited(
+          LhsChipIdentifier.kPermissionRequest);
+      assertEquals(
+          LhsChipIdentifier.kPermissionRequest,
+          await toolbarUiService.whenCalled('onChipPointerExited'));
+
+      dashboard.delegate.onChipMousePressed(
+          LhsChipIdentifier.kPermissionRequest);
+      assertEquals(
+          LhsChipIdentifier.kPermissionRequest,
+          await toolbarUiService.whenCalled('onChipMousePressed'));
+
+      dashboard.delegate.onChipExpandAnimationEnded(
+          LhsChipIdentifier.kPermissionIndicator);
+      assertEquals(
+          LhsChipIdentifier.kPermissionIndicator,
+          await toolbarUiService.whenCalled('onChipExpandAnimationEnded'));
+
+      dashboard.delegate.onChipCollapseAnimationEnded(
+          LhsChipIdentifier.kPermissionIndicator);
+      assertEquals(
+          LhsChipIdentifier.kPermissionIndicator,
+          await toolbarUiService.whenCalled('onChipCollapseAnimationEnded'));
+    });
+
+    test(
+        'registers super G button help bubble anchor only when logo is shown',
+        () => {
+          const anchorStatuses = topToolbar.getSortedAnchorStatusesForTesting();
+          const gButtonStatus = anchorStatuses.find(
+              ([id]: [string, boolean]) =>
+                  id === 'kContextualTasksSuperGButtonElementId');
+          assertTrue(!!gButtonStatus);
+          assertTrue(gButtonStatus[1]);
+        });
+  });
+  // </if>
+
+  suite('Profile indicator', () => {
+    setup(async () => {
+      loadTimeData.overrideValues({
+        contextualTasksSidePanelRearchitectureEnabled: true,
+      });
+      document.body.innerHTML = window.trustedTypes!.emptyHTML;
+      topToolbar = document.createElement('top-toolbar');
+      document.body.appendChild(topToolbar);
+      await microtasksFinished();
+    });
+
+    test('hides profile indicator when avatar url is empty', () => {
+      assertEquals('', topToolbar.profileAvatarUrl);
+      const profileIndicator =
+          topToolbar.shadowRoot.querySelector('#profileIndicator');
+      assertEquals(null, profileIndicator);
+    });
+
+    test(
+        'hides profile indicator when rearchitecture is disabled', async () => {
+          loadTimeData.overrideValues({
+            contextualTasksSidePanelRearchitectureEnabled: false,
+          });
+          document.body.innerHTML = window.trustedTypes!.emptyHTML;
+          topToolbar = document.createElement('top-toolbar');
+          topToolbar.profileAvatarUrl = 'data:image/png;base64,fakeImageData';
+          document.body.appendChild(topToolbar);
+          await microtasksFinished();
+
+          const profileIndicator =
+              topToolbar.shadowRoot.querySelector('#profileIndicator');
+          assertEquals(null, profileIndicator);
+        });
+
+    test(
+        'shows profile indicator with avatar image when avatar url is set',
+        async () => {
+          topToolbar.profileAvatarUrl = 'data:image/png;base64,fakeImageData';
+          await microtasksFinished();
+
+          const profileIndicator =
+              topToolbar.shadowRoot.querySelector<HTMLElement>(
+                  '#profileIndicator');
+          assertTrue(!!profileIndicator);
+
+          const avatarImg = profileIndicator.querySelector<HTMLImageElement>(
+              '.profile-avatar-img');
+          assertTrue(!!avatarImg);
+          assertEquals('data:image/png;base64,fakeImageData', avatarImg.src);
+        });
+
+    test(
+        'renders profile indicator with chrome placeholder avatar',
+        async () => {
+          topToolbar.profileAvatarUrl =
+              'chrome://theme/IDR_PROFILE_AVATAR_PLACEHOLDER_LARGE';
+          await microtasksFinished();
+
+          const profileIndicator =
+              topToolbar.shadowRoot.querySelector<HTMLElement>(
+                  '#profileIndicator');
+          assertTrue(!!profileIndicator);
+
+          const avatarImg = profileIndicator.querySelector<HTMLImageElement>(
+              '.profile-avatar-img');
+          assertTrue(!!avatarImg);
+          assertEquals(
+              'chrome://theme/IDR_PROFILE_AVATAR_PLACEHOLDER_LARGE',
+              avatarImg.src);
+        });
+
+    test('updates avatar url via mojo setProfileAvatarUrl', async () => {
+      topToolbar.profileAvatarUrl =
+          'chrome://theme/IDR_PROFILE_AVATAR_PLACEHOLDER_LARGE';
+      await microtasksFinished();
+
+      toolbarProxy.callbackRouterRemote.setProfileAvatarUrl(
+          'data:image/png;base64,pushedAvatar');
+      await microtasksFinished();
+
+      const profileIndicator =
+          topToolbar.shadowRoot.querySelector<HTMLElement>('#profileIndicator');
+      assertTrue(!!profileIndicator);
+      const avatarImg = profileIndicator.querySelector<HTMLImageElement>(
+          '.profile-avatar-img');
+      assertTrue(!!avatarImg);
+      assertEquals('data:image/png;base64,pushedAvatar', avatarImg.src);
+
+      toolbarProxy.callbackRouterRemote.setProfileAvatarUrl('');
+      await microtasksFinished();
+      assertEquals(
+          null, topToolbar.shadowRoot.querySelector('#profileIndicator'));
+    });
   });
 });

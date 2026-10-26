@@ -13,7 +13,6 @@ import '../settings_shared.css.js';
 import './os_japanese_clear_ime_data_dialog.js';
 import './os_japanese_manage_user_dictionary_page.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -25,7 +24,8 @@ import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
 import {OsSettingsSubpageElement} from '../os_settings_page/os_settings_subpage.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './input_method_options_page.html.js';
@@ -128,11 +128,16 @@ export class SettingsInputMethodOptionsPageElement extends
     };
   }
 
+  constructor() {
+    super();
+    this.optionSections_ = [];
+  }
+
   // Public API: Bidirectional data flow.
   // override prefs: any;  // From PrefsMixin.
 
   // Public API: Downwards data flow.
-  languageHelper: LanguageHelper;
+  declare languageHelper: LanguageHelper;
 
   // Internal properties for mixins.
   // From DeepLinkingMixin.
@@ -145,17 +150,17 @@ export class SettingsInputMethodOptionsPageElement extends
   // This property does not have a default value in `static get properties()`,
   // but is set in `currentRouteChanged()`.
   // TODO(b/265556480): Update the initial value to be ''.
-  private id_: string;
+  declare private id_: string;
   // This property does not have a default value in `static get properties()`.
   // TODO(b/265556480): Update the initial value to be false.
-  private showClearPersonalizedData_: boolean;
+  declare private showClearPersonalizedData_: boolean;
 
   // Manually computed properties.
   // TODO(b/238031866): Convert these to be Polymer computed properties.
   /** Computed from id_. */
-  private engineId_: string;
+  declare private engineId_: string;
   /** Computed from engineId_. */
-  private optionSections_: Section[] = [];
+  declare private optionSections_: Section[];
 
   /**
    * RouteObserverMixin override
@@ -359,9 +364,6 @@ export class SettingsInputMethodOptionsPageElement extends
    */
   private getDefaultValueOverrides_(engineId: string):
       {[OptionType.PHYSICAL_KEYBOARD_AUTO_CORRECTION_LEVEL]?: 1} {
-    if (!loadTimeData.getBoolean('autocorrectEnableByDefault')) {
-      return {};
-    }
     const enabledByDefaultKey =
         PHYSICAL_KEYBOARD_AUTOCORRECT_ENABLED_BY_DEFAULT;
     const prefBlob = this.getPref<PrefsObjectType>(PREFS_PATH).value;

@@ -4,14 +4,11 @@
 
 package org.chromium.components.facilitated_payments;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -19,8 +16,6 @@ import java.util.List;
 
 /** Unit tests for {@link SecurePayload}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
-@SmallTest
 public class SecurePayloadTest {
     private static final List<SecureData> SECURE_DATA = Arrays.asList(new SecureData(1, "value_1"));
     private static final byte[] ACTION_TOKEN = new byte[] {1, 2, 3};

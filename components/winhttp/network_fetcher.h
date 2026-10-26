@@ -7,12 +7,12 @@
 
 #include <windows.h>
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_map.h"
@@ -144,7 +144,7 @@ class NetworkFetcher : public base::RefCountedThreadSafe<NetworkFetcher> {
   int port_ = 0;
   std::string path_for_request_;
 
-  std::wstring_view verb_;
+  std::wstring verb_;
   std::string request_data_;
   // The value of Content-Type header, e.g. "application/json".
   std::string content_type_;

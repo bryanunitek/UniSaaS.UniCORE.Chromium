@@ -6,27 +6,18 @@
 
 namespace client_certificates::features {
 
-BASE_FEATURE(kEnableClientCertificateProvisioningOnAndroid,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-bool IsClientCertificateProvisioningOnAndroidEnabled() {
-  return base::FeatureList::IsEnabled(
-      kEnableClientCertificateProvisioningOnAndroid);
-}
-
-BASE_FEATURE(kEnableClientCertificateProvisioningOnIOS,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-bool IsClientCertificateProvisioningOnIOSEnabled() {
-  return base::FeatureList::IsEnabled(
-      kEnableClientCertificateProvisioningOnIOS);
-}
 
 BASE_FEATURE(kManagedUserClientCertificateInPrefs,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 bool IsManagedUserClientCertificateInPrefsEnabled() {
   return base::FeatureList::IsEnabled(kManagedUserClientCertificateInPrefs);
+}
+
+BASE_FEATURE(kClientCertCommonNameAttribute, base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsClientCertCommonNameAttributeEnabled() {
+  return base::FeatureList::IsEnabled(kClientCertCommonNameAttribute);
 }
 
 #if BUILDFLAG(IS_WIN)

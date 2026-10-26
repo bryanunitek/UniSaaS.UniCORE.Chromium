@@ -29,6 +29,7 @@ class PLATFORM_EXPORT AudioDestinationUmaReporter final {
   void AddFifoDelay(base::TimeDelta fifo_delay);
   void AddTotalPlayoutDelay(base::TimeDelta total_playout_delay);
   void IncreaseFifoUnderrunCount();
+  void IncreaseUnexpectedFifoUnderrunCount();
   void UpdateMetricNameForDualThreadMode();
   void Report();
   void AddRenderDuration(base::TimeDelta duration) {
@@ -46,8 +47,10 @@ class PLATFORM_EXPORT AudioDestinationUmaReporter final {
   static constexpr std::string_view kFifoDelayHistogramNameBase = "FIFODelay";
   static constexpr std::string_view kFifoUnderrunHistogramNameBase =
       "FIFOUnderrunCount";
+  static constexpr std::string_view kUnexpectedFifoUnderrunHistogramNameBase =
+      "UnexpectedFIFOUnderrunCount";
   static constexpr std::string_view kTotalPlayoutDelayHistogramNameBase =
-      "TotalPlayoutDelay";
+      "TotalPlayoutDelay2";
   static constexpr std::string_view kRenderTimeRatioHistogramNameBase =
       "RenderTimeRatio";
   static constexpr std::string_view kRequestRenderTimeRatioHistogramNameBase =
@@ -67,6 +70,7 @@ class PLATFORM_EXPORT AudioDestinationUmaReporter final {
   enum class SamplingPeriod { kShort, kIntervals };
   int callback_count_ = 0;
   int fifo_underrun_count_ = 0;
+  int unexpected_fifo_underrun_count_ = 0;
   const WebAudioLatencyHint latency_hint_;
   bool use_audio_worklet_ = false;
 
@@ -79,6 +83,9 @@ class PLATFORM_EXPORT AudioDestinationUmaReporter final {
   // the speaker. Averaged, reported and reset at every 'kMetricsReportCycle'
   // audio callbacks.
   base::TimeDelta total_playout_delay_sum_;
+  // Number of delays in `total_playout_delay_sum_`. We add one per render
+  // quantum, so there can be several per callback.
+  int total_playout_delay_count_ = 0;
 
   // Histogram names for metrics reported by `AudioDestinationUmaReporter`.
   // These names are constructed during initialization (or updated in
@@ -89,6 +96,8 @@ class PLATFORM_EXPORT AudioDestinationUmaReporter final {
   std::string fifo_delay_histogram_name_with_latency_tag_;
   std::string fifo_underrun_histogram_name_;
   std::string fifo_underrun_histogram_name_with_latency_tag_;
+  std::string unexpected_fifo_underrun_histogram_name_;
+  std::string unexpected_fifo_underrun_histogram_name_with_latency_tag_;
   std::string total_playout_delay_histogram_name_;
   std::string total_playout_delay_histogram_name_with_latency_tag_;
   std::string render_time_ratio_histogram_name_;

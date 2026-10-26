@@ -43,8 +43,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
@@ -104,6 +105,7 @@
 #include "services/network/test/trust_token_test_server_handler_registration.h"
 #include "services/network/test/trust_token_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/constants/chromeos_features.h"
@@ -128,7 +130,7 @@ class ProfileNetworkContextServiceBrowsertest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
     EXPECT_TRUE(embedded_test_server()->Start());
     loader_factory_ = browser()
-                          ->profile()
+                          ->GetProfile()
                           ->GetDefaultStoragePartition()
                           ->GetURLLoaderFactoryForBrowserProcess()
                           .get();
@@ -299,7 +301,7 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextServiceCacheSameBrowsertest,
 
   // At this point, we have already called the initialization.
   // Verify that we have the correct values in the profile preferences.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   DCHECK_EQ(profile_prefs->GetString(kHttpCacheFinchExperimentGroups),
             "None None None None");
 }
@@ -311,7 +313,7 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextServiceCacheSameBrowsertest,
 
   // At this point, we have already called the initialization.
   // Verify that we have the correct values in the profile preferences.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   DCHECK_EQ(profile_prefs->GetString(kHttpCacheFinchExperimentGroups),
             "None None None None");
 }
@@ -340,7 +342,7 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextServiceCacheChangeBrowsertest,
 
   // At this point, we have already called the initialization.
   // Verify that we have the correct values in the profile preferences.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   DCHECK_EQ(profile_prefs->GetString(kHttpCacheFinchExperimentGroups),
             "scoped_feature_list_trial_group None None None");
   // Set the local state for the next test.
@@ -357,7 +359,7 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextServiceCacheChangeBrowsertest,
 
   // At this point, we have already called the initialization once.
   // Verify that we have the correct values in the profile preferences.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   DCHECK_EQ(profile_prefs->GetString(kHttpCacheFinchExperimentGroups),
             "scoped_feature_list_trial_group None None None");
 }
@@ -387,7 +389,7 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextServiceCacheCredentialsBrowserTest,
 
   // At this point, we have already called the initialization.
   // Verify that we have the correct values in the profile preferences.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   DCHECK_EQ(profile_prefs->GetString(kHttpCacheFinchExperimentGroups),
             "None None None scoped_feature_list_trial_group");
   // Set the local state for the next test.
@@ -404,7 +406,7 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextServiceCacheCredentialsBrowserTest,
 
   // At this point, we have already called the initialization once.
   // Verify that we have the correct values in the profile preferences.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   DCHECK_EQ(profile_prefs->GetString(kHttpCacheFinchExperimentGroups),
             "None None None scoped_feature_list_trial_group");
 }
@@ -416,7 +418,8 @@ class ProfileNetworkContextServiceDiskCacheBackendExperimentBrowserTest
   ProfileNetworkContextServiceDiskCacheBackendExperimentBrowserTest() {
     feature_list_.InitAndEnableFeatureWithParameters(
         net::features::kDiskCacheBackendExperiment,
-        {{"backend", GetBackendParamValue()}});
+        {{"backend", GetBackendParamValue()},
+         {"DiskCacheBackendResetCacheOnGroupChange", "true"}});
   }
   ~ProfileNetworkContextServiceDiskCacheBackendExperimentBrowserTest()
       override = default;
@@ -452,7 +455,7 @@ IN_PROC_BROWSER_TEST_P(
 
   // At this point, we have already called the initialization.
   // Verify that we have the correct values in the profile preferences.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   DCHECK_EQ(profile_prefs->GetString(kHttpCacheFinchExperimentGroups),
             "None None None None scoped_feature_list_trial_group");
 
@@ -471,7 +474,7 @@ IN_PROC_BROWSER_TEST_P(
 
   // At this point, we have already called the initialization.
   // Verify that we have the correct values in the profile preferences.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   DCHECK_EQ(profile_prefs->GetString(kHttpCacheFinchExperimentGroups),
             "None None None None scoped_feature_list_trial_group");
 }
@@ -486,6 +489,27 @@ INSTANTIATE_TEST_SUITE_P(
                        net::features::DiskCacheBackend::kSql
 #endif  // ENABLE_DISK_CACHE_SQL_BACKEND
     }));
+
+class ProfileNetworkContextServiceDiskCacheBackendExperimentNoResetBrowserTest
+    : public ProfileNetworkContextServiceBrowsertest {
+ public:
+  ProfileNetworkContextServiceDiskCacheBackendExperimentNoResetBrowserTest() {
+    feature_list_.InitAndEnableFeatureWithParameters(
+        net::features::kDiskCacheBackendExperiment, {{"backend", "simple"}});
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(
+    ProfileNetworkContextServiceDiskCacheBackendExperimentNoResetBrowserTest,
+    TestNoCacheResetOnGroupChangeByDefault) {
+  NavigateToCreateHttpCache();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
+  EXPECT_EQ(profile_prefs->GetString(kHttpCacheFinchExperimentGroups),
+            "None None None None");
+}
 
 class ProfileNetworkContextServiceCacheResetBrowserTestBase
     : public ProfileNetworkContextServiceBrowsertest {
@@ -552,7 +576,9 @@ class ProfileNetworkContextServiceCacheResetOnUpgradeBrowserTest
     } else {
       // non-PRE test: experiment active (use simple backend)
       feature_list_.InitAndEnableFeatureWithParameters(
-          net::features::kDiskCacheBackendExperiment, {{"backend", "simple"}});
+          net::features::kDiskCacheBackendExperiment,
+          {{"backend", "simple"},
+           {"DiskCacheBackendResetCacheOnGroupChange", "true"}});
     }
   }
 
@@ -567,7 +593,9 @@ class ProfileNetworkContextServiceCacheResetSameBackendBrowserTest
     // Enable the experiment in both PRE and non-PRE runs to keep the backend
     // type same, avoiding forced cache recreation.
     feature_list_.InitAndEnableFeatureWithParameters(
-        net::features::kDiskCacheBackendExperiment, {{"backend", "simple"}});
+        net::features::kDiskCacheBackendExperiment,
+        {{"backend", "simple"},
+         {"DiskCacheBackendResetCacheOnGroupChange", "true"}});
   }
 
  private:
@@ -588,7 +616,7 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(1, cache_reset_test_request_count_);
 
   // Simulate upgrade by clearing the pref.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   profile_prefs->ClearPref(kHttpCacheFinchExperimentGroups);
 }
 
@@ -621,7 +649,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // Populate cache for non-default partition.
   content::StoragePartition* partition =
-      browser()->profile()->GetStoragePartition(
+      browser()->GetProfile()->GetStoragePartition(
           content::StoragePartitionConfig::Create(browser()->GetProfile(),
                                                   "testdomain", "testpartition",
                                                   /*in_memory=*/false));
@@ -634,7 +662,7 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(2, cache_reset_test_request_count_);
 
   // Simulate upgrade by clearing the pref.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   profile_prefs->ClearPref(kHttpCacheFinchExperimentGroups);
 }
 
@@ -679,13 +707,13 @@ IN_PROC_BROWSER_TEST_F(
   // initialization will see the empty pref, call GetHttpCacheBackendResetParam,
   // return true (since we are in experiment), and update the pref.
   // If the correct code runs, it will short-circuit and not touch the pref.
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
   const std::string pref_name = kHttpCacheFinchExperimentGroups;
   profile_prefs->ClearPref(pref_name);
 
   // Request the cached resource for non-default partition.
   content::StoragePartition* partition =
-      browser()->profile()->GetStoragePartition(
+      browser()->GetProfile()->GetStoragePartition(
           content::StoragePartitionConfig::Create(browser()->GetProfile(),
                                                   "testdomain", "testpartition",
                                                   /*in_memory=*/false));
@@ -722,7 +750,7 @@ class AmbientAuthenticationTestWithPolicy : public policy::PolicyTest {
     int policy_value =
         service->GetInteger(prefs::kAmbientAuthenticationInPrivateModesEnabled);
 
-    Profile* regular_profile = browser()->profile();
+    Profile* regular_profile = browser()->GetProfile();
     Profile* incognito_profile =
         regular_profile->GetPrimaryOTRProfile(/*create_if_needed=*/true);
     Profile* non_primary_otr_profile = regular_profile->GetOffTheRecordProfile(
@@ -905,7 +933,7 @@ class ProfileNetworkContextTrustTokensBrowsertest
 
   void Flush() {
     browser()
-        ->profile()
+        ->GetProfile()
         ->GetDefaultStoragePartition()
         ->FlushNetworkInterfaceForTesting();
   }
@@ -921,17 +949,6 @@ class ProfileNetworkContextTrustTokensBrowsertest
 IN_PROC_BROWSER_TEST_F(ProfileNetworkContextTrustTokensBrowsertest,
                        TrustTokenBlocked) {
   ProvideRequestHandlerKeyCommitmentsToNetworkService("a.test");
-  auto* privacy_sandbox_settings =
-      PrivacySandboxSettingsFactory::GetForProfile(browser()->GetProfile());
-  auto privacy_sandbox_delegate = std::make_unique<
-      privacy_sandbox_test_util::MockPrivacySandboxSettingsDelegate>();
-  privacy_sandbox_delegate->SetUpIsPrivacySandboxRestrictedResponse(
-      /*restricted=*/false);
-  privacy_sandbox_delegate->SetUpIsIncognitoProfileResponse(
-      /*incognito=*/browser()->GetProfile()->IsIncognitoProfile());
-  privacy_sandbox_settings->SetDelegateForTesting(
-      std::move(privacy_sandbox_delegate));
-  privacy_sandbox_settings->SetAllPrivacySandboxAllowedForTesting();
   auto* host_content_settings_map =
       HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   Flush();
@@ -961,7 +978,7 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextTrustTokensBrowsertest,
       ContentSettingsType::ANTI_ABUSE, CONTENT_SETTING_BLOCK);
   Flush();
 
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_TRUE(content::WaitForLoadStop(GetActiveWebContents()));
   EXPECT_EQ(false, EvalJs(GetActiveWebContents(), command));
 
@@ -969,7 +986,7 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextTrustTokensBrowsertest,
       ContentSettingsType::ANTI_ABUSE, CONTENT_SETTING_ALLOW);
   Flush();
 
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_TRUE(content::WaitForLoadStop(GetActiveWebContents()));
   EXPECT_EQ(true, EvalJs(GetActiveWebContents(), command));
 
@@ -980,7 +997,7 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextTrustTokensBrowsertest,
       top_level_origin, top_level_origin, ContentSettingsType::COOKIES,
       CONTENT_SETTING_BLOCK);
 
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_TRUE(content::WaitForLoadStop(GetActiveWebContents()));
   EXPECT_EQ(false, EvalJs(GetActiveWebContents(), command));
 }
@@ -1041,7 +1058,10 @@ class CacheEncryptionPolicyTestBase : public InProcessBrowserTest {
   // Helper function to call ComputeHttpCacheSize synchronously
   int64_t ComputeHttpCacheSizeSync() {
     network::mojom::NetworkContext* network_context =
-        browser()->profile()->GetDefaultStoragePartition()->GetNetworkContext();
+        browser()
+            ->GetProfile()
+            ->GetDefaultStoragePartition()
+            ->GetNetworkContext();
 
     base::RunLoop run_loop;
     int64_t result_size_or_error =
@@ -1065,7 +1085,7 @@ class CacheEncryptionPolicyTestBase : public InProcessBrowserTest {
     content::RunAllTasksUntilIdle();
 
     browser()
-        ->profile()
+        ->GetProfile()
         ->GetDefaultStoragePartition()
         ->FlushNetworkInterfaceForTesting();
     content::RunAllTasksUntilIdle();
@@ -1114,7 +1134,7 @@ IN_PROC_BROWSER_TEST_F(CacheEncryptionEnabledByPolicyTest,
   // This test verifies that for the initial, default profile, the cache is
   // initialized correctly on startup.
   VerifyCacheBackendInitialized();
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   ASSERT_TRUE(prefs);
   EXPECT_FALSE(
       prefs->GetString(enterprise_connectors::kEncryptedCachePrimaryKey)
@@ -1147,7 +1167,7 @@ IN_PROC_BROWSER_TEST_F(CacheEncryptionEnabledByPolicyTest,
                   .empty());
 
   // Create a browser for the new profile and navigate to trigger cache init.
-  Browser* new_browser = CreateBrowser(&new_profile);
+  BrowserWindowInterface* new_browser = CreateBrowser(&new_profile);
   GURL url = embedded_test_server()->GetURL("/empty.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(new_browser, url));
   content::RunAllTasksUntilIdle();
@@ -1171,7 +1191,7 @@ IN_PROC_BROWSER_TEST_F(CacheEncryptionEnabledByPolicyTest,
 
 IN_PROC_BROWSER_TEST_F(CacheEncryptionDisabledByPolicyTest,
                        BackendInitializesWithPolicyDisabled) {
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   ASSERT_TRUE(prefs);
   // The key pref should not exist before the cache is initialized.
   EXPECT_FALSE(
@@ -1193,7 +1213,7 @@ IN_PROC_BROWSER_TEST_F(CacheEncryptionDisabledByPolicyTest,
                        KeyPrefIsNotStoredWhenPolicyIsDisabled) {
   // The pref should not be stored at all, if the policy is disabled.
 
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   ASSERT_TRUE(prefs);
   EXPECT_FALSE(
       prefs->GetBoolean(enterprise_connectors::kCacheEncryptionEnabledPref));

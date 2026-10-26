@@ -5,7 +5,9 @@
 #import "ios/chrome/browser/level_up/model/level_up_scene_agent.h"
 
 #import <map>
+#import <string>
 
+#import "base/check.h"
 #import "base/functional/bind.h"
 #import "base/logging.h"
 #import "base/memory/raw_ptr.h"
@@ -15,12 +17,16 @@
 #import "ios/chrome/app/profile/profile_state.h"
 #import "ios/chrome/browser/level_up/model/level_up_service.h"
 #import "ios/chrome/browser/level_up/model/level_up_service_factory.h"
+#import "ios/chrome/browser/ntp/model/new_tab_page_util.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/tab_grid_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
+#import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/level_up_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_message.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_message_action.h"
@@ -34,6 +40,8 @@
   raw_ptr<LevelUpService> _levelUpService;
   // Map from user action to task type for fast lookup.
   std::map<std::string, TaskType> _actionToTaskMap;
+  // Map from user action to stat type for fast lookup.
+  std::map<std::string, LevelUpTaskStatType> _actionToStatMap;
 }
 
 - (void)setSceneState:(SceneState*)sceneState {
@@ -65,8 +73,11 @@
 
   _actionToTaskMap.clear();
   for (const auto& [type, info] : _levelUpService->GetTasks()) {
-    _actionToTaskMap[info->GetTriggerUserAction()] = type;
+    for (const std::string& action : info->GetTriggerUserActions()) {
+      _actionToTaskMap[action] = type;
+    }
   }
+  _actionToStatMap = _levelUpService->GetStatTriggerUserActions();
 
   __weak LevelUpSceneAgent* weakSelf = self;
   _actionCallback = base::BindRepeating(
@@ -84,6 +95,7 @@
   _actionCallback.Reset();
   _levelUpService = nullptr;
   _actionToTaskMap.clear();
+  _actionToStatMap.clear();
 }
 
 - (void)dealloc {
@@ -91,8 +103,13 @@
 }
 
 - (void)onUserAction:(const std::string&)action {
-  if (!_levelUpService) {
+  if (!_levelUpService || !_levelUpService->IsOptedIn()) {
     return;
+  }
+
+  auto statIt = _actionToStatMap.find(action);
+  if (statIt != _actionToStatMap.end()) {
+    _levelUpService->IncrementStatValue(statIt->second, 1);
   }
 
   auto it = _actionToTaskMap.find(action);
@@ -100,7 +117,9 @@
     TaskType taskType = it->second;
     if (!_levelUpService->IsTaskCompleted(taskType)) {
       _levelUpService->MarkTaskCompleted(taskType);
-      [self showCompletionSnackbarForTask:taskType];
+      if (_levelUpService->IsUIEnabled()) {
+        [self showCompletionSnackbarForTask:taskType];
+      }
     }
   }
 }
@@ -112,44 +131,70 @@
     return;
   }
 
-  Browser* browser =
-      self.sceneState.browserProviderInterface.currentBrowserProvider.browser;
-  if (!browser) {
+  std::string message = taskInfo->GetCompletionSnackbarMessage();
+  if (message.empty()) {
+    return;
+  }
+
+  Browser* browser = [self currentBrowser];
+  CHECK(browser);
+
+  // By design, no completion snackbar is shown in incognito.
+  if (browser->type() == Browser::Type::kIncognito) {
     return;
   }
 
   id<SnackbarCommands> snackbarHandler =
       HandlerForProtocol(browser->GetCommandDispatcher(), SnackbarCommands);
-  if (!snackbarHandler) {
-    return;
-  }
 
-  SnackbarMessage* snackbarMessage = [[SnackbarMessage alloc]
-      initWithTitle:base::SysUTF8ToNSString(
-                        taskInfo->GetCompletionSnackbarMessage())];
+  SnackbarMessage* snackbarMessage =
+      [[SnackbarMessage alloc] initWithTitle:base::SysUTF8ToNSString(message)];
 
   SnackbarMessageAction* action = [[SnackbarMessageAction alloc] init];
   action.title = l10n_util::GetNSString(IDS_IOS_LEVEL_UP_SNACKBAR_ACTION);
 
   __weak LevelUpSceneAgent* weakSelf = self;
   action.handler = ^{
-    LevelUpSceneAgent* strongSelf = weakSelf;
-    if (!strongSelf) {
-      return;
-    }
-    Browser* strongBrowser = strongSelf.sceneState.browserProviderInterface
-                                 .currentBrowserProvider.browser;
-    if (!strongBrowser) {
-      return;
-    }
-    id<LevelUpCommands> levelUpHandler = HandlerForProtocol(
-        strongBrowser->GetCommandDispatcher(), LevelUpCommands);
-    [levelUpHandler showLevelUp];
+    [weakSelf onSnackbarAction];
   };
 
   snackbarMessage.action = action;
 
   [snackbarHandler showSnackbarMessage:snackbarMessage];
+}
+
+#pragma mark - Private
+
+// Returns the current active browser for the associated scene.
+- (Browser*)currentBrowser {
+  return self.sceneState.browserProviderInterface.currentBrowserProvider
+      .browser;
+}
+
+// Called when the user taps the action button in the completion snackbar.
+- (void)onSnackbarAction {
+  Browser* browser = [self currentBrowser];
+  CHECK(browser);
+
+  // Since there is no active NTP, an NTP will be created before presenting
+  // Level Up.
+  id<SceneCommands> sceneHandler =
+      HandlerForProtocol(browser->GetCommandDispatcher(), SceneCommands);
+  __weak LevelUpSceneAgent* weakSelf = self;
+  [sceneHandler prepareToPresentModalWithSnackbarDismissal:NO
+                                                completion:^{
+                                                  [weakSelf showLevelUp];
+                                                }];
+}
+
+// Shows the Level Up UI.
+- (void)showLevelUp {
+  Browser* browser = [self currentBrowser];
+  CHECK(browser);
+
+  id<LevelUpCommands> levelUpHandler =
+      HandlerForProtocol(browser->GetCommandDispatcher(), LevelUpCommands);
+  [levelUpHandler showLevelUp];
 }
 
 @end

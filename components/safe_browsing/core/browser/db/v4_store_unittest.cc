@@ -5,6 +5,7 @@
 #include "components/safe_browsing/core/browser/db/v4_store.h"
 
 #include "base/base64.h"
+#include "base/containers/flat_set.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
@@ -23,7 +24,6 @@
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/v5_store.pb.h"
 #include "crypto/hash.h"
-#include "crypto/sha2.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/platform_test.h"
 
@@ -31,16 +31,12 @@ namespace safe_browsing {
 
 using ::google::protobuf::RepeatedField;
 using ::google::protobuf::RepeatedPtrField;
+using ::testing::ElementsAre;
 using ::testing::Pair;
 using ::testing::UnorderedElementsAre;
 
 class V4StoreTest : public PlatformTest {
  public:
-  V4StoreTest() {
-    feature_list_.InitAndEnableFeature(
-        kAllowSafeBrowsingV4StoreDiskMigrationChanges);
-  }
-
   void SetUp() override {
     PlatformTest::SetUp();
 
@@ -137,8 +133,8 @@ class V4StoreTest : public PlatformTest {
     return HashPrefixMapView(map.begin(), map.end());
   }
 
-  std::string ExtensionV4IdToV5Hash(std::string_view v4_id) {
-    return SBStore::ExtensionV4IdToV5Hash(v4_id);
+  std::string ExtensionIdToHash(std::string_view extension_id) {
+    return SBStore::ExtensionIdToHash(extension_id);
   }
 
   StoreReadResult ReadFromDisk(V4Store& store) { return store.ReadFromDisk(); }
@@ -147,6 +143,41 @@ class V4StoreTest : public PlatformTest {
   }
   std::string GetExpectedChecksum(const V4Store& store) {
     return store.expected_checksum_;
+  }
+
+  void ApplyUpdateAndVerifyCategory(
+      V4Store& store,
+      bool is_partial_update,
+      SafeBrowsingUpdateCategory expected_category) {
+    base::HistogramTester histograms;
+
+    base::RunLoop run_loop;
+    UpdatedStoreReadyCallback store_ready_callback =
+        base::BindOnce(&V4StoreTest::UpdatedStoreReady, base::Unretained(this),
+                       &run_loop, /*expect_store=*/false);
+
+    auto lur = std::make_unique<ListUpdateResponse>();
+    lur->set_response_type(is_partial_update
+                               ? ListUpdateResponse::PARTIAL_UPDATE
+                               : ListUpdateResponse::FULL_UPDATE);
+    lur->set_new_client_state("test_state");
+    lur->mutable_checksum()->set_sha256(
+        std::string(crypto::hash::kSha256Size, /*ch=*/0));
+    auto sb_response = std::make_unique<SBUpdateResponse>();
+    sb_response->v4_response = std::move(lur);
+
+    store.ApplyUpdate(std::move(sb_response), task_runner(),
+                      std::move(store_ready_callback));
+    run_loop.Run();
+
+    histograms.ExpectUniqueSample("SafeBrowsing.V4Update.Category",
+                                  expected_category, 1);
+    histograms.ExpectUniqueSample("SafeBrowsing.V4Update.Category.V4StoreTest",
+                                  expected_category, 1);
+    histograms.ExpectUniqueSample("SafeBrowsing.SBUpdate.Category",
+                                  expected_category, 1);
+    histograms.ExpectUniqueSample("SafeBrowsing.SBUpdate.Category.V4StoreTest",
+                                  expected_category, 1);
   }
 
   void RunExtensionMigrationFailureTest(
@@ -209,10 +240,8 @@ class V4StoreTest : public PlatformTest {
     list_details->set_version("v5_version");
 
     std::string v5_hash_data;
-    v5_hash_data.append(
-        ExtensionV4IdToV5Hash("aapbdbdomjkkjkaonfhkkikfgjllcleb"));
-    v5_hash_data.append(
-        ExtensionV4IdToV5Hash("aapbdbdomjkkjkaonfhkkikfgjllclec"));
+    v5_hash_data.append(ExtensionIdToHash("aapbdbdomjkkjkaonfhkkikfgjllcleb"));
+    v5_hash_data.append(ExtensionIdToHash("aapbdbdomjkkjkaonfhkkikfgjllclec"));
 
     if (override_checksum.has_value()) {
       list_details->mutable_checksum()->set_sha256(override_checksum.value());
@@ -297,7 +326,6 @@ class V4StoreTest : public PlatformTest {
   base::FilePath v5_store_path_;
   base::test::TaskEnvironment task_environment_;
   SBStorePtr updated_store_{nullptr, SBStoreDeleter(nullptr)};
-  base::test::ScopedFeatureList feature_list_;
 };
 
 TEST_F(V4StoreTest, TestReadFromEmptyFile) {
@@ -383,45 +411,6 @@ TEST_F(V4StoreTest, TestReadFromNoHashPrefixesFile) {
   EXPECT_TRUE(store.hash_prefix_map_->view().empty());
   EXPECT_EQ(14, store.file_size_);
   EXPECT_FALSE(store.HasValidData());
-}
-
-TEST_F(V4StoreTest, TestMigrationDisabled) {
-  base::test::ScopedFeatureList local_feature_list;
-  local_feature_list.InitAndDisableFeature(
-      kAllowSafeBrowsingV4StoreDiskMigrationChanges);
-
-  V5StoreFileFormat file_format;
-  file_format.set_magic_number(0x600D71FE);
-  file_format.set_file_version(10);
-  ListDetails* list_details = file_format.mutable_list_details();
-  list_details->set_version("v5_version");
-  list_details->mutable_checksum()->set_sha256("v5_checksum");
-  V5HashFile* hash_file = list_details->mutable_hash_file();
-  hash_file->set_extension("foo");
-  hash_file->set_file_size(4);
-
-  // Write V5 store file.
-  base::WriteFile(v5_store_path_, file_format.SerializeAsString());
-  // Write V5 hash file.
-  base::WriteFile(v5_store_path_.AddExtensionASCII("foo"), "abcd");
-
-  base::HistogramTester histograms;
-
-  V4Store store(task_runner(), store_path_, /*v5_prefix_size=*/4,
-                /*is_eligible_for_migration=*/true,
-                /*is_extensions_blocklist=*/false);
-  EXPECT_EQ(FILE_UNREADABLE_FAILURE, store.ReadFromDisk());
-
-  // Verify V4 files not created.
-  EXPECT_FALSE(base::PathExists(store_path_));
-  EXPECT_FALSE(base::PathExists(store_path_.AddExtensionASCII("4_foo")));
-
-  // Verify V5 files not deleted.
-  EXPECT_TRUE(base::PathExists(v5_store_path_));
-  EXPECT_TRUE(base::PathExists(v5_store_path_.AddExtensionASCII("foo")));
-
-  // Verify no migration histogram logged.
-  histograms.ExpectTotalCount("SafeBrowsing.V4Store.V5ToV4MigrationResult", 0);
 }
 
 TEST_F(V4StoreTest, TestMigrationAlreadyV4) {
@@ -869,10 +858,8 @@ TEST_F(V4StoreTest, TestExtensionMigrationCleanupOnLateFailure) {
   list_details->set_version("v5_version");
 
   std::string v5_hash_data;
-  v5_hash_data.append(
-      ExtensionV4IdToV5Hash("aapbdbdomjkkjkaonfhkkikfgjllcleb"));
-  v5_hash_data.append(
-      ExtensionV4IdToV5Hash("aapbdbdomjkkjkaonfhkkikfgjllclec"));
+  v5_hash_data.append(ExtensionIdToHash("aapbdbdomjkkjkaonfhkkikfgjllcleb"));
+  v5_hash_data.append(ExtensionIdToHash("aapbdbdomjkkjkaonfhkkikfgjllclec"));
 
   std::array<uint8_t, crypto::hash::kSha256Size> v5_checksum;
   crypto::hash::Hash(crypto::hash::HashKind::kSha256,
@@ -921,10 +908,8 @@ TEST_F(V4StoreTest, TestExtensionMigrationSuccess) {
 
   // We will write V5 hashes.
   std::string v5_hash_data;
-  v5_hash_data.append(
-      ExtensionV4IdToV5Hash("aapbdbdomjkkjkaonfhkkikfgjllcleb"));
-  v5_hash_data.append(
-      ExtensionV4IdToV5Hash("aapbdbdomjkkjkaonfhkkikfgjllclec"));
+  v5_hash_data.append(ExtensionIdToHash("aapbdbdomjkkjkaonfhkkikfgjllcleb"));
+  v5_hash_data.append(ExtensionIdToHash("aapbdbdomjkkjkaonfhkkikfgjllclec"));
 
   V5HashFile* hash_file = list_details->mutable_hash_file();
   hash_file->set_extension("foo");
@@ -1161,7 +1146,7 @@ TEST_F(V4StoreTest, TestMergeUpdatesWithSameSizesInEachMap) {
   std::string expected_checksum = std::string(
       "\xBC\xB3\xEDk\xE3x\xD1(\xA9\xEDz7]x\x18\xBDn]"
       "\xA5\xA8R\xF7\xAB\xCF\xC1\xA3\xA3\xC5Z,\xA6o",
-      crypto::kSHA256Length);
+      crypto::hash::kSha256Size);
   EXPECT_EQ(APPLY_UPDATE_SUCCESS,
             store.MergeUpdate(PrefixMapToView(prefix_map_old),
                               PrefixMapToView(prefix_map_additions), nullptr,
@@ -1206,7 +1191,7 @@ TEST_F(V4StoreTest, TestMergeUpdatesWithDifferentSizesInEachMap) {
       "\xA5\x8B\xCAsD\xC7\xF9\xCE\xD2\xF4\x4="
       "\xB2\"\x82\x1A\xC1\xB8\x1F\x10\r\v\x9A\x93\xFD\xE1\xB8"
       "B\x1Eh\xF7\xB4",
-      crypto::kSHA256Length);
+      crypto::hash::kSha256Size);
   EXPECT_EQ(APPLY_UPDATE_SUCCESS,
             store.MergeUpdate(PrefixMapToView(prefix_map_old),
                               PrefixMapToView(prefix_map_additions), nullptr,
@@ -1244,7 +1229,7 @@ TEST_F(V4StoreTest, TestMergeUpdatesOldMapRunsOutFirst) {
       "\x84\x92\xET\xED\xF7\x97"
       "C\xCE}\xFF"
       "E\x1\xAB-\b>\xDB\x95\b\xD8H\xD5\x1D\xF9]8x\xA4\xD4\xC2\xFA",
-      crypto::kSHA256Length);
+      crypto::hash::kSha256Size);
   EXPECT_EQ(APPLY_UPDATE_SUCCESS,
             store.MergeUpdate(PrefixMapToView(prefix_map_old),
                               PrefixMapToView(prefix_map_additions), nullptr,
@@ -1279,7 +1264,7 @@ TEST_F(V4StoreTest, TestMergeUpdatesAdditionsMapRunsOutFirst) {
       "\x84\x92\xET\xED\xF7\x97"
       "C\xCE}\xFF"
       "E\x1\xAB-\b>\xDB\x95\b\xD8H\xD5\x1D\xF9]8x\xA4\xD4\xC2\xFA",
-      crypto::kSHA256Length);
+      crypto::hash::kSha256Size);
   EXPECT_EQ(APPLY_UPDATE_SUCCESS,
             store.MergeUpdate(PrefixMapToView(prefix_map_old),
                               PrefixMapToView(prefix_map_additions), nullptr,
@@ -1537,7 +1522,7 @@ TEST_F(V4StoreTest, TestMergeUpdatesRemovesOnlyElement) {
       "\xE7\xD2\xE6\xDC\x16\xB9\x8C+\xA2\xB3\x9E\x89<,\x88"
       "B3\xA5\xB1"
       "D\x9E\x9E'\x14",
-      crypto::kSHA256Length);
+      crypto::hash::kSha256Size);
   EXPECT_EQ(APPLY_UPDATE_SUCCESS,
             store.MergeUpdate(PrefixMapToView(prefix_map_old),
                               PrefixMapToView(prefix_map_additions),
@@ -1569,7 +1554,7 @@ TEST_F(V4StoreTest, TestMergeUpdatesRemovesFirstElement) {
       "D7=\xB5v\xAD\b1\xC9\xB3"
       "A\xAC"
       "b\xF1lf\xA4",
-      crypto::kSHA256Length);
+      crypto::hash::kSha256Size);
   EXPECT_EQ(APPLY_UPDATE_SUCCESS,
             store.MergeUpdate(PrefixMapToView(prefix_map_old),
                               PrefixMapToView(prefix_map_additions),
@@ -1603,7 +1588,7 @@ TEST_F(V4StoreTest, TestMergeUpdatesRemovesMiddleElement) {
       "\xFA-A\x15{\x17\0>\xAE"
       "8\xACigR\xD1\x93<\xB2\xC9\xB5\x81\xC0\xFB\xBB\x2\f\xAFpN\xEA"
       "44",
-      crypto::kSHA256Length);
+      crypto::hash::kSha256Size);
   EXPECT_EQ(APPLY_UPDATE_SUCCESS,
             store.MergeUpdate(PrefixMapToView(prefix_map_old),
                               PrefixMapToView(prefix_map_additions),
@@ -1636,7 +1621,7 @@ TEST_F(V4StoreTest, TestMergeUpdatesRemovesLastElement) {
   std::string expected_checksum = std::string(
       "a\xE1\xAD\x96\xFE\xA6"
       "A\xCA~7W\xF6z\xD8\n\xCA?\x96\x8A\x17U\x5\v\r\x88]\n\xB2JX\xC4S",
-      crypto::kSHA256Length);
+      crypto::hash::kSha256Size);
   EXPECT_EQ(APPLY_UPDATE_SUCCESS,
             store.MergeUpdate(PrefixMapToView(prefix_map_old),
                               PrefixMapToView(prefix_map_additions),
@@ -1672,7 +1657,7 @@ TEST_F(V4StoreTest, TestMergeUpdatesRemovesWhenOldHasDifferentSizes) {
       "\xA7OG\x9D\x83.\x9D-f\x8A\xE\x8B\r&\x19"
       "6\xE3\xF0\xEFTi\xA7\x5\xEA\xF7"
       "ej,\xA8\x9D\xAD\x91",
-      crypto::kSHA256Length);
+      crypto::hash::kSha256Size);
   EXPECT_EQ(APPLY_UPDATE_SUCCESS,
             store.MergeUpdate(PrefixMapToView(prefix_map_old),
                               PrefixMapToView(prefix_map_additions),
@@ -1710,7 +1695,7 @@ TEST_F(V4StoreTest, TestMergeUpdatesRemovesMultipleAcrossDifferentSizes) {
       "E\xDD\x10\"\x9A\xCA\xF1"
       "3^\x83w\xBBL\x19n\xAD\xBDM\x9D"
       "b\x9F",
-      crypto::kSHA256Length);
+      crypto::hash::kSha256Size);
   EXPECT_EQ(APPLY_UPDATE_SUCCESS,
             store.MergeUpdate(PrefixMapToView(prefix_map_old),
                               PrefixMapToView(prefix_map_additions),
@@ -2008,7 +1993,7 @@ TEST_F(V4StoreTest, TestRemovalsWithRiceEncodingSucceeds) {
       "\xA5\x8B\xCAsD\xC7\xF9\xCE\xD2\xF4\x4="
       "\xB2\"\x82\x1A\xC1\xB8\x1F\x10\r\v\x9A\x93\xFD\xE1\xB8"
       "B\x1Eh\xF7\xB4",
-      crypto::kSHA256Length);
+      crypto::hash::kSha256Size);
   EXPECT_EQ(APPLY_UPDATE_SUCCESS,
             store.MergeUpdate(PrefixMapToView(prefix_map_old),
                               PrefixMapToView(prefix_map_additions), nullptr,
@@ -2169,7 +2154,8 @@ TEST_F(V4StoreTest, FullUpdateFailsChecksumSynchronously) {
   // Now create a response with invalid checksum.
   std::unique_ptr<ListUpdateResponse> lur(new ListUpdateResponse);
   lur->set_response_type(ListUpdateResponse::FULL_UPDATE);
-  lur->mutable_checksum()->set_sha256(std::string(crypto::kSHA256Length, 0));
+  lur->mutable_checksum()->set_sha256(
+      std::string(crypto::hash::kSha256Size, 0));
   auto sb_response = std::make_unique<SBUpdateResponse>();
   sb_response->v4_response = std::move(lur);
   store.ApplyUpdate(std::move(sb_response), task_runner(),
@@ -2378,6 +2364,12 @@ TEST_F(V4StoreTest, CleanUpOldFiles) {
                 /*is_extensions_blocklist=*/false);
   EXPECT_EQ(WRITE_SUCCESS, store.WriteToDisk(Checksum()));
 
+  // Before cleanup, the old hashes file exists.
+  EXPECT_TRUE(base::PathExists(old_hashes_path));
+
+  SBStore::CleanupExtraFiles(
+      store_path_, base::flat_set<base::FilePath>(store.GetPathsInUse()));
+
   EXPECT_FALSE(base::PathExists(old_hashes_path));
   EXPECT_TRUE(base::PathExists(other_path));
 }
@@ -2428,7 +2420,7 @@ TEST_F(V4StoreTest, MergeUpdatesWithHashPrefixMap) {
   std::string expected_checksum(
       "\xBC\xB3\xEDk\xE3x\xD1(\xA9\xEDz7]x\x18\xBDn]"
       "\xA5\xA8R\xF7\xAB\xCF\xC1\xA3\xA3\xC5Z,\xA6o",
-      crypto::kSHA256Length);
+      crypto::hash::kSha256Size);
   EXPECT_EQ(APPLY_UPDATE_SUCCESS,
             store.MergeUpdate(PrefixMapToView(prefix_map_old),
                               PrefixMapToView(prefix_map_additions), nullptr,
@@ -2590,9 +2582,117 @@ TEST_F(V4StoreTest, TestMigrationFailureMissingDetailsV5) {
       "SafeBrowsing.V4Store.V5ToV4Migration.V5ReadFailureReason",
       V5StoreReadResult::kHashPrefixInfoMissingFailure,
       /*expected_bucket_count=*/1);
+}
 
-  // Verify V5 files are wiped.
-  EXPECT_FALSE(base::PathExists(v5_store_path_));
+TEST_F(V4StoreTest, UpdateCategory_FullUpdate) {
+  V4Store store(task_runner(), store_path_, /*v5_prefix_size=*/4,
+                /*is_eligible_for_migration=*/true,
+                /*is_extensions_blocklist=*/false);
+  ReadFromDisk(store);
+
+  ApplyUpdateAndVerifyCategory(
+      store, /*is_partial_update=*/false,
+      SafeBrowsingUpdateCategory::kNewDatabaseFullUpdate);
+  ApplyUpdateAndVerifyCategory(store, /*is_partial_update=*/false,
+                               SafeBrowsingUpdateCategory::kRegularFullUpdate);
+}
+
+TEST_F(V4StoreTest, UpdateCategory_PartialUpdate) {
+  V4Store store(task_runner(), store_path_, /*v5_prefix_size=*/4,
+                /*is_eligible_for_migration=*/true,
+                /*is_extensions_blocklist=*/false);
+  ReadFromDisk(store);
+
+  ApplyUpdateAndVerifyCategory(
+      store, /*is_partial_update=*/true,
+      SafeBrowsingUpdateCategory::kNewDatabasePartialUpdate);
+  ApplyUpdateAndVerifyCategory(
+      store, /*is_partial_update=*/true,
+      SafeBrowsingUpdateCategory::kRegularPartialUpdate);
+}
+
+TEST_F(V4StoreTest, UpdateCategory_PostMigrationFullUpdate) {
+  V5StoreFileFormat file_format;
+  file_format.set_magic_number(0x600D71FE);
+  file_format.set_file_version(10);
+  ListDetails* list_details = file_format.mutable_list_details();
+  list_details->set_version("v5_version");
+  list_details->mutable_checksum()->set_sha256("v5_checksum");
+  V5HashFile* hash_file = list_details->mutable_hash_file();
+  hash_file->set_extension("foo");
+  hash_file->set_file_size(4);
+
+  base::WriteFile(v5_store_path_, file_format.SerializeAsString());
+  base::WriteFile(v5_store_path_.AddExtensionASCII("foo"), "abcd");
+
+  V4Store store(task_runner(), store_path_, /*v5_prefix_size=*/4,
+                /*is_eligible_for_migration=*/true,
+                /*is_extensions_blocklist=*/false);
+  EXPECT_EQ(READ_SUCCESS, ReadFromDisk(store));
+  EXPECT_EQ("v5_version", store.state());
+
+  ApplyUpdateAndVerifyCategory(
+      store, /*is_partial_update=*/false,
+      SafeBrowsingUpdateCategory::kPostMigrationFullUpdate);
+}
+
+TEST_F(V4StoreTest, UpdateCategory_PostMigrationPartialUpdate) {
+  V5StoreFileFormat file_format;
+  file_format.set_magic_number(0x600D71FE);
+  file_format.set_file_version(10);
+  ListDetails* list_details = file_format.mutable_list_details();
+  list_details->set_version("v5_version");
+  list_details->mutable_checksum()->set_sha256("v5_checksum");
+  V5HashFile* hash_file = list_details->mutable_hash_file();
+  hash_file->set_extension("foo");
+  hash_file->set_file_size(4);
+
+  base::WriteFile(v5_store_path_, file_format.SerializeAsString());
+  base::WriteFile(v5_store_path_.AddExtensionASCII("foo"), "abcd");
+
+  V4Store store(task_runner(), store_path_, /*v5_prefix_size=*/4,
+                /*is_eligible_for_migration=*/true,
+                /*is_extensions_blocklist=*/false);
+  EXPECT_EQ(READ_SUCCESS, ReadFromDisk(store));
+
+  ApplyUpdateAndVerifyCategory(
+      store, /*is_partial_update=*/true,
+      SafeBrowsingUpdateCategory::kPostMigrationPartialUpdate);
+}
+
+TEST_F(V4StoreTest, GetPathsInUse) {
+  V4Store store(task_runner(), store_path_, /*v5_prefix_size=*/4,
+                /*is_eligible_for_migration=*/true,
+                /*is_extensions_blocklist=*/false);
+  // Before hash prefix map is loaded, GetPathsInUse() returns just the store
+  // path.
+  EXPECT_THAT(store.GetPathsInUse(), ElementsAre(store_path_));
+
+  // Write a valid store format proto with hash files.
+  V4StoreFileFormat file_format;
+  auto* hash_file1 = file_format.add_hash_files();
+  hash_file1->set_prefix_size(4);
+  hash_file1->set_extension("foo");
+  hash_file1->set_file_size(4);
+  base::WriteFile(HashPrefixMap::GetPath(store_path_, "foo"), "abcd");
+
+  auto* hash_file2 = file_format.add_hash_files();
+  hash_file2->set_prefix_size(2);
+  hash_file2->set_extension("bar");
+  hash_file2->set_file_size(2);
+  base::WriteFile(HashPrefixMap::GetPath(store_path_, "bar"), "ab");
+
+  ListUpdateResponse list_update_response;
+  list_update_response.set_platform_type(LINUX_PLATFORM);
+  list_update_response.set_response_type(ListUpdateResponse::FULL_UPDATE);
+  WriteFileFormatProtoToFile(&file_format, /*magic=*/0x600D71FE,
+                             /*version=*/9, &list_update_response);
+
+  EXPECT_EQ(READ_SUCCESS, ReadFromDisk(store));
+  EXPECT_THAT(store.GetPathsInUse(),
+              UnorderedElementsAre(store_path_,
+                                   HashPrefixMap::GetPath(store_path_, "foo"),
+                                   HashPrefixMap::GetPath(store_path_, "bar")));
 }
 
 }  // namespace safe_browsing

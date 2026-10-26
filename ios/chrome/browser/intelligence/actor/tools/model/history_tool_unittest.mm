@@ -9,13 +9,15 @@
 #import "base/test/test_future.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/fake_tool_delegate.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
-#import "ios/chrome/browser/intelligence/actor/tools/utils/profile_context_resolver.h"
+#import "ios/chrome/browser/intelligence/actor/util/actor_test_utils.h"
 #import "ios/chrome/browser/shared/model/browser/browser_list.h"
 #import "ios/chrome/browser/shared/model/browser/browser_list_factory.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
+#import "ios/web/public/test/fakes/fake_navigation_context.h"
 #import "ios/web/public/test/fakes/fake_navigation_manager.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "testing/gtest/include/gtest/gtest.h"
@@ -44,9 +46,13 @@ class HistoryToolTest : public PlatformTest {
   // in its navigation manager. If `first_item_active`, the active navigation
   // item will be the first one with `kTestUrl1`, otherwise it would be the
   // second navigation item with `kTestUrl2`.
-  void InsertWebStateWithNavigationManager(bool first_item_active) {
+  CompletingFakeNavigationManager* InsertWebStateWithNavigationManager(
+      bool first_item_active) {
     auto web_state = std::make_unique<web::FakeWebState>();
-    auto navigation_manager = std::make_unique<web::FakeNavigationManager>();
+    auto navigation_manager =
+        std::make_unique<CompletingFakeNavigationManager>(web_state.get());
+    CompletingFakeNavigationManager* navigation_manager_ptr =
+        navigation_manager.get();
     navigation_manager->AddItem(GURL(kTestUrl1), ui::PAGE_TRANSITION_TYPED);
     navigation_manager->AddItem(GURL(kTestUrl2), ui::PAGE_TRANSITION_LINK);
     navigation_manager->SetLastCommittedItemIndex(first_item_active ? 0 : 1);
@@ -54,64 +60,89 @@ class HistoryToolTest : public PlatformTest {
     browser_->GetWebStateList()->InsertWebState(
         std::move(web_state),
         WebStateList::InsertionParams::AtIndex(0).Activate());
+    return navigation_manager_ptr;
   }
 
  protected:
-  base::test::TaskEnvironment task_environment_;
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   std::unique_ptr<TestProfileIOS> profile_;
   std::unique_ptr<TestBrowser> browser_;
+  FakeToolDelegate tool_delegate_;
 
-  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> CreateTool(
-      const optimization_guide::proto::HistoryBackAction& action) {
-    return HistoryTool::Create(action, ProfileContextResolver(profile_.get()));
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult>
+  CreateToolAndValidate(
+      const optimization_guide::proto::HistoryBackAction& action,
+      web::WebState* web_state) {
+    std::unique_ptr<HistoryTool> tool = HistoryTool::Create(
+        web_state ? web_state->GetWeakPtr() : nullptr, action, &tool_delegate_);
+    CHECK(tool);
+    base::test::TestFuture<ToolExecutionResult> validate_future;
+    tool->Validate(validate_future.GetCallback());
+    if (!validate_future.Get().IsOk()) {
+      return base::unexpected(validate_future.Get());
+    }
+    return tool;
   }
 
-  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> CreateTool(
-      const optimization_guide::proto::HistoryForwardAction& action) {
-    return HistoryTool::Create(action, ProfileContextResolver(profile_.get()));
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult>
+  CreateToolAndValidate(
+      const optimization_guide::proto::HistoryForwardAction& action,
+      web::WebState* web_state) {
+    std::unique_ptr<HistoryTool> tool = HistoryTool::Create(
+        web_state ? web_state->GetWeakPtr() : nullptr, action, &tool_delegate_);
+    CHECK(tool);
+    base::test::TestFuture<ToolExecutionResult> validate_future;
+    tool->Validate(validate_future.GetCallback());
+    if (!validate_future.Get().IsOk()) {
+      return base::unexpected(validate_future.Get());
+    }
+    return tool;
   }
 };
 
-// Tests that the tool could not be created if proto fields are missing.
-TEST_F(HistoryToolTest, Create_MissingProtoFields) {
-  // Initialize the action without tab_id.
+// Tests that back navigation validation fails with
+// kTriggeredNavigationBlocked when the target back item URL is disallowed.
+TEST_F(HistoryToolTest, Validate_Back_BlockedByOriginGating) {
+  tool_delegate_.set_navigation_destination_allowed(false);
+  InsertWebStateWithNavigationManager(/*first_item_active=*/false);
+  web::WebState* web_state = browser_->GetWebStateList()->GetWebStateAt(0);
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
   optimization_guide::proto::Action action;
-  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> result =
-      CreateTool(action.back());
-
-  EXPECT_FALSE(result.has_value());
-  EXPECT_EQ(InternalToolErrorCode::kCreationMissingRequiredFields,
-            result.error().internal_code().value());
-
-  result = CreateTool(action.forward());
-  EXPECT_FALSE(result.has_value());
-  EXPECT_EQ(InternalToolErrorCode::kCreationMissingRequiredFields,
-            result.error().internal_code().value());
+  action.mutable_back()->set_tab_id(tab_id);
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
+      CreateToolAndValidate(action.back(), web_state);
+  ASSERT_FALSE(maybe_tool.has_value());
+  EXPECT_EQ(mojom::ActionResultCode::kTriggeredNavigationBlocked,
+            maybe_tool.error().code());
 }
 
-// Tests that the tool could not be created if the tab does not exist.
-TEST_F(HistoryToolTest, Create_NoWebStateForTabId) {
+// Tests that forward navigation validation fails with
+// kTriggeredNavigationBlocked when the target forward item URL is disallowed.
+TEST_F(HistoryToolTest, Validate_Forward_BlockedByOriginGating) {
+  tool_delegate_.set_navigation_destination_allowed(false);
+  InsertWebStateWithNavigationManager(/*first_item_active=*/true);
+  web::WebState* web_state = browser_->GetWebStateList()->GetWebStateAt(0);
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
   optimization_guide::proto::Action action;
-  action.mutable_back()->set_tab_id(1);
-  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> result =
-      CreateTool(action.back());
-  EXPECT_FALSE(result.has_value());
-  EXPECT_EQ(result.error().code(), mojom::ActionResultCode::kTabWentAway);
-  EXPECT_FALSE(result.error().internal_code().has_value());
+  action.mutable_forward()->set_tab_id(tab_id);
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
+      CreateToolAndValidate(action.forward(), web_state);
+  ASSERT_FALSE(maybe_tool.has_value());
+  EXPECT_EQ(mojom::ActionResultCode::kTriggeredNavigationBlocked,
+            maybe_tool.error().code());
 }
 
 // Tests that the tool could not be created if the tab is removed before the
 // tool is executed.
 TEST_F(HistoryToolTest, Execute_TabRemovedBeforeExecution) {
   InsertWebStateWithNavigationManager(/*first_item_active=*/false);
-  int tab_id = browser_->GetWebStateList()
-                   ->GetWebStateAt(0)
-                   ->GetUniqueIdentifier()
-                   .identifier();
+  web::WebState* web_state = browser_->GetWebStateList()->GetWebStateAt(0);
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
   optimization_guide::proto::Action action;
   action.mutable_back()->set_tab_id(tab_id);
   base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
-      CreateTool(action.back());
+      CreateToolAndValidate(action.back(), web_state);
   EXPECT_TRUE(maybe_tool.has_value());
   std::unique_ptr<HistoryTool> tool = std::move(maybe_tool.value());
 
@@ -134,7 +165,7 @@ TEST_F(HistoryToolTest, Execute_Back_Success) {
   optimization_guide::proto::Action action;
   action.mutable_back()->set_tab_id(tab_id);
   base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
-      CreateTool(action.back());
+      CreateToolAndValidate(action.back(), web_state);
   EXPECT_TRUE(maybe_tool.has_value());
 
   std::unique_ptr<HistoryTool> tool = std::move(maybe_tool.value());
@@ -150,14 +181,12 @@ TEST_F(HistoryToolTest, Execute_Back_Success) {
 // navigate back.
 TEST_F(HistoryToolTest, Execute_Back_NotPossible) {
   InsertWebStateWithNavigationManager(/*first_item_active=*/true);
-  int tab_id = browser_->GetWebStateList()
-                   ->GetWebStateAt(0)
-                   ->GetUniqueIdentifier()
-                   .identifier();
+  web::WebState* web_state = browser_->GetWebStateList()->GetWebStateAt(0);
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
   optimization_guide::proto::Action action;
   action.mutable_back()->set_tab_id(tab_id);
   base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
-      CreateTool(action.back());
+      CreateToolAndValidate(action.back(), web_state);
   EXPECT_TRUE(maybe_tool.has_value());
 
   std::unique_ptr<HistoryTool> tool = std::move(maybe_tool.value());
@@ -178,7 +207,7 @@ TEST_F(HistoryToolTest, Execute_Forward_Success) {
   optimization_guide::proto::Action action;
   action.mutable_forward()->set_tab_id(tab_id);
   base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
-      CreateTool(action.forward());
+      CreateToolAndValidate(action.forward(), web_state);
   EXPECT_TRUE(maybe_tool.has_value());
 
   std::unique_ptr<HistoryTool> tool = std::move(maybe_tool.value());
@@ -199,7 +228,7 @@ TEST_F(HistoryToolTest, Execute_Forward_NotPossible) {
   optimization_guide::proto::Action action;
   action.mutable_forward()->set_tab_id(tab_id);
   base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
-      CreateTool(action.forward());
+      CreateToolAndValidate(action.forward(), web_state);
   EXPECT_TRUE(maybe_tool.has_value());
 
   std::unique_ptr<HistoryTool> tool = std::move(maybe_tool.value());
@@ -214,16 +243,14 @@ TEST_F(HistoryToolTest, Execute_Forward_NotPossible) {
 
 TEST_F(HistoryToolTest, GetToolType) {
   InsertWebStateWithNavigationManager(/*first_item_active=*/false);
-  int tab_id = browser_->GetWebStateList()
-                   ->GetWebStateAt(0)
-                   ->GetUniqueIdentifier()
-                   .identifier();
+  web::WebState* web_state = browser_->GetWebStateList()->GetWebStateAt(0);
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
 
   {
     optimization_guide::proto::Action action;
     action.mutable_back()->set_tab_id(tab_id);
     base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult>
-        maybe_tool = CreateTool(action.back());
+        maybe_tool = CreateToolAndValidate(action.back(), web_state);
     ASSERT_TRUE(maybe_tool.has_value());
     EXPECT_EQ(maybe_tool.value()->GetToolType(), ToolType::kBack);
   }
@@ -232,12 +259,268 @@ TEST_F(HistoryToolTest, GetToolType) {
     optimization_guide::proto::Action action;
     action.mutable_forward()->set_tab_id(tab_id);
     base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult>
-        maybe_tool = CreateTool(action.forward());
+        maybe_tool = CreateToolAndValidate(action.forward(), web_state);
     ASSERT_TRUE(maybe_tool.has_value());
     EXPECT_EQ(maybe_tool.value()->GetToolType(), ToolType::kForward);
   }
 }
 
-}  // namespace
+// Test that history navigation fails with kHistoryFailedBeforeCommit
+// when the navigation finishes without committing.
+TEST_F(HistoryToolTest, Execute_Back_FailedBeforeCommit) {
+  CompletingFakeNavigationManager* nav_manager =
+      InsertWebStateWithNavigationManager(/*first_item_active=*/false);
+  nav_manager->set_has_committed(false);
+  web::WebState* web_state = browser_->GetWebStateList()->GetWebStateAt(0);
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
 
+  optimization_guide::proto::Action action;
+  action.mutable_back()->set_tab_id(tab_id);
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
+      CreateToolAndValidate(action.back(), web_state);
+  ASSERT_TRUE(maybe_tool.has_value());
+
+  base::test::TestFuture<ToolExecutionResult> future;
+  maybe_tool.value()->Execute(future.GetCallback());
+
+  ToolExecutionResult result = future.Get();
+  EXPECT_FALSE(result.IsOk());
+  EXPECT_EQ(mojom::ActionResultCode::kHistoryFailedBeforeCommit, result.code());
+}
+
+// Test that history navigation fails with kHistoryErrorPage when the
+// navigation commits with an error.
+TEST_F(HistoryToolTest, Execute_Back_ErrorPage) {
+  CompletingFakeNavigationManager* nav_manager =
+      InsertWebStateWithNavigationManager(/*first_item_active=*/false);
+  nav_manager->set_error([NSError errorWithDomain:@"test"
+                                             code:-1
+                                         userInfo:nil]);
+  web::WebState* web_state = browser_->GetWebStateList()->GetWebStateAt(0);
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
+
+  optimization_guide::proto::Action action;
+  action.mutable_back()->set_tab_id(tab_id);
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
+      CreateToolAndValidate(action.back(), web_state);
+  ASSERT_TRUE(maybe_tool.has_value());
+
+  base::test::TestFuture<ToolExecutionResult> future;
+  maybe_tool.value()->Execute(future.GetCallback());
+
+  ToolExecutionResult result = future.Get();
+  EXPECT_FALSE(result.IsOk());
+  EXPECT_EQ(mojom::ActionResultCode::kHistoryErrorPage, result.code());
+}
+
+// Test that destroying the WebState while history navigation is in progress
+// returns kTabWentAway.
+TEST_F(HistoryToolTest, Execute_WebStateDestroyedDuringNavigation) {
+  CompletingFakeNavigationManager* nav_manager =
+      InsertWebStateWithNavigationManager(/*first_item_active=*/false);
+  nav_manager->set_auto_complete(false);
+  web::WebState* web_state = browser_->GetWebStateList()->GetWebStateAt(0);
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
+
+  optimization_guide::proto::Action action;
+  action.mutable_back()->set_tab_id(tab_id);
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
+      CreateToolAndValidate(action.back(), web_state);
+  ASSERT_TRUE(maybe_tool.has_value());
+
+  base::test::TestFuture<ToolExecutionResult> future;
+  maybe_tool.value()->Execute(future.GetCallback());
+
+  browser_->GetWebStateList()->DetachWebStateAt(0);
+
+  ToolExecutionResult result = future.Get();
+  EXPECT_FALSE(result.IsOk());
+  EXPECT_EQ(mojom::ActionResultCode::kTabWentAway, result.code());
+}
+
+// Test that if GoBack does not start a navigation before timeout,
+// kHistoryNoNavigationsCreated is returned.
+TEST_F(HistoryToolTest, Execute_NoNavigationStarted_ReturnsError) {
+  CompletingFakeNavigationManager* nav_manager =
+      InsertWebStateWithNavigationManager(/*first_item_active=*/false);
+  nav_manager->set_auto_complete(false);
+  web::WebState* web_state = browser_->GetWebStateList()->GetWebStateAt(0);
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
+
+  optimization_guide::proto::Action action;
+  action.mutable_back()->set_tab_id(tab_id);
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
+      CreateToolAndValidate(action.back(), web_state);
+  ASSERT_TRUE(maybe_tool.has_value());
+
+  base::test::TestFuture<ToolExecutionResult> future;
+  maybe_tool.value()->Execute(future.GetCallback());
+
+  task_environment_.FastForwardBy(base::Seconds(10));
+
+  ToolExecutionResult result = future.Get();
+  EXPECT_FALSE(result.IsOk());
+  EXPECT_EQ(mojom::ActionResultCode::kHistoryNoNavigationsCreated,
+            result.code());
+}
+
+// Test that cancelling HistoryTool while navigation is in progress prevents
+// the completion callback from running when navigation later finishes.
+TEST_F(HistoryToolTest, Cancel_DuringNavigation_DoesNotRunCallback) {
+  CompletingFakeNavigationManager* nav_manager =
+      InsertWebStateWithNavigationManager(/*first_item_active=*/false);
+  nav_manager->set_auto_complete(false);
+  auto* web_state = static_cast<web::FakeWebState*>(
+      browser_->GetWebStateList()->GetWebStateAt(0));
+
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
+
+  optimization_guide::proto::Action action;
+  action.mutable_back()->set_tab_id(tab_id);
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
+      CreateToolAndValidate(action.back(), web_state);
+  ASSERT_TRUE(maybe_tool.has_value());
+
+  base::test::TestFuture<ToolExecutionResult> future;
+  maybe_tool.value()->Execute(future.GetCallback());
+  maybe_tool.value()->Cancel();
+
+  web::FakeNavigationContext context;
+  context.SetHasCommitted(true);
+  web_state->OnNavigationStarted(&context);
+  web_state->OnNavigationFinished(&context);
+
+  EXPECT_FALSE(future.IsReady());
+}
+
+// Test that HistoryTool ignores null navigation contexts while waiting for the
+// history navigation to finish.
+TEST_F(HistoryToolTest, Execute_IgnoresNullNavigationContext) {
+  CompletingFakeNavigationManager* nav_manager =
+      InsertWebStateWithNavigationManager(/*first_item_active=*/false);
+  nav_manager->set_auto_complete(false);
+  auto* web_state = static_cast<web::FakeWebState*>(
+      browser_->GetWebStateList()->GetWebStateAt(0));
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
+
+  optimization_guide::proto::Action action;
+  action.mutable_back()->set_tab_id(tab_id);
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
+      CreateToolAndValidate(action.back(), web_state);
+  ASSERT_TRUE(maybe_tool.has_value());
+
+  base::test::TestFuture<ToolExecutionResult> future;
+  maybe_tool.value()->Execute(future.GetCallback());
+
+  web_state->OnNavigationStarted(nullptr);
+  web_state->OnNavigationFinished(nullptr);
+  EXPECT_FALSE(future.IsReady());
+
+  web::FakeNavigationContext valid_context;
+  valid_context.SetHasCommitted(true);
+  web_state->OnNavigationStarted(&valid_context);
+  web_state->OnNavigationFinished(&valid_context);
+  EXPECT_TRUE(future.Get().IsOk());
+}
+
+// Test that HistoryTool ignores same-document navigations while waiting for the
+// history navigation to finish.
+TEST_F(HistoryToolTest, Execute_IgnoresSameDocumentNavigation) {
+  CompletingFakeNavigationManager* nav_manager =
+      InsertWebStateWithNavigationManager(/*first_item_active=*/false);
+  nav_manager->set_auto_complete(false);
+  auto* web_state = static_cast<web::FakeWebState*>(
+      browser_->GetWebStateList()->GetWebStateAt(0));
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
+
+  optimization_guide::proto::Action action;
+  action.mutable_back()->set_tab_id(tab_id);
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
+      CreateToolAndValidate(action.back(), web_state);
+  ASSERT_TRUE(maybe_tool.has_value());
+
+  base::test::TestFuture<ToolExecutionResult> future;
+  maybe_tool.value()->Execute(future.GetCallback());
+
+  web::FakeNavigationContext same_doc_context;
+  same_doc_context.SetIsSameDocument(true);
+  same_doc_context.SetHasCommitted(true);
+  web_state->OnNavigationStarted(&same_doc_context);
+  web_state->OnNavigationFinished(&same_doc_context);
+  EXPECT_FALSE(future.IsReady());
+
+  web::FakeNavigationContext valid_context;
+  valid_context.SetHasCommitted(true);
+  web_state->OnNavigationStarted(&valid_context);
+  web_state->OnNavigationFinished(&valid_context);
+  EXPECT_TRUE(future.Get().IsOk());
+}
+
+// Test that HistoryTool ignores renderer-initiated navigations while waiting
+// for the history navigation to finish.
+TEST_F(HistoryToolTest, Execute_IgnoresRendererInitiatedNavigation) {
+  CompletingFakeNavigationManager* nav_manager =
+      InsertWebStateWithNavigationManager(/*first_item_active=*/false);
+  nav_manager->set_auto_complete(false);
+  auto* web_state = static_cast<web::FakeWebState*>(
+      browser_->GetWebStateList()->GetWebStateAt(0));
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
+
+  optimization_guide::proto::Action action;
+  action.mutable_back()->set_tab_id(tab_id);
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
+      CreateToolAndValidate(action.back(), web_state);
+  ASSERT_TRUE(maybe_tool.has_value());
+
+  base::test::TestFuture<ToolExecutionResult> future;
+  maybe_tool.value()->Execute(future.GetCallback());
+
+  web::FakeNavigationContext renderer_context;
+  renderer_context.SetIsRendererInitiated(true);
+  renderer_context.SetHasCommitted(true);
+  web_state->OnNavigationStarted(&renderer_context);
+  web_state->OnNavigationFinished(&renderer_context);
+  EXPECT_FALSE(future.IsReady());
+
+  web::FakeNavigationContext valid_context;
+  valid_context.SetHasCommitted(true);
+  web_state->OnNavigationStarted(&valid_context);
+  web_state->OnNavigationFinished(&valid_context);
+  EXPECT_TRUE(future.Get().IsOk());
+}
+
+// Test that HistoryTool ignores a concurrent navigation starting while the
+// tracked history navigation is already pending.
+TEST_F(HistoryToolTest, Execute_IgnoresConcurrentNavigation) {
+  CompletingFakeNavigationManager* nav_manager =
+      InsertWebStateWithNavigationManager(/*first_item_active=*/false);
+  nav_manager->set_auto_complete(false);
+  auto* web_state = static_cast<web::FakeWebState*>(
+      browser_->GetWebStateList()->GetWebStateAt(0));
+  int tab_id = web_state->GetUniqueIdentifier().identifier();
+
+  optimization_guide::proto::Action action;
+  action.mutable_back()->set_tab_id(tab_id);
+  base::expected<std::unique_ptr<HistoryTool>, ToolExecutionResult> maybe_tool =
+      CreateToolAndValidate(action.back(), web_state);
+  ASSERT_TRUE(maybe_tool.has_value());
+
+  base::test::TestFuture<ToolExecutionResult> future;
+  maybe_tool.value()->Execute(future.GetCallback());
+
+  web::FakeNavigationContext valid_context;
+  valid_context.SetHasCommitted(true);
+  web_state->OnNavigationStarted(&valid_context);
+
+  web::FakeNavigationContext concurrent_context;
+  concurrent_context.SetHasCommitted(true);
+  web_state->OnNavigationStarted(&concurrent_context);
+  web_state->OnNavigationFinished(&concurrent_context);
+  EXPECT_FALSE(future.IsReady());
+
+  web_state->OnNavigationFinished(&valid_context);
+  EXPECT_TRUE(future.Get().IsOk());
+}
+
+}  // namespace
 }  // namespace actor

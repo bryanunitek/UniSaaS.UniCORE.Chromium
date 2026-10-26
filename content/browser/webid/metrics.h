@@ -5,6 +5,7 @@
 #ifndef CONTENT_BROWSER_WEBID_METRICS_H_
 #define CONTENT_BROWSER_WEBID_METRICS_H_
 
+#include "base/containers/flat_set.h"
 #include "content/browser/webid/idp_network_request_manager.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/webid/identity_request_dialog_controller.h"
@@ -83,7 +84,12 @@ enum class RequestIdTokenStatus {
   kLoginPopupClosedWithoutSignin = 51,
   kSuppressedBySegmentationPlatform = 52,
   kSuccessUsingRedirectTo = 53,
-  kMaxValue = kSuccessUsingRedirectTo
+  kWellKnownBlockedByConnectionAllowlist = 54,
+  kConfigBlockedByConnectionAllowlist = 55,
+  kAccountsBlockedByConnectionAllowlist = 56,
+  kIdTokenBlockedByConnectionAllowlist = 57,
+  kPopupBlockedByConnectionAllowlist = 58,
+  kMaxValue = kPopupBlockedByConnectionAllowlist
 };
 
 // LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmRequestIdTokenStatus)
@@ -123,7 +129,8 @@ enum class IdpSigninMatchStatus {
   kMismatchWithNoContent = 5,
   kMismatchWithInvalidResponse = 6,
   kMismatchWithUnexpectedAccounts = 7,
-  kMaxValue = kMismatchWithUnexpectedAccounts
+  kMismatchWithConnectionAllowlistBlock = 8,
+  kMaxValue = kMismatchWithConnectionAllowlistBlock
 };
 
 // LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmIdpSigninMatchStatus)
@@ -172,23 +179,13 @@ enum class DisconnectStatus {
   kWellKnownInvalidContentType = 17,
   kConfigInvalidContentType = 18,
   kIdpNotPotentiallyTrustworthy = 19,
-  kMaxValue = kIdpNotPotentiallyTrustworthy
+  kWellKnownBlockedByConnectionAllowlist = 20,
+  kConfigBlockedByConnectionAllowlist = 21,
+  kDisconnectBlockedByConnectionAllowlist = 22,
+  kMaxValue = kDisconnectBlockedByConnectionAllowlist
 };
 
 // LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmDisconnectStatus)
-
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-// LINT.IfChange(SetLoginStatusIgnoredReason)
-
-enum class SetLoginStatusIgnoredReason {
-  kFrameTreeLookupFailed = 0,
-  kInFencedFrame = 1,
-  kCrossOrigin = 2,
-  kMaxValue = kCrossOrigin
-};
-
-// LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmSetLoginStatusIgnoredReason)
 
 // This enum describes the result of the error dialog.
 // These values are persisted to logs. Entries should not be renumbered and
@@ -462,9 +459,9 @@ class CONTENT_EXPORT Metrics {
       bool did_show_ui);
 
   // Records whether a nonce was included in the FedCM call.
-  void RecordHasNonce(const std::set<GURL>& idps_with_nonce);
+  void RecordHasNonce(const base::flat_set<GURL>& idps_with_nonce);
   void RecordHasNonceOutsideParamsOnly(
-      const std::set<GURL>& idps_with_nonce_outside_params_only);
+      const base::flat_set<GURL>& idps_with_nonce_outside_params_only);
 
   // Records when the well-known file does not have the required endpoints due
   // to client_metadata being used.
@@ -506,7 +503,6 @@ class CONTENT_EXPORT Metrics {
       bool is_auto_reauthn_setting_blocked,
       bool is_auto_reauthn_embargoed,
       bool is_auto_reauthn_blocked_by_embedder,
-      std::optional<base::TimeDelta> time_from_embargo,
       bool requires_user_mediation);
 
   // Records a sample when an accounts dialog is shown.
@@ -575,10 +571,6 @@ class CONTENT_EXPORT Metrics {
       blink::mojom::RpMode new_request_rp_mode,
       const std::vector<GURL>& requested_providers);
 
-  // Records the time from when a User Info API call, if any, most likely upon
-  // page load, to when the first Active Mode API is called afterwards, if any.
-  void RecordTimeBetweenUserInfoAndActiveModeAPI(base::TimeDelta duration);
-
   // Records the number of accounts matching a given filter, when the FedCM call
   // involved filtering out accounts with that filter. Filter must be one of
   // "LoginHint", "DomainHint", and "AccountLabel".
@@ -607,7 +599,20 @@ class CONTENT_EXPORT Metrics {
   int GetSessionID() const;
 
  private:
-  ukm::SourceId GetOrCreateProviderSourceId(const GURL& provider);
+  // Holds the per-provider UKM builder and dialog/request counters for a
+  // single IDP config URL.
+  struct ProviderInfo {
+    explicit ProviderInfo(ukm::SourceId source_id);
+    ~ProviderInfo();
+
+    ukm::builders::Blink_FedCmIdp fedcm_idp_builder;
+    int accounts_request_sent = 0;
+    int accounts_dialog_shown = 0;
+    int mismatch_dialog_shown = 0;
+  };
+
+  ProviderInfo& GetOrCreateProviderInfo(const GURL& provider);
+  int SumOverProviders(int ProviderInfo::* field) const;
   ukm::builders::Blink_FedCm* GetOrCreateFedCmBuilder();
   ukm::builders::Blink_FedCmIdp* GetOrCreateFedCmIdpBuilder(
       const GURL& provider);
@@ -615,10 +620,8 @@ class CONTENT_EXPORT Metrics {
   // Builder to log the Blink.FedCm UKM event.
   std::unique_ptr<ukm::builders::Blink_FedCm> fedcm_builder_;
 
-  // Map of provider's config URL to its builder to log the Blink.FedCmIdp UKM
-  // event.
-  std::map<GURL, std::unique_ptr<ukm::builders::Blink_FedCmIdp>>
-      provider_to_fedcm_idp_builder_;
+  // Map of provider's config URL to its per-provider UKM builder and counters.
+  std::map<GURL, ProviderInfo> providers_;
 
   // The page's SourceId. Used to log the UKM event Blink.FedCm.
   ukm::SourceId page_source_id_;
@@ -626,28 +629,9 @@ class CONTENT_EXPORT Metrics {
   // Session ID associated with this request to include in metrics recorded.
   int session_id_;
 
-  // The SourceId to be used to log the UKM event Blink.FedCmIdp. Maps a
-  // provider's config URL to its UKM SourceId.
-  std::map<GURL, ukm::SourceId> provider_source_ids_;
-
-  // Map of provider's config URL to its number of accounts request sent.
-  std::map<GURL, int> accounts_request_sent_;
-
-  // Map of provider's config URL to its number of accounts dialogs shown.
-  std::map<GURL, int> accounts_dialog_shown_;
-
-  // Map of provider's config URL to its number of mismatch dialogs shown.
-  std::map<GURL, int> mismatch_dialog_shown_;
-
   // Whether |RecordRequestTokenStatus| has been called.
   bool has_recorded_request_token_status_{false};
 };
-
-// The following metric is recorded for UMA and UKM, but does not require an
-// existing FedCM call. Records metrics associated with a preventSilentAccess()
-// call from the given RenderFrameHost.
-void RecordPreventSilentAccess(const RequesterFrameType& requester_frame_type,
-                               int source_id);
 
 // Records the page scroll Y-axis position upon account selection.
 void RecordAccountSelectionScrollPosition(int source_id,
@@ -670,9 +654,6 @@ void RecordIdpSignOutNetError(int response_code);
 // Records why there's no valid account in the response.
 void RecordAccountsResponseInvalidReason(
     IdpNetworkRequestManager::AccountsResponseInvalidReason reason);
-
-// Records the reason why we ignored an attempt to set a login status.
-void RecordSetLoginStatusIgnoredReason(SetLoginStatusIgnoredReason reason);
 
 // Records the lifecycle state if we fail a FedCM request due to a page not
 // being primary.

@@ -11,6 +11,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "ui/aura/client/drag_drop_delegate.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/window_delegate.h"
@@ -54,6 +55,9 @@ class DesktopNativeCursorManager;
 class DesktopWindowTreeHost;
 class FocusManagerEventHandler;
 class TooltipManagerAura;
+namespace legacy {
+class WindowReorderer;
+}
 class WindowReorderer;
 
 // DesktopNativeWidgetAura is a NativeWidgetPrivate implementation that owns
@@ -106,6 +110,10 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   // Ensures that the correct window is activated/deactivated based on whether
   // we are being activated/deactivated.
   void HandleActivationChanged(bool active);
+
+  // Returns whether `HandleActivationChanged(false)` is in progress, i.e. the
+  // window tree host is losing activation.
+  bool IsHandlingHostDeactivation() const;
 
   // Called before the window tree host will close.
   void OnHostWillClose();
@@ -210,6 +218,8 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   void ClearNativeFocus() override;
   gfx::Rect GetWorkAreaBoundsInScreen() const override;
   bool IsMoveLoopSupported() const override;
+  void PrepareForMoveLoop(Widget::MoveLoopSource source) override;
+  void SetBypassWindowManager(bool bypass) override;
   Widget::MoveLoopResult RunMoveLoop(
       const gfx::Vector2d& drag_offset,
       Widget::MoveLoopSource source,
@@ -367,6 +377,7 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
 
   // Reorders child windows of |window_| associated with a view based on the
   // order of the associated views in the widget's view hierarchy.
+  std::unique_ptr<legacy::WindowReorderer> legacy_window_reorderer_;
   std::unique_ptr<WindowReorderer> window_reorderer_;
 
   // See class documentation for Widget in widget.h for a note about type.
@@ -380,6 +391,9 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
   // generate them in some circumstances after a key press.
   gfx::Point last_mouse_loc_;
 #endif
+
+  base::ScopedObservation<aura::WindowTreeHost, aura::WindowTreeHostObserver>
+      host_observation_{this};
 
   // The following factory is used to provide references to the
   // DesktopNativeWidgetAura instance and used for calls to close to run drop

@@ -19,29 +19,24 @@ def CheckChangeOnCommit(input_api, output_api):
 
 def _CommonChecks(input_api, output_api):
   """Does all presubmit checks for chekteamtags."""
+  if not input_api.HasAffectedFiles(extensions='.py'):
+    return []
   results = []
   results.extend(_RunUnitTests(input_api, output_api))
-  results.extend(_RunPyLint(input_api, output_api))
   return results
 
 
 def _RunUnitTests(input_api, output_api):
   """Runs unit tests for checkteamtags."""
   repo_root = input_api.change.RepositoryRoot()
-  checkteamtags_dir = input_api.os_path.join(repo_root, 'tools',
-                                             'checkteamtags')
+  checkteamtags_dir = input_api.os_path.join(
+    repo_root, 'tools', 'checkteamtags'
+  )
   test_runner = input_api.os_path.join(checkteamtags_dir, 'run_tests')
   return_code = input_api.subprocess.call(
-      [input_api.python3_executable, test_runner])
+    [input_api.python3_executable, test_runner]
+  )
   if return_code:
     message = 'Checkteamtags unit tests did not all pass.'
     return [output_api.PresubmitError(message)]
   return []
-
-
-def _RunPyLint(input_api, output_api):
-  """Runs unit tests for checkteamtags."""
-  tests = input_api.canned_checks.GetPylint(input_api,
-                                            output_api,
-                                            version='2.7')
-  return input_api.RunTests(tests)

@@ -28,11 +28,11 @@
 #include "ash/public/cpp/app_list/app_list_features.h"
 #include "ash/public/cpp/app_list/app_list_model_delegate.h"
 #include "ash/public/cpp/metrics_util.h"
-#include "ash/public/cpp/style/color_provider.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_id.h"
-#include "ash/style/system_shadow.h"
+#include "ash/style/style_util.h"
+#include "ash/style/system_decoration.h"
 #include "base/barrier_closure.h"
 #include "base/check.h"
 #include "base/functional/bind.h"
@@ -46,6 +46,7 @@
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/events/event.h"
 #include "ui/events/types/event_type.h"
@@ -145,7 +146,8 @@ class BackgroundAnimation : public AppListFolderView::Animation,
     const SkColor from_color = show_ ? bubble_color : background_color;
     const SkColor to_color = show_ ? background_color : bubble_color;
 
-    animating_view_->layer()->SetColor(from_color);
+    animating_view_->layer()->AsSolidColor()->SetColor(
+        SkColor4f::FromColor(from_color));
     animating_view_->layer()->SetClipRect(from_rect);
     animating_view_->layer()->SetRoundedCornerRadius(
         gfx::RoundedCornersF(from_radius));
@@ -157,7 +159,8 @@ class BackgroundAnimation : public AppListFolderView::Animation,
     settings.SetTransitionDuration(kFolderTransitionDuration);
     settings.SetTweenType(gfx::Tween::FAST_OUT_SLOW_IN);
     settings.AddObserver(this);
-    animating_view_->layer()->SetColor(to_color);
+    animating_view_->layer()->AsSolidColor()->SetColor(
+        SkColor4f::FromColor(to_color));
     animating_view_->layer()->SetClipRect(to_rect);
     animating_view_->layer()->SetRoundedCornerRadius(
         gfx::RoundedCornersF(to_radius));
@@ -198,8 +201,7 @@ class BackgroundAnimation : public AppListFolderView::Animation,
         clip_rect.IsEmpty() ? background_bounds
                             : clip_rect + background_bounds.OffsetFromOrigin();
     shadow_->SetContentBounds(content_bounds);
-    shadow_->SetRoundedCornerRadius(
-        background_layer->rounded_corner_radii().upper_left());
+    shadow_->SetRoundedCorners(background_layer->rounded_corner_radii());
   }
 
   // True if opening the folder.
@@ -208,7 +210,7 @@ class BackgroundAnimation : public AppListFolderView::Animation,
 
   const raw_ptr<AppListFolderView> folder_view_;
   const raw_ptr<views::View> animating_view_;
-  const raw_ptr<SystemShadow> shadow_;
+  const raw_ptr<SystemDecoration> shadow_;
 
   // Observes the rect clip change of background view.
   base::ScopedObservation<views::View, views::ViewObserver>
@@ -661,13 +663,14 @@ AppListFolderView::AppListFolderView(AppListFolderController* folder_controller,
   // such changes.
   background_view_ = AddChildView(std::make_unique<views::View>());
   background_view_->SetPaintToLayer(ui::LAYER_TEXTURED);
+  background_view_->layer()->SetName("AppListFolderView:Background");
 
   if (chromeos::features::IsSystemBlurEnabled()) {
     background_view_->layer()->SetFillsBoundsOpaquely(false);
     background_view_->layer()->SetBackgroundBlur(
-        ColorProvider::kBackgroundBlurSigma);
+        StyleUtil::kBackgroundBlurSigma);
     background_view_->layer()->SetBackdropFilterQuality(
-        ColorProvider::kBackgroundBlurQuality);
+        StyleUtil::kBackgroundBlurQuality);
   }
 
   background_view_->layer()->SetRoundedCornerRadius(
@@ -686,25 +689,26 @@ AppListFolderView::AppListFolderView(AppListFolderController* folder_controller,
 
   animating_background_ = AddChildView(std::make_unique<views::View>());
   animating_background_->SetPaintToLayer(ui::LAYER_SOLID_COLOR);
+  animating_background_->layer()->SetName(
+      "AppListFolderView:AnimatingBackground");
   if (chromeos::features::IsSystemBlurEnabled()) {
     animating_background_->layer()->SetBackgroundBlur(
-        ColorProvider::kBackgroundBlurSigma);
+        StyleUtil::kBackgroundBlurSigma);
     animating_background_->layer()->SetBackdropFilterQuality(
-        ColorProvider::kBackgroundBlurQuality);
+        StyleUtil::kBackgroundBlurQuality);
   }
 
   animating_background_->SetVisible(false);
 
   contents_container_ = AddChildView(std::make_unique<views::View>());
   contents_container_->SetPaintToLayer(ui::LAYER_NOT_DRAWN);
+  contents_container_->layer()->SetName("AppListFolderView:ContentsContainer");
 
   CreateScrollableAppsGrid(tablet_mode);
 
   // Create a shadow under `background_view_`.
-  shadow_ = SystemShadow::CreateShadowOnNinePatchLayer(
-      SystemShadow::Type::kElevation12,
-      base::BindRepeating(&AppListFolderView::OnShadowLayerRecreated,
-                          base::Unretained(this)));
+  shadow_ = SystemDecoration::CreateShadowOnNinePatchLayer(
+      SystemDecoration::ShadowType::kElevation12);
   background_view_->AddLayerToRegion(shadow_->GetLayer(),
                                      views::LayerRegion::kBelow);
 
@@ -1055,12 +1059,6 @@ void AppListFolderView::UpdatePreferredBounds() {
 
 void AppListFolderView::UpdateShadowBounds() {
   shadow_->SetContentBounds(background_view_->layer()->bounds());
-}
-
-void AppListFolderView::OnShadowLayerRecreated(ui::Layer* old_layer,
-                                               ui::Layer* new_layer) {
-  background_view_->RemoveLayerFromRegions(old_layer);
-  background_view_->AddLayerToRegion(new_layer, views::LayerRegion::kBelow);
 }
 
 int AppListFolderView::GetYOffsetForFolder() {

@@ -7,11 +7,11 @@ package org.chromium.chrome.browser.autofill.editors.common.dropdown_field;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 
 import static org.chromium.chrome.browser.autofill.editors.common.dropdown_field.DropdownFieldProperties.DROPDOWN_ALL_KEYS;
 import static org.chromium.chrome.browser.autofill.editors.common.dropdown_field.DropdownFieldProperties.DROPDOWN_KEY_VALUE_LIST;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.ERROR_MESSAGE;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.FOCUSED;
 import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.IS_REQUIRED;
 import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.LABEL;
 import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.VALIDATOR;
@@ -20,24 +20,25 @@ import static org.chromium.chrome.browser.autofill.editors.common.field.FieldPro
 
 import android.app.Activity;
 import android.text.TextUtils;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import com.google.android.material.textfield.TextInputEditText;
 
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
-import org.mockito.junit.MockitoJUnit;
-import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 
-import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.DisabledTest;
+import org.chromium.base.test.util.PayloadCallbackHelper;
 import org.chromium.chrome.browser.autofill.editors.common.field.EditorFieldValidator;
 import org.chromium.chrome.browser.autofill.editors.utils.TestUtils;
 import org.chromium.components.autofill.DropdownKeyValue;
+import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
@@ -48,17 +49,17 @@ import java.util.List;
 /** Unit test for {@link DropdownFieldView}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public final class DropdownFieldViewUnitTest {
+    private final PayloadCallbackHelper<String> mValueChangedCallback =
+            new PayloadCallbackHelper<>();
+
     private Activity mActivity;
     private ViewGroup mContentView;
 
-    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
-
-    @Mock private Callback<String> mValueChangedCallback;
-
     @Before
     public void setUp() {
-        mActivity = Robolectric.setupActivity(Activity.class);
+        mActivity = Robolectric.buildActivity(TestActivity.class).setup().get();
         mContentView = new LinearLayout(mActivity);
+        mActivity.setContentView(mContentView);
     }
 
     private PropertyModel buildDefaultPropertyModel() {
@@ -70,7 +71,7 @@ public final class DropdownFieldViewUnitTest {
                 .with(IS_REQUIRED, false)
                 .with(DROPDOWN_KEY_VALUE_LIST, keyValues)
                 .with(LABEL, "label")
-                .with(VALUE_CHANGED_CALLBACK, mValueChangedCallback)
+                .with(VALUE_CHANGED_CALLBACK, mValueChangedCallback::notifyCalled)
                 .build();
     }
 
@@ -96,7 +97,8 @@ public final class DropdownFieldViewUnitTest {
         DropdownFieldView field = attachDropdownFieldView(model);
 
         TestUtils.setDropdownValue(field, "value2");
-        verify(mValueChangedCallback, times(1)).onResult("key2");
+        assertEquals(1, mValueChangedCallback.getCallCount());
+        assertEquals("key2", mValueChangedCallback.getOnlyPayloadBlocking());
     }
 
     /** Test that no error message is displayed if there aren't any validation errors. */
@@ -193,5 +195,50 @@ public final class DropdownFieldViewUnitTest {
         assertFalse(field.getLabel().isImportantForAccessibility());
 
         assertEquals("label", field.getDropdown().getContentDescription());
+    }
+
+    /** Test that the error message is correctly set and cleared. */
+    @Test
+    public void testSetErrorMessage() {
+        PropertyModel model = buildDefaultPropertyModel();
+        DropdownFieldView field = attachDropdownFieldView(model);
+
+        TextView errorLabel = field.getErrorLabelForTests();
+        assertEquals(View.GONE, errorLabel.getVisibility());
+
+        model.set(ERROR_MESSAGE, "Error message");
+        assertEquals(View.VISIBLE, errorLabel.getVisibility());
+        assertEquals("Error message", errorLabel.getText().toString());
+
+        model.set(ERROR_MESSAGE, null);
+        assertEquals(View.GONE, errorLabel.getVisibility());
+        assertTrue(TextUtils.isEmpty(errorLabel.getText()));
+
+        // Show the error message again and make sure that an empty string hides the error message
+        // as well.
+        model.set(ERROR_MESSAGE, "Error message");
+        assertEquals(View.VISIBLE, errorLabel.getVisibility());
+        assertEquals("Error message", errorLabel.getText().toString());
+
+        model.set(ERROR_MESSAGE, "");
+        assertEquals(View.GONE, errorLabel.getVisibility());
+        assertTrue(TextUtils.isEmpty(errorLabel.getText()));
+    }
+
+    /**
+     * Test that focusing the dropdown, then focusing a different field clears the FOCUSED property.
+     */
+    @Test
+    public void testFocus() {
+        View otherFocusableField = new TextInputEditText(mActivity);
+        mContentView.addView(otherFocusableField);
+
+        PropertyModel model = buildDefaultPropertyModel();
+        attachDropdownFieldView(model);
+        model.set(FOCUSED, true);
+
+        otherFocusableField.requestFocus();
+        assertTrue(otherFocusableField.hasFocus());
+        assertFalse(model.get(FOCUSED));
     }
 }

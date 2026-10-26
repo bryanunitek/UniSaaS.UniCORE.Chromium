@@ -15,6 +15,9 @@ template("mojom_rust") {
                            "jinja2_sources",
                            "parser_target_name",
                            "common_generator_args",
+                           "message_scrambling_inputs",
+                           "message_scrambling_args",
+                           "scramble_message_ids",
                            "output_file_base_paths",
                            "variant_suffix",
                            "output_visibility",
@@ -40,6 +43,23 @@ template("mojom_rust") {
       sources_for_rust_metadata += [ rebase_path(s, "//") ]
     }
 
+    if (defined(rust_typemaps)) {
+      _rust_typemaps = []
+      foreach(typemap, rust_typemaps) {
+        _typemap = {
+        }
+        _typemap = typemap
+        if (defined(typemap.traits_file)) {
+          _typemap.traits_file =
+              rebase_path(typemap.traits_file, root_build_dir)
+        }
+        _rust_typemaps += [ _typemap ]
+      }
+      write_file("$target_gen_dir/${base_name}_typemap.json",
+                 _rust_typemaps,
+                 "json")
+    }
+
     # Contains metadata for this target's mojom dependencies.
     group("${base_name}_meta") {
       deps = [ ":${base_name}_deps_meta" ]
@@ -48,6 +68,9 @@ template("mojom_rust") {
           {
             target_name = get_label_info(":${base_name}", "label_no_toolchain")
             mojom_sources = sources_for_rust_metadata
+            if (defined(_rust_typemaps)) {
+              typemaps = _rust_typemaps
+            }
           },
         ]
       }
@@ -64,22 +87,6 @@ template("mojom_rust") {
       visibility = [ ":$rust_generator_target_name" ]
     }
 
-    if (defined(rust_typemaps)) {
-      _rust_typemaps = []
-      foreach(typemap, rust_typemaps) {
-        _typemap = {
-        }
-        _typemap = typemap
-        if (defined(typemap.traits_file)) {
-          _typemap.traits_file = rebase_path(typemap.traits_file, "//")
-        }
-        _rust_typemaps += [ _typemap ]
-      }
-      write_file("$target_gen_dir/${base_name}_typemap.json",
-                 _rust_typemaps,
-                 "json")
-    }
-
     action(rust_generator_target_name) {
       script = mojom_generator_script
       inputs = mojom_generator_sources + jinja2_sources +
@@ -87,15 +94,12 @@ template("mojom_rust") {
       if (defined(rust_typemaps)) {
         inputs += [ "$target_gen_dir/${base_name}_typemap.json" ]
       }
-      sources =
-          sources_list +
-          # Not totally sure if this really belongs here, but better to be safe
-          [ "$root_gen_dir/mojo/public/tools/bindings/rust_templates.zip" ]
+      sources = sources_list
 
       deps = [
         ":$parser_target_name",
         ":${base_name}_dep_info",
-        "//mojo/public/tools/bindings:precompile_templates",
+        "//mojo/public/tools/bindings:precompile_rust_templates",
       ]
       if (defined(invoker.parser_deps)) {
         deps += invoker.parser_deps
@@ -125,6 +129,10 @@ template("mojom_rust") {
         args += [ "--typemap=" +
                   rebase_path("$target_gen_dir/${base_name}_typemap.json",
                               root_build_dir) ]
+      }
+      if (!defined(scramble_message_ids) || scramble_message_ids) {
+        inputs += message_scrambling_inputs
+        args += message_scrambling_args
       }
     }
 
@@ -157,13 +165,6 @@ template("mojom_rust") {
       crate_root = rust_crate_root_librs
       sources = [ rust_crate_root_librs ] +
                 get_target_outputs(":$rust_generator_target_name")
-      if (defined(rust_typemaps)) {
-        foreach(typemap, rust_typemaps) {
-          if (defined(typemap.traits_file)) {
-            sources += [ typemap.traits_file ]
-          }
-        }
-      }
       deps = [
         ":$rust_crate_root_target_name",
         ":$rust_generator_target_name",
@@ -175,6 +176,19 @@ template("mojom_rust") {
       ]
 
       public_deps = []
+      if (defined(rust_typemaps)) {
+        foreach(typemap, rust_typemaps) {
+          if (defined(typemap.traits_file)) {
+            sources += [ typemap.traits_file ]
+          }
+          if (defined(typemap.deps)) {
+            deps += typemap.deps
+          }
+          if (defined(typemap.public_deps)) {
+            public_deps += typemap.public_deps
+          }
+        }
+      }
       foreach(d, all_deps) {
         full_name = get_label_info(d, "label_no_toolchain")
         public_deps += [ "${full_name}_rust" ]
@@ -208,6 +222,9 @@ template("mojom_rust") {
                  "jinja2_sources",
                  "parser_target_name",
                  "common_generator_args",
+                 "message_scrambling_inputs",
+                 "message_scrambling_args",
+                 "scramble_message_ids",
                  "output_file_base_paths",
                  "variant_suffix",
                ])

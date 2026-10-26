@@ -24,6 +24,8 @@ export class TestGlicBrowserProxy extends TestBrowserProxy implements
   constructor() {
     super([
       'getActorLoginPermissions',
+      'startObservingActorLoginPermissions',
+      'stopObservingActorLoginPermissions',
       'revokeActorLoginPermission',
       'setGlicOsLauncherEnabled',
       'getGlicShortcut',
@@ -39,6 +41,7 @@ export class TestGlicBrowserProxy extends TestBrowserProxy implements
       'setWebActuationEnabled',
       'getExperimentalTriggeringEnabled',
       'setExperimentalTriggeringEnabled',
+      'onHotkeyScopeSettingsChange',
     ]);
   }
 
@@ -149,6 +152,14 @@ export class TestGlicBrowserProxy extends TestBrowserProxy implements
     return Promise.resolve(this.actorLoginPermissions_);
   }
 
+  startObservingActorLoginPermissions() {
+    this.methodCalled('startObservingActorLoginPermissions');
+  }
+
+  stopObservingActorLoginPermissions() {
+    this.methodCalled('stopObservingActorLoginPermissions');
+  }
+
   setActorLoginPermissions(permissions: LoginPermission[]) {
     this.actorLoginPermissions_ = permissions;
   }
@@ -170,5 +181,9 @@ export class TestGlicBrowserProxy extends TestBrowserProxy implements
   setGlicSelectionShortcut(shortcut: string) {
     this.methodCalled('setGlicSelectionShortcut', shortcut);
     return Promise.resolve();
+  }
+
+  onHotkeyScopeSettingsChange(isGlobal: boolean) {
+    this.methodCalled('onHotkeyScopeSettingsChange', isGlobal);
   }
 }

@@ -17,11 +17,14 @@ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.regional_capabilities.RegionalCapabilitiesServiceFactory;
 import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
 import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
+import org.chromium.chrome.browser.sync.SyncSettingsUtils;
 import org.chromium.chrome.browser.ui.signin.GoogleActivityController;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
 import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
@@ -89,7 +92,8 @@ public class PersonalizeGoogleServicesSettings extends ChromeBaseSettingsFragmen
             if (SettingsIndexData.getInstance() != null) {
                 SettingsIndexData.getInstance().setNeedsIndexing();
             }
-            SettingsNavigationFactory.createSettingsNavigation().finishCurrentSettings(this);
+            SettingsNavigationFactory.createSettingsNavigation(requireActivity())
+                    .finishCurrentSettings(this);
             return;
         }
 
@@ -113,6 +117,10 @@ public class PersonalizeGoogleServicesSettings extends ChromeBaseSettingsFragmen
         RecordUserAction.record("Signin_AccountSettings_LinkedGoogleServicesClicked");
     }
 
+    private static boolean isEeaChoiceCountry(Profile profile) {
+        return RegionalCapabilitiesServiceFactory.getForProfile(profile).isInEeaCountry();
+    }
+
     @Override
     public @AnimationType int getAnimationType() {
         return AnimationType.PROPERTY;
@@ -120,6 +128,13 @@ public class PersonalizeGoogleServicesSettings extends ChromeBaseSettingsFragmen
 
     public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
             new ChromeBaseSearchIndexProvider(
-                    PersonalizeGoogleServicesSettings.class.getName(),
-                    R.xml.personalize_google_services_preferences);
+                    PersonalizeGoogleServicesSettings.class.getName(), 0) {
+                @Override
+                public int getXmlRes(Profile profile) {
+                    if (!SignInPreference.isSignedIn(profile) || !isEeaChoiceCountry(profile)) {
+                        return 0;
+                    }
+                    return R.xml.personalize_google_services_preferences;
+                }
+            };
 }

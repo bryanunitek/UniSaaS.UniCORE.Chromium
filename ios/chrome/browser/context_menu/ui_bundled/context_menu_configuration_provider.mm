@@ -31,13 +31,14 @@
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_service.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_service_factory.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_tab_helper.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_availability.h"
 #import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
 #import "ios/chrome/browser/intelligence/bwg/utils/gemini_feature_availability.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/lens/ui_bundled/lens_availability.h"
 #import "ios/chrome/browser/lens/ui_bundled/lens_entrypoint.h"
+#import "ios/chrome/browser/menu/public/menu_histograms.h"
 #import "ios/chrome/browser/menu/ui_bundled/browser_action_factory.h"
-#import "ios/chrome/browser/menu/ui_bundled/menu_histograms.h"
 #import "ios/chrome/browser/net/model/crurl.h"
 #import "ios/chrome/browser/photos/model/photos_availability.h"
 #import "ios/chrome/browser/photos/model/photos_metrics.h"
@@ -57,6 +58,7 @@
 #import "ios/chrome/browser/shared/public/commands/activity_service_commands.h"
 #import "ios/chrome/browser/shared/public/commands/activity_service_share_url_command.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/country_code_picker_commands.h"
 #import "ios/chrome/browser/shared/public/commands/enhanced_calendar_commands.h"
 #import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/lens_commands.h"
@@ -218,7 +220,7 @@ NSString* const kAlertAccessibilityIdentifier = @"AlertAccessibilityIdentifier";
   const bool isOffTheRecord = self.browser->GetProfile()->IsOffTheRecord();
 
   const GURL& lastCommittedURL = webState->GetLastCommittedURL();
-  web::Referrer referrer(lastCommittedURL, web::ReferrerPolicyDefault);
+  web::Referrer referrer(lastCommittedURL, params.referrer_policy);
 
   NSMutableArray<UIMenuElement*>* menuElements = [[NSMutableArray alloc] init];
   NSString* menuTitle = nil;
@@ -280,17 +282,22 @@ NSString* const kAlertAccessibilityIdentifier = @"AlertAccessibilityIdentifier";
   // This check skips every internal context menu entry. This may need to be
   // changed to only affect entity detection entries.
   if (IsEntitySelectionAllowedForURL(webState)) {
+    CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
+    ContextMenuHandlers* contextMenuHandlers =
+        [[ContextMenuHandlers alloc] init];
+    contextMenuHandlers.miniMapHandler =
+        HandlerForProtocol(dispatcher, MiniMapCommands);
+    contextMenuHandlers.unitConversionHandler =
+        HandlerForProtocol(dispatcher, UnitConversionCommands);
+    contextMenuHandlers.enhancedCalendarHandler =
+        HandlerForProtocol(dispatcher, EnhancedCalendarCommands);
+    contextMenuHandlers.countryCodeHandler =
+        HandlerForProtocol(dispatcher, CountryCodePickerCommands);
     // Insert any provided menu items. Do after Link and/or Image to allow
     // inserting at beginning or adding to end.
     ElementsToAddToContextMenu* result =
         ios::provider::GetContextMenuElementsToAdd(
-            webState, params, self.baseViewController,
-            HandlerForProtocol(self.browser->GetCommandDispatcher(),
-                               MiniMapCommands),
-            HandlerForProtocol(self.browser->GetCommandDispatcher(),
-                               UnitConversionCommands),
-            HandlerForProtocol(self.browser->GetCommandDispatcher(),
-                               EnhancedCalendarCommands));
+            webState, params, self.baseViewController, contextMenuHandlers);
     if (result && result.elements) {
       [menuElements addObjectsFromArray:result.elements];
       menuTitle = result.title;
@@ -354,6 +361,7 @@ NSString* const kAlertAccessibilityIdentifier = @"AlertAccessibilityIdentifier";
       [[ImagePreviewViewController alloc]
           initWithSrcURL:net::NSURLWithGURL(params.src_url)
                 webState:webState
+          referrerPolicy:params.referrer_policy
                  frameID:base::SysUTF8ToNSString(params.frame_id)
              frameOrigin:params.frame_security_origin];
   [previewViewController loadPreview];
@@ -575,9 +583,6 @@ NSString* const kAlertAccessibilityIdentifier = @"AlertAccessibilityIdentifier";
 
   // Launch the Gemini experience with an image attached.
   UIMenuElement* geminiElement = nil;
-  GeminiService* geminiService =
-      GeminiServiceFactory::GetForProfile(self.browser->GetProfile());
-  GeminiTabHelper* geminiTabHelper = GeminiTabHelper::FromWebState(webState);
   // To show the Gemini element, we check three distinct layers of availability:
   // - Feature-level (`IsFeatureAvailable`): Handles fine-grained or regulatory
   //   restrictions for specific features like ImageRemix, even when Gemini is
@@ -587,16 +592,12 @@ NSString* const kAlertAccessibilityIdentifier = @"AlertAccessibilityIdentifier";
   // - Profile-level (`IsProfileEligibleForGemini`): Checks account-wide
   //   eligibility such as enterprise policies, workspace restrictions, and
   //   login state.
-  BOOL canShowGeminiElement =
-      gemini::IsFeatureAvailable(gemini::Feature::kImageRemix,
-                                 self.browser->GetProfile()) &&
-      geminiTabHelper && geminiTabHelper->IsGeminiAvailableForWebState() &&
-      geminiTabHelper->IsContextualEntryPointAllowed() && geminiService &&
-      geminiService->IsProfileEligibleForGemini();
-  BOOL geminiAboveSearch = IsGeminiImageRemixToolShowAboveSearchImageEnabled();
-  BOOL geminiBelowSearch = IsGeminiImageRemixToolShowBelowSearchImageEnabled();
-
-  if (canShowGeminiElement && (geminiAboveSearch || geminiBelowSearch)) {
+  // - Quota exhaustion: Disables the element while keeping it visible with a
+  //   refill reset subtitle.
+  gemini::GeminiAvailabilityResult geminiAvailability =
+      gemini::IsGeminiAvailable(gemini::EntryPoint::ImageContextMenu,
+                                self.browser->GetProfile(), webState);
+  if (geminiAvailability.visible) {
     RecordImageRemixContextMenuEntryPointShown();
 
     ProceduralBlock geminiElementCallback = ^{
@@ -604,22 +605,22 @@ NSString* const kAlertAccessibilityIdentifier = @"AlertAccessibilityIdentifier";
                               referrer:referrer
                                 params:params];
     };
-    geminiElement = [actionFactory
+    UIAction* geminiAction = [actionFactory
         actionToOpenImageInGeminiWithBlock:geminiElementCallback];
-  }
-
-  // Display the gemini element either above or below the search image
-  // element based on the flags.
-  if (geminiElement && geminiAboveSearch) {
+    if (!geminiAvailability.enabled) {
+      geminiAction.attributes = UIMenuElementAttributesDisabled;
+      // Add a quota specific subtitle when the entry point is disabled due to
+      // quota exhaustion.
+      if (geminiAvailability.disabled_reason ==
+          gemini::EntryPointDisabledReason::kQuotaExhausted) {
+        geminiAction.subtitle = geminiAvailability.disabled_reason_subtitle;
+      }
+    }
+    geminiElement = geminiAction;
     [imageMenuElements addObject:geminiElement];
   }
 
   [imageMenuElements addObjectsFromArray:imageSearchingElements];
-
-  // Ensure we don't show gemini twice if both flags are enabled.
-  if (geminiElement && geminiBelowSearch && !geminiAboveSearch) {
-    [imageMenuElements addObject:geminiElement];
-  }
 
   // Share Image.
   // Shares the URL of the image and not the image itself.
@@ -651,6 +652,8 @@ NSString* const kAlertAccessibilityIdentifier = @"AlertAccessibilityIdentifier";
       imageURL, referrer, params.frame_id, params.frame_security_origin,
       ^(NSData* rawData) {
         // Arbitrary web image data requires sanitization before use.
+        // TODO(b/541315801): C2PA: Web images could have C2PA metadata;
+        // candidate to pass raw bytes.
         [weakSelf
             sanitizeImageData:rawData
                      mimeType:kJPEGImageMimeType
@@ -914,8 +917,8 @@ NSString* const kAlertAccessibilityIdentifier = @"AlertAccessibilityIdentifier";
   [imageSavingElements addObject:saveImageToPhotosAction];
 
   // Save Image Menu.
-  UIImage* image = DefaultSymbolWithPointSize(kPhotoBadgeArrowDownSymbol,
-                                              kSymbolActionPointSize);
+  UIImage* image =
+      SymbolWithPointSize(SymbolPhotoBadgeArrowDown, kSymbolActionPointSize);
   UIMenu* saveImageInMenu = [UIMenu
       menuWithTitle:l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_SAVE_IMAGE_IN)
               image:image
@@ -1189,7 +1192,10 @@ NSString* const kAlertAccessibilityIdentifier = @"AlertAccessibilityIdentifier";
   GeminiStartupState* state = [[GeminiStartupState alloc]
       initWithEntryPoint:gemini::EntryPoint::ImageContextMenu];
   state.imageAttachment = image;
-  [handler startGeminiFlowWithStartupState:state];
+  [handler startGeminiEntryFlowWithStartupState:state
+                             baseViewController:self.baseViewController
+                       showSnackbarOnCompletion:YES
+                                     completion:nil];
 }
 
 @end

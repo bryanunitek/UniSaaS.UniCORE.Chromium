@@ -14,13 +14,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
-import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece.Type.DIVIDER;
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece.Type.FOOTER_COMMAND;
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece.Type.PASSWORD_INFO;
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece.Type.TITLE;
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece.getType;
+import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabProperties.IS_DEFAULT_A11Y_FOCUS_REQUESTED;
 import static org.chromium.chrome.browser.keyboard_accessory.utils.ManualFillingMetricsRecorder.UMA_KEYBOARD_ACCESSORY_ACTION_IMPRESSION;
 import static org.chromium.chrome.browser.keyboard_accessory.utils.ManualFillingMetricsRecorder.UMA_KEYBOARD_ACCESSORY_TOGGLE_CLICKED;
 import static org.chromium.chrome.browser.keyboard_accessory.utils.ManualFillingMetricsRecorder.UMA_KEYBOARD_ACCESSORY_TOGGLE_IMPRESSION;
@@ -34,9 +34,9 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -51,38 +51,37 @@ import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.OptionToggle;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.UserInfo;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.modelutil.ListObservable;
 
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Controller tests for the password accessory sheet. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class PasswordAccessorySheetControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Mock private AccessorySheetTabView mMockView;
     @Mock private ListObservable.ListObserver<Void> mMockItemListObserver;
     @Mock private Profile mProfile;
     @Mock private Callback<Integer> mMockObserver;
 
+    private AccessorySheetTabView mView;
     private PasswordAccessorySheetCoordinator mCoordinator;
     private AccessorySheetTabItemsModel mSheetDataPieces;
 
     @Before
     public void setUp() {
-        when(mMockView.getContext()).thenReturn(ContextUtils.getApplicationContext());
+        mView = new AccessorySheetTabView(ContextUtils.getApplicationContext(), null);
         mCoordinator =
                 new PasswordAccessorySheetCoordinator(
-                        RuntimeEnvironment.application, mProfile, null);
+                        RuntimeEnvironment.getApplication(), mProfile, null);
         assertNotNull(mCoordinator);
         mSheetDataPieces = mCoordinator.getSheetDataPiecesForTesting();
     }
 
     @After
     public void tearDown() {
-        ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(false);
+        AccessibilityStateTestHelper.setAccessibilityEnabledForTesting(false);
     }
 
     @Test
@@ -94,24 +93,22 @@ public class PasswordAccessorySheetControllerTest {
 
     @Test
     public void testSetsViewAdapterOnTabCreation() {
-        when(mMockView.getParent()).thenReturn(mMockView);
         KeyboardAccessoryData.Tab tab = mCoordinator.getTab();
         assertNotNull(tab);
         assertNotNull(tab.getListener());
-        tab.getListener().onTabCreated(mMockView);
-        verify(mMockView).setAdapter(any());
+        tab.getListener().onTabCreated(mView);
+        assertNotNull(mView.getAdapter());
     }
 
     @Test
     public void testRequestDefaultFocus() {
-        ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(true);
+        AccessibilityStateTestHelper.setAccessibilityEnabledForTesting(true);
 
-        when(mMockView.getParent()).thenReturn(mMockView);
         KeyboardAccessoryData.Tab tab = mCoordinator.getTab();
-        tab.getListener().onTabCreated(mMockView);
+        tab.getListener().onTabCreated(mView);
         tab.getListener().onTabShown();
 
-        verify(mMockView).requestDefaultA11yFocus();
+        assertTrue(mCoordinator.mModel.get(IS_DEFAULT_A11Y_FOCUS_REQUESTED));
     }
 
     @Test
@@ -163,7 +160,8 @@ public class PasswordAccessorySheetControllerTest {
 
         // Providing a User Info doesn't add a separator, even with footers present:
         testData.getUserInfoList().add(new UserInfo("example.com", true));
-        testData.getFooterCommands().add(new FooterCommand("Manage passwords", result -> {}));
+        testData.getFooterCommands()
+                .add(new FooterCommand("Manage passwords", CallbackUtils.emptyCallback()));
         testProvider.set(testData);
 
         assertThat(mSheetDataPieces.size(), is(2));
@@ -183,7 +181,8 @@ public class PasswordAccessorySheetControllerTest {
         mCoordinator.registerDataProvider(testProvider);
 
         // Providing only FooterCommands and no User Info shows the title as empty state:
-        testData.getFooterCommands().add(new FooterCommand("Manage passwords", result -> {}));
+        testData.getFooterCommands()
+                .add(new FooterCommand("Manage passwords", CallbackUtils.emptyCallback()));
         testProvider.set(testData);
 
         assertThat(mSheetDataPieces.size(), is(3));
@@ -336,7 +335,7 @@ public class PasswordAccessorySheetControllerTest {
                         "Save passwords for this site",
                         toggleEnabled,
                         AccessoryAction.TOGGLE_SAVE_PASSWORDS,
-                        (Boolean enabled) -> {}));
+                        CallbackUtils.emptyCallback()));
         mCoordinator.registerDataProvider(testProvider);
         testProvider.set(testData);
     }

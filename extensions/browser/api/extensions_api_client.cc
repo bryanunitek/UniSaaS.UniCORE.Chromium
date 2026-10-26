@@ -163,6 +163,10 @@ MessagingDelegate* ExtensionsAPIClient::GetMessagingDelegate() {
   return nullptr;
 }
 
+CookiesApiDelegate* ExtensionsAPIClient::GetCookiesApiDelegate() {
+  return nullptr;
+}
+
 #if !BUILDFLAG(IS_ANDROID)
 FileSystemDelegate* ExtensionsAPIClient::GetFileSystemDelegate() {
   return nullptr;
@@ -208,6 +212,11 @@ ExtensionsAPIClient::CreateNativeMessagePortDispatcher(
 std::vector<KeyedServiceBaseFactory*>
 ExtensionsAPIClient::GetFactoryDependencies() {
   return {};
+}
+
+WebstorePrivateAPIDelegate*
+ExtensionsAPIClient::GetWebstorePrivateAPIDelegate() {
+  return nullptr;
 }
 
 }  // namespace extensions

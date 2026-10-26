@@ -51,9 +51,7 @@ bool ContainsNoneType(const base::Value& value) {
   return false;
 }
 
-namespace {
-
-mojom::blink::PerformancePreference ToMojoSummarizerPreference(
+mojom::blink::PerformancePreference ToMojoPerformancePreference(
     V8PerformancePreference preference) {
   switch (preference.AsEnum()) {
     case V8PerformancePreference::Enum::kAuto:
@@ -64,6 +62,8 @@ mojom::blink::PerformancePreference ToMojoSummarizerPreference(
       return mojom::blink::PerformancePreference::kCapability;
   }
 }
+
+namespace {
 
 mojom::blink::AISummarizerType ToMojoSummarizerType(V8SummarizerType type) {
   switch (type.AsEnum()) {
@@ -171,7 +171,7 @@ mojom::blink::AISummarizerCreateOptionsPtr ToMojoSummarizerCreateOptionsImpl(
       shared_context, ToMojoSummarizerType(options->type()),
       ToMojoSummarizerFormat(options->format()),
       ToMojoSummarizerLength(options->length()),
-      ToMojoSummarizerPreference(options->preference()),
+      ToMojoPerformancePreference(options->preference()),
       ToMojoLanguageCodes(options->getExpectedInputLanguagesOr({})),
       ToMojoLanguageCodes(options->getExpectedContextLanguagesOr({})),
       mojom::blink::AILanguageCode::New(
@@ -245,6 +245,10 @@ mojom::blink::AILanguageModelSamplingMode ConvertSamplingModeToMojo(
       return mojom::blink::AILanguageModelSamplingMode::kCreative;
     case V8LanguageModelSamplingMode::Enum::kMostCreative:
       return mojom::blink::AILanguageModelSamplingMode::kMostCreative;
+    case V8LanguageModelSamplingMode::Enum::kSlightlyPredictable:
+      return mojom::blink::AILanguageModelSamplingMode::kSlightlyPredictable;
+    case V8LanguageModelSamplingMode::Enum::kSlightlyCreative:
+      return mojom::blink::AILanguageModelSamplingMode::kSlightlyCreative;
   }
   NOTREACHED();
 }
@@ -270,6 +274,12 @@ std::optional<V8LanguageModelSamplingMode> ConvertSamplingModeToV8(
     case mojom::blink::AILanguageModelSamplingMode::kMostCreative:
       return V8LanguageModelSamplingMode(
           V8LanguageModelSamplingMode::Enum::kMostCreative);
+    case mojom::blink::AILanguageModelSamplingMode::kSlightlyPredictable:
+      return V8LanguageModelSamplingMode(
+          V8LanguageModelSamplingMode::Enum::kSlightlyPredictable);
+    case mojom::blink::AILanguageModelSamplingMode::kSlightlyCreative:
+      return V8LanguageModelSamplingMode(
+          V8LanguageModelSamplingMode::Enum::kSlightlyCreative);
   }
   NOTREACHED();
 }
@@ -321,7 +331,8 @@ ResolveSamplingParamsOption(const LanguageModelCreateCoreOptions* options,
         mojom::blink::WebFeature::kLanguageModel_Temperature);
   }
 
-  if (!RuntimeEnabledFeatures::AIPromptAPILegacyParamsEnabled(
+  if (options->hasSamplingMode() ||
+      !RuntimeEnabledFeatures::AIPromptAPILegacyParamsEnabled(
           execution_context)) {
     return nullptr;
   }
@@ -466,7 +477,7 @@ HeapVector<Member<LanguageModelMessageContent>> ConvertMojoToolCallsToMessages(
 
     // Create init dictionary for the interface.
     auto* tool_call_init = LanguageModelToolCallInit::Create();
-    tool_call_init->setCallID(tc->call_id);
+    tool_call_init->setCallId(tc->call_id);
     tool_call_init->setName(tc->name);
     ScriptObject arguments_object(isolate, arguments_v8);
     tool_call_init->setArguments(arguments_object);

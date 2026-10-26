@@ -6,10 +6,10 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include "base/base64.h"
 #include "base/json/json_reader.h"
-#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
@@ -21,8 +21,7 @@
 #include "chrome/browser/ash/attestation/tpm_challenge_key.h"
 #include "chrome/browser/ash/attestation/tpm_challenge_key_result.h"
 #include "chrome/browser/ash/attestation/tpm_challenge_key_subtle.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/common/attestation_utils.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/common_types.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -30,10 +29,14 @@
 #include "chromeos/ash/components/dbus/attestation/attestation_client.h"
 #include "chromeos/ash/components/dbus/constants/attestation_constants.h"
 #include "components/device_signals/core/common/signals_constants.h"
+#include "components/enterprise/device_trust/core/attestation/attestation_utils.h"
+#include "components/enterprise/device_trust/core/common_types.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using ash::attestation::TpmChallengeKeyFactory;
+using ash::attestation::TpmChallengeKeySubtleFactory;
 using base::test::RunOnceCallback;
 using testing::_;
 using testing::StrictMock;
@@ -86,24 +89,36 @@ std::optional<std::string> ParseValueFromResponse(const std::string& response) {
   return decoded_response_value;
 }
 
-ash::attestation::MockTpmChallengeKeySubtle* InjectMockChallengeKeySubtle() {
+// Makes `TpmChallengeKeySubtleFactory::Create()` return a new mock while the
+// returned override is alive.
+[[nodiscard]] std::pair<
+    TpmChallengeKeySubtleFactory::ScopedOneshotOverrideForTesting,
+    ash::attestation::MockTpmChallengeKeySubtle*>
+InjectMockChallengeKeySubtle() {
   auto mock_challenge_key_subtle =
       std::make_unique<ash::attestation::MockTpmChallengeKeySubtle>();
   ash::attestation::MockTpmChallengeKeySubtle* challenge_key_subtle_ptr =
       mock_challenge_key_subtle.get();
-  ash::attestation::TpmChallengeKeySubtleFactory::SetForTesting(
-      std::move(mock_challenge_key_subtle));
-  return challenge_key_subtle_ptr;
+  // NOTE: ScopedOneshotOverrideForTesting is non-movable. Relying on C++17 RVO.
+  return std::pair<
+      TpmChallengeKeySubtleFactory::ScopedOneshotOverrideForTesting,
+      ash::attestation::MockTpmChallengeKeySubtle*>(
+      std::move(mock_challenge_key_subtle), challenge_key_subtle_ptr);
 }
 
-ash::attestation::MockTpmChallengeKey* InjectMockChallengeKey() {
+// Makes `TpmChallengeKeyFactory::Create()` return a new mock while the returned
+// override is alive.
+[[nodiscard]] std::pair<TpmChallengeKeyFactory::ScopedOneshotOverrideForTesting,
+                        ash::attestation::MockTpmChallengeKey*>
+InjectMockChallengeKey() {
   auto mock_challenge_key =
       std::make_unique<ash::attestation::MockTpmChallengeKey>();
   ash::attestation::MockTpmChallengeKey* challenge_key_ptr =
       mock_challenge_key.get();
-  ash::attestation::TpmChallengeKeyFactory::SetForTesting(
-      std::move(mock_challenge_key));
-  return challenge_key_ptr;
+  // NOTE: ScopedOneshotOverrideForTesting is non-movable. Relying on C++17 RVO.
+  return std::pair<TpmChallengeKeyFactory::ScopedOneshotOverrideForTesting,
+                   ash::attestation::MockTpmChallengeKey*>(
+      std::move(mock_challenge_key), challenge_key_ptr);
 }
 
 }  // namespace
@@ -112,13 +127,10 @@ class AshAttestationServiceImplTest : public testing::Test {
  protected:
   AshAttestationServiceImplTest() {
     ash::AttestationClient::InitializeFake();
-    mock_challenge_key_subtle_ = InjectMockChallengeKeySubtle();
-    mock_challenge_key_ = InjectMockChallengeKey();
     test_profile_.set_profile_name(kTestUserEmail);
   }
 
   ~AshAttestationServiceImplTest() override {
-    ash::attestation::TpmChallengeKeySubtleFactory::Create();
     ash::AttestationClient::Shutdown();
   }
 
@@ -153,10 +165,6 @@ class AshAttestationServiceImplTest : public testing::Test {
   content::BrowserTaskEnvironment task_environment_;
 
   TestingProfile test_profile_;
-  raw_ptr<ash::attestation::MockTpmChallengeKeySubtle, DanglingUntriaged>
-      mock_challenge_key_subtle_;
-  raw_ptr<ash::attestation::MockTpmChallengeKey, DanglingUntriaged>
-      mock_challenge_key_;
   std::set<enterprise_connectors::DTCPolicyLevel> levels_;
 };
 
@@ -168,7 +176,9 @@ TEST_F(AshAttestationServiceImplTest,
       std::make_unique<AshAttestationServiceImpl>(&test_profile_);
 
   auto protoChallenge = GetSerializedSignedChallenge();
-  EXPECT_CALL(*mock_challenge_key_,
+  auto [scoped_challenge_key_override, mock_challenge_key] =
+      InjectMockChallengeKey();
+  EXPECT_CALL(*mock_challenge_key,
               BuildResponse(::attestation::ENTERPRISE_MACHINE,
                             /*profile=*/&test_profile_, /*callback=*/_,
                             /*challenge=*/protoChallenge,
@@ -195,8 +205,10 @@ TEST_F(AshAttestationServiceImplTest,
       std::make_unique<AshAttestationServiceImpl>(&test_profile_);
 
   auto protoChallenge = GetSerializedSignedChallenge();
+  auto [scoped_challenge_key_override, mock_challenge_key] =
+      InjectMockChallengeKey();
   EXPECT_CALL(
-      *mock_challenge_key_,
+      *mock_challenge_key,
       BuildResponse(
           ::attestation::DEVICE_TRUST_CONNECTOR,
           /*profile=*/&test_profile_, /*callback=*/_,
@@ -221,7 +233,9 @@ TEST_F(AshAttestationServiceImplTest,
 TEST_F(AshAttestationServiceImplTest, TryPrepareKey_DeviceManagedSkip) {
   SetDeviceManagement(true);
 
-  EXPECT_CALL(*mock_challenge_key_subtle_,
+  auto [scoped_challenge_key_subtle_override, mock_challenge_key_subtle] =
+      InjectMockChallengeKeySubtle();
+  EXPECT_CALL(*mock_challenge_key_subtle,
               StartPrepareKeyStep(_, _, _, _, _, _, _))
       .Times(0);
 
@@ -233,8 +247,10 @@ TEST_F(AshAttestationServiceImplTest, TryPrepareKey_DeviceManagedSkip) {
 TEST_F(AshAttestationServiceImplTest, TryPrepareKey_DeviceUnmanagedSuccess) {
   SetDeviceManagement(false);
 
+  auto [scoped_challenge_key_subtle_override, mock_challenge_key_subtle] =
+      InjectMockChallengeKeySubtle();
   EXPECT_CALL(
-      *mock_challenge_key_subtle_,
+      *mock_challenge_key_subtle,
       StartPrepareKeyStep(
           ::attestation::DEVICE_TRUST_CONNECTOR, false,
           ::attestation::KEY_TYPE_RSA,

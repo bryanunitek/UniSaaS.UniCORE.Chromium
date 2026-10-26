@@ -12,7 +12,10 @@
 #include "content/browser/service_worker/service_worker_main_resource_loader_interceptor.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/common/url_utils.h"
+#include "net/base/ip_endpoint.h"
 #include "net/base/load_timing_info.h"
+#include "net/base/net_errors.h"
 #include "net/url_request/redirect_util.h"
 #include "services/network/public/cpp/record_ontransfersizeupdate_utils.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -41,7 +44,7 @@ WorkerScriptLoader::WorkerScriptLoader(
       browser_context_getter_(browser_context_getter),
       default_loader_factory_(std::move(default_loader_factory)),
       traffic_annotation_(traffic_annotation) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (!service_worker_handle_) {
     // The DedicatedWorkerHost or SharedWorkerHost is already destroyed.
@@ -56,22 +59,22 @@ WorkerScriptLoader::WorkerScriptLoader(
 }
 
 WorkerScriptLoader::~WorkerScriptLoader() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 }
 
 base::WeakPtr<WorkerScriptLoader> WorkerScriptLoader::GetWeakPtr() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   return weak_factory_.GetWeakPtr();
 }
 
 void WorkerScriptLoader::Abort() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   complete_status_ = network::URLLoaderCompletionStatus(net::ERR_ABORTED);
   CommitCompleted();
 }
 
 void WorkerScriptLoader::Start() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   CHECK_EQ(state_, State::kInitial);
 
   // The DedicatedWorkerHost or SharedWorkerHost is already destroyed.
@@ -111,9 +114,9 @@ network::mojom::URLLoaderFactory* WorkerScriptLoader::Fallback(
 void WorkerScriptLoader::MaybeStartLoader(
     ServiceWorkerMainResourceLoaderInterceptor* interceptor,
     std::optional<NavigationLoaderInterceptor::Result> interceptor_result) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   CHECK_EQ(state_, State::kInitial);
-  DCHECK(interceptor);
+  CHECK(interceptor, base::NotFatalUntil::M160);
 
   if (!service_worker_handle_) {
     // The DedicatedWorkerHost or SharedWorkerHost is already destroyed.
@@ -142,7 +145,7 @@ void WorkerScriptLoader::MaybeStartLoader(
 }
 
 void WorkerScriptLoader::LoadFromNetwork() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   CHECK_EQ(state_, State::kInitial);
 
   url_loader_client_receiver_.reset();
@@ -162,13 +165,13 @@ void WorkerScriptLoader::LoadFromNetwork() {
 void WorkerScriptLoader::FollowRedirect(
     network::HttpRequestHeadersUpdateParams headers_update_params,
     const std::optional<GURL>& new_url) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   DCHECK(!new_url.has_value()) << "Redirect with modified URL was not "
                                   "supported yet. crbug.com/845683";
-  DCHECK(redirect_info_);
+  CHECK(redirect_info_, base::NotFatalUntil::M160);
 
   // |should_clear_upload| is unused because there is no body anyway.
-  DCHECK(!resource_request_.request_body);
+  CHECK(!resource_request_.request_body, base::NotFatalUntil::M160);
   bool should_clear_upload = false;
   net::RedirectUtil::UpdateHttpRequest(
       resource_request_.url, resource_request_.method, *redirect_info_,
@@ -199,7 +202,7 @@ void WorkerScriptLoader::FollowRedirect(
 // state or propagating state to a new URLLoader upon redirect.
 void WorkerScriptLoader::SetPriority(net::RequestPriority priority,
                                      int32_t intra_priority_value) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (url_loader_)
     url_loader_->SetPriority(priority, intra_priority_value);
 }
@@ -212,7 +215,11 @@ void WorkerScriptLoader::SetPriority(net::RequestPriority priority,
 
 void WorkerScriptLoader::OnReceiveEarlyHints(
     network::mojom::EarlyHintsPtr early_hints) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  // Early Hints are only supported for HTTP/HTTPS requests.
+  if (!resource_request_.url.SchemeIsHTTPOrHTTPS()) {
+    return;
+  }
   client_->OnReceiveEarlyHints(std::move(early_hints));
 }
 
@@ -220,7 +227,26 @@ void WorkerScriptLoader::OnReceiveResponse(
     network::mojom::URLResponseHeadPtr response_head,
     mojo::ScopedDataPipeConsumerHandle body,
     std::optional<mojo_base::BigBuffer> cached_metadata) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  if (resource_request_.url.SchemeIsBlob() && response_head) {
+    // A blob URL is loaded by a renderer-hosted BlobURLLoader. A blob URL
+    // request is never handled by a service worker or a network socket.
+    // Sanitize service worker and network address space fields to ensure
+    // robustness against invalid input and maintain expected specifications.
+    response_head->was_fetched_via_service_worker = false;
+    response_head->url_list_via_service_worker.clear();
+    response_head->service_worker_response_source =
+        network::mojom::FetchResponseSource::kUnspecified;
+    response_head->initial_service_worker_status.reset();
+    response_head->service_worker_router_info.reset();
+    response_head->client_address_space =
+        network::mojom::IPAddressSpace::kUnknown;
+    response_head->response_address_space =
+        network::mojom::IPAddressSpace::kUnknown;
+    response_head->remote_endpoint = net::IPEndPoint();
+    response_head->was_fetched_via_cache = false;
+    response_head->is_validated = false;
+  }
   client_->OnReceiveResponse(std::move(response_head), std::move(body),
                              std::move(cached_metadata));
 }
@@ -228,7 +254,23 @@ void WorkerScriptLoader::OnReceiveResponse(
 void WorkerScriptLoader::OnReceiveRedirect(
     const net::RedirectInfo& redirect_info,
     network::mojom::URLResponseHeadPtr response_head) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+
+  if (resource_request_.url.SchemeIsBlob()) {
+    // Loading a blob URL never produces a redirect.
+    complete_status_ =
+        network::URLLoaderCompletionStatus(net::ERR_UNSAFE_REDIRECT);
+    CommitCompleted();
+    return;
+  }
+
+  if (!IsSafeRedirectTarget(resource_request_.url, redirect_info.new_url)) {
+    complete_status_ =
+        network::URLLoaderCompletionStatus(net::ERR_UNSAFE_REDIRECT);
+    CommitCompleted();
+    return;
+  }
+
   if (--redirect_limit_ == 0) {
     complete_status_ =
         network::URLLoaderCompletionStatus(net::ERR_TOO_MANY_REDIRECTS);
@@ -244,13 +286,13 @@ void WorkerScriptLoader::OnUploadProgress(
     int64_t current_position,
     int64_t total_size,
     OnUploadProgressCallback ack_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   client_->OnUploadProgress(current_position, total_size,
                             std::move(ack_callback));
 }
 
 void WorkerScriptLoader::OnTransferSizeUpdated(int32_t transfer_size_diff) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   network::RecordOnTransferSizeUpdatedUMA(
       network::OnTransferSizeUpdatedFrom::kWorkerScriptLoader);
   client_->OnTransferSizeUpdated(transfer_size_diff);
@@ -258,7 +300,7 @@ void WorkerScriptLoader::OnTransferSizeUpdated(int32_t transfer_size_diff) {
 
 void WorkerScriptLoader::OnComplete(
     const network::URLLoaderCompletionStatus& status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   complete_status_ = status;
   switch (state_) {
     case State::kInitial:
@@ -308,7 +350,7 @@ void WorkerScriptLoader::OnFetcherCallbackCalled() {
 //    top-level script evaluation on the renderer process.
 // (Note that non-OK `CommitCompleted()` can be called without 1 or 3)
 void WorkerScriptLoader::CommitCompleted() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   CHECK_NE(state_, State::kCompleted);
   CHECK(complete_status_);
   state_ = State::kCompleted;

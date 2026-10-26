@@ -14,6 +14,7 @@ import {PageCallbackRouter, PageHandlerFactory, PageHandlerRemote} from '/shared
 import type {ExtensionActionInfo} from '/shared/extensions_bar_data_model.mojom-webui.js';
 import type {IconUpdate} from '/shared/icon_handle.mojom-webui.js';
 import {IconTable} from '/shared/icon_table.js';
+import {HighlightTracker} from '/shared/toolbar_button.js';
 
 import {ExtensionElement} from './extension.js';
 import {getCss} from './extensions_bar.css.js';
@@ -47,21 +48,28 @@ export class ExtensionsBarElement extends CrLitElement {
   private iconTable_: IconTable = IconTable.getInstance();
   private extensionsMenuButton: CrIconButtonElement;
   private trackedElementManager: TrackedElementManager;
+  // Tracks whether a bubble is anchored to the extensions menu button.
+  private menuButtonHighlightTracker_: HighlightTracker =
+      new HighlightTracker();
 
   constructor() {
     super();
     this.trackedElementManager = TrackedElementManager.getInstance();
     this.extensionsMenuButton = new CrIconButtonElement();
     this.extensionsMenuButton.id = 'extensionsMenuButton';
-    this.extensionsMenuButton.ironIcon =
-        'webui-browser:ExtensionChromeRefreshIcon';
+    this.extensionsMenuButton.ironIcon = 'webui-browser:chrome-extension';
     this.extensionsMenuButton.title =
         loadTimeData.getString('tooltipExtensionsButton');
     this.extensionsMenuButton.addEventListener(
+        'pointerdown', this.menuButtonHighlightTracker_.onPointerdown);
+    this.extensionsMenuButton.addEventListener(
         'click', this.extensionMenuButtonClicked.bind(this));
     this.trackedElementManager.startTracking(
-        this.extensionsMenuButton, 'kExtensionsMenuButtonElementId',
-        {secondaryId: 'ext:'});
+        this.extensionsMenuButton, 'kExtensionsMenuButtonElementId', {
+          secondaryId: 'ext:',
+          onHighlightChanged:
+              this.menuButtonHighlightTracker_.onHighlightChanged,
+        });
 
     const factory = PageHandlerFactory.getRemote();
     factory.createPageHandler(
@@ -130,7 +138,10 @@ export class ExtensionsBarElement extends CrLitElement {
     this.handler.showContextMenu(source, id);
   }
 
-  private extensionMenuButtonClicked() {
+  private extensionMenuButtonClicked(e: PointerEvent) {
+    if (this.menuButtonHighlightTracker_.shouldSkipClick(e)) {
+      return;
+    }
     this.handler.toggleExtensionsMenuFromWebUI();
   }
 

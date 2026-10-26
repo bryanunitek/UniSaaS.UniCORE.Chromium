@@ -98,6 +98,7 @@
 
 #include "base/check_is_test.h"
 #include "base/compiler_specific.h"
+#include "base/memory/unsafe_shared_memory_region.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -111,11 +112,12 @@
 #include "services/network/public/mojom/web_sandbox_flags.mojom-blink.h"
 #include "third_party/blink/public/common/context_menu_data/context_menu_params_builder.h"
 #include "third_party/blink/public/common/frame/fenced_frame_sandbox_flags.h"
+#include "third_party/blink/public/common/messaging/message_port_channel.h"
+#include "third_party/blink/public/common/messaging/message_port_descriptor.h"
 #include "third_party/blink/public/common/page_state/page_state.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/browser_interface_broker.mojom-blink.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
-#include "third_party/blink/public/mojom/fenced_frame/fenced_frame.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/frame_owner_properties.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/frame_replication_state.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/media_player_action.mojom-blink.h"
@@ -142,6 +144,7 @@
 #include "third_party/blink/public/web/web_node.h"
 #include "third_party/blink/public/web/web_performance_metrics_for_nested_contexts.h"
 #include "third_party/blink/public/web/web_performance_metrics_for_reporting.h"
+#include "third_party/blink/public/web/web_performance_timings.h"
 #include "third_party/blink/public/web/web_plugin.h"
 #include "third_party/blink/public/web/web_print_client.h"
 #include "third_party/blink/public/web/web_print_page_description.h"
@@ -156,8 +159,10 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_evaluation_result.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
+#include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_gc_controller.h"
+#include "third_party/blink/renderer/core/ad_tracker/extension_script_tracker.h"
 #include "third_party/blink/renderer/core/clipboard/clipboard_utilities.h"
 #include "third_party/blink/renderer/core/clipboard/system_clipboard.h"
 #include "third_party/blink/renderer/core/core_initializer.h"
@@ -192,7 +197,6 @@
 #include "third_party/blink/renderer/core/exported/web_dev_tools_agent_impl.h"
 #include "third_party/blink/renderer/core/exported/web_plugin_container_impl.h"
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
-#include "third_party/blink/renderer/core/frame/attribution_src_loader.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/frame/find_in_page.h"
@@ -211,7 +215,6 @@
 #include "third_party/blink/renderer/core/frame/web_frame_widget_impl.h"
 #include "third_party/blink/renderer/core/frame/web_remote_frame_impl.h"
 #include "third_party/blink/renderer/core/html/anchor_element_utils.h"
-#include "third_party/blink/renderer/core/html/fenced_frame/html_fenced_frame_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
@@ -241,6 +244,7 @@
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
 #include "third_party/blink/renderer/core/loader/history_item.h"
 #include "third_party/blink/renderer/core/loader/web_associated_url_loader_impl.h"
+#include "third_party/blink/renderer/core/messaging/blink_transferable_message.h"
 #include "third_party/blink/renderer/core/page/context_menu_controller.h"
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/frame_tree.h"
@@ -255,6 +259,7 @@
 #include "third_party/blink/renderer/core/svg/svg_a_element.h"
 #include "third_party/blink/renderer/core/timing/dom_window_performance.h"
 #include "third_party/blink/renderer/core/timing/window_performance.h"
+#include "third_party/blink/renderer/core/typed_arrays/array_buffer/array_buffer_contents.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
@@ -276,6 +281,7 @@
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/url_loader_factory.h"
 #include "third_party/blink/renderer/platform/scheduler/public/frame_scheduler.h"
+#include "third_party/blink/renderer/platform/scheduler/public/page_scheduler.h"
 #include "third_party/blink/renderer/platform/scheduler/public/scheduling_policy.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 #include "third_party/blink/renderer/platform/text/text_direction.h"
@@ -473,7 +479,8 @@ class ChromePrintContext : public PrintContext {
     gfx::Rect page_rect = PageRect(page_index);
 
     // Cancel out the scroll offset used in screen mode.
-    gfx::Vector2d offset = frame_view->LayoutViewport()->ScrollOffsetInt();
+    gfx::Vector2d offset =
+        frame_view->LayoutViewport()->PixelSnappedScrollOffset();
     context.Save();
     context.Translate(static_cast<float>(offset.x()),
                       static_cast<float>(offset.y()));
@@ -749,8 +756,8 @@ bool WebLocalFrameImpl::HasTransientUserActivation() {
 }
 
 bool WebLocalFrameImpl::ConsumeTransientUserActivation(
-    UserActivationUpdateSource update_source) {
-  return LocalFrame::ConsumeTransientUserActivation(GetFrame(), update_source);
+    UserActivationUpdateScope update_scope) {
+  return LocalFrame::ConsumeTransientUserActivation(GetFrame(), update_scope);
 }
 
 bool WebLocalFrameImpl::LastActivationWasRestricted() const {
@@ -878,6 +885,67 @@ bool WebLocalFrameImpl::DispatchedPagehideAndStillHidden() const {
   return ViewImpl()->GetPage()->DispatchedPagehideAndStillHidden();
 }
 
+#if BUILDFLAG(IS_ANDROID)
+namespace {
+
+// The wire payload for a message whose value is a single SharedArrayBuffer
+// reference.
+//
+// This is the same trade-off, and the same format, as the encoder in
+// blink::EncodeWebMessagePayload(): the format is an implementation detail of
+// V8, but a stable one, since V8 must keep reading old payloads back out of
+// IndexedDB. A version bump would therefore not invalidate these bytes, and if
+// it ever did, WebFrameTest.PostEmbedderMessageEventDeliversSharedArrayBuffer
+// fails.
+constexpr uint8_t kSharedArrayBufferPayload[] = {
+    0xFF,  // Version tag.
+    10,    // Wire format version.
+    'u',   // kSharedArrayBuffer in v8/src/objects/value-serializer.cc.
+    0,     // Index into the message's shared array buffer array.
+};
+
+}  // namespace
+
+void WebLocalFrameImpl::PostEmbedderMessageEvent(
+    const WebSecurityOrigin& target_origin,
+    std::vector<MessagePortDescriptor> ports,
+    base::UnsafeSharedMemoryRegion region) {
+  CHECK(region.IsValid());
+
+  // Read the size before the region is moved from below.
+  size_t size = region.GetSize();
+  ArrayBufferContents contents(
+      base::UnsafeSharedMemoryRegion::TakeHandleForSerialization(
+          std::move(region)),
+      /*offset=*/0, size, ArrayBufferContents::kShared);
+  if (!contents.IsValid()) {
+    return;
+  }
+
+  scoped_refptr<SerializedScriptValue> serialized_value =
+      SerializedScriptValue::Create(base::span(kSharedArrayBufferPayload));
+  // Index 0 of this array is what the payload above refers to.
+  serialized_value->SharedArrayBuffersContents().push_back(std::move(contents));
+
+  BlinkTransferableMessage blink_message;
+  blink_message.message = std::move(serialized_value);
+  blink_message.ports.ReserveInitialCapacity(
+      base::checked_cast<wtf_size_t>(ports.size()));
+  for (auto& port : ports) {
+    blink_message.ports.emplace_back(std::move(port));
+  }
+  // There is no sending document, so attribute the message to the target
+  // window's own agent cluster. The embedder's agent cluster ID would fail the
+  // agent cluster check that SharedArrayBuffers are subject to.
+  blink_message.sender_agent_cluster_id =
+      GetFrame()->DomWindow()->GetAgentClusterID();
+
+  GetFrame()->PostMessageEvent(/*source_frame_token=*/std::nullopt,
+                               /*source_origin=*/nullptr, target_origin,
+                               std::move(blink_message));
+}
+#endif
+
 void WebLocalFrameImpl::CopyToFindPboard() {
 #if BUILDFLAG(IS_MAC)
   if (HasSelection())
@@ -920,7 +988,7 @@ gfx::Size WebLocalFrameImpl::DocumentSize() const {
 bool WebLocalFrameImpl::HasVisibleContent() const {
   auto* layout_object = GetFrame()->OwnerLayoutObject();
   if (layout_object &&
-      layout_object->StyleRef().Visibility() != EVisibility::kVisible) {
+      layout_object->Style().Visibility() != EVisibility::kVisible) {
     return false;
   }
 
@@ -949,6 +1017,12 @@ WebDocument WebLocalFrameImpl::GetDocument() const {
   return WebDocument(GetFrame()->GetDocument());
 }
 
+InitiatorStateToken WebLocalFrameImpl::GetInitiatorStateToken() const {
+  CHECK(GetFrame());
+  CHECK(GetFrame()->DomWindow());
+  return GetFrame()->DomWindow()->GetInitiatorStateToken();
+}
+
 WebPerformanceMetricsForReporting
 WebLocalFrameImpl::PerformanceMetricsForReporting() const {
   if (!GetFrame())
@@ -962,6 +1036,14 @@ WebLocalFrameImpl::PerformanceMetricsForNestedContexts() const {
   if (!GetFrame())
     return WebPerformanceMetricsForNestedContexts();
   return WebPerformanceMetricsForNestedContexts(
+      DOMWindowPerformance::performance(*(GetFrame()->DomWindow())));
+}
+
+WebPerformanceTimings WebLocalFrameImpl::PerformanceTimings() const {
+  if (!GetFrame()) {
+    return WebPerformanceTimings();
+  }
+  return WebPerformanceTimings(
       DOMWindowPerformance::performance(*(GetFrame()->DomWindow())));
 }
 
@@ -1136,12 +1218,13 @@ void WebLocalFrameImpl::RequestExecuteScript(
     WebScriptExecutionCallback callback,
     BackForwardCacheAware back_forward_cache_aware,
     mojom::blink::WantResultOption want_result_option,
-    mojom::blink::PromiseResultOption promise_behavior) {
+    mojom::blink::PromiseResultOption promise_behavior,
+    const WebString& script_injector_id) {
   DCHECK(GetFrame());
   GetFrame()->RequestExecuteScript(
       world_id, sources, user_gesture, evaluation_timing, blocking_option,
       std::move(callback), back_forward_cache_aware, want_result_option,
-      promise_behavior);
+      promise_behavior, script_injector_id);
 }
 
 bool WebLocalFrameImpl::IsInspectorConnected() {
@@ -1865,6 +1948,15 @@ void WebLocalFrameImpl::DeleteSurroundingText(int before, int after) {
 void WebLocalFrameImpl::DeleteSurroundingTextInCodePoints(int before,
                                                           int after) {
   TRACE_EVENT0("blink", "WebLocalFrameImpl::deleteSurroundingTextInCodePoints");
+
+  if (RuntimeEnabledFeatures::EditContextCodePointDeletionEnabled()) {
+    if (EditContext* edit_context =
+            GetFrame()->GetInputMethodController().GetActiveEditContext()) {
+      edit_context->DeleteSurroundingTextInCodePoints(before, after);
+      return;
+    }
+  }
+
   if (WebPlugin* plugin = FocusedPluginIfInputMethodSupported()) {
     plugin->DeleteSurroundingTextInCodePoints(before, after);
     return;
@@ -2024,7 +2116,10 @@ bool WebLocalFrameImpl::CapturePaintPreview(const gfx::Rect& bounds,
     // Ignore paint timing while capturing a paint preview as it can change LCP
     // see crbug.com/1323073.
     IgnorePaintTimingScope scope;
-    IgnorePaintTimingScope::IncrementIgnoreDepth();
+    if (!base::FeatureList::IsEnabled(
+            features::kPaintTimingIngnoreOutOfLifecyclePaints)) {
+      IgnorePaintTimingScope::IncrementIgnoreDepth();
+    }
 
     Document::PaintPreviewScope paint_preview(
         *GetFrame()->GetDocument(),
@@ -2121,6 +2216,7 @@ WebLocalFrame* WebLocalFrame::CreateMainFrame(
         interface_broker,
     const LocalFrameToken& frame_token,
     const DocumentToken& document_token,
+    const InitiatorStateToken& initiator_state_token,
     std::unique_ptr<WebPolicyContainer> policy_container,
     WebFrame* opener,
     const WebString& name,
@@ -2130,7 +2226,7 @@ WebLocalFrame* WebLocalFrame::CreateMainFrame(
   return WebLocalFrameImpl::CreateMainFrame(
       web_view, client, interface_registry, std::move(interface_broker),
       frame_token, opener, name, sandbox_flags, document_token,
-      std::move(policy_container), creator_base_url,
+      initiator_state_token, std::move(policy_container), creator_base_url,
       std::move(sandbox_origin_token));
 }
 
@@ -2159,6 +2255,7 @@ WebLocalFrameImpl* WebLocalFrameImpl::CreateMainFrame(
     const WebString& name,
     network::mojom::blink::WebSandboxFlags sandbox_flags,
     const DocumentToken& document_token,
+    const InitiatorStateToken& initiator_state_token,
     std::unique_ptr<WebPolicyContainer> policy_container,
     const WebURL& creator_base_url,
     std::unique_ptr<base::UnguessableToken> sandbox_origin_token) {
@@ -2178,9 +2275,9 @@ WebLocalFrameImpl* WebLocalFrameImpl::CreateMainFrame(
   frame->InitializeCoreFrame(
       page, nullptr, nullptr, nullptr, FrameInsertType::kInsertInConstructor,
       name, opener ? &ToCoreFrame(*opener)->window_agent_factory() : nullptr,
-      opener, document_token, std::move(interface_broker),
-      std::move(policy_container), storage_key, creator_base_url, sandbox_flags,
-      std::move(sandbox_origin_token));
+      opener, document_token, initiator_state_token,
+      std::move(interface_broker), std::move(policy_container), storage_key,
+      creator_base_url, sandbox_flags, std::move(sandbox_origin_token));
   return frame;
 }
 
@@ -2234,6 +2331,7 @@ WebLocalFrameImpl* WebLocalFrameImpl::CreateProvisional(
       previous_web_frame->Parent(), nullptr, FrameInsertType::kInsertLater,
       name, &ToCoreFrame(*previous_web_frame)->window_agent_factory(),
       previous_web_frame->Opener(), DocumentToken(),
+      /*initiator_state_token=*/InitiatorStateToken(),
       std::move(interface_broker),
       /*policy_container=*/nullptr, StorageKey(),
       /*creator_base_url=*/NullUrl(), sandbox_flags,
@@ -2356,6 +2454,7 @@ void WebLocalFrameImpl::InitializeCoreFrame(
     WindowAgentFactory* window_agent_factory,
     WebFrame* opener,
     const DocumentToken& document_token,
+    const InitiatorStateToken& initiator_state_token,
     mojo::PendingRemote<mojom::blink::BrowserInterfaceBroker> interface_broker,
     std::unique_ptr<blink::WebPolicyContainer> policy_container,
     const StorageKey& storage_key,
@@ -2364,7 +2463,8 @@ void WebLocalFrameImpl::InitializeCoreFrame(
     std::unique_ptr<base::UnguessableToken> sandbox_origin_token) {
   InitializeCoreFrameInternal(
       page, owner, parent, previous_sibling, insert_type, name,
-      window_agent_factory, opener, document_token, std::move(interface_broker),
+      window_agent_factory, opener, document_token, initiator_state_token,
+      std::move(interface_broker),
       PolicyContainer::CreateFromWebPolicyContainer(
           std::move(policy_container)),
       storage_key, ukm::kInvalidSourceId, creator_base_url, sandbox_flags,
@@ -2381,6 +2481,7 @@ void WebLocalFrameImpl::InitializeCoreFrameInternal(
     WindowAgentFactory* window_agent_factory,
     WebFrame* opener,
     const DocumentToken& document_token,
+    const InitiatorStateToken& initiator_state_token,
     mojo::PendingRemote<mojom::blink::BrowserInterfaceBroker> interface_broker,
     std::unique_ptr<PolicyContainer> policy_container,
     const StorageKey& storage_key,
@@ -2423,9 +2524,9 @@ void WebLocalFrameImpl::InitializeCoreFrameInternal(
 
   // We must call init() after frame_ is assigned because it is referenced
   // during init().
-  frame_->Init(opener_frame, document_token, std::move(policy_container),
-               storage_key, document_ukm_source_id, creator_base_url,
-               std::move(sandbox_origin_token));
+  frame_->Init(opener_frame, document_token, initiator_state_token,
+               std::move(policy_container), storage_key, document_ukm_source_id,
+               creator_base_url, std::move(sandbox_origin_token));
 
   if (!owner) {
     // This trace event is needed to detect the main frame of the
@@ -2483,6 +2584,7 @@ LocalFrame* WebLocalFrameImpl::CreateChildFrame(
       [this, owner_element, &policy_container_remote, &policy_container_data,
        &name, document_ukm_source_id](
           WebLocalFrame* new_child_frame, const DocumentToken& document_token,
+          const InitiatorStateToken& initiator_state_token,
           CrossVariantMojoRemote<mojom::BrowserInterfaceBrokerInterfaceBase>
               interface_broker,
           std::unique_ptr<base::UnguessableToken> sandbox_origin_token) {
@@ -2503,7 +2605,8 @@ LocalFrame* WebLocalFrameImpl::CreateChildFrame(
                 *GetFrame()->GetPage(), owner_element, this, LastChild(),
                 FrameInsertType::kInsertInConstructor, name,
                 &GetFrame()->window_agent_factory(), nullptr, document_token,
-                std::move(interface_broker), std::move(policy_container),
+                initiator_state_token, std::move(interface_broker),
+                std::move(policy_container),
                 GetFrame()->DomWindow()->GetStorageKey(),
                 document_ukm_source_id, creator_base_url,
                 network::mojom::blink::WebSandboxFlags::kNone,
@@ -2529,40 +2632,6 @@ LocalFrame* WebLocalFrameImpl::CreateChildFrame(
   // If the lambda to complete initialization is not called, this will fail.
   DCHECK(webframe_child->GetFrame());
   return webframe_child->GetFrame();
-}
-
-RemoteFrame* WebLocalFrameImpl::CreateFencedFrame(
-    HTMLFencedFrameElement* fenced_frame,
-    mojo::PendingAssociatedReceiver<mojom::blink::FencedFrameOwnerHost>
-        receiver) {
-  mojom::blink::FrameReplicationStatePtr initial_replicated_state =
-      mojom::blink::FrameReplicationState::New();
-  initial_replicated_state->origin = SecurityOrigin::CreateUniqueOpaque();
-  RemoteFrameToken frame_token;
-  base::UnguessableToken devtools_frame_token =
-      base::UnguessableToken::Create();
-  auto remote_frame_interfaces =
-      mojom::blink::RemoteFrameInterfacesFromRenderer::New();
-  mojo::PendingAssociatedRemote<mojom::blink::RemoteFrameHost>
-      remote_frame_host = remote_frame_interfaces->frame_host_receiver
-                              .InitWithNewEndpointAndPassRemote();
-  mojo::PendingAssociatedReceiver<mojom::blink::RemoteFrame>
-      remote_frame_receiver =
-          remote_frame_interfaces->frame.InitWithNewEndpointAndPassReceiver();
-
-  GetFrame()->GetLocalFrameHostRemote().CreateFencedFrame(
-      std::move(receiver), std::move(remote_frame_interfaces), frame_token,
-      devtools_frame_token);
-
-  DCHECK(initial_replicated_state->origin->IsOpaque());
-
-  WebRemoteFrameImpl* remote_frame = WebRemoteFrameImpl::CreateForFencedFrame(
-      mojom::blink::TreeScopeType::kDocument, frame_token, devtools_frame_token,
-      fenced_frame, std::move(remote_frame_host),
-      std::move(remote_frame_receiver), std::move(initial_replicated_state));
-
-  client_->DidCreateFencedFrame(frame_token);
-  return remote_frame->GetFrame();
 }
 
 void WebLocalFrameImpl::DidChangeContentsSize(const gfx::Size& size) {
@@ -2774,25 +2843,6 @@ void WebLocalFrameImpl::SendPings(const WebURL& destination_url) {
           destination_url, anchor->GetDocument(),
           anchor->FastGetAttribute(html_names::kPingAttr));
     }
-  }
-}
-
-void WebLocalFrameImpl::SendAttributionSrc(
-    const std::optional<Impression>& impression,
-    bool did_navigate) {
-  auto* frame = GetFrame();
-  DCHECK(frame);
-
-  if (AttributionSrcLoader* attribution_src_loader =
-          frame->GetAttributionSrcLoader()) {
-    HTMLAnchorElementBase* anchor = nullptr;
-    if (Node* node = ContextMenuNodeInner(); did_navigate && node) {
-      anchor = DynamicTo<HTMLAnchorElementBase>(
-          node->EnclosingLinkEventParentOrSelf());
-    }
-
-    attribution_src_loader->RegisterFromContextMenuNavigation(impression,
-                                                              anchor);
   }
 }
 
@@ -3461,15 +3511,18 @@ bool WebLocalFrameImpl::IsFeatureEnabled(
   return GetFrame()->DomWindow()->IsFeatureEnabled(feature);
 }
 
+bool WebLocalFrameImpl::IsInBackForwardCache() const {
+  return GetFrame()->GetPage()->GetPageScheduler()->IsInBackForwardCache();
+}
+
 void WebLocalFrameImpl::AddHitTestOnTouchStartCallback(
     base::RepeatingCallback<void(const blink::WebHitTestResult&)> callback) {
   TouchStartEventListener* touch_start_event_listener =
       MakeGarbageCollected<TouchStartEventListener>(std::move(callback));
-  AddEventListenerOptionsResolved* options =
-      MakeGarbageCollected<AddEventListenerOptionsResolved>();
-  options->setPassive(true);
-  options->SetPassiveSpecified(true);
-  options->setCapture(true);
+  AddEventListenerOptionsResolved options;
+  options.SetPassive(true);
+  options.SetPassiveSpecified(true);
+  options.SetCapture(true);
   GetFrame()->DomWindow()->addEventListener(
       event_type_names::kTouchstart, touch_start_event_listener, options);
 }

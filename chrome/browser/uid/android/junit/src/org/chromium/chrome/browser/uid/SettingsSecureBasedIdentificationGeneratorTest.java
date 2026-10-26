@@ -6,8 +6,6 @@ package org.chromium.chrome.browser.uid;
 
 import static org.mockito.Mockito.doReturn;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
@@ -16,13 +14,11 @@ import org.mockito.Mockito;
 import org.mockito.Spy;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.util.HashUtil;
 
 /** Unit tests for {@link SettingsSecureBasedIdentificationGenerator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(UniqueIdentificationGeneratorFactoryTest.IDENTITY_GENERATOR_BATCH_NAME)
 public class SettingsSecureBasedIdentificationGeneratorTest {
     // Tell R8 this class is spied on and shouldn't be made final.
     @Spy SettingsSecureBasedIdentificationGenerator mGenerator;
@@ -33,7 +29,6 @@ public class SettingsSecureBasedIdentificationGeneratorTest {
     }
 
     @Test
-    @SmallTest
     @Feature({"ChromeToMobile", "Omaha"})
     public void testAndroidIdSuccessWithSalt() {
         String androidId = "42";
@@ -43,7 +38,6 @@ public class SettingsSecureBasedIdentificationGeneratorTest {
     }
 
     @Test
-    @SmallTest
     @Feature({"ChromeToMobile", "Omaha"})
     public void testAndroidIdSuccessWithoutSalt() {
         String androidId = "42";
@@ -52,7 +46,6 @@ public class SettingsSecureBasedIdentificationGeneratorTest {
     }
 
     @Test
-    @SmallTest
     @Feature({"ChromeToMobile", "Omaha"})
     public void testAndroidIdFailureWithSalt() {
         String androidId = null;
@@ -62,7 +55,6 @@ public class SettingsSecureBasedIdentificationGeneratorTest {
     }
 
     @Test
-    @SmallTest
     @Feature({"ChromeToMobile", "Omaha"})
     public void testAndroidIdFailureWithoutSalt() {
         String androidId = null;

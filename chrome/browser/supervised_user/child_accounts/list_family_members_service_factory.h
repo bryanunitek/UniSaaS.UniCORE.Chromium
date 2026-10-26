@@ -15,11 +15,10 @@
 #include "components/supervised_user/core/browser/list_family_members_service.h"
 #include "content/public/browser/browser_context.h"
 
+namespace supervised_user {
+
 class ListFamilyMembersServiceFactory : public ProfileKeyedServiceFactory {
  public:
-  static supervised_user::ListFamilyMembersService* GetForProfile(
-      Profile* profile);
-
   static ListFamilyMembersServiceFactory* GetInstance();
 
   ListFamilyMembersServiceFactory(const ListFamilyMembersServiceFactory&) =
@@ -36,6 +35,12 @@ class ListFamilyMembersServiceFactory : public ProfileKeyedServiceFactory {
   // BrowserContextKeyedServiceFactory:
   std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
+
+  // This is a leaf background service that must be implicitly created. It is
+  // required to gather family information specific to the profile.
+  bool ServiceIsCreatedWithBrowserContext() const override;
 };
+
+}  // namespace supervised_user
 
 #endif  // CHROME_BROWSER_SUPERVISED_USER_CHILD_ACCOUNTS_LIST_FAMILY_MEMBERS_SERVICE_FACTORY_H_

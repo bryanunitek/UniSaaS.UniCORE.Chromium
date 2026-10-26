@@ -11,11 +11,12 @@
 #import "ios/chrome/browser/composebox/public/composebox_entrypoint.h"
 #import "ios/chrome/browser/composebox/public/composebox_focus_params.h"
 #import "ios/chrome/browser/composebox/public/composebox_mode.h"
-#import "ios/chrome/browser/composebox/public/composebox_model_option.h"
 #import "ios/chrome/browser/composebox/shared/coordinator/composebox_picker_drive_result.h"
 #import "ios/chrome/browser/composebox/shared/coordinator/composebox_picker_image_result.h"
 #import "ios/web/public/web_state_id.h"
+#import "third_party/omnibox_proto/model_mode.pb.h"
 
+struct ComposeboxTabSelection;
 class WebStateList;
 @class ComposeboxAttachmentSelection;
 @class ComposeboxMenuMediator;
@@ -31,9 +32,9 @@ class WebStateList;
 - (void)composeboxMenuMediator:(ComposeboxMenuMediator*)mediator
                     didTapTool:(ComposeboxMode)toolMode;
 
-// Called when a model option is tapped.
+// Called when a model is tapped.
 - (void)composeboxMenuMediator:(ComposeboxMenuMediator*)mediator
-                   didTapModel:(ComposeboxModelOption)modelMode;
+                   didTapModel:(omnibox::ModelMode)model;
 
 // Called when the picked attachments are updated.
 - (void)composeboxMenuMediator:(ComposeboxMenuMediator*)mediator
@@ -98,9 +99,8 @@ class WebStateList;
 /// Processes the given `driveItems`.
 - (void)processDriveItems:(NSArray<ComposeboxPickerDriveResult*>*)driveItems;
 
-/// Processes the given web state IDs.
-- (void)processWebStateIDs:(std::set<web::WebStateID>)selectedWebStateIDs
-         cachedWebStateIDs:(std::set<web::WebStateID>)cachedWebStateIDs;
+/// Processes the given `tabSelection`.
+- (void)processTabSelection:(const ComposeboxTabSelection&)tabSelection;
 
 /// Returns whether more attachments can be added.
 - (BOOL)canAddMoreAttachments;
@@ -108,6 +108,9 @@ class WebStateList;
 /// Returns the maximum number of images allowed based on the current
 /// composebox mode and current number of attachments.
 - (NSUInteger)remainingNumberOfImagesAllowed;
+
+/// Returns the asset IDs of all currently attached image items.
+- (NSArray<NSString*>*)attachedImageAssetIDs;
 
 /// Returns the associated IDs for all currently attached tabs.
 - (std::set<web::WebStateID>)allAttachedWebStateIDs;

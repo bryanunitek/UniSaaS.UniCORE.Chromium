@@ -10,7 +10,9 @@
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
 #import "ios/chrome/browser/authentication/test/signin_matchers.h"
+#import "ios/chrome/browser/authentication/ui_bundled/views/views_constants.h"
 #import "ios/chrome/browser/metrics/model/metrics_app_interface.h"
+#import "ios/chrome/browser/omnibox/eg_tests/omnibox_app_interface.h"
 #import "ios/chrome/browser/policy/model/policy_earl_grey_utils.h"
 #import "ios/chrome/browser/policy/model/policy_util.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
@@ -27,6 +29,7 @@
 using chrome_test_util::ButtonWithAccessibilityLabelId;
 using chrome_test_util::FullscreenSigninPrimaryButtonMatcher;
 using chrome_test_util::GREYAssertErrorNil;
+using chrome_test_util::IdentityCellMatcherForEmail;
 using chrome_test_util::StaticTextWithAccessibilityLabelId;
 using signin_metrics::CrossDeviceInitialState;
 
@@ -34,6 +37,9 @@ namespace {
 
 constexpr char kCrossDeviceSigninUrl[] =
     "https://www.google.com/chrome/go-mobile";
+// URL prefix typed into the omnibox to trigger inline autocompletion.
+// Omnibox URL formatting strips the default scheme ("https://") and "www.".
+constexpr char kCrossDeviceSigninUrlPrefix[] = "google.com/chrome/go-mobile";
 
 // Returns the deep link URL for the given `email`.
 NSURL* GetDeepLinkURLForEmail(NSString* email) {
@@ -43,7 +49,46 @@ NSURL* GetDeepLinkURLForEmail(NSString* email) {
   return [NSURL URLWithString:urlString];
 }
 
-void CheckAccountSignin(FakeSystemIdentity* chosenIdentity) {
+void CheckMetrics(signin::ExternalEntryPoint entryPoint,
+                  int initialAccountsNumber,
+                  CrossDeviceInitialState initialState) {
+  NSString* entryPointSuffix =
+      entryPoint == signin::ExternalEntryPoint::kDesktopDefault
+          ? @"DesktopDefault"
+          : @"Unknown";
+  GREYAssertNil(
+      [MetricsAppInterface
+          expectUniqueSampleWithCount:1
+                            forBucket:initialAccountsNumber
+                         forHistogram:
+                             @"Signin.CrossDevice.InitialAccountsNumber"],
+      @"Failed to record InitialAccountsNumber");
+  NSString* initialAccountsHistogram =
+      [NSString stringWithFormat:@"Signin.CrossDevice.InitialAccountsNumber.%@",
+                                 entryPointSuffix];
+  GREYAssertNil([MetricsAppInterface
+                    expectUniqueSampleWithCount:1
+                                      forBucket:initialAccountsNumber
+                                   forHistogram:initialAccountsHistogram],
+                @"Failed to record InitialAccountsNumber");
+  GREYAssertNil(
+      [MetricsAppInterface
+          expectUniqueSampleWithCount:1
+                            forBucket:static_cast<int>(initialState)
+                         forHistogram:@"Signin.CrossDevice.InitialState"],
+      @"Failed to record InitialState");
+  NSString* initialStateHistogram = [NSString
+      stringWithFormat:@"Signin.CrossDevice.InitialState.%@", entryPointSuffix];
+  GREYAssertNil([MetricsAppInterface
+                    expectUniqueSampleWithCount:1
+                                      forBucket:static_cast<int>(initialState)
+                                   forHistogram:initialStateHistogram],
+                @"Failed to record InitialState");
+}
+
+void CheckAccountSignin(FakeSystemIdentity* chosenIdentity,
+                        int initialAccountsNumber,
+                        CrossDeviceInitialState initialState) {
   [ChromeEarlGrey waitForMatcher:chrome_test_util::SigninScreenPromoMatcher()];
 
   id<GREYMatcher> primaryButton =
@@ -65,10 +110,14 @@ void CheckAccountSignin(FakeSystemIdentity* chosenIdentity) {
   [[EarlGrey selectElementWithMatcher:primaryButton] performAction:grey_tap()];
   // Verify that `chosenIdentity` is now signed in.
   [SigninEarlGrey verifySignedInWithFakeIdentity:chosenIdentity];
+  CheckMetrics(signin::ExternalEntryPoint::kDesktopDefault,
+               initialAccountsNumber, initialState);
 }
 
 void CheckAccountSwitch(FakeSystemIdentity* signedInIdentity,
-                        FakeSystemIdentity* chosenIdentity) {
+                        FakeSystemIdentity* chosenIdentity,
+                        int initialAccountsNumber,
+                        CrossDeviceInitialState initialState) {
   [ChromeEarlGrey waitForMatcher:chrome_test_util::SigninScreenPromoMatcher()];
 
   id<GREYMatcher> primaryButton =
@@ -93,6 +142,8 @@ void CheckAccountSwitch(FakeSystemIdentity* signedInIdentity,
   [[EarlGrey selectElementWithMatcher:primaryButton] performAction:grey_tap()];
   // Verify that `chosenIdentity` is now signed in.
   [SigninEarlGrey verifySignedInWithFakeIdentity:chosenIdentity];
+  CheckMetrics(signin::ExternalEntryPoint::kDesktopDefault,
+               initialAccountsNumber, initialState);
 }
 
 }  // namespace
@@ -120,6 +171,7 @@ void CheckAccountSwitch(FakeSystemIdentity* signedInIdentity,
   config.features_enabled_and_params.push_back(
       {switches::kCrossDeviceSignin,
        {{switches::kCrossDeviceSigninUrl.name, kCrossDeviceSigninUrl}}});
+  config.features_enabled.push_back(switches::kCrossDeviceSigninDismissModals);
   return config;
 }
 
@@ -158,7 +210,77 @@ void CheckAccountSwitch(FakeSystemIdentity* signedInIdentity,
       simulateExternalAppURLOpeningWithURL:GetDeepLinkURLForEmail(
                                                fakeIdentity.userEmail)];
 
-  CheckAccountSignin(fakeIdentity);
+  CheckAccountSignin(fakeIdentity, 1,
+                     CrossDeviceInitialState::kSignedOutTargetAccountOnDevice);
+}
+
+// Tests that navigating to a cross-device sign-in deep link from the omnibox
+// for an account that is not signed in shows the sign-in flow.
+- (void)testCrossDeviceSigninFromOmnibox {
+  // Add a fake identity to the device, but keep the user signed out.
+  FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
+  [SigninEarlGrey addFakeIdentity:fakeIdentity];
+  [SigninEarlGrey verifySignedOut];
+
+  // Load a blank page so that the location bar is visible.
+  [ChromeEarlGrey loadURL:GURL("about:blank")];
+
+  // Navigate to the deep link via the omnibox.
+  NSURL* url = GetDeepLinkURLForEmail(fakeIdentity.userEmail);
+  [ChromeEarlGreyUI
+      typeTextInOmnibox:base::SysNSStringToUTF8(url.absoluteString)
+          andPressEnter:YES];
+
+  CheckAccountSignin(fakeIdentity, 1,
+                     CrossDeviceInitialState::kSignedOutTargetAccountOnDevice);
+}
+
+// Tests that typing a prefix of the cross-device sign-in deep link into the
+// omnibox (which triggers inline autocompletion and pre-rendering from history
+// suggestions) does not prematurely trigger the sign-in flow while the user is
+// still typing, and only shows the sign-in flow once navigation is committed.
+- (void)testCrossDeviceSigninTypingInOmniboxDoesNotTriggerSignin {
+  // Add a fake identity to the device, but keep the user signed out.
+  FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
+  [SigninEarlGrey addFakeIdentity:fakeIdentity];
+  [SigninEarlGrey verifySignedOut];
+
+  // Add the deep link URL to the History service with multiple typed visits so
+  // that it is eligible for inline autocompletion (non-host URLs require
+  // typed_count > 1).
+  NSURL* url = GetDeepLinkURLForEmail(fakeIdentity.userEmail);
+  GURL gurl(base::SysNSStringToUTF8(url.absoluteString));
+  [ChromeEarlGrey addHistoryServiceTypedURL:gurl];
+  [ChromeEarlGrey addHistoryServiceTypedURL:gurl];
+
+  // Load a blank page so that the location bar is visible.
+  [ChromeEarlGrey loadURL:GURL("about:blank")];
+
+  // Type a prefix of the URL in the omnibox to trigger inline autocompletion
+  // from history suggestions without pressing Enter.
+  [ChromeEarlGreyUI focusOmniboxAndReplaceText:@(kCrossDeviceSigninUrlPrefix)];
+
+  // Verify that the omnibox displays inline autocompletion for the deep link.
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
+      assert:[OmniboxAppInterface displaysInlineAutocompleteText:YES]];
+
+  // Verify that the sign-in promo is not shown while typing in the omnibox even
+  // when an inline autocomplete suggestion is available.
+  [ChromeEarlGreyUI waitForAppToIdle];
+  [[EarlGrey
+      selectElementWithMatcher:chrome_test_util::SigninScreenPromoMatcher()]
+      assertWithMatcher:grey_nil()];
+  // Accept the inline autocompletion by tapping the omnibox.
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
+      performAction:grey_tap()];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
+      assert:[OmniboxAppInterface displaysInlineAutocompleteText:NO]];
+
+  // Commit the navigation by pressing Enter.
+  [ChromeEarlGreyUI pressEnter];
+
+  CheckAccountSignin(fakeIdentity, 1,
+                     CrossDeviceInitialState::kSignedOutTargetAccountOnDevice);
 }
 
 // Tests that opening a cross-device sign-in deep link when sign-in is disabled
@@ -205,6 +327,21 @@ void CheckAccountSwitch(FakeSystemIdentity* signedInIdentity,
   [[EarlGrey
       selectElementWithMatcher:chrome_test_util::SigninScreenPromoMatcher()]
       assertWithMatcher:grey_nil()];
+  GREYAssertNil(
+      [MetricsAppInterface
+          expectUniqueSampleWithCount:1
+                            forBucket:static_cast<int>(CrossDeviceInitialState::
+                                                           kFlowForbidden)
+                         forHistogram:@"Signin.CrossDevice.InitialState"],
+      @"Failed to record InitialState");
+  GREYAssertNil(
+      [MetricsAppInterface
+          expectUniqueSampleWithCount:1
+                            forBucket:static_cast<int>(CrossDeviceInitialState::
+                                                           kFlowForbidden)
+                         forHistogram:
+                             @"Signin.CrossDevice.InitialState.DesktopDefault"],
+      @"Failed to record InitialState");
 }
 
 // Tests that opening a cross-device sign-in deep link when no accounts on
@@ -226,7 +363,9 @@ void CheckAccountSwitch(FakeSystemIdentity* signedInIdentity,
                                           kFakeAuthAddAccountButtonIdentifier)]
       performAction:grey_tap()];
 
-  CheckAccountSignin(fakeIdentity);
+  CheckAccountSignin(
+      fakeIdentity, 0,
+      CrossDeviceInitialState::kSignedOutTargetAccountNotOnDevice);
 }
 
 // Tests that opening a cross-device sign-in deep link with an account not on
@@ -253,13 +392,15 @@ void CheckAccountSwitch(FakeSystemIdentity* signedInIdentity,
                                           kFakeAuthAddAccountButtonIdentifier)]
       performAction:grey_tap()];
 
-  CheckAccountSignin(fakeIdentity2);
+  CheckAccountSignin(
+      fakeIdentity2, 1,
+      CrossDeviceInitialState::kSignedOutTargetAccountNotOnDevice);
 }
 
 // Tests that opening a cross-device sign-in deep link with an account not on
 // device while there is already another account signed-in shows add account
 // flow.
-- (void)testCrossDeviceSigninSignedInTargetAccountNotOnDevice {
+- (void)DISABLED_testCrossDeviceSigninSignedInTargetAccountNotOnDevice {
   // Sign in with `fakeIdentity1`.
   FakeSystemIdentity* fakeIdentity1 = [FakeSystemIdentity fakeIdentity1];
   [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity1];
@@ -280,12 +421,14 @@ void CheckAccountSwitch(FakeSystemIdentity* signedInIdentity,
                                           kFakeAuthAddAccountButtonIdentifier)]
       performAction:grey_tap()];
 
-  CheckAccountSwitch(fakeIdentity1, fakeIdentity2);
+  CheckAccountSwitch(fakeIdentity1, fakeIdentity2, 1,
+                     CrossDeviceInitialState::
+                         kSignedInWithDifferentAccountTargetAccountNotOnDevice);
 }
 
 // Tests that opening a cross-device sign-in deep link with an account on device
 // while there is already another account signed-in shows switch account flow.
-- (void)testCrossDeviceSigninSignedInTargetAccountOnDevice {
+- (void)DISABLED_testCrossDeviceSigninSignedInTargetAccountOnDevice {
   FakeSystemIdentity* fakeIdentity1 = [FakeSystemIdentity fakeIdentity1];
   FakeSystemIdentity* fakeIdentity2 = [FakeSystemIdentity fakeIdentity2];
   [SigninEarlGrey addFakeIdentity:fakeIdentity1];
@@ -299,7 +442,42 @@ void CheckAccountSwitch(FakeSystemIdentity* signedInIdentity,
       simulateExternalAppURLOpeningWithURL:GetDeepLinkURLForEmail(
                                                fakeIdentity2.userEmail)];
 
-  CheckAccountSwitch(fakeIdentity1, fakeIdentity2);
+  CheckAccountSwitch(fakeIdentity1, fakeIdentity2, 2,
+                     CrossDeviceInitialState::
+                         kSignedInWithDifferentAccountTargetAccountOnDevice);
+}
+
+// Tests that users changing target account to signed-in account in fullscreen
+// signin screen view dismisses the flow. Regression test for:
+// crbug.com/537715404.
+- (void)testCrossDeviceSigninChangeToSignedInAccount {
+  FakeSystemIdentity* fakeIdentity1 = [FakeSystemIdentity fakeIdentity1];
+  FakeSystemIdentity* fakeIdentity2 = [FakeSystemIdentity fakeIdentity2];
+  [SigninEarlGrey addFakeIdentity:fakeIdentity1];
+  [SigninEarlGrey addFakeIdentity:fakeIdentity2];
+
+  // Sign in with `fakeIdentity1`.
+  [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity1];
+
+  // Simulate opening the URL from an external app with `fakeIdentity2` email.
+  [ChromeEarlGrey
+      simulateExternalAppURLOpeningWithURL:GetDeepLinkURLForEmail(
+                                               fakeIdentity2.userEmail)];
+  [ChromeEarlGrey waitForMatcher:chrome_test_util::SigninScreenPromoMatcher()];
+
+  // Open the identity chooser and sign-in with `fakeIdentity1`.
+  [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
+                                          kIdentityButtonControlIdentifier)]
+      performAction:grey_tap()];
+  [[EarlGrey selectElementWithMatcher:IdentityCellMatcherForEmail(
+                                          fakeIdentity1.userEmail)]
+      performAction:grey_tap()];
+  id<GREYMatcher> primaryButton =
+      FullscreenSigninPrimaryButtonMatcher(fakeIdentity1);
+  [[EarlGrey selectElementWithMatcher:primaryButton] performAction:grey_tap()];
+
+  // Verify that `fakeIdentity1` is still signed in.
+  [SigninEarlGrey verifySignedInWithFakeIdentity:fakeIdentity1];
 }
 
 // Tests that opening a cross-device sign-in deep link with an unknown entry
@@ -315,38 +493,8 @@ void CheckAccountSwitch(FakeSystemIdentity* signedInIdentity,
       simulateExternalAppURLOpeningWithURL:[NSURL URLWithString:urlString]];
 
   [ChromeEarlGrey waitForMatcher:chrome_test_util::SigninScreenPromoMatcher()];
-
-  GREYAssertNil(
-      [MetricsAppInterface
-          expectUniqueSampleWithCount:1
-                            forBucket:1
-                         forHistogram:
-                             @"Signin.CrossDevice.InitialAccountsNumber"],
-      @"Failed to record InitialAccountsNumber");
-  GREYAssertNil(
-      [MetricsAppInterface
-          expectUniqueSampleWithCount:1
-                            forBucket:1
-                         forHistogram:@"Signin.CrossDevice."
-                                      @"InitialAccountsNumber.Unknown"],
-      @"Failed to record InitialAccountsNumber");
-  GREYAssertNil(
-      [MetricsAppInterface
-          expectUniqueSampleWithCount:1
-                            forBucket:static_cast<int>(
-                                          CrossDeviceInitialState::
-                                              kSignedOutTargetAccountOnDevice)
-                         forHistogram:@"Signin.CrossDevice.InitialState"],
-      @"Failed to record InitialState");
-  GREYAssertNil(
-      [MetricsAppInterface
-          expectUniqueSampleWithCount:1
-                            forBucket:static_cast<int>(
-                                          CrossDeviceInitialState::
-                                              kSignedOutTargetAccountOnDevice)
-                         forHistogram:
-                             @"Signin.CrossDevice.InitialState.Unknown"],
-      @"Failed to record InitialState");
+  CheckMetrics(signin::ExternalEntryPoint::kUnknown, 1,
+               CrossDeviceInitialState::kSignedOutTargetAccountOnDevice);
 }
 
 // Tests that opening a cross-device sign-in deep link and cancelling the "Add

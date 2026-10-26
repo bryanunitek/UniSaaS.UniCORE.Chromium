@@ -5,18 +5,17 @@
 #include "base/base64.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/time/time.h"
 #include "components/autofill/core/browser/crowdsourcing/mock_autofill_crowdsourcing_manager.h"
 #include "components/autofill/core/browser/foundations/mock_autofill_manager_observer.h"
 #include "components/autofill/core/browser/integrators/one_time_tokens/otp_manager_impl.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_test_base.h"
-#include "components/autofill/core/browser/metrics/ukm_metrics_test_utils.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/metrics/ukm_metrics_test_util.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/signatures.h"
+#include "components/one_time_tokens/core/browser/fake_sms_otp_service.h"
 #include "components/one_time_tokens/core/browser/one_time_token.h"
 #include "components/one_time_tokens/core/browser/one_time_token_retrieval_error.h"
-#include "components/one_time_tokens/core/browser/one_time_token_service_impl.h"
-#include "components/one_time_tokens/core/browser/sms_otp_backend.h"
-#include "components/password_manager/core/browser/features/password_features.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -33,26 +32,11 @@ using ::testing::_;
 using ::testing::Each;
 using ::testing::Return;
 
-class MockSmsOtpBackend : public one_time_tokens::SmsOtpBackend {
- public:
-  MockSmsOtpBackend() = default;
-  ~MockSmsOtpBackend() override = default;
-
-  MOCK_METHOD(
-      void,
-      RetrieveSmsOtp,
-      (base::OnceCallback<
-          void(base::expected<one_time_tokens::OneTimeToken,
-                              one_time_tokens::OneTimeTokenRetrievalError>)>),
-      (override));
-};
-
 class OtpFormEventLoggerIntegrationTest
     : public autofill_metrics::AutofillMetricsBaseTest,
       public testing::Test {
  protected:
   OtpFormEventLoggerIntegrationTest() = default;
-  base::test::ScopedFeatureList feature_list_;
 
   void SetUp() override {
     SetUpHelper();
@@ -62,13 +46,13 @@ class OtpFormEventLoggerIntegrationTest
 
   void InitAutofillClient() override {
     autofill_metrics::AutofillMetricsBaseTest::InitAutofillClient();
-    // Inject the mocked SMS OTP backend into the TestAutofillClient.
-    auto mock_sms_otp_backend = std::make_unique<MockSmsOtpBackend>();
-    autofill_client().set_sms_otp_backend(std::move(mock_sms_otp_backend));
-    autofill_client().set_one_time_token_service(
-        std::make_unique<one_time_tokens::OneTimeTokenServiceImpl>(
-            autofill_client().GetSmsOtpBackend(),
-            /*gmail_otp_backend=*/nullptr));
+    autofill_client().set_sms_otp_service(
+        std::make_unique<one_time_tokens::FakeSmsOtpService>());
+  }
+
+  one_time_tokens::FakeSmsOtpService& sms_otp_service() {
+    return static_cast<one_time_tokens::FakeSmsOtpService&>(
+        *autofill_client().GetSmsOtpService());
   }
 
   void ResetCrowdsourcingManager() {
@@ -135,16 +119,16 @@ class OtpFormEventLoggerIntegrationTest
     return base::Base64Encode(response.SerializeAsString());
   }
 
-  void SetupMockedOtpResponse(bool returns_otp) {
-    MockSmsOtpBackend* backend =
-        static_cast<MockSmsOtpBackend*>(autofill_client().GetSmsOtpBackend());
-    EXPECT_CALL(*backend, RetrieveSmsOtp)
-        .WillRepeatedly([this, returns_otp](auto callback) {
-          if (returns_otp) {
-            autofill_manager().GetOtpFormEventLogger().OnOtpAvailable();
-          }
-          std::move(callback).Run(CreateOtpResult(returns_otp));
-        });
+  // Simulates the arrival of an SMS OTP if `returns_otp` is true, and a failed
+  // SMS OTP retrieval otherwise.
+  void SimulateOtpResponse(bool returns_otp) {
+    if (returns_otp) {
+      // `OtpManager` reports the availability of SMS OTPs only while
+      // suggestions are requested. Report it directly to simulate that the OTP
+      // was available before the user interacted with the form.
+      autofill_manager().GetOtpFormEventLogger().OnOtpAvailable();
+    }
+    sms_otp_service().SimulateOtpArrived(CreateOtpResult(returns_otp));
   }
 
   base::expected<one_time_tokens::OneTimeToken,
@@ -210,7 +194,6 @@ TEST_F(OtpFormEventLoggerIntegrationTest, Readiness) {
 
 TEST_F(OtpFormEventLoggerIntegrationTest, OtpReady) {
   base::HistogramTester histogram_tester;
-  SetupMockedOtpResponse(true);
   FormData otp_form = CreateOtpForm();
   SetupMockedServerPredictionResponse(
       CreateMockedServerResponseString(otp_form),
@@ -219,6 +202,8 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpReady) {
 
   // Trigger field type determination to start OTP retrieval.
   test_api(autofill_manager()).OnFormsParsed({otp_form});
+  ASSERT_EQ(sms_otp_service().num_subscribers(), 1u);
+  SimulateOtpResponse(/*returns_otp=*/true);
 
   // This line marks the form as interacted with which is a prerequisite for key
   // metrics to be emitted.
@@ -258,7 +243,6 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpReady) {
 
 TEST_F(OtpFormEventLoggerIntegrationTest, OtpNotReady) {
   base::HistogramTester histogram_tester;
-  SetupMockedOtpResponse(false);
   FormData otp_form = CreateOtpForm();
   SetupMockedServerPredictionResponse(
       CreateMockedServerResponseString(otp_form),
@@ -267,11 +251,16 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpNotReady) {
 
   // Trigger field type determination to start OTP retrieval.
   test_api(autofill_manager()).OnFormsParsed({otp_form});
+  ASSERT_EQ(sms_otp_service().num_subscribers(), 1u);
 
   // This line marks the form as interacted with which is a prerequisite for key
   // metrics to be emitted.
   autofill_manager().OnAskForValuesToFillTest(
       otp_form, otp_form.fields().front().global_id());
+
+  // Simulate that no OTP could be retrieved after the user interacted with the
+  // form.
+  SimulateOtpResponse(/*returns_otp=*/false);
 
   // Simulate the WillSubmit event.
   SubmitForm(otp_form);
@@ -305,12 +294,7 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpNotReady) {
 }
 
 TEST_F(OtpFormEventLoggerIntegrationTest, OtpAccepted) {
-#if BUILDFLAG(IS_ANDROID)
-  feature_list_.InitAndEnableFeature(
-      password_manager::features::kAndroidSmsOtpFilling);
-#endif
   base::HistogramTester histogram_tester;
-  SetupMockedOtpResponse(true);
   FormData otp_form = CreateOtpForm();
   SetupMockedServerPredictionResponse(
       CreateMockedServerResponseString(otp_form),
@@ -319,6 +303,8 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpAccepted) {
 
   // Trigger field type determination to start OTP retrieval.
   test_api(autofill_manager()).OnFormsParsed({otp_form});
+  ASSERT_EQ(sms_otp_service().num_subscribers(), 1u);
+  SimulateOtpResponse(/*returns_otp=*/true);
 
   // This line marks the form as interacted with which is a prerequisite for key
   // metrics to be emitted.
@@ -333,7 +319,8 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpAccepted) {
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, otp_form.global_id(),
       otp_form.fields().front().global_id(), &fill_data,
-      AutofillTriggerSource::kPopup, /*blocked_fields=*/{});
+      AutofillTriggerSource::kPopup, /*require_user_confirmation=*/false,
+      /*blocked_fields=*/{});
 
   SubmitForm(otp_form);
   DeleteDriverToCommitMetrics();
@@ -384,6 +371,8 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpAccepted) {
         autofill_metrics::GetUkmEvents(test_ukm_recorder(), Ukm::kEntryName),
         autofill_metrics::UkmEventsAre(
             {event_metrics(autofill_metrics::FORM_EVENT_DID_PARSE_FORM),
+             event_metrics(autofill_metrics::FORM_EVENT_DID_PARSE_FORM),
+             event_metrics(autofill_metrics::FORM_EVENT_DID_PARSE_FORM),
              event_metrics(autofill_metrics::FORM_EVENT_INTERACTED_ONCE),
              event_metrics(autofill_metrics::FORM_EVENT_SUGGESTIONS_SHOWN),
              event_metrics(autofill_metrics::FORM_EVENT_SUGGESTIONS_SHOWN_ONCE),
@@ -401,7 +390,6 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpAccepted) {
 
 TEST_F(OtpFormEventLoggerIntegrationTest, OtpNotAccepted) {
   base::HistogramTester histogram_tester;
-  SetupMockedOtpResponse(true);
   FormData otp_form = CreateOtpForm();
   SetupMockedServerPredictionResponse(
       CreateMockedServerResponseString(otp_form),
@@ -410,6 +398,8 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpNotAccepted) {
 
   // Trigger field type determination to start OTP retrieval.
   test_api(autofill_manager()).OnFormsParsed({otp_form});
+  ASSERT_EQ(sms_otp_service().num_subscribers(), 1u);
+  SimulateOtpResponse(/*returns_otp=*/true);
 
   // This line marks the form as interacted with which is a prerequisite for key
   // metrics to be emitted.
@@ -457,25 +447,22 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpNotAccepted) {
 }
 
 TEST_F(OtpFormEventLoggerIntegrationTest, OtpAcceptedAndCorrected) {
-#if BUILDFLAG(IS_ANDROID)
-  feature_list_.InitAndEnableFeature(
-      password_manager::features::kAndroidSmsOtpFilling);
-#endif
   base::HistogramTester histogram_tester;
-  SetupMockedOtpResponse(true);
   FormData otp_form = CreateOtpForm();
   SetupMockedServerPredictionResponse(
       CreateMockedServerResponseString(otp_form),
       CalculateFormSignature(otp_form));
   SeeForm(otp_form);
 
+  // Trigger field type determination to start OTP retrieval.
+  test_api(autofill_manager()).OnFormsParsed({otp_form});
+  ASSERT_EQ(sms_otp_service().num_subscribers(), 1u);
+  SimulateOtpResponse(/*returns_otp=*/true);
+
   // This line marks the form as interacted with which is a prerequisite for key
   // metrics to be emitted.
   autofill_manager().OnAskForValuesToFillTest(
       otp_form, otp_form.fields().front().global_id());
-
-  // Trigger field type determination to start OTP retrieval.
-  test_api(autofill_manager()).OnFormsParsed({otp_form});
 
   // Simulate that the suggestions are actually shown.
   DidShowAutofillSuggestions(otp_form, /*field_index=*/0);
@@ -485,7 +472,8 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpAcceptedAndCorrected) {
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, otp_form.global_id(),
       otp_form.fields().front().global_id(), &fill_data,
-      AutofillTriggerSource::kPopup, /*blocked_fields=*/{});
+      AutofillTriggerSource::kPopup, /*require_user_confirmation=*/false,
+      /*blocked_fields=*/{});
   // Simulate the user correcting the value.
   SimulateUserChangedFieldTo(otp_form, otp_form.fields().front().global_id(),
                              u"654321");
@@ -538,8 +526,10 @@ TEST_F(OtpFormEventLoggerIntegrationTest, OtpAcceptedAndCorrected) {
     EXPECT_THAT(
         autofill_metrics::GetUkmEvents(test_ukm_recorder(), Ukm::kEntryName),
         autofill_metrics::UkmEventsAre(
-            {event_metrics(autofill_metrics::FORM_EVENT_INTERACTED_ONCE),
+            {event_metrics(autofill_metrics::FORM_EVENT_DID_PARSE_FORM),
              event_metrics(autofill_metrics::FORM_EVENT_DID_PARSE_FORM),
+             event_metrics(autofill_metrics::FORM_EVENT_DID_PARSE_FORM),
+             event_metrics(autofill_metrics::FORM_EVENT_INTERACTED_ONCE),
              event_metrics(autofill_metrics::FORM_EVENT_SUGGESTIONS_SHOWN),
              event_metrics(autofill_metrics::FORM_EVENT_SUGGESTIONS_SHOWN_ONCE),
              event_metrics(

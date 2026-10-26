@@ -13,8 +13,8 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/browser/ui/webui/signin/history_sync_optin/history_sync_optin.mojom.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service.h"
@@ -82,14 +82,14 @@ history_sync_optin::mojom::AccountInfoPtr CreateAccountInfoDataMojo(
 HistorySyncOptinHandler::HistorySyncOptinHandler(
     mojo::PendingReceiver<history_sync_optin::mojom::PageHandler> receiver,
     mojo::PendingRemote<history_sync_optin::mojom::Page> page,
-    Browser* browser,
+    BrowserWindowInterface* browser,
     Profile* profile,
     std::optional<bool> should_close_modal_dialog,
     HistorySyncOptinHelper::FlowCompletedCallback
         history_optin_completed_callback)
     : receiver_(this, std::move(receiver)),
       page_(std::move(page)),
-      browser_(browser ? browser->AsWeakPtr() : nullptr),
+      browser_(browser ? browser->GetWeakPtr() : nullptr),
       profile_(profile),
       should_close_modal_dialog_(should_close_modal_dialog),
       history_optin_completed_callback_(
@@ -156,8 +156,7 @@ void HistorySyncOptinHandler::MaybeGetAccountInfo() {
 
 void HistorySyncOptinHandler::UpdateDialogHeight(uint32_t height) {
   if (browser_) {
-    browser_->GetFeatures().signin_view_controller()->SetModalSigninHeight(
-        height);
+    SigninViewController::From(browser_.get())->SetModalSigninHeight(height);
   }
 }
 
@@ -169,7 +168,7 @@ void HistorySyncOptinHandler::FinishAndCloseDialog(
   auto callback = std::move(history_optin_completed_callback_);
 
   if (browser_ && should_close_modal_dialog_.value_or(false)) {
-    browser_->GetFeatures().signin_view_controller()->CloseModalSignin();
+    SigninViewController::From(browser_.get())->CloseModalSignin();
   }
   if (!callback->is_null()) {
     std::move(callback.value()).Run(result);
@@ -229,7 +228,7 @@ void HistorySyncOptinHandler::DispatchAccountInfoUpdate(
     return;
   }
 
-  if (info.account_id !=
+  if (info.GetAccountId() !=
       identity_manager_->GetPrimaryAccountId(signin::ConsentLevel::kSignin)) {
     return;
   }

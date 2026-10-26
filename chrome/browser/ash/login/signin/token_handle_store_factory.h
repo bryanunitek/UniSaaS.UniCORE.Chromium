@@ -8,23 +8,25 @@
 #include <memory>
 #include <vector>
 
-#include "ash/public/cpp/token_handle_store.h"
 #include "base/containers/flat_map.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
-#include "base/no_destructor.h"
+#include "chrome/browser/ash/login/signin/token_handle_store.h"
 #include "chromeos/ash/components/login/auth/auth_factor_editor.h"
+
+class PrefService;
 
 namespace ash {
 
-// Helper class to switch implementation of TokenHandleStore depending
-// on feature flag state.
-// TokenHandleStoreFactory just switches the returned implementation by either
-// creating a TokenHandleUtil or returning the global instance of
-// TokenHandleStoreImpl.
-// This class is temporary, and will be removed once we completely migrate to
-// TokenHandleStoreImpl.
+// Owns the global instance of TokenHandleStore and hands it out to callers.
+// The instance is created lazily, before profile loading, and lives until the
+// browser shuts down.
 class TokenHandleStoreFactory {
  public:
+  // `local_state` must be non-null and must outlive `this`.
+  explicit TokenHandleStoreFactory(PrefService* local_state);
+  ~TokenHandleStoreFactory();
+
   TokenHandleStoreFactory(const TokenHandleStoreFactory&) = delete;
   TokenHandleStoreFactory& operator=(const TokenHandleStoreFactory&) = delete;
 
@@ -32,9 +34,9 @@ class TokenHandleStoreFactory {
 
   TokenHandleStore* GetTokenHandleStore();
 
-  void DestroyTokenHandleStore();
-
  private:
+  friend class TokenHandleStoreFactoryTest;
+
   // Functor that determines if a given `account_id` has a gaia password.
   // The class maintains the invariant that at any given time, there is at most
   // one request in flight for a given `account_id`.
@@ -70,13 +72,9 @@ class TokenHandleStoreFactory {
     base::WeakPtrFactory<DoesUserHaveGaiaPassword> weak_factory_{this};
   };
 
-  friend class base::NoDestructor<TokenHandleStoreFactory>;
+  std::unique_ptr<TokenHandleStore> CreateTokenHandleStore();
 
-  std::unique_ptr<TokenHandleStore> CreateTokenHandleStoreImpl();
-
-  TokenHandleStoreFactory();
-  ~TokenHandleStoreFactory();
-
+  const raw_ref<PrefService> local_state_;
   std::unique_ptr<DoesUserHaveGaiaPassword> does_user_have_gaia_password_;
   std::unique_ptr<TokenHandleStore> token_handle_store_;
 };

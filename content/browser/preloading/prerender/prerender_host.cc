@@ -548,7 +548,7 @@ PrerenderHost::PrerenderHost(
                          /*frame_policy=*/blink::FramePolicy(),
                          base::UnguessableToken::Create());
 
-    // Use the same SessionStorageNamespace as the primary page for the
+    // Use the same SessionStorageNamespaceHandle as the primary page for the
     // prerendering page.
     GetFrameTree()->controller().SetSessionStorageNamespace(
         site_instance->GetSecurityPrincipal().GetStoragePartitionConfig(),
@@ -736,9 +736,10 @@ void PrerenderHost::ReadyToCommitNavigation(
           blink::mojom::WebFeature::kPrerender2CrossOriginIframes);
     }
 
-    if (IsPrerenderActivationBeaconEnabled(
+    if (GetPrerenderActivationBeaconFeatureState(
             navigation_request->GetURL(),
-            navigation_request->GetResponseHeaders())) {
+            navigation_request->GetResponseHeaders()) ==
+        PreloadActivationBeaconFeatureState::kEnabled) {
       activation_beacon_url_ = FindActivationBeaconURL(*navigation_request);
     }
   }
@@ -833,7 +834,11 @@ std::unique_ptr<StoredPage> PrerenderHost::Activate(
         PreloadActivationReportManager::GetOrCreateForBrowserContext(
             web_contents_->GetBrowserContext());
     manager->ReportActivation(activation_beacon_url_,
-                              GetFrameTree()->root()->current_frame_host());
+                              GetFrameTree()->root()->current_frame_host(),
+                              PreloadActivationReportType::kPrerender);
+    GetContentClient()->browser()->LogWebFeatureForCurrentPage(
+        GetFrameTree()->root()->current_frame_host(),
+        blink::mojom::WebFeature::kPrefetchAndPrerenderActivationBeacon);
   }
 
   FrameTree& target_frame_tree = web_contents_->GetPrimaryFrameTree();
@@ -972,7 +977,7 @@ std::unique_ptr<StoredPage> PrerenderHost::Activate(
   // Prerender is activated. Set the status to kSuccess.
   SetTriggeringOutcome(PreloadingTriggeringOutcome::kSuccess);
   devtools_instrumentation::DidActivatePrerender(
-      navigation_request, initiator_devtools_navigation_token());
+      navigation_request, initiator_web_contents().get());
   return page;
 }
 
@@ -1191,12 +1196,6 @@ PrerenderHost::AreBeginNavigationParamsCompatibleWithNavigation(
       return ActivationNavigationParamsMatch::kRequestContextType;
   }
 
-  // Since impression should not be set, no need to compare contents.
-  CHECK(!begin_params_->impression);
-  if (potential_activation.impression.has_value()) {
-    return ActivationNavigationParamsMatch::kImpressionHasValue;
-  }
-
   // No need to test for devtools_initiator because this field is used for
   // tracking what triggered a network request, and prerender activation will
   // not use network requests.
@@ -1406,9 +1405,7 @@ PrerenderHost::LoadingOutcome PrerenderHost::WaitForLoadStopForTesting() {
 }
 
 bool PrerenderHost::ShouldAllowProcessReuse() const {
-  if (attributes_.IsBrowserInitiated() ||
-      !base::FeatureList::IsEnabled(
-          features::kPrerender2ReuseInitiatorProcess)) {
+  if (attributes_.IsBrowserInitiated()) {
     return false;
   }
 
@@ -1429,32 +1426,6 @@ bool PrerenderHost::ShouldAllowProcessReuse() const {
     return false;
   }
 
-  std::string allowed_action =
-      features::kPrerender2ReuseInitiatorProcessActionType.Get();
-
-  bool action_matches = false;
-  if (allowed_action == "all") {
-    action_matches = true;
-  } else if (allowed_action == "prerender" &&
-             attributes_.prerender_action_type ==
-                 blink::mojom::SpeculationAction::kPrerender) {
-    action_matches = true;
-  } else if (allowed_action == "prerender-until-script" &&
-             attributes_.prerender_action_type ==
-                 blink::mojom::SpeculationAction::kPrerenderUntilScript) {
-    action_matches = true;
-  }
-
-  if (!action_matches) {
-    return false;
-  }
-
-  std::string allowed_eagerness =
-      features::kPrerender2ReuseInitiatorProcessEagerness.Get();
-  if (allowed_eagerness == "all") {
-    return true;
-  }
-
   auto get_eagerness_score = [](blink::mojom::SpeculationEagerness e) {
     switch (e) {
       case blink::mojom::SpeculationEagerness::kConservative:
@@ -1470,20 +1441,63 @@ bool PrerenderHost::ShouldAllowProcessReuse() const {
 
   CHECK(attributes_.GetEagerness().has_value());
   int current_score = get_eagerness_score(attributes_.GetEagerness().value());
-  int allowed_score = 1;  // Default Moderate
-  if (allowed_eagerness == "conservative") {
-    allowed_score = 0;
-  } else if (allowed_eagerness == "moderate") {
-    allowed_score = 1;
-  } else if (allowed_eagerness == "eager") {
-    allowed_score = 2;
-  } else if (allowed_eagerness == "immediate") {
-    allowed_score = 3;
-  } else {
-    return false;
+  CHECK_GE(current_score, 0);
+
+  if (base::FeatureList::IsEnabled(
+          features::kPrerender2ReuseInitiatorProcess)) {
+    std::string allowed_action =
+        features::kPrerender2ReuseInitiatorProcessActionType.Get();
+
+    bool action_matches = false;
+    if (allowed_action == "all") {
+      action_matches = true;
+    } else if (allowed_action == "prerender" &&
+               attributes_.prerender_action_type ==
+                   blink::mojom::SpeculationAction::kPrerender) {
+      action_matches = true;
+    } else if (allowed_action == "prerender-until-script" &&
+               attributes_.prerender_action_type ==
+                   blink::mojom::SpeculationAction::kPrerenderUntilScript) {
+      action_matches = true;
+    }
+
+    if (action_matches) {
+      std::string allowed_eagerness =
+          features::kPrerender2ReuseInitiatorProcessEagerness.Get();
+      if (allowed_eagerness == "all") {
+        return true;
+      }
+
+      int allowed_score = 1;  // Default Moderate
+      if (allowed_eagerness == "conservative") {
+        allowed_score = 0;
+      } else if (allowed_eagerness == "moderate") {
+        allowed_score = 1;
+      } else if (allowed_eagerness == "eager") {
+        allowed_score = 2;
+      } else if (allowed_eagerness == "immediate") {
+        allowed_score = 3;
+      } else {
+        allowed_score = -1;
+      }
+
+      if (current_score <= allowed_score) {
+        return true;
+      }
+    }
   }
 
-  return current_score <= allowed_score;
+  // By default, process reuse is enabled for prerender-until-script with
+  // moderate or conservative eagerness.
+  if (attributes_.prerender_action_type ==
+          blink::mojom::SpeculationAction::kPrerenderUntilScript &&
+      base::FeatureList::IsEnabled(
+          features::kPrerenderUntilScriptProcessReuse)) {
+    constexpr int kDefaultAllowedScore = 1;  // Moderate
+    return current_score <= kDefaultAllowedScore;
+  }
+
+  return false;
 }
 
 const GURL& PrerenderHost::GetInitialUrl() const {
@@ -1609,7 +1623,6 @@ void PrerenderHost::SetFailureReason(
     case PrerenderFinalStatus::kJavaScriptInterfaceRemoved:
     case PrerenderFinalStatus::kAllPrerenderingCanceled:
     case PrerenderFinalStatus::kWindowClosed:
-    case PrerenderFinalStatus::kSlowNetwork:
     case PrerenderFinalStatus::kPrerenderFailedDuringPrefetch:
     case PrerenderFinalStatus::kBrowsingDataRemoved:
     case PrerenderFinalStatus::kFormSubmitWhenPrerendering:
@@ -2054,9 +2067,10 @@ void PrerenderHost::UpgradeToFullPrerender() {
   }
 
   upgraded_to_full_prerender_ = true;
-
-  // TODO(502133187): Notify DevTools that the prerender-until-script attempt
-  // has been upgraded.
+  if (devtools_attempt_) {
+    devtools_attempt_->SetEffectiveAction(
+        attributes_, blink::mojom::SpeculationAction::kPrerender);
+  }
 
   // Send the upgrade IPC to every RenderViewHost in the prerender frame tree,
   // mirroring how PageImpl::Activate propagates activation. This ensures all

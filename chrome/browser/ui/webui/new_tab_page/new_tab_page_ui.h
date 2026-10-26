@@ -12,27 +12,20 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/new_tab_page/modules/file_suggestion/drive_suggestion.mojom.h"
 #include "chrome/browser/new_tab_page/modules/file_suggestion/microsoft_files.mojom.h"
 #include "chrome/browser/new_tab_page/modules/new_tab_page_modules.h"
-#include "chrome/browser/new_tab_page/modules/v2/authentication/microsoft_auth.mojom.h"
 #include "chrome/browser/new_tab_page/modules/v2/calendar/google_calendar.mojom.h"
 #include "chrome/browser/new_tab_page/modules/v2/calendar/outlook_calendar.mojom.h"
 #include "chrome/browser/new_tab_page/modules/v2/most_relevant_tab_resumption/most_relevant_tab_resumption.mojom.h"
 #include "chrome/browser/new_tab_page/modules/v2/tab_groups/tab_groups.mojom.h"
+#include "chrome/browser/ui/webui/customize_buttons/customize_buttons.mojom.h"
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/action_chips.mojom.h"
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/action_chips_handler.h"
-#include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
-#include "ui/webui/resources/js/browser_command/browser_command.mojom.h"
-#if !defined(OFFICIAL_BUILD)
-#include "chrome/browser/ui/webui/new_tab_page/foo/foo.mojom.h"  // nogncheck crbug.com/40147906
-#endif
-#include "base/memory/weak_ptr.h"
-#include "base/scoped_observation.h"
-#include "chrome/browser/themes/theme_service.h"
-#include "chrome/browser/themes/theme_service_observer.h"
-#include "chrome/browser/ui/webui/customize_buttons/customize_buttons.mojom.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page.mojom.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/omnibox/browser/searchbox.mojom.h"
@@ -51,16 +44,24 @@
 #include "ui/native_theme/native_theme_observer.h"
 #include "ui/webui/mojo_web_ui_controller.h"
 #include "ui/webui/resources/cr_components/composebox/composebox.mojom.h"
+#include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
 #include "ui/webui/resources/cr_components/most_visited/most_visited.mojom.h"
+#include "ui/webui/resources/cr_components/search/plural_string_provider.mojom.h"
+#include "ui/webui/resources/js/browser_command/browser_command.mojom.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/webui/new_tab_page/ntp_promo/ntp_promo.mojom.h"  // nogncheck
 #include "chrome/browser/ui/webui/new_tab_page/ntp_promo/ntp_promo_handler.h"  // nogncheck
 #include "components/user_education/common/ntp_promo/ntp_promo_controller.h"
-#include "components/user_education/webui/help_bubble_handler.h"
+#include "components/user_education/webui/help_bubble_handler.h"  // nogncheck
+#endif
+
+#if !defined(OFFICIAL_BUILD)
+#include "chrome/browser/ui/webui/new_tab_page/foo/foo.mojom.h"  // nogncheck crbug.com/40147906
 #endif
 
 namespace base {
+class DictValue;
 class RefCountedMemory;
 }  // namespace base
 
@@ -87,10 +88,10 @@ class FooHandler;
 class GoogleCalendarPageHandler;
 class OutlookCalendarPageHandler;
 class GURL;
-class MicrosoftAuthPageHandler;
 class MicrosoftFilesPageHandler;
 class MostRelevantTabResumptionPageHandler;
 class MostVisitedHandler;
+class MostVisitedPrefObserver;
 class NewTabPageHandler;
 class NtpCustomBackgroundService;
 class PrefRegistrySimple;
@@ -98,6 +99,7 @@ class PrefService;
 class Profile;
 class RealboxHandler;
 class TabGroupsPageHandler;
+class ThemeService;
 class NewTabPageUI;
 
 class NewTabPageUI
@@ -131,6 +133,11 @@ class NewTabPageUI
   static void MigrateDeprecatedUseMostVisitedTilesPref(PrefService* prefs);
   static void MigrateDeprecatedShortcutsTypePref(PrefService* prefs);
   static bool IsManagedProfile(Profile* profile);
+
+  // Returns the loadTimeData of chrome://new-tab-page, for surfaces that reuse
+  // NTP elements outside of the WebUI (e.g. the NTP component extension).
+  static base::DictValue GetLoadTimeData(Profile* profile,
+                                         bool session_allows_drag_and_drop);
 
   // Instantiates the implementor of the mojom::PageHandlerFactory mojo
   // interface passing the pending receiver that will be internally bound.
@@ -179,32 +186,17 @@ class NewTabPageUI
       mojo::PendingReceiver<ntp::calendar::mojom::GoogleCalendarPageHandler>
           pending_receiver);
 
-  // Instantiates the implementor of
-  // npt::calendar::mojom::OutlookCalendarPageHandler mojo interface passing the
-  // pending receiver that will be internally bound.
-  void BindInterface(
-      mojo::PendingReceiver<ntp::calendar::mojom::OutlookCalendarPageHandler>
-          pending_receiver);
-
-  // Instantiates the implementor of
-  // npt::authentication::mojom::MicrosoftAuthPageHandler mojo
-  // interface passing the pending receiver that will be internally bound.
-  void BindInterface(mojo::PendingReceiver<
-                     ntp::authentication::mojom::MicrosoftAuthPageHandler>
-                         pending_receiver);
-
-  // Instantiates the implementor of
-  // file_suggestion::mojom::MicrosoftFilesPageHandler mojo interface
-  // passing the pending receiver that will be internally bound.
-  void BindInterface(
-      mojo::PendingReceiver<file_suggestion::mojom::MicrosoftFilesPageHandler>
-          pending_receiver);
-
   // Instantiates the implementor of the composebox::mojom::PageHandlerFactory
   // mojo interface inside the new tab page.
   void BindInterface(
       mojo::PendingReceiver<composebox::mojom::PageHandlerFactory>
           pending_receiver);
+
+  // Binds the plural_string::mojom::PluralStringProvider used by the shared
+  // searchbox and composebox components and the NTP modules.
+  void BindInterface(
+      mojo::PendingReceiver<plural_string::mojom::PluralStringProvider>
+          receiver);
 
 #if !defined(OFFICIAL_BUILD)
   // Instantiates the implementor of the foo::mojom::FooHandler mojo interface
@@ -212,9 +204,6 @@ class NewTabPageUI
   void BindInterface(
       mojo::PendingReceiver<foo::mojom::FooHandler> pending_receiver);
 #endif
-
-  void BindInterface(mojo::PendingReceiver<ntp::tab_groups::mojom::PageHandler>
-                         pending_page_handler);
 
   void BindInterface(mojo::PendingReceiver<
                      ntp::most_relevant_tab_resumption::mojom::PageHandler>
@@ -229,6 +218,23 @@ class NewTabPageUI
           pending_receiver);
 
 #if !BUILDFLAG(IS_ANDROID)
+  void BindInterface(mojo::PendingReceiver<ntp::tab_groups::mojom::PageHandler>
+                         pending_page_handler);
+
+  // Instantiates the implementor of
+  // npt::calendar::mojom::OutlookCalendarPageHandler mojo interface passing the
+  // pending receiver that will be internally bound.
+  void BindInterface(
+      mojo::PendingReceiver<ntp::calendar::mojom::OutlookCalendarPageHandler>
+          pending_receiver);
+
+  // Instantiates the implementor of
+  // file_suggestion::mojom::MicrosoftFilesPageHandler mojo interface
+  // passing the pending receiver that will be internally bound.
+  void BindInterface(
+      mojo::PendingReceiver<file_suggestion::mojom::MicrosoftFilesPageHandler>
+          pending_receiver);
+
   void BindInterface(
       mojo::PendingReceiver<ntp_promo::mojom::NtpPromoHandlerFactory>
           pending_receiver);
@@ -241,7 +247,7 @@ class NewTabPageUI
       mojo::PendingRemote<new_tab_page::mojom::MicrosoftAuthUntrustedDocument>
           child_page);
 
-  static base::RefCountedMemory* GetFaviconResourceBytes(
+  static scoped_refptr<base::RefCountedMemory> GetFaviconResourceBytes(
       ui::ResourceScaleFactor scale_factor);
 
   // Lazily creates and returns a reference to the owned contextual search
@@ -278,7 +284,6 @@ class NewTabPageUI
 
   // composebox::mojom::PageHandlerFactory:
   void CreatePageHandler(
-      mojo::PendingRemote<composebox::mojom::Page> pending_page,
       mojo::PendingReceiver<composebox::mojom::PageHandler>
           pending_page_handler,
       mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page,
@@ -317,22 +322,8 @@ class NewTabPageUI
       content::NavigationHandle* navigation_handle) override;
   void OnColorProviderChanged() override;
 
-  bool IsShortcutsVisible() const;
-
-  // Updates the NTP tile types based on current preferences.
-  void UpdateMostVisitedTileTypes();
-  // Callback for when the value of the prefs for determining the type of NTP
-  // tiles to show changes.
-  void OnTileTypesChanged();
-  // Callback for when the value of the pref for showing the NTP tiles changes.
-  void OnTilesVisibilityPrefChanged();
-  // Called when the enterprise shortcuts policy may have changed.
-  void OnEnterpriseShortcutsPolicyChanged();
   // Called when the NTP (re)loads. Sets mutable load time data.
   void OnLoad();
-
-  // Called to maybe enable enterprise shortcuts visibility by default.
-  void MaybeEnableEnterpriseShortcutsVisibility();
 
   // Based on the current profile and NTP promo controller, determine which
   // type of NTP promos can be shown, if any.
@@ -352,13 +343,13 @@ class NewTabPageUI
   mojo::Receiver<customize_buttons::mojom::CustomizeButtonsHandlerFactory>
       customize_buttons_factory_receiver_;
   std::unique_ptr<MostVisitedHandler> most_visited_page_handler_;
+  std::unique_ptr<MostVisitedPrefObserver> most_visited_pref_observer_;
   mojo::Receiver<most_visited::mojom::MostVisitedPageHandlerFactory>
       most_visited_page_factory_receiver_;
   mojo::Receiver<composebox::mojom::PageHandlerFactory>
       composebox_page_factory_receiver_;
   std::unique_ptr<ComposeboxHandler> composebox_handler_;
 #if BUILDFLAG(IS_ANDROID)
-  mojo::PendingRemote<composebox::mojom::Page> android_stub_composebox_page_;
   std::unique_ptr<composebox::mojom::PageHandler>
       android_stub_composebox_handler_;
   mojo::PendingRemote<searchbox::mojom::Page> android_stub_searchbox_page_;
@@ -371,6 +362,9 @@ class NewTabPageUI
   std::unique_ptr<NtpPromoHandler> ntp_promo_handler_;
   mojo::Receiver<ntp_promo::mojom::NtpPromoHandlerFactory>
       ntp_promo_handler_factory_receiver_;
+  std::unique_ptr<MicrosoftFilesPageHandler> microsoft_files_handler_;
+  std::unique_ptr<OutlookCalendarPageHandler> outlook_calendar_handler_;
+  std::unique_ptr<TabGroupsPageHandler> tab_groups_handler_;
 #endif  // BUILDFLAG(IS_ANDROID)
   std::unique_ptr<ActionChipsHandler> action_chips_handler_;
   mojo::Receiver<action_chips::mojom::ActionChipsHandlerFactory>
@@ -406,11 +400,6 @@ class NewTabPageUI
   // Mojo implementations for modules:
   std::unique_ptr<DriveSuggestionHandler> drive_handler_;
   std::unique_ptr<GoogleCalendarPageHandler> google_calendar_handler_;
-  std::unique_ptr<MicrosoftAuthPageHandler> microsoft_auth_handler_;
-  std::unique_ptr<MicrosoftFilesPageHandler> microsoft_files_handler_;
-  std::unique_ptr<OutlookCalendarPageHandler> outlook_calendar_handler_;
-  std::unique_ptr<TabGroupsPageHandler> tab_groups_handler_;
-  PrefChangeRegistrar pref_change_registrar_;
 
   base::WeakPtrFactory<NewTabPageUI> weak_ptr_factory_{this};
 

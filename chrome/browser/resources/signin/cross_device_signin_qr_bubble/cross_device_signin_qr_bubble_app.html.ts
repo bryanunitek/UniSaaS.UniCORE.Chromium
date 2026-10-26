@@ -13,11 +13,10 @@ export function getHtml(this: CrossDeviceSigninQrBubbleAppElement) {
 
   <div id="card-container">
     <div id="qr-wrapper">
-      ${
-      this.qrCodeDataUri ? html`
-        <img id="qr-code" src="${this.qrCodeDataUri}" alt="QR Code">
-      ` :
-                           ''}
+      ${this.qrCodeDataUri ? html`
+        <img id="qr-code" src="${this.qrCodeDataUri}"
+            alt="${this.i18n('qrCodeAltText', this.fullName)}">
+      ` : ''}
     </div>
 
     <div id="user-details">
@@ -25,6 +24,5 @@ export function getHtml(this: CrossDeviceSigninQrBubbleAppElement) {
       <div id="email">${this.email}</div>
     </div>
   </div>
-</div>
-`;
+</div>`;
 }

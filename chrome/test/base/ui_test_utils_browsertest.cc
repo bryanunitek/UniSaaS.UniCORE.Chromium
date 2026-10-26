@@ -11,6 +11,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "net/dns/mock_host_resolver.h"
+#include "ui/base/window_open_disposition.h"
 
 class UITestUtilsBrowserTest : public InProcessBrowserTest {
  public:
@@ -33,23 +34,23 @@ IN_PROC_BROWSER_TEST_F(UITestUtilsBrowserTest, OpenTwoTabsInBackground) {
   const GURL url3 = embedded_test_server()->GetURL("a.com", "/title3.html");
 
   NavigateToURLWithDisposition(browser(), url1,
-                               WindowOpenDisposition::CURRENT_TAB,
+                               WindowOpenDisposition::kCurrentTab,
                                ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   NavigateToURLWithDisposition(browser(), url2,
-                               WindowOpenDisposition::NEW_BACKGROUND_TAB,
+                               WindowOpenDisposition::kNewBackgroundTab,
                                ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // This test will pass if this call does not time out, which requires
   //   // NavigateToURLWithDisposition to pick correct tab to wait for.
   NavigateToURLWithDisposition(browser(), url3,
-                               WindowOpenDisposition::NEW_BACKGROUND_TAB,
+                               WindowOpenDisposition::kNewBackgroundTab,
                                ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 }
 
 IN_PROC_BROWSER_TEST_F(UITestUtilsBrowserTest, FindMatchingBrowsers) {
   BrowserWindowInterface* const regular_browser1 = browser();
   BrowserWindowInterface* const regular_browser2 =
-      CreateBrowser(browser()->profile());
+      CreateBrowser(browser()->GetProfile());
   BrowserWindowInterface* const incognito_browser = CreateIncognitoBrowser();
 
   // All browsers.

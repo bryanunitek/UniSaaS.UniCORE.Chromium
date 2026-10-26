@@ -50,9 +50,6 @@ bool LaunchArgumentsAreEqual(NSArray<NSString*>* args1,
 }  // namespace
 
 @interface AppLaunchManager ()
-// Similar to EG's -backgroundApplication, but with a longer 20 second wait and
-// faster 0.5 second poll interval.
-- (BOOL)backgroundApplication;
 // List of observers to be notified of actions performed by the app launch
 // manager.
 @property(nonatomic, strong)
@@ -256,7 +253,13 @@ bool LaunchArgumentsAreEqual(NSArray<NSString*>* args1,
 - (BOOL)backgroundApplication {
   XCUIApplication* currentApplication = [[XCUIApplication alloc] init];
   // Tell the system to background the app.
-  [[XCUIDevice sharedDevice] pressButton:XCUIDeviceButtonHome];
+  // `-[XCUIDevice pressButton:XCUIDeviceButtonHome]` -- and by extension
+  // `[EarlGrey backgroundApplication]` -- is unreliable across form factors.
+  // It fails under Stage Manager on iPad, drops events on multi-display devices
+  // like the Duo, and breaks across Xcode releases. Activating SpringBoard
+  // directly backgrounds the application consistently.
+  [[[XCUIApplication alloc] initWithBundleIdentifier:@"com.apple.springboard"]
+      activate];
   BOOL (^conditionBlock)(void) = ^BOOL {
     return currentApplication.state == XCUIApplicationStateRunningBackground ||
            currentApplication.state ==

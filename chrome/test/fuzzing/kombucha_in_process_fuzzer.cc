@@ -11,7 +11,9 @@
 #include "chrome/browser/ui/accelerator_utils.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
 #include "chrome/browser/ui/views/tabs/tab_group_header.h"
@@ -176,10 +178,9 @@ void KombuchaInProcessFuzzer::CleanInProcessBrowserState() {
   }
 
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
-  for (int i = 1; i < tab_strip_model->count(); i++) {
+  while (tab_strip_model->count() > 1) {
     auto* contents = tab_strip_model->GetActiveWebContents();
-    int idx = tab_strip_model->GetIndexOfWebContents(contents);
-    tab_strip_model->CloseWebContentsAt(idx, TabCloseTypes::CLOSE_NONE);
+    tab_strip_model->CloseWebContents(contents, TabCloseTypes::CLOSE_NONE);
   }
 }
 

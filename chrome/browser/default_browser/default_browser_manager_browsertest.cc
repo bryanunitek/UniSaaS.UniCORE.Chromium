@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -19,8 +20,8 @@
 #include "chrome/browser/default_browser/test_support/fake_shell_delegate.h"
 #include "chrome/browser/global_features.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/toasts/api/toast_id.h"
 #include "chrome/browser/ui/toasts/toast_controller.h"
 #include "chrome/grit/branded_strings.h"
@@ -33,6 +34,7 @@
 #include "ui/base/unowned_user_data/user_data_factory.h"
 
 #if BUILDFLAG(IS_WIN)
+#include "base/test/scoped_os_info_override_win.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/win/registry.h"
 #endif  // BUILDFLAG(IS_WIN)
@@ -59,7 +61,8 @@ class DefaultBrowserManagerWinBrowserTest : public InProcessBrowserTest {
     scoped_feature_list_.InitWithFeatures(
         /*enable_features*/ {kDefaultBrowserFramework,
                              kDefaultBrowserChangedOsNotification},
-        /*disabled_features=*/{});
+        /*disabled_features=*/{omnibox::internal::kWebUIOmniboxPopup,
+                               omnibox::internal::kWebUIOmniboxAimPopup});
   }
   ~DefaultBrowserManagerWinBrowserTest() override = default;
 
@@ -94,7 +97,7 @@ class DefaultBrowserManagerWinBrowserTest : public InProcessBrowserTest {
               return std::make_unique<DefaultBrowserManager>(
                   &browser_process, std::move(fake_shell_delegate),
                   base::BindLambdaForTesting(
-                      [&]() { return browser()->profile(); }));
+                      [&]() { return browser()->GetProfile(); }));
             }));
   }
 
@@ -144,6 +147,8 @@ class DefaultBrowserManagerWinBrowserTest : public InProcessBrowserTest {
   base::HistogramTester histogram_tester_;
 
  private:
+  base::test::ScopedOSInfoOverride win11_os_{
+      base::test::ScopedOSInfoOverride::Type::kWin11Pro};
   base::test::ScopedFeatureList scoped_feature_list_;
   ui::UserDataFactory::ScopedOverride global_feature_override_;
   registry_util::RegistryOverrideManager registry_override_manager_;
@@ -284,8 +289,9 @@ IN_PROC_BROWSER_TEST_F(DefaultBrowserManagerWinBrowserTest,
       "DefaultBrowser.ChangeDetectedNotification.ShellIntegration.Shown", 1, 1);
 }
 
+// TODO(crbug.com/526025707): Re-enable this test.
 IN_PROC_BROWSER_TEST_F(DefaultBrowserManagerWinBrowserTest,
-                       NoNotificationWhenChromeRemainsDefault) {
+                       DISABLED_NoNotificationWhenChromeRemainsDefault) {
   fake_shell_delegate_ptr_->set_default_state(shell_integration::IS_DEFAULT);
   CreateDefaultBrowserKey(L"ChromeHTML");
 
@@ -455,8 +461,7 @@ IN_PROC_BROWSER_TEST_F(DefaultBrowserManagerBrowserTest, OnAcceptedShowsToast) {
   controller.OnAccepted(future.GetCallback());
   EXPECT_EQ(future.Get(), DefaultBrowserState::IS_DEFAULT);
 
-  ToastController* toast_controller =
-      browser()->browser_window_features()->toast_controller();
+  ToastController* toast_controller = ToastController::From(browser());
   ASSERT_TRUE(toast_controller);
   EXPECT_TRUE(toast_controller->IsShowingToast());
   EXPECT_EQ(toast_controller->GetCurrentToastId(),

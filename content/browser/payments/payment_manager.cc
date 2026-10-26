@@ -8,13 +8,9 @@
 
 #include "base/functional/bind.h"
 #include "base/strings/string_util.h"
-#include "content/browser/payments/payment_app.pb.h"
 #include "content/browser/payments/payment_app_context_impl.h"
 #include "content/browser/payments/payment_app_database.h"
-#include "content/browser/service_worker/service_worker_context_wrapper.h"
-#include "content/browser/service_worker/service_worker_registration.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/service_worker_context.h"
 
 namespace content {
 namespace {
@@ -41,19 +37,19 @@ PaymentManager::PaymentManager(
     : payment_app_context_(payment_app_context),
       origin_(origin),
       receiver_(this, std::move(receiver)) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(payment_app_context);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(payment_app_context, base::NotFatalUntil::M160);
 
   receiver_.set_disconnect_handler(base::BindOnce(
       &PaymentManager::OnConnectionError, weak_ptr_factory_.GetWeakPtr()));
 }
 
 PaymentManager::~PaymentManager() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 }
 
 void PaymentManager::Init(const GURL& context_url, const std::string& scope) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (!context_url.is_valid()) {
     receiver_.ResetWithReason(
@@ -88,122 +84,9 @@ void PaymentManager::Init(const GURL& context_url, const std::string& scope) {
     return;
   }
 
-  should_set_payment_app_info_ = true;
-  context_url_ = context_url;
   scope_ = scope_url;
 }
 
-void PaymentManager::DeletePaymentInstrument(
-    const std::string& instrument_key,
-    PaymentManager::DeletePaymentInstrumentCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (scope_.is_empty()) {
-    receiver_.ResetWithReason(static_cast<uint32_t>(ReasonCode::kInvalidState),
-                              kInvalidPaymentManagerStateMessage);
-    return;
-  }
-
-  payment_app_context_->payment_app_database()->DeletePaymentInstrument(
-      scope_, instrument_key, std::move(callback));
-}
-
-void PaymentManager::GetPaymentInstrument(
-    const std::string& instrument_key,
-    PaymentManager::GetPaymentInstrumentCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (scope_.is_empty()) {
-    receiver_.ResetWithReason(static_cast<uint32_t>(ReasonCode::kInvalidState),
-                              kInvalidPaymentManagerStateMessage);
-    return;
-  }
-
-  payment_app_context_->payment_app_database()->ReadPaymentInstrument(
-      scope_, instrument_key, std::move(callback));
-}
-
-void PaymentManager::KeysOfPaymentInstruments(
-    PaymentManager::KeysOfPaymentInstrumentsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (scope_.is_empty()) {
-    receiver_.ResetWithReason(static_cast<uint32_t>(ReasonCode::kInvalidState),
-                              kInvalidPaymentManagerStateMessage);
-    return;
-  }
-
-  payment_app_context_->payment_app_database()->KeysOfPaymentInstruments(
-      scope_, std::move(callback));
-}
-
-void PaymentManager::HasPaymentInstrument(
-    const std::string& instrument_key,
-    PaymentManager::HasPaymentInstrumentCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (scope_.is_empty()) {
-    receiver_.ResetWithReason(static_cast<uint32_t>(ReasonCode::kInvalidState),
-                              kInvalidPaymentManagerStateMessage);
-    return;
-  }
-
-  payment_app_context_->payment_app_database()->HasPaymentInstrument(
-      scope_, instrument_key, std::move(callback));
-}
-
-void PaymentManager::SetPaymentInstrument(
-    const std::string& instrument_key,
-    payments::mojom::PaymentInstrumentPtr details,
-    PaymentManager::SetPaymentInstrumentCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (scope_.is_empty()) {
-    receiver_.ResetWithReason(static_cast<uint32_t>(ReasonCode::kInvalidState),
-                              kInvalidPaymentManagerStateMessage);
-    return;
-  }
-
-  if (should_set_payment_app_info_) {
-    payment_app_context_->payment_app_database()->WritePaymentInstrument(
-        scope_, instrument_key, std::move(details),
-        base::BindOnce(
-            &PaymentManager::SetPaymentInstrumentIntermediateCallback,
-            weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-  } else {
-    payment_app_context_->payment_app_database()->WritePaymentInstrument(
-        scope_, instrument_key, std::move(details), std::move(callback));
-  }
-}
-
-void PaymentManager::SetPaymentInstrumentIntermediateCallback(
-    PaymentManager::SetPaymentInstrumentCallback callback,
-    payments::mojom::PaymentHandlerStatus status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (scope_.is_empty()) {
-    receiver_.ResetWithReason(static_cast<uint32_t>(ReasonCode::kInvalidState),
-                              kInvalidPaymentManagerStateMessage);
-    return;
-  }
-
-  if (status != payments::mojom::PaymentHandlerStatus::SUCCESS ||
-      !should_set_payment_app_info_) {
-    std::move(callback).Run(status);
-    return;
-  }
-
-  payment_app_context_->payment_app_database()->FetchAndUpdatePaymentAppInfo(
-      context_url_, scope_, std::move(callback));
-  should_set_payment_app_info_ = false;
-}
-
-void PaymentManager::ClearPaymentInstruments(
-    ClearPaymentInstrumentsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (scope_.is_empty()) {
-    receiver_.ResetWithReason(static_cast<uint32_t>(ReasonCode::kInvalidState),
-                              kInvalidPaymentManagerStateMessage);
-    return;
-  }
-
-  payment_app_context_->payment_app_database()->ClearPaymentInstruments(
-      scope_, std::move(callback));
-}
 
 void PaymentManager::SetUserHint(const std::string& user_hint) {
   if (scope_.is_empty()) {
@@ -219,7 +102,7 @@ void PaymentManager::SetUserHint(const std::string& user_hint) {
 void PaymentManager::EnableDelegations(
     const std::vector<payments::mojom::PaymentDelegation>& delegations,
     PaymentManager::EnableDelegationsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (scope_.is_empty()) {
     receiver_.ResetWithReason(static_cast<uint32_t>(ReasonCode::kInvalidState),
                               kInvalidPaymentManagerStateMessage);
@@ -231,7 +114,7 @@ void PaymentManager::EnableDelegations(
 }
 
 void PaymentManager::OnConnectionError() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   payment_app_context_->PaymentManagerHadConnectionError(this);
 }
 

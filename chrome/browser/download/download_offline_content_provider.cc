@@ -182,7 +182,7 @@ DownloadOfflineContentProvider::~DownloadOfflineContentProvider() {
 
 void DownloadOfflineContentProvider::SetSimpleDownloadManagerCoordinator(
     SimpleDownloadManagerCoordinator* manager) {
-  DCHECK(manager);
+  CHECK(manager, base::NotFatalUntil::M161);
   if (manager_ == manager)
     return;
 
@@ -616,13 +616,14 @@ void DownloadOfflineContentProvider::CheckForExternallyRemovedDownloads() {
 }
 
 void DownloadOfflineContentProvider::EnsureDownloadCoreServiceStarted() {
-  DCHECK(profile_);
+  CHECK(profile_, base::NotFatalUntil::M161);
 
   // Make sure download history is initialized.
   DownloadCoreService* service =
       DownloadCoreServiceFactory::GetForBrowserContext(profile_);
   if (service) {
-    service->InitializeHistory();
+    service->InitializeHistory(DownloadCoreService::DownloadHistoryLoadTrigger::
+                                   kOfflineContentProvider);
   }
 
   CHECK(profile_->GetDownloadManager());

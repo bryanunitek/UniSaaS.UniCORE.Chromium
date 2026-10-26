@@ -16,42 +16,32 @@ import android.view.View;
 
 import androidx.preference.Preference;
 import androidx.preference.PreferenceScreen;
-import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.robolectric.Robolectric;
+import org.robolectric.android.controller.ActivityController;
 
-import org.chromium.base.test.BaseJUnit4ClassRunner;
-import org.chromium.base.test.util.Batch;
-import org.chromium.components.browser_ui.settings.BlankUiTestActivitySettingsTestRule;
+import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.components.browser_ui.settings.PlaceholderSettingsForTest;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
 import org.chromium.components.browser_ui.widget.R;
 import org.chromium.components.browser_ui.widget.containment.ContainmentItem.BackgroundStyle;
+import org.chromium.ui.base.TestActivity;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /** Tests for {@link ContainmentItemController}. */
-@RunWith(BaseJUnit4ClassRunner.class)
-@Batch(Batch.PER_CLASS)
+@RunWith(BaseRobolectricTestRunner.class)
 public class ContainmentItemControllerTest {
-    @Rule
-    public final BlankUiTestActivitySettingsTestRule mSettingsRule =
-            new BlankUiTestActivitySettingsTestRule();
-
     private int mDefaultRadius;
     private int mInnerRadius;
     private int mSectionBottomMargin;
     private int mDefaultContainerVerticalMargin;
     private int mDefaultMargin;
     private int mBackgroundColor;
-
-    private static final int CUSTOM_TOP_MARGIN = 100;
-    private static final int CUSTOM_BOTTOM_MARGIN = 200;
-    private static final int CUSTOM_HORIZONTAL_MARGIN = 50;
 
     private Context mContext;
     private ContainmentItemController mController;
@@ -61,9 +51,16 @@ public class ContainmentItemControllerTest {
 
     @Before
     public void setUp() {
-        mSettingsRule.launchPreference(PlaceholderSettingsForTest.class);
-        mContext = mSettingsRule.getActivity();
-        mPreferenceScreen = mSettingsRule.getPreferenceScreen();
+        ActivityController<TestActivity> controller = Robolectric.buildActivity(TestActivity.class);
+        controller.get().setTheme(R.style.Theme_BrowserUI_DayNight);
+        TestActivity activity = controller.setup().get();
+        PlaceholderSettingsForTest fragment = new PlaceholderSettingsForTest();
+        activity.getSupportFragmentManager()
+                .beginTransaction()
+                .replace(android.R.id.content, fragment)
+                .commitNow();
+        mContext = activity;
+        mPreferenceScreen = fragment.getPreferenceScreen();
         mController = new ContainmentItemController(mContext);
         mDefaultRadius =
                 mContext.getResources()
@@ -81,16 +78,13 @@ public class ContainmentItemControllerTest {
                 mContext.getResources().getDimensionPixelSize(R.dimen.settings_item_margin);
         mBackgroundColor = getSettingsContainerBackgroundColor(mContext);
 
-        mSettingsRule
-                .getPreferenceFragment()
-                .addPreferencesFromResource(R.xml.test_settings_custom_preference_screen);
+        fragment.addPreferencesFromResource(R.xml.test_settings_custom_preference_screen);
 
         mVisiblePreferences = SettingsUtils.getVisiblePreferences(mPreferenceScreen);
         mPreferenceStyles = mController.generatePreferenceStyles(mVisiblePreferences);
     }
 
     @Test
-    @SmallTest
     public void testPreferenceStyleCount() {
         assertEquals(
                 "The number of styles should match the number of visible preferences.",
@@ -99,7 +93,6 @@ public class ContainmentItemControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testPreferenceCategoryStyle() {
         ContainerStyle preferenceCategoryStyle = getPreferenceStyle("preference_category");
         assertEquals(mDefaultMargin, preferenceCategoryStyle.getBottomMargin());
@@ -108,7 +101,6 @@ public class ContainmentItemControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testTextMessagePreferenceStyle() {
         ContainerStyle textMessagePreferenceStyle = getPreferenceStyle("text_message_preference");
         assertEquals(mDefaultRadius, textMessagePreferenceStyle.getTopRadius(), 0);
@@ -121,7 +113,6 @@ public class ContainmentItemControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testContainerStyle_PreferenceTop() {
         ContainerStyle preferenceTopStyle = getPreferenceStyle("preference_top");
         assertEquals(mDefaultRadius, preferenceTopStyle.getTopRadius(), 0);
@@ -131,7 +122,6 @@ public class ContainmentItemControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testContainerStyle_PreferenceMiddle() {
         ContainerStyle preferenceMiddleStyle = getPreferenceStyle("preference_middle");
         assertEquals(mInnerRadius, preferenceMiddleStyle.getTopRadius(), 0);
@@ -141,7 +131,6 @@ public class ContainmentItemControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testContainerStyle_PreferenceBottom() {
         ContainerStyle preferenceBottomStyle = getPreferenceStyle("preference_bottom");
         assertEquals(mInnerRadius, preferenceBottomStyle.getTopRadius(), 0);
@@ -153,7 +142,6 @@ public class ContainmentItemControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testCardBackgroundStyle() {
         ContainerStyle styleCard = getPreferenceStyle("preference_card");
         assertEquals(mDefaultRadius, styleCard.getTopRadius(), 0);
@@ -166,7 +154,6 @@ public class ContainmentItemControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testCustomColorBackgroundStyle() {
         ContainerStyle styleCustomColor = getPreferenceStyle("preference_color");
         assertEquals(mDefaultRadius, styleCustomColor.getTopRadius(), 0);
@@ -181,7 +168,6 @@ public class ContainmentItemControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testStandardBackgroundStyle() {
         ContainerStyle styleStandard = getPreferenceStyle("preference_standard");
         assertEquals(mDefaultRadius, styleStandard.getTopRadius(), 0);
@@ -194,14 +180,12 @@ public class ContainmentItemControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testNoneBackgroundStyle() {
         ContainerStyle styleNone = getPreferenceStyle("preference_none");
         assertSame(ContainerStyle.EMPTY, styleNone);
     }
 
     @Test
-    @SmallTest
     public void testGenerateViewStyles_Layout() {
         List<View> views =
                 List.of(
@@ -227,7 +211,6 @@ public class ContainmentItemControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testGenerateViewStyles_Standalone() {
         List<View> views =
                 List.of(
@@ -245,7 +228,6 @@ public class ContainmentItemControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testGenerateViewStyles_CustomNone() {
         List<View> views = List.of(new CustomView(mContext, BackgroundStyle.NONE));
         ArrayList<ContainerStyle> viewStyles = mController.generateViewStyles(views);
@@ -254,7 +236,6 @@ public class ContainmentItemControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testGenerateViewStyles_CustomCard() {
         List<View> views = List.of(new CustomView(mContext, BackgroundStyle.CARD));
         ArrayList<ContainerStyle> viewStyles = mController.generateViewStyles(views);

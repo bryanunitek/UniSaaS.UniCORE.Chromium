@@ -11,9 +11,11 @@
 #include <vector>
 
 #include "base/callback_list.h"
+#include "base/component_export.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/observer_list.h"
@@ -24,9 +26,10 @@
 #include "base/types/pass_key.h"
 #include "base/values.h"
 #include "base/version.h"
+#include "build/build_config.h"
 #include "components/webapps/isolated_web_apps/key_distribution/iwa_key_distribution_histograms.h"
+#include "components/webapps/isolated_web_apps/key_distribution/iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/key_distribution/proto/key_distribution.pb.h"
-#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
 
 class BrowserProcessImpl;
 class TestingBrowserProcess;
@@ -41,7 +44,8 @@ namespace web_app {
 
 // This class is a singleton responsible for processing the IWA Key Distribution
 // Component data.
-class IwaKeyDistributionInfoProvider : public IwaRuntimeDataProvider {
+class COMPONENT_EXPORT(ISOLATED_WEB_APPS) IwaKeyDistributionInfoProvider
+    : public IwaRuntimeDataProvider {
  public:
   using KeyRotations =
       base::flat_map<std::string, IwaRuntimeDataProvider::KeyRotationInfo>;
@@ -206,6 +210,11 @@ class IwaKeyDistributionInfoProvider : public IwaRuntimeDataProvider {
       on_component_updated_for_testing_;
   bool skip_managed_checks_for_testing_ = false;
 };
+
+#if BUILDFLAG(IS_CHROMEOS)
+COMPONENT_EXPORT(ISOLATED_WEB_APPS)
+BASE_DECLARE_FEATURE(kIsolatedWebAppBypassManagedAllowlist);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace web_app
 

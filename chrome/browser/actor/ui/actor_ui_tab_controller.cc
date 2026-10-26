@@ -4,12 +4,14 @@
 
 #include "chrome/browser/actor/ui/actor_ui_tab_controller.h"
 
+#include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/functional/concurrent_closures.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/actor/ui/actor_border_view_controller.h"
+#include "chrome/browser/actor/ui/actor_task_unload_handler.h"
 #include "chrome/browser/actor/ui/actor_ui_metrics.h"
 #include "chrome/browser/actor/ui/actor_ui_tab_controller_interface.h"
 #include "chrome/browser/actor/ui/actor_ui_window_controller.h"
@@ -17,11 +19,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/tab_change_type.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
+#include "components/constrained_window/constrained_window_views.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+#include "ui/views/bubble/bubble_dialog_model_host.h"
+#include "ui/views/widget/widget.h"
 
 DEFINE_USER_DATA(actor::ui::ActorUiTabController);
 
@@ -34,6 +37,14 @@ void LogAndIgnoreCallbackError(const std::string_view source_name,
     LOG(DFATAL) << "Unexpected error in callback from " << source_name;
     RecordTabControllerError(ActorUiTabControllerError::kCallbackError);
   }
+}
+
+// static
+ActorUiTabController* ActorUiTabController::From(tabs::TabInterface* tab) {
+  if (!tab) {
+    return nullptr;
+  }
+  return Get(tab->GetUnownedUserDataHost());
 }
 
 ActorUiTabController::ActorUiTabController(
@@ -51,9 +62,19 @@ ActorUiTabController::ActorUiTabController(
   CHECK(base::FeatureList::IsEnabled(features::kGlicActorUi));
   CHECK(base::FeatureList::IsEnabled(features::kGlicActor));
   CHECK(actor_keyed_service_);
+  RegisterTabSubscriptions();
 }
 
 ActorUiTabController::~ActorUiTabController() = default;
+
+void ActorUiTabController::RegisterTabSubscriptions() {
+  if (base::FeatureList::IsEnabled(
+          features::kGlicHandoffButtonHideWhenModalUIShown)) {
+    tab_subscriptions_.push_back(
+        tab_->RegisterModalUIChanged(base::BindRepeating(
+            &ActorUiTabController::OnModalUIChanged, base::Unretained(this))));
+  }
+}
 
 void ActorUiTabController::OnUiTabStateChange(const UiTabState& ui_tab_state,
                                               UiResultCallback callback) {
@@ -68,19 +89,6 @@ void ActorUiTabController::OnUiTabStateChange(const UiTabState& ui_tab_state,
 
   current_ui_tab_state_ = ui_tab_state;
   UpdateUi(std::move(callback));
-}
-
-[[nodiscard]] base::ScopedClosureRunner
-ActorUiTabController::RegisterActorTabIndicatorStateChangedCallback(
-    ActorTabIndicatorStateChangedCallback callback) {
-  // Crash if attempting to register a null callback, or if a callback is
-  // already registered.
-  CHECK(!callback.is_null());
-  CHECK(on_actor_tab_indicator_changed_callback_.is_null());
-  on_actor_tab_indicator_changed_callback_ = std::move(callback);
-  return base::ScopedClosureRunner(base::BindOnce(
-      &ActorUiTabController::UnregisterActorTabIndicatorStateChange,
-      weak_factory_.GetWeakPtr()));
 }
 
 [[nodiscard]] base::ScopedClosureRunner
@@ -109,6 +117,31 @@ ActorUiTabController::RegisterActorOverlayStateChange(
                      weak_factory_.GetWeakPtr()));
 }
 
+void ActorUiTabController::SetCursorChipText(const std::string& text) {
+  if (cursor_chip_text_ == text) {
+    return;
+  }
+  cursor_chip_text_ = text;
+  if (cursor_chip_text_changed_callback_) {
+    cursor_chip_text_changed_callback_.Run(cursor_chip_text_);
+  }
+}
+
+std::string ActorUiTabController::GetCursorChipText() const {
+  return cursor_chip_text_;
+}
+
+[[nodiscard]] base::ScopedClosureRunner
+ActorUiTabController::RegisterCursorChipTextChange(
+    CursorChipTextChangeCallback callback) {
+  CHECK(!callback.is_null());
+  CHECK(cursor_chip_text_changed_callback_.is_null());
+  cursor_chip_text_changed_callback_ = std::move(callback);
+  return base::ScopedClosureRunner(
+      base::BindOnce(&ActorUiTabController::UnregisterCursorChipTextChange,
+                     weak_factory_.GetWeakPtr()));
+}
+
 void ActorUiTabController::SetActorTabIndicatorVisibility(
     TabIndicatorStatus tab_indicator_status,
     base::OnceClosure callback) {
@@ -117,15 +150,9 @@ void ActorUiTabController::SetActorTabIndicatorVisibility(
   // alert migrates away from the GLIC_ACCESSING resources.
   if (tab_indicator_ != tab_indicator_status) {
     tab_indicator_ = tab_indicator_status;
-    if (on_actor_tab_indicator_changed_callback_) {
-      on_actor_tab_indicator_changed_callback_.Run(tab_indicator_);
-      // Notify tab strip model of state change.
-      tab_->GetBrowserWindowInterface()->GetTabStripModel()->NotifyTabChanged(
-          base::to_address(tab_), TabChangeType::kAll);
-    }
+    NotifyActorTabIndicatorStateChanged(tab_indicator_);
   }
   std::move(callback).Run();
-  return;
 }
 
 void ActorUiTabController::OnViewBoundsChanged() {
@@ -196,6 +223,12 @@ bool ActorUiTabController::ComputeActorOverlayVisibility() {
 }
 
 bool ActorUiTabController::ComputeHandoffButtonVisibility() {
+  if (base::FeatureList::IsEnabled(
+          features::kGlicHandoffButtonHideWhenModalUIShown) &&
+      !tab_->CanShowModalUI()) {
+    return false;
+  }
+
   // TODO(crbug.com/436662421): Clean up this null check for
   // ActorUiWindowController. The GetImmersiveModeController call is done
   // on the BrowserView, which causes crashes in test scenarios where the
@@ -272,6 +305,11 @@ void ActorUiTabController::OnWindowOmniboxPopupVisibilityChanged() {
                           "OnWindowOmniboxPopupVisibilityChanged"));
 }
 
+void ActorUiTabController::OnModalUIChanged(tabs::TabInterface* tab) {
+  CHECK_EQ(tab, base::to_address(tab_), base::NotFatalUntil::M161);
+  UpdateUi(base::BindOnce(&LogAndIgnoreCallbackError, "OnModalUIChanged"));
+}
+
 void ActorUiTabController::OnOverlayHoverStatusChanged(bool is_hovering) {
   is_overlay_hovered_ = is_hovering;
   update_scrim_background_debounce_timer_.Reset();
@@ -289,8 +327,8 @@ void ActorUiTabController::UnregisterActorOverlayBackgroundChange() {
   actor_overlay_background_changed_callback_.Reset();
 }
 
-void ActorUiTabController::UnregisterActorTabIndicatorStateChange() {
-  on_actor_tab_indicator_changed_callback_.Reset();
+void ActorUiTabController::UnregisterCursorChipTextChange() {
+  cursor_chip_text_changed_callback_.Reset();
 }
 
 void ActorUiTabController::UnregisterHandoffButtonController() {
@@ -318,5 +356,51 @@ ActorUiTabController::GetWeakPtr() {
 UiTabState ActorUiTabController::GetCurrentUiTabState() const {
   return current_ui_tab_state_;
 }
+
+bool ActorUiTabController::MaybeDeferNavigation(
+    tabs::TabInterface* tab,
+    const GURL& url,
+    ActorNavigationThrottle::Delegate::NavigationConfirmedCallback callback) {
+  CHECK(!tab || tab == &*tab_);
+  content::WebContents* contents = tab_->GetContents();
+  if (!ActorTaskTabCloseConfirmDialog::ShouldShow(contents)) {
+    return false;
+  }
+
+  // A newer navigation supersedes the pending one. This frees the tab-modal
+  // slot for the dialog created below.
+  CancelNavigationConfirmation(tab);
+
+  // The task is left running here. If the user accepts, the throttle stops it
+  // with `kUserNavigatedAway`.
+  std::unique_ptr<views::BubbleDialogModelHost> delegate =
+      ActorTaskTabCloseConfirmDialog::CreateDelegate(contents,
+                                                     std::move(callback));
+  if (!delegate) {
+    return false;
+  }
+  active_navigation_confirm_widget_ =
+      constrained_window::ShowWebModalDialogViews(delegate.release(), contents)
+          ->GetWeakPtr();
+  return true;
+}
+
+#if !BUILDFLAG(IS_ANDROID)
+void ActorUiTabController::CancelNavigationConfirmation(
+    tabs::TabInterface* tab) {
+  CHECK(!tab || tab == &*tab_);
+  // Closing synchronously releases the old dialog's tab-modal slot and rejects
+  // its navigation if that navigation's throttle still exists; the navigation
+  // may already have been superseded.
+  if (active_navigation_confirm_widget_) {
+    active_navigation_confirm_widget_->CloseNow();
+  }
+}
+
+views::Widget*
+ActorUiTabController::GetActiveNavigationConfirmDialogWidgetForTesting() const {
+  return active_navigation_confirm_widget_.get();
+}
+#endif
 
 }  // namespace actor::ui

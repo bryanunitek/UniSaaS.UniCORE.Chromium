@@ -72,6 +72,12 @@ inline std::string ToString(SidePanelOpenTrigger trigger) {
       return "ContextualTasks";
     case SidePanelOpenTrigger::kReadAnythingListenToThisPageContextMenu:
       return "ReadAnythingListenToThisPageContextMenu";
+    case SidePanelOpenTrigger::kReadAnythingUnknown:
+      return "ReadAnythingUnknown";
+    case SidePanelOpenTrigger::kPdfTranslation:
+      return "PdfTranslation";
+    case SidePanelOpenTrigger::kUnknown:
+      return "Unknown";
   }
   NOTREACHED();
 }

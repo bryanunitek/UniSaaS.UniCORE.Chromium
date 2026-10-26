@@ -35,6 +35,7 @@
 #include "cc/trees/transform_node.h"
 #include "components/viz/common/view_transition_element_resource_id.h"
 #include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/geometry/vector2d_f.h"
@@ -470,14 +471,15 @@ class CC_EXPORT EffectTree final : public PropertyTree<EffectNode> {
 
   float EffectiveOpacity(const EffectNode& node) const;
 
-  void UpdateSurfaceContentsScale(EffectNode* node);
+  void UpdateSurfaceContentsScale(EffectNode* node,
+                                  float external_page_scale_factor);
 
   bool OnOpacityAnimated(ElementId id, float opacity);
   bool OnFilterAnimated(ElementId id, const FilterOperations& filters);
   bool OnBackdropFilterAnimated(ElementId id,
                                 const FilterOperations& backdrop_filters);
 
-  void UpdateEffects(int id);
+  void UpdateEffects(int id, float external_page_scale_factor);
 
   void UpdateEffectChanged(EffectNode* node, const EffectNode* parent_node);
 
@@ -538,6 +540,29 @@ class CC_EXPORT EffectTree final : public PropertyTree<EffectNode> {
   // 1) All clips preserve 2d axis.
   // 2) There are no mask layers.
   bool ClippedHitTestRegionIsRectangle(int effect_node_id) const;
+
+  struct RoundedCornersHitTestInfo {
+    struct CornerRadii {
+      gfx::Vector2dF upper_left;
+      gfx::Vector2dF upper_right;
+      gfx::Vector2dF lower_right;
+      gfx::Vector2dF lower_left;
+
+      friend bool operator==(const CornerRadii&, const CornerRadii&) = default;
+    };
+
+    bool requires_async_hit_test = false;
+    // Empty when no rounded corners apply or async hit testing is required.
+    std::optional<CornerRadii> corner_radii;
+  };
+
+  // Returns the corner radii that can be serialized for viz hit testing, or
+  // indicates that the mask configuration must stay on the async path. Returns
+  // empty radii without requiring async hit testing when none apply.
+  RoundedCornersHitTestInfo GetRoundedCornersForHitTest(
+      int effect_tree_index,
+      int transform_tree_index,
+      const gfx::RectF& hit_test_rect_in_transform_space) const;
 
   // This function checks if the associated layer can use its layer bounds to
   // correctly hit test. It returns true if the layer bounds cannot be trusted.
@@ -728,9 +753,6 @@ class CC_EXPORT ScrollTree final : public PropertyTree<ScrollNode> {
   bool CanRealizeScrollsOnActiveTree(const ScrollNode& node) const;
   bool CanRealizeScrollsOnPendingTree(const ScrollNode& node) const;
   bool ShouldRealizeScrollsOnMain(const ScrollNode& node) const;
-
-  // Reports reasons for blocking scroll updates on main-thread repaint.
-  uint32_t GetMainThreadRepaintReasons(const ScrollNode& node) const;
 
   using SyncedScrollOffsetMap =
       base::flat_map<ElementId, scoped_refptr<SyncedScrollOffset>>;

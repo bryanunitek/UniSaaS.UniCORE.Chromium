@@ -16,6 +16,7 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Matchers;
 import org.chromium.base.test.util.UrlUtils;
@@ -33,7 +34,6 @@ import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 import org.chromium.content_public.browser.SelectionPopupController;
 import org.chromium.content_public.browser.test.util.DOMUtils;
 
-import java.util.Iterator;
 import java.util.concurrent.TimeoutException;
 
 /** Test that verifies back press will dismiss the selection popup. */
@@ -58,6 +58,7 @@ public class SelectionPopupBackPressTest {
     @Test
     @MediumTest
     @Feature({"TextInput", "SmartSelection"})
+    @DisabledTest(message = "https://crbug.com/572588187")
     public void testBackPressClearSelection() throws TimeoutException {
         testBackPressClearSelectionInternal();
     }
@@ -174,11 +175,11 @@ public class SelectionPopupBackPressTest {
                 controller.isSelectActionBarShowingSupplier().get());
     }
 
-    private boolean find(Iterator<TabObserver> observers, BackPressHandler handler) {
+    private boolean find(Iterable<TabObserver> observers, BackPressHandler handler) {
         return ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    while (observers.hasNext()) {
-                        if (observers.next() == handler) {
+                    for (TabObserver observer : observers) {
+                        if (observer == handler) {
                             return true;
                         }
                     }

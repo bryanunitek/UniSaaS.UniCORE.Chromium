@@ -6,6 +6,8 @@
 
 #import <UIKit/UIKit.h>
 
+#import <utility>
+
 #import "base/notreached.h"
 #import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
@@ -54,8 +56,7 @@
   DCHECK_EQ(browser->type(), Browser::Type::kRegular);
   self = [super initWithBaseViewController:viewController browser:browser];
   if (self) {
-    CHECK_EQ(browser->type(), Browser::Type::kRegular,
-             base::NotFatalUntil::M145);
+    CHECK_EQ(browser->type(), Browser::Type::kRegular);
     CHECK(changeProfileContinuationProvider);
     _screenProvider = screenProvider;
     _changeProfileContinuationProvider = changeProfileContinuationProvider;
@@ -66,7 +67,7 @@
 }
 
 - (void)dealloc {
-  CHECK(!_changeProfileContinuationProvider, base::NotFatalUntil::M146);
+  CHECK(!_changeProfileContinuationProvider);
 }
 
 #pragma mark - ChromeCoordinator
@@ -76,8 +77,7 @@
   signin::IdentityManager* identityManager =
       IdentityManagerFactory::GetForProfile(self.profile);
   CHECK(self.canSwitchAccount ||
-            !identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin),
-        base::NotFatalUntil::M142);
+        !identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   _signinInProgress = [self.sceneState createSigninInProgress];
   self.navigationController =
       [[UINavigationController alloc] initWithNavigationBarClass:nil
@@ -127,14 +127,8 @@
 // presenting the screens.
 - (void)finishPresentingScreens {
   __weak __typeof(self) weakSelf = self;
-  AuthenticationService* authService =
-      AuthenticationServiceFactory::GetForProfile(self.profile);
-  id<SystemIdentity> identity = authService->GetPrimaryIdentity();
   void (^completion)(void) = ^{
-    SigninCoordinatorResult result =
-        identity ? SigninCoordinatorResultSuccess
-                 : SigninCoordinatorResultCanceledByUser;
-    [weakSelf finishWithResult:result identity:identity];
+    [weakSelf finishWithPrimaryIdentity];
   };
   [self.navigationController dismissViewControllerAnimated:YES
                                                 completion:completion];
@@ -186,13 +180,31 @@
   return nil;
 }
 
-- (void)finishWithResult:(SigninCoordinatorResult)result
-                identity:(id<SystemIdentity>)identity {
+- (void)finishWithPrimaryIdentity {
+  id<SystemIdentity> identity =
+      AuthenticationServiceFactory::GetForProfile(self.profile)
+          ->GetPrimaryIdentity();
+  SigninCoordinatorResultOrIdentity result =
+      identity ? SigninCoordinatorResultOrIdentity(identity)
+               : base::unexpected(SigninCoordinatorResultCanceledByUser);
+  [self finishWithResult:std::move(result)];
+}
+
+- (void)finishWithResult:(SigninCoordinatorResultOrIdentity)result {
   [self stopChildCoordinator];
   self.navigationController = nil;
   self.screenProvider = nil;
-  [self.delegate fullscreenSigninCoordinatorWantsToBeStopped:self
-                                                      result:result];
+  if ([self.delegate
+          respondsToSelector:@selector(
+                                 fullscreenSigninCoordinatorDone:result:)]) {
+    [self.delegate fullscreenSigninCoordinatorDone:self
+                                            result:std::move(result)];
+  } else {
+    SigninCoordinatorResult legacyResult =
+        result.has_value() ? SigninCoordinatorResultSuccess : result.error();
+    [self.delegate fullscreenSigninCoordinatorWantsToBeStopped:self
+                                                        result:legacyResult];
+  }
 }
 
 #pragma mark - FirstRunScreenDelegate

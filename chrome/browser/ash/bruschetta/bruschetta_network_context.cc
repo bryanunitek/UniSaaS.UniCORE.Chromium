@@ -23,7 +23,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/storage_partition.h"
 #include "extensions/browser/cws_info_service.h"
@@ -41,7 +40,6 @@
 #include "net/ssl/ssl_private_key.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/network_context.mojom.h"
-#include "services/network/public/mojom/shared_storage.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/url_loader_network_service_observer.mojom.h"
 #include "url/gurl.h"
@@ -85,14 +83,14 @@ class SSLPrivateKeyBridge : public network::mojom::SSLPrivateKey {
 BruschettaNetworkContext::BruschettaNetworkContext(Profile* profile,
                                                    PrefService& local_state)
     : profile_(profile), proxy_config_monitor_(&local_state) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 }
 
 BruschettaNetworkContext::~BruschettaNetworkContext() = default;
 
 network::mojom::URLLoaderFactory*
 BruschettaNetworkContext::GetURLLoaderFactory() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (!url_loader_factory_ || !url_loader_factory_.is_connected()) {
     EnsureNetworkContextExists();
@@ -224,6 +222,7 @@ void BruschettaNetworkContext::OnAuthRequired(
     int32_t request_id,
     const GURL& url,
     bool first_auth_attempt,
+    bool do_not_prompt_for_login,
     const net::AuthChallengeInfo& auth_info,
     const scoped_refptr<net::HttpResponseHeaders>& head_headers,
     mojo::PendingRemote<network::mojom::AuthChallengeResponder>
@@ -247,6 +246,8 @@ void BruschettaNetworkContext::OnPlatformLocalNetworkPermissionRequired(
 
 void BruschettaNetworkContext::OnClearSiteData(
     const GURL& url,
+    const std::optional<net::SchemefulSite>& top_level_site,
+    const std::optional<base::UnguessableToken>& nonce,
     const std::string& header_value,
     int32_t load_flags,
     const std::optional<net::CookiePartitionKey>& cookie_partition_key,
@@ -266,18 +267,6 @@ void BruschettaNetworkContext::OnDataUseUpdate(
     base::ByteSize recv_bytes,
     base::ByteSize sent_bytes) {}
 
-void BruschettaNetworkContext::OnSharedStorageHeaderReceived(
-    const url::Origin& request_origin,
-    std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
-        methods_with_options,
-    const std::optional<std::string>& with_lock,
-    OnSharedStorageHeaderReceivedCallback callback) {
-  std::move(callback).Run();
-}
-
-void BruschettaNetworkContext::OnAdAuctionEventRecordHeaderReceived(
-    network::AdAuctionEventRecord event_record,
-    const std::optional<url::Origin>& top_frame_origin) {}
 
 void BruschettaNetworkContext::Clone(
     mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>

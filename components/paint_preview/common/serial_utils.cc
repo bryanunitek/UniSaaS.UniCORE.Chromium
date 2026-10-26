@@ -5,13 +5,14 @@
 #include "components/paint_preview/common/serial_utils.h"
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "components/paint_preview/common/subset_font.h"
 #include "skia/ext/codec_utils.h"
 #include "skia/ext/font_utils.h"
-#include "third_party/skia/include/codec/SkBmpDecoder.h"
+#include "third_party/skia/include/codec/SkBmpRustDecoder.h"
 #include "third_party/skia/include/codec/SkCodec.h"
 #include "third_party/skia/include/codec/SkGifDecoder.h"
 #include "third_party/skia/include/codec/SkJpegDecoder.h"
@@ -124,7 +125,7 @@ static sk_sp<SkTypeface> DeserializeTypeface(SkStream& stream, void* ctx) {
 
 static bool is_supported_codec(sk_sp<const SkData> data) {
   CHECK(data);
-  return SkBmpDecoder::IsBmp(data->data(), data->size()) ||
+  return SkBmpRustDecoder::IsBmp(data->data(), data->size()) ||
          SkGifDecoder::IsGif(data->data(), data->size()) ||
          SkPngRustDecoder::IsPng(data->data(), data->size()) ||
          SkJpegDecoder::IsJpeg(data->data(), data->size()) ||
@@ -203,8 +204,8 @@ sk_sp<SkImage> DeserializeImage(sk_sp<SkData> data,
     return get_image(SkPngRustDecoder::Decode(
         std::make_unique<SkMemoryStream>(std::move(data)), nullptr));
   }
-  if (SkBmpDecoder::IsBmp(bytes, length)) {
-    return get_image(SkBmpDecoder::Decode(data, nullptr));
+  if (SkBmpRustDecoder::IsBmp(bytes, length)) {
+    return get_image(SkBmpRustDecoder::Decode(data, nullptr));
   }
   if (SkGifDecoder::IsGif(bytes, length)) {
     return get_image(SkGifDecoder::Decode(data, nullptr));
@@ -228,7 +229,11 @@ sk_sp<SkPicture> DeserializePictureAsRectData(const void* data,
   if (length < sizeof(rect_data)) {
     return MakeEmptyPicture();
   }
-  UNSAFE_TODO(memcpy(&rect_data, data, sizeof(rect_data)));
+  // SAFETY: We checked that `length` is at least `sizeof(rect_data)`.
+  base::byte_span_from_ref(base::allow_nonunique_obj, rect_data)
+      .copy_from(
+          UNSAFE_BUFFERS(base::span(static_cast<const uint8_t*>(data), length))
+              .first<sizeof(SerializedRectData)>());
   auto* context = reinterpret_cast<DeserializationContext*>(ctx);
   context->insert(
       {rect_data.content_id,
@@ -251,7 +256,11 @@ sk_sp<SkPicture> GetPictureFromDeserialContext(const void* data,
   if (length < sizeof(rect_data)) {
     return MakeEmptyPicture();
   }
-  UNSAFE_TODO(memcpy(&rect_data, data, sizeof(rect_data)));
+  // SAFETY: We checked that `length` is at least `sizeof(rect_data)`.
+  base::byte_span_from_ref(base::allow_nonunique_obj, rect_data)
+      .copy_from(
+          UNSAFE_BUFFERS(base::span(static_cast<const uint8_t*>(data), length))
+              .first<sizeof(SerializedRectData)>());
   auto* context = reinterpret_cast<LoadedFramesDeserialContext*>(ctx);
 
   auto it = context->find(rect_data.content_id);

@@ -7,7 +7,6 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -28,36 +27,44 @@
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/payments/legal_message_line.h"
+#include "components/autofill/core/browser/studies/hats_surveys_util.h"
 #include "components/autofill/core/browser/ui/popup_open_enums.h"
 #include "components/autofill/core/common/aliases.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/profile_metrics/browser_profile_type.h"
 #include "components/security_state/core/security_state.h"
-#include "net/base/schemeful_site.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "url/origin.h"
 
-namespace net {
-class SchemefulSite;
-}
+#if BUILDFLAG(IS_ANDROID)
+#include "components/autofill/core/browser/ui/autofill_tapjacking_protector.h"
+#endif
 
 class GoogleGroupsManager;
 class GURL;
 class PrefService;
+
+namespace affiliations {
+class AffiliationService;
+}
 
 namespace consent_auditor {
 class ConsentAuditor;
 }
 
 namespace device_reauth {
+class DeviceAuthAvailabilityChecker;
 class DeviceAuthenticator;
-}
+}  // namespace device_reauth
 
 namespace network {
 class SharedURLLoaderFactory;
 }
 
 namespace one_time_tokens {
-class OneTimeTokenService;
+class GmailOtpBackend;
+class SmsOtpService;
 }  // namespace one_time_tokens
 
 namespace optimization_guide {
@@ -68,7 +75,6 @@ class RemoteModelExecutor;
 namespace optimization_guide::proto {
 class AnnotatedPageContent;
 }
-
 
 namespace signin {
 class IdentityManager;
@@ -102,7 +108,8 @@ enum class Channel;
 namespace personal_context {
 enum class PersonalContextEligibilityState;
 class PersonalContextEligibilityService;
-}
+class PersonalContextFirstRunService;
+}  // namespace personal_context
 
 namespace subscription_eligibility {
 class SubscriptionEligibilityService;
@@ -114,9 +121,10 @@ class ProfileMetricsService;
 
 namespace autofill {
 
-class ActorKeyMetricsRecorder;
+class ActorAutofillManager;
 class AutofillManager;
 class AddressNormalizer;
+class AtMemoryManager;
 class AtMemoryQueryService;
 class AutocompleteHistoryManager;
 class AutofillAblationStudy;
@@ -139,8 +147,10 @@ class FieldClassificationModelHandler;
 enum class FillingProduct;
 class FormDataImporter;
 class FormFieldData;
+enum class GmailOtpOptInResult;
 class LogManager;
 class OtpFieldDetector;
+class OtpMetricsTracker;
 class OtpPhishGuardDelegate;
 class FormPredictionsTracker;
 struct PasswordFormClassification;
@@ -151,8 +161,10 @@ struct Suggestion;
 enum class SuggestionHidingReason;
 enum class SuggestionType;
 class SingleFieldFillRouter;
+class TouchToFillAutofillDelegate;
 class ValuablesDataManager;
 class AutofillAiPersonalContextAccessManager;
+class EntitySuppressionManager;
 class VotesUploader;
 class PasswordManagerAutofillHelperDelegate;
 class WalletPassAccessManager;
@@ -163,10 +175,8 @@ class FormInteractionsUkmLogger;
 
 namespace payments {
 class PaymentsAutofillClient;
-}
-
-// Fills the focused field with the string passed to it.
-using PlusAddressCallback = base::OnceCallback<void(const std::string&)>;
+class WalletReminderNoticeManager;
+}  // namespace payments
 
 // A client interface that needs to be supplied to the Autofill component by the
 // embedder.
@@ -179,6 +189,7 @@ class AutofillClient {
  public:
   // Categories of Autofill data that can be blocked or allowed on specific GURL
   // patterns by enterprise policies.
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.autofill
   // LINT.IfChange(AutofillPolicyDataCategory)
   enum class AutofillPolicyDataCategory {
     // Address, name, email, phone, and profile configuration details.
@@ -192,6 +203,7 @@ class AutofillClient {
     kTravel,
     // Autofill AI shopping details (e.g. orders, shipments).
     kShopping,
+    kMaxValue = kShopping,
   };
   // LINT.ThenChange(//components/autofill/core/browser/permissions/autofill_policy_service.cc:AutofillPolicyDataCategory,//components/autofill/core/browser/permissions/autofill_policy_service_unittest.cc:AutofillPolicyDataCategory)
 
@@ -252,23 +264,35 @@ class AutofillClient {
     kMaxValue = kEditAccepted
   };
 
-  // Represents the user's decision or outcome in response to the email
-  // verification prompt.
-  enum class EmailVerificationPermissionUiResult {
-    kAccepted = 0,
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.autofill
+  // LINT.IfChange(EvpPermissionUiStatus)
+  enum class EmailVerificationPermissionUiStatus {
+    kAllowed = 0,
     kDeclined = 1,
-    kIgnored = 2,
+    kUserAborted = 2,            // e.g. ESC key or clicking outside
+    kNavigation = 3,             // page navigated
+    kTabGone = 4,                // tab closed or hidden
+    kWidgetChanged = 5,          // e.g. window resized
+    kOverlappingPrompt = 6,      // overlapped by another prompt/pip
+    kOther = 7,                  // any other reason
+    kViewDestroyedDirectly = 8,  // view destroyed without explicit Hide()
+    kMaxValue = kViewDestroyedDirectly,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:EvpPermissionUiStatus)
 
   // Describes the types of Iph shown by Autofill and anchored to a field.
   enum class IphFeature {
     kAutofillAi,
+    kWalletDirectOffers,
   };
 
   // Required arguments to create a dropdown showing autofill suggestions.
   struct PopupOpenArgs {
     PopupOpenArgs();
-    PopupOpenArgs(LocalFrameToken frame_token,
+    PopupOpenArgs(FormGlobalId form_id,
+                  FieldGlobalId field_id,
                   const gfx::RectF& element_bounds,
                   base::i18n::TextDirection text_direction,
                   std::vector<Suggestion> suggestions,
@@ -276,15 +300,16 @@ class AutofillClient {
                   int32_t form_control_ax_id,
                   PopupAnchorType anchor_type,
                   bool show_tabbed_popup = false,
-                  bool prefer_prev_arrow_side_on_suggestions_update = false);
+                  bool prefer_prev_arrow_side_on_suggestions_update = false,
+                  std::u16string search_bar_initial_value = {});
     PopupOpenArgs(const PopupOpenArgs&);
     PopupOpenArgs(PopupOpenArgs&&);
     PopupOpenArgs& operator=(const PopupOpenArgs&);
     PopupOpenArgs& operator=(PopupOpenArgs&&);
     ~PopupOpenArgs();
-    // The frame in which the popup is anchored. Typically this is the frame of
-    // the field on which the user triggered Autofill.
-    LocalFrameToken frame_token;
+    // The form and field to which the popup is anchored.
+    FormGlobalId form_id;
+    FieldGlobalId field_id;
     // TODO(crbug.com/340817507): Update this member name since bounds can now
     // refer to the caret bounds and elements gives the idea of HTML elements
     // only.
@@ -301,6 +326,8 @@ class AutofillClient {
     // are updated. This avoids unnecessary jumping when the popup is updated,
     // unless the popup would otherwise go out of bounds.
     bool prefer_prev_arrow_side_on_suggestions_update = false;
+    // Initial value for the search bar.
+    std::u16string search_bar_initial_value;
   };
 
   // Details about the UI that was shown to the user in an entity import bubble.
@@ -432,22 +459,18 @@ class AutofillClient {
   virtual FieldClassificationModelHandler*
   GetPasswordManagerFieldClassificationModelHandler();
 
+  // Gets the AffiliationService instance associated with the client, if there
+  // is one.
+  virtual affiliations::AffiliationService* GetAffiliationService();
+
   // Handles routing single-field form filling requests, such as for
   // Autocomplete and merchant promo codes.
   virtual SingleFieldFillRouter& GetSingleFieldFillRouter() = 0;
 
-  // Returns true if Autofill suggestions should include the Personal Context
-  // notice.
-  virtual bool ShouldShowPersonalContextAmbientAutofillNotice() const;
-
-  // Marks the Personal Context notice as acknowledged.
-  virtual void MarkPersonalContextAmbientAutofillNoticeAsAcknowledged();
-
-  // Returns true if AtMemory UI should include the Personal Context notice.
-  virtual bool ShouldShowPersonalContextAtMemoryNotice() const;
-
-  // Marks the AtMemory Personal Context notice as acknowledged.
-  virtual void MarkPersonalContextAtMemoryNoticeAsAcknowledged();
+  // Returns the PersonalContextFirstRunService instance associated with the
+  // client.
+  virtual personal_context::PersonalContextFirstRunService*
+  GetPersonalContextFirstRunService();
 
   // Gets the AutocompleteHistoryManager instance associated with the client.
   virtual AutocompleteHistoryManager* GetAutocompleteHistoryManager() = 0;
@@ -475,6 +498,11 @@ class AutofillClient {
   const AutofillAiPersonalContextAccessManager*
   GetAutofillAiPersonalContextAccessManager() const;
 
+  // Returns the per-profile `EntitySuppressionManager` associated with the
+  // client.
+  virtual EntitySuppressionManager* GetEntitySuppressionManager();
+  const EntitySuppressionManager* GetEntitySuppressionManager() const;
+
   // Returns the per-profile `AutofillAiModelCache`. Returns `nullptr` if the
   // `kAutofillAiServerModel` is not enabled.
   virtual AutofillAiModelCache* GetAutofillAiModelCache();
@@ -501,6 +529,10 @@ class AutofillClient {
   // Returns the `AtMemoryQueryService` associated with the profile of
   // the window of this tab.
   virtual AtMemoryQueryService* GetAtMemoryQueryService();
+
+  // Returns the `AtMemoryManager`.
+  virtual AtMemoryManager* GetAtMemoryManager();
+  const AtMemoryManager* GetAtMemoryManager() const;
 
   // Returns the enablement state of the Accessibility Annotator.
   // TODO(crbug.com/524193567) Delete this method once all the invocations are
@@ -548,6 +580,13 @@ class AutofillClient {
   // functions will return nullptr.
   virtual payments::PaymentsAutofillClient* GetPaymentsAutofillClient();
   const payments::PaymentsAutofillClient* GetPaymentsAutofillClient() const;
+
+  // Returns the WalletReminderNoticeManager for showing the legal reminder
+  // notice when required.
+  virtual payments::WalletReminderNoticeManager*
+  GetWalletReminderNoticeManager();
+  const payments::WalletReminderNoticeManager* GetWalletReminderNoticeManager()
+      const;
 
   // Gets the StrikeDatabase associated with the client. Note: Nullptr may be
   // returned so check before use.
@@ -630,14 +669,22 @@ class AutofillClient {
       const PopupOpenArgs& open_args,
       base::WeakPtr<AutofillSuggestionDelegate> delegate) = 0;
 
+  // Opens Gmail for the OTP retrieval flow.
+  virtual void OpenGmailForOtps();
+
   // Opens Gemini in the sidebar with the given prompt pre-filled.
   virtual void OpenGeminiInSidebar(const std::u16string& prompt);
 
   // Returns true if the Glic sidebar is enabled and can be opened.
   virtual bool IsGlicEnabled() const;
 
+  // Returns true if the user has completed onboarding / opted in to Gemini in
+  // Chrome (Glic).
+  virtual bool IsGlicConsented() const;
+
   // Update the data list values shown by the Autofill suggestions, if visible.
   virtual void UpdateAutofillDataListValues(
+      const LocalFrameToken& frame_token,
       base::span<const SelectOption> datalist) = 0;
 
   // Returns the identifier of the suggestion UI that is currently showing or
@@ -663,46 +710,36 @@ class AutofillClient {
   virtual void HideSuggestions(SuggestionHidingReason reason,
                                std::optional<FillingProduct> product) = 0;
 
-  // Maybe triggers a hats survey that measures the user's perception of
-  // Autofill. When triggering happens, the survey dialog will be displayed with
-  // a 5s delay. Note:  This survey should be triggered after form submissions.
-  // `field_filling_stats_data` contains a key-value string representation of
-  // `autofill_metrics::FormGroupFillingStats`. See
-  // chrome/browser/ui/hats/survey_config.cc for details on what values should
-  // be present.
-  // `filling_product` defines whether an address or payments survey will be
-  // displayed.
-  virtual void TriggerUserPerceptionOfAutofillSurvey(
-      FillingProduct filling_product,
-      const std::map<std::string, std::string>& field_filling_stats_data);
-
   // Triggers a survey to ask the user why they declined saving an address.
   virtual void TriggerDeclinedSaveAddressReasonSurvey();
 
-  // Triggers a survey after the user sees an Autofill AI suggestion and submits
-  // a form. The triggering happens only if the uses sees an Autofill AI
-  // suggestion, regardless of whether they accepted it or not.
-  // `suggestion_accepted` defines whether the suggestion seen by the user was
-  // accepted. `entity_type` defines the type of entity used to generate the
-  // suggestion.
-  virtual void TriggerAutofillAiFillingJourneySurvey(
-      bool suggestion_accepted,
-      EntityType entity_type,
-      const base::flat_set<EntityTypeName>& saved_entities,
-      const FieldTypeSet& triggering_field_types);
+  // Triggers a survey to ask the user about their experience regarding
+  // personalization features in Chrome.
+  virtual void TriggerPersonalizationAndTrustSurveys(
+      FillingProduct filling_product,
+      const HatsSurveyStringData& field_filling_stats_data);
 
-  // Triggers a survey after the user sees an Autofill AI save prompt.
-  virtual void TriggerAutofillAiSavePromptSurvey(
-      bool prompt_accepted,
-      EntityType entity_type,
-      const base::flat_set<EntityTypeName>& saved_entities);
+  // Triggers a survey to ask the user about their experience regarding
+  // AtMemory. `is_dismissed` specifies whether the survey is for dismissing
+  // AtMemory without accepting any suggestion.
+  virtual void TriggerAtMemoryPersonalizationAndTrustSurvey(
+      bool is_dismissed,
+      const HatsSurveyStringData& product_specific_data);
+
+  // Triggers a survey to ask the user about their experience regarding
+  // dismissed OTP suggestions.
+  virtual void TriggerOneTimePasswordDismissalPersonalizationAndTrustSurvey(
+      const HatsSurveyStringData& product_specific_data);
 
   // Returns whether there is an active actor task for this client's tab (if
   // one exists).
   virtual bool IsTabInActorMode() const;
 
-  // Returns the `ActorKeyMetricsRecorder` for the current tab (if one exists).
-  virtual ActorKeyMetricsRecorder* GetActorKeyMetricsRecorder();
+  // Returns the `ActorAutofillManager` for the current tab (if one exists).
+  virtual ActorAutofillManager* GetActorAutofillManager();
+
+  // Returns the navigation ID associated with the main frame of the client.
+  virtual int64_t GetNavigationId() const;
 
   // Returns true if either Profile or CreditCard Autofill is enabled.
   virtual bool IsAutofillEnabled() const = 0;
@@ -752,15 +789,36 @@ class AutofillClient {
   virtual const AutofillAblationStudy& GetAblationStudy() const;
 
 #if BUILDFLAG(IS_ANDROID)
-  // Shows the @memory bottom sheet. Triggered by keyboard accessory controller.
-  virtual void ShowAtMemoryBottomSheet(
-      base::span<const Suggestion> suggestions,
-      base::WeakPtr<AutofillSuggestionDelegate> delegate);
-  virtual void HideAtMemoryBottomSheet() {}
+  // Shows the Personal Context ambient autofill notice. Returns whether the
+  // notice was successfully shown.
+  virtual bool ShowAmbientAutofillNotice(
+      base::WeakPtr<TouchToFillAutofillDelegate> delegate);
+
+  // Shows the Autofill AI private inference notice in the Touch To Fill bottom
+  // sheet. Returns whether the notice was successfully shown.
+  virtual bool ShowPrivateInferenceNoticeBottomSheet(
+      base::WeakPtr<TouchToFillAutofillDelegate> delegate);
+
+  // Hides the currently shown Touch To Fill autofill notice (either the
+  // Personal Context ambient autofill notice or the private inference notice).
+  virtual void HideTouchToFillAutofillNotice();
 
   // The AutofillSnackbarController is used to show a snackbar notification
   // on Android.
   virtual AutofillSnackbarControllerImpl* GetAutofillSnackbarController();
+
+  // Notifies the user that their data is being fetched from the server to fill
+  // the form.
+  virtual void ShowAutofillAiLoadingDialog();
+
+  // Closes the dialog that informs the user that their data is being fetched
+  // from the server to fill the form.
+  virtual void DismissAutofillAiLoadingDialog();
+
+  // Shows tapjacking protection for sensitive autofill actions.
+  virtual void ShowTapjackingProtector(
+      AutofillTapjackingProtector::AuthorizationType authorization_type,
+      AutofillTapjackingProtector::AuthorizationCallback callback);
 #endif
 
 #if BUILDFLAG(IS_IOS)
@@ -773,24 +831,47 @@ class AutofillClient {
   // to the use of a large keyboard accessory view. See b/40942168.
   virtual bool ShouldFormatForLargeKeyboardAccessory() const;
 
-  // Returns true if the device is considered a large form factor for the
-  // purposes of the keyboard accessory. On Android, this considers screen
-  // dimensions and physical keyboard status.
-  virtual bool IsAndroidLargeFormFactor() const;
+  // Convenience wrapper for `GetDeviceAuthenticator("")`.
+  std::unique_ptr<device_reauth::DeviceAuthenticator> GetDeviceAuthenticator()
+      const;
 
-  // Returns a pointer to a DeviceAuthenticator. Might be nullptr if the given
-  // platform is not supported.
+  // Returns a new authenticator used to prompt the user for device
+  // authentication (e.g. biometrics or screen lock / passcode) and record
+  // authentication metrics to `histogram`. Might be `nullptr` if device
+  // authentication is unsupported by the embedder or platform.
+  //
+  // Use `GetDeviceAuthenticator()` to initiate an interactive authentication
+  // flow (e.g. `AuthenticateWithMessage()`). To query whether device
+  // authentication is available or supported on the device prior to initiating
+  // a flow, use `GetDeviceAuthAvailabilityChecker()` if
+  // `kDeviceReauthRefactor` is enabled.
+  //
+  // Note: both the `DeviceAuthenticator` and
+  // `DeviceAuthAvailabilityChecker` should have the same level of support
+  // for a given embedder/platform, so there should be no situation in which
+  // only one of them is null.
+  //
+  // A new instance should be used for each authentication attempt.
   virtual std::unique_ptr<device_reauth::DeviceAuthenticator>
-  GetDeviceAuthenticator() const;
+  GetDeviceAuthenticator(std::string histogram) const = 0;
 
-  // Same as `GetDeviceAuthenticator()` but also logs authentication results to
-  // `histogram`.
-  virtual std::unique_ptr<device_reauth::DeviceAuthenticator>
-  GetDeviceAuthenticator(std::string histogram) const;
-
-  // Returns true if the device supports any kind of re-auth through the
-  // `GetDeviceAuthenticator()`.
-  virtual bool SupportsDeviceReauth() const;
+  // Returns a new checker used to passively query whether device authentication
+  // (biometrics or screen lock) is supported and available on the device.
+  // Unlike `GetDeviceAuthenticator()`, this method and the returned checker
+  // never trigger user prompts. Might be `nullptr` if unsupported by the
+  // embedder or platform.
+  //
+  // Note: both the `DeviceAuthenticator` and
+  // `DeviceAuthAvailabilityChecker` should have the same level of support
+  // for a given embedder/platform, so there should be no situation in which
+  // only one of them is null.
+  //
+  // To be used if `kDeviceReauthRefactor` is enabled.
+  //
+  // It's cheap to construct, so it doesn't need to be persisted between
+  // queries.
+  virtual std::unique_ptr<device_reauth::DeviceAuthAvailabilityChecker>
+  GetDeviceAuthAvailabilityChecker() const = 0;
 
   // Attaches the IPH for `feature` to the `field`, on
   // platforms that it. If another IPH has been shown for the tab, the IPH is
@@ -826,7 +907,6 @@ class AutofillClient {
       FormGlobalId form_id,
       FieldGlobalId field_id) const;
 
-
   // Returns the service used in order to log metrics into MQLS.
   virtual optimization_guide::ModelQualityLogsUploaderService*
   GetMqlsUploadService();
@@ -837,10 +917,14 @@ class AutofillClient {
   // `save_is_synchronous` indicates whether accepting the prompt requires a
   // (notably) asynchronous operation. The UI can use this information to decide
   // whether to close the prompt upon acceptance.
+  // `public_passes_notice` contains the Wallet legal disclosure messages to
+  // show in the prompt's footer. It is empty if no disclosure is required, or
+  // if fetching the disclosure from the Wallet backend failed.
   virtual void ShowEntityImportBubble(
       EntityInstance new_entity,
       std::optional<EntityInstance> old_entity,
       bool save_is_synchronous,
+      LegalMessageLines public_passes_notice,
       EntityImportPromptResultCallback prompt_result_callback);
 
   // Hides the Autofill AI import bubble if it is currently showing.
@@ -853,8 +937,14 @@ class AutofillClient {
   // Notifies the user that an Autofill AI operation save to Wallet failed.
   virtual void ShowAutofillAiSaveToWalletFailureNotification();
 
-  // Notifies the user that operation to fetch data from Wallet failed.
-  virtual void ShowAutofillAiFetchFromWalletFailureNotification();
+  // Notifies the user that operation to fetch data failed.
+  virtual void ShowAutofillAiFetchEntityFailureNotification();
+
+  // Notifies the user that an AtMemory operation to fetch PII data failed. If
+  // `message_override` is provided, it is displayed instead of the generic
+  // error message.
+  virtual void ShowAtMemoryFetchFailureNotification(
+      std::optional<std::u16string> message_override);
 
   // Notifies the user that prefetching Autofill AI entities failed.
   virtual void ShowAutofillAiPreFetchFailureNotification();
@@ -863,20 +953,77 @@ class AutofillClient {
   // default.
   virtual void ShowAutofillAiPrivateInferenceNotice();
 
-  virtual void ShowEmailVerifiedToast(const GURL& issuer);
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  // Shows a dialog that asks the user to confirm that the Autofill AI
+  // personal-context entity `entity` will no longer be suggested. `callback` is
+  // run with true if the user confirms, and with false if they cancel or close
+  // the dialog.
+  virtual void ShowAutofillAiSuppressionConfirmationDialog(
+      const EntityInstance& entity,
+      base::OnceCallback<void(bool)> callback);
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
+  // Displays a notification informing the user that the Autofill AI suggestion
+  // for the personal-context `entity` was removed, offering an undo action.
+  // Depending on the platform, undoing may either run `on_undo_clicked` (e.g.
+  // Android snackbar) or unsuppress `entity` directly (e.g. Desktop toast).
+  virtual void ShowAutofillAiSuggestionRemovedNotification(
+      const EntityInstance& entity,
+      base::OnceClosure on_undo_clicked);
+
+  // TODO(crbug.com/555673134): Rename *Popup and *Toast methods below to
+  // platform-agnostic names (e.g., ShowEmailVerificationPrompt,
+  // HideEmailVerificationPrompt, ShowEmailVerificationLoading,
+  // ShowEmailVerifiedNotification, ShowEmailVerificationErrorNotification) in
+  // a follow-up CL, as Android uses a BottomSheet and Message banners.
 
   // Shows a yes/no prompt asking the user to confirm that they want to verify
   // their email. The prompt is anchored on the field at `element_bounds`.
-  // `issuer_site` is the site that issued the assertion.
-  // `callback` is called with the user's decision (accept, decline, or ignore).
+  // `issuer_origin` is the origin that issued the assertion.
+  // `callback` is called with the permission UI status
+  // (`EmailVerificationPermissionUiStatus`).
   virtual void ShowEmailVerificationPopup(
       const gfx::RectF& element_bounds,
-      const net::SchemefulSite& issuer_site,
+      const url::Origin& issuer_origin,
       const std::u16string& email,
-      base::OnceCallback<void(EmailVerificationPermissionUiResult)> callback);
+      base::OnceCallback<void(EmailVerificationPermissionUiStatus)> callback);
+
+  // Dismisses the email verification permission prompt popup if currently
+  // showing. Called when token verification completes (on success or error) to
+  // dismiss the first-run prompt while its verify button was displaying an
+  // in-button loading spinner.
+  virtual void HideEmailVerificationPopup();
+
+  // Displays a loading toast (or Message banner on Android) indicating that
+  // email verification is in progress. Called for subsequent-run requests where
+  // permission was already granted, so the permission prompt popup is bypassed
+  // while the token request is in flight. `cancel_callback` is invoked if the
+  // user cancels the verification from the loading UI.
+  virtual void ShowEmailVerificationLoadingToast(
+      base::OnceClosure cancel_callback);
+
+  // Displays a toast (or Message banner on Android) notifying the user that
+  // email verification succeeded for `issuer`. Called upon receiving a valid
+  // verification token.
+  virtual void ShowEmailVerifiedToast(const GURL& issuer);
+
+  // Displays an error toast notifying the user that email verification failed.
+  // Called when token verification fails or returns an error.
+  virtual void ShowEmailVerificationErrorToast();
+
+  // Shows the bubble asking the user to opt in to fetching one-time
+  // verification codes from Gmail for `account_email`, invoking `callback` with
+  // the user's decision.
+  virtual void ShowGmailOtpOptInBubble(
+      const std::u16string& account_email,
+      base::OnceCallback<void(GmailOtpOptInResult)> callback);
 
   // May return null on platforms where OTPs are not supported.
   virtual OtpFieldDetector* GetOtpFieldDetector();
+
+  // Returns the OtpMetricsTracker for the current tab. May return null on
+  // platforms where it is not supported or when the feature is disabled.
+  virtual OtpMetricsTracker* GetOtpMetricsTracker();
 
   // Returns the delegate for OTP phish guard, which can be used to perform
   // security checks before offering an OTP. May return nullptr.
@@ -886,8 +1033,11 @@ class AutofillClient {
   // on platforms where it is not supported.
   virtual FormPredictionsTracker* GetFormPredictionsTracker();
 
-  // May return null on platforms where no OneTimeTokenService is supported.
-  virtual one_time_tokens::OneTimeTokenService* GetOneTimeTokenService() const;
+  // May return null on platforms where no SmsOtpService is supported.
+  virtual one_time_tokens::SmsOtpService* GetSmsOtpService() const;
+
+  // May return null on platforms where no GmailOtpBackend is supported.
+  virtual one_time_tokens::GmailOtpBackend* GetGmailOtpBackend() const;
 
   // Returns true if the primary main frame's document used the WebOTP API. This
   // exists only for the main frame because only the main frame has the
@@ -900,6 +1050,10 @@ class AutofillClient {
 
   // Returns the AutofillManager instance for the current frame/tab.
   virtual AutofillManager* GetAutofillManagerForPrimaryMainFrame();
+
+  // Returns whether the client uses platform-native autofill rather than
+  // Chrome's built-in autofill UI/logic.
+  virtual bool UsesPlatformAutofill() const = 0;
 };
 
 }  // namespace autofill

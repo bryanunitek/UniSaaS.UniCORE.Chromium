@@ -42,22 +42,19 @@
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_browsertest_base.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_integration_test.h"
-#include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/ui/ash/system/system_tray_client_impl.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/ash/system_web_dialog/system_web_dialog_delegate.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/pref_test_utils.h"
@@ -76,6 +73,7 @@
 #include "content/public/test/test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/base_window.h"
 #include "ui/base/idle/idle.h"
 #include "ui/base/idle/scoped_set_idle_state.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -86,6 +84,7 @@
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/message_center/message_center.h"
 #include "ui/views/widget/any_widget_observer.h"
 #include "ui/views/widget/widget.h"
 #include "url/url_constants.h"
@@ -102,10 +101,8 @@ class HelpAppIntegrationTest : public SystemWebAppIntegrationTest {
       : https_server_{std::make_unique<net::EmbeddedTestServer>(
             net::EmbeddedTestServer::TYPE_HTTPS)} {
     scoped_feature_list_.InitWithFeatures(
-        {chromeos::features::kUploadOfficeToCloud,
-         features::kReleaseNotesNotificationAllChannels},
-        {features::kHelpAppOpensInsteadOfReleaseNotesNotification,
-         ::features::kWebAppInstallDialog});
+        {features::kReleaseNotesNotificationAllChannels},
+        {::features::kWebAppInstallDialog});
     https_server()->AddDefaultHandlers(GetChromeTestDataDir());
   }
 
@@ -127,18 +124,6 @@ content::WebContents* GetActiveWebContents() {
       ->GetActiveWebContents();
 }
 
-class HelpAppIntegrationTestWithAutoTriggerDisabled
-    : public HelpAppIntegrationTest {
- public:
-  HelpAppIntegrationTestWithAutoTriggerDisabled() {
-    scoped_feature_list_.InitAndDisableFeature(
-        features::kHelpAppAutoTriggerInstallDialog);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
 class HelpAppIntegrationTestWithFirstRunEnabled
     : public HelpAppIntegrationTest {
  public:
@@ -149,13 +134,6 @@ class HelpAppIntegrationTestWithFirstRunEnabled
     HelpAppIntegrationTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(ash::switches::kForceFirstRunUI);
   }
-};
-
-class HelpAppIntegrationTestWithHelpAppOpensInsteadOfReleaseNotesNotification
-    : public HelpAppIntegrationTest {
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{
-      features::kHelpAppOpensInsteadOfReleaseNotesNotification};
 };
 
 }  // namespace
@@ -188,7 +166,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2MinWindowSize) {
 // the screen.
 IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2DefaultWindowBounds) {
   WaitForTestSystemAppInstall();
-  Browser* browser;
+  BrowserWindowInterface* browser = nullptr;
   LaunchApp(SystemWebAppType::HELP, &browser);
   gfx::Rect work_area =
       display::Screen::Get()->GetDisplayForNewWindows().work_area();
@@ -373,8 +351,6 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
                        HelpAppV2ReleaseNotesNotificationFromBackground) {
   WaitForTestSystemAppInstall();
   content::WebContents* web_contents = LaunchApp(SystemWebAppType::HELP);
-  auto display_service =
-      std::make_unique<NotificationDisplayServiceTester>(/*profile=*/nullptr);
   base::UserActionTester user_action_tester;
   profile()->GetPrefs()->SetInteger(
       ash::help_app::prefs::kHelpAppNotificationLastShownMilestone, 20);
@@ -411,34 +387,29 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
   // Wait until the browser with the web contents closes.
   observer.Wait();
   // Assert that the notification really is there.
-  auto notifications = display_service->GetDisplayedNotificationsForType(
-      NotificationHandler::Type::TRANSIENT);
-  ASSERT_EQ(0u, notifications.size());
+  ASSERT_FALSE(
+      message_center::MessageCenter::Get()->FindVisibleNotificationById(
+          "show_release_notes_notification"));
 
   // Click on the notification.
   GURL expected_url = GURL("chrome://help-app/updates");
   content::TestNavigationObserver navigation_observer(expected_url);
   navigation_observer.StartWatchingNewWebContents();
-  display_service->SimulateClick(NotificationHandler::Type::TRANSIENT,
-                                 "show_release_notes_notification",
-                                 std::nullopt, std::nullopt);
+  message_center::MessageCenter::Get()->ClickOnNotification(
+      "show_release_notes_notification");
 #if !BUILDFLAG(ENABLE_CROS_HELP_APP)
   // We just have the original browser. No new app opens.
   EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 #endif
 }
 
-IN_PROC_BROWSER_TEST_P(
-    HelpAppIntegrationTestWithHelpAppOpensInsteadOfReleaseNotesNotification,
-    OpensHelpApp) {
+IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, OpensHelpApp) {
   WaitForTestSystemAppInstall();
   base::HistogramTester histogram_tester;
   GURL expected_trusted_frame_url = GURL(kExploreUpdatesPageUrl);
   content::TestNavigationObserver navigation_observer(
       expected_trusted_frame_url);
   navigation_observer.StartWatchingNewWebContents();
-  auto display_service =
-      std::make_unique<NotificationDisplayServiceTester>(/*profile=*/nullptr);
 
   profile()->GetPrefs()->SetInteger(
       ash::help_app::prefs::kHelpAppNotificationLastShownMilestone, 20);
@@ -446,9 +417,9 @@ IN_PROC_BROWSER_TEST_P(
       ->MaybeShowReleaseNotesNotification();
 
   // The release notes notification should not appear.
-  auto notifications = display_service->GetDisplayedNotificationsForType(
-      NotificationHandler::Type::TRANSIENT);
-  EXPECT_EQ(0u, notifications.size());
+  EXPECT_FALSE(
+      message_center::MessageCenter::Get()->FindVisibleNotificationById(
+          "show_release_notes_notification"));
   // The release notes suggestion chip should not appear.
   EXPECT_EQ(profile()->GetPrefs()->GetInteger(
                 ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow),
@@ -462,17 +433,13 @@ IN_PROC_BROWSER_TEST_P(
 #endif
 }
 
-IN_PROC_BROWSER_TEST_P(
-    HelpAppIntegrationTestWithHelpAppOpensInsteadOfReleaseNotesNotification,
-    HelpAppRemainsClosed) {
+IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppRemainsClosed) {
   WaitForTestSystemAppInstall();
   base::HistogramTester histogram_tester;
   GURL expected_trusted_frame_url = GURL(kExploreUpdatesPageUrl);
   content::TestNavigationObserver navigation_observer(
       expected_trusted_frame_url);
   navigation_observer.StartWatchingNewWebContents();
-  auto display_service =
-      std::make_unique<NotificationDisplayServiceTester>(/*profile=*/nullptr);
 
   profile()->GetPrefs()->SetInteger(
       ash::help_app::prefs::kHelpAppNotificationLastShownMilestone, 20);
@@ -480,9 +447,9 @@ IN_PROC_BROWSER_TEST_P(
       ->MaybeShowReleaseNotesNotification();
 
   // The release notes notification should not appear.
-  auto notifications = display_service->GetDisplayedNotificationsForType(
-      NotificationHandler::Type::TRANSIENT);
-  EXPECT_EQ(0u, notifications.size());
+  EXPECT_FALSE(
+      message_center::MessageCenter::Get()->FindVisibleNotificationById(
+          "show_release_notes_notification"));
   // The release notes suggestion chip should not appear.
   EXPECT_EQ(profile()->GetPrefs()->GetInteger(
                 ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow),
@@ -509,7 +476,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2NavigateOnRelaunch) {
   // There should initially be a single browser window.
   EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
-  Browser* browser;
+  BrowserWindowInterface* browser = nullptr;
   content::WebContents* web_contents =
       LaunchApp(SystemWebAppType::HELP, &browser);
 
@@ -743,58 +710,6 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2ShowAppMallSWA) {
   EXPECT_EQ(expected_url, GetActiveWebContents()->GetVisibleURL());
 }
 
-// Test that the Help App's `openUrlInBrowserAndTriggerInstallDialog` can open
-// valid URLs if the `kHelpAppAutoTriggerInstallDialog` feature is disabled.
-IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTestWithAutoTriggerDisabled,
-                       HelpAppV2CanOpenValidHttpsUrlsInBrowser) {
-  ASSERT_TRUE(https_server()->Start());
-  const GURL test_url = https_server()->GetURL("/title1.html");
-
-  ASSERT_TRUE(test_url.SchemeIs(url::kHttpsScheme));
-
-  // There should be only be one regular browser with one tab.
-  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
-
-  WaitForTestSystemAppInstall();
-  content::WebContents* web_contents = LaunchApp(SystemWebAppType::HELP);
-
-  // There should be two browser windows, one regular and one for the newly
-  // opened help app.
-  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
-
-  content::TestNavigationObserver navigation_observer(test_url);
-  navigation_observer.StartWatchingNewWebContents();
-
-  // Script that tells the Help App to call the
-  // openUrlInBrowserAndTriggerInstallDialog Mojo function.
-  constexpr char kScript[] = R"(
-    (async () => {
-      const delegate = window.customLaunchData.delegate;
-      await delegate.openUrlInBrowserAndTriggerInstallDialog($1);
-    })();
-  )";
-  // Trigger the script, then wait for the URL to open in a new tab. Use
-  // ExecJs instead of EvalJsInAppFrame because the script needs to run
-  // in the same world as the page's code.
-  EXPECT_TRUE(
-      content::ExecJs(SandboxedWebUiAppTestBase::GetAppFrame(web_contents),
-                      content::JsReplace(kScript, test_url),
-                      content::EXECUTE_SCRIPT_NO_RESOLVE_PROMISES));
-  navigation_observer.Wait();
-
-  // There should still be two browser windows.
-  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
-  // The regular browser should only have 2 tabs.
-  EXPECT_EQ(2, browser()->tab_strip_model()->count());
-  // After opening the URL, the regular browser should be the most recently
-  // active browser.
-  EXPECT_EQ(browser(),
-            GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser());
-  // The active tab should be the `test_url` we opened.
-  EXPECT_EQ(test_url, GetActiveWebContents()->GetVisibleURL());
-}
-
 // Test that the Help App's `openUrlInBrowserAndTriggerInstallDialog` navigates
 // and triggers the install dialog by default.
 IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
@@ -884,7 +799,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
                                 "javascript:alert('Hello World')"};
   for (const std::string& test_url : invalid_urls) {
     // Launch a new Help app window per test URL.
-    Browser* help_app_browser;
+    BrowserWindowInterface* help_app_browser = nullptr;
     content::WebContents* web_contents =
         LaunchApp(SystemWebAppType::HELP, &help_app_browser);
 
@@ -1233,14 +1148,8 @@ INSTANTIATE_SYSTEM_WEB_APP_MANAGER_TEST_SUITE_REGULAR_PROFILE_P(
     HelpAppIntegrationTest);
 
 INSTANTIATE_SYSTEM_WEB_APP_MANAGER_TEST_SUITE_REGULAR_PROFILE_P(
-    HelpAppIntegrationTestWithAutoTriggerDisabled);
-
-INSTANTIATE_SYSTEM_WEB_APP_MANAGER_TEST_SUITE_REGULAR_PROFILE_P(
     HelpAppIntegrationTestWithFirstRunEnabled);
 
 INSTANTIATE_SYSTEM_WEB_APP_MANAGER_TEST_SUITE_ALL_PROFILE_TYPES_P(
     HelpAppAllProfilesIntegrationTest);
-
-INSTANTIATE_SYSTEM_WEB_APP_MANAGER_TEST_SUITE_REGULAR_PROFILE_P(
-    HelpAppIntegrationTestWithHelpAppOpensInsteadOfReleaseNotesNotification);
 }  // namespace ash

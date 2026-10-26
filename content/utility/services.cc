@@ -13,15 +13,18 @@
 #include "base/task/thread_type.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/services/storage/public/mojom/storage_service.mojom.h"
 #include "components/services/storage/storage_service_impl.h"
 #include "content/child/child_process.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/utility/content_utility_client.h"
 #include "content/public/utility/utility_thread.h"
-#include "content/services/auction_worklet/auction_worklet_service_impl.h"
-#include "content/services/auction_worklet/public/mojom/auction_worklet_service.mojom.h"
+#include "content/services/devtools_media_encoding_service/devtools_media_encoding_service_impl.h"
+#include "content/services/devtools_media_encoding_service/public/mojom/devtools_media_encoding_service.mojom.h"
+#include "content/services/resource_broker/public/mojom/resource_broker.mojom.h"
+#include "content/services/resource_broker/resource_broker_service_impl.h"
+#include "content/utility/on_device_model/on_device_model_sandbox_init.h"
 #include "device/vr/buildflags/buildflags.h"
 #include "media/base/media_switches.h"
 #include "media/gpu/buildflags.h"
@@ -29,7 +32,6 @@
 #include "mojo/public/cpp/bindings/interface_endpoint_client.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/bindings/service_factory.h"
-#include "services/accessibility/buildflags.h"
 #include "services/audio/service_factory.h"
 #include "services/data_decoder/data_decoder_service.h"
 #include "services/network/network_service.h"
@@ -67,8 +69,6 @@
 #if BUILDFLAG(IS_WIN)
 #include "base/win/scoped_com_initializer.h"
 #include "sandbox/win/src/sandbox.h"
-#include "services/webnn/public/mojom/webnn_compiler_service.mojom.h"
-#include "services/webnn/webnn_compiler_service_impl.h"
 extern sandbox::TargetServices* g_utility_target_services;
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -90,6 +90,11 @@ extern sandbox::TargetServices* g_utility_target_services;
 #include "media/mojo/services/media_foundation_service_broker.h"  // nogncheck
 #endif  // BUILDFLAG(IS_WIN)
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
+#include "services/webnn/public/mojom/webnn_compiler_service.mojom.h"  // nogncheck
+#include "services/webnn/webnn_compiler_service_impl.h"
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
+
 #if BUILDFLAG(IS_ANDROID)
 #include "media/mojo/mojom/mediadrm_support.mojom.h"       // nogncheck
 #include "media/mojo/services/mediadrm_support_service.h"  // nogncheck
@@ -99,17 +104,14 @@ extern sandbox::TargetServices* g_utility_target_services;
 #include "chromeos/ash/experiences/arc/video_accelerator/oop_arc_video_accelerator_factory.h"
 #endif  // BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
 
+#if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
+#include "media/mojo/services/oop_video_decoder_factory_process_service.h"  // nogncheck
+#endif  // BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
+
 #if BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
 #include "content/common/features.h"
 #include "media/mojo/services/mojo_video_encode_accelerator_provider_factory.h"
-#include "media/mojo/services/oop_video_decoder_factory_process_service.h"  // nogncheck
 #endif
-
-#if BUILDFLAG(ENABLE_ACCESSIBILITY_SERVICE)
-#include "services/accessibility/browser_accessibility_service.h"  // nogncheck
-#include "services/accessibility/public/mojom/accessibility_service.mojom.h"  // nogncheck
-#include "ui/accessibility/accessibility_features.h"
-#endif  // BUILDFLAG(ENABLE_ACCESSIBILITY_SERVICE)
 
 #if BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
 #include "media/capture/capture_switches.h"
@@ -196,11 +198,11 @@ auto RunNetworkService(
       /*delay_initialization_until_set_client=*/true);
 }
 
-auto RunAuctionWorkletService(
-    mojo::PendingReceiver<auction_worklet::mojom::AuctionWorkletService>
+auto RunDevToolsMediaEncodingService(
+    mojo::PendingReceiver<
+        devtools_media_encoding_service::mojom::DevToolsMediaEncodingService>
         receiver) {
-  return auction_worklet::AuctionWorkletServiceImpl::CreateForService(
-      std::move(receiver));
+  return std::make_unique<DevToolsMediaEncodingServiceImpl>(std::move(receiver));
 }
 
 auto RunAudio(mojo::PendingReceiver<audio::mojom::AudioService> receiver) {
@@ -280,13 +282,6 @@ auto RunDataDecoder(
       std::move(receiver));
 }
 
-#if BUILDFLAG(ENABLE_ACCESSIBILITY_SERVICE)
-auto RunAccessibilityService(
-    mojo::PendingReceiver<ax::mojom::AccessibilityService> receiver) {
-  return std::make_unique<ax::BrowserAccessibilityService>(std::move(receiver));
-}
-#endif  // BUILDFLAG(ENABLE_ACCESSIBILITY_SERVICE)
-
 #if BUILDFLAG(IS_WIN)
 auto RunMediaFoundationServiceBroker(
     mojo::PendingReceiver<media::mojom::MediaFoundationServiceBroker>
@@ -294,12 +289,14 @@ auto RunMediaFoundationServiceBroker(
   return std::make_unique<media::MediaFoundationServiceBroker>(
       std::move(receiver), base::BindOnce(&EnsureSandboxedWin));
 }
+#endif  // BUILDFLAG(IS_WIN)
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
 auto RunWebNNCompilerService(
     mojo::PendingReceiver<webnn::mojom::WebNNCompilerService> receiver) {
   return std::make_unique<webnn::WebNNCompilerServiceImpl>(std::move(receiver));
 }
-#endif  // BUILDFLAG(IS_WIN)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
 
 #if BUILDFLAG(IS_ANDROID)
 auto RunMediaDrmSupportService(
@@ -307,6 +304,13 @@ auto RunMediaDrmSupportService(
   return std::make_unique<media::MediaDrmSupportService>(std::move(receiver));
 }
 #endif  // BUILDFLAG(IS_ANDROID)
+
+auto RunResourceBroker(
+    mojo::PendingReceiver<resource_broker::mojom::ResourceBrokerService>
+        receiver) {
+  return std::make_unique<resource_broker::ResourceBrokerServiceImpl>(
+      std::move(receiver));
+}
 
 auto RunStorageService(
     mojo::PendingReceiver<storage::mojom::StorageService> receiver) {
@@ -365,13 +369,15 @@ auto RunOOPArcVideoAcceleratorFactoryService(
 #endif  // BUILDFLAG(IS_CHROMEOS) && \
         // BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
 
-#if BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
+#if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
 auto RunOOPVideoDecoderFactoryProcessService(
     mojo::PendingReceiver<media::mojom::VideoDecoderFactoryProcess> receiver) {
   return std::make_unique<media::OOPVideoDecoderFactoryProcessService>(
       std::move(receiver), ChildProcess::current()->io_task_runner());
 }
+#endif  // BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
 
+#if BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
 auto RunVideoEncodeAcceleratorProviderFactory(
     mojo::PendingReceiver<media::mojom::VideoEncodeAcceleratorProviderFactory>
         receiver) {
@@ -380,8 +386,7 @@ auto RunVideoEncodeAcceleratorProviderFactory(
   factory->BindReceiver(std::move(receiver));
   return factory;
 }
-
-#endif  // (BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
+#endif  // BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
 
 }  // namespace
 
@@ -400,21 +405,26 @@ void RegisterIOThreadServices(mojo::ServiceFactory& services) {
 }
 
 void RegisterMainThreadServices(mojo::ServiceFactory& services) {
-  services.Add(RunAuctionWorkletService);
+  services.Add(RunDevToolsMediaEncodingService);
   services.Add(RunAudio);
 
   services.Add(RunDataDecoder);
+  if (base::FeatureList::IsEnabled(features::kResourceBroker)) {
+    services.Add(RunResourceBroker);
+  }
   services.Add(RunStorageService);
   services.Add(RunTracing);
   services.Add(RunVideoCapture);
 
-#if BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
+#if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
   services.Add(RunOOPVideoDecoderFactoryProcessService);
 #endif
 
-  if (optimization_guide::features::CanLaunchOnDeviceModelService()) {
-    services.Add(RunOnDeviceModel);
-  }
+  services.Add(RunOnDeviceModel);
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE)
+  services.Add(RunWebNNCompilerService);
+#endif
 
 #if BUILDFLAG(IS_WIN) || (BUILDFLAG(GOOGLE_CHROME_BRANDING) && \
                           (BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)))
@@ -430,7 +440,6 @@ void RegisterMainThreadServices(mojo::ServiceFactory& services) {
 
 #if BUILDFLAG(IS_WIN)
   services.Add(RunMediaFoundationServiceBroker);
-  services.Add(RunWebNNCompilerService);
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_ANDROID)
@@ -451,10 +460,6 @@ void RegisterMainThreadServices(mojo::ServiceFactory& services) {
 #if BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
   services.Add(RunVideoEncodeAcceleratorProviderFactory);
 #endif  // BUILDFLAG(USE_LINUX_VIDEO_ACCELERATION)
-#if BUILDFLAG(ENABLE_ACCESSIBILITY_SERVICE)
-  if (::features::IsAccessibilityServiceEnabled())
-    services.Add(RunAccessibilityService);
-#endif  // BUILDFLAG(ENABLE_ACCESSIBILITY_SERVICE)
 
   // Add new main-thread services above this line.
   GetContentClient()->utility()->RegisterMainThreadServices(services);

@@ -5,13 +5,19 @@
 #include "net/quic/dedicated_web_transport_http3_client.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <string_view>
 #include <vector>
 
+#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/numerics/checked_math.h"
+#include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "net/base/address_list.h"
 #include "net/base/port_util.h"
@@ -24,9 +30,13 @@
 #include "net/quic/address_utils.h"
 #include "net/quic/crypto/proof_verifier_chromium.h"
 #include "net/quic/quic_chromium_alarm_factory.h"
+#include "net/quic/web_transport_send_stats_tracker.h"
 #include "net/spdy/spdy_http_utils.h"
 #include "net/third_party/quiche/src/quiche/quic/core/http/web_transport_http3.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_connection.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_constants.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_crypto_stream.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_data_writer.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_types.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_utils.h"
 #include "net/third_party/quiche/src/quiche/web_transport/web_transport_headers.h"
@@ -44,6 +54,42 @@ constexpr int kCustomCertificateMaxValidityDays = 14;
 // The time the client would wait for the server to acknowledge the session
 // being closed.
 constexpr base::TimeDelta kMaxCloseTimeout = base::Seconds(2);
+
+// The WebTransport specification requires clients to initially permit at
+// least 100 peer-initiated streams of each type, even if the application
+// provides a lower hint.
+constexpr uint32_t kMinimumIncomingWebTransportStreams = 100;
+static_assert(quic::kDefaultMaxStreamsPerConnection >=
+              kMinimumIncomingWebTransportStreams);
+
+constexpr std::string_view kWebTransportExporterLabel = "EXPORTER-WebTransport";
+
+std::optional<std::string> SerializeWebTransportExporterContext(
+    uint64_t session_id,
+    base::span<const uint8_t> label,
+    base::span<const uint8_t> context) {
+  if (label.size() > std::numeric_limits<uint8_t>::max() ||
+      context.size() > std::numeric_limits<uint8_t>::max()) {
+    return std::nullopt;
+  }
+
+  size_t exporter_context_size;
+  if (!base::CheckAdd(sizeof(uint64_t), sizeof(uint8_t), label.size(),
+                      sizeof(uint8_t), context.size())
+           .AssignIfValid(&exporter_context_size)) {
+    return std::nullopt;
+  }
+  std::string exporter_context(exporter_context_size, '\0');
+  quic::QuicDataWriter writer(absl::MakeSpan(exporter_context));
+  if (!writer.WriteUInt64(session_id) ||
+      !writer.WriteUInt8(static_cast<uint8_t>(label.size())) ||
+      !writer.WriteStringPiece(base::as_string_view(label)) ||
+      !writer.WriteUInt8(static_cast<uint8_t>(context.size())) ||
+      !writer.WriteStringPiece(base::as_string_view(context))) {
+    return std::nullopt;
+  }
+  return exporter_context;
+}
 
 // Enables custom congestion control for WebTransport over HTTP/3.
 BASE_FEATURE(kWebTransportCongestionControl, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -252,8 +298,61 @@ class DedicatedWebTransportHttp3ClientSession
                            : std::optional<quic::DatagramStatus>());
   }
 
+  quic::QuicConsumedData WritevData(quic::QuicStreamId id,
+                                    size_t write_length,
+                                    quic::QuicStreamOffset offset,
+                                    quic::StreamSendingState state,
+                                    quic::TransmissionType type,
+                                    quic::EncryptionLevel level) override {
+    quic::QuicConsumedData consumed = quic::QuicSpdyClientSession::WritevData(
+        id, write_length, offset, state, type, level);
+    if (type == quic::NOT_RETRANSMISSION) {
+      send_stats_tracker_.RecordSent(id, offset, consumed.bytes_consumed);
+    }
+    return consumed;
+  }
+
+  bool OnFrameAcked(const quic::QuicFrame& frame,
+                    quic::QuicTime::Delta ack_delay_time,
+                    bool is_retransmission) override {
+    if (frame.type == quic::STREAM_FRAME) {
+      send_stats_tracker_.RecordAcknowledged(frame.stream_frame.stream_id,
+                                             frame.stream_frame.offset,
+                                             frame.stream_frame.data_length);
+    }
+    return quic::QuicSpdyClientSession::OnFrameAcked(frame, ack_delay_time,
+                                                     is_retransmission);
+  }
+
+  void RegisterSendStream(quic::QuicStreamId stream_id) {
+    const quic::ParsedQuicVersion version = this->version();
+    const bool bidirectional =
+        quic::QuicUtils::IsBidirectionalStreamId(stream_id, version);
+    const bool client_initiated = quic::QuicUtils::IsOutgoingStreamId(
+        version, stream_id, quic::Perspective::IS_CLIENT);
+    // Incoming unidirectional streams have no locally writable side and must
+    // never be registered for send statistics.
+    CHECK(bidirectional || client_initiated);
+
+    quic::QuicStream* stream = GetActiveStream(stream_id);
+    CHECK(stream);
+    send_stats_tracker_.RegisterStream(
+        stream_id,
+        stream->stream_bytes_written() + stream->BufferedDataBytes());
+  }
+
+  void UnregisterSendStream(quic::QuicStreamId stream_id) {
+    send_stats_tracker_.UnregisterStream(stream_id);
+  }
+
+  std::optional<WebTransportSendStreamStats> GetSendStreamStats(
+      quic::QuicStreamId stream_id) const {
+    return send_stats_tracker_.GetStats(stream_id);
+  }
+
  private:
   raw_ptr<DedicatedWebTransportHttp3Client> client_;
+  WebTransportSendStatsTracker send_stats_tracker_;
 };
 
 class WebTransportVisitorProxy : public quic::WebTransportVisitor {
@@ -399,6 +498,7 @@ DedicatedWebTransportHttp3Client::DedicatedWebTransportHttp3Client(
           parameters.anticipated_concurrent_incoming_unidirectional_streams),
       anticipated_concurrent_incoming_bidirectional_streams_(
           parameters.anticipated_concurrent_incoming_bidirectional_streams),
+      additional_headers_(parameters.additional_headers),
       context_(context),
       visitor_(visitor),
       quic_context_(context->quic_context()),
@@ -477,6 +577,70 @@ quic::WebTransportSession* DedicatedWebTransportHttp3Client::session() {
   if (web_transport_session_ == nullptr)
     return nullptr;
   return web_transport_session_;
+}
+
+std::optional<quic::QuicByteCount>
+DedicatedWebTransportHttp3Client::GetMaxDatagramSize() const {
+  if (!session_ || !web_transport_session_ || !session_->SupportsH3Datagram()) {
+    return std::nullopt;
+  }
+  return web_transport_session_->GetMaxDatagramSize();
+}
+
+void DedicatedWebTransportHttp3Client::RegisterSendStream(uint32_t stream_id) {
+  CHECK(session_);
+  static_cast<DedicatedWebTransportHttp3ClientSession*>(session_.get())
+      ->RegisterSendStream(stream_id);
+}
+
+void DedicatedWebTransportHttp3Client::UnregisterSendStream(
+    uint32_t stream_id) {
+  if (session_) {
+    static_cast<DedicatedWebTransportHttp3ClientSession*>(session_.get())
+        ->UnregisterSendStream(stream_id);
+  }
+}
+
+std::optional<WebTransportSendStreamStats>
+DedicatedWebTransportHttp3Client::GetSendStreamStats(uint32_t stream_id) const {
+  if (!session_) {
+    return std::nullopt;
+  }
+  return static_cast<DedicatedWebTransportHttp3ClientSession*>(session_.get())
+      ->GetSendStreamStats(stream_id);
+}
+
+// static
+std::optional<std::string> DedicatedWebTransportHttp3Client::
+    SerializeExporterContextForTesting(  // IN-TEST
+        uint64_t session_id,
+        base::span<const uint8_t> label,
+        base::span<const uint8_t> context) {
+  return SerializeWebTransportExporterContext(session_id, label, context);
+}
+
+std::optional<std::vector<uint8_t>>
+DedicatedWebTransportHttp3Client::ExportKeyingMaterial(
+    base::span<const uint8_t> label,
+    base::span<const uint8_t> context,
+    size_t result_length) {
+  if (state_ != WebTransportState::CONNECTED || !connect_stream_id_ ||
+      !session_) {
+    return std::nullopt;
+  }
+  std::optional<std::string> exporter_context =
+      SerializeWebTransportExporterContext(*connect_stream_id_, label, context);
+  if (!exporter_context) {
+    return std::nullopt;
+  }
+  std::string result;
+  if (!session_->GetMutableCryptoStream()->ExportKeyingMaterial(
+          kWebTransportExporterLabel, *exporter_context, result_length,
+          &result) ||
+      result.size() != result_length) {
+    return std::nullopt;
+  }
+  return base::ToVector(base::as_byte_span(result));
 }
 
 void DedicatedWebTransportHttp3Client::DoLoop(int rv) {
@@ -662,6 +826,7 @@ int DedicatedWebTransportHttp3Client::DoConnect() {
 void DedicatedWebTransportHttp3Client::CreateConnection() {
   // Delete the objects in the same order they would be normally deleted by the
   // destructor.
+  connect_stream_id_.reset();
   session_ = nullptr;
   packet_reader_ = nullptr;
 
@@ -680,9 +845,24 @@ void DedicatedWebTransportHttp3Client::CreateConnection() {
   connection_ = connection.get();
   connection->SetMaxPacketLength(quic_context_->params()->max_packet_length);
 
+  // Configure initial stream limits before constructing `session_` so that
+  // `QuicSession` adds `kHttp3StaticUnidirectionalStreamCount` for HTTP/3
+  // control/QPACK streams and initializes its stream ID managers with the
+  // final values.
+  quic::QuicConfig config = InitializeQuicConfig(*quic_context_->params());
+  if (anticipated_concurrent_incoming_unidirectional_streams_) {
+    config.SetMaxUnidirectionalStreamsToSend(std::max<uint32_t>(
+        kMinimumIncomingWebTransportStreams,
+        *anticipated_concurrent_incoming_unidirectional_streams_));
+  }
+  if (anticipated_concurrent_incoming_bidirectional_streams_) {
+    config.SetMaxBidirectionalStreamsToSend(std::max<uint32_t>(
+        kMinimumIncomingWebTransportStreams,
+        *anticipated_concurrent_incoming_bidirectional_streams_));
+  }
+
   session_ = std::make_unique<DedicatedWebTransportHttp3ClientSession>(
-      InitializeQuicConfig(*quic_context_->params()), supported_versions_,
-      connection.release(),
+      config, supported_versions_, connection.release(),
       quic::QuicServerId(url_.GetHost(), url_.EffectiveIntPort()),
       &crypto_config_, this);
   if (!original_supported_versions_.empty()) {
@@ -701,15 +881,6 @@ void DedicatedWebTransportHttp3Client::CreateConnection() {
   connection_->set_debug_visitor(event_logger_.get());
   connection_->set_creator_debug_delegate(event_logger_.get());
   AdjustSendAlgorithm(*connection_, congestion_control_hint_);
-
-  if (anticipated_concurrent_incoming_unidirectional_streams_.has_value()) {
-    session_->config()->SetMaxUnidirectionalStreamsToSend(
-        *anticipated_concurrent_incoming_unidirectional_streams_);
-  }
-  if (anticipated_concurrent_incoming_bidirectional_streams_.has_value()) {
-    session_->config()->SetMaxBidirectionalStreamsToSend(
-        *anticipated_concurrent_incoming_bidirectional_streams_);
-  }
 
   session_->Initialize();
   packet_reader_->StartReading();
@@ -818,6 +989,7 @@ int DedicatedWebTransportHttp3Client::DoSendRequest() {
   if (stream == nullptr) {
     return ERR_QUIC_PROTOCOL_ERROR;
   }
+  connect_stream_id_ = stream->id();
 
   quiche::HttpHeaderBlock headers;
   DCHECK_EQ(url_.GetScheme(), url::kHttpsScheme);
@@ -836,6 +1008,11 @@ int DedicatedWebTransportHttp3Client::DoSendRequest() {
           *std::move(protocols_header);
     }
   }
+  for (const auto& [name, value] : additional_headers_) {
+    // "Characters in field names MUST be converted to lowercase prior to
+    // their encoding." -- RFC 9114 Section 4.2
+    headers.AppendValueOrAddHeader(base::ToLowerASCII(name), value);
+  }
   stream->WriteHeaders(std::move(headers), /*fin=*/false, nullptr);
 
   web_transport_session_ = stream->web_transport();
@@ -844,6 +1021,14 @@ int DedicatedWebTransportHttp3Client::DoSendRequest() {
   }
   stream->web_transport()->SetVisitor(
       std::make_unique<WebTransportVisitorProxy>(this));
+  // Install the single-use draining callback before the handshake completes so
+  // a GOAWAY that drains the session during the handshake is not lost.
+  web_transport_session_->SetOnDraining(
+      [weak_this = weak_factory_.GetWeakPtr()]() mutable {
+        if (weak_this) {
+          weak_this->OnSessionDraining();
+        }
+      });
 
   next_connect_state_ = CONNECT_STATE_CONFIRM_CONNECTION;
   return ERR_IO_PENDING;
@@ -954,6 +1139,13 @@ void DedicatedWebTransportHttp3Client::OnSessionClosed(
       FROM_HERE,
       base::BindOnce(&DedicatedWebTransportHttp3Client::TransitionToState,
                      weak_factory_.GetWeakPtr(), WebTransportState::CLOSED));
+}
+
+void DedicatedWebTransportHttp3Client::OnSessionDraining() {
+  if (IsTerminalState(state_)) {
+    return;
+  }
+  visitor_->OnDraining();
 }
 
 void DedicatedWebTransportHttp3Client::

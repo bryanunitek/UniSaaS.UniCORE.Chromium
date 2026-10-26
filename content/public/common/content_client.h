@@ -149,6 +149,11 @@ class CONTENT_EXPORT ContentClient {
     std::vector<std::pair<std::string, std::string>> predefined_handler_schemes;
     // Registers a URL scheme as an Isolated Web App scheme.
     std::vector<std::string> isolated_app_schemes;
+    // Registers a URL scheme whose scripts may use the V8 code cache. It must
+    // also be in standard_schemes; http, https, chrome and chrome-untrusted are
+    // not allowed. Entries are keyed by the requesting process's lock like
+    // http(s), and a process locked to this scheme as a whole gets none.
+    std::vector<std::string> code_cache_schemes;
 #if BUILDFLAG(IS_ANDROID)
     // Normally, non-standard schemes canonicalize to opaque origins. However,
     // Android WebView requires non-standard schemes to still be preserved.
@@ -177,7 +182,8 @@ class CONTENT_EXPORT ContentClient {
       ui::ResourceScaleFactor scale_factor);
 
   // Returns the raw bytes of a scale independent data resource.
-  virtual base::RefCountedMemory* GetDataResourceBytes(int resource_id);
+  virtual scoped_refptr<base::RefCountedMemory> GetDataResourceBytes(
+      int resource_id);
 
   // Returns the string contents of a resource given the resource id.
   virtual std::string GetDataResourceString(int resource_id);

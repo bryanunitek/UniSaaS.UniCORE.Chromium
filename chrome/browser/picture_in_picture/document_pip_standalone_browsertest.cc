@@ -6,23 +6,40 @@
 #include "base/memory/weak_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/picture_in_picture/document_pip_host.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "extensions/buildflags/buildflags.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
-#include "ui/display/screen.h"
+#include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
+#include "ui/base/window_open_disposition.h"
+#include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "base/strings/stringprintf.h"
+#include "chrome/browser/extensions/api/downloads/downloads_api.h"
+#include "chrome/browser/extensions/api/tabs/tabs_api.h"
+#include "chrome/browser/extensions/api/tabs/windows_api.h"
+#include "chrome/browser/extensions/chrome_test_extension_loader.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/sessions/content/session_tab_helper.h"
+#include "extensions/browser/api_test_utils.h"
+#include "extensions/common/extension_builder.h"
+#include "extensions/test/test_extension_dir.h"
+#endif
 
 namespace {
 
@@ -31,26 +48,9 @@ using content::EvalJs;
 constexpr base::FilePath::CharType kDocumentPipPage[] =
     FILE_PATH_LITERAL("media/picture-in-picture/document-pip.html");
 
-// Counts the open Browser-backed Picture-in-Picture windows by iterating the
-// global browser collection. Avoids the FindBrowserWith* helpers, which are
-// discouraged for new code.
-int CountPictureInPictureBrowsers() {
-  int count = 0;
-  GlobalBrowserCollection::GetInstance()->ForEach(
-      [&count](BrowserWindowInterface* browser) {
-        if (browser->GetType() ==
-            BrowserWindowInterface::TYPE_PICTURE_IN_PICTURE) {
-          ++count;
-        }
-        return true;
-      });
-  return count;
-}
-
 }  // namespace
 
-// Base fixture: enables the Document Picture-in-Picture web API and serves the
-// test page. The standalone feature is toggled by the derived fixtures.
+// Base fixture for Document PiP browser tests.
 class DocumentPipStandaloneBrowserTestBase : public InProcessBrowserTest {
  public:
   DocumentPipStandaloneBrowserTestBase() = default;
@@ -63,7 +63,7 @@ class DocumentPipStandaloneBrowserTestBase : public InProcessBrowserTest {
   }
 
   content::WebContents* OpenerWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   DocumentPipHost* GetDocumentPipHost() {
@@ -82,157 +82,332 @@ class DocumentPipStandaloneBrowserTestBase : public InProcessBrowserTest {
   }
 };
 
-// Fixture with the standalone Document PiP path enabled.
-class DocumentPipStandaloneEnabledBrowserTest
+class DocumentPipLifecycleBrowserTest
+    : public DocumentPipStandaloneBrowserTestBase,
+      public testing::WithParamInterface<bool> {
+ public:
+  DocumentPipLifecycleBrowserTest() {
+    scoped_feature_list_.InitWithFeatureStates(
+        {{blink::features::kDocumentPictureInPictureAPI, true},
+         {features::kDocumentPipStandaloneWindow, GetParam()}});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+class DocumentPipExtensionFoundationBrowserTest
     : public DocumentPipStandaloneBrowserTestBase {
  public:
-  DocumentPipStandaloneEnabledBrowserTest() {
+  DocumentPipExtensionFoundationBrowserTest() {
     scoped_feature_list_.InitWithFeatures(
         {blink::features::kDocumentPictureInPictureAPI,
          features::kDocumentPipStandaloneWindow},
         /*disabled_features=*/{});
   }
 
+  void SetUpOnMainThread() override {
+    DocumentPipStandaloneBrowserTestBase::SetUpOnMainThread();
+    extension_ = extensions::ExtensionBuilder("PiP foundation")
+                     .AddAPIPermissions({"tabs", "downloads", "downloads.shelf",
+                                         "downloads.ui"})
+                     .Build();
+  }
+
+ protected:
+  template <typename Function>
+  scoped_refptr<Function> NewFunction() {
+    auto function = base::MakeRefCounted<Function>();
+    function->set_extension(extension_.get());
+    return function;
+  }
+
+  scoped_refptr<const extensions::Extension> extension_;
+
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-// Opening a Document PiP window routes to a DocumentPipHost (no Browser) and
-// the window is not part of BrowserList.
-IN_PROC_BROWSER_TEST_F(DocumentPipStandaloneEnabledBrowserTest,
-                       RequestWindowOpensStandaloneHost) {
+IN_PROC_BROWSER_TEST_F(DocumentPipExtensionFoundationBrowserTest,
+                       WindowIdOperationsHandleStandaloneController) {
   OpenDocumentPipWindow();
-
   auto* host = GetDocumentPipHost();
-  ASSERT_NE(nullptr, host);
-  EXPECT_NE(nullptr, host->GetWidget());
-  EXPECT_NE(nullptr, host->GetChildWebContents());
-  EXPECT_NE(OpenerWebContents(), host->GetChildWebContents());
+  ASSERT_TRUE(host);
+  const int window_id = host->GetSessionId().id();
+  const int opener_id =
+      sessions::SessionTabHelper::IdForTab(OpenerWebContents()).id();
+  namespace utils = extensions::api_test_utils;
+  using extensions::ExtensionTabUtil;
 
-  auto* manager = PictureInPictureWindowManager::GetInstance();
-  EXPECT_EQ(host->GetChildWebContents(), manager->GetChildWebContents());
-  EXPECT_TRUE(PictureInPictureWindowManager::IsChildWebContents(
-      host->GetChildWebContents()));
-
-  // The standalone path must not create a Browser-backed PiP window.
-  EXPECT_EQ(0, CountPictureInPictureBrowsers());
+  EXPECT_EQ(ExtensionTabUtil::kTabStripNotEditableError,
+            utils::RunFunctionAndReturnError(
+                NewFunction<extensions::TabsCreateFunction>(),
+                base::StringPrintf(R"([{"windowId":%d}])", window_id),
+                browser()->GetProfile()));
+  EXPECT_EQ(
+      ExtensionTabUtil::kTabStripNotEditableError,
+      utils::RunFunctionAndReturnError(
+          NewFunction<extensions::TabsHighlightFunction>(),
+          base::StringPrintf(R"([{"windowId":%d,"tabs":[0]}])", window_id),
+          browser()->GetProfile()));
+  EXPECT_EQ(ExtensionTabUtil::kTabStripDoesNotSupportTabGroupsError,
+            utils::RunFunctionAndReturnError(
+                NewFunction<extensions::TabsGroupFunction>(),
+                base::StringPrintf(
+                    R"([{"tabIds":[%d],"createProperties":{"windowId":%d}}])",
+                    opener_id, window_id),
+                browser()->GetProfile()));
+  EXPECT_EQ(ExtensionTabUtil::kCanOnlyMoveTabsWithinNormalWindowsError,
+            utils::RunFunctionAndReturnError(
+                NewFunction<extensions::TabsMoveFunction>(),
+                base::StringPrintf(R"([%d,{"windowId":%d,"index":0}])",
+                                   opener_id, window_id),
+                browser()->GetProfile()));
+  EXPECT_TRUE(host->GetChildWebContents());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
 }
 
-// The standalone PiP widget should be placed on the same display as its
-// opener (regression guard for: the widget is given only a size, so the origin
-// defaults to the primary display's top-left).
-//
-// LIMITATION: browser_tests run with a single display (Xvfb on Linux, the host
-// display on Mac), so the opener display is the primary the perhaps the only
-// display and this assertion is trivially true even in the regressed state. It
-// therefore cannot actually catch the regression it guards against in CI.
-// TODO(crbug.com/515252142): Migrate to interactive_ui_tests and use
-// display::test::VirtualDisplayUtil to place the opener on a non-primary
-// display, then assert the PiP window lands there rather than on the primary
-// display.
-IN_PROC_BROWSER_TEST_F(DocumentPipStandaloneEnabledBrowserTest,
-                       OpensOnSameDisplayAsOpener) {
+IN_PROC_BROWSER_TEST_F(DocumentPipExtensionFoundationBrowserTest,
+                       DownloadUiOptionsWithStandaloneWindow) {
   OpenDocumentPipWindow();
-
-  auto* host = GetDocumentPipHost();
-  ASSERT_NE(nullptr, host);
-  ASSERT_NE(nullptr, host->GetWidget());
-  ASSERT_TRUE(host->GetWidget()->IsVisible());
-
-  const display::Screen* const screen = display::Screen::Get();
-  const display::Display opener_display = screen->GetDisplayNearestView(
-      OpenerWebContents()->GetContentNativeView());
-  const display::Display pip_display =
-      screen->GetDisplayNearestWindow(host->GetWidget()->GetNativeWindow());
-
-  EXPECT_EQ(opener_display.id(), pip_display.id());
+  namespace utils = extensions::api_test_utils;
+  for (bool enabled : {false, true}) {
+    const char* value = enabled ? "true" : "false";
+    EXPECT_TRUE(utils::RunFunction(
+        NewFunction<extensions::DownloadsSetShelfEnabledFunction>(),
+        base::StringPrintf("[%s]", value), browser()->GetProfile()));
+    EXPECT_TRUE(utils::RunFunction(
+        NewFunction<extensions::DownloadsSetUiOptionsFunction>(),
+        base::StringPrintf(R"([{"enabled":%s}])", value),
+        browser()->GetProfile()));
+  }
+  EXPECT_TRUE(GetDocumentPipHost()->GetChildWebContents());
 }
 
-// Exiting via the manager tears down the standalone window and child contents.
-IN_PROC_BROWSER_TEST_F(DocumentPipStandaloneEnabledBrowserTest,
-                       ExitClosesStandaloneWindow) {
+IN_PROC_BROWSER_TEST_F(DocumentPipExtensionFoundationBrowserTest,
+                       WindowReadAndRemovePreserveOpener) {
   OpenDocumentPipWindow();
-
   auto* host = GetDocumentPipHost();
-  ASSERT_NE(nullptr, host);
-  ASSERT_NE(nullptr, host->GetChildWebContents());
+  ASSERT_TRUE(host);
+  const int window_id = host->GetSessionId().id();
+  namespace utils = extensions::api_test_utils;
+  const auto result = utils::RunFunctionAndReturnSingleResult(
+      NewFunction<extensions::WindowsGetFunction>(),
+      base::StringPrintf(R"([%d,{"populate":true}])", window_id),
+      browser()->GetProfile());
+  ASSERT_TRUE(result);
+  const auto& window = result->GetDict();
+  EXPECT_EQ("popup", *window.FindString("type"));
+  EXPECT_EQ(true, window.FindBool("alwaysOnTop"));
+  const auto* tabs = window.FindList("tabs");
+  ASSERT_TRUE(tabs);
+  ASSERT_EQ(1u, tabs->size());
+  EXPECT_EQ(window_id, (*tabs)[0].GetDict().FindInt("windowId"));
+  EXPECT_EQ(true, (*tabs)[0].GetDict().FindBool("active"));
 
-  auto* manager = PictureInPictureWindowManager::GetInstance();
-  EXPECT_TRUE(manager->ExitPictureInPicture());
-
-  EXPECT_EQ(nullptr, host->GetWidget());
-  EXPECT_EQ(nullptr, host->GetChildWebContents());
-  EXPECT_EQ(nullptr, manager->GetChildWebContents());
+  content::WebContentsDestroyedWatcher destroyed(host->GetChildWebContents());
+  EXPECT_TRUE(utils::RunFunction(
+      NewFunction<extensions::WindowsRemoveFunction>(),
+      base::StringPrintf("[%d]", window_id), browser()->GetProfile()));
+  destroyed.Wait();
+  EXPECT_FALSE(host->GetWidget());
+  EXPECT_TRUE(OpenerWebContents());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
+  EXPECT_EQ(
+      base::StringPrintf("No window with id: %d.", window_id),
+      utils::RunFunctionAndReturnError(
+          NewFunction<extensions::WindowsGetFunction>(),
+          base::StringPrintf("[%d]", window_id), browser()->GetProfile()));
 }
 
-// Navigating the opener to a new page closes the standalone PiP window.
-IN_PROC_BROWSER_TEST_F(DocumentPipStandaloneEnabledBrowserTest,
-                       OpenerNavigationClosesWindow) {
-  OpenDocumentPipWindow();
-
-  auto* host = GetDocumentPipHost();
-  ASSERT_NE(nullptr, host);
-  ASSERT_NE(nullptr, host->GetWidget());
-
+IN_PROC_BROWSER_TEST_F(DocumentPipExtensionFoundationBrowserTest,
+                       IncognitoWindowIdentityAndFiltering) {
+  auto* incognito_browser = CreateIncognitoBrowser();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("/title1.html")));
-
-  // The host stays attached to the opener, but its window is closed.
-  EXPECT_EQ(nullptr, host->GetWidget());
-  EXPECT_EQ(nullptr, host->GetChildWebContents());
+      incognito_browser, embedded_test_server()->GetURL("/title1.html")));
+  auto* opener = incognito_browser->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_EQ(
+      true,
+      EvalJs(opener,
+             "documentPictureInPicture.requestWindow().then(() => true)"));
+  auto* host = DocumentPipHost::FromWebContents(opener);
+  ASSERT_TRUE(host);
+  const int window_id = host->GetSessionId().id();
+  namespace utils = extensions::api_test_utils;
+  EXPECT_EQ(
+      base::StringPrintf("No window with id: %d.", window_id),
+      utils::RunFunctionAndReturnError(
+          NewFunction<extensions::WindowsGetFunction>(),
+          base::StringPrintf("[%d]", window_id), browser()->GetProfile()));
+  const auto result = utils::RunFunctionAndReturnSingleResult(
+      NewFunction<extensions::WindowsGetFunction>(),
+      base::StringPrintf(R"([%d,{"populate":true}])", window_id),
+      incognito_browser->GetProfile());
+  ASSERT_TRUE(result);
+  EXPECT_EQ(true, result->GetDict().FindBool("incognito"));
+  const auto* tabs = result->GetDict().FindList("tabs");
+  ASSERT_TRUE(tabs);
+  ASSERT_EQ(1u, tabs->size());
+  EXPECT_EQ(true, (*tabs)[0].GetDict().FindBool("incognito"));
 }
 
-// Closing the opener tab destroys the host and leaves no PiP window behind.
-IN_PROC_BROWSER_TEST_F(DocumentPipStandaloneEnabledBrowserTest,
-                       OpenerDestroyedClosesWindow) {
+IN_PROC_BROWSER_TEST_F(DocumentPipExtensionFoundationBrowserTest,
+                       OptionsPageOpensInNormalBrowser) {
+  extensions::TestExtensionDir extension_dir;
+  extension_dir.WriteManifest(R"({
+    "name": "PiP options",
+    "manifest_version": 3,
+    "version": "1",
+    "options_page": "options.html"
+  })");
+  extension_dir.WriteFile(FILE_PATH_LITERAL("options.html"),
+                          "<!doctype html><title>PiP options</title>");
+  extensions::ChromeTestExtensionLoader loader(browser()->GetProfile());
+  auto extension = loader.LoadExtension(extension_dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
   OpenDocumentPipWindow();
   auto* host = GetDocumentPipHost();
-  ASSERT_NE(nullptr, host);
+  ASSERT_TRUE(host);
+  auto* child = host->GetChildWebContents();
+  std::string error;
+  auto* controller = extensions::ExtensionTabUtil::GetControllerInProfileWithId(
+      browser()->GetProfile(), host->GetSessionId().id(), false, &error);
+  ASSERT_TRUE(controller) << error;
+  const GURL options_url = extension->GetResourceURL("options.html");
+  ASSERT_TRUE(controller->OpenOptionsPage(extension.get(), options_url, true));
+  ASSERT_EQ(2, browser()->GetTabStripModel()->count());
+  auto* options = browser()->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(content::WaitForLoadStop(options));
+  EXPECT_EQ(options_url, options->GetLastCommittedURL());
+  EXPECT_EQ(u"PiP options", options->GetTitle());
+  EXPECT_EQ(child, host->GetChildWebContents());
+}
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
-  // The host is WebContentsUserData on the opener, so it is destroyed when the
-  // opener tab closes. Track it with a WeakPtr to verify it is released.
-  base::WeakPtr<DocumentPipHost> host_weak = host->GetWeakPtr();
+INSTANTIATE_TEST_SUITE_P(All,
+                         DocumentPipLifecycleBrowserTest,
+                         testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Standalone" : "BrowserBacked";
+                         });
+
+IN_PROC_BROWSER_TEST_P(DocumentPipLifecycleBrowserTest, ExitClosesWindow) {
+  const bool is_standalone = GetParam();
+  ASSERT_NO_FATAL_FAILURE(OpenDocumentPipWindow());
+
+  auto* opener = OpenerWebContents();
+  auto* manager = PictureInPictureWindowManager::GetInstance();
+  ASSERT_TRUE(manager->IsInPictureInPicture());
+  ASSERT_EQ(opener, manager->GetWebContents());
+  auto* child = manager->GetChildWebContents();
+  ASSERT_NE(nullptr, child);
+  auto* widget =
+      views::Widget::GetWidgetForNativeWindow(child->GetTopLevelNativeWindow());
+  ASSERT_NE(nullptr, widget);
+  content::WebContentsDestroyedWatcher child_destroyed_watcher(child);
+  views::test::WidgetDestroyedWaiter widget_destroyed_waiter(widget);
+  auto* host = GetDocumentPipHost();
+  ASSERT_EQ(is_standalone, host != nullptr);
+  base::WeakPtr<DocumentPipHost> host_weak =
+      host ? host->GetWeakPtr() : nullptr;
+
+  ASSERT_TRUE(manager->ExitPictureInPicture());
+
+  child_destroyed_watcher.Wait();
+  widget_destroyed_waiter.Wait();
+  EXPECT_FALSE(manager->IsInPictureInPicture());
+  EXPECT_EQ(nullptr, manager->GetWebContents());
+  EXPECT_EQ(nullptr, manager->GetChildWebContents());
+  if (is_standalone) {
+    ASSERT_TRUE(host_weak);
+    EXPECT_EQ(host_weak.get(), GetDocumentPipHost());
+    EXPECT_EQ(nullptr, host_weak->GetWidget());
+    EXPECT_EQ(nullptr, host_weak->GetChildWebContents());
+  }
+}
+
+// Regression test for crbug.com/544038274: a renderer-initiated same-window
+// navigation from the PiP child must not synchronously destroy the
+// child WebContents while content::WebContentsImpl::OpenURL() is still using
+// source-frame state on the stack.
+IN_PROC_BROWSER_TEST_P(DocumentPipLifecycleBrowserTest,
+                       ChildCurrentTabNavigationClosesWindowWithoutCrashing) {
+  const bool is_standalone = GetParam();
+  ASSERT_NO_FATAL_FAILURE(OpenDocumentPipWindow());
+
+  auto* manager = PictureInPictureWindowManager::GetInstance();
+  content::WebContents* child = manager->GetChildWebContents();
+  ASSERT_NE(nullptr, child);
+  ASSERT_NE(OpenerWebContents(), child);
+  auto* widget =
+      views::Widget::GetWidgetForNativeWindow(child->GetTopLevelNativeWindow());
+  ASSERT_NE(nullptr, widget);
+  content::WebContentsDestroyedWatcher child_destroyed_watcher(child);
+  views::test::WidgetDestroyedWaiter widget_destroyed_waiter(widget);
+  auto* host = GetDocumentPipHost();
+  ASSERT_EQ(is_standalone, host != nullptr);
+  base::WeakPtr<DocumentPipHost> host_weak =
+      host ? host->GetWeakPtr() : nullptr;
+
+  // Exercise OpenURLFromTab rather than the usual BeginNavigation path.
+  child->GetMutableRendererPrefs()->browser_handles_all_top_level_requests =
+      true;
+  child->SyncRendererPrefs();
+
+  content::ExecuteScriptAsync(
+      child, content::JsReplace("location.href = $1;",
+                                embedded_test_server()->GetURL(
+                                    "example.test", "/title1.html")));
+
+  child_destroyed_watcher.Wait();
+  widget_destroyed_waiter.Wait();
+
+  EXPECT_EQ(nullptr, manager->GetChildWebContents());
+  if (is_standalone) {
+    ASSERT_TRUE(host_weak);
+    EXPECT_EQ(nullptr, host_weak->GetWidget());
+    EXPECT_EQ(nullptr, host_weak->GetChildWebContents());
+  }
+}
+
+IN_PROC_BROWSER_TEST_P(DocumentPipLifecycleBrowserTest,
+                       OpenerDestroyedClosesWindow) {
+  const bool is_standalone = GetParam();
+  ASSERT_NO_FATAL_FAILURE(OpenDocumentPipWindow());
+
+  auto* opener = OpenerWebContents();
+  auto* manager = PictureInPictureWindowManager::GetInstance();
+  ASSERT_TRUE(manager->IsInPictureInPicture());
+  ASSERT_EQ(opener, manager->GetWebContents());
+  auto* child = manager->GetChildWebContents();
+  ASSERT_NE(nullptr, child);
+  auto* widget =
+      views::Widget::GetWidgetForNativeWindow(child->GetTopLevelNativeWindow());
+  ASSERT_NE(nullptr, widget);
+  content::WebContentsDestroyedWatcher child_destroyed_watcher(child);
+  views::test::WidgetDestroyedWaiter widget_destroyed_waiter(widget);
+  auto* host = GetDocumentPipHost();
+  ASSERT_EQ(is_standalone, host != nullptr);
+  base::WeakPtr<DocumentPipHost> host_weak =
+      host ? host->GetWeakPtr() : nullptr;
 
   // Open a second tab so closing the first one doesn't close the browser.
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
       browser(), embedded_test_server()->GetURL("/title1.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
 
-  browser()->tab_strip_model()->CloseWebContentsAt(
+  browser()->GetTabStripModel()->CloseWebContentsAt(
       0, TabCloseTypes::CLOSE_USER_GESTURE);
 
-  // Destroying the opener releases the host and leaves no PiP window behind.
-  EXPECT_FALSE(host_weak);
-  EXPECT_EQ(
-      nullptr,
-      PictureInPictureWindowManager::GetInstance()->GetChildWebContents());
-}
-
-// Fixture with the standalone Document PiP path disabled (legacy behavior).
-class DocumentPipStandaloneDisabledBrowserTest
-    : public DocumentPipStandaloneBrowserTestBase {
- public:
-  DocumentPipStandaloneDisabledBrowserTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {blink::features::kDocumentPictureInPictureAPI},
-        /*disabled_features=*/{features::kDocumentPipStandaloneWindow});
+  child_destroyed_watcher.Wait();
+  widget_destroyed_waiter.Wait();
+  EXPECT_FALSE(manager->IsInPictureInPicture());
+  EXPECT_EQ(nullptr, manager->GetWebContents());
+  EXPECT_EQ(nullptr, manager->GetChildWebContents());
+  if (is_standalone) {
+    EXPECT_FALSE(host_weak);
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-// With the flag off, Document PiP still opens a Browser-backed window and no
-// DocumentPipHost is created.
-IN_PROC_BROWSER_TEST_F(DocumentPipStandaloneDisabledBrowserTest,
-                       RequestWindowUsesBrowserBackedPath) {
-  OpenDocumentPipWindow();
-
-  auto* child_web_contents =
-      PictureInPictureWindowManager::GetInstance()->GetChildWebContents();
-  ASSERT_NE(nullptr, child_web_contents);
-
-  EXPECT_EQ(nullptr, GetDocumentPipHost());
-  EXPECT_EQ(1, CountPictureInPictureBrowsers());
 }

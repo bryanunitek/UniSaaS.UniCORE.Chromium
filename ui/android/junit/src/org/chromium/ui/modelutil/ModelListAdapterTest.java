@@ -19,7 +19,6 @@ import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.CallbackHelper;
@@ -29,7 +28,6 @@ import java.util.concurrent.TimeoutException;
 
 /** Tests to ensure/validate ModelListAdapter behavior. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ModelListAdapterTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private static final Integer VIEW_TYPE_1 = 0;
@@ -102,7 +100,7 @@ public class ModelListAdapterTest {
         testData.add(new MVCListAdapter.ListItem(VIEW_TYPE_1, mModel));
         testData.add(new MVCListAdapter.ListItem(VIEW_TYPE_2, mModel));
         testData.add(new MVCListAdapter.ListItem(VIEW_TYPE_3_INFLATED, mModel));
-        mList = new LinearLayout(RuntimeEnvironment.application);
+        mList = new LinearLayout(RuntimeEnvironment.getApplication());
 
         mModelListAdapter = new ModelListAdapter(testData);
         mModelListAdapter.registerType(VIEW_TYPE_1, new TestViewBuilder(), new TestViewBinder());
@@ -136,7 +134,7 @@ public class ModelListAdapterTest {
         // Set a property to test that it gets bound.
         mModel.set(BOOLEAN_PROPERTY, true);
 
-        View nullTypeView = new View(RuntimeEnvironment.application);
+        View nullTypeView = new View(RuntimeEnvironment.getApplication());
         View view = mModelListAdapter.getView(0, nullTypeView, mList);
 
         mBindBooleanCallbackHelper.waitForCallback(0);
@@ -155,7 +153,7 @@ public class ModelListAdapterTest {
         mModel.set(BOOLEAN_PROPERTY, true);
 
         // Set up a convertView with the same type, the test model, and a test MCP.
-        View convertView = new View(RuntimeEnvironment.application);
+        View convertView = new View(RuntimeEnvironment.getApplication());
         PropertyModelChangeProcessor convertViewMcp =
                 Mockito.spy(
                         PropertyModelChangeProcessor.create(
@@ -204,7 +202,7 @@ public class ModelListAdapterTest {
         convertViewModel.set(BOOLEAN_PROPERTY, true);
         mModel.set(BOOLEAN_PROPERTY, false);
 
-        View convertView = new View(RuntimeEnvironment.application);
+        View convertView = new View(RuntimeEnvironment.getApplication());
         convertView.setTag(R.id.view_type, VIEW_TYPE_1);
         convertView.setTag(R.id.view_model, convertViewModel);
 
@@ -224,7 +222,7 @@ public class ModelListAdapterTest {
         convertViewModel.set(BOOLEAN_PROPERTY, true);
         mModel.set(BOOLEAN_PROPERTY, true);
 
-        View convertView = new View(RuntimeEnvironment.application);
+        View convertView = new View(RuntimeEnvironment.getApplication());
         convertView.setTag(R.id.view_type, VIEW_TYPE_2);
         convertView.setTag(R.id.view_model, convertViewModel);
 
@@ -261,7 +259,7 @@ public class ModelListAdapterTest {
         mModel.set(OBJECT_PROPERTY, new TestObject("Test"));
 
         ModelListAdapter.bindNewModel(
-                mModel, null, new View(RuntimeEnvironment.application), new TestViewBinder());
+                mModel, null, new View(RuntimeEnvironment.getApplication()), new TestViewBinder());
 
         mBindBooleanCallbackHelper.waitForCallback(0);
         mBindFloatCallbackHelper.waitForCallback(0);
@@ -272,7 +270,7 @@ public class ModelListAdapterTest {
     @Test
     public void testBindNewModel_NullOldModel_UnsetPropertyValues() {
         ModelListAdapter.bindNewModel(
-                mModel, null, new View(RuntimeEnvironment.application), new TestViewBinder());
+                mModel, null, new View(RuntimeEnvironment.getApplication()), new TestViewBinder());
 
         Assert.assertEquals(
                 "Incorrect callback count for boolean property",
@@ -307,7 +305,10 @@ public class ModelListAdapterTest {
         mModel.set(OBJECT_PROPERTY, new TestObject("Test"));
 
         ModelListAdapter.bindNewModel(
-                mModel, oldModel, new View(RuntimeEnvironment.application), new TestViewBinder());
+                mModel,
+                oldModel,
+                new View(RuntimeEnvironment.getApplication()),
+                new TestViewBinder());
 
         Assert.assertEquals(
                 "Incorrect callback count for boolean property",
@@ -342,7 +343,10 @@ public class ModelListAdapterTest {
         mModel.set(OBJECT_PROPERTY, new TestObject("Test1"));
 
         ModelListAdapter.bindNewModel(
-                mModel, oldModel, new View(RuntimeEnvironment.application), new TestViewBinder());
+                mModel,
+                oldModel,
+                new View(RuntimeEnvironment.getApplication()),
+                new TestViewBinder());
 
         mBindBooleanCallbackHelper.waitForCallback(0);
         mBindFloatCallbackHelper.waitForCallback(0);
@@ -361,7 +365,10 @@ public class ModelListAdapterTest {
         oldModel.set(OBJECT_PROPERTY, new TestObject("Test"));
 
         ModelListAdapter.bindNewModel(
-                mModel, oldModel, new View(RuntimeEnvironment.application), new TestViewBinder());
+                mModel,
+                oldModel,
+                new View(RuntimeEnvironment.getApplication()),
+                new TestViewBinder());
 
         mBindBooleanCallbackHelper.waitForCallback(0);
         mBindFloatCallbackHelper.waitForCallback(0);

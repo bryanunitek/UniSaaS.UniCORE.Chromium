@@ -8,6 +8,7 @@
 
 #include "base/auto_reset.h"
 #include "base/metrics/field_trial_params.h"
+#include "chrome/browser/banners/app_banner_manager_desktop.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -75,9 +76,16 @@ void PwaInstallPageActionController::WillDiscardContents(
     content::WebContents* new_contents) {
   if (manager_) {
     manager_->RemoveObserver(this);
+    manager_ = nullptr;
   }
   if (new_contents) {
-    manager_ = webapps::AppBannerManager::FromWebContents(new_contents);
+    // Look the recreated manager up via the tab: during discard callbacks the
+    // new WebContents is not yet associated with the tab, so the
+    // WebContents-based lookup would return null.
+    webapps::AppBannerManagerDesktop* manager_desktop =
+        webapps::AppBannerManagerDesktop::From(tab_interface);
+    manager_ =
+        manager_desktop ? manager_desktop->app_banner_manager() : nullptr;
     if (manager_) {
       manager_->AddObserver(this);
     }
@@ -251,14 +259,14 @@ bool PwaInstallPageActionController::ShouldShowIph(
 
 void PwaInstallPageActionController::OnIphShown(
     user_education::FeaturePromoResult result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   iph_pending_ = false;
   iph_activity_ = page_action_controller_->AddActivity(kActionInstallPwa);
 }
 
 void PwaInstallPageActionController::OnIphClosed(
     const webapps::ManifestId manifest_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   iph_activity_.reset();
   // IPH is also closed when the install button is clicked and the action is
   // executed.

@@ -15,7 +15,9 @@ using ProtobufTestMessages.Proto2;
 using ProtobufTestMessages.Proto3;
 using ProtobufUnittest;
 using System;
+using System.Linq;
 using UnitTest.Issues.TestProtos;
+using JsonEnumvalCustomString;
 
 namespace Google.Protobuf
 {
@@ -907,6 +909,71 @@ namespace Google.Protobuf
         }
 
         [Test]
+        public void MaliciousRecursionOfObjectsInValue()
+        {
+            int depth = 64;
+            string json = string.Join("", Enumerable.Repeat("{\"a\":", depth)) +
+                "{}" +
+                string.Join("", Enumerable.Repeat("}", depth));
+
+            // Each object level requires a Value and a Struct, so we can effectively only
+            // handle half as much depth as in a normal message.
+            var sufficientLimitParser = new JsonParser(new JsonParser.Settings(depth * 2 + 1));
+            sufficientLimitParser.Parse<Value>(json);
+
+            var insufficientLimitParser = new JsonParser(new JsonParser.Settings(depth * 2));
+            Assert.Throws<InvalidProtocolBufferException>(() => insufficientLimitParser.Parse<Value>(json));
+        }
+
+        [Test]
+        public void MaliciousRecursionOfArraysInValue()
+        {
+            int depth = 64;
+            string json = new string('[', depth) + new string(']', depth);
+
+            // Each array level requires a Value and a ListValue, so we can effectively only
+            // handle half as much depth as in a normal message. The limits here are slightly different than
+            // the limits for object recursion due to implementation details, but the inconsistency
+            // is preferred over the complexity of making arrays and objects match precisely in
+            // limit handling.
+            var sufficientLimitParser = new JsonParser(new JsonParser.Settings(depth * 2 - 1));
+            sufficientLimitParser.Parse<Value>(json);
+
+            var insufficientLimitParser = new JsonParser(new JsonParser.Settings(depth * 2 - 2));
+            Assert.Throws<InvalidProtocolBufferException>(() => insufficientLimitParser.Parse<Value>(json));
+        }
+
+        /// <summary>
+        /// Regression test: deeply-nested google.protobuf.Any payloads must
+        /// honor JsonParser.Settings.RecursionLimit. Previously the
+        /// JsonReplayTokenizer constructed for each Any body started at depth
+        /// zero, allowing the limit to be bypassed and producing an
+        /// uncatchable StackOverflowException. See the equivalent fixes in
+        /// Java (mergeAnyMessage) and Python (_ConvertAnyMessage).
+        /// </summary>
+        [Test]
+        public void MaliciousRecursionOfAnyInAny()
+        {
+            int depth = 100;
+            const string anyHeader = "{\"@type\":\"type.googleapis.com/google.protobuf.Any\",\"value\":";
+            string json =
+                string.Concat(Enumerable.Repeat(anyHeader, depth)) +
+                "{}" +
+                new string('}', depth);
+
+            var registry = TypeRegistry.FromMessages(Any.Descriptor);
+
+            // A generous limit must still successfully parse the document.
+            var sufficientLimitParser = new JsonParser(new JsonParser.Settings(depth * 2, registry));
+            Assert.DoesNotThrow(() => sufficientLimitParser.Parse<Any>(json));
+
+            // A limit smaller than the nesting depth must throw a recoverable
+            // protobuf exception rather than overflowing the stack.
+            var insufficientLimitParser = new JsonParser(new JsonParser.Settings(10, registry));
+            Assert.Throws<InvalidProtocolBufferException>(() => insufficientLimitParser.Parse<Any>(json));
+        }
+
+        [Test]
         [TestCase("AQI")]
         [TestCase("_-==")]
         public void Bytes_InvalidBase64(string badBase64)
@@ -1198,6 +1265,99 @@ namespace Google.Protobuf
             Assert.AreEqual(0, message.MapInt32Int32.Count);
             Assert.AreEqual(0, message.MapBoolBool.Count);
             Assert.AreEqual(0, message.MapStringNestedMessage.Count);
+        }
+
+        [Test]
+        [TestCase(Armor.Gorget, "ARMOR_GORGET")]
+        [TestCase(Armor.GreatHelm, "gr8 helm", "ARMOR_GREAT_HELM")]
+        [TestCase(Armor.Gauntlet, "a\\\"b", "ARMOR_GAUNTLET")]
+        [TestCase(Armor.Plate, "\\\"plate\\\"", "ARMOR_PLATE")]
+        [TestCase(Armor.Coif, "", "ARMOR_COIF")]
+        [TestCase(Armor.Pauldron, "p\\taul\\ndron", "ARMOR_PAULDRON")]
+        [TestCase(
+            Armor.Sabaton, "sabaton", "ARMOR_SABATON", "ARMOR_SOLLERET")]
+        [TestCase(
+            Armor.Solleret, "sabaton", "ARMOR_SOLLERET", "ARMOR_SABATON")]
+        [TestCase(Armor.HachiMaiDo, "8", "ARMOR_HACHI_MAI_DO")]
+        [TestCase(Armor.Greaves, "ARMOR_GREAVES")]
+        [TestCase(Armor.Unknown, "ARMOR_UNKNOWN")]
+        public void ParseString(Armor value, params string[] validJsonValues)
+        {
+            foreach (var validJsonValue in validJsonValues)
+            {
+                string json = $"{{ \"armor\": \"{validJsonValue}\" }}";
+                var parsed = JsonParser.Default.Parse<Knight>(json);
+                Assert.AreEqual(value, parsed.Armor);
+            }
+        }
+
+        [Test]
+        public void ParseInteger()
+        {
+            foreach (
+                var value in System.Enum.GetValues(typeof(Armor)).Cast<Armor>())
+            {
+                string json = $"{{ \"armor\": {(int) value} }}";
+                var parsed = JsonParser.Default.Parse<Knight>(json);
+                Assert.AreEqual(value, parsed.Armor);
+            }
+        }
+
+        [Test]
+        [TestCase("\"UNKNOWN_1\"")]
+        [TestCase("\"ARMOR_INVALID\"")]
+        [TestCase("\"A\\\"b\"")]
+        [TestCase("\"ARMOR_great_helm\"")]
+        [TestCase("\"GR8 HELM\"")]
+        [TestCase("true")]
+        [TestCase("123.456")]
+        [TestCase("{}")]
+        [TestCase("[ \"gr8 helm\" ]")]
+        [TestCase("[ \"ARMOR_GREAT_HELM\" ]")]
+        public void ParseInvalidValueFails(string jsonValue)
+        {
+            string json = $"{{ \"armor\": {jsonValue} }}";
+            Assert.Throws<InvalidProtocolBufferException>(
+                () => JsonParser.Default.Parse<Knight>(json));
+        }
+
+        [Test]
+        [TestCase("UNKNOWN_1")]
+        [TestCase("ARMOR_great_helm")]
+        [TestCase("GR8 HELM")]
+        public void ParseUnknownString_IgnoreUnknownFields(
+            string unrecognizedJsonValue)
+        {
+            var settings = JsonParser.Settings.Default
+                .WithIgnoreUnknownFields(true);
+            var parser = new JsonParser(settings);
+            string json = $"{{ \"armor\": \"{unrecognizedJsonValue}\" }}";
+            var parsed = parser.Parse<Knight>(json);
+            Assert.AreEqual(Armor.Unknown, parsed.Armor);
+        }
+
+        [Test]
+        public void ParseRepeated()
+        {
+            string json =
+                "{ \"armors\": [ \"gr8 helm\", \"ARMOR_GORGET\", \"a\\\"b\" ] }";
+            var parsed = JsonParser.Default.Parse<Knight>(json);
+            Assert.AreEqual(3, parsed.Armors.Count);
+            Assert.AreEqual(Armor.GreatHelm, parsed.Armors[0]);
+            Assert.AreEqual(Armor.Gorget, parsed.Armors[1]);
+            Assert.AreEqual(Armor.Gauntlet, parsed.Armors[2]);
+        }
+
+        [Test]
+        public void ParseMap()
+        {
+            string json =
+                "{ \"armorMap\": { \"primary\": \"gr8 helm\"," +
+                " \"secondary\": \"ARMOR_GORGET\" } }";
+            var parsed = JsonParser.Default.Parse<Knight>(json);
+            Assert.AreEqual(2, parsed.ArmorMap.Count);
+            Assert.AreEqual(Armor.GreatHelm, parsed.ArmorMap["primary"]);
+            Assert.AreEqual(Armor.Gorget, parsed.ArmorMap["secondary"]);
         }
     }
 }

@@ -15,6 +15,7 @@ import android.webkit.URLUtil;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.CommandLine;
+import org.chromium.blink_public.common.BlinkFeatures;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.ContentFeatureMap;
@@ -204,7 +205,8 @@ public final class ContextMenuUtils {
 
     /**
      * Get the suffix for the context menu type determined by the params. Histogram values should
-     * match with the values defined in histogram_suffixes_list.xml under ContextMenuTypeAndroid
+     * match with the values defined in tools/metrics/histograms/metadata/ui/histograms.xml under
+     * ContextMenuAndroidTypes.
      *
      * @param params The list of params for the opened context menu.
      * @return A string value for the histogram suffix.
@@ -254,14 +256,18 @@ public final class ContextMenuUtils {
     }
 
     /**
-     * Checks if the context menu should be displayed as a mouse driven popup or if it was opened
-     * from a shared highlight.
+     * Checks if the context menu should be displayed as an anchored popup (when triggered by a
+     * mouse, keyboard, or shared highlight).
      *
      * @param params The {@link ContextMenuParams} for the context menu.
      * @return True if the menu should be displayed as a popup, false otherwise.
      */
     public static boolean isMouseOrHighlightPopup(ContextMenuParams params) {
-        return params.getSourceType() == MenuSourceType.MOUSE || params.getOpenedFromHighlight();
+        return params.getSourceType() == MenuSourceType.MOUSE
+                || params.getOpenedFromHighlight()
+                || (params.getSourceType() == MenuSourceType.KEYBOARD
+                        && ContentFeatureMap.isEnabled(
+                                BlinkFeatures.ANDROID_KEYBOARD_CONTEXT_MENU));
     }
 
     /**
@@ -273,7 +279,6 @@ public final class ContextMenuUtils {
      * @param context The application {@link Context}.
      * @param webContents The {@link WebContents} instance.
      * @param params The {@link ContextMenuParams} for the context menu.
-     * @param leftContentOffsetPx The left content offset in pixels.
      * @param topContentOffsetPx The top content offset in pixels.
      * @param usePopupWindow Whether the menu should be displayed as a popup window.
      * @param containerView The container {@link View} for the context menu.
@@ -284,19 +289,12 @@ public final class ContextMenuUtils {
             Window window,
             WebContents webContents,
             ContextMenuParams params,
-            int leftContentOffsetPx,
             int topContentOffsetPx,
             boolean usePopupWindow,
             View containerView) {
         Point touchPoint =
                 getTouchPointCoordinates(
-                        context,
-                        window,
-                        params,
-                        leftContentOffsetPx,
-                        topContentOffsetPx,
-                        usePopupWindow,
-                        containerView);
+                        context, window, params, topContentOffsetPx, usePopupWindow, containerView);
 
         // If drag drop is enabled, the context menu needs to be anchored next to the drag shadow.
         // Otherwise, the Rect used to display the context menu dialog can be a single point.
@@ -315,7 +313,6 @@ public final class ContextMenuUtils {
      *
      * @param context The application {@link Context}.
      * @param params The {@link ContextMenuParams} for the context menu.
-     * @param leftContentOffsetPx The left content offset in pixels.
      * @param topContentOffsetPx The top content offset in pixels.
      * @param usePopupWindow Whether the menu should be displayed as a popup window.
      * @param containerView The container {@link View} for the context menu.
@@ -326,7 +323,6 @@ public final class ContextMenuUtils {
             Context context,
             Window window,
             ContextMenuParams params,
-            int leftContentOffsetPx,
             int topContentOffsetPx,
             boolean usePopupWindow,
             View containerView) {
@@ -334,7 +330,7 @@ public final class ContextMenuUtils {
         final float touchPointXPx = params.getTriggeringTouchXDp() * density;
         final float touchPointYPx = params.getTriggeringTouchYDp() * density;
 
-        int x = (int) (touchPointXPx + leftContentOffsetPx);
+        int x = (int) touchPointXPx;
         int y = (int) (touchPointYPx + topContentOffsetPx);
 
         // When context menu is a popup, the coordinates are expected to be screen coordinates as

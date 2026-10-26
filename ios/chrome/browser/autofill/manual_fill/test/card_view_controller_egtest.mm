@@ -2,10 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#import <optional>
+
 #import "base/ios/ios_util.h"
+#import "base/path_service.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
-#import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/autofill/manual_fill/public/manual_fill_constants.h"
@@ -23,6 +26,7 @@
 #import "ios/testing/earl_grey/app_launch_configuration.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "ios/web/public/test/element_selector.h"
+#import "net/test/embedded_test_server/default_handlers.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "ui/base/l10n/l10n_util.h"
 #import "url/gurl.h"
@@ -92,15 +96,6 @@ void OpenPaymentMethodManualFillView() {
       assertWithMatcher:grey_sufficientlyVisible()];
 }
 
-// Matcher for the credit card tab in the manual fill view.
-id<GREYMatcher> CreditCardManualFillViewTab() {
-  return grey_allOf(
-      grey_accessibilityLabel(l10n_util::GetNSString(
-          IDS_IOS_EXPANDED_MANUAL_FILL_PAYMENT_TAB_ACCESSIBILITY_LABEL)),
-      grey_ancestor(
-          grey_accessibilityID(manual_fill::kExpandedManualFillHeaderViewID)),
-      nil);
-}
 
 // Matcher for the overflow menu button shown in the payment method cells.
 id<GREYMatcher> OverflowMenuButton(NSInteger cell_index) {
@@ -242,16 +237,20 @@ void CheckChipButtonsOfLocalCard() {
       assertWithMatcher:grey_sufficientlyVisible()];
 }
 
+// Matcher for the credit card manual fill view button on keyboard accessory.
+id<GREYMatcher> CreditCardManualFillViewButton() {
+  return grey_allOf(grey_accessibilityLabel(l10n_util::GetNSString(
+                        IDS_IOS_AUTOFILL_CREDIT_CARD_AUTOFILL_DATA)),
+                    grey_ancestor(grey_accessibilityID(
+                        kFormInputAccessoryViewAccessibilityID)),
+                    nil);
+}
+
 // Opens the payment method manual fill view when there are no saved payment
 // methods and verifies that the card view controller is visible afterwards.
 void OpenPaymentMethodManualFillViewWithNoSavedPaymentMethods() {
-  // Tap the button to open the expanded manual fill view.
-  [[EarlGrey
-      selectElementWithMatcher:manual_fill::KeyboardAccessoryManualFillButton()]
-      performAction:grey_tap()];
-
-  // Tap the payment method tab from the segmented control.
-  [[EarlGrey selectElementWithMatcher:CreditCardManualFillViewTab()]
+  // Tap the credit card manual fill button on the keyboard accessory bar.
+  [[EarlGrey selectElementWithMatcher:CreditCardManualFillViewButton()]
       performAction:grey_tap()];
 
   // Verify the card table view controller is visible.
@@ -286,7 +285,9 @@ void DismissPaymentBottomSheet() {
 }  // namespace
 
 // Integration Tests for Manual Fallback credit cards View Controller.
-@interface CreditCardViewControllerTestCase : ChromeTestCase
+@interface CreditCardViewControllerTestCase : ChromeTestCase {
+  std::optional<net::test_server::EmbeddedTestServer> _HTTPSServer;
+}
 @end
 
 @implementation CreditCardViewControllerTestCase
@@ -300,6 +301,7 @@ void DismissPaymentBottomSheet() {
 
 - (void)setUp {
   [super setUp];
+  _HTTPSServer.reset();
   GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
   const GURL URL = self.testServer->GetURL(kFormHTMLFile);
   [self loadURL];
@@ -323,6 +325,7 @@ void DismissPaymentBottomSheet() {
   [MetricsAppInterface stopOverridingMetricsAndCrashReportingForTesting];
   chrome_test_util::GREYAssertErrorNil(
       [MetricsAppInterface releaseHistogramTester]);
+  _HTTPSServer.reset();
   [super tearDownHelper];
 }
 
@@ -392,9 +395,9 @@ void DismissPaymentBottomSheet() {
   GREYAssertNil(
       [MetricsAppInterface
           expectUniqueSampleWithCount:1
-                            forBucket:1
+                            forBucket:0
                          forHistogram:@"ManualFallback.VisibleSuggestions."
-                                      @"ExpandIcon.OpenPaymentMethods"],
+                                      @"OpenCreditCards"],
       @"Unexpected histogram error for number of visible suggestions.");
 }
 
@@ -1010,6 +1013,22 @@ void DismissPaymentBottomSheet() {
   [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
                                     ReauthenticationResult::kSuccess];
 
+  [self startHTTPSServer];
+  const GURL URL = _HTTPSServer->GetURL(kFormHTMLFile);
+  [ChromeEarlGrey loadURL:URL];
+
+  // Check if the SSL warning page is displayed by verifying if the
+  // "details-button" element exists on the page.
+  base::Value result = [ChromeEarlGrey
+      evaluateJavaScript:@"document.getElementById('details-button') !== null"];
+  if (result.is_bool() && result.GetBool()) {
+    [ChromeEarlGrey tapWebStateElementWithID:@"details-button"];
+    [ChromeEarlGrey tapWebStateElementWithID:@"proceed-link"];
+  }
+
+  [ChromeEarlGrey waitForWebStateContainingText:"Autofill Test"];
+  [AutofillAppInterface considerCreditCardFormSecureForTesting];
+
   // Save a card.
   [AutofillAppInterface saveLocalCreditCard];
 
@@ -1080,6 +1099,16 @@ void DismissPaymentBottomSheet() {
   const GURL URL = self.testServer->GetURL(kFormHTMLFile);
   [ChromeEarlGrey loadURL:URL];
   [ChromeEarlGrey waitForWebStateContainingText:"Autofill Test"];
+}
+
+// Starts the dedicated HTTPS test server.
+- (void)startHTTPSServer {
+  _HTTPSServer.emplace(net::test_server::EmbeddedTestServer::TYPE_HTTPS);
+  _HTTPSServer->ServeFilesFromDirectory(
+      base::PathService::CheckedGet(base::DIR_ASSETS)
+          .AppendASCII("ios/testing/data/http_server_files/"));
+  net::test_server::RegisterDefaultHandlers(&_HTTPSServer.value());
+  GREYAssertTrue(_HTTPSServer->Start(), @"HTTPS Test server failed to start.");
 }
 
 - (void)verifyCreditCardButtonWithTitle:(NSString*)title

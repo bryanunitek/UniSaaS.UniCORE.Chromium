@@ -18,17 +18,14 @@
 // This is the public interface for a browser window. Most features in
 // //chrome/browser depend on this interface, and thus to prevent circular
 // dependencies this interface should not depend on anything else in //chrome.
-// Ping erikchen for assistance if this class does not have the functionality
-// your feature needs. This comment will be deleted after there are 10+ features
-// in BrowserWindowFeatures.
 //
 // This interface is shared between desktop platforms and the experimental
 // desktop android platform. As such, the features exposed directly on this
 // class should only be those that apply to all these platforms, and should only
 // be features that are core to the concept of a browser window. Classes related
-// to specific features should likely instead be stored either as an entry in
-// the UnownedUserData (via BrowserWindowInterface::GetUnownedUserDataHost())
-// or on DesktopBrowserWindowCapabilities.
+// to specific features should instead be stored either as an entry in
+// the UnownedUserData via BrowserWindowInterface::GetUnownedUserDataHost().
+// Desktop-only functions should live in DesktopBrowserWindowCapabilities.
 
 #if !BUILDFLAG(IS_ANDROID)
 namespace tabs {
@@ -39,8 +36,6 @@ namespace web_modal {
 class WebContentsModalDialogHost;
 }  // namespace web_modal
 
-class Browser;
-class BrowserActions;
 class BrowserWindowFeatures;
 class DesktopBrowserWindowCapabilities;
 class GURL;
@@ -151,10 +146,12 @@ class BrowserWindowInterface : public content::PageNavigator {
     // strip).
     TYPE_APP_POPUP,
 #if !BUILDFLAG(IS_ANDROID)
-    // Document picture-in-picture browser.  It's mostly the same as a
-    // TYPE_POPUP, except that it floats above other windows.  It also has some
-    // additional restrictions, like it cannot navigated, to prevent misuse.
-    TYPE_PICTURE_IN_PICTURE,
+    // Floating browser (e.g. Document Picture-in-Picture or always-on-top
+    // popup). It's mostly the same as a TYPE_POPUP, except that it floats
+    // above other windows and uses a minimal frame. Document Picture-in-Picture
+    // windows also have additional restrictions (see
+    // DesktopBrowserWindowCapabilities::IsDocumentPictureInPicture()).
+    TYPE_FLOATING,
 #endif
 #if BUILDFLAG(IS_ANDROID)
     // TODO(https://crbug.com/493668475): Revisit if this type is needed.
@@ -233,8 +230,26 @@ class BrowserWindowInterface : public content::PageNavigator {
   virtual void OpenGURL(const GURL& gurl,
                         WindowOpenDisposition disposition) = 0;
 
+  // Never nullptr.
+  //
+  // When the last tab is removed, the browser attempts to close, see
+  // TabStripEmpty(). TODO(crbug.com/331031753): Several existing Browser::Types
+  // never show a tab strip, yet are forced to work with the tab strip API to
+  // deal with the previous condition. This creates confusing control flow both
+  // for the tab strip and this class. One or both of the following should
+  // happen:
+  //  (1) tab_strip_model_ should become an optional member.
+  //  (2) Variations of Browser::Type that never show a tab strip should not use
+  //      this class.
   virtual TabStripModel* GetTabStripModel() = 0;
   virtual const TabStripModel* GetTabStripModel() const = 0;
+
+  // WARNING: Do not use these accessors, please use the `GetTabStripModel()`
+  // accessors above.
+  // TODO(crbug.com/532254684): Migrate remaining clients of `tab_strip_model()`
+  // to `GetTabStripModel()` and remove these.
+  TabStripModel* tab_strip_model() { return GetTabStripModel(); }
+  const TabStripModel* tab_strip_model() const { return GetTabStripModel(); }
 
   // Returns true if the tab strip is currently visible for this browser window.
   // Will return false on browser initialization before the tab strip is
@@ -302,19 +317,9 @@ class BrowserWindowInterface : public content::PageNavigator {
   virtual base::CallbackListSubscription RegisterDidBecomeInactive(
       DidBecomeInactiveCallback callback) = 0;
 
-  // This class manages actions that a user can take that are scoped to a
-  // browser window (e.g. most of the 3-dot menu actions).
-  virtual BrowserActions* GetActions() = 0;
-
   // This is used by features that need to operate on most or all tabs in the
   // browser window. Do not use this method to find a specific tab.
   virtual std::vector<tabs::TabInterface*> GetAllTabInterfaces() = 0;
-
-  // Downcasts to a Browser*. The only valid use for this method is when
-  // migrating a large chunk of code to BrowserWindowInterface, to allow
-  // incremental migration.
-  virtual Browser* GetBrowserForMigrationOnly() = 0;
-  virtual const Browser* GetBrowserForMigrationOnly() const = 0;
 
   // Checks if the browser popup is tab modal dialog.
   virtual bool IsTabModalPopup() const = 0;

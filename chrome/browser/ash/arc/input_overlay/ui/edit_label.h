@@ -11,6 +11,7 @@
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/arc/input_overlay/constants.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/views/controls/button/label_button.h"
 
 namespace arc::input_overlay {
@@ -66,7 +67,7 @@ class EditLabel : public views::LabelButton {
   const Direction direction_index_;
 
   // Layer for edit label pulse animation.
-  std::unique_ptr<ui::Layer> pulse_layer_;
+  std::unique_ptr<ui::LayerSolidColor> pulse_layer_;
 };
 
 }  // namespace arc::input_overlay

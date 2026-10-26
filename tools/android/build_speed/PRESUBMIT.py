@@ -9,12 +9,15 @@ for more details on the presubmit API built into depot_tools.
 
 
 def CommonChecks(input_api, output_api):
+    if not input_api.HasAffectedFiles(extensions='.py'):
+        return []
     checks = input_api.canned_checks.GetUnitTestsRecursively(
         input_api,
         output_api,
         input_api.PresubmitLocalPath(),
         files_to_check=[r'.+_unittest\.py$'],
-        files_to_skip=[])
+        files_to_skip=[],
+    )
 
     return input_api.RunTests(checks, False)
 

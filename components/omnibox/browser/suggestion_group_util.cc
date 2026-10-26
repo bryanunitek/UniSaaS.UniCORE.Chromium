@@ -8,7 +8,7 @@
 
 #include "base/feature_list.h"
 #include "base/lazy_instance.h"
-#include "build/buildflag.h"
+#include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/match_compare.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/common/omnibox_features.h"
@@ -37,7 +37,18 @@ base::LazyInstance<GroupConfigMap>::DestructorAtExit g_default_groups =
 base::LazyInstance<GroupConfigMap>::DestructorAtExit g_default_hub_zps_groups =
     LAZY_INSTANCE_INITIALIZER;
 base::LazyInstance<GroupConfigMap>::DestructorAtExit
-    g_default_hub_typed_groups = LAZY_INSTANCE_INITIALIZER;
+    g_default_hub_typed_regular_groups = LAZY_INSTANCE_INITIALIZER;
+base::LazyInstance<GroupConfigMap>::DestructorAtExit
+    g_default_hub_typed_incognito_groups = LAZY_INSTANCE_INITIALIZER;
+base::LazyInstance<GroupConfigMap>::DestructorAtExit
+    g_default_tab_search_overlay_zps_regular_groups = LAZY_INSTANCE_INITIALIZER;
+base::LazyInstance<GroupConfigMap>::DestructorAtExit
+    g_default_tab_search_overlay_zps_incognito_groups =
+        LAZY_INSTANCE_INITIALIZER;
+base::LazyInstance<GroupConfigMap>::DestructorAtExit
+    g_default_tab_search_overlay_regular_groups = LAZY_INSTANCE_INITIALIZER;
+base::LazyInstance<GroupConfigMap>::DestructorAtExit
+    g_default_tab_search_overlay_incognito_groups = LAZY_INSTANCE_INITIALIZER;
 
 const GroupConfigMap& BuildDefaultGroups() {
   if (g_default_groups.Get().empty()) {
@@ -80,8 +91,10 @@ const GroupConfigMap& BuildDefaultHubZPSGroups() {
 }
 
 const GroupConfigMap& BuildDefaultHubTypedGroups(bool is_incognito) {
-  if (g_default_hub_typed_groups.Get().empty()) {
-    g_default_hub_typed_groups.Get() = {
+  auto& group_map = is_incognito ? g_default_hub_typed_incognito_groups.Get()
+                                 : g_default_hub_typed_regular_groups.Get();
+  if (group_map.empty()) {
+    group_map = {
         // clang-format off
                 {GROUP_MOBILE_OPEN_TABS,
 #if BUILDFLAG(IS_ANDROID)
@@ -109,20 +122,83 @@ const GroupConfigMap& BuildDefaultHubTypedGroups(bool is_incognito) {
         // clang-format on
     };
   }
-  return g_default_hub_typed_groups.Get();
+  return group_map;
+}
+
+// Recently closed tabs are not available in incognito, matching desktop
+// (TabRestoreService does not exist for off-the-record profiles).
+void MaybeAddRecentlyClosedTabsGroup(GroupConfigMap& group_map,
+                                     bool is_incognito) {
+  if (is_incognito) {
+    return;
+  }
+  group_map.emplace(GROUP_RECENTLY_CLOSED_TABS,
+                    CreateGroup(SECTION_RECENTLY_CLOSED_TABS,
+                                GroupConfig_RenderType_DEFAULT_VERTICAL,
+                                IDS_RECENTLY_CLOSED));
+}
+
+const GroupConfigMap& BuildDefaultTabSearchOverlayZPSGroups(bool is_incognito) {
+  auto& group_map =
+      is_incognito ? g_default_tab_search_overlay_zps_incognito_groups.Get()
+                   : g_default_tab_search_overlay_zps_regular_groups.Get();
+  if (group_map.empty()) {
+    group_map = {
+        // clang-format off
+        {GROUP_MOBILE_OPEN_TABS,
+         CreateGroup(SECTION_MOBILE_OPEN_TABS,
+                    GroupConfig_RenderType_DEFAULT_VERTICAL,
+                    IDS_OMNIBOX_HUB_OPEN_TABS_HEADER)},
+        // clang-format on
+    };
+    MaybeAddRecentlyClosedTabsGroup(group_map, is_incognito);
+  }
+  return group_map;
+}
+
+const GroupConfigMap& BuildDefaultTabSearchOverlayGroups(bool is_incognito) {
+  auto& group_map = is_incognito
+                        ? g_default_tab_search_overlay_incognito_groups.Get()
+                        : g_default_tab_search_overlay_regular_groups.Get();
+  if (group_map.empty()) {
+    group_map = {
+        // clang-format off
+        {GROUP_MOBILE_OPEN_TABS,
+#if BUILDFLAG(IS_ANDROID)
+         !is_incognito
+             ? CreateGroup(SECTION_MOBILE_OPEN_TABS,
+                           GroupConfig_RenderType_DEFAULT_VERTICAL,
+                           IDS_OMNIBOX_HUB_TYPED_MATCH_HEADER)
+             : CreateGroup(SECTION_MOBILE_OPEN_TABS)
+#else
+             CreateGroup(SECTION_MOBILE_OPEN_TABS)
+#endif
+        },
+        {GROUP_MOBILE_HISTORY,
+             CreateGroup(SECTION_MOBILE_HISTORY,
+                         GroupConfig_RenderType_DEFAULT_VERTICAL,
+                         IDS_OMNIBOX_HUB_HISTORY_HEADER)},
+        // clang-format on
+    };
+    MaybeAddRecentlyClosedTabsGroup(group_map, is_incognito);
+  }
+  return group_map;
 }
 
 }  // namespace
 
-const omnibox::GroupConfigMap& BuildDefaultGroupsForInput(
-    const AutocompleteInput& input,
-    bool is_incognito) {
+const GroupConfigMap& BuildDefaultGroupsForInput(const AutocompleteInput& input,
+                                                 bool is_incognito) {
   using OEP = ::metrics::OmniboxEventProto;
   switch (input.current_page_classification()) {
     case OEP::ANDROID_HUB:
       return input.IsZeroSuggest() || input.text().empty()
                  ? BuildDefaultHubZPSGroups()
                  : BuildDefaultHubTypedGroups(is_incognito);
+    case OEP::ANDROID_TAB_SEARCH_OVERLAY:
+      return input.IsZeroSuggest() || input.text().empty()
+                 ? BuildDefaultTabSearchOverlayZPSGroups(is_incognito)
+                 : BuildDefaultTabSearchOverlayGroups(is_incognito);
     default:
       return BuildDefaultGroups();
   }
@@ -131,7 +207,12 @@ const omnibox::GroupConfigMap& BuildDefaultGroupsForInput(
 void ResetDefaultGroupsForTest() {
   g_default_groups.Get().clear();
   g_default_hub_zps_groups.Get().clear();
-  g_default_hub_typed_groups.Get().clear();
+  g_default_hub_typed_regular_groups.Get().clear();
+  g_default_hub_typed_incognito_groups.Get().clear();
+  g_default_tab_search_overlay_zps_regular_groups.Get().clear();
+  g_default_tab_search_overlay_zps_incognito_groups.Get().clear();
+  g_default_tab_search_overlay_regular_groups.Get().clear();
+  g_default_tab_search_overlay_incognito_groups.Get().clear();
 }
 
 GroupId GroupIdForNumber(int value) {

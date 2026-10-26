@@ -45,7 +45,8 @@ namespace search_engines {
 
 namespace {
 std::vector<std::unique_ptr<TemplateURL>> ToOwnedTemplateURLs(
-    const std::vector<const TemplateURLPrepopulateData::PrepopulatedEngine*>&
+    const std::vector<
+        raw_ptr<const TemplateURLPrepopulateData::PrepopulatedEngine>>&
         engines) {
   return base::ToVector(
       engines,
@@ -191,7 +192,7 @@ TEST_F(SearchEngineChoiceUtilsTest,
       regional_capabilities::GetDefaultPrepopulatedEngines());
 
   TemplateURLData template_url_data;
-  template_url_data.id = 0;
+  template_url_data.id = kInvalidTemplateURLID;
   template_url_data.SetKeyword(u"custom");
   template_url_data.SetURL("https://www.example.com/?q={searchTerms}");
   auto current_default_to_highlight =

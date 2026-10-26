@@ -4,15 +4,20 @@
 
 #include "services/network/web_bundle/web_bundle_url_loader_factory.h"
 
+#include "base/base64.h"
 #include "base/functional/callback_helpers.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "components/web_package/web_bundle_builder.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe_utils.h"
 #include "mojo/public/cpp/system/functions.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/mojom/blocked_by_response_reason.mojom.h"
+#include "services/network/public/mojom/cross_origin_embedder_policy.mojom.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/test/test_url_loader_client.h"
@@ -155,10 +160,62 @@ class BadMessageTestHelper {
   mojo::internal::MessageDispatchContext context_;
 };
 
+// Test implementation of mojom::CrossOriginEmbedderPolicyReporter that records
+// reported blocked URLs from CORP violations.
+class TestCoepReporter : public mojom::CrossOriginEmbedderPolicyReporter {
+ public:
+  TestCoepReporter() = default;
+  ~TestCoepReporter() override = default;
+
+  void QueueCorpViolationReport(const GURL& blocked_url,
+                                mojom::RequestDestination destination,
+                                bool report_only) override {
+    reports_.push_back(blocked_url);
+    if (quit_closure_) {
+      std::move(quit_closure_).Run();
+    }
+  }
+
+  void Clone(mojo::PendingReceiver<mojom::CrossOriginEmbedderPolicyReporter>
+                 receiver) override {
+    receivers_.Add(this, std::move(receiver));
+  }
+
+  mojo::PendingRemote<mojom::CrossOriginEmbedderPolicyReporter>
+  CreatePendingRemote() {
+    mojo::PendingRemote<mojom::CrossOriginEmbedderPolicyReporter> remote;
+    receivers_.Add(this, remote.InitWithNewPipeAndPassReceiver());
+    return remote;
+  }
+
+  void RunUntilReport() {
+    if (!reports_.empty()) {
+      return;
+    }
+    base::RunLoop run_loop;
+    quit_closure_ = run_loop.QuitClosure();
+    run_loop.Run();
+  }
+
+  const std::vector<GURL>& reports() const { return reports_; }
+
+ private:
+  std::vector<GURL> reports_;
+  base::OnceClosure quit_closure_;
+  mojo::ReceiverSet<mojom::CrossOriginEmbedderPolicyReporter> receivers_;
+};
+
 }  // namespace
 
 class WebBundleURLLoaderFactoryTest : public ::testing::Test {
  public:
+  WebBundleURLLoaderFactoryTest()
+      : WebBundleURLLoaderFactoryTest(CrossOriginEmbedderPolicy()) {}
+
+  explicit WebBundleURLLoaderFactoryTest(
+      const CrossOriginEmbedderPolicy& cross_origin_embedder_policy)
+      : cross_origin_embedder_policy_(cross_origin_embedder_policy) {}
+
   void SetUp() override {
     mojo::ScopedDataPipeConsumerHandle consumer;
     ASSERT_EQ(CreateDataPipe(nullptr, bundle_data_destination_, consumer),
@@ -167,14 +224,23 @@ class WebBundleURLLoaderFactoryTest : public ::testing::Test {
     handle_ = std::make_unique<TestWebBundleHandle>(
         handle.BindNewPipeAndPassReceiver());
 
+    // In production, CorsURLLoaderFactory owns the COEP reporter remote and
+    // clones it for WebBundleURLLoaderFactory. We mirror that ownership here.
+    mojo::PendingRemote<mojom::CrossOriginEmbedderPolicyReporter> cloned_remote;
+    original_coep_reporter_.Bind(coep_reporter_.CreatePendingRemote());
+    original_coep_reporter_->Clone(
+        cloned_remote.InitWithNewPipeAndPassReceiver());
+
     const ResourceRequest::WebBundleTokenParams create_params(
         GURL(kBundleUrl), {} /* token */, {} /* handle */);
     factory_ = std::make_unique<WebBundleURLLoaderFactory>(
         GURL(kBundleUrl), create_params, std::move(handle),
         std::make_unique<MockMemoryQuotaConsumer>(),
-        CrossOriginEmbedderPolicy(), nullptr /* coep_reporter */);
+        cross_origin_embedder_policy_, std::move(cloned_remote));
     factory_->SetBundleStream(std::move(consumer));
   }
+
+  void ResetOriginalCoepReporter() { original_coep_reporter_.reset(); }
 
   void WriteBundle(base::span<const uint8_t> data) {
     mojo::BlockingCopyFromString(
@@ -225,13 +291,25 @@ class WebBundleURLLoaderFactoryTest : public ::testing::Test {
     return handle_->last_bundle_error();
   }
 
+  void RunUntilCoepReport() { coep_reporter_.RunUntilReport(); }
+
+  const std::vector<GURL>& coep_reports() const {
+    return coep_reporter_.reports();
+  }
+
  protected:
   std::unique_ptr<WebBundleURLLoaderFactory> factory_;
 
  private:
+  base::test::TaskEnvironment task_environment;
+
   std::unique_ptr<TestWebBundleHandle> handle_;
   mojo::ScopedDataPipeProducerHandle bundle_data_destination_;
-  base::test::TaskEnvironment task_environment;
+
+  const CrossOriginEmbedderPolicy cross_origin_embedder_policy_;
+  mojo::Remote<mojom::CrossOriginEmbedderPolicyReporter>
+      original_coep_reporter_;
+  TestCoepReporter coep_reporter_;
 };
 
 TEST_F(WebBundleURLLoaderFactoryTest, Basic) {
@@ -532,6 +610,233 @@ TEST_F(WebBundleURLLoaderFactoryTest, WrongBundleURL) {
   EXPECT_THAT(bad_message_helper.bad_message_reports(),
               ::testing::ElementsAre(
                   "WebBundleURLLoaderFactory: Bundle URL does not match"));
+}
+
+// Test fixture configured with CrossOriginEmbedderPolicy: require-corp.
+class WebBundleURLLoaderFactoryRequireCorpTest
+    : public WebBundleURLLoaderFactoryTest {
+ public:
+  WebBundleURLLoaderFactoryRequireCorpTest()
+      : WebBundleURLLoaderFactoryTest(RequireCorpPolicy()) {}
+
+ private:
+  static CrossOriginEmbedderPolicy RequireCorpPolicy() {
+    CrossOriginEmbedderPolicy coep;
+    coep.value = mojom::CrossOriginEmbedderPolicyValue::kRequireCorp;
+    return coep;
+  }
+};
+
+// Regression test for crbug.com/349994197.
+//
+// Previously, WebBundleURLLoaderFactory held a raw pointer to
+// mojom::CrossOriginEmbedderPolicyReporter borrowed from CorsURLLoaderFactory.
+// If CorsURLLoaderFactory was destroyed before WebBundleURLLoaderFactory,
+// attempting to report a CORP violation via the dangling pointer resulted in a
+// Use-After-Free (UAF).
+//
+// This test verifies that WebBundleURLLoaderFactory safely retains its own
+// cloned reporter remote even after the original reporter remote (owned by
+// CorsURLLoaderFactory) is destroyed:
+// 1. Simulate CorsURLLoaderFactory destruction via ResetOriginalCoepReporter().
+// 2. Issue a cross-origin subresource request that violates CORP.
+// 3. Verify that the request is blocked and the CORP violation report is
+//    safely delivered through the cloned remote without crashing.
+TEST_F(WebBundleURLLoaderFactoryRequireCorpTest, ClonedReporterDestruction) {
+  // Step 1: Simulate CorsURLLoaderFactory being destroyed while
+  // WebBundleURLLoaderFactory is still alive.
+  ResetOriginalCoepReporter();
+
+  WriteBundle(CreateCrossOriginBundle());
+  FinishWritingBundle();
+
+  // Step 2: Issue a cross-origin subresource request that lacks a CORP header.
+  // Under COEP: require-corp, this request will be blocked by CORP, which
+  // invokes coep_reporter_->QueueCorpViolationReport().
+  network::ResourceRequest request =
+      CreateRequest(GURL(kCrossOriginJsUrl), kResourceRequestId);
+  request.mode = mojom::RequestMode::kNoCors;
+  request.destination = mojom::RequestDestination::kScript;
+
+  auto result = StartRequest(request);
+  result.client->RunUntilComplete();
+  RunUntilCoepReport();
+
+  // Step 3: Verify the request is blocked and the report is safely delivered.
+  EXPECT_EQ(net::ERR_BLOCKED_BY_RESPONSE,
+            result.client->completion_status().error_code);
+  EXPECT_THAT(coep_reports(), ::testing::ElementsAre(GURL(kCrossOriginJsUrl)));
+}
+
+TEST_F(WebBundleURLLoaderFactoryTest, UnencodedDigestParsed) {
+  constexpr char kValidDigestHeader[] =
+      "sha-256=:X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=:";
+  web_package::WebBundleBuilder builder;
+  builder.AddExchange(kResourceUrl,
+                      {{":status", "200"},
+                       {"content-type", "application/json"},
+                       {"unencoded-digest", kValidDigestHeader}},
+                      R"({"hello": "world"})");
+  builder.AddExchange(kResourceUrl2,
+                      {{":status", "200"},
+                       {"content-type", "application/json"},
+                       {"unencoded-digest", "malformed-digest"}},
+                      R"({"hello": "world"})");
+  WriteBundle(builder.CreateBundle());
+  FinishWritingBundle();
+
+  auto valid_request = StartRequest(GURL(kResourceUrl), kResourceRequestId);
+  valid_request.client->RunUntilComplete();
+  EXPECT_EQ(net::OK, valid_request.client->completion_status().error_code);
+  ASSERT_TRUE(valid_request.client->response_head()->unencoded_digests);
+  EXPECT_EQ(
+      1u,
+      valid_request.client->response_head()->unencoded_digests->digests.size());
+  EXPECT_TRUE(
+      valid_request.client->response_head()->unencoded_digests->issues.empty());
+
+  auto malformed_request =
+      StartRequest(GURL(kResourceUrl2), kResourceRequestId2);
+  malformed_request.client->RunUntilComplete();
+  EXPECT_EQ(net::OK, malformed_request.client->completion_status().error_code);
+  ASSERT_TRUE(malformed_request.client->response_head()->unencoded_digests);
+  EXPECT_TRUE(malformed_request.client->response_head()
+                  ->unencoded_digests->digests.empty());
+  EXPECT_FALSE(malformed_request.client->response_head()
+                   ->unencoded_digests->issues.empty());
+}
+
+TEST_F(WebBundleURLLoaderFactoryTest, SRIMessageSignatureValid) {
+  constexpr char kPublicKey[] = "JrQLj5P/89iXES9+vFgrIy29clF9CC/oPPsw3c5D0bs=";
+  constexpr char kValidDigestHeader[] =
+      "sha-256=:X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=:";
+  constexpr char kValidSignatureInputHeader[] =
+      "signature=(\"unencoded-digest\";sf);"
+      "keyid=\"JrQLj5P/89iXES9+vFgrIy29clF9CC/oPPsw3c5D0bs=\";"
+      "tag=\"ed25519-integrity\"";
+  constexpr char kValidSignatureHeader[] =
+      "signature=:SbCdPUyjc0IBJjFbVRWs81ucEUcFz87b37nQ63d6kDW+/"
+      "JvDmET6O5cSdwlddePvlwemLdaWFuY6pQGO+hrkAg==:";
+
+  web_package::WebBundleBuilder builder;
+  builder.AddExchange(kResourceUrl,
+                      {{":status", "200"},
+                       {"content-type", "application/json"},
+                       {"unencoded-digest", kValidDigestHeader},
+                       {"signature-input", kValidSignatureInputHeader},
+                       {"signature", kValidSignatureHeader}},
+                      R"({"hello": "world"})");
+  WriteBundle(builder.CreateBundle());
+  FinishWritingBundle();
+
+  network::ResourceRequest request =
+      CreateRequest(GURL(kResourceUrl), kResourceRequestId);
+  std::optional<std::vector<uint8_t>> decoded_key =
+      base::Base64Decode(kPublicKey);
+  ASSERT_TRUE(decoded_key.has_value());
+  request.expected_public_keys = {*decoded_key};
+
+  auto result = StartRequest(request);
+  result.client->RunUntilComplete();
+
+  EXPECT_EQ(net::OK, result.client->completion_status().error_code);
+  ASSERT_TRUE(result.client->response_head()->unencoded_digests);
+  EXPECT_EQ(1u,
+            result.client->response_head()->unencoded_digests->digests.size());
+  std::string body;
+  EXPECT_TRUE(mojo::BlockingCopyToString(result.client->response_body_release(),
+                                         &body));
+  EXPECT_EQ(R"({"hello": "world"})", body);
+}
+
+TEST_F(WebBundleURLLoaderFactoryTest, SRIMessageSignatureInvalidBlocked) {
+  constexpr char kValidDigestHeader[] =
+      "sha-256=:X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=:";
+  constexpr char kValidSignatureInputHeader[] =
+      "signature=(\"unencoded-digest\";sf);"
+      "keyid=\"JrQLj5P/89iXES9+vFgrIy29clF9CC/oPPsw3c5D0bs=\";"
+      "tag=\"ed25519-integrity\"";
+  constexpr char kInvalidSignatureHeader[] =
+      "signature=:gHim9e5Pk2H7c9BStOmxSmkyc8+ioZgoxynu3d4INAT4dwfj"
+      "5LhvaV9DFnEQ9p7C0hzW4o4Qpkm5aApd6WLLCw==:";
+
+  web_package::WebBundleBuilder builder;
+  builder.AddExchange(kResourceUrl,
+                      {{":status", "200"},
+                       {"content-type", "application/json"},
+                       {"unencoded-digest", kValidDigestHeader},
+                       {"signature-input", kValidSignatureInputHeader},
+                       {"signature", kInvalidSignatureHeader}},
+                      R"({"hello": "world"})");
+  WriteBundle(builder.CreateBundle());
+  FinishWritingBundle();
+
+  auto result = StartRequest(GURL(kResourceUrl), kResourceRequestId);
+  result.client->RunUntilComplete();
+
+  EXPECT_EQ(net::ERR_BLOCKED_BY_RESPONSE,
+            result.client->completion_status().error_code);
+  EXPECT_EQ(mojom::BlockedByResponseReason::kSRIMessageSignatureMismatch,
+            result.client->completion_status().blocked_by_response_reason);
+}
+
+TEST_F(WebBundleURLLoaderFactoryTest,
+       SRIMessageSignatureExpectedPublicKeyMismatchOrMissingBlocked) {
+  constexpr char kOtherPublicKey[] =
+      "xDnP380zcL4rJ76rXYjeHlfMyPZEOqpJYjsjEppbuXE=";
+  constexpr char kValidDigestHeader[] =
+      "sha-256=:X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=:";
+  constexpr char kValidSignatureInputHeader[] =
+      "signature=(\"unencoded-digest\";sf);"
+      "keyid=\"JrQLj5P/89iXES9+vFgrIy29clF9CC/oPPsw3c5D0bs=\";"
+      "tag=\"ed25519-integrity\"";
+  constexpr char kValidSignatureHeader[] =
+      "signature=:SbCdPUyjc0IBJjFbVRWs81ucEUcFz87b37nQ63d6kDW+/"
+      "JvDmET6O5cSdwlddePvlwemLdaWFuY6pQGO+hrkAg==:";
+
+  web_package::WebBundleBuilder builder;
+  // Signed with kPublicKey, not kOtherPublicKey.
+  builder.AddExchange(kResourceUrl,
+                      {{":status", "200"},
+                       {"content-type", "application/json"},
+                       {"unencoded-digest", kValidDigestHeader},
+                       {"signature-input", kValidSignatureInputHeader},
+                       {"signature", kValidSignatureHeader}},
+                      R"({"hello": "world"})");
+  // Unsigned response.
+  builder.AddExchange(
+      kResourceUrl2, {{":status", "200"}, {"content-type", "application/json"}},
+      R"({"hello": "world"})");
+  WriteBundle(builder.CreateBundle());
+  FinishWritingBundle();
+
+  std::optional<std::vector<uint8_t>> other_key =
+      base::Base64Decode(kOtherPublicKey);
+  ASSERT_TRUE(other_key.has_value());
+
+  // 1. Signed with a different public key than expected -> blocked.
+  network::ResourceRequest wrong_key_request =
+      CreateRequest(GURL(kResourceUrl), kResourceRequestId);
+  wrong_key_request.expected_public_keys = {*other_key};
+  auto wrong_key_result = StartRequest(wrong_key_request);
+  wrong_key_result.client->RunUntilComplete();
+  EXPECT_EQ(net::ERR_BLOCKED_BY_RESPONSE,
+            wrong_key_result.client->completion_status().error_code);
+  EXPECT_EQ(
+      mojom::BlockedByResponseReason::kSRIMessageSignatureMismatch,
+      wrong_key_result.client->completion_status().blocked_by_response_reason);
+
+  // 2. Unsigned response when client requires public key integrity -> blocked.
+  network::ResourceRequest unsigned_request =
+      CreateRequest(GURL(kResourceUrl2), kResourceRequestId2);
+  unsigned_request.expected_public_keys = {*other_key};
+  auto unsigned_result = StartRequest(unsigned_request);
+  unsigned_result.client->RunUntilComplete();
+  EXPECT_EQ(net::ERR_BLOCKED_BY_RESPONSE,
+            unsigned_result.client->completion_status().error_code);
+  EXPECT_EQ(
+      mojom::BlockedByResponseReason::kSRIMessageSignatureMismatch,
+      unsigned_result.client->completion_status().blocked_by_response_reason);
 }
 
 }  // namespace network

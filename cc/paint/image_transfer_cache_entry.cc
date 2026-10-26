@@ -6,9 +6,11 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <type_traits>
 #include <utility>
 
+#include "base/atomic_sequence_num.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/functional/callback_helpers.h"
@@ -18,10 +20,10 @@
 #include "base/numerics/safe_conversions.h"
 #include "cc/paint/paint_op_reader.h"
 #include "cc/paint/paint_op_writer.h"
-#include "third_party/skia/include/core/SkCPURecorder.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkPixmap.h"
+#include "third_party/skia/include/core/SkRecorder.h"
 #include "third_party/skia/include/core/SkYUVAInfo.h"
 #include "third_party/skia/include/gpu/GpuTypes.h"
 #include "third_party/skia/include/gpu/ganesh/GrBackendSurface.h"
@@ -32,6 +34,7 @@
 #include "third_party/skia/include/gpu/graphite/Recorder.h"
 #include "ui/gfx/hdr_metadata.h"
 #include "ui/gfx/mojom/hdr_metadata.mojom.h"
+#include "ui/gfx/tone_map_util.h"
 
 namespace cc {
 namespace {
@@ -434,6 +437,13 @@ sk_sp<SkImage> ReadImage(
   }
 }
 
+uint32_t GetNextCacheEntryId() {
+  static base::AtomicSequenceNumberT<uint32_t> id_sequence;
+  uint32_t id = id_sequence.GetNext();
+  CHECK_NE(id, std::numeric_limits<uint32_t>::max());
+  return id;
+}
+
 }  // namespace
 
 size_t NumberOfPlanesForYUVDecodeFormat(YUVDecodeFormat format) {
@@ -496,7 +506,7 @@ ClientImageTransferCacheEntry::ClientImageTransferCacheEntry(
     sk_sp<SkColorSpace> target_color_space)
     : needs_mips_(needs_mips),
       target_color_space_(target_color_space),
-      id_(GetNextId()),
+      id_(GetNextCacheEntryId()),
       image_(image) {
   ComputeSize();
 }
@@ -507,7 +517,7 @@ ClientImageTransferCacheEntry::ClientImageTransferCacheEntry(
     const SkGainmapInfo& gainmap_info,
     bool needs_mips)
     : needs_mips_(needs_mips),
-      id_(GetNextId()),
+      id_(GetNextCacheEntryId()),
       image_(image),
       gainmap_image_(gainmap_image),
       gainmap_info_(gainmap_info) {
@@ -515,9 +525,6 @@ ClientImageTransferCacheEntry::ClientImageTransferCacheEntry(
 }
 
 ClientImageTransferCacheEntry::~ClientImageTransferCacheEntry() = default;
-
-// static
-base::AtomicSequenceNumber ClientImageTransferCacheEntry::s_next_id_;
 
 uint32_t ClientImageTransferCacheEntry::SerializedSize() const {
   return size_;
@@ -645,8 +652,8 @@ bool ServiceImageTransferCacheEntry::Deserialize(
   // but is odd. All of the caching of the color space conversion here should be
   // removed.
   const bool is_tone_mapped =
-      has_gainmap_ || ToneMapUtil::UseGlobalToneMapFilter(image_->colorSpace(),
-                                                          gfx::HDRMetadata());
+      has_gainmap_ || gfx::ToneMapUtil::UseGlobalToneMapFilter(
+                          image_->colorSpace(), gfx::HDRMetadata());
 
   // Perform color conversion (if no tone mapping is needed).
   if (target_color_space && !is_tone_mapped) {
@@ -660,7 +667,7 @@ bool ServiceImageTransferCacheEntry::Deserialize(
       // Need to handle this case (currently just goes through gr_context path
       // with nullptr context).
       image_ = image_->makeColorSpace(
-          gr_context_ ? gr_context_->asRecorder() : skcpu::Recorder::TODO(),
+          gr_context_ ? gr_context_->asRecorder() : SkRecorder::TODO(),
           target_color_space, {});
       if (needs_mips && gr_context_ && image_ && image_->isTextureBacked()) {
         image_ = SkImages::TextureFromImage(

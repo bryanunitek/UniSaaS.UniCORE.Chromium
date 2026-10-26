@@ -30,7 +30,6 @@
 #include "ash/public/cpp/capture_mode/capture_mode_test_api.h"
 #include "ash/public/cpp/holding_space/holding_space_controller.h"
 #include "ash/public/cpp/holding_space/holding_space_model.h"
-#include "ash/public/cpp/holding_space/holding_space_prefs.h"
 #include "ash/public/cpp/holding_space/holding_space_test_api.h"
 #include "ash/public/cpp/holding_space/holding_space_util.h"
 #include "ash/public/cpp/holding_space/mock_holding_space_client.h"
@@ -51,6 +50,7 @@
 #include "ash/test/ash_test_base.h"
 #include "ash/test/ash_test_util.h"
 #include "ash/wm/window_state.h"
+#include "base/json/values_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/system_monitor.h"
@@ -62,7 +62,7 @@
 #include "components/viz/test/test_in_process_context_provider.h"
 #include "media/base/video_facing.h"
 #include "media/base/video_frame.h"
-#include "media/renderers/paint_canvas_video_renderer.h"
+#include "media/gfx/paint_canvas_video_renderer.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_types.h"
@@ -135,6 +135,17 @@ gfx::Rect GetTooSmallToFitCameraRegion() {
 }
 
 }  // namespace
+
+TEST(CameraIdOrderingTest, OrdersByModelThenNumber) {
+  const CameraId camera_a1("camera_a", 1);
+  const CameraId camera_a2("camera_a", 2);
+  const CameraId camera_b1("camera_b", 1);
+
+  EXPECT_FALSE(camera_a1 < camera_a1);
+  EXPECT_TRUE(camera_a1 < camera_a2);
+  EXPECT_TRUE(camera_a2 < camera_b1);
+  EXPECT_FALSE(camera_b1 < camera_a2);
+}
 
 class CaptureModeCameraTest : public AshTestBase {
  public:
@@ -4231,7 +4242,7 @@ TEST_F(CameraPreviewWithNotificationTest,
 
 class CameraPreviewWithHoldingSpaceTest : public CaptureModeCameraTest {
  public:
-  CameraPreviewWithHoldingSpaceTest() { set_start_session(false); }
+  CameraPreviewWithHoldingSpaceTest() = default;
   CameraPreviewWithHoldingSpaceTest(const CameraPreviewWithHoldingSpaceTest&) =
       delete;
   CameraPreviewWithHoldingSpaceTest& operator=(
@@ -4249,6 +4260,11 @@ class CameraPreviewWithHoldingSpaceTest : public CaptureModeCameraTest {
   }
 
   // CaptureModeCameraTest:
+  void SetUpInitParams(AshTestHelper::InitParams& init_params) override {
+    CaptureModeCameraTest::SetUpInitParams(init_params);
+    init_params.start_session = false;
+  }
+
   void SetUp() override {
     CaptureModeCameraTest::SetUp();
 
@@ -4257,10 +4273,13 @@ class CameraPreviewWithHoldingSpaceTest : public CaptureModeCameraTest {
     HoldingSpaceController::Get()->RegisterClientAndModelForUser(
         user_account, client(), model());
 
-    auto pref_service = TestPrefServiceProvider::CreateUserPrefServiceSimple();
-    holding_space_prefs::MarkTimeOfFirstAvailability(pref_service.get());
-    holding_space_prefs::MarkTimeOfFirstAdd(pref_service.get());
-    SimulateUserLogin({}, user_account, std::move(pref_service));
+    base::Value now = base::TimeToValue(base::Time::Now());
+    auto init_prefs =
+        base::DictValue()
+            .Set("ash.holding_space.time_of_first_availability", now.Clone())
+            .Set("ash.holding_space.time_of_first_add", std::move(now));
+    SimulateUserLogin({.account_id = user_account,
+                       .init_pref_service_value = std::move(init_prefs)});
   }
 
   void TearDown() override {
@@ -4731,7 +4750,7 @@ TEST_F(NoSessionCaptureModeCameraTest, RequestCameraInfoAfterUserLogsIn) {
   {
     base::RunLoop loop;
     camera_controller->SetOnCameraListReceivedForTesting(loop.QuitClosure());
-    SimulateUserLogin({"example@gmail.com"});
+    SimulateUserLogin(AccountId::FromUserEmail("example@gmail.com"));
     loop.Run();
   }
 

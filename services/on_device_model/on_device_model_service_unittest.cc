@@ -20,6 +20,7 @@
 #include "services/on_device_model/ml/chrome_ml_types.h"
 #include "services/on_device_model/ml/gpu_blocklist.h"
 #include "services/on_device_model/on_device_model_mojom_impl.h"
+#include "services/on_device_model/public/cpp/features.h"
 #include "services/on_device_model/public/cpp/model_assets.h"
 #include "services/on_device_model/public/cpp/service_client.h"
 #include "services/on_device_model/public/cpp/test_support/test_response_holder.h"
@@ -34,6 +35,10 @@ namespace {
 
 using ::testing::ElementsAre;
 
+// Standard sample rate (in Hz) used for ASR stream and audio chunk inputs in
+// tests.
+constexpr uint32_t kDefaultAsrSampleRateHz = 16000;
+
 // Creates a test tool declaration matching the fake's tool call name.
 ml::ToolDeclaration MakeToolDeclaration() {
   ml::ToolDeclaration decl;
@@ -42,6 +47,15 @@ ml::ToolDeclaration MakeToolDeclaration() {
   decl.input_schema_json =
       R"({"type":"object","properties":{"input":{"type":"string"}}})";
   return decl;
+}
+
+ml::ToolCall MakeToolCall(
+    std::string arguments_json = R"({"location":{"city":"Paris"}})") {
+  ml::ToolCall call;
+  call.call_id = fake_ml::kFakeToolCallId;
+  call.name = fake_ml::kFakeToolName;
+  call.arguments_json = std::move(arguments_json);
+  return call;
 }
 
 mojom::InputPiecePtr MakeMojomInputPiece(ml::InputPiece piece) {
@@ -67,6 +81,14 @@ mojom::InputPiecePtr MakeMojomInputPiece(ml::InputPiece piece) {
                 mojom::ToolDeclaration::New(std::move(decl.name),
                                             std::move(decl.description),
                                             std::move(*parsed_schema)));
+          },
+          [](ml::ToolCall call) {
+            auto parsed_arguments = base::JSONReader::ReadDict(
+                call.arguments_json, base::JSON_PARSE_RFC);
+            CHECK(parsed_arguments.has_value());
+            return mojom::InputPiece::NewToolCall(mojom::ToolCall::New(
+                std::move(call.call_id), std::move(call.name),
+                std::move(*parsed_arguments)));
           },
           [](ml::ToolResponse response) {
             std::optional<base::Value> result;
@@ -145,6 +167,40 @@ class ContextClientWaiter : public mojom::ContextClient {
   std::optional<int> tokens_processed_;
 };
 
+class TestAsrResponder : public mojom::AsrStreamResponder {
+ public:
+  TestAsrResponder() = default;
+  ~TestAsrResponder() override = default;
+
+  mojo::PendingRemote<mojom::AsrStreamResponder> BindRemote() {
+    auto remote = receiver_.BindNewPipeAndPassRemote();
+    receiver_.set_disconnect_handler(disconnect_future_.GetCallback());
+    return remote;
+  }
+
+  void OnResponse(
+      std::vector<mojom::SpeechRecognitionResultPtr> result) override {
+    if (!response_future_.IsReady()) {
+      response_future_.SetValue(std::move(result));
+    }
+  }
+
+  base::test::TestFuture<std::vector<mojom::SpeechRecognitionResultPtr>>&
+  response_future() {
+    return response_future_;
+  }
+
+  base::test::TestFuture<void>& disconnect_future() {
+    return disconnect_future_;
+  }
+
+ private:
+  mojo::Receiver<mojom::AsrStreamResponder> receiver_{this};
+  base::test::TestFuture<std::vector<mojom::SpeechRecognitionResultPtr>>
+      response_future_;
+  base::test::TestFuture<void> disconnect_future_;
+};
+
 class FakeFile {
  public:
   explicit FakeFile(const std::string& content) {
@@ -160,9 +216,8 @@ class FakeFile {
 
   base::File Open() {
     base::ScopedAllowBlockingForTesting allow_blocking;
-    return base::File(temp_file_.path(), base::File::FLAG_OPEN |
-                                             base::File::FLAG_WRITE |
-                                             base::File::FLAG_READ);
+    return base::File(temp_file_.path(),
+                      base::File::FLAG_OPEN | base::File::FLAG_READ);
   }
 
   base::FilePath Path() { return temp_file_.path(); }
@@ -222,6 +277,50 @@ class OnDeviceModelServiceTest : public testing::Test {
     auto params = mojom::LoadAdaptationParams::New();
     params->assets.weights_path = std::move(adaptation_path);
     return LoadAdaptationWithParams(model, std::move(params));
+  }
+
+  mojo::Remote<mojom::OnDeviceModel> LoadPostProcessorWithParams(
+      mojom::OnDeviceModel& model,
+      mojom::LoadPostProcessorParamsPtr params) {
+    mojo::Remote<mojom::OnDeviceModel> remote;
+    base::test::TestFuture<mojom::LoadModelResult> future;
+    model.LoadPostProcessor(std::move(params),
+                            remote.BindNewPipeAndPassReceiver(),
+                            future.GetCallback());
+    EXPECT_EQ(future.Get(), mojom::LoadModelResult::kSuccess);
+    return remote;
+  }
+
+  mojo::Remote<mojom::OnDeviceModel> LoadPostProcessor(
+      mojom::OnDeviceModel& model,
+      base::File postprocessor_data) {
+    auto params = mojom::LoadPostProcessorParams::New();
+    params->weights = std::move(postprocessor_data);
+    return LoadPostProcessorWithParams(model, std::move(params));
+  }
+
+  std::string GetAsrTranscript(mojom::OnDeviceModel& model) {
+    mojo::Remote<mojom::Session> session;
+    model.StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+
+    TestAsrResponder responder;
+    auto options = mojom::AsrStreamOptions::New();
+    options->sample_rate_hz = kDefaultAsrSampleRateHz;
+    mojo::Remote<mojom::AsrStreamInput> asr_input;
+    session->AsrStream(std::move(options),
+                       asr_input.BindNewPipeAndPassReceiver(),
+                       responder.BindRemote());
+
+    auto audio_data = mojom::AudioData::New();
+    audio_data->sample_rate = kDefaultAsrSampleRateHz;
+    audio_data->channel_count = 1;
+    audio_data->frame_count = 1;
+    audio_data->data = {0};
+    asr_input->AddAudioChunk(std::move(audio_data));
+
+    auto results = responder.response_future().Take();
+    CHECK_EQ(results.size(), 1u);
+    return results[0]->transcript;
   }
 
   mojom::AppendOptionsPtr MakeInput(const std::string& input) {
@@ -341,7 +440,7 @@ TEST_F(OnDeviceModelServiceTest, AsrStreamIdleTimeout) {
       &responder_impl, responder_remote.InitWithNewPipeAndPassReceiver());
 
   auto options = mojom::AsrStreamOptions::New();
-  options->sample_rate_hz = 16000;
+  options->sample_rate_hz = kDefaultAsrSampleRateHz;
   mojo::Remote<mojom::AsrStreamInput> asr_input;
   session->AsrStream(std::move(options), asr_input.BindNewPipeAndPassReceiver(),
                      std::move(responder_remote));
@@ -352,12 +451,12 @@ TEST_F(OnDeviceModelServiceTest, AsrStreamIdleTimeout) {
 
   // An ASR chunk should reset timeout.
   auto audio_data = mojom::AudioData::New();
-  audio_data->sample_rate = 16000;
+  audio_data->sample_rate = kDefaultAsrSampleRateHz;
   audio_data->channel_count = 1;
   audio_data->frame_count = 1;
   audio_data->data = {0};
   asr_input->AddAudioChunk(std::move(audio_data));
-  task_environment_.RunUntilIdle();
+  asr_input.FlushForTesting();
 
   task_environment_.FastForwardBy(kDefaultModelIdleTimeout - base::Seconds(1));
   EXPECT_FALSE(model_future.IsReady());
@@ -368,6 +467,125 @@ TEST_F(OnDeviceModelServiceTest, AsrStreamIdleTimeout) {
             static_cast<uint32_t>(ModelDisconnectReason::kIdleShutdown));
   EXPECT_EQ(std::get<0>(session_future.Get()),
             static_cast<uint32_t>(ModelDisconnectReason::kIdleShutdown));
+}
+
+TEST_F(OnDeviceModelServiceTest, AsrStreamDisconnectDoesNotDisconnectSession) {
+  auto model = LoadModel();
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+
+  class DummyResponder : public mojom::AsrStreamResponder {
+   public:
+    void OnResponse(
+        std::vector<mojom::SpeechRecognitionResultPtr> result) override {}
+  };
+  DummyResponder responder_impl;
+  mojo::PendingRemote<mojom::AsrStreamResponder> responder_remote;
+  mojo::Receiver<mojom::AsrStreamResponder> receiver(
+      &responder_impl, responder_remote.InitWithNewPipeAndPassReceiver());
+
+  auto options = mojom::AsrStreamOptions::New();
+  options->sample_rate_hz = kDefaultAsrSampleRateHz;
+  mojo::Remote<mojom::AsrStreamInput> asr_input;
+  session->AsrStream(std::move(options), asr_input.BindNewPipeAndPassReceiver(),
+                     std::move(responder_remote));
+  asr_input.FlushForTesting();
+
+  // Disconnect the ASR stream.
+  asr_input.reset();
+  session.FlushForTesting();
+
+  // The session remote should remain connected and functional.
+  EXPECT_TRUE(session.is_connected());
+
+  TestResponseHolder response;
+  session->Append(MakeInput("test"), {});
+  session->Generate(mojom::GenerateOptions::New(), response.BindRemote());
+  response.WaitForCompletion();
+  EXPECT_THAT(response.responses(), ElementsAre("test"));
+}
+
+TEST_F(OnDeviceModelServiceTest, AsrStreamReuseOnExistingSession) {
+  auto model = LoadModel();
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+
+  // First ASR stream on session.
+  TestAsrResponder responder1;
+  auto options1 = mojom::AsrStreamOptions::New();
+  options1->sample_rate_hz = kDefaultAsrSampleRateHz;
+  mojo::Remote<mojom::AsrStreamInput> asr_input1;
+  session->AsrStream(std::move(options1),
+                     asr_input1.BindNewPipeAndPassReceiver(),
+                     responder1.BindRemote());
+  base::test::TestFuture<void> asr_input1_disconnect;
+  asr_input1.set_disconnect_handler(asr_input1_disconnect.GetCallback());
+
+  auto audio_data1 = mojom::AudioData::New();
+  audio_data1->sample_rate = kDefaultAsrSampleRateHz;
+  audio_data1->channel_count = 1;
+  audio_data1->frame_count = 1;
+  audio_data1->data = {0};
+  asr_input1->AddAudioChunk(std::move(audio_data1));
+  EXPECT_TRUE(responder1.response_future().Wait());
+
+  // Second ASR stream on the same session replacing the previous stream while
+  // the first stream is still open (hot replacement).
+  TestAsrResponder responder2;
+  auto options2 = mojom::AsrStreamOptions::New();
+  options2->sample_rate_hz = kDefaultAsrSampleRateHz;
+  mojo::Remote<mojom::AsrStreamInput> asr_input2;
+  session->AsrStream(std::move(options2),
+                     asr_input2.BindNewPipeAndPassReceiver(),
+                     responder2.BindRemote());
+
+  EXPECT_TRUE(asr_input1_disconnect.Wait());
+  EXPECT_TRUE(responder1.disconnect_future().Wait());
+  EXPECT_TRUE(session.is_connected());
+  EXPECT_TRUE(asr_input2.is_connected());
+  EXPECT_FALSE(asr_input1.is_connected());
+
+  auto audio_data2 = mojom::AudioData::New();
+  audio_data2->sample_rate = kDefaultAsrSampleRateHz;
+  audio_data2->channel_count = 1;
+  audio_data2->frame_count = 1;
+  audio_data2->data = {0};
+  asr_input2->AddAudioChunk(std::move(audio_data2));
+  EXPECT_TRUE(responder2.response_future().Wait());
+  EXPECT_TRUE(session.is_connected());
+}
+
+TEST_F(OnDeviceModelServiceTest, AsrStreamTimestamps) {
+  auto model = LoadModel();
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+
+  TestAsrResponder responder;
+  auto options = mojom::AsrStreamOptions::New();
+  options->sample_rate_hz = kDefaultAsrSampleRateHz;
+  mojo::Remote<mojom::AsrStreamInput> asr_input;
+  session->AsrStream(std::move(options), asr_input.BindNewPipeAndPassReceiver(),
+                     responder.BindRemote());
+
+  auto audio_data = mojom::AudioData::New();
+  audio_data->sample_rate = kDefaultAsrSampleRateHz;
+  audio_data->channel_count = 1;
+  audio_data->frame_count = 1;
+  audio_data->data = {0};
+  asr_input->AddAudioChunk(std::move(audio_data));
+
+  auto results = responder.response_future().Take();
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0]->transcript, fake_ml::kFakeAsrTranscript);
+  EXPECT_TRUE(results[0]->is_final);
+  // Expected audio start and end timestamps matching the fake ASR engine output
+  // (1.0s and 2.5s).
+  constexpr base::TimeDelta kExpectedStartTime =
+      base::Microseconds(fake_ml::kFakeAsrStartTimeMicros);
+  constexpr base::TimeDelta kExpectedEndTime =
+      base::Microseconds(fake_ml::kFakeAsrEndTimeMicros);
+  EXPECT_EQ(results[0]->audio_start_time, kExpectedStartTime);
+  EXPECT_EQ(results[0]->audio_end_time, kExpectedEndTime);
 }
 
 TEST_F(OnDeviceModelServiceTest, Responds) {
@@ -472,6 +690,36 @@ TEST_F(OnDeviceModelServiceTest, ClampedSamplingParams) {
   }
 }
 
+TEST_F(OnDeviceModelServiceTest, SpeculativeDecodingDisabledByDefault) {
+  auto model = LoadModel();
+
+  TestResponseHolder response;
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+
+  session->Generate(mojom::GenerateOptions::New(), response.BindRemote());
+  response.WaitForCompletion();
+
+  EXPECT_THAT(response.responses(), ElementsAre());
+}
+
+TEST_F(OnDeviceModelServiceTest, SpeculativeDecodingEnabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      features::kOnDeviceModelSpeculativeDecoding);
+
+  auto model = LoadModel();
+
+  TestResponseHolder response;
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+
+  session->Generate(mojom::GenerateOptions::New(), response.BindRemote());
+  response.WaitForCompletion();
+
+  EXPECT_THAT(response.responses(), ElementsAre("SpeculativeDecodingAllowed"));
+}
+
 TEST_F(OnDeviceModelServiceTest, CloneContextAndContinue) {
   auto model = LoadModel();
 
@@ -561,19 +809,43 @@ TEST_F(OnDeviceModelServiceTest, MultipleSessionsAppend) {
 TEST_F(OnDeviceModelServiceTest, CountTokens) {
   auto model = LoadModel();
 
+  std::vector<std::string> inputs = {"cheese", "more", "cheddar"};
+
   TestResponseHolder response;
   mojo::Remote<mojom::Session> session;
   model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
-  session->Append(MakeInput("cheese"), {});
-  session->Append(MakeInput("more"), {});
+  session->Append(MakeInput(inputs.at(0)), {});
+  session->Append(MakeInput(inputs.at(1)), {});
 
-  std::string input = "cheddar";
-  session->Append(MakeInput(input), {});
+  session->Append(MakeInput(inputs.at(2)), {});
   session->Generate(mojom::GenerateOptions::New(), response.BindRemote());
   response.WaitForCompletion();
 
-  // 3 context.
-  EXPECT_THAT(response.output_token_count(), 3);
+  constexpr int kEosTokenCount = 1;
+  EXPECT_THAT(response.output_token_count(), inputs.size() + kEosTokenCount);
+}
+
+// TODO(crbug.com/540118700): Remove once the legacy engine has been removed and
+// all of these unittests use context_usage by default.
+TEST_F(OnDeviceModelServiceTest, CountTokensWithTokenDecodedSet) {
+  base::AutoReset<bool> calculate_tokens_decoded =
+      fake_ml::EnableCalculateTokensDecodedForTesting();
+  auto model = LoadModel();
+
+  std::vector<std::string> inputs = {"cheese", "more", "cheddar"};
+
+  TestResponseHolder response;
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+  session->Append(MakeInput(inputs.at(0)), {});
+  session->Append(MakeInput(inputs.at(1)), {});
+
+  session->Append(MakeInput(inputs.at(2)), {});
+  session->Generate(mojom::GenerateOptions::New(), response.BindRemote());
+  response.WaitForCompletion();
+
+  constexpr int kEosTokenCount = 1;
+  EXPECT_THAT(response.output_token_count(), inputs.size() + kEosTokenCount);
 }
 
 TEST_F(OnDeviceModelServiceTest, AppendWithTokenLimits) {
@@ -679,6 +951,40 @@ TEST_F(OnDeviceModelServiceTest, LoadingAdaptationDoesNotCancelSession) {
   session.reset_on_disconnect();
 
   LoadAdaptation(*model, weights1.Open());
+  FlushService();
+  EXPECT_TRUE(session);
+}
+
+TEST_F(OnDeviceModelServiceTest, LoadsPostProcessor) {
+  FakeFile polisher_weights("Polisher1");
+  auto model = LoadModel();
+  auto postprocessor = LoadPostProcessor(*model, polisher_weights.Open());
+
+  EXPECT_EQ(GetAsrTranscript(*model), fake_ml::kFakeAsrTranscript);
+  EXPECT_EQ(
+      GetAsrTranscript(*postprocessor),
+      base::StrCat({fake_ml::kFakeAsrTranscript, " (Polisher: Polisher1)"}));
+}
+
+TEST_F(OnDeviceModelServiceTest, LoadsPostProcessorWithInvalidWeightsFails) {
+  auto model = LoadModel();
+  mojo::Remote<mojom::OnDeviceModel> postprocessor;
+  base::test::TestFuture<mojom::LoadModelResult> future;
+  model->LoadPostProcessor(mojom::LoadPostProcessorParams::New(),
+                           postprocessor.BindNewPipeAndPassReceiver(),
+                           future.GetCallback());
+  EXPECT_EQ(future.Get(), mojom::LoadModelResult::kFailedToLoadLibrary);
+}
+
+TEST_F(OnDeviceModelServiceTest, LoadingPostProcessorDoesNotCancelSession) {
+  FakeFile polisher_weights("Polisher1");
+  auto model = LoadModel();
+
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+  session.reset_on_disconnect();
+
+  LoadPostProcessor(*model, polisher_weights.Open());
   FlushService();
   EXPECT_TRUE(session);
 }
@@ -812,8 +1118,6 @@ TEST_F(OnDeviceModelServiceTest, AppendWithImages) {
               ElementsAre("cheddar[Bitmap of size 7x21]cheese",
                           "bleu[Bitmap of size 63x42]cheese"));
 }
-
-
 
 TEST_F(OnDeviceModelServiceTest, GpuBlocked) {
   // The fake implementation of ChromeML always blocks GPU by default.
@@ -1159,6 +1463,104 @@ TEST_F(OnDeviceModelServiceTest, ToolResponseProcessing) {
                   {fake_ml::kToolRespPrefix, fake_ml::kFakeToolName, "="}))));
 }
 
+TEST_F(OnDeviceModelServiceTest, ToolCallInputProcessing) {
+  auto model = LoadModel();
+
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+  session->Append(
+      MakeInput({ml::Token::kModel, MakeToolCall(), ml::Token::kEnd}), {});
+
+  TestResponseHolder response;
+  session->Generate(mojom::GenerateOptions::New(), response.BindRemote());
+  response.WaitForCompletion();
+
+  EXPECT_TRUE(response.complete());
+  EXPECT_THAT(
+      response.responses(),
+      testing::Contains(testing::HasSubstr(base::StrCat(
+          {fake_ml::kToolCallPrefix, fake_ml::kFakeToolCallId, ":",
+           fake_ml::kFakeToolName, R"(={"location":{"city":"Paris"}}])"}))));
+}
+
+TEST_F(OnDeviceModelServiceTest, ToolCallInputSizeInTokens) {
+  auto model = LoadModel();
+
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+  base::test::TestFuture<uint32_t> future;
+  session->GetSizeInTokens(
+      MakeMojomInput(std::vector<ml::InputPiece>{MakeToolCall("{}")}),
+      future.GetCallback());
+
+  EXPECT_EQ(future.Get(),
+            base::StrCat({fake_ml::kToolCallPrefix, fake_ml::kFakeToolCallId,
+                          ":", fake_ml::kFakeToolName, "={}]"})
+                .size());
+}
+
+TEST_F(OnDeviceModelServiceTest, ToolDeclarationInputSizeInTokens) {
+  auto model = LoadModel();
+
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+  base::test::TestFuture<uint32_t> future;
+  session->GetSizeInTokens(
+      MakeMojomInput(std::vector<ml::InputPiece>{MakeToolDeclaration()}),
+      future.GetCallback());
+
+  EXPECT_EQ(future.Get(), base::StrCat({fake_ml::kToolDeclPrefix,
+                                        fake_ml::kFakeToolName, "]"})
+                              .size());
+}
+
+TEST_F(OnDeviceModelServiceTest, ToolResponseInputSizeInTokens) {
+  auto model = LoadModel();
+
+  constexpr std::string_view kResultJson = R"({"output":"42"})";
+  ml::ToolResponse tool_response;
+  tool_response.call_id = fake_ml::kFakeToolCallId;
+  tool_response.name = fake_ml::kFakeToolName;
+  tool_response.result_json = kResultJson;
+
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+  base::test::TestFuture<uint32_t> future;
+  session->GetSizeInTokens(
+      MakeMojomInput(std::vector<ml::InputPiece>{std::move(tool_response)}),
+      future.GetCallback());
+
+  EXPECT_EQ(future.Get(),
+            base::StrCat({fake_ml::kToolRespPrefix, fake_ml::kFakeToolName, "=",
+                          kResultJson, "]"})
+                .size());
+}
+
+TEST_F(OnDeviceModelServiceTest, ToolCallInputPreservedInClone) {
+  auto model = LoadModel();
+
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+  auto append_waiter = std::make_unique<ContextClientWaiter>();
+  session->Append(
+      MakeInput({ml::Token::kModel, MakeToolCall(), ml::Token::kEnd}),
+      append_waiter->BindRemote());
+  append_waiter->WaitForCompletion();
+
+  mojo::Remote<mojom::Session> cloned;
+  session->Clone(cloned.BindNewPipeAndPassReceiver());
+  TestResponseHolder response;
+  cloned->Generate(mojom::GenerateOptions::New(), response.BindRemote());
+  response.WaitForCompletion();
+
+  EXPECT_TRUE(response.complete());
+  EXPECT_THAT(
+      response.responses(),
+      testing::Contains(testing::HasSubstr(base::StrCat(
+          {fake_ml::kToolCallPrefix, fake_ml::kFakeToolCallId, ":",
+           fake_ml::kFakeToolName, R"(={"location":{"city":"Paris"}}])"}))));
+}
+
 TEST_F(OnDeviceModelServiceTest, InvalidToolResponseReportsBadMessageOnAppend) {
   auto model = LoadModel();
 
@@ -1468,6 +1870,34 @@ TEST_F(OnDeviceModelServiceTest, AsrStreamInitializationFailure) {
   EXPECT_TRUE(received_reason_future.Wait());
   EXPECT_EQ(std::get<0>(received_reason_future.Take()),
             static_cast<uint32_t>(mojom::AsrError::kInitializationFailed));
+
+  // The session remote should remain connected and functional after failure.
+  EXPECT_TRUE(session.is_connected());
+
+  TestResponseHolder response;
+  session->Append(MakeInput("test"), {});
+  session->Generate(mojom::GenerateOptions::New(), response.BindRemote());
+  response.WaitForCompletion();
+  EXPECT_THAT(response.responses(), ElementsAre("test"));
+}
+
+TEST_F(OnDeviceModelServiceTest, GenerateWithThinking) {
+  auto model = LoadModel();
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+  session->Append(MakeInput("solve"), {});
+
+  TestResponseHolder response;
+  auto options = mojom::GenerateOptions::New();
+  options->enable_thinking = true;
+  options->thinking_token_budget = 512;
+  session->Generate(std::move(options), response.BindRemote());
+  response.WaitForCompletion();
+
+  EXPECT_THAT(response.thoughts(), ElementsAre("Thinking (budget=512)"));
+  EXPECT_THAT(response.responses(), ElementsAre("solve"));
+  // 1 visible text chunk + 1 EOS token; the thought chunk is excluded.
+  EXPECT_EQ(response.output_token_count(), 2u);
 }
 
 }  // namespace

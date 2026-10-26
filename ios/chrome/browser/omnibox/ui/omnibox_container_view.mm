@@ -87,7 +87,7 @@ UIImageView* CreateLeadingImageView(
   leading_image_view.translatesAutoresizingMaskIntoConstraints = NO;
   leading_image_view.tintColor = icon_tint;
   if (presentation_context == OmniboxPresentationContext::kComposebox) {
-    leading_image_view.contentMode = UIViewContentModeScaleAspectFit;
+    leading_image_view.contentMode = UIViewContentModeCenter;
     [NSLayoutConstraint activateConstraints:@[
       [leading_image_view.widthAnchor
           constraintEqualToConstant:kLeadingImageSizeAIM],
@@ -132,7 +132,7 @@ UIButton* CreateClearButton(OmniboxPresentationContext presentationContext) {
       presentationContext == OmniboxPresentationContext::kComposebox
           ? kComposeboxClearButtonImageSize
           : kClearButtonImageSize;
-  conf.image = DefaultSymbolWithPointSize(kXMarkCircleFillSymbol, imageSize);
+  conf.image = SymbolWithPointSize(SymbolXMarkCircleFill, imageSize);
   conf.contentInsets =
       NSDirectionalEdgeInsetsMake(kClearButtonInset, kClearButtonInset,
                                   kClearButtonInset, kClearButtonInset);
@@ -538,6 +538,12 @@ UIButton* CreateClearButton(OmniboxPresentationContext presentationContext) {
 - (void)setMinimumHeight:(CGFloat)minimumHeight {
   if (UseTextView(_presentationContext)) {
     _textView.minimumHeight = minimumHeight;
+  }
+}
+
+- (void)setPlaceholderColor:(UIColor*)placeholderColor {
+  if (UseTextView(_presentationContext)) {
+    _textView.placeholderColor = placeholderColor;
   }
 }
 

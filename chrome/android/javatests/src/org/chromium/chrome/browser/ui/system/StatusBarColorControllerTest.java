@@ -77,17 +77,14 @@ import java.util.function.Supplier;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-// TODO(crbug.com/419289558): Re-enable color surface feature flags
 @Features.DisableFeatures({
     ChromeFeatureList.EDGE_TO_EDGE_EVERYWHERE,
-    ChromeFeatureList.ANDROID_SURFACE_COLOR_UPDATE,
-    ChromeFeatureList.GRID_TAB_SWITCHER_SURFACE_COLOR_UPDATE,
     ChromeFeatureList.ANDROID_THEME_MODULE
 })
-// TODO(crbug.com/428056054): Do not read color from system window bars on B+.
+// TODO(crbug.com/428281352): Do not read color from system window bars on B+.
 @DisableIf.Build(
         sdk_is_greater_than = Build.VERSION_CODES.VANILLA_ICE_CREAM,
-        message = "crbug.com/428056054")
+        message = "crbug.com/428281352")
 public class StatusBarColorControllerTest {
     @Rule
     public AutoResetCtaTransitTestRule mActivityTestRule =
@@ -305,8 +302,11 @@ public class StatusBarColorControllerTest {
         waitForStatusBarColor(activity, Color.RED);
 
         mOmniboxUtils.requestFocus();
+        mOmniboxUtils.waitAnimationsComplete();
+        mOmniboxUtils.checkFocus(true);
         waitForStatusBarColor(activity, expectedFocusedColor);
         mOmniboxUtils.clearFocus();
+        mOmniboxUtils.waitAnimationsComplete();
         waitForStatusBarColor(activity, Color.RED);
     }
 

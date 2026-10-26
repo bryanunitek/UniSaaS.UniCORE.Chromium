@@ -20,6 +20,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
+#include "chrome/browser/enterprise/isolated_mode/isolated_mode_settings_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service.h"
@@ -75,6 +76,10 @@ const char kLearnMoreGuestSessionUrl[] =
 #else
     "https://support.google.com/chrome/?p=ui_guest";
 #endif
+
+// The URL for the Learn More page shown on isolated mode new tab.
+const char kLearnMoreIsolatedModeUrl[] =
+    "https://support.google.com/chrome?p=isolated_mode";
 
 std::string ReplaceTemplateExpressions(
     const scoped_refptr<base::RefCountedMemory>& bytes,
@@ -137,10 +142,13 @@ NTPResourceCache::WindowType NTPResourceCache::GetWindowType(Profile* profile) {
   if (profile->IsGuestSession()) {
     return GUEST;
   }
-  if (profile->IsIncognitoProfile()) {
-    return INCOGNITO;
-  }
-  if (profile->IsOffTheRecord()) {
+  if (profile->IsIncognitoProfile() || profile->IsOffTheRecord()) {
+    if (enterprise_isolated_mode::IsolatedModeReplacesIncognito(profile)) {
+      return ISOLATED;
+    }
+    if (profile->IsIncognitoProfile()) {
+      return INCOGNITO;
+    }
     return NON_PRIMARY_OTR;
   }
 
@@ -158,7 +166,7 @@ base::RefCountedMemory* NTPResourceCache::GetNewTabGuestHTML() {
 base::RefCountedMemory* NTPResourceCache::GetNewTabHTML(
     WindowType win_type,
     const content::WebContents::Getter& wc_getter) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   switch (win_type) {
     case GUEST:
       return GetNewTabGuestHTML();
@@ -168,6 +176,12 @@ base::RefCountedMemory* NTPResourceCache::GetNewTabHTML(
         CreateNewTabIncognitoHTML(wc_getter);
       }
       return new_tab_incognito_html_.get();
+
+    case ISOLATED:
+      if (!new_tab_isolated_html_) {
+        CreateNewTabIsolatedHTML(wc_getter);
+      }
+      return new_tab_isolated_html_.get();
 
     case NON_PRIMARY_OTR:
       if (!new_tab_non_primary_otr_html_) {
@@ -184,11 +198,18 @@ base::RefCountedMemory* NTPResourceCache::GetNewTabHTML(
 base::RefCountedMemory* NTPResourceCache::GetNewTabCSS(
     WindowType win_type,
     const content::WebContents::Getter& wc_getter) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   // Guest mode doesn't have theme-related CSS.
   if (win_type == GUEST) {
     return nullptr;
+  }
+
+  if (win_type == ISOLATED) {
+    if (!new_tab_isolated_css_) {
+      CreateNewTabIsolatedCSS(wc_getter);
+    }
+    return new_tab_isolated_css_.get();
   }
 
   // Returns the cached CSS if it exists.
@@ -216,13 +237,16 @@ void NTPResourceCache::Shutdown() {
 
 void NTPResourceCache::OnNativeThemeUpdated(ui::NativeTheme* updated_theme) {
   // TODO(crbug.com/40677117): Remove the global accessor to NativeTheme.
-  DCHECK_EQ(updated_theme, ui::NativeTheme::GetInstanceForNativeUi());
+  CHECK_EQ(updated_theme, ui::NativeTheme::GetInstanceForNativeUi(),
+           base::NotFatalUntil::M162);
   Invalidate();
 }
 
 void NTPResourceCache::Invalidate() {
   new_tab_incognito_html_ = nullptr;
   new_tab_incognito_css_ = nullptr;
+  new_tab_isolated_html_ = nullptr;
+  new_tab_isolated_css_ = nullptr;
   new_tab_css_ = nullptr;
   new_tab_guest_html_ = nullptr;
 }
@@ -233,8 +257,8 @@ void NTPResourceCache::CreateNewTabIncognitoHTML(
   base::DictValue localized_strings;
 
   // Ensure passing off-the-record profile; |profile_| is not an OTR profile.
-  DCHECK(!profile_->IsOffTheRecord());
-  DCHECK(profile_->HasAnyOffTheRecordProfile());
+  CHECK(!profile_->IsOffTheRecord(), base::NotFatalUntil::M162);
+  CHECK(profile_->HasAnyOffTheRecordProfile(), base::NotFatalUntil::M162);
 
   replacements["incognitoTabDescription"] =
       l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_SUBTITLE_WITH_READING_LIST);
@@ -279,6 +303,65 @@ void NTPResourceCache::CreateNewTabIncognitoHTML(
   ui::TemplateReplacementsFromDictionaryValue(localized_strings, &replacements);
   new_tab_incognito_html_ = base::MakeRefCounted<base::RefCountedString>(
       ReplaceTemplateExpressions(*incognito_tab_html, replacements));
+}
+
+void NTPResourceCache::CreateNewTabIsolatedHTML(
+    const content::WebContents::Getter& wc_getter) {
+  ui::TemplateReplacements replacements;
+  base::DictValue localized_strings;
+
+  replacements["title"] = l10n_util::GetStringUTF8(IDS_NEW_ISOLATED_TAB_TITLE);
+  replacements["isolatedTabHeading"] =
+      l10n_util::GetStringUTF8(IDS_NEW_ISOLATED_TAB_HEADING);
+  replacements["isolatedTabDescription"] =
+      l10n_util::GetStringUTF8(IDS_NEW_ISOLATED_TAB_DESCRIPTION);
+  replacements["learnMore"] =
+      l10n_util::GetStringUTF8(IDS_NEW_ISOLATED_TAB_LEARN_MORE_LINK);
+  replacements["learnMoreLink"] = kLearnMoreIsolatedModeUrl;
+  replacements["isolatedVisibilityWarning"] =
+      l10n_util::GetStringUTF8(IDS_NEW_ISOLATED_TAB_VISIBILITY_WARNING);
+  replacements["learnMoreA11yLabel"] = l10n_util::GetStringUTF8(
+      IDS_NEW_ISOLATED_TAB_LEARN_MORE_ACCESSIBILITY_LABEL);
+  replacements["activityMonitoringBoxTitle"] =
+      l10n_util::GetStringUTF8(IDS_NEW_ISOLATED_TAB_ACTIVITY_MONITORING_TITLE);
+  replacements["activityMonitoringBoxContent"] = l10n_util::GetStringUTF8(
+      IDS_NEW_ISOLATED_TAB_ACTIVITY_MONITORING_CONTENT);
+  replacements["browsingDataBoxTitle"] =
+      l10n_util::GetStringUTF8(IDS_NEW_ISOLATED_TAB_BROWSING_DATA_TITLE);
+  replacements["browsingDataBoxContent"] =
+      l10n_util::GetStringUTF8(IDS_NEW_ISOLATED_TAB_BROWSING_DATA_CONTENT);
+  replacements["extensionsBoxTitle"] =
+      l10n_util::GetStringUTF8(IDS_NEW_ISOLATED_TAB_EXTENSIONS_TITLE);
+  replacements["extensionsBoxContent"] =
+      l10n_util::GetStringUTF8(IDS_NEW_ISOLATED_TAB_EXTENSIONS_CONTENT);
+  replacements["thirdPartyCookiesBoxTitle"] =
+      l10n_util::GetStringUTF8(IDS_NEW_ISOLATED_TAB_THIRD_PARTY_COOKIES_TITLE);
+  replacements["thirdPartyCookiesBoxContent"] =
+      base::UTF16ToUTF8(l10n_util::GetStringFUTF16(
+          IDS_NEW_ISOLATED_TAB_THIRD_PARTY_COOKIES_CONTENT,
+          chrome::kUserBypassHelpCenterURL,
+          l10n_util::GetStringUTF16(IDS_NEW_TAB_OPENS_HC_ARTICLE_IN_NEW_TAB)));
+
+  const std::string& app_locale = g_browser_process->GetApplicationLocale();
+  webui::SetLoadTimeDataDefaults(app_locale, &replacements);
+
+  static const base::NoDestructor<scoped_refptr<base::RefCountedMemory>>
+      isolated_tab_html(
+          ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytes(
+              IDR_ISOLATED_TAB_HTML));
+  CHECK(*isolated_tab_html);
+  ui::TemplateReplacementsFromDictionaryValue(localized_strings, &replacements);
+  new_tab_isolated_html_ = base::MakeRefCounted<base::RefCountedString>(
+      ReplaceTemplateExpressions(*isolated_tab_html, replacements));
+}
+
+void NTPResourceCache::CreateNewTabIsolatedCSS(
+    const content::WebContents::Getter& wc_getter) {
+  static const base::NoDestructor<scoped_refptr<base::RefCountedMemory>>
+      isolated_tab_css(
+          ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytes(
+              IDR_INCOGNITO_TAB_THEME_CSS));
+  new_tab_isolated_css_ = *isolated_tab_css;
 }
 
 void NTPResourceCache::CreateNewTabGuestHTML() {
@@ -357,7 +440,7 @@ void NTPResourceCache::CreateNewTabIncognitoCSS(
   auto* web_contents = wc_getter.Run();
   const ui::NativeTheme* native_theme =
       webui::GetNativeThemeDeprecated(web_contents);
-  DCHECK(native_theme);
+  CHECK(native_theme, base::NotFatalUntil::M162);
 
   const ui::ThemeProvider& tp = ThemeService::GetThemeProviderForProfile(
       profile_->GetPrimaryOTRProfile(/*create_if_needed=*/true));
@@ -391,7 +474,7 @@ void NTPResourceCache::CreateNewTabCSS(
   auto* web_contents = wc_getter.Run();
   const ui::NativeTheme* native_theme =
       webui::GetNativeThemeDeprecated(web_contents);
-  DCHECK(native_theme);
+  CHECK(native_theme, base::NotFatalUntil::M162);
 
   const ui::ThemeProvider& tp =
       ThemeService::GetThemeProviderForProfile(profile_);

@@ -22,6 +22,7 @@ source_set("sanitized_image_source") {
     "//chrome/browser/image_fetcher",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/signin",
+    "//chrome/common",
     "//chrome/common:constants",
     "//google_apis",
     "//ipc",
@@ -43,7 +44,6 @@ source_set("unit_tests") {
   deps = [
     ":sanitized_image_source",
     "//base/test:test_support",
-    "//chrome/browser",
     "//chrome/test:test_support",
     "//content/test:test_support",
     "//testing/gmock",

@@ -47,8 +47,18 @@ DocumentPictureInPictureWindowControllerImpl::
 void DocumentPictureInPictureWindowControllerImpl::SetChildWebContents(
     WebContents* child_contents) {
   // This method should only be called once for a given controller.
-  DCHECK(!child_contents_);
+  CHECK(!child_contents_, base::NotFatalUntil::M159);
   child_contents_ = child_contents;
+
+  // Notify coordinator of PiP owner early so screen capture exclusion is
+  // established before the window becomes visible, avoiding capture flickering.
+  if (auto* coordinator = PipScreenCaptureCoordinator::GetInstance()) {
+    if (WebContentsImpl* web_contents_impl = GetWebContentsImpl()) {
+      coordinator->OnPipInitiated(
+          web_contents_impl->GetPrimaryMainFrame()->GetGlobalId());
+    }
+  }
+
   // Start observing immediately, so that we don't miss a destruction event.
   child_contents_observer_ = std::make_unique<ChildContentsObserver>(
       GetChildWebContents(),
@@ -71,7 +81,7 @@ void DocumentPictureInPictureWindowControllerImpl::Show() {
   // It would nice if we were provided with the child WebContents, but this
   // method is shared with non-WebContents video PiP. So, we just have to be
   // confident that somebody has set it already.
-  DCHECK(child_contents_);
+  CHECK(child_contents_, base::NotFatalUntil::M159);
 
   // Start observing our WebContents. Note that this is safe, since we're
   // owned by the opener WebContents.
@@ -95,7 +105,7 @@ void DocumentPictureInPictureWindowControllerImpl::Close(
 
   NotifyClosedAndStopObserving(should_pause_video);
   // Since we use `child_contents_` to gate everything, make sure it's null.
-  DCHECK(!child_contents_);
+  CHECK(!child_contents_, base::NotFatalUntil::M159);
 }
 
 void DocumentPictureInPictureWindowControllerImpl::CloseAndFocusInitiator() {
@@ -110,7 +120,10 @@ void DocumentPictureInPictureWindowControllerImpl::OnWindowDestroyed(
 }
 
 WebContents* DocumentPictureInPictureWindowControllerImpl::GetWebContents() {
-  return web_contents();
+  // `opener_web_contents_` is available from construction time, whereas
+  // `web_contents()` (via WebContentsObserver) remains null until `Show()`
+  // begins observation.
+  return opener_web_contents_.get();
 }
 
 std::optional<url::Origin>
@@ -212,7 +225,7 @@ void DocumentPictureInPictureWindowControllerImpl::OnChildContentsDestroyed() {
 
 WebContentsImpl*
 DocumentPictureInPictureWindowControllerImpl::GetWebContentsImpl() {
-  return static_cast<WebContentsImpl*>(web_contents());
+  return static_cast<WebContentsImpl*>(opener_web_contents_.get());
 }
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(DocumentPictureInPictureWindowControllerImpl);

@@ -51,8 +51,6 @@
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/model/url/url_util.h"
-#import "ios/chrome/browser/shared/model/utils/first_run_util.h"
-#import "ios/chrome/browser/shared/model/utils/mime_type_util.h"
 #import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/location_bar_badge_commands.h"
@@ -60,6 +58,7 @@
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/public/provider/chrome/browser/bwg/gemini_api.h"
+#import "ios/web/public/content_type_util.h"
 #import "ios/web/public/navigation/navigation_context.h"
 #import "ios/web/public/web_state.h"
 #import "mojo/public/cpp/bindings/remote.h"
@@ -75,13 +74,8 @@ const base::TimeDelta kFullPageContextTimeout = base::Seconds(3);
 // Returns true if `mime_type` represents an extractable web page (HTML or
 // Image).
 bool IsExtractableMimeType(const std::string& mime_type) {
-  const std::string image = "image";
-  const bool is_image = mime_type.compare(0, image.size(), image) == 0;
-  return is_image ||
-         base::EqualsCaseInsensitiveASCII(mime_type,
-                                          kHyperTextMarkupLanguageMimeType) ||
-         base::EqualsCaseInsensitiveASCII(mime_type, kXHTMLMimeType) ||
-         base::EqualsCaseInsensitiveASCII(mime_type, kXMLMimeType);
+  return web::IsContentTypeHtml(mime_type) ||
+         web::IsContentTypeImage(mime_type);
 }
 
 // Helper to convert PageContextWrapperError to
@@ -156,13 +150,17 @@ bool GeminiTabHelper::HasObserver(GeminiTabHelperObserver* observer) {
 }
 
 void GeminiTabHelper::GeneratePageContext(
-    base::RepeatingCallback<void(GeminiPageContext*)> callback) {
+    base::RepeatingCallback<void(GeminiPageContext*)> callback,
+    bool is_background_tab) {
   page_context_consumer_callback_ = std::move(callback);
 
+  bool can_extract = CanExtractPageContextForGemini(is_background_tab);
+
   // Call back immediately if the page context cannot be extracted.
-  if (!CanExtractPageContextForGemini()) {
+  if (!can_extract) {
     if (page_context_consumer_callback_) {
-      page_context_consumer_callback_.Run(GetPartialPageContext());
+      page_context_consumer_callback_.Run(
+          GetPartialPageContext(is_background_tab));
     }
     return;
   }
@@ -201,16 +199,25 @@ void GeminiTabHelper::CancelPageContextGeneration() {
   page_loaded_callback_.Reset();
 }
 
-void GeminiTabHelper::ExecuteZeroStateSuggestions(
-    base::OnceCallback<void(NSArray<NSString*>*)> callback) {
+void GeminiTabHelper::FetchZeroStateSuggestions(
+    base::OnceCallback<void(NSArray<ZeroStateSuggestion*>*)> callback) {
   CHECK(IsZeroStateSuggestionsEnabled() ||
         IsZeroStateSuggestionsCentralizationEnabled());
-  if (gemini_contextual_eligibility_ == ContextualEligibility::kIneligible ||
-      !zero_state_suggestions_service_) {
+
+  if (!zero_state_suggestions_service_) {
     std::move(callback).Run(nil);
     return;
   }
 
+  bool is_model_led_eligible =
+      gemini_contextual_eligibility_ != ContextualEligibility::kIneligible;
+
+  zero_state_suggestions_service_->FetchZeroStateSuggestions(
+      std::move(callback), is_model_led_eligible);
+}
+
+void GeminiTabHelper::FetchZeroStateSuggestionsAsStrings(
+    base::OnceCallback<void(NSArray<NSString*>*)> callback) {
   base::OnceCallback<void(NSArray<ZeroStateSuggestion*>*)> conversion_callback =
       base::BindOnce(
           [](base::OnceCallback<void(NSArray<NSString*>*)> result_callback,
@@ -220,8 +227,7 @@ void GeminiTabHelper::ExecuteZeroStateSuggestions(
           },
           std::move(callback));
 
-  zero_state_suggestions_service_->FetchZeroStateSuggestions(
-      std::move(conversion_callback));
+  FetchZeroStateSuggestions(std::move(conversion_callback));
 }
 
 bool GeminiTabHelper::ShouldPreventContextualPanelEntryPoint() {
@@ -255,9 +261,9 @@ UIImage* GeminiTabHelper::GetFavicon() {
   return current_favicon_;
 }
 
-GeminiPageContext* GeminiTabHelper::GetPartialPageContext(bool forced) {
-  bool is_eligible = forced ? CanExtractPageContextForWebState(web_state_)
-                            : CanExtractPageContextForGemini();
+GeminiPageContext* GeminiTabHelper::GetPartialPageContext(
+    bool is_background_tab) {
+  bool is_eligible = CanExtractPageContextForGemini(is_background_tab);
 
   return gemini::CreatePartialPageContextForWebState(web_state_, is_eligible);
 }
@@ -373,7 +379,8 @@ bool GeminiTabHelper::IsGeminiChatAvailableForWebState() {
   }
 
   // By default, the NTP is ineligible, and only extractable pages are eligible.
-  return !is_ntp && CanExtractPageContextForWebState(web_state_);
+  return !is_ntp && CanExtractPageContextForWebState(web_state_,
+                                                     IsPageContextPDFEnabled());
 }
 
 IOSGeminiInvocationPageType GeminiTabHelper::GetCurrentPageType() {
@@ -390,8 +397,7 @@ IOSGeminiInvocationPageType GeminiTabHelper::GetCurrentPageType() {
   }
 
   const std::string mime_type = web_state_->GetContentsMimeType();
-  if (base::EqualsCaseInsensitiveASCII(mime_type,
-                                       kAdobePortableDocumentFormatMimeType)) {
+  if (web::IsContentTypePdf(mime_type)) {
     return IOSGeminiInvocationPageType::kPdfDocument;
   }
 
@@ -410,7 +416,7 @@ void GeminiTabHelper::WasShown(web::WebState* web_state) {
   // visible tab.
   if (IsNextIaOrLiveMode()) {
     NotifyPageContextUpdated(web_state);
-  } else {
+  } else if (IsPageActionMenuEnabled()) {
     [gemini_handler_
         updateFloatyVisibilityIfEligibleAnimated:NO
                                       fromSource:gemini::FloatyUpdateSource::
@@ -424,7 +430,7 @@ void GeminiTabHelper::WasHidden(web::WebState* web_state) {
   // immediately to ensure the hidden tab's content is detached and blocked.
   if (IsNextIaOrLiveMode()) {
     NotifyPageContextUpdated(web_state);
-  } else {
+  } else if (IsPageActionMenuEnabled()) {
     [gemini_handler_
         hideFloatyIfInvokedAnimated:NO
                          fromSource:gemini::FloatyUpdateSource::WebNavigation];
@@ -502,10 +508,12 @@ void GeminiTabHelper::DidFinishNavigation(
   } else {
     RecordGeminiPageAvailability(IOSGeminiPageAvailability::kUnavailable);
   }
-  [gemini_handler_
-      updateFloatyVisibilityIfEligibleAnimated:NO
-                                    fromSource:gemini::FloatyUpdateSource::
-                                                   WebNavigation];
+  if (IsPageActionMenuEnabled()) {
+    [gemini_handler_
+        updateFloatyVisibilityIfEligibleAnimated:NO
+                                      fromSource:gemini::FloatyUpdateSource::
+                                                     WebNavigation];
+  }
 
   const GURL& current_url = navigation_context->GetUrl().GetWithoutRef();
   if (previous_main_frame_url_ == current_url) {
@@ -519,7 +527,8 @@ void GeminiTabHelper::DidFinishNavigation(
 
   latest_load_contextual_cueing_metadata_.reset();
 
-  if (!optimization_guide_decider_ || !current_url.SchemeIsHTTPOrHTTPS()) {
+  if (!optimization_guide_decider_ || !current_url.SchemeIsHTTPOrHTTPS() ||
+      IsGeminiInsightsChipAblationEnabled()) {
     return;
   }
 
@@ -570,8 +579,7 @@ void GeminiTabHelper::FaviconUrlUpdated(
         configurationWithPointSize:gfx::kFaviconSize
                             weight:UIImageSymbolWeightBold
                              scale:UIImageSymbolScaleMedium];
-    new_favicon =
-        DefaultSymbolWithConfiguration(kGlobeAmericasSymbol, configuration);
+    new_favicon = SymbolWithConfiguration(SymbolGlobeAmericas, configuration);
   }
 
   if (new_favicon != current_favicon_ &&
@@ -600,12 +608,7 @@ void GeminiTabHelper::PopulatePageContextFields() {
   }
 
   PageContextWrapperConfig config =
-      PageContextWrapperConfigBuilder()
-          .SetUseRefactoredExtractor(IsPageContextExtractorRefactoredEnabled())
-          .SetGraftCrossOriginFrameContent(IsGeminiRichAPCExtractionEnabled())
-          .SetUseRichExtraction(IsGeminiRichAPCExtractionEnabled())
-          .SetExtractPaidContent(IsGeminiRichAPCExtractionEnabled())
-          .Build();
+      PageContextWrapperConfigBuilder().SetDefaultRichExtraction(true).Build();
 
   // Create a new wrapper.
   page_context_wrapper_ = [[PageContextWrapper alloc]
@@ -614,8 +617,14 @@ void GeminiTabHelper::PopulatePageContextFields() {
       completionCallback:base::BindRepeating(
                              &GeminiTabHelper::OnPageContextWrapperResponse,
                              weak_ptr_factory_.GetWeakPtr())];
-  [page_context_wrapper_ setShouldGetAnnotatedPageContent:YES];
-  [page_context_wrapper_ setShouldGetSnapshot:YES];
+  const bool is_pdf = web::IsContentTypePdf(web_state_->GetContentsMimeType());
+  if (is_pdf) {
+    page_context_wrapper_.shouldGetFullPagePDF = YES;
+    page_context_wrapper_.shouldGetAnnotatedPageContent = NO;
+  } else {
+    page_context_wrapper_.shouldGetAnnotatedPageContent = YES;
+  }
+  page_context_wrapper_.shouldGetSnapshot = YES;
   [page_context_wrapper_ populatePageContextFieldsAsync];
 }
 
@@ -674,30 +683,11 @@ void GeminiTabHelper::OnCanApplyContextualCueingDecision(
     return;
   }
 
-  ProfileIOS* profile =
-      ProfileIOS::FromBrowserState(web_state_->GetBrowserState());
-
-  // TODO(crbug.com/461595639): Remove pref checks to fully migrate logic to
-  // FET.
-  bool floaty_shown = profile->GetPrefs()->GetBoolean(prefs::kIOSBwgConsent);
-  bool should_wait_for_new_user =
-      !ShouldSkipBWGPromoNewUserDelay() && IsFirstRunRecent(base::Days(1));
-
-  // Show promo if eligible.
-  if (IsGeminiNavigationPromoEnabled() && !should_wait_for_new_user &&
-      !floaty_shown && !gemini::DidUserSeeGeminiPromo(profile->GetPrefs()) &&
-      feature_engagement::TrackerFactory::GetForProfile(profile)
-          ->WouldTriggerHelpUI(
-              feature_engagement::kIPHiOSGeminiFullscreenPromoFeature)) {
-    [gemini_handler_ showGeminiPromoIfPageIsEligible];
-    return;
-  }
-
   UIImage* badge_image;
   BOOL should_hide_badge_after_chip_collapse = NO;
   if (IsChromeNextIaEnabled()) {
-    badge_image = CustomSymbolTemplateWithPointSize(kTextSparkSymbol,
-                                                    kBadgeSymbolPointSize);
+    badge_image =
+        SymbolTemplateWithPointSize(SymbolTextSpark, kBadgeSymbolPointSize);
     should_hide_badge_after_chip_collapse = NO;
   } else {
     badge_image =
@@ -830,9 +820,11 @@ void GeminiTabHelper::OnGeminiEligibilityOnDemandDecision(
                               it->second.decision, it->second.metadata);
 }
 
-bool GeminiTabHelper::CanExtractPageContextForGemini() {
-  return CanExtractPageContextForWebState(web_state_) &&
-         (!IsNextIaOrLiveMode() || web_state_->IsVisible());
+bool GeminiTabHelper::CanExtractPageContextForGemini(bool is_background_tab) {
+  return CanExtractPageContextForWebState(web_state_,
+                                          IsPageContextPDFEnabled()) &&
+         (is_background_tab || !IsNextIaOrLiveMode() ||
+          web_state_->IsVisible());
 }
 
 bool GeminiTabHelper::IsInGeminiLiveMode() const {

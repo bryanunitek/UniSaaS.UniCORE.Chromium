@@ -7,13 +7,6 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/scoped_observation.h"
-#include "components/account_id/account_id.h"
-#include "components/prefs/testing_pref_service.h"
-#include "components/user_manager/fake_user_manager.h"
-#include "components/user_manager/scoped_user_manager.h"
-#include "components/user_manager/test_helper.h"
-#include "components/user_manager/user_manager.h"
-#include "google_apis/gaia/gaia_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace ash {
@@ -129,24 +122,6 @@ TEST_F(LoginStateTest, TestLoggedInStateChangedObserverOnUserTypeChange) {
   EXPECT_EQ(LoginState::LOGGED_IN_USER_CHILD, logged_in_user_type_);
   EXPECT_EQ(LoginState::LOGGED_IN_USER_CHILD,
             LoginState::Get()->GetLoggedInUserType());
-}
-
-TEST_F(LoginStateTest, TestPrimaryUser) {
-  TestingPrefServiceSimple local_state;
-  user_manager::UserManagerImpl::RegisterPrefs(local_state.registry());
-  auto fake_user_manager =
-      std::make_unique<user_manager::FakeUserManager>(&local_state);
-
-  const AccountId account_id =
-      AccountId::FromUserEmailGaiaId("test@test", GaiaId("fakegaia"));
-  std::string username_hash =
-      user_manager::TestHelper::GetFakeUsernameHash(account_id);
-  fake_user_manager->AddGaiaUser(account_id, user_manager::UserType::kRegular);
-  fake_user_manager->UserLoggedIn(account_id, username_hash);
-  auto scoped_user_manager = std::make_unique<user_manager::ScopedUserManager>(
-      std::move(fake_user_manager));
-
-  EXPECT_EQ(username_hash, LoginState::Get()->primary_user_hash());
 }
 
 }  // namespace ash

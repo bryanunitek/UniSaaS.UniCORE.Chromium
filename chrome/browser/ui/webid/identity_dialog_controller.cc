@@ -25,10 +25,13 @@
 #include "components/segmentation_platform/public/features.h"
 #include "components/segmentation_platform/public/result.h"
 #include "components/segmentation_platform/public/segmentation_platform_service.h"
+#include "content/public/browser/page.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/webid/federated_embedder_login_request.h"
 #include "content/public/browser/webid/identity_credential_source.h"
 #include "third_party/blink/public/mojom/webid/federated_request.mojom-shared.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
+#include "url/origin.h"
 
 // We add nognchecks on these includes so that Android bots do not fail
 // dependency checks.
@@ -114,7 +117,8 @@ void IdentityDialogController::OnActorTaskStateChanged(actor::ActorTask& task) {
 
   tabs::TabInterface* tab =
       tabs::TabInterface::MaybeGetFromContents(rp_web_contents_);
-  if (!tab || !task.IsActingOnTab(tab->GetHandle())) {
+  if (!tab || !task.IsActingOnActorSurface(
+                  actor::ActorSurfaceHandle::From(tab->GetHandle()))) {
     if (acting_task_id_ == task_id) {
       // The task we thought was acting on this tab is no longer active, so we
       // clear the task ID.
@@ -418,6 +422,32 @@ bool IdentityDialogController::ShowVerifyingDialog(
   return false;
 }
 
+bool IdentityDialogController::ShowNativeAppUi(
+    const content::NativeAppRequestOptions& request_options,
+    DismissCallback dismiss_callback,
+    NativeAppResultCallback native_result_callback) {
+  // The native app UI is an active mode surface, so it is subject to the same
+  // restriction as ShowAccountsDialog(): when an actor is driving the tab we
+  // must not hand control to a third party application on the user's behalf.
+  if (!ShouldShowFedCmUi()) {
+    return false;
+  }
+
+  on_dismiss_ = std::move(dismiss_callback);
+  on_native_result_ = std::move(native_result_callback);
+
+  if (!TrySetAccountView()) {
+    NotifyEmbedderOfResult(FederatedLoginResult::kFrameNotActive);
+    return false;
+  }
+
+  if (account_view_->ShowNativeAppUi(request_options)) {
+    DidInvokeShowUi();
+    return true;
+  }
+  return false;
+}
+
 void IdentityDialogController::OnLoginToIdP(const GURL& idp_config_url,
                                             const GURL& idp_login_url) {
   CHECK(on_login_);
@@ -432,6 +462,40 @@ void IdentityDialogController::OnMoreDetails() {
 void IdentityDialogController::OnAccountsDisplayed() {
   CHECK(on_accounts_displayed_);
   std::move(on_accounts_displayed_).Run();
+}
+
+void IdentityDialogController::OnNativeAppResult(const std::string& token) {
+  on_dismiss_.Reset();
+  if (on_native_result_) {
+    std::move(on_native_result_)
+        .Run(content::IdentityRequestDialogController::NativeAppResult{
+            content::IdentityRequestDialogController::NativeAppResult::Type::
+                kToken,
+            token});
+  }
+}
+
+void IdentityDialogController::OnNativeAppError(
+    const content::IdentityCredentialTokenError& error) {
+  on_dismiss_.Reset();
+  if (on_native_result_) {
+    std::move(on_native_result_)
+        .Run(content::IdentityRequestDialogController::NativeAppResult{
+            content::IdentityRequestDialogController::NativeAppResult::Type::
+                kError,
+            "", error});
+  }
+}
+
+void IdentityDialogController::OnNativeAppLoginFinished() {
+  on_dismiss_.Reset();
+  if (on_native_result_) {
+    std::move(on_native_result_)
+        .Run(content::IdentityRequestDialogController::NativeAppResult{
+            content::IdentityRequestDialogController::NativeAppResult::Type::
+                kLoginFinished,
+            ""});
+  }
 }
 
 void IdentityDialogController::OnAccountSelected(
@@ -461,6 +525,7 @@ void IdentityDialogController::OnAccountSelected(
 }
 
 void IdentityDialogController::OnDismiss(DismissReason dismiss_reason) {
+  on_native_result_.Reset();
   // |OnDismiss| can be called after |OnAccountSelected| which sets the callback
   // to null.
   if (!on_dismiss_) {
@@ -477,6 +542,7 @@ void IdentityDialogController::OnDismiss(DismissReason dismiss_reason) {
   }
 
   on_account_selection_.Reset();
+  on_native_result_.Reset();
   std::move(on_dismiss_).Run(dismiss_reason);
 
   // Do not access member variables from this point onwards because
@@ -504,7 +570,7 @@ void IdentityDialogController::ShowUrl(LinkType type, const GURL& url) {
     return;
   }
   // Cannot be invoked if FedCM UI is being shown.
-  DCHECK(ShouldShowFedCmUi());
+  CHECK(ShouldShowFedCmUi(), base::NotFatalUntil::M162);
   account_view_->ShowUrl(type, url);
 }
 
@@ -513,8 +579,10 @@ content::WebContents* IdentityDialogController::ShowModalDialog(
     blink::mojom::RpMode rp_mode,
     DismissCallback dismiss_callback,
     content::IdentityRequestDialogController::ShownModalAsyncCallback
-        on_shown_async) {
+        on_shown_async,
+    NativeAppResultCallback native_result_callback) {
   on_dismiss_ = std::move(dismiss_callback);
+  on_native_result_ = std::move(native_result_callback);
   rp_mode_ = rp_mode;
   if (!TrySetAccountView()) {
     NotifyEmbedderOfResult(FederatedLoginResult::kFrameNotActive);

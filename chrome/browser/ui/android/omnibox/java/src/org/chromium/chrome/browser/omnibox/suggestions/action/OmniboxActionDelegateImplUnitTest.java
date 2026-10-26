@@ -8,9 +8,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.robolectric.Shadows.shadowOf;
@@ -27,12 +25,15 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
+import org.chromium.base.UserDataHost;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -42,13 +43,14 @@ import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabwindow.TabWindowInfo;
 import org.chromium.chrome.browser.tabwindow.TabWindowManager;
+import org.chromium.chrome.browser.ui.lens.LensOverlayCoordinator;
+import org.chromium.chrome.browser.ui.lens.LensOverlayInvocationSource;
 import org.chromium.components.browser_ui.settings.SettingsNavigation;
 import org.chromium.components.browser_ui.settings.SettingsNavigation.SettingsFragment;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.url.GURL;
 
-import java.util.Collections;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -58,22 +60,27 @@ public class OmniboxActionDelegateImplUnitTest {
     private static final int TEST_TAB_ID = 1;
     private static final int TEST_WINDOW_ID = 2;
     private static final GURL TEST_URL = new GURL("https://www.example.com/");
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
-    private @Mock Consumer<String> mMockOpenUrl;
-    private @Mock Runnable mMockOpenIncognitoPage;
-    private @Mock Runnable mMockOpenPasswordSettings;
-    private @Mock SettingsNavigation mMockSettingsNavigation;
-    private @Mock Tab mTab;
-    private @Mock Runnable mMockOpenQuickDeleteDialog;
+
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
+
+    @Mock private Tab mTab;
+    @Mock private Consumer<String> mMockOpenUrl;
+    @Mock private Runnable mMockOpenIncognitoPage;
+    @Mock private Runnable mMockOpenPasswordSettings;
+    @Mock private Runnable mMockOpenQuickDeleteDialog;
+    @Mock private TabWindowManager mTabManager;
+    @Mock private OmniboxActionDelegateImpl.BringTabToFrontCallback mBringTabToFrontCallback;
+    @Mock private SettingsNavigation mMockSettingsNavigation;
+    @Mock private TabModel mTabModel;
+    @Mock private TabModelSelector mTabModelSelector;
+    @Mock private LensOverlayCoordinator mLensOverlayCoordinator;
+    @Captor private ArgumentCaptor<LoadUrlParams> mLoadParamsCaptor;
+
     private final AtomicReference<Tab> mTabReference = new AtomicReference<>();
+    private SettableMonotonicObservableSupplier<TabWindowManager> mTabManagerSupplier;
     private Context mContext;
     private OmniboxActionDelegateImpl mDelegate;
-
-    private @Mock TabWindowManager mTabManager;
-    private @Mock OmniboxActionDelegateImpl.BringTabToFrontCallback mBringTabToFrontCallback;
-    private @Mock TabModel mTabModel;
-    private @Mock TabModelSelector mTabModelSelector;
-    private SettableMonotonicObservableSupplier<TabWindowManager> mTabManagerSupplier;
 
     @Before
     public void setUp() {
@@ -91,7 +98,6 @@ public class OmniboxActionDelegateImplUnitTest {
                         mTabManagerSupplier,
                         mBringTabToFrontCallback);
         SettingsNavigationFactory.setInstanceForTesting(mMockSettingsNavigation);
-        doAnswer(inv -> Collections.emptyList().iterator()).when(mTabModel).iterator();
     }
 
     @After
@@ -105,20 +111,19 @@ public class OmniboxActionDelegateImplUnitTest {
     @Test
     public void openIncognitoTab() {
         mDelegate.openIncognitoTab();
-        verify(mMockOpenIncognitoPage, times(1)).run();
+        verify(mMockOpenIncognitoPage).run();
     }
 
     @Test
     public void openPasswordManager() {
         mDelegate.openPasswordManager();
-        verify(mMockOpenPasswordSettings, times(1)).run();
+        verify(mMockOpenPasswordSettings).run();
     }
 
     @Test
     public void openSettingsPage() {
         mDelegate.openSettingsPage(SettingsFragment.ACCESSIBILITY);
-        verify(mMockSettingsNavigation, times(1))
-                .startSettings(mContext, SettingsFragment.ACCESSIBILITY);
+        verify(mMockSettingsNavigation).startSettings(mContext, SettingsFragment.ACCESSIBILITY);
     }
 
     @Test
@@ -138,10 +143,9 @@ public class OmniboxActionDelegateImplUnitTest {
         doReturn(true).when(mTab).isUserInteractable();
         mDelegate.loadPageInCurrentTab("url");
 
-        verify(mTab, times(1)).isUserInteractable();
-        var loadParamsCaptor = ArgumentCaptor.forClass(LoadUrlParams.class);
-        verify(mTab, times(1)).loadUrl(loadParamsCaptor.capture());
-        assertEquals("url", loadParamsCaptor.getValue().getUrl());
+        verify(mTab).isUserInteractable();
+        verify(mTab).loadUrl(mLoadParamsCaptor.capture());
+        assertEquals("url", mLoadParamsCaptor.getValue().getUrl());
         verifyNoMoreInteractions(mTab);
     }
 
@@ -150,7 +154,7 @@ public class OmniboxActionDelegateImplUnitTest {
         doReturn(false).when(mTab).isUserInteractable();
         mDelegate.loadPageInCurrentTab("url");
 
-        verify(mTab, times(1)).isUserInteractable();
+        verify(mTab).isUserInteractable();
         verifyNoMoreInteractions(mTab);
         verify(mMockOpenUrl).accept("url");
     }
@@ -167,6 +171,17 @@ public class OmniboxActionDelegateImplUnitTest {
     public void openQuickDeleteDialog() {
         mDelegate.handleClearBrowsingData();
         verify(mMockOpenQuickDeleteDialog).run();
+    }
+
+    @Test
+    public void openLensOverlay() {
+        // Provide a UserDataHost to prevent LensOverlayCoordinator from crashing on
+        // getOrCreateForTab.
+        UserDataHost userDataHost = new UserDataHost();
+        userDataHost.setUserData(LensOverlayCoordinator.class, mLensOverlayCoordinator);
+        doReturn(userDataHost).when(mTab).getUserDataHost();
+        mDelegate.openLensOverlay();
+        verify(mLensOverlayCoordinator).start(LensOverlayInvocationSource.OMNIBOX_PAGE_ACTION);
     }
 
     @Test

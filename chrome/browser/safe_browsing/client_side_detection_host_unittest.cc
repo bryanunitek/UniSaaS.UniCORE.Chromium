@@ -7,6 +7,8 @@
 #include <tuple>
 #include <utility>
 
+#include "base/base_switches.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -14,6 +16,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -24,6 +27,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/test/test_future.h"
+#include "build/build_config.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/safe_browsing/chrome_client_side_detection_host_delegate.h"
 #include "chrome/browser/safe_browsing/chrome_safe_browsing_blocking_page_factory.h"
@@ -40,11 +44,12 @@
 #include "components/autofill/content/browser/test_content_autofill_driver.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
 #include "components/autofill/core/browser/foundations/test_autofill_driver.h"
 #include "components/autofill/core/browser/foundations/test_browser_autofill_manager.h"
-#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_util.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/history/core/browser/history_database_params.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/test/test_history_database.h"
@@ -55,25 +60,31 @@
 #include "components/safe_browsing/content/browser/client_side_detection_feature_cache.h"
 #include "components/safe_browsing/content/browser/client_side_detection_service.h"
 #include "components/safe_browsing/content/browser/content_unsafe_resource_util.h"
-#include "components/safe_browsing/content/browser/credit_card_form_event.h"
 #include "components/safe_browsing/content/browser/ui_manager.h"
 #include "components/safe_browsing/content/browser/url_checker_holder.h"
 #include "components/safe_browsing/content/common/safe_browsing.mojom-shared.h"
+#include "components/safe_browsing/core/browser/credit_card_form_event.h"
 #include "components/safe_browsing/core/browser/csd_model_type.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
 #include "components/safe_browsing/core/browser/db/test_database_manager.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
 #include "components/safe_browsing/core/browser/intelligent_scan_delegate.h"
+#include "components/safe_browsing/core/browser/safe_browsing_token_fetcher.h"
 #include "components/safe_browsing/core/browser/sync/sync_utils.h"
 #include "components/safe_browsing/core/browser/verdict_cache_manager.h"
+#include "components/safe_browsing/core/common/client_side_detection_enums.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/safe_browsing/core/common/threat_enums.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
+#include "components/sessions/core/session_id.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "components/site_engagement/content/site_engagement_service.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
@@ -92,6 +103,8 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/gfx/codec/png_codec.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -163,6 +176,11 @@ MATCHER_P(HasScamThreatSubtype, other, "") {
   return (other.threat_subtype == arg.threat_subtype);
 }
 
+MATCHER_P(HasThreatTypeAndSubtype, other, "") {
+  return (other.threat_type == arg.threat_type &&
+          other.threat_subtype == arg.threat_subtype);
+}
+
 MATCHER(EmptyLlamForcedTriggerInfoVerdict, "") {
   return !arg->has_llama_forced_trigger_info();
 }
@@ -196,11 +214,12 @@ class MockClientSideDetectionService : public ClientSideDetectionService {
   MOCK_CONST_METHOD1(IsPrivateIPAddress, bool(const net::IPAddress&));
   MOCK_METHOD2(GetValidCachedResult, bool(const GURL&, bool*));
   MOCK_METHOD0(AtPhishingReportLimit, bool());
-  MOCK_METHOD0(GetModelSharedMemoryRegion, base::ReadOnlySharedMemoryRegion());
-  MOCK_METHOD0(GetModelType, CSDModelType());
-  MOCK_METHOD0(IsModelAvailable, bool());
-  MOCK_METHOD0(HasImageEmbeddingModel, bool());
-  MOCK_METHOD0(IsModelMetadataImageEmbeddingVersionMatching, bool());
+  MOCK_CONST_METHOD0(GetModelSharedMemoryRegion,
+                     base::ReadOnlySharedMemoryRegion());
+  MOCK_CONST_METHOD0(GetModelType, CSDModelType());
+  MOCK_CONST_METHOD0(IsModelAvailable, bool());
+  MOCK_CONST_METHOD0(HasImageEmbeddingModel, bool());
+  MOCK_CONST_METHOD0(IsModelMetadataImageEmbeddingVersionMatching, bool());
 };
 
 class MockSafeBrowsingUIManager : public SafeBrowsingUIManager {
@@ -244,6 +263,7 @@ class MockSafeBrowsingDatabaseManager : public TestSafeBrowsingDatabaseManager {
       CheckUrlForHighConfidenceAllowlistCallback callback) override {
     std::string url = gurl.spec();
     DCHECK(urls_allowlist_match_.contains(url));
+    hc_check_count_++;
 
     ui_task_runner()->PostTask(
         FROM_HERE,
@@ -258,11 +278,14 @@ class MockSafeBrowsingDatabaseManager : public TestSafeBrowsingDatabaseManager {
     urls_allowlist_match_[url] = match;
   }
 
+  int hc_check_count() const { return hc_check_count_; }
+
  protected:
   ~MockSafeBrowsingDatabaseManager() override = default;
 
  private:
   base::flat_map<std::string, bool> urls_allowlist_match_;
+  int hc_check_count_ = 0;
 };
 
 class MockClientSideDetectionHostDelegate
@@ -309,7 +332,7 @@ class MockIntelligentScanDelegate : public IntelligentScanDelegate {
   MOCK_METHOD(ModelType, GetIntelligentScanModelType, (bool), (override));
   MOCK_METHOD(std::optional<base::UnguessableToken>,
               StartIntelligentScan,
-              (std::string, IntelligentScanDoneCallback),
+              (std::string, std::string, IntelligentScanDoneCallback),
               (override));
   MOCK_METHOD(bool,
               CancelIntelligentScan,
@@ -488,7 +511,8 @@ class ClientSideDetectionHostTestBase : public ChromeRenderViewHostTestHarness {
 
     // Inject service classes.
     csd_service_ = std::make_unique<NiceMock<MockClientSideDetectionService>>();
-    database_manager_ = new NiceMock<MockSafeBrowsingDatabaseManager>();
+    database_manager_ =
+        base::MakeRefCounted<NiceMock<MockSafeBrowsingDatabaseManager>>();
     ui_manager_ = new NiceMock<MockSafeBrowsingUIManager>();
 
     identity_test_env_.MakePrimaryAccountAvailable(
@@ -496,7 +520,8 @@ class ClientSideDetectionHostTestBase : public ChromeRenderViewHostTestHarness {
 
     csd_host_ =
         ChromeClientSideDetectionHostDelegate::CreateHost(web_contents());
-    csd_host_->set_client_side_detection_service(csd_service_->GetWeakPtr());
+    csd_host_->set_client_side_detection_service_for_testing(
+        csd_service_->GetWeakPtr());
     csd_host_->set_ui_manager(ui_manager_.get());
     csd_host_->set_database_manager(database_manager_.get());
     csd_host_->set_tick_clock_for_testing(&clock_);
@@ -620,7 +645,8 @@ class ClientSideDetectionHostTestBase : public ChromeRenderViewHostTestHarness {
     content::WebContentsTester::For(web_contents())
         ->TestDidFirstVisuallyNonEmptyPaint();
     if (csd_host_) {
-      csd_host_->OnFirstContentfulPaintInPrimaryMainFrame();
+      csd_host_->OnFirstContentfulPaintInPrimaryMainFrame(
+          base::TimeTicks::Now());
     }
   }
 
@@ -634,7 +660,8 @@ class ClientSideDetectionHostTestBase : public ChromeRenderViewHostTestHarness {
         NotifyClientSideDetectionObservers();
       } else {
         if (csd_host_) {
-          csd_host_->OnFirstContentfulPaintInPrimaryMainFrame();
+          csd_host_->OnFirstContentfulPaintInPrimaryMainFrame(
+              base::TimeTicks::Now());
         }
         content::WebContentsTester::For(web_contents())
             ->TestDidFirstVisuallyNonEmptyPaint();
@@ -703,6 +730,8 @@ class ClientSideDetectionHostTestBase : public ChromeRenderViewHostTestHarness {
         return "UserReport";
       case safe_browsing::ClientSideDetectionType::UNFAMILIAR_LOGIN_PAGE:
         return "UnfamiliarLoginPage";
+      case safe_browsing::ClientSideDetectionType::POLICY_ENGINE:
+        return "PolicyEngine";
     }
   }
 
@@ -1001,7 +1030,20 @@ TEST_F(ClientSideDetectionHostTest, UserReportSkipsReportLimit) {
   fake_phishing_detector_.CheckMessage(&url);
 }
 
-TEST_F(ClientSideDetectionHostTest, UnfamiliarLoginPageTriggersClassification) {
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
+// TODO(crbug.com/542592773): Flaky on Linux TSan.
+#define MAYBE_UnfamiliarLoginPageTriggersClassification \
+  DISABLED_UnfamiliarLoginPageTriggersClassification
+#define MAYBE_UnfamiliarLoginPageSampleRate \
+  DISABLED_UnfamiliarLoginPageSampleRate
+#else
+#define MAYBE_UnfamiliarLoginPageTriggersClassification \
+  UnfamiliarLoginPageTriggersClassification
+#define MAYBE_UnfamiliarLoginPageSampleRate UnfamiliarLoginPageSampleRate
+#endif
+
+TEST_F(ClientSideDetectionHostTest,
+       MAYBE_UnfamiliarLoginPageTriggersClassification) {
   if (base::FeatureList::IsEnabled(kClientSideDetectionKillswitch)) {
     GTEST_SKIP();
   }
@@ -1035,7 +1077,7 @@ TEST_F(ClientSideDetectionHostTest, UnfamiliarLoginPageTriggersClassification) {
             fake_phishing_detector_.last_request_type());
 }
 
-TEST_F(ClientSideDetectionHostTest, UnfamiliarLoginPageSampleRate) {
+TEST_F(ClientSideDetectionHostTest, MAYBE_UnfamiliarLoginPageSampleRate) {
   if (base::FeatureList::IsEnabled(kClientSideDetectionKillswitch)) {
     GTEST_SKIP();
   }
@@ -1085,8 +1127,16 @@ TEST_F(ClientSideDetectionHostTest, UnfamiliarLoginPageSampleRate) {
   }
 }
 
+// TODO(crbug.com/542592773): Flaky on Linux TSAN.
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
+#define MAYBE_UnfamiliarLoginPage_NoEnhancedProtection_NoTrigger \
+  DISABLED_UnfamiliarLoginPage_NoEnhancedProtection_NoTrigger
+#else
+#define MAYBE_UnfamiliarLoginPage_NoEnhancedProtection_NoTrigger \
+  UnfamiliarLoginPage_NoEnhancedProtection_NoTrigger
+#endif
 TEST_F(ClientSideDetectionHostTest,
-       UnfamiliarLoginPage_NoEnhancedProtection_NoTrigger) {
+       MAYBE_UnfamiliarLoginPage_NoEnhancedProtection_NoTrigger) {
   if (base::FeatureList::IsEnabled(kClientSideDetectionKillswitch)) {
     GTEST_SKIP();
   }
@@ -1257,6 +1307,86 @@ TEST_F(
   histogram_tester.ExpectUniqueSample(
       "SBClientPhishing.HighConfidenceAllowlistMatchOnServerVerdictPhishy",
       true, 1);
+}
+
+TEST_F(ClientSideDetectionHostTest,
+       PhishingDetectionDoneUnfamiliarLoginPageSiteEngagementScore) {
+  base::HistogramTester histogram_tester;
+
+  ClientSideDetectionService::ClientReportPhishingRequestCallback cb;
+  GURL phishing_url("http://unfamiliarloginpage.com/");
+  ClientPhishingRequest verdict;
+  verdict.set_url(phishing_url.spec());
+  verdict.set_client_score(1.0f);
+  verdict.set_is_phishing(true);
+
+  site_engagement::SiteEngagementService::Get(profile())->ResetBaseScoreForURL(
+      phishing_url, 42.0);
+
+  EXPECT_CALL(*csd_service_, SendClientReportPhishingRequest(
+                                 PartiallyEqualVerdict(verdict), _, _))
+      .WillOnce(MoveArg<1>(&cb));
+  PhishingDetectionDone(mojo_base::ProtoWrapper(verdict),
+                        ClientSideDetectionType::UNFAMILIAR_LOGIN_PAGE);
+  EXPECT_TRUE(Mock::VerifyAndClear(csd_host_.get()));
+  EXPECT_TRUE(Mock::VerifyAndClear(csd_service_.get()));
+  ASSERT_FALSE(cb.is_null());
+
+  // Simulate server response: not phishing (false).
+  std::move(cb).Run(phishing_url, /*is_phishing=*/false, net::HTTP_OK,
+                    std::nullopt);
+
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.ServerModelDetectsPhishing", false, 1);
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.ServerModelDetectsPhishing.UnfamiliarLoginPage", false,
+      1);
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.UnfamiliarLoginPage.SiteEngagementScore.NotPhishing",
+      42, 1);
+  histogram_tester.ExpectTotalCount(
+      "SBClientPhishing.UnfamiliarLoginPage.SiteEngagementScore.Phishing", 0);
+}
+
+TEST_F(ClientSideDetectionHostIncognitoTest,
+       PhishingDetectionDoneUnfamiliarLoginPageOffTheRecordDoesNotLog) {
+  base::HistogramTester histogram_tester;
+
+  ClientSideDetectionService::ClientReportPhishingRequestCallback cb;
+  GURL phishing_url("http://unfamiliarloginpage.com/");
+  ClientPhishingRequest verdict;
+  verdict.set_url(phishing_url.spec());
+  verdict.set_client_score(1.0f);
+  verdict.set_is_phishing(true);
+
+  site_engagement::SiteEngagementService::Get(profile())->ResetBaseScoreForURL(
+      phishing_url, 42.0);
+
+  EXPECT_EQ(csd_host_->GetSiteEngagementScore(phishing_url), std::nullopt);
+
+  EXPECT_CALL(*csd_service_, SendClientReportPhishingRequest(
+                                 PartiallyEqualVerdict(verdict), _, _))
+      .WillOnce(MoveArg<1>(&cb));
+  PhishingDetectionDone(mojo_base::ProtoWrapper(verdict),
+                        ClientSideDetectionType::UNFAMILIAR_LOGIN_PAGE);
+  EXPECT_TRUE(Mock::VerifyAndClear(csd_host_.get()));
+  EXPECT_TRUE(Mock::VerifyAndClear(csd_service_.get()));
+  ASSERT_FALSE(cb.is_null());
+
+  // Simulate server response: not phishing (false).
+  std::move(cb).Run(phishing_url, /*is_phishing=*/false, net::HTTP_OK,
+                    std::nullopt);
+
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.ServerModelDetectsPhishing", false, 1);
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.ServerModelDetectsPhishing.UnfamiliarLoginPage", false,
+      1);
+  histogram_tester.ExpectTotalCount(
+      "SBClientPhishing.UnfamiliarLoginPage.SiteEngagementScore.NotPhishing",
+      0);
+  histogram_tester.ExpectTotalCount(
+      "SBClientPhishing.UnfamiliarLoginPage.SiteEngagementScore.Phishing", 0);
 }
 
 TEST_F(ClientSideDetectionHostTest,
@@ -1477,13 +1607,97 @@ TEST_F(ClientSideDetectionHostTest,
       1);
 }
 
+// Tests that high confidence allowlist checking is skipped when CSD allowlist
+// matches, and no classification takes place.
 TEST_F(ClientSideDetectionHostTest,
        TestPreClassificationCheckMatchCSDAllowlist) {
+  base::HistogramTester histogram_tester;
   GURL url("http://host.com/");
-  database_manager_->SetAllowlistLookupDetailsForUrl(url, false);
   ExpectPreClassificationChecks(url, &kFalse, &kTrue, nullptr, nullptr);
   NavigateAndCommit(url);
   WaitAndCheckPreClassificationChecks();
+
+  EXPECT_EQ(database_manager_->hc_check_count(), 0);
+  histogram_tester.ExpectTotalCount(
+      "SBClientPhishing.HighConfidenceAllowlistCheckDuration", 0);
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.MatchHighConfidenceAllowlist",
+      ClientSideAllowlistMatchResult::kCsdMatch, 1);
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.MatchHighConfidenceAllowlist.TriggerModel",
+      ClientSideAllowlistMatchResult::kCsdMatch, 1);
+  histogram_tester.ExpectBucketCount(
+      "SBClientPhishing.PreClassificationCheckResult",
+      PreClassificationCheckResult::NO_CLASSIFY_MATCH_CSD_ALLOWLIST, 1);
+  histogram_tester.ExpectBucketCount(
+      "SBClientPhishing.PreClassificationCheckResult.TriggerModel",
+      PreClassificationCheckResult::NO_CLASSIFY_MATCH_CSD_ALLOWLIST, 1);
+}
+
+// Tests that high confidence allowlist checking is skipped when CSD allowlist
+// matches even if a sample ping is triggered.
+TEST_F(ClientSideDetectionHostTest,
+       TestPreClassificationCheckMatchCSDAllowlistWithSamplePing) {
+  SetEnhancedProtectionPrefForTests(profile()->GetPrefs(), true);
+  csd_host_->set_sample_ping_rate_for_testing(1.0f);
+  base::HistogramTester histogram_tester;
+
+  GURL url("http://host.com/");
+  ExpectPreClassificationChecks(url, &kFalse, &kTrue, &kFalse, &kFalse);
+  NavigateAndCommit(url);
+  WaitAndCheckPreClassificationChecks();
+
+  fake_phishing_detector_.CheckMessage(&url);
+
+  EXPECT_EQ(database_manager_->hc_check_count(), 0);
+  histogram_tester.ExpectTotalCount(
+      "SBClientPhishing.HighConfidenceAllowlistCheckDuration", 0);
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.MatchHighConfidenceAllowlist",
+      ClientSideAllowlistMatchResult::kCsdMatch, 1);
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.MatchHighConfidenceAllowlist.TriggerModel",
+      ClientSideAllowlistMatchResult::kCsdMatch, 1);
+  histogram_tester.ExpectBucketCount(
+      "SBClientPhishing.PreClassificationCheckResult",
+      PreClassificationCheckResult::CLASSIFY, 1);
+  histogram_tester.ExpectBucketCount(
+      "SBClientPhishing.PreClassificationCheckResult.TriggerModel",
+      PreClassificationCheckResult::CLASSIFY, 1);
+}
+
+// Tests that high confidence allowlist checking is skipped even when a sample
+// ping is triggered, and that an HC allowlist match no longer suppresses a
+// sampled CSD-allowlisted ping (classification proceeds).
+TEST_F(ClientSideDetectionHostTest,
+       TestPreClassificationCheckMatchCSDAllowlistWithSamplePingAndMatchHC) {
+  SetEnhancedProtectionPrefForTests(profile()->GetPrefs(), true);
+  csd_host_->set_sample_ping_rate_for_testing(1.0f);
+  SetHighConfidenceAllowlistAcceptanceRate(1.0f);
+  base::HistogramTester histogram_tester;
+
+  GURL url("http://host.com/");
+  ExpectPreClassificationChecks(url, &kFalse, &kTrue, &kFalse, &kFalse);
+  NavigateAndCommit(url);
+  WaitAndCheckPreClassificationChecks();
+
+  fake_phishing_detector_.CheckMessage(&url);
+
+  EXPECT_EQ(database_manager_->hc_check_count(), 0);
+  histogram_tester.ExpectTotalCount(
+      "SBClientPhishing.HighConfidenceAllowlistCheckDuration", 0);
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.MatchHighConfidenceAllowlist",
+      ClientSideAllowlistMatchResult::kCsdMatch, 1);
+  histogram_tester.ExpectUniqueSample(
+      "SBClientPhishing.MatchHighConfidenceAllowlist.TriggerModel",
+      ClientSideAllowlistMatchResult::kCsdMatch, 1);
+  histogram_tester.ExpectBucketCount(
+      "SBClientPhishing.PreClassificationCheckResult",
+      PreClassificationCheckResult::CLASSIFY, 1);
+  histogram_tester.ExpectBucketCount(
+      "SBClientPhishing.PreClassificationCheckResult.TriggerModel",
+      PreClassificationCheckResult::CLASSIFY, 1);
 }
 
 TEST_F(ClientSideDetectionHostTest,
@@ -1564,13 +1778,25 @@ TEST_F(ClientSideDetectionHostTest, TestPreClassificationCheckTwoNavigations) {
 TEST_F(ClientSideDetectionHostTest, TestPreClassificationCheckCancelActor) {
   base::HistogramTester histogram_tester;
 
+  // Explicitly ensure that url1 and url2 do not match the CSD allowlist. Since
+  // matching the CSD allowlist skips high-confidence allowlist checking and
+  // completes preclassification synchronously, a CSD allowlist match would
+  // finish immediately and prevent url1 from staying in-flight and being
+  // cancelled by url2.
+  EXPECT_CALL(*database_manager_.get(), CanCheckUrl(_))
+      .WillRepeatedly(Return(true));
+
   // Although we'll navigate to url1 and keep loading, we will not complete the
   // preclassification check and continue loading, so that url2 can cancel it.
   GURL url1("http://host1.com/");
+  EXPECT_CALL(*database_manager_.get(), CheckCsdAllowlistUrl(url1, _))
+      .WillOnce(Return(AsyncMatch::NO_MATCH));
   database_manager_->SetAllowlistLookupDetailsForUrl(url1, false);
   NavigateAndCommit(url1);
 
   GURL url2("http://host2.com/");
+  EXPECT_CALL(*database_manager_.get(), CheckCsdAllowlistUrl(url2, _))
+      .WillOnce(Return(AsyncMatch::NO_MATCH));
   database_manager_->SetAllowlistLookupDetailsForUrl(url2, false);
   NavigateAndCommit(url2);
 
@@ -2272,27 +2498,15 @@ TEST_F(ClientSideDetectionHostTest,
   NavigateAndCommit(url);
   WaitAndCheckPreClassificationChecks();
 
-  // Check that the clipboard histograms haven't been recorded yet.
+  csd_host_->OnTextCopiedToClipboard(main_rfh(), u"test");
+
+  // The feature hasn't been triggered, so nothing will be recorded.
   histogram_tester.ExpectTotalCount(
       "SBClientPhishing.MatchCSDAllowlistOnClipboardCopyApi", 0);
   histogram_tester.ExpectTotalCount(
       "SBClientPhishing.MatchHighConfidenceAllowlist.ClipboardCopyApi", 0);
   histogram_tester.ExpectTotalCount(
       "SBClientPhishing.PreClassificationCheckResult.ClipboardCopyApi", 0);
-
-  ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
-  csd_host_->OnTextCopiedToClipboard(main_rfh(), u"test");
-  WaitAndCheckPreClassificationChecks();
-
-  // The feature to send CSP pings is disabled, so nothing will be classified
-  // (or included in the HC allowlist).
-  histogram_tester.ExpectTotalCount(
-      "SBClientPhishing.MatchCSDAllowlistOnClipboardCopyApi", 1);
-  histogram_tester.ExpectTotalCount(
-      "SBClientPhishing.MatchHighConfidenceAllowlist.ClipboardCopyApi", 1);
-  histogram_tester.ExpectBucketCount(
-      "SBClientPhishing.PreClassificationCheckResult.ClipboardCopyApi",
-      PreClassificationCheckResult::NO_CLASSIFY_ALLOWLIST_METRIC, 1);
 }
 
 TEST_F(ClientSideDetectionHostTest,
@@ -2305,7 +2519,7 @@ TEST_F(ClientSideDetectionHostTest,
   base::HistogramTester histogram_tester;
 
   GURL url("http://host.com/");
-  database_manager_->SetAllowlistLookupDetailsForUrl(url, /*match=*/true);
+  database_manager_->SetAllowlistLookupDetailsForUrl(url, /*match=*/false);
   ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
   NavigateAndCommit(url);
   WaitAndCheckPreClassificationChecks();
@@ -2319,7 +2533,7 @@ TEST_F(ClientSideDetectionHostTest,
       "SBClientPhishing.PreClassificationCheckResult.ClipboardCopyApi", 0);
 
   ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
-  csd_host_->OnTextCopiedToClipboard(main_rfh(), u"test");
+  csd_host_->OnTextCopiedToClipboard(main_rfh(), u"curl example.com");
   WaitAndCheckPreClassificationChecks();
 
   // The feature to send CSP pings is enabled and the host is not included in
@@ -2359,7 +2573,7 @@ TEST_F(
       "SBClientPhishing.PreClassificationCheckResult.ClipboardCopyApi", 0);
 
   ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
-  csd_host_->OnTextCopiedToClipboard(main_rfh(), u"test");
+  csd_host_->OnTextCopiedToClipboard(main_rfh(), u"curl example.com");
   WaitAndCheckPreClassificationChecks();
 
   // The feature to send CSP pings is enabled, but the host is included in the
@@ -2375,12 +2589,14 @@ TEST_F(
 
 TEST_F(ClientSideDetectionHostTest,
        ClipboardCopyApiCallDoesNotProceedWithClassificationWithZeroSampleRate) {
-  SetFeatures({kClientSideDetectionClipboardCopyApi}, {});
+  feature_list_.InitAndEnableFeatureWithParameters(
+      kClientSideDetectionClipboardCopyApi,
+      {{kCsdClipboardCopyApiSampleRate.name, "0.0"}});
   SetEnhancedProtectionPrefForTests(profile()->GetPrefs(), true);
   base::HistogramTester histogram_tester;
 
   GURL url("http://host.com/");
-  database_manager_->SetAllowlistLookupDetailsForUrl(url, /*match=*/true);
+  database_manager_->SetAllowlistLookupDetailsForUrl(url, /*match=*/false);
   ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
   NavigateAndCommit(url);
   WaitAndCheckPreClassificationChecks();
@@ -2394,7 +2610,7 @@ TEST_F(ClientSideDetectionHostTest,
       "SBClientPhishing.PreClassificationCheckResult.ClipboardCopyApi", 0);
 
   ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
-  csd_host_->OnTextCopiedToClipboard(main_rfh(), u"test");
+  csd_host_->OnTextCopiedToClipboard(main_rfh(), u"curl example.com");
   WaitAndCheckPreClassificationChecks();
 
   // The feature to send CSP pings is enabled, but the sampling rate is set to
@@ -2443,7 +2659,7 @@ TEST_F(
   base::HistogramTester histogram_tester;
 
   GURL url("http://host.com/");
-  database_manager_->SetAllowlistLookupDetailsForUrl(url, /*match=*/true);
+  database_manager_->SetAllowlistLookupDetailsForUrl(url, /*match=*/false);
   ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
   NavigateAndCommit(url);
   WaitAndCheckPreClassificationChecks();
@@ -2654,13 +2870,10 @@ class ClientSideDetectionHostCreditCardFormTest
     history_dir_ = temp_dir_.GetPath().AppendASCII("HistoryServiceTest");
     ASSERT_TRUE(base::CreateDirectory(history_dir_));
     history_service_ = std::make_unique<history::HistoryService>();
-    if (!history_service_->Init(
-            history::TestHistoryDatabaseParamsForPath(history_dir_))) {
-      history_service_.reset();
-      ADD_FAILURE();
-    }
+    history_service_->Init(
+        history::TestHistoryDatabaseParamsForPath(history_dir_));
 
-    csd_host_->set_history_service_for_testing(history_service_.get());
+    csd_host_->SetAndObserveHistoryServiceForTesting(history_service_.get());
   }
 
   void TearDown() override {
@@ -2769,7 +2982,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
   autofill_manager()->AddSeenForm(form_data, {autofill::EMAIL_ADDRESS});
 
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
 
   EXPECT_FALSE(future.IsReady());
 
@@ -2799,7 +3013,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
   autofill_manager()->AddSeenForm(form_data, {autofill::UNKNOWN_TYPE});
 
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
 
   EXPECT_FALSE(future.IsReady());
 
@@ -2829,7 +3044,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
   auto form_data = CreateCreditCardForm();
 
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
 
   EXPECT_FALSE(future.IsReady());
 
@@ -2866,7 +3082,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
 
   ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
   WaitUntilHighConfidenceAllowlistCheckDone();
   WaitAndCheckPreClassificationChecks();
 
@@ -2914,7 +3131,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest, DoesNotProceedDueToSampling) {
 
   ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
   WaitUntilHighConfidenceAllowlistCheckDone();
   WaitAndCheckPreClassificationChecks();
 
@@ -2965,7 +3183,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
 
   ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
   WaitUntilHighConfidenceAllowlistCheckDone();
   WaitAndCheckPreClassificationChecks();
 
@@ -3018,7 +3237,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
   base::StatisticsRecorder::HistogramWaiter event_waiter(
       "SBClientPhishing.CreditCardFormEvent3");
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
   event_waiter.Wait();
 
   // The Autofill field detection event should not have resulted in
@@ -3074,7 +3294,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
     base::StatisticsRecorder::HistogramWaiter event_waiter(
         "SBClientPhishing.CreditCardFormEvent3");
     autofill_manager()->OnFocusOnFormField(
-        form_data, form_data.fields().begin()->global_id());
+        form_data, form_data.fields().begin()->global_id(),
+        autofill::AutofillManagerTestApi::pass_key());
     event_waiter.Wait();
     WaitAndCheckPreClassificationChecks();
 
@@ -3108,7 +3329,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
     base::StatisticsRecorder::HistogramWaiter event_waiter(
         "SBClientPhishing.CreditCardFormEvent3");
     autofill_manager()->OnFocusOnFormField(
-        form_data2, form_data2.fields().begin()->global_id());
+        form_data2, form_data2.fields().begin()->global_id(),
+        autofill::AutofillManagerTestApi::pass_key());
     event_waiter.Wait();
 
     EXPECT_FALSE(future.IsReady());
@@ -3151,7 +3373,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
 
   ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
   WaitUntilHighConfidenceAllowlistCheckDone();
   WaitAndCheckPreClassificationChecks();
 
@@ -3197,7 +3420,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
   base::StatisticsRecorder::HistogramWaiter event_waiter(
       "SBClientPhishing.CreditCardFormEvent3");
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
   event_waiter.Wait();
 
   // The Autofill field detection event should not have resulted in
@@ -3236,7 +3460,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
   // Trigger form field interaction, waiting for the event to be logged.
   ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
   WaitUntilHighConfidenceAllowlistCheckDone();
   WaitAndCheckPreClassificationChecks();
 
@@ -3253,7 +3478,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
   csd_host_->set_preclassification_started_callback_for_testing(
       future.GetRepeatingCallback());
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
   EXPECT_FALSE(future.IsReady());
 
   ExpectOnlyBucketCount(
@@ -3380,7 +3606,8 @@ TEST_F(ClientSideDetectionHostCreditCardFormTest,
   csd_host_->set_preclassification_started_callback_for_testing(
       future.GetRepeatingCallback());
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
 
   EXPECT_FALSE(future.IsReady());
 
@@ -3497,7 +3724,8 @@ TEST_P(ClientSideDetectionHostCreditCardFormReferringAppTest,
 
   ExpectPreClassificationChecks(url, &kFalse, &kFalse, nullptr, nullptr);
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
   WaitUntilHighConfidenceAllowlistCheckDone();
   WaitAndCheckPreClassificationChecks();
 
@@ -3556,7 +3784,8 @@ TEST_P(ClientSideDetectionHostCreditCardFormReferringAppTest,
   base::StatisticsRecorder::HistogramWaiter event_waiter(
       "SBClientPhishing.CreditCardFormEvent3");
   autofill_manager()->OnFocusOnFormField(
-      form_data, form_data.fields().begin()->global_id());
+      form_data, form_data.fields().begin()->global_id(),
+      autofill::AutofillManagerTestApi::pass_key());
   event_waiter.Wait();
 
   // The Autofill field detection event should not have resulted in
@@ -3591,7 +3820,8 @@ class ClientSideDetectionHostSkipImageClassificationScoringTest
     for (int i = 0; ClientSideDetectionType_IsValid(i); i++) {
       ClientSideDetectionType type = static_cast<ClientSideDetectionType>(i);
       if (type !=
-          ClientSideDetectionType::CLIENT_SIDE_DETECTION_TYPE_UNSPECIFIED) {
+              ClientSideDetectionType::CLIENT_SIDE_DETECTION_TYPE_UNSPECIFIED &&
+          type != ClientSideDetectionType::POLICY_ENGINE) {
         values.push_back(type);
       }
     }
@@ -3635,9 +3865,15 @@ TEST_P(ClientSideDetectionHostSkipImageClassificationScoringTest,
   // Phishing detection should have been done (not skipped).
   EXPECT_TRUE(fake_phishing_detector_.phishing_detection_started());
 
+  ClientSideDetectionType expected_logged_type = request_type;
+  if (request_type == ClientSideDetectionType::TRIGGER_MODELS &&
+      base::FeatureList::IsEnabled(kClientSideDetectionImageEmbeddingMatch)) {
+    expected_logged_type = ClientSideDetectionType::IMAGE_EMBEDDING_MATCH;
+  }
+
   histogram_tester.ExpectUniqueSample(
       "SBClientPhishing.PhishingDetectorResult." +
-          GetRequestTypeName(request_type),
+          GetRequestTypeName(expected_logged_type),
       mojom::PhishingDetectorResult::SUCCESS, 1);
 }
 
@@ -3676,9 +3912,15 @@ TEST_P(ClientSideDetectionHostSkipImageClassificationScoringTest,
   // Phishing detection should have been done (not skipped).
   EXPECT_TRUE(fake_phishing_detector_.phishing_detection_started());
 
+  ClientSideDetectionType expected_logged_type = request_type;
+  if (request_type == ClientSideDetectionType::TRIGGER_MODELS &&
+      base::FeatureList::IsEnabled(kClientSideDetectionImageEmbeddingMatch)) {
+    expected_logged_type = ClientSideDetectionType::IMAGE_EMBEDDING_MATCH;
+  }
+
   histogram_tester.ExpectUniqueSample(
       "SBClientPhishing.PhishingDetectorResult." +
-          GetRequestTypeName(request_type),
+          GetRequestTypeName(expected_logged_type),
       mojom::PhishingDetectorResult::SUCCESS, 1);
 }
 
@@ -3956,7 +4198,10 @@ class ClientSideDetectionRTLookupResponseForceRequestTest
         /*hash_realtime_selection=*/
         hash_realtime_utils::HashRealTimeSelection::kNone,
         /*is_async_check=*/true, /*check_allowlist_before_hash_database=*/false,
-        SessionID::InvalidValue(), /*referring_app_info=*/std::nullopt);
+        /*tab_id=*/SessionID::InvalidValue(),
+        /*referring_app_info=*/std::nullopt,
+        /*v5_get_hash_protocol_manager=*/nullptr,
+        /*prioritize_navigation_callbacks=*/false);
     tracker->TransferUrlChecker(std::move(checker));
     // all_checks_completed must be set to true to notify
     // ClientSideDetectionHost.
@@ -4441,10 +4686,11 @@ class ClientSideDetectionHostScamDetectionTest
 
   void SetIntelligentScanCallback(bool should_return_response,
                                   std::optional<float> returned_scam_score) {
-    EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _))
+    EXPECT_CALL(*intelligent_scan_delegate_,
+                StartIntelligentScan(_, example_url_.spec(), _))
         .WillOnce(
             [=, this](
-                std::string rendered_text,
+                std::string rendered_text, std::string url,
                 IntelligentScanDelegate::IntelligentScanDoneCallback callback) {
               base::UnguessableToken token = base::UnguessableToken::Create();
               IntelligentScanDelegate::IntelligentScanResult
@@ -4474,8 +4720,21 @@ class ClientSideDetectionHostScamDetectionTest
       std::optional<IntelligentScanInfo::NoInfoReason> expected_no_info_reason,
       std::optional<std::string> expected_llama_forced_trigger_info_trigger_url,
       bool returned_is_phishing,
+      IntelligentScanVerdict returned_intelligent_scan_verdict) {
+    SetSendClientReportPhishingRequestCallback(
+        has_expected_brand_and_intent, expected_no_info_reason,
+        expected_llama_forced_trigger_info_trigger_url, returned_is_phishing,
+        returned_intelligent_scan_verdict,
+        has_expected_brand_and_intent ? example_scam_score_ : std::nullopt);
+  }
+
+  void SetSendClientReportPhishingRequestCallback(
+      bool has_expected_brand_and_intent,
+      std::optional<IntelligentScanInfo::NoInfoReason> expected_no_info_reason,
+      std::optional<std::string> expected_llama_forced_trigger_info_trigger_url,
+      bool returned_is_phishing,
       IntelligentScanVerdict returned_intelligent_scan_verdict,
-      std::optional<float> expected_scam_score = std::nullopt) {
+      std::optional<float> expected_scam_score) {
     EXPECT_CALL(*csd_service_, SendClientReportPhishingRequest(_, _, _))
         .Times(1)
         .WillOnce([=, this](std::unique_ptr<ClientPhishingRequest> request,
@@ -4513,6 +4772,21 @@ class ClientSideDetectionHostScamDetectionTest
           } else {
             EXPECT_FALSE(request->intelligent_scan_info().has_scam_score());
           }
+          EXPECT_THAT(
+              request->population().finch_active_groups(),
+              testing::Contains(
+                  base::FeatureList::IsEnabled(
+                      kClientSideDetectionScamDetectionRequestWithUrl)
+                      ? "ClientSideDetectionScamDetectionRequestWithUrl.Enabled"
+                      : "ClientSideDetectionScamDetectionRequestWithUrl."
+                        "Control"));
+          EXPECT_THAT(
+              request->population().finch_active_groups(),
+              testing::Contains(
+                  base::FeatureList::IsEnabled(
+                      kClientSideDetectionServerModelMultimodal)
+                      ? "ClientSideDetectionServerModelMultimodal.Enabled"
+                      : "ClientSideDetectionServerModelMultimodal.Control"));
           std::move(callback).Run(example_url_, returned_is_phishing,
                                   net::HTTP_OK,
                                   returned_intelligent_scan_verdict);
@@ -4564,9 +4838,17 @@ class ClientSideDetectionHostScamDetectionTest
       histogram_tester_.ExpectUniqueSample(
           "SBClientPhishing.IntelligentScanVerdict",
           intelligent_scan_verdict.value(), 1);
+      histogram_tester_.ExpectUniqueSample(
+          "SBClientPhishing.IntelligentScanVerdict." +
+              GetRequestTypeName(expected_request_type),
+          intelligent_scan_verdict.value(), 1);
     } else {
       histogram_tester_.ExpectTotalCount(
           "SBClientPhishing.IntelligentScanVerdict", 0);
+      histogram_tester_.ExpectTotalCount(
+          "SBClientPhishing.IntelligentScanVerdict." +
+              GetRequestTypeName(expected_request_type),
+          0);
     }
   }
 
@@ -4614,6 +4896,17 @@ class ClientSideDetectionHostScamDetectionTest
                                      mojo_base::ProtoWrapper(verdict));
   }
 
+  void OnScreenshotTaken(
+      std::unique_ptr<ClientPhishingRequest> verdict,
+      std::optional<bool> did_match_high_confidence_allowlist,
+      bool is_invalid_ip,
+      std::string inner_text,
+      const content::CopyFromSurfaceResult& result) {
+    csd_host_->OnScreenshotTaken(std::move(verdict),
+                                 did_match_high_confidence_allowlist,
+                                 is_invalid_ip, std::move(inner_text), result);
+  }
+
   void SetExampleUrl(GURL example_url) { example_url_ = example_url; }
 
   base::HistogramTester histogram_tester_;
@@ -4630,7 +4923,8 @@ TEST_F(ClientSideDetectionHostScamDetectionTest,
       .WillOnce(Return(false));
   // Because the delegate has disabled intelligent scan, we will
   // NOT start the intelligent scan.
-  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _)).Times(0);
+  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _, _))
+      .Times(0);
   EXPECT_CALL(*intelligent_scan_delegate_, OnScamWarningShown()).Times(0);
   SetSendClientReportPhishingRequestCallback(
       /*has_expected_brand_and_intent=*/false,
@@ -4713,7 +5007,8 @@ TEST_F(ClientSideDetectionHostScamDetectionTest,
        EmptyInnerTextDoesNotTriggersIntelligentScan) {
   raw_delegate_->ForceEmptyInnerText();
   // Because the inner text is empty, we will NOT start the intelligent scan.
-  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _)).Times(0);
+  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _, _))
+      .Times(0);
   SetSendClientReportPhishingRequestCallback(
       /*has_expected_brand_and_intent=*/false,
       /*expected_no_info_reason=*/IntelligentScanInfo::EMPTY_TEXT,
@@ -4743,7 +5038,8 @@ TEST_F(ClientSideDetectionHostScamDetectionTest,
   raw_delegate_->SetInnerText("text");
   // Because the inner text is too short, we will NOT start the intelligent
   // scan.
-  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _)).Times(0);
+  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _, _))
+      .Times(0);
   SetSendClientReportPhishingRequestCallback(
       /*has_expected_brand_and_intent=*/false,
       /*expected_no_info_reason=*/IntelligentScanInfo::TEXT_TOO_SHORT,
@@ -4770,7 +5066,8 @@ TEST_F(ClientSideDetectionHostScamDetectionTest,
        AllowlistedOnHCDoesNotTriggersIntelligentScan) {
   // Because the URL is on the HC allowlist, we will NOT start the intelligent
   // scan.
-  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _)).Times(0);
+  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _, _))
+      .Times(0);
   SetSendClientReportPhishingRequestCallback(
       /*has_expected_brand_and_intent=*/false,
       /*expected_no_info_reason=*/IntelligentScanInfo::ALLOWLISTED,
@@ -4802,7 +5099,8 @@ TEST_F(ClientSideDetectionHostScamDetectionTest,
           Return(IntelligentScanDelegate::ModelType::kNotSupportedOnDevice));
   // Because the intelligent scan is unavailable, we will NOT start the
   // intelligent scan.
-  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _)).Times(0);
+  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _, _))
+      .Times(0);
   SetSendClientReportPhishingRequestCallback(
       /*has_expected_brand_and_intent=*/false,
       /*expected_no_info_reason=*/
@@ -4942,13 +5240,13 @@ TEST_F(
                          /*intelligent_scan=*/true,
                          /*cache_expression=*/first_url_redirect.GetContent());
 
+  // Re-set the example URL to the final url in the redirect chain.
+  SetExampleUrl(third_url_redirect);
+
   EXPECT_CALL(*intelligent_scan_delegate_,
               ShouldRequestIntelligentScan(IntelligentScanEnabledVerdict()))
       .WillOnce(Return(true));
   SetIntelligentScanCallback(/*should_return_response=*/true);
-
-  // Re-set the example URL to the final url in the redirect chain.
-  SetExampleUrl(third_url_redirect);
   SetSendClientReportPhishingRequestCallback(
       /*has_expected_brand_and_intent=*/true,
       /*expected_no_info_reason=*/std::nullopt,
@@ -5252,6 +5550,77 @@ TEST_F(ClientSideDetectionHostScamDetectionTest,
 }
 
 TEST_F(ClientSideDetectionHostScamDetectionTest,
+       BillingScamExperimentVerdictShowsBillingWarning) {
+  SetFeatures({}, {});
+  SetIntelligentScanCallback(/*should_return_response=*/true);
+  SetSendClientReportPhishingRequestCallback(
+      /*has_expected_brand_and_intent=*/true,
+      /*expected_no_info_reason=*/std::nullopt,
+      /*expected_llama_forced_trigger_info_trigger_url=*/std::nullopt,
+      /*returned_is_phishing=*/false,
+      /*returned_intelligent_scan_verdict=*/
+      IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_BILLING);
+  EXPECT_CALL(*intelligent_scan_delegate_,
+              ShouldShowScamWarning(std::optional<IntelligentScanVerdict>(
+                  IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_BILLING)))
+      .WillOnce(Return(true));
+
+  UnsafeResource resource;
+  resource.threat_type = SBThreatType::SB_THREAT_TYPE_BILLING;
+  resource.threat_subtype = ThreatSubtype::SCAM_EXPERIMENT_VERDICT_BILLING;
+  // Because the callback responds with the billing verdict, we show the
+  // billing warning.
+  EXPECT_CALL(*ui_manager_.get(),
+              DisplayBlockingPage(HasThreatTypeAndSubtype(resource)))
+      .Times(1);
+
+  PhishingDetectionDone(/*is_phishing=*/false, /*client_score=*/0.8f,
+                        ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED,
+                        /*did_match_high_confidence_allowlist=*/false);
+
+  VerifyExpectedCalls();
+  VerifyGeneralScamDetectionHistograms(
+      /*expected_request_type=*/ClientSideDetectionType::
+          KEYBOARD_LOCK_REQUESTED,
+      /*is_intelligent_scan_available=*/true,
+      /*model_has_successful_response=*/true,
+      /*intelligent_scan_verdict=*/
+      IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_BILLING);
+}
+
+TEST_F(ClientSideDetectionHostScamDetectionTest,
+       BillingScamExperimentVerdictWithPhishingShowsPhishingWarning) {
+  SetFeatures({}, {});
+  SetIntelligentScanCallback(/*should_return_response=*/true);
+  SetSendClientReportPhishingRequestCallback(
+      /*has_expected_brand_and_intent=*/true,
+      /*expected_no_info_reason=*/std::nullopt,
+      /*expected_llama_forced_trigger_info_trigger_url=*/std::nullopt,
+      /*returned_is_phishing=*/true,
+      /*returned_intelligent_scan_verdict=*/
+      IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_BILLING);
+  EXPECT_CALL(*intelligent_scan_delegate_,
+              ShouldShowScamWarning(std::optional<IntelligentScanVerdict>(
+                  IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_BILLING)))
+      .WillOnce(Return(true));
+
+  UnsafeResource resource;
+  resource.threat_type = SBThreatType::SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING;
+  resource.threat_subtype = ThreatSubtype::SCAM_EXPERIMENT_VERDICT_BILLING;
+  // The phishing warning takes precedence over the billing warning, but the
+  // billing subtype is kept for metrics.
+  EXPECT_CALL(*ui_manager_.get(),
+              DisplayBlockingPage(HasThreatTypeAndSubtype(resource)))
+      .Times(1);
+
+  PhishingDetectionDone(/*is_phishing=*/false, /*client_score=*/0.8f,
+                        ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED,
+                        /*did_match_high_confidence_allowlist=*/false);
+
+  VerifyExpectedCalls();
+}
+
+TEST_F(ClientSideDetectionHostScamDetectionTest,
        ScamScoreNotPopulatedWhenFeatureDisabled) {
   SetFeatures({}, {kClientSideDetectionScamScore});
   SetIntelligentScanCallback(/*should_return_response=*/true);
@@ -5284,7 +5653,9 @@ TEST_F(ClientSideDetectionHostScamDetectionTest,
 
 TEST_F(ClientSideDetectionHostScamDetectionTest,
        ScamScorePopulatedWhenFeatureEnabled) {
-  SetFeatures({kClientSideDetectionScamScore}, {});
+  SetFeatures({kClientSideDetectionScamScore,
+               kClientSideDetectionScamDetectionRequestWithUrl},
+              {});
   SetIntelligentScanCallback(/*should_return_response=*/true);
   SetSendClientReportPhishingRequestCallback(
       /*has_expected_brand_and_intent=*/true,
@@ -5345,135 +5716,300 @@ TEST_F(ClientSideDetectionHostScamDetectionTest,
       IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
 }
 
-// Unit tests for ExtractClipboardData
-class ClientSideDetectionHostClipboardDataTest
-    : public ClientSideDetectionHostTest {
- public:
-  ClipboardExtractedData ExtractFromPayload(const std::u16string& payload) {
-    return csd_host_->ExtractClipboardData(payload);
-  }
-};
+TEST_F(ClientSideDetectionHostScamDetectionTest,
+       MultimodalScreenshotCapturedAndEncodedToPng) {
+  SetFeatures({kClientSideDetectionServerModelMultimodal}, {});
+  SetIntelligentScanCallback(/*should_return_response=*/true);
+  SetSendClientReportPhishingRequestCallback(
+      /*has_expected_brand_and_intent=*/true,
+      /*expected_no_info_reason=*/std::nullopt,
+      /*expected_llama_forced_trigger_info_trigger_url=*/std::nullopt,
+      /*returned_is_phishing=*/false,
+      /*returned_intelligent_scan_verdict=*/
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+  EXPECT_CALL(*intelligent_scan_delegate_,
+              ShouldShowScamWarning(std::optional<IntelligentScanVerdict>(
+                  IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE)))
+      .WillOnce(Return(false));
 
-TEST_F(ClientSideDetectionHostClipboardDataTest, EmptyPayload) {
-  ClipboardExtractedData data = ExtractFromPayload(u"");
-  EXPECT_EQ(0, data.suspicious_tokens_size());
-  EXPECT_FALSE(data.is_first_token_suspicious());
-  EXPECT_FALSE(data.is_last_token_suspicious());
+  web_contents()->WasShown();
+
+  auto verdict = std::make_unique<ClientPhishingRequest>();
+  verdict->set_url(example_url_.spec());
+  verdict->set_client_score(0.8f);
+  verdict->set_is_phishing(false);
+  verdict->set_client_side_detection_type(
+      ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED);
+
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(10, 10);
+  bitmap.eraseColor(SK_ColorBLUE);
+  viz::CopyOutputBitmapWithMetadata copy_result;
+  copy_result.bitmap = bitmap;
+
+  OnScreenshotTaken(
+      std::move(verdict), /*did_match_high_confidence_allowlist=*/false,
+      /*is_invalid_ip=*/false, "Suspicious inner text", base::ok(copy_result));
+  task_environment()->RunUntilIdle();
+
+  VerifyExpectedCalls();
+  ASSERT_TRUE(csd_host_->last_intelligent_scan_tab_screenshot_for_testing()
+                  .has_value());
+  SkBitmap decoded_bitmap = gfx::PNGCodec::Decode(base::as_byte_span(
+      *csd_host_->last_intelligent_scan_tab_screenshot_for_testing()));
+  EXPECT_FALSE(decoded_bitmap.isNull());
+  EXPECT_EQ(decoded_bitmap.width(), 10);
+  EXPECT_EQ(decoded_bitmap.height(), 10);
 }
 
-TEST_F(ClientSideDetectionHostClipboardDataTest, NoSusCommands) {
-  ClipboardExtractedData data = ExtractFromPayload(u"this is a normal string");
-  EXPECT_EQ(0, data.suspicious_tokens_size());
-  EXPECT_FALSE(data.is_first_token_suspicious());
-  EXPECT_FALSE(data.is_last_token_suspicious());
-  EXPECT_FALSE(data.is_overall_suspicious());
+TEST_F(ClientSideDetectionHostScamDetectionTest,
+       MultimodalScreenshotDiscardedWhenTabHidden) {
+  SetFeatures({kClientSideDetectionServerModelMultimodal}, {});
+  SetIntelligentScanCallback(/*should_return_response=*/true);
+  SetSendClientReportPhishingRequestCallback(
+      /*has_expected_brand_and_intent=*/true,
+      /*expected_no_info_reason=*/std::nullopt,
+      /*expected_llama_forced_trigger_info_trigger_url=*/std::nullopt,
+      /*returned_is_phishing=*/false,
+      /*returned_intelligent_scan_verdict=*/
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+  EXPECT_CALL(*intelligent_scan_delegate_,
+              ShouldShowScamWarning(std::optional<IntelligentScanVerdict>(
+                  IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE)))
+      .WillOnce(Return(false));
+
+  web_contents()->WasHidden();
+
+  auto verdict = std::make_unique<ClientPhishingRequest>();
+  verdict->set_url(example_url_.spec());
+  verdict->set_client_score(0.8f);
+  verdict->set_is_phishing(false);
+  verdict->set_client_side_detection_type(
+      ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED);
+
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(10, 10);
+  bitmap.eraseColor(SK_ColorBLUE);
+  viz::CopyOutputBitmapWithMetadata copy_result;
+  copy_result.bitmap = bitmap;
+
+  OnScreenshotTaken(
+      std::move(verdict), /*did_match_high_confidence_allowlist=*/false,
+      /*is_invalid_ip=*/false, "Suspicious inner text", base::ok(copy_result));
+  task_environment()->RunUntilIdle();
+
+  VerifyExpectedCalls();
+  EXPECT_FALSE(csd_host_->last_intelligent_scan_tab_screenshot_for_testing()
+                   .has_value());
 }
 
-TEST_F(ClientSideDetectionHostClipboardDataTest, SingleSusCommandAtBeginning) {
-  ClipboardExtractedData data = ExtractFromPayload(u"curl example.com");
-  EXPECT_THAT(data.suspicious_tokens(), ::testing::ElementsAre("curl"));
-  EXPECT_TRUE(data.is_first_token_suspicious());
-  EXPECT_FALSE(data.is_last_token_suspicious());
-  EXPECT_FALSE(data.is_overall_suspicious());
+TEST_F(ClientSideDetectionHostScamDetectionTest,
+       MultimodalScreenshotDiscardedWhenUrlChanged) {
+  SetFeatures({kClientSideDetectionServerModelMultimodal}, {});
+  EXPECT_CALL(*intelligent_scan_delegate_,
+              StartIntelligentScan(_, "http://otherurl.com/", _))
+      .WillOnce(
+          [this](
+              std::string rendered_text, std::string url,
+              IntelligentScanDelegate::IntelligentScanDoneCallback callback) {
+            IntelligentScanDelegate::IntelligentScanResult response;
+            response.model_type = IntelligentScanDelegate::ModelType::kOnDevice;
+            response.execution_success = true;
+            response.model_version = example_model_version_;
+            response.brand = example_brand_;
+            response.intent = example_intent_;
+            std::move(callback).Run(response);
+            return base::UnguessableToken::Create();
+          });
+  EXPECT_CALL(*csd_service_, SendClientReportPhishingRequest(_, _, _)).Times(1);
+
+  web_contents()->WasShown();
+
+  auto verdict = std::make_unique<ClientPhishingRequest>();
+  verdict->set_url("http://otherurl.com/");
+  verdict->set_client_score(0.8f);
+  verdict->set_is_phishing(false);
+  verdict->set_client_side_detection_type(
+      ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED);
+
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(10, 10);
+  bitmap.eraseColor(SK_ColorBLUE);
+  viz::CopyOutputBitmapWithMetadata copy_result;
+  copy_result.bitmap = bitmap;
+
+  OnScreenshotTaken(
+      std::move(verdict), /*did_match_high_confidence_allowlist=*/false,
+      /*is_invalid_ip=*/false, "Suspicious inner text", base::ok(copy_result));
+  task_environment()->RunUntilIdle();
+
+  VerifyExpectedCalls();
+  EXPECT_FALSE(csd_host_->last_intelligent_scan_tab_screenshot_for_testing()
+                   .has_value());
 }
 
-TEST_F(ClientSideDetectionHostClipboardDataTest, EchoAndPipe) {
-  ClipboardExtractedData data = ExtractFromPayload(u"echo hello | bash");
-  EXPECT_THAT(data.suspicious_tokens(), ::testing::ElementsAre("bash"));
-  EXPECT_FALSE(data.is_first_token_suspicious());
-  EXPECT_TRUE(data.is_last_token_suspicious());
-  EXPECT_FALSE(data.is_overall_suspicious());
+TEST_F(ClientSideDetectionHostScamDetectionTest,
+       EmptyInnerTextTriggersIntelligentScanWhenMultimodalEnabled) {
+  SetFeatures({kClientSideDetectionServerModelMultimodal}, {});
+  SetIntelligentScanCallback(/*should_return_response=*/true);
+  SetSendClientReportPhishingRequestCallback(
+      /*has_expected_brand_and_intent=*/true,
+      /*expected_no_info_reason=*/std::nullopt,
+      /*expected_llama_forced_trigger_info_trigger_url=*/std::nullopt,
+      /*returned_is_phishing=*/false,
+      /*returned_intelligent_scan_verdict=*/
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+  EXPECT_CALL(*intelligent_scan_delegate_,
+              ShouldShowScamWarning(std::optional<IntelligentScanVerdict>(
+                  IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE)))
+      .WillOnce(Return(false));
+
+  web_contents()->WasShown();
+
+  auto verdict = std::make_unique<ClientPhishingRequest>();
+  verdict->set_url(example_url_.spec());
+  verdict->set_client_score(0.8f);
+  verdict->set_is_phishing(false);
+  verdict->set_client_side_detection_type(
+      ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED);
+
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(10, 10);
+  bitmap.eraseColor(SK_ColorBLUE);
+  viz::CopyOutputBitmapWithMetadata copy_result;
+  copy_result.bitmap = bitmap;
+
+  OnScreenshotTaken(std::move(verdict),
+                    /*did_match_high_confidence_allowlist=*/false,
+                    /*is_invalid_ip=*/false, /*inner_text=*/"",
+                    base::ok(copy_result));
+  task_environment()->RunUntilIdle();
+
+  VerifyExpectedCalls();
+  EXPECT_TRUE(csd_host_->last_intelligent_scan_tab_screenshot_for_testing()
+                  .has_value());
 }
 
-TEST_F(ClientSideDetectionHostClipboardDataTest, SingleSusCommandAtEnd) {
-  ClipboardExtractedData data = ExtractFromPayload(u"some text with wget");
-  EXPECT_THAT(data.suspicious_tokens(), ::testing::ElementsAre("wget"));
-  EXPECT_FALSE(data.is_first_token_suspicious());
-  EXPECT_TRUE(data.is_last_token_suspicious());
-  EXPECT_FALSE(data.is_overall_suspicious());
+TEST_F(ClientSideDetectionHostScamDetectionTest,
+       ShortInnerTextTriggersIntelligentScanWhenMultimodalEnabled) {
+  SetFeatures({kClientSideDetectionServerModelMultimodal}, {});
+  SetIntelligentScanCallback(/*should_return_response=*/true);
+  SetSendClientReportPhishingRequestCallback(
+      /*has_expected_brand_and_intent=*/true,
+      /*expected_no_info_reason=*/std::nullopt,
+      /*expected_llama_forced_trigger_info_trigger_url=*/std::nullopt,
+      /*returned_is_phishing=*/false,
+      /*returned_intelligent_scan_verdict=*/
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+  EXPECT_CALL(*intelligent_scan_delegate_,
+              ShouldShowScamWarning(std::optional<IntelligentScanVerdict>(
+                  IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE)))
+      .WillOnce(Return(false));
+
+  web_contents()->WasShown();
+
+  auto verdict = std::make_unique<ClientPhishingRequest>();
+  verdict->set_url(example_url_.spec());
+  verdict->set_client_score(0.8f);
+  verdict->set_is_phishing(false);
+  verdict->set_client_side_detection_type(
+      ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED);
+
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(10, 10);
+  bitmap.eraseColor(SK_ColorBLUE);
+  viz::CopyOutputBitmapWithMetadata copy_result;
+  copy_result.bitmap = bitmap;
+
+  OnScreenshotTaken(std::move(verdict),
+                    /*did_match_high_confidence_allowlist=*/false,
+                    /*is_invalid_ip=*/false, /*inner_text=*/"text",
+                    base::ok(copy_result));
+  task_environment()->RunUntilIdle();
+
+  VerifyExpectedCalls();
+  EXPECT_TRUE(csd_host_->last_intelligent_scan_tab_screenshot_for_testing()
+                  .has_value());
 }
 
-TEST_F(ClientSideDetectionHostClipboardDataTest, SuspiciousCommand) {
-  ClipboardExtractedData data =
-      ExtractFromPayload(u"curl https://example.com/s.sh | bash");
-  EXPECT_THAT(data.suspicious_tokens(), ::testing::ElementsAre("curl", "bash"));
-  EXPECT_TRUE(data.is_first_token_suspicious());
-  EXPECT_TRUE(data.is_last_token_suspicious());
-  EXPECT_EQ(data.payload_length(), 36);
-  EXPECT_EQ(data.total_parsed_tokens(), 3);
-  EXPECT_EQ(data.urls_size(), 1);
-  EXPECT_TRUE(data.is_overall_suspicious());
+TEST_F(ClientSideDetectionHostScamDetectionTest,
+       EmptyInnerTextAndEmptyScreenshotDoesNotTriggerIntelligentScan) {
+  SetFeatures({kClientSideDetectionServerModelMultimodal}, {});
+  raw_delegate_->ForceEmptyInnerText();
+  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _, _))
+      .Times(0);
+  SetSendClientReportPhishingRequestCallback(
+      /*has_expected_brand_and_intent=*/false,
+      /*expected_no_info_reason=*/IntelligentScanInfo::EMPTY_TEXT,
+      /*expected_llama_forced_trigger_info_trigger_url=*/std::nullopt,
+      /*returned_is_phishing=*/false,
+      /*returned_intelligent_scan_verdict=*/
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+
+  PhishingDetectionDone(/*is_phishing=*/false, /*client_score=*/0.0f,
+                        ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED,
+                        /*did_match_high_confidence_allowlist=*/false);
+
+  VerifyExpectedCalls();
+  VerifyGeneralScamDetectionHistograms(
+      /*expected_request_type=*/ClientSideDetectionType::
+          KEYBOARD_LOCK_REQUESTED,
+      /*is_intelligent_scan_available=*/true,
+      /*model_has_successful_response=*/std::nullopt,
+      /*intelligent_scan_verdict=*/
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
 }
 
-TEST_F(ClientSideDetectionHostClipboardDataTest, MissingRunner) {
-  // Loader + URL, but no runner.
-  ClipboardExtractedData data = ExtractFromPayload(u"curl https://example.com");
-  EXPECT_EQ(1, data.suspicious_tokens_size());
-  EXPECT_FALSE(data.is_overall_suspicious());
+TEST_F(ClientSideDetectionHostScamDetectionTest,
+       ShortInnerTextAndEmptyScreenshotDoesNotTriggerIntelligentScan) {
+  SetFeatures({kClientSideDetectionServerModelMultimodal}, {});
+  raw_delegate_->SetInnerText("text");
+  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _, _))
+      .Times(0);
+  SetSendClientReportPhishingRequestCallback(
+      /*has_expected_brand_and_intent=*/false,
+      /*expected_no_info_reason=*/IntelligentScanInfo::TEXT_TOO_SHORT,
+      /*expected_llama_forced_trigger_info_trigger_url=*/std::nullopt,
+      /*returned_is_phishing=*/false,
+      /*returned_intelligent_scan_verdict=*/
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
+
+  PhishingDetectionDone(/*is_phishing=*/false, /*client_score=*/0.0f,
+                        ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED,
+                        /*did_match_high_confidence_allowlist=*/false);
+
+  VerifyExpectedCalls();
+  VerifyGeneralScamDetectionHistograms(
+      /*expected_request_type=*/ClientSideDetectionType::
+          KEYBOARD_LOCK_REQUESTED,
+      /*is_intelligent_scan_available=*/true,
+      /*model_has_successful_response=*/std::nullopt,
+      /*intelligent_scan_verdict=*/
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE);
 }
 
-TEST_F(ClientSideDetectionHostClipboardDataTest, MissingURL) {
-  // Loader + Runner, but no URL.
-  ClipboardExtractedData data = ExtractFromPayload(u"echo hello | bash");
-  EXPECT_EQ(1, data.suspicious_tokens_size());
-  EXPECT_FALSE(data.is_overall_suspicious());
-}
+TEST_F(ClientSideDetectionHostScamDetectionTest,
+       EmptyInnerTextDoesNotTriggerIntelligentScanOnLowEndDeviceWhenExcluded) {
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitch(
+      switches::kEnableLowEndDeviceMode);
+  SetFeatures({kClientSideDetectionServerModelMultimodal}, {});
+  raw_delegate_->ForceEmptyInnerText();
+  EXPECT_CALL(*intelligent_scan_delegate_, StartIntelligentScan(_, _, _))
+      .Times(0);
+  SetSendClientReportPhishingRequestCallback(
+      /*has_expected_brand_and_intent=*/false,
+      /*expected_no_info_reason=*/IntelligentScanInfo::EMPTY_TEXT,
+      /*expected_llama_forced_trigger_info_trigger_url=*/std::nullopt,
+      /*returned_is_phishing=*/false,
+      /*returned_intelligent_scan_verdict=*/
+      IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_UNSPECIFIED);
 
-TEST_F(ClientSideDetectionHostClipboardDataTest, RemoteRunner) {
-  // Remote runner satisfies loader and runner.
-  ClipboardExtractedData data = ExtractFromPayload(u"mshta example.com");
-  EXPECT_THAT(data.suspicious_tokens(), ::testing::ElementsAre("mshta"));
-  EXPECT_TRUE(data.is_first_token_suspicious());
-  EXPECT_EQ(data.urls_size(), 1);
-  EXPECT_TRUE(data.is_overall_suspicious());
-}
+  PhishingDetectionDone(/*is_phishing=*/false, /*client_score=*/0.0f,
+                        ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED,
+                        /*did_match_high_confidence_allowlist=*/false);
 
-TEST_F(ClientSideDetectionHostClipboardDataTest, SubcommandSyntax) {
-  // Subcommand syntax satisfies runner.
-  ClipboardExtractedData data =
-      ExtractFromPayload(u"$(curl http://example.com)");
-  EXPECT_THAT(data.suspicious_tokens(), ::testing::ElementsAre("curl"));
-  EXPECT_EQ(data.urls_size(), 1);
-  EXPECT_TRUE(data.is_overall_suspicious());
-}
-
-TEST_F(ClientSideDetectionHostClipboardDataTest, MixedCaseAndPaths) {
-  ClipboardExtractedData data =
-      ExtractFromPayload(u"cUrL https://example.com/s /usr/bin/BaSh.exe");
-  EXPECT_THAT(data.suspicious_tokens(), ::testing::ElementsAre("curl", "bash"));
-  EXPECT_TRUE(data.is_first_token_suspicious());
-  EXPECT_TRUE(data.is_last_token_suspicious());
-  EXPECT_TRUE(data.is_overall_suspicious());
-}
-
-TEST_F(ClientSideDetectionHostClipboardDataTest, MixedDelimiters) {
-  ClipboardExtractedData data = ExtractFromPayload(
-      u"curl\thttps://e.com\rwget\nhttp://b.com|{bash};(cmd::iex)");
-  EXPECT_THAT(data.suspicious_tokens(),
-              ::testing::ElementsAre("curl", "wget", "bash", "cmd", "iex"));
-  EXPECT_TRUE(data.is_first_token_suspicious());
-  EXPECT_TRUE(data.is_last_token_suspicious());
-  EXPECT_TRUE(data.is_overall_suspicious());
-}
-
-TEST_F(ClientSideDetectionHostClipboardDataTest, IncludeFullPayload) {
-  feature_list_.InitAndEnableFeatureWithParameters(
-      kClientSideDetectionClipboardCopyApi, {{"IncludeFullPayload", "true"}});
-
-  ClipboardExtractedData data =
-      ExtractFromPayload(u"curl https://example.com/s.sh | bash");
-  EXPECT_TRUE(data.is_overall_suspicious());
-  EXPECT_EQ(data.content(), "curl https://example.com/s.sh | bash");
-}
-
-TEST_F(ClientSideDetectionHostClipboardDataTest, ExcludeFullPayloadByDefault) {
-  feature_list_.InitAndEnableFeatureWithParameters(
-      kClientSideDetectionClipboardCopyApi, {{"IncludeFullPayload", "false"}});
-
-  ClipboardExtractedData data =
-      ExtractFromPayload(u"curl https://example.com/s.sh | bash");
-  EXPECT_TRUE(data.is_overall_suspicious());
-  EXPECT_FALSE(data.has_content());
+  VerifyExpectedCalls();
 }
 
 class ClientSideDetectionHostPriorityTest
@@ -5575,7 +6111,7 @@ TEST_F(ClientSideDetectionHostPriorityTest, SameTierTriggerBlocked) {
   std::u16string copied_text =
       u"This string is definitely long enough to pass the length checks for "
       u"the clipboard copy API trigger. We need this string to be quite long "
-      u"indeed to pass the minimum threshold.";
+      u"indeed to pass the minimum threshold. ssh";
   csd_host_->OnTextCopiedToClipboard(web_contents()->GetPrimaryMainFrame(),
                                      copied_text);
 
@@ -5614,7 +6150,7 @@ TEST_F(ClientSideDetectionHostPriorityTest, BypassTiers) {
   std::u16string copied_text =
       u"This string is definitely long enough to pass the length checks for "
       u"the clipboard copy API trigger. We need this string to be quite long "
-      u"indeed to pass the minimum threshold.";
+      u"indeed to pass the minimum threshold. ssh";
   csd_host_->OnTextCopiedToClipboard(web_contents()->GetPrimaryMainFrame(),
                                      copied_text);
 

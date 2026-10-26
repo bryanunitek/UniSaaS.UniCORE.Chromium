@@ -10,16 +10,16 @@
 #include <algorithm>
 #include <string>
 
-#include "base/containers/flat_map.h"
-#include "base/functional/bind.h"
+#include "base/containers/fixed_flat_map.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
-#include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_types.h"
 #include "third_party/libyuv/include/libyuv/convert.h"
+#include "third_party/libyuv/include/libyuv/planar_functions.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace media::cast {
@@ -41,93 +41,121 @@ constexpr int kPlane = 0;
 // Total number of pixels per character.
 constexpr int kPixelsPerChar = (kCharacterWidth + kCharacterSpacing) * kScale;
 
+constexpr gfx::Rect kExclamation[] = {gfx::Rect(1, 0, 1, 3),
+                                      gfx::Rect(1, 4, 1, 1)};
+constexpr gfx::Rect kPercent[] = {gfx::Rect(0, 0, 1, 1), gfx::Rect(2, 1, 1, 1),
+                                  gfx::Rect(1, 2, 1, 1), gfx::Rect(0, 3, 1, 1),
+                                  gfx::Rect(2, 4, 1, 1)};
+constexpr gfx::Rect kPlus[] = {gfx::Rect(1, 1, 1, 1), gfx::Rect(1, 3, 1, 1),
+                               gfx::Rect(0, 2, 3, 1)};
+constexpr gfx::Rect kMinus[] = {gfx::Rect(0, 2, 3, 1)};
+constexpr gfx::Rect kPeriod[] = {gfx::Rect(1, 4, 1, 1)};
+constexpr gfx::Rect kZero[] = {gfx::Rect(0, 0, 3, 1), gfx::Rect(0, 1, 1, 3),
+                               gfx::Rect(2, 1, 1, 3), gfx::Rect(0, 4, 3, 1)};
+constexpr gfx::Rect kOne[] = {gfx::Rect(1, 0, 1, 5)};
+constexpr gfx::Rect kTwo[] = {gfx::Rect(0, 0, 3, 1), gfx::Rect(2, 1, 1, 1),
+                              gfx::Rect(0, 2, 3, 1), gfx::Rect(0, 3, 1, 1),
+                              gfx::Rect(0, 4, 3, 1)};
+constexpr gfx::Rect kThree[] = {gfx::Rect(0, 0, 3, 1), gfx::Rect(2, 1, 1, 1),
+                                gfx::Rect(0, 2, 3, 1), gfx::Rect(2, 3, 1, 1),
+                                gfx::Rect(0, 4, 3, 1)};
+constexpr gfx::Rect kFour[] = {gfx::Rect(0, 0, 1, 2), gfx::Rect(2, 0, 1, 5),
+                               gfx::Rect(0, 2, 2, 1)};
+constexpr gfx::Rect kFive[] = {gfx::Rect(0, 0, 3, 1), gfx::Rect(0, 1, 1, 1),
+                               gfx::Rect(0, 2, 3, 1), gfx::Rect(2, 3, 1, 1),
+                               gfx::Rect(0, 4, 3, 1)};
+constexpr gfx::Rect kSix[] = {gfx::Rect(1, 0, 2, 1), gfx::Rect(0, 1, 1, 1),
+                              gfx::Rect(0, 2, 3, 1), gfx::Rect(0, 3, 1, 1),
+                              gfx::Rect(2, 3, 1, 1), gfx::Rect(0, 4, 3, 1)};
+constexpr gfx::Rect kSeven[] = {gfx::Rect(0, 0, 3, 1), gfx::Rect(2, 1, 1, 2),
+                                gfx::Rect(1, 3, 1, 2)};
+constexpr gfx::Rect kEight[] = {gfx::Rect(0, 0, 3, 1), gfx::Rect(0, 1, 1, 1),
+                                gfx::Rect(2, 1, 1, 1), gfx::Rect(0, 2, 3, 1),
+                                gfx::Rect(0, 3, 1, 1), gfx::Rect(2, 3, 1, 1),
+                                gfx::Rect(0, 4, 3, 1)};
+constexpr gfx::Rect kNine[] = {gfx::Rect(0, 0, 3, 1), gfx::Rect(0, 1, 1, 1),
+                               gfx::Rect(2, 1, 1, 1), gfx::Rect(0, 2, 3, 1),
+                               gfx::Rect(2, 3, 1, 1), gfx::Rect(0, 4, 2, 1)};
+constexpr gfx::Rect kColon[] = {gfx::Rect(1, 1, 1, 1), gfx::Rect(1, 3, 1, 1)};
+constexpr gfx::Rect kE[] = {gfx::Rect(0, 0, 3, 1), gfx::Rect(0, 1, 1, 1),
+                            gfx::Rect(0, 2, 2, 1), gfx::Rect(0, 3, 1, 1),
+                            gfx::Rect(0, 4, 3, 1)};
+constexpr gfx::Rect kX[] = {gfx::Rect(0, 1, 1, 1), gfx::Rect(2, 1, 1, 1),
+                            gfx::Rect(1, 2, 1, 1), gfx::Rect(0, 3, 1, 1),
+                            gfx::Rect(2, 3, 1, 1)};
+
 // A map from an ASCII character to the set of rectangles corresponding to how
 // it should be rendered on the frame.
-const auto& GetCharacterRenderMap() {
-  static const base::NoDestructor<base::flat_map<char, std::vector<gfx::Rect>>>
-      kCharacterRenderMap({
-          {'!', {gfx::Rect(1, 0, 1, 3), gfx::Rect(1, 4, 1, 1)}},
-          {'%',
-           {gfx::Rect(0, 0, 1, 1), gfx::Rect(2, 1, 1, 1), gfx::Rect(1, 2, 1, 1),
-            gfx::Rect(0, 3, 1, 1), gfx::Rect(2, 4, 1, 1)}},
-          {'+',
-           {gfx::Rect(1, 1, 1, 1), gfx::Rect(1, 3, 1, 1),
-            gfx::Rect(0, 2, 3, 1)}},
-          {'-', {gfx::Rect(0, 2, 3, 1)}},
-          {'.', {gfx::Rect(1, 4, 1, 1)}},
-          {'0',
-           {gfx::Rect(0, 0, 3, 1), gfx::Rect(0, 1, 1, 3), gfx::Rect(2, 1, 1, 3),
-            gfx::Rect(0, 4, 3, 1)}},
-          {'1', {gfx::Rect(1, 0, 1, 5)}},
-          {'2',
-           {gfx::Rect(0, 0, 3, 1), gfx::Rect(2, 1, 1, 1), gfx::Rect(0, 2, 3, 1),
-            gfx::Rect(0, 3, 1, 1), gfx::Rect(0, 4, 3, 1)}},
-          {'3',
-           {gfx::Rect(0, 0, 3, 1), gfx::Rect(2, 1, 1, 1), gfx::Rect(0, 2, 3, 1),
-            gfx::Rect(2, 3, 1, 1), gfx::Rect(0, 4, 3, 1)}},
-          {'4',
-           {gfx::Rect(0, 0, 1, 2), gfx::Rect(2, 0, 1, 5),
-            gfx::Rect(0, 2, 2, 1)}},
-          {'5',
-           {gfx::Rect(0, 0, 3, 1), gfx::Rect(0, 1, 1, 1), gfx::Rect(0, 2, 3, 1),
-            gfx::Rect(2, 3, 1, 1), gfx::Rect(0, 4, 3, 1)}},
-          {'6',
-           {gfx::Rect(1, 0, 2, 1), gfx::Rect(0, 1, 1, 1), gfx::Rect(0, 2, 3, 1),
-            gfx::Rect(0, 3, 1, 1), gfx::Rect(2, 3, 1, 1),
-            gfx::Rect(0, 4, 3, 1)}},
-          {'7',
-           {gfx::Rect(0, 0, 3, 1), gfx::Rect(2, 1, 1, 2),
-            gfx::Rect(1, 3, 1, 2)}},
-          {'8',
-           {gfx::Rect(0, 0, 3, 1), gfx::Rect(0, 1, 1, 1), gfx::Rect(2, 1, 1, 1),
-            gfx::Rect(0, 2, 3, 1), gfx::Rect(0, 3, 1, 1), gfx::Rect(2, 3, 1, 1),
-            gfx::Rect(0, 4, 3, 1)}},
-          {'9',
-           {gfx::Rect(0, 0, 3, 1), gfx::Rect(0, 1, 1, 1), gfx::Rect(2, 1, 1, 1),
-            gfx::Rect(0, 2, 3, 1), gfx::Rect(2, 3, 1, 1),
-            gfx::Rect(0, 4, 2, 1)}},
-          {':', {gfx::Rect(1, 1, 1, 1), gfx::Rect(1, 3, 1, 1)}},
-          {'e',
-           {gfx::Rect(0, 0, 3, 1), gfx::Rect(0, 1, 1, 1), gfx::Rect(0, 2, 2, 1),
-            gfx::Rect(0, 3, 1, 1), gfx::Rect(0, 4, 3, 1)}},
-          {'x',
-           {gfx::Rect(0, 1, 1, 1), gfx::Rect(2, 1, 1, 1), gfx::Rect(1, 2, 1, 1),
-            gfx::Rect(0, 3, 1, 1), gfx::Rect(2, 3, 1, 1)}},
-      });
-
-  return *kCharacterRenderMap;
-}
+constexpr auto kCharacterRenderMap =
+    base::MakeFixedFlatMap<char, base::span<const gfx::Rect>>({
+        {'!', kExclamation},
+        {'%', kPercent},
+        {'+', kPlus},
+        {'-', kMinus},
+        {'.', kPeriod},
+        {'0', kZero},
+        {'1', kOne},
+        {'2', kTwo},
+        {'3', kThree},
+        {'4', kFour},
+        {'5', kFive},
+        {'6', kSix},
+        {'7', kSeven},
+        {'8', kEight},
+        {'9', kNine},
+        {':', kColon},
+        {'e', kE},
+        {'x', kX},
+    });
 
 scoped_refptr<VideoFrame> CopyVideoFrame(scoped_refptr<VideoFrame> source) {
-  // Currently Cast only supports I420, and converts NV12 frames before passing
-  // them to the VideoSender.
-  CHECK_EQ(source->format(), media::PIXEL_FORMAT_I420);
+  // Currently Cast supports I420 and NV12.
+  CHECK(source->format() == media::PIXEL_FORMAT_I420 ||
+        source->format() == media::PIXEL_FORMAT_NV12);
 
   // Allocate a new frame, identical in configuration to `source`, then copy
   // over all data and metadata.
   const scoped_refptr<VideoFrame> frame = VideoFrame::CreateFrame(
-      media::PIXEL_FORMAT_I420, source->coded_size(), source->visible_rect(),
+      source->format(), source->coded_size(), source->visible_rect(),
       source->natural_size(), source->timestamp());
   if (!frame) {
     return nullptr;
   }
 
   // Copy the contents of the VideoFrame over.
-  libyuv::I420Copy(source->data(media::VideoFrame::Plane::kY),
-                   source->stride(media::VideoFrame::Plane::kY),
-                   source->data(media::VideoFrame::Plane::kU),
-                   source->stride(media::VideoFrame::Plane::kU),
-                   source->data(media::VideoFrame::Plane::kV),
-                   source->stride(media::VideoFrame::Plane::kV),
-                   frame->writable_data(media::VideoFrame::Plane::kY),
-                   frame->stride(media::VideoFrame::Plane::kY),
-                   frame->writable_data(media::VideoFrame::Plane::kU),
-                   frame->stride(media::VideoFrame::Plane::kU),
-                   frame->writable_data(media::VideoFrame::Plane::kV),
-                   frame->stride(media::VideoFrame::Plane::kV),
-                   source->coded_size().width(), source->coded_size().height());
+  if (source->format() == media::PIXEL_FORMAT_I420) {
+    libyuv::I420Copy(source->data(media::VideoFrame::Plane::kY),
+                     source->stride(media::VideoFrame::Plane::kY),
+                     source->data(media::VideoFrame::Plane::kU),
+                     source->stride(media::VideoFrame::Plane::kU),
+                     source->data(media::VideoFrame::Plane::kV),
+                     source->stride(media::VideoFrame::Plane::kV),
+                     frame->writable_data(media::VideoFrame::Plane::kY),
+                     frame->stride(media::VideoFrame::Plane::kY),
+                     frame->writable_data(media::VideoFrame::Plane::kU),
+                     frame->stride(media::VideoFrame::Plane::kU),
+                     frame->writable_data(media::VideoFrame::Plane::kV),
+                     frame->stride(media::VideoFrame::Plane::kV),
+                     source->coded_size().width(),
+                     source->coded_size().height());
+  } else {
+    libyuv::CopyPlane(source->data(media::VideoFrame::Plane::kY),
+                      source->stride(media::VideoFrame::Plane::kY),
+                      frame->writable_data(media::VideoFrame::Plane::kY),
+                      frame->stride(media::VideoFrame::Plane::kY),
+                      source->coded_size().width(),
+                      source->coded_size().height());
+    libyuv::CopyPlane(source->data(media::VideoFrame::Plane::kUV),
+                      source->stride(media::VideoFrame::Plane::kUV),
+                      frame->writable_data(media::VideoFrame::Plane::kUV),
+                      frame->stride(media::VideoFrame::Plane::kUV),
+                      source->coded_size().width(),
+                      (source->coded_size().height() + 1) / 2);
+  }
 
   frame->metadata().MergeMetadataFrom(source->metadata());
+  frame->set_color_space(source->ColorSpace());
+  frame->set_hdr_metadata(source->hdr_metadata());
 
   // Important: After all consumers are done with the frame, copy-back the
   // changed/new metadata to the source frame, as it contains feedback signals
@@ -218,7 +246,6 @@ void RenderLineOfText(const std::string& line, int top, VideoFrame& frame) {
           + first_idx * kPixelsPerChar);
 
   // Render each character.
-  static const auto& kCharacterRenderMap = GetCharacterRenderMap();
   for (size_t i = first_idx; i < line.size(); ++i) {
     p_ul = p_ul.subspan(static_cast<size_t>(kPixelsPerChar));
     auto it = kCharacterRenderMap.find(base::ToLowerASCII(line[i]));
@@ -258,9 +285,11 @@ scoped_refptr<VideoFrame> RenderPerformanceMetricsOverlay(
     return source;
   }
 
-  // Generally speaking, we unfortunately cannot modify the video frame in place
-  // so need to create a copy for modification. Allocate a new frame, identical
-  // in configuration to `source` and copy over all data and metadata.
+  // We cannot modify `source` in-place (or via a shallow wrapper like
+  // `WrapVideoFrame`) because it is an incoming capture frame that may be
+  // shared with other consumers or recycled by a buffer pool. Mutating its
+  // pixel buffer directly would corrupt shared/subsequent frames. Create a
+  // deep copy before rendering the overlay.
   scoped_refptr<VideoFrame> frame = CopyVideoFrame(source);
   if (!frame) {
     return source;  // Allocation failure: Return source frame.

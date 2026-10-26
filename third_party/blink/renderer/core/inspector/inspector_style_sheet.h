@@ -28,6 +28,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_font_face_rule.h"
 #include "third_party/blink/renderer/core/css/css_font_feature_values_rule.h"
@@ -109,14 +110,14 @@ class InspectorStyle final : public GarbageCollected<InspectorStyle> {
 class InspectorStyleSheetBase
     : public GarbageCollected<InspectorStyleSheetBase> {
  public:
-  class CORE_EXPORT Listener {
+  class CORE_EXPORT Listener : public GarbageCollectedMixin {
    public:
     Listener() = default;
     virtual ~Listener() = default;
     virtual void StyleSheetChanged(InspectorStyleSheetBase*) = 0;
   };
   virtual ~InspectorStyleSheetBase() = default;
-  virtual void Trace(Visitor* visitor) const {}
+  virtual void Trace(Visitor* visitor) const { visitor->Trace(listener_); }
 
   String Id() { return id_; }
 
@@ -151,7 +152,7 @@ class InspectorStyleSheetBase
   friend class InspectorStyle;
 
   String id_;
-  Listener* listener_;
+  Member<Listener> listener_;
   std::unique_ptr<LineEndings> line_endings_;
 };
 

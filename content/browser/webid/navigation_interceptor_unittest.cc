@@ -6,6 +6,7 @@
 
 #include <variant>
 
+#include "base/containers/to_vector.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/test/bind.h"
@@ -32,6 +33,7 @@
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -39,10 +41,15 @@
 namespace content::webid {
 
 using ::testing::_;
+using ::testing::ElementsAre;
+using ::testing::Eq;
+using ::testing::Field;
+using ::testing::Optional;
+using ::testing::Pointee;
 using ::testing::Return;
 using ::testing::WithArgs;
 using MediationRequirement = ::password_manager::CredentialMediationRequirement;
-using RequestTokenCallback = Request::RequestTokenCallback;
+using RequestTokenCallback = RequestHandler::RequestTokenCallback;
 
 class InterceptorMockNavigationHandle : public MockNavigationHandle {
  public:
@@ -78,38 +85,29 @@ net::structured_headers::Dictionary EncodeParams(
                    std::variant<std::string, std::vector<std::string>>>&
         params) {
   net::structured_headers::Dictionary dictionary;
-  for (const auto& pair : params) {
-    const std::string& key = pair.first;
-    const auto& value_variant = pair.second;
-
-    std::vector<net::structured_headers::ParameterizedItem>
-        member_items_for_param_member;
-
-    if (std::holds_alternative<std::string>(value_variant)) {
-      const std::string& value = std::get<std::string>(value_variant);
-      member_items_for_param_member.emplace_back(
-          net::structured_headers::Item(
-              value, net::structured_headers::Item::kStringType),
-          net::structured_headers::Parameters());
-    } else if (std::holds_alternative<std::vector<std::string>>(
-                   value_variant)) {
-      const std::vector<std::string>& values =
-          std::get<std::vector<std::string>>(value_variant);
-      for (const auto& value : values) {
-        member_items_for_param_member.emplace_back(
-            net::structured_headers::Item(
-                value, net::structured_headers::Item::kStringType),
-            net::structured_headers::Parameters());
-      }
-    }
-
-    auto member = net::structured_headers::ParameterizedMember(
-        std::move(member_items_for_param_member),
-        net::structured_headers::Parameters());
-    if (std::holds_alternative<std::string>(value_variant)) {
-      member.member_is_inner_list = false;
-    }
-    dictionary[key] = std::move(member);
+  for (const auto& [key, value_variant] : params) {
+    dictionary[key] = std::visit(
+        absl::Overload{
+            [](const std::string& value) {
+              return net::structured_headers::ParameterizedMember(
+                  net::structured_headers::Item(
+                      net::structured_headers::Item::string, value),
+                  net::structured_headers::Parameters());
+            },
+            [](const std::vector<std::string>& values) {
+              return net::structured_headers::ParameterizedMember(
+                  base::ToVector(
+                      values,
+                      [](const auto& value) {
+                        return net::structured_headers::ParameterizedItem(
+                            net::structured_headers::Item(
+                                net::structured_headers::Item::string, value),
+                            net::structured_headers::Parameters());
+                      }),
+                  net::structured_headers::Parameters());
+            },
+        },
+        value_variant);
   }
   return dictionary;
 }
@@ -475,6 +473,66 @@ TEST_F(NavigationInterceptorTest, WillProcessResponseTokenRequestFails) {
   EXPECT_EQ(cancel_result->action(), NavigationThrottle::CANCEL);
 }
 
+TEST_F(NavigationInterceptorTest,
+       WillProcessResponseTokenRequestTooManyRequests) {
+  // Uses an in-process data decoder service for testing.
+  data_decoder::test::InProcessDataDecoder in_process_data_decoder;
+
+  NavigateAndCommit(GURL("https://rp.example/"));
+
+  auto mock_initiator = std::make_unique<MockRequestInitiator>();
+
+  InterceptorMockNavigationHandle mock_navigation_handle(web_contents());
+  mock_navigation_handle.set_url(base_url_);
+  EXPECT_CALL(mock_navigation_handle, GetPreviousRenderFrameHostId)
+      .WillRepeatedly(
+          Return(web_contents()->GetPrimaryMainFrame()->GetGlobalId()));
+  mock_navigation_handle.set_render_frame_host(
+      web_contents()->GetPrimaryMainFrame());
+  mock_navigation_handle.set_is_in_primary_main_frame(true);
+
+  auto headers = base::MakeRefCounted<net::HttpResponseHeaders>("");
+  headers->AddHeader("FedCM-Intercept-Navigation",
+                     net::structured_headers::SerializeDictionary(
+                         EncodeParams({
+                             {"config_url", "https://idp.example/fedcm.json"},
+                             {"client_id", "1234"},
+                         }))
+                         .value());
+  mock_navigation_handle.set_response_headers(headers);
+
+  MockNavigationThrottleRegistry registry(&mock_navigation_handle);
+
+  NavigationInterceptor interceptor(registry, mock_initiator->GetInitiator());
+
+  EXPECT_CALL(*mock_initiator, Run)
+      .WillOnce(WithArgs<5>([](RequestTokenCallback callback) {
+        std::move(callback).Run(
+            blink::mojom::RequestTokenStatus::kErrorTooManyRequests,
+            /*selected_identity_provider_config_url=*/std::nullopt,
+            /*token=*/std::nullopt,
+            /*error=*/nullptr,
+            /*is_auto_selected=*/false);
+        return false;
+      }));
+
+  base::RunLoop run_loop;
+  bool was_resumed = false;
+
+  interceptor.set_resume_callback_for_testing(base::BindLambdaForTesting([&]() {
+    was_resumed = true;
+    run_loop.Quit();
+  }));
+
+  interceptor.WillStartRequest();
+  auto result = interceptor.WillProcessResponse();
+  EXPECT_EQ(result, NavigationThrottle::DEFER);
+
+  run_loop.Run();
+
+  EXPECT_TRUE(was_resumed);
+}
+
 TEST_F(NavigationInterceptorTest, RequestBuilderBuildsRequest) {
   const char* kconfig_url = "https://idp.example/fedcm.json";
   const char* kclient_id = "1234";
@@ -658,6 +716,86 @@ TEST_F(NavigationInterceptorTest,
   auto result = builder.Build(base_url_, parsed_dictionary);
 
   ASSERT_FALSE(result.has_value());
+}
+
+// Regression test for http://crbug.com/545549898.
+TEST_F(NavigationInterceptorTest, RequestBuilderHandlesInnerLists) {
+  const struct {
+    std::string_view desc;
+    std::string_view input;
+    testing::Matcher<std::optional<
+        std::vector<blink::mojom::IdentityProviderGetParametersPtr>>>
+        matches;
+  } kTestCases[] = {
+      {
+          "config_url-inner-list-rejected",
+          R"(config_url=("https://idp.example/fedcm.json"))",
+          Eq(std::nullopt),
+      },
+      {
+          "client_id-inner-list-rejected",
+          R"(config_url="https://idp.example/fedcm.json", client_id=("123"))",
+          Eq(std::nullopt),
+      },
+      {
+          "login_hint-inner-list-ignored",
+          R"(config_url="https://idp.example/fedcm.json", client_id="123", login_hint=("x"))",
+          Optional(ElementsAre(Pointee(Field(
+              &blink::mojom::IdentityProviderGetParameters::providers,
+              ElementsAre(Pointee(Field(
+                  &blink::mojom::IdentityProviderRequestOptions::login_hint,
+                  ""))))))),
+      },
+      {
+          "domain_hint-inner-list-ignored",
+          R"(config_url="https://idp.example/fedcm.json", client_id="123", domain_hint=("x"))",
+          Optional(ElementsAre(Pointee(Field(
+              &blink::mojom::IdentityProviderGetParameters::providers,
+              ElementsAre(Pointee(Field(
+                  &blink::mojom::IdentityProviderRequestOptions::domain_hint,
+                  ""))))))),
+      },
+      {
+          "params-inner-list-ignored",
+          R"(config_url="https://idp.example/fedcm.json", client_id="123", params=("x"))",
+          Optional(ElementsAre(Pointee(Field(
+              &blink::mojom::IdentityProviderGetParameters::providers,
+              ElementsAre(Pointee(Field(
+                  &blink::mojom::IdentityProviderRequestOptions::params_json,
+                  std::nullopt))))))),
+      },
+      {
+          "fields-not-inner-list-ignored",
+          R"(config_url="https://idp.example/fedcm.json", client_id="123", fields="x")",
+          Optional(ElementsAre(Pointee(
+              Field(&blink::mojom::IdentityProviderGetParameters::providers,
+                    ElementsAre(Pointee(Field(
+                        &blink::mojom::IdentityProviderRequestOptions::fields,
+                        std::nullopt))))))),
+      },
+      {
+          "fields-element-not-string-rejected",
+          R"(config_url="https://idp.example/fedcm.json", client_id="123", fields=(x))",
+          Eq(std::nullopt),
+      },
+      {
+          "context-inner-list-ignored",
+          R"(config_url="https://idp.example/fedcm.json", client_id="123", context=("x"))",
+          Optional(ElementsAre(Pointee(
+              Field(&blink::mojom::IdentityProviderGetParameters::context,
+                    blink::mojom::RpContext::kSignIn)))),
+      },
+  };
+
+  for (const auto& test_case : kTestCases) {
+    SCOPED_TRACE(test_case.desc);
+
+    auto dict = net::structured_headers::ParseDictionary(test_case.input);
+    ASSERT_TRUE(dict);
+
+    NavigationInterceptor::RequestBuilder builder;
+    EXPECT_THAT(builder.Build(base_url_, *std::move(dict)), test_case.matches);
+  }
 }
 
 TEST_F(NavigationInterceptorTest, ResponseBuilderBuildsResponse) {
@@ -1163,6 +1301,78 @@ TEST_F(EmbedderLoginNavigationInterceptorTest,
   interceptor.WillStartRequest();
   auto result = interceptor.WillProcessResponse();
   EXPECT_EQ(result, NavigationThrottle::PROCEED);
+}
+
+TEST_F(NavigationInterceptorTest, TokenRequestFailsSynchronousDestruction) {
+  // Uses an in-process data decoder service for testing.
+  data_decoder::test::InProcessDataDecoder in_process_data_decoder;
+
+  NavigateAndCommit(GURL("https://rp.example/"));
+
+  auto mock_initiator = std::make_unique<MockRequestInitiator>();
+
+  InterceptorMockNavigationHandle mock_navigation_handle(web_contents());
+  mock_navigation_handle.set_url(base_url_);
+  EXPECT_CALL(mock_navigation_handle, GetPreviousRenderFrameHostId)
+      .WillRepeatedly(
+          Return(web_contents()->GetPrimaryMainFrame()->GetGlobalId()));
+  mock_navigation_handle.set_render_frame_host(
+      web_contents()->GetPrimaryMainFrame());
+  mock_navigation_handle.set_is_in_primary_main_frame(true);
+
+  auto headers = base::MakeRefCounted<net::HttpResponseHeaders>("");
+  headers->AddHeader("FedCM-Intercept-Navigation",
+                     net::structured_headers::SerializeDictionary(
+                         EncodeParams({
+                             {"config_url", "https://idp.example/fedcm.json"},
+                             {"client_id", "1234"},
+                         }))
+                         .value());
+  mock_navigation_handle.set_response_headers(headers);
+
+  MockNavigationThrottleRegistry registry(&mock_navigation_handle);
+
+  auto interceptor = std::make_unique<NavigationInterceptor>(
+      registry, mock_initiator->GetInitiator());
+
+  EXPECT_CALL(*mock_initiator, Run)
+      .WillOnce(WithArgs<5>([](RequestTokenCallback callback) {
+        std::move(callback).Run(
+            blink::mojom::RequestTokenStatus::kError,
+            /*selected_identity_provider_config_url=*/std::nullopt,
+            /*token=*/std::nullopt,
+            /*error=*/nullptr,
+            /*is_auto_selected=*/false);
+        return false;
+      }));
+
+  base::RunLoop run_loop;
+  bool was_cancelled = false;
+  std::optional<NavigationThrottle::ThrottleCheckResult> cancel_result;
+
+  NavigationInterceptor* interceptor_ptr = interceptor.get();
+  interceptor_ptr->set_cancel_deferred_navigation_callback_for_testing(
+      base::BindLambdaForTesting(
+          [&](NavigationThrottle::ThrottleCheckResult result) {
+            was_cancelled = true;
+            cancel_result = result;
+            interceptor.reset();
+            run_loop.Quit();
+          }));
+
+  interceptor_ptr->WillStartRequest();
+  auto result = interceptor_ptr->WillProcessResponse();
+
+  // If the interceptor was synchronously destroyed during WillProcessResponse
+  // because the callback ran inline, returning DEFER means it didn't crash via
+  // use-after-free inside NavigationInterceptor::OnHeaderParsed.
+  EXPECT_EQ(result, NavigationThrottle::DEFER);
+
+  run_loop.Run();
+
+  EXPECT_TRUE(was_cancelled);
+  ASSERT_TRUE(cancel_result.has_value());
+  EXPECT_EQ(cancel_result->action(), NavigationThrottle::CANCEL);
 }
 
 }  // namespace content::webid

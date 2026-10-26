@@ -9,9 +9,7 @@
 
 #include "base/time/time.h"
 #include "chrome/browser/ui/webui/signin/signin_email_confirmation_dialog.h"
-#include "components/signin/public/base/consent_level.h"
 
-class Browser;
 class BrowserWindowInterface;
 
 namespace login_ui_test_utils {
@@ -20,7 +18,7 @@ inline constexpr base::TimeDelta kSyncConfirmationDialogTimeout =
     base::Seconds(30);
 
 // Blocks until the login UI is available and ready for authorization.
-void WaitUntilUIReady(Browser* browser);
+void WaitUntilUIReady(BrowserWindowInterface* browser);
 
 // Executes JavaScript code to sign in a user with email and password to the
 // auth iframe hosted by gaia_auth extension. This function automatically
@@ -39,18 +37,18 @@ void SigninInOldGaiaFlow(content::WebContents* web_contents,
                          const std::string& email,
                          const std::string& password);
 
-// A function to sign in a user using Chrome sign-in UI interface.
-// This will block until a signin succeeded or failed notification is observed.
+// Signs in a user at `ConsentLevel::kSignin` using Chrome sign-in UI
+// interface. This will block until a signin succeeded or failed notification
+// is observed.
 bool SignInWithUI(BrowserWindowInterface* browser,
                   const std::string& email,
-                  const std::string& password,
-                  signin::ConsentLevel consent_level);
+                  const std::string& password);
 
 // Waits for sync confirmation dialog to get displayed, then executes javascript
 // to click on confirm button. Returns false if dialog wasn't dismissed before
 // |timeout|.
 [[nodiscard]] bool ConfirmSyncConfirmationDialog(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     base::TimeDelta timeout = kSyncConfirmationDialogTimeout);
 
 // Waits for the history sync optin dialog to get displayed, then executes
@@ -63,7 +61,7 @@ bool SignInWithUI(BrowserWindowInterface* browser,
 // Note: The case with `wait_for_dismiss` set to false, works only for impressions
 // of the dialog via the corresponding history sync optin service.
 [[nodiscard]] bool ConfirmHistorySyncOptinDialog(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     base::TimeDelta timeout = kSyncConfirmationDialogTimeout,
     bool wait_for_dismiss = true);
 
@@ -77,7 +75,7 @@ bool SignInWithUI(BrowserWindowInterface* browser,
 // Note: The case with `wait_for_dismiss` set to false, works only for impressions
 // of the dialog via the corresponding history sync optin service.
 [[nodiscard]] bool RejectHistorySyncOptinDialog(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     base::TimeDelta timeout = kSyncConfirmationDialogTimeout,
     bool wait_for_dismiss = true);
 
@@ -85,21 +83,21 @@ bool SignInWithUI(BrowserWindowInterface* browser,
 // to click on settings button. Returns false if dialog wasn't dismissed before
 // |timeout|.
 [[nodiscard]] bool GoToSettingsSyncConfirmationDialog(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     base::TimeDelta timeout = kSyncConfirmationDialogTimeout);
 
 // Waits for sync confirmation dialog to get displayed, then executes javascript
 // to click on cancel button. Returns false if dialog wasn't dismissed before
 // |timeout|.
 [[nodiscard]] bool CancelSyncConfirmationDialog(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     base::TimeDelta timeout = kSyncConfirmationDialogTimeout);
 
 // Waits for the signin email confirmation dialog to get displayed, then
 // executes javascript to perform |action|. Returns false if failed to dismiss
 // the dialog before |timeout|.
 bool CompleteSigninEmailConfirmationDialog(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     base::TimeDelta timeout,
     SigninEmailConfirmationDialog::Action action);
 
@@ -107,7 +105,7 @@ bool CompleteSigninEmailConfirmationDialog(
 // javascript to click on done button. Returns false if dialog wasn't
 // dismissed before |timeout|.
 bool CompleteProfileCustomizationDialog(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     base::TimeDelta timeout = kSyncConfirmationDialogTimeout);
 
 // Waits for an element from the sign-in page to appear.

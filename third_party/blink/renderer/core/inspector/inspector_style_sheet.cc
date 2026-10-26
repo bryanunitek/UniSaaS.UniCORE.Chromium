@@ -27,8 +27,9 @@
 
 #include <algorithm>
 #include <memory>
+#include <ranges>
 
-#include "base/containers/adapters.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/renderer/core/css/css_container_rule.h"
 #include "third_party/blink/renderer/core/css/css_counter_style_rule.h"
 #include "third_party/blink/renderer/core/css/css_font_palette_values_rule.h"
@@ -205,7 +206,8 @@ BuildSpecificityComponents(const CSSSelector* selector) {
   }
   auto components =
       std::make_unique<protocol::Array<protocol::CSS::SpecificityComponent>>();
-  for (const Vector<const CSSSelector*>& compound : base::Reversed(compounds)) {
+  for (const Vector<const CSSSelector*>& compound :
+       std::views::reverse(compounds)) {
     for (const CSSSelector* simple_selector : compound) {
       std::array<uint8_t, 3> tuple =
           simple_selector->SimpleSelectorSpecificityTuple();
@@ -2171,11 +2173,12 @@ void InspectorStyleSheet::InnerSetText(const String& text,
   if (mark_as_locally_modified) {
     Element* element = OwnerStyleElement();
     if (element) {
-      resource_container_->StoreStyleElementContent(element->GetDomNodeId(),
-                                                    text);
+      resource_container_->StoreStyleElementContent(
+          DOMNodeIdType(element->GetDomNodeId()), text);
     } else if (origin_ == protocol::CSS::StyleSheetOriginEnum::Inspector) {
       resource_container_->StoreStyleElementContent(
-          page_style_sheet_->OwnerDocument()->GetDomNodeId(), text);
+          DOMNodeIdType(page_style_sheet_->OwnerDocument()->GetDomNodeId()),
+          text);
     } else {
       resource_container_->StoreStyleSheetContent(FinalURL(), text);
     }
@@ -2247,7 +2250,8 @@ InspectorStyleSheet::BuildObjectForStyleSheetInfo() {
           .setFrameId(frame ? IdentifiersFactory::FrameId(frame) : "")
           .setIsInline(style_sheet->IsInline() && !StartsAtZero())
           .setIsConstructed(style_sheet->IsConstructed())
-          .setIsMutable(style_sheet->Contents()->IsMutable())
+          .setIsMutable(style_sheet->IsConstructed() ||
+                        style_sheet->Contents()->IsMutable())
           .setStartLine(start.line_.ZeroBasedInt())
           .setStartColumn(start.column_.ZeroBasedInt())
           .setLength(text_length)
@@ -3015,7 +3019,7 @@ bool InspectorStyleSheet::InlineStyleSheetText(String* out) {
   }
 
   result = resource_container_->LoadStyleElementContent(
-      owner_element->GetDomNodeId(), out);
+      DOMNodeIdType(owner_element->GetDomNodeId()), out);
 
   if (!result) {
     *out = owner_element->textContent();
@@ -3038,7 +3042,8 @@ bool InspectorStyleSheet::InspectorStyleSheetText(String* result) {
     return false;
   }
   if (resource_container_->LoadStyleElementContent(
-          page_style_sheet_->OwnerDocument()->GetDomNodeId(), result)) {
+          DOMNodeIdType(page_style_sheet_->OwnerDocument()->GetDomNodeId()),
+          result)) {
     return true;
   }
   *result = "";

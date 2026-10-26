@@ -11,7 +11,7 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -24,6 +24,7 @@
 #include "content/public/test/navigation_simulator.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace safe_browsing {
 
@@ -40,15 +41,15 @@ class ChromeClientSideDetectionHostDelegateTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUpOnMainThread();
     ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
         browser(), GURL("http://foo/0"),
-        WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        WindowOpenDisposition::kNewForegroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
     navigation_observer_manager_ =
         SafeBrowsingNavigationObserverManagerFactory::GetForBrowserContext(
             profile);
-    ASSERT_TRUE(browser()->tab_strip_model()->GetActiveWebContents());
+    ASSERT_TRUE(browser()->GetTabStripModel()->GetActiveWebContents());
     navigation_observer_ = std::make_unique<SafeBrowsingNavigationObserver>(
-        browser()->tab_strip_model()->GetActiveWebContents(),
+        browser()->GetTabStripModel()->GetActiveWebContents(),
         HostContentSettingsMapFactory::GetForProfile(profile),
         navigation_observer_manager_);
   }
@@ -93,7 +94,7 @@ IN_PROC_BROWSER_TEST_F(ChromeClientSideDetectionHostDelegateTest,
 
   std::unique_ptr<ChromeClientSideDetectionHostDelegate> csd_host_delegate =
       std::make_unique<ChromeClientSideDetectionHostDelegate>(
-          browser()->tab_strip_model()->GetActiveWebContents());
+          browser()->GetTabStripModel()->GetActiveWebContents());
   csd_host_delegate->SetNavigationObserverManagerForTesting(
       navigation_observer_manager_);
   std::unique_ptr<ClientPhishingRequest> verdict(new ClientPhishingRequest);
@@ -123,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(ChromeClientSideDetectionHostDelegateTest,
 
   std::unique_ptr<ChromeClientSideDetectionHostDelegate> csd_host_delegate =
       std::make_unique<ChromeClientSideDetectionHostDelegate>(
-          browser()->tab_strip_model()->GetActiveWebContents());
+          browser()->GetTabStripModel()->GetActiveWebContents());
   std::unique_ptr<ClientPhishingRequest> verdict(new ClientPhishingRequest);
   csd_host_delegate->AddReferrerChain(verdict.get(), GURL("http://b.com/"),
                                       content::GlobalRenderFrameHostId());

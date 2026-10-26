@@ -51,6 +51,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
@@ -182,8 +183,7 @@ void HTMLMarqueeElement::setLoop(int value, ExceptionState& exception_state) {
   if (value <= 0 && value != -1) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        StrCat({"The provided value (", String::Number(value),
-                ") is neither positive nor -1."}));
+        Format("The provided value ({}) is neither positive nor -1.", value));
     return;
   }
   SetIntegralAttribute(html_names::kLoopAttr, value);
@@ -195,12 +195,14 @@ void HTMLMarqueeElement::start() {
 
   RequestAnimationFrameCallback* callback =
       MakeGarbageCollected<RequestAnimationFrameCallback>(this);
-  continue_callback_request_id_ = GetDocument().RequestAnimationFrame(callback);
+  continue_callback_request_id_ = GetDocument().RequestAnimationFrame(
+      callback, FrameCallbackType::kInternal);
 }
 
 void HTMLMarqueeElement::stop() {
   if (continue_callback_request_id_) {
-    GetDocument().CancelAnimationFrame(continue_callback_request_id_);
+    GetDocument().CancelAnimationFrame(continue_callback_request_id_,
+                                       FrameCallbackType::kInternal);
     continue_callback_request_id_ = 0;
     return;
   }

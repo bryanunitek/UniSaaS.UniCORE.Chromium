@@ -5,9 +5,8 @@
 #include "chrome/browser/ui/views/permissions/permission_prompt_desktop.h"
 
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/location_bar/location_bar_override_data.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "components/tabs/public/tab_interface.h"
 
@@ -55,18 +54,10 @@ PermissionPromptDesktop::GetTabSwitchingBehavior() {
       kDestroyPromptButKeepRequestPending;
 }
 
-std::optional<gfx::Rect> PermissionPromptDesktop::GetViewBoundsInScreen()
-    const {
-  return std::nullopt;
-}
-
 views::Widget* PermissionPromptDesktop::GetPromptBubbleWidgetForTesting() {
   return nullptr;
 }
 
-bool PermissionPromptDesktop::ShouldFinalizeRequestAfterDecided() const {
-  return true;
-}
 
 std::vector<permissions::ElementAnchoredBubbleVariant>
 PermissionPromptDesktop::GetPromptVariants() const {
@@ -83,7 +74,5 @@ bool PermissionPromptDesktop::IsAskPrompt() const {
 }
 
 LocationBar* PermissionPromptDesktop::GetLocationBar() {
-  BrowserWindow* browser_window =
-      browser_ ? BrowserWindow::FromBrowser(browser_) : nullptr;
-  return browser_window ? browser_window->GetLocationBar() : nullptr;
+  return location_bar::GetLocationBarForWebContents(web_contents());
 }

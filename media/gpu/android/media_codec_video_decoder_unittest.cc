@@ -4,6 +4,7 @@
 
 #include "media/gpu/android/media_codec_video_decoder.h"
 
+#include "base/android/android_info.h"
 #include "base/android/jni_android.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -40,7 +41,6 @@
 
 using base::test::RunCallback;
 using testing::_;
-using testing::InvokeWithoutArgs;
 using testing::NiceMock;
 using testing::NotNull;
 using testing::Return;
@@ -80,6 +80,21 @@ bool HasAv1Decoder() {
 
   return false;
 }
+
+class FakeCdmContextRef final : public CdmContextRef {
+ public:
+  FakeCdmContextRef(bool* destroyed, base::OnceClosure on_destroyed)
+      : destroyed_(destroyed), on_destroyed_(std::move(on_destroyed)) {}
+  ~FakeCdmContextRef() override {
+    *destroyed_ = true;
+    std::move(on_destroyed_).Run();
+  }
+  CdmContext* GetCdmContext() override { return nullptr; }
+
+ private:
+  raw_ptr<bool> destroyed_;
+  base::OnceClosure on_destroyed_;
+};
 
 }  // namespace
 
@@ -146,7 +161,10 @@ class MockVideoFrameFactory : public VideoFrameFactory {
 
 class MediaCodecVideoDecoderTest : public testing::TestWithParam<VideoCodec> {
  public:
-  MediaCodecVideoDecoderTest() : codec_(GetParam()) {}
+  MediaCodecVideoDecoderTest() : codec_(GetParam()) {
+    scoped_feature_list_.InitAndDisableFeature(
+        kUseMediaCryptoRequiresSecureDecoderComponent);
+  }
 
   void SetUp() override {
     uint8_t data = 0;
@@ -340,6 +358,7 @@ class MediaCodecVideoDecoderTest : public testing::TestWithParam<VideoCodec> {
   }
 
  protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
   const VideoCodec codec_;
   base::test::SingleThreadTaskEnvironment task_environment_;
   base::android::ScopedJavaGlobalRef<jobject> java_surface_;
@@ -488,11 +507,10 @@ TEST_P(MediaCodecVideoDecoderTest, AfterInitCompletesTheCodecIsPolled) {
   // Run a RunLoop until the first time the codec is polled for an available
   // input buffer.
   base::RunLoop loop;
-  EXPECT_CALL(*codec, DequeueInputBuffer(_, _))
-      .WillOnce(InvokeWithoutArgs([&loop]() {
-        loop.Quit();
-        return MediaCodecResult::Codes::kTryAgainLater;
-      }));
+  EXPECT_CALL(*codec, DequeueInputBuffer(_, _)).WillOnce([&loop]() {
+    loop.Quit();
+    return MediaCodecResult::Codes::kTryAgainLater;
+  });
   loop.Run();
 }
 
@@ -867,6 +885,104 @@ TEST_P(MediaCodecVideoDecoderTest, CdmInitializationWorksForL3) {
   ASSERT_TRUE(codec_allocator_->most_recent_config->media_crypto);
 }
 
+TEST_P(MediaCodecVideoDecoderTest,
+       EncryptedStreamReleasesCodecSynchronouslyOnDestroy) {
+  CreateCdm(true, false);
+  codec_allocator_->hold_codec_released_cb = true;
+  bool cdm_ref_destroyed = false;
+  base::RunLoop cdm_ref_destroyed_loop;
+  EXPECT_CALL(*cdm_, GetCdmContextRef()).WillOnce([&]() {
+    return std::make_unique<FakeCdmContextRef>(
+        &cdm_ref_destroyed, cdm_ref_destroyed_loop.QuitClosure());
+  });
+
+  ASSERT_TRUE(InitializeWithOverlay_OneDecodePending(
+      TestVideoConfig::NormalEncrypted(codec_)));
+  auto* codec = codec_allocator_->ProvideMockCodecAsync();
+  ASSERT_TRUE(codec);
+
+  // When a CDM is attached, DestroyAsync() must release the codec immediately
+  // and keep CdmContextRef alive until the ReleaseMediaCodec callback finishes,
+  // even after DeleteSoon(this) destroys MediaCodecVideoDecoder.
+  EXPECT_CALL(*codec_allocator_, MockReleaseMediaCodec(codec)).WillOnce([&]() {
+    EXPECT_FALSE(cdm_ref_destroyed);
+  });
+  mcvd_.reset();
+  testing::Mock::VerifyAndClearExpectations(codec_allocator_.get());
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(cdm_ref_destroyed);
+
+  codec_allocator_->RunPendingCodecReleased();
+  cdm_ref_destroyed_loop.Run();
+  EXPECT_TRUE(cdm_ref_destroyed);
+}
+
+TEST_P(MediaCodecVideoDecoderTest,
+       EncryptedStreamKeepsCdmAliveWhenDestroyedDuringCodecCreation) {
+  CreateCdm(true, false);
+  codec_allocator_->hold_codec_released_cb = true;
+  bool cdm_ref_destroyed = false;
+  base::RunLoop cdm_ref_destroyed_loop;
+  EXPECT_CALL(*cdm_, GetCdmContextRef()).WillOnce([&]() {
+    return std::make_unique<FakeCdmContextRef>(
+        &cdm_ref_destroyed, cdm_ref_destroyed_loop.QuitClosure());
+  });
+
+  ASSERT_TRUE(InitializeWithOverlay_OneDecodePending(
+      TestVideoConfig::NormalEncrypted(codec_)));
+
+  // Destroy MCVD while CreateMediaCodecAsync() is still in flight.
+  mcvd_.reset();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(cdm_ref_destroyed);
+
+  // When codec creation finishes after MCVD destruction,
+  // OnCodecConfiguredInternal must release the codec and keep CdmContextRef
+  // alive until release completes.
+  EXPECT_CALL(*codec_allocator_, MockReleaseMediaCodec(NotNull()));
+  ASSERT_TRUE(codec_allocator_->ProvideMockCodecAsync());
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(cdm_ref_destroyed);
+
+  codec_allocator_->RunPendingCodecReleased();
+  cdm_ref_destroyed_loop.Run();
+  EXPECT_TRUE(cdm_ref_destroyed);
+}
+
+TEST_P(MediaCodecVideoDecoderTest,
+       EncryptedStreamKeepsCdmAliveWhenCodecReleasedBeforeDestroy) {
+  CreateCdm(true, true);
+  codec_allocator_->hold_codec_released_cb = true;
+  bool cdm_ref_destroyed = false;
+  base::RunLoop cdm_ref_destroyed_loop;
+  EXPECT_CALL(*cdm_, GetCdmContextRef()).WillOnce([&]() {
+    return std::make_unique<FakeCdmContextRef>(
+        &cdm_ref_destroyed, cdm_ref_destroyed_loop.QuitClosure());
+  });
+
+  auto* overlay = InitializeWithOverlay_OneDecodePending(
+      TestVideoConfig::NormalEncrypted(codec_));
+  ASSERT_TRUE(overlay);
+  auto* codec = codec_allocator_->ProvideMockCodecAsync();
+  ASSERT_TRUE(codec);
+
+  // Losing the secure overlay surface triggers ReleaseCodec() before
+  // DestroyAsync().
+  EXPECT_CALL(*codec_allocator_, MockReleaseMediaCodec(codec));
+  overlay->OnSurfaceDestroyed();
+  testing::Mock::VerifyAndClearExpectations(codec_allocator_.get());
+
+  // Destroying MCVD while that ReleaseMediaCodec() is still in flight must keep
+  // CdmContextRef alive until the release callback runs.
+  mcvd_.reset();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(cdm_ref_destroyed);
+
+  codec_allocator_->RunPendingCodecReleased();
+  cdm_ref_destroyed_loop.Run();
+  EXPECT_TRUE(cdm_ref_destroyed);
+}
+
 TEST_P(MediaCodecVideoDecoderTest, CdmInitializationWorksForL1) {
   // Make sure that MCVD uses the cdm, and sends it along to the codec.
   CreateCdm(true, true);
@@ -1116,6 +1232,42 @@ TEST_P(MediaCodecVideoDecoderVp9Test, HdrMetadataIsIncludedInCodecConfig) {
   EXPECT_TRUE(InitializeFully_OneDecodePending(config));
 
   EXPECT_EQ(hdr_metadata, codec_allocator_->most_recent_config->hdr_metadata);
+}
+
+TEST_P(MediaCodecVideoDecoderTest, BlockModelDisabledWhenFeatureDisabled) {
+  base::test::ScopedFeatureList scoped_features;
+  scoped_features.InitAndDisableFeature(kMediaCodecBlockModel);
+  EXPECT_CALL(*device_info_, SdkVersionFull())
+      .WillRepeatedly(
+          Return(base::android::android_info::SDK_VERSION_FULL_CINNAMON_BUN_2));
+
+  VideoDecoderConfig config = TestVideoConfig::Normal(codec_);
+  ASSERT_TRUE(InitializeFully_OneDecodePending(config));
+  EXPECT_FALSE(codec_allocator_->most_recent_config->use_block_model);
+}
+
+TEST_P(MediaCodecVideoDecoderTest, BlockModelDisabledOnEarlierSdkVersion) {
+  base::test::ScopedFeatureList scoped_features;
+  scoped_features.InitAndEnableFeature(kMediaCodecBlockModel);
+  EXPECT_CALL(*device_info_, SdkVersionFull())
+      .WillRepeatedly(
+          Return(base::android::android_info::SDK_VERSION_FULL_CINNAMON_BUN_1));
+
+  VideoDecoderConfig config = TestVideoConfig::Normal(codec_);
+  ASSERT_TRUE(InitializeFully_OneDecodePending(config));
+  EXPECT_FALSE(codec_allocator_->most_recent_config->use_block_model);
+}
+
+TEST_P(MediaCodecVideoDecoderTest, BlockModelEnabledOnSupportedVersion) {
+  base::test::ScopedFeatureList scoped_features;
+  scoped_features.InitAndEnableFeature(kMediaCodecBlockModel);
+  EXPECT_CALL(*device_info_, SdkVersionFull())
+      .WillRepeatedly(
+          Return(base::android::android_info::SDK_VERSION_FULL_CINNAMON_BUN_2));
+
+  VideoDecoderConfig config = TestVideoConfig::Normal(codec_);
+  ASSERT_TRUE(InitializeFully_OneDecodePending(config));
+  EXPECT_TRUE(codec_allocator_->most_recent_config->use_block_model);
 }
 
 static std::vector<VideoCodec> GetTestList() {

@@ -23,6 +23,7 @@
 #include "components/history/core/browser/history_service.h"
 #include "components/sync/protocol/history_specifics.pb.h"
 #include "components/sync/protocol/proto_value_conversions.h"
+#include "ui/base/page_transition_types.h"
 
 namespace sync_pb {
 
@@ -416,16 +417,9 @@ void AddUrlToHistoryWithTimestamp(int index,
                                   const base::Time& timestamp) {
   AddToHistory(GetHistoryServiceFromClient(index), url, transition, source,
                timestamp);
-  if (sync_datatype_helper::test()->UseVerifier()) {
-    AddToHistory(HistoryServiceFactory::GetForProfile(
-                     sync_datatype_helper::test()->verifier(),
-                     ServiceAccessType::IMPLICIT_ACCESS),
-                 url, transition, source, timestamp);
-  }
 
   // Wait until the AddPage() request has completed so we know the change has
-  // filtered down to the sync observers (don't need to wait for the
-  // verifier profile since it doesn't sync).
+  // filtered down to the sync observers.
   WaitForHistoryDBThread(index);
 }
 
@@ -440,6 +434,7 @@ LocalHistoryMatchChecker::LocalHistoryMatchChecker(
 LocalHistoryMatchChecker::~LocalHistoryMatchChecker() = default;
 
 bool LocalHistoryMatchChecker::IsExitConditionSatisfied(std::ostream* os) {
+  *os << "Waiting for local history visits to match: ";
   for (const auto& [url, matcher] : matchers_) {
     history::VisitVector visits =
         GetVisitsForURLFromClient(profile_index_, url);
@@ -471,6 +466,7 @@ void ServerHistoryMatchChecker::OnCommit(
 }
 
 bool ServerHistoryMatchChecker::IsExitConditionSatisfied(std::ostream* os) {
+  *os << "Waiting for server history entities to match: ";
   std::vector<sync_pb::HistorySpecifics> entities =
       SyncEntitiesToHistorySpecifics(
           fake_server()->GetSyncEntitiesByDataType(syncer::HISTORY));

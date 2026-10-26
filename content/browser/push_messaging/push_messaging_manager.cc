@@ -53,16 +53,16 @@ const char kIncognitoPushUnsupportedMessage[] =
 // These UMA methods are called from the SW and/or UI threads. Racey but ok, see
 // https://groups.google.com/a/chromium.org/d/msg/chromium-dev/FNzZRJtN2aw/Aw0CWAXJJ1kJ
 void RecordRegistrationStatus(blink::mojom::PushRegistrationStatus status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   UMA_HISTOGRAM_ENUMERATION("PushMessaging.RegistrationStatus", status);
 }
 void RecordUnregistrationStatus(blink::mojom::PushUnregistrationStatus status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   UMA_HISTOGRAM_ENUMERATION("PushMessaging.UnregistrationStatus", status);
 }
 void RecordGetRegistrationStatus(
     blink::mojom::PushGetRegistrationStatus status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   UMA_HISTOGRAM_ENUMERATION("PushMessaging.GetRegistrationStatus", status);
 }
 
@@ -147,7 +147,7 @@ PushMessagingManager::PushMessagingManager(
       is_incognito_(
           render_process_host_->GetBrowserContext()->IsOffTheRecord()),
       service_available_(!!GetService()) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 }
 
 PushMessagingManager::~PushMessagingManager() {}
@@ -155,6 +155,10 @@ PushMessagingManager::~PushMessagingManager() {}
 void PushMessagingManager::AddPushMessagingReceiver(
     mojo::PendingReceiver<blink::mojom::PushMessaging> receiver) {
   receivers_.Add(this, std::move(receiver));
+}
+
+bool PushMessagingManager::IsRequestFromFencedFrame() const {
+  return false;
 }
 
 // Subscribe methods, merged in order of use.
@@ -165,8 +169,17 @@ void PushMessagingManager::Subscribe(
     blink::mojom::PushSubscriptionOptionsPtr options,
     bool user_gesture,
     SubscribeCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(options);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  CHECK(options, base::NotFatalUntil::M159);
+
+  // The renderer should have checked and disallowed the request for fenced
+  // frames and thrown an exception in blink::PushManager. Ignore the request
+  // and mark it as bad if it didn't happen for some reason.
+  if (IsRequestFromFencedFrame()) {
+    bad_message::ReceivedBadMessage(&*render_process_host_,
+                                    bad_message::PMM_SUBSCRIBE_IN_FENCED_FRAME);
+    return;
+  }
 
   RegisterData data;
 
@@ -186,9 +199,11 @@ void PushMessagingManager::Subscribe(
     return;
   }
 
-  // The renderer should have checked and disallowed the request for fenced
-  // frames and thrown an exception in blink::PushManager. Report a bad message
-  // if the renderer if the renderer side check didn't happen for some reason.
+  // Registrations created on behalf of a fenced frame may not have push
+  // subscriptions. Together with the IsRequestFromFencedFrame() check above
+  // this also catches requests from service workers running in such a frame
+  // (which use a worker-bound instance of this class) when they target their
+  // own registration.
   if (service_worker_registration->ancestor_frame_type() ==
       blink::mojom::AncestorFrameType::kFencedFrame) {
     bad_message::ReceivedBadMessage(render_process_host_->GetDeprecatedID(),
@@ -207,8 +222,9 @@ void PushMessagingManager::Subscribe(
 
   data.requesting_storage_key = storage_key;
 
-  DCHECK(!(data.options->application_server_key.empty() &&
-           IsRequestFromDocument(render_frame_id_)));
+  CHECK(!(data.options->application_server_key.empty() &&
+          IsRequestFromDocument(render_frame_id_)),
+        base::NotFatalUntil::M159);
 
   int64_t registration_id = data.service_worker_registration_id;
   service_worker_context_->GetRegistrationUserData(
@@ -222,12 +238,13 @@ void PushMessagingManager::DidCheckForExistingRegistration(
     RegisterData data,
     const std::vector<std::string>& subscription_id_and_sender_id,
     blink::ServiceWorkerStatusCode service_worker_status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   // Validate the stored subscription against the subscription request made by
   // the developer. The authorized entity must match.
   if (service_worker_status == blink::ServiceWorkerStatusCode::kOk) {
-    DCHECK_EQ(2u, subscription_id_and_sender_id.size());
+    CHECK_EQ(2u, subscription_id_and_sender_id.size(),
+             base::NotFatalUntil::M159);
 
     const std::string& subscription_id = subscription_id_and_sender_id[0];
     const std::string& stored_sender_id = subscription_id_and_sender_id[1];
@@ -275,15 +292,16 @@ void PushMessagingManager::DidGetSenderIdFromStorage(
     RegisterData data,
     const std::vector<std::string>& stored_sender_id,
     blink::ServiceWorkerStatusCode service_worker_status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (service_worker_status != blink::ServiceWorkerStatusCode::kOk) {
     SendSubscriptionError(std::move(data),
                           blink::mojom::PushRegistrationStatus::NO_SENDER_ID);
     return;
   }
-  DCHECK_EQ(1u, stored_sender_id.size());
+  CHECK_EQ(1u, stored_sender_id.size(), base::NotFatalUntil::M159);
   // We should only be here because no sender info was supplied to subscribe().
-  DCHECK(data.options->application_server_key.empty());
+  CHECK(data.options->application_server_key.empty(),
+        base::NotFatalUntil::M159);
 
   const std::string application_server_key_string(
       std::string(data.options->application_server_key.begin(),
@@ -301,7 +319,7 @@ void PushMessagingManager::DidGetSenderIdFromStorage(
 }
 
 void PushMessagingManager::Register(PushMessagingManager::RegisterData data) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   PushMessagingService* push_service = GetService();
   if (!push_service) {
     if (!is_incognito_) {
@@ -333,8 +351,9 @@ void PushMessagingManager::Register(PushMessagingManager::RegisterData data) {
           // detect whether incognito is active.
           bool user_gesture = data.user_gesture;
 
-          DCHECK_EQ(data.requesting_storage_key,
-                    render_frame_host_impl->GetStorageKey());
+          CHECK_EQ(data.requesting_storage_key,
+                   render_frame_host_impl->GetStorageKey(),
+                   base::NotFatalUntil::M159);
 
           render_frame_host_impl->GetBrowserContext()
               ->GetPermissionController()
@@ -378,8 +397,10 @@ void PushMessagingManager::Register(PushMessagingManager::RegisterData data) {
 void PushMessagingManager::DidRequestPermissionInIncognito(
     RegisterData data,
     PermissionResult permission_result) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   // Notification permission should always be denied in incognito.
+  // TODO(crbug.com/560302146): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK_EQ(blink::mojom::PermissionStatus::DENIED, permission_result.status);
   SendSubscriptionError(
       std::move(data),
@@ -397,7 +418,7 @@ void PushMessagingManager::DidRegister(
     const std::vector<uint8_t>& p256dh,
     const std::vector<uint8_t>& auth,
     blink::mojom::PushRegistrationStatus status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   // TODO(crbug.com/41275327): Handle the case where |push_subscription_id| and
   // |data.existing_subscription_id| are not the same. Right now we just
@@ -430,7 +451,7 @@ void PushMessagingManager::PersistRegistration(
     const std::vector<uint8_t>& p256dh,
     const std::vector<uint8_t>& auth,
     blink::mojom::PushRegistrationStatus status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   blink::StorageKey storage_key = data.requesting_storage_key;
   int64_t registration_id = data.service_worker_registration_id;
   std::string application_server_key(
@@ -454,7 +475,7 @@ void PushMessagingManager::DidPersistRegistration(
     const std::vector<uint8_t>& auth,
     blink::mojom::PushRegistrationStatus push_registration_status,
     blink::ServiceWorkerStatusCode service_worker_status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (service_worker_status == blink::ServiceWorkerStatusCode::kOk) {
     SendSubscriptionSuccess(std::move(data), push_registration_status, endpoint,
                             expiration_time, p256dh, auth);
@@ -468,7 +489,7 @@ void PushMessagingManager::DidPersistRegistration(
 void PushMessagingManager::SendSubscriptionError(
     RegisterData data,
     blink::mojom::PushRegistrationStatus status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   std::move(data.callback).Run(status, nullptr /* subscription */);
   RecordRegistrationStatus(status);
 }
@@ -480,11 +501,11 @@ void PushMessagingManager::SendSubscriptionSuccess(
     const std::optional<base::Time>& expiration_time,
     const std::vector<uint8_t>& p256dh,
     const std::vector<uint8_t>& auth) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (!service_available_) {
     // This shouldn't be possible in incognito mode, since we've already checked
     // that we have an existing registration. Hence it's ok to throw an error.
-    DCHECK(!is_incognito_);
+    CHECK(!is_incognito_, base::NotFatalUntil::M159);
     SendSubscriptionError(
         std::move(data),
         blink::mojom::PushRegistrationStatus::SERVICE_NOT_AVAILABLE);
@@ -504,7 +525,14 @@ void PushMessagingManager::SendSubscriptionSuccess(
 
 void PushMessagingManager::Unsubscribe(int64_t service_worker_registration_id,
                                        UnsubscribeCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+
+  if (IsRequestFromFencedFrame()) {
+    bad_message::ReceivedBadMessage(
+        &*render_process_host_, bad_message::PMM_UNSUBSCRIBE_IN_FENCED_FRAME);
+    return;
+  }
+
   scoped_refptr<ServiceWorkerRegistration> service_worker_registration =
       service_worker_context_->GetLiveRegistration(
           service_worker_registration_id);
@@ -536,11 +564,11 @@ void PushMessagingManager::UnsubscribeHavingGottenSenderId(
     const url::Origin& requesting_origin,
     const std::vector<std::string>& sender_ids,
     blink::ServiceWorkerStatusCode service_worker_status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   std::string sender_id;
   if (service_worker_status == blink::ServiceWorkerStatusCode::kOk) {
-    DCHECK_EQ(1u, sender_ids.size());
+    CHECK_EQ(1u, sender_ids.size(), base::NotFatalUntil::M159);
     sender_id = sender_ids[0];
   }
 
@@ -548,7 +576,7 @@ void PushMessagingManager::UnsubscribeHavingGottenSenderId(
   if (!push_service) {
     // This shouldn't be possible in incognito mode, since we've already checked
     // that we have an existing registration. Hence it's ok to throw an error.
-    DCHECK(!is_incognito_);
+    CHECK(!is_incognito_, base::NotFatalUntil::M159);
     DidUnregister(
         std::move(callback),
         blink::mojom::PushUnregistrationStatus::SERVICE_NOT_AVAILABLE);
@@ -566,7 +594,7 @@ void PushMessagingManager::DidUnregister(
     UnsubscribeCallback callback,
     blink::mojom::PushUnregistrationStatus unregistration_status) {
   // Only called from SW thread, but would be safe to call from UI thread.
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   switch (unregistration_status) {
     case blink::mojom::PushUnregistrationStatus::SUCCESS_UNREGISTERED:
     case blink::mojom::PushUnregistrationStatus::PENDING_NETWORK_ERROR:
@@ -599,7 +627,14 @@ void PushMessagingManager::DidUnregister(
 void PushMessagingManager::GetSubscription(
     int64_t service_worker_registration_id,
     GetSubscriptionCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+
+  if (IsRequestFromFencedFrame()) {
+    bad_message::ReceivedBadMessage(
+        &*render_process_host_,
+        bad_message::PMM_GET_SUBSCRIPTION_IN_FENCED_FRAME);
+    return;
+  }
 
   scoped_refptr<ServiceWorkerRegistration> registration =
       service_worker_context_->GetLiveRegistration(
@@ -629,12 +664,13 @@ void PushMessagingManager::DidGetSubscription(
     const std::vector<std::string>&
         push_subscription_id_and_application_server_key,
     blink::ServiceWorkerStatusCode service_worker_status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   blink::mojom::PushGetRegistrationStatus get_status =
       blink::mojom::PushGetRegistrationStatus::STORAGE_ERROR;
   switch (service_worker_status) {
     case blink::ServiceWorkerStatusCode::kOk: {
-      DCHECK_EQ(2u, push_subscription_id_and_application_server_key.size());
+      CHECK_EQ(2u, push_subscription_id_and_application_server_key.size(),
+               base::NotFatalUntil::M159);
       const std::string& push_subscription_id =
           push_subscription_id_and_application_server_key[0];
       const std::string& application_server_key =
@@ -733,7 +769,7 @@ void PushMessagingManager::GetSubscriptionDidGetInfo(
     const std::optional<base::Time>& expiration_time,
     const std::vector<uint8_t>& p256dh,
     const std::vector<uint8_t>& auth) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (is_valid) {
     auto options = blink::mojom::PushSubscriptionOptions::New();
     options->user_visible_only = user_visible_only;
@@ -782,7 +818,7 @@ void PushMessagingManager::GetSubscriptionDidUnsubscribe(
     GetSubscriptionCallback callback,
     blink::mojom::PushGetRegistrationStatus get_status,
     blink::mojom::PushUnregistrationStatus unsubscribe_status) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   std::move(callback).Run(get_status, nullptr /* subscription */);
 }
 
@@ -792,7 +828,7 @@ void PushMessagingManager::GetSubscriptionInfo(
     const std::string& sender_id,
     const std::string& push_subscription_id,
     PushMessagingService::SubscriptionInfoCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   PushMessagingService* push_service = GetService();
   if (!push_service) {
     std::move(callback).Run(

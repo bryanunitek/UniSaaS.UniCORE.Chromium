@@ -8,7 +8,9 @@
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/notimplemented.h"
+#include "base/rand_util.h"
 #include "base/task/common/task_annotator.h"
 #include "gpu/command_buffer/service/graphite_shared_context.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
@@ -61,7 +63,7 @@ SkCanvas* SkiaOutputDevice::ScopedPaint::GetCanvas() {
 }
 
 GrSemaphoresSubmitted SkiaOutputDevice::ScopedPaint::Flush(
-    VulkanContextProvider* vulkan_context_provider,
+    gpu::VulkanContextProvider* vulkan_context_provider,
     std::vector<GrBackendSemaphore> end_semaphores,
     base::OnceClosure on_finished) {
   return device_->Flush(sk_surface_, vulkan_context_provider,
@@ -137,8 +139,21 @@ void SkiaOutputDevice::Submit(
   } else {
     auto* graphite_shared_context = context_state->graphite_shared_context();
     CHECK(graphite_shared_context);
+
+    const bool should_record_metric = base::ShouldRecordSubsampledMetric(0.01);
+    base::TimeTicks start_time;
+    if (should_record_metric) {
+      start_time = base::TimeTicks::Now();
+    }
+
     graphite_shared_context->submit(sync_cpu ? skgpu::graphite::SyncToCpu::kYes
                                              : skgpu::graphite::SyncToCpu::kNo);
+    if (should_record_metric) {
+      UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+          "GPU.Graphite.SkiaOutputDeviceSubmitDurationUs",
+          base::TimeTicks::Now() - start_time, base::Microseconds(1),
+          base::Seconds(1), 50);
+    }
   }
   std::move(callback).Run();
 }
@@ -312,7 +327,7 @@ SkCanvas* SkiaOutputDevice::GetCanvas(SkSurface* sk_surface) {
 
 GrSemaphoresSubmitted SkiaOutputDevice::Flush(
     SkSurface* sk_surface,
-    VulkanContextProvider* vulkan_context_provider,
+    gpu::VulkanContextProvider* vulkan_context_provider,
     std::vector<GrBackendSemaphore> end_semaphores,
     base::OnceClosure on_finished) {
   CHECK(sk_surface);

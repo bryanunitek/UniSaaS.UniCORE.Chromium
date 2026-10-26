@@ -31,6 +31,7 @@ class MessageBannerCoordinator {
     private final MessageBannerView mView;
     private final View mParentView;
     private final PropertyModel mModel;
+    private final PropertyModelChangeProcessor mModelChangeProcessor;
     private final RunnableTimer mTimer;
     private final Supplier<Long> mAutodismissDurationMs;
     private final Runnable mOnTimeUp;
@@ -68,7 +69,8 @@ class MessageBannerCoordinator {
         mView = view;
         mParentView = parentView;
         mModel = model;
-        PropertyModelChangeProcessor.create(model, view, MessageBannerViewBinder::bind);
+        mModelChangeProcessor =
+                PropertyModelChangeProcessor.create(model, view, MessageBannerViewBinder::bind);
         mMediator =
                 new MessageBannerMediator(
                         model,
@@ -215,6 +217,11 @@ class MessageBannerCoordinator {
         mMediator.setOnTouchRunnable(runnable);
     }
 
+    void destroy() {
+        mMediator.destroy();
+        mModelChangeProcessor.destroy();
+    }
+
     private void updateAccessibilityPane(int toIndex) {
         String msg = "";
         if (toIndex == Position.FRONT) {
@@ -237,9 +244,11 @@ class MessageBannerCoordinator {
      * @param isShowing Whether the message is visible. {@code true} if shown, {@code false} if
      *     hidden.
      */
-    private void sendPaneChangeAccessibilityEvent(boolean isShowing) {
+    @VisibleForTesting
+    void sendPaneChangeAccessibilityEvent(boolean isShowing) {
         AccessibilityEvent event =
                 AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
+        event.setSource(mView);
         if (isShowing) {
             event.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_APPEARED);
         } else {

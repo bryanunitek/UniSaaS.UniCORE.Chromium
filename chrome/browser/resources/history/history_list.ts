@@ -7,14 +7,17 @@ import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
 import 'chrome://resources/cr_elements/cr_infinite_list/cr_infinite_list.js';
 import 'chrome://resources/cr_elements/cr_lazy_render/cr_lazy_render_lit.js';
+import 'chrome://resources/cr_elements/cr_toast/cr_toast.js';
 import './history_item.js';
 
 import type {HistoryEntry, HistoryQuery, PageCallbackRouter, QueryState} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
+import {OpenConversationResult} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import type {CrActionMenuElement} from 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import type {CrDialogElement} from 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
 import type {CrInfiniteListElement} from 'chrome://resources/cr_elements/cr_infinite_list/cr_infinite_list.js';
 import type {CrLazyRenderLitElement} from 'chrome://resources/cr_elements/cr_lazy_render/cr_lazy_render_lit.js';
+import type {CrToastElement} from 'chrome://resources/cr_elements/cr_toast/cr_toast.js';
 import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -42,6 +45,7 @@ type HistoryCheckboxSelectEvent = CustomEvent<{
 
 export interface HistoryListElement {
   $: {
+    errorToast: CrToastElement,
     infiniteList: CrInfiniteListElement<HistoryEntry>,
     dialog: CrLazyRenderLitElement<CrDialogElement>,
     noResults: HTMLElement,
@@ -152,6 +156,7 @@ export class HistoryListElement extends HistoryListElementBase {
     after: null,
     includeUserVisits: true,
     includeActorVisits: true,
+    clientIds: [],
   };
   accessor scrollTarget: HTMLElement = document.documentElement;
   accessor scrollOffset: number = 0;
@@ -462,14 +467,50 @@ export class HistoryListElement extends HistoryListElementBase {
   }
 
   /**
-   * Called when the page is scrolled to near the bottom of the list.
+   * Requests the next batch of history results, unless loading is disabled or
+   * a query is already in progress.
    */
-  private onScrollToBottom_() {
+  private loadMoreHistory_() {
     if (this.resultLoadingDisabled_ || this.queryState.querying) {
       return;
     }
 
     this.fire('query-history', true);
+  }
+
+  protected onViewportFilled_() {
+    this.loadMoreIfListNotScrollable_();
+  }
+
+  /**
+   * Each query returns a fixed number of visits, which can merge into only a
+   * few entries. If the rendered list is too short to scroll, the user can't
+   * trigger loading more by scrolling, so request more results directly.
+   */
+  private loadMoreIfListNotScrollable_() {
+    if (!this.isActive || this.historyData_.length === 0) {
+      return;
+    }
+
+    const listRect = this.$.infiniteList.getBoundingClientRect();
+    if (listRect.height === 0) {
+      // The list has not been laid out yet (e.g. it is hidden).
+      return;
+    }
+
+    // Use on-screen positions, not scrollHeight. `scrollTarget` may be <html>
+    // or <body>, which never scroll here, so scrollHeight would say the list
+    // fits even when it doesn't. Limit the result to window.innerHeight so the
+    // check doesn't rely on CSS sizing <html> to the screen. Without that CSS
+    // (e.g. in tests), <html> grows with its content and we'd keep loading
+    // results the user doesn't need.
+    const viewportBottom = Math.min(
+        this.scrollTarget.getBoundingClientRect().bottom, window.innerHeight);
+    if (listRect.bottom > viewportBottom) {
+      return;
+    }
+
+    this.loadMoreHistory_();
   }
 
   private onOpenMenu_(e: OpenMenuEvent) {
@@ -515,6 +556,54 @@ export class HistoryListElement extends HistoryListElementBase {
     BrowserProxyImpl.getInstance().handler.removeBookmark(
         this.actionMenuModel_!.item.url);
     this.fire('remove-bookmark-stars', this.actionMenuModel_!.item.url);
+    this.closeMenu_();
+  }
+
+  private isCriticalActionsEnabled_(): boolean {
+    return loadTimeData.getBoolean('isCriticalActionsEnabled');
+  }
+
+  private isChatLinkoutsEnabled_(): boolean {
+    return loadTimeData.valueExists('isCriticalActionsChatLinkoutsEnabled') &&
+        loadTimeData.getBoolean('isCriticalActionsChatLinkoutsEnabled');
+  }
+
+  protected canShowGoToGeminiChat_(): boolean {
+    return this.isCriticalActionsEnabled_() && this.isChatLinkoutsEnabled_() &&
+        (this.actionMenuModel_?.item.criticalActions?.length ?? 0) > 0;
+  }
+
+  protected async onGoToGeminiChatClick_() {
+    BrowserProxyImpl.getInstance().recordAction('EntryMenuGoToGeminiChat');
+    this.recordContextMenuActionsHistogram_(
+        VisitContextMenuAction.GO_TO_GEMINI_CHAT_CLICKED);
+
+    const actionId = this.actionMenuModel_?.item.criticalActions?.[0]?.id;
+    this.closeMenu_();
+
+    if (actionId) {
+      const {result} = await BrowserProxyImpl.getInstance()
+                           .handler.openCriticalActionConversation(actionId);
+      if (result !== OpenConversationResult.kSuccess) {
+        this.$.errorToast.show();
+      }
+    }
+  }
+
+  protected canShowReviewGeminiActivity_(): boolean {
+    return this.isCriticalActionsEnabled_() && !this.isChatLinkoutsEnabled_() &&
+        (!!this.actionMenuModel_?.item.isActorVisit ||
+         (this.actionMenuModel_?.item.criticalActions?.length ?? 0) > 0);
+  }
+
+  protected onReviewGeminiActivityClick_(e: MouseEvent) {
+    BrowserProxyImpl.getInstance().recordAction(
+        'EntryMenuReviewGeminiActivity');
+    this.recordContextMenuActionsHistogram_(
+        VisitContextMenuAction.REVIEW_GEMINI_ACTIVITY_CLICKED);
+
+    BrowserProxyImpl.getInstance().navigateToUrl(
+        loadTimeData.getString('myActivityGeminiAppsUrl'), '_blank', e);
     this.closeMenu_();
   }
 
@@ -681,6 +770,7 @@ export class HistoryListElement extends HistoryListElementBase {
       oldTarget.removeEventListener('scroll', this.scrollListener_);
     }
     if (this.scrollTarget) {
+      this.lastOffsetHeight_ = this.scrollTarget.offsetHeight;
       this.resizeObserver_.observe(this.scrollTarget);
       this.scrollTarget.addEventListener('scroll', this.scrollListener_);
       this.fillCurrentViewport();
@@ -705,7 +795,7 @@ export class HistoryListElement extends HistoryListElementBase {
     const lowerScroll = this.scrollTarget.scrollHeight -
         this.scrollTarget.scrollTop - this.scrollTarget.offsetHeight;
     if (lowerScroll < 500) {
-      this.onScrollToBottom_();
+      this.loadMoreHistory_();
     }
     this.fire('scroll-timeout-for-test');
   }
@@ -716,6 +806,10 @@ export class HistoryListElement extends HistoryListElementBase {
 
   protected onListBlurredChanged_(e: CustomEvent<{value: boolean}>) {
     this.listBlurred_ = e.detail.value;
+  }
+
+  protected onRestoreListFocus_() {
+    this.listBlurred_ = false;
   }
 
   private getSelectedEntries_(): HistoryEntry[] {

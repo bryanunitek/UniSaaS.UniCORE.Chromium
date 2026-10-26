@@ -37,6 +37,7 @@
 #include "gpu/config/gpu_finch_features.h"
 #include "skia/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gl/gl_switches.h"
 
 #if BUILDFLAG(SKIA_USE_DAWN)
 #include "third_party/dawn/include/dawn/dawn_proc.h"
@@ -305,16 +306,18 @@ void PixelTest::SetUpSkiaRenderer(gfx::SurfaceOrigin output_surface_origin) {
 }
 
 void PixelTest::TearDown() {
-  // Tear down the client side context provider, etc.
+  // Tear down the client side resource provider.
   child_resource_provider_->ShutdownAndReleaseAllResources();
   child_resource_provider_.reset();
-  child_context_provider_.reset();
 
   // Tear down the skia renderer.
   software_renderer_ = nullptr;
   renderer_.reset();
   resource_provider_.reset();
   output_surface_.reset();
+
+  // Tear down the client side context provider.
+  child_context_provider_.reset();
 }
 
 void PixelTest::SetUpSoftwareRenderer() {
@@ -344,7 +347,7 @@ void PixelTest::SetUpSoftwareRenderer() {
 void PixelTest::FinishSetup() {
   CHECK(renderer_);
   renderer_->Initialize();
-  renderer_->SetVisible(true);
+  renderer_->SetHasBackBuffers(true);
 
   child_context_provider_ =
       base::MakeRefCounted<viz::TestInProcessContextProvider>(

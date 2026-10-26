@@ -6,16 +6,21 @@
 
 #include <memory>
 
+#include "build/branding_buildflags.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/webui/webui_toolbar/webui_toolbar_test_utils.h"
 #include "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api_data_model.mojom.h"
 #include "components/omnibox/browser/location_bar_model_util.h"
+#include "components/omnibox/browser/vector_icons.h"
 #include "components/security_state/core/security_state.h"
 #include "components/vector_icons/vector_icons.h"
+#include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/models/image_model.h"
 #include "ui/color/color_provider.h"
+#include "ui/gfx/image/image.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/views/vector_icons.h"
 
@@ -31,6 +36,7 @@ class IconTableTest : public testing::Test, public IconTable::Delegate {
     icon_table_.PermitFallbackVectorRasterizationForTesting();
     color_provider_.SetColorForTesting(ui::kColorIcon, SK_ColorBLUE);
     color_provider_.SetColorForTesting(ui::kColorMenuIcon, SK_ColorGREEN);
+    color_provider_.SetColorForTesting(ui::kColorSysPrimary, SK_ColorCYAN);
   }
 
   // IconTable::Delegate:
@@ -41,6 +47,9 @@ class IconTableTest : public testing::Test, public IconTable::Delegate {
   float GetScaleFactor() const override { return scale_factor_; }
 
  protected:
+  // Setup the browser task environment so thread-checkers for particular
+  // browser threads function properly.
+  content::BrowserTaskEnvironment task_environment_;
   ui::ColorProvider color_provider_;
   float scale_factor_ = 1.5f;
 
@@ -239,10 +248,38 @@ TEST_F(IconTableTest, RegisterImageModelTryReuse) {
   ASSERT_FALSE(i4.is_null());
   EXPECT_EQ(i3, i4);
 
-  EXPECT_THAT(
-      icon_table_.GetFullState(),
-      testing::UnorderedElementsAre(MatchesIconUpdate(std::ref(expected_i1)),
-                                    MatchesBitmapIconUpdate(2u)));
+  // Distinct gfx::Image instances with identical bitmap contents should be
+  // reused via deep comparison.
+  SkBitmap bitmap1;
+  bitmap1.allocN32Pixels(16, 16);
+  bitmap1.eraseColor(SK_ColorRED);
+
+  SkBitmap bitmap2;
+  bitmap2.allocN32Pixels(16, 16);
+  bitmap2.eraseColor(SK_ColorRED);
+
+  gfx::Image img1 = gfx::Image::CreateFrom1xBitmap(bitmap1);
+  gfx::Image img2 = gfx::Image::CreateFrom1xBitmap(bitmap2);
+
+  // Verify that operator== returns false for distinct gfx::Image instances.
+  EXPECT_NE(img1, img2);
+  EXPECT_NE(ui::ImageModel::FromImage(img1), ui::ImageModel::FromImage(img2));
+
+  toolbar_ui_api::IconHandle img_handle1 =
+      icon_table_.RegisterImageModelTryReuse(ui::ImageModel::FromImage(img1),
+                                             toolbar_ui_api::IconHandle());
+  ASSERT_FALSE(img_handle1.is_null());
+
+  toolbar_ui_api::IconHandle img_handle2 =
+      icon_table_.RegisterImageModelTryReuse(ui::ImageModel::FromImage(img2),
+                                             img_handle1);
+  ASSERT_FALSE(img_handle2.is_null());
+  EXPECT_EQ(img_handle1, img_handle2);
+
+  EXPECT_THAT(icon_table_.GetFullState(),
+              testing::UnorderedElementsAre(
+                  MatchesIconUpdate(std::ref(expected_i1)),
+                  MatchesBitmapIconUpdate(2u), MatchesBitmapIconUpdate(3u)));
 }
 
 TEST_F(IconTableTest, ScaleFactorChange) {
@@ -303,10 +340,106 @@ TEST_F(IconTableTest, Colors) {
       2u, "webui-toolbar:password_manager", IconType::kIconSet,
       /*color=*/SK_ColorGREEN);
 
+  toolbar_ui_api::IconHandle i3 =
+      icon_table_.RegisterImageModel(ui::ImageModel::FromVectorIcon(
+          omnibox::kStarFilledIcon, ui::kColorSysPrimary));
+  ASSERT_FALSE(i3.is_null());
+  auto expected_i3 = toolbar_ui_api::mojom::IconUpdate::New(
+      3u, "webui-toolbar:star_filled", IconType::kIconSet,
+      /*color=*/SK_ColorCYAN);
+
   EXPECT_THAT(
       icon_table_.GetFullState(),
       testing::UnorderedElementsAre(MatchesIconUpdate(std::ref(expected_i1)),
-                                    MatchesIconUpdate(std::ref(expected_i2))));
+                                    MatchesIconUpdate(std::ref(expected_i2)),
+                                    MatchesIconUpdate(std::ref(expected_i3))));
+}
+
+TEST_F(IconTableTest, OnThemeChanged) {
+  // Register a rasterized bitmap icon (need_rasterize = true)
+  toolbar_ui_api::IconHandle i1 = icon_table_.RegisterImageModel(
+      ui::ImageModel::FromVectorIcon(vector_icons::kCardboardFilledIcon));
+  ASSERT_FALSE(i1.is_null());
+
+  // Register a mapped vector icon with a color provider color
+  toolbar_ui_api::IconHandle i2 =
+      icon_table_.RegisterImageModel(ui::ImageModel::FromVectorIcon(
+          vector_icons::kPasswordManagerIcon, ui::kColorIcon));
+  ASSERT_FALSE(i2.is_null());
+
+  // Consume initial pending updates
+  auto expected_i2_initial = toolbar_ui_api::mojom::IconUpdate::New(
+      2u, "webui-toolbar:password_manager", IconType::kIconSet,
+      /*color=*/SK_ColorBLUE);
+
+  EXPECT_THAT(icon_table_.TakePendingUpdates(),
+              testing::UnorderedElementsAre(
+                  MatchesBitmapIconUpdate(1u),
+                  MatchesIconUpdate(std::ref(expected_i2_initial))));
+  EXPECT_TRUE(icon_table_.TakePendingUpdates().empty());
+
+  // Update color provider colors to simulate a theme change (e.g. dark mode)
+  color_provider_.SetColorForTesting(ui::kColorIcon, SK_ColorRED);
+
+  // Notify icon table that the theme changed
+  icon_table_.OnThemeChanged();
+
+  // Verify TakePendingUpdates() re-evaluates all registered icons and returns
+  // updated rasterization / color data for both bitmap and vector icons.
+  auto expected_i2_updated = toolbar_ui_api::mojom::IconUpdate::New(
+      2u, "webui-toolbar:password_manager", IconType::kIconSet,
+      /*color=*/SK_ColorRED);
+
+  EXPECT_THAT(icon_table_.TakePendingUpdates(),
+              testing::UnorderedElementsAre(
+                  MatchesBitmapIconUpdate(1u),
+                  MatchesIconUpdate(std::ref(expected_i2_updated))));
+
+  // A subsequent call to TakePendingUpdates() without changes must be empty,
+  // confirming rasterized_scale_ was maintained and pending updates cleared.
+  EXPECT_TRUE(icon_table_.TakePendingUpdates().empty());
+}
+
+TEST_F(IconTableTest, ForceRerasterize) {
+  // Register a rasterized bitmap icon whose rasterization depends on
+  // GetColorProvider().
+  toolbar_ui_api::IconHandle i1 =
+      icon_table_.RegisterImageModel(ui::ImageModel::FromVectorIcon(
+          vector_icons::kCardboardFilledIcon, ui::kColorIcon));
+  ASSERT_FALSE(i1.is_null());
+
+  // First call to TakePendingUpdates() invokes ToMojom(), rasterizing with
+  // initial colors and setting rasterized_scale_.
+  auto updates1 = icon_table_.TakePendingUpdates();
+  ASSERT_EQ(1u, updates1.size());
+  std::string initial_png_data_url = updates1[0]->icon_url_or_name.value();
+  EXPECT_TRUE(base::StartsWith(initial_png_data_url, "data:image/png;base64"));
+
+  // Change ColorProvider colors to simulate theme switch.
+  color_provider_.SetColorForTesting(ui::kColorIcon, SK_ColorGREEN);
+
+  // Calling ToMojom() when rasterized_scale_ matches scale_factor_ must reuse
+  // initial_png_data_url without re-rasterizing.
+  auto full_state_before_reraster = icon_table_.GetFullState();
+  ASSERT_EQ(1u, full_state_before_reraster.size());
+  EXPECT_EQ(initial_png_data_url,
+            full_state_before_reraster[0]->icon_url_or_name.value());
+
+  // Trigger OnThemeChanged() which calls ForceRerasterize(), resetting
+  // rasterized_scale_.
+  icon_table_.OnThemeChanged();
+
+  // TakePendingUpdates() now re-rasterizes with the updated ColorProvider
+  // color.
+  auto updates2 = icon_table_.TakePendingUpdates();
+  ASSERT_EQ(1u, updates2.size());
+  std::string rerasterized_png_data_url = updates2[0]->icon_url_or_name.value();
+  EXPECT_TRUE(
+      base::StartsWith(rerasterized_png_data_url, "data:image/png;base64"));
+
+  // Verify that re-rasterization generated a new PNG data URL matching the new
+  // color.
+  EXPECT_NE(initial_png_data_url, rerasterized_png_data_url);
 }
 
 TEST_F(IconTableTest, AllSecurityIconsAreMapped) {
@@ -318,29 +451,100 @@ TEST_F(IconTableTest, AllSecurityIconsAreMapped) {
   };
 
   for (auto level : levels) {
-    security_state::VisibleSecurityState state;
-
     // Standard icon
-    const gfx::VectorIcon& standard_icon =
-        location_bar_model::GetSecurityVectorIcon(level, &state);
-    EXPECT_TRUE(icon_table_.RegisterVectorIcon(standard_icon).has_value())
-        << "Missing standard icon for SecurityLevel: " << level;
+    {
+      security_state::VisibleSecurityState state;
+      const gfx::VectorIcon& standard_icon =
+          location_bar_model::GetSecurityVectorIcon(level, &state);
+      EXPECT_TRUE(icon_table_.RegisterVectorIcon(standard_icon).has_value())
+          << "Missing standard icon for SecurityLevel: " << level;
+    }
 
     // HTTPS Upgraded (WARNING triggers no_encryption)
-    state.is_https_only_mode_upgraded = true;
-    const gfx::VectorIcon& https_upgraded_icon =
-        location_bar_model::GetSecurityVectorIcon(level, &state);
-    EXPECT_TRUE(icon_table_.RegisterVectorIcon(https_upgraded_icon).has_value())
-        << "Missing HTTPS upgraded icon for SecurityLevel: " << level;
+    {
+      security_state::VisibleSecurityState state;
+      state.is_https_only_mode_upgraded = true;
+      const gfx::VectorIcon& https_upgraded_icon =
+          location_bar_model::GetSecurityVectorIcon(level, &state);
+      EXPECT_TRUE(
+          icon_table_.RegisterVectorIcon(https_upgraded_icon).has_value())
+          << "Missing HTTPS upgraded icon for SecurityLevel: " << level;
+    }
 
     // Enterprise block (DANGEROUS triggers domain/business)
-    state.malicious_content_status =
-        security_state::MALICIOUS_CONTENT_STATUS_MANAGED_POLICY_BLOCK;
-    const gfx::VectorIcon& enterprise_icon =
-        location_bar_model::GetSecurityVectorIcon(level, &state);
-    EXPECT_TRUE(icon_table_.RegisterVectorIcon(enterprise_icon).has_value())
-        << "Missing enterprise block icon for SecurityLevel: " << level;
+    {
+      security_state::VisibleSecurityState state;
+      state.malicious_content_status =
+          security_state::MALICIOUS_CONTENT_STATUS_MANAGED_POLICY_BLOCK;
+      const gfx::VectorIcon& enterprise_icon =
+          location_bar_model::GetSecurityVectorIcon(level, &state);
+      EXPECT_TRUE(icon_table_.RegisterVectorIcon(enterprise_icon).has_value())
+          << "Missing enterprise block icon for SecurityLevel: " << level;
+    }
+
+    // Suspicious site (DANGEROUS triggers shield_question)
+    {
+      security_state::VisibleSecurityState state;
+      state.malicious_content_status =
+          security_state::MALICIOUS_CONTENT_STATUS_WARNABLE_SUSPICIOUS_SITE;
+      const gfx::VectorIcon& suspicious_site_icon =
+          location_bar_model::GetSecurityVectorIcon(level, &state);
+      EXPECT_TRUE(
+          icon_table_.RegisterVectorIcon(suspicious_site_icon).has_value())
+          << "Missing suspicious site icon for SecurityLevel: " << level;
+    }
   }
+}
+
+TEST_F(IconTableTest, ExtensionIconsAreMapped) {
+  const gfx::VectorIcon* extension_icons[] = {
+      &omnibox::kExtensionFilledIcon,
+      &omnibox::kExtensionAppOldIcon,
+      &vector_icons::kExtensionFilledIcon,
+      &vector_icons::kExtensionOldIcon,
+      &vector_icons::kExtensionChromeRefreshOldIcon,
+      &vector_icons::kChromeExtensionIcon,
+      &vector_icons::kChromeExtensionCheckIcon,
+      &vector_icons::kChromeExtensionOffIcon,
+      &vector_icons::kExtensionOffOldIcon,
+      &vector_icons::kExtensionOnOldIcon,
+  };
+
+  for (const gfx::VectorIcon* icon : extension_icons) {
+    EXPECT_TRUE(icon_table_.RegisterVectorIcon(*icon).has_value())
+        << "Missing mapping for extension icon: "
+        << (icon->name ? icon->name : "(null)");
+  }
+}
+
+TEST_F(IconTableTest, PinnedToolbarActionIconsAreMapped) {
+  const gfx::VectorIcon* pinned_action_icons[] = {
+      &vector_icons::kMicFilledIcon,           &vector_icons::kMicOldIcon,
+      &vector_icons::kMicChromeRefreshOldIcon, &vector_icons::kScienceIcon,
+      &vector_icons::kScienceOldIcon,
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+      &vector_icons::kAudioSparkIcon,
+#endif
+  };
+
+  for (const gfx::VectorIcon* icon : pinned_action_icons) {
+    EXPECT_TRUE(icon_table_.RegisterVectorIcon(*icon).has_value())
+        << "Missing mapping for pinned action icon: "
+        << (icon->name ? icon->name : "(null)");
+  }
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  IconTable audio_spark_table(this);
+  std::optional<toolbar_ui_api::IconHandle> handle =
+      audio_spark_table.RegisterVectorIcon(vector_icons::kAudioSparkIcon);
+  ASSERT_TRUE(handle.has_value());
+  auto expected = toolbar_ui_api::mojom::IconUpdate::New(
+      1u, "internal-icons:audio_spark", IconType::kIconSet,
+      /*color=*/std::nullopt);
+  EXPECT_THAT(
+      audio_spark_table.GetFullState(),
+      testing::UnorderedElementsAre(MatchesIconUpdate(std::ref(expected))));
+#endif
 }
 
 }  // namespace

@@ -4,8 +4,8 @@
 
 #include "third_party/blink/renderer/core/layout/grid/layout_grid.h"
 
-#include "third_party/blink/renderer/core/layout/break_token_algorithm_data.h"
 #include "third_party/blink/renderer/core/layout/fragmentation_utils.h"
+#include "third_party/blink/renderer/core/layout/grid/grid_break_token_data.h"
 #include "third_party/blink/renderer/core/layout/layout_result.h"
 
 namespace blink {
@@ -117,13 +117,14 @@ bool LayoutGrid::GridPlacementInputsDidChange(
 void LayoutGrid::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutBlock::StyleDidChange(diff, old_style, style_change_context);
+  LayoutBlock::StyleDidChange(diff, old_style, new_style, style_change_context);
   if (!old_style)
     return;
 
-  if (GridPlacementInputsDidChange(StyleRef(), *old_style, diff)) {
+  if (GridPlacementInputsDidChange(new_style, *old_style, diff)) {
     SetGridPlacementDirty(true);
   }
 }
@@ -169,7 +170,8 @@ const GridLayoutData* LayoutGrid::LayoutData() const {
 }
 
 wtf_size_t LayoutGrid::StitchedRowGapIndex(const PhysicalBoxFragment& fragment,
-                                           wtf_size_t gap_index) const {
+                                           wtf_size_t gap_index,
+                                           std::optional<wtf_size_t>) const {
   NOT_DESTROYED();
   // This should only be reached when painting gap decorations in a fragmented
   // context.
@@ -181,7 +183,8 @@ wtf_size_t LayoutGrid::StitchedRowGapIndex(const PhysicalBoxFragment& fragment,
   if (!previous_break_token) {
     return gap_index;
   }
-  return previous_break_token->TokenData()->GetFirstUnprocessedRowGapIndex() +
+  return To<GridBreakTokenData>(previous_break_token->TokenData())
+             ->GetFirstUnprocessedRowGapIndex() +
          gap_index;
 }
 

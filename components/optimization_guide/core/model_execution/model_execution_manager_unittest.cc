@@ -22,12 +22,12 @@
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "components/optimization_guide/core/model_execution/model_execution_fetcher.h"
+#include "components/optimization_guide/core/model_execution/remote_model_execution_common.h"
 #include "components/optimization_guide/core/model_execution/remote_model_executor.h"
-#include "components/optimization_guide/core/model_execution/test/request_builder.h"
 #include "components/optimization_guide/core/model_quality/model_quality_log_entry.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
+#include "components/optimization_guide/proto/features/compose.pb.h"
 #include "components/optimization_guide/proto/features/forms_classifications.pb.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
@@ -107,6 +107,12 @@ class RemoteResponseHolder {
   base::WeakPtrFactory<RemoteResponseHolder> weak_ptr_factory_{this};
 };
 
+proto::ComposeRequest UserInputRequest(const std::string& input) {
+  proto::ComposeRequest req;
+  req.mutable_generate_params()->set_user_input(input);
+  return req;
+}
+
 proto::ExecuteResponse BuildComposeResponse(const std::string& output) {
   proto::ComposeResponse compose_response;
   compose_response.set_output(output);
@@ -138,7 +144,7 @@ class ModelExecutionManagerTest : public testing::Test {
   bool SimulateResponse(const std::string& content,
                         net::HttpStatusCode http_status) {
     return test_url_loader_factory_.SimulateResponseForPendingRequest(
-        switches::GetModelExecutionServiceURL().spec(), content, http_status,
+        GetModelExecutionServiceBaseURL().spec(), content, http_status,
         network::TestURLLoaderFactory::kUrlMatchPrefix);
   }
 
@@ -256,8 +262,7 @@ TEST_F(ModelExecutionManagerTest, MultipleParallelRequestsLimit) {
       /*log_ai_data_request=*/nullptr, ModelExecutionServiceType::kDefault,
       response_holder2.GetCallback());
 
-  test_url_loader_factory()->EraseResponse(
-      switches::GetModelExecutionServiceURL());
+  test_url_loader_factory()->EraseResponse(GetModelExecutionServiceBaseURL());
   EXPECT_TRUE(SimulateSuccessfulResponse());
 
   EXPECT_TRUE(response_holder2.GetFinalStatus());

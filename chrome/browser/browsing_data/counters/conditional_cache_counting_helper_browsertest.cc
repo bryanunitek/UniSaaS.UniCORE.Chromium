@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/browsing_data/content/conditional_cache_counting_helper.h"
+
 #include <algorithm>
 #include <memory>
 #include <set>
@@ -12,9 +14,8 @@
 #include "base/strings/strcat.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "components/browsing_data/content/conditional_cache_counting_helper.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
@@ -103,7 +104,7 @@ class ConditionalCacheCountingHelperBrowserTest : public InProcessBrowserTest {
                                            TRAFFIC_ANNOTATION_FOR_TESTS);
       simple_loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
           browser()
-              ->profile()
+              ->GetProfile()
               ->GetDefaultStoragePartition()
               ->GetURLLoaderFactoryForBrowserProcess()
               .get(),
@@ -122,7 +123,7 @@ class ConditionalCacheCountingHelperBrowserTest : public InProcessBrowserTest {
 // Tests that ConditionalCacheCountingHelper only counts those cache entries
 // that match the condition.
 // TODO(crbug.com/40816226): The test is flaky on Win.
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_CHROMEOS) && defined(MEMORY_SANITIZER))
 #define MAYBE_Count DISABLED_Count
 #else
 #define MAYBE_Count Count

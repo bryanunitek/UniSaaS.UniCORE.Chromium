@@ -11,8 +11,9 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/link_capturing/link_capturing_feature_test_support.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/test/web_app_navigation_browsertest.h"
@@ -106,7 +107,7 @@ class WebAppScopeExtensionsBrowserTest
   }
 
   WebAppProvider& provider() {
-    return *WebAppProvider::GetForTest(browser()->profile());
+    return *WebAppProvider::GetForTest(browser()->GetProfile());
   }
 
   bool LinkCapturingEnabledByDefault() const {
@@ -130,12 +131,12 @@ class WebAppScopeExtensionsBrowserTest
 
     // Turn on link capturing if needed.
 #if BUILDFLAG(IS_CHROMEOS)
-    apps::AppReadinessWaiter(browser()->profile(), app_id).Await();
+    apps::AppReadinessWaiter(browser()->GetProfile(), app_id).Await();
 #endif
     if (!LinkCapturingEnabledByDefault()) {
-      EXPECT_THAT(
-          apps::test::EnableLinkCapturingByUser(browser()->profile(), app_id),
-          base::test::HasValue());
+      EXPECT_THAT(apps::test::EnableLinkCapturingByUser(browser()->GetProfile(),
+                                                        app_id),
+                  base::test::HasValue());
     }
     return app_id;
   }
@@ -162,7 +163,7 @@ class WebAppScopeExtensionsBrowserTest
       return std::nullopt;
     }
 
-    Browser* app_browser = browser_created_observer.Wait();
+    BrowserWindowInterface* app_browser = browser_created_observer.Wait();
     if (!web_app::AppBrowserController::From(app_browser)) {
       chrome::CloseWindow(app_browser);
       return std::nullopt;
@@ -305,7 +306,8 @@ IN_PROC_BROWSER_TEST_P(WebAppScopeExtensionsBrowserTest,
           })",
           {primary_server_.GetURL("/simple.html").spec()}, nullptr));
 
-  Browser* app_browser = LaunchWebAppBrowserAndWait(app_->app_id());
+  BrowserWindowInterface* app_browser =
+      LaunchWebAppBrowserAndWait(app_->app_id());
   content::WebContents* app_web_contents =
       app_browser->tab_strip_model()->GetActiveWebContents();
 
@@ -385,9 +387,9 @@ IN_PROC_BROWSER_TEST_P(WebAppScopeExtensionsBrowserTest,
       browser(), secondary_server_.GetURL(
                      "/web_apps/get_manifest.html?app_a.webmanifest"));
   if (!LinkCapturingEnabledByDefault()) {
-    ASSERT_EQ(
-        apps::test::EnableLinkCapturingByUser(browser()->profile(), app_a_id),
-        base::ok());
+    ASSERT_EQ(apps::test::EnableLinkCapturingByUser(browser()->GetProfile(),
+                                                    app_a_id),
+              base::ok());
   }
 
   // Install App B (regular scope on primary_server_, extended scope on
@@ -426,9 +428,9 @@ IN_PROC_BROWSER_TEST_P(WebAppScopeExtensionsBrowserTest,
 
     // Re-enable link capturing for app A, which (on Chrome OS) disables
     // capturing for app B.
-    ASSERT_THAT(
-        apps::test::EnableLinkCapturingByUser(browser()->profile(), app_a_id),
-        base::test::HasValue());
+    ASSERT_THAT(apps::test::EnableLinkCapturingByUser(browser()->GetProfile(),
+                                                      app_a_id),
+                base::test::HasValue());
     EXPECT_EQ(app_a_id, GetCapturingAppId(app_a_page_url));
     EXPECT_EQ(std::nullopt, GetCapturingAppId(app_b_page_url));
   }
@@ -461,9 +463,9 @@ IN_PROC_BROWSER_TEST_P(WebAppScopeExtensionsBrowserTest,
       browser(), secondary_server_.GetURL(
                      "/web_apps/get_manifest.html?app_a.webmanifest"));
   if (!LinkCapturingEnabledByDefault()) {
-    ASSERT_EQ(
-        apps::test::EnableLinkCapturingByUser(browser()->profile(), app_a_id),
-        base::ok());
+    ASSERT_EQ(apps::test::EnableLinkCapturingByUser(browser()->GetProfile(),
+                                                    app_a_id),
+              base::ok());
   }
 
   // Install App B (regular scope on primary_server_, extended scope on

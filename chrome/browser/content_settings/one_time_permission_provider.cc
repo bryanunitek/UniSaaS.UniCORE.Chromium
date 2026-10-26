@@ -9,6 +9,7 @@
 #include <set>
 
 #include "base/power_monitor/power_monitor.h"
+#include "base/scoped_observation.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
@@ -16,8 +17,8 @@
 #include "chrome/browser/permissions/one_time_permissions_tracker.h"
 #include "chrome/browser/permissions/one_time_permissions_tracker_factory.h"
 #include "chrome/browser/permissions/one_time_permissions_tracker_observer.h"
-#include "components/content_settings/core/browser/content_settings_registry.h"
 #include "components/content_settings/core/browser/content_settings_rule.h"
+#include "components/content_settings/core/browser/content_settings_utils.h"
 #include "components/content_settings/core/browser/permission_settings_registry.h"
 #include "components/content_settings/core/browser/user_modifiable_provider.h"
 #include "components/content_settings/core/common/content_settings.h"
@@ -29,12 +30,55 @@
 #include "components/permissions/permission_util.h"
 #include "url/gurl.h"
 
+class OneTimePermissionProvider::TrackerObserver
+    : public OneTimePermissionsTrackerObserver {
+ public:
+  TrackerObserver(OneTimePermissionProvider* provider,
+                  OneTimePermissionsTracker* tracker)
+      : provider_(provider) {
+    observation_.Observe(tracker);
+  }
+  ~TrackerObserver() override = default;
+
+  // OneTimePermissionsTrackerObserver:
+  void OnLastPageFromOriginClosed(const url::Origin& origin) override {
+    provider_->OnLastPageFromOriginClosed(origin);
+  }
+
+  void OnAllTabsInBackgroundTimerExpired(
+      const url::Origin& origin,
+      const BackgroundExpiryType& expiry_type) override {
+    provider_->OnAllTabsInBackgroundTimerExpired(
+        origin, expiry_type == BackgroundExpiryType::kLongTimeout);
+  }
+
+  void OnCapturingVideoExpired(const url::Origin& origin) override {
+    provider_->OnCapturingVideoExpired(origin);
+  }
+
+  void OnCapturingAudioExpired(const url::Origin& origin) override {
+    provider_->OnCapturingAudioExpired(origin);
+  }
+
+  void OnShutdown() override {
+    observation_.Reset();
+    provider_->OnShutdown();
+  }
+
+ private:
+  raw_ptr<OneTimePermissionProvider> provider_;
+  base::ScopedObservation<OneTimePermissionsTracker,
+                          OneTimePermissionsTrackerObserver>
+      observation_{this};
+};
+
 OneTimePermissionProvider::OneTimePermissionProvider(
     OneTimePermissionsTracker* one_time_permissions_tracker)
     : one_time_permissions_tracker_(one_time_permissions_tracker),
+      tracker_observer_(
+          std::make_unique<TrackerObserver>(this,
+                                            one_time_permissions_tracker_)),
       clock_(base::DefaultClock::GetInstance()) {
-  one_time_permissions_tracker_->AddObserver(this);
-
   // The PowerMonitor is initialized in content_main_runner_impl.cc before the
   // main function for the browser process is run (which initializes the HCSM).
   // For this reason, the PowerMonitor is always initialized before the observer
@@ -238,23 +282,19 @@ void OneTimePermissionProvider::ExpireWebsiteSetting(
 
 void OneTimePermissionProvider::OnSuspend() {
   std::vector<ContentSettingEntry> patterns_to_delete;
-  auto* registry = content_settings::ContentSettingsRegistry::GetInstance();
 
-  for (const auto* info : *registry) {
-    auto setting_type = info->website_settings_info()->type();
-    if (permissions::PermissionUtil::DoesStoreTemporaryGrantsInHcsm(
-            setting_type)) {
-      std::unique_ptr<content_settings::RuleIterator> rule_iterator(
-          value_map_.GetRuleIterator(setting_type));
+  for (auto setting_type :
+       content_settings::GetTypesWithTemporaryGrantsInHcsm()) {
+    std::unique_ptr<content_settings::RuleIterator> rule_iterator(
+        value_map_.GetRuleIterator(setting_type));
 
-      while (rule_iterator && rule_iterator->HasNext()) {
-        auto rule = rule_iterator->Next();
-        patterns_to_delete.emplace_back(setting_type, rule->primary_pattern,
-                                        rule->secondary_pattern);
-        permissions::PermissionUmaUtil::RecordOneTimePermissionEvent(
-            setting_type,
-            permissions::OneTimePermissionEvent::EXPIRED_ON_SUSPEND);
-      }
+    while (rule_iterator && rule_iterator->HasNext()) {
+      auto rule = rule_iterator->Next();
+      patterns_to_delete.emplace_back(setting_type, rule->primary_pattern,
+                                      rule->secondary_pattern);
+      permissions::PermissionUmaUtil::RecordOneTimePermissionEvent(
+          setting_type,
+          permissions::OneTimePermissionEvent::EXPIRED_ON_SUSPEND);
     }
   }
 
@@ -279,17 +319,13 @@ void OneTimePermissionProvider::OnLastPageFromOriginClosed(
 // the origin.
 void OneTimePermissionProvider::OnAllTabsInBackgroundTimerExpired(
     const url::Origin& origin,
-    const OneTimePermissionsTrackerObserver::BackgroundExpiryType&
-        expiry_type) {
-  switch (expiry_type) {
-    case BackgroundExpiryType::kTimeout:
-      DeleteEntriesMatchingGURL(
-          permissions::PermissionUtil::GetGeolocationType(), origin.GetURL(),
-          permissions::OneTimePermissionEvent::EXPIRED_IN_BACKGROUND);
-      return;
-    case BackgroundExpiryType::kLongTimeout:
-      return;
+    bool is_long_timeout) {
+  if (is_long_timeout) {
+    return;
   }
+  DeleteEntriesMatchingGURL(
+      permissions::PermissionUtil::GetGeolocationType(), origin.GetURL(),
+      permissions::OneTimePermissionEvent::EXPIRED_IN_BACKGROUND);
 }
 
 // All tabs to the origin have not shown a tab indicator for video for a
@@ -320,16 +356,6 @@ void OneTimePermissionProvider::DeleteEntriesAndNotify(
     for (const auto& pattern : entries_to_delete) {
       value_map_.DeleteValue(pattern.primary_pattern, pattern.secondary_pattern,
                              pattern.type);
-
-      // In all the observable `OneTimePermissionsTrackerObserver` events
-      // which are emitted from the tracker, the tracker knows for which
-      // origins and content settings it can halt bookkeeping. However, the
-      // tracker isn't aware of externally deleted content settings. To
-      // prevent it from triggering observers for an already deleted content
-      // setting, we need to inform it about the deletion here (and only
-      // here).
-      one_time_permissions_tracker_->CleanupStateForExpiredContentSetting(
-          pattern.type, pattern.primary_pattern, pattern.secondary_pattern);
     }
   }
 
@@ -364,8 +390,5 @@ void OneTimePermissionProvider::DeleteEntriesMatchingGURL(
 }
 
 void OneTimePermissionProvider::OnShutdown() {
-  if (one_time_permissions_tracker_) {
-    one_time_permissions_tracker_->RemoveObserver(this);
-    one_time_permissions_tracker_ = nullptr;
-  }
+  one_time_permissions_tracker_ = nullptr;
 }

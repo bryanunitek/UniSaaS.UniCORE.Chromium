@@ -24,7 +24,6 @@ import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -33,6 +32,7 @@ import org.chromium.chrome.browser.search_engines.R;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.search_engines.settings.common.SiteSearchProperties;
 import org.chromium.components.favicon.LargeIconBridgeJni;
+import org.chromium.components.search_engines.SearchEngineSettingsDataProvider;
 import org.chromium.components.search_engines.TemplateUrl;
 import org.chromium.components.search_engines.TemplateUrlCategory;
 import org.chromium.components.search_engines.TemplateUrlService;
@@ -48,7 +48,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class CustomSearchEngineMediatorUnitTest {
     @Rule public MockitoRule mockitoRule = MockitoJUnit.rule();
 
@@ -58,6 +57,7 @@ public class CustomSearchEngineMediatorUnitTest {
     @Mock private ModelList mModelList;
     @Mock private Profile mProfile;
     @Mock private TemplateUrlService mTemplateUrlService;
+    @Mock private SearchEngineSettingsDataProvider mSettingsDataProvider;
     @Mock private TemplateUrl mTemplateUrl;
     @Mock private LargeIconBridgeJni mLargeIconBridgeJni;
     @Mock private Callback<TemplateUrl> mOnEditSearchEngine;
@@ -67,14 +67,14 @@ public class CustomSearchEngineMediatorUnitTest {
 
     @Before
     public void setUp() {
-        mContext = RuntimeEnvironment.application;
+        mContext = RuntimeEnvironment.getApplication();
         mResources = mContext.getResources();
         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeJni);
 
         List<TemplateUrl> urls = new ArrayList<>();
         urls.add(mTemplateUrl);
-        when(mTemplateUrlService.getTemplateUrlsByCategory(TemplateUrlCategory.DEFAULT))
+        when(mSettingsDataProvider.getTemplateUrlsByCategory(TemplateUrlCategory.DEFAULT))
                 .thenReturn(urls);
         when(mTemplateUrl.getKeyword()).thenReturn("keyword");
         when(mTemplateUrl.getShortName()).thenReturn("My Search Engine");
@@ -90,17 +90,22 @@ public class CustomSearchEngineMediatorUnitTest {
 
         mMediator =
                 new CustomSearchEngineMediator(
-                        mContext, mModelList, mProfile, mOnEditSearchEngine, mOnRemoveSearchEngine);
+                        mContext,
+                        mModelList,
+                        mProfile,
+                        mSettingsDataProvider,
+                        mOnEditSearchEngine,
+                        mOnRemoveSearchEngine);
     }
 
     @Test
     public void testRefreshList() {
-        Mockito.clearInvocations(mModelList, mTemplateUrlService);
+        Mockito.clearInvocations(mModelList, mTemplateUrlService, mSettingsDataProvider);
 
         mMediator.onTemplateURLServiceChanged();
 
         verify(mModelList).clear();
-        verify(mTemplateUrlService).getTemplateUrlsByCategory(TemplateUrlCategory.DEFAULT);
+        verify(mSettingsDataProvider).getTemplateUrlsByCategory(TemplateUrlCategory.DEFAULT);
         verify(mModelList).add(any(ListItem.class));
     }
 

@@ -328,6 +328,13 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
   RunTypedTest<kMacAttributes>("ax-insertion-point-line-number.html");
 }
 
+// TODO(crbug.com/548552911): This test shows the incorrect line number.
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
+                       AXInsertionPointLineNumberContenteditable) {
+  RunTypedTest<kMacAttributes>(
+      "ax-insertion-point-line-number-contenteditable.html");
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXInvalid) {
   RunTypedTest<kMacAttributes>("ax-invalid.html");
 }
@@ -535,6 +542,12 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
   RunTypedTest<kMacTextMarker>("ax-text-marker-range-for-ui-element.html");
 }
 
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
+                       AXLineTextMarkerRangeForTextMarker) {
+  RunTypedTest<kMacTextMarker>(
+      "ax-line-text-marker-range-for-text-marker.html");
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AccessibilityColumns) {
   RunTypedTest<kMacMethods>("accessibility-columns.html");
 }
@@ -739,6 +752,12 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXStringForRange) {
   RunTypedTest<kMacParameterizedAttributes>("ax-string-for-range.html");
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
+                       AXLineForIndexAndRangeForLine) {
+  RunTypedTest<kMacParameterizedAttributes>(
+      "ax-line-for-index-and-range-for-line.html");
 }
 
 // Text Operation

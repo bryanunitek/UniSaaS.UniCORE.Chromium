@@ -117,7 +117,7 @@ std::u16string GetChromeCounterTextFromResult(
 
     // Three cases: Nonzero result for the entire cache, nonzero result for
     // a subset of cache (i.e. a finite time interval), and almost zero (< 1MB).
-    if (cache_size_bytes >= base::MiBU(1)) {
+    if (cache_size_bytes >= base::MiB(1)) {
       std::u16string formatted_size = FormatBytesMBOrHigher(cache_size_bytes);
       if (!is_upper_limit) {
 #if BUILDFLAG(IS_ANDROID)
@@ -185,9 +185,10 @@ std::u16string GetChromeCounterTextFromResult(
         static_cast<const HostedAppsCounter::HostedAppsResult*>(result);
     int hosted_apps_count = hosted_apps_result->Value();
 
-    DCHECK_GE(
+    CHECK_GE(
         hosted_apps_result->Value(),
-        base::checked_cast<ResultInt>(hosted_apps_result->examples().size()));
+        base::checked_cast<ResultInt>(hosted_apps_result->examples().size()),
+        base::NotFatalUntil::M161);
 
     std::vector<std::u16string> replacements;
     if (hosted_apps_count > 0) {

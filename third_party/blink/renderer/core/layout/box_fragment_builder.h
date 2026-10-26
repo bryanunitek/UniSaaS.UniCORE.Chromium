@@ -36,6 +36,7 @@
 
 namespace blink {
 
+class ColumnSpannerPath;
 class PhysicalFragment;
 
 class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
@@ -52,7 +53,8 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
                         space,
                         writing_direction,
                         previous_break_token),
-        is_inline_formatting_context_(node.IsInline()) {}
+        is_inline_formatting_context_(node.IsInline()),
+        is_line_clamp_clipped_float_(space.IsLineClampClippedFloat()) {}
 
   // Build a fragment for LayoutObject without LayoutInputNode. LayoutInline
   // has InlineItem but does not have corresponding LayoutInputNode.
@@ -65,7 +67,8 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
                         space,
                         writing_direction,
                         /*previous_break_token=*/nullptr),
-        is_inline_formatting_context_(true) {
+        is_inline_formatting_context_(true),
+        is_line_clamp_clipped_float_(space.IsLineClampClippedFloat()) {
     layout_object_ = layout_object;
   }
 
@@ -479,10 +482,10 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     return false;
   }
 
-  // Return true if we need to break inside this node, the way things are
-  // currently looking. This should only be called at the end of layout, right
-  // before creating a fragment.
-  bool ShouldBreakInside() const {
+  // Return true if we need to break inside this node, due to content needing
+  // space in a subsequent fragmentainer. This should only be called at the end
+  // of layout, after having laid out all children.
+  bool ShouldBreakInsideForContent() const {
     if (HasInsertedChildBreak())
       return true;
     // If there's an outgoing inline break-token at this point, and we're about
@@ -502,6 +505,15 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     // are to start in a later fragmentainer. But we still want the
     // fragmentainer to create a break token, since there's going to be more.
     return has_subsequent_children_;
+  }
+
+  // Return true if the node is going to break, and resume in a subsequent
+  // fragmentainer.
+  //
+  // Calling this before `FinishFragmentation()` has been performed on the node
+  // is undefined behavior.
+  bool ShouldBreak() const {
+    return DidBreakSelf() || ShouldBreakInsideForContent();
   }
 
   // Return true if we need to break before or inside any in-flow child that
@@ -577,6 +589,40 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   const EarlyBreak& GetEarlyBreak() const {
     DCHECK(early_break_);
     return *early_break_;
+  }
+
+  // There may be cases where a column spanner was previously found but is no
+  // longer accessible. For example, in simplified OOF layout, we may want to
+  // recreate a spanner break for an existing fragment being relaid out, but
+  // the spanner node is no longer available. In such cases,
+  // `has_column_spanner_` may be true while `column_spanner_path_` is not set.
+  void SetHasColumnSpanner() {
+    has_column_spanner_ = true;
+
+    // Adding a spanner automatically counts as an in-flow child break (no
+    // content that's defined after it should appear in columns preceding it),
+    // even if the container might be in a parallel flow.
+    has_inflow_child_break_inside_ = true;
+  }
+  void SetColumnSpannerPath(const ColumnSpannerPath& spanner_path) {
+    column_spanner_path_ = &spanner_path;
+    SetHasColumnSpanner();
+  }
+  bool FoundColumnSpanner() const {
+    DCHECK(has_column_spanner_ || !column_spanner_path_);
+    return has_column_spanner_;
+  }
+  void SetIsEmptySpannerParent(bool is_empty_spanner_parent) {
+    DCHECK(FoundColumnSpanner());
+    is_empty_spanner_parent_ = is_empty_spanner_parent;
+  }
+  bool IsEmptySpannerParent() const { return is_empty_spanner_parent_; }
+
+  void SetShouldForceSameFragmentationFlow() {
+    should_force_same_fragmentation_flow_ = true;
+  }
+  bool ShouldForceSameFragmentationFlow() const {
+    return should_force_same_fragmentation_flow_;
   }
 
   // Creates the fragment. Can only be called once.
@@ -692,10 +738,7 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
     reading_flow_nodes_ = std::move(nodes);
   }
 
-  const GridLayoutData& GetGridLayoutData() const {
-    DCHECK(grid_layout_data_);
-    return *grid_layout_data_;
-  }
+  const GridLayoutData* GetGridLayoutData() const { return grid_layout_data_; }
 
   BreakTokenAlgorithmData* GetBreakTokenData() { return break_token_data_; }
 
@@ -795,12 +838,16 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   bool has_forced_break_ = false;
   bool has_seen_all_children_ = false;
   bool has_subsequent_children_ = false;
+  bool has_column_spanner_ = false;
+  bool is_empty_spanner_parent_ = false;
+  bool should_force_same_fragmentation_flow_ = false;
   bool is_math_fraction_ = false;
   bool is_math_operator_ = false;
   bool is_at_block_end_ = false;
   bool is_truncated_by_fragmentation_line = false;
   bool use_last_baseline_for_inline_baseline_ = false;
   bool has_moved_children_ = false;
+  bool is_line_clamp_clipped_float_ = false;
 
   // Whether the `text-box-trim` is effective for block-start/end edges of a
   // node.
@@ -844,6 +891,8 @@ class CORE_EXPORT BoxFragmentBuilder final : public FragmentBuilder {
   std::optional<wtf_size_t> table_cell_column_index_;
   wtf_size_t table_section_start_row_index_;
   Vector<LayoutUnit> table_section_row_offsets_;
+
+  const ColumnSpannerPath* column_spanner_path_ = nullptr;
 
   BreakTokenAlgorithmData* break_token_data_ = nullptr;
   const GridLayoutData* grid_layout_data_ = nullptr;

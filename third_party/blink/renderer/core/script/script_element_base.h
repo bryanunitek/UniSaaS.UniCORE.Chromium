@@ -64,7 +64,6 @@ class CORE_EXPORT ScriptElementBase : public GarbageCollectedMixin {
   // https://w3c.github.io/trusted-types/dist/spec/#prepare-script-url-and-text
   virtual String ScriptTextInternalSlot() const = 0;
   virtual bool HasSourceAttribute() const = 0;
-  virtual bool HasAttributionsrcAttribute() const = 0;
   virtual bool IsConnected() const = 0;
   virtual bool HasChildren() const = 0;
   virtual const AtomicString& GetNonceForElement() const = 0;
@@ -77,7 +76,7 @@ class CORE_EXPORT ScriptElementBase : public GarbageCollectedMixin {
   // synchronously to ensure the correct Javascript world is used for CSP
   // checks.
   virtual bool AllowInlineScriptForCSP(const AtomicString& nonce,
-                                       const OrdinalNumber&,
+                                       const TextPosition& context_position,
                                        const String& script_content) = 0;
 
   // GetDocument() is "element document", to which the script element belongs

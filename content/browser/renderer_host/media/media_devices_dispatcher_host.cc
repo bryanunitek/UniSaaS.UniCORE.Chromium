@@ -384,8 +384,7 @@ void MediaDevicesDispatcherHost::SetPreferredSinkId(
 
   AudioOutputAuthorizationHandler* handler = authorization_handler.get();
   handler->RequestDeviceAuthorization(
-      render_frame_host_id_.frame_routing_id, base::UnguessableToken(),
-      hashed_sink_id,
+      base::UnguessableToken(), hashed_sink_id,
       base::BindOnce(&MediaDevicesDispatcherHost::AuthorizationCompleted,
                      weak_factory_.GetWeakPtr(),
                      std::move(authorization_handler), std::move(callback)));
@@ -434,10 +433,9 @@ void MediaDevicesDispatcherHost::AuthorizationCompleted(
 std::unique_ptr<AudioOutputAuthorizationHandler>
 MediaDevicesDispatcherHost::CreateAuthorizationHandler() {
   CHECK_CURRENTLY_ON(BrowserThread::IO);
-  // TODO(crbug.com/379869738) Remove GetUnsafeValue.
   return std::make_unique<AudioOutputAuthorizationHandler>(
       media_stream_manager_->audio_system(), media_stream_manager_,
-      render_frame_host_id_.child_id.GetUnsafeValue());
+      render_frame_host_id_);
 }
 
 void MediaDevicesDispatcherHost::FinalizeGetVideoInputCapabilities(
@@ -682,11 +680,17 @@ void MediaDevicesDispatcherHost::OnEnumeratedAudioOutputDevices(
                 /*tests_use_fake_render_frame_hosts=*/false)
           : MediaStreamUIProxy::Create();
 
+  // Post the reply back to the IO sequence via BindPostTaskToCurrentDefault
+  // because embedders may execute the callback synchronously on the UI thread.
+  // This guarantees the WeakPtr dereference inside OnSelectedDeviceInfo is
+  // serialized with host destruction on the IO thread, preventing a
+  // cross-thread Use-After-Free.
   ui_proxy->RequestSelectAudioOutput(
       std::make_unique<SelectAudioOutputRequest>(
           render_frame_host_id_, std::move(audio_output_devices)),
-      base::BindOnce(&MediaDevicesDispatcherHost::OnSelectedDeviceInfo,
-                     weak_factory_.GetWeakPtr(), std::move(enumeration)));
+      base::BindPostTaskToCurrentDefault(
+          base::BindOnce(&MediaDevicesDispatcherHost::OnSelectedDeviceInfo,
+                         weak_factory_.GetWeakPtr(), std::move(enumeration))));
 }
 
 void MediaDevicesDispatcherHost::OnSelectedDeviceInfo(

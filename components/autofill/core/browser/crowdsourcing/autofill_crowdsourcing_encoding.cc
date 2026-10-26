@@ -46,7 +46,7 @@
 #include "components/autofill/core/browser/autofill_format_string.h"
 #include "components/autofill/core/browser/crowdsourcing/randomized_encoder.h"
 #include "components/autofill/core/browser/crowdsourcing/server_prediction_overrides.h"
-#include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/field_type_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_parsing/form_field_parser.h"
 #include "components/autofill/core/browser/form_structure.h"
@@ -486,18 +486,6 @@ void EncodeFormFieldsForUpload(
   DCHECK(!IsMalformed(form));
 
   for (const AutofillField* const field : upload_fields) {
-    // Don't upload checkable fields.
-    if (IsCheckable(field->check_status())) {
-      continue;
-    }
-    // Do not upload fields that were filled with a fallback type, as this would
-    // introduce unnecessary noise in the field votes.
-    if (field->WasAutofilledWithFallback() &&
-        !base::FeatureList::IsEnabled(
-            features::kAutofillUploadManualFallbackFieldsToServer)) {
-      continue;
-    }
-
     const EncodeUploadRequestOptions::Field* field_options = nullptr;
     if (auto it = fields.find(field->global_id()); it != fields.end()) {
       field_options = &it->second;
@@ -613,8 +601,7 @@ void EncodeFormForQuery(const FormData& form,
         queried_form_signatures.push_back(form_signature);
 
         for (const auto& field : fields) {
-          if (IsCheckable(field.check_status()) ||
-              !necessary_condition(field)) {
+          if (!necessary_condition(field)) {
             continue;
           }
 
@@ -982,7 +969,7 @@ std::vector<AutofillUploadContents> EncodeUploadRequest(
   AutofillUploadContents upload;
   upload.set_submission(options.observed_submission);
   upload.set_client_version(
-      std::string(version_info::GetProductNameAndVersionForUserAgent()));
+      version_info::GetProductNameAndVersionForUserAgent());
   upload.set_form_signature(form.form_signature().value());
   if (base::FeatureList::IsEnabled(
           features::kAutofillUseStructuralSignatureInsteadOfSecondary)) {
@@ -1062,7 +1049,7 @@ std::vector<AutofillUploadContents> EncodeUploadRequest(
        subform_begin != upload_fields.end();) {
     AutofillUploadContents& upload_content = uploads.emplace_back();
     upload_content.set_client_version(
-        std::string(version_info::GetProductNameAndVersionForUserAgent()));
+        version_info::GetProductNameAndVersionForUserAgent());
     upload_content.set_form_signature(
         (*subform_begin)->host_form_signature().value());
     upload_content.set_autofill_used(false);
@@ -1094,7 +1081,7 @@ EncodeAutofillPageQueryRequest(const std::vector<FormData>& forms) {
   std::vector<FormSignature> queried_form_signatures;
   queried_form_signatures.reserve(forms.size());
   query.set_client_version(
-      std::string(version_info::GetProductNameAndVersionForUserAgent()));
+      version_info::GetProductNameAndVersionForUserAgent());
 
   // If a page contains repeated forms, detect that and encode only one form as
   // the returned data would be the same for all the repeated forms.
@@ -1213,7 +1200,8 @@ void ServerPredictions::ApplyTo(FormStructure& form) const {
                                   ? field->server_predictions()[1].source()
                                   : FieldPrediction::SOURCE_UNSPECIFIED,
         .server_type_prediction_is_override =
-            field->server_type_prediction_is_override(),
+            field->PredictionSource() ==
+            AutofillPredictionSource::kServerOverride,
         .rank_in_field_signature_group =
             field_rank_map[field->GetFieldSignature()],
     });
@@ -1226,9 +1214,6 @@ std::vector<ServerPredictions> ParseServerPredictionsFromQueryResponse(
     const std::vector<FormSignature>& queried_form_signatures,
     LogManager* log_manager,
     bool ignore_small_forms) {
-  AutofillMetrics::LogServerQueryMetric(
-      AutofillMetrics::QUERY_RESPONSE_RECEIVED);
-
   std::string decoded_payload;
   if (!base::Base64Decode(payload, &decoded_payload)) {
     DVLOG(1) << "Could not decode payload from base64 to bytes";
@@ -1244,7 +1229,6 @@ std::vector<ServerPredictions> ParseServerPredictionsFromQueryResponse(
   DVLOG(1) << "Autofill query response from API was successfully parsed: "
            << response;
 
-  AutofillMetrics::LogServerQueryMetric(AutofillMetrics::QUERY_RESPONSE_PARSED);
   LOG_AF(log_manager) << LoggingScope::kParsing
                       << LogMessage::kProcessingServerData;
 

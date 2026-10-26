@@ -24,10 +24,12 @@
 
 #include "third_party/blink/public/common/input/web_pointer_properties.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_mouse_event_init.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatcher.h"
 #include "third_party/blink/renderer/core/dom/events/event_path.h"
 #include "third_party/blink/renderer/core/event_interface_names.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
@@ -45,7 +47,6 @@
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
 namespace blink {
@@ -135,7 +136,6 @@ MouseEvent::MouseEvent()
     : position_type_(PositionType::kPosition),
       button_(0),
       buttons_(0),
-      related_target_(nullptr),
       synthetic_event_type_(kRealOrIndistinguishable) {}
 
 MouseEvent::MouseEvent(const AtomicString& event_type,
@@ -147,13 +147,13 @@ MouseEvent::MouseEvent(const AtomicString& event_type,
     : UIEventWithKeyState(event_type, initializer, platform_time_stamp),
       screen_x_(initializer->screenX()),
       screen_y_(initializer->screenY()),
+      related_target_(initializer->relatedTarget()),
       movement_delta_(initializer->movementX(), initializer->movementY()),
       position_type_(synthetic_event_type == kPositionless
                          ? PositionType::kPositionless
                          : PositionType::kPosition),
       button_(initializer->button()),
       buttons_(initializer->buttons()),
-      related_target_(initializer->relatedTarget()),
       synthetic_event_type_(synthetic_event_type),
       menu_source_type_(menu_source_type) {
   InitCoordinates(initializer->clientX(), initializer->clientY(),
@@ -176,7 +176,8 @@ void MouseEvent::InitCoordinates(const double client_x,
     if (LocalFrame* frame = local_dom_window->GetFrame()) {
       // Adjust page_x_ and page_y_ by layout viewport scroll offset.
       if (ScrollableArea* scrollable_area = frame->View()->LayoutViewport()) {
-        gfx::Vector2d scroll_offset = scrollable_area->ScrollOffsetInt();
+        gfx::Vector2d scroll_offset =
+            scrollable_area->PixelSnappedScrollOffset();
         page_x_ += scroll_offset.x() / zoom_factor;
         page_y_ += scroll_offset.y() / zoom_factor;
       }
@@ -331,14 +332,6 @@ bool MouseEvent::IsMouseEvent() const {
   return true;
 }
 
-void MouseEvent::SetRelatedTarget(EventTarget* related_target) {
-  if ((IsWheelEvent() || IsDragEvent()) &&
-      !RuntimeEnabledFeatures::DontLeakShadowTreesInDragEventsEnabled()) {
-    return;
-  }
-  related_target_ = related_target;
-}
-
 int16_t MouseEvent::button() const {
   const AtomicString& event_name = type();
   if (button_ == -1 || event_name == event_type_names::kMousemove ||
@@ -396,6 +389,7 @@ void MouseEvent::Trace(Visitor* visitor) const {
 }
 
 DispatchEventResult MouseEvent::DispatchEvent(EventDispatcher& dispatcher) {
+  ClearCrossOriginRelatedTarget(dispatcher.GetNode(), related_target_);
   // TODO(mustaq): Move click-specific code to `PointerEvent::DispatchEvent`.
   GetEventPath().AdjustForRelatedTarget(dispatcher.GetNode(), relatedTarget());
 
@@ -525,7 +519,7 @@ void MouseEvent::ComputeRelativePosition() {
     layer = layer->EnclosingSelfPaintingLayer();
 
     PhysicalOffset physical_offset =
-        layer->GetLayoutObject().LocalToAbsolutePoint(PhysicalOffset(), 0);
+        layer->GetLayoutObject().LocalToAbsolutePoint(PhysicalOffset());
     layer_location_ -= gfx::Vector2dF(physical_offset);
 
     layer_location_.Scale(inverse_zoom_factor);

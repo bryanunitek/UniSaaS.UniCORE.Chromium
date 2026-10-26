@@ -13,6 +13,7 @@
 #import "ios/web/public/security/ssl_status.h"
 #import "ios/web/public/test/web_test.h"
 #import "ios/web/security/wk_web_view_security_util.h"
+#import "ios/web/test/cert_test_util.h"
 #import "ios/web/test/fakes/crw_fake_back_forward_list.h"
 #import "ios/web/test/fakes/fake_navigation_manager_delegate.h"
 #import "net/cert/x509_util_apple.h"
@@ -143,6 +144,8 @@ TEST_F(CRWSSLStatusUpdaterTest, Initialization) {
 TEST_F(CRWSSLStatusUpdaterTest, HttpItem) {
   AddNavigationItem(kHttpUrl);
   web::NavigationItem* item = nav_manager_->GetLastCommittedItem();
+  // Set a non-zero cert_status to verify it gets cleared for HTTP.
+  item->GetSSL().cert_status = net::CERT_STATUS_INVALID;
   // Make sure that item change callback was called.
   [[delegate_ expect] SSLStatusUpdater:ssl_status_updater_
       didChangeSSLStatusForNavigationItem:item];
@@ -154,6 +157,9 @@ TEST_F(CRWSSLStatusUpdaterTest, HttpItem) {
 
   // No certificate for http.
   EXPECT_FALSE(!!item->GetSSL().certificate);
+
+  // Certificate status should be cleared.
+  EXPECT_EQ(net::CertStatus(), item->GetSSL().cert_status);
 
   // Always normal content for http.
   EXPECT_EQ(web::SSLStatus::NORMAL_CONTENT, item->GetSSL().content_status);

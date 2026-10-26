@@ -25,10 +25,13 @@
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
+#include "base/time/time.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
 #include "components/safe_browsing/core/browser/safe_browsing_hats_delegate.h"
+#include "components/safe_browsing/core/browser/user_population.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
+#include "components/safe_browsing/core/common/safebrowsing_constants.h"
 #include "components/safe_browsing/core/common/utils.h"
 #include "google_apis/google_api_keys.h"
 #include "net/base/load_flags.h"
@@ -170,12 +173,6 @@ std::string_view GetReportTypeSuffix(
     case safe_browsing::ClientSafeBrowsingReportRequest_ReportType_APK_DOWNLOAD:
       return "APKDownload";
     case safe_browsing::
-        ClientSafeBrowsingReportRequest_ReportType_BLOCKED_AD_REDIRECT:
-      return "BlockedAdRedirect";
-    case safe_browsing::
-        ClientSafeBrowsingReportRequest_ReportType_BLOCKED_AD_POPUP:
-      return "BlockedAdPopup";
-    case safe_browsing::
         ClientSafeBrowsingReportRequest_ReportType_PHISHY_SITE_INTERACTIONS:
       return "PhishySiteInteractions";
     case safe_browsing::
@@ -194,9 +191,6 @@ std::string_view GetReportTypeSuffix(
         ClientSafeBrowsingReportRequest_ReportType_URL_REALTIME_AND_HASH_REALTIME_DISCREPANCY:
       return "URLRealTimeAndHashRealTimeDiscrepancy";
     case safe_browsing::
-        ClientSafeBrowsingReportRequest_ReportType_EXTERNAL_APP_REDIRECT:
-      return "ExternalAppRedirect";
-    case safe_browsing::
         ClientSafeBrowsingReportRequest_ReportType_DANGEROUS_DOWNLOAD_WARNING_ANDROID:
       return "DangerousDownloadWarningAndroid";
     case safe_browsing::
@@ -207,6 +201,12 @@ std::string_view GetReportTypeSuffix(
         ClientSafeBrowsingReportRequest_ReportType_URL_CLIENT_SIDE_MALWARE:
     case safe_browsing::
         ClientSafeBrowsingReportRequest_ReportType_HASH_PREFIX_REAL_TIME_EXPERIMENT:
+    case safe_browsing::
+        ClientSafeBrowsingReportRequest_ReportType_EXTERNAL_APP_REDIRECT:
+    case safe_browsing::
+        ClientSafeBrowsingReportRequest_ReportType_BLOCKED_AD_REDIRECT:
+    case safe_browsing::
+        ClientSafeBrowsingReportRequest_ReportType_BLOCKED_AD_POPUP:
       NOTREACHED();
   }
 }
@@ -266,7 +266,7 @@ std::vector<std::string> PingManager::Persister::ReadAndDeleteReports() {
 
 // static
 std::unique_ptr<PingManager> PingManager::Create(
-    const V4ProtocolConfig& config,
+    const SBProtocolConfig& config,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     std::unique_ptr<SafeBrowsingTokenFetcher> token_fetcher,
     base::RepeatingCallback<bool()> get_should_fetch_access_token,
@@ -288,7 +288,7 @@ std::unique_ptr<PingManager> PingManager::Create(
 }
 
 PingManager::PingManager(
-    const V4ProtocolConfig& config,
+    const SBProtocolConfig& config,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     std::unique_ptr<SafeBrowsingTokenFetcher> token_fetcher,
     base::RepeatingCallback<bool()> get_should_fetch_access_token,
@@ -454,7 +454,8 @@ void PingManager::OnReadPersistedReportsDone(
 }
 
 void PingManager::AttachThreatDetailsAndLaunchSurvey(
-    std::unique_ptr<ClientSafeBrowsingReportRequest> report) {
+    std::unique_ptr<ClientSafeBrowsingReportRequest> report,
+    bool is_tab_closed) {
   // Return early if HaTS survey is disabled by policy.
   if (!hats_delegate_) {
     return;
@@ -477,11 +478,96 @@ void PingManager::AttachThreatDetailsAndLaunchSurvey(
   base::Base64UrlEncode(serialized_report,
                         base::Base64UrlEncodePolicy::INCLUDE_PADDING,
                         &url_encoded_serialized_report);
-  hats_delegate_->LaunchRedWarningSurvey(
-      {{kFlaggedUrl, report->url()},
-       {kMainFrameUrl, report->page_url()},
-       {kReferrerUrl, report->referrer_url()},
-       {kUserActivityWithUrls, url_encoded_serialized_report}});
+  std::string user_action = kUserActionUnknown;
+  bool learn_more_clicked = false;
+  bool show_more_clicked = false;
+  bool open_diagnostic_clicked = false;
+  bool report_phishing_error_clicked = false;
+  bool did_proceed_cmd = false;
+  bool did_dont_proceed_cmd = false;
+  bool did_close_without_ui_cmd = false;
+
+  for (const auto& interaction : report->interstitial_interactions()) {
+    if (interaction.has_security_interstitial_interaction()) {
+      switch (interaction.security_interstitial_interaction()) {
+        case ClientSafeBrowsingReportRequest::InterstitialInteraction::
+            CMD_PROCEED:
+          did_proceed_cmd = true;
+          break;
+        case ClientSafeBrowsingReportRequest::InterstitialInteraction::
+            CMD_DONT_PROCEED:
+          did_dont_proceed_cmd = true;
+          break;
+        case ClientSafeBrowsingReportRequest::InterstitialInteraction::
+            CMD_CLOSE_INTERSTITIAL_WITHOUT_UI:
+          did_close_without_ui_cmd = true;
+          break;
+        case ClientSafeBrowsingReportRequest::InterstitialInteraction::
+            CMD_OPEN_HELP_CENTER:
+          learn_more_clicked = true;
+          break;
+        case ClientSafeBrowsingReportRequest::InterstitialInteraction::
+            CMD_SHOW_MORE_SECTION:
+          show_more_clicked = true;
+          break;
+        case ClientSafeBrowsingReportRequest::InterstitialInteraction::
+            CMD_OPEN_DIAGNOSTIC:
+          open_diagnostic_clicked = true;
+          break;
+        case ClientSafeBrowsingReportRequest::InterstitialInteraction::
+            CMD_REPORT_PHISHING_ERROR:
+          report_phishing_error_clicked = true;
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  if (did_proceed_cmd) {
+    user_action = kUserActionProceed;
+  } else if (did_dont_proceed_cmd) {
+    user_action = kUserActionDontProceed;
+  } else if (did_close_without_ui_cmd) {
+    user_action = is_tab_closed ? kUserActionCloseTab : kUserActionNavigateAway;
+  } else if (report->has_did_proceed()) {
+    user_action =
+        report->did_proceed() ? kUserActionProceed : kUserActionDontProceed;
+  }
+
+  bool repeat_visit = report->repeat_visit();
+  std::string time_warning_visible = "";
+  if (report->has_warning_shown_timestamp_msec()) {
+    int64_t elapsed_ms = base::Time::Now().InMillisecondsSinceUnixEpoch() -
+                         report->warning_shown_timestamp_msec();
+    time_warning_visible =
+        base::NumberToString(std::max<int64_t>(0, elapsed_ms)) + "ms";
+  }
+  SurveyStringData string_data = {
+      {kFlaggedUrl, report->url()},
+      {kMainFrameUrl, report->page_url()},
+      {kReferrerUrl, report->referrer_url()},
+      // Populated by
+      // ChromeSafeBrowsingHatsDelegateAndroid::LaunchRedWarningSurvey on
+      // Android.
+      {kReferringApp, std::string()},
+      {kReportType,
+       ClientSafeBrowsingReportRequest::ReportType_Name(report->type())},
+      {kTimeWarningVisible, time_warning_visible},
+      {kUserAction, user_action},
+      {kUserActivityWithUrls, url_encoded_serialized_report},
+  };
+
+  SurveyBitsData bits_data = {
+      {kLearnMoreClicked, learn_more_clicked},
+      {kOpenDiagnostic, open_diagnostic_clicked},
+      {kRepeatVisit, repeat_visit},
+      {kReportPhishingErrorClicked, report_phishing_error_clicked},
+      {kShowMoreClicked, show_more_clicked},
+  };
+
+  hats_delegate_->LaunchRedWarningSurvey(std::move(string_data),
+                                         std::move(bits_data), is_tab_closed);
 }
 
 void PingManager::ReportThreatDetailsOnGotAccessToken(
@@ -522,6 +608,8 @@ PingManager::ReportThreatDetailsResult PingManager::FinalizeAndSerializeReport(
   SanitizeThreatDetailsReport(report);
   if (!get_user_population_callback_.is_null()) {
     *report->mutable_population() = get_user_population_callback_.Run();
+    // TODO(crbug.com/372395685): Remove this post feature launch.
+    GetExperimentStatus({&kLocalListsUseSBv5}, report->mutable_population());
   }
   if (!get_page_load_token_callback_.is_null()) {
     ChromeUserPopulation::PageLoadToken token =

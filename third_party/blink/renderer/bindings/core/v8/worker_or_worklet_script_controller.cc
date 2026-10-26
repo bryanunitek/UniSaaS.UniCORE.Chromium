@@ -37,7 +37,7 @@
 #include "base/notreached.h"
 #include "third_party/blink/public/mojom/origin_trials/origin_trial_feature.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_state_impl.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/inspector/worker_thread_debugger.h"
 #include "third_party/blink/renderer/core/origin_trials/origin_trial_context.h"
@@ -128,18 +128,13 @@ void WorkerOrWorkletScriptController::Initialize(const KURL& url_for_debugger) {
       global_interface_template->InstanceTemplate();
   v8::Local<v8::Context> context;
   {
-    // Initialize V8 extensions before creating the context.
-    v8::ExtensionConfiguration extension_configuration =
-        ScriptController::ExtensionsFor(global_scope_);
-
     v8::MicrotaskQueue* microtask_queue = global_scope_->GetMicrotaskQueue();
 
     V8PerIsolateData::UseCounterDisabledScope use_counter_disabled(
         V8PerIsolateData::From(isolate_));
-    context = v8::Context::New(isolate_, &extension_configuration,
-                               global_template, v8::MaybeLocal<v8::Value>(),
-                               v8::DeserializeInternalFieldsCallback(),
-                               microtask_queue);
+    context = v8::Context::New(
+        isolate_, nullptr, global_template, v8::MaybeLocal<v8::Value>(),
+        v8::DeserializeInternalFieldsCallback(), microtask_queue);
   }
   // TODO(crbug.com/1501387): Remove temporary crash key when crash is fixed.
   // While this logging involves a lot of string operations, it is only
@@ -171,12 +166,13 @@ void WorkerOrWorkletScriptController::Initialize(const KURL& url_for_debugger) {
       ot_feature_string.Resize(255);
     }
     SCOPED_CRASH_KEY_STRING256("shared-storage", "context-empty",
-                               ot_feature_string.ReleaseString().Utf8());
+                               ot_feature_string.Utf8());
     NOTREACHED() << "V8 context is empty";
   }
   CHECK(!context.IsEmpty());
 
-  script_state_ = ScriptState::Create(context, world_, global_scope_);
+  script_state_ =
+      MakeGarbageCollected<ScriptStateImpl>(context, world_, *global_scope_);
 
   ScriptState::Scope scope(script_state_);
 
@@ -239,20 +235,9 @@ void WorkerOrWorkletScriptController::Initialize(const KURL& url_for_debugger) {
     disable_wasm_eval_pending_ = String();
   }
 
-  // This is a workaround for worker with on-the-main-thread script fetch and
-  // worklets.
-  // - For workers with off-the-main-thread worker script fetch,
-  //   PrepareForEvaluation() is called in WorkerGlobalScope::Initialize() after
-  //   top-level worker script fetch and before script evaluation.
-  // - For workers with on-the-main-thread worker script fetch, it's too early
-  //   to call PrepareForEvaluation() in WorkerGlobalScope::Initialize() because
-  //   it's called immediately after WorkerGlobalScope's constructor, that is,
-  //   before WorkerOrWorkletScriptController::Initialize(). Therefore, we
-  //   ignore the first call of PrepareForEvaluation() from
-  //   WorkerGlobalScope::Initialize(), and call it here again.
-  // TODO(https://crbug.com/835717): Remove this workaround once
-  // off-the-main-thread worker script fetch is enabled by default for dedicated
-  // workers.
+  // This is a workaround for worklets.
+  // - For workers, `PrepareForEvaluation()` is called in `WorkerGlobalScope::Initialize()`
+  //   after top-level worker script fetch and before script evaluation.
   //
   // - For worklets, there is no appropriate timing to call
   //   PrepareForEvaluation() other than here because worklets have various
@@ -261,31 +246,18 @@ void WorkerOrWorkletScriptController::Initialize(const KURL& url_for_debugger) {
   //   addModule() call in JS).
   // TODO(nhiroki): Unify worklet initialization sequences, and move this to an
   // appropriate place.
-  if ((global_scope_->IsWorkerGlobalScope() &&
-       To<WorkerGlobalScope>(global_scope_.Get())
-           ->IsOffMainThreadScriptFetchDisabled()) ||
-      global_scope_->IsWorkletGlobalScope()) {
+  if (global_scope_->IsWorkletGlobalScope()) {
     // This should be called after origin trial tokens are applied for
-    // OriginTrialContext in WorkerGlobalScope::Initialize() to install origin
-    // trial features in JavaScript's global object. Workers with
-    // on-the-main-thread script fetch and worklets apply origin trial tokens
-    // before WorkerOrWorkletScriptController::initialize(), so it's safe to
-    // call this here.
+    // OriginTrialContext to install origin trial features in JavaScript's
+    // global object. Worklets apply origin trial tokens before
+    // WorkerOrWorkletScriptController::initialize(), so it's safe to call this
+    // here.
     PrepareForEvaluation();
   }
 }
 
 void WorkerOrWorkletScriptController::PrepareForEvaluation() {
-  if (!IsContextInitialized()) {
-    // For workers with on-the-main-thread worker script fetch, this can be
-    // called before WorkerOrWorkletScriptController::Initialize() via
-    // WorkerGlobalScope creation function. In this case, PrepareForEvaluation()
-    // calls this function again. See comments in PrepareForEvaluation().
-    DCHECK(global_scope_->IsWorkerGlobalScope());
-    DCHECK(To<WorkerGlobalScope>(global_scope_.Get())
-               ->IsOffMainThreadScriptFetchDisabled());
-    return;
-  }
+  CHECK(IsContextInitialized());
   DCHECK(!is_ready_to_evaluate_);
   is_ready_to_evaluate_ = true;
 

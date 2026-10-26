@@ -24,7 +24,8 @@
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/sync/test/integration/invalidations/invalidations_status_checker.h"
 #include "chrome/browser/sync/test/integration/single_client_status_change_checker.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/supervised_user/browser_user.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/identity_manager/test_accounts.h"
@@ -37,6 +38,7 @@
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "net/dns/mock_host_resolver.h"
 #include "ui/base/interaction/interactive_test_internal.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "url/gurl.h"
 
@@ -171,9 +173,9 @@ void FamilyLiveTest::SigninToBrowser() {
 
 void FamilyLiveTest::SigninToBrowserFor(BrowserUser& browser_user) {
   browser_user.SignInToBrowser();
-  browser_user.browser().tab_strip_model()->CloseWebContentsAt(
+  browser_user.browser().GetTabStripModel()->CloseWebContentsAt(
       2, TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
-  browser_user.browser().tab_strip_model()->CloseWebContentsAt(
+  browser_user.browser().GetTabStripModel()->CloseWebContentsAt(
       1, TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
 
   if (IsSwitchEnabled(kDebugSwitch)) {
@@ -190,7 +192,6 @@ void FamilyLiveTest::SigninToBrowserFor(BrowserUser& browser_user) {
     syncer::SyncServiceImpl* service =
         SyncServiceFactory::GetAsSyncServiceImplForProfileForTesting(
             &browser_user.profile());
-    service->SetInvalidationsForSessionsEnabled(true);
     bool is_supervised_user = (&browser_user == child_.get());
 
     CHECK(SyncSetupChecker(service, is_supervised_user).Wait())
@@ -273,9 +274,9 @@ void FamilyLiveTest::TearDownOnMainThread() {
     // notify this client. Explicit sign-out is critical, otherwise server-side
     // data structures can still think that the current client should receive
     // sync updates.
-    user->browser().GetFeatures().signin_view_controller()->ShowGaiaLogoutTab(
-        signin_metrics::SourceForRefreshTokenOperation::
-            kUserMenu_SignOutAllAccounts);
+    SigninViewController::From(&user->browser())
+        ->ShowGaiaLogoutTab(signin_metrics::SourceForRefreshTokenOperation::
+                                kUserMenu_SignOutAllAccounts);
   }
 #endif
 
@@ -305,7 +306,7 @@ std::unique_ptr<BrowserUser> FamilyLiveTest::MakeSignedInBrowser(
     const test_accounts::FamilyMember& credentials) {
   // Managed externally to the test fixture.
   Profile& profile = CreateNewProfile();
-  Browser* browser = CreateBrowser(&profile);
+  BrowserWindowInterface* browser = CreateBrowser(&profile);
   CHECK(browser) << "Expected to create a browser.";
 
   BrowserUser::NewTabCallback new_tab_callback = base::BindLambdaForTesting(

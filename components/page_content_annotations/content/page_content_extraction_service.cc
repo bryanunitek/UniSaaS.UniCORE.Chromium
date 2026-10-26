@@ -13,13 +13,11 @@
 #include <vector>
 
 #include "base/base64.h"
-#include "base/check.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
-#include "components/feature_engagement/public/feature_constants.h"
 #include "components/feature_engagement/public/tracker.h"
 #include "components/optimization_guide/content/browser/page_content_proto_provider.h"
 #include "components/optimization_guide/proto/features/common_quality_data.pb.h"
@@ -74,7 +72,14 @@ optimization_guide::proto::PageContext ToPageContext(
 }
 
 // Returns whether the page content cache is enabled.
-bool IsPageContentCacheEnabled(feature_engagement::Tracker* tracker) {
+bool IsPageContentCacheEnabled(feature_engagement::Tracker* tracker,
+                               os_crypt_async::OSCryptAsync* os_crypt_async,
+                               const base::FilePath& profile_path) {
+  // Should only be hit in testing.
+  if (!os_crypt_async || profile_path.empty()) {
+    return false;
+  }
+
   bool enabled = base::FeatureList::IsEnabled(features::kPageContentCache);
 
 #if BUILDFLAG(IS_ANDROID)
@@ -156,7 +161,8 @@ PageContentExtractionService::PageContentExtractionService(
     os_crypt_async::OSCryptAsync* os_crypt_async,
     const base::FilePath& profile_path,
     feature_engagement::Tracker* tracker)
-    : is_page_content_cache_enabled_(IsPageContentCacheEnabled(tracker)),
+    : is_page_content_cache_enabled_(
+          IsPageContentCacheEnabled(tracker, os_crypt_async, profile_path)),
       page_content_cache_handler_(
           CreatePageContentCacheHandler(is_page_content_cache_enabled_,
                                         os_crypt_async,
@@ -363,6 +369,11 @@ void PageContentExtractionService::OnNewNavigation(
     base::UmaHistogramCounts100(
         "OptimizationGuide.PageContentExtraction.ObserverCountPerNavigation",
         std::distance(observers_.begin(), observers_.end()));
+  }
+
+  content::Page& current_page = web_contents->GetPrimaryPage();
+  for (auto& observer : observers_) {
+    observer.OnPageContentReset(current_page, is_same_document);
   }
 }
 

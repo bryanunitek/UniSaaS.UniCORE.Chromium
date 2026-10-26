@@ -18,10 +18,12 @@
 #import "ios/chrome/browser/settings/autofill/autofill_and_passwords/ui/autofill_ai_base_mutator.h"
 #import "ios/chrome/browser/settings/autofill/autofill_and_passwords/ui/identity_docs_mutator.h"
 #import "ios/chrome/browser/settings/autofill/utils/autofill_settings_ui_util.h"
+#import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_settings_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/elements/enterprise_info_popover_view_controller.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_root_table_view_controller+toolbar_add.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_info_button_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_link_header_footer_item.h"
+#import "ios/chrome/browser/shared/ui/table_view/cells/table_view_multi_detail_text_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_switch_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_header_footer_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
@@ -31,16 +33,19 @@
 #import "ui/strings/grit/ui_strings.h"
 
 namespace {
-enum SectionIdentifier {
-  SectionIdentifierToggle = kSectionIdentifierEnumZero,
-  SectionIdentifierDriversLicenses,
-  SectionIdentifierNationalIdCards,
-  SectionIdentifierPassports,
+enum class SectionIdentifier {
+  kToggleSection = kSectionIdentifierEnumZero,
+  kSuggestionsFromGeminiSection,
+  kDriversLicensesSection,
+  kNationalIdCardsSection,
+  kPassportsSection,
 };
 
-enum ItemType {
-  ItemTypeToggle = kAutofillAIBaseItemTypeEntity + 1,
-  ItemTypeFooter,
+enum class ItemType {
+  kToggleItem = kAutofillAIBaseItemTypeEntity + 1,
+  kFooterItem,
+  kSuggestionsFromGeminiItem,
+  kSuggestionsFromGeminiFooterItem,
 };
 
 }  // namespace
@@ -59,6 +64,8 @@ enum ItemType {
   std::vector<autofill::EntityType> _writableEntityTypes;
   UIBarButtonItem* _addButtonInToolbar;
   BOOL _hasLocalEntities;
+  BOOL _shouldShowSuggestionsFromGemini;
+  BOOL _suggestionsFromGeminiEnabled;
   BOOL _identityDocsEnabled;
   BOOL _identityDocsToggleEnabled;
   BOOL _identityDocsToggleManaged;
@@ -91,82 +98,57 @@ enum ItemType {
 - (void)loadModel {
   [super loadModel];
 
-  TableViewModel* model = self.tableViewModel;
+  [self loadToggleSection];
+  [self loadSuggestionsFromGeminiSection];
 
-  [model addSectionWithIdentifier:SectionIdentifierToggle];
-  if (_identityDocsToggleManaged) {
-    TableViewInfoButtonItem* managedItem =
-        [[TableViewInfoButtonItem alloc] initWithType:ItemTypeToggle];
-    managedItem.text =
-        l10n_util::GetNSString(IDS_AUTOFILL_IDENTITY_DOCS_OPT_IN_TOGGLE_LABEL);
-    managedItem.statusText = l10n_util::GetNSString(IDS_IOS_SETTING_OFF);
-    managedItem.accessibilityHint = l10n_util::GetNSString(
-        IDS_IOS_TOGGLE_SETTING_MANAGED_ACCESSIBILITY_HINT);
-    managedItem.target = self;
-    managedItem.selector = @selector(didTapManagedUIInfoButton:);
-    [model addItem:managedItem toSectionWithIdentifier:SectionIdentifierToggle];
-  } else {
-    TableViewSwitchItem* toggleItem =
-        [[TableViewSwitchItem alloc] initWithType:ItemTypeToggle];
-    toggleItem.text =
-        l10n_util::GetNSString(IDS_AUTOFILL_IDENTITY_DOCS_OPT_IN_TOGGLE_LABEL);
-    toggleItem.on = _identityDocsToggleEnabled && _identityDocsEnabled;
-    toggleItem.enabled = _identityDocsToggleEnabled;
-    toggleItem.target = self;
-    toggleItem.selector = @selector(identityDocsToggleChanged:);
-    [model addItem:toggleItem toSectionWithIdentifier:SectionIdentifierToggle];
-  }
-
-  TableViewLinkHeaderFooterItem* footer =
-      [[TableViewLinkHeaderFooterItem alloc] initWithType:ItemTypeFooter];
-  footer.text = l10n_util::GetNSString(
-      IDS_AUTOFILL_IDENTITY_DOCS_OPT_IN_TOGGLE_SUB_LABEL);
-  [model setFooter:footer forSectionWithIdentifier:SectionIdentifierToggle];
-
-  if (_driversLicenses.count > 0) {
-    [model addSectionWithIdentifier:SectionIdentifierDriversLicenses];
-    TableViewTextHeaderFooterItem* header =
-        [[TableViewTextHeaderFooterItem alloc]
-            initWithType:kAutofillAIBaseItemTypeHeader];
-    header.text =
-        l10n_util::GetNSString(IDS_AUTOFILL_AI_DRIVERS_LICENSES_TITLE);
-    [model setHeader:header
-        forSectionWithIdentifier:SectionIdentifierDriversLicenses];
-    for (TableViewItem* item in _driversLicenses) {
-      [model addItem:item
-          toSectionWithIdentifier:SectionIdentifierDriversLicenses];
-    }
-  }
-
-  if (_nationalIdCards.count > 0) {
-    [model addSectionWithIdentifier:SectionIdentifierNationalIdCards];
-    TableViewTextHeaderFooterItem* header =
-        [[TableViewTextHeaderFooterItem alloc]
-            initWithType:kAutofillAIBaseItemTypeHeader];
-    header.text = l10n_util::GetNSString(IDS_AUTOFILL_AI_NATIONAL_IDS_TITLE);
-    [model setHeader:header
-        forSectionWithIdentifier:SectionIdentifierNationalIdCards];
-    for (TableViewItem* item in _nationalIdCards) {
-      [model addItem:item
-          toSectionWithIdentifier:SectionIdentifierNationalIdCards];
-    }
-  }
-
-  if (_passports.count > 0) {
-    [model addSectionWithIdentifier:SectionIdentifierPassports];
-    TableViewTextHeaderFooterItem* header =
-        [[TableViewTextHeaderFooterItem alloc]
-            initWithType:kAutofillAIBaseItemTypeHeader];
-    header.text = l10n_util::GetNSString(IDS_AUTOFILL_AI_PASSPORTS_TITLE);
-    [model setHeader:header
-        forSectionWithIdentifier:SectionIdentifierPassports];
-    for (TableViewItem* item in _passports) {
-      [model addItem:item toSectionWithIdentifier:SectionIdentifierPassports];
-    }
-  }
+  [self addSectionWithIdentifier:SectionIdentifier::kDriversLicensesSection
+                   headerTitleID:IDS_AUTOFILL_AI_DRIVERS_LICENSES_TITLE
+                           items:_driversLicenses];
+  [self addSectionWithIdentifier:SectionIdentifier::kNationalIdCardsSection
+                   headerTitleID:IDS_AUTOFILL_AI_NATIONAL_IDS_TITLE
+                           items:_nationalIdCards];
+  [self addSectionWithIdentifier:SectionIdentifier::kPassportsSection
+                   headerTitleID:IDS_AUTOFILL_AI_PASSPORTS_TITLE
+                           items:_passports];
 }
 
 #pragma mark - IdentityDocsConsumer
+
+- (void)setShouldShowSuggestionsFromGemini:(BOOL)shouldShow
+                                   enabled:(BOOL)enabled {
+  BOOL reload = NO;
+  if (_shouldShowSuggestionsFromGemini != shouldShow) {
+    _shouldShowSuggestionsFromGemini = shouldShow;
+    reload = YES;
+  }
+
+  BOOL suggestionsFromGeminiEnabledChanged =
+      (_suggestionsFromGeminiEnabled != enabled);
+  _suggestionsFromGeminiEnabled = enabled;
+
+  if (reload) {
+    if (self.viewLoaded) {
+      [self reloadData];
+    }
+  } else if (suggestionsFromGeminiEnabledChanged && self.viewLoaded &&
+             _shouldShowSuggestionsFromGemini) {
+    TableViewModel* model = self.tableViewModel;
+    NSIndexPath* suggestionsFromGeminiPath =
+        [model indexPathForItemType:static_cast<NSInteger>(
+                                        ItemType::kSuggestionsFromGeminiItem)
+                  sectionIdentifier:
+                      static_cast<NSInteger>(
+                          SectionIdentifier::kSuggestionsFromGeminiSection)];
+    if (suggestionsFromGeminiPath) {
+      TableViewMultiDetailTextItem* suggestionsFromGeminiItem =
+          base::apple::ObjCCastStrict<TableViewMultiDetailTextItem>(
+              [model itemAtIndexPath:suggestionsFromGeminiPath]);
+      suggestionsFromGeminiItem.trailingDetailText = l10n_util::GetNSString(
+          enabled ? IDS_IOS_SETTING_ON : IDS_IOS_SETTING_OFF);
+      [self reconfigureCellsForItems:@[ suggestionsFromGeminiItem ]];
+    }
+  }
+}
 
 - (void)
     setIdentityDocsWithDriversLicenses:(NSArray<TableViewItem*>*)driversLicenses
@@ -203,9 +185,10 @@ enum ItemType {
       [self reloadData];
     } else {
       TableViewModel* model = self.tableViewModel;
-      NSIndexPath* togglePath =
-          [model indexPathForItemType:ItemTypeToggle
-                    sectionIdentifier:SectionIdentifierToggle];
+      NSIndexPath* togglePath = [model
+          indexPathForItemType:static_cast<NSInteger>(ItemType::kToggleItem)
+             sectionIdentifier:static_cast<NSInteger>(
+                                   SectionIdentifier::kToggleSection)];
       if (togglePath) {
         if (managed) {
           TableViewInfoButtonItem* managedItem =
@@ -232,8 +215,9 @@ enum ItemType {
 
   TableViewModel* model = self.tableViewModel;
   NSIndexPath* switchPath =
-      [model indexPathForItemType:ItemTypeToggle
-                sectionIdentifier:SectionIdentifierToggle];
+      [model indexPathForItemType:static_cast<NSInteger>(ItemType::kToggleItem)
+                sectionIdentifier:static_cast<NSInteger>(
+                                      SectionIdentifier::kToggleSection)];
   if (switchPath) {
     TableViewSwitchItem* switchItem =
         base::apple::ObjCCastStrict<TableViewSwitchItem>(
@@ -438,6 +422,14 @@ enum ItemType {
 
   [tableView deselectRowAtIndexPath:indexPath animated:YES];
 
+  NSInteger itemType = [self.tableViewModel itemTypeForIndexPath:indexPath];
+  if (itemType ==
+      static_cast<NSInteger>(ItemType::kSuggestionsFromGeminiItem)) {
+    [self.delegate
+        identityDocsTableViewControllerDidSelectSuggestionsFromGemini:self];
+    return;
+  }
+
   TableViewItem* item = [self.tableViewModel itemAtIndexPath:indexPath];
   [self.mutator didSelectEntityItem:item];
 }
@@ -492,6 +484,117 @@ enum ItemType {
 }
 
 #pragma mark - Private
+
+// Returns the toggle item based on management state.
+- (TableViewItem*)toggleItem {
+  if (_identityDocsToggleManaged) {
+    TableViewInfoButtonItem* managedItem = [[TableViewInfoButtonItem alloc]
+        initWithType:static_cast<NSInteger>(ItemType::kToggleItem)];
+    managedItem.text =
+        l10n_util::GetNSString(IDS_AUTOFILL_IDENTITY_DOCS_OPT_IN_TOGGLE_LABEL);
+    managedItem.statusText = l10n_util::GetNSString(IDS_IOS_SETTING_OFF);
+    managedItem.accessibilityHint = l10n_util::GetNSString(
+        IDS_IOS_TOGGLE_SETTING_MANAGED_ACCESSIBILITY_HINT);
+    managedItem.target = self;
+    managedItem.selector = @selector(didTapManagedUIInfoButton:);
+    return managedItem;
+  }
+
+  TableViewSwitchItem* toggleItem = [[TableViewSwitchItem alloc]
+      initWithType:static_cast<NSInteger>(ItemType::kToggleItem)];
+  toggleItem.text =
+      l10n_util::GetNSString(IDS_AUTOFILL_IDENTITY_DOCS_OPT_IN_TOGGLE_LABEL);
+  toggleItem.on = _identityDocsToggleEnabled && _identityDocsEnabled;
+  toggleItem.enabled = _identityDocsToggleEnabled;
+  toggleItem.target = self;
+  toggleItem.selector = @selector(identityDocsToggleChanged:);
+  return toggleItem;
+}
+
+// Returns the footer for the toggle section.
+- (TableViewHeaderFooterItem*)toggleFooter {
+  TableViewLinkHeaderFooterItem* footer = [[TableViewLinkHeaderFooterItem alloc]
+      initWithType:static_cast<NSInteger>(ItemType::kFooterItem)];
+  footer.text = l10n_util::GetNSString(
+      IDS_AUTOFILL_IDENTITY_DOCS_OPT_IN_TOGGLE_SUB_LABEL);
+  return footer;
+}
+
+// Populates the toggle section.
+- (void)loadToggleSection {
+  TableViewModel* model = self.tableViewModel;
+  NSInteger section = static_cast<NSInteger>(SectionIdentifier::kToggleSection);
+  [model addSectionWithIdentifier:section];
+  [model addItem:[self toggleItem] toSectionWithIdentifier:section];
+  [model setFooter:[self toggleFooter] forSectionWithIdentifier:section];
+}
+
+// Populates the Suggestions from Gemini section if enabled.
+- (void)loadSuggestionsFromGeminiSection {
+  if (!_shouldShowSuggestionsFromGemini) {
+    return;
+  }
+
+  TableViewModel* model = self.tableViewModel;
+  NSInteger section =
+      static_cast<NSInteger>(SectionIdentifier::kSuggestionsFromGeminiSection);
+  [model addSectionWithIdentifier:section];
+  [model addItem:[self suggestionsFromGeminiItem]
+      toSectionWithIdentifier:section];
+  [model setFooter:[self suggestionsFromGeminiFooter]
+      forSectionWithIdentifier:section];
+}
+
+// Adds an entity section with `items` and a header to the table view model if
+// `items` is not empty.
+- (void)addSectionWithIdentifier:(SectionIdentifier)sectionIdentifier
+                   headerTitleID:(int)headerTitleID
+                           items:(NSArray<TableViewItem*>*)items {
+  if (items.count == 0) {
+    return;
+  }
+
+  TableViewModel* model = self.tableViewModel;
+  NSInteger section = static_cast<NSInteger>(sectionIdentifier);
+  [model addSectionWithIdentifier:section];
+
+  TableViewTextHeaderFooterItem* header = [[TableViewTextHeaderFooterItem alloc]
+      initWithType:kAutofillAIBaseItemTypeHeader];
+  header.text = l10n_util::GetNSString(headerTitleID);
+  [model setHeader:header forSectionWithIdentifier:section];
+
+  for (TableViewItem* item in items) {
+    [model addItem:item toSectionWithIdentifier:section];
+  }
+}
+
+// Returns the table view item for the Suggestions from Gemini section.
+- (TableViewItem*)suggestionsFromGeminiItem {
+  TableViewMultiDetailTextItem* suggestionsFromGeminiItem =
+      [[TableViewMultiDetailTextItem alloc]
+          initWithType:static_cast<NSInteger>(
+                           ItemType::kSuggestionsFromGeminiItem)];
+  suggestionsFromGeminiItem.text =
+      l10n_util::GetNSString(IDS_IOS_PERSONAL_CONTEXT_AUTOFILL_SETTINGS_TITLE);
+  suggestionsFromGeminiItem.trailingDetailText = l10n_util::GetNSString(
+      _suggestionsFromGeminiEnabled ? IDS_IOS_SETTING_ON : IDS_IOS_SETTING_OFF);
+  suggestionsFromGeminiItem.accessoryType =
+      UITableViewCellAccessoryDisclosureIndicator;
+  suggestionsFromGeminiItem.accessibilityTraits |= UIAccessibilityTraitButton;
+  suggestionsFromGeminiItem.accessibilityIdentifier =
+      kSuggestionsFromGeminiTableViewId;
+  return suggestionsFromGeminiItem;
+}
+
+// Returns the footer for the Suggestions from Gemini section.
+- (TableViewHeaderFooterItem*)suggestionsFromGeminiFooter {
+  TableViewLinkHeaderFooterItem* footer = [[TableViewLinkHeaderFooterItem alloc]
+      initWithType:static_cast<NSInteger>(
+                       ItemType::kSuggestionsFromGeminiFooterItem)];
+  footer.text = l10n_util::GetNSString(
+      IDS_IOS_PERSONAL_CONTEXT_AUTOFILL_SETTINGS_SUBPAGE_SUMMARY);
+  return footer;
+}
 
 // Confirms the deletion of the given `items` by resetting the swipe-to-delete
 // state if needed and informing the mutator.

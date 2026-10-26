@@ -8,7 +8,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
@@ -17,11 +16,13 @@
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/passwords/password_bubble_view_test_base.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/affiliations/core/browser/match_type.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/mock_password_feature_manager.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/mock_password_store_interface.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync/test/test_sync_service.h"
 #include "content/public/test/navigation_simulator.h"
@@ -31,7 +32,6 @@
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/combobox/combobox.h"
 #include "ui/views/controls/editable_combobox/editable_password_combobox.h"
-#include "ui/views/controls/styled_label.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/view_utils.h"
@@ -227,8 +227,7 @@ TEST_P(PasswordSaveUpdateViewTest,
 
   // Set the federation_origin to force a Federated Credentials bubble.
   pending_password_.federation_origin = url::SchemeHostPort(kURL);
-  pending_password_.match_type =
-      password_manager::PasswordForm::MatchType::kExact;
+  pending_password_.match_type = affiliations::MatchType::kExact;
   CreateViewAndShow();
 }
 
@@ -328,13 +327,14 @@ TEST_F(PasswordDropdownExperimentTest, DropdownMenuExperimentMorphing) {
   // Add an existing credential.
   password_manager::PasswordForm existing_form;
   existing_form.username_value = u"existing_user";
-  existing_form.password_value = u"password";
+  existing_form.password_value = password_manager::PasswordString(u"password");
   current_forms_.push_back(
       std::make_unique<password_manager::PasswordForm>(existing_form));
 
   // Set pending password to a NEW user.
   pending_password_.username_value = u"new_user";
-  pending_password_.password_value = u"password";
+  pending_password_.password_value =
+      password_manager::PasswordString(u"password");
 
   // Start in Save state.
   ON_CALL(*model_delegate_mock(), GetState)
@@ -399,7 +399,8 @@ TEST_F(PasswordDropdownExperimentTest,
 
 TEST_F(PasswordDropdownExperimentTest,
        DropdownMenuExperimentInteraction_SaveAndReplaceWithPromo) {
-  pending_password_.password_value = u"password";
+  pending_password_.password_value =
+      password_manager::PasswordString(u"password");
 
   CreateViewAndShow();
 
@@ -422,7 +423,8 @@ TEST_F(PasswordDropdownExperimentTest,
 }
 
 TEST_F(PasswordDropdownExperimentTest, DropdownMenuExperimentInteraction_Save) {
-  pending_password_.password_value = u"password";
+  pending_password_.password_value =
+      password_manager::PasswordString(u"password");
 
   CreateViewAndShow();
 
@@ -432,7 +434,8 @@ TEST_F(PasswordDropdownExperimentTest, DropdownMenuExperimentInteraction_Save) {
 
 TEST_F(PasswordDropdownExperimentTest,
        DropdownMenuExperimentInteraction_Never) {
-  pending_password_.password_value = u"password";
+  pending_password_.password_value =
+      password_manager::PasswordString(u"password");
   CreateViewAndShow();
 
   views::View* split_button =
@@ -459,7 +462,7 @@ TEST_F(PasswordDropdownExperimentTest,
   // Add an existing credential.
   password_manager::PasswordForm existing_form;
   existing_form.username_value = u"existing_user";
-  existing_form.password_value = u"password";
+  existing_form.password_value = password_manager::PasswordString(u"password");
   current_forms_.push_back(
       std::make_unique<password_manager::PasswordForm>(existing_form));
 
@@ -506,7 +509,8 @@ TEST_F(PasswordDropdownExperimentTest, OkButtonEnabledWhenPasswordIsNotEmpty) {
 }
 
 TEST_F(PasswordDropdownExperimentTest, DropdownMenuExperimentNonBlockingMenu) {
-  pending_password_.password_value = u"password";
+  pending_password_.password_value =
+      password_manager::PasswordString(u"password");
   CreateViewAndShow();
 
   views::View* split_button =
@@ -571,8 +575,7 @@ TEST_F(PasswordDropdownExperimentTest,
 
   // Set the federation_origin to force a Federated Credentials bubble.
   pending_password_.federation_origin = url::SchemeHostPort(kURL);
-  pending_password_.match_type =
-      password_manager::PasswordForm::MatchType::kExact;
+  pending_password_.match_type = affiliations::MatchType::kExact;
 
   CreateViewAndShow();
 }
@@ -598,6 +601,26 @@ TEST_F(PasswordDropdownExperimentTest,
   ASSERT_TRUE(cancel_button);
   EXPECT_EQ(views::AsViewClass<views::MdTextButton>(cancel_button)->GetText(),
             NeverButtonCaption());
+}
+
+TEST_F(PasswordDropdownExperimentTest, TrustedVaultErrorUiState) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      password_manager::features::kPasswordSaveInContextErrorResolution};
+  signin::MakePrimaryAccountAvailable(
+      IdentityManagerFactory::GetForProfile(profile()), "test@email.com",
+      signin::ConsentLevel::kSignin);
+  ON_CALL(*model_delegate_mock(), IsSavingBlockedByTrustedVaultError)
+      .WillByDefault(Return(true));
+
+  CreateViewAndShow();
+
+  EXPECT_EQ(view()->GetSubtitle(),
+            l10n_util::GetStringUTF16(
+                IDS_PASSWORD_BUBBLES_SUBTITLE_TRUSTED_VAULT_ERROR));
+  views::MdTextButton* ok_button = view()->GetOkButtonForTesting();
+  ASSERT_TRUE(ok_button);
+  EXPECT_EQ(ok_button->GetText(), l10n_util::GetStringUTF16(IDS_CONTINUE));
+  ASSERT_TRUE(view()->GetFootnoteViewForTesting());
 }
 
 TEST_P(PasswordSaveUpdateViewTest, TrustedVaultErrorUiState) {

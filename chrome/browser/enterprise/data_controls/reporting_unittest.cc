@@ -43,7 +43,9 @@ class DataControlsReportingTest : public testing::Test {
     EXPECT_TRUE(profile_manager_->SetUp());
     managed_profile_ = profile_manager_->CreateTestingProfile("managed");
     unmanaged_profile_ = profile_manager_->CreateTestingProfile("unmanaged");
-    guest_profile_ = profile_manager_->CreateGuestProfile();
+    guest_profile_ =
+        profile_manager_->CreateGuestProfile()->GetPrimaryOTRProfile(
+            /*create_if_needed=*/true);
 
     helper_ = std::make_unique<
         enterprise_connectors::test::EventReportValidatorHelper>(
@@ -101,7 +103,7 @@ class DataControlsReportingTest : public testing::Test {
   }
 
   content::ClipboardEndpoint managed_endpoint(GURL url) {
-    return content::ClipboardEndpoint(
+    return content::ClipboardEndpoint::ForFrame(
         ui::DataTransferEndpoint(url),
         base::BindLambdaForTesting([this]() -> content::BrowserContext* {
           return static_cast<content::BrowserContext*>(managed_profile_);
@@ -110,7 +112,7 @@ class DataControlsReportingTest : public testing::Test {
   }
 
   content::ClipboardEndpoint incognito_managed_endpoint(GURL url) {
-    return content::ClipboardEndpoint(
+    return content::ClipboardEndpoint::ForFrame(
         ui::DataTransferEndpoint(url),
         base::BindLambdaForTesting([this]() -> content::BrowserContext* {
           return static_cast<content::BrowserContext*>(
@@ -120,7 +122,7 @@ class DataControlsReportingTest : public testing::Test {
   }
 
   content::ClipboardEndpoint unmanaged_endpoint(GURL url) {
-    return content::ClipboardEndpoint(
+    return content::ClipboardEndpoint::ForFrame(
         ui::DataTransferEndpoint(url),
         base::BindLambdaForTesting([this]() -> content::BrowserContext* {
           return static_cast<content::BrowserContext*>(unmanaged_profile_);
@@ -129,7 +131,7 @@ class DataControlsReportingTest : public testing::Test {
   }
 
   content::ClipboardEndpoint incognito_unmanaged_endpoint(GURL url) {
-    return content::ClipboardEndpoint(
+    return content::ClipboardEndpoint::ForFrame(
         ui::DataTransferEndpoint(url),
         base::BindLambdaForTesting([this]() -> content::BrowserContext* {
           return static_cast<content::BrowserContext*>(
@@ -139,7 +141,7 @@ class DataControlsReportingTest : public testing::Test {
   }
 
   content::ClipboardEndpoint guest_endpoint(GURL url) {
-    return content::ClipboardEndpoint(
+    return content::ClipboardEndpoint::ForFrame(
         ui::DataTransferEndpoint(url),
         base::BindLambdaForTesting([this]() -> content::BrowserContext* {
           return static_cast<content::BrowserContext*>(guest_profile_);
@@ -149,7 +151,7 @@ class DataControlsReportingTest : public testing::Test {
 
   content::ClipboardEndpoint os_clipboard_endpoint(GURL url,
                                                    bool off_the_record) {
-    return content::ClipboardEndpoint(
+    return content::ClipboardEndpoint::ForOutsideChrome(
         ui::DataTransferEndpoint(url, ui::DataTransferEndpointOptions{
                                           .off_the_record = off_the_record,
                                       }));
@@ -160,7 +162,7 @@ class DataControlsReportingTest : public testing::Test {
   std::unique_ptr<TestingProfileManager> profile_manager_;
   raw_ptr<TestingProfile> managed_profile_ = nullptr;
   raw_ptr<TestingProfile> unmanaged_profile_ = nullptr;
-  raw_ptr<TestingProfile> guest_profile_ = nullptr;
+  raw_ptr<Profile> guest_profile_ = nullptr;
   std::unique_ptr<content::WebContents> managed_contents_;
   std::unique_ptr<content::WebContents> unmanaged_contents_;
   std::unique_ptr<content::WebContents> incognito_managed_contents_;

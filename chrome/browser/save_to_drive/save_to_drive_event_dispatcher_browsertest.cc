@@ -13,7 +13,7 @@
 #include "chrome/browser/save_to_drive/save_to_drive_recorder.h"
 #include "chrome/browser/save_to_drive/time_remaining_calculator.h"
 #include "chrome/common/extensions/api/pdf_viewer_private.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -145,12 +145,12 @@ IN_PROC_BROWSER_TEST_P(SaveToDriveEventDispatcherBrowserTest, Notify) {
   EXPECT_EQ(captured_event->event_name,
             pdf_api::OnSaveToDriveProgress::kEventName);
 
-  ASSERT_EQ(captured_event->event_args.size(), 2u);
+  ASSERT_EQ(captured_event->args().size(), 2u);
   // The stream URL is not deterministic, so just check that it's a string and
   // not empty.
-  ASSERT_TRUE(captured_event->event_args[0].is_string());
-  EXPECT_FALSE(captured_event->event_args[0].GetString().empty());
-  EXPECT_EQ(captured_event->event_args[1], expected_progress.ToValue());
+  ASSERT_TRUE(captured_event->args()[0].is_string());
+  EXPECT_FALSE(captured_event->args()[0].GetString().empty());
+  EXPECT_EQ(captured_event->args()[1], expected_progress.ToValue());
 }
 
 IN_PROC_BROWSER_TEST_P(SaveToDriveEventDispatcherBrowserTest,
@@ -172,7 +172,7 @@ IN_PROC_BROWSER_TEST_P(SaveToDriveEventDispatcherBrowserTest,
   extensions::Event* captured_event = observer.events().begin()->second.get();
   ASSERT_TRUE(captured_event);
   std::optional<pdf_api::SaveToDriveProgress> captured_progress =
-      pdf_api::SaveToDriveProgress::FromValue(captured_event->event_args[1]);
+      pdf_api::SaveToDriveProgress::FromValue(captured_event->args()[1]);
   ASSERT_TRUE(captured_progress.has_value());
   EXPECT_EQ(*captured_progress->file_metadata, "50.0/100 MB • PLACEHOLDER");
 }
@@ -194,7 +194,7 @@ IN_PROC_BROWSER_TEST_P(SaveToDriveEventDispatcherBrowserTest,
   extensions::Event* captured_event = observer.events().begin()->second.get();
   ASSERT_TRUE(captured_event);
   std::optional<pdf_api::SaveToDriveProgress> captured_progress =
-      pdf_api::SaveToDriveProgress::FromValue(captured_event->event_args[1]);
+      pdf_api::SaveToDriveProgress::FromValue(captured_event->args()[1]);
   ASSERT_TRUE(captured_progress.has_value());
   EXPECT_EQ(*captured_progress->file_metadata, "100 MB • Done");
 }
@@ -214,7 +214,7 @@ IN_PROC_BROWSER_TEST_P(SaveToDriveEventDispatcherBrowserTest,
   extensions::Event* captured_event = observer.events().begin()->second.get();
   ASSERT_TRUE(captured_event);
   std::optional<pdf_api::SaveToDriveProgress> captured_progress =
-      pdf_api::SaveToDriveProgress::FromValue(captured_event->event_args[1]);
+      pdf_api::SaveToDriveProgress::FromValue(captured_event->args()[1]);
   ASSERT_TRUE(captured_progress.has_value());
   EXPECT_FALSE(captured_progress->file_metadata.has_value());
 }

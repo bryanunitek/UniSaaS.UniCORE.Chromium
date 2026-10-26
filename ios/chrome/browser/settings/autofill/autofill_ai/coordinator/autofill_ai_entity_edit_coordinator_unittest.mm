@@ -9,7 +9,7 @@
 #import "base/test/scoped_feature_list.h"
 #import "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
 #import "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
-#import "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
+#import "components/autofill/core/browser/test_utils/entity_data_test_util.h"
 #import "components/autofill/core/common/autofill_features.h"
 #import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/autofill/model/ios_autofill_entity_data_manager_factory.h"
@@ -125,6 +125,7 @@ TEST_F(AutofillAIEntityEditCoordinatorTest, MediatorSetsConsumer) {
       [[FakeAutofillAIEntityEditConsumer alloc] init];
   mediator.consumer = consumer;
 
+  EXPECT_EQ(consumer.mode, AutofillAIEntityEditMode::kViewAndEdit);
   EXPECT_GT(consumer.title.length, 0u);
   EXPECT_GT(consumer.editItems.count, 0u);
 }
@@ -175,7 +176,8 @@ TEST_F(AutofillAIEntityEditCoordinatorTest, OpenWalletURLForServerWalletItem) {
   // Create an explicit Server Wallet entity instance.
   autofill::EntityType type(autofill::EntityTypeName::kVehicle);
   autofill::EntityInstanceBuilder builder(type);
-  builder.SetRecordType(autofill::EntityInstance::RecordType::kServerWallet);
+  builder.SetRecordTypeData(autofill::EntityInstance::WalletRecordTypePayload{
+      .management_url = GURL()});
 
   for (autofill::AttributeType attr_type : type.attributes()) {
     builder.AddAttribute(autofill::AttributeInstance(attr_type));

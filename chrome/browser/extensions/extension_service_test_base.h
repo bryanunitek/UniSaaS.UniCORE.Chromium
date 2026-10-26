@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 
+#include "base/auto_reset.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/raw_ptr.h"
@@ -41,6 +42,7 @@ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 class TestingProfile;
+class TestingProfileManager;
 
 namespace content {
 class BrowserContext;
@@ -143,6 +145,10 @@ class ExtensionServiceTestBase : public testing::Test {
   // Whether MV2 extensions should be allowed. Defaults to true.
   virtual bool ShouldAllowMV2Extensions();
 
+  // Whether unpacked extensions should be allowed without developer mode.
+  // Defaults to true.
+  virtual bool ShouldAllowUnpackedExtensionsWithoutDeveloperMode();
+
   // Initialize an empty ExtensionService using a production, on-disk pref file.
   // See documentation for `prefs_content`.
   void InitializeEmptyExtensionService();
@@ -172,6 +178,10 @@ class ExtensionServiceTestBase : public testing::Test {
   // TODO(rdevlin.cronin): Pull out more methods from ExtensionServiceTest that
   // are commonly used and/or reimplemented. For instance, methods to install
   // extensions from various locations, etc.
+
+  TestingProfileManager* testing_profile_manager() {
+    return testing_profile_manager_.get();
+  }
 
   content::BrowserContext* browser_context();
   Profile* profile();
@@ -255,7 +265,8 @@ class ExtensionServiceTestBase : public testing::Test {
 #endif
 
   // The associated testing profile.
-  std::unique_ptr<TestingProfile> profile_;
+  std::unique_ptr<TestingProfileManager> testing_profile_manager_;
+  raw_ptr<TestingProfile> profile_ = nullptr;
 
   // The directory into which extensions are installed.
   base::FilePath extensions_install_dir_;
@@ -278,6 +289,9 @@ class ExtensionServiceTestBase : public testing::Test {
 
   // An override that allows MV2 extensions to be loaded.
   std::optional<ScopedTestMV2Enabler> mv2_enabler_;
+
+  // An override that allows unpacked extensions without developer mode.
+  std::optional<base::AutoReset<bool>> allow_unpacked_without_developer_mode_;
 };
 
 }  // namespace extensions

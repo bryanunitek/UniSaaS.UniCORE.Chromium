@@ -63,8 +63,12 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
   void SetNeedsRedraw(const gfx::Rect& damage_rect) override;
   void SetTargetLocalSurfaceId(
       const viz::LocalSurfaceId& target_local_surface_id) override;
+  void SetMemoryPolicy(const ManagedMemoryPolicy& policy) override;
   void SetUnboundedFrameSink(
       std::unique_ptr<LayerTreeFrameSink> unbounded_frame_sink,
+      const viz::LocalSurfaceId& local_surface_id) override;
+  void SetUnboundedFrameSinkId(
+      const viz::FrameSinkId& frame_sink_id,
       const viz::LocalSurfaceId& local_surface_id) override;
   void DismissUnboundedFrameSink() override;
   void SetUnboundedLocalSurfaceId(
@@ -136,9 +140,11 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
   void NotifyReadyToDraw() override;
   void SetNeedsRedrawOnImplThread() override;
   void SetNeedsOneBeginImplFrameOnImplThread() override;
+  void NotifyInputEvent() override;
   void SetNeedsPrepareTilesOnImplThread() override;
   void SetNeedsCommitOnImplThread(BeginMainFrameReason reason,
-                                  bool urgent) override;
+                                  bool urgent,
+                                  bool unthrottle) override;
   void SetVideoNeedsBeginFrames(bool needs_begin_frames) override;
   void DidChangeBeginFrameSourcePaused(bool paused) override;
   void SetDeferBeginMainFrameFromImpl(bool defer_begin_main_frame) override {}

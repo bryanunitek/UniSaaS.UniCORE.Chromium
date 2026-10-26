@@ -33,7 +33,6 @@ namespace content {
 
 class BrowserContext;
 class DevToolsExternalAgentProxyDelegate;
-class MojomDevToolsAgentHostDelegate;
 class DevToolsSocketFactory;
 class RenderFrameHost;
 class WebContents;
@@ -63,7 +62,6 @@ class CONTENT_EXPORT DevToolsAgentHost
   static const char kTypeSharedWorker[];
   static const char kTypeServiceWorker[];
   static const char kTypeWorklet[];
-  static const char kTypeSharedStorageWorklet[];
   static const char kTypeBrowser[];
   static const char kTypeGuest[];
   static const char kTypeOther[];
@@ -113,13 +111,6 @@ class CONTENT_EXPORT DevToolsAgentHost
   static scoped_refptr<DevToolsAgentHost> Forward(
       const std::string& id,
       std::unique_ptr<DevToolsExternalAgentProxyDelegate> delegate);
-
-  // Creates DevToolsAgentHost that communicates to the target using mojom, and
-  // gets details from |delegate|. |delegate| ownership is passed to the created
-  // agent host.
-  static scoped_refptr<DevToolsAgentHost> CreateForMojomDelegate(
-      const std::string& id,
-      std::unique_ptr<MojomDevToolsAgentHostDelegate> delegate);
 
   using CreateServerSocketCallback =
       base::RepeatingCallback<std::unique_ptr<net::ServerSocket>(std::string*)>;

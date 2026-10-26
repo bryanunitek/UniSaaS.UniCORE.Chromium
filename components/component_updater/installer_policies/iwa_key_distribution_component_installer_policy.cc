@@ -4,8 +4,10 @@
 
 #include "components/component_updater/installer_policies/iwa_key_distribution_component_installer_policy.h"
 
-#include <cstdint>
+#include <stdint.h>
+
 #include <memory>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -127,8 +129,7 @@ IwaKeyDistributionComponentInstallerPolicy::GetRelativeInstallDir() const {
 
 void IwaKeyDistributionComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(std::begin(kIwaKeyDistributionPublicKeySHA256),
-               std::end(kIwaKeyDistributionPublicKeySHA256));
+  hash->assign_range(kIwaKeyDistributionPublicKeySHA256);
 }
 
 std::string IwaKeyDistributionComponentInstallerPolicy::GetName() const {

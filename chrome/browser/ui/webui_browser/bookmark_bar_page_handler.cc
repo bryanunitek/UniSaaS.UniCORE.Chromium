@@ -6,21 +6,18 @@
 
 #include <algorithm>
 
-#include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
-#include "base/logging.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/page_load_metrics/chrome_navigation_initiator.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bookmarks/bookmark_bar_controller.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils_desktop.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
-#include "components/page_load_metrics/browser/navigation_handle_user_data.h"
 #include "ui/base/window_open_disposition.h"
 
 namespace {
@@ -48,13 +45,13 @@ WebUIBrowserBookmarkBarPageHandler::WebUIBrowserBookmarkBarPageHandler(
     mojo::PendingReceiver<bookmark_bar::mojom::PageHandler> receiver,
     mojo::PendingRemote<bookmark_bar::mojom::Page> page,
     content::WebUI* web_ui,
-    Browser* browser)
+    BrowserWindowInterface* browser)
     : receiver_(this, std::move(receiver)),
       page_(std::move(page)),
       web_ui_(web_ui),
       browser_(browser) {
   bookmark_model_ =
-      BookmarkModelFactory::GetForBrowserContext(browser_->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser_->GetProfile());
 
   if (bookmark_model_) {
     bookmark_model_->AddObserver(this);
@@ -136,10 +133,9 @@ void WebUIBrowserBookmarkBarPageHandler::OpenInNewTab(int64_t node_id) {
   const bookmarks::BookmarkNode* node =
       bookmarks::GetBookmarkNodeByID(bookmark_model_, node_id);
   bookmarks::OpenAllIfAllowed(
-      browser_, {node}, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser_, {node}, WindowOpenDisposition::kNewForegroundTab,
       bookmarks::OpenAllBookmarksContext::kNone,
-      page_load_metrics::NavigationHandleUserData::InitiatorLocation::
-          kBookmarkBar,
+      chrome_navigation_initiator::kBookmarkBar,
       {{BookmarkLaunchLocation::kAttachedBar, base::TimeTicks::Now()}});
 }
 

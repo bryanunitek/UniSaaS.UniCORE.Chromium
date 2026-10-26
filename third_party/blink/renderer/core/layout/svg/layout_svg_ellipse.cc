@@ -63,17 +63,19 @@ LayoutSVGEllipse::~LayoutSVGEllipse() = default;
 void LayoutSVGEllipse::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutSVGShape::StyleDidChange(diff, old_style, style_change_context);
+  LayoutSVGShape::StyleDidChange(diff, old_style, new_style,
+                                 style_change_context);
 
-  if (old_style && GeometryPropertiesChanged(*old_style, StyleRef())) {
+  if (old_style && GeometryPropertiesChanged(*old_style, new_style)) {
     SetNeedsShapeUpdate();
   }
 }
 
 bool LayoutSVGEllipse::CalculateGeometryDependsOnViewport() const {
-  const ComputedStyle& style = StyleRef();
+  const ComputedStyle& style = Style();
   if (style.Cx().HasPercent() || style.Cy().HasPercent()) {
     return true;
   }
@@ -110,7 +112,7 @@ void LayoutSVGEllipse::CalculateRadiiAndCenter() {
   NOT_DESTROYED();
   DCHECK(GetElement());
   const SVGViewportResolver viewport_resolver(*this);
-  const ComputedStyle& style = StyleRef();
+  const ComputedStyle& style = Style();
   center_ =
       PointForLengthPair(style.Cx(), style.Cy(), viewport_resolver, style);
 
@@ -172,7 +174,7 @@ bool LayoutSVGEllipse::ShapeDependentFillContains(
 
 bool LayoutSVGEllipse::HasContinuousStroke() const {
   NOT_DESTROYED();
-  return !StyleRef().StrokeDashArray();
+  return !Style().StrokeDashArray();
 }
 
 }  // namespace blink

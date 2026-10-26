@@ -13,7 +13,6 @@
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/hash/hash.h"
-#include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -52,10 +51,9 @@ bool AutofillProfileMatchesAccountInfo(const AutofillProfile& profile,
 }
 
 void RemoveNickname(std::string& name) {
-  static const base::NoDestructor<RE2> nickname_pattern(
-      R"(\s+\([^)]*\)|\s+\"[^\"]*\")");
+  static constexpr re2::LazyRE2 nickname_pattern = {
+      R"(\s+\([^)]*\)|\s+\"[^\"]*\")"};
   RE2::GlobalReplace(&name, *nickname_pattern, "");
-
   name = base::UTF16ToUTF8(base::TrimWhitespace(base::UTF8ToUTF16(name),
                                                 base::TrimPositions::TRIM_ALL));
 }
@@ -90,7 +88,7 @@ void AccountNameEmailStore::OnExtendedAccountInfoUpdated(
       identity_manager_observer_.GetSource()->GetPrimaryAccountInfo(
           signin::ConsentLevel::kSignin);
   if (!primary_info.has_value() ||
-      (!primary_info->IsEmpty() && info.gaia != primary_info->gaia)) {
+      (!primary_info->IsEmpty() && info.GetGaiaId() != primary_info->gaia)) {
     return;
   }
   MaybeUpdateOrCreateAccountNameEmail();

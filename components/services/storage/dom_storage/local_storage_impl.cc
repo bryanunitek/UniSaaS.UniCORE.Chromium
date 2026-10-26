@@ -18,6 +18,7 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
 #include "base/task/thread_pool.h"
@@ -36,16 +37,6 @@
 
 namespace storage {
 namespace {
-
-// Limits on the cache size and number of areas in memory, over which the areas
-// are purged.
-#if BUILDFLAG(IS_ANDROID)
-const unsigned kMaxLocalStorageAreaCount = 10;
-const size_t kMaxLocalStorageCacheSize = 2 * 1024 * 1024;
-#else
-const unsigned kMaxLocalStorageAreaCount = 50;
-const size_t kMaxLocalStorageCacheSize = 20 * 1024 * 1024;
-#endif
 
 void IgnoreStatus(base::OnceClosure callback, DbStatus status) {
   std::move(callback).Run();
@@ -308,9 +299,8 @@ void LocalStorageImpl::ShutDown() {
   // Nothing to do if no connection to the database was ever finished.
   if (connection_state_ == CONNECTION_FINISHED) {
     // Flush any uncommitted data.
-    for (const auto& it : areas_) {
-      auto* area = it.second->storage_area();
-      area->ScheduleImmediateCommit();
+    for (const auto& [storage_key, storage_area_holder] : areas_) {
+      storage_area_holder->storage_area()->ScheduleImmediateCommit();
     }
 
     if (database_ && !force_keep_session_state_ &&
@@ -319,12 +309,38 @@ void LocalStorageImpl::ShutDown() {
           std::move(origins_to_purge_on_shutdown_));
     }
   }
+
+  for (const auto& [storage_key, storage_area_holder] : areas_) {
+    StorageAreaImpl* area = storage_area_holder->storage_area();
+    // Record data loss, which happens when this storage area destructs before
+    // persisting changes to `database_`.
+    //
+    // TODO(crbug.com/503422295): Monitor these histograms and if dropping
+    // changes is common then handle that here.
+    const bool data_loss_during_migration =
+        area->HasPendingCommit() && database_ && database_->is_migrating();
+
+    base::UmaHistogramBoolean("Storage.LocalStorage.MigrationDroppedChanges",
+                              data_loss_during_migration);
+
+    base::UmaHistogramBoolean("Storage.LocalStorage.ShutdownDroppedChanges",
+                              area->has_pending_load_read_write_tasks());
+  }
 }
 
 void LocalStorageImpl::PurgeMemory() {
+  const bool database_migration_in_progress =
+      database_ && database_->is_migrating();
+
   for (auto it = areas_.begin(); it != areas_.end();) {
-    if (it->second->has_bindings()) {
+    StorageAreaHolder& storage_area_holder = *it->second;
+    if (storage_area_holder.has_bindings()) {
       it->second->storage_area()->PurgeMemory();
+      ++it;
+    } else if (storage_area_holder.storage_area()->HasPendingCommit() &&
+               database_migration_in_progress) {
+      // To avoid losing the pending commit, don't purge the storage area during
+      // migration.
       ++it;
     } else {
       it = areas_.erase(it);
@@ -358,11 +374,21 @@ void LocalStorageImpl::PurgeUnusedAreasIfNeeded() {
     return;
   }
 
+  const bool database_migration_in_progress =
+      database_ && database_->is_migrating();
+
   for (auto it = areas_.begin(); it != areas_.end();) {
-    if (it->second->has_bindings())
+    StorageAreaHolder& storage_area_holder = *it->second;
+    if (storage_area_holder.has_bindings()) {
       ++it;
-    else
+    } else if (storage_area_holder.storage_area()->HasPendingCommit() &&
+               database_migration_in_progress) {
+      // To avoid losing the pending commit, don't purge the storage area during
+      // migration.
+      ++it;
+    } else {
       it = areas_.erase(it);
+    }
   }
 }
 
@@ -538,13 +564,16 @@ void LocalStorageImpl::OnConnectionFinished() {
 
 void LocalStorageImpl::DeleteAndRecreateDatabase(
     DomStorageRecoveryReason reason) {
+  CHECK(database_);
+  const DatabaseMetricsType metrics_type = database_->metrics_type();
+
   // Record the reason that initiated this recovery cycle. The first reason
   // wins: subsequent calls during the same recovery cycle (e.g. an open
   // failure after a destroy triggered by kCommitErrorThresholdExceeded) do not
   // overwrite it. So, the histogram correctly attributes the outcome to the
   // original reason.
   if (!recovery_state_) {
-    recovery_state_.emplace(reason, in_memory_);
+    recovery_state_.emplace(reason, metrics_type);
   }
 
   // We're about to set database_ to null, so delete the StorageAreaImpls
@@ -554,9 +583,9 @@ void LocalStorageImpl::DeleteAndRecreateDatabase(
   // Reset state to be in process of connecting. This will cause requests for
   // StorageAreas to be queued until the connection is complete.
   connection_state_ = CONNECTION_IN_PROGRESS;
-  RecordCommitErrorCountAtReset("LocalStorage", commit_error_count_);
+  RecordCommitErrorCountAtReset("LocalStorage", commit_error_count_,
+                                metrics_type);
   commit_error_count_ = 0;
-  CHECK(database_);
   database_.reset();
 
   bool recreate_in_memory = false;
@@ -666,22 +695,26 @@ void LocalStorageImpl::GetStatistics(size_t* total_cache_size,
 }
 
 void LocalStorageImpl::OnCommitResult(DbStatus status) {
+  CHECK_EQ(connection_state_, CONNECTION_FINISHED);
+  CHECK(database_);
   if (status.ok()) {
+    const DatabaseMetricsType metrics_type = database_->metrics_type();
     if (commit_error_count_ > 0 && tried_to_recover_from_commit_errors_) {
       base::UmaHistogramEnumeration(
-          "Storage.LocalStorage.Recovery.CommitErrorThresholdExceeded",
+          base::StrCat(
+              {"Storage.LocalStorage.Recovery.CommitErrorThresholdExceeded",
+               MaybeGetOnDiskExperimentalSuffix(metrics_type)}),
           DomStorageDatabaseRecoveryOutcome::
               kTransientErrorsAfterAttemptedRecovery);
     }
-    RecordCommitErrorCountAtReset("LocalStorage", commit_error_count_);
+    RecordCommitErrorCountAtReset("LocalStorage", commit_error_count_,
+                                  metrics_type);
     commit_error_count_ = 0;
     return;
   }
 
-  if (connection_state_ != CONNECTION_FINISHED) {
-    // Previous commit errors deleted and recreated the database below.  Ignore
-    // additional errors from the old database while waiting for the new
-    // database to open.
+  if (database_ && database_->is_migrating()) {
+    // Don't delete the source database while a migration is in progress.
     return;
   }
 
@@ -692,7 +725,9 @@ void LocalStorageImpl::OnCommitResult(DbStatus status) {
       // are still having problems: there isn't really anything left to try, so
       // just ignore errors.
       base::UmaHistogramEnumeration(
-          "Storage.LocalStorage.Recovery.CommitErrorThresholdExceeded",
+          base::StrCat(
+              {"Storage.LocalStorage.Recovery.CommitErrorThresholdExceeded",
+               MaybeGetOnDiskExperimentalSuffix(database_->metrics_type())}),
           DomStorageDatabaseRecoveryOutcome::
               kOngoingErrorsAfterAttemptedRecovery);
       return;

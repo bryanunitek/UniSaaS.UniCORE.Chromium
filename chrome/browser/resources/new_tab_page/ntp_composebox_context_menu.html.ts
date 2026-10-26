@@ -37,16 +37,20 @@ export function getHtml(this: NtpComposeboxElement) {
       .recentTabId="${this.recentTabId}"
       .smartTabSharingActive="${this.smartTabSharingActive}"
       .contextManagementInComposeboxEnabled="${this.contextManagementInComposeboxEnabled}"
+      .composeboxContextMenuTooltipsEnabled="${
+          this.composeboxContextMenuTooltipsEnabled}"
       .smartTabSharingVisible="${this.smartTabSharingVisible}"
       .searchboxLayoutMode="${this.searchboxLayoutMode}"
       .tabSuggestions="${this.tabSuggestions}"
       .hasImageFiles="${this.hasImageFiles()}"
-      .disabledTabIds="${this.addedTabsIds}"
+      .selectedTabIds="${this.addedTabsIds}"
       .aimThreadRestoredTabs="${this.aimThreadRestoredTabs}"
-      .fileNum="${this.files.size}"
+      .fileNum="${this.attachedContext.size}"
       .sharedTabs="${this.getSharedTabs()}"
       .tabSuggestionsState="${this.tabSuggestionsState}"
-      ?upload-button-disabled="${this.uploadButtonDisabled}"
+      .glifAnimationState="${this.glifAnimationState}"
+      .energyEffectAnimationEnabled="${this.energyEffectAnimationEnabled}"
+      .disableFallbackGlifAnimation="${true}"
       ?show-context-menu-description="${this.showContextMenuDescription}">
   </cr-composebox-contextual-entrypoint-and-menu>
 </div>

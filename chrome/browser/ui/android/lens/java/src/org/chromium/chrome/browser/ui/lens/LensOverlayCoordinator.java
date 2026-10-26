@@ -16,7 +16,10 @@ import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniPtr;
 import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.JniUniquePtr;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.Log;
@@ -33,6 +36,7 @@ import org.chromium.chrome.browser.lens.LensController;
 import org.chromium.chrome.browser.lens.LensEntryPoint;
 import org.chromium.chrome.browser.lens.LensIdentityUtils;
 import org.chromium.chrome.browser.lens.LensIntentParams;
+import org.chromium.chrome.browser.lens.LensSupportStatusHelper;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.components.browser_ui.share.ShareImageFileUtils;
 import org.chromium.components.embedder_support.view.ContentView;
@@ -56,12 +60,16 @@ import java.util.UUID;
 @JNINamespace("lens")
 @NullMarked
 public class LensOverlayCoordinator implements UserData {
+    @JniType("::lens::LensOverlayControllerAndroid")
+    interface NativeLensOverlayControllerAndroid extends JniTypeToken {}
+
     private static final String TAG = "LensOverlay";
-    static final String LENS_OVERLAY_IMPL_INTENT = "intent";
-    static final String LENS_OVERLAY_IMPL_WEBUI = "webui";
-    static final String LENS_OVERLAY_IMPL_DEFAULT = LENS_OVERLAY_IMPL_INTENT;
+    static final String LENS_OVERLAY_IMPL_DEFAULT =
+            LensSupportStatusHelper.LENS_OVERLAY_IMPL_INTENT;
 
     private static final String LENS_OVERLAY_JS_BRIDGE_NAME = "lensOverlay";
+
+    private static final String LENS_OVERLAY_URL = "chrome-untrusted://lens-overlay/";
 
     /**
      * Returns whether the WebUI implementation of the Lens Overlay is enabled via feature params.
@@ -69,36 +77,14 @@ public class LensOverlayCoordinator implements UserData {
     public static boolean isWebUiImplementationEnabled() {
         String implType =
                 ChromeFeatureList.getFieldTrialParamByFeature(
-                        ChromeFeatureList.LENS_OVERLAY_ANDROID, "implementation_type");
-        return LENS_OVERLAY_IMPL_WEBUI.equals(implType);
+                        ChromeFeatureList.LENS_OVERLAY_ANDROID,
+                        LensSupportStatusHelper.LENS_OVERLAY_IMPL_TYPE);
+        return LensSupportStatusHelper.LENS_OVERLAY_IMPL_WEBUI.equals(implType);
     }
 
-    private static final String LENS_OVERLAY_DEFAULT_HTML =
-            """
-            <!DOCTYPE html>
-            <html>
-            <head>
-            <style>
-              html, body {
-                align-items: center;
-                display: flex;
-                font-family: sans-serif;
-                height: 100vh;
-                justify-content: center;
-                margin: 0;
-                padding: 0;
-                width: 100vw;
-              }
-            </style>
-            </head>
-            <body onclick="lensOverlay.close()" role="dialog" aria-label="Lens Overlay Placeholder">
-              <h1>Lens Overlay Placeholder: Click to dismiss.</h1>
-            </body>
-            </html>
-            """;
-
     private final Tab mTab;
-    private long mNativeLensOverlayControllerAndroid;
+    private @Nullable JniUniquePtr<NativeLensOverlayControllerAndroid>
+            mNativeLensOverlayControllerAndroid;
     private @Nullable ThinWebView mThinWebView;
     private @Nullable WebContents mOverlayWebContents;
 
@@ -133,7 +119,8 @@ public class LensOverlayCoordinator implements UserData {
      * @return Whether the overlay was successfully started.
      */
     public boolean start(@LensOverlayInvocationSource int invocationSource) {
-        if (LensOverlayTabHelper.isOverlayShowing(mTab)) {
+        if (mNativeLensOverlayControllerAndroid == null
+                || LensOverlayTabHelper.isOverlayShowing(mTab)) {
             return false;
         }
 
@@ -153,7 +140,10 @@ public class LensOverlayCoordinator implements UserData {
         // - If capture fails to start, start() returns failure immediately.
         // - If capture fails asynchronously (e.g., GPU crash), onCaptureError() is called.
         if (!LensOverlayCoordinatorJni.get()
-                .showUI(mNativeLensOverlayControllerAndroid, invocationSource)) {
+                .showUI(
+                        mNativeLensOverlayControllerAndroid,
+                        invocationSource,
+                        isWebUiImplementationEnabled())) {
             Log.e(TAG, "Failed to show Lens Overlay UI");
             setShowing(false);
             return false;
@@ -173,17 +163,18 @@ public class LensOverlayCoordinator implements UserData {
         ThreadUtils.assertOnUiThread();
         String implType =
                 ChromeFeatureList.getFieldTrialParamByFeature(
-                        ChromeFeatureList.LENS_OVERLAY_ANDROID, "implementation_type");
+                        ChromeFeatureList.LENS_OVERLAY_ANDROID,
+                        LensSupportStatusHelper.LENS_OVERLAY_IMPL_TYPE);
 
         if (TextUtils.isEmpty(implType)) {
             implType = LENS_OVERLAY_IMPL_DEFAULT;
         }
 
         boolean isRunning = false;
-        Log.d(TAG, "Lens Overlay " + implType + " implementation started");
-        if (LENS_OVERLAY_IMPL_INTENT.equals(implType)) {
+        Log.d(TAG, "Lens Overlay %s implementation started", implType);
+        if (LensSupportStatusHelper.LENS_OVERLAY_IMPL_INTENT.equals(implType)) {
             isRunning = startIntentFlow(bitmap);
-        } else if (LENS_OVERLAY_IMPL_WEBUI.equals(implType)) {
+        } else if (LensSupportStatusHelper.LENS_OVERLAY_IMPL_WEBUI.equals(implType)) {
             isRunning = startWebUIFlow(bitmap);
         } else {
             Log.e(TAG, "Unrecognized implementation type: " + implType);
@@ -297,12 +288,7 @@ public class LensOverlayCoordinator implements UserData {
                 new ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        mOverlayWebContents
-                .getNavigationController()
-                .loadUrl(
-                        new LoadUrlParams(
-                                "data:text/html;charset=utf-8,"
-                                        + Uri.encode(LENS_OVERLAY_DEFAULT_HTML)));
+        mOverlayWebContents.getNavigationController().loadUrl(new LoadUrlParams(LENS_OVERLAY_URL));
         return true;
     }
 
@@ -392,9 +378,9 @@ public class LensOverlayCoordinator implements UserData {
 
     @Override
     public void destroy() {
-        if (mNativeLensOverlayControllerAndroid != 0) {
-            LensOverlayCoordinatorJni.get().destroy(mNativeLensOverlayControllerAndroid);
-            mNativeLensOverlayControllerAndroid = 0;
+        if (mNativeLensOverlayControllerAndroid != null) {
+            mNativeLensOverlayControllerAndroid.destroy();
+            mNativeLensOverlayControllerAndroid = null;
         }
         close();
     }
@@ -404,16 +390,42 @@ public class LensOverlayCoordinator implements UserData {
         return window.getIntentRequestTracker();
     }
 
+    void addWebUiDebugString(String s) {
+        if (mOverlayWebContents != null) {
+            String jsFormat =
+                    """
+                    const el = document.getElementById('div-debug');
+                    const div = document.createElement('div');
+                    div.textContent = '%s';
+                    el.appendChild(div);
+                    """;
+            // TODO(crbug.com/538670163): Move this to a proper file. Note that the text replacement
+            // below is for convenience, but not robust (e.g., it does not escape "</script>"
+            // literal, which on a browser would premature end a "<script>" block.
+            String js = String.format(jsFormat, s.replace("\\", "\\\\").replace("'", "\\'"));
+            mOverlayWebContents.evaluateJavaScript(js, null);
+        }
+    }
+
+    /**
+     * Called by the C++ controller when the backend responds with the processed objects. This is a
+     * temporary tracer bullet to verify the data pipeline.
+     */
+    @CalledByNative
+    void onObjectsReceived(int objectCount) {
+        ThreadUtils.assertOnUiThread();
+        addWebUiDebugString("Received Backend Objects: " + objectCount);
+    }
+
     @NativeMethods
     interface Natives {
-        long init(
+        JniUniquePtr<NativeLensOverlayControllerAndroid> init(
                 LensOverlayCoordinator caller,
                 @JniType("content::WebContents*") WebContents webContents);
 
         boolean showUI(
-                long nativeLensOverlayControllerAndroid,
-                @LensOverlayInvocationSource int invocationSource);
-
-        void destroy(long nativeLensOverlayControllerAndroid);
+                JniPtr<NativeLensOverlayControllerAndroid> self,
+                @LensOverlayInvocationSource int invocationSource,
+                boolean useWebUi);
     }
 }

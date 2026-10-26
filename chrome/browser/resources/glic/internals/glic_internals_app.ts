@@ -3,18 +3,54 @@
 // found in the LICENSE file.
 
 import '//resources/cr_elements/cr_button/cr_button.js';
+import '//resources/cr_elements/cr_checkbox/cr_checkbox.js';
 import '//resources/cr_elements/cr_tabs/cr_tabs.js';
 
+import type {CrCheckboxElement} from '//resources/cr_elements/cr_checkbox/cr_checkbox.js';
+import {EventTracker} from '//resources/js/event_tracker.js';
+import {loadTimeData} from '//resources/js/load_time_data.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
-import {ActuationEligibility, ActuationTarget, FormFactor, FreOverride, GlicExperimentalTriggeringState, InvocationSource, Platform} from '../glic.mojom-webui.js';
-import {FeatureMode} from '../glic_enums.mojom-webui.js';
-import {FreCompletionWaitMode, InternalsPageHandlerFactory, InternalsPageHandlerRemote} from '../glic_internals.mojom-webui.js';
-import type {InternalsDataPayload, TriggerInvokeFromInternalsOptions} from '../glic_internals.mojom-webui.js';
+import {             //
+  ActuationTarget,   //
+  FeatureMode,       //
+  FormFactor,        //
+  FreOverride,       //
+  InvocationSource,  //
+  Platform,          //
+} from '../glic_enums.mojom-webui.js';
+import {                            //
+  ActuationEligibility,             //
+  browserProxyFactory,              //
+  FreCompletionWaitMode,            //
+  GlicExperimentalTriggeringState,  //
+} from '../glic_internals.mojom-webui.js';
+import type {                                   //
+             BrowserProxy,                      //
+             InternalsDataPayload,              //
+             TriggerInvokeFromInternalsOptions, //
+} from '../glic_internals.mojom-webui.js';
 
 import {getCss} from './glic_internals_app.css.js';
 import {getHtml} from './glic_internals_app.html.js';
 
+const TAB_GENERAL = 0;
+const TAB_DEBUG = 1;
+const DEFAULT_TAB_HASH = '#general';
+
+const TAB_HASH_MAP: Record<number, string> = {
+  [TAB_GENERAL]: DEFAULT_TAB_HASH,
+  [TAB_DEBUG]: '#debug',
+};
+
+function getEnumEntries<E extends Record<string, unknown>>(enumObj: E):
+    Array<{name: string, value: number}> {
+  return Object.entries(enumObj)
+      .filter(
+          ([key]) =>
+              isNaN(Number(key)) && key !== 'MIN_VALUE' && key !== 'MAX_VALUE')
+      .map(([name, value]) => ({name, value: Number(value)}));
+}
 
 export class GlicInternalsAppElement extends CrLitElement {
   static get is() {
@@ -32,12 +68,14 @@ export class GlicInternalsAppElement extends CrLitElement {
   static override get properties() {
     return {
       data_: {type: Object},
-      invokePrompt_: {type: String},
+      invokePrompts_: {type: Array},
       invokeAutoSubmit_: {type: Boolean},
       invokeFreOverride_: {type: Number},
       invokeFeatureMode_: {type: Number},
       invokeInvocationSource_: {type: Number},
       invokeWaitForPanelOpen_: {type: Boolean},
+      invokeFocusOnShow_: {type: Boolean},
+      invokeTimeoutMs_: {type: String},
       invokeLogs_: {type: Array},
       invokeSurfaceType_: {type: String},
       invokeZssOverride_: {type: Boolean},
@@ -49,22 +87,39 @@ export class GlicInternalsAppElement extends CrLitElement {
       invokePayloadUniversalCartMetadata_: {type: String},
       invokeFreCompletionWaitMode_: {type: Number},
       freCompletionWaitModeEnumValues_: {type: Array},
+      invokeTakeScreenshot_: {type: Boolean},
+      invokeSupersedeIfInProgress_: {type: Boolean},
+      invokePublicKey_: {type: String},
+      invokeAuthSecret_: {type: String},
 
       selectedTabIndex_: {type: Number},
-      invokeNewConversation_: {type: Boolean},
+      invokeConversationType_: {type: String},
+      invokeConversationId_: {type: String},
+      invokeSpecificTabIndex_: {type: Number},
+      invokeSpecificTabsToShareIndices_: {type: Array},
+      availableTabs_: {type: Array},
       tabNames_: {type: Array},
       featureModeEnumValues_: {type: Array},
+      copyButtonText_: {type: String},
     };
   }
 
+  protected accessor copyButtonText_: string = 'Copy Diagnostics';
+  private copyResetTimeoutId_: number|null = null;
+  private eventTracker_: EventTracker = new EventTracker();
+  private highlightTimeoutId_: number|null = null;
+  private currentHighlightedElement_: HTMLElement|null = null;
+
   protected accessor data_: InternalsDataPayload|undefined;
-  protected accessor invokePrompt_: string = '';
+  protected accessor invokePrompts_: string[] = [''];
   protected accessor invokeAutoSubmit_: boolean = true;
   protected accessor invokeFreOverride_: FreOverride = FreOverride.kUnspecified;
   protected accessor invokeFeatureMode_: FeatureMode = FeatureMode.kUnspecified;
   protected accessor invokeInvocationSource_: InvocationSource =
       InvocationSource.kOsButton;
   protected accessor invokeWaitForPanelOpen_: boolean = false;
+  protected accessor invokeFocusOnShow_: boolean = true;
+  protected accessor invokeTimeoutMs_: string = '';
   protected accessor invokeLogs_: string[] = [];
   protected accessor invokeSurfaceType_: string = 'default';
   protected accessor invokeZssOverride_: boolean = false;
@@ -76,49 +131,112 @@ export class GlicInternalsAppElement extends CrLitElement {
   protected accessor invokePayloadUniversalCartMetadata_: string = '';
   protected accessor invokeFreCompletionWaitMode_: FreCompletionWaitMode =
       FreCompletionWaitMode.kDefault;
-  protected accessor invokeNewConversation_: boolean = false;
+  protected accessor invokeTakeScreenshot_: boolean = false;
+  protected accessor invokeSupersedeIfInProgress_: boolean = false;
+  protected accessor invokePublicKey_: string =
+      'BFlvj1VrkwP8pxa1zSiJZzZ7yeMEO1DOPS' +
+      'bNw6XV8NK3Xo++7ql9NTcxNaciYM2eQ/G1ebnwrtRrHyMXEDhN5ck=';
+  protected accessor invokeAuthSecret_: string = 'aaaaaaaaaaaaaaaa';
+  protected accessor invokeConversationType_: string = 'default';
+  protected accessor invokeConversationId_: string = '';
+  protected accessor invokeSpecificTabIndex_: number = 0;
+  protected accessor invokeSpecificTabsToShareIndices_: number[] = [];
+  protected accessor availableTabs_: string[] = [];
 
   protected accessor selectedTabIndex_: number = 0;
   protected accessor tabNames_: string[] = ['General', 'Debug Controls'];
   protected accessor featureModeEnumValues_:
-      Array<{name: string, value: number}> =
-          Object.entries(FeatureMode)
-              .filter(([key]) => isNaN(Number(key)))
-              .map(([name, value]) => ({name, value: value as number}));
+      Array<{name: string, value: number}> = getEnumEntries(FeatureMode);
   protected accessor actuationTargetEnumValues_:
-      Array<{name: string, value: number}> =
-          Object.entries(ActuationTarget)
-              .filter(([key]) => isNaN(Number(key)))
-              .map(([name, value]) => ({name, value: value as number}));
+      Array<{name: string, value: number}> = getEnumEntries(ActuationTarget);
   protected accessor freCompletionWaitModeEnumValues_:
       Array<{name: string, value: number}> =
-          Object.entries(FreCompletionWaitMode)
-              .filter(([key]) => isNaN(Number(key)))
-              .map(([name, value]) => ({name, value: value as number}));
+          getEnumEntries(FreCompletionWaitMode);
 
 
 
-  private pageHandler_ = new InternalsPageHandlerRemote();
+  private browserProxy_: BrowserProxy = browserProxyFactory.getInstance();
 
   override connectedCallback() {
     super.connectedCallback();
-    InternalsPageHandlerFactory.getRemote().createInternalsPageHandler(
-        this.pageHandler_.$.bindNewPipeAndPassReceiver());
+    this.eventTracker_.add(window, 'hashchange', () => this.onHashChanged_());
+    this.fetchInternalsData_();
+    this.refreshOpenTabs_();
+    this.onHashChanged_();
+  }
 
-    this.pageHandler_.getInternalsDataPayload().then(
-        ({internalsData}: {internalsData: InternalsDataPayload}) => {
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    this.eventTracker_.removeAll();
+    if (this.highlightTimeoutId_ !== null) {
+      window.clearTimeout(this.highlightTimeoutId_);
+      this.highlightTimeoutId_ = null;
+    }
+  }
+
+  private fetchInternalsData_() {
+    this.browserProxy_.handler.getInternalsDataPayload().then(
+        async ({internalsData}: {internalsData: InternalsDataPayload}) => {
           this.data_ = internalsData;
+          if (window.location.hash) {
+            await this.updateComplete;
+            const {elementId} = this.resolveTargetHash_(window.location.hash);
+            if (elementId) {
+              this.scrollToElement_(elementId);
+            }
+          }
         });
   }
 
   protected onShowErrorAllowedChange(e: Event) {
     const allowed = (e.target as HTMLInputElement).checked;
     this.data_!.showErrorAllowed = allowed;
-    this.pageHandler_.setShowErrorAllowed(allowed);
+    this.browserProxy_.handler.setShowErrorAllowed(allowed);
   }
 
   protected onExperimentalOptInClick_() {
-    this.pageHandler_.showExperimentalOptIn();
+    this.browserProxy_.handler.showExperimentalOptIn();
+  }
+
+  protected isAllConsentMet_(): boolean {
+    if (!this.data_?.enablement) {
+      return false;
+    }
+    return this.data_.enablement.glicExperimentalTriggeringState ===
+        GlicExperimentalTriggeringState.kReady &&
+        this.data_.enablement.freIsConsented &&
+        this.data_.enablement.actuationIsConsented;
+  }
+
+  protected onGlicConsentChange_(e: CustomEvent<{value: boolean}>) {
+    if (!(e.target as HTMLInputElement).checked) {
+      this.browserProxy_.handler.revokeGlicConsent();
+      this.fetchInternalsData_();
+    }
+  }
+
+  protected onActuationConsentChange_(e: CustomEvent<{value: boolean}>) {
+    if (!(e.target as HTMLInputElement).checked) {
+      this.browserProxy_.handler.revokeActuationConsent();
+      this.fetchInternalsData_();
+    }
+  }
+
+  protected onExperimentalConsentChange_(e: CustomEvent<{value: boolean}>) {
+    if (!(e.target as HTMLInputElement).checked) {
+      this.browserProxy_.handler.revokeExperimentalTriggeringConsent();
+      this.fetchInternalsData_();
+    }
+  }
+
+  protected onHotkeyGlobalScopeMigratedChange_(
+      e: CustomEvent<{value: boolean}>) {
+    const checked = (e.target as CrCheckboxElement).checked;
+    if (this.data_) {
+      this.data_.hotkeyGlobalScopeMigratedV2 = checked;
+    }
+    this.browserProxy_.handler.setHotkeyGlobalScopeMigratedV2(checked);
+    this.fetchInternalsData_();
   }
 
   protected onAutopushInputChange(e: Event) {
@@ -154,7 +272,7 @@ export class GlicInternalsAppElement extends CrLitElement {
       return;
     }
     errorMsg!.classList.add('hiddenElement');
-    this.pageHandler_.setGuestUrlPresets(
+    this.browserProxy_.handler.setGuestUrlPresets(
         this.data_!.config.autopushGuestUrl, this.data_!.config.stagingGuestUrl,
         this.data_!.config.preprodGuestUrl, this.data_!.config.prodGuestUrl);
   }
@@ -177,7 +295,7 @@ export class GlicInternalsAppElement extends CrLitElement {
       return;
     }
     errorMsg!.classList.add('hiddenElement');
-    this.pageHandler_.setWebContinuityOriginatingHostUrlPreset(url);
+    this.browserProxy_.handler.setWebContinuityOriginatingHostUrlPreset(url);
   }
 
   protected getActuationEligibilityString_(eligibility: ActuationEligibility):
@@ -203,6 +321,215 @@ export class GlicInternalsAppElement extends CrLitElement {
   protected getExperimentalTriggeringStateString_(
       state: GlicExperimentalTriggeringState): string {
     return GlicExperimentalTriggeringState[state] || 'Unknown';
+  }
+
+  protected isActuationEligible_(): boolean {
+    return this.data_?.enablement?.actuationEligibility ===
+        ActuationEligibility.kEligible;
+  }
+
+  protected isGlicApiActuationEligible_(): boolean {
+    return this.data_?.enablement?.glicApiActuationEligibility ===
+        ActuationEligibility.kEligible;
+  }
+
+  protected computeOverallStatus_(): {enabled: boolean, reason?: string} {
+    if (!this.data_ || !this.data_.enablement) {
+      return {enabled: false, reason: 'Loading or unavailable'};
+    }
+    const e = this.data_.enablement;
+    if (!e.featureEnabled) {
+      return {enabled: false, reason: 'Disabled by Chrome feature flag'};
+    }
+    if (!e.isRegularProfile) {
+      return {
+        enabled: false,
+        reason: 'Not a regular user profile (e.g. Incognito or Guest)',
+      };
+    }
+    if (!e.allowedByCountryFilter) {
+      return {enabled: false, reason: 'Blocked by country filter'};
+    }
+    if (!e.allowedByLocaleFilter) {
+      return {enabled: false, reason: 'Blocked by UI locale filter'};
+    }
+    if (!e.allowedByChromePolicy) {
+      return {enabled: false, reason: 'Disabled by enterprise Chrome policy'};
+    }
+    if (!e.allowedByRemoteAdmin) {
+      return {enabled: false, reason: 'Disabled by server-side admin policy'};
+    }
+    if (!e.allowedByRemoteOther) {
+      return {enabled: false, reason: 'Disabled by server-side configuration'};
+    }
+    if (!e.isRolledOut) {
+      return {enabled: false, reason: 'Profile not in rollout group'};
+    }
+    if (!e.primaryAccountIsCapable) {
+      return {
+        enabled: false,
+        reason: 'Primary account lacks Gemini capabilities',
+      };
+    }
+    if (!e.primaryAccountIsFullySignedIn) {
+      return {enabled: false, reason: 'Primary account not fully signed in'};
+    }
+    if (!e.freIsConsented) {
+      return {
+        enabled: false,
+        reason: 'First Run Experience (FRE) consent not completed',
+      };
+    }
+    return {enabled: true};
+  }
+
+  protected onRefreshClick_() {
+    this.fetchInternalsData_();
+    this.refreshOpenTabs_();
+  }
+
+  protected getChromeVersion_(): string {
+    if (loadTimeData.isInitialized()) {
+      try {
+        const browserVersion = loadTimeData.getString('browserVersion');
+        if (browserVersion) {
+          return browserVersion;
+        }
+      } catch {
+        // Fall back below if key is not found.
+      }
+      try {
+        const version = loadTimeData.getString('version');
+        if (version) {
+          const modifier = loadTimeData.getString('version_modifier');
+          const arch = loadTimeData.getString('version_processor_variation');
+          return [version, modifier, arch].filter(Boolean).join(' ');
+        }
+      } catch {
+        // Fall back below.
+      }
+    }
+    const match = navigator.userAgent.match(/Chrome\/([0-9.]+)/);
+    return match?.[1] ?? 'Unknown';
+  }
+
+  protected getDiagnosticsMarkdown_(): string {
+    if (!this.data_) {
+      return '# Glic Internals Diagnostics\n\nNo diagnostics data available.';
+    }
+
+    const lines: string[] = [];
+    const overall = this.computeOverallStatus_();
+
+    lines.push('# Glic Internals Diagnostics');
+    lines.push('');
+    lines.push(`- **Timestamp:** ${new Date().toISOString()}`);
+    lines.push(`- **Chrome Version:** ${this.getChromeVersion_()}`);
+    if (loadTimeData.isInitialized()) {
+      try {
+        const revision = loadTimeData.getString('cl');
+        if (revision) {
+          lines.push(`- **Revision:** ${revision}`);
+        }
+      } catch {
+        // Ignore if key is not present.
+      }
+    }
+    lines.push(`- **Overall Status:** ${
+        overall.enabled ? 'Eligible & Enabled' : 'Blocked / Ineligible'}`);
+    if (!overall.enabled && overall.reason) {
+      lines.push(`- **Blocking Reason:** ${overall.reason}`);
+    }
+    if (this.data_.debugInfo) {
+      lines.push(`- **Platform:** ${
+          this.getPlatformString_(this.data_.debugInfo.platform)}`);
+      lines.push(`- **Form Factor:** ${
+          this.getFormFactorString_(this.data_.debugInfo.formFactor)}`);
+    }
+    lines.push(`- **User Agent:** ${navigator.userAgent}`);
+    lines.push('');
+
+    const generalContents = this.shadowRoot?.querySelector('#general-contents');
+    if (generalContents) {
+      const cards = generalContents.querySelectorAll('.card');
+      for (const card of cards) {
+        const headerEl = card.querySelector('.card-header');
+        const headerText = headerEl?.textContent?.trim();
+        const table = card.querySelector('table');
+        if (!table) {
+          continue;
+        }
+        const tableMd = this.tableToMarkdown_(table);
+        if (!tableMd) {
+          continue;
+        }
+        if (headerText) {
+          lines.push(`## ${headerText}`);
+          lines.push('');
+        }
+        lines.push(tableMd);
+        lines.push('');
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  private cleanTableCellText_(text: string): string {
+    return text.replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim();
+  }
+
+  private tableToMarkdown_(table: HTMLTableElement): string {
+    const headerCells = Array.from(table.querySelectorAll('thead th'));
+    if (headerCells.length === 0) {
+      return '';
+    }
+
+    const headers =
+        headerCells.map(th => this.cleanTableCellText_(th.textContent ?? ''));
+    const lines: string[] = [
+      `| ${headers.join(' | ')} |`,
+      `| ${headers.map(() => ':---').join(' | ')} |`,
+    ];
+
+    const rowElements = Array.from(table.querySelectorAll('tbody tr'));
+    for (const row of rowElements) {
+      const cells =
+          Array.from(row.querySelectorAll('td'))
+              .map(td => this.cleanTableCellText_(td.textContent ?? ''));
+      if (cells.length === 0) {
+        continue;
+      }
+      while (cells.length < headers.length) {
+        cells.push('');
+      }
+      lines.push(`| ${cells.join(' | ')} |`);
+    }
+
+    return lines.join('\n');
+  }
+
+  protected async onCopyDiagnosticsClick_() {
+    await this.updateComplete;
+    const text = this.getDiagnosticsMarkdown_();
+    try {
+      await navigator.clipboard.writeText(text);
+      if (this.copyResetTimeoutId_ !== null) {
+        window.clearTimeout(this.copyResetTimeoutId_);
+      }
+      this.copyButtonText_ = 'Copied!';
+      this.copyResetTimeoutId_ = window.setTimeout(() => {
+        this.copyButtonText_ = 'Copy Diagnostics';
+        this.copyResetTimeoutId_ = null;
+      }, 2000);
+    } catch (err) {
+      console.error('Failed to copy diagnostics to clipboard:', err);
+    }
+  }
+
+  protected isExperimentalOptInConsentMet_(): boolean {
+    return this.data_?.enablement?.glicExperimentalTriggeringState ===
+        GlicExperimentalTriggeringState.kReady;
   }
 
   protected getTableData_(): Array<{label: string, value: boolean}> {
@@ -263,14 +590,31 @@ export class GlicInternalsAppElement extends CrLitElement {
     ];
   }
 
-  protected getInvocationSourceOptions_() {
-    return Object.entries(InvocationSource)
-        .filter(([_, value]) => typeof value === 'number')
-        .map(([key, value]) => ({name: key, value: value}));
+  protected getInvocationSourceOptions_():
+      Array<{name: string, value: number}> {
+    return getEnumEntries(InvocationSource);
   }
 
   protected onInvokePromptInput_(e: Event) {
-    this.invokePrompt_ = (e.target as HTMLInputElement).value;
+    const input = e.target as HTMLInputElement;
+    const index = Number(input.dataset['index']);
+    const newPrompts = [...this.invokePrompts_];
+    newPrompts[index] = input.value;
+    this.invokePrompts_ = newPrompts;
+  }
+
+  protected onAddPromptClick_() {
+    this.invokePrompts_ = [...this.invokePrompts_, ''];
+  }
+
+  protected onRemovePromptClick_(e: Event) {
+    if (this.invokePrompts_.length <= 1) {
+      return;
+    }
+    const button = e.currentTarget as HTMLElement;
+    const indexToRemove = Number(button.dataset['index']);
+    this.invokePrompts_ =
+        this.invokePrompts_.filter((_, index) => index !== indexToRemove);
   }
 
   protected onInvokeAutoSubmitChange_(e: Event) {
@@ -292,9 +636,19 @@ export class GlicInternalsAppElement extends CrLitElement {
   protected onInvokeWaitForPanelOpenChange_(e: Event) {
     this.invokeWaitForPanelOpen_ = (e.target as HTMLInputElement).checked;
   }
+  protected onInvokeFocusOnShowChange_(e: Event) {
+    this.invokeFocusOnShow_ = (e.target as HTMLInputElement).checked;
+  }
+  protected onInvokeTimeoutMsInput_(e: Event) {
+    this.invokeTimeoutMs_ = (e.target as HTMLInputElement).value;
+  }
 
-  protected onInvokeNewConversationChange_(e: Event) {
-    this.invokeNewConversation_ = (e.target as HTMLInputElement).checked;
+  protected onInvokeConversationTypeChange_(e: Event) {
+    this.invokeConversationType_ = (e.target as HTMLSelectElement).value;
+  }
+
+  protected onInvokeConversationIdInput_(e: Event) {
+    this.invokeConversationId_ = (e.target as HTMLInputElement).value;
   }
 
   protected onPayloadUniversalCartMetadataInput_(e: Event) {
@@ -302,8 +656,47 @@ export class GlicInternalsAppElement extends CrLitElement {
         (e.target as HTMLInputElement).value;
   }
 
-  protected onInvokeSurfaceTypeChange_(e: Event) {
+  protected async onInvokeSurfaceTypeChange_(e: Event) {
     this.invokeSurfaceType_ = (e.target as HTMLSelectElement).value;
+    if (this.invokeSurfaceType_ === 'specificTab') {
+      await this.refreshOpenTabs_();
+    }
+  }
+
+  protected async refreshOpenTabs_() {
+    const {tabTitles} = await this.browserProxy_.handler.getOpenTabs();
+    this.availableTabs_ = tabTitles;
+    this.invokeSpecificTabIndex_ = 0;
+  }
+
+  protected onRefreshTabsClick_() {
+    this.refreshOpenTabs_();
+  }
+
+  protected onInvokeSpecificTabIndexChange_(e: Event) {
+    this.invokeSpecificTabIndex_ =
+        Number((e.target as HTMLSelectElement).value);
+  }
+
+  protected onInvokeSpecificTabsToShareIndexChange_(e: Event) {
+    const select = e.target as HTMLSelectElement;
+    const indexInArray = Number(select.dataset['index']);
+    const newIndices = [...this.invokeSpecificTabsToShareIndices_];
+    newIndices[indexInArray] = Number(select.value);
+    this.invokeSpecificTabsToShareIndices_ = newIndices;
+  }
+
+  protected onRemoveTabsToShareIndexClick_(e: Event) {
+    const button = e.target as HTMLElement;
+    const indexToRemove = Number(button.dataset['index']);
+    this.invokeSpecificTabsToShareIndices_ =
+        this.invokeSpecificTabsToShareIndices_.filter(
+            (_, index) => index !== indexToRemove);
+  }
+
+  protected onAddTabsToShareIndexClick_() {
+    this.invokeSpecificTabsToShareIndices_ =
+        [...this.invokeSpecificTabsToShareIndices_, 0];
   }
 
   protected onInvokeZssOverrideChange_(e: Event) {
@@ -329,12 +722,27 @@ export class GlicInternalsAppElement extends CrLitElement {
     this.invokeFreCompletionWaitMode_ =
         Number((e.target as HTMLSelectElement).value);
   }
+  protected onInvokeTakeScreenshotChange_(e: Event) {
+    this.invokeTakeScreenshot_ = (e.target as HTMLInputElement).checked;
+  }
+  protected onInvokeSupersedeIfInProgressChange_(e: Event) {
+    this.invokeSupersedeIfInProgress_ = (e.target as HTMLInputElement).checked;
+  }
+  protected onInvokePublicKeyInput_(e: Event) {
+    this.invokePublicKey_ = (e.target as HTMLInputElement).value;
+  }
+  protected onInvokeAuthSecretInput_(e: Event) {
+    this.invokeAuthSecret_ = (e.target as HTMLInputElement).value;
+  }
   protected onTriggerInvokeClick_() {
-    const surface = this.invokeSurfaceType_ === 'newTab' ?
-        {newTab: {openInForeground: this.invokeOpenInForeground_}} :
-        {defaultSurface: {}};
+    let surface: TriggerInvokeFromInternalsOptions['surface'];
+    if (this.invokeSurfaceType_ === 'newTab') {
+      surface = {newTab: {openInForeground: this.invokeOpenInForeground_}};
+    } else {
+      surface = {defaultSurface: {}};
+    }
 
-    let payload = null;
+    let payload: TriggerInvokeFromInternalsOptions['payload'] = null;
     if (this.invokeInvocationSource_ === InvocationSource.kUniversalCart) {
       const bytes = this.invokePayloadUniversalCartMetadata_ ?
           Array.from(
@@ -348,28 +756,53 @@ export class GlicInternalsAppElement extends CrLitElement {
       };
     }
 
+    let conversationSelection:
+        TriggerInvokeFromInternalsOptions['conversation'] = {
+          defaultConversation: {},
+        };
+    if (this.invokeConversationType_ === 'new') {
+      conversationSelection = {newConversation: {}};
+    } else if (this.invokeConversationType_ === 'conversationId') {
+      conversationSelection = {conversationId: this.invokeConversationId_};
+    }
+
     const options: TriggerInvokeFromInternalsOptions = {
       invocationSource: this.invokeInvocationSource_,
-      prompts: this.invokePrompt_ ? [this.invokePrompt_] : [],
-      additionalContext: null,
-      conversation: this.invokeNewConversation_ ? {newConversation: {}} :
-                                                  {defaultConversation: {}},
+      prompts: this.invokePrompts_.filter(prompt => prompt.length > 0),
+      conversation: conversationSelection,
       featureMode: this.invokeFeatureMode_,
       disableZss: false,
-      zssConfig: this.invokeZssOverride_ ?
-          {additionalContent: this.invokeZssAdditionalContent_ || null} :
+      zssAdditionalContent: this.invokeZssOverride_ ?
+          (this.invokeZssAdditionalContent_ || null) :
           null,
       skillId: null,
       errorMessage: null,
-      timeout: null,
+      timeout: this.invokeTimeoutMs_ ?
+          {microseconds: BigInt(Number(this.invokeTimeoutMs_) * 1000)} :
+          null,
       autoSubmit: this.invokeAutoSubmit_,
       freOverride: this.invokeFreOverride_,
       waitForPanelOpen: this.invokeWaitForPanelOpen_,
+      focusOnShow: this.invokeFocusOnShow_,
       freCompletionWaitMode: this.invokeFreCompletionWaitMode_,
       surface: surface,
+      specificTabIndex: this.invokeSurfaceType_ === 'specificTab' ?
+          this.invokeSpecificTabIndex_ :
+          null,
+      specificTabsToShareIndices:
+          this.invokeSpecificTabsToShareIndices_.length > 0 ?
+          this.invokeSpecificTabsToShareIndices_ :
+          null,
       actuationTarget: this.invokeActuationTarget_,
       showPanel: this.invokeAutoSubmit_ ? this.invokeShowPanel_ : null,
       payload: payload,
+      takeScreenshot: this.invokeTakeScreenshot_,
+      supersedeIfInProgress: this.invokeSupersedeIfInProgress_,
+      keyConfig: (this.invokePublicKey_ || this.invokeAuthSecret_) ? {
+        publicKey: this.invokePublicKey_,
+        authSecret: this.invokeAuthSecret_,
+      } :
+                                                                     null,
     };
 
     const invocationSourceMap =
@@ -382,6 +815,9 @@ export class GlicInternalsAppElement extends CrLitElement {
         ActuationTarget as unknown as Record<number, string>;
 
     const optionsString = JSON.stringify(options, (key, value) => {
+      if (typeof value === 'bigint') {
+        value = value.toString();
+      }
       if (value === null || value === undefined) {
         return undefined;
       }
@@ -416,6 +852,9 @@ export class GlicInternalsAppElement extends CrLitElement {
       if (key === 'waitForPanelOpen' && value === false) {
         return undefined;
       }
+      if (key === 'focusOnShow' && value === true) {
+        return undefined;
+      }
 
       if (key === 'invocationSource') {
         return `${value} (${invocationSourceMap[value as number]})`;
@@ -441,7 +880,7 @@ export class GlicInternalsAppElement extends CrLitElement {
     ];
     console.info(this.invokeLogs_[0]);
 
-    this.pageHandler_.triggerInvokeFromInternalsAction(options).then(
+    this.browserProxy_.handler.triggerInvokeFromInternalsAction(options).then(
         ({success, errorMessage}: {success: boolean, errorMessage: string}) => {
           const timestamp = new Date().toLocaleTimeString();
           const logEntry = `[${timestamp}] ${
@@ -506,6 +945,10 @@ export class GlicInternalsAppElement extends CrLitElement {
         value: debugInfo.glicTieredRolloutV2FeatureEnabled,
       },
       {
+        label: 'GlicSubscriptionBenefitsEligibility Feature Flag',
+        value: debugInfo.glicSubscriptionBenefitsEligibilityFeatureEnabled,
+      },
+      {
         label: 'Platform',
         value: this.getPlatformString_(debugInfo.platform),
       },
@@ -514,7 +957,7 @@ export class GlicInternalsAppElement extends CrLitElement {
         value: this.getFormFactorString_(debugInfo.formFactor),
       },
       {
-        label: 'OS Hotkey',
+        label: 'Launcher Hotkey',
         value: debugInfo.hotkey || 'None',
       },
       {
@@ -565,7 +1008,145 @@ export class GlicInternalsAppElement extends CrLitElement {
 
   protected onSelectedTabIndexSelectedChanged_(
       e: CustomEvent<{value: number}>) {
-    this.selectedTabIndex_ = e.detail.value;
+    const newIndex = e.detail.value;
+    if (this.selectedTabIndex_ === newIndex) {
+      return;
+    }
+    this.selectedTabIndex_ = newIndex;
+    const targetHash = TAB_HASH_MAP[newIndex] ?? DEFAULT_TAB_HASH;
+    const currentHash = window.location.hash;
+    if (currentHash !== targetHash &&
+        !currentHash.startsWith(targetHash + '.')) {
+      window.location.hash = targetHash;
+    }
+  }
+
+  protected onTabsClick_(e: MouseEvent) {
+    const tab = e.composedPath().find(
+                    el => el instanceof HTMLElement &&
+                        el.classList.contains('tab')) as HTMLElement |
+        undefined;
+    if (!tab || tab.dataset['index'] === undefined) {
+      return;
+    }
+    const clickedIndex = Number(tab.dataset['index']);
+    const targetHash = TAB_HASH_MAP[clickedIndex] ?? DEFAULT_TAB_HASH;
+    if (window.location.hash !== targetHash) {
+      window.location.hash = targetHash;
+    }
+  }
+
+  protected onSectionLinkClick_(e: MouseEvent) {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) {
+      return;
+    }
+    e.preventDefault();
+
+    const anchor = (e.currentTarget as HTMLElement)
+                       .closest<HTMLAnchorElement>('a.section-link');
+    const targetHash = anchor?.getAttribute('href');
+    if (!targetHash) {
+      return;
+    }
+
+    if (window.location.hash !== targetHash) {
+      window.location.hash = targetHash;
+    } else {
+      const id = targetHash.startsWith('#') ? targetHash.slice(1) : targetHash;
+      this.scrollToElement_(id);
+    }
+  }
+
+  private resolveTargetHash_(rawHash: string): {
+    targetHash: string,
+    tabIndex: number,
+    elementId?: string,
+  } {
+    let hash = rawHash.trim().toLowerCase();
+    if (!hash || hash === '#') {
+      return {
+        targetHash: DEFAULT_TAB_HASH,
+        tabIndex: TAB_GENERAL,
+      };
+    }
+    if (!hash.startsWith('#')) {
+      hash = '#' + hash;
+    }
+
+    for (const [indexStr, tabHash] of Object.entries(TAB_HASH_MAP)) {
+      const tabIndex = Number(indexStr);
+      if (hash === tabHash) {
+        return {targetHash: tabHash, tabIndex};
+      }
+      if (hash.startsWith(tabHash + '.')) {
+        return {
+          targetHash: hash,
+          tabIndex,
+          elementId: hash.slice(1),
+        };
+      }
+    }
+
+    return {
+      targetHash: DEFAULT_TAB_HASH,
+      tabIndex: TAB_GENERAL,
+    };
+  }
+
+  private async onHashChanged_() {
+    const {targetHash, tabIndex, elementId} =
+        this.resolveTargetHash_(window.location.hash);
+
+    if (this.selectedTabIndex_ !== tabIndex) {
+      this.selectedTabIndex_ = tabIndex;
+    }
+
+    await this.updateComplete;
+
+    if (elementId) {
+      this.scrollToElement_(elementId);
+    } else if (Object.values(TAB_HASH_MAP).includes(targetHash)) {
+      window.scrollTo({top: 0, behavior: 'smooth'});
+    }
+  }
+
+  private scrollToElement_(elementId: string) {
+    if (!this.shadowRoot) {
+      return;
+    }
+
+    const element = this.shadowRoot.getElementById(elementId);
+    if (!element) {
+      return;
+    }
+
+    element.scrollIntoView({behavior: 'smooth', block: 'start'});
+
+    // Clear any pending timeout and remove highlight from any previously
+    // highlighted element.
+    if (this.highlightTimeoutId_ !== null) {
+      window.clearTimeout(this.highlightTimeoutId_);
+      this.highlightTimeoutId_ = null;
+    }
+    if (this.currentHighlightedElement_) {
+      this.currentHighlightedElement_.classList.remove('highlight-target');
+    }
+
+    // Trigger pulse animation. Removing and re-adding the class with a forced
+    // reflow (by reading offsetWidth) restarts the CSS animation if the element
+    // was already highlighted.
+    element.classList.remove('highlight-target');
+    void element.offsetWidth;
+    element.classList.add('highlight-target');
+    this.currentHighlightedElement_ = element;
+
+    this.highlightTimeoutId_ = window.setTimeout(() => {
+      element.classList.remove('highlight-target');
+      if (this.currentHighlightedElement_ === element) {
+        this.currentHighlightedElement_ = null;
+      }
+      this.highlightTimeoutId_ = null;
+    }, 1500);
   }
 }
 

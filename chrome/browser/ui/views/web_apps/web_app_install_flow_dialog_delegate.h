@@ -11,13 +11,18 @@
 #include <string>
 #include <variant>
 
+#include "base/auto_reset.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/views/web_apps/web_app_install_dialog_delegate.h"
 #include "chrome/browser/ui/views/web_apps/web_app_modal_dialog_delegate.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/web_applications/web_app_install_params.h"
+#include "components/webapps/common/web_app_id.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/views/controls/button/button.h"
 
@@ -53,6 +58,15 @@ enum class InstallDialogStep {
   kMaxValue = kSuccessful,
 };
 // LINT.ThenChange(//tools/metrics/histograms/enums.xml:WebAppInstallFlowStep)
+
+// LINT.IfChange(InstallFlowSuccessStepAction)
+enum class InstallFlowSuccessStepAction {
+  kOpenAppClicked = 0,
+  kCloseClicked = 1,
+  kShowInFinderClicked = 2,
+  kMaxValue = kShowInFinderClicked,
+};
+// LINT.ThenChange(//tools/metrics/histograms/enums.xml:WebAppInstallFlowSuccessStepAction)
 
 enum class InstallOsType { kMac, kWin, kCros, kOther };
 inline constexpr int kLargeImageSize = 80;
@@ -126,6 +140,10 @@ class WebAppInstallFlowDialogDelegate : public WebAppModalDialogDelegate {
   InstallDialogType dialog_type() const { return dialog_type_; }
 
   InstallDialogStep GetCurrentStepForTesting() const { return current_step_; }
+  [[nodiscard]] static base::AutoReset<base::TimeDelta>
+  SetAppShimGracePeriodForTesting(base::TimeDelta period);
+  static base::OneShotTimer& GetAppShimGraceTimerForTesting(
+      views::Widget* widget);
 
  protected:
   InstallDialogStep current_step_ = InstallDialogStep::kInstallDialog;
@@ -135,9 +153,15 @@ class WebAppInstallFlowDialogDelegate : public WebAppModalDialogDelegate {
   base::WeakPtr<WebAppInstallOptionsView> options_view_;
 
  private:
+  // Helpers for the macOS app-shim bounds workaround.
+  bool IsDialogLayoutSafe(views::Widget* widget) const;
+  void OnAppShimGraceExpired();
+
   void OnLearnMoreButtonClicked();
   void UpdateDialogTitleAndHeader(InstallDialogStep step);
+  void UpdateFocusAndAnnounceStep(InstallDialogStep step);
   void UpdateProgressAndMaybeAdvance();
+
   void OnInstallResult(bool success, base::OnceClosure reparent_closure);
   void AcceptForTesting();  // IN-TEST
   void OnAutoAcceptInstallResultForTesting(
@@ -147,9 +171,10 @@ class WebAppInstallFlowDialogDelegate : public WebAppModalDialogDelegate {
 
   void MeasureMetricsOnDialogClose(bool was_closed_by_user_action);
   void MeasureAcceptUserActionsForInstallDialog();
-  void MeasureCancelUserActionsForInstallDialog();
+  void MeasureCloseUserActionsForInstallDialog();
 
   std::unique_ptr<WebAppInstallInfo> install_info_;
+  webapps::AppId app_id_;
   std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker_;
   WebAppInstallationAcceptanceCallback callback_;
   PwaInProductHelpState iph_state_;
@@ -167,6 +192,14 @@ class WebAppInstallFlowDialogDelegate : public WebAppModalDialogDelegate {
   bool install_success_ = false;
   std::optional<double> timer_percentage_ = 0.0;
   base::OnceClosure reparent_closure_;
+
+  // State for the macOS app-shim stale bounds workaround.
+  // TODO(crbug.com/572892450): Remove once sequenced geometry updates allow
+  // distinguishing between stale and current bounds.
+  bool use_app_shim_workaround_ = false;
+  base::OneShotTimer app_shim_grace_timer_;
+  base::WeakPtr<views::Widget> dialog_widget_;
+
   base::WeakPtrFactory<WebAppInstallFlowDialogDelegate> weak_ptr_factory_{this};
 };
 

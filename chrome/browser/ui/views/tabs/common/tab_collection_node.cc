@@ -23,8 +23,10 @@
 namespace {
 
 TabCollectionNode::Type GetTypeFromNode(tabs::ConstChildPtr node_data_) {
-  if (std::holds_alternative<const tabs::TabCollection*>(node_data_)) {
-    switch (std::get<const tabs::TabCollection*>(node_data_)->type()) {
+  if (std::holds_alternative<tabs::ConstDanglingUntriagedTabCollection>(
+          node_data_)) {
+    switch (std::get<tabs::ConstDanglingUntriagedTabCollection>(node_data_)
+                ->type()) {
       case tabs::TabCollection::Type::TABSTRIP:
         return TabCollectionNode::Type::TABSTRIP;
       case tabs::TabCollection::Type::PINNED:
@@ -37,7 +39,8 @@ TabCollectionNode::Type GetTypeFromNode(tabs::ConstChildPtr node_data_) {
         return TabCollectionNode::Type::SPLIT;
     }
   }
-  CHECK(std::holds_alternative<const tabs::TabInterface*>(node_data_));
+  CHECK(std::holds_alternative<tabs::ConstDanglingUntriagedTabInterface>(
+      node_data_));
   return TabCollectionNode::Type::TAB;
 }
 
@@ -52,14 +55,16 @@ class CollectionTestViewImpl : public views::View {
 };
 
 tabs::TabCollectionNodeHandle GetHandleFromNode(tabs::ConstChildPtr node_data) {
-  if (std::holds_alternative<const tabs::TabCollection*>(node_data)) {
+  if (std::holds_alternative<tabs::ConstDanglingUntriagedTabCollection>(
+          node_data)) {
     const tabs::TabCollection* collection =
-        std::get<const tabs::TabCollection*>(node_data);
+        std::get<tabs::ConstDanglingUntriagedTabCollection>(node_data);
     return collection->GetHandle();
   } else {
-    CHECK(std::holds_alternative<const tabs::TabInterface*>(node_data));
+    CHECK(std::holds_alternative<tabs::ConstDanglingUntriagedTabInterface>(
+        node_data));
     const tabs::TabInterface* tab =
-        std::get<const tabs::TabInterface*>(node_data);
+        std::get<tabs::ConstDanglingUntriagedTabInterface>(node_data);
     return tab->GetHandle();
   }
 }
@@ -128,9 +133,10 @@ tabs::TabCollectionNodeHandle TabCollectionNode::GetHandle() const {
 std::unique_ptr<views::View> TabCollectionNode::Initialize() {
   std::unique_ptr<views::View> node_view = CreateAndSetView();
 
-  if (std::holds_alternative<const tabs::TabCollection*>(node_data_)) {
+  if (std::holds_alternative<tabs::ConstDanglingUntriagedTabCollection>(
+          node_data_)) {
     const tabs::TabCollection* collection =
-        std::get<const tabs::TabCollection*>(node_data_);
+        std::get<tabs::ConstDanglingUntriagedTabCollection>(node_data_);
     for (const auto& child_data : collection->GetChildren()) {
       tabs::ConstChildPtr child_ptr;
       if (std::holds_alternative<std::unique_ptr<tabs::TabCollection>>(
@@ -138,25 +144,25 @@ std::unique_ptr<views::View> TabCollectionNode::Initialize() {
         child_ptr =
             std::get<std::unique_ptr<tabs::TabCollection>>(child_data).get();
       } else {
-        CHECK(std::holds_alternative<std::unique_ptr<tabs::TabInterface>>(
-            child_data));
-        child_ptr =
-            std::get<std::unique_ptr<tabs::TabInterface>>(child_data).get();
+        CHECK(std::holds_alternative<tabs::ScopedTab>(child_data));
+        child_ptr = std::get<tabs::ScopedTab>(child_data).get();
       }
       AddNewChild(GetPassKey(), child_ptr, children_.size(),
                   /*perform_initialization=*/true);
     }
   } else {
-    CHECK(std::holds_alternative<const tabs::TabInterface*>(node_data_));
+    CHECK(std::holds_alternative<tabs::ConstDanglingUntriagedTabInterface>(
+        node_data_));
   }
 
   return node_view;
 }
 
 void TabCollectionNode::Deinitialize() {
-  if (std::holds_alternative<const tabs::TabCollection*>(node_data_)) {
+  if (std::holds_alternative<tabs::ConstDanglingUntriagedTabCollection>(
+          node_data_)) {
     const tabs::TabCollection* collection =
-        std::get<const tabs::TabCollection*>(node_data_);
+        std::get<tabs::ConstDanglingUntriagedTabCollection>(node_data_);
     for (const auto& child_data : collection->GetChildren()) {
       tabs::TabCollectionNodeHandle child_handle;
       if (std::holds_alternative<std::unique_ptr<tabs::TabCollection>>(
@@ -165,16 +171,15 @@ void TabCollectionNode::Deinitialize() {
             std::get<std::unique_ptr<tabs::TabCollection>>(child_data)
                 ->GetHandle();
       } else {
-        CHECK(std::holds_alternative<std::unique_ptr<tabs::TabInterface>>(
-            child_data));
-        child_handle = std::get<std::unique_ptr<tabs::TabInterface>>(child_data)
-                           ->GetHandle();
+        CHECK(std::holds_alternative<tabs::ScopedTab>(child_data));
+        child_handle = std::get<tabs::ScopedTab>(child_data)->GetHandle();
       }
       RemoveChild(GetPassKey(), child_handle,
                   /*perform_deinitialization=*/true);
     }
   } else {
-    CHECK(std::holds_alternative<const tabs::TabInterface*>(node_data_));
+    CHECK(std::holds_alternative<tabs::ConstDanglingUntriagedTabInterface>(
+        node_data_));
   }
 }
 
@@ -319,11 +324,6 @@ void TabCollectionNode::MoveChild(base::PassKey<TabCollectionNode> pass_key,
                 children_.begin() + old_index + 1);
   }
 
-  // Move the child view to the top of the z-order to ensure the moved child
-  // appears over the other tabs in its parent container.
-  TabCollectionNode* moved_node = children_[target_index].get();
-  node_view_->ReorderChildView(moved_node->node_view_,
-                               static_cast<int>(children_.size() - 1));
   node_view_->InvalidateLayout();
 
   EnsureFocusOrder(target_index);
@@ -346,14 +346,18 @@ void TabCollectionNode::MoveChild(base::PassKey<TabCollectionNode> pass_key,
         child_node->node_view_->GetBoundsInScreen();
     const bool was_focused = child_node->node_view_->HasFocus();
 
+    // Remove the node from `src_parent_node->children_` before detaching the
+    // view so that layout recalculations triggered during view removal do not
+    // include the removed node.
+    std::unique_ptr<TabCollectionNode> removed_node = std::move(*it);
+    src_parent_node->children_.erase(it);
+
     std::unique_ptr<views::View> removed_view =
         src_parent_node->detach_child_from_node_
             ? src_parent_node->detach_child_from_node_.Run(
                   child_node->node_view_)
             : src_parent_node->node_view_->RemoveChildViewT(
                   child_node->node_view_);
-    std::unique_ptr<TabCollectionNode> removed_node = std::move(*it);
-    src_parent_node->children_.erase(it);
 
     dst_parent_node->AddChildNode(std::move(removed_node), new_index);
     if (dst_parent_node->attach_child_to_node_) {
@@ -377,14 +381,6 @@ void TabCollectionNode::MoveChild(base::PassKey<TabCollectionNode> pass_key,
   NOTREACHED();
 }
 
-std::vector<views::View*> TabCollectionNode::GetDirectChildren() const {
-  std::vector<views::View*> child_views;
-  child_views.reserve(children_.size());
-  for (const auto& child : children_) {
-    child_views.push_back(child->node_view_);
-  }
-  return child_views;
-}
 
 std::unique_ptr<views::View> TabCollectionNode::CreateAndSetView() {
   auto node_view = CreateViewForNode(this);

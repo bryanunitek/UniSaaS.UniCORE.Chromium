@@ -11,7 +11,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/data_model/addresses/contact_info.h"
+#include "components/autofill/core/browser/data_model/addresses/name_info.h"
 #include "components/autofill/core/browser/data_quality/autofill_data_util.h"
 #include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/field_types.h"
@@ -103,9 +103,15 @@ bool PaymentsProfileComparator::IsContactEqualOrSuperset(
         !super.HasInfo(autofill::NAME_FULL)) {
       return false;
     }
-    if (!autofill::NameInfo::AreNamesMergeable(
-            sub.GetNameInfo(), sub.GetAddressCountryCode(), super.GetNameInfo(),
-            super.GetAddressCountryCode())) {
+    const base::expected<autofill::NameInfo,
+                         autofill::NameInfo::MergeFailureReason>
+        names_merge_result = autofill::NameInfo::MergeNames(
+            super.GetNameInfo(), super.GetAddressCountryCode(),
+            sub.GetNameInfo(), sub.GetAddressCountryCode(),
+            sub.usage_history().use_date() < super.usage_history().use_date());
+    if (!names_merge_result.has_value() &&
+        names_merge_result.error() !=
+            autofill::NameInfo::MergeFailureReason::kAlternativeNameFailed) {
       return false;
     }
   }
@@ -114,16 +120,19 @@ bool PaymentsProfileComparator::IsContactEqualOrSuperset(
         !super.HasInfo(autofill::PHONE_HOME_WHOLE_NUMBER)) {
       return false;
     }
-    if (!HaveMergeablePhoneNumbers(super, sub))
+    if (!MergePhoneNumbers(super, sub).has_value()) {
       return false;
+    }
   }
   if (options_->request_payer_email()) {
     if (sub.HasInfo(autofill::EMAIL_ADDRESS) &&
         !super.HasInfo(autofill::EMAIL_ADDRESS)) {
       return false;
     }
-    if (!HaveMergeableEmailAddresses(super, sub))
+
+    if (!MergeEmailAddresses(super, sub).has_value()) {
       return false;
+    }
   }
   return true;
 }

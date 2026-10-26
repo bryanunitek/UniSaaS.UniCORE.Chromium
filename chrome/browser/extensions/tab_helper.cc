@@ -8,6 +8,7 @@
 
 #include "base/check_op.h"
 #include "base/notreached.h"
+#include "base/types/pass_key.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/activity_log/activity_log.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
@@ -15,7 +16,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_tab_helper_factory.h"
 #include "chrome/common/buildflags.h"
+#include "components/crx_file/id_util.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
@@ -23,9 +26,12 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
+#include "extensions/browser/api/constants.h"
 #include "extensions/browser/api/declarative/rules_registry_service.h"
 #include "extensions/browser/api/declarative_content/content_rules_registry.h"
+#include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_web_contents_observer.h"
+#include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/permissions/active_tab_permission_granter.h"
 #include "extensions/browser/permissions/site_permissions_helper.h"
 #include "extensions/browser/permissions_manager.h"
@@ -34,6 +40,9 @@
 #include "extensions/common/extension_resource.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/permissions/api_permission.h"
+#include "net/base/schemeful_site.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_recorder.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/extensions/api/bookmark_manager_private/bookmark_manager_private_api.h"
@@ -145,6 +154,20 @@ void TabHelper::SetReloadRequired(
   }
 }
 
+void TabHelper::SetReloadRequired(
+    const std::vector<const Extension*>& extensions,
+    bool show_bubble_if_visible) {
+  reload_required_ = true;
+  for (const auto* extension : extensions) {
+    if (!std::ranges::contains(reload_extensions_, extension)) {
+      reload_extensions_.push_back(extension);
+    }
+  }
+  if (show_bubble_if_visible) {
+    ShowReloadBubbleIfVisible();
+  }
+}
+
 bool TabHelper::IsReloadRequired() {
   return reload_required_;
 }
@@ -167,16 +190,25 @@ void TabHelper::InvokeForContentRulesRegistries(const Func& func) {
   RulesRegistryService* rules_registry_service =
       RulesRegistryService::Get(profile_);
   if (rules_registry_service) {
-    func(rules_registry_service->content_rules_registry());
+    // The service can remain accessible after its registries are released
+    // during profile teardown.
+    if (ContentRulesRegistry* content_rules_registry =
+            rules_registry_service->content_rules_registry()) {
+      func(content_rules_registry);
+    }
     if (profile_->IsOffTheRecord()) {
       // The original profile's content rules registry handles rules for
       // spanning extensions in incognito profiles, so invoke it also.
       RulesRegistryService* original_profile_rules_registry_service =
           RulesRegistryService::Get(profile_->GetOriginalProfile());
-      DCHECK_NE(rules_registry_service,
-                original_profile_rules_registry_service);
+      CHECK_NE(rules_registry_service, original_profile_rules_registry_service,
+               base::NotFatalUntil::M161);
       if (original_profile_rules_registry_service) {
-        func(original_profile_rules_registry_service->content_rules_registry());
+        if (ContentRulesRegistry* original_content_rules_registry =
+                original_profile_rules_registry_service
+                    ->content_rules_registry()) {
+          func(original_content_rules_registry);
+        }
       }
     }
   }
@@ -208,6 +240,60 @@ void TabHelper::DidFinishNavigation(
   // Reset the `reload_required_` data member, since a page navigation acts as a
   // page refresh.
   reload_required_ = false;
+  reload_extensions_.clear();
+
+  MaybeRecordSearchRedirectMetrics(navigation_handle);
+}
+
+void TabHelper::MaybeRecordSearchRedirectMetrics(
+    content::NavigationHandle* navigation_handle) {
+  if (!navigation_handle->IsInPrimaryMainFrame() ||
+      !navigation_handle->HasCommitted() || navigation_handle->IsErrorPage() ||
+      !navigation_handle->IsRendererInitiated() ||
+      navigation_handle->HasUserGesture()) {
+    return;
+  }
+
+  const std::string& script_injector_id =
+      navigation_handle->GetScriptInjectorHost();
+  if (script_injector_id.empty() ||
+      !crx_file::id_util::IdIsValid(script_injector_id)) {
+    return;
+  }
+
+  // Ensure the extension is currently installed and active on this profile.
+  const Extension* extension =
+      ExtensionRegistry::Get(profile_)->enabled_extensions().GetByID(
+          script_injector_id);
+  if (!extension) {
+    return;
+  }
+
+  if (net::SchemefulSite::IsSameSite(
+          navigation_handle->GetPreviousPrimaryMainFrameURL(),
+          navigation_handle->GetURL())) {
+    return;
+  }
+
+  if (!ExtensionsBrowserClient::Get()->IsDefaultSearchEngineRedirect(
+          profile_, script_injector_id,
+          navigation_handle->GetPreviousPrimaryMainFrameURL(),
+          navigation_handle->GetURL())) {
+    return;
+  }
+
+  ukm::builders::Extensions_ContentScript_DSERedirect(
+      ukm::UkmRecorder::GetSourceIdForExtensionUrl(
+          base::PassKey<TabHelper>(),
+          Extension::GetBaseURLFromExtensionId(script_injector_id)))
+      .SetSeen(true)
+      .Record(ukm::UkmRecorder::Get());
+
+  ukm::builders::Extensions_SearchRedirect(
+      navigation_handle->GetNextPageUkmSourceId())
+      .SetApi(
+          static_cast<int64_t>(ExtensionSearchRedirectedByApi::kContentScript))
+      .Record(ukm::UkmRecorder::Get());
 }
 
 void TabHelper::DidCloneToNewWebContents(WebContents* old_web_contents,
@@ -217,6 +303,22 @@ void TabHelper::DidCloneToNewWebContents(WebContents* old_web_contents,
   // TODO(jamescook): Do we still need to do this if we're not copying any
   // state?
   CreateForWebContents(new_web_contents);
+}
+
+void TabHelper::OnVisibilityChanged(content::Visibility visibility) {
+  ShowReloadBubbleIfVisible();
+}
+
+void TabHelper::ShowReloadBubbleIfVisible() {
+  if (web_contents()->GetVisibility() == content::Visibility::VISIBLE &&
+      reload_required_ && !reload_extensions_.empty()) {
+    std::vector<const Extension*> raw_extensions;
+    for (const auto& ext : reload_extensions_) {
+      raw_extensions.push_back(ext.get());
+    }
+    extension_action_runner_->ShowReloadPageBubble(raw_extensions);
+    reload_extensions_.clear();
+  }
 }
 
 void TabHelper::WebContentsDestroyed() {
@@ -245,12 +347,16 @@ void TabHelper::OnExtensionUnloaded(content::BrowserContext* browser_context,
   // side effects of loading/unloading the extension.
   web_contents()->GetController().GetBackForwardCache().Flush();
 
-  // Technically, the refresh is no longer needed if the unloaded extension was
-  // the only one causing `refresh_required`. However, we would need to track
-  // which are the extensions causing the reload, and sometimes it is not
-  // specific to an extensions. Also, this is a very edge case  (site settings
-  // changed and then extension is installed externally), so it's fine to not
-  // handle it.
+  // If the unloaded extension was pending a reload on this tab, remove it
+  // and clear reload_required_ if no other extensions require a reload.
+  if (!reload_extensions_.empty()) {
+    std::erase_if(reload_extensions_, [extension](const auto& ext) {
+      return ext.get() == extension;
+    });
+    if (reload_extensions_.empty()) {
+      reload_required_ = false;
+    }
+  }
 }
 
 void TabHelper::SetTabId(content::RenderFrameHost* render_frame_host) {

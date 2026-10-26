@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/webui/signin/profile_picker_ui.h"
 
-#include <memory>
+#include <array>
 #include <variant>
 
 #include "base/files/file_path.h"
@@ -13,16 +13,14 @@
 #include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
-#include "base/thread_annotations.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/profiles/profile_management_step_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_test_base.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view_test_utils.h"
@@ -36,8 +34,8 @@
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
-#include "components/signin/public/identity_manager/signin_constants.h"
 #include "components/supervised_user/test_support/supervised_user_signin_test_utils.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -66,7 +64,7 @@ struct ProfilePickerTestParam {
   std::optional<std::variant<ForceSigninUIError::Type, SigninUIError::Type>>
       signin_error_dialog_type;
   bool error_with_signin_button = false;
-  bool use_ai_avatar_ring = false;
+  bool use_gradient_avatar_ring = false;
 };
 
 // To be passed as 4th argument to `INSTANTIATE_TEST_SUITE_P()`, allows the test
@@ -79,129 +77,135 @@ std::string ParamToTestSuffix(
 }
 
 // Permutations of supported parameters.
-const ProfilePickerTestParam kTestParams[] = {
-    {.pixel_test_param = {.test_suffix = "Regular"}},
-    {.pixel_test_param = {.test_suffix = "RegularSecondPickerRun"},
-     .is_profile_picker_first_run = false},
-    {
-        .pixel_test_param = {.test_suffix = "MultipleProfiles"},
-        .use_multiple_profiles = true,
-    },
-    {.pixel_test_param = {.test_suffix = "PortraitModeWindow",
-                          .window_size =
-                              PixelTestParam::kPortraitModeWindowSize}},
-    {.pixel_test_param = {.test_suffix = "MultipleProfilesSmall",
-                          .window_size = PixelTestParam::kSmallWindowSize},
-     .use_multiple_profiles = true},
-    {.pixel_test_param = {.test_suffix = "MultipleProfilesPortraitMode",
-                          .window_size =
-                              PixelTestParam::kPortraitModeWindowSize},
-     .use_multiple_profiles = true},
-    {.pixel_test_param = {.test_suffix = "MultipleProfilesNoProfileCreation"},
-     .use_multiple_profiles = true,
-     .disallow_profile_creation = true},
-    {
-        .pixel_test_param = {.test_suffix = "DarkRtlSmallMultipleProfiles",
-                             .use_dark_theme = true,
-                             .use_right_to_left_language = true,
-                             .window_size = PixelTestParam::kSmallWindowSize},
-        .use_multiple_profiles = true,
-    },
+auto GetTestParams() {
+  return std::to_array<ProfilePickerTestParam>({
+      {.pixel_test_param = {.test_suffix = "Regular"}},
+      {.pixel_test_param = {.test_suffix = "RegularSecondPickerRun"},
+       .is_profile_picker_first_run = false},
+      {
+          .pixel_test_param = {.test_suffix = "MultipleProfiles"},
+          .use_multiple_profiles = true,
+      },
+      {.pixel_test_param = {.test_suffix = "PortraitModeWindow",
+                            .window_size =
+                                PixelTestParam::kPortraitModeWindowSize}},
+      {.pixel_test_param = {.test_suffix = "MultipleProfilesSmall",
+                            .window_size = PixelTestParam::kSmallWindowSize},
+       .use_multiple_profiles = true},
+      {.pixel_test_param = {.test_suffix = "MultipleProfilesPortraitMode",
+                            .window_size =
+                                PixelTestParam::kPortraitModeWindowSize},
+       .use_multiple_profiles = true},
+      {.pixel_test_param = {.test_suffix = "MultipleProfilesNoProfileCreation"},
+       .use_multiple_profiles = true,
+       .disallow_profile_creation = true},
+      {
+          .pixel_test_param = {.test_suffix = "DarkRtlSmallMultipleProfiles",
+                               .use_dark_theme = true,
+                               .use_right_to_left_language = true,
+                               .window_size = PixelTestParam::kSmallWindowSize},
+          .use_multiple_profiles = true,
+      },
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
-    {.pixel_test_param = {.test_suffix = "MultipleProfiles_Kite"},
-     .use_multiple_profiles = true,
-     .has_supervised_user = true},
-    {.pixel_test_param = {.test_suffix = "DarkRtlSmallMultipleProfiles_Kite",
-                          .use_dark_theme = true,
-                          .use_right_to_left_language = true,
-                          .window_size = PixelTestParam::kSmallWindowSize},
-     .use_multiple_profiles = true,
-     .has_supervised_user = true},
-    {.pixel_test_param = {.test_suffix = "ManagedProfileHasCustomWorkLabel"},
-     .use_multiple_profiles = true,
-     .is_enterprise_badging_enabled = true},
+      {.pixel_test_param = {.test_suffix = "MultipleProfiles_Kite"},
+       .use_multiple_profiles = true,
+       .has_supervised_user = true},
+      {.pixel_test_param = {.test_suffix = "DarkRtlSmallMultipleProfiles_Kite",
+                            .use_dark_theme = true,
+                            .use_right_to_left_language = true,
+                            .window_size = PixelTestParam::kSmallWindowSize},
+       .use_multiple_profiles = true,
+       .has_supervised_user = true},
+      {.pixel_test_param = {.test_suffix = "ManagedProfileHasCustomWorkLabel"},
+       .use_multiple_profiles = true,
+       .is_enterprise_badging_enabled = true},
 #endif
-    {.pixel_test_param = {.test_suffix = "GlicRegular"},
-     .use_glic_version = true},
-    {.pixel_test_param = {.test_suffix = "GlicRegularDarkMode",
-                          .use_dark_theme = true},
-     .use_glic_version = true},
-    {.pixel_test_param = {.test_suffix = "GlicRegularSmall",
-                          .window_size = PixelTestParam::kSmallWindowSize},
-     .use_glic_version = true},
-    {.pixel_test_param = {.test_suffix = "GlicRegularPortraitMode",
-                          .window_size =
-                              PixelTestParam::kPortraitModeWindowSize},
-     .use_glic_version = true},
-    {.pixel_test_param = {.test_suffix = "GlicNoProfiles"},
-     .use_glic_version = true,
-     .no_glic_eligible_profiles = true},
-    {.pixel_test_param = {.test_suffix = "GlicMultipleProfiles"},
-     .use_multiple_profiles = true,
-     .use_glic_version = true},
-    {.pixel_test_param = {.test_suffix = "GlicMultipleProfilesSmall",
-                          .window_size = PixelTestParam::kSmallWindowSize},
-     .use_multiple_profiles = true,
-     .use_glic_version = true},
-    {.pixel_test_param = {.test_suffix = "GlicMultipleProfilesPortraitMode",
-                          .window_size =
-                              PixelTestParam::kPortraitModeWindowSize},
-     .use_multiple_profiles = true,
-     .use_glic_version = true},
-    /* Force Signin UI error dialog params */
-    {.pixel_test_param = {.test_suffix = "SigninErrorDialogPattern"},
-     .signin_error_dialog_type =
-         ForceSigninUIError::Type::kSigninPatternNotMatching},
-    {.pixel_test_param = {.test_suffix = "SigninErrorDialogReauthNotAllowed",
-                          .use_dark_theme = true},
-     .signin_error_dialog_type = ForceSigninUIError::Type::kReauthNotAllowed},
-    {.pixel_test_param = {.test_suffix =
-                              "SigninErrorDialogReauthWrongAccountRTL",
-                          .use_right_to_left_language = true},
-     .signin_error_dialog_type = ForceSigninUIError::Type::kReauthWrongAccount,
-     .error_with_signin_button = true},
-    {.pixel_test_param = {.test_suffix = "SigninErrorDialogReauthWrongAccount"},
-     .signin_error_dialog_type = ForceSigninUIError::Type::kReauthWrongAccount,
-     .error_with_signin_button = true},
-    /* Signin UI error dialog params */
-    {.pixel_test_param = {.test_suffix = "GoogleServiceAuthError"},
-     .signin_error_dialog_type =
-         SigninUIError::Type::kFromGoogleServiceAuthError},
-    {.pixel_test_param = {.test_suffix = "SigninErrorCookiesNotAllowed",
-                          .use_dark_theme = true},
-     .signin_error_dialog_type = SigninUIError::Type::kSigninCookiesDisallowed},
-    /* Refreshed UI params (FirstRunDesktopRefresh) */
-    {.pixel_test_param = {.test_suffix = "RefreshedUI"},
-     .use_multiple_profiles = true,
-     .use_refreshed_ui = true},
-    {.pixel_test_param = {.test_suffix = "RefreshedUIDarkMode",
-                          .use_dark_theme = true},
-     .use_multiple_profiles = true,
-     .use_refreshed_ui = true},
-    {.pixel_test_param = {.test_suffix = "SingleProfileAiRing"},
-     .use_ai_avatar_ring = true},
-    {.pixel_test_param = {.test_suffix = "DarkSingleProfileAiRing",
-                          .use_dark_theme = true},
-     .use_ai_avatar_ring = true},
-    {.pixel_test_param = {.test_suffix = "SingleProfileManagedAiRing"},
-     .is_enterprise_badging_enabled = true,
-     .use_ai_avatar_ring = true},
-    {.pixel_test_param = {.test_suffix = "MultipleProfilesAiRing"},
-     .use_multiple_profiles = true,
-     .use_ai_avatar_ring = true},
-    {.pixel_test_param = {.test_suffix = "DarkMultipleProfilesAiRing",
-                          .use_dark_theme = true},
-     .use_multiple_profiles = true,
-     .use_ai_avatar_ring = true},
-};
+      {.pixel_test_param = {.test_suffix = "GlicRegular"},
+       .use_glic_version = true},
+      {.pixel_test_param = {.test_suffix = "GlicRegularDarkMode",
+                            .use_dark_theme = true},
+       .use_glic_version = true},
+      {.pixel_test_param = {.test_suffix = "GlicRegularSmall",
+                            .window_size = PixelTestParam::kSmallWindowSize},
+       .use_glic_version = true},
+      {.pixel_test_param = {.test_suffix = "GlicRegularPortraitMode",
+                            .window_size =
+                                PixelTestParam::kPortraitModeWindowSize},
+       .use_glic_version = true},
+      {.pixel_test_param = {.test_suffix = "GlicNoProfiles"},
+       .use_glic_version = true,
+       .no_glic_eligible_profiles = true},
+      {.pixel_test_param = {.test_suffix = "GlicMultipleProfiles"},
+       .use_multiple_profiles = true,
+       .use_glic_version = true},
+      {.pixel_test_param = {.test_suffix = "GlicMultipleProfilesSmall",
+                            .window_size = PixelTestParam::kSmallWindowSize},
+       .use_multiple_profiles = true,
+       .use_glic_version = true},
+      {.pixel_test_param = {.test_suffix = "GlicMultipleProfilesPortraitMode",
+                            .window_size =
+                                PixelTestParam::kPortraitModeWindowSize},
+       .use_multiple_profiles = true,
+       .use_glic_version = true},
+      /* Force Signin UI error dialog params */
+      {.pixel_test_param = {.test_suffix = "SigninErrorDialogPattern"},
+       .signin_error_dialog_type =
+           ForceSigninUIError::Type::kSigninPatternNotMatching},
+      {.pixel_test_param = {.test_suffix = "SigninErrorDialogReauthNotAllowed",
+                            .use_dark_theme = true},
+       .signin_error_dialog_type = ForceSigninUIError::Type::kReauthNotAllowed},
+      {.pixel_test_param = {.test_suffix =
+                                "SigninErrorDialogReauthWrongAccountRTL",
+                            .use_right_to_left_language = true},
+       .signin_error_dialog_type =
+           ForceSigninUIError::Type::kReauthWrongAccount,
+       .error_with_signin_button = true},
+      {.pixel_test_param = {.test_suffix =
+                                "SigninErrorDialogReauthWrongAccount"},
+       .signin_error_dialog_type =
+           ForceSigninUIError::Type::kReauthWrongAccount,
+       .error_with_signin_button = true},
+      /* Signin UI error dialog params */
+      {.pixel_test_param = {.test_suffix = "GoogleServiceAuthError"},
+       .signin_error_dialog_type =
+           SigninUIError::Type::kFromGoogleServiceAuthError},
+      {.pixel_test_param = {.test_suffix = "SigninErrorCookiesNotAllowed",
+                            .use_dark_theme = true},
+       .signin_error_dialog_type =
+           SigninUIError::Type::kSigninCookiesDisallowed},
+      /* Refreshed UI params (FirstRunDesktopRefresh) */
+      {.pixel_test_param = {.test_suffix = "RefreshedUI"},
+       .use_multiple_profiles = true,
+       .use_refreshed_ui = true},
+      {.pixel_test_param = {.test_suffix = "RefreshedUIDarkMode",
+                            .use_dark_theme = true},
+       .use_multiple_profiles = true,
+       .use_refreshed_ui = true},
+      {.pixel_test_param = {.test_suffix = "SingleProfileGradientRing"},
+       .use_gradient_avatar_ring = true},
+      {.pixel_test_param = {.test_suffix = "DarkSingleProfileGradientRing",
+                            .use_dark_theme = true},
+       .use_gradient_avatar_ring = true},
+      {.pixel_test_param = {.test_suffix = "SingleProfileManagedGradientRing"},
+       .is_enterprise_badging_enabled = true,
+       .use_gradient_avatar_ring = true},
+      {.pixel_test_param = {.test_suffix = "MultipleProfilesGradientRing"},
+       .use_multiple_profiles = true,
+       .use_gradient_avatar_ring = true},
+      {.pixel_test_param = {.test_suffix = "DarkMultipleProfilesGradientRing",
+                            .use_dark_theme = true},
+       .use_multiple_profiles = true,
+       .use_gradient_avatar_ring = true},
+  });
+}
 
 enum class ProfileStatus {
   kSignedOut,
   kSignedIn,
   kSignedInManaged,
   kSignedInSupervised,
-  kSignedInAiSubscription,
-  kSignedInManagedAiSubscription,
+  kSignedInGradientRing,
+  kSignedInManagedGradientRing,
 };
 
 void SetSigninProfileProperties(Profile* profile,
@@ -224,9 +228,9 @@ void SetSigninProfileProperties(Profile* profile,
     case ProfileStatus::kSignedInManaged: {
       account_info = signin::MakePrimaryAccountAvailable(
           identity_manager, kManagedEmail, signin::ConsentLevel::kSignin);
-      account_info =
-          FillAccountInfo(account_info, AccountManagementStatus::kManaged,
-                          signin::Tribool::kUnknown);
+      account_info = FillAccountInfo(account_info.GetCoreAccountInfo(),
+                                     AccountManagementStatus::kManaged,
+                                     signin::Tribool::kUnknown);
       signin::UpdateAccountInfoForAccount(identity_manager, account_info);
       break;
     }
@@ -238,7 +242,7 @@ void SetSigninProfileProperties(Profile* profile,
           account_info, identity_manager, true);
       break;
     }
-    case ProfileStatus::kSignedInAiSubscription: {
+    case ProfileStatus::kSignedInGradientRing: {
       account_info = signin::MakePrimaryAccountAvailable(
           identity_manager, kOtherEmail, signin::ConsentLevel::kSignin);
       g_browser_process->profile_manager()
@@ -247,12 +251,12 @@ void SetSigninProfileProperties(Profile* profile,
           ->SetAiSubscriptionTier(1);
       break;
     }
-    case ProfileStatus::kSignedInManagedAiSubscription: {
+    case ProfileStatus::kSignedInManagedGradientRing: {
       account_info = signin::MakePrimaryAccountAvailable(
           identity_manager, kOtherManagedEmail, signin::ConsentLevel::kSignin);
-      account_info =
-          FillAccountInfo(account_info, AccountManagementStatus::kManaged,
-                          signin::Tribool::kUnknown);
+      account_info = FillAccountInfo(account_info.GetCoreAccountInfo(),
+                                     AccountManagementStatus::kManaged,
+                                     signin::Tribool::kUnknown);
       signin::UpdateAccountInfoForAccount(identity_manager, account_info);
       g_browser_process->profile_manager()
           ->GetProfileAttributesStorage()
@@ -274,7 +278,7 @@ void SetSigninProfileProperties(Profile* profile,
   }
 
   if (profile_status == ProfileStatus::kSignedInManaged ||
-      profile_status == ProfileStatus::kSignedInManagedAiSubscription) {
+      profile_status == ProfileStatus::kSignedInManagedGradientRing) {
     enterprise_util::SetUserAcceptedAccountManagement(profile, true);
   }
 }
@@ -282,13 +286,13 @@ void SetSigninProfileProperties(Profile* profile,
 // Create 4 profiles with different icons and types.
 void AddMultipleProfiles(bool is_glic_version,
                          bool has_supervised_user,
-                         bool use_ai_avatar_ring) {
+                         bool use_gradient_avatar_ring) {
   ProfileStatus signed_in_status_with_potential_ai_subscription =
-      use_ai_avatar_ring ? ProfileStatus::kSignedInAiSubscription
-                         : ProfileStatus::kSignedIn;
+      use_gradient_avatar_ring ? ProfileStatus::kSignedInGradientRing
+                               : ProfileStatus::kSignedIn;
   ProfileStatus managed_status_with_potential_ai_subscription =
-      use_ai_avatar_ring ? ProfileStatus::kSignedInManagedAiSubscription
-                         : ProfileStatus::kSignedInManaged;
+      use_gradient_avatar_ring ? ProfileStatus::kSignedInManagedGradientRing
+                               : ProfileStatus::kSignedInManaged;
 
   std::vector<ProfileStatus> profiles_status;
   if (is_glic_version) {
@@ -337,7 +341,7 @@ class ProfilePickerUIPixelTest
     } else {
       disabled_features.push_back(switches::kFirstRunDesktopRefresh);
     }
-    if (GetParam().use_ai_avatar_ring) {
+    if (GetParam().use_gradient_avatar_ring) {
       enabled_features.push_back(
           {switches::kEnableAiSubscriptionAvatarRing, {}});
     } else {
@@ -419,15 +423,15 @@ class ProfilePickerUIPixelTest
     bool no_glic_eligible_profiles = GetParam().no_glic_eligible_profiles;
 
     // Sign in the default profile if needed.
-    bool sign_in_default =
-        (is_glic_version && !no_glic_eligible_profiles) ||
-        (GetParam().use_ai_avatar_ring && !GetParam().use_multiple_profiles);
+    bool sign_in_default = (is_glic_version && !no_glic_eligible_profiles) ||
+                           (GetParam().use_gradient_avatar_ring &&
+                            !GetParam().use_multiple_profiles);
     if (sign_in_default) {
       ProfileStatus status = ProfileStatus::kSignedIn;
-      if (GetParam().use_ai_avatar_ring) {
+      if (GetParam().use_gradient_avatar_ring) {
         status = GetParam().is_enterprise_badging_enabled
-                     ? ProfileStatus::kSignedInManagedAiSubscription
-                     : ProfileStatus::kSignedInAiSubscription;
+                     ? ProfileStatus::kSignedInManagedGradientRing
+                     : ProfileStatus::kSignedInGradientRing;
       }
       SetSigninProfileProperties(browser()->GetProfile(), status,
                                  is_glic_version);
@@ -439,7 +443,7 @@ class ProfilePickerUIPixelTest
           policy::ManagementServiceFactory::GetForProfile(
               browser()->GetProfile()),
           policy::EnterpriseManagementAuthority::CLOUD);
-      browser()->profile()->GetPrefs()->SetString(
+      browser()->GetProfile()->GetPrefs()->SetString(
           prefs::kEnterpriseCustomLabelForProfile, "Work");
     }
 #endif
@@ -449,7 +453,7 @@ class ProfilePickerUIPixelTest
       // `no_glic_eligible_profiles` must be set to false.
       CHECK(!is_glic_version || !no_glic_eligible_profiles);
       AddMultipleProfiles(is_glic_version, GetParam().has_supervised_user,
-                          GetParam().use_ai_avatar_ring);
+                          GetParam().use_gradient_avatar_ring);
     }
 
     if (GetParam().disallow_profile_creation) {
@@ -530,8 +534,9 @@ class ProfilePickerUIPixelTest
     views::Widget* widget = GetWidgetForScreenshot();
 
     auto* test_info = testing::UnitTest::GetInstance()->current_test_info();
-    const std::string screenshot_name =
-        base::StrCat({test_info->test_suite_name(), "_", test_info->name()});
+    const std::string baseline = "8481376";
+    const std::string screenshot_name = base::StrCat(
+        {test_info->test_suite_name(), "_", test_info->name(), "_", baseline});
 
     return VerifyPixelUi(widget, "ProfilePickerUIPixelTest", screenshot_name) !=
            ui::test::ActionResult::kFailed;
@@ -566,5 +571,5 @@ IN_PROC_BROWSER_TEST_P(ProfilePickerUIPixelTest, InvokeUi_default) {
 
 INSTANTIATE_TEST_SUITE_P(,
                          ProfilePickerUIPixelTest,
-                         testing::ValuesIn(kTestParams),
+                         testing::ValuesIn(GetTestParams()),
                          &ParamToTestSuffix);

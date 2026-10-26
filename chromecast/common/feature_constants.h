@@ -17,6 +17,8 @@ extern const char kEnableTrackControlAppRendererFeatureUse[];
 extern const char kEnablePlayready[];
 
 extern const char kKeyAppId[];
+extern const char kExtendedInputSupported[];
+extern const char kRotationSupported[];
 
 // If dev mode is enabled, kDevModeOrigin will be set with origin url
 extern const char kEnableDevMode[];
@@ -60,6 +62,8 @@ extern const char kCastCoreKeepScreenOn[];
 extern const char kCastCoreBitstreamAudioCodecsInfo[];
 extern const char kCastCoreCodecs[];
 extern const char kCastCoreSpatialRendering[];
+
+extern const char kCastCoreCrashOnStart[];
 
 }  // namespace feature
 }  // namespace chromecast

@@ -44,6 +44,7 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "extensions/buildflags/buildflags.h"
+#include "net/log/file_net_log_observer.h"
 #include "net/log/net_log_capture_mode.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/shell_dialogs/selected_file_info.h"
@@ -145,6 +146,7 @@ class NetExportMessageHandler final
   // the save dialog. Their values are only valid while the save dialog is open
   // on the desktop UI.
   net::NetLogCaptureMode capture_mode_;
+  net::NetLogFileFormat file_format_ = net::NetLogFileFormat::kJson;
   uint64_t max_log_file_size_;
   bool is_logging_ = false;
 
@@ -170,7 +172,7 @@ NetExportMessageHandler::~NetExportMessageHandler() {
 }
 
 void NetExportMessageHandler::RegisterMessages() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   web_ui()->RegisterMessageCallback(
       net_log::kEnableNotifyUIWithStateHandler,
@@ -200,7 +202,7 @@ void NetExportMessageHandler::RegisterMessages() {
 void NetExportMessageHandler::OnEnableNotifyUIWithState(
     const base::ListValue& list) {
   AllowJavascript();
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   if (!state_observation_manager_.IsObserving()) {
     state_observation_manager_.Observe(file_writer_.get());
   }
@@ -209,13 +211,20 @@ void NetExportMessageHandler::OnEnableNotifyUIWithState(
 }
 
 void NetExportMessageHandler::OnStartNetLog(const base::ListValue& params) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   // Determine the capture mode.
   capture_mode_ = net::NetLogCaptureMode::kDefault;
   if (!params.empty() && params[0].is_string()) {
     capture_mode_ = net_log::NetExportFileWriter::CaptureModeFromString(
         params[0].GetString());
+  }
+
+  // Determine the file format.
+  file_format_ = net::NetLogFileFormat::kJson;
+  if (params.size() > 2 && params[2].is_string()) {
+    file_format_ = net_log::NetExportFileWriter::FileFormatFromString(
+        params[2].GetString());
   }
 
   // Determine the max file size.
@@ -233,14 +242,16 @@ void NetExportMessageHandler::OnStartNetLog(const base::ListValue& params) {
                   web_ui()->GetWebContents()->GetBrowserContext())
                   ->DownloadPath()
             : GetLastSaveDir();
-    base::FilePath initial_path =
-        initial_dir.Append(FILE_PATH_LITERAL("chrome-net-export-log.json"));
+    base::FilePath initial_path = initial_dir.Append(
+        file_format_ == net::NetLogFileFormat::kNdjson
+            ? FILE_PATH_LITERAL("chrome-net-export-log.jsonl")
+            : FILE_PATH_LITERAL("chrome-net-export-log.json"));
     ShowSelectFileDialog(initial_path);
   }
 }
 
 void NetExportMessageHandler::OnStopNetLog(const base::ListValue& list) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   base::DictValue ui_thread_polled_data;
 
@@ -258,13 +269,13 @@ void NetExportMessageHandler::OnStopNetLog(const base::ListValue& list) {
 }
 
 void NetExportMessageHandler::OnSendNetLog(const base::ListValue& list) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   file_writer_->GetFilePathToCompletedLog(
       base::BindOnce(&NetExportMessageHandler::SendEmail));
 }
 
 void NetExportMessageHandler::OnShowFile(const base::ListValue& list) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   file_writer_->GetFilePathToCompletedLog(
       base::BindOnce(&NetExportMessageHandler::ShowFileInShell,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -272,8 +283,8 @@ void NetExportMessageHandler::OnShowFile(const base::ListValue& list) {
 
 void NetExportMessageHandler::FileSelected(const ui::SelectedFileInfo& file,
                                            int index) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(select_file_dialog_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(select_file_dialog_, base::NotFatalUntil::M162);
   GetLastSaveDir() = file.path().DirName();
 
   StartNetLog(file.path());
@@ -284,12 +295,12 @@ void NetExportMessageHandler::FileSelected(const ui::SelectedFileInfo& file,
 }
 
 void NetExportMessageHandler::FileSelectionCanceled() {
-  DCHECK(select_file_dialog_);
+  CHECK(select_file_dialog_, base::NotFatalUntil::M162);
   select_file_dialog_ = nullptr;
 }
 
 void NetExportMessageHandler::OnNewState(const base::DictValue& state) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   const bool will_be_logging = file_writer_->IsLogging();
 #if BUILDFLAG(IS_ANDROID)
   if (!will_be_logging && is_logging_) {
@@ -303,7 +314,7 @@ void NetExportMessageHandler::OnNewState(const base::DictValue& state) {
 
 // static
 void NetExportMessageHandler::SendEmail(const base::FilePath& file_to_send) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 #if BUILDFLAG(IS_ANDROID)
   if (file_to_send.empty()) {
     return;
@@ -321,11 +332,11 @@ void NetExportMessageHandler::SendEmail(const base::FilePath& file_to_send) {
 }
 
 void NetExportMessageHandler::StartNetLog(const base::FilePath& path) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   is_logging_ = true;
 
   file_writer_->StartNetLog(
-      path, capture_mode_, max_log_file_size_,
+      path, capture_mode_, file_format_, max_log_file_size_,
       base::CommandLine::ForCurrentProcess()->GetCommandLineString(),
       chrome::GetChannelName(chrome::WithExtendedStable(true)),
       Profile::FromWebUI(web_ui())
@@ -334,7 +345,7 @@ void NetExportMessageHandler::StartNetLog(const base::FilePath& path) {
 }
 
 void NetExportMessageHandler::ShowFileInShell(const base::FilePath& path) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   if (path.empty()) {
     return;
   }
@@ -355,8 +366,8 @@ bool NetExportMessageHandler::UsingMobileUI() {
 }
 
 void NetExportMessageHandler::NotifyUIWithState(const base::DictValue& state) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(web_ui());
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(web_ui(), base::NotFatalUntil::M162);
   FireWebUIListener(net_log::kNetLogInfoChangedEvent, state);
 }
 
@@ -372,12 +383,15 @@ void NetExportMessageHandler::ShowSelectFileDialog(
 
   select_file_dialog_ = ui::SelectFileDialog::Create(
       this, std::make_unique<ChromeSelectFilePolicy>(webcontents));
-  ui::SelectFileDialog::FileTypeInfo file_type_info{
-      {FILE_PATH_LITERAL("json")}};
+  base::FilePath::StringType extension = default_path.Extension();
+  if (!extension.empty() && extension[0] == FILE_PATH_LITERAL('.')) {
+    extension.erase(0, 1);
+  }
+  ui::SelectFileDialog::FileTypeInfo file_type_info{{extension}};
   gfx::NativeWindow owning_window = webcontents->GetTopLevelNativeWindow();
-  select_file_dialog_->SelectFile(
-      ui::SelectFileDialog::SELECT_SAVEAS_FILE, std::u16string(), default_path,
-      &file_type_info, 0, base::FilePath::StringType(), owning_window);
+  select_file_dialog_->SelectFile(ui::SelectFileDialog::SELECT_SAVEAS_FILE,
+                                  std::u16string(), default_path,
+                                  &file_type_info, 0, extension, owning_window);
 }
 
 }  // namespace

@@ -14,11 +14,11 @@ import {recordEnum} from '../../common/js/metrics.js';
 import type {DialogType} from '../../state/state.js';
 
 import type {ActionsController} from './actions_controller.js';
-import {DEFAULT_BRUSCHETTA_VM, DEFAULT_CROSTINI_VM, PLUGIN_VM} from './constants.js';
+import {DEFAULT_BRUSCHETTA_VM, DEFAULT_CROSTINI_VM} from './constants.js';
 import type {FileFilter} from './directory_contents.js';
 import type {DirectoryModel} from './directory_model.js';
 import type {DirectoryTreeNamingController} from './directory_tree_naming_controller.js';
-import {BrowserBackCommand, ConfigureCommand, CutCopyCommand, DefaultTaskCommand, DeleteCommand, DlpRestrictionDetailsCommand, DriveBuyMoreSpaceCommand, DriveGoToDriveCommand, DriveSyncSettingsCommand, EmptyTrashCommand, EraseDeviceCommand, ExtractAllCommand, FilesSettingsCommand, FocusActionBarCommand, FormatCommand, GetInfoCommand, GoToFileLocationCommand, GuestOsManagingSharingCommand, GuestOsManagingSharingGearCommand, GuestOsShareCommand, InspectConsoleCommand, InspectElementCommand, InspectNormalCommand, InvokeSharesheetCommand, ManageInDriveCommand, ManageMirrorsyncCommand, NewFolderCommand, NewWindowCommand, OpenGearMenuCommand, OpenWithCommand, PasteCommand, PasteIntoCurrentFolderCommand, PasteIntoFolderCommand, PinFolderCommand, RefreshCommand, RenameCommand, RestoreFromTrashCommand, SearchCommand, SelectAllCommand, SendFeedbackCommand, SetWallpaperCommand, ShowProvidersSubmenuCommand, SortByDateCommand, SortByNameCommand, SortBySizeCommand, SortByTypeCommand, ToggleHiddenAndroidFoldersCommand, ToggleHiddenFilesCommand, ToggleHoldingSpaceCommand, TogglePinnedCommand, UnmountCommand, UnpinFolderCommand, VolumeHelpCommand, VolumeStorageCommand, VolumeSwitchCommand, ZipSelectionCommand, ZoomInCommand, ZoomOutCommand, ZoomResetCommand} from './file_manager_commands.js';
+import {BrowserBackCommand, ConfigureCommand, CutCopyCommand, DefaultTaskCommand, DeleteCommand, DlpRestrictionDetailsCommand, DriveBuyMoreSpaceCommand, DriveGoToDriveCommand, DriveSyncSettingsCommand, EmptyTrashCommand, ExtractAllCommand, FilesSettingsCommand, FocusActionBarCommand, FormatCommand, GetInfoCommand, GoToFileLocationCommand, GuestOsManagingSharingCommand, GuestOsManagingSharingGearCommand, GuestOsShareCommand, InspectConsoleCommand, InspectElementCommand, InspectNormalCommand, InvokeSharesheetCommand, ManageInDriveCommand, NewFolderCommand, NewWindowCommand, OpenGearMenuCommand, OpenWithCommand, PasteCommand, PasteIntoCurrentFolderCommand, PasteIntoFolderCommand, PinFolderCommand, RefreshCommand, RenameCommand, RestoreFromTrashCommand, SearchCommand, SelectAllCommand, SendFeedbackCommand, SetWallpaperCommand, ShowProvidersSubmenuCommand, SortByDateCommand, SortByNameCommand, SortBySizeCommand, SortByTypeCommand, ToggleHiddenAndroidFoldersCommand, ToggleHiddenFilesCommand, ToggleHoldingSpaceCommand, TogglePinnedCommand, UnmountCommand, UnpinFolderCommand, VolumeHelpCommand, VolumeStorageCommand, VolumeSwitchCommand, ZipSelectionCommand, ZoomInCommand, ZoomOutCommand, ZoomResetCommand} from './file_manager_commands.js';
 import {shouldIgnoreEvents} from './file_manager_commands_util.js';
 import type {FileSelection, FileSelectionHandler} from './file_selection.js';
 import type {FileTransferController} from './file_transfer_controller.js';
@@ -81,10 +81,10 @@ export enum MenuCommandsForUma {
   MANAGE_LINUX_SHARING = 'manage-linux-sharing',
   MANAGE_LINUX_SHARING_TOAST = 'manage-linux-sharing-toast',
   MANAGE_LINUX_SHARING_TOAST_STARTUP = 'manage-linux-sharing-toast-startup',
-  SHARE_WITH_PLUGIN_VM = 'share-with-plugin-vm',
-  MANAGE_PLUGIN_VM_SHARING = 'manage-plugin-vm-sharing',
-  MANAGE_PLUGIN_VM_SHARING_TOAST = 'manage-plugin-vm-sharing-toast',
-  MANAGE_PLUGIN_VM_SHARING_TOAST_STARTUP =
+  DEPRECATED_SHARE_WITH_PLUGIN_VM = 'share-with-plugin-vm',
+  DEPRECATED_MANAGE_PLUGIN_VM_SHARING = 'manage-plugin-vm-sharing',
+  DEPRECATED_MANAGE_PLUGIN_VM_SHARING_TOAST = 'manage-plugin-vm-sharing-toast',
+  DEPRECATED_MANAGE_PLUGIN_VM_SHARING_TOAST_STARTUP =
       'manage-plugin-vm-sharing-toast-startup',
   PIN_TO_HOLDING_SPACE = 'pin-to-holding-space',
   UNPIN_FROM_HOLDING_SPACE = 'unpin-from-holding-space',
@@ -99,7 +99,6 @@ const cutCopyCommand = new CutCopyCommand();
 const deleteCommand = new DeleteCommand();
 
 const crostiniSettings = 'crostini/sharedPaths';
-const pluginVmSettings = 'app-management/pluginVm/sharedPaths';
 const bruschettaSettings = 'bruschetta/sharedPaths';
 
 /**
@@ -120,7 +119,6 @@ const FilesCommands = {
   'zoom-in': new ZoomInCommand(),
   'unpin-folder': new UnpinFolderCommand(),
   'pin-folder': new PinFolderCommand(),
-  'manage-mirrorsync': new ManageMirrorsyncCommand(),
   'manage-in-drive': new ManageInDriveCommand(),
   'zip-selection': new ZipSelectionCommand(),
   'extract-all': new ExtractAllCommand(),
@@ -154,7 +152,6 @@ const FilesCommands = {
   'select-all': new SelectAllCommand(),
   'new-window': new NewWindowCommand(),
   'new-folder': new NewFolderCommand(),
-  'erase-device': new EraseDeviceCommand(),
   'format': new FormatCommand(),
   'unmount': new UnmountCommand(),
   'browser-back': new BrowserBackCommand(),
@@ -176,10 +173,6 @@ const FilesCommands = {
       DEFAULT_CROSTINI_VM, 'CROSTINI', crostiniSettings,
       MenuCommandsForUma.MANAGE_LINUX_SHARING_TOAST,
       MenuCommandsForUma.SHARE_WITH_LINUX),
-  'share-with-plugin-vm': new GuestOsShareCommand(
-      PLUGIN_VM, 'PLUGIN_VM', pluginVmSettings,
-      MenuCommandsForUma.MANAGE_PLUGIN_VM_SHARING_TOAST,
-      MenuCommandsForUma.SHARE_WITH_PLUGIN_VM),
   'share-with-bruschetta': new GuestOsShareCommand(
       DEFAULT_BRUSCHETTA_VM, 'BRUSCHETTA', bruschettaSettings,
       MenuCommandsForUma.MANAGE_BRUSCHETTA_SHARING_TOAST,
@@ -187,16 +180,12 @@ const FilesCommands = {
   'manage-linux-sharing-gear': new GuestOsManagingSharingGearCommand(
       DEFAULT_CROSTINI_VM, crostiniSettings,
       MenuCommandsForUma.MANAGE_LINUX_SHARING),
-  'manage-plugin-vm-sharing-gear': new GuestOsManagingSharingGearCommand(
-      PLUGIN_VM, pluginVmSettings, MenuCommandsForUma.MANAGE_PLUGIN_VM_SHARING),
   'manage-bruschetta-sharing-gear': new GuestOsManagingSharingGearCommand(
       DEFAULT_BRUSCHETTA_VM, bruschettaSettings,
       MenuCommandsForUma.MANAGE_BRUSCHETTA_SHARING),
   'manage-linux-sharing': new GuestOsManagingSharingCommand(
       DEFAULT_CROSTINI_VM, crostiniSettings,
       MenuCommandsForUma.MANAGE_LINUX_SHARING),
-  'manage-plugin-vm-sharing': new GuestOsManagingSharingCommand(
-      PLUGIN_VM, pluginVmSettings, MenuCommandsForUma.MANAGE_PLUGIN_VM_SHARING),
   'manage-bruschetta-sharing': new GuestOsManagingSharingCommand(
       DEFAULT_BRUSCHETTA_VM, bruschettaSettings,
       MenuCommandsForUma.MANAGE_BRUSCHETTA_SHARING),
@@ -323,10 +312,10 @@ export const ValidMenuCommandsForUma = [
   MenuCommandsForUma.MANAGE_LINUX_SHARING,
   MenuCommandsForUma.MANAGE_LINUX_SHARING_TOAST,
   MenuCommandsForUma.MANAGE_LINUX_SHARING_TOAST_STARTUP,
-  MenuCommandsForUma.SHARE_WITH_PLUGIN_VM,
-  MenuCommandsForUma.MANAGE_PLUGIN_VM_SHARING,
-  MenuCommandsForUma.MANAGE_PLUGIN_VM_SHARING_TOAST,
-  MenuCommandsForUma.MANAGE_PLUGIN_VM_SHARING_TOAST_STARTUP,
+  MenuCommandsForUma.DEPRECATED_SHARE_WITH_PLUGIN_VM,
+  MenuCommandsForUma.DEPRECATED_MANAGE_PLUGIN_VM_SHARING,
+  MenuCommandsForUma.DEPRECATED_MANAGE_PLUGIN_VM_SHARING_TOAST,
+  MenuCommandsForUma.DEPRECATED_MANAGE_PLUGIN_VM_SHARING_TOAST_STARTUP,
   MenuCommandsForUma.PIN_TO_HOLDING_SPACE,
   MenuCommandsForUma.UNPIN_FROM_HOLDING_SPACE,
   MenuCommandsForUma.SHARE_WITH_BRUSCHETTA,

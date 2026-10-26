@@ -27,6 +27,7 @@
 
 #include <algorithm>
 
+#include "base/memory/raw_ptr_exclusion.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
@@ -421,7 +422,8 @@ static bool ShouldNotInheritStyleFrom(const Node& node) {
 namespace {
 
 struct HtmlEquivalentTagDefinition {
-  const HTMLQualifiedName* tag;
+  // RAW_PTR_EXCLUSION: #global-scope
+  RAW_PTR_EXCLUSION const HTMLQualifiedName* tag;
   CSSPropertyID property;
   CSSValueID value_id;
 };
@@ -750,9 +752,7 @@ void DeleteSelectionCommand::RemoveCompletelySelectedNodes(
       // content from any descendant text nodes to ensure selectionchange
       // event fires. This handles nested contenteditable elements and
       // deeply nested text nodes.
-      if (is_root_editable &&
-          RuntimeEnabledFeatures::
-              DeleteTextInContentEditableBeforeRemovingChildrenEnabled()) {
+      if (is_root_editable) {
         HeapVector<Member<Text>> text_nodes_to_clear;
         for (Node& descendant :
              NodeTraversal::DescendantsOf(*node_to_be_removed)) {
@@ -800,8 +800,8 @@ void DeleteSelectionCommand::RemoveCompletelySelectedNodes(
 }
 
 static void UpdatePositionForTextRemoval(Text* node,
-                                         int offset,
-                                         int count,
+                                         wtf_size_t offset,
+                                         wtf_size_t count,
                                          Position& position) {
   if (!position.IsOffsetInAnchor() || position.ComputeContainerNode() != node)
     return;
@@ -814,8 +814,8 @@ static void UpdatePositionForTextRemoval(Text* node,
 }
 
 void DeleteSelectionCommand::DeleteTextFromNode(Text* node,
-                                                unsigned offset,
-                                                unsigned count) {
+                                                wtf_size_t offset,
+                                                wtf_size_t count) {
   // FIXME: Update the endpoints of the range being deleted.
   UpdatePositionForTextRemoval(node, offset, count, ending_position_);
   UpdatePositionForTextRemoval(node, offset, count, leading_whitespace_);
@@ -857,7 +857,7 @@ void DeleteSelectionCommand::HandleGeneralDelete(EditingState* editing_state) {
   if (upstream_start_.IsNull())
     return;
 
-  int start_offset = upstream_start_.ComputeEditingOffset();
+  wtf_size_t start_offset = upstream_start_.ComputeEditingOffset();
   Node* start_node = upstream_start_.AnchorNode();
   DCHECK(start_node);
 
@@ -880,7 +880,7 @@ void DeleteSelectionCommand::HandleGeneralDelete(EditingState* editing_state) {
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
   auto* text = DynamicTo<Text>(start_node);
   if (start_offset >= CaretMaxOffset(start_node) && text) {
-    if (text->length() > static_cast<unsigned>(CaretMaxOffset(start_node))) {
+    if (text->length() > CaretMaxOffset(start_node)) {
       DeleteTextFromNode(text, CaretMaxOffset(start_node),
                          text->length() - CaretMaxOffset(start_node));
     }
@@ -1044,7 +1044,7 @@ void DeleteSelectionCommand::FixupWhitespace(const Position& position) {
   if (IsRenderedCharacter(position))
     return;
   DCHECK(!text_node->GetLayoutObject() ||
-         text_node->GetLayoutObject()->StyleRef().ShouldCollapseWhiteSpaces())
+         text_node->GetLayoutObject()->Style().ShouldCollapseWhiteSpaces())
       << text_node;
   ReplaceTextInNode(text_node, position.ComputeOffsetInContainerNode(), 1,
                     NonBreakingSpaceString(),
@@ -1132,14 +1132,10 @@ void DeleteSelectionCommand::MergeParagraphs(EditingState* editing_state) {
   if (merge_destination.DeepEquivalent() == merge_origin.DeepEquivalent())
     return;
 
-  VisiblePosition start_of_paragraph_to_move = StartOfParagraph(merge_origin);
-  VisiblePosition end_of_paragraph_to_move =
-      EndOfParagraph(merge_origin, kCanSkipOverEditingBoundary);
-  if (RuntimeEnabledFeatures::TraverseFlatTreeToHandleSlotsEnabled()) {
-    start_of_paragraph_to_move = StartOfParagraphInFlatTree(merge_origin);
-    end_of_paragraph_to_move =
-        EndOfParagraphInFlatTree(merge_origin, kCanSkipOverEditingBoundary);
-  }
+  const VisiblePosition start_of_paragraph_to_move =
+      StartOfParagraphInFlatTree(merge_origin);
+  const VisiblePosition end_of_paragraph_to_move =
+      EndOfParagraphInFlatTree(merge_origin, kCanSkipOverEditingBoundary);
 
   if (merge_destination.DeepEquivalent() ==
       end_of_paragraph_to_move.DeepEquivalent())

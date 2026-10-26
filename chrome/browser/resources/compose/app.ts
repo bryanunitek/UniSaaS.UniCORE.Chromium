@@ -11,10 +11,8 @@ import '//resources/cr_elements/cr_chip/cr_chip.js';
 import '//resources/cr_elements/cr_feedback_buttons/cr_feedback_buttons.js';
 import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import '//resources/cr_elements/cr_loading_gradient/cr_loading_gradient.js';
-import '//resources/cr_elements/cr_scrollable.css.js';
 import '//resources/cr_elements/cr_shared_vars.css.js';
 import '//resources/cr_elements/icons.html.js';
-import '//resources/cr_elements/md_select.css.js';
 import '//resources/cr_elements/cr_icon/cr_icon.js';
 
 import {ColorChangeUpdater} from '//resources/cr_components/color_change_listener/colors_css_updater.js';
@@ -180,6 +178,7 @@ export class ComposeAppElement extends ComposeAppElementBase {
       hasOutput_: {type: Boolean},
       displayedText_: {type: String},
       modifierOptions_: {type: Array},
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
 
@@ -251,6 +250,8 @@ export class ComposeAppElement extends ComposeAppElementBase {
   ];
   protected accessor responseText_:
       TextInput = {text: '', isPartial: false, streamingEnabled: false};
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
 
   private animator_: ComposeAppAnimator;
   private apiProxy_: ComposeApiProxy = ComposeApiProxyImpl.getInstance();
@@ -1039,11 +1040,20 @@ export class ComposeAppElement extends ComposeAppElementBase {
     }
     switch (mode) {
       case InputMode.kPolish:
-        return 'compose:polish';
+        return (
+            loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+                'compose:edit-fix-auto' :
+                'compose:polish-old');
       case InputMode.kElaborate:
-        return 'compose:elaborate';
+        return (
+            loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+                'compose:expand' :
+                'compose:elaborate-old');
       case InputMode.kFormalize:
-        return 'compose:formalize';
+        return (
+            loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+                'compose:work' :
+                'compose:formalize-old');
       default:
         return '';
     }

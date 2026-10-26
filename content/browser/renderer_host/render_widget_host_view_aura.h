@@ -9,11 +9,13 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
@@ -46,6 +48,7 @@
 #include "ui/display/display_observer.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/vector2d_f.h"
 #include "ui/gfx/selection_bound.h"
 #include "ui/wm/public/activation_delegate.h"
 
@@ -102,6 +105,8 @@ inline constexpr char16_t kArabicIndicZero = u'\u0660';
 CONTENT_EXPORT void ResetArabicIndicDigitInputStateForTesting();
 #endif  // BUILDFLAG(IS_WIN)
 
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPreventReentrantInternalSetBounds);
+
 // RenderWidgetHostView class hierarchy described in render_widget_host_view.h.
 class CONTENT_EXPORT RenderWidgetHostViewAura
     : public RenderWidgetHostViewBase,
@@ -133,6 +138,7 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
   bool IsShowing() override;
   void WasOccluded() override;
   gfx::Rect GetViewBounds() override;
+  gfx::Rect GetViewBoundsWithoutTransform() override;
   bool IsPointerLocked() override;
   gfx::Size GetVisibleViewportSize() override;
   gfx::Size GetVisibleViewportSizeDevicePx() override;
@@ -160,22 +166,25 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
   void SetIsLoading(bool is_loading) override;
   void RenderProcessGone() override;
   void ShowWithVisibility(PageVisibilityState page_visibility) final;
-  void Destroy() override;
+  void DestroyImpl() override;
+  void OnDestroyOrDefer() override;
   void UpdateTooltipUnderCursor(const std::u16string& tooltip_text) override;
   void UpdateTooltip(const std::u16string& tooltip_text) override;
   void UpdateTooltipFromKeyboard(const std::u16string& tooltip_text,
                                  const gfx::Rect& bounds) override;
   void ClearKeyboardTriggeredTooltip() override;
   bool IsSurfaceAvailableForCopy() override;
-  void CopyFromSurface(
+  void CopyFromSurfaceImpl(
       const gfx::Rect& src_rect,
       const gfx::Size& output_size,
+      bool is_copy_request_secure,
       base::TimeDelta timeout,
       base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback)
       override;
   ui::FilteredGestureProvider* GetFilteredGestureProviderForTesting() override;
   void TransformPointToRootSurface(gfx::PointF* point) override;
   gfx::Rect GetBoundsInScreen() override;
+  gfx::Rect GetBoundsInScreenWithoutTransform() override;
   void WheelEventAck(const blink::WebMouseWheelEvent& event,
                      blink::mojom::InputEventResultState ack_result) override;
   void GestureEventAck(const blink::WebGestureEvent& event,
@@ -191,6 +200,7 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
       const blink::WebInputEvent& input_event) override;
   gfx::AcceleratedWidget AccessibilityGetAcceleratedWidget() override;
   gfx::NativeViewAccessible AccessibilityGetNativeViewAccessible() override;
+  ui::AXTreeID AccessibilityGetParentAXTreeID() override;
   void SetMainFrameAXTreeID(ui::AXTreeID id) override;
   blink::mojom::PointerLockResult LockPointer(
       bool request_unadjusted_movement) override;
@@ -221,14 +231,17 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
   viz::FrameSinkId GetRootFrameSinkId() override;
   viz::SurfaceId GetCurrentSurfaceId() const override;
   bool HasSavedCompositorFrame() const override;
+  void SetEvictOnHide(bool evict_on_hide) override;
   void FocusedNodeChanged(bool is_editable_node,
                           const gfx::Rect& node_bounds_in_screen) override;
 #if BUILDFLAG(IS_WIN)
   bool ShouldInitiateStylusWriting() override;
+  std::optional<gfx::Vector2dF> GetStylusHandwritingPixelsPerInch() override;
   void OnStartStylusWriting() override;
   void OnEditElementFocusedForStylusWriting(
       blink::mojom::StylusWritingFocusResultPtr focus_result) override;
-  void SetStylusHandwritingFocusCallback(
+  void StartStylusWritingFromChildHostView(
+      RenderWidgetHostViewBase* view,
       OnFocusHandwritingTargetCallback callback) override;
 #endif  // BUILDFLAG(IS_WIN)
   void OnSynchronizedDisplayPropertiesChanged(bool rotation = false) override;
@@ -238,10 +251,8 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
 
   // Unbounded element API overrides:
   void CreateUnboundedSurface(
-      mojo::PendingAssociatedReceiver<blink::mojom::UnboundedSurfaceHost> host,
-      mojo::PendingAssociatedRemote<blink::mojom::UnboundedSurfaceClient>
-          client,
-      const gfx::Rect& bounds_in_dips) override;
+      const gfx::Rect& bounds_in_screen,
+      base::WeakPtr<RenderWidgetHostViewBase> subframe_view) override;
 
   void TakeFallbackContentFrom(RenderWidgetHostView* view) override;
   bool CanSynchronizeVisualProperties() override;
@@ -332,20 +343,15 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
       const gfx::Range& range,
       const std::u16string& active_composition_text,
       bool is_composition_committed) override;
-#endif
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
   // Returns the editing context of the active web content.
-  // This is currently used by TSF and ChromeOS to fetch the URL of the active
-  // web content.
+  // This is currently used by TSF to fetch the URL of the active web content.
   // https://docs.microsoft.com/en-us/windows/win32/tsf/predefined-properties
   ui::TextInputClient::EditingContext GetTextEditingContext() override;
-#endif
 
-#if BUILDFLAG(IS_WIN)
   // Notify TSF (via text store) when URL of the frame in focus changes.
   void NotifyOnFrameFocusChanged() override;
-#endif
+#endif  // BUILDFLAG(IS_WIN)
 
   // Overridden from display::DisplayObserver:
   void OnDisplayMetricsChanged(const display::Display& display,
@@ -455,6 +461,8 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
 
   void ScrollFocusedEditableNodeIntoView();
 
+  // Gets the pointer type of last user generated (non-synthesized) pointer
+  // input event.
   ui::EventPointerType GetLastPointerType() const { return last_pointer_type_; }
 
   MouseWheelPhaseHandler* GetMouseWheelPhaseHandler() override;
@@ -488,6 +496,7 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
   void UpdateFrameSinkIdRegistration() override;
   void UpdateBackgroundColor() override;
   bool HasFallbackSurface() const override;
+  void OptOutFrameEviction() override;
   std::optional<DisplayFeature> GetDisplayFeature() override;
   void DisableDisplayFeatureOverrideForEmulation() override;
   void OverrideDisplayFeatureForEmulation(
@@ -500,8 +509,8 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
       blink::RecordContentToVisibleTimeRequest visible_time_request) final;
   void CancelSuccessfulPresentationTimeRequestForHostAndDelegate() final;
 
-  // May be overridden in tests.
   virtual bool ShouldSkipCursorUpdate() const;
+  void CleanUpHostObservers() override;
 
  private:
   friend class DelegatedFrameHostClientAura;
@@ -604,6 +613,8 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
   FRIEND_TEST_ALL_PREFIXES(SitePerProcessHitTestBrowserTest,
                            ScrollOOPIFEditableElement);
   FRIEND_TEST_ALL_PREFIXES(RenderWidgetHostViewAuraTest, OcclusionHidesTooltip);
+  FRIEND_TEST_ALL_PREFIXES(RenderWidgetHostViewAuraTest,
+                           SetBoundsDoesNotReenterInternalSetBounds);
   FRIEND_TEST_ALL_PREFIXES(RenderWidgetHostViewAuraTest,
                            UpdateInsetsWithVirtualKeyboardEnabled);
 
@@ -752,6 +763,9 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
       const gfx::Rect& focus_screen_rect_in_dips,
       const gfx::Size& tolerance_screen_distance_in_dips);
 
+  void StartStylusWritingImpl(RenderWidgetHostViewBase* initiating_view,
+                              OnFocusHandwritingTargetCallback callback);
+
   void ForwardArabicIndicCharEventWithLatencyInfo(const ui::KeyEvent& event,
                                                   char16_t ascii_char);
 #endif  // BUILDFLAG(IS_WIN)
@@ -772,14 +786,35 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
   // again while inside shutdown, causing a double-free.
   bool in_shutdown_;
 
-  // True if in the process of handling a window bounds changed notification.
-  bool in_bounds_changed_;
+  // Prevents mutual recursion between `InternalSetBounds()` and
+  // `OnBoundsChanged()`:
+  //
+  // 1. Bounds set via `RenderWidgetHostViewAura::SetBounds()` / `SetSize()`:
+  //    - `InternalSetBounds()` (sets `is_setting_bounds_ = true`)
+  //    - `aura::Window::SetBounds()`
+  //    - ...
+  //    - `OnBoundsChanged()` (skips `SetSize()`)
+  //
+  // 2. Bounds set directly on `window_` via `aura::Window::SetBounds()`:
+  //    - `aura::Window::SetBounds()`
+  //    - ...
+  //    - `OnBoundsChanged()` (sets `is_setting_bounds_ = true`)
+  //    - `SetSize()`
+  //    - `InternalSetBounds()` (skips `window_->SetBounds()`)
+  bool is_setting_bounds_ = false;
 
   // Our parent host view, if this is a popup.  NULL otherwise.
-  raw_ptr<RenderWidgetHostViewAura, DanglingUntriaged> popup_parent_host_view_;
+  //
+  // `popup_parent_host_view_` and `popup_child_host_view_` form a matched
+  // pair: if one side is set, the other side points back. Every path that
+  // breaks the link clears both directions before either view is freed, so
+  // neither can dangle. See `InitAsPopup()`, which unlinks any previous child
+  // before re-parenting, and ~RenderWidgetHostViewAura(), which unlinks
+  // whichever side is set and CHECKs that the pair agrees.
+  raw_ptr<RenderWidgetHostViewAura> popup_parent_host_view_;
 
   // Our child popup host. NULL if we do not have a child popup.
-  raw_ptr<RenderWidgetHostViewAura, DanglingUntriaged> popup_child_host_view_;
+  raw_ptr<RenderWidgetHostViewAura> popup_child_host_view_;
 
   class EventObserverForPopupExit;
   std::unique_ptr<EventObserverForPopupExit> event_observer_for_popup_exit_;
@@ -861,6 +896,9 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
   ui::EventPointerType last_pointer_type_before_focus_ =
       ui::EventPointerType::kUnknown;
 
+  // Tracks the last text input type notified to the InputMethod.
+  ui::TextInputType last_text_input_type_ = ui::TEXT_INPUT_TYPE_NONE;
+
   bool is_first_navigation_ = true;
   viz::LocalSurfaceId inset_surface_id_;
 
@@ -891,11 +929,6 @@ class CONTENT_EXPORT RenderWidgetHostViewAura
   // pointer id and a handwriting stroke id.
   std::optional<ui::StylusHandwritingPropertiesWin>
       last_stylus_handwriting_properties_;
-
-  // Set by a child frame view so the TSF focus response is routed to the
-  // child frame view instead of this view. Reset after use in
-  // OnStartStylusWriting.
-  OnFocusHandwritingTargetCallback stylus_handwriting_focus_callback_;
 #endif  // BUILDFLAG(IS_WIN)
 
   std::optional<display::ScopedDisplayObserver> display_observer_;

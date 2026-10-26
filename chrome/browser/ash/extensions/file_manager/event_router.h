@@ -33,10 +33,10 @@
 #include "chrome/browser/ash/guest_os/public/guest_os_mount_provider_registry.h"
 #include "chrome/browser/ash/policy/skyvault/local_user_files_policy_observer.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_util.h"
-#include "chrome/common/extensions/api/file_manager_private.h"
 #include "chromeos/ash/components/settings/timezone_settings.h"
 #include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_observer.h"
 #include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_manager_private.h"
 #include "chromeos/dbus/dlp/dlp_client.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
@@ -152,12 +152,6 @@ class EventRouter
   void OnFormatCompleted(const std::string& device_path,
                          const std::string& device_label,
                          bool success) override;
-  void OnPartitionStarted(const std::string& device_path,
-                          const std::string& device_label,
-                          bool success) override;
-  void OnPartitionCompleted(const std::string& device_path,
-                            const std::string& device_label,
-                            bool success) override;
   void OnRenameStarted(const std::string& device_path,
                        const std::string& device_label,
                        bool success) override;
@@ -184,10 +178,6 @@ class EventRouter
 
   // display::DisplayObserver overrides.
   void OnDisplayTabletStateChanged(display::TabletState state) override;
-
-  // Notifies FilesApp that file drop to Plugin VM was not in a shared directory
-  // and failed FilesApp will show the "Move to Windows files" dialog.
-  void DropFailedPluginVmDirectoryNotShared();
 
   // Called by the UI to notify the result of a displayed dialog.
   void OnDriveDialogResult(drivefs::mojom::DialogResult result);

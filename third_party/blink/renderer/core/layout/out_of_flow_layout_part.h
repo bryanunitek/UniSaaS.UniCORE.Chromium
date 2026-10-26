@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/core/layout/block_node.h"
 #include "third_party/blink/renderer/core/layout/box_fragment_builder.h"
 #include "third_party/blink/renderer/core/layout/geometry/logical_rect.h"
+#include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
 #include "third_party/blink/renderer/core/layout/geometry/static_position.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_containing_block_utils.h"
 #include "third_party/blink/renderer/core/layout/non_overflowing_scroll_range.h"
@@ -41,6 +42,20 @@ class CORE_EXPORT OutOfFlowLayoutPart {
   STACK_ALLOCATED();
 
  public:
+  static void Run(BoxFragmentBuilder* builder) {
+    // If there are no OOFs inside, we can skip OOF layout, except if this is
+    // the root. There may be top-layer nodes still to be added. Additionally,
+    // for pagination, we might not have hauled any OOFs inside the
+    // fragmentainers yet. See HandleFragmentation().
+    if (!builder->HasOutOfFlowPositionedCandidates() &&
+        !builder->HasOutOfFlowFragmentainerDescendants() &&
+        !builder->HasMulticolsWithPendingOOFs() && !builder->IsRoot()) {
+      return;
+    }
+
+    OutOfFlowLayoutPart(builder).Run();
+  }
+
   explicit OutOfFlowLayoutPart(BoxFragmentBuilder* container_builder);
   void Run();
 
@@ -142,8 +157,9 @@ class CORE_EXPORT OutOfFlowLayoutPart {
                                               TextDirection::kLtr};
     // If the container is scrollable.
     bool is_scroll_container;
-    // If the container is hidden for paint, which is also true for the OOFs.
-    bool is_hidden_for_paint;
+    // If the container is hidden due to layout, which is also true for the
+    // OOFs.
+    bool is_hidden_due_to_layout;
     // Size and offset of the container.
     LogicalRect rect;
     // https://drafts.csswg.org/css-position-4/#scrollable-containing-block
@@ -227,6 +243,9 @@ class CORE_EXPORT OutOfFlowLayoutPart {
     BoxStrut insets_for_get_computed_style;
     // Offset to container's border box.
     LogicalOffset offset;
+    // Inset-modified containing block relative to containing block's border
+    // box.
+    PhysicalRect imcb_rect;
     // Holds the initial layout result if we needed to know the size in order
     // to calculate the offset. If an initial result is set, it will either be
     // re-used or replaced in the final layout pass.
@@ -267,6 +286,9 @@ class CORE_EXPORT OutOfFlowLayoutPart {
     // True if the element overflows the inset-modified containing block.
     bool overflows_containing_block = false;
 
+    // True if the default anchor resolves to an acceptable anchor box.
+    bool has_default_anchor = false;
+
     Member<Element> accessibility_anchor;
     Member<GCedHeapHashSet<Member<Element>>> display_locks_affected_by_anchors;
 
@@ -295,13 +317,12 @@ class CORE_EXPORT OutOfFlowLayoutPart {
   const ContainingBlockInfo GetContainingBlockInfo(
       const LogicalOofPositionedNode&);
 
+  const BlockNode& Node() const { return container_builder_.Node(); }
   FragmentationType GetFragmentainerType() const {
-    if (container_builder_->Node().IsPaginatedRoot())
-      return kFragmentPage;
-    return kFragmentColumn;
+    return Node().IsPaginatedRoot() ? kFragmentPage : kFragmentColumn;
   }
   const ConstraintSpace& GetConstraintSpace() const {
-    return container_builder_->GetConstraintSpace();
+    return container_builder_.GetConstraintSpace();
   }
 
   void ComputeInlineContainingBlocks(
@@ -314,7 +335,7 @@ class CORE_EXPORT OutOfFlowLayoutPart {
   // relative to the fragmentation context root (not including any offset from
   // relative positioning).
   void AddInlineContainingBlockInfo(
-      const InlineContainingBlockUtils::InlineContainingBlockMap&,
+      const InlineContainingBlockMap&,
       const WritingDirectionMode container_writing_direction,
       PhysicalSize container_builder_size,
       LogicalOffset containing_block_relative_offset = LogicalOffset(),
@@ -418,9 +439,9 @@ class CORE_EXPORT OutOfFlowLayoutPart {
 
   const FragmentBuilder::ChildrenVector& FragmentationContextChildren() const {
     DCHECK(!RuntimeEnabledFeatures::FragmentedOofInCbEnabled());
-    DCHECK(container_builder_->IsBlockFragmentationContextRoot());
+    DCHECK(container_builder_.IsBlockFragmentationContextRoot());
     return child_fragment_storage_ ? *child_fragment_storage_
-                                   : container_builder_->Children();
+                                   : container_builder_.Children();
   }
 
   // Get the child / descendant fragment at the specified index. These are
@@ -441,7 +462,7 @@ class CORE_EXPORT OutOfFlowLayoutPart {
       child_fragment_storage_->push_back(
           LogicalFragmentLink{fragmentainer, fragmentainer_offset});
     } else {
-      container_builder_->AddChild(fragmentainer, fragmentainer_offset);
+      container_builder_.AddChild(fragmentainer, fragmentainer_offset);
     }
   }
 
@@ -449,7 +470,7 @@ class CORE_EXPORT OutOfFlowLayoutPart {
   // `index`.
   const BlockBreakToken* PreviousFragmentainerBreakToken(wtf_size_t) const;
 
-  BoxFragmentBuilder* container_builder_;
+  BoxFragmentBuilder& container_builder_;
   ContainingBlockInfo default_containing_block_;
   std::optional<ContainingBlockInfo> viewport_containing_block_;
   HeapHashMap<Member<const LayoutObject>, ContainingBlockInfo>

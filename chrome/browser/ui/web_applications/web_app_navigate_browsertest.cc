@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/webapps/common/web_app_id.h"
@@ -29,7 +30,7 @@ class WebAppServiceWorkerOpenWindowBrowserTest : public WebAppBrowserTestBase {
   NavigateParams MakeNavigateParamsForServiceWorker() const {
     NavigateParams params(browser()->GetProfile(), GetGoogleURL(),
                           ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     params.is_renderer_initiated = true;
     params.user_gesture = false;
     params.initiator_origin = url::Origin::Create(GetGoogleURL());
@@ -48,20 +49,21 @@ IN_PROC_BROWSER_TEST_F(WebAppServiceWorkerOpenWindowBrowserTest,
   Navigate(&params);
 
   EXPECT_NE(browser(), params.browser);
-  EXPECT_FALSE(params.browser->GetBrowserForMigrationOnly()->is_type_normal());
-  EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()->is_type_app());
+  EXPECT_NE(params.browser->GetType(),
+            BrowserWindowInterface::Type::TYPE_NORMAL);
+  EXPECT_EQ(params.browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
   EXPECT_TRUE(WindowFeatureController::From(params.browser)->IsTrustedSource());
 }
 
 IN_PROC_BROWSER_TEST_F(WebAppServiceWorkerOpenWindowBrowserTest,
                        AppNotInstalled_ServiceWorkerOpenWindow) {
-  int num_tabs = browser()->tab_strip_model()->count();
+  int num_tabs = browser()->GetTabStripModel()->count();
 
   NavigateParams params(MakeNavigateParamsForServiceWorker());
   Navigate(&params);
 
   EXPECT_EQ(browser(), params.browser);
-  EXPECT_EQ(++num_tabs, browser()->tab_strip_model()->count());
+  EXPECT_EQ(++num_tabs, browser()->GetTabStripModel()->count());
 }
 
 }  // namespace web_app

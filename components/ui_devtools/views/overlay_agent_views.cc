@@ -14,6 +14,7 @@
 #include "components/ui_devtools/views/view_element.h"
 #include "components/ui_devtools/views/widget_element.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/events/event.h"
 #include "ui/gfx/canvas.h"
@@ -484,9 +485,8 @@ protocol::Response OverlayAgentViews::HighlightNode(int node_id,
     return protocol::Response::ServerError("Cannot highlight root node.");
 
   if (!layer_for_highlighting_) {
-    layer_for_highlighting_ =
-        std::make_unique<ui::Layer>(ui::LayerType::LAYER_TEXTURED);
-    layer_for_highlighting_->SetName("HighlightingLayer");
+    layer_for_highlighting_ = std::make_unique<ui::LayerTextured>();
+    layer_for_highlighting_->SetName("OverlayAgentViews:Highlighting");
     layer_for_highlighting_->set_delegate(this);
     layer_for_highlighting_->SetFillsBoundsOpaquely(false);
   }

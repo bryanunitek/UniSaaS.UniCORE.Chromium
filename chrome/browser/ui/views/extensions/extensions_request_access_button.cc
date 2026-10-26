@@ -24,6 +24,7 @@
 #include "chrome/browser/ui/views/extensions/extensions_request_access_hover_card_coordinator.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_chip_constants.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_chip_button.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
@@ -35,15 +36,6 @@
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_utils.h"
-
-namespace {
-
-// TODO(crbug.com/40916158): Same as permission's ChipController. Pull out to a
-// shared location.
-constexpr auto kConfirmationDisplayDuration = base::Seconds(4);
-
-
-}  // namespace
 
 ExtensionsRequestAccessButton::ExtensionsRequestAccessButton(
     BrowserWindowInterface* browser,
@@ -72,6 +64,7 @@ void ExtensionsRequestAccessButton::Update(
         request_access_button_params) {
   CHECK(!IsShowingConfirmation());
   extension_ids_ = request_access_button_params.extension_ids;
+  origin_ = request_access_button_params.origin;
 
   SetVisible(!request_access_button_params.extension_ids.empty());
   SetTooltipText(request_access_button_params.tooltip_text);
@@ -129,10 +122,6 @@ bool ExtensionsRequestAccessButton::IsShowingConfirmationFor(
 
   CHECK(GetVisible());
   return confirmation_origin_ == origin;
-}
-
-bool ExtensionsRequestAccessButton::ShouldShowInkdropAfterIphInteraction() {
-  return false;
 }
 
 void ExtensionsRequestAccessButton::VisibilityChanged(
@@ -221,21 +210,31 @@ void ExtensionsRequestAccessButton::OnButtonPressed(const ui::Event& event) {
       feature_engagement::kIPHExtensionsRequestAccessButtonFeature,
       FeaturePromoFeatureUsedAction::kClosePromoIfPresent);
   content::WebContents* web_contents = GetActiveWebContents();
+  if (!web_contents) {
+    return;
+  }
   extensions::ExtensionActionRunner* action_runner =
       extensions::ExtensionActionRunner::GetForWebContents(web_contents);
   if (!action_runner) {
     return;
   }
 
+  // Verify that the origin displayed when the action was initiated matches the
+  // current origin of the WebContents.
+  if (!origin_.IsSameOriginWith(
+          web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin())) {
+    return;
+  }
+
   // Make sure we set this before granting tab permissions, since that will
   // trigger an update to the request access button for each extension that is
   // granted access.
-  confirmation_origin_ =
-      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin();
+  confirmation_origin_ = origin_;
 
   // Always grant access to this site to all extensions.
-  DCHECK_GT(extension_ids_.size(), 0u);
-  extensions_toolbar_view_model_->GrantSiteAccess(web_contents, extension_ids_);
+  CHECK_GT(extension_ids_.size(), 0u, base::NotFatalUntil::M162);
+  extensions_toolbar_view_model_->GrantSiteAccess(web_contents, extension_ids_,
+                                                  origin_);
 
   // Show confirmation message, and disable the button, for a specific duration.
   std::optional<SkColor> color;
@@ -244,9 +243,9 @@ void ExtensionsRequestAccessButton::OnButtonPressed(const ui::Event& event) {
                color);
   SetEnabled(false);
 
-  base::TimeDelta collapse_duration = remove_confirmation_for_testing_
-                                          ? base::Seconds(0)
-                                          : kConfirmationDisplayDuration;
+  base::TimeDelta collapse_duration =
+      remove_confirmation_for_testing_ ? base::Seconds(0)
+                                       : kPermissionConfirmationDisplayDuration;
   // base::Unretained() below is safe because this view is tied to the
   // lifetime of `extensions_toolbar_view_model_`.
   collapse_timer_.Start(

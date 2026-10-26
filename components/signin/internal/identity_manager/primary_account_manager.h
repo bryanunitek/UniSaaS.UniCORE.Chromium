@@ -26,11 +26,14 @@
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
+#include "build/build_config.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_observer.h"
 #include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_client.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/primary_account_change_event.h"
@@ -55,6 +58,14 @@ class PrimaryAccountManager : public ProfileOAuth2TokenServiceObserver {
     // level for the primary account.
     virtual void OnPrimaryAccountChanged(
         const signin::PrimaryAccountChangeEvent& event_details) = 0;
+
+#if BUILDFLAG(IS_IOS)
+    // Called once the batch of primary account changes ended.
+    // This method is also called for each single primary account event, when
+    // there is no batch.
+    // See `StartBatchOfPrimaryAccountChanges()`.
+    virtual void OnEndBatchOfPrimaryAccountChanges() = 0;
+#endif  // BUILDFLAG(IS_IOS)
   };
 
   // Used to remove accounts from the token service and the account tracker.
@@ -86,6 +97,22 @@ class PrimaryAccountManager : public ProfileOAuth2TokenServiceObserver {
     kMaxValue = kEmptyAccountInfo_RestoreSuccessFromLastSyncInfo,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:PAMInitializePrimaryAccountInfoState)
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  // LINT.IfChange(ExplicitSigninDatatypeMigrationState)
+  // Enum for histogram 'Signin.ExplicitSigninDatatypeMigration'.
+  //
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class ExplicitSigninDatatypeMigrationState {
+    kSignedIn = 0,  // Baseline.
+    kSignedInWithExplicitBookmarks = 1,
+    kSignedInWithExplicitExtensions = 2,
+
+    kMaxValue = kSignedInWithExplicitExtensions,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:ExplicitSigninDatatypeMigrationState)
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   PrimaryAccountManager(
       SigninClient* client,
@@ -159,6 +186,19 @@ class PrimaryAccountManager : public ProfileOAuth2TokenServiceObserver {
   // the accounts untouched.
   void RevokeSyncConsent(signin_metrics::ProfileSignout signout_source_metric);
 
+#if BUILDFLAG(IS_IOS)
+  // Whether a batch of primary account changes is in progress. See
+  // `Observer::OnEndBatchOfPrimaryAccountChanges()`.
+  bool IsBatchOfPrimaryAccountChangesInProgress() const;
+
+  // Starts a batch of primary account changes (e.g. when switching from one
+  // primary account to another). `OnEndBatchOfPrimaryAccountChanges()` is not
+  // sent on `OnPrimaryAccountChanged()` while the batch is running, and is sent
+  // when the returned `ScopedClosureRunner` is destructed.
+  // See `Observer::OnEndBatchOfPrimaryAccountChanges()`.
+  base::ScopedClosureRunner StartBatchOfPrimaryAccountChanges();
+#endif  // BUILDFLAG(IS_IOS)
+
   // Adds and removes observers.
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
@@ -231,6 +271,17 @@ class PrimaryAccountManager : public ProfileOAuth2TokenServiceObserver {
   // account was initialized.
   const PrimaryAccount& GetPrimaryAccount() const;
 
+#if BUILDFLAG(IS_IOS)
+  // Stops the batch of primary account changes. Can only be called by
+  // `StartBatchOfPrimaryAccountChanges()`. Only one batch of primary account
+  // changes can be started at the same time.
+  void BatchOfPrimaryAccountChangesDone();
+
+  // Triggers `OnEndBatchOfPrimaryAccountChanges()` events. A batch of primary
+  // account changes should not be in progress when calling this method.
+  void FireOnEndBatchOfPrimaryAccountChanges();
+#endif  // BUILDFLAG(IS_IOS)
+
   // The SigninClient instance associated with this object. Must outlive this
   // object.
   raw_ptr<SigninClient> client_;
@@ -254,10 +305,27 @@ class PrimaryAccountManager : public ProfileOAuth2TokenServiceObserver {
   // this field.
   std::optional<PrimaryAccount> primary_account_;
 
+#if BUILDFLAG(IS_IOS)
+  // `true` if there is a batch of primary account changes (e.g. account
+  // switching) in progress. See `StartBatchOfPrimaryAccountChanges()`.
+  bool batch_of_primary_account_changes_in_progress_ = false;
+
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
+#else
   base::ObserverList<Observer> observers_;
+#endif
   base::ScopedObservation<ProfileOAuth2TokenService,
                           ProfileOAuth2TokenServiceObserver>
       token_service_observation_{this};
+
+#if BUILDFLAG(IS_IOS)
+  base::WeakPtrFactory<PrimaryAccountManager> weak_factory_{this};
+#endif  // BUILDFLAG(IS_IOS)
 };
 
 #endif  // COMPONENTS_SIGNIN_INTERNAL_IDENTITY_MANAGER_PRIMARY_ACCOUNT_MANAGER_H_

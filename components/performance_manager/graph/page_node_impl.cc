@@ -4,6 +4,7 @@
 
 #include "components/performance_manager/graph/page_node_impl.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -174,6 +175,11 @@ PageNode::LoadingState PageNodeImpl::GetLoadingState() const {
   return loading_state_.value();
 }
 
+bool PageNodeImpl::IsUserOrBrowserInitiatedLoad() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return is_user_or_browser_initiated_load_.value();
+}
+
 ukm::SourceId PageNodeImpl::GetUkmSourceID() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return ukm_source_id_.value();
@@ -231,7 +237,7 @@ const GURL& PageNodeImpl::GetMainFrameUrl() const {
 base::ByteSize PageNodeImpl::EstimateMainFramePrivateFootprintSize() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   base::ByteSize total;
-  FrameNodeImpl* main_frame = main_frame_node();
+  FrameNodeImpl* main_frame = primary_main_frame_node();
   if (main_frame) {
     performance_manager::GraphImplOperations::VisitFrameAndChildrenPreOrder(
         main_frame, [&total](FrameNodeImpl* frame_node) {
@@ -341,6 +347,13 @@ void PageNodeImpl::SetLoadingState(LoadingState loading_state) {
   loading_state_.SetAndMaybeNotify(this, loading_state);
 }
 
+void PageNodeImpl::SetIsUserOrBrowserInitiatedLoad(
+    bool is_user_or_browser_initiated_load) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  is_user_or_browser_initiated_load_.SetAndMaybeNotify(
+      this, is_user_or_browser_initiated_load);
+}
+
 void PageNodeImpl::SetType(PageType type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK_NE(type, PageType::kUnknown);
@@ -408,7 +421,7 @@ void PageNodeImpl::OnAboutToBeDiscarded(base::WeakPtr<PageNode> new_page_node) {
   }
 
   // Notify all embedded frames that the primary page is about to be discarded.
-  if (FrameNodeImpl* main_frame = main_frame_node()) {
+  if (FrameNodeImpl* main_frame = primary_main_frame_node()) {
     main_frame->OnPrimaryPageAboutToBeDiscarded();
   }
 
@@ -477,22 +490,14 @@ FrameNodeImpl* PageNodeImpl::embedder_frame_node() const {
   return embedder_frame_node_;
 }
 
-FrameNodeImpl* PageNodeImpl::main_frame_node() const {
+FrameNodeImpl* PageNodeImpl::primary_main_frame_node() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (main_frame_nodes_.empty()) {
-    return nullptr;
-  }
-
-  // Return the current frame node if there is one. Iterating over this set is
-  // fine because it is almost always of length 1 or 2.
   for (FrameNodeImpl* frame : main_frame_nodes()) {
-    if (frame->IsCurrent()) {
+    if (frame->IsActive() && !frame->parent_or_outer_document()) {
       return frame;
     }
   }
-
-  // Otherwise, return any old main frame node.
-  return *main_frame_nodes().begin();
+  return nullptr;
 }
 
 PageNode::NodeSetView<FrameNodeImpl*> PageNodeImpl::main_frame_nodes() const {
@@ -609,9 +614,9 @@ const FrameNode* PageNodeImpl::GetEmbedderFrameNode() const {
   return embedder_frame_node();
 }
 
-const FrameNode* PageNodeImpl::GetMainFrameNode() const {
-  CHECK(graph()->NodeEdgesArePublic(this) || !main_frame_node());
-  return main_frame_node();
+const FrameNode* PageNodeImpl::GetPrimaryMainFrameNode() const {
+  CHECK(graph()->NodeEdgesArePublic(this) || !primary_main_frame_node());
+  return primary_main_frame_node();
 }
 
 PageNode::NodeSetView<const FrameNode*> PageNodeImpl::GetMainFrameNodes()

@@ -26,7 +26,7 @@ constexpr int kFocusToggleAcceleratorModifiers =
 #if BUILDFLAG(IS_MAC)
     ui::EF_CONTROL_DOWN | ui::EF_COMMAND_DOWN;
 #elif BUILDFLAG(IS_CHROMEOS)
-// ui::EF_COMMAND_DOWN is the search key for ChromeOS.
+    // ui::EF_COMMAND_DOWN is the search key for ChromeOS.
     ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN;
 #else
     ui::EF_ALT_DOWN | ui::EF_SHIFT_DOWN;
@@ -80,16 +80,21 @@ constexpr int kZoomModifier = ui::EF_CONTROL_DOWN;
 
 constexpr std::array kZoomInAccelerators = {
     ui::Accelerator{ui::VKEY_OEM_PLUS, kZoomModifier},
-    ui::Accelerator{ui::VKEY_ADD, kZoomModifier}};
+    ui::Accelerator{ui::VKEY_OEM_PLUS, kZoomModifier | ui::EF_SHIFT_DOWN},
+    ui::Accelerator{ui::VKEY_ADD, kZoomModifier},
+    ui::Accelerator{ui::VKEY_ADD, kZoomModifier | ui::EF_SHIFT_DOWN}};
 
 constexpr std::array kZoomOutAccelerators = {
     ui::Accelerator{ui::VKEY_OEM_MINUS, kZoomModifier},
-    ui::Accelerator{ui::VKEY_SUBTRACT, kZoomModifier}};
+    ui::Accelerator{ui::VKEY_OEM_MINUS, kZoomModifier | ui::EF_SHIFT_DOWN},
+    ui::Accelerator{ui::VKEY_SUBTRACT, kZoomModifier},
+    ui::Accelerator{ui::VKEY_SUBTRACT, kZoomModifier | ui::EF_SHIFT_DOWN}};
 
 constexpr std::array kZoomResetAccelerators = {
     ui::Accelerator{ui::VKEY_0, kZoomModifier},
-    ui::Accelerator{ui::VKEY_NUMPAD0, kZoomModifier}};
-
+    ui::Accelerator{ui::VKEY_0, kZoomModifier | ui::EF_SHIFT_DOWN},
+    ui::Accelerator{ui::VKEY_NUMPAD0, kZoomModifier},
+    ui::Accelerator{ui::VKEY_NUMPAD0, kZoomModifier | ui::EF_SHIFT_DOWN}};
 
 constexpr auto kCommandToStaticAcceleratorsMap =
     base::MakeFixedFlatMap<LocalHotkeyManager::Command,
@@ -233,7 +238,13 @@ bool LocalHotkeyManager::AcceleratorPressed(
     return false;
   }
   auto command = GetCommand(accelerator);
-  return event_handler_->AcceleratorPressed(command);
+  return event_handler_->AcceleratorPressed(command, accelerator);
+}
+
+bool LocalHotkeyManager::EventHandler::AcceleratorPressed(
+    Command command,
+    const ui::Accelerator& accelerator) {
+  return AcceleratorPressed(command);
 }
 
 bool LocalHotkeyManager::CanHandleAccelerators() const {
@@ -243,8 +254,20 @@ bool LocalHotkeyManager::CanHandleAccelerators() const {
   return event_handler_->CanHandleAccelerators();
 }
 
+bool LocalHotkeyManager::IsRegisteredAccelerator(
+    const ui::Accelerator& accelerator) const {
+  for (Command command : supported_commands_) {
+    for (const ui::Accelerator& registered_accel : GetAccelerators(command)) {
+      if (registered_accel == accelerator) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 std::vector<ui::Accelerator> LocalHotkeyManager::GetAccelerators(
-    Command command) {
+    Command command) const {
   std::vector<ui::Accelerator> accelerators_to_register;
   if (kCommandToPrefMap.contains(command)) {
     // Configurable hotkey
@@ -285,6 +308,10 @@ void LocalHotkeyManager::RegisterCommand(Command command) {
   if (!new_registrations.empty()) {
     command_registrations_.emplace(command, std::move(new_registrations));
   }
+}
+
+BrowserWindowInterface* LocalHotkeyManager::Panel::GetBrowserWindowInterface() {
+  return nullptr;
 }
 
 }  // namespace glic

@@ -37,6 +37,7 @@
 #include <limits>
 #include <memory>
 
+#include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
@@ -48,6 +49,8 @@
 #include "base/strings/string_view_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/types/strong_alias.h"
+#include "services/network/public/mojom/ip_address_space.mojom-blink.h"
+#include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/mojom/websockets/websocket_connector.mojom-blink.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/platform.h"
@@ -82,6 +85,7 @@
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/ascii_ctype.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -281,16 +285,22 @@ WebSocketChannelImpl::WebSocketChannelImpl(ExecutionContext* execution_context,
 
 WebSocketChannelImpl::~WebSocketChannelImpl() = default;
 
-bool WebSocketChannelImpl::Connect(const KURL& url, const String& protocol) {
+bool WebSocketChannelImpl::Connect(
+    const KURL& url,
+    const String& protocol,
+    network::mojom::blink::IPAddressSpace target_address_space) {
   DVLOG(1) << this << " Connect()";
 
-  if (GetBaseFetchContext()->ShouldBlockWebSocketByMixedContentCheck(url)) {
+  if (GetBaseFetchContext()->ShouldBlockWebSocketByMixedContentCheck(
+          url, target_address_space)) {
     has_initiated_opening_handshake_ = false;
     return false;
   }
 
   if (auto* scheduler = execution_context_->GetScheduler()) {
-    if (!RuntimeEnabledFeatures::DisconnectWebSocketOnBFCacheEnabled()) {
+    if (!RuntimeEnabledFeatures::DisconnectWebSocketOnBFCacheEnabled() ||
+        base::CommandLine::ForCurrentProcess()->HasSwitch(
+            blink::switches::kDisableBackForwardCacheForWebSockets)) {
       // Two features are registered here:
       // - `kWebSocket`: a non-sticky feature that will disable BFCache for any
       // page. It will be reset after the `WebSocketChannel` is closed.
@@ -342,13 +352,11 @@ bool WebSocketChannelImpl::Connect(const KURL& url, const String& protocol) {
   // are throttled by the network service.
   if (connection_count_tracker_handle_.IncrementAndCheckStatus() ==
       ConnectionCountTrackerHandle::CountStatus::kShouldNotConnect) {
-    StringBuilder message;
-    message.Append("WebSocket connection to '");
-    message.Append(url.GetString());
-    message.Append("' failed: Insufficient resources");
+    String message = StrCat({"WebSocket connection to '", url.GetString(),
+                             "' failed: Insufficient resources"});
     execution_context_->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
         mojom::blink::ConsoleMessageSource::kNetwork,
-        mojom::blink::ConsoleMessageLevel::kError, message.ToString()));
+        mojom::blink::ConsoleMessageLevel::kError, message));
     execution_context_->GetTaskRunner(TaskType::kNetworking)
         ->PostTask(FROM_HERE,
                    BindOnce(&WebSocketChannelImpl::TearDownFailedConnection,
@@ -367,10 +375,10 @@ bool WebSocketChannelImpl::Connect(const KURL& url, const String& protocol) {
 
   connector->Connect(
       url, protocols, execution_context_->UserAgent(),
-      execution_context_->GetStorageAccessApiStatus(),
       handshake_client_receiver_.BindNewPipeAndPassRemote(
           execution_context_->GetTaskRunner(TaskType::kWebSocket)),
-      /*throttling_profile_id=*/devtools_throttling_token);
+      /*throttling_profile_id=*/devtools_throttling_token,
+      target_address_space);
   handshake_client_receiver_.set_disconnect_with_reason_handler(
       blink::BindOnce(&WebSocketChannelImpl::OnConnectionError,
                       WrapWeakPersistent(this), FROM_HERE));
@@ -422,7 +430,7 @@ void WebSocketChannelImpl::Send(
 
 void WebSocketChannelImpl::Send(
     scoped_refptr<BlobDataHandle> blob_data_handle) {
-  DVLOG(1) << this << " Send(" << blob_data_handle->Uuid() << ", "
+  DVLOG(1) << this << " Send(" << blob_data_handle->MaybeUuid() << ", "
            << blob_data_handle->GetType() << ", " << blob_data_handle->size()
            << ") "
            << "(BlobDataHandle argument)";
@@ -987,8 +995,8 @@ void WebSocketChannelImpl::DidFailLoadingBlob(FileErrorCode error_code) {
     return;
   }
   // FIXME: Generate human-friendly reason message.
-  FailAsError(StrCat({"Failed to load Blob: error code = ",
-                      String::Number(static_cast<int>(error_code))}));
+  FailAsError(Format("Failed to load Blob: error code = {}",
+                     static_cast<int>(error_code)));
 }
 
 void WebSocketChannelImpl::TearDownFailedConnection() {

@@ -37,7 +37,7 @@ using base::RecordAction;
 using base::UmaHistogramEnumeration;
 using base::UserMetricsAction;
 
-@interface FeedTopSectionMediator () <IdentityManagerObserverBridgeDelegate> {
+@interface FeedTopSectionMediator () <IdentityManagerObserving> {
   // Observes changes in identity.
   std::unique_ptr<signin::IdentityManagerObserverBridge>
       _identityObserverBridge;
@@ -92,8 +92,10 @@ using base::UserMetricsAction;
 }
 
 - (void)shutdown {
+  self.delegate = nil;
   _identityObserverBridge.reset();
   _provisionalPushNotificationService = nullptr;
+  _signinPromoConfigurator = nil;
   self.authenticationService = nullptr;
   self.identityManager = nullptr;
   self.prefService = nullptr;
@@ -102,6 +104,7 @@ using base::UserMetricsAction;
 // Handles closing the promo, and the NTP and Feed Top Section layout when the
 // promo is closed.
 - (void)updateFeedTopSectionWhenClosed {
+  [self setFeedTopSectionVisible:NO];
   [self.NTPDelegate handleFeedTopSectionClosed];
   [self.consumer hidePromo];
   [self.NTPDelegate updateFeedLayout];
@@ -116,14 +119,14 @@ using base::UserMetricsAction;
   return _signinPromoConfigurator;
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
 // Called when a user changes the syncing state.
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {
     case signin::PrimaryAccountChangeEvent::Type::kSet:
-      if (!self.signinPromoMediator.showSpinner) {
+      if (!self.signinPromoMediator.spinnerVisible) {
         // User has signed in, stop showing the promo.
         [self updateShouldShowPromo];
       }
@@ -139,10 +142,9 @@ using base::UserMetricsAction;
 #pragma mark - SigninPromoViewConsumer
 
 - (void)configureSigninPromoWithConfigurator:
-            (SigninPromoViewConfigurator*)configurator
-                             identityChanged:(BOOL)identityChanged {
-  // No-op: The NTP is always recreated when the identity changes, so this is
-  // not needed.
+    (SigninPromoViewConfigurator*)configurator {
+  _signinPromoConfigurator = configurator;
+  [self.consumer updateSigninPromoWithConfigurator:configurator];
 }
 
 - (void)signinPromoViewMediatorCloseButtonWasTapped:
@@ -308,11 +310,21 @@ using base::UserMetricsAction;
          self.isSignInPromoEnabled && isAccountEligibleForSignInPromo;
 }
 
+// Updates `_feedTopSectionVisible` and notifies the delegate if changed.
+- (void)setFeedTopSectionVisible:(BOOL)visible {
+  if (_feedTopSectionVisible == visible) {
+    return;
+  }
+  _feedTopSectionVisible = visible;
+  [self.delegate feedTopSectionMediator:self didUpdateVisibility:visible];
+}
+
 - (void)updateShouldShowPromo {
   // Don't show any promo if Set Up List is Enabled.
   if (set_up_list_utils::IsSetUpListActive(
           GetApplicationContext()->GetLocalState(), self.prefService)) {
     // Hide promo as a safeguard in case it is being shown.
+    [self setFeedTopSectionVisible:NO];
     [self.consumer hidePromo];
     return;
   }
@@ -320,6 +332,7 @@ using base::UserMetricsAction;
   if ([self shouldShowSigninPromo]) {
     self.consumer.visiblePromoViewType = PromoViewTypeSignin;
     [self.consumer showPromo];
+    [self setFeedTopSectionVisible:YES];
     return;
   }
 
@@ -328,8 +341,12 @@ using base::UserMetricsAction;
     [self.consumer showPromo];
     [self logHistogramForAction:ContentNotificationTopOfFeedPromoAction::
                                     kDisplayed];
+    [self setFeedTopSectionVisible:YES];
     return;
   }
+
+  [self setFeedTopSectionVisible:NO];
+  [self.consumer hidePromo];
 }
 
 #pragma mark - Private

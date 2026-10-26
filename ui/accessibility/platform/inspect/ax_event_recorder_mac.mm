@@ -4,6 +4,7 @@
 
 #include "ui/accessibility/platform/inspect/ax_event_recorder_mac.h"
 
+#include <ApplicationServices/ApplicationServices.h>
 #import <Cocoa/Cocoa.h>
 
 #include <algorithm>
@@ -20,11 +21,38 @@
 #include "ui/accessibility/platform/ax_platform_node.h"
 #include "ui/accessibility/platform/ax_platform_tree_manager.h"
 #include "ui/accessibility/platform/ax_private_webkit_constants_mac.h"
+#include "ui/accessibility/platform/inspect/ax_element_wrapper_mac.h"
 #include "ui/accessibility/platform/inspect/ax_inspect_utils_mac.h"
 #include "ui/accessibility/platform/inspect/ax_tree_formatter_mac.h"
 #include "ui/gfx/native_ui_types.h"
 
+using base::apple::CFToNSPtrCast;
+
 namespace ui {
+
+namespace {
+
+// Accessibility identifier assigned to windows that fall outside the recording
+// scope passed to the AXEventRecorderMac constructor. An AXUIElementRef cannot
+// be mapped back to its in-process NSWindow through public API, but the
+// identifier of an element's window can be read through kAXIdentifierAttribute,
+// which makes it possible to classify event targets by window.
+NSString* const kOutOfScopeWindowIdentifier =
+    @"ChromeAXEventRecorderOutOfScopeWindow";
+
+// Returns true if `window` is `scope_window` or one of its descendant child
+// windows (or sheets).
+bool IsWindowInScope(NSWindow* window, NSWindow* scope_window) {
+  for (NSWindow* ancestor = window; ancestor;
+       ancestor = ancestor.parentWindow ?: ancestor.sheetParent) {
+    if (ancestor == scope_window) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
 
 // Callback function registered using AXObserverCreate.
 static void EventReceivedThunk(AXObserverRef observer_ref,
@@ -39,8 +67,11 @@ static void EventReceivedThunk(AXObserverRef observer_ref,
 AXEventRecorderMac::AXEventRecorderMac(
     base::WeakPtr<AXPlatformTreeManager> manager,
     base::ProcessId pid,
-    const AXTreeSelector& selector)
-    : manager_(manager), observer_run_loop_source_(nullptr) {
+    const AXTreeSelector& selector,
+    NSWindow* scope_window)
+    : manager_(manager),
+      scope_window_(scope_window),
+      observer_run_loop_source_(nullptr) {
   base::apple::ScopedCFTypeRef<AXUIElementRef> node;
   if (pid) {
     node.reset(AXUIElementCreateApplication(pid));
@@ -67,28 +98,28 @@ AXEventRecorderMac::AXEventRecorderMac(
 
   // Add the notifications we care about to the observer.
   static NSArray* notifications = @[
-    @"AXAutocorrectionOccurred",
-    @"AXElementBusyChanged",
-    @"AXExpandedChanged",
-    @"AXInvalidStatusChanged",
-    @"AXLiveRegionChanged",
-    @"AXLiveRegionCreated",
-    @"AXLoadComplete",
-    @"AXMenuItemSelected",
-    (NSString*)kAXMenuClosedNotification,
-    (NSString*)kAXMenuOpenedNotification,
     NSAccessibilityAnnouncementRequestedNotification,
     NSAccessibilityApplicationActivatedNotification,
     NSAccessibilityApplicationDeactivatedNotification,
     NSAccessibilityApplicationHiddenNotification,
     NSAccessibilityApplicationShownNotification,
+    NSAccessibilityAutocorrectionOccurredNotification,
     NSAccessibilityCreatedNotification,
     NSAccessibilityDrawerCreatedNotification,
+    CFToNSPtrCast(kAXElementBusyChangedNotification),
+    CFToNSPtrCast(kAXExpandedChangedNotification),
     NSAccessibilityFocusedUIElementChangedNotification,
     NSAccessibilityFocusedWindowChangedNotification,
     NSAccessibilityHelpTagCreatedNotification,
+    CFToNSPtrCast(kAXInvalidStatusChangedNotification),
     NSAccessibilityLayoutChangedNotification,
+    CFToNSPtrCast(kAXLiveRegionChangedNotification),
+    CFToNSPtrCast(kAXLiveRegionCreatedNotification),
+    CFToNSPtrCast(kAXLoadCompleteNotification),
     NSAccessibilityMainWindowChangedNotification,
+    CFToNSPtrCast(kAXMenuClosedNotification),
+    CFToNSPtrCast(kAXMenuItemSelectedNotification),
+    CFToNSPtrCast(kAXMenuOpenedNotification),
     NSAccessibilityMovedNotification,
     NSAccessibilityResizedNotification,
     NSAccessibilityRowCollapsedNotification,
@@ -125,11 +156,62 @@ AXEventRecorderMac::AXEventRecorderMac(
 AXEventRecorderMac::~AXEventRecorderMac() {
   CFRunLoopRemoveSource(CFRunLoopGetCurrent(), observer_run_loop_source_,
                         kCFRunLoopDefaultMode);
+
+  // Remove the markers applied by UpdateWindowScopeMarkers().
+  if (scope_window_) {
+    for (NSWindow* window in NSApp.windows) {
+      if ([window.accessibilityIdentifier
+              isEqualToString:kOutOfScopeWindowIdentifier]) {
+        window.accessibilityIdentifier = nil;
+      }
+    }
+  }
 }
 
 void AXEventRecorderMac::AddNotification(NSString* notification) {
   AXObserverAddNotification(observer_ref_.get(), application_.get(),
                             base::apple::NSToCFPtrCast(notification), this);
+}
+
+void AXEventRecorderMac::UpdateWindowScopeMarkers() {
+  // Setting accessibilityIdentifier is a plain stored property on
+  // NSAccessibilityProtocol; AppKit does not post an accessibility
+  // notification when it changes, so it is safe to assign unconditionally on
+  // every call.
+  for (NSWindow* window in NSApp.windows) {
+    window.accessibilityIdentifier = IsWindowInScope(window, scope_window_)
+                                         ? nil
+                                         : kOutOfScopeWindowIdentifier;
+  }
+}
+
+bool AXEventRecorderMac::IsElementInWindowScope(AXUIElementRef element) {
+  if (!scope_window_) {
+    return true;
+  }
+
+  // Windows may be created at any time during a test (e.g. menus), so refresh
+  // the markers before classifying the event target.
+  UpdateWindowScopeMarkers();
+
+  // Resolve the element's window. Window elements themselves don't expose
+  // kAXWindowAttribute, so fall back to the element in that case.
+  AXElementWrapper element_wrapper((__bridge id)element);
+  AXOptionalNSObject window =
+      element_wrapper.GetAttributeValue(NSAccessibilityWindowAttribute);
+  id window_element =
+      window.HasValue() && *window ? *window : (__bridge id)element;
+
+  AXOptionalNSObject identifier =
+      AXElementWrapper(window_element)
+          .GetAttributeValue(NSAccessibilityIdentifierAttribute);
+  if (!identifier.HasValue()) {
+    // Be conservative: when the window can't be classified (e.g. the element
+    // is already gone), leave it to downstream filtering.
+    return true;
+  }
+  NSString* identifier_string = base::apple::ObjCCast<NSString>(*identifier);
+  return ![identifier_string isEqualToString:kOutOfScopeWindowIdentifier];
 }
 
 void AXEventRecorderMac::EventReceived(AXUIElementRef element,
@@ -144,6 +226,10 @@ void AXEventRecorderMac::EventReceived(AXUIElementRef element,
     if (end_of_test_loop_runner_) {
       end_of_test_loop_runner_->Quit();
     }
+    return;
+  }
+
+  if (!IsElementInWindowScope(element)) {
     return;
   }
 
@@ -194,7 +280,7 @@ std::string AXEventRecorderMac::SerializeTextSelectionChangedProperties(
     return {};
   }
 
-  NSDictionary* ns_user_info = base::apple::CFToNSPtrCast(user_info);
+  NSDictionary* ns_user_info = CFToNSPtrCast(user_info);
   std::vector<std::string> serialized_info;
   for (NSString* key in ns_user_info) {
     NSNumber* value = base::apple::ObjCCast<NSNumber>(ns_user_info[key]);
@@ -210,6 +296,19 @@ std::string AXEventRecorderMac::SerializeTextSelectionChangedProperties(
           ToString(static_cast<AXTextSelectionGranularity>(value.intValue));
     } else if ([key isEqual:NSAccessibilityTextEditType]) {
       value_string = ToString(static_cast<AXTextEditType>(value.intValue));
+    } else if ([key isEqual:NSAccessibilityTextStateSyncKey]) {
+      value_string = value.boolValue ? "true" : "false";
+    } else if ([key isEqual:NSAccessibilityTextSelectionChangedFocus]) {
+      value_string = value.boolValue ? "true" : "false";
+    } else if ([key isEqual:NSAccessibilityTextChangeElement]) {
+      AXElementWrapper ax_element(ns_user_info[key]);
+      AXOptionalNSObject role =
+          ax_element.GetAttributeValue(NSAccessibilityRoleAttribute);
+      if (!role.HasValue()) {
+        continue;
+      }
+      NSString* role_string = *role;
+      value_string = base::SysNSStringToUTF8(role_string);
     } else {
       continue;
     }
@@ -221,7 +320,7 @@ std::string AXEventRecorderMac::SerializeTextSelectionChangedProperties(
   // consistent output ordering.
   std::sort(serialized_info.begin(), serialized_info.end());
 
-  return base::JoinString(serialized_info, " ");
+  return "user_info={" + base::JoinString(serialized_info, " ") + "}";
 }
 
 void AXEventRecorderMac::WaitForDoneRecording() {

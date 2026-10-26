@@ -5,7 +5,6 @@
 #include "components/commerce/content/browser/commerce_tab_helper.h"
 
 #include "components/commerce/core/shopping_service.h"
-#include "components/history/core/browser/features.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
@@ -19,7 +18,6 @@ CommerceTabHelper::CommerceTabHelper(content::WebContents* content,
                                      ShoppingService* shopping_service,
                                      int32_t js_world_id)
     : content::WebContentsObserver(content),
-      content::WebContentsUserData<CommerceTabHelper>(*content),
       is_off_the_record_(is_off_the_record),
       web_wrapper_(std::make_unique<WebContentsWrapper>(content, js_world_id)),
       shopping_service_(shopping_service) {
@@ -27,7 +25,11 @@ CommerceTabHelper::CommerceTabHelper(content::WebContents* content,
     shopping_service_->WebWrapperCreated(web_wrapper_.get());
 }
 
-CommerceTabHelper::~CommerceTabHelper() = default;
+CommerceTabHelper::~CommerceTabHelper() {
+  if (shopping_service_) {
+    shopping_service_->WebWrapperDestroyed(web_wrapper_.get());
+  }
+}
 
 void CommerceTabHelper::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
@@ -36,19 +38,15 @@ void CommerceTabHelper::DidFinishNavigation(
     return;
   }
 
-  // Some navigations we're called for will be 404s. When the feature
-  // `history::kVisitedLinksOn404` is enabled, some of those 404 navigations
-  // will be eligible for history (that is,
-  // `NavigationHandle::ShouldUpdateHistory()` will be true). We don't want to
-  // notify on 404s even if they're eligible for history, so exclude them here.
-  if (base::FeatureList::IsEnabled(history::kVisitedLinksOn404)) {
-    const int http_response_code =
-        navigation_handle->GetResponseHeaders()
-            ? navigation_handle->GetResponseHeaders()->response_code()
-            : 0;
-    if (http_response_code == 404) {
-      return;
-    }
+  // Although visits to reachable 404 pages are eligible for history (that is,
+  // `NavigationHandle::ShouldUpdateHistory()` is true), we don't want to notify
+  // the service for 404s.
+  const int http_response_code =
+      navigation_handle->GetResponseHeaders()
+          ? navigation_handle->GetResponseHeaders()->response_code()
+          : 0;
+  if (http_response_code == 404) {
+    return;
   }
 
   // Notify the service that we're no longer interested in a particular URL.
@@ -106,8 +104,10 @@ void CommerceTabHelper::OnWebContentsFocused(content::RenderWidgetHost* host) {
 }
 
 void CommerceTabHelper::WebContentsDestroyed() {
-  if (shopping_service_)
+  if (shopping_service_) {
     shopping_service_->WebWrapperDestroyed(web_wrapper_.get());
+    shopping_service_ = nullptr;
+  }
 
   web_wrapper_->ClearWebContentsPointer();
 }
@@ -121,7 +121,5 @@ void CommerceTabHelper::SetShoppingServiceForTesting(KeyedService* service) {
     shopping_service_->WebWrapperCreated(web_wrapper_.get());
   }
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(CommerceTabHelper);
 
 }  // namespace commerce

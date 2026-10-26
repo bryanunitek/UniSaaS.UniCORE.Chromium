@@ -9,7 +9,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/timer/timer.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/views/widget/widget_observer.h"
 
 namespace aura {
@@ -88,8 +88,8 @@ class UserNudgeController : public views::WidgetObserver {
 
   // These are the two animation layers that will be used to highlight
   // `view_to_be_highlighted_` to nudge the user towards it.
-  ui::Layer base_ring_{ui::LAYER_SOLID_COLOR};
-  ui::Layer ripple_ring_{ui::LAYER_SOLID_COLOR};
+  ui::LayerSolidColor base_ring_;
+  ui::LayerSolidColor ripple_ring_;
 
   // The timer used to repeat the nudge animation after a certain delay.
   base::OneShotTimer timer_;

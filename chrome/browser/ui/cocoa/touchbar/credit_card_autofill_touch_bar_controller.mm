@@ -14,7 +14,7 @@
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
-#include "components/autofill/core/browser/ui/autofill_resource_utils.h"
+#include "components/autofill/core/browser/ui/autofill_resource_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/grit/components_scaled_resources.h"
 #import "ui/base/cocoa/touch_bar_util.h"
@@ -192,7 +192,8 @@ NSImage* GetCreditCardTouchBarImage(int iconId) {
 
 - (void)acceptCreditCard:(id)sender {
   _controller->AcceptSuggestion(
-      [sender tag], autofill::AutofillMetrics::SuggestionAcceptedMethod::kTap);
+      [sender tag], autofill::AutofillMetrics::SuggestionAcceptedMethod::kTap,
+      /*was_obscured=*/false);
 }
 
 - (void)setIsCreditCardPopup:(bool)is_credit_card_popup {

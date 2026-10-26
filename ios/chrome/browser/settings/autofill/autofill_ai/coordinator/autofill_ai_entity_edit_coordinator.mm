@@ -44,7 +44,22 @@ autofill::EntityInstance GetEmptyEntityInstanceForType(
     autofill::EntityType type,
     autofill::EntityInstance::RecordType record_type) {
   autofill::EntityInstanceBuilder builder(type);
-  builder.SetRecordType(record_type);
+  auto record_type_data = [&] -> autofill::EntityInstance::RecordTypeData {
+    switch (record_type) {
+      case autofill::EntityInstance::RecordType::kLocal:
+        return autofill::EntityInstance::LocalRecordTypePayload{};
+      case autofill::EntityInstance::RecordType::kServerWallet:
+        // Empty entities that are created in the settings cannot yet have a
+        // management_url, which is later provided by the Wallet server.
+        return autofill::EntityInstance::WalletRecordTypePayload{
+            .management_url = GURL()};
+      case autofill::EntityInstance::RecordType::kPersonalContext:
+        // pContext entities cannot be created from settings.
+        NOTREACHED();
+    }
+    NOTREACHED();
+  }();
+  builder.SetRecordTypeData(std::move(record_type_data));
 
   // Iterate through all attributes for this specific type.
   for (autofill::AttributeType attr_type : type.attributes()) {
@@ -59,7 +74,8 @@ autofill::EntityInstance GetEmptyEntityInstanceForType(
 @interface AutofillAIEntityEditCoordinator () <
     AutofillAIEntityEditMediatorDelegate,
     AutofillAIEntityEditTableViewControllerDelegate,
-    AutofillCountrySelectionTableViewControllerDelegate>
+    AutofillCountrySelectionTableViewControllerDelegate,
+    UIAdaptivePresentationControllerDelegate>
 
 @property(nonatomic, strong) AutofillAIEntityEditMediator* mediator;
 
@@ -139,6 +155,7 @@ autofill::EntityInstance GetEmptyEntityInstanceForType(
 
   _mediator = [[AutofillAIEntityEditMediator alloc]
       initWithEntityInstance:std::move(*instance)
+                        mode:_editMode
            entityDataManager:entityDataManager
            walletPassManager:walletPassManager
               consentAuditor:ConsentAuditorFactory::GetForProfile(
@@ -152,7 +169,6 @@ autofill::EntityInstance GetEmptyEntityInstanceForType(
       initWithStyle:ChromeTableViewStyle()];
   _viewController.delegate = self;
   _viewController.mutator = _mediator;
-  _viewController.mode = _editMode;
 
   _mediator.delegate = self;
   _mediator.consumer = _viewController;
@@ -162,6 +178,7 @@ autofill::EntityInstance GetEmptyEntityInstanceForType(
     // Present modally for creating a new entity.
     UINavigationController* navController = [[UINavigationController alloc]
         initWithRootViewController:_viewController];
+    navController.presentationController.delegate = self;
     [_baseNavigationController presentViewController:navController
                                             animated:YES
                                           completion:nil];
@@ -172,6 +189,7 @@ autofill::EntityInstance GetEmptyEntityInstanceForType(
 }
 
 - (void)stop {
+  [_mediator disconnect];
   _mediator = nil;
 
   if (_viewController) {
@@ -265,6 +283,13 @@ autofill::EntityInstance GetEmptyEntityInstanceForType(
 - (void)dismissCountryViewController {
   [_viewController.navigationController popViewControllerAnimated:YES];
   _countryItemBeingEdited = nil;
+}
+
+#pragma mark - UIAdaptivePresentationControllerDelegate
+
+- (void)presentationControllerDidDismiss:
+    (UIPresentationController*)presentationController {
+  [self.delegate autofillAIEntityEditCoordinatorDidFinish:self];
 }
 
 #pragma mark - Private

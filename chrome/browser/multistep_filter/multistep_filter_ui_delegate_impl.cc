@@ -9,6 +9,7 @@
 #include "chrome/browser/multistep_filter/ui/filter_ui_controller.h"
 #include "components/multistep_filter/core/data_models/suggestion_user_decision.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 #include "url/gurl.h"
 
 namespace multistep_filter {
@@ -26,12 +27,11 @@ void MultistepFilterUiDelegateImpl::ClearSuggestion() {
   }
 }
 
-void MultistepFilterUiDelegateImpl::OnSuggestionGenerated(
+void MultistepFilterUiDelegateImpl::ShowSuggestion(
     std::optional<UrlFilterSuggestion> suggestion,
     SuggestionUiCallbacks callbacks) {
   if (FilterUiController* controller = GetController()) {
-    controller->OnSuggestionGenerated(std::move(suggestion),
-                                      std::move(callbacks));
+    controller->ShowSuggestion(std::move(suggestion), std::move(callbacks));
   }
 }
 

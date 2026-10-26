@@ -31,16 +31,10 @@
 #include "net/base/network_isolation_key.h"
 #include "net/proxy_resolution/pac_file_data.h"
 #include "net/proxy_resolution/proxy_info.h"
+#include "third_party/jni_zero/default_conversions.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "android_webview/browser_jni_headers/AwPacProcessor_jni.h"
-
-using base::android::AttachCurrentThread;
-using base::android::ConvertJavaStringToUTF8;
-using base::android::ConvertUTF8ToJavaString;
-using base::android::JavaRef;
-using base::android::ScopedJavaGlobalRef;
-using base::android::ScopedJavaLocalRef;
 
 namespace android_webview {
 
@@ -75,7 +69,17 @@ int AndroidGetAddrInfoForNetwork(net_handle_t network,
   return getaddrinfofornetwork(network, node, service, hints, res);
 }
 
-scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunner() {
+proxy_resolver::ProxyResolverV8TracingFactory* GetProxyResolverFactory() {
+  static std::unique_ptr<proxy_resolver::ProxyResolverV8TracingFactory>
+      factory = proxy_resolver::ProxyResolverV8TracingFactory::Create();
+
+  return factory.get();
+}
+
+}  // namespace
+
+// static
+scoped_refptr<base::SingleThreadTaskRunner> AwPacProcessor::GetTaskRunner() {
   struct ThreadHolder {
     base::Thread thread_;
     scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
@@ -89,15 +93,6 @@ scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunner() {
 
   return thread_holder.task_runner_;
 }
-
-proxy_resolver::ProxyResolverV8TracingFactory* GetProxyResolverFactory() {
-  static std::unique_ptr<proxy_resolver::ProxyResolverV8TracingFactory>
-      factory = proxy_resolver::ProxyResolverV8TracingFactory::Create();
-
-  return factory.get();
-}
-
-}  // namespace
 
 // TODO(amalova): We could use a separate thread or thread pool for executing
 // blocking DNS queries, to get better performance.
@@ -165,6 +160,7 @@ class HostResolver : public proxy_resolver::ProxyHostResolver {
       // NetworkCallback#onLinkPropertiesChanged.
       // See SetNetworkAndLinkAddresses.
       if (IsNetworkSpecified()) {
+        CHECK(!link_addresses_.empty());
         results_.push_back(link_addresses_.front());
         return true;
       }
@@ -177,6 +173,7 @@ class HostResolver : public proxy_resolver::ProxyHostResolver {
 
     bool MyIpAddressExImpl() {
       if (IsNetworkSpecified()) {
+        CHECK(!link_addresses_.empty());
         results_ = link_addresses_;
         return true;
       }
@@ -300,13 +297,17 @@ class Job {
   virtual ~Job() = default;
 
   bool ExecSync() {
-    GetTaskRunner()->PostTask(
+    AwPacProcessor::GetTaskRunner()->PostTask(
         FROM_HERE, base::BindOnce(&Job::Exec, base::Unretained(this)));
     event_.Wait();
     return net_error_ == net::OK;
   }
 
   void Exec() {
+    if (processor_->jobs_cancelled_) {
+      event_.Signal();
+      return;
+    }
     processor_->jobs_.insert(this);
     std::move(task_).Run();
   }
@@ -378,27 +379,30 @@ AwPacProcessor::AwPacProcessor() {
 }
 
 AwPacProcessor::~AwPacProcessor() {
-  base::WaitableEvent event;
   // |proxy_resolver_| must be destroyed on the same thread it is created.
+  DCHECK(GetTaskRunner()->BelongsToCurrentThread());
+  CancelJobsOnPacThread();
+}
+
+void AwPacProcessor::DestroyNative() {
+  // Delete on the PAC thread, after the tasks already posted there, without
+  // making the caller wait.
+  GetTaskRunner()->DeleteSoon(FROM_HERE, this);
+}
+
+void AwPacProcessor::CancelJobs() {
   GetTaskRunner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&AwPacProcessor::Destroy, base::Unretained(this),
-                     base::Unretained(&event)));
-  event.Wait();
+      FROM_HERE, base::BindOnce(&AwPacProcessor::CancelJobsOnPacThread,
+                                base::Unretained(this)));
 }
 
-void AwPacProcessor::Destroy(base::WaitableEvent* event) {
-  // Cancel all unfinished jobs to unblock calling thread.
-  for (Job* job : jobs_) {
-    job->Cancel();
+void AwPacProcessor::CancelJobsOnPacThread() {
+  DCHECK(GetTaskRunner()->BelongsToCurrentThread());
+  jobs_cancelled_ = true;
+  // Job::Cancel() removes the job from |jobs_|.
+  while (!jobs_.empty()) {
+    (*jobs_.begin())->Cancel();
   }
-
-  proxy_resolver_.reset();
-  event->Signal();
-}
-
-void AwPacProcessor::DestroyNative(JNIEnv* env) {
-  delete this;
 }
 
 void AwPacProcessor::SetProxyScriptNative(
@@ -429,13 +433,9 @@ void AwPacProcessor::MakeProxyRequestNative(
   }
 }
 
-bool AwPacProcessor::SetProxyScript(std::string script) {
+bool AwPacProcessor::SetProxyScript(const std::string& script) {
   SetProxyScriptJob job(this, script);
   return job.ExecSync();
-}
-
-bool AwPacProcessor::SetProxyScript(JNIEnv* env, const std::string& script) {
-  return SetProxyScript(script);
 }
 
 bool AwPacProcessor::MakeProxyRequest(std::string url, std::string* result) {
@@ -452,20 +452,16 @@ bool AwPacProcessor::MakeProxyRequest(std::string url, std::string* result) {
   }
 }
 
-ScopedJavaLocalRef<jstring> AwPacProcessor::MakeProxyRequest(
-    JNIEnv* env,
-    const JavaRef<jstring>& jurl) {
-  std::string url = ConvertJavaStringToUTF8(env, jurl);
+std::optional<std::string> AwPacProcessor::MakeProxyRequest(
+    const std::string& url) {
   std::string result;
   if (MakeProxyRequest(url, &result)) {
-    return ConvertUTF8ToJavaString(env, result);
-  } else {
-    return nullptr;
+    return result;
   }
+  return std::nullopt;
 }
 
 void AwPacProcessor::SetNetworkAndLinkAddresses(
-    JNIEnv* env,
     net_handle_t net_handle,
     const std::vector<std::string>& string_link_addresses) {
   std::vector<net::IPAddress> link_addresses;
@@ -484,12 +480,12 @@ void AwPacProcessor::SetNetworkAndLinkAddresses(
                                 net_handle, std::move(link_addresses)));
 }
 
-static int64_t JNI_AwPacProcessor_CreateNativePacProcessor(JNIEnv* env) {
+static int64_t JNI_AwPacProcessor_CreateNativePacProcessor() {
   AwPacProcessor* processor = new AwPacProcessor();
   return reinterpret_cast<intptr_t>(processor);
 }
 
-static void JNI_AwPacProcessor_InitializeEnvironment(JNIEnv* env) {
+static void JNI_AwPacProcessor_InitializeEnvironment() {
   base::ThreadPoolInstance::CreateAndStartWithDefaultParams("AwPacProcessor");
 }
 

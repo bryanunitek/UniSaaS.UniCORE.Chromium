@@ -11,6 +11,7 @@
 #include "base/check_is_test.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/memory/self_deleting.h"
 #include "base/types/expected_macros.h"
 #include "build/build_config.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
@@ -19,7 +20,6 @@
 #include "chrome/browser/permissions/permission_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_features.h"
-#include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_policy_constants.h"
 #include "chrome/browser/web_applications/policy/web_app_policy_constants.h"
 #include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -110,9 +110,9 @@ bool IsDevModeInstalledIwaOrigin(content::RenderFrameHost& host,
   ASSIGN_OR_RETURN(const web_app::WebAppRegistrar& registrar,
                    GetRegistrar(host), [] { return false; });
   return registrar
-      .FindBestAppWithUrlInScope(origin.GetURL(),
-                                 web_app::WebAppFilter::IsDevModeIsolatedApp(),
-                                 {.exclude_scope_extensions = true})
+      .FindBestAppWithUrlInScope(
+          origin.GetURL(), web_app::WebAppFilter::IsDevModeIsolatedApp(),
+          {.scope_score_options = {.exclude_scope_extensions = true}})
       .has_value();
 }
 
@@ -128,8 +128,8 @@ bool IsAffiliatedUser(Profile* profile) {
 
 bool IsTrustedContext(content::RenderFrameHost& host,
                       const url::Origin& origin) {
-  // Do not create the service for the incognito mode.
-  if (GetProfile(host)->IsIncognitoProfile()) {
+  // Do not create the service for incognito or enterprise isolated mode.
+  if (GetProfile(host)->IsPrimaryOTRProfileWithRegularParent()) {
     return false;
   }
 
@@ -154,7 +154,7 @@ bool IsTrustedContext(content::RenderFrameHost& host,
           origin.GetURL(),
           web_app::WebAppFilter::PolicyInstalledIsolatedWebApp() |
               web_app::WebAppFilter::IsDevModeIsolatedApp(),
-          {.exclude_scope_extensions = true})
+          {.scope_score_options = {.exclude_scope_extensions = true}})
       .has_value();
 }
 
@@ -181,8 +181,9 @@ bool IsAllowedByContentSettings(content::RenderFrameHost& host,
 DeviceServiceImpl::DeviceServiceImpl(
     content::RenderFrameHost& host,
     mojo::PendingReceiver<blink::mojom::DeviceAPIService> receiver,
-    std::unique_ptr<DeviceAttributeApi> device_attribute_api)
-    : DocumentService(host, std::move(receiver)),
+    std::unique_ptr<DeviceAttributeApi> device_attribute_api,
+    base::SelfDeletingPassKey key)
+    : DocumentService(host, std::move(receiver), key),
       device_attribute_api_(std::move(device_attribute_api)) {
   Profile* const profile = GetProfile(host);
   pref_change_registrar_.Init(profile->GetPrefs());
@@ -214,7 +215,7 @@ void DeviceServiceImpl::Create(
     mojo::PendingReceiver<blink::mojom::DeviceAPIService> receiver,
     std::unique_ptr<DeviceAttributeApi> device_attribute_api) {
   CHECK(host);
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   if (host->GetParentOrOuterDocumentOrEmbedder()) {
     mojo::ReportBadMessage(
@@ -233,8 +234,8 @@ void DeviceServiceImpl::Create(
   }
   // The object is bound to the lifetime of |host| and the mojo
   // connection. See DocumentService for details.
-  new DeviceServiceImpl(*host, std::move(receiver),
-                        std::move(device_attribute_api));
+  base::MakeSelfDeleting<DeviceServiceImpl>(*host, std::move(receiver),
+                                            std::move(device_attribute_api));
 }
 
 // static

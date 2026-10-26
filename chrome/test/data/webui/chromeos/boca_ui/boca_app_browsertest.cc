@@ -22,14 +22,17 @@
 #include "chrome/browser/ash/boca/boca_manager.h"
 #include "chrome/browser/ash/boca/boca_manager_factory.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/gcm/gcm_profile_service_factory.h"
+#include "chrome/browser/gcm/instance_id/instance_id_profile_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/web_ui_mocha_browser_test.h"
 #include "chromeos/ash/components/boca/proto/bundle.pb.h"
 #include "chromeos/ash/components/boca/session_api/constants.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
+#include "components/gcm_driver/gcm_profile_service.h"
+#include "components/gcm_driver/instance_id/instance_id_profile_service.h"
 #include "components/manta/features.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
@@ -55,11 +58,17 @@ std::unique_ptr<KeyedService> BuildBocaManagerWithIdentity(
   identity_adaptor->identity_test_env()->MakePrimaryAccountAvailable(
       "teacher@gmail.com", signin::ConsentLevel::kSignin);
   identity_adaptor->identity_test_env()->SetAutomaticIssueOfAccessTokens(true);
+  signin::IdentityManager* const identity_manager =
+      identity_adaptor->identity_test_env()->identity_manager();
   *adaptor_out = std::move(identity_adaptor);
 
   return std::make_unique<ash::BocaManager>(
       profile, g_browser_process->local_state(),
-      g_browser_process->GetApplicationLocale());
+      g_browser_process->GetApplicationLocale(),
+      gcm::GCMProfileServiceFactory::GetForProfile(profile)->driver(),
+      instance_id::InstanceIDProfileServiceFactory::GetForProfile(profile)
+          ->driver(),
+      identity_manager);
 }
 
 std::string GetRequestBodyString(
@@ -202,9 +211,9 @@ IN_PROC_BROWSER_TEST_F(BocaAppBrowserConsumerTest, TestMainPageLoaded) {
 }
 
 IN_PROC_BROWSER_TEST_F(BocaAppBrowserConsumerTest, TestFeatureFlagNotHonored) {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       ash::prefs::kClassManagementToolsCaptionEligibilitySetting, false);
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       ash::prefs::kClassManagementToolsViewScreenEligibilitySetting, false);
   RunTestWithoutTestLoader("chromeos/boca_ui/feature_flag_test.js",
                            "mocha.run()");

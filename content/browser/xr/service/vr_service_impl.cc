@@ -49,6 +49,10 @@
 #include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom-shared.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#endif
+
 namespace {
 
 device::mojom::XRRuntimeSessionOptionsPtr GetRuntimeOptions(
@@ -212,7 +216,7 @@ VRServiceImpl::VRServiceImpl(content::RenderFrameHost* render_frame_host)
           content::WebContents::FromRenderFrameHost(render_frame_host)),
       render_frame_host_(render_frame_host),
       in_focused_frame_(render_frame_host->GetView()->HasFocus()) {
-  DCHECK(render_frame_host_);
+  CHECK(render_frame_host_, base::NotFatalUntil::M159);
   DVLOG(2) << __func__;
 
   runtime_manager_ =
@@ -274,6 +278,10 @@ void VRServiceImpl::ResolvePendingRequests() {
 
 void VRServiceImpl::RuntimesChanged() {
   DVLOG(2) << __func__;
+  if (!IsRenderFrameHostVisible()) {
+    pending_device_changed_ = true;
+    return;
+  }
   if (service_client_) {
     service_client_->OnDeviceChanged();
   }
@@ -299,8 +307,20 @@ void VRServiceImpl::RenderFrameDeleted(content::RenderFrameHost* host) {
   // Receiver should always be live here, as this is a SelfOwnedReceiver.
   // Close the receiver (and delete this VrServiceImpl) when the RenderFrameHost
   // is deleted.
-  DCHECK(receiver_.get());
+  CHECK(receiver_.get(), base::NotFatalUntil::M159);
   receiver_->Close();
+}
+
+void VRServiceImpl::OnVisibilityChanged(content::Visibility visibility) {
+  // Re-check frame visibility, as our associated RenderFrameHost may remain
+  // hidden even when the top-level page becomes visible.
+  if (!pending_device_changed_ || !IsRenderFrameHostVisible()) {
+    return;
+  }
+  pending_device_changed_ = false;
+  if (service_client_) {
+    service_client_->OnDeviceChanged();
+  }
 }
 
 void VRServiceImpl::OnWebContentsFocusChanged(content::RenderWidgetHost* host,
@@ -374,7 +394,7 @@ void VRServiceImpl::OnInlineSessionCreated(
 void VRServiceImpl::OnImmersiveSessionCreated(
     SessionRequestData request,
     device::mojom::XRRuntimeSessionResultPtr session_result) {
-  DCHECK(request.options);
+  CHECK(request.options, base::NotFatalUntil::M159);
   if (!session_result) {
     TRACE_EVENT("xr",
                 "VRServiceImpl::OnImmersiveSessionCreated: no session_result",
@@ -498,7 +518,7 @@ void VRServiceImpl::RequestSession(
     device::mojom::XRSessionOptionsPtr options,
     device::mojom::VRService::RequestSessionCallback callback) {
   DVLOG(2) << __func__;
-  DCHECK(options);
+  CHECK(options, base::NotFatalUntil::M159);
 
   webxr::mojom::SessionRequestedRecordPtr session_requested_record =
       webxr::mojom::SessionRequestedRecord::New();
@@ -550,8 +570,7 @@ void VRServiceImpl::RequestSession(
     return;
   }
 
-  if (render_frame_host_->GetVisibilityState() !=
-      content::PageVisibilityState::kVisible) {
+  if (!IsRenderFrameHostVisible()) {
     // Page visibility is verified blink-side, so this should never fail unless
     // the requesting client is misbehaving or compromised. Treat non-visible
     // page as unknown failure:
@@ -633,9 +652,9 @@ void VRServiceImpl::DoRequestPermissions(
 void VRServiceImpl::GetPermissionStatus(SessionRequestData request,
                                         BrowserXRRuntimeImpl* runtime) {
   DVLOG(2) << __func__;
-  DCHECK(request.options);
-  DCHECK(runtime);
-  DCHECK_EQ(runtime->GetId(), request.runtime_id);
+  CHECK(request.options, base::NotFatalUntil::M159);
+  CHECK(runtime, base::NotFatalUntil::M159);
+  CHECK_EQ(runtime->GetId(), request.runtime_id, base::NotFatalUntil::M159);
 
   // Need to calculate the permissions before the call below, as otherwise
   // std::move nulls options out before `GetRequiredPermissions()` runs.
@@ -655,7 +674,7 @@ void VRServiceImpl::OnPermissionResultsForMode(
     const std::vector<blink::mojom::PermissionStatus>& results,
     bool needs_prompt) {
   DVLOG(2) << __func__ << ": permissions.size()=" << permissions.size();
-  DCHECK_EQ(permissions.size(), results.size());
+  CHECK_EQ(permissions.size(), results.size(), base::NotFatalUntil::M159);
 
   if (needs_prompt) {
     // Prolong the user activation since the user may have taken long enough to
@@ -900,6 +919,16 @@ void VRServiceImpl::SupportsSession(
   TRACE_EVENT("xr", "VRServiceImpl::SupportsSession: received",
               perfetto::Flow::Global(options->trace_id));
 
+  if (!IsRenderFrameHostVisible()) {
+    bool is_supported_when_hidden = false;
+#if BUILDFLAG(IS_ANDROID)
+    is_supported_when_hidden = !base::android::device_info::is_desktop() ||
+                               base::android::device_info::is_xr();
+#endif
+    std::move(callback).Run(is_supported_when_hidden);
+    return;
+  }
+
   runtime_manager_->SupportsSession(std::move(options), std::move(callback));
 }
 
@@ -995,6 +1024,11 @@ void VRServiceImpl::OnVisibilityStateChanged(
 
 content::WebContents* VRServiceImpl::GetWebContents() {
   return content::WebContents::FromRenderFrameHost(render_frame_host_);
+}
+
+bool VRServiceImpl::IsRenderFrameHostVisible() const {
+  return render_frame_host_ && render_frame_host_->GetVisibilityState() ==
+                                   content::PageVisibilityState::kVisible;
 }
 
 void VRServiceImpl::Teardown() {

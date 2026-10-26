@@ -87,7 +87,7 @@ class IntWrapper : public GarbageCollected<IntWrapper> {
     return other.Value() == Value();
   }
 
-  unsigned GetHash() { return blink::GetHash(x_); }
+  uint32_t GetHash() { return blink::GetHash(x_); }
 
   IntWrapper(int x) : x_(x) {}
 
@@ -98,7 +98,7 @@ class IntWrapper : public GarbageCollected<IntWrapper> {
 std::atomic_int IntWrapper::destructor_calls_{0};
 
 struct IntWrapperHashTraits : GenericHashTraits<IntWrapper> {
-  static unsigned GetHash(const IntWrapper& key) {
+  static uint32_t GetHash(const IntWrapper& key) {
     return HashInt(static_cast<uint32_t>(key.Value()));
   }
 };
@@ -371,7 +371,8 @@ class ThreadedTesterBase {
 
  private:
   static void ThreadFunc(ThreadedTesterBase* tester, v8::Platform* platform) {
-    ThreadState::AttachCurrentThreadForTesting(platform);
+    cppgc::StackStartMarker stack_start_marker;
+    ThreadState::AttachCurrentThreadForTesting(platform, stack_start_marker);
     tester->RunThread();
     ThreadState::DetachCurrentThread();
     if (!tester->threads_to_finish_.Decrement())
@@ -487,8 +488,8 @@ class ThreadMarker {
 // ThreadMarkerHash is the default hash for ThreadMarker
 template <>
 struct HashTraits<ThreadMarker> : SimpleClassHashTraits<ThreadMarker> {
-  static unsigned GetHash(const ThreadMarker& key) {
-    return static_cast<unsigned>(
+  static uint32_t GetHash(const ThreadMarker& key) {
+    return static_cast<uint32_t>(
         reinterpret_cast<uintptr_t>(key.creating_thread_) + key.num_);
   }
   static constexpr bool kSafeToCompareToEmptyOrDeleted = false;
@@ -1631,6 +1632,31 @@ TEST_F(HeapTest, ClearInWeakProcessing) {
   ClearInWeakProcessingHelper<HeapLinkedHashSet<WeakMember<IntWrapper>>>();
 }
 
+TEST_F(HeapTest, HeapHashMapWithHeapLinkedHashSetValue) {
+  // HeapLinkedHashSet may be used as the inline value type of a HeapHashMap.
+  // Empty buckets in the map's backing are not visited during tracing, so a
+  // default-constructed value must not own any out-of-line allocations.
+  ClearOutOldGarbage();
+
+  using InnerSet = HeapLinkedHashSet<Member<IntWrapper>>;
+  using Map = GCedHeapHashMap<Member<IntWrapper>, InnerSet>;
+  Persistent<Map> map = MakeGarbageCollected<Map>();
+  Persistent<IntWrapper> key1 = MakeGarbageCollected<IntWrapper>(1);
+  Persistent<IntWrapper> key2 = MakeGarbageCollected<IntWrapper>(2);
+
+  map->ReserveCapacityForSize(8);
+  PreciselyCollectGarbage();
+
+  map->insert(key1.Get(), InnerSet()).stored_value->value.insert(key1.Get());
+  PreciselyCollectGarbage();
+  map->insert(key2.Get(), InnerSet()).stored_value->value.insert(key2.Get());
+  PreciselyCollectGarbage();
+
+  EXPECT_EQ(2u, map->size());
+  EXPECT_TRUE(map->find(key1.Get())->value.Contains(key1.Get()));
+  EXPECT_TRUE(map->find(key2.Get())->value.Contains(key2.Get()));
+}
+
 namespace {
 class ThingWithDestructor {
   DISALLOW_NEW();
@@ -1651,7 +1677,7 @@ class ThingWithDestructor {
 
   static int live_things_with_destructor_;
 
-  unsigned GetHash() { return blink::GetHash(x_); }
+  uint32_t GetHash() { return blink::GetHash(x_); }
 
  private:
   static const int kEmptyValue = 0;
@@ -1670,6 +1696,8 @@ int ThingWithDestructor::live_things_with_destructor_;
 // "keep alive" persistent reference that is set & cleared across
 // ref-counting operations.
 //
+}  // namespace
+
 class RefCountedAndGarbageCollected final
     : public GarbageCollected<RefCountedAndGarbageCollected> {
  public:
@@ -1695,9 +1723,11 @@ class RefCountedAndGarbageCollected final
 
  private:
   int ref_count_ = 0;
-  SelfKeepAlive<RefCountedAndGarbageCollected> keep_alive_;
+  SelfKeepAlive<RefCountedAndGarbageCollected> keep_alive_{{}};
 };
 int RefCountedAndGarbageCollected::destructor_calls_ = 0;
+
+namespace {
 
 static void HeapMapDestructorHelper(bool clear_maps) {
   ThingWithDestructor::live_things_with_destructor_ = 0;
@@ -2607,7 +2637,7 @@ class OffHeapInt : public RefCounted<OffHeapInt> {
     return other.Value() == Value();
   }
 
-  unsigned GetHash() { return blink::GetHash(x_); }
+  uint32_t GetHash() { return blink::GetHash(x_); }
   void VoidFunction() {}
 
   OffHeapInt() = delete;
@@ -3123,7 +3153,7 @@ class KeyWithCopyingMoveConstructor final {
   DISALLOW_NEW();
 
  public:
-  unsigned GetHash() const { return hash_; }
+  uint32_t GetHash() const { return hash_; }
 
   KeyWithCopyingMoveConstructor() = default;
   explicit KeyWithCopyingMoveConstructor(HashTableDeletedValueType)
@@ -3254,6 +3284,102 @@ TEST_F(HeapTest, ContainerAnnotationOnTinyBacking) {
   // annotations. The critical path expands the backing without allocating a new
   // one.
   vector.reserve(2);
+}
+
+namespace {
+struct alignas(8) AlignedElement {
+  DISALLOW_NEW();
+
+ public:
+  uint64_t value = 0;
+};
+}  // namespace
+
+TEST_F(HeapTest, HeapVectorBackingAlignment) {
+  // Regression test: https://crbug.com/540446275
+  // Verify that Oilpan allocates properly aligned backing stores for elements
+  // requiring 8-byte alignment (even on 32-bit platforms where default
+  // alignment might otherwise be 4 bytes).
+  HeapVector<AlignedElement> vector;
+  vector.reserve(10);
+  EXPECT_LE(10u, vector.capacity());
+  EXPECT_TRUE(vector.data());
+  EXPECT_EQ(0u, reinterpret_cast<uintptr_t>(vector.data()) % 8u);
+}
+
+TEST_F(HeapTest, NestedHeapVectorAlignment) {
+  // Regression test: https://crbug.com/540446275
+  // Verify that nested HeapVectors maintain runtime memory alignment matching
+  // alignof(HeapVector<T>), preventing libc++ hardening alignment aborts.
+  HeapVector<HeapVector<Member<IntWrapper>>> nested_vector;
+  nested_vector.reserve(5);
+  EXPECT_LE(5u, nested_vector.capacity());
+  EXPECT_TRUE(nested_vector.data());
+  EXPECT_EQ(0u, reinterpret_cast<uintptr_t>(nested_vector.data()) %
+                    alignof(HeapVector<Member<IntWrapper>>));
+}
+
+#if defined(ARCH_CPU_64_BITS)
+struct alignas(16) OverAlignedElement {
+  DISALLOW_NEW();
+
+ public:
+  OverAlignedElement() = default;
+  explicit OverAlignedElement(IntWrapper* w) : wrapper(w) {}
+
+  Member<IntWrapper> wrapper;
+  void Trace(Visitor* visitor) const { visitor->Trace(wrapper); }
+};
+
+template <>
+struct VectorTraits<OverAlignedElement> : VectorTraitsBase<OverAlignedElement> {
+  static constexpr bool kCanClearUnusedSlotsWithMemset = true;
+  static constexpr bool kCanMoveWithMemcpy = true;
+};
+
+class OverAlignedVectorHolder
+    : public GarbageCollected<OverAlignedVectorHolder> {
+ public:
+  void Trace(Visitor* visitor) const { visitor->Trace(vector); }
+  HeapVector<OverAlignedElement> vector;
+};
+
+TEST_F(HeapTest, OverAlignedHeapVectorTracingAndGC) {
+  Persistent<OverAlignedVectorHolder> holder =
+      MakeGarbageCollected<OverAlignedVectorHolder>();
+  holder->vector.push_back(
+      OverAlignedElement(MakeGarbageCollected<IntWrapper>(42)));
+  TestSupportingGC::PreciselyCollectGarbage();
+  EXPECT_EQ(1u, holder->vector.size());
+  EXPECT_EQ(42, holder->vector[0].wrapper->Value());
+}
+#endif  // defined(ARCH_CPU_64_BITS)
+
+TEST_F(HeapTest, HeapVectorPromptlyFree) {
+  const bool was_enabled = ProcessHeap::IsHeapVectorPromptlyFreeEnabled();
+
+  PreciselyCollectGarbage();
+  const size_t initial_size = GetOverallObjectSize();
+
+  ProcessHeap::SetHeapVectorPromptlyFreeEnabledForTesting(true);
+  {
+    HeapVector<Member<IntWrapper>> vector(100);
+    EXPECT_GT(GetOverallObjectSize(), initial_size);
+    vector.clear();
+    EXPECT_EQ(GetOverallObjectSize(), initial_size);
+  }
+
+  ProcessHeap::SetHeapVectorPromptlyFreeEnabledForTesting(false);
+  {
+    HeapVector<Member<IntWrapper>> vector(100);
+    EXPECT_GT(GetOverallObjectSize(), initial_size);
+    vector.clear();
+    EXPECT_GT(GetOverallObjectSize(), initial_size);
+    PreciselyCollectGarbage();
+    EXPECT_EQ(GetOverallObjectSize(), initial_size);
+  }
+
+  ProcessHeap::SetHeapVectorPromptlyFreeEnabledForTesting(was_enabled);
 }
 
 }  // namespace blink

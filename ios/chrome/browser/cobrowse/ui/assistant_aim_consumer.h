@@ -27,12 +27,17 @@ enum class AssistantAIMState {
 // Sets the WebState view to be displayed.
 - (void)setWebStateView:(UIView*)webStateView;
 
-// Displays the history view with the given items.
+// Displays the history view with `items`. When `signedIn` is NO, the history
+// view displays the signed out zero state instead of the list of items.
 - (void)displayHistoryWithItems:
-    (const std::vector<AssistantAIMHistoryItem>&)items;
+            (const std::vector<AssistantAIMHistoryItem>&)items
+                       signedIn:(BOOL)signedIn;
 
 // Sets the header title.
 - (void)setHeaderTitle:(NSString*)title;
+
+// Hides the input plate.
+- (void)setInputPlateForceHidden:(BOOL)hidden;
 
 // Sets the greeting message to display in the landing state.
 - (void)setGreetingMessage:(NSString*)message;

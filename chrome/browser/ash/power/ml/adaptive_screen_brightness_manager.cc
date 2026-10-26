@@ -14,17 +14,18 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/power/ml/adaptive_screen_brightness_ukm_logger.h"
 #include "chrome/browser/ash/power/ml/adaptive_screen_brightness_ukm_logger_impl.h"
 #include "chrome/browser/ash/power/ml/recent_events_counter.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/tab_contents/form_interaction_tab_helper.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/constants/devicetype.h"
 #include "chromeos/dbus/power_manager/backlight.pb.h"
 #include "components/prefs/pref_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/viz/host/host_frame_sink_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -56,8 +57,11 @@ const std::pair<ukm::SourceId, bool> GetActiveTabData() {
     content::WebContents* contents = browser->GetActiveWebContents();
     if (contents) {
       tab_id = contents->GetPrimaryMainFrame()->GetPageUkmSourceId();
-      has_form_entry = FormInteractionTabHelper::FromWebContents(contents)
-                           ->had_form_interaction();
+      tabs::TabInterface* tab =
+          tabs::TabInterface::MaybeGetFromContents(contents);
+      FormInteractionTabHelper* helper =
+          tab ? FormInteractionTabHelper::From(tab) : nullptr;
+      has_form_entry = helper && helper->had_form_interaction();
     }
   }
   return std::pair<ukm::SourceId, bool>(tab_id, has_form_entry);
@@ -93,11 +97,11 @@ AdaptiveScreenBrightnessManager::AdaptiveScreenBrightnessManager(
       touch_counter_(
           std::make_unique<RecentEventsCounter>(kUserInputEventsDuration,
                                                 kNumUserInputEventsBuckets)) {
-  DCHECK(ukm_logger_);
-  DCHECK(detector);
+  CHECK(ukm_logger_, base::NotFatalUntil::M160);
+  CHECK(detector, base::NotFatalUntil::M160);
   user_activity_observation_.Observe(detector);
 
-  DCHECK(power_manager_client);
+  CHECK(power_manager_client, base::NotFatalUntil::M160);
   power_manager_client_observation_.Observe(power_manager_client);
   power_manager_client->RequestStatusUpdate();
   power_manager_client->GetSwitchStates(
@@ -106,7 +110,7 @@ AdaptiveScreenBrightnessManager::AdaptiveScreenBrightnessManager(
   power_manager_client->GetScreenBrightnessPercent(base::BindOnce(
       &AdaptiveScreenBrightnessManager::OnReceiveScreenBrightnessPercent,
       weak_ptr_factory_.GetWeakPtr()));
-  DCHECK(periodic_timer_);
+  CHECK(periodic_timer_, base::NotFatalUntil::M160);
   periodic_timer_->Start(FROM_HERE, kLoggingInterval, this,
                          &AdaptiveScreenBrightnessManager::OnTimerFired);
 }
@@ -115,20 +119,21 @@ AdaptiveScreenBrightnessManager::~AdaptiveScreenBrightnessManager() = default;
 
 std::unique_ptr<AdaptiveScreenBrightnessManager>
 AdaptiveScreenBrightnessManager::CreateInstance() {
-  if (chromeos::GetDeviceType() != chromeos::DeviceType::kChromebook)
+  if (chromeos::GetDeviceType() != chromeos::DeviceType::kChromebook) {
     return nullptr;
+  }
 
   chromeos::PowerManagerClient* const power_manager_client =
       chromeos::PowerManagerClient::Get();
-  DCHECK(power_manager_client);
+  CHECK(power_manager_client, base::NotFatalUntil::M160);
   ui::UserActivityDetector* const detector = ui::UserActivityDetector::Get();
-  DCHECK(detector);
+  CHECK(detector, base::NotFatalUntil::M160);
   AccessibilityManager* const accessibility_manager =
       AccessibilityManager::Get();
-  DCHECK(accessibility_manager);
+  CHECK(accessibility_manager, base::NotFatalUntil::M160);
   MagnificationManager* const magnification_manager =
       MagnificationManager::Get();
-  DCHECK(magnification_manager);
+  CHECK(magnification_manager, base::NotFatalUntil::M160);
   mojo::PendingRemote<viz::mojom::VideoDetectorObserver>
       video_observer_screen_brightness_logger;
 
@@ -150,8 +155,9 @@ AdaptiveScreenBrightnessManager::CreateInstance() {
 
 void AdaptiveScreenBrightnessManager::OnUserActivity(
     const ui::Event* const event) {
-  if (!event)
+  if (!event) {
     return;
+  }
   const base::TimeDelta time_since_boot = boot_clock_.GetTimeSinceBoot();
   // Update |start_activity_time_since_boot_| if the time since the last
   // activity is at least kInactivityDuration. An absense of activity for this
@@ -291,15 +297,18 @@ void AdaptiveScreenBrightnessManager::OnReceiveScreenBrightnessPercent(
 const std::optional<int>
 AdaptiveScreenBrightnessManager::GetNightLightTemperaturePercent() const {
   const Profile* const profile = ProfileManager::GetActiveUserProfile();
-  if (!profile)
+  if (!profile) {
     return std::nullopt;
+  }
 
   const PrefService* const pref_service = profile->GetPrefs();
-  if (!pref_service)
+  if (!pref_service) {
     return std::nullopt;
+  }
 
-  if (!pref_service->GetBoolean(ash::prefs::kNightLightEnabled))
+  if (!pref_service->GetBoolean(ash::prefs::kNightLightEnabled)) {
     return std::nullopt;
+  }
   return std::floor(
       pref_service->GetDouble(ash::prefs::kNightLightTemperature) * 100);
 }
@@ -349,7 +358,7 @@ void AdaptiveScreenBrightnessManager::LogEvent() {
 
   if (is_video_playing_.value_or(false)) {
     activity_data->set_last_activity_time_sec(0);
-    DCHECK(start_activity_time_since_boot_);
+    CHECK(start_activity_time_since_boot_, base::NotFatalUntil::M160);
     activity_data->set_recent_time_active_sec(
         (time_since_boot - *start_activity_time_since_boot_).InSeconds());
   } else if (last_activity_time_since_boot_.has_value()) {

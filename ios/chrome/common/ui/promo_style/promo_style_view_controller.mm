@@ -87,7 +87,6 @@ UIImage* ArrowDownImage() {
                                         UIScrollViewDelegate,
                                         UITextDragDelegate>
 
-@property(nonatomic, strong) UIImageView* bannerImageView;
 // This view contains only the header image.
 @property(nonatomic, strong) UIImageView* headerImageView;
 @property(nonatomic, strong) UITextView* disclaimerView;
@@ -425,14 +424,6 @@ UIImage* ArrowDownImage() {
   _canUpdateViewsOnScroll = NO;
 }
 
-- (void)viewDidDisappear:(BOOL)animated {
-  [super viewDidDisappear:animated];
-  if (self.isBeingDismissed &&
-      [self.delegate respondsToSelector:@selector(didDismissViewController)]) {
-    [self.delegate didDismissViewController];
-  }
-}
-
 - (void)viewWillAppear:(BOOL)animated {
   [super viewWillAppear:animated];
 
@@ -488,7 +479,7 @@ UIImage* ArrowDownImage() {
         self.headerBackgroundImage == nil
             ? _noBackgroundHeaderImageTopMarginPercentage
             : kHeaderImageBackgroundTopMarginPercentage;
-    _headerBackgroundImageViewTopMargin.constant = AlignValueToPixel(
+    _headerBackgroundImageViewTopMargin.constant = AlignValueToLowerPixel(
         self.view.bounds.size.height * headerImageTopMarginPercentage);
   }
 }
@@ -732,6 +723,12 @@ UIImage* ArrowDownImage() {
   }
 }
 
+- (void)didDismissButtonStackViewController {
+  if ([self.delegate respondsToSelector:@selector(didDismissViewController)]) {
+    [self.delegate didDismissViewController];
+  }
+}
+
 #pragma mark - Private
 
 // Updates the aspect ratio constraint for `_bannerImageView` when it does not
@@ -913,7 +910,8 @@ UIImage* ArrowDownImage() {
 
 // Returns the banner image to be displayed.
 - (UIImage*)bannerImage {
-  if (self.shouldHideBanner && !self.bannerName) {
+  if (self.shouldHideBannerImage ||
+      (self.shouldHideBanner && !self.bannerName)) {
     return [[UIImage alloc] init];
   }
   return [UIImage imageNamed:self.bannerName];

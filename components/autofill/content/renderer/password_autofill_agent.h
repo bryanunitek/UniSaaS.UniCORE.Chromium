@@ -21,7 +21,6 @@
 #include "components/autofill/content/common/mojom/autofill_driver.mojom.h"
 #include "components/autofill/content/renderer/autofill_agent.h"
 #include "components/autofill/content/renderer/form_autofill_util.h"
-#include "components/autofill/content/renderer/form_tracker.h"
 #include "components/autofill/content/renderer/html_based_username_detector.h"
 #include "components/autofill/content/renderer/synchronous_form_cache.h"
 #include "components/autofill/core/common/field_data_manager.h"
@@ -216,12 +215,8 @@ class PasswordAutofillAgent : public content::RenderFrameObserver,
   // JavaScript.
   void UserGestureObserved();
 
-  std::optional<FormData> GetFormDataFromWebForm(
-      const blink::WebFormElement& web_form,
-      const SynchronousFormCache& form_cache);
-
-  std::optional<FormData> GetFormDataFromUnownedInputElements(
-      const SynchronousFormCache& form_cache);
+  std::optional<FormData> GetFormData(FormRendererId form_id,
+                                      const SynchronousFormCache& form_cache);
 
   // Notification that form element was cleared by HTMLFormElement::reset()
   // method. This can be used as a signal of a successful submission for change

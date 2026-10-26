@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_KEYBOARD_ACCESSORY_ANDROID_MANUAL_FILLING_CONTROLLER_H_
 #define CHROME_BROWSER_KEYBOARD_ACCESSORY_ANDROID_MANUAL_FILLING_CONTROLLER_H_
 
+#include <optional>
+
 #include "base/memory/weak_ptr.h"
 #include "base/types/strong_alias.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_data.h"
@@ -44,6 +46,7 @@ class ManualFillingController {
     PASSWORD_FALLBACKS,
     CREDIT_CARD_FALLBACKS,
     ADDRESS_FALLBACKS,
+    AT_MEMORY,
   };
 
   using ShouldShowAction = base::StrongAlias<struct ShouldShowActionTag, bool>;
@@ -103,6 +106,19 @@ class ManualFillingController {
   virtual void ShowAccessorySheetTab(
       const autofill::AccessoryTabType& tab_type) = 0;
 
+  // Highlights a suggestion visually when navigated via keyboard or selection.
+  // Passing `std::nullopt` clears the selection.
+  virtual void SetSelectedSuggestion(std::optional<int> suggestion_index) = 0;
+
+  // Performs the keyboard navigation `action` in the accessory bar. Returns
+  // whether the action was handled, i.e. whether the triggering key event
+  // should be consumed.
+  virtual bool Navigate(autofill::NavigationAction action) = 0;
+
+  // Clicks the keyboard-selected manual fallback icon. Returns whether one was
+  // selected.
+  virtual bool AcceptFallback() = 0;
+
   // --------------------------
   // Methods called by UI code:
   // --------------------------
@@ -140,9 +156,6 @@ class ManualFillingController {
 
   // The web page view containing the focused field.
   virtual gfx::NativeView container_view() const = 0;
-
-  // Returns true if the device is a large form factor.
-  virtual bool IsLargeFormFactor() const = 0;
 };
 
 #endif  // CHROME_BROWSER_KEYBOARD_ACCESSORY_ANDROID_MANUAL_FILLING_CONTROLLER_H_

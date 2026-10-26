@@ -9,10 +9,14 @@
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/installer/metrics_util.h"
 #include "chrome/browser/enterprise/connectors/device_trust/test/test_constants.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
 
 namespace enterprise_connectors::test {
 
@@ -216,11 +220,11 @@ void DeviceTrustBrowserTestBase::VerifyKeyRotationSuccess(bool with_nonce) {
 }
 
 content::WebContents* DeviceTrustBrowserTestBase::web_contents(
-    Browser* active_browser) {
+    BrowserWindowInterface* active_browser) {
   if (!active_browser) {
     active_browser = browser();
   }
-  return active_browser->tab_strip_model()->GetActiveWebContents();
+  return active_browser->GetTabStripModel()->GetActiveWebContents();
 }
 
 std::unique_ptr<net::test_server::HttpResponse>

@@ -12,7 +12,7 @@ import org.chromium.base.test.transit.Station;
 import org.chromium.base.test.transit.TripBuilder;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.app.ChromeActivity;
-import org.chromium.chrome.browser.layouts.LayoutType;
+import org.chromium.chrome.browser.tabmodel.TabClosingSource;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.test.util.MenuUtils;
 
@@ -37,28 +37,6 @@ public class ChromeTriggers {
                                 menuId));
     }
 
-    /** Switch to the browsing layout programmatically. */
-    @CheckReturnValue
-    public static TripBuilder showBrowsingLayoutTo(
-            Station<? extends ChromeTabbedActivity> station) {
-        return station.runOnUiThreadTo(
-                () ->
-                        station.getActivity()
-                                .getLayoutManager()
-                                .showLayout(LayoutType.BROWSING, /* animate= */ false));
-    }
-
-    /** Switch to the tab switcher layout programmatically. */
-    @CheckReturnValue
-    public static TripBuilder showTabSwitcherLayoutTo(
-            Station<? extends ChromeTabbedActivity> station) {
-        return station.runOnUiThreadTo(
-                () ->
-                        station.getActivity()
-                                .getLayoutManager()
-                                .showLayout(LayoutType.HUB, /* animate= */ false));
-    }
-
     /** Close all tabs in the current tab model programmatically. */
     @CheckReturnValue
     public static TripBuilder closeAllTabsProgrammaticallyTo(
@@ -69,7 +47,30 @@ public class ChromeTriggers {
                                 .getCurrentTabModel()
                                 .getTabRemover()
                                 .closeTabs(
-                                        TabClosureParams.closeAllTabs().build(),
+                                        TabClosureParams.closeAllTabs()
+                                                .tabClosingSource(
+                                                        TabClosingSource.GRID_TAB_SWITCHER)
+                                                .build(),
+                                        /* allowDialog= */ false));
+    }
+
+    /**
+     * Close the current tab of |activity| programmatically, without undo.
+     *
+     * <p>Takes the activity separately from |station| for Stations that are not bound to a
+     * ChromeTabbedActivity, e.g. a Settings page shown in a tab.
+     */
+    @CheckReturnValue
+    public static TripBuilder closeCurrentTabProgrammaticallyTo(
+            Station<?> station, ChromeTabbedActivity activity) {
+        return station.runOnUiThreadTo(
+                () ->
+                        activity.getCurrentTabModel()
+                                .getTabRemover()
+                                .closeTabs(
+                                        TabClosureParams.closeTab(activity.getActivityTab())
+                                                .allowUndo(false)
+                                                .build(),
                                         /* allowDialog= */ false));
     }
 }

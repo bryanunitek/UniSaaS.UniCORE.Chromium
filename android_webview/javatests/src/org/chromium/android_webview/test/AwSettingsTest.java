@@ -48,6 +48,7 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.TestFileUtil;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.blink_public.common.BlinkFeatures;
@@ -3322,6 +3323,7 @@ public class AwSettingsTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView", "Preferences"})
+    @DisableFeatures(AwFeatures.WEBVIEW_IGNORE_DEFAULT_VIDEO_POSTER)
     public void testDefaultVideoPosterUrl() throws Throwable {
         final CallbackHelper videoPosterAccessedCallbackHelper = new CallbackHelper();
         final String defaultVideoPosterUrl = "http://default_video_poster/";
@@ -3534,9 +3536,15 @@ public class AwSettingsTest {
         }
 
         @Override
-        public AwSettings createAwSettings(Context context, boolean supportsLegacyQuirks) {
+        public AwSettings createAwSettings(
+                AwContents awContents,
+                boolean isAccessFromFileUrlsGrantedByDefault,
+                boolean supportsLegacyQuirks,
+                boolean allowEmptyDocumentPersistence,
+                boolean allowGeolocationOnInsecureOrigins,
+                boolean doNotUpdateSelectionOnMutatingSelectionRange) {
             return new AwSettings(
-                    context,
+                    awContents,
                     /* isAccessFromFileUrlsGrantedByDefault= */ false,
                     supportsLegacyQuirks,
                     mAllow,
@@ -3585,17 +3593,16 @@ public class AwSettingsTest {
         doAllowEmptyDocumentPersistenceTest(false);
     }
 
-    @Test
-    @SmallTest
-    @Feature({"AndroidWebView", "Preferences"})
-    public void testCssHexAlphaColorEnabled() throws Throwable {
+    private void doTestCssHexAlphaColor(boolean enabled) throws Throwable {
         final TestAwContentsClient client = new TestAwContentsClient();
         final AwTestContainerView view =
                 mActivityTestRule.createAwTestContainerViewOnMainSync(client);
         final AwContents awContents = view.getAwContents();
+        InstrumentationRegistry.getInstrumentation()
+                .runOnMainSync(() -> awContents.getSettings().setCssHexAlphaColorEnabled(enabled));
         CallbackHelper onPageFinishedHelper = client.getOnPageFinishedHelper();
         AwActivityTestRule.enableJavaScriptOnUiThread(awContents);
-        final String expectedTitle = "false"; // https://crbug.com/618472
+        final String expectedTitle = enabled ? "true" : "false"; // https://crbug.com/618472
         final String page =
                 "<!doctype html>"
                         + "<script>"
@@ -3610,6 +3617,20 @@ public class AwSettingsTest {
         Assert.assertEquals(expectedTitle, actualTitle);
     }
 
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testCssHexAlphaColorEnabled() throws Throwable {
+        doTestCssHexAlphaColor(true);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testCssHexAlphaColorDisabled() throws Throwable {
+        doTestCssHexAlphaColor(false);
+    }
+
     private static class SelectionRangeTestDependencyFactory extends TestDependencyFactory {
         private final boolean mDoNotUpdate;
 
@@ -3618,9 +3639,15 @@ public class AwSettingsTest {
         }
 
         @Override
-        public AwSettings createAwSettings(Context context, boolean supportsLegacyQuirks) {
+        public AwSettings createAwSettings(
+                AwContents awContents,
+                boolean isAccessFromFileUrlsGrantedByDefault,
+                boolean supportsLegacyQuirks,
+                boolean allowEmptyDocumentPersistence,
+                boolean allowGeolocationOnInsecureOrigins,
+                boolean doNotUpdateSelectionOnMutatingSelectionRange) {
             return new AwSettings(
-                    context,
+                    awContents,
                     /* isAccessFromFileUrlsGrantedByDefault= */ false,
                     supportsLegacyQuirks,
                     /* allowEmptyDocumentPersistence= */ false,
@@ -4106,5 +4133,96 @@ public class AwSettingsTest {
                 "Even without LAYOUT_ALGORITHM_TEXT_AUTOSIZING set, text-size-adjust is obeyed.",
                 "\"20px\"",
                 fontSizeStr);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testSetAllowFileAccessHistogram() throws Throwable {
+        TestAwContentsClient contentClient = new TestAwContentsClient();
+        AwTestContainerView testContainerView =
+                mActivityTestRule.createAwTestContainerViewOnMainSync(contentClient);
+        AwContents awContents = testContainerView.getAwContents();
+        AwSettings settings = mActivityTestRule.getAwSettingsOnUiThread(awContents);
+
+        var watcherTrue =
+                HistogramWatcher.newSingleRecordWatcher("Android.WebView.SetAllowFileAccess", true);
+        settings.setAllowFileAccess(true);
+        watcherTrue.assertExpected();
+
+        var watcherFalse =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.WebView.SetAllowFileAccess", false);
+        settings.setAllowFileAccess(false);
+        watcherFalse.assertExpected();
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testSetAllowContentAccessHistogram() throws Throwable {
+        TestAwContentsClient contentClient = new TestAwContentsClient();
+        AwTestContainerView testContainerView =
+                mActivityTestRule.createAwTestContainerViewOnMainSync(contentClient);
+        AwContents awContents = testContainerView.getAwContents();
+        AwSettings settings = mActivityTestRule.getAwSettingsOnUiThread(awContents);
+
+        var watcherTrue =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.WebView.SetAllowContentAccess", true);
+        settings.setAllowContentAccess(true);
+        watcherTrue.assertExpected();
+
+        var watcherFalse =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.WebView.SetAllowContentAccess", false);
+        settings.setAllowContentAccess(false);
+        watcherFalse.assertExpected();
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testSetAllowFileAccessFromFileURLsHistogram() throws Throwable {
+        TestAwContentsClient contentClient = new TestAwContentsClient();
+        AwTestContainerView testContainerView =
+                mActivityTestRule.createAwTestContainerViewOnMainSync(contentClient);
+        AwContents awContents = testContainerView.getAwContents();
+        AwSettings settings = mActivityTestRule.getAwSettingsOnUiThread(awContents);
+
+        var watcherTrue =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.WebView.SetAllowFileAccessFromFileURLs", true);
+        settings.setAllowFileAccessFromFileUrls(true);
+        watcherTrue.assertExpected();
+
+        var watcherFalse =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.WebView.SetAllowFileAccessFromFileURLs", false);
+        settings.setAllowFileAccessFromFileUrls(false);
+        watcherFalse.assertExpected();
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView", "Preferences"})
+    public void testSetAllowUniversalAccessFromFileURLsHistogram() throws Throwable {
+        TestAwContentsClient contentClient = new TestAwContentsClient();
+        AwTestContainerView testContainerView =
+                mActivityTestRule.createAwTestContainerViewOnMainSync(contentClient);
+        AwContents awContents = testContainerView.getAwContents();
+        AwSettings settings = mActivityTestRule.getAwSettingsOnUiThread(awContents);
+
+        var watcherTrue =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.WebView.SetAllowUniversalAccessFromFileURLs", true);
+        settings.setAllowUniversalAccessFromFileUrls(true);
+        watcherTrue.assertExpected();
+
+        var watcherFalse =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Android.WebView.SetAllowUniversalAccessFromFileURLs", false);
+        settings.setAllowUniversalAccessFromFileUrls(false);
+        watcherFalse.assertExpected();
     }
 }

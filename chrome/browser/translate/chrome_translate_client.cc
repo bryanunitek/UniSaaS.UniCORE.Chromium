@@ -8,9 +8,12 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/strings/string_split.h"
@@ -25,7 +28,20 @@
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/translate/translate_ranker_factory.h"
 #include "chrome/browser/translate/translate_service.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/read_anything/read_anything_controller.h"
+#include "chrome/browser/ui/read_anything/read_anything_lifecycle_observer.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"   // nogncheck
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"  // nogncheck
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"      // nogncheck
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"         // nogncheck
 #include "chrome/browser/ui/translate/translate_bubble_factory.h"
+#include "components/tabs/public/tab_interface.h"
+#include "content/public/common/content_switches.h"
+#endif
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/theme_resources.h"
@@ -45,21 +61,14 @@
 #include "components/translate/core/browser/translate_metrics_logger.h"
 #include "components/translate/core/browser/translate_prefs.h"
 #include "components/translate/core/common/language_detection_details.h"
+#include "components/translate/core/common/translate_constants.h"
 #include "components/translate/core/common/translate_features.h"
 #include "components/translate/core/common/translate_util.h"
 #include "components/variations/service/variations_service.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
-#include "pdf/buildflags.h"
 #include "third_party/metrics_proto/translate_event.pb.h"
-#include "ui/base/ui_base_features.h"
 #include "url/gurl.h"
-
-#if BUILDFLAG(ENABLE_PDF)
-#include "base/barrier_callback.h"
-#include "components/pdf/browser/pdf_document_helper.h"
-#include "mojo/public/cpp/bindings/callback_helpers.h"
-#endif
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/android/android_theme_resources.h"
@@ -68,7 +77,7 @@
 #include "content/public/browser/page.h"
 #include "content/public/browser/visibility.h"
 #else
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_command_controller.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
@@ -116,74 +125,145 @@ bool IsAutomaticTranslationType(translate::TranslationType type) {
 }
 #endif  // BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(ENABLE_PDF)
-void OnPdfDocumentLoadComplete(
-    base::WeakPtr<ChromeTranslateClient> client,
-    base::OnceCallback<void(bool)> completion_callback) {
-  if (!client) {
-    std::move(completion_callback).Run(false);
-    return;
-  }
-  pdf::PDFDocumentHelper* pdf_helper =
-      pdf::PDFDocumentHelper::MaybeGetForWebContents(client->web_contents());
-  if (!pdf_helper) {
-    std::move(completion_callback).Run(false);
-    return;
-  }
-
-  enum class PdfCheckType { kMeaningfulText, kJavaScript, kPasswordProtected };
-  using PdfCheckResult = std::pair<PdfCheckType, bool>;
-
-  // The first parameter (3) is the number of times `pdf_checks_barrier` must
-  // be called (once for `HasMeaningfulText`, once for `HasJavaScript`, and
-  // once for `IsPasswordProtected`) before executing `completion_callback`.
-  auto pdf_checks_barrier = base::BarrierCallback<PdfCheckResult>(
-      3, base::BindOnce(
-             [](base::OnceCallback<void(bool)> completion_callback,
-                std::vector<PdfCheckResult> results) {
-               bool has_meaningful_text = false;
-               bool has_javascript = true;
-               bool is_password_protected = true;
-               for (const auto& [type, value] : results) {
-                 switch (type) {
-                   case PdfCheckType::kMeaningfulText:
-                     has_meaningful_text = value;
-                     break;
-                   case PdfCheckType::kJavaScript:
-                     has_javascript = value;
-                     break;
-                   case PdfCheckType::kPasswordProtected:
-                     is_password_protected = value;
-                     break;
-                 }
-               }
-               std::move(completion_callback)
-                   .Run(has_meaningful_text && !has_javascript &&
-                        !is_password_protected);
-             },
-             std::move(completion_callback)));
-
-  pdf_helper->HasMeaningfulText(base::BindOnce(
-      [](base::RepeatingCallback<void(PdfCheckResult)> barrier, bool result) {
-        barrier.Run({PdfCheckType::kMeaningfulText, result});
-      },
-      pdf_checks_barrier));
-
-  pdf_helper->HasJavaScript(base::BindOnce(
-      [](base::RepeatingCallback<void(PdfCheckResult)> barrier, bool result) {
-        barrier.Run({PdfCheckType::kJavaScript, result});
-      },
-      pdf_checks_barrier));
-
-  pdf_helper->IsPasswordProtected(base::BindOnce(
-      [](base::RepeatingCallback<void(PdfCheckResult)> barrier, bool result) {
-        barrier.Run({PdfCheckType::kPasswordProtected, result});
-      },
-      pdf_checks_barrier));
-}
-#endif  // BUILDFLAG(ENABLE_PDF)
-
 }  // namespace
+
+SidePanelUI* ChromeTranslateClient::GetSidePanelUIFromTab(
+    tabs::TabInterface* tab) const {
+#if !BUILDFLAG(IS_ANDROID)
+  BrowserWindowInterface* browser =
+      tab ? tab->GetBrowserWindowInterface() : nullptr;
+  return browser ? SidePanelUI::From(browser) : nullptr;
+#else
+  return nullptr;
+#endif
+}
+
+#if !BUILDFLAG(IS_ANDROID)
+class ChromeTranslateClient::ReadAnythingObserver
+    : public ReadAnythingLifecycleObserver {
+ public:
+  explicit ReadAnythingObserver(ChromeTranslateClient* client)
+      : client_(client) {}
+  ~ReadAnythingObserver() override = default;
+
+  void OnWillClose(ReadAnythingCloseReason reason) override {
+    // Reading Mode stays open when switching tabs (it's shown again when
+    // switching back) or when switching between the side panel and the
+    // immersive overlay, so do not clear the client's state or stop observing:
+    // a PDF translation must only be reverted or cancelled when it's actually
+    // closed.
+    if (reason == ReadAnythingCloseReason::kTabSwitched ||
+        reason == ReadAnythingCloseReason::kToggledPresentation) {
+      return;
+    }
+    client_->OnSidePanelClosed();
+    if (client_->web_contents()) {
+      tabs::TabInterface* tab =
+          tabs::TabInterface::MaybeGetFromContents(client_->web_contents());
+      if (tab) {
+        if (auto* controller = ReadAnythingController::From(tab)) {
+          controller->RemoveObserver(this);
+        }
+      }
+    }
+  }
+
+  void OnDestroyed() override {}
+
+ private:
+  raw_ptr<ChromeTranslateClient> client_;
+};
+#endif
+
+void ChromeTranslateClient::TriggerPdfTranslation() {
+#if !BUILDFLAG(IS_ANDROID)
+  if (!IsReadingModeOpen()) {
+    opened_side_panel_for_pdf_translation_ = true;
+  }
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents());
+  if (tab) {
+    if (auto* controller = ReadAnythingController::From(tab)) {
+      if (!read_anything_observer_) {
+        read_anything_observer_ =
+            std::make_unique<ReadAnythingObserver>(this);
+      }
+      // The observer may still be observing, e.g. if a translation was already
+      // requested while Reading Mode is open, and observers can't be added
+      // twice.
+      controller->RemoveObserver(read_anything_observer_.get());
+      controller->AddObserver(read_anything_observer_.get());
+    }
+  }
+  SidePanelUI* side_panel_ui = GetSidePanelUIFromTab(tab);
+  if (side_panel_ui) {
+    side_panel_ui->Show(
+        SidePanelEntryId::kReadAnything,
+        SidePanelOpenTrigger::kPdfTranslation);
+  }
+#endif
+}
+
+void ChromeTranslateClient::RevertPdfTranslation() {
+#if !BUILDFLAG(IS_ANDROID)
+  if (opened_side_panel_for_pdf_translation_) {
+    opened_side_panel_for_pdf_translation_ = false;
+    tabs::TabInterface* tab =
+        tabs::TabInterface::MaybeGetFromContents(web_contents());
+    SidePanelUI* side_panel_ui = GetSidePanelUIFromTab(tab);
+    if (side_panel_ui &&
+        side_panel_ui->IsSidePanelEntryShowing(
+            SidePanelEntryKey(SidePanelEntryId::kReadAnything))) {
+      side_panel_ui->Close();
+    }
+  }
+#endif
+}
+
+void ChromeTranslateClient::OnSidePanelClosed() {
+#if !BUILDFLAG(IS_ANDROID)
+  // Revert translation specifically for PDF documents when Reading Mode UI closes.
+  const bool is_pdf =
+      translate_driver_ &&
+      translate_driver_->GetContentsMimeType() == translate::kPdfMimeType;
+
+  if (opened_side_panel_for_pdf_translation_ || is_pdf) {
+    opened_side_panel_for_pdf_translation_ = false;
+    translate::LanguageState* language_state =
+        GetTranslateManager()->GetLanguageState();
+    if (language_state->IsPageTranslated()) {
+      GetTranslateManager()->RevertTranslation();
+    } else if (language_state->pending_source_language().has_value()) {
+      // Reading Mode closed before the PDF translation started, which only
+      // happens once its content is distilled. Cancel the translation, which
+      // also clears the pending translation languages, so that it doesn't
+      // start while Reading Mode is closed.
+      language_state->set_translation_pending(false);
+    }
+  }
+#endif
+}
+
+bool ChromeTranslateClient::IsReadingModeOpen() const {
+#if !BUILDFLAG(IS_ANDROID)
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents());
+  SidePanelUI* side_panel_ui = GetSidePanelUIFromTab(tab);
+  if (side_panel_ui) {
+    if (side_panel_ui->IsSidePanelEntryShowing(
+            SidePanelEntryKey(SidePanelEntryId::kReadAnything))) {
+      return true;
+    }
+  }
+  if (auto* controller = ReadAnythingController::From(tab)) {
+    if (controller->GetPresentationState() ==
+        ReadAnythingController::PresentationState::kInImmersiveOverlay) {
+      return true;
+    }
+  }
+#endif
+  return false;
+}
 
 ChromeTranslateClient::ChromeTranslateClient(content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
@@ -211,6 +291,17 @@ ChromeTranslateClient::ChromeTranslateClient(content::WebContents* web_contents)
 ChromeTranslateClient::~ChromeTranslateClient() {
   translate_driver_->RemoveLanguageDetectionObserver(this);
   translate_driver_->set_translate_manager(nullptr);
+#if !BUILDFLAG(IS_ANDROID)
+  if (read_anything_observer_ && web_contents()) {
+    tabs::TabInterface* tab =
+        tabs::TabInterface::MaybeGetFromContents(web_contents());
+    if (tab) {
+      if (auto* controller = ReadAnythingController::From(tab)) {
+        controller->RemoveObserver(read_anything_observer_.get());
+      }
+    }
+  }
+#endif
 }
 
 const translate::LanguageState& ChromeTranslateClient::GetLanguageState() {
@@ -292,8 +383,9 @@ bool ChromeTranslateClient::ShowTranslateUI(
     const std::string& target_language,
     translate::TranslateErrors error_type,
     bool triggered_from_menu) {
-  DCHECK(web_contents());
-  DCHECK(translate_manager_);
+  if (!web_contents() || !translate_manager_) {
+    return false;
+  }
 
   if (error_type != translate::TranslateErrors::NONE) {
     step = translate::TRANSLATE_STEP_TRANSLATE_ERROR;
@@ -387,40 +479,14 @@ void ChromeTranslateClient::ManualTranslateWhenReady() {
 #endif
 
 void ChromeTranslateClient::SetPredefinedTargetLanguage(
-    const std::string& translate_language_code,
+    const base::i18n::LanguageTag& language,
     bool should_auto_translate) {
   translate::TranslateManager* manager = GetTranslateManager();
-  manager->SetPredefinedTargetLanguage(translate_language_code,
-                                       should_auto_translate);
+  manager->SetPredefinedTargetLanguage(language, should_auto_translate);
 }
 
 bool ChromeTranslateClient::IsTranslatableURL(const GURL& url) {
   return TranslateService::IsTranslatableURL(url);
-}
-
-void ChromeTranslateClient::CheckIfPdfIsTranslatable(
-    base::OnceCallback<void(bool)> callback) {
-#if BUILDFLAG(ENABLE_PDF)
-  if (!base::FeatureList::IsEnabled(translate::kEnableTranslatePdf)) {
-    std::move(callback).Run(false);
-    return;
-  }
-  pdf::PDFDocumentHelper* pdf_helper =
-      pdf::PDFDocumentHelper::MaybeGetForWebContents(web_contents());
-  if (!pdf_helper) {
-    std::move(callback).Run(false);
-    return;
-  }
-
-  auto wrapped_callback =
-      mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback), false);
-
-  pdf_helper->RegisterForDocumentLoadComplete(
-      base::BindOnce(&OnPdfDocumentLoadComplete, weak_factory_.GetWeakPtr(),
-                     std::move(wrapped_callback)));
-#else
-  std::move(callback).Run(false);
-#endif
 }
 
 void ChromeTranslateClient::UndoTranslate() {
@@ -449,14 +515,40 @@ void ChromeTranslateClient::WebContentsDestroyed() {
   }
 }
 
-#if BUILDFLAG(IS_ANDROID)
 void ChromeTranslateClient::PrimaryPageChanged(content::Page& page) {
+#if BUILDFLAG(IS_ANDROID)
   if (auto_translate_snackbar_controller_ &&
       auto_translate_snackbar_controller_->IsShowing()) {
     auto_translate_snackbar_controller_->NativeDismissSnackbar();
   }
+#else
+  // If the Reading Mode side panel was opened specifically to translate the
+  // PDF, close it when navigating to a new page.
+  if (!opened_side_panel_for_pdf_translation_) {
+    return;
+  }
+  opened_side_panel_for_pdf_translation_ = false;
+
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents());
+
+  // Stop observing Reading Mode before closing it: the translation belonged to
+  // the previous page, so there is nothing to revert on the new one.
+  if (read_anything_observer_ && tab) {
+    if (auto* controller = ReadAnythingController::From(tab)) {
+      controller->RemoveObserver(read_anything_observer_.get());
+    }
+  }
+
+  SidePanelUI* side_panel_ui = GetSidePanelUIFromTab(tab);
+  if (side_panel_ui && side_panel_ui->IsSidePanelEntryShowing(SidePanelEntryKey(
+                           SidePanelEntryId::kReadAnything))) {
+    side_panel_ui->Close();
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
+#if BUILDFLAG(IS_ANDROID)
 void ChromeTranslateClient::OnVisibilityChanged(
     content::Visibility visibility) {
   if (auto_translate_snackbar_controller_ &&
@@ -465,7 +557,7 @@ void ChromeTranslateClient::OnVisibilityChanged(
     auto_translate_snackbar_controller_->NativeDismissSnackbar();
   }
 }
-#endif  // IS_ANDROID
+#endif  // BUILDFLAG(IS_ANDROID)
 
 // TranslateDriver::LanguageDetectionObserver implementation.
 void ChromeTranslateClient::OnLanguageDetermined(
@@ -485,6 +577,21 @@ void ChromeTranslateClient::OnLanguageDetermined(
   if (manual_translate_on_ready_) {
     GetTranslateManager()->ShowTranslateUI(/*auto_translate=*/true);
     manual_translate_on_ready_ = false;
+  }
+#else
+  // The availability of the app menu's Translate command depends on the
+  // detected source language. Language detection may complete after the last
+  // tab state update (e.g. for PDFs, where detection runs once the document
+  // text is available), so refresh the browser's command state here.
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents());
+  if (browser &&
+      web_contents() == browser->GetTabStripModel()->GetActiveWebContents()) {
+    if (auto* command_controller =
+            chrome::BrowserCommandController::From(browser)) {
+      command_controller->TabStateChanged();
+    }
   }
 #endif
 }

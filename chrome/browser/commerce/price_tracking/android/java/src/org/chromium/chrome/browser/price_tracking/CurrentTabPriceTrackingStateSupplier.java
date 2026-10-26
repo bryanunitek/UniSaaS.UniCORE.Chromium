@@ -17,8 +17,8 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.commerce.ShoppingServiceFactory;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.CurrentTabObserver;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.components.commerce.core.CommerceSubscription;
 import org.chromium.components.commerce.core.IdentifierType;
 import org.chromium.components.commerce.core.ManagementType;
@@ -84,7 +84,7 @@ public class CurrentTabPriceTrackingStateSupplier implements NonNullObservableSu
         mCurrentTabObserver =
                 new CurrentTabObserver(
                         mTabSupplier,
-                        new EmptyTabObserver() {
+                        new TabObserver() {
                             @Override
                             public void onUrlUpdated(Tab tab) {
                                 refreshPriceTrackingState();
@@ -177,12 +177,12 @@ public class CurrentTabPriceTrackingStateSupplier implements NonNullObservableSu
     }
 
     @Override
-    public Boolean addObserver(Callback<Boolean> obs, int behavior) {
+    public Boolean addObserver(Callback<? super Boolean> obs, int behavior) {
         return mSupplier.addObserver(obs, behavior);
     }
 
     @Override
-    public void removeObserver(Callback<Boolean> obs) {
+    public void removeObserver(Callback<? super Boolean> obs) {
         mSupplier.removeObserver(obs);
     }
 

@@ -17,6 +17,7 @@ import './view/pages/process.js';
 import './view/pages/telemetry.js';
 import './view/settings/settings_dialog.js';
 
+import {assert} from '//resources/js/assert.js';
 import {sendWithPromise} from '//resources/js/cr.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
@@ -84,6 +85,13 @@ export class HealthdInternalsAppElement extends PolymerElement {
     };
   }
 
+  constructor() {
+    super();
+    this.pageList = [];
+    this.currentPath = PagePath.NONE;
+    this.selectedIndex = -1;
+  }
+
   override connectedCallback() {
     super.connectedCallback();
 
@@ -145,17 +153,17 @@ export class HealthdInternalsAppElement extends PolymerElement {
   }
 
   // Init in `connectedCallback`.
-  private dataManager: DataManager;
+  private dataManager: DataManager|null = null;
 
   // The content pages for chrome://healthd-internals. It is also used for
   // rendering the tabs in the sidebar menu.
   // It will be empty if the feature flag (HealthdInternalsTabs) is disabled.
-  private pageList: Page[] = [];
+  declare private pageList: Page[];
   // This current path updated by `iron-location`.
-  private currentPath: string = PagePath.NONE;
+  declare private currentPath: string;
   // The selected index updated by `cr-menu-selector`. If `pageList` is empty,
   // this index will always be -1 and no page will be displayed.
-  private selectedIndex: number = -1;
+  declare private selectedIndex: number;
 
   // Return true if the menu tabs are not displayed.
   private areTabsHidden(): boolean {
@@ -214,6 +222,7 @@ export class HealthdInternalsAppElement extends PolymerElement {
       return;
     }
 
+    assert(this.dataManager);
     this.dataManager.setupFetchDataRequests(
         this.$.settingsDialog.getHealthdDataPollingCycle());
   }
@@ -230,6 +239,7 @@ export class HealthdInternalsAppElement extends PolymerElement {
     }
 
     const duration: number = this.$.settingsDialog.getDataRetentionDuration();
+    assert(this.dataManager);
     this.dataManager.updateDataRetentionDuration(duration);
   }
 

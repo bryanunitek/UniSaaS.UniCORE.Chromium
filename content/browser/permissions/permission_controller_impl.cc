@@ -11,10 +11,12 @@
 
 #include "base/barrier_closure.h"
 #include "base/functional/bind.h"
+#include "base/memory/weak_ptr.h"
 #include "base/types/optional_ref.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "content/browser/permissions/permission_service_context.h"
+#include "content/browser/permissions/permission_subscription_impl.h"
 #include "content/browser/permissions/permission_util.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/browser_context.h"
@@ -178,7 +180,7 @@ bool IsRequestAllowed(
     if (result.status == PermissionStatus::DENIED) {
       switch (result.source) {
         case PermissionStatusSource::FENCED_FRAME:
-          render_frame_host->GetOutermostMainFrame()->AddMessageToConsole(
+          render_frame_host->AddMessageToConsole(
               blink::mojom::ConsoleMessageLevel::kWarning,
               blink::GetPermissionString(permission_type) +
                   " permission has been blocked because it was requested "
@@ -301,8 +303,6 @@ ContentSettingsType ConvertPermissionTypeForCookieManager(
   switch (permission) {
     case PermissionType::STORAGE_ACCESS_GRANT:
       return ContentSettingsType::STORAGE_ACCESS;
-    case PermissionType::TOP_LEVEL_STORAGE_ACCESS:
-      return ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS;
     default:
       NOTREACHED();
   }
@@ -341,11 +341,28 @@ PermissionControllerImpl* PermissionControllerImpl::FromBrowserContext(
       browser_context->GetPermissionController());
 }
 
-PermissionControllerImpl::~PermissionControllerImpl() {
-  // Ideally we need to unsubscribe from delegate subscriptions here,
-  // but browser_context_ is already destroyed by this point, so
-  // we can't fetch our delegate.
+void PermissionControllerImpl::Shutdown() {
+  if (subscriptions_.IsEmpty()) {
+    return;
+  }
+  // `browser_context_` is still valid here, so the delegate can be reached and
+  // asked to drop the observers it registered on our behalf. Note that
+  // `subscriptions_` being non-empty also guarantees that the delegate was
+  // already created when subscribing, so this will not lazily construct a
+  // KeyedService during BrowserContext teardown. Subscriptions are only cleared
+  // afterwards, since the delegate reads from the map while unsubscribing.
+  if (PermissionControllerDelegate* delegate =
+          browser_context_->GetPermissionControllerDelegate()) {
+    for (SubscriptionsMap::iterator it(&subscriptions_); !it.IsAtEnd();
+         it.Advance()) {
+      delegate->UnsubscribeFromPermissionResultChange(it.GetCurrentKey());
+    }
+    delegate->SetSubscriptions(nullptr);
+  }
+  subscriptions_.Clear();
 }
+
+PermissionControllerImpl::~PermissionControllerImpl() = default;
 
 PermissionResult PermissionControllerImpl::GetSubscriptionCurrentResult(
     const PermissionResultSubscription& subscription) {
@@ -391,6 +408,8 @@ PermissionControllerImpl::GetSubscriptionsStatuses(
 
 void PermissionControllerImpl::NotifyChangedSubscriptions(
     const SubscriptionsStatusMap& old_statuses) {
+  // Callbacks are collected first and run only after the loop below, to prevent
+  // re-entrance issues.
   std::vector<base::OnceClosure> callbacks;
   for (const auto& it : old_statuses) {
     auto key = it.first;
@@ -575,16 +594,14 @@ void PermissionControllerImpl::UpdateCookieManagerContentSettings(
     std::optional<PermissionType> permission_to_process,
     base::OnceClosure callback) {
   std::vector<PermissionType> permissions;
-  if (permission_to_process == PermissionType::STORAGE_ACCESS_GRANT ||
-      permission_to_process == PermissionType::TOP_LEVEL_STORAGE_ACCESS) {
+  if (permission_to_process == PermissionType::STORAGE_ACCESS_GRANT) {
     permissions.push_back(permission_to_process.value());
   } else if (!permission_to_process) {
     // A null `permission_to_process` value indicates that a bulk operation
     // like `ResetPermissionOverrides` or `GrantPermissionOverrides` was
     // performed. In such cases, we must update all permissions that require
-    // it, which currently includes both Storage Access API permissions.
-    permissions = {PermissionType::STORAGE_ACCESS_GRANT,
-                   PermissionType::TOP_LEVEL_STORAGE_ACCESS};
+    // it.
+    permissions = {PermissionType::STORAGE_ACCESS_GRANT};
   }
 
   const auto callback_after_ipc =
@@ -809,20 +826,18 @@ void PermissionControllerImpl::PermissionResultChange(
     SubscriptionId subscription_id,
     PermissionResult result,
     bool ignore_status_override) {
+  PermissionResultSubscription* subscription =
+      subscriptions_.Lookup(subscription_id);
+  // The subscription may have been unsubscribed concurrently (e.g. by another
+  // callback in the same batch).
+  if (!subscription) {
+    return;
+  }
   // Check if the permission status override should be ignored. The verification
   // is suppressed if a permission status change was initiated by DevTools. In
   // all other cases permission status override is always checked.
   if (ignore_status_override) {
     callback.Run(result);
-    return;
-  }
-  PermissionResultSubscription* subscription =
-      subscriptions_.Lookup(subscription_id);
-  DCHECK(subscription);
-  // TODO(crbug.com/40056329) Adding this block to prevent crashes while we
-  // investigate the root cause of the crash. This block will be removed as the
-  // DCHECK() above should be enough.
-  if (!subscription) {
     return;
   }
   std::optional<PermissionResult> permission_result = permission_overrides_.Get(
@@ -835,7 +850,7 @@ void PermissionControllerImpl::PermissionResultChange(
   }
 }
 
-PermissionController::SubscriptionId
+std::unique_ptr<PermissionController::PermissionSubscription>
 PermissionControllerImpl::SubscribeToPermissionResultChange(
     blink::mojom::PermissionDescriptorPtr permission_descriptor,
     RenderProcessHost* render_process_host,
@@ -876,7 +891,7 @@ PermissionControllerImpl::SubscribeToPermissionResultChange(
     delegate->SetSubscriptions(&subscriptions_);
     delegate->OnPermissionStatusChangeSubscriptionAdded(id);
   }
-  return id;
+  return std::make_unique<PermissionSubscriptionImpl>(GetWeakPtr(), id);
 }
 
 void PermissionControllerImpl::UnsubscribeFromPermissionResultChange(
@@ -957,6 +972,10 @@ void PermissionControllerImpl::NotifyEventListener() {
   if (onchange_listeners_callback_for_tests_) {
     onchange_listeners_callback_for_tests_.Run();
   }
+}
+
+base::WeakPtr<PermissionControllerImpl> PermissionControllerImpl::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
 }
 
 }  // namespace content

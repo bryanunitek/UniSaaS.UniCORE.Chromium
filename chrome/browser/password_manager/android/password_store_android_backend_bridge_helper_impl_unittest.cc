@@ -15,6 +15,7 @@
 #include "chrome/browser/password_manager/android/password_store_android_backend_dispatcher_bridge.h"
 #include "chrome/browser/password_manager/android/password_store_android_backend_receiver_bridge.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/sync/protocol/deletion_origin.pb.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -29,7 +30,6 @@ using testing::NiceMock;
 using testing::Optional;
 using testing::Return;
 using testing::StrictMock;
-using testing::VariantWith;
 using testing::WithArg;
 using JobId = PasswordStoreAndroidBackendDispatcherBridge::JobId;
 
@@ -42,7 +42,7 @@ constexpr base::Time kTestDateCreated = base::Time::FromTimeT(1500);
 PasswordForm CreateTestLogin() {
   PasswordForm form;
   form.username_value = kTestUsername;
-  form.password_value = kTestPassword;
+  form.password_value = PasswordString(std::u16string(kTestPassword));
   form.url = GURL(kTestUrl);
   form.signon_realm = kTestUrl;
   form.date_created = kTestDateCreated;
@@ -55,7 +55,10 @@ class MockBackendConsumer
               OnCompleteWithLogins,
               (JobId, std::vector<StoredCredential>),
               (override));
-  MOCK_METHOD(void, OnLoginsChanged, (JobId, PasswordChanges), (override));
+  MOCK_METHOD(void,
+              OnLoginsChanged,
+              (JobId, std::optional<PasswordStoreChangeList>),
+              (override));
   MOCK_METHOD(void, OnError, (JobId, AndroidBackendError), (override));
 };
 

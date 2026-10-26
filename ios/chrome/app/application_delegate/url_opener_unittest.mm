@@ -7,15 +7,15 @@
 #import <Foundation/Foundation.h>
 
 #import "base/check_op.h"
-#import "base/test/with_feature_override.h"
+#import "base/test/scoped_feature_list.h"
+#import "base/time/time.h"
+#import "base/timer/elapsed_timer.h"
 #import "ios/chrome/app/application_delegate/fake_tab_opener.h"
 #import "ios/chrome/app/application_delegate/startup_information.h"
 #import "ios/chrome/app/application_delegate/url_opener_params.h"
 #import "ios/chrome/app/profile/profile_init_stage.h"
 #import "ios/chrome/app/startup/chrome_app_startup_parameters.h"
 #import "ios/chrome/browser/shared/coordinator/scene/test/fake_connection_information.h"
-#import "ios/chrome/browser/shared/coordinator/scene/test/stub_browser_provider.h"
-#import "ios/chrome/browser/shared/coordinator/scene/test/stub_browser_provider_interface.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -35,10 +35,17 @@
 @implementation StubStartupInformation
 @synthesize isFirstRun = _isFirstRun;
 @synthesize isColdStart = _isColdStart;
-@synthesize appLaunchTime = _appLaunchTime;
+@synthesize launchReason = _launchReason;
+@synthesize appLaunchTimer = _appLaunchTimer;
+@synthesize preMainDuration = _preMainDuration;
 @synthesize didFinishLaunchingTime = _didFinishLaunchingTime;
 @synthesize firstSceneConnectionTime = _firstSceneConnectionTime;
+@synthesize coldStartFromMainDuration = _coldStartFromMainDuration;
 @synthesize isTerminating = _isTerminating;
+
+- (BOOL)isLaunchedInBackground {
+  return _launchReason.has_value() && IsBackgroundLaunchReason(*_launchReason);
+}
 
 - (FirstUserActionRecorder*)firstUserActionRecorder {
   return nil;
@@ -60,6 +67,12 @@
 - (void)stopChromeMain {
 }
 
+- (void)maybeSetLaunchReason:(IOSLaunchReason)launchReason {
+  if (!_launchReason.has_value()) {
+    _launchReason = launchReason;
+  }
+}
+
 - (NSDictionary*)launchOptions {
   return @{};
 }
@@ -68,9 +81,15 @@
 
 #pragma mark -
 
+// Tests `URLOpener` with the legacy startup flow.
 class URLOpenerTest : public PlatformTest {
  protected:
-  URLOpenerTest() {
+  void SetUp() override {
+    PlatformTest::SetUp();
+    ResetEnableNewStartupFlowEnabledForTesting();
+    scoped_feature_list_.InitAndDisableFeature(kEnableNewStartupFlow);
+    SaveEnableNewStartupFlowForNextStart();
+
     startup_information_mock_ =
         OCMStrictProtocolMock(@protocol(StartupInformation));
     connection_information_mock_ =
@@ -78,10 +97,12 @@ class URLOpenerTest : public PlatformTest {
     tab_opener_mock_ = OCMStrictProtocolMock(@protocol(TabOpening));
   }
 
-  ~URLOpenerTest() override {
+  void TearDown() override {
     EXPECT_OCMOCK_VERIFY(startup_information_mock_);
     EXPECT_OCMOCK_VERIFY(connection_information_mock_);
     EXPECT_OCMOCK_VERIFY(tab_opener_mock_);
+    ResetEnableNewStartupFlowEnabledForTesting();
+    PlatformTest::TearDown();
   }
 
   id<StartupInformation> startup_information_mock_;
@@ -90,6 +111,7 @@ class URLOpenerTest : public PlatformTest {
 
  private:
   web::WebTaskEnvironment task_environment_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(URLOpenerTest, HandleOpenURL) {

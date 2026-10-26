@@ -16,7 +16,6 @@
 #include "chrome/browser/actor/tools/tool_delegate.h"
 #include "chrome/common/actor.mojom-forward.h"
 #include "components/actor/core/aggregated_journal.h"
-#include "content/public/browser/weak_document_ptr.h"
 
 namespace actor {
 
@@ -77,6 +76,11 @@ class ToolController {
   void ObservationDelayComplete(
       mojom::ActionResultPtr action_result,
       ObservationDelayController::Result observation_result);
+
+  // Validates the target surface of `tool`. Returns OK if the tool has no
+  // target, kTabWentAway if the surface is gone, and kActionTargetCrossProfile
+  // if it belongs to another profile.
+  mojom::ActionResultPtr ValidateTarget(const Tool& tool) const;
 
   AggregatedJournal& journal() { return tool_delegate_->GetJournal(); }
 

@@ -31,13 +31,16 @@ void UpdatePageAttachmentState(
     GeminiPageContextAttachmentState gemini_attachment_state) {}
 
 void UpdatePromptAction(gemini::EntryPoint entry_point,
-                        NSString* prepopulated_prompt) {}
+                        NSString* prepopulated_prompt,
+                        bool should_auto_submit) {}
+
+void UpdatePromptAction(gemini::InputType input_type,
+                        NSString* prepopulated_prompt,
+                        bool should_auto_submit) {}
 
 bool IsProtectedUrl(std::string url) {
   return false;
 }
-
-void UpdatePageContext(GeminiPageContext* gemini_page_context) {}
 
 void UpdateActivePageContext(GeminiPageContext* gemini_page_context,
                              NSArray<GeminiPageContext*>* shared_tabs) {}
@@ -52,6 +55,8 @@ GeminiSettingsAction* ActionForSettingsContext(GeminiSettingsContext context) {
 }
 
 void UpdateOverlayOffsetWithOpacity(CGFloat offset, CGFloat opacity) {}
+
+void UpdateDetentHeights(CGFloat collapsed_height, CGFloat extended_height) {}
 
 void UpdateGeminiViewState(GeminiViewState view_state, bool animated) {}
 
@@ -73,6 +78,10 @@ GeminiPageContextAttachmentState GetCurrentPageContextAttachmentState() {
 
 void SwitchToMode(GeminiViewMode mode, bool animated) {}
 
+void SwitchToMode(GeminiViewMode mode,
+                  GeminiViewState target_state,
+                  bool animated) {}
+
 GeminiViewMode GetCurrentMode() {
   return GeminiViewMode::kUnknown;
 }
@@ -89,9 +98,27 @@ int GetLiveCaptionsNumberOfLines() {
   return 0;
 }
 
+void SetShouldShowSuggestionChips(bool should_show) {}
+
+void SetBlockQuerySubmissionWhileLoading(bool block_submission) {}
+
+void SetShowPageLoadingSnackbarOnOpeningInvocation(bool show_snackbar) {}
+
+void ShowAccountSnackbar() {}
+
 UIViewController* GetFloatyViewControllerWithConfiguration(
     GeminiConfiguration* gemini_configuration) {
   return nil;
 }
+
+bool IsFeatureModeDisabledByQuota(GeminiFeatureMode feature_mode) {
+  return false;
+}
+
+NSDate* GetRefillDateForFeatureMode(GeminiFeatureMode feature_mode) {
+  return nil;
+}
+
+void ForceRefreshQuotaInfo() {}
 
 }  // namespace ios::provider

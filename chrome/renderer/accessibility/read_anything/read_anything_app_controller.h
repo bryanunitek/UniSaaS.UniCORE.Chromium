@@ -8,27 +8,27 @@
 #include <deque>
 #include <map>
 #include <memory>
-#include <set>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/memory/raw_ptr.h"
-#include "base/memory/safe_ref.h"
+#include "base/functional/callback.h"
 #include "base/scoped_observation.h"
+#include "base/threading/sequence_bound.h"
+#include "base/timer/timer.h"
 #include "base/values.h"
 #include "chrome/common/read_anything/read_anything.mojom.h"
 #include "chrome/renderer/accessibility/read_anything/read_aloud_app_model.h"
 #include "chrome/renderer/accessibility/read_anything/read_anything_app_model.h"
+#include "chrome/renderer/accessibility/read_anything/read_anything_distiller.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "gin/wrappable.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "third_party/skia/include/core/SkColor.h"
 #include "ui/accessibility/ax_location_and_scroll_updates.h"
 #include "ui/accessibility/ax_node_id_forward.h"
-#include "ui/accessibility/ax_node_position.h"
 #include "ui/accessibility/ax_position.h"
 #include "ui/accessibility/ax_tree_observer.h"
 #include "ui/accessibility/ax_tree_update_forward.h"
@@ -49,8 +49,9 @@ class MojoUkmRecorder;
 
 class AXTreeDistiller;
 class DependencyParserModel;
-class ReadAnythingAppControllerTest;
 class ReadAnythingAppControllerReadabilityTest;
+class ReadAnythingAppControllerTest;
+class ReadAnythingDistillerFactory;
 
 ///////////////////////////////////////////////////////////////////////////////
 // ReadAnythingAppController
@@ -143,12 +144,6 @@ class ReadAnythingAppController
       const ui::AXTreeID& tree_id,
       const std::vector<ui::AXTreeUpdate>& updates,
       const std::vector<ui::AXEvent>& events) override;
-  void AccessibilityLocationChangesReceived(
-      const ui::AXTreeID& tree_id,
-      ui::AXLocationAndScrollUpdates& details) override;
-  void AccessibilityLocationChangesReceived(
-      const ui::AXTreeID& tree_id,
-      const ui::AXLocationAndScrollUpdates& details) override;
   void OnActiveAXTreeIDChanged(const ui::AXTreeID& tree_id,
                                ukm::SourceId ukm_source_id,
                                bool is_pdf) override;
@@ -181,6 +176,8 @@ class ReadAnythingAppController
   void OnGetVoicePackInfo(
       read_anything::mojom::VoicePackInfoPtr voice_pack_info) override;
   void OnReadingModeHidden(bool tab_active) override;
+  void OnReadingModeShown(
+      read_anything::mojom::ReadAnythingOpenTrigger open_trigger) override;
   void OnTabWillDetach() override;
   void OnTabMuteStateChange(bool muted) override;
   void UpdateContent(const std::string& title,
@@ -188,6 +185,8 @@ class ReadAnythingAppController
   void OnReadabilityDistillationStateChanged(
       read_anything::mojom::ReadAnythingDistillationState new_state) override;
   void OnMainFrameSameDocumentNavigation(const GURL& url) override;
+  void OnTranslationStateChanged(bool is_translated) override;
+  void OnTranslationFailed() override;
 
 #if BUILDFLAG(IS_CHROMEOS)
   void OnDeviceLocked() override;
@@ -221,7 +220,6 @@ class ReadAnythingAppController
   float FontSize() const;
   bool LinksEnabled() const;
   bool ImagesEnabled() const;
-  bool ImagesFeatureEnabled() const;
   double SpeechRate() const;
   void OnFontSizeChanged(bool increase);
   void OnFontSizeReset();
@@ -276,10 +274,10 @@ class ReadAnythingAppController
   int InImmersiveOverlayPresentationState() const;
   int DistillationTypeScreen2x() const;
   int DistillationTypeReadability() const;
+  bool IsInSelectionMode() const;
   std::string GetStoredVoice() const;
   std::vector<std::string> GetLanguagesEnabledInPref() const;
   std::vector<ui::AXNodeID> GetChildren(ui::AXNodeID ax_node_id) const;
-  std::string GetDataFontCss(ui::AXNodeID ax_node_id) const;
   std::string GetHtmlTag(ui::AXNodeID ax_node_id) const;
   std::string GetLanguage(ui::AXNodeID ax_node_id) const;
   std::u16string GetTextContent(ui::AXNodeID ax_node_id) const;
@@ -293,7 +291,6 @@ class ReadAnythingAppController
   std::string GetDomDistillerContentHtml() const;
   // Serializes accessibility tree anchors into a V8 object for the frontend.
   v8::Local<v8::Value> GetDomDistillerAnchors() const;
-  // Will only return a state if IsImmersiveReadAnythingEnabled() is true.
   // Returns the presentation through the OnGetPresentationState callback.
   void SendGetPresentationStateRequest() const;
   // The results of these are sent back via UntrustedPage::OnGetVoicePackInfo.
@@ -306,8 +303,9 @@ class ReadAnythingAppController
   bool IsSpeechTreeInitialized();
   bool ShouldBold(ui::AXNodeID ax_node_id) const;
   bool IsOverline(ui::AXNodeID ax_node_id) const;
+  bool IsSuperscript(ui::AXNodeID ax_node_id) const;
+  bool IsSubscript(ui::AXNodeID ax_node_id) const;
   bool IsLeafNode(ui::AXNodeID ax_node_id) const;
-  bool IsReadAnythingPinned() const;
   void OnConnected();
   void OnCopy() const;
   void OnScroll(bool on_selection) const;
@@ -317,7 +315,7 @@ class ReadAnythingAppController
                          ui::AXNodeID focus_node_id,
                          int focus_offset);
   void OnCollapseSelection();
-  bool MaybeHasKeyPointsSection() const;
+  v8::Local<v8::Value> GetOriginalPageMetrics();
   std::string GetKeyPointsRegex() const;
   void AttemptLogEarlySelection(bool from_side_panel);
   void OnDistilled(int word_count);
@@ -325,15 +323,17 @@ class ReadAnythingAppController
   v8::Local<v8::Value> GetAXMapping(int index);
   bool IsGoogleDocs() const;
   bool IsPdf() const;
-  bool IsImmersiveEnabled() const;
+  bool IsContentTranslated() const;
   bool IsImprovedReadAloudEnabled() const;
+  bool IsReadAnythingImprovedUiEnabled() const;
   bool IsReadAnythingTranslateEntryPointEnabled() const;
+  bool IsReadAnythingSendFeedbackEnabled() const;
+  bool IsTranslatePdfEnabled() const;
+  bool IsReadAnythingReadAloudExperimentalPlaybackUiEnabled() const;
   bool IsTsTextSegmentationEnabled() const;
   bool IsReadabilityEnabled() const;
-  bool IsReadabilitySelectTextEnabled() const;
   bool IsLineFocusEnabled() const;
   bool IsReadabilityWithLinksEnabled() const;
-  bool IsChromeOsAsh() const;
   bool IsPhraseHighlightingEnabled() const;
   void OnLetterSpacingChange(int value);
   void OnLineSpacingChange(int value);
@@ -354,10 +354,9 @@ class ReadAnythingAppController
   v8::Local<v8::Value> GetImageBitmap(ui::AXNodeID node_id);
   void OnIsSpeechActiveChanged(bool is_speech_active);
   void OnIsAudioCurrentlyPlayingChanged(bool is_audio_currently_playing);
+  void OnAiPlaybackStateChanged(bool enabled);
   std::string GetValidatedFontName(const std::string& font) const;
   std::vector<std::string> GetAllFonts() const;
-  void OnScrolledToBottom();
-  bool IsDocsLoadMoreButtonVisible() const;
   void OnNoTextContent();
   void UpdateWordsSeen(int words_seen);
   void UpdateWordsHeard(int words_heard);
@@ -399,11 +398,17 @@ class ReadAnythingAppController
   // available.
   void UpdateDependencyParserModel(base::File model_file);
 
-  DependencyParserModel& GetDependencyParserModelForTesting();
+  void OnDependencyParserModelAvailabilityChecked(bool is_available);
+
+  base::SequenceBound<DependencyParserModel>&
+  GetDependencyParserModelForTesting();
 
   // Called when distillation has completed.
   void OnAXTreeDistilled(const ui::AXTreeID& tree_id,
                          const std::vector<ui::AXNodeID>& content_node_ids);
+
+  // Called when distillation completes from the active ReadAnythingDistiller.
+  void OnDistillationComplete(const DistillationResult& result);
 
   // Inits the AXPosition with a starting node.
   // TODO(crbug.com/40927698): We should be able to use AXPosition in a way
@@ -427,28 +432,12 @@ class ReadAnythingAppController
 
   void Draw(bool recompute_display_nodes);
 
-  // Snapshot_lite is a data structure which resembles an
-  // AXTreeUpdate. E.g.:
-  //   const axTree = {
-  //     root_id: 1,
-  //     nodes: [
-  //       {
-  //         id: 1,
-  //         role: 'rootWebArea',
-  //         child_ids: [2],
-  //       },
-  //       {
-  //         id: 2,
-  //         role: 'staticText',
-  //         name: 'Some text.',
-  //       },
-  //     ],
-  //   };
-  void SetContentForTesting(v8::Local<v8::Value> v8_snapshot_lite,
-                            std::vector<ui::AXNodeID> content_node_ids);
-  void SetAnchorsForTesting(v8::Local<v8::Value> v8_snapshot_lite,
-                            std::vector<ui::AXNodeID> content_node_ids);
   void SetLanguageForTesting(const std::string& language_code);
+  void set_forced_distillation_method_for_testing(
+      ReadAnythingAppModel::DistillationMethod method) {
+    forced_distillation_method_for_testing_ = method;
+    model_.set_current_content_distillation_method(method);
+  }
 
  private:
   friend ReadAnythingAppControllerTest;
@@ -458,8 +447,31 @@ class ReadAnythingAppController
   const std::string& GetDefaultLanguageCodeForSpeech() const;
 
   void Distill();
+
+  // Ensures that `active_distiller_` is configured for the next distillation
+  // method indicated by `model_.next_distillation_method()`. If a different
+  // distiller is currently active, replacing it cancels any in-flight
+  // operations from the previous distiller before instantiating the new one.
+  void UpdateActiveDistiller();
+
+  // Initiates distillation by ensuring the active distiller matches the
+  // model's next distillation method and dispatching the `request`.
+  // DOM-based engines (Readability) that distill in the browser process do not
+  // need an AXTree and only read `request.reason`; tree-based engines
+  // (Screen2x) require a populated `request.tree`.
+  void ExecuteDistillation(const DistillationRequest& request);
+
+  // Forwards a Readability distillation request, and the reason for it, to the
+  // browser process via `page_handler_`. Passed as a callback to
+  // ReadAnythingDistillerFactory.
+  void RequestReadabilityDistillation(
+      read_anything::mojom::ReadabilityDistillationReason reason,
+      read_anything::mojom::UntrustedPageHandler::
+          RequestReadabilityDistillationCallback callback);
+
   void DrawSelection();
   void DrawEmptyState();
+  void DrawReadabilityContent();
 
   // Helper function that restarts the distillation logging timer and triggers a
   // new distillation if the tree is ready.
@@ -469,15 +481,17 @@ class ReadAnythingAppController
   // preparation for a new content distillation.
   void PrepareForNewContentDistillation();
 
-  // Returns the initial distillation method state based on feature flags and
-  // page type (e.g. if it's PDF).
-  ReadAnythingAppModel::DistillationMethod GetInitialDistillationMethod(
-      bool is_pdf) const;
+  // Returns the initial distillation method based on feature flags and the
+  // active tree's page type (e.g. if it's a PDF).
+  ReadAnythingAppModel::DistillationMethod GetInitialDistillationMethod() const;
 
   void ExecuteJavaScript(const std::string& script);
 
   // Returns true if a draw occurred.
   bool PostProcessSelection();
+
+  // Handles the browser's reply to a selection request from the side panel.
+  void OnSelectionRequestHandled(bool applied);
 
   // Signals that the side panel has finished loading and it's safe to show
   // the UI to avoid loading artifacts.
@@ -498,8 +512,7 @@ class ReadAnythingAppController
       const std::vector<ui::AXEvent>& events);
 
   // Triggers the text mapping algorithm if both the accessibility tree and the
-  // rendered text blocks from the WebUI are ready if
-  // IsReadabilitySelectTextEnabled.
+  // rendered text blocks from the WebUI are ready if IsReadabilityEnabled.
   void MaybeMapRenderedTextToTree();
 
   // Helper for forwarding reading mode hide events to the webui so we can
@@ -568,6 +581,10 @@ class ReadAnythingAppController
 
   void OnPdfDebounceFinished();
 
+  // Logs the time it took for the AXTree to become ready after the active
+  // tree ID changed.
+  void MaybeLogAXTreeReady();
+
   // Stores a screenshot of the page and triggers distillation to record protos.
   // This function is not used in production and is behind the disabled
   // `DataCollectionModeForScreen2x` flag.
@@ -577,6 +594,8 @@ class ReadAnythingAppController
 
   bool IsHidden() const;
 
+  // TODO(crbug.com/554114724): Remove `distiller_` once the
+  // ReadAnythingDistiller refactoring is complete and enabled by default.
   std::unique_ptr<AXTreeDistiller> distiller_;
   mojo::Remote<read_anything::mojom::UntrustedPageHandlerFactory>
       page_handler_factory_;
@@ -588,10 +607,6 @@ class ReadAnythingAppController
   // Model that holds Read Aloud state for this controller.
   ReadAloudAppModel read_aloud_model_;
 
-  // Set of nodes that will be deleted that are also displayed. A draw will
-  // occur when the set becomes empty.
-  std::set<ui::AXNodeID> displayed_nodes_pending_deletion_;
-
   bool waiting_for_tree_id_ = false;
 
   // Tracks whether the rendered text blocks ready metric has been recorded for
@@ -601,6 +616,10 @@ class ReadAnythingAppController
   // Tracks the time since the active tree ID was last changed.
   base::TimeTicks active_tree_changed_start_time_;
 
+  // Tracks the time it took for the AXTree to become ready after the active
+  // tree changes.
+  base::TimeDelta elapsed_time_ax_tree_ready_;
+
   // Model that holds Reading mode state for this controller.
   ReadAnythingAppModel model_;
 
@@ -608,6 +627,14 @@ class ReadAnythingAppController
   base::ScopedObservation<ReadAnythingAppModel,
                           ReadAnythingAppModel::ModelObserver>
       model_observer_{this};
+
+  // Factory used to instantiate concrete `ReadAnythingDistiller` engines based
+  // on the requested distillation method.
+  std::unique_ptr<ReadAnythingDistillerFactory> distiller_factory_;
+
+  // The active distillation engine instance (e.g. Screen2x or Readability).
+  // Dynamically instantiated and updated via `UpdateActiveDistiller()`.
+  std::unique_ptr<ReadAnythingDistiller> active_distiller_;
 
   // Observers of AXTrees, which are added / removed  as the `model_` changes
   // state.
@@ -623,6 +650,16 @@ class ReadAnythingAppController
 
   // The time when the WebUI connects i.e. when onConnected is called.
   base::TimeTicks web_ui_connected_time_ms_;
+
+  // Flag to ensure the AXTree ready metric is logged only once per active
+  // tree change. Initially set as true to make sure that the variable reset is
+  // called before trying to log the metric.
+  bool ax_tree_ready_for_current_active_tree_recorded_ = true;
+
+  // Flag to ensure the AXTree ready metric is measured only once per active
+  // tree change. Initially set as true to make sure that the variable reset is
+  // called before trying to measure the metric.
+  bool ax_tree_ready_for_current_active_tree_measured_ = true;
 
   // A timer that causes a distillation after a user stops typing for a set
   // number of seconds.
@@ -657,6 +694,9 @@ class ReadAnythingAppController
 
   // The distilled content result of DOM distiller distillation.
   std::string dom_distiller_content_html_;
+
+  std::optional<ReadAnythingAppModel::DistillationMethod>
+      forced_distillation_method_for_testing_;
 
   // As a subclass of RenderFrameObserver, all objects of this class are stored
   // in data structure and should not get deallocated as long as the object is

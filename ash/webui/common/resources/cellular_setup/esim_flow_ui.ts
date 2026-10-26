@@ -62,6 +62,7 @@ export enum EsimUiState {
 // The reason that caused the user to exit the ESim Setup flow.
 // These values are persisted to logs. Entries should not be renumbered
 // and numeric values should never be reused.
+// LINT.IfChange(ESimSetupFlowResult)
 export enum EsimSetupFlowResult {
   SUCCESS = 0,
   INSTALL_FAIL = 1,
@@ -71,7 +72,9 @@ export enum EsimSetupFlowResult {
   CANCELLED_WITHOUT_ERROR = 5,
   CANCELLED_NO_PROFILES = 6,
   NO_NETWORK = 7,
+  COUNT = NO_NETWORK + 1,
 }
+// LINT.ThenChange(//tools/metrics/histograms/metadata/network/enums.xml:ESimSetupFlowResult)
 
 export const ESIM_SETUP_RESULT_METRIC_NAME =
     'Network.Cellular.ESim.SetupFlowResult';
@@ -194,20 +197,20 @@ export class EsimFlowUiElement extends EsimFlowUiElementBase {
     };
   }
 
-  delegate: CellularSetupDelegate;
-  header: string;
-  forwardButtonLabel: string;
-  private state_: string;
-  private selectedEsimPageName_: string;
-  private hasConsentedForDiscovery_: boolean;
-  private shouldSkipDiscovery_: boolean;
-  private showError_: boolean;
-  private pendingProfileProperties_: ESimProfileProperties[];
-  private selectedProfileProperties_: ESimProfileProperties|null;
-  private activationCode_: string;
-  private confirmationCode_: string;
-  private hasHadActiveCellularNetwork_: boolean;
-  private isActivationCodeFromQrCode_: boolean;
+  declare delegate: CellularSetupDelegate;
+  declare header: string;
+  declare forwardButtonLabel: string;
+  declare private state_: string;
+  declare private selectedEsimPageName_: string;
+  declare private hasConsentedForDiscovery_: boolean;
+  declare private shouldSkipDiscovery_: boolean;
+  declare private showError_: boolean;
+  declare private pendingProfileProperties_: ESimProfileProperties[];
+  declare private selectedProfileProperties_: ESimProfileProperties|null;
+  declare private activationCode_: string;
+  declare private confirmationCode_: string;
+  declare private hasHadActiveCellularNetwork_: boolean;
+  declare private isActivationCodeFromQrCode_: boolean;
 
   /**
    * Provides an interface to the ESimManager Mojo service.
@@ -289,7 +292,7 @@ export class EsimFlowUiElement extends EsimFlowUiElementBase {
     assert(resultCode !== null);
     MetricsBrowserProxy.getInstance().recordEnumerationValue(
         ESIM_SETUP_RESULT_METRIC_NAME, resultCode,
-        Object.keys(EsimSetupFlowResult).length);
+        EsimSetupFlowResult.COUNT);
 
     const elapsedTimeMs = new Date().getTime() - this.timeOnAttached_!.getTime();
     if (resultCode === EsimSetupFlowResult.SUCCESS) {

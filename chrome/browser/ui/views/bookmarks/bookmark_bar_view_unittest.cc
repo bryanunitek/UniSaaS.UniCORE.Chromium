@@ -20,11 +20,13 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_test_util.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/bookmarks/controllers/bookmark_bar_ui_controller.h"
+#include "chrome/browser/ui/bookmarks/controllers/bookmark_bar_ui_controller_impl.h"
+#include "chrome/browser/ui/bookmarks/controllers/desktop_bookmark_bar_ui_controller_injector.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view_test_helper.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_bar.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/bookmarks/browser/bookmark_model.h"
@@ -37,6 +39,7 @@
 #include "components/search_engines/template_url_service_client.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "content/public/browser/page_navigator.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
@@ -76,21 +79,18 @@ class BookmarkBarViewBaseTest : public ChromeViewsTestBase {
     BookmarkMergedSurfaceServiceFactory::GetForProfile(profile_.get())
         ->LoadForTesting({});
 
-    Browser::CreateParams params(profile(), true);
-    auto browser_window = std::make_unique<TestBrowserWindow>();
-    params.window = browser_window.release();
-    browser_ = Browser::DeprecatedCreateOwnedForTesting(params);
+    ON_CALL(browser_window_interface_, GetProfile())
+        .WillByDefault(testing::Return(profile_.get()));
   }
 
   void TearDown() override {
-    browser_->GetWindow()->Close();
     ChromeViewsTestBase::TearDown();
   }
 
   virtual BookmarkBarView* bookmark_bar_view() = 0;
 
   TestingProfile* profile() { return profile_.get(); }
-  Browser* browser() { return browser_.get(); }
+  BrowserWindowInterface* browser() { return &browser_window_interface_; }
 
  protected:
   // Returns a string containing the label of each of the *visible* buttons on
@@ -175,8 +175,13 @@ class BookmarkBarViewBaseTest : public ChromeViewsTestBase {
   std::unique_ptr<BookmarkBarView> CreateBookmarkModelAndBookmarkBarView() {
     WaitForBookmarkModelToLoad();
 
-    auto bookmark_bar_view =
-        std::make_unique<BookmarkBarView>(browser(), nullptr);
+    auto injector =
+        std::make_unique<DesktopBookmarkBarUIControllerInjector>(browser());
+    auto controller =
+        std::make_unique<BookmarkBarUIControllerImpl>(std::move(injector));
+
+    auto bookmark_bar_view = std::make_unique<BookmarkBarView>(
+        browser(), std::move(controller), nullptr);
     test_helper_ =
         std::make_unique<BookmarkBarViewTestHelper>(bookmark_bar_view.get());
     return bookmark_bar_view;
@@ -185,7 +190,7 @@ class BookmarkBarViewBaseTest : public ChromeViewsTestBase {
   base::test::ScopedFeatureList feature_list_{
       switches::kSyncEnableBookmarksInTransportMode};
   std::unique_ptr<TestingProfile> profile_;
-  std::unique_ptr<Browser> browser_;
+  testing::NiceMock<MockBrowserWindowInterface> browser_window_interface_;
   std::unique_ptr<BookmarkBarViewTestHelper> test_helper_;
 };
 
@@ -204,9 +209,8 @@ class BookmarkBarViewTest : public BookmarkBarViewBaseTest {
   }
 
   void TearDown() override {
-    BookmarkBarViewBaseTest::TearDown();
-
     bookmark_bar_view_.reset();
+    BookmarkBarViewBaseTest::TearDown();
   }
 
   BookmarkBarView* bookmark_bar_view() override {
@@ -255,22 +259,22 @@ class BookmarkBarViewInWidgetTest : public BookmarkBarViewBaseTest {
 // Verify that in instant extended mode the visibility of the apps shortcut
 // button properly follows the pref value.
 TEST_F(BookmarkBarViewTest, AppsShortcutVisibility) {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  profile()->GetPrefs()->SetBoolean(
       bookmarks::prefs::kShowAppsShortcutInBookmarkBar, false);
   EXPECT_FALSE(test_helper_->apps_page_shortcut()->GetVisible());
 
   // Try to make the Apps shortcut visible. Its visibility depends on whether
   // the Apps shortcut is enabled.
-  browser()->profile()->GetPrefs()->SetBoolean(
+  profile()->GetPrefs()->SetBoolean(
       bookmarks::prefs::kShowAppsShortcutInBookmarkBar, true);
-  if (chrome::IsAppsShortcutEnabled(browser()->GetProfile())) {
+  if (chrome::IsAppsShortcutEnabled(profile())) {
     EXPECT_TRUE(test_helper_->apps_page_shortcut()->GetVisible());
   } else {
     EXPECT_FALSE(test_helper_->apps_page_shortcut()->GetVisible());
   }
 
   // Make sure we can also properly transition from true to false.
-  browser()->profile()->GetPrefs()->SetBoolean(
+  profile()->GetPrefs()->SetBoolean(
       bookmarks::prefs::kShowAppsShortcutInBookmarkBar, false);
   EXPECT_FALSE(test_helper_->apps_page_shortcut()->GetVisible());
 }
@@ -280,12 +284,12 @@ TEST_F(BookmarkBarViewTest, TabGroupsBarVisibility) {
   EXPECT_TRUE(test_helper_->saved_tab_group_bar()->GetVisible());
 
   // Pref not to show hides tab group bar.
-  browser()->profile()->GetPrefs()->SetBoolean(
+  profile()->GetPrefs()->SetBoolean(
       bookmarks::prefs::kShowTabGroupsInBookmarkBar, false);
   EXPECT_FALSE(test_helper_->saved_tab_group_bar()->GetVisible());
 
   // Pref to show displays tab group bar.
-  browser()->profile()->GetPrefs()->SetBoolean(
+  profile()->GetPrefs()->SetBoolean(
       bookmarks::prefs::kShowTabGroupsInBookmarkBar, true);
   EXPECT_TRUE(test_helper_->saved_tab_group_bar()->GetVisible());
 }
@@ -670,29 +674,6 @@ TEST_F(BookmarkBarViewTest, ManagedShowAppsShortcutInBookmarksBar) {
 }
 #endif
 
-// Verifies the SavedTabGroupBar's page navigator is set when the
-// bookmarkbarview's page navigator is set.
-// TODO(crbug.com/375364962): Flaky on Windows & Linux.
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
-#define MAYBE_PageNavigatorSet DISABLED_PageNavigatorSet
-#else
-#define MAYBE_PageNavigatorSet PageNavigatorSet
-#endif
-TEST_F(BookmarkBarViewTest, MAYBE_PageNavigatorSet) {
-  // Expect SavedTabGroupBar to have a page navigator when BookmarkBarView
-  // does.
-  EXPECT_FALSE(test_helper_->saved_tab_group_bar()->page_navigator());
-  bookmark_bar_view()->SetPageNavigator(browser());
-  EXPECT_TRUE(test_helper_->saved_tab_group_bar()->page_navigator());
-
-  // Reset both page navigators.
-  bookmark_bar_view()->SetPageNavigator(nullptr);
-
-  // Expect we can set the SaveTabGroupBar's page navigator without affecting
-  // BookmarkBarView.
-  test_helper_->saved_tab_group_bar()->SetPageNavigator(browser());
-  EXPECT_TRUE(test_helper_->saved_tab_group_bar()->page_navigator());
-}
 
 TEST_F(BookmarkBarViewTest, GetAvailableWidthForSavedTabGroupsBar) {
   // Saved tab group bar and bookmark buttons can both fit.
@@ -855,8 +836,8 @@ TEST_F(BookmarkBarViewTest, MAYBE_AccessibleRoleDescription) {
 // implementation.
 class BookmarkBarViewWithCounter : public BookmarkBarView {
  public:
-  explicit BookmarkBarViewWithCounter(Browser* browser)
-      : BookmarkBarView(browser, nullptr) {}
+  explicit BookmarkBarViewWithCounter(BrowserWindowInterface* browser)
+      : BookmarkBarView(browser, nullptr, nullptr) {}
 
   size_t GetSchedulePaintCount() const { return schedule_paint_count_; }
 
@@ -879,6 +860,11 @@ class BookmarkBarViewWithCounterTest : public BookmarkBarViewBaseTest {
     WaitForBookmarkModelToLoad();
     bookmark_bar_view_with_counter_ =
         std::make_unique<BookmarkBarViewWithCounter>(browser());
+  }
+
+  void TearDown() override {
+    bookmark_bar_view_with_counter_.reset();
+    BookmarkBarViewBaseTest::TearDown();
   }
 
   BookmarkBarView* bookmark_bar_view() override {

@@ -17,7 +17,6 @@
 #include "chrome/browser/ash/policy/affiliation/affiliation_test_helper.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/login/login_handler.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
@@ -553,8 +552,8 @@ IN_PROC_BROWSER_TEST_F(SystemProxyManagerPolicyCredentialsBrowserTest,
   auto proxy_config = base::DictValue()
                           .Set("mode", ProxyPrefs::kPacScriptProxyModeName)
                           .Set("pac_url", "http://proxy");
-  browser()->profile()->GetPrefs()->SetDict(::proxy_config::prefs::kProxy,
-                                            std::move(proxy_config));
+  browser()->GetProfile()->GetPrefs()->SetDict(::proxy_config::prefs::kProxy,
+                                               std::move(proxy_config));
   RunUntilIdle();
   EXPECT_EQ(++set_auth_details_call_count,
             client_test_interface()->GetSetAuthenticationDetailsCallCount());
@@ -640,7 +639,7 @@ class SystemProxyCredentialsReuseBrowserTest
 
  protected:
   content::WebContents* GetWebContents() const {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetActiveTabInterface()->GetContents();
   }
 
   void SetManagedProxy() {
@@ -649,8 +648,8 @@ class SystemProxyCredentialsReuseBrowserTest
         base::DictValue()
             .Set("mode", ProxyPrefs::kFixedServersProxyModeName)
             .Set("server", proxy_server_.host_port_pair().ToString());
-    browser()->profile()->GetPrefs()->SetDict(::proxy_config::prefs::kProxy,
-                                              std::move(proxy_config));
+    browser()->GetProfile()->GetPrefs()->SetDict(::proxy_config::prefs::kProxy,
+                                                 std::move(proxy_config));
     RunUntilIdle();
   }
 
@@ -676,7 +675,10 @@ class SystemProxyCredentialsReuseBrowserTest
                                  const std::string& expected_username,
                                  const std::string& expected_password) {
     network::mojom::NetworkContext* network_context =
-        browser()->profile()->GetDefaultStoragePartition()->GetNetworkContext();
+        browser()
+            ->GetProfile()
+            ->GetDefaultStoragePartition()
+            ->GetNetworkContext();
     std::string username;
     std::string password;
     base::RunLoop loop;

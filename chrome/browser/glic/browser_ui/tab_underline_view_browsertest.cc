@@ -10,13 +10,15 @@
 #include "chrome/browser/glic/host/host.h"
 #include "chrome/browser/glic/test_support/glic_browser_test.h"
 #include "chrome/browser/tab_list/tab_list_interface.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/views/tabs/tab/alert_indicator_button.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/sessions/core/session_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/test/browser_test.h"
 #include "gpu/config/gpu_switches.h"
@@ -182,17 +184,22 @@ class TabUnderlineViewBrowserTest : public GlicBrowserTest {
 
   GURL Title2() const { return embedded_test_server()->GetURL("/title2.html"); }
 
-  TabUnderlineView* GetUnderlineOfTab(Browser* target_browser, int index) {
+  TabUnderlineView* GetUnderlineOfTab(BrowserWindowInterface* target_browser,
+                                      int index) {
     TabStripRegionView* tab_strip_view =
         BrowserView::GetBrowserViewForBrowser(target_browser)->tab_strip_view();
     views::View* underline =
-        tab_strip_view->GetTabAnchorViewAt(index)->GetViewByElementId(
-            TabUnderlineView::kGlicTabUnderlineElementId);
+        tab_strip_view
+            ->GetTabAnchorView(target_browser->tab_strip_model()
+                                   ->GetTabAtIndex(index)
+                                   ->GetHandle())
+            ->GetViewByElementId(TabUnderlineView::kGlicTabUnderlineElementId);
     CHECK(underline);
     return views::AsViewClass<TabUnderlineView>(underline);
   }
 
-  TabUnderlineView* GetUnderlineOfActiveTab(Browser* target_browser = nullptr) {
+  TabUnderlineView* GetUnderlineOfActiveTab(
+      BrowserWindowInterface* target_browser = nullptr) {
     if (!target_browser) {
       target_browser = browser();
     }
@@ -206,7 +213,8 @@ class TabUnderlineViewBrowserTest : public GlicBrowserTest {
         BrowserView::GetBrowserViewForBrowser(browser())->tab_strip_view();
     views::View* button =
         tab_strip_view
-            ->GetTabAnchorViewAt(GetTabListInterface()->GetActiveIndex())
+            ->GetTabAnchorView(
+                browser()->tab_strip_model()->GetActiveTab()->GetHandle())
             ->GetViewByElementId(kTabAlertIndicatorButtonElementId);
     return views::AsViewClass<AlertIndicatorButton>(button);
   }
@@ -427,29 +435,27 @@ IN_PROC_BROWSER_TEST_F(TabUnderlineViewBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(TabUnderlineViewBrowserTest, IncognitoModeCrash) {
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(incognito_browser, GURL("about:blank")));
 }
 
-// TODO(crbug.com/513374065): Re-enable this test once the flakiness is fixed on
-// Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_AttachPinnedTabToNewWindow DISABLED_AttachPinnedTabToNewWindow
-#else
-#define MAYBE_AttachPinnedTabToNewWindow AttachPinnedTabToNewWindow
-#endif
 IN_PROC_BROWSER_TEST_F(TabUnderlineViewBrowserTest,
-                       MAYBE_AttachPinnedTabToNewWindow) {
+                       AttachPinnedTabToNewWindow) {
+  BrowserWindowInterface* browser1 = GetBrowser();
   // Set up two windows, each with one tab
   ASSERT_EQ(GetTabListInterface()->GetTabCount(), 1);
-  // Second browser window
-  Browser* browser2 = CreateBrowser(browser()->GetProfile());
-  browser2->GetWindow()->Activate();
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser2, Title2()));
-  ASSERT_EQ(GetTabListInterface()->GetTabCount(), 1);
+  // Second browser window, and activate it.
+  BrowserWindowInterface* browser2 = CreateAdditionalBrowserWindow();
   auto* tab_list2 = TabListInterface::From(browser2);
   ASSERT_EQ(tab_list2->GetTabCount(), 1);
+
+  // Navigate browser2's tab
+  NavigateTab(*tab_list2->GetTab(0), Title2());
+
+  // We want to open Glic on browser1, so we must ensure it is the active
+  // window. Otherwise, browser2 is currently the active window.
+  ASSERT_OK(ActivateWindow(browser1));
 
   tabs::TabHandle handle1 = GetTabListInterface()->GetTab(0)->GetHandle();
   tabs::TabHandle handle2 = tab_list2->GetTab(0)->GetHandle();
@@ -458,8 +464,9 @@ IN_PROC_BROWSER_TEST_F(TabUnderlineViewBrowserTest,
 
   auto& global_sharing_manager = service()->active_instance_sharing_manager();
   EXPECT_TRUE(global_sharing_manager.GetPinnedTabs().empty());
-  // Toggle Glic on second browser window to create an instance. Because the
-  // second browser is active, the main sharing manager will delegate to this
+
+  // Toggle Glic on the first browser window to create an instance. Because this
+  // browser is active, the main sharing manager will delegate to this
   // instance's sharing manager.
   ASSERT_OK_AND_ASSIGN(auto* instance, OpenGlicForActiveTab());
   ASSERT_OK(WaitForGlicClient(instance));
@@ -476,7 +483,7 @@ IN_PROC_BROWSER_TEST_F(TabUnderlineViewBrowserTest,
   EXPECT_TRUE(global_sharing_manager.IsTabPinned(handle2));
 
   // Verify both tabs have underlines showing.
-  auto* underline1 = GetUnderlineOfActiveTab(browser());
+  auto* underline1 = GetUnderlineOfActiveTab(browser1);
   auto* underline2 = GetUnderlineOfActiveTab(browser2);
   ASSERT_TRUE(underline1);
   ASSERT_TRUE(underline2);
@@ -486,11 +493,11 @@ IN_PROC_BROWSER_TEST_F(TabUnderlineViewBrowserTest,
   EXPECT_TRUE(underline2->IsShowing());
 
   // Simulate attachment of browser2's tab to browser1.
-  tab_list2->MoveTabToWindow(handle2, GetBrowser()->GetSessionID(), 1);
+  tab_list2->MoveTabToWindow(handle2, browser1->GetSessionID(), 1);
   EXPECT_EQ(GetTabListInterface()->GetTabCount(), 2);
 
   // Check that the newly attached tab has its underline showing.
-  auto* underline_attached = GetUnderlineOfTab(browser(), 1);
+  auto* underline_attached = GetUnderlineOfTab(browser1, 1);
   ASSERT_TRUE(underline_attached);
   static_cast<TesterImpl*>(underline_attached->tester())
       ->WaitForAnimationStart();

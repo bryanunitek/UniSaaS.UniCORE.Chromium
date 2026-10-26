@@ -4,8 +4,9 @@
 
 #include "chrome/updater/update_service_impl_impl.h"
 
+#include <stdint.h>
+
 #include <algorithm>
-#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -107,6 +108,7 @@ UpdateService::Result ToResult(update_client::Error error) {
     case update_client::Error::RETRY_LATER:
       return UpdateService::Result::kRetryLater;
     case update_client::Error::SERVICE_ERROR:
+    case update_client::Error::UPDATE_DISABLED:
       return UpdateService::Result::kServiceFailed;
     case update_client::Error::UPDATE_CHECK_ERROR:
       return UpdateService::Result::kUpdateCheckFailed;
@@ -221,6 +223,7 @@ std::wstring GetTextForUpdateClientInstallError(int error_code,
         update_client::InstallError::INSTALL_VERIFICATION_FAILED);
     INSTALL_SWITCH_ENTRY(update_client::InstallError::MISSING_INSTALL_PARAMS);
     INSTALL_SWITCH_ENTRY(update_client::InstallError::LAUNCH_PROCESS_FAILED);
+    INSTALL_SWITCH_ENTRY(update_client::InstallError::INSTALL_PATH_ERROR);
     INSTALL_SWITCH_ENTRY(update_client::InstallError::CUSTOM_ERROR_BASE);
     default:
       return GetLocalizedStringF(IDS_GENERIC_INSTALL_ERROR_BASE,
@@ -240,6 +243,8 @@ std::wstring GetTextForDownloadError(int error, const std::wstring& language) {
     DOWNLOAD_SWITCH_ENTRY(update_client::CrxDownloaderError::NO_HASH);
     DOWNLOAD_SWITCH_ENTRY(
         update_client::CrxDownloaderError::BITS_TOO_MANY_JOBS);
+    DOWNLOAD_SWITCH_ENTRY(
+        update_client::CrxDownloaderError::DO_TOO_MANY_DOWNLOADS);
     DOWNLOAD_SWITCH_ENTRY(update_client::CrxDownloaderError::GENERIC_ERROR);
 
     case std::to_underlying(update_client::CrxDownloaderError::BAD_HASH):
@@ -1163,14 +1168,14 @@ void UpdateServiceImplImpl::UpdateAll(
       app_ids, base::ToLowerASCII(kUpdaterAppId),
       static_cast<std::string (*)(std::string_view)>(&base::ToLowerASCII)));
 
-  const Priority priority = Priority::kBackground;
+  constexpr Priority kPriority = Priority::kBackground;
 
   auto events_by_app_id =
       std::make_unique<base::flat_map<std::string, UpdateEndEvent>>();
   for (const std::string& app_id : app_ids) {
     (*events_by_app_id)[app_id] = UpdateStartEvent()
                                       .SetAppId(app_id)
-                                      .SetPriority(priority)
+                                      .SetPriority(kPriority)
                                       .WriteAsyncAndReturnEndEvent();
   }
   state_update =
@@ -1208,10 +1213,10 @@ void UpdateServiceImplImpl::UpdateAll(
                  .Then(std::move(callback));
 
   ShouldBlockUpdateForMeteredNetwork(
-      priority,
+      kPriority,
       base::BindOnce(
           &UpdateServiceImplImpl::OnShouldBlockUpdateForMeteredNetwork, this,
-          app_ids, kEmptyFlatMap, kEmptyFlatMap, priority,
+          app_ids, kEmptyFlatMap, kEmptyFlatMap, kPriority,
           UpdateService::PolicySameVersionUpdate::kNotAllowed,
           /*language=*/"", state_update,
           base::BindOnce(

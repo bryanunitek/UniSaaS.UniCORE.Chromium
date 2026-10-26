@@ -71,9 +71,6 @@ using DataChannelState = webrtc::DataChannelInterface::DataState;
 // transport-info messages.
 const int kTransportInfoSendDelayMs = 20;
 
-// XML namespace for the transport elements.
-const char kTransportNamespace[] = "google:remoting:webrtc";
-
 // Global maximum bitrate set for the PeerConnection.
 const int kMaxBitrateBps = 1e8;  // 100 Mbps.
 
@@ -270,7 +267,7 @@ class WebrtcTransport::PeerConnectionWrapper
     : public webrtc::PeerConnectionObserver {
  public:
   PeerConnectionWrapper(
-      webrtc::Thread* worker_thread,
+      webrtc::Thread* network_thread,
       std::unique_ptr<webrtc::VideoEncoderFactory> encoder_factory,
       std::unique_ptr<webrtc::PortAllocator> port_allocator,
       base::WeakPtr<WebrtcTransport> transport)
@@ -278,8 +275,7 @@ class WebrtcTransport::PeerConnectionWrapper
     audio_module_ = new webrtc::RefCountedObject<WebrtcAudioModule>();
 
     webrtc::PeerConnectionFactoryDependencies pcf_deps;
-    pcf_deps.network_thread = worker_thread;
-    pcf_deps.worker_thread = worker_thread;
+    pcf_deps.network_thread = network_thread;
     pcf_deps.signaling_thread = webrtc::Thread::Current();
     pcf_deps.env = WebRtcEnvironment();
     pcf_deps.event_log_factory = std::make_unique<webrtc::RtcEventLogFactory>();
@@ -411,7 +407,7 @@ class WebrtcTransport::PeerConnectionWrapper
 };
 
 WebrtcTransport::WebrtcTransport(
-    webrtc::Thread* worker_thread,
+    webrtc::Thread* network_thread,
     scoped_refptr<TransportContext> transport_context,
     std::unique_ptr<webrtc::VideoEncoderFactory> video_encoder_factory,
     EventHandler* event_handler)
@@ -423,7 +419,7 @@ WebrtcTransport::WebrtcTransport(
   apply_network_settings_ =
       std::move(create_port_allocator_result.apply_network_settings);
   peer_connection_wrapper_ = std::make_unique<PeerConnectionWrapper>(
-      worker_thread, std::move(video_encoder_factory),
+      network_thread, std::move(video_encoder_factory),
       std::move(create_port_allocator_result.allocator),
       weak_factory_.GetWeakPtr());
 
@@ -480,7 +476,7 @@ void WebrtcTransport::ApplyNetworkSettings(
 }
 
 void WebrtcTransport::Start(
-    Authenticator* authenticator,
+    const std::string& auth_key,
     SendTransportInfoCallback send_transport_info_callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(send_transport_info_callback_.is_null());
@@ -492,7 +488,7 @@ void WebrtcTransport::Start(
 
   send_transport_info_callback_ = std::move(send_transport_info_callback);
 
-  hmac_key_ = base::ToVector(base::as_byte_span(authenticator->GetAuthKey()));
+  hmac_key_ = base::ToVector(base::as_byte_span(auth_key));
 
   event_handler_->OnWebrtcTransportConnecting();
 
@@ -504,10 +500,6 @@ void WebrtcTransport::Start(
 bool WebrtcTransport::ProcessTransportInfo(
     const JingleTransportInfo& transport_info) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-
-  if (transport_info.xml_namespace != kTransportNamespace) {
-    return false;
-  }
 
   if (!peer_connection()) {
     return false;
@@ -810,7 +802,6 @@ void WebrtcTransport::OnLocalSessionDescriptionCreated(
 
   // Format and send the session description to the peer.
   auto transport_info = std::make_unique<JingleTransportInfo>();
-  transport_info->xml_namespace = kTransportNamespace;
 
   SessionDescription session_description;
   if (description->GetType() == webrtc::SdpType::kOffer) {
@@ -831,6 +822,13 @@ void WebrtcTransport::OnLocalSessionDescriptionCreated(
 
   session_description.signature.assign(digest.begin(), digest.end());
   transport_info->session_description = std::move(session_description);
+
+  if (pending_transport_info_message_) {
+    transport_info->candidates =
+        std::move(pending_transport_info_message_->candidates);
+    pending_transport_info_message_.reset();
+    transport_info_timer_.Stop();
+  }
 
   send_transport_info_callback_.Run(std::move(transport_info));
 
@@ -860,7 +858,14 @@ void WebrtcTransport::OnLocalDescriptionSet(bool success,
     return;
   }
 
+  // AddPendingCandidatesIfPossible() calls Close() if adding a queued ICE
+  // candidate fails, which notifies `event_handler_` of the error and may
+  // synchronously destroy `this`.
+  base::WeakPtr<WebrtcTransport> self = weak_factory_.GetWeakPtr();
   AddPendingCandidatesIfPossible();
+  if (!self) {
+    return;
+  }
 
   // The sender "encodings" parameters are initialized after the local
   // description is set. At this point, it is possible to set parameters such as
@@ -1173,6 +1178,10 @@ void WebrtcTransport::SetSenderBitrates(
 void WebrtcTransport::RequestNegotiation() {
   DCHECK(transport_context_->role() == TransportRole::SERVER);
 
+  if (send_transport_info_callback_.is_null()) {
+    return;
+  }
+
   if (!negotiation_pending_) {
     negotiation_pending_ = true;
     auto send_offer_cb =
@@ -1214,17 +1223,14 @@ void WebrtcTransport::SendOffer() {
 void WebrtcTransport::EnsurePendingTransportInfoMessage() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
-  // |transport_info_timer_| must be running iff
-  // |pending_transport_info_message_| exists.
-  DCHECK_EQ(pending_transport_info_message_ != nullptr,
-            transport_info_timer_.IsRunning());
-
   if (!pending_transport_info_message_) {
     pending_transport_info_message_ = std::make_unique<JingleTransportInfo>();
-    pending_transport_info_message_->xml_namespace = kTransportNamespace;
+  }
 
-    // Delay sending the new candidates in case we get more candidates
-    // that we can send in one message.
+  // Delay sending the new candidates in case we get more candidates
+  // that we can send in one message.
+  if (!send_transport_info_callback_.is_null() &&
+      !transport_info_timer_.IsRunning()) {
     transport_info_timer_.Start(FROM_HERE,
                                 base::Milliseconds(kTransportInfoSendDelayMs),
                                 this, &WebrtcTransport::SendTransportInfo);
@@ -1234,6 +1240,7 @@ void WebrtcTransport::EnsurePendingTransportInfoMessage() {
 void WebrtcTransport::SendTransportInfo() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(pending_transport_info_message_);
+  DCHECK(!send_transport_info_callback_.is_null());
 
   send_transport_info_callback_.Run(std::move(pending_transport_info_message_));
 }

@@ -8,7 +8,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_view_host.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/extensions/extension_popup.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -29,6 +28,7 @@ ExtensionViewViews::ExtensionViewViews(Profile* profile,
           &ExtensionViewViews::OnWebContentsAttached, base::Unretained(this)));
   host_->set_view(this);
   SetWebContents(host_->web_contents());
+  SetAcceleratorHandling(views::WebContentsAcceleratorHandling::kEnabled);
 }
 
 ExtensionViewViews::~ExtensionViewViews() {
@@ -42,7 +42,7 @@ ExtensionViewViews::~ExtensionViewViews() {
 void ExtensionViewViews::Init() {
   if (host_->extension_host_type() ==
       extensions::mojom::ViewType::kExtensionPopup) {
-    DCHECK(container_);
+    CHECK(container_, base::NotFatalUntil::M162);
 
     // This will set the max popup bounds for the duration of the popup's
     // lifetime; they won't be readjusted if the window moves. This is usually
@@ -122,12 +122,11 @@ void ExtensionViewViews::RenderFrameCreated(
 bool ExtensionViewViews::HandleKeyboardEvent(
     content::WebContents* source,
     const input::NativeWebKeyboardEvent& event) {
-  return unhandled_keyboard_event_handler_.HandleKeyboardEvent(
-      event, GetFocusManager());
+  return WebView::HandleKeyboardEvent(source, event);
 }
 
 void ExtensionViewViews::OnLoaded() {
-  DCHECK(host_->has_loaded_once());
+  CHECK(host_->has_loaded_once(), base::NotFatalUntil::M162);
 
   // ExtensionPopup delegates showing the view to OnLoaded(). ExtensionDialog
   // handles visibility directly.
@@ -145,7 +144,13 @@ ui::Cursor ExtensionViewViews::GetCursor(const ui::MouseEvent& event) {
 
 void ExtensionViewViews::OnWebContentsAttached(views::WebView*) {
   host_->CreateRendererSoon();
-  SetVisible(false);
+  // Popups remain hidden until their content has loaded to avoid resizing
+  // flicker. Other views should remain visible so that views::FocusManager can
+  // properly manage focus when they are shown.
+  if (host_->extension_host_type() ==
+      extensions::mojom::ViewType::kExtensionPopup) {
+    SetVisible(false);
+  }
 }
 
 BEGIN_METADATA(ExtensionViewViews)

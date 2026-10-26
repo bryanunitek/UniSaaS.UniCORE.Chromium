@@ -69,7 +69,7 @@ DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(
     kCustomPinnedActionToolbarButtonFactoryKey)
 
 PinnedActionToolbarButton::PinnedActionToolbarButton(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     actions::ActionId action_id,
     base::WeakPtr<PinnedToolbarActionsContainer> container)
     : ToolbarButton(
@@ -134,7 +134,7 @@ PinnedActionToolbarButton::~PinnedActionToolbarButton() {
   action_count_changed_subscription_ = {};
 }
 
-bool PinnedActionToolbarButton::IsActive() {
+bool PinnedActionToolbarButton::IsActive() const {
   return anchor_higlight_.has_value();
 }
 
@@ -157,6 +157,10 @@ void PinnedActionToolbarButton::AddHighlight() {
 void PinnedActionToolbarButton::ResetHighlight() {
   anchor_higlight_.reset();
   GetViewAccessibility().SetCheckedState(ax::mojom::CheckedState::kFalse);
+}
+
+bool PinnedActionToolbarButton::IsHighlighted() const {
+  return IsActive();
 }
 
 void PinnedActionToolbarButton::SetPinned(bool pinned) {
@@ -331,8 +335,7 @@ void PinnedActionToolbarButtonActionViewInterface::ActionItemChangedImpl(
   ButtonActionViewInterface::ActionItemChangedImpl(action_item);
 
   if (action_view_->IsIconVisible() &&
-      actions::IsActionItemClass<actions::StatefulImageActionItem>(
-          action_item)) {
+      actions::IsActionClass<actions::StatefulImageActionItem>(action_item)) {
     auto* stateful_action_item =
         static_cast<actions::StatefulImageActionItem*>(action_item);
     if (stateful_action_item->GetStatefulImage().IsVectorIcon()) {
@@ -371,10 +374,8 @@ void PinnedActionToolbarButtonActionViewInterface::InvokeActionImpl(
       action_view_->SetNeedsDelayedDestruction(true);
   action_item->InvokeAction(
       actions::ActionInvocationContext::Builder()
-          .SetProperty(
-              kSidePanelOpenTriggerKey,
-              static_cast<std::underlying_type_t<SidePanelOpenTrigger>>(
-                  SidePanelOpenTrigger::kPinnedEntryToolbarButton))
+          .SetProperty(kSidePanelOpenTriggerKey,
+                       SidePanelOpenTrigger::kPinnedEntryToolbarButton)
           .Build());
 }
 
@@ -401,8 +402,7 @@ void PinnedActionToolbarButtonActionViewInterface::OnViewChangedImpl(
   // Update the button's icon. If the action item is a stateful image action
   // item, use the stateful image. Otherwise, use the action item's image.
   ui::ImageModel image_model;
-  if (actions::IsActionItemClass<actions::StatefulImageActionItem>(
-          action_item)) {
+  if (actions::IsActionClass<actions::StatefulImageActionItem>(action_item)) {
     image_model = static_cast<actions::StatefulImageActionItem*>(action_item)
                       ->GetStatefulImage();
   } else {

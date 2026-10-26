@@ -15,7 +15,6 @@ import '../settings_shared.css.js';
 import './channel_switcher_dialog.js';
 import './consumer_auto_update_toggle_dialog.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/ash/common/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {CrPolicyIndicatorType} from 'chrome://resources/ash/common/cr_elements/policy/cr_policy_indicator_mixin.js';
@@ -28,7 +27,8 @@ import {castExists} from '../assert_extras.js';
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {routes} from '../router.js';
 
 import type {AboutPageBrowserProxy, ChannelInfo, VersionInfo} from './about_page_browser_proxy.js';
@@ -136,19 +136,19 @@ export class SettingsDetailedBuildInfoSubpageElement extends
     Setting.kCopyDetailedBuildInfo,
   ]);
 
-  private versionInfo_: VersionInfo;
-  private channelInfo_: ChannelInfo;
-  private currentlyOnChannelText_: string;
-  private showChannelSwitcherDialog_: boolean;
-  private canChangeChannel_: boolean;
-  private isManagedAutoUpdateEnabled_: boolean;
-  private showConsumerAutoUpdateToggleDialog_: boolean;
-  private eolMessageWithMonthAndYear: string;
-  private shouldHideEolInfo_: boolean;
-  private isManaged_: boolean;
-  private isConsumerAutoUpdateTogglingAllowed_: boolean;
-  private showConsumerAutoUpdateToggle_: boolean;
-  private showManagedAutoUpdateToggle_: boolean;
+  declare private versionInfo_: VersionInfo;
+  declare private channelInfo_: ChannelInfo;
+  declare private currentlyOnChannelText_: string;
+  declare private showChannelSwitcherDialog_: boolean;
+  declare private canChangeChannel_: boolean;
+  declare private isManagedAutoUpdateEnabled_: boolean;
+  declare private showConsumerAutoUpdateToggleDialog_: boolean;
+  declare private eolMessageWithMonthAndYear: string;
+  declare private shouldHideEolInfo_: boolean;
+  declare private isManaged_: boolean;
+  declare private isConsumerAutoUpdateTogglingAllowed_: boolean;
+  declare private showConsumerAutoUpdateToggle_: boolean;
+  declare private showManagedAutoUpdateToggle_: boolean;
 
   private aboutPageBrowserProxy_: AboutPageBrowserProxy;
 

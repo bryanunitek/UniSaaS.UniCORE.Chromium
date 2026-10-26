@@ -11,7 +11,6 @@
 <translation id="1253734725326687145">Symudwyd y targed cyffwrdd i'r dde uchaf. Tapiwch yma.</translation>
 <translation id="1266864766717917324">Ni ellid rhannu <ph name="CONTENT_TYPE" /></translation>
 <translation id="1269641567813814718">Ennill</translation>
-<translation id="1291104554099683393">Rhowch gynnig ar rannu'r testun mewn darnau llai.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">O'r Chwith i'r Dde</translation>
 <translation id="1383876407941801731">Chwilio</translation>
@@ -38,7 +37,6 @@
 <translation id="1901303067676059328">Dewis &amp;popeth</translation>
 <translation id="19085484004813472">Mae hon yn nodwedd newydd</translation>
 <translation id="2006524834898217237">Gwnewch yn siŵr bod y ddyfais hon wedi'i chysylltu â'r rhyngrwyd.</translation>
-<translation id="208586643495776849">Rhowch gynnig arall arni</translation>
 <translation id="2111134541987263231">Trowch <ph name="BEGIN_BOLD" />Caniatáu yn y modd Anhysbys<ph name="END_BOLD" /> ymlaen</translation>
 <translation id="2141853158323869627">{DAYS,plural, =1{1d}zero{#d}two{#dd}few{#d}many{#d}other{#d}}</translation>
 <translation id="2148716181193084225">Heddiw</translation>
@@ -85,7 +83,6 @@
 <translation id="3306688585798492231">Sgrîn integredig</translation>
 <translation id="335581015389089642">Llefarydd</translation>
 <translation id="3372635229069101468">Cliciwch <ph name="BEGIN_BOLD" />Manylion<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Mae'r testun yn rhy fawr</translation>
 <translation id="3406306243914553062">Cynnwys HTML</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 diwrnod ar ôl}zero{# diwrnod ar ôl}two{# ddiwrnod ar ôl}few{# diwrnod ar ôl}many{# diwrnod ar ôl}other{# diwrnod ar ôl}}</translation>
 <translation id="3600969208114796418">Ffeil <ph name="SAVEAS_EXTENSION_TYPE" /></translation>
@@ -128,7 +125,6 @@
 <translation id="5046499563572181734">Tapiwch yma</translation>
 <translation id="5076340679995252485">&amp;Gludo</translation>
 <translation id="520299402983819650"><ph name="QUANTITY" /> PB</translation>
-<translation id="5278860589123563674">Wedi methu ag anfon</translation>
 <translation id="5283101102242354279">Trowch estyniad ymlaen yn y modd Anhysbys ymlaen:</translation>
 <translation id="528468243742722775">Diwedd</translation>
 <translation id="5329858601952122676">&amp;Dileu</translation>

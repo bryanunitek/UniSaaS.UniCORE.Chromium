@@ -13,12 +13,12 @@
 #include "ash/bubble/bubble_constants.h"
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/accelerators.h"
-#include "ash/public/cpp/style/color_provider.h"
 #include "ash/root_window_controller.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shell.h"
 #include "ash/style/ash_color_id.h"
-#include "ash/style/system_shadow.h"
+#include "ash/style/style_util.h"
+#include "ash/style/system_decoration.h"
 #include "ash/system/notification_center/notification_center_tray.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/system/tray/tray_constants.h"
@@ -38,7 +38,7 @@
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_type.h"
-#include "ui/compositor_extra/shadow.h"
+#include "ui/decoration/shadow.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/events/event.h"
 #include "ui/events/types/event_type.h"
@@ -193,7 +193,8 @@ TrayBubbleView::Delegate::GetAcceleratorAction() const {
   return std::nullopt;
 }
 
-TrayBubbleView::InitParams::InitParams() = default;
+TrayBubbleView::InitParams::InitParams()
+    : has_shadow(features::IsSystemTrayShadowEnabled()) {}
 
 TrayBubbleView::InitParams::~InitParams() = default;
 
@@ -369,21 +370,15 @@ TrayBubbleView::TrayBubbleView(const InitParams& init_params)
                        : cros_tokens::kCrosSysSystemBaseElevatedOpaque));
     layer()->SetFillsBoundsOpaquely(!is_translucent);
     if (is_translucent) {
-      layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-      layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+      layer()->SetBackgroundBlur(StyleUtil::kBackgroundBlurSigma);
+      layer()->SetBackdropFilterQuality(StyleUtil::kBackgroundBlurQuality);
     }
   }
 
   if (params_.has_shadow) {
-    // Draws shadow on texture layer for large corner radius bubbles.
-    if (params_.has_large_corner_radius) {
-      shadow_ = SystemShadow::CreateShadowOnTextureLayer(params_.shadow_type);
-      shadow_->SetRoundedCornerRadius(params_.corner_radius);
-    } else if (features::IsSystemTrayShadowEnabled()) {
-      shadow_ = SystemShadow::CreateShadowOnNinePatchLayerForView(
-          this, params_.shadow_type);
-      shadow_->SetRoundedCornerRadius(params_.corner_radius);
-    }
+    shadow_ = SystemDecoration::CreateShadowOnNinePatchLayerForView(
+        this, params_.shadow_type);
+    shadow_->SetRoundedCorners(gfx::RoundedCornersF(params_.corner_radius));
   }
 
   auto layout = std::make_unique<BottomAlignedBoxLayout>(this);
@@ -392,9 +387,11 @@ TrayBubbleView::TrayBubbleView(const InitParams& init_params)
   if (init_params.anchor_mode == AnchorMode::kRect) {
     SetAnchorView(nullptr);
     SetAnchorRect(init_params.anchor_rect);
+    SetUseAnchorWindowBounds(true);
   } else {
     SetAnchorView(init_params.anchor_view);
     SetAnchorRect(gfx::Rect());
+    SetUseAnchorWindowBounds(false);
   }
 
   message_center::MessageCenter::Get()->AddObserver(this);
@@ -428,13 +425,6 @@ void TrayBubbleView::InitializeAndShowBubble() {
   UpdateBubble();
   UpdateAccessibleName();
   UpdateAccessibleIgnoredState();
-
-  // Manually sets the shadow position since `CreateShadowOnTextureLayer` only
-  // constructs the shadow but doesn't deal with shadow positioning.
-  if (params_.has_shadow && params_.has_large_corner_radius) {
-    AddLayerToRegion(shadow_->GetLayer(), views::LayerRegion::kBelow);
-    shadow_->SetContentBounds(layer()->bounds());
-  }
 
   // Register pre target event handler to reroute key
   // events to the widget for activating the view or closing it.
@@ -555,7 +545,7 @@ std::unique_ptr<FrameView> TrayBubbleView::CreateFrameView(Widget* widget) {
     bubble_border->set_rounded_corners(gfx::RoundedCornersF(GetCornerRadius()));
   }
 
-  bubble_border->SetColor(background_color());
+  bubble_border->set_background_color(background_color());
   bubble_border->set_avoid_shadow_overlap(true);
   if (params_.insets.has_value()) {
     bubble_border->set_insets(params_.insets.value());
@@ -564,9 +554,6 @@ std::unique_ptr<FrameView> TrayBubbleView::CreateFrameView(Widget* widget) {
   auto frame = BubbleDialogDelegateView::CreateFrameView(widget);
   auto* frame_ptr = static_cast<views::BubbleFrameView*>(frame.get());
   frame_ptr->SetBubbleBorder(std::move(bubble_border));
-  if (params_.anchor_mode == AnchorMode::kView) {
-    frame_ptr->set_use_anchor_window_bounds(false);
-  }
 
   return frame;
 }
@@ -586,15 +573,6 @@ std::u16string TrayBubbleView::GetAccessibleWindowTitle() const {
     return delegate_->GetAccessibleNameForBubble();
   } else {
     return std::u16string();
-  }
-}
-
-void TrayBubbleView::AddedToWidget() {
-  // If the view has a shadow on texture layer, should make it observe widget
-  // theme change to update its colors. The function is called here since we
-  // should guarantee that `GetWidget()` returns non-nullptr.
-  if (params_.has_shadow && params_.has_large_corner_radius) {
-    shadow_->ObserveColorProviderSource(GetWidget());
   }
 }
 

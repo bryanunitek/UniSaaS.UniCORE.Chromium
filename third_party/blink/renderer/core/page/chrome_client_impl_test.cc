@@ -30,9 +30,11 @@
 
 #include "third_party/blink/renderer/core/page/chrome_client_impl.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "cc/trees/layer_tree_host.h"
@@ -43,6 +45,7 @@
 #include "third_party/blink/public/mojom/choosers/color_chooser.mojom-blink.h"
 #include "third_party/blink/public/web/web_autofill_client.h"
 #include "third_party/blink/public/web/web_autofill_state.h"
+#include "third_party/blink/public/web/web_form_related_change_type.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/public/web/web_testing_support.h"
@@ -111,7 +114,6 @@ class ViewCreatingClient : public frame_test_helpers::TestWebFrameClient {
       network::mojom::blink::WebSandboxFlags,
       const SessionStorageNamespaceId&,
       bool& consumed_user_gesture,
-      const std::optional<Impression>&,
       const std::optional<WebPictureInPictureWindowOptions>&,
       const WebURL& creator_base_url) override {
     return web_view_helper_.InitializeWithOpener(Frame());
@@ -133,14 +135,14 @@ class CreateWindowTest : public testing::Test {
   test::TaskEnvironment task_environment_;
   ViewCreatingClient web_frame_client_;
   frame_test_helpers::WebViewHelper helper_;
-  WebViewImpl* web_view_;
-  WebLocalFrame* main_frame_;
+  raw_ptr<WebViewImpl, UnprotectedInRelease | DanglingUntriaged> web_view_;
+  raw_ptr<WebLocalFrame, UnprotectedInRelease | DanglingUntriaged> main_frame_;
   Persistent<ChromeClientImpl> chrome_client_impl_;
 };
 
 TEST_F(CreateWindowTest, CreateWindowFromPausedPage) {
   ScopedPagePauser pauser;
-  LocalFrame* frame = To<WebLocalFrameImpl>(main_frame_)->GetFrame();
+  LocalFrame* frame = To<WebLocalFrameImpl>(main_frame_.get())->GetFrame();
   FrameLoadRequest request(frame->DomWindow(), ResourceRequest());
   request.SetNavigationPolicy(kNavigationPolicyNewForegroundTab);
   WebWindowFeatures features;
@@ -223,6 +225,7 @@ class FakeColorChooserClient : public GarbageCollected<FakeColorChooserClient>,
     return gfx::Rect();
   }
   Color CurrentColor() override { return Color(); }
+  bool ShouldShowAlpha() const override { return false; }
   bool ShouldShowSuggestions() const override { return false; }
   Vector<mojom::blink::ColorSuggestionPtr> Suggestions() const override {
     return Vector<mojom::blink::ColorSuggestionPtr>();
@@ -308,7 +311,7 @@ class PagePopupSuppressionTest : public testing::Test {
  protected:
   test::TaskEnvironment task_environment_;
   frame_test_helpers::WebViewHelper helper_;
-  WebViewImpl* web_view_;
+  raw_ptr<WebViewImpl, UnprotectedInRelease | DanglingUntriaged> web_view_;
   Persistent<WebLocalFrameImpl> main_frame_;
   Persistent<ChromeClientImpl> chrome_client_impl_;
   Persistent<FakeColorChooserClient> color_chooser_client_;
@@ -347,7 +350,7 @@ class FileChooserQueueTest : public testing::Test {
 
   test::TaskEnvironment task_environment_;
   frame_test_helpers::WebViewHelper helper_;
-  WebViewImpl* web_view_;
+  raw_ptr<WebViewImpl, UnprotectedInRelease | DanglingUntriaged> web_view_;
   Persistent<ChromeClientImpl> chrome_client_impl_;
 };
 
@@ -534,8 +537,22 @@ class MockWebAutofillClient : public WebAutofillClient {
     is_autofillable_ = is_autofillable;
   }
 
+  void DidChangeFormRelatedElementDynamically(
+      WebFormRelatedChangeType,
+      std::optional<mojom::FormControlType> form_control_type,
+      base::FunctionRef<WebElement()> element) override {
+    last_form_control_type_ = form_control_type;
+    last_element_ = element();
+  }
+  const std::optional<mojom::FormControlType>& last_form_control_type() const {
+    return last_form_control_type_;
+  }
+  const WebElement& last_element() const { return last_element_; }
+
  private:
   bool is_autofillable_ = false;
+  std::optional<mojom::FormControlType> last_form_control_type_;
+  WebElement last_element_;
 };
 
 class ChromeClientImplAutofillTest : public testing::Test {
@@ -549,15 +566,15 @@ class ChromeClientImplAutofillTest : public testing::Test {
 
   test::TaskEnvironment task_environment_;
   frame_test_helpers::WebViewHelper helper_;
-  WebViewImpl* web_view_;
-  WebLocalFrame* main_frame_;
+  raw_ptr<WebViewImpl, UnprotectedInRelease | DanglingUntriaged> web_view_;
+  raw_ptr<WebLocalFrame, UnprotectedInRelease | DanglingUntriaged> main_frame_;
   Persistent<ChromeClientImpl> chrome_client_impl_;
 };
 
 TEST_F(ChromeClientImplAutofillTest, IsAutofillableElement) {
   frame_test_helpers::LoadHTMLString(
       main_frame_, "<body><input id=input></body>", blink::WebURL());
-  auto* web_frame = To<WebLocalFrameImpl>(main_frame_);
+  auto* web_frame = To<WebLocalFrameImpl>(main_frame_.get());
   MockWebAutofillClient mock_autofill_client;
   web_frame->SetAutofillClient(&mock_autofill_client);
 
@@ -571,6 +588,48 @@ TEST_F(ChromeClientImplAutofillTest, IsAutofillableElement) {
 
   mock_autofill_client.SetIsAutofillable(true);
   EXPECT_TRUE(chrome_client_impl_->IsAutofillableElement(*input));
+
+  web_frame->SetAutofillClient(nullptr);
+}
+
+TEST_F(ChromeClientImplAutofillTest, DidChangeFormRelatedElementDynamically) {
+  frame_test_helpers::LoadHTMLString(
+      main_frame_,
+      "<body><input id=input type=checkbox><form id=form></form>"
+      "<input id=password type=password>",
+      blink::WebURL());
+  auto* web_frame = To<WebLocalFrameImpl>(main_frame_.get());
+  MockWebAutofillClient mock_autofill_client;
+  web_frame->SetAutofillClient(&mock_autofill_client);
+
+  LocalFrame* frame = web_frame->GetFrame();
+  Document* document = frame->GetDocument();
+  auto* input =
+      To<HTMLElement>(document->getElementById(AtomicString("input")));
+  auto* form = To<HTMLElement>(document->getElementById(AtomicString("form")));
+  auto* password =
+      To<HTMLInputElement>(document->getElementById(AtomicString("password")));
+
+  chrome_client_impl_->DidChangeFormRelatedElementDynamically(
+      frame, input, WebFormRelatedChangeType::kAdd);
+  EXPECT_EQ(mock_autofill_client.last_form_control_type(),
+            mojom::FormControlType::kInputCheckbox);
+  EXPECT_EQ(mock_autofill_client.last_element(), WebElement(input));
+
+  chrome_client_impl_->DidChangeFormRelatedElementDynamically(
+      frame, form, WebFormRelatedChangeType::kAdd);
+  EXPECT_EQ(mock_autofill_client.last_form_control_type(), std::nullopt);
+  EXPECT_EQ(mock_autofill_client.last_element(), WebElement(form));
+
+  // The client is told FormControlTypeForAutofill(): a text field that was a
+  // password field still counts as one.
+  password->setType(input_type_names::kText);
+  ASSERT_EQ(password->FormControlType(), mojom::FormControlType::kInputText);
+  chrome_client_impl_->DidChangeFormRelatedElementDynamically(
+      frame, password, WebFormRelatedChangeType::kAdd);
+  EXPECT_EQ(mock_autofill_client.last_form_control_type(),
+            mojom::FormControlType::kInputPassword);
+  EXPECT_EQ(mock_autofill_client.last_element(), WebElement(password));
 
   web_frame->SetAutofillClient(nullptr);
 }

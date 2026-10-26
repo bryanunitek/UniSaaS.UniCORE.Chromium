@@ -13,11 +13,11 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_element.h"
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/layer_delegate.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/font.h"
@@ -73,7 +73,7 @@ END_METADATA
 AnimatingSquare::AnimatingSquare(size_t index) : index_(index) {
   SetPaintToLayer();
   layer()->SetFillsBoundsOpaquely(false);
-  layer()->SetFillsBoundsCompletely(false);
+  layer()->AsTextured()->SetFillsBoundsCompletely(false);
 }
 
 void AnimatingSquare::OnPaint(gfx::Canvas* canvas) {
@@ -159,8 +159,9 @@ ProposedLayout SquaresLayoutManager::CalculateProposedLayout(
 }
 
 void SquaresLayoutManager::LayoutImpl() {
-  ProposedLayout proposed_layout = GetProposedLayout(host_view()->size());
-  for (auto child_layout : proposed_layout.child_layouts) {
+  const ProposedLayout& proposed_layout =
+      GetProposedLayout(host_view()->size());
+  for (const auto& child_layout : proposed_layout.child_layouts) {
     bounds_animator_->AnimateViewTo(child_layout.child_view,
                                     child_layout.bounds);
   }

@@ -8,6 +8,7 @@
 #include "base/callback_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/webui/settings/search/mojom/settings_search.mojom.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/user_education/webui/help_bubble_handler.h"
@@ -22,6 +23,7 @@
 #include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
 
 #if !BUILDFLAG(IS_CHROMEOS)
+#include "ui/webui/resources/cr_components/signin/signin.mojom.h"
 #include "ui/webui/resources/cr_components/theme_color_picker/theme_color_picker.mojom.h"
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 #include "ui/webui/resources/js/batch_upload_promo/batch_upload_promo.mojom.h"
@@ -36,10 +38,16 @@ class PrefRegistrySyncable;
 
 #if !BUILDFLAG(IS_CHROMEOS)
 class ThemeColorPickerHandler;
+class SigninUtilsHandler;
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 class BatchUploadPromoHandler;
 
 class CustomizeColorSchemeModeHandler;
+
+namespace settings_search {
+class SettingsSearchHandler;
+}  // namespace settings_search
+
 namespace settings {
 
 class SettingsUI;
@@ -56,16 +64,17 @@ class SettingsUI
     : public ui::MojoWebUIController,
       public help_bubble::mojom::HelpBubbleHandlerFactory,
       public customize_color_scheme_mode::mojom::
-          CustomizeColorSchemeModeHandlerFactory
+          CustomizeColorSchemeModeHandlerFactory,
+      public settings_search::mojom::SettingsSearchHandlerFactory
 #if !BUILDFLAG(IS_CHROMEOS)
     ,
       // chrome://settings/manageProfile which only exists on !IS_CHROMEOS
       // requires mojo bindings.
-      public theme_color_picker::mojom::ThemeColorPickerHandlerFactory
+      public theme_color_picker::mojom::ThemeColorPickerHandlerFactory,
+      public signin::mojom::SigninPageHandlerFactory
 #endif  // !BUILDFLAG(IS_CHROMEOS)
     ,
-      public batch_upload_promo::mojom::PageHandlerFactory
-{
+      public batch_upload_promo::mojom::PageHandlerFactory {
  public:
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
@@ -89,6 +98,10 @@ class SettingsUI
   void BindInterface(mojo::PendingReceiver<
                      theme_color_picker::mojom::ThemeColorPickerHandlerFactory>
                          pending_receiver);
+
+  void BindInterface(
+      mojo::PendingReceiver<signin::mojom::SigninPageHandlerFactory>
+          pending_receiver);
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
   // Instantiates the implementor of the
@@ -108,6 +121,12 @@ class SettingsUI
       mojo::PendingReceiver<customize_color_scheme_mode::mojom::
                                 CustomizeColorSchemeModeHandlerFactory>
           pending_receiver);
+
+  // Binds the native settings search handler factory when the feature is
+  // enabled.
+  void BindInterface(mojo::PendingReceiver<
+                     settings_search::mojom::SettingsSearchHandlerFactory>
+                         pending_receiver);
 
  private:
   void AddSettingsPageUIHandler(
@@ -132,6 +151,14 @@ class SettingsUI
   std::unique_ptr<ThemeColorPickerHandler> theme_color_picker_handler_;
   mojo::Receiver<theme_color_picker::mojom::ThemeColorPickerHandlerFactory>
       theme_color_picker_handler_factory_receiver_{this};
+
+  // signin::mojom::SigninPageHandlerFactory:
+  void CreateSigninPageHandler(
+      mojo::PendingReceiver<signin::mojom::SigninPageHandler> handler) override;
+
+  std::unique_ptr<SigninUtilsHandler> signin_handler_;
+  mojo::Receiver<signin::mojom::SigninPageHandlerFactory>
+      signin_handler_factory_receiver_{this};
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
   // batch_upload_promo::mojom::PageHandlerFactory:
@@ -167,6 +194,16 @@ class SettingsUI
   mojo::Receiver<customize_color_scheme_mode::mojom::
                      CustomizeColorSchemeModeHandlerFactory>
       customize_color_scheme_mode_handler_factory_receiver_{this};
+
+  // settings_search::mojom::SettingsSearchHandlerFactory:
+  void CreateSettingsSearchHandler(
+      mojo::PendingReceiver<settings_search::mojom::SettingsSearchHandler>
+          handler) override;
+
+  std::unique_ptr<settings_search::SettingsSearchHandler>
+      settings_search_handler_;
+  mojo::Receiver<settings_search::mojom::SettingsSearchHandlerFactory>
+      settings_search_handler_factory_receiver_{this};
 
   base::CallbackListSubscription glic_settings_state_subscription_;
 

@@ -5,7 +5,7 @@
 #include "chrome/browser/ui/webui_browser/webui_browser_web_contents_delegate.h"
 
 #include "base/logging.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_window.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
 #include "content/public/browser/web_contents.h"
@@ -71,4 +71,16 @@ bool WebUIBrowserWebContentsDelegate::HandleKeyboardEvent(
     content::WebContents* source,
     const input::NativeWebKeyboardEvent& event) {
   return window_->HandleKeyboardEvent(event);
+}
+
+void WebUIBrowserWebContentsDelegate::RequestPointerLock(
+    content::WebContents* web_contents,
+    bool user_gesture,
+    bool last_unlocked_by_target) {
+  BrowserWebContentsDelegate::From(window_->browser())
+      ->RequestPointerLock(web_contents, user_gesture, last_unlocked_by_target);
+}
+
+void WebUIBrowserWebContentsDelegate::LostPointerLock() {
+  BrowserWebContentsDelegate::From(window_->browser())->LostPointerLock();
 }

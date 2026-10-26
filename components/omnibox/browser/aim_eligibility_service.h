@@ -17,6 +17,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/timer/timer.h"
+#include "components/contextual_tasks/public/host_override.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/omnibox/browser/aim_eligibility_service_features.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -116,6 +117,10 @@ class AimEligibilityService
     // The value for the `Sec-CH-UA-Full-Version-List` HTTP Header. The header
     // is skipped if it is empty.
     std::string full_version_list;
+
+    // The value for the `Chrome-Search-Capabilities-Version` HTTP Header. The
+    // header is skipped if it is empty.
+    std::string search_capabilities_version;
   };
 
   // Returns the current server eligibility request mode based on the feature
@@ -207,15 +212,49 @@ class AimEligibilityService
   // Checks if user is eligible for Canvas in AIM features.
   virtual bool IsCanvasEligible() const;
 
+  // Checks if the user is eligible for Co-Browse in AIM according to server
+  // and feature flag checks, regardless of Contextual Tasks enablement.
+  virtual bool IsCobrowseServerEligible() const;
+
   // Checks if the user is eligible for Co-Browse in AIM features.
   virtual bool IsCobrowseEligible() const;
 
   // Checks if the user is eligible for AIM Fuseboxes.
   virtual bool IsFuseboxEligible() const;
 
-  // Determining whether the provided URL is an AI page based on server-provided
-  // params.
+  // Checks if the user is eligible for Contextual Search Box (CSB).
+  virtual bool IsCsbEligible() const;
+
+  // Returns whether `url` is a valid AIM URL (i.e. would navigate a user to the
+  // AIM feature). All of the host, path, and URL params are checked to
+  // determine this. This method does not incorporate checks for params that
+  // would cause the browser to skip features like cobrowse mode. The
+  // `host_override` param can be used to allow a host that isn't provided by
+  // the eligibility service backend. In practice, this method is primarily used
+  // to determine whether the browser should intercept a navigation and redirect
+  // to an internal page.
+  virtual bool IsAimUrl(
+      const GURL& url,
+      std::optional<contextual_tasks::HostOverride> host_override) const;
+
+  // Returns whether `url` has a host which would qualify it as an AIM URL. This
+  // method alone does not determine whether the URL would actually navigate a
+  // user to AIM, things like path and URL params would also need to be checked.
+  virtual bool IsAimHost(
+      const GURL& url,
+      std::optional<contextual_tasks::HostOverride> host_override) const;
+
+  // Returns whether `url` has the collection of URL params that qualify it as
+  // an AIM URL. This method alone does not determine whether the URL would
+  // actually navigate a user to AIM, things like host and path would still need
+  // to be checked. This is mainly a helper for `IsAimUrl()` above.
   virtual bool HasAimUrlParams(const GURL& url) const;
+
+  // Returns whether `url` has params that should prevent it from being
+  // intercepted and entering cobrowsing mode. This does not check that the
+  // provided `url` is an AIM URL, only whether specific URL params are
+  // present.
+  virtual bool HasNoCobrowseParams(const GURL& url) const;
 
   // Returns the most recent eligibility response proto.
   virtual const omnibox::AimEligibilityResponse& GetMostRecentResponse() const;
@@ -340,6 +379,12 @@ class AimEligibilityService
   // Callback for when the AIM policy changes.
   void OnPolicyChanged();
 
+  // Returns whether `url` has a path component which would qualify it as an AIM
+  // URL. This method alone does not determine whether the URL would actually
+  // navigate a user to AIM, things like host and URL params would still need to
+  // be checked. This is primarily a helper for `IsAimUrl()` above.
+  bool IsAimPath(const GURL& url) const;
+
  protected:
   // Callback for when the eligibility response changes. Notifies observers.
   void OnEligibilityResponseChanged();
@@ -371,6 +416,10 @@ class AimEligibilityService
 
   // Returns true if the request should be dropped.
   bool ShouldDropRequest() const;
+
+  // Returns true if the manual override is active and has not expired.
+  // Clears the override if it has expired.
+  bool IsManualOverrideActive();
 
   // Queues a request if the last active account changed.
   void ScheduleServerEligibilityRequestIfNeeded(RequestSource source);

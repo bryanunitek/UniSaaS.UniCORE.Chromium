@@ -191,7 +191,7 @@ public class AccountManagerFacadeImpl implements AccountManagerFacade {
 
         getAccounts()
                 .then(
-                        unused -> {
+                        _ -> {
                             getAccessTokenHelper(coreAccountInfo, scope, callback);
                         });
     }
@@ -328,7 +328,7 @@ public class AccountManagerFacadeImpl implements AccountManagerFacade {
         // Wait for list of accounts to be available before checking capabilities.
         getAccounts()
                 .then(
-                        unused -> {
+                        _ -> {
                             checkIsSubjectToParentalControlsHelper(coreAccountInfo, listener);
                         });
     }
@@ -401,7 +401,7 @@ public class AccountManagerFacadeImpl implements AccountManagerFacade {
 
         getAccounts()
                 .then(
-                        unused -> {
+                        _ -> {
                             fetchCapabilitiesHelper(coreAccountInfo, accountCapabilitiesPromise);
                         });
         return accountCapabilitiesPromise;
@@ -812,7 +812,13 @@ public class AccountManagerFacadeImpl implements AccountManagerFacade {
                 if (isCancelled()) {
                     return null;
                 }
-                final GaiaId gaiaId = mDelegate.getAccountGaiaId(email);
+                final GaiaId gaiaId;
+                try {
+                    gaiaId = mDelegate.getAccountGaiaId(email);
+                } catch (OutOfMemoryError e) {
+                    // https://crbug.com/540644097
+                    return null;
+                }
                 if (gaiaId == null) {
                     // TODO(crbug.com/40275966): Add metrics to check how often we get a
                     // null gaiaId.

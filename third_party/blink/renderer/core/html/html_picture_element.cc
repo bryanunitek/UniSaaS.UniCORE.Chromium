@@ -12,24 +12,21 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/loader/image_loader.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
 HTMLPictureElement::HTMLPictureElement(Document& document)
     : HTMLElement(html_names::kPictureTag, document) {}
 
-void HTMLPictureElement::SourceChanged(
-    ImageSourceChangeType change_type,
-    HTMLImageElement::ShouldResetImageReplacement
-        should_reset_image_replacement) {
+void HTMLPictureElement::SourceChanged(ImageSourceChangeType change_type) {
   ImageLoader::UpdateFromElementBehavior update_behavior =
       change_type == ImageSourceChangeType::kMedia
           ? ImageLoader::kUpdateSizeChanged
           : ImageLoader::kUpdateNormal;
   for (HTMLImageElement& image_element :
        Traversal<HTMLImageElement>::ChildrenOf(*this)) {
-    image_element.SelectSourceURL(update_behavior,
-                                  should_reset_image_replacement);
+    image_element.SelectSourceURL(update_behavior);
   }
 }
 
@@ -37,6 +34,14 @@ void HTMLPictureElement::SourceDimensionChanged() {
   for (HTMLImageElement& image_element :
        Traversal<HTMLImageElement>::ChildrenOf(*this)) {
     image_element.InvalidateAttributeMapping();
+    // A previous sibling source's width or height attribute affects the
+    // dimension attribute aspect ratio used for source selection, so changing
+    // it is a relevant mutation:
+    // https://html.spec.whatwg.org/#relevant-mutations
+    if (RuntimeEnabledFeatures::SrcsetTwoDimensionalSizesEnabled() &&
+        !image_element.ImageSourceURL().empty()) {
+      image_element.SelectSourceURL(ImageLoader::kUpdateSizeChanged);
+    }
   }
 }
 

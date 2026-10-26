@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.about_settings;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.util.AttributeSet;
@@ -14,6 +16,7 @@ import org.chromium.base.ContextUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.customtabs.CustomTabActivity;
+import org.chromium.components.browser_ui.settings.SettingsUtils;
 import org.chromium.ui.base.LocalizationUtils;
 
 /** A preference that navigates to an URL. */
@@ -23,6 +26,7 @@ public class HyperlinkPreference extends Preference {
 
     public HyperlinkPreference(Context context, AttributeSet attrs) {
         super(context, attrs);
+        SettingsUtils.initializePreferenceDefaults(context, attrs, this);
         TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.HyperlinkPreference, 0, 0);
         mUrlResId = a.getResourceId(R.styleable.HyperlinkPreference_url, 0);
         a.recycle();
@@ -31,8 +35,9 @@ public class HyperlinkPreference extends Preference {
 
     @Override
     protected void onClick() {
+        var activity = assertNonNull(ContextUtils.activityFromContext(getContext()));
         CustomTabActivity.showInfoPage(
-                ContextUtils.activityFromContext(getContext()),
+                activity,
                 LocalizationUtils.substituteLocalePlaceholder(getContext().getString(mUrlResId)));
     }
 }

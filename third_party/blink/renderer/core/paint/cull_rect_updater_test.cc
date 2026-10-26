@@ -1188,7 +1188,7 @@ TEST_F(CullRectUpdateOnPaintPropertyChangeTest,
 }
 
 TEST_F(CullRectUpdaterTest, OverscrollAreaCullRect) {
-  ScopedOverscrollGesturesForTest overscroll_gestures(true);
+  ScopedOverscrollAreasForTest overscroll_areas(true);
   SetBodyInnerHTML(R"HTML(
     <style>
       #container {
@@ -1205,6 +1205,7 @@ TEST_F(CullRectUpdaterTest, OverscrollAreaCullRect) {
       <div id="menu" overscrollarea></div>
       <div style="height: 1000px"></div>
     </div>
+    <button command="toggle-overscroll" commandfor="menu"></button>
   )HTML");
 
   auto* menu = GetElementById("menu");

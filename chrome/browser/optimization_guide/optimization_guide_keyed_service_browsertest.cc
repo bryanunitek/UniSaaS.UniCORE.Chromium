@@ -28,25 +28,28 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/profile_waiter.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
+#include "components/optimization_guide/core/feature_registry/enterprise_policy_registry.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/feature_registry/mqls_feature_registry.h"
 #include "components/optimization_guide/core/filters/optimization_hints_component_update_listener.h"
 #include "components/optimization_guide/core/filters/test_hints_component_creator.h"
 #include "components/optimization_guide/core/hints/command_line_top_host_provider.h"
+#include "components/optimization_guide/core/hints/hints_manager.h"
 #include "components/optimization_guide/core/hints/optimization_guide_store.h"
-#include "components/optimization_guide/core/model_execution/feature_keys.h"
 #include "components/optimization_guide/core/model_execution/model_execution_features.h"
 #include "components/optimization_guide/core/model_execution/model_execution_features_controller.h"
-#include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
-#include "components/optimization_guide/core/model_execution/on_device_model_component.h"
+#include "components/optimization_guide/core/model_quality/model_quality_log_entry.h"
+#include "components/optimization_guide/core/model_quality/model_quality_logs_uploader_service.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_prefs.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
+#include "components/optimization_guide/core/optimization_guide_permissions_util.h"
 #include "components/optimization_guide/proto/hints.pb.h"
 #include "components/optimization_guide/proto/model_quality_service.pb.h"
 #include "components/optimization_guide/public/mojom/model_broker.mojom-shared.h"
@@ -68,6 +71,7 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source.h"
 #include "services/network/public/cpp/network_connection_tracker.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_network_connection_tracker.h"
 #include "services/network/test/test_url_loader_factory.h"
@@ -75,7 +79,6 @@
 
 namespace optimization_guide {
 
-using model_execution::prefs::ModelExecutionEnterprisePolicyValue;
 using ::testing::ElementsAre;
 
 namespace {
@@ -181,7 +184,13 @@ class OptimizationGuideKeyedServiceDisabledBrowserTest
     : public InProcessBrowserTest {
  public:
   OptimizationGuideKeyedServiceDisabledBrowserTest() {
-    feature_list_.InitWithFeatures({}, {features::kOptimizationHints});
+    feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove the two omnibox features below.
+        /*disabled_features=*/
+        {features::kOptimizationHints, omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
   }
 
  private:
@@ -211,9 +220,13 @@ class OptimizationGuideKeyedServiceBrowserTest
           {
               {"on_device_startup_metric_delay", "0"},
           }}},
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove the two omnibox features below.
         /*disabled_features=*/
         {features::internal::kWallpaperSearchGraduated,
-         features::internal::kComposeGraduated});
+         features::internal::kComposeGraduated,
+         omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
   }
 
   OptimizationGuideKeyedServiceBrowserTest(
@@ -224,7 +237,7 @@ class OptimizationGuideKeyedServiceBrowserTest
   ~OptimizationGuideKeyedServiceBrowserTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* cmd) override {
-    cmd->AppendSwitch(switches::kPurgeHintsStore);
+    cmd->AppendSwitch(kPurgeHintsStoreSwitch);
   }
 
   void SetUp() override {
@@ -284,7 +297,7 @@ class OptimizationGuideKeyedServiceBrowserTest
 
     // Set up an OptimizationGuideKeyedService consumer.
     consumer_ = std::make_unique<OptimizationGuideConsumerWebContentsObserver>(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
   }
 
   void CanApplyOptimizationOnDemand(
@@ -346,7 +359,7 @@ class OptimizationGuideKeyedServiceBrowserTest
   }
 
   OptimizationGuideKeyedService* service() {
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     return OptimizationGuideKeyedServiceFactory::GetForProfile(profile);
   }
 
@@ -402,14 +415,14 @@ class OptimizationGuideKeyedServiceBrowserTest
     // feature.
     EnableSignIn();
 
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetInteger(prefs::GetSettingEnabledPrefName(feature),
                       static_cast<int>(prefs::FeatureOptInState::kEnabled));
     base::RunLoop().RunUntilIdle();
   }
 
   void SetEnterprisePolicy(const std::string& key,
-                           ModelExecutionEnterprisePolicyValue value) {
+                           EnterprisePolicyValue value) {
     // Enable logging via the enterprise policy.
     policies_.Set(key, policy::POLICY_LEVEL_MANDATORY,
                   policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
@@ -497,18 +510,6 @@ class DogfoodOptimizationGuideKeyedServiceBrowserTest
   }
 };
 
-class OptimizationGuideKeyedServiceOnDeviceModelDisabledBrowserTest
-    : public OptimizationGuideKeyedServiceBrowserTest {
- public:
-  OptimizationGuideKeyedServiceOnDeviceModelDisabledBrowserTest() {
-    feature_list_.InitWithFeatures({},
-                                   {features::kOptimizationGuideOnDeviceModel,
-                                    features::kLogOnDeviceMetricsOnStartup});
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
 
 IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
                        RemoteFetchingDisabled) {
@@ -639,7 +640,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
             last_can_apply_optimization_decision());
 
   // Make sure metrics get recorded when tab is hidden.
-  browser()->tab_strip_model()->GetActiveWebContents()->WasHidden();
+  browser()->GetTabStripModel()->GetActiveWebContents()->WasHidden();
 
   // Expect that the optimization guide UKM is recorded.
   auto entries = ukm_recorder.GetEntriesByName(
@@ -827,7 +828,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   // in progress.
   run_loop = std::make_unique<base::RunLoop>();
   OptimizationGuideNewApiConsumerWebContentsObserver observer(
-      browser()->tab_strip_model()->GetActiveWebContents(),
+      browser()->GetTabStripModel()->GetActiveWebContents(),
       base::BindOnce(
           [](base::RunLoop* run_loop, OptimizationGuideDecision decision,
              const OptimizationMetadata& metadata) {
@@ -929,7 +930,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   // Visibility of compose is enabled via finch.
   EXPECT_TRUE(IsSettingVisible(UserVisibleFeatureKey::kCompose));
 
-  auto* prefs = browser()->profile()->GetPrefs();
+  auto* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetInteger(
       prefs::GetSettingEnabledPrefName(UserVisibleFeatureKey::kWallpaperSearch),
       static_cast<int>(prefs::FeatureOptInState::kEnabled));
@@ -972,7 +973,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   EXPECT_FALSE(ogks->ShouldFeatureBeCurrentlyEnabledForUser(
       UserVisibleFeatureKey::kCompose));
 
-  auto* prefs = browser()->profile()->GetPrefs();
+  auto* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetInteger(
       prefs::GetSettingEnabledPrefName(UserVisibleFeatureKey::kWallpaperSearch),
       static_cast<int>(prefs::FeatureOptInState::kEnabled));
@@ -1024,7 +1025,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   EXPECT_FALSE(ogks->ShouldFeatureBeCurrentlyEnabledForUser(
       UserVisibleFeatureKey::kCompose));
 
-  auto* prefs = browser()->profile()->GetPrefs();
+  auto* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetInteger(
       prefs::GetSettingEnabledPrefName(UserVisibleFeatureKey::kWallpaperSearch),
       static_cast<int>(prefs::FeatureOptInState::kEnabled));
@@ -1060,7 +1061,8 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
 
   // Set up incognito browser and incognito OptimizationGuideKeyedService
   // consumer.
-  Browser* otr_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* otr_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   EXPECT_TRUE(otr_browser);
 
   // Instantiate off the record Optimization Guide Service.
@@ -1069,7 +1071,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
           browser()->GetProfile()->GetPrimaryOTRProfile(
               /*create_if_needed=*/true));
 
-  auto* prefs = browser()->profile()->GetPrefs();
+  auto* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetInteger(
       prefs::GetSettingEnabledPrefName(UserVisibleFeatureKey::kWallpaperSearch),
       static_cast<int>(prefs::FeatureOptInState::kEnabled));
@@ -1082,7 +1084,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
 // CreateGuestBrowser() is not supported for Android or ChromeOS out of the box.
 IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
                        GuestProfileUniqueKeyedService) {
-  Browser* guest_browser = CreateGuestBrowser();
+  BrowserWindowInterface* guest_browser = CreateGuestBrowser();
   OptimizationGuideKeyedService* guest_ogks =
       OptimizationGuideKeyedServiceFactory::GetForProfile(
           guest_browser->GetProfile());
@@ -1094,7 +1096,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   EXPECT_TRUE(ogks);
   EXPECT_NE(guest_ogks, ogks);
 
-  auto* prefs = browser()->profile()->GetPrefs();
+  auto* prefs = browser()->GetProfile()->GetPrefs();
   auto* guest_prefs = guest_browser->GetProfile()->GetPrefs();
 
   EnableSignIn();
@@ -1168,11 +1170,11 @@ class OptimizationGuideKeyedServicePermissionsCheckDisabledTest
   void SetUpCommandLine(base::CommandLine* cmd) override {
     OptimizationGuideKeyedServiceBrowserTest::SetUpCommandLine(cmd);
 
-    cmd->AppendSwitch(switches::kDisableCheckingUserPermissionsForTesting);
+    cmd->AppendSwitch(kDisableCheckingUserPermissionsForTestingSwitch);
 
     // Add switch to avoid racing navigations in the test.
     cmd->AppendSwitch(
-        switches::kDisableFetchingHintsAtNavigationStartForTesting);
+        kDisableFetchingHintsAtNavigationStartForTestingSwitch);
   }
 };
 
@@ -1198,7 +1200,8 @@ IN_PROC_BROWSER_TEST_F(
 
   // Set up incognito browser and incognito OptimizationGuideKeyedService
   // consumer.
-  Browser* otr_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* otr_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
 
   // Instantiate off the record Optimization Guide Service.
   OptimizationGuideKeyedService* otr_ogks =
@@ -1285,7 +1288,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
                        CheckUploadWithoutMetricsConsent) {
-  auto* profile = browser()->profile();
+  auto* profile = browser()->GetProfile();
   OptimizationGuideKeyedService* ogks =
       OptimizationGuideKeyedServiceFactory::GetForProfile(profile);
 
@@ -1341,7 +1344,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   SetMetricsConsent(true);
   EnableSignIn();
 
-  auto* profile = browser()->profile();
+  auto* profile = browser()->GetProfile();
   OptimizationGuideKeyedService* ogks =
       OptimizationGuideKeyedServiceFactory::GetForProfile(profile);
   auto compose_feature = UserVisibleFeatureKey::kCompose;
@@ -1353,13 +1356,12 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   policy::PolicyMap policies;
 
   // Disable logging via the enterprise policy to state kAllowWithoutLogging.
-  policies.Set(policy::key::kHelpMeWriteSettings,
-               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
-               policy::POLICY_SOURCE_CLOUD,
-               base::Value(static_cast<int>(
-                   model_execution::prefs::ModelExecutionEnterprisePolicyValue::
-                       kAllowWithoutLogging)),
-               nullptr);
+  policies.Set(
+      policy::key::kHelpMeWriteSettings, policy::POLICY_LEVEL_MANDATORY,
+      policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
+      base::Value(
+          static_cast<int>(EnterprisePolicyValue::kAllowWithoutLogging)),
+      nullptr);
   policy_provider_.UpdateChromePolicy(policies);
   base::RunLoop().RunUntilIdle();
 
@@ -1373,13 +1375,10 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   ModelQualityLogEntry::Upload(GetModelQualityLogEntryForCompose());
 
   // Disable logging via via the enterprise policy to kDisable state.
-  policies.Set(policy::key::kHelpMeWriteSettings,
-               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
-               policy::POLICY_SOURCE_CLOUD,
-               base::Value(static_cast<int>(
-                   model_execution::prefs::ModelExecutionEnterprisePolicyValue::
-                       kDisable)),
-               nullptr);
+  policies.Set(
+      policy::key::kHelpMeWriteSettings, policy::POLICY_LEVEL_MANDATORY,
+      policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
+      base::Value(static_cast<int>(EnterprisePolicyValue::kDisable)), nullptr);
   policy_provider_.UpdateChromePolicy(policies);
   base::RunLoop().RunUntilIdle();
 
@@ -1394,9 +1393,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   policies.Set(
       policy::key::kHelpMeWriteSettings, policy::POLICY_LEVEL_MANDATORY,
       policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
-      base::Value(static_cast<int>(
-          model_execution::prefs::ModelExecutionEnterprisePolicyValue::kAllow)),
-      nullptr);
+      base::Value(static_cast<int>(EnterprisePolicyValue::kAllow)), nullptr);
   policy_provider_.UpdateChromePolicy(policies);
   prefs->SetInteger(prefs::GetSettingEnabledPrefName(compose_feature),
                     static_cast<int>(prefs::FeatureOptInState::kEnabled));
@@ -1427,7 +1424,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   SetMetricsConsent(true);
   EnableSignIn();
 
-  auto* profile = browser()->profile();
+  auto* profile = browser()->GetProfile();
   OptimizationGuideKeyedService* ogks =
       OptimizationGuideKeyedServiceFactory::GetForProfile(profile);
   auto compose_feature = UserVisibleFeatureKey::kCompose;
@@ -1441,13 +1438,12 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   // Disable logging via via the enterprise policy to state
   // kAllowWithoutLogging this should return
   // ChromeModelQualityLogsUploaderService::CanUploadLogs to false.
-  policies.Set(policy::key::kHelpMeWriteSettings,
-               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
-               policy::POLICY_SOURCE_CLOUD,
-               base::Value(static_cast<int>(
-                   model_execution::prefs::ModelExecutionEnterprisePolicyValue::
-                       kAllowWithoutLogging)),
-               nullptr);
+  policies.Set(
+      policy::key::kHelpMeWriteSettings, policy::POLICY_LEVEL_MANDATORY,
+      policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
+      base::Value(
+          static_cast<int>(EnterprisePolicyValue::kAllowWithoutLogging)),
+      nullptr);
   policy_provider_.UpdateChromePolicy(policies);
   base::RunLoop().RunUntilIdle();
 
@@ -1462,13 +1458,10 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
 
   // Disable logging via the enterprise policy to kDisable state this should
   // return ChromeModelQualityLogsUploaderService::CanUploadLogs to false.
-  policies.Set(policy::key::kHelpMeWriteSettings,
-               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
-               policy::POLICY_SOURCE_CLOUD,
-               base::Value(static_cast<int>(
-                   model_execution::prefs::ModelExecutionEnterprisePolicyValue::
-                       kDisable)),
-               nullptr);
+  policies.Set(
+      policy::key::kHelpMeWriteSettings, policy::POLICY_LEVEL_MANDATORY,
+      policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
+      base::Value(static_cast<int>(EnterprisePolicyValue::kDisable)), nullptr);
   policy_provider_.UpdateChromePolicy(policies);
   base::RunLoop().RunUntilIdle();
 
@@ -1484,9 +1477,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   policies.Set(
       policy::key::kHelpMeWriteSettings, policy::POLICY_LEVEL_MANDATORY,
       policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
-      base::Value(static_cast<int>(
-          model_execution::prefs::ModelExecutionEnterprisePolicyValue::kAllow)),
-      nullptr);
+      base::Value(static_cast<int>(EnterprisePolicyValue::kAllow)), nullptr);
   policy_provider_.UpdateChromePolicy(policies);
   prefs->SetInteger(prefs::GetSettingEnabledPrefName(compose_feature),
                     static_cast<int>(prefs::FeatureOptInState::kEnabled));
@@ -1512,9 +1503,8 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
                        LoggingDisabledByEnterprisePolicy_NonDogfood_NoSwitch) {
   auto compose_feature = UserVisibleFeatureKey::kCompose;
   EnableFeature(compose_feature);
-  SetEnterprisePolicy(
-      policy::key::kHelpMeWriteSettings,
-      ModelExecutionEnterprisePolicyValue::kAllowWithoutLogging);
+  SetEnterprisePolicy(policy::key::kHelpMeWriteSettings,
+                      EnterprisePolicyValue::kAllowWithoutLogging);
 
   const MqlsFeatureMetadata* metadata =
       MqlsFeatureRegistry::GetInstance().GetFeature(
@@ -1528,11 +1518,10 @@ IN_PROC_BROWSER_TEST_F(
     LoggingDisabledByEnterprisePolicy_NonDogfood_WithSwitch) {
   auto compose_feature = UserVisibleFeatureKey::kCompose;
   EnableFeature(compose_feature);
-  SetEnterprisePolicy(
-      policy::key::kHelpMeWriteSettings,
-      ModelExecutionEnterprisePolicyValue::kAllowWithoutLogging);
+  SetEnterprisePolicy(policy::key::kHelpMeWriteSettings,
+                      EnterprisePolicyValue::kAllowWithoutLogging);
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableModelQualityDogfoodLogging);
+      kEnableModelQualityDogfoodLoggingSwitch);
 
   const MqlsFeatureMetadata* metadata =
       MqlsFeatureRegistry::GetInstance().GetFeature(
@@ -1545,9 +1534,8 @@ IN_PROC_BROWSER_TEST_F(DogfoodOptimizationGuideKeyedServiceBrowserTest,
                        LoggingDisabledByEnterprisePolicy_Dogfood_NoSwitch) {
   auto compose_feature = UserVisibleFeatureKey::kCompose;
   EnableFeature(compose_feature);
-  SetEnterprisePolicy(
-      policy::key::kHelpMeWriteSettings,
-      ModelExecutionEnterprisePolicyValue::kAllowWithoutLogging);
+  SetEnterprisePolicy(policy::key::kHelpMeWriteSettings,
+                      EnterprisePolicyValue::kAllowWithoutLogging);
 
   const MqlsFeatureMetadata* metadata =
       MqlsFeatureRegistry::GetInstance().GetFeature(
@@ -1560,11 +1548,10 @@ IN_PROC_BROWSER_TEST_F(DogfoodOptimizationGuideKeyedServiceBrowserTest,
                        LoggingDisabledByEnterprisePolicy_Dogfood_WithSwitch) {
   auto compose_feature = UserVisibleFeatureKey::kCompose;
   EnableFeature(compose_feature);
-  SetEnterprisePolicy(
-      policy::key::kHelpMeWriteSettings,
-      ModelExecutionEnterprisePolicyValue::kAllowWithoutLogging);
+  SetEnterprisePolicy(policy::key::kHelpMeWriteSettings,
+                      EnterprisePolicyValue::kAllowWithoutLogging);
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableModelQualityDogfoodLogging);
+      kEnableModelQualityDogfoodLoggingSwitch);
 
   const MqlsFeatureMetadata* metadata =
       MqlsFeatureRegistry::GetInstance().GetFeature(
@@ -1578,7 +1565,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   auto compose_feature = UserVisibleFeatureKey::kCompose;
   EnableFeature(compose_feature);
   SetEnterprisePolicy(policy::key::kHelpMeWriteSettings,
-                      ModelExecutionEnterprisePolicyValue::kAllow);
+                      EnterprisePolicyValue::kAllow);
 
   EXPECT_TRUE(service()->ShouldFeatureBeCurrentlyAllowedForFeedback(
       proto::LogAiDataRequest::FeatureCase::kCompose));
@@ -1588,9 +1575,8 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
                        FeedbackIsDisabledWhenLoggingIsDisabled_NotDogfood) {
   auto compose_feature = UserVisibleFeatureKey::kCompose;
   EnableFeature(compose_feature);
-  SetEnterprisePolicy(
-      policy::key::kHelpMeWriteSettings,
-      ModelExecutionEnterprisePolicyValue::kAllowWithoutLogging);
+  SetEnterprisePolicy(policy::key::kHelpMeWriteSettings,
+                      EnterprisePolicyValue::kAllowWithoutLogging);
   SetIsDogfoodClient(false);
 
   EXPECT_FALSE(service()->ShouldFeatureBeCurrentlyAllowedForFeedback(
@@ -1601,9 +1587,8 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
                        FeedbackIsEnabledWhenLoggingIsDisabled_Dogfood) {
   auto compose_feature = UserVisibleFeatureKey::kCompose;
   EnableFeature(compose_feature);
-  SetEnterprisePolicy(
-      policy::key::kHelpMeWriteSettings,
-      ModelExecutionEnterprisePolicyValue::kAllowWithoutLogging);
+  SetEnterprisePolicy(policy::key::kHelpMeWriteSettings,
+                      EnterprisePolicyValue::kAllowWithoutLogging);
   SetIsDogfoodClient(true);
 
   EXPECT_TRUE(service()->ShouldFeatureBeCurrentlyAllowedForFeedback(
@@ -1616,7 +1601,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   SetMetricsConsent(true);
   EnableSignIn();
 
-  auto* profile = browser()->profile();
+  auto* profile = browser()->GetProfile();
   OptimizationGuideKeyedService* ogks =
       OptimizationGuideKeyedServiceFactory::GetForProfile(profile);
   auto compose_feature = UserVisibleFeatureKey::kCompose;
@@ -1629,9 +1614,7 @@ IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
   policies.Set(
       policy::key::kHelpMeWriteSettings, policy::POLICY_LEVEL_MANDATORY,
       policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
-      base::Value(static_cast<int>(
-          model_execution::prefs::ModelExecutionEnterprisePolicyValue::kAllow)),
-      nullptr);
+      base::Value(static_cast<int>(EnterprisePolicyValue::kAllow)), nullptr);
   policy_provider_.UpdateChromePolicy(policies);
   prefs->SetInteger(prefs::GetSettingEnabledPrefName(compose_feature),
                     static_cast<int>(prefs::FeatureOptInState::kEnabled));

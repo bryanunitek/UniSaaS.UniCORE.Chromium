@@ -127,18 +127,18 @@ class ModelError {
     kNigoriInvalidPassphraseTransition = 104,
     kNigoriInvalidSpecifics = 105,
     kNigoriMissingKeystoreKeysDuringInitialSync = 106,
-    kNigoriMissingLastTrustedVaultKeyInKeybag = 107,
+    kNigoriMissingLastDefaultKeyInKeybag = 107,
     kNigoriMissingNewDefaultKeyInKeybag = 108,
-    kPlusAddressAddOrUpdateProfileFailed = 121,
-    kPlusAddressClearProfilesFailed = 122,
-    kPlusAddressDatabaseInitFailed = 123,
-    kPlusAddressMetadataReadFailed = 124,
-    kPlusAddressRemoveProfileFailed = 125,
-    kPlusAddressSettingFailedToParseSpecifics = 126,
-    kPlusAddressTransactionBeginFailedOnDisableSync = 127,
-    kPlusAddressTransactionBeginFailedOnIncrementalSync = 128,
-    kPlusAddressTransactionCommitFailedOnDisableSync = 129,
-    kPlusAddressTransactionCommitFailedOnIncrementalSync = 130,
+    // kPlusAddressAddOrUpdateProfileFailed = 121, // Deprecated.
+    // kPlusAddressClearProfilesFailed = 122, // Deprecated.
+    // kPlusAddressDatabaseInitFailed = 123, // Deprecated.
+    // kPlusAddressMetadataReadFailed = 124, // Deprecated.
+    // kPlusAddressRemoveProfileFailed = 125, // Deprecated.
+    // kPlusAddressSettingFailedToParseSpecifics = 126, // Deprecated.
+    // kPlusAddressTransactionBeginFailedOnDisableSync = 127, // Deprecated.
+    // kPlusAddressTransactionBeginFailedOnIncrementalSync = 128, // Deprecated.
+    // kPlusAddressTransactionCommitFailedOnDisableSync = 129, // Deprecated.
+    // kPlusAddressTransactionCommitFailedOnIncrementalSync = 130, // Deprecated.
     // kPowerBookmarkDatabaseCommitFailed = 131,  // Deprecated.
     // kPowerBookmarkDatabaseInitFailed = 132,  // Deprecated.
     // kPowerBookmarkFailedToBeginTransaction = 133,  // Deprecated.
@@ -200,7 +200,11 @@ class ModelError {
     kAutofillValuableMetadataFailedToLoadMetadata = 190,
     kDataTypeControllerInFailedState = 191,
     kBookmarksLocalCountExceededLimitAfterInitialMerge = 192,
-    kMaxValue = kBookmarksLocalCountExceededLimitAfterInitialMerge,
+    kTabContextContainerFailedToDeserializeSpecifics = 193,
+    kJourneysFailedToLoadMetadata = 194,
+    kJourneysDatabaseError = 195,
+    kAutofillEntitySuppressionEncryptionUnavailable = 196,
+    kMaxValue = kAutofillEntitySuppressionEncryptionUnavailable,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/sync/enums.xml:SyncModelError)
 

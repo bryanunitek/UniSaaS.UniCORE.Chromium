@@ -3,10 +3,9 @@
 # found in the LICENSE file.
 
 import os
-import re
 import time
 
-from absl import app, flags
+from absl import app
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from pywinauto.application import Application
@@ -15,12 +14,20 @@ from pywinauto.findwindows import ElementNotFoundError
 from test_util import create_chrome_webdriver
 
 encrypted_file_url = "https://storage.googleapis.com/testfiles-webprotect/malware_file_encrypted.zip"
-large_file_url = "https://storage.googleapis.com/testfiles-webprotect/large_file.bin"
-unknown_malware_url = "https://storage.googleapis.com/testfiles-webprotect/malware_file.zip"
+large_file_url = (
+  "https://storage.googleapis.com/testfiles-webprotect/large_file.bin"
+)
+unknown_malware_url = (
+  "https://storage.googleapis.com/testfiles-webprotect/malware_file.zip"
+)
 
 encrypted_block_text = ".* is\nencrypted\. Ask its owner to decrypt\."
-large_block_text = ".* is too big for a security\ncheck\. You can open files up to 50 MB\."
-unknown_malware_block_text = "Checking .* with your\norganization's security policies"
+large_block_text = (
+  ".* is too big for a security\ncheck\. You can open files up to 50 MB\."
+)
+unknown_malware_block_text = (
+  "Checking .* with your\norganization's security policies"
+)
 
 
 def download_file_from_url(driver, url, regex, wait, type, message):
@@ -29,8 +36,7 @@ def download_file_from_url(driver, url, regex, wait, type, message):
   try:
     app = Application(backend="uia")
     app.connect(title_re='.*Chrome|.*Chromium')
-    app.top_window() \
-        .child_window(title_re=regex, control_type=type)
+    app.top_window().child_window(title_re=regex, control_type=type)
     print(message)
   except ElementNotFoundError as error:
     print(error)
@@ -54,13 +60,25 @@ def main(argv):
   driver.get(policy_url)
   driver.find_element(By.ID, 'reload-policies').click
 
-  download_file_from_url(driver, encrypted_file_url, encrypted_block_text, 30,
-                         "Button", "Encrypted blocked")
-  download_file_from_url(driver, large_file_url, large_block_text, 30, "Button",
-                         "Large file blocked")
-  download_file_from_url(driver, unknown_malware_url,
-                         unknown_malware_block_text, 2, "Text",
-                         "Unknown malware scanning")
+  download_file_from_url(
+    driver,
+    encrypted_file_url,
+    encrypted_block_text,
+    30,
+    "Button",
+    "Encrypted blocked",
+  )
+  download_file_from_url(
+    driver, large_file_url, large_block_text, 30, "Button", "Large file blocked"
+  )
+  download_file_from_url(
+    driver,
+    unknown_malware_url,
+    unknown_malware_block_text,
+    2,
+    "Text",
+    "Unknown malware scanning",
+  )
 
   driver.quit()
 

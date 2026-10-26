@@ -4,21 +4,21 @@
 
 #include "chrome/browser/ui/webui/webui_toolbar/utils/toolbar_button_utils.h"
 
+#include <array>
+
+#include "base/notreached.h"
 #include "build/branding_buildflags.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/page_action/action_ids.h"
+#include "chrome/browser/ui/page_info/about_this_site_icon.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_ids.h"
-#include "chrome/common/pref_names.h"
 #include "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api_data_model.mojom.h"
-#include "components/prefs/pref_service.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/actions/actions.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/views/vector_icons.h"
 
 namespace webui_toolbar {
 
@@ -30,14 +30,17 @@ DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarPrintElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarQrCodeGeneratorElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarRouteMediaElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowAddressesBubbleOrPageElementId);
-DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowDownloadsElementId);
+DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowAiOverlayDialogElementId);
+DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowChromeLabsElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowPasswordsBubbleOrPageElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowPaymentsBubbleOrPageElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowTranslateElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowAboutThisSiteElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowContextualTasksElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowCustomizeChromeElementId);
+DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowGlicElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowHistoryClusterElementId);
+DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowHistoryElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowLensElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowMerchantTrustElementId);
 DECLARE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowReadAnythingElementId);
@@ -55,14 +58,17 @@ DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarPrintElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarQrCodeGeneratorElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarRouteMediaElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowAddressesBubbleOrPageElementId);
-DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowDownloadsElementId);
+DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowAiOverlayDialogElementId);
+DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowChromeLabsElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowPasswordsBubbleOrPageElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowPaymentsBubbleOrPageElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarShowTranslateElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowAboutThisSiteElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowContextualTasksElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowCustomizeChromeElementId);
+DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowGlicElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowHistoryClusterElementId);
+DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowHistoryElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowLensElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowMerchantTrustElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowReadAnythingElementId);
@@ -71,8 +77,10 @@ DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarSidePanelShowShoppingInsightsElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarTabSearchElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kToolbarTaskManagerElementId);
 
-std::vector<ui::ElementIdentifier> GetPinnedToolbarActionElementIds() {
-  return {webui_toolbar::kToolbarClearBrowsingDataElementId,
+base::span<const ui::ElementIdentifier> GetPinnedToolbarActionElementIds() {
+  static constexpr auto kPinnedToolbarActionElementIds =
+      std::to_array<ui::ElementIdentifier>({
+          webui_toolbar::kToolbarClearBrowsingDataElementId,
           webui_toolbar::kToolbarCopyUrlElementId,
           webui_toolbar::kToolbarDevToolsElementId,
           webui_toolbar::kToolbarNewIncognitoWindowElementId,
@@ -80,21 +88,27 @@ std::vector<ui::ElementIdentifier> GetPinnedToolbarActionElementIds() {
           webui_toolbar::kToolbarQrCodeGeneratorElementId,
           webui_toolbar::kToolbarRouteMediaElementId,
           webui_toolbar::kToolbarShowAddressesBubbleOrPageElementId,
-          webui_toolbar::kToolbarShowDownloadsElementId,
+          kToolbarDownloadButtonElementId,
+          webui_toolbar::kToolbarShowAiOverlayDialogElementId,
+          webui_toolbar::kToolbarShowChromeLabsElementId,
           webui_toolbar::kToolbarShowPasswordsBubbleOrPageElementId,
           webui_toolbar::kToolbarShowPaymentsBubbleOrPageElementId,
           webui_toolbar::kToolbarShowTranslateElementId,
           webui_toolbar::kToolbarSidePanelShowAboutThisSiteElementId,
           webui_toolbar::kToolbarSidePanelShowContextualTasksElementId,
           webui_toolbar::kToolbarSidePanelShowCustomizeChromeElementId,
+          webui_toolbar::kToolbarSidePanelShowGlicElementId,
           webui_toolbar::kToolbarSidePanelShowHistoryClusterElementId,
+          webui_toolbar::kToolbarSidePanelShowHistoryElementId,
           webui_toolbar::kToolbarSidePanelShowLensElementId,
           webui_toolbar::kToolbarSidePanelShowMerchantTrustElementId,
           webui_toolbar::kToolbarSidePanelShowReadAnythingElementId,
           webui_toolbar::kToolbarSidePanelShowReadingListElementId,
           webui_toolbar::kToolbarSidePanelShowShoppingInsightsElementId,
           webui_toolbar::kToolbarTabSearchElementId,
-          webui_toolbar::kToolbarTaskManagerElementId};
+          webui_toolbar::kToolbarTaskManagerElementId,
+      });
+  return kPinnedToolbarActionElementIds;
 }
 
 ui::ElementIdentifier ActionIdToElementIdentifier(actions::ActionId action) {
@@ -114,8 +128,6 @@ ui::ElementIdentifier ActionIdToElementIdentifier(actions::ActionId action) {
       return kToolbarSidePanelShowReadingListElementId;
     case kActionSidePanelShowHistoryCluster:
       return kToolbarSidePanelShowHistoryClusterElementId;
-    case kActionShowDownloads:
-      return kToolbarShowDownloadsElementId;
     case kActionClearBrowsingData:
       return kToolbarClearBrowsingDataElementId;
     case kActionPrint:
@@ -148,6 +160,14 @@ ui::ElementIdentifier ActionIdToElementIdentifier(actions::ActionId action) {
       return kToolbarSidePanelShowShoppingInsightsElementId;
     case kActionSidePanelShowMerchantTrust:
       return kToolbarSidePanelShowMerchantTrustElementId;
+    case kActionShowAiOverlayDialog:
+      return kToolbarShowAiOverlayDialogElementId;
+    case kActionSidePanelShowHistory:
+      return kToolbarSidePanelShowHistoryElementId;
+    case kActionShowChromeLabs:
+      return kToolbarShowChromeLabsElementId;
+    case kActionSidePanelShowGlic:
+      return kToolbarSidePanelShowGlicElementId;
     default:
       return ui::ElementIdentifier();
   }
@@ -161,7 +181,7 @@ ActionItemToPinnedToolbarAction(actions::ActionItem* item) {
   if (item->GetImage().IsVectorIcon()) {
     icon = item->GetImage().GetVectorIcon().vector_icon();
   }
-  if (actions::IsActionItemClass<actions::StatefulImageActionItem>(item)) {
+  if (actions::IsActionClass<actions::StatefulImageActionItem>(item)) {
     auto* stateful_item = static_cast<actions::StatefulImageActionItem*>(item);
     if (stateful_item->GetStatefulImage().IsVectorIcon()) {
       icon = stateful_item->GetStatefulImage().GetVectorIcon().vector_icon();
@@ -210,9 +230,14 @@ ActionItemToPinnedToolbarAction(actions::ActionItem* item) {
       return toolbar_ui_api::mojom::PinnedToolbarAction::
           kSidePanelShowHistoryCluster;
     case kActionShowDownloads:
-      CHECK_EQ(icon, &(features::IsRoundedIconsEnabled()
-                           ? kDownloadIcon
-                           : kDownloadToolbarButtonChromeRefreshOldIcon));
+      // DownloadToolbarUIController::UpdateIcon() switches between these
+      // depending on download progress and touch mode.
+      CHECK(features::IsRoundedIconsEnabled()
+                ? (icon == &kDownloadIcon || icon == &kArrowDownwardAltIcon)
+                : (icon == &kDownloadToolbarButtonChromeRefreshOldIcon ||
+                   icon == &kDownloadInProgressChromeRefreshOldIcon ||
+                   icon == &kDownloadToolbarButtonTouchOldIcon ||
+                   icon == &kDownloadInProgressTouchOldIcon));
       return toolbar_ui_api::mojom::PinnedToolbarAction::kShowDownloads;
     case kActionClearBrowsingData:
       CHECK_EQ(icon,
@@ -269,7 +294,7 @@ ActionItemToPinnedToolbarAction(actions::ActionItem* item) {
           kSidePanelShowReadAnything;
     case kActionCopyUrl:
       CHECK_EQ(icon, &(features::IsRoundedIconsEnabled()
-                           ? kLinkIcon
+                           ? vector_icons::kLinkIcon
                            : kLinkChromeRefreshOldIcon));
       return toolbar_ui_api::mojom::PinnedToolbarAction::kCopyUrl;
     case kActionSendTabToSelf:
@@ -278,9 +303,7 @@ ActionItemToPinnedToolbarAction(actions::ActionItem* item) {
                            : kDevicesChromeRefreshOldIcon));
       return toolbar_ui_api::mojom::PinnedToolbarAction::kSendTabToSelf;
     case kActionTaskManager:
-      CHECK_EQ(icon,
-               &(features::IsRoundedIconsEnabled() ? kTableChartIcon
-                                                   : kTaskManagerOldIcon));
+      CHECK_EQ(icon, &vector_icons::kTableChartIcon);
       return toolbar_ui_api::mojom::PinnedToolbarAction::kTaskManager;
     case kActionDevTools:
       CHECK_EQ(icon,
@@ -293,9 +316,15 @@ ActionItemToPinnedToolbarAction(actions::ActionItem* item) {
                            : kTabSearchTabStripOldIcon));
       return toolbar_ui_api::mojom::PinnedToolbarAction::kTabSearch;
     case kActionSidePanelShowContextualTasks:
-      CHECK_EQ(icon, &(features::IsRoundedIconsEnabled()
-                           ? omnibox::kSearchSparkIcon
-                           : omnibox::kSearchSparkOldIcon));
+      CHECK(icon == &(features::IsRoundedIconsEnabled()
+                          ? omnibox::kSearchSparkIcon
+                          : omnibox::kSearchSparkOldIcon) ||
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+            item->GetImage().IsImage()
+#else
+            icon == &vector_icons::kGoogleColorIcon
+#endif
+      );
       return toolbar_ui_api::mojom::PinnedToolbarAction::
           kSidePanelShowContextualTasks;
     case kActionSidePanelShowLens:
@@ -304,19 +333,12 @@ ActionItemToPinnedToolbarAction(actions::ActionItem* item) {
                            : vector_icons::kImageSearchOldIcon));
       return toolbar_ui_api::mojom::PinnedToolbarAction::kSidePanelShowLens;
     case kActionSidePanelShowAboutThisSite:
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-      CHECK_EQ(icon, &vector_icons::kPageInsightsIcon);
-#else
-      CHECK_EQ(icon, &(features::IsRoundedIconsEnabled()
-                           ? views::kInfoIcon
-                           : views::kInfoChromeRefreshOldIcon));
-#endif  // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
+      CHECK_EQ(icon, &page_info::GetAboutThisSiteIcon());
       return toolbar_ui_api::mojom::PinnedToolbarAction::
           kSidePanelShowAboutThisSite;
     case kActionSidePanelShowCustomizeChrome:
-      CHECK_EQ(icon, &(features::IsRoundedIconsEnabled() ? kEditIcon
-                       : features::IsRoundedIconsEnabled()
-                           ? vector_icons::kEditIcon
+      CHECK_EQ(icon, &(features::IsRoundedIconsEnabled()
+                           ? kEditIcon
                            : vector_icons::kEditChromeRefreshOldIcon));
       return toolbar_ui_api::mojom::PinnedToolbarAction::
           kSidePanelShowCustomizeChrome;
@@ -343,6 +365,33 @@ ActionItemToPinnedToolbarAction(actions::ActionItem* item) {
                            ? vector_icons::kChatIcon
                            : vector_icons::kChatOldIcon));
       return toolbar_ui_api::mojom::PinnedToolbarAction::kSidePanelShowComments;
+    case kActionShowAiOverlayDialog:
+      CHECK_EQ(icon, &(features::IsRoundedIconsEnabled()
+                           ? vector_icons::kMicFilledIcon
+                           : vector_icons::kMicOldIcon));
+      return toolbar_ui_api::mojom::PinnedToolbarAction::kShowAiOverlayDialog;
+    case kActionTtcToolbar:
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+      CHECK_EQ(icon, &vector_icons::kAudioSparkIcon);
+#else
+      CHECK_EQ(icon, &(features::IsRoundedIconsEnabled()
+                           ? vector_icons::kMicFilledIcon
+                           : vector_icons::kMicChromeRefreshOldIcon));
+#endif
+      return toolbar_ui_api::mojom::PinnedToolbarAction::kTtcToolbar;
+    case kActionSidePanelShowHistory:
+      CHECK_EQ(icon, &(features::IsRoundedIconsEnabled()
+                           ? vector_icons::kHistoryIcon
+                           : vector_icons::kHistoryChromeRefreshOldIcon));
+      return toolbar_ui_api::mojom::PinnedToolbarAction::kSidePanelShowHistory;
+    case kActionShowChromeLabs:
+      CHECK_EQ(icon, &(features::IsRoundedIconsEnabled()
+                           ? vector_icons::kScienceIcon
+                           : vector_icons::kScienceOldIcon));
+      return toolbar_ui_api::mojom::PinnedToolbarAction::kShowChromeLabs;
+    case kActionSidePanelShowGlic:
+      CHECK_EQ(icon, &omnibox::kSparkIcon);
+      return toolbar_ui_api::mojom::PinnedToolbarAction::kSidePanelShowGlic;
     default:
       return std::nullopt;
   }
@@ -417,10 +466,179 @@ std::optional<actions::ActionId> PinnedToolbarActionToActionId(
       return kActionSendSharedTabGroupFeedback;
     case toolbar_ui_api::mojom::PinnedToolbarAction::kSidePanelShowComments:
       return kActionSidePanelShowComments;
+    case toolbar_ui_api::mojom::PinnedToolbarAction::kShowAiOverlayDialog:
+      return kActionShowAiOverlayDialog;
+    case toolbar_ui_api::mojom::PinnedToolbarAction::kTtcToolbar:
+      return kActionTtcToolbar;
+    case toolbar_ui_api::mojom::PinnedToolbarAction::kSidePanelShowHistory:
+      return kActionSidePanelShowHistory;
+    case toolbar_ui_api::mojom::PinnedToolbarAction::kShowChromeLabs:
+      return kActionShowChromeLabs;
+    case toolbar_ui_api::mojom::PinnedToolbarAction::kSidePanelShowGlic:
+      return kActionSidePanelShowGlic;
     case toolbar_ui_api::mojom::PinnedToolbarAction::kDivider:
       return std::nullopt;
   }
   return std::nullopt;
+}
+
+using MojomPageActionId = toolbar_ui_api::mojom::PageActionId;
+
+actions::ActionId MojomPageActionIdToActionId(
+    MojomPageActionId page_action_id) {
+  switch (page_action_id) {
+    case MojomPageActionId::kActionAiMode:
+      return kActionAiMode;
+    case MojomPageActionId::kActionIndigo:
+      return kActionIndigo;
+    case MojomPageActionId::kActionMultistepFilter:
+      return kActionMultistepFilter;
+    case MojomPageActionId::kActionSidePanelShowLensOverlayResults:
+      return kActionSidePanelShowLensOverlayResults;
+    case MojomPageActionId::kActionLensOverlayHomework:
+      return kActionLensOverlayHomework;
+    case MojomPageActionId::kActionShowTranslate:
+      return kActionShowTranslate;
+    case MojomPageActionId::kActionShowMemorySaverChip:
+      return kActionShowMemorySaverChip;
+    case MojomPageActionId::kActionShowJsOptimizationsIcon:
+      return kActionShowJsOptimizationsIcon;
+    case MojomPageActionId::kActionRecordReplay:
+      return kActionRecordReplay;
+    case MojomPageActionId::kActionShowIntentPicker:
+      return kActionShowIntentPicker;
+    case MojomPageActionId::kActionShowZoomBubble:
+      return kActionShowZoomBubble;
+    case MojomPageActionId::kActionSidePanelShowReadAnything:
+      return kActionSidePanelShowReadAnything;
+    case MojomPageActionId::kActionOffersAndRewardsForPage:
+      return kActionOffersAndRewardsForPage;
+    case MojomPageActionId::kActionShowFileSystemAccess:
+      return kActionShowFileSystemAccess;
+    case MojomPageActionId::kActionInstallPwa:
+      return kActionInstallPwa;
+    case MojomPageActionId::kActionCommercePriceInsights:
+      return kActionCommercePriceInsights;
+    case MojomPageActionId::kActionCommerceDiscounts:
+      return kActionCommerceDiscounts;
+    case MojomPageActionId::kActionShowPasswordsBubbleOrPage:
+      return kActionShowPasswordsBubbleOrPage;
+    case MojomPageActionId::kActionShowCollaborationRecentActivity:
+      return kActionShowCollaborationRecentActivity;
+    case MojomPageActionId::kActionAutofillMandatoryReauth:
+      return kActionAutofillMandatoryReauth;
+    case MojomPageActionId::kActionFind:
+      return kActionFind;
+    case MojomPageActionId::kActionShowCookieControls:
+      return kActionShowCookieControls;
+    case MojomPageActionId::kActionShowAddressesBubbleOrPage:
+      return kActionShowAddressesBubbleOrPage;
+    case MojomPageActionId::kActionVirtualCardEnroll:
+      return kActionVirtualCardEnroll;
+    case MojomPageActionId::kActionFilledCardInformation:
+      return kActionFilledCardInformation;
+    case MojomPageActionId::kActionShowPaymentsBubbleOrPage:
+      return kActionShowPaymentsBubbleOrPage;
+    case MojomPageActionId::kActionSidePanelShowContextualTasks:
+      return kActionSidePanelShowContextualTasks;
+    case MojomPageActionId::kActionBookmarkThisTab:
+      return kActionBookmarkThisTab;
+    case MojomPageActionId::kActionFederation:
+      return kActionFederation;
+    case MojomPageActionId::kActionGlicContextualCueing:
+      return kActionGlicContextualCueing;
+    case MojomPageActionId::kActionAnchoredContextualCue:
+      return kActionAnchoredContextualCue;
+    case MojomPageActionId::kActionAutofillPayment:
+      return kActionAutofillPayment;
+    case MojomPageActionId::kActionShowPaymentsChurnedUsersBubble:
+      return kActionShowPaymentsChurnedUsersBubble;
+    case MojomPageActionId::kActionFakePageActionForDebug:
+      return kActionFakePageActionForDebug;
+    case MojomPageActionId::kActionWalletReminderNotice:
+      return kActionWalletReminderNotice;
+    case MojomPageActionId::kActionGmailOtpOptIn:
+      return kActionGmailOtpOptIn;
+  }
+  NOTREACHED();
+}
+
+MojomPageActionId ActionIdToMojomPageActionId(actions::ActionId action_id) {
+  switch (action_id) {
+    case kActionAiMode:
+      return MojomPageActionId::kActionAiMode;
+    case kActionIndigo:
+      return MojomPageActionId::kActionIndigo;
+    case kActionMultistepFilter:
+      return MojomPageActionId::kActionMultistepFilter;
+    case kActionSidePanelShowLensOverlayResults:
+      return MojomPageActionId::kActionSidePanelShowLensOverlayResults;
+    case kActionLensOverlayHomework:
+      return MojomPageActionId::kActionLensOverlayHomework;
+    case kActionShowTranslate:
+      return MojomPageActionId::kActionShowTranslate;
+    case kActionShowMemorySaverChip:
+      return MojomPageActionId::kActionShowMemorySaverChip;
+    case kActionShowJsOptimizationsIcon:
+      return MojomPageActionId::kActionShowJsOptimizationsIcon;
+    case kActionRecordReplay:
+      return MojomPageActionId::kActionRecordReplay;
+    case kActionShowIntentPicker:
+      return MojomPageActionId::kActionShowIntentPicker;
+    case kActionShowZoomBubble:
+      return MojomPageActionId::kActionShowZoomBubble;
+    case kActionSidePanelShowReadAnything:
+      return MojomPageActionId::kActionSidePanelShowReadAnything;
+    case kActionOffersAndRewardsForPage:
+      return MojomPageActionId::kActionOffersAndRewardsForPage;
+    case kActionShowFileSystemAccess:
+      return MojomPageActionId::kActionShowFileSystemAccess;
+    case kActionInstallPwa:
+      return MojomPageActionId::kActionInstallPwa;
+    case kActionCommercePriceInsights:
+      return MojomPageActionId::kActionCommercePriceInsights;
+    case kActionCommerceDiscounts:
+      return MojomPageActionId::kActionCommerceDiscounts;
+    case kActionShowPasswordsBubbleOrPage:
+      return MojomPageActionId::kActionShowPasswordsBubbleOrPage;
+    case kActionShowCollaborationRecentActivity:
+      return MojomPageActionId::kActionShowCollaborationRecentActivity;
+    case kActionAutofillMandatoryReauth:
+      return MojomPageActionId::kActionAutofillMandatoryReauth;
+    case kActionFind:
+      return MojomPageActionId::kActionFind;
+    case kActionShowCookieControls:
+      return MojomPageActionId::kActionShowCookieControls;
+    case kActionShowAddressesBubbleOrPage:
+      return MojomPageActionId::kActionShowAddressesBubbleOrPage;
+    case kActionVirtualCardEnroll:
+      return MojomPageActionId::kActionVirtualCardEnroll;
+    case kActionFilledCardInformation:
+      return MojomPageActionId::kActionFilledCardInformation;
+    case kActionShowPaymentsBubbleOrPage:
+      return MojomPageActionId::kActionShowPaymentsBubbleOrPage;
+    case kActionSidePanelShowContextualTasks:
+      return MojomPageActionId::kActionSidePanelShowContextualTasks;
+    case kActionBookmarkThisTab:
+      return MojomPageActionId::kActionBookmarkThisTab;
+    case kActionFederation:
+      return MojomPageActionId::kActionFederation;
+    case kActionGlicContextualCueing:
+      return MojomPageActionId::kActionGlicContextualCueing;
+    case kActionAnchoredContextualCue:
+      return MojomPageActionId::kActionAnchoredContextualCue;
+    case kActionAutofillPayment:
+      return MojomPageActionId::kActionAutofillPayment;
+    case kActionShowPaymentsChurnedUsersBubble:
+      return MojomPageActionId::kActionShowPaymentsChurnedUsersBubble;
+    case kActionFakePageActionForDebug:
+      return MojomPageActionId::kActionFakePageActionForDebug;
+    case kActionWalletReminderNotice:
+      return MojomPageActionId::kActionWalletReminderNotice;
+    case kActionGmailOtpOptIn:
+      return MojomPageActionId::kActionGmailOtpOptIn;
+  }
+  NOTREACHED();
 }
 
 }  // namespace webui_toolbar

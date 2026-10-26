@@ -6,17 +6,18 @@
 
 #include <memory>
 
+#include "base/feature_list.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/android_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/browser/enterprise/browser_management/management_identity.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/managed_ui.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/current_channel_logo.h"
 #include "chrome/browser/ui/webui/management/management_ui_constants.h"
 #include "chrome/browser/ui/webui/management/management_ui_handler.h"
-#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
@@ -32,6 +33,10 @@
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/webui/webui_util.h"
 
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/webui/theme_source.h"  // nogncheck
+#endif
+
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/strings/grit/ash_strings.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
@@ -44,6 +49,7 @@
 #else  // BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
+#include "chrome/browser/ui/managed_ui.h"  // nogncheck crbug.com/40147906
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
@@ -78,10 +84,6 @@ content::WebUIDataSource* CreateAndAddManagementUIHtmlSource(Profile* profile) {
   source->AddString(kManagementReportDlpEvents,
                     l10n_util::GetPluralStringFUTF16(
                         IDS_MANAGEMENT_REPORT_DLP_EVENTS, dlp_events_count));
-  source->AddString("pluginVmDataCollection",
-                    l10n_util::GetStringFUTF16(
-                        IDS_MANAGEMENT_REPORT_PLUGIN_VM,
-                        l10n_util::GetStringUTF16(IDS_PLUGIN_VM_APP_NAME)));
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   source->AddString("webuiRefresh2026", features::IsWebuiRefresh2026Enabled()
@@ -102,7 +104,7 @@ content::WebUIDataSource* CreateAndAddManagementUIHtmlSource(Profile* profile) {
 }  // namespace
 
 // static
-base::RefCountedMemory* ManagementUI::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory> ManagementUI::GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
       IDR_MANAGEMENT_FAVICON, scale_factor);
@@ -201,10 +203,10 @@ void ManagementUI::GetLocalizedStrings(
       {kManagementScreenCaptureEvent, IDS_MANAGEMENT_SCREEN_CAPTURE_EVENT},
       {kManagementScreenCaptureData, IDS_MANAGEMENT_SCREEN_CAPTURE_DATA},
 #endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#if !BUILDFLAG(IS_CHROMEOS)
       {kManagementDeviceSignalsDisclosure,
        IDS_MANAGEMENT_DEVICE_SIGNALS_DISCLOSURE},
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
       {"browserReporting", IDS_MANAGEMENT_BROWSER_REPORTING},
       {"browserReportingExplanation",
        IDS_MANAGEMENT_BROWSER_REPORTING_EXPLANATION},
@@ -242,6 +244,8 @@ void ManagementUI::GetLocalizedStrings(
       {kThreatProtectionTitle, IDS_MANAGEMENT_THREAT_PROTECTION},
       {"connectorEvent", IDS_MANAGEMENT_CONNECTORS_EVENT},
       {"connectorVisibleData", IDS_MANAGEMENT_CONNECTORS_VISIBLE_DATA},
+      {"secureGatewayTitle", IDS_MANAGEMENT_SECURE_GATEWAY_TITLE},
+      {"secureGatewayDisclosure", IDS_MANAGEMENT_SECURE_GATEWAY_DISCLOSURE},
       {kManagementEnterpriseReportingEvent,
        IDS_MANAGEMENT_ENTERPRISE_REPORTING_EVENT},
       {kManagementEnterpriseReportingVisibleData,
@@ -255,6 +259,9 @@ void ManagementUI::GetLocalizedStrings(
       {kManagementOnBulkDataEntryEvent, IDS_MANAGEMENT_TEXT_ENTERED_EVENT},
       {kManagementOnBulkDataEntryVisibleData,
        IDS_MANAGEMENT_TEXT_ENTERED_VISIBLE_DATA},
+      {kManagementOnDataCopiedEvent, IDS_MANAGEMENT_TEXT_COPIED_EVENT},
+      {kManagementOnDataCopiedVisibleData,
+       IDS_MANAGEMENT_TEXT_COPIED_VISIBLE_DATA},
       {kManagementOnPrintEvent, IDS_MANAGEMENT_PAGE_PRINTED_EVENT},
       {kManagementOnPrintVisibleData, IDS_MANAGEMENT_PAGE_PRINTED_VISIBLE_DATA},
       {kManagementOnPageVisitedEvent, IDS_MANAGEMENT_PAGE_VISITED_EVENT},
@@ -329,3 +336,14 @@ void ManagementUI::RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(
       policy::policy_prefs::kHasDismissedManagementPagePromotionBanner, false);
 }
+
+// Mobile Android is the only platform without extensions support.
+// On Mobile, chrome://management WebUI is guarded behind the
+// `features::kMigrateManagementPageToWebUIOnMobile` experiment flag.
+#if !BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+bool ManagementUIConfig::IsWebUIEnabled(
+    content::BrowserContext* browser_context) {
+  return base::FeatureList::IsEnabled(
+      features::kMigrateManagementPageToWebUIOnMobile);
+}
+#endif

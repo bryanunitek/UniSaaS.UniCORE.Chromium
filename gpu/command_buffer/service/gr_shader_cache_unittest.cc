@@ -36,9 +36,9 @@ class GrShaderCacheTest : public GrShaderCache::Client, public testing::Test {
     disk_cache_[key] = shader;
   }
 
+  base::test::ScopedFeatureList scoped_feature_list_;
   base::TestMemoryConsumerRegistry test_memory_consumer_registry_;
   base::test::TaskEnvironment task_environment_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 
   GrShaderCache cache_;
   std::unordered_map<std::string, std::string> disk_cache_;
@@ -235,7 +235,7 @@ TEST_F(GrShaderCacheTest, MemoryPressure) {
 
   // Trigger moderate memory pressure (50% limit).
   test_memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
-      50, task_environment_.QuitClosure());
+      base::MemoryLimit::FromPercent(50), task_environment_.QuitClosure());
   task_environment_.RunUntilQuit();
 
   // Verify that UpdateMemoryLimit does not release memory.
@@ -263,7 +263,7 @@ TEST_F(GrShaderCacheTest, MemoryPressure) {
   {
     base::RunLoop run_loop;
     test_memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
-        0, base::DoNothing());
+        base::MemoryLimit::FromPercent(0), base::DoNothing());
     test_memory_consumer_registry_.NotifyReleaseMemoryAsync(
         run_loop.QuitClosure());
     run_loop.Run();
@@ -285,7 +285,7 @@ TEST_F(GrShaderCacheTest, MemoryPressure) {
   {
     base::RunLoop run_loop;
     test_memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
-        100, base::DoNothing());
+        base::MemoryLimit::Default(), base::DoNothing());
     test_memory_consumer_registry_.NotifyReleaseMemoryAsync(
         run_loop.QuitClosure());
     run_loop.Run();
@@ -328,7 +328,7 @@ TEST_F(GrShaderCacheTest, StatefulMemoryPressure) {
 
   // Trigger moderate memory pressure (50% limit).
   test_memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
-      50, task_environment_.QuitClosure());
+      base::MemoryLimit::FromPercent(50), task_environment_.QuitClosure());
   task_environment_.RunUntilQuit();
 
   // Stateful behavior: limit should not decrease below current usage.
@@ -378,7 +378,7 @@ TEST_F(GrShaderCacheTest, ClampMemoryLimitAbove100Percent) {
 
   // Trigger a memory limit increase (150% limit).
   test_memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
-      150, task_environment_.QuitClosure());
+      base::MemoryLimit::FromPercent(150), task_environment_.QuitClosure());
   task_environment_.RunUntilQuit();
 
   // Attempting to store a 5th entry should still trigger eviction because

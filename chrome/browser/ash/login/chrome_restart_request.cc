@@ -11,6 +11,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/constants/chrome_switches.h"
 #include "ash/constants/chrome_webui_url_constants.h"
 #include "base/base_switches.h"
 #include "base/command_line.h"
@@ -27,9 +28,6 @@
 #include "chrome/browser/ash/boot_times_recorder/boot_times_recorder.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/chrome_paths.h"
-#include "chrome/common/chrome_switches.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
@@ -52,7 +50,6 @@
 #include "media/base/media_switches.h"
 #include "media/capture/capture_switches.h"
 #include "media/media_buildflags.h"
-#include "mojo/core/embedder/features.h"
 #include "sandbox/policy/switches.h"
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/cros_system_api/switches/chrome_switches.h"
@@ -76,6 +73,9 @@ using ::content::BrowserThread;
 // Increase logging level for Guest mode to avoid INFO messages in logs.
 const char kGuestModeLoggingLevel[] = "1";
 
+// Whether RestartChrome() has been called.
+bool g_restart_requested = false;
+
 bool IsRunningTest() {
   const base::CommandLine* current_command_line =
       base::CommandLine::ForCurrentProcess();
@@ -91,7 +91,7 @@ void DeriveCommandLine(const GURL& start_url,
                        const base::CommandLine& base_command_line,
                        const base::DictValue& new_switches,
                        base::CommandLine* command_line) {
-  DCHECK_NE(&base_command_line, command_line);
+  CHECK_NE(&base_command_line, command_line, base::NotFatalUntil::M160);
 
   static const char* const kForwardSwitches[] = {
       sandbox::policy::switches::kDisableGpuSandbox,
@@ -145,10 +145,11 @@ void DeriveCommandLine(const GURL& start_url,
       ::switches::kHardwareVideoDevicePath,
 #endif
       ::switches::kUseGL,
-      ::switches::kUserDataDir,
+      ash::chrome_switches::kUserDataDir,
       ::switches::kV,
       ::switches::kVModule,
       ::switches::kVideoCaptureUseGpuMemoryBuffer,
+      ::switches::kVideoCaptureUseVirtualDevicesOnly,
       ::switches::kWebAuthRemoteDesktopSupport,
       ::switches::kEnableWebGLDeveloperExtensions,
       ::switches::kEnableWebGLDraftExtensions,
@@ -247,19 +248,16 @@ void DeriveCommandLine(const GURL& start_url,
 // current session.
 void DeriveFeatures(base::CommandLine* out_command_line) {
   auto kForwardFeatures = {
-      &::features::kAccessibilityManifestV3EspeakNGTts,
       &::features::kAccessibilityManifestV3GoogleTts,
       &features::kAutoNightLight,
       &chromeos::features::kFeatureManagementRoundedWindows,
       &ash::features::kSeamlessRefreshRateSwitching,
-      &::features::kPluginVm,
       &display::features::kCtmColorManagement,
       &display::features::kDrmColorSpaceDefaultIsRec709,
       &display::features::kOledScaleFactorEnabled,
 #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
       &media::kPlatformHEVCDecoderSupport,
 #endif
-      &mojo::core::kMojoIpcz,
   };
   std::vector<std::string> enabled_features;
   std::vector<std::string> disabled_features;
@@ -303,8 +301,10 @@ class ChromeRestartRequest {
 
   ~ChromeRestartRequest();
 
-  // Starts the request.
-  void Start();
+  // Starts the request. The request is sent once the pending writes of
+  // `local_state` are committed, or after a timeout. `local_state` is only
+  // used during this call.
+  void Start(PrefService& local_state);
 
  private:
   // Fires job restart request to session manager.
@@ -327,7 +327,7 @@ ChromeRestartRequest::ChromeRestartRequest(const std::vector<std::string>& argv,
 
 ChromeRestartRequest::~ChromeRestartRequest() = default;
 
-void ChromeRestartRequest::Start() {
+void ChromeRestartRequest::Start(PrefService& local_state) {
   VLOG(1) << "Requesting a restart with command line: "
           << base::JoinString(argv_, " ");
 
@@ -337,15 +337,20 @@ void ChromeRestartRequest::Start() {
 
   // XXX: normally this call must not be needed, however RestartJob
   // just kills us so settings may be lost. See http://crosbug.com/13102
-  g_browser_process->local_state()->CommitPendingWrite(base::BindOnce(
+  local_state.CommitPendingWrite(base::BindOnce(
       &ChromeRestartRequest::RestartJob, weak_ptr_factory_.GetWeakPtr()));
   timer_.Start(FROM_HERE, base::Seconds(3), this,
                &ChromeRestartRequest::RestartJob);
 }
 
 void ChromeRestartRequest::RestartJob() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   VLOG(1) << "ChromeRestartRequest::RestartJob";
+
+  // Called on either the local state commit or the timeout, whichever comes
+  // first. Cancel the other one so that the restart request is sent only once.
+  timer_.Stop();
+  weak_ptr_factory_.InvalidateWeakPtrs();
 
   // The session manager requires a RestartJob caller to open a socket pair and
   // pass one end over D-Bus while holding the local end open for the duration
@@ -386,7 +391,7 @@ void GetOffTheRecordCommandLine(const GURL& start_url,
                                 base::CommandLine* command_line) {
   base::DictValue otr_switches;
   otr_switches.Set(switches::kGuestSession, std::string());
-  otr_switches.Set(::switches::kIncognito, std::string());
+  otr_switches.Set(ash::chrome_switches::kIncognito, std::string());
   otr_switches.Set(::switches::kLoggingLevel, kGuestModeLoggingLevel);
   otr_switches.Set(
       switches::kLoginUser,
@@ -397,23 +402,23 @@ void GetOffTheRecordCommandLine(const GURL& start_url,
   }
 
   // Override the home page.
-  otr_switches.Set(::switches::kHomePage,
+  otr_switches.Set(ash::chrome_switches::kHomePage,
                    GURL(ash::chrome_urls::kChromeUINewTabURL).spec());
 
   DeriveCommandLine(start_url, base_command_line, otr_switches, command_line);
   DeriveFeatures(command_line);
 }
 
-void RestartChrome(const base::CommandLine& command_line,
+void RestartChrome(PrefService& local_state,
+                   const base::CommandLine& command_line,
                    RestartChromeReason reason) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   BootTimesRecorder::Get()->set_restart_requested();
 
-  static bool restart_requested = false;
-  if (restart_requested) {
+  if (g_restart_requested) {
     NOTREACHED() << "Request chrome restart for more than once.";
   }
-  restart_requested = true;
+  g_restart_requested = true;
 
   if (!SessionManagerClient::Get()->SupportsBrowserRestart()) {
     // Do nothing when running as test on bots or a dev box.
@@ -428,7 +433,11 @@ void RestartChrome(const base::CommandLine& command_line,
   }
 
   // ChromeRestartRequest deletes itself after request sent to session manager.
-  (new ChromeRestartRequest(command_line.argv(), reason))->Start();
+  (new ChromeRestartRequest(command_line.argv(), reason))->Start(local_state);
+}
+
+void ResetRestartRequestedForTesting() {
+  g_restart_requested = false;
 }
 
 }  // namespace ash

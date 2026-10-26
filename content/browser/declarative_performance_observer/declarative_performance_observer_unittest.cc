@@ -9,29 +9,49 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_set.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
+#include "content/browser/declarative_performance_observer/declarative_performance_observer_coordinator.h"
 #include "content/browser/declarative_performance_observer/declarative_performance_observer_store.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/storage_partition_config.h"
+#include "content/public/common/content_client.h"
+#include "content/public/common/content_features.h"
 #include "content/public/test/mock_navigation_handle.h"
+#include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_storage_partition.h"
 #include "content/public/test/test_utils.h"
 #include "content/test/storage_partition_test_helpers.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/net_errors.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/test/test_network_context.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/origin_trials/scoped_test_origin_trial_policy.h"
 #include "third_party/blink/public/mojom/timing/declarative_performance_observer.mojom.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 
 namespace content {
 namespace {
+
+class MockDPOContentBrowserClient : public ContentBrowserClient {
+ public:
+  MockDPOContentBrowserClient() = default;
+  ~MockDPOContentBrowserClient() override = default;
+
+  MOCK_METHOD(void,
+              LogWebFeatureForCurrentPage,
+              (RenderFrameHost*, blink::mojom::WebFeature),
+              (override));
+};
 
 class TestNetworkContext : public network::TestNetworkContext {
  public:
@@ -39,14 +59,25 @@ class TestNetworkContext : public network::TestNetworkContext {
     Report(const std::string& type,
            const std::string& group,
            const GURL& url,
+           const std::optional<base::UnguessableToken>& reporting_source,
            base::DictValue body)
-        : type(type), group(group), url(url), body(std::move(body)) {}
+        : type(type),
+          group(group),
+          url(url),
+          reporting_source(reporting_source),
+          body(std::move(body)) {}
 
     std::string type;
     std::string group;
     GURL url;
+    std::optional<base::UnguessableToken> reporting_source;
     base::DictValue body;
   };
+
+  void SendReportsAndRemoveSource(
+      const base::UnguessableToken& reporting_source) override {
+    expired_sources_.insert(reporting_source);
+  }
 
   void QueueReport(
       const std::string& type,
@@ -55,15 +86,46 @@ class TestNetworkContext : public network::TestNetworkContext {
       const std::optional<base::UnguessableToken>& reporting_source,
       const net::NetworkAnonymizationKey& network_anonymization_key,
       base::DictValue body) override {
-    reports_.emplace_back(type, group, url, std::move(body));
+    // Mirror net::ReportingCacheImpl::AddReport, which silently drops reports
+    // whose reporting_source has already been marked expired by
+    // SendReportsAndRemoveSource.
+    if (reporting_source.has_value() &&
+        expired_sources_.contains(*reporting_source)) {
+      dropped_reports_due_to_expired_source_++;
+      return;
+    }
+    reports_.emplace_back(type, group, url, reporting_source, std::move(body));
     if (quit_closure_) {
       std::move(quit_closure_).Run();
     }
   }
 
+  void SendReportsForSource(
+      const base::UnguessableToken& reporting_source) override {
+    send_reports_for_source_calls_.push_back(reporting_source);
+  }
+
+  const std::vector<base::UnguessableToken>& send_reports_for_source_calls()
+      const {
+    return send_reports_for_source_calls_;
+  }
+
   const std::vector<Report>& reports() const { return reports_; }
 
-  void ClearReports() { reports_.clear(); }
+  const base::flat_set<base::UnguessableToken>& expired_sources() const {
+    return expired_sources_;
+  }
+
+  size_t dropped_reports_due_to_expired_source() const {
+    return dropped_reports_due_to_expired_source_;
+  }
+
+  void ClearReports() {
+    reports_.clear();
+    send_reports_for_source_calls_.clear();
+    expired_sources_.clear();
+    dropped_reports_due_to_expired_source_ = 0;
+  }
 
   void SetQuitClosure(base::OnceClosure quit_closure) {
     quit_closure_ = std::move(quit_closure);
@@ -71,6 +133,9 @@ class TestNetworkContext : public network::TestNetworkContext {
 
  private:
   std::vector<Report> reports_;
+  std::vector<base::UnguessableToken> send_reports_for_source_calls_;
+  base::flat_set<base::UnguessableToken> expired_sources_;
+  size_t dropped_reports_due_to_expired_source_ = 0;
   base::OnceClosure quit_closure_;
 };
 
@@ -361,6 +426,9 @@ TEST_F(DeclarativePerformanceObserverTest, RecordsBFCacheLifecycle) {
 
   // Buffer should be flushed on entering BFCache
   ASSERT_EQ(network_context_.reports().size(), 1u);
+  ASSERT_EQ(network_context_.send_reports_for_source_calls().size(), 1u);
+  EXPECT_EQ(network_context_.send_reports_for_source_calls()[0],
+            main_rfh()->GetReportingSource());
   const auto& report1 = network_context_.reports()[0];
 
   const base::ListValue* entries1 = report1.body.FindList("entries");
@@ -402,6 +470,9 @@ TEST_F(DeclarativePerformanceObserverTest, RecordsBFCacheLifecycle) {
   DeclarativePerformanceObserver::DeleteForCurrentDocument(main_rfh());
 
   ASSERT_EQ(network_context_.reports().size(), 1u);
+  ASSERT_EQ(network_context_.send_reports_for_source_calls().size(), 1u);
+  EXPECT_EQ(network_context_.send_reports_for_source_calls()[0],
+            main_rfh()->GetReportingSource());
   const auto& report2 = network_context_.reports()[0];
 
   const base::ListValue* entries2 = report2.body.FindList("entries");
@@ -427,6 +498,41 @@ TEST_F(DeclarativePerformanceObserverTest, RecordsBFCacheLifecycle) {
   ASSERT_TRUE(vis_entry);
   EXPECT_EQ(*(vis_entry->FindString("entryType")), "visibility-state");
   EXPECT_EQ(*(vis_entry->FindString("name")), "visible");
+}
+
+TEST_F(DeclarativePerformanceObserverTest, OnEnterBFCacheNullStoragePartition) {
+  const GURL kPageURL("https://example.com/index.html");
+  const std::string kEndpoint("telemetry");
+
+  auto policy = network::mojom::DeclarativePerformanceObserverPolicy::New();
+  policy->reporting_endpoint = kEndpoint;
+  policy->entry_types.push_back(
+      network::mojom::PerformanceEntryType::kNavigation);
+
+  MockNavigationHandle navigation_handle(kPageURL, main_rfh());
+  navigation_handle.set_has_committed(true);
+  navigation_handle.set_is_in_primary_main_frame(true);
+  navigation_handle.set_is_error_page(false);
+
+  NavigationHandleTiming timing;
+  ON_CALL(navigation_handle, GetNavigationHandleTiming())
+      .WillByDefault(testing::ReturnRef(timing));
+
+  ON_CALL(navigation_handle, GetDeclarativePerformanceObserverPolicy())
+      .WillByDefault(testing::Return(policy.get()));
+
+  CreateObserver(&navigation_handle);
+  auto* observer =
+      DeclarativePerformanceObserver::GetForCurrentDocument(main_rfh());
+  ASSERT_TRUE(observer);
+
+  // Explicitly simulate a null StoragePartition.
+  observer->SetStoragePartitionForTesting(nullptr);
+
+  // Entering BFCache should not crash when StoragePartition is null.
+  observer->OnEnterBFCache();
+  EXPECT_EQ(network_context_.reports().size(), 0u);
+  EXPECT_EQ(network_context_.send_reports_for_source_calls().size(), 0u);
 }
 
 TEST_F(DeclarativePerformanceObserverTest, RecordsPerformanceMarks) {
@@ -457,12 +563,12 @@ TEST_F(DeclarativePerformanceObserverTest, RecordsPerformanceMarks) {
   std::vector<blink::mojom::DeclarativePerformanceEntryPtr> entries;
 
   // 1. Allowed mark with detail
-  auto entry1 = blink::mojom::DeclarativePerformanceEntry::New();
-  entry1->name = "some_mark";
-  entry1->start_time = base::Milliseconds(100);
   base::DictValue detail_dict;
   detail_dict.Set("key", "value");
-  entry1->detail = base::Value(std::move(detail_dict));
+  auto entry1 = blink::mojom::DeclarativePerformanceEntry::NewMark(
+      blink::mojom::DeclarativePerformanceMark::New(
+          "some_mark", base::Milliseconds(100),
+          base::Value(std::move(detail_dict))));
   entries.push_back(std::move(entry1));
 
   observer_remote->DidObservePerformanceEntries(std::move(entries));
@@ -492,6 +598,84 @@ TEST_F(DeclarativePerformanceObserverTest, RecordsPerformanceMarks) {
   ASSERT_TRUE(detail);
   ASSERT_TRUE(detail->is_dict());
   EXPECT_EQ(*(detail->GetDict().FindString("key")), "value");
+}
+
+TEST_F(DeclarativePerformanceObserverTest, RecordsLargestContentfulPaint) {
+  const GURL kPageURL("https://example.com/index.html");
+  const std::string kEndpoint("telemetry");
+
+  auto policy = network::mojom::DeclarativePerformanceObserverPolicy::New();
+  policy->reporting_endpoint = kEndpoint;
+  policy->entry_types.push_back(
+      network::mojom::PerformanceEntryType::kLargestContentfulPaint);
+
+  MockNavigationHandle navigation_handle(kPageURL, main_rfh());
+  navigation_handle.set_has_committed(true);
+  navigation_handle.set_is_in_primary_main_frame(true);
+  navigation_handle.set_is_error_page(false);
+
+  ON_CALL(navigation_handle, GetDeclarativePerformanceObserverPolicy())
+      .WillByDefault(testing::Return(policy.get()));
+
+  CreateObserver(&navigation_handle);
+
+  // Bind Mojo remote
+  mojo::Remote<blink::mojom::DeclarativePerformanceObserverHost>
+      observer_remote;
+  DeclarativePerformanceObserver::Bind(
+      main_rfh(), observer_remote.BindNewPipeAndPassReceiver());
+
+  // Simulate receiving performance entries from renderer
+  // Send first LCP entry
+  {
+    std::vector<blink::mojom::DeclarativePerformanceEntryPtr> entries;
+    entries.push_back(blink::mojom::DeclarativePerformanceEntry::NewLcp(
+        blink::mojom::DeclarativeLargestContentfulPaint::New(
+            base::Milliseconds(150), 450, base::Milliseconds(150),
+            base::Milliseconds(120), "hero-img", "https://example.com/hero.png",
+            "IMG")));
+    observer_remote->DidObservePerformanceEntries(std::move(entries));
+    observer_remote.FlushForTesting();
+  }
+
+  // Send second larger LCP entry that replaces the first one
+  {
+    std::vector<blink::mojom::DeclarativePerformanceEntryPtr> entries;
+    entries.push_back(blink::mojom::DeclarativePerformanceEntry::NewLcp(
+        blink::mojom::DeclarativeLargestContentfulPaint::New(
+            base::Milliseconds(300), 900, base::Milliseconds(300),
+            base::Milliseconds(250), "main-hero",
+            "https://example.com/main.png", "DIV")));
+    observer_remote->DidObservePerformanceEntries(std::move(entries));
+    observer_remote.FlushForTesting();
+  }
+
+  // Trigger unload to flush metrics
+  DeclarativePerformanceObserver::DeleteForCurrentDocument(main_rfh());
+
+  ASSERT_EQ(network_context_.reports().size(), 1u);
+  const auto& report = network_context_.reports()[0];
+  EXPECT_EQ(report.type, "performance-observer");
+  EXPECT_EQ(report.group, kEndpoint);
+  EXPECT_EQ(report.url, kPageURL);
+
+  const base::ListValue* report_entries = report.body.FindList("entries");
+  ASSERT_TRUE(report_entries);
+  ASSERT_EQ(report_entries->size(), 2u);
+
+  const base::DictValue* lcp_entry1 = (*report_entries)[0].GetIfDict();
+  ASSERT_TRUE(lcp_entry1);
+  EXPECT_EQ(*(lcp_entry1->FindString("entryType")), "largest-contentful-paint");
+  EXPECT_EQ(*(lcp_entry1->FindDouble("startTime")), 150.0);
+  EXPECT_EQ(*(lcp_entry1->FindDouble("size")), 450.0);
+  EXPECT_EQ(*(lcp_entry1->FindString("id")), "hero-img");
+
+  const base::DictValue* lcp_entry2 = (*report_entries)[1].GetIfDict();
+  ASSERT_TRUE(lcp_entry2);
+  EXPECT_EQ(*(lcp_entry2->FindString("entryType")), "largest-contentful-paint");
+  EXPECT_EQ(*(lcp_entry2->FindDouble("startTime")), 300.0);
+  EXPECT_EQ(*(lcp_entry2->FindDouble("size")), 900.0);
+  EXPECT_EQ(*(lcp_entry2->FindString("id")), "main-hero");
 }
 
 TEST_F(DeclarativePerformanceObserverTest,
@@ -524,15 +708,15 @@ TEST_F(DeclarativePerformanceObserverTest,
   std::vector<blink::mojom::DeclarativePerformanceEntryPtr> entries;
 
   // 1. Allowed mark
-  auto entry1 = blink::mojom::DeclarativePerformanceEntry::New();
-  entry1->name = "allowed_mark";
-  entry1->start_time = base::Milliseconds(100);
+  auto entry1 = blink::mojom::DeclarativePerformanceEntry::NewMark(
+      blink::mojom::DeclarativePerformanceMark::New(
+          "allowed_mark", base::Milliseconds(100), std::nullopt));
   entries.push_back(std::move(entry1));
 
   // 2. Disallowed mark
-  auto entry2 = blink::mojom::DeclarativePerformanceEntry::New();
-  entry2->name = "disallowed_mark";
-  entry2->start_time = base::Milliseconds(200);
+  auto entry2 = blink::mojom::DeclarativePerformanceEntry::NewMark(
+      blink::mojom::DeclarativePerformanceMark::New(
+          "disallowed_mark", base::Milliseconds(200), std::nullopt));
   entries.push_back(std::move(entry2));
 
   observer_remote->DidObservePerformanceEntries(std::move(entries));
@@ -660,13 +844,25 @@ TEST_F(DeclarativePerformanceObserverTest,
       kOrigin, true, sync_loop.QuitClosure());
   sync_loop.Run();
 
+  // The early failure report must be queued and immediately flushed via
+  // `SendReportsForSource()` using the document's `reporting_source_` as soon
+  // as it is taken from the store, before the session ends.
+  ASSERT_EQ(network_context_.reports().size(), 1u);
+  ASSERT_EQ(network_context_.send_reports_for_source_calls().size(), 1u);
+  EXPECT_EQ(network_context_.send_reports_for_source_calls()[0],
+            main_rfh()->GetReportingSource());
+
   DeclarativePerformanceObserver::DeleteForCurrentDocument(main_rfh());
 
   ASSERT_EQ(network_context_.reports().size(), 2u);
+  ASSERT_EQ(network_context_.send_reports_for_source_calls().size(), 2u);
+  EXPECT_EQ(network_context_.send_reports_for_source_calls()[1],
+            main_rfh()->GetReportingSource());
 
   // First report: Early failure navigation timing
   const auto& failure_report = network_context_.reports()[0];
   EXPECT_EQ(failure_report.url, kOrigin.GetURL());
+  EXPECT_EQ(failure_report.reporting_source, main_rfh()->GetReportingSource());
   const base::ListValue* failure_entries =
       failure_report.body.FindList("entries");
   ASSERT_TRUE(failure_entries);
@@ -683,6 +879,7 @@ TEST_F(DeclarativePerformanceObserverTest,
   // session-end)
   const auto& main_report = network_context_.reports()[1];
   EXPECT_EQ(main_report.url, kPageURL);
+  EXPECT_EQ(main_report.reporting_source, main_rfh()->GetReportingSource());
   const base::ListValue* main_entries = main_report.body.FindList("entries");
   ASSERT_TRUE(main_entries);
   ASSERT_EQ(main_entries->size(), 2u);
@@ -1116,12 +1313,12 @@ TEST_F(DeclarativePerformanceObserverTest, DocumentBufferLimitEnforced) {
   // 1. Send first entry just under 640KB limit (e.g. 400KB detail string)
   {
     std::vector<blink::mojom::DeclarativePerformanceEntryPtr> entries;
-    auto entry = blink::mojom::DeclarativePerformanceEntry::New();
-    entry->name = "mark_1";
-    entry->start_time = base::Milliseconds(100);
     base::DictValue detail_dict;
     detail_dict.Set("payload", std::string(400 * 1024, 'a'));
-    entry->detail = base::Value(std::move(detail_dict));
+    auto entry = blink::mojom::DeclarativePerformanceEntry::NewMark(
+        blink::mojom::DeclarativePerformanceMark::New(
+            "mark_1", base::Milliseconds(100),
+            base::Value(std::move(detail_dict))));
     entries.push_back(std::move(entry));
 
     observer_remote->DidObservePerformanceEntries(std::move(entries));
@@ -1132,12 +1329,12 @@ TEST_F(DeclarativePerformanceObserverTest, DocumentBufferLimitEnforced) {
   // 640KB
   {
     std::vector<blink::mojom::DeclarativePerformanceEntryPtr> entries;
-    auto entry = blink::mojom::DeclarativePerformanceEntry::New();
-    entry->name = "mark_2";
-    entry->start_time = base::Milliseconds(200);
     base::DictValue detail_dict;
     detail_dict.Set("payload", std::string(300 * 1024, 'b'));
-    entry->detail = base::Value(std::move(detail_dict));
+    auto entry = blink::mojom::DeclarativePerformanceEntry::NewMark(
+        blink::mojom::DeclarativePerformanceMark::New(
+            "mark_2", base::Milliseconds(200),
+            base::Value(std::move(detail_dict))));
     entries.push_back(std::move(entry));
 
     observer_remote->DidObservePerformanceEntries(std::move(entries));
@@ -1208,9 +1405,9 @@ TEST_F(DeclarativePerformanceObserverTest,
   // The first 5 should be buffered successfully, and the 6th should be dropped.
   std::vector<blink::mojom::DeclarativePerformanceEntryPtr> entries;
   for (int i = 0; i < 6; ++i) {
-    auto entry = blink::mojom::DeclarativePerformanceEntry::New();
-    entry->name = "mark_tiny";
-    entry->start_time = base::Milliseconds(i);
+    auto entry = blink::mojom::DeclarativePerformanceEntry::NewMark(
+        blink::mojom::DeclarativePerformanceMark::New(
+            "mark_tiny", base::Milliseconds(i), std::nullopt));
     entries.push_back(std::move(entry));
   }
   observer_remote->DidObservePerformanceEntries(std::move(entries));
@@ -1227,6 +1424,398 @@ TEST_F(DeclarativePerformanceObserverTest,
   ASSERT_TRUE(entries_list);
 
   EXPECT_EQ(entries_list->size(), 5u);
+}
+
+TEST_F(DeclarativePerformanceObserverTest, RecordsUseCounter) {
+  const GURL kPageURL("https://example.com/index.html");
+  const std::string kEndpoint("telemetry");
+
+  auto policy = network::mojom::DeclarativePerformanceObserverPolicy::New();
+  policy->reporting_endpoint = kEndpoint;
+  policy->entry_types.push_back(
+      network::mojom::PerformanceEntryType::kVisibilityState);
+
+  MockNavigationHandle navigation_handle(kPageURL, main_rfh());
+  navigation_handle.set_has_committed(true);
+  navigation_handle.set_is_in_primary_main_frame(true);
+  navigation_handle.set_is_error_page(false);
+
+  ON_CALL(navigation_handle, GetDeclarativePerformanceObserverPolicy())
+      .WillByDefault(testing::Return(policy.get()));
+
+  MockDPOContentBrowserClient mock_client;
+  ContentBrowserClient* old_client = SetBrowserClientForTesting(&mock_client);
+
+  EXPECT_CALL(mock_client,
+              LogWebFeatureForCurrentPage(
+                  main_rfh(),
+                  blink::mojom::WebFeature::kDeclarativePerformanceObserver))
+      .Times(1);
+
+  CreateObserver(&navigation_handle);
+
+  SetBrowserClientForTesting(old_client);
+}
+
+TEST_F(DeclarativePerformanceObserverTest,
+       SanitizesReportUrlsInNavigationEntry) {
+  const GURL kPageURL("https://user:password@example.com/index.html#section1");
+  const GURL kExpectedSanitizedURL("https://example.com/index.html");
+  const std::string kEndpoint("telemetry");
+
+  auto policy = network::mojom::DeclarativePerformanceObserverPolicy::New();
+  policy->reporting_endpoint = kEndpoint;
+  policy->entry_types.push_back(
+      network::mojom::PerformanceEntryType::kNavigation);
+
+  MockNavigationHandle navigation_handle(kPageURL, main_rfh());
+  navigation_handle.set_has_committed(true);
+  navigation_handle.set_is_in_primary_main_frame(true);
+  navigation_handle.set_is_error_page(false);
+
+  NavigationHandleTiming timing;
+  ON_CALL(navigation_handle, GetNavigationHandleTiming())
+      .WillByDefault(testing::ReturnRef(timing));
+
+  ON_CALL(navigation_handle, GetDeclarativePerformanceObserverPolicy())
+      .WillByDefault(testing::Return(policy.get()));
+
+  CreateObserver(&navigation_handle);
+  auto* observer =
+      DeclarativePerformanceObserver::GetForCurrentDocument(main_rfh());
+  ASSERT_TRUE(observer);
+
+  observer->OnEnterBFCache();
+
+  ASSERT_EQ(network_context_.reports().size(), 1u);
+  const auto& report1 = network_context_.reports()[0];
+  EXPECT_EQ(report1.type, "performance-observer");
+
+  const base::ListValue* entries1 = report1.body.FindList("entries");
+  ASSERT_TRUE(entries1);
+  ASSERT_GE(entries1->size(), 1u);
+
+  const base::DictValue* nav_entry1 = (*entries1)[0].GetIfDict();
+  ASSERT_TRUE(nav_entry1);
+  EXPECT_EQ(*(nav_entry1->FindString("entryType")), "navigation");
+  EXPECT_EQ(*(nav_entry1->FindString("name")), kExpectedSanitizedURL.spec());
+
+  network_context_.ClearReports();
+
+  const GURL kBFCacheURL(
+      "https://user:password@example.com/index.html#section2");
+  MockNavigationHandle restore_handle(kBFCacheURL, main_rfh());
+  restore_handle.set_has_committed(true);
+  restore_handle.set_is_in_primary_main_frame(true);
+  restore_handle.set_is_error_page(false);
+  restore_handle.set_is_served_from_bfcache(true);
+
+  observer->OnDidFinishNavigation(&restore_handle);
+
+  DeclarativePerformanceObserver::DeleteForCurrentDocument(main_rfh());
+
+  ASSERT_EQ(network_context_.reports().size(), 1u);
+  const auto& report2 = network_context_.reports()[0];
+  const base::ListValue* entries2 = report2.body.FindList("entries");
+  ASSERT_TRUE(entries2);
+  ASSERT_GE(entries2->size(), 1u);
+
+  const base::DictValue* nav_entry2 = (*entries2)[0].GetIfDict();
+  ASSERT_TRUE(nav_entry2);
+  EXPECT_EQ(*(nav_entry2->FindString("entryType")), "navigation");
+  EXPECT_EQ(*(nav_entry2->FindString("type")), "back_forward");
+  EXPECT_EQ(*(nav_entry2->FindString("name")), kExpectedSanitizedURL.spec());
+}
+
+TEST_F(DeclarativePerformanceObserverTest, SanitizesReportUrlsInLcpEntry) {
+  const GURL kPageURL("https://example.com/index.html");
+  const std::string kEndpoint("telemetry");
+
+  auto policy = network::mojom::DeclarativePerformanceObserverPolicy::New();
+  policy->reporting_endpoint = kEndpoint;
+  policy->entry_types.push_back(
+      network::mojom::PerformanceEntryType::kLargestContentfulPaint);
+
+  MockNavigationHandle navigation_handle(kPageURL, main_rfh());
+  navigation_handle.set_has_committed(true);
+  navigation_handle.set_is_in_primary_main_frame(true);
+  navigation_handle.set_is_error_page(false);
+
+  NavigationHandleTiming timing;
+  ON_CALL(navigation_handle, GetNavigationHandleTiming())
+      .WillByDefault(testing::ReturnRef(timing));
+
+  ON_CALL(navigation_handle, GetDeclarativePerformanceObserverPolicy())
+      .WillByDefault(testing::Return(policy.get()));
+
+  CreateObserver(&navigation_handle);
+
+  mojo::Remote<blink::mojom::DeclarativePerformanceObserverHost>
+      observer_remote;
+  DeclarativePerformanceObserver::Bind(
+      main_rfh(), observer_remote.BindNewPipeAndPassReceiver());
+
+  std::vector<blink::mojom::DeclarativePerformanceEntryPtr> entries;
+  entries.push_back(blink::mojom::DeclarativePerformanceEntry::NewLcp(
+      blink::mojom::DeclarativeLargestContentfulPaint::New(
+          base::Milliseconds(150), 450, base::Milliseconds(150),
+          base::Milliseconds(120), "hero-img",
+          "https://user:password@example.com/hero.png#section2", "IMG")));
+  observer_remote->DidObservePerformanceEntries(std::move(entries));
+  observer_remote.FlushForTesting();
+
+  DeclarativePerformanceObserver::DeleteForCurrentDocument(main_rfh());
+
+  ASSERT_EQ(network_context_.reports().size(), 1u);
+  const auto& report = network_context_.reports()[0];
+
+  const base::ListValue* entries_list = report.body.FindList("entries");
+  ASSERT_TRUE(entries_list);
+  ASSERT_GE(entries_list->size(), 1u);
+
+  const base::Value& entry_val0 = (*entries_list)[0];
+  const base::DictValue* lcp_entry = entry_val0.GetIfDict();
+  ASSERT_TRUE(lcp_entry);
+
+  const std::string* url = lcp_entry->FindString("url");
+  ASSERT_TRUE(url);
+  EXPECT_EQ(*url, "https://example.com/hero.png");
+}
+
+// Verifies that when a renderer crashes (crbug.com/558351483),
+// DeclarativePerformanceObserver::OnFrameDeleted() queues its final report
+// before RenderFrameHostImpl::RenderProcessGone() expires the reporting source
+// via SendReportsAndRemoveSource().
+TEST_F(DeclarativePerformanceObserverTest,
+       FlushesBeforeSourceRemovalOnRenderProcessGone) {
+  const GURL kPageURL("https://example.com/index.html");
+  const std::string kEndpoint("telemetry");
+
+  NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(), kPageURL);
+
+  mojo::Receiver<network::mojom::NetworkContext> network_context_receiver(
+      &network_context_);
+  static_cast<StoragePartitionImpl*>(main_rfh()->GetStoragePartition())
+      ->SetNetworkContextForTesting(
+          network_context_receiver.BindNewPipeAndPassRemote());
+
+  DeclarativePerformanceObserverCoordinator::CreateForWebContents(
+      web_contents());
+
+  auto policy = network::mojom::DeclarativePerformanceObserverPolicy::New();
+  policy->reporting_endpoint = kEndpoint;
+  policy->entry_types.push_back(
+      network::mojom::PerformanceEntryType::kVisibilityState);
+
+  MockNavigationHandle navigation_handle(kPageURL, main_rfh());
+  navigation_handle.set_has_committed(true);
+  navigation_handle.set_is_in_primary_main_frame(true);
+  navigation_handle.set_is_error_page(false);
+
+  ON_CALL(navigation_handle, GetDeclarativePerformanceObserverPolicy())
+      .WillByDefault(testing::Return(policy.get()));
+
+  // Create the observer directly without overriding StoragePartition so that
+  // FlushMetrics() and RenderFrameHostImpl::RenderProcessGone() share
+  // main_rfh()->GetStoragePartition()'s NetworkContext Mojo pipe.
+  DeclarativePerformanceObserver::CreateForCurrentDocument(main_rfh(),
+                                                           &navigation_handle);
+  const base::UnguessableToken reporting_source =
+      main_rfh()->GetReportingSource();
+
+  static_cast<MockRenderProcessHost*>(main_rfh()->GetProcess())
+      ->SimulateCrash();
+  main_rfh()->GetStoragePartition()->FlushNetworkInterfaceForTesting();
+
+  EXPECT_TRUE(network_context_.expired_sources().contains(reporting_source));
+  EXPECT_EQ(network_context_.dropped_reports_due_to_expired_source(), 0u);
+  EXPECT_THAT(
+      network_context_.reports(),
+      testing::Contains(testing::Field(&TestNetworkContext::Report::type,
+                                       testing::Eq("performance-observer"))));
+}
+
+class DeclarativePerformanceObserverSameRFHTest
+    : public DeclarativePerformanceObserverTest {
+ public:
+  DeclarativePerformanceObserverSameRFHTest() {
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{features::kRenderDocument,
+                               features::kBackForwardCache});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Verifies that when a cross-document navigation commits in the same
+// RenderFrameHost (crbug.com/558351483), replacing document_associated_data_
+// flushes ~DeclarativePerformanceObserver() before
+// RenderFrameHostImpl::DidCommitNavigationInternal() expires the previous
+// document's reporting source via SendReportsAndRemoveSource().
+TEST_F(DeclarativePerformanceObserverSameRFHTest,
+       FlushesBeforeSourceRemovalOnSameRFHNavigation) {
+  const GURL kPageURL1("https://example.com/index.html");
+  const GURL kPageURL2("https://example.com/page2.html");
+  const std::string kEndpoint("telemetry");
+
+  NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(), kPageURL1);
+
+  mojo::Receiver<network::mojom::NetworkContext> network_context_receiver(
+      &network_context_);
+  static_cast<StoragePartitionImpl*>(main_rfh()->GetStoragePartition())
+      ->SetNetworkContextForTesting(
+          network_context_receiver.BindNewPipeAndPassRemote());
+
+  auto policy = network::mojom::DeclarativePerformanceObserverPolicy::New();
+  policy->reporting_endpoint = kEndpoint;
+  policy->entry_types.push_back(
+      network::mojom::PerformanceEntryType::kVisibilityState);
+
+  MockNavigationHandle navigation_handle(kPageURL1, main_rfh());
+  navigation_handle.set_has_committed(true);
+  navigation_handle.set_is_in_primary_main_frame(true);
+  navigation_handle.set_is_error_page(false);
+
+  ON_CALL(navigation_handle, GetDeclarativePerformanceObserverPolicy())
+      .WillByDefault(testing::Return(policy.get()));
+
+  DeclarativePerformanceObserver::CreateForCurrentDocument(main_rfh(),
+                                                           &navigation_handle);
+
+  RenderFrameHost* const old_rfh = main_rfh();
+  const base::UnguessableToken old_reporting_source =
+      main_rfh()->GetReportingSource();
+
+  NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(), kPageURL2);
+  EXPECT_EQ(old_rfh, main_rfh());
+  main_rfh()->GetStoragePartition()->FlushNetworkInterfaceForTesting();
+
+  EXPECT_TRUE(
+      network_context_.expired_sources().contains(old_reporting_source));
+  EXPECT_FALSE(network_context_.expired_sources().contains(
+      main_rfh()->GetReportingSource()));
+  EXPECT_EQ(network_context_.dropped_reports_due_to_expired_source(), 0u);
+  ASSERT_EQ(network_context_.reports().size(), 1u);
+  EXPECT_EQ(network_context_.reports()[0].type, "performance-observer");
+}
+
+class DeclarativePerformanceObserverCrossRFHWithoutBFCacheTest
+    : public DeclarativePerformanceObserverTest {
+ public:
+  DeclarativePerformanceObserverCrossRFHWithoutBFCacheTest() {
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{features::kRenderDocument},
+        /*disabled_features=*/{features::kBackForwardCache});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Verifies that when a cross-RenderFrameHost navigation destroys the previous
+// RenderFrameHost without storing it in BackForwardCache (crbug.com/558351483),
+// RenderFrameHostImpl::~RenderFrameHostImpl() flushes
+// DeclarativePerformanceObserver before expiring the previous document's
+// reporting source via SendReportsAndRemoveSource().
+TEST_F(DeclarativePerformanceObserverCrossRFHWithoutBFCacheTest,
+       FlushesBeforeSourceRemovalOnCrossRFHNavigation) {
+  const GURL kPageURL1("https://example.com/index.html");
+  const GURL kPageURL2("https://example.com/page2.html");
+  const std::string kEndpoint("telemetry");
+
+  NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(), kPageURL1);
+
+  mojo::Receiver<network::mojom::NetworkContext> network_context_receiver(
+      &network_context_);
+  static_cast<StoragePartitionImpl*>(main_rfh()->GetStoragePartition())
+      ->SetNetworkContextForTesting(
+          network_context_receiver.BindNewPipeAndPassRemote());
+
+  DeclarativePerformanceObserverCoordinator::CreateForWebContents(
+      web_contents());
+
+  auto policy = network::mojom::DeclarativePerformanceObserverPolicy::New();
+  policy->reporting_endpoint = kEndpoint;
+  policy->entry_types.push_back(
+      network::mojom::PerformanceEntryType::kVisibilityState);
+
+  MockNavigationHandle navigation_handle(kPageURL1, main_rfh());
+  navigation_handle.set_has_committed(true);
+  navigation_handle.set_is_in_primary_main_frame(true);
+  navigation_handle.set_is_error_page(false);
+
+  ON_CALL(navigation_handle, GetDeclarativePerformanceObserverPolicy())
+      .WillByDefault(testing::Return(policy.get()));
+
+  DeclarativePerformanceObserver::CreateForCurrentDocument(main_rfh(),
+                                                           &navigation_handle);
+
+  const GlobalRenderFrameHostId old_rfh_id = main_rfh()->GetGlobalId();
+  const base::UnguessableToken old_reporting_source =
+      main_rfh()->GetReportingSource();
+
+  NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(), kPageURL2);
+  EXPECT_NE(old_rfh_id, main_rfh()->GetGlobalId());
+  main_rfh()->GetStoragePartition()->FlushNetworkInterfaceForTesting();
+
+  EXPECT_TRUE(
+      network_context_.expired_sources().contains(old_reporting_source));
+  EXPECT_FALSE(network_context_.expired_sources().contains(
+      main_rfh()->GetReportingSource()));
+  EXPECT_EQ(network_context_.dropped_reports_due_to_expired_source(), 0u);
+  ASSERT_EQ(network_context_.reports().size(), 1u);
+  EXPECT_EQ(network_context_.reports()[0].type, "performance-observer");
+}
+
+// Verifies that when WebContents is destroyed (e.g., tab closure,
+// crbug.com/558351483), RenderFrameHostImpl::~RenderFrameHostImpl() flushes
+// DeclarativePerformanceObserver before expiring the reporting source via
+// SendReportsAndRemoveSource().
+TEST_F(DeclarativePerformanceObserverTest,
+       FlushesBeforeSourceRemovalOnWebContentsDestruction) {
+  const GURL kPageURL("https://example.com/index.html");
+  const std::string kEndpoint("telemetry");
+
+  NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(), kPageURL);
+
+  auto* storage_partition =
+      static_cast<StoragePartitionImpl*>(main_rfh()->GetStoragePartition());
+  mojo::Receiver<network::mojom::NetworkContext> network_context_receiver(
+      &network_context_);
+  storage_partition->SetNetworkContextForTesting(
+      network_context_receiver.BindNewPipeAndPassRemote());
+
+  DeclarativePerformanceObserverCoordinator::CreateForWebContents(
+      web_contents());
+
+  auto policy = network::mojom::DeclarativePerformanceObserverPolicy::New();
+  policy->reporting_endpoint = kEndpoint;
+  policy->entry_types.push_back(
+      network::mojom::PerformanceEntryType::kVisibilityState);
+
+  MockNavigationHandle navigation_handle(kPageURL, main_rfh());
+  navigation_handle.set_has_committed(true);
+  navigation_handle.set_is_in_primary_main_frame(true);
+  navigation_handle.set_is_error_page(false);
+
+  ON_CALL(navigation_handle, GetDeclarativePerformanceObserverPolicy())
+      .WillByDefault(testing::Return(policy.get()));
+
+  DeclarativePerformanceObserver::CreateForCurrentDocument(main_rfh(),
+                                                           &navigation_handle);
+
+  const base::UnguessableToken reporting_source =
+      main_rfh()->GetReportingSource();
+
+  DeleteContents();
+  storage_partition->FlushNetworkInterfaceForTesting();
+
+  EXPECT_TRUE(network_context_.expired_sources().contains(reporting_source));
+  EXPECT_EQ(network_context_.dropped_reports_due_to_expired_source(), 0u);
+  ASSERT_EQ(network_context_.reports().size(), 1u);
+  EXPECT_EQ(network_context_.reports()[0].type, "performance-observer");
 }
 
 }  // namespace

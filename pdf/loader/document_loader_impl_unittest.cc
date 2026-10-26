@@ -185,12 +185,14 @@ class TestURLLoader : public URLLoaderWrapper {
   raw_ptr<LoaderData> data_;
 };
 
-class TestClient : public DocumentLoader::Client {
+class TestDocumentLoaderClient : public DocumentLoader::Client {
  public:
-  TestClient() { full_page_loader_data()->set_content_type("application/pdf"); }
-  TestClient(const TestClient&) = delete;
-  TestClient& operator=(const TestClient&) = delete;
-  ~TestClient() override = default;
+  TestDocumentLoaderClient() {
+    full_page_loader_data()->set_content_type("application/pdf");
+  }
+  TestDocumentLoaderClient(const TestDocumentLoaderClient&) = delete;
+  TestDocumentLoaderClient& operator=(const TestDocumentLoaderClient&) = delete;
+  ~TestDocumentLoaderClient() override = default;
 
   // DocumentLoader::Client overrides:
   std::unique_ptr<URLLoaderWrapper> CreateURLLoader() override {
@@ -238,11 +240,11 @@ class TestClient : public DocumentLoader::Client {
   TestURLLoader::LoaderData partial_loader_data_;
 };
 
-class MockClient : public TestClient {
+class MockDocumentLoaderClient : public TestDocumentLoaderClient {
  public:
-  MockClient() = default;
-  MockClient(const MockClient&) = delete;
-  MockClient& operator=(const MockClient&) = delete;
+  MockDocumentLoaderClient() = default;
+  MockDocumentLoaderClient(const MockDocumentLoaderClient&) = delete;
+  MockDocumentLoaderClient& operator=(const MockDocumentLoaderClient&) = delete;
 
   MOCK_METHOD(void, OnPendingRequestComplete, (), (override));
   MOCK_METHOD(void, OnNewDataReceived, (), (override));
@@ -261,12 +263,39 @@ class DocumentLoaderImplTest : public testing::Test {
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
+TEST_F(DocumentLoaderImplTest, ContentDisposition) {
+  {
+    TestDocumentLoaderClient client;
+    client.full_page_loader_data()->set_content_disposition(
+        "inline; filename=foo.pdf");
+    DocumentLoaderImpl loader(&client);
+    EXPECT_TRUE(loader.Init(client.CreateFullPageLoader(), "http://url.com"));
+    EXPECT_EQ("foo.pdf", loader.GetFileNameFromContentDisposition());
+  }
+  {
+    TestDocumentLoaderClient client;
+    client.full_page_loader_data()->set_content_disposition(
+        "inline; filename*=UTF-8''foo%20bar.pdf");
+    DocumentLoaderImpl loader(&client);
+    EXPECT_TRUE(loader.Init(client.CreateFullPageLoader(), "http://url.com"));
+    EXPECT_EQ("foo bar.pdf", loader.GetFileNameFromContentDisposition());
+  }
+  {
+    TestDocumentLoaderClient client;
+    client.full_page_loader_data()->set_content_disposition(
+        "attachment; filename=foo.pdf");
+    DocumentLoaderImpl loader(&client);
+    EXPECT_FALSE(loader.Init(client.CreateFullPageLoader(), "http://url.com"));
+    EXPECT_EQ("", loader.GetFileNameFromContentDisposition());
+  }
+}
+
 TEST_F(DocumentLoaderImplTest, PartialLoadingFeatureDefault) {
   scoped_feature_list_.Reset();
   scoped_feature_list_.Init();
 
   // Test that partial loading is disabled when feature is defaulted.
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   DocumentLoaderImpl loader(&client);
   loader.Init(client.CreateFullPageLoader(), "http://url.com");
@@ -282,7 +311,7 @@ TEST_F(DocumentLoaderImplTest, PartialLoadingFeatureDisabled) {
   scoped_feature_list_.InitAndDisableFeature(features::kPdfPartialLoading);
 
   // Test that partial loading is disabled when feature is disabled.
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   DocumentLoaderImpl loader(&client);
   loader.Init(client.CreateFullPageLoader(), "http://url.com");
@@ -295,7 +324,7 @@ TEST_F(DocumentLoaderImplTest, PartialLoadingFeatureDisabled) {
 
 TEST_F(DocumentLoaderImplTest, PartialLoadingEnabled) {
   // Test that partial loading is enabled. (Fixture enables PdfPartialLoading.)
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   DocumentLoaderImpl loader(&client);
   loader.Init(client.CreateFullPageLoader(), "http://url.com");
@@ -307,7 +336,7 @@ TEST_F(DocumentLoaderImplTest, PartialLoadingEnabled) {
 }
 
 TEST_F(DocumentLoaderImplTest, PartialLoadingDisabledOnSmallFiles) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 2);
   DocumentLoaderImpl loader(&client);
@@ -320,7 +349,7 @@ TEST_F(DocumentLoaderImplTest, PartialLoadingDisabledOnSmallFiles) {
 }
 
 TEST_F(DocumentLoaderImplTest, PartialLoadingDisabledIfContentEncoded) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_encoded(true);
   DocumentLoaderImpl loader(&client);
@@ -333,7 +362,7 @@ TEST_F(DocumentLoaderImplTest, PartialLoadingDisabledIfContentEncoded) {
 }
 
 TEST_F(DocumentLoaderImplTest, PartialLoadingDisabledNoAcceptRangeBytes) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_accept_ranges_bytes(false);
   DocumentLoaderImpl loader(&client);
@@ -346,7 +375,7 @@ TEST_F(DocumentLoaderImplTest, PartialLoadingDisabledNoAcceptRangeBytes) {
 }
 
 TEST_F(DocumentLoaderImplTest, PartialLoadingReallyDisabledRequestFromBegin) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   DocumentLoaderImpl loader(&client);
   client.SetCanUsePartialLoading();
   loader.SetPartialLoadingEnabled(false);
@@ -361,7 +390,7 @@ TEST_F(DocumentLoaderImplTest, PartialLoadingReallyDisabledRequestFromBegin) {
 }
 
 TEST_F(DocumentLoaderImplTest, PartialLoadingReallyDisabledRequestFromMiddle) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   DocumentLoaderImpl loader(&client);
   loader.SetPartialLoadingEnabled(false);
@@ -374,7 +403,7 @@ TEST_F(DocumentLoaderImplTest, PartialLoadingReallyDisabledRequestFromMiddle) {
 }
 
 TEST_F(DocumentLoaderImplTest, PartialLoadingSimple) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
 
   DocumentLoaderImpl loader(&client);
@@ -402,7 +431,7 @@ TEST_F(DocumentLoaderImplTest, PartialLoadingSimple) {
 }
 
 TEST_F(DocumentLoaderImplTest, PartialLoadingBackOrder) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
 
   DocumentLoaderImpl loader(&client);
@@ -432,7 +461,7 @@ TEST_F(DocumentLoaderImplTest, PartialLoadingBackOrder) {
 }
 
 TEST_F(DocumentLoaderImplTest, CompleteWithoutPartial) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   DocumentLoaderImpl loader(&client);
   loader.Init(client.CreateFullPageLoader(), "http://url.com");
@@ -445,7 +474,7 @@ TEST_F(DocumentLoaderImplTest, CompleteWithoutPartial) {
 }
 
 TEST_F(DocumentLoaderImplTest, ErrorDownloadFullDocument) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   DocumentLoaderImpl loader(&client);
   loader.Init(client.CreateFullPageLoader(), "http://url.com");
@@ -457,7 +486,7 @@ TEST_F(DocumentLoaderImplTest, ErrorDownloadFullDocument) {
 }
 
 TEST_F(DocumentLoaderImplTest, CompleteNoContentLength) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   DocumentLoaderImpl loader(&client);
   loader.Init(client.CreateFullPageLoader(), "http://url.com");
   EXPECT_FALSE(client.full_page_loader_data()->closed());
@@ -473,7 +502,7 @@ TEST_F(DocumentLoaderImplTest, CompleteNoContentLength) {
 }
 
 TEST_F(DocumentLoaderImplTest, CompleteWithPartial) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20);
   DocumentLoaderImpl loader(&client);
@@ -497,7 +526,7 @@ TEST_F(DocumentLoaderImplTest, CompleteWithPartial) {
 
 TEST_F(DocumentLoaderImplTest, PartialRequestLastChunk) {
   constexpr uint32_t kLastChunkSize = 300;
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20 +
                                                      kLastChunkSize);
@@ -526,7 +555,7 @@ TEST_F(DocumentLoaderImplTest, PartialRequestLastChunk) {
 }
 
 TEST_F(DocumentLoaderImplTest, DocumentSize) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(123456789);
   DocumentLoaderImpl loader(&client);
@@ -536,7 +565,7 @@ TEST_F(DocumentLoaderImplTest, DocumentSize) {
 }
 
 TEST_F(DocumentLoaderImplTest, DocumentSizeNoContentLength) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   DocumentLoaderImpl loader(&client);
   loader.Init(client.CreateFullPageLoader(), "http://url.com");
   EXPECT_EQ(0ul, loader.GetDocumentSize());
@@ -549,7 +578,7 @@ TEST_F(DocumentLoaderImplTest, DocumentSizeNoContentLength) {
 }
 
 TEST_F(DocumentLoaderImplTest, ClearPendingRequests) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 100 +
                                                      58383);
@@ -640,7 +669,7 @@ TEST_F(DocumentLoaderImplTest, ClearPendingRequests) {
 TEST_F(DocumentLoaderImplTest, GetBlock) {
   std::vector<char> buffer(kDefaultRequestSize);
   auto buffer_span = base::as_writable_byte_span(buffer);
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20 +
                                                      58383);
@@ -669,7 +698,7 @@ TEST_F(DocumentLoaderImplTest, GetBlock) {
 }
 
 TEST_F(DocumentLoaderImplTest, IsDataAvailable) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20 +
                                                      58383);
@@ -694,7 +723,7 @@ TEST_F(DocumentLoaderImplTest, IsDataAvailable) {
 }
 
 TEST_F(DocumentLoaderImplTest, RequestData) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 100 +
                                                      58383);
@@ -761,7 +790,7 @@ TEST_F(DocumentLoaderImplTest, RequestData) {
 }
 
 TEST_F(DocumentLoaderImplTest, DoNotLoadAvailablePartialData) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20 +
                                                      58383);
@@ -783,7 +812,7 @@ TEST_F(DocumentLoaderImplTest, DoNotLoadAvailablePartialData) {
 }
 
 TEST_F(DocumentLoaderImplTest, DoNotLoadDataAfterComplete) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20);
   DocumentLoaderImpl loader(&client);
@@ -802,7 +831,7 @@ TEST_F(DocumentLoaderImplTest, DoNotLoadDataAfterComplete) {
 }
 
 TEST_F(DocumentLoaderImplTest, DoNotLoadPartialDataAboveDocumentSize) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20);
   DocumentLoaderImpl loader(&client);
@@ -817,7 +846,7 @@ TEST_F(DocumentLoaderImplTest, DoNotLoadPartialDataAboveDocumentSize) {
 }
 
 TEST_F(DocumentLoaderImplTest, MergePendingRequests) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 50 +
                                                      58383);
@@ -846,7 +875,7 @@ TEST_F(DocumentLoaderImplTest, MergePendingRequests) {
 }
 
 TEST_F(DocumentLoaderImplTest, PartialStopOnStatusCodeError) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20);
   DocumentLoaderImpl loader(&client);
@@ -865,7 +894,7 @@ TEST_F(DocumentLoaderImplTest, PartialStopOnStatusCodeError) {
 
 TEST_F(DocumentLoaderImplTest,
        PartialAsFullDocumentLoadingRangeRequestNoRangeField) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20);
   DocumentLoaderImpl loader(&client);
@@ -885,7 +914,7 @@ TEST_F(DocumentLoaderImplTest,
 }
 
 TEST_F(DocumentLoaderImplTest, PartialMultiPart) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20);
   DocumentLoaderImpl loader(&client);
@@ -907,7 +936,7 @@ TEST_F(DocumentLoaderImplTest, PartialMultiPart) {
 }
 
 TEST_F(DocumentLoaderImplTest, PartialMultiPartRangeError) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20);
   DocumentLoaderImpl loader(&client);
@@ -929,7 +958,7 @@ TEST_F(DocumentLoaderImplTest, PartialMultiPartRangeError) {
 }
 
 TEST_F(DocumentLoaderImplTest, PartialConnectionErrorOnOpen) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20);
   DocumentLoaderImpl loader(&client);
@@ -952,7 +981,7 @@ TEST_F(DocumentLoaderImplTest, PartialConnectionErrorOnOpen) {
 }
 
 TEST_F(DocumentLoaderImplTest, PartialConnectionErrorOnRead) {
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20);
   DocumentLoaderImpl loader(&client);
@@ -979,7 +1008,7 @@ TEST_F(DocumentLoaderImplTest, PartialConnectionErrorOnRead) {
 }
 
 TEST_F(DocumentLoaderImplTest, ClientCompleteCallbacks) {
-  NiceMock<MockClient> client;
+  NiceMock<MockDocumentLoaderClient> client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20);
   DocumentLoaderImpl loader(&client);
@@ -996,7 +1025,7 @@ TEST_F(DocumentLoaderImplTest, ClientCompleteCallbacks) {
 }
 
 TEST_F(DocumentLoaderImplTest, ClientCompleteCallbacksNoContentLength) {
-  NiceMock<MockClient> client;
+  NiceMock<MockDocumentLoaderClient> client;
   DocumentLoaderImpl loader(&client);
   loader.Init(client.CreateFullPageLoader(), "http://url.com");
 
@@ -1013,7 +1042,7 @@ TEST_F(DocumentLoaderImplTest, ClientCompleteCallbacksNoContentLength) {
 }
 
 TEST_F(DocumentLoaderImplTest, ClientCancelCallback) {
-  NiceMock<MockClient> client;
+  NiceMock<MockDocumentLoaderClient> client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20);
   DocumentLoaderImpl loader(&client);
@@ -1032,7 +1061,7 @@ TEST_F(DocumentLoaderImplTest, ClientCancelCallback) {
 }
 
 TEST_F(DocumentLoaderImplTest, NewDataAvailable) {
-  MockClient client;
+  MockDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDefaultRequestSize * 20);
   DocumentLoaderImpl loader(&client);
@@ -1052,7 +1081,7 @@ TEST_F(DocumentLoaderImplTest, NewDataAvailable) {
 }
 
 TEST_F(DocumentLoaderImplTest, ClientPendingRequestCompleteFullLoader) {
-  NiceMock<MockClient> client;
+  NiceMock<MockDocumentLoaderClient> client;
   client.SetCanUsePartialLoading();
   DocumentLoaderImpl loader(&client);
   loader.Init(client.CreateFullPageLoader(), "http://url.com");
@@ -1065,7 +1094,7 @@ TEST_F(DocumentLoaderImplTest, ClientPendingRequestCompleteFullLoader) {
 }
 
 TEST_F(DocumentLoaderImplTest, ClientPendingRequestCompletePartialLoader) {
-  NiceMock<MockClient> client;
+  NiceMock<MockDocumentLoaderClient> client;
   client.SetCanUsePartialLoading();
   DocumentLoaderImpl loader(&client);
   loader.Init(client.CreateFullPageLoader(), "http://url.com");
@@ -1082,7 +1111,7 @@ TEST_F(DocumentLoaderImplTest, ClientPendingRequestCompletePartialLoader) {
 
 TEST_F(DocumentLoaderImplTest,
        ClientPendingRequestCompletePartialAndFullLoader) {
-  NiceMock<MockClient> client;
+  NiceMock<MockDocumentLoaderClient> client;
   client.SetCanUsePartialLoading();
   DocumentLoaderImpl loader(&client);
   loader.Init(client.CreateFullPageLoader(), "http://url.com");
@@ -1103,7 +1132,7 @@ TEST_F(DocumentLoaderImplTest,
 
 TEST_F(DocumentLoaderImplTest, IgnoreDataMoreThanExpectedWithPartial) {
   static constexpr uint32_t kDocSize = kDefaultRequestSize * 80 - 321;
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDocSize);
   DocumentLoaderImpl loader(&client);
@@ -1157,7 +1186,7 @@ TEST_F(DocumentLoaderImplTest, IgnoreDataMoreThanExpectedWithPartialAtFileEnd) {
   static constexpr uint32_t kExtraSize = 100;
   static constexpr uint32_t kRealSize = kDefaultRequestSize * 20 - 300;
   static constexpr uint32_t kDocSize = kRealSize - kExtraSize;
-  TestClient client;
+  TestDocumentLoaderClient client;
   client.SetCanUsePartialLoading();
   client.full_page_loader_data()->set_content_length(kDocSize);
   DocumentLoaderImpl loader(&client);

@@ -98,6 +98,7 @@ void TestWebTransportCreator::Connect(
     /*anticipated_concurrent_incoming_unidirectional_streams*/,
     std::optional<uint16_t>
     /*anticipated_concurrent_incoming_bidirectional_streams*/,
+    net::HttpRequestHeaders::HeaderVector,
     mojo::PendingRemote<network::mojom::blink::WebTransportHandshakeClient>
         pending_handshake_client) {
   mojo::Remote<network::mojom::blink::WebTransportHandshakeClient>
@@ -114,7 +115,8 @@ void TestWebTransportCreator::Connect(
       client_remote.InitWithNewPipeAndPassReceiver(),
       net::HttpResponseHeaders::Builder(net::HttpVersion(1, 1), "200 OK")
           .Build(),
-      String(), network::mojom::blink::WebTransportStats::New());
+      String(), network::mojom::blink::WebTransportStats::New(),
+      /*max_datagram_size=*/1024);
   client_remote_.Bind(std::move(client_remote));
 }
 

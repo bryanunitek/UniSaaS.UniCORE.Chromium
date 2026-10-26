@@ -8,6 +8,7 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/dictation/dictation_keyed_service.h"
 #include "chrome/browser/dictation/features.h"
+#include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/renderer_context_menu/render_view_context_menu_proxy.h"
@@ -15,6 +16,7 @@
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/global_dom_node_id.h"
 #include "content/public/browser/render_frame_host.h"
+#include "third_party/blink/public/common/context_menu_data/edit_flags.h"
 #include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -28,7 +30,14 @@ DictationMenuObserver::~DictationMenuObserver() = default;
 void DictationMenuObserver::InitMenu(const content::ContextMenuParams& params) {
   // Note that `field_renderer_id` is `DOMNodeIdType` within blink. Its value
   // is only meaningful within the renderer that generated it.
-  target_element_dom_id_ = params.form_field_dom_node_id;
+  target_details_.target_id = params.form_field_dom_node_id;
+  target_details_.richly_editable =
+      params.edit_flags & blink::ContextMenuDataEditFlags::kCanEditRichly;
+
+  content::RenderFrameHost* rfh = proxy_->GetRenderFrameHost();
+  if (rfh && rfh->IsFocusedElementPasswordLike()) {
+    return;
+  }
 
   DictationKeyedService* service = GetDictationService();
   if (service && service->ShouldShowContextMenuItem()) {
@@ -55,9 +64,12 @@ void DictationMenuObserver::ExecuteCommand(int command_id) {
     return;
   }
 
+  UserEducationService::MaybeNotifyNewBadgeFeatureUsed(
+      proxy_->GetBrowserContext(), kDictation);
+
   DictationKeyedService* service = GetDictationService();
   if (service) {
-    service->ContextMenuHandler(target_element_dom_id_);
+    service->ContextMenuHandler(target_details_);
   }
 }
 

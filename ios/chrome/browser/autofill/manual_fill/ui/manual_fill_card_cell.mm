@@ -323,8 +323,6 @@ CGFloat GPayIconTopAnchorOffset() {
 
   self.headerSeparator = CreateGraySeparatorForContainer(self.contentView);
 
-  UILabel* expirationDateSeparatorLabel;
-
   // Card instruction textview is always created, but is only visible for
   // virtual and CardInfoRetrieval enrolled cards and hidden for rest.
   self.cardInstructionTextView = [self createCardInstructionTextView];
@@ -370,13 +368,13 @@ CGFloat GPayIconTopAnchorOffset() {
                               action:@selector(onAutofillFormButtonTapped)
                     forControlEvents:UIControlEventTouchUpInside];
 
-  [self horizontallyArrangeViews:expirationDateSeparatorLabel];
+  [self horizontallyArrangeViews];
 
   SetUpCellAccessibilityElements(self, accessibilityElements);
 }
 
 // Horizontally positions the UIViews.
-- (void)horizontallyArrangeViews:(UILabel*)expirationDateSeparatorLabel {
+- (void)horizontallyArrangeViews {
   NSMutableArray<NSLayoutConstraint*>* staticConstraints =
       [[NSMutableArray alloc] init];
   AppendHorizontalConstraintsForViews(staticConstraints, @[ self.headerView ],
@@ -581,9 +579,12 @@ CGFloat GPayIconTopAnchorOffset() {
       base::UserMetricsAction([self createMetricsAction:@"SelectCardNumber"]));
 
   if (self.card.canFillDirectly) {
-    [self.contentInjector userDidPickContent:number
-                               passwordField:NO
-                               requiresHTTPS:YES];
+    [self.contentInjector
+        userDidPickContent:number
+             passwordField:NO
+             requiresHTTPS:YES
+           jumpToNextField:YES
+                actionType:autofill::mojom::FieldActionType::kReplaceAll];
   } else {
     [self.navigationDelegate
         requestFullCreditCard:self.card
@@ -594,22 +595,32 @@ CGFloat GPayIconTopAnchorOffset() {
 - (void)userDidTapCardholderName:(UIButton*)sender {
   base::RecordAction(base::UserMetricsAction(
       [self createMetricsAction:@"SelectCardholderName"]));
-  [self.contentInjector userDidPickContent:sender.titleLabel.text
-                             passwordField:NO
-                             requiresHTTPS:NO];
+  [self.contentInjector
+      userDidPickContent:sender.titleLabel.text
+           passwordField:NO
+           requiresHTTPS:NO
+         jumpToNextField:YES
+              actionType:autofill::mojom::FieldActionType::kReplaceAll];
 }
 
 - (void)userDidTapExpirationMonth:(UIButton*)sender {
   base::RecordAction(base::UserMetricsAction(
       [self createMetricsAction:@"SelectExpirationMonth"]));
   if (self.card.recordType == kVirtualCard) {
+    if (![self.contentInjector canUserInjectInPasswordField:NO
+                                              requiresHTTPS:YES]) {
+      return;
+    }
     [self.navigationDelegate
         requestFullCreditCard:self.card
                     fieldType:manual_fill::PaymentFieldType::kExpirationMonth];
   } else {
-    [self.contentInjector userDidPickContent:sender.titleLabel.text
-                               passwordField:NO
-                               requiresHTTPS:NO];
+    [self.contentInjector
+        userDidPickContent:sender.titleLabel.text
+             passwordField:NO
+             requiresHTTPS:NO
+           jumpToNextField:YES
+                actionType:autofill::mojom::FieldActionType::kReplaceAll];
   }
 }
 
@@ -617,30 +628,41 @@ CGFloat GPayIconTopAnchorOffset() {
   base::RecordAction(base::UserMetricsAction(
       [self createMetricsAction:@"SelectExpirationYear"]));
   if (self.card.recordType == kVirtualCard) {
+    if (![self.contentInjector canUserInjectInPasswordField:NO
+                                              requiresHTTPS:YES]) {
+      return;
+    }
     [self.navigationDelegate
         requestFullCreditCard:self.card
                     fieldType:manual_fill::PaymentFieldType::kExpirationYear];
   } else {
-    [self.contentInjector userDidPickContent:sender.titleLabel.text
-                               passwordField:NO
-                               requiresHTTPS:NO];
+    [self.contentInjector
+        userDidPickContent:sender.titleLabel.text
+             passwordField:NO
+             requiresHTTPS:NO
+           jumpToNextField:YES
+                actionType:autofill::mojom::FieldActionType::kReplaceAll];
   }
 }
 
 - (void)userDidTapCVC:(UIButton*)sender {
+  if (![self.contentInjector canUserInjectInPasswordField:NO
+                                            requiresHTTPS:YES]) {
+    return;
+  }
+
   base::RecordAction(
       base::UserMetricsAction([self createMetricsAction:@"SelectCvc"]));
 
   // For cards that can be filled directly (e.g. local cards or unmasked virtual
   // cards), insert the stored CVC.
   if (self.card.canFillDirectly) {
-    if (![self.contentInjector canUserInjectInPasswordField:NO
-                                              requiresHTTPS:YES]) {
-      return;
-    }
-    [self.contentInjector userDidPickContent:self.card.CVC
-                               passwordField:NO
-                               requiresHTTPS:YES];
+    [self.contentInjector
+        userDidPickContent:self.card.CVC
+             passwordField:NO
+             requiresHTTPS:YES
+           jumpToNextField:YES
+                actionType:autofill::mojom::FieldActionType::kReplaceAll];
   } else {
     [self.navigationDelegate
         requestFullCreditCard:self.card
@@ -651,6 +673,11 @@ CGFloat GPayIconTopAnchorOffset() {
 // Called when the "Autofill Form" button is tapped. Fills the current form with
 // the card's data.
 - (void)onAutofillFormButtonTapped {
+  if (![self.contentInjector canUserInjectInPasswordField:NO
+                                            requiresHTTPS:YES]) {
+    return;
+  }
+
   base::UmaHistogramSparse(
       "Autofill.UserAcceptedSuggestionAtIndex.CreditCard.ManualFallback",
       _cellIndex);
@@ -818,12 +845,11 @@ CGFloat GPayIconTopAnchorOffset() {
   UIImage* icon;
   // `kGooglePaySymbol` only exists in official builds.
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  NSString* symbol = base::FeatureList::IsEnabled(
-                         autofill::features::kAutofillEnableGradientGoogleLogos)
-                         ? kGooglePayV2Symbol
-                         : kGooglePaySymbol;
-  icon =
-      MakeSymbolMulticolor(CustomSymbolWithPointSize(symbol, kGPayIconWidth));
+  Symbol symbol = base::FeatureList::IsEnabled(
+                      autofill::features::kAutofillEnableGradientGoogleLogos)
+                      ? SymbolGooglePayV2
+                      : SymbolGooglePay;
+  icon = MakeSymbolMulticolor(SymbolWithPointSize(symbol, kGPayIconWidth));
 #else
   icon = NativeImage(IDR_AUTOFILL_GOOGLE_PAY);
 #endif
@@ -837,6 +863,20 @@ CGFloat GPayIconTopAnchorOffset() {
                               constraintEqualToConstant:kGPayIconWidth] ]];
 
   return imageView;
+}
+
+#pragma mark - Testing
+
+- (UIButton*)cvcButton {
+  return self.CVCLabeledChip.singleButton;
+}
+
+- (UIButton*)expirationMonthButton {
+  return self.expirationDateLabeledChip.expirationMonthButton;
+}
+
+- (UIButton*)expirationYearButton {
+  return self.expirationDateLabeledChip.expirationYearButton;
 }
 
 @end

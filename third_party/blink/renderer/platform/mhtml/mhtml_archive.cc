@@ -37,6 +37,7 @@
 #include "base/i18n/time_formatting.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "third_party/blink/public/mojom/loader/mhtml_load_result.mojom-blink.h"
@@ -302,10 +303,8 @@ void MHTMLArchive::GenerateMHTMLHeader(const String& boundary,
   string_builder.Append("\r\nSubject: ");
   string_builder.Append(ConvertToPrintableCharacters(title));
   string_builder.Append("\r\nDate: ");
-  string_builder.Append(
-      // See http://tools.ietf.org/html/rfc2822#section-3.3.
-      String(base::UnlocalizedTimeFormatWithPattern(date,
-                                                    "E, d MMM y HH:mm:ss xx")));
+  // See http://tools.ietf.org/html/rfc2822#section-3.3.
+  string_builder.Append(String(base::TimeFormatHTTP(date)));
   string_builder.Append("\r\nMIME-Version: 1.0\r\n");
   string_builder.Append("Content-Type: multipart/related;\r\n");
   string_builder.Append("\ttype=\"");
@@ -318,7 +317,7 @@ void MHTMLArchive::GenerateMHTMLHeader(const String& boundary,
   // We use Utf8() below instead of Ascii() as Ascii() replaces CRLFs with ??
   // (we still only have put ASCII characters in it).
   DCHECK(string_builder.ToString().ContainsOnlyAsciiOrEmpty());
-  std::string utf8_string = string_builder.ToString().Utf8();
+  std::string utf8_string = string_builder.Utf8();
 
   output_buffer.append_range(utf8_string);
 }
@@ -369,7 +368,7 @@ void MHTMLArchive::GenerateMHTMLPart(const String& boundary,
 
   string_builder.Append("\r\n");
 
-  std::string utf8_string = string_builder.ToString().Utf8();
+  std::string utf8_string = string_builder.Utf8();
   output_buffer.append_range(utf8_string);
 
   if (content_encoding == kBinary) {

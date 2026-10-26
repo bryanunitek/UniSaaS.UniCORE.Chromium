@@ -106,6 +106,10 @@ ui::AXNodeData GetNodeData(View* view) {
   return data;
 }
 
+ui::AXNodeID GetUniqueId(View* view) {
+  return static_cast<ui::AXNodeID>(view->GetViewAccessibility().GetUniqueId());
+}
+
 void ExpectLiveRegionContainer(View* view,
                                const std::string& status,
                                const std::string& relevant,
@@ -253,6 +257,41 @@ TEST_F(ViewAccessibilityTest, ViewUsesChildViewName) {
   child_view()->GetViewAccessibility().GetAccessibleNodeData(&data_2);
   EXPECT_FALSE(data_2.HasStringAttribute(ax::mojom::StringAttribute::kName));
   EXPECT_FALSE(data.HasStringAttribute(ax::mojom::StringAttribute::kName));
+}
+
+TEST_F(ViewAccessibilityTest, EmptyDescriptionNotifiesAttributeRemoval) {
+  auto& view_accessibility = view()->GetViewAccessibility();
+  view_accessibility.SetDescription("Description");
+
+  bool description_removed = false;
+  base::CallbackListSubscription description_changed_subscription =
+      view_accessibility.AddStringAttributeChangedCallback(
+          ax::mojom::StringAttribute::kDescription,
+          base::BindRepeating(
+              [](bool* description_removed,
+                 ax::mojom::StringAttribute attribute,
+                 const std::optional<std::string>& description) {
+                EXPECT_EQ(attribute, ax::mojom::StringAttribute::kDescription);
+                *description_removed = !description.has_value();
+              },
+              &description_removed));
+  bool description_from_removed = false;
+  base::CallbackListSubscription description_from_changed_subscription =
+      view_accessibility.AddIntAttributeChangedCallback(
+          ax::mojom::IntAttribute::kDescriptionFrom,
+          base::BindRepeating(
+              [](bool* description_from_removed,
+                 ax::mojom::IntAttribute attribute,
+                 std::optional<int> description_from) {
+                EXPECT_EQ(attribute, ax::mojom::IntAttribute::kDescriptionFrom);
+                *description_from_removed = !description_from.has_value();
+              },
+              &description_from_removed));
+
+  view_accessibility.SetDescription("");
+
+  EXPECT_TRUE(description_removed);
+  EXPECT_TRUE(description_from_removed);
 }
 
 TEST_F(ViewAccessibilityTest, ViewUsesChildViewSelected) {
@@ -460,6 +499,60 @@ TEST_F(ViewAccessibilityTest, CantSetRelativeBoundsInLazyLoading) {
       relative_bounds;
   EXPECT_DCHECK_DEATH(
       lazy_loading_view->GetViewAccessibility().CompleteCacheInitialization());
+}
+
+TEST_F(ViewAccessibilityTest, OffsetContainerId_NoParent) {
+  EXPECT_EQ(GetNodeData(view()).relative_bounds.offset_container_id,
+            ui::kInvalidAXNodeID);
+}
+
+TEST_F(ViewAccessibilityTest, OffsetContainerId_ViewAddedToParent) {
+  EXPECT_EQ(GetNodeData(child_view()).relative_bounds.offset_container_id,
+            GetUniqueId(view()));
+}
+
+TEST_F(ViewAccessibilityTest, OffsetContainerId_ViewReparented) {
+  View* new_parent = view()->AddChildView(std::make_unique<View>());
+  new_parent->AddChildView(view()->RemoveChildViewT(child_view()));
+
+  EXPECT_EQ(GetNodeData(child_view()).relative_bounds.offset_container_id,
+            GetUniqueId(new_parent));
+}
+
+TEST_F(ViewAccessibilityTest, OffsetContainerId_ViewRemovedFromParent) {
+  View* child = view()->AddChildView(std::make_unique<View>());
+  ASSERT_EQ(GetNodeData(child).relative_bounds.offset_container_id,
+            GetUniqueId(view()));
+
+  std::unique_ptr<View> removed = view()->RemoveChildViewT(child);
+
+  EXPECT_EQ(GetNodeData(removed.get()).relative_bounds.offset_container_id,
+            ui::kInvalidAXNodeID);
+}
+
+TEST_F(ViewAccessibilityTest, OffsetContainerId_NestedHierarchy) {
+  View* grandchild = child_view()->AddChildView(std::make_unique<View>());
+  View* great_grandchild = grandchild->AddChildView(std::make_unique<View>());
+
+  EXPECT_EQ(GetNodeData(child_view()).relative_bounds.offset_container_id,
+            GetUniqueId(view()));
+  EXPECT_EQ(GetNodeData(grandchild).relative_bounds.offset_container_id,
+            GetUniqueId(child_view()));
+  EXPECT_EQ(GetNodeData(great_grandchild).relative_bounds.offset_container_id,
+            GetUniqueId(grandchild));
+}
+
+TEST_F(ViewAccessibilityTest, OffsetContainerId_SubtreeReparented) {
+  View* subtree_root = child_view()->AddChildView(std::make_unique<View>());
+  View* descendant = subtree_root->AddChildView(std::make_unique<View>());
+  View* new_parent = view()->AddChildView(std::make_unique<View>());
+
+  new_parent->AddChildView(child_view()->RemoveChildViewT(subtree_root));
+
+  EXPECT_EQ(GetNodeData(subtree_root).relative_bounds.offset_container_id,
+            GetUniqueId(new_parent));
+  EXPECT_EQ(GetNodeData(descendant).relative_bounds.offset_container_id,
+            GetUniqueId(subtree_root));
 }
 
 TEST_F(ViewAccessibilityTest, EmptyWhenNoChildren) {

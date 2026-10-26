@@ -6,10 +6,11 @@
 
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/chrome_content_browser_client.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
@@ -24,6 +25,7 @@
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 // This test exercises support for kInitialWebUIWithoutExtensions, a performance
@@ -41,19 +43,19 @@ class WebUITestWebUIControllerFactory : public content::WebUIControllerFactory {
   std::unique_ptr<content::WebUIController> CreateWebUIControllerForURL(
       content::WebUI* web_ui,
       const GURL& url) override {
-    return content::HasWebUIScheme(url)
+    return url.host() == "test-initial"
                ? std::make_unique<content::WebUIController>(web_ui)
                : nullptr;
   }
   content::WebUI::TypeID GetWebUIType(content::BrowserContext* browser_context,
                                       const GURL& url) override {
-    return content::HasWebUIScheme(url)
+    return url.host() == "test-initial"
                ? reinterpret_cast<content::WebUI::TypeID>(1)
                : nullptr;
   }
   bool UseWebUIForURL(content::BrowserContext* browser_context,
                       const GURL& url) override {
-    return content::HasWebUIScheme(url);
+    return url.host() == "test-initial";
   }
 };
 
@@ -98,7 +100,7 @@ class RendererStartupHelperBrowserTest : public InProcessBrowserTest {
   }
 
   content::WebContents* contents() const {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
  private:

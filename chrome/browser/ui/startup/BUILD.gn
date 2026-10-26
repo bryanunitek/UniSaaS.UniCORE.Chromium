@@ -33,7 +33,6 @@ source_set("startup_tab") {
 source_set("startup") {
   sources = [
     "bad_flags_prompt.h",
-    "bidding_and_auction_consented_debugging_infobar_delegate.h",
     "url_util.h",
   ]
   public_deps = [
@@ -101,6 +100,7 @@ source_set("startup") {
     ]
 
     public_deps += [
+      "//chrome/browser/infobars",
       "//chrome/browser/startup",
       "//chrome/browser/ui:browser_tab_strip",
       "//chrome/browser/ui/tabs:tab_strip_model_observer",
@@ -128,7 +128,6 @@ source_set("startup") {
 source_set("impl") {
   sources = [
     "bad_flags_prompt.cc",
-    "bidding_and_auction_consented_debugging_infobar_delegate.cc",
     "url_util.cc",
   ]
   deps = [
@@ -145,6 +144,7 @@ source_set("impl") {
     "//chrome/browser/first_run",
     "//chrome/browser/headless",
     "//chrome/browser/infobars",
+    "//chrome/browser/policy",
     "//chrome/browser/profiles",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/profiles:profile_manager",
@@ -153,6 +153,7 @@ source_set("impl") {
     "//chrome/browser/sync",
     "//chrome/browser/sync:factories",
     "//chrome/browser/ui:simple_message_box_headers",
+    "//chrome/browser/ui/browser_window:create_browser_window",
     "//chrome/browser/ui/dialogs",
     "//chrome/browser/ui/profiles",
     "//chrome/browser/webauthn",
@@ -169,6 +170,7 @@ source_set("impl") {
     "//components/signin/public/base",
     "//components/signin/public/identity_manager",
     "//components/startup_metric_utils",
+    "//components/tabs:public",
     "//components/translate/core/common",
     "//components/vector_icons",
     "//content/public/browser",
@@ -188,10 +190,7 @@ source_set("impl") {
     "//ui/gfx:native_ui_types",
     "//url",
   ]
-  public_deps = [
-    "//chrome/browser:browser_public_dependencies",
-    "//ui/base/unowned_user_data",
-  ]
+  public_deps = [ "//ui/base/unowned_user_data" ]
 
   if (!is_android) {
     sources += [
@@ -228,18 +227,22 @@ source_set("impl") {
       "//chrome/browser/prefs",
       "//chrome/browser/prefs:util",
       "//chrome/browser/privacy_sandbox:headers",
-      "//chrome/browser/privacy_sandbox/notice:desktop_entrypoint_handlers_helper",
       "//chrome/browser/profile_resetter",
       "//chrome/browser/profiles:misc",
       "//chrome/browser/profiles:profile_io_data",
       "//chrome/browser/profiles/keep_alive",
       "//chrome/browser/search",
       "//chrome/browser/search_engines",
+      "//chrome/browser/ui:browser_commands",
+      "//chrome/browser/ui:browser_tabstrip",
+      "//chrome/browser/ui:browser_window_header",
       "//chrome/browser/ui:chrome_pages",
+      "//chrome/browser/ui:session_crashed_bubble",
       "//chrome/browser/ui:ui_features",
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/extensions",
       "//chrome/browser/ui/navigator",
+      "//chrome/browser/ui/omnibox/omnibox_everywhere",
       "//chrome/browser/ui/startup/focus",
       "//chrome/browser/ui/tabs",
       "//chrome/browser/ui/tabs:tab_group",
@@ -248,6 +251,7 @@ source_set("impl") {
       "//chrome/browser/ui/toasts/api:toasts",
       "//chrome/browser/ui/waap:manager",
       "//chrome/browser/ui/waap:window_metrics_manager",
+      "//chrome/browser/ui/webui/settings",
       "//chrome/browser/ui/webui/whats_new",
       "//chrome/browser/web_applications",
       "//chrome/common",
@@ -343,6 +347,7 @@ source_set("impl") {
     ]
     deps += [
       "//chrome/browser/ui/startup/default_browser_prompt",
+      "//chrome/browser/ui/views/profiles:profile_picker_utils",
       "//chrome/browser/ui/web_applications",
     ]
   }
@@ -358,6 +363,7 @@ source_set("impl") {
     ]
     deps += [
       "//chrome/browser/signin:signin_promo",
+      "//chrome/browser/ui/webui:chrome_web_contents_handler",
       "//chrome/credential_provider/common:common_constants",
     ]
   }
@@ -400,6 +406,7 @@ if (!is_android) {
         "//chrome/browser/first_run",
         "//chrome/browser/profiles:profile",
         "//chrome/browser/profiles:profile_util",
+        "//chrome/browser/ui/browser_window",
         "//chrome/common:constants",
         "//chrome/common:non_code_constants",
         "//chrome/test:test_support_ui",
@@ -418,6 +425,7 @@ source_set("unit_tests") {
     "//base",
     "//base/test:test_support",
     "//chrome/common:chrome_features",
+    "//chrome/test/base:testing_browser_process",
   ]
 
   if (!is_android) {
@@ -464,7 +472,10 @@ if (!is_android) {
   source_set("browser_tests") {
     testonly = true
     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
-    sources = [ "startup_browser_creator_browsertest.cc" ]
+    sources = [
+      "oscryptasync_availability_infobar_browsertest.cc",
+      "startup_browser_creator_browsertest.cc",
+    ]
     deps = [
       ":startup",
       "//base",
@@ -472,10 +483,12 @@ if (!is_android) {
       "//base/version_info",
       "//build:buildflag_header_h",
       "//chrome/app:command_ids",
+      "//chrome/app:generated_resources",
       "//chrome/browser:browser_process",
       "//chrome/browser:buildflags",
       "//chrome/browser:chrome_browser_main",
       "//chrome/browser/extensions",
+      "//chrome/browser/infobars",
       "//chrome/browser/lifetime",
       "//chrome/browser/prefs:util",
       "//chrome/browser/profiles",
@@ -486,6 +499,9 @@ if (!is_android) {
       "//chrome/browser/search",
       "//chrome/browser/sessions",
       "//chrome/browser/signin:signin_promo",
+      "//chrome/browser/ui:browser_commands",
+      "//chrome/browser/ui:browser_init_state",
+      "//chrome/browser/ui:browser_window_header",
       "//chrome/browser/ui:ui_features",
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/profiles",
@@ -493,6 +509,7 @@ if (!is_android) {
       "//chrome/browser/ui/search:test_support_ui",
       "//chrome/browser/ui/startup/focus:browser_tests",
       "//chrome/browser/ui/toasts",
+      "//chrome/browser/ui/views/web_apps:launch_dialogs",
       "//chrome/browser/ui/web_applications",
       "//chrome/browser/ui/window_metadata",
       "//chrome/browser/web_applications",
@@ -526,6 +543,7 @@ if (!is_android) {
       "//testing/gtest",
       "//third_party/abseil-cpp:absl",
       "//third_party/blink/public/common:headers",
+      "//ui/base",
       "//ui/views",
       "//ui/views/controls/webview",
       "//url",
@@ -541,6 +559,8 @@ if (!is_android) {
         "//chrome/browser/profile_resetter",
         "//chrome/browser/ui:chrome_pages",
         "//chrome/credential_provider/common:common_constants",
+        "//chrome/test/base:testing_browser_process",
+        "//components/enterprise/isolated_mode",
       ]
     }
     if (enable_dice_support) {
@@ -575,6 +595,8 @@ if (!is_android && !is_chromeos_device) {
       "//chrome/browser:main_extra_parts",
       "//chrome/browser/prefs:util",
       "//chrome/browser/sessions",
+      "//chrome/browser/ui:browser_commands",
+      "//chrome/browser/ui:browser_window_header",
       "//chrome/browser/ui:simple_message_box_internal",
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/tabs:tab_strip",
@@ -591,7 +613,10 @@ if (!is_android && !is_chromeos_device) {
 
     if (is_win) {
       sources += [ "startup_launch_infobar_interactive_uitest.cc" ]
-      deps += [ "//chrome/browser/ui/views/infobars" ]
+      deps += [
+        "//chrome/browser/infobars",
+        "//chrome/browser/ui/views/infobars",
+      ]
     }
 
     if (!is_chromeos) {

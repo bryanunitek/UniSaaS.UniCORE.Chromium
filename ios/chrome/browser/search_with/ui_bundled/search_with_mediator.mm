@@ -12,9 +12,15 @@
 #import "base/metrics/histogram_functions.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/enterprise/data_controls/core/browser/features.h"
+#import "components/omnibox/browser/aim_eligibility_service.h"
+#import "components/prefs/pref_service.h"
 #import "components/search_engines/template_url.h"
 #import "components/search_engines/template_url_service.h"
 #import "ios/chrome/browser/browser_content/ui_bundled/browser_edit_menu_utils.h"
+#import "ios/chrome/browser/cobrowse/model/cobrowse_browser_agent.h"
+#import "ios/chrome/browser/cobrowse/model/cobrowse_context.h"
+#import "ios/chrome/browser/cobrowse/model/cobrowse_util.h"
+#import "ios/chrome/browser/cobrowse/shared/metrics/assistant_aim_metrics_constants.h"
 #import "ios/chrome/browser/enterprise/data_controls/model/data_controls_tab_helper.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
@@ -75,20 +81,35 @@ void LogSelectedNumberChar(NSUInteger textLength) {
 @implementation SearchWithMediator {
   // The service to retrieve default search engine URL.
   raw_ptr<TemplateURLService, DanglingUntriaged> _templateURLService;
+  // The service to determine AIM eligibility.
+  raw_ptr<AimEligibilityService> _aimEligibilityService;
+  // The browser agent for cobrowse.
+  raw_ptr<CobrowseBrowserAgent> _cobrowseBrowserAgent;
+  // The profile preference service.
+  raw_ptr<PrefService> _prefService;
 }
 
-- (instancetype)initWithTemplateURLService:
-                    (TemplateURLService*)templateURLService
-                                 incognito:(BOOL)incognito {
+- (instancetype)
+    initWithTemplateURLService:(TemplateURLService*)templateURLService
+         aimEligibilityService:(AimEligibilityService*)aimEligibilityService
+          cobrowseBrowserAgent:(CobrowseBrowserAgent*)cobrowseBrowserAgent
+                   prefService:(PrefService*)prefService
+                     incognito:(BOOL)incognito {
   if ((self = [super init])) {
     _incognito = incognito;
     _templateURLService = templateURLService;
+    _aimEligibilityService = aimEligibilityService;
+    _cobrowseBrowserAgent = cobrowseBrowserAgent;
+    _prefService = prefService;
   }
   return self;
 }
 
 - (void)shutdown {
   _templateURLService = nullptr;
+  _aimEligibilityService = nullptr;
+  _cobrowseBrowserAgent = nullptr;
+  _prefService = nullptr;
 }
 
 #pragma mark - Private
@@ -259,6 +280,19 @@ void LogSelectedNumberChar(NSUInteger textLength) {
   BOOL incognito = self.incognito;
   LogTrigger(incognito, isDefaultSearchEngineGoogle);
   LogSelectedNumberChar([text length]);
+
+  if (isDefaultSearchEngineGoogle && !incognito && _cobrowseBrowserAgent &&
+      IsAimCobrowseWebSelectionSearchEligible(_aimEligibilityService,
+                                              _prefService)) {
+    CobrowseContext* context =
+        [CobrowseContext cobrowseContextWithSearchQuery:text];
+    context.entrypoint = AssistantAimEntrypoint::kWebSelectionSearchWith;
+    _cobrowseBrowserAgent->SetCobrowseContext(context);
+    _cobrowseBrowserAgent->SetSessionActive(true);
+    [self.sceneHandler showAssistantWithNewSession];
+    return;
+  }
+
   OpenNewTabCommand* command =
       [[OpenNewTabCommand alloc] initWithURL:searchURL
                                     referrer:web::Referrer()
@@ -271,12 +305,12 @@ void LogSelectedNumberChar(NSUInteger textLength) {
 // Returns the action to trigger the search with feature. Calls `handler` on
 // activation.
 - (UIAction*)actionWithHandler:(void (^)(UIAction*))handler {
-  return [UIAction
-      actionWithTitle:[self buttonTitle]
-                image:DefaultSymbolWithPointSize(kMagnifyingglassCircleSymbol,
-                                                 kSymbolActionPointSize)
-           identifier:@"chromeAction.searchWith"
-              handler:handler];
+  return
+      [UIAction actionWithTitle:[self buttonTitle]
+                          image:SymbolWithPointSize(SymbolMagnifyingglassCircle,
+                                                    kSymbolActionPointSize)
+                     identifier:@"chromeAction.searchWith"
+                        handler:handler];
 }
 
 #pragma mark - EditMenuBuilder

@@ -18,13 +18,12 @@ import './keyboard_six_pack_key_row.js';
 import type {I18nMixinInterface} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import type {PolymerElementProperties} from 'chrome://resources/polymer/v3_0/polymer/interfaces.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import type {RouteObserverMixinInterface} from '../common/route_observer_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router, routes} from '../router.js';
 
 import {getInputDeviceSettingsProvider} from './input_device_mojo_interface_provider.js';
@@ -320,27 +319,25 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
         value: -1,
       },
 
-      isAltClickAndSixPackCustomizationEnabled: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean(
-              'enableAltClickAndSixPackCustomization');
-        },
-        readOnly: true,
-      },
-
-      areF11andF12KeyShortcutsEnabled: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean('enableF11AndF12KeyShortcuts');
-        },
-        readOnly: true,
-      },
-
       keyboardPolicies: {
         type: Object,
       },
     };
+  }
+
+  constructor() {
+    super();
+    this.defaultRemappings = {
+        [ModifierKey.kMeta]: ModifierKey.kMeta,
+        [ModifierKey.kControl]: ModifierKey.kControl,
+        [ModifierKey.kAlt]: ModifierKey.kAlt,
+        [ModifierKey.kEscape]: ModifierKey.kEscape,
+        [ModifierKey.kBackspace]: ModifierKey.kBackspace,
+        [ModifierKey.kAssistant]: ModifierKey.kAssistant,
+        [ModifierKey.kCapsLock]: ModifierKey.kCapsLock,
+        [ModifierKey.kQuickInsert]: ModifierKey.kQuickInsert,
+        [ModifierKey.kFunction]: ModifierKey.kFunction,
+      };
   }
 
   static get observers(): string[] {
@@ -371,48 +368,36 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
     return ModifierKey;
   }
 
-  keyboard: Keyboard;
-  protected keyboardPolicies: KeyboardPolicies;
-  isAltClickAndSixPackCustomizationEnabled: boolean;
-  areF11andF12KeyShortcutsEnabled: boolean;
-  private keyboards: Keyboard[];
-  protected keyboardId: number;
-  protected defaultRemappings: {[key: number]: ModifierKey} = {
-    [ModifierKey.kMeta]: ModifierKey.kMeta,
-    [ModifierKey.kControl]: ModifierKey.kControl,
-    [ModifierKey.kAlt]: ModifierKey.kAlt,
-    [ModifierKey.kEscape]: ModifierKey.kEscape,
-    [ModifierKey.kBackspace]: ModifierKey.kBackspace,
-    [ModifierKey.kAssistant]: ModifierKey.kAssistant,
-    [ModifierKey.kCapsLock]: ModifierKey.kCapsLock,
-    [ModifierKey.kQuickInsert]: ModifierKey.kQuickInsert,
-    [ModifierKey.kFunction]: ModifierKey.kFunction,
-  };
+  declare keyboard: Keyboard;
+  declare protected keyboardPolicies: KeyboardPolicies;
+  declare private keyboards: Keyboard[];
+  declare protected keyboardId: number;
+  declare protected defaultRemappings: {[key: number]: ModifierKey};
   private inputDeviceSettingsProvider: InputDeviceSettingsProviderInterface =
       getInputDeviceSettingsProvider();
-  private fakeAltPref: chrome.settingsPrivate.PrefObject;
-  private fakeAssistantPref: chrome.settingsPrivate.PrefObject;
-  private fakeBackspacePref: chrome.settingsPrivate.PrefObject;
-  private fakeCtrlPref: chrome.settingsPrivate.PrefObject;
-  private fakeCapsLockPref: chrome.settingsPrivate.PrefObject;
-  private fakeEscPref: chrome.settingsPrivate.PrefObject;
-  private fakeQuickInsertPref: chrome.settingsPrivate.PrefObject;
-  private fakeFunctionPref: chrome.settingsPrivate.PrefObject;
-  private fakeMetaPref: chrome.settingsPrivate.PrefObject;
-  private insertPref: chrome.settingsPrivate.PrefObject;
-  private pageUpPref: chrome.settingsPrivate.PrefObject;
-  private pageDownPref: chrome.settingsPrivate.PrefObject;
-  private endPref: chrome.settingsPrivate.PrefObject;
-  private deletePref: chrome.settingsPrivate.PrefObject;
-  private homePref: chrome.settingsPrivate.PrefObject;
-  private f11KeyPref: chrome.settingsPrivate.PrefObject;
-  private f12KeyPref: chrome.settingsPrivate.PrefObject;
-  private hasAssistantKey: boolean;
-  private hasCapsLockKey: boolean;
-  private hasQuickInsertKey: boolean;
-  private hasFunctionKey: boolean;
-  private metaKeyLabel: string;
-  private isInitialized: boolean;
+  declare private fakeAltPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeAssistantPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeBackspacePref: chrome.settingsPrivate.PrefObject;
+  declare private fakeCtrlPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeCapsLockPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeEscPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeQuickInsertPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeFunctionPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeMetaPref: chrome.settingsPrivate.PrefObject;
+  declare private insertPref: chrome.settingsPrivate.PrefObject;
+  declare private pageUpPref: chrome.settingsPrivate.PrefObject;
+  declare private pageDownPref: chrome.settingsPrivate.PrefObject;
+  declare private endPref: chrome.settingsPrivate.PrefObject;
+  declare private deletePref: chrome.settingsPrivate.PrefObject;
+  declare private homePref: chrome.settingsPrivate.PrefObject;
+  declare private f11KeyPref: chrome.settingsPrivate.PrefObject;
+  declare private f12KeyPref: chrome.settingsPrivate.PrefObject;
+  declare private hasAssistantKey: boolean;
+  declare private hasCapsLockKey: boolean;
+  declare private hasQuickInsertKey: boolean;
+  declare private hasFunctionKey: boolean;
+  declare private metaKeyLabel: string;
+  declare private isInitialized: boolean;
 
   override currentRouteChanged(route: Route): void {
     // Does not apply to this page.
@@ -473,13 +458,11 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
           this.setRemappedKey(originalKey);
         });
 
-    if (this.isAltClickAndSixPackCustomizationEnabled) {
-      this.setSixPackKeyRemappings();
+    this.setSixPackKeyRemappings();
 
-      // Potentially overrides some/all "six pack" settings based on
-      // the keyboard policies.
-      this.setSixPackKeyRemappingsForPolicies();
-    }
+    // Potentially overrides some/all "six pack" settings based on
+    // the keyboard policies.
+    this.setSixPackKeyRemappingsForPolicies();
 
     if (this.shouldShowFkeys()) {
       this.set('f11KeyPref.value', searchedKeyboard.settings?.f11);
@@ -553,9 +536,7 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
     this.set('fakeCapsLockPref.value', ModifierKey.kCapsLock);
     this.set('fakeEscPref.value', ModifierKey.kEscape);
     this.set('fakeMetaPref.value', ModifierKey.kMeta);
-    if (loadTimeData.getBoolean('enableModifierSplit')) {
-      this.set('fakeQuickInsertPref.value', ModifierKey.kQuickInsert);
-    }
+    this.set('fakeQuickInsertPref.value', ModifierKey.kQuickInsert);
     if (this.hasFunctionKey) {
       this.set('fakeFunctionPref.value', ModifierKey.kFunction);
     }
@@ -621,14 +602,8 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
     this.keyboard.settings = {
       ...this.keyboard.settings,
       modifierRemappings: this.getUpdatedRemappings(),
+      sixPackKeyRemappings: this.getSixPackKeyRemappings(),
     };
-
-    if (this.isAltClickAndSixPackCustomizationEnabled) {
-      this.keyboard.settings = {
-        ...this.keyboard.settings,
-        sixPackKeyRemappings: this.getSixPackKeyRemappings(),
-      };
-    }
 
     if (this.shouldShowFkeys()) {
       this.keyboard.settings = {
@@ -670,11 +645,9 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
       updatedRemappings[ModifierKey.kMeta] = this.fakeMetaPref.value;
     }
 
-    if (loadTimeData.getBoolean('enableModifierSplit')) {
-      if (ModifierKey.kQuickInsert !== this.fakeQuickInsertPref.value) {
-        updatedRemappings[ModifierKey.kQuickInsert] =
-            this.fakeQuickInsertPref.value;
-      }
+    if (ModifierKey.kQuickInsert !== this.fakeQuickInsertPref.value) {
+      updatedRemappings[ModifierKey.kQuickInsert] =
+          this.fakeQuickInsertPref.value;
     }
 
     if (this.hasFunctionKey) {
@@ -710,15 +683,8 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
     if (!this.keyboard?.name) {
       return '';
     }
-    const keyboardName = this.keyboard.isExternal ?
-        this.keyboard.name :
-        this.i18n('builtInKeyboardName');
-
-    if (this.isAltClickAndSixPackCustomizationEnabled) {
-      return keyboardName;
-    }
-
-    return this.i18n('remapKeyboardKeysDescription', keyboardName);
+    return this.keyboard.isExternal ? this.keyboard.name :
+                                      this.i18n('builtInKeyboardName');
   }
 
   private setSixPackKeyRemappings(): void {
@@ -765,10 +731,8 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
   }
 
   protected shouldShowFkeys(): boolean {
-    return this.areF11andF12KeyShortcutsEnabled &&
-        (this.keyboard?.settings?.f11 != null &&
-         this.keyboard?.settings?.f12 != null) &&
-        !this.hasFunctionKey;
+    return this.keyboard?.settings?.f11 != null &&
+        this.keyboard?.settings?.f12 != null && !this.hasFunctionKey;
   }
 
   private getShortcutRowLabel(name: string): string {

@@ -14,7 +14,6 @@
 
 #include "base/check_deref.h"
 #include "base/notreached.h"
-#include "components/autofill/core/browser/autofill_browser_util.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
@@ -24,8 +23,8 @@
 #include "components/autofill/core/browser/form_processing/optimization_guide_proto_util.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
-#include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
-#include "components/autofill/core/browser/permissions/autofill_ai/autofill_ai_permission_utils.h"
+#include "components/autofill/core/browser/metrics/autofill_metrics_util.h"
+#include "components/autofill/core/browser/permissions/autofill_ai/autofill_ai_permission_util.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/signatures.h"
@@ -184,7 +183,8 @@ void AutofillAiUkmLogger::LogKeyMetrics(ukm::SourceId ukm_source_id,
   const int autofill_ai_filled_field_count = std::ranges::count(
       form, FillingProduct::kAutofillAi, &AutofillField::filling_product);
 
-  const bool perfect_filling = IsFormStructurePerfectlyFilled(form);
+  const bool perfect_filling =
+      autofill_metrics::IsFormStructurePerfectlyFilled(form);
 
   if (optimization_guide::ModelQualityLogsUploaderService* uploader_ =
           client_->GetMqlsUploadService();

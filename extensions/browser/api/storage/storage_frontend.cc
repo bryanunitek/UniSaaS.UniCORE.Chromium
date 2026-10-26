@@ -16,6 +16,7 @@
 #include "base/lazy_instance.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -32,6 +33,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/api/storage.h"
+#include "extensions/common/event_args.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "third_party/leveldatabase/env_chromium.h"
@@ -647,7 +649,7 @@ void StorageFrontend::OnSettingsChanged(
     std::optional<api::storage::AccessLevel> access_level,
     base::Value changes) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  TRACE_EVENT1("browser", "SettingsObserver:OnSettingsChanged", "extension_id",
+  TRACE_EVENT1("browser", "StorageFrontend::OnSettingsChanged", "extension_id",
                extension_id);
 
   // Alias extension_id for investigation of shutdown hangs. crbug.com/1154997
@@ -674,6 +676,9 @@ void StorageFrontend::OnSettingsChanged(
     return;
   }
 
+  base::ScopedUmaHistogramTimer timer(
+      "Extensions.Storage.OnSettingsChangedTime");
+
   api::storage::AccessLevel effective_access_level =
       access_level.has_value()
           ? access_level.value()
@@ -689,20 +694,20 @@ void StorageFrontend::OnSettingsChanged(
 
   auto make_changed_event = [&namespace_string,
                              restrict_to_context_type](base::Value changes) {
-    base::ListValue args;
-    args.Append(std::move(changes));
-    args.Append(namespace_string);
+    auto args = base::MakeRefCounted<EventArgs>();
+    args->data.Append(std::move(changes));
+    args->data.Append(namespace_string);
 
     return std::make_unique<Event>(
         events::STORAGE_ON_CHANGED, api::storage::OnChanged::kEventName,
-        std::move(args), /*restrict_to_browser_context=*/nullptr,
-        restrict_to_context_type);
+        std::move(args),
+        /*restrict_to_browser_context=*/nullptr, restrict_to_context_type);
   };
   auto make_area_changed_event = [&storage_area, &area_event_name,
                                   restrict_to_context_type](
                                      base::Value changes) {
-    base::ListValue args;
-    args.Append(std::move(changes));
+    auto args = base::MakeRefCounted<EventArgs>();
+    args->data.Append(std::move(changes));
     return std::make_unique<Event>(StorageAreaToEventHistogram(storage_area),
                                    area_event_name, std::move(args), nullptr,
                                    restrict_to_context_type);

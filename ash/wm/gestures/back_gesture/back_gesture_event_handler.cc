@@ -4,6 +4,7 @@
 
 #include "ash/wm/gestures/back_gesture/back_gesture_event_handler.h"
 
+#include <string_view>
 #include <utility>
 
 #include "ash/app_list/app_list_controller_impl.h"
@@ -31,7 +32,6 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "ash/wm/wm_event.h"
-#include "base/debug/crash_logging.h"
 #include "base/i18n/rtl.h"
 #include "base/metrics/user_metrics.h"
 #include "chromeos/ui/base/app_types.h"
@@ -305,9 +305,8 @@ void BackGestureEventHandler::OnTouchEvent(ui::TouchEvent* event) {
   }
 }
 
-const std::string& BackGestureEventHandler::GetName() const {
-  static const std::string name("BackGestureEventHandler");
-  return name;
+std::string_view BackGestureEventHandler::GetName() const {
+  return kName;
 }
 
 base::WeakPtr<ui::GestureConsumer> BackGestureEventHandler::GetWeakPtr() {
@@ -362,12 +361,6 @@ bool BackGestureEventHandler::MaybeHandleBackGesture(
       // with large enough velocity. Note, complete can be different actions
       // while in different scenarios, but always fading out the affordance at
       // the end.
-      SCOPED_CRASH_KEY_BOOL("286590216", "back_gesture_affordance_1",
-                            back_gesture_affordance_ != nullptr);
-      SCOPED_CRASH_KEY_BOOL("286590216", "going_back_started_1",
-                            going_back_started_);
-      SCOPED_CRASH_KEY_NUMBER("286590216", "event.type",
-                              std::to_underlying(event->type()));
       if (back_gesture_affordance_->IsActivated() ||
           (event->type() == ui::EventType::kScrollFlingStart &&
            event->details().velocity_x() >= kFlingVelocityForGoingBack)) {
@@ -417,10 +410,6 @@ bool BackGestureEventHandler::MaybeHandleBackGesture(
             }
           }
         }
-        SCOPED_CRASH_KEY_BOOL("286590216", "back_gesture_affordance_2",
-                              back_gesture_affordance_ != nullptr);
-        SCOPED_CRASH_KEY_BOOL("286590216", "going_back_started_2",
-                              going_back_started_);
         // `back_gesture_affordance_` could be reset after receiving the event,
         // depends on the timing that receives the display rotation
         // notification.
@@ -461,13 +450,13 @@ bool BackGestureEventHandler::CanStartGoingBack(
     return false;
   }
 
-  // Do not enable back gesture in locked fullscreen to prevent users from
+  // Do not enable back gesture in trusted pinned to prevent users from
   // exiting this mode.
   const ScreenPinningController* const screen_pinning_controller =
       shell->screen_pinning_controller();
   if (screen_pinning_controller->IsPinned() &&
       GetWindowPinType(screen_pinning_controller->pinned_window()) ==
-          chromeos::WindowPinType::kLockedFullscreen) {
+          chromeos::WindowPinType::kTrustedPinned) {
     return false;
   }
 

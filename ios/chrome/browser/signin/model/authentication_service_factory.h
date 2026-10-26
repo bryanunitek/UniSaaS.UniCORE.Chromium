@@ -7,52 +7,30 @@
 
 #import <memory>
 
-#import "base/no_destructor.h"
-#import "ios/chrome/browser/shared/model/profile/profile_keyed_service_factory_ios.h"
-
-class ProfileIOS;
+#import "ios/chrome/browser/shared/model/profile/typed_profile_keyed_service_factory_ios.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
 
 namespace user_prefs {
 class PrefRegistrySyncable;
 }
 
-class AuthenticationService;
-class AuthenticationServiceDelegate;
-
 // Singleton that owns all `AuthenticationServices` and associates them with
 // profiles. Listens for the profile's destruction notification and cleans up
 // the associated `AuthenticationService`.
-class AuthenticationServiceFactory : public ProfileKeyedServiceFactoryIOS {
+class AuthenticationServiceFactory final
+    : public TypedProfileKeyedServiceFactoryIOS<AuthenticationServiceFactory,
+                                                AuthenticationService> {
  public:
-  // Factory for AuthenticationServiceDelegate.
-  using AuthenticationServiceDelegateFactory =
-      base::OnceCallback<std::unique_ptr<AuthenticationServiceDelegate>(
-          ProfileIOS*)>;
+  explicit AuthenticationServiceFactory(PassKey key);
 
-  static AuthenticationService* GetForProfile(ProfileIOS* profile);
-  static AuthenticationServiceFactory* GetInstance();
-
-  // Returns a factory that builds an AuthenticationService using a custom
-  // delegate instance (needs to be constructible before the profile).
-  static TestingFactory GetFactoryWithDelegate(
-      std::unique_ptr<AuthenticationServiceDelegate> delegate);
-
-  // Returns a factory that builds an AuthenticationService using a custom
-  // delegate factory.
-  static TestingFactory GetFactoryWithDelegateFactory(
-      AuthenticationServiceDelegateFactory delegate_factory);
+  // Returns the default factory, useful in tests.
+  static TestingFactory GetDefaultFactory();
 
  private:
-  friend class base::NoDestructor<AuthenticationServiceFactory>;
-
-  AuthenticationServiceFactory();
-  ~AuthenticationServiceFactory() override;
-
   // ProfileKeyedServiceFactoryIOS implementation.
   std::unique_ptr<KeyedService> BuildServiceInstanceFor(
-      ProfileIOS* profile) const override;
-  void RegisterProfilePrefs(
-      user_prefs::PrefRegistrySyncable* registry) override;
+      ProfileIOS* profile) const final;
+  void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) final;
 };
 
 #endif  // IOS_CHROME_BROWSER_SIGNIN_MODEL_AUTHENTICATION_SERVICE_FACTORY_H_

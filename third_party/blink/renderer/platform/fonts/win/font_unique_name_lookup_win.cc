@@ -79,6 +79,24 @@ bool FontUniqueNameLookupWin::IsFontUniqueNameLookupReadyForSyncLookup() {
   return true;
 }
 
+FontUniqueNameLookup::FontServiceConnectionState
+FontUniqueNameLookupWin::GetFontServiceConnectionStateForCrash() const {
+  if (RuntimeEnabledFeatures::FontDataServiceForCSSLocalFontsEnabled()) {
+    if (!font_data_service_) {
+      return FontServiceConnectionState::kNotBound;
+    }
+    return font_data_service_.is_connected()
+               ? FontServiceConnectionState::kConnected
+               : FontServiceConnectionState::kDisconnected;
+  }
+
+  if (!service_) {
+    return FontServiceConnectionState::kNotBound;
+  }
+  return service_.is_connected() ? FontServiceConnectionState::kConnected
+                                 : FontServiceConnectionState::kDisconnected;
+}
+
 void FontUniqueNameLookupWin::EnsureServiceConnected() {
   if (service_)
     return;
@@ -144,7 +162,7 @@ sk_sp<SkTypeface> FontUniqueNameLookupWin::InstantiateFromMatchResult(
         match_result->typeface_data->get_region().Map());
     if (mapping->IsValid()) {
       data = SkData::MakeWithProc(
-          mapping->memory(), mapping->size(),
+          mapping->data(), mapping->size(),
           [](const void*, void* ctx) {
             delete static_cast<base::ReadOnlySharedMemoryMapping*>(ctx);
           },

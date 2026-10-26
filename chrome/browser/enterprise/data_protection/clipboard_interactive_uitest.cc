@@ -12,9 +12,11 @@
 #include "chrome/browser/enterprise/data_controls/desktop_data_controls_dialog.h"
 #include "chrome/browser/enterprise/data_controls/desktop_data_controls_dialog_test_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "components/enterprise/data_controls/core/browser/features.h"
@@ -23,6 +25,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/permissions_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
+#include "printing/buildflags/buildflags.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/clipboard/test/test_clipboard.h"
 #include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
@@ -31,7 +34,6 @@
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
 #include "chrome/browser/printing/print_test_utils.h"
 #include "chrome/browser/printing/test_print_preview_observer.h"
-#include "printing/buildflags/buildflags.h"
 #endif  // BUILDFLAG(ENABLE_PRINT_PREVIEW)
 
 namespace enterprise_data_protection {
@@ -63,7 +65,7 @@ class DataProtectionClipboardBrowserTest : public InteractiveBrowserTest {
 
   content::RenderFrameHost* rfh() {
     return browser()
-        ->tab_strip_model()
+        ->GetTabStripModel()
         ->GetActiveWebContents()
         ->GetPrimaryMainFrame();
   }
@@ -74,12 +76,11 @@ class DataProtectionClipboardBrowserTest : public InteractiveBrowserTest {
   }
 
   void FocusWebContents(content::WebContents* web_contents = nullptr) {
-#if BUILDFLAG(IS_MAC)
-    content::HandleMissingKeyWindow();
-#endif
     if (!web_contents) {
-      web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+      web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
     }
+    ASSERT_TRUE(ui_test_utils::ShowAndFocusNativeWindow(
+        web_contents->GetTopLevelNativeWindow()));
     web_contents->Focus();
     views::test::WaitForWidgetActive(
         views::Widget::GetWidgetForNativeWindow(
@@ -386,7 +387,7 @@ IN_PROC_BROWSER_TEST_F(DataProtectionClipboardBrowserTest,
   printing::TestPrintPreviewObserver print_preview_observer(
       /*wait_for_loaded=*/true);
   printing::test::StartPrint(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   content::WebContents* preview_web_contents =
       print_preview_observer.WaitUntilPreviewIsReadyAndReturnPreviewDialog();
 
@@ -414,7 +415,7 @@ IN_PROC_BROWSER_TEST_F(DataProtectionClipboardBrowserTest,
       browser(), embedded_test_server()->GetURL(
                      "a.com", "/cross_site_iframe_factory.html?a(b)")));
   content::WebContents* original_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   content::RenderFrameHost* main_frame =
       original_contents->GetPrimaryMainFrame();

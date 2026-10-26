@@ -13,6 +13,12 @@
 #include "components/sync/base/client_tag_hash.h"
 #include "components/sync/protocol/entity_metadata.pb.h"
 
+class GURL;
+
+namespace base {
+class FilePath;
+}  // namespace base
+
 namespace sync_pb {
 class EntitySpecifics;
 class UniquePosition;
@@ -53,13 +59,6 @@ class ProcessorEntityMetadata {
   // Returns the underlying proto metadata.
   const sync_pb::EntityMetadata& proto() const { return metadata_; }
 
-  // Returns a mutable pointer to the underlying proto metadata.
-  // Prefer using the high-level mutation APIs below instead of modifying the
-  // proto directly.
-  // TODO(crbug.com/40823197): Remove this API once bookmarks are fully
-  // refactored.
-  sync_pb::EntityMetadata* mutable_proto() { return &metadata_; }
-
   // Returns true if the entity is deleted.
   bool IsDeleted() const;
 
@@ -88,6 +87,9 @@ class ProcessorEntityMetadata {
   // Increments the sequence number of the entity, indicating a local change.
   // This will also update the base_specifics_hash if the entity was not already
   // unsynced.
+  // TODO(crbug.com/40823197): Consider replacing IncrementSequenceNumber() with
+  // a higher-level domain API (e.g. MarkForRecommit()) to avoid exposing
+  // low-level sequence number counter semantics to callers.
   void IncrementSequenceNumber();
 
   // Returns true if the entity's specifics hash (sync-ed or unsynced) matches
@@ -108,8 +110,9 @@ class ProcessorEntityMetadata {
   // `specifics`. The entity must not be deleted.
   bool MatchesSpecificsHash(const sync_pb::EntitySpecifics& specifics) const;
 
-  // Updates the specifics hash in the metadata based on `specifics`.
-  void UpdateSpecificsHash(const sync_pb::EntitySpecifics& specifics);
+  // Returns true if `favicon_png_bytes` matches the tracked favicon hash.
+  // The entity must not be deleted.
+  bool MatchesFaviconHash(const std::string& favicon_png_bytes) const;
 
   // Records that a remote update was ignored. Updates server_id and
   // server_version.
@@ -131,12 +134,6 @@ class ProcessorEntityMetadata {
   // Records a commit response.
   void RecordCommitResponse(const CommitResponseData& data);
 
-  // Updates the metadata fields (sequence_number, specifics_hash,
-  // modification_time, is_deleted) for a local update.
-  // Used by bookmarks to perform custom local updates.
-  void UpdateMetadataForLocalUpdate(const sync_pb::EntitySpecifics& specifics,
-                                    base::Time modification_time);
-
   // Performs a local update based on the provided `data`, updating metadata
   // fields.
   void RecordLocalUpdate(
@@ -147,20 +144,34 @@ class ProcessorEntityMetadata {
   // Performs a local deletion, updating metadata fields.
   void RecordLocalDeletion(const DeletionOrigin& origin);
 
-  // Sets the possibly trimmed base specifics.
-  void SetPossiblyTrimmedBaseSpecifics(sync_pb::EntitySpecifics specifics);
+  // Returns true if an outgoing attachment upload is queued or in progress and
+  // has not yet produced a `temporary_blob_id`.
+  bool HasPendingAttachmentUpload() const;
 
-  // Sets the creation time.
-  void SetCreationTime(base::Time time);
+  // Marks that a local attachment upload for `file_path` is queued for this
+  // entity before the asynchronous upload handshake completes, clearing any
+  // previous `attachment` or `upload_url`. Does not increment the sequence
+  // number itself; the entity must already be unsynced (e.g. via an
+  // accompanying `RecordLocalUpdate()` call).
+  void RecordAttachmentUploadQueued(const base::FilePath& file_path);
 
-  // Sets the unique position.
-  void SetUniquePosition(const sync_pb::UniquePosition& unique_position);
+  // Records that the asynchronous upload handshake completed and returned the
+  // resumable session `upload_url`.
+  void RecordAttachmentUploadStarted(const GURL& upload_url);
 
-  // Clears the unique position.
-  void ClearUniquePosition();
+  // Records that the outgoing attachment upload finished and returned
+  // `temporary_blob_id`, clearing `pending_upload` from metadata.
+  void RecordAttachmentUploadCompleted(const std::string& temporary_blob_id);
+
+  // Clears `pending_upload` from metadata if an attachment upload is queued or
+  // in progress.
+  void RecordAttachmentUploadCancelled();
 
  private:
   explicit ProcessorEntityMetadata(sync_pb::EntityMetadata metadata);
+
+  // Updates the specifics hash in the metadata based on `specifics`.
+  void UpdateSpecificsHash(const sync_pb::EntitySpecifics& specifics);
 
   sync_pb::EntityMetadata metadata_;
 };

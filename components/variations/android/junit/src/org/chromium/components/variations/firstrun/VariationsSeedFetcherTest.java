@@ -25,7 +25,6 @@ import android.util.Base64;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ContextUtils;
@@ -49,7 +48,6 @@ import java.util.List;
 
 /** Tests for VariationsSeedFetcher */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class VariationsSeedFetcherTest {
     private HttpURLConnection mConnection;
     private VariationsSeedFetcher mFetcher;
@@ -338,7 +336,9 @@ public class VariationsSeedFetcherTest {
         assertEquals("savedSerialNumber", curSeedInfo.getParsedVariationsSeed().getSerialNumber());
     }
 
-    /** Test method for {@link VariationsSeedFetcher#downloadContent()} when IM-header is invalid. */
+    /**
+     * Test method for {@link VariationsSeedFetcher#downloadContent()} when IM-header is invalid.
+     */
     @Test
     public void testDownloadContent_invalidImHeader() throws IOException {
         when(mConnection.getResponseCode()).thenReturn(HttpURLConnection.HTTP_OK);
@@ -539,7 +539,9 @@ public class VariationsSeedFetcherTest {
                         VariationsSeedFetcher.SEED_FETCH_RESULT_HISTOGRAM));
     }
 
-    /** Test method for {@link VariationsSeedFetcher#fetchSeed()} with an exception when connecting */
+    /**
+     * Test method for {@link VariationsSeedFetcher#fetchSeed()} with an exception when connecting
+     */
     @Test
     public void testFetchSeed_IOException() throws IOException {
         doThrow(new IOException()).when(mConnection).connect();
@@ -696,6 +698,28 @@ public class VariationsSeedFetcherTest {
 
         // The channel param should be overridden by commandline.
         assertTrue(urlString, urlString.contains("stable"));
+    }
+
+    /**
+     * Test method to make sure {@link VariationsSeedFetcher#getConnectionString()} honors the
+     * "--fake-variations-platform" switch.
+     */
+    @Test
+    @CommandLineFlags.Add(VariationsSwitches.FAKE_VARIATIONS_PLATFORM + "=android_webview")
+    public void testGetConnectionString_HonorsPlatformCommandlineSwitch() {
+        @VariationsSeedFetcher.VariationsPlatform
+        int platform = VariationsSeedFetcher.VariationsPlatform.ANDROID;
+        final VariationsSeedFetcher.SeedFetchParameters params =
+                VariationsSeedFetcher.SeedFetchParameters.Builder.newBuilder()
+                        .setPlatform(platform)
+                        .setRestrictMode(sRestrict)
+                        .setMilestone(sMilestone)
+                        .setChannel(sChannel)
+                        .build();
+        String urlString = mFetcher.getConnectionString(params);
+
+        // The URL should have an osname param and it should be overridden by the command line.
+        assertTrue(urlString, urlString.contains("osname=android_webview"));
     }
 
     /**

@@ -5,16 +5,15 @@
 #include "extensions/common/features/feature_provider.h"
 
 #include <algorithm>
+#include <array>
 #include <set>
 #include <string>
 #include <string_view>
-#include <utility>
 
-#include "base/test/bind.h"
+#include "base/containers/span.h"
 #include "build/android_buildflags.h"
 #include "build/build_config.h"
 #include "extensions/common/extension_builder.h"
-#include "extensions/common/extensions_client.h"
 #include "extensions/common/features/feature.h"
 #include "extensions/common/features/simple_feature.h"
 #include "extensions/common/manifest.h"
@@ -25,6 +24,14 @@
 
 namespace extensions {
 
+namespace {
+
+constexpr char kRegistryFeatureName[] = "feature";
+constexpr SimpleFeatureData kRegistryFeatureData = {
+    .feature = {.name = kRegistryFeatureName}};
+
+}  // namespace
+
 // Tests that a real manifest feature is available for the correct types of
 // extensions and apps.
 TEST(FeatureProviderTest, ManifestFeatureTypes) {
@@ -33,7 +40,7 @@ TEST(FeatureProviderTest, ManifestFeatureTypes) {
   const SimpleFeature* feature = static_cast<const SimpleFeature*>(
       FeatureProvider::GetManifestFeature("description"));
   ASSERT_TRUE(feature);
-  const std::vector<Manifest::Type>& extension_types =
+  const base::span<const Manifest::Type> extension_types =
       feature->extension_types();
   EXPECT_EQ(8u, extension_types.size());
   EXPECT_EQ(1, std::ranges::count(extension_types, Manifest::Type::kExtension));
@@ -49,6 +56,23 @@ TEST(FeatureProviderTest, ManifestFeatureTypes) {
                                   Manifest::Type::kLoginScreenExtension));
   EXPECT_EQ(1, std::ranges::count(extension_types,
                                   Manifest::Type::kChromeOSSystemExtension));
+}
+
+TEST(FeatureProviderTest, GetManifestFeatureWithNonNullTerminatedStringView) {
+  const std::string name_with_suffix = "description!";
+  const std::string_view name(name_with_suffix.data(),
+                              name_with_suffix.size() - 1);
+
+  EXPECT_TRUE(FeatureProvider::GetManifestFeature(name));
+}
+
+TEST(FeatureProviderTest, GetByNameWithNonNullTerminatedStringView) {
+  const std::string name_with_suffix = "manifest!";
+  const std::string_view name(name_with_suffix.data(),
+                              name_with_suffix.size() - 1);
+
+  EXPECT_EQ(FeatureProvider::GetManifestFeatures(),
+            FeatureProvider::GetByName(name));
 }
 
 // Tests that real manifest features have the correct availability for an
@@ -96,7 +120,7 @@ TEST(FeatureProviderTest, PermissionFeatureTypes) {
   const SimpleFeature* feature = static_cast<const SimpleFeature*>(
       FeatureProvider::GetPermissionFeature("alarms"));
   ASSERT_TRUE(feature);
-  const std::vector<Manifest::Type>& extension_types =
+  const base::span<const Manifest::Type> extension_types =
       feature->extension_types();
   EXPECT_EQ(3u, extension_types.size());
   EXPECT_EQ(1, std::ranges::count(extension_types, Manifest::Type::kExtension));
@@ -152,93 +176,61 @@ TEST(FeatureProviderTest, PermissionFeatureAvailability) {
 }
 
 TEST(FeatureProviderTest, GetChildren) {
+  static constexpr SimpleFeatureData kParent = {.feature = {.name = "parent"}};
+  static constexpr SimpleFeatureData kChild = {
+      .feature = {.name = "parent.child"}};
+  static constexpr SimpleFeatureData kGrandchild = {
+      .feature = {.name = "parent.child.grandchild"}};
+  static constexpr SimpleFeatureData kOtherGrandchild = {
+      .feature = {.name = "parent.other_child.other_grandchild"}};
+  static constexpr SimpleFeatureData kUnparentedChild = {
+      .feature = {.name = "parent.unparented_child", .no_parent = true}};
+
+  SimpleFeature parent_feature{StaticFeatureData(kParent)};
+  SimpleFeature child_feature{StaticFeatureData(kChild)};
+  SimpleFeature grandchild_feature{StaticFeatureData(kGrandchild)};
+  SimpleFeature other_grandchild_feature{StaticFeatureData(kOtherGrandchild)};
+  SimpleFeature unparented_child_feature{StaticFeatureData(kUnparentedChild)};
+  std::array<Feature*, 5> features = {
+      &parent_feature, &child_feature, &grandchild_feature,
+      &other_grandchild_feature, &unparented_child_feature};
   FeatureProvider provider;
-
-  auto add_feature = [&provider](std::string_view name,
-                                 bool no_parent = false) {
-    auto feature = std::make_unique<SimpleFeature>();
-    feature->set_name(name);
-    feature->set_noparent(no_parent);
-    provider.AddFeature(name, std::move(feature));
-  };
-
-  add_feature("parent");
-  add_feature("parent.child");
-  add_feature("parent.child.grandchild");
-  add_feature("parent.other_child.other_grandchild");
-  add_feature("parent.unparented_child", true);
+  provider.AddStaticFeatures(features);
 
   const Feature* parent = provider.GetFeature("parent");
   ASSERT_TRUE(parent);
   std::vector<const Feature*> children = provider.GetChildren(*parent);
   std::set<std::string> children_names;
   for (const Feature* child : children)
-    children_names.insert(child->name());
+    children_names.emplace(child->name());
   EXPECT_THAT(children_names, testing::UnorderedElementsAre(
                                   "parent.child", "parent.child.grandchild",
                                   "parent.other_child.other_grandchild"));
 }
 
-TEST(FeatureProviderTest, InstallFeatureDelegatedAvailabilityCheck) {
-  Feature::FeatureDelegatedAvailabilityCheckMap map;
-  static constexpr const char* kDelegatedFeatureName = "delegatedFeature";
-  static constexpr const char* kNondelgatedFeatureName = "nondelegatedFeature";
-  static constexpr const char* kMissingRequiresDelegatedCheckFeatureName =
-      "missingRequiresDelegatedCheckFeature";
+TEST(FeatureProviderTest, StaticFeaturesAreNotOwned) {
+  SimpleFeature feature{StaticFeatureData(kRegistryFeatureData)};
+  std::array<Feature*, 1> features = {&feature};
 
-  auto delegated_availability_check =
-      [&](const std::string& api_full_name, const Extension* extension,
-          mojom::ContextType context, const GURL& url,
-          Feature::Platform platform, int context_id, bool check_developer_mode,
-          const ContextData& context_data) { return false; };
-  map.emplace(kDelegatedFeatureName,
-              base::BindLambdaForTesting(delegated_availability_check));
-  map.emplace(kMissingRequiresDelegatedCheckFeatureName,
-              base::BindLambdaForTesting(delegated_availability_check));
-  ExtensionsClient::Get()->SetFeatureDelegatedAvailabilityCheckMap(
-      std::move(map));
+  {
+    FeatureProvider provider;
+    provider.AddStaticFeatures(features);
+    EXPECT_EQ(&feature, provider.GetFeature(kRegistryFeatureName));
+  }
 
+  EXPECT_EQ(kRegistryFeatureName, feature.name());
+}
+
+TEST(FeatureProviderTest, FeatureNamesBackRegistryKeys) {
+  SimpleFeature feature{StaticFeatureData(kRegistryFeatureData)};
+  std::array<Feature*, 1> features = {&feature};
   FeatureProvider provider;
+  provider.AddStaticFeatures(features);
 
-  // Verify that the delegated check handler is installed for a feature that
-  // requires it and has a handler in the map.
-  {
-    auto feature = std::make_unique<SimpleFeature>();
-    feature->set_name(kDelegatedFeatureName);
-    feature->set_requires_delegated_availability_check(true);
-    provider.AddFeature(kDelegatedFeatureName, std::move(feature));
-
-    const auto* delegated_feature = provider.GetFeature(kDelegatedFeatureName);
-    EXPECT_TRUE(
-        delegated_feature->HasDelegatedAvailabilityCheckHandlerForTesting());
-  }
-
-  // Verify that a delegated check handler is not installed for a feature that
-  // doesn't require it.
-  {
-    auto feature = std::make_unique<SimpleFeature>();
-    feature->set_name(kNondelgatedFeatureName);
-    provider.AddFeature(kNondelgatedFeatureName, std::move(feature));
-
-    const auto* nondelegated_feature =
-        provider.GetFeature(kNondelgatedFeatureName);
-    EXPECT_FALSE(
-        nondelegated_feature->HasDelegatedAvailabilityCheckHandlerForTesting());
-  }
-
-  // Verify that a delegated check handler is not installed for a feature that
-  // doesn't require it but has a handler in the map.
-  {
-    auto feature = std::make_unique<SimpleFeature>();
-    feature->set_name(kMissingRequiresDelegatedCheckFeatureName);
-    provider.AddFeature(kMissingRequiresDelegatedCheckFeatureName,
-                        std::move(feature));
-
-    const auto* missing_requires_delegated_check_feature =
-        provider.GetFeature(kMissingRequiresDelegatedCheckFeatureName);
-    EXPECT_FALSE(missing_requires_delegated_check_feature
-                     ->HasDelegatedAvailabilityCheckHandlerForTesting());
-  }
+  const FeatureMap& registry = provider.GetAllFeatures();
+  ASSERT_EQ(1u, registry.size());
+  const auto& [name, stored_feature] = *registry.begin();
+  EXPECT_EQ(name.data(), stored_feature->name().data());
 }
 
 }  // namespace extensions

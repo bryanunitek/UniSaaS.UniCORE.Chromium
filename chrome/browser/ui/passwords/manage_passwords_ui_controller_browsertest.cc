@@ -6,38 +6,32 @@
 
 #include "base/test/with_feature_override.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/passwords/manage_passwords_test.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_view_interface.h"
-#include "chrome/browser/ui/views/page_action/test_support/page_action_test_support.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_accessor.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/autofill/core/common/autofill_features.h"
+#include "components/affiliations/core/browser/match_type.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/common/password_manager_ui.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/views/view.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
 class ManagePasswordsUIControllerBrowserTest : public ManagePasswordsTest {};
-
-class ManagePasswordsUIControllerBrowserTestWithFeatureOverride
-    : public base::test::WithFeatureOverride,
-      public ManagePasswordsTest {
- public:
-  ManagePasswordsUIControllerBrowserTestWithFeatureOverride()
-      : base::test::WithFeatureOverride(
-            autofill::features::kAutofillShowBubblesBasedOnPriorities) {}
-};
 
 // Regression test for crbug.com/485738514.
 // Verifies that a background tab correctly updates its own PageActionController
@@ -64,7 +58,7 @@ IN_PROC_BROWSER_TEST_F(ManagePasswordsUIControllerBrowserTest,
   forms[0].url = GURL("http://example.com");
   forms[0].signon_realm = "http://example.com/";
   forms[0].username_value = u"user";
-  forms[0].password_value = u"pass";
+  forms[0].password_value = password_manager::PasswordString(u"pass");
 
   // Triggering OnPasswordAutofilled will call UpdateBubbleAndIconVisibility.
   // In the buggy version, this would use browser->GetActiveTabInterface()
@@ -75,28 +69,23 @@ IN_PROC_BROWSER_TEST_F(ManagePasswordsUIControllerBrowserTest,
 
   // 4. Verify Foreground Tab Icon Visibility
   // The foreground tab's page action icon should NOT be visible.
-  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
-  auto* provider = browser_view->toolbar_button_provider();
-  views::View* icon_view = page_actions::GetIconLabelBubbleViewForTesting(
-      provider->GetPageActionViewInterface(kActionShowPasswordsBubbleOrPage),
-      kActionShowPasswordsBubbleOrPage);
-  ASSERT_TRUE(icon_view);
-  EXPECT_FALSE(icon_view->GetVisible())
+  EXPECT_FALSE(page_actions::PageActionTestAccessor(
+                   browser(), kActionShowPasswordsBubbleOrPage)
+                   .GetVisible())
       << "Foreground PageActionView was incorrectly shown by background tab "
          "update.";
 }
 
-IN_PROC_BROWSER_TEST_P(
-    ManagePasswordsUIControllerBrowserTestWithFeatureOverride,
-    OnAutofillingSharedPasswordNotNotifiedYet) {
+IN_PROC_BROWSER_TEST_F(ManagePasswordsUIControllerBrowserTest,
+                       OnAutofillingSharedPasswordNotNotifiedYet) {
   // Simulate two candidates in the dropdown menu where one of them is shared.
   password_manager::PasswordForm non_shared_credentials;
   non_shared_credentials.url = GURL("http://example.com/login");
   non_shared_credentials.signon_realm = non_shared_credentials.url.spec();
   non_shared_credentials.username_value = u"username";
-  non_shared_credentials.password_value = u"12345";
-  non_shared_credentials.match_type =
-      password_manager::PasswordForm::MatchType::kExact;
+  non_shared_credentials.password_value =
+      password_manager::PasswordString(u"12345");
+  non_shared_credentials.match_type = affiliations::MatchType::kExact;
 
   password_manager::PasswordForm shared_credentials = non_shared_credentials;
   shared_credentials.type =
@@ -122,18 +111,17 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_FALSE(GetController()->IsShowingBubble());
 }
 
-IN_PROC_BROWSER_TEST_P(
-    ManagePasswordsUIControllerBrowserTestWithFeatureOverride,
-    OnAutofillingSharedPasswordNotifiedAlready) {
+IN_PROC_BROWSER_TEST_F(ManagePasswordsUIControllerBrowserTest,
+                       OnAutofillingSharedPasswordNotifiedAlready) {
   // Simulate two candidates in the dropdown menu where one of them is shared,
   // while the user has been notified about the shared password already.
   password_manager::PasswordForm non_shared_credentials;
   non_shared_credentials.url = GURL("http://example.com/login");
   non_shared_credentials.signon_realm = non_shared_credentials.url.spec();
   non_shared_credentials.username_value = u"username";
-  non_shared_credentials.password_value = u"12345";
-  non_shared_credentials.match_type =
-      password_manager::PasswordForm::MatchType::kExact;
+  non_shared_credentials.password_value =
+      password_manager::PasswordString(u"12345");
+  non_shared_credentials.match_type = affiliations::MatchType::kExact;
 
   password_manager::PasswordForm shared_credentials = non_shared_credentials;
   shared_credentials.type =
@@ -154,6 +142,3 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_FALSE(GetController()->IsAutomaticallyOpeningBubble());
   EXPECT_FALSE(GetController()->IsShowingBubble());
 }
-
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
-    ManagePasswordsUIControllerBrowserTestWithFeatureOverride);

@@ -107,11 +107,11 @@ class PasswordSettingsUpdaterMetricsRecorder {
         @AndroidBackendErrorType
         int error = PasswordManagerAndroidBackendUtil.getBackendError(exception);
         RecordHistogram.recordEnumeratedHistogram(
-                getHistogramName("ErrorCode"), error, AndroidBackendErrorType.MAX_VALUE);
+                getHistogramName("ErrorCode"), error, AndroidBackendErrorType.MAX_VALUE + 1);
         RecordHistogram.recordEnumeratedHistogram(
                 getHistogramName("ErrorCode", mStoreType),
                 error,
-                AndroidBackendErrorType.MAX_VALUE);
+                AndroidBackendErrorType.MAX_VALUE + 1);
         if (error == AndroidBackendErrorType.EXTERNAL_ERROR) {
             int apiErrorCode = PasswordManagerAndroidBackendUtil.getApiErrorCode(exception);
             RecordHistogram.recordSparseHistogram(getHistogramName("APIError1"), apiErrorCode);
@@ -129,8 +129,7 @@ class PasswordSettingsUpdaterMetricsRecorder {
         return mSetting;
     }
 
-    public static String getStoreType(String account) {
-        assert account == null || !account.isEmpty();
-        return account == null ? LOCAL_STORE_BACKEND_TYPE : ACCOUNT_STORE_BACKEND_TYPE;
+    public static String getStoreType(@Nullable String account) {
+        return TextUtils.isEmpty(account) ? LOCAL_STORE_BACKEND_TYPE : ACCOUNT_STORE_BACKEND_TYPE;
     }
 }

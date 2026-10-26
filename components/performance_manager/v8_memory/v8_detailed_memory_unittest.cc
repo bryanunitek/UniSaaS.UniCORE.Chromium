@@ -228,10 +228,12 @@ TEST_F(V8DetailedMemoryDecoratorTest, OnlyMeasureRenderers) {
 TEST_F(V8DetailedMemoryDecoratorTest, OneShot) {
   // Create 2 renderer processes. Create one request that measures both of
   // them, and a one-shot request that measures only one.
-  constexpr RenderProcessHostId kProcessId1 = RenderProcessHostId(0xFAB);
+  constexpr RenderProcessHostId kProcessId1 =
+      RenderProcessHostId(content::ChildProcessId(0xFAB));
   auto process1 = CreateNode<ProcessNodeImpl>(
       RenderProcessHostProxy::CreateForTesting(kProcessId1));
-  constexpr RenderProcessHostId kProcessId2 = RenderProcessHostId(0xBAF);
+  constexpr RenderProcessHostId kProcessId2 =
+      RenderProcessHostId(content::ChildProcessId(0xBAF));
   auto process2 = CreateNode<ProcessNodeImpl>(
       RenderProcessHostProxy::CreateForTesting(kProcessId2));
 
@@ -605,7 +607,7 @@ TEST_F(V8DetailedMemoryDecoratorTest, DataIsDistributed) {
   {
     auto data = NewPerProcessV8MemoryUsage(1);
     // Add data for an unknown frame.
-    AddIsolateMemoryUsage(blink::LocalFrameToken(), base::KiBU(1),
+    AddIsolateMemoryUsage(blink::LocalFrameToken(), base::KiB(1),
                           data->isolates[0].get());
 
     ExpectBindAndRespondToQuery(&reporter, std::move(data));
@@ -619,7 +621,7 @@ TEST_F(V8DetailedMemoryDecoratorTest, DataIsDistributed) {
 
   // Since the frame was unknown, the usage should have accrued to detached.
   EXPECT_TRUE(V8DetailedMemoryProcessData::ForProcessNode(process.get()));
-  EXPECT_EQ(base::KiBU(1),
+  EXPECT_EQ(base::KiB(1),
             V8DetailedMemoryProcessData::ForProcessNode(process.get())
                 ->detached_v8_memory_used());
 
@@ -1424,10 +1426,12 @@ TEST_F(V8DetailedMemoryDecoratorTest, ObserverOutlivesDecorator) {
 TEST_F(V8DetailedMemoryDecoratorTest, SingleProcessRequest) {
   // Create 2 renderer processes. Create one request that measures both of
   // them, and one request that measures only one.
-  constexpr RenderProcessHostId kProcessId1 = RenderProcessHostId(0xFAB);
+  constexpr RenderProcessHostId kProcessId1 =
+      RenderProcessHostId(content::ChildProcessId(0xFAB));
   auto process1 = CreateNode<ProcessNodeImpl>(
       RenderProcessHostProxy::CreateForTesting(kProcessId1));
-  constexpr RenderProcessHostId kProcessId2 = RenderProcessHostId(0xBAF);
+  constexpr RenderProcessHostId kProcessId2 =
+      RenderProcessHostId(content::ChildProcessId(0xBAF));
   auto process2 = CreateNode<ProcessNodeImpl>(
       RenderProcessHostProxy::CreateForTesting(kProcessId2));
 

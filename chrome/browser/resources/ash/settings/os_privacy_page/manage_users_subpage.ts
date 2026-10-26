@@ -26,7 +26,7 @@ import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import type {PrefsState} from '../common/types.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
 import type {SettingsUsersAddUserDialogElement} from '../os_people_page/add_user_dialog.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {routes} from '../router.js';
 
 import {getTemplate} from './manage_users_subpage.html.js';
@@ -76,7 +76,7 @@ export class SettingsManageUsersSubpageElement extends
     };
   }
 
-  prefs: PrefsState;
+  declare prefs: PrefsState;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -87,9 +87,9 @@ export class SettingsManageUsersSubpageElement extends
     Setting.kRemoveFromUserAllowlistV2,
   ]);
 
-  private isOwner_: boolean;
-  private isUserListManaged_: boolean;
-  private isChild_: boolean;
+  declare private isOwner_: boolean;
+  declare private isUserListManaged_: boolean;
+  declare private isChild_: boolean;
 
   constructor() {
     super();

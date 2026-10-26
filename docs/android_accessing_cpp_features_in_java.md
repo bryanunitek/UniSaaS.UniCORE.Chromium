@@ -24,7 +24,7 @@ If the components or layer does not have a FeatureMap, create a new one:
       with `kFeaturesExposedToJava`.
     * `JNI_FooFeatureList_GetNativeMap` simply calling `GetFeatureMap`.
 2. In Java, create a `FooFeatureMap.java` class extending `FeatureMap.java`
-   (ex. [`ContentFeatureMap`](/content/public/android/java/src/org/chromium/content/browser/ContentFeatureMap.java)) with:
+   (ex. [`ContentFeatureMap`](/content/public/android/java/src/org/chromium/content_public/browser/ContentFeatureMap.java)) with:
     * A `getInstance()` that returns the singleton instance.
     * A single `long getNativeMap()` as @NativeMethods.
     * An `@Override` for the abstract `getNativeMap()` simply calling
@@ -168,9 +168,9 @@ disabled-by-default for another). Example:
 
 ```c++
 #if defined(...)
-BASE_FEATURE(kMyFeature, "MyFeature", base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kMyFeature, base::FEATURE_ENABLED_BY_DEFAULT);
 #else
-BASE_FEATURE(kMyFeature, "MyFeature", base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kMyFeature, base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
 ```
 
@@ -181,14 +181,12 @@ simple. Rewrite the definition to only use directives around the enabled state:
 
 ```c++
 BASE_FEATURE(kMyFeature,
-             "MyFeature",
 #if defined(...)
              base::FEATURE_ENABLED_BY_DEFAULT
 #else
              base::FEATURE_DISABLED_BY_DEFAULT
 #endif
-};
-
+);
 ```
 
 

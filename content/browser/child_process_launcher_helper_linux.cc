@@ -12,11 +12,11 @@
 #include "content/browser/child_process_launcher.h"
 #include "content/browser/child_process_launcher_helper_posix.h"
 #include "content/browser/sandbox_host_linux.h"
+#include "content/browser/sandboxed_process_launcher_delegate.h"
 #include "content/browser/zygote_host/zygote_host_impl_linux.h"
 #include "content/common/zygote/zygote_communication_linux.h"
 #include "content/public/browser/child_process_launcher_utils.h"
 #include "content/public/browser/content_browser_client.h"
-#include "content/public/browser/sandboxed_process_launcher_delegate.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_constants.h"
 #include "content/public/common/content_features.h"
@@ -31,17 +31,18 @@ namespace internal {
 
 std::optional<mojo::NamedPlatformChannel>
 ChildProcessLauncherHelper::CreateNamedPlatformChannelOnLauncherThread() {
-  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
+  CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M159);
   return std::nullopt;
 }
 
 void ChildProcessLauncherHelper::BeforeLaunchOnClientThread() {
-  DCHECK(client_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(client_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M159);
 }
 
 std::unique_ptr<FileMappedForLaunch>
 ChildProcessLauncherHelper::GetFilesToMap() {
-  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
+  CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M159);
   return CreateDefaultPosixFilesToMap(
       child_process_id(), mojo_channel_->remote_endpoint(),
       file_data_->files_to_preload, GetProcessType(), command_line());
@@ -55,7 +56,7 @@ bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
     PosixFileDescriptorInfo& files_to_register,
     base::LaunchOptions* options) {
   if (options) {
-    DCHECK(!GetZygoteForLaunch());
+    CHECK(!GetZygoteForLaunch(), base::NotFatalUntil::M159);
     // Convert FD mapping to FileHandleMappingVector
     options->fds_to_remap = files_to_register.GetMappingWithIDAdjustment(
         base::GlobalDescriptors::kBaseDescriptor);
@@ -67,10 +68,10 @@ bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
 
     options->environment = delegate_->GetEnvironment();
   } else {
-    DCHECK(GetZygoteForLaunch());
+    CHECK(GetZygoteForLaunch(), base::NotFatalUntil::M159);
     // Environment variables could be supported in the future, but are not
     // currently supported when launching with the zygote.
-    DCHECK(delegate_->GetEnvironment().empty());
+    CHECK(delegate_->GetEnvironment().empty(), base::NotFatalUntil::M159);
   }
 
   return true;
@@ -161,7 +162,7 @@ void ChildProcessLauncherHelper::ForceNormalProcessTerminationSync(
     ChildProcessLauncherHelper::Process process) {
   TRACE_EVENT0("chromeos",
                "ChildProcessLauncherHelper::ForceNormalProcessTerminationSync");
-  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
+  CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M159);
   process.process.Terminate(RESULT_CODE_NORMAL_EXIT, false);
   // On POSIX, we must additionally reap the child.
   if (process.zygote) {
@@ -173,10 +174,11 @@ void ChildProcessLauncherHelper::ForceNormalProcessTerminationSync(
   }
 }
 
-void ChildProcessLauncherHelper::SetProcessPriorityOnLauncherThread(
-    base::Process process,
+// static
+void ChildProcessLauncherHelper::ApplyProcessPriorityOnLauncherThread(
+    base::Process& process,
     base::Process::Priority priority) {
-  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
+  CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M159);
   if (process.CanSetPriority()) {
     process.SetPriority(priority);
   }
@@ -192,7 +194,7 @@ base::File OpenFileToShare(const base::FilePath& path,
                            base::MemoryMappedFile::Region* region) {
   base::FilePath exe_dir;
   bool result = base::PathService::Get(base::BasePathKey::DIR_EXE, &exe_dir);
-  DCHECK(result);
+  CHECK(result, base::NotFatalUntil::M159);
   base::File file(exe_dir.Append(path),
                   base::File::FLAG_OPEN | base::File::FLAG_READ);
   *region = base::MemoryMappedFile::Region::kWholeFile;

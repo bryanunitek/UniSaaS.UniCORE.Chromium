@@ -300,7 +300,7 @@ void WorkerProcessLauncherTest::TerminateWorker(int exit_code) {
 
 void WorkerProcessLauncherTest::ConnectClient() {
   channel_client_ = IPC::ChannelProxy::Create(
-      client_channel_handle_.release(), IPC::Channel::MODE_CLIENT,
+      std::move(client_channel_handle_), IPC::Channel::MODE_CLIENT,
       &client_listener_, task_runner_,
       base::SingleThreadTaskRunner::GetCurrentDefault());
 
@@ -379,7 +379,7 @@ void WorkerProcessLauncherTest::DoLaunchProcess() {
   ASSERT_TRUE(worker_process_.IsValid());
 
   channel_server_ = IPC::ChannelProxy::Create(
-      pipe.handle1.release(), IPC::Channel::MODE_SERVER, this, task_runner_,
+      std::move(pipe.handle1), IPC::Channel::MODE_SERVER, this, task_runner_,
       base::SingleThreadTaskRunner::GetCurrentDefault());
 }
 
@@ -426,8 +426,7 @@ TEST_F(WorkerProcessLauncherTest, Restart) {
   Expectation first_connect =
       EXPECT_CALL(server_listener_, OnChannelConnected(_))
           .Times(2)
-          .WillOnce(InvokeWithoutArgs(
-              [this]() { TerminateWorker(kSuccessExitCode); }))
+          .WillOnce([this]() { TerminateWorker(kSuccessExitCode); })
           .WillOnce(
               InvokeWithoutArgs(this, &WorkerProcessLauncherTest::StopWorker));
 
@@ -471,8 +470,7 @@ TEST_F(WorkerProcessLauncherTest, PermanentError) {
 
   EXPECT_CALL(server_listener_, OnChannelConnected(_))
       .Times(1)
-      .WillOnce(InvokeWithoutArgs(
-          [this] { TerminateWorker(kMinPermanentErrorExitCode); }));
+      .WillOnce([this] { TerminateWorker(kMinPermanentErrorExitCode); });
   EXPECT_CALL(server_listener_, OnPermanentError(_))
       .Times(1)
       .WillOnce(
@@ -499,8 +497,7 @@ TEST_F(WorkerProcessLauncherTest, Crash) {
 
   EXPECT_CALL(client_listener_, CrashProcess(_, _, _))
       .Times(1)
-      .WillOnce(InvokeWithoutArgs(
-          [this]() { TerminateWorker(kInitializationFailed); }));
+      .WillOnce([this]() { TerminateWorker(kInitializationFailed); });
   EXPECT_CALL(server_listener_, OnWorkerProcessStopped()).Times(1);
 
   StartWorker();

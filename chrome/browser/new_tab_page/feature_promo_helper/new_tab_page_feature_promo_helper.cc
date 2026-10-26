@@ -6,13 +6,14 @@
 
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search/search.h"
+
+#if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/search/background/ntp_custom_background_service.h"
 #include "chrome/browser/search/background/ntp_custom_background_service_factory.h"
-#include "chrome/browser/search/search.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -25,13 +26,13 @@
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/common/pref_names.h"
-#include "components/feature_engagement/public/event_constants.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/search/ntp_features.h"
 #include "components/user_education/common/feature_promo/feature_promo_controller.h"
-#include "ui/base/ui_base_features.h"
+#endif
 
+#if !BUILDFLAG(IS_ANDROID)
 namespace {
 
 const void* const kCustomizeChromeAutoOpenedUserDataKey =
@@ -70,14 +71,12 @@ void ShowCustomizeChromeSidePanel(Profile* profile) {
           1);
 
   actions::ActionManager::Get()
-      .FindAction(kActionSidePanelShowCustomizeChrome)
+      .FindAction(kActionSidePanelShowCustomizeChrome, nullptr)
       ->InvokeAction(
           actions::ActionInvocationContext::Builder()
               .SetProperty(
                   kSidePanelOpenTriggerKey,
-                  static_cast<std::underlying_type_t<SidePanelOpenTrigger>>(
-                      SidePanelOpenTrigger::
-                          kNewTabPageAutomaticCustomizeChrome))
+                  SidePanelOpenTrigger::kNewTabPageAutomaticCustomizeChrome)
               .Build());
 }
 
@@ -115,13 +114,6 @@ NTPCustomizeChromePromoEligibility CanShowCustomizeChromePromo(
     return NTPCustomizeChromePromoEligibility::kCustomizeChromeOpenedByUser;
   }
 
-  // If no max auto open count is set, then we are showing a different variation
-  // of the promo (not involving auto opening of the Side Panel), for which the
-  // user is considered eligible at this point.
-  if (ntp_features::kNtpCustomizeChromeAutoShownMaxCount.Get() == 0) {
-    return NTPCustomizeChromePromoEligibility::kCanShowPromo;
-  }
-
   if (ntp_features::kNtpCustomizeChromeAutoShownMaxCount.Get() <= 0 ||
       ntp_features::kNtpCustomizeChromeAutoShownSessionMaxCount.Get() <= 0) {
     return NTPCustomizeChromePromoEligibility::kFeatureConfigMismatch;
@@ -143,16 +135,19 @@ NTPCustomizeChromePromoEligibility CanShowCustomizeChromePromo(
 }
 
 }  // namespace
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 void NewTabPageFeaturePromoHelper::RecordPromoFeatureUsageAndClosePromo(
     const base::Feature& feature,
     content::WebContents* web_contents) {
+#if !BUILDFLAG(IS_ANDROID)
   if (auto* const interface =
           BrowserUserEducationInterface::MaybeGetForWebContentsInTab(
               web_contents)) {
     interface->NotifyFeaturePromoFeatureUsed(
         feature, FeaturePromoFeatureUsedAction::kClosePromoIfPresent);
   }
+#endif
 }
 
 // For testing purposes only.
@@ -169,6 +164,7 @@ bool NewTabPageFeaturePromoHelper::DefaultSearchProviderIsGoogle(
   return search::DefaultSearchProviderIsGoogle(profile);
 }
 
+#if !BUILDFLAG(IS_ANDROID)
 void NewTabPageFeaturePromoHelper::MaybeShowFeaturePromo(
     user_education::FeaturePromoParams params,
     content::WebContents* web_contents) {
@@ -182,25 +178,29 @@ void NewTabPageFeaturePromoHelper::MaybeShowFeaturePromo(
     interface->MaybeShowFeaturePromo(std::move(params));
   }
 }
+#endif
 
 bool NewTabPageFeaturePromoHelper::IsSigninModalDialogOpen(
     content::WebContents* web_contents) {
+#if !BUILDFLAG(IS_ANDROID)
   BrowserWindowInterface* browser =
       GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
   // `browser` might be NULL if the new tab is immediately dragged out of the
   // window.
-  return browser ? browser->GetFeatures()
-                       .signin_view_controller()
-                       ->ShowsModalDialog()
+  return browser ? SigninViewController::From(browser)->ShowsModalDialog()
                  : false;
+#else
+  return false;
+#endif
 }
 
 void NewTabPageFeaturePromoHelper::MaybeTriggerAutomaticCustomizeChromePromo(
     content::WebContents* web_contents) {
+#if !BUILDFLAG(IS_ANDROID)
   auto* browser_interface = webui::GetBrowserWindowInterface(web_contents);
-  if (!browser_interface ||
-      browser_interface->GetFeatures().side_panel_ui()->IsSidePanelEntryShowing(
-          SidePanelEntry::Key(SidePanelEntry::Id::kCustomizeChrome))) {
+  if (!browser_interface || SidePanelUI::From(browser_interface)
+                                ->IsSidePanelEntryShowing(SidePanelEntryKey(
+                                    SidePanelEntryId::kCustomizeChrome))) {
     return;
   }
 
@@ -220,14 +220,6 @@ void NewTabPageFeaturePromoHelper::MaybeTriggerAutomaticCustomizeChromePromo(
     return;
   }
 
-  // Variation where we do not open the Side Panel automatically; instead we
-  // show a tutorial.
-  if (ntp_features::kNtpCustomizeChromeAutoShownMaxCount.Get() == 0) {
-    interface->MaybeShowFeaturePromo(
-        feature_engagement::kIPHDesktopCustomizeChromeExperimentFeature);
-    return;
-  }
-
   user_education::FeaturePromoParams params(
       feature_engagement::kIPHDesktopCustomizeChromeAutoOpenFeature);
   if (!profile->GetPrefs()->GetBoolean(
@@ -241,4 +233,5 @@ void NewTabPageFeaturePromoHelper::MaybeTriggerAutomaticCustomizeChromePromo(
 
   interface->MaybeShowFeaturePromo(std::move(params));
   ShowCustomizeChromeSidePanel(profile);
+#endif
 }

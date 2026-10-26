@@ -23,20 +23,89 @@ import java.io.InputStream;
 @NullMarked
 public class WebContentsPrinter implements Printable {
     private final WebContents mWebContents;
+    private final boolean mPrintSelectionOnly;
     private final String mDefaultTitle;
     private final String mErrorMessage;
 
+    private int mRenderProcessId = -1;
+    private int mRenderFrameId = -1;
+
+    /**
+     * Creates a {@link WebContentsPrinter} for the given web contents.
+     *
+     * @param webContents The web contents to print.
+     */
     public WebContentsPrinter(WebContents webContents) {
+        this(webContents, false);
+    }
+
+    /**
+     * Creates a {@link WebContentsPrinter} for the given web contents with selection flag.
+     *
+     * @param webContents The web contents to print.
+     * @param printSelectionOnly Whether to print only the selection within the frame.
+     */
+    public WebContentsPrinter(WebContents webContents, boolean printSelectionOnly) {
         mWebContents = webContents;
+        mPrintSelectionOnly = printSelectionOnly;
         mDefaultTitle = ContextUtils.getApplicationContext().getString(R.string.menu_print);
         mErrorMessage =
                 ContextUtils.getApplicationContext().getString(R.string.error_printing_failed);
     }
 
     @Override
-    public boolean print(int renderProcessId, int renderFrameId) {
+    public boolean initiatePrint(int renderProcessId, int renderFrameId) {
+        mRenderProcessId = -1;
+        mRenderFrameId = -1;
         if (!canPrint()) return false;
-        return WebContentsPrinterJni.get().print(mWebContents, renderProcessId, renderFrameId);
+        long targetFrame =
+                WebContentsPrinterJni.get()
+                        .initiatePrint(
+                                mWebContents, renderProcessId, renderFrameId, mPrintSelectionOnly);
+        if (targetFrame == -1) return false;
+        mRenderProcessId = (int) (targetFrame >> 32);
+        mRenderFrameId = (int) targetFrame;
+        return true;
+    }
+
+    @Override
+    public boolean print(
+            int renderProcessId,
+            int renderFrameId,
+            int fd,
+            int dpi,
+            int width,
+            int height,
+            int @Nullable [] pages) {
+        if (!canPrint()) {
+            Printable.closeFd(fd);
+            return false;
+        }
+        boolean hasExplicitTarget = renderProcessId >= 0 && renderFrameId >= 0;
+        int processId = hasExplicitTarget ? renderProcessId : mRenderProcessId;
+        int frameId = hasExplicitTarget ? renderFrameId : mRenderFrameId;
+        return WebContentsPrinterJni.get()
+                .print(
+                        mWebContents,
+                        processId,
+                        frameId,
+                        mPrintSelectionOnly,
+                        fd,
+                        dpi,
+                        width,
+                        height,
+                        pages);
+    }
+
+    @Override
+    public void finishPrint(int renderProcessId, int renderFrameId) {
+        boolean hasExplicitTarget = renderProcessId >= 0 && renderFrameId >= 0;
+        int processId = hasExplicitTarget ? renderProcessId : mRenderProcessId;
+        int frameId = hasExplicitTarget ? renderFrameId : mRenderFrameId;
+        mRenderProcessId = -1;
+        mRenderFrameId = -1;
+        if (mWebContents.isDestroyed()) return;
+        WebContentsPrinterJni.get().finishPrint(mWebContents, processId, frameId);
     }
 
     @Override
@@ -69,6 +138,23 @@ public class WebContentsPrinter implements Printable {
 
     @NativeMethods
     interface Natives {
-        boolean print(@Nullable WebContents webContents, int renderProcessId, int renderFrameId);
+        long initiatePrint(
+                @Nullable WebContents webContents,
+                int renderProcessId,
+                int renderFrameId,
+                boolean printSelectionOnly);
+
+        boolean print(
+                @Nullable WebContents webContents,
+                int renderProcessId,
+                int renderFrameId,
+                boolean printSelectionOnly,
+                int fd,
+                int dpi,
+                int width,
+                int height,
+                int @Nullable [] pages);
+
+        void finishPrint(@Nullable WebContents webContents, int renderProcessId, int renderFrameId);
     }
 }

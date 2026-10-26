@@ -12,6 +12,20 @@
 // Configuration for the PageContextWrapper.
 class PageContextWrapperConfig {
  public:
+  // Policy controlling when a live snapshot is captured vs. retrieved from
+  // cache storage (when `shouldGetSnapshot` is YES).
+  enum class SnapshotCachePolicy {
+    // Captures live when the WebState is visible; uses the cache when hidden.
+    kUseCacheWhenHidden,
+
+    // Captures live when the WebState is visible or when the cache is empty;
+    // otherwise uses the cache.
+    kCaptureWhenVisibleOrUncached,
+
+    // Always captures a live snapshot, bypassing the cache.
+    kBypassCache,
+  };
+
   PageContextWrapperConfig(const PageContextWrapperConfig&);
   PageContextWrapperConfig& operator=(const PageContextWrapperConfig&);
   ~PageContextWrapperConfig();
@@ -57,8 +71,21 @@ class PageContextWrapperConfig {
   // True to apply redacting metadata for credit card numbers.
   bool extract_autofill_credit_card_redactions() const;
 
+  // True to apply redacting metadata for OTP fields.
+  bool extract_autofill_otp_redactions() const;
+
+  // True to apply redacting metadata and geometry for password fields.
+  bool extract_password_screenshot_redactions() const;
+
   // True to block page context extraction on unsafe pages.
   bool block_unsafe_pages() const;
+
+  // Returns whether only same-site iframe data should be extracted.
+  bool include_same_site_only() const;
+
+  // Returns the policy controlling when a live snapshot is captured vs.
+  // retrieved from cache.
+  SnapshotCachePolicy snapshot_cache_policy() const;
 
  private:
   friend class PageContextWrapperConfigBuilder;
@@ -74,7 +101,11 @@ class PageContextWrapperConfig {
       bool extract_autofill,
       bool extract_autofill_credit_card_redactions,
       bool include_sensitive_payments_for_redaction,
-      bool block_unsafe_pages);
+      bool extract_autofill_otp_redactions,
+      bool extract_password_screenshot_redactions,
+      bool block_unsafe_pages,
+      bool include_same_site_only,
+      SnapshotCachePolicy snapshot_cache_policy);
 
   // Bit to use the refactored PageContextExtractor.
   bool use_refactored_extractor_;
@@ -103,8 +134,21 @@ class PageContextWrapperConfig {
   // Bit to include sensitive payments for redaction.
   bool include_sensitive_payments_for_redaction_;
 
+  // Bit to apply Autofill OTP redaction policies.
+  bool extract_autofill_otp_redactions_;
+
+  // Bit to apply password screenshot redaction policies.
+  bool extract_password_screenshot_redactions_;
+
   // Bit to block page context extraction on unsafe pages.
   bool block_unsafe_pages_;
+
+  // Bit to extract only same-site iframe data.
+  bool include_same_site_only_;
+
+  // Policy controlling when a live snapshot is captured vs. retrieved from
+  // cache.
+  SnapshotCachePolicy snapshot_cache_policy_;
 };
 
 // Builder for PageContextWrapperConfig.
@@ -123,6 +167,12 @@ class PageContextWrapperConfigBuilder {
 
   // Sets whether to use the TreeWalker (Rich Extraction).
   PageContextWrapperConfigBuilder& SetUseRichExtraction(
+      bool use_rich_extraction);
+
+  // Shorthand to configure rich extraction (APC V2) defaults for iOS features.
+  // Sets use_rich_extraction, graft_cross_origin_frame_content, and
+  // extract_paid_content.
+  PageContextWrapperConfigBuilder& SetDefaultRichExtraction(
       bool use_rich_extraction);
 
   // Sets whether to extract actionable information alongside rich extraction.
@@ -146,20 +196,42 @@ class PageContextWrapperConfigBuilder {
   // for blink.
   PageContextWrapperConfigBuilder& SetExtractAutofill(bool extract_autofill);
 
-  // Sets whether to apply Autofill credit card redaction to field values. Does
-  // the equivalent of the kAnnotatedPageContentAutofillCreditCardRedactions
-  // feature switch in
-  // components/optimization_guide/content/browser/page_content_proto_util.cc
-  // for blink.
+  // Sets whether to apply Autofill credit card redaction to field values.
+  // Note: If `kPageContextAutofillCreditCardRedactions` is enabled,
+  // this setting is overridden to true upon `Build()`.
   PageContextWrapperConfigBuilder& SetExtractAutofillCreditCardRedactions(
       bool extract_autofill_credit_card_redactions);
 
   // Sets whether to include sensitive payments for redaction.
+  // Note: If `kPageContextScreenshotSensitivePaymentRedaction` is enabled, this
+  // setting is overridden to true upon `Build()`.
   PageContextWrapperConfigBuilder& SetIncludeSensitivePaymentsForRedaction(
       bool include_sensitive_payments_for_redaction);
 
+  // Sets whether to apply Autofill OTP redactions to field values.
+  // Note: If `kPageContextAutofillOtpRedactions` is enabled, this setting is
+  // overridden to true upon `Build()`.
+  PageContextWrapperConfigBuilder& SetExtractAutofillOtpRedactions(
+      bool extract_autofill_otp_redactions);
+
+  // Sets whether to apply password redactions to screenshot and geometry.
+  // Note: If `kPageContextScreenshotPasswordRedaction` is enabled, this setting
+  // is overridden to true upon `Build()`.
+  PageContextWrapperConfigBuilder& SetExtractPasswordScreenshotRedactions(
+      bool extract_password_screenshot_redactions);
+
   // Sets whether to block page context extraction on unsafe pages.
   PageContextWrapperConfigBuilder& SetBlockUnsafePages(bool block_unsafe_pages);
+
+  // Sets whether to extract only same-site iframe data.
+  PageContextWrapperConfigBuilder& SetIncludeSameSiteOnly(
+      bool include_same_site_only);
+
+  // Sets the policy controlling when a live snapshot is captured vs. retrieved
+  // from cache. Defaults to
+  // `SnapshotCachePolicy::kCaptureWhenVisibleOrUncached`.
+  PageContextWrapperConfigBuilder& SetSnapshotCachePolicy(
+      PageContextWrapperConfig::SnapshotCachePolicy snapshot_cache_policy);
 
   // Returns the PageContextWrapperConfig.
   PageContextWrapperConfig Build() const;
@@ -174,7 +246,11 @@ class PageContextWrapperConfigBuilder {
   bool extract_autofill_;
   bool extract_autofill_credit_card_redactions_;
   bool include_sensitive_payments_for_redaction_;
+  bool extract_autofill_otp_redactions_;
+  bool extract_password_screenshot_redactions_;
   bool block_unsafe_pages_;
+  bool include_same_site_only_;
+  PageContextWrapperConfig::SnapshotCachePolicy snapshot_cache_policy_;
 };
 
 #endif  // IOS_CHROME_BROWSER_INTELLIGENCE_PROTO_WRAPPERS_PAGE_CONTEXT_WRAPPER_CONFIG_H_

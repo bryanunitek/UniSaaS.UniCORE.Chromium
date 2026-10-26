@@ -62,14 +62,16 @@
   _autocompleteProviderClient = nullptr;
 }
 
-- (NSArray<id<AutocompleteSuggestionGroup>>*)wrapAutocompleteResultInGroups:
-    (const AutocompleteResult&)autocompleteResult {
+- (NSArray<id<AutocompleteSuggestionGroup>>*)
+    wrapAutocompleteResultInGroups:(const AutocompleteResult&)autocompleteResult
+        suppressVerbatimFromResult:(BOOL)shouldSkipVerbatim {
   NSMutableArray<id<AutocompleteSuggestionGroup>>* groups =
       [[NSMutableArray alloc] init];
 
   // Group the suggestions by the section Id.
   NSMutableArray<AutocompleteMatchFormatter*>* allMatches =
-      [self wrapMatchesFromResult:autocompleteResult];
+      [self wrapMatchesFromResult:autocompleteResult
+          suppressVerbatimFromResult:shouldSkipVerbatim];
   NSArray<id<AutocompleteSuggestionGroup>>* allGroups =
       [self groupSuggestions:allMatches
           usingACResultAsHeaderMap:autocompleteResult];
@@ -176,8 +178,9 @@
 
 /// Wraps the autocomplete results from the given AutocompleteResult object into
 /// an array of AutocompleteSuggestion objects.
-- (NSMutableArray<AutocompleteMatchFormatter*>*)wrapMatchesFromResult:
-    (const AutocompleteResult&)autocompleteResult {
+- (NSMutableArray<AutocompleteMatchFormatter*>*)
+         wrapMatchesFromResult:(const AutocompleteResult&)autocompleteResult
+    suppressVerbatimFromResult:(BOOL)shouldSkipVerbatim {
   NSMutableArray<AutocompleteMatchFormatter*>* wrappedMatches =
       [[NSMutableArray alloc] init];
 
@@ -186,12 +189,17 @@
   BOOL tileNavSuggestHandled = NO;
   for (size_t i = 0; i < autocompleteResult.size(); i++) {
     const AutocompleteMatch& match = autocompleteResult.match_at((NSUInteger)i);
-    if (match.type == AutocompleteMatchType::TILE_NAVSUGGEST) {
+    if (match.type == omnibox::AutocompleteMatchType::kSearchWhatYouTyped) {
+      if (shouldSkipVerbatim) {
+        continue;
+      }
+    }
+    if (match.type == omnibox::AutocompleteMatchType::kTileNavsuggest) {
       if (tileNavSuggestHandled) {
         continue;
       }
       tileNavSuggestHandled = YES;
-      DCHECK(match.type == AutocompleteMatchType::TILE_NAVSUGGEST);
+      DCHECK(match.type == omnibox::AutocompleteMatchType::kTileNavsuggest);
       for (const AutocompleteMatch::SuggestTile& tile : match.suggest_tiles) {
         AutocompleteMatch tileMatch = AutocompleteMatch(match);
         tileMatch.destination_url = tile.url;

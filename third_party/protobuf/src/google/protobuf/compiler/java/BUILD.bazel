@@ -2,6 +2,7 @@
 # Protocol Buffers Compiler - Java code generator
 ################################################################################
 
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 load("@rules_pkg//pkg:mappings.bzl", "pkg_files", "strip_prefix")
 load("//build_defs:cpp_opts.bzl", "COPTS")
@@ -9,6 +10,16 @@ load("//build_defs:cpp_opts.bzl", "COPTS")
 package(
     default_visibility = [
         "//src/google/protobuf/compiler/java:__subpackages__",
+    ],
+)
+
+cc_binary(
+    name = "protoc-gen-java",
+    srcs = ["plugin_main.cc"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":java",
+        "//src/google/protobuf/compiler:plugin",
     ],
 )
 
@@ -30,18 +41,6 @@ cc_library(
     strip_include_prefix = "/src",
     deps = [
         "//src/google/protobuf",
-    ],
-)
-
-cc_library(
-    name = "generator_headers",
-    hdrs = ["generator.h"],
-    copts = COPTS,
-    strip_include_prefix = "/src",
-    visibility = ["//pkg:__pkg__"],
-    deps = [
-        "//src/google/protobuf",
-        "//src/google/protobuf/compiler:code_generator",
     ],
 )
 
@@ -130,6 +129,8 @@ cc_library(
         "//src/google/protobuf:port",
         "//src/google/protobuf/compiler:code_generator",
         "//src/google/protobuf/compiler:code_generator_lite",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@abseil-cpp//absl/log:absl_check",
         "@abseil-cpp//absl/log:absl_log",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:str_format",

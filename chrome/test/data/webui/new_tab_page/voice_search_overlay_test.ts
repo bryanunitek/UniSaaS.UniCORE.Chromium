@@ -190,6 +190,10 @@ suite('NewTabPageVoiceSearchOverlayTest', () => {
     assertEquals(1, metrics.count('NewTabPage.VoiceActions'));
     assertEquals(
         1, metrics.count('NewTabPage.VoiceActions', Action.QUERY_SUBMITTED));
+    assertEquals(
+        1,
+        metrics.count(
+            'VoiceSearch.QuerySubmission.Source', 0 /* NTP_REALBOX */));
   });
 
   ([
@@ -247,6 +251,12 @@ suite('NewTabPageVoiceSearchOverlayTest', () => {
               1, metrics.count('VoiceSearch.Errors.NTP_REALBOX', logError));
         });
       });
+
+  test('details link does not have aria-label', () => {
+    const detailsLink = voiceSearchOverlay.shadowRoot.querySelector(
+        '#errorLinks *[link="details"]')!;
+    assertFalse(detailsLink.hasAttribute('aria-label'));
+  });
 
   test('on end received shows error text if no final result', async () => {
     // Act.
@@ -362,7 +372,7 @@ suite('NewTabPageVoiceSearchOverlayTest', () => {
     assertTrue(mockSpeechRecognition.abortCalled);
   });
 
-  test(`clicking '#retryLink' starts voice search if in retry state`, () => {
+  test('clicking \'#retryLink\' starts voice search if in retry state', () => {
     // Arrange.
     mockSpeechRecognition.onnomatch!();
     mockSpeechRecognition.startCalled = false;

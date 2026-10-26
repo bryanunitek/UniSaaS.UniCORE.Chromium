@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -101,10 +102,11 @@ class CONTENT_EXPORT DownloadManagerImpl
       download::SimpleDownloadManager::DownloadVector* result) override;
   void GetUninitializedActiveDownloadsIfAny(
       download::SimpleDownloadManager::DownloadVector* result) override;
-  int RemoveDownloadsByURLAndTime(
+  void RemoveDownloadsByURLAndTime(
       const base::RepeatingCallback<bool(const GURL&)>& url_filter,
       base::Time remove_begin,
-      base::Time remove_end) override;
+      base::Time remove_end,
+      base::OnceClosure callback) override;
   bool CanDownload(download::DownloadUrlParameters* parameters) override;
   void DownloadUrl(
       std::unique_ptr<download::DownloadUrlParameters> parameters) override;
@@ -139,14 +141,16 @@ class CONTENT_EXPORT DownloadManagerImpl
       bool opened,
       base::Time last_access_time,
       bool transient,
-      const std::vector<download::DownloadItem::ReceivedSlice>& received_slices)
-      override;
+      const std::vector<download::DownloadItem::ReceivedSlice>& received_slices,
+      const base::FilePath& display_name) override;
   void PostInitialization(DownloadInitializationDependency dependency) override;
   bool IsManagerInitialized() override;
   int InProgressCount() override;
   int BlockingShutdownCount() override;
   BrowserContext* GetBrowserContext() override;
   void CheckForHistoryFilesRemoval() override;
+  void WaitForActiveDownloadsInitialization(
+      base::OnceClosure callback) override;
   void OnHistoryQueryComplete(
       base::OnceClosure load_history_downloads_cb) override;
   download::DownloadItem* GetDownload(uint32_t id) override;
@@ -293,6 +297,7 @@ class CONTENT_EXPORT DownloadManagerImpl
       network::mojom::URLResponseHeadPtr response_head,
       mojo::ScopedDataPipeConsumerHandle response_body,
       network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
+      const StoragePartitionConfig& storage_partition_config,
       bool is_download_allowed);
   void BeginResourceDownloadOnChecksComplete(
       std::unique_ptr<download::DownloadUrlParameters> params,
@@ -412,6 +417,12 @@ class CONTENT_EXPORT DownloadManagerImpl
   // Callbacks to run once download ID is determined.
   using IdCallbackVector = std::vector<std::unique_ptr<GetNextIdCallback>>;
   IdCallbackVector id_callbacks_;
+
+  // Callbacks to run once download manager is initialized.
+  std::vector<base::OnceClosure> on_initialized_callbacks_;
+
+  // Callbacks to run once active downloads are initialized.
+  std::vector<base::OnceClosure> active_downloads_callbacks_;
 
   // SequencedTaskRunner to check for file existence. A sequence is used so
   // that a large download history doesn't cause a large number of concurrent

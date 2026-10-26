@@ -16,9 +16,11 @@
 #include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/child_process_id.h"
+#include "content/public/common/content_client.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 
 namespace content {
@@ -30,16 +32,26 @@ namespace {
 std::vector<blink::mojom::FileChooserFileInfoPtr> RemoveSymlinks(
     std::vector<blink::mojom::FileChooserFileInfoPtr> files,
     base::FilePath base_dir) {
-  DCHECK(!base_dir.empty());
+  CHECK(!base_dir.empty(), base::NotFatalUntil::M158);
   auto to_remove = std::ranges::remove_if(
       files,
       [&base_dir](const base::FilePath& file_path) {
         if (base::IsLink(file_path))
           return true;
-        for (base::FilePath path = file_path.DirName(); base_dir.IsParent(path);
+        // Walk up the ancestors of `file_path`, up to and including
+        // `base_dir`. `base_dir` itself must be checked as well, because it is
+        // not necessarily a directory the user picked: a compromised renderer
+        // can pass any path it already has (lexical) read access to, including
+        // a symlink, to FileChooserImpl::EnumerateChosenDirectory().
+        for (base::FilePath path = file_path.DirName();;
              path = path.DirName()) {
           if (base::IsLink(path))
             return true;
+          // Stop at `base_dir`. Also stop if `path` is not under `base_dir`,
+          // which shouldn't happen, but guarantees termination at the root.
+          if (path == base_dir || !base_dir.IsParent(path)) {
+            break;
+          }
         }
         return false;
       },
@@ -159,6 +171,16 @@ void FileChooserImpl::OpenFileChooser(blink::mojom::FileChooserParamsPtr params,
     std::move(callback).Run(nullptr);
     return;
   }
+
+#if BUILDFLAG(IS_ANDROID)
+  WebContents* web_contents =
+      WebContents::FromRenderFrameHost(render_frame_host());
+  if (!GetContentClient()->browser()->ShouldAllowSystemUiPopups(
+          web_contents)) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+#endif
   callback_ = std::move(callback);
   auto listener = base::MakeRefCounted<FileSelectListenerImpl>(this);
   listener_impl_ = listener.get();

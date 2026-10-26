@@ -15,8 +15,6 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -26,11 +24,9 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.page_image_service.ImageServiceMetrics.SalientImageUrlFetchResult;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -40,9 +36,7 @@ import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
 
 /** Unit tests for {@link ImageServiceBridge}. */
-@Batch(Batch.UNIT_TESTS)
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public final class ImageServiceBridgeUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -76,7 +70,6 @@ public final class ImageServiceBridgeUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testFetchImageUrlFor() {
         HistogramWatcher histogramWatcher =
                 HistogramWatcher.newBuilder()
@@ -132,7 +125,6 @@ public final class ImageServiceBridgeUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testDestroy() {
         mImageServiceBridge.destroy();
         verify(mImageServiceBridgeJni).destroy(anyLong());
@@ -140,7 +132,6 @@ public final class ImageServiceBridgeUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testClear() {
         mImageServiceBridge.fetchImageUrlFor(/* isAccountData= */ true, PAGE_URL, mUrlCallback);
 

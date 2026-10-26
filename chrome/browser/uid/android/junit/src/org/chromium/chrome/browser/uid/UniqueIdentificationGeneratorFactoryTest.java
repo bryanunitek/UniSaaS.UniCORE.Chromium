@@ -5,24 +5,18 @@
 package org.chromium.chrome.browser.uid;
 
 import androidx.annotation.Nullable;
-import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
 
 /** Unit tests for {@link UniqueIdentificationGeneratorFactory}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(UniqueIdentificationGeneratorFactoryTest.IDENTITY_GENERATOR_BATCH_NAME)
 public class UniqueIdentificationGeneratorFactoryTest {
-    public static final String IDENTITY_GENERATOR_BATCH_NAME = "identity_generator";
-
     @Test
-    @SmallTest
     @Feature({"ChromeToMobile", "Omaha", "Sync"})
     public void testSetAndGetGenerator() {
         UniqueIdentificationGeneratorFactory.clearGeneratorMapForTest();
@@ -32,7 +26,6 @@ public class UniqueIdentificationGeneratorFactoryTest {
     }
 
     @Test
-    @SmallTest
     @Feature({"ChromeToMobile", "Omaha", "Sync"})
     public void testForceCanOverrideGenerator() {
         UniqueIdentificationGeneratorFactory.clearGeneratorMapForTest();
@@ -48,7 +41,6 @@ public class UniqueIdentificationGeneratorFactoryTest {
     }
 
     @Test
-    @SmallTest
     @Feature({"ChromeToMobile", "Omaha", "Sync"})
     public void testGeneratorNotFoundThrows() {
         UniqueIdentificationGeneratorFactory.clearGeneratorMapForTest();

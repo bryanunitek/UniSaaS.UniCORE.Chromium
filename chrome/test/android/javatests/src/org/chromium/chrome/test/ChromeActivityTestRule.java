@@ -6,10 +6,6 @@ package org.chromium.chrome.test;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.content.ComponentName;
@@ -22,14 +18,14 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import org.hamcrest.Matchers;
 import org.junit.runner.Description;
 import org.junit.runners.model.Statement;
-import org.mockito.Mockito;
 
+import org.chromium.base.ActivityState;
+import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ApplicationStatus;
-import org.chromium.base.Callback;
 import org.chromium.base.CommandLine;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.Holder;
 import org.chromium.base.Log;
-import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.CallbackHelper;
@@ -60,6 +56,7 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvi
 import org.chromium.components.browser_ui.bottomsheet.ManagedBottomSheetController;
 import org.chromium.components.browser_ui.widget.highlight.PulseDrawable;
 import org.chromium.components.embedder_support.util.UrlUtilities;
+import org.chromium.components.feature_engagement.TestTracker;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
@@ -94,7 +91,9 @@ import java.util.concurrent.atomic.AtomicReference;
 public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivityTestRule<T> {
     // The number of ms to wait for the rendering activity to be started.
     private static final int ACTIVITY_START_TIMEOUT_MS = 1000;
+    private static final long DEFERRED_STARTUP_TIMEOUT_MS = 20000L;
     private static final String TAG = "TestRule";
+    private static final Tracker sDisabledTracker = new TestTracker();
 
     private final EmbeddedTestServerRule mTestServerRule = new EmbeddedTestServerRule();
 
@@ -131,19 +130,9 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
         // Disable IPH to prevent it from interfering with the tests.
         Log.w(
                 TAG,
-                "A mock Tracker is set in ChromeActivityTestRule. This will"
+                "A fake Tracker is set in ChromeActivityTestRule. This will"
                         + " prevent any IPH from showing. See crbug.com/342240475.");
-        Tracker tracker = Mockito.mock(Tracker.class);
-        when(tracker.shouldTriggerHelpUi(anyString())).thenReturn(false);
-        doAnswer(
-                        invocation -> {
-                            invocation.<Callback<Boolean>>getArgument(0).onResult(true);
-                            return null;
-                        })
-                .when(tracker)
-                .addOnInitializedCallback(any());
-        TrackerFactory.setTrackerForTests(tracker);
-        ResettersForTesting.register(() -> Mockito.reset(tracker));
+        TrackerFactory.setTrackerForTests(sDisabledTracker);
     }
 
     private void slowDownPulseDrawableAnimations() {
@@ -273,7 +262,7 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
             NewTabPageTestUtils.waitForNtpLoaded(tab);
         }
 
-        assertTrue(waitForDeferredStartup(activity));
+        assertTrue("Deferred startup never completed", waitForDeferredStartup(activity));
 
         assertNotNull(tab);
         assertNotNull(tab.getView());
@@ -286,10 +275,12 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
     public static boolean waitForDeferredStartup(ChromeActivity activity) {
         CriteriaHelper.pollUiThread(
                 activity::deferredStartupPostedForTesting,
-                20000L,
+                DEFERRED_STARTUP_TIMEOUT_MS,
                 CriteriaHelper.DEFAULT_POLLING_INTERVAL);
+        // CriteriaHelper scales timeouts internally; waitForDeferredStartupCompleteForTesting does
+        // not.
         return DeferredStartupHandler.waitForDeferredStartupCompleteForTesting(
-                ScalableTimeout.scaleTimeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL));
+                ScalableTimeout.scaleTimeout(DEFERRED_STARTUP_TIMEOUT_MS));
     }
 
     @Override
@@ -581,6 +572,25 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
     protected void waitForFirstFrame() {
         final Coordinates coord = Coordinates.createFor(getWebContents());
         CriteriaHelper.pollUiThread(
-                coord::frameInfoUpdated, "FrameInfo has not been updated in time.");
+                () -> {
+                    // TODO(crbug.com/573354424): On Android Desktop emulators, the
+                    // ChromeLauncherActivity trampoline task's DesktopTasksTransitionHandler
+                    // transition can abort after ChromeLauncherActivity finishes, returning focus
+                    // to QuickstepLauncher and stopping ChromeTabbedActivity.
+                    if (DeviceInfo.isDesktop()) {
+                        T activity = getActivity();
+                        if (activity == null) return false;
+                        @ActivityState int state = ApplicationStatus.getStateForActivity(activity);
+                        if (state != ActivityState.RESUMED) {
+                            ApiCompatibilityUtils.moveTaskToFront(
+                                    activity, activity.getTaskId(), 0);
+                            return false;
+                        }
+                    }
+                    return coord.frameInfoUpdated();
+                },
+                "FrameInfo has not been updated in time.",
+                10000L,
+                CriteriaHelper.DEFAULT_POLLING_INTERVAL);
     }
 }

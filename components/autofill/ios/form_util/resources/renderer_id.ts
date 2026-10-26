@@ -7,13 +7,14 @@
  * forms and fields.
  */
 
-import {ID_SYMBOL, UNIQUE_ID_ATTRIBUTE} from '//components/autofill/ios/form_util/resources/fill_constants.js';
+import {HAS_BEEN_PASSWORD_SYMBOL, UNIQUE_ID_ATTRIBUTE} from '//components/autofill/ios/form_util/resources/fill_constants.js';
+import {getOrCreateUniqueNodeId} from '//components/autofill/ios/form_util/resources/unique_node_id.js';
 import {gCrWeb} from '//ios/web/public/js_messaging/resources/gcrweb.js';
 
 // Extends the Element to add the ability to access its properties
 // via the [] notation.
 declare interface IndexableElement extends Element {
-  [key: symbol]: number;
+  [key: symbol]: number|boolean;
 }
 
 /**
@@ -33,11 +34,14 @@ export function getElementMap(): Map<any, any>|null {
 }
 
 /**
- * Stores the next available ID for forms and fields. By convention, 0 means
- * null, so we start at 1 and increment from there.
+ * Returns true if the password fields tracking feature is enabled.
  */
-if (typeof document[ID_SYMBOL] === 'undefined') {
-  document[ID_SYMBOL] = 1;
+function isTrackPasswordFieldsEnabled(): boolean {
+  if (!gCrWeb.hasRegisteredApi('autofill_form_features')) {
+    return false;
+  }
+  return gCrWeb.getRegisteredApi('autofill_form_features')
+      .getFunction('isAutofillTrackPasswordFieldsEnabled')();
 }
 
 /**
@@ -47,17 +51,24 @@ if (typeof document[ID_SYMBOL] === 'undefined') {
 // content world.
 export function setUniqueIDIfNeeded(element: IndexableElement): void {
   try {
-    if (typeof element[ID_SYMBOL] === 'undefined') {
-      const elementID = document[ID_SYMBOL]!++;
-      element[ID_SYMBOL] = elementID;
+    const elementID = getOrCreateUniqueNodeId(element);
+    const elementMap = getElementMap();
+    if (elementMap && elementMap.has(elementID)) {
+      return;
+    }
 
-      //  Store a copy of the ID in the DOM. Utility function getUniqueID will use
-      //  the DOM copy when running in the page content world.
-      element.setAttribute(UNIQUE_ID_ATTRIBUTE, elementID.toString());
+    // Store a copy of the ID in the DOM. Utility function getUniqueID will use
+    // the DOM copy when running in the page content world.
+    Element.prototype.setAttribute.call(
+        element, UNIQUE_ID_ATTRIBUTE, elementID.toString());
 
-      const elementMap = getElementMap();
-      if (elementMap) {
-        elementMap.set(elementID, new WeakRef(element));
+    if (elementMap) {
+      elementMap.set(elementID, new WeakRef(element));
+
+      // Set a flag to indicate if this element is a password field.
+      if (element instanceof HTMLInputElement && element.type === 'password' &&
+          isTrackPasswordFieldsEnabled()) {
+        element[HAS_BEEN_PASSWORD_SYMBOL] = true;
       }
     }
   } catch (e) {

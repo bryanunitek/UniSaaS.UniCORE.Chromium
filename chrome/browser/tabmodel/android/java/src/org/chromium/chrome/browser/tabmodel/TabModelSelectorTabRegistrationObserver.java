@@ -69,6 +69,14 @@ public final class TabModelSelectorTabRegistrationObserver {
                     }
 
                     @Override
+                    public void willCloseTabs(
+                            List<Tab> tabs, boolean isAllTabs, boolean allowUndo) {
+                        for (Tab tab : tabs) {
+                            mTabsToClose.put(tab.getId(), tab);
+                        }
+                    }
+
+                    @Override
                     public void tabClosureUndone(Tab tab) {
                         mTabsToClose.remove(tab.getId());
                     }
@@ -117,15 +125,8 @@ public final class TabModelSelectorTabRegistrationObserver {
     }
 
     /**
-     * Removes an observer for subsequent tab registration events.
-     * @param observer The observer to be removed.
-     */
-    public void removeObserver(Observer observer) {
-        mObservers.removeObserver(observer);
-    }
-
-    /**
      * Called when a tab is registered to a tab model this selector is managing.
+     *
      * @param tab The registered Tab.
      */
     private void onTabRegistered(Tab tab) {
@@ -150,5 +151,6 @@ public final class TabModelSelectorTabRegistrationObserver {
         Tab[] tabs = mRegisteredTabs.toArray(new Tab[0]);
         for (Tab tab : tabs) onTabUnregistered(tab);
         assert mRegisteredTabs.isEmpty();
+        mObservers.clear();
     }
 }

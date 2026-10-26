@@ -27,7 +27,6 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
@@ -44,7 +43,7 @@
 #include "components/compose/core/browser/compose_utils.h"
 #include "components/compose/core/browser/config.h"
 #include "components/content_extraction/content/browser/inner_text.h"
-#include "components/optimization_guide/core/model_execution/feature_keys.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/model_execution/multimodal_message.h"
 #include "components/optimization_guide/core/model_execution/optimization_guide_model_execution_error.h"
 #include "components/optimization_guide/core/model_execution/remote_model_executor.h"
@@ -55,6 +54,7 @@
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/optimization_guide/proto/features/compose.pb.h"
 #include "components/optimization_guide/proto/model_quality_service.pb.h"
+#include "components/sessions/core/session_id.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/page_navigator.h"
@@ -889,10 +889,9 @@ void ComposeSession::OpenBugReportingLink() {
     }
   }
   web_contents_->OpenURL(
-      content::OpenURLParams(GURL(url), content::Referrer(),
-                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                             ui::PAGE_TRANSITION_LINK,
-                             /* is_renderer_initiated= */ false),
+      content::OpenURLParams::CreateBrowserInitiated(
+          GURL(url), WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_LINK),
       /*navigation_handle_callback=*/{});
 }
 
@@ -908,19 +907,17 @@ void ComposeSession::OpenComposeLearnMorePage() {
     return;
   }
   web_contents_->OpenURL(
-      content::OpenURLParams(
-          GURL(kComposeLearnMorePageURL), content::Referrer(),
-          WindowOpenDisposition::NEW_FOREGROUND_TAB, ui::PAGE_TRANSITION_LINK,
-          /* is_renderer_initiated= */ false),
+      content::OpenURLParams::CreateBrowserInitiated(
+          GURL(kComposeLearnMorePageURL),
+          WindowOpenDisposition::kNewForegroundTab, ui::PAGE_TRANSITION_LINK),
       /*navigation_handle_callback=*/{});
 }
 
 void ComposeSession::OpenEnterpriseComposeLearnMorePage() {
   web_contents_->OpenURL(
-      content::OpenURLParams(
-          GURL(kEnterpriseComposeLearnMorePageURL), content::Referrer(),
-          WindowOpenDisposition::NEW_FOREGROUND_TAB, ui::PAGE_TRANSITION_LINK,
-          /* is_renderer_initiated= */ false),
+      content::OpenURLParams::CreateBrowserInitiated(
+          GURL(kEnterpriseComposeLearnMorePageURL),
+          WindowOpenDisposition::kNewForegroundTab, ui::PAGE_TRANSITION_LINK),
       /*navigation_handle_callback=*/{});
 }
 
@@ -935,19 +932,17 @@ void ComposeSession::OpenFeedbackSurveyLink() {
     }
   }
   web_contents_->OpenURL(
-      content::OpenURLParams(GURL(url), content::Referrer(),
-                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                             ui::PAGE_TRANSITION_LINK,
-                             /* is_renderer_initiated= */ false),
+      content::OpenURLParams::CreateBrowserInitiated(
+          GURL(url), WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_LINK),
       /*navigation_handle_callback=*/{});
 }
 
 void ComposeSession::OpenSignInPage() {
   web_contents_->OpenURL(
-      content::OpenURLParams(GURL(kSignInPageURL), content::Referrer(),
-                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                             ui::PAGE_TRANSITION_LINK,
-                             /* is_renderer_initiated= */ false),
+      content::OpenURLParams::CreateBrowserInitiated(
+          GURL(kSignInPageURL), WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_LINK),
       /*navigation_handle_callback=*/{});
 }
 

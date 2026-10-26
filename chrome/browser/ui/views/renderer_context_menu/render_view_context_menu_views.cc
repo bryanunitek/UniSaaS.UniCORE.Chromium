@@ -4,23 +4,23 @@
 
 #include "chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.h"
 
-#include <string>
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/feature_list.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/observer_list.h"
 #include "base/scoped_observation.h"
 #include "base/task/current_thread.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/pref_names.h"
 #include "components/lens/buildflags.h"
-#include "components/lens/lens_features.h"
+#include "components/prefs/pref_service.h"
 #include "components/renderer_context_menu/views/toolkit_delegate_views.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
@@ -30,6 +30,7 @@
 #include "ui/aura/client/screen_position_client.h"
 #include "ui/aura/window.h"
 #include "ui/base/accelerators/accelerator.h"
+#include "ui/base/accelerators/command.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/events/keycodes/keyboard_codes.h"
@@ -66,12 +67,12 @@ class RenderViewContextMenuViews::SubmenuViewObserver
   void OnViewIsDeleting(views::View* observed_view) override {
     // The submenu view is being deleted, make sure the parent no longer
     // observes it.
-    DCHECK_EQ(submenu_view_, observed_view);
+    CHECK_EQ(submenu_view_, observed_view, base::NotFatalUntil::M162);
     parent_->OnSubmenuClosed();
   }
 
   void OnViewBoundsChanged(views::View* observed_view) override {
-    DCHECK_EQ(submenu_view_, observed_view);
+    CHECK_EQ(submenu_view_, observed_view, base::NotFatalUntil::M162);
     // Check to make sure the host exists. The SubmenuView can drop the
     // reference to the host.
     if (submenu_view_->host()) {
@@ -81,7 +82,7 @@ class RenderViewContextMenuViews::SubmenuViewObserver
   }
 
   void OnViewAddedToWidget(views::View* observed_view) override {
-    DCHECK_EQ(submenu_view_, observed_view);
+    CHECK_EQ(submenu_view_, observed_view, base::NotFatalUntil::M162);
     auto* widget = submenu_view_->host();
     if (widget) {
       submenu_widget_observation_.Observe(widget);
@@ -127,21 +128,21 @@ RenderViewContextMenuViews::RenderViewContextMenuViews(
                             is_paste_enabled,
                             is_paste_and_match_style_enabled),
       bidi_submenu_model_(this) {
-  std::unique_ptr<ToolkitDelegate> delegate(new ToolkitDelegateViews);
-  set_toolkit_delegate(std::move(delegate));
+  set_toolkit_delegate(std::make_unique<ToolkitDelegateViews>());
 }
 
 RenderViewContextMenuViews::~RenderViewContextMenuViews() = default;
 
 // static
-RenderViewContextMenuViews* RenderViewContextMenuViews::Create(
+std::unique_ptr<RenderViewContextMenuViews> RenderViewContextMenuViews::Create(
     content::RenderFrameHost& render_frame_host,
     const content::ContextMenuParams& params,
     bool is_paste_enabled,
     bool is_paste_and_match_style_enabled) {
-  return new RenderViewContextMenuViews(render_frame_host, params,
-                                        is_paste_enabled,
-                                        is_paste_and_match_style_enabled);
+  // Protected ctor.
+  return base::WrapUnique(new RenderViewContextMenuViews(
+      render_frame_host, params, is_paste_enabled,
+      is_paste_and_match_style_enabled));
 }
 
 void RenderViewContextMenuViews::RunMenuAt(views::Widget* parent,
@@ -255,6 +256,34 @@ bool RenderViewContextMenuViews::GetAcceleratorForCommandId(
       *accel = ui::Accelerator(ui::VKEY_U, ui::EF_CONTROL_DOWN);
       return true;
 
+    case IDC_CONTENT_CONTEXT_OPEN_IN_READING_MODE: {
+      ui::AcceleratorProvider* accelerator_provider =
+          GetBrowserAcceleratorProvider();
+      if (!accelerator_provider) {
+        return false;
+      }
+      // Reading mode uses different command IDs for different ways of opening
+      // it, so adjust to use the command ID for the keyboard shortcut to grab
+      // the proper accelerator.
+      return accelerator_provider->GetAcceleratorForCommandId(
+          IDC_SHOW_READING_MODE_KEYBOARD, accel);
+    }
+
+    case IDC_CONTENT_CONTEXT_DICTATION: {
+      if (!GetProfile()->GetPrefs()->GetBoolean(
+              prefs::kPrefDictationOnboardingCompleted)) {
+        return false;
+      }
+
+      const std::string& pref_shortcut =
+          GetProfile()->GetPrefs()->GetString(prefs::kVoiceTypingHotkey);
+      if (pref_shortcut.empty()) {
+        return false;
+      }
+      *accel = ui::Command::StringToAccelerator(pref_shortcut);
+      return !accel->IsEmpty();
+    }
+
     case IDC_CONTENT_CONTEXT_EMOJI:
 #if BUILDFLAG(IS_WIN)
       *accel = ui::Accelerator(ui::VKEY_OEM_PERIOD, ui::EF_COMMAND_DOWN);
@@ -279,10 +308,7 @@ bool RenderViewContextMenuViews::GetAcceleratorForCommandId(
 void RenderViewContextMenuViews::ExecuteCommand(int command_id,
                                                 int event_flags) {
   switch (command_id) {
-    case kWritingDirectionDefaultId:
-      // WebKit's current behavior is for this menu item to always be disabled.
-      NOTREACHED();
-
+    case IDC_WRITING_DIRECTION_DEFAULT:
     case IDC_WRITING_DIRECTION_RTL:
     case IDC_WRITING_DIRECTION_LTR: {
       // Note: we get the local render frame host so that the writing mode
@@ -293,10 +319,14 @@ void RenderViewContextMenuViews::ExecuteCommand(int command_id,
       // menu is open. In this case, we'll not perform the action, but still
       // record metrics.
       if (rfh) {
-        rfh->GetRenderWidgetHost()->UpdateTextDirection(
-            (command_id == IDC_WRITING_DIRECTION_RTL)
-                ? base::i18n::RIGHT_TO_LEFT
-                : base::i18n::LEFT_TO_RIGHT);
+        base::i18n::TextDirection direction =
+            base::i18n::TextDirection::UNKNOWN_DIRECTION;
+        if (command_id == IDC_WRITING_DIRECTION_RTL) {
+          direction = base::i18n::RIGHT_TO_LEFT;
+        } else if (command_id == IDC_WRITING_DIRECTION_LTR) {
+          direction = base::i18n::LEFT_TO_RIGHT;
+        }
+        rfh->GetRenderWidgetHost()->UpdateTextDirection(direction);
         rfh->GetRenderWidgetHost()->NotifyTextDirection();
       }
       RenderViewContextMenu::RecordUsedItem(command_id);
@@ -311,7 +341,7 @@ void RenderViewContextMenuViews::ExecuteCommand(int command_id,
 
 bool RenderViewContextMenuViews::IsCommandIdChecked(int command_id) const {
   switch (command_id) {
-    case kWritingDirectionDefaultId:
+    case IDC_WRITING_DIRECTION_DEFAULT:
       return (params_.writing_direction_default &
               blink::ContextMenuData::kCheckableMenuItemChecked) != 0;
     case IDC_WRITING_DIRECTION_RTL:
@@ -328,9 +358,9 @@ bool RenderViewContextMenuViews::IsCommandIdChecked(int command_id) const {
 
 bool RenderViewContextMenuViews::IsCommandIdEnabled(int command_id) const {
   switch (command_id) {
-    case kWritingDirectionMenuId:
+    case IDC_WRITING_DIRECTION_MENU:
       return true;
-    case kWritingDirectionDefaultId:  // Provided to match OS defaults.
+    case IDC_WRITING_DIRECTION_DEFAULT:  // Provided to match OS defaults.
       return params_.writing_direction_default &
              blink::ContextMenuData::kCheckableMenuItemEnabled;
     case IDC_WRITING_DIRECTION_RTL:
@@ -347,8 +377,7 @@ bool RenderViewContextMenuViews::IsCommandIdEnabled(int command_id) const {
 
 ui::AcceleratorProvider*
 RenderViewContextMenuViews::GetBrowserAcceleratorProvider() const {
-  Browser* browser =
-      GetBrowser() ? GetBrowser()->GetBrowserForMigrationOnly() : nullptr;
+  BrowserWindowInterface* browser = GetBrowser();
   if (!browser) {
     return nullptr;
   }
@@ -358,7 +387,7 @@ RenderViewContextMenuViews::GetBrowserAcceleratorProvider() const {
 
 void RenderViewContextMenuViews::AppendPlatformEditableItems() {
   bidi_submenu_model_.AddCheckItem(
-      kWritingDirectionDefaultId,
+      IDC_WRITING_DIRECTION_DEFAULT,
       l10n_util::GetStringUTF16(IDS_CONTENT_CONTEXT_WRITING_DIRECTION_DEFAULT));
   bidi_submenu_model_.AddCheckItem(
       IDC_WRITING_DIRECTION_LTR,
@@ -368,7 +397,7 @@ void RenderViewContextMenuViews::AppendPlatformEditableItems() {
       l10n_util::GetStringUTF16(IDS_CONTENT_CONTEXT_WRITING_DIRECTION_RTL));
 
   menu_model_.AddSubMenu(
-      kWritingDirectionMenuId,
+      IDC_WRITING_DIRECTION_MENU,
       l10n_util::GetStringUTF16(IDS_CONTENT_CONTEXT_WRITING_DIRECTION_MENU),
       &bidi_submenu_model_);
 }

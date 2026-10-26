@@ -18,6 +18,7 @@
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/user_education/common/feature_promo/feature_promo_controller.h"
 #include "components/user_education/common/tutorial/tutorial_service.h"
 #include "components/user_education/webui/help_bubble_handler.h"
@@ -134,7 +135,8 @@ TabWebUIHelpBubbleFactoryBrowser::CreateBubble(
       if (BrowserWindowInterface* browser =
               GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
                   contents)) {
-        if (browser->GetTabStripModel()->GetActiveWebContents() == contents) {
+        if (browser->GetActiveTabInterface() &&
+            browser->GetActiveTabInterface()->GetContents() == contents) {
           BrowserFocusController::From(browser)->FocusWebContentsPane();
         }
       }
@@ -182,7 +184,15 @@ bool FloatingWebUIHelpBubbleFactoryBrowser::CanBuildBubbleForTrackedElement(
 // static
 void BrowserHelpBubble::MaybeCloseOverlappingHelpBubbles(
     const views::View* view) {
+  const gfx::Rect bounds = view->GetBoundsInScreen();
   auto* const browser = BrowserFeaturePromoController::GetBrowserForView(view);
+  MaybeCloseOverlappingHelpBubbles(browser, bounds);
+}
+
+// static
+void BrowserHelpBubble::MaybeCloseOverlappingHelpBubbles(
+    BrowserWindowInterface* browser,
+    const gfx::Rect& bounds_in_screen) {
   if (!browser) {
     return;
   }
@@ -193,15 +203,16 @@ void BrowserHelpBubble::MaybeCloseOverlappingHelpBubbles(
     return;
   }
 
-  const gfx::Rect bounds = view->GetBoundsInScreen();
 
   if (auto* const controller = service->GetFeaturePromoController(
           base::PassKey<BrowserHelpBubble>())) {
     static_cast<user_education::FeaturePromoControllerImpl*>(controller)
-        ->DismissNonCriticalBubbleInRegion(bounds);
+        ->DismissNonCriticalBubbleInRegion(bounds_in_screen);
   }
 
-  service->tutorial_service().DismissBubbleInRegion(bounds);
+  if (auto* const tutorials = service->tutorial_service()) {
+    tutorials->DismissBubbleInRegion(bounds_in_screen);
+  }
 }
 
 // static

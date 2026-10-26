@@ -10,8 +10,6 @@ import static org.chromium.ui.test.util.MockitoHelper.doCallback;
 
 import android.os.Looper;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -23,7 +21,6 @@ import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Shadows;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -36,7 +33,6 @@ import java.util.List;
 
 /** Unit test for {@link TosDialogBehaviorSharedPrefInvalidator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TosDialogBehaviorSharedPrefInvalidatorUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock public PolicyService mMockPolicyService;
@@ -61,7 +57,6 @@ public class TosDialogBehaviorSharedPrefInvalidatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSkipNotTriggered() {
         TosDialogBehaviorSharedPrefInvalidator.refreshSharedPreferenceIfTosSkipped();
         Shadows.shadowOf(Looper.getMainLooper()).idle();
@@ -70,7 +65,6 @@ public class TosDialogBehaviorSharedPrefInvalidatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSkipTriggered() {
         FirstRunStatus.setFirstRunSkippedByPolicy(true);
         AbstractAppRestrictionsProvider.setTestRestrictions(
@@ -83,7 +77,6 @@ public class TosDialogBehaviorSharedPrefInvalidatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testRefreshTriggered_NotSkippedByPolicy() {
         FirstRunStatus.setFirstRunSkippedByPolicy(true);
         launchSharedPrefInvalidator();
@@ -101,12 +94,11 @@ public class TosDialogBehaviorSharedPrefInvalidatorUnitTest {
      * Test to verify if #mOnPolicyAvailableCallback in TosDialogBehaviorSharedPrefInvalidator is
      * doing correct task.
      *
-     * Noting that shared preference only controls whether a TosDialogBehaviorSharedPrefInvalidator
-     * will be created or not. Once an instance is created, it runs regardless the value of
-     * FirstRunStatus#isFirstRunSkippedByPolicy.
+     * <p>Noting that shared preference only controls whether a
+     * TosDialogBehaviorSharedPrefInvalidator will be created or not. Once an instance is created,
+     * it runs regardless the value of FirstRunStatus#isFirstRunSkippedByPolicy.
      */
     @Test
-    @SmallTest
     public void testRefreshTriggered_RemainSkippedByPolicy() {
         FirstRunStatus.setFirstRunSkippedByPolicy(true);
         launchSharedPrefInvalidator();

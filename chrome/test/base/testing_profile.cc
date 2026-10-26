@@ -35,6 +35,7 @@
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/device_reauth/chrome_device_authenticator_factory.h"
+#include "chrome/browser/enterprise/isolated_mode/isolated_mode_settings_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/origin_trials/origin_trials_factory.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
@@ -44,7 +45,6 @@
 #include "chrome/browser/prefs/pref_service_syncable_util.h"
 #include "chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.h"
 #include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/profiles/profile_load_tracker_win.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/profiles/storage_partition_descriptor.h"
@@ -110,6 +110,7 @@
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "net/cookies/cookie_store.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/test/test_network_connection_tracker.h"
 #include "services/service_manager/public/cpp/service.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -141,11 +142,16 @@
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/net/delay_network_call.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager_factory.h"
 #include "chrome/browser/ash/system_web_apps/test_support/test_system_web_app_manager.h"
 #include "chromeos/ash/components/account_manager/account_manager_factory.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/account_manager_core/chromeos/account_manager.h"
+#endif
+
+#if BUILDFLAG(IS_WIN)
+#include "chrome/browser/profiles/profile_load_tracker_win.h"
 #endif
 
 namespace {
@@ -216,7 +222,7 @@ TestingProfile::TestingProfile(const base::FilePath& path,
                      /*prefs=*/nullptr,
                      /*parent=*/nullptr,
                      /*guest_session=*/false,
-                     /*allows_browser_windows=*/true,
+                     /*allows_browser_windows=*/std::nullopt,
                      /*is_new_profile=*/false,
                      /*is_supervised_profile=*/false,
                      /*policy_manager=*/{},
@@ -238,7 +244,7 @@ TestingProfile::TestingProfile(
     std::unique_ptr<sync_preferences::PrefServiceSyncable> prefs,
     TestingProfile* parent,
     bool guest_session,
-    bool allows_browser_windows,
+    std::optional<bool> allows_browser_windows,
     bool is_new_profile,
     bool is_supervised_profile,
 #if BUILDFLAG(IS_CHROMEOS)
@@ -279,7 +285,12 @@ TestingProfile::TestingProfile(
       profile_load_tracker_enabled_(profile_load_tracker_enabled)
 #endif
 {
-  set_allows_browser_windows_for_testing(allows_browser_windows);
+  if (allows_browser_windows.has_value()) {
+    set_allows_browser_windows_for_testing(*allows_browser_windows);
+  }
+  // TestingProfile is not registered with ProfileManager in most unit tests,
+  // but AddKeepAlive() should still work on it without failing CHECK().
+  set_lifecycle_state(LifecycleState::kRegistered);
 #if BUILDFLAG(IS_CHROMEOS)
   user_cloud_policy_manager_ = std::move(policy_manager);
 #else
@@ -522,11 +533,17 @@ void TestingProfile::InitializeProfileType() {
 #endif  // !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
 
   if (IsOffTheRecord()) {
+    if (otr_profile_id_ != OTRProfileID::PrimaryID()) {
+      profile_metrics::SetBrowserProfileType(
+          this, profile_metrics::BrowserProfileType::kOtherOffTheRecordProfile);
+      return;
+    }
+
     profile_metrics::SetBrowserProfileType(
-        this,
-        (otr_profile_id_ == OTRProfileID::PrimaryID())
-            ? profile_metrics::BrowserProfileType::kIncognito
-            : profile_metrics::BrowserProfileType::kOtherOffTheRecordProfile);
+        this, enterprise_isolated_mode::IsolatedModeReplacesIncognito(
+                  original_profile_)
+                  ? profile_metrics::BrowserProfileType::kEnterpriseIsolated
+                  : profile_metrics::BrowserProfileType::kIncognito);
     return;
   }
 

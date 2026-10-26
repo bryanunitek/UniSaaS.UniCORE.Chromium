@@ -4,9 +4,10 @@
 
 #include "components/sync/engine/syncer_proto_util.h"
 
-#include <map>
 #include <optional>
 
+#include "base/containers/flat_map.h"
+#include "base/feature_list.h"
 #include "base/format_macros.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
@@ -16,6 +17,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "components/sync/base/data_type.h"
+#include "components/sync/base/features.h"
 #include "components/sync/base/time.h"
 #include "components/sync/engine/cycle/sync_cycle_context.h"
 #include "components/sync/engine/net/server_connection_manager.h"
@@ -203,7 +205,7 @@ void ProcessClientCommand(const sync_pb::ClientCommand& command,
   }
 
   if (command.custom_nudge_delays_size() > 0) {
-    std::map<DataType, base::TimeDelta> delay_map;
+    base::flat_map<DataType, base::TimeDelta> delay_map;
     for (int i = 0; i < command.custom_nudge_delays_size(); ++i) {
       DataType type = GetDataTypeFromSpecificsFieldNumber(
           command.custom_nudge_delays(i).datatype_id());
@@ -238,8 +240,10 @@ void ProcessClientCommand(const sync_pb::ClientCommand& command,
 }  // namespace
 
 DataTypeSet GetTypesToMigrate(const ClientToServerResponse& response) {
-  return GetDataTypeSetFromSpecificsFieldNumberList(
+  DataTypeSet types = GetDataTypeSetFromSpecificsFieldNumberList(
       response.migrated_data_type_id());
+  types.Remove(NIGORI);
+  return types;
 }
 
 SyncProtocolError ConvertErrorPBToSyncProtocolError(
@@ -393,9 +397,11 @@ void SyncerProtoUtil::SetProtocolVersion(ClientToServerMessage* msg) {
 }
 
 // static
-bool SyncerProtoUtil::PostAndProcessHeaders(ServerConnectionManager* scm,
-                                            const ClientToServerMessage& msg,
-                                            ClientToServerResponse* response) {
+bool SyncerProtoUtil::PostAndProcessHeaders(
+    ServerConnectionManager* scm,
+    const ClientToServerMessage& msg,
+    ClientToServerResponse* response,
+    const signin::AccessTokenInfo& access_token_info) {
   DCHECK(msg.has_protocol_version());
   DCHECK_EQ(msg.protocol_version(),
             ClientToServerMessage::default_instance().protocol_version());
@@ -425,7 +431,10 @@ bool SyncerProtoUtil::PostAndProcessHeaders(ServerConnectionManager* scm,
   // Fills in buffer_out.
   std::string buffer_out;
   HttpResponse http_response =
-      scm->PostBufferWithCachedAuth(buffer_in, &buffer_out);
+      base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken)
+          ? scm->PostBufferWithAccessToken(buffer_in, &buffer_out,
+                                           access_token_info)
+          : scm->PostBufferWithCachedAuth(buffer_in, &buffer_out);
   if (http_response.server_status != HttpResponse::SERVER_CONNECTION_OK) {
     LOG(WARNING) << "Error posting from syncer:" << http_response;
     return false;
@@ -506,7 +515,7 @@ SyncerError SyncerProtoUtil::PostClientToServerMessage(
 
   LogClientToServerMessage(msg);
   if (!PostAndProcessHeaders(cycle->context()->connection_manager(), msg,
-                             response)) {
+                             response, cycle->access_token_info())) {
     // There was an error establishing communication with the server.
     // We can not proceed beyond this point.
     const HttpResponse::ServerConnectionCode server_status =
@@ -527,24 +536,6 @@ SyncerError SyncerProtoUtil::PostClientToServerMessage(
 
   return HandleClientToServerMessageResponse(*response, cycle,
                                              partial_failure_data_types);
-}
-
-// static
-bool SyncerProtoUtil::ShouldMaintainPosition(
-    const sync_pb::SyncEntity& sync_entity) {
-  // Maintain positions for bookmarks that are not server-defined top-level
-  // folders.
-  return GetDataTypeFromSpecifics(sync_entity.specifics()) == BOOKMARKS &&
-         !(sync_entity.folder() &&
-           !sync_entity.server_defined_unique_tag().empty());
-}
-
-// static
-bool SyncerProtoUtil::ShouldMaintainHierarchy(
-    const sync_pb::SyncEntity& sync_entity) {
-  // Maintain hierarchy for bookmarks or top-level items.
-  return GetDataTypeFromSpecifics(sync_entity.specifics()) == BOOKMARKS ||
-         sync_entity.parent_id_string() == "0";
 }
 
 std::string SyncerProtoUtil::SyncEntityDebugString(

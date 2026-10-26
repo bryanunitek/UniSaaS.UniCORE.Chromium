@@ -113,6 +113,12 @@ public class RenderFrameHostImpl implements RenderFrameHost {
     }
 
     @Override
+    public boolean isOutermostMainFrame() {
+        if (mNativeRenderFrameHostAndroid == 0) return false;
+        return RenderFrameHostImplJni.get().isOutermostMainFrame(mNativeRenderFrameHostAndroid);
+    }
+
+    @Override
     public void getCanonicalUrlForSharing(Callback<@Nullable GURL> callback) {
         if (mNativeRenderFrameHostAndroid == 0) {
             callback.onResult(null);
@@ -148,6 +154,13 @@ public class RenderFrameHostImpl implements RenderFrameHost {
     public void notifyUserActivation() {
         if (mNativeRenderFrameHostAndroid == 0) return;
         RenderFrameHostImplJni.get().notifyUserActivation(mNativeRenderFrameHostAndroid);
+    }
+
+    @Override
+    public boolean consumeTransientUserActivation() {
+        if (mNativeRenderFrameHostAndroid == 0) return false;
+        return RenderFrameHostImplJni.get()
+                .consumeTransientUserActivation(mNativeRenderFrameHostAndroid);
     }
 
     @Override
@@ -329,6 +342,12 @@ public class RenderFrameHostImpl implements RenderFrameHost {
         RenderFrameHostImplJni.get().viewSource(mNativeRenderFrameHostAndroid);
     }
 
+    @Override
+    public boolean isCrossOriginIsolated() {
+        if (mNativeRenderFrameHostAndroid == 0) return false;
+        return RenderFrameHostImplJni.get().isCrossOriginIsolated(mNativeRenderFrameHostAndroid);
+    }
+
     @NativeMethods
     interface Natives {
         GURL getLastCommittedURL(long nativeRenderFrameHostAndroid);
@@ -336,6 +355,8 @@ public class RenderFrameHostImpl implements RenderFrameHost {
         Origin getLastCommittedOrigin(long nativeRenderFrameHostAndroid);
 
         RenderFrameHost getMainFrame(long nativeRenderFrameHostAndroid);
+
+        boolean isOutermostMainFrame(long nativeRenderFrameHostAndroid);
 
         void getCanonicalUrlForSharing(
                 long nativeRenderFrameHostAndroid,
@@ -352,6 +373,8 @@ public class RenderFrameHostImpl implements RenderFrameHost {
         UnguessableToken getAndroidOverlayRoutingToken(long nativeRenderFrameHostAndroid);
 
         void notifyUserActivation(long nativeRenderFrameHostAndroid);
+
+        boolean consumeTransientUserActivation(long nativeRenderFrameHostAndroid);
 
         void notifyWebAuthnAssertionRequestSucceeded(long nativeRenderFrameHostAndroid);
 
@@ -407,5 +430,7 @@ public class RenderFrameHostImpl implements RenderFrameHost {
         boolean hasHitTestDataForTesting(long nativeRenderFrameHostAndroid);
 
         void viewSource(long nativeRenderFrameHostAndroid);
+
+        boolean isCrossOriginIsolated(long nativeRenderFrameHostAndroid);
     }
 }

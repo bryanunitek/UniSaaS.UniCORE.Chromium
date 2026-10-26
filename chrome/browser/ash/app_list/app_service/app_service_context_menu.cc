@@ -22,13 +22,9 @@
 #include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/guest_os/guest_os_terminal.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_manager.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
 #include "chrome/browser/extensions/context_menu_matcher.h"
 #include "chrome/browser/extensions/menu_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/chrome_pages.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "components/app_constants/constants.h"
@@ -38,6 +34,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/context_menu_params.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/display/scoped_display_for_new_windows.h"
 #include "ui/gfx/vector_icon_types.h"
 
@@ -47,8 +44,9 @@ bool MenuItemHasLauncherContext(const extensions::MenuItem* item) {
 }
 
 apps::WindowMode ConvertUseLaunchTypeCommandToWindowMode(int command_id) {
-  DCHECK(command_id >= ash::USE_LAUNCH_TYPE_COMMAND_START &&
-         command_id < ash::USE_LAUNCH_TYPE_COMMAND_END);
+  CHECK(command_id >= ash::USE_LAUNCH_TYPE_COMMAND_START &&
+            command_id < ash::USE_LAUNCH_TYPE_COMMAND_END,
+        base::NotFatalUntil::M160);
   switch (command_id) {
     case ash::USE_LAUNCH_TYPE_REGULAR:
       return apps::WindowMode::kBrowser;
@@ -80,8 +78,8 @@ void ShowOptionsPage(AppListControllerDelegate* controller,
                      Profile* profile,
                      const std::string& app_id,
                      bool post_task) {
-  DCHECK(controller);
-  DCHECK(profile);
+  CHECK(controller, base::NotFatalUntil::M160);
+  CHECK(profile, base::NotFatalUntil::M160);
 
   if (post_task) {
     content::GetUIThreadTaskRunner({})->PostTask(
@@ -96,7 +94,7 @@ void ShowOptionsPage(AppListControllerDelegate* controller,
 void ExecuteLaunchCommand(app_list::AppContextMenuDelegate* delegate,
                           int event_flags,
                           bool post_task) {
-  DCHECK(delegate);
+  CHECK(delegate, base::NotFatalUntil::M160);
   if (post_task) {
     content::GetUIThreadTaskRunner({})->PostTask(
         FROM_HERE, base::BindOnce(ExecuteLaunchCommand, delegate, event_flags,
@@ -212,9 +210,6 @@ void AppServiceContextMenu::ExecuteCommand(int command_id, int event_flags) {
       if (app_id() == guest_os::kTerminalSystemAppId) {
         crostini::CrostiniManager::GetForProfile(profile())->StopRunningVms(
             base::DoNothing());
-      } else if (app_id() == plugin_vm::kPluginVmShelfAppId) {
-        plugin_vm::PluginVmManagerFactory::GetForProfile(profile())
-            ->StopPluginVm(plugin_vm::kPluginVmName, /*force=*/false);
       } else {
         LOG(ERROR) << "App " << app_id()
                    << " should not have a shutdown guest OS command.";
@@ -435,11 +430,12 @@ void AppServiceContextMenu::SetLaunchType(int command_id) {
 }
 
 void AppServiceContextMenu::ExecutePublisherContextMenuCommand(int command_id) {
-  DCHECK(command_id >= ash::LAUNCH_APP_SHORTCUT_FIRST &&
-         command_id <= ash::LAUNCH_APP_SHORTCUT_LAST);
+  CHECK(command_id >= ash::LAUNCH_APP_SHORTCUT_FIRST &&
+            command_id <= ash::LAUNCH_APP_SHORTCUT_LAST,
+        base::NotFatalUntil::M160);
   const size_t index = command_id - ash::LAUNCH_APP_SHORTCUT_FIRST;
-  DCHECK(app_shortcut_items_);
-  DCHECK_LT(index, app_shortcut_items_->size());
+  CHECK(app_shortcut_items_, base::NotFatalUntil::M160);
+  CHECK_LT(index, app_shortcut_items_->size(), base::NotFatalUntil::M160);
 
   proxy_->ExecuteContextMenuCommand(app_id(), command_id,
                                     app_shortcut_items_->at(index).shortcut_id,

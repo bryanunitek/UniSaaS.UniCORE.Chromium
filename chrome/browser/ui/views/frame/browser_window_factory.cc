@@ -12,6 +12,7 @@
 #include "chrome/browser/ui/views/frame/browser_widget.h"
 #include "chrome/browser/ui/webui_browser/webui_browser.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_window.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "ui/views/widget/widget.h"
 
 #if defined(USE_AURA)
@@ -22,15 +23,17 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ui/views/frame/browser_view_ash.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "chromeos/components/kiosk/kiosk_utils.h"
 #endif
 
 // static
 std::unique_ptr<BrowserWindow, BrowserWindowDeleter>
-BrowserWindow::CreateBrowserWindow(Browser* browser,
+BrowserWindow::CreateBrowserWindow(BrowserWindowInterface* browser,
                                    bool user_gesture,
                                    bool in_tab_dragging) {
-  if (webui_browser::IsWebUIBrowserEnabled() && browser->is_type_normal()) {
+  if (webui_browser::IsWebUIBrowserEnabled() &&
+      browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
     return std::unique_ptr<BrowserWindow, BrowserWindowDeleter>(
         new WebUIBrowserWindow(browser));
   }

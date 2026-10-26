@@ -8,7 +8,9 @@
 #include <stddef.h>
 #include <xf86drm.h>
 
+#include <array>
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/compiler_specific.h"
@@ -52,7 +54,11 @@ const int kAuthFailSleepMs = 100;
 // Log a warning after failing to authenticate for this many milliseconds.
 const int kLogAuthFailDelayMs = 1000;
 
-constexpr const char* kDisplayActionString[] = {
+// Maximum number of attempts to authenticate the DRM device before proceeding.
+// With kAuthFailSleepMs = 100, 50 attempts corresponds to ~5 seconds.
+constexpr int kMaxAuthAttempts = 50;
+
+constexpr std::array<std::string_view, 3> kDisplayActionString = {
     "ADD",
     "REMOVE",
     "CHANGE",
@@ -110,8 +116,9 @@ std::unique_ptr<DrmWrapper> OpenDrmDevice(const base::FilePath& dev_path,
 
   base::ScopedFD scoped_fd;
   int num_auth_attempts = 0;
+  bool is_authenticated = false;
   const base::TimeTicks start_time = base::TimeTicks::Now();
-  while (true) {
+  while (num_auth_attempts < kMaxAuthAttempts) {
     scoped_fd.reset();
     int fd = HANDLE_EINTR(open(dev_path.value().c_str(), O_RDWR | O_CLOEXEC));
     if (fd < 0) {
@@ -141,6 +148,13 @@ std::unique_ptr<DrmWrapper> OpenDrmDevice(const base::FilePath& dev_path,
     }
     drm_errno = drmAuthMagic(fd, magic);
     if (drm_errno) {
+      // If authenticating fails (e.g. because the previously crashing process
+      // held DRM master and is being torn down), try explicitly acquiring DRM
+      // master on this file descriptor.
+      if (drmSetMaster(fd) == 0 && drmAuthMagic(fd, magic) == 0) {
+        is_authenticated = true;
+        break;
+      }
       LOG_IF(ERROR, should_log_error)
           << "Failed to authenticate: " << dev_path.value()
           << " with errno: " << drm_errno << " after " << num_auth_attempts
@@ -148,12 +162,19 @@ std::unique_ptr<DrmWrapper> OpenDrmDevice(const base::FilePath& dev_path,
       usleep(kAuthFailSleepMs * 1000);
       continue;
     }
+    is_authenticated = true;
     break;
   }
 
-  VLOG(1) << "Succeeded authenticating " << dev_path.value() << " in "
-          << (base::TimeTicks::Now() - start_time).InMilliseconds() << " ms "
-          << "with " << num_auth_attempts << " attempt(s)";
+  if (!is_authenticated) {
+    LOG(WARNING) << "Failed to authenticate " << dev_path.value() << " after "
+                 << num_auth_attempts
+                 << " attempt(s); proceeding with unauthenticated device";
+  } else {
+    VLOG(1) << "Succeeded authenticating " << dev_path.value() << " in "
+            << (base::TimeTicks::Now() - start_time).InMilliseconds() << " ms "
+            << "with " << num_auth_attempts << " attempt(s)";
+  }
 
   auto drm = std::make_unique<DrmWrapper>(sys_path, std::move(scoped_fd),
                                           is_primary_device);
@@ -439,9 +460,8 @@ void DrmDisplayHostManager::ProcessEvent() {
     const std::string seqnum = seqnum_it == event.display_event_props.end()
                                    ? ""
                                    : ("(SEQNUM:" + seqnum_it->second + ")");
-    VLOG(1) << "Got display event "
-            << UNSAFE_TODO(kDisplayActionString[event.action_type]) << seqnum
-            << " for " << event.path.value();
+    VLOG(1) << "Got display event " << kDisplayActionString[event.action_type]
+            << seqnum << " for " << event.path.value();
     switch (event.action_type) {
       case DeviceEvent::ADD:
         if (drm_devices_.find(event.path) == drm_devices_.end()) {

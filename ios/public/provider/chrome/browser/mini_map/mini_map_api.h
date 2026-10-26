@@ -78,6 +78,8 @@ using MiniMapControllerCompletionWithString = void (^)(NSString*);
 
 @end
 
+class GURL;
+
 namespace ios {
 namespace provider {
 
@@ -90,6 +92,16 @@ id<MiniMapController> CreateMiniMapController();
 
 // Checks whether MiniMap can handle `url`.
 BOOL MiniMapCanHandleURL(NSURL* url);
+
+// Returns the maps URL with the campaign token appended if needed.
+GURL URLByAppendingCampaignTokenIfNeeded(const GURL& url);
+
+// Returns whether `url` has a campaign token matching the configured one.
+BOOL URLHasCampaignToken(const GURL& url);
+
+// Returns true if the experiment flag for bypassing Google Maps Native Preview
+// is enabled.
+BOOL IsMapsNativePreviewBypassEnabled();
 
 }  // namespace provider
 }  // namespace ios

@@ -25,7 +25,6 @@ import '../os_search_page/magic_boost_review_terms_banner.js';
 import '../os_settings_page/os_settings_animated_pages.js';
 import 'chrome://resources/ash/common/shortcut_input_ui/shortcut_input_key.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {CrButtonElement} from 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import type {ShortcutLabelProperties} from 'chrome://resources/ash/common/shortcut_input_ui/shortcut_utils.js';
@@ -46,7 +45,8 @@ import type {AcceleratorFetcherInterface} from '../mojom-webui/accelerator_fetch
 import {AcceleratorFetcher, AcceleratorFetcherObserverReceiver} from '../mojom-webui/accelerator_fetcher.mojom-webui.js';
 import type {StandardAcceleratorProperties} from '../mojom-webui/accelerator_info.mojom-webui.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import {hasOptionsPageInSettings} from './input_method_util.js';
@@ -151,12 +151,21 @@ export class OsSettingsInputPageElement extends OsSettingsInputPageElementBase {
     };
   }
 
+  constructor() {
+    super();
+    this.isShortcutCustomizationEnabled_ =
+        loadTimeData.getBoolean('isShortcutCustomizationEnabled');
+    this.metaKey_ = MetaKey.kSearch;
+    this.languagePacksInSettingsEnabled_ =
+        loadTimeData.getBoolean('languagePacksInSettingsEnabled');
+  }
+
   // Public API: Bidirectional data flow.
   // override prefs: any;  // From PrefsMixin.
 
   // Public API: Downwards data flow.
-  languages: LanguagesModel|undefined;
-  languageHelper: LanguageHelper;
+  declare languages: LanguagesModel|undefined;
+  declare languageHelper: LanguageHelper;
 
   // API proxies.
   private languagesMetricsProxy_ = LanguagesMetricsProxyImpl.getInstance();
@@ -172,30 +181,28 @@ export class OsSettingsInputPageElement extends OsSettingsInputPageElementBase {
   override route = routes.OS_LANGUAGES_INPUT;
 
   // Internal state.
-  private showAddSpellcheckLanguagesDialog_: boolean;
-  private showAddInputMethodsDialog_: boolean;
+  declare private showAddSpellcheckLanguagesDialog_: boolean;
+  declare private showAddInputMethodsDialog_: boolean;
 
   // Accelerator fetcher properties.
   // TODO(yyhyyh@): Move these members to somewhere common.
-  acceleratorFetcher: AcceleratorFetcherInterface|null;
-  private isShortcutCustomizationEnabled_ =
-      loadTimeData.getBoolean('isShortcutCustomizationEnabled');
-  private lastUsedImeAccelerator_?: StandardAcceleratorProperties;
-  private nextImeAccelerator_?: StandardAcceleratorProperties;
+  declare acceleratorFetcher: AcceleratorFetcherInterface|null;
+  declare private isShortcutCustomizationEnabled_: boolean;
+  declare private lastUsedImeAccelerator_?: StandardAcceleratorProperties;
+  declare private nextImeAccelerator_?: StandardAcceleratorProperties;
   private acceleratorFetcherObserverReceiver_:
-      AcceleratorFetcherObserverReceiver;
-  private metaKey_ = MetaKey.kSearch;
+      AcceleratorFetcherObserverReceiver|null = null;
+  declare private metaKey_: MetaKey;
 
   // loadTimeData flags.
-  private onDeviceGrammarCheckEnabled_: boolean;
-  private languagePacksInSettingsEnabled_ =
-      loadTimeData.getBoolean('languagePacksInSettingsEnabled');
+  declare private onDeviceGrammarCheckEnabled_: boolean;
+  declare private languagePacksInSettingsEnabled_: boolean;
 
   // Computed properties.
-  private spellCheckLanguages_: SpellCheckLanguageState[]|undefined;
-  private showLastUsedImeShortcutReminder_: boolean;
-  private showNextImeShortcutReminder_: boolean;
-  private shortcutReminderBody_: TrustedHTML[];
+  declare private spellCheckLanguages_: SpellCheckLanguageState[]|undefined;
+  declare private showLastUsedImeShortcutReminder_: boolean;
+  declare private showNextImeShortcutReminder_: boolean;
+  declare private shortcutReminderBody_: TrustedHTML[];
 
   override ready(): void {
     super.ready();

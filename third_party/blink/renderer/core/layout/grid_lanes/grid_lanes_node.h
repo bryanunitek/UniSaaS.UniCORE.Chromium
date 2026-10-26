@@ -28,6 +28,10 @@ class CORE_EXPORT GridLanesNode final : public BlockNode {
     return To<LayoutGridLanes>(box_.Get())->CachedPlacementData();
   }
 
+  const GridLineResolver& CachedLineResolver() const {
+    return CachedPlacementData().line_resolver;
+  }
+
   // Collects the children of this node (using the `GridItemData` for each child
   // provided by `grid_lanes_items`) into item groups based on their placement,
   // span size, and baseline-sharing group. `start_offset` calculates the offset
@@ -48,7 +52,8 @@ class CORE_EXPORT GridLanesNode final : public BlockNode {
   // invalidation into subgrids. A grid-lanes container does not cache its own
   // items' placement (placement happens after track sizing), but a regular-grid
   // subgrid child does cache. When this container's placement-affecting style
-  // changes, we set this flag so the subgrid's cache is invalidated.
+  // changes, we set this flag so the subgrid's cache is invalidated. A
+  // grid-lanes subgrid caches its line resolver for later item reconstruction.
   //
   // `parent_is_auto_placed` is true when this grid is itself an auto-placed
   // subgrid inside a grid-lanes ancestor — i.e. the ancestor resolves its own
@@ -57,6 +62,17 @@ class CORE_EXPORT GridLanesNode final : public BlockNode {
   // subgrid should also be considered auto-placed if true.
   GridItems* ConstructGridItems(
       const GridLineResolver& line_resolver,
+      bool* must_invalidate_placement_cache,
+      bool parent_is_auto_placed = false,
+      HeapVector<Member<LayoutBox>>* opt_oof_children = nullptr,
+      bool* opt_has_nested_subgrid = nullptr) const;
+
+  // Constructs grid-lanes items with explicit subgrid parameters.
+  GridItems* ConstructGridItems(
+      const GridLineResolver& line_resolver,
+      const ComputedStyle& root_grid_style,
+      const ComputedStyle& parent_grid_style,
+      bool must_consider_for_columns,
       bool* must_invalidate_placement_cache,
       bool parent_is_auto_placed = false,
       HeapVector<Member<LayoutBox>>* opt_oof_children = nullptr,

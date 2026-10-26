@@ -10,6 +10,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/test/test_context_factories.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -28,7 +29,8 @@ void CompositorMetricsReporterTestBase::SetUp() {
       bounds, context_factories_->GetContextFactory()));
   host_->Show();
 
-  compositor()->SetRootLayer(&root_);
+  root_ = std::make_unique<LayerTextured>();
+  compositor()->SetRootLayer(root_.get());
 
   frame_generation_timer_.Start(
       FROM_HERE, base::Milliseconds(16), this,

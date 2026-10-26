@@ -51,7 +51,7 @@
 #include "base/android/apk_info.h"
 #include "chrome/browser/ui/android/android_about_app_info.h"
 #else
-#include "chrome/browser/ui/webui/theme_source.h"
+#include "chrome/browser/ui/webui/theme_source.h"  // nogncheck
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -231,7 +231,7 @@ int VersionUI::VersionProcessorVariation() {
 }
 
 // static
-base::RefCountedMemory* VersionUI::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory> VersionUI::GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
       IDR_PRODUCT_FAVICON, scale_factor);

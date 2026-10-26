@@ -6,6 +6,8 @@
 
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/numerics/safe_conversions.h"
 #include "content/browser/loader/prefetch_url_loader_service_context.h"
 #include "content/browser/loader/subresource_proxying_url_loader.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
@@ -30,7 +32,7 @@ SubresourceProxyingURLLoaderService::BindContext::BindContext(
     scoped_refptr<PrefetchedSignedExchangeCache>
         prefetched_signed_exchange_cache)
     : frame_tree_node_id(frame_tree_node_id),
-      factory(factory),
+      factory(std::move(factory)),
       render_frame_host(std::move(render_frame_host)),
       cross_origin_factory(nullptr),
       prefetched_signed_exchange_cache(
@@ -38,10 +40,18 @@ SubresourceProxyingURLLoaderService::BindContext::BindContext(
 
 void SubresourceProxyingURLLoaderService::BindContext::OnDidCommitNavigation(
     WeakDocumentPtr committed_document) {
+  did_commit_navigation = true;
   document = committed_document;
 }
 
-SubresourceProxyingURLLoaderService::BindContext::~BindContext() = default;
+SubresourceProxyingURLLoaderService::BindContext::~BindContext() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  if (total_tokens_generated > 0) {
+    base::UmaHistogramCounts100(
+        "Prefetch.RecursivePrefetch.TokensPerDocument",
+        base::saturated_cast<int>(total_tokens_generated));
+  }
+}
 
 SubresourceProxyingURLLoaderService::SubresourceProxyingURLLoaderService(
     BrowserContext* browser_context)
@@ -49,7 +59,7 @@ SubresourceProxyingURLLoaderService::SubresourceProxyingURLLoaderService(
           std::make_unique<PrefetchURLLoaderServiceContext>(
               browser_context,
               loader_factory_receivers_)) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 }
 
 base::WeakPtr<SubresourceProxyingURLLoaderService::BindContext>
@@ -61,7 +71,7 @@ SubresourceProxyingURLLoaderService::GetFactory(
     base::WeakPtr<RenderFrameHostImpl> render_frame_host,
     scoped_refptr<PrefetchedSignedExchangeCache>
         prefetched_signed_exchange_cache) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   auto bind_context = base::MakeRefCounted<BindContext>(
       frame_tree_node_id, subresource_proxying_factory_bundle,
@@ -84,57 +94,18 @@ void SubresourceProxyingURLLoaderService::CreateLoaderAndStart(
     const network::ResourceRequest& resource_request_in,
     mojo::PendingRemote<network::mojom::URLLoaderClient> client,
     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (!PrefetchURLLoaderServiceContext::IsPrefetchRequest(
-          resource_request_in) &&
-      !resource_request_in.browsing_topics &&
-      !resource_request_in.ad_auction_headers) {
+          resource_request_in)) {
     loader_factory_receivers_.ReportBadMessage(
         "Unexpected `resource_request_in` in "
         "SubresourceProxyingURLLoaderService::CreateLoaderAndStart(): it's not "
-        "a prefetch or browsing_topics or ad_auction_headers request.");
+        "a prefetch request.");
     return;
   }
 
-  if (PrefetchURLLoaderServiceContext::IsPrefetchRequest(resource_request_in) &&
-      (resource_request_in.browsing_topics ||
-       resource_request_in.ad_auction_headers)) {
-    loader_factory_receivers_.ReportBadMessage(
-        "Unexpected `resource_request_in` in "
-        "SubresourceProxyingURLLoaderService::CreateLoaderAndStart(): prefetch "
-        "cannot be set at the same time with browsing_topics or "
-        "ad_auction_headers.");
-    return;
-  }
-
-  if (resource_request_in.browsing_topics &&
-      !base::FeatureList::IsEnabled(network::features::kBrowsingTopics)) {
-    loader_factory_receivers_.ReportBadMessage(
-        "Unexpected `resource_request_in` in "
-        "SubresourceProxyingURLLoaderService::CreateLoaderAndStart(): "
-        "browsing_topics is set when Topics API is disabled.");
-    return;
-  }
-
-  if (resource_request_in.ad_auction_headers &&
-      !base::FeatureList::IsEnabled(network::features::kInterestGroupStorage)) {
-    loader_factory_receivers_.ReportBadMessage(
-        "Unexpected `resource_request_in` in "
-        "SubresourceProxyingURLLoaderService::CreateLoaderAndStart(): "
-        "ad_auction_headers is set when InterestGroupStorage is disabled.");
-    return;
-  }
-
-  if (PrefetchURLLoaderServiceContext::IsPrefetchRequest(resource_request_in)) {
-    prefetch_url_loader_service_context_->CreatePrefetchLoaderAndStart(
-        std::move(receiver), request_id, options, resource_request_in,
-        std::move(client), traffic_annotation);
-    return;
-  }
-
-  // For non-prefetch requests, fall back to `SubresourceProxyingURLLoader`.
-  CreateSubresourceProxyingLoaderAndStart(
+  prefetch_url_loader_service_context_->CreatePrefetchLoaderAndStart(
       std::move(receiver), request_id, options, resource_request_in,
       std::move(client), traffic_annotation);
 }
@@ -165,7 +136,7 @@ SubresourceProxyingURLLoaderService::~SubresourceProxyingURLLoaderService() =
 
 void SubresourceProxyingURLLoaderService::Clone(
     mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   loader_factory_receivers_.Add(this, std::move(receiver),
                                 loader_factory_receivers_.current_context());
 }

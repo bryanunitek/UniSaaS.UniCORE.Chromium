@@ -56,6 +56,8 @@ void JavaBooleanCallbackAdapter(base::OnceCallback<void(bool)> callback,
 int TabIdFromDirectoryKey(const DirectoryKey& key) {
   int out;
   bool success = base::StringToInt(key.AsciiDirname(), &out);
+  // TODO(crbug.com/574559903): CHECK-exclusion: Convert to a CHECK once we
+  // are confident it won't be triggered.
   DCHECK(success);
   return out;
 }
@@ -140,7 +142,7 @@ void PaintPreviewTabService::CaptureTab(int tab_id,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // If the system is under memory pressure don't try to capture.
-  if (memory_limit() <= base::kModerateMemoryPressureThreshold) {
+  if (memory_limit() <= base::MemoryLimit::ModeratePressureThreshold()) {
     return;
   }
 

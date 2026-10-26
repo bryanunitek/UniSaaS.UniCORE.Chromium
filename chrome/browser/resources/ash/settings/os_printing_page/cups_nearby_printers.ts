@@ -106,16 +106,16 @@ export class SettingsCupsNearbyPrintersElement extends
     return ['onSearchOrPrintersChanged_(nearbyPrinters.*, searchTerm)'];
   }
 
-  activePrinter: CupsPrinterInfo;
-  printersCount: number;
-  searchTerm: string;
-  userPrintersAllowed: boolean;
+  declare activePrinter: CupsPrinterInfo;
+  declare printersCount: number;
+  declare searchTerm: string;
+  declare userPrintersAllowed: boolean;
 
-  private activePrinterListEntryIndex_: number;
-  private filteredPrinters_: PrinterListEntry[];
-  private lastFocused_: Object;
-  private listBlurred_: boolean;
-  private savingPrinter_: boolean;
+  declare private activePrinterListEntryIndex_: number;
+  declare private filteredPrinters_: PrinterListEntry[];
+  declare private lastFocused_: Object;
+  declare private listBlurred_: boolean;
+  declare private savingPrinter_: boolean;
 
   override ready(): void {
     super.ready();
@@ -258,7 +258,7 @@ export class SettingsCupsNearbyPrintersElement extends
     this.showCupsPrinterToast_(result, printerName);
     chrome.metricsPrivate.recordEnumerationValue(
         'Printing.CUPS.PrinterSetupResult.SettingsDiscoveredPrinters', result,
-        Object.keys(PrinterSetupResult).length);
+        PrinterSetupResult.COUNT);
     recordSettingChange(Setting.kAddPrinter);
   }
 
@@ -277,7 +277,7 @@ export class SettingsCupsNearbyPrintersElement extends
     chrome.metricsPrivate.recordEnumerationValue(
         'Printing.CUPS.PrinterSetupResult.SettingsDiscoveredPrinters',
         PrinterSetupResult.MANUAL_SETUP_REQUIRED,
-        Object.keys(PrinterSetupResult).length);
+        PrinterSetupResult.COUNT);
   }
 
   /**

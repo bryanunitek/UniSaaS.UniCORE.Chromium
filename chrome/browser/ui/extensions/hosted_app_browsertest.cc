@@ -30,7 +30,6 @@
 #include "chrome/browser/preloading/prerender/prerender_utils.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -68,13 +67,13 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/security_principal.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_mock_cert_verifier.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
@@ -99,6 +98,8 @@
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(ENABLE_PDF)
 #include "chrome/browser/pdf/test_mime_handler_stream_manager.h"
@@ -193,11 +194,11 @@ bool TryToLoadImage(const content::ToRenderFrameHost& adapter,
 // potential UI issue on mac. We should fix the issue on mac and remove its
 // dependency on BrowserList::GetLastActive().
 
-void WaitUntilBrowserBecomeLastActive(Browser* browser) {
+void WaitUntilBrowserBecomeLastActive(BrowserWindowInterface* browser) {
   ui_test_utils::WaitForBrowserSetLastActive(browser);
 }
 
-void ExpectBrowserBecomesActiveOrLastActive(Browser* browser) {
+void ExpectBrowserBecomesActiveOrLastActive(BrowserWindowInterface* browser) {
   EXPECT_EQ(browser,
             GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser());
 }
@@ -331,9 +332,9 @@ class HostedOrWebAppTest : public extensions::ExtensionBrowserTest,
 
     size_t num_browsers =
         ProfileBrowserCollection::GetForProfile(profile())->GetSize();
-    int num_tabs = browser()->tab_strip_model()->count();
+    int num_tabs = browser()->GetTabStripModel()->count();
     content::WebContents* initial_tab =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
 
     ASSERT_NO_FATAL_FAILURE(std::move(action).Run());
 
@@ -343,10 +344,10 @@ class HostedOrWebAppTest : public extensions::ExtensionBrowserTest,
     EXPECT_EQ(num_browsers,
               ProfileBrowserCollection::GetForProfile(profile())->GetSize());
     ExpectBrowserBecomesActiveOrLastActive(browser());
-    EXPECT_EQ(++num_tabs, browser()->tab_strip_model()->count());
+    EXPECT_EQ(++num_tabs, browser()->GetTabStripModel()->count());
 
     content::WebContents* new_tab =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     EXPECT_NE(initial_tab, new_tab);
     EXPECT_EQ(target_url, new_tab->GetLastCommittedURL());
   }
@@ -360,7 +361,7 @@ class HostedOrWebAppTest : public extensions::ExtensionBrowserTest,
   apps::AppServiceTest& app_service_test() { return app_service_test_; }
 
   std::string app_id_;
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> app_browser_;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged> app_browser_;
 
   AppType app_type() const { return app_type_; }
 
@@ -404,7 +405,7 @@ IN_PROC_BROWSER_TEST_P(HostedOrWebAppTest, DISABLED_OpenLinkInNewTab) {
                                 0 /* event_flags */);
             url_observer.Wait();
           },
-          app_browser_->tab_strip_model()->GetActiveWebContents(), url),
+          app_browser_->GetTabStripModel()->GetActiveWebContents(), url),
       url);
 }
 
@@ -458,7 +459,7 @@ IN_PROC_BROWSER_TEST_P(HostedOrWebAppTest, MAYBE_CtrlClickLink) {
                                         blink::WebMouseEvent::Button::kLeft);
             url_observer.Wait();
           },
-          app_browser_->tab_strip_model()->GetActiveWebContents(), url),
+          app_browser_->GetTabStripModel()->GetActiveWebContents(), url),
       url);
 }
 
@@ -467,7 +468,7 @@ IN_PROC_BROWSER_TEST_P(HostedOrWebAppTest, MAYBE_CtrlClickLink) {
 IN_PROC_BROWSER_TEST_P(HostedOrWebAppTest, WebContentsPrefsOpenApplication) {
   SetupAppWithURL(GURL(kExampleURL));
   CheckWebContentsHasAppPrefs(
-      app_browser_->tab_strip_model()->GetActiveWebContents());
+      app_browser_->GetTabStripModel()->GetActiveWebContents());
 }
 
 // Tests that the WebContents of an app window launched using
@@ -477,14 +478,13 @@ IN_PROC_BROWSER_TEST_P(HostedOrWebAppTest,
   SetupAppWithURL(GURL(kExampleURL));
 
   content::WebContents* current_tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   CheckWebContentsDoesNotHaveAppPrefs(current_tab);
 
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   BrowserWindowInterface* app_browser =
       web_app::ReparentWebContentsIntoAppBrowser(current_tab, app_id_);
-  ASSERT_NE(browser(),
-            app_browser ? app_browser->GetBrowserForMigrationOnly() : nullptr);
+  ASSERT_NE(browser(), app_browser);
 
   // Wait for the target parent app browser window to become the last active
   // one.
@@ -510,7 +510,7 @@ IN_PROC_BROWSER_TEST_P(HostedOrWebAppTest, WebContentsPrefsOpenInChrome) {
   SetupAppWithURL(GURL(kExampleURL));
 
   content::WebContents* app_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
+      app_browser_->GetTabStripModel()->GetActiveWebContents();
   CheckWebContentsHasAppPrefs(app_contents);
 
   chrome::OpenInChrome(app_browser_);
@@ -518,7 +518,7 @@ IN_PROC_BROWSER_TEST_P(HostedOrWebAppTest, WebContentsPrefsOpenInChrome) {
             GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser());
 
   CheckWebContentsDoesNotHaveAppPrefs(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
 }
 
 // Check that the toolbar is shown correctly.
@@ -578,11 +578,11 @@ class HostedAppTestWithPrerendering : public HostedOrWebAppTest {
   }
 
   content::WebContents* GetAppWebContents() {
-    return app_browser_->tab_strip_model()->GetActiveWebContents();
+    return app_browser_->GetTabStripModel()->GetActiveWebContents();
   }
 
   content::WebContents* GetNonAppWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   base::HistogramTester& histogram_tester() { return histogram_tester_; }
@@ -763,7 +763,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppTestWithAutoupgradesDisabled,
 
   // Load mixed content; now the toolbar should be shown.
   content::WebContents* web_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
+      app_browser_->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(TryToLoadImage(
       web_contents, embedded_test_server()->GetURL("foo.com", kImagePath)));
   EXPECT_TRUE(web_app::AppBrowserController::From(app_browser_)
@@ -884,7 +884,7 @@ IN_PROC_BROWSER_TEST_P(HostedOrWebAppTest, SubframeRedirectsToHostedApp) {
   // Navigate a regular tab to a page with a subframe.
   GURL url = embedded_test_server()->GetURL("foo.com", "/iframe.html");
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   NavigateViaLinkClickToURLAndWait(browser(), url);
 
   // Navigate the subframe to a URL that redirects to a URL in the hosted app's
@@ -1046,7 +1046,7 @@ class HostedAppProcessModelTest : public HostedOrWebAppTest {
         << " for " << url << " from " << rfh->GetLastCommittedURL();
 
     EXPECT_EQ(expect_app_process,
-              process_map_->Contains(new_rfh->GetProcess()->GetDeprecatedID()))
+              process_map_->Contains(new_rfh->GetProcess()->GetID()))
         << " for " << url << " from " << rfh->GetLastCommittedURL();
     EXPECT_EQ(expect_app_process,
               new_rfh->GetSiteInstance()->GetSecurityPrincipal().SchemeIs(
@@ -1094,7 +1094,7 @@ class HostedAppProcessModelTest : public HostedOrWebAppTest {
         << " for " << url << " from " << parent_rfh->GetLastCommittedURL();
 
     EXPECT_EQ(expect_app_process,
-              process_map_->Contains(subframe->GetProcess()->GetDeprecatedID()))
+              process_map_->Contains(subframe->GetProcess()->GetID()))
         << " for " << url << " from " << parent_rfh->GetLastCommittedURL();
     if (!base::FeatureList::IsEnabled(
             features::kSiteInstanceGroupsForDataUrls)) {
@@ -1150,7 +1150,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest, IframesInsideHostedApp) {
   SetupApp(test_app_dir.UnpackedPath());
 
   content::WebContents* web_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
+      app_browser_->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
 
   auto find_frame = [web_contents](const std::string& name) {
@@ -1167,21 +1167,21 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest, IframesInsideHostedApp) {
 
   // Sanity-check sites of all relevant frames to verify test setup.
   GURL app_site =
-      GetSiteForURL(app_browser_->profile(), app->GetLastCommittedURL());
+      GetSiteForURL(app_browser_->GetProfile(), app->GetLastCommittedURL());
   EXPECT_EQ(extensions::kExtensionScheme, app_site.GetScheme());
 
-  GURL same_dir_site =
-      GetSiteForURL(app_browser_->profile(), same_dir->GetLastCommittedURL());
+  GURL same_dir_site = GetSiteForURL(app_browser_->GetProfile(),
+                                     same_dir->GetLastCommittedURL());
   EXPECT_EQ(extensions::kExtensionScheme, same_dir_site.GetScheme());
   EXPECT_EQ(same_dir_site, app_site);
 
-  GURL diff_dir_site =
-      GetSiteForURL(app_browser_->profile(), diff_dir->GetLastCommittedURL());
+  GURL diff_dir_site = GetSiteForURL(app_browser_->GetProfile(),
+                                     diff_dir->GetLastCommittedURL());
   EXPECT_NE(extensions::kExtensionScheme, diff_dir_site.GetScheme());
   EXPECT_NE(diff_dir_site, app_site);
 
-  GURL same_site_site =
-      GetSiteForURL(app_browser_->profile(), same_site->GetLastCommittedURL());
+  GURL same_site_site = GetSiteForURL(app_browser_->GetProfile(),
+                                      same_site->GetLastCommittedURL());
   EXPECT_NE(extensions::kExtensionScheme, same_site_site.GetScheme());
   EXPECT_NE(same_site_site, app_site);
   EXPECT_EQ(same_site_site, diff_dir_site);
@@ -1197,15 +1197,15 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest, IframesInsideHostedApp) {
   // content/public via SiteInfo.  For now, this verification will be done
   // implicitly by comparing SiteInstances and then actual processes further
   // below.
-  GURL isolated_site =
-      GetSiteForURL(app_browser_->profile(), isolated->GetLastCommittedURL());
+  GURL isolated_site = GetSiteForURL(app_browser_->GetProfile(),
+                                     isolated->GetLastCommittedURL());
   EXPECT_EQ(extensions::kExtensionScheme, isolated_site.GetScheme());
   EXPECT_EQ(isolated_site, app_site);
   EXPECT_NE(isolated->GetSiteInstance(), app->GetSiteInstance());
   EXPECT_NE(isolated_site, diff_dir_site);
 
-  GURL cross_site_site =
-      GetSiteForURL(app_browser_->profile(), cross_site->GetLastCommittedURL());
+  GURL cross_site_site = GetSiteForURL(app_browser_->GetProfile(),
+                                       cross_site->GetLastCommittedURL());
   EXPECT_NE(cross_site_site, app_site);
   EXPECT_NE(cross_site_site, same_site_site);
 
@@ -1233,14 +1233,12 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest, IframesInsideHostedApp) {
 
   // The isolated origin iframe's process should be in the ProcessMap, since
   // the isolated origin is covered by the app's extent.
-  EXPECT_TRUE(
-      process_map_->Contains(isolated->GetProcess()->GetDeprecatedID()));
+  EXPECT_TRUE(process_map_->Contains(isolated->GetProcess()->GetID()));
 
   // If we swapped processes for the |cross_site| iframe, its process should
   // not be on the ProcessMap.
   if (should_swap_for_cross_site_) {
-    EXPECT_FALSE(
-        process_map_->Contains(cross_site->GetProcess()->GetDeprecatedID()));
+    EXPECT_FALSE(process_map_->Contains(cross_site->GetProcess()->GetID()));
   }
 
   // Verify that |same_dir| and |diff_dir| can script each other.
@@ -1266,7 +1264,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest,
   SetupApp(test_app_dir.UnpackedPath());
 
   content::WebContents* web_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
+      app_browser_->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
 
   RenderFrameHost* app = web_contents->GetPrimaryMainFrame();
@@ -1331,7 +1329,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest, PopupsInsideHostedApp) {
   SetupApp(test_app_dir.UnpackedPath());
 
   content::WebContents* web_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
+      app_browser_->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
 
   auto find_frame = [web_contents](const std::string& name) {
@@ -1418,7 +1416,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest, FromOutsideHostedApp) {
   SetupApp(test_app_dir.UnpackedPath());
 
   content::WebContents* web_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
+      app_browser_->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
 
   // Starting same-origin but outside the app, popups should swap to the app.
@@ -1535,15 +1533,14 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest,
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(browser(), double_slash_path_app_url));
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   RenderFrameHost* main_frame = contents->GetPrimaryMainFrame();
   EXPECT_EQ(double_slash_path_app_url, main_frame->GetLastCommittedURL());
 
   // The resulting page should load in an app process, and the corresponding
   // SiteInstance's site URL should be a valid, non-empty chrome-extension://
   // URL with a valid host that corresponds to the app's ID.
-  EXPECT_TRUE(
-      process_map_->Contains(main_frame->GetProcess()->GetDeprecatedID()));
+  EXPECT_TRUE(process_map_->Contains(main_frame->GetProcess()->GetID()));
   EXPECT_FALSE(main_frame->GetSiteInstance()
                    ->GetSecurityPrincipal()
                    .GetDeprecatedSiteURL()
@@ -1556,83 +1553,11 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest,
             app_id_);
 }
 
-class HostedAppProcessModelFencedFrameTest : public HostedAppProcessModelTest {
- public:
-  HostedAppProcessModelFencedFrameTest() = default;
-  ~HostedAppProcessModelFencedFrameTest() override = default;
 
-  void SetUp() override {
-    ASSERT_TRUE(test_server().InitializeAndListen());
-    HostedAppProcessModelTest::SetUp();
-  }
-
-  void SetUpOnMainThread() override {
-    HostedAppProcessModelTest::SetUpOnMainThread();
-    test_server().AddDefaultHandlers(GetChromeTestDataDir());
-    test_server().RegisterRequestHandler(base::BindRepeating(
-        [](const net::test_server::HttpRequest& request)
-            -> std::unique_ptr<net::test_server::HttpResponse> {
-          if (request.GetURL().ExtractFileName() != "page.html") {
-            return {};
-          }
-          auto response =
-              std::make_unique<net::test_server::BasicHttpResponse>();
-          response->set_content_type("text/html");
-          response->AddCustomHeader("Supports-Loading-Mode", "fenced-frame");
-          return response;
-        }));
-    test_server().StartAcceptingConnections();
-  }
-
-  content::test::FencedFrameTestHelper& fenced_frame_test_helper() {
-    return fenced_frame_test_helper_;
-  }
-
-  net::EmbeddedTestServer& test_server() { return test_server_; }
-
- private:
-  content::test::FencedFrameTestHelper fenced_frame_test_helper_;
-  net::EmbeddedTestServer test_server_;
-};
 
 // Tests that a fenced frame in a hosted app uses a different SiteInstance from
 // the app.
-IN_PROC_BROWSER_TEST_P(HostedAppProcessModelFencedFrameTest,
-                       FencedFrameHasDifferentSiteInstance) {
-  // Set up and launch the hosted app.
-  GURL app_url =
-      test_server().GetURL("app.site.test", "/frame_tree/simple.htm");
 
-  extensions::TestExtensionDir test_app_dir;
-  test_app_dir.WriteManifest(base::StringPrintf(kHostedAppProcessModelManifest,
-                                                app_url.spec().c_str()));
-  test_app_dir.WriteFile(FILE_PATH_LITERAL("page.html"),
-                         R"(<html>PAGE</html>)");
-  SetupApp(test_app_dir.UnpackedPath());
-
-  content::WebContents* web_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
-  EXPECT_TRUE(content::WaitForLoadStop(web_contents));
-
-  // Check that the app loaded properly.
-  RenderFrameHost* app = web_contents->GetPrimaryMainFrame();
-  EXPECT_EQ(extensions::kExtensionScheme, app->GetSiteInstance()
-                                              ->GetSecurityPrincipal()
-                                              .GetDeprecatedSiteURL()
-                                              .GetScheme());
-  GURL app_site =
-      GetSiteForURL(app_browser_->profile(), app->GetLastCommittedURL());
-  EXPECT_EQ(extensions::kExtensionScheme, app_site.GetScheme());
-  EXPECT_TRUE(process_map_->Contains(app->GetProcess()->GetDeprecatedID()));
-
-  // Load a page as a fenced frame in the app.
-  GURL fenced_frame_url =
-      test_server().GetURL("app.site.test", "/frame_tree/page.html");
-  RenderFrameHost* fenced_frame_host =
-      fenced_frame_test_helper().CreateFencedFrame(app, fenced_frame_url);
-  // Ensure that a fenced frame has its own SiteInstance.
-  EXPECT_NE(app->GetSiteInstance(), fenced_frame_host->GetSiteInstance());
-}
 
 // Helper class that sets up two isolated origins, where one is a subdomain of
 // the other: https://isolated.com and https://very.isolated.com.
@@ -1681,7 +1606,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppIsolatedOriginTest,
   SetupApp(test_app_dir.UnpackedPath());
 
   content::WebContents* web_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
+      app_browser_->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
 
   // Check that the app loaded properly. Even though its URL is from an
@@ -1692,9 +1617,9 @@ IN_PROC_BROWSER_TEST_P(HostedAppIsolatedOriginTest,
                                               .GetDeprecatedSiteURL()
                                               .GetScheme());
   GURL app_site =
-      GetSiteForURL(app_browser_->profile(), app->GetLastCommittedURL());
+      GetSiteForURL(app_browser_->GetProfile(), app->GetLastCommittedURL());
   EXPECT_EQ(extensions::kExtensionScheme, app_site.GetScheme());
-  EXPECT_TRUE(process_map_->Contains(app->GetProcess()->GetDeprecatedID()));
+  EXPECT_TRUE(process_map_->Contains(app->GetProcess()->GetID()));
 
   // Add a same-site subframe on isolated.com outside the app's extent.  This
   // should stay in app process.
@@ -1729,12 +1654,12 @@ IN_PROC_BROWSER_TEST_P(HostedAppIsolatedOriginTest,
   // processes to a non-app process.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser_, very_isolated_url));
   EXPECT_FALSE(process_map_->Contains(
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      web_contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
 
   // Navigating main frame back to the app URL should go into an app process.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser_, app_url));
   EXPECT_TRUE(process_map_->Contains(
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      web_contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
 }
 
 // Check that when a hosted app's extent contains multiple origins, one of
@@ -1765,17 +1690,17 @@ IN_PROC_BROWSER_TEST_P(HostedAppIsolatedOriginTest,
   SetupApp(test_app_dir.UnpackedPath());
 
   content::WebContents* web_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
+      app_browser_->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
 
   // The app URL should have loaded in an app process.
   RenderFrameHost* app = web_contents->GetPrimaryMainFrame();
-  EXPECT_TRUE(process_map_->Contains(app->GetProcess()->GetDeprecatedID()));
+  EXPECT_TRUE(process_map_->Contains(app->GetProcess()->GetID()));
   EXPECT_EQ(extensions::kExtensionScheme, app->GetSiteInstance()
                                               ->GetSecurityPrincipal()
                                               .GetDeprecatedSiteURL()
                                               .GetScheme());
-  int first_app_process_id = app->GetProcess()->GetDeprecatedID();
+  content::ChildProcessId first_app_process_id = app->GetProcess()->GetID();
 
   // Creating a subframe on unisolated.com should not be allowed to share the
   // main frame's app process, since we don't want the isolated.com isolated
@@ -1793,10 +1718,9 @@ IN_PROC_BROWSER_TEST_P(HostedAppIsolatedOriginTest,
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser_, unisolated_app_url));
   EXPECT_TRUE(process_map_->Contains(
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
-  EXPECT_NE(
-      first_app_process_id,
-      web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID());
+      web_contents->GetPrimaryMainFrame()->GetProcess()->GetID()));
+  EXPECT_NE(first_app_process_id,
+            web_contents->GetPrimaryMainFrame()->GetProcess()->GetID());
 }
 
 class HostedAppSitePerProcessTest : public HostedAppProcessModelTest {
@@ -1839,7 +1763,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
     SetupApp(test_app_dir.UnpackedPath());
   }
   content::WebContents* foo_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
+      app_browser_->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(foo_contents));
 
   // Set up and launch a hosted app covering bar.com.
@@ -1851,7 +1775,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
     SetupApp(test_app_dir.UnpackedPath());
   }
   content::WebContents* bar_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
+      app_browser_->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(bar_contents));
 
   EXPECT_NE(foo_contents, bar_contents);
@@ -1892,7 +1816,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
     SetupApp(test_app_dir.UnpackedPath());
   }
   content::WebContents* foo_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
+      app_browser_->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(foo_contents));
   EXPECT_EQ(foo_app_url, foo_contents->GetLastCommittedURL());
 
@@ -1900,7 +1824,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
   GURL bar_app_url(embedded_test_server()->GetURL("bar.com", "/title2.html"));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), bar_app_url));
   content::WebContents* bar_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_EQ(bar_app_url, bar_contents->GetLastCommittedURL());
   EXPECT_NE(foo_contents, bar_contents);
 
@@ -1927,8 +1851,8 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
 
   // Both processes should still be app processes.
   auto* process_map = extensions::ProcessMap::Get(browser()->GetProfile());
-  EXPECT_TRUE(process_map->Contains(foo_process->GetDeprecatedID()));
-  EXPECT_TRUE(process_map->Contains(bar_process->GetDeprecatedID()));
+  EXPECT_TRUE(process_map->Contains(foo_process->GetID()));
+  EXPECT_TRUE(process_map->Contains(bar_process->GetID()));
 }
 
 #if BUILDFLAG(ENABLE_PDF)
@@ -1983,15 +1907,14 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessPDFTest,
     SetupApp(test_app_dir.UnpackedPath());
   }
   content::WebContents* foo_contents =
-      app_browser_->tab_strip_model()->GetActiveWebContents();
+      app_browser_->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(foo_contents));
   EXPECT_EQ(foo_app_url, foo_contents->GetLastCommittedURL());
 
   // Ensure the app URL loaded in a hosted app process.
   auto* process_map = extensions::ProcessMap::Get(browser()->GetProfile());
   content::RenderFrameHost* app_frame = foo_contents->GetPrimaryMainFrame();
-  EXPECT_TRUE(
-      process_map->Contains(app_frame->GetProcess()->GetDeprecatedID()));
+  EXPECT_TRUE(process_map->Contains(app_frame->GetProcess()->GetID()));
 
   // Add a same-site PDF subframe and wait for it to load.
   GURL pdf_url = embedded_test_server()->GetURL("foo.com", "/pdf/test.pdf");
@@ -2023,8 +1946,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessPDFTest,
   // The current behavior is that the PDF process is also considered to be an
   // app process, since its URL matched the app's extent. This is probably not
   // necessary and is something to consider changing in future.
-  EXPECT_TRUE(process_map->Contains(
-      pdf_document_frame->GetProcess()->GetDeprecatedID()));
+  EXPECT_TRUE(process_map->Contains(pdf_document_frame->GetProcess()->GetID()));
 }
 #endif  // BUILDFLAG(ENABLE_PDF)
 
@@ -2119,7 +2041,7 @@ class HostedAppJitTestBase : public HostedAppProcessModelTest {
     // Navigate main window to a jit-disabled.com app URL.
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), jit_disabled_app_url));
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     EXPECT_EQ(jit_disabled_app_url, web_contents->GetLastCommittedURL());
     scoped_refptr<content::SiteInstance> site_instance =
         web_contents->GetPrimaryMainFrame()->GetSiteInstance();
@@ -2131,7 +2053,7 @@ class HostedAppJitTestBase : public HostedAppProcessModelTest {
     GURL jit_enabled_app_url(
         embedded_test_server()->GetURL("jit-enabled.com", "/title2.html"));
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), jit_enabled_app_url));
-    web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+    web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
     EXPECT_EQ(jit_enabled_app_url, web_contents->GetLastCommittedURL());
     site_instance = web_contents->GetPrimaryMainFrame()->GetSiteInstance();
     EXPECT_TRUE(site_instance->GetSecurityPrincipal().SchemeIs(
@@ -2183,13 +2105,13 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
   // Navigate main window to a foo.com app URL.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), foo_app_url));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_EQ(foo_app_url, web_contents->GetLastCommittedURL());
   scoped_refptr<content::SiteInstance> foo_site_instance =
       web_contents->GetPrimaryMainFrame()->GetSiteInstance();
   auto* foo_process = foo_site_instance->GetProcess();
   auto* process_map = extensions::ProcessMap::Get(browser()->GetProfile());
-  EXPECT_TRUE(process_map->Contains(foo_process->GetDeprecatedID()));
+  EXPECT_TRUE(process_map->Contains(foo_process->GetID()));
 
   // At this point the main frame process should have access to foo.com data
   // but not bar.com data.
@@ -2216,7 +2138,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
       web_contents->GetPrimaryMainFrame()->GetSiteInstance();
   EXPECT_NE(foo_site_instance, bar_site_instance);
   auto* bar_process = bar_site_instance->GetProcess();
-  EXPECT_TRUE(process_map->Contains(bar_process->GetDeprecatedID()));
+  EXPECT_TRUE(process_map->Contains(bar_process->GetID()));
   EXPECT_NE(foo_process, bar_process);
 
   // At this point the main frame process should have access to bar.com data.
@@ -2235,7 +2157,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
   EXPECT_EQ(foo_app_url, web_contents->GetLastCommittedURL());
   foo_site_instance = web_contents->GetPrimaryMainFrame()->GetSiteInstance();
   foo_process = foo_site_instance->GetProcess();
-  EXPECT_TRUE(process_map->Contains(foo_process->GetDeprecatedID()));
+  EXPECT_TRUE(process_map->Contains(foo_process->GetID()));
 
   GURL foo_nonapp_url(
       embedded_test_server()->GetURL("foo.com", "/title1.html"));
@@ -2250,7 +2172,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
             web_contents->GetPrimaryMainFrame()->GetSiteInstance());
   auto* foo_nonapp_process = web_contents->GetPrimaryMainFrame()->GetProcess();
   EXPECT_NE(foo_process, foo_nonapp_process);
-  EXPECT_FALSE(process_map->Contains(foo_nonapp_process->GetDeprecatedID()));
+  EXPECT_FALSE(process_map->Contains(foo_nonapp_process->GetID()));
 
   // Ensure the current non-app foo.com process is allowed to access foo.com
   // data.
@@ -2292,28 +2214,28 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest,
   // foo.com, bar.com, and another one at foo.com.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), foo_app_url));
   content::WebContents* foo_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_EQ(foo_app_url, foo_contents->GetLastCommittedURL());
 
   GURL bar_app_url(embedded_test_server()->GetURL("bar.com", "/title2.html"));
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), bar_app_url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), bar_app_url, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   content::WebContents* bar_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_EQ(bar_app_url, bar_contents->GetLastCommittedURL());
   EXPECT_NE(foo_contents, bar_contents);
 
   GURL foo_app_url2(embedded_test_server()->GetURL("foo.com", "/title3.html"));
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), foo_app_url2, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), foo_app_url2, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   content::WebContents* foo_contents2 =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_EQ(foo_app_url2, foo_contents2->GetLastCommittedURL());
   EXPECT_NE(foo_contents, foo_contents2);
   EXPECT_NE(bar_contents, foo_contents2);
-  ASSERT_EQ(3, browser()->tab_strip_model()->count());
+  ASSERT_EQ(3, browser()->GetTabStripModel()->count());
 
   // The two foo.com tabs should be in the same process even though they are
   // unrelated, since hosted apps use the process-per-site process model.
@@ -2331,8 +2253,8 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest,
 
   // Ensure all tabs are in app processes.
   auto* process_map = extensions::ProcessMap::Get(browser()->GetProfile());
-  EXPECT_TRUE(process_map->Contains(foo_process->GetDeprecatedID()));
-  EXPECT_TRUE(process_map->Contains(bar_process->GetDeprecatedID()));
+  EXPECT_TRUE(process_map->Contains(foo_process->GetID()));
+  EXPECT_TRUE(process_map->Contains(bar_process->GetID()));
 
   // Open a background page from the first foo.com window.
   {
@@ -2346,7 +2268,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest,
               background_page_observer.last_navigation_url());
 
     // The background page shouldn't show up in the tab strip.
-    ASSERT_EQ(3, browser()->tab_strip_model()->count());
+    ASSERT_EQ(3, browser()->GetTabStripModel()->count());
   }
 
   // Script the background page from the first foo.com window and set a dummy
@@ -2373,10 +2295,10 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest,
   // process-per-site.
   GURL bar_app_url2(embedded_test_server()->GetURL("bar.com", "/title3.html"));
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), bar_app_url2, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), bar_app_url2, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   content::WebContents* bar_contents2 =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_EQ(bar_app_url2, bar_contents2->GetLastCommittedURL());
   EXPECT_EQ(bar_process, bar_contents2->GetPrimaryMainFrame()->GetProcess());
   EXPECT_FALSE(
@@ -2485,7 +2407,7 @@ class HostedAppOriginIsolationTest : public HostedOrWebAppTest {
     SetupApp(test_app_dir.UnpackedPath());
 
     content::WebContents* web_contents =
-        app_browser_->tab_strip_model()->GetActiveWebContents();
+        app_browser_->GetTabStripModel()->GetActiveWebContents();
     // Now wait for that navigation triggered by the app's loading of the launch
     // web_url from the manifest, which is |main_origin_url|.
     EXPECT_TRUE(content::WaitForLoadStop(web_contents));
@@ -2564,10 +2486,6 @@ INSTANTIATE_TEST_SUITE_P(All,
 
 INSTANTIATE_TEST_SUITE_P(All,
                          HostedAppProcessModelTest,
-                         ::testing::Values(AppType::HOSTED_APP));
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         HostedAppProcessModelFencedFrameTest,
                          ::testing::Values(AppType::HOSTED_APP));
 
 INSTANTIATE_TEST_SUITE_P(All,

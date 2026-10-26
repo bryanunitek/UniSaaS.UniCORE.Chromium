@@ -9,13 +9,14 @@
 #import "base/memory/weak_ptr.h"
 #import "base/no_destructor.h"
 #import "base/types/expected.h"
-#import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/action_target.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
 #import "ios/web/public/js_messaging/java_script_feature.h"
 
 namespace base {
+class ElapsedTimer;
 class Value;
-}
+}  // namespace base
 
 namespace web {
 class WebFrame;
@@ -30,6 +31,8 @@ enum class ActionTargetResultCode {
   kOk = 0,
   // The coordinates provided to the function were not in the viewport.
   kCoordinatesOutOfBounds = 1,
+  // The argument provided to resolveTargetIframe were invalid.
+  kArgumentsInvalid = 2,
 };
 // LINT.ThenChange(//ios/chrome/browser/intelligence/actor/tools/model/resources/action_target.ts:ActionTargetResultCode)
 
@@ -40,7 +43,7 @@ class ActionTargetJavaScriptFeature : public web::JavaScriptFeature {
 
   struct TargetFrameResult {
     web::WebFrame* frame;
-    optimization_guide::proto::ActionTarget target;
+    ActionTarget target;
   };
 
   using TargetFrameCallback = base::OnceCallback<void(
@@ -52,7 +55,7 @@ class ActionTargetJavaScriptFeature : public web::JavaScriptFeature {
   // with it and the translated ActionTarget.
   void GetTargetFrame(web::WebState* web_state,
                       web::WebFrame* web_frame,
-                      const optimization_guide::proto::ActionTarget& target,
+                      const ActionTarget& target,
                       TargetFrameCallback callback,
                       int depth = 0);
 
@@ -63,23 +66,22 @@ class ActionTargetJavaScriptFeature : public web::JavaScriptFeature {
  private:
   friend class base::NoDestructor<ActionTargetJavaScriptFeature>;
 
-  void GetTargetFrameByDocumentIdentifier(
-      web::WebState* web_state,
-      const optimization_guide::proto::ActionTarget& target,
-      TargetFrameCallback callback);
+  void GetTargetFrameByDocumentIdentifier(web::WebState* web_state,
+                                          const ActionTarget& target,
+                                          TargetFrameCallback callback);
 
-  void GetTargetFrameByCoordinate(
-      web::WebState* web_state,
-      web::WebFrame* web_frame,
-      const optimization_guide::proto::ActionTarget& target,
-      TargetFrameCallback callback,
-      int depth);
+  void GetTargetFrameByCoordinate(web::WebState* web_state,
+                                  web::WebFrame* web_frame,
+                                  const ActionTarget& target,
+                                  TargetFrameCallback callback,
+                                  int depth);
 
-  void OnTargetIframeResolved(optimization_guide::proto::ActionTarget target,
+  void OnTargetIframeResolved(ActionTarget target,
                               base::WeakPtr<web::WebState> web_state,
                               base::WeakPtr<web::WebFrame> current_frame,
                               TargetFrameCallback callback,
                               int depth,
+                              base::ElapsedTimer timer,
                               const base::Value* result);
 
   base::expected<web::WebFrame*, ToolExecutionResult>

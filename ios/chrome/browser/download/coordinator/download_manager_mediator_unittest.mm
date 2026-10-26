@@ -23,7 +23,6 @@
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/fakes/fake_download_manager_consumer.h"
@@ -57,14 +56,14 @@ const base::FilePath::CharType kTestSuggestedFileName[] =
 class DownloadManagerMediatorTest : public PlatformTest {
  protected:
   DownloadManagerMediatorTest()
-      : consumer_([[FakeDownloadManagerConsumer alloc] init]),
+      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME),
+        consumer_([[FakeDownloadManagerConsumer alloc] init]),
         application_(OCMClassMock([UIApplication class])) {
     OCMStub([application_ sharedApplication]).andReturn(application_);
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
-            std::make_unique<FakeAuthenticationServiceDelegate>()));
+        AuthenticationServiceFactory::GetDefaultFactory());
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateTestSyncService));
     profile_ = std::move(builder).Build();
@@ -386,6 +385,23 @@ TEST_F(DownloadManagerMediatorTest, SetGoogleDriveAppInstalled) {
   EXPECT_FALSE(consumer_.installDriveButtonVisible);
 }
 
+// Tests that calling `UpdateConsumer()` rechecks whether Google Drive app is
+// installed.
+TEST_F(DownloadManagerMediatorTest,
+       UpdateConsumerRechecksGoogleDriveAppInstalled) {
+  mediator_.SetDownloadTask(task());
+  mediator_.SetConsumer(consumer_);
+
+  mediator_.SetGoogleDriveAppInstalled(YES);
+  EXPECT_FALSE(consumer_.installDriveButtonVisible);
+
+  mediator_.SetGoogleDriveAppInstalled(NO);
+  EXPECT_TRUE(consumer_.installDriveButtonVisible);
+
+  mediator_.SetGoogleDriveAppInstalled(YES);
+  EXPECT_FALSE(consumer_.installDriveButtonVisible);
+}
+
 // Tests the diplay origin logic.
 TEST_F(DownloadManagerMediatorTest, DisplayOrigin) {
   if (!base::ios::IsRunningOnOrLater(18, 2, 0)) {
@@ -427,4 +443,27 @@ TEST_F(DownloadManagerMediatorTest, DisplayOrigin) {
   mediator->UpdateConsumer();
   EXPECT_NSEQ(consumer_.originatingHost,
               base::SysUTF8ToNSString(GURL(kCrossDomainURL).GetHost()));
+}
+
+// Tests that rapid progress updates are throttled so consumer is not updated
+// on every single progress change.
+TEST_F(DownloadManagerMediatorTest, ConsumerProgressThrottling) {
+  mediator_.SetDownloadTask(task());
+  mediator_.SetConsumer(consumer_);
+
+  task()->Start(base::FilePath());
+  EXPECT_EQ(0.0f, consumer_.progress);
+
+  // First progress update triggers consumer immediately.
+  task()->SetPercentComplete(10);
+  EXPECT_EQ(0.1f, consumer_.progress);
+
+  // Immediate subsequent progress update while timer is running should be
+  // throttled.
+  task()->SetPercentComplete(20);
+  EXPECT_EQ(0.1f, consumer_.progress);
+
+  // Fast forward past the throttling interval (100ms).
+  task_environment_.FastForwardBy(base::Milliseconds(100));
+  EXPECT_EQ(0.2f, consumer_.progress);
 }

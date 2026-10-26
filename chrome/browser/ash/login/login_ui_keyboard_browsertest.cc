@@ -39,6 +39,8 @@
 #include "chromeos/ash/experiences/login/login_screen_shown_observer.h"
 #include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_test.h"
@@ -473,8 +475,12 @@ class FirstLoginKeyboardTest : public LoginManagerTest {
   }
 
  protected:
-  AccountId test_user_{
-      AccountId::FromUserEmailGaiaId(kTestUser1, kTestUser1GaiaId)};
+  const LoginManagerMixin::TestUserInfo test_user_{
+      AccountId::FromUserEmailGaiaId(kTestUser1, kTestUser1GaiaId),
+      test::UserAuthConfig::Create(test::kDefaultAuthSetup)
+          .WithOnlinePassword(kPassword)};
+
+  LoginManagerMixin login_manager_{&mixin_host_, {test_user_}};
   DeviceStateMixin device_state_{
       &mixin_host_, DeviceStateMixin::State::OOBE_COMPLETED_UNOWNED};
 };
@@ -483,19 +489,23 @@ class FirstLoginKeyboardTest : public LoginManagerTest {
 // session unlock.
 IN_PROC_BROWSER_TEST_F(FirstLoginKeyboardTest,
                        UsersLastInputMethodPersistsOnLoginOrUnlock) {
-  EXPECT_TRUE(lock_screen_utils::GetUserLastInputMethodId(
-                  CHECK_DEREF(g_browser_process->local_state()), test_user_)
-                  .empty());
+  EXPECT_TRUE(
+      lock_screen_utils::GetUserLastInputMethodId(
+          CHECK_DEREF(g_browser_process->local_state()), test_user_.account_id)
+          .empty());
 
   // Non canonical display email (typed) should not affect input method storage.
   LoginDisplayHost::default_host()->SetDisplayEmail(
       kTestUser1NonCanonicalDisplayEmail);
-  LoginUser(test_user_);
+
+  login_manager_.LoginWithDefaultContext(test_user_);
+  login_manager_.WaitForActiveSession();
 
   // Last input method should be stored.
-  EXPECT_FALSE(lock_screen_utils::GetUserLastInputMethodId(
-                   CHECK_DEREF(g_browser_process->local_state()), test_user_)
-                   .empty());
+  EXPECT_FALSE(
+      lock_screen_utils::GetUserLastInputMethodId(
+          CHECK_DEREF(g_browser_process->local_state()), test_user_.account_id)
+          .empty());
 
   ScreenLockerTester locker_tester;
   locker_tester.Lock();
@@ -503,18 +513,21 @@ IN_PROC_BROWSER_TEST_F(FirstLoginKeyboardTest,
   // Clear user input method.
   input_method::InputMethodPersistence::
       SetUserLastInputMethodPreferenceForTesting(
-          *g_browser_process->local_state(), test_user_, std::string());
-  EXPECT_TRUE(lock_screen_utils::GetUserLastInputMethodId(
-                  CHECK_DEREF(g_browser_process->local_state()), test_user_)
-                  .empty());
+          CHECK_DEREF(g_browser_process->local_state()), test_user_.account_id,
+          std::string());
+  EXPECT_TRUE(
+      lock_screen_utils::GetUserLastInputMethodId(
+          CHECK_DEREF(g_browser_process->local_state()), test_user_.account_id)
+          .empty());
 
-  locker_tester.UnlockWithPassword(test_user_, "password");
+  locker_tester.UnlockWithPassword(test_user_.account_id, kPassword);
   locker_tester.WaitForUnlock();
 
   // Last input method should be stored.
-  EXPECT_FALSE(lock_screen_utils::GetUserLastInputMethodId(
-                   CHECK_DEREF(g_browser_process->local_state()), test_user_)
-                   .empty());
+  EXPECT_FALSE(
+      lock_screen_utils::GetUserLastInputMethodId(
+          CHECK_DEREF(g_browser_process->local_state()), test_user_.account_id)
+          .empty());
 }
 
 class EphemeralUserKeyboardTest : public LoginManagerTest {
@@ -541,8 +554,10 @@ IN_PROC_BROWSER_TEST_F(EphemeralUserKeyboardTest, PersistToProfile) {
   login_manager_.LoginAsNewRegularUser();
   login_manager_.WaitForActiveSession();
 
-  const AccountId& account_id =
-      user_manager::UserManager::Get()->GetActiveUser()->GetAccountId();
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ASSERT_TRUE(active_session);
+  const AccountId& account_id = active_session->account_id();
   user_manager::KnownUser known_user(g_browser_process->local_state());
   // Should be empty because known_user does not persist data for ephemeral
   // users.

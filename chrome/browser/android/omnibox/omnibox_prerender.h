@@ -5,9 +5,12 @@
 #ifndef CHROME_BROWSER_ANDROID_OMNIBOX_OMNIBOX_PRERENDER_H_
 #define CHROME_BROWSER_ANDROID_OMNIBOX_OMNIBOX_PRERENDER_H_
 
-#include "base/android/jni_weak_ref.h"
+#include <cstdint>
+
+#include <string>
 
 class Profile;
+class TabAndroid;
 struct AutocompleteMatch;
 
 namespace content {
@@ -21,7 +24,7 @@ class WebContents;
 // or pre-connect. This class then takes the corresponding action.
 class OmniboxPrerender {
  public:
-  OmniboxPrerender(JNIEnv* env, const jni_zero::JavaRef<jobject>& obj);
+  OmniboxPrerender();
 
   OmniboxPrerender(const OmniboxPrerender&) = delete;
   OmniboxPrerender& operator=(const OmniboxPrerender&) = delete;
@@ -31,35 +34,30 @@ class OmniboxPrerender {
   // Clears the transitional matches. This should be called when the user
   // stops typing into the omnibox (e.g. when navigating away, closing the
   // keyboard or changing tabs).
-  void Clear(JNIEnv* env,
-             Profile* profile);
+  void Clear(Profile* profile);
 
   // Initializes the underlying action predictor for a given profile instance.
   // This should be called as soon as possible as the predictor must register
   // for certain notifications to properly initialize before providing
   // predictions and updated its learning database.
-  void InitializeForProfile(JNIEnv* env,
-                            Profile* profile);
+  void InitializeForProfile(Profile* profile);
 
   // Potentailly invokes a pre-render or pre-connect given the url typed into
   // the omnibox and a corresponding autocomplete result. This should be
   // invoked everytime the omnibox changes (e.g. As the user types characters
   // this method should be invoked at least once per character).
-  void PrerenderMaybe(JNIEnv* env,
-                      const base::android::JavaRef<jstring>& j_url,
-                      const base::android::JavaRef<jstring>& j_current_url,
+  void PrerenderMaybe(const std::u16string& url_string,
+                      const std::u16string& current_url_string,
                       int64_t jsource_match,
                       Profile* profile,
-                      const base::android::JavaRef<jobject>& j_tab);
+                      TabAndroid* tab);
 
  private:
-
   // Prerenders a given AutocompleteMatch's url.
   void DoPrerender(const AutocompleteMatch& match,
                    Profile* profile,
                    content::WebContents* web_contents);
   void DoPreconnect(const AutocompleteMatch& match, Profile* profile);
-  JavaObjectWeakGlobalRef weak_java_omnibox_;
 };
 
 #endif  // CHROME_BROWSER_ANDROID_OMNIBOX_OMNIBOX_PRERENDER_H_

@@ -18,6 +18,7 @@
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -82,9 +83,14 @@ std::string* CreateSavedVariableName(base::cstring_view env_var) {
 // different names here so that the SUID sandbox can resolve them for the
 // renderer.
 void SaveSUIDUnsafeEnvironmentVariables(base::Environment* env) {
-  for (unsigned i = 0; UNSAFE_TODO(kSUIDUnsafeEnvironmentVariables[i]); ++i) {
-    const base::cstring_view UNSAFE_TODO(
-        env_var(kSUIDUnsafeEnvironmentVariables[i]));
+  // Note: kSUIDUnsafeEnvironmentVariables is NULL-terminated.
+  for (const char* const env_var_str :
+       base::span(kSUIDUnsafeEnvironmentVariables)
+           .first<std::size(kSUIDUnsafeEnvironmentVariables) - 1>()) {
+    // SAFETY: Elements of `kSUIDUnsafeEnvironmentVariables` are static string
+    // literals and are guaranteed to be NUL-terminated.
+    const base::cstring_view env_var =
+        UNSAFE_BUFFERS(base::cstring_view(env_var_str));
     // Get the saved environment variable corresponding to envvar.
     std::unique_ptr<std::string> saved_env_var(
         CreateSavedVariableName(env_var));
@@ -196,6 +202,28 @@ void SetuidSandboxHost::SetupLaunchOptions(
 void SetuidSandboxHost::SetupLaunchEnvironment() {
   SaveSUIDUnsafeEnvironmentVariables(env_.get());
   SetSandboxAPIEnvironmentVariable(env_.get());
+}
+
+// static
+const char* SetuidSandboxHost::DescribeExitCode(int exit_code) {
+  switch (exit_code) {
+    case kSuidSandboxExitFatalError:
+      return "fatal error";
+    case kSuidSandboxExitApiVersionFailure:
+      return "invalid API version";
+    case kSuidSandboxExitNamespaceFailure:
+      return "failed to move to new namespaces";
+    case kSuidSandboxExitChrootHelperFailure:
+      return "failed to spawn chroot helper";
+    case kSuidSandboxExitDropRootFailure:
+      return "failed to drop root";
+    case kSuidSandboxExitEnvironmentFailure:
+      return "failed to set up child environment";
+    case kSuidSandboxExitExecFailure:
+      return "exec failed";
+    default:
+      return nullptr;
+  }
 }
 
 }  // namespace sandbox

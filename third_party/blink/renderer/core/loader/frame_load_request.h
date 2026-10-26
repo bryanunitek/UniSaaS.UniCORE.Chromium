@@ -32,7 +32,7 @@
 #include "base/time/time.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/referrer_policy.mojom-blink.h"
-#include "third_party/blink/public/common/navigation/impression.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/policy_container.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/triggering_event_info.mojom-blink.h"
@@ -61,6 +61,9 @@ struct CORE_EXPORT FrameLoadRequest {
   STACK_ALLOCATED();
 
  public:
+  // Automatically populates resource_request.has_user_gesture from
+  // `origin_window`'s transient user activation state when `origin_window` is
+  // non-null (defaults to false otherwise, unless already set).
   FrameLoadRequest(LocalDOMWindow* origin_window, const ResourceRequest&);
   FrameLoadRequest(LocalDOMWindow* origin_window, const ResourceRequestHead&);
   FrameLoadRequest(const FrameLoadRequest&) = delete;
@@ -176,11 +179,10 @@ struct CORE_EXPORT FrameLoadRequest {
   void SetNoOpener() { window_features_.noopener = true; }
   void SetExplicitOpener() { window_features_.explicit_opener = true; }
 
-  const std::optional<base::UnguessableToken>& GetScriptToolInvocationId()
-      const {
+  const std::optional<ToolInvocationToken>& GetScriptToolInvocationId() const {
     return script_tool_invocation_id_;
   }
-  void SetScriptToolInvocationId(const base::UnguessableToken& id) {
+  void SetScriptToolInvocationId(const ToolInvocationToken& id) {
     script_tool_invocation_id_ = id;
   }
   void SetNoReferrer() {
@@ -190,22 +192,28 @@ struct CORE_EXPORT FrameLoadRequest {
     resource_request_.ClearHTTPOrigin();
   }
 
-  // Impressions are set when a FrameLoadRequest is created for a click on an
-  // anchor tag that has conversion measurement attributes.
-  void SetImpression(const std::optional<Impression>& impression) {
-    impression_ = impression;
-  }
-
-  const std::optional<blink::Impression>& Impression() const {
-    return impression_;
-  }
-
   bool CanDisplay(const KURL&) const;
 
   void SetInitiatorFrameToken(const LocalFrameToken& token) {
     initiator_frame_token_ = token;
   }
   const LocalFrameToken* GetInitiatorFrameToken() const;
+
+  void SetInitiatorStateToken(
+      const InitiatorStateToken& initiator_state_token) {
+    initiator_state_token_ = initiator_state_token;
+  }
+  const InitiatorStateToken& GetInitiatorStateToken() const {
+    return initiator_state_token_;
+  }
+
+  void SetInitiatorDocumentToken(
+      const DocumentToken& initiator_document_token) {
+    initiator_document_token_ = initiator_document_token;
+  }
+  const DocumentToken& GetInitiatorDocumentToken() const {
+    return initiator_document_token_;
+  }
 
   bool IsUnfencedTopNavigation() const { return is_unfenced_top_navigation_; }
   void SetIsUnfencedTopNavigation(bool is_unfenced_top_navigation) {
@@ -243,7 +251,7 @@ struct CORE_EXPORT FrameLoadRequest {
   ClientNavigationReason client_navigation_reason_ =
       ClientNavigationReason::kNone;
   NavigationPolicy navigation_policy_ = kNavigationPolicyCurrentTab;
-  std::optional<base::UnguessableToken> script_tool_invocation_id_;
+  std::optional<ToolInvocationToken> script_tool_invocation_id_;
   mojom::blink::TriggeringEventInfo triggering_event_info_ =
       mojom::blink::TriggeringEventInfo::kNotFromEvent;
   // The element that triggered the navigation. This may be cross-origin to the
@@ -260,8 +268,9 @@ struct CORE_EXPORT FrameLoadRequest {
   WebWindowFeatures window_features_;
   std::optional<WebPictureInPictureWindowOptions>
       picture_in_picture_window_options_;
-  std::optional<blink::Impression> impression_;
   std::optional<LocalFrameToken> initiator_frame_token_;
+  InitiatorStateToken initiator_state_token_;
+  DocumentToken initiator_document_token_;
   mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>
       initiator_navigation_state_keep_alive_handle_;
   SourceLocation* source_location_ = nullptr;

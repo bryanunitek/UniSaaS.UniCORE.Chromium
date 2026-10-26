@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "google/protobuf/descriptor.pb.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_replace.h"
 #include "google/protobuf/compiler/code_generator.h"
@@ -24,6 +25,7 @@
 #include "hpb_generator/names.h"
 #include "google/protobuf/descriptor.h"
 #include "upb_generator/c/names.h"
+#include "upb_generator/minitable/names.h"
 
 namespace google {
 namespace protobuf {
@@ -53,9 +55,64 @@ void WriteForwardDecls(const google::protobuf::FileDescriptor* file, Context& ct
   WriteTypedefForwardingHeader(file, this_file_messages, ctx);
 }
 
-void WriteHeader(const google::protobuf::FileDescriptor* file, Context& ctx) {
+void WriteHeader(const google::protobuf::FileDescriptor* file, Context& ctx,
+                 absl::string_view info_path) {
   if (ctx.options().backend == Backend::CPP) {
     EmitFileWarning(file, ctx);
+
+    ctx.Emit({{"filename", ToPreproc(file->name())}},
+             R"cc(
+#ifndef $filename$_HPB_PROTO_H_
+#define $filename$_HPB_PROTO_H_
+             )cc");
+
+    // Import headers for proto public dependencies.
+    for (int i = 0; i < file->public_dependency_count(); i++) {
+      if (i == 0) {
+        ctx.Emit("// Public Imports.\n");
+      }
+      ctx.Emit({{"header", CppHeaderFilename(file->public_dependency(i))}},
+               "#include \"$header$\"\n");
+      if (i == file->public_dependency_count() - 1) {
+        ctx.Emit("\n");
+      }
+    }
+
+    ctx.Emit(
+        "#include \"hpb/internal/os_macros_undef.inc\"\n");
+
+    if (!info_path.empty()) {
+      ctx.Emit({{"info_path", std::string(info_path)}},
+               R"cc(
+#ifdef KYTHE_IS_RUNNING
+#pragma kythe_metadata "$info_path$"
+#endif  // KYTHE_IS_RUNNING
+               )cc");
+    }
+
+    const std::vector<const google::protobuf::Descriptor*> this_file_messages =
+        SortedMessages(file);
+    const std::vector<const google::protobuf::FieldDescriptor*>
+        this_file_exts{};  // TODO: extensions
+
+    if (!this_file_messages.empty()) {
+      ctx.Emit("\n");
+    }
+
+    WriteHeaderMessageForwardDecls(file, ctx);
+    WriteForwardDecls(file, ctx);
+
+    std::vector<const google::protobuf::EnumDescriptor*> this_file_enums =
+        SortedEnums(file);
+
+    WrapNamespace(file, ctx, [&]() {
+      // Write Class and Enums.
+      WriteEnumDeclarations(this_file_enums, ctx);
+      ctx.Emit("\n");
+      // TODO: class decls
+      // TODO: extension identifiers
+    });
+
     const auto msgs = SortedMessages(file);
     for (auto message : msgs) {
       ctx.Emit({{"type", QualifiedClassName(message)},
@@ -64,6 +121,8 @@ void WriteHeader(const google::protobuf::FileDescriptor* file, Context& ctx) {
                                                                {{".", "::"}}),
                                            "::protos")}},
                R"cc(
+#include "hpb/internal/internal.h"
+
                  // message stubs
                  namespace $namespace$ {
 
@@ -87,6 +146,11 @@ void WriteHeader(const google::protobuf::FileDescriptor* file, Context& ctx) {
                  }  // namespace $namespace$
                )cc");
     }
+    ctx.Emit(
+        "#include "
+        "\"hpb/internal/os_macros_restore.inc\"\n");
+    ctx.Emit({{"filename", ToPreproc(file->name())}},
+             "#endif  /* $filename$_HPB_PROTO_H_ */\n");
     return;
   }
   EmitFileWarning(file, ctx);
@@ -116,6 +180,15 @@ void WriteHeader(const google::protobuf::FileDescriptor* file, Context& ctx) {
   ctx.Emit("#include \"upb/port/def.inc\"\n");
   ctx.Emit(
       "#include \"hpb/internal/os_macros_undef.inc\"\n");
+
+  if (!info_path.empty()) {
+    ctx.Emit({{"info_path", std::string(info_path)}},
+             R"cc(
+#ifdef KYTHE_IS_RUNNING
+#pragma kythe_metadata "$info_path$"
+#endif  // KYTHE_IS_RUNNING
+             )cc");
+  }
 
   const std::vector<const google::protobuf::Descriptor*> this_file_messages =
       SortedMessages(file);
@@ -160,6 +233,8 @@ void WriteHeader(const google::protobuf::FileDescriptor* file, Context& ctx) {
       outer_namespace = "";
     }
     ctx.Emit({{"class_name", ClassName(desc)},
+              {"minitable_name",
+               upb::generator::MiniTableMessageVarName(desc->full_name())},
               {"outer_namespace", outer_namespace},
               {"c_api_msg_type",
                upb::generator::CApiMessageType(desc->full_name())}},
@@ -167,6 +242,7 @@ void WriteHeader(const google::protobuf::FileDescriptor* file, Context& ctx) {
                template <>
                struct AssociatedUpbTypes<$outer_namespace$$class_name$> {
                  using CMessageType = $c_api_msg_type$;
+                 static inline const upb_MiniTable* kMiniTable = &$minitable_name$;
                };
              )cc");
   }
@@ -248,8 +324,10 @@ void WriteTypedefForwardingHeader(
 void WriteHeaderMessageForwardDecls(const google::protobuf::FileDescriptor* file,
                                     Context& ctx) {
   // Import forward-declaration of types defined in this file.
-  ctx.Emit({{"upb_filename", UpbCFilename(file)}},
-           "#include \"$upb_filename$\"\n");
+  if (ctx.options().backend == Backend::UPB) {
+    ctx.Emit({{"upb_filename", UpbCFilename(file)}},
+             "#include \"$upb_filename$\"\n");
+  }
   WriteForwardDecls(file, ctx);
   // Import forward-declaration of types in dependencies.
   for (int i = 0; i < file->dependency_count(); ++i) {
@@ -271,6 +349,7 @@ bool Generator::Generate(const google::protobuf::FileDescriptor* file,
                          std::string* error) const {
   {
     bool strip_nonfunctional_codegen = false;
+    bool annotate_headers = false;
     Backend backend = Backend::UPB;
     std::vector<std::pair<std::string, std::string>> params;
     google::protobuf::compiler::ParseGeneratorParameter(parameter, &params);
@@ -280,24 +359,51 @@ bool Generator::Generate(const google::protobuf::FileDescriptor* file,
         strip_nonfunctional_codegen = true;
       } else if (pair.first == "backend" && pair.second == "cpp") {
         backend = Backend::CPP;
+      } else if (pair.first == "annotate_headers") {
+        annotate_headers = true;
       } else {
         *error = "Unknown parameter: " + pair.first;
         return false;
       }
     }
+
+    std::unique_ptr<GeneratedCodeInfo> annotations;
+    std::unique_ptr<io::AnnotationCollector> annotation_collector;
+    if (annotate_headers) {
+      annotations = std::make_unique<GeneratedCodeInfo>();
+      annotation_collector =
+          std::make_unique<io::AnnotationProtoCollector<GeneratedCodeInfo>>(
+              annotations.get());
+    }
+
+    std::string meta_filename = "";
+    if (annotate_headers) {
+      meta_filename =
+          absl::StrCat(compiler::StripProto(file->name()), ".hpb.h.meta");
+    }
+
     // Write model.hpb.h
     Options options = {.backend = backend,
-                       .strip_feature_includes = strip_nonfunctional_codegen};
+                       .strip_feature_includes = strip_nonfunctional_codegen,
+                       .annotation_collector = annotation_collector.get()};
     std::unique_ptr<google::protobuf::io::ZeroCopyOutputStream> header_output_stream(
         context->Open(CppHeaderFilename(file)));
     Context hdr_ctx(file, header_output_stream.get(), options);
-    WriteHeader(file, hdr_ctx);
+    WriteHeader(file, hdr_ctx, meta_filename);
 
     // Write model.hpb.cc
     std::unique_ptr<google::protobuf::io::ZeroCopyOutputStream> cc_output_stream(
         context->Open(CppSourceFilename(file)));
     auto cc_ctx = Context(file, cc_output_stream.get(), options);
     WriteSource(file, cc_ctx);
+
+    if (annotate_headers) {
+      std::unique_ptr<google::protobuf::io::ZeroCopyOutputStream> meta_output_stream(
+          context->Open(meta_filename));
+      ABSL_CHECK(
+          annotations->SerializeToZeroCopyStream(meta_output_stream.get()));
+    }
+
     return true;
   }
 }

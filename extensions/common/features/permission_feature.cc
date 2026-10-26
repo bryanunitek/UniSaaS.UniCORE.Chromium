@@ -10,12 +10,6 @@
 
 namespace extensions {
 
-PermissionFeature::PermissionFeature() {
-}
-
-PermissionFeature::~PermissionFeature() {
-}
-
 Feature::Availability PermissionFeature::IsAvailableToContextImpl(
     const Extension* extension,
     mojom::ContextType context,
@@ -23,16 +17,18 @@ Feature::Availability PermissionFeature::IsAvailableToContextImpl(
     Feature::Platform platform,
     int context_id,
     bool check_developer_mode,
-    const ContextData& context_data) const {
+    const ContextData& context_data,
+    DelegatedAvailabilityCheckHandler delegated_handler) const {
   Availability availability = SimpleFeature::IsAvailableToContextImpl(
       extension, context, url, platform, context_id, check_developer_mode,
-      context_data);
+      context_data, delegated_handler);
   if (!availability.is_available())
     return availability;
 
-  if (extension && !extension->permissions_data()->HasAPIPermission(name()))
+  if (extension && !extension->permissions_data()->HasAPIPermission(name())) {
     return CreateAvailability(AvailabilityResult::kNotPresent,
                               extension->GetType());
+  }
 
   return CreateAvailability(AvailabilityResult::kIsAvailable);
 }

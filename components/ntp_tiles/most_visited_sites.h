@@ -38,7 +38,6 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-#include "components/supervised_user/core/browser/supervised_user_service_observer.h"
 #include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
 #endif
 
@@ -55,6 +54,7 @@ namespace user_prefs {
 class PrefRegistrySyncable;
 }
 
+class PrefChangeRegistrar;
 class PrefService;
 
 namespace ntp_tiles {
@@ -90,7 +90,6 @@ class CustomLinksCache {
 // Tracks the list of most visited sites.
 class MostVisitedSites :
 #if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-    public SupervisedUserServiceObserver,
     public supervised_user::SupervisedUserUrlFilteringService::Observer,
 #endif
     public history::TopSitesObserver {
@@ -333,8 +332,6 @@ class MostVisitedSites :
   void ClearBlockedUrls();
 
 #if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-  //  SupervisedUserServiceObserver:
-  void OnURLFilterChanged() override;
   // SupervisedUserUrlFilteringService::Observer:
   void OnUrlFilteringServiceChanged() override;
 #endif
@@ -359,6 +356,29 @@ class MostVisitedSites :
 
   // Verifies if NTPTile App comes from a PreInstalledApp.
   static bool IsNtpTileFromPreinstalledApp(GURL url);
+
+  // Read-only helpers for code outside //components/ntp_tiles that needs to
+  // react to custom links or enterprise shortcuts without owning a
+  // MostVisitedSites. Unlike CustomLinksManager and EnterpriseShortcutsManager,
+  // these never modify prefs.
+
+  // Returns whether the enterprise shortcuts policy in `prefs` provides at
+  // least one valid shortcut. Always false on platforms without enterprise
+  // shortcuts.
+  static bool HasEnterpriseShortcuts(const PrefService& prefs);
+
+  // Adds `callback` to the initialized `registrar` so that it runs whenever the
+  // enterprise shortcuts policy changes. No-op on platforms without enterprise
+  // shortcuts.
+  static void AddEnterpriseShortcutsObserver(
+      PrefChangeRegistrar& registrar,
+      const base::RepeatingClosure& callback);
+
+  // Adds `callback` to the initialized `registrar` so that it runs whenever the
+  // custom links stored for `scope` change.
+  static void AddCustomLinksObserver(PrefChangeRegistrar& registrar,
+                                     CustomLinksScope scope,
+                                     const base::RepeatingClosure& callback);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(MostVisitedSitesTest,
@@ -499,9 +519,6 @@ class MostVisitedSites :
   raw_ptr<const supervised_user::SupervisedUserUrlFilteringService>
       supervised_user_url_filtering_service_;
 #if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-  base::ScopedObservation<supervised_user::SupervisedUserService,
-                          SupervisedUserServiceObserver>
-      supervised_user_service_observation_{this};
   base::ScopedObservation<
       supervised_user::SupervisedUserUrlFilteringService,
       supervised_user::SupervisedUserUrlFilteringService::Observer>

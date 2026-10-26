@@ -4,20 +4,19 @@
 
 #include "chrome/browser/ui/actions/chrome_action_properties.h"
 
-DEFINE_UI_CLASS_PROPERTY_TYPE(WindowOpenDisposition)
-DEFINE_UI_CLASS_PROPERTY_TYPE(const GURL*)
-DEFINE_UI_CLASS_PROPERTY_TYPE(const url::Origin*)
+#include "ui/base/window_open_disposition.h"
 
 namespace chrome {
 
 DEFINE_UI_CLASS_PROPERTY_KEY(WindowOpenDisposition,
                              kDispositionKey,
-                             WindowOpenDisposition::UNKNOWN)
+                             WindowOpenDisposition::kUnknown)
 
-DEFINE_UI_CLASS_PROPERTY_KEY(const GURL*, kLinkUrlKey, nullptr)
-
-DEFINE_UI_CLASS_PROPERTY_KEY(const GURL*, kFrameUrlKey, nullptr)
-DEFINE_UI_CLASS_PROPERTY_KEY(const url::Origin*, kFrameOriginKey, nullptr)
-DEFINE_UI_CLASS_PROPERTY_KEY(int, kReferrerPolicyKey, 0)
+DEFINE_UI_CLASS_PROPERTY_KEY(ActionInvocationSource,
+                             kActionInvocationSourceKey,
+                             ActionInvocationSource::kUnknown)
 
 }  // namespace chrome
+
+DEFINE_UI_CLASS_PROPERTY_TYPE(WindowOpenDisposition)
+DEFINE_UI_CLASS_PROPERTY_TYPE(chrome::ActionInvocationSource)

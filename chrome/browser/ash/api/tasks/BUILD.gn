@@ -12,25 +12,21 @@ static_library("tasks") {
     "tasks_client_impl.h",
   ]
 
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
-
   deps = [
     "//ash",
     "//ash/constants",
     "//base",
-    "//chrome/browser/apps/app_service",
-    "//chrome/browser/ash/profiles",
     "//chrome/browser/profiles:profile",
-    "//chrome/browser/profiles:profile_manager",
-    "//chrome/browser/signin",
-    "//chrome/browser/web_applications",
+    "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/policy/policy_blocklist_service",
+    "//chromeos/ash/components/signin:identity_manager_provider",
     "//components/account_id",
     "//components/policy/content",
     "//components/policy/core/browser",
-    "//components/services/app_service/public/cpp:app_types",
+    "//components/services/app_service",
     "//components/signin/public/identity_manager",
     "//components/user_manager",
+    "//content/public/browser",
     "//google_apis",
     "//google_apis/common",
     "//google_apis/tasks",
@@ -57,6 +53,7 @@ source_set("unit_tests") {
     "//chrome/browser/prefs",
     "//chrome/browser/web_applications",
     "//chrome/test:test_support",
+    "//chrome/test/base:testing_browser_process",
     "//chromeos/ash/components/policy/policy_blocklist_service",
     "//components/services/app_service/public/cpp:app_types",
     "//components/sync_preferences:test_support",

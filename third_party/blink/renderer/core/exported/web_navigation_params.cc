@@ -26,10 +26,12 @@ WebNavigationParams::~WebNavigationParams() = default;
 WebNavigationParams::WebNavigationParams(
     const blink::DocumentToken& document_token,
     const base::UnguessableToken& devtools_navigation_token,
+    const InitiatorStateToken& initiator_state_token,
     const base::Uuid& base_auction_nonce)
     : http_method(http_names::kGET),
       document_token(document_token),
       devtools_navigation_token(devtools_navigation_token),
+      initiator_state_token(initiator_state_token),
       base_auction_nonce(base_auction_nonce),
       content_settings(CreateDefaultRendererContentSettings()) {}
 
@@ -53,6 +55,7 @@ std::unique_ptr<WebNavigationParams> WebNavigationParams::CreateFromInfo(
       info.initiator_origin_trial_features;
   result->frame_policy = info.frame_policy;
   result->had_transient_user_activation = info.url_request.HasUserGesture();
+  result->initiator_state_token = info.initiator_state_token;
   return result;
 }
 

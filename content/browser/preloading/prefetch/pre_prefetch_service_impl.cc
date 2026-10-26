@@ -20,7 +20,6 @@
 #include "base/timer/elapsed_timer.h"
 #include "base/trace_event/trace_event.h"
 #include "base/types/pass_key.h"
-#include "content/browser/loader/url_loader_factory_utils.h"
 #include "content/browser/preloading/prefetch/pre_prefetch_container.h"
 #include "content/browser/preloading/prefetch/pre_prefetch_handle_impl.h"
 #include "content/browser/preloading/prefetch/prefetch_request.h"
@@ -35,7 +34,6 @@
 #include "content/public/common/content_features.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/cpp/constants.h"
-#include "services/network/public/cpp/url_loader_factory_builder.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "third_party/blink/public/mojom/loader/referrer.mojom.h"
@@ -43,8 +41,6 @@
 namespace content {
 
 namespace {
-static network::SharedURLLoaderFactory* g_url_loader_factory_for_testing =
-    nullptr;
 static std::atomic<bool>
     g_should_prohibit_url_loader_factory_refresh_for_testing{false};
 
@@ -53,46 +49,11 @@ void RecordPrePrefetchStartResultHistogram(PrePrefetchStartResult result) {
                                 result);
 }
 
-mojo::PendingRemote<network::mojom::URLLoaderFactory>
-CreateURLLoaderFactoryOnUI(BrowserContext* browser_context) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  CHECK(browser_context);
-
-  // This is the same default network context that should be used in normal
-  // prefetch's `URLLoaderFactory` on the UI thread, created via
-  // `PrefetchContainer::GetOrCreateDefaultNetworkContextURLLoaderFactory()`.
-  network::mojom::NetworkContext* network_context =
-      browser_context->GetDefaultStoragePartition()->GetNetworkContext();
-
-  mojo::PendingRemote<network::mojom::URLLoaderFactory> pending_factory;
-  if (g_url_loader_factory_for_testing) {
-    CHECK_IS_TEST();
-    g_url_loader_factory_for_testing->Clone(
-        pending_factory.InitWithNewPipeAndPassReceiver());
-  } else {
-    // Unlike `CreatePrefetchURLLoaderFactory()`, this does use
-    // `url_loader_factory::HeaderClientOption::kDisallow` and null
-    // `url_loader_factory::ContentClientParams`. The interceptors that would be
-    // added by `ContentClientParams` will be added/executed when the
-    // PrePrefetch is consumed by a `PrefetchContainer`.
-    pending_factory = url_loader_factory::CreatePendingRemote(
-        ContentBrowserClient::URLLoaderFactoryType::kPrefetch,
-        url_loader_factory::TerminalParams::ForNetworkContext(
-            network_context,
-            CreatePrefetchURLLoaderFactoryParams(
-                // Pre-prefetches are browser-initiated without a referring
-                // frame/context, so no creator restrictions apply.
-                network::GetNoOpNetworkRestrictionsId()),
-            url_loader_factory::HeaderClientOption::kDisallow),
-        /*content_client_params=*/std::nullopt);
-  }
-  return pending_factory;
-}
-
 network::HttpRequestHeadersUpdateParams PreCalculatePrePrefetchHeadersOnUI(
     BrowserContext* browser_context,
     const PrePrefetchPreCalculatedHeadersKey& key) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  TRACE_EVENT("loading", "PreCalculatePrePrefetchHeadersOnUI");
   // Create a tentative `PrefetchRequest` to pre-calculate headers based on
   // `PrePrefetchPreCalculatedHeadersKey`.
   // TODO(crbug.com/470242977): Creating a full `PrefetchRequest` just to
@@ -104,7 +65,7 @@ network::HttpRequestHeadersUpdateParams PreCalculatePrePrefetchHeadersOnUI(
       PrefetchRequest::CreateBrowserInitiatedWithoutWebContents(
           browser_context, key.origin.GetURL(),
           PrefetchType(PreloadingTriggerType::kEmbedder,
-                       /*use_prefetch_proxy=*/true),
+                       /*use_prefetch_proxy=*/false),
           /*histogram_suffix=*/"Tentative", blink::mojom::Referrer(),
           key.javascript_enabled,
           /*referring_origin=*/std::nullopt,
@@ -159,6 +120,8 @@ class PrePrefetchServiceCore {
             std::move(non_ui_thread_update_headers_callbacks)) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     CHECK(base::FeatureList::IsEnabled(features::kPrefetchOffTheMainThread));
+    TRACE_EVENT("loading", "PrePrefetchServiceCore::PrePrefetchServiceCore");
+
     UpdateURLLoaderFactory(std::move(pending_factory));
   }
   ~PrePrefetchServiceCore() {
@@ -251,11 +214,11 @@ class PrePrefetchServiceCore {
         FROM_HERE,
         base::BindOnce(
             [](base::WeakPtr<BrowserContext> browser_context) {
-              DCHECK_CURRENTLY_ON(BrowserThread::UI);
-              return browser_context
-                         ? CreateURLLoaderFactoryOnUI(browser_context.get())
-                         : mojo::PendingRemote<
-                               network::mojom::URLLoaderFactory>();
+              CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+              return browser_context ? CreatePrePrefetchURLLoaderFactoryOnUI(
+                                           browser_context.get())
+                                     : mojo::PendingRemote<
+                                           network::mojom::URLLoaderFactory>();
             },
             browser_context_weak_on_ui_thread_),
         base::BindOnce(&PrePrefetchServiceCore::UpdateURLLoaderFactory,
@@ -290,7 +253,7 @@ class PrePrefetchServiceCore {
             [](base::WeakPtr<BrowserContext> browser_context,
                PrePrefetchPreCalculatedHeadersKey key)
                 -> std::optional<network::HttpRequestHeadersUpdateParams> {
-              DCHECK_CURRENTLY_ON(BrowserThread::UI);
+              CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
               return browser_context ? std::make_optional(
                                            PreCalculatePrePrefetchHeadersOnUI(
                                                browser_context.get(), key))
@@ -352,7 +315,7 @@ std::unique_ptr<PrePrefetchService> PrePrefetchService::Create(
     std::optional<bool> initial_javascript_enabled_hint,
     std::optional<bool> initial_should_append_variations_header_hint) {
   CHECK(base::FeatureList::IsEnabled(features::kPrefetchOffTheMainThread));
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   return std::make_unique<PrePrefetchServiceImpl>(
       browser_context,
       std::move(embedder_non_ui_thread_update_headers_callbacks),
@@ -367,13 +330,13 @@ PrePrefetchServiceImpl::PrePrefetchServiceImpl(
     std::optional<url::Origin> initial_origin_hint,
     std::optional<bool> initial_javascript_enabled_hint,
     std::optional<bool> initial_should_append_variations_header_hint) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   TRACE_EVENT("loading", "PrePrefetchServiceImpl::PrePrefetchServiceImpl");
 
   browser_context_weak_on_ui_thread_ = browser_context->GetWeakPtr();
 
   mojo::PendingRemote<network::mojom::URLLoaderFactory> pending_factory =
-      CreateURLLoaderFactoryOnUI(browser_context);
+      CreatePrePrefetchURLLoaderFactoryOnUI(browser_context);
 
   // Pre-calculate headers based on the hints. If we can utilize this upon
   // PrePrefetch happening on the UI thread, we can save a thread hop to the UI
@@ -403,7 +366,7 @@ PrePrefetchServiceImpl::PrePrefetchServiceImpl(
 }
 
 PrePrefetchServiceImpl::~PrePrefetchServiceImpl() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 }
 
 std::unique_ptr<PrePrefetchHandle>
@@ -419,7 +382,8 @@ PrePrefetchServiceImpl::StartPrePrefetchRequest(
     bool should_append_variations_header,
     bool should_disable_block_until_head_timeout,
     bool should_bypass_http_cache) {
-  DCHECK(!BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(!BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M159);
   TRACE_EVENT("loading", "PrePrefetchServiceImpl::StartPrePrefetchRequest",
               "url", url);
 
@@ -427,7 +391,7 @@ PrePrefetchServiceImpl::StartPrePrefetchRequest(
       PrefetchRequest::CreateBrowserInitiatedWithoutWebContentsOffTheMainThread(
           browser_context_weak_on_ui_thread_, url,
           PrefetchType(PreloadingTriggerType::kEmbedder,
-                       /*use_prefetch_proxy=*/true),
+                       /*use_prefetch_proxy=*/false),
           histogram_suffix, blink::mojom::Referrer(), javascript_enabled,
           /*referring_origin=*/std::nullopt, std::move(no_vary_search_hint),
           priority,
@@ -448,7 +412,8 @@ PrePrefetchServiceImpl::StartPrePrefetchRequestForTesting(  // IN-TEST
 std::unique_ptr<PrePrefetchHandle>
 PrePrefetchServiceImpl::StartPrePrefetchRequestInternal(
     std::unique_ptr<const PrefetchRequest> prefetch_request) {
-  DCHECK(!BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(!BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M159);
   CHECK(prefetch_request);
   std::unique_ptr<PrePrefetchHandle> handle;
   base::WaitableEvent event(base::WaitableEvent::ResetPolicy::MANUAL,
@@ -469,12 +434,6 @@ PrePrefetchServiceImpl::StartPrePrefetchRequestInternal(
       timer.Elapsed());
 
   return handle;
-}
-
-// static
-void PrePrefetchServiceImpl::SetURLLoaderFactoryForTesting(  // IN-TEST
-    network::SharedURLLoaderFactory* url_loader_factory) {
-  g_url_loader_factory_for_testing = url_loader_factory;
 }
 
 // static

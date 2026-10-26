@@ -8,10 +8,12 @@
 
 #include <algorithm>
 #include <iterator>
+#include <string>
 #include <utility>
 
 #include "base/i18n/case_conversion.h"
-#include "base/i18n/unicodestring.h"
+#include "base/i18n/icubridge/icu_bridge.h"
+#include "base/i18n/icubridge/normalizer.h"
 #include "base/logging.h"
 #include "base/stl_util.h"
 #include "base/strings/utf_offset_string_conversions.h"
@@ -23,8 +25,6 @@
 #include "components/omnibox/common/string_cleaning.h"
 #include "components/query_parser/snippet.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
-#include "third_party/icu/source/common/unicode/normalizer2.h"
-#include "third_party/icu/source/common/unicode/utypes.h"
 
 namespace bookmarks {
 
@@ -123,23 +123,8 @@ std::vector<TitledUrlMatch> TitledUrlIndex::GetResultsMatching(
 
 // static
 std::u16string TitledUrlIndex::Normalize(std::u16string_view text) {
-  UErrorCode status = U_ZERO_ERROR;
-  const icu::Normalizer2* normalizer2 =
-      icu::Normalizer2::getInstance(nullptr, "nfkc", UNORM2_COMPOSE, status);
-  if (U_FAILURE(status)) {
-    // Log and crash right away to capture the error code in the crash report.
-    LOG(FATAL) << "failed to create a normalizer: " << u_errorName(status);
-  }
-  icu::UnicodeString unicode_text(text.data(),
-                                  static_cast<int32_t>(text.length()));
-  icu::UnicodeString unicode_normalized_text;
-  normalizer2->normalize(unicode_text, unicode_normalized_text, status);
-  if (U_FAILURE(status)) {
-    // This should not happen. Log the error and fall back.
-    LOG(ERROR) << "normalization failed: " << u_errorName(status);
-    return std::u16string(text);
-  }
-  return base::i18n::UnicodeStringToString16(unicode_normalized_text);
+  return base::i18n::IcuBridge::GetInstance().normalizer().Normalize(
+      base::i18n::IcuBridge::Normalizer::NormalizationForm::NFKC, text);
 }
 
 void TitledUrlIndex::SortMatches(const TitledUrlNodeSet& matches,

@@ -449,7 +449,7 @@ bool ParseProcMeminfo(std::string_view meminfo_data,
       uint64_t value;
       if (StringToUint64(tokens[1], &value) &&
           value <= ByteSize::Max().InKiB()) {
-        *target = KiBU(value);
+        *target = KiB(value);
       }
     }
   }
@@ -989,7 +989,6 @@ bool GetGraphicsMemoryInfo(GraphicsMemoryInfoKB* gpu_meminfo) {
 #if defined(ARCH_CPU_X86_FAMILY)
   // Reading i915_gem_objects on intel platform with kernel 5.4 is slow and is
   // prohibited.
-  // TODO(b/170397975): Update if i915_gem_objects reading time is improved.
   static bool is_newer_kernel =
       base::StartsWith(base::SysInfo::KernelVersion(), "5.");
   static bool is_intel_cpu = base::CPU().vendor_name() == "GenuineIntel";

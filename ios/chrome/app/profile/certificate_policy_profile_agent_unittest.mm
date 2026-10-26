@@ -132,7 +132,7 @@ class CertificatePolicyProfileStateAgentTest : public BlockCleanupTest {
   // Triggers certificate cache updates in the app agent under test, and wait
   // for updates to complete.
   void TriggerCertCacheUpdate() {
-    SceneState* scene_state = [[SceneState alloc] initWithAppState:nil];
+    SceneState* scene_state = [[SceneState alloc] init];
 
     [profile_state_ sceneStateConnected:scene_state];
     scene_state.activationLevel = SceneActivationLevelForegroundInactive;
@@ -153,8 +153,8 @@ class CertificatePolicyProfileStateAgentTest : public BlockCleanupTest {
   bool IsHostCertAllowed(
       const scoped_refptr<web::CertificatePolicyCache>& cache,
       const std::string& host) {
-    __block web::CertPolicy::Judgment judgement =
-        web::CertPolicy::Judgment::UNKNOWN;
+    __block web::CertificatePolicyCache::Judgment judgement =
+        web::CertificatePolicyCache::Judgment::UNKNOWN;
     __block bool completed = false;
     web::GetIOThreadTaskRunner({})->PostTask(FROM_HERE, base::BindOnce(^{
                                                completed = true;
@@ -164,7 +164,7 @@ class CertificatePolicyProfileStateAgentTest : public BlockCleanupTest {
     EXPECT_TRUE(WaitUntilConditionOrTimeout(kWaitForActionTimeout, ^{
       return completed;
     }));
-    return judgement == web::CertPolicy::Judgment::ALLOWED;
+    return judgement == web::CertificatePolicyCache::Judgment::ALLOWED;
   }
 
   // Clears all entries from `cache`. This is posted to the IO thread and this

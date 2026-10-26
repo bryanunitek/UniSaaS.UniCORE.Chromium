@@ -13,12 +13,14 @@ import android.util.AttributeSet;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.widget.PopupWindow;
 
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ObserverList;
 import org.chromium.base.ResettersForTesting;
+import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.R;
@@ -71,12 +73,16 @@ public class ListMenuHost
     private final boolean mMenuHorizontalOverlapAnchor;
 
     private int mMenuMaxWidth;
+    private int mMenuMaxHeight;
 
-    private final HierarchicalMenuController<AnchoredPopupWindow> mHierarchicalMenuController;
+    // Nullable for lazy initialization.
+    private @MonotonicNonNull HierarchicalMenuController<AnchoredPopupWindow>
+            mHierarchicalMenuController;
 
     private @Nullable ListMenuDelegate mDelegate;
     private final ObserverList<PopupMenuShownListener> mPopupListeners = new ObserverList<>();
     private boolean mTryToFitLargestItem;
+    private boolean mKeepSoftInputVisible;
     private final boolean mPositionedAtStart;
     private final boolean mPositionedAtEnd;
 
@@ -110,6 +116,7 @@ public class ListMenuHost
                 a.getDimensionPixelSize(
                         R.styleable.ListMenuButton_menuMaxWidth,
                         mView.getResources().getDimensionPixelSize(R.dimen.list_menu_width));
+        mMenuMaxHeight = a.getDimensionPixelSize(R.styleable.ListMenuButton_menuMaxHeight, 0);
         mMenuHorizontalOverlapAnchor =
                 a.getBoolean(R.styleable.ListMenuButton_menuHorizontalOverlapAnchor, true);
         mMenuVerticalOverlapAnchor =
@@ -122,9 +129,6 @@ public class ListMenuHost
                 : "menuPositionedAtStart and menuPositionedAtEnd are both true.";
 
         a.recycle();
-
-        mHierarchicalMenuController =
-                ListMenuUtils.createHierarchicalMenuController(mView.getContext());
     }
 
     /**
@@ -143,13 +147,24 @@ public class ListMenuHost
         }
     }
 
+    /** A getter for {@link HierarchicalMenuController} for lazy initialization. */
+    private HierarchicalMenuController<AnchoredPopupWindow>
+            getHierarchicalMenuControllerInternal() {
+        if (mHierarchicalMenuController == null) {
+            mHierarchicalMenuController =
+                    ListMenuUtils.createHierarchicalMenuController(mView.getContext());
+        }
+        return mHierarchicalMenuController;
+    }
+
     /** Called to dismiss any popup menu that might be showing for this button. */
     public void dismiss() {
         if (mPressedStateSetter != null) {
             mPressedStateSetter.setPressedState(false);
         }
 
-        if (mHierarchicalMenuController.getFlyoutController() == null) {
+        if (mHierarchicalMenuController == null
+                || mHierarchicalMenuController.getFlyoutController() == null) {
             return;
         }
         mHierarchicalMenuController.destroyFlyoutController();
@@ -161,6 +176,9 @@ public class ListMenuHost
 
     /** Returns whether the popup menu is currently showing. */
     public boolean isMenuShowing() {
+        if (mHierarchicalMenuController == null) {
+            return false;
+        }
         FlyoutController<AnchoredPopupWindow> controller =
                 mHierarchicalMenuController.getFlyoutController();
         if (controller == null) {
@@ -177,7 +195,7 @@ public class ListMenuHost
         initPopupWindow();
 
         FlyoutController<AnchoredPopupWindow> controller =
-                mHierarchicalMenuController.getFlyoutController();
+                getHierarchicalMenuControllerInternal().getFlyoutController();
         assert controller != null;
         controller.getMainPopup().show();
 
@@ -194,6 +212,29 @@ public class ListMenuHost
      */
     public void setMenuMaxWidth(int maxWidth) {
         mMenuMaxWidth = maxWidth;
+    }
+
+    /**
+     * Set the max height of the popup menu.
+     *
+     * @param maxHeight The max height of the popup.
+     */
+    public void setMenuMaxHeight(int maxHeight) {
+        mMenuMaxHeight = maxHeight;
+    }
+
+    /**
+     * Sets whether the popup should keep any soft keyboard shown by the anchor's window visible.
+     *
+     * <p>Defaults to {@code false}. Set to {@code true} for menus anchored to a focused text field
+     * (e.g. the omnibox): the popup stays focusable (so it remains reachable by accessibility and
+     * key navigation) but does not take input-method focus, so showing it does not dismiss the soft
+     * keyboard. This avoids the keyboard flickering while the menu is up. See crbug.com/544573787.
+     *
+     * @param keepSoftInputVisible Whether to keep the soft keyboard visible when the menu shows.
+     */
+    public void setKeepSoftInputVisible(boolean keepSoftInputVisible) {
+        mKeepSoftInputVisible = keepSoftInputVisible;
     }
 
     /** Init the popup window with provided attributes, called before {@link #showMenu()} */
@@ -215,12 +256,13 @@ public class ListMenuHost
                                 mView.getContext(),
                                 mView,
                                 new ColorDrawable(Color.TRANSPARENT),
-                                () -> contentView,
+                                (unused) -> contentView,
                                 mDelegate.getRectProvider(mView))
                         .setDismissOnScreenSizeChange(true)
                         .setVerticalOverlapAnchor(mMenuVerticalOverlapAnchor)
                         .setHorizontalOverlapAnchor(mMenuHorizontalOverlapAnchor)
                         .setMaxWidth(mMenuMaxWidth)
+                        .setMaxHeight(mMenuMaxHeight)
                         .setFocusable(true)
                         .setAnimateFromAnchor(true)
                         .addOnDismissListener(
@@ -243,14 +285,25 @@ public class ListMenuHost
         }
 
         AnchoredPopupWindow popupMenu = builder.build();
-        mHierarchicalMenuController.setupFlyoutController(
-                /* flyoutHandler= */ this, popupMenu, /* drillDownOverrideValue= */ null);
+        if (mKeepSoftInputVisible) {
+            // Keep the popup focusable (for accessibility and key navigation) but do not let it
+            // take
+            // input-method focus, so the soft keyboard shown by the anchor stays visible instead of
+            // flickering. See crbug.com/544573787.
+            popupMenu.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
+        }
+        getHierarchicalMenuControllerInternal()
+                .setupFlyoutController(
+                        /* flyoutHandler= */ this,
+                        popupMenu,
+                        menu::addOnScrollListener,
+                        /* drillDownOverrideValue= */ null);
 
         if (sPopupMenuHelperForTesting != null) {
             AnchoredPopupWindow spiedPopupMenu =
                     sPopupMenuHelperForTesting.injectPopupMenu(popupMenu);
             FlyoutController<AnchoredPopupWindow> flyoutController =
-                    mHierarchicalMenuController.getFlyoutController();
+                    getHierarchicalMenuControllerInternal().getFlyoutController();
             assert flyoutController != null;
             flyoutController.setMainPopupForTest(spiedPopupMenu);
         }
@@ -274,7 +327,10 @@ public class ListMenuHost
 
     @Override
     public AnchoredPopupWindow createAndShowFlyoutPopup(
-            List<ListItem> items, View view, Runnable dismissRunnable) {
+            List<ListItem> items,
+            View view,
+            Runnable dismissRunnable,
+            View.OnScrollChangeListener scrollListener) {
         if (mDelegate == null) throw new IllegalStateException("Delegate was not set.");
         ListMenu menu = mDelegate.getListMenuFromItems(items);
         assert menu != null;
@@ -292,12 +348,14 @@ public class ListMenuHost
                                 mView.getContext(),
                                 rootView,
                                 new ColorDrawable(Color.TRANSPARENT),
-                                () -> contentView,
+                                (unused) -> contentView,
                                 new RectProvider(
                                         FlyoutController.calculateFlyoutAnchorRect(view, rootView)))
+                        .setDismissOnScreenSizeChange(true)
                         .setVerticalOverlapAnchor(true)
                         .setHorizontalOverlapAnchor(false)
                         .setMaxWidth(mMenuMaxWidth)
+                        .setMaxHeight(mMenuMaxHeight)
                         .setFocusable(true)
                         .setTouchModal(false)
                         .setAnimateFromAnchor(false)
@@ -310,12 +368,14 @@ public class ListMenuHost
                                 })
                         .build();
 
+        menu.addOnScrollListener(scrollListener);
         popupMenu.show();
         return popupMenu;
     }
 
     @Override
     public void setWindowFocus(AnchoredPopupWindow popupWindow, boolean hasFocus) {
+        popupWindow.setFocusable(hasFocus);
         ViewGroup contentView = (ViewGroup) popupWindow.getContentView();
         if (contentView == null) return;
 
@@ -345,7 +405,7 @@ public class ListMenuHost
     public void onPreLayoutChange(
             boolean positionBelow, int x, int y, int width, int height, Rect anchorRect) {
         FlyoutController<AnchoredPopupWindow> controller =
-                mHierarchicalMenuController.getFlyoutController();
+                getHierarchicalMenuControllerInternal().getFlyoutController();
         assert controller != null;
 
         // This animation style is only for the main pane, not for flyout popups.
@@ -394,8 +454,8 @@ public class ListMenuHost
      *
      * @return The {@link HierarchicalMenuController} for this object.
      */
-    public HierarchicalMenuController getHierarchicalMenuController() {
-        return mHierarchicalMenuController;
+    public HierarchicalMenuController<AnchoredPopupWindow> getHierarchicalMenuController() {
+        return getHierarchicalMenuControllerInternal();
     }
 
     public static void setMenuChangedListenerForTesting(PopupMenuHelper listener) {

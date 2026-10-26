@@ -7,7 +7,7 @@ package org.chromium.chrome.browser.page_info;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import android.content.Context;
+import android.app.Activity;
 import android.view.View;
 
 import androidx.annotation.Nullable;
@@ -20,12 +20,12 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
-import org.robolectric.annotation.Config;
 
-import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.chrome.R;
 import org.chromium.components.browser_ui.site_settings.BaseSiteSettingsFragment;
 import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
@@ -45,19 +45,17 @@ import java.util.Arrays;
 
 /** Tests for PageInfoPermissionsController. */
 @RunWith(RobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class PageInfoPermissionsControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Rule public BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
 
     @Mock private PageInfoMainController mMainController;
-    @Mock private PageInfoRowView mRowView;
     @Mock private PageInfoControllerDelegate mDelegate;
     @Mock private WebContents mWebContents;
     @Mock private WindowAndroid mWindowAndroid;
-    @Mock private Context mContext;
     @Mock private PermissionUtil.Natives mPermissionUtilJni;
 
+    private GURL mPageUrl;
     private PageInfoPermissionsController mController;
     private boolean mRequestAndroidPermissionsResult;
     private AndroidPermissionRequester.RequestDelegate mRequestDelegateCaptured;
@@ -65,17 +63,18 @@ public class PageInfoPermissionsControllerTest {
     @Before
     public void setUp() {
         PermissionUtilJni.setInstanceForTesting(mPermissionUtilJni);
+        mPageUrl = new GURL("https://example.com");
 
-        when(mRowView.getContext()).thenReturn(mContext);
-        when(mContext.getResources())
-                .thenReturn(ContextUtils.getApplicationContext().getResources());
-        when(mMainController.getURL()).thenReturn(new GURL("https://example.com"));
+        Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        activity.setTheme(R.style.Theme_BrowserUI_DayNight);
+        PageInfoRowView rowView = new PageInfoRowView(activity, null);
+        when(mMainController.getURL()).thenReturn(mPageUrl);
         when(mWebContents.getTopLevelNativeWindow()).thenReturn(mWindowAndroid);
 
         mController =
                 new PageInfoPermissionsController(
                         mMainController,
-                        mRowView,
+                        rowView,
                         mDelegate,
                         mWebContents,
                         ContentSettingsType.NOTIFICATIONS) {
@@ -111,7 +110,7 @@ public class PageInfoPermissionsControllerTest {
     @Test
     public void testOnNotificationSubscribeClicked_RequestsPermission_Granted() {
         when(mPermissionUtilJni.resolveNotificationsPermissionRequest(
-                        mWebContents, ContentSetting.ALLOW))
+                        mWebContents, mPageUrl, ContentSetting.ALLOW))
                 .thenReturn(true);
         mRequestAndroidPermissionsResult = true;
         HistogramWatcher histogramWatcher =
@@ -123,7 +122,8 @@ public class PageInfoPermissionsControllerTest {
         mRequestDelegateCaptured.onAndroidPermissionAccepted();
 
         verify(mPermissionUtilJni)
-                .resolveNotificationsPermissionRequest(mWebContents, ContentSetting.ALLOW);
+                .resolveNotificationsPermissionRequest(
+                        mWebContents, mPageUrl, ContentSetting.ALLOW);
         histogramWatcher.assertExpected();
     }
 
@@ -138,33 +138,35 @@ public class PageInfoPermissionsControllerTest {
 
         mRequestDelegateCaptured.onAndroidPermissionCanceled();
 
-        verify(mPermissionUtilJni).dismissNotificationsPermissionRequest(mWebContents);
+        verify(mPermissionUtilJni).dismissNotificationsPermissionRequest(mWebContents, mPageUrl);
         histogramWatcher.assertExpected();
     }
 
     @Test
     public void testOnNotificationSubscribeClicked_PermissionAlreadyGranted() {
         when(mPermissionUtilJni.resolveNotificationsPermissionRequest(
-                        mWebContents, ContentSetting.ALLOW))
+                        mWebContents, mPageUrl, ContentSetting.ALLOW))
                 .thenReturn(true);
         mRequestAndroidPermissionsResult = false;
         mController.onNotificationSubscribeClicked();
 
         verify(mPermissionUtilJni)
-                .resolveNotificationsPermissionRequest(mWebContents, ContentSetting.ALLOW);
+                .resolveNotificationsPermissionRequest(
+                        mWebContents, mPageUrl, ContentSetting.ALLOW);
     }
 
     @Test
     public void testOnNotificationSubscribeClicked_NullWindow() {
         when(mPermissionUtilJni.resolveNotificationsPermissionRequest(
-                        mWebContents, ContentSetting.ALLOW))
+                        mWebContents, mPageUrl, ContentSetting.ALLOW))
                 .thenReturn(true);
         when(mWebContents.getTopLevelNativeWindow()).thenReturn(null);
 
         mController.onNotificationSubscribeClicked();
 
         verify(mPermissionUtilJni)
-                .resolveNotificationsPermissionRequest(mWebContents, ContentSetting.ALLOW);
+                .resolveNotificationsPermissionRequest(
+                        mWebContents, mPageUrl, ContentSetting.ALLOW);
     }
 
     @Test
@@ -182,7 +184,8 @@ public class PageInfoPermissionsControllerTest {
         mController.onSubpageRemoved();
 
         verify(mPermissionUtilJni)
-                .resolveNotificationsPermissionRequest(mWebContents, ContentSetting.BLOCK);
+                .resolveNotificationsPermissionRequest(
+                        mWebContents, mPageUrl, ContentSetting.BLOCK);
     }
 
     @Test
@@ -200,6 +203,7 @@ public class PageInfoPermissionsControllerTest {
         mController.onPermissionsReset();
 
         verify(mPermissionUtilJni)
-                .resolveNotificationsPermissionRequest(mWebContents, ContentSetting.DEFAULT);
+                .resolveNotificationsPermissionRequest(
+                        mWebContents, mPageUrl, ContentSetting.DEFAULT);
     }
 }

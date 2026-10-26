@@ -25,6 +25,7 @@
 #include "components/update_client/network.h"
 #include "components/update_client/persisted_data.h"
 #include "components/update_client/protocol_handler.h"
+#include "ui/base/device_form_factor.h"
 #include "url/gurl.h"
 
 namespace activity_reporter {
@@ -145,6 +146,11 @@ std::string ActivityReporterConfigurator::GetOSLongName() const {
   return std::string{version_info::GetOSType()};
 }
 
+std::string ActivityReporterConfigurator::GetDeviceFormFactor() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return std::string(ui::DeviceFormFactorToString(ui::GetDeviceFormFactor()));
+}
+
 base::flat_map<std::string, std::string>
 ActivityReporterConfigurator::ExtraRequestParams() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -223,7 +229,9 @@ std::optional<bool> ActivityReporterConfigurator::IsMachineExternallyManaged()
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   policy::PlatformManagementService* service =
       policy::PlatformManagementService::GetInstance();
-  return service && service->IsManaged();
+  return service &&
+        service->GetManagementAuthorityTrustworthiness() >=
+             policy::ManagementAuthorityTrustworthiness::TRUSTED;
 }
 
 update_client::UpdaterStateProvider

@@ -115,6 +115,12 @@ const char* JobTypeToRequestType(
     case DeviceManagementService::JobConfiguration::
         TYPE_DETERMINE_PROMOTION_ELIGIBILITY:
       return dm_protocol::kValueRequestDeterminePromotionEligibility;
+    case DeviceManagementService::JobConfiguration::
+        TYPE_GENERATE_CHROME_PROFILE_CHALLENGE:
+      return dm_protocol::kValueRequestGenerateChromeProfileChallenge;
+    case DeviceManagementService::JobConfiguration::
+        TYPE_USER_MANAGEMENT_STATUS_AND_POLICIES:
+      return dm_protocol::kValueRequestUserManagementStatusAndPolicies;
   }
   NOTREACHED() << "Invalid job type " << type;
 }

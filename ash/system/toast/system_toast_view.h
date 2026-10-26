@@ -22,7 +22,7 @@ class Label;
 
 namespace ash {
 
-class SystemShadow;
+class SystemDecoration;
 
 // The System Toast view. (go/toast-style-spec)
 // This view supports different configurations depending on the provided
@@ -59,17 +59,13 @@ class ASH_EXPORT SystemToastView : public views::FlexLayoutView {
   std::u16string_view GetText() const;
 
  private:
-  // views::View:
-  void AddedToWidget() override;
-  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
-
   // Owned by the views hierarchy.
   raw_ptr<views::Label> label_ = nullptr;
   // Button which either contains text or an icon depending on the toast's
   // `ButtonType`.
   raw_ptr<views::Button> button_ = nullptr;
 
-  std::unique_ptr<SystemShadow> shadow_;
+  std::unique_ptr<SystemDecoration> shadow_;
 };
 
 }  // namespace ash

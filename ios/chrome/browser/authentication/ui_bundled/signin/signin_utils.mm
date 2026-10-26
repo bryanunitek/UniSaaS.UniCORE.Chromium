@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 
 #import "base/barrier_callback.h"
+#import "base/check.h"
 #import "base/command_line.h"
 #import "base/functional/bind.h"
 #import "base/functional/callback_helpers.h"
@@ -103,7 +104,7 @@ NSSet<NSString*>* GaiaIdSetWithAccountInfos(
     const std::vector<AccountInfo>& account_infos) {
   NSMutableSet* gaia_id_set = [NSMutableSet set];
   for (const AccountInfo& account_info : account_infos) {
-    [gaia_id_set addObject:account_info.gaia.ToNSString()];
+    [gaia_id_set addObject:account_info.GetGaiaId().ToNSString()];
   }
   return [gaia_id_set copy];
 }
@@ -174,6 +175,18 @@ void AllBrowsersSignedOut(signin::SignoutCompletion completion,
     }
   }
   std::move(completion).Run(new_scene_state);
+}
+
+// Checks that `result` is valid, i.e. either it contains a non-nil identity
+// value or a non-success cancellation/failure reason
+// (`SigninCoordinatorResult`).
+void CheckSigninCoordinatorResultOrIdentity(
+    SigninCoordinatorResultOrIdentity result) {
+  if (result.has_value()) {
+    CHECK(result.value());
+  } else {
+    CHECK_NE(result.error(), SigninCoordinatorResultSuccess);
+  }
 }
 
 }  // namespace
@@ -398,17 +411,6 @@ void RecordFullscreenSigninPromoStarted(
   [defaults setInteger:display_count forKey:kSigninPromoViewDisplayCountKey];
 }
 
-Tribool TriboolFromCapabilityResult(SystemIdentityCapabilityResult result) {
-  switch (result) {
-    case SystemIdentityCapabilityResult::kTrue:
-      return Tribool::kTrue;
-    case SystemIdentityCapabilityResult::kFalse:
-      return Tribool::kFalse;
-    case SystemIdentityCapabilityResult::kUnknown:
-      return Tribool::kUnknown;
-  }
-  NOTREACHED();
-}
 
 NSArray<id<SystemIdentity>>* GetIdentitiesOnDevice(
     signin::IdentityManager* identityManager,
@@ -551,11 +553,12 @@ void MultiProfileSignOutForProfile(
         break;
       }
     }
-    base::OnceClosure authentication_signout_completion = base::BindOnce(
-        std::move(signout_completion_closure), trigger_scene_state);
-    authentication_service->SignOut(
-        signout_source,
-        base::CallbackToBlock(std::move(authentication_signout_completion)));
+    authentication_service->SignOut(signout_source);
+    if (signout_completion_closure) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(std::move(signout_completion_closure),
+                                    trigger_scene_state));
+    }
     return;
   }
 
@@ -646,6 +649,36 @@ Browser* GetRegularBrowser(Browser* browser) {
   }
   return browser->GetSceneState()
       .browserProviderInterface.mainBrowserProvider.browser;
+}
+
+void CheckSigninCoordinatorResultAndIdentity(SigninCoordinatorResult result,
+                                             id<SystemIdentity> identity) {
+  if (result == SigninCoordinatorResultSuccess) {
+    CHECK(identity);
+  } else {
+    CHECK(!identity);
+  }
+}
+
+SigninCoordinatorResult
+SigninCoordinatorResultFromSigninCoordinatorResultOrIdentity(
+    SigninCoordinatorResultOrIdentity result) {
+  CheckSigninCoordinatorResultOrIdentity(result);
+  if (result.has_value()) {
+    return SigninCoordinatorResultSuccess;
+  }
+  return result.error();
+}
+
+SigninCoordinatorResultOrIdentity
+SigninCoordinatorResultOrIdentityFromSigninCoordinatorResult(
+    SigninCoordinatorResult result,
+    id<SystemIdentity> identity) {
+  CheckSigninCoordinatorResultAndIdentity(result, identity);
+  if (result == SigninCoordinatorResultSuccess) {
+    return identity;
+  }
+  return base::unexpected(result);
 }
 
 }  // namespace signin

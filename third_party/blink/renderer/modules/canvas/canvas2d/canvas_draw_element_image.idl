@@ -4,34 +4,38 @@
 
 interface mixin CanvasDrawElementImage {
   [RuntimeEnabled=CanvasDrawElement, RaisesException, MeasureAs=HTMLInCanvas]
-  DOMMatrix drawElementImage((Element or ElementImage) element,
-                             unrestricted double dx,
-                             unrestricted double dy);
+  void drawElementImage((Element or ElementImage) element,
+                        unrestricted double dx,
+                        unrestricted double dy,
+                        optional DrawElementImageOptions options = {});
 
   [RuntimeEnabled=CanvasDrawElement, RaisesException, MeasureAs=HTMLInCanvas]
-  DOMMatrix drawElementImage((Element or ElementImage) element,
-                             unrestricted double dx,
-                             unrestricted double dy,
-                             unrestricted double dwidth,
-                             unrestricted double dheight);
+  void drawElementImage((Element or ElementImage) element,
+                        unrestricted double dx,
+                        unrestricted double dy,
+                        unrestricted double dwidth,
+                        unrestricted double dheight,
+                        optional DrawElementImageOptions options = {});
 
   [RuntimeEnabled=CanvasDrawElement, RaisesException, MeasureAs=HTMLInCanvas]
-  DOMMatrix drawElementImage((Element or ElementImage) element,
-                             unrestricted double sx,
-                             unrestricted double sy,
-                             unrestricted double swidth,
-                             unrestricted double sheight,
-                             unrestricted double dx,
-                             unrestricted double dy);
+  void drawElementImage((Element or ElementImage) element,
+                        unrestricted double sx,
+                        unrestricted double sy,
+                        unrestricted double swidth,
+                        unrestricted double sheight,
+                        unrestricted double dx,
+                        unrestricted double dy,
+                        optional DrawElementImageOptions options = {});
 
   [RuntimeEnabled=CanvasDrawElement, RaisesException, MeasureAs=HTMLInCanvas]
-  DOMMatrix drawElementImage((Element or ElementImage) element,
-                             unrestricted double sx,
-                             unrestricted double sy,
-                             unrestricted double swidth,
-                             unrestricted double sheight,
-                             unrestricted double dx,
-                             unrestricted double dy,
-                             unrestricted double dwidth,
-                             unrestricted double dheight);
+  void drawElementImage((Element or ElementImage) element,
+                        unrestricted double sx,
+                        unrestricted double sy,
+                        unrestricted double swidth,
+                        unrestricted double sheight,
+                        unrestricted double dx,
+                        unrestricted double dy,
+                        unrestricted double dwidth,
+                        unrestricted double dheight,
+                        optional DrawElementImageOptions options = {});
 };

@@ -7,9 +7,11 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/toolbar/back_forward_menu_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view.h"
 #include "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api_data_model.mojom.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/events/event_constants.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/view.h"
@@ -19,7 +21,7 @@ WebUIBackForwardControl::WebUIBackForwardControl(
     BackForwardButton::Direction direction)
     : delegate_(delegate),
       direction_(direction),
-      menu_model_(delegate->GetBrowser()->GetBrowserForMigrationOnly(),
+      menu_model_(delegate->GetBrowser(),
                   direction == BackForwardButton::Direction::kBack
                       ? BackForwardMenuModel::ModelType::kBackward
                       : BackForwardMenuModel::ModelType::kForward) {}
@@ -38,6 +40,8 @@ void WebUIBackForwardControl::HandleContextMenu(
       &menu_model_, base::BindRepeating(
                         &WebUIToolbarControlDelegate::OnBackForwardStateChanged,
                         base::Unretained(delegate_)));
+  menu_model_adapter_->set_triggerable_event_flags(ui::EF_LEFT_MOUSE_BUTTON |
+                                                   ui::EF_MIDDLE_MOUSE_BUTTON);
   std::unique_ptr<views::MenuItemView> root = menu_model_adapter_->CreateMenu();
   root->SetSubmenuId(direction_ == BackForwardButton::Direction::kBack
                          ? kToolbarBackButtonMenuElementId
@@ -72,9 +76,14 @@ bool WebUIBackForwardControl::IsPinned() const {
 }
 
 void WebUIBackForwardControl::SetIsOverflowed(bool is_overflowed) {
+  if (is_overflowed) {
+    CHECK(!features::IsWebUIToolbarFullyEnabled());
+  }
+
   if (is_overflowed_ == is_overflowed) {
     return;
   }
+
   is_overflowed_ = is_overflowed;
   delegate_->OnBackForwardStateChanged();
 }

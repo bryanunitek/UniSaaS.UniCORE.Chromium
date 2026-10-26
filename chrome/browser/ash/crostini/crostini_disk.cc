@@ -153,8 +153,7 @@ void OnListVmDisks(
 
   if (image->image_type() !=
       vm_tools::concierge::DiskImageType::DISK_IMAGE_RAW) {
-    // Can't resize qcow2 images and don't know how to handle auto or pluginvm
-    // images.
+    // Only raw disk images can be resized.
     disk_info->can_resize = false;
     std::move(callback).Run(std::move(disk_info));
     return;
@@ -203,7 +202,7 @@ GetTicks(int64_t min, int64_t current, int64_t max, int* out_default_index) {
     return {};
   }
   std::vector<int64_t> values = GetTicksForDiskSize(min, max);
-  DCHECK(!values.empty());
+  CHECK(!values.empty(), base::NotFatalUntil::M160);
 
   // If the current size isn't on one of the ticks insert an extra tick for it.
   // It's possible for the current size to be greater than the maximum tick,

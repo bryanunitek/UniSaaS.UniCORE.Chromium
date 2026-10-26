@@ -20,7 +20,6 @@
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "ash/public/cpp/pagination/pagination_controller.h"
-#include "ash/public/cpp/style/color_provider.h"
 #include "ash/style/ash_color_id.h"
 #include "ash/style/dark_light_mode_controller_impl.h"
 #include "base/check.h"
@@ -35,7 +34,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/animation_throughput_reporter.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/events/event.h"
 #include "ui/events/types/event_type.h"
@@ -130,8 +129,9 @@ class PagedAppsGridView::BackgroundCardLayer : public ui::LayerOwner,
                                                public ui::LayerDelegate {
  public:
   explicit BackgroundCardLayer(PagedAppsGridView* paged_apps_grid_view)
-      : LayerOwner(std::make_unique<ui::Layer>(ui::LAYER_TEXTURED)),
+      : LayerOwner(std::make_unique<ui::LayerTextured>()),
         paged_apps_grid_view_(paged_apps_grid_view) {
+    layer()->SetName("PagedAppsGridView:BackgroundCard");
     layer()->SetFillsBoundsOpaquely(false);
     layer()->set_delegate(this);
   }

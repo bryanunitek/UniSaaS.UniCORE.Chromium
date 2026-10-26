@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_hidden_style.css.js';
-import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
+import 'chrome://resources/ash/common/cr_elements/cr_hidden_style.css.js';
+import 'chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js';
 import 'chrome://resources/js/util.js';
-import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
+import 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
 import 'chrome://resources/polymer/v3_0/iron-media-query/iron-media-query.js';
 import './destination_dropdown_cros.js';
 import './destination_select_style.css.js';
@@ -14,7 +14,7 @@ import './print_preview_shared.css.js';
 import './throbber.css.js';
 import '/strings.m.js';
 
-import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
+import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import type {Destination} from '../data/destination_cros.js';
@@ -104,22 +104,22 @@ export class PrintPreviewDestinationSelectCrosElement extends
     };
   }
 
-  activeUser: string;
-  dark: boolean;
-  destination: Destination;
-  disabled: boolean;
-  driveDestinationKey: string;
-  loaded: boolean;
-  noDestinations: boolean;
-  pdfPrinterDisabled: boolean;
-  recentDestinationList: Destination[];
-  state: State;
-  error: Error;
-  private pdfDestinationKey_: string;
-  private statusText_: TrustedHTML;
-  private destinationIcon_: string;
-  private isCurrentDestinationCrosLocal_: boolean;
-  private isDarkModeActive_: boolean;
+  declare activeUser: string;
+  declare dark: boolean;
+  declare destination: Destination;
+  declare disabled: boolean;
+  declare driveDestinationKey: string;
+  declare loaded: boolean;
+  declare noDestinations: boolean;
+  declare pdfPrinterDisabled: boolean;
+  declare recentDestinationList: Destination[];
+  declare state: State;
+  declare error: Error;
+  declare private pdfDestinationKey_: string;
+  declare private statusText_: TrustedHTML;
+  declare private destinationIcon_: string;
+  declare private isCurrentDestinationCrosLocal_: boolean;
+  declare private isDarkModeActive_: boolean;
 
   override focus() {
     this.shadowRoot!.querySelector(

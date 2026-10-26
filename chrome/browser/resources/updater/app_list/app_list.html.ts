@@ -7,12 +7,11 @@ import {html} from '//resources/lit/v3_0/lit.rollup.js';
 import type {AppListElement} from './app_list.js';
 
 export function getHtml(this: AppListElement) {
-  // clang-format off
   return html`
 <!--_html_template_start_-->
 ${this.error ? html`
   <div class="error-card">
-    <cr-icon icon="cr:warning"></cr-icon>
+    <cr-icon icon="cr:warning-filled"></cr-icon>
     <div id="error-message">$i18n{appStatesQueryFailed}</div>
   </div>
 ` : ''}
@@ -44,5 +43,4 @@ ${this.shouldShowTable() ? html`
   </div>
 ` : ''}
 <!--_html_template_end_-->`;
-  // clang-format on
 }

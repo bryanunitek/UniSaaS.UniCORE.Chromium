@@ -141,6 +141,7 @@ LayerTreeHostImplTestBase::LayerTreeHostImplTestBase(
       did_request_commit_(false),
       did_request_redraw_(false),
       did_request_next_frame_(false),
+      did_notify_input_event_(false),
       did_request_prepare_tiles_(false),
       did_prepare_tiles_(false),
       did_complete_page_scale_animation_(false),
@@ -227,11 +228,15 @@ void LayerTreeHostImplTestBase::SetNeedsRedrawOnImplThread() {
 void LayerTreeHostImplTestBase::SetNeedsOneBeginImplFrameOnImplThread() {
   did_request_next_frame_ = true;
 }
+void LayerTreeHostImplTestBase::NotifyInputEvent() {
+  did_notify_input_event_ = true;
+}
 void LayerTreeHostImplTestBase::SetNeedsPrepareTilesOnImplThread() {
   did_request_prepare_tiles_ = true;
 }
 void LayerTreeHostImplTestBase::SetNeedsCommitOnImplThread(BeginMainFrameReason,
-                                                           bool urgent) {
+                                                           bool urgent,
+                                                           bool unthrottled) {
   did_request_commit_ = true;
 }
 void LayerTreeHostImplTestBase::SetVideoNeedsBeginFrames(
@@ -565,7 +570,7 @@ void LayerTreeHostImplTestBase::CreateAndTestNonScrollableLayers(
           .get(),
       ui::ScrollInputType::kWheel);
   ASSERT_EQ(ScrollThread::kScrollOnImplThread, status.thread);
-  ASSERT_EQ(MainThreadScrollingReason::kFailedHitTest,
+  ASSERT_EQ(MainThreadHitTestReasons{MainThreadHitTestReason::kFailedHitTest},
             status.main_thread_hit_test_reasons);
 
   // The point hits squash1 layer and also scrollbar layer.
@@ -575,7 +580,7 @@ void LayerTreeHostImplTestBase::CreateAndTestNonScrollableLayers(
           .get(),
       ui::ScrollInputType::kWheel);
   ASSERT_EQ(ScrollThread::kScrollOnImplThread, status.thread);
-  ASSERT_EQ(MainThreadScrollingReason::kFailedHitTest,
+  ASSERT_EQ(MainThreadHitTestReasons{MainThreadHitTestReason::kFailedHitTest},
             status.main_thread_hit_test_reasons);
 
   // The point hits squash2 layer and also scroll layer, because scroll layer
@@ -769,7 +774,7 @@ LayerImpl* LayerTreeHostImplTestBase::CreateLayerForSnapping() {
       ScrollSnapType(false, SnapAxis::kBoth, SnapStrictness::kMandatory),
       gfx::RectF(0, 0, 200, 200), gfx::PointF(300, 300));
   SnapAreaData area_data(ScrollSnapAlign(SnapAlignment::kStart),
-                         gfx::RectF(50, 50, 100, 100), false, false,
+                         gfx::RectF(50, 50, 100, 100), SnapStop::kNormal, false,
                          ElementId(10));
   container_data.AddSnapAreaData(area_data);
   GetScrollNode(overflow)->snap_container_data.emplace(container_data);
@@ -940,8 +945,8 @@ void LayerTreeHostImplTestBase::SetupMouseMoveAtTestScrollbarStates(
   LayerImpl* root_scroll = OuterViewportScrollLayer();
 
   if (main_thread_scrolling) {
-    GetScrollNode(root_scroll)->main_thread_repaint_reasons =
-        MainThreadScrollingReason::kHasBackgroundAttachmentFixedObjects;
+    GetScrollNode(root_scroll)->main_thread_repaint_reasons = {
+        MainThreadRepaintReason::kHasBackgroundAttachmentFixedObjects};
   }
 
   // scrollbar_1 on root scroll.

@@ -18,7 +18,6 @@
 #include "chrome/browser/ash/login/signin_partition_manager_factory.h"
 #include "chrome/browser/ash/policy/core/device_local_account_policy_broker.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/password_manager/factories/password_reuse_manager_factory.h"
 #include "chrome/browser/policy/networking/user_network_configuration_updater_ash.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
@@ -209,12 +208,11 @@ scoped_refptr<network::SharedURLLoaderFactory> GetSigninURLLoaderFactory() {
   return signin_partition->GetURLLoaderFactoryForBrowserProcess();
 }
 
-void SaveSyncPasswordDataToProfile(const UserContext& user_context,
-                                   Profile* profile) {
-  DCHECK(user_context.GetSyncPasswordData().has_value());
-  password_manager::PasswordReuseManager* reuse_manager =
-      PasswordReuseManagerFactory::GetForProfile(profile);
-
+void SaveSyncPasswordDataToProfile(
+    const UserContext& user_context,
+    password_manager::PasswordReuseManager* reuse_manager) {
+  CHECK(user_context.GetSyncPasswordData().has_value(),
+        base::NotFatalUntil::M161);
   if (reuse_manager) {
     reuse_manager->SaveSyncPasswordHash(
         user_context.GetSyncPasswordData().value(),

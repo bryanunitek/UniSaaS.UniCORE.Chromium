@@ -1,3 +1,4 @@
+  // Print Preview CrOS was removed.
 // Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -111,10 +112,7 @@ enum class SystemWebAppType {
   // Contact: assistive-eng@google.com
   VC_BACKGROUND = 25,
 
-  // CrOS implementation of the print preview surface.
-  // Source: //ash/webui/print_preview_cros/
-  // Contact: cros-device-enablement@google.com
-  PRINT_PREVIEW_CROS = 26,
+  // PRINT_PREVIEW_CROS = 26,
 
   // Boca implementation.
   // Source: //ash/webui/boca_ui/
@@ -146,9 +144,10 @@ enum class SystemWebAppType {
 
   // When adding a new System App, remember to:
   //
-  // 1. Add a corresponding histogram suffix in WebAppSystemAppInternalName
-  //    (histogram_suffixes_list.xml). The suffix name should match the App's
-  //    |internal_name|. This is for reporting per-app install results.
+  // 1. Add a corresponding variant to Webapp.InstallResult.{Type} in
+  //    tools/metrics/histograms/metadata/webapps/histograms.xml. The variant
+  //    name should match "System.Apps." + the App's |internal_name|. This is
+  //    for reporting per-app install results.
   //
   // 2. Add a corresponding proto enum entry (with the same numerical value) to
   //    SystemWebAppDataProto in system_web_app_data.proto. This is for

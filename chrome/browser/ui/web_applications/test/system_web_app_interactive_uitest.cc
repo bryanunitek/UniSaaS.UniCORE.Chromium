@@ -28,7 +28,6 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/app_list/app_service/app_service_app_item.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -42,9 +41,11 @@
 #include "chrome/browser/ui/ash/login/user_adding_screen.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
@@ -63,6 +64,7 @@
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/web_contents_user_data.h"
@@ -71,6 +73,8 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "ui/base/models/menu_model.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/display/screen.h"
 #include "ui/wm/public/activation_change_observer.h"
 #include "ui/wm/public/activation_client.h"
@@ -97,11 +101,11 @@ class SystemWebAppLinkCaptureBrowserTest
   }
 
  protected:
-  Browser* CreateIncognitoBrowser() {
-    Browser* incognito = Browser::Create(
-        Browser::CreateParams(browser()->GetProfile()->GetPrimaryOTRProfile(
-                                  /*create_if_needed=*/true),
-                              true));
+  BrowserWindowInterface* CreateIncognitoBrowser() {
+    BrowserWindowInterface* incognito = CreateBrowserWindow(
+        BrowserWindowCreateParams(browser()->GetProfile()->GetPrimaryOTRProfile(
+                                      /*create_if_needed=*/true),
+                                  /*from_user_gesture=*/true));
 
     auto* contents =
         chrome::AddSelectedTabWithURL(incognito, GURL(url::kAboutBlankURL),
@@ -128,11 +132,10 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest,
   ash::BrowserDelegate* app_browser_delegate = FindSystemWebAppBrowser(
       browser()->GetProfile(), GetAppType(), ash::BrowserType::kApp);
   ASSERT_TRUE(app_browser_delegate);
-  Browser* app_browser =
-      app_browser_delegate->GetBrowser().GetBrowserForMigrationOnly();
+  BrowserWindowInterface* app_browser = &app_browser_delegate->GetBrowser();
   ui_test_utils::BrowserActivationWaiter(app_browser).WaitForActivation();
   EXPECT_EQ(2U, GlobalBrowserCollection::GetInstance()->GetSize());
-  EXPECT_EQ(Browser::TYPE_APP, app_browser->type());
+  EXPECT_EQ(BrowserWindowInterface::TYPE_APP, app_browser->GetType());
   EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
                    ->ShouldShowCustomTabBar());
 }
@@ -152,11 +155,10 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest, OmniboxPasteAndGo) {
   ash::BrowserDelegate* app_browser_delegate = FindSystemWebAppBrowser(
       browser()->GetProfile(), GetAppType(), ash::BrowserType::kApp);
   ASSERT_TRUE(app_browser_delegate);
-  Browser* app_browser =
-      app_browser_delegate->GetBrowser().GetBrowserForMigrationOnly();
+  BrowserWindowInterface* app_browser = &app_browser_delegate->GetBrowser();
   ui_test_utils::BrowserActivationWaiter(app_browser).WaitForActivation();
   EXPECT_EQ(2U, GlobalBrowserCollection::GetInstance()->GetSize());
-  EXPECT_EQ(Browser::TYPE_APP, app_browser->type());
+  EXPECT_EQ(BrowserWindowInterface::TYPE_APP, app_browser->GetType());
   EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
                    ->ShouldShowCustomTabBar());
 }
@@ -196,12 +198,11 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest, AnchorLinkClick) {
       ash::BrowserDelegate* app_browser_delegate = FindSystemWebAppBrowser(
           browser()->GetProfile(), GetAppType(), ash::BrowserType::kApp);
       ASSERT_TRUE(app_browser_delegate);
-      Browser* app_browser =
-          app_browser_delegate->GetBrowser().GetBrowserForMigrationOnly();
+      BrowserWindowInterface* app_browser = &app_browser_delegate->GetBrowser();
       ui_test_utils::BrowserActivationWaiter(app_browser).WaitForActivation();
       EXPECT_EQ(1 + starting_browser_count,
                 GlobalBrowserCollection::GetInstance()->GetSize());
-      EXPECT_EQ(Browser::TYPE_APP, app_browser->type());
+      EXPECT_EQ(BrowserWindowInterface::TYPE_APP, app_browser->GetType());
       EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
                        ->ShouldShowCustomTabBar());
       ui_test_utils::BrowserDestroyedObserver destroyed_observer(app_browser);
@@ -245,11 +246,10 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest,
   ash::BrowserDelegate* app_browser_delegate = FindSystemWebAppBrowser(
       browser()->GetProfile(), GetAppType(), ash::BrowserType::kApp);
   ASSERT_TRUE(app_browser_delegate);
-  Browser* app_browser =
-      app_browser_delegate->GetBrowser().GetBrowserForMigrationOnly();
+  BrowserWindowInterface* app_browser = &app_browser_delegate->GetBrowser();
   ui_test_utils::BrowserActivationWaiter(app_browser).WaitForActivation();
   EXPECT_EQ(2U, GlobalBrowserCollection::GetInstance()->GetSize());
-  EXPECT_EQ(Browser::TYPE_APP, app_browser->type());
+  EXPECT_EQ(BrowserWindowInterface::TYPE_APP, app_browser->GetType());
   EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
                    ->ShouldShowCustomTabBar());
   ui_test_utils::BrowserDestroyedObserver destroyed_observer(app_browser);
@@ -294,11 +294,10 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest,
   ash::BrowserDelegate* app_browser_delegate = FindSystemWebAppBrowser(
       browser()->GetProfile(), GetAppType(), ash::BrowserType::kApp);
   ASSERT_TRUE(app_browser_delegate);
-  Browser* app_browser =
-      app_browser_delegate->GetBrowser().GetBrowserForMigrationOnly();
+  BrowserWindowInterface* app_browser = &app_browser_delegate->GetBrowser();
   ui_test_utils::BrowserActivationWaiter(app_browser).WaitForActivation();
   EXPECT_EQ(2U, GlobalBrowserCollection::GetInstance()->GetSize());
-  EXPECT_EQ(Browser::TYPE_APP, app_browser->type());
+  EXPECT_EQ(BrowserWindowInterface::TYPE_APP, app_browser->GetType());
   EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
                    ->ShouldShowCustomTabBar());
   ui_test_utils::BrowserDestroyedObserver destroyed_observer(app_browser);
@@ -330,12 +329,11 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest, ChangeLocationHref) {
   ash::BrowserDelegate* app_browser_delegate = FindSystemWebAppBrowser(
       browser()->GetProfile(), GetAppType(), ash::BrowserType::kApp);
   ASSERT_TRUE(app_browser_delegate);
-  Browser* app_browser =
-      app_browser_delegate->GetBrowser().GetBrowserForMigrationOnly();
+  BrowserWindowInterface* app_browser = &app_browser_delegate->GetBrowser();
   ui_test_utils::BrowserActivationWaiter(app_browser).WaitForActivation();
   EXPECT_EQ(1 + starting_browser_count,
             GlobalBrowserCollection::GetInstance()->GetSize());
-  EXPECT_EQ(Browser::TYPE_APP, app_browser->type());
+  EXPECT_EQ(BrowserWindowInterface::TYPE_APP, app_browser->GetType());
   EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
                    ->ShouldShowCustomTabBar());
 
@@ -370,12 +368,11 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest, WindowOpen) {
       ash::BrowserDelegate* app_browser_delegate = FindSystemWebAppBrowser(
           browser()->GetProfile(), GetAppType(), ash::BrowserType::kApp);
       ASSERT_TRUE(app_browser_delegate);
-      Browser* app_browser =
-          app_browser_delegate->GetBrowser().GetBrowserForMigrationOnly();
+      BrowserWindowInterface* app_browser = &app_browser_delegate->GetBrowser();
       ui_test_utils::BrowserActivationWaiter(app_browser).WaitForActivation();
       EXPECT_EQ(1 + starting_browser_count,
                 GlobalBrowserCollection::GetInstance()->GetSize());
-      EXPECT_EQ(Browser::TYPE_APP, app_browser->type());
+      EXPECT_EQ(BrowserWindowInterface::TYPE_APP, app_browser->GetType());
       EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
                        ->ShouldShowCustomTabBar());
       ui_test_utils::BrowserDestroyedObserver destroyed_observer(app_browser);
@@ -413,14 +410,13 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest,
       ash::BrowserDelegate* app_browser_delegate = FindSystemWebAppBrowser(
           browser()->GetProfile(), GetAppType(), ash::BrowserType::kApp);
       ASSERT_TRUE(app_browser_delegate);
-      Browser* app_browser =
-          app_browser_delegate->GetBrowser().GetBrowserForMigrationOnly();
+      BrowserWindowInterface* app_browser = &app_browser_delegate->GetBrowser();
       ui_test_utils::BrowserActivationWaiter(app_browser).WaitForActivation();
 
       // There should be three browsers: the default one (new tab page), the
       // initiating system app, the link capturing system app.
       EXPECT_EQ(3U, GlobalBrowserCollection::GetInstance()->GetSize());
-      EXPECT_EQ(Browser::TYPE_APP, app_browser->type());
+      EXPECT_EQ(BrowserWindowInterface::TYPE_APP, app_browser->GetType());
       EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
                        ->ShouldShowCustomTabBar());
       ui_test_utils::BrowserDestroyedObserver destroyed_observer(app_browser);
@@ -438,8 +434,7 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest,
                        CaptureToOpenedWindowAndNavigateURL) {
   WaitForTestSystemAppInstall();
 
-  Browser* app_browser;
-  content::WebContents* web_contents = LaunchApp(GetAppType(), &app_browser);
+  content::WebContents* web_contents = LaunchApp(GetAppType());
 
   GURL kInitiatingChromeUrl = GURL(chrome::kChromeUIAboutURL);
   NavigateViaLinkClickToURLAndWait(browser(), kInitiatingChromeUrl);
@@ -460,9 +455,7 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest,
                          kPageURL)));
   observer.Wait();
 
-  EXPECT_EQ(kPageURL, app_browser->tab_strip_model()
-                          ->GetActiveWebContents()
-                          ->GetLastCommittedURL());
+  EXPECT_EQ(kPageURL, web_contents->GetLastCommittedURL());
 }
 
 IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest,
@@ -470,7 +463,7 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest,
   WaitForTestSystemAppInstall();
   GURL start_url = GetStartUrl();
 
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   ui_test_utils::BrowserDestroyedObserver destroyed_observer(browser());
   browser()->GetWindow()->Close();
   destroyed_observer.Wait();
@@ -489,11 +482,10 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLinkCaptureBrowserTest,
       incognito_browser->GetProfile()->GetOriginalProfile(), GetAppType(),
       ash::BrowserType::kApp);
   ASSERT_TRUE(app_browser_delegate);
-  Browser* app_browser =
-      app_browser_delegate->GetBrowser().GetBrowserForMigrationOnly();
+  BrowserWindowInterface* app_browser = &app_browser_delegate->GetBrowser();
   ui_test_utils::BrowserActivationWaiter(app_browser).WaitForActivation();
   EXPECT_EQ(2U, GlobalBrowserCollection::GetInstance()->GetSize());
-  EXPECT_EQ(Browser::TYPE_APP, app_browser->type());
+  EXPECT_EQ(BrowserWindowInterface::TYPE_APP, app_browser->GetType());
   EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
                    ->ShouldShowCustomTabBar());
 }
@@ -514,10 +506,11 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppManagerWindowSizeControlsTest,
 
   content::TestNavigationObserver observer(GetStartUrl());
   observer.StartWatchingNewWebContents();
-  Browser* app_browser;
-  LaunchApp(GetAppType(), &app_browser);
+  content::WebContents* web_contents = LaunchApp(GetAppType());
+  BrowserWindowInterface* app_browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
 
-  EXPECT_FALSE(app_browser->create_params().can_resize);
+  EXPECT_FALSE(BrowserInitState::From(app_browser)->create_params().can_resize);
 }
 
 IN_PROC_BROWSER_TEST_P(SystemWebAppManagerWindowSizeControlsTest,
@@ -526,10 +519,12 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppManagerWindowSizeControlsTest,
 
   content::TestNavigationObserver observer(GetStartUrl());
   observer.StartWatchingNewWebContents();
-  Browser* app_browser;
-  LaunchApp(GetAppType(), &app_browser);
+  content::WebContents* web_contents = LaunchApp(GetAppType());
+  BrowserWindowInterface* app_browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
 
-  EXPECT_FALSE(app_browser->create_params().can_maximize);
+  EXPECT_FALSE(
+      BrowserInitState::From(app_browser)->create_params().can_maximize);
 }
 
 // Use LoginManagerTest here instead of SystemWebAppManagerBrowserTest, because
@@ -570,12 +565,12 @@ class SystemWebAppManagerMultiDesktopLaunchBrowserTest
     return *app_id;
   }
 
-  Browser* LaunchAppOnProfile(Profile* profile) {
+  BrowserWindowInterface* LaunchAppOnProfile(Profile* profile) {
     webapps::AppId app_id = GetAppId(profile);
 
     auto launch_params = apps::AppLaunchParams(
         app_id, apps::LaunchContainer::kLaunchContainerWindow,
-        WindowOpenDisposition::CURRENT_TAB,
+        WindowOpenDisposition::kCurrentTab,
         apps::LaunchSource::kFromAppListGrid);
 
     content::TestNavigationObserver navigation_observer(
@@ -599,8 +594,7 @@ class SystemWebAppManagerMultiDesktopLaunchBrowserTest
     if (!swa_browser_delegate) {
       return nullptr;
     }
-    Browser* swa_browser =
-        swa_browser_delegate->GetBrowser().GetBrowserForMigrationOnly();
+    BrowserWindowInterface* swa_browser = &swa_browser_delegate->GetBrowser();
     ui_test_utils::BrowserActivationWaiter(swa_browser).WaitForActivation();
 
     return swa_browser;
@@ -650,14 +644,14 @@ IN_PROC_BROWSER_TEST_F(SystemWebAppManagerMultiDesktopLaunchBrowserTest,
 
   // Launch the app from user 2 profile. The window should be on user 1
   // (the active) desktop.
-  Browser* browser2 = LaunchAppOnProfile(profile2);
+  BrowserWindowInterface* browser2 = LaunchAppOnProfile(profile2);
   EXPECT_TRUE(multi_user_window_manager->IsWindowOnDesktopOfUser(
       browser2->GetWindow()->GetNativeWindow(), account_id1_));
 
   // Launch the app from user 1 profile. The window should be on user 1 (the
   // active) desktop. And there should be two different browser windows
   // (for each profile).
-  Browser* browser1 = LaunchAppOnProfile(profile1);
+  BrowserWindowInterface* browser1 = LaunchAppOnProfile(profile1);
   EXPECT_TRUE(multi_user_window_manager->IsWindowOnDesktopOfUser(
       browser1->GetWindow()->GetNativeWindow(), account_id1_));
 
@@ -667,7 +661,7 @@ IN_PROC_BROWSER_TEST_F(SystemWebAppManagerMultiDesktopLaunchBrowserTest,
   // Switch to user 2, then launch the app. SWAs reuse their window, so it
   // should bring `browser2` to user 2 (the active) desktop.
   user_manager->SwitchActiveUser(account_id2_);
-  Browser* browser2_relaunch = LaunchAppOnProfile(profile2);
+  BrowserWindowInterface* browser2_relaunch = LaunchAppOnProfile(profile2);
 
   EXPECT_EQ(browser2, browser2_relaunch);
   EXPECT_TRUE(multi_user_window_manager->IsWindowOnDesktopOfUser(
@@ -715,7 +709,7 @@ IN_PROC_BROWSER_TEST_F(SystemWebAppManagerMultiDesktopLaunchBrowserTest,
     provider->scheduler().LaunchAppWithCustomParams(
         apps::AppLaunchParams(app_id2,
                               apps::LaunchContainer::kLaunchContainerWindow,
-                              WindowOpenDisposition::CURRENT_TAB,
+                              WindowOpenDisposition::kCurrentTab,
                               apps::LaunchSource::kFromAppListGrid),
         future.GetCallback());
     EXPECT_FALSE(future.template Get<1>().get());
@@ -731,7 +725,7 @@ IN_PROC_BROWSER_TEST_F(SystemWebAppManagerMultiDesktopLaunchBrowserTest,
     provider->scheduler().LaunchAppWithCustomParams(
         apps::AppLaunchParams(app_id1,
                               apps::LaunchContainer::kLaunchContainerWindow,
-                              WindowOpenDisposition::CURRENT_TAB,
+                              WindowOpenDisposition::kCurrentTab,
                               apps::LaunchSource::kFromAppListGrid),
         future.GetCallback());
     EXPECT_TRUE(future.template Get<1>().get());
@@ -743,7 +737,7 @@ using SystemWebAppLaunchProfileBrowserTest =
 
 IN_PROC_BROWSER_TEST_P(SystemWebAppLaunchProfileBrowserTest,
                        LaunchFromNormalSessionIncognitoProfile) {
-  Profile* startup_profile = browser()->profile();
+  Profile* startup_profile = browser()->GetProfile();
   ASSERT_TRUE(!startup_profile->IsOffTheRecord());
 
   WaitForTestSystemAppInstall();
@@ -793,7 +787,7 @@ using SystemWebAppLaunchProfileGuestSessionBrowserTest =
 IN_PROC_BROWSER_TEST_P(SystemWebAppLaunchProfileGuestSessionBrowserTest,
                        LaunchFromGuestSessionOriginalProfile) {
   // We should start into the guest session browsing profile.
-  Profile* startup_profile = browser()->profile();
+  Profile* startup_profile = browser()->GetProfile();
   ASSERT_TRUE(startup_profile->IsGuestSession());
   ASSERT_TRUE(startup_profile->IsPrimaryOTRProfile());
 
@@ -801,7 +795,7 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLaunchProfileGuestSessionBrowserTest,
 
   // We typically don't get the original profile as an argument, but it is a
   // valid input to LaunchSystemWebAppAsync.
-  Profile* original_profile = browser()->profile()->GetOriginalProfile();
+  Profile* original_profile = browser()->GetProfile()->GetOriginalProfile();
 
   content::TestNavigationObserver observer(GetStartUrl());
   observer.StartWatchingNewWebContents();
@@ -815,7 +809,7 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppLaunchProfileGuestSessionBrowserTest,
 IN_PROC_BROWSER_TEST_P(SystemWebAppLaunchProfileGuestSessionBrowserTest,
                        LaunchFromGuestSessionPrimaryOTRProfile) {
   // We should start into the guest session browsing profile.
-  Profile* startup_profile = browser()->profile();
+  Profile* startup_profile = browser()->GetProfile();
   ASSERT_TRUE(startup_profile->IsGuestSession());
   ASSERT_TRUE(startup_profile->IsPrimaryOTRProfile());
 
@@ -909,18 +903,19 @@ class SystemWebAppManagerCloseFromScriptsTest
 IN_PROC_BROWSER_TEST_P(SystemWebAppManagerCloseFromScriptsTest, WindowClose) {
   WaitForTestSystemAppInstall();
 
-  Browser* app_browser;
-  LaunchApp(GetAppType(), &app_browser);
+  content::WebContents* web_contents = LaunchApp(GetAppType());
+  BrowserWindowInterface* app_browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
 
   const GURL kPageURL = GetStartUrl().Resolve("/page2.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, kPageURL));
-  EXPECT_EQ(kPageURL, app_browser->tab_strip_model()
+  EXPECT_EQ(kPageURL, app_browser->GetTabStripModel()
                           ->GetActiveWebContents()
                           ->GetLastCommittedURL());
 
   ui_test_utils::BrowserDestroyedObserver observer(app_browser);
   EXPECT_TRUE(
-      content::ExecJs(app_browser->tab_strip_model()->GetActiveWebContents(),
+      content::ExecJs(app_browser->GetTabStripModel()->GetActiveWebContents(),
                       "window.close();"));
 
   observer.Wait();
@@ -942,22 +937,23 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppManagerShouldNotCloseFromScriptsTest,
                        ShouldNotCloseWindow) {
   WaitForTestSystemAppInstall();
 
-  Browser* app_browser;
-  LaunchApp(GetAppType(), &app_browser);
+  content::WebContents* web_contents = LaunchApp(GetAppType());
+  BrowserWindowInterface* app_browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
 
   const GURL kPageURL = GetStartUrl().Resolve("/page2.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, kPageURL));
-  EXPECT_EQ(kPageURL, app_browser->tab_strip_model()
+  EXPECT_EQ(kPageURL, app_browser->GetTabStripModel()
                           ->GetActiveWebContents()
                           ->GetLastCommittedURL());
 
   content::WebContentsConsoleObserver console_observer(
-      app_browser->tab_strip_model()->GetActiveWebContents());
+      app_browser->GetTabStripModel()->GetActiveWebContents());
   console_observer.SetPattern(
       "Scripts may close only the windows that were opened by them.");
 
   EXPECT_TRUE(
-      content::ExecJs(app_browser->tab_strip_model()->GetActiveWebContents(),
+      content::ExecJs(app_browser->GetTabStripModel()->GetActiveWebContents(),
                       "window.close();"));
 
   ASSERT_TRUE(console_observer.Wait());
@@ -979,7 +975,7 @@ class SystemWebAppNewWindowMenuItemTest
   }
 
   std::unique_ptr<AppServiceAppItem> GetAppServiceAppItem() {
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
     std::unique_ptr<AppServiceAppItem> item;
     auto app_id = GetManager().GetAppIdForSystemApp(GetAppType()).value();
     apps::AppServiceProxyFactory::GetForProfile(profile)

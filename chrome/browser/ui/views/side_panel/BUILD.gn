@@ -13,15 +13,8 @@ source_set("side_panel") {
     "bookmarks/bookmarks_side_panel_coordinator.h",
     "comments/comments_side_panel_coordinator.cc",
     "comments/comments_side_panel_coordinator.h",
-    "customize_chrome/customize_chrome_utils.cc",
-    "customize_chrome/customize_chrome_utils.h",
-    "customize_chrome/side_panel_controller_views.cc",
-    "customize_chrome/side_panel_controller_views.h",
-    "extensions/extension_side_panel_coordinator.cc",
-    "extensions/extension_side_panel_coordinator.h",
-    "extensions/extension_side_panel_manager.cc",
-    "extensions/extension_side_panel_manager.h",
-    "extensions/extension_side_panel_utils.cc",
+    "extensions/extension_side_panel_action_item_util.cc",
+    "extensions/extension_side_panel_action_item_util.h",
     "history/history_side_panel_coordinator.cc",
     "history/history_side_panel_coordinator.h",
     "history_clusters/history_clusters_side_panel_controller.cc",
@@ -30,8 +23,6 @@ source_set("side_panel") {
     "history_clusters/history_clusters_side_panel_controller_utils.h",
     "history_clusters/history_clusters_side_panel_coordinator.cc",
     "history_clusters/history_clusters_side_panel_coordinator.h",
-    "history_clusters/history_clusters_side_panel_utils.cc",
-    "history_clusters/history_clusters_side_panel_utils.h",
     "history_clusters/history_clusters_tab_helper.cc",
     "history_clusters/history_clusters_tab_helper.h",
     "reading_list/read_later_side_panel_web_view.cc",
@@ -40,6 +31,8 @@ source_set("side_panel") {
     "reading_list/reading_list_side_panel_coordinator.h",
     "side_panel.cc",
     "side_panel.h",
+    "side_panel_animation_content_view.cc",
+    "side_panel_animation_content_view.h",
     "side_panel_coordinator.cc",
     "side_panel_coordinator.h",
     "side_panel_header.cc",
@@ -61,28 +54,27 @@ source_set("side_panel") {
   ]
   public_deps = [
     "//base",
-    "//chrome/browser:browser_public_dependencies",
     "//chrome/browser:primitives",
     "//chrome/browser/history_clusters",
     "//chrome/browser/optimization_guide",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui/actions:actions_headers",
     "//chrome/browser/ui/color:color_headers",
-    "//chrome/browser/ui/customize_chrome",
     "//chrome/browser/ui/tabs:tab_model",
     "//chrome/browser/ui/toolbar/pinned_toolbar",
     "//chrome/browser/ui/webui/new_tab_footer",
-    "//chrome/browser/ui/webui/side_panel/customize_chrome",
     "//chrome/browser/ui/webui/side_panel/reading_list",
     "//chrome/common",
     "//chrome/common/read_anything:mojo_bindings",
     "//components/omnibox/browser",
+    "//components/performance_manager",
     "//components/prefs",
     "//components/search_engines",
     "//content/public/browser",
     "//ui/actions:actions_headers",
     "//ui/base",
     "//ui/base/mojom:ui_base_types",
+    "//ui/base/unowned_user_data",
     "//ui/color:color_headers",
     "//ui/gfx",
     "//ui/gfx/animation",
@@ -119,6 +111,7 @@ source_set("side_panel") {
     "//chrome/browser/themes",
     "//chrome/browser/ui:browser_actions",
     "//chrome/browser/ui:browser_element_identifiers",
+    "//chrome/browser/ui:browser_window_header",
     "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/actions",
     "//chrome/browser/ui/animation",
@@ -132,12 +125,13 @@ source_set("side_panel") {
     "//chrome/browser/ui/user_education",
     "//chrome/browser/ui/views:layout_provider",
     "//chrome/browser/ui/views/animations",
+    "//chrome/browser/ui/views/frame:browser_view_header",
+    "//chrome/browser/ui/views/frame:themed_background",
     "//chrome/browser/ui/views/interaction",
     "//chrome/browser/ui/views/toolbar",
     "//chrome/browser/ui/webui:webui_util",
     "//chrome/browser/ui/webui/side_panel/bookmarks",
     "//chrome/browser/ui/webui/side_panel/comments",
-    "//chrome/browser/ui/webui/side_panel/customize_chrome:customize_chrome_ui",
     "//chrome/browser/ui/webui/side_panel/history",
     "//chrome/browser/ui/webui/side_panel/history_clusters",
     "//chrome/browser/ui/webui/side_panel/tabs_from_other_devices",
@@ -145,7 +139,6 @@ source_set("side_panel") {
     "//chrome/browser/ui/webui_browser:headers",
     "//chrome/common",
     "//chrome/common:constants",
-    "//components/accessibility:reading",
     "//components/download/content/factory",
     "//components/download/content/public",
     "//components/favicon_base",
@@ -183,18 +176,84 @@ source_set("side_panel") {
     "//ui/webui",
   ]
 
-  if (enable_extensions) {
+  if (enable_extensions_core) {
     public_deps += [
       "//extensions/browser",
       "//extensions/common",
     ]
-    deps += [ "//chrome/common/extensions/api" ]
+    deps += [
+      "//chrome/browser/ui/views/extensions:extensions_container_views",
+      "//chrome/common/extensions/api",
+    ]
   }
 
-  allow_circular_includes_from = [
-    "//chrome/browser/ui/views/toolbar",
-    "//chrome/browser/ui/customize_chrome",
-    "//chrome/browser/ui/side_panel:side_panel",
-    "//chrome/browser/glic",
+  allow_circular_includes_from = [ "//chrome/browser/glic" ]
+}
+
+source_set("browser_tests") {
+  testonly = true
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+  sources = [
+    "extensions/extension_side_panel_browsertest.cc",
+    "history_clusters/history_clusters_side_panel_coordinator_browsertest.cc",
+    "side_panel_coordinator_browsertest.cc",
+    "side_panel_web_ui_view_browsertest.cc",
+    "tabs_from_other_devices/tabs_from_other_devices_side_panel_browsertest.cc",
+  ]
+  deps = [
+    ":side_panel",
+    "//chrome/browser/metrics/critical_user_journeys",
+    "//chrome/browser/ui:browser_actions",
+    "//chrome/browser/ui:browser_tabstrip",
+    "//chrome/browser/ui:browser_window_header",
+    "//chrome/browser/ui/animation",
+    "//chrome/browser/ui/extensions:test_support",
+    "//chrome/browser/ui/side_panel:side_panel_views_dependent",
+    "//chrome/browser/ui/views/animations",
+    "//chrome/browser/ui/views/extensions:extensions_toolbar_button",
+    "//chrome/browser/ui/views/extensions:extensions_toolbar_desktop",
+    "//chrome/browser/ui/views/frame:browser_view_header",
+    "//chrome/browser/ui/views/frame:browser_view_layout",
+    "//chrome/test:test_support",
+    "//chrome/test:test_support_ui",
+    "//components/contextual_tasks/public:feature_list",
+    "//testing/gtest",
+  ]
+}
+
+source_set("interactive_ui_tests") {
+  testonly = true
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+  sources = [
+    "comments/comments_side_panel_coordinator_interactive_uitest.cc",
+    "extensions/extension_side_panel_interactive_uitest.cc",
+    "side_panel_interactive_uitest.cc",
+  ]
+  deps = [
+    ":side_panel",
+    "//chrome/browser/data_sharing",
+    "//chrome/browser/tab_group_sync:factories",
+    "//chrome/browser/ui:browser_actions",
+    "//chrome/browser/ui/read_anything:prefs",
+    "//chrome/browser/ui/side_panel:side_panel_views_dependent",
+    "//chrome/browser/ui/views/frame:browser_view_header",
+    "//chrome/test:test_support",
+    "//chrome/test:test_support_ui",
+    "//chrome/test/user_education",
+    "//testing/gtest",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "tabs_from_other_devices/tabs_from_other_devices_side_panel_metrics_unittest.cc" ]
+  deps = [
+    ":side_panel",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/profiles:profile",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//testing/gtest",
   ]
 }

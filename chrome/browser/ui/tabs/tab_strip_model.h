@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -17,15 +18,20 @@
 
 #include "base/containers/span.h"
 #include "base/feature_list.h"
+#include "base/functional/function_ref.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
+#include "chrome/browser/tab_list/constants.h"
 #include "chrome/browser/tab_list/tab_removed_reason.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_selection_state.h"
 #include "chrome/browser/ui/tabs/tab_strip_scrubbing_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
@@ -33,6 +39,8 @@
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tab_groups/tab_group_visual_data.h"
 #include "components/tabs/public/tab_collection.h"
+#include "components/tabs/public/tab_collection_types.h"
+#include "components/tabs/public/tab_context_menu_command.h"
 #include "components/tabs/public/tab_interface.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 #include "ui/base/models/list_selection_model.h"
@@ -141,8 +149,8 @@ struct DetachedTab {
   TabRemovedReason remove_reason;
   tabs::TabInterface::DetachReason tab_detach_reason;
 
-  // The |contents| associated optional SessionID, used as key for
-  // ClosedTabCache. We only cache |contents| if |remove_reason| is kCached.
+  // The `contents` associated optional SessionID, used as key for
+  // ClosedTabCache. We only cache `contents` if `remove_reason` is kCached.
   //
   // TODO(crbug.com/377537302): The ClosedTabCache feature is gone, but it's
   // unclear if the session ID is needed for other things as well.
@@ -192,15 +200,17 @@ class ScopedTabStripModalUI {
 class TabStripModel {
  public:
   using TabIterator = tabs::TabCollection::TabIterator;
+  using iterator = TabIterator;
+  using const_iterator = TabIterator;
+  using reverse_iterator = std::reverse_iterator<TabIterator>;
+  using const_reverse_iterator = std::reverse_iterator<TabIterator>;
 
-  // TODO(crbug.com/40881446): Remove this, and use std::optional<size_t> (or at
-  // least std::optional<int>) in its place.
-  static constexpr int kNoTab = -1;
+  static constexpr int kNoTab = tab_list::kNoTabIndex;
 
   TabStripModel() = delete;
 
   // Construct a TabStripModel with a delegate to help it do certain things
-  // (see the TabStripModelDelegate documentation). |delegate| cannot be NULL.
+  // (see the TabStripModelDelegate documentation). `delegate` cannot be NULL.
   // the TabGroupModelFactory can be replaced with a nullptr to set the
   // group_model to null in cases where groups are not supported.
   explicit TabStripModel(TabStripModelDelegate* delegate,
@@ -265,13 +275,13 @@ class TabStripModel {
   void AppendTab(std::unique_ptr<tabs::TabModel> tab, bool foreground);
 
   // Adds the specified WebContents at the specified location.
-  // |add_types| is a bitmask of AddTabTypes; see it for details.
+  // `add_types` is a bitmask of AddTabTypes; see it for details.
   //
   // All append/insert methods end up in this method.
   //
   // NOTE: adding a tab using this method does NOT query the order controller,
   // as such the ADD_FORCE_INDEX AddTabTypes is meaningless here. The only time
-  // the |index| is changed is if using the index would result in breaking the
+  // the `index` is changed is if using the index would result in breaking the
   // constraint that all pinned tabs occur before non-pinned tabs. It returns
   // the index the web contents is actually inserted to. See also
   // AddWebContents.
@@ -315,21 +325,22 @@ class TabStripModel {
       bool pinned,
       std::optional<tab_groups::TabGroupId> group_id = std::nullopt);
 
+  // Closes the specified WebContents. This causes the WebContents to be
+  // destroyed, but it may not happen immediately.
+  // `close_types` is a bitmask of CloseTypes. Prefer this over
+  // CloseWebContentsAt() when a WebContents* is already available.
+  void CloseWebContents(content::WebContents* contents, uint32_t close_types);
+
   // Closes the WebContents at the specified index. This causes the
   // WebContents to be destroyed, but it may not happen immediately.
-  // |close_types| is a bitmask of CloseTypes.
-  // TODO(crbug.com/392950857): Currently many call sites of CloseWebContentsAt
-  // convert a tab/webcontents to an index, which gets converted back to a
-  // webcontents within this function. Provide a CloseWebContents function that
-  // directly closes a web contents so that we don't have to convert back and
-  // forth.
+  // `close_types` is a bitmask of CloseTypes.
   void CloseWebContentsAt(int index, uint32_t close_types);
 
-  // Discards the WebContents at |index| and replaces it with |new_contents|.
-  // The WebContents that was at |index| is returned and its ownership returns
+  // Discards `contents` and replaces it with `new_contents`.
+  // The WebContents that was discarded is returned and its ownership returns
   // to the caller.
-  std::unique_ptr<content::WebContents> DiscardWebContentsAt(
-      int index,
+  std::unique_ptr<content::WebContents> DiscardWebContents(
+      content::WebContents* contents,
       std::unique_ptr<content::WebContents> new_contents);
 
   // Detaches the tab at the specified index for reinsertion into another tab
@@ -381,7 +392,7 @@ class TabStripModel {
   // WebContents inline and sends a Moved notification instead.
   // EnsureGroupContiguity() is called after the move, so this will never result
   // in non-contiguous group (though the moved tab's group may change).
-  // If |select_after_move| is false, whatever tab was selected before the move
+  // If `select_after_move` is false, whatever tab was selected before the move
   // will still be selected, but its index may have incremented or decremented
   // one slot. It returns the index the web contents is actually moved to.
   int MoveWebContentsAt(int index, int to_position, bool select_after_move);
@@ -395,7 +406,7 @@ class TabStripModel {
                         bool select_after_move,
                         std::optional<tab_groups::TabGroupId> group);
 
-  // Moves the selected tabs to |index|. |index| is treated as if the tab strip
+  // Moves the selected tabs to `index`. `index` is treated as if the tab strip
   // did not contain any of the selected tabs. For example, if the tabstrip
   // contains [A b c D E f] (upper case selected) and this is invoked with 1 the
   // result is [b A D E c f].
@@ -445,40 +456,44 @@ class TabStripModel {
   int GetIndexOfWebContents(const content::WebContents* contents) const;
 
   // Notify any observers that the tab has changed in some way. See
-  // TabChangeType for details of |change_type|.'
-  void NotifyTabChanged(tabs::TabInterface* tab, TabChangeType change_type);
+  // TabChangeType for details of `change_type`.
+  void NotifyTabChanged(tabs::TabInterface* tab,
+                        TabChangeType change_type);
 
-  // Notify any observers that the WebContents at the specified index has
-  // changed in some way. See TabChangeType for details of |change_type|.
-  void UpdateWebContentsStateAt(int index, TabChangeType change_type);
+  // Notify any observers that the WebContents has changed in some way. See
+  // TabChangeType for details of `change_type`.
+  void UpdateWebContentsState(content::WebContents* contents,
+                              TabChangeType change_type);
 
   // Cause a tab to display a UI indication to the user that it needs their
   // attention.
-  void SetTabNeedsAttentionAt(int index, bool attention);
+  void SetTabNeedsAttention(content::WebContents* contents, bool attention);
 
   // Close all tabs at once. Code can use closing_all() above to defer
   // operations that might otherwise by invoked by the flurry of detach/select
   // notifications this method causes.
   void CloseAllTabs();
 
-  // Close all tabs in the given |group| at once, but sets the focus state
-  // first.
+  // Closes all tabs in the given `group`. If the group is focused, focus is
+  // unset before closing. If all tabs in the tabstrip are in `group`, a new
+  // fallback tab is added outside the group to prevent the browser window from
+  // closing.
   void CloseAllTabsInGroup(const tab_groups::TabGroupId& group);
 
   // Returns true if there are any WebContentses that are currently loading
   // and should be shown on the UI.
   bool TabsNeedLoadingUI() const;
 
-  // Returns the WebContents that opened the WebContents at |index|, or NULL if
+  // Returns the WebContents that opened the WebContents at `index`, or NULL if
   // there is no opener on record.
   tabs::TabInterface* GetOpenerOfTabAt(const int index) const;
 
-  // Changes the |opener| of the tab at |index|.
+  // Changes the `opener` of the tab at `index`.
   // Note: A tab must not be its own opener.
   void SetOpenerOfTabAt(int index, tabs::TabInterface* opener);
 
   // Returns the index of the last WebContents in the model opened by the
-  // specified opener, starting at |start_index|.
+  // specified opener, starting at `start_index`.
   int GetIndexOfLastWebContentsOpenedBy(const content::WebContents* opener,
                                         int start_index) const;
 
@@ -489,7 +504,7 @@ class TabStripModel {
   void TabNavigating(content::WebContents* contents,
                      ui::PageTransition transition);
 
-  // Changes the blocked state of the tab at |index|.
+  // Changes the blocked state of the tab at `index`.
   void SetTabBlocked(int index, bool blocked);
 
   // Changes the pinned state of the tab at `index`. See description above
@@ -498,7 +513,7 @@ class TabStripModel {
   // tabstrip).)
   int SetTabPinned(int index, bool pinned);
 
-  // Returns true if the tab at |index| is pinned.
+  // Returns true if the tab at `index` is pinned.
   // See description above class for details on pinned tabs.
   bool IsTabPinned(int index) const;
 
@@ -506,13 +521,13 @@ class TabStripModel {
 
   bool IsGroupCollapsed(const tab_groups::TabGroupId& group) const;
 
-  // Returns true if the tab at |index| is blocked by a tab modal dialog.
+  // Returns true if the tab at `index` is blocked by a tab modal dialog.
   bool IsTabBlocked(int index) const;
 
-  // Returns true if the tab at |index| is in the foreground.
+  // Returns true if the tab at `index` is in the foreground.
   bool IsTabInForeground(int index) const;
 
-  // Returns true if the tab corresponding to |tab| is allowed to be
+  // Returns true if the tab corresponding to `tab` is allowed to be
   // closed.
   bool IsTabClosable(const tabs::TabInterface* tab) const;
 
@@ -527,22 +542,22 @@ class TabStripModel {
 
   std::optional<split_tabs::SplitTabId> GetSplitForTab(int index) const;
 
-  // Returns the group that contains the tab at |index|, or nullopt if the tab
+  // Returns the group that contains the tab at `index`, or nullopt if the tab
   // index is invalid or not grouped.
   std::optional<tab_groups::TabGroupId> GetTabGroupForTab(int index) const;
 
-  // If a tab inserted at |index| would be within a tab group, return that
-  // group's ID. Otherwise, return nullopt. If |index| points to the first tab
+  // If a tab inserted at `index` would be within a tab group, return that
+  // group's ID. Otherwise, return nullopt. If `index` points to the first tab
   // in a group, it will return nullopt since a new tab would be either between
   // two different groups or just after a non-grouped tab.
   std::optional<tab_groups::TabGroupId> GetSurroundingTabGroup(int index) const;
 
   // Returns the index of the first tab that is not a pinned tab. This returns
-  // |count()| if all of the tabs are pinned tabs, and 0 if none of the tabs are
+  // `count()` if all of the tabs are pinned tabs, and 0 if none of the tabs are
   // pinned tabs.
   int IndexOfFirstNonPinnedTab() const;
 
-  // Extends the selection from the anchor to |index|.
+  // Extends the selection from the anchor to `index`.
   void ExtendSelectionTo(int index);
 
   // This can fail if the tabstrip is not editable.
@@ -551,15 +566,15 @@ class TabStripModel {
   // This can fail if the tabstrip is not editable.
   void DeselectTabAt(int index);
 
-  // Makes sure the tabs from the anchor to |index| are selected. This adds to
-  // the selection if there is an anchor and resets the selection to |index| if
+  // Makes sure the tabs from the anchor to `index` are selected. This adds to
+  // the selection if there is an anchor and resets the selection to `index` if
   // there is not an anchor.
   void AddSelectionFromAnchorTo(int index);
 
-  // Returns true if the tab at |index| is selected.
+  // Returns true if the tab at `index` is selected.
   bool IsTabSelected(int index) const;
 
-  // Sets the selection to match that of |source|.
+  // Sets the selection to match that of `source`.
   void SetSelectionFromModel(ui::ListSelectionModel source);
   void SetSelectionFromModel(tabs::TabStripModelSelectionState source);
 
@@ -573,14 +588,13 @@ class TabStripModel {
   // features from showing tabstrip-modal UI.
   bool CanShowModalUI() const;
   std::unique_ptr<ScopedTabStripModalUI> ShowModalUI();
-  void ForceShowingModalUIForTesting(bool showing);
 
   // Command level API /////////////////////////////////////////////////////////
 
   // Adds a WebContents at the best position in the TabStripModel given
-  // the specified insertion index, transition, etc. |add_types| is a bitmask of
+  // the specified insertion index, transition, etc. `add_types` is a bitmask of
   // AddTabTypes; see it for details. This method ends up calling into
-  // InsertWebContentsAt to do the actual insertion. Pass kNoTab for |index| to
+  // InsertWebContentsAt to do the actual insertion. Pass kNoTab for `index` to
   // append the contents to the end of the tab strip.
   void AddWebContents(
       std::unique_ptr<content::WebContents> contents,
@@ -645,9 +659,10 @@ class TabStripModel {
   // Reverses the order of tabs with `split_id`.
   void ReverseTabsInSplit(split_tabs::SplitTabId split_id);
 
-  // Create a new split view with the active tab and add the set of tabs pointed
-  // to by |indices| to it. Reorders the tabs so they are contiguous. |indices|
-  // must be sorted in ascending order.
+  // Create a new split view with the first entry in `indices` (or the active
+  // tab if there is only one element in `indices`) as the pivot index and add
+  // the rest of the tabs pointed to by `indices` to it. Reorders the tabs so
+  // they are contiguous.
   split_tabs::SplitTabId AddToNewSplit(
       std::vector<int> indices,
       split_tabs::SplitTabVisualData visual_data,
@@ -660,33 +675,34 @@ class TabStripModel {
                     const std::vector<int>& indices,
                     split_tabs::SplitTabVisualData visual_data);
 
-  // Create a new tab group and add the set of tabs pointed to be |indices| to
+  // Create a new tab group and add the set of tabs pointed to be `indices` to
   // it. Pins all of the tabs if any of them were pinned, and reorders the tabs
   // so they are contiguous and do not split an existing group in half. Returns
   // the new group. This may unsplit split tabs if they are only partially
-  // contained in |indices|. |indices| must be sorted in ascending order.
-  tab_groups::TabGroupId AddToNewGroup(const std::vector<int> indices);
+  // contained in `indices`. `indices` must be sorted in ascending order.
+  tab_groups::TabGroupId AddToNewGroup(const std::vector<int> indices,
+                                       bool is_ephemeral = false);
 
-  // Add the set of tabs pointed to by |indices| to the given tab group |group|.
+  // Add the set of tabs pointed to by `indices` to the given tab group `group`.
   // The tabs take on the pinnedness of the tabs already in the group. Tabs
   // before the group will move to the start, while tabs after the group will
-  // move to the end. If |add_to_end| is true, all tabs will instead move to
+  // move to the end. If `add_to_end` is true, all tabs will instead move to
   // the end. This may unsplit split tabs if they are only partially contained
-  // in |indices|. |indices| must be sorted in ascending order.
+  // in `indices`. `indices` must be sorted in ascending order.
   void AddToExistingGroup(const std::vector<int> indices,
                           const tab_groups::TabGroupId group,
                           const bool add_to_end = false);
 
-  // Similar to AddToExistingGroup(), but creates a group with id |group| if it
+  // Similar to AddToExistingGroup(), but creates a group with id `group` if it
   // doesn't exist. This is only intended to be called from session restore
   // code.
   void AddToGroupForRestore(const std::vector<int>& indices,
                             const tab_groups::TabGroupId& group);
 
-  // Removes the set of tabs pointed to by |indices| from the the groups they
+  // Removes the set of tabs pointed to by `indices` from the the groups they
   // are in, if any. The tabs are moved out of the group if necessary. This
-  // may unsplit split tabs if they are only partially contained in |indices|.
-  // |indices| must be sorted in ascending order.
+  // may unsplit split tabs if they are only partially contained in `indices`.
+  // `indices` must be sorted in ascending order.
   void RemoveFromGroup(const std::vector<int>& indices);
 
   // Unsplits all the tabs that are part of the split with `split_id`. The tabs
@@ -697,14 +713,36 @@ class TabStripModel {
 
   bool SupportsTabGroups() const { return group_model_.get() != nullptr; }
 
+  // When tabs are in focus selection mode, they can present as non-grouped
+  // but be part of a group architecturally.
+  bool IsEphemeralTabGroup(const tab_groups::TabGroupId& group_id) const;
+
+  // Promotes an ephemeral tab group into a permanent tab group and notifies
+  // observers that the tab group was added.
+  void PromoteEphemeralTabGroup(const tab_groups::TabGroupId& group_id);
+
   // Returns the ID of the group that is focused. If no group is focused,
   // returns nullopt.
   std::optional<tab_groups::TabGroupId> GetFocusedGroup() const;
 
-  // Sets the group to be focused.
-  void SetFocusedGroup(std::optional<tab_groups::TabGroupId> group);
+  // Enters focus mode for `group`.
+  void EnterFocusMode(const tab_groups::TabGroupId& group);
 
-  // Returns true if one or more of the tabs pointed to by |indices| are
+  // Exits focus mode, recording `reason` (if provided) in
+  // TabGroups.Focus.ExitReason. If an ephemeral (non-group focus) group was
+  // focused, it is removed, since such a group only exists to back focus mode
+  // and must never outlive it.
+  void ExitFocusMode(
+      std::optional<TabGroupFocusExitReason> reason = std::nullopt);
+
+  // Rotates the focused tab group between the unfocused state and active tab
+  // groups in the strip. Requires `features::kTabGroupsFocusing` to be enabled
+  // (CHECKs). If there are no tab groups, this is a no-op. When `forward` is
+  // true, rotates towards higher-indexed groups; otherwise rotates in reverse
+  // order.
+  void RotateFocusedGroup(bool forward);
+
+  // Returns true if one or more of the tabs pointed to by `indices` are
   // supported by read later.
   bool IsReadLaterSupportedForAny(const std::vector<int>& indices);
 
@@ -724,6 +762,9 @@ class TabStripModel {
   // Returns iterators for traversing through all the tabs in the tabstrip.
   TabIterator begin() const;
   TabIterator end() const;
+  reverse_iterator rbegin() const;
+  reverse_iterator rend() const;
+  TabIterator at(tabs::TabInterface* tab) const;
 
   // Gets the root of the tab strip model. Used to traverse the tab topology.
   const tabs::TabCollection* Root() const;
@@ -742,51 +783,16 @@ class TabStripModel {
 
   // View API //////////////////////////////////////////////////////////////////
 
-  // LINT.IfChange(TabContextMenuCommand)
-  // Context menu functions. Tab groups uses command ids following CommandLast
-  // for entries in the 'Add to existing group' submenu.
-  enum ContextMenuCommand {
-    CommandFirst,
-    CommandNewTabToRight,
-    CommandReload,
-    CommandDuplicate,
-    CommandCloseTab,
-    CommandCloseOtherTabs,
-    CommandCloseTabsToRight,
-    CommandTogglePinned,
-    CommandToggleGrouped,
-    CommandToggleSiteMuted,
-    CommandSendTabToSelf,
-    CommandAddNote,
-    CommandAddToReadLater,
-    CommandAddToNewGroup,
-    CommandAddToExistingGroup,
-    CommandAddToNewGroupFromMenuItem,
-    CommandAddToSplit,
-    CommandSwapWithActiveSplit,
-    CommandArrangeSplit,
-    CommandRemoveFromGroup,
-    CommandMoveToExistingWindow,
-    CommandMoveTabsToNewWindow,
-    CommandCopyURL,
-    CommandGoBack,
-    CommandCloseAllTabs,
-    CommandToggleVertical,
-    CommandGlicShare,
-    CommandGlicCreateNewChat,
-    CommandGlicSwitchToRecentConversation,
-    CommandGlicUnshare,
-    CommandLast
-  };
-  // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/histograms.xml:TabContextMenuCommand)
+  using ContextMenuCommand = tabs::TabContextMenuCommand;
+  using enum tabs::TabContextMenuCommand;
 
-  // Returns true if the specified command is enabled. If |context_index| is
+  // Returns true if the specified command is enabled. If `context_index` is
   // selected the response applies to all selected tabs.
   bool IsContextMenuCommandEnabled(int context_index,
                                    ContextMenuCommand command_id) const;
 
   // Performs the action associated with the specified command for the given
-  // TabStripModel index |context_index|.  If |context_index| is selected the
+  // TabStripModel index `context_index`.  If `context_index` is selected the
   // command applies to all selected tabs.
   void ExecuteContextMenuCommand(int context_index,
                                  ContextMenuCommand command_id);
@@ -815,58 +821,74 @@ class TabStripModel {
   // deletes any saved groups that are closing. When false, groups will close
   // normally but continue to be saved.
   void ExecuteCloseTabsCommand(
-      base::RepeatingCallback<std::vector<tabs::TabInterface*>()>
-          get_tabs_to_close,
+      base::RepeatingCallback<std::vector<tabs::TabHandle>()> get_tabs_to_close,
       bool delete_groups);
 
-  // Adds the tab at |context_index| to the given tab group |group|. If
-  // |context_index| is selected the command applies to all selected tabs.
+  // Adds the tab at `context_index` to the given tab group `group`. If
+  // `context_index` is selected the command applies to all selected tabs.
   void ExecuteAddToExistingGroupCommand(int context_index,
                                         const tab_groups::TabGroupId& group);
 
-  // Adds the tab at |context_index| to the browser window at |browser_index|.
-  // If |context_index| is selected the command applies to all selected tabs.
+  // Adds the tab at `context_index` to the browser window at `browser_index`.
+  // If `context_index` is selected the command applies to all selected tabs.
   void ExecuteAddToExistingWindowCommand(int context_index, int browser_index);
 
-  // Adds the tab at |context_index| to a new split with the current active tab.
-  // If |context_index| is active, the currently selected tabs are added to a
+  // Adds the tab at `context_index` to a new split with the current active tab.
+  // If `context_index` is active, the currently selected tabs are added to a
   // new split.
   void ExecuteAddToNewSplitCommand(int context_index,
                                    split_tabs::SplitTabLayout layout);
 
-  // Returns true if 'CommandToggleSiteMuted' will mute. |index| is the
-  // index supplied to |ExecuteContextMenuCommand|.
+  // Returns true if 'CommandToggleSiteMuted' will mute. `index` is the
+  // index supplied to `ExecuteContextMenuCommand`.
   bool WillContextMenuMuteSites(int index);
 
-  // Returns true if 'CommandTogglePinned' will pin. |index| is the index
-  // supplied to |ExecuteContextMenuCommand|.
+  // Sets the sound content setting for each site at the `indices`.
+  void SetSitesMuted(const std::vector<int>& indices, bool mute) const;
+
+  // Returns true if 'CommandTogglePinned' will pin. `index` is the index
+  // supplied to `ExecuteContextMenuCommand`.
   bool WillContextMenuPin(int index);
 
-  // Returns true if 'CommandToggleGrouped' will group. |index| is the index
-  // supplied to |ExecuteContextMenuCommand|.
+  // Returns true if 'CommandToggleGrouped' will group. `index` is the index
+  // supplied to `ExecuteContextMenuCommand`.
   bool WillContextMenuGroup(int index);
+
+  // Returns the group ID if all tabs at `indices` belong to the same group,
+  // or std::nullopt if they belong to different groups or any are ungrouped.
+  std::optional<tab_groups::TabGroupId> GetCommonGroupForIndices(
+      const std::vector<int>& indices) const;
+
+  // Returns true if none of the tabs at `indices` belong to any tab group.
+  bool AreAllUngrouped(const std::vector<int>& indices) const;
 
   // Convert a ContextMenuCommand into a browser command. Returns true if a
   // corresponding browser command exists, false otherwise.
   static bool ContextMenuCommandToBrowserCommand(int cmd_id, int* browser_cmd);
 
   // Returns the index of the next tab spawned by the specified tabs in
-  // `block_tab_range`.
+  // `block_tab_range`. Indices rejected by `is_eligible` are skipped, and the
+  // scan continues.
   int GetIndexOfNextWebContentsOpenedBy(
-      const gfx::Range& block_tab_range) const;
+      const gfx::Range& block_tab_range,
+      base::FunctionRef<bool(int)> is_eligible) const;
 
   // Returns the index of the next tab spawned by the opener of the specified
-  // tabs in `block_tab_range`.
+  // tabs in `block_tab_range`. Indices rejected by `is_eligible` are skipped,
+  // and the scan continues.
   int GetIndexOfNextWebContentsOpenedByOpenerOf(
-      const gfx::Range& block_tab_range) const;
+      const gfx::Range& block_tab_range,
+      base::FunctionRef<bool(int)> is_eligible) const;
 
   // Finds the next available tab to switch to as the active tab starting at
   // a block of tabs. The methods will check the indices to
   // the right of the block before checking the indices to the left of the
-  // block. Index within the block cannot be returned. Returns std::nullopt if
+  // block. Index within the block cannot be returned. Indices rejected by
+  // `is_eligible` are skipped, and the scan continues. Returns std::nullopt if
   // there are no valid tabs.
   std::optional<int> GetNextExpandedActiveTab(
-      const gfx::Range& block_tab_range) const;
+      const gfx::Range& block_tab_range,
+      base::FunctionRef<bool(int)> is_eligible) const;
   std::optional<int> GetNextExpandedActiveTab(
       tab_groups::TabGroupId collapsing_group) const;
 
@@ -898,13 +920,11 @@ class TabStripModel {
   std::vector<tabs::TabInterface*> GetTabsAtIndices(
       const std::vector<int>& indices) const;
 
-  // TODO(349161508) remove this method once tabs dont need to be converted
-  // into webcontents.
   tabs::TabInterface* GetTabForWebContents(
       const content::WebContents* contents) const;
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(TabStripModelTest, GetIndicesClosedByCommand);
+  FRIEND_TEST_ALL_PREFIXES(TabStripModelTest, HasTabsClosedByCommand);
   // Temporary private API.
   FRIEND_TEST_ALL_PREFIXES(TabStripModelTest, FindGroupIdFor);
 
@@ -936,6 +956,15 @@ class TabStripModel {
   // and notify observers.
   void OnChange(const TabStripModelChange& change,
                 const TabStripSelectionChange& selection);
+
+  // Notify observers if the focused tab group has changed.
+  void NotifyTabGroupFocusChanged(
+      const std::optional<tab_groups::TabGroupId>& old_focused_group);
+
+  // Logs metrics when the focused tab group changes.
+  void LogTabGroupFocusMetrics(
+      const std::optional<tab_groups::TabGroupId>& old_focused_group,
+      const std::optional<tab_groups::TabGroupId>& new_focused_group);
 
   // Notify observers that a `group` was created.
   void NotifyTabGroupVisualsChanged(const tab_groups::TabGroupId& group_id,
@@ -1085,21 +1114,21 @@ class TabStripModel {
 
   int ConstrainMoveIndex(int index, bool pinned_tab) const;
 
-  // If |index| is selected all the selected indices are returned, otherwise a
-  // vector with |index| is returned. This is used when executing commands to
+  // If `index` is selected all the selected indices are returned, otherwise a
+  // vector with `index` is returned. This is used when executing commands to
   // determine which indices the command applies to. Indices are sorted in
   // increasing order.
   std::vector<int> GetIndicesForCommand(int index) const;
 
-  // Returns a vector of indices of the tabs that will close when executing the
-  // command |id| for the tab at |index|. The returned indices are sorted in
-  // descending order.
-  std::vector<int> GetIndicesClosedByCommand(int index,
-                                             ContextMenuCommand id) const;
+  // Returns whether any tab would close when executing the command `id`
+  // (CommandCloseTabsToRight or CommandCloseOtherTabs) for `context_tab`.
+  bool HasTabsClosedByCommand(tabs::TabHandle context_tab,
+                              ContextMenuCommand id) const;
 
-  std::vector<tabs::TabInterface*> GetTabsForCommand(int index) const;
-  std::vector<tabs::TabInterface*> GetTabsClosedByCommand(
-      int index,
+  std::vector<tabs::TabHandle> GetTabsForCommand(
+      tabs::TabHandle context_tab) const;
+  std::vector<tabs::TabHandle> GetTabsClosedByCommand(
+      tabs::TabHandle context_tab,
       ContextMenuCommand id) const;
   // Returns true if the specified WebContents is a New Tab at the end of
   // the tabstrip. We check for this because opener relationships are _not_
@@ -1109,13 +1138,13 @@ class TabStripModel {
   bool IsNewTabAtEndOfTabStrip(content::WebContents* contents) const;
 
   // Adds the specified TabModel at the specified location.
-  // |add_types| is a bitmask of AddTabTypes; see it for details.
+  // `add_types` is a bitmask of AddTabTypes; see it for details.
   //
   // All append/insert methods end up in this method.
   //
   // NOTE: adding a tab using this method does NOT query the order controller,
   // as such the ADD_FORCE_INDEX AddTabTypes is meaningless here. The only time
-  // the |index| is changed is if using the index would result in breaking the
+  // the `index` is changed is if using the index would result in breaking the
   // constraint that all pinned tabs occur before non-pinned tabs. It returns
   // the index the tab is actually inserted to. See also AddWebContents.
   int InsertTabAtImpl(int index,
@@ -1132,15 +1161,14 @@ class TabStripModel {
                  uint32_t close_types);
 
   // Executes a call to CloseTabs on the web contentses contained in tabs
-  // returned from |get_tabs_to_close|. This is a helper method
+  // returned from `get_tabs_to_close`. This is a helper method
   // bound by ExecuteCloseTabsCommand in order to properly
   // protect the stack from reentrancy.
   void ExecuteCloseTabs(
-      base::RepeatingCallback<std::vector<tabs::TabInterface*>()>
-          get_tabs_to_close,
+      base::RepeatingCallback<std::vector<tabs::TabHandle>()> get_tabs_to_close,
       uint32_t close_types);
 
-  // |close_types| is a bitmask of the types in CloseTypes.
+  // `close_types` is a bitmask of the types in CloseTypes.
   // Returns true if all the tabs have been deleted. A return value of false
   // means some portion (potentially none) of the WebContents were deleted.
   // WebContents not deleted by this function are processing unload handlers
@@ -1157,11 +1185,11 @@ class TabStripModel {
   std::vector<content::WebContents*> GetWebContentsesByIndices(
       std::vector<int> indices) const;
 
-  // Sets the selection to |new_model| and notifies any observers.
+  // Sets the selection to `new_model` and notifies any observers.
   // Note: This function might end up sending 0 to 3 notifications in the
   // following order: TabDeactivated, ActiveTabChanged, TabSelectionChanged.
-  // |selection| will be filled with information corresponding to 3 notification
-  // above. When it's |triggered_by_other_operation|, This won't notify
+  // `selection` will be filled with information corresponding to 3 notification
+  // above. When it's `triggered_by_other_operation`, This won't notify
   // observers that selection was changed. Callers should notify it by
   // themselves.
   TabStripSelectionChange SetSelection(
@@ -1169,7 +1197,7 @@ class TabStripModel {
       TabStripModelObserver::ChangeReason reason,
       bool triggered_by_other_operation);
 
-  // Close all tabs in the given |group| at once.
+  // Close all tabs in the given `group` at once.
   void CloseAllTabsInGroupImpl(const tab_groups::TabGroupId& group);
 
   // Direction of relative tab movements or selections. kNext indicates moving
@@ -1190,10 +1218,6 @@ class TabStripModel {
   // single slot.
   void MoveTabRelative(TabRelativeDirection direction);
 
-  // Implementation of MoveSelectedTabsTo. Moves |length| of the selected tabs
-  // starting at |start| to |index|. See MoveSelectedTabsTo for more details.
-  void MoveSelectedTabsToImpl(int index, size_t start, size_t length);
-
   std::vector<int> GetSelectedPinnedTabs();
   std::vector<int> GetSelectedUnpinnedTabs();
 
@@ -1211,28 +1235,31 @@ class TabStripModel {
                             int update_index,
                             SplitUpdateType update_type);
 
-  // Adds tabs to newly-allocated group id |new_group|. This group must be new
+  // Adds tabs to newly-allocated group id `new_group`. This group must be new
   // and have no tabs in it.
-  void AddToNewGroupImpl(
-      const std::vector<int>& indices,
-      const tab_groups::TabGroupId& new_group,
-      std::optional<tab_groups::TabGroupVisualData> visual_data = std::nullopt);
+  void AddToNewGroupImpl(const std::vector<int>& indices,
+                         const tab_groups::TabGroupId& new_group,
+                         bool is_ephemeral = false);
 
   void MoveGroupToImpl(const tab_groups::TabGroupId& group, int to_index);
 
-  // Adds tabs to existing group |group|. This group must have been initialized
-  // by a previous call to |AddToNewGroupImpl()|.
+  // Adds tabs to existing group `group`. This group must have been initialized
+  // by a previous call to `AddToNewGroupImpl()`.
   void AddToExistingGroupImpl(const std::vector<int>& indices,
                               const tab_groups::TabGroupId& group,
                               const bool add_to_end = false);
+
+  // Removes the tabs at `indices` from their groups, moving them out of group
+  // bounds if necessary.
+  void RemoveFromGroupImpl(const std::vector<int>& indices);
 
   // Adds all selected indices provided by `context_index` into a new tab group.
   void AddToNewGroupFromContextIndex(int context_index);
 
   // Implementation of MoveTabsAndSetPropertiesImpl. Moves the set of tabs in
-  // |indices| to the |destination_index| and updates the tabs to the
-  // appropriate |group| and |pinned| properties.
-  // Note: |destination_index| refers to a place in the tabstrip prior to the
+  // `indices` to the `destination_index` and updates the tabs to the
+  // appropriate `group` and `pinned` properties.
+  // Note: `destination_index` refers to a place in the tabstrip prior to the
   // move operation.
   void MoveTabsAndSetPropertiesImpl(const std::vector<int>& indices,
                                     int destination_index,
@@ -1253,7 +1280,8 @@ class TabStripModel {
   // removing an existing tab in  the tabstrip.
   std::unique_ptr<tabs::TabModel> RemoveTabFromIndexImpl(
       int index,
-      tabs::TabInterface::DetachReason tab_detach_reason);
+      tabs::TabInterface::DetachReason tab_detach_reason,
+      int index_before_any_removals);
 
   // Updates the `contents_data_` and sends out observer notifications for
   // updating the index, pinned state or group property.
@@ -1278,6 +1306,13 @@ class TabStripModel {
       const std::optional<tab_groups::TabGroupId> initial_group,
       const std::optional<tab_groups::TabGroupId> new_group);
 
+  // Exits or updates focus mode when a moved or reparented tab was the active
+  // tab in the focused group.
+  void MaybeUpdateFocusModeForMovedTab(
+      tabs::TabInterface* tab,
+      bool initial_pinned_state,
+      const std::optional<tab_groups::TabGroupId>& initial_focused_group);
+
   // Updates the `group_model` by incrementing the tab count of `group`.
   void AddTabToGroupModel(const tab_groups::TabGroupId& group);
 
@@ -1299,7 +1334,7 @@ class TabStripModel {
                                     int destination_index);
 
   // Clears any previous selection and sets the selected index. This takes into
-  // account split tabs. Namely, if the tab at |index| is a split tab then
+  // account split tabs. Namely, if the tab at `index` is a split tab then
   // all the tabs in the split will be selected.
   void SetSelectedIndex(tabs::TabStripModelSelectionState& selection_state,
                         int index);
@@ -1343,10 +1378,7 @@ class TabStripModel {
                                  int destination_index,
                                  base::OnceClosure execute_tabs_move_operation);
 
-  // Sets the sound content setting for each site at the |indices|.
-  void SetSitesMuted(const std::vector<int>& indices, bool mute) const;
-
-  // Sets the opener of any tabs that reference the tab at |index| to that tab's
+  // Sets the opener of any tabs that reference the tab at `index` to that tab's
   // opener or null if there's a cycle.
   void FixOpeners(int index);
 
@@ -1371,12 +1403,13 @@ class TabStripModel {
   // that the block is going away.
   int GetTabIndexAfterClosing(int index, const gfx::Range& block_tabs) const;
 
-  // Takes the |selection| change and decides whether to forget the openers.
+  // Takes the `selection` change and decides whether to forget the openers.
   void OnActiveTabChanged(const TabStripSelectionChange& selection);
 
   // Determine where to shift selection after a tab or collection is closed.
   std::optional<int> DetermineNewSelectedIndex(
-      std::variant<tabs::TabInterface*, tabs::TabCollection*> tab_or_collection)
+      std::variant<tabs::DanglingUntriagedTabInterface,
+                   tabs::DanglingUntriagedTabCollection> tab_or_collection)
       const;
 
   std::vector<std::pair<tabs::TabInterface*, int>> GetTabsAndIndicesInSplit(
@@ -1405,6 +1438,10 @@ class TabStripModel {
   // tabs not in `indices`.
   void MaybeRemoveSplitsForUpdate(const std::vector<int>& indices);
 
+  // Exits focus mode if ungrouping `indices` would ungroup the entire focused
+  // group or remove the active tab from the focused group.
+  void MaybeExitFocusModeForUpdate(const std::vector<int>& indices);
+
   // Checks if both tabs of a split view are closing simultaneously and, if so,
   // creates a historical split entry in the tab restore service.
   void CreateHistoricalSplitIfClosing(
@@ -1418,18 +1455,15 @@ class TabStripModel {
   // split being removed.
   void NotifyInactiveSplitTabWillBecomeHidden(split_tabs::SplitTabId split_id);
 
-  // Assues |left| and |right| have the same root tab collection, and that
-  // |left| comes before |right| in traversal order. Returns a vector of tabs
-  // ordered by the traversal order starting from |left| and ending at |right|.
-  // The range includes both endpoints |left| and |right|.
+  // Assues `left` and `right` have the same root tab collection, and that
+  // `left` comes before `right` in traversal order. Returns a vector of tabs
+  // ordered by the traversal order starting from `left` and ending at `right`.
+  // The range includes both endpoints `left` and `right`.
   std::vector<tabs::TabInterface*> GetTabRange(tabs::TabInterface* left,
                                                tabs::TabInterface* right);
 
   // Returns the tab in selection_model_ with the lowest index.
   tabs::TabInterface* GetFirstSelectedTab() const;
-
-  // Returns the tab in selection_model_ with the highest index.
-  tabs::TabInterface* GetLastSelectedTab() const;
 
   // Returns a TabStripModelSelectionState with the same active, anchor, and
   // selected tabs as the given ListSelectionModel.
@@ -1437,7 +1471,7 @@ class TabStripModel {
       const ui::ListSelectionModel&);
 
   // The WebContents data currently hosted within this TabStripModel. This must
-  // be kept in sync with |selection_model_|.
+  // be kept in sync with `selection_model_`.
   std::unique_ptr<tabs::TabStripCollection> contents_data_;
 
   // The model for tab groups hosted within this TabStripModel.
@@ -1460,11 +1494,11 @@ class TabStripModel {
   // True if all tabs are currently being closed via CloseAllTabs.
   bool closing_all_ = false;
 
-  // This must be kept in sync with |contents_data_|.
+  // This must be kept in sync with `contents_data_`.
   tabs::TabStripModelSelectionState selection_model_;
 
   // TabStripModel is not re-entrancy safe. This member is used to guard public
-  // methods that mutate state of |selection_model_| or |contents_data_|.
+  // methods that mutate state of `selection_model_` or `contents_data_`.
   bool reentrancy_guard_ = false;
 
   TabStripScrubbingMetrics scrubbing_metrics_;
@@ -1472,8 +1506,16 @@ class TabStripModel {
   // Tracks whether a modal UI is showing.
   bool showing_modal_ui_ = false;
 
-  // The focused group. If no group is focused, this is nullopt.
-  std::optional<tab_groups::TabGroupId> focused_group_;
+  // Timestamp when the current focus mode session began, if active.
+  std::optional<base::TimeTicks> focus_mode_session_start_time_;
+
+  // Number of times a pinned tab was activated during the current focus mode
+  // session.
+  int focus_mode_pinned_tab_activations_ = 0;
+
+  // Tracks whether any pinned tabs were present during the current focus mode
+  // session.
+  bool had_pinned_tabs_in_focus_session_ = false;
 
   base::WeakPtrFactory<TabStripModel> weak_factory_{this};
 };

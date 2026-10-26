@@ -4,7 +4,8 @@
 
 #include "chrome/browser/sessions/session_service.h"
 
-#include "base/containers/adapters.h"
+#include <ranges>
+
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_restrictions.h"
@@ -13,12 +14,14 @@
 #include "chrome/browser/sessions/session_service_factory.h"
 #include "chrome/browser/sessions/session_service_log.h"
 #include "chrome/browser/sessions/session_service_test_helper.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/sessions/core/command_storage_manager.h"
 #include "components/sessions/core/session_command.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/test/browser_test.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -28,13 +31,13 @@
 class SessionServiceBrowserTest : public InProcessBrowserTest {
  protected:
   SessionService* service() {
-    return SessionServiceFactory::GetForProfile(browser()->profile());
+    return SessionServiceFactory::GetForProfile(browser()->GetProfile());
   }
 
   std::optional<SessionServiceEvent> FindMostRecentEventOfType(
       SessionServiceEventLogType type) {
-    auto events = GetSessionServiceEvents(browser()->profile());
-    for (const SessionServiceEvent& event : base::Reversed(events)) {
+    auto events = GetSessionServiceEvents(browser()->GetProfile());
+    for (const SessionServiceEvent& event : std::views::reverse(events)) {
       if (event.type == type) {
         return event;
       }
@@ -56,7 +59,7 @@ IN_PROC_BROWSER_TEST_F(SessionServiceBrowserTest, Workspace) {
   std::string expected_workspace =
       BrowserWindow::FromBrowser(browser())->GetWorkspace();
   std::unique_ptr<sessions::SessionCommand> workspace_command =
-      sessions::CreateSetWindowWorkspaceCommand(browser()->session_id(),
+      sessions::CreateSetWindowWorkspaceCommand(browser()->GetSessionID(),
                                                 expected_workspace);
   for (const auto& command : pending_commands) {
     if (command->id() == workspace_command->id() &&
@@ -85,7 +88,7 @@ IN_PROC_BROWSER_TEST_F(SessionServiceBrowserTest, WorkspaceSavedOnOpened) {
   std::string expected_workspace =
       BrowserWindow::FromBrowser(browser())->GetWorkspace();
   std::unique_ptr<sessions::SessionCommand> workspace_command =
-      sessions::CreateSetWindowWorkspaceCommand(browser()->session_id(),
+      sessions::CreateSetWindowWorkspaceCommand(browser()->GetSessionID(),
                                                 expected_workspace);
   for (const auto& command : pending_commands) {
     if (command->id() == workspace_command->id() &&
@@ -111,7 +114,7 @@ IN_PROC_BROWSER_TEST_F(SessionServiceBrowserTest, VisibleOnAllWorkspaces) {
       BrowserWindow::FromBrowser(browser())->IsVisibleOnAllWorkspaces();
   std::unique_ptr<sessions::SessionCommand> visible_on_all_workspaces_command =
       sessions::CreateSetWindowVisibleOnAllWorkspacesCommand(
-          browser()->session_id(), expected_visible);
+          browser()->GetSessionID(), expected_visible);
   for (const auto& command : pending_commands) {
     if (command->id() == visible_on_all_workspaces_command->id() &&
         command->contents() == visible_on_all_workspaces_command->contents()) {
@@ -123,7 +126,7 @@ IN_PROC_BROWSER_TEST_F(SessionServiceBrowserTest, VisibleOnAllWorkspaces) {
 }
 
 IN_PROC_BROWSER_TEST_F(SessionServiceBrowserTest, PinnedAfterReset) {
-  browser()->tab_strip_model()->SetTabPinned(0, true);
+  browser()->GetTabStripModel()->SetTabPinned(0, true);
   // Force a reset, to verify that SessionService::BuildCommandsForBrowser
   // handles pinned tabs correctly.
   service()->ResetFromCurrentBrowsers();
@@ -136,7 +139,7 @@ IN_PROC_BROWSER_TEST_F(SessionServiceBrowserTest, PinnedAfterReset) {
 
   sessions::SessionTabHelper* session_tab_helper =
       sessions::SessionTabHelper::FromWebContents(
-          browser()->tab_strip_model()->GetWebContentsAt(0));
+          browser()->GetTabStripModel()->GetWebContentsAt(0));
   std::unique_ptr<sessions::SessionCommand> pinned_command =
       sessions::CreatePinnedStateCommand(session_tab_helper->session_id(),
                                          true);
@@ -153,16 +156,17 @@ IN_PROC_BROWSER_TEST_F(SessionServiceBrowserTest, PinnedAfterReset) {
 
 IN_PROC_BROWSER_TEST_F(SessionServiceBrowserTest, LogExit) {
   EXPECT_FALSE(FindMostRecentEventOfType(SessionServiceEventLogType::kExit));
-  service()->WindowClosing(browser()->session_id());
+  service()->WindowClosing(browser()->GetSessionID());
   auto exit_event =
       FindMostRecentEventOfType(SessionServiceEventLogType::kExit);
   ASSERT_TRUE(exit_event);
   EXPECT_EQ(1, exit_event->data.exit.window_count);
-  EXPECT_EQ(browser()->tab_strip_model()->count(),
+  EXPECT_EQ(browser()->GetTabStripModel()->count(),
             exit_event->data.exit.tab_count);
 
   // Create another window, which should remove the exit.
   SessionID window2_id = SessionID::NewUnique();
-  service()->SetWindowType(window2_id, Browser::TYPE_NORMAL);
+  service()->SetWindowType(window2_id,
+                           BrowserWindowInterface::Type::TYPE_NORMAL);
   EXPECT_FALSE(FindMostRecentEventOfType(SessionServiceEventLogType::kExit));
 }

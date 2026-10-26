@@ -29,10 +29,10 @@
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
@@ -43,6 +43,7 @@
 #include "chrome/browser/ui/user_education/show_promo_in_page.h"
 #include "chrome/browser/ui/webui/bookmarks/bookmarks_ui.h"
 #include "chrome/browser/ui/webui/settings/site_settings_helper.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "chrome/browser/user_education/tutorial_identifiers.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
@@ -68,11 +69,11 @@
 #include "extensions/common/extension_urls.h"
 #include "net/base/url_util.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "url/url_util.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "ash/constants/ash_features.h"
 #include "ash/constants/webui_url_constants.h"
 #include "ash/webui/settings/public/constants/routes_util.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
@@ -127,9 +128,7 @@ void LaunchReleaseNotesImpl(Profile* profile, apps::LaunchSource source) {
   base::RecordAction(UserMetricsAction("ReleaseNotes.ShowReleaseNotes"));
   ash::SystemAppLaunchParams params;
   params.url =
-      base::FeatureList::IsEnabled(
-          ash::features::kHelpAppOpensInsteadOfReleaseNotesNotification) &&
-              source == apps::LaunchSource::kFromReleaseNotesNotification
+      source == apps::LaunchSource::kFromReleaseNotesNotification
           ? GURL("chrome://help-app/updates?launchSource=version-update")
           : GURL("chrome://help-app/updates");
   params.launch_source = source;
@@ -235,15 +234,19 @@ std::string GenerateContentSettingsExceptionsSubPage(ContentSettingsType type) {
           {ContentSettingsType::WEB_PRINTING, "webPrinting"},
           {ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
            "autoPictureInPicture"},
-          {ContentSettingsType::INLINE_CUE_MENU, "inlineCueMenu"},
+          {ContentSettingsType::INLINE_CUE_MENU, "ai/inlineCueMenu"},
       });
 
   const std::string_view* override =
       base::FindOrNull(kSettingsPathOverrides, type);
-  return base::StrCat(
-      {kContentSettingsSubPage, "/",
-       override ? *override
-                : site_settings::ContentSettingsTypeToGroupName(type)});
+  if (override) {
+    if (override->find('/') != std::string_view::npos) {
+      return std::string(*override);
+    }
+    return base::StrCat({kContentSettingsSubPage, "/", *override});
+  }
+  return base::StrCat({kContentSettingsSubPage, "/",
+                       site_settings::ContentSettingsTypeToGroupName(type)});
 }
 
 bool SiteGURLIsValid(const GURL& url) {
@@ -275,7 +278,7 @@ void ShowSiteSettingsImpl(BrowserWindowInterface* browser,
         GetSettingsUrl(chrome::kSiteDetailsSubpage), kParamRequest, url_string);
   }
   NavigateParams params(profile, link_destination, ui::PAGE_TRANSITION_TYPED);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   params.browser = browser;
   Navigate(&params);
 }
@@ -301,7 +304,7 @@ void ShowSiteSettingsFileSystemImpl(BrowserWindowInterface* browser,
                                                  kParamRequest, origin_string);
   }
   NavigateParams params(profile, link_destination, ui::PAGE_TRANSITION_TYPED);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   params.browser = browser;
   Navigate(&params);
 }
@@ -310,7 +313,7 @@ BrowserWindowInterface* GetOrCreateBrowserForProfile(Profile* profile) {
   BrowserWindowInterface* browser =
       ProfileBrowserCollection::GetForProfile(profile)->FindTabbedBrowser();
   if (!browser) {
-    return Browser::Create(Browser::CreateParams(profile, true));
+    return CreateBrowserWindow(BrowserWindowCreateParams(profile, true));
   }
   return browser;
 }
@@ -495,8 +498,7 @@ void ShowSettingsSubPageInTabbedBrowser(BrowserWindowInterface* browser,
 void ShowPageWithPromoForProfile(Profile* profile,
                                  ShowPromoInPage::Params promo_params) {
   BrowserWindowInterface* browser = GetOrCreateBrowserForProfile(profile);
-  ShowPromoInPage::Start(browser->GetBrowserForMigrationOnly(),
-                         std::move(promo_params));
+  ShowPromoInPage::Start(browser, std::move(promo_params));
 }
 
 void ShowContentSettingsExceptions(BrowserWindowInterface* browser,
@@ -517,7 +519,7 @@ void ShowSiteSettings(BrowserWindowInterface* browser, const GURL& url) {
 }
 
 void ShowSiteSettings(Profile* profile, const GURL& url) {
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M162);
   ShowSiteSettingsImpl(nullptr, profile, url);
 }
 
@@ -527,7 +529,7 @@ void ShowSiteSettingsFileSystem(BrowserWindowInterface* browser,
 }
 
 void ShowSiteSettingsFileSystem(Profile* profile, const GURL& url) {
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M162);
   ShowSiteSettingsFileSystemImpl(nullptr, profile, url);
 }
 
@@ -551,7 +553,7 @@ void ShowPasswordManager(BrowserWindowInterface* bwi) {
   auto* service =
       UserEducationServiceFactory::GetForBrowserContext(bwi->GetProfile());
   if (service) {
-    auto* tutorial_service = &service->tutorial_service();
+    auto* tutorial_service = service->tutorial_service();
     if (tutorial_service &&
         tutorial_service->IsRunningTutorial(kPasswordManagerTutorialId)) {
       ShowSingletonTab(bwi, GURL(kChromeUIPasswordManagerSettingsURL));
@@ -604,8 +606,7 @@ void ShowSafeBrowsingEnhancedProtectionWithIph(
   base::UmaHistogramEnumeration("SafeBrowsing.EsbPromotionFlow.IphShown",
                                 referral_method);
   safe_browsing::LogShowEnhancedProtectionAction();
-  ShowPromoInPage::Start(browser->GetBrowserForMigrationOnly(),
-                         std::move(params));
+  ShowPromoInPage::Start(browser, std::move(params));
 #endif
 }
 
@@ -712,7 +713,7 @@ void ShowWebAppSettingsImpl(BrowserWindowInterface* browser,
 #else
   const GURL link_destination(chrome::kChromeUIWebAppSettingsURL + app_id);
   NavigateParams params(profile, link_destination, ui::PAGE_TRANSITION_TYPED);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   params.browser = browser;
   Navigate(&params);
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -728,6 +729,16 @@ void ShowWebAppSettings(Profile* profile,
                         const std::string& app_id,
                         web_app::AppSettingsPageEntryPoint entry_point) {
   ShowWebAppSettingsImpl(/*browser=*/nullptr, profile, app_id, entry_point);
+}
+
+void ShowSkillsYourSkills(BrowserWindowInterface* browser) {
+  ShowSingletonTabIgnorePathOverwriteNTP(
+      browser, GURL(kChromeUISkillsURL).Resolve(kChromeUISkillsYourSkillsPath));
+}
+
+void ShowSkillsBrowse(BrowserWindowInterface* browser) {
+  ShowSingletonTabIgnorePathOverwriteNTP(
+      browser, GURL(kChromeUISkillsURL).Resolve(kChromeUISkillsBrowsePath));
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 

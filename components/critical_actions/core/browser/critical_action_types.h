@@ -11,19 +11,47 @@
 #include <vector>
 
 #include "base/time/time.h"
-#include "url/gurl.h"
 
 namespace critical_actions {
 
 // Enum defining list of critical categories supported by Critical Action
 // History.
+// LINT.IfChange(CriticalActionType)
 enum class ActionType {
   kUnknown = 0,
   kFormFill = 1,
   kDownload = 2,
   kSettingChange = 3,
   kCredentialAccess = 4,
+  kGooglePasswordManager = 5,
+  kFederatedLogin = 6,
+  kCredentialsOtp = 7,
+  kWebMcpTool = 8,
+  kMaxValue = kWebMcpTool,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/critical_actions/enums.xml:CriticalActionType)
+
+// Source features that generate critical actions.
+// LINT.IfChange(ActionSource)
+enum class ActionSource {
+  kUnknown = 0,
+  kPasswordManager = 1,
+  kActor = 2,
+  kAutofill = 3,
+  kMaxValue = kAutofill,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/critical_actions/histograms.xml:ActionSource)
+
+// Result of attempting to open a conversation associated with a critical
+// action.
+// LINT.IfChange(OpenConversationResult)
+enum class OpenConversationResult {
+  kSuccess = 0,
+  kErrorInvalidActionEntry = 1,
+  kErrorInternal = 2,
+  kMaxValue = kErrorInternal,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/critical_actions/enums.xml:OpenConversationResult)
 
 // Represents a memory row copy of a single record in critical_actions database.
 struct CriticalActionEntry {
@@ -34,16 +62,53 @@ struct CriticalActionEntry {
   CriticalActionEntry& operator=(CriticalActionEntry&&) noexcept;
   ~CriticalActionEntry();
 
+  // Returns the user-facing localized label for the critical action.
+  std::string GetLabel() const;
+
+  // Returns the user-facing localized tooltip / description for the action.
+  std::string GetTooltip() const;
+
+  class Builder;
+
   std::string critical_action_id;  // Client-generated UUID
   base::Time timestamp;
   int64_t visit_id = 0;         // References History visit
   std::string conversation_id;  // References conversation context
   std::string actor_task_id;    // References agent task
   ActionType action_type = ActionType::kUnknown;
-  GURL url;
-  std::string metadata;  // Action-specific details in JSON format
+  ActionSource action_source = ActionSource::kUnknown;
+  // Action-specific details in JSON format. Must NOT contain page-identifying
+  // data (URLs, origins, hostnames, page titles, or anything derived from
+  // them): critical actions deliberately keep no copy of browsing history, and
+  // this field is not covered by History's deletion lifecycle. Use `visit_id`
+  // to refer to the page the action was performed on.
+  std::string metadata;
 
   bool operator==(const CriticalActionEntry& other) const = default;
+};
+
+class CriticalActionEntry::Builder {
+ public:
+  Builder();
+  ~Builder();
+  Builder(const Builder&) = delete;
+  Builder& operator=(const Builder&) = delete;
+  Builder(Builder&&) noexcept;
+  Builder& operator=(Builder&&) noexcept;
+
+  Builder&& SetCriticalActionId(std::string critical_action_id_val) &&;
+  Builder&& SetTimestamp(base::Time timestamp_val) &&;
+  Builder&& SetActionType(ActionType action_type_val) &&;
+  Builder&& SetActionSource(ActionSource action_source_val) &&;
+  Builder&& SetConversationId(std::string conversation_id_val) &&;
+  Builder&& SetActorTaskId(std::string actor_task_id_val) &&;
+  Builder&& SetMetadata(std::string metadata_val) &&;
+  Builder&& SetVisitId(int64_t visit_id_val) &&;
+
+  CriticalActionEntry Build() &&;
+
+ private:
+  CriticalActionEntry entry_;
 };
 
 // Options for querying critical action history.
@@ -62,6 +127,8 @@ struct CriticalActionQueryOptions {
 
   // If set, only records with these action types are returned.
   std::vector<ActionType> action_types;
+  // If set, only records with these visit IDs are returned.
+  std::vector<int64_t> visit_ids;
   // If set, only records with this conversation_id are returned.
   std::optional<std::string> conversation_id;
   // If set, only records with this actor_task_id are returned.

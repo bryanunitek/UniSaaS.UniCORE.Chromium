@@ -17,6 +17,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "chrome/browser/browser_process.h"
@@ -40,10 +41,11 @@
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
+#include "components/browser_actuator/public/features.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/contextual_tasks/public/features.h"
 #include "components/metrics/metrics_service.h"
-#include "components/plus_addresses/core/common/features.h"
+#include "components/omnibox/common/omnibox_features.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/core/browser/cookie_settings_util.h"
@@ -56,13 +58,16 @@
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/primary_account_change_event.h"
+#include "components/site_token_provider/features.h"
 #include "components/skills/features.h"
 #include "components/version_info/channel.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
+#include "extensions/buildflags/buildflags.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/gaia_urls.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/base/models/tree_node_iterator.h"
 #include "url/gurl.h"
 
@@ -77,7 +82,8 @@
 #endif
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #endif
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
@@ -153,6 +159,8 @@ signin_metrics::ProfileSignout kAlwaysAllowedSignoutSources[] = {
     signin_metrics::ProfileSignout::kSignoutDuringProfileDeletion,
     // Allowed as the user declined the enterprise management disclaimer.
     signin_metrics::ProfileSignout::kUserDeclinedEnterpriseManagementDisclaimer,
+    // Allowed as the user declined the enterprise signals disclaimer.
+    signin_metrics::ProfileSignout::kUserDeclinedEnterpriseSignalsDisclaimer,
 };
 
 // Returns the HaTS survey trigger corresponding to the given AccessPoint, or
@@ -163,8 +171,7 @@ std::string HatsSurveyTriggerForAccessPoint(
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
     case signin_metrics::AccessPoint::kAddressBubble:
       return kHatsSurveyTriggerIdentityAddressBubbleSignin;
-    case signin_metrics::AccessPoint::kAvatarBubbleSignIn:
-    case signin_metrics::AccessPoint::kAvatarBubbleSignInWithSyncPromo:
+    case signin_metrics::AccessPoint::kProfileMenuPrimaryButton:
       return kHatsSurveyTriggerIdentityProfileMenuSignin;
     case signin_metrics::AccessPoint::kForYouFre:
       return kHatsSurveyTriggerIdentityFirstRunSignin;
@@ -183,15 +190,6 @@ std::string HatsSurveyTriggerForAccessPoint(
 
 class ChromeOAuthConsumerRegistry : public signin::OAuthConsumerRegistry {
  protected:
-  signin::OAuthConsumer GetOAuthConsumerForEnterprisePlusAddress()
-      const override {
-    CHECK(base::FeatureList::IsEnabled(
-        plus_addresses::features::kPlusAddressesEnabled));
-    return signin::OAuthConsumer(
-        signin::oauth_consumer_name::kEnterprisePlusAddressName,
-        {plus_addresses::features::kEnterprisePlusAddressOAuthScope.Get()});
-  }
-
   signin::OAuthConsumer GetOAuthConsumerForGlicUserStatus() const override {
     CHECK(base::FeatureList::IsEnabled(features::kGlicUserStatusCheck));
     return signin::OAuthConsumer(
@@ -218,7 +216,7 @@ class ChromeOAuthConsumerRegistry : public signin::OAuthConsumerRegistry {
   }
 
   signin::OAuthConsumer GetOAuthConsumerForContextualTasks() const override {
-    CHECK(base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks));
+    CHECK(contextual_tasks::IsContextualTasksUIEnabled());
     signin::ScopeSet scopes = {
         GaiaConstants::kSearchResultsOAuth2Scope,
         kCalendarEventsOAuth2Scope,
@@ -226,12 +224,15 @@ class ChromeOAuthConsumerRegistry : public signin::OAuthConsumerRegistry {
         kCalendarListOAuth2Scope,
         GaiaConstants::kClearCutOAuth2Scope,
         kDocumentsOAuth2Scope,
-        GaiaConstants::kDriveOAuth2Scope,
         kGmailModifyOAuth2Scope,
         GaiaConstants::kLensOAuth2Scope,
         kPeopleReadOnlyOAuth2Scope,
         kSpreadsheetsOAuth2Scope,
     };
+    if (base::FeatureList::IsEnabled(
+            contextual_tasks::kContextualTasksDriveOAuthScope)) {
+      scopes.insert(GaiaConstants::kDriveOAuth2Scope);
+    }
     if (base::FeatureList::IsEnabled(
             contextual_tasks::kContextualTasksExtraOauthScopes)) {
       std::string extra_scopes_str =
@@ -247,6 +248,17 @@ class ChromeOAuthConsumerRegistry : public signin::OAuthConsumerRegistry {
         signin::oauth_consumer_name::kContextualTasksName, std::move(scopes));
   }
 
+  signin::OAuthConsumer GetOAuthConsumerForDrivePickerHost() const override {
+    if (base::FeatureList::IsEnabled(omnibox::kDrivePickerV2Scope)) {
+      return signin::OAuthConsumer(
+          signin::oauth_consumer_name::kDrivePickerHostName,
+          {"https://www.googleapis.com/auth/drive.file"});
+    }
+    return signin::OAuthConsumer(
+        signin::oauth_consumer_name::kDrivePickerHostName,
+        {"https://www.googleapis.com/auth/drive.readonly"});
+  }
+
   signin::OAuthConsumer GetOAuthConsumerForIndigo() const override {
     CHECK(base::FeatureList::IsEnabled(features::kIndigo));
     std::string scopes_str = features::kIndigoScopes.Get();
@@ -256,7 +268,30 @@ class ChromeOAuthConsumerRegistry : public signin::OAuthConsumerRegistry {
     return signin::OAuthConsumer(signin::oauth_consumer_name::kIndigoName,
                                  std::move(scopes));
   }
+
+  signin::OAuthConsumer GetOAuthConsumerForBrowserActuator() const override {
+    CHECK(base::FeatureList::IsEnabled(browser_actuator::kBrowserActuator));
+
+    return signin::OAuthConsumer(
+        signin::oauth_consumer_name::kBrowserActuatorName,
+        {browser_actuator::kBrowserActuatorOAuth2ScopeParam.Get()});
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForSiteTokenProvider() const override {
+    return signin::OAuthConsumer(
+        signin::oauth_consumer_name::kSiteTokenProviderName,
+        {site_token_provider::features::kSiteTokenOAuth2Scope.Get()});
+  }
 };
+
+void ClearPrefsForOtrProfile(PrefService* prefs) {
+  prefs->SetBoolean(prefs::kSigninAllowed, false);
+  prefs->SetString(prefs::kGaiaCookieLastListAccountsBinaryData, "");
+  prefs->SetString(prefs::kGoogleServicesAccountId, "");
+  prefs->SetBoolean(prefs::kGoogleServicesConsentedToSync, false);
+  prefs->SetString(prefs::kGoogleServicesSigninScopedDeviceId, "");
+  prefs->SetList(prefs::kAccountInfo, base::ListValue());
+}
 
 }  // namespace
 
@@ -272,6 +307,12 @@ ChromeSigninClient::ChromeSigninClient(Profile* profile)
       profile_(profile),
       oauth_consumer_registry_(
           std::make_unique<ChromeOAuthConsumerRegistry>()) {
+  if (profile_->IsOffTheRecord()) {
+    // Off-the-record (e.g. Isolated Mode) profiles start with an empty cookie
+    // jar and no accounts signed in to the browser or the content area,
+    // so do not inherit the parent profile's prefs.
+    ClearPrefsForOtrProfile(profile_->GetPrefs());
+  }
 }
 
 ChromeSigninClient::~ChromeSigninClient() = default;
@@ -345,7 +386,7 @@ bool ChromeSigninClient::IsClearPrimaryAccountAllowed() const {
 void ChromeSigninClient::PreSignOut(
     base::OnceCallback<void(SignoutDecision)> on_signout_decision_reached,
     signin_metrics::ProfileSignout signout_source_metric) {
-  DCHECK(on_signout_decision_reached);
+  CHECK(on_signout_decision_reached, base::NotFatalUntil::M162);
   DCHECK(!on_signout_decision_reached_) << "SignOut already in-progress!";
   on_signout_decision_reached_ = std::move(on_signout_decision_reached);
 
@@ -473,6 +514,23 @@ ChromeSigninClient::CreateBoundSessionOAuthMultiloginDelegate() const {
 signin::OAuthConsumer ChromeSigninClient::GetOAuthConsumerFromId(
     signin::OAuthConsumerId oauth_consumer_id) const {
   return oauth_consumer_registry_->GetOAuthConsumerFromId(oauth_consumer_id);
+}
+
+bool ChromeSigninClient::IsAccountSignedInOnOtherProfile(
+    const GaiaId& gaia_id) const {
+  if (gaia_id.empty() || !g_browser_process ||
+      !g_browser_process->profile_manager()) {
+    return false;
+  }
+  std::vector<ProfileAttributesEntry*> entries =
+      g_browser_process->profile_manager()
+          ->GetProfileAttributesStorage()
+          .GetAllProfilesAttributes();
+  return std::ranges::any_of(
+      entries, [this, &gaia_id](const ProfileAttributesEntry* entry) {
+        return !entry->IsOmitted() && entry->GetPath() != profile_->GetPath() &&
+               entry->GetGAIAId() == gaia_id;
+      });
 }
 
 SigninClient::SignoutDecision ChromeSigninClient::GetSignoutDecision(

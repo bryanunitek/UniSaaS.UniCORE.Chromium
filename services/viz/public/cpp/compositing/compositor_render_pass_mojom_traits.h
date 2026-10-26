@@ -10,8 +10,10 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/types/expected.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
 #include "components/viz/common/surfaces/subtree_capture_id.h"
+#include "mojo/public/cpp/bindings/deserialization_error.h"
 #include "services/viz/public/cpp/compositing/copy_output_request_mojom_traits.h"
 #include "services/viz/public/cpp/compositing/quads_mojom_traits.h"
 #include "services/viz/public/mojom/compositing/compositor_render_pass.mojom-shared.h"
@@ -42,21 +44,6 @@ struct StructTraits<viz::mojom::CompositorRenderPassDataView,
   static const gfx::Transform& transform_to_root_target(
       const std::unique_ptr<viz::CompositorRenderPass>& input) {
     return input->transform_to_root_target;
-  }
-
-  static const cc::FilterOperations& filters(
-      const std::unique_ptr<viz::CompositorRenderPass>& input) {
-    return input->filters;
-  }
-
-  static const cc::FilterOperations& backdrop_filters(
-      const std::unique_ptr<viz::CompositorRenderPass>& input) {
-    return input->backdrop_filters;
-  }
-
-  static const std::optional<SkPath>& backdrop_filter_bounds(
-      const std::unique_ptr<viz::CompositorRenderPass>& input) {
-    return input->backdrop_filter_bounds;
   }
 
   static viz::SubtreeCaptureId subtree_capture_id(
@@ -115,8 +102,9 @@ struct StructTraits<viz::mojom::CompositorRenderPassDataView,
     return input->quad_list;
   }
 
-  static bool Read(viz::mojom::CompositorRenderPassDataView data,
-                   std::unique_ptr<viz::CompositorRenderPass>* out);
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::CompositorRenderPassDataView data,
+      std::unique_ptr<viz::CompositorRenderPass>* out);
 };
 
 }  // namespace mojo

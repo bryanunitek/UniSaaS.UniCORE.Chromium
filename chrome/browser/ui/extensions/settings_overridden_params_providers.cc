@@ -25,6 +25,7 @@
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/extensions/controlled_home_dialog_controller.h"
+#include "chrome/browser/ui/extensions/search_override_stack.h"
 #include "chrome/browser/ui/extensions/settings_api_bubble_helpers.h"
 #include "chrome/browser/ui/hats/survey_config.h"
 #include "chrome/common/chrome_features.h"
@@ -87,15 +88,13 @@ bool GoogleIsDefaultSearchProvider(Profile* profile) {
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 // Helper to determine if a search provider is known (prepopulated).
-bool IsPrepopulatedOrStarterPack(const TemplateURL* template_url,
-                                 TemplateURLService* template_url_service) {
-  auto has_prepopulated_ids = [](const TemplateURL* turl) {
-    return turl->prepopulate_id() > 0 ||
-           turl->starter_pack_id() !=
-               template_url_starter_pack_data::StarterPackId::kNone;
+bool IsPrepopulated(const TemplateURL* template_url,
+                    TemplateURLService* template_url_service) {
+  auto is_prepopulated = [](const TemplateURL* turl) {
+    return turl->prepopulate_id() > 0;
   };
 
-  if (has_prepopulated_ids(template_url)) {
+  if (is_prepopulated(template_url)) {
     return true;
   }
 
@@ -107,8 +106,7 @@ bool IsPrepopulatedOrStarterPack(const TemplateURL* template_url,
     return std::any_of(all_urls.begin(), all_urls.end(), [&](const auto& turl) {
       return turl.get() != template_url &&
              turl->keyword() == template_url->keyword() &&
-             turl->url() == template_url->url() &&
-             has_prepopulated_ids(turl.get());
+             turl->url() == template_url->url() && is_prepopulated(turl.get());
     });
   }
 
@@ -178,7 +176,7 @@ SecondarySearchInfo GetSecondarySearchInfo(Profile* profile) {
       GetNumberOfExtensionsThatOverrideSearch(profile);
   // This method should only be called when there's an extension that overrides
   // the search engine.
-  DCHECK_GE(num_overriding_extensions, 1u);
+  CHECK_GE(num_overriding_extensions, 1u, base::NotFatalUntil::M162);
 
   // Another extension would take over.
   std::optional<const TemplateURL> secondary_extension_search;
@@ -192,11 +190,14 @@ SecondarySearchInfo GetSecondarySearchInfo(Profile* profile) {
     std::string primary_ext_id =
         extension_prefs_value_map->GetExtensionControllingPref(search_pref_key);
 
+    // Search overrides are registered in the regular profile
+    // (TemplateURLService is redirected to the original profile in OTR
+    // profiles), so always query the regular profile's effective pref value.
     const base::Value* secondary_pref =
         extension_prefs_value_map->GetEffectivePrefValue(
-            search_pref_key, profile->IsIncognitoProfile(),
-            /* from_incognito= */ nullptr,
-            /* ignore_extension_id= */ primary_ext_id);
+            search_pref_key, /*incognito=*/false,
+            /*from_incognito=*/nullptr,
+            /*ignore_extension_id=*/primary_ext_id);
 
     if (secondary_pref) {
       std::unique_ptr<TemplateURLData> url_data =
@@ -228,7 +229,7 @@ SecondarySearchInfo GetSecondarySearchInfo(Profile* profile) {
   SecondarySearchInfo search_info;
   search_info.origin = origin;
   search_info.is_prepopulated =
-      IsPrepopulatedOrStarterPack(secondary_search, template_url_service);
+      IsPrepopulated(secondary_search, template_url_service);
   search_info.name = GetDialogDisplayName(
       secondary_search, search_info.is_prepopulated, search_url);
 
@@ -415,7 +416,7 @@ std::optional<ExtensionSettingsOverriddenDialog::Params> GetNtpOverriddenParams(
       content::BrowserURLHandler::GetInstance()->GetPossibleRewrites(ntp_url,
                                                                      profile);
   // We already know that the extension is the primary NTP controller.
-  DCHECK(!possible_rewrites.empty());
+  CHECK(!possible_rewrites.empty(), base::NotFatalUntil::M162);
   DCHECK_EQ(extension->url().host(), possible_rewrites[0].host())
       << "Unexpected NTP URL: " << possible_rewrites[0];
 
@@ -461,8 +462,8 @@ std::optional<ExtensionSettingsOverriddenDialog::Params> GetNtpOverriddenParams(
         IDS_EXTENSION_NTP_OVERRIDDEN_DIALOG_TITLE_GENERIC);
     histogram_name = kGenericDialogHistogramName;
   }
-  DCHECK(!dialog_title.empty());
-  DCHECK(histogram_name);
+  CHECK(!dialog_title.empty(), base::NotFatalUntil::M162);
+  CHECK(histogram_name, base::NotFatalUntil::M162);
 
   std::u16string dialog_message = l10n_util::GetStringFUTF16(
       IDS_EXTENSION_NTP_OVERRIDDEN_DIALOG_BODY_GENERIC,
@@ -477,6 +478,63 @@ std::optional<ExtensionSettingsOverriddenDialog::Params> GetNtpOverriddenParams(
 }
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+bool ExtensionSearchOverrideMatchesExistingEngine(Profile* profile) {
+  if (!profile) {
+    return false;
+  }
+
+  if (!extensions::GetExtensionOverridingSearchEngine(profile)) {
+    return false;
+  }
+
+  TemplateURLService* template_url_service =
+      TemplateURLServiceFactory::GetForProfile(profile);
+  CHECK(template_url_service);
+  if (!template_url_service->IsExtensionControlledDefaultSearch()) {
+    return false;
+  }
+
+  const TemplateURL* default_search =
+      template_url_service->GetDefaultSearchProvider();
+  if (!default_search) {
+    return false;
+  }
+
+  const GURL search_url(default_search->url());
+  if (!search_url.is_valid()) {
+    return false;
+  }
+
+  // NOTE: Normally, we wouldn't want to use direct equality comparison of
+  // GURL::GetOrigin() because of edge cases like inner URLs with filesystem,
+  // etc. This is okay here, because if the origins don't match we fall through
+  // to showing the dialog. That's likely good if any extension is doing
+  // something as crazy as using filesystem: URLs as a search engine.
+  const SecondarySearchInfo secondary_search = GetSecondarySearchInfo(profile);
+  return !secondary_search.origin.is_empty() &&
+         secondary_search.origin == search_url.DeprecatedGetOriginAsURL();
+}
+
+bool HasUnacknowledgedMatchingDseExtension(Profile* profile) {
+  if (!profile) {
+    return false;
+  }
+
+  const extensions::Extension* extension =
+      extensions::GetExtensionOverridingSearchEngine(profile);
+  if (!extension) {
+    return false;
+  }
+
+  if (!ExtensionSearchOverrideMatchesExistingEngine(profile)) {
+    return false;
+  }
+
+  return !ExtensionSettingsOverriddenDialog::HasAcknowledgedExtension(
+      *profile, extension->id(),
+      ControlledHomeDialogController::kAcknowledgedPreference);
+}
+
 void GetSearchOverriddenParamsThenRun(
     content::WebContents* web_contents,
     base::OnceCallback<
@@ -506,12 +564,13 @@ void GetSearchOverriddenParamsThenRun(
   // Find the active search engine (which is provided by the extension).
   TemplateURLService* template_url_service =
       TemplateURLServiceFactory::GetForProfile(profile);
-  DCHECK(template_url_service->IsExtensionControlledDefaultSearch());
+  CHECK(template_url_service->IsExtensionControlledDefaultSearch(),
+        base::NotFatalUntil::M162);
   const TemplateURL* default_search =
       template_url_service->GetDefaultSearchProvider();
-  DCHECK(default_search);
-  DCHECK_EQ(TemplateURL::NORMAL_CONTROLLED_BY_EXTENSION,
-            default_search->type());
+  CHECK(default_search, base::NotFatalUntil::M162);
+  CHECK_EQ(TemplateURL::NORMAL_CONTROLLED_BY_EXTENSION, default_search->type(),
+           base::NotFatalUntil::M162);
 
   // NOTE: For most TemplateURLs, there's no guarantee that search_url is a
   // valid URL (it could contain placeholders, etc). However, for extension-
@@ -519,20 +578,21 @@ void GetSearchOverriddenParamsThenRun(
   GURL search_url(default_search->url());
   DCHECK(search_url.is_valid()) << default_search->url();
 
-  // Check whether the secondary search is the same search the extension set.
-  // This can happen if the user set a search engine, and then installed an
-  // extension that set the same one.
-  SecondarySearchInfo secondary_search = GetSecondarySearchInfo(profile);
-  // NOTE: Normally, we wouldn't want to use direct equality comparison of
-  // GURL::GetOrigin() because of edge cases like inner URLs with filesystem,
-  // etc. This okay here, because if the origins don't match, we'll show the
-  // dialog to the user. That's likely good if any extension is doing something
-  // as crazy as using filesystem: URLs as a search engine.
-  if (!secondary_search.origin.is_empty() &&
-      secondary_search.origin == search_url.DeprecatedGetOriginAsURL()) {
+  // Nothing was actually overridden; there is nothing to confirm. Callers check
+  // this synchronously before withholding a navigation; re-check here in case
+  // extension state changed in between.
+  if (ExtensionSearchOverrideMatchesExistingEngine(profile)) {
     std::move(done_callback).Run(nullptr);
     return;
   }
+
+  SecondarySearchInfo secondary_search = GetSecondarySearchInfo(profile);
+
+  // Extension preferences live on the original profile, so an incognito
+  // window sees the same stack.
+  std::optional<extensions::SearchOverrideStackInfo> search_override_stack =
+      extensions::GetSearchOverrideStackInfo(*profile->GetOriginalProfile(),
+                                             extension->id());
 
   constexpr char kGenericDialogHistogramName[] =
       "Extensions.SettingsOverridden.GenericSearchOverriddenDialogResult";
@@ -547,7 +607,7 @@ void GetSearchOverriddenParamsThenRun(
       histogram_name = kBackToGoogleHistogramName;
       break;
     case SecondarySearchInfo::Type::kNonGoogleInDefaultList:
-      DCHECK(!secondary_search.name.empty());
+      CHECK(!secondary_search.name.empty(), base::NotFatalUntil::M162);
       histogram_name = kBackToOtherHistogramName;
       break;
     case SecondarySearchInfo::Type::kOther:
@@ -559,7 +619,7 @@ void GetSearchOverriddenParamsThenRun(
   if (base::FeatureList::IsEnabled(
           extensions_features::kSearchEngineExplicitChoiceDialog)) {
     const bool is_prepopulated =
-        IsPrepopulatedOrStarterPack(default_search, template_url_service);
+        IsPrepopulated(default_search, template_url_service);
     std::u16string search_name =
         GetDialogDisplayName(default_search, is_prepopulated, search_url);
 
@@ -579,6 +639,7 @@ void GetSearchOverriddenParamsThenRun(
     auto params = std::make_unique<ExtensionSettingsOverriddenDialog::Params>(
         extension->id(), extension->name(), preference_name, histogram_name,
         std::move(show_params));
+    params->search_override_stack = search_override_stack;
     if (base::FeatureList::IsEnabled(
             features::kHappinessTrackingSurveysForDesktopSEHijacking)) {
       params->hats_survey_trigger = kHatsSurveyTriggerSEHijacking;
@@ -651,7 +712,7 @@ void GetSearchOverriddenParamsThenRun(
 #endif
       break;
     case SecondarySearchInfo::Type::kNonGoogleInDefaultList:
-      DCHECK(!secondary_search.name.empty());
+      CHECK(!secondary_search.name.empty(), base::NotFatalUntil::M162);
       dialog_title = l10n_util::GetStringFUTF16(
           IDS_EXTENSION_SEARCH_OVERRIDDEN_DIALOG_TITLE_BACK_TO_OTHER,
           secondary_search.name);
@@ -673,6 +734,7 @@ void GetSearchOverriddenParamsThenRun(
   auto params = std::make_unique<ExtensionSettingsOverriddenDialog::Params>(
       extension->id(), extension->name(), preference_name, histogram_name,
       std::move(show_params));
+  params->search_override_stack = search_override_stack;
   if (base::FeatureList::IsEnabled(
           features::kHappinessTrackingSurveysForDesktopSEHijacking)) {
     params->hats_survey_trigger = kHatsSurveyTriggerSEHijacking;

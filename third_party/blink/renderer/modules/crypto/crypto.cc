@@ -32,6 +32,7 @@
 #include "third_party/blink/renderer/core/dom/quota_exceeded_error.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_view.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/uuid.h"
 
 namespace blink {
@@ -60,19 +61,16 @@ NotShared<DOMArrayBufferView> Crypto::getRandomValues(
   if (!IsIntegerArray(array)) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kTypeMismatchError,
-        UNSAFE_TODO(String::Format(
-            "The provided ArrayBufferView is of type '%s', which is "
-            "not an integer array type.",
-            array->TypeName())));
+        StrCat({"The provided ArrayBufferView is of type '", array->TypeName(),
+                "', which is not an integer array type."}));
     return NotShared<DOMArrayBufferView>(nullptr);
   }
   if (array->byteLength() > 65536) {
     QuotaExceededError::Throw(
         exception_state,
-        String::Format("The ArrayBufferView's byte length (%zu) exceeds the "
-                       "number of bytes of entropy available via this API "
-                       "(65536).",
-                       array->byteLength()));
+        Format("The ArrayBufferView's byte length ({}) exceeds the number of "
+               "bytes of entropy available via this API (65536).",
+               array->byteLength()));
     return NotShared<DOMArrayBufferView>(nullptr);
   }
   crypto::RandBytes(array->ByteSpan());

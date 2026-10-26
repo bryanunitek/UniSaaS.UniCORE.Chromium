@@ -29,8 +29,6 @@ android_library("java") {
   srcjar_deps = [ ":jni_headers" ]
   sources = [
     "java/src/org/chromium/chrome/browser/logo/DoodleCache.java",
-    "java/src/org/chromium/chrome/browser/logo/LegacyLogoView.java",
-    "java/src/org/chromium/chrome/browser/logo/LegacyLogoViewBinder.java",
     "java/src/org/chromium/chrome/browser/logo/LogoBridge.java",
     "java/src/org/chromium/chrome/browser/logo/LogoContainerView.java",
     "java/src/org/chromium/chrome/browser/logo/LogoContainerViewBinder.java",
@@ -45,19 +43,17 @@ android_library("java") {
     ":utils_java",
     "//base:base_java",
     "//build/android:build_java",
+    "//chrome/android:new_tab_page_utils_java",
     "//chrome/browser/flags:java",
     "//chrome/browser/ntp_customization:java",
-    "//chrome/browser/preferences:java",
     "//chrome/browser/profiles/android:java",
     "//chrome/browser/search_engines/android:java",
-    "//components/cached_flags:java",
     "//components/embedder_support/android:simple_factory_key_java",
     "//components/image_fetcher:java",
     "//components/search_engines/android:java",
     "//content/public/android:content_full_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/androidx:androidx_core_core_java",
-    "//third_party/gif_player:gif_player_java",
     "//third_party/jni_zero:jni_zero_java",
     "//ui/android:ui_no_recycler_view_java",
   ]
@@ -75,7 +71,7 @@ android_library("utils_java") {
   deps = [
     ":java_resources",
     "//base:base_java",
-    "//chrome/browser/flags:java",
+    "//chrome/android:new_tab_page_utils_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/androidx:androidx_core_core_java",
   ]
@@ -85,10 +81,9 @@ android_library("utils_java") {
 
 android_resources("java_resources") {
   sources = [
-    "java/res/drawable-sw600dp/ic_google_logo.xml",
     "java/res/drawable/ic_google_logo.xml",
-    "java/res/layout/legacy_logo_view_layout.xml",
     "java/res/layout/logo_view_layout.xml",
+    "java/res/values-land/dimens.xml",
     "java/res/values-sw600dp/dimens.xml",
     "java/res/values/dimens.xml",
     "java/res/values/ids.xml",
@@ -101,8 +96,6 @@ robolectric_library("junit") {
   resources_package = "org.chromium.chrome.browser.logo"
   sources = [
     "java/src/org/chromium/chrome/browser/logo/DoodleCacheUnitTest.java",
-    "java/src/org/chromium/chrome/browser/logo/LegacyLogoViewBinderUnitTest.java",
-    "java/src/org/chromium/chrome/browser/logo/LegacyLogoViewTest.java",
     "java/src/org/chromium/chrome/browser/logo/LogoContainerViewBinderUnitTest.java",
     "java/src/org/chromium/chrome/browser/logo/LogoCoordinatorUnitTest.java",
     "java/src/org/chromium/chrome/browser/logo/LogoMediatorUnitTest.java",
@@ -118,6 +111,7 @@ robolectric_library("junit") {
     "//base:base_java_test_support_uncommon",
     "//base:base_junit_test_support",
     "//chrome/android:chrome_java",
+    "//chrome/android:new_tab_page_utils_java",
     "//chrome/browser/flags:java",
     "//chrome/browser/ntp_customization:java",
     "//chrome/browser/preferences:java",
@@ -132,8 +126,6 @@ robolectric_library("junit") {
     "//third_party/androidx:androidx_core_core_java",
     "//third_party/androidx:androidx_test_core_java",
     "//third_party/androidx:androidx_test_ext_junit_java",
-    "//third_party/androidx:androidx_test_runner_java",
-    "//third_party/gif_player:gif_player_java",
     "//third_party/jni_zero:jni_zero_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",

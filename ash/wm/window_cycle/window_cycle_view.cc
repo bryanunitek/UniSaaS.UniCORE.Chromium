@@ -10,11 +10,11 @@
 
 #include "ash/accessibility/accessibility_controller.h"
 #include "ash/public/cpp/metrics_util.h"
-#include "ash/public/cpp/style/color_provider.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_id.h"
-#include "ash/style/system_shadow.h"
+#include "ash/style/style_util.h"
+#include "ash/style/system_decoration.h"
 #include "ash/style/tab_slider.h"
 #include "ash/style/tab_slider_button.h"
 #include "ash/utility/occlusion_tracker_pauser.h"
@@ -107,31 +107,20 @@ constexpr base::TimeDelta kOcclusionTrackerPauseTimeout =
 // Builds the item view for window cycling for the given `window` with the
 // correct parent. If the given `window` is a free-form window, the direct
 // parent will be `mirror_container`. For `window` that belongs to a snap group,
-// however, a `GroupContainerCycleView` will be added. If `same_app_only` is
-// true, `GroupContainerCycleView` will only be created if both the windows in
-// snap group belongs to the same app.
-WindowMiniViewBase* BuildAndConfigureCycleView(
-    aura::Window* window,
-    views::View* mirror_container,
-    std::vector<raw_ptr<WindowMiniViewBase, VectorExperimental>>& cycle_views,
-    const std::vector<raw_ptr<aura::Window, VectorExperimental>>& windows,
-    const bool same_app_only) {
+// however, a `GroupContainerCycleView` will be added.
+WindowMiniViewBase* BuildAndConfigureCycleView(aura::Window* window,
+                                               views::View* mirror_container) {
   if (auto* snap_group_controller = SnapGroupController::Get()) {
     if (auto* snap_group =
             snap_group_controller->GetSnapGroupForGivenWindow(window)) {
-      if (!same_app_only ||
-          (same_app_only &&
-           std::ranges::contains(windows, snap_group->window1()) &&
-           std::ranges::contains(windows, snap_group->window2()))) {
-        // Create `GroupContainerCycleView` if `window` is physically left / top
-        // snapped, which adds two child views subsequently. Skip adding
-        // `GroupContainerCycleView` if `window` is secondary snapped since the
-        // corresponding container view has been built.
-        return window == snap_group->GetPhysicallyLeftOrTopWindow()
-                   ? mirror_container->AddChildView(
-                         std::make_unique<GroupContainerCycleView>(snap_group))
-                   : nullptr;
-      }
+      // Create `GroupContainerCycleView` if `window` is physically left / top
+      // snapped, which adds two child views subsequently. Skip adding
+      // `GroupContainerCycleView` if `window` is secondary snapped since the
+      // corresponding container view has been built.
+      return window == snap_group->GetPhysicallyLeftOrTopWindow()
+                 ? mirror_container->AddChildView(
+                       std::make_unique<GroupContainerCycleView>(snap_group))
+                 : nullptr;
     }
   }
 
@@ -144,9 +133,8 @@ WindowMiniViewBase* BuildAndConfigureCycleView(
 }  // namespace
 
 WindowCycleView::WindowCycleView(aura::Window* root_window,
-                                 const WindowList& windows,
-                                 const bool same_app_only)
-    : root_window_(root_window), same_app_only_(same_app_only) {
+                                 const WindowList& windows)
+    : root_window_(root_window) {
   const bool is_interactive_alt_tab_mode_allowed =
       Shell::Get()->window_cycle_controller()->IsInteractiveAltTabModeAllowed();
 
@@ -164,8 +152,8 @@ WindowCycleView::WindowCycleView(aura::Window* root_window,
   layer()->SetMasksToBounds(true);
   if (chromeos::features::IsSystemBlurEnabled()) {
     layer()->SetFillsBoundsOpaquely(false);
-    layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-    layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+    layer()->SetBackgroundBlur(StyleUtil::kBackgroundBlurSigma);
+    layer()->SetBackdropFilterQuality(StyleUtil::kBackgroundBlurQuality);
   }
 
   SetBackground(views::CreateSolidBackground(
@@ -194,7 +182,7 @@ WindowCycleView::WindowCycleView(aura::Window* root_window,
           .SetCrossAxisAlignment(views::BoxLayout::CrossAxisAlignment::kStart)
           .Build());
   mirror_container_->AddObserver(this);
-  mirror_container_->layer()->SetName("WindowCycleView/MirrorContainer");
+  mirror_container_->layer()->SetName("WindowCycleView:MirrorContainer");
 
   if (is_interactive_alt_tab_mode_allowed) {
     tab_slider_ = AddChildView(std::make_unique<TabSlider>(/*max_tab_num=*/2));
@@ -259,8 +247,7 @@ WindowCycleView::WindowCycleView(aura::Window* root_window,
   }
 
   for (aura::Window* window : windows) {
-    if (auto* view = BuildAndConfigureCycleView(
-            window, mirror_container_, cycle_views_, windows, same_app_only)) {
+    if (auto* view = BuildAndConfigureCycleView(window, mirror_container_)) {
       cycle_views_.push_back(view);
       no_previews_list_.push_back(view);
     }
@@ -275,9 +262,9 @@ WindowCycleView::WindowCycleView(aura::Window* root_window,
   mirror_container_->SetBetweenChildSpacing(kBetweenChildPaddingDp -
                                             cycle_item_insets.width());
 
-  shadow_ = SystemShadow::CreateShadowOnNinePatchLayerForView(
-      this, SystemShadow::Type::kElevation4);
-  shadow_->SetRoundedCornerRadius(kBackgroundCornerRadius);
+  shadow_ = SystemDecoration::CreateShadowOnNinePatchLayerForView(
+      this, SystemDecoration::ShadowType::kElevation4);
+  shadow_->SetRoundedCorners(gfx::RoundedCornersF(kBackgroundCornerRadius));
 }
 
 WindowCycleView::~WindowCycleView() = default;
@@ -358,8 +345,7 @@ void WindowCycleView::UpdateWindows(const WindowList& windows) {
     return;
 
   for (aura::Window* window : windows) {
-    if (auto* view = BuildAndConfigureCycleView(
-            window, mirror_container_, cycle_views_, windows, same_app_only_)) {
+    if (auto* view = BuildAndConfigureCycleView(window, mirror_container_)) {
       cycle_views_.push_back(view);
       no_previews_list_.push_back(view);
     }

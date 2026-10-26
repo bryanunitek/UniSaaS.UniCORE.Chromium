@@ -32,7 +32,6 @@
 #include "chrome/installer/util/shell_util.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/browser_thread.h"
-#include "net/base/filename_util.h"
 
 namespace web_app {
 
@@ -160,10 +159,10 @@ std::wstring GetProgId(const base::FilePath& profile_path,
     // Provided file extensions must have a leading period. This is enforced
     // to ensure that calls to this function have consistent syntax (and
     // therefore get the same prog_id for a given set of inputs).
-    DCHECK_EQ(iter->at(0), '.');
+    CHECK_EQ(iter->at(0), '.', base::NotFatalUntil::M162);
     string_to_hash += *iter;
     while (++iter != file_extensions->end()) {
-      DCHECK_EQ(iter->at(0), '.');
+      CHECK_EQ(iter->at(0), '.', base::NotFatalUntil::M162);
       string_to_hash += ";";
       string_to_hash += *iter;
     }
@@ -211,7 +210,7 @@ base::FilePath GetAppSpecificLauncherFilename(const std::wstring& app_name) {
   // Windows' logic for checking reserved filenames views characters after '.'
   // as file extensions, and only the pre-file-extension portion is checked for
   // legitimacy (e.g. "nul_" is allowed, but "nul.a_" is not).
-  if (net::IsReservedNameOnWindows(sanitized_app_name))
+  if (base::IsReservedNameOnWindows(sanitized_app_name))
     sanitized_app_name.insert(0, 1, FILE_PATH_LITERAL('_'));
 
   // Add .exe extension.
@@ -274,7 +273,7 @@ std::optional<base::FilePath> CreateAppLauncherFile(
 void CheckAndUpdateExternalInstallations(const base::FilePath& cur_profile_path,
                                          const webapps::AppId& app_id,
                                          ResultCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   std::wstring prog_id = GetProgIdForApp(cur_profile_path, app_id);
   bool cur_profile_has_installation =

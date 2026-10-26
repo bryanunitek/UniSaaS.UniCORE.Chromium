@@ -4,6 +4,7 @@
 
 #include <utility>
 
+#include "base/command_line.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -29,7 +30,6 @@
 #include "chrome/browser/signin/chrome_signin_client_test_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -42,6 +42,7 @@
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "components/variations/variations_switches.h"
 #include "content/public/test/browser_test.h"
 #include "google_apis/common/api_error_codes.h"
 #include "net/base/net_errors.h"
@@ -89,6 +90,13 @@ class GlicUserStatusBrowserTest : public InProcessBrowserTest {
     RegisterGeminiSettingsPrefs(pref_service_.registry());
   }
 
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    // Add a dummy variation ID so that the X-Client-Data header is appended to
+    // eligible requests to select Google servers.
+    command_line->AppendSwitchASCII(variations::switches::kForceVariationIds,
+                                    "224466");
+  }
+
   void SetUpBrowserContextKeyedServices(
       content::BrowserContext* context) override {
     IdentityTestEnvironmentProfileAdaptor::
@@ -113,7 +121,8 @@ class GlicUserStatusBrowserTest : public InProcessBrowserTest {
 
     profile()->GetPrefs()->SetInteger(
         optimization_guide::prefs::kGeminiSettings,
-        std::to_underlying(glic::prefs::SettingsPolicyState::kEnabled));
+        std::to_underlying(
+            optimization_guide::prefs::GeminiSettingsPolicyState::kEnabled));
 
 #if !BUILDFLAG(IS_CHROMEOS)
     // TODO(crbug.com/460830699): Evaluate whether this is necessary on
@@ -174,8 +183,8 @@ class GlicUserStatusBrowserTest : public InProcessBrowserTest {
   void SimulateSuccessfulFetchOfAccountInfo(const TestAccount* test_account,
                                             const AccountInfo* account_info) {
     identity_test_env_->SimulateSuccessfulFetchOfAccountInfo(
-        account_info->account_id, account_info->email, account_info->gaia,
-        test_account->host_domain,
+        account_info->GetAccountId(), account_info->GetEmail(),
+        account_info->GetGaiaId(), test_account->host_domain,
         base::StrCat({"full_name-", test_account->email}),
         base::StrCat({"given_name-", test_account->email}),
         base::StrCat({"local-", test_account->email}),
@@ -229,7 +238,7 @@ class GlicUserStatusBrowserTest : public InProcessBrowserTest {
   }
 
   bool IsGlicEnabled() { return GlicEnabling::IsEnabledForProfile(profile()); }
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   net::test_server::HttpRequest& most_recent_request() {
     return most_recent_request_.value();
@@ -335,7 +344,8 @@ IN_PROC_BROWSER_TEST_F(GlicUserStatusBrowserTest,
   // Setting kGeminiSettings to disabled so that no RPC would be sent.
   profile()->GetPrefs()->SetInteger(
       optimization_guide::prefs::kGeminiSettings,
-      std::to_underlying(glic::prefs::SettingsPolicyState::kDisabled));
+      std::to_underlying(
+          optimization_guide::prefs::GeminiSettingsPolicyState::kDisabled));
 
   // Sign in again and wait for a while.
   SimulatePrimaryAccountChangedSignIn(&enterpriseAccount);
@@ -357,7 +367,8 @@ IN_PROC_BROWSER_TEST_F(GlicUserStatusBrowserTest,
   // Make the account enterprise again by setting kGeminiSettings to enabled.
   profile()->GetPrefs()->SetInteger(
       optimization_guide::prefs::kGeminiSettings,
-      std::to_underlying(glic::prefs::SettingsPolicyState::kEnabled));
+      std::to_underlying(
+          optimization_guide::prefs::GeminiSettingsPolicyState::kEnabled));
 
   // Sign in again.
   SimulatePrimaryAccountChangedSignIn(&enterpriseAccount);
@@ -414,7 +425,8 @@ IN_PROC_BROWSER_TEST_F(GlicUserStatusBrowserTest,
   request_received = false;
   profile()->GetPrefs()->SetInteger(
       optimization_guide::prefs::kGeminiSettings,
-      std::to_underlying(glic::prefs::SettingsPolicyState::kDisabled));
+      std::to_underlying(
+          optimization_guide::prefs::GeminiSettingsPolicyState::kDisabled));
 
   // Verifying the absence of a request by verifying the absence for a time
   // period longer than the polling interval.
@@ -429,7 +441,8 @@ IN_PROC_BROWSER_TEST_F(GlicUserStatusBrowserTest,
   // Make the account enterprise again by setting kGeminiSettings to enabled.
   profile()->GetPrefs()->SetInteger(
       optimization_guide::prefs::kGeminiSettings,
-      std::to_underlying(glic::prefs::SettingsPolicyState::kEnabled));
+      std::to_underlying(
+          optimization_guide::prefs::GeminiSettingsPolicyState::kEnabled));
 
   // Verify request handler is inovked.
   ASSERT_TRUE(base::test::RunUntil([&]() { return request_received; }));
@@ -564,7 +577,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // Revoke the refresh token. This should cause the managed status check to
   // fail, and no RPC will be sent.
-  identity_test_env_->RemoveRefreshTokenForAccount(account_info.account_id);
+  identity_test_env_->RemoveRefreshTokenForAccount(account_info.GetAccountId());
 
   // Verify no request is sent.
   {
@@ -577,11 +590,11 @@ IN_PROC_BROWSER_TEST_F(
 
   // Now, restore the refresh token and provide account info. This should allow
   // the fetcher to retry and succeed.
-  identity_test_env_->MakeAccountAvailable(account_info.email);
+  identity_test_env_->MakeAccountAvailable(account_info.GetEmail());
 
   // Re-apply capabilities, as they are lost when the token is restored.
   account_info = identity_manager_->FindExtendedAccountInfoByAccountId(
-      account_info.account_id);
+      account_info.GetAccountId());
   AccountCapabilitiesTestMutator refreshed_mutator(&account_info);
   SetGlicCapability(refreshed_mutator, true);
   identity_test_env_->UpdateAccountInfoForAccount(account_info);

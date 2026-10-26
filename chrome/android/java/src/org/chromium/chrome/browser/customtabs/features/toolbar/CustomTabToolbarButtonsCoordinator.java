@@ -42,6 +42,7 @@ import org.chromium.chrome.browser.toolbar.optional_button.ButtonData;
 import org.chromium.chrome.browser.toolbar.top.OptionalBrowsingModeButtonController;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
 import org.chromium.components.browser_ui.styles.ChromeColors;
+import org.chromium.ui.base.ViewUtils;
 import org.chromium.ui.modelutil.ListModelChangeProcessor;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyListModel;
@@ -67,9 +68,8 @@ public class CustomTabToolbarButtonsCoordinator
             CustomTabToolbar view,
             BrowserServicesIntentDataProvider intentDataProvider,
             Callback<CustomButtonParams> customButtonClickCallback,
-            CustomTabMinimizeDelegate minimizeDelegate,
+            @Nullable CustomTabMinimizeDelegate minimizeDelegate,
             Supplier<@Nullable AppMenuHandler> appMenuHandler,
-            CustomTabToolbar.@Nullable OmniboxParams omniboxParams,
             ActivityLifecycleDispatcher lifecycleDispatcher,
             ActivityTabProvider tabProvider) {
         var customActionButtons =
@@ -84,13 +84,13 @@ public class CustomTabToolbarButtonsCoordinator
                                 closeButtonVisible,
                                 intentDataProvider.getCloseButtonDrawable(),
                                 closeButtonPosition,
-                                /* clickListener= */ v -> {}) // Real value set later by
-                        // #setCloseButtonClickHandler.
+                                /* clickListener= */ ViewUtils
+                                        .emptyClickListener()) // Real value set
+                        // later by #setCloseButtonClickHandler.
                         : new CloseButtonData();
 
         mIsOptionalButtonSupported = intentDataProvider.isOptionalButtonSupported();
         int toolbarWidth = CustomTabDimensionUtils.getInitialWidth(activity, intentDataProvider);
-        boolean omniboxEnabled = omniboxParams != null;
         boolean titleVisible =
                 intentDataProvider.getTitleVisibilityState() == TitleVisibility.VISIBLE;
         boolean isIncognito =
@@ -106,7 +106,6 @@ public class CustomTabToolbarButtonsCoordinator
                         /* menuButtonVisible= */ true,
                         /* optionalButtonVisible= */ false,
                         toolbarWidth,
-                        omniboxEnabled,
                         titleVisible,
                         isIncognito,
                         tint);

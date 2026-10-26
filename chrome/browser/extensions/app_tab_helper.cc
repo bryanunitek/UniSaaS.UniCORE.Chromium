@@ -14,6 +14,7 @@
 #include "chrome/browser/sessions/session_tab_helper_factory.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
@@ -23,6 +24,7 @@
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/url_constants.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -54,25 +56,43 @@ using content::WebContents;
 
 namespace extensions {
 
+DEFINE_USER_DATA(AppTabHelper);
+
 AppTabHelper::~AppTabHelper() = default;
 
-AppTabHelper::AppTabHelper(content::WebContents* web_contents)
+AppTabHelper::AppTabHelper(tabs::TabInterface& tab,
+                           content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
-      content::WebContentsUserData<AppTabHelper>(*web_contents),
-      profile_(Profile::FromBrowserContext(web_contents->GetBrowserContext())) {
+      profile_(Profile::FromBrowserContext(web_contents->GetBrowserContext())),
+      scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {
   // Ensure we have a SessionTabHelper.
   CreateSessionServiceTabHelper(web_contents);
 
   registry_observation_.Observe(ExtensionRegistry::Get(profile_));
 }
 
+// static
+AppTabHelper* AppTabHelper::From(tabs::TabInterface* tab) {
+  return tab ? Get(tab->GetUnownedUserDataHost()) : nullptr;
+}
+
+// static
+AppTabHelper* AppTabHelper::FromWebContents(
+    content::WebContents* web_contents) {
+  if (!web_contents) {
+    return nullptr;
+  }
+  return From(tabs::TabInterface::MaybeGetFromContents(web_contents));
+}
+
 void AppTabHelper::SetExtensionApp(const Extension* extension) {
-  DCHECK(!extension || AppLaunchInfo::GetFullLaunchURL(extension).is_valid());
+  CHECK(!extension || AppLaunchInfo::GetFullLaunchURL(extension).is_valid(),
+        base::NotFatalUntil::M161);
   if (extension_app_ == extension) {
     return;
   }
 
-  DCHECK(!extension || extension->is_app());
+  CHECK(!extension || extension->is_app(), base::NotFatalUntil::M161);
 
   extension_app_ = extension;
 
@@ -132,26 +152,15 @@ void AppTabHelper::DidFinishNavigation(
        browser->GetType() == BrowserWindowInterface::Type::TYPE_APP_POPUP)) {
     const Extension* extension =
         registry->GetInstalledExtension(web_app::GetAppIdFromApplicationName(
-            browser->GetBrowserForMigrationOnly()->app_name()));
+            BrowserInitState::From(browser)->create_params().app_name));
     if (extension && AppLaunchInfo::GetFullLaunchURL(extension).is_valid()) {
-      DCHECK(extension->is_app());
+      CHECK(extension->is_app(), base::NotFatalUntil::M161);
       SetExtensionApp(extension);
     }
   } else {
     UpdateExtensionAppIcon(
         enabled_extensions.GetExtensionOrAppByURL(navigation_handle->GetURL()));
   }
-}
-
-void AppTabHelper::DidCloneToNewWebContents(WebContents* old_web_contents,
-                                            WebContents* new_web_contents) {
-  // When the WebContents that this is attached to is cloned, give the new clone
-  // a AppTabHelper and copy state over.
-  CreateForWebContents(new_web_contents);
-  AppTabHelper* new_helper = FromWebContents(new_web_contents);
-
-  new_helper->SetExtensionApp(extension_app_);
-  new_helper->extension_app_icon_ = extension_app_icon_;
 }
 
 const Extension* AppTabHelper::GetExtension(
@@ -203,7 +212,5 @@ void AppTabHelper::OnExtensionUnloaded(content::BrowserContext* browser_context,
     SetExtensionApp(nullptr);
   }
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(AppTabHelper);
 
 }  // namespace extensions

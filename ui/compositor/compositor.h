@@ -164,7 +164,6 @@ class COMPOSITOR_EXPORT Compositor
              scoped_refptr<base::SingleThreadTaskRunner> task_runner,
              bool enable_pixel_canvas,
              bool use_external_begin_frame_control = false,
-             bool force_software_compositor = false,
              bool enable_compositing_based_throttling = false,
              size_t memory_limit_when_visible_mb = 0);
 
@@ -245,6 +244,8 @@ class COMPOSITOR_EXPORT Compositor
   // Set the current CGDirectDisplayID and update the private client.
   void SetVSyncDisplayID(const int64_t display_id);
   int64_t display_id() const;
+
+  void UpdateRefreshRate(float refresh_rate);
 #endif
 
   const gfx::DisplayColorSpaces& display_color_spaces() const {
@@ -310,14 +311,6 @@ class COMPOSITOR_EXPORT Compositor
   gfx::AcceleratedWidget ReleaseAcceleratedWidget();
   gfx::AcceleratedWidget widget() const;
 
-  // This flag is used to force a compositor into software compositing even tho
-  // in general chrome is using gpu compositing. This allows the compositor to
-  // be created without a gpu context, and does not go through the gpu path at
-  // all. This flag can not be used with a compositor that embeds any external
-  // content via a SurfaceLayer, as they would not agree on what compositing
-  // mode to use for resources, but may be used eg for tooltip windows.
-  bool force_software_compositor() { return force_software_compositor_; }
-
   // Returns the main thread task runner this compositor uses. Users of the
   // compositor generally shouldn't use this.
   scoped_refptr<base::SingleThreadTaskRunner> task_runner() const {
@@ -370,7 +363,6 @@ class COMPOSITOR_EXPORT Compositor
 #else
   void IssueExternalBeginFrame(
       const viz::BeginFrameArgs& args,
-      bool force,
       base::OnceCallback<void(const viz::BeginFrameAck&)> callback);
 #endif
 
@@ -612,12 +604,10 @@ class COMPOSITOR_EXPORT Compositor
   struct PendingBeginFrameArgs {
     PendingBeginFrameArgs(
         const viz::BeginFrameArgs& args,
-        bool force,
         base::OnceCallback<void(const viz::BeginFrameAck&)> callback);
     ~PendingBeginFrameArgs();
 
     const viz::BeginFrameArgs args;
-    const bool force;
     base::OnceCallback<void(const viz::BeginFrameAck&)> callback;
   };
 #endif
@@ -674,7 +664,6 @@ class COMPOSITOR_EXPORT Compositor
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   const bool use_external_begin_frame_control_;
-  const bool force_software_compositor_;
 
   // The device scale factor of the monitor that this compositor is compositing
   // layers on.

@@ -17,10 +17,10 @@ import '//resources/ash/common/cr_elements/cros_color_overrides.css.js';
 
 import type {CrToggleElement} from '//resources/ash/common/cr_elements/cr_toggle/cr_toggle.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {SettingsBooleanControlMixin} from '/shared/settings/controls/settings_boolean_control_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
 
+import {SettingsBooleanControlMixin} from './settings_boolean_control_mixin.js';
 import {getTemplate} from './settings_toggle_button.html.js';
 
 
@@ -97,15 +97,15 @@ export class SettingsToggleButtonElement extends
     ];
   }
 
-  override ariaLabel: string;
-  ariaShowLabel: boolean;
-  ariaShowSublabel: boolean;
-  elideLabel: boolean;
-  icon: string;
-  learnMoreAriaLabel: string;
-  learnMoreUrl: string;
-  subLabelWithLink: string;
-  subLabelIcon: string;
+  declare ariaLabel: string;
+  declare ariaShowLabel: boolean;
+  declare ariaShowSublabel: boolean;
+  declare elideLabel: boolean;
+  declare icon: string;
+  declare learnMoreAriaLabel: string;
+  declare learnMoreUrl: string;
+  declare subLabelWithLink: string;
+  declare subLabelIcon: string;
 
   override ready(): void {
     super.ready();

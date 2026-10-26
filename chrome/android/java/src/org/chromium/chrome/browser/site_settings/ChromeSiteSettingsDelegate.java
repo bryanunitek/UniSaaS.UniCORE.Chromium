@@ -23,8 +23,6 @@ import org.chromium.base.CommandLine;
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.supplier.OneshotSupplier;
-import org.chromium.base.task.PostTask;
-import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
@@ -41,7 +39,6 @@ import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.notifications.channels.SiteChannelsManager;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.privacy_sandbox.PrivacySandboxBridge;
-import org.chromium.chrome.browser.privacy_sandbox.PrivacySandboxSnackbarController;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
 import org.chromium.chrome.browser.settings.FaviconLoader;
@@ -59,7 +56,6 @@ import org.chromium.components.embedder_support.util.Origin;
 import org.chromium.components.favicon.LargeIconBridge;
 import org.chromium.components.feature_engagement.EventConstants;
 import org.chromium.components.permissions.PermissionUtil;
-import org.chromium.components.prefs.PrefService;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.ContentFeatureList;
@@ -79,10 +75,8 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
     private final Context mContext;
     private final Profile mProfile;
     private final PrivacySandboxBridge mPrivacySandboxBridge;
-    private @Nullable BrowsingDataModel mBrowsingDataModel;
     private @Nullable ManagedPreferenceDelegate mManagedPreferenceDelegate;
     private @Nullable SnackbarManager mSnackbarManager;
-    private @Nullable PrivacySandboxSnackbarController mPrivacySandboxController;
     private @Nullable LargeIconBridge mLargeIconBridge;
 
     public ChromeSiteSettingsDelegate(Context context, Profile profile) {
@@ -97,11 +91,6 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
             mLargeIconBridge.destroy();
             mLargeIconBridge = null;
         }
-
-        if (mBrowsingDataModel != null) {
-            mBrowsingDataModel.destroy();
-            mBrowsingDataModel = null;
-        }
     }
 
     /** Used to set an instance of {@link SnackbarManager} by the parent activity. */
@@ -110,8 +99,6 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
         snackbarManagerSupplier.onAvailable(
                 (snackbarManager) -> {
                     mSnackbarManager = snackbarManager;
-                    mPrivacySandboxController =
-                            new PrivacySandboxSnackbarController(mContext, snackbarManager);
                 });
     }
 
@@ -162,6 +149,8 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
             case SiteSettingsCategory.Type.BLUETOOTH:
                 return ContentFeatureMap.isEnabled(
                         ContentFeatureList.WEB_BLUETOOTH_NEW_PERMISSIONS_BACKEND);
+            case SiteSettingsCategory.Type.HID_DEVICES:
+                return ContentFeatureMap.isEnabled(ContentFeatureList.WEB_HID);
             case SiteSettingsCategory.Type.BLUETOOTH_SCANNING:
                 return CommandLine.getInstance()
                         .hasSwitch(ContentSwitches.ENABLE_EXPERIMENTAL_WEB_PLATFORM_FEATURES);
@@ -318,32 +307,6 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
     }
 
     @Override
-    public void maybeDisplayPrivacySandboxSnackbar() {
-        if (mPrivacySandboxController == null) return;
-
-        // Only show the snackbar when Privacy Sandbox APIs are enabled.
-        if (!isAnyPrivacySandboxApiEnabledV4()) return;
-
-        if (mPrivacySandboxBridge.isPrivacySandboxRestricted()) return;
-
-        mPrivacySandboxController.showSnackbar();
-    }
-
-    private boolean isAnyPrivacySandboxApiEnabledV4() {
-        PrefService prefs = UserPrefs.get(mProfile);
-        return prefs.getBoolean(Pref.PRIVACY_SANDBOX_M1_TOPICS_ENABLED)
-                || prefs.getBoolean(Pref.PRIVACY_SANDBOX_M1_AD_MEASUREMENT_ENABLED)
-                || prefs.getBoolean(Pref.PRIVACY_SANDBOX_M1_FLEDGE_ENABLED);
-    }
-
-    @Override
-    public void dismissPrivacySandboxSnackbar() {
-        if (mPrivacySandboxController != null) {
-            mPrivacySandboxController.dismissSnackbar();
-        }
-    }
-
-    @Override
     public boolean isRelatedWebsiteSetsDataAccessEnabled() {
         return mPrivacySandboxBridge.isRelatedWebsiteSetsDataAccessEnabled();
     }
@@ -364,7 +327,7 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
     }
 
     @Override
-    public String getRelatedWebsiteSetOwner(String memberOrigin) {
+    public @Nullable String getRelatedWebsiteSetOwner(String memberOrigin) {
         return mPrivacySandboxBridge.getRelatedWebsiteSetOwner(memberOrigin);
     }
 
@@ -375,7 +338,7 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
 
     @Override
     public void launchClearBrowsingDataDialog(Activity currentActivity) {
-        SettingsNavigationFactory.createSettingsNavigation()
+        SettingsNavigationFactory.createSettingsNavigation(currentActivity)
                 .startSettings(
                         currentActivity,
                         SettingsNavigation.SettingsFragment.CLEAR_BROWSING_DATA,
@@ -395,17 +358,7 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
         BrowsingDataBridge.buildBrowsingDataModelFromDisk(
                 mProfile,
                 model -> {
-                    if (mBrowsingDataModel != null) {
-                        // Posting the task to destroy the model to avoid ANR hangs/crashes caused
-                        // by sometimes slow model building and JNI deadlock.
-                        // The old model reference needs to be captured before posting the destroy
-                        // task to avoid crashing caused by destroying the new model instead of the
-                        // old model.
-                        BrowsingDataModel oldModel = mBrowsingDataModel;
-                        PostTask.postTask(TaskTraits.UI_DEFAULT, oldModel::destroy);
-                    }
-                    mBrowsingDataModel = model;
-                    callback.onResult(mBrowsingDataModel);
+                    callback.onResult(model);
                 });
     }
 
@@ -417,11 +370,6 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
     @Override
     public boolean isRelatedWebsiteSetsUiEnabled() {
         return ChromeFeatureList.isEnabled(ChromeFeatureList.RELATED_WEBSITE_SETS_UI);
-    }
-
-    @Override
-    public boolean isSettingsContainmentEnabled() {
-        return ChromeFeatureList.sAndroidSettingsContainment.isEnabled();
     }
 
     @Override

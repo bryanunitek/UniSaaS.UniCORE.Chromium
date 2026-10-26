@@ -10,6 +10,7 @@
 #include "base/compiler_specific.h"
 #include "base/numerics/safe_conversions.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
+#include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/fetch/body.h"
 #include "third_party/blink/renderer/core/fetch/bytes_consumer_tee.h"
@@ -29,6 +30,8 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/cached_metadata_handler.h"
 #include "third_party/blink/renderer/platform/network/encoded_form_data.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/scheduler/public/event_loop.h"
 #include "third_party/blink/renderer/platform/scheduler/public/frame_or_worker_scheduler.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "v8/include/v8.h"
@@ -71,8 +74,10 @@ class BodyStreamBuffer::LoaderClient final
   }
 
   void DidFetchDataStartedDataPipe(
-      mojo::ScopedDataPipeConsumerHandle data_pipe) override {
-    client_->DidFetchDataStartedDataPipe(std::move(data_pipe));
+      mojo::ScopedDataPipeConsumerHandle data_pipe,
+      DrainedDataPipeClient* drained_pipe_client) override {
+    client_->DidFetchDataStartedDataPipe(std::move(data_pipe),
+                                         drained_pipe_client);
   }
 
   void DidFetchDataLoadedDataPipe() override {
@@ -90,7 +95,7 @@ class BodyStreamBuffer::LoaderClient final
     client_->DidFetchDataLoadFailed();
   }
 
-  void Abort() override { NOTREACHED(); }
+  void Abort(ScriptValue reason) override { NOTREACHED(); }
 
   void Trace(Visitor* visitor) const override {
     visitor->Trace(buffer_);
@@ -259,11 +264,12 @@ void BodyStreamBuffer::StartLoading(FetchDataLoader* loader,
 
   if (signal_) {
     if (signal_->aborted()) {
-      client->Abort();
+      AbortLoader(client);
       return;
     }
     loader_client_abort_handle_ = signal_->AddAlgorithm(
-        BindOnce(&FetchDataLoader::Client::Abort, WrapWeakPersistent(client)));
+        BindOnce(&BodyStreamBuffer::AbortLoader, WrapWeakPersistent(this),
+                 WrapWeakPersistent(client)));
   }
   loader_ = loader;
   auto* handle = ReleaseHandle(exception_state);
@@ -385,6 +391,16 @@ void BodyStreamBuffer::OnStateChange() {
     return;
   }
 
+  // `consumer_` can call this from a task, with no script running. Fulfilling
+  // a read request can still run script, e.g. a "then" getter on the result. A
+  // callback called from that script must not perform a microtask checkpoint,
+  // as HTML only does so once the JavaScript execution context stack is empty.
+  // Pending microtasks run at the next checkpoint instead, e.g. at the end of
+  // the task.
+  std::unique_ptr<scheduler::EventLoop::PauseMicrotasksHandle>
+      microtasks_pauser =
+          GetExecutionContext()->GetAgent()->event_loop()->PauseMicrotasks();
+
   switch (consumer_->GetPublicState()) {
     case BytesConsumer::PublicState::kReadableOrWaiting:
       break;
@@ -467,13 +483,34 @@ void BodyStreamBuffer::Abort() {
   }
   auto* byte_controller =
       To<ReadableByteStreamController>(stream_->GetController());
-  v8::Local<v8::Value> dom_exception = V8ThrowDOMException::CreateOrEmpty(
-      script_state_->GetIsolate(), DOMExceptionCode::kAbortError,
-      "BodyStreamBuffer was aborted");
-  CHECK(!dom_exception.IsEmpty());
-  ReadableByteStreamController::Error(script_state_, byte_controller,
-                                      dom_exception);
+
+  v8::Local<v8::Value> reason;
+  if (signal_ &&
+      RuntimeEnabledFeatures::ForwardReasonToFetchBodyAbortEnabled()) {
+    reason = signal_->reason(script_state_).V8Value();
+  } else {
+    reason = V8ThrowDOMException::CreateOrEmpty(script_state_->GetIsolate(),
+                                                DOMExceptionCode::kAbortError,
+                                                "BodyStreamBuffer was aborted");
+  }
+
+  CHECK(!reason.IsEmpty());
+  ReadableByteStreamController::Error(script_state_, byte_controller, reason);
   CancelConsumer();
+}
+
+void BodyStreamBuffer::AbortLoader(FetchDataLoader::Client* client) {
+  if (!client) {
+    return;
+  }
+  if (RuntimeEnabledFeatures::ForwardReasonToFetchBodyAbortEnabled()) {
+    client->Abort(signal_->reason(script_state_));
+  } else {
+    v8::Local<v8::Value> error = V8ThrowDOMException::CreateOrEmpty(
+        script_state_->GetIsolate(), DOMExceptionCode::kAbortError,
+        "BodyStreamBuffer was aborted");
+    client->Abort(ScriptValue(script_state_->GetIsolate(), error));
+  }
 }
 
 void BodyStreamBuffer::Close(ExceptionState& exception_state) {
@@ -633,6 +670,30 @@ void BodyStreamBuffer::StopLoading() {
   }
   loader_->Cancel();
   EndLoading();
+}
+
+BodyStreamBuffer* BodyStreamBuffer::CreateProxy(
+    ExceptionState& exception_state) {
+  // ReleaseHandle() locks this buffer's stream and, unless the body is made
+  // from a ReadableStream, also closes and disturbs it.
+  BytesConsumer* consumer = ReleaseHandle(exception_state);
+  if (!consumer) {
+    return nullptr;
+  }
+  auto* proxy = BodyStreamBuffer::Create(script_state_, consumer, signal_.Get(),
+                                         /*cached_metadata_handler=*/nullptr);
+  if (!made_from_readable_stream_) {
+    return proxy;
+  }
+  // For a stream-backed body ReleaseHandle() returns a consumer that acquires
+  // its own reader, which locks the stream but does not disturb it until a
+  // read happens; "create a proxy" disturbs synchronously. This has to come
+  // after ReleaseHandle(), which DCHECKs that the stream is not yet disturbed.
+  stream_->MarkDisturbed();
+  // Like this body, the proxy has no source and an unknown length, so it has
+  // to be made from a ReadableStream as well.
+  return MakeGarbageCollected<BodyStreamBuffer>(
+      script_state_, proxy->Stream(), /*cached_metadata_handler=*/nullptr);
 }
 
 BytesConsumer* BodyStreamBuffer::ReleaseHandle(

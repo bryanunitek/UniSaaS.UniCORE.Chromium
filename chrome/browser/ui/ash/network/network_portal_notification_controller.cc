@@ -22,8 +22,6 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/browser/notifications/notification_handler.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
 #include "chrome/browser/ui/ash/network/network_portal_signin_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/network/network_event_log.h"
@@ -34,6 +32,7 @@
 #include "components/session_manager/core/session_manager.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_types.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
@@ -79,17 +78,17 @@ std::unique_ptr<message_center::Notification> CreateNotification(
                       : IDS_NEW_PORTAL_DETECTION_NOTIFICATION_TITLE_WIRED),
           l10n_util::GetStringFUTF16(message,
                                      base::UTF8ToUTF16(network->name())),
-          /*display_source=*/std::u16string(), /*origin_url=*/GURL(),
-          notifier_id, data, std::move(delegate),
-          ash::kNotificationCaptivePortalIcon,
+          /*display_source=*/std::u16string(), notifier_id, data,
+          std::move(delegate), ash::kNotificationCaptivePortalIcon,
           message_center::SystemNotificationWarningLevel::NORMAL);
   notification->set_never_timeout(true);
   return notification;
 }
 
 void CloseNotification() {
-  SystemNotificationHelper::GetInstance()->Close(
-      NetworkPortalNotificationController::kNotificationId);
+  message_center::MessageCenter::Get()->RemoveNotification(
+      NetworkPortalNotificationController::kNotificationId,
+      /*by_user=*/false);
 }
 
 }  // namespace
@@ -125,7 +124,7 @@ NetworkPortalNotificationController::NetworkPortalNotificationController() {
   if (NetworkHandler::IsInitialized()) {  // May be null in tests.
     NetworkHandler::Get()->network_state_handler()->AddObserver(this);
   }
-  DCHECK(session_manager::SessionManager::Get());
+  CHECK(session_manager::SessionManager::Get(), base::NotFatalUntil::M162);
   session_manager::SessionManager::Get()->AddObserver(this);
 }
 
@@ -179,7 +178,8 @@ void NetworkPortalNotificationController::PortalStateChanged(
       CreateDefaultCaptivePortalNotification(network, portal_state);
   DCHECK(notification) << "Notification not created for portal state: "
                        << portal_state;
-  SystemNotificationHelper::GetInstance()->Display(*notification);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 void NetworkPortalNotificationController::OnShuttingDown() {

@@ -29,6 +29,7 @@ import org.mockito.MockitoAnnotations;
 import org.robolectric.Robolectric;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.ui.xr.scenecore.XrFloatSize3d;
 import org.chromium.ui.xr.scenecore.XrResizableComponent.OnResizeListener;
 
 import java.util.List;
@@ -38,19 +39,21 @@ import java.util.List;
 public class XrResizableComponentImplTest {
     private static final float DELTA = 0.01f;
 
-    @Mock private View mView;
     @Mock private OnResizeListener mListener;
 
     private Session mSession;
     private XrResizableComponentImpl<PanelEntity> mResizableComponent;
     private ComponentActivity mActivity;
+    private View mView;
     private PanelEntity mEntity;
 
     @Before
     public void setUp() {
+        XrModuleProviderImpl.initialize();
         MockitoAnnotations.openMocks(this);
 
         mActivity = Robolectric.buildActivity(ComponentActivity.class).create().start().get();
+        mView = new View(mActivity);
 
         SessionCreateResult result = Session.create(mActivity);
         assertTrue(result instanceof SessionCreateSuccess);
@@ -89,7 +92,7 @@ public class XrResizableComponentImplTest {
 
     @Test
     public void testSetMinSize() {
-        mResizableComponent.setMinSize(1f, 2f, 0f);
+        mResizableComponent.setMinSize(XrFloatSize3d.create(1f, 2f, 0f));
         mResizableComponent.setResizable(true, false);
 
         ResizableComponent resizableComponent = getResizableComponent();
@@ -100,7 +103,7 @@ public class XrResizableComponentImplTest {
 
     @Test
     public void testSetMaxSize() {
-        mResizableComponent.setMaxSize(10f, 20f, 0f);
+        mResizableComponent.setMaxSize(XrFloatSize3d.create(10f, 20f, 0f));
         mResizableComponent.setResizable(true, false);
 
         ResizableComponent resizableComponent = getResizableComponent();

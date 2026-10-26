@@ -6,17 +6,17 @@
 
 #include <algorithm>
 #include <iterator>
+#include <ranges>
 #include <utility>
 
 #include "base/barrier_closure.h"
 #include "base/check_op.h"
-#include "base/containers/adapters.h"
 #include "base/functional/callback_helpers.h"
-#include "base/i18n/case_conversion.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros_local.h"
-#include "base/strings/string_number_conversions.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/google/core/common/google_util.h"
@@ -26,11 +26,7 @@
 #include "components/omnibox/common/zero_suggest_cache_service_interface.h"
 #include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/hints/optimization_guide_decider.h"
-#include "components/optimization_guide/core/noisy_metrics_recorder.h"
-#include "components/optimization_guide/core/optimization_guide_enums.h"
-#include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/page_content_annotations/core/on_device_category_classifier.h"
 #include "components/page_content_annotations/core/page_content_annotations_enums.h"
 #include "components/page_content_annotations/core/page_content_annotations_features.h"
@@ -38,10 +34,8 @@
 #include "components/page_content_annotations/core/page_content_annotations_switches.h"
 #include "components/page_content_annotations/core/page_content_annotations_validator.h"
 #include "components/search/search.h"
-#include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
-#include "services/metrics/public/cpp/ukm_source.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/omnibox_proto/types.pb.h"
 
@@ -175,9 +169,7 @@ PageContentAnnotationsService::PageContentAnnotationsService(
     optimization_guide::OptimizationGuideDecider* optimization_guide_decider,
     passage_embeddings::EmbedderMetadataProvider* embedder_metadata_provider,
     scoped_refptr<base::SequencedTaskRunner> background_task_runner)
-    : min_page_category_score_to_persist_(
-          features::GetMinimumPageCategoryScoreToPersist()),
-      history_service_(history_service),
+    : history_service_(history_service),
       template_url_service_(template_url_service),
       zero_suggest_cache_service_(zero_suggest_cache_service),
       prefetched_related_searches_(features::MaxRelatedSearchesCacheSize()),
@@ -215,14 +207,10 @@ PageContentAnnotationsService::PageContentAnnotationsService(
     on_device_category_classifier_->AddObserver(this);
   }
 
-  if (features::RemotePageMetadataEnabled(application_locale, country_code)) {
-    std::vector<optimization_guide::proto::OptimizationType> optimization_types;
-    optimization_types.emplace_back(optimization_guide::proto::PAGE_ENTITIES);
-    optimization_types.emplace_back(optimization_guide::proto::SALIENT_IMAGE);
-    if (optimization_guide_decider_) {
-      optimization_guide_decider_->RegisterOptimizationTypes(
-          optimization_types);
-    }
+  if (optimization_guide_decider_) {
+    optimization_guide_decider_->RegisterOptimizationTypes(
+        {optimization_guide::proto::PAGE_ENTITIES,
+         optimization_guide::proto::SALIENT_IMAGE});
   }
   validator_ =
       PageContentAnnotationsValidator::MaybeCreateAndStartTimer(annotator_);
@@ -238,7 +226,7 @@ void PageContentAnnotationsService::Shutdown() {
   history_service_observation_.Reset();
 }
 
-void PageContentAnnotationsService::Annotate(const HistoryVisit& visit) {
+void PageContentAnnotationsService::Annotate(HistoryVisit visit) {
   if (last_annotated_history_visits_.Peek(visit) !=
       last_annotated_history_visits_.end()) {
     // We have already been requested to annotate this visit, so don't submit
@@ -266,7 +254,7 @@ void PageContentAnnotationsService::Annotate(const HistoryVisit& visit) {
     //
     // TODO(crbug.com/40212690): If the model was updated, the cached value
     // could be stale so we should invalidate the cache on model updates.
-    OnPageContentAnnotated(visit, it->second);
+    OnPageContentAnnotated(std::move(visit), it->second);
     base::UmaHistogramBoolean(
         "OptimizationGuide.PageContentAnnotations.AnnotateVisitResultCached",
         true);
@@ -277,7 +265,7 @@ void PageContentAnnotationsService::Annotate(const HistoryVisit& visit) {
                << "URL: " << visit.url << "\n"
                << "Text: " << visit.text_to_annotate.value_or(std::string());
   }
-  visits_to_annotate_.insert(visit);
+  visits_to_annotate_.insert(std::move(visit));
 
   base::UmaHistogramBoolean(
       "OptimizationGuide.PageContentAnnotations.AnnotateVisitResultCached",
@@ -305,6 +293,47 @@ void PageContentAnnotationsService::OnCategoriesClassified(
     const GURL& url,
     ukm::SourceId source_id,
     const std::vector<Category>& categories) {
+  ukm::builders::PageContentAnnotations2 builder(source_id);
+  bool has_ukm = false;
+
+  for (const Category& category : categories) {
+    int64_t score = base::ClampRound(category.score * 100);
+    int64_t noisy_score = GenerateRapporNoisedScore(category.score);
+    if (optimization_guide_logger_ &&
+        optimization_guide_logger_->ShouldEnableDebugLogs()) {
+      OPTIMIZATION_GUIDE_LOGGER(
+          optimization_guide_common::mojom::LogSource::PAGE_CONTENT_ANNOTATIONS,
+          optimization_guide_logger_)
+          << base::StringPrintf(
+                 "URL: %s, Category classifier result (CategoryType, score): "
+                 "(%d, %f)",
+                 url.spec(), static_cast<int>(category.category_type),
+                 category.score);
+    }
+    switch (category.category_type) {
+      case CategoryType::kEducation:
+        base::UmaHistogramPercentage(
+            "OptimizationGuide.PageContentAnnotations.CategoryClassifier."
+            "EducationScore",
+            score);
+        builder.SetCategoryClassifier_EducationScore(noisy_score);
+        has_ukm = true;
+        break;
+      case CategoryType::kShopping:
+        base::UmaHistogramPercentage(
+            "OptimizationGuide.PageContentAnnotations.CategoryClassifier."
+            "ShoppingScore",
+            score);
+        builder.SetCategoryClassifier_ShoppingScore(noisy_score);
+        has_ukm = true;
+        break;
+    }
+  }
+
+  if (has_ukm) {
+    builder.Record(ukm::UkmRecorder::Get());
+  }
+
   auto it = last_visit_for_url_.Peek(url);
   if (it == last_visit_for_url_.end()) {
     return;
@@ -347,10 +376,11 @@ void PageContentAnnotationsService::AnnotateVisitBatch() {
   // Cancel any pending timers.
   batch_annotations_start_timer_.Cancel();
 
-  current_visit_annotation_batch_.assign(
-      std::move_iterator(visits_to_annotate_.begin()),
-      std::make_move_iterator(visits_to_annotate_.end()));
-  visits_to_annotate_.clear();
+  current_visit_annotation_batch_.reserve(visits_to_annotate_.size());
+  while (!visits_to_annotate_.empty()) {
+    current_visit_annotation_batch_.push_back(std::move(
+        visits_to_annotate_.extract(visits_to_annotate_.begin()).value()));
+  }
 
   // Used for testing.
   LOCAL_HISTOGRAM_BOOLEAN(
@@ -440,7 +470,7 @@ void PageContentAnnotationsService::OnBatchVisitsAnnotated(
   DCHECK_EQ(merged_annotation_outputs->size(),
             current_visit_annotation_batch_.size());
   for (size_t i = 0; i < merged_annotation_outputs->size(); i++) {
-    OnPageContentAnnotated(current_visit_annotation_batch_[i],
+    OnPageContentAnnotated(std::move(current_visit_annotation_batch_[i]),
                            merged_annotation_outputs->at(i));
   }
 
@@ -497,7 +527,7 @@ void PageContentAnnotationsService::RequestAndNotifyWhenModelAvailable(
 }
 
 void PageContentAnnotationsService::OnPageContentAnnotated(
-    const HistoryVisit& visit,
+    HistoryVisit visit,
     const std::optional<history::VisitContentModelAnnotations>&
         content_annotations) {
   base::UmaHistogramBoolean(
@@ -518,17 +548,13 @@ void PageContentAnnotationsService::OnPageContentAnnotated(
       PageContentAnnotationsResult::CreateContentVisibilityScoreResult(
           content_annotations->visibility_score));
 
-  if (!features::ShouldWriteContentAnnotationsToHistoryService()) {
-    return;
-  }
-
   if (visit.visit_id != history::kInvalidVisitID) {
     // If the visit ID is known, directly add the annotations for that visit
     // rather than querying history for the closest match.
     history_service_->AddContentModelAnnotationsForVisit(*content_annotations,
                                                          visit.visit_id);
   } else {
-    QueryURL(visit,
+    QueryURL(visit.nav_entry_timestamp, visit.url,
              base::BindOnce(
                  &history::HistoryService::AddContentModelAnnotationsForVisit,
                  history_service_->AsWeakPtr(), *content_annotations),
@@ -574,7 +600,8 @@ void PageContentAnnotationsService::OnZeroSuggestResponseUpdated(
 }
 
 void PageContentAnnotationsService::OnRelatedSearchesExtracted(
-    const HistoryVisit& visit,
+    base::Time navigation_timestamp,
+    const GURL& navigation_url,
     continuous_search::SearchResultExtractorClientStatus status,
     continuous_search::mojom::CategoryResultsPtr results) {
   // Fetch any cached "related searches" data obtained via ZPS prefetch.
@@ -582,7 +609,7 @@ void PageContentAnnotationsService::OnRelatedSearchesExtracted(
   if (ShouldExtractRelatedSearchesFromZPSCache()) {
     bool found = false;
     const auto it = prefetched_related_searches_.Get(
-        GetCanonicalSearchURL(visit.url, template_url_service_));
+        GetCanonicalSearchURL(navigation_url, template_url_service_));
     if (it != prefetched_related_searches_.end()) {
       related_searches_from_zps_prefetch = it->second;
       found = true;
@@ -625,36 +652,35 @@ void PageContentAnnotationsService::OnRelatedSearchesExtracted(
     return;
   }
 
-  if (!features::ShouldWriteContentAnnotationsToHistoryService()) {
-    return;
-  }
-
-  AddRelatedSearchesForVisit(visit, related_searches);
+  AddRelatedSearchesForVisit(navigation_timestamp, navigation_url,
+                             related_searches);
 }
 
 void PageContentAnnotationsService::AddRelatedSearchesForVisit(
-    const HistoryVisit& visit,
+    base::Time navigation_timestamp,
+    const GURL& navigation_url,
     const std::vector<std::string>& related_searches) {
-  QueryURL(visit,
+  QueryURL(navigation_timestamp, navigation_url,
            base::BindOnce(&history::HistoryService::AddRelatedSearchesForVisit,
                           history_service_->AsWeakPtr(), related_searches),
            PageContentAnnotationsType::kRelatedSearches);
 }
 
 void PageContentAnnotationsService::QueryURL(
-    const HistoryVisit& visit,
+    base::Time navigation_timestamp,
+    const GURL& navigation_url,
     PersistAnnotationsCallback callback,
     PageContentAnnotationsType annotation_type) {
   history_service_->QueryURLAndVisits(
-      visit.url, history::VisitQuery404sPolicy::kExclude404s,
+      navigation_url, history::VisitQuery404sPolicy::kExclude404s,
       base::BindOnce(&PageContentAnnotationsService::OnURLQueried,
-                     weak_ptr_factory_.GetWeakPtr(), visit, std::move(callback),
-                     annotation_type),
+                     weak_ptr_factory_.GetWeakPtr(), navigation_timestamp,
+                     std::move(callback), annotation_type),
       &history_service_task_tracker_);
 }
 
 void PageContentAnnotationsService::OnURLQueried(
-    const HistoryVisit& visit,
+    base::Time navigation_timestamp,
     PersistAnnotationsCallback callback,
     PageContentAnnotationsType annotation_type,
     history::QueryURLAndVisitsResult url_result) {
@@ -665,8 +691,8 @@ void PageContentAnnotationsService::OnURLQueried(
   }
 
   bool did_store_content_annotations = false;
-  for (const auto& visit_for_url : base::Reversed(url_result.visits)) {
-    if (visit.nav_entry_timestamp != visit_for_url.visit_time) {
+  for (const auto& visit_for_url : std::views::reverse(url_result.visits)) {
+    if (navigation_timestamp != visit_for_url.visit_time) {
       continue;
     }
 
@@ -799,7 +825,7 @@ void PageContentAnnotationsService::OnWaitForTitleDone(const GURL& url) {
   auto it = missing_title_visits_by_url_.Peek(url);
   if (it != missing_title_visits_by_url_.end()) {
     for (auto& history_visit : it->second) {
-      Annotate(history_visit);
+      Annotate(std::move(history_visit));
     }
     missing_title_visits_by_url_.Erase(it);
   }
@@ -811,6 +837,9 @@ void PageContentAnnotationsService::AddObserver(
   DCHECK(annotation_type == AnnotationType::kContentVisibility ||
          annotation_type == AnnotationType::kCategoryClassifier);
   page_content_annotations_observers_[annotation_type].AddObserver(observer);
+  if (annotation_type == AnnotationType::kCategoryClassifier) {
+    UpdateCategoryClassifierBridgeDemand();
+  }
 }
 
 void PageContentAnnotationsService::RemoveObserver(
@@ -819,6 +848,9 @@ void PageContentAnnotationsService::RemoveObserver(
   DCHECK(annotation_type == AnnotationType::kContentVisibility ||
          annotation_type == AnnotationType::kCategoryClassifier);
   page_content_annotations_observers_[annotation_type].RemoveObserver(observer);
+  if (annotation_type == AnnotationType::kCategoryClassifier) {
+    UpdateCategoryClassifierBridgeDemand();
+  }
 }
 
 void PageContentAnnotationsService::PersistRemotePageMetadata(
@@ -844,7 +876,7 @@ void PageContentAnnotationsService::PersistRemotePageMetadata(
   std::vector<history::VisitContentModelAnnotations::Category> categories;
   for (const auto& category : page_entities_metadata.categories()) {
     int category_score = static_cast<int>(100 * category.score());
-    if (category_score < min_page_category_score_to_persist_) {
+    if (category_score < features::kMinimumPageCategoryScoreToPersist) {
       continue;
     }
     model_annotations.categories.emplace_back(category.category_id(),
@@ -933,6 +965,18 @@ void PageContentAnnotationsService::SetPageCategoryClassifierBridge(
     std::unique_ptr<PageCategoryClassifierBridge>
         page_category_classifier_bridge) {
   page_category_classifier_bridge_ = std::move(page_category_classifier_bridge);
+  UpdateCategoryClassifierBridgeDemand();
+}
+
+void PageContentAnnotationsService::UpdateCategoryClassifierBridgeDemand() {
+  if (!page_category_classifier_bridge_) {
+    return;
+  }
+  auto it = page_content_annotations_observers_.find(
+      AnnotationType::kCategoryClassifier);
+  bool has_demand =
+      it != page_content_annotations_observers_.end() && !it->second.empty();
+  page_category_classifier_bridge_->SetDemandActive(has_demand);
 }
 
 HistoryVisit::HistoryVisit() = default;
@@ -946,7 +990,9 @@ HistoryVisit::HistoryVisit(history::VisitID visit_id) {
   this->visit_id = visit_id;
 }
 
-HistoryVisit::~HistoryVisit() = default;
 HistoryVisit::HistoryVisit(const HistoryVisit&) = default;
+HistoryVisit::HistoryVisit(HistoryVisit&&) = default;
+
+HistoryVisit::~HistoryVisit() = default;
 
 }  // namespace page_content_annotations

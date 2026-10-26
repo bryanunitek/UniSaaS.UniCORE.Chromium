@@ -7,6 +7,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/dom/document_lifecycle.h"
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
+#include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
@@ -33,28 +34,29 @@ constexpr double kLargeAdSizeToViewportSizeThreshold = 0.1;
 // ancestors (including itself), the 2nd to the top (where the top should always
 // be the <body>) has absolute position.
 bool IsOverlayCandidate(Element* element) {
-  const ComputedStyle* style = nullptr;
   LayoutView* layout_view = element->GetDocument().GetLayoutView();
   LayoutObject* object = element->GetLayoutObject();
 
   DCHECK_NE(object, layout_view);
 
+  LayoutObject* candidate = nullptr;
   for (; object != layout_view; object = object->Container()) {
     DCHECK(object);
-    style = object->Style();
+    candidate = object;
   }
 
-  DCHECK(style);
+  DCHECK(candidate);
 
   // 'style' is now the ComputedStyle for the object whose position depends
   // on the document.
-  if (style->GetPosition() == EPosition::kFixed ||
-      style->HasStickyConstrainedPosition()) {
+  const ComputedStyle& style = candidate->Style();
+  if (style.GetPosition() == EPosition::kFixed ||
+      style.HasStickyConstrainedPosition()) {
     return true;
   }
 
-  if (style->GetPosition() == EPosition::kAbsolute) {
-    return !object->StyleRef().ScrollsOverflow();
+  if (style.GetPosition() == EPosition::kAbsolute) {
+    return !layout_view->Style().ScrollsOverflow();
   }
 
   return false;
@@ -168,7 +170,11 @@ void OverlayInterstitialAdDetector::MaybeFireDetection(
     // skip that candidate because it could be a parallax/scroller ad.
     if (outermost_main_frame->GetOutermostMainFrameScrollPosition().y() ==
         candidate_start_outermost_main_frame_scroll_position_) {
-      OnPopupDetected(outermost_main_frame, candidate_is_ad_);
+      OnPopupDetected(
+          outermost_main_frame, candidate_is_ad_,
+          candidate_is_ad_
+              ? DynamicTo<Element>(DOMNodeIds::NodeForId(candidate_id_))
+              : nullptr);
     }
 
     if (popup_ad_detected_) {
@@ -218,7 +224,7 @@ void OverlayInterstitialAdDetector::MaybeFireDetection(
     if (!outermost_main_frame->GetDocument()
              ->GetLayoutView()
              ->HasScrollableOverflowY()) {
-      OnPopupDetected(outermost_main_frame, is_ad);
+      OnPopupDetected(outermost_main_frame, is_ad, element);
     }
 
     if (popup_ad_detected_) {
@@ -236,7 +242,8 @@ void OverlayInterstitialAdDetector::MaybeFireDetection(
 
 void OverlayInterstitialAdDetector::OnPopupDetected(
     LocalFrame* outermost_main_frame,
-    bool is_ad) {
+    bool is_ad,
+    Element* ad_element) {
   if (!popup_detected_) {
     UseCounter::Count(outermost_main_frame->GetDocument(),
                       WebFeature::kOverlayPopup);
@@ -249,6 +256,11 @@ void OverlayInterstitialAdDetector::OnPopupDetected(
     UseCounter::Count(outermost_main_frame->GetDocument(),
                       WebFeature::kOverlayPopupAd);
     popup_ad_detected_ = true;
+
+    // Tag the element as popup ad for the ad highlight label.
+    if (ad_element) {
+      ad_element->SetIsOverlayPopupAd();
+    }
   }
 }
 

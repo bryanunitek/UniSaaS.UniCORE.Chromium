@@ -195,7 +195,7 @@
             "os": "Ubuntu-22.04"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 5
+          "shards": 6
         },
         "test": "blink_unittests",
         "test_id_prefix": "ninja://third_party/blink/renderer/controller:blink_unittests/"
@@ -241,7 +241,8 @@
       {
         "args": [
           "--test-launcher-print-test-stdio=always",
-          "--test-launcher-filter-file=../../testing/buildbot/filters/linux.asan.browser_tests.filter"
+          "--test-launcher-filter-file=../../testing/buildbot/filters/linux.asan.browser_tests.filter",
+          "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup"
         ],
         "ci_only": true,
         "merge": {
@@ -381,6 +382,7 @@
         "args": [
           "--test-launcher-print-test-stdio=always"
         ],
+        "enable_rts_filtering": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
@@ -420,6 +422,7 @@
         "args": [
           "--test-launcher-print-test-stdio=always"
         ],
+        "enable_rts_filtering": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
@@ -431,7 +434,7 @@
             "os": "Ubuntu-22.04"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 88
+          "shards": 83
         },
         "test": "content_browsertests",
         "test_id_prefix": "ninja://content/test:content_browsertests/"
@@ -847,7 +850,8 @@
       },
       {
         "args": [
-          "--test-launcher-print-test-stdio=always"
+          "--test-launcher-print-test-stdio=always",
+          "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
@@ -859,8 +863,13 @@
           "dimensions": {
             "os": "Ubuntu-22.04"
           },
+          "optional_dimensions": {
+            "30": {
+              "cpu": "x86-64-e4"
+            }
+          },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 140
+          "shards": 130
         },
         "test": "interactive_ui_tests",
         "test_id_prefix": "ninja://chrome/test:interactive_ui_tests/"
@@ -1383,8 +1392,10 @@
       },
       {
         "args": [
-          "--test-launcher-print-test-stdio=always"
+          "--test-launcher-print-test-stdio=always",
+          "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup"
         ],
+        "enable_rts_filtering": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
@@ -1396,7 +1407,7 @@
             "os": "Ubuntu-22.04"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 20
+          "shards": 18
         },
         "test": "sync_integration_tests",
         "test_id_prefix": "ninja://chrome/test:sync_integration_tests/"
@@ -1473,7 +1484,7 @@
             "os": "Ubuntu-22.04"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 9
+          "shards": 7
         },
         "test": "unit_tests",
         "test_id_prefix": "ninja://chrome/test:unit_tests/"

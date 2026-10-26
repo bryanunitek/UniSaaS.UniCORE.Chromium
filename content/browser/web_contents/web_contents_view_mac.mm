@@ -20,6 +20,8 @@
 #include "base/task/current_thread.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/thread_restrictions.h"
+#include "components/remote_cocoa/app_shim/mouse_capture.h"
+#include "components/remote_cocoa/app_shim/window_move_loop.h"
 #include "components/remote_cocoa/browser/ns_view_ids.h"
 #include "components/remote_cocoa/common/application.mojom.h"
 #include "content/app_shim_remote_cocoa/web_contents_ns_view_bridge.h"
@@ -67,7 +69,7 @@ namespace {
 // is responsible for opening the file. It takes the drop data and an open file
 // stream.
 void PromiseWriterHelper(const DropData& drop_data, base::File file) {
-  DCHECK(file.IsValid());
+  CHECK(file.IsValid(), base::NotFatalUntil::M158);
   file.WriteAtCurrentPos(drop_data.file_contents);
 }
 
@@ -124,7 +126,7 @@ WebContentsViewMac::WebContentsViewMac(
 WebContentsViewMac::~WebContentsViewMac() {
   if (views_host_)
     views_host_->OnHostableViewDestroying();
-  DCHECK(!views_host_);
+  CHECK(!views_host_, base::NotFatalUntil::M158);
   in_process_ns_view_bridge_.reset();
 }
 
@@ -189,7 +191,19 @@ gfx::Rect WebContentsViewMac::GetContainerBounds() const {
   return gfx::ScreenRectFromNSRect(bounds);
 }
 
-void WebContentsViewMac::OnCapturerCountChanged() {}
+void WebContentsViewMac::UpdateVideoCaptureLock() {
+  if (web_contents_->IsBeingCaptured() && views_host_) {
+    if (!video_capture_lock_) {
+      video_capture_lock_ = views_host_->CreateVideoCaptureLock();
+    }
+  } else {
+    video_capture_lock_.RunAndReset();
+  }
+}
+
+void WebContentsViewMac::OnCapturerCountChanged() {
+  UpdateVideoCaptureLock();
+}
 
 void WebContentsViewMac::FullscreenStateChanged(bool is_fullscreen) {}
 
@@ -210,8 +224,22 @@ void WebContentsViewMac::StartDragging(
     const blink::mojom::DragEventSourceInfo& event_info) {
   RenderWidgetHostImpl* source_rwh =
       static_cast<RenderWidgetHostImpl*>(source_rfh.GetRenderWidgetHost());
-  // Disallow reentrant drag which could be an attempt to exploit drag state.
-  if (drag_source_start_rwh_) {
+  // Disallow reentrant drags. This uses the destination's state because
+  // the source frame might be destroyed during an active drag session.
+  if ([drag_dest_ didInitiateDrag] || drag_source_start_rwh_) {
+    return;
+  }
+  // A window move loop already owns the held mouse button; refuse to start a
+  // dragging session that would interfere with it.
+  if (remote_cocoa::CocoaWindowMoveLoop::IsActive()) {
+    web_contents_->SystemDragEnded(source_rwh);
+    return;
+  }
+  // Likewise, a widget holding mouse capture (e.g. a tab strip during a tab
+  // drag, or an open menu) owns the held mouse button; refuse to start a
+  // dragging session that would interfere with its gesture.
+  if (remote_cocoa::CocoaMouseCapture::GetGlobalCaptureWindow()) {
+    web_contents_->SystemDragEnded(source_rwh);
     return;
   }
   url::Origin source_origin = source_rfh.GetLastCommittedOrigin();
@@ -314,7 +342,8 @@ DropData* WebContentsViewMac::GetDropData() const {
 }
 
 void WebContentsViewMac::UpdateDragOperation(ui::mojom::DragOperation operation,
-                                             bool document_is_handling_drag) {
+                                             bool document_is_handling_drag,
+                                             RenderWidgetHostImpl* source_rwh) {
   [drag_dest_ setCurrentOperation:operation
            documentIsHandlingDrag:document_is_handling_drag];
 }
@@ -407,6 +436,9 @@ void WebContentsViewMac::CreateView(gfx::NativeView context) {
   in_process_ns_view_bridge_ =
       std::make_unique<remote_cocoa::WebContentsNSViewBridge>(ns_view_id_,
                                                               this);
+  if (web_contents_->GetVisibility() == Visibility::HIDDEN) {
+    in_process_ns_view_bridge_->SetVisible(false);
+  }
 
   drag_dest_ = [[WebDragDest alloc] initWithWebContentsImpl:web_contents_];
   if (delegate_)
@@ -421,7 +453,7 @@ RenderWidgetHostViewBase* WebContentsViewMac::CreateViewForWidget(
     // this actually is happening (and somebody isn't accidentally creating the
     // view twice), we check for the RVH Factory, which will be set when we're
     // making special ones (which go along with the special views).
-    DCHECK(RenderViewHostFactory::has_factory());
+    CHECK(RenderViewHostFactory::has_factory(), base::NotFatalUntil::M158);
     return static_cast<RenderWidgetHostViewBase*>(
         render_widget_host->GetView());
   }
@@ -458,6 +490,13 @@ RenderWidgetHostViewBase* WebContentsViewMac::CreateViewForWidget(
                         positioned:NSWindowBelow
                         relativeTo:nil];
   [GetInProcessNSView() setNextKeyView:view_view];
+
+  // There is no NSWindow when running headless, so send the frame bounds to the
+  // view synchronously to ensure its initial screen info is accurate.
+  if (![GetInProcessNSView() window]) {
+    view->SetWindowFrameInScreen(
+        gfx::ScreenRectFromNSRect([GetInProcessNSView() frame]));
+  }
   return view;
 }
 
@@ -467,7 +506,7 @@ RenderWidgetHostViewBase* WebContentsViewMac::CreateViewForChildWidget(
       new RenderWidgetHostViewMac(render_widget_host);
 
   // If the parent RenderWidgetHostViewMac is hosted in another process, ensure
-  // that the popup window will be created created in the same process.
+  // that the popup window will be created in the same process.
   // https://crbug.com/1091179
   if (views_host_) {
     auto* remote_cocoa_application = views_host_->GetRemoteCocoaApplication();
@@ -664,7 +703,7 @@ void WebContentsViewMac::PerformEndDrag(uint32_t drag_operation,
                                         const gfx::PointF& screen_point) {
   // Validate internal members are non-null as this method can be called
   // asynchronously.
-  if (!web_contents_ || !drag_source_start_rwh_) {
+  if (!web_contents_) {
     return;
   }
 
@@ -674,17 +713,19 @@ void WebContentsViewMac::PerformEndDrag(uint32_t drag_operation,
   // non-root RenderWidgetHosts they need to be transformed.
   gfx::PointF transformed_point = local_point;
   gfx::PointF transformed_screen_point = screen_point;
-  if (web_contents_->GetRenderWidgetHostView()) {
+  if (drag_source_start_rwh_ && web_contents_->GetRenderWidgetHostView()) {
     content::RenderWidgetHostViewBase* contentsViewBase =
         static_cast<content::RenderWidgetHostViewBase*>(
             web_contents_->GetRenderWidgetHostView());
     content::RenderWidgetHostViewBase* dragStartViewBase =
         static_cast<content::RenderWidgetHostViewBase*>(
             drag_source_start_rwh_->GetView());
-    contentsViewBase->TransformPointToCoordSpaceForView(
-        local_point, dragStartViewBase, &transformed_point);
-    contentsViewBase->TransformPointToCoordSpaceForView(
-        screen_point, dragStartViewBase, &transformed_screen_point);
+    if (dragStartViewBase) {
+      contentsViewBase->TransformPointToCoordSpaceForView(
+          local_point, dragStartViewBase, &transformed_point);
+      contentsViewBase->TransformPointToCoordSpaceForView(
+          screen_point, dragStartViewBase, &transformed_screen_point);
+    }
   }
 
   web_contents_->DragSourceEndedAt(
@@ -736,6 +777,7 @@ void WebContentsViewMac::DragPromisedFileTo(
 void WebContentsViewMac::ViewsHostableAttach(
     ViewsHostableView::Host* views_host) {
   views_host_ = views_host;
+  UpdateVideoCaptureLock();
   // Create an NSView in the target process, if one exists.
   auto* remote_cocoa_application = views_host_->GetRemoteCocoaApplication();
   if (remote_cocoa_application) {
@@ -758,6 +800,9 @@ void WebContentsViewMac::ViewsHostableAttach(
 
     remote_cocoa_application->CreateWebContentsNSView(
         ns_view_id_, std::move(stub_host), std::move(stub_ns_view_receiver));
+    if (web_contents_->GetVisibility() == Visibility::HIDDEN) {
+      remote_ns_view_->SetVisible(false);
+    }
     remote_ns_view_->SetParentNSView(views_host_->GetNSViewId());
 
     // Because this view is being displayed from a remote process, reset the
@@ -779,6 +824,8 @@ void WebContentsViewMac::ViewsHostableAttach(
 }
 
 void WebContentsViewMac::ViewsHostableDetach() {
+  // TODO(crbug.com/553428210): CHECK-exclusion: Convert to a CHECK once
+  // we are confident it won't be triggered.
   DCHECK(views_host_);
   // Disconnect from the remote bridge, if it exists. This will have the effect
   // of destroying the associated bridge instance with its NSView.
@@ -793,6 +840,7 @@ void WebContentsViewMac::ViewsHostableDetach() {
   }
   in_process_ns_view_bridge_->SetVisible(false);
   in_process_ns_view_bridge_->ResetParentNSView();
+  video_capture_lock_.RunAndReset();
   views_host_ = nullptr;
 
   for (auto* rwhv_mac : GetChildViews()) {

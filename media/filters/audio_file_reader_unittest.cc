@@ -211,10 +211,11 @@ TEST_P(AudioFileReaderTest, UnknownDuration) {
 }
 
 TEST_P(AudioFileReaderTest, WithVideo) {
-  // The total samples should be 45568 after applying discard padding.
-  // ffprobe shows discard_padding=64 for the last packet.
-  RunTest("bear.ogv", "-2.10,-1.01,0.24,1.48,0.70,-0.68,", 2, 44100,
-          base::Microseconds(1011520), 44609, 45568);
+  // Total raw samples decoded is 45568, but 128 preroll samples prior to time 0
+  // are trimmed by AudioFileReader::FinalizeDecodedBuffer, leaving 45440
+  // frames.
+  RunTest("bear.ogv", "-2.58,-0.68,1.00,1.40,-0.08,-1.29,", 2, 44100,
+          base::Microseconds(1011520), 44609, 45440);
 }
 
 TEST_P(AudioFileReaderTest, FLAC) {
@@ -228,11 +229,13 @@ TEST_P(AudioFileReaderTest, FLAC_WithMask) {
 }
 
 TEST_P(AudioFileReaderTest, Vorbis) {
-  // oggdec produces 15435 samples, but the last 629 samples are silence
-  // corresponding to discard padding. FFmpeg applies this discard padding,
-  // resulting in 15307 samples.
+  // oggdec produces 15435 samples. FFmpeg assigns a -2.902ms (-128 samples at
+  // 44.1kHz) start timestamp offset for the priming packet, leading to an
+  // estimated container duration of 352903us (~15564 frames). After trimming
+  // the priming audio and applying 629 samples of discard padding at the end,
+  // FFmpeg outputs 15307 samples (15435 - 128 = 15307).
   RunTest("sfx.ogg", "3.95,3.02,3.98,5.14,5.65,5.13,", 1, 44100,
-          base::Microseconds(350001), 15436, 15307);
+          base::Microseconds(352903), 15564, 15307);
 }
 
 TEST_P(AudioFileReaderTest, WaveU8) {
@@ -268,10 +271,15 @@ TEST_P(AudioFileReaderTest, CorruptMP3) {
           base::Microseconds(1018801), 44930, 44928);
 }
 
+TEST_P(AudioFileReaderTest, ReproMinimalMP3) {
+  RunTest("repro-minimal.mp3", "-0.84,-0.32,-0.75,-0.41,-0.93,0.29,", 2, 44100,
+          base::Microseconds(2220409), 97921, 97391);
+}
+
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
 TEST_P(AudioFileReaderTest, AAC) {
-  RunTest("sfx.m4a", "2.47,2.30,2.45,2.80,3.06,3.56,", 1, 44100,
-          base::Microseconds(347665), 15333, 12719);
+  RunTest("sfx.m4a", "0.79,2.31,4.15,4.92,4.04,1.44,", 1, 44100,
+          base::Microseconds(347665), 15333, 12701);
 }
 
 TEST_P(AudioFileReaderTest, AAC_SinglePacket) {
@@ -307,16 +315,9 @@ TEST_P(AudioFileReaderTest, MidStreamConfigChangesFail) {
 #endif
 
 TEST_P(AudioFileReaderTest, VorbisValidChannelLayout) {
-  if (GetParam()) {
-    // TODO(crbug.com/495575937): Remove this check once Symphonia supports 9
-    // channels.
-    Initialize("9ch.ogg");
-    EXPECT_FALSE(reader_->Open());
-    return;
-  }
   // The total samples should be 4800 after applying discard padding.
   RunTest("9ch.ogg", "102.08,12.51,57.91,56.94,63.05,17.30,", 9, 48000,
-          base::Microseconds(100001), 4801, 4800);
+          base::Microseconds(102668), 4929, 4800);
 }
 
 TEST_P(AudioFileReaderTest, WaveValidFourChannelLayout) {

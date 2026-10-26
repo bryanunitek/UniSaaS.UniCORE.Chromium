@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
 #include "components/vector_icons/vector_icons.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -113,7 +114,10 @@ BubbleFrameView::BubbleFrameView(const gfx::Insets& title_margins,
       subtitle_(title_container_->AddChildView(
           CreateLabelWithContextAndStyle(std::u16string(),
                                          style::CONTEXT_LABEL,
-                                         style::STYLE_SECONDARY))) {
+                                         style::STYLE_SECONDARY))),
+      available_screen_bounds_callback_(
+          base::BindRepeating(&BubbleFrameView::GetDefaultAvailableScreenBounds,
+                              base::Unretained(this))) {
   title_container_->SetOrientation(BoxLayout::Orientation::kVertical);
 
   default_title_->SetVisible(false);
@@ -250,14 +254,8 @@ bool BubbleFrameView::GetClientMask(const gfx::Size& size, SkPath* path) const {
     return false;
   }
 
-  // Format is upper-left, upper-right, lower-right, and lower-left.
-  const SkVector radii[4]{
-      {corner_radii.upper_left(),  corner_radii.upper_left()},
-      {corner_radii.upper_right(), corner_radii.upper_right()},
-      {corner_radii.lower_right(), corner_radii.lower_right()},
-      {corner_radii.lower_left(),  corner_radii.lower_left()}};
-  *path = SkPath::RRect(SkRRect::MakeRectRadii(
-      SkRect::MakeIWH(size.width(), size.height()), radii));
+  *path =
+      SkPath::RRect(gfx::RoundedRectToSkRRect(gfx::Rect(size), corner_radii));
   return true;
 }
 
@@ -337,11 +335,8 @@ void BubbleFrameView::GetWindowMask(const gfx::Size& size,
                     kBorderStrokeSize)};
 
   if (bubble_border_->shadow() == BubbleBorder::NO_SHADOW) {
-    SkVector radii[4]{{border_radii.upper_left(),  border_radii.upper_left()},
-                      {border_radii.upper_right(), border_radii.upper_right()},
-                      {border_radii.lower_right(), border_radii.lower_right()},
-                      {border_radii.lower_left(),  border_radii.lower_left()}};
-    *window_mask = SkPath::RRect(SkRRect::MakeRectRadii(rect, radii));
+    *window_mask = SkPath::RRect(
+        gfx::RoundedRectFToSkRRect(gfx::SkRectToRectF(rect), border_radii));
   } else {
     static const int kBottomBorderShadowSize = 2;
     rect.fBottom += SkIntToScalar(kBottomBorderShadowSize);
@@ -872,7 +867,16 @@ BubbleBorder::Arrow BubbleFrameView::GetArrow() const {
 }
 
 void BubbleFrameView::SetDisplayVisibleArrow(bool display_visible_arrow) {
+  if (bubble_border_->visible_arrow() == display_visible_arrow) {
+    return;
+  }
   bubble_border_->set_visible_arrow(display_visible_arrow);
+  if (GetWidget() && GetWidget()->widget_delegate()) {
+    if (auto* bubble_delegate =
+            GetWidget()->widget_delegate()->AsBubbleDialogDelegate()) {
+      bubble_delegate->SizeToContents();
+    }
+  }
 }
 
 bool BubbleFrameView::GetDisplayVisibleArrow() const {
@@ -880,7 +884,7 @@ bool BubbleFrameView::GetDisplayVisibleArrow() const {
 }
 
 void BubbleFrameView::SetBackgroundColor(ui::ColorVariant color) {
-  bubble_border_->SetColor(color);
+  bubble_border_->set_background_color(color);
   if (!GetWidget()) {
     return;
   }
@@ -987,7 +991,16 @@ gfx::Rect BubbleFrameView::GetUpdatedWindowBounds(
     SchedulePaint();
   }
 
-  return bubble_border_->GetBounds(anchor_rect, size);
+  gfx::Rect bounds = bubble_border_->GetBounds(anchor_rect, size);
+  if (adjust_to_fit_available_bounds &&
+      BubbleBorder::has_arrow(delegate_arrow)) {
+    const gfx::Rect available_bounds = GetAvailableScreenBounds(anchor_rect);
+    if (!available_bounds.IsEmpty()) {
+      bubble_border_->AdjustBoundsToFitAvailableBounds(bounds,
+                                                       available_bounds);
+    }
+  }
+  return bounds;
 }
 
 void BubbleFrameView::UpdateInputProtectorTimeStamp() {
@@ -1003,6 +1016,11 @@ gfx::Insets BubbleFrameView::GetClientViewInsets() const {
 }
 
 gfx::Rect BubbleFrameView::GetAvailableScreenBounds(
+    const gfx::Rect& rect) const {
+  return available_screen_bounds_callback_.Run(rect);
+}
+
+gfx::Rect BubbleFrameView::GetDefaultAvailableScreenBounds(
     const gfx::Rect& rect) const {
   display::Display display =
       display::Screen::Get()->GetDisplayNearestPoint(rect.CenterPoint());

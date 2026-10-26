@@ -10,18 +10,20 @@ static_library("uploading") {
     "status_uploader.h",
     "system_log_uploader.cc",
     "system_log_uploader.h",
+    "system_log_uploader_delegate.cc",
+    "system_log_uploader_delegate.h",
     "upload_job.h",
     "upload_job_impl.cc",
     "upload_job_impl.h",
   ]
 
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
-
   deps = [
+    "//ash/constants",
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/ash/policy/core",
     "//chrome/browser/device_identity",
+    "//chrome/browser/policy",
     "//chrome/browser/profiles:profile_manager",
     "//chrome/common",
     "//chrome/common:non_code_constants",
@@ -69,6 +71,7 @@ source_set("unit_tests") {
     "//chrome/browser/ash/settings:test_support",
     "//chrome/browser/prefs",
     "//chrome/test:test_support",
+    "//chrome/test/base:testing_browser_process",
     "//chromeos/ash/components/settings",
     "//chromeos/dbus/power",
     "//chromeos/dbus/tpm_manager",

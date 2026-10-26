@@ -9,15 +9,15 @@
 #include <optional>
 #include <utility>
 
-#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/network_config_service.h"
+#include "base/check_deref.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/flat_set.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
@@ -46,7 +46,6 @@
 #include "chrome/browser/ash/printing/usb_printer_detector.h"
 #include "chrome/browser/ash/printing/usb_printer_notification_controller.h"
 #include "chrome/browser/ash/printing/zeroconf_printer_detector.h"
-#include "chrome/browser/ash/scanning/zeroconf_scanner_detector.h"
 #include "chrome/browser/printing/print_preview_sticky_settings.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
@@ -64,6 +63,7 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "printing/printer_query_result.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace ash {
 
@@ -96,17 +96,6 @@ constexpr auto kGoodStatePollingIntervalMap =
 bool IsIppUri(const chromeos::Uri& uri) {
   return (uri.GetScheme() == chromeos::kIppScheme ||
           uri.GetScheme() == chromeos::kIppsScheme);
-}
-
-// TODO(b/192467856) Remove this metric gathering by M99
-void SendScannerCountToUMA(std::unique_ptr<ZeroconfScannerDetector> detector) {
-  if (detector == nullptr) {
-    PRINTER_LOG(DEBUG) << "SendScannerCountToUMA detector was null";
-    return;
-  }
-  const uint16_t num_scanners = detector->GetScanners().size();
-  base::UmaHistogramCounts100("Scanning.NumDetectedScannersAtLogin",
-                              num_scanners);
 }
 
 namespace {
@@ -143,10 +132,11 @@ class CupsPrintersManagerImpl
   enum DetectorIds { kUsbDetector, kZeroconfDetector, kPrintServerDetector };
 
   CupsPrintersManagerImpl(
+      const ApplicationLocaleStorage* application_locale_storage,
       SyncedPrintersManager* synced_printers_manager,
       std::unique_ptr<PrinterDetector> usb_detector,
       std::unique_ptr<PrinterDetector> zeroconf_detector,
-      scoped_refptr<PpdProvider> ppd_provider,
+      std::unique_ptr<PpdProvider> ppd_provider,
       DlcserviceClient* dlc_service_client,
       std::unique_ptr<UsbPrinterNotificationController>
           usb_notification_controller,
@@ -154,7 +144,8 @@ class CupsPrintersManagerImpl
       std::unique_ptr<EnterprisePrintersProvider> enterprise_printers_provider,
       PrinterEventTracker* event_tracker,
       PrefService* pref_service)
-      : synced_printers_manager_(synced_printers_manager),
+      : application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+        synced_printers_manager_(synced_printers_manager),
         usb_detector_(std::move(usb_detector)),
         zeroconf_detector_(std::move(zeroconf_detector)),
         ppd_provider_(std::move(ppd_provider)),
@@ -202,15 +193,6 @@ class CupsPrintersManagerImpl
         base::BindRepeating(&CupsPrintersManagerImpl::OnPrintersFound,
                             weak_ptr_factory_.GetWeakPtr(), kZeroconfDetector));
     OnPrintersFound(kZeroconfDetector, zeroconf_detector_->GetPrinters());
-
-    // TODO(b/192467856) Remove this metric gathering by M99
-    // Creates a ZeroconfScannerDetector, then logs the number of scanners
-    // detected after 5 minutes.
-    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE,
-        base::BindOnce(&SendScannerCountToUMA,
-                       ZeroconfScannerDetector::Create()),
-        base::Minutes(5));
 
     print_servers_manager_->AddObserver(this);
 
@@ -347,14 +329,10 @@ class CupsPrintersManagerImpl
       }
     }
 
-    if (base::FeatureList::IsEnabled(features::kManagedUsbPrinters)) {
-      // Retrigger the setup of enterprise USB printers. This also removes any
-      // detected (but not saved) USB printers which should be enterprise
-      // managed. `PrinterClass::kEnterprise` observers are also notified here.
-      RebuildDetectedLists();
-    } else {
-      NotifyObservers({PrinterClass::kEnterprise});
-    }
+    // Retrigger the setup of enterprise USB printers. This also removes any
+    // detected (but not saved) USB printers which should be enterprise
+    // managed. `PrinterClass::kEnterprise` observers are also notified here.
+    RebuildDetectedLists();
   }
 
   // CrosNetworkConfigObserver implementation.
@@ -427,7 +405,8 @@ class CupsPrintersManagerImpl
     // start/restart the setup process.
     if (printers_being_setup_[id].fingerprint != fingerprint) {
       printers_being_setup_[id].configurer =
-          PrinterConfigurer::Create(ppd_provider_, dlc_service_client_);
+          PrinterConfigurer::Create(&application_locale_storage_.get(),
+                                    ppd_provider_.get(), dlc_service_client_);
       printers_being_setup_[id].fingerprint = fingerprint;
       printers_being_setup_[id].configurer->SetUpPrinterInCups(
           printer, base::BindOnce(
@@ -902,9 +881,6 @@ class CupsPrintersManagerImpl
       }
     }
     // Now look through enterprise usb printers.
-    if (!base::FeatureList::IsEnabled(features::kManagedUsbPrinters)) {
-      return std::nullopt;
-    }
     if (std::optional<Printer> enterprise =
             printers_.Get(chromeos::PrinterClass::kEnterprise, id)) {
       // Need to find the corresponding detected usb printer and get the
@@ -972,21 +948,14 @@ class CupsPrintersManagerImpl
     // Update the list of connected printers.
     std::vector<PrinterDetector::DetectedPrinter> printers;
     for (const PrinterDetector::DetectedPrinter& detected : detected_list) {
-      if (base::FeatureList::IsEnabled(features::kManagedUsbPrinters)) {
-        UpdateEnterprisePrintersWithDetected(detected.printer);
-        // Skip further set up for any enterprise managed or saved printers.
-        if (AnyEnterprisePrinterMatches(detected.printer.usb_device_id()) ||
-            printers_.IsPrinterInClass(PrinterClass::kSaved,
-                                       detected.printer.id())) {
-          continue;
-        }
-        printers.push_back(detected);
-      } else {
-        if (!printers_.IsPrinterInClass(PrinterClass::kSaved,
-                                        detected.printer.id())) {
-          printers.push_back(detected);
-        }
+      UpdateEnterprisePrintersWithDetected(detected.printer);
+      // Skip further set up for any enterprise managed or saved printers.
+      if (AnyEnterprisePrinterMatches(detected.printer.usb_device_id()) ||
+          printers_.IsPrinterInClass(PrinterClass::kSaved,
+                                     detected.printer.id())) {
+        continue;
       }
+      printers.push_back(detected);
     }
 
     auto_usb_printer_configurer_->UpdateListOfConnectedPrinters(
@@ -1129,12 +1098,8 @@ class CupsPrintersManagerImpl
     AddDetectedUsbPrinters(usb_detections_);
     AddDetectedNetworkPrinters(zeroconf_detections_);
     AddDetectedNetworkPrinters(servers_detections_);
-    if (base::FeatureList::IsEnabled(features::kManagedUsbPrinters)) {
-      NotifyObservers({PrinterClass::kAutomatic, PrinterClass::kDiscovered,
-                       PrinterClass::kEnterprise});
-    } else {
-      NotifyObservers({PrinterClass::kAutomatic, PrinterClass::kDiscovered});
-    }
+    NotifyObservers({PrinterClass::kAutomatic, PrinterClass::kDiscovered,
+                     PrinterClass::kEnterprise});
   }
 
   void OnUsbPrinterSetupDone(std::string printer_id) {
@@ -1181,7 +1146,7 @@ class CupsPrintersManagerImpl
 
     std::map<std::string, PrinterSetupTracker>::iterator it =
         printers_being_setup_.find(printer_id);
-    DCHECK(it != printers_being_setup_.end());
+    CHECK(it != printers_being_setup_.end(), base::NotFatalUntil::M160);
 
     if (result == PrinterSetupResult::kSuccess) {
       installed_printer_fingerprints_[printer_id] = it->second.fingerprint;
@@ -1227,6 +1192,8 @@ class CupsPrintersManagerImpl
 
   SEQUENCE_CHECKER(sequence_);
 
+  const raw_ref<const ApplicationLocaleStorage> application_locale_storage_;
+
   // Source lists for detected printers.
   std::vector<PrinterDetector::DetectedPrinter> usb_detections_;
   std::vector<PrinterDetector::DetectedPrinter> zeroconf_detections_;
@@ -1246,7 +1213,7 @@ class CupsPrintersManagerImpl
 
   std::unique_ptr<PrinterDetector> zeroconf_detector_;
 
-  scoped_refptr<PpdProvider> ppd_provider_;
+  std::unique_ptr<PpdProvider> ppd_provider_;
   raw_ptr<DlcserviceClient> dlc_service_client_;
 
   std::unique_ptr<UsbPrinterNotificationController>
@@ -1324,14 +1291,19 @@ class CupsPrintersManagerImpl
 
 // static
 std::unique_ptr<CupsPrintersManager> CupsPrintersManager::Create(
+    PrefService& local_state,
+    const ApplicationLocaleStorage* application_locale_storage,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     Profile* profile) {
   return std::make_unique<CupsPrintersManagerImpl>(
+      application_locale_storage,
       SyncedPrintersManagerFactory::GetInstance()->GetForBrowserContext(
           profile),
       UsbPrinterDetector::Create(), ZeroconfPrinterDetector::Create(),
-      CreatePpdProvider(profile), DlcserviceClient::Get(),
+      CreatePpdProvider(std::move(url_loader_factory), profile),
+      DlcserviceClient::Get(),
       UsbPrinterNotificationController::Create(profile),
-      PrintServersManager::Create(profile),
+      PrintServersManager::Create(local_state, profile),
       EnterprisePrintersProvider::Create(CrosSettings::Get(), profile),
       PrinterEventTrackerFactory::GetInstance()->GetForBrowserContext(profile),
       profile->GetPrefs());
@@ -1339,10 +1311,11 @@ std::unique_ptr<CupsPrintersManager> CupsPrintersManager::Create(
 
 // static
 std::unique_ptr<CupsPrintersManager> CupsPrintersManager::CreateForTesting(
+    const ApplicationLocaleStorage* application_locale_storage,
     SyncedPrintersManager* synced_printers_manager,
     std::unique_ptr<PrinterDetector> usb_detector,
     std::unique_ptr<PrinterDetector> zeroconf_detector,
-    scoped_refptr<PpdProvider> ppd_provider,
+    std::unique_ptr<PpdProvider> ppd_provider,
     DlcserviceClient* dlc_service_client,
     std::unique_ptr<UsbPrinterNotificationController>
         usb_notification_controller,
@@ -1351,8 +1324,9 @@ std::unique_ptr<CupsPrintersManager> CupsPrintersManager::CreateForTesting(
     PrinterEventTracker* event_tracker,
     PrefService* pref_service) {
   return std::make_unique<CupsPrintersManagerImpl>(
-      synced_printers_manager, std::move(usb_detector),
-      std::move(zeroconf_detector), std::move(ppd_provider), dlc_service_client,
+      application_locale_storage, synced_printers_manager,
+      std::move(usb_detector), std::move(zeroconf_detector),
+      std::move(ppd_provider), dlc_service_client,
       std::move(usb_notification_controller), std::move(print_servers_manager),
       std::move(enterprise_printers_provider), event_tracker, pref_service);
 }

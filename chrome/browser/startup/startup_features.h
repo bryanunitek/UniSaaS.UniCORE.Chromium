@@ -44,6 +44,12 @@ constexpr inline auto kLaunchOnStartupTrialGroupOptions =
             {LaunchOnStartupDefaultPreference::kEnabled, "enabled"},
         });
 
+// Feature param names. Shared with about:flags so that the strings stay in
+// sync with the definitions in startup_features.cc.
+inline constexpr char kLaunchOnStartupModeParamName[] = "mode";
+inline constexpr char kLaunchOnStartupDefaultPreferenceParamName[] =
+    "default_preference";
+
 // This flag (and the params) gates the Launch on Startup feature and
 // corresponding modes.
 BASE_DECLARE_FEATURE(kLaunchOnStartup);
@@ -51,8 +57,14 @@ BASE_DECLARE_FEATURE_PARAM(LaunchOnStartupMode, kLaunchOnStartupModeParam);
 BASE_DECLARE_FEATURE_PARAM(LaunchOnStartupDefaultPreference,
                            kLaunchOnStartupDefaultPreferenceParam);
 
+// This flag gates the Launch on Startup InfoBar prompt feature.
+BASE_DECLARE_FEATURE(kLaunchOnStartupInfoBar);
+
 // Returns whether the foreground launch feature is enabled.
 bool IsForegroundLaunchEnabled();
+
+// Returns whether the foreground launch infobar feature is enabled.
+bool IsForegroundLaunchInfoBarEnabled();
 
 // Returns the default preference value of the user based on finch config.
 // This method will crash if the `kLaunchOnStartup` feature flag is disabled.

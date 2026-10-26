@@ -57,7 +57,7 @@ class BlockPopupInfoBarDelegate : public ConfirmInfoBarDelegate {
 
   ui::ImageModel GetIcon() const override {
     if (icon_.IsEmpty()) {
-      // This symbol is not created using CustomSymbolWithPointSize() because
+      // This symbol is not created using SymbolWithPointSize() because
       // "ios/chrome/browser/shared/ui/symbols/symbols.h" cannot be imported
       // here.
       UIImageSymbolConfiguration* configuration = [UIImageSymbolConfiguration
@@ -98,7 +98,7 @@ class BlockPopupInfoBarDelegate : public ConfirmInfoBarDelegate {
         ios::HostContentSettingsMapFactory::GetForProfile(profile_));
     for (auto& popup : popups_) {
       web::WebState::OpenURLParams params(
-          popup.popup_url, popup.referrer, WindowOpenDisposition::NEW_POPUP,
+          popup.popup_url, popup.referrer, WindowOpenDisposition::kNewPopup,
           ui::PAGE_TRANSITION_LINK, true /* is_renderer_initiated */);
       web_state_->OpenURL(params);
       host_content_map_settings->SetContentSettingCustomScope(
@@ -136,7 +136,7 @@ BlockedPopupTabHelper::BlockedPopupTabHelper(web::WebState* web_state)
 BlockedPopupTabHelper::~BlockedPopupTabHelper() = default;
 
 bool BlockedPopupTabHelper::ShouldBlockPopup(const GURL& source_url) {
-  HostContentSettingsMap* settings_map =
+  scoped_refptr<HostContentSettingsMap> settings_map =
       ios::HostContentSettingsMapFactory::GetForProfile(GetProfile());
   ContentSetting setting = settings_map->GetContentSetting(
       source_url, source_url, ContentSettingsType::POPUPS);

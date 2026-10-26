@@ -9,7 +9,9 @@
 
 #include "base/check_deref.h"
 #include "base/functional/bind.h"
+#include "base/time/time.h"
 #include "chrome/browser/glic/host/context/glic_tab_data.h"
+#include "chrome/browser/glic/public/glic_api_metrics.h"
 #include "chrome/browser/glic/public/glic_instance.h"
 #include "chrome/browser/glic/public/glic_invoke_options.h"
 #include "chrome/browser/glic/service/metrics/glic_instance_metrics.h"
@@ -28,6 +30,7 @@
 #include "chrome/common/webui_url_constants.h"
 #include "components/skills/features.h"
 #include "components/skills/public/skill.mojom.h"
+#include "components/skills/public/skills_metrics.h"
 #include "components/skills/public/skills_service.h"
 #include "components/sync/protocol/skill_specifics.pb.h"
 #include "components/tabs/public/tab_interface.h"
@@ -43,9 +46,21 @@ mojom::SkillPreviewPtr ToMojomSkillPreview(const skills::proto::Skill& skill) {
   if (!skill.curated_by().empty()) {
     curated_by = skill.curated_by();
   }
+  std::optional<std::string> category;
+  if (skill.has_category()) {
+    category = skill.category();
+  }
+  std::optional<GURL> image_url;
+  if (skill.has_image_url() && !skill.image_url().empty()) {
+    GURL url(skill.image_url());
+    if (url.is_valid()) {
+      image_url = std::move(url);
+    }
+  }
   return mojom::SkillPreview::New(
       skill.id(), skill.name(), skill.icon(), mojom::SkillSource::kFirstParty,
-      skill.description(), curated_by, /*image_url=*/std::nullopt);
+      skill.description(), curated_by, image_url, category,
+      /*creation_time=*/std::nullopt, /*enabled=*/true);
 }
 
 }  // namespace
@@ -118,8 +133,9 @@ void GlicSkillsManagerImpl::LaunchSkillsDialog(
     base::OnceCallback<void(bool)> callback) {
   tabs::TabInterface* target_tab = EnsureTabForSkills();
   if (!target_tab || !target_tab->IsInNormalWindow()) {
-    const GURL skills_url = GURL(chrome::kChromeUISkillsURL)
-                                .Resolve(chrome::kChromeUISkillsBrowsePath);
+    const GURL skills_url = skills::AppendOpenStartTime(
+        GURL(chrome::kChromeUISkillsURL)
+            .Resolve(chrome::kChromeUISkillsBrowsePath));
 
     BrowserWindowCreateParams create_params(
         BrowserWindowInterface::Type::TYPE_NORMAL, *profile_,
@@ -185,14 +201,20 @@ void GlicSkillsManagerImpl::ShowBrowseSkillsUi() {
 
 void GlicSkillsManagerImpl::ShowSkillsUiAtRelativePath(
     const std::string& path) {
-  const GURL skills_url = GURL(chrome::kChromeUISkillsURL).Resolve(path);
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(&*profile_)) {
+    return;
+  }
+  const GURL skills_url_without_query =
+      GURL(chrome::kChromeUISkillsURL).Resolve(path);
+  const GURL skills_url = skills::AppendOpenStartTime(skills_url_without_query);
+
   bool existing_skills_tab_found = false;
 
   BrowserWindowInterface* most_recent_browser = nullptr;
 
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-      [&skills_url, &existing_skills_tab_found, &most_recent_browser,
-       this](BrowserWindowInterface* browser) {
+      [&skills_url_without_query, &existing_skills_tab_found,
+       &most_recent_browser, this](BrowserWindowInterface* browser) {
         if (browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL ||
             browser->GetProfile() != &*profile_) {
           return true;
@@ -208,13 +230,18 @@ void GlicSkillsManagerImpl::ShowSkillsUiAtRelativePath(
         }
         for (const auto& tab : tab_list->GetAllTabs()) {
           content::WebContents* web_contents = tab->GetContents();
-          if (web_contents && web_contents->GetURL() == skills_url) {
-            if (browser->GetWindow()) {
-              browser->GetWindow()->Activate();
+          if (web_contents) {
+            GURL::Replacements clear_query;
+            clear_query.ClearQuery();
+            if (web_contents->GetURL().ReplaceComponents(clear_query) ==
+                skills_url_without_query) {
+              if (browser->GetWindow()) {
+                browser->GetWindow()->Activate();
+              }
+              tab_list->ActivateTab(tab->GetHandle());
+              existing_skills_tab_found = true;
+              return false;
             }
-            tab_list->ActivateTab(tab->GetHandle());
-            existing_skills_tab_found = true;
-            return false;
           }
         }
         return true;
@@ -247,6 +274,9 @@ void GlicSkillsManagerImpl::ShowSkillsUiAtRelativePath(
 }
 
 void GlicSkillsManagerImpl::OnActiveTabChanged(tabs::TabInterface* tab) {
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(&*profile_)) {
+    return;
+  }
   pending_contextual_skills_.clear();
   UpdateSkillPreviews(std::nullopt);
 }
@@ -255,7 +285,7 @@ void GlicSkillsManagerImpl::NotifyPanelOpenedOrActivated() {
   // NEEDS_ANDROID_IMPL: (crbug.com/477622144) Remove desktop-only
   // restrictions from Skills backend.
 #if !BUILDFLAG(IS_ANDROID)  // NEEDS_ANDROID_IMPL
-  if (base::FeatureList::IsEnabled(features::kSkillsEnabled)) {
+  if (skills::SkillsServiceFactory::IsSkillsEnabledForProfile(&*profile_)) {
     skills::SkillsServiceFactory::GetForProfile(&*profile_)
         ->RefreshDiscoverySkills();
   }
@@ -264,12 +294,20 @@ void GlicSkillsManagerImpl::NotifyPanelOpenedOrActivated() {
 
 void GlicSkillsManagerImpl::NotifyContextualSkillsChanged(
     std::vector<mojom::SkillPreviewPtr> contextual_skill_previews) {
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(&*profile_)) {
+    return;
+  }
   if (session_) {
     session_->NotifyContextualSkillsChanged(
         std::move(contextual_skill_previews));
   } else {
     pending_contextual_skills_ = std::move(contextual_skill_previews);
   }
+}
+
+void GlicSkillsManagerImpl::RecordSkillsWebClientEvent(
+    mojom::SkillsWebClientEvent event) {
+  instance_metrics_->RecordSkillsWebClientEvent(event);
 }
 
 // GlicSkillsClientSession implementation:
@@ -309,12 +347,12 @@ GlicSkillsClientSession::~GlicSkillsClientSession() {
 
 void GlicSkillsClientSession::CreateSkill(mojom::CreateSkillRequestPtr request,
                                           CreateSkillCallback callback) {
+  LogApiRequestCount(GlicHostApiRequestId::kCreateSkill);
   auto scoped_callback =
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback), false);
 
-  if (!base::FeatureList::IsEnabled(features::kSkillsEnabled)) {
-    receiver_.ReportBadMessage(
-        "CreateSkill cannot be called without Skills enabled.");
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(
+          manager_->profile())) {
     return;
   }
   // There are three scenarios:
@@ -334,14 +372,24 @@ void GlicSkillsClientSession::CreateSkill(mojom::CreateSkillRequestPtr request,
 
 void GlicSkillsClientSession::UpdateSkill(mojom::UpdateSkillRequestPtr request,
                                           UpdateSkillCallback callback) {
+  LogApiRequestCount(GlicHostApiRequestId::kUpdateSkill);
   auto scoped_callback =
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback), false);
 
-  if (!base::FeatureList::IsEnabled(features::kSkillsEnabled)) {
-    receiver_.ReportBadMessage(
-        "UpdateSkill cannot be called without Skills enabled.");
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(
+          manager_->profile())) {
     return;
   }
+
+  if (base::FeatureList::IsEnabled(features::kSkillsWebViewV2Enabled)) {
+    skills::Skill skill;
+    skill.id = request->id;
+    manager_->LaunchSkillsDialog(manager_->profile(), std::move(skill),
+                                 skills::mojom::SkillsDialogType::kEdit,
+                                 std::move(scoped_callback));
+    return;
+  }
+
   if (!skills_service_) {
     return;
   }
@@ -355,30 +403,33 @@ void GlicSkillsClientSession::UpdateSkill(mojom::UpdateSkillRequestPtr request,
 
 void GlicSkillsClientSession::GetSkill(const std::string& id,
                                        GetSkillCallback callback) {
-  if (!base::FeatureList::IsEnabled(features::kSkillsEnabled)) {
-    receiver_.ReportBadMessage(
-        "GetSkill cannot be called without Skills enabled.");
+  LogApiRequestCount(GlicHostApiRequestId::kGetSkill);
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(
+          manager_->profile())) {
+    std::move(callback).Run(nullptr);
     return;
   }
   mojom::SkillPtr skill = GetSkillById(id);
   std::move(callback).Run(std::move(skill));
 }
 
-void GlicSkillsManagerImpl::RecordSkillsWebClientEvent(
-    mojom::SkillsWebClientEvent event) {
-  instance_metrics_->RecordSkillsWebClientEvent(event);
-}
-
 void GlicSkillsClientSession::RecordSkillsWebClientEvent(
     mojom::SkillsWebClientEvent event) {
+  LogApiRequestCount(GlicHostApiRequestId::kRecordSkillsWebClientEvent);
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(
+          manager_->profile())) {
+    return;
+  }
   manager_->RecordSkillsWebClientEvent(event);
 }
 
 void GlicSkillsClientSession::ShowManageSkillsUi() {
+  LogApiRequestCount(GlicHostApiRequestId::kShowManageSkillsUi);
   manager_->ShowManageSkillsUi();
 }
 
 void GlicSkillsClientSession::ShowBrowseSkillsUi() {
+  LogApiRequestCount(GlicHostApiRequestId::kShowBrowseSkillsUi);
   manager_->ShowBrowseSkillsUi();
 }
 
@@ -447,12 +498,16 @@ void GlicSkillsClientSession::OnDiscoverySkillsUpdated(
 }
 
 bool GlicSkillsClientSession::Require1PSkillRefresh() {
-  return manager_->instance().GetPanelState().kind !=
+  return manager_->instance().GetPanelState()->kind !=
          mojom::PanelStateKind::kHidden;
 }
 
 void GlicSkillsClientSession::UpdateSkillPreviews(
     std::optional<tabs::TabInterface*> updated_tab) {
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(
+          manager_->profile())) {
+    return;
+  }
   if (!client_) {
     return;
   }
@@ -486,14 +541,35 @@ void GlicSkillsClientSession::UpdateSkillPreviews(
 
 void GlicSkillsClientSession::NotifyContextualSkillsChanged(
     std::vector<mojom::SkillPreviewPtr> contextual_skill_previews) {
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(
+          manager_->profile())) {
+    return;
+  }
   if (client_) {
     client_->NotifyContextualSkillPreviewsChanged(
         std::move(contextual_skill_previews));
   }
 }
 
+void GlicSkillsClientSession::OnSkillsEnabledChanged(bool enabled) {
+  if (client_) {
+    if (enabled) {
+      UpdateSkillPreviews(std::nullopt);
+      client_->NotifySkillPreviewsChanged(GetSkillPreviewsList());
+    } else {
+      client_->NotifySkillPreviewsChanged({});
+      client_->NotifyContextualSkillPreviewsChanged({});
+    }
+    client_->NotifySkillsEnabledChanged(enabled);
+  }
+}
+
 mojom::SkillPtr GlicSkillsClientSession::GetSkillById(
     std::string_view skill_id) {
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(
+          manager_->profile())) {
+    return nullptr;
+  }
   if (!skills_service_) {
     return nullptr;
   }
@@ -515,6 +591,10 @@ mojom::SkillPtr GlicSkillsClientSession::GetSkillById(
 std::vector<mojom::SkillPreviewPtr>
 GlicSkillsClientSession::GetSkillPreviewsList() {
   std::vector<mojom::SkillPreviewPtr> skill_previews;
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(
+          manager_->profile())) {
+    return skill_previews;
+  }
   if (!skills_service_) {
     return skill_previews;
   }

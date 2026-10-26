@@ -6,11 +6,14 @@
 
 #include <utility>
 
+#include "base/metrics/histogram_functions.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/screen_orientation_delegate.h"
 #include "content/public/browser/web_contents.h"
+#include "services/network/public/mojom/web_sandbox_flags.mojom.h"
 
 namespace content {
 
@@ -43,6 +46,17 @@ bool ScreenOrientationProvider::IsOrientationLockSupported() const {
 void ScreenOrientationProvider::LockOrientation(
     device::mojom::ScreenOrientationLockType orientation,
     LockOrientationCallback callback) {
+  RenderFrameHostImpl* rfh =
+      static_cast<RenderFrameHostImpl*>(&receivers_.CurrentTargetFrame());
+  const bool is_sandboxed =
+      rfh->IsSandboxed(network::mojom::WebSandboxFlags::kOrientationLock);
+  base::UmaHistogramBoolean("Security.ScreenOrientation.LockRequestIsSandboxed",
+                            is_sandboxed);
+
+  // Media controls intentionally bypass ScreenOrientation::lock() and can issue
+  // orientation lock requests from sandboxed frames. Record these requests to
+  // measure their usage, but do not treat them as bad IPC.
+
   // Cancel any pending lock request.
   NotifyLockResult(ScreenOrientationLockResult::
                        SCREEN_ORIENTATION_LOCK_RESULT_ERROR_CANCELED);
@@ -153,7 +167,7 @@ void ScreenOrientationProvider::OnOrientationChange() {
     return;
 
   if (LockMatchesCurrentOrientation(pending_lock_orientation_.value())) {
-    DCHECK(!pending_callback_.is_null());
+    CHECK(!pending_callback_.is_null(), base::NotFatalUntil::M159);
     NotifyLockResult(
         ScreenOrientationLockResult::SCREEN_ORIENTATION_LOCK_RESULT_SUCCESS);
   }
@@ -227,6 +241,11 @@ void ScreenOrientationProvider::SetOrientationLockChangedCallback(
   lock_changed_callback_ = std::move(callback);
 }
 
+void ScreenOrientationProvider::SetCurrentTargetFrameForTesting(  // IN-TEST
+    RenderFrameHost* render_frame_host) {
+  receivers_.SetCurrentTargetFrameForTesting(render_frame_host);  // IN-TEST
+}
+
 void ScreenOrientationProvider::NotifyOrientationLockChanged(
     bool locked,
     std::optional<device::mojom::ScreenOrientationLockType> orientation) {
@@ -247,6 +266,8 @@ void ScreenOrientationProvider::DidToggleFullscreenModeForTab(
   if (!delegate_->FullScreenRequired(web_contents()))
     return;
 
+  // TODO(crbug.com/557428107): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(!entered_fullscreen);
   UnlockOrientation();
 }

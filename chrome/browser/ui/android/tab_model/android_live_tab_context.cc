@@ -17,6 +17,7 @@
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "components/sessions/content/content_live_tab.h"
 #include "components/sessions/content/content_serialized_navigation_builder.h"
+#include "components/sessions/core/session_id.h"
 #include "components/sessions/core/session_types.h"
 #include "components/sessions/core/tab_restore_types.h"
 #include "components/split_tabs/split_tab_id.h"
@@ -27,6 +28,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/restore_type.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
+#include "ui/base/window_open_disposition.h"
 
 AndroidLiveTabContext::AndroidLiveTabContext(TabModel* tab_model)
     : tab_model_(tab_model) {}
@@ -139,6 +141,12 @@ AndroidLiveTabContext::GetGroupIdForSavedGroup(const base::Uuid& saved) const {
   return std::nullopt;
 }
 
+bool AndroidLiveTabContext::IsEphemeralTabGroup(
+    const tab_groups::TabGroupId& group) const {
+  // Focus Selection is currently not supported on the Android platform.
+  return false;
+}
+
 bool AndroidLiveTabContext::IsTabPinned(int index) const {
   TabAndroid* tab_android = tab_model_->GetTabAt(index);
   return tab_android && tab_android->IsPinned();
@@ -153,6 +161,24 @@ void AndroidLiveTabContext::SetVisualDataForGroup(
   // NOTREACHED) if we implement restoring groups for foreign session
   // windows.
   NOTREACHED();
+}
+
+const std::optional<tab_groups::TabGroupId>
+AndroidLiveTabContext::GetInitialFocusedTabGroup() const {
+  // Android does not support focused tab groups.
+
+  // This function would return the tab group ID that was focused when the
+  // window was closed, so it can be restored to focus.
+  return std::nullopt;
+}
+
+void AndroidLiveTabContext::SetFocusedTabGroup(
+    const tab_groups::TabGroupId& group) {
+  // Android does not support focused tab groups.
+
+  // This function would set the focused tab group for the window, removing the
+  // visibility of other tabs to instead show just the given tab group.
+  NOTIMPLEMENTED();
 }
 
 const gfx::Rect AndroidLiveTabContext::GetRestoredBounds() const {
@@ -230,7 +256,7 @@ sessions::LiveTab* AndroidLiveTabContext::ReplaceRestoredTab(
   // This is called only on replacement of the current tab.
   content::WebContents* web_contents = tab_model_->GetActiveWebContents();
   web_contents = SessionRestore::RestoreForeignSessionTab(
-      web_contents, session_tab, WindowOpenDisposition::CURRENT_TAB);
+      web_contents, session_tab, WindowOpenDisposition::kCurrentTab);
   web_contents->GetController().LoadIfNecessary();
   return sessions::ContentLiveTab::GetOrCreateForWebContents(web_contents);
 }

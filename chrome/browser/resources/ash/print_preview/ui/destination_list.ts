@@ -2,19 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_hidden_style.css.js';
-import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
+import 'chrome://resources/ash/common/cr_elements/cr_hidden_style.css.js';
+import 'chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js';
 import 'chrome://resources/polymer/v3_0/iron-list/iron-list.js';
-
 import './destination_list_item_cros.js';
 import './print_preview_vars.css.js';
 import '/strings.m.js';
 import './throbber.css.js';
 
-import {ListPropertyUpdateMixin} from 'chrome://resources/cr_elements/list_property_update_mixin.js';
+import {ListPropertyUpdateMixin} from 'chrome://resources/ash/common/cr_elements/list_property_update_mixin.js';
 import type {IronListElement} from 'chrome://resources/polymer/v3_0/iron-list/iron-list.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-
 
 import type {Destination} from '../data/destination_cros.js';
 
@@ -74,13 +72,13 @@ export class PrintPreviewDestinationListElement extends
     };
   }
 
-  destinations: Destination[];
-  searchQuery: RegExp|null;
-  loadingDestinations: boolean;
-  private matchingDestinations_: Destination[];
-  private hasDestinations_: boolean;
-  private throbberHidden_: boolean;
-  private hideList_: boolean;
+  declare destinations: Destination[];
+  declare searchQuery: RegExp|null;
+  declare loadingDestinations: boolean;
+  declare private matchingDestinations_: Destination[];
+  declare private hasDestinations_: boolean;
+  declare private throbberHidden_: boolean;
+  declare private hideList_: boolean;
 
   private boundUpdateHeight_: ((e: Event) => void)|null = null;
 
@@ -164,6 +162,7 @@ export class PrintPreviewDestinationListElement extends
     if (e.key === 'Enter') {
       this.onDestinationSelected_(e);
       e.stopPropagation();
+      e.preventDefault();
     }
   }
 

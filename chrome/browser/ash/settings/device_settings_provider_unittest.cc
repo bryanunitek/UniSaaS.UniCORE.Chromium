@@ -18,6 +18,7 @@
 #include "chrome/browser/ash/ownership/owner_key_loader.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -304,13 +305,6 @@ class DeviceSettingsProviderTest : public DeviceSettingsTestBase {
     em::DeviceScheduledUpdateCheckProto* proto =
         device_policy_->payload().mutable_device_scheduled_update_check();
     proto->set_device_scheduled_update_check_settings(json_string);
-    BuildAndInstallDevicePolicy();
-  }
-
-  void SetPluginVmAllowedSetting(bool plugin_vm_allowed) {
-    em::PluginVmAllowedProto* proto =
-        device_policy_->payload().mutable_plugin_vm_allowed();
-    proto->set_plugin_vm_allowed(plugin_vm_allowed);
     BuildAndInstallDevicePolicy();
   }
 
@@ -628,8 +622,6 @@ TEST_F(DeviceSettingsProviderTest, PolicyRetrievalFailedBadSignature) {
   histogram_tester.ExpectUniqueSample(
       "Enterprise.DeviceSettings.UpdatedStatus2",
       DeviceSettingsService::STORE_VALIDATION_ERROR, /*amount=*/1);
-  histogram_tester.ExpectTotalCount(
-      "Enterprise.DeviceSettings.MissingPolicyMitigated", 0);
 }
 
 TEST_F(DeviceSettingsProviderTest, PolicyRetrievalNoPolicy) {
@@ -649,8 +641,6 @@ TEST_F(DeviceSettingsProviderTest, PolicyRetrievalNoPolicy) {
       "Enterprise.DeviceSettings.UpdatedStatus2",
       DeviceSettingsService::STORE_NO_POLICY,
       /*amount=*/1);
-  histogram_tester.ExpectTotalCount(
-      "Enterprise.DeviceSettings.MissingPolicyMitigated", 0);
 }
 
 TEST_F(DeviceSettingsProviderTest, PolicyRetrievalNoPolicyMitigated) {
@@ -673,8 +663,6 @@ TEST_F(DeviceSettingsProviderTest, PolicyRetrievalNoPolicyMitigated) {
       "Enterprise.DeviceSettings.UpdatedStatus2",
       DeviceSettingsService::STORE_NO_POLICY,
       /*amount=*/1);
-  histogram_tester.ExpectTotalCount(
-      "Enterprise.DeviceSettings.MissingPolicyMitigated", 1);
 }
 
 TEST_F(DeviceSettingsProviderTest, PolicyFailedPermanentlyNotification) {
@@ -700,8 +688,6 @@ TEST_F(DeviceSettingsProviderTest, PolicyFailedPermanentlyNotification) {
       "Enterprise.DeviceSettings.UpdatedStatus2",
       DeviceSettingsService::STORE_NO_POLICY,
       /*amount=*/1);
-  histogram_tester.ExpectTotalCount(
-      "Enterprise.DeviceSettings.MissingPolicyMitigated", 0);
 }
 
 TEST_F(DeviceSettingsProviderTest, PolicyLoadNotification) {
@@ -720,8 +706,6 @@ TEST_F(DeviceSettingsProviderTest, PolicyLoadNotification) {
       "Enterprise.DeviceSettings.UpdatedStatus2",
       DeviceSettingsService::STORE_SUCCESS,
       /*amount=*/1);
-  histogram_tester.ExpectTotalCount(
-      "Enterprise.DeviceSettings.MissingPolicyMitigated", 0);
 }
 
 TEST_F(DeviceSettingsProviderTest, LegacyDeviceLocalAccounts) {
@@ -908,6 +892,17 @@ TEST_F(DeviceSettingsProviderTest, DecodeDomainAutoComplete) {
   VerifyDomainAutoComplete(&domain_value);
 }
 
+TEST_F(DeviceSettingsProviderTest, DecodeDeviceMaxUserProfiles) {
+  // By default DeviceMaxUserProfiles policy should not be set.
+  VerifyPolicyValue(kAccountsPrefDeviceMaxUserProfiles, nullptr);
+
+  // Check some meaningful value. Policy should be set.
+  device_policy_->payload().mutable_devicemaxuserprofiles()->set_value(5);
+  BuildAndInstallDevicePolicy();
+  base::Value expected_value(5);
+  VerifyPolicyValue(kAccountsPrefDeviceMaxUserProfiles, &expected_value);
+}
+
 TEST_F(DeviceSettingsProviderTest, EmptyAllowedConnectionTypesForUpdate) {
   // By default AllowedConnectionTypesForUpdate policy should not be set.
   VerifyPolicyValue(kAllowedConnectionTypesForUpdate, nullptr);
@@ -1006,14 +1001,6 @@ TEST_F(DeviceSettingsProviderTest, DeviceScheduledUpdateCheckTests) {
   base::Value expected_value(std::move(expected_dict));
   SetDeviceScheduledUpdateCheck(json_string);
   VerifyPolicyValue(kDeviceScheduledUpdateCheck, &expected_value);
-}
-
-TEST_F(DeviceSettingsProviderTest, DecodePluginVmAllowedSetting) {
-  SetPluginVmAllowedSetting(true);
-  EXPECT_EQ(base::Value(true), *provider_->Get(kPluginVmAllowed));
-
-  SetPluginVmAllowedSetting(false);
-  EXPECT_EQ(base::Value(false), *provider_->Get(kPluginVmAllowed));
 }
 
 TEST_F(DeviceSettingsProviderTest, DeviceRebootAfterUserSignout) {

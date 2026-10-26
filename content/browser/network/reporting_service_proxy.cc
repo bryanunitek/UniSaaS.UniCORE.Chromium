@@ -12,7 +12,6 @@
 #include "base/unguessable_token.h"
 #include "base/values.h"
 #include "content/browser/service_worker/service_worker_host.h"
-#include "content/browser/shared_storage/shared_storage_worklet_host.h"
 #include "content/browser/worker_host/dedicated_worker_host.h"
 #include "content/browser/worker_host/shared_worker_host.h"
 #include "content/public/browser/browser_thread.h"
@@ -38,7 +37,7 @@ class ReportingServiceProxyImpl : public blink::mojom::ReportingServiceProxy {
       : render_process_id_(render_process_id),
         reporting_source_(reporting_source),
         network_anonymization_key_(network_anonymization_key) {
-    DCHECK(!reporting_source.is_empty());
+    CHECK(!reporting_source.is_empty(), base::NotFatalUntil::M160);
   }
 
   ReportingServiceProxyImpl(const ReportingServiceProxyImpl&) = delete;
@@ -289,7 +288,7 @@ class ReportingServiceProxyImpl : public blink::mojom::ReportingServiceProxy {
 void CreateReportingServiceProxyForFrame(
     RenderFrameHost* render_frame_host,
     mojo::PendingReceiver<blink::mojom::ReportingServiceProxy> receiver) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   mojo::MakeSelfOwnedReceiver(
       std::make_unique<ReportingServiceProxyImpl>(
           render_frame_host->GetProcess()->GetID(),
@@ -302,7 +301,7 @@ void CreateReportingServiceProxyForFrame(
 void CreateReportingServiceProxyForServiceWorker(
     ServiceWorkerHost* service_worker_host,
     mojo::PendingReceiver<blink::mojom::ReportingServiceProxy> receiver) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   mojo::MakeSelfOwnedReceiver(
       std::make_unique<ReportingServiceProxyImpl>(
           service_worker_host->worker_process_id(),
@@ -314,7 +313,7 @@ void CreateReportingServiceProxyForServiceWorker(
 void CreateReportingServiceProxyForSharedWorker(
     SharedWorkerHost* shared_worker_host,
     mojo::PendingReceiver<blink::mojom::ReportingServiceProxy> receiver) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   mojo::MakeSelfOwnedReceiver(
       std::make_unique<ReportingServiceProxyImpl>(
           shared_worker_host->GetProcessHost()->GetID(),
@@ -326,32 +325,12 @@ void CreateReportingServiceProxyForSharedWorker(
 void CreateReportingServiceProxyForDedicatedWorker(
     DedicatedWorkerHost* dedicated_worker_host,
     mojo::PendingReceiver<blink::mojom::ReportingServiceProxy> receiver) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   mojo::MakeSelfOwnedReceiver(
       std::make_unique<ReportingServiceProxyImpl>(
           dedicated_worker_host->GetProcessHost()->GetID(),
           dedicated_worker_host->GetReportingSource(),
           dedicated_worker_host->GetNetworkAnonymizationKey()),
-      std::move(receiver));
-}
-
-void CreateReportingServiceProxyForSharedStorageWorklet(
-    SharedStorageWorkletHost* shared_storage_worklet_host,
-    mojo::PendingReceiver<blink::mojom::ReportingServiceProxy> receiver) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  CHECK(shared_storage_worklet_host->GetProcessHost());
-  // The worklet may outlive its document, leaving no valid NetworkIsolationKey.
-  const net::NetworkIsolationKey& network_isolation_key =
-      shared_storage_worklet_host->MaybeGetNetworkIsolationKey();
-  if (network_isolation_key.IsEmpty()) {
-    return;
-  }
-  mojo::MakeSelfOwnedReceiver(
-      std::make_unique<ReportingServiceProxyImpl>(
-          shared_storage_worklet_host->GetProcessHost()->GetID(),
-          shared_storage_worklet_host->GetWorkletToken(),
-          net::NetworkAnonymizationKey::CreateFromNetworkIsolationKey(
-              network_isolation_key)),
       std::move(receiver));
 }
 

@@ -12,6 +12,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "media/base/media_export.h"
@@ -81,6 +82,9 @@ class MEDIA_EXPORT FuchsiaVideoDecoder : public VideoDecoder,
   void OnSysmemBufferStreamNoKey() override;
 
   // StreamProcessorHelper::Client implementation.
+  void OnStreamProcessorAllocateInputBuffers(
+      const fuchsia::media::StreamBufferConstraints& stream_constraints)
+      override;
   void OnStreamProcessorAllocateOutputBuffers(
       const fuchsia::media::StreamBufferConstraints& stream_constraints)
       override;
@@ -121,6 +125,7 @@ class MEDIA_EXPORT FuchsiaVideoDecoder : public VideoDecoder,
 
   OutputCB output_cb_;
   WaitingCB waiting_cb_;
+  InitCB init_cb_;
 
   std::unique_ptr<SysmemBufferStream> sysmem_buffer_stream_;
 
@@ -143,7 +148,7 @@ class MEDIA_EXPORT FuchsiaVideoDecoder : public VideoDecoder,
   fuchsia::media::VideoUncompressedFormat output_format_;
   std::unique_ptr<SysmemCollectionClient> output_buffer_collection_;
   zx::eventpair output_buffer_collection_handle_;
-  std::vector<OutputMailbox*> output_mailboxes_;
+  std::vector<raw_ptr<OutputMailbox>> output_mailboxes_;
 
   // Set to true when the output buffers are protected.
   bool protected_output_ = false;

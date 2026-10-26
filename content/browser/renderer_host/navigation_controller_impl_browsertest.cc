@@ -32,6 +32,9 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "components/viz/common/quads/compositor_frame.h"
+#include "components/viz/test/compositor_frame_helpers.h"
+#include "components/viz/test/fake_compositor_frame_sink_client.h"
 #include "content/browser/process_lock.h"
 #include "content/browser/renderer_host/frame_navigation_entry.h"
 #include "content/browser/renderer_host/frame_tree.h"
@@ -94,6 +97,7 @@
 #include "net/test/embedded_test_server/expectation_handler.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/url_request/url_request_failed_job.h"
+#include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/loader/referrer_utils.h"
 #include "third_party/blink/public/common/page_state/page_state_serialization.h"
@@ -2903,6 +2907,94 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
   }
 }
 
+// Same-URL navigation of a subframe whose current document is an error page
+// should not do replacement when the initiator is cross-origin to the URL that
+// failed to load. The replacement decision must not depend on whether the new
+// URL matches the failed URL, otherwise the initiator could observe a
+// difference in history.length between matching and non-matching navigations.
+// However, an initiator that is same-origin to the failed URL should still get
+// replacement, so that retrying a failed load doesn't leave the error page in
+// the back/forward list.
+IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
+                       ErrorPageReplacementSubframeCrossOriginInitiator) {
+  NavigationController& controller = shell()->web_contents()->GetController();
+  // Navigate to a page on a.com with a same-origin iframe.
+  GURL main_url = embedded_test_server()->GetURL(
+      "a.com", "/navigation_controller/page_with_iframe_simple.html");
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+  EXPECT_EQ(1, controller.GetEntryCount());
+
+  FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
+                            ->GetPrimaryFrameTree()
+                            .root();
+  ASSERT_EQ(1U, root->child_count());
+  FrameTreeNode* subframe = root->child_at(0);
+
+  // 1) The parent navigates the subframe to a cross-origin (b.com) URL that is
+  // blocked by X-Frame-Options. This commits an error page and adds a new
+  // entry.
+  GURL blocked_url_b =
+      embedded_test_server()->GetURL("b.com", "/x-frame-options-deny.html");
+  {
+    FrameNavigateParamsCapturer capturer(subframe);
+    EXPECT_TRUE(
+        NavigateIframeToURL(shell()->web_contents(), "frame", blocked_url_b));
+    capturer.Wait();
+    EXPECT_EQ(NAVIGATION_TYPE_NEW_SUBFRAME, capturer.navigation_type());
+    EXPECT_FALSE(capturer.did_replace_entry());
+    EXPECT_EQ(2, controller.GetEntryCount());
+    EXPECT_TRUE(subframe->current_frame_host()->IsErrorDocument());
+    EXPECT_EQ(blocked_url_b,
+              subframe->current_frame_host()->GetLastCommittedURL());
+  }
+
+  // 2) The parent navigates the subframe to the same b.com URL again. The
+  // initiator (a.com) is cross-origin to the failed URL (b.com), so this must
+  // not replace the current entry even though the URLs match. The result must
+  // be the same as if the parent had navigated to a different b.com URL.
+  {
+    FrameNavigateParamsCapturer capturer(subframe);
+    EXPECT_TRUE(
+        NavigateIframeToURL(shell()->web_contents(), "frame", blocked_url_b));
+    capturer.Wait();
+    EXPECT_EQ(NAVIGATION_TYPE_NEW_SUBFRAME, capturer.navigation_type());
+    EXPECT_FALSE(capturer.did_replace_entry());
+    EXPECT_EQ(3, controller.GetEntryCount());
+    EXPECT_TRUE(subframe->current_frame_host()->IsErrorDocument());
+  }
+
+  // 3) The parent navigates the subframe to a same-origin (a.com) URL that is
+  // also blocked by X-Frame-Options. This adds a new entry.
+  GURL blocked_url_a =
+      embedded_test_server()->GetURL("a.com", "/x-frame-options-deny.html");
+  {
+    FrameNavigateParamsCapturer capturer(subframe);
+    EXPECT_TRUE(
+        NavigateIframeToURL(shell()->web_contents(), "frame", blocked_url_a));
+    capturer.Wait();
+    EXPECT_EQ(NAVIGATION_TYPE_NEW_SUBFRAME, capturer.navigation_type());
+    EXPECT_FALSE(capturer.did_replace_entry());
+    EXPECT_EQ(4, controller.GetEntryCount());
+    EXPECT_TRUE(subframe->current_frame_host()->IsErrorDocument());
+    EXPECT_EQ(blocked_url_a,
+              subframe->current_frame_host()->GetLastCommittedURL());
+  }
+
+  // 4) The parent navigates the subframe to the same a.com URL again. The
+  // initiator (a.com) is same-origin to the failed URL, so this still does
+  // replacement.
+  {
+    FrameNavigateParamsCapturer capturer(subframe);
+    EXPECT_TRUE(
+        NavigateIframeToURL(shell()->web_contents(), "frame", blocked_url_a));
+    capturer.Wait();
+    EXPECT_EQ(NAVIGATION_TYPE_AUTO_SUBFRAME, capturer.navigation_type());
+    EXPECT_TRUE(capturer.did_replace_entry());
+    EXPECT_EQ(4, controller.GetEntryCount());
+    EXPECT_TRUE(subframe->current_frame_host()->IsErrorDocument());
+  }
+}
+
 // Various tests for navigation type classifications. TODO(avi): It's rather
 // bogus that the same info is in two different enums; http://crbug.com/453555.
 
@@ -3247,8 +3339,8 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
         capturer.transition(), ui::PAGE_TRANSITION_RELOAD));
 
     // We reused the last committed entry for this navigation.
-    // TODO(crbug.com/40755155): This should replace the last committed
-    // entry instead.
+    // TODO(crbug.com/396645696): This should replace the last committed entry
+    // instead.
     EXPECT_FALSE(capturer.did_replace_entry());
     NavigationEntryImpl* entry = controller.GetLastCommittedEntry();
     EXPECT_EQ(previous_entry, entry);
@@ -3270,10 +3362,8 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
     EXPECT_TRUE(ui::PageTransitionTypeIncludingQualifiersIs(
         capturer.transition(), ui::PAGE_TRANSITION_RELOAD));
 
-    // We reused the last committed entry for this navigation.
-    // TODO(crbug.com/40755155): This should replace the last committed
-    // entry instead.
-    EXPECT_FALSE(capturer.did_replace_entry());
+    // We replaced the last committed entry for this navigation.
+    EXPECT_TRUE(capturer.did_replace_entry());
     NavigationEntryImpl* entry = controller.GetLastCommittedEntry();
     EXPECT_EQ(previous_entry, entry);
     EXPECT_EQ(PAGE_TYPE_ERROR, entry->GetPageType());
@@ -3611,8 +3701,8 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
     EXPECT_EQ(NAVIGATION_TYPE_MAIN_FRAME_EXISTING_ENTRY,
               capturer.navigation_type());
 
-    // The navigation reused the previously committed error page entry.
-    EXPECT_FALSE(capturer.did_replace_entry());
+    // The navigation replaced the previously committed error page entry.
+    EXPECT_TRUE(capturer.did_replace_entry());
     EXPECT_EQ(previous_entry, controller.GetLastCommittedEntry());
     EXPECT_EQ(1, controller.GetEntryCount());
 
@@ -15269,6 +15359,22 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
   // Verify the Origin and Referer headers.
   EXPECT_THAT(headers, ::testing::HasSubstr("Origin: null"));
   EXPECT_THAT(headers, ::testing::ContainsRegex("Referer: http://a.com:.*/"));
+
+  // Ensure the POST submission was present.
+  std::string request_body =
+      EvalJs(shell(), "document.getElementsByTagName('pre')[0].innerText")
+          .ExtractString();
+  EXPECT_THAT(request_body, ::testing::HasSubstr("text=value"));
+
+  NavigationControllerImpl& controller = static_cast<NavigationControllerImpl&>(
+      shell()->web_contents()->GetController());
+
+  // Check the FrameNavigationEntry's post data still exists as well.
+  NavigationEntryImpl* entry = controller.GetLastCommittedEntry();
+  scoped_refptr<FrameNavigationEntry> frame_entry =
+      entry->root_node()->frame_entry.get();
+  std::string content_type;
+  EXPECT_NE(frame_entry->GetPostData(&content_type), nullptr);
 }
 
 // Test that verifies that Content-Type http header is correctly sent
@@ -17239,6 +17345,11 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
   // Create and submit a form that will create a new about:blank tab.
   WebContentsAddedObserver web_contents_added_observer;
   TestNavigationObserver navigation_observer(nullptr, 1);
+  // Set the wait event up front so that if the navigation to about:blank
+  // finishes before `ExecJs()` returns, `TestNavigationObserver` does not
+  // miss the navigation completion event.
+  navigation_observer.set_wait_event(
+      TestNavigationObserver::WaitEvent::kNavigationFinished);
   navigation_observer.StartWatchingNewWebContents();
   ASSERT_TRUE(ExecJs(contents(),
                      R"(let form = document.createElement('form');
@@ -18517,7 +18628,8 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
   TestNavigationObserver error_observer(shell()->web_contents());
   controller.LoadPostCommitErrorPage(child, child->GetLastCommittedURL(),
                                      error_html);
-  error_observer.Wait();
+  error_observer.WaitForNavigationFinished();
+  EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
 
   // The post-commit error page committed an error page and sets the last
   // committed URL to about:blank.
@@ -18586,12 +18698,15 @@ IN_PROC_BROWSER_TEST_P(
   TestNavigationObserver error_observer(shell()->web_contents());
   controller.LoadPostCommitErrorPage(child, child->GetLastCommittedURL(),
                                      error_html);
-  error_observer.Wait();
+  error_observer.WaitForNavigationFinished();
+  EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
 
   // The post-commit error page committed an error page and sets the last
   // committed URL to about:blank, which is allowed by CSP because it's the same
   // origin as the main frame (because of origin inheritance). So, the net error
   // code is still ERR_BLOCKED_BY_CLIENT instead of ERR_BLOCKED_BY_CSP.
+  child = static_cast<RenderFrameHostImpl*>(
+      ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0));
   EXPECT_EQ(child->GetLastCommittedURL(), GURL("about:blank"));
   EXPECT_FALSE(error_observer.last_navigation_succeeded());
   EXPECT_EQ(net::ERR_BLOCKED_BY_CLIENT, error_observer.last_net_error_code());
@@ -18731,6 +18846,9 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
   error_observer.Wait();
   EXPECT_EQ(PAGE_TYPE_ERROR, controller.GetLastCommittedEntry()->GetPageType());
   EXPECT_EQ(1, controller.GetEntryCount());
+  int error_entry_id = controller.GetLastCommittedEntry()->GetUniqueID();
+
+  EXPECT_NE(initial_entry_id, error_entry_id);
 
   // Make sure reload triggers a reload of the original page, not the error,
   // and that we get back to the original entry.
@@ -18738,9 +18856,12 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
   EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
   EXPECT_EQ(initial_entry_index, controller.GetLastCommittedEntryIndex());
 
-  // We should be in the initial entry and no longer be in an error page.
-  EXPECT_EQ(initial_entry_id,
+  // We should be in a new, non-error page.
+  // TODO(crbug.com/396645696): Once pre-error subtree restoration lands,
+  // evaluate whether the initial entry ID should be restored.
+  EXPECT_NE(initial_entry_id,
             controller.GetLastCommittedEntry()->GetUniqueID());
+  EXPECT_NE(error_entry_id, controller.GetLastCommittedEntry()->GetUniqueID());
   EXPECT_EQ(PAGE_TYPE_NORMAL,
             controller.GetLastCommittedEntry()->GetPageType());
 
@@ -19698,9 +19819,8 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
               controller.GetLastCommittedEntry()->GetFrameEntry(child));
     EXPECT_TRUE(capturer.did_replace_entry());
 
-    // We keep the same history.state value, even in the error page, so that it
-    // can be used when the load later succeeds in step 4.
-    EXPECT_EQ("foo", EvalJs(child, "history.state"));
+    // We clear the history state/PageState on error page navigation.
+    EXPECT_EQ(base::Value(), EvalJs(child, "history.state"));
   }
 
   // 4) Test successfully navigating the subframe to the same URL after a failed
@@ -19717,19 +19837,15 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
     capturer.Wait();
     EXPECT_TRUE(observer.last_navigation_succeeded());
 
-    // The navigation got converted into a reload - we reused the previous
-    // NavigationEntry, FNE, and didn't do replacement in the renderer.
-    // TODO(crbug.com/40755155): Once error-page isolation for subframes
-    // is turned on, this should do replacement.
     EXPECT_EQ(NAVIGATION_TYPE_AUTO_SUBFRAME, capturer.navigation_type());
     EXPECT_EQ(2, controller.GetEntryCount());
     EXPECT_EQ(previous_entry, controller.GetLastCommittedEntry());
     EXPECT_EQ(previous_frame_entry,
               controller.GetLastCommittedEntry()->GetFrameEntry(child));
-    EXPECT_FALSE(capturer.did_replace_entry());
+    EXPECT_TRUE(capturer.did_replace_entry());
 
-    // We keep the same history.state value.
-    EXPECT_EQ("foo", EvalJs(child, "history.state"));
+    // We clear the history state/PageState on recovery as well.
+    EXPECT_EQ(base::Value(), EvalJs(child, "history.state"));
   }
 }
 
@@ -19922,7 +20038,7 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
 
     // We reused the previous NavigationEntry, FNE, and didn't do replacement in
     // the renderer.
-    // TODO(crbug.com/40755155): Once error-page isolation for subframes
+    // TODO(crbug.com/396645697): Once error-page isolation for subframes
     // is turned on, this should do replacement.
     EXPECT_FALSE(capturer.did_replace_entry());
     EXPECT_EQ(previous_entry, controller.GetLastCommittedEntry());
@@ -19947,24 +20063,11 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
     // We're classifying this as AUTO_SUBFRAME.
     EXPECT_EQ(NAVIGATION_TYPE_AUTO_SUBFRAME, capturer.navigation_type());
 
-    // We reused the previous NavigationEntry, FNE, and didn't do replacement in
-    // the renderer.
-    // TODO(crbug.com/40755155): Once error-page isolation for subframes
-    // is turned on, this should do replacement.
-    EXPECT_FALSE(capturer.did_replace_entry());
-    EXPECT_EQ(previous_entry, controller.GetLastCommittedEntry());
-    EXPECT_EQ(previous_frame_entry,
-              controller.GetLastCommittedEntry()->GetFrameEntry(child));
+    // We replaced the previous NavigationEntry/FNE.
+    EXPECT_TRUE(capturer.did_replace_entry());
     EXPECT_EQ(1, controller.GetEntryCount());
 
-    // We keep the history.state value from before the failed navigation.
-    // TODO(http://crbug.com/1188956): Ensure error page isolation correctly
-    // maintains history.state as well.
-    if (SiteIsolationPolicy::IsErrorPageIsolationEnabled(false)) {
-      EXPECT_EQ(base::Value(), EvalJs(child, "history.state"));
-    } else {
-      EXPECT_EQ("foo", EvalJs(child, "history.state"));
-    }
+    EXPECT_EQ(base::Value(), EvalJs(child, "history.state"));
   }
 }
 
@@ -21061,16 +21164,25 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
-                       URLLoadReturnsNavigationHandle) {
+                       LoadURLWithParamsForResultReturnsNavigationHandle) {
   GURL url(embedded_test_server()->GetURL("/title1.html"));
 
   TestNavigationManager navigation_manager(shell()->web_contents(), url);
-  base::WeakPtr<NavigationHandle> navigation =
-      shell()->web_contents()->GetController().LoadURLWithParams(
-          NavigationController::LoadURLParams(url));
+  NavigationController::LoadURLParams params(url);
+  base::expected<base::WeakPtr<NavigationHandle>, NavigationNotStartedReason>
+      result =
+          shell()->web_contents()->GetController().LoadURLWithParamsForResult(
+              params);
 
   // The returned NavigationHandle should be valid.
-  EXPECT_TRUE(navigation);
+  ASSERT_TRUE(result.has_value());
+  base::WeakPtr<NavigationHandle> navigation = result.value();
+  ASSERT_TRUE(navigation);
+
+  // The navigation is already owned by the FrameTreeNode when the handle is
+  // returned, i.e. the handle refers to a navigation that is really in flight.
+  EXPECT_EQ(navigation.get(),
+            contents()->GetPrimaryFrameTree().root()->navigation_request());
 
   // Start the navigation and ensure that the NavigationHandle we saw matches
   // the one TestNavigationManager saw.
@@ -21919,6 +22031,119 @@ IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
 
   EXPECT_EQ(url1, controller.GetLastCommittedEntry()->GetURL());
   EXPECT_EQ(initial_site_instance, contents()->GetSiteInstance());
+}
+
+// Verify that the navigate event for a cross-document history traversal is not
+// dispatched when the destination entry was committed at an opaque origin due
+// to CSP sandbox, even though its URL shares the current document's tuple
+// origin.
+IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTestNoServer,
+                       NavigateEventNotFiredForTraversalToCSPSandboxedEntry) {
+  net::test_server::ControllableHttpResponse response1(embedded_test_server(),
+                                                       "/sandboxed_page");
+  net::test_server::ControllableHttpResponse response2(embedded_test_server(),
+                                                       "/sandboxed_page");
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  // Ensure a.com requires a dedicated process across all platforms (including
+  // Android), so that CSP-sandboxed pages are isolated into a separate
+  // sandboxed SiteInstance from non-sandboxed pages of the same tuple origin.
+  IsolateOriginsForTesting(embedded_test_server(), shell()->web_contents(),
+                           {"a.com"});
+
+  NavigationControllerImpl& controller =
+      static_cast<NavigationControllerImpl&>(contents()->GetController());
+  FrameTreeNode* root = contents()->GetPrimaryFrameTree().root();
+
+  // Load a CSP-sandboxed page, which commits at an opaque origin.
+  GURL sandboxed_url(
+      embedded_test_server()->GetURL("a.com", "/sandboxed_page"));
+  {
+    TestNavigationObserver nav_observer(contents());
+    shell()->LoadURL(sandboxed_url);
+    response1.WaitForRequest();
+    response1.Send(
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/html; charset=utf-8\r\n"
+        "Content-Security-Policy: sandbox\r\n"
+        "Cache-Control: no-store\r\n"
+        "\r\n"
+        "sandboxed document");
+    response1.Done();
+    nav_observer.Wait();
+  }
+
+  ASSERT_TRUE(root->current_frame_host()->GetLastCommittedOrigin().opaque());
+  scoped_refptr<SiteInstance> sandboxed_site_instance =
+      root->current_frame_host()->GetSiteInstance();
+  FrameNavigationEntry* sandboxed_frame_entry =
+      controller.GetLastCommittedEntry()->GetFrameEntry(root);
+  ASSERT_TRUE(sandboxed_frame_entry->committed_origin().has_value());
+  EXPECT_TRUE(sandboxed_frame_entry->committed_origin()->opaque());
+  int64_t sandboxed_isn = sandboxed_frame_entry->item_sequence_number();
+  int64_t sandboxed_dsn = sandboxed_frame_entry->document_sequence_number();
+  // The history navigation below must reach the network, so prevent this page
+  // from being restored from BFCache.
+  DisableBFCacheForRFHForTesting(root->current_frame_host()->GetGlobalId());
+
+  // Load a non-sandboxed page from the same tuple origin.
+  GURL non_sandboxed_url(
+      embedded_test_server()->GetURL("a.com", "/title1.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), non_sandboxed_url));
+  EXPECT_FALSE(root->current_frame_host()->GetLastCommittedOrigin().opaque());
+  EXPECT_NE(sandboxed_site_instance, contents()->GetSiteInstance());
+
+  // Register a navigate event listener and traverse back to the sandboxed
+  // entry.
+  EXPECT_TRUE(ExecJs(root, R"(
+      window.navigate_event_fired = false;
+      navigation.onnavigate = e => { window.navigate_event_fired = true; };
+  )"));
+  TestNavigationManager nav_manager(contents(), sandboxed_url);
+  controller.GoBack();
+
+  // Delay the server response using ControllableHttpResponse until after the
+  // speculative RenderFrameHost is created, to verify that it speculatively
+  // uses the destination sandboxed SiteInstance before response headers arrive.
+  nav_manager.WaitForSpeculativeRenderFrameHostCreation();
+  EXPECT_EQ(
+      sandboxed_site_instance,
+      root->render_manager()->speculative_frame_host()->GetSiteInstance());
+
+  // Ensure the URLLoader has started sending the request before waiting for
+  // the server request.
+  ASSERT_TRUE(nav_manager.WaitForLoaderStart());
+
+  // Send the server response now that the speculative RFH has been verified.
+  response2.WaitForRequest();
+  response2.Send(
+      "HTTP/1.1 200 OK\r\n"
+      "Content-Type: text/html; charset=utf-8\r\n"
+      "Content-Security-Policy: sandbox\r\n"
+      "Cache-Control: no-store\r\n"
+      "\r\n"
+      "sandboxed document");
+  response2.Done();
+
+  // Pause at WillProcessResponse so the listener result can be read from the
+  // still-current document before it is replaced.
+  ASSERT_TRUE(nav_manager.WaitForResponse());
+
+  // The sandboxed entry's committed origin is opaque and therefore
+  // cross-origin to the current document, so no navigate event should fire and
+  // no PageState should be sent to the current renderer.
+  EXPECT_EQ(false, EvalJs(root, "window.navigate_event_fired"));
+
+  ASSERT_TRUE(nav_manager.WaitForNavigationFinished());
+  EXPECT_EQ(sandboxed_url, controller.GetLastCommittedEntry()->GetURL());
+  EXPECT_EQ(sandboxed_site_instance,
+            root->current_frame_host()->GetSiteInstance());
+  FrameNavigationEntry* final_frame_entry =
+      controller.GetLastCommittedEntry()->GetFrameEntry(root);
+  EXPECT_EQ(sandboxed_isn, final_frame_entry->item_sequence_number());
+  EXPECT_EQ(sandboxed_dsn, final_frame_entry->document_sequence_number());
+  ASSERT_TRUE(final_frame_entry->committed_origin().has_value());
+  EXPECT_TRUE(final_frame_entry->committed_origin()->opaque());
 }
 
 IN_PROC_BROWSER_TEST_P(NavigationControllerBrowserTest,
@@ -24093,7 +24318,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   int first_link_click_nav_id =
       nav_manager.GetNavigationHandle()->GetNavigationId();
   EXPECT_NE(first_link_click_nav_id,
-            root->current_frame_host()->navigation_id());
+            root->current_frame_host()->GetNavigationId());
 
   // 2. Click the link again, and assert that the first link click navigation is
   // kept and eventually commits, and the second link click gets ignored.
@@ -24110,7 +24335,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
     EXPECT_TRUE(nav_manager.was_committed());
     EXPECT_EQ(link_url, root->current_frame_host()->GetLastCommittedURL());
     EXPECT_EQ(first_link_click_nav_id,
-              root->current_frame_host()->navigation_id());
+              root->current_frame_host()->GetNavigationId());
 
     // Ensure that there's no ongoing navigation, which means the second link
     // click got ignored.
@@ -24123,7 +24348,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
     EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
     EXPECT_EQ(link_url, root->current_frame_host()->GetLastCommittedURL());
     EXPECT_NE(first_link_click_nav_id,
-              root->current_frame_host()->navigation_id());
+              root->current_frame_host()->GetNavigationId());
   }
 }
 
@@ -24144,7 +24369,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
   int first_nav_id = nav_manager.GetNavigationHandle()->GetNavigationId();
-  EXPECT_NE(first_nav_id, root->current_frame_host()->navigation_id());
+  EXPECT_NE(first_nav_id, root->current_frame_host()->GetNavigationId());
 
   // 2. Start the second navigation to `url2`.
   shell()->LoadURL(url2);
@@ -24157,7 +24382,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
     // committed.
     EXPECT_TRUE(nav_manager.was_committed());
     EXPECT_EQ(url2, root->current_frame_host()->GetLastCommittedURL());
-    EXPECT_EQ(first_nav_id, root->current_frame_host()->navigation_id());
+    EXPECT_EQ(first_nav_id, root->current_frame_host()->GetNavigationId());
 
     // Ensure that there's no ongoing navigation, which means the second
     // navigation got ignored.
@@ -24169,8 +24394,51 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
     // The second navigation will replace the first one, and eventually commit.
     EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
     EXPECT_EQ(url2, root->current_frame_host()->GetLastCommittedURL());
-    EXPECT_NE(first_nav_id, root->current_frame_host()->navigation_id());
+    EXPECT_NE(first_nav_id, root->current_frame_host()->GetNavigationId());
   }
+}
+
+// Tests that a browser-initiated navigation that's a duplicate of an ongoing
+// browser-initiated navigation is NOT ignored if the scheme is not HTTP/HTTPS
+// (e.g., a data: URL).
+IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
+                       DuplicateDataURLIsNotIgnored) {
+  GURL url1(embedded_test_server()->GetURL("/title1.html"));
+  GURL data_url("data:text/html,<html><body>test</body></html>");
+
+  EXPECT_TRUE(NavigateToURL(shell(), url1));
+  FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
+                            ->GetPrimaryFrameTree()
+                            .root();
+
+  // 1. Start the first navigation to the data: URL.
+  TestNavigationManager nav_manager(shell()->web_contents(), data_url);
+  shell()->LoadURL(data_url);
+
+  // Pause the navigation at request start.
+  EXPECT_TRUE(nav_manager.WaitForRequestStart());
+  int first_nav_id = nav_manager.GetNavigationHandle()->GetNavigationId();
+  EXPECT_NE(first_nav_id, root->current_frame_host()->GetNavigationId());
+
+  // 2. Start the second navigation to the exact same data: URL.
+  shell()->LoadURL(data_url);
+
+  // Wait for the first navigation to finish.
+  EXPECT_TRUE(nav_manager.WaitForNavigationFinished());
+
+  // Since data: URLs are not HTTP/HTTPS, they should NOT be deduplicated.
+  // Therefore, the second navigation should cancel the first one, meaning
+  // the first navigation will NOT commit, regardless of whether the
+  // ignore_duplicate_nav flag is enabled or not.
+  EXPECT_FALSE(nav_manager.was_committed());
+
+  // The second navigation will replace the first one and eventually commit.
+  EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
+  EXPECT_EQ(data_url, root->current_frame_host()->GetLastCommittedURL());
+
+  // The committed navigation ID should be different from the first one,
+  // confirming the second navigation is the one that actually committed.
+  EXPECT_NE(first_nav_id, root->current_frame_host()->GetNavigationId());
 }
 
 // Tests that a browser-initiated navigation that's a duplicate of an ongoing
@@ -24191,7 +24459,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
   int first_nav_id = nav_manager.GetNavigationHandle()->GetNavigationId();
-  EXPECT_NE(first_nav_id, root->current_frame_host()->navigation_id());
+  EXPECT_NE(first_nav_id, root->current_frame_host()->GetNavigationId());
 
   // 2. Modify cookies via document.cookie.
   EXPECT_TRUE(ExecJs(contents(), "document.cookie='foo=bar';"));
@@ -24211,7 +24479,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   // and eventually commit.
   EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
   EXPECT_EQ(url2, root->current_frame_host()->GetLastCommittedURL());
-  EXPECT_NE(first_nav_id, root->current_frame_host()->navigation_id());
+  EXPECT_NE(first_nav_id, root->current_frame_host()->GetNavigationId());
 }
 
 // Tests that a browser-initiated navigation that's a duplicate of an ongoing
@@ -24234,7 +24502,7 @@ IN_PROC_BROWSER_TEST_P(
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
   int first_nav_id = nav_manager.GetNavigationHandle()->GetNavigationId();
-  EXPECT_NE(first_nav_id, root->current_frame_host()->navigation_id());
+  EXPECT_NE(first_nav_id, root->current_frame_host()->GetNavigationId());
 
   // 2. Modify HTTP-only cookie via fetch.
   EXPECT_TRUE(ExecJs(contents(), "fetch('/set-cookie?foo=bar;HttpOnly');"));
@@ -24258,7 +24526,7 @@ IN_PROC_BROWSER_TEST_P(
   // and eventually commit.
   EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
   EXPECT_EQ(url2, root->current_frame_host()->GetLastCommittedURL());
-  EXPECT_NE(first_nav_id, root->current_frame_host()->navigation_id());
+  EXPECT_NE(first_nav_id, root->current_frame_host()->GetNavigationId());
 }
 
 // Tests that a browser-initiated navigation that's a duplicate of an ongoing
@@ -24279,7 +24547,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
   int first_nav_id = nav_manager.GetNavigationHandle()->GetNavigationId();
-  EXPECT_NE(first_nav_id, root->current_frame_host()->navigation_id());
+  EXPECT_NE(first_nav_id, root->current_frame_host()->GetNavigationId());
 
   // 2. Do a cookie update for `url1`. This should not affect the cross-site
   // navigation to `url2`.
@@ -24299,7 +24567,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
     // committed.
     EXPECT_TRUE(nav_manager.was_committed());
     EXPECT_EQ(url2, root->current_frame_host()->GetLastCommittedURL());
-    EXPECT_EQ(first_nav_id, root->current_frame_host()->navigation_id());
+    EXPECT_EQ(first_nav_id, root->current_frame_host()->GetNavigationId());
 
     // Ensure that there's no ongoing navigation, which means the second
     // navigation got ignored.
@@ -24311,7 +24579,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
     // The second navigation will replace the first one, and eventually commit.
     EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
     EXPECT_EQ(url2, root->current_frame_host()->GetLastCommittedURL());
-    EXPECT_NE(first_nav_id, root->current_frame_host()->navigation_id());
+    EXPECT_NE(first_nav_id, root->current_frame_host()->GetNavigationId());
   }
 }
 
@@ -24334,7 +24602,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
   int link_click_nav_id = nav_manager.GetNavigationHandle()->GetNavigationId();
-  EXPECT_NE(link_click_nav_id, root->current_frame_host()->navigation_id());
+  EXPECT_NE(link_click_nav_id, root->current_frame_host()->GetNavigationId());
 
   // 2. Navigate again but via script instead of link click, and assert that the
   // link click navigation is overridden by the second navigation.
@@ -24376,7 +24644,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
   int link_click_nav_id = nav_manager.GetNavigationHandle()->GetNavigationId();
-  EXPECT_NE(link_click_nav_id, root->current_frame_host()->navigation_id());
+  EXPECT_NE(link_click_nav_id, root->current_frame_host()->GetNavigationId());
 
   // Modify cookie to trigger cookie modification count change.
   EXPECT_TRUE(ExecJs(contents(), "document.cookie = 'foo=bar';"));
@@ -24423,7 +24691,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
   int link_click_nav_id = nav_manager.GetNavigationHandle()->GetNavigationId();
-  EXPECT_NE(link_click_nav_id, root->current_frame_host()->navigation_id());
+  EXPECT_NE(link_click_nav_id, root->current_frame_host()->GetNavigationId());
 
   // Modify cookie via CookieStore to trigger cookie modification count change.
   EXPECT_TRUE(ExecJs(contents(), "cookieStore.set('foo', 'bar');"));
@@ -24470,7 +24738,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
   int link_click_nav_id = nav_manager.GetNavigationHandle()->GetNavigationId();
-  EXPECT_NE(link_click_nav_id, root->current_frame_host()->navigation_id());
+  EXPECT_NE(link_click_nav_id, root->current_frame_host()->GetNavigationId());
 
   // Perform a fetch to /set-cookie?foo=bar. This modifies the cookie via
   // response headers, so it should NOT affect the document's cookie
@@ -24490,12 +24758,12 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   if (ignore_duplicate_nav()) {
     EXPECT_TRUE(nav_manager.was_committed());
     EXPECT_EQ(link_url, root->current_frame_host()->GetLastCommittedURL());
-    EXPECT_EQ(link_click_nav_id, root->current_frame_host()->navigation_id());
+    EXPECT_EQ(link_click_nav_id, root->current_frame_host()->GetNavigationId());
   } else {
     EXPECT_FALSE(nav_manager.was_committed());
     EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
     EXPECT_EQ(link_url, root->current_frame_host()->GetLastCommittedURL());
-    EXPECT_NE(link_click_nav_id, root->current_frame_host()->navigation_id());
+    EXPECT_NE(link_click_nav_id, root->current_frame_host()->GetNavigationId());
   }
 }
 
@@ -24525,7 +24793,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
   int link_click_nav_id = nav_manager.GetNavigationHandle()->GetNavigationId();
-  EXPECT_NE(link_click_nav_id, root->current_frame_host()->navigation_id());
+  EXPECT_NE(link_click_nav_id, root->current_frame_host()->GetNavigationId());
 
   // Modify cookies in the second tab's document. This should not affect the
   // main document's cookie modification count.
@@ -24543,12 +24811,12 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   if (ignore_duplicate_nav()) {
     EXPECT_TRUE(nav_manager.was_committed());
     EXPECT_EQ(link_url, root->current_frame_host()->GetLastCommittedURL());
-    EXPECT_EQ(link_click_nav_id, root->current_frame_host()->navigation_id());
+    EXPECT_EQ(link_click_nav_id, root->current_frame_host()->GetNavigationId());
   } else {
     EXPECT_FALSE(nav_manager.was_committed());
     EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
     EXPECT_EQ(link_url, root->current_frame_host()->GetLastCommittedURL());
-    EXPECT_NE(link_click_nav_id, root->current_frame_host()->navigation_id());
+    EXPECT_NE(link_click_nav_id, root->current_frame_host()->GetNavigationId());
   }
 }
 
@@ -24572,7 +24840,7 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
   int link_click_nav_id = nav_manager.GetNavigationHandle()->GetNavigationId();
-  EXPECT_NE(link_click_nav_id, root->current_frame_host()->navigation_id());
+  EXPECT_NE(link_click_nav_id, root->current_frame_host()->GetNavigationId());
 
   // Perform a fetch to set an HttpOnly cookie.
   GURL fetch_url =
@@ -24589,11 +24857,11 @@ IN_PROC_BROWSER_TEST_P(IgnoreDuplicateNavsBrowserTest,
 
   if (ignore_duplicate_nav()) {
     EXPECT_TRUE(nav_manager.was_committed());
-    EXPECT_EQ(link_click_nav_id, root->current_frame_host()->navigation_id());
+    EXPECT_EQ(link_click_nav_id, root->current_frame_host()->GetNavigationId());
   } else {
     EXPECT_FALSE(nav_manager.was_committed());
     EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
-    EXPECT_NE(link_click_nav_id, root->current_frame_host()->navigation_id());
+    EXPECT_NE(link_click_nav_id, root->current_frame_host()->GetNavigationId());
   }
 }
 
@@ -24699,17 +24967,17 @@ IN_PROC_BROWSER_TEST_P(RestrictDuplicateNavsToOriginsBrowserTest,
   int first_link_click_nav_id =
       nav_manager.GetNavigationHandle()->GetNavigationId();
   EXPECT_NE(first_link_click_nav_id,
-            root->current_frame_host()->navigation_id());
+            root->current_frame_host()->GetNavigationId());
 
   // Click the link again, and assert that the first link click navigation is
   // kept and eventually commits, and the second link click gets ignored.
   EXPECT_TRUE(ExecJs(contents(), script));
   // Run script to ensure that the second link click is already processed.
   EXPECT_TRUE(ExecJs(shell(), "console.log('Success');"));
+  FetchHistogramsFromChildProcesses();
 
   // Wait for the first link click navigation to finish.
   EXPECT_TRUE(nav_manager.WaitForNavigationFinished());
-  FetchHistogramsFromChildProcesses();
 
   bool should_be_ignored =
       ignore_duplicate_navs() &&
@@ -24720,7 +24988,7 @@ IN_PROC_BROWSER_TEST_P(RestrictDuplicateNavsToOriginsBrowserTest,
     EXPECT_TRUE(nav_manager.was_committed());
     EXPECT_EQ(link_url, root->current_frame_host()->GetLastCommittedURL());
     EXPECT_EQ(first_link_click_nav_id,
-              root->current_frame_host()->navigation_id());
+              root->current_frame_host()->GetNavigationId());
 
     // Ensure that there's no ongoing navigation, which means the second link
     // click got ignored.
@@ -24733,7 +25001,7 @@ IN_PROC_BROWSER_TEST_P(RestrictDuplicateNavsToOriginsBrowserTest,
     EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
     EXPECT_EQ(link_url, root->current_frame_host()->GetLastCommittedURL());
     EXPECT_NE(first_link_click_nav_id,
-              root->current_frame_host()->navigation_id());
+              root->current_frame_host()->GetNavigationId());
   }
   if (ignore_duplicate_navs() && restrict_duplicate_navs_to_origins()) {
     // Record whether the navigation URL matches the target origin if the origin
@@ -25115,6 +25383,140 @@ IN_PROC_BROWSER_TEST_P(
     ReloadReplacesInitialEntryAfterCanceledNavigation_BypassingCache) {
   RunReloadReplacesInitialEntryAfterCanceledNavigationTest(
       shell(), embedded_test_server(), ReloadType::BYPASSING_CACHE);
+}
+
+namespace {
+
+// Builds a CompositorFrame that CompositorFrame::HasVisuallyNonEmptyContent()
+// reports as non-empty (two SolidColorDrawQuads, rather than the single
+// background quad a blank document submits).
+viz::CompositorFrame MakeVisuallyNonEmptyCompositorFrame() {
+  constexpr gfx::Rect kOutputRect(0, 0, 100, 100);
+  return viz::CompositorFrameBuilder()
+      .AddRenderPass(
+          viz::RenderPassBuilder(kOutputRect)
+              .AddSolidColorQuad(kOutputRect, SkColors::kWhite)
+              .AddSolidColorQuad(gfx::Rect(0, 0, 10, 10), SkColors::kRed))
+      .Build();
+}
+
+// Leaves `contents` on an unmodified blank tab with a renderer-initiated
+// pending URL visible in place of about:blank.
+void StartPendingRendererInitiatedNavigationInNewTab(WebContentsImpl* contents,
+                                                     const GURL& url) {
+  NavigationController::LoadURLParams params(url);
+  params.is_renderer_initiated = true;
+  params.initiator_origin = url::Origin::Create(url);
+  params.transition_type = ui::PAGE_TRANSITION_LINK;
+  TestNavigationManager nav_manager(contents, url);
+  contents->GetController().LoadURLWithParams(params);
+  ASSERT_TRUE(nav_manager.WaitForRequestStart());
+
+  NavigationControllerImpl& controller = contents->GetController();
+  ASSERT_TRUE(controller.IsUnmodifiedBlankTab());
+  ASSERT_TRUE(controller.GetPendingEntry());
+  ASSERT_TRUE(controller.GetPendingEntry()->is_renderer_initiated());
+  ASSERT_EQ(controller.GetPendingEntry(), controller.GetVisibleEntry());
+  ASSERT_EQ(url, controller.GetVisibleEntry()->GetURL());
+}
+
+}  // namespace
+
+// The tests below submit CompositorFrames directly, which keeps them focused on
+// the browser and Viz plumbing and lets them cover frame sink lifetimes that a
+// non-compromised renderer cannot produce on demand. The attack itself is
+// covered end to end by the
+// NonEmptyCompositorFrameInInitialEmptyDocumentClearsPendingURL test in
+// SecurityExploitBrowserTest.
+
+// Verifies that a renderer cannot disarm the detection by asking for a new
+// CompositorFrameSink before drawing, which destroys the old
+// CompositorFrameSinkSupport in Viz. See https://crbug.com/40055319.
+IN_PROC_BROWSER_TEST_P(
+    NavigationControllerBrowserTest,
+    VisuallyNonEmptyCompositorFrameAfterRecreatingFrameSinkRevertsPendingURL) {
+  Shell* new_shell =
+      Shell::CreateNewWindow(shell()->web_contents()->GetBrowserContext(),
+                             GURL(), nullptr, gfx::Size(100, 100));
+  WebContentsImpl* new_contents =
+      static_cast<WebContentsImpl*>(new_shell->web_contents());
+  NavigationControllerImpl& controller = new_contents->GetController();
+
+  ASSERT_NO_FATAL_FAILURE(StartPendingRendererInitiatedNavigationInNewTab(
+      new_contents, embedded_test_server()->GetURL("/title1.html")));
+
+  // Recreate the CompositorFrameSink, as a renderer recovering from context
+  // loss would.
+  RenderWidgetHostImpl* rwh =
+      new_contents->GetPrimaryMainFrame()->GetRenderWidgetHost();
+  viz::FakeCompositorFrameSinkClient sink_client;
+  mojo::Remote<viz::mojom::CompositorFrameSink> compositor_frame_sink;
+  mojo::PendingRemote<blink::mojom::RenderInputRouterClient> rir_client;
+  std::ignore = rir_client.InitWithNewPipeAndPassReceiver();
+  rwh->CreateFrameSink(compositor_frame_sink.BindNewPipeAndPassReceiver(),
+                       sink_client.BindInterfaceRemote(),
+                       std::move(rir_client));
+  EXPECT_TRUE(controller.IsUnmodifiedBlankTab());
+
+  viz::LocalSurfaceId local_surface_id =
+      rwh->GetView()->GetLocalSurfaceId().is_valid()
+          ? rwh->GetView()->GetLocalSurfaceId()
+          : viz::LocalSurfaceId(1, 1, base::UnguessableToken::Create());
+  compositor_frame_sink->SubmitCompositorFrame(
+      local_surface_id, MakeVisuallyNonEmptyCompositorFrame(), std::nullopt, 0);
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return new_contents->HasAccessedInitialDocument(); }));
+  EXPECT_TRUE(controller.GetVisibleEntry()->IsInitialEntry());
+  EXPECT_EQ(GURL::EmptyGURL(), controller.GetVisibleEntry()->GetURL());
+}
+
+// Verifies that a renderer cannot suppress the notification by closing its
+// CompositorFrameSink pipe immediately after submitting a spoofed frame. The
+// surface has already activated and is still drawn, so the browser must still
+// be told. This test prevents a bypass found in an earlier
+// CompositorFrameSinkSupport-based approach. See https://crbug.com/40055319.
+IN_PROC_BROWSER_TEST_P(
+    NavigationControllerBrowserTest,
+    VisuallyNonEmptyCompositorFrameThenClosedSinkRevertsPendingURL) {
+  Shell* new_shell =
+      Shell::CreateNewWindow(shell()->web_contents()->GetBrowserContext(),
+                             GURL(), nullptr, gfx::Size(100, 100));
+  WebContentsImpl* new_contents =
+      static_cast<WebContentsImpl*>(new_shell->web_contents());
+  NavigationControllerImpl& controller = new_contents->GetController();
+
+  ASSERT_NO_FATAL_FAILURE(StartPendingRendererInitiatedNavigationInNewTab(
+      new_contents, embedded_test_server()->GetURL("/title1.html")));
+
+  RenderWidgetHostImpl* rwh =
+      new_contents->GetPrimaryMainFrame()->GetRenderWidgetHost();
+  // Held in an optional so the test can close the client pipe along with the
+  // sink, as a renderer tearing down its CompositorFrameSink would.
+  std::optional<viz::FakeCompositorFrameSinkClient> sink_client;
+  sink_client.emplace();
+  mojo::Remote<viz::mojom::CompositorFrameSink> compositor_frame_sink;
+  mojo::PendingRemote<blink::mojom::RenderInputRouterClient> rir_client;
+  std::ignore = rir_client.InitWithNewPipeAndPassReceiver();
+  rwh->CreateFrameSink(compositor_frame_sink.BindNewPipeAndPassReceiver(),
+                       sink_client->BindInterfaceRemote(),
+                       std::move(rir_client));
+
+  viz::LocalSurfaceId local_surface_id =
+      rwh->GetView()->GetLocalSurfaceId().is_valid()
+          ? rwh->GetView()->GetLocalSurfaceId()
+          : viz::LocalSurfaceId(1, 1, base::UnguessableToken::Create());
+  compositor_frame_sink->SubmitCompositorFrame(
+      local_surface_id, MakeVisuallyNonEmptyCompositorFrame(), std::nullopt, 0);
+
+  // Tear down the sink right after submitting, without ever drawing again.
+  compositor_frame_sink.reset();
+  sink_client.reset();
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return new_contents->HasAccessedInitialDocument(); }));
+  EXPECT_TRUE(controller.GetVisibleEntry()->IsInitialEntry());
+  EXPECT_EQ(GURL::EmptyGURL(), controller.GetVisibleEntry()->GetURL());
 }
 
 }  // namespace content

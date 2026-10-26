@@ -16,7 +16,6 @@
 #include "content/public/browser/desktop_media_id.h"
 #include "media/capture/video/video_capture_device.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
-#include "ui/gfx/native_ui_types.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/java_handler_thread.h"
@@ -74,8 +73,7 @@ class CONTENT_EXPORT DesktopCaptureDevice : public media::VideoCaptureDevice {
   // a frame sent to the consumer with a delay of up to one second.
   void RequestRefreshFrame() override;
 
-  // Set the platform-dependent window id for the notification window.
-  void SetNotificationWindowId(gfx::NativeViewId window_id);
+  void InvalidateBuffers() override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(DesktopCaptureDeviceTest,

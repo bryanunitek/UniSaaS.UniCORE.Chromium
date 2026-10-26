@@ -27,14 +27,11 @@
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/favicon_size.h"
 
-// Must come after all headers that specialize FromJniType() / ToJniType().
+// Must come after headers that provide symbols used by @JniType.
 #include "chrome/browser/partnerbookmarks/jni_headers/PartnerBookmarksReader_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::CheckException;
-using base::android::ConvertJavaStringToUTF16;
-using base::android::ConvertJavaStringToUTF8;
-using base::android::ConvertUTF8ToJavaString;
 using base::android::JavaRef;
 using base::android::ScopedJavaGlobalRef;
 using bookmarks::BookmarkNode;
@@ -49,9 +46,8 @@ void SetFaviconTask(Profile* profile,
                     const GURL& icon_url,
                     const std::vector<unsigned char>& image_data,
                     favicon_base::IconType icon_type) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  scoped_refptr<base::RefCountedMemory> bitmap_data(
-      new base::RefCountedBytes(image_data));
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
+  auto bitmap_data = base::MakeRefCounted<base::RefCountedBytes>(image_data);
   gfx::Size pixel_size(gfx::kFaviconSize, gfx::kFaviconSize);
   favicon::FaviconService* favicon_service =
       FaviconServiceFactory::GetForProfile(profile,
@@ -107,7 +103,7 @@ PartnerBookmarksReader::PartnerBookmarksReader(
 PartnerBookmarksReader::~PartnerBookmarksReader() = default;
 
 void PartnerBookmarksReader::PartnerBookmarksCreationComplete(JNIEnv* env) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   partner_bookmarks_shim_->SetPartnerBookmarksRoot(
       std::move(wip_partner_bookmarks_root_));
   wip_next_available_id_ = 0;
@@ -118,15 +114,15 @@ void PartnerBookmarksReader::Destroy(JNIEnv* env) {
 }
 
 void PartnerBookmarksReader::Reset(JNIEnv* env) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   wip_partner_bookmarks_root_.reset();
   wip_next_available_id_ = 0;
 }
 
 int64_t PartnerBookmarksReader::AddPartnerBookmark(
     JNIEnv* env,
-    const JavaRef<jstring>& jurl,
-    const JavaRef<jstring>& jtitle,
+    const std::u16string& url,
+    const std::u16string& title,
     bool is_folder,
     int64_t parent_id,
     const JavaRef<jbyteArray>& favicon,
@@ -134,14 +130,8 @@ int64_t PartnerBookmarksReader::AddPartnerBookmark(
     bool fetch_uncached_favicons_from_server,
     int32_t desired_favicon_size_px,
     const JavaRef<jobject>& j_callback) {
-  std::u16string url;
-  std::u16string title;
-  if (jurl) {
-    DCHECK(!is_folder);
-    url = ConvertJavaStringToUTF16(env, jurl);
-  }
-  if (jtitle) {
-    title = ConvertJavaStringToUTF16(env, jtitle);
+  if (!url.empty()) {
+    CHECK(!is_folder, base::NotFatalUntil::M161);
   }
 
   int64_t node_id = 0;
@@ -153,22 +143,16 @@ int64_t PartnerBookmarksReader::AddPartnerBookmark(
     // Handle favicon and touchicon
     if (profile_ != nullptr) {
       if (!favicon.is_null() || !touchicon.is_null()) {
-        jbyteArray icon =
-            (!touchicon.is_null()) ? touchicon.obj() : favicon.obj();
+        const JavaRef<jbyteArray>& icon =
+            (!touchicon.is_null()) ? touchicon : favicon;
         const favicon_base::IconType icon_type =
             touchicon ? favicon_base::IconType::kTouchIcon
                       : favicon_base::IconType::kFavicon;
-        int8_t* icon_bytes = env->GetByteArrayElements(icon, nullptr);
-        if (icon_bytes) {
-          const int icon_len = env->GetArrayLength(icon);
-          // SAFETY: Pointer and length come from JNI; assume those are
-          // implemented correctly.
-          base::span<uint8_t> icon_span =
-              UNSAFE_BUFFERS(base::span(reinterpret_cast<uint8_t*>(icon_bytes),
-                                        base::checked_cast<size_t>(icon_len)));
-          PrepareAndSetFavicon(icon_span, node.get(), profile_, icon_type);
+        SkBitmap icon_bitmap = gfx::PNGCodec::Decode(
+            icon.CreateViewCritical<uint8_t>(env).as_span());
+        if (!icon_bitmap.isNull()) {
+          PrepareAndSetFavicon(icon_bitmap, node.get(), profile_, icon_type);
         }
-        env->ReleaseByteArrayElements(icon, icon_bytes, JNI_ABORT);
       } else {
         // We should attempt to read the favicon from cache or retrieve it from
         // a server and cache it.
@@ -358,14 +342,10 @@ void PartnerBookmarksReader::OnFaviconFetched(
 
 // static
 void PartnerBookmarksReader::PrepareAndSetFavicon(
-    base::span<uint8_t> icon,
+    const SkBitmap& icon_bitmap,
     BookmarkNode* node,
     Profile* profile,
     favicon_base::IconType icon_type) {
-  SkBitmap icon_bitmap = gfx::PNGCodec::Decode(icon);
-  if (icon_bitmap.isNull()) {
-    return;
-  }
   std::optional<std::vector<uint8_t>> image_data =
       gfx::PNGCodec::EncodeBGRASkBitmap(icon_bitmap,
                                         /*discard_transparency=*/false);
@@ -387,7 +367,8 @@ void PartnerBookmarksReader::PrepareAndSetFavicon(
   {
     // Waiting is okay here because this is called from a background thread
     // in Java.
-    DCHECK(!::content::BrowserThread::CurrentlyOn(BrowserThread::UI));
+    CHECK(!::content::BrowserThread::CurrentlyOn(BrowserThread::UI),
+          base::NotFatalUntil::M161);
     base::ScopedAllowBaseSyncPrimitives allow_sync;
     event.Wait();
   }
@@ -413,7 +394,6 @@ static int64_t JNI_PartnerBookmarksReader_Init(JNIEnv* env, Profile* profile) {
 }
 
 static std::string JNI_PartnerBookmarksReader_GetNativeUrlString(
-    JNIEnv* env,
     const std::string& url) {
   return GURL(url).spec();
 }

@@ -7,6 +7,10 @@ import("//build/config/chrome_build.gni")
 assert(is_win, "The installer downloader is for windows only")
 assert(is_chrome_branded, "The installer downloader is for chrome branded only")
 
+source_set("constants") {
+  public = [ "installer_downloader_constants.h" ]
+}
+
 source_set("prefs") {
   public = [ "installer_downloader_pref_names.h" ]
 }
@@ -31,6 +35,7 @@ source_set("controller") {
   public_deps = [ "//base" ]
 
   deps = [
+    ":constants",
     ":infobar",
     ":prefs",
     "//base/version_info",
@@ -87,15 +92,16 @@ source_set("infobar_impl") {
   ]
 
   deps = [
+    ":constants",
     ":controller",
     ":infobar",
     "//chrome/app:branded_strings_grit",
-    "//chrome/browser/ui",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/views/infobars",
     "//components/infobars/content",
     "//components/infobars/core",
     "//components/omnibox/browser:vector_icons",
+    "//components/strings",
     "//components/vector_icons",
     "//ui/base",
   ]
@@ -111,14 +117,18 @@ source_set("unit_tests") {
   ]
 
   deps = [
+    ":constants",
     ":controller",
     ":infobar",
     ":prefs",
     "//base",
     "//base/test:test_support",
+    "//chrome/browser/infobars",
     "//chrome/browser/ui/views/infobars",
     "//chrome/browser/win:cloud_synced_folder_checker",
     "//chrome/test:test_support",
+    "//chrome/test/base:chrome_render_view_host_test_harness",
+    "//chrome/test/base:testing_browser_process",
     "//components/infobars/content",
     "//components/infobars/core",
     "//components/prefs",
@@ -141,10 +151,10 @@ source_set("interactive_ui_tests") {
   deps = [
     ":controller",
     ":prefs",
+    "//chrome/browser",
     "//chrome/browser:browser_process",
     "//chrome/browser:global_features",
     "//chrome/browser/infobars",
-    "//chrome/browser/ui",
     "//chrome/browser/ui:browser_element_identifiers",
     "//chrome/browser/ui/views/infobars",
     "//chrome/test:test_support_ui",

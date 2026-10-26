@@ -4,19 +4,27 @@
 
 package org.chromium.chrome.browser.ui.side_ui;
 
+import android.content.res.Resources;
+import android.util.ArrayMap;
 import android.view.View;
 import android.view.ViewGroup.LayoutParams;
 
 import androidx.annotation.Px;
+import androidx.annotation.StringRes;
 
 import com.google.errorprone.annotations.DoNotMock;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.AnchorSide;
+import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.HeightType;
 import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.SideUiId;
+import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.SideUiSpecs.SideUiSize;
 import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.UiUpdateRequest;
 import org.chromium.ui.base.ViewUtils;
+
+import java.util.Map;
 
 /** Minimum implementation of {@link SideUiContainer} to allow setting/getting width for tests. */
 @DoNotMock
@@ -24,18 +32,30 @@ import org.chromium.ui.base.ViewUtils;
 public final class TestSideUiContainer implements SideUiContainer {
     private static final int DEFAULT_MAX_WIDTH_DP = 412;
 
-    /**
-     * Whether the container has content to show.
-     *
-     * <p>This will be returned by {@link #hasContentToShow()}.
-     */
-    public boolean mHasContentToShow = true;
+    /** Height type for this container. */
+    public @HeightType int mHeightType = HeightType.TOOLBAR;
 
-    /** The last {@code availableWidth} received by {@link #determineShowableWidth}. */
+    /** Map of {@link Tab} to whether this container has content to show for that tab. */
+    public final Map<Tab, Boolean> mHasContentForTabMap = new ArrayMap<>();
+
+    /** Number of times {@link #hasContentToShow} is called. */
+    public int mNumHasContentToShowCalls;
+
+    /**
+     * Whether browser top controls should remain locked when this container is showing.
+     *
+     * <p>This will be returned by {@link #shouldLockTopControls()}.
+     */
+    public boolean mShouldLockTopControls = true;
+
+    /** The last {@code availableWidth} received by {@link #determineShowableSize}. */
     public @Nullable @Px Integer mLastAvailableWidth;
 
-    /** The last {@code windowWidth} received by {@link #determineShowableWidth}. */
+    /** The last {@code windowWidth} received by {@link #determineShowableSize}. */
     public @Nullable @Px Integer mLastWindowWidth;
+
+    /** The last {@code isFullscreen} received by {@link #determineShowableSize}. */
+    public boolean mLastIsFullscreen;
 
     /** Maximum width for this {@link SideUiContainer}. */
     public int mMaxWidthDp = DEFAULT_MAX_WIDTH_DP;
@@ -43,28 +63,70 @@ public final class TestSideUiContainer implements SideUiContainer {
     /** Minimum width for this {@link SideUiContainer}. */
     public int mMinWidthDp;
 
+    /**
+     * How much wider than its reserved width this container renders, i.e. how much of the web
+     * contents it overlays. 0 for a container that doesn't overlay them.
+     */
+    public @Px int mOverlayWidth;
+
     /** Number of times {@link #onWillAutoClose} is called. */
     public int mNumOnWillAutoCloseReceived;
+
+    /** The last {@code isShowable} received by {@link #onWillAutoClose}. */
+    public @Nullable Boolean mLastIsShowableOnWillAutoClose;
 
     /** Number of times {@link #onWillAutoRestore} is called. */
     public int mNumOnWillAutoRestoreReceived;
 
     /**
-     * Whether to call {@link SideUiCoordinator#updateUi} in {@link #onWillAutoClose()}.
+     * Whether to call {@link SideUiCoordinator#updateUi} in {@link #onWillAutoClose}.
      *
      * <p>When this is true, it simulates a common mistake in a {@link SideUiContainer}. Please see
-     * the documentation of {@link #onWillAutoClose()} for details.
+     * the documentation of {@link #onWillAutoClose} for details.
      */
     public boolean mRequestUiUpdateOnWillAutoClose;
+
+    /** Number of times {@link #onUiUpdateStarting} is called. */
+    public int mNumOnUiUpdateStartingReceived;
+
+    /** The last {@code oldReservedWidth} received by {@link #onUiUpdateStarting}. */
+    public @Nullable @Px Integer mLastOldReservedWidthOnUpdateStarting;
+
+    /** The last {@code newReservedWidth} received by {@link #onUiUpdateStarting}. */
+    public @Nullable @Px Integer mLastNewReservedWidthOnUpdateStarting;
+
+    /** The last {@code oldHeightType} received by {@link #onUiUpdateStarting}. */
+    public @HeightType int mLastOldHeightTypeOnUpdateStarting;
+
+    /** The last {@code newHeightType} received by {@link #onUiUpdateStarting}. */
+    public @HeightType int mLastNewHeightTypeOnUpdateStarting;
 
     /** Number of times {@link #onUiUpdateCompleted} is called. */
     public int mNumOnUiUpdateCompletedReceived;
 
-    /** The last {@code oldWidth} received by {@link #onUiUpdateCompleted}. */
-    public @Nullable @Px Integer mLastOldWidth;
+    /** The last {@code oldReservedWidth} received by {@link #onUiUpdateCompleted}. */
+    public @Nullable @Px Integer mLastOldReservedWidthOnUpdateCompleted;
 
-    /** The last {@code newWidth} received by {@link #onUiUpdateCompleted}. */
-    public @Nullable @Px Integer mLastNewWidth;
+    /** The last {@code newReservedWidth} received by {@link #onUiUpdateCompleted}. */
+    public @Nullable @Px Integer mLastNewReservedWidthOnUpdateCompleted;
+
+    /** The last {@code oldHeightType} received by {@link #onUiUpdateCompleted}. */
+    public @HeightType int mLastOldHeightTypeOnUpdateCompleted;
+
+    /** The last {@code newHeightType} received by {@link #onUiUpdateCompleted}. */
+    public @HeightType int mLastNewHeightTypeOnUpdateCompleted;
+
+    /** Whether this container reports that it supports manual resizing. */
+    public boolean mSupportsManualResize;
+
+    /** The content description resource id returned for the resize handle. */
+    public @StringRes int mResizeHandleContentDescriptionRes = Resources.ID_NULL;
+
+    /** The last width received by {@link #onResizeLive}. */
+    public @Nullable @Px Integer mLastResizeLiveWidth;
+
+    /** The last width received by {@link #onResizeCommitted}. */
+    public @Nullable @Px Integer mLastResizeCommittedWidth;
 
     private final SideUiCoordinator mSideUiCoordinator;
     private final View mSideUiContainerView;
@@ -93,26 +155,25 @@ public final class TestSideUiContainer implements SideUiContainer {
     }
 
     @Override
-    public int determineShowableWidth(@Px int availableWidth, @Px int windowWidth) {
+    public SideUiSize determineShowableSize(
+            @Px int availableWidth, @Px int windowWidth, boolean isFullscreen) {
         assert availableWidth <= windowWidth;
         assert mMinWidthDp <= mMaxWidthDp;
         assert mMaxWidthDp <= windowWidth;
 
         mLastAvailableWidth = availableWidth;
         mLastWindowWidth = windowWidth;
+        mLastIsFullscreen = isFullscreen;
 
         @Px int minWidth = ViewUtils.dpToPx(mSideUiContainerView.getContext(), mMinWidthDp);
         @Px int maxWidth = ViewUtils.dpToPx(mSideUiContainerView.getContext(), mMaxWidthDp);
 
         if (availableWidth < minWidth) {
-            return 0;
+            return new SideUiSize(0, HeightType.NOT_APPLICABLE);
         }
 
-        if (availableWidth < maxWidth) {
-            return availableWidth;
-        }
-
-        return maxWidth;
+        @Px int reservedWidth = availableWidth < maxWidth ? availableWidth : maxWidth;
+        return new SideUiSize(reservedWidth, reservedWidth + mOverlayWidth, mHeightType);
     }
 
     @Override
@@ -122,27 +183,53 @@ public final class TestSideUiContainer implements SideUiContainer {
     }
 
     @Override
-    public boolean hasContentToShow() {
-        return mHasContentToShow;
+    public boolean hasContentToShow(Tab tab) {
+        mNumHasContentToShowCalls++;
+        return mHasContentForTabMap.getOrDefault(tab, true);
     }
 
     @Override
-    public void setWidth(int width) {
+    public void setRenderedWidth(int renderedWidth) {
         LayoutParams layoutParams = mSideUiContainerView.getLayoutParams();
-        layoutParams.width = width;
+        layoutParams.width = renderedWidth;
         mSideUiContainerView.setLayoutParams(layoutParams);
     }
 
     @Override
-    public void onUiUpdateCompleted(@Px int oldWidth, @Px int newWidth) {
-        mNumOnUiUpdateCompletedReceived++;
-        mLastOldWidth = oldWidth;
-        mLastNewWidth = newWidth;
+    public boolean shouldLockTopControls() {
+        return mShouldLockTopControls;
     }
 
     @Override
-    public void onWillAutoClose() {
+    public void onUiUpdateStarting(
+            @Px int oldReservedWidth,
+            @Px int newReservedWidth,
+            @HeightType int oldHeightType,
+            @HeightType int newHeightType) {
+        mNumOnUiUpdateStartingReceived++;
+        mLastOldReservedWidthOnUpdateStarting = oldReservedWidth;
+        mLastNewReservedWidthOnUpdateStarting = newReservedWidth;
+        mLastOldHeightTypeOnUpdateStarting = oldHeightType;
+        mLastNewHeightTypeOnUpdateStarting = newHeightType;
+    }
+
+    @Override
+    public void onUiUpdateCompleted(
+            @Px int oldReservedWidth,
+            @Px int newReservedWidth,
+            @HeightType int oldHeightType,
+            @HeightType int newHeightType) {
+        mNumOnUiUpdateCompletedReceived++;
+        mLastOldReservedWidthOnUpdateCompleted = oldReservedWidth;
+        mLastNewReservedWidthOnUpdateCompleted = newReservedWidth;
+        mLastOldHeightTypeOnUpdateCompleted = oldHeightType;
+        mLastNewHeightTypeOnUpdateCompleted = newHeightType;
+    }
+
+    @Override
+    public void onWillAutoClose(boolean isShowable) {
         mNumOnWillAutoCloseReceived++;
+        mLastIsShowableOnWillAutoClose = isShowable;
 
         if (mRequestUiUpdateOnWillAutoClose) {
             mSideUiCoordinator.updateUi(
@@ -153,5 +240,25 @@ public final class TestSideUiContainer implements SideUiContainer {
     @Override
     public void onWillAutoRestore() {
         mNumOnWillAutoRestoreReceived++;
+    }
+
+    @Override
+    public boolean supportsManualResize() {
+        return mSupportsManualResize;
+    }
+
+    @Override
+    public @StringRes int getResizeHandleContentDescriptionRes() {
+        return mResizeHandleContentDescriptionRes;
+    }
+
+    @Override
+    public void onResizeLive(@Px int proposedWidthPx) {
+        mLastResizeLiveWidth = proposedWidthPx;
+    }
+
+    @Override
+    public void onResizeCommitted(@Px int finalWidthPx) {
+        mLastResizeCommittedWidth = finalWidthPx;
     }
 }

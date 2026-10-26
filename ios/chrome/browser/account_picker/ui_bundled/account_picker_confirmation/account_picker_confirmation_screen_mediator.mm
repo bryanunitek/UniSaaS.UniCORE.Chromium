@@ -25,7 +25,7 @@
 
 @interface AccountPickerConfirmationScreenMediator () <
     AuthenticationServiceObserving,
-    IdentityManagerObserverBridgeDelegate> {
+    IdentityManagerObserving> {
 }
 
 @end
@@ -72,8 +72,8 @@
 }
 
 - (void)dealloc {
-  CHECK(!_accountManagerService, base::NotFatalUntil::M151);
-  CHECK(!_identityManager, base::NotFatalUntil::M151);
+  CHECK(!_accountManagerService);
+  CHECK(!_identityManager);
 }
 
 #pragma mark - AccountPickerConfirmationScreenMediator
@@ -159,7 +159,7 @@
 // called asynchronously when the management status if retrieved and the
 // identity is managed.
 - (BOOL)isIdentityKnownToBeManaged:(id<SystemIdentity>)identity {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   if (std::optional<BOOL> managed = IsIdentityManaged(identity);
       managed.has_value()) {
     return managed.value();
@@ -176,13 +176,13 @@
 
 #pragma mark -  IdentityManagerObserver
 
-- (void)onAccountsOnDeviceChanged {
+- (void)accountsOnDeviceDidChange {
   [self selectDefaultIdentity];
 }
 
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)info {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)info {
   id<SystemIdentity> identity =
-      _accountManagerService->GetIdentityOnDeviceWithGaiaID(info.gaia);
+      _accountManagerService->GetIdentityOnDeviceWithGaiaID(info.GetGaiaId());
   [self handleIdentityUpdated:identity];
 }
 

@@ -49,6 +49,9 @@ void PrintTo(const Program& program, std::ostream* os) {
     case Program::kWaffle:
       *os << "kWaffle";
       break;
+    case Program::kScone:
+      *os << "kScone";
+      break;
   }
 }
 
@@ -143,7 +146,9 @@ Program GetActiveProgram(RegionalCapabilitiesService& service) {
 class RegionalCapabilitiesServiceTest : public ::testing::Test {
  public:
   RegionalCapabilitiesServiceTest() {
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
     feature_list_.InitWithFeatures({switches::kDynamicProfileCountry}, {});
+#endif
 
     prefs::RegisterProfilePrefs(pref_service_.registry());
   }
@@ -397,6 +402,25 @@ INSTANTIATE_TEST_SUITE_P(
         },
 #endif  // BUILDFLAG(IS_ANDROID)
 
+        ProgramDeterminationTestParam{
+            .test_name = "gb_to_scone",
+            .client_fetched_country = CountryId("GB"),
+#if BUILDFLAG(IS_ANDROID)
+            .device_program_override = Program::kScone,
+#endif  // BUILDFLAG(IS_ANDROID)
+            .expected_program = Program::kScone,
+            .expected_is_in_choice_screen_region = false,
+            .expected_ose_list_type = SearchEngineListType::kTopN,
+            .expected_histograms =
+                {
+#if BUILDFLAG(IS_ANDROID)
+                    {"RegionalCapabilities.Debug.AndroidProgramResolution",
+                     ExpectHistogramBucket(AndroidProgramResolution::kSuccess)},
+#endif
+                    {"RegionalCapabilities.LoadedCountrySource",
+                     ExpectHistogramBucket(LoadedCountrySource::kCurrentOnly)},
+                },
+        },
         ProgramDeterminationTestParam{
             .test_name = "us_to_default",
             .client_fetched_country = CountryId("US"),
@@ -861,6 +885,7 @@ TEST_F(RegionalCapabilitiesServiceTest, GetCountryId_PrefAlreadyWritten) {
       static_cast<int>(LoadedCountrySource::kCurrentPreferred), 1);
 }
 
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
 TEST_F(RegionalCapabilitiesServiceTest,
        GetCountryId_PrefAlreadyWritten_DynamicProfileCountryIsDisabled) {
   base::test::ScopedFeatureList feature_list;
@@ -937,6 +962,88 @@ TEST_F(RegionalCapabilitiesServiceTest,
   histogram_tester().ExpectUniqueSample(
       "RegionalCapabilities.LoadedCountrySource",
       static_cast<int>(LoadedCountrySource::kPersistedPreferred), 1);
+}
+
+TEST_F(RegionalCapabilitiesServiceTest,
+       GetDynamicCountryProgramForMetrics_DynamicProfileCountryIsDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({}, {switches::kDynamicProfileCountry});
+
+  // Persisted country in Waffle scope, current country out of scope.
+  {
+    std::unique_ptr<RegionalCapabilitiesService> service =
+        InitService(/*fallback_country_id=*/CountryId("US"));
+    client()->SetFetchedCountry(CountryId("US"));
+    SetPrefCountryIDAtInstall(kBelgiumCountryId);
+
+    EXPECT_EQ(service->GetActiveProgramForMetrics(),
+              ActiveRegionalProgram::kWaffle);
+    EXPECT_EQ(service->GetDynamicCountryProgramForMetrics(),
+              ActiveRegionalProgram::kDefault);
+  }
+
+  // Persisted country out of scope, current country in Waffle scope.
+  {
+    pref_service().ClearPref(prefs::kCountryIDAtInstall);
+    std::unique_ptr<RegionalCapabilitiesService> service =
+        InitService(/*fallback_country_id=*/CountryId("US"));
+    client()->SetFetchedCountry(kBelgiumCountryId);
+    SetPrefCountryIDAtInstall(CountryId("US"));
+
+    EXPECT_EQ(service->GetActiveProgramForMetrics(),
+              ActiveRegionalProgram::kDefault);
+    EXPECT_EQ(service->GetDynamicCountryProgramForMetrics(),
+              ActiveRegionalProgram::kWaffle);
+  }
+
+  // The current country is only available from the fallback: the persisted
+  // country is preferred in both cases.
+  {
+    pref_service().ClearPref(prefs::kCountryIDAtInstall);
+    std::unique_ptr<RegionalCapabilitiesService> service =
+        InitService(/*fallback_country_id=*/CountryId("US"));
+    SetPrefCountryIDAtInstall(kBelgiumCountryId);
+
+    EXPECT_EQ(service->GetActiveProgramForMetrics(),
+              ActiveRegionalProgram::kWaffle);
+    EXPECT_EQ(service->GetDynamicCountryProgramForMetrics(),
+              ActiveRegionalProgram::kWaffle);
+  }
+
+  // Command line overrides apply to both.
+  {
+    std::unique_ptr<RegionalCapabilitiesService> service =
+        InitService(/*fallback_country_id=*/CountryId("US"));
+    client()->SetFetchedCountry(CountryId("US"));
+    SetCommandLineCountry(kBelgiumCountryCode);
+
+    EXPECT_EQ(service->GetActiveProgramForMetrics(),
+              ActiveRegionalProgram::kWaffle);
+    EXPECT_EQ(service->GetDynamicCountryProgramForMetrics(),
+              ActiveRegionalProgram::kWaffle);
+    ClearCommandLineCountry();
+  }
+}
+#endif  // !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
+
+TEST_F(RegionalCapabilitiesServiceTest,
+       GetDynamicCountryProgramForMetrics_MatchesActiveProgram) {
+  // The dynamic profile country is enabled by the fixture (or always enabled
+  // on mobile), so the dynamic country program matches the active one.
+  std::unique_ptr<RegionalCapabilitiesService> service =
+      InitService(/*fallback_country_id=*/CountryId("US")
+#if BUILDFLAG(IS_ANDROID)
+                      ,
+                  /*device_program=*/Program::kDefault
+#endif  // BUILDFLAG(IS_ANDROID)
+      );
+  client()->SetFetchedCountry(CountryId("US"));
+  SetPrefCountryIDAtInstall(kBelgiumCountryId);
+
+  EXPECT_EQ(service->GetActiveProgramForMetrics(),
+            ActiveRegionalProgram::kDefault);
+  EXPECT_EQ(service->GetDynamicCountryProgramForMetrics(),
+            ActiveRegionalProgram::kDefault);
 }
 
 TEST_F(RegionalCapabilitiesServiceTest, GetCountryId_PrefChangesAfterReading) {
@@ -1154,6 +1261,51 @@ TEST_F(RegionalCapabilitiesServiceTest,
     ASSERT_EQ(actual_prepopulated_engines.size(), 2u);
     EXPECT_EQ(actual_prepopulated_engines[1], &made_up_engine_next);
   }
+}
+
+TEST_F(RegionalCapabilitiesServiceTest, GetRegionalVariants) {
+  // Explicitly disable the feature.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(
+        switches::kPrepopulatedEnginesShadowVariants);
+
+    std::unique_ptr<RegionalCapabilitiesService> service = InitService();
+    SetCommandLineCountry("JP");
+    EXPECT_TRUE(service->GetRegionalVariants().empty());
+  }
+
+  // Now enable the feature.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(
+        switches::kPrepopulatedEnginesShadowVariants);
+
+    std::unique_ptr<RegionalCapabilitiesService> service = InitService();
+
+    // For US, it should return empty.
+    SetCommandLineCountry("US");
+    EXPECT_TRUE(service->GetRegionalVariants().empty());
+
+    // For JP, it should return yahoo_jp.
+    SetCommandLineCountry("JP");
+    auto jp_variants = service->GetRegionalVariants();
+    ASSERT_EQ(jp_variants.size(), 1u);
+    EXPECT_EQ(jp_variants[0]->id, TemplateURLPrepopulateData::yahoo_jp.id);
+  }
+}
+
+TEST_F(RegionalCapabilitiesServiceTest, IsSearchEngineSplitRegion) {
+  std::unique_ptr<RegionalCapabilitiesService> service = InitService();
+
+  SetCommandLineCountry("US");
+  EXPECT_FALSE(service->IsSearchEngineSplitRegion());
+
+  SetCommandLineCountry("FR");
+  EXPECT_FALSE(service->IsSearchEngineSplitRegion());
+
+  SetCommandLineCountry("JP");
+  EXPECT_TRUE(service->IsSearchEngineSplitRegion());
 }
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)

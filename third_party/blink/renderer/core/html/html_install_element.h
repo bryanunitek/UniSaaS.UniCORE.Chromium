@@ -14,21 +14,25 @@ namespace blink {
 
 class Attribute;
 class Document;
-class KURL;
-class String;
 
 // Represents the <install> HTML element, which provides a mechanism to
 // install web applications. It has two optional attributes:
-// - installurl: URL of the web app to install. If not provided, the current
-//   document URL is used.
-// - manifestid: ID of the web app manifest. Only valid if installurl is also
-//   provided.
+// - manifest: URL of the web app manifest to install.
+// - manifestid: ID of the web app manifest.
 // By default the element renders as an Install button, but may also show as
 // a Launch button.
 class CORE_EXPORT HTMLInstallElement : public HTMLCapabilityElementBase {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
+  // Result of an install triggered by this element, surfaced to script via the
+  // `installresult` event's `result` attribute.
+  enum class InstallResult {
+    kSuccess,     // The app was installed.
+    kAbortError,  // The user or user agent cancelled the install.
+    kDataError,   // The supplied install data (URL/manifest/id) was invalid.
+  };
+
   explicit HTMLInstallElement(Document&);
 
   ElementType GetElementType() const final {
@@ -38,21 +42,30 @@ class CORE_EXPORT HTMLInstallElement : public HTMLCapabilityElementBase {
   // HTMLElement:
   bool IsHTMLInstallElement() const final { return true; }
 
-  const String& InstallUrl() const;
-  const String& ManifestId() const;
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(installresult, kInstallresult)
+
   void Trace(Visitor*) const override;
 
   bool show_as_launch() const { return show_as_launch_; }
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(HTMLInstallElementTestBase,
+                           LaunchIconScalesWithFontSize);
+  FRIEND_TEST_ALL_PREFIXES(HTMLInstallElementTestBase,
+                           InstalledStateHiddenInCanvasSubtree);
+  FRIEND_TEST_ALL_PREFIXES(HTMLInstallElementTestBase,
+                           InstalledStateClearedWhenMovedIntoCanvasSubtree);
+
   // HTMLElement:
   bool IsURLAttribute(const Attribute&) const override;
+  void DidChangeIsInCanvasSubtree(CanvasSubtreePropagation) override;
 
   // HTMLCapabilityElementBase:
   void UpdateAppearance() override;
   void UpdateIcon(mojom::blink::PermissionName permission) override;
   mojom::blink::EmbeddedPermissionRequestDescriptorPtr
   CreateEmbeddedPermissionRequestDescriptor() override;
+  void RunActivationBehavior(Event&, EventDispatchHandlingState*) override;
   void DefaultEventHandler(Event&) override;
 
   void OnIsInstalledResult(bool is_installed);
@@ -63,9 +76,12 @@ class CORE_EXPORT HTMLInstallElement : public HTMLCapabilityElementBase {
   void OnConnectionError();
 
   void OnActivated();
-  mojom::blink::InstallOptionsPtr GetCheckedInstallOptions();
-  void OnInstallResult(mojom::blink::WebInstallServiceResult,
-                       const KURL& manifest_id);
+  mojom::blink::ManifestInstallOptionsPtr GetCheckedManifestInstallOptions();
+  void OnManifestInstallResult(mojom::blink::WebInstallServiceResult);
+
+  // Enqueues a bubbling `installresult` event carrying `result` for
+  // asynchronous dispatch.
+  void DispatchInstallResultEvent(InstallResult result);
 
   HeapMojoRemote<mojom::blink::WebInstallService> service_;
   // Controls whether the element should render as a launch button.

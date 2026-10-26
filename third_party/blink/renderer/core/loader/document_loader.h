@@ -33,6 +33,7 @@
 #include <memory>
 #include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
@@ -48,7 +49,6 @@
 #include "third_party/blink/public/common/permissions_policy/document_policy.h"
 #include "third_party/blink/public/common/scheduler/task_attribution_id.h"
 #include "third_party/blink/public/common/subresource_load_metrics.h"
-#include "third_party/blink/public/mojom/fenced_frame/fenced_frame.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/triggering_event_info.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/loader/content_security_notifier.mojom-blink.h"
 #include "third_party/blink/public/mojom/loader/mhtml_load_result.mojom-blink-forward.h"
@@ -296,6 +296,8 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   void StartLoading();
   void StopLoading();
 
+  void InheritXsltUseCountersFrom(DocumentLoader* other);
+
   // CommitNavigation() does the work of creating a Document and
   // DocumentParser, as well as creating a new LocalDOMWindow if needed. It also
   // initializes a bunch of state on the Document (e.g., the state based on
@@ -386,6 +388,10 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
     return last_navigation_had_trusted_initiator_;
   }
 
+  bool TextFragmentTokenHadTrustedInitiator() const {
+    return text_fragment_token_had_trusted_initiator_;
+  }
+
   // Called when the URL needs to be updated due to a document.open() call.
   void DidOpenDocumentInputStream(const KURL& url);
 
@@ -419,10 +425,10 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   bool ConsumeTextFragmentToken();
 
   // Returns the text fragment to scroll to and clears it.
-  std::optional<String> TakeInternalScrollToTextFragment();
+  String TakeInternalScrollToTextFragment();
 
   bool HasInternalScrollToTextFragment() const {
-    return internal_scroll_to_text_fragment_.has_value();
+    return !internal_scroll_to_text_fragment_.IsNull();
   }
 
   // For testing purposes.
@@ -514,6 +520,14 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   const mojom::RendererContentSettingsPtr& GetContentSettings();
 
   void ReportTotalTakenTimeToUpdateSubresourceLoadMetrics();
+
+  mojom::blink::ScriptInjectionPolicy GetScriptInjectionPolicy() const {
+    return script_injection_policy_;
+  }
+  void SetScriptInjectionPolicyForTesting(
+      mojom::blink::ScriptInjectionPolicy script_injection_policy) {
+    script_injection_policy_ = script_injection_policy;
+  }
 
   bool IsInCommitDataForTesting() const { return in_commit_data_; }
 
@@ -697,6 +711,7 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   const std::optional<blink::mojom::FetchCacheMode> force_fetch_cache_mode_;
   const FramePolicy frame_policy_;
   std::optional<uint64_t> visited_link_salt_;
+  InitiatorStateToken initiator_state_token_;
 
   Member<LocalFrame> frame_;
 
@@ -784,6 +799,15 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   // window's SecurityContext.
   bool is_secure_context_root_ = false;
 
+  // Whether the document may bind RestrictedDeviceBoundSessionManager, from
+  // the commit params. Applied to the LocalDOMWindow for every new document.
+  bool can_use_device_bound_session_js_api_ = false;
+
+  // Policy controlling script injection tracking and protections for this
+  // document.
+  mojom::blink::ScriptInjectionPolicy script_injection_policy_ =
+      mojom::blink::ScriptInjectionPolicy::kNone;
+
   // Whether this load request comes with a sticky user activation. For
   // prerendered pages, this is initially false but could be updated on
   // prerender page activation.
@@ -801,9 +825,13 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   // through a redirect.
   bool has_text_fragment_token_ = false;
 
+  // If true, the navigation that produced the text fragment token was initiated
+  // from the same-origin as the document or was browser-initiated.
+  bool text_fragment_token_had_trusted_initiator_ = false;
+
   // If set, the document should attempt to scroll this text fragment into view
   // upon load, without highlighting it.
-  std::optional<String> internal_scroll_to_text_fragment_;
+  String internal_scroll_to_text_fragment_;
 
   // See WebNavigationParams for definition.
   const bool was_discarded_ = false;
@@ -830,7 +858,8 @@ class CORE_EXPORT DocumentLoader : public GarbageCollected<DocumentLoader>,
   // report feature usage to UMA histograms per page load.
   UseCounterImpl use_counter_;
 
-  const base::TickClock* clock_;
+  raw_ptr<const base::TickClock, UnprotectedInRelease | DanglingUntriaged>
+      clock_;
 
   const Vector<mojom::blink::OriginTrialFeature>
       initiator_origin_trial_features_;

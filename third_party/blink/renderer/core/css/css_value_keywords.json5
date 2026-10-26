@@ -720,6 +720,8 @@
     // end
     "flex-start",
     "flex-end",
+    "flow-start",
+    "flow-end",
     // center
     "space-between",
     "space-around",
@@ -1663,6 +1665,7 @@
     // both
     "mandatory",
     "proximity",
+    "pair",
 
     // scroll-snap-align
     // none
@@ -1673,6 +1676,7 @@
     // scroll-snap-stop
     // normal
     // always
+    // before
 
     // containment
     // paint
@@ -1809,6 +1813,8 @@
     "numeric",
     "additive",
     "extends",
+    // symbols() function (https://drafts.csswg.org/css-counter-styles-3/#symbols-function)
+    "symbols",
     // Predefined counter styles that don't use the above systems
     "-internal-simp-chinese-informal",
     "-internal-simp-chinese-formal",
@@ -2008,8 +2014,8 @@
 
     // position-visibility
     // always
-    // TODO(crbug.com/332933527): Support anchors-valid.
-    // "anchors-valid",
+    "anchor-valid",
+    "anchor-visible",
     "anchors-visible",
     "no-overflow",
 
@@ -2032,6 +2038,9 @@
     "per-line",
     "per-line-all",
     "consistent",
+
+    // progress()
+    "no-clamp",
 
     // media-progress()
     "media-progress",
@@ -2146,5 +2155,12 @@
     // ruby-overhang
     // "auto",
     "spaces",
+
+    // max-content-sizing
+    "shrink-to-fit",
+
+    // overscroll-container-type
+    // "none", "auto", "overlay" already exist above
+    "push",
   ],
 }

@@ -12,6 +12,7 @@
 #include "base/metrics/field_trial_params.h"
 #include "base/process/launch.h"
 #include "base/task/thread_pool.h"
+#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/certificate_viewer.h"
@@ -43,7 +44,6 @@
 #endif
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
@@ -80,8 +80,9 @@ void SSLErrorControllerClient::GoBack() {
 
 void SSLErrorControllerClient::Proceed() {
   content::WebContents* const web_contents = this->web_contents();
-  MaybeTriggerSecurityInterstitialProceededEvent(web_contents, request_url_,
-                                                 "SSL_ERROR", cert_error_);
+  MaybeTriggerSecurityInterstitialProceededEvent(
+      web_contents, request_url_, "SSL_ERROR", cert_error_,
+      base::UTF16ToUTF8(web_contents->GetTitle()));
 #if !BUILDFLAG(IS_ANDROID)
   // Web Apps should not be allowed to run if there is a problem with their
   // certificate. So, when users click proceed on an interstitial, move the tab
@@ -90,7 +91,7 @@ void SSLErrorControllerClient::Proceed() {
   BrowserWindowInterface* browser =
       GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
   if (web_app::AppBrowserController::IsWebApp(browser))
-    chrome::OpenInChrome(browser->GetBrowserForMigrationOnly());
+    chrome::OpenInChrome(browser);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
   Profile* profile =
@@ -130,8 +131,8 @@ void SSLErrorControllerClient::LaunchDateAndTimeSettings() {
 #if !BUILDFLAG(IS_ANDROID)
 void SSLErrorControllerClient::ShowCertificateViewer() {
   // TODO(crbug.com/436274249): support "view certificate" on android too.
-  ::ShowCertificateViewer(web_contents(),
-                          web_contents()->GetTopLevelNativeWindow(),
-                          ssl_info_.cert.get());
+  ::ShowCertificateViewer(
+      web_contents(), web_contents()->GetTopLevelNativeWindow(),
+      ssl_info_.cert.get(), CertificateViewerEntrypoint::kSslInterstitial);
 }
 #endif

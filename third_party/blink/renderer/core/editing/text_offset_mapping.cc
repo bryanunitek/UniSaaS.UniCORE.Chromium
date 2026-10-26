@@ -81,11 +81,12 @@ const LayoutBlockFlow& RootInlineContentsContainerOf(
     const LayoutBlockFlow& block_flow) {
   DCHECK(block_flow.ChildrenInline()) << block_flow;
   const LayoutBlockFlow* root_block_flow = &block_flow;
-  for (const LayoutBlock* runner = block_flow.ContainingBlock(); runner;
+  for (const LayoutBox* runner = block_flow.ContainingBlock(); runner;
        runner = runner->ContainingBlock()) {
     auto* containing_block_flow = DynamicTo<LayoutBlockFlow>(runner);
-    if (!containing_block_flow || !runner->ChildrenInline())
+    if (!containing_block_flow || !containing_block_flow->ChildrenInline()) {
       break;
+    }
     root_block_flow = containing_block_flow;
   }
   DCHECK(!root_block_flow->IsInline()) << block_flow << ' ' << root_block_flow;
@@ -153,7 +154,7 @@ const Node* FindLastNonPseudoNodeIn(const LayoutObject& container) {
 // |LayoutBlockFlow|.
 const LayoutBlockFlow* ComputeInlineContentsAsBlockFlow(
     const LayoutObject& layout_object) {
-  const auto* block = DynamicTo<LayoutBlock>(layout_object);
+  const LayoutObject* block = DynamicTo<LayoutBlock>(layout_object);
   if (!block)
     block = layout_object.ContainingBlock();
 
@@ -300,7 +301,8 @@ int TextOffsetMapping::ComputeTextOffset(
                                              behavior_);
 }
 
-PositionInFlatTree TextOffsetMapping::GetPositionBefore(unsigned offset) const {
+PositionInFlatTree TextOffsetMapping::GetPositionBefore(
+    wtf_size_t offset) const {
   DCHECK_LE(offset, text16_.length());
   CharacterIteratorInFlatTree iterator(range_, behavior_);
   if (offset >= 1 && offset == text16_.length()) {
@@ -311,15 +313,16 @@ PositionInFlatTree TextOffsetMapping::GetPositionBefore(unsigned offset) const {
   return iterator.GetPositionBefore();
 }
 
-PositionInFlatTree TextOffsetMapping::GetPositionAfter(unsigned offset) const {
+PositionInFlatTree TextOffsetMapping::GetPositionAfter(
+    wtf_size_t offset) const {
   DCHECK_LE(offset, text16_.length());
   CharacterIteratorInFlatTree iterator(range_, behavior_);
   iterator.Advance(offset);
   return iterator.GetPositionAfter();
 }
 
-EphemeralRangeInFlatTree TextOffsetMapping::ComputeRange(unsigned start,
-                                                         unsigned end) const {
+EphemeralRangeInFlatTree TextOffsetMapping::ComputeRange(wtf_size_t start,
+                                                         wtf_size_t end) const {
   DCHECK_LE(end, text16_.length());
   DCHECK_LE(start, end);
   if (start == end)
@@ -328,9 +331,9 @@ EphemeralRangeInFlatTree TextOffsetMapping::ComputeRange(unsigned start,
                                   GetPositionAfter(end));
 }
 
-unsigned TextOffsetMapping::FindNonWhitespaceCharacterFrom(
-    unsigned offset) const {
-  for (unsigned runner = offset; runner < text16_.length(); ++runner) {
+wtf_size_t TextOffsetMapping::FindNonWhitespaceCharacterFrom(
+    wtf_size_t offset) const {
+  for (wtf_size_t runner = offset; runner < text16_.length(); ++runner) {
     if (!IsWhitespace(text16_[runner]))
       return runner;
   }

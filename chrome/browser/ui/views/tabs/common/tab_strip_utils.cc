@@ -4,11 +4,12 @@
 
 #include "chrome/browser/ui/views/tabs/common/tab_strip_utils.h"
 
-#include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
+#include <cmath>
+
 #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
-#include "chrome/browser/ui/views/tabs/common/tab_group_view.h"
 #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
-#include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
+#include "ui/events/event.h"
+#include "ui/views/controls/scroll_view.h"
 #include "ui/views/view.h"
 #include "ui/views/view_utils.h"
 
@@ -16,14 +17,7 @@ gfx::Rect GetTabStripViewTargetBounds(const views::View* view) {
   CHECK(view);
 
   const views::View* const parent = view->parent();
-  const auto has_animating_layout_manager = [](const views::View* container) {
-    // New clients of `TabCollectionAnimatingLayoutManager` should be added to
-    // this list as usage expands.
-    return views::IsViewClass<PinnedTabContainerView>(container) ||
-           views::IsViewClass<UnpinnedTabContainerView>(container) ||
-           views::IsViewClass<TabGroupView>(container);
-  };
-  if (!parent || !has_animating_layout_manager(parent)) {
+  if (!parent || !parent->GetProperty(kHasAnimatingLayoutManagerKey)) {
     return view->bounds();
   }
 
@@ -44,4 +38,25 @@ TabStripView* GetTabStripView(views::View* view) {
     }
   }
   return nullptr;
+}
+
+bool CanScrollAlongAxis(const views::View* view,
+                        TabStripOrientation orientation,
+                        const ui::GestureEvent& event) {
+  const views::ScrollView* scroll_view = nullptr;
+  for (const views::View* curr = view->parent(); curr; curr = curr->parent()) {
+    if (const auto* sv = views::AsViewClass<views::ScrollView>(curr)) {
+      scroll_view = sv;
+      break;
+    }
+  }
+  if (!scroll_view) {
+    return false;
+  }
+  const float dx = std::abs(event.details().scroll_x_hint());
+  const float dy = std::abs(event.details().scroll_y_hint());
+  if (orientation == TabStripOrientation::kVertical) {
+    return scroll_view->IsVerticalContentOverflowing() && dy >= dx;
+  }
+  return scroll_view->IsHorizontalContentOverflowing() && dx >= dy;
 }

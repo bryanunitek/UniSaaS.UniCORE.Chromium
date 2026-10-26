@@ -71,7 +71,7 @@ TEST(PermissionsPolicyMojomTraitsTest, Roundtrips_PermissionsPolicy) {
              /*matches_all_origins=*/false,
              /*matches_opaque_src=*/false},
             {network::mojom::PermissionsPolicyFeature::
-                 kSharedStorage, /*allowed_origins=*/
+                 kGamepad, /*allowed_origins=*/
              {*network::OriginWithPossibleWildcards::FromOrigin(
                  url::Origin::Create(GURL(kUrlA)))},
              /*self_if_matches=*/std::nullopt,
@@ -103,6 +103,18 @@ TEST(PermissionsPolicyMojomTraitsTest, Roundtrips_PermissionsPolicy) {
   EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::PermissionsPolicy>(
       *original, *copied));
   EXPECT_EQ(*original, *copied);
+}
+
+TEST(PermissionsPolicyMojomTraitsTest,
+     Roundtrips_PermissionsPolicyFeaturesBitset) {
+  PermissionsPolicyFeaturesBitset original;
+  original.Add(network::mojom::PermissionsPolicyFeature::kCamera);
+  original.Add(network::mojom::PermissionsPolicyFeature::kUsb);
+
+  PermissionsPolicyFeaturesBitset copied;
+  EXPECT_TRUE(mojo::test::SerializeAndDeserialize<
+              mojom::PermissionsPolicyFeaturesBitset>(original, copied));
+  EXPECT_EQ(original, copied);
 }
 
 }  // namespace

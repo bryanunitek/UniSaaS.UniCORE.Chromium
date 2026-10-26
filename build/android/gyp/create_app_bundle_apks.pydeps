@@ -25,6 +25,7 @@
 ../../action_helpers.py
 ../../gn_helpers.py
 ../../print_python_deps.py
+../../zip_helpers.py
 ../pylib/__init__.py
 ../pylib/utils/__init__.py
 ../pylib/utils/app_bundle_utils.py

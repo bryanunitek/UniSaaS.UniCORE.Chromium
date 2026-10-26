@@ -15,6 +15,7 @@
 #include "base/time/time.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
@@ -137,8 +138,9 @@ void InteractiveFeaturePromoTestPrivate::DoTestTearDown() {
 }
 
 InteractiveFeaturePromoTestPrivate::MockTracker*
-InteractiveFeaturePromoTestPrivate::GetMockTrackerFor(Browser* browser) {
-  auto* const data = base::FindOrNull(profile_data_, browser->profile());
+InteractiveFeaturePromoTestPrivate::GetMockTrackerFor(
+    BrowserWindowInterface* browser) {
+  auto* const data = base::FindOrNull(profile_data_, browser->GetProfile());
   return data ? data->mock_tracker : nullptr;
 }
 
@@ -165,7 +167,7 @@ void InteractiveFeaturePromoTestPrivate::SetLastActive(NewTime time) {
 }
 
 void InteractiveFeaturePromoTestPrivate::MaybeWaitForTrackerInitialization(
-    Browser* browser) {
+    BrowserWindowInterface* browser) {
   bool wait_for_browser = false;
   if (const auto* const mode =
           std::get_if<UseDefaultTrackerAllowingPromos>(&tracker_mode_)) {
@@ -180,7 +182,7 @@ void InteractiveFeaturePromoTestPrivate::MaybeWaitForTrackerInitialization(
   if (wait_for_browser) {
     auto* const tracker =
         feature_engagement::TrackerFactory::GetForBrowserContext(
-            browser->profile());
+            browser->GetProfile());
     ASSERT_NE(nullptr, tracker);
     base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
     tracker->AddOnInitializedCallback(

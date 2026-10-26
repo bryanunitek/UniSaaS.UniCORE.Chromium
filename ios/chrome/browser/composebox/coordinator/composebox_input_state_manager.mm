@@ -5,20 +5,25 @@
 #import "ios/chrome/browser/composebox/coordinator/composebox_input_state_manager.h"
 
 #import <algorithm>
+#import <optional>
 #import <ranges>
 #import <unordered_map>
 
-#import "base/debug/dump_without_crashing.h"
 #import "base/memory/raw_ptr.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/contextual_search/contextual_search_metrics_recorder.h"
 #import "components/contextual_search/contextual_search_session_handle.h"
+#import "components/contextual_search/footprints/public/drive_disclaimer_controller.h"
+#import "components/contextual_search/footprints/public/fpop_service.h"
+#import "components/contextual_search/pref_names.h"
 #import "components/omnibox/browser/aim_eligibility_service.h"
+#import "components/omnibox/common/omnibox_features.h"
 #import "components/prefs/pref_service.h"
 #import "components/search/search.h"
 #import "components/search_engines/template_url_service.h"
 #import "components/search_engines/util.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
+#import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/composebox/coordinator/composebox_constants.h"
 #import "ios/chrome/browser/composebox/coordinator/composebox_mode_holder.h"
@@ -27,55 +32,40 @@
 #import "ios/chrome/browser/composebox/shared/metrics/composebox_metrics_recorder.h"
 #import "ios/chrome/browser/composebox/ui/composebox_input_item.h"
 #import "ios/chrome/browser/composebox/ui/composebox_input_item_collection.h"
-#import "ios/chrome/browser/composebox/ui/composebox_strings.h"
+#import "ios/chrome/browser/composebox/ui/composebox_model_item.h"
+#import "ios/chrome/browser/composebox/ui/composebox_ui_config.h"
 #import "ios/chrome/browser/composebox/ui/composebox_ui_input_state.h"
+#import "ios/chrome/browser/composebox/ui/composebox_ui_util.h"
+#import "ios/chrome/browser/intelligence/proto_wrappers/page_context_utils.h"
 #import "ios/chrome/browser/search_engines/model/search_engine_observer_bridge.h"
 #import "ios/chrome/browser/shared/model/url/url_util.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
+#import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/common/NSString+Chromium.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/public/web_state_id.h"
-#import "ui/base/l10n/l10n_util.h"
+#import "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace {
 
-// Returns the model option required by the given model mode.
-ComposeboxModelOption ModelOptionForModelMode(omnibox::ModelMode model_mode) {
-  using enum ComposeboxModelOption;
-  switch (model_mode) {
-    case omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_AUTOROUTE:
-      return kAuto;
+// Returns the local fallback icon for the given `model`, used when the server
+// doesn't provide one.
+UIImage* FallbackIconForModel(omnibox::ModelMode model) {
+  switch (model) {
     case omnibox::ModelMode::MODEL_MODE_GEMINI_PRO:
-      return kThinking;
+    case omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_LATEST:
     case omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_NO_GEN_UI:
-      return kThinkingNoGenUI;
+      return SymbolWithPointSize(SymbolClock, kSymbolActionPointSize);
+    case omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_AUTOROUTE:
+      return SymbolWithPointSize(SymbolArrowTrianglehead2ClockwiseRotate90,
+                                 kSymbolActionPointSize);
     case omnibox::ModelMode::MODEL_MODE_GEMINI_REGULAR:
     case omnibox::ModelMode::MODEL_MODE_UNSPECIFIED:
-      return kRegular;
+      return SymbolWithPointSize(SymbolAcute, kSymbolActionPointSize);
     default:
-      base::debug::DumpWithoutCrashing();
-      return kRegular;
-  }
-}
-
-// Returns the model mode for the given model option.
-omnibox::ModelMode ModelModeForModelOption(
-    ComposeboxModelOption modelOption,
-    const contextual_search::InputState& input_state) {
-  using enum ComposeboxModelOption;
-  switch (modelOption) {
-    case kNone:
-      return input_state.GetDefaultModel();
-    case kRegular:
-      return omnibox::ModelMode::MODEL_MODE_GEMINI_REGULAR;
-    case kAuto:
-      return omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_AUTOROUTE;
-    case kThinking:
-      return omnibox::ModelMode::MODEL_MODE_GEMINI_PRO;
-    case kThinkingNoGenUI:
-      return omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_NO_GEN_UI;
+      return SymbolWithPointSize(SymbolBolt, kSymbolActionPointSize);
   }
 }
 
@@ -115,32 +105,27 @@ omnibox::ToolMode ToolModeForComposeboxMode(ComposeboxMode mode,
   }
 }
 
-// Returns the server strings object from a given input state.
-ComposeboxStrings* ServerStringsFromInputState(
+// Returns the server UI config object from a given input state.
+ComposeboxUIConfig* ServerUIConfigFromInputState(
     const contextual_search::InputState& input_state) {
-  std::unordered_map<ComposeboxMode, ComposeboxStringBundle*> tool_mapping;
+  std::unordered_map<ComposeboxMode, ComposeboxItemUIConfig*> tool_mapping;
   for (const omnibox::ToolConfig& tool_config : input_state.tool_configs) {
     NSString* menuLabel = base::SysUTF8ToNSString(tool_config.menu_label());
     NSString* chipLabel = base::SysUTF8ToNSString(tool_config.chip_label());
     NSString* hintText = base::SysUTF8ToNSString(tool_config.hint_text());
+    UIImage* icon = nil;
+    if (tool_config.has_icon() && tool_config.icon().has_icon_id()) {
+      icon = ImageForIconResourceId(tool_config.icon().icon_id(),
+                                    kSymbolActionPointSize);
+    }
     std::optional<ComposeboxMode> mode = ModeForToolMode(tool_config.tool());
     if (mode) {
       tool_mapping[*mode] =
-          [[ComposeboxStringBundle alloc] initWithMenuLabel:menuLabel
+          [[ComposeboxItemUIConfig alloc] initWithMenuLabel:menuLabel
                                                   chipLabel:chipLabel
-                                                   hintText:hintText];
+                                                   hintText:hintText
+                                                       icon:icon];
     }
-  }
-
-  std::unordered_map<ComposeboxModelOption, ComposeboxStringBundle*>
-      model_mapping;
-  for (const omnibox::ModelConfig& model_config : input_state.model_configs) {
-    NSString* menuLabel = base::SysUTF8ToNSString(model_config.menu_label());
-    NSString* hintText = base::SysUTF8ToNSString(model_config.hint_text());
-    model_mapping[ModelOptionForModelMode(model_config.model())] =
-        [[ComposeboxStringBundle alloc] initWithMenuLabel:menuLabel
-                                                chipLabel:nil
-                                                 hintText:hintText];
   }
 
   NSString* modelSectionHeader = @"";
@@ -156,15 +141,32 @@ ComposeboxStrings* ServerStringsFromInputState(
         base::SysUTF8ToNSString(input_state.tools_section_config->header());
   }
 
-  return [[ComposeboxStrings alloc] initWithToolMapping:tool_mapping
-                                           modelMapping:model_mapping
-                                     modelSectionHeader:modelSectionHeader
-                                     toolsSectionHeader:toolsSectionHeader];
+  return [[ComposeboxUIConfig alloc] initWithToolMapping:tool_mapping
+                                      modelSectionHeader:modelSectionHeader
+                                      toolsSectionHeader:toolsSectionHeader];
+}
+
+// Returns the DriveConsentState corresponding to the given DisclaimerStatus.
+contextual_search::DriveConsentState ConsentStateFromDisclaimerStatus(
+    drive_picker::DriveDisclaimerController::DisclaimerStatus status) {
+  using DisclaimerStatus =
+      drive_picker::DriveDisclaimerController::DisclaimerStatus;
+  using DriveConsentState = contextual_search::DriveConsentState;
+
+  switch (status) {
+    case DisclaimerStatus::kAccepted:
+      return DriveConsentState::kConsent;
+    case DisclaimerStatus::kNotAccepted:
+      return DriveConsentState::kNotConsent;
+    case DisclaimerStatus::kRestricted:
+      return DriveConsentState::kRestricted;
+  }
 }
 
 }  // namespace
 
 @interface ComposeboxInputStateManager () <ComposeboxModeObserver,
+                                           IdentityManagerObserving,
                                            SearchEngineObserving>
 @end
 
@@ -173,9 +175,11 @@ ComposeboxStrings* ServerStringsFromInputState(
   ComposeboxEntrypoint _entrypoint;
   // The mode holder to read the active mode.
   ComposeboxModeHolder* _modeHolder;
-  // The active model. This is different from omnibox::ModelMode that doesn't
-  // support unselected state.
-  ComposeboxModelOption _activeModel;
+  // The active model, or `MODEL_MODE_UNSPECIFIED` when no model is explicitly
+  // selected (e.g. in regular search). Unlike `InputStateModel`, which only
+  // models AIM state and always keeps a concrete active model, this manager
+  // also covers regular search where no model applies.
+  omnibox::ModelMode _activeModel;
 
   // The web state list of the browser.
   raw_ptr<WebStateList> _webStateList;
@@ -185,6 +189,9 @@ ComposeboxStrings* ServerStringsFromInputState(
   raw_ptr<AimEligibilityService> _aimEligibilityService;
   // Identity manager for checking account status.
   raw_ptr<signin::IdentityManager> _identityManager;
+  // Bridge to observe `IdentityManager` events.
+  std::unique_ptr<signin::IdentityManagerObserverBridge>
+      _identityManagerObserverBridge;
   // Template URL service for checking default search engine.
   raw_ptr<TemplateURLService> _templateURLService;
   // Whether the current session is incognito.
@@ -194,14 +201,20 @@ ComposeboxStrings* ServerStringsFromInputState(
   base::WeakPtr<contextual_search::ContextualSearchSessionHandle>
       _sessionHandle;
 
+  // Shared URL loader factory for network requests.
+  scoped_refptr<network::SharedURLLoaderFactory> _urlLoaderFactory;
+  // Controller for Drive privacy disclaimer verification.
+  std::unique_ptr<drive_picker::DriveDisclaimerController>
+      _driveDisclaimerController;
+
   // The underlying C++ model that manages the state.
   std::unique_ptr<contextual_search::InputStateModel> _inputStateModel;
   // The cached current input state.
   std::optional<contextual_search::InputState> _inputState;
   // Subscription for state updates from the model.
   base::CallbackListSubscription _inputStateSubscription;
-  // Cached server strings.
-  ComposeboxStrings* _cachedStrings;
+  // Cached server UI config.
+  ComposeboxUIConfig* _cachedUIConfig;
   // Observer for the TemplateURLService.
   std::unique_ptr<SearchEngineObserverBridge> _searchEngineObserver;
   // Subscription for eligibility changes.
@@ -223,25 +236,55 @@ ComposeboxStrings* ServerStringsFromInputState(
                 (contextual_search::ContextualSearchSessionHandle*)sessionHandle
                entrypoint:(ComposeboxEntrypoint)entrypoint
               isIncognito:(BOOL)isIncognito {
+  return [self initWithWebStateList:webStateList
+                         modeHolder:modeHolder
+                        prefService:prefService
+              aimEligibilityService:aimEligibilityService
+                    identityManager:identityManager
+                 templateURLService:templateURLService
+                      sessionHandle:sessionHandle
+                         entrypoint:entrypoint
+                        isIncognito:isIncognito
+                   urlLoaderFactory:nullptr];
+}
+
+- (instancetype)
+     initWithWebStateList:(WebStateList*)webStateList
+               modeHolder:(ComposeboxModeHolder*)modeHolder
+              prefService:(PrefService*)prefService
+    aimEligibilityService:(AimEligibilityService*)aimEligibilityService
+          identityManager:(signin::IdentityManager*)identityManager
+       templateURLService:(TemplateURLService*)templateURLService
+            sessionHandle:
+                (contextual_search::ContextualSearchSessionHandle*)sessionHandle
+               entrypoint:(ComposeboxEntrypoint)entrypoint
+              isIncognito:(BOOL)isIncognito
+         urlLoaderFactory:
+             (scoped_refptr<network::SharedURLLoaderFactory>)urlLoaderFactory {
   self = [super init];
   if (self) {
-    // Initialize with local fallback strings. These will be overwritten
-    // when server-side strings become available via the input state model.
-    _cachedStrings = [ComposeboxStrings localFallbackStrings];
+    // Initialize with local fallback config. These will be overwritten
+    // when server-side config becomes available via the input state model.
+    _cachedUIConfig = [ComposeboxUIConfig localFallbackUIConfig];
     _webStateList = webStateList;
     _modeHolder = modeHolder;
     [_modeHolder addObserver:self];
     _prefService = prefService;
     _aimEligibilityService = aimEligibilityService;
     _identityManager = identityManager;
+    if (_identityManager) {
+      _identityManagerObserverBridge =
+          std::make_unique<signin::IdentityManagerObserverBridge>(
+              _identityManager, self);
+    }
     _templateURLService = templateURLService;
+    _urlLoaderFactory = urlLoaderFactory;
     // sessionHandle can be nil only in tests.
     if (sessionHandle) {
       _sessionHandle = sessionHandle->AsWeakPtr();
     }
     _entrypoint = entrypoint;
     _isIncognito = isIncognito;
-    _activeModel = ComposeboxModelOption::kNone;
 
     if (_templateURLService) {
       _isDSEGoogle = search::DefaultSearchProviderIsGoogle(_templateURLService);
@@ -249,12 +292,14 @@ ComposeboxStrings* ServerStringsFromInputState(
           self, _templateURLService);
     }
 
-    __weak __typeof(self) weakSelf = self;
-    _aimEligibilitySubscription =
-        _aimEligibilityService->RegisterEligibilityChangedCallback(
-            base::BindRepeating(^{
-              [weakSelf onAimEligibilityChanged];
-            }));
+    if (_aimEligibilityService) {
+      __weak __typeof(self) weakSelf = self;
+      _aimEligibilitySubscription =
+          _aimEligibilityService->RegisterEligibilityChangedCallback(
+              base::BindRepeating(^{
+                [weakSelf onAimEligibilityChanged];
+              }));
+    }
 
     [self updateSearchboxConfig];
   }
@@ -266,10 +311,11 @@ ComposeboxStrings* ServerStringsFromInputState(
   _inputStateSubscription = {};
   _inputStateModel.reset();
   _inputState.reset();
-  _cachedStrings = nil;
+  _cachedUIConfig = nil;
   _webStateList = nullptr;
   _prefService = nullptr;
   _aimEligibilityService = nullptr;
+  _identityManagerObserverBridge.reset();
   _identityManager = nullptr;
   _templateURLService = nullptr;
   _sessionHandle.reset();
@@ -278,34 +324,53 @@ ComposeboxStrings* ServerStringsFromInputState(
   _searchEngineObserver.reset();
   _aimEligibilitySubscription = {};
   _metricsRecorder = nil;
+  _driveDisclaimerController.reset();
+  _urlLoaderFactory = nullptr;
 }
 
-- (ComposeboxModelOption)activeModel {
+- (drive_picker::DriveDisclaimerController*)driveDisclaimerController {
+  if (_driveDisclaimerController) {
+    return _driveDisclaimerController.get();
+  }
+  if (!_identityManager || !_urlLoaderFactory) {
+    return nullptr;
+  }
+  // Create FpopService (Footprints One Platform Service) to communicate
+  // with the Footprints backend for querying user privacy consent settings.
+  auto fpopService = contextual_search::FpopService::Create(_identityManager,
+                                                            _urlLoaderFactory);
+  _driveDisclaimerController =
+      std::make_unique<drive_picker::DriveDisclaimerController>(
+          std::move(fpopService));
+  return _driveDisclaimerController.get();
+}
+
+- (omnibox::ModelMode)activeModel {
+  // `InputStateModel` keeps its default model active even in regular search,
+  // where no model applies on the client.
   if ([self activeMode] == ComposeboxMode::kRegularSearch ||
       !_inputStateModel) {
-    return ComposeboxModelOption::kNone;
+    return omnibox::ModelMode::MODEL_MODE_UNSPECIFIED;
   }
-  return ModelOptionForModelMode(
-      _inputStateModel->GetInputState().active_model);
+  return _inputStateModel->GetInputState().active_model;
 }
 
-- (void)setActiveModel:(ComposeboxModelOption)modelOption
+- (void)setActiveModel:(omnibox::ModelMode)model
     explicitUserAction:(BOOL)explicitUserAction {
   if (!_inputStateModel) {
     return;
   }
 
-  if (![self canSelectModel:modelOption]) {
+  if (![self canSelectModel:model]) {
     return;
   }
 
-  if (modelOption == _activeModel) {
+  if (model == _activeModel) {
     return;
   }
-  _activeModel = modelOption;
+  _activeModel = model;
 
-  [self setActiveModelInInputState:modelOption
-                explicitUserAction:explicitUserAction];
+  [self setActiveModelInInputState:model explicitUserAction:explicitUserAction];
 
   [self.delegate inputStateManagerDidUpdateUIState:self];
 
@@ -394,9 +459,6 @@ ComposeboxStrings* ServerStringsFromInputState(
   if (experimental_flags::ShouldForceDisableComposeboxAIM()) {
     return NO;
   }
-  if (IsComposeboxAIMDisabled()) {
-    return NO;
-  }
   if (!_aimEligibilityService) {
     return NO;
   }
@@ -414,9 +476,8 @@ ComposeboxStrings* ServerStringsFromInputState(
   return [self isToolAllowed:mode] && ![self isToolDisabled:mode];
 }
 
-- (BOOL)canSelectModel:(ComposeboxModelOption)modelOption {
-  return
-      [self isModelAllowed:modelOption] && ![self isModelDisabled:modelOption];
+- (BOOL)canSelectModel:(omnibox::ModelMode)model {
+  return [self isModelAllowed:model] && ![self isModelDisabled:model];
 }
 
 - (BOOL)canAddMoreAttachments {
@@ -470,11 +531,17 @@ ComposeboxStrings* ServerStringsFromInputState(
     return NO;
   }
 
-  BOOL isNTP = IsUrlNtp(webState->GetVisibleURL());
+  const GURL& URL = webState->GetVisibleURL();
+  if (IsAimURL(URL) || IsAimZeroStateURL(URL)) {
+    return NO;
+  }
+
+  BOOL isExtractable =
+      CanExtractPageContextForWebState(webState, [self isEligibleToUploadPdf]);
   BOOL alreadyProcessed =
       attachedWebStateIDs.contains(webState->GetUniqueIdentifier());
 
-  return !isNTP && !alreadyProcessed && [self isContentSharingEnabled];
+  return isExtractable && !alreadyProcessed && [self isContentSharingEnabled];
 }
 
 - (NSUInteger)maxTabAttachmentCount {
@@ -511,9 +578,8 @@ ComposeboxStrings* ServerStringsFromInputState(
   state.allowModelPicker = ShowComposeboxAdditionalAdvancedTools();
 
   state.activeTool = [self activeMode];
-  state.activeModel = self.activeModel;
 
-  state.strings = _cachedStrings;
+  state.uiConfig = _cachedUIConfig;
 
   NSMutableArray<ComposeboxMenuSharedTab*>* sharedTabs =
       [[NSMutableArray alloc] init];
@@ -523,7 +589,7 @@ ComposeboxStrings* ServerStringsFromInputState(
         ComposeboxMenuSharedTab* tab =
             [[ComposeboxMenuSharedTab alloc] initWithURL:item.tabURL
                                                    title:item.title
-                                             serverToken:item.serverToken
+                                     inputItemIdentifier:item.identifier
                                                  favicon:item.leadingIconImage];
         [sharedTabs addObject:tab];
       }
@@ -576,25 +642,7 @@ ComposeboxStrings* ServerStringsFromInputState(
 
   state.allowedTools = allowedTools;
   state.disabledTools = disabledTools;
-
-  std::unordered_set<ComposeboxModelOption> allowedModels;
-  std::unordered_set<ComposeboxModelOption> disabledModels;
-
-  for (ComposeboxModelOption modelOption : ComposeboxModelOptionSet::All()) {
-    // Skip ComposeboxModelOption::kNone in the available models.
-    if (modelOption == ComposeboxModelOption::kNone) {
-      continue;
-    }
-    if ([self isModelAllowed:modelOption]) {
-      allowedModels.insert(modelOption);
-    }
-    if ([self isModelDisabled:modelOption]) {
-      disabledModels.insert(modelOption);
-    }
-  }
-
-  state.allowedModels = allowedModels;
-  state.disabledModels = disabledModels;
+  state.modelItems = [self modelItems];
 
   return state;
 }
@@ -614,6 +662,29 @@ ComposeboxStrings* ServerStringsFromInputState(
 - (void)templateURLServiceShuttingDown:(TemplateURLService*)urlService {
   _searchEngineObserver.reset();
   _templateURLService = nullptr;
+}
+
+#pragma mark - IdentityManagerObserving
+
+- (void)primaryAccountDidChange:
+    (const signin::PrimaryAccountChangeEvent&)event {
+  switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {
+    case signin::PrimaryAccountChangeEvent::Type::kCleared:
+    case signin::PrimaryAccountChangeEvent::Type::kSet: {
+      // Immediately reset cached Drive consent state when switching accounts or
+      // signing out to prevent leaking the previous account's consent state
+      // while asynchronous FACS status queries are in flight.
+      if (_prefService) {
+        _prefService->SetInteger(
+            contextual_search::kDriveConsentState,
+            static_cast<int>(contextual_search::DriveConsentState::kNotReady));
+      }
+      [self updateSearchboxConfig];
+      break;
+    }
+    case signin::PrimaryAccountChangeEvent::Type::kNone:
+      break;
+  }
 }
 
 #pragma mark - ComposeboxModeObserver
@@ -645,10 +716,11 @@ ComposeboxStrings* ServerStringsFromInputState(
 /// Updates the active model on mode change.
 - (void)updateModelOnModeChange {
   if ([_modeHolder isRegularSearch]) {
-    // Reset model to kNone when switching to regular search.
-    [self setActiveModel:ComposeboxModelOption::kNone explicitUserAction:NO];
+    // Clear the model selection when switching to regular search.
+    [self setActiveModel:omnibox::ModelMode::MODEL_MODE_UNSPECIFIED
+        explicitUserAction:NO];
     return;
-  } else if (_activeModel == ComposeboxModelOption::kNone) {
+  } else if (_activeModel == omnibox::ModelMode::MODEL_MODE_UNSPECIFIED) {
     // In AI tools, set the default model when none is selected.
     [self setActiveModel:[self defaultModel] explicitUserAction:NO];
   }
@@ -714,18 +786,50 @@ ComposeboxStrings* ServerStringsFromInputState(
 
   _inputStateModel = std::make_unique<contextual_search::InputStateModel>(
       *_sessionHandle, *searchboxConfig, GURL(), _isIncognito,
-      has_primary_account);
+      /*is_signed_in=*/has_primary_account,
+      /*browser_identity_matches_aim_identity=*/has_primary_account);
+  if (_prefService) {
+    _inputStateModel->SetPrefService(_prefService);
+  }
 
   [self startInputStateObservation];
   // `Initialize` is synchronous and immediately notifies observers, updating
   // the state.
   _inputStateModel->Initialize();
 
-  // iOS doesn't rely on the active hint text from `_inputState`, strings only
-  // changes when `searchboxConfig` is updated.
-  _cachedStrings =
-      ServerStringsFromInputState(_inputStateModel->GetInputState());
+  if (base::FeatureList::IsEnabled(
+          omnibox::kComposeboxDriveContextMenuOption)) {
+    if (base::FeatureList::IsEnabled(omnibox::kForceDriveDisclaimerAccepted)) {
+      [self onDriveDisclaimerChecked:drive_picker::DriveDisclaimerController::
+                                         DisclaimerStatus::kAccepted];
+    } else if (auto* controller = [self driveDisclaimerController]) {
+      __weak __typeof(self) weakSelf = self;
+      controller->CheckDisclaimerStatusAsync(base::BindOnce(
+          ^(drive_picker::DriveDisclaimerController::DisclaimerStatus status) {
+            [weakSelf onDriveDisclaimerChecked:status];
+          }));
+    } else {
+      [self onDriveDisclaimerChecked:drive_picker::DriveDisclaimerController::
+                                         DisclaimerStatus::kRestricted];
+    }
+  }
 
+  // iOS doesn't rely on the active hint text from `_inputState`, UI config only
+  // changes when `searchboxConfig` is updated.
+  _cachedUIConfig =
+      ServerUIConfigFromInputState(_inputStateModel->GetInputState());
+
+  [self.delegate inputStateManagerDidUpdateUIState:self];
+}
+
+- (void)onDriveDisclaimerChecked:
+    (drive_picker::DriveDisclaimerController::DisclaimerStatus)status {
+  if (!_prefService) {
+    return;
+  }
+  _prefService->SetInteger(
+      contextual_search::kDriveConsentState,
+      static_cast<int>(ConsentStateFromDisclaimerStatus(status)));
   [self.delegate inputStateManagerDidUpdateUIState:self];
 }
 
@@ -737,7 +841,7 @@ ComposeboxStrings* ServerStringsFromInputState(
     return;
   }
   __weak __typeof(self) weakSelf = self;
-  _inputStateSubscription = _inputStateModel->subscribe(
+  _inputStateSubscription = _inputStateModel->Subscribe(
       base::BindRepeating(^(const contextual_search::InputState& inputState) {
         [weakSelf didUpdateInputState:inputState];
       }));
@@ -765,18 +869,18 @@ ComposeboxStrings* ServerStringsFromInputState(
   }
 }
 
-// Returns YES if the given model option matches the model mode.
-- (BOOL)isModelOption:(ComposeboxModelOption)option
+// Returns `YES` if the given `model` matches `modelMode`.
+- (BOOL)isModel:(omnibox::ModelMode)model
     matchingModelMode:(omnibox::ModelMode)modelMode {
   if ([self activeMode] == ComposeboxMode::kRegularSearch) {
     // Any model is valid in regular search.
     return YES;
   }
-  if (option == ComposeboxModelOption::kNone) {
-    // kNone is not valid in AI mode.
+  if (model == omnibox::ModelMode::MODEL_MODE_UNSPECIFIED) {
+    // `MODEL_MODE_UNSPECIFIED` is not valid in AI mode.
     return NO;
   }
-  return option == ModelOptionForModelMode(modelMode);
+  return model == modelMode;
 }
 
 // Synchronizes the local active tool mode with the server-side input state,
@@ -813,8 +917,7 @@ ComposeboxStrings* ServerStringsFromInputState(
     return;
   }
   // Local and inputStateModel matches.
-  if ([self isModelOption:_activeModel
-          matchingModelMode:_inputState->active_model]) {
+  if ([self isModel:_activeModel matchingModelMode:_inputState->active_model]) {
     return;
   }
 
@@ -835,13 +938,20 @@ ComposeboxStrings* ServerStringsFromInputState(
     return NO;
   }
 
-  // Enforce signed-in status check for the Drive option before evaluating
-  // server-side or local rules.
+  // Enforce signed-in status and restriction check for the Drive option before
+  // evaluating server-side or local rules.
   if (attachmentOption == ComposeboxAttachmentOption::kDrive) {
     BOOL hasPrimaryAccount =
         _identityManager &&
         _identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin);
     if (!hasPrimaryAccount) {
+      return NO;
+    }
+
+    if (_prefService &&
+        _prefService->GetInteger(contextual_search::kDriveConsentState) ==
+            static_cast<int>(
+                contextual_search::DriveConsentState::kRestricted)) {
       return NO;
     }
   }
@@ -925,10 +1035,16 @@ ComposeboxStrings* ServerStringsFromInputState(
   }
 }
 
-// Whether the given model option is allowed.
-- (BOOL)isModelAllowed:(ComposeboxModelOption)modelOption {
-  // None is the fallback/default option that is always available.
-  if (modelOption == ComposeboxModelOption::kNone) {
+// Whether the given `model` is allowed.
+- (BOOL)isModelAllowed:(omnibox::ModelMode)model {
+  if ([ComposeboxUIInputState allToolsEnabled]) {
+    return YES;
+  }
+
+  // `MODEL_MODE_UNSPECIFIED` represents having no explicit model selection
+  // (e.g. when resetting on return to regular search) and is always allowed,
+  // even though it is not part of `_inputState->allowed_models`.
+  if (model == omnibox::ModelMode::MODEL_MODE_UNSPECIFIED) {
     return YES;
   }
 
@@ -947,13 +1063,15 @@ ComposeboxStrings* ServerStringsFromInputState(
     return NO;
   }
 
-  omnibox::ModelMode modelMode =
-      ModelModeForModelOption(modelOption, _inputState.value());
-  return std::ranges::contains(_inputState->allowed_models, modelMode);
+  return std::ranges::contains(_inputState->allowed_models, model);
 }
 
-// Whether the given model option is disabled.
-- (BOOL)isModelDisabled:(ComposeboxModelOption)modelOption {
+// Whether the given `model` is disabled.
+- (BOOL)isModelDisabled:(omnibox::ModelMode)model {
+  if ([ComposeboxUIInputState allToolsEnabled]) {
+    return NO;
+  }
+
   // Models are only available from server state.
   if (!ShowComposeboxAdditionalAdvancedTools() ||
       !EnableComposeboxServerSideState()) {
@@ -964,9 +1082,48 @@ ComposeboxStrings* ServerStringsFromInputState(
     return NO;
   }
 
-  omnibox::ModelMode modelMode =
-      ModelModeForModelOption(modelOption, _inputState.value());
-  return std::ranges::contains(_inputState->disabled_models, modelMode);
+  return std::ranges::contains(_inputState->disabled_models, model);
+}
+
+// Returns the items to display in the model picker, in server order. Models
+// without a label are excluded; selected and disabled models are kept.
+- (NSArray<ComposeboxModelItem*>*)modelItems {
+  if (!_inputState.has_value()) {
+    return @[];
+  }
+  omnibox::ModelMode activeModel = self.activeModel;
+
+  NSMutableArray<ComposeboxModelItem*>* items = [NSMutableArray array];
+  for (const omnibox::ModelConfig& config : _inputState->model_configs) {
+    omnibox::ModelMode model = config.model();
+    if (![self isModelAllowed:model]) {
+      continue;
+    }
+    if (config.menu_label().empty()) {
+      continue;
+    }
+    NSString* title = base::SysUTF8ToNSString(config.menu_label());
+    ComposeboxModelItem* item = [[ComposeboxModelItem alloc]
+        initWithModelMode:model
+                    title:title
+                     icon:[self iconForModelConfig:config]
+                 selected:model == activeModel
+                 disabled:[self isModelDisabled:model]];
+    [items addObject:item];
+  }
+  return items;
+}
+
+// Returns the menu icon for the given `config`: the server icon if available,
+// otherwise the local fallback.
+- (UIImage*)iconForModelConfig:(const omnibox::ModelConfig&)config {
+  if (config.has_icon() && config.icon().has_icon_id()) {
+    if (UIImage* icon = ImageForIconResourceId(config.icon().icon_id(),
+                                               kSymbolActionPointSize)) {
+      return icon;
+    }
+  }
+  return FallbackIconForModel(config.model());
 }
 
 #pragma mark - InputState Helpers
@@ -976,21 +1133,26 @@ ComposeboxStrings* ServerStringsFromInputState(
   return _modeHolder.mode;
 }
 
-/// Sets the active model in input state model.
-- (void)setActiveModelInInputState:(ComposeboxModelOption)modelOption
+// Sets the active model in input state model.
+- (void)setActiveModelInInputState:(omnibox::ModelMode)model
                 explicitUserAction:(BOOL)explicitUserAction {
   if (!_inputState.has_value()) {
     return;
   }
-  // Set the model in input state.
+  // `InputStateModel` expects a concrete model from `allowed_models` (and
+  // resets `MODEL_MODE_UNSPECIFIED` on config updates). Resolve
+  // `MODEL_MODE_UNSPECIFIED` to the server's default model so compatibility
+  // rules and query parameters are evaluated against the default model.
   omnibox::ModelMode requestedModelMode =
-      ModelModeForModelOption(modelOption, _inputState.value());
+      model != omnibox::ModelMode::MODEL_MODE_UNSPECIFIED
+          ? model
+          : _inputState->GetDefaultModel();
 
   if (_inputState->active_model == requestedModelMode) {
     return;
   }
 
-  _inputStateModel->setActiveModel(requestedModelMode);
+  _inputStateModel->SetActiveModel(requestedModelMode);
 
   contextual_search::ContextualSearchMetricsRecorder* recorder =
       _sessionHandle ? _sessionHandle->GetMetricsRecorder() : nullptr;
@@ -1015,20 +1177,20 @@ ComposeboxStrings* ServerStringsFromInputState(
     recorder->RecordToolMode(activeTool);
   }
 
-  _inputStateModel->setActiveTool(activeTool);
+  _inputStateModel->SetActiveTool(activeTool);
 }
 
 #pragma mark - Eligibility & Availability
 
 /// Returns the default model for the active mode.
-- (ComposeboxModelOption)defaultModel {
+- (omnibox::ModelMode)defaultModel {
   if ([self activeMode] == ComposeboxMode::kRegularSearch) {
-    return ComposeboxModelOption::kNone;
+    return omnibox::ModelMode::MODEL_MODE_UNSPECIFIED;
   }
   if (!_inputState.has_value()) {
-    return ComposeboxModelOption::kNone;
+    return omnibox::ModelMode::MODEL_MODE_UNSPECIFIED;
   }
-  return ModelOptionForModelMode(_inputState->GetDefaultModel());
+  return _inputState->GetDefaultModel();
 }
 
 /// Returns the default mode/tool that is implicit in the context. The tool is
@@ -1244,8 +1406,7 @@ ComposeboxStrings* ServerStringsFromInputState(
 
 /// Whether the given tool mode is disabled by local rules.
 - (BOOL)isToolDisabledLocally:(ComposeboxMode)mode {
-  return mode == ComposeboxMode:: kImageGeneration &&
-         self.items.hasTabOrFile;
+  return mode == ComposeboxMode::kImageGeneration && self.items.hasTabOrFile;
 }
 
 @end

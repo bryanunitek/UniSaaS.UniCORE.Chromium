@@ -78,14 +78,13 @@ MockRenderProcessHost::MockRenderProcessHost(
       deletion_callback_called_(false),
       is_for_guests_only_(is_for_guests_only),
       priority_(base::Process::Priority::kUserBlocking),
-      is_unused_(true),
       pending_view_count_(0),
       worker_ref_count_(0),
       pending_reuse_ref_count_(0),
       foreground_service_worker_count_(0) {
   // Child process security operations can't be unit tested unless we add
   // ourselves as an existing child process.
-  ChildProcessSecurityPolicyImpl::GetInstance()->Add(GetID(), browser_context);
+  ChildProcessSecurityPolicyImpl::GetInstance()->Add(GetID());
 
   RenderProcessHostImpl::RegisterHost(GetID(), this);
 }
@@ -98,6 +97,7 @@ MockRenderProcessHost::~MockRenderProcessHost() {
       observer.RenderProcessHostDestroyed(this);
     RenderProcessHostImpl::UnregisterHost(GetID());
   }
+  ClearAllUserData();
 }
 
 void MockRenderProcessHost::SimulateCrash() {
@@ -129,6 +129,10 @@ void MockRenderProcessHost::SimulateReady() {
   is_ready_ = true;
   for (auto& observer : observers_)
     observer.RenderProcessReady(this);
+}
+
+bool MockRenderProcessHost::IsMock() const {
+  return true;
 }
 
 bool MockRenderProcessHost::Init() {
@@ -207,12 +211,20 @@ bool MockRenderProcessHost::IsForGuestsOnly() {
   return is_for_guests_only_;
 }
 
+bool MockRenderProcessHost::IsPrivileged() {
+  return GetProcessLock().is_privileged();
+}
+
 bool MockRenderProcessHost::IsJitDisabled() {
   return false;
 }
 
 bool MockRenderProcessHost::AreV8OptimizationsDisabled() {
-  return false;
+  return are_v8_optimizations_disabled_;
+}
+
+void MockRenderProcessHost::SetAreV8OptimizationsDisabled(bool disabled) {
+  are_v8_optimizations_disabled_ = disabled;
 }
 
 bool MockRenderProcessHost::DisallowV8FeatureFlagOverrides() {
@@ -278,8 +290,10 @@ bool MockRenderProcessHost::FastShutdownIfPossible(
     bool ignore_keep_alive,
     bool ignore_pending_reuse,
     bool use_outermost_main_frame_check) {
-  if (GetActiveViewCount() != page_count)
+  if ((page_count || use_outermost_main_frame_check) &&
+      GetActiveViewCount() != page_count) {
     return false;
+  }
   // We aren't actually going to do anything, but set |fast_shutdown_started_|
   // to true so that tests know we've been called.
   fast_shutdown_started_ = true;
@@ -291,11 +305,9 @@ bool MockRenderProcessHost::FastShutdownStarted() {
 }
 
 const base::Process& MockRenderProcessHost::GetProcess() {
-  if (process.IsValid())
-    return process;
-
-  static const base::Process current_process(base::Process::Current());
-  return current_process;
+  // While launching, match RenderProcessHostImpl::GetProcess(): a sentinel
+  // for "no process".
+  return process_still_launching_ ? null_process_ : current_process_;
 }
 
 bool MockRenderProcessHost::IsReady() {
@@ -501,7 +513,7 @@ void MockRenderProcessHost::ForEachRenderFrameHost(
     // Speculative RFHs are not exposed to //content embedders, so we have to
     // explicitly check them here to avoid leaks.
     if (rfh->lifecycle_state() ==
-        RenderFrameHostImpl::LifecycleStateImpl::kSpeculative) {
+        RenderFrameHostLifecycleStateImpl::kSpeculative) {
       continue;
     }
     on_render_frame_host(rfh);
@@ -569,11 +581,11 @@ bool MockRenderProcessHost::MayReuseHost() {
 }
 
 bool MockRenderProcessHost::IsUnused() {
-  return is_unused_;
+  return GetProcessLock().is_unused();
 }
 
 void MockRenderProcessHost::SetIsUsed() {
-  is_unused_ = false;
+  ChildProcessSecurityPolicyImpl::GetInstance()->SetProcessIsUsed(GetID());
 }
 
 bool MockRenderProcessHost::HostHasNotBeenUsed() {
@@ -589,7 +601,7 @@ void MockRenderProcessHost::SetProcessLock(
     const IsolationContext& isolation_context,
     const ProcessLock& process_lock) {
   ChildProcessSecurityPolicyImpl::GetInstance()->LockProcess(
-      isolation_context, GetID(), !IsUnused(), process_lock);
+      isolation_context, GetID(), process_lock);
   if (process_lock.IsASiteOrOrigin())
     is_renderer_locked_to_site_ = true;
 }
@@ -630,6 +642,29 @@ void MockRenderProcessHost::GetSandboxedFileSystemForBucket(
 std::string
 MockRenderProcessHost::GetInfoForBrowserContextDestructionCrashReporting() {
   return std::string();
+}
+
+const std::string&
+MockRenderProcessHost::GetUnresponsiveDocumentJavascriptCallStack() const {
+  return unresponsive_document_javascript_call_stack_;
+}
+
+const blink::LocalFrameToken&
+MockRenderProcessHost::GetUnresponsiveDocumentToken() const {
+  return unresponsive_document_token_;
+}
+
+std::optional<blink::OomInterventionMetrics>
+MockRenderProcessHost::GetCrashMemoryMetrics() const {
+  return std::nullopt;
+}
+
+void MockRenderProcessHost::SetUnresponsiveDocumentJSCallStackAndToken(
+    std::string javascript_call_stack,
+    blink::LocalFrameToken token) {
+  unresponsive_document_javascript_call_stack_ =
+      std::move(javascript_call_stack);
+  unresponsive_document_token_ = token;
 }
 
 void MockRenderProcessHost::WriteIntoTrace(

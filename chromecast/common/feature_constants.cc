@@ -22,6 +22,8 @@ const char kDisableBackgroundSuspend[] = "disable_background_suspend";
 const char kEnableDemoStandaloneMode[] = "enable_demo_standalone_mode";
 
 const char kKeyAppId[] = "app_id";
+const char kExtendedInputSupported[] = "extended_input_supported";
+const char kRotationSupported[] = "rotation_supported";
 
 const char kCastCoreRendererFeatures[] = "cast_core_renderer_features";
 const char kCastCoreEnforceFeaturePermissions[] =
@@ -41,6 +43,8 @@ const char kCastCoreBitstreamAudioCodecsInfo[] =
     "cast_core_bitstream_audio_codecs_info";
 const char kCastCoreCodecs[] = "cast_core_codecs";
 const char kCastCoreSpatialRendering[] = "cast_core_spatial_rendering";
+
+const char kCastCoreCrashOnStart[] = "crash-on-start";
 
 }  // namespace feature
 }  // namespace chromecast

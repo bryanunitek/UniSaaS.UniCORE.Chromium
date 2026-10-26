@@ -51,7 +51,6 @@ import org.chromium.base.Callback;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.commerce.ShoppingServiceFactory;
@@ -75,12 +74,9 @@ import org.chromium.url.JUnitTestGURLs;
 import java.util.Arrays;
 
 /** Tests for {@link PriceInsightsBottomSheetMediator}. */
-@Batch(Batch.UNIT_TESTS)
 @RunWith(BaseRobolectricTestRunner.class)
 @EnableFeatures({NotificationFeatureMap.CACHE_NOTIIFICATIONS_ENABLED})
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowToast.class})
+@Config(shadows = {ShadowToast.class})
 public class PriceInsightsBottomSheetMediatorTest {
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -90,7 +86,6 @@ public class PriceInsightsBottomSheetMediatorTest {
     @Mock private TabModelSelector mMockTabModelSelector;
     @Mock private ShoppingService mMockShoppingService;
     @Mock private PriceInsightsDelegate mMockPriceInsightsDelegate;
-    @Mock private View mMockPriceHistoryChart;
 
     private static final String PRODUCT_TITLE = "Testing Sneaker";
     private static final String PRICE_TRACKING_DISABLED_BUTTON_TEXT = "Track";
@@ -128,11 +123,13 @@ public class PriceInsightsBottomSheetMediatorTest {
     private PriceInsightsBottomSheetMediator mPriceInsightsMediator;
     private final PropertyModel mPropertyModel = new PropertyModel(ALL_KEYS);
     private Activity mActivity;
+    private View mPriceHistoryChart;
 
     @Before
     public void setUp() {
-        mActivity = Robolectric.buildActivity(Activity.class).setup().get();
+        mActivity = Robolectric.buildActivity(Activity.class).get();
         mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
+        mPriceHistoryChart = new View(mActivity);
 
         doReturn(mMockProfile).when(mMockTab).getProfile();
         doReturn(PRODUCT_TITLE).when(mMockTab).getTitle();
@@ -250,7 +247,7 @@ public class PriceInsightsBottomSheetMediatorTest {
 
     @Test
     public void testRequestShowContent_PriceHistorySingleCatalog() {
-        doReturn(mMockPriceHistoryChart)
+        doReturn(mPriceHistoryChart)
                 .when(mMockPriceInsightsDelegate)
                 .getPriceHistoryChartForPriceInsightsInfo(PRICE_INSIGHTS_INFO_SINGLE_CATALOG);
         setShoppingServiceGetPriceInsightsInfoForUrl(PRICE_INSIGHTS_INFO_SINGLE_CATALOG);
@@ -258,12 +255,12 @@ public class PriceInsightsBottomSheetMediatorTest {
 
         assertEquals(PRICE_HISTORY_SINGLE_CATALOGS_TITLE, mPropertyModel.get(PRICE_HISTORY_TITLE));
         assertNull(mPropertyModel.get(PRICE_HISTORY_DESCRIPTION));
-        assertEquals(mMockPriceHistoryChart, mPropertyModel.get(PRICE_HISTORY_CHART));
+        assertEquals(mPriceHistoryChart, mPropertyModel.get(PRICE_HISTORY_CHART));
     }
 
     @Test
     public void testRequestShowContent_PriceHistoryMultipleCatalogs() {
-        doReturn(mMockPriceHistoryChart)
+        doReturn(mPriceHistoryChart)
                 .when(mMockPriceInsightsDelegate)
                 .getPriceHistoryChartForPriceInsightsInfo(PRICE_INSIGHTS_INFO_MULTIPLE_CATALOGS);
         setShoppingServiceGetPriceInsightsInfoForUrl(PRICE_INSIGHTS_INFO_MULTIPLE_CATALOGS);
@@ -272,7 +269,7 @@ public class PriceInsightsBottomSheetMediatorTest {
         assertEquals(
                 PRICE_HISTORY_MULTIPLE_CATALOGS_TITLE, mPropertyModel.get(PRICE_HISTORY_TITLE));
         assertEquals(CATALOG_ATTRIBUTES, mPropertyModel.get(PRICE_HISTORY_DESCRIPTION));
-        assertEquals(mMockPriceHistoryChart, mPropertyModel.get(PRICE_HISTORY_CHART));
+        assertEquals(mPriceHistoryChart, mPropertyModel.get(PRICE_HISTORY_CHART));
     }
 
     @Test

@@ -75,70 +75,73 @@ void CastWindowManagerBindings::Install(v8::Local<v8::Object> cast_platform,
     // On back bindings.
     InstallBinding(isolate, windowManagerObject, kCanGoBackName,
                    &CastWindowManagerBindings::SetCanGoBack,
-                   base::Unretained(this));
+                   weak_factory_.GetWeakPtr());
     InstallBinding(isolate, windowManagerObject, kOnBackGestureName,
                    &CastWindowManagerBindings::SetV8Callback,
-                   base::Unretained(this), &on_back_gesture_callback_);
+                   weak_factory_.GetWeakPtr(), &on_back_gesture_callback_);
     InstallBinding(isolate, windowManagerObject, kOnBackGestureProgressName,
                    &CastWindowManagerBindings::SetV8Callback,
-                   base::Unretained(this), &on_back_gesture_progress_callback_);
+                   weak_factory_.GetWeakPtr(),
+                   &on_back_gesture_progress_callback_);
     InstallBinding(isolate, windowManagerObject, kOnBackGestureCancelName,
                    &CastWindowManagerBindings::SetV8Callback,
-                   base::Unretained(this), &on_back_gesture_cancel_callback_);
+                   weak_factory_.GetWeakPtr(),
+                   &on_back_gesture_cancel_callback_);
 
     // Top drag bindings.
     InstallBinding(isolate, windowManagerObject, kCanTopDragName,
                    &CastWindowManagerBindings::SetCanTopDrag,
-                   base::Unretained(this));
+                   weak_factory_.GetWeakPtr());
     InstallBinding(isolate, windowManagerObject, kOnTopDragGestureDoneName,
                    &CastWindowManagerBindings::SetV8Callback,
-                   base::Unretained(this), &on_top_drag_gesture_done_callback_);
+                   weak_factory_.GetWeakPtr(),
+                   &on_top_drag_gesture_done_callback_);
     InstallBinding(isolate, windowManagerObject, kOnTopDragGestureProgressName,
                    &CastWindowManagerBindings::SetV8Callback,
-                   base::Unretained(this),
+                   weak_factory_.GetWeakPtr(),
                    &on_top_drag_gesture_progress_callback_);
 
     // Right drag bindings.
     InstallBinding(isolate, windowManagerObject, kCanRightDragName,
                    &CastWindowManagerBindings::SetCanRightDrag,
-                   base::Unretained(this));
+                   weak_factory_.GetWeakPtr());
     InstallBinding(isolate, windowManagerObject, kOnRightDragGestureDoneName,
                    &CastWindowManagerBindings::SetV8Callback,
-                   base::Unretained(this),
+                   weak_factory_.GetWeakPtr(),
                    &on_right_drag_gesture_done_callback_);
     InstallBinding(
         isolate, windowManagerObject, kOnRightDragGestureProgressName,
-        &CastWindowManagerBindings::SetV8Callback, base::Unretained(this),
+        &CastWindowManagerBindings::SetV8Callback, weak_factory_.GetWeakPtr(),
         &on_right_drag_gesture_progress_callback_);
 
     // 'Tap' bindings.
     InstallBinding(isolate, windowManagerObject, kOnTapGestureName,
                    &CastWindowManagerBindings::SetV8Callback,
-                   base::Unretained(this), &on_tap_gesture_callback_);
+                   weak_factory_.GetWeakPtr(), &on_tap_gesture_callback_);
     InstallBinding(isolate, windowManagerObject, kOnTapDownGestureName,
                    &CastWindowManagerBindings::SetV8Callback,
-                   base::Unretained(this), &on_tap_down_gesture_callback_);
+                   weak_factory_.GetWeakPtr(), &on_tap_down_gesture_callback_);
   }
   if (feature_manager_->FeatureEnabled(feature::kEnableWindowControls)) {
     v8::Local<v8::Object> windowManagerObject =
         EnsureObjectExists(isolate, cast_platform, kBindingsObjectName);
 
     InstallBinding(isolate, windowManagerObject, kMaximize,
-                   &CastWindowManagerBindings::Show, base::Unretained(this));
+                   &CastWindowManagerBindings::Show,
+                   weak_factory_.GetWeakPtr());
     InstallBinding(isolate, windowManagerObject, kMinimize,
-                   &CastWindowManagerBindings::Hide, base::Unretained(this));
+                   &CastWindowManagerBindings::Hide,
+                   weak_factory_.GetWeakPtr());
   }
 }
 
-v8::Local<v8::Value> CastWindowManagerBindings::SetV8Callback(
+void CastWindowManagerBindings::SetV8Callback(
     v8::UniquePersistent<v8::Function>* callback_function,
     v8::Local<v8::Function> callback) {
   v8::Isolate* isolate =
       render_frame()->GetWebFrame()->GetAgentGroupScheduler()->Isolate();
 
   *callback_function = v8::UniquePersistent<v8::Function>(isolate, callback);
-
-  return v8::Undefined(isolate);
 }
 
 void CastWindowManagerBindings::Show() {
@@ -229,17 +232,14 @@ void CastWindowManagerBindings::InvokeV8Callback(
   v8::Isolate* isolate = web_frame->GetAgentGroupScheduler()->Isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context = web_frame->MainWorldScriptContext();
+  v8::MicrotasksScope microtasks_scope(
+      context, v8::MicrotasksScope::kDoNotRunMicrotasks);
   v8::Context::Scope context_scope(context);
   v8::Local<v8::Function> handler =
-      v8::Local<v8::Function>::New(isolate, std::move(*callback_function));
+      v8::Local<v8::Function>::New(isolate, *callback_function);
 
-  v8::MaybeLocal<v8::Value> maybe_result =
-      handler->Call(context, context->Global(), 0, nullptr);
-
-  *callback_function = v8::UniquePersistent<v8::Function>(isolate, handler);
-
-  v8::Local<v8::Value> result;
-  std::ignore = maybe_result.ToLocal(&result);
+  // Running |handler| may delete |this|; do not touch any members afterwards.
+  std::ignore = handler->Call(context, context->Global(), 0, nullptr);
 }
 
 void CastWindowManagerBindings::InvokeV8Callback(
@@ -253,22 +253,20 @@ void CastWindowManagerBindings::InvokeV8Callback(
   v8::Isolate* isolate = web_frame->GetAgentGroupScheduler()->Isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context = web_frame->MainWorldScriptContext();
+  v8::MicrotasksScope microtasks_scope(
+      context, v8::MicrotasksScope::kDoNotRunMicrotasks);
   v8::Context::Scope context_scope(context);
   v8::Local<v8::Function> handler =
-      v8::Local<v8::Function>::New(isolate, std::move(*callback_function));
+      v8::Local<v8::Function>::New(isolate, *callback_function);
 
   v8::Local<v8::Number> touch_x = v8::Integer::New(isolate, touch_location.x());
   v8::Local<v8::Number> touch_y = v8::Integer::New(isolate, touch_location.y());
 
   auto args = std::to_array<v8::Local<v8::Value>>({touch_x, touch_y});
 
-  v8::MaybeLocal<v8::Value> maybe_result =
+  // Running |handler| may delete |this|; do not touch any members afterwards.
+  std::ignore =
       handler->Call(context, context->Global(), args.size(), args.data());
-
-  *callback_function = v8::UniquePersistent<v8::Function>(isolate, handler);
-
-  v8::Local<v8::Value> result;
-  std::ignore = maybe_result.ToLocal(&result);
 }
 
 void CastWindowManagerBindings::OnBackGesture(
@@ -285,13 +283,14 @@ void CastWindowManagerBindings::OnBackGesture(
   v8::Isolate* isolate = web_frame->GetAgentGroupScheduler()->Isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context = web_frame->MainWorldScriptContext();
+  v8::MicrotasksScope microtasks_scope(
+      context, v8::MicrotasksScope::kDoNotRunMicrotasks);
   v8::Context::Scope context_scope(context);
-  v8::Local<v8::Function> handler = v8::Local<v8::Function>::New(
-      isolate, std::move(on_back_gesture_callback_));
+  v8::Local<v8::Function> handler =
+      v8::Local<v8::Function>::New(isolate, on_back_gesture_callback_);
+  // Running |handler| may delete |this|; do not touch any members afterwards.
   auto result = handler->Call(context, context->Global(), 0, nullptr);
 
-  on_back_gesture_callback_ =
-      v8::UniquePersistent<v8::Function>(isolate, handler);
   if (result.IsEmpty()) {
     LOG(ERROR) << "No value from callback execution; ";
     std::move(callback).Run(false);

@@ -10,12 +10,14 @@
 #include "chrome/browser/extensions/webstore_install_with_prompt.h"
 #include "chrome/browser/extensions/webstore_standalone_installer.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/crx_file/id_util.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/webstore_install_result.h"
 #include "extensions/common/manifest_constants.h"
+#include "ui/base/base_window.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 using extensions::ExtensionRegistry;
 
@@ -81,11 +83,12 @@ void InstallChromeApp(const std::string& app_id,
   // At the moment InstallChromeApp() is called immediately after handling
   // startup URLs, so a browser is guaranteed to be created. If that changes we
   // may need to start a browser or browser session here.
-  DCHECK(browser);
+  CHECK(browser, base::NotFatalUntil::M161);
 
-  content::OpenURLParams params(GetAppInstallUrl(app_id), content::Referrer(),
-                                WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                                ui::PAGE_TRANSITION_AUTO_TOPLEVEL, false);
+  content::OpenURLParams params =
+      content::OpenURLParams::CreateBrowserInitiated(
+          GetAppInstallUrl(app_id), WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
   browser->OpenURL(params, /*navigation_handle_callback=*/{});
 
   ExtensionRegistry* registry = ExtensionRegistry::Get(browser->GetProfile());

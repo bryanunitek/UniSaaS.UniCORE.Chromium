@@ -17,6 +17,7 @@
 #include "base/scoped_observation.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/metrics/metrics_reporting_state.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/profile.h"
@@ -47,6 +48,7 @@
 #include "ui/base/models/dialog_model.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/button/label_button_border.h"
@@ -91,7 +93,7 @@ void OpenUmaLink(BrowserWindowInterface* browser, const ui::Event& event) {
   browser->OpenGURL(
       GURL("https://support.google.com/chrome/answer/96817"),
       ui::DispositionFromEventFlags(event.flags(),
-                                    WindowOpenDisposition::NEW_FOREGROUND_TAB));
+                                    WindowOpenDisposition::kNewForegroundTab));
   RecordBubbleHistogramValue(SESSION_CRASHED_BUBBLE_HELP);
 }
 
@@ -104,13 +106,14 @@ class SessionCrashedBubbleDelegate : public ui::DialogModelDelegate {
             ExitTypeService::GetInstanceForProfile(profile)) {
       crashed_lock_ = exit_type_service->CreateCrashedLock();
     }
-
   }
 
   ~SessionCrashedBubbleDelegate() override { g_instance_for_test = nullptr; }
 
-
   void OpenStartupPages(BrowserWindowInterface* browser) {
+    if (RejectActionIfBrowserClosing(browser)) {
+      return;
+    }
     ignored_ = false;
     MaybeEnableUma();
     dialog_model()->host()->Close();
@@ -118,8 +121,7 @@ class SessionCrashedBubbleDelegate : public ui::DialogModelDelegate {
     RecordBubbleHistogramValue(SESSION_CRASHED_BUBBLE_STARTUP_PAGES);
     // Opening tabs has side effects, so it's preferable to do it after the
     // bubble was closed.
-    SessionRestore::OpenStartupPagesAfterCrash(
-        browser->GetBrowserForMigrationOnly());
+    SessionRestore::OpenStartupPagesAfterCrash(browser);
   }
 
   void OnWindowClosing() {
@@ -129,6 +131,10 @@ class SessionCrashedBubbleDelegate : public ui::DialogModelDelegate {
   }
 
   void RestorePreviousSession(BrowserWindowInterface* browser) {
+    if (RejectActionIfBrowserClosing(browser)) {
+      return;
+    }
+
     ignored_ = false;
     MaybeEnableUma();
     // The call to Close() deletes this. Grab the lock so that session restore
@@ -141,8 +147,7 @@ class SessionCrashedBubbleDelegate : public ui::DialogModelDelegate {
     RecordBubbleHistogramValue(SESSION_CRASHED_BUBBLE_RESTORED);
     // Restoring tabs has side effects, so it's preferable to do it after the
     // bubble was closed.
-    SessionRestore::RestoreSessionAfterCrash(
-        browser->GetBrowserForMigrationOnly());
+    SessionRestore::RestoreSessionAfterCrash(browser);
   }
 
   void MaybeEnableUma() {
@@ -163,6 +168,18 @@ class SessionCrashedBubbleDelegate : public ui::DialogModelDelegate {
   }
 
  private:
+  bool RejectActionIfBrowserClosing(BrowserWindowInterface* browser) {
+    if (!browser_shutdown::HasShutdownStarted() &&
+        !browser->IsDeleteScheduled()) {
+      return false;
+    }
+
+    // Treat the stale action as handled rather than as a dismissed bubble.
+    ignored_ = false;
+    dialog_model()->host()->Close();
+    return true;
+  }
+
   bool ignored_ = true;
   std::unique_ptr<ExitTypeService::CrashedLock> crashed_lock_;
 };
@@ -175,7 +192,7 @@ class SessionCrashedBubbleView::BrowserRemovalObserver
  public:
   explicit BrowserRemovalObserver(BrowserWindowInterface* browser)
       : browser_(browser) {
-    DCHECK(browser_);
+    CHECK(browser_, base::NotFatalUntil::M162);
     browser_collection_observation_.Observe(
         GlobalBrowserCollection::GetInstance());
   }
@@ -204,7 +221,7 @@ class SessionCrashedBubbleView::BrowserRemovalObserver
 void SessionCrashedBubble::ShowIfNotOffTheRecordProfile(
     BrowserWindowInterface* browser,
     bool skip_tab_checking) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (browser->GetProfile()->IsOffTheRecord()) {
     return;
   }

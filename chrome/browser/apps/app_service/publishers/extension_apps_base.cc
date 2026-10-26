@@ -18,13 +18,12 @@
 #include "chrome/browser/apps/app_service/publishers/extension_apps.h"
 #include "chrome/browser/apps/app_service/publishers/extension_apps_enable_flow.h"
 #include "chrome/browser/apps/app_service/publishers/extension_apps_util.h"
-#include "chrome/browser/ash/app_list/extension_app_utils.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/launch_util.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/extensions/app_launch_params.h"
@@ -32,6 +31,7 @@
 #include "chrome/browser/ui/extensions/extension_enable_flow.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow_delegate.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_metrics.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
@@ -53,9 +53,13 @@
 #include "extensions/browser/ui_util.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_urls.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/common/manifest_handlers/options_page_info.h"
 #include "extensions/common/switches.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
+#include "ui/display/types/display_constants.h"
 #include "url/url_constants.h"
 
 // TODO(crbug.com/40569217): life cycle events. Extensions can be installed and
@@ -142,7 +146,7 @@ AppPtr ExtensionAppsBase::CreateAppImpl(const extensions::Extension* extension,
                                        ? InstallSource::kSystem
                                        : InstallSource::kChromeWebStore);
   app->short_name = extension->short_name();
-  app->description = extension->description();
+  app->description = extensions::DescriptionInfo::GetDescription(*extension);
   app->version = extension->GetVersionForDisplay();
   app->installer_package_id =
       apps::PackageId(apps::PackageType::kChromeApp, extension->id());
@@ -227,10 +231,10 @@ void ExtensionAppsBase::LaunchAppWithParamsImpl(AppLaunchParams&& params,
 
 const extensions::Extension* ExtensionAppsBase::MaybeGetExtension(
     const std::string& app_id) {
-  DCHECK(profile_);
+  CHECK(profile_, base::NotFatalUntil::M161);
   extensions::ExtensionRegistry* registry =
       extensions::ExtensionRegistry::Get(profile_);
-  DCHECK(registry);
+  CHECK(registry, base::NotFatalUntil::M161);
   const extensions::Extension* extension =
       registry->GetInstalledExtension(app_id);
   if (!extension || !Accepts(extension)) {
@@ -246,7 +250,7 @@ void ExtensionAppsBase::Initialize() {
   prefs_observation_.Observe(extensions::ExtensionPrefs::Get(profile_));
   registry_observation_.Observe(extensions::ExtensionRegistry::Get(profile_));
 
-  DCHECK(profile_);
+  CHECK(profile_, base::NotFatalUntil::M161);
 
   // Publish apps after all extensions have been loaded, to include all apps
   // including the disabled apps.
@@ -451,7 +455,7 @@ void ExtensionAppsBase::Uninstall(const std::string& app_id,
   NavigateParams params(
       profile(), extension_urls::GetWebstoreReportAbuseUrl(app_id, kReferrerId),
       ui::PAGE_TRANSITION_LINK);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   Navigate(&params);
 }
 
@@ -470,11 +474,10 @@ void ExtensionAppsBase::OpenNativeSettings(const std::string& app_id) {
     BrowserWindowInterface* browser =
         ProfileBrowserCollection::GetForProfile(profile_)->FindTabbedBrowser();
     if (!browser) {
-      browser = Browser::Create(Browser::CreateParams(profile_, true));
+      browser = CreateBrowserWindow(BrowserWindowCreateParams(profile_, true));
     }
 
-    chrome::ShowExtensions(browser->GetBrowserForMigrationOnly(),
-                           extension->id());
+    chrome::ShowExtensions(browser, extension->id());
   }
 }
 
@@ -493,7 +496,7 @@ void ExtensionAppsBase::OnExtensionLastLaunchTimeChanged(
 
 void ExtensionAppsBase::OnExtensionPrefsWillBeDestroyed(
     extensions::ExtensionPrefs* prefs) {
-  DCHECK(prefs_observation_.IsObservingSource(prefs));
+  CHECK(prefs_observation_.IsObservingSource(prefs), base::NotFatalUntil::M161);
   prefs_observation_.Reset();
 }
 

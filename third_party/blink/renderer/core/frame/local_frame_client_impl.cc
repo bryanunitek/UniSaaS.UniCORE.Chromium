@@ -49,6 +49,7 @@
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/mojom/frame/user_activation_update_types.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/loader/fetch_later.mojom-blink.h"
+#include "third_party/blink/public/mojom/scroll/scroll_enums.mojom-blink.h"
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_provider.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_provider_client.h"
@@ -309,13 +310,10 @@ void LocalFrameClientImpl::WillReleaseScriptContext(
   }
 }
 
-bool LocalFrameClientImpl::AllowScriptExtensions() {
-  return true;
-}
-
-void LocalFrameClientImpl::DidChangeScrollOffset() {
+void LocalFrameClientImpl::DidChangeScrollOffset(
+    mojom::blink::ScrollType scroll_type) {
   if (web_frame_->Client()) {
-    web_frame_->Client()->DidChangeScrollOffset();
+    web_frame_->Client()->DidChangeScrollOffset(scroll_type);
   }
 }
 
@@ -630,8 +628,9 @@ void LocalFrameClientImpl::BeginNavigation(
     base::TimeTicks input_start_time,
     base::TimeTicks actual_navigation_start,
     const String& href_translate,
-    const std::optional<Impression>& impression,
     const LocalFrameToken* initiator_frame_token,
+    const InitiatorStateToken& initiator_state_token,
+    const DocumentToken& initiator_document_token,
     SourceLocation* source_location,
     mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>
         initiator_navigation_state_keep_alive_handle,
@@ -639,7 +638,8 @@ void LocalFrameClientImpl::BeginNavigation(
     bool has_rel_opener,
     mojo::PendingReceiver<mojom::blink::NavigationResumeDeferredCommitListener>
         resume_defer_commit_listener,
-    std::optional<base::UnguessableToken> script_tool_invocation_id) {
+    std::optional<ToolInvocationToken> script_tool_invocation_id,
+    const String& script_injector_host) {
   if (!web_frame_->Client()) {
     return;
   }
@@ -660,11 +660,8 @@ void LocalFrameClientImpl::BeginNavigation(
   navigation_info->is_unfenced_top_navigation = is_unfenced_top_navigation;
   navigation_info->frame_load_type = frame_load_type;
   navigation_info->is_client_redirect = is_client_redirect;
-
-  if (script_tool_invocation_id.has_value()) {
-    navigation_info->script_tool_invocation_id =
-        script_tool_invocation_id.value();
-  }
+  navigation_info->script_injector_host = script_injector_host;
+  navigation_info->script_tool_invocation_id = script_tool_invocation_id;
 
   navigation_info->triggering_event_info = triggering_event_info;
   navigation_info->should_check_main_world_content_security_policy =
@@ -672,6 +669,8 @@ void LocalFrameClientImpl::BeginNavigation(
   navigation_info->blob_url_token = std::move(blob_url_token);
   navigation_info->input_start = input_start_time;
   navigation_info->actual_navigation_start = actual_navigation_start;
+  navigation_info->initiator_state_token = initiator_state_token;
+  navigation_info->initiator_document_token = initiator_document_token;
   navigation_info->initiator_frame_token =
       base::OptionalFromPtr(initiator_frame_token);
   navigation_info->initiator_navigation_state_keep_alive_handle =
@@ -697,8 +696,6 @@ void LocalFrameClientImpl::BeginNavigation(
     // |initiator_navigation_state_keep_alive_handle| if |origin_window| is not
     // set.
   }
-
-  navigation_info->impression = impression;
 
   // Can be null.
   LocalFrame* local_parent_frame = GetLocalParentFrame(web_frame_);
@@ -864,10 +861,14 @@ void LocalFrameClientImpl::DidObserveUserInteraction(
     base::TimeTicks max_event_processing_start,
     base::TimeTicks max_event_commit_finish,
     base::TimeTicks max_event_end,
-    uint64_t interaction_offset) {
-  web_frame_->Client()->DidObserveUserInteraction(
-      max_event_start, max_event_queued_main_thread, max_event_processing_start,
-      max_event_commit_finish, max_event_end, interaction_offset);
+    PerformanceTimelineEntryIdInfo interaction_id,
+    PerformanceTimelineEntryIdInfo navigation_id) {
+  if (web_frame_->Client()) {
+    web_frame_->Client()->DidObserveUserInteraction(
+        max_event_start, max_event_queued_main_thread,
+        max_event_processing_start, max_event_commit_finish, max_event_end,
+        interaction_id.non_web_exposed_id, navigation_id.non_web_exposed_id);
+  }
 }
 
 void LocalFrameClientImpl::DidChangeCpuTiming(base::TimeDelta time) {
@@ -910,15 +911,27 @@ void LocalFrameClientImpl::DidObserveSoftNavigation(
   }
 }
 
+void LocalFrameClientImpl::DidObserveSoftNavigationFirstContentfulPaint(
+    uint64_t performance_timeline_navigation_id,
+    base::TimeDelta first_contentful_paint) {
+  if (WebLocalFrameClient* client = web_frame_->Client()) {
+    client->DidObserveSoftNavigationFirstContentfulPaint(
+        performance_timeline_navigation_id, first_contentful_paint);
+  }
+}
+
 void LocalFrameClientImpl::DidObserveSoftLargestContentfulPaint(
     const LargestContentfulPaintDetailsForReporting& lcp) {
   web_frame_->Client()->DidObserveSoftLargestContentfulPaint(lcp);
 }
 
-void LocalFrameClientImpl::DidObserveLayoutShift(double score,
-                                                 bool after_input_or_scroll) {
+void LocalFrameClientImpl::DidObserveLayoutShift(
+    double score,
+    bool after_input_or_scroll,
+    PerformanceTimelineEntryIdInfo navigation_id) {
   if (WebLocalFrameClient* client = web_frame_->Client()) {
-    client->DidObserveLayoutShift(score, after_input_or_scroll);
+    client->DidObserveLayoutShift(score, after_input_or_scroll,
+                                  navigation_id.non_web_exposed_id);
   }
 }
 
@@ -985,13 +998,6 @@ LocalFrame* LocalFrameClientImpl::CreateFrame(
     const AtomicString& name,
     HTMLFrameOwnerElement* owner_element) {
   return web_frame_->CreateChildFrame(name, owner_element);
-}
-
-RemoteFrame* LocalFrameClientImpl::CreateFencedFrame(
-    HTMLFencedFrameElement* fenced_frame,
-    mojo::PendingAssociatedReceiver<mojom::blink::FencedFrameOwnerHost>
-        receiver) {
-  return web_frame_->CreateFencedFrame(fenced_frame, std::move(receiver));
 }
 
 WebPluginContainerImpl* LocalFrameClientImpl::CreatePlugin(
@@ -1273,6 +1279,10 @@ void LocalFrameClientImpl::BindDevToolsAgent(
 
 bool LocalFrameClientImpl::IsDomStorageDisabled() const {
   return web_frame_->Client()->IsDomStorageDisabled();
+}
+
+bool LocalFrameClientImpl::AreDedicatedWorkersDisabled() const {
+  return web_frame_->Client()->AreDedicatedWorkersDisabled();
 }
 
 bool LocalFrameClientImpl::IsForInitialWebUI() const {

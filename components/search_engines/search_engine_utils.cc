@@ -57,7 +57,7 @@ SearchEngineType GetEngineType(const GURL& url) {
   // Now check the rest of the prepopulate data.
   const auto& all_engines = regional_capabilities::GetAllPrepopulatedEngines();
 
-  auto it = std::ranges::find_if(all_engines, [&](const auto* engine) {
+  auto it = std::ranges::find_if(all_engines, [&](const auto& engine) {
     return HasSameDomainUrl(url, engine);
   });
   if (it == all_engines.end()) {
@@ -66,9 +66,21 @@ SearchEngineType GetEngineType(const GURL& url) {
 
   const PrepopulatedEngine* matched_engine = *it;
 
+  if (!matched_engine->migrate_to_id) {
+    return matched_engine->type;
+  }
+
   // Check whether the migration is needed.
-  if (!matched_engine->migrate_to_id ||
-      !base::FeatureList::IsEnabled(switches::kPrepopulatedEnginesMigration)) {
+  if (!base::FeatureList::IsEnabled(
+          switches::kApplySearchEngineTypeMigration)) {
+    // Consistency check: As prepopulated engine migration or shadow variants
+    // require search engine type migration to be enabled as well, we shouldn't
+    // have the case where one of them is enabled but not the type migration.
+
+    CHECK(!base::FeatureList::IsEnabled(
+              switches::kPrepopulatedEnginesMigration) &&
+              !switches::ArePrepopulatedEnginesShadowVariantsEnabled(),
+          base::NotFatalUntil::M159);
     return matched_engine->type;
   }
 
@@ -77,8 +89,7 @@ SearchEngineType GetEngineType(const GURL& url) {
       all_engines, matched_engine->migrate_to_id, &PrepopulatedEngine::id);
   // Enforced in data pipeline checks and on startup by a CHECK in
   // `regional_capabilities::ComputeMigratedEnginesMapping`
-  CHECK(found_migrated_engine_it != all_engines.end(),
-        base::NotFatalUntil::M149);
+  CHECK(found_migrated_engine_it != all_engines.end());
   return (*found_migrated_engine_it)->type;
 }
 

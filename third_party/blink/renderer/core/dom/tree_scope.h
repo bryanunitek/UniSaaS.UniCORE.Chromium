@@ -29,6 +29,7 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/tree_ordered_map.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_registry_assignment.h"
 #include "third_party/blink/renderer/core/html/forms/radio_button_group_scope.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
@@ -44,6 +45,7 @@ class CustomElementRegistry;
 class DomSelection;
 class Document;
 class Element;
+class Focusable;
 class HTMLMapElement;
 class HitTestRequest;
 class HitTestResult;
@@ -71,6 +73,7 @@ class CORE_EXPORT TreeScope : public GarbageCollectedMixin {
 
   // DocumentOrShadowRoot web-exposed:
   Element* activeElement() const;
+  Focusable* activeFocusable() const;
   StyleSheetList* styleSheets() { return &StyleSheets(); }
   V8ObservableArrayCSSStyleSheet* adoptedStyleSheets() {
     return &EnsureAdoptedStyleSheets();
@@ -88,8 +91,6 @@ class CORE_EXPORT TreeScope : public GarbageCollectedMixin {
   Element* pictureInPictureElement();
 
   TreeScope* ParentTreeScope() const { return parent_tree_scope_.Get(); }
-
-  bool IsInclusiveAncestorTreeScopeOf(const TreeScope&) const;
 
   // is_pseudo_allowed:
   // - if true, PseudoElement can be returned
@@ -183,6 +184,8 @@ class CORE_EXPORT TreeScope : public GarbageCollectedMixin {
   }
   V8ObservableArrayCSSStyleSheet& EnsureAdoptedStyleSheets();
   bool HasAdoptedStyleSheets() const;
+  void ReplaceAdoptedStyleSheet(CSSStyleSheet& old_sheet,
+                                CSSStyleSheet& new_sheet);
   void AppendAdoptedStyleSheets(HeapVector<Member<CSSStyleSheet>>&&);
   void SetAdoptedStyleSheetsForTesting(HeapVector<Member<CSSStyleSheet>>);
   void ClearAdoptedStyleSheets();
@@ -206,9 +209,9 @@ class CORE_EXPORT TreeScope : public GarbageCollectedMixin {
   // check.
   CustomElementRegistry* customElementRegistry(
       ScriptState* script_state = nullptr) const;
-  // Return true when custom element registry was set successfully, return false
-  // otherwise.
-  bool SetCustomElementRegistry(CustomElementRegistry*);
+  // Sets how this tree scope resolves its custom element registry
+  // Return true when it was set successfully, return false otherwise.
+  bool SetCustomElementRegistry(CustomElementRegistryAssignment);
 
   bool IsWaitingForScopedRegistry() const;
 
@@ -261,6 +264,9 @@ class CORE_EXPORT TreeScope : public GarbageCollectedMixin {
 
   Member<V8ObservableArrayCSSStyleSheet> adopted_style_sheets_;
 
+  // `CustomElementRegistryAssignment` is stack-allocated for transient
+  // assignment operations. TreeScope stores the equivalent persistent state as
+  // a traced registry pointer plus a waiting flag.
   Member<CustomElementRegistry> custom_element_registry_;
   // By default, TreeScope attempts to retrieve the global custom element
   // registry before it has been explicitly set. In cases where TreeScope is

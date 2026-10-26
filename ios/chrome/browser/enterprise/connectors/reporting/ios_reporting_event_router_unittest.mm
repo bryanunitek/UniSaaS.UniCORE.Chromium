@@ -42,6 +42,7 @@ using UrlInfo = ::chrome::cros::reporting::proto::UrlInfo;
 
 inline constexpr char kTestDmToken[] = "dm_token";
 inline constexpr char kTestClientId[] = "client_id";
+inline constexpr char kTabTitle[] = "tab_title";
 
 TriggeredRuleInfo MakeTriggeredRuleInfo(TriggeredRuleInfo::Action action,
                                         bool has_watermark) {
@@ -351,12 +352,13 @@ TEST_F(IOSReportingEventRouterTest, TestOnUrlFilteringInterstitial_Blocked) {
   *expected_event.add_triggered_rule_info() = MakeTriggeredRuleInfo(
       /*action=*/TriggeredRuleInfo::BLOCK, /*has_watermark=*/false);
   *expected_event.add_referrers() = test::MakeUrlInfoReferrer();
+  expected_event.set_tab_title(kTabTitle);
 
   test::EventReportValidatorBase validator(client_.get());
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
 
-    validator.ExpectProtoBasedUrlFilteringInterstitialEvent(expected_event);
+  validator.ExpectUrlFilteringInterstitialEvent(expected_event);
 
   safe_browsing::RTLookupResponse response;
   auto* threat_info = response.add_threat_info();
@@ -372,7 +374,7 @@ TEST_F(IOSReportingEventRouterTest, TestOnUrlFilteringInterstitial_Blocked) {
 
   reporting_event_router_->OnUrlFilteringInterstitial(
       GURL("https://filteredurl.com"), "ENTERPRISE_BLOCKED_SEEN", response,
-      referrer_chain);
+      referrer_chain, /*tab_title=*/kTabTitle);
   run_loop.Run();
 }
 
@@ -396,12 +398,13 @@ TEST_F(IOSReportingEventRouterTest, TestOnUrlFilteringInterstitial_Warned) {
   *expected_event.add_triggered_rule_info() = MakeTriggeredRuleInfo(
       /*action=*/TriggeredRuleInfo::WARN, /*has_watermark=*/false);
   *expected_event.add_referrers() = test::MakeUrlInfoReferrer();
+  expected_event.set_tab_title(kTabTitle);
 
   test::EventReportValidatorBase validator(client_.get());
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
 
-    validator.ExpectProtoBasedUrlFilteringInterstitialEvent(expected_event);
+  validator.ExpectUrlFilteringInterstitialEvent(expected_event);
 
   safe_browsing::RTLookupResponse response;
   auto* threat_info = response.add_threat_info();
@@ -417,7 +420,7 @@ TEST_F(IOSReportingEventRouterTest, TestOnUrlFilteringInterstitial_Warned) {
 
   reporting_event_router_->OnUrlFilteringInterstitial(
       GURL("https://filteredurl.com"), "ENTERPRISE_WARNED_SEEN", response,
-      referrer_chain);
+      referrer_chain, /*tab_title=*/kTabTitle);
   run_loop.Run();
 }
 
@@ -442,12 +445,13 @@ TEST_F(IOSReportingEventRouterTest, TestOnUrlFilteringInterstitial_Bypassed) {
   *expected_event.add_triggered_rule_info() = MakeTriggeredRuleInfo(
       /*action=*/TriggeredRuleInfo::WARN, /*has_watermark=*/false);
   *expected_event.add_referrers() = test::MakeUrlInfoReferrer();
+  expected_event.set_tab_title(kTabTitle);
 
   test::EventReportValidatorBase validator(client_.get());
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
 
-    validator.ExpectProtoBasedUrlFilteringInterstitialEvent(expected_event);
+  validator.ExpectUrlFilteringInterstitialEvent(expected_event);
 
   safe_browsing::RTLookupResponse response;
   auto* threat_info = response.add_threat_info();
@@ -463,7 +467,7 @@ TEST_F(IOSReportingEventRouterTest, TestOnUrlFilteringInterstitial_Bypassed) {
 
   reporting_event_router_->OnUrlFilteringInterstitial(
       GURL("https://filteredurl.com"), "ENTERPRISE_WARNED_BYPASS", response,
-      referrer_chain);
+      referrer_chain, /*tab_title=*/kTabTitle);
   run_loop.Run();
 }
 
@@ -486,12 +490,13 @@ TEST_F(IOSReportingEventRouterTest,
   *expected_event.add_triggered_rule_info() = MakeTriggeredRuleInfo(
       /*action=*/TriggeredRuleInfo::ACTION_UNKNOWN, /*has_watermark=*/false);
   *expected_event.add_referrers() = test::MakeUrlInfoReferrer();
+  expected_event.set_tab_title(kTabTitle);
 
   test::EventReportValidatorBase validator(client_.get());
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
 
-    validator.ExpectProtoBasedUrlFilteringInterstitialEvent(expected_event);
+  validator.ExpectUrlFilteringInterstitialEvent(expected_event);
 
   safe_browsing::RTLookupResponse response;
   auto* threat_info = response.add_threat_info();
@@ -504,7 +509,8 @@ TEST_F(IOSReportingEventRouterTest,
   referrer_chain.Add(test::MakeReferrerChainEntry());
 
   reporting_event_router_->OnUrlFilteringInterstitial(
-      GURL("https://filteredurl.com"), "", response, referrer_chain);
+      GURL("https://filteredurl.com"), "", response, referrer_chain,
+      /*tab_title=*/kTabTitle);
   run_loop.Run();
 }
 
@@ -531,13 +537,15 @@ TEST_F(IOSReportingEventRouterTest, TestInterstitialShownWarned) {
     expected_event.set_clicked_through(false);
     expected_event.set_net_error_code(0);
     expected_event.mutable_referrers()->Add(test::MakeUrlInfoReferrer());
+    expected_event.set_tab_title(kTabTitle);
 
     validator.ExpectSecurityInterstitialEvent(std::move(expected_event));
 
   ReferrerChain referrer_chain;
   referrer_chain.Add(test::MakeReferrerChainEntry());
   reporting_event_router_->OnSecurityInterstitialShown(
-      GURL("https://phishing.com/"), "PHISHING", 0, false, referrer_chain);
+      GURL("https://phishing.com/"), "PHISHING", 0, false, referrer_chain,
+      /*tab_title=*/kTabTitle);
   run_loop.Run();
 }
 
@@ -564,13 +572,15 @@ TEST_F(IOSReportingEventRouterTest, TestInterstitialShownBlocked) {
     expected_event.set_clicked_through(false);
     expected_event.set_net_error_code(0);
     expected_event.mutable_referrers()->Add(test::MakeUrlInfoReferrer());
+    expected_event.set_tab_title(kTabTitle);
 
     validator.ExpectSecurityInterstitialEvent(std::move(expected_event));
 
   ReferrerChain referrer_chain;
   referrer_chain.Add(test::MakeReferrerChainEntry());
   reporting_event_router_->OnSecurityInterstitialShown(
-      GURL("https://phishing.com/"), "PHISHING", 0, true, referrer_chain);
+      GURL("https://phishing.com/"), "PHISHING", 0, true, referrer_chain,
+      /*tab_title=*/kTabTitle);
   run_loop.Run();
 }
 
@@ -597,13 +607,15 @@ TEST_F(IOSReportingEventRouterTest, TestInterstitialProceeded) {
     expected_event.set_clicked_through(true);
     expected_event.set_net_error_code(0);
     expected_event.mutable_referrers()->Add(test::MakeUrlInfoReferrer());
+    expected_event.set_tab_title(kTabTitle);
 
     validator.ExpectSecurityInterstitialEvent(std::move(expected_event));
 
   ReferrerChain referrer_chain;
   referrer_chain.Add(test::MakeReferrerChainEntry());
   reporting_event_router_->OnSecurityInterstitialProceeded(
-      GURL("https://phishing.com/"), "PHISHING", 0, referrer_chain);
+      GURL("https://phishing.com/"), "PHISHING", 0, referrer_chain,
+      /*tab_title=*/kTabTitle);
   run_loop.Run();
 }
 
@@ -620,35 +632,33 @@ TEST_F(IOSReportingEventRouterTest, TestOnDataControlsSensitiveDataEvent) {
   validator.SetDoneClosure(run_loop.QuitClosure());
   chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
 
-    expected_event.set_url("https://example.com/");
-    expected_event.set_tab_url("https://example.com/");
-    expected_event.set_source("exampleSource");
-    expected_event.set_destination("exampleDestination");
-    expected_event.set_content_type("text/html");
-    expected_event.set_content_size(1234);
-    expected_event.set_trigger(
-        chrome::cros::reporting::proto::DataTransferEventTrigger::
-            WEB_CONTENT_UPLOAD);
-    expected_event.set_event_result(
-        chrome::cros::reporting::proto::EventResult::EVENT_RESULT_ALLOWED);
-    expected_event.set_web_app_signed_in_account("content_area_user@gmail.com");
-    expected_event.set_source_web_app_signed_in_account(
-        "active_user@gmail.com");
+  expected_event.set_url("https://example.com/");
+  expected_event.set_tab_url("https://example.com/");
+  expected_event.set_source("exampleSource");
+  expected_event.set_destination("exampleDestination");
+  expected_event.set_content_type("text/html");
+  expected_event.set_content_size(1234);
+  expected_event.set_trigger(chrome::cros::reporting::proto::
+                                 DataTransferEventTrigger::WEB_CONTENT_UPLOAD);
+  expected_event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_ALLOWED);
+  expected_event.set_web_app_signed_in_account("content_area_user@gmail.com");
+  expected_event.set_source_web_app_signed_in_account("active_user@gmail.com");
 
-    TriggeredRuleInfo triggered_rule;
-    triggered_rule.set_rule_id(1);
-    triggered_rule.set_rule_name("rule_1_name");
+  TriggeredRuleInfo triggered_rule;
+  triggered_rule.set_rule_id(1);
+  triggered_rule.set_rule_name("rule_1_name");
 
-    *expected_event.add_triggered_rule_info() = triggered_rule;
-    expected_event.set_profile_identifier(GetProfileIdentifier());
-    expected_event.set_profile_user_name(profile_->GetProfileName());
+  *expected_event.add_triggered_rule_info() = triggered_rule;
+  expected_event.set_profile_identifier(GetProfileIdentifier());
+  expected_event.set_profile_user_name(profile_->GetProfileName());
 
-    validator.ExpectSensitiveDataEvent(std::move(expected_event));
+  validator.ExpectSensitiveDataEvent(std::move(expected_event));
 
   reporting_event_router_->OnDataControlsSensitiveDataEvent(
       GURL("https://example.com/"), GURL("https://example.com/"),
       "exampleSource", "exampleDestination", "text/html",
-      enterprise_connectors::kWebContentUploadDataTransferEventTrigger,
+      enterprise_connectors::DataTransferEventTrigger::WEB_CONTENT_UPLOAD,
       "active_user@gmail.com", "content_area_user@gmail.com", triggered_rules,
       enterprise_connectors::EventResult::ALLOWED, 1234);
   run_loop.Run();

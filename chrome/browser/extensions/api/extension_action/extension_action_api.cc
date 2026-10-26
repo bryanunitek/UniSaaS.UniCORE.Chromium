@@ -17,6 +17,7 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/extensions/browser_window_util.h"
 #include "chrome/browser/extensions/extension_action_dispatcher.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
@@ -28,6 +29,7 @@
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/common/color_parser.h"
+#include "extensions/browser/api/constants.h"
 #include "extensions/browser/api/declarative_net_request/constants.h"
 #include "extensions/browser/api/declarative_net_request/prefs_helper.h"
 #include "extensions/browser/api/declarative_net_request/utils.h"
@@ -51,8 +53,8 @@
 #include "url/origin.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 using content::WebContents;
@@ -65,7 +67,6 @@ namespace {
 // Errors.
 const char kNoExtensionActionError[] =
     "This extension has no action specified.";
-const char kNoTabError[] = "No tab with id: *.";
 constexpr char kOpenPopupError[] =
     "Failed to show popup either because there is an existing popup or another "
     "error occurred.";
@@ -78,6 +79,8 @@ constexpr char kOpenPopupInactiveWindow[] =
     "Cannot show popup for an inactive window. To show the popup for this "
     "window, first call `chrome.windows.update` with `focused` set to "
     "true.";
+constexpr char kSetBadgeMaximumSizeError[] =
+    "Badge text size is %u bytes which exceeds the limit of %u bytes.";
 
 bool g_report_error_for_invisible_icon = false;
 
@@ -124,7 +127,7 @@ bool HasPopupOnActiveTab(BrowserWindowInterface& browser,
   ExtensionAction* extension_action =
       ExtensionActionManager::Get(browser_context)
           ->GetExtensionAction(extension);
-  DCHECK(extension_action);
+  CHECK(extension_action, base::NotFatalUntil::M161);
   int tab_id = ExtensionTabUtil::GetTabId(web_contents);
 
   return extension_action->HasPopup(tab_id) &&
@@ -142,9 +145,8 @@ bool OpenPopupInBrowser(BrowserWindowInterface& browser,
   // exists, so the check below is sufficient.
   // On other platforms, ExtensionsContainer is always constructed except for
   // guest sessions, so we need more detailed checks.
-  Browser& browser_legacy = *browser.GetBrowserForMigrationOnly();
-  if (!browser_legacy.SupportsWindowFeature(
-          Browser::WindowFeature::kFeatureToolbar) ||
+  if (!WindowFeatureController::From(&browser)->SupportsWindowFeature(
+          WindowFeatureController::WindowFeature::kFeatureToolbar) ||
       !BrowserWindow::FromBrowser(&browser)->IsToolbarVisible()) {
     *error = "Browser window has no toolbar.";
     return false;
@@ -199,7 +201,8 @@ ExtensionFunction::ResponseAction ExtensionActionFunction::Run() {
                                  include_incognito_information(),
                                  &contents_out_param);
     if (!contents_out_param) {
-      return RespondNow(Error(kNoTabError, base::NumberToString(tab_id_)));
+      return RespondNow(
+          Error(kTabNotFoundError, base::NumberToString(tab_id_)));
     }
     contents_ = contents_out_param;
   } else {
@@ -360,7 +363,7 @@ ExtensionActionSetPopupFunction::RunExtensionAction() {
   // one is specified in the manifest).
   if (!popup_string->empty()) {
     popup_url = extension()->ResolveExtensionURL(*popup_string);
-    if (!popup_url.is_valid()) {
+    if (!popup_url.is_valid() || !popup_url.SchemeIs(kExtensionScheme)) {
       return RespondNow(Error(manifest_errors::kInvalidExtensionPopupPath));
     }
   }
@@ -375,17 +378,18 @@ ExtensionActionSetBadgeTextFunction::RunExtensionAction() {
   EXTENSION_FUNCTION_VALIDATE(details_);
 
   const std::string* badge_text = details_->FindString("text");
+
   if (badge_text) {
+    // The maximum size (in bytes) for values passed to action.setBadgeText().
+    constexpr size_t kMaxBadgeTextSize = 100;
+    if (badge_text->length() > kMaxBadgeTextSize) {
+      return RespondNow(Error(base::StringPrintf(
+          kSetBadgeMaximumSizeError, badge_text->length(), kMaxBadgeTextSize)));
+    }
     extension_action_->SetBadgeText(tab_id_, *badge_text);
   } else {
     extension_action_->ClearBadgeText(tab_id_);
   }
-
-  // Log badge text length to determine future length limit.
-  // TODO(crbug.com/491158086): After determining suitable length limit, remove
-  // histogram and add special case handling of excessively long badges.
-  base::UmaHistogramCounts1000("Extensions.Action.SetBadgeTextLength",
-                               badge_text ? badge_text->length() : 0);
 
   NotifyChange();
   return RespondNow(NoArguments());
@@ -483,7 +487,7 @@ ActionGetUserSettingsFunction::ActionGetUserSettingsFunction() = default;
 ActionGetUserSettingsFunction::~ActionGetUserSettingsFunction() = default;
 
 ExtensionFunction::ResponseAction ActionGetUserSettingsFunction::Run() {
-  DCHECK(extension());
+  CHECK(extension(), base::NotFatalUntil::M161);
   ExtensionActionManager* const action_manager =
       ExtensionActionManager::Get(browser_context());
   ExtensionAction* const action =
@@ -491,8 +495,9 @@ ExtensionFunction::ResponseAction ActionGetUserSettingsFunction::Run() {
 
   // This API is only available to extensions with the "action" key in the
   // manifest, so they should always have an action.
-  DCHECK(action);
-  DCHECK_EQ(ActionInfo::Type::kAction, action->action_type());
+  CHECK(action, base::NotFatalUntil::M161);
+  CHECK_EQ(ActionInfo::Type::kAction, action->action_type(),
+           base::NotFatalUntil::M161);
 
   const bool is_pinned =
       ToolbarActionsModel::Get(Profile::FromBrowserContext(browser_context()))
@@ -533,24 +538,28 @@ ExtensionFunction::ResponseAction ActionOpenPopupFunction::Run() {
 
   BrowserWindowInterface* browser = nullptr;
   Profile* profile = Profile::FromBrowserContext(browser_context());
-  std::string error;
   if (window_id == extension_misc::kCurrentWindowId) {
     browser =
         FindActiveBrowserWindow(*profile, include_incognito_information());
     if (!browser) {
-      error = kNoActiveWindowFound;
+      return RespondNow(Error(kNoActiveWindowFound));
     }
   } else {
-    if (WindowController* controller =
-            ExtensionTabUtil::GetControllerInProfileWithId(
-                profile, window_id, include_incognito_information(), &error)) {
-      browser = controller->GetBrowserWindowInterface();
+    std::string error;
+    WindowController* controller =
+        ExtensionTabUtil::GetControllerInProfileWithId(
+            profile, window_id, include_incognito_information(), &error);
+    if (!controller) {
+      return RespondNow(Error(std::move(error)));
     }
-  }
-
-  if (!browser) {
-    DCHECK(!error.empty());
-    return RespondNow(Error(std::move(error)));
+    browser = controller->GetBrowserWindowInterface();
+    if (!browser) {
+      // The window exists but isn't a browser window, so it can't host a popup.
+      // TODO(crbug.com/571684513): Update this error to be more specific on
+      // the actual nature of the failure condition, a window was found but it
+      // does not support this operation.
+      return RespondNow(Error(kNoActiveWindowFound));
+    }
   }
 
   if (!browser->GetWindow()->IsActive()) {
@@ -561,11 +570,12 @@ ExtensionFunction::ResponseAction ActionOpenPopupFunction::Run() {
     return RespondNow(Error(kNoActivePopup));
   }
 
+  std::string error;
   if (!OpenPopupInBrowser(
           *browser, *extension(), &error,
           base::BindOnce(&ActionOpenPopupFunction::OnShowPopupComplete,
                          this))) {
-    DCHECK(!error.empty());
+    CHECK(!error.empty(), base::NotFatalUntil::M161);
     return RespondNow(Error(std::move(error)));
   }
 
@@ -575,12 +585,12 @@ ExtensionFunction::ResponseAction ActionOpenPopupFunction::Run() {
 }
 
 void ActionOpenPopupFunction::OnShowPopupComplete(ExtensionHost* popup_host) {
-  DCHECK(!did_respond());
+  CHECK(!did_respond(), base::NotFatalUntil::M161);
 
   if (popup_host) {
     // TODO(crbug.com/40057101): Return the tab for which the extension
     // popup was shown?
-    DCHECK(popup_host->document_element_available());
+    CHECK(popup_host->document_element_available(), base::NotFatalUntil::M161);
     Respond(NoArguments());
   } else {
     // NOTE(devlin): We could have the callback pass more information here about
@@ -612,7 +622,7 @@ ExtensionFunction::ResponseAction BrowserActionOpenPopupFunction::Run() {
   std::string error;
   if (!OpenPopupInBrowser(*browser, *extension(), &error,
                           ShowPopupCallback())) {
-    DCHECK(!error.empty());
+    CHECK(!error.empty(), base::NotFatalUntil::M161);
     return RespondNow(Error(std::move(error)));
   }
 

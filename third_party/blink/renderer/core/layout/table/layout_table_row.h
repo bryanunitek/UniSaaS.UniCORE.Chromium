@@ -46,12 +46,14 @@ class CORE_EXPORT LayoutTableRow : public LayoutBlock {
 
   void StyleDidChange(StyleDifference diff,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
 
+  LayoutBlock* CreateAnonymousChild() const override;
   LayoutBox* CreateAnonymousBoxWithSameTypeAs(
       const LayoutObject* parent) const override;
 
-  LayoutBlock* StickyContainer() const override;
+  LayoutBox* StickyContainer() const override;
 
   // Whether a row has opaque background depends on many factors, e.g. border
   // spacing, border collapsing, missing cells, etc.
@@ -84,9 +86,6 @@ class CORE_EXPORT LayoutTableRow : public LayoutBlock {
   unsigned RowIndex() const;
 
  private:
-  void AddChildBeforeDescendant(LayoutObject* new_child,
-                                LayoutObject* before_descendant);
-
   bool IsTableRow() const final {
     NOT_DESTROYED();
     return true;
@@ -100,6 +99,11 @@ class CORE_EXPORT LayoutTableRow : public LayoutBlock {
   bool IsEligibleForSizeContainment() const final {
     NOT_DESTROYED();
     return false;
+  }
+
+  bool CanBeDirectChild(const LayoutObject& child) const override {
+    NOT_DESTROYED();
+    return child.IsTableCell();
   }
 
   bool CanMergeWith(const LayoutBoxModelObject& other) const override {

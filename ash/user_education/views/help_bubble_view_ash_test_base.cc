@@ -19,7 +19,7 @@
 #include "components/user_education/views/help_bubble_view_info.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
@@ -123,7 +123,8 @@ void HelpBubbleViewAshTestBase::SetUp() {
   widget_->Init(std::move(params));
 
   // Give the `widget_` color so that it stands out in benchmark images.
-  widget_->GetLayer()->SetColor(gfx::kPlaceholderColor);
+  widget_->GetLayer()->AsSolidColor()->SetColor(
+      SkColor4f::FromColor(gfx::kPlaceholderColor));
 
   // Center the `widget_` so that we can confirm various anchoring strategies
   // are working as intended.

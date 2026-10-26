@@ -101,9 +101,13 @@ generally lower priority. Examples include:
   are enforced via Site Isolation), typically allowing CSRF-like attacks but not
   direct access to the cookies.
 * **Cross-Origin Information Leaks (No Direct Read):** Side channels or limited
-  leaks (e.g., sniffing cross-origin layout or detecting whether a cross-origin
-  resource is cached) that do not allow direct reading of sensitive cross-site
-  data.
+  leaks that do not allow direct reading of sensitive cross-site data. Some
+  examples include:
+  * Sniffing cross-origin layout.
+  * Detecting whether a cross-origin resource is cached.
+  * Knowledge of an `UnguessableToken` the origin should not have access to,
+    such as a `RemoteFrameToken` meant for a different process, or a
+   `LocalFrameToken` sent to a process that doesn't host that frame.
 * **UI Spoofing via Unvalidated IPCs:** A compromised renderer supplying
   unvalidated strings via IPC to manipulate native browser UI. While spoofing
   the Omnibox or permission prompts is severe, spoofing on surfaces that aren't
@@ -149,6 +153,36 @@ functional bugs (unless a broader boundary is broken):
 * **Safe Browsing:** Safe Browsing is not designed to be protected against a
   compromised renderer process; we can assume that Safe Browsing already failed
   to do its job if a renderer process is compromised.
+* **TLS Certificate Error:** If the user encounters a TLS certificate error
+  interstitial and allows the page load to move forward, it is generally
+  permissable for the HTTP Headers or JavaScript of that page to cause writes
+  (i.e., Set-Cookie, document.cookie, Clear-Site-Data, Accept-CH, localStorage).
+  Data not directly manageable by the origin va HTTP Headers or JavaScript may
+  be withheld due to sensitivity (i.e., passwords or autofill) or to prevent
+  caching of insecure resources (i.e., HTTP Cache), and is still in-scope.
+* **Storage Access API Revocation:** In most cases when access to a permission
+  is revoked, the renderer should be cut-off from the protected resource without
+  requiring a page navigation. The Storage Access API (SAA) is an exception to
+  this as downgrading the storage access of a page between navigations is not
+  supported. Thus, if a document successfully obtains SAA access and then loses
+  it, the document (and workers that descend from that document) may retain
+  access to unpartitioned storage and third-party cookies via JavaScript, but
+  network requests from the document (or workers) must reflect the revoked
+  permission.
+* **Client Hints (`Accept-CH` / `Critical-CH`):** Client Hints and their
+  persistence (`ContentSettingsType::CLIENT_HINTS`) are a content-negotiation
+  and privacy mechanism, not a process-isolated security boundary. High-entropy
+  client hints expose device and user-agent properties that are already
+  accessible to active scripts via JavaScript APIs (e.g.,
+  `navigator.userAgentData.getHighEntropyValues()`), and any site can already
+  trigger `Accept-CH` persistence for a third-party origin via a top-level
+  redirect. Additionally, Client Hints intentionally propagate main-frame
+  context and policies (`main_frame_origin`, `is_outermost_main_frame`, and
+  `PermissionsPolicy`) to subframes, subresources, preloads, and network-service
+  interceptors. Issues where preloading, prefetching, or subresource fetches
+  persist or inherit `Accept-CH` state should be filed as functional bugs rather
+  than security vulnerabilities.
+
 
 ## Mitigating Factors
 

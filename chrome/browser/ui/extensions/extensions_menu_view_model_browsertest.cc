@@ -5,9 +5,15 @@
 #include "chrome/browser/ui/extensions/extensions_menu_view_model.h"
 
 #include <string>
+#include <string_view>
 
+#include "base/files/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/test/allow_check_is_test_for_testing.h"
 #include "base/test/metrics/user_action_tester.h"
+#include "base/threading/thread_restrictions.h"
+#include "base/values.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
@@ -20,6 +26,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/host_access_request_helper.h"
@@ -27,12 +34,15 @@
 #include "extensions/browser/permissions/scripting_permissions_modifier.h"
 #include "extensions/browser/permissions/site_permissions_helper.h"
 #include "extensions/browser/permissions_manager.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/test/permissions_manager_waiter.h"
 #include "extensions/test/test_extension_dir.h"
+#include "net/base/filename_util.h"
 #include "net/dns/mock_host_resolver.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -70,7 +80,15 @@ class TestExtensionsMenuDelegate : public ExtensionsMenuViewModel::Delegate {
       : browser_(browser) {}
   ~TestExtensionsMenuDelegate() override = default;
 
+  void SetActiveWebContents(content::WebContents* web_contents) {
+    web_contents_ = web_contents;
+  }
+
   // ExtensionsMenuViewModel::Delegate:
+  content::WebContents* GetActiveWebContents() const override {
+    return web_contents_;
+  }
+
   std::unique_ptr<ExtensionActionViewModel> CreateActionViewModel(
       const extensions::ExtensionId& extension_id) override {
     return ExtensionActionViewModel::Create(
@@ -80,6 +98,7 @@ class TestExtensionsMenuDelegate : public ExtensionsMenuViewModel::Delegate {
 
  private:
   raw_ptr<BrowserWindowInterface> browser_;
+  raw_ptr<content::WebContents> web_contents_ = nullptr;
 };
 
 }  // namespace
@@ -124,6 +143,12 @@ class ExtensionsMenuViewModelBrowserTest
   // Navigates the active web contents to a URL on `host_name`.
   void NavigateTo(std::string_view host_name);
 
+  // Writes a test page into a temporary directory owned by this fixture and
+  // returns its file:// URL with `suffix` appended (e.g. "#section" or
+  // "?foo=bar"). The temporary directory outlives the call, so the file
+  // remains readable for the duration of the test.
+  GURL CreateTempFileUrl(std::string_view suffix);
+
   ExtensionsMenuViewModel* menu_model() { return menu_model_.get(); }
   SitePermissionsHelper* permissions_helper() {
     return permissions_helper_.get();
@@ -135,6 +160,7 @@ class ExtensionsMenuViewModelBrowserTest
   void TearDownOnMainThread() override;
 
  private:
+  base::ScopedTempDir temp_dir_;
   std::unique_ptr<TestExtensionsMenuDelegate> menu_delegate_;
   std::unique_ptr<ExtensionsMenuViewModel> menu_model_;
   std::unique_ptr<SitePermissionsHelper> permissions_helper_;
@@ -202,6 +228,24 @@ void ExtensionsMenuViewModelBrowserTest::NavigateTo(
     std::string_view host_name) {
   const GURL url = embedded_test_server()->GetURL(host_name, "/simple.html");
   ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), url));
+}
+
+GURL ExtensionsMenuViewModelBrowserTest::CreateTempFileUrl(
+    std::string_view suffix) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  if (!temp_dir_.IsValid()) {
+    CHECK(temp_dir_.CreateUniqueTempDir());
+  }
+
+  constexpr char kTestHtml[] = "<html>test</html>";
+
+  const base::FilePath file_path =
+      temp_dir_.GetPath().Append(FILE_PATH_LITERAL("page.html"));
+
+  CHECK(base::WriteFile(file_path, kTestHtml));
+
+  return GURL(net::FilePathToFileURL(file_path).spec() + std::string(suffix));
 }
 
 void ExtensionsMenuViewModelBrowserTest::SetUpOnMainThread() {
@@ -370,6 +414,47 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   // Verify that site access was NOT granted because the origin changed.
   // On the new site (other.com), interaction should be kNone since it didn't
   // request it.
+  EXPECT_EQ(permissions_helper()->GetSiteInteraction(*extension, web_contents),
+            SitePermissionsHelper::SiteInteraction::kNone);
+
+  // And site access for example.com should still be kOnClick (withheld).
+  EXPECT_EQ(permissions_manager()->GetUserSiteAccess(*extension, urlA),
+            PermissionsManager::UserSiteAccess::kOnClick);
+}
+
+// Tests that the extensions menu view model fails to update site access if the
+// origin changes.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       UpdateSiteAccess_FailsIfOriginChanges) {
+  // Add extension that requests host permissions and withheld site access.
+  scoped_refptr<const extensions::Extension> extension =
+      AddExtensionWithHostPermission("Extension", "*://example.com/*");
+  extensions::ScriptingPermissionsModifier modifier(profile(), extension);
+  modifier.SetWithholdHostPermissions(true);
+
+  // Navigate to a site the extension requested access to.
+  const GURL urlA =
+      embedded_test_server()->GetURL("example.com", "/simple.html");
+  ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), urlA));
+  content::WebContents* web_contents = GetActiveWebContents();
+  auto originA = web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin();
+
+  // Verify site interaction and site access are withheld.
+  EXPECT_EQ(permissions_helper()->GetSiteInteraction(*extension, web_contents),
+            SitePermissionsHelper::SiteInteraction::kWithheld);
+  EXPECT_EQ(permissions_manager()->GetUserSiteAccess(
+                *extension, web_contents->GetLastCommittedURL()),
+            PermissionsManager::UserSiteAccess::kOnClick);
+
+  // Simulate navigation to another site before user clicks.
+  const GURL urlB = embedded_test_server()->GetURL("other.com", "/simple.html");
+  ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), urlB));
+
+  // Try to update site access using the previous origin.
+  menu_model()->UpdateSiteAccess(extension->id(), originA,
+                                 PermissionsManager::UserSiteAccess::kOnSite);
+
+  // Verify that site access was NOT granted because the origin changed.
   EXPECT_EQ(permissions_helper()->GetSiteInteraction(*extension, web_contents),
             SitePermissionsHelper::SiteInteraction::kNone);
 
@@ -1478,4 +1563,275 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   requests = menu_model()->host_access_requests();
   ASSERT_EQ(1u, requests.size());
   EXPECT_EQ(extension_C->id(), requests[0]);
+}
+
+// Tests that disabling multiple extensions updates the menu model action
+// models.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       RemoveMultipleExtensions) {
+  auto extension_A = AddExtension("Extension A");
+  auto extension_B = AddExtension("Extension B");
+
+  ASSERT_EQ(2u, menu_model()->action_models().size());
+
+  extension_registrar()->DisableExtension(
+      extension_A->id(), {extensions::disable_reason::DISABLE_USER_ACTION});
+  extension_registrar()->DisableExtension(
+      extension_B->id(), {extensions::disable_reason::DISABLE_USER_ACTION});
+
+  EXPECT_TRUE(menu_model()->action_models().empty());
+}
+
+// Tests that triggering an extension requiring reload updates
+// PageNeedsRefresh state.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       ActivateWithReload_PageNeedsRefresh) {
+  scoped_refptr<const extensions::Extension> extension =
+      extensions::ExtensionBuilder("Extension")
+          .AddHostPermissions({"<all_urls>"})
+          .SetManifestKey(
+              "content_scripts",
+              base::ListValue().Append(
+                  base::DictValue()
+                      .Set("matches", base::ListValue().Append("<all_urls>"))
+                      .Set("run_at", "document_start")
+                      .Set("js", base::ListValue().Append("script.js"))))
+          .SetID(crx_file::id_util::GenerateId("Extension"))
+          .Build();
+  extension_registrar()->AddExtension(extension.get());
+
+  extensions::ScriptingPermissionsModifier(profile(), extension)
+      .SetWithholdHostPermissions(true);
+
+  NavigateTo("example.com");
+  content::WebContents* web_contents = GetActiveWebContents();
+
+  extensions::ExtensionActionRunner* action_runner =
+      extensions::ExtensionActionRunner::GetForWebContents(web_contents);
+  EXPECT_TRUE(action_runner->WantsToRun(extension.get()));
+
+  // A refresh should be needed in order to run the actions and inject the
+  // content script.
+  EXPECT_TRUE(permissions_helper()->PageNeedsRefreshToRun(
+      action_runner->GetBlockedActions(extension->id())));
+}
+
+// Tests that GetSiteSettingsState strips '#' fragment from file:// URLs.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       GetSiteSettingsState_FileUrl_StripFragment) {
+#if BUILDFLAG(IS_ANDROID)
+  GTEST_SKIP() << "file:// navigation unsupported on Android browsertests";
+#else
+  AddExtensionWithHostPermission("Extension", "<all_urls>");
+
+  const GURL url = CreateTempFileUrl("#section");
+  ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), url));
+
+  ExtensionsMenuViewModel::SiteSettingsState state =
+      menu_model()->GetSiteSettingsState();
+  // Label should contain full file path including .html, without '#section'.
+  EXPECT_TRUE(state.label.find(u"page.html") != std::u16string::npos);
+  EXPECT_EQ(state.label.find(u'#'), std::u16string::npos);
+#endif
+}
+
+// Tests that GetSiteSettingsState strips '?' query from file:// URLs.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       GetSiteSettingsState_FileUrl_StripQuery) {
+#if BUILDFLAG(IS_ANDROID)
+  GTEST_SKIP() << "file:// navigation unsupported on Android browsertests";
+#else
+  AddExtensionWithHostPermission("Extension", "<all_urls>");
+
+  const GURL url = CreateTempFileUrl("?foo=bar");
+  ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), url));
+
+  ExtensionsMenuViewModel::SiteSettingsState state =
+      menu_model()->GetSiteSettingsState();
+  // Label should contain full file path including .html, without '?foo=bar'.
+  EXPECT_TRUE(state.label.find(u"page.html") != std::u16string::npos);
+  EXPECT_EQ(state.label.find(u'?'), std::u16string::npos);
+#endif
+}
+
+// Tests that GetSiteSettingsState does not modify a clean file:// URL.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       GetSiteSettingsState_FileUrl_Clean) {
+#if BUILDFLAG(IS_ANDROID)
+  GTEST_SKIP() << "file:// navigation unsupported on Android browsertests";
+#else
+  AddExtensionWithHostPermission("Extension", "<all_urls>");
+
+  const GURL url = CreateTempFileUrl(/*suffix=*/"");
+  ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), url));
+
+  ExtensionsMenuViewModel::SiteSettingsState state =
+      menu_model()->GetSiteSettingsState();
+  // Label should remain unchanged — no #, no ?
+  EXPECT_TRUE(state.label.find(u"page.html") != std::u16string::npos);
+  EXPECT_EQ(state.label.find(u'?'), std::u16string::npos);
+  EXPECT_EQ(state.label.find(u'#'), std::u16string::npos);
+#endif
+}
+
+// Tests that executing an extension action when host permissions are withheld
+// grants active tab permission, clears the host access request from the model,
+// and updates the optional section.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       SiteAccessToggle_RunAction) {
+  auto cooldown_reset =
+      extensions::HostAccessRequestsHelper::SetCooldownForTesting(
+          base::TimeDelta());
+
+  auto extension = AddExtensionWithHostPermission("Extension", "<all_urls>");
+  extensions::ScriptingPermissionsModifier(profile(), extension)
+      .SetWithholdHostPermissions(true);
+
+  NavigateTo("a.com");
+  content::WebContents* web_contents = GetActiveWebContents();
+  const GURL urlA = web_contents->GetLastCommittedURL();
+  int tab_id = extensions::ExtensionTabUtil::GetTabId(web_contents);
+
+  // Add a site access request for the extension.
+  permissions_manager()->AddHostAccessRequest(web_contents, tab_id, *extension);
+
+  // Verify initial state:
+  // - site access setting is kCustomizeByExtension and user site access is
+  // kOnClick
+  // - host access request is present in model
+  // - optional section is kHostAccessRequests
+  EXPECT_EQ(
+      permissions_manager()->GetUserSiteSetting(url::Origin::Create(urlA)),
+      PermissionsManager::UserSiteSetting::kCustomizeByExtension);
+  EXPECT_EQ(permissions_manager()->GetUserSiteAccess(*extension.get(), urlA),
+            PermissionsManager::UserSiteAccess::kOnClick);
+  EXPECT_THAT(menu_model()->host_access_requests(),
+              testing::ElementsAre(extension->id()));
+  EXPECT_EQ(menu_model()->GetOptionalSection(),
+            ExtensionsMenuViewModel::OptionalSection::kHostAccessRequests);
+
+  // Execute extension action.
+  extensions::PermissionsManagerWaiter waiter(permissions_manager());
+  menu_model()->ExecuteAction(extension->id());
+  waiter.WaitForActiveTabPermissionGranted(extension->id());
+
+  // After running action and granting site access:
+  // - host access requests section in model is empty
+  // - optional section type is kHostAccessRequests (and requests list is empty)
+  EXPECT_TRUE(menu_model()->host_access_requests().empty());
+  EXPECT_EQ(menu_model()->GetOptionalSection(),
+            ExtensionsMenuViewModel::OptionalSection::kHostAccessRequests);
+
+  // Navigate to another domain and then back to a.com.
+  NavigateTo("b.com");
+  NavigateTo("a.com");
+
+  // After cross-origin navigation:
+  // - user site access is back to kOnClick
+  // - host access requests section is empty
+  EXPECT_EQ(permissions_manager()->GetUserSiteAccess(*extension.get(), urlA),
+            PermissionsManager::UserSiteAccess::kOnClick);
+  EXPECT_TRUE(menu_model()->host_access_requests().empty());
+}
+
+// Verifies host access requests added/removed on an inactive tab do not alter
+// the host access requests in the active tab's view model.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       HostAccessRequestsForMultipleTabs) {
+  auto cooldown_reset =
+      extensions::HostAccessRequestsHelper::SetCooldownForTesting(
+          base::TimeDelta());
+
+  auto extension_A =
+      AddExtensionWithHostPermission("Extension A", "<all_urls>");
+  auto extension_B =
+      AddExtensionWithHostPermission("Extension B", "<all_urls>");
+  extensions::ScriptingPermissionsModifier(profile(), extension_A)
+      .SetWithholdHostPermissions(true);
+  extensions::ScriptingPermissionsModifier(profile(), extension_B)
+      .SetWithholdHostPermissions(true);
+
+  NavigateTo("first.com");
+  content::WebContents* tab1_contents = GetActiveWebContents();
+  int tab1_id = extensions::ExtensionTabUtil::GetTabId(tab1_contents);
+
+  // Create a second WebContents representing an inactive tab.
+  std::unique_ptr<content::WebContents> tab2_contents =
+      content::WebContents::Create(
+          content::WebContents::CreateParams(profile()));
+  int tab2_id = extensions::ExtensionTabUtil::GetTabId(tab2_contents.get());
+
+  // Initially active tab tab1 has no host access requests.
+  EXPECT_TRUE(menu_model()->host_access_requests().empty());
+
+  // Add host access request for Extension A on tab1 (active tab).
+  permissions_manager()->AddHostAccessRequest(tab1_contents, tab1_id,
+                                              *extension_A);
+  EXPECT_THAT(menu_model()->host_access_requests(),
+              testing::ElementsAre(extension_A->id()));
+
+  // Add host access request for Extension B on tab2 (inactive tab).
+  // Model for active tab should still only contain Extension A.
+  permissions_manager()->AddHostAccessRequest(tab2_contents.get(), tab2_id,
+                                              *extension_B);
+  EXPECT_THAT(menu_model()->host_access_requests(),
+              testing::ElementsAre(extension_A->id()));
+
+  // Add host access request for Extension A on tab2 (inactive tab).
+  // Model for active tab should still only contain Extension A.
+  permissions_manager()->AddHostAccessRequest(tab2_contents.get(), tab2_id,
+                                              *extension_A);
+  EXPECT_THAT(menu_model()->host_access_requests(),
+              testing::ElementsAre(extension_A->id()));
+
+  // Remove request for Extension A on tab2 (inactive tab).
+  // Model for active tab should still retain Extension A.
+  permissions_manager()->RemoveHostAccessRequest(tab2_id, extension_A->id());
+  EXPECT_THAT(menu_model()->host_access_requests(),
+              testing::ElementsAre(extension_A->id()));
+}
+
+// Tests that an ExtensionsMenuViewModel can be explicitly scoped to a custom
+// WebContents instead of defaulting to the active tab.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       ScopedToCustomWebContents) {
+  auto extension = AddExtensionWithHostPermission("Extension", "<all_urls>");
+  extensions::ScriptingPermissionsModifier(profile(), extension)
+      .SetWithholdHostPermissions(true);
+
+  NavigateTo("active-tab.com");
+  content::WebContents* active_tab = GetActiveWebContents();
+
+  std::unique_ptr<content::WebContents> custom_contents =
+      content::WebContents::Create(
+          content::WebContents::CreateParams(profile()));
+  const GURL custom_url =
+      embedded_test_server()->GetURL("custom-site.com", "/simple.html");
+  ASSERT_TRUE(NavigateToURL(custom_contents.get(), custom_url));
+
+  TestExtensionsMenuDelegate custom_menu_delegate(browser_window_interface());
+  custom_menu_delegate.SetActiveWebContents(custom_contents.get());
+  auto custom_menu_model = std::make_unique<ExtensionsMenuViewModel>(
+      browser_window_interface(), &custom_menu_delegate);
+
+  EXPECT_EQ(custom_menu_model->GetActiveWebContents(), custom_contents.get());
+  EXPECT_EQ(menu_model()->GetActiveWebContents(), active_tab);
+
+  // Check that site permissions state reflects the custom web contents origin.
+  auto custom_permissions_state =
+      custom_menu_model->GetExtensionSitePermissionsState(extension->id(),
+                                                          gfx::Size(20, 20));
+  EXPECT_EQ(custom_permissions_state.origin,
+            custom_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
+  EXPECT_NE(custom_permissions_state.origin,
+            active_tab->GetPrimaryMainFrame()->GetLastCommittedOrigin());
+
+  // Navigating the active tab should not affect the custom_menu_model.
+  NavigateTo("another-active-tab.com");
+  EXPECT_EQ(custom_menu_model->GetActiveWebContents(), custom_contents.get());
+  EXPECT_EQ(
+      custom_menu_model
+          ->GetExtensionSitePermissionsState(extension->id(), gfx::Size(20, 20))
+          .origin,
+      custom_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
 }

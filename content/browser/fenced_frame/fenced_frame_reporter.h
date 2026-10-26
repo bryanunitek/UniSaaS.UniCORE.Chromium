@@ -20,21 +20,17 @@
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/types/pass_key.h"
-#include "content/browser/attribution_reporting/attribution_beacon_id.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/privacy_sandbox_invoking_api.h"
 #include "content/public/browser/render_frame_host.h"
-#include "content/services/auction_worklet/public/mojom/private_aggregation_request.mojom.h"
 #include "net/url_request/referrer_policy.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "services/network/public/mojom/attribution.mojom-forward.h"
 #include "third_party/blink/public/common/fenced_frame/redacted_fenced_frame_config.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
 namespace content {
 
-class AttributionManager;
 class BrowserContext;
 class RenderFrameHostImpl;
 
@@ -106,8 +102,8 @@ class CONTENT_EXPORT FencedFrameReporter
   //
   // `url_loader_factory` is used to send all reports, and must not be null.
   //
-  // `browser_context` is used to help notify Attribution Reporting API
-  // for the beacons, and to check attestations before sending out the beacons.
+  // `browser_context` is used to check attestations before sending out the
+  // beacons.
   //
   // `reporting_url_declarer_origin` is used to set the request initiator on
   // outgoing beacon network requests. The initiator is the entity that chose
@@ -122,30 +118,6 @@ class CONTENT_EXPORT FencedFrameReporter
       ReportingUrlMap reporting_url_map,
       const url::Origin& main_frame_origin = url::Origin());
 
-  // Creates a FencedFrameReporter that maps FLEDGE ReportingDestination types
-  // (kBuyer, kSeller, kComponentSeller), but that initially considers all three
-  // map types pending, and just collects reporting strings of those types until
-  // the corresponding mappings are passed in via OnUrlMappingReady().
-  //
-  // `url_loader_factory` is used to send all reports, and must not be null.
-  //
-  // `browser_context` is used to help notify Attribution Reporting API
-  // for the beacons, and to check attestations before sending out the beacons.
-  //
-  // `main_frame_origin` is the main frame of the page where the auction is
-  // running.
-  //
-  // `allowed_reporting_origins` is the winning ad's allowedReportingOrigins. If
-  //  any macro report is attempted to an unlisted origin, all further reports
-  //  after it will be cancelled.
-  static scoped_refptr<FencedFrameReporter> CreateForFledge(
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      BrowserContext* browser_context,
-      bool direct_seller_is_seller,
-      const url::Origin& main_frame_origin,
-      const std::optional<std::vector<url::Origin>>& allowed_reporting_origins =
-          std::nullopt);
-
   // Don't use this constructor directly, but use factory methods instead.
   // See factory methods for details.
   FencedFrameReporter(
@@ -153,9 +125,7 @@ class CONTENT_EXPORT FencedFrameReporter
       PrivacySandboxInvokingAPI invoking_api,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       BrowserContext* browser_context,
-      const url::Origin& main_frame_origin,
-      const std::optional<std::vector<url::Origin>>& allowed_reporting_origins =
-          std::nullopt);
+      const url::Origin& main_frame_origin);
 
   // Called when a mapping for reports of type `reporting_destination` is ready.
   // The reporter must currently be considering maps of type
@@ -269,20 +239,12 @@ class CONTENT_EXPORT FencedFrameReporter
 
  private:
   friend class base::RefCounted<FencedFrameReporter>;
-  friend class FencedFrameURLMappingTestPeer;
-
-  struct AttributionReportingData {
-    BeaconId beacon_id;
-    bool is_automatic_beacon;
-    network::mojom::AttributionSupport attribution_reporting_support;
-  };
 
   struct PendingEvent {
     PendingEvent(
         const DestinationVariant& event,
         const url::Origin& request_initiator,
         const net::ReferrerPolicy request_referrer_policy,
-        std::optional<AttributionReportingData> attribution_reporting_data,
         FrameTreeNodeId initiator_frame_tree_node_id);
 
     PendingEvent(const PendingEvent&);
@@ -296,9 +258,6 @@ class CONTENT_EXPORT FencedFrameReporter
     DestinationVariant event;
     url::Origin request_initiator;
     net::ReferrerPolicy request_referrer_policy;
-    // The data necessary for attribution reporting. Will be `std::nullopt` if
-    // attribution reporting is disallowed in the initiator frame.
-    std::optional<AttributionReportingData> attribution_reporting_data;
     FrameTreeNodeId initiator_frame_tree_node_id;
   };
 
@@ -337,24 +296,10 @@ class CONTENT_EXPORT FencedFrameReporter
       blink::FencedFrame::ReportingDestination reporting_destination,
       const url::Origin& request_initiator,
       const net::ReferrerPolicy request_referrer_policy,
-      const std::optional<AttributionReportingData>& attribution_reporting_data,
       FrameTreeNodeId initiator_frame_tree_node_id,
       std::string& error_message,
       blink::mojom::ConsoleMessageLevel& console_message_level,
       const std::string& devtools_request_id);
-
-  // Used by FencedFrameURLMappingTestPeer.
-  const base::flat_map<blink::FencedFrame::ReportingDestination,
-                       ReportingDestinationInfo>&
-  reporting_metadata() const {
-    return reporting_metadata_;
-  }
-
-  // Helper to notify `AttributionDataHostManager` if the report failed to be
-  // sent.
-  void NotifyFencedFrameReportingBeaconFailed(
-      const std::optional<AttributionReportingData>&
-          attribution_reporting_data);
 
   // Notify the installed observers whether the beacon is queued to be sent or
   // not.
@@ -363,34 +308,16 @@ class CONTENT_EXPORT FencedFrameReporter
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
-  // Bound to the lifetime of the browser context. Could be null in Incognito
-  // mode or in test.
-  const raw_ptr<AttributionManager, DanglingUntriaged> attribution_manager_;
-
   const raw_ptr<BrowserContext> browser_context_;
 
   base::flat_map<blink::FencedFrame::ReportingDestination,
                  ReportingDestinationInfo>
       reporting_metadata_;
 
-  // True if the "directSeller" alias maps to the Seller destination. False if
-  // it maps to the "ComponentSeller" destination.
-  bool direct_seller_is_seller_ = false;
-
-  // The origin of the page's main frame. Used for 3rd party cookie permission
-  // check for credentialed automatic beacons.
+  // The origin of the page's main frame. Used for:
+  // * Private aggregation (Protected Audience only)
+  // * 3rd party cookie permission check for credentialed automatic beacons
   const url::Origin main_frame_origin_;
-
-  // Origins allowed to receive macro expanded reports.
-  const std::optional<std::vector<url::Origin>> allowed_reporting_origins_;
-
-  // Whether there has been an attempt to send a custom destination url with
-  // macro substitution report to a disallowed origin (according to
-  // `allowed_reporting_origins_`). Once this occurs, custom destination url
-  // reports will be disabled for the remainder of the FencedFrameReporter's
-  // lifetime. This prevents an interest group from encoding cross-site data
-  // about a user in binary with its choices of allowed/disallowed origins.
-  bool attempted_custom_url_report_to_disallowed_origin_ = false;
 
   // Which API created this fenced frame reporter instance.
   PrivacySandboxInvokingAPI invoking_api_;

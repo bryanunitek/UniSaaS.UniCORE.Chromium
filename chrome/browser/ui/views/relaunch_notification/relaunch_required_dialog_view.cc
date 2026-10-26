@@ -24,11 +24,7 @@
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/insets.h"
-#include "ui/gfx/geometry/point.h"
-#include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/label.h"
@@ -148,10 +144,17 @@ RelaunchRequiredDialogView::RelaunchRequiredDialogView(
       views::DialogContentType::kText, views::DialogContentType::kText));
 
   auto label = std::make_unique<views::Label>(
-      l10n_util::GetPluralStringFUTF16(
-          ap_style_ ? IDS_ADVANCED_PROTECTION_RELAUNCH_REQUIRED_BODY
-                    : IDS_RELAUNCH_REQUIRED_BODY,
-          GlobalBrowserCollection::GetInstance()->GetIncognitoBrowserCount()),
+      ap_style_
+          ? GlobalBrowserCollection::GetInstance()
+                ->GetDialogWithIncognitoAndIsolatedVariants(
+                    IDS_ADVANCED_PROTECTION_RELAUNCH_REQUIRED_BODY,
+                    IDS_ADVANCED_PROTECTION_RELAUNCH_REQUIRED_BODY_ISOLATED,
+                    IDS_ADVANCED_PROTECTION_RELAUNCH_REQUIRED_BODY_INCOGNITO_AND_ISOLATED)
+          : GlobalBrowserCollection::GetInstance()
+                ->GetDialogWithIncognitoAndIsolatedVariants(
+                    IDS_RELAUNCH_REQUIRED_BODY,
+                    IDS_RELAUNCH_REQUIRED_BODY_ISOLATED,
+                    IDS_RELAUNCH_REQUIRED_BODY_INCOGNITO_AND_ISOLATED),
       views::style::CONTEXT_DIALOG_BODY_TEXT);
   label->SetMultiLine(true);
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);

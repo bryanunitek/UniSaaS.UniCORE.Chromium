@@ -26,8 +26,8 @@
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/window.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_tree_owner.h"
+#include "ui/compositor/layer_with_external_texture.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/views/animation/animation_builder.h"
@@ -73,9 +73,9 @@ constexpr float kFastSwipeVisibilityRatio = 0.1f;
 // sized as children get added to it. This is the layer that will be animated.
 std::unique_ptr<ui::LayerTreeOwner> CreateAnimationLayerOwner(
     aura::Window* root) {
-  auto animation_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
-  animation_layer->SetName("Desk switch animation layer");
-  animation_layer->SetColor(SK_ColorBLACK);
+  auto animation_layer = std::make_unique<ui::LayerSolidColor>();
+  animation_layer->SetName("RootWindowDeskSwitchAnimator:Animation");
+  animation_layer->SetColor(SkColors::kBlack);
   return std::make_unique<ui::LayerTreeOwner>(std::move(animation_layer));
 }
 
@@ -101,7 +101,8 @@ void TakeScreenshot(
 }
 
 std::string GetScreenshotLayerName(int index) {
-  return "Desk " + base::NumberToString(index) + " screenshot layer";
+  return "RootWindowDeskSwitchAnimator:Desk" + base::NumberToString(index) +
+         "Screenshot";
 }
 
 // The values received from WmGestureHandler via DesksController are in touchpad
@@ -170,8 +171,9 @@ void RootWindowDeskSwitchAnimator::TakeStartingDeskScreenshot() {
 
     // We don't take a screenshot of the soon-to-be-removed desk, we use an
     // empty black solid color layer.
-    auto black_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
-    black_layer->SetColor(SK_ColorBLACK);
+    auto black_layer = std::make_unique<ui::LayerSolidColor>();
+    black_layer->SetName("RootWindowDeskSwitchAnimator:RemovedDeskBlack");
+    black_layer->SetColor(SkColors::kBlack);
     CompleteAnimationPhase1WithLayer(std::move(black_layer));
     return;
   }

@@ -14,7 +14,7 @@
 #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
-#include "third_party/blink/renderer/core/paint/fragment_data_iterator.h"
+#include "third_party/blink/renderer/core/paint/fragment_data.h"
 #include "third_party/blink/renderer/core/paint/object_paint_properties.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_paint_order_iterator.h"
@@ -75,13 +75,17 @@ bool SetFragmentContentsCullRect(PaintLayer& layer,
         g_original_cull_rects->back().fragment != &fragment) {
       g_original_cull_rects->emplace_back(fragment);
     }
-  } else {
-    SetLayerNeedsRepaintOnCullRectChange(layer);
-    if (auto* scrollable_area = layer.GetScrollableArea())
-      scrollable_area->DidUpdateCullRect();
   }
 
   fragment.SetContentsCullRect(contents_cull_rect);
+
+  if (!g_original_cull_rects) {
+    SetLayerNeedsRepaintOnCullRectChange(layer);
+    if (auto* scrollable_area = layer.GetScrollableArea()) {
+      scrollable_area->DidUpdateCullRect();
+    }
+  }
+
   return true;
 }
 
@@ -107,12 +111,10 @@ bool ShouldUseInfiniteCullRect(
     return true;
   }
 
-  if (RuntimeEnabledFeatures::CanvasDrawElementEnabled(
-          object.GetDocument().GetExecutionContext())) {
-    auto* element = DynamicTo<Element>(object.GetNode());
-    if (element && element->IsInCanvasSubtree()) {
-      return true;
-    }
+  if (object.IsInCanvasSubtree()) {
+    // TODO(crbug.com/532229486): Support cull rects under canvas.
+    subtree_should_use_infinite_cull_rect = true;
+    return true;
   }
 
   // TODO(crbug.com/501066634): This can likely be tighter bounded than
@@ -143,8 +145,9 @@ bool ShouldUseInfiniteCullRect(
     }
 
     const TransformPaintPropertyNode* transform_nodes[] = {
-        properties->Transform(), properties->Offset(), properties->Scale(),
-        properties->Rotate(), properties->Translate()};
+        properties->Transform(), properties->Offset(),
+        properties->Scale(),     properties->Rotate(),
+        properties->Translate(), properties->ElementCanvasTransform()};
     for (const auto* transform : transform_nodes) {
       if (!transform)
         continue;
@@ -292,6 +295,9 @@ void CullRectUpdater::UpdateRecursively(const Context& parent_context,
   if (object.IsFragmentLessBox()) {
     return;
   }
+  if (!object.FirstFragment().HasLocalBorderBoxProperties()) {
+    return;
+  }
 
   Context context = parent_context;
   if (object.IsAbsolutePositioned())
@@ -309,12 +315,13 @@ void CullRectUpdater::UpdateRecursively(const Context& parent_context,
     context.current.force_update_children |= UpdateForSelf(context, layer);
   }
 
-  if (!context.current.subtree_is_out_of_cull_rect &&
+  if (!context.current.subtree_should_use_infinite_cull_rect &&
+      !context.current.subtree_is_out_of_cull_rect &&
       object.ShouldClipOverflowAlongBothAxis() && !object.IsFragmented()) {
     const auto* box = layer.GetLayoutBox();
     DCHECK(box);
-    PhysicalRect clip_rect =
-        box->OverflowClipRect(box->FirstFragment().PaintOffset());
+    PhysicalRect clip_rect = box->OverflowClipRect();
+    clip_rect.Move(box->FirstFragment().PaintOffset());
     if (!box->FirstFragment().GetCullRect().Intersects(
             ToEnclosingRect(clip_rect))) {
       context.current.subtree_is_out_of_cull_rect = true;
@@ -399,7 +406,7 @@ bool CullRectUpdater::UpdateForSelf(Context& context, PaintLayer& layer) {
   }
 
   for (FragmentData& fragment :
-       MutableFragmentDataIterator(layer.GetLayoutObject())) {
+       layer.GetLayoutObject().GetMutableForPainting().FragmentList()) {
     CullRect cull_rect;
     CullRect contents_cull_rect;
     if (context.current.subtree_is_out_of_cull_rect) {

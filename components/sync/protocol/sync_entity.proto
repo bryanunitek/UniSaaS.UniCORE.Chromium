@@ -11,6 +11,7 @@ option optimize_for = LITE_RUNTIME;
 
 package sync_pb;
 
+import "components/sync/protocol/attachment.proto";
 import "components/sync/protocol/deletion_origin.proto";
 import "components/sync/protocol/entity_specifics.proto";
 import "components/sync/protocol/unique_position.proto";
@@ -278,4 +279,8 @@ message SyncEntity {
   // investigating and mitigating user reports or incidents that cause data
   // deletion. Introduced in M126.
   optional DeletionOrigin deletion_origin = 28;
+
+  // References an optional attachment (usually large payload) associated with
+  // this entity.
+  optional Attachment attachment = 29;
 }

@@ -1286,26 +1286,6 @@ class BASE_EXPORT TimeTicks : public time_internal::TimeBase<TimeTicks> {
 
 #endif  // BUILDFLAG(IS_ANDROID)
 
-  // Get an estimate of the TimeTick value at the time of the UnixEpoch. Because
-  // Time and TimeTicks respond differently to user-set time and NTP
-  // adjustments, this number is only an estimate. Nevertheless, this can be
-  // useful when you need to relate the value of TimeTicks to a real time and
-  // date. Note: Upon first invocation, this function takes a snapshot of the
-  // realtime clock to establish a reference point.  This function will return
-  // the same value for the duration of the application, but will be different
-  // in future application runs.
-  // DEPRECATED:
-  // Because TimeTicks increments can get suspended on some platforms (e.g. Mac)
-  // and because this function returns a static value, this value will not get
-  // suspension time into account on those platforms.
-  // As TimeTicks is intended to be used to track a process duration and not an
-  // absolute time, if you plan to use this function, please consider using a
-  // Time instead.
-  // TODO(crbug.com/355423207): Remove function.
-  static TimeTicks UnixEpoch();
-
-  static void SetSharedUnixEpoch(TimeTicks);
-
   // Returns an enum indicating the underlying clock being used to generate
   // TimeTicks timestamps. This function should only be used for debugging and
   // logging purposes.
@@ -1346,6 +1326,10 @@ BASE_EXPORT std::ostream& operator<<(std::ostream& os, TimeTicks time_ticks);
 // Behaves similarly to `TimeTicks` (a monotonically non-decreasing clock time)
 // with the main difference being that `LiveTicks` is guaranteed not to advance
 // while the system is suspended.
+//
+// TODO(crbug.com/567134137): Fully define "while the system is suspended",
+// e.g. how LiveTicks behaves in intermediate low-power modes like Windows
+// "Modern Standby".
 class BASE_EXPORT LiveTicks : public time_internal::TimeBase<LiveTicks> {
  public:
   constexpr LiveTicks() : TimeBase(0) {}
@@ -1361,6 +1345,51 @@ class BASE_EXPORT LiveTicks : public time_internal::TimeBase<LiveTicks> {
 
 // For logging use only.
 BASE_EXPORT std::ostream& operator<<(std::ostream& os, LiveTicks live_ticks);
+
+namespace time_internal {
+
+// RealTicks ------------------------------------------------------------------
+
+// Behaves similarly to `TimeTicks` (a monotonically non-decreasing clock time)
+// with the main difference being that `RealTicks` always returns clock ticks
+// since the system booted, continuing to advance while the system is suspended.
+//
+// IMPORTANT: `RealTicks` is GUARANTEED to advance in lockstep with `LiveTicks`
+// as long as the system is awake (not suspended). On all platforms, both clocks
+// are derived from the exact same underlying time source with an identical
+// ticking rate; they never drift relative to each other while awake, differing
+// solely by an offset representing cumulative time spent in system suspension.
+//
+// This is internal to base (e.g. for `ElapsedNoSleepTimer`).
+class BASE_EXPORT RealTicks : public TimeBase<RealTicks> {
+ public:
+  constexpr RealTicks() : TimeBase(0) {}
+  static RealTicks Now();
+
+ private:
+  friend class TimeBase<RealTicks>;
+
+  // Please use Now() to create a new object. This is for internal use
+  // and testing.
+  constexpr explicit RealTicks(int64_t us) : TimeBase(us) {}
+};
+
+// For logging use only.
+BASE_EXPORT std::ostream& operator<<(std::ostream& os, RealTicks real_ticks);
+
+struct BASE_EXPORT LiveAndRealTicks {
+  LiveTicks live;
+  RealTicks real;
+  // Upper bound on sampling error resulting from non-atomic clock reads and
+  // independent microsecond truncation.
+  TimeDelta max_error;
+};
+
+// Reads LiveTicks and RealTicks, making a best effort to be atomic without
+// locking.
+BASE_EXPORT LiveAndRealTicks SampleLiveAndRealTicks();
+
+}  // namespace time_internal
 
 // ThreadTicks ----------------------------------------------------------------
 

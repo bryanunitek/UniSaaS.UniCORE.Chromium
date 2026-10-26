@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/md_select.css.js';
+import 'chrome://resources/ash/common/cr_elements/md_select.css.js';
 import './print_preview_shared.css.js';
 import './settings_section.js';
 
@@ -60,9 +60,9 @@ export class PrintPreviewMarginsSettingsElement extends
     ];
   }
 
-  disabled: boolean;
-  state: State;
-  private marginsDisabled_: boolean;
+  declare disabled: boolean;
+  declare state: State;
+  declare private marginsDisabled_: boolean;
   private loaded_: boolean = false;
 
   private onStateChange_() {

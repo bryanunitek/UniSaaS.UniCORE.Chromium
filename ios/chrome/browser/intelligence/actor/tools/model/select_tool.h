@@ -9,6 +9,7 @@
 #import "base/memory/weak_ptr.h"
 #import "base/types/expected.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/action_target.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/action_target_java_script_feature.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/web_actor_tool.h"
 
@@ -20,33 +21,35 @@ namespace actor {
 
 class SelectToolJavaScriptFeature;
 
-class ProfileContextResolver;
-
 // A tool that picks an <option> from a <select> element.
 class SelectTool : public WebActorTool {
  public:
   ~SelectTool() override;
 
   // Validates and creates a SelectTool instance.
-  static base::expected<std::unique_ptr<SelectTool>, ToolExecutionResult>
-  Create(const optimization_guide::proto::SelectAction& action,
-         const ProfileContextResolver& profile_context_resolver);
+  static std::unique_ptr<SelectTool> Create(
+      base::WeakPtr<web::WebState> web_state,
+      const optimization_guide::proto::SelectAction& action);
 
   // ActorTool:
+  void Validate(ToolExecutionCallback callback) override;
   void Execute(ToolExecutionCallback callback) override;
   base::WeakPtr<web::WebState> GetTargetWebState() const override;
   ToolType GetToolType() const override;
+  std::string DebugString() const override;
 
  private:
-  SelectTool(const optimization_guide::proto::SelectAction& action,
-             base::WeakPtr<web::WebState> web_state);
+  SelectTool(base::WeakPtr<web::WebState> web_state,
+             std::optional<std::string> value,
+             ActionTarget target);
 
   void OnTargetFrameResolved(
       ToolExecutionCallback callback,
       base::expected<ActionTargetJavaScriptFeature::TargetFrameResult,
                      ToolExecutionResult> result);
 
-  optimization_guide::proto::SelectAction action_;
+  std::optional<std::string> value_;
+  ActionTarget target_;
   base::WeakPtr<web::WebState> web_state_;
   raw_ptr<SelectToolJavaScriptFeature> js_feature_ = nullptr;
   base::WeakPtrFactory<SelectTool> weak_ptr_factory_{this};

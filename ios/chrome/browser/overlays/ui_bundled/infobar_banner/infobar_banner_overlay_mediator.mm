@@ -19,6 +19,7 @@
 #import "ios/chrome/browser/overlays/model/public/overlay_response.h"
 #import "ios/chrome/browser/overlays/ui_bundled/infobar_banner/infobar_banner_overlay_mediator+consumer_support.h"
 #import "ios/chrome/browser/overlays/ui_bundled/overlay_request_mediator+subclassing.h"
+#import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/non_modal_signin_promo_commands.h"
 
 @implementation InfobarBannerOverlayMediator
@@ -30,8 +31,21 @@
   return self;
 }
 
+#pragma mark - Public
+
+- (void)configureDependenciesWithDispatcher:(CommandDispatcher*)dispatcher {
+  self.nonModalSignInPromoHandler =
+      HandlerForProtocol(dispatcher, NonModalSignInPromoCommands);
+}
+
 - (void)finishDismissal {
-  // No-op as default.
+  self.nonModalSignInPromoHandler = nil;
+}
+
+- (void)disconnect {
+  self.consumer = nil;
+  self.engagementTracker = nullptr;
+  [super disconnect];
 }
 
 #pragma mark - Accessors

@@ -4,12 +4,14 @@
 
 package org.chromium.chrome.browser.ui.bottombar;
 
+import android.content.Context;
+
 import androidx.annotation.IntDef;
 import androidx.annotation.StringDef;
 
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.chrome.browser.glic.GlicButtonStateController;
+import org.chromium.chrome.browser.glic.toolbar_button.GlicButtonStateController;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -31,24 +33,25 @@ public class BottomBarMetrics {
     // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidBottomBarPromoEvent)
 
     // LINT.IfChange(AndroidBottomBarIphEvent)
-    /** Events representing showing or dismissing Bottom Bar In-Product Helps (IPH). */
-    @IntDef({IphEvent.SHOWN, IphEvent.DISMISSED})
+    /** Events representing showing, dismissing, or acting on Bottom Bar In-Product Helps (IPH). */
+    @IntDef({IphEvent.SHOWN, IphEvent.DISMISSED, IphEvent.MOVED_TO_BOTTOM})
     @Retention(RetentionPolicy.SOURCE)
     public @interface IphEvent {
         int SHOWN = 0;
         int DISMISSED = 1;
-        int COUNT = 2;
+        int MOVED_TO_BOTTOM = 2;
+        int COUNT = 3;
     }
 
     // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidBottomBarIphEvent)
 
     // LINT.IfChange(AndroidBottomBarIphFeature)
-    @StringDef({IphFeature.GLIC, IphFeature.NEW_TAB, IphFeature.AIM})
+    @StringDef({IphFeature.ADDRESS_BAR, IphFeature.GLIC, IphFeature.NEW_TAB})
     @Retention(RetentionPolicy.SOURCE)
     public @interface IphFeature {
+        String ADDRESS_BAR = "AddressBar";
         String GLIC = "Glic";
         String NEW_TAB = "NewTab";
-        String AIM = "Aim";
     }
 
     // LINT.ThenChange(//tools/metrics/histograms/metadata/android/histograms.xml:AndroidBottomBarIphFeature)
@@ -85,6 +88,48 @@ public class BottomBarMetrics {
     }
 
     // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidBottomBarGlicConvoResult)
+
+    // LINT.IfChange(AndroidBottomBarCandidateAction)
+    /** Candidate action resolved for the bottom bar's extra button container slot. */
+    @IntDef({CandidateAction.NONE, CandidateAction.GLIC, CandidateAction.DEPRECATED_AIM})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface CandidateAction {
+        int NONE = 0;
+        int GLIC = 1;
+        int DEPRECATED_AIM = 2;
+        int COUNT = 3;
+    }
+
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidBottomBarCandidateAction)
+
+    // LINT.IfChange(AndroidBottomBarGlicIneligibilityReason)
+    /** Reasons why Glic was determined ineligible or not shown in the bottom bar. */
+    @IntDef({
+        GlicIneligibilityReason.PROFILE_INELIGIBLE,
+        GlicIneligibilityReason.DEPRECATED_COUNTRY_GEOFENCED,
+        GlicIneligibilityReason.USER_DISABLED_IN_SETTINGS
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface GlicIneligibilityReason {
+        int PROFILE_INELIGIBLE = 0;
+        int DEPRECATED_COUNTRY_GEOFENCED = 1;
+        int USER_DISABLED_IN_SETTINGS = 2;
+        int COUNT = 3;
+    }
+
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidBottomBarGlicIneligibilityReason)
+
+    /**
+     * Records whether the bottom bar is enabled on an eligible device when bottom controls are
+     * initialized.
+     *
+     * @param context The context to check device eligibility against.
+     */
+    public static void maybeRecordEnabledState(Context context) {
+        if (!BottomBarConfigUtils.isBottomBarEligible(context)) return;
+        RecordHistogram.recordBooleanHistogram(
+                "Android.BottomBar.EnabledState", BottomBarConfigUtils.isBottomBarEnabled(context));
+    }
 
     /**
      * Records the visual state of the Glic button in the bottom bar at the moment of the user
@@ -142,8 +187,9 @@ public class BottomBarMetrics {
     /**
      * Records In-Product Help (IPH) trigger events for Bottom Bar actions.
      *
-     * @param event The IPH event (Shown or Dismissed).
-     * @param featureType The feature type suffix for the histogram (e.g. "Glic", "NewTab", "Aim").
+     * @param event The IPH event (Shown, Dismissed, or MovedToBottom).
+     * @param featureType The feature type suffix for the histogram (e.g. "AddressBar", "Glic",
+     *     "NewTab").
      */
     public static void recordIphEvent(@IphEvent int event, @IphFeature String featureType) {
         RecordHistogram.recordEnumeratedHistogram(
@@ -162,12 +208,37 @@ public class BottomBarMetrics {
     }
 
     /**
-     * Records the decision and processing time taken to evaluate whether Glic should be visible.
+     * Records the decision and processing time taken to evaluate candidate extra action resolution
+     * in the bottom bar.
      *
      * @param durationMs The elapsed time in milliseconds.
      */
-    public static void recordGlicVisibilityDecisionTime(long durationMs) {
+    public static void recordCandidateDecisionTime(long durationMs) {
         RecordHistogram.recordTimesHistogram(
-                "Android.BottomBar.GlicVisibilityDecisionTime", durationMs);
+                "Android.BottomBar.ExtraAction.CandidateDecisionTime", durationMs);
+    }
+
+    /**
+     * Records the candidate extra action resolved for the bottom bar.
+     *
+     * @param candidateAction The candidate extra action (None or Glic).
+     */
+    public static void recordCandidateExtraAction(@CandidateAction int candidateAction) {
+        RecordHistogram.recordEnumeratedHistogram(
+                "Android.BottomBar.ExtraAction.CandidateResolved",
+                candidateAction,
+                CandidateAction.COUNT);
+    }
+
+    /**
+     * Records the reason why Glic was determined ineligible or not shown in the bottom bar.
+     *
+     * @param reason The ineligibility reason.
+     */
+    public static void recordGlicIneligibilityReason(@GlicIneligibilityReason int reason) {
+        RecordHistogram.recordEnumeratedHistogram(
+                "Android.BottomBar.Glic.IneligibilityReason",
+                reason,
+                GlicIneligibilityReason.COUNT);
     }
 }

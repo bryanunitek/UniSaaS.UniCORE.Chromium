@@ -70,6 +70,7 @@
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/events/web_input_event_conversion.h"
 #include "third_party/blink/renderer/core/exported/web_dev_tools_agent_impl.h"
+#include "third_party/blink/renderer/core/exported/web_page_popup_impl.h"
 #include "third_party/blink/renderer/core/exported/web_plugin_container_impl.h"
 #include "third_party/blink/renderer/core/exported/web_settings_impl.h"
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
@@ -92,6 +93,7 @@
 #include "third_party/blink/renderer/core/html/forms/external_date_time_chooser.h"
 #include "third_party/blink/renderer/core/html/forms/external_popup_menu.h"
 #include "third_party/blink/renderer/core/html/forms/file_chooser.h"
+#include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/internal_popup_menu.h"
@@ -360,9 +362,7 @@ void ChromeClientImpl::SetKeyboardFocusURL(Element* new_focus_element) {
       new_focus_element && new_focus_element->GetDocument().LastFocusType() ==
                                mojom::blink::FocusType::kMouse;
   if (new_focus_element && new_focus_element->IsLiveLink() &&
-      new_focus_element->ShouldHaveFocusAppearance() &&
-      (!RuntimeEnabledFeatures::ClickFocusDoesntPersistStatusBubbleEnabled() ||
-       !is_mouse_focus)) {
+      new_focus_element->ShouldHaveFocusAppearance() && !is_mouse_focus) {
     focus_url = new_focus_element->HrefURL();
   }
   web_view_->SetKeyboardFocusURL(focus_url);
@@ -434,8 +434,7 @@ Page* ChromeClientImpl::CreateWindowDelegate(
           requested_screen_rect,
           static_cast<WebNavigationPolicy>(r.GetNavigationPolicy()),
           sandbox_flags, session_storage_namespace_id, consumed_user_gesture,
-          r.Impression(), r.GetPictureInPictureWindowOptions(),
-          r.GetRequestorBaseURL()));
+          r.GetPictureInPictureWindowOptions(), r.GetRequestorBaseURL()));
   if (!new_view) {
     return nullptr;
   }
@@ -829,10 +828,14 @@ DateTimeChooser* ChromeClientImpl::OpenDateTimeChooser(
     DateTimeChooserClient* picker_client,
     const DateTimeChooserParameters& parameters) {
   NotifyPopupOpeningObservers();
+  // Android does not support PagePopup, so we must always use the native
+  // picker.
+#if !BUILDFLAG(IS_ANDROID)
   if (RuntimeEnabledFeatures::InputMultipleFieldsUIEnabled()) {
     return MakeGarbageCollected<DateTimeChooserImpl>(frame, picker_client,
                                                      parameters);
   }
+#endif
 
   // JavaScript may try to open a date time chooser while one is already open.
   if (external_date_time_chooser_ &&
@@ -1286,10 +1289,20 @@ void ChromeClientImpl::DidChangeFormRelatedElementDynamically(
     LocalFrame* frame,
     HTMLElement* element,
     WebFormRelatedChangeType form_related_change) {
-  if (auto* fill_client = AutofillClientFromFrame(frame)) {
-    fill_client->DidChangeFormRelatedElementDynamically(element,
-                                                        form_related_change);
+  auto* fill_client = AutofillClientFromFrame(frame);
+  if (!fill_client) {
+    return;
   }
+  std::optional<mojom::blink::FormControlType> form_control_type;
+  if (auto* form_control = DynamicTo<HTMLFormControlElement>(element)) {
+    form_control_type = form_control->FormControlTypeForAutofill();
+  }
+  // This is called for every form-related element that is inserted into or
+  // removed from the document, so the WebElement (a Persistent) is only made
+  // if the client asks for it.
+  fill_client->DidChangeFormRelatedElementDynamically(
+      form_related_change, form_control_type,
+      [element] { return WebElement(element); });
 }
 
 void ChromeClientImpl::ShowVirtualKeyboardOnElementFocus(LocalFrame& frame) {
@@ -1298,7 +1311,7 @@ void ChromeClientImpl::ShowVirtualKeyboardOnElementFocus(LocalFrame& frame) {
       ->ShowVirtualKeyboardOnElementFocus();
 }
 
-void ChromeClientImpl::OnMouseDown(Node& mouse_down_node) {
+void ChromeClientImpl::DidDispatchMouseDown(Node& mouse_down_node) {
   LocalFrame* frame = mouse_down_node.GetDocument().GetFrame();
   if (auto* fill_client = AutofillClientFromFrame(frame)) {
     fill_client->DidReceiveLeftMouseDownOrGestureTapInNode(
@@ -1310,14 +1323,22 @@ void ChromeClientImpl::OnMouseDown(Node& mouse_down_node) {
   }
 }
 
-void ChromeClientImpl::HandleKeyboardEventOnTextField(
-    HTMLInputElement& input_element,
+void ChromeClientImpl::WillDispatchPointerDown(Node& node) {
+  if (auto* fill_client =
+          AutofillClientFromFrame(node.GetDocument().GetFrame())) {
+    fill_client->DidReceiveLeftPointerDownBeforeDispatch(WebNode(&node));
+  }
+}
+
+bool ChromeClientImpl::HandleKeyboardEventOnEditableElement(
+    HTMLElement& element,
     KeyboardEvent& event) {
   if (auto* fill_client =
-          AutofillClientFromFrame(input_element.GetDocument().GetFrame())) {
-    fill_client->TextFieldDidReceiveKeyDown(WebInputElement(&input_element),
-                                            WebKeyboardEventBuilder(event));
+          AutofillClientFromFrame(element.GetDocument().GetFrame())) {
+    return fill_client->DidReceiveKeyDown(WebElement(&element),
+                                          WebKeyboardEventBuilder(event));
   }
+  return false;
 }
 
 void ChromeClientImpl::DidChangeValueInTextField(
@@ -1482,7 +1503,7 @@ WebAutofillClient* ChromeClientImpl::AutofillClientFromFrame(
     LocalFrame* frame) {
   if (!frame) {
     // It is possible to pass nullptr to this method. For instance the call from
-    // OnMouseDown might be nullptr. See https://crbug.com/739199.
+    // DidDispatchMouseDown might be nullptr. See https://crbug.com/739199.
     return nullptr;
   }
 
@@ -1503,6 +1524,13 @@ void ChromeClientImpl::DocumentDetached(Document& document) {
   for (auto& it : file_chooser_queue_) {
     if (it->FrameOrNull() == document.GetFrame())
       it->DisconnectClient();
+  }
+  // Close any open popup owned by `document`, including popups opened via
+  // HTMLInputElement::showPicker() on disconnected elements that are not
+  // visited by Document::DetachLayoutTree().
+  if (web_view_ && web_view_->GetPagePopup() &&
+      web_view_->GetPagePopup()->OwnerElement().GetDocument() == document) {
+    web_view_->ClosePagePopup(web_view_->GetPagePopup());
   }
 }
 
@@ -1580,8 +1608,14 @@ gfx::Rect ChromeClientImpl::AdjustWindowRectForDisplay(
   return window;
 }
 
-void ChromeClientImpl::OnFirstContentfulPaint(const base::TimeDelta& duration) {
-  web_view_->OnFirstContentfulPaint(duration);
+void ChromeClientImpl::OnFirstContentfulPaint(
+    const base::TimeTicks& presentation_time) {
+  web_view_->OnFirstContentfulPaint(presentation_time);
+}
+
+void ChromeClientImpl::OnLargestContentfulPaint(
+    const base::TimeTicks& presentation_time) {
+  web_view_->OnLargestContentfulPaint(presentation_time);
 }
 
 }  // namespace blink

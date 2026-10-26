@@ -19,7 +19,6 @@ import '../settings_vars.css.js';
 import 'chrome://resources/ash/common/cr_elements/localized_link/localized_link.js';
 import './search_engine.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
@@ -28,7 +27,8 @@ import {castExists} from '../assert_extras.js';
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './search_subpage.html.js';
@@ -74,9 +74,9 @@ export class SettingsSearchSubpageElement extends
     Setting.kQuickAnswersUnitConversion,
   ]);
 
-  private quickAnswersSubLabel_: string;
-  private quickAnswersSubToggleEnabled_: boolean;
-  private translationSubLabel_: string;
+  declare private quickAnswersSubLabel_: string;
+  declare private quickAnswersSubToggleEnabled_: boolean;
+  declare private translationSubLabel_: string;
 
   constructor() {
     super();

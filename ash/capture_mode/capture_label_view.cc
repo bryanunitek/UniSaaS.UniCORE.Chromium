@@ -10,9 +10,9 @@
 #include "ash/capture_mode/capture_mode_util.h"
 #include "ash/capture_mode/stop_recording_button_tray.h"
 #include "ash/constants/ash_features.h"
-#include "ash/public/cpp/style/color_provider.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_id.h"
+#include "ash/style/style_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/number_formatting.h"
@@ -151,11 +151,9 @@ CaptureLabelView::CaptureLabelView(
     views::Button::PressedCallback on_capture_button_pressed,
     views::Button::PressedCallback on_drop_down_button_pressed)
     : capture_mode_session_(capture_mode_session),
-      // Since this view has fully circular rounded corners, we can't use a nine
-      // patch layer for the shadow. We have to use the `ShadowOnTextureLayer`.
-      // For more info, see https://crbug.com/1308800.
-      shadow_(SystemShadow::CreateShadowOnTextureLayer(
-          SystemShadow::Type::kElevation12)) {
+      shadow_(SystemDecoration::CreateShadowOnNinePatchLayerForView(
+          this,
+          SystemDecoration::ShadowType::kElevation12)) {
   SetPaintToLayer();
   layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(kCaptureLabelRadius));
   SetBackground(views::CreateSolidBackground(
@@ -165,8 +163,8 @@ CaptureLabelView::CaptureLabelView(
 
   if (chromeos::features::IsSystemBlurEnabled()) {
     layer()->SetFillsBoundsOpaquely(false);
-    layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-    layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+    layer()->SetBackgroundBlur(StyleUtil::kBackgroundBlurSigma);
+    layer()->SetBackdropFilterQuality(StyleUtil::kBackgroundBlurQuality);
   }
 
   capture_button_container_ = AddChildView(std::make_unique<CaptureButtonView>(
@@ -187,7 +185,7 @@ CaptureLabelView::CaptureLabelView(
       this, kCaptureLabelRadius,
       views::HighlightBorder::Type::kHighlightBorderNoShadow);
 
-  shadow_->SetRoundedCornerRadius(kCaptureLabelRadius);
+  shadow_->SetRoundedCorners(gfx::RoundedCornersF(kCaptureLabelRadius));
 }
 
 CaptureLabelView::~CaptureLabelView() = default;
@@ -316,24 +314,6 @@ void CaptureLabelView::StartCountDown(
 
 bool CaptureLabelView::IsInCountDownAnimation() const {
   return !!countdown_finished_callback_;
-}
-
-void CaptureLabelView::AddedToWidget() {
-  // Since the layer of the shadow has to be added as a sibling to this view's
-  // layer, we need to wait until the view is added to the widget.
-  auto* parent = layer()->parent();
-  parent->Add(shadow_->GetLayer());
-  parent->StackAtBottom(shadow_->GetLayer());
-
-  // Make the shadow observe the color provider source change to update the
-  // colors.
-  shadow_->ObserveColorProviderSource(GetWidget());
-}
-
-void CaptureLabelView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
-  // The shadow layer is a sibling of this view's layer, and should have the
-  // same bounds.
-  shadow_->SetContentBounds(layer()->bounds());
 }
 
 void CaptureLabelView::Layout(PassKey) {

@@ -4,18 +4,51 @@
 
 #include "chrome/browser/contextual_cueing/contextual_cueing_service.h"
 
-#include "chrome/browser/contextual_cueing/contextual_cueing_enums.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/contextual_cueing/features.h"
-#include "chrome/browser/contextual_cueing/nudge_cap_tracker.h"
 #include "chrome/browser/contextual_cueing/prefs.h"
-#include "chrome/browser/contextual_cueing/ucb_scorer.h"
+#include "components/contextual_cueing/contextual_cueing_enums.h"
+#include "components/contextual_cueing/nudge_cap_tracker.h"
+#include "components/contextual_cueing/ucb_scorer.h"
 #include "components/prefs/pref_service.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/contextual_cueing/internals/contextual_cueing_internals.mojom.h"
+#endif
 
 namespace {
 const contextual_cueing::TargetStats kEmptyStats;
 }  // namespace
 
 namespace contextual_cueing {
+
+ContextualCueSurveyCategory GetSurveyCategory(CueTargetType cue_type,
+                                              const std::string& cuj) {
+  if (cue_type == CueTargetType::kIndigo) {
+    return ContextualCueSurveyCategory::kIndigo;
+  }
+
+  if (cue_type == CueTargetType::kGlic ||
+      cue_type == CueTargetType::kContextualSearch) {
+    std::string cuj_upper = base::ToUpperASCII(cuj);
+    if (cuj_upper.find("SHOP") != std::string::npos) {
+      return ContextualCueSurveyCategory::kShopping;
+    }
+    if (cuj_upper.find("LEARN") != std::string::npos ||
+        cuj_upper.find("QUIZ") != std::string::npos) {
+      return ContextualCueSurveyCategory::kEducation;
+    }
+  }
+
+  return ContextualCueSurveyCategory::kUnknown;
+}
+
+std::string GetSurveyCujName(const std::string& cuj) {
+  if (base::EqualsCaseInsensitiveASCII(cuj, "Indigo")) {
+    return "TRY_ON_YOU";
+  }
+  return cuj;
+}
 
 ContextualCueingService::ContextualCueingService(PrefService* profile_prefs)
     : recent_nudge_tracker_(kCueCapCount.Get(), kCueCapTime.Get()),
@@ -37,7 +70,7 @@ ContextualCueingService::~ContextualCueingService() = default;
 
 void ContextualCueingService::WriteStatsToPref(CueTargetType type) {
   auto it = target_stats_.find(type);
-  DCHECK(it != target_stats_.end());
+  CHECK(it != target_stats_.end(), base::NotFatalUntil::M161);
   if (it == target_stats_.end()) {
     return;
   }
@@ -51,54 +84,93 @@ void ContextualCueingService::ReportPageLoad() {
   }
 }
 
-void ContextualCueingService::OnCueClicked(CueTargetType type) {
+void ContextualCueingService::OnCueClicked(CueTargetType type,
+                                           bool record_ucb_stats) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   click_backoff_end_time_ = base::TimeTicks::Now() + kClickBackoffTime.Get();
   dismiss_count_ = 0;
-  target_stats_[type].clicks++;
-  WriteStatsToPref(type);
+  if (record_ucb_stats) {
+    target_stats_[type].clicks++;
+    WriteStatsToPref(type);
+  }
 }
 
-void ContextualCueingService::OnCueDismissed(CueTargetType type) {
+void ContextualCueingService::OnCueDismissed(CueTargetType type,
+                                             bool record_ucb_stats) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   base::TimeDelta backoff_duration =
       kDismissBackoffTime.Get() *
       pow(kDismissBackoffMultiplierBase.Get(), dismiss_count_);
   dismiss_backoff_end_time_ = base::TimeTicks::Now() + backoff_duration;
   ++dismiss_count_;
-  target_stats_[type].dismissals++;
-  WriteStatsToPref(type);
+  if (record_ucb_stats) {
+    target_stats_[type].dismissals++;
+    WriteStatsToPref(type);
+  }
 }
 
-void ContextualCueingService::OnCueShown(const GURL& url, CueTargetType type) {
+void ContextualCueingService::OnCueShown(const GURL& url,
+                                         CueTargetType type,
+                                         bool record_ucb_stats,
+                                         CueIntrusiveness intrusiveness) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (kMinPageCountBetweenNudges.Get()) {
-    // Let the cue logic be performed the next page after quiet count pages.
-    remaining_quiet_loads_ = kMinPageCountBetweenNudges.Get() + 1;
+  if (intrusiveness == CueIntrusiveness::kLoud) {
+    if (kMinPageCountBetweenNudges.Get()) {
+      // Let the cue logic be performed the next page after quiet count pages.
+      remaining_quiet_loads_ = kMinPageCountBetweenNudges.Get() + 1;
+    }
+    shown_backoff_end_time_ =
+        base::TimeTicks::Now() + kMinTimeBetweenNudges.Get();
+
+    recent_nudge_tracker_.CueingNudgeShown();
+
+    auto origin = url::Origin::Create(url);
+    auto origin_iter = recent_visited_origins_.Get(origin);
+    if (origin_iter == recent_visited_origins_.end()) {
+      origin_iter = recent_visited_origins_.Put(
+          origin, NudgeCapTracker(kCueCapCountPerOrigin.Get(),
+                                  kCueCapTimePerOrigin.Get()));
+    }
+    origin_iter->second.CueingNudgeShown();
   }
-  shown_backoff_end_time_ =
-      base::TimeTicks::Now() + kMinTimeBetweenNudges.Get();
 
-  recent_nudge_tracker_.CueingNudgeShown();
-
-  auto origin = url::Origin::Create(url);
-  auto origin_iter = recent_visited_origins_.Get(origin);
-  if (origin_iter == recent_visited_origins_.end()) {
-    origin_iter = recent_visited_origins_.Put(
-        origin, NudgeCapTracker(kCueCapCountPerOrigin.Get(),
-                                kCueCapTimePerOrigin.Get()));
+  if (record_ucb_stats) {
+    target_stats_[type].impressions++;
+    WriteStatsToPref(type);
   }
-  origin_iter->second.CueingNudgeShown();
-
-  target_stats_[type].impressions++;
-  WriteStatsToPref(type);
 }
+
+#if !BUILDFLAG(IS_ANDROID)
+void ContextualCueingService::LogCueShownMetadata(CueLogPtr cue_log) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (cue_log) {
+    if (shown_cues_.size() >= kMaxShownCues) {
+      shown_cues_.pop_front();
+    }
+    shown_cues_.push_back(std::move(cue_log));
+  }
+}
+#endif
 
 contextual_cueing::ContextualCueingDecision ContextualCueingService::CanShowCue(
-    const GURL& url) const {
+    const GURL& url,
+    CueIntrusiveness intrusiveness) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (kDisableCueBackoff.Get()) {
     return ContextualCueingDecision::kSuccess;
+  }
+
+  if (intrusiveness == CueIntrusiveness::kQuiet) {
+    return ContextualCueingDecision::kSuccess;
+  }
+
+  if (dismiss_backoff_end_time_ &&
+      (base::TimeTicks::Now() < *dismiss_backoff_end_time_)) {
+    return ContextualCueingDecision::kNotEnoughTimeSinceLastDismissal;
+  }
+  if (click_backoff_end_time_ &&
+      (base::TimeTicks::Now() < *click_backoff_end_time_)) {
+    return ContextualCueingDecision::kNotEnoughTimeSinceLastClick;
   }
 
   if (remaining_quiet_loads_ > 0) {
@@ -107,14 +179,6 @@ contextual_cueing::ContextualCueingDecision ContextualCueingService::CanShowCue(
   if (shown_backoff_end_time_ &&
       (base::TimeTicks::Now() < *shown_backoff_end_time_)) {
     return ContextualCueingDecision::kNotEnoughTimeSinceLastCue;
-  }
-  if (dismiss_backoff_end_time_ &&
-      (base::TimeTicks::Now() < *dismiss_backoff_end_time_)) {
-    return ContextualCueingDecision::kNotEnoughTimeSinceLastDismissal;
-  }
-  if (click_backoff_end_time_ &&
-      (base::TimeTicks::Now() < *click_backoff_end_time_)) {
-    return ContextualCueingDecision::kNotEnoughTimeSinceLastClick;
   }
 
   if (!recent_nudge_tracker_.CanShowNudge()) {
@@ -128,6 +192,22 @@ contextual_cueing::ContextualCueingDecision ContextualCueingService::CanShowCue(
   }
 
   return ContextualCueingDecision::kSuccess;
+}
+
+std::pair<ContextualCueingService::AllowedIntrusivenessResult,
+          contextual_cueing::ContextualCueingDecision>
+ContextualCueingService::GetAllowedIntrusiveness(const GURL& url) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (auto decision = CanShowCue(url, CueIntrusiveness::kLoud);
+      decision == ContextualCueingDecision::kSuccess) {
+    return {AllowedIntrusivenessResult::kLoud,
+            ContextualCueingDecision::kSuccess};
+  } else if (auto quiet_decision = CanShowCue(url, CueIntrusiveness::kQuiet);
+             quiet_decision == ContextualCueingDecision::kSuccess) {
+    return {AllowedIntrusivenessResult::kQuiet, decision};
+  } else {
+    return {AllowedIntrusivenessResult::kBlocked, quiet_decision};
+  }
 }
 
 const TargetStats& ContextualCueingService::GetStatsForTarget(

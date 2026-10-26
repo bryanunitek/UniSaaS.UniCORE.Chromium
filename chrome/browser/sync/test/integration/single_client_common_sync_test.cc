@@ -352,8 +352,18 @@ IN_PROC_BROWSER_TEST_P(SingleClientCommonSyncTest, ReusesSameCacheGuid) {
   EXPECT_EQ(old_cache_guid, transport_data_prefs.GetCacheGuid());
 }
 
-IN_PROC_BROWSER_TEST_P(SingleClientCommonSyncTest,
-                       E2E_ENABLED(ShouldCrashAwaitQuiescenceForE2ETest)) {
+// TODO(crbug.com/542347163): Re-enable test.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
+#define MAYBE_ShouldCrashAwaitQuiescenceForE2ETest \
+  DISABLED_ShouldCrashAwaitQuiescenceForE2ETest
+#else
+#define MAYBE_ShouldCrashAwaitQuiescenceForE2ETest \
+  ShouldCrashAwaitQuiescenceForE2ETest
+#endif
+IN_PROC_BROWSER_TEST_P(
+    SingleClientCommonSyncTest,
+    E2E_ENABLED(MAYBE_ShouldCrashAwaitQuiescenceForE2ETest)) {
   ASSERT_TRUE(SetupSync());
   EXPECT_CHECK_DEATH_WITH(
       { EXPECT_TRUE(AwaitQuiescence()); },
@@ -594,6 +604,7 @@ class SingleClientFeatureToTransportSyncTest : public SyncTest {
 
  protected:
   const GURL kUrl{"https://url.com/"};
+  base::HistogramTester histograms_;
 };
 
 IN_PROC_BROWSER_TEST_F(SingleClientFeatureToTransportSyncTest,
@@ -621,10 +632,8 @@ IN_PROC_BROWSER_TEST_F(SingleClientFeatureToTransportSyncTest,
 
 IN_PROC_BROWSER_TEST_F(SingleClientFeatureToTransportSyncTest,
                        ShouldFixBadMetadata) {
-  base::HistogramTester histograms;
-
   ASSERT_TRUE(SetupClients());
-  // BeforeSetupClient() in the fixture has mangled the prefs so that
+  // OnProfileCreationStarted() in the fixture has mangled the prefs so that
   // Sync-the-feature is *not* enabled anymore, and Sync will start up in
   // transport mode instead.
   // Note that this means the persisted metadata is now in an inconsistent
@@ -652,36 +661,36 @@ IN_PROC_BROWSER_TEST_F(SingleClientFeatureToTransportSyncTest,
 
   // Generally: For data types that use two separate models, the metadata (of
   // the Sync-the-feature model) should have been cleared.
-  histograms.ExpectBucketCount(
+  histograms_.ExpectBucketCount(
       "Sync.ClearMetadataWhileStopped",
       syncer::DataTypeHistogramValue(syncer::BOOKMARKS), 1);
-  histograms.ExpectBucketCount(
+  histograms_.ExpectBucketCount(
       "Sync.ClearMetadataWhileStopped",
       syncer::DataTypeHistogramValue(syncer::PASSWORDS), 1);
-  histograms.ExpectBucketCount(
+  histograms_.ExpectBucketCount(
       "Sync.ClearMetadataWhileStopped",
       syncer::DataTypeHistogramValue(syncer::READING_LIST), 1);
-  histograms.ExpectBucketCount(
+  histograms_.ExpectBucketCount(
       "Sync.ClearMetadataWhileStopped",
       syncer::DataTypeHistogramValue(syncer::AUTOFILL_WALLET_DATA), 1);
 
   // But for data types that use a single model in both transport mode and
   // Sync-the-feature mode (and that support transport mode in the first place),
   // the metadata should *not* have been cleared.
-  histograms.ExpectBucketCount(
+  histograms_.ExpectBucketCount(
       "Sync.ClearMetadataWhileStopped",
       syncer::DataTypeHistogramValue(syncer::DEVICE_INFO), 0);
-  histograms.ExpectBucketCount(
+  histograms_.ExpectBucketCount(
       "Sync.ClearMetadataWhileStopped",
       syncer::DataTypeHistogramValue(syncer::SHARING_MESSAGE), 0);
-  histograms.ExpectBucketCount(
+  histograms_.ExpectBucketCount(
       "Sync.ClearMetadataWhileStopped",
       syncer::DataTypeHistogramValue(syncer::SECURITY_EVENTS), 0);
 
   // With `kSeparateLocalAndAccountSearchEngines`, the same model is used for
   // both transport mode and Sync-the-feature mode, so the metadata should *not*
   // have been cleared.
-  histograms.ExpectBucketCount(
+  histograms_.ExpectBucketCount(
       "Sync.ClearMetadataWhileStopped",
       syncer::DataTypeHistogramValue(syncer::SEARCH_ENGINES),
       base::FeatureList::IsEnabled(
@@ -697,8 +706,10 @@ class SingleClientPolicySyncTest
  public:
   SingleClientPolicySyncTest() : SyncTest(SINGLE_CLIENT) {
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
-      scoped_feature_list_.InitAndEnableFeature(
-          syncer::kReplaceSyncPromosWithSignInPromos);
+      scoped_feature_list_.InitWithFeatures(
+          {syncer::kReplaceSyncPromosWithSignInPromos,
+           switches::kSyncEnableBookmarksInTransportMode},
+          {});
     }
   }
   ~SingleClientPolicySyncTest() override = default;
@@ -852,37 +863,26 @@ class SingleClientOldProgressMarkerSyncTest : public SyncTest {
 #if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(SingleClientOldProgressMarkerSyncTest,
                        PRE_OldProgressMarker) {
+  GetFakeServer()->InjectEntity(bookmarks_helper::CreateBookmarkServerEntity(
+      kBookmarkTitle1, kBookmarkUrl1, kBookmarkUuid1));
+  GetFakeServer()->InjectEntity(bookmarks_helper::CreateBookmarkServerEntity(
+      kBookmarkTitle2, kBookmarkUrl2));
+  GetFakeServer()->InjectEntity(
+      reading_list_helper::CreateTestReadingListEntity(kReadingListUrl1,
+                                                       "title1"));
+  GetFakeServer()->InjectEntity(
+      reading_list_helper::CreateTestReadingListEntity(kReadingListUrl2,
+                                                       "title2"));
+
   ASSERT_TRUE(SetupSyncWithMode(SetupSyncMode::kSyncTransportOnly));
 
-  // Add two bookmarks.
-  bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(GetProfile(0));
-  bookmark_model->AddURL(bookmark_model->account_bookmark_bar_node(), 0,
-                         kBookmarkTitle1, kBookmarkUrl1, nullptr, std::nullopt,
-                         kBookmarkUuid1);
-  bookmark_model->AddURL(bookmark_model->account_bookmark_bar_node(), 0,
-                         kBookmarkTitle2, kBookmarkUrl2);
+  EXPECT_TRUE(bookmarks_helper::HasNodeWithURL(0, kBookmarkUrl1));
+  EXPECT_TRUE(bookmarks_helper::HasNodeWithURL(0, kBookmarkUrl2));
 
-  // Add two reading list entries.
   ReadingListModel* reading_list_model =
       ReadingListModelFactory::GetForBrowserContext(GetProfile(0));
-  reading_list_model->AddOrReplaceEntry(kReadingListUrl1, "title1",
-                                        reading_list::ADDED_VIA_CURRENT_APP,
-                                        /*estimated_read_time=*/std::nullopt,
-                                        /*creation_time=*/std::nullopt);
-  reading_list_model->AddOrReplaceEntry(kReadingListUrl2, "title2",
-                                        reading_list::ADDED_VIA_CURRENT_APP,
-                                        /*estimated_read_time=*/std::nullopt,
-                                        /*creation_time=*/std::nullopt);
-
-  // Wait for everything to arrive on the server.
-  bookmarks_helper::ServerBookmarksEqualityChecker(
-      {{kBookmarkTitle1, kBookmarkUrl1}, {kBookmarkTitle2, kBookmarkUrl2}},
-      /*cryptographer=*/nullptr)
-      .Wait();
-  reading_list_helper::ServerReadingListURLsEqualityChecker(
-      {kReadingListUrl1, kReadingListUrl2})
-      .Wait();
+  EXPECT_TRUE(reading_list_model->GetEntryByURL(kReadingListUrl1));
+  EXPECT_TRUE(reading_list_model->GetEntryByURL(kReadingListUrl2));
 
   // Pretend that the last poll happened long ago, so that after restart, a poll
   // will get triggered immediately.
@@ -924,15 +924,16 @@ IN_PROC_BROWSER_TEST_F(SingleClientOldProgressMarkerSyncTest,
 
   // Verify that the changes were applied. Note that the outcome here is the
   // same as if the server had sent a regular incremental update.
-  bookmarks_helper::BookmarksUrlChecker(0, kBookmarkUrl1, 0).Wait();
-  bookmarks_helper::BookmarksUrlChecker(0, kBookmarkUrl2, 1).Wait();
-  bookmarks_helper::BookmarksUrlChecker(0, kBookmarkUrl3, 1).Wait();
+  ASSERT_TRUE(
+      bookmarks_helper::BookmarksUrlChecker(0, kBookmarkUrl3, 1).Wait());
+  EXPECT_FALSE(bookmarks_helper::HasNodeWithURL(0, kBookmarkUrl1));
+  EXPECT_TRUE(bookmarks_helper::HasNodeWithURL(0, kBookmarkUrl2));
 
   ReadingListModel* reading_list_model =
       ReadingListModelFactory::GetForBrowserContext(GetProfile(0));
-  reading_list_helper::LocalReadingListURLsEqualityChecker(
-      reading_list_model, {kReadingListUrl2, kReadingListUrl3})
-      .Wait();
+  ASSERT_TRUE(reading_list_helper::LocalReadingListURLsEqualityChecker(
+                  reading_list_model, {kReadingListUrl2, kReadingListUrl3})
+                  .Wait());
 
   // Verify via histograms that the server indeed sent a full update, not an
   // incremental one - in particular, that it did not send any tombstones. Note

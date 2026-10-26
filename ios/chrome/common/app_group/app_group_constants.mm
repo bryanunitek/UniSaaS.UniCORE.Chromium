@@ -21,7 +21,6 @@ extern NSString* const kChromeSupportsAISummarizationCapability =
     @"SupportsAISummarization";
 extern NSString* const kChromeUserIsEligibleForGeminiCapability =
     @"UserIsEligibleForGemini";
-extern NSString* const kAppSwitcherHashedUserID = @"AppSwitcher.HashedUserID";
 extern NSString* const kChromeSupportOpenLinksParametersFromCapability =
     @"SupportOpenLinksParametersFrom";
 extern NSString* const kChromeSupportShareDefaultBrowserStatusCapability =
@@ -37,6 +36,7 @@ const char kChromeAppGroupCommandPreference[] =
     "GroupApp.ChromeAppGroupCommand";
 
 const char kChromeAppGroupCommandTimePreference[] = "CommandTime";
+const NSTimeInterval kAppGroupCommandTimeout = 15.0;
 const char kChromeAppGroupCommandAppPreference[] = "SourceApp";
 const char kChromeAppGroupCommandCommandPreference[] = "Command";
 const char kChromeAppGroupCommandTextPreference[] = "Text";
@@ -83,10 +83,6 @@ NSString* const kOpenCommandSourceShareExtension = @"ChromeShareExtension";
 NSString* const kOpenCommandSourceCredentialsExtension =
     @"ChromeCredentialsExtension";
 NSString* const kOpenCommandSourceOpenExtension = @"ChromeOpenExtension";
-
-NSString* const kSuggestedItems = @"SuggestedItems";
-NSString* const kSuggestedItemsLastModificationDate =
-    @"SuggestedItemsLastModificationDate";
 
 NSString* const kSuggestedItemsForMultiprofile = @"SuggestedItemsForMIM";
 NSString* const kSuggestedItemsLastModificationDateForMultiprofile =

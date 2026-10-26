@@ -27,8 +27,6 @@
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
-#include "base/test/task_environment.h"
 #include "base/test/test_file_util.h"
 #include "base/test/test_future.h"
 #include "base/threading/thread_restrictions.h"
@@ -36,13 +34,19 @@
 #include "net/base/cache_type.h"
 #include "net/base/features.h"
 #include "net/base/io_buffer.h"
+#include "net/disk_cache/backend_cleanup_tracker.h"
 #include "net/disk_cache/memory_entry_data_hints.h"
 #include "net/disk_cache/simple/simple_util.h"
 #include "net/disk_cache/sql/cache_entry_key.h"
 #include "net/disk_cache/sql/entry_write_buffer.h"
 #include "net/disk_cache/sql/sql_async_task_manager.h"
 #include "net/disk_cache/sql/sql_backend_constants.h"
+#include "net/disk_cache/sql/sql_persistent_store_backend.h"
 #include "net/disk_cache/sql/sql_persistent_store_backend_shard.h"
+#include "net/disk_cache/sql/sql_shared_cache.h"
+#include "net/disk_cache/sql/sql_shared_cache_isolated_database.h"
+#include "net/disk_cache/sql/sql_shared_cache_manager.h"
+#include "net/test/test_with_task_environment.h"
 #include "sql/database.h"
 #include "sql/meta_table.h"
 #include "sql/statement.h"
@@ -61,16 +65,29 @@ namespace disk_cache {
 inline constexpr int64_t kDefaultMaxBytes = 10 * 1024 * 1024;
 
 // Test fixture for SqlPersistentStore tests.
-class SqlPersistentStoreTestBase : public testing::Test {
+class SqlPersistentStoreTestBase : public net::TestWithTaskEnvironment {
  public:
+  SqlPersistentStoreTestBase()
+      : net::TestWithTaskEnvironment(
+            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+
   // Sets up a temporary directory and a background task runner for each test.
   void SetUp() override {
-    feature_list_.InitWithFeaturesAndParameters(
-        {{net::features::kDiskCacheBackendExperiment,
-          {{net::features::kDiskCacheBackendParam.name, "sql"},
-           {net::features::kSqlDiskCacheWalMode.name,
-            IsWalModeEnabled() ? "true" : "false"}}}},
-        {});
+    std::vector<base::test::FeatureRefAndParams> enabled_features = {
+        {net::features::kDiskCacheBackendExperiment,
+         {{net::features::kDiskCacheBackendParam.name, "sql"},
+          {net::features::kSqlDiskCacheWalMode.name,
+           IsWalModeEnabled() ? "true" : "false"}}}};
+    std::vector<base::test::FeatureRef> disabled_features;
+    if (IsRendererAccessibleHttpCacheEnabled()) {
+      enabled_features.emplace_back(base::test::FeatureRefAndParams(
+          net::features::kRendererAccessibleHttpCache, {}));
+    } else {
+      disabled_features.emplace_back(
+          net::features::kRendererAccessibleHttpCache);
+    }
+    AddScopedFeatureList().InitWithFeaturesAndParameters(enabled_features,
+                                                         disabled_features);
 
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     background_task_runners_.emplace_back(
@@ -78,11 +95,7 @@ class SqlPersistentStoreTestBase : public testing::Test {
   }
 
   // Cleans up the store and ensures all background tasks are completed.
-  void TearDown() override {
-    store_.reset();
-    // Make sure all background tasks are done before returning.
-    FlushPendingTask();
-  }
+  void TearDown() override { ClearStore(); }
 
  protected:
   // Returns the path to the temporary directory.
@@ -95,11 +108,17 @@ class SqlPersistentStoreTestBase : public testing::Test {
 
   // Creates a SqlPersistentStore instance.
   void CreateStore(int64_t max_bytes = kDefaultMaxBytes) {
+    if (store_ || cleanup_tracker_) {
+      ClearStore();
+    }
+    cleanup_tracker_ = BackendCleanupTracker::TryCreate(temp_dir_.GetPath(),
+                                                        base::DoNothing());
+    CHECK(cleanup_tracker_);
     store_ = std::make_unique<SqlPersistentStore>(
         GetTempPath(), max_bytes, net::CacheType::DISK_CACHE,
         std::vector<scoped_refptr<base::SequencedTaskRunner>>(
             background_task_runners_),
-        async_task_manager_);
+        async_task_manager_, cleanup_tracker_);
   }
 
   // Initializes the store and waits for the operation to complete.
@@ -115,17 +134,23 @@ class SqlPersistentStoreTestBase : public testing::Test {
   }
 
   void ClearStore() {
-    CHECK(store_);
-    store_.reset();
+    if (store_) {
+      store_.reset();
+    }
     FlushPendingTask();
+    if (cleanup_tracker_) {
+      base::RunLoop run_loop;
+      cleanup_tracker_->AddPostCleanupCallback(run_loop.QuitClosure());
+      cleanup_tracker_ = nullptr;
+      run_loop.Run();
+    }
   }
 
   // Helper function to create, initialize, and then close a store.
   void CreateAndCloseInitializedStore() {
     CreateStore();
     ASSERT_EQ(Init(), SqlPersistentStore::Error::kOk);
-    store_.reset();
-    FlushPendingTask();
+    ClearStore();
   }
 
   // Makes the database file unwritable to test error handling.
@@ -156,6 +181,7 @@ class SqlPersistentStoreTestBase : public testing::Test {
       background_task_runner->PostTask(FROM_HERE, run_loop.QuitClosure());
       run_loop.Run();
     }
+    async_task_manager_.RunUntilAllTasksCompleteForTest();
   }
 
   // Custom deleter for the unique_ptr returned by ManuallyOpenDatabase.
@@ -220,9 +246,8 @@ class SqlPersistentStoreTestBase : public testing::Test {
   }
 
   // Synchronous wrapper for OpenEntry.
-  SqlPersistentStore::OptionalEntryInfoOrError OpenEntry(
-      const CacheEntryKey& key) {
-    base::test::TestFuture<SqlPersistentStore::OptionalEntryInfoOrError> future;
+  SqlPersistentStore::EntryInfoOrError OpenEntry(const CacheEntryKey& key) {
+    base::test::TestFuture<SqlPersistentStore::EntryInfoOrError> future;
     store_->OpenEntry(key, future.GetCallback());
     return future.Take();
   }
@@ -682,8 +707,7 @@ class SqlPersistentStoreTestBase : public testing::Test {
     for (int i = 0; i < num_entries; ++i) {
       const CacheEntryKey key("key_" + base::NumberToString(i));
       auto open_result = OpenEntry(key);
-      ASSERT_TRUE(open_result.has_value());
-      if (open_result->has_value()) {
+      if (open_result.has_value()) {
         key_out = key;
         index_out = i;
         break;
@@ -728,14 +752,13 @@ class SqlPersistentStoreTestBase : public testing::Test {
 
  protected:
   virtual bool IsWalModeEnabled() const = 0;
+  virtual bool IsRendererAccessibleHttpCacheEnabled() const { return false; }
 
-  base::test::TaskEnvironment task_environment_{
-      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  base::test::ScopedFeatureList feature_list_;
   base::ScopedTempDir temp_dir_;
   std::vector<scoped_refptr<base::SequencedTaskRunner>>
       background_task_runners_;
   SqlAsyncTaskManager async_task_manager_;
+  scoped_refptr<BackendCleanupTracker> cleanup_tracker_;
   std::unique_ptr<SqlPersistentStore> store_;
   std::unique_ptr<base::FilePermissionRestorer> file_permissions_restorer_;
 };
@@ -780,9 +803,23 @@ TEST_P(SqlPersistentStoreTest, InitExisting) {
   EXPECT_EQ(Init(), SqlPersistentStore::Error::kOk);
 }
 
+TEST_P(SqlPersistentStoreTest, ReduceUma) {
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment,
+      {{"SqlDiskCacheReduceUma", "true"}});
+
+  base::HistogramTester histogram_tester;
+  CreateStore(10 * 1024 * 1024);
+  EXPECT_EQ(Init(), SqlPersistentStore::Error::kOk);
+
+  histogram_tester.ExpectTotalCount(
+      "Net.SqlDiskCache.Backend.Initialize.SuccessTime", 0);
+  histogram_tester.ExpectTotalCount(
+      "Net.SqlDiskCache.Backend.Initialize.Result", 0);
+}
+
 TEST_P(SqlPersistentStoreTest, SerialInitialize) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
       net::features::kDiskCacheBackendExperiment,
       {{"SqlDiskCacheSerialInitialize", "true"}});
 
@@ -798,8 +835,7 @@ TEST_P(SqlPersistentStoreTest, SerialInitialize) {
 }
 
 TEST_P(SqlPersistentStoreTest, SerialInitializeShardFailure) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
       net::features::kDiskCacheBackendExperiment,
       {{"SqlDiskCacheSerialInitialize", "true"}});
 
@@ -854,11 +890,16 @@ TEST_P(SqlPersistentStoreTest, InitFailsWithCreationDirectoryFailure) {
   base::FilePath db_dir_path = GetTempPath().Append(FILE_PATH_LITERAL("db"));
   ASSERT_TRUE(base::WriteFile(db_dir_path, ""));
 
+  CHECK(!store_);
+  CHECK(!cleanup_tracker_);
+  cleanup_tracker_ =
+      BackendCleanupTracker::TryCreate(db_dir_path, base::DoNothing());
+  CHECK(cleanup_tracker_);
   store_ = std::make_unique<SqlPersistentStore>(
       db_dir_path, kDefaultMaxBytes, net::CacheType::DISK_CACHE,
       std::vector<scoped_refptr<base::SequencedTaskRunner>>(
           background_task_runners_),
-      async_task_manager_);
+      async_task_manager_, cleanup_tracker_);
   ASSERT_EQ(Init(), SqlPersistentStore::Error::kFailedToCreateDirectory);
 }
 
@@ -871,6 +912,88 @@ TEST_P(SqlPersistentStoreTest, InitFailsWithUnwritableFile) {
 
   CreateStore();
   ASSERT_EQ(Init(), SqlPersistentStore::Error::kFailedToOpenDatabase);
+}
+
+// Tests that SqlPersistentStore::Backend::Initialize fails if the database was
+// created with a different shared_cache_enabled setting.
+TEST_P(SqlPersistentStoreTest, SharedCacheEnabledMismatch) {
+  const base::FilePath db_path = GetTempPath();
+
+  // Initialize backend with shared_cache_enabled = true.
+  {
+    SqlPersistentStore::Backend backend(SqlPersistentStore::ShardId(0), db_path,
+                                        net::CacheType::DISK_CACHE,
+                                        /*shared_cache_enabled=*/true,
+                                        /*read_cache_memory_monitor=*/nullptr);
+    auto init_result =
+        backend.Initialize(kDefaultMaxBytes, base::TimeTicks::Now());
+    ASSERT_TRUE(init_result.has_value());
+  }
+
+  // Initializing backend with shared_cache_enabled = false on the same database
+  // should fail with kSharedCacheEnabledMismatch.
+  {
+    SqlPersistentStore::Backend backend(SqlPersistentStore::ShardId(0), db_path,
+                                        net::CacheType::DISK_CACHE,
+                                        /*shared_cache_enabled=*/false,
+                                        /*read_cache_memory_monitor=*/nullptr);
+    auto init_result =
+        backend.Initialize(kDefaultMaxBytes, base::TimeTicks::Now());
+    ASSERT_FALSE(init_result.has_value());
+    EXPECT_EQ(init_result.error(),
+              SqlPersistentStore::Error::kSharedCacheEnabledMismatch);
+  }
+}
+
+// Tests that initializing an existing database that lacks the
+// kSqlBackendMetaTableKeySharedCacheEnabled metadata key fails if
+// shared_cache_enabled is true, and succeeds if shared_cache_enabled is false.
+TEST_P(SqlPersistentStoreTest, SharedCacheEnabledAbsentInOldDatabase) {
+  const base::FilePath db_path = GetTempPath();
+
+  // Create an existing database and meta table without setting
+  // kSqlBackendMetaTableKeySharedCacheEnabled.
+  {
+    auto db = std::make_unique<sql::Database>(
+        sql::DatabaseOptions()
+#if BUILDFLAG(IS_WIN)
+            .set_exclusive_database_file_lock(true)
+#endif
+            .set_wal_mode(IsWalModeEnabled()),
+        sql::Database::Tag("HttpCacheDiskCache"));
+    ASSERT_TRUE(db->Open(GetDatabaseFilePath()));
+    sql::MetaTable meta_table;
+    ASSERT_TRUE(meta_table.Init(db.get(), kSqlBackendCurrentDatabaseVersion,
+                                kSqlBackendCompatibleDatabaseVersion));
+    ASSERT_TRUE(meta_table.SetValue(kSqlBackendMetaTableKeyEntryCount, 0));
+    ASSERT_TRUE(meta_table.SetValue(kSqlBackendMetaTableKeyTotalSize, 0));
+  }
+
+  // Initializing backend with shared_cache_enabled = true on an old DB without
+  // the shared cache metadata key should fail with kSharedCacheEnabledMismatch.
+  {
+    SqlPersistentStore::Backend backend(SqlPersistentStore::ShardId(0), db_path,
+                                        net::CacheType::DISK_CACHE,
+                                        /*shared_cache_enabled=*/true,
+                                        /*read_cache_memory_monitor=*/nullptr);
+    auto init_result =
+        backend.Initialize(kDefaultMaxBytes, base::TimeTicks::Now());
+    ASSERT_FALSE(init_result.has_value());
+    EXPECT_EQ(init_result.error(),
+              SqlPersistentStore::Error::kSharedCacheEnabledMismatch);
+  }
+
+  // Initializing backend with shared_cache_enabled = false on the old DB should
+  // succeed.
+  {
+    SqlPersistentStore::Backend backend(SqlPersistentStore::ShardId(0), db_path,
+                                        net::CacheType::DISK_CACHE,
+                                        /*shared_cache_enabled=*/false,
+                                        /*read_cache_memory_monitor=*/nullptr);
+    auto init_result =
+        backend.Initialize(kDefaultMaxBytes, base::TimeTicks::Now());
+    EXPECT_TRUE(init_result.has_value());
+  }
 }
 
 // Tests the recovery mechanism when the database file is corrupted.
@@ -1087,12 +1210,11 @@ TEST_P(SqlPersistentStoreTest, OpenEntrySuccess) {
 
   auto open_result = OpenEntry(kKey);
   ASSERT_TRUE(open_result.has_value());
-  ASSERT_TRUE(open_result->has_value());
-  EXPECT_EQ((*open_result)->res_id, created_res_id);
-  EXPECT_TRUE((*open_result)->opened);
-  EXPECT_EQ((*open_result)->body_end, 0);
-  ASSERT_NE((*open_result)->head, nullptr);
-  EXPECT_EQ((*open_result)->head->size(), 0);
+  EXPECT_EQ(open_result->res_id, created_res_id);
+  EXPECT_TRUE(open_result->opened);
+  EXPECT_EQ(open_result->body_end, 0);
+  ASSERT_NE(open_result->head, nullptr);
+  EXPECT_EQ(open_result->head->size(), 0);
 
   // Opening an entry should not change the store's stats.
   EXPECT_EQ(GetEntryCount(), 1);
@@ -1105,8 +1227,8 @@ TEST_P(SqlPersistentStoreTest, OpenEntryNotFound) {
   const CacheEntryKey kKey("non-existent-key");
 
   auto result = OpenEntry(kKey);
-  ASSERT_TRUE(result.has_value());
-  EXPECT_FALSE(result->has_value());
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), SqlPersistentStore::Error::kNotFound);
 }
 
 TEST_P(SqlPersistentStoreTest, OpenOrCreateEntryCreatesNew) {
@@ -1166,14 +1288,13 @@ TEST_P(SqlPersistentStoreTest, DoomEntrySuccess) {
 
   // Verify the doomed entry can no longer be opened.
   auto open_doomed_result = OpenEntry(kKeyToDoom);
-  ASSERT_TRUE(open_doomed_result.has_value());
-  EXPECT_FALSE(open_doomed_result->has_value());
+  ASSERT_FALSE(open_doomed_result.has_value());
+  EXPECT_EQ(open_doomed_result.error(), SqlPersistentStore::Error::kNotFound);
 
   // Verify the other entry can still be opened.
   auto open_kept_result = OpenEntry(kKeyToKeep);
   ASSERT_TRUE(open_kept_result.has_value());
-  ASSERT_TRUE(open_kept_result->has_value());
-  EXPECT_EQ((*open_kept_result)->res_id, res_id_to_keep);
+  EXPECT_EQ(open_kept_result->res_id, res_id_to_keep);
 
   // Verify the doomed entry still exists in the table but is marked as doomed,
   // and the other entry is unaffected.
@@ -1219,13 +1340,11 @@ TEST_P(SqlPersistentStoreTest, DoomEntryFailsWrongResId) {
 
   auto open_result1 = OpenEntry(kKey1);
   ASSERT_TRUE(open_result1.has_value());
-  ASSERT_TRUE(open_result1->has_value());
-  EXPECT_EQ((*open_result1)->res_id, res_id1);
+  EXPECT_EQ(open_result1->res_id, res_id1);
 
   auto open_result2 = OpenEntry(kKey2);
   ASSERT_TRUE(open_result2.has_value());
-  ASSERT_TRUE(open_result2->has_value());
-  EXPECT_EQ((*open_result2)->res_id, res_id2);
+  EXPECT_EQ(open_result2->res_id, res_id2);
 }
 
 TEST_P(SqlPersistentStoreTest, DoomEntryWithCorruptSizeRecovers) {
@@ -1352,14 +1471,13 @@ TEST_P(SqlPersistentStoreTest, DeleteLiveEntrySuccess) {
 
   // Verify the deleted entry cannot be opened.
   auto open_deleted_result = OpenEntry(kKeyToDelete);
-  ASSERT_TRUE(open_deleted_result.has_value());
-  EXPECT_FALSE(open_deleted_result->has_value());
+  ASSERT_FALSE(open_deleted_result.has_value());
+  EXPECT_EQ(open_deleted_result.error(), SqlPersistentStore::Error::kNotFound);
 
   // Verify the other entry can still be opened.
   auto open_kept_result = OpenEntry(kKeyToKeep);
   ASSERT_TRUE(open_kept_result.has_value());
-  ASSERT_TRUE(open_kept_result->has_value());
-  EXPECT_EQ((*open_kept_result)->res_id, res_id_to_keep);
+  EXPECT_EQ(open_kept_result->res_id, res_id_to_keep);
 
   // Verify the entry is physically gone from the database.
   EXPECT_EQ(CountResourcesTable(), 1);
@@ -1414,7 +1532,6 @@ TEST_P(SqlPersistentStoreTest, DeleteLiveEntryFailsOnDoomedEntry) {
   EXPECT_EQ(GetEntryCount(), 1);
   auto open_live_result = OpenEntry(kLiveKey);
   ASSERT_TRUE(open_live_result.has_value());
-  ASSERT_TRUE(open_live_result->has_value());
 
   // Verify the doomed entry still exists in the table (as doomed), and the
   // live entry is also present.
@@ -1507,8 +1624,8 @@ TEST_P(SqlPersistentStoreTest, DeleteAllEntriesNonEmpty) {
 
   // Verify the old entries cannot be opened.
   auto open_result = OpenEntry(kKey1);
-  ASSERT_TRUE(open_result.has_value());
-  EXPECT_FALSE(open_result->has_value());
+  ASSERT_FALSE(open_result.has_value());
+  EXPECT_EQ(open_result.error(), SqlPersistentStore::Error::kNotFound);
 }
 
 TEST_P(SqlPersistentStoreTest, DeleteAllEntriesDeletesBlobs) {
@@ -1611,8 +1728,7 @@ void SqlPersistentStoreTestBase::RunCleanupDoomedEntriesTest(
   // Verify the live entry is still present.
   auto open_result1 = OpenEntry(kKeyToKeep);
   ASSERT_TRUE(open_result1.has_value());
-  ASSERT_TRUE(open_result1->has_value());
-  EXPECT_EQ(open_result1.value()->res_id, res_id_to_keep);
+  EXPECT_EQ(open_result1->res_id, res_id_to_keep);
 }
 
 TEST_P(SqlPersistentStoreTest,
@@ -1630,8 +1746,7 @@ TEST_P(SqlPersistentStoreTest,
 
 TEST_P(SqlPersistentStoreTest,
        MaybeRunCleanupDoomedEntriesWithLoadIndexOnInitFeature) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeaturesAndParameters(
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
       {{net::features::kDiskCacheBackendExperiment,
         {{net::features::kDiskCacheBackendParam.name, "sql"},
          {net::features::kSqlDiskCacheLoadIndexOnInit.name, "true"}}}},
@@ -1860,10 +1975,10 @@ TEST_P(SqlPersistentStoreTest, DeleteLiveEntriesBetweenOneEntry) {
   CreateAndInitStore();
   store_->EnableStrictCorruptionCheckForTesting();
   const base::Time kBaseTime = base::Time::Now();
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   const CacheEntryKey kKey("key");
   ASSERT_TRUE(CreateEntry(kKey).has_value());
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   ASSERT_EQ(DeleteLiveEntriesBetween(kBaseTime, base::Time::Now(), {}),
             SqlPersistentStore::Error::kOk);
 }
@@ -1879,16 +1994,16 @@ TEST_P(SqlPersistentStoreTest, DeleteLiveEntriesBetween) {
   const base::Time kBaseTime = base::Time::Now();
 
   // Create entries with different last_used times.
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   ASSERT_TRUE(CreateEntry(kKey1).has_value());
   const base::Time kTime1 = base::Time::Now();
 
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   auto create_result = CreateEntry(kKey2);
   ASSERT_TRUE(create_result.has_value());
   SqlPersistentStore::ResId res_id2 = create_result->res_id;
 
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   ASSERT_TRUE(CreateEntry(kKey3).has_value());
   const base::Time kTime3 = base::Time::Now();
 
@@ -1907,7 +2022,7 @@ TEST_P(SqlPersistentStoreTest, DeleteLiveEntriesBetween) {
 
   // Create kKey5, ensuring its time is after kTime3.
   // At this point, Time::Now() is effectively kTime3.
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   ASSERT_TRUE(CreateEntry(kKey5).has_value());
   const base::Time kTime5 = base::Time::Now();
   ASSERT_GT(kTime5, kTime3);
@@ -1955,14 +2070,14 @@ TEST_P(SqlPersistentStoreTest, DeleteLiveEntriesBetween) {
 
   // Verify kKey1 is deleted.
   auto open_key1 = OpenEntry(kKey1);
-  ASSERT_TRUE(open_key1.has_value());
-  EXPECT_FALSE(open_key1->has_value());
+  ASSERT_FALSE(open_key1.has_value());
+  EXPECT_EQ(open_key1.error(), SqlPersistentStore::Error::kNotFound);
 
   // Verify other keys are still present.
-  EXPECT_TRUE(OpenEntry(kKey2).value().has_value());
-  EXPECT_TRUE(OpenEntry(kKey3).value().has_value());
-  EXPECT_TRUE(OpenEntry(kKey4).value().has_value());
-  EXPECT_TRUE(OpenEntry(kKey5).value().has_value());
+  EXPECT_TRUE(OpenEntry(kKey2).has_value());
+  EXPECT_TRUE(OpenEntry(kKey3).has_value());
+  EXPECT_TRUE(OpenEntry(kKey4).has_value());
+  EXPECT_TRUE(OpenEntry(kKey5).has_value());
 
   EXPECT_EQ(CountResourcesTable(), 4);
 }
@@ -1973,7 +2088,7 @@ TEST_P(SqlPersistentStoreTest, DeleteLiveEntriesBetweenDeletesBlobs) {
   const auto res_id1 = CreateEntryAndGetResId(kKey1);
   const std::string kData1 = "data1";
   WriteDataAndAssertSuccess(kKey1, res_id1, 0, 0, kData1, /*truncate=*/false);
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   const base::Time time1 = base::Time::Now();
   const CacheEntryKey kKey2("key2");
   const auto res_id2 = CreateEntryAndGetResId(kKey2);
@@ -2003,7 +2118,7 @@ TEST_P(SqlPersistentStoreTest, DeleteLiveEntriesBetweenNoMatchingEntries) {
   CreateAndInitStore();
   const CacheEntryKey kKey1("key1");
 
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   const base::Time kTime1 = base::Time::Now();
   ASSERT_TRUE(CreateEntry(kKey1).has_value());
 
@@ -2017,7 +2132,7 @@ TEST_P(SqlPersistentStoreTest, DeleteLiveEntriesBetweenNoMatchingEntries) {
 
   EXPECT_EQ(GetEntryCount(), 1);
   EXPECT_EQ(GetSizeOfAllEntries(), initial_total_size);
-  EXPECT_TRUE(OpenEntry(kKey1).value().has_value());
+  EXPECT_TRUE(OpenEntry(kKey1).has_value());
 }
 
 TEST_P(SqlPersistentStoreTest, DeleteLiveEntriesBetweenWithCorruptSize) {
@@ -2026,12 +2141,12 @@ TEST_P(SqlPersistentStoreTest, DeleteLiveEntriesBetweenWithCorruptSize) {
   const CacheEntryKey kKeyToKeep("key-to-keep");
 
   // Create an entry that will be corrupted and fall within the deletion range.
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   const base::Time kTimeCorrupt = base::Time::Now();
   ASSERT_TRUE(CreateEntry(kKeyToCorrupt).has_value());
 
   // Create an entry that will be kept (outside the deletion range).
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   const base::Time kTimeKeep = base::Time::Now();
   ASSERT_TRUE(CreateEntry(kKeyToKeep).has_value());
 
@@ -2070,8 +2185,8 @@ TEST_P(SqlPersistentStoreTest, DeleteLiveEntriesBetweenWithCorruptSize) {
       kSqlBackendStaticResourceSize + kKeyToKeep.string().size();
   EXPECT_EQ(GetSizeOfAllEntries(), expected_size_after_delete);
 
-  EXPECT_FALSE(OpenEntry(kKeyToCorrupt).value().has_value());
-  EXPECT_TRUE(OpenEntry(kKeyToKeep).value().has_value());
+  EXPECT_FALSE(OpenEntry(kKeyToCorrupt).has_value());
+  EXPECT_TRUE(OpenEntry(kKeyToKeep).has_value());
 }
 
 TEST_P(SqlPersistentStoreTest, UpdateEntryLastUsedByKeySuccess) {
@@ -2084,11 +2199,11 @@ TEST_P(SqlPersistentStoreTest, UpdateEntryLastUsedByKeySuccess) {
 
   // Open to verify initial time.
   auto open_result1 = OpenEntry(kKey);
-  ASSERT_TRUE(open_result1.has_value() && open_result1->has_value());
-  EXPECT_EQ((*open_result1)->last_used, create_time);
+  ASSERT_TRUE(open_result1.has_value());
+  EXPECT_EQ(open_result1->last_used, create_time);
 
   // Advance time and update.
-  task_environment_.AdvanceClock(base::Minutes(5));
+  AdvanceClock(base::Minutes(5));
   const base::Time kNewTime = base::Time::Now();
   ASSERT_NE(kNewTime, create_time);
 
@@ -2101,8 +2216,8 @@ TEST_P(SqlPersistentStoreTest, UpdateEntryLastUsedByKeySuccess) {
 
   // Open again to verify the updated time.
   auto open_result2 = OpenEntry(kKey);
-  ASSERT_TRUE(open_result2.has_value() && open_result2->has_value());
-  EXPECT_EQ((*open_result2)->last_used, kNewTime);
+  ASSERT_TRUE(open_result2.has_value());
+  EXPECT_EQ(open_result2->last_used, kNewTime);
 }
 
 TEST_P(SqlPersistentStoreTest, UpdateEntryLastUsedByKeyOnNonExistentEntry) {
@@ -2358,8 +2473,8 @@ TEST_P(SqlPersistentStoreWriteEntryTest, SuccessCreateNewDoomed) {
 
   // Verify OpenEntry fails.
   auto result = OpenEntry(kKey);
-  ASSERT_TRUE(result.has_value());
-  EXPECT_FALSE(result->has_value());
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), SqlPersistentStore::Error::kNotFound);
 }
 
 TEST_P(SqlPersistentStoreWriteEntryTest, NonExistentEntry) {
@@ -3587,8 +3702,8 @@ TEST_P(SqlPersistentStoreTest, WriteEntryDataCreatesNewDoomed) {
 
   // Verify OpenEntry fails.
   auto open_result = OpenEntry(kKey);
-  ASSERT_TRUE(open_result.has_value());
-  EXPECT_FALSE(open_result->has_value());
+  ASSERT_FALSE(open_result.has_value());
+  EXPECT_EQ(open_result.error(), SqlPersistentStore::Error::kNotFound);
 }
 
 TEST_P(SqlPersistentStoreTest, SparseRead) {
@@ -3908,11 +4023,10 @@ TEST_P(SqlPersistentStoreTest, OpenEntryCallbackNotRunOnStoreDestruction) {
   CreateAndInitStore();
 
   bool callback_run = false;
-  store_->OpenEntry(kKey,
-                    base::BindLambdaForTesting(
-                        [&](SqlPersistentStore::OptionalEntryInfoOrError) {
-                          callback_run = true;
-                        }));
+  store_->OpenEntry(kKey, base::BindLambdaForTesting(
+                              [&](SqlPersistentStore::EntryInfoOrError) {
+                                callback_run = true;
+                              }));
   store_.reset();
   FlushPendingTask();
 
@@ -4145,19 +4259,19 @@ TEST_P(SqlPersistentStoreTest, CalculateSizeOfEntriesBetween) {
       kSqlBackendStaticResourceSize + kKey3.string().size() + kData3.size();
 
   // Create entry 1.
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   const base::Time time1 = base::Time::Now();
   const auto res_id1 = CreateEntryAndGetResId(kKey1);
   WriteDataAndAssertSuccess(kKey1, res_id1, 0, 0, kData1, /*truncate=*/false);
 
   // Create entry 2.
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   const base::Time time2 = base::Time::Now();
   const auto res_id2 = CreateEntryAndGetResId(kKey2);
   WriteDataAndAssertSuccess(kKey2, res_id2, 0, 0, kData2, /*truncate=*/false);
 
   // Create entry 3.
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   const base::Time time3 = base::Time::Now();
   const auto res_id3 = CreateEntryAndGetResId(kKey3);
   WriteDataAndAssertSuccess(kKey3, res_id3, 0, 0, kData3, /*truncate=*/false);
@@ -4205,13 +4319,13 @@ TEST_P(SqlPersistentStoreTest, CalculateSizeOfEntriesBetweenOverflow) {
   const CacheEntryKey kKey2("key2");
 
   const base::Time time1 = base::Time::Now();
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   ASSERT_TRUE(CreateEntry(kKey1).has_value());
 
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   ASSERT_TRUE(CreateEntry(kKey2).has_value());
 
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
 
   // Manually set bytes_usage to large values for both entries.
   {
@@ -4247,13 +4361,13 @@ TEST_P(SqlPersistentStoreTest, CalculateSizeOfEntriesBetweenExcludesDoomed) {
       kSqlBackendStaticResourceSize + kKey2.string().size() + kData2.size();
 
   // Create entry 1.
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   const base::Time time1 = base::Time::Now();
   const auto res_id1 = CreateEntryAndGetResId(kKey1);
   WriteDataAndAssertSuccess(kKey1, res_id1, 0, 0, kData1, /*truncate=*/false);
 
   // Create entry 2.
-  task_environment_.AdvanceClock(base::Minutes(1));
+  AdvanceClock(base::Minutes(1));
   const auto res_id2 = CreateEntryAndGetResId(kKey2);
   WriteDataAndAssertSuccess(kKey2, res_id2, 0, 0, kData2, /*truncate=*/false);
 
@@ -4356,8 +4470,7 @@ TEST_P(SqlPersistentStoreTest, StartEvictionReducesSizeToLowWatermark) {
     keys.push_back(key);
     auto create_result = CreateEntry(key);
     ASSERT_TRUE(create_result.has_value());
-    task_environment_.AdvanceClock(
-        base::Seconds(1));  // To distinguish last_used
+    AdvanceClock(base::Seconds(1));  // To distinguish last_used
   }
 
   const int64_t size_before_eviction = GetSizeOfAllEntries();
@@ -4382,8 +4495,8 @@ TEST_P(SqlPersistentStoreTest, StartEvictionReducesSizeToLowWatermark) {
     EXPECT_EQ(store_->GetIndexStateForHash(keys[j].hash()),
               SqlPersistentStore::IndexState::kHashNotFound);
     auto result = OpenEntry(keys[j]);
-    ASSERT_TRUE(result.has_value());
-    EXPECT_FALSE(result->has_value());
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), SqlPersistentStore::Error::kNotFound);
   }
 
   // Verify newest entries are still there.
@@ -4392,7 +4505,6 @@ TEST_P(SqlPersistentStoreTest, StartEvictionReducesSizeToLowWatermark) {
               SqlPersistentStore::IndexState::kHashFound);
     auto result = OpenEntry(keys[j]);
     ASSERT_TRUE(result.has_value());
-    EXPECT_TRUE(result->has_value());
   }
 
   EXPECT_NE(store_->GetEvictionUrgency(),
@@ -4401,8 +4513,7 @@ TEST_P(SqlPersistentStoreTest, StartEvictionReducesSizeToLowWatermark) {
 
 TEST_P(SqlPersistentStoreTest,
        StartEvictionWithConsolidatedInMemoryIndexDoesNotCorruptSize) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeaturesAndParameters(
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
       {{net::features::kDiskCacheBackendExperiment,
         {{"SqlDiskCacheSizeAndPriorityAwareEviction", "true"},
          {"SqlDiskCacheConsolidatedInMemoryIndex", "true"}}},
@@ -4429,7 +4540,7 @@ TEST_P(SqlPersistentStoreTest,
     keys.push_back(key);
     auto res_id = CreateEntryAndGetResId(key);
     FillDataInRange(key, res_id, 0, 0, kPayloadSize, 'a');
-    task_environment_.AdvanceClock(base::Minutes(1));
+    AdvanceClock(base::Minutes(1));
     auto error = StartEviction({}, /*is_idle_time_eviction=*/false);
     EXPECT_EQ(error, SqlPersistentStore::Error::kOk);
   }
@@ -4467,8 +4578,7 @@ TEST_P(SqlPersistentStoreTest, StartEvictionExcludesGivenKeys) {
     if (!first_res_id.has_value()) {
       first_res_id = create_result->res_id;
     }
-    task_environment_.AdvanceClock(
-        base::Seconds(1));  // To distinguish last_used
+    AdvanceClock(base::Seconds(1));  // To distinguish last_used
   }
 
   const int64_t size_before_eviction = GetSizeOfAllEntries();
@@ -4497,7 +4607,6 @@ TEST_P(SqlPersistentStoreTest, StartEvictionExcludesGivenKeys) {
   // Verify the excluded entry is still there.
   auto result = OpenEntry(keys[0]);
   ASSERT_TRUE(result.has_value());
-  EXPECT_TRUE(result->has_value());
 
   // Verify some other old entries are gone.
   // The number of evicted entries will be different now.
@@ -4506,8 +4615,8 @@ TEST_P(SqlPersistentStoreTest, StartEvictionExcludesGivenKeys) {
   // evicted.
   for (int j = 1; j <= evicted_count; ++j) {
     result = OpenEntry(keys[j]);
-    ASSERT_TRUE(result.has_value());
-    EXPECT_FALSE(result->has_value());
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), SqlPersistentStore::Error::kNotFound);
   }
 
   EXPECT_NE(store_->GetEvictionUrgency(),
@@ -4560,11 +4669,16 @@ int SqlPersistentStoreTestBase::GetNumberForWritesRequiredForCheckpoint(
     std::string_view data) {
   base::ScopedTempDir temp_dir;
   CHECK(temp_dir.CreateUniqueTempDir());
+  CHECK(!store_);
+  CHECK(!cleanup_tracker_);
+  cleanup_tracker_ =
+      BackendCleanupTracker::TryCreate(temp_dir.GetPath(), base::DoNothing());
+  CHECK(cleanup_tracker_);
   store_ = std::make_unique<SqlPersistentStore>(
       temp_dir.GetPath(), kDefaultMaxBytes, net::CacheType::DISK_CACHE,
       std::vector<scoped_refptr<base::SequencedTaskRunner>>(
           background_task_runners_),
-      async_task_manager_);
+      async_task_manager_, cleanup_tracker_);
   CHECK_EQ(Init(), SqlPersistentStore::Error::kOk);
 
   const base::FilePath db_path =
@@ -4597,16 +4711,14 @@ int SqlPersistentStoreTestBase::GetNumberForWritesRequiredForCheckpoint(
     EXPECT_GT(wal_size, previous_wal_size);
     previous_wal_size = wal_size;
   }
-  store_.reset();
-  FlushPendingTask();
+  ClearStore();
   return number_of_writes;
 }
 
 void SqlPersistentStoreTestBase::RunWalCheckpointTest(bool serial_checkpoint,
                                                       bool multiple_shards) {
   // Set small thresholds to shorten the test execution time.
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeaturesAndParameters(
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
       {{net::features::kDiskCacheBackendExperiment,
         {{net::features::kDiskCacheBackendParam.name, "sql"},
          {net::features::kSqlDiskCacheForceCheckpointThreshold.name, "200"},
@@ -4663,12 +4775,7 @@ void SqlPersistentStoreTestBase::RunWalCheckpointTest(bool serial_checkpoint,
   // greater than in an idle state.
   EXPECT_GT(non_idle_checkpoint_write_count, idle_checkpoint_write_count);
 
-  store_ = std::make_unique<SqlPersistentStore>(
-      GetTempPath(), kDefaultMaxBytes, net::CacheType::DISK_CACHE,
-      std::vector<scoped_refptr<base::SequencedTaskRunner>>(
-          background_task_runners_),
-      async_task_manager_);
-  CHECK_EQ(Init(), SqlPersistentStore::Error::kOk);
+  CreateAndInitStore();
   const base::FilePath db_path = GetDatabaseFilePath();
   int64_t previous_db_size = CheckedGetFileSize(db_path);
 
@@ -4859,8 +4966,7 @@ TEST_P(SqlPersistentStoreTest, IndexReloads) {
 }
 
 TEST_P(SqlPersistentStoreTest, LoadIndexOnInitFeature) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeaturesAndParameters(
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
       {{net::features::kDiskCacheBackendExperiment,
         {{net::features::kDiskCacheBackendParam.name, "sql"},
          {net::features::kSqlDiskCacheLoadIndexOnInit.name, "true"}}}},
@@ -4985,7 +5091,6 @@ TEST_P(SqlPersistentStoreTest, SimulateDbFailure) {
 
   open_result = OpenEntry(kKey);
   ASSERT_TRUE(open_result.has_value());
-  ASSERT_TRUE(open_result->has_value());
 }
 
 TEST_P(SqlPersistentStoreTest, AfterRazeAndPoisoned) {
@@ -5313,14 +5418,13 @@ TEST_P(SqlPersistentStoreTest, ResumeEvictionRespectsExcludedResIds) {
   // The excluded entry should still exist.
   auto open_result = OpenEntry(existing_entry_key);
   ASSERT_TRUE(open_result.has_value());
-  EXPECT_TRUE(open_result->has_value());
 
   // Another entry should be gone.
   const CacheEntryKey evicted_key(
       "key_" + base::NumberToString(existing_entry_index + 1));
   auto open_result_evicted = OpenEntry(evicted_key);
-  ASSERT_TRUE(open_result_evicted.has_value());
-  EXPECT_FALSE(open_result_evicted->has_value());
+  ASSERT_FALSE(open_result_evicted.has_value());
+  EXPECT_EQ(open_result_evicted.error(), SqlPersistentStore::Error::kNotFound);
 }
 
 TEST_P(SqlPersistentStoreTest, ResumeEvictionHandlesModifiedEntrySize) {
@@ -5356,8 +5460,8 @@ TEST_P(SqlPersistentStoreTest, ResumeEvictionHandlesModifiedEntrySize) {
 
   // Verify `existing_entry_key` is evicted.
   auto final_result = OpenEntry(existing_entry_key);
-  ASSERT_TRUE(final_result.has_value());
-  EXPECT_FALSE(final_result->has_value());
+  ASSERT_FALSE(final_result.has_value());
+  EXPECT_EQ(final_result.error(), SqlPersistentStore::Error::kNotFound);
 
   // Verify total size is correct (should be below low watermark).
   // The fact that key_0 was larger than expected should simply mean we freed
@@ -5634,15 +5738,14 @@ TEST_P(SqlPersistentStoreTest, DoomEntryWhileIndexLoading) {
   // 9. Verify that the doomed entries are gone and the other entry is still
   //    accessible.
   auto open_result1 = OpenEntry(kKey1);
-  ASSERT_TRUE(open_result1.has_value());
-  EXPECT_FALSE(open_result1->has_value());
+  ASSERT_FALSE(open_result1.has_value());
+  EXPECT_EQ(open_result1.error(), SqlPersistentStore::Error::kNotFound);
   auto open_result2 = OpenEntry(kKey2);
   ASSERT_TRUE(open_result2.has_value());
-  ASSERT_TRUE(open_result2->has_value());
-  EXPECT_EQ((*open_result2)->res_id, res_id2);
+  EXPECT_EQ(open_result2->res_id, res_id2);
   auto open_result3 = OpenEntry(kKey3);
-  ASSERT_TRUE(open_result3.has_value());
-  EXPECT_FALSE(open_result3->has_value());
+  ASSERT_FALSE(open_result3.has_value());
+  EXPECT_EQ(open_result3.error(), SqlPersistentStore::Error::kNotFound);
 }
 
 TEST_P(SqlPersistentStoreTest,
@@ -5711,8 +5814,7 @@ TEST_P(SqlPersistentStoreTest, DoomEntryRecoversIndexOnDbFailure) {
   // The entry should still be openable.
   auto open_result = OpenEntry(kKey);
   ASSERT_TRUE(open_result.has_value());
-  ASSERT_TRUE(open_result->has_value());
-  EXPECT_EQ(open_result.value()->res_id, res_id);
+  EXPECT_EQ(open_result->res_id, res_id);
 
   // Doom the entry again. This time it should succeed.
   ASSERT_EQ(DoomEntry(kKey, res_id), SqlPersistentStore::Error::kOk);
@@ -5723,8 +5825,8 @@ TEST_P(SqlPersistentStoreTest, DoomEntryRecoversIndexOnDbFailure) {
 
   // The entry should not be openable.
   open_result = OpenEntry(kKey);
-  ASSERT_TRUE(open_result.has_value());
-  EXPECT_FALSE(open_result->has_value());
+  ASSERT_FALSE(open_result.has_value());
+  EXPECT_EQ(open_result.error(), SqlPersistentStore::Error::kNotFound);
 }
 
 // Tests that when `DoomEntry` is called with a `res_id` that is present in the
@@ -5760,8 +5862,7 @@ TEST_P(SqlPersistentStoreTest, DoomEntryRecoversIndexOnNotFound) {
   EXPECT_EQ(GetEntryCount(), 1);
   auto open_result = OpenEntry(kExistingKey);
   ASSERT_TRUE(open_result.has_value());
-  ASSERT_TRUE(open_result->has_value());
-  EXPECT_EQ((*open_result)->res_id, res_id);
+  EXPECT_EQ(open_result->res_id, res_id);
 }
 
 TEST_P(SqlPersistentStoreTest,
@@ -5908,8 +6009,7 @@ TEST_P(SqlPersistentStoreTest, SetAndGetEntryInMemoryData) {
 }
 
 TEST_P(SqlPersistentStoreTest, StartEvictionEvictsLargerEntriesFirst) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
       net::features::kDiskCacheBackendExperiment,
       {{"SqlDiskCacheSizeAndPriorityAwareEviction", "true"}});
 
@@ -5950,7 +6050,7 @@ TEST_P(SqlPersistentStoreTest, StartEvictionEvictsLargerEntriesFirst) {
             SqlPersistentStore::Error::kOk);
 
   // Advance clock so time_since_last_used > 0.
-  task_environment_.FastForwardBy(base::Seconds(10));
+  FastForwardBy(base::Seconds(10));
 
   EXPECT_GT(GetSizeOfAllEntries(), kHighWatermark);
   EXPECT_EQ(store_->GetEvictionUrgency(),
@@ -5968,14 +6068,13 @@ TEST_P(SqlPersistentStoreTest, StartEvictionEvictsLargerEntriesFirst) {
 
   // Verify the larger entry is gone.
   auto open_large = OpenEntry(large_key);
-  ASSERT_TRUE(open_large.has_value());
-  EXPECT_FALSE(open_large->has_value());
+  ASSERT_FALSE(open_large.has_value());
+  EXPECT_EQ(open_large.error(), SqlPersistentStore::Error::kNotFound);
 
   // Verify smaller entries are still there.
   for (const auto& key : keys) {
     auto open_result = OpenEntry(key);
     ASSERT_TRUE(open_result.has_value());
-    EXPECT_TRUE(open_result->has_value());
   }
 }
 
@@ -6005,7 +6104,7 @@ void SqlPersistentStoreTestBase::RunStartEvictionEvictsOlderEntriesFirstTest() {
   }
 
   // Advance clock.
-  task_environment_.FastForwardBy(base::Seconds(20));
+  FastForwardBy(base::Seconds(20));
 
   EXPECT_GT(GetSizeOfAllEntries(), kHighWatermark);
 
@@ -6020,21 +6119,19 @@ void SqlPersistentStoreTestBase::RunStartEvictionEvictsOlderEntriesFirstTest() {
 
   // Verify the oldest entry (key0) is gone.
   auto open_oldest = OpenEntry(keys[0]);
-  ASSERT_TRUE(open_oldest.has_value());
-  EXPECT_FALSE(open_oldest->has_value());
+  ASSERT_FALSE(open_oldest.has_value());
+  EXPECT_EQ(open_oldest.error(), SqlPersistentStore::Error::kNotFound);
 
   // Verify newest entries are still there.
   for (int i = 1; i < 10; ++i) {
     auto open_result = OpenEntry(keys[i]);
     ASSERT_TRUE(open_result.has_value());
-    EXPECT_TRUE(open_result->has_value());
   }
 }
 
 TEST_P(SqlPersistentStoreTest,
        StartEvictionEvictsOlderEntriesFirstSizeAndPriorityAwareEviction) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
       net::features::kDiskCacheBackendExperiment,
       {{"SqlDiskCacheSizeAndPriorityAwareEviction", "true"}});
 
@@ -6043,8 +6140,7 @@ TEST_P(SqlPersistentStoreTest,
 
 TEST_P(SqlPersistentStoreTest,
        StartEvictionEvictsOlderEntriesFirstLeastRecentlyUsedEviction) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
       net::features::kDiskCacheBackendExperiment,
       {{"SqlDiskCacheSizeAndPriorityAwareEviction", "false"}});
 
@@ -6052,8 +6148,7 @@ TEST_P(SqlPersistentStoreTest,
 }
 
 TEST_P(SqlPersistentStoreTest, StartEvictionPrioritizesHighPriorityEntries) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeaturesAndParameters(
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
       {{net::features::kDiskCacheBackendExperiment,
         {{"SqlDiskCacheSizeAndPriorityAwareEviction", "true"}}},
        {net::features::kSimpleCachePrioritizedCaching, {}}},
@@ -6101,7 +6196,7 @@ TEST_P(SqlPersistentStoreTest, StartEvictionPrioritizesHighPriorityEntries) {
             SqlPersistentStore::Error::kOk);
 
   // Advance clock.
-  task_environment_.FastForwardBy(base::Seconds(10));
+  FastForwardBy(base::Seconds(10));
 
   EXPECT_GT(GetSizeOfAllEntries(), kHighWatermark);
 
@@ -6116,13 +6211,12 @@ TEST_P(SqlPersistentStoreTest, StartEvictionPrioritizesHighPriorityEntries) {
   // Verify the high priority entry is still there.
   auto open_high = OpenEntry(high_priority_key);
   ASSERT_TRUE(open_high.has_value());
-  EXPECT_TRUE(open_high->has_value());
 
   // Verify one of the low priority entries is gone.
   int gone_count = 0;
   for (const auto& key : low_priority_keys) {
     auto open_result = OpenEntry(key);
-    if (open_result.has_value() && !open_result->has_value()) {
+    if (!open_result.has_value()) {
       gone_count++;
     }
   }
@@ -6131,8 +6225,7 @@ TEST_P(SqlPersistentStoreTest, StartEvictionPrioritizesHighPriorityEntries) {
 
 TEST_P(SqlPersistentStoreTest,
        StartEvictionPrioritizesHighPriorityEntriesWithConsolidatedIndex) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeaturesAndParameters(
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
       {{net::features::kDiskCacheBackendExperiment,
         {{"SqlDiskCacheSizeAndPriorityAwareEviction", "true"},
          {"SqlDiskCacheConsolidatedInMemoryIndex", "true"}}},
@@ -6182,7 +6275,7 @@ TEST_P(SqlPersistentStoreTest,
             SqlPersistentStore::Error::kOk);
 
   // Advance clock.
-  task_environment_.FastForwardBy(base::Seconds(10));
+  FastForwardBy(base::Seconds(10));
 
   EXPECT_GT(GetSizeOfAllEntries(), kHighWatermark);
 
@@ -6197,13 +6290,12 @@ TEST_P(SqlPersistentStoreTest,
   // Verify the high priority entry is still there.
   auto open_high = OpenEntry(high_priority_key);
   ASSERT_TRUE(open_high.has_value());
-  EXPECT_TRUE(open_high->has_value());
 
   // Verify one of the low priority entries is gone.
   int gone_count = 0;
   for (const auto& key : low_priority_keys) {
     auto open_result = OpenEntry(key);
-    if (open_result.has_value() && !open_result->has_value()) {
+    if (!open_result.has_value()) {
       gone_count++;
     }
   }
@@ -6211,8 +6303,7 @@ TEST_P(SqlPersistentStoreTest,
 }
 
 TEST_P(SqlPersistentStoreTest, EvictionCollectsMetadata) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeaturesAndParameters(
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
       {{net::features::kDiskCacheBackendExperiment,
         {{"SqlDiskCacheSizeAndPriorityAwareEviction", "true"},
          {"SqlDiskCacheConsolidatedInMemoryIndex", "true"}}}},
@@ -6236,7 +6327,7 @@ TEST_P(SqlPersistentStoreTest, EvictionCollectsMetadata) {
     keys.push_back(key);
     auto create_result = CreateEntry(key);
     ASSERT_TRUE(create_result.has_value());
-    task_environment_.AdvanceClock(base::Seconds(1));
+    AdvanceClock(base::Seconds(1));
   }
 
   EXPECT_FALSE(store_->GetShardForTesting(SqlPersistentStoreShardId(0))
@@ -6262,8 +6353,7 @@ TEST_P(SqlPersistentStoreTest, EvictionCollectsMetadata) {
       // Verify that metadata is available after the first eviction.
       auto open_result = OpenEntry(key);
       ASSERT_TRUE(open_result.has_value());
-      ASSERT_TRUE(open_result->has_value());
-      auto res_id = (*open_result)->res_id;
+      auto res_id = open_result->res_id;
       auto metadata = store_->GetShardForTesting(key.hash())
                           .GetIndexForTesting()
                           ->GetEntryMetadataForTesting(key.hash(), res_id);
@@ -6272,12 +6362,12 @@ TEST_P(SqlPersistentStoreTest, EvictionCollectsMetadata) {
       EXPECT_EQ(metadata->last_used.InSecondsFSinceUnixEpoch(),
                 base::Time::FromSecondsSinceUnixEpoch(
                     static_cast<uint32_t>(
-                        (*open_result)->last_used.InSecondsFSinceUnixEpoch()))
+                        open_result->last_used.InSecondsFSinceUnixEpoch()))
                     .InSecondsFSinceUnixEpoch());
 
-      uint64_t expected_initial_size = (*open_result)->body_end;
-      if ((*open_result)->head) {
-        expected_initial_size += (*open_result)->head->capacity();
+      uint64_t expected_initial_size = open_result->body_end;
+      if (open_result->head) {
+        expected_initial_size += open_result->head->capacity();
       }
       uint64_t expected_usage = expected_initial_size + key.string().size();
       EXPECT_EQ(metadata->bytes_usage, ((expected_usage + 255) >> 8) << 8);
@@ -6291,12 +6381,11 @@ TEST_P(SqlPersistentStoreTest, EvictionCollectsMetadata) {
   CacheEntryKey oldest_alive_key = alive_keys.front();
   auto open_oldest = OpenEntry(oldest_alive_key);
   ASSERT_TRUE(open_oldest.has_value());
-  ASSERT_TRUE(open_oldest->has_value());
-  auto oldest_res_id = (*open_oldest)->res_id;
+  auto oldest_res_id = open_oldest->res_id;
 
   // Advance clock so the entry gets a newer last_used time.
   base::Time new_last_used = base::Time::Now() + base::Seconds(10);
-  task_environment_.AdvanceClock(base::Seconds(10));
+  AdvanceClock(base::Seconds(10));
   ASSERT_EQ(UpdateEntryLastUsedByKey(oldest_alive_key, new_last_used),
             SqlPersistentStore::Error::kOk);
 
@@ -6315,11 +6404,10 @@ TEST_P(SqlPersistentStoreTest, EvictionCollectsMetadata) {
   CacheEntryKey second_oldest_key = alive_keys[1];
   auto open_second = OpenEntry(second_oldest_key);
   ASSERT_TRUE(open_second.has_value());
-  ASSERT_TRUE(open_second->has_value());
-  auto res_id = (*open_second)->res_id;
-  auto initial_size = (*open_second)->body_end;
-  if ((*open_second)->head) {
-    initial_size += (*open_second)->head->capacity();
+  auto res_id = open_second->res_id;
+  auto initial_size = open_second->body_end;
+  if (open_second->head) {
+    initial_size += open_second->head->capacity();
   }
 
   // We write some data to increase the size of the second oldest entry.
@@ -6347,8 +6435,7 @@ TEST_P(SqlPersistentStoreTest, EvictionCollectsMetadata) {
 }
 
 TEST_P(SqlPersistentStoreTest, SecondEvictionUsesInMemoryIndex) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeaturesAndParameters(
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
       {{net::features::kDiskCacheBackendExperiment,
         {{"SqlDiskCacheSizeAndPriorityAwareEviction", "true"},
          {"SqlDiskCacheConsolidatedInMemoryIndex", "true"}}}},
@@ -6366,7 +6453,7 @@ TEST_P(SqlPersistentStoreTest, SecondEvictionUsesInMemoryIndex) {
   while (GetSizeOfAllEntries() <= kHighWatermark) {
     const CacheEntryKey key(base::StringPrintf("key%04d", i++));
     auto create_result = CreateEntry(key);
-    task_environment_.AdvanceClock(base::Seconds(1));
+    AdvanceClock(base::Seconds(1));
   }
 
   base::HistogramTester histogram_tester;
@@ -6383,11 +6470,11 @@ TEST_P(SqlPersistentStoreTest, SecondEvictionUsesInMemoryIndex) {
       "Success",
       0);
 
-  task_environment_.AdvanceClock(base::Seconds(1));
+  AdvanceClock(base::Seconds(1));
   while (GetSizeOfAllEntries() <= kHighWatermark) {
     const CacheEntryKey key(base::StringPrintf("key%04d", i++));
     auto create_result = CreateEntry(key);
-    task_environment_.AdvanceClock(base::Seconds(1));
+    AdvanceClock(base::Seconds(1));
   }
 
   ASSERT_EQ(StartEviction({}, /*is_idle_time_eviction=*/false),
@@ -6401,8 +6488,7 @@ TEST_P(SqlPersistentStoreTest, SecondEvictionUsesInMemoryIndex) {
 }
 
 TEST_P(SqlPersistentStoreTest, InMemoryEvictionRespectsPriority) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeaturesAndParameters(
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
       {{net::features::kDiskCacheBackendExperiment,
         {{"SqlDiskCacheSizeAndPriorityAwareEviction", "true"},
          {"SqlDiskCacheConsolidatedInMemoryIndex", "true"}}},
@@ -6423,7 +6509,7 @@ TEST_P(SqlPersistentStoreTest, InMemoryEvictionRespectsPriority) {
     const CacheEntryKey key(base::StringPrintf("key%04d", i++));
     keys.push_back(key);
     auto create_result = CreateEntry(key);
-    task_environment_.AdvanceClock(base::Seconds(1));
+    AdvanceClock(base::Seconds(1));
   }
 
   ASSERT_EQ(StartEviction({}, /*is_idle_time_eviction=*/false),
@@ -6440,21 +6526,21 @@ TEST_P(SqlPersistentStoreTest, InMemoryEvictionRespectsPriority) {
 
   CacheEntryKey oldest_alive_key = alive_keys.front();
   auto open_oldest = OpenEntry(oldest_alive_key);
-  auto oldest_res_id = (*open_oldest)->res_id;
+  auto oldest_res_id = open_oldest->res_id;
 
   base::Time new_last_used = base::Time::Now() + base::Seconds(10);
-  task_environment_.AdvanceClock(base::Seconds(10));
+  AdvanceClock(base::Seconds(10));
 
   ASSERT_EQ(UpdateEntryHeaderAndLastUsed(
                 oldest_alive_key, oldest_res_id, new_last_used, nullptr, 0,
                 MemoryEntryDataHints(HINT_HIGH_PRIORITY)),
             SqlPersistentStore::Error::kOk);
 
-  task_environment_.AdvanceClock(base::Seconds(1));
+  AdvanceClock(base::Seconds(1));
   while (GetSizeOfAllEntries() <= kHighWatermark) {
     const CacheEntryKey key(base::StringPrintf("key%04d", i++));
     auto create_result = CreateEntry(key);
-    task_environment_.AdvanceClock(base::Seconds(1));
+    AdvanceClock(base::Seconds(1));
   }
 
   base::HistogramTester histogram_tester;
@@ -6473,8 +6559,7 @@ TEST_P(SqlPersistentStoreTest, InMemoryEvictionRespectsPriority) {
 }
 
 TEST_P(SqlPersistentStoreTest, InMemoryEvictionRespectsExcludedResIds) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeaturesAndParameters(
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
       {{net::features::kDiskCacheBackendExperiment,
         {{"SqlDiskCacheSizeAndPriorityAwareEviction", "true"},
          {"SqlDiskCacheConsolidatedInMemoryIndex", "true"}}}},
@@ -6494,7 +6579,7 @@ TEST_P(SqlPersistentStoreTest, InMemoryEvictionRespectsExcludedResIds) {
     const CacheEntryKey key(base::StringPrintf("key%04d", i++));
     keys.push_back(key);
     auto create_result = CreateEntry(key);
-    task_environment_.AdvanceClock(base::Seconds(1));
+    AdvanceClock(base::Seconds(1));
   }
 
   ASSERT_EQ(StartEviction({}, /*is_idle_time_eviction=*/false),
@@ -6511,13 +6596,13 @@ TEST_P(SqlPersistentStoreTest, InMemoryEvictionRespectsExcludedResIds) {
 
   CacheEntryKey oldest_alive_key = alive_keys.front();
   auto open_oldest = OpenEntry(oldest_alive_key);
-  auto oldest_res_id = (*open_oldest)->res_id;
+  auto oldest_res_id = open_oldest->res_id;
 
-  task_environment_.AdvanceClock(base::Seconds(1));
+  AdvanceClock(base::Seconds(1));
   while (GetSizeOfAllEntries() <= kHighWatermark) {
     const CacheEntryKey key(base::StringPrintf("key%04d", i++));
     auto create_result = CreateEntry(key);
-    task_environment_.AdvanceClock(base::Seconds(1));
+    AdvanceClock(base::Seconds(1));
   }
 
   base::HistogramTester histogram_tester;
@@ -6624,7 +6709,7 @@ INSTANTIATE_TEST_SUITE_P(All,
 class SqlPersistentStoreIncrementalVacuumTest : public SqlPersistentStoreTest {
  protected:
   void SetUp() override {
-    feature_list_.InitWithFeaturesAndParameters(
+    AddScopedFeatureList().InitWithFeaturesAndParameters(
         {{net::features::kDiskCacheBackendExperiment,
           {{net::features::kDiskCacheBackendParam.name, "sql"},
            {net::features::kSqlDiskCacheWalMode.name,
@@ -6821,7 +6906,7 @@ TEST_P(SqlPersistentStoreIncrementalVacuumTest,
                        /*truncate=*/false),
         SqlPersistentStore::Error::kOk);
 
-    task_environment_.AdvanceClock(base::Minutes(1));
+    AdvanceClock(base::Minutes(1));
   }
 
   // 2. Delete middle entries (key_1 to key_8).
@@ -6869,9 +6954,8 @@ TEST_P(SqlPersistentStoreIncrementalVacuumTest,
   for (int i : {0, 9}) {
     auto open_result = OpenEntry(keys[i]);
     ASSERT_TRUE(open_result.has_value());
-    ASSERT_TRUE(open_result->has_value());
 
-    auto& entry_info = **open_result;
+    auto& entry_info = *open_result;
     EXPECT_EQ(entry_info.res_id, res_ids[i]);
     EXPECT_EQ(entry_info.body_end, static_cast<int64_t>(datas[i].size()));
 
@@ -6890,8 +6974,8 @@ TEST_P(SqlPersistentStoreIncrementalVacuumTest,
   // 7. Verify middle entries (key_1 to key_8) are indeed deleted.
   for (int i = 1; i <= 8; ++i) {
     auto open_result = OpenEntry(keys[i]);
-    ASSERT_TRUE(open_result.has_value());
-    EXPECT_FALSE(open_result->has_value());  // Should be nullopt (not found)
+    ASSERT_FALSE(open_result.has_value());
+    EXPECT_EQ(open_result.error(), SqlPersistentStore::Error::kNotFound);
   }
 }
 
@@ -6900,5 +6984,564 @@ INSTANTIATE_TEST_SUITE_P(
     SqlPersistentStoreIncrementalVacuumTest,
     testing::Bool(),
     SqlPersistentStoreIncrementalVacuumTest::ParamToString);
+
+class SqlPersistentStoreSharedCacheTest
+    : public SqlPersistentStoreTestBase,
+      public testing::WithParamInterface<bool> {
+ public:
+  static std::string ParamToString(const testing::TestParamInfo<bool>& info) {
+    return info.param ? "Wal" : "NonWal";
+  }
+
+ protected:
+  bool IsWalModeEnabled() const override { return GetParam(); }
+  bool IsRendererAccessibleHttpCacheEnabled() const override { return true; }
+
+  static constexpr int kTestHeaderSize = 4;
+  static constexpr int kTestBodySize = 3;
+
+  struct SharedCacheEntryData {
+    scoped_refptr<SqlSharedCacheHandle> handle;
+    SqlSharedCacheDbId db_id;
+    CacheEntryKey key;
+    SqlPersistentStore::ResId res_id;
+    SqlSharedCacheRowId row_id;
+  };
+
+  SharedCacheEntryData PrepareLiveSharedCacheEntry(
+      const CacheEntryKey& key = CacheEntryKey("0/0/https://example.com/1")) {
+    CreateAndInitStore();
+    auto* manager = store_->shared_cache_manager_for_testing();
+    EXPECT_TRUE(manager);
+
+    net::NetworkIsolationKey nik(net::SchemefulSite(GURL("https://foo.test")),
+                                 net::SchemefulSite(GURL("https://bar.test")));
+    base::test::TestFuture<scoped_refptr<SqlSharedCacheHandle>> handle_future;
+    manager->GetCacheByNik(nik, /*require_shared_cache_db_id=*/true,
+                           handle_future.GetCallback());
+    scoped_refptr<SqlSharedCacheHandle> handle = handle_future.Take();
+    EXPECT_TRUE(handle);
+    EXPECT_TRUE((*handle)->shared_cache_db_id().has_value());
+    SqlSharedCacheDbId db_id = *(*handle)->shared_cache_db_id();
+
+    auto create_res = CreateEntry(key);
+    EXPECT_TRUE(create_res.has_value());
+    SqlPersistentStore::ResId res_id = create_res->res_id;
+    WriteDataAndAssertSuccess(key, res_id, /*old_body_end=*/0, /*offset=*/0,
+                              std::string(kTestBodySize, 'a'),
+                              /*truncate=*/false);
+
+    // Insert entry into shared cache isolated database.
+    auto headers = base::MakeRefCounted<net::IOBufferWithSize>(kTestHeaderSize);
+    headers->span().copy_from(base::span<const uint8_t>({1, 2, 3, 4}));
+    auto body = base::MakeRefCounted<net::IOBufferWithSize>(kTestBodySize);
+    body->span().copy_from(base::span<const uint8_t>({5, 6, 7}));
+
+    base::test::TestFuture<base::expected<
+        SqlSharedCacheRowId, SqlSharedCacheIsolatedDatabase::Error>>
+        insert_future;
+    (*handle)
+        ->isolated_database_for_testing()
+        .AsyncCall(&SqlSharedCacheIsolatedDatabase::Insert)
+        .WithArgs(key, headers, kTestBodySize, body)
+        .Then(insert_future.GetCallback());
+    FlushPendingTask();
+    auto insert_res = insert_future.Take();
+    EXPECT_TRUE(insert_res.has_value());
+    SqlSharedCacheRowId row_id = *insert_res;
+
+    // Link shared cache resource ID to the entry in resources table.
+    base::test::TestFuture<SqlPersistentStore::Error> move_future;
+    store_->MoveBlobsToSharedCache(key, res_id,
+                                   SqlSharedCacheResourceId{db_id, row_id},
+                                   move_future.GetCallback());
+    FlushPendingTask();
+    EXPECT_EQ(move_future.Get(), SqlPersistentStore::Error::kOk);
+
+    return SharedCacheEntryData{
+        .handle = std::move(handle),
+        .db_id = db_id,
+        .key = key,
+        .res_id = res_id,
+        .row_id = row_id,
+    };
+  }
+
+  SharedCacheEntryData PrepareDoomedSharedCacheEntry(
+      const CacheEntryKey& key = CacheEntryKey("0/0/https://example.com/1")) {
+    auto data = PrepareLiveSharedCacheEntry(key);
+
+    // Doom entry.
+    base::test::TestFuture<SqlPersistentStore::Error> doom_future;
+    store_->DoomEntry(data.key, data.res_id, /*accept_index_mismatch=*/false,
+                      doom_future.GetCallback());
+    FlushPendingTask();
+    EXPECT_EQ(doom_future.Get(), SqlPersistentStore::Error::kOk);
+
+    return data;
+  }
+
+  void VerifySharedCacheEntryDeleted(
+      const scoped_refptr<SqlSharedCacheHandle>& handle,
+      const CacheEntryKey& key,
+      SqlSharedCacheRowId row_id) {
+    auto read_buf = base::MakeRefCounted<net::IOBufferWithSize>(kTestBodySize);
+    base::test::TestFuture<SqlSharedCacheIsolatedDatabase::ReadResultOrError>
+        read_future;
+    (*handle)
+        ->isolated_database_for_testing()
+        .AsyncCall(&SqlSharedCacheIsolatedDatabase::Read)
+        .WithArgs(key, row_id, /*body_size=*/kTestBodySize, /*offset=*/0,
+                  read_buf)
+        .Then(read_future.GetCallback());
+    FlushPendingTask();
+
+    auto read_res = read_future.Take();
+    EXPECT_FALSE(read_res.has_value());
+    EXPECT_EQ(read_res.error(),
+              SqlSharedCacheIsolatedDatabase::Error::kEntryNotFound);
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         SqlPersistentStoreSharedCacheTest,
+                         testing::Bool(),
+                         SqlPersistentStoreSharedCacheTest::ParamToString);
+
+TEST_P(SqlPersistentStoreSharedCacheTest, MoveBlobsToSharedCache) {
+  CreateAndInitStore();
+  const CacheEntryKey kKey("my-key");
+  const auto res_id = CreateEntryAndGetResId(kKey);
+  const std::string kData = "some data";
+  WriteDataAndAssertSuccess(kKey, res_id, /*old_body_end=*/0, /*offset=*/0,
+                            kData, /*truncate=*/false);
+
+  // Verify initial state.
+  CheckBlobData(res_id, {{0, kData}});
+  auto details = GetResourceEntryDetails(kKey);
+  ASSERT_TRUE(details.has_value());
+  EXPECT_EQ(details->bytes_usage,
+            static_cast<int64_t>(kKey.string().size() + kData.size()));
+
+  // Manually move blobs to shared cache.
+  auto* manager = store_->shared_cache_manager_for_testing();
+  ASSERT_TRUE(manager);
+  net::NetworkIsolationKey nik(net::SchemefulSite(GURL("https://foo.test")),
+                               net::SchemefulSite(GURL("https://bar.test")));
+  base::test::TestFuture<scoped_refptr<SqlSharedCacheHandle>> handle_future;
+  manager->GetCacheByNik(nik, /*require_shared_cache_db_id=*/true,
+                         handle_future.GetCallback());
+  scoped_refptr<SqlSharedCacheHandle> handle = handle_future.Take();
+  ASSERT_TRUE(handle);
+  ASSERT_TRUE((*handle)->shared_cache_db_id().has_value());
+  SqlSharedCacheDbId db_id = *(*handle)->shared_cache_db_id();
+
+  auto headers = base::MakeRefCounted<net::IOBufferWithSize>(4);
+  headers->span().copy_from(base::span<const uint8_t>({1, 2, 3, 4}));
+  auto body = base::MakeRefCounted<net::IOBufferWithSize>(kData.size());
+  body->span().copy_from(base::as_byte_span(kData));
+
+  base::test::TestFuture<base::expected<SqlSharedCacheRowId,
+                                        SqlSharedCacheIsolatedDatabase::Error>>
+      insert_future;
+  (*handle)
+      ->isolated_database_for_testing()
+      .AsyncCall(&SqlSharedCacheIsolatedDatabase::Insert)
+      .WithArgs(kKey, headers, kData.size(), body)
+      .Then(insert_future.GetCallback());
+  FlushPendingTask();
+  auto insert_res = insert_future.Take();
+  ASSERT_TRUE(insert_res.has_value());
+  SqlSharedCacheRowId row_id = *insert_res;
+
+  const SqlSharedCacheResourceId kSharedResourceId{db_id, row_id};
+  base::test::TestFuture<SqlPersistentStore::Error> move_future;
+  store_->MoveBlobsToSharedCache(kKey, res_id, kSharedResourceId,
+                                 move_future.GetCallback());
+  ASSERT_EQ(move_future.Get(), SqlPersistentStore::Error::kOk);
+
+  // Verify blobs are gone and shared_cache_db_id/row_id is set.
+  CheckBlobData(res_id, {});
+
+  {
+    auto db_handle = ManuallyOpenDatabase();
+    sql::Statement s(db_handle->GetUniqueStatement(
+        "SELECT shared_cache_db_id, shared_cache_row_id, bytes_usage "
+        "FROM resources WHERE res_id=?"));
+    s.BindInt64(0, res_id.value());
+    ASSERT_TRUE(s.Step());
+    EXPECT_EQ(s.ColumnInt64(0), kSharedResourceId.db_id.value());
+    EXPECT_EQ(s.ColumnInt64(1), kSharedResourceId.row_id.value());
+    // bytes_usage should not be updated (blobs size removed).
+    EXPECT_EQ(s.ColumnInt64(2),
+              static_cast<int64_t>(kKey.string().size() + kData.size()));
+  }
+
+  // Verify GetSizeOfAllEntries is unchanged.
+  EXPECT_EQ(GetSizeOfAllEntries(),
+            static_cast<int64_t>(kSqlBackendStaticResourceSize +
+                                 kKey.string().size() + kData.size()));
+
+  // Verify OpenEntry returns the entry with shared_cache_resource_id populated.
+  auto open_result = OpenEntry(kKey);
+  ASSERT_TRUE(open_result.has_value());
+  EXPECT_TRUE(open_result->shared_cache_resource_id.has_value());
+  EXPECT_EQ(open_result->shared_cache_resource_id->db_id,
+            kSharedResourceId.db_id);
+  EXPECT_EQ(open_result->shared_cache_resource_id->row_id,
+            kSharedResourceId.row_id);
+
+  // Verify OpenNextEntry returns the entry with shared_cache_resource_id
+  // populated.
+  auto next_result = OpenNextEntry(SqlPersistentStore::EntryIterator());
+  ASSERT_TRUE(next_result.has_value());
+  EXPECT_TRUE(next_result->info.shared_cache_resource_id.has_value());
+  EXPECT_EQ(next_result->info.shared_cache_resource_id->db_id,
+            kSharedResourceId.db_id);
+  EXPECT_EQ(next_result->info.shared_cache_resource_id->row_id,
+            kSharedResourceId.row_id);
+}
+
+TEST_P(SqlPersistentStoreSharedCacheTest,
+       DeleteDoomedEntryDeletesSharedCacheResource) {
+  auto entry_data = PrepareDoomedSharedCacheEntry();
+
+  // Delete doomed entry.
+  base::test::TestFuture<SqlPersistentStore::Error> delete_future;
+  store_->DeleteDoomedEntry(entry_data.key, entry_data.res_id,
+                            delete_future.GetCallback());
+  FlushPendingTask();
+  ASSERT_EQ(delete_future.Get(), SqlPersistentStore::Error::kOk);
+
+  VerifySharedCacheEntryDeleted(entry_data.handle, entry_data.key,
+                                entry_data.row_id);
+}
+
+TEST_P(SqlPersistentStoreSharedCacheTest,
+       MaybeRunCleanupDoomedEntriesDeletesSharedCacheResource) {
+  auto entry_data = PrepareDoomedSharedCacheEntry();
+
+  // Reload the store and load in-memory index to mark doomed entries for
+  // deletion.
+  ClearStore();
+  CreateAndInitStore();
+  EXPECT_TRUE(LoadInMemoryIndex());
+
+  auto* manager = store_->shared_cache_manager_for_testing();
+  ASSERT_TRUE(manager);
+  base::test::TestFuture<scoped_refptr<SqlSharedCacheHandle>> handle_future;
+  manager->GetCacheByDbId(entry_data.db_id, handle_future.GetCallback());
+  auto handle = handle_future.Take();
+  ASSERT_TRUE(handle);
+
+  // Run cleanup of doomed entries via MaybeRunCleanupDoomedEntries.
+  base::test::TestFuture<SqlPersistentStore::Error> cleanup_future;
+  EXPECT_TRUE(
+      store_->MaybeRunCleanupDoomedEntries(cleanup_future.GetCallback()));
+  FlushPendingTask();
+  FlushPendingTask();
+  base::ThreadPoolInstance::Get()->FlushForTesting();
+  FlushPendingTask();
+
+  VerifySharedCacheEntryDeleted(handle, entry_data.key, entry_data.row_id);
+}
+
+TEST_P(SqlPersistentStoreSharedCacheTest,
+       DeleteLiveEntryDeletesSharedCacheResource) {
+  auto entry_data = PrepareLiveSharedCacheEntry();
+
+  // Delete live entry.
+  base::test::TestFuture<SqlPersistentStore::Error> delete_future;
+  store_->DeleteLiveEntry(entry_data.key, delete_future.GetCallback());
+  FlushPendingTask();
+  ASSERT_EQ(delete_future.Get(), SqlPersistentStore::Error::kOk);
+
+  VerifySharedCacheEntryDeleted(entry_data.handle, entry_data.key,
+                                entry_data.row_id);
+}
+
+TEST_P(SqlPersistentStoreSharedCacheTest,
+       DeleteLiveEntriesBetweenDeletesSharedCacheResource) {
+  base::Time start_time = base::Time::Now();
+  auto entry_data = PrepareLiveSharedCacheEntry();
+  base::Time end_time = base::Time::Now() + base::Seconds(10);
+
+  // Delete live entries between start_time and end_time.
+  base::test::TestFuture<SqlPersistentStore::Error> delete_future;
+  store_->DeleteLiveEntriesBetween(start_time - base::Seconds(1), end_time,
+                                   /*excluded_list=*/{},
+                                   delete_future.GetCallback());
+  FlushPendingTask();
+  ASSERT_EQ(delete_future.Get(), SqlPersistentStore::Error::kOk);
+
+  VerifySharedCacheEntryDeleted(entry_data.handle, entry_data.key,
+                                entry_data.row_id);
+}
+
+TEST_P(SqlPersistentStoreSharedCacheTest, EvictionDeletesSharedCacheResource) {
+  const int64_t kMaxBytes = 100 * 1024;
+  CreateStore(kMaxBytes);
+  ASSERT_EQ(Init(), SqlPersistentStore::Error::kOk);
+
+  auto* manager = store_->shared_cache_manager_for_testing();
+  ASSERT_TRUE(manager);
+
+  net::NetworkIsolationKey nik(net::SchemefulSite(GURL("https://foo.test")),
+                               net::SchemefulSite(GURL("https://bar.test")));
+  base::test::TestFuture<scoped_refptr<SqlSharedCacheHandle>> handle_future;
+  manager->GetCacheByNik(nik, /*require_shared_cache_db_id=*/true,
+                         handle_future.GetCallback());
+  scoped_refptr<SqlSharedCacheHandle> handle = handle_future.Take();
+  ASSERT_TRUE(handle);
+  ASSERT_TRUE((*handle)->shared_cache_db_id().has_value());
+  SqlSharedCacheDbId db_id = *(*handle)->shared_cache_db_id();
+
+  // Populate cache with enough entries to exceed the high watermark.
+  std::vector<SqlPersistentStore::ResId> res_ids;
+  PopulateCache(100, 1024, &res_ids);
+  ASSERT_FALSE(res_ids.empty());
+
+  CacheEntryKey key("key_0");
+  SqlPersistentStore::ResId target_res_id = res_ids[0];
+  UpdateEntryLastUsedByKey(key, base::Time::Now() - base::Seconds(1000));
+
+  // Insert entry into shared cache isolated database.
+  auto headers = base::MakeRefCounted<net::IOBufferWithSize>(kTestHeaderSize);
+  headers->span().copy_from(base::span<const uint8_t>({1, 2, 3, 4}));
+  auto body = base::MakeRefCounted<net::IOBufferWithSize>(kTestBodySize);
+  body->span().copy_from(base::span<const uint8_t>({5, 6, 7}));
+
+  base::test::TestFuture<base::expected<SqlSharedCacheRowId,
+                                        SqlSharedCacheIsolatedDatabase::Error>>
+      insert_future;
+  (*handle)
+      ->isolated_database_for_testing()
+      .AsyncCall(&SqlSharedCacheIsolatedDatabase::Insert)
+      .WithArgs(key, headers, kTestBodySize, body)
+      .Then(insert_future.GetCallback());
+  FlushPendingTask();
+  auto insert_res = insert_future.Take();
+  ASSERT_TRUE(insert_res.has_value());
+  SqlSharedCacheRowId row_id = *insert_res;
+
+  // Link shared cache resource ID to the entry in resources table.
+  base::test::TestFuture<SqlPersistentStore::Error> move_future;
+  store_->MoveBlobsToSharedCache(key, target_res_id,
+                                 SqlSharedCacheResourceId{db_id, row_id},
+                                 move_future.GetCallback());
+  FlushPendingTask();
+  ASSERT_EQ(move_future.Get(), SqlPersistentStore::Error::kOk);
+
+  EXPECT_EQ(store_->GetEvictionUrgency(),
+            SqlPersistentStore::EvictionUrgency::kNeeded);
+
+  // Trigger eviction.
+  ASSERT_EQ(StartEviction({}, /*is_idle_time_eviction=*/false),
+            SqlPersistentStore::Error::kOk);
+
+  VerifySharedCacheEntryDeleted(handle, key, row_id);
+}
+
+TEST_P(SqlPersistentStoreSharedCacheTest,
+       ResumePendingEvictionDeletesSharedCacheResource) {
+  // Disable consolidated in-memory index to ensure `EvictEntries` uses
+  // `trust_target_size = true` (which calls `DeleteResourceByResIdReturnHash`),
+  // while `ResumePendingEviction` uses `trust_target_size = false`
+  // (which calls `DeleteLiveResourceByResIdReturnUsageAndHash`). This tests
+  // that shared cache resource deletion works correctly across both code paths.
+  AddScopedFeatureList().InitWithFeaturesAndParameters(
+      {{net::features::kDiskCacheBackendExperiment,
+        {{"SqlDiskCacheConsolidatedInMemoryIndex", "false"}}}},
+      {});
+
+  const int64_t kMaxBytes = 100 * 1024;
+  CreateStore(kMaxBytes);
+  ASSERT_EQ(Init(), SqlPersistentStore::Error::kOk);
+
+  auto* manager = store_->shared_cache_manager_for_testing();
+  ASSERT_TRUE(manager);
+
+  net::NetworkIsolationKey nik(net::SchemefulSite(GURL("https://foo.test")),
+                               net::SchemefulSite(GURL("https://bar.test")));
+  base::test::TestFuture<scoped_refptr<SqlSharedCacheHandle>> handle_future;
+  manager->GetCacheByNik(nik, /*require_shared_cache_db_id=*/true,
+                         handle_future.GetCallback());
+  scoped_refptr<SqlSharedCacheHandle> handle = handle_future.Take();
+  ASSERT_TRUE(handle);
+  ASSERT_TRUE((*handle)->shared_cache_db_id().has_value());
+  SqlSharedCacheDbId db_id = *(*handle)->shared_cache_db_id();
+
+  const int kNumEntries = 100;
+  // Populate cache with enough entries to exceed the high watermark.
+  std::vector<SqlPersistentStore::ResId> res_ids;
+  PopulateCache(kNumEntries, 1024, &res_ids);
+  ASSERT_FALSE(res_ids.empty());
+
+  struct SharedCacheTestEntry {
+    CacheEntryKey key;
+    SqlSharedCacheRowId row_id;
+  };
+  std::vector<SharedCacheTestEntry> shared_cache_entries;
+
+  // Move ALL 100 entries to SharedCache.
+  for (int i = 0; i < kNumEntries; ++i) {
+    CacheEntryKey key("key_" + base::NumberToString(i));
+    SqlPersistentStore::ResId target_res_id = res_ids[i];
+
+    auto headers = base::MakeRefCounted<net::IOBufferWithSize>(kTestHeaderSize);
+    headers->span().copy_from(base::span<const uint8_t>({1, 2, 3, 4}));
+    auto body = base::MakeRefCounted<net::IOBufferWithSize>(kTestBodySize);
+    body->span().copy_from(base::span<const uint8_t>({5, 6, 7}));
+
+    base::test::TestFuture<base::expected<
+        SqlSharedCacheRowId, SqlSharedCacheIsolatedDatabase::Error>>
+        insert_future;
+    (*handle)
+        ->isolated_database_for_testing()
+        .AsyncCall(&SqlSharedCacheIsolatedDatabase::Insert)
+        .WithArgs(key, headers, kTestBodySize, body)
+        .Then(insert_future.GetCallback());
+    FlushPendingTask();
+    auto insert_res = insert_future.Take();
+    ASSERT_TRUE(insert_res.has_value());
+    SqlSharedCacheRowId row_id = *insert_res;
+
+    base::test::TestFuture<SqlPersistentStore::Error> move_future;
+    store_->MoveBlobsToSharedCache(key, target_res_id,
+                                   SqlSharedCacheResourceId{db_id, row_id},
+                                   move_future.GetCallback());
+    FlushPendingTask();
+    ASSERT_EQ(move_future.Get(), SqlPersistentStore::Error::kOk);
+
+    shared_cache_entries.push_back({key, row_id});
+  }
+
+  // Start eviction and pause execution at the hook.
+  StartAndPauseEviction();
+  EXPECT_TRUE(store_->HasPendingEviction());
+
+  // Resume pending eviction.
+  ASSERT_EQ(StartEviction({}, /*is_idle_time_eviction=*/false),
+            SqlPersistentStore::Error::kOk);
+
+  // Check all 100 entries: any entry that is no longer in store_ must have
+  // its shared cache resource deleted from SqlSharedCacheIsolatedDatabase.
+  for (const auto& entry : shared_cache_entries) {
+    auto open_result = OpenEntry(entry.key);
+    bool entry_exists_in_store = open_result.has_value();
+
+    if (!entry_exists_in_store) {
+      VerifySharedCacheEntryDeleted(handle, entry.key, entry.row_id);
+    }
+  }
+}
+
+TEST_P(SqlPersistentStoreSharedCacheTest,
+       OpenEntryPopulatesSharedCacheHandles) {
+  auto entry_data = PrepareLiveSharedCacheEntry();
+
+  auto open_entry_res = OpenEntry(entry_data.key);
+  ASSERT_TRUE(open_entry_res.has_value());
+  EXPECT_TRUE(open_entry_res->shared_cache_handle);
+  EXPECT_TRUE(open_entry_res->shared_cache_blob_handle);
+}
+
+TEST_P(SqlPersistentStoreSharedCacheTest,
+       OpenOrCreateEntryPopulatesSharedCacheHandles) {
+  auto entry_data = PrepareLiveSharedCacheEntry();
+
+  auto open_or_create_res = OpenOrCreateEntry(entry_data.key);
+  ASSERT_TRUE(open_or_create_res.has_value());
+  EXPECT_TRUE(open_or_create_res->shared_cache_handle);
+  EXPECT_TRUE(open_or_create_res->shared_cache_blob_handle);
+}
+
+TEST_P(SqlPersistentStoreSharedCacheTest,
+       OpenEntryDeletesEntryAndReturnsNotFoundOnSharedCacheFailure) {
+  auto entry_data = PrepareLiveSharedCacheEntry();
+
+  // Delete the row from the isolated database so that GetBlobHandle will fail.
+  (*entry_data.handle)
+      ->isolated_database_for_testing()
+      .AsyncCall(&SqlSharedCacheIsolatedDatabase::DeleteEntry)
+      .WithArgs(entry_data.row_id);
+  FlushPendingTask();
+
+  // OpenEntry should detect failure, delete entry from store, and return
+  // kNotFound.
+  auto open_entry_res = OpenEntry(entry_data.key);
+  ASSERT_FALSE(open_entry_res.has_value());
+  EXPECT_EQ(open_entry_res.error(), SqlPersistentStore::Error::kNotFound);
+
+  // Subsequent OpenEntry should also return kNotFound.
+  auto re_open_res = OpenEntry(entry_data.key);
+  ASSERT_FALSE(re_open_res.has_value());
+  EXPECT_EQ(re_open_res.error(), SqlPersistentStore::Error::kNotFound);
+}
+
+TEST_P(SqlPersistentStoreSharedCacheTest,
+       OpenOrCreateEntryRecreatesEntryOnSharedCacheFailure) {
+  auto entry_data = PrepareLiveSharedCacheEntry();
+
+  // Delete the row from the isolated database so that GetBlobHandle will fail.
+  (*entry_data.handle)
+      ->isolated_database_for_testing()
+      .AsyncCall(&SqlSharedCacheIsolatedDatabase::DeleteEntry)
+      .WithArgs(entry_data.row_id);
+  FlushPendingTask();
+
+  // OpenOrCreateEntry should detect failure, delete old entry, and recreate a
+  // new one.
+  auto open_or_create_res = OpenOrCreateEntry(entry_data.key);
+  ASSERT_TRUE(open_or_create_res.has_value());
+  EXPECT_NE(open_or_create_res->res_id, entry_data.res_id);
+  EXPECT_FALSE(open_or_create_res->opened);
+  EXPECT_FALSE(open_or_create_res->shared_cache_resource_id.has_value());
+  EXPECT_FALSE(open_or_create_res->shared_cache_handle);
+  EXPECT_FALSE(open_or_create_res->shared_cache_blob_handle);
+}
+
+TEST_P(SqlPersistentStoreSharedCacheTest, OpenEntryGetCacheByDbIdFailure) {
+  auto entry_data = PrepareLiveSharedCacheEntry();
+
+  // Change the shared_cache_db_id on the entry to a non-existent db_id (9999)
+  // so that GetCacheByDbId will fail and return a null handle.
+  base::test::TestFuture<SqlPersistentStore::Error> move_future;
+  store_->MoveBlobsToSharedCache(
+      entry_data.key, entry_data.res_id,
+      SqlSharedCacheResourceId{SqlSharedCacheDbId(9999), entry_data.row_id},
+      move_future.GetCallback());
+  EXPECT_EQ(move_future.Get(), SqlPersistentStore::Error::kOk);
+
+  // OpenEntry should detect GetCacheByDbId failure (!handle), delete entry
+  // from store, and return kNotFound.
+  auto open_entry_res = OpenEntry(entry_data.key);
+  ASSERT_FALSE(open_entry_res.has_value());
+  EXPECT_EQ(open_entry_res.error(), SqlPersistentStore::Error::kNotFound);
+}
+
+TEST_P(SqlPersistentStoreSharedCacheTest,
+       OpenOrCreateEntryGetCacheByDbIdFailure) {
+  auto entry_data = PrepareLiveSharedCacheEntry();
+
+  // Change the shared_cache_db_id on the entry to a non-existent db_id (9999)
+  // so that GetCacheByDbId will fail and return a null handle.
+  base::test::TestFuture<SqlPersistentStore::Error> move_future;
+  store_->MoveBlobsToSharedCache(
+      entry_data.key, entry_data.res_id,
+      SqlSharedCacheResourceId{SqlSharedCacheDbId(9999), entry_data.row_id},
+      move_future.GetCallback());
+  EXPECT_EQ(move_future.Get(), SqlPersistentStore::Error::kOk);
+
+  // OpenOrCreateEntry should detect GetCacheByDbId failure (!handle), delete
+  // old entry, and recreate a new one.
+  auto open_or_create_res = OpenOrCreateEntry(entry_data.key);
+  ASSERT_TRUE(open_or_create_res.has_value());
+  EXPECT_NE(open_or_create_res->res_id, entry_data.res_id);
+  EXPECT_FALSE(open_or_create_res->opened);
+  EXPECT_FALSE(open_or_create_res->shared_cache_resource_id.has_value());
+  EXPECT_FALSE(open_or_create_res->shared_cache_handle);
+  EXPECT_FALSE(open_or_create_res->shared_cache_blob_handle);
+}
 
 }  // namespace disk_cache

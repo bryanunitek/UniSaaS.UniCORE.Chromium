@@ -53,6 +53,7 @@
 #include "ui/events/blink/did_overscroll_params.h"
 #include "ui/events/event_constants.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/vector2d_f.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/range/range.h"
 #include "url/origin.h"
@@ -128,6 +129,7 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   ui::TextInputClient* GetTextInputClient() override;
   std::u16string GetSelectedText() override;
   bool GetIsPointerLockedUnadjustedMovementForTesting() override;
+  void SetHasFocusForTesting(std::optional<bool> has_focus) override;
   bool CanBePointerLocked() override;
   bool AccessibilityHasFocus() override;
   bool LockKeyboard(std::optional<base::flat_set<ui::DomCode>> codes) override;
@@ -147,7 +149,13 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
       const gfx::Size& output_size,
       base::TimeDelta timeout,
       base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback)
-      override;
+      final;
+  void CopyFromSurfaceSecure(
+      const gfx::Rect& src_rect,
+      const gfx::Size& output_size,
+      base::TimeDelta timeout,
+      base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback)
+      final;
   std::unique_ptr<viz::ClientFrameSinkVideoCapturer> CreateVideoCapturer()
       override;
   display::ScreenInfo GetScreenInfo() const override;
@@ -176,31 +184,10 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
 
   virtual void DidOverscroll(const ui::DidOverscrollParams& params) {}
 
-  // Identical to `CopyFromSurface()`, except that this method issues the
-  // `viz::CopyOutputRequest` against the exact `viz::Surface` currently
-  // embedded by this View, while `CopyFromSurface()` may return a copy of any
-  // Surface associated with this View, generated after the current Surface. The
-  // caller is responsible for making sure that the target Surface is embedded
-  // and available for copy when this API is called. This Surface can be removed
-  // from the UI after this call.
-  //
-  // TODO(crbug.com/40276723): merge this API into `CopyFromSurface()`,
-  // and enable it fully on Android.
-  virtual void CopyFromExactSurface(
-      const gfx::Rect& src_rect,
-      const gfx::Size& output_size,
-      base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback);
-
   // For testing only.
   virtual ui::FilteredGestureProvider* GetFilteredGestureProviderForTesting();
 
 #if BUILDFLAG(IS_ANDROID)
-  virtual void CopyFromExactSurfaceWithIpcDelay(
-      const gfx::Rect& src_rect,
-      const gfx::Size& output_size,
-      base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback,
-      base::TimeDelta ipc_delay);
-
   // Returns whethere there's a touch sequence active on Viz.
   //  false: There's definitely no active touch sequence on Viz.
   //  true: A touch sequence is likely active on Viz, but could be a false
@@ -217,6 +204,9 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
       blink::mojom::DragEventSourceInfoPtr event_info) = 0;
 
   virtual void SetTouchpadOverscrollHistoryNavigation(bool enabled) {}
+
+  virtual void ReportScrollJankStats(uint32_t total_frames,
+                                     uint32_t janky_frames) {}
 #endif
 
   // For HiDPI capture mode, allow applying a render scale multiplier
@@ -269,6 +259,7 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
       const gfx::Rect& src_subrect,
       const gfx::Size& dst_size,
       float scale_factor,
+      bool is_copy_request_secure,
       base::TimeDelta timeout,
       base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback);
 
@@ -277,6 +268,9 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   WidgetType GetWidgetType();
 
   virtual void SendInitialPropertiesIfNeeded() {}
+
+  // Opts the view out of frame eviction.
+  virtual void OptOutFrameEviction() {}
 
   // Called when screen information or native widget bounds change.
   virtual void UpdateScreenInfo();
@@ -315,6 +309,7 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   virtual gfx::NativeViewAccessible AccessibilityGetNativeViewAccessible();
   virtual gfx::NativeViewAccessible
   AccessibilityGetNativeViewAccessibleForWindow();
+  virtual ui::AXTreeID AccessibilityGetParentAXTreeID();
   virtual void SetMainFrameAXTreeID(ui::AXTreeID id) {}
   // Informs that the focused DOM node has changed.
   virtual void FocusedNodeChanged(bool is_editable_node,
@@ -325,6 +320,7 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   bool ShouldInitiateStylusWriting() override;
   // Notify whether the hovered element action is stylus writable or not.
   void NotifyHoverActionStylusWritable(bool stylus_writable) override {}
+  std::optional<gfx::Vector2dF> GetStylusHandwritingPixelsPerInch() override;
 
   // Invalidates the `viz::SurfaceAllocationGroup` of this View. Also
   // invalidates `viz::SurfaceId` of it. This should be used when no previous
@@ -426,16 +422,44 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   // be suspended. Calling Show()/Hide() overrides the state set by this method.
   virtual void WasOccluded() {}
 
-  // Tells the View to destroy itself.
-  virtual void Destroy();
+  // Tells the View to destroy itself. This will be done immediately unless
+  // there are `input::ScopedInputDispatchPin` keeping `this` alive. Since input
+  // can have multiple distinct events in the queue, it is possible for an event
+  // to close our associated `RenderWidgetHostImpl` while iterating over events.
+  // The closure of the host normally leads to the destruction of `this`,
+  // however since we are on the stack input targeting risks re-entrancy to a
+  // destroyed `RenderWidgetHostViewBase`.
+  //
+  // In such a case we notify our subclass that this has occurred
+  // `OnDestroyOrDefer`. We then notify observers, while stopping out own
+  // observations. All associated `WeakPtrs` are cleared. This allows all other
+  // classes to treat `this` as if were destroyed and to gracefully stop input
+  // processing.
+  //
+  // Once the last `input::ScopedInputDispatchPin` has been removed
+  // `DestroyImpl` is called to actually `delete this`. Pins that are both
+  // acquired and released while `DestroyOrDefer` is executing (e.g. by an
+  // observer synchronously dispatching input) never trigger `DestroyImpl`;
+  // `DestroyOrDefer` itself decides once teardown is complete.
+  void DestroyOrDefer();
+  virtual void DestroyImpl() = 0;
+  virtual void OnDestroyOrDefer() {}
+
+  // RenderWidgetHostViewInput implementation:
+  void PinForInputDispatch() override;
+  void UnpinForInputDispatch() override;
+
+  bool destroy_pending() const { return destroy_pending_; }
 
   // Unbounded element API methods.
+  // Creates the native window of an unbounded element. Called by
+  // UnboundedSurfaceHostImpl, which owns the policy and Mojo endpoints.
   virtual void CreateUnboundedSurface(
-      mojo::PendingAssociatedReceiver<blink::mojom::UnboundedSurfaceHost> host,
-      mojo::PendingAssociatedRemote<blink::mojom::UnboundedSurfaceClient>
-          client,
-      const gfx::Rect& bounds_in_dips);
-  virtual void UpdateUnboundedSurfaceBounds(const gfx::Rect& bounds_in_screen);
+      const gfx::Rect& bounds_in_screen,
+      base::WeakPtr<RenderWidgetHostViewBase> subframe_view);
+  gfx::Rect ConvertSubframeBoundsToScreenWithoutConstraints(
+      const gfx::Rect& bounds_in_dips,
+      RenderWidgetHostViewBase* subframe_view);
   virtual void DismissUnboundedSurface();
   virtual void DestroyUnboundedSurface(
       base::WeakPtr<UnboundedSurfaceWindow> window);
@@ -460,6 +484,14 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
 
   // Gets the bounds of the top-level window, in screen coordinates.
   virtual gfx::Rect GetBoundsInScreen() = 0;
+
+  // Gets the bounds of the top-level window, in screen coordinates, ignoring
+  // any transforms that might be applied.
+  virtual gfx::Rect GetBoundsInScreenWithoutTransform();
+
+  // Gets the bounds of the View, in screen coordinates, ignoring any transforms
+  // that might be applied.
+  virtual gfx::Rect GetViewBoundsWithoutTransform();
 
   // Increments the LocalSurfaceId associated with this view when a commit IPC
   // is being sent to change the Document for the root RenderFrameHost rendering
@@ -592,6 +624,8 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
 
   void SetIsFrameSinkIdOwner(bool is_owner);
 
+  void SetEvictOnHide(bool evict_on_hide) override {}
+
   void SetViewTransitionResources(
       std::unique_ptr<ScopedViewTransitionResources> resources);
   bool HasViewTransitionResourcesForTesting() const {
@@ -601,13 +635,13 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   virtual viz::SurfaceId GetFallbackSurfaceIdForTesting() const;
 
 #if BUILDFLAG(IS_WIN)
-  // Called by child frame views before delegating OnStartStylusWriting to the
-  // root view, so the root view uses the provided callback for the TSF
-  // FocusHandwritingTarget response instead of its own.
   using OnFocusHandwritingTargetCallback =
       base::RepeatingCallback<void(const gfx::Rect& /*rect_in_screen*/,
                                    const gfx::Size& /*distance_threshold*/)>;
-  virtual void SetStylusHandwritingFocusCallback(
+  // Called by a child host view to start a handwriting session on the root
+  // view on its behalf. Only implemented by the root (Aura) view.
+  virtual void StartStylusWritingFromChildHostView(
+      RenderWidgetHostViewBase* view,
       OnFocusHandwritingTargetCallback callback) {}
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -615,9 +649,18 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   explicit RenderWidgetHostViewBase(RenderWidgetHost* host);
   ~RenderWidgetHostViewBase() override;
 
+  virtual void CleanUpHostObservers() = 0;
+
   bool is_frame_sink_id_owner() const { return is_frame_sink_id_owner_; }
 
   virtual MouseWheelPhaseHandler* GetMouseWheelPhaseHandler();
+
+  virtual void CopyFromSurfaceImpl(
+      const gfx::Rect& src_rect,
+      const gfx::Size& output_size,
+      bool is_copy_request_secure,
+      base::TimeDelta timeout,
+      base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback);
 
   // RenderWidgetHostViewInput implementations.
   void UpdateFrameSinkIdRegistration() override;
@@ -675,10 +718,6 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   // and platform-specific bookkeeping needed.
   virtual void CancelSuccessfulPresentationTimeRequestForHostAndDelegate() = 0;
 
-  // The model object. Access is protected to allow access to
-  // RenderWidgetHostViewChildFrame.
-  raw_ptr<RenderWidgetHostImpl, DanglingUntriaged> host_;
-
   std::unique_ptr<UnboundedSurfaceWindow> unbounded_surface_window_;
 
   // Whether this view is a frame or a popup.
@@ -714,6 +753,8 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   std::optional<SkColor> default_background_color_;
 
   raw_ptr<TooltipObserver> tooltip_observer_for_testing_ = nullptr;
+
+  std::optional<bool> has_focus_for_testing_;
 
   // Cursor size in logical pixels, obtained from the OS. This value is general
   // to all displays.
@@ -754,11 +795,40 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   // opaque.
   bool IsBackgroundColorOpaque();
 
+  // This is only ever assigned in the constructor and cleared in
+  // `DestroyOrDefer()`. RenderWidgetHostImpl::Destroy() always routes through
+  // `view_->DestroyOrDefer()`, so `host_` is cleared before the
+  // RenderWidgetHostImpl is destroyed. This holds even when this view outlives
+  // the host, which happens when teardown is deferred while input is being
+  // dispatched (`pin_count_ > 0`).
+  raw_ptr<RenderWidgetHostImpl> host_;
+
   bool is_evicted_ = false;
 
   bool is_frame_sink_id_owner_ = false;
 
+  // Whether `UpdateScreenInfo()` has been called at least once. Subclasses may
+  // populate `screen_infos_` before the first `UpdateScreenInfo()` call (e.g.,
+  // when initialized without a root window), and the first `UpdateScreenInfo()`
+  // must still synchronize display properties.
+  bool has_updated_screen_info_ = false;
+
   std::unique_ptr<ScopedViewTransitionResources> view_transition_resources_;
+
+  // The count of `input::ScopedInputDispatchPin` active for `this`. Preventing
+  // our immediate deletion during input dispatch. See `DestroyOrDefer` for
+  // details.
+  int pin_count_ = 0;
+  // Once `DestroyOrDefer` has been called this becomes `true`. Used to
+  // early-exit visual updates that are no longer required. So that we can
+  // gracefully clean up input dispatch.
+  bool destroy_pending_ = false;
+  // `true` while `DestroyOrDefer` is on the stack. Observers notified during
+  // teardown can synchronously dispatch input to, and pin, `this`. Releasing
+  // such a pin must not call `DestroyImpl` while `DestroyOrDefer` is still
+  // executing, otherwise `this` would be deleted out from under it, and then
+  // deleted a second time when `DestroyOrDefer` completes.
+  bool in_destroy_or_defer_ = false;
 
   base::WeakPtrFactory<RenderWidgetHostViewBase> weak_factory_{this};
 };

@@ -5,12 +5,13 @@
 # license that can be found in the LICENSE file or at
 # https://developers.google.com/open-source/licenses/bsd
 
+load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
-load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_python//python:defs.bzl", "py_binary")
-load("//bazel/private:upb_proto_library_internal/copts.bzl", "upb_proto_library_copts")
-load("//upb/bazel:amalgamation.bzl", "upb_amalgamation")
-load("//upb/bazel:build_defs.bzl", "UPB_DEFAULT_COPTS")
+load("//upb/bazel:copts.bzl", "UPB_DEFAULT_COPTS", "UPB_DEFAULT_FEATURES")
+load("//upb/bazel/private:upb_proto_library_internal/copts.bzl", "upb_proto_library_copts")
+load("//upb/bazel/private/oss:amalgamation.bzl", "upb_amalgamation")  # buildifier: disable=bzl-visibility
 
 package(default_applicable_licenses = ["//:license"])
 
@@ -25,40 +26,67 @@ exports_files(
     visibility = ["//upb/cmake:__pkg__"],
 )
 
+UPB_CONFIG_VISIBILITY = [
+    "//benchmarks:__subpackages__",
+    "//hpb:__subpackages__",
+    "//hpb_generator:__subpackages__",
+    "//lua:__pkg__",
+    "//python:__pkg__",
+    "//src/google/protobuf/compiler:__subpackages__",
+    "//upb:__subpackages__",
+    "//upb_generator:__subpackages__",
+    "//src/google/protobuf/compiler:__subpackages__",
+]
+
 config_setting(
     name = "windows",
     constraint_values = ["@platforms//os:windows"],
-    visibility = [
-        "//hpb:__subpackages__",
-        "//hpb_generator:__subpackages__",
-        "//lua:__pkg__",
-        "//python:__pkg__",
-        "//upb:__subpackages__",
-        "//upb_generator:__subpackages__",
-    ],
+    visibility = UPB_CONFIG_VISIBILITY,
 )
 
 bool_flag(
     name = "fasttable_enabled",
     build_setting_default = False,
-    visibility = ["//bazel:__pkg__"],
+    scope = "universal",
+    visibility = UPB_CONFIG_VISIBILITY,
 )
 
 config_setting(
-    name = "fasttable_enabled_setting",
+    name = "fasttable_enabled_setting_flag",
     flag_values = {"//upb:fasttable_enabled": "true"},
-    visibility = [
-        "//lua:__pkg__",
-        "//python:__pkg__",
-        "//upb:__subpackages__",
-        "//upb_generator:__subpackages__",
+    visibility = UPB_CONFIG_VISIBILITY,
+)
+
+selects.config_setting_group(
+    name = "fasttable_enabled_setting",
+    match_all = [
+        ":fasttable_enabled_setting_flag",
+        ":any_64bit",
     ],
+    visibility = UPB_CONFIG_VISIBILITY,
+)
+
+selects.config_setting_group(
+    name = "any_64bit",
+    match_any = [
+        "@platforms//cpu:aarch64",
+        "@platforms//cpu:arm64",
+        "@platforms//cpu:cortex-r82",
+        "@platforms//cpu:mips64",
+        "@platforms//cpu:ppc64le",
+        "@platforms//cpu:riscv64",
+        "@platforms//cpu:s390x",
+        "@platforms//cpu:wasm64",
+        "@platforms//cpu:x86_64",
+    ],
+    visibility = UPB_CONFIG_VISIBILITY,
 )
 
 upb_proto_library_copts(
     name = "upb_proto_library_copts",
     copts = UPB_DEFAULT_COPTS,
-    visibility = ["//bazel:__pkg__"],
+    features = UPB_DEFAULT_FEATURES,
+    visibility = ["//upb/bazel:__pkg__"],
 )
 
 # Please update copy.bara.sky target = ":friends" if
@@ -83,6 +111,7 @@ cc_library(
     name = "generated_code_support",
     hdrs = ["generated_code_support.h"],
     copts = UPB_DEFAULT_COPTS,
+    features = UPB_DEFAULT_FEATURES,
     textual_hdrs = [
         "//upb/port:inc",
     ],
@@ -98,12 +127,14 @@ cc_library(
         "//upb/message:internal",
         "//upb/mini_descriptor",
         "//upb/mini_table",
+        "//upb/mini_table:internal",
         "//upb/wire",
     ] + select({
         ":fasttable_enabled_setting": [
             "//upb/wire/decode_fast:field_parsers",
         ],
-        "//conditions:default": [],
+        "//conditions:default": [
+        ],
     }),
 )
 
@@ -111,6 +142,7 @@ cc_library(
 cc_library(
     name = "generated_cpp_support",
     copts = UPB_DEFAULT_COPTS,
+    features = UPB_DEFAULT_FEATURES,
     textual_hdrs = [
         "//upb/port:inc",
     ],
@@ -129,6 +161,8 @@ upb_amalgamation(
         ":generated_code_support",
         "//src/google/protobuf:descriptor_upb_c_proto",
         "//src/google/protobuf:descriptor_upb_minitable_proto",
+        "//src/google/protobuf:json_enumvalue_options_upb_c_proto",
+        "//src/google/protobuf:json_enumvalue_options_upb_minitable_proto",
         "//upb/base",
         "//upb/base:internal",
         "//upb/hash:hash",
@@ -136,6 +170,7 @@ upb_amalgamation(
         "//upb/mem",
         "//upb/mem:internal",
         "//upb/message",
+        "//upb/message:message_unknowns",
         "//upb/message:compare",
         "//upb/message:copy",
         "//upb/message:internal",
@@ -148,12 +183,17 @@ upb_amalgamation(
         "//upb/port",
         "//upb/reflection",
         "//upb/reflection:descriptor_upb_proto",
+        "//upb/reflection:json_enumvalue_options_upb_proto",
         "//upb/reflection:internal",
         "//upb/text:debug",
         "//upb/text:internal",
         "//upb/wire",
+        "//upb/wire:back_alloc",
+        "//upb/wire:byte_size",
         "//upb/wire:decoder",
+        "//upb/wire:encoder",
         "//upb/wire:eps_copy_input_stream",
+        "//upb/wire:eps_copy_input_stream_internal",
         "//upb/wire:reader",
         "//upb/wire:reader_internal",
         "//upb/wire:writer",
@@ -181,6 +221,9 @@ upb_amalgamation(
         "//src/google/protobuf:descriptor_upb_c_proto",
         "//src/google/protobuf:descriptor_upb_minitable_proto",
         "//src/google/protobuf:descriptor_upb_reflection_proto",
+        "//src/google/protobuf:json_enumvalue_options_upb_c_proto",
+        "//src/google/protobuf:json_enumvalue_options_upb_minitable_proto",
+        "//src/google/protobuf:json_enumvalue_options_upb_reflection_proto",
         "//upb/base",
         "//upb/base:internal",
         "//upb/hash:hash",
@@ -189,6 +232,7 @@ upb_amalgamation(
         "//upb/mem",
         "//upb/mem:internal",
         "//upb/message",
+        "//upb/message:message_unknowns",
         "//upb/message:compare",
         "//upb/message:copy",
         "//upb/message:internal",
@@ -201,10 +245,14 @@ upb_amalgamation(
         "//upb/port",
         "//upb/reflection",
         "//upb/reflection:descriptor_upb_proto",
+        "//upb/reflection:json_enumvalue_options_upb_proto",
         "//upb/reflection:internal",
         "//upb/wire",
+        "//upb/wire:back_alloc",
         "//upb/wire:decoder",
+        "//upb/wire:encoder",
         "//upb/wire:eps_copy_input_stream",
+        "//upb/wire:eps_copy_input_stream_internal",
         "//upb/wire:reader",
         "//upb/wire:reader_internal",
         "//upb/wire:writer",
@@ -232,6 +280,8 @@ upb_amalgamation(
         ":generated_code_support",
         "//src/google/protobuf:descriptor_upb_c_proto",
         "//src/google/protobuf:descriptor_upb_minitable_proto",
+        "//src/google/protobuf:json_enumvalue_options_upb_c_proto",
+        "//src/google/protobuf:json_enumvalue_options_upb_minitable_proto",
         "//upb/base",
         "//upb/base:internal",
         "//upb/hash:hash",
@@ -240,6 +290,7 @@ upb_amalgamation(
         "//upb/mem",
         "//upb/mem:internal",
         "//upb/message",
+        "//upb/message:message_unknowns",
         "//upb/message:compare",
         "//upb/message:copy",
         "//upb/message:internal",
@@ -252,11 +303,15 @@ upb_amalgamation(
         "//upb/port",
         "//upb/reflection",
         "//upb/reflection:descriptor_upb_proto",
+        "//upb/reflection:json_enumvalue_options_upb_proto",
         "//upb/reflection:internal",
         "//upb/util:def_to_proto",
         "//upb/wire",
+        "//upb/wire:back_alloc",
         "//upb/wire:decoder",
+        "//upb/wire:encoder",
         "//upb/wire:eps_copy_input_stream",
+        "//upb/wire:eps_copy_input_stream_internal",
         "//upb/wire:reader",
         "//upb/wire:reader_internal",
         "//upb/wire:writer",
@@ -293,14 +348,17 @@ filegroup(
 
 filegroup(
     name = "test_protos",
+    testonly = 1,
     srcs = [
         "//src/google/protobuf:test_messages_proto2.proto",
         "//src/google/protobuf:test_messages_proto3.proto",
         "//src/google/protobuf:well_known_type_protos",
         "//upb/json:test_protos",
         "//upb/message:test_protos",
+        "//upb/mini_table:test_protos",
         "//upb/test:test_protos",
         "//upb/util:test_protos",
+        "//upb/wire:test_protos",
     ],
     visibility = ["//pkg:__pkg__"],
 )
@@ -308,9 +366,13 @@ filegroup(
 filegroup(
     name = "test_srcs",
     srcs = [
+        "//upb/hash:test_srcs",
         "//upb/json:test_srcs",
+        "//upb/lex:test_srcs",
         "//upb/mem:test_srcs",
         "//upb/message:test_srcs",
+        "//upb/mini_descriptor:test_srcs",
+        "//upb/mini_table:test_srcs",
         "//upb/test:test_srcs",
         "//upb/util:test_srcs",
         "//upb/wire:test_srcs",

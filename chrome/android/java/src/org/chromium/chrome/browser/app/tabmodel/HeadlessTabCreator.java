@@ -10,15 +10,16 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabBuilder;
 import org.chromium.chrome.browser.tab.TabCreationState;
+import org.chromium.chrome.browser.tab.TabId;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabState;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
 import org.chromium.chrome.browser.tabmodel.TabCreator.NeedsTabModel;
 import org.chromium.chrome.browser.tabmodel.TabCreatorUtil;
 import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.tabmodel.TabModelType;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
-import org.chromium.url.GURL;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -68,7 +69,7 @@ public class HeadlessTabCreator implements TabCreator, NeedsTabModel {
         Tab tab =
                 TabBuilder.createForLazyLoad(mProfile, loadUrlParams, title)
                         .setLaunchType(type)
-                        .setDelegateFactory(new HeadlessTabDelegateFactory())
+                        .setDelegateFactory(new HeadlessTabDelegateFactory(TabModelType.HEADLESS))
                         .setParent(parent)
                         .build();
         mTabModel.addTab(tab, position, type, TabCreationState.FROZEN_FOR_LAZY_LOAD);
@@ -81,12 +82,17 @@ public class HeadlessTabCreator implements TabCreator, NeedsTabModel {
         Tab tab =
                 TabBuilder.createFromFrozenState(mProfile)
                         .setId(id)
-                        .setDelegateFactory(new HeadlessTabDelegateFactory())
+                        .setDelegateFactory(new HeadlessTabDelegateFactory(TabModelType.HEADLESS))
                         .setTabState(state)
                         .build();
         mTabModel.addTab(
                 tab, index, TabLaunchType.FROM_RESTORE, TabCreationState.FROZEN_ON_RESTORE);
         return tab;
+    }
+
+    @Override
+    public boolean isReparenting(@TabId int id) {
+        return false;
     }
 
     @Override
@@ -106,15 +112,14 @@ public class HeadlessTabCreator implements TabCreator, NeedsTabModel {
             boolean shouldPin,
             WebContents webContents,
             @TabLaunchType int type,
-            GURL url,
             int index,
             CompletableFuture<Boolean> addTabToModel) {
-        throw new RuntimeException("Headless does not support live web contents.");
+        throw new UnsupportedOperationException("Headless does not support live web contents.");
     }
 
     @Override
     public @Nullable Tab createTabWithHistory(@Nullable Tab parent, int type) {
-        throw new RuntimeException("Headless does not support live web contents.");
+        throw new UnsupportedOperationException("Headless does not support live web contents.");
     }
 
     @Override

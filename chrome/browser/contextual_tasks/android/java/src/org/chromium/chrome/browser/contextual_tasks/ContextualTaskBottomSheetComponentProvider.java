@@ -9,6 +9,7 @@ import android.view.View;
 import androidx.annotation.ColorInt;
 import androidx.annotation.IdRes;
 import androidx.annotation.Px;
+import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
@@ -17,6 +18,7 @@ import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.contextual_tasks.ui.ContextualTasksControlCoordinator;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_bottom_sheet.CoBrowseComponentProvider;
@@ -39,7 +41,8 @@ public class ContextualTaskBottomSheetComponentProvider implements CoBrowseCompo
      * @return A new instance of {@link ContextualTaskBottomSheetComponentProvider}.
      */
     @CalledByNative
-    private static ContextualTaskBottomSheetComponentProvider createProvider() {
+    @VisibleForTesting
+    public static ContextualTaskBottomSheetComponentProvider createProvider() {
         return new ContextualTaskBottomSheetComponentProvider();
     }
 
@@ -48,6 +51,7 @@ public class ContextualTaskBottomSheetComponentProvider implements CoBrowseCompo
     @Override
     public TabBottomSheetContent createContent(
             View contentView,
+            float defaultHeightRatio,
             float fullHeightRatio,
             @ColorInt int backgroundColor,
             @Px int peekViewHeight,
@@ -55,6 +59,7 @@ public class ContextualTaskBottomSheetComponentProvider implements CoBrowseCompo
             Runnable onBackPressed) {
         return new ContextualTaskBottomSheetContent(
                 contentView,
+                defaultHeightRatio,
                 fullHeightRatio,
                 backgroundColor,
                 peekViewHeight,
@@ -68,6 +73,8 @@ public class ContextualTaskBottomSheetComponentProvider implements CoBrowseCompo
             MonotonicObservableSupplier<Profile> profileSupplier,
             NullableObservableSupplier<Tab> tabSupplier,
             TabSelectionDelegate tabSelectionDelegate) {
-        return null;
+        Profile profile = profileSupplier.get();
+        assert profile != null && !profile.isOffTheRecord();
+        return new ContextualTasksControlCoordinator(tabBottomSheetManager, profile);
     }
 }

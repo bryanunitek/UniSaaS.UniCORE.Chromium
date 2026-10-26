@@ -5,15 +5,14 @@
 #include "chrome/browser/ash/boca/boca_app_client_impl.h"
 
 #include "chrome/browser/ash/boca/shared_crd_session_wrapper_impl.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/policy/remote_commands/crd/public/shared_crd_session_provider.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/feedback/show_feedback_page.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chromeos/ash/components/boca/shared_crd_session_wrapper.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
@@ -26,17 +25,6 @@ inline static constexpr char kDummyDeviceId[] = "kDummyDeviceId";
 BocaAppClientImpl::BocaAppClientImpl() = default;
 
 BocaAppClientImpl::~BocaAppClientImpl() = default;
-
-signin::IdentityManager* BocaAppClientImpl::GetIdentityManager() {
-  Profile* profile = ProfileManager::GetActiveUserProfile();
-  return IdentityManagerFactory::GetForProfile(profile);
-}
-
-scoped_refptr<network::SharedURLLoaderFactory>
-BocaAppClientImpl::GetURLLoaderFactory() {
-  Profile* profile = ProfileManager::GetActiveUserProfile();
-  return profile->GetURLLoaderFactory();
-}
 
 std::string BocaAppClientImpl::GetDeviceId() {
   if (!ash::DeviceSettingsService::IsInitialized()) {

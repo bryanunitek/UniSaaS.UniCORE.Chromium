@@ -12,7 +12,6 @@
 #include "chrome/browser/new_tab_page/chrome_colors/generated_colors_info.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/cr_components/theme_color_picker/customize_chrome_colors.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -21,6 +20,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/mojom/themes.mojom.h"
+#include "ui/base/window_open_disposition.h"
 
 class TestChromeColorsService : public InProcessBrowserTest {
  protected:
@@ -184,7 +184,7 @@ IN_PROC_BROWSER_TEST_F(TestChromeColorsService, RevertThemeChangesForTab) {
 
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL("chrome://newtab"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
   content::WebContents* second_tab =
       browser()->tab_strip_model()->GetActiveWebContents();

@@ -64,7 +64,6 @@
 #include "third_party/blink/public/common/frame/frame_owner_element_type.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
-#include "third_party/blink/public/mojom/fenced_frame/fenced_frame.mojom.h"
 #include "third_party/blink/public/mojom/page/prerender_page_param.mojom.h"
 #include "third_party/blink/public/mojom/page/widget.mojom.h"
 #include "third_party/blink/public/mojom/widget/platform_widget.mojom.h"
@@ -548,8 +547,9 @@ bool CopyMetafileDataToReadOnlySharedMem(
   if (!region_mapping.IsValid())
     return false;
 
-  if (!metafile.GetData(region_mapping.mapping.memory(), buf_size))
+  if (!metafile.GetData(region_mapping.mapping.data(), buf_size)) {
     return false;
+  }
 
   *region = std::move(region_mapping.region);
   return true;
@@ -693,7 +693,8 @@ class HeaderAndFooterContext {
   blink::WebLocalFrame* CreateFrame() {
     return blink::WebLocalFrame::CreateMainFrame(
         web_view_, &frame_client_, nullptr, mojo::NullRemote(),
-        blink::LocalFrameToken(), blink::DocumentToken(), nullptr);
+        blink::LocalFrameToken(), blink::DocumentToken(),
+        blink::InitiatorStateToken(), nullptr);
   }
 
   void InitWebView() {
@@ -982,7 +983,7 @@ void PrepareFrameAndViewForPrint::CopySelection(
   blink::WebView::ApplyWebPreferences(prefs, web_view);
   blink::WebLocalFrame* main_frame = blink::WebLocalFrame::CreateMainFrame(
       web_view, this, nullptr, mojo::NullRemote(), blink::LocalFrameToken(),
-      blink::DocumentToken(), nullptr);
+      blink::DocumentToken(), blink::InitiatorStateToken(), nullptr);
   frame_.Reset(main_frame);
   mojo::AssociatedRemote<blink::mojom::FrameWidget> frame_widget;
   mojo::PendingAssociatedReceiver<blink::mojom::FrameWidget>
@@ -1162,7 +1163,7 @@ PrintRenderFrameHelper::~PrintRenderFrameHelper() = default;
 const mojo::AssociatedRemote<mojom::PrintManagerHost>&
 PrintRenderFrameHelper::GetPrintManagerHost() {
   // We should not make calls back to the host while handling PrintWithParams().
-  DCHECK(!print_with_params_callback_);
+  CHECK(!print_with_params_callback_);
 
   if (!print_manager_host_) {
     render_frame()->GetRemoteAssociatedInterfaces()->GetInterface(
@@ -1281,17 +1282,64 @@ void PrintRenderFrameHelper::ScriptedPrint(bool user_initiated) {
   loop.Run();
 #else
   Print(web_frame, blink::WebNode(), PrintRequestType::kScripted);
-#endif
   if (!weak_this) {
     return;
   }
 
   web_frame->DispatchAfterPrintEvent();
-  if (!weak_this)
+  // DispatchAfterPrintEvent() runs script, which may delete `this`.
+  if (!weak_this) {
     return;
+  }
+  print_in_progress_ = false;
+#endif
+}
+
+#if BUILDFLAG(IS_ANDROID)
+void PrintRenderFrameHelper::InitiatePrintAndroid() {
+  ScopedIPC scoped_ipc(weak_ptr_factory_.GetWeakPtr());
+  if (ipc_nesting_level_ > kAllowedIpcDepthForPrint) {
+    return;
+  }
+
+  if (print_in_progress_ || render_frame_gone_) {
+    return;
+  }
+
+  // On Android, `print_in_progress_` remains true throughout the entire system
+  // print session until `FinishPrintAndroid()` is invoked, preventing duplicate
+  // `beforeprint` dispatches while allowing asynchronous rendering.
+  print_in_progress_ = true;
+  render_frame()->GetWebFrame()->DispatchBeforePrintEvent(
+      /*print_client=*/nullptr);
+}
+
+void PrintRenderFrameHelper::FinishPrintAndroid() {
+  ScopedIPC scoped_ipc(weak_ptr_factory_.GetWeakPtr());
+  if (ipc_nesting_level_ > kAllowedIpcDepthForPrint) {
+    return;
+  }
+
+  if (!print_in_progress_) {
+    return;
+  }
+
+  on_stop_loading_closure_.Reset();
+  is_loading_ = false;
+  Reset();
+
+  if (!render_frame_gone_) {
+    auto weak_this = weak_ptr_factory_.GetWeakPtr();
+    render_frame()->GetWebFrame()->DispatchAfterPrintEvent();
+    // DispatchAfterPrintEvent() runs script, which may delete `this`.
+    if (!weak_this) {
+      return;
+    }
+  }
 
   print_in_progress_ = false;
 }
+#endif  // BUILDFLAG(IS_ANDROID)
 
 void PrintRenderFrameHelper::WillBeDestroyed() {
   // TODO(crbug.com/40094746): Handle unpausing here when PrintRenderFrameHelper
@@ -1326,18 +1374,24 @@ void PrintRenderFrameHelper::PrintRequestedPagesInternal(
   blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
 
 #if BUILDFLAG(IS_ANDROID)
-  bool is_scripted = print_in_progress_;
+  bool has_external_lifecycle = print_in_progress_;
 #else
-  constexpr bool is_scripted = false;
+  constexpr bool has_external_lifecycle = false;
 #endif
 
-  if (!already_notified_frame && !is_scripted) {
-    frame->DispatchBeforePrintEvent(/*print_client=*/nullptr);
-    // Don't print if the RenderFrame is gone.
-    if (render_frame_gone_) {
-      return;
+  if (!already_notified_frame) {
+    // `beforeprint` may already have been dispatched outside of this method:
+    // by `ScriptedPrint()` (nested run loop) or by `InitiatePrintAndroid()`.
+    if (!has_external_lifecycle) {
+      auto weak_this = weak_ptr_factory_.GetWeakPtr();
+      frame->DispatchBeforePrintEvent(/*print_client=*/nullptr);
+      // Don't print if the RenderFrame is gone.
+      if (!weak_this || render_frame_gone_) {
+        return;
+      }
     }
 
+    // Always give the document a chance to load print-only/lazy resources.
     is_loading_ = frame->WillPrintSoon();
     if (is_loading_) {
       on_stop_loading_closure_ = base::BindOnce(
@@ -1358,7 +1412,7 @@ void PrintRenderFrameHelper::PrintRequestedPagesInternal(
     return;
   }
 
-  if (!is_scripted) {
+  if (!has_external_lifecycle) {
     frame->DispatchAfterPrintEvent();
   }
   // WARNING: `this` may be gone at this point. Do not do any more work here and
@@ -1407,9 +1461,30 @@ void PrintRenderFrameHelper::PrintWithParams(
                        ? DebugEvent::kSetPrintSettings1
                        : DebugEvent::kSetPrintSettings2);
   SetPrintPagesParamsForPrinting(*settings);
+
+  is_loading_ = frame->WillPrintSoon();
+  if (is_loading_) {
+    on_stop_loading_closure_ =
+        base::BindOnce(&PrintRenderFrameHelper::OnPrintWithParamsFinished,
+                       weak_ptr_factory_.GetWeakPtr());
+    SetupOnStopLoadingTimeout();
+    return;
+  }
+
+  OnPrintWithParamsFinished();
+}
+
+void PrintRenderFrameHelper::OnPrintWithParamsFinished() {
+  if (render_frame_gone_) {
+    return;
+  }
+
+  blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
+  const blink::WebNode plugin_node = delegate_->GetPdfElement(frame);
+
   prep_frame_view_ =
       std::make_unique<PrepareFrameAndViewForPrint>(frame, plugin_node);
-  prep_frame_view_->EnterPrintMode(*settings->params,
+  prep_frame_view_->EnterPrintMode(*print_pages_params_->params,
                                    /*ignore_css_margins=*/false);
 
   PrintPages();
@@ -2559,8 +2634,16 @@ bool PrintRenderFrameHelper::RenderPagesForPrint(blink::WebLocalFrame* frame,
   const mojom::PrintPagesParams& params = *print_pages_params_;
   const mojom::PrintParams& print_params = *params.params;
   prep_frame_view_ = std::make_unique<PrepareFrameAndViewForPrint>(frame, node);
+#if !BUILDFLAG(IS_ANDROID)
+  // On Desktop, the Print Preview WebUI explicitly prevents page range
+  // selection when "Selection only" is checked. Therefore, `pages` is always
+  // expected to be empty. However, on Android, Chrome relies on the standard
+  // Android Print Spooler UI. The spooler operates on the extracted
+  // selection-only document and allows users to specify a page range. Thus,
+  // `pages` can be non-empty.
   DCHECK(!print_pages_params_->params->selection_only ||
          print_pages_params_->pages.empty());
+#endif
   prep_frame_view_->BeginPrinting(
       render_frame()->GetBlinkPreferences(), print_params, ignore_css_margins_,
       base::BindOnce(&PrintRenderFrameHelper::OnFramePreparedForPrintPages,
@@ -2702,14 +2785,12 @@ void PrintRenderFrameHelper::RequestPrintPreview(PrintPreviewRequestType type,
     }
   }
 
-  const bool is_modifiable = print_preview_context_.IsModifiable();
   const bool has_selection = print_preview_context_.HasSelection();
 
   auto params = mojom::RequestPrintPreviewParams::New();
 #if BUILDFLAG(IS_CHROMEOS)
   params->is_from_arc = print_preview_context_.IsForArc();
 #endif
-  params->is_modifiable = is_modifiable;
   params->has_selection = has_selection;
   switch (type) {
     case PrintPreviewRequestType::kScripted: {

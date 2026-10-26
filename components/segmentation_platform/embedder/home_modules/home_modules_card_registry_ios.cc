@@ -22,10 +22,13 @@
 #include "components/segmentation_platform/embedder/home_modules/enhanced_safe_browsing_ephemeral_module.h"
 #include "components/segmentation_platform/embedder/home_modules/ephemeral_module_utils.h"
 #include "components/segmentation_platform/embedder/home_modules/lens_ephemeral_module.h"
+#include "components/segmentation_platform/embedder/home_modules/ntp_customization_ephemeral_module.h"
+#include "components/segmentation_platform/embedder/home_modules/ntp_theme_ephemeral_module.h"
 #include "components/segmentation_platform/embedder/home_modules/price_tracking_notification_promo.h"
 #include "components/segmentation_platform/embedder/home_modules/save_passwords_ephemeral_module.h"
 #include "components/segmentation_platform/embedder/home_modules/send_tab_notification_promo.h"
 #include "components/segmentation_platform/embedder/home_modules/tips_manager/constants.h"
+#include "components/segmentation_platform/embedder/home_modules/tips_notifications_ephemeral_module.h"
 
 namespace segmentation_platform::home_modules {
 
@@ -74,12 +77,35 @@ void AddCardForTip(TipIdentifier tip,
       }
       break;
     }
+    case TipIdentifier::kNTPTheme: {
+      if (NTPThemeEphemeralModule::IsEnabled(prefs)) {
+        cards.push_back(std::make_unique<NTPThemeEphemeralModule>(prefs));
+      }
+      break;
+    }
+    case TipIdentifier::kTipsNotifications: {
+      if (TipsNotificationsEphemeralModule::IsEnabled(prefs)) {
+        cards.push_back(
+            std::make_unique<TipsNotificationsEphemeralModule>(prefs));
+      }
+      break;
+    }
+    case TipIdentifier::kNTPCustomization: {
+      if (NTPCustomizationEphemeralModule::IsEnabled(prefs)) {
+        cards.push_back(
+            std::make_unique<NTPCustomizationEphemeralModule>(prefs));
+      }
+      break;
+    }
   }
 }
 
 // Returns the default sequence of tips variations for iOS.
 std::string GetDefaultTipsExperimentTrain() {
-  return base::StrCat({kLensEphemeralModuleSearchVariation, ",",
+  return base::StrCat({kNTPThemeEphemeralModule, ",",
+                       kNTPCustomizationEphemeralModule, ",",
+                       kTipsNotificationsEphemeralModule, ",",
+                       kLensEphemeralModuleSearchVariation, ",",
                        kEnhancedSafeBrowsingEphemeralModule});
 }
 
@@ -171,6 +197,9 @@ void HomeModulesCardRegistryIOS::RegisterProfilePrefs(
   LensEphemeralModule::RegisterProfilePrefs(registry);
   SendTabNotificationPromo::RegisterProfilePrefs(registry);
   DefaultBrowserPromoEphemeralModule::RegisterProfilePrefs(registry);
+  NTPThemeEphemeralModule::RegisterProfilePrefs(registry);
+  TipsNotificationsEphemeralModule::RegisterProfilePrefs(registry);
+  NTPCustomizationEphemeralModule::RegisterProfilePrefs(registry);
 }
 
 // static
@@ -180,7 +209,10 @@ bool HomeModulesCardRegistryIOS::IsEphemeralTipsModuleLabel(
          AutofillPasswordsEphemeralModule::IsModuleLabel(label) ||
          EnhancedSafeBrowsingEphemeralModule::IsModuleLabel(label) ||
          SavePasswordsEphemeralModule::IsModuleLabel(label) ||
-         LensEphemeralModule::IsModuleLabel(label);
+         LensEphemeralModule::IsModuleLabel(label) ||
+         NTPThemeEphemeralModule::IsModuleLabel(label) ||
+         TipsNotificationsEphemeralModule::IsModuleLabel(label) ||
+         NTPCustomizationEphemeralModule::IsModuleLabel(label);
 }
 
 void HomeModulesCardRegistryIOS::NotifyCardShown(std::string_view card_name) {

@@ -9,7 +9,7 @@
 #include "base/strings/pattern.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/speech_monitor.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -32,7 +32,7 @@ class AccessibilityLiveSiteTest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
     ASSERT_FALSE(AccessibilityManager::Get()->IsSelectToSpeakEnabled());
 
-    extensions::ExtensionHostTestHelper host_helper(browser()->profile());
+    extensions::ExtensionHostTestHelper host_helper(browser()->GetProfile());
     AccessibilityManager::Get()->SetSelectToSpeakEnabled(true);
     host_helper.WaitForHostCompletedFirstLoad();
 
@@ -52,7 +52,7 @@ class AccessibilityLiveSiteTest : public InProcessBrowserTest {
 
     // Pretend that enhanced network voices dialog has been accepted so that the
     // dialog does not block.
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         prefs::kAccessibilitySelectToSpeakEnhancedVoicesDialogShown, true);
 
     InProcessBrowserTest::SetUpInProcessBrowserTestFixture();

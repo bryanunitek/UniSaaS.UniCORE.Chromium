@@ -639,6 +639,24 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAriaSpinbuttonAppendingTextChanged) {
+  RunEventTest(
+      FILE_PATH_LITERAL("aria-spinbutton-appending-text-changed.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(
+    DumpAccessibilityEventsTest,
+    AccessibilityEventsNativeSpinbuttonAppendingTextChanged) {
+  RunEventTest(
+      FILE_PATH_LITERAL("native-spinbutton-appending-text-changed.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsNativeSpinbuttonArrowUpChanged) {
+  RunEventTest(FILE_PATH_LITERAL("native-spinbutton-arrow-up-changed.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsAddAlert) {
   RunEventTest(FILE_PATH_LITERAL("add-alert.html"));
 }
@@ -985,6 +1003,22 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsLiveRegionRemove) {
   RunEventTest(FILE_PATH_LITERAL("live-region-remove.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsLiveRegionReparent) {
+  RunEventTest(FILE_PATH_LITERAL("live-region-reparent.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsLiveRegionReparentFromLiveRegion) {
+  RunEventTest(FILE_PATH_LITERAL("live-region-reparent-from-live-region.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsLiveRegionReparentWithinLiveRegion) {
+  RunEventTest(
+      FILE_PATH_LITERAL("live-region-reparent-within-live-region.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(

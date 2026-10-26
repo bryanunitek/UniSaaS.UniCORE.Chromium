@@ -6,19 +6,21 @@ package org.chromium.chrome.browser.omnibox.suggestions;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
-import static org.mockito.Mockito.when;
 
 import static org.chromium.ui.test.util.MockitoHelper.clearInvocations;
 
+import android.app.Activity;
 import android.content.Context;
 import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
@@ -26,7 +28,6 @@ import android.view.View;
 import android.widget.FrameLayout;
 
 import androidx.recyclerview.widget.RecyclerView;
-import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.After;
 import org.junit.Before;
@@ -36,16 +37,19 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
+import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.MathUtils;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsDropdown.SuggestionLayoutScrollListener;
+import org.chromium.chrome.browser.omnibox.suggestions.SelectionController.TraversalMode;
 import org.chromium.components.omnibox.OmniboxFeatureList;
 import org.chromium.components.omnibox.suggestions.OmniboxSuggestionUiType;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
@@ -56,31 +60,34 @@ import org.chromium.ui.modelutil.PropertyModel;
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(sdk = BaseRobolectricTestRunner.MIN_SDK)
 public class OmniboxSuggestionsDropdownUnitTest {
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
-    private @Mock Runnable mDropdownScrollListener;
-    private @Mock Runnable mDropdownScrollToTopListener;
-    private @Mock OmniboxSuggestionsDropdownAdapter mAdapter;
-    private @Mock View mView;
-    private @Mock OmniboxSuggestionsDropdown.NavigationListener mNavigationListener;
 
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
+
+    @Mock private Runnable mDropdownScrollListener;
+    @Mock private Runnable mDropdownScrollToTopListener;
+    @Mock private OmniboxSuggestionsDropdownAdapter mAdapter;
+    @Mock private OmniboxSuggestionsDropdown.NavigationListener mNavigationListener;
+
+    private Activity mActivity;
     private Context mContext;
+    private View mView;
     private OmniboxSuggestionsDropdown mDropdown;
-    private OmniboxSuggestionsDropdown.SuggestionLayoutScrollListener mListener;
+    private SuggestionLayoutScrollListener mListener;
     private FrameLayout.LayoutParams mLayoutParams;
     private final SettableNonNullObservableSupplier<Boolean> mChipVisibilitySupplier =
             ObservableSuppliers.createNonNull(false);
 
     @Before
     public void setUp() {
-        mContext =
-                new ContextThemeWrapper(
-                        ApplicationProvider.getApplicationContext(),
-                        R.style.Theme_BrowserUI_DayNight);
+        mActivity = Robolectric.buildActivity(Activity.class).setup().get();
+        mContext = new ContextThemeWrapper(mActivity, R.style.Theme_BrowserUI_DayNight);
+        mView = new View(mContext);
+        mView.setFocusable(true);
         mListener = spy(new OmniboxSuggestionsDropdown.SuggestionLayoutScrollListener(mContext));
-        when(mListener.getItemCount()).thenReturn(3);
-        when(mListener.findViewByPosition(anyInt())).thenReturn(mView);
-        when(mView.isFocusable()).thenReturn(true);
-        mDropdown = spy(new OmniboxSuggestionsDropdown(mContext, null, mListener));
+        lenient().doReturn(3).when(mListener).getItemCount();
+        lenient().doReturn(mView).when(mListener).findViewByPosition(anyInt());
+        mDropdown = new OmniboxSuggestionsDropdown(mContext, null, mListener);
         mDropdown.setId(R.id.omnibox_suggestions_dropdown);
         mDropdown.setAdapter(mAdapter);
 
@@ -99,7 +106,7 @@ public class OmniboxSuggestionsDropdownUnitTest {
 
         // Scroll attempt should suppress the scroll and emit keyboard dismiss.
         assertEquals(0, mListener.updateKeyboardVisibilityAndScroll(10, 10));
-        verify(mDropdownScrollListener, times(1)).run();
+        verify(mDropdownScrollListener).run();
         verifyNoMoreInteractions(mDropdownScrollListener);
 
         // Subsequent scroll events should pass through.
@@ -114,7 +121,7 @@ public class OmniboxSuggestionsDropdownUnitTest {
 
         // Scroll attempt should suppress the scroll and emit keyboard dismiss.
         assertEquals(0, mListener.updateKeyboardVisibilityAndScroll(10, 10));
-        verify(mDropdownScrollListener, times(1)).run();
+        verify(mDropdownScrollListener).run();
         verifyNoMoreInteractions(mDropdownScrollListener);
 
         // Subsequent scroll events should pass through.
@@ -130,7 +137,7 @@ public class OmniboxSuggestionsDropdownUnitTest {
 
         // Scroll attempt should suppress the scroll and emit keyboard dismiss.
         assertEquals(0, mListener.updateKeyboardVisibilityAndScroll(10, 10));
-        verify(mDropdownScrollListener, times(1)).run();
+        verify(mDropdownScrollListener).run();
         verifyNoMoreInteractions(mDropdownScrollListener);
 
         // Pretend we scroll up, while keyboard is hidden.
@@ -145,7 +152,7 @@ public class OmniboxSuggestionsDropdownUnitTest {
         // Overscroll to top again, but this time as a new gesture.
         mListener.onNewGesture();
         assertEquals(-5, mListener.updateKeyboardVisibilityAndScroll(-5, -10));
-        verify(mDropdownScrollToTopListener, times(1)).run();
+        verify(mDropdownScrollToTopListener).run();
         verifyNoMoreInteractions(mDropdownScrollToTopListener);
 
         // Overscroll again. Make sure we don't call the keyboard up again.
@@ -208,7 +215,7 @@ public class OmniboxSuggestionsDropdownUnitTest {
         // Scroll attempt should suppress the scroll and emit keyboard dismiss.
         // This time the scroll happens, even if just by one pixel.
         assertEquals(0, mListener.updateKeyboardVisibilityAndScroll(10, 10));
-        verify(mDropdownScrollListener, times(1)).run();
+        verify(mDropdownScrollListener).run();
         verifyNoMoreInteractions(mDropdownScrollListener);
 
         // Simulate lists being shown again.
@@ -238,26 +245,22 @@ public class OmniboxSuggestionsDropdownUnitTest {
 
     @Test
     public void translateChildrenVertical() {
-        View childView = mock(View.class);
-
         mDropdown.translateChildrenVertical(45.6f);
-        mDropdown.onChildAttachedToWindow(childView);
-        verify(childView).setTranslationY(45.6f);
+        mDropdown.onChildAttachedToWindow(mView);
+        assertEquals(45.6f, mView.getTranslationY(), MathUtils.EPSILON);
 
-        mDropdown.onChildDetachedFromWindow(childView);
-        verify(childView).setTranslationY(0.0f);
+        mDropdown.onChildDetachedFromWindow(mView);
+        assertEquals(0.0f, mView.getTranslationY(), MathUtils.EPSILON);
     }
 
     @Test
     public void setChildAlpha() {
-        View childView = mock(View.class);
-
         mDropdown.setChildAlpha(0.6f);
-        mDropdown.onChildAttachedToWindow(childView);
-        verify(childView).setAlpha(0.6f);
+        mDropdown.onChildAttachedToWindow(mView);
+        assertEquals(0.6f, mView.getAlpha(), MathUtils.EPSILON);
 
-        mDropdown.onChildDetachedFromWindow(childView);
-        verify(childView).setAlpha(1.0f);
+        mDropdown.onChildDetachedFromWindow(mView);
+        assertEquals(1.0f, mView.getAlpha(), MathUtils.EPSILON);
     }
 
     @Test
@@ -279,12 +282,11 @@ public class OmniboxSuggestionsDropdownUnitTest {
         clearInvocations(mListener);
 
         mListener.updateVisualScrollState();
-        verify(mListener, times(0)).postOnAnimation(any());
+        verify(mListener, never()).postOnAnimation(any());
     }
 
     @Test
     public void onKeyDown_beforeShownDoesNotHandleTabNavigation() {
-        when(mDropdown.isShown()).thenReturn(false);
         assertFalse(
                 mDropdown.onKeyDown(
                         KeyEvent.KEYCODE_TAB,
@@ -303,7 +305,7 @@ public class OmniboxSuggestionsDropdownUnitTest {
 
     @Test
     public void onKeyDown_handlesTabNavigationEvents() {
-        when(mDropdown.isShown()).thenReturn(true);
+        mActivity.setContentView(mDropdown);
 
         // Tab should be handled the first time to put focus on the first item.
         assertTrue(
@@ -366,24 +368,27 @@ public class OmniboxSuggestionsDropdownUnitTest {
     @DisableFeatures(OmniboxFeatureList.RESET_SUGGESTIONS_SCROLL)
     public void testOnLayoutChildren_flagDisabled_noScroll() {
         mListener.onLayoutChildren(null, new RecyclerView.State());
-        verify(mListener, times(0)).scrollToPositionWithOffset(anyInt(), anyInt());
+        verify(mListener, never()).scrollToPositionWithOffset(anyInt(), anyInt());
     }
 
     @Test
-    public void testSetAllowParkingAtSentinel() {
+    public void testSetSelectionMode() {
         SelectionController controller = mDropdown.getSelectionControllerForTesting();
 
-        mDropdown.setAllowParkingAtSentinel(true);
+        mDropdown.setSelectionMode(TraversalMode.WRAPPING_WITH_SENTINEL);
         assertTrue(controller.isParkedAtSentinel());
 
-        mDropdown.setAllowParkingAtSentinel(false);
+        mDropdown.setSelectionMode(TraversalMode.SENTINEL_THEN_WRAPPING);
+        assertTrue(controller.isParkedAtSentinel());
+
+        mDropdown.setSelectionMode(TraversalMode.WRAPPING);
         assertFalse(controller.isParkedAtSentinel());
     }
 
     @Test
     public void testNavigationListener_notifiedOnKeyDown() {
         mDropdown.setNavigationListener(mNavigationListener);
-        when(mDropdown.isShown()).thenReturn(true);
+        mActivity.setContentView(mDropdown);
 
         mDropdown.onKeyDown(
                 KeyEvent.KEYCODE_TAB,
@@ -393,7 +398,6 @@ public class OmniboxSuggestionsDropdownUnitTest {
     }
 
     @Test
-    @EnableFeatures(OmniboxFeatureList.OMNIBOX_ASYNC_VIEW_INFLATION)
     public void testRecycledViewPool_NotClearedAndReused() {
         ModelList listItems = new ModelList();
         var listener = new SuggestionLayoutScrollListener(mContext);
@@ -404,8 +408,6 @@ public class OmniboxSuggestionsDropdownUnitTest {
 
         PreWarmingRecycledViewPool pool =
                 (PreWarmingRecycledViewPool) dropdown.getRecycledViewPool();
-
-        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
 
         // Verify pool is initially pre-warmed.
         assertEquals(
@@ -425,5 +427,24 @@ public class OmniboxSuggestionsDropdownUnitTest {
         assertEquals(
                 PreWarmingRecycledViewPool.PRE_WARMED_DEFAULT_VIEW_COUNT - 1,
                 pool.getRecycledViewCount(OmniboxSuggestionUiType.DEFAULT));
+    }
+
+    @Test
+    public void testDestroy_cleansUpOmtOverlayView() throws Exception {
+        var dropdown =
+                new OmniboxSuggestionsDropdown(
+                        mContext, null, new SuggestionLayoutScrollListener(mContext));
+        assertNull(dropdown.getOmtOverlayViewForTesting());
+
+        var overlay = new SuggestionsOmtOverlayView(mContext, dropdown);
+        dropdown.setOmtOverlayView(overlay);
+        assertEquals(overlay, dropdown.getOmtOverlayViewForTesting());
+        assertTrue(overlay.getInputThreadForTesting().isAlive());
+
+        dropdown.destroy();
+
+        assertNull(dropdown.getOmtOverlayViewForTesting());
+        overlay.getInputThreadForTesting().join();
+        assertFalse(overlay.getInputThreadForTesting().isAlive());
     }
 }

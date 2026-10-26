@@ -4,15 +4,16 @@
 
 #include "components/update_client/pipeline.h"
 
-#include <cstdint>
+#include <stdint.h>
+
 #include <optional>
 #include <queue>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/adapters.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -62,11 +63,11 @@ using Operation = base::OnceCallback<base::OnceClosure(
 
 constexpr CategorizedError kUnsupportedOperationError = CategorizedError(
     {.category = ErrorCategory::kUpdateCheck,
-     .code = static_cast<int>(ProtocolError::UNSUPPORTED_OPERATION)});
+     .code = std::to_underlying(ProtocolError::UNSUPPORTED_OPERATION)});
 
 constexpr CategorizedError kInvalidOperationAttributesError = CategorizedError(
     {.category = ErrorCategory::kUpdateCheck,
-     .code = static_cast<int>(ProtocolError::INVALID_OPERATION_ATTRIBUTES)});
+     .code = std::to_underlying(ProtocolError::INVALID_OPERATION_ATTRIBUTES)});
 
 // `Pipeline` manages the flow of operations, passing the output path of
 // each operation to the next one, short-circuiting on errors.
@@ -142,7 +143,7 @@ void Pipeline::OpComplete(
     // Pipeline still running, but cancelled.
     std::move(callback_).Run(
         {.category = ErrorCategory::kService,
-         .code = static_cast<int>(ServiceError::CANCELLED)});
+         .code = std::to_underlying(ServiceError::CANCELLED)});
     return;
   }
   // Pipeline still running: start next operation.
@@ -408,7 +409,7 @@ void MakePipeline(
   // Assemble the pipelines from last to first.
   scoped_refptr<Pipeline> fallback = nullptr;
   for (const ProtocolParser::Pipeline& pipeline :
-       base::Reversed(result.pipelines)) {
+       std::views::reverse(result.pipelines)) {
     // First, scan the operations to find any to-be-installed CRX so that
     // downloads can be skipped if it is already in cache.
     auto cache_check = base::BindRepeating(

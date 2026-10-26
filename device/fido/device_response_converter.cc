@@ -16,14 +16,15 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "components/cbor/diagnostic_writer.h"
 #include "components/cbor/reader.h"
 #include "components/cbor/writer.h"
 #include "components/device_event_log/device_event_log.h"
 #include "device/fido/authenticator_data.h"
 #include "device/fido/authenticator_supported_options.h"
+#include "device/fido/cbor_util.h"
 #include "device/fido/cmtg_key_response.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/opaque_attestation_statement.h"
 #include "device/fido/public/features.h"
 #include "device/fido/public/fido_constants.h"
@@ -400,7 +401,7 @@ std::optional<AuthenticatorGetInfoResponse> ReadCTAPGetInfoResponse(
   if (!decoded_response->is_map())
     return std::nullopt;
 
-  FIDO_LOG(DEBUG) << "-> " << cbor::DiagnosticWriter::Write(*decoded_response);
+  FIDO_LOG(DEBUG) << "-> " << cbor::WriteDiagnostic(*decoded_response);
   const auto& response_map = decoded_response->GetMap();
 
   auto it = response_map.find(CBOR(0x01));
@@ -488,6 +489,8 @@ std::optional<AuthenticatorGetInfoResponse> ReadCTAPGetInfoResponse(
         options.large_blob_type = LargeBlobSupportType::kExtension;
       } else if (extension_str == kExtensionLargeBlobKey) {
         large_blob_key_extension_seen = true;
+      } else if (extension_str == kExtensionCmtgKey) {
+        options.supports_cmtg_key = true;
       }
       extensions.push_back(extension_str);
     }
@@ -892,15 +895,14 @@ static std::optional<std::string> FixInvalidUTF8String(
       // This string has been truncated. This is the case that we expect to
       // have to handle since CTAP2 devices are permitted to truncate strings
       // without reference to UTF-8.
-      const std::string candidate(
-          reinterpret_cast<const char*>(utf8_bytes.data()),
-          longest_valid_prefix_len);
+      std::string_view candidate =
+          base::as_string_view(utf8_bytes.first(longest_valid_prefix_len));
       // Check that the result is now acceptable to |IsStringUTF8|, which is
       // stricter than |StreamingUtf8Validator|. Without this, a string could
       // have both contained invalid code-points /and/ been truncated, and this
       // function would only have corrected the latter issue.
       if (base::IsStringUTF8(candidate)) {
-        return candidate;
+        return std::string(candidate);
       }
       return std::nullopt;
     }
@@ -909,60 +911,52 @@ static std::optional<std::string> FixInvalidUTF8String(
 
 typedef bool (*PathPredicate)(const std::vector<const cbor::Value*>&);
 
-static std::optional<cbor::Value> FixInvalidUTF8Value(
-    const cbor::Value& v,
-    std::vector<const cbor::Value*>* path,
+// Recursively repairs truncated UTF-8 strings in `v` in-place at paths
+// permitted by `predicate`. Returns true if all `INVALID_UTF8` values in `v`
+// were successfully repaired (or none were present), and false if any
+// `INVALID_UTF8` value could not be repaired or was not permitted by
+// `predicate`, or if an unsupported map key type was encountered.
+[[nodiscard]] static bool FixInvalidUTF8Value(
+    cbor::Value& v,
+    std::vector<const cbor::Value*>& path,
     PathPredicate predicate) {
   switch (v.type()) {
     case cbor::Value::Type::INVALID_UTF8: {
-      if (!predicate(*path)) {
-        return std::nullopt;
+      if (!predicate(path)) {
+        return false;
       }
       std::optional<std::string> maybe_fixed(
           FixInvalidUTF8String(v.GetInvalidUTF8()));
       if (!maybe_fixed) {
-        return std::nullopt;
+        return false;
       }
-      return cbor::Value(*maybe_fixed);
+      v = cbor::Value(*std::move(maybe_fixed));
+      return true;
     }
 
     case cbor::Value::Type::UNSIGNED:
     case cbor::Value::Type::NEGATIVE:
     case cbor::Value::Type::BYTE_STRING:
     case cbor::Value::Type::STRING:
-    case cbor::Value::Type::TAG:
     case cbor::Value::Type::SIMPLE_VALUE:
-    case cbor::Value::Type::FLOAT_VALUE:
-    case cbor::Value::Type::NONE:
-      return v.Clone();
+      return true;
 
     case cbor::Value::Type::ARRAY: {
-      const cbor::Value::ArrayValue& old_array = v.GetArray();
-      cbor::Value::ArrayValue new_array;
-      new_array.reserve(old_array.size());
-
-      for (const auto& child : old_array) {
-        std::optional<cbor::Value> maybe_fixed =
-            FixInvalidUTF8Value(child, path, predicate);
-        if (!maybe_fixed) {
-          return std::nullopt;
+      for (cbor::Value& child : v.GetArray()) {
+        if (!FixInvalidUTF8Value(child, path, predicate)) {
+          return false;
         }
-        new_array.emplace_back(std::move(*maybe_fixed));
       }
 
-      return cbor::Value(new_array);
+      return true;
     }
 
     case cbor::Value::Type::MAP: {
-      const cbor::Value::MapValue& old_map = v.GetMap();
-      cbor::Value::MapValue new_map;
-      new_map.reserve(old_map.size());
-
-      for (const auto& it : old_map) {
-        switch (it.first.type()) {
+      for (auto& [key, value] : v.GetMap()) {
+        switch (key.type()) {
           case cbor::Value::Type::INVALID_UTF8:
             // Invalid strings in map keys are not supported.
-            return std::nullopt;
+            return false;
 
           case cbor::Value::Type::UNSIGNED:
           case cbor::Value::Type::NEGATIVE:
@@ -971,77 +965,25 @@ static std::optional<cbor::Value> FixInvalidUTF8Value(
 
           default:
             // Other types are not permitted as map keys in CTAP2.
-            return std::nullopt;
+            return false;
         }
 
-        path->push_back(&it.first);
-        std::optional<cbor::Value> maybe_fixed =
-            FixInvalidUTF8Value(it.second, path, predicate);
-        path->pop_back();
-        if (!maybe_fixed) {
-          return std::nullopt;
+        path.push_back(&key);
+        const bool ok = FixInvalidUTF8Value(value, path, predicate);
+        path.pop_back();
+        if (!ok) {
+          return false;
         }
-
-        new_map.emplace(it.first.Clone(), std::move(*maybe_fixed));
       }
 
-      return cbor::Value(new_map);
-    }
-  }
-}
-
-// ContainsInvalidUTF8 returns true if any element of |v| (recursively) contains
-// a string with invalid UTF-8. It bases this determination purely on the type
-// of the nodes and doesn't actually check the contents of the strings
-// themselves.
-static bool ContainsInvalidUTF8(const cbor::Value& v) {
-  switch (v.type()) {
-    case cbor::Value::Type::INVALID_UTF8:
       return true;
-
-    case cbor::Value::Type::UNSIGNED:
-    case cbor::Value::Type::NEGATIVE:
-    case cbor::Value::Type::BYTE_STRING:
-    case cbor::Value::Type::STRING:
-    case cbor::Value::Type::TAG:
-    case cbor::Value::Type::SIMPLE_VALUE:
-    case cbor::Value::Type::FLOAT_VALUE:
-    case cbor::Value::Type::NONE:
-      return false;
-
-    case cbor::Value::Type::ARRAY: {
-      const cbor::Value::ArrayValue& array = v.GetArray();
-      for (const auto& child : array) {
-        if (ContainsInvalidUTF8(child)) {
-          return true;
-        }
-      }
-
-      return false;
-    }
-
-    case cbor::Value::Type::MAP: {
-      const cbor::Value::MapValue& map = v.GetMap();
-      for (const auto& it : map) {
-        if (ContainsInvalidUTF8(it.first) || ContainsInvalidUTF8(it.second)) {
-          return true;
-        }
-      }
-
-      return false;
     }
   }
 }
 
-std::optional<cbor::Value> FixInvalidUTF8(cbor::Value in,
-                                          PathPredicate predicate) {
-  if (!ContainsInvalidUTF8(in)) {
-    // Common case that everything is fine.
-    return in;
-  }
-
+bool FixInvalidUTF8(cbor::Value& in, PathPredicate predicate) {
   std::vector<const cbor::Value*> path;
-  return FixInvalidUTF8Value(in, &path, predicate);
+  return FixInvalidUTF8Value(in, path, predicate);
 }
 
 std::optional<PINUVAuthProtocol> ToPINUVAuthProtocol(int64_t in) {
@@ -1053,14 +995,14 @@ std::optional<PINUVAuthProtocol> ToPINUVAuthProtocol(int64_t in) {
 }
 
 cbor::Value RedactCtapGetAssertionResponse(const cbor::Value& cbor) {
-  using fido_parsing_utils::ToCborVector;
+  using fido_cbor_util::Path;
   constexpr int kSignature = 0x03;
   constexpr int kLargeBlobKey = 0x07;
   constexpr int kExtension = 0x08;
-  return fido_parsing_utils::RedactCbor(
-      cbor, std::array{ToCborVector(kSignature), ToCborVector(kLargeBlobKey),
-                       ToCborVector(kExtension, kExtensionPRF, "results"),
-                       ToCborVector(kExtension, kExtensionLargeBlob)});
+  return fido_cbor_util::RedactValueAtPaths(
+      cbor, Path(kSignature), Path(kLargeBlobKey),
+      Path(kExtension, kExtensionPRF, "results"),
+      Path(kExtension, kExtensionLargeBlob));
 }
 
 }  // namespace device

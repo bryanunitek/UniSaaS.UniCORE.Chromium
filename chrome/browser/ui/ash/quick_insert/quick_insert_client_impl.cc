@@ -44,18 +44,22 @@
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
 #include "chrome/browser/ash/input_method/editor_mediator_factory.h"
 #include "chrome/browser/ash/lobster/lobster_service_provider.h"
-#include "chrome/browser/favicon/favicon_service_factory.h"
-#include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/ash/quick_insert/quick_insert_file_suggester.h"
 #include "chrome/browser/ui/ash/quick_insert/quick_insert_thumbnail_loader.h"
+#include "chromeos/ash/components/bookmarks/bookmark_model_provider.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/drivefs/mojom/drivefs.mojom.h"
 #include "chromeos/ash/components/editor_menu/public/cpp/editor_context.h"
 #include "chromeos/ash/components/editor_menu/public/cpp/editor_mode.h"
 #include "chromeos/ash/components/editor_menu/public/cpp/preset_text_query.h"
+#include "chromeos/ash/components/favicon/favicon_service_provider.h"
+#include "chromeos/ash/components/history/history_service_provider.h"
+#include "chromeos/ash/components/search_engines/template_url_service_provider.h"
 #include "chromeos/constants/chromeos_features.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/render_frame_host.h"
@@ -160,9 +164,10 @@ std::unique_ptr<app_list::SearchProvider> CreateDriveSearchProvider(
 }
 
 std::unique_ptr<app_list::SearchProvider> CreateFileSearchProvider(
+    PrefService* local_state,
     Profile* profile) {
   return std::make_unique<app_list::FileSearchProvider>(
-      profile, base::FileEnumerator::FileType::FILES,
+      local_state, profile, base::FileEnumerator::FileType::FILES,
       std::vector<std::string>{".jpg", ".jpeg", ".png", ".gif", ".webp"});
 }
 
@@ -242,15 +247,22 @@ std::vector<ash::QuickInsertSearchResult> GetEditorResultsFromEditorContext(
 }  // namespace
 
 QuickInsertClientImpl::QuickInsertClientImpl(
+    PrefService* local_state,
     ash::QuickInsertController* controller,
     user_manager::UserManager* user_manager)
-    : announcer_(kAnnouncementViewName), controller_(controller) {
+    : local_state_(CHECK_DEREF(local_state)),
+      announcer_(kAnnouncementViewName),
+      controller_(controller) {
   controller_->SetClient(this);
 
   // As `QuickInsertClientImpl` is initialised in
   // `ChromeBrowserMainExtraPartsAsh::PostProfileInit`, the user manager does
   // not notify us of the first user "change".
-  ActiveUserChanged(user_manager->GetActiveUser());
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ActiveUserChanged(active_session ? user_manager->FindUserAndModify(
+                                         active_session->account_id())
+                                   : nullptr);
   user_session_state_observation_.Observe(user_manager);
 }
 
@@ -509,13 +521,13 @@ void QuickInsertClientImpl::ActiveUserChanged(user_manager::User* active_user) {
 }
 
 history::HistoryService* QuickInsertClientImpl::GetHistoryService() {
-  return HistoryServiceFactory::GetForProfile(
-      profile_, ServiceAccessType::EXPLICIT_ACCESS);
+  return ash::HistoryServiceProvider::Get().Find(CHECK_DEREF(
+      ash::AnnotatedAccountId::Get(profile_->GetOriginalProfile())));
 }
 
 favicon::FaviconService* QuickInsertClientImpl::GetFaviconService() {
-  return FaviconServiceFactory::GetForProfile(
-      profile_, ServiceAccessType::EXPLICIT_ACCESS);
+  return ash::FaviconServiceProvider::Get().Find(CHECK_DEREF(
+      ash::AnnotatedAccountId::Get(profile_->GetOriginalProfile())));
 }
 
 void QuickInsertClientImpl::SetProfileByUser(const user_manager::User* user) {
@@ -534,7 +546,8 @@ void QuickInsertClientImpl::SetProfile(Profile* profile) {
   search_engine_ = std::make_unique<app_list::SearchEngine>(profile_);
   search_engine_->AddProvider(CreateOmniboxProvider(
       /*bookmarks=*/true, /*history=*/true, /*open_tabs=*/true));
-  search_engine_->AddProvider(CreateFileSearchProvider(profile_));
+  search_engine_->AddProvider(
+      CreateFileSearchProvider(&local_state_.get(), profile_));
   search_engine_->AddProvider(CreateDriveSearchProvider(profile_));
   filtered_search_engine_ = nullptr;
   current_filter_category_ = std::nullopt;
@@ -543,20 +556,20 @@ void QuickInsertClientImpl::SetProfile(Profile* profile) {
 
   file_suggester_ = std::make_unique<QuickInsertFileSuggester>(profile_);
   thumbnail_loader_ = std::make_unique<QuickInsertThumbnailLoader>(profile_);
-
-  if (controller_ != nullptr) {
-    controller_->OnClientPrefsSet(profile == nullptr ? nullptr
-                                                     : profile->GetPrefs());
-  }
 }
 
 std::unique_ptr<app_list::SearchProvider>
 QuickInsertClientImpl::CreateOmniboxProvider(bool bookmarks,
                                              bool history,
                                              bool open_tabs) {
+  const AccountId& account_id = CHECK_DEREF(
+      ash::AnnotatedAccountId::Get(profile_->GetOriginalProfile()));
   return std::make_unique<app_list::OmniboxProvider>(
       profile_, GetEmptyAppListControllerDelegate(),
-      TemplateURLServiceFactory::GetForProfile(profile_),
+      ash::TemplateURLServiceProvider::Get().Find(account_id),
+      ash::BookmarkModelProvider::Get().Find(account_id),
+      ash::FaviconServiceProvider::Get().Find(account_id),
+      ash::HistoryServiceProvider::Get().Find(account_id),
       LauncherSearchProviderTypes(bookmarks, history, open_tabs));
 }
 
@@ -583,7 +596,7 @@ QuickInsertClientImpl::CreateSearchProviderForCategory(
     case ash::QuickInsertCategory::kDriveFiles:
       return CreateDriveSearchProvider(profile_);
     case ash::QuickInsertCategory::kLocalFiles:
-      return CreateFileSearchProvider(profile_);
+      return CreateFileSearchProvider(&local_state_.get(), profile_);
   }
 }
 
@@ -610,18 +623,20 @@ int QuickInsertClientImpl::LauncherSearchProviderTypes(bool bookmarks,
   int providers = 0;
 
   if (bookmarks) {
-    providers |= AutocompleteProvider::TYPE_BOOKMARK;
+    providers |= static_cast<int>(AutocompleteProvider::Type::kBookmark);
   }
 
   if (history) {
-    providers |= AutocompleteProvider::TYPE_HISTORY_QUICK |
-                 AutocompleteProvider::TYPE_HISTORY_URL |
-                 AutocompleteProvider::TYPE_HISTORY_FUZZY |
-                 AutocompleteProvider::TYPE_HISTORY_EMBEDDINGS;
+    // `AutocompleteProvider::Type` defines bitwise `operator|`.
+    providers |=
+        static_cast<int>(AutocompleteProvider::Type::kHistoryQuick |
+                         AutocompleteProvider::Type::kHistoryUrl |
+                         AutocompleteProvider::Type::kHistoryFuzzy |
+                         AutocompleteProvider::Type::kHistoryEmbeddings);
   }
 
   if (open_tabs) {
-    providers |= AutocompleteProvider::TYPE_OPEN_TAB;
+    providers |= static_cast<int>(AutocompleteProvider::Type::kOpenTab);
   }
 
   return providers;

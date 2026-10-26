@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/memory/weak_ptr.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/document_service.h"
 #include "content/public/browser/eye_dropper_listener.h"
@@ -25,6 +26,9 @@ class CONTENT_EXPORT EyeDropperChooserImpl final
   static void Create(RenderFrameHost*,
                      mojo::PendingReceiver<blink::mojom::EyeDropperChooser>);
 
+  EyeDropperChooserImpl(RenderFrameHost&,
+                        mojo::PendingReceiver<blink::mojom::EyeDropperChooser>,
+                        base::SelfDeletingPassKey key);
   EyeDropperChooserImpl(const EyeDropperChooserImpl&) = delete;
   EyeDropperChooserImpl& operator=(const EyeDropperChooserImpl&) = delete;
 
@@ -36,9 +40,6 @@ class CONTENT_EXPORT EyeDropperChooserImpl final
   void ColorSelectionCanceled() override;
 
  private:
-  EyeDropperChooserImpl(RenderFrameHost&,
-                        mojo::PendingReceiver<blink::mojom::EyeDropperChooser>);
-
   ~EyeDropperChooserImpl() override;
 
   // Clears this instance as its WebContents' active eye dropper, if it is the
@@ -47,6 +48,7 @@ class CONTENT_EXPORT EyeDropperChooserImpl final
 
   ChooseCallback callback_;
   std::unique_ptr<EyeDropper> eye_dropper_;
+  base::WeakPtrFactory<EyeDropperChooserImpl> weak_ptr_factory_{this};
 };
 
 }  // namespace content

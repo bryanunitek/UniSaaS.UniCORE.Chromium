@@ -34,8 +34,7 @@ export function getHtml(this: SpComponentsDemoElement) {
   <div class="row center">
     <label id="itemSizeLabel">Item size</label>
     <select id="itemSizeSelect" class="md-select"
-        aria-labelledby="itemSizeLabel"
-        .value="${this.itemSize_}"
+        aria-labelledby="itemSizeLabel" .value="${this.itemSize_}"
         @change="${this.onItemSizeChange_}">
       ${this.itemSizeOptions_.map(item => html`
         <option .value="${item}">${item}</option>
@@ -53,13 +52,11 @@ export function getHtml(this: SpComponentsDemoElement) {
     </sp-heading>
 
     ${this.urls_.map(item => html`
-      <cr-url-list-item title="${item.title}"
-          description="${item.url}"
-          .url="${item.url}"
-          .size="${this.itemSize_}">
+      <cr-url-list-item title="${item.title}" description="${item.url}"
+          .url="${item.url}" .size="${this.itemSize_}">
         ${this.showBadges_ ? html`
           <sp-list-item-badge slot="badges">
-            <cr-icon icon="cr:info-outline"></cr-icon>
+            <cr-icon icon="cr:info"></cr-icon>
             <span>2 Notes</span>
           </sp-list-item-badge>
         ` : ''}
@@ -77,14 +74,16 @@ export function getHtml(this: SpComponentsDemoElement) {
 
 <h2>Empty state</h2>
 <div id="emptyStateDemo" class="demos">
-  <sp-empty-state
-      image-path="./demos/side_panel/empty.svg"
+  <sp-empty-state image-path="./demos/side_panel/empty.svg"
       dark-image-path="./demos/side_panel/empty_dark.svg"
       heading="There is no content"
       body="Some more descriptive text explaining how to add content">
   </sp-empty-state>
   <cr-button class="floating-button">
-    <cr-icon slot="prefix-icon" icon="sp:add-circle"></cr-icon>
+    <cr-icon slot="prefix-icon"
+        icon="${this.webuiRoundedIconsEnabled_ ? 'sp:add-circle' :
+                                                 'sp:add-circle-old'}">
+    </cr-icon>
     Add content
   </cr-button>
 </div>
@@ -92,12 +91,12 @@ export function getHtml(this: SpComponentsDemoElement) {
 <h2>List item badges</h2>
 <div class="demos">
   <sp-list-item-badge>
-    <cr-icon icon="cr:info-outline"></cr-icon>
+    <cr-icon icon="cr:info"></cr-icon>
     <span>3 Notes</span>
   </sp-list-item-badge>
 
   <sp-list-item-badge was-updated>
-    <cr-icon icon="cr:info-outline"></cr-icon>
+    <cr-icon icon="cr:info"></cr-icon>
     <span>$100</span>
     <span slot="previous-badge">$200</span>
   </sp-list-item-badge>
@@ -107,7 +106,7 @@ export function getHtml(this: SpComponentsDemoElement) {
 <div class="demos">
   <div class="sp-icon-buttons-row">
     <cr-icon-button iron-icon="cr:add"></cr-icon-button>
-    <cr-icon-button iron-icon="cr:print"></cr-icon-button>
+    <cr-icon-button iron-icon="cr:print-filled"></cr-icon-button>
     <cr-icon-button iron-icon="cr:more-vert"></cr-icon-button>
   </div>
 </div>

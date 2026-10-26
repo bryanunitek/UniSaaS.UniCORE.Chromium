@@ -12,10 +12,11 @@
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/mock_hats_service.h"
 #include "chrome/browser/ui/hats/survey_config.h"
+#include "chrome/common/channel_info.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/scoped_browser_locale.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
@@ -47,7 +48,8 @@ class ChromeSigninClientHatsSurveyBrowserTest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
     mock_hats_service_ = static_cast<MockHatsService*>(
         HatsServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-            browser()->profile(), base::BindRepeating(&BuildMockHatsService)));
+            browser()->GetProfile(),
+            base::BindRepeating(&BuildMockHatsService)));
   }
 
   void TearDownOnMainThread() override { mock_hats_service_ = nullptr; }
@@ -85,7 +87,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSigninClientHatsSurveyBrowserTest,
   // Simulate a user signing in via the password bubble, which should trigger
   // the survey.
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   signin::MakeAccountAvailable(
       identity_manager,
       signin::AccountAvailabilityOptionsBuilder()
@@ -99,7 +101,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSigninClientHatsSurveyBrowserTest,
 // launched immediately when a browser is subsequently created for that profile.
 IN_PROC_BROWSER_TEST_F(ChromeSigninClientHatsSurveyBrowserTest,
                        HatsSurveyLaunchedOnBrowserCreationAfterSignin) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   // Keep the browser process running while browsers are closed.
   ScopedKeepAlive keep_alive(KeepAliveOrigin::BROWSER,
                              KeepAliveRestartOption::DISABLED);
@@ -119,7 +121,8 @@ IN_PROC_BROWSER_TEST_F(ChromeSigninClientHatsSurveyBrowserTest,
 
   // Expect the HaTS service to launch the first run sign-in survey.
   std::map<std::string, std::string> expected_string_psd = {
-      {"Channel", "unknown"},
+      {"Channel",
+       std::string(version_info::GetChannelString(chrome::GetChannel()))},
       {"Chrome Version", version_info::GetVersion().GetString()},
       {"Number of Chrome Profiles", "1"},
       {"Number of Google Accounts", "1"},
@@ -134,7 +137,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSigninClientHatsSurveyBrowserTest,
 
   // Create a new browser for the signed-in profile, which should now trigger
   // the survey.
-  Browser* new_browser = CreateBrowser(profile);
+  BrowserWindowInterface* new_browser = CreateBrowser(profile);
   ASSERT_TRUE(new_browser);
 }
 
@@ -159,7 +162,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSigninClientHatsSurveyBrowserTest,
   // Simulate a user signing in via the password bubble.
   // This would normally trigger the survey if the locale was supported.
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   signin::MakeAccountAvailable(
       identity_manager,
       signin::AccountAvailabilityOptionsBuilder()

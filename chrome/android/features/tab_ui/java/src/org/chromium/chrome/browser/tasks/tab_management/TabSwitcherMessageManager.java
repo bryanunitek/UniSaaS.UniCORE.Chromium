@@ -42,7 +42,6 @@ import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tab_ui.OnTabSelectingListener;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabGridIphDialogCoordinator;
-import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tab_ui.TabSwitcher;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
 import org.chromium.chrome.browser.tabmodel.TabModel;
@@ -51,6 +50,7 @@ import org.chromium.chrome.browser.tasks.tab_management.MessageCardViewPropertie
 import org.chromium.chrome.browser.tasks.tab_management.MessageService.Message;
 import org.chromium.chrome.browser.tasks.tab_management.PriceMessageService.PriceWelcomeMessageReviewActionProvider;
 import org.chromium.chrome.browser.tasks.tab_management.TabProperties.UiType;
+import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderUtils;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
@@ -132,6 +132,12 @@ public class TabSwitcherMessageManager {
                 }
 
                 @Override
+                public void willCloseTabs(
+                        List<Tab> tabs, boolean isAllTabs, boolean allowUndo) {
+                    removeMessagesIfTabModelEmpty(/* numTabsToRemove= */ tabs.size());
+                }
+
+                @Override
                 public void tabClosureUndone(Tab tab) {
                     TabModel tabModel = mCurrentTabModelSupplier.get();
                     assumeNonNull(tabModel);
@@ -160,7 +166,6 @@ public class TabSwitcherMessageManager {
             mTabListCoordinatorSupplier = ObservableSuppliers.createNullable();
     private final BrowserControlsStateProvider mBrowserControlsStateProvider;
     private final TabContentManager mTabContentManager;
-    private final @TabListMode int mTabListMode;
     private final ViewGroup mRootView;
     private final TabCreator mRegularTabCreator;
     private final BackPressManager mBackPressManager;
@@ -168,7 +173,7 @@ public class TabSwitcherMessageManager {
     private final MonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier;
     private final Supplier<PaneManager> mPaneManagerSupplier;
     private final Supplier<TabGroupUiActionHandler> mTabGroupUiActionHandlerSupplier;
-    private final Supplier<LayoutStateProvider> mLayoutStateProviderSupplier;
+    private final Supplier<@Nullable LayoutStateProvider> mLayoutStateProviderSupplier;
 
     private @Nullable Profile mProfile;
     private @Nullable PriceWelcomeMessageController mPriceWelcomeMessageController;
@@ -186,7 +191,6 @@ public class TabSwitcherMessageManager {
      * @param modalDialogManager The {@link ModalDialogManager} for the activity.
      * @param browserControlStateProvider Provides the state of browser controls.
      * @param tabContentManager Serves tab content to UI components.
-     * @param tabListMode The {@link TabListMode} determining how the TabList will be displayed.
      * @param rootView The root {@link ViewGroup} to attach dialogs to.
      * @param regularTabCreator Manages the creation of regular tabs.
      * @param backPressManager Manages the different back press handlers in the app.
@@ -206,7 +210,6 @@ public class TabSwitcherMessageManager {
             ModalDialogManager modalDialogManager,
             BrowserControlsStateProvider browserControlStateProvider,
             TabContentManager tabContentManager,
-            @TabListMode int tabListMode,
             ViewGroup rootView,
             TabCreator regularTabCreator,
             BackPressManager backPressManager,
@@ -214,7 +217,7 @@ public class TabSwitcherMessageManager {
             MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
             Supplier<PaneManager> paneManagerSupplier,
             Supplier<TabGroupUiActionHandler> tabGroupUiActionHandlerSupplier,
-            Supplier<LayoutStateProvider> layoutStateProviderSupplier) {
+            Supplier<@Nullable LayoutStateProvider> layoutStateProviderSupplier) {
         mActivity = activity;
         mLifecycleDispatcher = lifecycleDispatcher;
         mCurrentTabModelSupplier = currentTabModelSupplier;
@@ -223,7 +226,6 @@ public class TabSwitcherMessageManager {
         mModalDialogManager = modalDialogManager;
         mBrowserControlsStateProvider = browserControlStateProvider;
         mTabContentManager = tabContentManager;
-        mTabListMode = tabListMode;
         mRootView = rootView;
         mRegularTabCreator = regularTabCreator;
         mBackPressManager = backPressManager;
@@ -306,7 +308,7 @@ public class TabSwitcherMessageManager {
     }
 
     /** Post-native initialization. */
-    public void initWithNative(Profile profile, @TabListMode int mode) {
+    public void initWithNative(Profile profile) {
         assert profile != null;
         mProfile = profile;
 
@@ -316,7 +318,6 @@ public class TabSwitcherMessageManager {
                         ArchivedTabModelOrchestrator.getForProfile(mProfile),
                         mBrowserControlsStateProvider,
                         mTabContentManager,
-                        mTabListMode,
                         mRootView,
                         mSnackbarManager,
                         mRegularTabCreator,
@@ -646,8 +647,14 @@ public class TabSwitcherMessageManager {
         }
     }
 
+    private boolean shouldShowMessagesInDesktopWindow() {
+        return AppHeaderUtils.isAppInDesktopWindow(mDesktopWindowStateManager)
+                && ChromeFeatureList.sTabSwitcherMessagesOnDesktopWindowingKillSwitch.isEnabled();
+    }
+
     private boolean shouldShowMessages() {
-        return !mMultiWindowModeStateDispatcher.isInMultiWindowMode()
+        return (!mMultiWindowModeStateDispatcher.isInMultiWindowMode()
+                        || shouldShowMessagesInDesktopWindow())
                 && mTabListCoordinatorSupplier.get() != null;
     }
 

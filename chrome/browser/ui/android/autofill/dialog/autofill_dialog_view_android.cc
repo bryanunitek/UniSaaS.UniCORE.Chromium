@@ -9,12 +9,12 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/check_deref.h"
-#include "chrome/android/chrome_jni_headers/AutofillDialogController_jni.h"
 #include "chrome/browser/ui/autofill/autofill_dialog_view.h"
 #include "ui/android/view_android.h"
 #include "ui/android/window_android.h"
 
-using base::android::ConvertUTF16ToJavaString;
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/android/chrome_jni_headers/AutofillDialogController_jni.h"
 
 namespace autofill {
 
@@ -29,6 +29,30 @@ std::unique_ptr<AutofillDialogView> AutofillDialogView::Create(
 }
 
 void AutofillDialogViewAndroid::Show() {
+  InitJavaObject();
+  // Java object might be null if the context associated with the android
+  // window doesn't exist.
+  if (!java_object_.is_null()) {
+    Java_AutofillDialogController_show(
+        base::android::AttachCurrentThread(), java_object_,
+        controller_->GetTitleText(), controller_->GetDescriptionText(),
+        controller_->GetPositiveButtonText(),
+        controller_->GetNegativeButtonText());
+  }
+}
+
+void AutofillDialogViewAndroid::ShowLoadingDialog() {
+  InitJavaObject();
+  // Java object might be null if the context associated with the android
+  // window doesn't exist.
+  if (!java_object_.is_null()) {
+    Java_AutofillDialogController_showAutofillAiLoadingDialog(
+        base::android::AttachCurrentThread(), java_object_,
+        controller_->GetTitleText());
+  }
+}
+
+void AutofillDialogViewAndroid::InitJavaObject() {
   JNIEnv* env = base::android::AttachCurrentThread();
   ui::ViewAndroid* view_android = controller_->GetWebContents().GetNativeView();
   if (!view_android) {
@@ -40,14 +64,7 @@ void AutofillDialogViewAndroid::Show() {
   }
 
   java_object_.Reset(Java_AutofillDialogController_create(
-      env, reinterpret_cast<intptr_t>(this), window_android->GetJavaObject()));
-  // Java object might be null if the context associated with the android
-  // window doesn't exist.
-  if (!java_object_.is_null()) {
-    Java_AutofillDialogController_show(
-        env, java_object_, controller_->GetTitleText(),
-        controller_->GetDescriptionText(), controller_->GetButtonText());
-  }
+      env, reinterpret_cast<intptr_t>(this), window_android));
 }
 
 void AutofillDialogViewAndroid::Dismiss() {
@@ -57,11 +74,15 @@ void AutofillDialogViewAndroid::Dismiss() {
   }
 }
 
-void AutofillDialogViewAndroid::OnPositiveButtonClicked(JNIEnv* env) {
+void AutofillDialogViewAndroid::OnPositiveButtonClicked() {
   controller_->OnPositiveButtonClicked();
 }
 
-void AutofillDialogViewAndroid::OnDismissed(JNIEnv* env) {
+void AutofillDialogViewAndroid::OnNegativeButtonClicked() {
+  controller_->OnNegativeButtonClicked();
+}
+
+void AutofillDialogViewAndroid::OnDismissed() {
   controller_->OnDismissed();
 }
 

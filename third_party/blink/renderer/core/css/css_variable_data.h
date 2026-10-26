@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_token.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
+#include "third_party/blink/renderer/platform/wtf/hash_functions_memory.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -26,8 +27,9 @@ enum class VariableDataFeature : uint8_t {
   kHasLineHeightUnits = 1 << 2,
   kHasDashedFunctions = 1 << 3,
   kHasReferences = 1 << 4,
+  kHasRandomFunctions = 1 << 5,
 };
-static constexpr size_t kVariableDataFeatureBits = 5;
+static constexpr size_t kVariableDataFeatureBits = 6;
 using VariableDataFeatures = unsigned;
 
 class CORE_EXPORT CSSVariableData : public GarbageCollected<CSSVariableData> {
@@ -89,9 +91,7 @@ class CORE_EXPORT CSSVariableData : public GarbageCollected<CSSVariableData> {
     }
   }
 
-  uint32_t Hash() const {
-    return StringHasher::HashMemory32(OriginalText().RawByteSpan());
-  }
+  uint32_t Hash() const { return HashMemory32(OriginalText().RawByteSpan()); }
 
   String Serialize() const;
 
@@ -135,6 +135,11 @@ class CORE_EXPORT CSSVariableData : public GarbageCollected<CSSVariableData> {
                            VariableDataFeature::kHasDashedFunctions);
   }
 
+  bool HasRandomFunctions() const {
+    return features_ & static_cast<VariableDataFeatures>(
+                           VariableDataFeature::kHasRandomFunctions);
+  }
+
   VariableDataFeatures GetVariableDataFeatures() const { return features_; }
 
   const CSSValue* ParseForSyntax(const CSSSyntaxDefinition&,
@@ -169,7 +174,7 @@ class CORE_EXPORT CSSVariableData : public GarbageCollected<CSSVariableData> {
   const unsigned is_animation_tainted_ : 1;       // bool.
   const unsigned is_attr_tainted_ : 1;            // bool.
   const unsigned is_8bit_ : 1;                    // bool.
-  unsigned /* unused_ */ : 2;
+  unsigned /* unused_ */ : 1;
 
   // The actual character data is stored after this.
 };

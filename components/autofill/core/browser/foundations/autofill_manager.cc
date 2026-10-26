@@ -27,6 +27,8 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
 #include "base/functional/function_ref.h"
 #include "base/location.h"
 #include "base/memory/raw_ref.h"
@@ -35,10 +37,10 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/types/optional_ref.h"
 #include "base/types/pass_key.h"
-#include "base/types/zip.h"
 #include "components/autofill/core/browser/autofill_server_prediction.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/crowdsourcing/autofill_crowdsourcing_encoding.h"
@@ -210,10 +212,6 @@ void AutofillManager::OnLanguageDetermined(
 
   NotifyObservers(&Observer::OnBeforeLanguageDetermined);
 
-  // TODO(crbug.com/360322019): This will make an additional server query for
-  // server predictions which does not need any update after determining the
-  // page language. This was added to `ParseFormsAsync()` as part of
-  // crbug.com/470949499.
   // TODO(crbug.com/360322019):  Consider using `ReparseKnownForms()` instead.
   ParseFormsAsync(
       base::ToVector(form_structures_,
@@ -237,7 +235,8 @@ LanguageCode AutofillManager::GetCurrentPageLanguage() {
   return LanguageCode(language_state->current_language());
 }
 
-void AutofillManager::OnDidAutofillForm(const FormData& form) {
+void AutofillManager::OnDidAutofillForm(const FormData& form,
+                                        RendererEventPassKey pass_key) {
   if (!IsValidFormData(form)) {
     return;
   }
@@ -248,16 +247,19 @@ void AutofillManager::OnDidAutofillForm(const FormData& form) {
                                               form.global_id())));
 }
 
-void AutofillManager::SuppressAutomaticRefills(const FillId& fill_id) {
+void AutofillManager::SuppressAutomaticRefills(const FillId& fill_id,
+                                               RendererEventPassKey pass_key) {
   SuppressAutomaticRefillsImpl(fill_id);
 }
 
-void AutofillManager::RequestRefill(const FillId& fill_id) {
+void AutofillManager::RequestRefill(const FillId& fill_id,
+                                    RendererEventPassKey pass_key) {
   RequestRefillImpl(fill_id);
 }
 
 void AutofillManager::OnFormSubmitted(const FormData& form,
-                                      const mojom::SubmissionSource source) {
+                                      const mojom::SubmissionSource source,
+                                      RendererEventPassKey pass_key) {
   if (!IsValidFormData(form)) {
     return;
   }
@@ -268,7 +270,8 @@ void AutofillManager::OnFormSubmitted(const FormData& form,
 
 void AutofillManager::OnFormWithEmailVerificationTokenSubmitted(
     const FormData& form,
-    const FieldGlobalId& field_id) {
+    const FieldGlobalId& field_id,
+    RendererEventPassKey pass_key) {
   if (!IsValidFormData(form)) {
     return;
   }
@@ -280,7 +283,8 @@ void AutofillManager::OnFormWithEmailVerificationTokenSubmitted(
 }
 
 void AutofillManager::OnFormsSeen(std::vector<FormData> updated_forms,
-                                  std::vector<FormGlobalId> removed_form_ids) {
+                                  std::vector<FormGlobalId> removed_form_ids,
+                                  RendererEventPassKey pass_key) {
   auto erase_removed_forms = [&] {
     // Erase forms that have been removed from the DOM. This prevents
     // |form_structures_| from growing up its upper bound
@@ -305,23 +309,17 @@ void AutofillManager::OnFormsSeen(std::vector<FormData> updated_forms,
                   removed_form_ids);
   erase_removed_forms();
 
-  // TODO(crbug.com/470949499): Remove `forms_seen_timestamp` once
-  // `AutofillServerQueryPredictionsEarly` is launched.
-  // The timestamp is used to measure the time elapsed between OnFormsSeen() and
-  // the server predictions response.
   auto process_parsed_forms = base::BindOnce(
       [](std::vector<FormGlobalId> updated_form_ids,
-         std::vector<FormGlobalId> removed_form_ids,
-         base::TimeTicks forms_seen_timestamp, AutofillManager& self,
+         std::vector<FormGlobalId> removed_form_ids, AutofillManager& self,
          const std::vector<FormData>& parsed_forms) {
         if (!parsed_forms.empty()) {
-          self.OnFormsParsed(parsed_forms, forms_seen_timestamp);
+          self.OnFormsParsed(parsed_forms);
         }
         self.NotifyObservers(&Observer::OnAfterFormsSeen, updated_form_ids,
                              removed_form_ids);
       },
-      std::move(updated_form_ids), std::move(removed_form_ids),
-      base::TimeTicks::Now());
+      std::move(updated_form_ids), std::move(removed_form_ids));
 
   ParseFormsAsync(std::move(updated_forms), std::move(process_parsed_forms));
 }
@@ -331,7 +329,9 @@ void AutofillManager::QueryServerPredictions(
     base::TimeTicks form_seen_timestamp) {
   std::vector<FormData> queryable_forms;
   for (const FormData& form : forms) {
-    if (ShouldBeQueried(form)) {
+    if (GetFormParsingPermissions(
+            form, /*ignore_small_forms=*/!client().IsTabInActorMode())
+            .contains(FormParsingPermission::kServerQuery)) {
       queryable_forms.push_back(form);
     }
   }
@@ -340,8 +340,11 @@ void AutofillManager::QueryServerPredictions(
     return;
   }
 
-  NotifyObservers(&Observer::OnBeforeLoadedServerPredictions);
-  // TODO(crbug.com/470949499): Consider changing the type of callback that
+  std::vector<FormGlobalId> queryable_form_ids =
+      base::ToVector(queryable_forms, &FormData::global_id);
+  NotifyObservers(&Observer::OnBeforeLoadedServerPredictions,
+                  queryable_form_ids);
+  // TODO(crbug.com/40100455): Consider changing the type of callback that
   // StartQueryRequest() expects to include the queried forms. This would allow
   // StartQueryRequest() to provide the queried forms to the callback
   // automatically, instead of passing them in separately here.
@@ -353,8 +356,7 @@ void AutofillManager::QueryServerPredictions(
       std::move(on_loaded));
 }
 
-void AutofillManager::OnFormsParsed(const std::vector<FormData>& forms,
-                                    base::TimeTicks form_seen_timestamp) {
+void AutofillManager::OnFormsParsed(const std::vector<FormData>& forms) {
   DCHECK(!forms.empty());
   OnBeforeProcessParsedForms();
 
@@ -367,44 +369,18 @@ void AutofillManager::OnFormsParsed(const std::vector<FormData>& forms,
     if (!form_structure) {
       continue;
     }
-
-    // Configure the query encoding for this form and add it to the appropriate
-    // collection of forms: queryable vs non-queryable.
-    // TODO(crbug.com/470949499): Remove this check and StartQueryRequest()
-    // once features::kAutofillServerQueryPredictionsEarly is launched.
-    if (ShouldBeQueried(form)) {
-      queryable_forms.push_back(form);
-    }
-
     OnFormProcessed(*form_structure);
   }
 
   if (base::FeatureList::IsEnabled(features::debug::kShowDomNodeIDs)) {
     driver().ExposeDomNodeIdsInAllFrames();
   }
-
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillServerQueryPredictionsEarly)) {
-    return;
-  }
-
-  // Query the server if at least one of the forms was parsed.
-  if (!queryable_forms.empty()) {
-    NotifyObservers(&Observer::OnBeforeLoadedServerPredictions);
-    // If language detection is currently reparsing the form, wait until the
-    // server response is processed, to ensure server predictions are not lost.
-    auto on_loaded =
-        base::BindOnce(&AutofillManager::OnLoadedServerPredictions,
-                       GetWeakPtr(), queryable_forms, form_seen_timestamp);
-    client().GetCrowdsourcingManager().StartQueryRequest(
-        std::move(queryable_forms), driver().GetIsolationInfo(),
-        std::move(on_loaded));
-  }
 }
 
 void AutofillManager::OnCaretMovedInFormField(const FormData& form,
                                               const FieldGlobalId& field_id,
-                                              const gfx::Rect& caret_bounds) {
+                                              const gfx::Rect& caret_bounds,
+                                              RendererEventPassKey pass_key) {
   if (!IsValidFormData(form)) {
     return;
   }
@@ -421,7 +397,8 @@ void AutofillManager::OnCaretMovedInFormField(const FormData& form,
 
 void AutofillManager::OnTextFieldValueChanged(const FormData& form,
                                               const FieldGlobalId& field_id,
-                                              const base::TimeTicks timestamp) {
+                                              const base::TimeTicks timestamp,
+                                              RendererEventPassKey pass_key) {
   if (!IsValidFormData(form)) {
     return;
   }
@@ -437,7 +414,8 @@ void AutofillManager::OnTextFieldValueChanged(const FormData& form,
 }
 
 void AutofillManager::OnTextFieldDidScroll(const FormData& form,
-                                           const FieldGlobalId& field_id) {
+                                           const FieldGlobalId& field_id,
+                                           RendererEventPassKey pass_key) {
   if (!IsValidFormData(form)) {
     return;
   }
@@ -452,7 +430,8 @@ void AutofillManager::OnTextFieldDidScroll(const FormData& form,
 
 void AutofillManager::OnSelectControlSelectionChanged(
     const FormData& form,
-    const FieldGlobalId& field_id) {
+    const FieldGlobalId& field_id,
+    RendererEventPassKey pass_key) {
   if (!IsValidFormData(form)) {
     return;
   }
@@ -471,22 +450,55 @@ void AutofillManager::OnAskForValuesToFill(
     const FieldGlobalId& field_id,
     const gfx::Rect& caret_bounds,
     AutofillSuggestionTriggerSource trigger_source,
-    std::optional<PasswordSuggestionRequest> password_request) {
+    std::optional<PasswordSuggestionRequest> password_request,
+    RendererEventPassKey pass_key) {
   if (!IsValidFormData(form)) {
     return;
   }
   NotifyObservers(&Observer::OnBeforeAskForValuesToFill, form.global_id(),
                   field_id, form);
+  auto scoped_on_after_ask_for_values_to_fill =
+      base::ScopedClosureRunner(base::BindOnce(
+          [](base::WeakPtr<AutofillManager> self,
+             scoped_refptr<base::SequencedTaskRunner> task_runner,
+             FormGlobalId form_id, FieldGlobalId field_id) {
+            base::OnceClosure notify = base::BindOnce(
+                [](base::WeakPtr<AutofillManager> self, FormGlobalId form_id,
+                   FieldGlobalId field_id) {
+                  if (self) {
+                    self->NotifyObservers(&Observer::OnAfterAskForValuesToFill,
+                                          form_id, field_id);
+                  }
+                },
+                self, form_id, field_id);
+            if (task_runner->RunsTasksInCurrentSequence()) {
+              std::move(notify).Run();
+            } else {
+              task_runner->PostTask(FROM_HERE, std::move(notify));
+            }
+          },
+          GetWeakPtr(), base::SequencedTaskRunner::GetCurrentDefault(),
+          form.global_id(), field_id));
   ParseFormAsync(
       form,
-      ParsingCallback(&AutofillManager::OnAskForValuesToFillImpl, field_id,
-                      caret_bounds, trigger_source, std::move(password_request))
-          .Then(NotifyObserversCallback(&Observer::OnAfterAskForValuesToFill,
-                                        form.global_id(), field_id)));
+      base::BindOnce(
+          [](const FieldGlobalId& field_id, const gfx::Rect& caret_bounds,
+             AutofillSuggestionTriggerSource trigger_source,
+             std::optional<PasswordSuggestionRequest> password_request,
+             base::ScopedClosureRunner scoped_on_after_ask_for_values_to_fill,
+             AutofillManager& manager, const FormData& form) {
+            manager.OnAskForValuesToFillImpl(
+                form, field_id, caret_bounds, trigger_source,
+                std::move(password_request),
+                std::move(scoped_on_after_ask_for_values_to_fill));
+          },
+          field_id, caret_bounds, trigger_source, std::move(password_request),
+          std::move(scoped_on_after_ask_for_values_to_fill)));
 }
 
 void AutofillManager::OnFocusOnFormField(const FormData& form,
-                                         const FieldGlobalId& field_id) {
+                                         const FieldGlobalId& field_id,
+                                         RendererEventPassKey pass_key) {
   if (!IsValidFormData(form)) {
     return;
   }
@@ -499,17 +511,17 @@ void AutofillManager::OnFocusOnFormField(const FormData& form,
                                         form.global_id(), field_id)));
 }
 
-void AutofillManager::OnFocusOnNonFormField() {
+void AutofillManager::OnFocusOnNonFormField(RendererEventPassKey pass_key) {
   NotifyObservers(&Observer::OnBeforeFocusOnNonFormField);
   OnFocusOnNonFormFieldImpl();
   NotifyObservers(&Observer::OnAfterFocusOnNonFormField);
 }
 
-void AutofillManager::OnDidEndTextFieldEditing() {
+void AutofillManager::OnDidEndTextFieldEditing(RendererEventPassKey pass_key) {
   OnDidEndTextFieldEditingImpl();
 }
 
-void AutofillManager::OnHidePopup() {
+void AutofillManager::OnHidePopup(RendererEventPassKey pass_key) {
   OnHidePopupImpl();
 }
 
@@ -524,7 +536,8 @@ void AutofillManager::OnSuggestionsHidden(SuggestionHidingReason reason) {
 
 void AutofillManager::OnSelectFieldOptionsDidChange(
     const FormData& form,
-    const FieldGlobalId& field_id) {
+    const FieldGlobalId& field_id,
+    RendererEventPassKey pass_key) {
   if (!IsValidFormData(form)) {
     return;
   }
@@ -541,7 +554,8 @@ void AutofillManager::OnSelectFieldOptionsDidChange(
 void AutofillManager::OnJavaScriptChangedAutofilledValue(
     const FormData& form,
     const FieldGlobalId& field_id,
-    const std::u16string& old_value) {
+    const std::u16string& old_value,
+    RendererEventPassKey pass_key) {
   if (!IsValidFormData(form)) {
     return;
   }
@@ -559,13 +573,16 @@ void AutofillManager::OnJavaScriptChangedAutofilledValue(
 void AutofillManager::OnDidDetectJavaScriptAutofill(
     const FormData& form,
     const FieldGlobalId& trigger_field_id,
-    const std::vector<FieldGlobalId>& field_ids) {
+    const std::vector<JavaScriptFieldModification>& field_modifications,
+    base::TimeTicks detection_start_timestamp,
+    RendererEventPassKey pass_key) {
   if (!IsValidFormData(form)) {
     return;
   }
   ParseFormAsync(
       form, ParsingCallback(&AutofillManager::OnDidDetectJavaScriptAutofillImpl,
-                            trigger_field_id, field_ids)
+                            trigger_field_id, field_modifications,
+                            detection_start_timestamp)
                 .Then(base::BindOnce([](AutofillManager&) {})));
 }
 
@@ -622,16 +639,8 @@ void AutofillManager::TriggerFormExtractionInAllFrames(
 }
 
 void AutofillManager::ReparseKnownForms() {
-  auto ProcessParsedForms = [](AutofillManager& self,
-                               const std::vector<FormData>& parsed_forms) {
-    if (!parsed_forms.empty()) {
-      self.OnFormsParsed(parsed_forms, base::TimeTicks());
-    }
-  };
-  ParseFormsAsync(
-      base::ToVector(form_structures_,
-                     [](const auto& p) { return p.second->ToFormData(); }),
-      base::BindOnce(ProcessParsedForms));
+  driver_->ClearFormCacheInAllFrames();
+  TriggerFormExtractionInAllFrames(base::DoNothing());
 }
 
 base::flat_map<FieldGlobalId, AutofillServerPrediction>
@@ -674,7 +683,10 @@ void AutofillManager::ParseFormsAsync(
                             << LogMessage::kAbortParsingTooManyForms << form;
       return true;
     }
-    if (!ShouldBeParsed(form, log_manager())) {
+    if (GetFormParsingPermissions(
+            form, /*ignore_small_forms=*/!client().IsTabInActorMode(),
+            log_manager())
+            .empty()) {
       LogCurrentFieldTypes(&form);
       return true;
     }
@@ -682,10 +694,9 @@ void AutofillManager::ParseFormsAsync(
     return false;
   });
 
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillServerQueryPredictionsEarly)) {
-    QueryServerPredictions(forms, base::TimeTicks::Now());
-  }
+  // TODO(crbug.com/558222620): Consider only querying server predictions for
+  // forms that changed signatures.
+  QueryServerPredictions(forms, base::TimeTicks::Now());
 
   ParseFormsAsyncCommon(
       /*preserve_signatures=*/false, std::move(forms), std::move(callback));
@@ -705,7 +716,10 @@ void AutofillManager::ParseFormAsync(
     return;
   }
 
-  if (!ShouldBeParsed(form, log_manager())) {
+  if (GetFormParsingPermissions(
+          form, /*ignore_small_forms=*/!client().IsTabInActorMode(),
+          log_manager())
+          .empty()) {
     LogCurrentFieldTypes(&form);
     // For Autocomplete, events need to be handled even for forms that cannot be
     // parsed.
@@ -933,10 +947,6 @@ void AutofillManager::PopulateCacheForQueryResponse(
       break;
     }
 
-    // TODO(crbug.com/470949499): This introduces redundancy in
-    // UpdateFormCache(), as we would call
-    // FormStructure::UpdateFormData(form_data) where form_data and the data
-    // in FormStructure are already identical.
     if (is_new_form) {
       form_structures_[form.global_id()] =
           std::make_unique<FormStructure>(form);
@@ -956,21 +966,23 @@ void AutofillManager::OnLoadedServerPredictions(
         "Autofill.TimingInterval.FormsSeen.LoadedServerPredictions",
         base::TimeTicks::Now() - form_seen_timestamp);
   }
-  absl::Cleanup on_after_loaded_server_predictions = [this] {
-    NotifyObservers(&Observer::OnAfterLoadedServerPredictions);
-  };
+  std::vector<FormGlobalId> form_ids =
+      base::ToVector(forms, &FormData::global_id);
+  absl::Cleanup on_after_loaded_server_predictions =
+      [this, form_ids = std::move(form_ids)] {
+        NotifyObservers(&Observer::OnAfterLoadedServerPredictions, form_ids);
+      };
 
   if (!response) {
     return;
   }
 
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillServerQueryPredictionsEarly)) {
-    // Update the form cache with the form structures that were part of the
-    // query. The form structures are conditionally created here depending on
-    // whether local parsing has already finished and populated the cache.
-    PopulateCacheForQueryResponse(forms, *response);
-  }
+  // Update the form cache with the form structures that were part of the
+  // query. The form structures are conditionally created here depending on
+  // whether local parsing has already finished and populated the cache.
+  // TODO(crbug.com/475586865): Consider replacing the mechanism below with
+  // AutofillManager::UpdateFormCache().
+  PopulateCacheForQueryResponse(forms, *response);
 
   std::vector<raw_ref<FormStructure>> queried_forms;
   queried_forms.reserve(forms.size());
@@ -985,7 +997,7 @@ void AutofillManager::OnLoadedServerPredictions(
     // TODO(crbug.com/475586865): Use `AutofillManager::UpdateFormCache()`
     // instead of duplicating the logic.
     for (auto [form, server_predictions] :
-         base::zip(forms, form_server_predictions)) {
+         std::views::zip(forms, form_server_predictions)) {
       FormStructure* form_structure =
           FindCachedFormById(form.global_id(), /*pass_key=*/{});
       if (!form_structure) {
@@ -1003,10 +1015,7 @@ void AutofillManager::OnLoadedServerPredictions(
       NotifyObservers(&Observer::OnFieldTypesDetermined, form.global_id(),
                       Observer::FieldTypeSource::kAutofillServer,
                       /*small_forms_were_parsed=*/client().IsTabInActorMode());
-      if (base::FeatureList::IsEnabled(
-              features::kAutofillServerQueryPredictionsEarly)) {
-        OnFormProcessed(*form_structure);
-      }
+      OnFormProcessed(*form_structure);
     }
     LogServerQueryResponseMetrics(queried_forms);
   }
@@ -1014,49 +1023,20 @@ void AutofillManager::OnLoadedServerPredictions(
   if (base::FeatureList::IsEnabled(features::debug::kShowDomNodeIDs)) {
     driver().ExposeDomNodeIdsInAllFrames();
   }
-  // TODO(crbug.com/470949499): Consider merging OnFormProcessed() and
+  // TODO(crbug.com/40232021): Consider merging OnFormProcessed() and
   // OnLoadedServerPredictionsImpl().
   OnLoadedServerPredictionsImpl(queried_forms);
 }
 
 void AutofillManager::LogServerQueryResponseMetrics(
     const std::vector<raw_ref<FormStructure>>& forms) {
-  bool heuristics_detected_fillable_field = false;
-  bool query_response_overrode_heuristics = false;
   for (raw_ref<FormStructure> form : forms) {
-    for (const std::unique_ptr<AutofillField>& field : form->fields()) {
-      FieldType heuristic_type = field->heuristic_type();
-      if (heuristic_type != UNKNOWN_TYPE) {
-        heuristics_detected_fillable_field = true;
-      }
-      if (!field->Type().GetTypes().contains(heuristic_type)) {
-        query_response_overrode_heuristics = true;
-      }
-    }
     AutofillMetrics::LogServerResponseHasDataForForm(std::ranges::any_of(
         form->fields(), [](FieldType t) { return t != NO_SERVER_DATA; },
         &AutofillField::server_type));
     autofill_metrics::LogQualityMetricsBasedOnAutocomplete(
         *form, client().GetFormInteractionsUkmLogger(),
         driver().GetPageUkmSourceId());
-  }
-
-  // TODO(crbug.com/470949499): Clean up these metrics once the
-  // `kAutofillServerQueryPredictionsEarly` flag is launched. The metric
-  // `QUERY_RESPONSE_WITH_NO_LOCAL_HEURISTICS` will always be logged if the
-  // server finishes first, which is non-deterministic.
-  if (!base::FeatureList::IsEnabled(
-          features::kAutofillServerQueryPredictionsEarly)) {
-    AutofillMetrics::ServerQueryMetric metric;
-    if (query_response_overrode_heuristics &&
-        heuristics_detected_fillable_field) {
-      metric = AutofillMetrics::QUERY_RESPONSE_OVERRODE_LOCAL_HEURISTICS;
-    } else if (query_response_overrode_heuristics) {
-      metric = AutofillMetrics::QUERY_RESPONSE_WITH_NO_LOCAL_HEURISTICS;
-    } else {
-      metric = AutofillMetrics::QUERY_RESPONSE_MATCHED_LOCAL_HEURISTICS;
-    }
-    AutofillMetrics::LogServerQueryMetric(metric);
   }
 }
 
@@ -1081,6 +1061,8 @@ void AutofillManager::UpdateFormCache(
       }
       // This is set by running the ML model.
       field->set_ml_supported_types({});
+      // This is set when regex matching happens.
+      field->set_regex_match_info(std::nullopt);
     }
   };
 

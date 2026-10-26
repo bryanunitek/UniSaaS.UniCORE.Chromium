@@ -8,6 +8,8 @@
 #include <utility>
 
 #include "base/containers/span.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
@@ -15,10 +17,12 @@
 #include "chrome/grit/visual_guided_setter_resources.h"
 #include "chrome/grit/visual_guided_setter_resources_map.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "net/base/url_util.h"
+#include "ui/base/webui/web_ui_util.h"
 #include "ui/webui/webui_util.h"
 
 VisualGuidedSetterUI::VisualGuidedSetterUI(content::WebUI* web_ui)
@@ -30,32 +34,27 @@ VisualGuidedSetterUI::VisualGuidedSetterUI(content::WebUI* web_ui)
     can_pin_to_taskbar = value == "true";
   }
 
+  Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      web_ui->GetWebContents()->GetBrowserContext(),
-      chrome::kChromeUIDefaultBrowserVisualGuidedSetterHost);
+      profile, chrome::kChromeUIDefaultBrowserVisualGuidedSetterHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
-  source->AddLocalizedString(
-      "title", IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_PAGE_TITLE);
-  source->AddLocalizedString(
-      "headerTitle", IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_HEADER_TITLE);
-  source->AddLocalizedString(
-      "contentTitle", IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_CONTENT_TITLE);
-  source->AddLocalizedString(
-      "contentDescription",
-      IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_CONTENT_DESCRIPTION);
-  source->AddLocalizedString(
-      "instructionStep1",
-      IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_INSTRUCTION_STEP_1);
-  source->AddLocalizedString(
-      "instructionStep2",
-      IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_INSTRUCTION_STEP_2);
-  source->AddLocalizedString(
-      "resizedToFit", IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_RESIZED_TO_FIT);
-  source->AddLocalizedString(
-      "didntWork", IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_DIDNT_WORK);
-  source->AddLocalizedString(
-      "openWindowsSettings",
-      IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_OPEN_WINDOWS_SETTINGS);
+  static constexpr webui::LocalizedString kLocalizedStrings[] = {
+      {"title", IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_PAGE_TITLE},
+      {"headerTitle", IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_HEADER_TITLE},
+      {"contentTitle", IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_CONTENT_TITLE},
+      {"contentDescription",
+       IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_CONTENT_DESCRIPTION},
+      {"instructionStep1",
+       IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_INSTRUCTION_STEP_1},
+      {"instructionStep2",
+       IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_INSTRUCTION_STEP_2},
+      {"resizedToFit", IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_RESIZED_TO_FIT},
+      {"didntWork", IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_DIDNT_WORK},
+      {"openWindowsSettings",
+       IDS_DEFAULT_BROWSER_VISUAL_GUIDED_SETTER_OPEN_WINDOWS_SETTINGS},
+  };
+  source->AddLocalizedStrings(kLocalizedStrings);
 
   source->AddBoolean("canPinToTaskbar", can_pin_to_taskbar);
 

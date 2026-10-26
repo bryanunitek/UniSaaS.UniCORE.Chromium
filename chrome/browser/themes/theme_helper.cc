@@ -2,18 +2,32 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/themes/theme_helper.h"
+
+#include <string_view>
+
 #include "base/feature_list.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/no_destructor.h"
 #include "build/build_config.h"
-#include "chrome/browser/themes/browser_theme_pack.h"
 #include "chrome/browser/themes/custom_theme_supplier.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service.h"
-#include "chrome/grit/theme_resources.h"
-#include "components/grit/components_scaled_resources.h"
-#include "ui/base/resource/resource_bundle.h"
+#include "extensions/buildflags/buildflags.h"
 #include "ui/gfx/image/image.h"
 #include "ui/native_theme/native_theme.h"
+
+// The image-backed half of ThemeHelper is compiled out on Android; the grit
+// resources and ResourceBundle it needs are desktop-only deps.
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/grit/theme_resources.h"                  // nogncheck
+#include "components/grit/components_scaled_resources.h"  // nogncheck
+#include "ui/base/resource/resource_bundle.h"
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "chrome/browser/themes/browser_theme_pack.h"
+#endif
 
 #if BUILDFLAG(IS_LINUX)
 #include "ui/linux/linux_ui.h"
@@ -59,7 +73,7 @@ bool ThemeHelper::IsDefaultTheme(const CustomThemeSupplier* theme_supplier) {
     return false;
   }
 
-  const std::string& id = theme_supplier->extension_id();
+  const std::string_view id = theme_supplier->extension_id();
   return id == kDefaultThemeID || id == kDefaultThemeGalleryID;
 }
 
@@ -72,8 +86,12 @@ bool ThemeHelper::IsCustomTheme(const CustomThemeSupplier* theme_supplier) {
 // static
 bool ThemeHelper::HasCustomImage(int id,
                                  const CustomThemeSupplier* theme_supplier) {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   return BrowserThemePack::IsPersistentImageID(id) && theme_supplier &&
          theme_supplier->HasCustomImage(id);
+#else
+  return false;
+#endif
 }
 
 ThemeHelper::ThemeHelper() = default;
@@ -91,61 +109,6 @@ int ThemeHelper::GetDisplayProperty(
   }
 
   return GetDefaultDisplayProperty(id);
-}
-
-base::RefCountedMemory* ThemeHelper::GetRawData(
-    int id,
-    const CustomThemeSupplier* theme_supplier,
-    ui::ResourceScaleFactor scale_factor) const {
-  // Check to see whether we should substitute some images.
-  int ntp_alternate =
-      GetDisplayProperty(TP::NTP_LOGO_ALTERNATE, theme_supplier);
-  if (id == IDR_PRODUCT_LOGO && ntp_alternate != 0) {
-    id = IDR_PRODUCT_LOGO_WHITE;
-  }
-
-  base::RefCountedMemory* data = nullptr;
-  if (theme_supplier) {
-    data = theme_supplier->GetRawData(id, scale_factor);
-  }
-  if (!data) {
-    data =
-        ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
-            id, ui::k100Percent);
-  }
-
-  return data;
-}
-
-color_utils::HSL ThemeHelper::GetTint(
-    int id,
-    bool incognito,
-    const CustomThemeSupplier* theme_supplier) const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  color_utils::HSL hsl;
-  if (theme_supplier && theme_supplier->GetTint(id, &hsl)) {
-    return hsl;
-  }
-
-  return TP::GetDefaultTint(id, incognito, UseDarkModeColors(theme_supplier));
-}
-
-gfx::ImageSkia* ThemeHelper::GetImageSkiaNamed(
-    int id,
-    bool incognito,
-    const CustomThemeSupplier* theme_supplier) const {
-  gfx::Image image = GetImageNamed(id, incognito, theme_supplier);
-  if (image.IsEmpty()) {
-    return nullptr;
-  }
-  // TODO(pkotwicz): Remove this const cast.  The gfx::Image interface returns
-  // its images const. GetImageSkiaNamed() also should but has many callsites.
-  return const_cast<gfx::ImageSkia*>(image.ToImageSkia());
-}
-
-bool ThemeHelper::ShouldUseNativeFrame(
-    const CustomThemeSupplier* theme_supplier) const {
-  return false;
 }
 
 int ThemeHelper::GetDefaultDisplayProperty(int id) const {
@@ -167,13 +130,72 @@ int ThemeHelper::GetDefaultDisplayProperty(int id) const {
   }
 }
 
+color_utils::HSL ThemeHelper::GetTint(
+    int id,
+    bool incognito,
+    const CustomThemeSupplier* theme_supplier) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  color_utils::HSL hsl;
+  if (theme_supplier && theme_supplier->GetTint(id, &hsl)) {
+    return hsl;
+  }
+
+  return TP::GetDefaultTint(id, incognito, UseDarkModeColors(theme_supplier));
+}
+
 // static
 bool ThemeHelper::UseDarkModeColors(const CustomThemeSupplier* theme_supplier) {
   // Dark mode is disabled for custom themes so they apply atop a predictable
   // state.
+  const ui::NativeTheme* native_theme =
+      theme_supplier ? theme_supplier->GetNativeTheme()
+                     : ui::NativeTheme::GetInstanceForNativeUi();
   return !IsCustomTheme(theme_supplier) &&
-         theme_supplier->GetNativeTheme()->preferred_color_scheme() ==
+         native_theme->preferred_color_scheme() ==
              ui::NativeTheme::PreferredColorScheme::kDark;
+}
+
+#if !BUILDFLAG(IS_ANDROID)
+scoped_refptr<base::RefCountedMemory> ThemeHelper::GetRawData(
+    int id,
+    const CustomThemeSupplier* theme_supplier,
+    ui::ResourceScaleFactor scale_factor) const {
+  // Check to see whether we should substitute some images.
+  int ntp_alternate =
+      GetDisplayProperty(TP::NTP_LOGO_ALTERNATE, theme_supplier);
+  if (id == IDR_PRODUCT_LOGO && ntp_alternate != 0) {
+    id = IDR_PRODUCT_LOGO_WHITE;
+  }
+
+  scoped_refptr<base::RefCountedMemory> data;
+  if (theme_supplier) {
+    data = theme_supplier->GetRawData(id, scale_factor);
+  }
+  if (!data) {
+    data =
+        ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
+            id, ui::k100Percent);
+  }
+
+  return data;
+}
+
+gfx::ImageSkia* ThemeHelper::GetImageSkiaNamed(
+    int id,
+    bool incognito,
+    const CustomThemeSupplier* theme_supplier) const {
+  gfx::Image image = GetImageNamed(id, incognito, theme_supplier);
+  if (image.IsEmpty()) {
+    return nullptr;
+  }
+  // TODO(pkotwicz): Remove this const cast.  The gfx::Image interface returns
+  // its images const. GetImageSkiaNamed() also should but has many callsites.
+  return const_cast<gfx::ImageSkia*>(image.ToImageSkia());
+}
+
+bool ThemeHelper::ShouldUseNativeFrame(
+    const CustomThemeSupplier* theme_supplier) const {
+  return false;
 }
 
 gfx::Image ThemeHelper::GetImageNamed(
@@ -202,3 +224,4 @@ gfx::Image ThemeHelper::GetImageNamed(
 
   return image;
 }
+#endif  // !BUILDFLAG(IS_ANDROID)

@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
+#include "services/webnn/public/cpp/webgpu_context_properties.h"
 #include "services/webnn/public/cpp/webnn_trace.h"
 #include "services/webnn/public/cpp/webnn_types.h"
 #include "services/webnn/webnn_context_impl.h"
@@ -46,10 +47,12 @@ class ContextImplLiteRt final : public WebNNContextImpl {
       mojo::PendingReceiver<mojom::WebNNContext> receiver,
       base::WeakPtr<WebNNContextProviderInRenderer> context_provider,
       mojom::CreateContextOptionsPtr options,
+      WebGpuContextProperties webgpu_properties,
       scoped_refptr<base::SingleThreadTaskRunner> owning_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> main_task_runner);
 
   ContextImplLiteRt(
+      mojom::Device device,
       mojo::PendingReceiver<mojom::WebNNContext> receiver,
       base::WeakPtr<WebNNContextProviderImpl> context_provider,
       mojom::CreateContextOptionsPtr options,
@@ -64,9 +67,11 @@ class ContextImplLiteRt final : public WebNNContextImpl {
 
   // Constructor for running without GPU dependencies.
   ContextImplLiteRt(
+      mojom::Device device,
       mojo::PendingReceiver<mojom::WebNNContext> receiver,
       base::WeakPtr<WebNNContextProviderInRenderer> context_provider,
       mojom::CreateContextOptionsPtr options,
+      WebGpuContextProperties webgpu_properties,
       scoped_refptr<base::SingleThreadTaskRunner> owning_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> main_task_runner);
 
@@ -84,17 +89,22 @@ class ContextImplLiteRt final : public WebNNContextImpl {
       WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
       base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
           constant_operands,
-      base::flat_map<OperandId, scoped_refptr<WebNNTensorImpl>>
-          constant_tensor_operands,
       CreateGraphImplCallback callback) override;
+
+  void DidOpenWeightsFile(
+      mojom::GraphInfoPtr graph_info,
+      WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
+      base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
+          constant_operands,
+      CreateGraphImplCallback callback,
+      base::File weights_file,
+      mojo::PendingRemote<mojom::WeightsFileSession> session);
 
   void DidCreateWeightsFile(
       mojom::GraphInfoPtr graph_info,
       WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
       base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
           constant_operands,
-      base::flat_map<OperandId, scoped_refptr<WebNNTensorImpl>>
-          constant_tensor_operands,
       CreateGraphImplCallback callback,
       base::File weights_file);
 
@@ -111,6 +121,8 @@ class ContextImplLiteRt final : public WebNNContextImpl {
   std::string_view GetBackendName() const override;
   std::vector<mojom::WebNNExecutionProviderDetailsPtr>
   GetExecutionProvidersInfo() const override;
+
+  WebGpuContextProperties webgpu_properties_;
 
   // Only be used in the GPU-process flow to indicate whether the profile is in
   // incognito.

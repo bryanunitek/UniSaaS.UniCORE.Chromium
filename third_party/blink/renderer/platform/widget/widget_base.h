@@ -298,11 +298,14 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
                          const gfx::Range& replacement_range,
                          int selection_start,
                          int selection_end,
-                         mojom::blink::ImeState ime_state);
+                         mojom::blink::ImeState ime_state,
+                         DOMNodeIdType target_dom_node_id);
   void ImeCommitText(const String& text,
                      const Vector<ui::ImeTextSpan>& ime_text_spans,
                      const gfx::Range& replacement_range,
-                     int relative_cursor_pos);
+                     int relative_cursor_pos,
+                     DOMNodeIdType target_dom_node_id);
+  void PasteIntoNode(const String& text, DOMNodeIdType target_dom_node_id);
   void ImeFinishComposingText(bool keep_selection);
   bool IsForProvisionalFrame();
   void FlushInputProcessedCallback();
@@ -384,7 +387,7 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
   gfx::Point BlinkSpaceToFlooredDIPs(const gfx::Point& point);
   gfx::Size BlinkSpaceToFlooredDIPs(const gfx::Size& size);
   gfx::Rect BlinkSpaceToEnclosedDIPs(const gfx::Rect& rect);
-  gfx::RectF BlinkSpaceToDIPs(const gfx::RectF& rectF);
+  gfx::RectF BlinkSpaceToDIPs(const gfx::RectF& rect);
 
   void BindWidgetCompositor(
       mojo::PendingReceiver<mojom::blink::WidgetCompositor> receiver);

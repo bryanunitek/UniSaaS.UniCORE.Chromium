@@ -806,8 +806,12 @@ TEST_F(
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitWithFeatures(
       /*enabled_features=*/
-      {syncer::kReplaceSyncPromosWithSignInPromos,
-       syncer::kSyncEnableContactInfoDataTypeForCustomPassphraseUsers},
+      {
+          syncer::kReplaceSyncPromosWithSignInPromos,
+#if BUILDFLAG(IS_CHROMEOS)
+          syncer::kSyncEnableContactInfoDataTypeForCustomPassphraseUsers,
+#endif  // BUILDFLAG(IS_CHROMEOS)
+      },
       /*disabled_features=*/{});
 
   // Sign-in.
@@ -862,12 +866,8 @@ TEST_F(
 TEST_F(
     SyncServiceImplTest,
     AddressesSyncValueShouldRemainUnchangedForCustomPassphraseUsersAfterTheirInitialSignin) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      /*enabled_features=*/
-      {syncer::kReplaceSyncPromosWithSignInPromos,
-       syncer::kSyncEnableContactInfoDataTypeForCustomPassphraseUsers},
-      /*disabled_features=*/{});
+  base::test::ScopedFeatureList scoped_feature_list{
+      syncer::kReplaceSyncPromosWithSignInPromos};
 
   // Sign-in.
   SignInWithoutSyncConsent();
@@ -928,12 +928,8 @@ TEST_F(
 TEST_F(
     SyncServiceImplTest,
     AddressesSyncShouldNotBeDisabledForSignedInUsersWithNewlyCustomPassphraseSet) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      /*enabled_features=*/
-      {syncer::kReplaceSyncPromosWithSignInPromos,
-       syncer::kSyncEnableContactInfoDataTypeForCustomPassphraseUsers},
-      /*disabled_features=*/{});
+  base::test::ScopedFeatureList scoped_feature_list{
+      syncer::kReplaceSyncPromosWithSignInPromos};
 
   // Sign-in.
   SignInWithoutSyncConsent();
@@ -1124,7 +1120,7 @@ TEST_F(SyncServiceImplTest, RevokeAccessTokenFromTokenService) {
   AccountInfo secondary_account_info =
       identity_test_env()->MakeAccountAvailable("test_user2@gmail.com");
   identity_test_env()->RemoveRefreshTokenForAccount(
-      secondary_account_info.account_id);
+      secondary_account_info.GetAccountId());
   EXPECT_FALSE(service()->GetAccessTokenForTest().empty());
 
   identity_test_env()->RemoveRefreshTokenForPrimaryAccount();
@@ -1593,6 +1589,38 @@ TEST_F(SyncServiceImplTest,
       /*expected_bucket_count=*/1);
 }
 
+// Checks that syncing preferences are being copied to transport mode upon
+// `DISABLE_SYNC_ON_CLIENT` error. Regression test for
+// https://crbug.com/534244680.
+TEST_F(SyncServiceImplTest,
+       DisableSyncOnClientCopiesSyncPreferencesToTransportMode) {
+  PopulatePrefsForInitialSyncFeatureSetupComplete();
+  SignInWithSyncConsent();
+  std::vector<FakeControllerInitParams> params;
+  params.emplace_back(PASSWORDS, /*enable_transport_mode=*/true);
+  InitializeService(std::move(params));
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(service()->IsSyncFeatureEnabled());
+  // Disabling password syncing in Sync-the-feature mode.
+  UserSelectableTypeSet enabled_types =
+      service()->GetUserSettings()->GetSelectedTypes();
+  enabled_types.Remove(UserSelectableType::kPasswords);
+  service()->GetUserSettings()->SetSelectedTypes(/*sync_everything=*/false,
+                                                 enabled_types);
+  ASSERT_FALSE(service()->GetUserSettings()->GetSelectedTypes().Has(
+      UserSelectableType::kPasswords));
+
+  // Simulating a Sync error that causes switching to Sync-the-transport mode.
+  SyncProtocolError client_cmd;
+  client_cmd.action = DISABLE_SYNC_ON_CLIENT;
+  service()->OnActionableProtocolError(client_cmd);
+
+  ASSERT_FALSE(service()->IsSyncFeatureEnabled());
+  EXPECT_FALSE(service()->GetUserSettings()->GetSelectedTypes().Has(
+      UserSelectableType::kPasswords));
+}
+
 TEST_F(SyncServiceImplTest,
        DisableSyncOnClientLogsPassphraseTypeForEncryptionObsolete) {
   const PassphraseType kPassphraseType = PassphraseType::kKeystorePassphrase;
@@ -1903,7 +1931,12 @@ TEST_F(SyncServiceImplTest,
 }
 #endif
 
+#if BUILDFLAG(IS_ANDROID)
 TEST_F(SyncServiceImplTest, ShouldEnableAndDisableInvalidationsForSessions) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      kAlwaysRegisterSessionsInvalidationsAndroid);
+
   PopulatePrefsForInitialSyncFeatureSetupComplete();
   SignInWithSyncConsent();
   std::vector<FakeControllerInitParams> params;
@@ -1920,7 +1953,6 @@ TEST_F(SyncServiceImplTest, ShouldEnableAndDisableInvalidationsForSessions) {
   service()->SetInvalidationsForSessionsEnabled(false);
 }
 
-#if BUILDFLAG(IS_ANDROID)
 TEST_F(SyncServiceImplTest,
        ShouldAlwaysSubscribeToSessionsListingsIfFeatureEnabled) {
   base::test::ScopedFeatureList scoped_feature_list;
@@ -1930,7 +1962,7 @@ TEST_F(SyncServiceImplTest,
   AccountInfo account_info = identity_test_env()->MakePrimaryAccountAvailable(
       kTestUser, signin::ConsentLevel::kSignin);
   SyncPrefs(prefs()).SetSelectedTypeForAccount(UserSelectableType::kTabs, true,
-                                               account_info.gaia);
+                                               account_info.GetGaiaId());
 
   std::vector<FakeControllerInitParams> params;
   params.emplace_back(DEVICE_INFO, /*enable_transport_mode=*/true);
@@ -2030,6 +2062,29 @@ TEST_F(SyncServiceImplTest, ShouldSubscribeToStopAndKeepDataTypes) {
   EXPECT_CALL(*sync_invalidations_service(),
               SetInterestedDataTypes(AllOf(ContainsDataType(DEVICE_INFO),
                                            ContainsDataType(BOOKMARKS))));
+  base::RunLoop().RunUntilIdle();
+}
+
+// Verifies that data types with crypto errors remain subscribed to
+// invalidations, unlike data types with permanent errors.
+TEST_F(SyncServiceImplTest, ShouldSubscribeToDataTypesWithCryptoErrors) {
+  PopulatePrefsForInitialSyncFeatureSetupComplete();
+  SignInWithSyncConsent();
+  std::vector<FakeControllerInitParams> params;
+  params.emplace_back(BOOKMARKS, /*enable_transport_mode=*/false);
+  params.emplace_back(DEVICE_INFO, /*enable_transport_mode=*/true);
+  InitializeService(std::move(params));
+  EXPECT_CALL(*sync_invalidations_service(),
+              SetInterestedDataTypes(AllOf(ContainsDataType(DEVICE_INFO),
+                                           ContainsDataType(BOOKMARKS))));
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_CALL(*sync_invalidations_service(),
+              SetInterestedDataTypes(AllOf(ContainsDataType(DEVICE_INFO),
+                                           ContainsDataType(BOOKMARKS))));
+  service()->GetEncryptionObserverForTest()->OnEncryptedTypesChanged(
+      EncryptableUserTypes(), /*encrypt_everything=*/true);
+  TriggerPassphraseRequired();
   base::RunLoop().RunUntilIdle();
 }
 
@@ -3135,6 +3190,18 @@ TEST_F(SyncServiceImplTest, ShouldQueueTaskUntilEngineInitialized) {
   base::MockCallback<base::OnceClosure> mock_task2;
   EXPECT_CALL(mock_task2, Run()).Times(1);
   service()->RunOrQueueTaskOnEngineInitializedForTest(mock_task2.Get());
+}
+
+TEST_F(SyncServiceImplTest, AvoidCachingCredentialsInEngineWhenFeatureEnabled) {
+  base::test::ScopedFeatureList feature_list(kSyncUsePropagatedAccessToken);
+
+  PopulatePrefsForInitialSyncFeatureSetupComplete();
+  SignInWithSyncConsent();
+  InitializeService();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_FALSE(service()->GetAccessTokenForTest().empty());
+  EXPECT_FALSE(engine()->last_credentials().has_value());
 }
 
 }  // namespace

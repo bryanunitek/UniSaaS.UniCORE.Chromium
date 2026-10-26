@@ -62,12 +62,10 @@
 #include "chrome/browser/ash/login/quickstart_controller.h"
 // Make sure to include new screen to all relevant metric enums.
 // LINT.IfChange(UsageMetrics)
-#include "chrome/browser/ash/login/screens/account_selection_screen.h"
 #include "chrome/browser/ash/login/screens/add_child_screen.h"
 #include "chrome/browser/ash/login/screens/ai_intro_screen.h"
 #include "chrome/browser/ash/login/screens/app_downloading_screen.h"
 #include "chrome/browser/ash/login/screens/app_launch_splash_screen.h"
-#include "chrome/browser/ash/login/screens/arc_vm_data_migration_screen.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
 #include "chrome/browser/ash/login/screens/categories_selection_screen.h"
 #include "chrome/browser/ash/login/screens/choobe_screen.h"
@@ -166,12 +164,10 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/system/system_tray_client_impl.h"
-#include "chrome/browser/ui/webui/ash/login/account_selection_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/add_child_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/ai_intro_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/app_downloading_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/app_launch_splash_screen_handler.h"
-#include "chrome/browser/ui/webui/ash/login/arc_vm_data_migration_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/auto_enrollment_check_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/categories_selection_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/choobe_screen_handler.h"
@@ -248,7 +244,6 @@
 #include "chrome/browser/ui/webui/ash/login/user_creation_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/welcome_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/wrong_hwid_screen_handler.h"
-#include "chrome/browser/ui/webui/help/help_utils_chromeos.h"
 #include "chrome/common/chrome_constants.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
@@ -256,6 +251,7 @@
 #include "chromeos/ash/components/geolocation/system_location_provider.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/language_packs/language_pack_manager.h"
+#include "chromeos/ash/components/login/auth/mount_performer.h"
 #include "chromeos/ash/components/network/network_state.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/osauth/public/auth_session_storage.h"
@@ -273,6 +269,7 @@
 #include "chromeos/ash/services/cros_healthd/private/cpp/dlc_utils.h"
 #include "chromeos/ash/services/rollback_network_config/public/mojom/rollback_network_config.mojom.h"
 #include "components/application_locale_storage/application_locale_storage.h"
+#include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/session_manager/core/session_manager.h"
@@ -413,7 +410,14 @@ bool IsInitialSetup(const WizardContext& wizard_context) {
 }
 
 void InvalidateTokenAndRequestSignout(const WizardContext& wizard_context) {
-  CHECK(wizard_context.extra_factors_token.has_value());
+  if (!wizard_context.extra_factors_token.has_value()) {
+    // If there is no token, we can just sign out. This can happen when the user
+    // is ephemeral.
+    LOG(WARNING) << "No extra factors token to invalidate, directly requesting "
+                    "sign out.";
+    session_manager::SessionManager::Get()->RequestSignOut();
+    return;
+  }
   ash::AuthSessionStorage::Get()->Invalidate(
       wizard_context.extra_factors_token.value(),
       base::BindOnce(&session_manager::SessionManager::RequestSignOut,
@@ -448,6 +452,8 @@ WizardController::WizardController(
     scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
     policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
     scoped_refptr<component_updater::ComponentManagerAsh> component_manager_ash,
+    policy::DeviceRestrictionScheduleController*
+        device_restriction_schedule_controller,
     WizardContext* wizard_context)
     : local_state_(CHECK_DEREF(local_state)),
       metrics_service_(metrics_service),
@@ -455,12 +461,17 @@ WizardController::WizardController(
       shared_url_loader_factory_(std::move(shared_url_loader_factory)),
       browser_policy_connector_ash_(CHECK_DEREF(browser_policy_connector_ash)),
       component_manager_ash_(std::move(component_manager_ash)),
+      device_restriction_schedule_controller_(
+          device_restriction_schedule_controller),
       quickstart_controller_(
           std::make_unique<quick_start::QuickStartController>(
               &local_state_.get())),
       screen_manager_(std::make_unique<ScreenManager>()),
       wizard_context_(wizard_context) {
   if (!metrics_service_) {
+    CHECK_IS_TEST();
+  }
+  if (!device_restriction_schedule_controller_) {
     CHECK_IS_TEST();
   }
   CHECK(component_manager_ash_);
@@ -513,7 +524,7 @@ WizardController::~WizardController() {
 }
 
 void WizardController::Init(OobeScreenId first_screen) {
-  DCHECK(!is_initialized());
+  CHECK(!is_initialized(), base::NotFatalUntil::M160);
   is_initialized_ = true;
 
   prescribed_enrollment_config_ =
@@ -804,11 +815,6 @@ WizardController::CreateScreens() {
   append(std::make_unique<LocalStateErrorScreen>(
       oobe_ui->GetView<LocalStateErrorScreenHandler>()->AsWeakPtr()));
 
-  if (base::FeatureList::IsEnabled(arc::kEnableArcVmDataMigration)) {
-    append(std::make_unique<ArcVmDataMigrationScreen>(
-        oobe_ui->GetView<ArcVmDataMigrationScreenHandler>()->AsWeakPtr()));
-  }
-
   if (HIDDetectionScreen::CanShowScreen(local_state_.get())) {
     append(std::make_unique<HIDDetectionScreen>(
         &local_state_.get(),
@@ -823,7 +829,9 @@ WizardController::CreateScreens() {
       oobe_ui->GetErrorScreen(),
       base::BindRepeating(&WizardController::OnAutoEnrollmentCheckScreenExit,
                           weak_factory_.GetWeakPtr())));
+  CHECK(device_restriction_schedule_controller_);
   append(std::make_unique<DeviceDisabledScreen>(
+      device_restriction_schedule_controller_,
       oobe_ui->GetView<DeviceDisabledScreenHandler>()->AsWeakPtr()));
   append(std::make_unique<EncryptionMigrationScreen>(
       oobe_ui->GetView<EncryptionMigrationScreenHandler>()->AsWeakPtr()));
@@ -984,7 +992,7 @@ WizardController::CreateScreens() {
           weak_factory_.GetWeakPtr())));
 
   append(std::make_unique<CryptohomeRecoveryScreen>(
-      &local_state_.get(), shared_url_loader_factory_,
+      local_state_.get(), shared_url_loader_factory_,
       oobe_ui->GetView<CryptohomeRecoveryScreenHandler>()->AsWeakPtr(),
       base::BindRepeating(&WizardController::OnCryptohomeRecoveryScreenExit,
                           weak_factory_.GetWeakPtr())));
@@ -1065,11 +1073,13 @@ WizardController::CreateScreens() {
                           weak_factory_.GetWeakPtr())));
 
   append(std::make_unique<LocalDataLossWarningScreen>(
+      local_state_.get(),
       oobe_ui->GetView<LocalDataLossWarningScreenHandler>()->AsWeakPtr(),
       base::BindRepeating(&WizardController::OnLocalDataLossWarningScreenExit,
                           weak_factory_.GetWeakPtr())));
 
   append(std::make_unique<EnterOldPasswordScreen>(
+      local_state_.get(),
       oobe_ui->GetView<EnterOldPasswordScreenHandler>()->AsWeakPtr(),
       base::BindRepeating(&WizardController::OnEnterOldPasswordScreenExit,
                           weak_factory_.GetWeakPtr())));
@@ -1087,13 +1097,6 @@ WizardController::CreateScreens() {
       oobe_ui->GetView<FactorSetupSuccessScreenHandler>()->AsWeakPtr(),
       base::BindRepeating(&WizardController::OnFactorSetupSuccessScreenExit,
                           weak_factory_.GetWeakPtr())));
-
-  if (features::IsOobeAddUserDuringEnrollmentEnabled()) {
-    append(std::make_unique<AccountSelectionScreen>(
-        oobe_ui->GetView<AccountSelectionScreenHandler>()->AsWeakPtr(),
-        base::BindRepeating(&WizardController::OnAccountSelectionScreenExit,
-                            weak_factory_.GetWeakPtr())));
-  }
 
   append(std::make_unique<AppLaunchSplashScreen>(
       oobe_ui->GetView<AppLaunchSplashScreenHandler>()->AsWeakPtr(),
@@ -1447,7 +1450,7 @@ void WizardController::ShowConsolidatedConsentScreen() {
 }
 
 void WizardController::ShowChoobeScreen() {
-  DCHECK(features::IsOobeChoobeEnabled());
+  CHECK(features::IsOobeChoobeEnabled(), base::NotFatalUntil::M160);
   SetCurrentScreen(GetScreen(ChoobeScreenView::kScreenId));
 }
 
@@ -1491,18 +1494,10 @@ void WizardController::ShowGuestTosScreen() {
   SetCurrentScreen(GetScreen(GuestTosScreenView::kScreenId));
 }
 
-void WizardController::ShowArcVmDataMigrationScreen() {
-  SetCurrentScreen(GetScreen(ArcVmDataMigrationScreenView::kScreenId));
-}
-
 void WizardController::ShowCryptohomeRecoveryScreen(
     std::unique_ptr<UserContext> user_context) {
   wizard_context_->user_context = std::move(user_context);
   SetCurrentScreen(GetScreen(CryptohomeRecoveryScreenView::kScreenId));
-}
-
-void WizardController::ShowAccountSelectionScreen() {
-  SetCurrentScreen(GetScreen(AccountSelectionScreenView::kScreenId));
 }
 
 void WizardController::ShowAppLaunchSplashScreen() {
@@ -1557,12 +1552,7 @@ void WizardController::OnUserCreationScreenExit(
       }
       break;
     case UserCreationScreen::Result::SKIPPED:
-      if (features::IsOobeAddUserDuringEnrollmentEnabled() &&
-          wizard_context_->timebound_user_context_holder) {
-        ShowAccountSelectionScreen();
-      } else {
-        AdvanceToScreen(GaiaView::kScreenId);
-      }
+      AdvanceToScreen(GaiaView::kScreenId);
       break;
     case UserCreationScreen::Result::ADD_CHILD:
       MaybeAbortQuickStartFlow(
@@ -1766,8 +1756,16 @@ void WizardController::OnSamlConfirmPasswordScreenExit(
     case SamlConfirmPasswordScreen::Result::kSuccess:
       switch (wizard_context_->knowledge_factor_setup.auth_setup_flow) {
         case WizardContext::AuthChangeFlow::kInitialSetup:
-          // Continue initial setup by showing other auth factors flows.
-          ShowPinSetupScreenAsMainFactor();
+          // `user_context` is only set on the wizard context for pre-cryptohome
+          // SAML confirm password screen exit. This can happen when the user is
+          // ephemeral as we always show the confirm password screen for
+          // ephemeral users before cryptohome mount.
+          if (wizard_context_->user_context != nullptr) {
+            CompleteLogin();
+          } else {
+            // Continue initial setup by showing other auth factors flows.
+            ShowPinSetupScreenAsMainFactor();
+          }
           break;
         case WizardContext::AuthChangeFlow::kRecovery:
         case WizardContext::AuthChangeFlow::kReauthentication:
@@ -1834,11 +1832,11 @@ void WizardController::OnConsolidatedConsentScreenExit(
       ShowSyncConsentScreen();
       break;
     case ConsolidatedConsentScreen::Result::ACCEPTED_DEMO_ONLINE:
-      DCHECK(demo_setup_controller_);
+      CHECK(demo_setup_controller_, base::NotFatalUntil::M160);
       ShowAutoEnrollmentCheckScreen();
       break;
     case ConsolidatedConsentScreen::Result::BACK_DEMO:
-      DCHECK(demo_setup_controller_);
+      CHECK(demo_setup_controller_, base::NotFatalUntil::M160);
       ShowDemoModePreferencesScreen();
       break;
   }
@@ -1871,7 +1869,7 @@ void WizardController::OnOsInstallScreenExit() {
     return;
   }
   const bool did_advance = MaybeSetToPreviousScreen();
-  DCHECK(did_advance);
+  CHECK(did_advance, base::NotFatalUntil::M160);
 }
 
 void WizardController::OnOsTrialScreenExit(OsTrialScreen::Result result) {
@@ -2019,7 +2017,8 @@ void WizardController::OnLocalDataLossWarningScreenExit(
   OnScreenExit(LocalDataLossWarningScreenView::kScreenId,
                LocalDataLossWarningScreen::GetResultString(result));
   switch (result) {
-    case LocalDataLossWarningScreen::Result::kRemoveUser: {
+    case LocalDataLossWarningScreen::Result::kRemoveUser:
+    case LocalDataLossWarningScreen::Result::kAutoWipe: {
       std::unique_ptr<UserContext> context =
           std::move(wizard_context_->user_context);
       ash::LoginDisplayHost::default_host()->CompleteLogin(*context);
@@ -2173,17 +2172,6 @@ void WizardController::OnDisplaySizeScreenExit(
   }
 }
 
-void WizardController::OnAccountSelectionScreenExit(
-    AccountSelectionScreen::Result result) {
-  OnScreenExit(AccountSelectionScreenView::kScreenId,
-               AccountSelectionScreen::GetResultString(result));
-  switch (result) {
-    case AccountSelectionScreen::Result::kNotApplicable:
-    case AccountSelectionScreen::Result::kGaiaFallback:
-      AdvanceToScreen(GaiaView::kScreenId);
-  }
-}
-
 void WizardController::SkipToLoginForTesting() {
   VLOG(1) << "WizardController::SkipToLoginForTesting()";
 
@@ -2197,7 +2185,7 @@ void WizardController::SkipToLoginForTesting() {
 
   StartNetworkTimezoneResolve();
   DelayNetworkCall(ServicesCustomizationDocument::GetInstance()
-                       ->EnsureCustomizationAppliedClosure());
+                       .EnsureCustomizationAppliedClosure());
   if (features::IsOobeAutoEnrollmentCheckForcedEnabled()) {
     StartupUtils::MarkOobeCompleted(local_state_.get());
   }
@@ -2215,6 +2203,8 @@ void WizardController::OnScreenExit(OobeScreenId screen,
   if (exit_reason == BaseScreen::kNotApplicable) {
     return;
   }
+  // TODO(crbug.com/568836062): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(current_screen_->screen_id() == screen);
 
   GetLoginDisplayHost()->GetOobeMetricsHelper()->RecordScreenExit(screen,
@@ -2386,7 +2376,14 @@ void WizardController::OnUpdateScreenExit(UpdateScreen::Result result) {
 
 void WizardController::OnUpdateCompleted() {
   // Install language packs based on the user selected language.
-  const std::string locale = application_locale_storage_->Get();
+  // Prefer `kApplicationLocale` from `Local State` so regional locales whose
+  // UI resource bundle falls back to a base or sibling locale (such as `en-AU`
+  // -> `en-GB` or `fr-CA` -> `fr`) install the regional TTS DLC during OOBE.
+  std::string locale =
+      GetLocalState()->GetString(language::prefs::kApplicationLocale);
+  if (locale.empty()) {
+    locale = std::string(application_locale_storage_->GetTag().tag_string());
+  }
   language_packs::LanguagePackManager::UpdatePacksForOobe(locale,
                                                           base::DoNothing());
 
@@ -2436,19 +2433,20 @@ void WizardController::OnEnrollmentScreenExit(EnrollmentScreen::Result result) {
       // OOBECompletedActions are only performed in the first call.
       PerformOOBECompletedActions(
           OobeMetricsHelper::CompletedPreLoginOobeFlowType::kAutoEnrollment);
-      DCHECK(!prescribed_enrollment_config_.is_forced());
+      CHECK(!prescribed_enrollment_config_.is_forced(),
+            base::NotFatalUntil::M160);
       // set  the userCreationScreen with the default step creation and
       // pre-select 'For personal use'.
       GetScreen<UserCreationScreen>()->SetDefaultStep();
       ShowLoginScreen();
       break;
     case EnrollmentScreen::Result::TPM_ERROR:
-      DCHECK(switches::IsTpmDynamic());
+      CHECK(switches::IsTpmDynamic(), base::NotFatalUntil::M160);
       wizard_context_->tpm_owned_error = true;
       AdvanceToScreen(TpmErrorView::kScreenId);
       break;
     case EnrollmentScreen::Result::TPM_DBUS_ERROR:
-      DCHECK(switches::IsTpmDynamic());
+      CHECK(switches::IsTpmDynamic(), base::NotFatalUntil::M160);
       wizard_context_->tpm_dbus_error = true;
       AdvanceToScreen(TpmErrorView::kScreenId);
       break;
@@ -2489,8 +2487,8 @@ void WizardController::OnEnrollmentDone() {
     AutoLaunchKioskApp(app.value());
   } else if (ash::InstallAttributes::Get()->IsEnterpriseManaged()) {
     // Could be not managed in tests.
-    DCHECK_EQ(LoginDisplayHost::default_host()->GetOobeUI()->display_type(),
-              OobeUI::kOobeDisplay);
+    CHECK_EQ(LoginDisplayHost::default_host()->GetOobeUI()->display_type(),
+             OobeUI::kOobeDisplay, base::NotFatalUntil::M160);
     SwitchWebUItoMojo();
   } else {
     ShowLoginScreen();
@@ -2514,7 +2512,7 @@ void WizardController::OnDemoPreferencesScreenExit(
   OnScreenExit(DemoPreferencesScreenView::kScreenId,
                DemoPreferencesScreen::GetResultString(result));
 
-  DCHECK(demo_setup_controller_);
+  CHECK(demo_setup_controller_, base::NotFatalUntil::M160);
 
   switch (result) {
     case DemoPreferencesScreen::Result::COMPLETED:
@@ -2534,7 +2532,7 @@ void WizardController::OnDemoSetupScreenExit(DemoSetupScreen::Result result) {
   OnScreenExit(DemoSetupScreenView::kScreenId,
                DemoSetupScreen::GetResultString(result));
 
-  DCHECK(demo_setup_controller_);
+  CHECK(demo_setup_controller_, base::NotFatalUntil::M160);
   demo_setup_controller_.reset();
 
   switch (result) {
@@ -3242,7 +3240,7 @@ void WizardController::OnFjordImageDownloadCompleted(
   }
 }
 
-bool WizardController::ExitFjordTouchControllerScreen() {
+bool WizardController::OnFjordTouchControllerSetupFinished() {
   // Return true if Station setup screen or FW update screen is showing because
   // this means the TC setup screen was shown before this. This ensures that if
   // the TC goes offline and online again, it can know if the TC setup screen
@@ -3254,7 +3252,8 @@ bool WizardController::ExitFjordTouchControllerScreen() {
     return true;
   }
 
-  return GetScreen<FjordTouchControllerScreen>()->ExitScreen();
+  return GetScreen<FjordTouchControllerScreen>()
+      ->OnTouchControllerSetupFinished();
 }
 
 bool WizardController::ShowNextFjordOobeScreen(
@@ -3402,7 +3401,7 @@ void WizardController::StartTimezoneResolve() {
 void WizardController::PerformPostNetworkScreenActions() {
   StartNetworkTimezoneResolve();
   DelayNetworkCall(ServicesCustomizationDocument::GetInstance()
-                       ->EnsureCustomizationAppliedClosure());
+                       .EnsureCustomizationAppliedClosure());
   GetAutoEnrollmentController()->Start();
 }
 
@@ -3682,8 +3681,6 @@ void WizardController::AdvanceToScreen(OobeScreenId screen_id) {
     ShowConsolidatedConsentScreen();
   } else if (screen_id == CryptohomeRecoverySetupScreenView::kScreenId) {
     ShowCryptohomeRecoverySetupScreen();
-  } else if (screen_id == ArcVmDataMigrationScreenView::kScreenId) {
-    ShowArcVmDataMigrationScreen();
   } else if (screen_id == TouchpadScrollScreenView::kScreenId) {
     ShowTouchpadScrollScreen();
   } else if (screen_id == GaiaInfoScreenView::kScreenId) {
@@ -3904,8 +3901,8 @@ PrefService* WizardController::GetLocalState() {
 void WizardController::OnTimezoneResolved(
     std::unique_ptr<TimeZoneResponseData> timezone,
     bool server_error) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(timezone);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(timezone, base::NotFatalUntil::M160);
 
   timezone_resolved_ = true;
   base::ScopedClosureRunner inform_test(
@@ -3949,7 +3946,7 @@ TimeZoneProvider* WizardController::GetTimezoneProvider() {
 void WizardController::OnLocationResolved(const Geoposition& position,
                                           bool server_error,
                                           const base::TimeDelta elapsed) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   const base::TimeDelta timeout = base::Seconds(kResolveTimeZoneTimeoutSeconds);
   // Ignore invalid position.
@@ -3972,7 +3969,7 @@ void WizardController::OnLocationResolved(const Geoposition& position,
   // WizardController owns TimezoneProvider, so timezone request is silently
   // cancelled on destruction.
   GetTimezoneProvider()->RequestTimezone(
-      position, timeout - elapsed,
+      position, base::Time::Now(), timeout - elapsed,
       base::BindOnce(&WizardController::OnTimezoneResolved,
                      weak_factory_.GetWeakPtr()));
 }
@@ -4014,7 +4011,7 @@ void WizardController::ShowEnrollmentScreenIfEligible() {
 }
 
 bool WizardController::MaybeSetToPreviousScreen() {
-  DCHECK(current_screen_);
+  CHECK(current_screen_, base::NotFatalUntil::M160);
   if (!previous_screens_.contains(current_screen_)) {
     return false;
   }

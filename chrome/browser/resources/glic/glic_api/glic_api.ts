@@ -38,6 +38,9 @@ export import AutofillSuggestion = generated.AutofillSuggestion;
 export import CaptureRegionParams = generated.CaptureRegionParams;
 export import CaptureRegionResult = generated.CaptureRegionResult;
 export import CapturedRegion = generated.CapturedRegion;
+export import CloseAuthTabOptions = generated.CloseAuthTabOptions;
+export import CloseAuthTabResponse = generated.CloseAuthTabResponse;
+export import CloseSignInTabOptions = generated.CloseSignInTabOptions;
 export import ConversationInfo = generated.ConversationInfo;
 export import CounterAbuseVerdict = generated.CounterAbuseVerdict;
 export import CreateActorTabOptions = generated.CreateActorTabOptions;
@@ -45,6 +48,8 @@ export import CreateSkillRequest = generated.CreateSkillRequest;
 export import CreateTabOptions = generated.CreateTabOptions;
 export import Credential = generated.Credential;
 export import DocumentData = generated.DocumentData;
+export import ExperimentalTriggeringPayload =
+    generated.ExperimentalTriggeringPayload;
 export import ExperimentalTriggeringUpdate =
     generated.ExperimentalTriggeringUpdate;
 export import FormFillingRequest = generated.FormFillingRequest;
@@ -52,12 +57,22 @@ export import FormFillingResponse = generated.FormFillingResponse;
 export import FrameMetadata = generated.FrameMetadata;
 export import GeminiEnterpriseSettings = generated.GeminiEnterpriseSettings;
 export import GetPinCandidatesOptions = generated.GetPinCandidatesOptions;
+export import GmailOtpConfirmationRequest =
+    generated.GmailOtpConfirmationRequest;
+export import GmailOtpConfirmationResponse =
+    generated.GmailOtpConfirmationResponse;
+export import GmailOtpOptInRequest = generated.GmailOtpOptInRequest;
+export import GmailOtpOptInResponse = generated.GmailOtpOptInResponse;
 export import ImageBytesResult = generated.ImageBytesResult;
 export import ImageInfo = generated.ImageInfo;
 export import InvokeOptions = generated.InvokeOptions;
 export import MetaTag = generated.MetaTag;
 export import OnResponseStoppedDetails = generated.OnResponseStoppedDetails;
+export import OpenAuthTabOptions = generated.OpenAuthTabOptions;
+export import OpenAuthTabResponse = generated.OpenAuthTabResponse;
+export import OpenPinnedTabPickerOptions = generated.OpenPinnedTabPickerOptions;
 export import OpenSettingsOptions = generated.OpenSettingsOptions;
+export import OpenSignInTabOptions = generated.OpenSignInTabOptions;
 export import PageMetadata = generated.PageMetadata;
 export import PanelOpeningData = generated.PanelOpeningData;
 export import PanelState = generated.PanelState;
@@ -82,8 +97,10 @@ export import SelectCredentialDialogRequest =
     generated.SelectCredentialDialogRequest;
 export import SelectCredentialDialogResponse =
     generated.SelectCredentialDialogResponse;
+export import SendTabToSelfDevice = generated.SendTabToSelfDevice;
 export import Skill = generated.Skill;
 export import SkillPreview = generated.SkillPreview;
+export import SkillsPayload = generated.SkillsPayload;
 export import SuggestionContent = generated.SuggestionContent;
 export import TabContextOptions = generated.TabContextOptions;
 export import TabContextResult = generated.TabContextResult;
@@ -105,17 +122,19 @@ export import ActorTaskState = generated.ActorTaskState;
 export import ActorTaskStopReason = generated.ActorTaskStopReason;
 export import ActuationTarget = generated.ActuationTarget;
 export import AdditionalContextSource = generated.AdditionalContextSource;
+export import AuthTabPurpose = generated.AuthTabPurpose;
 export import CancelActionsResult = generated.CancelActionsResult;
 export import CaptureRegionErrorReason = generated.CaptureRegionErrorReason;
-export import CaptureScreenshotErrorReason =
-    generated.CaptureScreenshotErrorReason;
 export import ClientCapabilities = generated.ClientCapabilities;
 export import ClientErrorDialogType = generated.ClientErrorDialogType;
+export import CloseAuthTabResult = generated.CloseAuthTabResult;
+export import CloseSignInTabResult = generated.CloseSignInTabResult;
 export import CreateTaskErrorReason = generated.CreateTaskErrorReason;
 export import CredentialType = generated.CredentialType;
 export import ExperimentalTriggeringUpdateType =
     generated.ExperimentalTriggeringUpdateType;
 export import FeatureMode = generated.FeatureMode;
+export import FileUploadPolicyState = generated.FileUploadPolicyState;
 export import FormFactor = generated.FormFactor;
 export import FreOverride = generated.FreOverride;
 export import HostCapability = generated.HostCapability;
@@ -124,10 +143,13 @@ export import LightweightPageFeature = generated.LightweightPageFeature;
 export import MetricUserInputReactionType =
     generated.MetricUserInputReactionType;
 export import MicrophoneStatus = generated.MicrophoneStatus;
+export import OpenAuthTabResult = generated.OpenAuthTabResult;
+export import OpenSignInTabResult = generated.OpenSignInTabResult;
 export import PanelStateKind = generated.PanelStateKind;
 export import PerformActionsErrorReason = generated.PerformActionsErrorReason;
 export import PinTrigger = generated.PinTrigger;
 export import Platform = generated.Platform;
+export import PromptType = generated.PromptType;
 export import RegisterConversationErrorReason =
     generated.RegisterConversationErrorReason;
 export import SbThreatType = generated.SbThreatType;
@@ -150,6 +172,9 @@ export import WebClientModel = generated.WebClientModel;
 export import WebUseCounter = generated.WebUseCounter;
 
 /// END_GENERATED - DO NOT MODIFY ABOVE
+
+export * from './geic_api.js';
+import type {GeicBrowserHost} from './geic_api.js';
 
 /** Allows the Glic web client to register with the host WebUI. */
 export declare interface GlicHostRegistry {
@@ -192,6 +217,8 @@ export declare interface AdditionalContextPart {
 /** Union representing source-specific payloads. */
 export declare interface InvocationPayload {
   universalCart?: UniversalCartPayload;
+  skillsPayload?: SkillsPayload;
+  experimentalTriggering?: ExperimentalTriggeringPayload;
 }
 
 /**
@@ -246,7 +273,7 @@ export declare interface GlicWebClient {
    * `panelOpeningData` in these cases.
    */
   notifyPanelWillOpen?
-    (panelOpeningData: PanelOpeningData & PanelState): Promise<OpenPanelInfo>;
+      (panelOpeningData: PanelOpeningData&PanelState): Promise<OpenPanelInfo>;
 
   /**
    * Called right after the panel was hidden away and is not visible to
@@ -297,7 +324,7 @@ export declare interface GlicWebClient {
    * take place.
    */
   getExperimentalTriggeringUpdates?
-    (): Observable2<ExperimentalTriggeringUpdate>;
+      (): Observable2<ExperimentalTriggeringUpdate>;
 
   // !!! ATTENTION !!!
   // Avoid adding new methods to this interface! Instead, to push information to
@@ -314,6 +341,37 @@ export declare interface ExperimentalTriggeringUploadScreenshotRequest {
 }
 
 /**
+ * A confirmation decision made by the user on a remote surface.
+ * Delivered to the client so that it can resolve the corresponding
+ * pending confirmation dialog.
+ */
+export declare interface ExperimentalTriggeringConfirmationResponseRequest {
+  /**
+   * The serialized confirmation response proto. This is opaque to Chrome and
+   * is forwarded verbatim from the server.
+   *
+   * The client is responsible for decoding this payload, matching it against
+   * a pending confirmation dialog request, and invoking that request's
+   * response callback.
+   */
+  response: ArrayBuffer;
+
+  /**
+   * The client must call this exactly once. Pass true if the response was
+   * matched to a pending confirmation dialog and applied, and false otherwise
+   * (for example, if there is no pending dialog, if the payload could not be
+   * decoded, or if the decision is no longer relevant).
+   *
+   * This should be called promptly, as it reports only whether the decision
+   * was applied locally. If it is not called within a short timeout, or if the
+   * web client is torn down while the request is in flight, the decision is
+   * reported to the browser as not applied. Calls made after that point are
+   * ignored.
+   */
+  onComplete(applied: boolean): void;
+}
+
+/**
  * Interface providing experimental triggering capabilities from the browser
  * host.
  */
@@ -324,6 +382,18 @@ export declare interface GlicExperimentalTriggeringBrowserHost {
    */
   uploadEncryptedScreenshotRequests?
       (): Observable<ExperimentalTriggeringUploadScreenshotRequest>;
+
+  /**
+   * Returns an Observable emitting confirmation decisions that were made by
+   * the user on a remote surface. Each emitted request carries an opaque
+   * payload which the client must decode in order to resolve the matching
+   * pending confirmation dialog.
+   *
+   * If the client has no active subscription to this Observable, the browser
+   * treats every confirmation response as unhandled.
+   */
+  confirmationResponses?
+      (): Observable<ExperimentalTriggeringConfirmationResponseRequest>;
 }
 
 /**
@@ -339,6 +409,11 @@ export declare interface GlicBrowserHost {
    * experimental triggering is disabled.
    */
   experimentalTriggering?(): GlicExperimentalTriggeringBrowserHost;
+
+  /**
+   * Returns the Gemini Enterprise in Chrome host interface.
+   */
+  getGeicClient?(): GeicBrowserHost;
 
   /** Return the platform glic is running on. */
   getPlatform?(): Platform;
@@ -370,7 +445,13 @@ export declare interface GlicBrowserHost {
    * expect that the provided values may not be applied verbatim.
    */
   resizeWindow(width: number, height: number, options?: ResizeWindowOptions):
-    Promise<void>;
+      Promise<void>;
+
+  /**
+   * Returns the list of target devices available for Send Tab to Self.
+   * Resolves to an empty list if sync is disabled or the model is not ready.
+   */
+  getSendTabToSelfDevices?(): Promise<SendTabToSelfDevice[]>;
 
   /**
    * Set the state of the panel's user drag-to-resize capability, or if the
@@ -422,7 +503,7 @@ export declare interface GlicBrowserHost {
    * @throws {Error} on failure.
    */
   getContextFromFocusedTab?
-    (options: TabContextOptions): Promise<TabContextResult>;
+      (options: TabContextOptions): Promise<TabContextResult>;
 
   /**
    * Similar to `getContextFromFocusedTab`, but returns context from the tab
@@ -431,7 +512,7 @@ export declare interface GlicBrowserHost {
    * @throws {Error} on failure.
    */
   getContextFromTab?
-    (tabId: string, options: TabContextOptions): Promise<TabContextResult>;
+      (tabId: string, options: TabContextOptions): Promise<TabContextResult>;
 
   /**
    * Similar to `getContextFromTab`, but for actors. Skips the focus check.
@@ -439,7 +520,7 @@ export declare interface GlicBrowserHost {
    * @throws {Error} on failure.
    */
   getContextForActorFromTab?
-    (tabId: string, options: TabContextOptions): Promise<TabContextResult>;
+      (tabId: string, options: TabContextOptions): Promise<TabContextResult>;
 
   /**
    * Retrieves raw image bytes, MIME type, and metadata for an image node from
@@ -470,7 +551,7 @@ export declare interface GlicBrowserHost {
    * @throws {ActInFocusedTabError} on failure.
    */
   actInFocusedTab?
-    (params: ActInFocusedTabParams): Promise<ActInFocusedTabResult>;
+      (params: ActInFocusedTabParams): Promise<ActInFocusedTabResult>;
 
   /**
    * Creates a task and returns its ID. The optional @param taskOptions
@@ -531,8 +612,8 @@ export declare interface GlicBrowserHost {
    *
    */
   pauseActorTask?
-    (taskId: number, pauseReason?: ActorTaskPauseReason, tabId?: string):
-    void;
+      (taskId: number, pauseReason?: ActorTaskPauseReason, tabId?: string):
+          void;
 
   /**
    * Resumes a previously paused actor task with the given ID.
@@ -544,7 +625,7 @@ export declare interface GlicBrowserHost {
    *
    */
   resumeActorTask?(taskId: number, tabContextOptions: TabContextOptions):
-    Promise<ResumeActorTaskResult>;
+      Promise<ResumeActorTaskResult>;
 
   /**
    * Interrupts the actor task with the given ID in the browser if it exists.
@@ -557,13 +638,18 @@ export declare interface GlicBrowserHost {
    * @param interruptReason The reason for why the interrupt was initiated.
    */
   interruptActorTask?
-    (taskId: number, interruptReason?: ActorTaskInterruptReason): void;
+      (taskId: number, interruptReason?: ActorTaskInterruptReason): void;
 
   /**
    * Indicates a task is no longer interrupted with the given ID in the browser
    * if it exists. No-op otherwise.
    */
   uninterruptActorTask?(taskId: number): void;
+
+  /**
+   * Updates the progress of a step for an actor task with the given ID.
+   */
+  updateActorTaskStepProgress?(taskId: number, stepProgress: string): void;
 
   /**
    * Returns the observable state of the actor task with the given ID. Updates
@@ -584,7 +670,7 @@ export declare interface GlicBrowserHost {
    * isn't associated with the task until an action is performed on the tab.
    */
   createActorTab?(taskId: number, createActorTabOptions: CreateActorTabOptions):
-    Promise<TabData>;
+      Promise<TabData>;
 
   /**
    * Returns the observable state of TabData for the given tab.
@@ -604,7 +690,7 @@ export declare interface GlicBrowserHost {
    * not found with the given ID. If the tab has no favicon, the observable
    * will emit undefined.
    */
-  getTabFaviconById?(tabId: string): ObservableValue<Blob | undefined>;
+  getTabFaviconById?(tabId: string): ObservableValue<Blob|undefined>;
 
   /**
    * Makes the given tab the active tab in its window and activates its window.
@@ -612,18 +698,6 @@ export declare interface GlicBrowserHost {
    * No-op if the tab doesn't exist or is already in the foreground.
    */
   activateTab?(tabId: string): void;
-
-  /**
-   * Requests the host to capture a screenshot. The choice of the screenshot
-   * target is made by the host, possibly allowing the user to choose between a
-   * desktop, window or arbitrary region.
-   *
-   * The promise will be failed if the user rejects the capture or another
-   * problem happens.
-   *
-   * @throws {CaptureScreenshotError} on failure.
-   */
-  captureScreenshot?(): Promise<Screenshot>;
 
   /**
    * Starts a user-interactive process to select content from a tab. The user
@@ -648,7 +722,7 @@ export declare interface GlicBrowserHost {
    * be terminated and a new one will begin.
    */
   captureRegion?
-    (params?: CaptureRegionParams): ObservableValue<CaptureRegionResult>;
+      (params?: CaptureRegionParams): ObservableValue<CaptureRegionResult>;
 
   /**
    * Deletes a captured region.
@@ -700,6 +774,12 @@ export declare interface GlicBrowserHost {
    * has the page loaded, it is focused instead.
    */
   openPasswordManagerSettingsPage?(): void;
+
+  /**
+   * Opens a tab to the contact info settings page. If an open tab already
+   * has the page loaded, it is focused instead.
+   */
+  openContactInfoSettingsPage?(): void;
 
   /** Requests the closing of the panel containing the web client. */
   closePanel?(): Promise<void>;
@@ -803,7 +883,7 @@ export declare interface GlicBrowserHost {
   getOsLocationPermissionState?(): ObservableValue<boolean>;
 
   /** Returns the state of the OS hotkey. */
-  getOsHotkeyState?(): ObservableValue<{ hotkey: string }>;
+  getOsHotkeyState?(): ObservableValue<{hotkey: string}>;
 
   /** Returns the state of the glic closed captioning setting. */
   getClosedCaptioningSetting?(): ObservableValue<boolean>;
@@ -954,7 +1034,7 @@ export declare interface GlicBrowserHost {
    * ZeroStateSuggestions tabId and url before using it.
    */
   getZeroStateSuggestionsForFocusedTab?
-    (is_first_run?: boolean): Promise<ZeroStateSuggestions>;
+      (is_first_run?: boolean): Promise<ZeroStateSuggestions>;
 
   /**
    * Called when the client believes that the user's status may have changed.
@@ -1001,6 +1081,25 @@ export declare interface GlicBrowserHost {
   getPinnedTabs?(): ObservableValue<TabData[]>;
 
   /**
+   * Opens the browser's native tab picker UI (such as the Grid Tab Switcher
+   * on Android) on top of Chrome, allowing the user to select one or more tabs
+   * to pin as context.
+   *
+   * Selected tabs are pinned to the conversation and asynchronously emitted to
+   * the web client via `getPinnedTabs()`.
+   *
+   * The returned promise resolves when the user finishes interacting with the
+   * picker (either by confirming their selection or dismissing/cancelling).
+   *
+   * Note: This method is supported on mobile platforms (Android phone and
+   * tablet). On desktop and other non-mobile form factors, this is currently a
+   * no-op and resolves immediately.
+   *
+   * @param options Optional configuration for the picker.
+   */
+  openPinnedTabPicker?(options?: OpenPinnedTabPickerOptions): Promise<void>;
+
+  /**
    * Returns an observable that emits a ranked list of pin tab candidates per
    * the given options. The list is returned once, and then again whenever the
    * list of candidates changes. The results are sorted by string match and then
@@ -1017,7 +1116,7 @@ export declare interface GlicBrowserHost {
    * subscribed only while it is required.
    */
   getPinCandidates?
-    (options: GetPinCandidatesOptions): ObservableValue<PinCandidate[]>;
+      (options: GetPinCandidatesOptions): ObservableValue<PinCandidate[]>;
 
   /**
    * Returns an observable unique to the supplied options that emits zero state
@@ -1028,8 +1127,455 @@ export declare interface GlicBrowserHost {
    * observer to stop emitting.
    */
   getZeroStateSuggestions?(options?: ZeroStateSuggestionsOptions):
-    ObservableValue<ZeroStateSuggestionsV2>;
+      ObservableValue<ZeroStateSuggestionsV2>;
 
+  /**
+   * Returns an observable of the skills functionality. Emits an instance of
+   * GlicBrowserSkills when skills are enabled, or undefined while skills are
+   * not enabled. Skills may be enabled or disabled dynamically.
+   */
+  skills?(): ObservableValue<GlicBrowserSkills|undefined>;
+
+  /**
+   * Creates a skill. The request contains a prompt or an empty string.
+   * A Chrome modal will be shown to allow the user to edit and save a skill.
+   * The promise will fail if the modal is not opened.
+   * @deprecated Use skills() instead.
+   */
+  createSkill?(request: CreateSkillRequest): Promise<void>;
+
+  /**
+   * Updates a skill. The request only contains a skill id.
+   * The Chrome modal will display the corresponding skill and allow the user to
+   * edit and save it. The promise will fail if the modal is not opened.
+   * @deprecated Use skills() instead.
+   */
+  updateSkill?(request: UpdateSkillRequest): Promise<void>;
+
+  /**
+   * Requests that the browser open skill management UI.
+   * @deprecated Use skills() instead.
+   */
+  showManageSkillsUi?(): void;
+
+  /**
+   * Requests that the browser open skill browsing UI.
+   * @deprecated Use skills() instead.
+   */
+  showBrowseSkillsUi?(): void;
+
+  /**
+   * Logs metrics for UI interactions and state transitions specific to the
+   * Skills feature in the web client.
+   * @deprecated Use skills() instead.
+   */
+  recordSkillsWebClientEvent?(event: SkillsWebClientEvent): void;
+
+  /**
+   * Gets a skill by id. The web client should use this method to get the
+   * full skill details including the prompt for display or run in the UI.
+   * The promise will fail if the skill is not found.
+   * @deprecated Use skills() instead.
+   */
+  getSkill?(id: string): Promise<Skill>;
+
+  /**
+   * Returns an observable list of skills, which include both 1P and
+   * user-created skills. Chrome will update the list when a skill is
+   * mutated. Chrome Sync can update multiple skills at once. The web client
+   * should use this method to display the full list of skill previews in the
+   * "/" menu.
+   * @deprecated Use skills() instead.
+   */
+  getSkillPreviews?(): ObservableValue<SkillPreview[]>;
+
+  /**
+   * Returns an observable skill to invoke. This happens when user chooses
+   * a skill to run in the chrome://skills page. The web client should
+   * automatically run the skill when it is received.
+   * @deprecated Use skills() instead.
+   */
+  getSkillToInvoke?(): ObservableValue<Skill>;
+
+  /**
+   * Returns the list of capabilities of the glic host. The returned set of
+   * capabilities will not change during the lifetime of the web client.
+   */
+  getHostCapabilities?(): Set<HostCapability>;
+
+  /**
+   * Returns an observable that emits when PageMetadata for the given tab
+   * changes. Only meta tags which are direct children of the head element and
+   * match one of the names provided in the names parameter will be
+   * monitored.
+   *
+   * If the tabId is invalid, the observable will complete immediately and not
+   * emit, even if the tabId becomes valid later.
+   *
+   * @throws {Error} if the names parameter is empty.
+   *
+   * Only one observable per tabId is supported. If a second observable is
+   * requested for the same tabId, the first observable will be returned, and
+   * therefore the names parameter is ignored in this case.
+   *
+   * When the tab is destroyed, the observable will complete.
+   */
+  getPageMetadata?
+      (tabId: string, names: string[]): ObservableValue<PageMetadata>;
+
+  /**
+   * Returns an observable that emits when the browser wants the web client to
+   * show a credential selection dialog.
+   *
+   * NOTE:
+   * - The browser will only request one dialog at a time. We might have to
+   * support concurrent PerformActions() in the future. The plan is to
+   * sequence the requests.
+   * - Currently the browser won't cancel the request. The task that issues the
+   * request will yield and wait for the response, or fail the task when it
+   * times out. The web client must also observe `getActorTaskState()` to clean
+   * up the UI elements when the task is no longer active.
+   */
+  selectCredentialDialogRequestHandler?
+      (): Observable<SelectCredentialDialogRequest>;
+
+  /**
+   * Returns an observable that emits when the browser wants the web client to
+   * show a user confirmation dialog.
+   *
+   * NOTE:
+   * - The browser will only request one dialog at a time. We might have to
+   * support concurrent PerformActions() in the future. The plan is to
+   * sequence the requests.
+   * - Currently the browser won't cancel the request. The task that issues the
+   * request will yield and wait for the response, or fail the task when it
+   * times out. The web client must also observe `getActorTaskState()` to clean
+   * up the UI elements when the task is no longer active.
+   */
+  selectUserConfirmationDialogRequestHandler?
+      (): Observable<UserConfirmationDialogRequest>;
+
+  /**
+   * Returns an observable that emits when the browser wants the web client to
+   * confirm a navigation to a novel origin with the model.
+   *
+   * NOTE:
+   * - The browser will only make one request at a time. We might have to
+   * support concurrent PerformActions() in the future. The plan is to
+   * sequence the requests.
+   * - Currently the browser won't cancel the request. The task that issues the
+   * request will yield and wait for the response, or fail the task when it
+   * times out. The web client must also observe `getActorTaskState()` to clean
+   * up the UI elements when the task is no longer active.
+   */
+  selectNavigationConfirmationRequestHandler?
+      (): Observable<NavigationConfirmationRequest>;
+
+  /**
+   * Returns an observable that emits when the browser wants the web client to
+   * show an autofill suggestion selection dialog. The web client should
+   * subscribe when actuating.
+   *
+   * NOTE:
+   * - The browser will only request one dialog at a time. We might have to
+   * support concurrent PerformActions() in the future. The plan is to
+   * sequence the requests.
+   * - Currently the browser won't cancel the request. The task that issues the
+   * request will yield and wait for the response, or fail the task when it
+   * times out. The web client must also observe `getActorTaskState()` to clean
+   * up the UI elements when the task is no longer active.
+   */
+  selectAutofillSuggestionsDialogRequestHandler?
+      (): Observable<SelectAutofillSuggestionsDialogRequest>;
+
+  /**
+   * Returns an observable that emits when the browser wants the web client to
+   * show a Gmail OTP opt-in dialog.
+   */
+  selectGmailOtpOptInRequestHandler?(): Observable<GmailOtpOptInRequest>;
+
+  /**
+   * Returns an observable that emits when the browser wants the web client to
+   * show a Gmail OTP confirmation dialog.
+   */
+  selectGmailOtpConfirmationRequestHandler?
+      (): Observable<GmailOtpConfirmationRequest>;
+
+  /**
+   * Switches to a use a different instance that shows the conversation
+   * represented by the provided id. If `info` is not provided, a new instance
+   * will be created with an empty conversation. When a new conversation is
+   * created, the web client is expected to call `registerConversation` after
+   * the first turn.
+   *
+   * If there are no other surfaces bound to the existing conversation, that
+   * web client will be destroyed.
+   *
+   * The returned promise will resolve when the conversation switch is complete
+   * on the browser side. The promise will be rejected if the switch fails.
+   * The only possible error reason is `UNKNOWN`.
+   */
+  switchConversation?(info?: ConversationInfo): Promise<void>;
+
+  /**
+   * Registers a conversation in the web client.
+   *
+   * The returned promise will resolve when the conversation is successfully
+   * registered with the browser. The promise will be rejected if registration
+   * fails. Possible error reasons are:
+   *  - `INSTANCE_ALREADY_HAS_CONVERSATION_ID`: The instance already has a
+   *    conversation ID.
+   *  - `UNKNOWN`: An unknown error occurred.
+   */
+  registerConversation?(info: ConversationInfo): Promise<void>;
+
+  /**
+   * Returns an observable that emits when additional context is available.
+   */
+  getAdditionalContext?(): Observable<AdditionalContext>;
+
+  /**
+   * Returns the host's capability to act on web pages. This reflects enterprise
+   * policy for whether actuation is allowed.
+   */
+  getActOnWebCapability?(): ObservableValue<boolean>;
+
+  /**
+   * Returns the host's capability to upload files. This reflects enterprise
+   * policy for whether file upload is allowed.
+   */
+  getFileUploadAllowedCapability?(): ObservableValue<FileUploadPolicyState>;
+
+  /**
+   * Called when the user has completed the onboarding flow.
+   */
+  setOnboardingCompleted?(): void;
+
+  /**
+   * Returns an observable that emits whether the user has completed the
+   * onboarding flow. The observable will be updated when the value changes to
+   * allow coordination between multiple Glic instances.
+   */
+  isOnboardingCompleted?(): ObservableValue<boolean>;
+
+  /**
+   * Returns the set of tools available from Chrome for this session.
+   * Only available when `HostCapability.CHROME_TOOLS` is supported by the host.
+   */
+  tools?(): GlicToolsHost;
+
+  /**
+   * Returns an observable that emits when a user interacts with the actor task
+   * list bubble and clicks on a task row (the observable emits the
+   * corresponding task id).
+   */
+  actorTaskListRowClicked?(): Observable<number>;
+
+  /**
+   * Called when the microphone status changes in the web client.
+   */
+  onMicrophoneStatusChange?(status: MicrophoneStatus): void;
+
+  /**
+   * Informs Chrome of whether an error dialog is showing. Used for metrics,
+   * and may cause Chrome to eventually reload the page if the GiC panel is
+   * backgrounded.
+   *
+   * @param shownDialogType The type of error dialog that is showing. If
+   *   `undefined`, no error dialog is showing.
+   */
+  setErrorDialogState?(shownDialogType?: ClientErrorDialogType): void;
+
+  /**
+   * Reports that the web client encountered a transient error. Transient errors
+   * are errors may be presented to the user, but may not prevent further use of
+   * GiC. Chrome may use this information to influence whether sign in cookies
+   * are synced later.
+   *
+   * @param abslStatus A absl::StatusCode value. See
+   *     https://abseil.io/docs/cpp/guides/status-codes.
+   */
+  reportClientTransientError?(abslStatus: number): void;
+
+  /**
+   * Notifies the host of a counter-abuse verdict received from the server.
+   */
+  processCounterAbuseVerdict?
+      (tabId: string, verdict: CounterAbuseVerdict): void;
+
+  /**
+   * Returns an object providing synchronous persistent key-value storage for
+   * the web client, backed by Chrome preferences.
+   */
+  getClientStorage?(): GlicClientStorage;
+}
+
+/**
+ * Provides synchronous key-value storage backed by Chrome preferences,
+ * with an API equivalent to the standard Web Storage `Storage` interface.
+ */
+export declare interface GlicClientStorage {
+  /** Returns the number of key/value pairs currently present in storage. */
+  readonly length: number;
+  /**
+   * Returns the name of the nth key in storage, or null if `index` is
+   * less than 0 or greater than or equal to `length`.
+   */
+  key(index: number): string|null;
+  /**
+   * Returns the current value associated with the given `key`, or null if the
+   * given `key` does not exist.
+   */
+  getItem(key: string): string|null;
+  /**
+   * Sets the value of the pair identified by `key` to `value`, creating a new
+   * key/value pair if none existed for `key` previously.
+   */
+  setItem(key: string, value: string): void;
+  /**
+   * Removes the key/value pair with the given `key`, if a key/value pair with
+   * the given `key` exists.
+   */
+  removeItem(key: string): void;
+  /** Removes all key/value pairs, if there are any. */
+  clear(): void;
+}
+
+/** Information about a conversation. */
+
+/** Fields of interest from the system settings page. */
+export type OsPermissionType = 'media'|'geolocation';
+
+/** Holds optional parameters for `GlicBrowserHost#resizeWindow`. */
+export declare interface ResizeWindowOptions {
+  /**
+   * If provided, `durationMs` will be used as the total duration of the resize
+   * animation, in milliseconds. If not provided, the duration defaults to 0
+   * (instant resizing). The promise will fail in case `durationMs` is not
+   * finite.
+   */
+  durationMs?: number;
+}
+
+/**
+ * Provides measurement-related functionality to the Glic web client.
+ *
+ * The typical sequence of events should be either:
+ *  (onUserInputSubmitted -> (onResponseStarted ->
+ *                            onResponseStopped)*
+ *  )*
+ * or
+ *  onUserInputSubmitted -> onResponseStopped -> * (repeat)
+ *
+ * This is the core flow for metrics and the web client should do its best to
+ * provide accurate and timely callbacks.
+ *
+ * The concepts of session and rating are less well defined. There are
+ * intentionally no constraints on when or how often they are called.
+ */
+
+/**
+ * Specifies whether a tool execution blocks the conversation or runs
+ * asynchronously.
+ */
+export enum ChromeToolBlockingBehavior {
+  UNSPECIFIED = 0,
+  BLOCKING = 1,
+  NON_BLOCKING = 2,
+}
+
+/**
+ * Reason for failure when executing a host tool.
+ */
+export enum ExecuteToolErrorReason {
+  UNKNOWN = 0,
+  TOOL_NOT_FOUND = 1,
+  INVALID_ARGUMENTS = 2,
+  EXECUTION_FAILED = 3,
+}
+
+/**
+ * Specifies whether the tool result should be announced verbally over TTS or
+ * handled silently.
+ */
+export enum ChromeToolResponseScheduling {
+  /** Default scheduling behavior. */
+  UNSPECIFIED = 0,
+  /**
+   * The tool result was handled (e.g. navigation performed) and does not need
+   * verbal speech output or interruption.
+   */
+  SILENT = 1,
+  /**
+   * The tool result requires immediate verbal notification and should interrupt
+   * current speech synthesis output.
+   */
+  INTERRUPT = 2,
+}
+
+/**
+ * Represents a tool provided by Chrome for use in an LLM session.
+ */
+export declare interface ChromeTool {
+  /** The unique name of the tool. */
+  name: string;
+  /** A description of what the tool does and when to use it. */
+  description: string;
+  /** A string containing the JSON schema for the tool's parameters. */
+  jsonSchemaParameters: string;
+  /**
+   * Specifies whether the tool execution blocks the conversation or runs
+   * asynchronously.
+   */
+  blockingBehavior: ChromeToolBlockingBehavior;
+}
+
+/**
+ * Result of executing a host tool.
+ */
+export declare interface ChromeToolExecutionResult {
+  /**
+   * The JSON string representation of the tool execution output. Defined only
+   * when execution is successful.
+   */
+  result?: string;
+  /** Response scheduling preference (e.g. silent or interrupt). */
+  scheduling?: ChromeToolResponseScheduling;
+  /**
+   * Reason for failure if execution failed. Undefined when execution succeeded.
+   */
+  errorReason?: ExecuteToolErrorReason;
+}
+
+/**
+ * Interface providing access to Chrome tools.
+ */
+export declare interface GlicToolsHost {
+  /**
+   * Returns the set of tools available from Chrome for this session.
+   *
+   * @return A Promise resolving to the list of available Chrome tools, or
+   *     undefined if tools are not supported.
+   */
+  getChromeTools?(): Promise<ChromeTool[]|undefined>;
+
+  /**
+   * Asks the host to execute a previously declared tool by name.
+   *
+   * @param toolName The name of the tool to invoke (matching a declared
+   *     ChromeTool).
+   * @param jsonArguments A JSON string containing the arguments for the tool.
+   * @return A Promise resolving to a ChromeToolExecutionResult containing the
+   *     result and scheduling.
+   */
+  executeTool?(toolName: string, jsonArguments: string):
+      Promise<ChromeToolExecutionResult>;
+}
+
+/**
+ * Methods for managing and invoking skills.
+ */
+export declare interface GlicBrowserSkills {
   /**
    * Creates a skill. The request contains a prompt or an empty string.
    * A Chrome modal will be shown to allow the user to edit and save a skill.
@@ -1075,239 +1621,14 @@ export declare interface GlicBrowserHost {
    * "/" menu.
    */
   getSkillPreviews?(): ObservableValue<SkillPreview[]>;
-
-  /**
-   * Returns an observable skill to invoke. This happens when user chooses
-   * a skill to run in the chrome://skills page. The web client should
-   * automatically run the skill when it is received.
-   */
-  getSkillToInvoke?(): ObservableValue<Skill>;
-
-  /**
-   * Returns the list of capabilities of the glic host. The returned set of
-   * capabilities will not change during the lifetime of the web client.
-   */
-  getHostCapabilities?(): Set<HostCapability>;
-
-  /**
-   * Returns an observable that emits when PageMetadata for the given tab
-   * changes. Only meta tags which are direct children of the head element and
-   * match one of the names provided in the names parameter will be
-   * monitored.
-   *
-   * If the tabId is invalid, the observable will complete immediately and not
-   * emit, even if the tabId becomes valid later.
-   *
-   * @throws {Error} if the names parameter is empty.
-   *
-   * Only one observable per tabId is supported. If a second observable is
-   * requested for the same tabId, the first observable will be returned, and
-   * therefore the names parameter is ignored in this case.
-   *
-   * When the tab is destroyed, the observable will complete.
-   */
-  getPageMetadata?
-    (tabId: string, names: string[]): ObservableValue<PageMetadata>;
-
-  /**
-   * Returns an observable that emits when the browser wants the web client to
-   * show a credential selection dialog.
-   *
-   * NOTE:
-   * - The browser will only request one dialog at a time. We might have to
-   * support concurrent PerformActions() in the future. The plan is to
-   * sequence the requests.
-   * - Currently the browser won't cancel the request. The task that issues the
-   * request will yield and wait for the response, or fail the task when it
-   * times out. The web client must also observe `getActorTaskState()` to clean
-   * up the UI elements when the task is no longer active.
-   */
-  selectCredentialDialogRequestHandler?
-    (): Observable<SelectCredentialDialogRequest>;
-
-  /**
-   * Returns an observable that emits when the browser wants the web client to
-   * show a user confirmation dialog.
-   *
-   * NOTE:
-   * - The browser will only request one dialog at a time. We might have to
-   * support concurrent PerformActions() in the future. The plan is to
-   * sequence the requests.
-   * - Currently the browser won't cancel the request. The task that issues the
-   * request will yield and wait for the response, or fail the task when it
-   * times out. The web client must also observe `getActorTaskState()` to clean
-   * up the UI elements when the task is no longer active.
-   */
-  selectUserConfirmationDialogRequestHandler?
-    (): Observable<UserConfirmationDialogRequest>;
-
-  /**
-   * Returns an observable that emits when the browser wants the web client to
-   * confirm a navigation to a novel origin with the model.
-   *
-   * NOTE:
-   * - The browser will only make one request at a time. We might have to
-   * support concurrent PerformActions() in the future. The plan is to
-   * sequence the requests.
-   * - Currently the browser won't cancel the request. The task that issues the
-   * request will yield and wait for the response, or fail the task when it
-   * times out. The web client must also observe `getActorTaskState()` to clean
-   * up the UI elements when the task is no longer active.
-   */
-  selectNavigationConfirmationRequestHandler?
-    (): Observable<NavigationConfirmationRequest>;
-
-  /**
-   * Returns an observable that emits when the browser wants the web client to
-   * show an autofill suggestion selection dialog. The web client should
-   * subscribe when actuating.
-   *
-   * NOTE:
-   * - The browser will only request one dialog at a time. We might have to
-   * support concurrent PerformActions() in the future. The plan is to
-   * sequence the requests.
-   * - Currently the browser won't cancel the request. The task that issues the
-   * request will yield and wait for the response, or fail the task when it
-   * times out. The web client must also observe `getActorTaskState()` to clean
-   * up the UI elements when the task is no longer active.
-   */
-  selectAutofillSuggestionsDialogRequestHandler?
-    (): Observable<SelectAutofillSuggestionsDialogRequest>;
-
-  /**
-   * Returns an observable that emits when the browser wants the web client to
-   * show a Gmail OTP opt-in dialog.
-   */
-  selectGmailOtpOptInRequestHandler?(): Observable<GmailOtpOptInRequest>;
-
-  /**
-   * Switches to a use a different instance that shows the conversation
-   * represented by the provided id. If `info` is not provided, a new instance
-   * will be created with an empty conversation. When a new conversation is
-   * created, the web client is expected to call `registerConversation` after
-   * the first turn.
-   *
-   * If there are no other surfaces bound to the existing conversation, that
-   * web client will be destroyed.
-   *
-   * The returned promise will resolve when the conversation switch is complete
-   * on the browser side. The promise will be rejected if the switch fails.
-   * The only possible error reason is `UNKNOWN`.
-   */
-  switchConversation?(info?: ConversationInfo): Promise<void>;
-
-  /**
-   * Registers a conversation in the web client.
-   *
-   * The returned promise will resolve when the conversation is successfully
-   * registered with the browser. The promise will be rejected if registration
-   * fails. Possible error reasons are:
-   *  - `INSTANCE_ALREADY_HAS_CONVERSATION_ID`: The instance already has a
-   *    conversation ID.
-   *  - `UNKNOWN`: An unknown error occurred.
-   */
-  registerConversation?(info: ConversationInfo): Promise<void>;
-
-  /**
-   * Returns an observable that emits when additional context is available.
-   */
-  getAdditionalContext?(): Observable<AdditionalContext>;
-
-  /**
-   * Returns the host's capability to act on web pages. This reflects enterprise
-   * policy for whether actuation is allowed.
-   */
-  getActOnWebCapability?(): ObservableValue<boolean>;
-
-  /**
-   * Called when the user has completed the onboarding flow.
-   */
-  setOnboardingCompleted?(): void;
-
-  /**
-   * Returns an observable that emits whether the user has completed the
-   * onboarding flow. The observable will be updated when the value changes to
-   * allow coordination between multiple Glic instances.
-   */
-  isOnboardingCompleted?(): ObservableValue<boolean>;
-
-  /**
-   * Returns an observable that emits when a user interacts with the actor task
-   * list bubble and clicks on a task row (the observable emits the
-   * corresponding task id).
-   */
-  actorTaskListRowClicked?(): Observable<number>;
-
-  /**
-   * Called when the microphone status changes in the web client.
-   */
-  onMicrophoneStatusChange?(status: MicrophoneStatus): void;
-
-  /**
-   * Informs Chrome of whether an error dialog is showing. Used for metrics,
-   * and may cause Chrome to eventually reload the page if the GiC panel is
-   * backgrounded.
-   *
-   * @param shownDialogType The type of error dialog that is showing. If
-   *   `undefined`, no error dialog is showing.
-   */
-  setErrorDialogState?(shownDialogType?: ClientErrorDialogType): void;
-
-  /**
-   * Reports that the web client encountered a transient error. Transient errors
-   * are errors may be presented to the user, but may not prevent further use of
-   * GiC. Chrome may use this information to influence whether sign in cookies
-   * are synced later.
-   *
-   * @param abslStatus A absl::StatusCode value. See
-   *     https://abseil.io/docs/cpp/guides/status-codes.
-   */
-  reportClientTransientError?(abslStatus: number): void;
-
-  /**
-   * Notifies the host of a counter-abuse verdict received from the server.
-   */
-  processCounterAbuseVerdict?(tabId: string, verdict: CounterAbuseVerdict): void;
 }
 
-/** Information about a conversation. */
-
-/** Fields of interest from the system settings page. */
-export type OsPermissionType = 'media' | 'geolocation';
-
-/** Holds optional parameters for `GlicBrowserHost#resizeWindow`. */
-export declare interface ResizeWindowOptions {
-  /**
-   * If provided, `durationMs` will be used as the total duration of the resize
-   * animation, in milliseconds. If not provided, the duration defaults to 0
-   * (instant resizing). The promise will fail in case `durationMs` is not
-   * finite.
-   */
-  durationMs?: number;
-}
-
-/**
- * Provides measurement-related functionality to the Glic web client.
- *
- * The typical sequence of events should be either:
- *  (onUserInputSubmitted -> (onResponseStarted ->
- *                            onResponseStopped)*
- *  )*
- * or
- *  onUserInputSubmitted -> onResponseStopped -> * (repeat)
- *
- * This is the core flow for metrics and the web client should do its best to
- * provide accurate and timely callbacks.
- *
- * The concepts of session and rating are less well defined. There are
- * intentionally no constraints on when or how often they are called.
- */
 export declare interface GlicBrowserHostMetrics {
   /** Called when the opt-in CTA is shown. */
   onOptinImpression?(): void;
 
   /** Called when the user has submitted input via the web client. */
-  onUserInputSubmitted?(mode: WebClientMode): void;
+  onUserInputSubmitted?(mode: WebClientMode, promptType?: PromptType): void;
 
   /**
    * Called when the web client sends a browser actuation result over the
@@ -1396,10 +1717,7 @@ export declare interface Point {
 
 /** An encoded journal. */
 export declare interface Journal {
-  /**
-   * Encoded journal data. ArrayBuffer is transferable, so it should be copied
-   * more efficiently over postMessage.
-   */
+  /** Encoded journal data. */
   data: ArrayBuffer;
 }
 
@@ -1419,8 +1737,8 @@ export declare interface GlicBrowserHostJournal {
    * endAsyncEvent must be called to terminate this event.
    */
   beginAsyncEvent(
-    asynEventId: number, taskId: number, event: string,
-    details: string): void;
+      asynEventId: number, taskId: number, event: string,
+      details: string): void;
 
   /**
    * Clears the contents of a started journal. No-op if a journal was not
@@ -1475,7 +1793,7 @@ export declare interface OpenPanelInfo {
    * open event. See documentation on `resizeWindow` for how the provided
    * arguments will be used.
    */
-  resizeParams?: { width: number, height: number, options?: ResizeWindowOptions };
+  resizeParams?: {width: number, height: number, options?: ResizeWindowOptions};
 
   /**
    * Whether the panel should start out resizable by the user. The panel is
@@ -1540,11 +1858,10 @@ export declare interface FocusedTabDataHasNoFocus {
  * Note: This will be updated in the future when we have a solution worked out
  * for annotating the captured screenshots.
  */
-export declare interface ImageOriginAnnotations { }
+export declare interface ImageOriginAnnotations {}
 
 /** Maps the ErrorWithReason.reasonType to the type of reason. */
 export declare interface ErrorReasonTypes {
-  captureScreenshot: CaptureScreenshotErrorReason;
   captureRegion: CaptureRegionErrorReason;
   scrollTo: ScrollToErrorReason;
   webClientInitialize: WebClientInitializeErrorReason;
@@ -1569,7 +1886,7 @@ export type WebClientInitializeError = ErrorWithReason<'webClientInitialize'>;
 
 /** Error implementation with a typed generic reason attached. */
 export declare interface ErrorWithReason<
-  T extends keyof ErrorReasonTypes> extends Error {
+    T extends keyof ErrorReasonTypes> extends Error {
   /** A tag that identifies the reason type. */
   reasonType: T;
   /** The reason for the error. */
@@ -1609,9 +1926,6 @@ export declare interface ActInFocusedTabParams {
   // Tab context options to gather context after acting.
   tabContextOptions: TabContextOptions;
 }
-
-/** Error type used for screenshot capture errors. */
-export type CaptureScreenshotError = ErrorWithReason<'captureScreenshot'>;
 
 export type CaptureRegionError = ErrorWithReason<'captureRegion'>;
 
@@ -1681,7 +1995,7 @@ export declare interface ObservableValue<T> extends Observable<T> {
    * Provides synchronous access to the current value. Returns undefined if the
    * initial value has not yet been populated.
    */
-  getCurrentValue(): T | undefined;
+  getCurrentValue(): T|undefined;
 }
 
 /** Allows control of a subscription to an Observable. */
@@ -1740,7 +2054,7 @@ export declare interface UserConfirmationDialogRequest {
 
   // The WebClient must call this function to respond back to the browser when
   // the dialog is closed.
-  onDialogClosed(result: { response: UserConfirmationDialogResponse }): void;
+  onDialogClosed(result: {response: UserConfirmationDialogResponse}): void;
 }
 
 export declare interface UserConfirmationDialogResponse {
@@ -1756,8 +2070,8 @@ export declare interface NavigationConfirmationRequest {
 
   // The WebClient must call this function to respond back to the browser when
   // the confirmation request has a decision.
-  onConfirmationDecision(result: { response: NavigationConfirmationResponse }):
-    void;
+  onConfirmationDecision(result: {response: NavigationConfirmationResponse}):
+      void;
 }
 
 export declare interface NavigationConfirmationResponse {
@@ -1765,20 +2079,7 @@ export declare interface NavigationConfirmationResponse {
   permissionGranted?: boolean;
 }
 
-export declare interface GmailOtpOptInRequest {
-  // ID of the actor's task.
-  taskId: number;
 
-  // The WebClient must call this function to respond back to the browser when
-  // the dialog is closed.
-  onDialogClosed(response: GmailOtpOptInResponse): void;
-}
-
-export declare interface GmailOtpOptInResponse {
-  // True if the user clicked the opt-in button, false if they
-  // cancelled/closed it.
-  permissionGranted: boolean;
-}
 
 /**
  * The response from the web client containing the chosen suggestions for each
@@ -1839,6 +2140,18 @@ declare module './glic_api_generated.js' {
     // The WebClient must call this function to respond back to the browser when
     // the dialog is closed.
     onDialogClosed(result: {response: SelectCredentialDialogResponse}): void;
+  }
+
+  export interface GmailOtpOptInRequest {
+    // The WebClient must call this function to respond back to the browser when
+    // the dialog is closed.
+    onDialogClosed(response: GmailOtpOptInResponse): void;
+  }
+
+  export interface GmailOtpConfirmationRequest {
+    // The WebClient must call this function to respond back to the browser when
+    // the dialog is closed.
+    onDialogClosed(response: GmailOtpConfirmationResponse): void;
   }
 
   export interface TabData {

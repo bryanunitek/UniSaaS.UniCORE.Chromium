@@ -41,7 +41,7 @@ class NavigationHandle;
 namespace web_app {
 
 class AppLock;
-class FinalizeInstallJob;
+class FinalizeInstallOrUpdateJob;
 class WebAppDataRetriever;
 
 using ScreenshotInfo = std::tuple<SkBitmap, std::optional<std::u16string>>;
@@ -137,9 +137,7 @@ class FetchManifestAndInstallCommand
   void OnInstallFinalizedMaybeReparentTab(const webapps::AppId& app_id,
                                           webapps::InstallResultCode code);
 
-  void OnInstallCompleted(const webapps::AppId& app_id,
-                          webapps::InstallResultCode code);
-  void MeasureUserInstalledAppHistogram(webapps::InstallResultCode code);
+  void MeasureUserInstalledAppHistograms(webapps::InstallResultCode code);
 
   // Start downloading screenshots if the manifest has them, so that the
   // detailed install dialog can show them.
@@ -168,6 +166,7 @@ class FetchManifestAndInstallCommand
   std::unique_ptr<ManifestToWebAppInstallInfoJob> manifest_to_install_info_job_;
 
   bool did_navigation_occur_before_start_ = false;
+  bool dialog_shown_ = false;
 
   std::unique_ptr<WebAppInstallInfo> web_app_info_;
   blink::mojom::ManifestPtr opt_manifest_;
@@ -182,7 +181,7 @@ class FetchManifestAndInstallCommand
       base::OnceCallback<void(SkBitmap, std::optional<std::u16string>)>>
       pending_screenshot_callbacks_;
 
-  std::unique_ptr<FinalizeInstallJob> install_job_;
+  std::unique_ptr<FinalizeInstallOrUpdateJob> install_job_;
 
   base::WeakPtrFactory<FetchManifestAndInstallCommand> weak_ptr_factory_{this};
 };

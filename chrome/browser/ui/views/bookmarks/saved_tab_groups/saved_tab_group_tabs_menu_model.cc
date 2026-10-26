@@ -10,44 +10,47 @@
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/favicon/favicon_utils.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
-#include "chrome/browser/ui/browser_command_controller.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_action_context_desktop.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_group_theme.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_tabs_menu_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/controls/menu/menu_model_adapter.h"
 
 namespace tab_groups {
 
 static constexpr int kUIUpdateIconSize = 16;
 
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel, kCloseGroup);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel, kDeleteGroupMenuItem);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel, kLeaveGroupMenuItem);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel,
-                                      kConvertToBookmarkMenuItem);
-DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel,
                                       kMoveGroupToNewWindowMenuItem);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel, kOpenGroup);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel,
+                                      kToggleGroupFocusStateMenuItem);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel,
                                       kToggleGroupPinStateMenuItem);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel, kTabsTitleItem);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel, kTab);
 
-STGTabsMenuModel::STGTabsMenuModel(Browser* browser,
+STGTabsMenuModel::STGTabsMenuModel(BrowserWindowInterface* browser,
                                    TabGroupMenuContext context)
     : ui::SimpleMenuModel(this), browser_(browser), context_(context) {}
 
 STGTabsMenuModel::STGTabsMenuModel(ui::SimpleMenuModel::Delegate* delegate,
-                                   Browser* browser,
+                                   BrowserWindowInterface* browser,
                                    TabGroupMenuContext context)
     : ui::SimpleMenuModel(delegate), browser_(browser), context_(context) {}
 
@@ -58,26 +61,37 @@ void STGTabsMenuModel::Build(
     base::RepeatingCallback<int()> get_next_command_id) {
   command_id_to_action_.clear();
   should_enable_move_menu_item_ = true;
-  should_enable_open_menu_item_ = true;
   sync_id_ = saved_group.saved_guid();
-  // Add item: open in browser.
-  if (saved_group.local_group_id().has_value()) {
-    should_enable_open_menu_item_ = false;
-  }
 
+  const bool is_group_open = saved_group.local_group_id().has_value();
   int latest_command_id = get_next_command_id.Run();
-  AddItemWithStringIdAndIcon(
-      latest_command_id, IDS_OPEN_GROUP_IN_BROWSER_MENU,
-      ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
-                                         ? kOpenInBrowserIcon
-                                         : kOpenInBrowserOldIcon,
-                                     ui::kColorMenuIcon, kUIUpdateIconSize));
-  SetElementIdentifierAt(GetIndexOfCommandId(latest_command_id).value(),
-                         kOpenGroup);
-  command_id_to_action_.emplace(
-      latest_command_id,
-      TabGroupMenuAction{TabGroupMenuAction::Type::OPEN_IN_BROWSER,
-                         sync_id_.value()});
+  if (is_group_open) {
+    AddItemWithStringIdAndIcon(
+        latest_command_id, IDS_TAB_GROUP_HEADER_CXMENU_CLOSE_GROUP,
+        ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                           ? kTabCloseIcon
+                                           : kCloseGroupRefreshOldIcon,
+                                       ui::kColorMenuIcon, kUIUpdateIconSize));
+    SetElementIdentifierAt(GetIndexOfCommandId(latest_command_id).value(),
+                           kCloseGroup);
+    command_id_to_action_.emplace(
+        latest_command_id,
+        TabGroupMenuAction{TabGroupMenuAction::Type::CLOSE_GROUP,
+                           sync_id_.value()});
+  } else {
+    AddItemWithStringIdAndIcon(
+        latest_command_id, IDS_OPEN_GROUP_IN_BROWSER_MENU,
+        ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                           ? kOpenInBrowserIcon
+                                           : kOpenInBrowserOldIcon,
+                                       ui::kColorMenuIcon, kUIUpdateIconSize));
+    SetElementIdentifierAt(GetIndexOfCommandId(latest_command_id).value(),
+                           kOpenGroup);
+    command_id_to_action_.emplace(
+        latest_command_id,
+        TabGroupMenuAction{TabGroupMenuAction::Type::OPEN_IN_BROWSER,
+                           sync_id_.value()});
+  }
 
   // Add item: open or move to new window.
   const std::u16string move_or_open_group_text =
@@ -100,8 +114,35 @@ void STGTabsMenuModel::Build(
       TabGroupMenuAction{TabGroupMenuAction::Type::OPEN_OR_MOVE_TO_NEW_WINDOW,
                          sync_id_.value()});
 
+  // Add item: focus or unfocus group.
+  if (base::FeatureList::IsEnabled(features::kTabGroupsFocusing)) {
+    bool is_group_focused = false;
+    if (saved_group.local_group_id().has_value()) {
+      if (const BrowserWindowInterface* browser_with_group =
+              SavedTabGroupUtils::GetBrowserWithTabGroupId(
+                  saved_group.local_group_id().value())) {
+        is_group_focused =
+            browser_with_group->GetTabStripModel()->GetFocusedGroup() ==
+            saved_group.local_group_id();
+      }
+    }
+    latest_command_id = get_next_command_id.Run();
+    AddItemWithStringIdAndIcon(
+        latest_command_id,
+        is_group_focused ? IDS_TAB_GROUP_HEADER_CXMENU_UNFOCUS_GROUP
+                         : IDS_TAB_GROUP_HEADER_CXMENU_FOCUS_GROUP,
+        ui::ImageModel::FromVectorIcon(kFilterTiltShiftIcon, ui::kColorMenuIcon,
+                                       kUIUpdateIconSize));
+    SetElementIdentifierAt(GetIndexOfCommandId(latest_command_id).value(),
+                           kToggleGroupFocusStateMenuItem);
+    command_id_to_action_.emplace(
+        latest_command_id,
+        TabGroupMenuAction{TabGroupMenuAction::Type::FOCUS_OR_UNFOCUS_GROUP,
+                           sync_id_.value()});
+  }
+
   // Add item: pin or unpin.
-  if (!tab_groups::IsProjectsPanelFeatureEnabled()) {
+  if (context_ != TabGroupMenuContext::ORGANIZER_PANEL) {
     latest_command_id = get_next_command_id.Run();
     bool group_pinned = saved_group.is_pinned();
     AddItemWithStringIdAndIcon(
@@ -129,8 +170,8 @@ void STGTabsMenuModel::Build(
     AddItemWithStringIdAndIcon(
         latest_command_id, IDS_TAB_GROUP_HEADER_CXMENU_DELETE_GROUP,
         ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
-                                           ? kTabCloseIcon
-                                           : kCloseGroupRefreshOldIcon,
+                                           ? kDeleteIcon
+                                           : kTrashCanRefreshOldIcon,
                                        ui::kColorMenuIcon, kUIUpdateIconSize));
     SetElementIdentifierAt(GetIndexOfCommandId(latest_command_id).value(),
                            kDeleteGroupMenuItem);
@@ -151,25 +192,6 @@ void STGTabsMenuModel::Build(
     command_id_to_action_.emplace(
         latest_command_id,
         TabGroupMenuAction{TabGroupMenuAction::Type::LEAVE_GROUP,
-                           sync_id_.value()});
-  }
-
-  if (!saved_group.is_shared_tab_group() &&
-      features::IsBookmarkTabGroupConversionEnabled()) {
-    latest_command_id = get_next_command_id.Run();
-    AddItemWithStringIdAndIcon(
-        latest_command_id,
-        IDS_TAB_GROUP_HEADER_CXMENU_CONVERT_GROUP_TO_BOOKMARK_FOLDER,
-        ui::ImageModel::FromVectorIcon(
-            features::IsRoundedIconsEnabled()
-                ? kHotelClassIcon
-                : kBookmarkAllTabsChromeRefreshOldIcon,
-            ui::kColorMenuIcon, kUIUpdateIconSize));
-    SetElementIdentifierAt(GetIndexOfCommandId(latest_command_id).value(),
-                           kConvertToBookmarkMenuItem);
-    command_id_to_action_.emplace(
-        latest_command_id,
-        TabGroupMenuAction{TabGroupMenuAction::Type::CONVERT_TO_BOOKMARK,
                            sync_id_.value()});
   }
 
@@ -215,12 +237,12 @@ void STGTabsMenuModel::Build(
   }
 
   if (saved_group.local_group_id().has_value()) {
-    const Browser* const browser_with_local_group_id =
+    const BrowserWindowInterface* const browser_with_local_group_id =
         SavedTabGroupUtils::GetBrowserWithTabGroupId(
             saved_group.local_group_id().value());
     if (browser_with_local_group_id) {
       const TabStripModel* const tab_strip_model =
-          browser_with_local_group_id->tab_strip_model();
+          browser_with_local_group_id->GetTabStripModel();
 
       // Show the menu item if there are tabs outside of the saved group.
       should_enable_move_menu_item_ =
@@ -243,9 +265,6 @@ bool STGTabsMenuModel::IsCommandIdEnabled(int command_id) const {
   CHECK(it != command_id_to_action_.end());
   if (it->second.type == TabGroupMenuAction::Type::OPEN_OR_MOVE_TO_NEW_WINDOW) {
     return should_enable_move_menu_item_;
-  }
-  if (it->second.type == TabGroupMenuAction::Type::OPEN_IN_BROWSER) {
-    return should_enable_open_menu_item_;
   }
   return true;
 }
@@ -271,7 +290,7 @@ void STGTabsMenuModel::OnFaviconDataAvailable(
   }
 
   const std::optional<size_t> index_in_menu = GetIndexOfCommandId(command_id);
-  DCHECK(index_in_menu.has_value());
+  CHECK(index_in_menu.has_value(), base::NotFatalUntil::M162);
   SetIcon(index_in_menu.value(), ui::ImageModel::FromImage(image_result.image));
 
   ui::MenuModelDelegate* delegate = menu_model_delegate();

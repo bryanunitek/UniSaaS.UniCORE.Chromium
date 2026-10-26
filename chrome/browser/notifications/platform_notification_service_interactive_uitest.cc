@@ -31,9 +31,9 @@
 #include "chrome/browser/notifications/platform_notification_service_factory.h"
 #include "chrome/browser/notifications/platform_notification_service_impl.h"
 #include "chrome/browser/permissions/permission_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -197,7 +197,7 @@ class PlatformNotificationServiceBrowserTest : public InProcessBrowserTest {
 
   GURL GetLastCommittedURL() const {
     return browser()
-        ->tab_strip_model()
+        ->GetTabStripModel()
         ->GetActiveWebContents()
         ->GetLastCommittedURL();
   }
@@ -212,7 +212,7 @@ class PlatformNotificationServiceBrowserTest : public InProcessBrowserTest {
   // will be returned, indicating whether the script was executed successfully.
   content::EvalJsResult RunScript(const std::string& script) const {
     return content::EvalJs(browser()
-                               ->tab_strip_model()
+                               ->GetTabStripModel()
                                ->GetActiveWebContents()
                                ->GetPrimaryMainFrame(),
                            script);
@@ -231,8 +231,8 @@ class PlatformNotificationServiceBrowserTest : public InProcessBrowserTest {
     return RunScript("RequestPermission();");
   }
 
-  content::WebContents* GetActiveWebContents(Browser* browser) {
-    return browser->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* GetActiveWebContents(BrowserWindowInterface* browser) {
+    return browser->GetTabStripModel()->GetActiveWebContents();
   }
 
   // Show a notification that sets `close_event_timeout` milliseconds in the
@@ -526,7 +526,7 @@ IN_PROC_BROWSER_TEST_F(PlatformNotificationServiceBrowserTest,
 
   // Expect 0.5 engagement for the navigation.
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   GURL origin = web_contents->GetLastCommittedURL();
   EXPECT_DOUBLE_EQ(0.5, GetEngagementScore(origin));
 
@@ -544,7 +544,7 @@ IN_PROC_BROWSER_TEST_F(PlatformNotificationServiceBrowserTest,
   notifications = WaitForDisplayedNotifications(true /* is_persistent */);
   ASSERT_EQ(1u, notifications.size());
 
-  web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   // We see some timeouts in dbg tests, so increase the wait timeout to the
   // test launcher's timeout.
   const base::test::ScopedRunLoopTimeout specific_timeout(
@@ -930,7 +930,7 @@ IN_PROC_BROWSER_TEST_F(
   // any event listeners attached (e.g. because the tab closed) creates a new
   // foreground tab.
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   NotificationDisplayServiceImpl* display_service =
       NotificationDisplayServiceImpl::GetForProfile(profile);
@@ -941,9 +941,9 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(handler);
 
   // There should be one open tab for the current |browser()|.
-  EXPECT_EQ(browser()->tab_strip_model()->count(), 1);
+  EXPECT_EQ(browser()->GetTabStripModel()->count(), 1);
   content::WebContents* original_web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   // Signal an activation for a notification that's never been shown.
   {
@@ -956,9 +956,9 @@ IN_PROC_BROWSER_TEST_F(
 
   // A second tab should've been created and have been brought to the foreground
   // for the notification's test origin.
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 2);
   content::WebContents* active_web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   EXPECT_NE(active_web_contents, original_web_contents);
   EXPECT_EQ(active_web_contents->GetVisibleURL(),
@@ -1003,7 +1003,8 @@ IN_PROC_BROWSER_TEST_F(PlatformNotificationServiceBrowserTest,
                        TestShouldDisplayMultiFullscreen) {
   ASSERT_NO_FATAL_FAILURE(GrantNotificationPermissionForTest());
 
-  Browser* other_browser = CreateBrowser(browser()->GetProfile());
+  BrowserWindowInterface* other_browser =
+      CreateBrowser(browser()->GetProfile());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(other_browser, GURL("about:blank")));
 
   EXPECT_EQ("ok", RunScript("DisplayPersistentNotification('display_normal')"));
@@ -1014,15 +1015,10 @@ IN_PROC_BROWSER_TEST_F(PlatformNotificationServiceBrowserTest,
   // Set the other browser fullscreen
   ui_test_utils::ToggleFullscreenModeAndWait(other_browser);
 
-  ASSERT_TRUE(browser()
-                  ->GetFeatures()
-                  .exclusive_access_manager()
-                  ->context()
-                  ->IsFullscreen());
-  ASSERT_TRUE(other_browser->GetFeatures()
-                  .exclusive_access_manager()
-                  ->context()
-                  ->IsFullscreen());
+  ASSERT_TRUE(
+      ExclusiveAccessManager::From(browser())->context()->IsFullscreen());
+  ASSERT_TRUE(
+      ExclusiveAccessManager::From(other_browser)->context()->IsFullscreen());
 
   ui_test_utils::BrowserActivationWaiter(other_browser).WaitForActivation();
   ASSERT_FALSE(browser()->GetWindow()->IsActive());
@@ -1223,7 +1219,7 @@ IN_PROC_BROWSER_TEST_F(PlatformNotificationServiceBrowserTest,
       KeepAliveOrigin::PENDING_NOTIFICATION_CLOSE_EVENT));
 
   // Close the browser before the first 'notificationclose' event completes.
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   CloseBrowserSynchronously(browser());
 
   // Close the second notification.
@@ -1328,11 +1324,11 @@ IN_PROC_BROWSER_TEST_F(PlatformNotificationServiceBrowserTest,
       KeepAliveOrigin::PENDING_NOTIFICATION_CLOSE_EVENT));
 
   // Close the browser before the 'notificationclose' event completes.
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   CloseBrowserSynchronously(browser());
 
   // Reopen the browser before the 'notificationclose' event completes.
-  Browser* second_browser = CreateBrowser(profile);
+  BrowserWindowInterface* second_browser = CreateBrowser(profile);
   EXPECT_TRUE(ui_test_utils::NavigateToURL(second_browser, TestPageUrl()));
 
   // Wait for the 'notificationclose' event to complete.

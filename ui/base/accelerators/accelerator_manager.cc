@@ -8,6 +8,7 @@
 #include <ostream>
 
 #include "base/check.h"
+#include "base/logging.h"
 
 namespace ui {
 
@@ -31,10 +32,16 @@ void AcceleratorManager::Unregister(const Accelerator& accelerator,
                                     AcceleratorTarget* target) {
   DCHECK(target);
   AcceleratorTargetInfo* target_info = accelerators_.Find(accelerator);
-  DCHECK(target_info) << "Unregistering non-existing accelerator";
+  if (!target_info) {
+    DLOG(WARNING) << "Unregistering non-existing accelerator";
+    return;
+  }
 
   const bool was_registered = target_info->Unregister(target);
-  DCHECK(was_registered) << "Unregistering accelerator for wrong target";
+  if (!was_registered) {
+    DLOG(WARNING) << "Unregistering accelerator for wrong target";
+    return;
+  }
 
   // If the last target for the accelerator is removed, then erase the
   // entry from the map.
@@ -60,6 +67,19 @@ void AcceleratorManager::UnregisterAll(AcceleratorTarget* target) {
     ++map_iter;
   }
 }
+
+#if DCHECK_IS_ON()
+size_t AcceleratorManager::GetAcceleratorCountForTarget(
+    AcceleratorTarget* target) const {
+  size_t count = 0;
+  for (const auto& [accelerator, target_info] : accelerators_) {
+    if (target_info.Contains(target)) {
+      ++count;
+    }
+  }
+  return count;
+}
+#endif
 
 bool AcceleratorManager::IsRegistered(const Accelerator& accelerator) const {
   const AcceleratorTargetInfo* target_info = accelerators_.Find(accelerator);

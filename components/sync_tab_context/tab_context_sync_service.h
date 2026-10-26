@@ -12,6 +12,7 @@
 #include "base/memory/weak_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/sync_tab_context/container_id.h"
+#include "components/sync_tab_context/upload_outcome.h"
 
 namespace syncer {
 class DataTypeControllerDelegate;
@@ -38,9 +39,13 @@ class TabContextSyncService : public KeyedService {
 
   // Inserts or updates an entry into a container identified via
   // `container_id`. `entry_id` acts as uniqueness key within the container.
-  virtual bool UploadPageContext(const ContainerId& container_id,
-                                 const std::string& entry_id,
-                                 std::string page_context) = 0;
+  // Invokes `callback` with `UploadOutcome::kSucceeded` once the item is
+  // committed to the server, or `UploadOutcome::kFailed` on failure.
+  virtual void UploadPageContext(
+      const ContainerId& container_id,
+      const std::string& entry_id,
+      std::string page_context,
+      base::OnceCallback<void(UploadOutcome)> callback) = 0;
 
   // Asynchronously returns an access token that can be used to access the
   // contents of a container. The precise means the token may be consumed is
@@ -49,9 +54,15 @@ class TabContextSyncService : public KeyedService {
       const ContainerId& container_id,
       base::OnceCallback<void(std::optional<std::string>)> cb) = 0;
 
-  // Returns the delegate responsible for integrating with sync.
+  // Return the delegates responsible for integrating with sync.
   virtual base::WeakPtr<syncer::DataTypeControllerDelegate>
-  GetSyncControllerDelegate() = 0;
+  GetSyncControllerDelegateForContainer() = 0;
+  virtual base::WeakPtr<syncer::DataTypeControllerDelegate>
+  GetSyncControllerDelegateForItem() = 0;
+
+  // Returns true if the service's underlying bridges are ready and tracking
+  // sync metadata. Intended for test synchronization.
+  virtual bool IsActiveForTesting() const = 0;
 };
 
 }  // namespace sync_tab_context

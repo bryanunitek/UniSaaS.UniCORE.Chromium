@@ -22,7 +22,6 @@
 #include "ui/events/event_handler.h"
 #include "ui/events/types/event_type.h"
 #include "ui/gfx/canvas.h"
-#include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/highlight_path_generator.h"
@@ -147,18 +146,21 @@ class SystemTextfield::EventHandler : public ui::EventHandler {
 //------------------------------------------------------------------------------
 // SystemTextfield::SystemTextfield:
 SystemTextfield::SystemTextfield(Type type)
-    : type_(type),
-      event_handler_(std::make_unique<EventHandler>(this)),
-      corner_radius_(kCornerRadius) {
+    : type_(type), event_handler_(std::make_unique<EventHandler>(this)) {
+  SetTextColorId(cros_tokens::kCrosSysOnSurface);
+  SetDisabledTextColorId(cros_tokens::kCrosSysDisabled);
+  SetSelectionTextColorId(cros_tokens::kCrosSysOnSurface);
+  SetSelectionBackgroundColorId(cros_tokens::kCrosSysHighlightText);
+  SetPlaceholderTextColorId(cros_tokens::kCrosSysDisabled);
+  SetBackgroundColor(cros_tokens::kCrosSysHoverOnSubtle);
+  SetCornerRadius(kCornerRadius);
+  SetBackgroundEnabled(false);
   SetFontList(GetFontListFromType(type_));
+
   SetBorder(views::CreateEmptyBorder(kBorderInsets));
   // Remove the default hover effect, since the hover effect of system textfield
   // appears not only on hover but also on focus.
   RemoveHoverEffect();
-
-  // Override the very round highlight path set in `views::Textfield`.
-  views::InstallRoundRectHighlightPathGenerator(this, gfx::Insets(),
-                                                corner_radius_);
 
   // Configure focus ring.
   auto* focus_ring = views::FocusRing::Get(this);
@@ -179,40 +181,9 @@ SystemTextfield::SystemTextfield(Type type)
 
 SystemTextfield::~SystemTextfield() = default;
 
-void SystemTextfield::SetTextColorId(ui::ColorId color_id) {
-  UpdateColorId(text_color_id_, color_id, /*is_background_color=*/false);
-}
-
-void SystemTextfield::SetSelectedTextColorId(ui::ColorId color_id) {
-  UpdateColorId(selected_text_color_id_, color_id,
-                /*is_background_color=*/false);
-}
-
-void SystemTextfield::SetSelectionBackgroundColorId(ui::ColorId color_id) {
-  UpdateColorId(selection_background_color_id_, color_id,
-                /*is_background_color=*/false);
-}
-
-void SystemTextfield::SetBackgroundColorId(ui::ColorId color_id) {
-  UpdateColorId(background_color_id_, color_id, /*is_background_color=*/true);
-}
-
-void SystemTextfield::SetPlaceholderTextColorId(ui::ColorId color_id) {
-  UpdateColorId(placeholder_text_color_id_, color_id,
-                /*is_background_color=*/false);
-}
-
 void SystemTextfield::SetActiveStateChangedCallback(
     base::RepeatingClosure callback) {
   active_state_changed_callback_ = std::move(callback);
-}
-
-void SystemTextfield::SetCornerRadius(int corner_radius) {
-  corner_radius_ = corner_radius;
-
-  views::InstallRoundRectHighlightPathGenerator(this, gfx::Insets(),
-                                                corner_radius_);
-  UpdateBackground();
 }
 
 void SystemTextfield::SetActive(bool active) {
@@ -254,8 +225,12 @@ void SystemTextfield::SetShowFocusRing(bool show) {
   }
 }
 
-void SystemTextfield::SetShowBackground(bool show) {
-  show_background_ = show;
+void SystemTextfield::SetBackgroundMode(BackgroundMode mode) {
+  if (background_mode_ == mode) {
+    return;
+  }
+
+  background_mode_ = mode;
   UpdateBackground();
 }
 
@@ -264,17 +239,20 @@ void SystemTextfield::RestoreText() {
 }
 
 void SystemTextfield::UpdateBackground() {
-  const bool has_background =
-      GetBackgroundEnabled() &&
-      (IsMouseHovered() || HasFocus() || show_background_);
-  if (!has_background) {
-    SetBackground(nullptr);
-    return;
+  bool show_background = false;
+  switch (background_mode_) {
+    case BackgroundMode::kOnHoverOrFocus:
+      show_background = IsMouseHovered() || HasFocus();
+      break;
+    case BackgroundMode::kAlways:
+      show_background = true;
+      break;
+    case BackgroundMode::kNever:
+      show_background = false;
+      break;
   }
 
-  SetBackground(views::CreateRoundedRectBackground(
-      background_color_id_.value_or(cros_tokens::kCrosSysHoverOnSubtle),
-      corner_radius_));
+  SetBackgroundEnabled(show_background);
 }
 
 gfx::Size SystemTextfield::CalculatePreferredSize(
@@ -300,20 +278,21 @@ void SystemTextfield::SetBorder(std::unique_ptr<views::Border> b) {
   views::View::SetBorder(std::move(b));
 }
 
+void SystemTextfield::OnPaintBackground(gfx::Canvas* canvas) {
+  // Ensure that the background is never drawn when kNever is set for
+  // background_mode_.
+  if (background_mode_ == BackgroundMode::kNever) {
+    CHECK(!GetBackgroundEnabled());
+  }
+  views::Textfield::OnPaintBackground(canvas);
+}
+
 void SystemTextfield::OnMouseEntered(const ui::MouseEvent& event) {
   UpdateBackground();
 }
 
 void SystemTextfield::OnMouseExited(const ui::MouseEvent& event) {
   UpdateBackground();
-}
-
-void SystemTextfield::OnThemeChanged() {
-  views::View::OnThemeChanged();
-
-  // Only update the text color since the background color will be handled by
-  // themed background.
-  UpdateTextColor();
 }
 
 void SystemTextfield::OnFocus() {
@@ -331,50 +310,7 @@ void SystemTextfield::OnBlur() {
 
 void SystemTextfield::OnEnabledStateChanged() {
   UpdateBackground();
-  UpdateTextColor();
   SchedulePaint();
-}
-
-void SystemTextfield::UpdateColorId(std::optional<ui::ColorId>& src,
-                                    ui::ColorId dst,
-                                    bool is_background_color) {
-  if (src && *src == dst) {
-    return;
-  }
-
-  src = dst;
-  if (is_background_color) {
-    UpdateBackground();
-  } else {
-    UpdateTextColor();
-  }
-}
-
-void SystemTextfield::UpdateTextColor() {
-  if (!GetWidget()) {
-    return;
-  }
-
-  // Set text color.
-  auto* color_provider = GetColorProvider();
-  gfx::RenderText* render_text = GetRenderText();
-  if (!GetEnabled()) {
-    SetColor(color_provider->GetColor(cros_tokens::kCrosSysDisabled));
-    return;
-  }
-
-  // Set text color and selection text and background (highlight part) colors.
-  SetColor(color_provider->GetColor(
-      text_color_id_.value_or(cros_tokens::kCrosSysOnSurface)));
-  render_text->set_selection_color(color_provider->GetColor(
-      selected_text_color_id_.value_or(cros_tokens::kCrosSysOnSurface)));
-  render_text->set_selection_background_focused_color(
-      color_provider->GetColor(selection_background_color_id_.value_or(
-          cros_tokens::kCrosSysHighlightText)));
-
-  // Set placeholder text color
-  views::Textfield::SetPlaceholderTextColorId(
-      placeholder_text_color_id_.value_or(cros_tokens::kCrosSysDisabled));
 }
 
 BEGIN_METADATA(SystemTextfield)

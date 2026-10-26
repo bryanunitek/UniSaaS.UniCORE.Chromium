@@ -13,7 +13,6 @@ import android.text.TextPaint;
 
 import androidx.core.content.res.ResourcesCompat;
 import androidx.test.core.app.ApplicationProvider;
-import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -23,7 +22,6 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.DisabledTest;
@@ -31,7 +29,6 @@ import org.chromium.ui.R;
 
 /** Unit tests for {@link DownloadableFontTextAppearanceSpan}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class DownloadableFontTextAppearanceSpanTest {
 
     public @Rule MockitoRule mockitoRule = MockitoJUnit.rule();
@@ -46,7 +43,6 @@ public class DownloadableFontTextAppearanceSpanTest {
     }
 
     @Test
-    @SmallTest
     @DisabledTest // This needs to be re-worked for Q.
     public void testTextAppearance() {
         DownloadableFontTextAppearanceSpan span =

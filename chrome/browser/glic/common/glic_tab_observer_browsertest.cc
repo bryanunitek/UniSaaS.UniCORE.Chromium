@@ -4,11 +4,11 @@
 
 #include "chrome/browser/glic/common/glic_tab_observer.h"
 
+#include <ranges>
 #include <string>
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -20,12 +20,14 @@
 #include "base/types/expected_macros.h"
 #include "build/build_config.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
+#include "chrome/browser/glic/test_support/glic_browser_test.h"
+#include "chrome/browser/glic/test_support/glic_test_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/platform_browser_test.h"
+#include "components/sessions/core/session_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/test/browser_test.h"
@@ -43,8 +45,6 @@
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
-#else
-#include "chrome/browser/ui/browser.h"
 #endif
 
 namespace {
@@ -127,7 +127,7 @@ class GlicTabEventCollector {
     WaitForEvent(base::BindRepeating([](const TestGlicTabEvent& event) {
       return std::holds_alternative<TestTabCreationEvent>(event);
     }));
-    for (auto& event : base::Reversed(events_)) {
+    for (auto& event : std::views::reverse(events_)) {
       if (const auto* c = std::get_if<TestTabCreationEvent>(&event)) {
         return *c;
       }
@@ -141,7 +141,7 @@ class GlicTabEventCollector {
     WaitForEvent(base::BindRepeating([](const TestGlicTabEvent& event) {
       return std::holds_alternative<TestTabActivationEvent>(event);
     }));
-    for (auto& event : base::Reversed(events_)) {
+    for (auto& event : std::views::reverse(events_)) {
       if (const auto* a = std::get_if<TestTabActivationEvent>(&event)) {
         return *a;
       }
@@ -167,7 +167,8 @@ class GlicTabEventCollector {
   base::test::TestFuture<void> condition_met_signal_;
 };
 
-class GlicTabObserverBrowserTest : public PlatformBrowserTest {
+class GlicTabObserverBrowserTest
+    : public glic::GlicBrowserTestMixin<PlatformBrowserTest> {
  public:
   GlicTabObserverBrowserTest() = default;
 
@@ -197,31 +198,16 @@ class GlicTabObserverBrowserTest : public PlatformBrowserTest {
   }
 
   BrowserWindowInterface* CreateNewWindowWithTab() {
-    BrowserWindowCreateParams create_params(BrowserWindowInterface::TYPE_NORMAL,
-                                            *GetProfile(), false);
-    base::test::TestFuture<BrowserWindowInterface*> future;
-    CreateBrowserWindow(std::move(create_params), future.GetCallback());
-    BrowserWindowInterface* window = future.Get();
-    CHECK(window);
-    TabListInterface* tab_list = TabListInterface::From(window);
-    CHECK(tab_list);
-    tabs::TabInterface* active_tab = tab_list->GetActiveTab();
-    if (!active_tab) {
-      active_tab = CreateTab(tab_list);
-    }
-    CHECK(active_tab);
-    return window;
+    return CreateAdditionalBrowserWindow();
   }
 
 #if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
   TabListInterface* CreateIncognitoTabList() {
     Profile* incognito_profile =
         GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
-    BrowserWindowCreateParams create_params(BrowserWindowInterface::TYPE_NORMAL,
-                                            *incognito_profile, false);
-    base::test::TestFuture<BrowserWindowInterface*> future;
-    CreateBrowserWindow(std::move(create_params), future.GetCallback());
-    return TabListInterface::From(future.Get());
+    BrowserWindowInterface* window =
+        glic::CreateBrowserWindow(incognito_profile);
+    return TabListInterface::From(window);
   }
 #endif
 
@@ -239,10 +225,9 @@ class GlicTabObserverBrowserTest : public PlatformBrowserTest {
 
   void NavigateTab(tabs::TabInterface* tab, const GURL& url) {
     content::TestNavigationObserver navigation_observer(tab->GetContents());
-    content::OpenURLParams params(url, content::Referrer(),
-                                  WindowOpenDisposition::CURRENT_TAB,
-                                  ui::PAGE_TRANSITION_TYPED,
-                                  /*is_renderer_initiated=*/false);
+    content::OpenURLParams params =
+        content::OpenURLParams::CreateBrowserInitiated(
+            url, WindowOpenDisposition::kCurrentTab, ui::PAGE_TRANSITION_TYPED);
     tab->GetContents()->OpenURL(params, base::DoNothing());
     navigation_observer.Wait();
   }
@@ -301,7 +286,7 @@ IN_PROC_BROWSER_TEST_F(GlicTabObserverBrowserTest, ObservesTabCreation) {
   // Open Tab 3
   tabs::TabInterface* third_tab = CreateTab();
   ASSERT_OK_AND_ASSIGN(creation, collector.WaitForCreation());
-  EXPECT_NE(creation.new_tab, nullptr);
+  ASSERT_TRUE(creation.new_tab);
   EXPECT_EQ(creation.old_tab.get(), second_tab);
   EXPECT_EQ(creation.new_tab.get(), third_tab);
 }
@@ -310,19 +295,11 @@ IN_PROC_BROWSER_TEST_F(GlicTabObserverBrowserTest,
                        ObservesTabCreationInNewWindow) {
   GlicTabEventCollector collector(GetProfile());
 
-  BrowserWindowCreateParams create_params(BrowserWindowInterface::TYPE_NORMAL,
-                                          *GetProfile(), false);
-  base::test::TestFuture<BrowserWindowInterface*> future;
-  CreateBrowserWindow(std::move(create_params), future.GetCallback());
-  BrowserWindowInterface* new_window = future.Get();
-  ASSERT_TRUE(new_window);
-
-  TabListInterface* new_tab_list = TabListInterface::From(new_window);
-  ASSERT_TRUE(new_tab_list);
-  CreateTab(new_tab_list);
+  BrowserWindowInterface* new_window = CreateAdditionalBrowserWindow();
 
   ASSERT_OK_AND_ASSIGN(auto creation, collector.WaitForCreation());
   EXPECT_NE(creation.new_tab, nullptr);
+  EXPECT_EQ(creation.new_tab->GetBrowserWindowInterface(), new_window);
 }
 
 // Mobile Android does not support programmatically creating separate browser
@@ -501,10 +478,10 @@ IN_PROC_BROWSER_TEST_F(GlicTabObserverBrowserTest, LinkClickTracking) {
   ASSERT_TRUE(first_tab);
 
   GURL target_url("about:blank");
-  content::OpenURLParams params(target_url, content::Referrer(),
-                                WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                                ui::PAGE_TRANSITION_LINK,
-                                /*is_renderer_initiated=*/false);
+  content::OpenURLParams params =
+      content::OpenURLParams::CreateBrowserInitiated(
+          target_url, WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_LINK);
   ASSERT_OK_AND_ASSIGN(auto creation, OpenURLAndWaitForTabCreation(
                                           first_tab, params, collector));
   ASSERT_TRUE(creation.new_tab);
@@ -520,10 +497,10 @@ IN_PROC_BROWSER_TEST_F(GlicTabObserverBrowserTest, LinkClickNewWindowTracking) {
   ASSERT_TRUE(first_tab);
 
   GURL target_url("about:blank");
-  content::OpenURLParams params(target_url, content::Referrer(),
-                                WindowOpenDisposition::NEW_WINDOW,
-                                ui::PAGE_TRANSITION_LINK,
-                                /*is_renderer_initiated=*/false);
+  content::OpenURLParams params =
+      content::OpenURLParams::CreateBrowserInitiated(
+          target_url, WindowOpenDisposition::kNewWindow,
+          ui::PAGE_TRANSITION_LINK);
   params.source_render_process_id = first_tab->GetContents()
                                         ->GetPrimaryMainFrame()
                                         ->GetProcess()

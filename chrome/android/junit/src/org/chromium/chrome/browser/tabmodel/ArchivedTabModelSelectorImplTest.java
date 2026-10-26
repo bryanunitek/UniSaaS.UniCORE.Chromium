@@ -26,7 +26,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -40,7 +39,6 @@ import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabDelegateFactory;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
-import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tabmodel.NextTabPolicy.NextTabPolicySupplier;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabCreatorManager;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabModel;
@@ -50,14 +48,12 @@ import java.lang.ref.WeakReference;
 
 /** Unit tests for {@link ArchivedTabModelSelectorImpl}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ArchivedTabModelSelectorImplTest {
     // Test activity type that does not restore tab on cold restart.
     // Any type other than ActivityType.TABBED works.
     private static final @ActivityType int NO_RESTORE_TYPE = ActivityType.CUSTOM_TAB;
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Mock private TabContentManager mMockTabContentManager;
     @Mock private TabDelegateFactory mTabDelegateFactory;
     @Mock private NextTabPolicySupplier mNextTabPolicySupplier;
 
@@ -96,8 +92,7 @@ public class ArchivedTabModelSelectorImplTest {
                 new PassthroughTabRemover(() -> mTabModelSelector.getModel(true));
         MockTabModel incognitoTabModel = new MockTabModel(mIncognitoProfile, null);
         incognitoTabModel.setTabRemoverForTesting(incognitoTabRemover);
-        mTabModelSelector.onNativeLibraryReadyInternal(
-                mMockTabContentManager, regularTabModel, incognitoTabModel);
+        mTabModelSelector.onNativeLibraryReadyInternal(regularTabModel, incognitoTabModel);
 
         assertEquals(
                 mTabModelSelector.getModel(/* incognito= */ false),

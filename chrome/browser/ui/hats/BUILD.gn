@@ -26,7 +26,7 @@ source_set("hats") {
     "//components/download/public/common:public",
     "//components/keyed_service/core",
     "//components/pref_registry",
-    "//components/safe_browsing/core/browser/db:v4_protocol_manager_util",
+    "//components/safe_browsing/core/browser/db:sb_protocol_manager_util",
     "//components/safe_browsing/core/browser/password_protection:password_protection_metrics_util",
     "//content/public/browser",
     "//pdf:buildflags",
@@ -62,13 +62,17 @@ source_set("impl") {
     ]
 
     deps += [
+      "//chrome/browser/contextual_cueing",
       "//chrome/browser/metrics/critical_user_journeys",
+      "//chrome/browser/ui:browser_window_header",
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/performance_controls",
+      "//chrome/browser/ui/webui/settings",
     ]
   }
   deps += [
     ":hats",
+    "//base/i18n:language_tag",
     "//chrome/browser:browser_process",
     "//chrome/browser:global_features",
     "//chrome/browser/content_settings:content_settings_factory",
@@ -89,14 +93,16 @@ source_set("impl") {
     "//components/content_settings/core/common",
     "//components/lens:features",
     "//components/metrics_services_manager",
+    "//components/page_info/core",
+    "//components/password_manager/core/browser/features:password_features",
     "//components/password_manager/core/common",
     "//components/permissions",
     "//components/permissions:permissions_common",
-    "//components/plus_addresses/core/common:features",
     "//components/policy/core/common:common_constants",
     "//components/prefs",
     "//components/privacy_sandbox:features",
     "//components/privacy_sandbox:privacy_sandbox_prefs",
+    "//components/safe_browsing/core/common",
     "//components/safe_browsing/core/common:features",
     "//components/safe_browsing/core/common:safe_browsing_prefs",
     "//components/signin/public/base",
@@ -110,7 +116,6 @@ source_set("impl") {
     # performance_controls_hats_service.h,
     # performance_controls_hats_service_factory.h, and site_settings_helper.h
     # ... but without a circular dependency.
-    "//chrome/browser/ui",
   ]
   if (is_android) {
     deps += [
@@ -124,7 +129,6 @@ source_set("impl") {
       "//pdf:features",
     ]
   }
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
 }
 
 if (is_android) {
@@ -138,6 +142,7 @@ if (!is_android) {
     testonly = true
     sources = [
       "hats_helper_unittest.cc",
+      "hats_service_desktop_unittest.cc",
       "survey_config_unittest.cc",
       "trust_safety_sentiment_service_factory_unittest.cc",
     ]
@@ -158,7 +163,10 @@ if (!is_android) {
       "//components/content_settings/core/test:test_support",
       "//components/signin/public/base",
       "//components/unified_consent",
+      "//components/version_info",
       "//content/test:test_support",
+      "//testing/gmock",
+      "//testing/gtest",
     ]
   }
 
@@ -193,6 +201,8 @@ if (!is_android) {
       "//chrome/browser:browser_process",
       "//chrome/browser/policy:test_support",
       "//chrome/browser/prefs",
+      "//chrome/browser/ui:browser_tabstrip",
+      "//chrome/browser/ui:bubble_anchor_util",
       "//chrome/browser/ui/page_info",
       "//chrome/browser/ui/views/page_info",
       "//chrome/common",
@@ -202,7 +212,6 @@ if (!is_android) {
       "//components/autofill/core/common:features",
       "//components/content_settings/core/common",
       "//components/metrics_services_manager",
-      "//components/plus_addresses/core/common:features",
       "//components/policy:generated",
       "//components/policy:policy_code_generate",
       "//components/policy/core/common:common_constants",
@@ -212,6 +221,7 @@ if (!is_android) {
       "//content/public/browser",
       "//content/public/common",
       "//content/test:test_support",
+      "//net",
       "//net:test_support",
     ]
 

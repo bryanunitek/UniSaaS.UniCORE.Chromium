@@ -44,9 +44,9 @@ class SyncErrorNotifier : public syncer::SyncServiceObserver,
   raw_ptr<syncer::SyncService> sync_service_ = nullptr;
 
   // The Profile this service belongs to.
-  const raw_ptr<Profile, DanglingUntriaged> profile_;
+  const raw_ptr<Profile> profile_;
 
-  // Notification was added to NotificationUIManager. This flag is used to
+  // Notification was added to MessageCenter. This flag is used to
   // prevent displaying passphrase notification to user if they already saw (and
   // potentially dismissed) previous one.
   bool notification_displayed_ = false;

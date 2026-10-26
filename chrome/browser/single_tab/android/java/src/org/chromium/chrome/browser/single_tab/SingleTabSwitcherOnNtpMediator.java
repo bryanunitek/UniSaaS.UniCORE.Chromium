@@ -27,7 +27,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
@@ -59,15 +58,15 @@ public class SingleTabSwitcherOnNtpMediator {
     // It is only non-null for NTP on tablets.
     private final @Nullable UiConfig mUiConfig;
     private final boolean mIsTablet;
+    private final @Nullable ThumbnailProvider mThumbnailProvider;
+    private final @Nullable ModuleDelegate mModuleDelegate;
 
     private boolean mInitialized;
     private @Nullable Tab mMostRecentTab;
     private @Nullable Callback<Integer> mSingleTabCardClickedCallback;
     private @Nullable Runnable mSeeMoreLinkClickedCallback;
-    private final @Nullable ThumbnailProvider mThumbnailProvider;
     private @Nullable Size mThumbnailSize;
     private @Nullable DisplayStyleObserver mDisplayStyleObserver;
-    private final @Nullable ModuleDelegate mModuleDelegate;
 
     SingleTabSwitcherOnNtpMediator(
             Context context,
@@ -249,11 +248,7 @@ public class SingleTabSwitcherOnNtpMediator {
         }
 
         mThumbnailProvider.getTabThumbnailWithCallback(
-                MultiThumbnailMetadata.createMetadataWithoutUrls(
-                        mMostRecentTab.getId(),
-                        mMostRecentTab.getTabGroupId() != null,
-                        mMostRecentTab.isIncognitoBranded(),
-                        /* tabGroupColor= */ null),
+                MultiThumbnailMetadata.createMetadataForSingleTab(mMostRecentTab.getId()),
                 mThumbnailSize,
                 /* isSelected= */ false,
                 (@Nullable Drawable tabThumbnail) -> {
@@ -267,10 +262,9 @@ public class SingleTabSwitcherOnNtpMediator {
         assumeNonNull(mMostRecentTab);
         if (mMostRecentTab.isLoading() && TextUtils.isEmpty(mMostRecentTab.getTitle())) {
             TabObserver tabObserver =
-                    new EmptyTabObserver() {
+                    new TabObserver() {
                         @Override
                         public void onPageLoadFinished(Tab tab, GURL url) {
-                            super.onPageLoadFinished(tab, url);
                             mPropertyModel.set(TITLE, tab.getTitle());
                             mPropertyModel.set(URL, getDomainUrl(tab.getUrl()));
                             tab.removeObserver(this);

@@ -13,8 +13,6 @@ source_set("virtual_keyboard_private") {
     "virtual_keyboard_private_api.h",
   ]
 
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
-
   public_deps = [
     "//base",
     "//build:chromeos_buildflags",
@@ -31,7 +29,6 @@ source_set("virtual_keyboard_private") {
   if (is_chromeos) {
     deps += [
       "//ash",
-      "//chromeos/crosapi/mojom",
       "//chromeos/ui/clipboard_history",
       "//ui/base",
       "//ui/color:color_headers",
@@ -41,8 +38,6 @@ source_set("virtual_keyboard_private") {
 
 source_set("virtual_keyboard_delegate") {
   sources = [ "virtual_keyboard_delegate.h" ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   public_deps = [
     "//base",

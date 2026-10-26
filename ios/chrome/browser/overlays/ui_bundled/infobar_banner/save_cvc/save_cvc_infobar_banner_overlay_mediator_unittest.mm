@@ -11,7 +11,7 @@
 #import "base/uuid.h"
 #import "components/autofill/core/browser/data_model/payments/credit_card.h"
 #import "components/autofill/core/browser/foundations/autofill_client.h"
-#import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "ios/chrome/browser/infobars/model/infobar_ios.h"
 #import "ios/chrome/browser/infobars/model/infobar_type.h"
@@ -52,8 +52,7 @@ class SaveCVCInfobarBannerOverlayMediatorTest : public PlatformTest {
 
   void InitInfobar(const bool for_upload) {
     autofill::CreditCard credit_card(
-        base::Uuid::GenerateRandomV4().AsLowercaseString(),
-        "https://www.example.com/");
+        base::Uuid::GenerateRandomV4().AsLowercaseString());
     SaveCreditCardOptions options;
     options.card_save_type =
         autofill::payments::PaymentsAutofillClient::CardSaveType::kCvcSaveOnly;

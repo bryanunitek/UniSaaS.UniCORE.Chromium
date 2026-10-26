@@ -15,7 +15,8 @@
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_id.h"
-#include "ash/style/system_shadow.h"
+#include "ash/style/style_util.h"
+#include "ash/style/system_decoration.h"
 #include "ash/system/power/power_button_menu_item_view.h"
 #include "ash/system/power/power_button_menu_metrics_type.h"
 #include "ash/system/power/power_button_menu_view_util.h"
@@ -31,7 +32,7 @@
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
-#include "ui/compositor_extra/shadow.h"
+#include "ui/decoration/shadow.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -70,8 +71,8 @@ PowerButtonMenuView::PowerButtonMenuView(
   layer()->SetRoundedCornerRadius(
       gfx::RoundedCornersF(kPowerButtonMenuCornerRadius));
   if (chromeos::features::IsSystemBlurEnabled()) {
-    layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-    layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+    layer()->SetBackgroundBlur(StyleUtil::kBackgroundBlurSigma);
+    layer()->SetBackdropFilterQuality(StyleUtil::kBackgroundBlurQuality);
   }
   GetViewAccessibility().SetRole(ax::mojom::Role::kMenu);
   GetViewAccessibility().SetName(
@@ -80,9 +81,10 @@ PowerButtonMenuView::PowerButtonMenuView(
   RecreateItems();
 
   // Create a system shadow for current view.
-  shadow_ = SystemShadow::CreateShadowOnNinePatchLayerForView(
-      this, SystemShadow::Type::kElevation12);
-  shadow_->SetRoundedCornerRadius(kPowerButtonMenuCornerRadius);
+  shadow_ = SystemDecoration::CreateShadowOnNinePatchLayerForView(
+      this, SystemDecoration::ShadowType::kElevation12);
+  shadow_->SetRoundedCorners(
+      gfx::RoundedCornersF(kPowerButtonMenuCornerRadius));
 }
 
 PowerButtonMenuView::~PowerButtonMenuView() = default;

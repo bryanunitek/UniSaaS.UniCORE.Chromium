@@ -9,24 +9,17 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/performance_controls/memory_saver_bubble_delegate.h"
 #include "chrome/browser/ui/performance_controls/memory_saver_bubble_observer.h"
-#include "chrome/browser/ui/performance_controls/memory_saver_chip_tab_helper.h"
 #include "chrome/browser/ui/performance_controls/memory_saver_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_view.h"
 #include "chrome/browser/ui/views/performance_controls/memory_saver_resource_view.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/performance_manager/public/user_tuning/prefs.h"
-#include "components/policy/core/common/policy_pref_names.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/interaction/element_identifier.h"
@@ -34,7 +27,6 @@
 #include "ui/base/models/dialog_model.h"
 #include "ui/base/models/dialog_model_field.h"
 #include "ui/base/text/bytes_formatting.h"
-#include "ui/base/ui_base_types.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/interaction/element_tracker_views.h"
 
@@ -49,7 +41,7 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(MemorySaverBubbleView,
 
 namespace {
 // The lower limit of memory usage that we would display to the user in bytes.
-constexpr base::ByteSize kMemoryUsageThreshold = base::MiBU(10);
+constexpr base::ByteSize kMemoryUsageThreshold = base::MiB(10);
 
 void AddBubbleBodyText(
     ui::DialogModel::Builder* dialog_model_builder,
@@ -132,7 +124,7 @@ views::BubbleDialogModelHost* MemorySaverBubbleView::ShowBubble(
 
   AddBubbleBodyText(&dialog_model_builder, IDS_MEMORY_SAVER_DIALOG_BODY);
 
-  if (!is_guest && !profile->IsIncognitoProfile()) {
+  if (!is_guest && !profile->IsPrimaryOTRProfileWithRegularParent()) {
     dialog_model_builder.SetSubtitle(
         base::UTF8ToUTF16(web_contents->GetURL().GetHost()));
     const bool is_site_excluded = performance_manager::user_tuning::prefs::

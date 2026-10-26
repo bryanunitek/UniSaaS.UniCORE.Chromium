@@ -13,13 +13,12 @@
 #include "headless/lib/browser/headless_window_parenting_client.h"
 #include "ui/aura/window.h"
 #include "ui/events/keycodes/dom/dom_code.h"
-#include "ui/gfx/icc_profile.h"
 
 namespace headless {
 
 HeadlessWindowTreeHost::HeadlessWindowTreeHost(
     bool use_external_begin_frame_control) {
-  CreateCompositor(false, use_external_begin_frame_control);
+  CreateCompositor(use_external_begin_frame_control);
   OnAcceleratedWidgetAvailable();
 
   focus_client_ = std::make_unique<HeadlessFocusClient>();

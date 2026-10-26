@@ -24,7 +24,6 @@ static_library("smart_lock") {
 
   public_deps = [
     "//base",
-    "//chrome/browser:browser_public_dependencies",
     "//chrome/browser/profiles:profile",
     "//chromeos/ash/components/feature_usage",
     "//chromeos/ash/components/multidevice",
@@ -47,7 +46,7 @@ static_library("smart_lock") {
     "//chrome/browser/ash/multidevice_setup",
     "//chrome/browser/ash/profiles",
     "//chrome/browser/ash/secure_channel",
-    "//chrome/browser/notifications",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/common",
     "//chrome/common:constants",
     "//chrome/common:non_code_constants",
@@ -68,6 +67,7 @@ static_library("smart_lock") {
     "//extensions/browser",
     "//ui/base",
     "//ui/chromeos",
+    "//ui/message_center",
   ]
 }
 
@@ -84,16 +84,19 @@ source_set("unit_tests") {
   deps = [
     ":smart_lock",
     "//ash/constants",
+    "//ash/public/cpp",
     "//base",
     "//base/test:test_support",
     "//chrome/browser",
     "//chrome/browser/ash/login/session",
     "//chrome/browser/ash/login/users:test_support",
     "//chrome/browser/prefs",
-    "//chrome/browser/ui",
     "//chrome/browser/ui/webui/ash/multidevice_setup",
     "//chrome/common:constants",
     "//chrome/test:test_support",
+    "//chrome/test/base:browser_with_test_window_test",
+    "//chrome/test/base:testing_browser_process",
+    "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/dbus",
     "//chromeos/ash/components/feature_usage",
     "//chromeos/ash/components/multidevice",
@@ -120,6 +123,7 @@ source_set("unit_tests") {
     "//ui/display",
     "//ui/display:test_support",
     "//ui/display/util",
+    "//ui/message_center",
     "//ui/message_center/public/cpp",
     "//ui/views:test_support",
   ]

@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
+import 'chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js';
 import './print_preview_vars.css.js';
 import '/strings.m.js';
 import '../data/document_info.js';
 import './sidebar.js';
 
-import type {CrDialogElement} from 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
-import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
+import type {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
+import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
 import {assertNotReachedCase} from 'chrome://resources/js/assert.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 import {FocusOutlineManager} from 'chrome://resources/js/focus_outline_manager.js';
@@ -118,20 +118,20 @@ export class PrintPreviewAppElement extends PrintPreviewAppElementBase {
     };
   }
 
-  state: State;
-  private controlsManaged_: boolean;
-  private destination_: Destination;
-  private destinationsManaged_: boolean;
-  private destinationState_: DestinationState;
-  private documentSettings_: DocumentSettings;
-  private error_: Error;
-  private margins_: Margins;
-  private pageSize_: Size;
-  private previewState_: PreviewAreaState;
-  private printableArea_: PrintableArea;
-  private settingsManaged_: boolean;
-  private measurementSystem_: MeasurementSystem|null;
-  private maxSheets_: number;
+  declare state: State;
+  declare private controlsManaged_: boolean;
+  declare private destination_: Destination;
+  declare private destinationsManaged_: boolean;
+  declare private destinationState_: DestinationState;
+  declare private documentSettings_: DocumentSettings;
+  declare private error_: Error;
+  declare private margins_: Margins;
+  declare private pageSize_: Size;
+  declare private previewState_: PreviewAreaState;
+  declare private printableArea_: PrintableArea;
+  declare private settingsManaged_: boolean;
+  declare private measurementSystem_: MeasurementSystem|null;
+  declare private maxSheets_: number;
 
   private nativeLayer_: NativeLayer|null = null;
   private tracker_: EventTracker = new EventTracker();

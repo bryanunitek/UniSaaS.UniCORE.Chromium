@@ -24,16 +24,16 @@
 #include "base/thread_annotations.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.h"
 #include "chrome/browser/net/net_error_diagnostics_dialog.h"
 #include "chrome/browser/policy/profile_policy_connector_builder.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/ui_thread_search_terms_data.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
@@ -42,6 +42,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/browsing_data/content/browsing_data_helper.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
 #include "components/error_page/content/browser/net_error_auto_reloader.h"
 #include "components/google/core/common/google_util.h"
 #include "components/language/core/browser/pref_names.h"
@@ -49,12 +50,14 @@
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_member.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/browsing_data_remover.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_view_host.h"
@@ -79,6 +82,11 @@
 #include "net/test/url_request/url_request_mock_http_job.h"
 #include "services/network/public/cpp/features.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/window_open_disposition.h"
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/test/base/scoped_channel_override.h"
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
@@ -115,21 +123,23 @@ namespace {
   return content::EvalJs(render_frame_host, command).ExtractBool();
 }
 
-[[nodiscard]] bool IsDisplayingText(Browser* browser, const std::string& text) {
+[[nodiscard]] bool IsDisplayingText(BrowserWindowInterface* browser,
+                                    const std::string& text) {
   return IsDisplayingText(
       browser->tab_strip_model()->GetActiveWebContents()->GetPrimaryMainFrame(),
       text);
 }
 
 // Expands the details box on the currently displayed error page.
-void ToggleDetails(Browser* browser) {
+void ToggleDetails(BrowserWindowInterface* browser) {
   EXPECT_TRUE(
       content::ExecJs(browser->tab_strip_model()->GetActiveWebContents(),
                       "document.getElementById('details-button').click();"));
 }
 
 // Returns true if the diagnostics link suggestion is displayed.
-[[nodiscard]] bool IsDisplayingDiagnosticsLink(Browser* browser) {
+[[nodiscard]] bool IsDisplayingDiagnosticsLink(
+    BrowserWindowInterface* browser) {
   std::string command = base::StringPrintf(
       "var diagnose_link = document.getElementById('diagnose-link');"
       "diagnose_link != null;");
@@ -140,13 +150,14 @@ void ToggleDetails(Browser* browser) {
 
 // Checks that the error page is being displayed with the specified error
 // string.
-void ExpectDisplayingErrorPage(Browser* browser,
+void ExpectDisplayingErrorPage(BrowserWindowInterface* browser,
                                const std::string& error_string) {
   EXPECT_TRUE(IsDisplayingText(browser, error_string));
 }
 
 // Checks that the error page is being displayed with the specified error code.
-void ExpectDisplayingErrorPage(Browser* browser, net::Error error_code) {
+void ExpectDisplayingErrorPage(BrowserWindowInterface* browser,
+                               net::Error error_code) {
   ExpectDisplayingErrorPage(browser, net::ErrorToShortString(error_code));
 }
 
@@ -224,9 +235,9 @@ class ErrorPageTest : public InProcessBrowserTest {
     content::TestNavigationObserver test_navigation_observer(
         browser()->tab_strip_model()->GetActiveWebContents(), 1);
     if (direction == HISTORY_NAVIGATE_BACK) {
-      chrome::GoBack(browser(), WindowOpenDisposition::CURRENT_TAB);
+      chrome::GoBack(browser(), WindowOpenDisposition::kCurrentTab);
     } else if (direction == HISTORY_NAVIGATE_FORWARD) {
-      chrome::GoForward(browser(), WindowOpenDisposition::CURRENT_TAB);
+      chrome::GoForward(browser(), WindowOpenDisposition::kCurrentTab);
     } else {
       FAIL();
     }
@@ -749,7 +760,7 @@ IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, CheckEasterEgg) {
 // Test error page in incognito mode. The only difference is that no network
 // diagnostic link is included, except on ChromeOS.
 IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, Incognito) {
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       incognito_browser,
@@ -769,6 +780,49 @@ IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, Incognito) {
   EXPECT_EQ(WebContentsCanShowDiagnosticsTool(
                 incognito_browser->tab_strip_model()->GetActiveWebContents()),
             IsDisplayingDiagnosticsLink(incognito_browser));
+}
+
+class DNSErrorPageIsolatedModeTest : public DNSErrorPageTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    DNSErrorPageTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(
+        enterprise_isolated_mode::switches::
+            kForceEnterpriseIsolatedModeReplacesIncognito);
+  }
+
+ private:
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+  chrome::ScopedChannelOverride channel_override_{
+      chrome::ScopedChannelOverride::Channel::kDev};
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+};
+
+// Test error page in Enterprise Isolated Mode. This should behave like
+// incognito mode: no network diagnostic link is included, except on ChromeOS.
+IN_PROC_BROWSER_TEST_F(DNSErrorPageIsolatedModeTest, IsolatedMode) {
+  BrowserWindowInterface* isolated_browser = CreateIncognitoBrowser();
+  ASSERT_TRUE(
+      isolated_browser->GetProfile()->IsEnterpriseIsolatedModeProfile());
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      isolated_browser,
+      URLRequestFailedJob::GetMockHttpsUrl(net::ERR_NAME_NOT_RESOLVED)));
+
+  // Verify that the expected error page is being displayed.
+  ExpectDisplayingErrorPage(isolated_browser, net::ERR_NAME_NOT_RESOLVED);
+
+#if !BUILDFLAG(IS_CHROMEOS)
+  // The diagnostics tool logs the URLs it is run with, so it must not be
+  // available in Isolated Mode, just like in incognito mode.
+  EXPECT_FALSE(WebContentsCanShowDiagnosticsTool(
+      isolated_browser->tab_strip_model()->GetActiveWebContents()));
+#endif
+
+  // Diagnostics button should be displayed, if available.
+  EXPECT_EQ(WebContentsCanShowDiagnosticsTool(
+                isolated_browser->tab_strip_model()->GetActiveWebContents()),
+            IsDisplayingDiagnosticsLink(isolated_browser));
 }
 
 class ErrorPageAutoReloadTest : public InProcessBrowserTest {
@@ -1071,7 +1125,7 @@ class ErrorPageForIDNTest : public InProcessBrowserTest {
   // InProcessBrowserTest:
   void SetUpOnMainThread() override {
     // Clear AcceptLanguages to force punycode decoding.
-    browser()->profile()->GetPrefs()->SetString(
+    browser()->GetProfile()->GetPrefs()->SetString(
         language::prefs::kAcceptLanguages, std::string());
   }
 
@@ -1128,7 +1182,7 @@ IN_PROC_BROWSER_TEST_F(ErrorPageSniffTest,
 
 #if BUILDFLAG(IS_CHROMEOS)
 // For ChromeOS, launches appropriate diagnostics app.
-void ClickDiagnosticsLink(Browser* browser) {
+void ClickDiagnosticsLink(BrowserWindowInterface* browser) {
   DCHECK(IsDisplayingDiagnosticsLink(browser));
   EXPECT_TRUE(
       content::ExecJs(browser->tab_strip_model()->GetActiveWebContents(),

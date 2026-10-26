@@ -32,7 +32,6 @@
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
@@ -40,7 +39,6 @@
 #import "ios/chrome/test/fakes/fake_download_manager_tab_helper_delegate.h"
 #import "ios/chrome/test/fakes/fake_enterprise_commands_handler.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
-#import "ios/components/enterprise/analysis/features.h"
 #import "ios/web/public/download/download_task_observer.h"
 #import "ios/web/public/test/fakes/fake_download_task.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
@@ -89,8 +87,7 @@ class DownloadManagerTabHelperTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
-            std::make_unique<FakeAuthenticationServiceDelegate>()));
+        AuthenticationServiceFactory::GetDefaultFactory());
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateTestSyncService));
     profile_ = std::move(builder).Build();
@@ -179,8 +176,8 @@ class DownloadManagerTabHelperTest : public PlatformTest {
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   base::test::ScopedFeatureList scoped_feature_list_;
   base::ScopedTempDir temp_dir_;
-  std::unique_ptr<TestBrowser> browser_;
   std::unique_ptr<TestProfileIOS> profile_;
+  std::unique_ptr<TestBrowser> browser_;
   raw_ptr<web::FakeWebState> web_state_ = nullptr;
   raw_ptr<AuthenticationService> auth_service_ = nullptr;
   FakeSystemIdentity* fake_identity_ = nullptr;
@@ -319,9 +316,6 @@ TEST_F(DownloadManagerTabHelperTest, HasDownloadTask) {
 // This verifies that when the feature is disabled, the scan result is SUCCESS
 // and it proceeds without a warning dialog.
 TEST_F(DownloadManagerTabHelperTest, DownloadCompleteProceeds) {
-  scoped_feature_list_.InitAndDisableFeature(
-      enterprise_connectors::kEnableFileDownloadConnectorIOS);
-
   web_state_->WasShown();
   std::unique_ptr<web::FakeDownloadTask> task =
       CreateFakeDownloadTask(GURL(kUrl), kMimeType);
@@ -364,9 +358,6 @@ TEST_F(DownloadManagerTabHelperTest, DownloadCompleteSavedToDriveDoesNotMove) {
 // is set, the scan result will be SUCCESS and the download proceeds,
 TEST_F(DownloadManagerTabHelperTest,
        DownloadCompleteWithScanningEnabledProceeds) {
-  scoped_feature_list_.InitAndEnableFeature(
-      enterprise_connectors::kEnableFileDownloadConnectorIOS);
-
   web_state_->WasShown();
   std::unique_ptr<web::FakeDownloadTask> task =
       CreateFakeDownloadTask(GURL(kUrl), kMimeType);
@@ -421,9 +412,6 @@ TEST_F(DownloadManagerTabHelperTest, EnterpriseMetadataCleanup) {
 // Tests that when a download task is complete, the tab helper notifies the
 // delegate about state updates and correctly reports `IsScannerProcessing()`.
 TEST_F(DownloadManagerTabHelperTest, DownloadCompleteNotifiesDelegate) {
-  scoped_feature_list_.InitAndDisableFeature(
-      enterprise_connectors::kEnableFileDownloadConnectorIOS);
-
   web_state_->WasShown();
   std::unique_ptr<web::FakeDownloadTask> task =
       CreateFakeDownloadTask(GURL(kUrl), kMimeType);

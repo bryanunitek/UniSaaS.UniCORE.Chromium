@@ -7,6 +7,7 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/containers/flat_map.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/web_contents.h"
@@ -23,6 +24,52 @@ using base::android::AttachCurrentThread;
 using base::android::JavaRef;
 
 namespace content {
+
+namespace {
+
+// Flattens the response headers of `navigation_handle` into a map. Headers
+// that appear multiple times are combined into a single comma separated
+// value. Returns an empty map if the response headers haven't been received
+// yet.
+//
+// Note: `Set-Cookie` headers are handled directly by the network service and
+// are not present in NavigationHandle's response headers, so we do not need to
+// worry about comma-separating multiple cookie headers.
+base::flat_map<std::string, std::string> GetResponseHeadersMap(
+    NavigationHandle* navigation_handle) {
+  base::flat_map<std::string, std::string> response_headers;
+  const net::HttpResponseHeaders* headers =
+      navigation_handle->GetResponseHeaders();
+  if (!headers) {
+    return response_headers;
+  }
+
+  size_t headers_iterator = 0;
+  std::string header_name, header_value;
+  while (headers->EnumerateHeaderLines(&headers_iterator, &header_name,
+                                       &header_value)) {
+    auto it = response_headers.find(header_name);
+    if (it == response_headers.end()) {
+      response_headers[header_name] = header_value;
+    } else if (!header_value.empty()) {
+      if (!it->second.empty()) {
+        it->second += ", ";
+      }
+      it->second += header_value;
+    }
+  }
+  return response_headers;
+}
+
+// Returns the HTTP status code of the response of `navigation_handle`, or 0 if
+// the response headers haven't been received yet.
+int GetResponseCode(NavigationHandle* navigation_handle) {
+  const net::HttpResponseHeaders* headers =
+      navigation_handle->GetResponseHeaders();
+  return headers ? headers->response_code() : 0;
+}
+
+}  // namespace
 
 NavigationHandleProxy::NavigationHandleProxy(
     NavigationHandle* cpp_navigation_handle)
@@ -51,6 +98,7 @@ void NavigationHandleProxy::DidStart() {
       env, java_navigation_handle_,
       url::GURLAndroid::FromNativeGURL(
           env, cpp_navigation_handle_->GetReferrer().url),
+      static_cast<jint>(cpp_navigation_handle_->GetReferrer().policy),
       url::GURLAndroid::FromNativeGURL(
           env, cpp_navigation_handle_->GetBaseURLForDataURL()),
       cpp_navigation_handle_->IsInPrimaryMainFrame(),
@@ -67,15 +115,19 @@ void NavigationHandleProxy::DidStart() {
       cpp_navigation_handle_->IsPageActivation(),
       cpp_navigation_handle_->IsPdf(),
       base::android::ConvertUTF8ToJavaString(env, GetMimeType()),
+      cpp_navigation_handle_->NavigationStart().ToUptimeMillis(),
       cpp_navigation_handle_->GetWebContents()->GetJavaWebContents());
 }
 
 void NavigationHandleProxy::DidRedirect() {
   JNIEnv* env = AttachCurrentThread();
   Java_NavigationHandle_didRedirect(
-      env, java_navigation_handle_,
-      url::GURLAndroid::FromNativeGURL(env, cpp_navigation_handle_->GetURL()),
-      cpp_navigation_handle_->IsExternalProtocol());
+      env, java_navigation_handle_, cpp_navigation_handle_->GetURL(),
+      cpp_navigation_handle_->IsExternalProtocol(),
+      cpp_navigation_handle_->GetReferrer().url,
+      static_cast<jint>(cpp_navigation_handle_->GetReferrer().policy),
+      GetResponseHeadersMap(cpp_navigation_handle_),
+      GetResponseCode(cpp_navigation_handle_));
 }
 
 void NavigationHandleProxy::DidFinish() {
@@ -109,23 +161,18 @@ void NavigationHandleProxy::DidFinish() {
                             : false;
 
   Java_NavigationHandle_didFinish(
-      env, java_navigation_handle_, url::GURLAndroid::FromNativeGURL(env, gurl),
-      cpp_navigation_handle_->IsErrorPage(),
+      env, java_navigation_handle_, gurl, cpp_navigation_handle_->IsErrorPage(),
       cpp_navigation_handle_->HasCommitted(),
       is_primary_main_frame_fragment_navigation,
       cpp_navigation_handle_->IsDownload(), is_valid_search_form_url,
       cpp_navigation_handle_->GetPageTransition(),
       cpp_navigation_handle_->GetNetErrorCode(),
-      base::android::ConvertUTF8ToJavaString(
-          env, net::ErrorToString(cpp_navigation_handle_->GetNetErrorCode())),
-      cpp_navigation_handle_->GetResponseHeaders()
-          ? cpp_navigation_handle_->GetResponseHeaders()->response_code()
-          : 0,
+      net::ErrorToString(cpp_navigation_handle_->GetNetErrorCode()),
+      GetResponseCode(cpp_navigation_handle_),
       cpp_navigation_handle_->IsExternalProtocol(),
-      cpp_navigation_handle_->IsPdf(),
-      base::android::ConvertUTF8ToJavaString(env, GetMimeType()),
+      cpp_navigation_handle_->IsPdf(), GetMimeType(),
       cpp_navigation_handle_->GetWebContents()->GetPrimaryPage().GetJavaPage(),
-      is_same_origin,
+      is_same_origin, GetResponseHeadersMap(cpp_navigation_handle_),
       cpp_navigation_handle_->GetIgnoredDuplicateNavigationCount());
 }
 

@@ -12,8 +12,10 @@
  * these Mojo-based searchbox types.
  */
 
-import type {AutocompleteMatch, AutocompleteResult, PageHandlerInterface} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
-import {PageCallbackRouter, PageHandlerFactory, PageHandlerRemote} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import type {Action, AutocompleteMatch, AutocompleteResult, InputKeywordModel, MatchKeywordModel, PageHandlerInterface} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import {KeywordType, PageCallbackRouter, PageHandlerFactory, PageHandlerRemote} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import {ColorType, IconType, SecondaryTextPlacement, SuggestStyle} from '//resources/mojo/components/omnibox/browser/suggest_template_info.mojom-webui.js';
+import type {FormattedString, FormattedStringFragment, SuggestTemplateInfo} from '//resources/mojo/components/omnibox/browser/suggest_template_info.mojom-webui.js';
 
 export function createAutocompleteMatch(
     modifiers: Partial<AutocompleteMatch> = {}): AutocompleteMatch {
@@ -24,31 +26,42 @@ export function createAutocompleteMatch(
     allowedToBeDefaultMatch: false,
     isSearchType: false,
     isEnterpriseSearchAggregatorPeopleType: false,
-    swapContentsAndDescription: false,
+    descriptionIconPath: '',
+    showSecondaryTextOnlyOnSelection: false,
     supportsDeletion: false,
     suggestionGroupId: -1,
-    contents: '',
-    contentsClass: [{offset: 0, style: 0}],
-    description: '',
-    descriptionClass: [{offset: 0, style: 0}],
     destinationUrl: '',
     inlineAutocompletion: '',
     fillIntoEdit: '',
     iconPath: '',
     iconUrl: '',
-    imageDominantColor: '',
-    imageUrl: '',
-    isContextualSuggestion: false,
-    isNoncannedAimSuggestion: false,
     removeButtonA11yLabel: '',
     type: '',
-    isRichSuggestion: false,
-    isWeatherAnswerSuggestion: null,
-    answer: null,
     tailSuggestCommonPrefix: null,
-    hasInstantKeyword: false,
-    keywordChipHint: '',
-    keywordChipA11y: '',
+    keywordModel: null,
+    suggestTemplate: createSuggestTemplateInfo(),
+    urlEmphasis: null,
+  };
+
+  return Object.assign(base, modifiers);
+}
+
+export function createFormattedString(
+    text: string = '',
+    fragments: FormattedStringFragment[] = []): FormattedString {
+  return {text, fragments, a11yText: null};
+}
+
+export function createSuggestTemplateInfo(
+    modifiers: Partial<SuggestTemplateInfo> = {}): SuggestTemplateInfo {
+  const base: SuggestTemplateInfo = {
+    primaryText: createFormattedString(),
+    secondaryText: null,
+    secondaryTextPlacement: SecondaryTextPlacement.kUnspecified,
+    image: null,
+    style: SuggestStyle.kUnspecified,
+    typeIcon: IconType.kIconTypeUnspecified,
+    fuseboxAction: null,
   };
 
   return Object.assign(base, modifiers);
@@ -62,6 +75,7 @@ export function createAutocompleteResultForTesting(
     matches: [],
     suggestionGroupsMap: {},
     smartComposeInlineHint: null,
+    showAimActivityLink: false,
     sequenceId: 0,
   };
 
@@ -70,16 +84,59 @@ export function createAutocompleteResultForTesting(
 
 export function createSearchMatchForTesting(
     modifiers: Partial<AutocompleteMatch> = {}): AutocompleteMatch {
+  const hintTextFragment: FormattedStringFragment = {
+    startIndex: 0,
+    color: ColorType.kSuggestHintText,
+    isBolded: false,
+  };
   const base = createAutocompleteMatch({
     isSearchType: true,
-    contents: 'hello world',
-    contentsClass: [{offset: 0, style: 0}],
-    description: 'Google search',
-    descriptionClass: [{offset: 0, style: 4}],
     destinationUrl: 'https://www.google.com/search?q=hello+world',
     fillIntoEdit: 'hello world',
     type: 'search-what-you-typed',
+    suggestTemplate: createSuggestTemplateInfo({
+      primaryText: createFormattedString('hello world'),
+      secondaryText: createFormattedString('Google search', [hintTextFragment]),
+    }),
   });
+
+  return Object.assign(base, modifiers);
+}
+
+export function createMatchKeywordModelForTesting(
+    modifiers: Partial<MatchKeywordModel> = {}): MatchKeywordModel {
+  const base = {
+    type: KeywordType.kChip,
+    chipHint: '',
+    chipA11y: '',
+    placeholder: '',
+    keyword: '',
+  };
+
+  return Object.assign(base, modifiers);
+}
+
+export function createInputKeywordModelForTesting(
+    modifiers: Partial<InputKeywordModel> = {}): InputKeywordModel {
+  const base: InputKeywordModel = {
+    type: KeywordType.kChip,
+    keyword: '',
+    displayText: '',
+    iconPath: '',
+    placeholder: '',
+  };
+
+  return Object.assign(base, modifiers);
+}
+
+export function createActionForTesting(modifiers: Partial<Action> = {}):
+    Action {
+  const base: Action = {
+    hint: '',
+    suggestionContents: '',
+    iconPath: '',
+    a11yLabel: '',
+  };
 
   return Object.assign(base, modifiers);
 }

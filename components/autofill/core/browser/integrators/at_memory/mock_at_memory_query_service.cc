@@ -7,28 +7,17 @@
 #include <memory>
 
 #include "components/autofill/core/browser/at_memory/autofill_data_provider.h"
-#include "components/autofill/core/browser/integrators/at_memory/at_memory_query_service_delegate.h"
 
 namespace autofill {
 
-namespace {
-
-class StubAtMemoryQueryServiceDelegate : public AtMemoryQueryServiceDelegate {
- public:
-  void RetrieveLiveTabContext(
-      LiveTabContextQuery query,
-      base::OnceCallback<void(LiveTabContextResponse)> callback) override {
-    std::move(callback).Run({});
-  }
-};
-
-}  // namespace
-
 MockAtMemoryQueryService::MockAtMemoryQueryService()
-    : AtMemoryQueryService(std::make_unique<StubAtMemoryQueryServiceDelegate>(),
-                           /*data_provider=*/nullptr,
+    : AtMemoryQueryService(/*data_provider=*/nullptr,
                            /*personal_context_service=*/nullptr,
-                           /*locale=*/"") {}
+                           /*locale=*/"",
+                           /*personal_context_eligibility_service=*/nullptr,
+                           /*subscription_eligibility_service=*/nullptr,
+                           /*pref_service=*/nullptr,
+                           /*log_router=*/nullptr) {}
 
 MockAtMemoryQueryService::~MockAtMemoryQueryService() = default;
 

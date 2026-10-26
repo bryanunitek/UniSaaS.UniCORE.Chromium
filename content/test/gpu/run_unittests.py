@@ -9,21 +9,19 @@ This script DOES NOT run tests. run_gpu_test does that.
 
 import sys
 
-from gpu_path_util import setup_telemetry_paths  # pylint: disable=unused-import
+from gpu_path_util import setup_telemetry_paths  # pylint: disable=unused-import  # noqa: F401
 import gpu_project_config
 
 # This needs to come after setup_telemetry_paths in order for the import to
 # work.
-# pylint: disable=wrong-import-order
 from telemetry.testing import unittest_runner
-# pylint: enable=wrong-import-order
 
 
 def main():
   args = sys.argv[1:]
-  return unittest_runner.Run(gpu_project_config.CONFIG,
-                             no_browser=True,
-                             passed_args=args)
+  return unittest_runner.Run(
+    gpu_project_config.CONFIG, no_browser=True, passed_args=args
+  )
 
 
 if __name__ == '__main__':

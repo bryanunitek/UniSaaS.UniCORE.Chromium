@@ -19,6 +19,7 @@
 #import "ios/chrome/browser/policy/model/policy_util.h"
 #import "ios/chrome/browser/safari_data_import/test/safari_data_import_earl_grey_ui.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/common/ui/button_stack/button_stack_constants.h"
 #import "ios/chrome/common/ui/promo_style/constants.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -134,11 +135,8 @@
   NSArray* disclaimerStrings = nil;
   switch (FRESigninIntent) {
     case FRESigninIntentRegular:
-      titleMatcher = grey_anyOf(
-          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE)),
-          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_0)),
-          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_1)),
-          nil);
+      titleMatcher =
+          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_1));
       subtitle = l10n_util::GetNSString(
           IDS_IOS_FIRST_RUN_SIGNIN_BENEFITS_SUBTITLE_SHORT);
       disclaimerStrings = @[
@@ -182,11 +180,8 @@
       ];
       break;
     case FRESigninIntentSigninWithSyncDisabledPolicy:
-      titleMatcher = grey_anyOf(
-          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE)),
-          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_0)),
-          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_1)),
-          nil);
+      titleMatcher =
+          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_1));
       // Note: With SyncDisabled, the "benefits" string is not used.
       subtitle =
           l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_SUBTITLE_SHORT);
@@ -200,11 +195,8 @@
       ];
       break;
     case FRESigninIntentSigninWithPolicy:
-      titleMatcher = grey_anyOf(
-          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE)),
-          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_0)),
-          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_1)),
-          nil);
+      titleMatcher =
+          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_1));
       subtitle = l10n_util::GetNSString(
           IDS_IOS_FIRST_RUN_SIGNIN_BENEFITS_SUBTITLE_SHORT);
       disclaimerStrings = @[
@@ -217,11 +209,8 @@
       ];
       break;
     case FRESigninIntentSigninWithUMAReportingDisabledPolicy:
-      titleMatcher = grey_anyOf(
-          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE)),
-          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_0)),
-          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_1)),
-          nil);
+      titleMatcher =
+          grey_text(l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_1));
       subtitle = l10n_util::GetNSString(
           IDS_IOS_FIRST_RUN_SIGNIN_BENEFITS_SUBTITLE_SHORT);
       disclaimerStrings = @[
@@ -237,14 +226,14 @@
                                                titleMatcher,
                                                grey_sufficientlyVisible(), nil)
                       scrollViewIdentifier:
-                          kPromoStyleScrollViewAccessibilityIdentifier]
+                          kButtonStackScrollViewAccessibilityIdentifier]
       assertWithMatcher:grey_notNil()];
   // Validate the Subtitle text.
   [[self elementInteractionWithGreyMatcher:grey_allOf(
                                                grey_text(subtitle),
                                                grey_sufficientlyVisible(), nil)
                       scrollViewIdentifier:
-                          kPromoStyleScrollViewAccessibilityIdentifier]
+                          kButtonStackScrollViewAccessibilityIdentifier]
       assertWithMatcher:grey_notNil()];
   // Validate the Managed text.
   [self verifyDisclaimerFooterWithStrings:disclaimerStrings];
@@ -310,7 +299,7 @@
                                                grey_text(disclaimerText),
                                                grey_sufficientlyVisible(), nil)
                       scrollViewIdentifier:
-                          kPromoStyleScrollViewAccessibilityIdentifier]
+                          kButtonStackScrollViewAccessibilityIdentifier]
       assertWithMatcher:grey_notNil()];
 }
 

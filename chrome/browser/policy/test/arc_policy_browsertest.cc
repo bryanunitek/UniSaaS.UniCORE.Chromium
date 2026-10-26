@@ -5,11 +5,11 @@
 #include "ash/constants/ash_features.h"
 #include "base/memory/ptr_util.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/values.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/policy/handlers/configuration_policy_handler_ash.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
 #include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
@@ -38,10 +38,10 @@ class ArcPolicyTest : public PolicyTest {
         std::make_unique<arc::ArcSessionRunner>(
             base::BindRepeating(arc::FakeArcSession::Create)));
 
-    browser()->profile()->GetPrefs()->SetBoolean(arc::prefs::kArcSignedIn,
-                                                 true);
-    browser()->profile()->GetPrefs()->SetBoolean(arc::prefs::kArcTermsAccepted,
-                                                 true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(arc::prefs::kArcSignedIn,
+                                                    true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        arc::prefs::kArcTermsAccepted, true);
   }
 
   void TearDownOnMainThread() override {
@@ -60,7 +60,7 @@ class ArcPolicyTest : public PolicyTest {
                  POLICY_SOURCE_CLOUD, base::Value(enabled), nullptr);
     UpdateProviderPolicy(policies);
     if (browser()) {
-      const PrefService* const prefs = browser()->profile()->GetPrefs();
+      const PrefService* const prefs = browser()->GetProfile()->GetPrefs();
       EXPECT_EQ(prefs->GetBoolean(arc::prefs::kArcEnabled), enabled);
     }
   }
@@ -70,7 +70,7 @@ class ArcPolicyTest : public PolicyTest {
 
 // Test ArcEnabled policy.
 IN_PROC_BROWSER_TEST_F(ArcPolicyTest, ArcEnabled) {
-  const PrefService* const pref = browser()->profile()->GetPrefs();
+  const PrefService* const pref = browser()->GetProfile()->GetPrefs();
   const auto* const arc_session_manager = arc::ArcSessionManager::Get();
 
   // ARC is switched off by default.
@@ -88,7 +88,7 @@ IN_PROC_BROWSER_TEST_F(ArcPolicyTest, ArcEnabled) {
 
 // Test ArcBackupRestoreServiceEnabled policy.
 IN_PROC_BROWSER_TEST_F(ArcPolicyTest, ArcBackupRestoreServiceEnabled) {
-  PrefService* const pref = browser()->profile()->GetPrefs();
+  PrefService* const pref = browser()->GetProfile()->GetPrefs();
 
   // Enable ARC backup and restore in user prefs.
   pref->SetBoolean(arc::prefs::kArcBackupRestoreEnabled, true);
@@ -141,7 +141,7 @@ IN_PROC_BROWSER_TEST_F(ArcPolicyTest, ArcBackupRestoreServiceEnabled) {
 // DefaultGeolocationSetting policy.
 IN_PROC_BROWSER_TEST_F(ArcPolicyTest, ArcGoogleLocationServicesEnabled) {
   ASSERT_FALSE(ash::features::IsCrosPrivacyHubLocationEnabled());
-  PrefService* const pref = browser()->profile()->GetPrefs();
+  PrefService* const pref = browser()->GetProfile()->GetPrefs();
 
   // Values of the ArcGoogleLocationServicesEnabled policy to be tested.
   auto test_policy_values =
@@ -241,7 +241,7 @@ IN_PROC_BROWSER_TEST_P(ArcLocationPolicyWhenPhEnabledTest,
 
   // Check that `ArcGoogleLocationServicesEnabled` policy, as it's being
   // deprecated, no longer affects the underlying pref.
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   EXPECT_TRUE(prefs->FindPreference(arc::prefs::kArcLocationServiceEnabled)
                   ->IsDefaultValue());
   EXPECT_FALSE(
@@ -254,5 +254,30 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(ArcServicePolicyValue::kDisabled,
                     ArcServicePolicyValue::kUnderUserControl,
                     ArcServicePolicyValue::kEnabled));
+
+// Test AutoLaunchAndroidApps policy.
+IN_PROC_BROWSER_TEST_F(ArcPolicyTest, AutoLaunchAndroidApps) {
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
+  EXPECT_TRUE(prefs->GetList(arc::prefs::kArcAutoLaunchApps).empty());
+  EXPECT_FALSE(prefs->IsManagedPreference(arc::prefs::kArcAutoLaunchApps));
+
+  const auto apps = base::ListValue()
+                        .Append("com.example.app")
+                        .Append("com.example.telemetry");
+
+  PolicyMap policies;
+  policies.Set(key::kAutoLaunchAndroidApps, POLICY_LEVEL_MANDATORY,
+               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
+               base::Value(apps.Clone()), nullptr);
+  UpdateProviderPolicy(policies);
+
+  EXPECT_EQ(apps, prefs->GetList(arc::prefs::kArcAutoLaunchApps));
+  EXPECT_TRUE(prefs->IsManagedPreference(arc::prefs::kArcAutoLaunchApps));
+
+  // Clearing the policy restores the default, unmanaged value.
+  UpdateProviderPolicy(PolicyMap());
+  EXPECT_TRUE(prefs->GetList(arc::prefs::kArcAutoLaunchApps).empty());
+  EXPECT_FALSE(prefs->IsManagedPreference(arc::prefs::kArcAutoLaunchApps));
+}
 
 }  // namespace policy

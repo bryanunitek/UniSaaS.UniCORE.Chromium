@@ -300,7 +300,6 @@ class MockPageSchedulerImpl : public PageSchedulerImpl {
         .WillByDefault(Return(false));
     ON_CALL(*this, IsWaitingForMainFrameMeaningfulPaint)
         .WillByDefault(Return(false));
-    ON_CALL(*this, IsMainFrameLocal).WillByDefault(Return(true));
     ON_CALL(*this, IsOrdinary).WillByDefault(Return(true));
 
     // This would normally be called by
@@ -314,7 +313,6 @@ class MockPageSchedulerImpl : public PageSchedulerImpl {
   MOCK_METHOD(bool, RequestBeginMainFrameNotExpected, (bool));
   MOCK_METHOD(bool, IsWaitingForMainFrameContentfulPaint, (), (const));
   MOCK_METHOD(bool, IsWaitingForMainFrameMeaningfulPaint, (), (const));
-  MOCK_METHOD(bool, IsMainFrameLocal, (), (const));
   MOCK_METHOD(bool, IsOrdinary, (), (const));
 };
 
@@ -4589,7 +4587,11 @@ TEST_P(BusyLoopOnRendererMainTest,
   } else {
     CheckScaleFactor([](UseCase use_case, float scale_factor) {
       const float expected_scale_factor =
-          (use_case == UseCase::kNone ? .5f : 1.f);
+          (use_case == UseCase::kNone ||
+           (use_case == UseCase::kCompositorGesture &&
+            base::FeatureList::IsEnabled(kBusyLoopLessWhenCompositorGesture)))
+              ? .5f
+              : 1.f;
       if (scale_factor == expected_scale_factor) {
         return ::testing::AssertionSuccess();
       }
@@ -4649,7 +4651,12 @@ TEST_P(BusyLoopOnRendererMainTest, BusyLoopAggressiveAfterCommittedLoad) {
   }
 
   auto expect_regular_factor = [](UseCase use_case, float scale_factor) {
-    const float expected_scale_factor = use_case == UseCase::kNone ? .5f : 1.f;
+    const float expected_scale_factor =
+        (use_case == UseCase::kNone ||
+         (use_case == UseCase::kCompositorGesture &&
+          base::FeatureList::IsEnabled(kBusyLoopLessWhenCompositorGesture)))
+            ? .5f
+            : 1.f;
     return Report(use_case, scale_factor, expected_scale_factor);
   };
 

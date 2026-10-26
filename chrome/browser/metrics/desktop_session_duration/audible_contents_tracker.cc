@@ -5,11 +5,11 @@
 #include "chrome/browser/metrics/desktop_session_duration/audible_contents_tracker.h"
 
 #include "chrome/browser/metrics/desktop_session_duration/desktop_session_duration_tracker.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
+#include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 
 namespace metrics {
@@ -50,14 +50,14 @@ void AudibleContentsTracker::OnTabStripModelChanged(
     if (replace->new_contents) {
       auto* audible_helper =
           RecentlyAudibleHelper::FromWebContents(replace->new_contents);
-      if (audible_helper->WasRecentlyAudible())
+      if (audible_helper && audible_helper->WasRecentlyAudible()) {
         AddAudibleWebContents(replace->new_contents);
+      }
     }
   }
 }
 
 void AudibleContentsTracker::OnTabChangedAt(tabs::TabInterface* tab,
-                                            int index,
                                             TabChangeType change_type) {
   // Ignore 'loading' and 'title' changes.
   if (change_type != TabChangeType::kAll)
@@ -65,10 +65,11 @@ void AudibleContentsTracker::OnTabChangedAt(tabs::TabInterface* tab,
 
   auto* web_contents = tab->GetContents();
   auto* audible_helper = RecentlyAudibleHelper::FromWebContents(web_contents);
-  if (audible_helper->WasRecentlyAudible())
+  if (audible_helper && audible_helper->WasRecentlyAudible()) {
     AddAudibleWebContents(web_contents);
-  else
+  } else {
     RemoveAudibleWebContents(web_contents);
+  }
 }
 
 void AudibleContentsTracker::AddAudibleWebContents(

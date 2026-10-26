@@ -7,7 +7,6 @@
 #import <memory>
 
 #import "base/test/ios/wait_util.h"
-#import "base/test/scoped_feature_list.h"
 #import "components/search_engines/template_url_service.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/signin/public/identity_manager/identity_test_environment.h"
@@ -21,6 +20,8 @@
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/signin/model/identity_test_environment_browser_state_adaptor.h"
+#import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
+#import "ios/chrome/test/ios_chrome_scoped_testing_variations_service.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
@@ -28,15 +29,15 @@
 
 class MiniMapServiceTest : public PlatformTest {
  public:
-  MiniMapServiceTest() : application_(OCMClassMock([UIApplication class])) {}
+  MiniMapServiceTest() : application_(OCMClassMock([UIApplication class])) {
+    // Force the localization in a country where the service is allowed.
+    scoped_variations_service_.Get()->OverrideStoredPermanentCountry("us");
+  }
 
   void SetUp() override {
     PlatformTest::SetUp();
-    feature_list_.InitAndEnableFeature(kIOSMiniMapUniversalLink);
 
-    MiniMapServiceFactory::GetInstance();
     TestProfileIOS::Builder test_profile_builder;
-
     test_profile_builder.AddTestingFactory(
         ios::TemplateURLServiceFactory::GetInstance(),
         ios::TemplateURLServiceFactory::GetDefaultFactory());
@@ -52,8 +53,9 @@ class MiniMapServiceTest : public PlatformTest {
     PlatformTest::TearDown();
   }
 
-  base::test::ScopedFeatureList feature_list_;
   web::WebTaskEnvironment task_environment_;
+  IOSChromeScopedTestingLocalState scoped_testing_local_state_;
+  IOSChromeScopedTestingVariationsService scoped_variations_service_;
   std::unique_ptr<TestProfileIOS> profile_;
   raw_ptr<MiniMapService> mini_map_service_;
   id application_;
@@ -115,22 +117,21 @@ TEST_F(MiniMapServiceTest, TestMiniMapIsMapsInstalled) {
   EXPECT_FALSE(mini_map_service_->IsGoogleMapsInstalled());
 }
 
-using MiniMapServiceCounterfactualTest = PlatformTest;
+class MiniMapUniversalLinkTest : public PlatformTest {
+ protected:
+  web::WebTaskEnvironment task_environment_;
+  IOSChromeScopedTestingLocalState scoped_testing_local_state_;
+  IOSChromeScopedTestingVariationsService scoped_variations_service_;
+};
 
-TEST_F(MiniMapServiceCounterfactualTest,
-       TestServiceCreationWithCounterfactualFlag) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({kIOSMiniMapUniversalLinkCounterfactual},
-                                {kIOSMiniMapUniversalLink});
+// Tests for IsMiniMapUniversalLinkEnabled behavior.
+TEST_F(MiniMapUniversalLinkTest, TestMiniMapUniversalLinkEnabled) {
+  scoped_variations_service_.Get()->OverrideStoredPermanentCountry("us");
+  EXPECT_TRUE(IsMiniMapUniversalLinkEnabled());
+}
 
-  web::WebTaskEnvironment task_environment;
-  TestProfileIOS::Builder test_profile_builder;
-  test_profile_builder.AddTestingFactory(
-      ios::TemplateURLServiceFactory::GetInstance(),
-      ios::TemplateURLServiceFactory::GetDefaultFactory());
-  std::unique_ptr<TestProfileIOS> profile =
-      std::move(test_profile_builder).Build();
-
-  MiniMapService* service = MiniMapServiceFactory::GetForProfile(profile.get());
-  EXPECT_TRUE(service);
+TEST_F(MiniMapUniversalLinkTest,
+       TestMiniMapUniversalLinkDisabledWhenCountryExcluded) {
+  scoped_variations_service_.Get()->OverrideStoredPermanentCountry("fr");
+  EXPECT_FALSE(IsMiniMapUniversalLinkEnabled());
 }

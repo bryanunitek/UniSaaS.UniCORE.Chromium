@@ -7,7 +7,6 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
 #include "chrome/browser/ui/views/payments/payment_request_row_view.h"
@@ -18,14 +17,7 @@
 #include "components/payments/core/strings_util.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/gfx/geometry/insets.h"
-#include "ui/gfx/paint_vector_icon.h"
-#include "ui/native_theme/native_theme.h"
-#include "ui/views/controls/button/label_button.h"
-#include "ui/views/controls/button/md_text_button.h"
-#include "ui/views/controls/image_view.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/layout/fill_layout.h"
 
 namespace payments {
 
@@ -72,8 +64,8 @@ class ProfileItem : public PaymentRequestItemList::Item {
   // PaymentRequestItemList::Item:
   std::unique_ptr<views::View> CreateContentView(
       std::u16string* accessible_content) override {
-    DCHECK(profile_);
-    DCHECK(accessible_content);
+    CHECK(profile_, base::NotFatalUntil::M162);
+    CHECK(accessible_content, base::NotFatalUntil::M162);
 
     return controller_->GetLabel(profile_, accessible_content);
   }
@@ -119,7 +111,7 @@ class ShippingProfileViewController : public ProfileListViewController,
                                 base::WeakPtr<PaymentRequestState> state,
                                 base::WeakPtr<PaymentRequestDialogView> dialog)
       : ProfileListViewController(spec, state, dialog) {
-    DCHECK(spec);
+    CHECK(spec, base::NotFatalUntil::M162);
     spec->AddObserver(this);
     PopulateList();
   }
@@ -249,7 +241,7 @@ class ContactProfileViewController : public ProfileListViewController {
                                base::WeakPtr<PaymentRequestState> state,
                                base::WeakPtr<PaymentRequestDialogView> dialog)
       : ProfileListViewController(spec, state, dialog) {
-    DCHECK(spec);
+    CHECK(spec, base::NotFatalUntil::M162);
     PopulateList();
   }
 
@@ -264,7 +256,7 @@ class ContactProfileViewController : public ProfileListViewController {
   std::unique_ptr<views::View> GetLabel(
       autofill::AutofillProfile* profile,
       std::u16string* accessible_content) override {
-    DCHECK(profile);
+    CHECK(profile, base::NotFatalUntil::M162);
     return GetContactInfoLabel(
         AddressStyleType::DETAILED, state()->GetApplicationLocale(), *profile,
         /*request_payer_name=*/spec() && spec()->request_payer_name(),

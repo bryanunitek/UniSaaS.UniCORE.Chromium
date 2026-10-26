@@ -112,6 +112,7 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
       const DisplayFeature* display_feature) override;
   void UpdateBackgroundColor() override;
   bool HasFallbackSurface() const override;
+  void OptOutFrameEviction() override;
   void NotifyHostAndDelegateOnWasShown(
       std::optional<blink::RecordContentToVisibleTimeRequest>
           visible_time_request) override;
@@ -126,11 +127,12 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
   void ActivatedOrEvictedFromBackForwardCache() override;
   void DidNavigate() override;
   bool RequestRepaintOnNewSurface() override;
-  void Destroy() override;
+  void DestroyImpl() override;
   bool IsSurfaceAvailableForCopy() override;
-  void CopyFromSurface(
+  void CopyFromSurfaceImpl(
       const gfx::Rect& src_rect,
       const gfx::Size& dst_size,
+      bool is_copy_request_secure,
       base::TimeDelta timeout,
       base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback)
       override;
@@ -189,13 +191,13 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
   // RenderFrameMetadataProvider::Observer implementation.
   void OnRenderFrameMetadataChangedBeforeActivation(
       const cc::RenderFrameMetadata& metadata) override;
-  void OnRootScrollOffsetChanged(
-      const gfx::PointF& root_scroll_offset) override;
   void OnRenderFrameMetadataChangedAfterActivation(
       base::TimeTicks activation_time) override {}
   void OnRenderFrameSubmission() override {}
   void OnLocalSurfaceIdChanged(
       const cc::RenderFrameMetadata& metadata) override {}
+  void OnRootScrollOffsetChanged(
+      const gfx::PointF& root_scroll_offset) override;
 
   void SetActive(bool active);
   void OnTouchEvent(blink::WebTouchEvent event);
@@ -250,6 +252,8 @@ class CONTENT_EXPORT RenderWidgetHostViewIOS
   friend class MockPointerLockRenderWidgetHostView;
 
   RenderWidgetHostImpl* GetActiveWidget();
+  void CleanUpHostObservers() override;
+  void OnDestroyOrDefer() override;
 
   void OnDidUpdateVisualPropertiesComplete(
       const cc::RenderFrameMetadata& metadata);

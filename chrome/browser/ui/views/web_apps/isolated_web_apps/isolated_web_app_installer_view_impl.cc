@@ -307,7 +307,7 @@ class UpdateSettingsPane : public views::BoxLayoutView {
         16, {ui::kColorIcon, ui::kColorIconDisabled});
     views::SetToggledImageFromVectorIconWithColor(
         button.get(),
-        features::IsRoundedIconsEnabled() ? kKeyboardArrowUpIcon
+        features::IsRoundedIconsEnabled() ? vector_icons::kKeyboardArrowUpIcon
                                           : kKeyboardArrowUpOldIcon,
         16, {ui::kColorIcon, ui::kColorIconDisabled});
 
@@ -441,11 +441,6 @@ class InstallerDialogView : public views::BoxLayoutView {
             gfx::Range(offset, offset + subtitle_param->get().length()),
             views::StyledLabel::RangeStyleInfo::CreateForLink(
                 *subtitle_link_callback));
-        // Fix for crbug.com/505281659: ChromeVox doesn't announce links in
-        // StyledLabel when role is the default kStaticText.
-        // TODO(crbug.com/510791136): Can be removed when the todo bug is fixed.
-        subtitle_label_->GetViewAccessibility().SetRole(
-            ax::mojom::Role::kParagraph);
       }
     } else {
       subtitle_label_->SetText(l10n_util::GetStringUTF16(subtitle_id));
@@ -521,8 +516,6 @@ class GetMetadataView : public InstallerDialogView {
       : InstallerDialogView(
             CreateImageModelFromVector(features::IsRoundedIconsEnabled()
                                            ? kFingerprintIcon
-                                       : features::IsRoundedIconsEnabled()
-                                           ? vector_icons::kFingerprintIcon
                                            : kFingerprintOldIcon,
                                        ui::kColorAccent),
             IDS_IWA_INSTALLER_VERIFICATION_TITLE,
@@ -553,8 +546,6 @@ class ShowMetadataView : public InstallerDialogView {
       : InstallerDialogView(
             CreateImageModelFromVector(features::IsRoundedIconsEnabled()
                                            ? kFingerprintIcon
-                                       : features::IsRoundedIconsEnabled()
-                                           ? vector_icons::kFingerprintIcon
                                            : kFingerprintOldIcon,
                                        ui::kColorAccent),
             // The title will be updated to the app name when available.
@@ -614,8 +605,6 @@ class InstallView : public InstallerDialogView {
       : InstallerDialogView(
             CreateImageModelFromVector(features::IsRoundedIconsEnabled()
                                            ? kFingerprintIcon
-                                       : features::IsRoundedIconsEnabled()
-                                           ? vector_icons::kFingerprintIcon
                                            : kFingerprintOldIcon,
                                        ui::kColorAccent),
             // The title will be updated to the app name when available.
@@ -646,8 +635,6 @@ class InstallSuccessView : public InstallerDialogView {
       : InstallerDialogView(
             CreateImageModelFromVector(features::IsRoundedIconsEnabled()
                                            ? kFingerprintIcon
-                                       : features::IsRoundedIconsEnabled()
-                                           ? vector_icons::kFingerprintIcon
                                            : kFingerprintOldIcon,
                                        ui::kColorAccent),
             // The title will be updated to the app name when available.
@@ -834,27 +821,26 @@ views::Widget* IsolatedWebAppInstallerViewImpl::ShowDialog(
     const IsolatedWebAppInstallerModel::Dialog& dialog,
     const views::DialogDelegate* dialog_delegate) {
   ApplyDim(dialog_delegate);
+  const ui::ImageModel error_icon = CreateImageModelFromVector(
+      features::IsRoundedIconsEnabled() ? vector_icons::kErrorIcon
+                                        : vector_icons::kErrorOutlineOldIcon,
+      ui::kColorAlertMediumSeverityIcon);
   return std::visit(
       absl::Overload{
-          [this](const IsolatedWebAppInstallerModel::BundleInvalidDialog&) {
+          [this, &error_icon](
+              const IsolatedWebAppInstallerModel::BundleInvalidDialog&) {
             return ShowChildDialog(
                 IDS_IWA_INSTALLER_VERIFICATION_ERROR_TITLE,
                 ui::DialogModelLabel(
                     IDS_IWA_INSTALLER_VERIFICATION_ERROR_SUBTITLE),
-                CreateImageModelFromVector(
-                    features::IsRoundedIconsEnabled()
-                        ? vector_icons::kErrorIcon
-                        : vector_icons::kErrorOutlineOldIcon,
-                    ui::kColorAlertMediumSeverityIcon),
-                /*ok_label=*/std::nullopt);
+                error_icon, /*ok_label=*/std::nullopt);
           },
-          [this](
+          [this, &error_icon](
               const IsolatedWebAppInstallerModel::BundleAlreadyInstalledDialog&
                   already_installed_dialog) {
             std::u16string title = l10n_util::GetStringFUTF16(
                 IDS_IWA_INSTALLER_ALREADY_INSTALLED_TITLE,
                 already_installed_dialog.bundle_name);
-
             std::string installed_version =
                 already_installed_dialog.installed_version.GetString();
             auto subtitle = ui::DialogModelLabel::CreateWithReplacements(
@@ -865,12 +851,7 @@ views::Widget* IsolatedWebAppInstallerViewImpl::ShowDialog(
                     ui::DialogModelLabel::CreatePlainText(
                         base::UTF8ToUTF16(installed_version)),
                 });
-            return ShowChildDialog(title, subtitle,
-                                   CreateImageModelFromVector(
-                                       features::IsRoundedIconsEnabled()
-                                           ? vector_icons::kErrorIcon
-                                           : vector_icons::kErrorOutlineOldIcon,
-                                       ui::kColorAlertMediumSeverityIcon),
+            return ShowChildDialog(title, subtitle, error_icon,
                                    /*ok_label=*/std::nullopt);
           },
           [this](const IsolatedWebAppInstallerModel::ConfirmInstallationDialog&
@@ -887,43 +868,29 @@ views::Widget* IsolatedWebAppInstallerViewImpl::ShowDialog(
                                            ui::kColorAccent),
                 IDS_IWA_INSTALLER_CONFIRM_CONTINUE);
           },
-          [this](
+          [this, &error_icon](
               const IsolatedWebAppInstallerModel::InstallationFailedDialog&) {
             return ShowChildDialog(
                 IDS_IWA_INSTALLER_INSTALL_FAILED_TITLE,
                 ui::DialogModelLabel(IDS_IWA_INSTALLER_INSTALL_FAILED_SUBTITLE),
-                CreateImageModelFromVector(
-                    features::IsRoundedIconsEnabled()
-                        ? vector_icons::kErrorIcon
-                        : vector_icons::kErrorOutlineOldIcon,
-                    ui::kColorAlertMediumSeverityIcon),
-                IDS_IWA_INSTALLER_INSTALL_FAILED_RETRY);
+                error_icon, IDS_IWA_INSTALLER_INSTALL_FAILED_RETRY);
           },
-          [this](const IsolatedWebAppInstallerModel::
-                     BundleNotAllowlistedForUserInstallationDialog&) {
+          [this,
+           &error_icon](const IsolatedWebAppInstallerModel::
+                            BundleNotAllowlistedForUserInstallationDialog&) {
             return ShowChildDialog(
                 IDS_IWA_INSTALLER_INSTALL_FAILED_BUNDLE_BLOCKED_USER_INSTALL_ALLOWLIST_BLOCKLIST_TITLE,
                 ui::DialogModelLabel(
                     IDS_IWA_INSTALLER_INSTALL_FAILED_BUNDLE_NOT_ON_USER_INSTALL_ALLOWLIST_MESSAGE),
-                CreateImageModelFromVector(
-                    features::IsRoundedIconsEnabled()
-                        ? vector_icons::kErrorIcon
-                        : vector_icons::kErrorOutlineOldIcon,
-                    ui::kColorAlertMediumSeverityIcon),
-                std::nullopt);
+                error_icon, std::nullopt);
           },
-          [this](const IsolatedWebAppInstallerModel::
-                     BundleBlocklistedInstallationDialog&) {
+          [this, &error_icon](const IsolatedWebAppInstallerModel::
+                                  BundleBlocklistedInstallationDialog&) {
             return ShowChildDialog(
                 IDS_IWA_INSTALLER_INSTALL_FAILED_BUNDLE_BLOCKED_USER_INSTALL_ALLOWLIST_BLOCKLIST_TITLE,
                 ui::DialogModelLabel(
                     IDS_IWA_INSTALLER_INSTALL_FAILED_BUNDLE_BLOCKLISTED_MESSAGE),
-                CreateImageModelFromVector(
-                    features::IsRoundedIconsEnabled()
-                        ? vector_icons::kErrorIcon
-                        : vector_icons::kErrorOutlineOldIcon,
-                    ui::kColorAlertMediumSeverityIcon),
-                std::nullopt);
+                error_icon, std::nullopt);
           }},
       dialog);
 }

@@ -230,8 +230,6 @@ ResourceRequest::TrustedParams& ResourceRequest::TrustedParams::operator=(
   response_body_stream = other.response_body_stream;
   expected_response_headers_for_synthetic_response =
       other.expected_response_headers_for_synthetic_response;
-  is_ad_auction_trusted_signals_request =
-      other.is_ad_auction_trusted_signals_request;
   return *this;
 }
 
@@ -255,9 +253,7 @@ bool ResourceRequest::TrustedParams::EqualsForTesting(
          // comparison of the refptrs themselves.
          (!!response_body_stream == !!other.response_body_stream) &&
          expected_response_headers_for_synthetic_response ==
-             other.expected_response_headers_for_synthetic_response &&
-         is_ad_auction_trusted_signals_request ==
-             other.is_ad_auction_trusted_signals_request;
+             other.expected_response_headers_for_synthetic_response;
 }
 
 ResourceRequest::WebBundleTokenParams::WebBundleTokenParams() = default;
@@ -355,8 +351,6 @@ bool ResourceRequest::EqualsForTesting(const ResourceRequest& request) const {
          destination == request.destination &&
          request_body == request.request_body &&
          keepalive == request.keepalive &&
-         shared_storage_writable_eligible ==
-             request.shared_storage_writable_eligible &&
          has_user_gesture == request.has_user_gesture &&
          enable_load_timing == request.enable_load_timing &&
          enable_upload_progress == request.enable_upload_progress &&
@@ -367,6 +361,8 @@ bool ResourceRequest::EqualsForTesting(const ResourceRequest& request) const {
          previews_state == request.previews_state &&
          upgrade_if_insecure == request.upgrade_if_insecure &&
          is_revalidating == request.is_revalidating &&
+         revalidation_etag == request.revalidation_etag &&
+         revalidation_last_modified == request.revalidation_last_modified &&
          throttling_profile_id == request.throttling_profile_id &&
          fetch_window_id == request.fetch_window_id &&
          devtools_request_id == request.devtools_request_id &&

@@ -4,11 +4,9 @@
 
 #include "chrome/browser/ash/file_suggest/file_suggest_keyed_service.h"
 
-#include "ash/constants/ash_features.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
 #include "chrome/browser/ash/drive/drive_integration_service_browser_test_base.h"
 #include "chrome/browser/ash/drive/drive_integration_service_factory.h"
@@ -16,7 +14,6 @@
 #include "chrome/browser/ash/file_suggest/file_suggest_test_util.h"
 #include "chrome/browser/ash/file_suggest/file_suggest_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chromeos/ash/components/drivefs/fake_drivefs.h"
 #include "chromeos/ash/components/drivefs/mojom/drivefs.mojom.h"
 #include "content/public/test/browser_test.h"
@@ -71,14 +68,12 @@ class FakeSearchQuery : public drivefs::mojom::SearchQuery {
 class FileSuggestKeyedServiceBrowserTest
     : public drive::DriveIntegrationServiceBrowserTestBase {
  public:
-  FileSuggestKeyedServiceBrowserTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        ash::features::kLauncherContinueSectionWithRecentsRollout);
-  }
+  FileSuggestKeyedServiceBrowserTest() = default;
+
   // drive::DriveIntegrationServiceBrowserTestBase:
   void SetUpOnMainThread() override {
     drive::DriveIntegrationServiceBrowserTestBase::SetUpOnMainThread();
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
 
     WaitUntilFileSuggestServiceReady(
         FileSuggestKeyedServiceFactory::GetInstance()->GetService(profile));
@@ -150,7 +145,7 @@ class FileSuggestKeyedServiceBrowserTest
 
   void NotifyFilesCreated(const std::vector<std::string>& file_ids) {
     std::vector<drivefs::mojom::FileChangePtr> changes;
-    Profile* const profile = browser()->profile();
+    Profile* const profile = browser()->GetProfile();
     for (const auto& file_id : file_ids) {
       base::FilePath drive_path("/");
       base::FilePath absolute_path = GetTestFilePath(file_id);
@@ -194,8 +189,6 @@ class FileSuggestKeyedServiceBrowserTest
   // Maps a test file added during test setup ID to the associated absolute file
   // path.
   std::map<std::string, base::FilePath> file_paths_;
-
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Verifies that the file suggest keyed service works as expected when the Drive
@@ -245,7 +238,7 @@ IN_PROC_BROWSER_TEST_F(FileSuggestKeyedServiceBrowserTest,
                        RespondToDriveRecentFilesUpdate) {
   base::HistogramTester histogram_tester;
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   FileSuggestKeyedService* service =
       FileSuggestKeyedServiceFactory::GetInstance()->GetService(profile);
 
@@ -333,7 +326,7 @@ IN_PROC_BROWSER_TEST_F(FileSuggestKeyedServiceBrowserTest,
                        RespondToDriveRecentFilesInvalidUpdate) {
   base::HistogramTester histogram_tester;
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   FileSuggestKeyedService* service =
       FileSuggestKeyedServiceFactory::GetInstance()->GetService(profile);
 
@@ -379,7 +372,7 @@ IN_PROC_BROWSER_TEST_F(FileSuggestKeyedServiceBrowserTest,
                        RespondToDriveRecentFilesPartiallyInvalidUpdate) {
   base::HistogramTester histogram_tester;
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   FileSuggestKeyedService* service =
       FileSuggestKeyedServiceFactory::GetInstance()->GetService(profile);
 

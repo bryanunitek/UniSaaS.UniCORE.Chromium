@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
 #include "third_party/blink/renderer/platform/wtf/text/code_point_iterator.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_internal.h"
@@ -48,12 +49,6 @@ int CodeUnitCompareIgnoringAsciiCase(base::span<const CharType1> c1,
 }
 
 }  // namespace
-
-StringView::StringView(const UChar* chars)
-    // SAFETY: It's safe if `chars` points to a NUL-terminated string.
-    : StringView(UNSAFE_BUFFERS(
-          base::span(chars, chars ? LengthOfNullTerminatedString(chars) : 0))) {
-}
 
 #if DCHECK_IS_ON()
 StringView::~StringView() {
@@ -189,7 +184,7 @@ bool StringView::ContainsOnlyLatin1OrEmpty() const {
   if (empty() || Is8Bit()) {
     return true;
   }
-  return std::ranges::all_of(Span16(), [](UChar ch) { return ch < 0x0100; });
+  return ContainsOnlyLatin1(Span16());
 }
 
 bool StringView::SubstringContainsOnlyWhitespaceOrEmpty(size_type from,
@@ -322,7 +317,7 @@ String StringView::EncodeForDebugging() const {
             builder.Append(static_cast<char>(character));
           } else {
             // Print "\uXXXX" for control or non-ASCII characters.
-            builder.AppendFormat("\\u%04X", character);
+            FormatTo(builder, "\\u{:04X}", character);
           }
           break;
       }

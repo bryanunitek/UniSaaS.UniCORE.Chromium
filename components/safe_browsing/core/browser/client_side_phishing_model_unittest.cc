@@ -5,7 +5,9 @@
 #include "components/safe_browsing/core/browser/client_side_phishing_model.h"
 
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
@@ -13,23 +15,28 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/test/gtest_util.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/model_util.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
 #include "components/optimization_guide/core/delivery/test_optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/optimization_guide_proto_util.h"
 #include "components/optimization_guide/proto/client_side_phishing_model_metadata.pb.h"
@@ -59,6 +66,7 @@ class ClientSidePhishingModelObserverTracker
         optimization_guide::proto::OPTIMIZATION_TARGET_CLIENT_SIDE_PHISHING) {
       EXPECT_FALSE(model_observer_);
       model_observer_ = observer;
+      model_task_runner_ = std::move(model_task_runner);
     }
   }
 
@@ -76,32 +84,30 @@ class ClientSidePhishingModelObserverTracker
   void NotifyModelFileUpdate(
       optimization_guide::proto::OptimizationTarget optimization_target,
       const base::FilePath& model_file_path,
-      const base::flat_set<base::FilePath>& additional_files_path) {
+      const std::vector<base::FilePath>& additional_files_path) {
     if (optimization_target ==
         optimization_guide::proto::OPTIMIZATION_TARGET_CLIENT_SIDE_PHISHING) {
       optimization_guide::proto::ClientSidePhishingModelMetadata
           trigger_model_metadata;
       trigger_model_metadata.set_image_embedding_model_version(1);
-      auto model_metadata =
-          optimization_guide::TestModelInfoBuilder()
-              .SetModelFilePath(model_file_path)
-              .SetAdditionalFiles(additional_files_path)
-              .SetModelMetadata(AnyWrapProto(trigger_model_metadata))
-              .Build();
-      model_observer_->OnModelUpdated(optimization_target, *model_metadata);
+      optimization_guide::ModelInfo model_metadata = {
+          .model_file_path = model_file_path,
+          .additional_files = additional_files_path,
+          .model_metadata = AnyWrapProto(trigger_model_metadata),
+      };
+      model_observer_->OnModelUpdated(optimization_target, model_metadata);
     } else if (optimization_target ==
                optimization_guide::proto::
                    OPTIMIZATION_TARGET_CLIENT_SIDE_PHISHING_IMAGE_EMBEDDER) {
       optimization_guide::proto::ClientSidePhishingModelMetadata
           image_embedding_model_metadata;
       image_embedding_model_metadata.set_image_embedding_model_version(1);
-      auto model_metadata =
-          optimization_guide::TestModelInfoBuilder()
-              .SetModelFilePath(model_file_path)
-              .SetAdditionalFiles(additional_files_path)
-              .SetModelMetadata(AnyWrapProto(image_embedding_model_metadata))
-              .Build();
-      model_observer_->OnModelUpdated(optimization_target, *model_metadata);
+      optimization_guide::ModelInfo model_metadata = {
+          .model_file_path = model_file_path,
+          .additional_files = additional_files_path,
+          .model_metadata = AnyWrapProto(image_embedding_model_metadata),
+      };
+      model_observer_->OnModelUpdated(optimization_target, model_metadata);
     }
   }
 
@@ -110,10 +116,15 @@ class ClientSidePhishingModelObserverTracker
     model_observer_->OnModelUpdated(optimization_target, std::nullopt);
   }
 
+  base::SequencedTaskRunner* model_task_runner() {
+    return model_task_runner_.get();
+  }
+
  private:
   // The observer that is registered to receive model validation optimzation
   // target events.
   raw_ptr<optimization_guide::OptimizationTargetModelObserver> model_observer_;
+  scoped_refptr<base::SequencedTaskRunner> model_task_runner_;
 };
 
 class ClientSidePhishingModelTest : public testing::Test {
@@ -139,30 +150,42 @@ class ClientSidePhishingModelTest : public testing::Test {
   void SendEmptyModelInfoUpdate(
       optimization_guide::proto::OptimizationTarget optimization_target) {
     model_observer_tracker_->SendEmptyModelInfoUpdate(optimization_target);
-    task_environment_.RunUntilIdle();
+    if (optimization_target ==
+        optimization_guide::proto::OPTIMIZATION_TARGET_CLIENT_SIDE_PHISHING) {
+      ASSERT_TRUE(
+          base::test::RunUntil([&]() { return !service()->IsEnabled(); }));
+    } else {
+      ASSERT_TRUE(base::test::RunUntil(
+          [&]() { return !service()->HasImageEmbeddingModel(); }));
+    }
   }
 
-  void ValidateModel(
-      const base::FilePath& model_file_path,
-      const base::flat_set<base::FilePath>& additional_file_path) {
+  void ValidateModel(const base::FilePath& model_file_path,
+                     const std::vector<base::FilePath>& additional_file_path) {
+    bool done = false;
+    service()->SetModelDoneCallbackForTesting(
+        base::BindOnce([](bool* done) { *done = true; }, &done));
     model_observer_tracker_->NotifyModelFileUpdate(
         optimization_guide::proto::OPTIMIZATION_TARGET_CLIENT_SIDE_PHISHING,
         model_file_path, additional_file_path);
-    task_environment_.RunUntilIdle();
+    ASSERT_TRUE(base::test::RunUntil([&]() { return done; }));
   }
 
   void ValidateImageEmbeddingModel(
       const base::FilePath& image_embedding_model_file_path,
-      const base::flat_set<base::FilePath>& additional_file_path = {}) {
+      const std::vector<base::FilePath>& additional_file_path = {}) {
+    bool done = false;
+    service()->SetModelDoneCallbackForTesting(
+        base::BindOnce([](bool* done) { *done = true; }, &done));
     model_observer_tracker_->NotifyModelFileUpdate(
         optimization_guide::proto::
             OPTIMIZATION_TARGET_CLIENT_SIDE_PHISHING_IMAGE_EMBEDDER,
         image_embedding_model_file_path, additional_file_path);
-    task_environment_.RunUntilIdle();
+    ASSERT_TRUE(base::test::RunUntil([&]() { return done; }));
   }
 
   void ValidateTargetEmbeddings(
-      const std::vector<TargetEmbedding>& target_embeddings) {
+      base::span<const TargetEmbedding> target_embeddings) {
     ASSERT_EQ(target_embeddings.size(), static_cast<size_t>(3));
     // Verify thresholds match.
     EXPECT_FLOAT_EQ(target_embeddings[0].threshold, .9);
@@ -183,6 +206,24 @@ class ClientSidePhishingModelTest : public testing::Test {
 
   ClientSidePhishingModel* service() {
     return client_side_phishing_model_.get();
+  }
+
+  void ResetModel() { client_side_phishing_model_.reset(); }
+
+  // Two passes are needed: the first waits for the background load task and
+  // its UI-thread reply (which posts a background file-close task), and the
+  // second waits for that background file-close task to complete.
+  void FlushBackgroundTaskRunner() {
+    for (int i = 0; i < 2; ++i) {
+      base::test::TestFuture<void> future;
+      model_observer_tracker_->model_task_runner()->PostTaskAndReply(
+          FROM_HERE, base::DoNothing(), future.GetCallback());
+      ASSERT_TRUE(future.Wait());
+    }
+  }
+
+  ClientSidePhishingModelObserverTracker* observer_tracker() {
+    return model_observer_tracker_.get();
   }
 
   base::HistogramTester& histogram_tester() { return histogram_tester_; }
@@ -212,8 +253,7 @@ void GetFlatBufferStringFromMappedMemory(
   ASSERT_TRUE(region.IsValid());
   base::ReadOnlySharedMemoryMapping mapping = region.Map();
   ASSERT_TRUE(mapping.IsValid());
-  *output = std::string(reinterpret_cast<const char*>(mapping.memory()),
-                        mapping.size());
+  *output = std::string(base::as_string_view(base::span(mapping)));
 }
 
 }  // namespace
@@ -534,7 +574,9 @@ TEST_F(ClientSidePhishingModelTest, DoesNotNotifyOnBadInitialUpdate) {
 
   service()->SetModelStringForTesting("", base::File());
 
-  run_loop.RunUntilIdle();
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, run_loop.QuitClosure());
+  run_loop.Run();
 
   EXPECT_FALSE(called);
   EXPECT_FALSE(service()->IsEnabled());
@@ -561,7 +603,7 @@ TEST_F(ClientSidePhishingModelTest, DoesNotNotifyOnBadFollowingUpdate) {
   const std::string model_str = CreateFlatBufferString();
   service()->SetModelStringForTesting(model_str, std::move(file));
 
-  run_loop.RunUntilIdle();
+  ASSERT_TRUE(base::test::RunUntil([&]() { return service()->IsEnabled(); }));
 
   // Perform an invalid update.
   bool called = false;
@@ -575,7 +617,9 @@ TEST_F(ClientSidePhishingModelTest, DoesNotNotifyOnBadFollowingUpdate) {
 
   service()->SetModelStringForTesting("", base::File());
 
-  run_loop.RunUntilIdle();
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, run_loop.QuitClosure());
+  run_loop.Run();
 
   EXPECT_FALSE(called);
   EXPECT_TRUE(service()->IsEnabled());
@@ -690,8 +734,6 @@ TEST_F(ClientSidePhishingModelTest, FlatbufferOnFollowingUpdate) {
   service()->ClearMappedRegionForTesting();
   service()->SetModelTypeForTesting(CSDModelType::kNone);
 
-  base::RunLoop run_loop;
-
   const std::string model_str1 = CreateFlatBufferString();
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
@@ -704,8 +746,7 @@ TEST_F(ClientSidePhishingModelTest, FlatbufferOnFollowingUpdate) {
   file.WriteAtCurrentPos(base::as_byte_span(file_contents));
   service()->SetModelStringForTesting(model_str1, std::move(file));
 
-  run_loop.RunUntilIdle();
-  EXPECT_TRUE(service()->IsEnabled());
+  ASSERT_TRUE(base::test::RunUntil([&]() { return service()->IsEnabled(); }));
 
   std::string model_str_from_shared_mem1;
 
@@ -714,18 +755,14 @@ TEST_F(ClientSidePhishingModelTest, FlatbufferOnFollowingUpdate) {
   EXPECT_EQ(model_str1, model_str_from_shared_mem1);
   EXPECT_EQ(service()->GetModelType(), CSDModelType::kFlatbuffer);
   // Should be able to write to memory with WritableSharedMemoryMapping field.
-  void* memory_addr = service()->GetFlatBufferMemoryAddressForTesting();
-
-  UNSAFE_TODO(EXPECT_EQ(memset(memory_addr, 'G', 1), memory_addr));
+  base::span<uint8_t> memory_span =
+      service()->GetFlatBufferMemorySpanForTesting();
+  ASSERT_FALSE(memory_span.empty());
+  memory_span[0] = 'G';
 
   bool called = false;
-  base::CallbackListSubscription subscription =
-      service()->RegisterCallback(base::BindRepeating(
-          [](base::RepeatingClosure quit_closure, bool* called) {
-            *called = true;
-            std::move(quit_closure).Run();
-          },
-          run_loop.QuitClosure(), &called));
+  base::CallbackListSubscription subscription = service()->RegisterCallback(
+      base::BindRepeating([](bool* called) { *called = true; }, &called));
 
   const std::string model_str2 = CreateFlatBufferString();
   base::ScopedTempDir temp_dir2;
@@ -739,8 +776,7 @@ TEST_F(ClientSidePhishingModelTest, FlatbufferOnFollowingUpdate) {
   file2.WriteAtCurrentPos(base::as_byte_span(file_contents2));
   service()->SetModelStringForTesting(model_str2, std::move(file2));
 
-  run_loop.RunUntilIdle();
-  EXPECT_TRUE(called);
+  ASSERT_TRUE(base::test::RunUntil([&]() { return called; }));
   EXPECT_TRUE(service()->IsEnabled());
   std::string model_str_from_shared_mem2;
   ASSERT_NO_FATAL_FAILURE(GetFlatBufferStringFromMappedMemory(
@@ -753,8 +789,78 @@ TEST_F(ClientSidePhishingModelTest, FlatbufferOnFollowingUpdate) {
   // Can remove this if flaky.
   // Windows ASAN flake: crbug.com/1234652
 #if !(BUILDFLAG(IS_WIN) && defined(ADDRESS_SANITIZER))
-  UNSAFE_TODO(BASE_EXPECT_DEATH(memset(memory_addr, 'G', 1), ""));
+  BASE_EXPECT_DEATH(memory_span[0] = 'G', "");
 #endif
+}
+
+// Test that when `ClientSidePhishingModel` is destroyed before the background
+// model load's UI-thread reply runs, the loaded `base::File` is closed on the
+// background task runner without triggering assertion failures under
+// `base::ScopedDisallowBlocking` on the UI thread.
+TEST_F(ClientSidePhishingModelTest,
+       ModelFilesClosedOnBackgroundThreadWhenModelDestroyedEarly) {
+  base::FilePath model_file_path;
+  base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &model_file_path);
+  model_file_path = model_file_path.AppendASCII("components")
+                        .AppendASCII("test")
+                        .AppendASCII("data")
+                        .AppendASCII("safe_browsing")
+                        .AppendASCII("client_model.pb");
+
+  base::FilePath additional_files_path;
+  base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &additional_files_path);
+  additional_files_path = additional_files_path.AppendASCII("components")
+                              .AppendASCII("test")
+                              .AppendASCII("data")
+                              .AppendASCII("safe_browsing")
+#if BUILDFLAG(IS_ANDROID)
+                              .AppendASCII("visual_model_android.tflite");
+#else
+                              .AppendASCII("visual_model_desktop.tflite");
+#endif
+
+  // Trigger model loading.
+  observer_tracker()->NotifyModelFileUpdate(
+      optimization_guide::proto::OPTIMIZATION_TARGET_CLIENT_SIDE_PHISHING,
+      model_file_path, {additional_files_path});
+
+  // Destroy the model before the UI-thread reply can run.
+  ResetModel();
+
+  // Disallow blocking on the UI thread. Closing loaded files must happen on the
+  // background task runner and not trigger a `ScopedBlockingCall` crash here.
+  base::ScopedDisallowBlocking disallow_blocking;
+  FlushBackgroundTaskRunner();
+}
+
+// Test that when `ClientSidePhishingModel` is destroyed before the image
+// embedding model load's UI-thread reply runs, the loaded `base::File` is
+// closed on the background task runner without triggering
+// `base::ScopedDisallowBlocking` assertion failures on the UI thread.
+TEST_F(
+    ClientSidePhishingModelTest,
+    ImageEmbeddingModelFilesClosedOnBackgroundThreadWhenModelDestroyedEarly) {
+  base::FilePath image_embedding_model_file_path;
+  base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT,
+                         &image_embedding_model_file_path);
+  image_embedding_model_file_path =
+      image_embedding_model_file_path.AppendASCII("components")
+          .AppendASCII("test")
+          .AppendASCII("data")
+          .AppendASCII("safe_browsing")
+          .AppendASCII("image_embedding.tflite");
+
+  // Trigger image embedding model loading.
+  observer_tracker()->NotifyModelFileUpdate(
+      optimization_guide::proto::
+          OPTIMIZATION_TARGET_CLIENT_SIDE_PHISHING_IMAGE_EMBEDDER,
+      image_embedding_model_file_path, {});
+
+  // Destroy the model before the UI-thread reply can run.
+  ResetModel();
+
+  base::ScopedDisallowBlocking disallow_blocking;
+  FlushBackgroundTaskRunner();
 }
 
 class ClientSidePhishingModelFeatureTest

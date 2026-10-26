@@ -265,7 +265,7 @@ BookmarkMergedSurfaceService::GetParentForManagedNode(
 void BookmarkMergedSurfaceService::Move(const bookmarks::BookmarkNode* node,
                                         const BookmarkParentFolder& new_parent,
                                         size_t index,
-                                        Browser* browser) {
+                                        BrowserWindowInterface* browser) {
   CHECK(node);
   CHECK(loaded());
   CHECK(!IsParentFolderManaged(new_parent));
@@ -447,7 +447,7 @@ size_t BookmarkMergedSurfaceService::GetIndexAcrossStorage(
         GetPermanentFolderOrderingTracker(*type);
     return tracker.GetIndexAcrossStorage(node, in_storage_index);
   }
-  DCHECK_EQ(GetIndexOf(node), in_storage_index);
+  CHECK_EQ(GetIndexOf(node), in_storage_index, base::NotFatalUntil::M161);
   return in_storage_index;
 }
 

@@ -21,16 +21,35 @@ import org.chromium.ui.widget.AnchoredPopupWindow.VerticalOrientation;
 @NullMarked
 public class FlyoutPopupSpecCalculator implements SpecCalculator {
 
+    /**
+     * Additional vertical padding to offset the flyout popup position. The calculator automatically
+     * accounts for {@code contentView.getPaddingTop()} on the root content view, but top padding on
+     * nested child views or inner layout containers inside {@code contentView} is not automatically
+     * included and must be passed via {@code mExtraPaddingY} to align the first flyout item with
+     * its parent anchor item.
+     */
+    private final int mExtraPaddingY;
+
+    public FlyoutPopupSpecCalculator() {
+        this(/* extraPaddingY= */ 0);
+    }
+
+    public FlyoutPopupSpecCalculator(int extraPaddingY) {
+        mExtraPaddingY = extraPaddingY;
+    }
+
     @Override
     public PopupSpec getPopupWindowSpec(
             final Rect freeSpaceRect,
             final Rect anchorRect,
             final View contentView,
             final int rootViewWidth,
+            final int rootViewHeight,
             int paddingX,
             int paddingY,
             int marginPx,
             int maxWidthPx,
+            int maxHeightPx,
             int desiredContentWidth,
             int desiredContentHeight,
             @HorizontalOrientation int preferredHorizontalOrientation,
@@ -44,8 +63,13 @@ public class FlyoutPopupSpecCalculator implements SpecCalculator {
         final int maxContentWidth =
                 AnchoredPopupWindowUtils.getMaxContentWidth(
                         maxWidthPx, rootViewWidth, marginPx, paddingX);
-        final int maxContentHeight =
+        final int windowMaxHeight =
                 freeSpaceRect.bottom - freeSpaceRect.top - 2 * paddingY - 2 * marginPx;
+        final int maxContentHeight =
+                Math.min(
+                        windowMaxHeight,
+                        AnchoredPopupWindowUtils.getMaxContentHeight(
+                                maxHeightPx, rootViewHeight, marginPx, paddingY));
 
         final int widthSpec =
                 desiredContentWidth > 0
@@ -105,7 +129,7 @@ public class FlyoutPopupSpecCalculator implements SpecCalculator {
                         isPositionToLeft);
 
         // The first item in child popup should align with the parent item.
-        final int popupY = anchorRect.top - contentView.getPaddingTop();
+        final int popupY = anchorRect.top - contentView.getPaddingTop() - mExtraPaddingY;
 
         return new PopupSpec(
                 new Rect(popupX, popupY, popupX + size.getWidth(), popupY + size.getHeight()),

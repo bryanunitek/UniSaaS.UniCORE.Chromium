@@ -15,6 +15,7 @@
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/span.h"
 #include "base/i18n/language_tag.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
@@ -107,10 +108,108 @@ bool AddKeywords(base::span<const std::string_view> keywords_span,
 
 }  // namespace
 
-Extension::Extension(base::PassKey<LanguageTag>, std::string_view extension)
-    : extension_(extension) {
-  CHECK_GE(extension_.size(), 4u);
-  CHECK_EQ(extension_[1], '-');
+// static
+std::optional<Extension> Extension::FromString(std::string_view extension) {
+  if (extension.size() < 3u || !base::IsAsciiAlphaNumeric(extension[0]) ||
+      extension[1] != '-') {
+    return std::nullopt;
+  }
+
+  std::vector<std::string_view> subtags = base::SplitStringPiece(
+      extension.substr(2), "-", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
+  return FromSubtags(extension[0], subtags);
+}
+
+// static
+std::optional<Extension> Extension::FromSubtags(
+    char singleton,
+    base::span<const std::string_view> subtags) {
+  if (!base::IsAsciiAlphaNumeric(singleton)) {
+    return std::nullopt;
+  }
+  if (subtags.empty()) {
+    return std::nullopt;
+  }
+  Extension result(singleton);
+  for (std::string_view subtag : subtags) {
+    if (!result.AddSubtag(subtag)) {
+      return std::nullopt;
+    }
+  }
+  return result;
+}
+
+Extension::Extension(char singleton) : singleton_(singleton) {}
+Extension::~Extension() = default;
+Extension::Extension(const Extension&) = default;
+Extension& Extension::operator=(const Extension&) = default;
+Extension::Extension(Extension&&) = default;
+Extension& Extension::operator=(Extension&&) = default;
+
+bool Extension::AddSubtag(std::string_view subtag) {
+  // RFC 5646 Section 2.2.6:
+  //  extension     = singleton 1*("-" (2*8alphanum))
+  if (subtag.size() < 2 || subtag.size() > 8 || !IsAllAlphaNumeric(subtag)) {
+    return false;
+  }
+  subtags_.insert(CanonicalizeTypeOrAttributeSubtags({subtag}));
+  return true;
+}
+
+std::string Extension::SubtagsString() const {
+  return base::JoinString(base::span(subtags_), "-");
+}
+
+bool PrivateUseSubtags::AddSubtag(std::string_view subtag) {
+  if (subtag.empty() || !IsAllAlphaNumeric(subtag)) {
+    return false;
+  }
+  subtags_.emplace_back(subtag);
+  return true;
+}
+
+std::string PrivateUseSubtags::SubtagsString() const {
+  return base::JoinString(subtags_, "-");
+}
+
+PrivateUseSubtags::PrivateUseSubtags() = default;
+PrivateUseSubtags::~PrivateUseSubtags() = default;
+PrivateUseSubtags::PrivateUseSubtags(const PrivateUseSubtags&) = default;
+PrivateUseSubtags& PrivateUseSubtags::operator=(const PrivateUseSubtags&) =
+    default;
+PrivateUseSubtags::PrivateUseSubtags(PrivateUseSubtags&&) = default;
+PrivateUseSubtags& PrivateUseSubtags::operator=(PrivateUseSubtags&&) = default;
+
+// static
+std::optional<PrivateUseSubtags> PrivateUseSubtags::FromString(
+    std::string_view private_use_subtags) {
+  if (private_use_subtags.empty()) {
+    return std::nullopt;
+  }
+
+  // If the caller passed the singleton, just ignore it.
+  if (private_use_subtags.size() > 1 && private_use_subtags[0] == 'x' &&
+      private_use_subtags[1] == '-') {
+    private_use_subtags = private_use_subtags.substr(2);
+  }
+  std::vector<std::string_view> subtags = base::SplitStringPiece(
+      private_use_subtags, "-", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
+  return FromSubtags(subtags);
+}
+
+// static
+std::optional<PrivateUseSubtags> PrivateUseSubtags::FromSubtags(
+    base::span<const std::string_view> subtags) {
+  if (subtags.empty()) {
+    return std::nullopt;
+  }
+  PrivateUseSubtags private_use_subtags_result;
+  for (std::string_view subtag : subtags) {
+    if (!private_use_subtags_result.AddSubtag(subtag)) {
+      return std::nullopt;
+    }
+  }
+  return private_use_subtags_result;
 }
 
 UnicodeExtension::~UnicodeExtension() = default;
@@ -131,16 +230,26 @@ std::optional<UnicodeExtension> UnicodeExtension::FromString(
 
   std::vector<std::string_view> subtags = base::SplitStringPiece(
       extension.substr(2), "-", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
+  return FromSubtags(subtags);
+}
+
+// static
+std::optional<UnicodeExtension> UnicodeExtension::FromSubtags(
+    base::span<const std::string_view> subtags) {
   size_t keyword_start = FindNextKeyIndex(subtags);
-  base::span<const std::string_view> subtags_span(subtags);
 
   UnicodeExtension result;
   // Attributes come before the keywords.
-  if (!AddAttributes(subtags_span.take_first(keyword_start), result)) {
+  if (!AddAttributes(subtags.take_first(keyword_start), result)) {
     return std::nullopt;
   }
   // The rest of the subtags are keywords.
-  if (!AddKeywords(subtags_span, result)) {
+  if (!AddKeywords(subtags, result)) {
+    return std::nullopt;
+  }
+
+  // Empty extensions are not considered valid.
+  if (result.attributes_.empty() && result.keywords_.empty()) {
     return std::nullopt;
   }
 
@@ -173,7 +282,7 @@ bool UnicodeExtension::SetKeyword(std::string_view key,
   return true;
 }
 
-std::string UnicodeExtension::ToString() const {
+std::string UnicodeExtension::SubtagsString() const {
   std::string subtags = base::JoinString(attributes_, "-");
   // Iterates sorted by key.
   for (auto& [key, value] : keywords_) {
@@ -206,14 +315,6 @@ std::vector<std::string> UnicodeExtension::GetKeywordKeys() const {
   std::ranges::transform(keywords_, std::back_inserter(keys),
                          [](const auto& pair) { return pair.first; });
   return keys;
-}
-
-PrivateUseSubtags::PrivateUseSubtags(base::PassKey<LanguageTag>,
-                                     std::string_view private_use)
-    : subtags_(std::string(private_use.substr(2))) {
-  CHECK_GE(private_use.size(), 3u);
-  CHECK_EQ(private_use[0], 'x');
-  CHECK_EQ(private_use[1], '-');
 }
 
 }  // namespace base::i18n

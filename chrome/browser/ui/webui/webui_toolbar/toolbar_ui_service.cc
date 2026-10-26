@@ -12,7 +12,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/types/expected.h"
 #include "chrome/browser/ui/webui/metrics_reporter/metrics_reporter.h"
-#include "chrome/browser/ui/webui/webui_toolbar/adapters/navigation_controls_state_fetcher.h"
+#include "chrome/browser/ui/webui/webui_toolbar/adapters/toolbar_state_fetcher.h"
 #include "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api.mojom.h"
 #include "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api_data_model.mojom.h"
 #include "mojo/public/cpp/bindings/clone_traits.h"
@@ -33,7 +33,7 @@ namespace toolbar_ui_api {
 
 ToolbarUIService::ToolbarUIService(
     mojo::PendingReceiver<toolbar_ui_api::mojom::ToolbarUIService> service,
-    std::unique_ptr<NavigationControlsStateFetcher> state_fetcher,
+    std::unique_ptr<ToolbarStateFetcher> state_fetcher,
     std::unique_ptr<IconTableFetcher> icon_table_fetcher,
     MetricsReporter* metrics_reporter,
     ToolbarUIServiceDelegate* delegate)
@@ -51,8 +51,7 @@ void ToolbarUIService::SetDelegate(ToolbarUIServiceDelegate* delegate) {
   delegate_ = delegate;
 }
 
-void ToolbarUIService::OnNavigationControlsStateChanged(
-    const mojom::NavigationControlsState& state) {
+void ToolbarUIService::OnToolbarStateChanged(const mojom::ToolbarState& state) {
   auto* mark = state.reload_control_state->is_navigation_loading
                    ? kChangeVisibleModeToLoadingStartMark
                    : kChangeVisibleModeToNotLoadingStartMark;
@@ -72,19 +71,17 @@ void ToolbarUIService::OnNavigationControlsStateChanged(
     ++it;
     if (it == observers_.end()) {
       // Last item, can avoid some copies.
-      observer->OnNavigationControlsStateChanged(std::move(icon_updates),
-                                                 state.Clone());
+      observer->OnToolbarStateChanged(std::move(icon_updates), state.Clone());
       break;
     } else {
-      observer->OnNavigationControlsStateChanged(mojo::Clone(icon_updates),
-                                                 state.Clone());
+      observer->OnToolbarStateChanged(mojo::Clone(icon_updates), state.Clone());
     }
   }
 }
 
 void ToolbarUIService::Bind(BindCallback callback) {
   auto result = toolbar_ui_api::mojom::InitialState::New();
-  result->state = state_fetcher_->GetNavigationControlsState();
+  result->state = state_fetcher_->GetToolbarState();
   result->icons = icon_table_fetcher_->GetFullState();
 
   mojo::Remote<toolbar_ui_api::mojom::ToolbarUIObserver> observer;
@@ -101,12 +98,39 @@ void ToolbarUIService::OnFocusRequested(mojom::FocusRequestTarget target) {
   }
 }
 
+void ToolbarUIService::ShowSplitTabsContextMenu() {
+  for (const auto& observer : observers_) {
+    observer->ShowSplitTabsContextMenu();
+  }
+}
+
+void ToolbarUIService::FlushObserversForTesting() {
+  observers_.FlushForTesting();  // IN-TEST
+}
+
 void ToolbarUIService::ShowContextMenu(
     toolbar_ui_api::mojom::ContextMenuType menu_type,
     const gfx::RectF& bounds_in_css_pixels,
-    ui::mojom::MenuSourceType source) {
+    ui::mojom::MenuSourceType source,
+    std::optional<uint32_t> show_menu_token) {
   if (delegate_) {
-    delegate_->HandleContextMenu(menu_type, bounds_in_css_pixels, source);
+    delegate_->HandleContextMenu(menu_type, bounds_in_css_pixels, source,
+                                 show_menu_token);
+  }
+}
+
+void ToolbarUIService::ShowOverflowMenu(
+    std::vector<toolbar_ui_api::mojom::OverflowMenuItemPtr> controls,
+    const gfx::RectF& bounds_in_css_pixels,
+    ui::mojom::MenuSourceType source,
+    ShowOverflowMenuCallback callback) {
+  if (delegate_) {
+    delegate_->ShowOverflowMenu(std::move(controls), bounds_in_css_pixels,
+                                source, std::move(callback));
+  } else {
+    std::move(callback).Run(base::unexpected(mojo_base::mojom::Error::New(
+        mojo_base::mojom::Code::kFailedPrecondition,
+        "ToolbarUIService: null delegate_ for ShowOverflowMenu")));
   }
 }
 
@@ -130,9 +154,11 @@ void ToolbarUIService::OnPageInitialized() {
 
 void ToolbarUIService::ShowContentSettingsBubble(
     ::toolbar_ui_api::mojom::ContentSettingImageType type,
+    bool is_pointer_interaction,
     ShowContentSettingsBubbleCallback callback) {
   if (delegate_) {
-    delegate_->ShowContentSettingsBubble(type, std::move(callback));
+    delegate_->ShowContentSettingsBubble(type, is_pointer_interaction,
+                                         std::move(callback));
   } else {
     std::move(callback).Run(base::unexpected(
         Error::New(Code::kFailedPrecondition,
@@ -141,6 +167,14 @@ void ToolbarUIService::ShowContentSettingsBubble(
                                       static_cast<int32_t>(type)))));
   }
 }
+
+void ToolbarUIService::OnContentSettingImagePointerDown(
+    ::toolbar_ui_api::mojom::ContentSettingImageType type) {
+  if (delegate_) {
+    delegate_->OnContentSettingImagePointerDown(type);
+  }
+}
+
 
 void ToolbarUIService::OnPageActionClick(
     ::toolbar_ui_api::mojom::PageActionId action_id,
@@ -160,9 +194,11 @@ void ToolbarUIService::OnPageActionClick(
 
 void ToolbarUIService::OnPageActionChipShowingChanged(
     ::toolbar_ui_api::mojom::PageActionId action_id,
+    bool is_showing,
     OnPageActionChipShowingChangedCallback callback) {
   if (delegate_) {
-    delegate_->OnPageActionChipShowingChanged(action_id, std::move(callback));
+    delegate_->OnPageActionChipShowingChanged(action_id, is_showing,
+                                              std::move(callback));
   } else {
     std::move(callback).Run(base::unexpected(Error::New(
         Code::kFailedPrecondition,
@@ -179,18 +215,56 @@ void ToolbarUIService::InvokePinnedToolbarAction(
   }
 }
 
-void ToolbarUIService::OnLhsChipMousePressed(
-    toolbar_ui_api::mojom::LhsChipIdentifier identifier) {
+void ToolbarUIService::OnLocationBarFocusWithinChanged(bool focused) {
   if (delegate_) {
-    delegate_->OnLhsChipMousePressed(identifier);
+    delegate_->OnLocationBarFocusWithinChanged(focused);
+  }
+}
+
+void ToolbarUIService::MovePinnedToolbarAction(
+    toolbar_ui_api::mojom::PinnedToolbarAction action_id,
+    int32_t target_index) {
+  if (delegate_) {
+    delegate_->MovePinnedToolbarAction(action_id, target_index);
+  }
+}
+
+void ToolbarUIService::MovePinnedToolbarActionBy(
+    toolbar_ui_api::mojom::PinnedToolbarAction action_id,
+    int32_t delta) {
+  if (delegate_) {
+    delegate_->MovePinnedToolbarActionBy(action_id, delta);
+  }
+}
+
+void ToolbarUIService::MoveExtensionAction(const std::string& extension_id,
+                                           int32_t target_index) {
+  if (delegate_) {
+    delegate_->MoveExtensionAction(extension_id, target_index);
+  }
+}
+
+void ToolbarUIService::MoveExtensionActionBy(const std::string& extension_id,
+                                             int32_t delta) {
+  if (delegate_) {
+    delegate_->MoveExtensionActionBy(extension_id, delta);
+  }
+}
+
+void ToolbarUIService::OnLhsChipMousePressed(
+    toolbar_ui_api::mojom::LhsChipIdentifier identifier,
+    bool is_middle_click) {
+  if (delegate_) {
+    delegate_->OnLhsChipMousePressed(identifier, is_middle_click);
   }
 }
 
 void ToolbarUIService::OnLhsChipClicked(
     toolbar_ui_api::mojom::LhsChipIdentifier identifier,
-    bool is_mouse_interaction) {
+    bool is_mouse_interaction,
+    uint32_t state_token) {
   if (delegate_) {
-    delegate_->OnLhsChipClicked(identifier, is_mouse_interaction);
+    delegate_->OnLhsChipClicked(identifier, is_mouse_interaction, state_token);
   }
 }
 
@@ -239,6 +313,12 @@ void ToolbarUIService::OnHomeButtonDropUrl(const GURL& url) {
 void ToolbarUIService::OnHomeButtonDropFile(const gfx::PointF& drop_position) {
   if (delegate_) {
     delegate_->OnHomeButtonDropFile(drop_position);
+  }
+}
+
+void ToolbarUIService::OnHomeButtonDropText(const std::string& text) {
+  if (delegate_) {
+    delegate_->OnHomeButtonDropText(text);
   }
 }
 
@@ -316,6 +396,38 @@ void ToolbarUIService::ShowExtensionContextMenu(
     ui::mojom::MenuSourceType source) {
   if (delegate_) {
     delegate_->ShowExtensionContextMenu(extension_id, source);
+  }
+}
+
+void ToolbarUIService::AdjustOmniboxTextForCopy(
+    const std::u16string& text,
+    int32_t selection_start,
+    AdjustOmniboxTextForCopyCallback callback) {
+  if (delegate_) {
+    std::move(callback).Run(
+        delegate_->AdjustOmniboxTextForCopy(text, selection_start));
+  } else {
+    std::move(callback).Run(base::unexpected(Error::New(
+        Code::kFailedPrecondition,
+        "ToolbarUIService: null delegate_ for AdjustOmniboxTextForCopy")));
+  }
+}
+
+void ToolbarUIService::OnPerformanceInterventionButtonClicked() {
+  if (delegate_) {
+    delegate_->OnPerformanceInterventionButtonClicked();
+  }
+}
+
+void ToolbarUIService::OnMediaButtonClicked() {
+  if (delegate_) {
+    delegate_->OnMediaButtonClicked();
+  }
+}
+
+void ToolbarUIService::OnGlicButtonClicked() {
+  if (delegate_) {
+    delegate_->OnGlicButtonClicked();
   }
 }
 }  // namespace toolbar_ui_api

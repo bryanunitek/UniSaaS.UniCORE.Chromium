@@ -29,6 +29,7 @@
 #include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "net/base/filename_util.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace web_app {
 
@@ -128,7 +129,7 @@ void UserChoiceDialogCompleted(
           app_id, protocol_url->GetScheme(), approval_state,
           std::move(persist_done));
     } else {
-      DCHECK(is_file_launch);
+      CHECK(is_file_launch, base::NotFatalUntil::M161);
       provider->scheduler().PersistFileHandlersUserChoice(
           app_id, allowed, std::move(persist_done));
     }
@@ -241,7 +242,7 @@ void WebAppShimManagerDelegate::LaunchApp(
     const GURL& override_url,
     chrome::mojom::AppShimLoginItemRestoreState login_item_restore_state,
     base::OnceClosure launch_finished_callback) {
-  DCHECK(AppIsInstalled(profile, app_id));
+  CHECK(AppIsInstalled(profile, app_id), base::NotFatalUntil::M161);
   if (UseFallback(profile, app_id)) {
     fallback_delegate_->LaunchApp(profile, app_id, files, urls, override_url,
                                   login_item_restore_state,
@@ -267,7 +268,7 @@ void WebAppShimManagerDelegate::LaunchApp(
   }
 
   apps::AppLaunchParams params(app_id, launch_container,
-                               WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                               WindowOpenDisposition::kNewForegroundTab,
                                launch_source);
   // Don't assign `files` to `params.launch_files` until we're sure this is a
   // permitted file launch.
@@ -352,7 +353,7 @@ void WebAppShimManagerDelegate::LaunchApp(
   // disabled), fall back to a normal app launch.
   if (!file_launches.empty()) {
     const WebApp* web_app = provider->registrar_unsafe().GetAppById(app_id);
-    DCHECK(web_app);
+    CHECK(web_app, base::NotFatalUntil::M161);
 
     if (web_app->file_handler_approval_state() ==
         ApiApprovalState::kRequiresPrompt) {
@@ -364,8 +365,8 @@ void WebAppShimManagerDelegate::LaunchApp(
       return;
     }
 
-    DCHECK_EQ(ApiApprovalState::kAllowed,
-              web_app->file_handler_approval_state());
+    CHECK_EQ(ApiApprovalState::kAllowed, web_app->file_handler_approval_state(),
+             base::NotFatalUntil::M161);
   }
 
   LaunchAppWithParams(profile, std::move(params), file_launches,
@@ -379,7 +380,7 @@ void WebAppShimManagerDelegate::LaunchShim(
     web_app::ShimLaunchMode launch_mode,
     apps::ShimLaunchedCallback launched_callback,
     apps::ShimTerminatedCallback terminated_callback) {
-  DCHECK(AppIsInstalled(profile, app_id));
+  CHECK(AppIsInstalled(profile, app_id), base::NotFatalUntil::M161);
   if (UseFallback(profile, app_id)) {
     fallback_delegate_->LaunchShim(profile, app_id, update_behavior,
                                    launch_mode, std::move(launched_callback),
@@ -433,13 +434,14 @@ WebAppShimManagerDelegate::GetAppShortcutsMenuItemInfos(
 
   std::vector<chrome::mojom::ApplicationDockMenuItemPtr> dock_menu_items;
 
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M161);
 
   auto shortcuts_menu_item_infos = WebAppProvider::GetForWebApps(profile)
                                        ->registrar_unsafe()
                                        .GetAppShortcutsMenuItemInfos(app_id);
 
-  DCHECK_LE(shortcuts_menu_item_infos.size(), kMaxApplicationDockMenuItems);
+  CHECK_LE(shortcuts_menu_item_infos.size(), kMaxApplicationDockMenuItems,
+           base::NotFatalUntil::M161);
   for (const auto& shortcuts_menu_item_info : shortcuts_menu_item_infos) {
     auto mojo_item = chrome::mojom::ApplicationDockMenuItem::New();
     mojo_item->name = shortcuts_menu_item_info.name;

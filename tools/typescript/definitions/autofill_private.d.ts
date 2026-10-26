@@ -15,8 +15,6 @@ declare global {
         email: string;
         isSyncEnabledForAutofillProfiles: boolean;
         isEligibleForAddressAccountStorage: boolean;
-        isAutofillSyncToggleEnabled: boolean;
-        isAutofillSyncToggleAvailable: boolean;
       }
 
       /**
@@ -152,6 +150,8 @@ declare global {
         FLIGHT_RESERVATION_TICKET_NUMBER,
         FLIGHT_RESERVATION_CONFIRMATION_CODE,
         FLIGHT_RESERVATION_PASSENGER_NAME,
+        FLIGHT_RESERVATION_DEPARTURE_AIRPORT,
+        FLIGHT_RESERVATION_ARRIVAL_AIRPORT,
         FLIGHT_RESERVATION_DEPARTURE_DATE,
         ADDRESS_HOME_ZIP_AND_CITY,
         ORDER_ID,
@@ -177,6 +177,18 @@ declare global {
       export enum EntityPassType {
         PUBLIC_PASS = 'PUBLIC_PASS',
         PRIVATE_PASS = 'PRIVATE_PASS',
+      }
+
+      export enum UserDataProcessingConsentState {
+        UNDEFINED = 'UNDEFINED',
+        UNKNOWN = 'UNKNOWN',
+        ENABLED = 'ENABLED',
+        DISABLED = 'DISABLED',
+      }
+
+      export interface UserDataProcessingConsentStates {
+        commsApps: UserDataProcessingConsentState;
+        googleApps: UserDataProcessingConsentState;
       }
 
       export interface AutofillMetadata {
@@ -275,6 +287,22 @@ declare global {
         value: string|DateValue;
       }
 
+      export interface LegalMessageLink {
+        start: number;
+        end: number;
+        url: string;
+      }
+
+      export interface LegalMessageLine {
+        text: string;
+        links: LegalMessageLink[];
+      }
+
+      export interface UpsertPassDetails {
+        legalMessageLines: LegalMessageLine[];
+        contextToken: string;
+      }
+
       export interface EntityInstance {
         type: EntityType;
         attributeInstances: AttributeInstance[];
@@ -283,6 +311,7 @@ declare global {
         shouldAuthenticateToView?: boolean;
         storedInWallet?: boolean;
         isReadOnly?: boolean;
+        contextToken?: string;
       }
 
       export interface EntityInstanceWithLabels {
@@ -330,7 +359,6 @@ declare global {
       export function getLocalCard(guid: string): Promise<CreditCardEntry|null>;
       export function checkIfDeviceAuthAvailable(): Promise<boolean>;
       export function bulkDeleteAllCvcs(): void;
-      export function setAutofillSyncToggleEnabled(enabled: boolean): void;
       export function addOrUpdateEntityInstance(entityInstance: EntityInstance):
           Promise<void>;
       export function removeEntityInstance(guid: string): void;
@@ -349,6 +377,11 @@ declare global {
       export function getWalletablePassDetectionOptInStatus(): Promise<boolean>;
       export function setWalletablePassDetectionOptInStatus(optedIn: boolean):
           Promise<boolean>;
+      export function fetchUserDataProcessingConsent():
+          Promise<UserDataProcessingConsentStates>;
+      export function getDetailsForUpsertPass(entityTypeName: number):
+          Promise<UpsertPassDetails|null>;
+      export function preloadDetailsForUpsertPass(entityTypeName: number): void;
       export const onPersonalDataChanged: ChromeEvent<
           (addresses: AddressEntry[], creditCards: CreditCardEntry[],
            ibans: IbanEntry[], payOverTimeIssuers: PayOverTimeIssuerEntry[],

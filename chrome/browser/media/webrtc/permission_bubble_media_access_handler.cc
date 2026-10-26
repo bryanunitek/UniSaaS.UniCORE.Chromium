@@ -167,9 +167,58 @@ void PermissionBubbleMediaAccessHandler::HandleRequest(
     const extensions::Extension* extension) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-
   // Ensure we are observing the deletion of |web_contents|.
   web_contents_collection_.StartObserving(web_contents);
+
+  // Add 500 ms cooldown rate limiter for permission prompts of current web
+  // contents without a user gesture to show again (although not all
+  // user-initiated requests will be marked as `user_gestures`='true', so it is
+  // important to keep a quick rate limiter to block automatic requests only).
+  // This is to prevent duplicate permission prompts if speech API and mojo both
+  // send prompt requests. Only limit dismissals since dismissals lead to more
+  // prompts while acceptances mean no more permission prompts.
+  auto dismissal_it = recent_dismissals_.find(web_contents);
+  if (dismissal_it != recent_dismissals_.end()) {
+    base::TimeTicks now = base::TimeTicks::Now();
+    auto& records = dismissal_it->second;
+    // Erase if not within rate limit window.
+    std::erase_if(records, [now](const DismissalRecord& record) {
+      return now - record.timestamp >= base::Milliseconds(500);
+    });
+
+    if (records.empty()) {
+      recent_dismissals_.erase(dismissal_it);
+    } else if (!request.user_gesture) {
+      // If audio/video are requested in this prompt.
+      bool target_audio =
+          request.audio_type != blink::mojom::MediaStreamType::NO_SERVICE;
+      bool target_video =
+          request.video_type != blink::mojom::MediaStreamType::NO_SERVICE;
+      // Check if all requested media device types were covered by recently
+      // dismissed prompts at least once.
+      bool dismissed_audio = false;
+      bool dismissed_video = false;
+      blink::mojom::MediaStreamRequestResult last_result =
+          blink::mojom::MediaStreamRequestResult::PERMISSION_DISMISSED;
+      for (const auto& record : records) {
+        if (record.origin == request.security_origin) {
+          dismissed_audio |= record.has_audio;
+          dismissed_video |= record.has_video;
+          last_result = record.result;
+        }
+      }
+      // If audio or video are covered in this request (meaning either
+      // are not required, or have been recently asked in a past prompt and
+      // dismissed), then dismiss this new prompt request.
+      bool audio_covered = !target_audio || dismissed_audio;
+      bool video_covered = !target_video || dismissed_video;
+      if ((target_audio || target_video) && audio_covered && video_covered) {
+        std::move(callback).Run(blink::mojom::StreamDevicesSet(), last_result,
+                                nullptr);
+        return;
+      }
+    }
+  }
 
   RequestsMap& requests_map = pending_requests_[web_contents];
   requests_map.emplace(next_request_id_++,
@@ -205,7 +254,7 @@ void PermissionBubbleMediaAccessHandler::ProcessQueuedAccessRequest(
       request, MediaCaptureDevicesDispatcher::GetInstance(),
       base::BindOnce(
           &PermissionBubbleMediaAccessHandler::OnMediaStreamRequestResponse,
-          base::Unretained(this), web_contents, request_id, request));
+          weak_factory_.GetWeakPtr(), web_contents, request_id, request));
 }
 
 void PermissionBubbleMediaAccessHandler::UpdateMediaRequestState(
@@ -319,41 +368,80 @@ void PermissionBubbleMediaAccessHandler::OnAccessRequestResponse(
     return;
 
   auto request_it = requests_map.find(request_id);
-  DCHECK(request_it != requests_map.end());
   if (request_it == requests_map.end())
     return;
 
-  // If the current request failed (denied or dismissed), automatically fail any
-  // other pending requests in the queue that are from the same origin and
-  // request the same media device types (e.g. microphone/camera). This avoids
-  // duplicate permission prompts when WebUI pages (like voice search) generate
-  // concurrent media access and stream generation requests. One case is when
-  // `SpeechRecognitionManagerImpl` requests permission when speech API is used,
-  // but the usual mojo microphone is requested when the browser uses the
-  // microphone (for the speech API), causing duplicate permission prompts if
-  // not handled.
-  if (result != blink::mojom::MediaStreamRequestResult::OK) {
-    for (auto it = requests_map.begin(); it != requests_map.end();) {
-      if (it->first != request_id &&
-          it->second.request.security_origin ==
-              request_it->second.request.security_origin) {
-        bool audio_match = request_it->second.request.audio_type !=
-                               blink::mojom::MediaStreamType::NO_SERVICE &&
-                           it->second.request.audio_type !=
-                               blink::mojom::MediaStreamType::NO_SERVICE;
-        bool video_match = request_it->second.request.video_type !=
-                               blink::mojom::MediaStreamType::NO_SERVICE &&
-                           it->second.request.video_type !=
-                               blink::mojom::MediaStreamType::NO_SERVICE;
-        if (audio_match || video_match) {
-          MediaResponseCallback callback = std::move(it->second.callback);
-          it = requests_map.erase(it);
-          std::move(callback).Run(blink::mojom::StreamDevicesSet(), result,
-                                  nullptr);
-          continue;
-        }
+  // Automatically resolve any other pending requests in the queue that are from
+  // the same origin and request the same media device types (e.g.
+  // microphone/camera). This avoids duplicate permission prompts when WebUI
+  // pages (like voice search) generate concurrent media access and stream
+  // generation requests. One case is when `SpeechRecognitionManagerImpl`
+  // requests permission when speech API is used, but the usual mojo microphone
+  // is requested when the browser uses the microphone (for the speech API),
+  // causing duplicate permission prompts if not handled.
+  std::vector<MediaResponseCallback> callbacks_to_run;
+  const GURL& target_origin = request_it->second.request.security_origin;
+  bool target_audio = request_it->second.request.audio_type !=
+                      blink::mojom::MediaStreamType::NO_SERVICE;
+  bool target_video = request_it->second.request.video_type !=
+                      blink::mojom::MediaStreamType::NO_SERVICE;
+
+  // Match other requests with the pending request from target. This is to
+  // de-duplicate pending requests.
+  for (auto it = requests_map.begin(); it != requests_map.end();) {
+    if (it->first != request_id &&
+        it->second.request.security_origin == target_origin) {
+      bool it_audio = it->second.request.audio_type !=
+                      blink::mojom::MediaStreamType::NO_SERVICE;
+      bool it_video = it->second.request.video_type !=
+                      blink::mojom::MediaStreamType::NO_SERVICE;
+      bool should_deduplicate = false;
+      if (result == blink::mojom::MediaStreamRequestResult::OK) {
+        // Strict match required for success to differentiate requests.
+        should_deduplicate =
+            (it_audio == target_audio) && (it_video == target_video);
+      } else {
+        // In declined request path: only deduplicate if the target covered all
+        // media types requested by the pending request.
+        bool audio_covered = !it_audio || target_audio;
+        bool video_covered = !it_video || target_video;
+        should_deduplicate =
+            (it_audio || it_video) && audio_covered && video_covered;
       }
-      ++it;
+      if (should_deduplicate) {
+        callbacks_to_run.push_back(std::move(it->second.callback));
+        it = requests_map.erase(it);
+        continue;
+      }
+    }
+    ++it;
+  }
+
+  // Pre-calculate whether any capture devices exist one time.
+  bool has_devices = false;
+  if (result == blink::mojom::MediaStreamRequestResult::OK &&
+      !stream_devices_set.stream_devices.empty()) {
+    const blink::mojom::StreamDevices& devices =
+        *stream_devices_set.stream_devices[0];
+    has_devices =
+        devices.audio_device.has_value() || devices.video_device.has_value();
+  }
+
+  // Run after the above for loop to prevent re-entrant calls that modify
+  // `requests_map`, which is being iterated in the above for loop.
+  for (auto& cb : callbacks_to_run) {
+    if (result == blink::mojom::MediaStreamRequestResult::OK) {
+      std::unique_ptr<content::MediaStreamUI> stream_ui;
+      if (has_devices) {
+        stream_ui =
+            MediaCaptureDevicesDispatcher::GetInstance()
+                ->GetMediaStreamCaptureIndicator()
+                ->RegisterMediaStream(web_contents,
+                                      *stream_devices_set.stream_devices[0]);
+      }
+      std::move(cb).Run(stream_devices_set, result, std::move(stream_ui));
+    } else {
+      std::move(cb).Run(blink::mojom::StreamDevicesSet(), result, nullptr);
     }
   }
 
@@ -423,6 +511,18 @@ void PermissionBubbleMediaAccessHandler::OnAccessRequestResponse(
   }
 #endif  // BUILDFLAG(IS_MAC)
 
+  // Add dismissed requests to `recent_dismissals_`.
+  if (final_result ==
+      blink::mojom::MediaStreamRequestResult::PERMISSION_DISMISSED) {
+    bool has_audio = request_it->second.request.audio_type !=
+                     blink::mojom::MediaStreamType::NO_SERVICE;
+    bool has_video = request_it->second.request.video_type !=
+                     blink::mojom::MediaStreamType::NO_SERVICE;
+    recent_dismissals_[web_contents].push_back(
+        {request_it->second.request.security_origin, final_result,
+         base::TimeTicks::Now(), has_audio, has_video});
+  }
+
   MediaResponseCallback callback = std::move(request_it->second.callback);
   requests_map.erase(request_it);
 
@@ -434,7 +534,7 @@ void PermissionBubbleMediaAccessHandler::OnAccessRequestResponse(
         FROM_HERE,
         base::BindOnce(
             &PermissionBubbleMediaAccessHandler::ProcessQueuedAccessRequest,
-            base::Unretained(this), base::UnsafeDangling(web_contents)));
+            weak_factory_.GetWeakPtr(), base::UnsafeDangling(web_contents)));
   }
 
   if (final_result != blink::mojom::MediaStreamRequestResult::OK) {
@@ -451,4 +551,5 @@ void PermissionBubbleMediaAccessHandler::WebContentsDestroyed(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   pending_requests_.erase(web_contents);
+  recent_dismissals_.erase(web_contents);
 }

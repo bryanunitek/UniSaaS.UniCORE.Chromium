@@ -19,9 +19,9 @@
 #include "chrome/browser/ash/kerberos/kerberos_files_handler.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/global_features.h"
-#include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/kerberos/kerberos_client.h"
@@ -31,6 +31,7 @@
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_task_environment.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -165,7 +166,10 @@ class KerberosCredentialsManagerTest : public testing::Test {
         TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
         TestingBrowserProcess::GetGlobal()
             ->platform_part()
-            ->browser_policy_connector_ash());
+            ->browser_policy_connector_ash(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->component_manager_ash());
 
     user_manager_->AddUser(AccountId::FromUserEmail(kProfileEmail));
 
@@ -179,9 +183,6 @@ class KerberosCredentialsManagerTest : public testing::Test {
     TestingProfile::Builder profile_builder;
     profile_builder.SetProfileName(kProfileEmail);
     profile_ = profile_builder.Build();
-
-    display_service_ =
-        std::make_unique<NotificationDisplayServiceTester>(profile_.get());
 
     mgr_ = std::make_unique<KerberosCredentialsManager>(
         TestingBrowserProcess::GetGlobal()->local_state(), profile_.get());
@@ -197,7 +198,6 @@ class KerberosCredentialsManagerTest : public testing::Test {
   ~KerberosCredentialsManagerTest() override {
     mgr_->RemoveObserver(&observer_);
     mgr_.reset();
-    display_service_.reset();
     user_session_manager_->Shutdown();
     profile_.reset();
     user_session_manager_.reset();
@@ -389,7 +389,6 @@ class KerberosCredentialsManagerTest : public testing::Test {
       std::make_unique<FakeChromeUserManager>()};
   std::unique_ptr<UserSessionManager> user_session_manager_;
   std::unique_ptr<TestingProfile> profile_;
-  std::unique_ptr<NotificationDisplayServiceTester> display_service_;
   std::unique_ptr<KerberosCredentialsManager> mgr_;
   FakeKerberosCredentialsManagerObserver observer_;
 

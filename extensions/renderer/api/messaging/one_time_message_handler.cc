@@ -20,7 +20,6 @@
 #include "extensions/common/api/messaging/message.h"
 #include "extensions/common/api/messaging/port_id.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/manifest_handlers/devtools_page_handler.h"
 #include "extensions/common/mojom/event_dispatcher.mojom.h"
 #include "extensions/common/mojom/message_port.mojom-shared.h"
 #include "extensions/renderer/api/messaging/message_target.h"
@@ -96,19 +95,6 @@ struct OneTimeMessageContextData : public base::SupportsUserData::Data {
 
 constexpr char OneTimeMessageContextData::kPerContextDataKey[];
 
-bool IsMessagePolyfillSupportEnabled(ScriptContext* script_context) {
-  if (!script_context) {
-    return false;
-  }
-  const Extension* extension = script_context->extension();
-
-  if (!extension) {
-    return true;
-  }
-
-  return chrome_manifest_urls::GetDevToolsPage(extension).is_empty();
-}
-
 // Returns an array from the `result` object's `property_name` if it exists,
 // otherwise returns an empty `v8::Local<v8::Array>`.
 v8::Local<v8::Array> GetListenerResultArray(v8::Isolate* isolate,
@@ -140,7 +126,7 @@ v8::Local<v8::Array> GetListenerResultArray(v8::Isolate* isolate,
 
 void DelayedOneTimeMessageCallbackHelper(
     const v8::FunctionCallbackInfo<v8::Value>& info) {
-  CHECK(info.Data()->IsString());
+  CHECK(info.DataV2().As<v8::Value>()->IsString());
 
   gin::Arguments arguments(info);
   v8::Isolate* isolate = arguments.isolate();
@@ -155,7 +141,7 @@ void DelayedOneTimeMessageCallbackHelper(
   }
 
   // Retrieve the CallbackID from v8 that we set when we created the callback.
-  v8::Local<v8::String> callback_id_v8_string = info.Data().As<v8::String>();
+  v8::Local<v8::String> callback_id_v8_string = info.DataV2().As<v8::String>();
   std::string callback_id_string;
   if (!gin::Converter<std::string>::FromV8(isolate, callback_id_v8_string,
                                            &callback_id_string)) {
@@ -680,10 +666,8 @@ bool OneTimeMessageHandler::DeliverMessageToReceiver(
           *script_context, target_port_id,
           std::move(message_response_callback));
 
-  if (IsMessagePolyfillSupportEnabled(script_context)) {
-    port.message_response_function =
-        v8::Global<v8::Function>(isolate, message_response_function);
-  }
+  port.message_response_function =
+      v8::Global<v8::Function>(isolate, message_response_function);
 
   v8::HandleScope handle_scope(isolate);
 
@@ -709,17 +693,14 @@ bool OneTimeMessageHandler::DeliverMessageToReceiver(
     // it intended to respond asynchronously.
     if (port.event_name == messaging_util::kOnMessageEvent ||
         port.event_name == messaging_util::kOnMessageExternalEvent) {
-      std::optional<CallbackID> listener_throws_error_callback_id;
-      if (IsMessagePolyfillSupportEnabled(script_context)) {
-        auto listener_throws_error_callback =
-            CreateListenerErrorCallback(target_port_id);
-        listener_throws_error_callback_id = CallbackID::Create();
-        listener_throws_error_function =
-            callback_manager_->CreateListenerThrowsErrorFunction(
-                *script_context, target_port_id,
-                std::move(listener_throws_error_callback),
-                *listener_throws_error_callback_id);
-      }
+      auto listener_throws_error_callback =
+          CreateListenerErrorCallback(target_port_id);
+      CallbackID listener_throws_error_callback_id = CallbackID::Create();
+      listener_throws_error_function =
+          callback_manager_->CreateListenerThrowsErrorFunction(
+              *script_context, target_port_id,
+              std::move(listener_throws_error_callback),
+              listener_throws_error_callback_id);
       auto message_dispatched_callback = CreateEventDispatchCallback(
           target_port_id, listener_throws_error_callback_id);
       message_dispatched_function =
@@ -969,12 +950,10 @@ void OneTimeMessageHandler::OnOneTimeMessageResponse(
   if (!message) {
     // Throw an error in the listener context.
     arguments->ThrowTypeError(message_creation_error);
-    if (IsMessagePolyfillSupportEnabled(script_context)) {
-      // This is a "fatal" error for the channel so close it entirely.
-      CloseReceiverMessagePortOrChannel(script_context, port_id,
-                                        /*close_channel=*/true,
-                                        message_creation_error);
-    }
+    // This is a "fatal" error for the channel so close it entirely.
+    CloseReceiverMessagePortOrChannel(script_context, port_id,
+                                      /*close_channel=*/true,
+                                      message_creation_error);
     return;
   }
 
@@ -1111,24 +1090,24 @@ void OneTimeMessageHandler::OneTimeMessageCallbackManager::
 
 std::optional<std::string> OneTimeMessageHandler::GetErrorMessageFromValue(
     v8::Isolate* isolate,
+    v8::Local<v8::Context> context,
     v8::Local<v8::Value> possible_error_value) {
   if (!possible_error_value->IsNativeError()) {
     return std::nullopt;
   }
 
-  v8::Local<v8::Message> error_message =
-      v8::Exception::CreateMessage(isolate, possible_error_value);
-  std::string error_message_from_v8;
-  bool error_message_string_convert_success =
-      gin::Converter<std::string>::FromV8(isolate,
-                                          error_message->Get().As<v8::Value>(),
-                                          &error_message_from_v8);
-
-  if (!error_message_string_convert_success || error_message_from_v8.empty()) {
-    return std::nullopt;
+  v8::TryCatch try_catch(isolate);
+  v8::Local<v8::Object> error_object = possible_error_value.As<v8::Object>();
+  v8::Local<v8::Value> message_value;
+  std::string error_message_string;
+  if (error_object->Get(context, gin::StringToSymbol(isolate, "message"))
+          .ToLocal(&message_value) &&
+      gin::Converter<std::string>::FromV8(isolate, message_value,
+                                          &error_message_string)) {
+    return error_message_string;
   }
 
-  return error_message_from_v8;
+  return std::nullopt;
 }
 
 void OneTimeMessageHandler::OnPromiseRejectedResponse(
@@ -1175,19 +1154,25 @@ void OneTimeMessageHandler::OnPromiseRejectedResponse(
     return;
   }
 
-  CHECK(IsMessagePolyfillSupportEnabled(script_context));
-
   callback_manager_->ClearCallbackDataForPortId(script_context, port_id);
 
-  // If promise rejection reason is a JS Error type then close the message port
-  // with the Error's .message property. Otherwise return a generic error
-  // message.
+  // If promise rejection reason is a JS `Error` type then close the message
+  // port with the `Error`'s `.message` property. Otherwise return a generic
+  // error message.
   // TODO(crbug.com/439644930): Support sending the listener's stack trace along
   // with the rejection error. mozilla/webextension-polyfill doesn't support it
   // currently, but plans to (see
   // https://github.com/mozilla/webextension-polyfill/issues/210).
+  base::WeakPtr<OneTimeMessageHandler> weak_this = weak_factory_.GetWeakPtr();
   std::optional<std::string> error_message_from_value =
-      GetErrorMessageFromValue(isolate, promise_reject_value);
+      GetErrorMessageFromValue(isolate, context, promise_reject_value);
+
+  // Property lookup on `promise_reject_value` can execute arbitrary JavaScript
+  // (e.g. via a getter), which could invalidate `script_context` or destroy
+  // `this`. Fail gracefully if the context is no longer valid.
+  if (!weak_this || !script_context->is_valid()) {
+    return;
+  }
 
   std::string error_message =
       error_message_from_value
@@ -1209,7 +1194,6 @@ void OneTimeMessageHandler::OnListenerThrowsError(const PortId& port_id,
   v8::Isolate* isolate = arguments->isolate();
   v8::Local<v8::Context> context = isolate->GetCurrentContext();
   ScriptContext* script_context = GetScriptContextFromV8Context(context);
-  CHECK(IsMessagePolyfillSupportEnabled(script_context));
 
   OneTimeMessageContextData* data =
       GetPerContextData<OneTimeMessageContextData>(
@@ -1241,8 +1225,17 @@ void OneTimeMessageHandler::OnListenerThrowsError(const PortId& port_id,
   CHECK(arguments->Length() > 0);
   CHECK(arguments->GetNext(&listener_thrown_value));
 
+  base::WeakPtr<OneTimeMessageHandler> weak_this = weak_factory_.GetWeakPtr();
   std::optional<std::string> error_message_from_value =
-      GetErrorMessageFromValue(isolate, listener_thrown_value);
+      GetErrorMessageFromValue(isolate, context, listener_thrown_value);
+
+  // Property lookup on `listener_thrown_value` can execute arbitrary JavaScript
+  // (e.g. via a getter), which could invalidate `script_context` or destroy
+  // `this`. Fail gracefully if the context is no longer valid.
+  if (!weak_this || !script_context->is_valid()) {
+    return;
+  }
+
   std::string error_message =
       error_message_from_value
           ? *error_message_from_value
@@ -1290,19 +1283,11 @@ bool OneTimeMessageHandler::CheckAndHandleAsyncListenerReply(
       will_reply_async = true;
     }
 
-    // If promise returns are not supported, then we don't need to attach any
-    // callbacks and can return early once we find at least one listener that
-    // wants to reply asynchronously
-    if (!IsMessagePolyfillSupportEnabled(&script_context) && will_reply_async) {
-      return true;
-    }
-
     // Check if any of the returns are a promise, indicating the listener will
     // reply async. Attach callbacks for both the promise resolving or
     // rejecting. This is so that whatever the promise settles to is considered
     // the listener replying to the message sender with the settled value.
-    if (IsMessagePolyfillSupportEnabled(&script_context) &&
-        listener_return->IsPromise()) {
+    if (listener_return->IsPromise()) {
       auto promise_rejected_response_callback =
           CreatePromiseRejectedCallback(port_id);
       v8::Local<v8::Function> promise_rejected_function =
@@ -1370,12 +1355,10 @@ void OneTimeMessageHandler::OnEventFired(
 
   OneTimeReceiver& port = iter->second;
 
-  v8::Local<v8::Function> promise_resolved_function;
-  if (IsMessagePolyfillSupportEnabled(script_context)) {
-    promise_resolved_function = port.message_response_function.Get(isolate);
-    // Ensure the global function doesn't outlive port closing.
-    port.message_response_function.SetWeak();
-  }
+  v8::Local<v8::Function> promise_resolved_function =
+      port.message_response_function.Get(isolate);
+  // Ensure the global function doesn't outlive port closing.
+  port.message_response_function.SetWeak();
 
   if (CheckAndHandleAsyncListenerReply(isolate, context, *script_context,
                                        result, port_id,

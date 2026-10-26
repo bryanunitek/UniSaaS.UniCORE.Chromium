@@ -79,7 +79,7 @@ PendingScript::PendingScript(ScriptElementBase* element,
           element->GetDocument().IsInDocumentWrite()),
       task_state_(task_state) {
   async_task_context_.Schedule(original_execution_context_, "PendingScript",
-                               probe::AsyncTaskContext::ScanForAds::kTrue);
+                               probe::AsyncTaskContext::StackOptions::kScan);
 }
 
 PendingScript::~PendingScript() {}
@@ -91,6 +91,13 @@ void PendingScript::Dispose() {
 
   starting_position_ = TextPosition::BelowRangePosition();
   parser_blocking_load_start_time_ = base::TimeTicks();
+
+  if (element_) {
+    if (auto* resource_manager =
+            element_->GetDocument().GetRenderBlockingResourceManager()) {
+      resource_manager->RemovePendingScript(*element_);
+    }
+  }
 
   DisposeInternal();
   element_ = nullptr;

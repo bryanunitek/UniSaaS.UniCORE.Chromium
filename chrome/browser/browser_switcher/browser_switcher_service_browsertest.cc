@@ -19,7 +19,6 @@
 #include "chrome/browser/browser_switcher/browser_switcher_service_factory.h"
 #include "chrome/browser/browser_switcher/browser_switcher_sitelist.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
@@ -137,7 +136,7 @@ class BrowserSwitcherServiceTest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
 #if BUILDFLAG(IS_WIN)
     fake_appdata_dir_ =
-        browser()->profile()->GetPath().AppendASCII("FakeAppData");
+        browser()->GetProfile()->GetPath().AppendASCII("FakeAppData");
     ASSERT_TRUE(DirectoryExists(fake_appdata_dir_) ||
                 CreateDirectory(fake_appdata_dir_));
     BrowserSwitcherServiceFactory::GetInstance()->SetTestingFactory(
@@ -448,8 +447,8 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
 
 IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
                        ExternalIgnoresNonManagedPref) {
-  browser()->profile()->GetPrefs()->SetString(prefs::kExternalSitelistUrl,
-                                              kAValidUrl);
+  browser()->GetProfile()->GetPrefs()->SetString(prefs::kExternalSitelistUrl,
+                                                 kAValidUrl);
 
   bool fetch_happened = false;
   content::URLLoaderInterceptor interceptor(base::BindRepeating(
@@ -573,7 +572,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest, IeemIgnoresFailedDownload) {
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest, IeemIgnoresNonManagedPref) {
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kUseIeSitelist, true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUseIeSitelist, true);
   BrowserSwitcherServiceWin::SetIeemSitelistUrlForTesting(kAValidUrl);
 
   bool fetch_happened = false;

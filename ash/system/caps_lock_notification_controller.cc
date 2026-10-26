@@ -64,15 +64,12 @@ int GetMessageStringId() {
 }
 
 std::unique_ptr<Notification> CreateNotification() {
-  const gfx::VectorIcon& capslock_icon =
-      features::IsModifierSplitEnabled()
-          ? kModifierSplitNotificationCapslockIcon
-          : kNotificationCapslockIcon;
+  const gfx::VectorIcon& capslock_icon = kModifierSplitNotificationCapslockIcon;
   std::unique_ptr<Notification> notification = ash::CreateSystemNotificationPtr(
       message_center::NOTIFICATION_TYPE_SIMPLE, kCapsLockNotificationId,
       l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_CAPS_LOCK_ENABLED),
       l10n_util::GetStringUTF16(GetMessageStringId()),
-      std::u16string() /* display_source */, GURL(),
+      std::u16string() /* display_source */,
       message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
                                  kNotifierCapsLock,
                                  NotificationCatalogName::kCapsLock),

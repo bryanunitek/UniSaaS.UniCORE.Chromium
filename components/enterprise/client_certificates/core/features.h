@@ -16,17 +16,14 @@ BASE_DECLARE_FEATURE(kManagedUserClientCertificateInPrefs);
 // Return true if the managed user certificate should be stored in prefs.
 bool IsManagedUserClientCertificateInPrefsEnabled();
 
-// Controls whether client certificate provisioning on Android is enabled.
-BASE_DECLARE_FEATURE(kEnableClientCertificateProvisioningOnAndroid);
+// Controls whether the Subject Common Name (CN) of managed client certificates
+// can be configured via policy, sent in certificate provisioning requests, and
+// validated against the expected context identity.
+BASE_DECLARE_FEATURE(kClientCertCommonNameAttribute);
 
-// Return true if client certificate provisioning on Android is enabled.
-bool IsClientCertificateProvisioningOnAndroidEnabled();
-
-// Controls whether client certificate provisioning on iOS is enabled.
-BASE_DECLARE_FEATURE(kEnableClientCertificateProvisioningOnIOS);
-
-// Return true if client certificate provisioning on iOS is enabled.
-bool IsClientCertificateProvisioningOnIOSEnabled();
+// Returns true if configurable Subject Common Name (CN) provisioning and
+// identity validation are enabled.
+bool IsClientCertCommonNameAttributeEnabled();
 
 #if BUILDFLAG(IS_WIN)
 // Controls whether Windows TPM keys are blocked from

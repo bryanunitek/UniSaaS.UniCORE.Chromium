@@ -22,7 +22,6 @@
 #include "chrome/browser/ash/policy/remote_commands/crd/public/shared_crd_session.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -32,7 +31,6 @@
 
 using base::test::TestFuture;
 using ::testing::_;
-using ::testing::InvokeWithoutArgs;
 using ::testing::NiceMock;
 using ::testing::StrictMock;
 using ::testing::WithArg;
@@ -83,7 +81,7 @@ class SpotlightCrdManagerImplTest : public InProcessBrowserTest {
     ASSERT_TRUE(embedded_test_server()->Start());
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<SpotlightCrdManagerImpl> manager_;
@@ -177,9 +175,9 @@ IN_PROC_BROWSER_TEST_F(SpotlightCrdManagerImplTest,
 IN_PROC_BROWSER_TEST_F(SpotlightCrdManagerImplTest,
                        TerminatesCrdSessionOnSessionEnd) {
   TestFuture<void> session_finished_future;
-  EXPECT_CALL(*crd_session_, TerminateSession)
-      .WillOnce(InvokeWithoutArgs(
-          [&]() { std::move(session_finished_future.GetCallback()).Run(); }));
+  EXPECT_CALL(*crd_session_, TerminateSession).WillOnce([&]() {
+    std::move(session_finished_future.GetCallback()).Run();
+  });
 
   TestFuture<const std::string&> success_future;
   manager_->InitiateSpotlightSession(success_future.GetCallback(),

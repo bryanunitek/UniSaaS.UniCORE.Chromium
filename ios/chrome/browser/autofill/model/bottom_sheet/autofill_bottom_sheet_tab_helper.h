@@ -7,6 +7,7 @@
 
 #import <memory>
 
+#import "base/gtest_prod_util.h"
 #import "base/memory/raw_ptr.h"
 #import "base/memory/weak_ptr.h"
 #import "base/scoped_multi_source_observation.h"
@@ -95,7 +96,7 @@ class AutofillBottomSheetTabHelper
   // Handler for JavaScript messages. Dispatch to more specific handler.
   void OnFormMessageReceived(const web::ScriptMessage& message);
 
-  // Sets the bottom sheet CommandDispatcher.
+  // Sets the bottom sheet AutofillCommands handler.
   void SetAutofillBottomSheetHandler(id<AutofillCommands> commands_handler);
 
   // Sets the password generation provider used for proactive password
@@ -138,13 +139,21 @@ class AutofillBottomSheetTabHelper
   // sheet on all frames.
   void DetachPaymentsListenersForAllFrames(bool refocus);
 
-  // Refocuses on the last field that triggered a bottom sheet, which can be a
-  // login field or any other field associated with a bottom sheet.
+  // Detach the Ambient Autofill notice listeners, which will deactivate the
+  // Ambient Autofill notice bottom sheet on all frames.
+  void DetachAmbientAutofillNoticeListenersForAllFrames(bool refocus);
+
+  // Refocuses on the last field that triggered a bottom sheet (which can be a
+  // login field or any other field associated with a bottom sheet) and restores
+  // first responder focus to the web view once JavaScript refocusing completes.
   void RefocusElementIfNeeded(const std::string& frame_id);
 
   // WebStateObserver:
+  void DidStartNavigation(web::WebState* web_state,
+                          web::NavigationContext* navigation_context) override;
   void DidFinishNavigation(web::WebState* web_state,
                            web::NavigationContext* navigation_context) override;
+  void RenderProcessGone(web::WebState* web_state) override;
   void WebStateDestroyed(web::WebState* web_state) override;
 
   // web::WebFramesManager::Observer:
@@ -188,8 +197,21 @@ class AutofillBottomSheetTabHelper
                                       autofill::FormGlobalId form_id,
                                       bool only_new);
 
+  // Updates the page listeners for the Ambient Autofill notice. If the user is
+  // eligible to see the notice, this method scans the fields of the form
+  // specified by `form_id` and attaches focus event listeners to the fields
+  // that have Autofill AI types. Tapping or focusing on these fields will
+  // trigger the notice bottom sheet.
+  void UpdateListenersForAmbientAutofillForm(autofill::AutofillManager& manager,
+                                             autofill::FormGlobalId form_id,
+                                             bool only_new);
+
  private:
   friend class web::WebStateUserData<AutofillBottomSheetTabHelper>;
+  FRIEND_TEST_ALL_PREFIXES(AutofillBottomSheetTabHelperTest,
+                           DidStartNavigationCancelsPendingCallbacks);
+  FRIEND_TEST_ALL_PREFIXES(AutofillBottomSheetTabHelperTest,
+                           RenderProcessGoneClearsState);
 
   explicit AutofillBottomSheetTabHelper(web::WebState* web_state);
 
@@ -218,6 +240,9 @@ class AutofillBottomSheetTabHelper
   // Send command to show the Credential Bottom Sheet.
   void ShowCredentialBottomSheet(const autofill::FormActivityParams& params);
 
+  // Send command to show the Ambient Autofill notice bottom sheet.
+  void ShowAmbientAutofillNotice(const autofill::FormActivityParams& params);
+
   // Conditionally show the payments bottom sheet based on the Autofill
   // suggestions that can be retrieved for the form that corresponds to
   // `params`.
@@ -242,6 +267,10 @@ class AutofillBottomSheetTabHelper
   // Shows the password generation suggestion view controller.
   void ShowProactivePasswordGenerationBottomSheet(
       const autofill::FormActivityParams& params);
+
+  // Cancels any pending asynchronous suggestion queries (e.g. for payments
+  // bottom sheet) associated with a previous page or document.
+  void CancelPendingSuggestionRequests();
 
   // Password generation provider used to trigger proactive password generation
   id<PasswordGenerationProvider> generation_provider_;
@@ -271,6 +300,11 @@ class AutofillBottomSheetTabHelper
   std::map<std::string, std::set<autofill::FieldRendererId>>
       registered_payments_renderer_ids_;
 
+  // List of Ambient Autofill notice bottom sheet related renderer ids, mapped
+  // to a frame id.
+  std::map<std::string, std::set<autofill::FieldRendererId>>
+      registered_ambient_renderer_ids_;
+
   // Set of proactive password generation bottom sheet related renderer ids,
   // mapped to their frame id.
   // TODO(crbug.com/40266699): Migrate to FieldGlobalIds.
@@ -294,6 +328,13 @@ class AutofillBottomSheetTabHelper
   // Callbacks to be run when the virtual card enrollment bottom sheet UI has
   // completed.
   autofill::VirtualCardEnrollmentCallbacks virtual_card_enrollment_callbacks_;
+
+  // Weak pointers handed out to pending suggestion retrieval callbacks. Kept
+  // separate from `weak_factory_` because `CancelPendingSuggestionRequests()`
+  // invalidates the whole factory, and only suggestion requests may be
+  // cancelled that way.
+  base::WeakPtrFactory<AutofillBottomSheetTabHelper>
+      suggestion_request_weak_factory_{this};
 
   base::WeakPtrFactory<AutofillBottomSheetTabHelper> weak_factory_{this};
 };

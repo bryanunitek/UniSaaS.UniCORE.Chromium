@@ -8,8 +8,6 @@ import static org.mockito.Mockito.verify;
 
 import android.app.Activity;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -18,7 +16,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.HistogramWatcher;
@@ -26,7 +23,6 @@ import org.chromium.chrome.browser.feed.v2.FeedUserActionType;
 
 /** Unit tests for {@link FeedUma}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class FeedUmaTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -39,7 +35,6 @@ public class FeedUmaTest {
     }
 
     @Test
-    @SmallTest
     public void testRecordFeedBottomSheetItemsClicked() {
         // Verifies that the histogram is logged correctly when the feed is turned on and off.
         String articlesListVisibleHistogramName =

@@ -6,10 +6,13 @@
 #define COMPONENTS_ACTIVITY_REPORTER_ACTIVITY_REPORTER_FOR_TESTING_H_
 
 #include <memory>
+#include <string>
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/version_info/channel.h"
+
+class PrefService;
 
 namespace update_client {
 class UpdateClient;
@@ -20,9 +23,11 @@ namespace activity_reporter {
 class ActivityReporter;
 
 std::unique_ptr<ActivityReporter> CreateActivityReporterForTesting(
+    base::RepeatingCallback<PrefService*()> pref_service_provider,
     scoped_refptr<update_client::UpdateClient> update_client,
-    base::RepeatingClosure updater_active_callback,
-    base::RepeatingCallback<version_info::Channel()> channel_provider);
+    base::RepeatingCallback<version_info::Channel()> channel_provider,
+    base::RepeatingCallback<std::string()> brand_provider,
+    base::RepeatingClosure updater_active_callback);
 
 }  // namespace activity_reporter
 

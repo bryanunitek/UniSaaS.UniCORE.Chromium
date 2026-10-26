@@ -12,11 +12,13 @@
 #include "chrome/browser/apps/app_shim/app_shim_manager_mac.h"
 #include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #import "chrome/browser/ui/cocoa/browser_window_command_handler.h"
 #import "chrome/browser/ui/cocoa/chrome_command_dispatcher_delegate.h"
 #include "components/input/native_web_keyboard_event.h"
 #import "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #include "ui/base/accelerators/global_accelerator_listener/global_accelerator_listener.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/cocoa/native_widget_mac_ns_window_host.h"
 #include "ui/views/widget/native_widget_mac.h"
 
@@ -26,8 +28,9 @@
 
 namespace {
 
-AppShimHost* GetHostForBrowser(Browser* browser) {
+AppShimHost* GetHostForBrowser(BrowserWindowInterface* browser) {
   auto* const shim_manager = apps::AppShimManager::Get();
+  CHECK(browser);
   if (!shim_manager) {
     return nullptr;
   }
@@ -70,14 +73,21 @@ bool WebUIBrowserWindow::HandleKeyboardEvent(
 // Note that the logic here is often derived from BrowserNativeWidgetMac.
 class WebUIBrowserNativeWidgetMac : public views::NativeWidgetMac {
  public:
-  WebUIBrowserNativeWidgetMac(Browser* browser, views::Widget* widget)
+  WebUIBrowserNativeWidgetMac(BrowserWindowInterface* browser,
+                              views::Widget* widget)
       : NativeWidgetMac(widget), browser_(browser) {}
 
  private:
   // views::NativeWidgetMac implementation:
+  void OnWidgetDestroyed(views::Widget* widget) override {
+    browser_ = nullptr;
+    NativeWidgetMac::OnWidgetDestroyed(widget);
+  }
+
   void ValidateUserInterfaceItem(
       int32_t command,
       remote_cocoa::mojom::ValidateUserInterfaceItemResult* result) override {
+    CHECK(browser_);
     // This allows menu items like "Close Tabs" to be enabled when the browser
     // has open tabs, which in turn enables the "Close Tabs" keyboard shortcut.
     result->enable = chrome::IsCommandEnabled(browser_, command);
@@ -101,6 +111,7 @@ class WebUIBrowserNativeWidgetMac : public views::NativeWidgetMac {
   bool WillExecuteCommand(int32_t command,
                           WindowOpenDisposition window_open_disposition,
                           bool is_before_first_responder) override {
+    CHECK(browser_);
     if (is_before_first_responder) {
       // The specification for this private extensions API is incredibly vague.
       // For now, we avoid triggering chrome commands prior to giving the
@@ -119,8 +130,8 @@ class WebUIBrowserNativeWidgetMac : public views::NativeWidgetMac {
       // on macOS.
       input::NativeWebKeyboardEvent dummy_event(
           blink::WebInputEvent::Type::kKeyDown, 0, base::TimeTicks());
-      if (!browser_->command_controller()->IsReservedCommandOrKey(
-              command, dummy_event)) {
+      if (!chrome::BrowserCommandController::From(browser_)
+               ->IsReservedCommandOrKey(command, dummy_event)) {
         return false;
       }
     }
@@ -169,7 +180,7 @@ class WebUIBrowserNativeWidgetMac : public views::NativeWidgetMac {
     *titlebar_height = 40;
   }
 
-  raw_ptr<Browser> browser_;
+  raw_ptr<BrowserWindowInterface> browser_;
 };
 
 views::NativeWidget* WebUIBrowserWindow::CreateNativeWidget() {

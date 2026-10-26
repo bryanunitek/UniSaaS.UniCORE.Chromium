@@ -213,29 +213,46 @@ function testAllowTransparencyAttribute() {
 
 // This test verifies that a lengthy page with autosize enabled will report
 // the correct height in the sizechanged event.
-function testAutosizeHeight(expectedWidth) {
+function testAutosizeHeight(expectedWidths) {
   var webview = document.createElement('webview');
 
   webview.autosize = true;
   webview.minwidth = 200;
   webview.maxwidth = 210;
   webview.minheight = 40;
-  webview.maxheight = 200;
 
-  var step = 1;
+  var initialMaxHeight = 200;
   var finalHeight = 50;
+  webview.maxheight = initialMaxHeight;
+  var loaded = false;
+  var completed = false;
+  webview.addEventListener('loadstop', function() {
+    loaded = true;
+    webview.maxheight = finalHeight;
+  });
+
   webview.addEventListener('sizechanged', function(e) {
+    if (completed) {
+      return;
+    }
+
     embedder.test.assertTrue(e.newHeight >= webview.minheight);
-    embedder.test.assertTrue(e.newHeight <= webview.maxheight);
+    embedder.test.assertTrue(e.newHeight <= initialMaxHeight);
     embedder.test.assertTrue(e.newWidth >= webview.minwidth);
     embedder.test.assertTrue(e.newWidth <= webview.maxwidth);
-    if (step == 1)
-      webview.maxheight = 50;
 
-    // We are done once the size settles on the final width and height.
-    if (e.newHeight == finalHeight && e.newWidth == expectedWidth)
+    if (!loaded || e.newHeight != finalHeight) {
+      return;
+    }
+
+    completed = true;
+    if (expectedWidths.includes(e.newWidth)) {
       embedder.test.succeed();
-    ++step;
+      return;
+    }
+
+    console.error('Unexpected final width: ' + e.newWidth);
+    embedder.test.fail();
   });
 
   webview.src = 'data:text/html,' +
@@ -3248,6 +3265,17 @@ function testDialogInPdf() {
   document.body.appendChild(webview);
 }
 
+// Test that <webview>.executeScript({allFrames: true}) on a guest page
+// embedding a PDF does not execute scripts in the PDF extension frame or the
+// PDF content frame.
+function testExecuteScriptInEmbeddedPdf() {
+  let webview = document.createElement('webview');
+  webview.onloadstop = embedder.test.succeed;
+  webview.onloadabort = embedder.test.fail;
+  webview.src = embedder.baseGuestURL + '/page_with_embedded_pdf.html';
+  document.body.appendChild(webview);
+}
+
 // This test verifies that mailto links are enabled.
 function testMailtoLink() {
   var webview = new WebView();
@@ -3532,33 +3560,6 @@ function testBlankWebview() {
     // for the remainder of the test.
     embedder.test.succeed();
   });
-}
-
-function testAddFencedFrame() {
-  let fencedFrameHostURL = embedder.baseGuestURL +
-      '/extensions/platform_apps/web_view/shim/fenced_frame_host.html';
-
-  let webview = new WebView();
-  webview.src = fencedFrameHostURL;
-  webview.addEventListener('loadstop', () => {
-    embedder.test.succeed();
-  });
-  document.body.appendChild(webview);
-}
-
-function testZoomFencedFrame() {
-  let fencedFrameHostURL = embedder.baseGuestURL +
-      '/extensions/platform_apps/web_view/shim/fenced_frame_host.html';
-
-  let webview = new WebView();
-  webview.src = fencedFrameHostURL;
-  webview.addEventListener('loadstop', async () => {
-    // Adjust zoom. Verify in native test that the RenderWidgetHost for the
-    // FencedFrame has the expected zoom.
-    await setZoomP(webview, 0.95);
-    embedder.test.succeed();
-  });
-  document.body.appendChild(webview);
 }
 
 // This test and several tests below test scenarios where a webview element is
@@ -4099,8 +4100,9 @@ async function testWebRequestOnErrorOccurredNavigation() {
 
 embedder.test.testList = {
   'testAllowTransparencyAttribute': testAllowTransparencyAttribute,
-  'testAutosizeHeightFeatureEnabled': () => testAutosizeHeight(210),
-  'testAutosizeHeightFeatureDisabled': () => testAutosizeHeight(200),
+  // The final width depends on whether the scrollbar consumes layout space.
+  'testAutosizeHeightFeatureEnabled': () => testAutosizeHeight([200, 210]),
+  'testAutosizeHeightFeatureDisabled': () => testAutosizeHeight([200]),
   'testAutosizeAfterNavigation': testAutosizeAfterNavigation,
   'testAutosizeBeforeNavigation': testAutosizeBeforeNavigation,
   'testAutosizeRemoveAttributes': testAutosizeRemoveAttributes,
@@ -4220,6 +4222,7 @@ embedder.test.testList = {
   'testPDFInWebview': testPDFInWebview,
   'testNavigateToPDFInWebview': testNavigateToPDFInWebview,
   'testDialogInPdf': testDialogInPdf,
+  'testExecuteScriptInEmbeddedPdf': testExecuteScriptInEmbeddedPdf,
   'testMailtoLink': testMailtoLink,
   'testRendererNavigationRedirectWhileUnattached':
       testRendererNavigationRedirectWhileUnattached,
@@ -4231,8 +4234,6 @@ embedder.test.testList = {
   'testNewWindowNoDeadlock': testNewWindowNoDeadlock,
   'testSelectPopupPositionInMac': testSelectPopupPositionInMac,
   'testWebRequestBlockedNavigation': testWebRequestBlockedNavigation,
-  'testAddFencedFrame': testAddFencedFrame,
-  'testZoomFencedFrame': testZoomFencedFrame,
   'testInsertIntoIframe': testInsertIntoIframe,
   'testCreateAndInsertInIframe': testCreateAndInsertInIframe,
   'testInsertIntoMainFrameFromIframe': testInsertIntoMainFrameFromIframe,

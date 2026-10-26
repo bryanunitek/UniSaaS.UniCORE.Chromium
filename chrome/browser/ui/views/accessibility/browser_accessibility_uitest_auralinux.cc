@@ -7,9 +7,10 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/devtools/devtools_window_testing.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tab_modal_confirm_dialog.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -17,6 +18,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/scoped_accessibility_mode_override.h"
 #include "ui/accessibility/platform/ax_platform_node_base.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
 
 class AuraLinuxAccessibilityInProcessBrowserTest : public InProcessBrowserTest {
@@ -158,7 +160,7 @@ void AuraLinuxAccessibilityInProcessBrowserTest::VerifyEmbedRelationships() {
   EXPECT_NE(nullptr, target);
 
   content::WebContents* active_web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_EQ(target, active_web_contents->GetRenderWidgetHostView()
                         ->GetNativeViewAccessible());
 
@@ -187,24 +189,24 @@ IN_PROC_BROWSER_TEST_F(AuraLinuxAccessibilityInProcessBrowserTest,
   // Force the creation of the document's native object which sets up the
   // relationship.
   content::WebContents* active_web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_NE(nullptr, active_web_contents->GetRenderWidgetHostView()
                          ->GetNativeViewAccessible());
 
   GURL url(url::kAboutBlankURL);
   ASSERT_TRUE(AddTabAtIndex(0, url, ui::PAGE_TRANSITION_LINK));
-  EXPECT_EQ(2, browser()->tab_strip_model()->count());
-  EXPECT_EQ(0, browser()->tab_strip_model()->active_index());
+  EXPECT_EQ(2, browser()->GetTabStripModel()->count());
+  EXPECT_EQ(0, browser()->GetTabStripModel()->active_index());
 
   VerifyEmbedRelationships();
 
-  browser()->tab_strip_model()->ActivateTabAt(1);
-  EXPECT_EQ(1, browser()->tab_strip_model()->active_index());
+  browser()->GetTabStripModel()->ActivateTabAt(1);
+  EXPECT_EQ(1, browser()->GetTabStripModel()->active_index());
 
   VerifyEmbedRelationships();
 
-  browser()->tab_strip_model()->ActivateTabAt(0);
-  EXPECT_EQ(0, browser()->tab_strip_model()->active_index());
+  browser()->GetTabStripModel()->ActivateTabAt(0);
+  EXPECT_EQ(0, browser()->GetTabStripModel()->active_index());
 
   VerifyEmbedRelationships();
 }
@@ -223,11 +225,11 @@ IN_PROC_BROWSER_TEST_F(AuraLinuxAccessibilityInProcessBrowserTest,
   // Force the creation of the document's native object which sets up the
   // relationship.
   content::WebContents* active_web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_NE(nullptr, active_web_contents->GetRenderWidgetHostView()
                          ->GetNativeViewAccessible());
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
-  EXPECT_EQ(0, browser()->tab_strip_model()->active_index());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
+  EXPECT_EQ(0, browser()->GetTabStripModel()->active_index());
 
   // Opens DevTools docked.
   DevToolsWindow* devtools =
@@ -252,14 +254,14 @@ IN_PROC_BROWSER_TEST_F(AuraLinuxAccessibilityInProcessBrowserTest,
 IN_PROC_BROWSER_TEST_F(AuraLinuxAccessibilityInProcessBrowserTest,
                        GetIndexInParent) {
   content::WebContents* active_web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_NE(nullptr, active_web_contents->GetRenderWidgetHostView()
                          ->GetNativeViewAccessible());
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
-  EXPECT_EQ(0, browser()->tab_strip_model()->active_index());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
+  EXPECT_EQ(0, browser()->GetTabStripModel()->active_index());
 
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
-  views::WebView* webview = browser_view->contents_web_view();
+  views::View* webview = browser_view->GetContentsView();
   gfx::NativeViewAccessible accessible =
       webview->GetViewAccessibility().GetNativeObject();
 

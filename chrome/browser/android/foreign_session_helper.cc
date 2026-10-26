@@ -7,12 +7,12 @@
 #include <jni.h>
 #include <stddef.h>
 
-#include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_restore.h"
@@ -22,21 +22,23 @@
 #include "chrome/common/url_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/sessions/core/session_id.h"
+#include "components/sessions/core/session_types.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync_sessions/open_tabs_ui_delegate.h"
 #include "components/sync_sessions/session_sync_service.h"
+#include "components/sync_sessions/synced_session.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/jni_zero/default_conversions.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/android/gurl_android.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/browser/recent_tabs/jni_headers/ForeignSessionHelper_jni.h"
 
 using base::android::AttachCurrentThread;
-using base::android::ConvertJavaStringToUTF8;
-using base::android::ConvertUTF16ToJavaString;
-using base::android::ConvertUTF8ToJavaString;
 using base::android::JavaRef;
-using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
 using sync_sessions::OpenTabsUIDelegate;
 using sync_sessions::SyncedSession;
@@ -55,40 +57,25 @@ OpenTabsUIDelegate* GetOpenTabsUIDelegate(Profile* profile) {
   return service->GetOpenTabsUIDelegate();
 }
 
-bool ShouldSkipTab(const sessions::SessionTab& session_tab) {
-  if (session_tab.navigations.empty()) {
-    return true;
+const sessions::SessionTab* GetForeignSessionTab(OpenTabsUIDelegate* open_tabs,
+                                                 const std::string& session_tag,
+                                                 int session_tab_id) {
+  if (!open_tabs) {
+    return nullptr;
   }
 
-  int selected_index = session_tab.normalized_navigation_index();
-  const sessions::SerializedNavigationEntry& current_navigation =
-      session_tab.navigations.at(selected_index);
-
-  if (current_navigation.virtual_url().is_empty()) {
-    return true;
+  const sessions::SessionTab* session_tab = nullptr;
+  if (!open_tabs->GetForeignTab(session_tag,
+                                SessionID::FromSerializedValue(session_tab_id),
+                                &session_tab)) {
+    return nullptr;
   }
 
-  return false;
-}
-
-bool ShouldSkipWindow(const sessions::SessionWindow& window) {
-  for (const auto& tab_ptr : window.tabs) {
-    const sessions::SessionTab& session_tab = *(tab_ptr.get());
-    if (!ShouldSkipTab(session_tab)) {
-      return false;
-    }
+  if (ForeignSessionHelper::ShouldSkipTab(*session_tab)) {
+    return nullptr;
   }
-  return true;
-}
 
-bool ShouldSkipSession(const SyncedSession& session) {
-  for (const auto& window_pair : session.windows) {
-    const sessions::SessionWindow& window = window_pair.second->wrapped_window;
-    if (!ShouldSkipWindow(window)) {
-      return false;
-    }
-  }
-  return true;
+  return session_tab;
 }
 
 static void JNI_ForeignSessionHelper_CopyTabToJava(
@@ -96,18 +83,16 @@ static void JNI_ForeignSessionHelper_CopyTabToJava(
     const sessions::SessionTab& tab,
     ScopedJavaLocalRef<jobject>& j_window) {
   int selected_index = tab.normalized_navigation_index();
-  DCHECK_GE(selected_index, 0);
-  DCHECK_LT(selected_index, static_cast<int>(tab.navigations.size()));
+  CHECK_GE(selected_index, 0, base::NotFatalUntil::M161);
+  CHECK_LT(selected_index, static_cast<int>(tab.navigations.size()),
+           base::NotFatalUntil::M161);
 
   const sessions::SerializedNavigationEntry& current_navigation =
       tab.navigations.at(selected_index);
 
-  GURL tab_url = current_navigation.virtual_url();
-
   Java_ForeignSessionHelper_pushTab(
-      env, j_window, url::GURLAndroid::FromNativeGURL(env, tab_url),
-      ConvertUTF16ToJavaString(env, current_navigation.title()),
-      tab.timestamp.InMillisecondsSinceUnixEpoch(),
+      env, j_window, current_navigation.virtual_url(),
+      current_navigation.title(), tab.timestamp.InMillisecondsSinceUnixEpoch(),
       tab.last_active_time.InMillisecondsSinceUnixEpoch(), tab.tab_id.id());
 }
 
@@ -118,8 +103,8 @@ static void JNI_ForeignSessionHelper_CopyWindowToJava(
   for (const auto& tab_ptr : window.tabs) {
     const sessions::SessionTab& session_tab = *(tab_ptr.get());
 
-    if (ShouldSkipTab(session_tab)) {
-      return;
+    if (ForeignSessionHelper::ShouldSkipTab(session_tab)) {
+      continue;
     }
 
     JNI_ForeignSessionHelper_CopyTabToJava(env, session_tab, j_window);
@@ -133,7 +118,7 @@ static void JNI_ForeignSessionHelper_CopySessionToJava(
   for (const auto& window_pair : session.windows) {
     const sessions::SessionWindow& window = window_pair.second->wrapped_window;
 
-    if (ShouldSkipWindow(window)) {
+    if (ForeignSessionHelper::ShouldSkipWindow(window)) {
       continue;
     }
 
@@ -148,7 +133,54 @@ static void JNI_ForeignSessionHelper_CopySessionToJava(
 
 }  // namespace
 
-static int64_t JNI_ForeignSessionHelper_Init(JNIEnv* env, Profile* profile) {
+// static
+bool ForeignSessionHelper::ShouldSkipTab(
+    const sessions::SessionTab& session_tab) {
+  if (session_tab.navigations.empty()) {
+    return true;
+  }
+
+  int selected_index = session_tab.normalized_navigation_index();
+  const sessions::SerializedNavigationEntry& current_navigation =
+      session_tab.navigations.at(selected_index);
+
+  if (current_navigation.virtual_url().is_empty()) {
+    return true;
+  }
+
+  if (!SessionSyncServiceFactory::ShouldSyncURL(
+          current_navigation.virtual_url())) {
+    return true;
+  }
+
+  return false;
+}
+
+// static
+bool ForeignSessionHelper::ShouldSkipWindow(
+    const sessions::SessionWindow& window) {
+  for (const auto& tab_ptr : window.tabs) {
+    const sessions::SessionTab& session_tab = *(tab_ptr.get());
+    if (!ShouldSkipTab(session_tab)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// static
+bool ForeignSessionHelper::ShouldSkipSession(
+    const sync_sessions::SyncedSession& session) {
+  for (const auto& window_pair : session.windows) {
+    const sessions::SessionWindow& window = window_pair.second->wrapped_window;
+    if (!ShouldSkipWindow(window)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static int64_t JNI_ForeignSessionHelper_Init(Profile* profile) {
   ForeignSessionHelper* foreign_session_helper =
       new ForeignSessionHelper(profile);
   return reinterpret_cast<intptr_t>(foreign_session_helper);
@@ -172,17 +204,17 @@ ForeignSessionHelper::ForeignSessionHelper(Profile* profile)
 
 ForeignSessionHelper::~ForeignSessionHelper() = default;
 
-void ForeignSessionHelper::Destroy(JNIEnv* env) {
+void ForeignSessionHelper::Destroy() {
   delete this;
 }
 
-bool ForeignSessionHelper::IsTabSyncEnabled(JNIEnv* env) {
+bool ForeignSessionHelper::IsTabSyncEnabled() {
   sync_sessions::SessionSyncService* service =
       SessionSyncServiceFactory::GetInstance()->GetForProfile(profile_);
   return service && service->GetOpenTabsUIDelegate();
 }
 
-void ForeignSessionHelper::TriggerSessionSync(JNIEnv* env) {
+void ForeignSessionHelper::TriggerSessionSync() {
   syncer::SyncService* service = SyncServiceFactory::GetForProfile(profile_);
   if (!service) {
     return;
@@ -246,8 +278,7 @@ bool ForeignSessionHelper::GetForeignSessions(JNIEnv* env,
     }
 
     last_pushed_session.Reset(Java_ForeignSessionHelper_pushSession(
-        env, result, ConvertUTF8ToJavaString(env, session.GetSessionTag()),
-        ConvertUTF8ToJavaString(env, session.GetSessionName()),
+        env, result, session.GetSessionTag(), session.GetSessionName(),
         session.GetModifiedTime().InMillisecondsSinceUnixEpoch(),
         static_cast<int>(session.GetDeviceFormFactor())));
 
@@ -277,13 +308,16 @@ bool ForeignSessionHelper::GetMobileAndTabletForeignSessions(
 
   // Note: we don't own the SyncedSessions themselves.
   for (const SyncedSession* session : sessions) {
+    if (ShouldSkipSession(*session)) {
+      continue;
+    }
+
     if (session->GetDeviceFormFactor() ==
             syncer::DeviceInfo::FormFactor::kPhone ||
         session->GetDeviceFormFactor() ==
             syncer::DeviceInfo::FormFactor::kTablet) {
       last_pushed_session.Reset(Java_ForeignSessionHelper_pushSession(
-          env, result, ConvertUTF8ToJavaString(env, session->GetSessionTag()),
-          ConvertUTF8ToJavaString(env, session->GetSessionName()),
+          env, result, session->GetSessionTag(), session->GetSessionName(),
           session->GetModifiedTime().InMillisecondsSinceUnixEpoch(),
           static_cast<int>(session->GetDeviceFormFactor())));
 
@@ -297,35 +331,26 @@ bool ForeignSessionHelper::GetMobileAndTabletForeignSessions(
   return (skipped_tabs_on_restore != sessions.size());
 }
 
-bool ForeignSessionHelper::OpenForeignSessionTab(
-    JNIEnv* env,
-    const JavaRef<jobject>& j_tab,
-    const JavaRef<jstring>& session_tag,
-    int32_t session_tab_id,
-    int32_t j_disposition) {
+bool ForeignSessionHelper::OpenForeignSessionTab(TabAndroid* tab_android,
+                                                 const std::string& session_tag,
+                                                 int32_t session_tab_id,
+                                                 int32_t j_disposition) {
   OpenTabsUIDelegate* open_tabs = GetOpenTabsUIDelegate(profile_);
   if (!open_tabs) {
     LOG(ERROR) << "Null OpenTabsUIDelegate returned.";
     return false;
   }
 
-  const sessions::SessionTab* session_tab;
-
-  if (!open_tabs->GetForeignTab(ConvertJavaStringToUTF8(env, session_tag),
-                                SessionID::FromSerializedValue(session_tab_id),
-                                &session_tab)) {
+  const sessions::SessionTab* session_tab =
+      GetForeignSessionTab(open_tabs, session_tag, session_tab_id);
+  if (!session_tab) {
     LOG(ERROR) << "Failed to load foreign tab.";
     return false;
   }
 
-  if (session_tab->navigations.empty()) {
-    LOG(ERROR) << "Foreign tab no longer has valid navigations.";
+  if (!tab_android) {
     return false;
   }
-
-  TabAndroid* tab_android = TabAndroid::GetNativeTab(env, j_tab);
-  if (!tab_android)
-    return false;
   content::WebContents* web_contents = tab_android->web_contents();
   if (!web_contents) {
     return false;
@@ -340,16 +365,14 @@ bool ForeignSessionHelper::OpenForeignSessionTab(
 }
 
 void ForeignSessionHelper::DeleteForeignSession(
-    JNIEnv* env,
-    const JavaRef<jstring>& session_tag) {
+    const std::string& session_tag) {
   OpenTabsUIDelegate* open_tabs = GetOpenTabsUIDelegate(profile_);
   if (open_tabs) {
-    open_tabs->DeleteForeignSession(ConvertJavaStringToUTF8(env, session_tag));
+    open_tabs->DeleteForeignSession(session_tag);
   }
 }
 
-void ForeignSessionHelper::SetInvalidationsForSessionsEnabled(JNIEnv* env,
-                                                              bool enabled) {
+void ForeignSessionHelper::SetInvalidationsForSessionsEnabled(bool enabled) {
   syncer::SyncService* service = SyncServiceFactory::GetForProfile(profile_);
   if (!service) {
     return;
@@ -359,24 +382,32 @@ void ForeignSessionHelper::SetInvalidationsForSessionsEnabled(JNIEnv* env,
 }
 
 int32_t ForeignSessionHelper::OpenForeignSessionTabsAsBackgroundTabs(
-    JNIEnv* env,
-    const JavaRef<jobject>& j_tab,
-    const JavaRef<jintArray>& j_session_tab_ids,
-    const JavaRef<jstring>& session_tag) {
-  std::vector<int> session_tab_ids;
-  base::android::JavaIntArrayToIntVector(env, j_session_tab_ids,
-                                         &session_tab_ids);
-  int tabs_android_count = env->GetArrayLength(j_session_tab_ids.obj());
+    TabAndroid* tab_android,
+    const std::vector<int32_t>& session_tab_ids,
+    const std::string& session_tag) {
+  if (session_tab_ids.empty()) {
+    return 0;
+  }
 
-  TabAndroid* tab_android = TabAndroid::GetNativeTab(env, j_tab);
   if (!tab_android) {
     return 0;
   }
 
-  // Open the first tab in the list with a renderer and web contents.
-  content::WebContents* web_contents =
-      ForeignSessionHelper::RestoreTabWithRenderer(session_tag, j_tab,
-                                                   session_tab_ids[0]);
+  OpenTabsUIDelegate* open_tabs = GetOpenTabsUIDelegate(profile_);
+  if (!open_tabs) {
+    return 0;
+  }
+
+  // Open the first valid tab in the list with a renderer and web contents.
+  content::WebContents* web_contents = nullptr;
+  size_t first_tab_index = 0;
+  for (; first_tab_index < session_tab_ids.size(); ++first_tab_index) {
+    web_contents = RestoreTabWithRenderer(open_tabs, session_tag, tab_android,
+                                          session_tab_ids[first_tab_index]);
+    if (web_contents) {
+      break;
+    }
+  }
   if (!web_contents) {
     return 0;
   }
@@ -384,9 +415,14 @@ int32_t ForeignSessionHelper::OpenForeignSessionTabsAsBackgroundTabs(
 
   // Using the web contents of the first tab, load the rest of the tabs
   // as background tabs without a renderer.
-  for (int i = 1; i < tabs_android_count; i++) {
-    if (ForeignSessionHelper::RestoreTabNoRenderer(
-            session_tag, session_tab_ids[i], web_contents)) {
+  base::WeakPtr<content::WebContents> weak_web_contents =
+      web_contents->GetWeakPtr();
+  for (size_t i = first_tab_index + 1; i < session_tab_ids.size(); ++i) {
+    if (!weak_web_contents) {
+      break;
+    }
+    if (RestoreTabNoRenderer(open_tabs, session_tag, session_tab_ids[i],
+                             weak_web_contents.get())) {
       num_tabs_restored++;
     }
   }
@@ -394,28 +430,16 @@ int32_t ForeignSessionHelper::OpenForeignSessionTabsAsBackgroundTabs(
 }
 
 content::WebContents* ForeignSessionHelper::RestoreTabWithRenderer(
-    const JavaRef<jstring>& session_tag,
-    const JavaRef<jobject>& j_tab,
+    sync_sessions::OpenTabsUIDelegate* open_tabs,
+    const std::string& session_tag,
+    TabAndroid* tab_android,
     int session_tab_id) {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  OpenTabsUIDelegate* open_tabs = GetOpenTabsUIDelegate(profile_);
-  if (!open_tabs) {
+  const sessions::SessionTab* foreground_session_tab =
+      GetForeignSessionTab(open_tabs, session_tag, session_tab_id);
+  if (!foreground_session_tab) {
     return nullptr;
   }
 
-  const sessions::SessionTab* foreground_session_tab;
-
-  if (!open_tabs->GetForeignTab(ConvertJavaStringToUTF8(env, session_tag),
-                                SessionID::FromSerializedValue(session_tab_id),
-                                &foreground_session_tab)) {
-    return nullptr;
-  }
-
-  if (foreground_session_tab->navigations.empty()) {
-    return nullptr;
-  }
-
-  TabAndroid* tab_android = TabAndroid::GetNativeTab(env, j_tab);
   if (!tab_android) {
     return nullptr;
   }
@@ -426,35 +450,24 @@ content::WebContents* ForeignSessionHelper::RestoreTabWithRenderer(
 
   return SessionRestore::RestoreForeignSessionTab(
       web_contents, *foreground_session_tab,
-      WindowOpenDisposition::CURRENT_TAB);
+      WindowOpenDisposition::kCurrentTab);
 }
 
 bool ForeignSessionHelper::RestoreTabNoRenderer(
-    const JavaRef<jstring>& session_tag,
+    sync_sessions::OpenTabsUIDelegate* open_tabs,
+    const std::string& session_tag,
     int session_tab_id,
     content::WebContents* web_contents) {
-  OpenTabsUIDelegate* open_tabs = GetOpenTabsUIDelegate(profile_);
-  if (!open_tabs) {
-    return false;
-  }
-
-  const sessions::SessionTab* background_session_tab;
-
-  if (!open_tabs->GetForeignTab(
-          ConvertJavaStringToUTF8(base::android::AttachCurrentThread(),
-                                  session_tag),
-          SessionID::FromSerializedValue(session_tab_id),
-          &background_session_tab)) {
-    return false;
-  }
-
-  if (background_session_tab->navigations.empty()) {
+  const sessions::SessionTab* background_session_tab =
+      GetForeignSessionTab(open_tabs, session_tag, session_tab_id);
+  if (!background_session_tab) {
     return false;
   }
 
   SessionRestore::RestoreForeignSessionTab(
       web_contents, *background_session_tab,
-      WindowOpenDisposition::NEW_BACKGROUND_TAB, true);
+      WindowOpenDisposition::kNewBackgroundTab,
+      /*skip_renderer_creation=*/true);
   return true;
 }
 

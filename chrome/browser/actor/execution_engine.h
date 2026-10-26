@@ -5,13 +5,17 @@
 #ifndef CHROME_BROWSER_ACTOR_EXECUTION_ENGINE_H_
 #define CHROME_BROWSER_ACTOR_EXECUTION_ENGINE_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <set>
+#include <string>
 #include <vector>
 
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/safe_ref.h"
 #include "base/memory/weak_ptr.h"
@@ -29,9 +33,12 @@
 #include "components/actor/core/aggregated_journal.h"
 #include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/autofill/core/browser/integrators/actor/actor_form_filling_types.h"
-#include "components/origin_gating/core/actor_container_config_slot.h"
+#include "components/origin_gating/core/client_tool.h"
 #include "components/origin_gating/core/origin_gating_cache.h"
 #include "components/origin_gating/core/origin_gating_checker.h"
+#include "components/origin_gating/core/origin_gating_registration.h"
+#include "components/origin_gating/core/origin_gating_service.h"
+#include "components/origin_gating/core/task_policy_config_slot.h"
 #include "components/password_manager/core/browser/actor_login/actor_login_service.h"
 #include "components/password_manager/core/browser/actor_login/actor_login_types.h"
 #include "components/tabs/public/tab_interface.h"
@@ -39,6 +46,7 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
+#include "url/gurl.h"
 
 class Profile;
 
@@ -56,6 +64,12 @@ class ScopedUmaHistogramTimer;
 
 namespace content {
 class NavigationHandle;
+class RenderFrameHost;
+class WebContents;
+}  // namespace content
+
+namespace origin_gating {
+class OriginGatingService;
 }
 
 namespace url {
@@ -123,7 +137,19 @@ class ExecutionEngine : public ToolDelegate,
     kAllowByContainerConfig = 4,
     // AgentContainerConfig was provided and blocked this site.
     kBlockByContainerConfig = 5,
-    kMaxValue = kBlockByContainerConfig,
+    // The navigation was blocked due to a dangerous MIME type in the response.
+    kBlockByDangerousMimeType = 6,
+    // Blocked by the Lookalike URL service.
+    kBlockByLookalikeUrl = 7,
+    // Blocked by SafeBrowsing.
+    kBlockBySafeBrowsing = 8,
+    // Allowed because safety checks are disabled.
+    kAllowBySafetyChecksDisabled = 9,
+    // Blocked because the destination was an error document.
+    kBlockByTabErrorDocument = 10,
+    // Blocked by SafeBrowsing tab observer.
+    kBlockByTabSafeBrowsingObserver = 11,
+    kMaxValue = kBlockByTabSafeBrowsingObserver,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/actor/enums.xml:GatingDecision)
 
@@ -147,7 +173,7 @@ class ExecutionEngine : public ToolDelegate,
     kRejected = 2,
     kMaxValue = kRejected
   };
-  // LINT.ThenChange(//tools/metrics/histograms/actor/enums.xml:ActorServerConfirmationResult)
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/actor/enums.xml:ActorServerConfirmationResult)
 
   // Tests can provide a factory function which will be used to create
   // test-instrumented ExecutionEngine instances. See the
@@ -156,18 +182,24 @@ class ExecutionEngine : public ToolDelegate,
       base::RepeatingCallback<std::unique_ptr<ExecutionEngine>(ActorTask&)>;
   static FactoryFunction& GetFactoryFunctionForTesting();
 
-  static std::unique_ptr<ExecutionEngine> Create(ActorTask& owner_task);
-  static std::unique_ptr<ExecutionEngine> CreateForTesting(
-      ActorTask& owner_task,
-      std::unique_ptr<ui::UiEventDispatcher> ui_event_dispatcher);
+  // Defines the allowed navigation schemes / origin gating policy.
+  enum class AllowedSchemes {
+    kRequireHttpsOrHttp,
+    kRequireHttpsOrHttpOrNtp,
+  };
 
-  // Constructors public for std::make_unique but only usable via static Create
+  static std::unique_ptr<ExecutionEngine> Create(
+      ActorTask& owner_task,
+      AllowedSchemes allowed_schemes = AllowedSchemes::kRequireHttpsOrHttp);
+
+  // Constructor public for std::make_unique but only usable via static Create
   // method.
-  explicit ExecutionEngine(base::PassKey<ExecutionEngine>,
-                           ActorTask& owner_task);
-  ExecutionEngine(base::PassKey<ExecutionEngine>,
-                  ActorTask& owner_task,
-                  std::unique_ptr<ui::UiEventDispatcher> ui_event_dispatcher);
+  explicit ExecutionEngine(
+      base::PassKey<ExecutionEngine>,
+      ActorTask& owner_task,
+      AllowedSchemes allowed_schemes = AllowedSchemes::kRequireHttpsOrHttp);
+
+  AllowedSchemes allowed_schemes() const { return allowed_schemes_; }
 
   ExecutionEngine(const ExecutionEngine&) = delete;
   ExecutionEngine& operator=(const ExecutionEngine&) = delete;
@@ -222,18 +254,23 @@ class ExecutionEngine : public ToolDelegate,
       AutofillSuggestionSelectedCallback callback) override;
   void RequestToShowGmailOtpOptInDialog(
       GmailOtpOptInCallback callback) override;
+  void RequestToShowGmailOtpConfirmationDialog(
+      const std::string& verification_code,
+      GmailOtpConfirmationCallback callback) override;
   void InterruptFromTool() override;
   void InterruptFromTool(bool retain_user_control) override;
   void UninterruptFromTool() override;
   void EnqueueFollowupAction(std::unique_ptr<ToolRequest> action) override;
-  void AddTab(
-      tabs::TabHandle tab_handle,
+  void AddActorSurface(
+      ActorSurfaceHandle actor_surface_handle,
       bool stop_task_on_detach,
       base::OnceCallback<void(mojom::ActionResultPtr)> callback) override;
-  bool HasTab(tabs::TabHandle tab_handle) override;
-  void RemoveTab(tabs::TabHandle tab_handle) override;
+  bool HasActorSurface(ActorSurfaceHandle actor_surface_handle) override;
+  void RemoveActorSurface(ActorSurfaceHandle actor_surface_handle) override;
   base::WeakPtr<actor_login::ActionSequenceDelegate> GetActionSequenceDelegate()
       override;
+  void OnActionTargetFrameResolved(
+      content::RenderFrameHost& target_frame) override;
 
   // actor_login::ActionSequenceDelegate:
   base::CallbackListSubscription RegisterActionSequenceEnded(
@@ -247,23 +284,22 @@ class ExecutionEngine : public ToolDelegate,
       std::unique_ptr<actor_login::ActorLoginService> actor_login_service);
 
   // Callback invoked when ConfirmCrossOriginNavigation, which spawns an IPC to
-  // the web client, receives its response. This callback gets a boolean
-  // indicating if navigation should continue.
+  // the web client, receives its response.
   using NavigationDecisionCallback =
-      base::OnceCallback<void(bool may_continue)>;
+      base::OnceCallback<void(MayActOnUrlBlockReason)>;
 
-  // Returns a value indicating how the given navigation should be handled
-  // (proceed, cancel and ignore, defer, etc.). This method must only be called
-  // on the primary main frame or a prerendered main frame. `callback` will be
-  // invoked iff this function returns `content::NavigationThrottle::DEFER`.
-  content::NavigationThrottle::ThrottleAction ShouldDeferNavigation(
-      content::NavigationHandle& navigation_handle,
-      NavigationDecisionCallback callback);
+  // Invokes `callback` with a value indicating how the given navigation should
+  // be handled (proceed, cancel and ignore). This method must only be called on
+  // the primary main frame or a prerendered main frame. `callback` will be
+  // invoked after this function returns.
+  void ShouldNavigationCommit(content::NavigationHandle& navigation_handle,
+                              NavigationDecisionCallback callback);
+
+  // Cancels all pending navigation gating checks, resolving their callbacks
+  // with a negative decision (e.g., false or kTaskWentAway).
+  void CancelPendingNavigations();
 
   static std::string StateToString(State state);
-
-  void OnMayActOnTabDecision(const url::Origin& evaluated_origin,
-                             MayActOnUrlBlockReason block_reason);
 
   void UserTakeover(mojom::ActionResultCode takeover_response_code,
                     base::OnceCallback<void(bool)> callback);
@@ -297,28 +333,24 @@ class ExecutionEngine : public ToolDelegate,
 
   State state() const { return state_; }
 
-  const origin_gating::OriginGatingCache& origin_gating_cache() const {
-    return origin_gating_checker_.cache();
-  }
+  const origin_gating::OriginGatingChecker& GetOriginGatingChecker() const;
+  origin_gating::OriginGatingChecker& GetOriginGatingChecker();
 
   // Currently, navigations are generally forced to happen in the same tab (see
   // https://crbug.com/420669167 ). In some cases we need to drop this
   // restriction for certain tools to function.
   bool TabsCanOpenNewWebContents() const;
 
-  origin_gating::ActorContainerConfigSlot& actor_container_config_slot() {
-    return actor_container_config_slot_;
-  }
-
   // origin_gating::OriginGatingChecker::Delegate
   void DoesOriginRequireUserConfirmation(
       origin_gating::GatingDecisionContext* context,
-      const GURL& source,
-      const GURL& destination,
+      const origin_gating::GateableEvent& event,
       DoesOriginRequireUserConfirmationCallback callback) const override;
+  void EvaluateEnterprisePolicy(
+      const GURL& destination,
+      EvaluateEnterprisePolicyCallback callback) const override;
   void OnNoVerdict(origin_gating::GatingDecisionContext* context,
-                   const GURL& source,
-                   const GURL& destination,
+                   const origin_gating::GateableEvent& event,
                    bool requires_user_confirmation,
                    base::OnceCallback<void(NoVerdictResult)> callback) override;
 
@@ -327,10 +359,15 @@ class ExecutionEngine : public ToolDelegate,
 
  protected:
   // Allow derived classes to use the natural constructors.
-  explicit ExecutionEngine(ActorTask& owner_task);
+  explicit ExecutionEngine(
+      ActorTask& owner_task,
+      AllowedSchemes allowed_schemes = AllowedSchemes::kRequireHttpsOrHttp);
 
  private:
   class NewTabWebContentsObserver;
+
+  origin_gating::OriginGatingService& GetOriginGatingService() const;
+  origin_gating::OriginGatingChecker& GetOriginGatingCheckerInternal() const;
 
   void SetState(State state);
 
@@ -343,13 +380,8 @@ class ExecutionEngine : public ToolDelegate,
 
   // Performs synchronous safety checks for the next action. If everything
   // passes calls tool_controller_.Invoke().
-  void DidFinishAsyncSafetyChecks(const url::Origin& evaluated_origin,
+  void DidFinishAsyncSafetyChecks(const url::Origin& committed_origin,
                                   mojom::ActionResultCode result_code);
-
-  // If a failure occurs before the next action starts, we associate the tab
-  // that the action would have acted on with the task, so that we can provide
-  // tab observations back to the client.
-  void FailedOnTabBeforeToolCreation();
 
   // Synchronously executes the next action. There are several types of actions,
   // including renderer-scoped actions, tab-scoped actions, and global actions.
@@ -389,18 +421,25 @@ class ExecutionEngine : public ToolDelegate,
                            const url::Origin& destination,
                            bool applied_gate) const;
 
-  // Returns the highest-priority navigation gating decision. Prioritizes
-  // blocking navigations over allowing (except on same origin navigations).
-  GatingDecision DetermineGatingDecision(const GURL& source_url,
-                                         const GURL& destination_url) const;
   void OnComputedGatingDecision(
       NavigationDecisionCallback callback,
+      std::unique_ptr<AggregatedJournal::PendingAsyncEntry> journal_entry,
       const url::Origin& source_origin,
       const url::Origin& destination_origin,
       State initial_state,
       std::optional<url::Origin> initiator,
+      origin_gating::GateableEvent::Type event_type,
       std::unique_ptr<origin_gating::GatingDecisionContext> context,
       origin_gating::GatingDecision decision);
+
+  // Evaluates page-action gating on each of `origins` (the distinct origins of
+  // a page action's ancestor frames that differ from the main frame's) as a dry
+  // run, without blocking the action or prompting the user, and records the
+  // outcome to UMA. `tool` is the tool performing the page action.
+  void RunSubframeGatingDryRun(base::WeakPtr<content::WebContents> web_contents,
+                               origin_gating::ClientTool tool,
+                               std::set<url::Origin> origins);
+
   // Called when the browser detects the actor needs to confirm a
   // client-side-initiated navigation to a novel origin.
   void HandleNavigationToNewOrigin(
@@ -422,7 +461,7 @@ class ExecutionEngine : public ToolDelegate,
       ukm::SourceId ukm_source_id,
       base::ScopedUmaHistogramTimer timer,
       State engine_state,
-      NavigationDecisionCallback callback,
+      base::OnceCallback<void(bool)> callback,
       webui::mojom::NavigationConfirmationResponsePtr response);
 
   // Makes the web client confirm with the user that the actor is allowed to
@@ -434,8 +473,10 @@ class ExecutionEngine : public ToolDelegate,
       base::OnceCallback<void(NoVerdictResult)> callback);
   void OnPromptUserToConfirmNavigationDecision(
       const url::Origin& destination,
-      NavigationDecisionCallback callback,
+      base::OnceCallback<void(bool)> callback,
       webui::mojom::UserConfirmationDialogResponsePtr response);
+
+  ui::UiEventDispatcher& GetUiEventDispatcher();
 
   State state_ = State::kInit;
 
@@ -443,6 +484,9 @@ class ExecutionEngine : public ToolDelegate,
 
   // Owns `this`.
   const base::raw_ref<ActorTask> task_;
+
+  // Allowed navigation schemes / origin gating policy.
+  const AllowedSchemes allowed_schemes_ = AllowedSchemes::kRequireHttpsOrHttp;
 
   base::SafeRef<AggregatedJournal> journal_;
 
@@ -454,7 +498,6 @@ class ExecutionEngine : public ToolDelegate,
       actor_form_filling_service_;
   std::unique_ptr<autofill::ActorOneTimeTokenFillingService>
       actor_one_time_token_filling_service_;
-  std::unique_ptr<ui::UiEventDispatcher> ui_event_dispatcher_;
 
   base::flat_map<url::Origin, url::Origin> affiliated_origin_map_;
 
@@ -466,6 +509,9 @@ class ExecutionEngine : public ToolDelegate,
   size_t next_action_index_ = 0;
   base::TimeTicks action_start_time_;
 
+  // The raw navigation ID of the page before the tool was invoked.
+  int64_t pre_invoke_navigation_id_ = 0;
+
   // If set, the currently executing tool should be considered failed once it
   // completes.
   std::optional<mojom::ActionResultCode> external_tool_failure_reason_;
@@ -473,17 +519,17 @@ class ExecutionEngine : public ToolDelegate,
   // The results for actions so far.
   std::vector<ActionResultWithLatencyInfo> action_results_;
 
-  // The engine that will determine the origin gating behavior.
-  origin_gating::OriginGatingChecker origin_gating_checker_;
+  // Manages the registration lifetime of this engine's OriginGatingChecker with
+  // the OriginGatingService. Automatically unregisters the checker upon
+  // destruction.
+  std::unique_ptr<origin_gating::OriginGatingRegistration>
+      origin_gating_registration_;
 
   // This will allow us to store already-recorded origins to avoid duplication
   // of dark launch metrics.
   origin_gating::OriginGatingCache dark_launch_origin_gating_cache_;
 
   TabObservationStrategy observation_strategy_;
-
-  // Manages the container config settings that have been sent by the server.
-  origin_gating::ActorContainerConfigSlot actor_container_config_slot_;
 
   // For multi-step login, this is the credential that the user has chosen to
   // allow the actor to use. The key is the
@@ -504,6 +550,9 @@ class ExecutionEngine : public ToolDelegate,
   base::OnceClosure deferred_finish_tool_invoke_;
 
   base::OnceClosure tool_invoke_complete_callback_for_testing_;
+
+  // Stores cancellation closures for all currently deferred navigations.
+  base::OnceCallbackList<void()> pending_navigation_cancellations_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

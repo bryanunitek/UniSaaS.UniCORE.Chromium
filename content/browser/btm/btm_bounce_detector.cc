@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
@@ -109,6 +110,25 @@ PAGE_USER_DATA_KEY_IMPL(PrimaryPageMarker);
 /* static */
 void BtmWebContentsObserver::MaybeCreateForWebContents(
     WebContents* web_contents) {
+  // Guest WebContents (e.g., <webview>, <controlledframe>) run in isolated
+  // guest views with their own storage partitions. They are not top-level
+  // browsing contexts and we should not observe them for the purposes of BTM,
+  // which operates at the profile level on the default `StoragePartition`.
+  //
+  // `IsInnerWebContentsForGuest()` is used here rather than checking
+  // `GetOuterWebContents()` because unattached guest `WebContents` (e.g.,
+  // during initialization in `WebContentsImpl::Init()` prior to attachment,
+  // or when created before DOM attachment) do not yet have an outer
+  // `WebContents`, but are already marked as guests.
+  //
+  // Note that under MPArch (`features::kGuestViewMPArch`), guest views are
+  // hosted within the outer `WebContents` via `GuestPageHolder` rather than in
+  // a separate `WebContents`, and their subframes return false for
+  // `IsInPrimaryMainFrame()`, which already excludes them from BTM.
+  if (web_contents->IsInnerWebContentsForGuest()) {
+    return;
+  }
+
   auto* btm_service = BtmServiceImpl::Get(web_contents->GetBrowserContext());
   if (!btm_service) {
     return;
@@ -130,6 +150,19 @@ BtmWebContentsObserver::BtmWebContentsObserver(WebContents* web_contents,
 }
 
 BtmWebContentsObserver::~BtmWebContentsObserver() = default;
+
+/* static */
+void RedirectChainDetector::MaybeCreateForWebContents(
+    WebContents* web_contents) {
+  // Guest `WebContents` run in isolated guest views and are not top-level
+  // browsing contexts, so they should not be tracked for BTM. See the comment
+  // in `BtmWebContentsObserver::MaybeCreateForWebContents()` for more info.
+  if (web_contents->IsInnerWebContentsForGuest()) {
+    return;
+  }
+
+  RedirectChainDetector::CreateForWebContents(web_contents);
+}
 
 RedirectChainDetector::RedirectChainDetector(WebContents* web_contents)
     : WebContentsObserver(web_contents),
@@ -212,7 +245,8 @@ BtmRedirectContext::BtmRedirectContext(
 BtmRedirectContext::~BtmRedirectContext() = default;
 
 void BtmRedirectContext::AppendClientRedirect(BtmRedirectPtr client_redirect) {
-  DCHECK_EQ(client_redirect->redirect_type, BtmRedirectType::kClient);
+  CHECK_EQ(client_redirect->redirect_type, BtmRedirectType::kClient,
+           base::NotFatalUntil::M158);
   redirectors_.insert(client_redirect->site);
   redirects_.push_back(std::move(client_redirect));
   MaybeTrimAndHandlePartialRedirectChain();
@@ -221,7 +255,8 @@ void BtmRedirectContext::AppendClientRedirect(BtmRedirectPtr client_redirect) {
 void BtmRedirectContext::AppendServerRedirects(
     std::vector<BtmRedirectPtr> server_redirects) {
   for (auto& redirect : server_redirects) {
-    DCHECK_EQ(redirect->redirect_type, BtmRedirectType::kServer);
+    CHECK_EQ(redirect->redirect_type, BtmRedirectType::kServer,
+             base::NotFatalUntil::M158);
     redirectors_.insert(redirect->site);
     redirects_.push_back(std::move(redirect));
   }
@@ -234,7 +269,7 @@ void BtmRedirectContext::MaybeTrimAndHandlePartialRedirectChain() {
     return;
   }
 
-  DCHECK_GE(redirects_.size(), trim_count);
+  CHECK_GE(redirects_.size(), trim_count, base::NotFatalUntil::M158);
 
   // Use an empty `final_url`. This processes the redirect as different from the
   // final URL, which allows recording in the BTM database.
@@ -562,7 +597,6 @@ void Populate3PcExceptions(BrowserContext* browser_context,
           final_url.SchemeIsHTTPOrHTTPS() ? final_url : GURL()));
   net::CookieSettingOverrides overrides({
       net::CookieSettingOverride::kStorageAccessGrantEligible,
-      net::CookieSettingOverride::kTopLevelStorageAccessGrantEligible,
   });
 
   ContentBrowserClient* browser_client = GetContentClient()->browser();

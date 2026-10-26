@@ -10,19 +10,29 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.content.res.ColorStateList;
+import android.graphics.Color;
+import android.graphics.Rect;
 import android.view.View;
+import android.view.ViewGroup.MarginLayoutParams;
 import android.view.ViewStub;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import org.jni_zero.JniUniquePtr;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -37,13 +47,18 @@ import org.robolectric.Robolectric;
 import org.robolectric.android.controller.ActivityController;
 
 import org.chromium.base.Callback;
+import org.chromium.base.DeviceInfo;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.UnownedUserDataHost;
 import org.chromium.base.UserDataHost;
+import org.chromium.base.supplier.LazyOneshotSupplier;
+import org.chromium.base.supplier.LazyOneshotSupplierImpl;
 import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Features.DisableFeatures;
@@ -58,6 +73,7 @@ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
 import org.chromium.chrome.browser.bookmarks.TabBookmarker;
 import org.chromium.chrome.browser.browser_controls.BottomControlsStacker;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsSizer;
+import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
 import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker;
 import org.chromium.chrome.browser.compositor.CompositorViewHolder;
@@ -72,21 +88,31 @@ import org.chromium.chrome.browser.fullscreen.FullscreenManager;
 import org.chromium.chrome.browser.glic.GlicEnabling;
 import org.chromium.chrome.browser.glic.GlicKeyedService;
 import org.chromium.chrome.browser.glic.GlicKeyedServiceFactory;
+import org.chromium.chrome.browser.hub.HubExitNavigationHelper;
+import org.chromium.chrome.browser.hub.HubManager;
 import org.chromium.chrome.browser.keyboard_accessory.ManualFillingComponent;
 import org.chromium.chrome.browser.keyboard_accessory.ManualFillingComponentSupplier;
 import org.chromium.chrome.browser.layouts.CompositorModelChangeProcessor;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider;
+import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.layouts.scene_layer.SceneLayer;
 import org.chromium.chrome.browser.layouts.scene_layer.SceneLayerJni;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
+import org.chromium.chrome.browser.media.PictureInPictureWindowManagerBridge;
+import org.chromium.chrome.browser.media.PictureInPictureWindowManagerBridgeJni;
 import org.chromium.chrome.browser.merchant_viewer.MerchantTrustSignalsCoordinator;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestrator;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestratorFactory;
+import org.chromium.chrome.browser.multiwindow.MultiWindowModeStateDispatcher;
+import org.chromium.chrome.browser.ntp.IncognitoNewTabPage;
 import org.chromium.chrome.browser.ntp.NewTabPage;
 import org.chromium.chrome.browser.omnibox.ChromeAutocompleteSchemeClassifier;
 import org.chromium.chrome.browser.omnibox.ChromeAutocompleteSchemeClassifierJni;
+import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
+import org.chromium.chrome.browser.omnibox.NewTabPageDelegate;
 import org.chromium.chrome.browser.omnibox.OmniboxChipManager;
 import org.chromium.chrome.browser.omnibox.fusebox.ComposeboxQueryControllerBridge;
+import org.chromium.chrome.browser.omnibox.fusebox.ComposeboxQueryControllerBridgeJni;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteController;
 import org.chromium.chrome.browser.omnibox.suggestions.action.OmniboxActionDelegateImpl;
 import org.chromium.chrome.browser.paint_preview.services.PaintPreviewTabServiceFactory;
@@ -95,11 +121,17 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.readaloud.ReadAloudController;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.share.ShareDelegate;
+import org.chromium.chrome.browser.share.send_tab_to_self.EntryPointDisplayReason;
+import org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfAndroidBridge;
+import org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfAndroidBridgeJni;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.signin.services.SigninManager;
+import org.chromium.chrome.browser.subscription_eligibility.SubscriptionEligibilityService;
+import org.chromium.chrome.browser.subscription_eligibility.SubscriptionEligibilityServiceFactory;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabBrowserControlsConstraintsHelper;
+import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabObscuringHandler;
 import org.chromium.chrome.browser.tab.TabViewManager;
 import org.chromium.chrome.browser.tab_bottom_sheet.TabBottomSheetManager;
@@ -107,10 +139,10 @@ import org.chromium.chrome.browser.tab_bottom_sheet.TabBottomSheetUtils;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabModelDotInfo;
 import org.chromium.chrome.browser.tabmodel.IncognitoStateProvider;
+import org.chromium.chrome.browser.tabmodel.TabCreator;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
 import org.chromium.chrome.browser.theme.BottomUiThemeColorProvider;
 import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
 import org.chromium.chrome.browser.toolbar.ToolbarPositionController.ToolbarPositionAndSource;
@@ -121,8 +153,11 @@ import org.chromium.chrome.browser.toolbar.optional_button.ButtonDataImpl;
 import org.chromium.chrome.browser.toolbar.optional_button.ButtonDataProvider;
 import org.chromium.chrome.browser.toolbar.optional_button.ButtonDataProvider.ButtonDataObserver;
 import org.chromium.chrome.browser.toolbar.settings.AddressBarPreference;
+import org.chromium.chrome.browser.toolbar.top.ResourceFactory;
+import org.chromium.chrome.browser.toolbar.top.ResourceFactoryJni;
 import org.chromium.chrome.browser.toolbar.top.ToolbarActionModeCallback;
 import org.chromium.chrome.browser.toolbar.top.ToolbarControlContainer;
+import org.chromium.chrome.browser.toolbar.top.TopToolbarCoordinator;
 import org.chromium.chrome.browser.toolbar.top.TopToolbarSceneLayer;
 import org.chromium.chrome.browser.toolbar.top.TopToolbarSceneLayerJni;
 import org.chromium.chrome.browser.ui.actions.ActionId;
@@ -137,8 +172,10 @@ import org.chromium.chrome.browser.ui.favicon.FaviconHelper;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelperJni;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.system.StatusBarColorController;
+import org.chromium.chrome.test.util.browser.signin.AccountManagerTestRule;
 import org.chromium.components.browser_ui.accessibility.PageZoomManager;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.desktop_windowing.AppHeaderState;
 import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
 import org.chromium.components.browser_ui.device_lock.DeviceLockActivityLauncher;
 import org.chromium.components.browser_ui.styles.IncognitoColors;
@@ -146,15 +183,21 @@ import org.chromium.components.browser_ui.util.BrowserControlsVisibilityDelegate
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.components.favicon.LargeIconBridge;
 import org.chromium.components.favicon.LargeIconBridgeJni;
+import org.chromium.components.feature_engagement.EventConstants;
+import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.omnibox.AutocompleteInput;
+import org.chromium.components.omnibox.OmniboxFeatureList;
 import org.chromium.components.omnibox.OmniboxFocusReason;
+import org.chromium.components.prefs.PrefChangeRegistrar;
+import org.chromium.components.prefs.PrefChangeRegistrarJni;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.components.signin.SigninFeatures;
-import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.sync.SyncService;
 import org.chromium.components.user_prefs.UserPrefs;
+import org.chromium.content_public.browser.NavigationHandle;
+import org.chromium.net.NetError;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.base.ActivityResultTracker;
 import org.chromium.ui.base.TestActivity;
@@ -163,12 +206,14 @@ import org.chromium.ui.display.DisplayAndroid;
 import org.chromium.ui.insets.InsetObserver;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.ui.util.TokenHolder;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
 
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -177,8 +222,8 @@ import java.util.function.Supplier;
 @EnableFeatures({
     ChromeFeatureList.HTTPS_FIRST_DIALOG_UI,
     SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT,
-    SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
-    ChromeFeatureList.GLIC
+    ChromeFeatureList.GLIC,
+    SigninFeatures.ENABLE_AI_SUBSCRIPTION_AVATAR_RING
 })
 @DisableFeatures({
     SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS,
@@ -188,6 +233,9 @@ public class ToolbarManagerUnitTest {
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
+    @Rule
+    public final AccountManagerTestRule mAccountManagerTestRule = new AccountManagerTestRule();
+
     @Mock private MultiInstanceOrchestrator mMultiInstanceOrchestrator;
     @Mock private BottomControlsStacker mBottomControlsStacker;
     @Mock private LayoutManagerImpl mLayoutManager;
@@ -196,13 +244,22 @@ public class ToolbarManagerUnitTest {
     @Mock private TabModelSelector mTabModelSelector;
     @Mock private TabModelDotInfo mTabModelDotInfo;
     @Mock private LocationBarModel.Natives mLocationBarModelNatives;
+
+    @Mock
+    private JniUniquePtr<LocationBarModel.NativeLocationBarModelAndroid>
+            mNativeLocationBarModelAndroid;
+
     @Mock private FaviconHelper.Natives mFaviconHelperNatives;
     @Mock private LargeIconBridge.Natives mLargeIconBridgeNatives;
     @Mock private ChromeAutocompleteSchemeClassifier.Natives mChromeAutocompleteSchemeClassifierJni;
+    @Mock private ComposeboxQueryControllerBridge.Natives mComposeboxBridgeJni;
     @Mock private PaintPreviewTabServiceFactory.Natives mPaintPreviewTabServiceFactoryNatives;
+    @Mock private PictureInPictureWindowManagerBridge.Natives mPictureInPictureBridgeNatives;
     @Mock private Runnable mOpenGridTabSwitcherHandler;
     @Mock private Tracker mTracker;
     @Mock private TopToolbarSceneLayer.Natives mTopToolbarSceneLayerNatives;
+    @Mock private ResourceFactory.Natives mResourceFactoryJni;
+    @Mock private LocationBarDataProvider.Observer mLocationBarDataProviderObserver;
     @Mock private SceneLayer.Natives mSceneLayerNatives;
     @Mock private TabModel mTabModel;
     @Mock private Tab mTab;
@@ -210,7 +267,6 @@ public class ToolbarManagerUnitTest {
     @Mock private Profile mProfile;
     @Mock private BrowserControlsSizer mControlsSizer;
     @Mock private FullscreenManager mFullscreenManager;
-    @Mock private CompositorViewHolder mCompositorViewHolder;
     @Mock private Callback<Boolean> mUrlFocusChangedCallback;
     @Mock private ToolbarThemeColorProvider mToolbarThemeColorProvider;
     @Mock private ToolbarThemeColorProvider mAdjustedToolbarThemeColorProvider;
@@ -224,6 +280,7 @@ public class ToolbarManagerUnitTest {
     @Mock private StatusBarColorController mStatusBarColorController;
     @Mock private AppMenuDelegate mAppMenuDelegate;
     @Mock private ActivityLifecycleDispatcher mActivityLifecycleDispatcher;
+    @Mock private MultiWindowModeStateDispatcher mMultiWindowModeStateDispatcher;
     @Mock private BottomSheetController mBottomSheetController;
     @Mock private DataSharingTabManager mDataSharingTabManager;
     @Mock private TabContentManager mTabContentManager;
@@ -247,30 +304,37 @@ public class ToolbarManagerUnitTest {
     @Mock private InsetObserver mInsetObserver;
     @Mock private TemplateUrlService mTemplateUrlService;
     @Mock private AutocompleteController mAutocompleteController;
-    @Mock private IdentityManager mIdentityManager;
     @Mock private SigninManager mSigninManager;
     @Mock private SyncService mSyncService;
     @Mock private ActionRegistry mActionRegistry;
     @Mock private PropertyModel mActionPropertyModel;
     @Mock private ActorKeyedService mActorKeyedService;
     @Mock private GlicKeyedService mGlicKeyedService;
+    @Mock private TopToolbarCoordinator mMockToolbar;
     @Mock private TabBottomSheetManager mTabBottomSheetManager;
+    @Mock private PrefChangeRegistrar.Natives mPrefChangeRegistrarJni;
     @Mock private PrefService mPrefService;
     @Mock private TabModel mIncognitoTabModel;
     @Mock private Profile mIncognitoProfile;
+    @Mock private SubscriptionEligibilityService mSubscriptionEligibilityService;
     @Mock private ButtonDataProvider mIdentityDiscProvider;
     @Mock private ButtonDataProvider mAdaptiveButtonProvider;
+    @Mock private HubManager mHubManager;
+    @Mock private TabCreator mTabCreator;
 
     @Captor private ArgumentCaptor<ButtonDataObserver> mIdentityDiscObserverCaptor;
     @Captor private ArgumentCaptor<ButtonDataObserver> mAdaptiveButtonObserverCaptor;
-    @Captor private ArgumentCaptor<TabModelSelectorObserver> mTabModelSelectorObserverCaptor;
 
     private List<ButtonDataProvider> mButtonDataProviders;
     private ActivityController<TestActivity> mActivityController;
+    private CompositorViewHolder mCompositorViewHolder;
+    private ToolbarControlContainer mControlContainer;
     private ToolbarManager mToolbarManager;
     private TopToolbarSceneLayer mTopToolbarSceneLayerInstance;
     private ActivityTabProvider mActivityTabProvider;
     private SettableMonotonicObservableSupplier<TabModel> mCurrentTabModelSupplier;
+    private OneshotSupplierImpl<LayoutStateProvider> mLayoutStateProviderSupplier;
+    private OneshotSupplierImpl<HubManager> mHubManagerSupplier;
 
     @Before
     @SuppressWarnings("unchecked") // Raw CompositorModelChangeProcessor mock.
@@ -279,6 +343,7 @@ public class ToolbarManagerUnitTest {
         GlicKeyedServiceFactory.setForTesting(mGlicKeyedService);
         GlicEnabling.setEnabledForTesting(true);
         ComposeboxQueryControllerBridge.setInstanceForTesting(null);
+        ComposeboxQueryControllerBridgeJni.setInstanceForTesting(mComposeboxBridgeJni);
         ChromeAutocompleteSchemeClassifierJni.setInstanceForTesting(
                 mChromeAutocompleteSchemeClassifierJni);
         when(mChromeAutocompleteSchemeClassifierJni.createAutocompleteClassifier(any()))
@@ -287,18 +352,30 @@ public class ToolbarManagerUnitTest {
         when(mFaviconHelperNatives.init()).thenReturn(1L);
         LargeIconBridgeJni.setInstanceForTesting(mLargeIconBridgeNatives);
         when(mLargeIconBridgeNatives.init()).thenReturn(1L);
+        PictureInPictureWindowManagerBridgeJni.setInstanceForTesting(
+                mPictureInPictureBridgeNatives);
         PaintPreviewTabServiceFactoryJni.setInstanceForTesting(
                 mPaintPreviewTabServiceFactoryNatives);
         when(mPaintPreviewTabServiceFactoryNatives.getServiceInstanceForCurrentProfile())
                 .thenReturn(null);
         LocationBarModelJni.setInstanceForTesting(mLocationBarModelNatives);
-        when(mLocationBarModelNatives.init(any())).thenReturn(1L);
+        when(mLocationBarModelNatives.init(any())).thenReturn(mNativeLocationBarModelAndroid);
+        PrefChangeRegistrarJni.setInstanceForTesting(mPrefChangeRegistrarJni);
         UserPrefs.setPrefServiceForTesting(mPrefService);
+        when(mProfile.getOriginalProfile()).thenReturn(mProfile);
         SceneLayerJni.setInstanceForTesting(mSceneLayerNatives);
-        when(mLocationBarModelNatives.getUrlOfVisibleNavigationEntry(anyLong()))
-                .thenReturn(GURL.emptyGURL());
-        when(mLocationBarModelNatives.getFormattedFullURL(anyLong())).thenReturn("");
-        when(mLocationBarModelNatives.getURLForDisplay(anyLong())).thenReturn("");
+        when(mLocationBarModelNatives.getUrlOfVisibleNavigationEntry(any()))
+                .thenAnswer(
+                        invocation -> {
+                            Tab tab =
+                                    mActivityTabProvider != null
+                                            ? mActivityTabProvider.get()
+                                            : null;
+                            GURL url = tab != null ? tab.getUrl() : null;
+                            return url != null ? url : GURL.emptyGURL();
+                        });
+        when(mLocationBarModelNatives.getFormattedFullURL(any())).thenReturn("");
+        when(mLocationBarModelNatives.getURLForDisplay(any())).thenReturn("");
         TopToolbarSceneLayerJni.setInstanceForTesting(mTopToolbarSceneLayerNatives);
         when(mTopToolbarSceneLayerNatives.init(any()))
                 .thenAnswer(
@@ -319,30 +396,17 @@ public class ToolbarManagerUnitTest {
         TrackerFactory.setTrackerForTests(mTracker);
         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
         AutocompleteController.setInstanceForTesting(mAutocompleteController);
-        IdentityServicesProvider.setIdentityManagerForTesting(mIdentityManager);
         IdentityServicesProvider.setSigninManagerForTesting(mSigninManager);
         SyncServiceFactory.setInstanceForTesting(mSyncService);
-
-        mActivityController = Robolectric.buildActivity(TestActivity.class).setup();
-        AppCompatActivity activity = mActivityController.get();
-        activity.setContentView(R.layout.main);
-        ViewStub controlStub = activity.findViewById(R.id.control_container_stub);
-        controlStub.setLayoutResource(R.layout.control_container);
-        ToolbarControlContainer controlContainer = (ToolbarControlContainer) controlStub.inflate();
-        controlContainer.initWithToolbar(R.layout.toolbar_phone, R.dimen.toolbar_height_no_shadow);
+        SubscriptionEligibilityServiceFactory.setForTesting(mSubscriptionEligibilityService);
 
         MultiInstanceOrchestratorFactory.setInstanceForTesting(mMultiInstanceOrchestrator);
         BrowserStateBrowserControlsVisibilityDelegate browserVisibilityDelegate =
                 new BrowserStateBrowserControlsVisibilityDelegate(
                         ObservableSuppliers.createNonNull(false));
         when(mControlsSizer.getBrowserVisibilityDelegate()).thenReturn(browserVisibilityDelegate);
-        NonNullObservableSupplier<Boolean> compositorInMotionSupplier =
-                ObservableSuppliers.createNonNull(false);
-        when(mCompositorViewHolder.getInMotionSupplier()).thenReturn(compositorInMotionSupplier);
         when(mDisplayAndroid.getDisplayHeight()).thenReturn(1000);
         when(mWindowAndroid.getDisplay()).thenReturn(mDisplayAndroid);
-        when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<>(activity));
-        when(mWindowAndroid.getContext()).thenReturn(new WeakReference<>(activity));
 
         when(mTabModelSelector.getCurrentTab()).thenReturn(mTab);
         when(mTab.getProfile()).thenReturn(mProfile);
@@ -365,12 +429,9 @@ public class ToolbarManagerUnitTest {
         when(mLayoutManager.getOverlayPanelManager()).thenReturn(mOverlayPanelManager);
         when(mLayoutManager.createCompositorMCP(any(), any(), any()))
                 .thenReturn(mCompositorModelChangeProcessor);
+        when(mLayoutManager.createCompositorMCPWithExclusions(any(), any(), any(), any()))
+                .thenReturn(mCompositorModelChangeProcessor);
 
-        UnownedUserDataHost unownedUserDataHost = new UnownedUserDataHost();
-        when(mWindowAndroid.getUnownedUserDataHost()).thenReturn(unownedUserDataHost);
-        SettableMonotonicObservableSupplier<ManualFillingComponent> manualFillingComponentSupplier =
-                ObservableSuppliers.createMonotonic();
-        ManualFillingComponentSupplier.attach(unownedUserDataHost, manualFillingComponentSupplier);
         when(mWindowAndroid.getKeyboardDelegate()).thenReturn(mKeyboardVisibilityDelegate);
         KeyboardVisibilityDelegate.setInstanceForTesting(mKeyboardVisibilityDelegate);
         when(mWindowAndroid.getInsetObserver()).thenReturn(mInsetObserver);
@@ -380,6 +441,48 @@ public class ToolbarManagerUnitTest {
         when(mActionRegistry.get(ActionId.NEW_TAB))
                 .thenReturn(ObservableSuppliers.createNullable(mActionPropertyModel));
 
+        mActivityTabProvider = new ActivityTabProvider();
+        mActivityTabProvider.setForTesting(mTab);
+
+        mButtonDataProviders = List.of(mIdentityDiscProvider, mAdaptiveButtonProvider);
+
+        mToolbarManager = createToolbarManager(LazyOneshotSupplier.fromValue(mFindToolbarManager));
+
+        verify(mIdentityDiscProvider).addObserver(mIdentityDiscObserverCaptor.capture());
+        verify(mAdaptiveButtonProvider).addObserver(mAdaptiveButtonObserverCaptor.capture());
+
+        RobolectricUtil.runAllBackgroundAndUi();
+    }
+
+    @After
+    public void tearDown() {
+        DeviceInfo.resetIsDesktopForTesting();
+        mToolbarManager.destroy();
+        mActivityController.close();
+    }
+
+    private ToolbarManager createToolbarManager(
+            LazyOneshotSupplier<FindToolbarManager> findToolbarManagerSupplier) {
+        if (mActivityController != null) {
+            mActivityController.close();
+        }
+        mActivityController = Robolectric.buildActivity(TestActivity.class).setup();
+        AppCompatActivity activity = mActivityController.get();
+        activity.setContentView(R.layout.main);
+        mCompositorViewHolder = new CompositorViewHolder(activity, /* attrs= */ null);
+        ViewStub controlStub = activity.findViewById(R.id.control_container_stub);
+        controlStub.setLayoutResource(R.layout.control_container);
+        mControlContainer = (ToolbarControlContainer) controlStub.inflate();
+        mControlContainer.initWithToolbar(R.layout.toolbar_phone, R.dimen.toolbar_height_no_shadow);
+
+        when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<>(activity));
+        when(mWindowAndroid.getContext()).thenReturn(new WeakReference<>(activity));
+        UnownedUserDataHost unownedUserDataHost = new UnownedUserDataHost();
+        when(mWindowAndroid.getUnownedUserDataHost()).thenReturn(unownedUserDataHost);
+        SettableMonotonicObservableSupplier<ManualFillingComponent> manualFillingComponentSupplier =
+                ObservableSuppliers.createMonotonic();
+        ManualFillingComponentSupplier.attach(unownedUserDataHost, manualFillingComponentSupplier);
+
         SettableMonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier =
                 ObservableSuppliers.createMonotonic();
         SettableMonotonicObservableSupplier<ShareDelegate> shareDelegateSupplier =
@@ -388,10 +491,12 @@ public class ToolbarManagerUnitTest {
                 ObservableSuppliers.createNonNull(mProfile);
         SettableMonotonicObservableSupplier<BookmarkModel> bookmarkModelSupplier =
                 ObservableSuppliers.createMonotonic();
-        OneshotSupplierImpl<LayoutStateProvider> layoutStateProviderSupplier =
-                new OneshotSupplierImpl<>();
+        mLayoutStateProviderSupplier = new OneshotSupplierImpl<>();
         OneshotSupplierImpl<AppMenuCoordinator> appMenuCoordinatorSupplier =
                 new OneshotSupplierImpl<>();
+        mHubManagerSupplier = new OneshotSupplierImpl<>();
+        mHubManagerSupplier.set(mHubManager);
+        when(mTabCreatorManager.getTabCreator(anyBoolean())).thenReturn(mTabCreator);
         SettableMonotonicObservableSupplier<TabModelSelector> tabModelSelectorSupplier =
                 ObservableSuppliers.createMonotonic();
         tabModelSelectorSupplier.set(mTabModelSelector);
@@ -400,7 +505,7 @@ public class ToolbarManagerUnitTest {
         OneshotSupplierImpl<Boolean> promoShownOneshotSupplier = new OneshotSupplierImpl<>();
         OneshotSupplierImpl<ChromeAndroidTask> chromeAndroidTaskSupplier =
                 new OneshotSupplierImpl<>();
-        Supplier<Boolean> isInOverviewModeSupplier = () -> false;
+        Supplier<Boolean> isInOverviewModeSupplier = SupplierUtils.alwaysFalse();
         SettableNonNullObservableSupplier<ModalDialogManager> modalDialogManagerSupplier =
                 ObservableSuppliers.createNonNull(mModalDialogManager);
         SettableMonotonicObservableSupplier<MerchantTrustSignalsCoordinator>
@@ -414,19 +519,14 @@ public class ToolbarManagerUnitTest {
         SettableNonNullObservableSupplier<Boolean> xrSpaceModeObservableSupplier =
                 ObservableSuppliers.createNonNull(false);
 
-        mActivityTabProvider = new ActivityTabProvider();
-        mActivityTabProvider.setForTesting(mTab);
-
-        mButtonDataProviders = List.of(mIdentityDiscProvider, mAdaptiveButtonProvider);
-
-        mToolbarManager =
+        ToolbarManager toolbarManager =
                 new ToolbarManager(
                         activity,
                         mBottomControlsStacker,
                         mControlsSizer,
                         mFullscreenManager,
                         edgeToEdgeControllerSupplier,
-                        controlContainer,
+                        mControlContainer,
                         mCompositorViewHolder,
                         mUrlFocusChangedCallback,
                         mToolbarThemeColorProvider,
@@ -439,10 +539,10 @@ public class ToolbarManagerUnitTest {
                         mActivityTabProvider,
                         mScrimManager,
                         mToolbarActionModeCallback,
-                        mFindToolbarManager,
+                        findToolbarManagerSupplier,
                         profileSupplier,
                         bookmarkModelSupplier,
-                        layoutStateProviderSupplier,
+                        mLayoutStateProviderSupplier,
                         appMenuCoordinatorSupplier,
                         /* canShowUpdateBadge= */ false,
                         tabModelSelectorSupplier,
@@ -457,6 +557,7 @@ public class ToolbarManagerUnitTest {
                         mStatusBarColorController,
                         mAppMenuDelegate,
                         mActivityLifecycleDispatcher,
+                        mMultiWindowModeStateDispatcher,
                         mBottomSheetController,
                         mDataSharingTabManager,
                         mTabContentManager,
@@ -480,14 +581,12 @@ public class ToolbarManagerUnitTest {
                         mBottomBarHostManager,
                         mActionRegistry,
                         /* toggleGlicCallback= */ (preventClose, invocationSource) -> {},
-                        /* suppressTabStripAtStart= */ false);
-
-        verify(mIdentityDiscProvider).addObserver(mIdentityDiscObserverCaptor.capture());
-        verify(mAdaptiveButtonProvider).addObserver(mAdaptiveButtonObserverCaptor.capture());
+                        /* suppressTabStripAtStart= */ false,
+                        mHubManagerSupplier);
 
         NonNullObservableSupplier<TabModelDotInfo> dotSupplier =
                 ObservableSuppliers.createNonNull(mTabModelDotInfo);
-        mToolbarManager.initializeWithNative(
+        toolbarManager.initializeWithNative(
                 mLayoutManager,
                 /* stripLayoutHelperManager= */ null,
                 mOpenGridTabSwitcherHandler,
@@ -499,13 +598,7 @@ public class ToolbarManagerUnitTest {
                 /* contextMenuPopulatorFactory= */ null,
                 /* selectionDropdownMenuDelegate= */ null);
 
-        RobolectricUtil.runAllBackgroundAndUi();
-    }
-
-    @After
-    public void tearDown() {
-        mToolbarManager.destroy();
-        mActivityController.close();
+        return toolbarManager;
     }
 
     private Tab mockTab(boolean isNtp) {
@@ -550,11 +643,10 @@ public class ToolbarManagerUnitTest {
         }
     }
 
-    private AutocompleteInput getAutocompleteInput() {
-        return mToolbarManager.getLocationBar().getOmniboxStub().getAutocompleteInputForTesting();
-    }
-
     @Test
+    @DisableFeatures(
+            ChromeFeatureList
+                    .ANDROID_BOTTOM_BAR) // TODO(crbug.com/527933081): Re-enable or add coverage.
     public void testSetUrlBarFocusAfterDestroy() {
         mToolbarManager.beginFuseboxInput(new AutocompleteInput(OmniboxFocusReason.OMNIBOX_TAP));
         assertTrue(mToolbarManager.isUrlBarFocused());
@@ -641,9 +733,7 @@ public class ToolbarManagerUnitTest {
     }
 
     @Test
-    @EnableFeatures(
-            ChromeFeatureList.ANDROID_BOTTOM_BAR
-                    + ":ntp_scroll_off_enabled/true/disable_on_ntp/false")
+    @EnableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR + ":ntp_scroll_off_enabled/true")
     public void testBottomBarConstraintsSupplier_ntpScrollOffEnabled() {
         var supplier = mToolbarManager.getBottomBarConstraintsSupplierForTesting();
         Tab ntpTab = mockTab(/* isNtp= */ true);
@@ -660,9 +750,7 @@ public class ToolbarManagerUnitTest {
     }
 
     @Test
-    @EnableFeatures(
-            ChromeFeatureList.ANDROID_BOTTOM_BAR
-                    + ":ntp_scroll_off_enabled/false/disable_on_ntp/false")
+    @EnableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR + ":ntp_scroll_off_enabled/false")
     public void testBottomBarConstraintsSupplier_ntpScrollOffDisabledButForcedBoth() {
         var supplier = mToolbarManager.getBottomBarConstraintsSupplierForTesting();
         Tab ntpTab = mockTab(/* isNtp= */ true);
@@ -678,28 +766,7 @@ public class ToolbarManagerUnitTest {
     }
 
     @Test
-    @EnableFeatures(
-            ChromeFeatureList.ANDROID_BOTTOM_BAR
-                    + ":ntp_scroll_off_enabled/true/disable_on_ntp/true")
-    public void testBottomBarConstraintsSupplier_disableOnNtpEnabled() {
-        var supplier = mToolbarManager.getBottomBarConstraintsSupplierForTesting();
-        Tab ntpTab = mockTab(/* isNtp= */ true);
-        BrowserControlsVisibilityDelegate visibilityDelegate =
-                new BrowserControlsVisibilityDelegate(BrowserControlsState.SHOWN);
-        setMockConstraintsHelper(ntpTab, visibilityDelegate);
-
-        mActivityTabProvider.setForTesting(ntpTab);
-        RobolectricUtil.runAllBackgroundAndUi();
-
-        // If bottom bar is disabled on NTP, we should not force BOTH constraints (should return
-        // SHOWN).
-        assertEquals(BrowserControlsState.SHOWN, supplier.get().intValue());
-    }
-
-    @Test
-    @EnableFeatures(
-            ChromeFeatureList.ANDROID_BOTTOM_BAR
-                    + ":ntp_scroll_off_enabled/true/disable_on_ntp/false")
+    @EnableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR + ":ntp_scroll_off_enabled/true")
     public void testBottomBarConstraintsSupplier_normalPage() {
         var supplier = mToolbarManager.getBottomBarConstraintsSupplierForTesting();
         Tab normalTab = mockTab(/* isNtp= */ false);
@@ -731,9 +798,7 @@ public class ToolbarManagerUnitTest {
     }
 
     @Test
-    @EnableFeatures(
-            ChromeFeatureList.ANDROID_BOTTOM_BAR
-                    + ":ntp_scroll_off_enabled/true/disable_on_ntp/false")
+    @EnableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR + ":ntp_scroll_off_enabled/true")
     public void testBottomBarConstraintsSupplier_incognitoNtpForcedBoth() {
         var supplier = mToolbarManager.getBottomBarConstraintsSupplierForTesting();
         Tab ntpTab = mockTab(/* isNtp= */ true, /* isIncognito= */ true);
@@ -748,6 +813,15 @@ public class ToolbarManagerUnitTest {
         // updates,
         // even though tab constraints are SHOWN.
         assertEquals(BrowserControlsState.BOTH, supplier.get().intValue());
+    }
+
+    @Test
+    public void testMaybeShowBottomBarPromo_delegatesToBottomBarHostManager() {
+        when(mBottomBarHostManager.maybeShowPromoDialog(mProfile)).thenReturn(true);
+        assertTrue(mToolbarManager.maybeShowBottomBarPromo(mProfile));
+
+        when(mBottomBarHostManager.maybeShowPromoDialog(mProfile)).thenReturn(false);
+        assertFalse(mToolbarManager.maybeShowBottomBarPromo(mProfile));
     }
 
     @Test
@@ -799,7 +873,8 @@ public class ToolbarManagerUnitTest {
                                         /* contentDescription= */ "Identity Disk",
                                         /* supportsTinting= */ false)
                                 .setButtonVariant(AdaptiveToolbarButtonVariant.UNKNOWN)
-                                .setIsIdentityDisc(true)
+                                .setIdentityDiscConfig(
+                                        /* isIdentityDisc= */ true, /* hasAiTierRing= */ false)
                                 .build());
         when(mIdentityDiscProvider.get(ntpTab)).thenReturn(identityDiskData);
 
@@ -830,7 +905,8 @@ public class ToolbarManagerUnitTest {
                                         /* contentDescription= */ "Identity Disk",
                                         /* supportsTinting= */ false)
                                 .setButtonVariant(AdaptiveToolbarButtonVariant.UNKNOWN)
-                                .setIsIdentityDisc(true)
+                                .setIdentityDiscConfig(
+                                        /* isIdentityDisc= */ true, /* hasAiTierRing= */ false)
                                 .build());
         when(mIdentityDiscProvider.get(webTab)).thenReturn(identityDiskData);
 
@@ -847,8 +923,6 @@ public class ToolbarManagerUnitTest {
     @EnableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
     @DisableFeatures(SigninFeatures.SIGNIN_LEVEL_UP_BUTTON)
     public void testToolbarOptionalButtonHidden_whenBottomBarEnabled_andNotIdentityDisk() {
-        ChromeFeatureList.sAndroidBottomBarDisableOnNtp.setForTesting(false);
-
         Tab ntpTab = mockTab(/* isNtp= */ true);
         mActivityTabProvider.setForTesting(ntpTab);
 
@@ -890,7 +964,8 @@ public class ToolbarManagerUnitTest {
                                         /* contentDescription= */ "Identity Disk",
                                         /* supportsTinting= */ false)
                                 .setButtonVariant(AdaptiveToolbarButtonVariant.UNKNOWN)
-                                .setIsIdentityDisc(true)
+                                .setIdentityDiscConfig(
+                                        /* isIdentityDisc= */ true, /* hasAiTierRing= */ false)
                                 .build());
         when(mIdentityDiscProvider.get(ntpTab)).thenReturn(identityDiskData);
 
@@ -903,39 +978,6 @@ public class ToolbarManagerUnitTest {
                 toolbar.findViewById(R.id.toolbar_buttons)
                         .findViewById(R.id.optional_toolbar_button_container);
         assertTrue(toolbarButton == null || toolbarButton.getVisibility() == View.GONE);
-    }
-
-    @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
-    @DisableFeatures(SigninFeatures.SIGNIN_LEVEL_UP_BUTTON)
-    public void testNtpOptionalButtonVisible_whenBottomBarEnabled_andDisableOnNtp() {
-        ChromeFeatureList.sAndroidBottomBarDisableOnNtp.setForTesting(true);
-
-        Tab ntpTab = mockTab(/* isNtp= */ true);
-        mActivityTabProvider.setForTesting(ntpTab);
-
-        ButtonDataImpl shareButtonData =
-                new ButtonDataImpl(
-                        /* canShow= */ true,
-                        /* isEnabled= */ true,
-                        new ButtonSpec.Builder(
-                                        /* drawable= */ null,
-                                        /* contentDescription= */ "Share",
-                                        /* supportsTinting= */ false)
-                                .setButtonVariant(AdaptiveToolbarButtonVariant.SHARE)
-                                .build());
-        when(mAdaptiveButtonProvider.get(ntpTab)).thenReturn(shareButtonData);
-
-        mAdaptiveButtonObserverCaptor.getValue().buttonDataChanged(true);
-        RobolectricUtil.runAllBackgroundAndUi();
-
-        AppCompatActivity activity = mActivityController.get();
-        View toolbar = activity.findViewById(R.id.toolbar);
-        View toolbarButton =
-                toolbar.findViewById(R.id.toolbar_buttons)
-                        .findViewById(R.id.optional_toolbar_button_container);
-        assertNotNull(toolbarButton);
-        assertEquals(View.VISIBLE, toolbarButton.getVisibility());
     }
 
     @Test
@@ -1016,7 +1058,8 @@ public class ToolbarManagerUnitTest {
                                         /* contentDescription= */ "Identity Disk",
                                         /* supportsTinting= */ false)
                                 .setButtonVariant(AdaptiveToolbarButtonVariant.UNKNOWN)
-                                .setIsIdentityDisc(true)
+                                .setIdentityDiscConfig(
+                                        /* isIdentityDisc= */ true, /* hasAiTierRing= */ false)
                                 .build());
         when(mIdentityDiscProvider.get(ntpTab)).thenReturn(identityDiskData);
         when(mAdaptiveButtonProvider.get(ntpTab)).thenReturn(null);
@@ -1052,7 +1095,8 @@ public class ToolbarManagerUnitTest {
                                         /* contentDescription= */ "Identity Disk",
                                         /* supportsTinting= */ false)
                                 .setButtonVariant(AdaptiveToolbarButtonVariant.UNKNOWN)
-                                .setIsIdentityDisc(true)
+                                .setIdentityDiscConfig(
+                                        /* isIdentityDisc= */ true, /* hasAiTierRing= */ false)
                                 .build());
         when(mIdentityDiscProvider.get(ntpTab)).thenReturn(identityDiskData);
 
@@ -1087,24 +1131,519 @@ public class ToolbarManagerUnitTest {
     }
 
     @Test
-    public void testSuspendFuseboxInputOnForegroundTabAdd() {
-        String userText = "hello world";
-        verify(mTabModelSelector, atLeastOnce())
-                .addObserver(mTabModelSelectorObserverCaptor.capture());
-        AutocompleteInput input = new AutocompleteInput(OmniboxFocusReason.OMNIBOX_TAP);
-        input.setUserText(userText);
-        mToolbarManager.beginFuseboxInput(input);
-        assertEquals(userText, getAutocompleteInput().getUserText());
+    public void testIsIncognitoNewTabPageCurrentlyVisible() {
+        LocationBarModel locationBarModel = mToolbarManager.getLocationBarModelForTesting();
+        NewTabPageDelegate delegate = locationBarModel.getNewTabPageDelegate();
 
-        Tab newTab = mockTab(/* isNtp= */ false);
-        for (TabModelSelectorObserver obs : mTabModelSelectorObserverCaptor.getAllValues()) {
-            obs.onTabHidden(mTab);
-        }
-        assertNull(getAutocompleteInput());
+        // 1. Regular web tab -> returns false
+        Tab webTab = mockTab(/* isNtp= */ false, /* isIncognito= */ false);
+        locationBarModel.setTab(webTab, mProfile);
+        assertFalse(delegate.isIncognitoNewTabPageCurrentlyVisible());
 
-        mActivityTabProvider.setForTesting(newTab);
+        // 2. Incognito tab with null nativePage but NTP URL (e.g. during back navigation) ->
+        // returns true
+        Tab incognitoNtpTab = mockTab(/* isNtp= */ false, /* isIncognito= */ true);
+        when(incognitoNtpTab.getUrl()).thenReturn(JUnitTestGURLs.NTP_URL);
+        locationBarModel.setTab(incognitoNtpTab, mIncognitoProfile);
+        assertTrue(delegate.isIncognitoNewTabPageCurrentlyVisible());
+
+        // 3. Incognito tab with IncognitoNewTabPage nativePage -> returns true
+        IncognitoNewTabPage incognitoNtpPage = mock(IncognitoNewTabPage.class);
+        when(incognitoNtpTab.getNativePage()).thenReturn(incognitoNtpPage);
+        assertTrue(delegate.isIncognitoNewTabPageCurrentlyVisible());
+    }
+
+    private MarginLayoutParams setUpTabletLayoutForAutoHiddenVerticalTab(int initialRightMargin) {
+        View tabletLayout = new View(mActivityController.get());
+        tabletLayout.setId(R.id.toolbar_tablet_layout);
+        mControlContainer.addView(tabletLayout, /* width= */ 100, /* height= */ 100);
+        MarginLayoutParams params = (MarginLayoutParams) tabletLayout.getLayoutParams();
+        params.rightMargin = initialRightMargin;
+        params.topMargin = 0;
+        params.leftMargin = 0;
+        tabletLayout.setLayoutParams(params);
+
+        mControlContainer.setIsVerticalTabsActiveSupplier(ObservableSuppliers.createNonNull(true));
+        when(mDesktopWindowStateManager.getAppHeaderState())
+                .thenReturn(
+                        new AppHeaderState(
+                                new Rect(0, 0, 100, 100),
+                                new Rect(10, 0, 80, 100),
+                                /* isInDesktopWindow= */ true));
+        return params;
+    }
+
+    @Test
+    public void testSetToolbarTabletMarginsForAutoHiddenVerticalTab() {
+        MarginLayoutParams params =
+                setUpTabletLayoutForAutoHiddenVerticalTab(/* initialRightMargin= */ 20);
+        View toolbarContainer = mControlContainer.findViewById(R.id.toolbar_container);
+        MarginLayoutParams containerParams =
+                (MarginLayoutParams) toolbarContainer.getLayoutParams();
+
+        SettableNonNullObservableSupplier<Boolean> isAutoHiddenSupplier =
+                ObservableSuppliers.createNonNull(false);
+        mToolbarManager.setVerticalTabsAutoHiddenSupplier(isAutoHiddenSupplier);
+
+        int tabStripHeight =
+                mActivityController
+                        .get()
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.tab_strip_height);
+
+        // When Vertical Tabs is hidden due to narrow window width
+        isAutoHiddenSupplier.set(true);
+        assertEquals(tabStripHeight, containerParams.topMargin);
+        assertEquals(0, params.rightMargin);
+        assertEquals(0, params.leftMargin);
+
+        // When Vertical Tabs gets shown again or turned off
+        isAutoHiddenSupplier.set(false);
+        assertEquals(0, containerParams.topMargin);
+        assertEquals(20, params.rightMargin);
+        assertEquals(0, params.leftMargin);
+    }
+
+    @Test
+    public void testSetToolbarTabletMarginsForAutoHiddenVerticalTab_UpdateRightMarginWhileHidden() {
+        // Simulate returning from fullscreen where right margin was 0.
+        MarginLayoutParams params =
+                setUpTabletLayoutForAutoHiddenVerticalTab(/* initialRightMargin= */ 0);
+        View toolbarContainer = mControlContainer.findViewById(R.id.toolbar_container);
+        MarginLayoutParams containerParams =
+                (MarginLayoutParams) toolbarContainer.getLayoutParams();
+        int tabStripHeight =
+                mActivityController
+                        .get()
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.tab_strip_height);
+
+        SettableNonNullObservableSupplier<Boolean> isAutoHiddenSupplier =
+                ObservableSuppliers.createNonNull(false);
+        mToolbarManager.setVerticalTabsAutoHiddenSupplier(isAutoHiddenSupplier);
+
+        // Vertical Tabs is auto-hidden in narrow window.
+        isAutoHiddenSupplier.set(true);
+        assertEquals(tabStripHeight, containerParams.topMargin);
+        assertEquals(0, params.rightMargin);
+
+        // Insets update notifies a new right margin while Vertical Tabs is auto-hidden.
+        mToolbarManager.onToolbarRightMarginChanged(20);
+        // Active layout margin remains 0 while auto-hidden.
+        assertEquals(0, params.rightMargin);
+
+        // When Vertical Tabs gets shown again on window widening, the updated margin is restored.
+        isAutoHiddenSupplier.set(false);
+        assertEquals(0, containerParams.topMargin);
+        assertEquals(20, params.rightMargin);
+    }
+
+    @Test
+    public void testMaybeShowGlicIph_nullGlicActionChipView() throws Exception {
+        // Setup Glic eligibility conditions.
+        when(mTab.isIncognitoBranded()).thenReturn(false);
+        when(mTab.isOffTheRecord()).thenReturn(false);
+        when(mTab.getUrl()).thenReturn(JUnitTestGURLs.SEARCH_URL);
+
+        when(mMockToolbar.shouldShowGlicToolbarButton()).thenReturn(true);
+        when(mMockToolbar.getGlicActionChipView()).thenReturn(null);
+
+        // Inject the mock toolbar into ToolbarManager
+        Field toolbarField = ToolbarManager.class.getDeclaredField("mToolbar");
+        toolbarField.setAccessible(true);
+        toolbarField.set(mToolbarManager, mMockToolbar);
+
+        // Trigger the code path.
+        Method maybeShowGlicIphMethod =
+                ToolbarManager.class.getDeclaredMethod("maybeShowGlicIph", Tab.class);
+        maybeShowGlicIphMethod.setAccessible(true);
+
+        maybeShowGlicIphMethod.invoke(mToolbarManager, mTab);
+    }
+
+    @Test
+    public void testOnSendTabToSelfClicked_recordsEvent() {
+        when(mLocationBarModelNatives.getUrlOfVisibleNavigationEntry(any()))
+                .thenReturn(JUnitTestGURLs.EXAMPLE_URL);
+        when(mTab.getUrl()).thenReturn(JUnitTestGURLs.EXAMPLE_URL);
+        when(mTab.isInitialized()).thenReturn(true);
+        mToolbarManager.getLocationBarModelForTesting().setTab(mTab, mProfile);
+
+        SendTabToSelfAndroidBridge.Natives bridgeMock =
+                mock(SendTabToSelfAndroidBridge.Natives.class);
+        SendTabToSelfAndroidBridgeJni.setInstanceForTesting(bridgeMock);
+        when(bridgeMock.getEntryPointDisplayReason(any(), any())).thenReturn(null);
+
+        mToolbarManager.onSendTabToSelfClicked();
+
+        verify(mTracker).notifyEvent(EventConstants.SEND_TAB_TO_SELF_OMNIBOX_USED);
+    }
+
+    @Test
+    public void testOnSendTabToSelfClicked_emptyUrl_doesNotRecordEvent() {
+        when(mTab.getUrl()).thenReturn(GURL.emptyGURL());
+        when(mTab.isInitialized()).thenReturn(true);
+        mToolbarManager.getLocationBarModelForTesting().setTab(mTab, mProfile);
+
+        mToolbarManager.onSendTabToSelfClicked();
+
+        verify(mTracker, never()).notifyEvent(EventConstants.SEND_TAB_TO_SELF_OMNIBOX_USED);
+    }
+
+    @Test
+    public void testIsSendTabToSelfAvailable() {
+        SendTabToSelfAndroidBridge.Natives bridgeMock =
+                mock(SendTabToSelfAndroidBridge.Natives.class);
+        SendTabToSelfAndroidBridgeJni.setInstanceForTesting(bridgeMock);
+
+        when(bridgeMock.getEntryPointDisplayReason(any(), any()))
+                .thenReturn(EntryPointDisplayReason.OFFER_FEATURE);
+        assertTrue(mToolbarManager.isSendTabToSelfAvailable(JUnitTestGURLs.EXAMPLE_URL));
+
+        when(bridgeMock.getEntryPointDisplayReason(any(), any())).thenReturn(null);
+        assertFalse(mToolbarManager.isSendTabToSelfAvailable(JUnitTestGURLs.EXAMPLE_URL));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.DISABLE_GRID_TAB_SWITCHER)
+    public void testCreateTabSwitcherLongClickListener_disabledOnDesktop() throws Exception {
+        DeviceInfo.setIsDesktopForTesting(true);
+        Method method =
+                ToolbarManager.class.getDeclaredMethod(
+                        "createTabSwitcherLongClickListener", Profile.class, Runnable.class);
+        method.setAccessible(true);
+        Object listener = method.invoke(mToolbarManager, mProfile, mOpenGridTabSwitcherHandler);
+        assertNull(listener);
+    }
+
+    @Test
+    public void testHomeButtonPressInHub() {
+        AppCompatActivity activity = mActivityController.get();
+        View homeButton = activity.findViewById(R.id.home_button);
+        assertNotNull("Home button should be present", homeButton);
+
+        LayoutStateProvider layoutStateProvider = mock(LayoutStateProvider.class);
+        mLayoutStateProviderSupplier.set(layoutStateProvider);
+        when(layoutStateProvider.isLayoutVisible(LayoutType.HUB)).thenReturn(true);
         mActivityTabProvider.setForTesting(mTab);
-        assertNotNull(getAutocompleteInput());
-        assertEquals(userText, getAutocompleteInput().getUserText());
+        when(mTab.getId()).thenReturn(123);
+        when(mTab.isClosing()).thenReturn(false);
+        when(mTab.isDestroyed()).thenReturn(false);
+        when(mTab.getProfile()).thenReturn(mProfile);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        homeButton.performClick();
+
+        verify(mHubManager).selectTabAndHideHub(123);
+        verify(mTab, never()).loadUrl(any());
+
+        HubExitNavigationHelper helper = mToolbarManager.getHubExitNavigationHelperForTesting();
+        assertNotNull(helper);
+        verify(layoutStateProvider).addObserver(helper);
+
+        helper.onFinishedHiding(LayoutType.HUB);
+        verify(mTab).loadUrl(any());
+    }
+
+    @Test
+    public void testHomeButtonPressInHub_NullTab() {
+        AppCompatActivity activity = mActivityController.get();
+        View homeButton = activity.findViewById(R.id.home_button);
+        assertNotNull("Home button should be present", homeButton);
+
+        LayoutStateProvider layoutStateProvider = mock(LayoutStateProvider.class);
+        mLayoutStateProviderSupplier.set(layoutStateProvider);
+        when(layoutStateProvider.isLayoutVisible(LayoutType.HUB)).thenReturn(true);
+        mToolbarManager.getLocationBarModelForTesting().setTab(null, mProfile);
+        when(mIncognitoStateProvider.isIncognitoSelected()).thenReturn(false);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        homeButton.performClick();
+
+        verify(mHubManager, never()).selectTabAndHideHub(anyInt());
+        verify(mTabCreator).createNewTab(any(), eq(TabLaunchType.FROM_CHROME_UI), isNull());
+    }
+
+    @Test
+    public void testHomeButtonPressInHub_TabClosing() {
+        AppCompatActivity activity = mActivityController.get();
+        View homeButton = activity.findViewById(R.id.home_button);
+        assertNotNull("Home button should be present", homeButton);
+
+        LayoutStateProvider layoutStateProvider = mock(LayoutStateProvider.class);
+        mLayoutStateProviderSupplier.set(layoutStateProvider);
+        when(layoutStateProvider.isLayoutVisible(LayoutType.HUB)).thenReturn(true);
+        mActivityTabProvider.setForTesting(mTab);
+        when(mTab.getId()).thenReturn(123);
+        when(mTab.isClosing()).thenReturn(true);
+        when(mIncognitoStateProvider.isIncognitoSelected()).thenReturn(false);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        homeButton.performClick();
+
+        verify(mHubManager, never()).selectTabAndHideHub(anyInt());
+        verify(mTabCreator).createNewTab(any(), eq(TabLaunchType.FROM_CHROME_UI), isNull());
+    }
+
+    @Test
+    public void testHomeButtonPressInHub_TabDestroyed() {
+        AppCompatActivity activity = mActivityController.get();
+        View homeButton = activity.findViewById(R.id.home_button);
+        assertNotNull("Home button should be present", homeButton);
+
+        LayoutStateProvider layoutStateProvider = mock(LayoutStateProvider.class);
+        mLayoutStateProviderSupplier.set(layoutStateProvider);
+        when(layoutStateProvider.isLayoutVisible(LayoutType.HUB)).thenReturn(true);
+        mActivityTabProvider.setForTesting(mTab);
+        when(mTab.getId()).thenReturn(123);
+        when(mTab.isClosing()).thenReturn(false);
+        when(mTab.isDestroyed()).thenReturn(true);
+        when(mIncognitoStateProvider.isIncognitoSelected()).thenReturn(false);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        homeButton.performClick();
+
+        verify(mHubManager, never()).selectTabAndHideHub(anyInt());
+        verify(mTabCreator).createNewTab(any(), eq(TabLaunchType.FROM_CHROME_UI), isNull());
+    }
+
+    @Test
+    public void testHomeButtonPress_NotInHub_HelperNotCreated() {
+        AppCompatActivity activity = mActivityController.get();
+        View homeButton = activity.findViewById(R.id.home_button);
+        assertNotNull("Home button should be present", homeButton);
+
+        LayoutStateProvider layoutStateProvider = mock(LayoutStateProvider.class);
+        mLayoutStateProviderSupplier.set(layoutStateProvider);
+        when(layoutStateProvider.isLayoutVisible(LayoutType.HUB)).thenReturn(false);
+        mActivityTabProvider.setForTesting(mTab);
+        when(mTab.getId()).thenReturn(123);
+        when(mTab.isClosing()).thenReturn(false);
+        when(mTab.isDestroyed()).thenReturn(false);
+        when(mTab.getProfile()).thenReturn(mProfile);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        homeButton.performClick();
+
+        verify(mTab).loadUrl(any());
+        assertNull(
+                "HubExitNavigationHelper should not be created",
+                mToolbarManager.getHubExitNavigationHelperForTesting());
+    }
+
+    @Test
+    public void testToolbarManagerDestroy_CleansUpHubExitNavigationHelper() {
+        AppCompatActivity activity = mActivityController.get();
+        View homeButton = activity.findViewById(R.id.home_button);
+
+        LayoutStateProvider layoutStateProvider = mock(LayoutStateProvider.class);
+        mLayoutStateProviderSupplier.set(layoutStateProvider);
+        when(layoutStateProvider.isLayoutVisible(LayoutType.HUB)).thenReturn(true);
+        mActivityTabProvider.setForTesting(mTab);
+        when(mTab.getId()).thenReturn(123);
+        when(mTab.isClosing()).thenReturn(false);
+        when(mTab.isDestroyed()).thenReturn(false);
+        when(mTab.getProfile()).thenReturn(mProfile);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        homeButton.performClick();
+        HubExitNavigationHelper helper = mToolbarManager.getHubExitNavigationHelperForTesting();
+        assertNotNull(helper);
+
+        mToolbarManager.destroy();
+        assertNull(mToolbarManager.getHubExitNavigationHelperForTesting());
+        verify(layoutStateProvider).removeObserver(helper);
+    }
+
+    @Test
+    public void
+            testOnDidFinishNavigationInPrimaryMainFrame_resetsNtpAnimationsWhenNavigatingBackToNtp() {
+        testOnDidFinishNavigationInPrimaryMainFrameImpl(
+                JUnitTestGURLs.NTP_URL, /* shouldReset= */ true);
+    }
+
+    @Test
+    public void testOnDidFinishNavigationInPrimaryMainFrame_doesNotResetNtpAnimationsForWebpage() {
+        testOnDidFinishNavigationInPrimaryMainFrameImpl(
+                JUnitTestGURLs.EXAMPLE_URL, /* shouldReset= */ false);
+    }
+
+    private void testOnDidFinishNavigationInPrimaryMainFrameImpl(GURL url, boolean shouldReset) {
+        Tab tab = mockTab(/* isNtp= */ true, /* isIncognito= */ false);
+        NewTabPage ntp = (NewTabPage) tab.getNativePage();
+
+        mActivityTabProvider.setForTesting(tab);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        ActivityTabProvider.ActivityTabTabObserver observer =
+                mToolbarManager.getActivityTabTabObserverForTesting();
+        assertNotNull(observer);
+
+        NavigationHandle navigation = mock(NavigationHandle.class);
+        when(navigation.hasCommitted()).thenReturn(true);
+        when(navigation.isSameDocument()).thenReturn(false);
+        when(navigation.getUrl()).thenReturn(url);
+        when(navigation.errorCode()).thenReturn(NetError.OK);
+
+        observer.onDidFinishNavigationInPrimaryMainFrame(tab, navigation);
+
+        if (shouldReset) {
+            verify(ntp).setUrlFocusAnimationsDisabled(false);
+        } else {
+            verify(ntp, never()).setUrlFocusAnimationsDisabled(anyBoolean());
+        }
+    }
+
+    @Test
+    public void testFindToolbarManagerLazySupplier() {
+        mToolbarManager.destroy();
+
+        FindToolbarManager findToolbarManager = mock(FindToolbarManager.class);
+        LazyOneshotSupplierImpl<FindToolbarManager> supplier =
+                new LazyOneshotSupplierImpl<>() {
+                    @Override
+                    public void doSet() {}
+                };
+
+        mToolbarManager = createToolbarManager(supplier);
+
+        verify(findToolbarManager, never()).addObserver(any());
+
+        supplier.set(findToolbarManager);
+        RobolectricUtil.runAllBackgroundAndUi();
+        verify(findToolbarManager).addObserver(any());
+    }
+
+    @Test
+    public void testFindToolbarManagerLazySupplier_destroyedBeforeAvailable() {
+        mToolbarManager.destroy();
+
+        FindToolbarManager findToolbarManager = mock(FindToolbarManager.class);
+        LazyOneshotSupplierImpl<FindToolbarManager> supplier =
+                new LazyOneshotSupplierImpl<>() {
+                    @Override
+                    public void doSet() {}
+                };
+
+        mToolbarManager = createToolbarManager(supplier);
+        mToolbarManager.destroy();
+
+        supplier.set(findToolbarManager);
+        RobolectricUtil.runAllBackgroundAndUi();
+        verify(findToolbarManager, never()).addObserver(any());
+    }
+
+    private ActivityTabProvider.ActivityTabTabObserver setUpForTabLoadStopped(Tab activeTab) {
+        // onLoadStopped() calls mToolbar.onPageLoadStopped(), which triggers bitmap texture
+        // capture (ViewResourceAdapter). Stub the JNI and theme color providers required during
+        // the view drawing and native container resource creation.
+        ResourceFactoryJni.setInstanceForTesting(mResourceFactoryJni);
+        ResettersForTesting.register(() -> ResourceFactoryJni.setInstanceForTesting(null));
+        when(mToolbarThemeColorProvider.getTint()).thenReturn(ColorStateList.valueOf(Color.BLACK));
+        when(mAdjustedToolbarThemeColorProvider.getTint())
+                .thenReturn(ColorStateList.valueOf(Color.BLACK));
+
+        mActivityTabProvider.setForTesting(activeTab);
+        RobolectricUtil.runAllBackgroundAndUi();
+        mToolbarManager
+                .getLocationBarModelForTesting()
+                .addObserver(mLocationBarDataProviderObserver);
+        ActivityTabProvider.ActivityTabTabObserver tabObserver =
+                mToolbarManager.getActivityTabTabObserverForTesting();
+        assertNotNull(tabObserver);
+        return tabObserver;
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.ZERO_SUGGEST_PREFETCH_ON_PAGE_LOAD_AND_TAB_SWITCH)
+    public void testOnLoadStopped_zeroSuggestPrefetch_featureEnabled() {
+        Tab tab = mockTab(/* isNtp= */ true);
+        ActivityTabProvider.ActivityTabTabObserver tabObserver = setUpForTabLoadStopped(tab);
+
+        tabObserver.onLoadStopped(tab, /* toDifferentDocument= */ true);
+        verify(mLocationBarDataProviderObserver).hintZeroSuggestRefresh();
+    }
+
+    @Test
+    @DisableFeatures(OmniboxFeatureList.ZERO_SUGGEST_PREFETCH_ON_PAGE_LOAD_AND_TAB_SWITCH)
+    public void testOnLoadStopped_zeroSuggestPrefetch_featureDisabled() {
+        Tab tab = mockTab(/* isNtp= */ true);
+        ActivityTabProvider.ActivityTabTabObserver tabObserver = setUpForTabLoadStopped(tab);
+
+        tabObserver.onLoadStopped(tab, /* toDifferentDocument= */ true);
+        verify(mLocationBarDataProviderObserver, never()).hintZeroSuggestRefresh();
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.ZERO_SUGGEST_PREFETCH_ON_PAGE_LOAD_AND_TAB_SWITCH)
+    public void testOnLoadStopped_zeroSuggestPrefetch_notDifferentDocument() {
+        Tab tab = mockTab(/* isNtp= */ true);
+        ActivityTabProvider.ActivityTabTabObserver tabObserver = setUpForTabLoadStopped(tab);
+
+        tabObserver.onLoadStopped(tab, /* toDifferentDocument= */ false);
+        verify(mLocationBarDataProviderObserver, never()).hintZeroSuggestRefresh();
+    }
+
+    @Test
+    @EnableFeatures(OmniboxFeatureList.ZERO_SUGGEST_PREFETCH_ON_PAGE_LOAD_AND_TAB_SWITCH)
+    public void testOnLoadStopped_zeroSuggestPrefetch_notActiveTab() {
+        Tab activeTab = mockTab(/* isNtp= */ true);
+        Tab backgroundTab = mockTab(/* isNtp= */ true);
+        ActivityTabProvider.ActivityTabTabObserver tabObserver = setUpForTabLoadStopped(activeTab);
+
+        tabObserver.onLoadStopped(backgroundTab, /* toDifferentDocument= */ true);
+        verify(mLocationBarDataProviderObserver, never()).hintZeroSuggestRefresh();
+    }
+
+    @Test
+    @EnableFeatures(
+            ChromeFeatureList.ANDROID_BOTTOM_BAR
+                    + ":education_enabled/true/education_address_bar_iph_enabled/true")
+    public void testMaybeShowBottomToolbarIph_EducationAddressBarIph_TopPosition() {
+        triggerMaybeShowBottomToolbarIph(ControlsPosition.TOP);
+
+        verify(mTracker, atLeastOnce())
+                .shouldTriggerHelpUi(FeatureConstants.ANDROID_BOTTOM_BAR_ADDRESS_BAR);
+        verify(mTracker, never())
+                .shouldTriggerHelpUi(eq(FeatureConstants.BOTTOM_TOOLBAR_FEATURE), any());
+    }
+
+    @Test
+    @EnableFeatures(
+            ChromeFeatureList.ANDROID_BOTTOM_BAR
+                    + ":education_enabled/true/education_address_bar_iph_enabled/true")
+    public void testMaybeShowBottomToolbarIph_EducationAddressBarIph_BottomPosition() {
+        triggerMaybeShowBottomToolbarIph(ControlsPosition.BOTTOM);
+
+        verify(mTracker, never())
+                .shouldTriggerHelpUi(FeatureConstants.ANDROID_BOTTOM_BAR_ADDRESS_BAR);
+        verify(mTracker, never())
+                .shouldTriggerHelpUi(eq(FeatureConstants.BOTTOM_TOOLBAR_FEATURE), any());
+    }
+
+    @Test
+    @EnableFeatures(
+            ChromeFeatureList.ANDROID_BOTTOM_BAR
+                    + ":education_enabled/true/education_address_bar_iph_enabled/false")
+    public void
+            testMaybeShowBottomToolbarIph_EducationAddressBarIphDisabled_ShowsBottomToolbarIph() {
+        triggerMaybeShowBottomToolbarIph(ControlsPosition.TOP);
+
+        verify(mTracker, atLeastOnce())
+                .shouldTriggerHelpUi(eq(FeatureConstants.BOTTOM_TOOLBAR_FEATURE), any());
+        verify(mTracker, never())
+                .shouldTriggerHelpUi(FeatureConstants.ANDROID_BOTTOM_BAR_ADDRESS_BAR);
+    }
+
+    private void triggerMaybeShowBottomToolbarIph(@ControlsPosition int controlsPosition) {
+        MockitoHelper.doCallback((Callback<Boolean> callback) -> callback.onResult(true))
+                .when(mTracker)
+                .addOnInitializedCallback(any());
+        when(mControlsSizer.getControlsPosition()).thenReturn(controlsPosition);
+        clearInvocations(mTracker);
+
+        Tab webTab = mockTab(/* isNtp= */ false);
+        mActivityTabProvider.setForTesting(webTab);
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 }

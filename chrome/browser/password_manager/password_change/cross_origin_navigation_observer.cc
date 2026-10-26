@@ -4,8 +4,9 @@
 
 #include "chrome/browser/password_manager/password_change/cross_origin_navigation_observer.h"
 
+#include <ranges>
+
 #include "base/barrier_closure.h"
-#include "base/containers/adapters.h"
 #include "components/affiliations/core/browser/affiliation_service.h"
 #include "components/affiliations/core/browser/affiliation_utils.h"
 #include "components/password_manager/core/browser/password_form.h"
@@ -37,12 +38,17 @@ CrossOriginNavigationObserver::CrossOriginNavigationObserver(
     affiliations::AffiliationService* affiliation_service,
     base::OnceClosure on_cross_origin_navigation_detected)
     : web_contents_(web_contents),
-      initial_host_(initial_url.host()),
+      initial_origin_(url::Origin::Create(initial_url)),
       on_cross_origin_navigation_detected_(
           std::move(on_cross_origin_navigation_detected)) {
+  // Populate the initial domain immediately so synchronous calls to
+  // `IsSameOrAffiliatedDomain()` work before the asynchronous
+  // `AffiliationService` callbacks complete.
   std::string main_domain =
       affiliations::GetExtendedTopLevelDomain(initial_url, {});
-  affiliated_domains_.insert(main_domain);
+  if (!main_domain.empty()) {
+    affiliated_domains_.insert(main_domain);
+  }
 
   base::RepeatingClosure barrier = base::BarrierClosure(
       2, base::BindOnce(&CrossOriginNavigationObserver::OnReady,
@@ -79,12 +85,16 @@ void CrossOriginNavigationObserver::NavigationEntryCommitted(
 
 bool CrossOriginNavigationObserver::IsSameOrAffiliatedDomain(
     const GURL& url) const {
+  if (url.scheme() != initial_origin_.scheme() ||
+      url.EffectiveIntPort() != initial_origin_.port()) {
+    return false;
+  }
   std::string domain =
       affiliations::GetExtendedTopLevelDomain(url, psl_extension_list_);
-  // An empty domain should not match anything, unless it's the exact same host
-  // as the initial URL (e.g. IP addresses where eTLD+1 is empty).
+  // An empty domain should not match anything, unless it's the exact same
+  // origin as the initial URL (e.g. IP addresses where eTLD+1 is empty).
   if (domain.empty()) {
-    return url.host() == initial_host_;
+    return initial_origin_.IsSameOriginWith(url);
   }
   return affiliated_domains_.contains(domain);
 }
@@ -98,13 +108,14 @@ void CrossOriginNavigationObserver::OnPSLExtensionsReceived(
 
   std::string main_domain =
       affiliations::GetExtendedTopLevelDomain(initial_url, psl_extension_list_);
-  affiliated_domains_.insert(main_domain);
+  if (!main_domain.empty()) {
+    affiliated_domains_.insert(main_domain);
+  }
 }
 
 void CrossOriginNavigationObserver::OnAffiliationsReceived(
     std::vector<std::string> affiliations) {
-  affiliated_domains_.insert_range(
-      base::RangeAsRvalues(std::move(affiliations)));
+  affiliated_domains_.insert_range(std::views::as_rvalue(affiliations));
 }
 
 void CrossOriginNavigationObserver::OnReady() {

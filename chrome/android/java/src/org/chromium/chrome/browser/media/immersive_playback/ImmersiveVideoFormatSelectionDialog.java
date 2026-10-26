@@ -28,10 +28,20 @@ import org.chromium.ui.modelutil.PropertyModel;
 @NullMarked
 public class ImmersiveVideoFormatSelectionDialog {
 
+    /** Callback interface for format selection dialog results. */
+    @FunctionalInterface
+    public interface Callback {
+        void onResult(
+                @ImmersivePlaybackConfirmationStatus int status,
+                @ImmersiveStereoMode int stereoMode,
+                @ImmersiveProjectionType int projectionType,
+                boolean isRecommended);
+    }
+
     private final Context mContext;
     private final Resources mResources;
     private final ModalDialogManager mModalDialogManager;
-    private final ImmersivePlaybackConfirmationCallback mCallback;
+    private final Callback mCallback;
     private @Nullable PropertyModel mDialogModel;
     private @Nullable ImmersiveVideoFormatRadioGroup mRadioGroup;
 
@@ -54,9 +64,7 @@ public class ImmersiveVideoFormatSelectionDialog {
             };
 
     public ImmersiveVideoFormatSelectionDialog(
-            Context context,
-            ModalDialogManager modalDialogManager,
-            ImmersivePlaybackConfirmationCallback callback) {
+            Context context, ModalDialogManager modalDialogManager, Callback callback) {
         mContext = context;
         mResources = context.getResources();
         mModalDialogManager = modalDialogManager;
@@ -64,12 +72,8 @@ public class ImmersiveVideoFormatSelectionDialog {
     }
 
     public void show() {
-        int padding =
-                mResources.getDimensionPixelSize(
-                        R.dimen.immersive_playback_confirmation_dialog_padding);
-
         mRadioGroup = new ImmersiveVideoFormatRadioGroup(mContext);
-        mRadioGroup.setPadding(padding, 0, padding, 0);
+        mRadioGroup.checkOption(ImmersiveStereoMode.MONO, ImmersiveProjectionType.QUAD);
         mRadioGroup.setLayoutParams(
                 new ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -112,9 +116,11 @@ public class ImmersiveVideoFormatSelectionDialog {
 
         if (dismissalCause == DialogDismissalCause.POSITIVE_BUTTON_CLICKED && mRadioGroup != null) {
             status = ImmersivePlaybackConfirmationStatus.CONFIRMED;
-            ImmersiveVideoFormatRadioGroup.FormatOption selected = mRadioGroup.getSelectedFormat();
-            stereoMode = selected.stereoMode;
-            projectionType = selected.projectionType;
+            ImmersiveVideoFormatRadioGroup.FormatOption selected = mRadioGroup.getSelectedOption();
+            if (selected != null) {
+                stereoMode = selected.stereoMode;
+                projectionType = selected.projectionType;
+            }
         } else if (dismissalCause == DialogDismissalCause.NEGATIVE_BUTTON_CLICKED) {
             status = ImmersivePlaybackConfirmationStatus.DECLINED;
         } else if (dismissalCause == DialogDismissalCause.NAVIGATE_BACK_OR_TOUCH_OUTSIDE) {
@@ -122,7 +128,7 @@ public class ImmersiveVideoFormatSelectionDialog {
         }
 
         mRadioGroup = null;
-        mCallback.onResult(status, stereoMode, projectionType);
+        mCallback.onResult(status, stereoMode, projectionType, false);
     }
 
     public void dismiss() {

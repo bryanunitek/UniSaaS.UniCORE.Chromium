@@ -43,7 +43,7 @@ class TransitiveObservableSupplier<
     TransitiveObservableSupplier(
             NullableObservableSupplier<ParentT> parentSupplier,
             Function<ParentT, FuncT> unwrapFunction,
-            ChildT defaultValue,
+            @Nullable ChildT defaultValue,
             boolean allowSetToNull) {
         super(defaultValue, allowSetToNull);
         mParentSupplier = parentSupplier;
@@ -53,7 +53,7 @@ class TransitiveObservableSupplier<
     }
 
     @Override
-    public ChildT addObserver(Callback<ChildT> obs, @NotifyBehavior int behavior) {
+    public ChildT addObserver(Callback<? super ChildT> obs, @NotifyBehavior int behavior) {
         if (!super.hasObservers()) {
             onParentSupplierChange(
                     mParentSupplier.addSyncObserver(mOnParentSupplierChangeCallback));
@@ -62,7 +62,7 @@ class TransitiveObservableSupplier<
     }
 
     @Override
-    public void removeObserver(Callback<ChildT> obs) {
+    public void removeObserver(Callback<? super ChildT> obs) {
         super.removeObserver(obs);
         if (!super.hasObservers()) {
             deactivate();
@@ -88,7 +88,7 @@ class TransitiveObservableSupplier<
     public ChildT get() {
         // If we have no observers, our copy of the value is not kept current.
         // Also - do not call any delegates after destroy(), since it might not be safe to do so.
-        if (mObservers != null && mObservers.isEmpty()) {
+        if (!isDestroyed() && !hasObservers()) {
             ChildT ret = null;
             ParentT parentValue = mParentSupplier.get();
             if (parentValue != null) {
@@ -115,8 +115,8 @@ class TransitiveObservableSupplier<
         // Ensure that if we are non-null or monotonic, that the transitive supplier is non-null or
         // monotonic.
         assert mDefaultValue != null
-                        || !Boolean.FALSE.equals(mAllowSetToNull)
-                        || !Boolean.TRUE.equals(BaseObservableSupplierImpl.allowsSetToNull(other))
+                        || mAllowSetToNull
+                        || !BaseObservableSupplierImpl.allowsSetToNull(other)
                 : "Root supplier set as non-null, but the transitive one is not.";
     }
 

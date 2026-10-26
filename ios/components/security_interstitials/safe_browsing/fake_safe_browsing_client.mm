@@ -35,6 +35,11 @@ FakeSafeBrowsingClient::GetHashRealTimeService() {
   return hash_real_time_service_;
 }
 
+safe_browsing::V5GetHashProtocolManager*
+FakeSafeBrowsingClient::GetV5GetHashProtocolManager() {
+  return v5_get_hash_protocol_manager_;
+}
+
 variations::VariationsService* FakeSafeBrowsingClient::GetVariationsService() {
   return nullptr;
 }
@@ -59,4 +64,10 @@ void FakeSafeBrowsingClient::OnSecurityInterstitialShown(
     web::WebState* web_state,
     const security_interstitials::UnsafeResource& resource) {
   on_security_interstitial_shown_called_ = true;
+}
+
+std::unique_ptr<safe_browsing::ClientSideDetectionHostBase>
+FakeSafeBrowsingClient::CreateClientSideDetectionHost(
+    web::WebState* web_state) {
+  return nullptr;
 }

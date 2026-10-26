@@ -26,6 +26,7 @@
 #include "content/common/content_export.h"
 #include "content/public/browser/frame_type.h"
 #include "content/public/browser/navigation_discard_reason.h"
+#include "services/network/public/cpp/connection_allowlist.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "services/network/public/mojom/content_security_policy.mojom-forward.h"
 #include "services/network/public/mojom/referrer_policy.mojom-forward.h"
@@ -304,25 +305,14 @@ class CONTENT_EXPORT FrameTreeNode : public RenderFrameHostOwner {
   const network::mojom::ContentSecurityPolicy* csp_attribute() const {
     return attributes_->parsed_csp_attribute.get();
   }
-  // Tracks iframe's 'browsingtopics' attribute, indicating whether the
-  // navigation requests on this frame should calculate and send the
-  // `Sec-Browsing-Topics` header.
-  bool browsing_topics() const { return attributes_->browsing_topics; }
-
-  // Tracks iframe's 'adauctionheaders' attribute, indicating whether the
-  // navigation request on this frame should calculate and send the
-  // 'Sec-Ad-Auction-Fetch` header.
-  bool ad_auction_headers() const { return attributes_->ad_auction_headers; }
-
-  // Tracks iframe's 'sharedstoragewritable' attribute, indicating what value
-  // the the corresponding
-  // `network::ResourceRequest::shared_storage_writable_eligible` should take
-  // for the navigation(s) on this frame, pending a permissions policy check. If
-  // true, and if the permissions policy check returns "enabled", the network
-  // service will send the `Shared-Storage-Write` request header.
-  bool shared_storage_writable_opted_in() const {
-    return attributes_->shared_storage_writable_opted_in;
+  // Reflects the iframe's 'connectionallowlist' attribute, parsed (in the
+  // renderer) into a ConnectionAllowlist for Connection-Allowlist embedded
+  // enforcement. Null when the attribute is unset.
+  const std::optional<network::ConnectionAllowlist>&
+  connection_allowlist_attribute() const {
+    return attributes_->required_connection_allowlist;
   }
+
   const std::optional<std::string> html_id() const { return attributes_->id; }
   // This tracks iframe's 'name' attribute instead of window.name, which is
   // tracked in FrameReplicationState. See the comment for frame_name() for
@@ -451,7 +441,9 @@ class CONTENT_EXPORT FrameTreeNode : public RenderFrameHostOwner {
   void PruneChildFrameNavigationEntries(NavigationEntryImpl* entry);
 
   using FencedFrameStatus = RenderFrameHostImpl::FencedFrameStatus;
-  FencedFrameStatus fenced_frame_status() const { return fenced_frame_status_; }
+  FencedFrameStatus fenced_frame_status() const {
+    return FencedFrameStatus::kNotNestedInFencedFrame;
+  }
 
   blink::FrameOwnerElementType frame_owner_element_type() const {
     return frame_owner_element_type_;
@@ -636,37 +628,6 @@ class CONTENT_EXPORT FrameTreeNode : public RenderFrameHostOwner {
   bool HasFencedFrameProperties() const {
     return fenced_frame_properties_.has_value();
   }
-
-  // Returns the number of fenced frame boundaries above this frame. The
-  // outermost main frame's frame tree has fenced frame depth 0, a topmost
-  // fenced frame tree embedded in the outermost main frame has fenced frame
-  // depth 1, etc.
-  //
-  // Also, sets `shared_storage_fenced_frame_root_count` to the
-  // number of fenced frame boundaries (roots) above this frame that originate
-  // from shared storage. This is used to check whether a fenced frame
-  // originates from shared storage only (i.e. not from FLEDGE).
-  // TODO(crbug.com/40233168): Remove this check once we put permissions inside
-  // FencedFrameConfig.
-  size_t GetFencedFrameDepth(size_t& shared_storage_fenced_frame_root_count);
-
-  // Traverse up from this node. Return all valid
-  // `node->fenced_frame_properties_->shared_storage_budget_metadata` (i.e. this
-  // node is subjected to the shared storage budgeting associated with those
-  // metadata). Every node that originates from sharedStorage.selectURL() will
-  // have an associated metadata. This indicates that the metadata can only
-  // possibly be associated with a fenced frame root, unless when
-  // `kAllowURNsInIframes` is enabled in which case they could be be associated
-  // with any node.
-  std::vector<const SharedStorageBudgetMetadata*>
-  FindSharedStorageBudgetMetadata();
-
-  // Returns any shared storage context string that was written to a
-  // `blink::FencedFrameConfig` before navigation via
-  // `setSharedStorageContext()`, as long as the request is for a same-origin
-  // frame within the config's fenced frame tree (or a same-origin descendant of
-  // a URN iframe).
-  std::optional<std::u16string> GetEmbedderSharedStorageContextIfAllowed();
 
   // Accessor to BrowsingContextState for subframes only. Only main frame
   // navigations can change BrowsingInstances and BrowsingContextStates,

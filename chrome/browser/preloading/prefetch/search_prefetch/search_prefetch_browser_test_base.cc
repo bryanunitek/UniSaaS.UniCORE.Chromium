@@ -4,7 +4,8 @@
 
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_browser_test_base.h"
 
-#include "base/containers/adapters.h"
+#include <ranges>
+
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -19,7 +20,9 @@
 #include "chrome/browser/preloading/search_preload/search_preload_features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/search_test_utils.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -32,6 +35,7 @@
 #include "net/test/embedded_test_server/http_response.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/navigation/preloading_headers.h"
+#include "ui/views/focus/focus_manager.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -72,11 +76,17 @@ SearchPrefetchBaseBrowserTest::~SearchPrefetchBaseBrowserTest() = default;
 
 void SearchPrefetchBaseBrowserTest::SetUpOnMainThread() {
   InProcessBrowserTest::SetUpOnMainThread();
+
+  // Clear focus in FocusManager so asynchronous window deactivation during
+  // autocomplete does not blur the omnibox and clobber autocomplete results.
+  if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser())) {
+    browser_view->GetFocusManager()->SetFocusedView(nullptr);
+  }
   host_resolver()->AddRule(kSearchDomain, "127.0.0.1");
   host_resolver()->AddRule(kSuggestDomain, "127.0.0.1");
 
   TemplateURLService* model =
-      TemplateURLServiceFactory::GetForProfile(browser()->profile());
+      TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
   ASSERT_TRUE(model);
   search_test_utils::WaitForTemplateURLServiceToLoad(model);
   ASSERT_TRUE(model->loaded());
@@ -117,7 +127,7 @@ GURL SearchPrefetchBaseBrowserTest::GetCanonicalSearchURL(
     const GURL& prefetch_url) {
   GURL canonical_search_url;
   EXPECT_TRUE(HasCanonicalPreloadingOmniboxSearchURL(
-      prefetch_url, browser()->profile(), &canonical_search_url));
+      prefetch_url, browser()->GetProfile(), &canonical_search_url));
   return canonical_search_url;
 }
 
@@ -137,7 +147,7 @@ std::tuple<GURL, GURL>
 SearchPrefetchBaseBrowserTest::GetSearchPrefetchAndNonPrefetch(
     const std::string& search_terms) {
   TemplateURLService* template_url_service =
-      TemplateURLServiceFactory::GetForProfile(browser()->profile());
+      TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
 
   TemplateURLRef::SearchTermsArgs search_terms_args =
       TemplateURLRef::SearchTermsArgs(base::ASCIIToUTF16(search_terms));
@@ -166,7 +176,7 @@ void SearchPrefetchBaseBrowserTest::WaitUntilStatusChangesTo(
     const GURL& canonical_search_url,
     std::optional<SearchPrefetchStatus> status) {
   auto* search_prefetch_service =
-      SearchPrefetchServiceFactory::GetForProfile(browser()->profile());
+      SearchPrefetchServiceFactory::GetForProfile(browser()->GetProfile());
   while (search_prefetch_service->GetSearchPrefetchStatusForTesting(
              canonical_search_url) != status) {
     base::RunLoop run_loop;
@@ -177,13 +187,13 @@ void SearchPrefetchBaseBrowserTest::WaitUntilStatusChangesTo(
 GURL SearchPrefetchBaseBrowserTest::GetRealPrefetchUrlForTesting(
     const GURL& canonical_search_url) {
   auto* search_prefetch_service =
-      SearchPrefetchServiceFactory::GetForProfile(browser()->profile());
+      SearchPrefetchServiceFactory::GetForProfile(browser()->GetProfile());
   return search_prefetch_service->GetRealPrefetchUrlForTesting(
       canonical_search_url);
 }
 
 content::WebContents* SearchPrefetchBaseBrowserTest::GetWebContents() const {
-  return browser()->tab_strip_model()->GetActiveWebContents();
+  return browser()->GetTabStripModel()->GetActiveWebContents();
 }
 
 std::string SearchPrefetchBaseBrowserTest::GetDocumentInnerHTML() const {
@@ -206,7 +216,7 @@ void SearchPrefetchBaseBrowserTest::ClearBrowsingCacheData(
   if (url_origin)
     filter->AddOrigin(url::Origin::Create(url_origin.value()));
   content::BrowsingDataRemover* remover =
-      browser()->profile()->GetBrowsingDataRemover();
+      browser()->GetProfile()->GetBrowsingDataRemover();
   content::BrowsingDataRemoverCompletionObserver completion_observer(remover);
   remover->RemoveWithFilterAndReply(
       base::Time(), base::Time::Max(),
@@ -218,7 +228,7 @@ void SearchPrefetchBaseBrowserTest::ClearBrowsingCacheData(
 void SearchPrefetchBaseBrowserTest::SetDSEWithURL(const GURL& url,
                                                   bool dse_allows_prefetch) {
   TemplateURLService* model =
-      TemplateURLServiceFactory::GetForProfile(browser()->profile());
+      TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
   TemplateURLData data;
   data.SetShortName(kSearchDomain16);
   data.SetKeyword(data.short_name());
@@ -238,7 +248,7 @@ void SearchPrefetchBaseBrowserTest::SetDSEWithURL(const GURL& url,
 // doesn't change DSE at all.
 void SearchPrefetchBaseBrowserTest::UpdateButChangeNothingInDSE() {
   TemplateURLService* model =
-      TemplateURLServiceFactory::GetForProfile(browser()->profile());
+      TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
   TemplateURLData data;
   data.SetShortName(kSuggestDomain16);
   data.SetKeyword(data.short_name());
@@ -383,7 +393,8 @@ SearchPrefetchBaseBrowserTest::HandleSearchSuggestRequest(
         }
     )";
 
-  for (const auto& suggestion_rule : base::Reversed(search_suggestion_rules_)) {
+  for (const auto& suggestion_rule :
+       std::views::reverse(search_suggestion_rules_)) {
     // Origin query matches a predefined rule.
     if (request.GetURL().spec().find(suggestion_rule.origin_query) ==
         std::string::npos)

@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import type {Notification} from '../menus/menu_util.js';
+
+import {AudioBrowserProxyImpl} from './audio_browser_proxy.js';
+
 export type VoicePackStatus = VoicePackServerResponseSuccess|
     VoicePackServerResponseError|VoicePackServerResponseParsingError;
 
@@ -262,8 +266,9 @@ export function convertLangToAnAvailableLangIfPresent(
   }
 
   // If all else fails, try the browser language.
-  const defaultLanguage =
-      chrome.readingMode.defaultLanguageForSpeech.toLowerCase();
+  const defaultLanguage = AudioBrowserProxyImpl.getInstance()
+                              .getDefaultLanguageForSpeech()
+                              .toLowerCase();
   if (availableLangs.includes(defaultLanguage)) {
     return defaultLanguage;
   }
@@ -492,6 +497,7 @@ const NATURAL_VOICES_SUPPORTED_LANGS_AND_LOCALES = new Set([
 // the locale format, as in AVAILABLE_GOOGLE_TTS_LOCALES, which means the
 // previously toggled language item won't match the language item associated
 // with the downloaded pack.
+// LINT.IfChange(AVAILABLE_GOOGLE_TTS_LOCALES)
 export const AVAILABLE_GOOGLE_TTS_LOCALES = new Set([
   'bn-bd', 'cs-cz', 'da-dk', 'de-de', 'el-gr',  'en-au',  'en-gb',
   'en-us', 'es-es', 'es-us', 'fi-fi', 'fil-ph', 'fr-fr',  'hi-in',
@@ -499,6 +505,7 @@ export const AVAILABLE_GOOGLE_TTS_LOCALES = new Set([
   'ne-np', 'nl-nl', 'pl-pl', 'pt-br', 'pt-pt',  'si-lk',  'sk-sk',
   'sv-se', 'th-th', 'tr-tr', 'uk-ua', 'vi-vn',  'yue-hk',
 ]);
+// LINT.ThenChange(voice_nature_naming.ts:VOICE_NATURE_NAMING_BY_LOCALE)
 
 export function areVoicesEqual(
     voice1?: SpeechSynthesisVoice|null,
@@ -512,4 +519,37 @@ export function areVoicesEqual(
   return voice1.default === voice2.default && voice1.lang === voice2.lang &&
       voice1.localService === voice2.localService &&
       voice1.name === voice2.name && voice1.voiceURI === voice2.voiceURI;
+}
+
+/**
+ * Maps a language code and notification dictionary to a Notification structure
+ * containing error state and localization string ID.
+ */
+export function getNotificationFor(
+    lang: string, currentNotifications: {[language: string]: NotificationType}):
+    Notification {
+  const voicePackLanguage = getVoicePackConvertedLangIfExists(lang);
+  const notification = currentNotifications[voicePackLanguage];
+  if (notification === undefined) {
+    return {isError: false};
+  }
+
+  switch (notification) {
+    case NotificationType.DOWNLOADING:
+      return {isError: false, text: 'readingModeLanguageMenuDownloading'};
+    case NotificationType.NO_INTERNET:
+      return {isError: true, text: 'readingModeLanguageMenuNoInternet'};
+    case NotificationType.GENERIC_ERROR:
+      return {isError: true, text: 'languageMenuDownloadFailed'};
+    case NotificationType.NO_SPACE_HQ:
+      return {isError: true, text: 'allocationErrorHighQuality'};
+    case NotificationType.NO_SPACE:
+      return {isError: true, text: 'allocationError'};
+    case NotificationType.DOWNLOADED:
+    case NotificationType.GOOGLE_VOICES_UNAVAILABLE:
+    case NotificationType.NONE:
+      return {isError: false};
+    default:
+      return notification satisfies never;
+  }
 }

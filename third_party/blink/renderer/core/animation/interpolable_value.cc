@@ -180,6 +180,17 @@ InterpolableList* InterpolableList::RawCloneAndZero() const {
   return result;
 }
 
+void InterpolableList::RepeatTo(wtf_size_t new_length) {
+  const wtf_size_t current_length = length();
+  if (current_length == 0 || current_length >= new_length) {
+    return;
+  }
+  values_.resize(new_length);
+  for (wtf_size_t i = current_length; i < new_length; ++i) {
+    values_[i] = values_[i % current_length]->Clone();
+  }
+}
+
 void InterpolableNumber::Scale(double scale) {
   if (IsDoubleValue()) {
     value_ *= scale;
@@ -231,7 +242,7 @@ void InterpolableNumber::Add(const InterpolableValue& other) {
 
 void InterpolableList::Add(const InterpolableValue& other) {
   const auto& other_list = To<InterpolableList>(other);
-  DCHECK_EQ(other_list.length(), length());
+  CHECK_EQ(other_list.length(), length());
   for (wtf_size_t i = 0; i < length(); i++)
     values_[i]->Add(*other_list.values_[i]);
 }
@@ -239,7 +250,7 @@ void InterpolableList::Add(const InterpolableValue& other) {
 void InterpolableList::ScaleAndAdd(double scale,
                                    const InterpolableValue& other) {
   const auto& other_list = To<InterpolableList>(other);
-  DCHECK_EQ(other_list.length(), length());
+  CHECK_EQ(other_list.length(), length());
   for (wtf_size_t i = 0; i < length(); i++)
     values_[i]->ScaleAndAdd(scale, *other_list.values_[i]);
 }

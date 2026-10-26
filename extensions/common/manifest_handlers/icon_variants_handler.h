@@ -19,6 +19,8 @@ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 namespace extensions {
 
 struct IconVariantsInfo : public Extension::ManifestData {
+  static const char* kManifestDataKey;
+
   IconVariantsInfo();
   ~IconVariantsInfo() override;
 
@@ -38,7 +40,7 @@ struct IconVariantsInfo : public Extension::ManifestData {
   const ExtensionIconSet& Get(
       std::optional<ExtensionIconVariant::ColorScheme> color_scheme) const;
 
-  // Data structure for `icon_variants`, based on icon_variants.idl.
+  // Data structure for `icon_variants`, based on icon_variants.webidl.
   std::optional<ExtensionIconVariants> icon_variants;
 
   // Populate member variable extension sets from `icon_variants`.

@@ -9,10 +9,14 @@ import {assertEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import type {MetricsTracker} from 'chrome://webui-test/metrics_test_support.js';
 import {fakeMetricsPrivate} from 'chrome://webui-test/metrics_test_support.js';
 import type {TestMock} from 'chrome://webui-test/test_mock.js';
+import {isVisible} from 'chrome://webui-test/test_util.js';
 
 import {installMock} from '../test_support.js';
 
+const AIM_THREADS_GOOGLE_SEARCH_LABEL = 'Google Search';
 const AIM_THREADS_HISTORY_LABEL = 'AI Mode history';
+const AIM_THREADS_NEW_SEARCH_LABEL = 'Start new AI Mode search';
+const GOOGLE_BASE_URL = 'https://www.google.com/';
 const DESKTOP_CHROME_NTP_THREADS_SOURCE = 'chrome.crn.rb';
 const DESKTOP_CHROME_NTP_THREADS_ENTRY_POINT = 129;
 const AIM_DISPLAY_MODE = 50;
@@ -31,9 +35,11 @@ suite('NewTabPageThreadsRailTest', () => {
     windowProxy = installMock(ComposeboxWindowProxy);
     metrics = fakeMetricsPrivate();
     loadTimeData.overrideValues({
+      aimThreadsGoogleSearchLabel: AIM_THREADS_GOOGLE_SEARCH_LABEL,
       aimThreadsHistoryLabel: AIM_THREADS_HISTORY_LABEL,
+      aimThreadsNewSearchLabel: AIM_THREADS_NEW_SEARCH_LABEL,
+      googleBaseUrl: GOOGLE_BASE_URL,
       threadsUrl: AIM_THREADS_URL,
-      enableThreadsRailLogo: true,
     });
     threadsRailElement = document.createElement('cr-threads-rail');
     document.body.appendChild(threadsRailElement);
@@ -44,32 +50,69 @@ suite('NewTabPageThreadsRailTest', () => {
     document.body.removeChild(threadsRailElement);
   });
 
-  test('Logo shows on rail when enabled', async () => {
-    const threadsRail = document.createElement('cr-threads-rail');
-    document.body.appendChild(threadsRail);
-    await threadsRail.updateComplete;
+  test('renders logo and icon buttons with correct tooltips', () => {
+    const logoButton =
+        threadsRailElement.shadowRoot.querySelector<HTMLElement>('#logoButton');
+    assertTrue(!!logoButton);
+    assertTrue(isVisible(logoButton));
+    assertEquals(
+        loadTimeData.getString('aimThreadsGoogleSearchLabel'),
+        logoButton.getAttribute('aria-label'));
+    assertTrue(logoButton.hasAttribute('suppress-rtl-flip'));
+    const logoTooltip =
+        threadsRailElement.shadowRoot.querySelector<HTMLElement>(
+            'cr-tooltip[for="logoButton"]');
+    assertTrue(!!logoTooltip);
+    assertEquals(
+        loadTimeData.getString('aimThreadsGoogleSearchLabel'),
+        logoTooltip.textContent.trim());
 
-    const logo = threadsRail.shadowRoot.querySelector<HTMLElement>('#logo');
-    assertTrue(!!logo);
-  });
-
-  test('Logo does not show on rail when disabled', async () => {
-    loadTimeData.overrideValues({enableThreadsRailLogo: false});
-    const threadsRail = document.createElement('cr-threads-rail');
-    document.body.appendChild(threadsRail);
-    await threadsRail.updateComplete;
-
-    const logo = threadsRail.shadowRoot.querySelector<HTMLElement>('#logo');
-    assertEquals(null, logo);
-  });
-
-  test('history button has correct tooltip', () => {
     const historyButton =
         threadsRailElement.shadowRoot.querySelector<HTMLElement>(
             '#showHistoryButton');
     assertTrue(!!historyButton);
     assertEquals(
-        loadTimeData.getString('aimThreadsHistoryLabel'), historyButton.title);
+        loadTimeData.getString('aimThreadsHistoryLabel'),
+        historyButton.getAttribute('aria-label'));
+    const historyTooltip =
+        threadsRailElement.shadowRoot.querySelector<HTMLElement>(
+            'cr-tooltip[for="showHistoryButton"]');
+    assertTrue(!!historyTooltip);
+    assertEquals(
+        loadTimeData.getString('aimThreadsHistoryLabel'),
+        historyTooltip.textContent.trim());
+
+    const newSearchButton =
+        threadsRailElement.shadowRoot.querySelector<HTMLElement>(
+            '#newSearchButton');
+    assertTrue(!!newSearchButton);
+    assertEquals(
+        loadTimeData.getString('aimThreadsNewSearchLabel'),
+        newSearchButton.getAttribute('aria-label'));
+    const newSearchTooltip =
+        threadsRailElement.shadowRoot.querySelector<HTMLElement>(
+            'cr-tooltip[for="newSearchButton"]');
+    assertTrue(!!newSearchTooltip);
+    assertEquals(
+        loadTimeData.getString('aimThreadsNewSearchLabel'),
+        newSearchTooltip.textContent.trim());
+
+    const tasksButton =
+        threadsRailElement.shadowRoot.querySelector<HTMLElement>(
+            '#tasksButton');
+    assertTrue(!!tasksButton);
+  });
+
+  test('navigates to Google base URL on logo button click', () => {
+    const logoButton =
+        threadsRailElement.shadowRoot.querySelector<HTMLElement>('#logoButton');
+    assertTrue(!!logoButton);
+
+    logoButton.click();
+
+    const args = windowProxy.getArgs('navigate');
+    assertEquals(1, args.length);
+    assertEquals(loadTimeData.getString('googleBaseUrl'), args[0]);
   });
 
   test('navigates and records metric on show history button click', () => {

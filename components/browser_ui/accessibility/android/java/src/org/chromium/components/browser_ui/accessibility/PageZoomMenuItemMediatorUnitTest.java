@@ -9,8 +9,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -32,7 +30,6 @@ import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /** Unit tests for {@link PageZoomMenuItemMediator}. */
-@SmallTest
 @RunWith(BaseRobolectricTestRunner.class)
 @DisableFeatures({ContentFeatures.ANDROID_DESKTOP_ZOOM_SCALING})
 public class PageZoomMenuItemMediatorUnitTest {
@@ -72,6 +69,7 @@ public class PageZoomMenuItemMediatorUnitTest {
         when(mPageZoomManagerDelegateMock.getWebContents()).thenReturn(mWebContentsMock);
         when(mPageZoomManagerDelegateMock.getBrowserContextHandle())
                 .thenReturn(mBrowserContextHandleMock);
+        when(mPageZoomManagerDelegateMock.isPageZoomSupported()).thenReturn(true);
 
         mModel = new PropertyModel.Builder(PageZoomProperties.ALL_KEYS_FOR_MENU_ITEM).build();
         mManager = new PageZoomManager(mPageZoomManagerDelegateMock);

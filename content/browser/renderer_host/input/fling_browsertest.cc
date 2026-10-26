@@ -53,6 +53,87 @@ const std::string kTouchActionFilterDataURL = R"HTML(
   <script>
     document.title='ready';
   </script>)HTML";
+
+const std::string kScrollAxisLockNoneSnapFlingDataURL = R"HTML(
+  <!DOCTYPE html>
+  <meta name='viewport' content='width=device-width'/>
+  <style>
+  body {
+    margin: 0;
+  }
+  .scroller {
+    width: 400px;
+    height: 400px;
+    overflow: scroll;
+    scroll-snap-type: both mandatory;
+    scroll-axis-lock: none;
+  }
+  .space {
+    width: 5000px;
+    height: 5000px;
+    position: relative;
+  }
+  .snap-area {
+    position: absolute;
+    width: 100px;
+    height: 100px;
+    background-color: blue;
+    scroll-snap-align: start;
+  }
+  .area-a {
+    left: 0px;
+    top: 0px;
+  }
+  .area-b {
+    left: 400px;
+    top: 400px;
+  }
+  </style>
+  <div class="scroller">
+    <div class="space">
+      <div class="snap-area area-a"></div>
+      <div class="snap-area area-b"></div>
+    </div>
+  </div>
+  <script>
+    const scroller = document.querySelector('.scroller');
+    scroller.addEventListener('scrollend', () => {
+      document.title = 'scrollend';
+    });
+    document.title = 'ready';
+  </script>
+)HTML";
+
+const std::string kScrollAxisLockNoneFlingDataURL = R"HTML(
+  <!DOCTYPE html>
+  <meta name='viewport' content='width=device-width'/>
+  <style>
+    body {
+      margin: 0;
+    }
+    .scroller {
+      scroll-axis-lock: none;
+      width: 200px;
+      height: 200px;
+      overflow: scroll;
+      border: 1px solid black;
+    }
+    .content {
+      width: 2000px;
+      height: 2000px;
+    }
+  </style>
+  <div class="scroller" id="scroller">
+    <div class="content" id="content"></div>
+  </div>
+  <script>
+    const scroller = document.getElementById('scroller');
+    scroller.addEventListener('scrollend', () => {
+      document.title = 'scrollend';
+    });
+    document.title = 'ready';
+  </script>
+)HTML";
 }  // namespace
 
 namespace content {
@@ -302,9 +383,15 @@ class BrowserSideFlingBrowserTest : public ContentBrowserTest {
     return root->child_at(0);
   }
 
+  void TearDownOnMainThread() override {
+    child_view_ = nullptr;
+    root_view_ = nullptr;
+    ContentBrowserTest::TearDownOnMainThread();
+  }
+
   std::unique_ptr<base::RunLoop> run_loop_;
-  raw_ptr<RenderWidgetHostViewBase, DanglingUntriaged> child_view_ = nullptr;
-  raw_ptr<RenderWidgetHostViewBase, DanglingUntriaged> root_view_ = nullptr;
+  raw_ptr<RenderWidgetHostViewBase> child_view_ = nullptr;
+  raw_ptr<RenderWidgetHostViewBase> root_view_ = nullptr;
 };
 
 // On Mac we don't have any touchscreen/touchpad fling events (GFS/GFC).
@@ -553,7 +640,7 @@ IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
                             ->GetPrimaryFrameTree()
                             .root();
 
-  GetWidgetHost()->GetView()->Destroy();
+  GetWidgetHost()->GetView()->DestroyOrDefer();
   SimulateTouchscreenFling(GetWidgetHost());
 
   // As the view is destroyed, there shouldn't be any active fling.
@@ -563,6 +650,97 @@ IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
 
   EXPECT_EQ(
       0, EvalJs(root->current_frame_host(), "window.scrollY").ExtractDouble());
+}
+
+// Tests that a diagonal touch fling successfully snaps to a diagonal target
+// when scroll-axis-lock: none is active.
+IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
+                       TouchscreenFlingSnapAxisLockNone) {
+  LoadURL(kScrollAxisLockNoneSnapFlingDataURL);
+
+  // Fling diagonally.
+  gfx::Vector2dF fling_velocity(-4000.f, -4000.f);
+
+  // Watch for the 'scrollend' title change indicating the snap animation
+  // finished.
+  std::u16string scrollend_title(u"scrollend");
+  TitleWatcher watcher(shell()->web_contents(), scrollend_title);
+
+  // Inject the fling directly via RenderWidgetHost.
+  SimulateTouchscreenFling(GetWidgetHost(), nullptr, fling_velocity);
+
+  // Wait for the scrollend event to fire in JS.
+  std::ignore = watcher.WaitAndGetTitle();
+
+  // Verify we snapped to Target B (400, 400).
+  double scroll_x = EvalJs(GetRootNode()->current_frame_host(),
+                           "document.querySelector('.scroller').scrollLeft")
+                        .ExtractDouble();
+  double scroll_y = EvalJs(GetRootNode()->current_frame_host(),
+                           "document.querySelector('.scroller').scrollTop")
+                        .ExtractDouble();
+
+  EXPECT_NEAR(scroll_x, 400.0, 1.0);
+  EXPECT_NEAR(scroll_y, 400.0, 1.0);
+}
+
+// Tests that when scroll-axis-lock: none is active, a touchscreen fling
+// initiated with a small horizontal and large vertical delta (which normally
+// triggers vertical scroll railing in the browser) is not railed out, allowing
+// flinging in both axes.
+IN_PROC_BROWSER_TEST_F(BrowserSideFlingBrowserTest,
+                       TouchscreenFlingAxisLockNone) {
+  LoadURL(kScrollAxisLockNoneFlingDataURL);
+
+  const int drag_x = 10;
+  const int drag_y = 100;
+
+  // Watch for the 'scrollend' title change indicating the fling animation
+  // finished.
+  std::u16string scrollend_title(u"scrollend");
+  TitleWatcher watcher(shell()->web_contents(), scrollend_title);
+
+  InputMsgWatcher fling_watcher(GetWidgetHost(),
+                                blink::WebInputEvent::Type::kGestureFlingStart);
+
+  SyntheticSmoothScrollGestureParams params;
+  params.gesture_source_type = content::mojom::GestureSourceType::kTouchInput;
+  params.anchor = gfx::PointF(100, 100);  // inside scroller
+  params.distances.push_back(gfx::Vector2d(-drag_x, -drag_y));
+  params.prevent_fling = false;
+  params.speed_in_pixels_s = 4000.f;
+
+  run_loop_ = std::make_unique<base::RunLoop>();
+
+  GetWidgetHost()->QueueSyntheticGesture(
+      std::make_unique<SyntheticSmoothScrollGesture>(params),
+      base::BindOnce(&BrowserSideFlingBrowserTest::OnSyntheticGestureCompleted,
+                     base::Unretained(this)));
+
+  // Run until the gesture completes.
+  run_loop_->Run();
+  run_loop_.reset();
+
+  // Verify that a fling was actually generated.
+  fling_watcher.GetAckStateWaitIfNecessary();
+
+  // Wait for the fling to finish and the scrollend event to fire.
+  std::ignore = watcher.WaitAndGetTitle();
+
+  double actual_scroll_left =
+      EvalJs(shell()->web_contents(),
+             "document.getElementById('scroller').scrollLeft")
+          .ExtractDouble();
+  double actual_scroll_top =
+      EvalJs(shell()->web_contents(),
+             "document.getElementById('scroller').scrollTop")
+          .ExtractDouble();
+
+  // When scroll-axis-lock is none, horizontal fling deltas should not be
+  // locked out by vertical railing. Both axes should have scrolled beyond
+  // the initial drag distance.
+  EXPECT_GT(actual_scroll_left, drag_x);
+  EXPECT_GT(actual_scroll_top, drag_y);
 }
 #endif  // !BUILDFLAG(IS_MAC)
 

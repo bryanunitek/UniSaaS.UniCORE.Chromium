@@ -5,16 +5,23 @@
 package org.chromium.chrome.test.transit.page;
 
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
+import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 
 import static org.hamcrest.CoreMatchers.allOf;
 
 import static org.chromium.base.test.transit.ViewSpec.viewSpec;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
 
 import android.app.Activity;
 import android.os.SystemClock;
+import android.view.KeyEvent;
 import android.view.View;
 
+import androidx.test.platform.app.InstrumentationRegistry;
+
+import org.chromium.base.DeviceInfo;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.transit.OptionalViewElement;
 import org.chromium.base.test.transit.TripBuilder;
 import org.chromium.base.test.transit.ViewElement;
@@ -22,6 +29,9 @@ import org.chromium.base.test.transit.ViewSpec;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
+import org.chromium.chrome.browser.compositor.layouts.components.CompositorButton;
+import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelper;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.omnibox.UrlBar;
@@ -39,6 +49,11 @@ import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
 import org.chromium.chrome.test.transit.ntp.RegularNewTabPageStation;
 import org.chromium.chrome.test.transit.omnibox.FakeOmniboxSuggestions;
 import org.chromium.chrome.test.transit.omnibox.OmniboxFacility;
+import org.chromium.chrome.test.transit.signin.SignedOutAccountMenuFacility;
+import org.chromium.chrome.test.transit.tab_search.TabSearchOverlayFacility;
+import org.chromium.chrome.test.util.TabStripUtils;
+import org.chromium.components.signin.SigninFeatureMap;
+import org.chromium.components.signin.SigninFeatures;
 import org.chromium.content_public.browser.test.util.TouchCommon;
 
 import java.util.function.Supplier;
@@ -50,8 +65,22 @@ import java.util.function.Supplier;
  * the expected title, etc.
  */
 public class CtaPageStation extends BasePageStation<ChromeTabbedActivity> {
+    private static final String SEARCH_PATH = "/search";
+    private static final String SEARCH_QUERY_PARAM = "q";
     public static final ViewSpec<UrlBar> URL_BAR = viewSpec(UrlBar.class, withId(R.id.url_bar));
+    public static final ViewSpec<View> TOOLBAR_MIC_BUTTON =
+            viewSpec(
+                    withId(R.id.optional_toolbar_button),
+                    withContentDescription(R.string.accessibility_toolbar_btn_mic));
+    public static final ViewSpec<View> TAB_SEARCH_BUTTON = viewSpec(withId(R.id.tab_search_button));
+
+    // The first show inflates the whole overlay, which can take several seconds on loaded bots.
+    private static final long TAB_SEARCH_OVERLAY_OPEN_TIMEOUT_MS = 7500L;
+
+    public final OptionalViewElement<View> optionalToolbarMicButtonElement;
     public final OptionalViewElement<View> homeButtonElement;
+    public final OptionalViewElement<View> tabSearchButtonElement;
+    public final OptionalViewElement<View> signinButtonElement;
     // TODO(crbug.com/477035792): Temporarily nullable while the toolbar is being migrated.
     public final @Nullable ViewElement<ToolbarControlContainer> toolbarElement;
     public final ViewElement<View> tabSwitcherButtonElement;
@@ -97,6 +126,36 @@ public class CtaPageStation extends BasePageStation<ChromeTabbedActivity> {
                 declareOptionalView(
                         allOf(withId(R.id.home_button), isDisplayed()),
                         ViewElement.unscopedOption());
+
+        // The optional toolbar mic button specifically.
+        optionalToolbarMicButtonElement = declareOptionalView(TOOLBAR_MIC_BUTTON);
+
+        // The tab search button is only intended to appear on desktop.
+        tabSearchButtonElement =
+                declareOptionalView(TAB_SEARCH_BUTTON, ViewElement.unscopedOption());
+
+        // The sign-in button only appears when the toolbar sign-in button feature is enabled.
+        signinButtonElement =
+                declareOptionalView(withId(R.id.signin_button), ViewElement.unscopedOption());
+    }
+
+    /**
+     * Clicks the mic button in the toolbar, expecting to navigate to a search results page.
+     *
+     * @param query the query to expect in the search URL
+     * @return the {@link WebPageStation} representing the search results page
+     */
+    public WebPageStation clickToolbarMicToSearchPage(String query) {
+        return optionalToolbarMicButtonElement.clickTo().arriveAt(createSearchPageStation(query));
+    }
+
+    /** Returns a {@link WebPageStation} expecting a search results page for the given query. */
+    public WebPageStation createSearchPageStation(String query) {
+        return WebPageStation.newBuilder()
+                .initFrom(this)
+                // TODO(b/543914644): Create a method for verifying url args directly.
+                .withExpectedUrlSubstring(SEARCH_PATH + "?" + SEARCH_QUERY_PARAM + "=" + query)
+                .build();
     }
 
     /** Long presses the tab switcher button to open the action menu. */
@@ -112,6 +171,86 @@ public class CtaPageStation extends BasePageStation<ChromeTabbedActivity> {
         recheckActiveConditions();
 
         return menuButtonElement.clickTo().enterFacility(new PageAppMenuFacility<>());
+    }
+
+    /**
+     * Opens the account menu popup by clicking the toolbar sign-in button on desktop while signed
+     * out.
+     */
+    public SignedOutAccountMenuFacility openSignedOutAccountMenu() {
+        assert DeviceInfo.isDesktop() : "The account menu is only available on desktop";
+        assert SigninFeatureMap.isEnabled(SigninFeatures.SIGNIN_BUTTON_PROFILE_MENU)
+                : "The account menu requires SIGNIN_BUTTON_PROFILE_MENU";
+        return signinButtonElement.clickTo().enterFacility(new SignedOutAccountMenuFacility());
+    }
+
+    /** Opens the Tab Search overlay by clicking the tab search button. */
+    public TabSearchOverlayFacility<CtaPageStation> openTabSearchOverlay() {
+        recheckActiveConditions();
+        assert ChromeFeatureList.sTabSearchForDesktop.isEnabled();
+
+        ChromeTabbedActivity activity = getActivity();
+        boolean hasVerticalTabSearchButton =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> {
+                            View v = activity.findViewById(R.id.tab_search_button);
+                            return v != null && v.isShown();
+                        });
+        // In vertical tabs mode, the tab search button is an Android View in the hierarchy,
+        // so it can be clicked via Espresso.
+        if (hasVerticalTabSearchButton) {
+            return tabSearchButtonElement
+                    .clickTo()
+                    .withTimeout(TAB_SEARCH_OVERLAY_OPEN_TIMEOUT_MS)
+                    .enterFacility(new TabSearchOverlayFacility<>());
+        }
+
+        // In the horizontal tab strip, the tab search button is drawn in the native composited UI
+        // without an Android View, so simulate a click on the compositor button directly.
+        StripLayoutHelper strip = TabStripUtils.getStripLayoutHelper(activity, mIsIncognito);
+        assert strip != null;
+        CompositorButton tabSearchButton = strip.getTabSearchButton();
+        assert tabSearchButton != null;
+        return runTo(
+                        () -> {
+                            TabStripUtils.settleDownCompositor(strip);
+                            TabStripUtils.clickCompositorButton(
+                                    tabSearchButton,
+                                    InstrumentationRegistry.getInstrumentation(),
+                                    activity);
+                        })
+                .withTimeout(TAB_SEARCH_OVERLAY_OPEN_TIMEOUT_MS)
+                .enterFacility(new TabSearchOverlayFacility<>());
+    }
+
+    /** Opens the Tab Search overlay via keyboard shortcut (Alt+Shift+A). */
+    public TabSearchOverlayFacility<CtaPageStation> openTabSearchOverlayViaShortcut() {
+        recheckActiveConditions();
+        assert ChromeFeatureList.sTabSearchForDesktop.isEnabled();
+        return runOnUiThreadTo(
+                        () -> {
+                            ChromeTabbedActivity activity = getActivity();
+                            long now = SystemClock.uptimeMillis();
+                            int metaState = KeyEvent.META_ALT_ON | KeyEvent.META_SHIFT_ON;
+                            activity.dispatchKeyEvent(
+                                    new KeyEvent(
+                                            now,
+                                            now,
+                                            KeyEvent.ACTION_DOWN,
+                                            KeyEvent.KEYCODE_A,
+                                            0,
+                                            metaState));
+                            activity.dispatchKeyEvent(
+                                    new KeyEvent(
+                                            now,
+                                            now,
+                                            KeyEvent.ACTION_UP,
+                                            KeyEvent.KEYCODE_A,
+                                            0,
+                                            metaState));
+                        })
+                .withTimeout(TAB_SEARCH_OVERLAY_OPEN_TIMEOUT_MS)
+                .enterFacility(new TabSearchOverlayFacility<>());
     }
 
     /** Shortcut to open a new tab programmatically as if selecting "New Tab" from the app menu. */
@@ -154,8 +293,8 @@ public class CtaPageStation extends BasePageStation<ChromeTabbedActivity> {
     }
 
     /**
-     * Attempts to open a new tab programmatically as if selecting "New Tab" from the app menu if
-     * available. If not available, attempts to open a new window.
+     * Opens a new tab programmatically as if selecting "New Tab" from the app menu, or opens a new
+     * window if we are currently in an incognito window that cannot open regular tabs.
      */
     public RegularNewTabPageStation openNewTabOrWindowFast() {
         if (IncognitoUtils.shouldOpenIncognitoAsWindow() && mIsIncognito) {
@@ -166,8 +305,9 @@ public class CtaPageStation extends BasePageStation<ChromeTabbedActivity> {
     }
 
     /**
-     * Attempts to open a new incognito tab programmatically as if selecting "New Incognito Tab"
-     * from the app menu if available. If not available, attempts to open a new incognito window.
+     * Opens a new incognito tab programmatically as if selecting "New Incognito Tab" from the app
+     * menu, or opens a new incognito window if we are currently in a regular window that cannot
+     * open incognito tabs.
      */
     public IncognitoNewTabPageStation openNewIncognitoTabOrWindowFast() {
         if (IncognitoUtils.shouldOpenIncognitoAsWindow() && !mIsIncognito) {
@@ -227,6 +367,12 @@ public class CtaPageStation extends BasePageStation<ChromeTabbedActivity> {
         return loadPageProgrammatically(url, WebPageStation.newBuilder());
     }
 
+    /** Loads the regular NTP in the same tab and waits to transition. */
+    public RegularNewTabPageStation loadNtp() {
+        return loadPageProgrammatically(
+                getOriginalNativeNtpUrl(), RegularNewTabPageStation.newBuilder());
+    }
+
     public WebPageStation loadAboutBlank() {
         return loadWebPageProgrammatically("about:blank");
     }
@@ -264,12 +410,13 @@ public class CtaPageStation extends BasePageStation<ChromeTabbedActivity> {
      * @param fakeSuggestions If non-null, fake suggestions expected to be shown in the Omnibox.
      */
     public OmniboxFacility openOmnibox(@Nullable FakeOmniboxSuggestions fakeSuggestions) {
-        OmniboxFacility omniboxFacility =
-                new OmniboxFacility(/* incognito= */ mIsIncognito, fakeSuggestions);
+        OmniboxFacility omniboxFacility = new OmniboxFacility(fakeSuggestions);
         SoftKeyboardFacility softKeyboard = new SoftKeyboardFacility();
 
         // The Omnibox opens and so does the soft keyboard.
-        clickUrlBarOrSearchBarTo().enterFacilities(omniboxFacility, softKeyboard);
+        clickUrlBarOrSearchBarTo()
+                .withPossiblyAlreadyFulfilled()
+                .enterFacilities(omniboxFacility, softKeyboard);
 
         // Close the soft keyboard before returning since autocomplete doesn't work well with the
         // GBoard displayed in the 12L AVD image (android_32_google_apis_x64_foldable_*.textpb).

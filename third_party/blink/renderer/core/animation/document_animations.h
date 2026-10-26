@@ -138,18 +138,23 @@ class CORE_EXPORT DocumentAnimations final
   // names declared in the trigger-instantiating property with the names
   // declared in the animation-trigger property.
   void UpdateAnimationTriggerAttachments();
-  void AddTriggeredAnimation(CSSAnimation* animation);
+  void AddCSSAnimationNeedingTriggerAttachment(CSSAnimation* animation);
 
-  const HeapHashSet<WeakMember<CSSAnimation>>& TriggeredAnimationsForTesting()
-      const {
-    return triggered_animations_;
+  const HeapHashSet<WeakMember<CSSAnimation>>&
+  CSSAnimationsNeedingTriggerAttachmentForTesting() const {
+    return css_animations_needing_trigger_attachment_;
   }
 
   void UpdateCompositorAnimationTriggers(
       const PaintArtifactCompositor* paint_artifact_compositor);
 
+  DeferredTimeline& GetGlobalDeferredTimeline(const TreeScope&,
+                                              const AtomicString&);
+  DeferredTimeline* FindExistingGlobalDeferredTimeline(
+      const TreeScope&,
+      const AtomicString&) const;
   DeferredTimeline& GetGlobalDeferredTimeline(const AtomicString& name) {
-    return *global_deferred_timelines_.Find(*document_, name);
+    return GetGlobalDeferredTimeline(*document_, name);
   }
 
   uint64_t current_transition_generation_;
@@ -161,6 +166,22 @@ class CORE_EXPORT DocumentAnimations final
   void RemoveReplacedAnimations(ReplaceableAnimationsMap*);
 
  private:
+  class TreeScopeDeferredTimelineMap
+      : public GarbageCollected<TreeScopeDeferredTimelineMap> {
+   public:
+    TreeScopeDeferredTimelineMap()
+        : map_(StyleTimelineScope{StyleTimelineScope::Type::kAll,
+                                  Vector<AtomicString>()}) {}
+
+    CSSDeferredTimelineMap& Map() { return map_; }
+    const CSSDeferredTimelineMap& Map() const { return map_; }
+
+    void Trace(Visitor* visitor) const { visitor->Trace(map_); }
+
+   private:
+    CSSDeferredTimelineMap map_;
+  };
+
   void MarkPendingIfCompositorPropertyAnimationChanges(
       const PaintArtifactCompositor*);
 
@@ -169,15 +190,16 @@ class CORE_EXPORT DocumentAnimations final
   HeapHashSet<WeakMember<AnimationTrigger>> triggers_;
   // Animations which should be attached to triggers after style and layout
   // updates.
-  HeapHashSet<WeakMember<CSSAnimation>> triggered_animations_;
+  HeapHashSet<WeakMember<CSSAnimation>>
+      css_animations_needing_trigger_attachment_;
   // In the new timeline name scoping model, names have document-global
   // visibility by default. This is implementing by having CSSAnimations::
   // FindAncestor[Deferred]Timeline() look up names in this map
   // as a last resort.
   //
   // Only used when the CSSTimelineScopeGlobal flag is enabled.
-  CSSDeferredTimelineMap global_deferred_timelines_{StyleTimelineScope{
-      StyleTimelineScope::Type::kAll, /*names=*/Vector<AtomicString>()}};
+  HeapHashMap<WeakMember<const TreeScope>, Member<TreeScopeDeferredTimelineMap>>
+      global_deferred_timelines_by_scope_;
 };
 
 }  // namespace blink

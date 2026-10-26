@@ -25,6 +25,7 @@
 #include "chrome/browser/bookmarks/bookmark_parent_folder_children.h"
 #include "chrome/browser/bookmarks/managed_bookmark_service_factory.h"
 #include "chrome/browser/commerce/shopping_service_factory.h"
+#include "chrome/browser/enterprise/isolated_mode/isolated_mode_settings_service_factory.h"
 #include "chrome/browser/extensions/api/bookmark_manager_private/bookmark_manager_private_api.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
@@ -34,10 +35,8 @@
 #include "chrome/browser/ui/bookmarks/bookmark_stats.h"
 #include "chrome/browser/ui/bookmarks/bookmark_ui_operations_helper.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils_desktop.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
@@ -90,7 +89,7 @@ class BookmarksPageHandler::BookmarkContextMenu
                 ->GetPrimaryWindowWidget()
                 ->GetNativeWindow(),
             this,
-            browser_window->GetBrowserForMigrationOnly(),
+            browser_window,
             browser_window->GetProfile(),
             BookmarkLaunchLocation::kSidePanelContextMenu,
             bookmarks,
@@ -102,10 +101,14 @@ class BookmarksPageHandler::BookmarkContextMenu
       return;
     }
     if (source == side_panel::mojom::ActionSource::kPriceTracking) {
-      DCHECK(shopping_list_controller_);
+      CHECK(shopping_list_controller_, base::NotFatalUntil::M162);
       AddItem(IDC_BOOKMARK_BAR_OPEN_ALL);
       AddItem(IDC_BOOKMARK_BAR_OPEN_ALL_NEW_WINDOW);
       AddItem(IDC_BOOKMARK_BAR_OPEN_ALL_INCOGNITO);
+      if (enterprise_isolated_mode::IsolatedModeReplacesIncognito(
+              browser_window->GetProfile())) {
+        AddItem(IDC_BOOKMARK_BAR_OPEN_ALL_ISOLATED);
+      }
       if (bookmarks.size() == 1 && bookmarks.front()->is_url()) {
         AddItem(IDC_BOOKMARK_BAR_OPEN_SPLIT_VIEW);
       }
@@ -120,6 +123,10 @@ class BookmarksPageHandler::BookmarkContextMenu
     AddItem(IDC_BOOKMARK_BAR_OPEN_ALL);
     AddItem(IDC_BOOKMARK_BAR_OPEN_ALL_NEW_WINDOW);
     AddItem(IDC_BOOKMARK_BAR_OPEN_ALL_INCOGNITO);
+    if (enterprise_isolated_mode::IsolatedModeReplacesIncognito(
+            browser_window->GetProfile())) {
+      AddItem(IDC_BOOKMARK_BAR_OPEN_ALL_ISOLATED);
+    }
     if (bookmarks.size() == 1 && bookmarks.front()->is_url()) {
       AddItem(IDC_BOOKMARK_BAR_OPEN_SPLIT_VIEW);
     }
@@ -406,8 +413,7 @@ void BookmarksPageHandler::BookmarkCurrentTabInFolder(
     return;
   }
   chrome::BookmarkCurrentTabInFolder(
-      browser_window_interface_->GetBrowserForMigrationOnly(),
-      bookmark_merged_surface_->bookmark_model(),
+      browser_window_interface_, bookmark_merged_surface_->bookmark_model(),
       bookmark_merged_surface_->GetDefaultParentForNewNodes(*parent)->id());
 }
 
@@ -500,7 +506,7 @@ void BookmarksPageHandler::DropBookmarks(const std::string& folder_id,
                      /*index=*/parent_node->children().size(),
                      /*copy=*/false,
                      chrome::BookmarkReorderDropTarget::kBookmarkSidePanel,
-                     browser_window_interface_->GetBrowserForMigrationOnly());
+                     browser_window_interface_);
 }
 
 void BookmarksPageHandler::ExecuteOpenInNewTabCommand(
@@ -526,7 +532,7 @@ void BookmarksPageHandler::ExecuteOpenInNewWindowCommand(
                             IDC_BOOKMARK_BAR_OPEN_ALL_NEW_WINDOW);
 }
 
-void BookmarksPageHandler::ExecuteOpenInIncognitoWindowCommand(
+void BookmarksPageHandler::ExecuteOpenInOffTheRecordWindowCommand(
     const std::vector<std::string>& side_panel_ids,
     side_panel::mojom::ActionSource source) {
   const std::vector<int64_t> node_ids =
@@ -534,8 +540,11 @@ void BookmarksPageHandler::ExecuteOpenInIncognitoWindowCommand(
   if (node_ids.empty()) {
     return;
   }
-  ExecuteContextMenuCommand(node_ids, source,
-                            IDC_BOOKMARK_BAR_OPEN_ALL_INCOGNITO);
+  int command_id = enterprise_isolated_mode::IsolatedModeReplacesIncognito(
+                       browser_window_interface_->GetProfile())
+                       ? IDC_BOOKMARK_BAR_OPEN_ALL_ISOLATED
+                       : IDC_BOOKMARK_BAR_OPEN_ALL_INCOGNITO;
+  ExecuteContextMenuCommand(node_ids, source, command_id);
 }
 
 void BookmarksPageHandler::GetIncognitoAvailableCount(
@@ -648,9 +657,8 @@ void BookmarksPageHandler::OpenBookmark(
       click_modifiers->middle_button, click_modifiers->alt_key,
       click_modifiers->ctrl_key, click_modifiers->meta_key,
       click_modifiers->shift_key);
-  bookmarks::OpenAllIfAllowed(
-      browser_window_interface_->GetBrowserForMigrationOnly(), {bookmark_node},
-      open_location);
+  bookmarks::OpenAllIfAllowed(browser_window_interface_, {bookmark_node},
+                              open_location);
   if (source == side_panel::mojom::ActionSource::kPriceTracking) {
     return;
   }
@@ -682,23 +690,6 @@ void BookmarksPageHandler::RenameBookmark(int64_t node_id,
   // through the extensions API.
   model->SetTitle(node_to_rename, base::UTF8ToUTF16(new_title),
                   bookmarks::metrics::BookmarkEditSource::kExtension);
-}
-
-void BookmarksPageHandler::MoveBookmark(int64_t node_id,
-                                        const std::string& folder_id) {
-  std::optional<BookmarkParentFolder> parent =
-      GetBookmarkParentFolderFromSidePanel(*bookmark_merged_surface_,
-                                           folder_id);
-  if (!parent) {
-    return;
-  }
-
-  const bookmarks::BookmarkNode* node_to_move = bookmarks::GetBookmarkNodeByID(
-      bookmark_merged_surface_->bookmark_model(), node_id);
-  bookmark_merged_surface_->Move(
-      node_to_move, *parent,
-      bookmark_merged_surface_->GetChildrenCount(*parent),
-      browser_window_interface_->GetBrowserForMigrationOnly());
 }
 
 void BookmarksPageHandler::RemoveBookmarks(const std::vector<int64_t>& node_ids,

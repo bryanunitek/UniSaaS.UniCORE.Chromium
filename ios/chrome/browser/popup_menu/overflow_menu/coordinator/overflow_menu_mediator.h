@@ -18,10 +18,16 @@ class BookmarkModel;
 namespace feature_engagement {
 class Tracker;
 }  // namespace feature_engagement
+namespace image_fetcher {
+class ImageFetcher;
+}  // namespace image_fetcher
 namespace signin {
 class AvatarProvider;
 class IdentityManager;
 }  // namespace signin
+namespace subscription_eligibility {
+class SubscriptionEligibilityService;
+}  // namespace subscription_eligibility
 namespace syncer {
 class SyncService;
 }  // namespace syncer
@@ -36,17 +42,18 @@ class AuthenticationService;
 class BrowserPolicyConnectorIOS;
 @protocol CobaltCommands;
 @protocol FindInPageCommands;
+@protocol FullscreenCommands;
 @protocol GeminiCommands;
 @protocol HelpCommands;
 class HomeBackgroundCustomizationService;
 @class LayoutGuideCenter;
 @protocol LensOverlayCommands;
 @protocol LevelUpCommands;
-class NTPBackgroundImageCacheService;
 @protocol OverflowMenuCustomizationCommands;
 @class OverflowMenuOrderer;
 class OverlayPresenter;
 @protocol PageInfoCommands;
+@protocol PictureInPictureCommands;
 @protocol PopupMenuCommands;
 class PrefService;
 @protocol PriceTrackedItemsCommands;
@@ -58,10 +65,12 @@ class ReadingListBrowserAgent;
 class ReadingListModel;
 @protocol ReminderNotificationsCommands;
 @protocol SceneCommands;
+@class SceneState;
 @protocol SettingsCommands;
 class TabBasedIPHBrowserAgent;
 class TemplateURLService;
 @protocol TextZoomCommands;
+class UserUploadedImageManager;
 class WebNavigationBrowserAgent;
 class WebStateList;
 @protocol WhatsNewCommands;
@@ -77,6 +86,9 @@ class WebStateList;
 // The WebStateList that this mediator listens for any changes on the current
 // WebState.
 @property(nonatomic, assign) WebStateList* webStateList;
+
+// The scene state of the current browser.
+@property(nonatomic, weak) SceneState* sceneState;
 
 // Command Handlers.
 @property(nonatomic, weak) id<ActivityServiceCommands> activityServiceHandler;
@@ -101,9 +113,11 @@ class WebStateList;
 @property(nonatomic, weak) id<WhatsNewCommands> whatsNewHandler;
 @property(nonatomic, weak) id<LevelUpCommands> levelUpHandler;
 @property(nonatomic, weak) id<ReaderModeCommands> readerModeHandler;
+@property(nonatomic, weak) id<FullscreenCommands> fullscreenHandler;
 @property(nonatomic, weak) id<GeminiCommands> geminiHandler;
 @property(nonatomic, weak) id<CobaltCommands> cobaltHandler;
 @property(nonatomic, weak) id<NewTabPageCommands> NTPCommandHandler;
+@property(nonatomic, weak) id<PictureInPictureCommands> pictureInPictureHandler;
 
 // Navigation agent for reloading pages.
 @property(nonatomic, assign) WebNavigationBrowserAgent* navigationAgent;
@@ -130,9 +144,11 @@ class WebStateList;
 @property(nonatomic, assign)
     HomeBackgroundCustomizationService* backgroundCustomizationService;
 
-// Service for NTP background image cache.
-@property(nonatomic, assign)
-    NTPBackgroundImageCacheService* backgroundImageCacheService;
+// Manager for user-uploaded NTP background images.
+@property(nonatomic, assign) UserUploadedImageManager* userUploadedImageManager;
+
+// Fetcher for preset NTP background images.
+@property(nonatomic, assign) image_fetcher::ImageFetcher* imageFetcher;
 
 // Pref service to retrieve profile preference values.
 @property(nonatomic, assign) PrefService* profilePrefs;
@@ -183,6 +199,11 @@ class WebStateList;
 
 // The AvatarProvider to get identity avatars.
 @property(nonatomic, assign) signin::AvatarProvider* identityAvatarProvider;
+
+// Service for checking AI subscription eligibility.
+@property(nonatomic, assign)
+    subscription_eligibility::SubscriptionEligibilityService*
+        subscriptionEligibilityService;
 
 // Disconnect the mediator.
 - (void)disconnect;

@@ -23,6 +23,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/repeating_test_future.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_file_util.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
@@ -34,9 +35,9 @@
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/download/save_package_file_picker.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -44,6 +45,7 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/download/public/common/download_features.h"
 #include "components/download/public/common/download_item.h"
 #include "components/history/core/browser/download_constants.h"
 #include "components/history/core/browser/download_row.h"
@@ -66,6 +68,7 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/shell_dialogs/fake_select_file_dialog.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -118,9 +121,14 @@ class DownloadPersistedObserver : public DownloadHistory::Observer {
       : profile_(profile),
         filter_(filter),
         persisted_(false) {
-    DownloadCoreServiceFactory::GetForBrowserContext(profile_)
-        ->GetDownloadHistory()
-        ->AddObserver(this);
+    DownloadCoreService* service =
+        DownloadCoreServiceFactory::GetForBrowserContext(profile_);
+    if (service) {
+      service->InitializeHistory();
+      if (service->GetDownloadHistory()) {
+        service->GetDownloadHistory()->AddObserver(this);
+      }
+    }
   }
 
   DownloadPersistedObserver(const DownloadPersistedObserver&) = delete;
@@ -329,18 +337,17 @@ class SavePageBrowserTest : public InProcessBrowserTest {
     *dir = GetSaveDir().AppendASCII(prefix + "_files");
   }
 
-  WebContents* GetCurrentTab(Browser* browser) const {
+  WebContents* GetCurrentTab(BrowserWindowInterface* browser) const {
     WebContents* current_tab =
-        browser->tab_strip_model()->GetActiveWebContents();
+        browser->GetTabStripModel()->GetActiveWebContents();
     EXPECT_TRUE(current_tab);
     return current_tab;
   }
 
   // Returns true if and when there was a single download created, and its url
   // is |expected_url|.
-  bool VerifySavePackageExpectations(
-      Browser* browser,
-      const GURL& expected_url) const {
+  bool VerifySavePackageExpectations(BrowserWindowInterface* browser,
+                                     const GURL& expected_url) const {
     // Generally, there should only be one download item created
     // in all of these tests.  If it's already here, grab it; if not,
     // wait for it to show up.
@@ -395,7 +402,7 @@ class SavePageBrowserTest : public InProcessBrowserTest {
   // persisted.
 
   DownloadManager* GetDownloadManager() const {
-    auto* download_manager = browser()->profile()->GetDownloadManager();
+    auto* download_manager = browser()->GetProfile()->GetDownloadManager();
     EXPECT_TRUE(download_manager);
     return download_manager;
   }
@@ -636,7 +643,7 @@ IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, SaveCompleteHTML) {
 IN_PROC_BROWSER_TEST_F(SavePageBrowserTest,
                        SaveDuringInitialNavigationIncognito) {
   // Open an Incognito window.
-  Browser* incognito = CreateIncognitoBrowser();  // Waits.
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();  // Waits.
   ASSERT_TRUE(incognito);
 
   // Create a download item creation waiter on that window.
@@ -646,7 +653,7 @@ IN_PROC_BROWSER_TEST_F(SavePageBrowserTest,
   // Navigate, unblocking with new tab.
   GURL url = embedded_test_server()->GetURL("/save_page/b.htm");
   NavigateToURLWithDisposition(incognito, url,
-                               WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                               WindowOpenDisposition::kNewForegroundTab,
                                ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB);
 
   // Save the page before completion.
@@ -1011,6 +1018,32 @@ IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, DISABLED_SaveURLQuarantine) {
 }
 #endif
 
+class SavePageDeferredDownloadHistoryBrowserTest : public SavePageBrowserTest {
+ public:
+  SavePageDeferredDownloadHistoryBrowserTest() {
+    feature_list_.InitAndEnableFeature(
+        download::features::kDeferredDownloadHistoryLoading);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(SavePageDeferredDownloadHistoryBrowserTest,
+                       SaveHTMLOnly) {
+  GURL url = NavigateToMockURL("a");
+
+  base::FilePath full_file_name, dir;
+  SaveCurrentTab(url, content::SAVE_PAGE_TYPE_AS_ONLY_HTML, "a", 1, &dir,
+                 &full_file_name);
+  ASSERT_FALSE(HasFailure());
+
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  EXPECT_TRUE(base::PathExists(full_file_name));
+  EXPECT_FALSE(base::PathExists(dir));
+  EXPECT_TRUE(base::ContentsEqual(GetTestDirFile("a.htm"), full_file_name));
+}
+
 // Test suite that allows testing --site-per-process against cross-site frames.
 // See http://dev.chromium.org/developers/design-documents/site-isolation.
 class SavePageSitePerProcessBrowserTest : public SavePageBrowserTest {
@@ -1197,6 +1230,48 @@ IN_PROC_BROWSER_TEST_F(SavePageSitePerProcessBrowserTest,
   EXPECT_TRUE(base::PathExists(full_file_name));
 }
 
+class SavePageSitePerProcessDeferredDownloadHistoryBrowserTest
+    : public SavePageSitePerProcessBrowserTest {
+ public:
+  SavePageSitePerProcessDeferredDownloadHistoryBrowserTest() {
+    feature_list_.InitAndEnableFeature(
+        download::features::kDeferredDownloadHistoryLoading);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(SavePageSitePerProcessDeferredDownloadHistoryBrowserTest,
+                       SaveAsCompleteHtml) {
+  GURL url(
+      embedded_test_server()->GetURL("a.com", "/save_page/frames-xsite.htm"));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  base::FilePath full_file_name, dir;
+  SaveCurrentTab(url, content::SAVE_PAGE_TYPE_AS_COMPLETE_HTML,
+                 "frames-xsite-complete-html", 5, &dir, &full_file_name);
+  ASSERT_FALSE(HasFailure());
+
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  EXPECT_TRUE(base::DirectoryExists(dir));
+  base::FilePath expected_files[] = {
+      full_file_name,
+      dir.AppendASCII("a.html"),
+      dir.AppendASCII("b.html"),
+      dir.AppendASCII("1.css"),
+      dir.AppendASCII("1.png"),
+  };
+  for (auto file_path : expected_files) {
+    EXPECT_TRUE(base::PathExists(file_path))
+        << "Does " << file_path.value() << " exist?";
+    std::optional<int64_t> actual_file_size = base::GetFileSize(file_path);
+    ASSERT_TRUE(actual_file_size.has_value());
+    EXPECT_NE(0, actual_file_size.value())
+        << "Is " << file_path.value() << " non-empty?";
+  }
+}
+
 // Test suite that verifies that the frame tree "looks" the same before
 // and after a save-page-as.
 class SavePageOriginalVsSavedComparisonTest
@@ -1262,7 +1337,7 @@ class SavePageOriginalVsSavedComparisonTest
     // See https://crbug.com/41450468.
     ASSERT_TRUE(
         ui_test_utils::NavigateToURL(browser(), GURL("data:text/html,foo")));
-    chrome::GoBack(browser(), WindowOpenDisposition::CURRENT_TAB);
+    chrome::GoBack(browser(), WindowOpenDisposition::kCurrentTab);
     EXPECT_TRUE(content::WaitForLoadStop(GetCurrentTab(browser())));
     DLOG(INFO) << "Verifying test expectations after history navigation...";
     AssertExpectationsAboutCurrentTab(expected_number_of_frames_in_saved_page,
@@ -1782,5 +1857,35 @@ IN_PROC_BROWSER_TEST_F(SavePageBrowserTest, SaveMHTMLWithDlp) {
 }
 
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+IN_PROC_BROWSER_TEST_F(SavePageBrowserTest,
+                       SavePageAsBlocksConcurrentFullscreen) {
+  NavigateToMockURL("a");
+  WebContents* web_contents = GetCurrentTab(browser());
+  auto request_fullscreen = [&]() {
+    return content::EvalJs(web_contents,
+                           "document.documentElement.requestFullscreen()"
+                           ".then(() => 'entered', () => 'rejected')");
+  };
+
+  SavePackageFilePicker::SetShouldPromptUser(true);
+  FakeSelectFileDialog::Factory* dialog_factory =
+      FakeSelectFileDialog::RegisterFactory();
+  base::ScopedClosureRunner reset_factory(
+      base::BindOnce([]() { ui::SelectFileDialog::SetFactory(nullptr); }));
+
+  base::RunLoop run_loop;
+  dialog_factory->SetOpenCallback(run_loop.QuitClosure());
+  chrome::SavePage(browser());
+  run_loop.Run();
+
+  EXPECT_EQ("rejected", request_fullscreen());
+  EXPECT_FALSE(web_contents->IsFullscreen());
+
+  ASSERT_NE(nullptr, dialog_factory->GetLastDialog());
+  dialog_factory->GetLastDialog()->CallFileSelectionCanceled();
+
+  EXPECT_EQ("entered", request_fullscreen());
+}
 
 }  // namespace

@@ -21,6 +21,7 @@
 #include "ui/views/drag_controller.h"
 
 class BrowserView;
+class DownloadButtonViews;
 class ToolbarButtonProvider;
 class ToolbarDivider;
 
@@ -52,8 +53,6 @@ class PinnedToolbarActionsContainer
   PinnedToolbarActionsContainer& operator=(
       const PinnedToolbarActionsContainer&) = delete;
   ~PinnedToolbarActionsContainer() override;
-
-  void MovePinnedActionBy(actions::ActionId action_id, int delta);
 
   // ToolbarIconContainerView:
   void UpdateAllIcons() override;
@@ -96,14 +95,17 @@ class PinnedToolbarActionsContainer
   bool IsActionPinned(actions::ActionId id) override;
   bool IsActionPoppedOut(actions::ActionId id) override;
   bool IsActionPinnedOrPoppedOut(actions::ActionId id) override;
+  bool IsActionHighlighted(actions::ActionId id) override;
   void PostOrQueueActionAfterAnimation(base::OnceClosure action) override;
-  ToolbarButton* GetDownloadButton() override;
+  DownloadButton* GetDownloadButton() override;
   views::BubbleAnchor GetBubbleAnchor(actions::ActionId action_id) override;
   void GetBubbleAnchorAsync(
       actions::ActionId action_id,
       base::OnceCallback<void(BubbleAnchorResult)> callback) override;
   PinnedActionToolbarButton* GetChromeLabsButton() override;
   void UpdatePinnedStateAndAnnounce(actions::ActionId id, bool pin) override;
+  void MovePinnedAction(actions::ActionId action_id, int target_index) override;
+  void MovePinnedActionBy(actions::ActionId action_id, int delta) override;
 
   // Returns the button associated with `id`. This does not return permanent
   // buttons which are currently invisible, an accessor for these can be
@@ -156,7 +158,7 @@ class PinnedToolbarActionsContainer
   void SetActionButtonIconVisibility(actions::ActionId id, bool visible);
 
   // Moves the dragged action `action_id`.
-  void MovePinnedAction(
+  void MovePinnedActionOnDrop(
       actions::ActionId action_id,
       size_t index,
       base::ScopedClosureRunner cleanup,
@@ -185,6 +187,10 @@ class PinnedToolbarActionsContainer
   std::vector<std::unique_ptr<PinnedActionToolbarButton>> permanent_buttons_;
   raw_ptr<ToolbarDivider> toolbar_divider_;
   raw_ptr<PinnedToolbarActionsModel> model_;
+
+  // Implements DownloadButton on top of the downloads button, when there is
+  // one.
+  const std::unique_ptr<DownloadButtonViews> download_button_;
 
   base::ScopedObservation<PinnedToolbarActionsModel,
                           PinnedToolbarActionsModel::Observer>

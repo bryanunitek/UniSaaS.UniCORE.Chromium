@@ -107,9 +107,7 @@ id<GREYMatcher> PasswordDetailPassword() {
 }
 
 id<GREYMatcher> NavigationBarEditButton() {
-  return grey_allOf(chrome_test_util::ButtonWithAccessibilityLabelId(
-                        IDS_IOS_NAVIGATION_BAR_EDIT_BUTTON),
-                    grey_userInteractionEnabled(), nil);
+  return chrome_test_util::NavigationBarEditButton();
 }
 
 id<GREYMatcher> EditDoneButton() {
@@ -272,17 +270,14 @@ void SaveHiddenPasskeyToStore(NSString* rpId,
 
 void OpenPasswordManager() {
   [ChromeEarlGreyUI openSettingsMenu];
-  if ([ChromeEarlGrey isYourSavedInfoSettingsPageIosEnabled]) {
-    [ChromeEarlGreyUI
-        tapSettingsMenuButton:grey_accessibilityID(
-                                  @"kSettingsAutofillAndPasswordsCellId")];
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                            SettingsMenuPasswordsButton()]
-        performAction:grey_tap()];
-  } else {
-    [ChromeEarlGreyUI
-        tapSettingsMenuButton:chrome_test_util::SettingsMenuPasswordsButton()];
-  }
+  [ChromeEarlGreyUI
+      tapSettingsMenuButton:grey_accessibilityID(
+                                @"kSettingsAutofillAndPasswordsCellId")];
+  [ChromeEarlGrey waitForSufficientlyVisibleElementWithMatcher:
+                      chrome_test_util::SettingsMenuPasswordsButton()];
+  [[EarlGrey
+      selectElementWithMatcher:chrome_test_util::SettingsMenuPasswordsButton()]
+      performAction:grey_tap()];
   // The settings page requested results from PasswordStore. Make sure they
   // have already been delivered by posting a task to PasswordStore's
   // background task runner and wait until it is finished. Because the
@@ -292,6 +287,8 @@ void OpenPasswordManager() {
 }
 
 void TapNavigationBarEditButton() {
+  [ChromeEarlGrey
+      waitForSufficientlyVisibleElementWithMatcher:NavigationBarEditButton()];
   [[EarlGrey selectElementWithMatcher:NavigationBarEditButton()]
       performAction:grey_tap()];
 }

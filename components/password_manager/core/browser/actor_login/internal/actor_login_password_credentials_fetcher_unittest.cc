@@ -18,7 +18,9 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "build/build_config.h"
+#include "components/affiliations/core/browser/match_type.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/optimization_guide/proto/features/actor_login.pb.h"
 #include "components/password_manager/core/browser/actor_login/actor_login_types.h"
@@ -130,6 +132,7 @@ class MockPasswordManagerDriver
   MOCK_METHOD(bool, IsInPrimaryMainFrame, (), (const, override));
   MOCK_METHOD(bool, IsDirectChildOfPrimaryMainFrame, (), (const, override));
   MOCK_METHOD(bool, IsNestedWithinFencedFrame, (), (const, override));
+  MOCK_METHOD(bool, HasCrossOriginAncestor, (), (const, override));
   MOCK_METHOD(password_manager::PasswordManagerInterface*,
               GetPasswordManager,
               (),
@@ -178,8 +181,8 @@ class ActorLoginPasswordCredentialsFetcherTest : public ::testing::Test {
   NiceMock<password_manager::MockPasswordFormCache>& form_cache() {
     return form_cache_;
   }
-  base::WeakPtr<MockActorLoginQualityLogger> mqls_logger() {
-    return mock_mqls_logger_.AsWeakPtr();
+  scoped_refptr<MockActorLoginQualityLogger> mqls_logger() {
+    return mock_mqls_logger_;
   }
 
   std::unique_ptr<PasswordFormManager> CreateFormManager() {
@@ -215,12 +218,13 @@ class ActorLoginPasswordCredentialsFetcherTest : public ::testing::Test {
       const std::string& url,
       const std::u16string& username,
       const std::u16string& password,
-      PasswordForm::MatchType match_type = PasswordForm::MatchType::kExact) {
+      affiliations::MatchType match_type = affiliations::MatchType::kExact) {
     password_manager::StoredCredential cred;
     cred.url = GURL(url);
     cred.signon_realm = cred.url.spec();
     cred.username_value = username;
-    cred.password_value = password;
+    cred.password_value =
+        password_manager::PasswordString(std::u16string(password));
     cred.match_type = match_type;
     return cred;
   }
@@ -250,7 +254,8 @@ class ActorLoginPasswordCredentialsFetcherTest : public ::testing::Test {
   NiceMock<MockPasswordManagerDriver> driver_;
   std::vector<std::unique_ptr<PasswordFormManager>> form_managers_;
   NiceMock<password_manager::MockPasswordFormCache> form_cache_;
-  MockActorLoginQualityLogger mock_mqls_logger_;
+  scoped_refptr<MockActorLoginQualityLogger> mock_mqls_logger_ =
+      base::MakeRefCounted<MockActorLoginQualityLogger>();
 };
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest, Success) {
@@ -598,6 +603,38 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, NestedFrameWithSameOrigin) {
   EXPECT_TRUE(credentials[0].immediatelyAvailableToLogin);
 }
 
+// TODO(crbug.com/539923959): Re-enable on iOS.
+#if !BUILDFLAG(IS_IOS)
+TEST_F(ActorLoginPasswordCredentialsFetcherTest,
+       NestedFrameWithCrossOriginAncestor) {
+  const GURL same_origin_url = GURL("https://foo.com/login");
+  const url::Origin same_origin = url::Origin::Create(same_origin_url);
+  client()->profile_store()->AddLogin(
+      CreatePasswordForm(same_origin_url.spec(), u"user", u"pass"));
+  AddFormManager(
+      CreateFormManager(same_origin,
+                        /*is_in_main_frame=*/false,
+                        actor_login::CreateSigninFormData(same_origin_url),
+                        client(), driver(), form_fetcher()));
+
+  ON_CALL(driver(), IsDirectChildOfPrimaryMainFrame)
+      .WillByDefault(Return(false));
+  ON_CALL(driver(), HasCrossOriginAncestor).WillByDefault(Return(true));
+
+  base::test::TestFuture<std::vector<Credential>,
+                         ActorLoginCredentialsFetcher::Status>
+      future;
+
+  auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
+      kOrigin, client(), password_manager(), mqls_logger());
+  fetcher->Fetch(future.GetCallback());
+
+  ASSERT_TRUE(future.Wait());
+  const auto& [credentials, status] = future.Get();
+  ASSERT_EQ(credentials.size(), 1u);
+  EXPECT_FALSE(credentials[0].immediatelyAvailableToLogin);
+}
+
 TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresSameSiteNestedFrame) {
   const GURL same_site_url = GURL("https://login.foo.com");
   const url::Origin same_site_origin = url::Origin::Create(same_site_url);
@@ -623,6 +660,7 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresSameSiteNestedFrame) {
 
   ON_CALL(driver(), IsDirectChildOfPrimaryMainFrame)
       .WillByDefault(Return(false));
+  ON_CALL(driver(), HasCrossOriginAncestor).WillByDefault(Return(true));
 
   base::test::TestFuture<std::vector<Credential>,
                          ActorLoginCredentialsFetcher::Status>
@@ -661,17 +699,18 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresSameSiteNestedFrame) {
   // Destroy the fetcher, because it sends logs in the destructor.
   fetcher.reset();
 }
+#endif  // !BUILDFLAG(IS_IOS)
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest,
        ReturnsAllMatchesWithPermission) {
   PasswordForm psl_match = password_manager::ToPasswordForm(
       CreatePasswordForm("https://sub.foo.com", u"psl_username",
-                         u"psl_password", PasswordForm::MatchType::kPSL));
+                         u"psl_password", affiliations::MatchType::kPSL));
   psl_match.actor_login_approved = true;
   PasswordForm affiliated_match =
       password_manager::ToPasswordForm(CreatePasswordForm(
           "https://m.foo.com", u"affiliated_username", u"affiliated_password",
-          PasswordForm::MatchType::kAffiliated));
+          affiliations::MatchType::kAffiliated));
   affiliated_match.actor_login_approved = true;
   PasswordForm exact_match = password_manager::ToPasswordForm(
       CreatePasswordForm(kUrl.spec(), u"exact_username", u"exact_password"));
@@ -699,11 +738,11 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
 TEST_F(ActorLoginPasswordCredentialsFetcherTest, NoApprovedCredentials) {
   PasswordForm psl_match = password_manager::ToPasswordForm(
       CreatePasswordForm("https://sub.foo.com", u"psl_username",
-                         u"psl_password", PasswordForm::MatchType::kPSL));
+                         u"psl_password", affiliations::MatchType::kPSL));
   PasswordForm affiliated_match =
       password_manager::ToPasswordForm(CreatePasswordForm(
           "https://m.foo.com", u"affiliated_username", u"affiliated_password",
-          PasswordForm::MatchType::kAffiliated));
+          affiliations::MatchType::kAffiliated));
   AddFormManager(CreateFormManager());
   form_fetcher()->SetBestMatches({affiliated_match, psl_match});
 
@@ -729,12 +768,12 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
        IgnoresWeakApprovedCredentials) {
   PasswordForm psl_match = password_manager::ToPasswordForm(
       CreatePasswordForm("https://sub.foo.com", u"psl_username",
-                         u"psl_password", PasswordForm::MatchType::kPSL));
+                         u"psl_password", affiliations::MatchType::kPSL));
   psl_match.actor_login_approved = true;
   PasswordForm affiliated_match =
       password_manager::ToPasswordForm(CreatePasswordForm(
           "https://m.foo.com", u"affiliated_username", u"affiliated_password",
-          PasswordForm::MatchType::kAffiliated));
+          affiliations::MatchType::kAffiliated));
   AddFormManager(CreateFormManager());
   form_fetcher()->SetBestMatches({affiliated_match, psl_match});
 
@@ -760,7 +799,7 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresGroupedMatches) {
   PasswordForm grouped_match =
       password_manager::ToPasswordForm(CreatePasswordForm(
           "https://sub.foo.com", u"grouped_username", u"grouped_password",
-          PasswordForm::MatchType::kGrouped));
+          affiliations::MatchType::kGrouped));
   grouped_match.actor_login_approved = true;
   AddFormManager(CreateFormManager());
   form_fetcher()->SetBestMatches({grouped_match});
@@ -787,11 +826,11 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
        ReturnsCredentialsWithCorrectPermissionStatus) {
   PasswordForm psl_match = password_manager::ToPasswordForm(
       CreatePasswordForm("https://sub.foo.com", u"psl_username",
-                         u"psl_password", PasswordForm::MatchType::kPSL));
+                         u"psl_password", affiliations::MatchType::kPSL));
   PasswordForm affiliated_match =
       password_manager::ToPasswordForm(CreatePasswordForm(
           "https://m.foo.com", u"affiliated_username", u"affiliated_password",
-          PasswordForm::MatchType::kAffiliated));
+          affiliations::MatchType::kAffiliated));
   affiliated_match.actor_login_approved = true;
   PasswordForm exact_match = password_manager::ToPasswordForm(
       CreatePasswordForm(kUrl.spec(), u"exact_username", u"exact_password"));

@@ -7,24 +7,30 @@
 #include <memory>
 
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/drive_picker_host/drive_picker_result_handler.mojom.h"
 #include "chrome/browser/ui/webui/drive_picker_host/drive_picker_host_ui.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
+#include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/compositor/layer.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/window/dialog_delegate.h"
 
 DrivePickerHostView::DrivePickerHostView(
     Profile* profile,
@@ -49,9 +55,12 @@ DrivePickerHostView::DrivePickerHostView(
   // `GetWebContents()` is guaranteed to return a valid pointer. We use a
   // `CHECK` here to assert this state and remove redundant defensive checks.
   CHECK(web_view->GetWebContents());
-  web_view->GetWebContents()->SetDelegate(this);
-  web_view->GetWebContents()->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
 
+  web_view->GetWebContents()->SetDelegate(this);
+  SetAcceleratorHandling(views::WebContentsAcceleratorHandling::kEnabled);
+  SetOnEscCloseWidget();
+
+  web_view->GetWebContents()->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
   web_view->LoadInitialURL(GURL(chrome::kChromeUIDrivePickerHostURL));
 
   AddAccelerator(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
@@ -83,6 +92,10 @@ gfx::Size DrivePickerHostView::CalculatePreferredSize(
       drive_picker_host::DrivePickerHostRequest::RequestType::kConsentDialog) {
     // Tight fit for the Google ConsentKit card
     size = gfx::Size(520, 580);
+  } else if (current_ui_type_ == drive_picker_host::DrivePickerHostRequest::
+                                     RequestType::kErrorDialog) {
+    // Small size for the error dialog
+    size = gfx::Size(512, 180);
   } else {
     // Standard size for the Google Drive Picker UI
     size = gfx::Size(830, 600);
@@ -93,6 +106,15 @@ gfx::Size DrivePickerHostView::CalculatePreferredSize(
 void DrivePickerHostView::OnTransitionToPicker() {
   current_ui_type_ =
       drive_picker_host::DrivePickerHostRequest::RequestType::kPickerUi;
+  PreferredSizeChanged();
+  if (GetWidget()) {
+    GetWidget()->CenterWindow(GetPreferredSize());
+  }
+}
+
+void DrivePickerHostView::OnTransitionToError() {
+  current_ui_type_ =
+      drive_picker_host::DrivePickerHostRequest::RequestType::kErrorDialog;
   PreferredSizeChanged();
   if (GetWidget()) {
     GetWidget()->CenterWindow(GetPreferredSize());
@@ -116,7 +138,7 @@ void DrivePickerHostView::AddedToWidget() {
       views::AsViewClass<views::WebView>(view_tracker_.view());
   if (web_view) {
     // Remove rounded corners to align with the Drive Picker's rectangular look.
-    web_view->holder()->SetCornerRadii(gfx::RoundedCornersF(0));
+    web_view->holder()->SetNativeViewCornerRadii(gfx::RoundedCornersF(0));
 
     // Also ensure this view's layer is rectangular.
     layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(0));
@@ -195,28 +217,55 @@ void DrivePickerHostView::SendErrorToRequest(
   }
 }
 
-content::KeyboardEventProcessingResult
-DrivePickerHostView::PreHandleKeyboardEvent(
+content::WebContents* DrivePickerHostView::OpenURLFromTab(
     content::WebContents* source,
-    const input::NativeWebKeyboardEvent& event) {
-  if (event.windows_key_code == ui::VKEY_ESCAPE &&
-      event.GetType() == blink::WebInputEvent::Type::kRawKeyDown) {
-    views::Widget* widget = GetWidget();
-    if (widget) {
-      widget->CloseWithReason(views::Widget::ClosedReason::kEscKeyPressed);
-    }
-    return content::KeyboardEventProcessingResult::HANDLED;
+    const content::OpenURLParams& params,
+    base::OnceCallback<void(content::NavigationHandle&)>
+        navigation_handle_callback) {
+  if (!browser_window_interface_) {
+    return nullptr;
   }
-  return content::KeyboardEventProcessingResult::NOT_HANDLED;
+  if (!params.url.SchemeIsHTTPOrHTTPS()) {
+    return nullptr;
+  }
+  content::OpenURLParams new_params(params);
+  if (new_params.disposition == WindowOpenDisposition::kCurrentTab ||
+      new_params.disposition == WindowOpenDisposition::kNewForegroundTab) {
+    new_params.disposition = WindowOpenDisposition::kNewWindow;
+  }
+  return browser_window_interface_->OpenURL(
+      new_params, std::move(navigation_handle_callback));
 }
-bool DrivePickerHostView::HandleKeyboardEvent(
+
+content::WebContents* DrivePickerHostView::AddNewContents(
     content::WebContents* source,
-    const input::NativeWebKeyboardEvent& event) {
-  if (!event.os_event) {
-    return false;
+    std::unique_ptr<content::WebContents> new_contents,
+    const GURL& target_url,
+    WindowOpenDisposition disposition,
+    const blink::mojom::WindowFeatures& window_features,
+    bool user_gesture,
+    bool* was_blocked) {
+  if (!browser_window_interface_) {
+    if (was_blocked) {
+      *was_blocked = true;
+    }
+    return nullptr;
   }
-  return unhandled_keyboard_event_handler_.HandleKeyboardEvent(
-      event, GetFocusManager());
+  if (!target_url.SchemeIsHTTPOrHTTPS()) {
+    if (was_blocked) {
+      *was_blocked = true;
+    }
+    return nullptr;
+  }
+  WindowOpenDisposition new_disposition = disposition;
+  if (new_disposition == WindowOpenDisposition::kNewForegroundTab ||
+      new_disposition == WindowOpenDisposition::kCurrentTab) {
+    new_disposition = WindowOpenDisposition::kNewWindow;
+  }
+  chrome::AddWebContents(browser_window_interface_, source,
+                         std::move(new_contents), target_url, new_disposition,
+                         window_features);
+  return nullptr;
 }
 
 BEGIN_METADATA(DrivePickerHostView)

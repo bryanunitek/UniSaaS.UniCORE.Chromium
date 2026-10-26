@@ -8,9 +8,10 @@
 
 #include "base/base64.h"
 #include "base/check.h"
+#include "base/files/file_path.h"
+#include "base/hash/hash.h"
 #include "base/hash/sha1.h"
 #include "base/memory/ptr_util.h"
-#include "base/not_fatal_until.h"
 #include "base/trace_event/memory_usage_estimator.h"
 #include "components/sync/base/deletion_origin.h"
 #include "components/sync/base/time.h"
@@ -22,6 +23,7 @@
 #include "components/sync/protocol/proto_memory_estimations.h"
 #include "components/sync/protocol/unique_position.pb.h"
 #include "components/version_info/version_info.h"
+#include "url/gurl.h"
 
 namespace syncer {
 
@@ -109,13 +111,13 @@ ClientTagHash ProcessorEntityMetadata::GetClientTagHash() const {
 }
 
 void ProcessorEntityMetadata::IncrementSequenceNumber() {
-  CHECK(metadata_.has_sequence_number(), base::NotFatalUntil::M141);
+  CHECK(metadata_.has_sequence_number());
   if (!IsUnsynced()) {
     // Update the base specifics hash if this entity wasn't already out of sync.
     metadata_.set_base_specifics_hash(metadata_.specifics_hash());
   }
   metadata_.set_sequence_number(metadata_.sequence_number() + 1);
-  CHECK(IsUnsynced(), base::NotFatalUntil::M141);
+  CHECK(IsUnsynced());
 }
 
 bool ProcessorEntityMetadata::MatchesData(const EntityData& data) const {
@@ -152,12 +154,24 @@ bool ProcessorEntityMetadata::MatchesSpecificsHash(
   return HashSpecifics(specifics) == metadata_.specifics_hash();
 }
 
+bool ProcessorEntityMetadata::MatchesFaviconHash(
+    const std::string& favicon_png_bytes) const {
+  DCHECK(!metadata_.is_deleted());
+  return metadata_.bookmark_favicon_hash() ==
+         base::PersistentHash(favicon_png_bytes);
+}
+
 void ProcessorEntityMetadata::UpdateSpecificsHash(
     const sync_pb::EntitySpecifics& specifics) {
   if (specifics.ByteSizeLong() > 0) {
     metadata_.set_specifics_hash(HashSpecifics(specifics));
+    if (specifics.has_bookmark()) {
+      metadata_.set_bookmark_favicon_hash(
+          base::PersistentHash(specifics.bookmark().favicon()));
+    }
   } else {
     metadata_.clear_specifics_hash();
+    metadata_.clear_bookmark_favicon_hash();
   }
 }
 
@@ -193,8 +207,12 @@ void ProcessorEntityMetadata::RecordAcceptedRemoteUpdate(
     }
   }
   UpdateSpecificsHash(update.entity.specifics);
-  *metadata_.mutable_possibly_trimmed_base_specifics() =
-      std::move(trimmed_specifics);
+  if (trimmed_specifics.ByteSizeLong() > 0) {
+    *metadata_.mutable_possibly_trimmed_base_specifics() =
+        std::move(trimmed_specifics);
+  } else {
+    metadata_.clear_possibly_trimmed_base_specifics();
+  }
   if (unique_position) {
     *metadata_.mutable_unique_position() = std::move(unique_position.value());
   } else {
@@ -206,7 +224,9 @@ void ProcessorEntityMetadata::RecordForcedRemoteUpdate(
     const UpdateResponseData& update,
     sync_pb::EntitySpecifics trimmed_specifics,
     std::optional<sync_pb::UniquePosition> unique_position) {
+  CHECK(!HasPendingAttachmentUpload());
   metadata_.set_acked_sequence_number(metadata_.sequence_number());
+  metadata_.clear_attachment_metadata();
   RecordAcceptedRemoteUpdate(update, std::move(trimmed_specifics),
                              std::move(unique_position));
 }
@@ -216,36 +236,52 @@ void ProcessorEntityMetadata::RecordCommitResponse(
   metadata_.set_server_id(data.id);
   metadata_.set_acked_sequence_number(data.sequence_number);
   metadata_.set_server_version(data.response_version);
+  if (metadata_.has_attachment_metadata() &&
+      data.attachment_modification_time.has_value()) {
+    metadata_.mutable_attachment_metadata()
+        ->mutable_attachment()
+        ->set_modification_time_unix_epoch_millis(
+            TimeToProtoTime(*data.attachment_modification_time));
+  }
   if (!IsUnsynced()) {
     metadata_.clear_base_specifics_hash();
+    if (metadata_.has_attachment_metadata()) {
+      metadata_.mutable_attachment_metadata()
+          ->mutable_attachment()
+          ->clear_temporary_blob_id();
+    }
   } else {
     metadata_.set_base_specifics_hash(data.specifics_hash);
   }
-}
-
-void ProcessorEntityMetadata::UpdateMetadataForLocalUpdate(
-    const sync_pb::EntitySpecifics& specifics,
-    base::Time modification_time) {
-  IncrementSequenceNumber();
-  UpdateSpecificsHash(specifics);
-  metadata_.set_modification_time(TimeToProtoTime(modification_time));
-  metadata_.set_is_deleted(false);
 }
 
 void ProcessorEntityMetadata::RecordLocalUpdate(
     const EntityData& data,
     sync_pb::EntitySpecifics trimmed_specifics,
     std::optional<sync_pb::UniquePosition> unique_position) {
-  base::Time modification_time = !data.modification_time.is_null()
-                                     ? data.modification_time
-                                     : base::Time::Now();
+  const base::Time modification_time = !data.modification_time.is_null()
+                                           ? data.modification_time
+                                           : base::Time::Now();
 
-  UpdateMetadataForLocalUpdate(data.specifics, modification_time);
+  IncrementSequenceNumber();
+  UpdateSpecificsHash(data.specifics);
+  metadata_.set_modification_time(TimeToProtoTime(modification_time));
+  metadata_.set_is_deleted(false);
+  if (unique_position.has_value()) {
+    *metadata_.mutable_unique_position() = std::move(unique_position).value();
+  } else {
+    metadata_.clear_unique_position();
+  }
 
-  SetPossiblyTrimmedBaseSpecifics(std::move(trimmed_specifics));
+  if (trimmed_specifics.ByteSizeLong() > 0) {
+    *metadata_.mutable_possibly_trimmed_base_specifics() =
+        std::move(trimmed_specifics);
+  } else {
+    metadata_.clear_possibly_trimmed_base_specifics();
+  }
 
   if (!data.creation_time.is_null()) {
-    SetCreationTime(data.creation_time);
+    metadata_.set_creation_time(TimeToProtoTime(data.creation_time));
   }
 
   // Collaboration metadata is updated only on creation (i.e. for the first
@@ -268,12 +304,6 @@ void ProcessorEntityMetadata::RecordLocalUpdate(
     CHECK_EQ(metadata_.collaboration().collaboration_id(),
              data.collaboration_metadata->collaboration_id().value());
   }
-
-  if (unique_position) {
-    SetUniquePosition(unique_position.value());
-  } else {
-    ClearUniquePosition();
-  }
 }
 
 void ProcessorEntityMetadata::RecordLocalDeletion(
@@ -282,8 +312,11 @@ void ProcessorEntityMetadata::RecordLocalDeletion(
   metadata_.set_modification_time(TimeToProtoTime(base::Time::Now()));
   metadata_.set_is_deleted(true);
   metadata_.clear_specifics_hash();
+  metadata_.clear_bookmark_favicon_hash();
   metadata_.clear_possibly_trimmed_base_specifics();
   metadata_.clear_unique_position();
+  CHECK(!HasPendingAttachmentUpload());
+  metadata_.clear_attachment_metadata();
 
   if (origin.is_specified()) {
     *metadata_.mutable_deletion_origin() =
@@ -294,22 +327,54 @@ void ProcessorEntityMetadata::RecordLocalDeletion(
       std::string(version_info::GetVersionNumber()));
 }
 
-void ProcessorEntityMetadata::SetPossiblyTrimmedBaseSpecifics(
-    sync_pb::EntitySpecifics specifics) {
-  *metadata_.mutable_possibly_trimmed_base_specifics() = std::move(specifics);
+bool ProcessorEntityMetadata::HasPendingAttachmentUpload() const {
+  return metadata_.attachment_metadata().has_pending_upload();
 }
 
-void ProcessorEntityMetadata::SetCreationTime(base::Time time) {
-  metadata_.set_creation_time(TimeToProtoTime(time));
+void ProcessorEntityMetadata::RecordAttachmentUploadQueued(
+    const base::FilePath& file_path) {
+  CHECK(!IsDeleted());
+  CHECK(IsUnsynced());
+  CHECK(!file_path.empty());
+  sync_pb::EntityMetadata::AttachmentMetadata* attachment_metadata =
+      metadata_.mutable_attachment_metadata();
+  attachment_metadata->clear_attachment();
+  sync_pb::EntityMetadata::AttachmentMetadata::PendingUpload* pending_upload =
+      attachment_metadata->mutable_pending_upload();
+  pending_upload->clear_upload_url();
+  pending_upload->set_file_path(file_path.AsUTF8Unsafe());
 }
 
-void ProcessorEntityMetadata::SetUniquePosition(
-    const sync_pb::UniquePosition& unique_position) {
-  *metadata_.mutable_unique_position() = unique_position;
+void ProcessorEntityMetadata::RecordAttachmentUploadStarted(
+    const GURL& upload_url) {
+  CHECK(!IsDeleted());
+  CHECK(HasPendingAttachmentUpload());
+  CHECK(upload_url.is_valid());
+  metadata_.mutable_attachment_metadata()
+      ->mutable_pending_upload()
+      ->set_upload_url(upload_url.spec());
 }
 
-void ProcessorEntityMetadata::ClearUniquePosition() {
-  metadata_.clear_unique_position();
+void ProcessorEntityMetadata::RecordAttachmentUploadCompleted(
+    const std::string& temporary_blob_id) {
+  CHECK(!IsDeleted());
+  CHECK(HasPendingAttachmentUpload());
+  CHECK(!temporary_blob_id.empty());
+  sync_pb::EntityMetadata::AttachmentMetadata* attachment_metadata =
+      metadata_.mutable_attachment_metadata();
+  attachment_metadata->clear_pending_upload();
+  attachment_metadata->mutable_attachment()->set_temporary_blob_id(
+      temporary_blob_id);
+}
+
+void ProcessorEntityMetadata::RecordAttachmentUploadCancelled() {
+  if (!HasPendingAttachmentUpload()) {
+    return;
+  }
+  metadata_.mutable_attachment_metadata()->clear_pending_upload();
+  if (!metadata_.attachment_metadata().has_attachment()) {
+    metadata_.clear_attachment_metadata();
+  }
 }
 
 }  // namespace syncer

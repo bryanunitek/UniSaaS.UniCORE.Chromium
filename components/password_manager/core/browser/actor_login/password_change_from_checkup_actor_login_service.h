@@ -7,8 +7,10 @@
 
 #include <string>
 
+#include "base/memory/scoped_refptr.h"
+#include "components/password_manager/core/browser/actor_login/actor_login_quality_logger_interface.h"
 #include "components/password_manager/core/browser/actor_login/actor_login_service.h"
-#include "url/gurl.h"
+#include "components/password_manager/core/browser/password_store/stored_credential.h"
 #include "url/origin.h"
 
 namespace actor_login {
@@ -21,9 +23,8 @@ struct FormFinderResult;
 // change flow.
 class PasswordChangeFromCheckupActorLoginService : public ActorLoginService {
  public:
-  PasswordChangeFromCheckupActorLoginService(std::u16string username,
-                                             std::u16string password,
-                                             GURL url);
+  explicit PasswordChangeFromCheckupActorLoginService(
+      password_manager::StoredCredential credential);
   ~PasswordChangeFromCheckupActorLoginService() override;
 
   PasswordChangeFromCheckupActorLoginService(
@@ -35,14 +36,14 @@ class PasswordChangeFromCheckupActorLoginService : public ActorLoginService {
   void GetCredentials(
       ActorLoginDelegateClient* client,
       bool has_sign_in_with_google_button,
-      base::WeakPtr<ActorLoginQualityLoggerInterface> mqls_logger,
+      scoped_refptr<ActorLoginQualityLoggerInterface> mqls_logger,
       CredentialsOrErrorReply callback) override;
 
   void AttemptLogin(
       ActorLoginDelegateClient* client,
       const Credential& credential,
       bool should_store_permission,
-      base::WeakPtr<ActorLoginQualityLoggerInterface> mqls_logger,
+      scoped_refptr<ActorLoginQualityLoggerInterface> mqls_logger,
       base::TimeTicks attempt_login_tool_start_time,
       FrameFillingStartedCallback frame_filling_started_cb,
       LoginStatusResultOrErrorReply done_callback,
@@ -54,9 +55,7 @@ class PasswordChangeFromCheckupActorLoginService : public ActorLoginService {
       CredentialsOrErrorReply callback,
       FormFinderResult form_finder_result);
 
-  std::u16string username_;
-  std::u16string password_;
-  GURL url_;
+  password_manager::StoredCredential credential_;
   std::unique_ptr<ActorLoginFormFinder> login_form_finder_;
   std::unique_ptr<AutomatedPasswordChangeCredentialFiller> credential_filler_;
   base::WeakPtrFactory<PasswordChangeFromCheckupActorLoginService>

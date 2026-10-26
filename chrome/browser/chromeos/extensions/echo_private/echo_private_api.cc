@@ -9,9 +9,10 @@
 #include <utility>
 
 #include "ash/constants/webui_url_constants.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
-#include "base/i18n/time_formatting.h"
 #include "base/location.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -20,19 +21,18 @@
 #include "chrome/browser/chromeos/extensions/echo_private/echo_private_api_util.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/window_controller.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/navigator/browser_navigator.h"
-#include "chrome/browser/ui/navigator/browser_navigator_params.h"
-#include "chrome/common/extensions/api/echo_private.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
 #include "chromeos/ash/components/report/utils/time_utils.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/cros_settings_provider.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
+#include "chromeos/ash/experiences/extensions/common/api/echo_private.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/user_manager/user.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_file_task_runner.h"
 #include "extensions/browser/view_type_utils.h"
@@ -40,6 +40,7 @@
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "third_party/icu/source/i18n/unicode/timezone.h"
 #include "ui/aura/window.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace {
 std::string GetRegistrationCode(std::string_view type) {
@@ -141,8 +142,10 @@ ExtensionFunction::ResponseAction EchoPrivateGetOobeTimestampFunction::Run() {
     // Returns an empty string on error.
     return RespondNow(WithArguments(std::string()));
   }
-  std::string result = base::UnlocalizedTimeFormatWithPattern(
-      timestamp.value(), "y-M-d", icu::TimeZone::getGMT());
+  base::Time::Exploded exploded;
+  timestamp.value().UTCExplode(&exploded);
+  std::string result = base::StringPrintf(
+      "%d-%d-%d", exploded.year, exploded.month, exploded.day_of_month);
   return RespondNow(WithArguments(std::move(result)));
 }
 
@@ -173,10 +176,10 @@ ExtensionFunction::ResponseAction EchoPrivateGetUserConsentFunction::Run() {
     }
   } else {
     extensions::WindowController* window = nullptr;
-    int tab_index = -1;
     if (!extensions::ExtensionTabUtil::GetTabById(
             *params->consent_requester.tab_id, browser_context(),
-            false /*incognito_enabled*/, &window, &web_contents, &tab_index) ||
+            /*include_incognito=*/false, &window, &web_contents,
+            /*tab_index=*/nullptr) ||
         !window) {
       return RespondNow(Error("Tab not found."));
     }
@@ -184,12 +187,12 @@ ExtensionFunction::ResponseAction EchoPrivateGetUserConsentFunction::Run() {
     // Bail out if the requested tab is not active - the dialog is modal to the
     // window, so showing it for a request from an inactive tab could be
     // misleading/confusing to the user.
-    if (tab_index != window->GetBrowser()->tab_strip_model()->active_index()) {
+    if (web_contents != window->GetActiveTab()) {
       return RespondNow(Error("Consent requested from an inactive tab."));
     }
   }
 
-  DCHECK(web_contents);
+  CHECK(web_contents, base::NotFatalUntil::M161);
 
   ash::CrosSettingsProvider::TrustedStatus status =
       ash::CrosSettings::Get()->PrepareTrustedValues(base::BindOnce(
@@ -248,13 +251,15 @@ void EchoPrivateGetUserConsentFunction::OnCancel() {
 }
 
 void EchoPrivateGetUserConsentFunction::OnMoreInfoLinkClicked() {
-  NavigateParams params(Profile::FromBrowserContext(browser_context()),
-                        GURL(ash::kChromeUIEchoLearnMoreURL),
-                        ui::PAGE_TRANSITION_LINK);
+  const AccountId& account_id =
+      CHECK_DEREF(ash::BrowserContextHelper::Get()->GetUserByBrowserContext(
+                      browser_context()))
+          .GetAccountId();
   // Open the link in a new window. The echo dialog is modal, so the current
   // window is useless until the dialog is closed.
-  params.disposition = WindowOpenDisposition::NEW_WINDOW;
-  Navigate(&params);
+  ash::BrowserController::GetInstance()->OpenUrl(
+      account_id, GURL(ash::kChromeUIEchoLearnMoreURL),
+      {.disposition = WindowOpenDisposition::kNewWindow});
 }
 
 void EchoPrivateGetUserConsentFunction::Finalize(bool consent) {

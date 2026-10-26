@@ -4,7 +4,8 @@
 
 #include "chrome/browser/component_updater/captcha_provider_component_installer.h"
 
-#include <cstdint>
+#include <stdint.h>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -117,8 +118,7 @@ base::FilePath CaptchaProviderComponentInstallerPolicy::GetRelativeInstallDir()
 
 void CaptchaProviderComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(std::begin(kCaptchaProviderPublicKeySha256),
-               std::end(kCaptchaProviderPublicKeySha256));
+  hash->assign_range(kCaptchaProviderPublicKeySha256);
 }
 
 std::string CaptchaProviderComponentInstallerPolicy::GetName() const {

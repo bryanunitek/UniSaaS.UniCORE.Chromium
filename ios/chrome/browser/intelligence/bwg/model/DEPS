@@ -1,8 +1,11 @@
 include_rules = [
   # keep-sorted start
+  "+components/actor/core/task_source_info.h",
   "+components/actor/public/mojom",
   "+components/feature_engagement/public",
   "+ios/chrome/browser/app_bar/ui",
+  "+ios/chrome/browser/default_browser/model/features.h",
+  "+ios/chrome/browser/default_browser/model/utils.h",
   "+ios/chrome/browser/feature_engagement/model/tracker_factory.h",
   "+ios/chrome/browser/fullscreen/model",
   "+ios/chrome/browser/fullscreen/public",
@@ -22,6 +25,8 @@ include_rules = [
   "+ios/chrome/browser/signin/model/authentication_service.h",
   "+ios/chrome/browser/signin/model/authentication_service_factory.h",
   "+ios/chrome/browser/signin/model/identity_manager_factory.h",
+  "+ios/chrome/browser/snackbar/ui_bundled/ui",
+  "+ios/chrome/browser/snapshots/model/snapshot_browser_agent.h",
   "+ios/chrome/browser/snapshots/model/snapshot_tab_helper.h",
   "+ios/chrome/browser/tab_picker/public",
   "+ios/chrome/browser/tabs/model/tabs_dependency_installer.h",
@@ -34,9 +39,5 @@ include_rules = [
 specific_include_rules = {
   "^gemini_browser_agent_unittest\\.mm$" : [
     "+ios/web/find_in_page/find_in_page_java_script_feature.h",
-    "+ios/web/js_messaging/java_script_feature_manager.h",
   ],
-  "^gemini_service_impl\\.mm$" : [
-    "+ios/web/util/content_type_util.h",
-  ]
 }

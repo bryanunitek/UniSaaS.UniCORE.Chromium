@@ -62,13 +62,10 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 constexpr char kAccept[] = "application/private-token-response";
 constexpr char kContentType[] = "application/private-token-request";
 constexpr base::TimeDelta kFetchTimeout = base::Minutes(1);
-// Response max is set based on ATHM token size and max batch size of
-// 20, Ns=32 and Ne=33.
-constexpr size_t kResponseMaxBodySize = 2 * 1024;
 
-network::ResourceRequest CreateFetchRequest(GURL issue_url) {
+network::ResourceRequest CreateFetchRequest(GURL issuer_request_url) {
   network::ResourceRequest resource_request;
-  resource_request.url = std::move(issue_url);
+  resource_request.url = std::move(issuer_request_url);
   resource_request.method = net::HttpRequestHeaders::kPostMethod;
   resource_request.credentials_mode = network::mojom::CredentialsMode::kInclude;
   resource_request.headers.SetHeader(net::HttpRequestHeaders::kAccept, kAccept);
@@ -80,27 +77,31 @@ network::ResourceRequest CreateFetchRequest(GURL issue_url) {
 // static
 std::unique_ptr<PrivateVerificationTokensFetcher>
 PrivateVerificationTokensFetcher::Create(
-    GURL issue_url,
+    GURL issuer_request_url,
     std::unique_ptr<network::PendingSharedURLLoaderFactory>
-        pending_url_loader_factory) {
+        pending_url_loader_factory,
+    size_t max_response_body_size) {
   if (!pending_url_loader_factory) {
     return nullptr;
   }
-  if (!issue_url.is_valid()) {
+  if (!issuer_request_url.is_valid()) {
     return nullptr;
   }
   return base::WrapUnique<PrivateVerificationTokensFetcher>(
       new PrivateVerificationTokensFetcher(
-          std::move(issue_url), std::move(pending_url_loader_factory)));
+          std::move(issuer_request_url), std::move(pending_url_loader_factory),
+          max_response_body_size));
 }
 
 PrivateVerificationTokensFetcher::PrivateVerificationTokensFetcher(
-    GURL issue_url,
+    GURL issuer_request_url,
     std::unique_ptr<network::PendingSharedURLLoaderFactory>
-        pending_url_loader_factory)
-    : request_(CreateFetchRequest(std::move(issue_url))),
+        pending_url_loader_factory,
+    size_t max_response_body_size)
+    : request_(CreateFetchRequest(std::move(issuer_request_url))),
       url_loader_factory_(network::SharedURLLoaderFactory::Create(
-          std::move(pending_url_loader_factory))) {
+          std::move(pending_url_loader_factory))),
+      max_response_body_size_(max_response_body_size) {
   CHECK(url_loader_factory_);
   CHECK(request_.url.is_valid());
 }
@@ -135,7 +136,7 @@ void PrivateVerificationTokensFetcher::TryGetTokens(
                      // error code and prevent it from going out of scope until
                      // the download is complete.
                      std::move(url_loader), std::move(callback)),
-      kResponseMaxBodySize);
+      max_response_body_size_);
 }
 
 void PrivateVerificationTokensFetcher::OnGetTokensCompleted(

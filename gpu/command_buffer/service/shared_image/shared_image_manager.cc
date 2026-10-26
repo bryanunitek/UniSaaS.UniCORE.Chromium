@@ -36,7 +36,7 @@
 #endif
 
 #if BUILDFLAG(IS_OZONE)
-#include "components/viz/common/gpu/vulkan_context_provider.h"
+#include "gpu/command_buffer/service/vulkan_context_provider.h"
 #include "gpu/config/gpu_finch_features.h"
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/ozone/public/surface_factory_ozone.h"
@@ -95,7 +95,7 @@ class SCOPED_LOCKABLE SharedImageManager::AutoLock {
 SharedImageManager::SharedImageManager(
     bool thread_safe,
     bool display_context_on_another_thread,
-    viz::VulkanContextProvider* vulkan_context_provider,
+    VulkanContextProvider* vulkan_context_provider,
     scoped_refptr<base::SingleThreadTaskRunner> io_runner)
     : display_context_on_another_thread_(display_context_on_another_thread)
 #if BUILDFLAG(IS_WIN)
@@ -153,7 +153,13 @@ SharedImageManager::Register(std::unique_ptr<SharedImageBacking> backing,
     return nullptr;
   }
 
-  UMA_HISTOGRAM_ENUMERATION("GPU.SharedImage.BackingType", backing->GetType());
+  // Log UMA only for standalone backings created outside SI Factory.
+  // CompoundImageBacking logs UMA for its own constituent elements when
+  // created.
+  if (backing->GetType() != SharedImageBackingType::kCompound) {
+    UMA_HISTOGRAM_ENUMERATION("GPU.SharedImage.BackingType",
+                              backing->GetType());
+  }
   UMA_HISTOGRAM_ENUMERATION("GPU.SharedImage.SharedImageFormat",
                             viz::GetSharedImageFormatUMA(backing->format()));
 
@@ -402,27 +408,6 @@ std::unique_ptr<MemoryImageRepresentation> SharedImageManager::ProduceMemory(
   return backing->ProduceMemory(this, tracker);
 }
 
-std::unique_ptr<RasterImageRepresentation> SharedImageManager::ProduceRaster(
-    const Mailbox& mailbox,
-    MemoryTypeTracker* tracker) {
-  CALLED_ON_VALID_THREAD();
-
-  AutoLock autolock(this);
-  auto* backing = GetBacking(mailbox);
-  if (!backing) {
-    LOG(ERROR) << "SharedImageManager::ProduceRaster: Trying to Produce a "
-                  "Raster representation from a non-existent mailbox.";
-    return nullptr;
-  }
-
-  // TODO(b/349290188): Add back this enforcement when we plan on shipping
-  // RawDraw.
-  // EnforceSharedImageUsage(backing, {SHARED_IMAGE_USAGE_RAW_DRAW});
-  // This is expected to fail based on the SharedImageBacking type, so don't log
-  // error here. Caller is expected to handle nullptr.
-  return backing->ProduceRaster(this, tracker);
-}
-
 std::unique_ptr<VideoImageRepresentation> SharedImageManager::ProduceVideo(
     VideoDevice device,
     const Mailbox& mailbox,
@@ -554,9 +539,8 @@ void SharedImageManager::OnRepresentationDestroyed(
   }
 }
 
-bool SharedImageManager::UpdateSharedImage(
-    const Mailbox& mailbox,
-    std::unique_ptr<gfx::GpuFence> in_fence) {
+bool SharedImageManager::UpdateSharedImage(const Mailbox& mailbox,
+                                           gfx::GpuFenceHandle in_fence) {
   AutoLock autolock(this);
   auto* backing = GetBacking(mailbox);
   if (!backing) {

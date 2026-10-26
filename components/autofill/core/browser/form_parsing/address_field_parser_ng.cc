@@ -23,7 +23,7 @@
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component_store.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/form_parsing/autofill_parsing_utils.h"
+#include "components/autofill/core/browser/form_parsing/autofill_parsing_util.h"
 #include "components/autofill/core/browser/form_parsing/autofill_scanner.h"
 #include "components/autofill/core/browser/form_parsing/field_candidates.h"
 #include "components/autofill/core/browser/form_parsing/form_field_parser.h"
@@ -700,6 +700,8 @@ std::optional<double> AddressFieldParserNG::FindScoreOfBestMatchingRule(
     case FLIGHT_RESERVATION_FLIGHT_NUMBER:
     case FLIGHT_RESERVATION_TICKET_NUMBER:
     case FLIGHT_RESERVATION_CONFIRMATION_CODE:
+    case FLIGHT_RESERVATION_ARRIVAL_AIRPORT:
+    case FLIGHT_RESERVATION_DEPARTURE_AIRPORT:
     case FLIGHT_RESERVATION_DEPARTURE_DATE:
     case ORDER_ID:
     case ORDER_DATE:

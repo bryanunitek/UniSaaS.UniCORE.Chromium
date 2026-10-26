@@ -20,6 +20,10 @@
 #include "url/gurl.h"
 #include "url/origin.h"
 
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
+
 namespace download {
 
 // The parameters describing when to run a download.  This allows the caller to
@@ -107,6 +111,9 @@ struct COMPONENT_EXPORT(COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE)
  public:
   RequestParams();
   RequestParams(const RequestParams& other);
+  RequestParams& operator=(const RequestParams& other);
+  RequestParams(RequestParams&& other);
+  RequestParams& operator=(RequestParams&& other);
   ~RequestParams();
 
   GURL url;
@@ -126,6 +133,10 @@ struct COMPONENT_EXPORT(COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE)
   // The credentials mode of the request. Not supported on iOS.
   ::network::mojom::CredentialsMode credentials_mode;
 
+  // The fetch request mode of the request. Not supported on iOS.
+  ::network::mojom::RequestMode fetch_request_mode =
+      ::network::mojom::RequestMode::kNavigate;
+
   // The isolation info of the request, this won't be persisted to db and will
   // be invalidate during download resumption in new browser session. Not
   // supported on iOS.
@@ -143,6 +154,10 @@ struct COMPONENT_EXPORT(COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE)
   // See |request_initiator| in url_request.mojom for a more detailed
   // explanation.
   std::optional<url::Origin> initiator;
+
+  // The custom URLLoaderFactory to use for the request. If null, a default
+  // URLLoaderFactory will be used.
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory;
 };
 
 // The parameters that describe a download request made to the DownloadService.

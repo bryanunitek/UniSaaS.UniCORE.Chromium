@@ -767,10 +767,18 @@ void HttpStreamPool::AttemptManager::OnTcpBasedAttemptComplete(
         raw_attempt->ip_endpoint());
   }
 
+  TcpBasedAttemptSlot* slot = raw_attempt->slot();
+  const bool has_other_attempt =
+      (raw_attempt == slot->ipv4_attempt() ? slot->ipv6_attempt() != nullptr
+                                           : slot->ipv4_attempt() != nullptr);
+  const bool slot_extracted = (rv != OK && !has_other_attempt);
   std::unique_ptr<TcpBasedAttempt> tcp_based_attempt =
       ExtractTcpBasedAttempt(raw_attempt, rv);
 
   if (rv != OK) {
+    if (slot_extracted) {
+      pool()->UpdateExpandabilityAfterRelease();
+    }
     HandleTcpBasedAttemptFailure(std::move(tcp_based_attempt), rv);
     return;
   }
@@ -1257,7 +1265,9 @@ QuicChromiumClientSession* HttpStreamPool::AttemptManager::
     QuicChromiumClientSession* quic_session =
         quic_session_pool()->HasMatchingIpSessionForServiceEndpoint(
             quic_session_alias_key(), endpoint,
-            service_endpoint_request_->GetDnsAliasResults(), true);
+            service_endpoint_request_->GetDnsAliasResults(),
+            /*use_dns_aliases=*/true,
+            /*log_negative_result=*/true);
     if (quic_session) {
       return quic_session;
     }
@@ -1441,10 +1451,17 @@ void HttpStreamPool::AttemptManager::CancelTcpBasedAttemptSlot(
   if (reason.has_value()) {
     slot->SetCancelReason(*reason);
   }
+  pool()->UpdateExpandabilityAfterRelease();
 }
 
 bool HttpStreamPool::AttemptManager::IsTcpBasedAttemptReady() {
   CanAttemptResult can_attempt = CanAttemptConnection();
+  if (can_attempt == CanAttemptResult::kAttempt && ShouldRespectLimits()) {
+    pool()->UpdateExpandabilityBeforeAllocation();
+    if (pool()->ReachedMaxStreamLimit()) {
+      can_attempt = CanAttemptResult::kReachedPoolLimit;
+    }
+  }
   // TODO(crbug.com/383606724): Consider removing these trace and net log event
   // once we figure out better endpoint selection algorithm.
   TRACE_EVENT_INSTANT("net.stream", "AttemptManager::IsTcpBasedAttemptReady",
@@ -1489,9 +1506,18 @@ bool HttpStreamPool::AttemptManager::IsTcpBasedAttemptReady() {
       NotifyPreconnectsComplete(ERR_PRECONNECT_MAX_SOCKET_LIMIT);
       return false;
     case CanAttemptResult::kReachedPoolLimit:
-      // If we can't attempt connection due to the pool's limit, try to close an
-      // idle stream in the pool.
-      if (!pool()->CloseOneIdleStreamSocket()) {
+      while (pool()->TotalIdleStreamCount() > 0) {
+        if (!pool()->CloseOneIdleStreamSocket()) {
+          break;
+        }
+        // Check if a new allocation could succeed after releasing an idle
+        // socket. If not, release more idle sockets and try again.
+        pool()->UpdateExpandabilityBeforeAllocation();
+        if (!pool()->ReachedMaxStreamLimit()) {
+          break;
+        }
+      }
+      if (pool()->ReachedMaxStreamLimit()) {
         // Try to close idle SPDY sessions. SPDY sessions never release the
         // underlying sockets immediately on close, so return false anyway.
         spdy_session_pool()->CloseCurrentIdleSessions("Closing idle sessions");
@@ -2182,14 +2208,8 @@ bool HttpStreamPool::AttemptManager::CanUseExistingQuicSession() const {
 bool HttpStreamPool::AttemptManager::IsEchEnabled() const {
   SSLClientContext* ssl_client_context =
       pool()->stream_attempt_params()->ssl_client_context;
-  if (!ssl_client_context->config().ech_enabled) {
-    return false;
-  }
-  if (!ssl_client_context->ssl_config_service()) {
-    return true;
-  }
-  return ssl_client_context->ssl_config_service()->GetEchMode(
-             stream_key().destination().host()) != EchMode::kDisabled;
+  return ssl_client_context &&
+         ssl_client_context->IsEchEnabled(stream_key().destination().host());
 }
 
 void HttpStreamPool::AttemptManager::MaybeMarkQuicBroken() {

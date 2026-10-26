@@ -120,7 +120,6 @@ error::Error RasterDecoderImpl::HandleBeginRasterCHROMIUMImmediate(
   gpu::raster::MsaaMode msaa_mode =
       static_cast<gpu::raster::MsaaMode>(c.msaa_mode);
   GLboolean can_use_lcd_text = static_cast<GLboolean>(c.can_use_lcd_text);
-  GLboolean visible = static_cast<GLboolean>(c.visible);
   GLfloat hdr_headroom = static_cast<GLfloat>(c.hdr_headroom);
   uint32_t mailbox_size;
   if (!gles2::GLES2Util::ComputeDataSize<GLbyte, 16>(1, &mailbox_size)) {
@@ -136,7 +135,23 @@ error::Error RasterDecoderImpl::HandleBeginRasterCHROMIUMImmediate(
     return error::kOutOfBounds;
   }
   DoBeginRasterCHROMIUM(r, g, b, a, needs_clear, msaa_sample_count, msaa_mode,
-                        can_use_lcd_text, visible, hdr_headroom, mailbox);
+                        can_use_lcd_text, hdr_headroom, mailbox);
+  return error::kNoError;
+}
+
+error::Error RasterDecoderImpl::HandleRasterCHROMIUM(
+    uint32_t immediate_data_size,
+    const volatile void* cmd_data) {
+  const volatile raster::cmds::RasterCHROMIUM& c =
+      *static_cast<const volatile raster::cmds::RasterCHROMIUM*>(cmd_data);
+  GLuint raster_shm_id = static_cast<GLuint>(c.raster_shm_id);
+  GLuint raster_shm_offset = static_cast<GLuint>(c.raster_shm_offset);
+  GLuint raster_shm_size = static_cast<GLuint>(c.raster_shm_size);
+  GLuint font_shm_id = static_cast<GLuint>(c.font_shm_id);
+  GLuint font_shm_offset = static_cast<GLuint>(c.font_shm_offset);
+  GLuint font_shm_size = static_cast<GLuint>(c.font_shm_size);
+  DoRasterCHROMIUM(raster_shm_id, raster_shm_offset, raster_shm_size,
+                   font_shm_id, font_shm_offset, font_shm_size);
   return error::kNoError;
 }
 
@@ -209,12 +224,12 @@ error::Error RasterDecoderImpl::HandleDeletePaintCachePathsINTERNALImmediate(
           cmd_data);
   GLsizei n = static_cast<GLsizei>(c.n);
   uint32_t ids_size;
-  if (!base::CheckMul(n, sizeof(GLuint)).AssignIfValid(&ids_size)) {
+  if (!base::CheckMul(n, sizeof(GLuint64)).AssignIfValid(&ids_size)) {
     return error::kOutOfBounds;
   }
-  volatile const GLuint* ids =
-      gles2::GetImmediateDataAs<volatile const GLuint*>(c, ids_size,
-                                                        immediate_data_size);
+  volatile const GLuint64* ids =
+      gles2::GetImmediateDataAs<volatile const GLuint64*>(c, ids_size,
+                                                          immediate_data_size);
   if (ids == nullptr) {
     return error::kOutOfBounds;
   }
@@ -230,10 +245,10 @@ error::Error RasterDecoderImpl::HandleDeletePaintCachePathsINTERNAL(
           cmd_data);
   GLsizei n = static_cast<GLsizei>(c.n);
   uint32_t ids_size;
-  if (!base::CheckMul(n, sizeof(GLuint)).AssignIfValid(&ids_size)) {
+  if (!base::CheckMul(n, sizeof(GLuint64)).AssignIfValid(&ids_size)) {
     return error::kOutOfBounds;
   }
-  const GLuint* ids = GetSharedMemoryAs<const GLuint*>(
+  const GLuint64* ids = GetSharedMemoryAs<const GLuint64*>(
       c.ids_shm_id, c.ids_shm_offset, ids_size);
   if (ids == nullptr) {
     return error::kOutOfBounds;
@@ -250,12 +265,12 @@ error::Error RasterDecoderImpl::HandleDeletePaintCacheEffectsINTERNALImmediate(
                        DeletePaintCacheEffectsINTERNALImmediate*>(cmd_data);
   GLsizei n = static_cast<GLsizei>(c.n);
   uint32_t ids_size;
-  if (!base::CheckMul(n, sizeof(GLuint)).AssignIfValid(&ids_size)) {
+  if (!base::CheckMul(n, sizeof(GLuint64)).AssignIfValid(&ids_size)) {
     return error::kOutOfBounds;
   }
-  volatile const GLuint* ids =
-      gles2::GetImmediateDataAs<volatile const GLuint*>(c, ids_size,
-                                                        immediate_data_size);
+  volatile const GLuint64* ids =
+      gles2::GetImmediateDataAs<volatile const GLuint64*>(c, ids_size,
+                                                          immediate_data_size);
   if (ids == nullptr) {
     return error::kOutOfBounds;
   }
@@ -272,10 +287,10 @@ error::Error RasterDecoderImpl::HandleDeletePaintCacheEffectsINTERNAL(
           cmd_data);
   GLsizei n = static_cast<GLsizei>(c.n);
   uint32_t ids_size;
-  if (!base::CheckMul(n, sizeof(GLuint)).AssignIfValid(&ids_size)) {
+  if (!base::CheckMul(n, sizeof(GLuint64)).AssignIfValid(&ids_size)) {
     return error::kOutOfBounds;
   }
-  const GLuint* ids = GetSharedMemoryAs<const GLuint*>(
+  const GLuint64* ids = GetSharedMemoryAs<const GLuint64*>(
       c.ids_shm_id, c.ids_shm_offset, ids_size);
   if (ids == nullptr) {
     return error::kOutOfBounds;

@@ -9,6 +9,7 @@
 #include "base/check_op.h"
 #include "base/containers/span_reader.h"
 #include "base/logging.h"
+#include "base/numerics/checked_math.h"
 #include "media/formats/mp4/box_definitions.h"
 #include "media/formats/mp4/hevc.h"
 #include "media/parsers/h265_nalu_parser.h"
@@ -55,7 +56,7 @@ bool H265ToAnnexBBitstreamConverter::ParseConfiguration(
     return false;
   }
 
-  nal_unit_length_field_width_ = hevc_config->lengthSizeMinusOne + 1;
+  nal_unit_length_field_width_ = hevc_config->length_size_minus_one + 1;
   CHECK_LE(nal_unit_length_field_width_, 4u);
 
   configuration_processed_ = true;
@@ -77,7 +78,7 @@ uint32_t H265ToAnnexBBitstreamConverter::GetConfigSize(
 uint32_t H265ToAnnexBBitstreamConverter::CalculateNeededOutputBufferSize(
     base::span<const uint8_t> input,
     const mp4::HEVCDecoderConfigurationRecord* hevc_config) const {
-  uint32_t output_size = 0;
+  base::CheckedNumeric<uint32_t> output_size = 0;
   bool first_nal_in_this_access_unit = first_nal_unit_in_access_unit_;
 
   if (input.empty()) {
@@ -114,6 +115,13 @@ uint32_t H265ToAnnexBBitstreamConverter::CalculateNeededOutputBufferSize(
       return 0;  // Error: Not enough data for correct conversion
     }
 
+    // HEVC NAL units strictly require at least a 2-byte header.
+    // Skip dummy NALUs inserted by buggy encoders.
+    if (nal_unit_length < 2) {
+      input_reader.Skip(nal_unit_length);
+      continue;
+    }
+
     // Six bits after forbidden_zero_bit of first NAL unit byte signify
     // nal_unit_type.
     const int nal_unit_type = (input_reader.remaining_span()[0] >> 1) & 0x3F;
@@ -129,7 +137,7 @@ uint32_t H265ToAnnexBBitstreamConverter::CalculateNeededOutputBufferSize(
     input_reader.Skip(nal_unit_length);
     // No need for trailing zero bits
   }
-  return output_size;
+  return output_size.ValueOrDefault(0);
 }
 
 bool H265ToAnnexBBitstreamConverter::ConvertHEVCDecoderConfigToByteStream(
@@ -179,6 +187,13 @@ bool H265ToAnnexBBitstreamConverter::ConvertNalUnitStreamToByteStream(
       break;  // Successful conversion, end of buffer
     } else if (nal_unit_length > input_reader.remaining()) {
       return false;  // Error: not enough data for correct conversion
+    }
+
+    // HEVC NAL units strictly require at least a 2-byte header.
+    // Skip dummy NALUs inserted by buggy encoders.
+    if (nal_unit_length < 2) {
+      input_reader.Skip(nal_unit_length);
+      continue;
     }
 
     // Six bits after forbidden_zero_bit of first NAL unit byte signify

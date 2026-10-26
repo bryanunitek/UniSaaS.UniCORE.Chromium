@@ -62,12 +62,6 @@ class SkiaProject : public Project {
   std::string_view GetAutoSpanificationHelperIncludePath() const override {
     return "include/core/SkSpan.h";
   }
-  std::string_view GetPreIncrementSpanName() const override {
-    return "SkPreIncrementSpan";
-  }
-  std::string_view GetPostIncrementSpanName() const override {
-    return "SkPostIncrementSpan";
-  }
   const std::vector<FuncMapping>& GetFuncMappingTable() const override {
     static const std::vector<FuncMapping> kFuncMappingTable = {};
     return kFuncMappingTable;
@@ -80,13 +74,8 @@ class SkiaProject : public Project {
         source_manager, raw_ptr_plugin::getRepresentativeLocation(Node),
         raw_ptr_plugin::FilenameLocationType::kSpellingLoc);
 
-    // Running in-place inside Chromium: absolute path contains
-    // "third_party/skia". We only want to spanify Skia sources, excluding its
-    // own internal third_party.
-    llvm::StringRef file(filename);
-    return (file.contains("third_party/") &&
-            !file.contains("third_party/skia/")) ||
-           file.contains("third_party/skia/third_party/");
+    return IsExcludedFromSubmodule(filename, "third_party/skia/",
+                                   "tools/clang/spanify/tests/skia/");
   }
   bool SupportsStaticExtent() const override { return false; }
 };

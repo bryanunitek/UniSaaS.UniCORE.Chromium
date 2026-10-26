@@ -5,18 +5,16 @@
 import 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 
 import type {CrIconButtonElement} from '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
-import {spinnerDebounceTimeout, ToolbarEvent, VoiceClientSideStatusCode, VoiceNotificationManager} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
-import type {LanguageMenuElement, SettingsOption, VoiceSelectionMenuElement} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import {loadTimeData} from '//resources/js/load_time_data.js';
+import {spinnerDebounceTimeout, stringToHtmlTestId, ToolbarEvent, VoiceClientSideStatusCode} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import type {LanguageMenuElement, SettingsOption, VoiceNotificationManager, VoiceSelectionMenuElement} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import {assertEquals, assertFalse, assertStringContains, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
 import {keyDownOn} from 'chrome-untrusted://webui-test/keyboard_mock_interactions.js';
 import {MockTimer} from 'chrome-untrusted://webui-test/mock_timer.js';
 import {hasStyle, microtasksFinished} from 'chrome-untrusted://webui-test/test_util.js';
 
-import {createSpeechSynthesisVoice, stubAnimationFrame} from './common.js';
-
-function stringToHtmlTestId(s: string): string {
-  return s.replace(/\s/g, '-').replace(/[()]/g, '');
-}
+import {createSpeechSynthesisVoice, setupTestEnvironment, stubAnimationFrame} from './common.js';
+import type {TestAudioBrowserProxy} from './test_audio_browser_proxy.js';
 
 function isPositionedOnPage(element: HTMLElement) {
   return !!element &&
@@ -27,6 +25,8 @@ function isPositionedOnPage(element: HTMLElement) {
 suite('VoiceSelectionMenu', () => {
   let voiceSelectionMenu: VoiceSelectionMenuElement;
   let dots: HTMLElement;
+  let audioBrowserProxy: TestAudioBrowserProxy;
+  let voiceNotificationManager: VoiceNotificationManager;
   let voice1 =
       createSpeechSynthesisVoice({name: 'Google test voice 1', lang: 'lang'});
   let voice2 =
@@ -61,8 +61,9 @@ suite('VoiceSelectionMenu', () => {
   }
 
   setup(async () => {
-    // Clearing the DOM should always be done first.
-    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    const result = setupTestEnvironment();
+    audioBrowserProxy = result.audioBrowserProxy;
+    voiceNotificationManager = result.notificationManager;
     voiceSelectionMenu = document.createElement('voice-selection-menu');
     document.body.appendChild(voiceSelectionMenu);
     await microtasksFinished();
@@ -395,11 +396,18 @@ suite('VoiceSelectionMenu', () => {
       // The play icon should flip to stop for the voice being previewed
       assertTrue(isPositionedOnPage(playIconOfPreviewVoice));
       assertEquals(
-          'read-anything-20:stop-circle', playIconOfPreviewVoice.ironIcon);
+          loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+              'read-anything-20:stop-circle' :
+              'read-anything-20:stop-circle-old',
+          playIconOfPreviewVoice.ironIcon);
       assertStringContains(playIconOfPreviewVoice.title.toLowerCase(), 'stop');
       // The play icon should remain unchanged for the other buttons
       assertTrue(isPositionedOnPage(playIconVoice0));
-      assertEquals('read-anything-20:play-circle', playIconVoice0.ironIcon);
+      assertEquals(
+          loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+              'read-anything-20:play-circle' :
+              'read-anything-20:play-circle-old',
+          playIconVoice0.ironIcon);
       assertStringContains(playIconVoice0.title.toLowerCase(), 'play');
     });
 
@@ -422,8 +430,15 @@ suite('VoiceSelectionMenu', () => {
       assertTrue(isPositionedOnPage(playIconOfPreviewVoice));
       assertTrue(isPositionedOnPage(playIconVoice0));
       assertEquals(
-          'read-anything-20:play-circle', playIconOfPreviewVoice.ironIcon);
-      assertEquals('read-anything-20:play-circle', playIconVoice0.ironIcon);
+          loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+              'read-anything-20:play-circle' :
+              'read-anything-20:play-circle-old',
+          playIconOfPreviewVoice.ironIcon);
+      assertEquals(
+          loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+              'read-anything-20:play-circle' :
+              'read-anything-20:play-circle-old',
+          playIconVoice0.ironIcon);
       assertStringContains(playIconOfPreviewVoice.title.toLowerCase(), 'play');
       assertStringContains(playIconVoice0.title.toLowerCase(), 'play');
     });
@@ -501,13 +516,13 @@ suite('VoiceSelectionMenu', () => {
   suite('with installing voices', () => {
     function setVoiceStatus(
         status: VoiceClientSideStatusCode, lang: string): Promise<void> {
-      VoiceNotificationManager.getInstance().onVoiceStatusChange(
+      voiceNotificationManager.onVoiceStatusChange(
           lang, status, voiceSelectionMenu.availableVoices, true);
       return microtasksFinished();
     }
 
     function setOfflineError(lang: string): Promise<void> {
-      VoiceNotificationManager.getInstance().onVoiceStatusChange(
+      voiceNotificationManager.onVoiceStatusChange(
           lang, VoiceClientSideStatusCode.ERROR_INSTALLING,
           voiceSelectionMenu.availableVoices, false);
       return microtasksFinished();
@@ -525,7 +540,16 @@ suite('VoiceSelectionMenu', () => {
     }
 
     setup(() => {
-      VoiceNotificationManager.getInstance().clear();
+      voiceNotificationManager.clear();
+      audioBrowserProxy.localeToDisplayName = {
+        'en': 'English (United States)',
+        'en-us': 'English (United States)',
+        'es': 'Español (España)',
+        'es-es': 'Español (España)',
+        'fr': 'Français',
+        'hi': 'हिन्दी',
+        'ja': '日本語',
+      };
       return microtasksFinished();
     });
 

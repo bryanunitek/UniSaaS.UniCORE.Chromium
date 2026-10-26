@@ -8,25 +8,43 @@
 #include <optional>
 #include <string>
 
+#include "base/containers/circular_deque.h"
 #include "base/containers/lru_cache.h"
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "chrome/browser/contextual_cueing/cue_target.h"
-#include "chrome/browser/contextual_cueing/nudge_cap_tracker.h"
+#include "components/contextual_cueing/nudge_cap_tracker.h"
+#include "components/contextual_cueing/ucb_scorer.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/contextual_cueing/internals/contextual_cueing_internals.mojom.h"
+#endif
 
 class PrefService;
 
 namespace contextual_cueing {
 
 enum class ContextualCueingDecision;
+enum class ContextualCueSurveyCategory;
+
+// Determines the HaTS survey category for a given cue target type and CUJ.
+ContextualCueSurveyCategory GetSurveyCategory(CueTargetType cue_type,
+                                              const std::string& cuj);
+
+// Returns the sanitized CUJ name to log in the HaTS survey metadata, converting
+// internal code names (e.g. "Indigo") to external identifiers.
+std::string GetSurveyCujName(const std::string& cuj);
 
 class ContextualCueingService : public KeyedService {
  public:
+  static constexpr size_t kMaxShownCues = 20;
+
   explicit ContextualCueingService(PrefService* pref_service);
   ~ContextualCueingService() override;
 
@@ -34,17 +52,32 @@ class ContextualCueingService : public KeyedService {
   // page loads requirement after a cueing UI is shown.
   void ReportPageLoad();
 
+  enum class AllowedIntrusivenessResult {
+    kLoud,
+    kQuiet,
+    kBlocked,
+  };
+
   // Called when the user clicks the cue action button.
-  void OnCueClicked(CueTargetType type);
+  void OnCueClicked(CueTargetType type, bool record_ucb_stats);
 
   // Called when the user dismisses the cue.
-  void OnCueDismissed(CueTargetType type);
+  void OnCueDismissed(CueTargetType type, bool record_ucb_stats);
 
   // Called when the cue is shown to the user.
-  void OnCueShown(const GURL& url, CueTargetType type);
+  void OnCueShown(const GURL& url,
+                  CueTargetType type,
+                  bool record_ucb_stats,
+                  CueIntrusiveness intrusiveness = CueIntrusiveness::kLoud);
 
-  // Returns true if a nudge can be shown.
-  ContextualCueingDecision CanShowCue(const GURL& url) const;
+  // Returns true if a nudge can be shown at the specified intrusiveness level.
+  ContextualCueingDecision CanShowCue(
+      const GURL& url,
+      CueIntrusiveness intrusiveness = CueIntrusiveness::kLoud) const;
+
+  // Returns the highest allowed intrusiveness tier and the associated decision.
+  std::pair<AllowedIntrusivenessResult, ContextualCueingDecision>
+  GetAllowedIntrusiveness(const GURL& url) const;
 
   // Returns the UCB score for the given target, incorporating per-target
   // interaction stats and UCB hyperparameters from Finch.
@@ -55,6 +88,18 @@ class ContextualCueingService : public KeyedService {
 
   // Returns the total number of impressions across all targets.
   int GetTotalImpressions() const;
+
+#if !BUILDFLAG(IS_ANDROID)
+  using CueLogPtr = contextual_cueing_internals::mojom::CueLogPtr;
+
+  // Logs metadata for a cue shown to the user for WebUI debugging.
+  void LogCueShownMetadata(CueLogPtr cue_log);
+
+  // Returns the list of shown cues for WebUI debugging.
+  const base::circular_deque<CueLogPtr>& shown_cues() const {
+    return shown_cues_;
+  }
+#endif
 
  private:
   // A counter for how many subsequent page load events will be prevented from
@@ -91,6 +136,10 @@ class ContextualCueingService : public KeyedService {
   const raw_ptr<PrefService> profile_prefs_;
 
   SEQUENCE_CHECKER(sequence_checker_);
+
+#if !BUILDFLAG(IS_ANDROID)
+  base::circular_deque<CueLogPtr> shown_cues_;
+#endif
 };
 
 }  // namespace contextual_cueing

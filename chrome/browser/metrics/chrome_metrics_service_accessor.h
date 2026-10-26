@@ -17,9 +17,12 @@
 #include "components/variations/synthetic_trials.h"
 
 class BrowserProcessImpl;
+class BrowserWindowInterface;
 class CampaignsManagerClientImpl;
 class ChromeMetricsServiceClient;
 class ChromePasswordManagerClient;
+class ChromeSyncClient;
+class DeviceInfoSyncClientImpl;
 class GlobalFeatures;
 class HttpsFirstModeService;
 class NavigationMetricsRecorder;
@@ -33,17 +36,9 @@ class CrashesDOMHandler;
 class ChromeCameraAppUIDelegate;
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-namespace browser_sync {
-class ChromeSyncClient;
-}
-
 namespace subscription_eligibility {
 class SubscriptionEligibilityMetricsProvider;
 }  // namespace subscription_eligibility
-
-namespace supervised_user {
-class MetricsServiceAccessorDelegateImpl;
-}
 
 class ChromeDomainReliabilityDelegate;
 namespace domain_reliability {
@@ -57,10 +52,11 @@ class GlicPrivateInvokeFunction;
 }  // namespace extensions
 
 namespace first_run {
-class FirstRunMasterPrefsVariationsSeedTest;
+class FirstRunInitialPrefsVariationsSeedTest;
 }
 
 namespace glic {
+class GlicEnabling;
 class GlicMetricsProvider;
 class GlicSyntheticTrialManager;
 }  // namespace glic
@@ -98,10 +94,6 @@ class FieldTrialRegisterImpl;
 namespace feed {
 class FeedServiceDelegateImpl;
 }  // namespace feed
-
-namespace browser_sync {
-class DeviceInfoSyncClientImpl;
-}  // namespace browser_sync
 
 namespace webauthn {
 namespace authenticator {
@@ -151,7 +143,7 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   friend class ChromeBrowserMainParts;
   friend class ChromeContentBrowserClient;
   friend class ChromeMetricsServicesManagerClient;
-  friend class browser_sync::ChromeSyncClient;
+  friend class ChromeSyncClient;
   friend class ChromeDomainReliabilityDelegate;
   friend class domain_reliability::TestDomainReliabilityServiceDelegate;
   friend class extensions::ChromeGuestViewManagerDelegate;
@@ -176,11 +168,11 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   friend class ChromePasswordManagerClient;
   friend class NavigationMetricsRecorder;
   friend class ChromeBrowserMainExtraPartsGpu;
-  friend class Browser;
+  friend class BrowserWindowInterface;
   friend class BrowserProcessImpl;
   friend class GlobalFeatures;
   friend class subscription_eligibility::SubscriptionEligibilityMetricsProvider;
-  friend class supervised_user::MetricsServiceAccessorDelegateImpl;
+  friend class glic::GlicEnabling;
   friend class glic::GlicMetricsProvider;
   friend class glic::GlicSyntheticTrialManager;
   friend class OptimizationGuideKeyedService;
@@ -188,7 +180,7 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   friend class WebUITabStripFieldTrial;
   friend class feed::FeedServiceDelegateImpl;
   friend class FirstRunService;
-  friend class browser_sync::DeviceInfoSyncClientImpl;
+  friend class DeviceInfoSyncClientImpl;
   friend class HttpsFirstModeService;
   friend class ash::DemoSession;
   friend class DataSharingUI;
@@ -205,7 +197,7 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Testing related friends.
-  friend class first_run::FirstRunMasterPrefsVariationsSeedTest;
+  friend class first_run::FirstRunInitialPrefsVariationsSeedTest;
   friend class ForceFieldTrialsBrowserTest;
   friend class MetricsReportingStateTest;
   friend class metrics::UkmConsentParamBrowserTest;

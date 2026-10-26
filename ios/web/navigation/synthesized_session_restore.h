@@ -7,13 +7,12 @@
 
 #import <Foundation/Foundation.h>
 
+#include <memory>
 #include <vector>
-
-#include "url/gurl.h"
 
 namespace web {
 
-class NavigationItem;
+class NavigationItemImpl;
 
 // Generates an NSData blob similar to what WKWebView uses in -interactionState.
 // This can be used to use native restore when the cached -interactionState is
@@ -24,7 +23,7 @@ class NavigationItem;
 // for the basis of this implementation.
 NSData* SynthesizedSessionRestore(
     int last_committed_item_index,
-    const std::vector<std::unique_ptr<NavigationItem>>& items,
+    const std::vector<std::unique_ptr<NavigationItemImpl>>& items,
     bool off_the_record);
 
 }  // namespace web

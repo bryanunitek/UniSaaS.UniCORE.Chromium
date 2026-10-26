@@ -2,14 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/test/scoped_feature_list.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/read_anything/read_anything_service.h"
+
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/interaction/interactive_browser_test.h"
 #include "content/public/test/browser_test.h"
-#include "ui/accessibility/accessibility_features.h"
+
+#if !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/accessibility/embedded_a11y_extension_loader.h"
+#include "chrome/common/extensions/extension_constants.h"
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 namespace {
 
@@ -18,7 +21,7 @@ namespace {
 using ReadAnythingServiceGuestTest = InProcessBrowserTest;
 IN_PROC_BROWSER_TEST_F(ReadAnythingServiceGuestTest,
                        ServiceIsCreatedForGuestProfile) {
-  Browser* guest_browser = CreateGuestBrowser();
+  BrowserWindowInterface* guest_browser = CreateGuestBrowser();
   Profile* guest_profile = guest_browser->GetProfile();
   EXPECT_TRUE(guest_profile->IsGuestSession());
 
@@ -31,6 +34,17 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingServiceGuestTest,
   ReadAnythingService* original_service =
       ReadAnythingService::Get(original_profile);
   EXPECT_EQ(nullptr, original_service);
+}
+
+using ReadAnythingServiceTest = InProcessBrowserTest;
+IN_PROC_BROWSER_TEST_F(ReadAnythingServiceTest,
+                       DoesNotInstallExtensionInTests) {
+  ReadAnythingService* service =
+      ReadAnythingService::Get(browser()->GetProfile());
+  ASSERT_NE(nullptr, service);
+  service->OnReadAnythingShown();
+  EXPECT_FALSE(EmbeddedA11yExtensionLoader::GetInstance()->IsExtensionInstalled(
+      extension_misc::kComponentUpdaterTTSEngineExtensionId));
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 

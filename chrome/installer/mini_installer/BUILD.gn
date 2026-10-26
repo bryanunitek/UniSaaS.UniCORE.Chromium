@@ -69,7 +69,10 @@ source_set("lib") {
     "write_to_disk.h",
   ]
 
-  deps = [ "//build:branding_buildflags" ]
+  deps = [
+    "//base:compiler_specific",
+    "//build:branding_buildflags",
+  ]
 
   # Initialization may insert unexpected memset calls.
   configs -= [ "//build/config/compiler:default_init_stack_vars" ]
@@ -229,7 +232,10 @@ action("mini_installer_archive") {
   }
 
   if (v8_use_external_startup_data) {
-    deps += [ "//v8" ]
+    deps += [
+      "//v8",
+      "//v8:run_mksnapshot_default",
+    ]
     if (use_v8_context_snapshot) {
       inputs += [ "$root_out_dir/$v8_context_snapshot_filename" ]
       deps += [ "//tools/v8_context_snapshot" ]
@@ -256,6 +262,7 @@ source_set("mini_installer_sources") {
   deps = [
     ":lib",
     "//base:clang_profiling_buildflags",
+    "//base:compiler_specific",
   ]
   configs -= [ "//build/config/compiler:default_init_stack_vars" ]
   configs += [ ":mini_installer_compiler_flags" ]
@@ -371,6 +378,9 @@ if (!(is_component_build && is_debug && target_cpu == "x86") &&
       "--path_7za",
       "../../third_party/lzma_sdk/bin/win64",
     ]
+    if (fast_archive_compression) {
+      args += [ "--fast_archive_compression" ]
+    }
     deps = [
       ":mini_installer",
       alternate_version_generator_target,

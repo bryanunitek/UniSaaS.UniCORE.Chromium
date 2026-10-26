@@ -33,7 +33,6 @@
 #include "ui/gl/buildflags.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_context.h"
-#include "ui/gl/gl_features.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_surface.h"
 #include "ui/gl/gl_surface_egl.h"
@@ -92,8 +91,7 @@ scoped_refptr<gl::GLSurface> InitializeGLSurface(gl::GLDisplay* display) {
 scoped_refptr<gl::GLContext> InitializeGLContext(gl::GLSurface* surface) {
   TRACE_EVENT("gpu,startup", "gpu_info_collector::InitializeGLContext");
   gl::GLContextAttribs attribs;
-  attribs.allow_es_version_fallback =
-      !features::ShouldFallbackToSWIfGLES3NotSupported();
+  attribs.allow_es_version_fallback = false;
   scoped_refptr<gl::GLContext> context(
       gl::init::CreateGLContext(nullptr, surface, attribs));
   if (!context.get()) {
@@ -260,6 +258,11 @@ void GetDawnTogglesForWebGPU(
   // Disallows usage of SPIR-V by default for security (we only ensure that WGSL
   // is secure).
   force_enabled_toggles->push_back("disallow_spirv");
+  // Allows usage of unsafe WebGPU features when `--enable-unsafe-webgpu` is
+  // specified.
+  if (enable_unsafe_webgpu) {
+    force_enabled_toggles->push_back("allow_unsafe_apis");
+  }
   // Enable timestamp quantization by default for privacy, unless
   // --enable-webgpu-developer-features is used.
   if (!enable_webgpu_developer_features) {
@@ -363,7 +366,6 @@ void ReportWebGPUAdapterMetrics(dawn::native::Instance* instance) {
 
 void ReportWebGPUSupportMetrics(dawn::native::Instance* instance) {
   static BASE_FEATURE(kCollectWebGPUSupportMetrics,
-                      "CollectWebGPUSupportMetrics",
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
                       base::FEATURE_DISABLED_BY_DEFAULT);
 #else
@@ -857,7 +859,6 @@ void CollectDawnInfo(const gpu::GpuPreferences& gpu_preferences,
       dawn_search_path = module_path.AsEndingWithSeparator().MaybeAsASCII();
     }
   }
-  const char* dawn_search_path_c_str = dawn_search_path.c_str();
 
   // Get the list of required toggles for WebGPU.
   std::vector<const char*> required_enabled_toggles_webgpu;
@@ -879,9 +880,11 @@ void CollectDawnInfo(const gpu::GpuPreferences& gpu_preferences,
   dawn_toggles.disabledToggles = required_disabled_toggles_webgpu.data();
 
   dawn::native::DawnInstanceDescriptor dawn_instance_desc = {};
-  dawn_instance_desc.additionalRuntimeSearchPathsCount =
-      dawn_search_path.empty() ? 0u : 1u;
-  dawn_instance_desc.additionalRuntimeSearchPaths = &dawn_search_path_c_str;
+  std::string_view dawn_search_path_view = dawn_search_path;
+  if (!dawn_search_path.empty()) {
+    dawn_instance_desc.additionalRuntimeSearchPaths =
+        base::span_from_ref(dawn_search_path_view);
+  }
 
   wgpu::InstanceDescriptor instance_desc = {};
   instance_desc.nextInChain = &dawn_instance_desc;
@@ -926,16 +929,38 @@ void CollectDawnInfo(const gpu::GpuPreferences& gpu_preferences,
   };
 #endif
 
-  for (wgpu::FeatureLevel featureLevel :
-       {wgpu::FeatureLevel::Compatibility, wgpu::FeatureLevel::Core}) {
-    adapter_options.featureLevel = featureLevel;
+  // Compatibility feature level is only relevant for backends that cannot
+  // support Core (such as OpenGLES, OpenGL, or D3D11). Probing Core backends
+  // (D3D12, Vulkan, Metal) for Compatibility mode is redundant because they
+  // always support Core and are discarded below. Only probe Compatibility mode
+  // for backends that may be Compatibility-only.
+  struct AdapterQuery {
+    wgpu::FeatureLevel feature_level;
+    wgpu::BackendType backend_type;
+  };
+  const AdapterQuery kQueries[] = {
+      {wgpu::FeatureLevel::Core, wgpu::BackendType::Undefined},
+#if BUILDFLAG(DAWN_ENABLE_BACKEND_OPENGLES)
+      {wgpu::FeatureLevel::Compatibility, wgpu::BackendType::OpenGLES},
+#endif
+#if BUILDFLAG(IS_WIN)
+      {wgpu::FeatureLevel::Compatibility, wgpu::BackendType::D3D11},
+#endif
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
+      {wgpu::FeatureLevel::Compatibility, wgpu::BackendType::OpenGL},
+#endif
+  };
+
+  for (const auto& query : kQueries) {
+    adapter_options.featureLevel = query.feature_level;
+    adapter_options.backendType = query.backend_type;
     std::vector<dawn::native::Adapter> adapters = instance->EnumerateAdapters(
         reinterpret_cast<const WGPURequestAdapterOptions*>(&adapter_options));
     for (dawn::native::Adapter& native_adapter : adapters) {
       wgpu::Adapter adapter(native_adapter.Get());
       wgpu::AdapterInfo info = {};
       adapter.GetInfo(&info);
-      if (featureLevel == wgpu::FeatureLevel::Compatibility &&
+      if (query.feature_level == wgpu::FeatureLevel::Compatibility &&
           adapter.HasFeature(wgpu::FeatureName::CoreFeaturesAndLimits)) {
         // If this adapter also supports Core feature level, then skip listing it as Compat
         // mode adapter.
@@ -948,7 +973,7 @@ void CollectDawnInfo(const gpu::GpuPreferences& gpu_preferences,
         std::string gpu_str = GetDawnAdapterTypeString(info.adapterType);
         gpu_str += " " + GetDawnBackendTypeString(info.backendType);
         gpu_str += " - " + std::string(info.device);
-        if (featureLevel == wgpu::FeatureLevel::Compatibility) {
+        if (query.feature_level == wgpu::FeatureLevel::Compatibility) {
           gpu_str += " (Compatibility Mode)";
         }
         dawn_info_list->push_back(gpu_str);

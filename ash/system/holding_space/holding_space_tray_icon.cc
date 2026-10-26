@@ -17,7 +17,6 @@
 #include "ash/system/holding_space/holding_space_tray_icon_preview.h"
 #include "ash/system/tray/tray_constants.h"
 #include "base/barrier_closure.h"
-#include "base/containers/adapters.h"
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
@@ -205,6 +204,8 @@ void HoldingSpaceTrayIcon::InitLayout() {
   // As holding space items are added to the model, child layers will be added
   // to `previews_container_` view's layer to represent them.
   previews_container_->SetPaintToLayer(ui::LAYER_NOT_DRAWN);
+  previews_container_->layer()->SetName(
+      "HoldingSpaceTrayIcon:PreviewsContainer");
 }
 
 void HoldingSpaceTrayIcon::UpdateDropTargetState(bool is_drop_target,

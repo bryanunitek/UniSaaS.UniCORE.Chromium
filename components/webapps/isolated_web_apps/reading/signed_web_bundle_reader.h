@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/auto_reset.h"
+#include "base/component_export.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 #include "base/sequence_checker.h"
@@ -20,8 +21,8 @@
 #include "components/web_package/signed_web_bundles/signed_web_bundle_integrity_block.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_signature_verifier.h"
 #include "components/webapps/isolated_web_apps/error/unusable_swbn_file_error.h"
+#include "components/webapps/isolated_web_apps/reading/mojo_web_bundle_parser.h"
 #include "net/base/net_errors.h"
-#include "services/data_decoder/public/cpp/safe_web_bundle_parser.h"
 #include "url/gurl.h"
 
 namespace network {
@@ -50,7 +51,7 @@ namespace web_app {
 // password, and fragment before looking up the corresponding response inside
 // the Signed Web Bundle. This is the same behavior as with unsigned Web
 // Bundles (see `content::WebBundleReader`).
-class SignedWebBundleReader {
+class COMPONENT_EXPORT(ISOLATED_WEB_APPS) SignedWebBundleReader {
  public:
   using Result = base::expected<std::unique_ptr<SignedWebBundleReader>,
                                 UnusableSwbnFileError>;
@@ -68,6 +69,16 @@ class SignedWebBundleReader {
   static base::AutoReset<web_package::SignedWebBundleSignatureVerifier*>
   SetSignatureVerifierForTesting(
       web_package::SignedWebBundleSignatureVerifier*);
+
+  using WebBundleParserFactoryBinder =
+      MojoWebBundleParser::WebBundleParserFactoryBinder;
+
+  // Makes `SignedWebBundleReader` and `UnsecureReader` bind their
+  // `web_package::mojom::WebBundleParserFactory` with `binder` instead of
+  // hosting a `web_package::WebBundleParserFactory` in this process.
+  static base::AutoReset<WebBundleParserFactoryBinder>
+  SetWebBundleParserFactoryBinderForTesting(
+      WebBundleParserFactoryBinder binder);
 
   SignedWebBundleReader() = default;
   virtual ~SignedWebBundleReader() = default;
@@ -139,7 +150,7 @@ class SignedWebBundleReader {
 // are the enterprise policy, a distributor store, etc.
 // Integrity check of the .swbn file without knowing the expected ID makes no
 // sense as an attacker can resign the tampered bundle with their private key.
-class UnsecureReader {
+class COMPONENT_EXPORT(ISOLATED_WEB_APPS) UnsecureReader {
  public:
   UnsecureReader(const UnsecureReader&) = delete;
   UnsecureReader& operator=(const UnsecureReader&) = delete;
@@ -161,12 +172,13 @@ class UnsecureReader {
   void OnFileOpened(base::File file);
 
   base::FilePath web_bundle_path_;
-  std::unique_ptr<data_decoder::SafeWebBundleParser> parser_;
+  std::unique_ptr<MojoWebBundleParser> parser_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };
 
-class UnsecureSignedWebBundleIdReader : public UnsecureReader {
+class COMPONENT_EXPORT(ISOLATED_WEB_APPS) UnsecureSignedWebBundleIdReader
+    : public UnsecureReader {
  public:
   using WebBundleIdCallback = base::OnceCallback<void(
       base::expected<web_package::SignedWebBundleId, UnusableSwbnFileError>)>;

@@ -12,8 +12,6 @@
 #include "base/time/time.h"
 #include "components/version_info/version_info.h"
 #include "crypto/hash.h"
-#include "crypto/secure_hash.h"
-#include "crypto/sha2.h"
 #include "net/base/hash_value.h"
 #include "net/cert/ct_serialization.h"
 #include "net/cert/sct_status_flags.h"
@@ -129,8 +127,7 @@ SCTAuditingCache::MaybeGenerateReportEntry(
   }
   RecordSCTAuditingReportDeduplicatedMetrics(false);
 
-  report->set_user_agent(
-      std::string(version_info::GetProductNameAndVersionForUserAgent()));
+  report->set_user_agent(version_info::GetProductNameAndVersionForUserAgent());
 
   // Add `cache_key` to the dedupe cache. The cache value is not used.
   dedupe_cache_.Put(cache_key, true);

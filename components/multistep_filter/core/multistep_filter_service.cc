@@ -8,6 +8,8 @@
 #include <optional>
 #include <utility>
 
+#include "base/check_deref.h"
+#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/string_util.h"
@@ -21,8 +23,14 @@
 #include "components/multistep_filter/core/prefs/multistep_filter_retention_prefs.h"
 #include "components/multistep_filter/core/storage/filter_store.h"
 #include "components/multistep_filter/core/suggestion/filter_suggestion_generator.h"
+#include "components/multistep_filter/core/switches.h"
 #include "components/multistep_filter/core/verification/filter_application_verifier.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
+#include "components/optimization_guide/core/feature_registry/feature_registration.h"
+#include "components/prefs/pref_service.h"
+#include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/tribool.h"
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
@@ -33,19 +41,6 @@ namespace multistep_filter {
 
 namespace {
 
-void LogUrlEligibilityCheck(MultistepFilterLogRouter* log_router,
-                            int64_t navigation_id,
-                            std::string_view host,
-                            bool signed_in,
-                            bool url_keyed_data_collection_enabled,
-                            bool history_sync_enabled) {
-  MULTISTEP_FILTER_LOG(log_router, navigation_id,
-                       LogEventType::kUrlEligibilityCheck, host)
-      << LogDetail{"signed_in", signed_in}
-      << LogDetail{"url_keyed_data_collection_enabled",
-                   url_keyed_data_collection_enabled}
-      << LogDetail{"history_sync_enabled", history_sync_enabled};
-}
 
 
 void LogAnnotationsExpired(MultistepFilterLogRouter* log_router,
@@ -70,18 +65,15 @@ void LogHistoryDeleted(MultistepFilterLogRouter* log_router,
       << LogDetail{"rows_deleted", static_cast<int>(rows_deleted.value_or(0))};
 }
 
-
-
-
 }  // namespace
 
 MultistepFilterService::MultistepFilterService(Params params)
     : annotation_index_client_(std::move(params.annotation_index_client)),
       filter_store_(std::move(params.filter_store)),
-      identity_manager_(params.identity_manager),
+      identity_manager_(CHECK_DEREF(params.identity_manager)),
       consent_helper_(std::move(params.consent_helper)),
       log_router_(params.log_router),
-      pref_service_(params.pref_service),
+      pref_service_(CHECK_DEREF(params.pref_service)),
       sync_service_(params.sync_service) {
   CHECK(annotation_index_client_);
   CHECK(filter_store_);
@@ -98,21 +90,17 @@ void MultistepFilterService::Shutdown() {
 }
 
 void MultistepFilterService::RecordSuggestionImpression() {
-  if (!pref_service_) {
-    return;
-  }
-  RecordImpression(pref_service_);
+  RecordImpression(&*pref_service_);
 }
 
 void MultistepFilterService::RecordUserInteractionWithSuggestion(
     SuggestionUserDecision decision) {
-  if (!pref_service_) {
-    return;
-  }
-  RecordUserInteraction(pref_service_, decision);
+  RecordUserInteraction(&*pref_service_, decision);
 }
 
-
+RetentionStateSnapshot MultistepFilterService::GetRetentionState() const {
+  return multistep_filter::GetRetentionState(&*pref_service_);
+}
 
 void MultistepFilterService::DeleteAnnotationsForTask(
     std::string_view task_type,
@@ -124,24 +112,60 @@ void MultistepFilterService::DeleteAnnotationsForTask(
                      std::string(host)));
 }
 
-bool MultistepFilterService::HasUserProvidedConsent(int64_t navigation_id,
-                                                    std::string_view host) {
-  const bool signed_in = IsUserSignedIn();
-  const bool url_keyed_data_collection_enabled =
-      IsUrlKeyedDataCollectionEnabled();
-  const bool history_sync_enabled = IsHistorySyncEnabled();
-  const bool consent_enabled =
-      signed_in && url_keyed_data_collection_enabled && history_sync_enabled;
+AccountState MultistepFilterService::GetAccountState() const {
+  AccountState state;
+  state.is_signed_in = IsUserSignedIn();
+  state.can_use_model_execution_features = CanUseModelExecutionFeatures();
+  return state;
+}
 
-  LogUrlEligibilityCheck(log_router_, navigation_id, host, signed_in,
-                         url_keyed_data_collection_enabled,
-                         history_sync_enabled);
-  return consent_enabled;
+ConsentState MultistepFilterService::GetConsentState() const {
+  ConsentState state;
+  state.is_msbb_enabled = IsUrlKeyedDataCollectionEnabled();
+  state.is_history_sync_enabled = IsHistorySyncEnabled();
+  return state;
+}
+
+SettingsState MultistepFilterService::GetSettingsState() const {
+  const optimization_guide::prefs::FeatureOptInState opt_in_state = static_cast<
+      optimization_guide::prefs::FeatureOptInState>(pref_service_->GetInteger(
+      optimization_guide::prefs::GetSettingEnabledPrefName(
+          optimization_guide::UserVisibleFeatureKey::kContextualCueing)));
+
+  const SuggestionsPolicyState policy_state =
+      (pref_service_->GetInteger(
+           optimization_guide::prefs::kChromeSuggestionsSettings) ==
+       std::to_underlying(SuggestionsPolicyState::kDisabled))
+          ? SuggestionsPolicyState::kDisabled
+          : SuggestionsPolicyState::kEnabled;
+
+  return SettingsState{
+      .opt_in_state = opt_in_state,
+      .policy_state = policy_state,
+  };
+}
+
+bool MultistepFilterService::CanUseModelExecutionFeatures() const {
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kMultistepFilterBypassCapabilityCheck)) {
+    return true;
+  }
+  if (!IsUserSignedIn()) {
+    return false;
+  }
+  const CoreAccountId account_id =
+      identity_manager_->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
+  if (account_id.empty()) {
+    return false;
+  }
+  const AccountInfo account_info =
+      identity_manager_->FindExtendedAccountInfoByAccountId(account_id);
+  return account_info.GetAccountCapabilities()
+             .can_use_model_execution_features() == signin::Tribool::kTrue;
 }
 
 bool MultistepFilterService::IsUserSignedIn() const {
-  return identity_manager_ &&
-         identity_manager_->HasPrimaryAccount(signin::ConsentLevel::kSignin);
+  return identity_manager_->HasPrimaryAccount(signin::ConsentLevel::kSignin);
 }
 
 bool MultistepFilterService::IsUrlKeyedDataCollectionEnabled() const {
@@ -166,6 +190,10 @@ void MultistepFilterService::OnHistoryDeletions(
   std::vector<std::string> deleted_hosts;
   for (const history::URLRow& url_row : deletion_info.deleted_rows()) {
     deleted_hosts.push_back(url_row.url().GetHost());
+  }
+
+  if (!deletion_info.time_range().IsValid() && deleted_hosts.empty()) {
+    return;
   }
 
   // If the time range is invalid (e.g., when specific URLs are deleted from

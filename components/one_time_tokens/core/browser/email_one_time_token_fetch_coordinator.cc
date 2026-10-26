@@ -5,12 +5,28 @@
 #include "components/one_time_tokens/core/browser/email_one_time_token_fetch_coordinator.h"
 
 #include <algorithm>
+#include <string>
 #include <utility>
 
-#include "base/logging.h"
+#include "base/base64url.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/time/time.h"
+#include "components/one_time_tokens/core/browser/one_time_token_backend_notification.h"
+#include "components/one_time_tokens/core/browser/one_time_token_log_sink.h"
 
 namespace one_time_tokens {
+
+namespace {
+
+std::string EncodeMessageReference(const EncryptedMessageReference& reference) {
+  std::string encoded_reference;
+  base::Base64UrlEncode(reference.value(),
+                        base::Base64UrlEncodePolicy::INCLUDE_PADDING,
+                        &encoded_reference);
+  return encoded_reference;
+}
+
+}  // namespace
 
 EmailOneTimeTokenFetchCoordinator::EmailOneTimeTokenFetchCoordinator(
     Delegate& delegate)
@@ -24,8 +40,10 @@ void EmailOneTimeTokenFetchCoordinator::SignalNetworkRequestNeeded(
   // Check if we are already tracking this notification in either the active
   // requests or the pending queue.
   if (active_requests_.contains(notification.encrypted_message_reference)) {
-    DLOG(WARNING) << "Duplicate notification received for an active request: "
-                  << notification.encrypted_message_reference.value();
+    LOG_OTT(delegate_->GetLogSink())
+        << "Coordinator ignoring notification: Duplicate "
+           "notification received for an active request: "
+        << EncodeMessageReference(notification.encrypted_message_reference);
     return;
   }
 
@@ -34,12 +52,18 @@ void EmailOneTimeTokenFetchCoordinator::SignalNetworkRequestNeeded(
            notification.encrypted_message_reference;
   });
   if (it != pending_queue_.end()) {
-    DLOG(WARNING) << "Duplicate notification received for a pending request: "
-                  << notification.encrypted_message_reference.value();
+    LOG_OTT(delegate_->GetLogSink())
+        << "Coordinator ignoring notification: Duplicate "
+           "notification received for a pending request: "
+        << EncodeMessageReference(notification.encrypted_message_reference);
     return;
   }
 
   pending_queue_.push_back({notification, base::TimeTicks::Now()});
+  LOG_OTT(delegate_->GetLogSink())
+      << "Notification queued in coordinator. Current queue size: "
+      << pending_queue_.size() << ", message_reference: "
+      << EncodeMessageReference(notification.encrypted_message_reference);
   base::UmaHistogramCounts100("Autofill.OneTimeTokens.Backend.Gmail.QueueSize",
                               pending_queue_.size());
   ProcessQueue();
@@ -49,6 +73,10 @@ void EmailOneTimeTokenFetchCoordinator::InformOfNetworkRequestFinished(
     const OneTimeTokenBackendNotification& notification) {
   active_requests_.erase(notification.encrypted_message_reference);
   ProcessQueue();
+}
+
+bool EmailOneTimeTokenFetchCoordinator::HasPendingRequests() const {
+  return !active_requests_.empty() || !pending_queue_.empty();
 }
 
 void EmailOneTimeTokenFetchCoordinator::ProcessQueue() {
@@ -72,6 +100,10 @@ void EmailOneTimeTokenFetchCoordinator::ProcessQueue() {
         {queued_item.notification.encrypted_message_reference,
          std::move(queued_item.notification)});
     if (inserted) {
+      LOG_OTT(delegate_->GetLogSink())
+          << "Coordinator starting network request. Active "
+             "requests count: "
+          << active_requests_.size();
       delegate_->OnCanSendNetworkRequest(it->second, queued_item.entry_time);
     }
 

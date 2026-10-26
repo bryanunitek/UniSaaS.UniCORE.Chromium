@@ -183,10 +183,15 @@ void ChromeOmniboxClientIOS::OnFocusChanged(OmniboxFocusState state,
   // goal of this code is to cancel prerenders when the omnibox loses focus.
   // Otherwise, they will live forever in cases where the user navigates to a
   // different URL than what is prerendered.
-  if (state == OMNIBOX_FOCUS_NONE) {
-    PrerenderBrowserAgent* agent = PrerenderBrowserAgent::FromBrowser(browser_);
-    if (agent) {
+  PrerenderBrowserAgent* agent = PrerenderBrowserAgent::FromBrowser(browser_);
+  if (agent) {
+    if (state == OMNIBOX_FOCUS_NONE) {
       agent->CancelPrerender();
+      if (IsOmniboxPrerenderOnTouchDownEnabled()) {
+        agent->SetWebStatePrecloningNeeded(false);
+      }
+    } else if (IsOmniboxPrerenderOnTouchDownEnabled()) {
+      agent->SetWebStatePrecloningNeeded(true);
     }
   }
 }
@@ -224,7 +229,7 @@ void ChromeOmniboxClientIOS::OnResultChanged(
   // not prerender other types of matches, including matches from the search
   // provider.
   if (is_inline_autocomplete &&
-      match.type == AutocompleteMatchType::HISTORY_URL) {
+      match.type == omnibox::AutocompleteMatchType::kHistoryUrl) {
     ui::PageTransition transition = ui::PageTransitionFromInt(
         match.transition | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR);
     agent->StartPrerender(
@@ -233,6 +238,22 @@ void ChromeOmniboxClientIOS::OnResultChanged(
             ? PrerenderBrowserAgent::PrerenderPolicy::kNoDelay
             : PrerenderBrowserAgent::PrerenderPolicy::kDefaultDelay);
   } else {
+    agent->CancelPrerender();
+  }
+}
+
+void ChromeOmniboxClientIOS::StartPrerender(const GURL& url,
+                                            ui::PageTransition transition) {
+  PrerenderBrowserAgent* agent = PrerenderBrowserAgent::FromBrowser(browser_);
+  if (agent) {
+    agent->StartPrerender(url, web::Referrer(), transition,
+                          PrerenderBrowserAgent::PrerenderPolicy::kNoDelay);
+  }
+}
+
+void ChromeOmniboxClientIOS::CancelPrerender() {
+  PrerenderBrowserAgent* agent = PrerenderBrowserAgent::FromBrowser(browser_);
+  if (agent) {
     agent->CancelPrerender();
   }
 }
@@ -271,7 +292,7 @@ void ChromeOmniboxClientIOS::OnAutocompleteAccept(
     TemplateURLRef::PostContent* post_content,
     WindowOpenDisposition disposition,
     ui::PageTransition transition,
-    AutocompleteMatchType::Type match_type,
+    omnibox::AutocompleteMatchType match_type,
     base::TimeTicks match_selection_timestamp,
     bool destination_url_entered_without_scheme,
     bool destination_url_entered_with_http_scheme,

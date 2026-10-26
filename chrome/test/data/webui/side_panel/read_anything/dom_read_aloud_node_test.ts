@@ -10,7 +10,6 @@ suite('DomReadAloudNode', () => {
   setup(() => {
     // Clearing the DOM should always be done first.
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    chrome.readingMode.onConnected = () => {};
   });
 
   function ancestorNotEquals(
@@ -64,6 +63,45 @@ suite('DomReadAloudNode', () => {
     // All of the nodes in the paragraph element should have the same
     // block ancestor.
     ancestorSame([textBeforeNode, boldNode, textAfterNode]);
+  });
+
+  test('getBlockAncestor with nested inline elements and siblings', () => {
+    const paragraph = document.createElement('p');
+    const span = document.createElement('span');
+    const link = document.createElement('a');
+    const bold = document.createElement('b');
+    const text1 = document.createTextNode('First ');
+    const text2 = document.createTextNode('Second');
+    const text3 = document.createTextNode('Third');
+
+    link.appendChild(text1);
+    span.appendChild(link);
+    bold.appendChild(text2);
+    paragraph.appendChild(span);
+    paragraph.appendChild(bold);
+    paragraph.appendChild(text3);
+    document.body.appendChild(paragraph);
+
+    const node1 = ReadAloudNode.create(text1);
+    const node2 = ReadAloudNode.create(text2);
+    const node3 = ReadAloudNode.create(text3);
+
+    assertTrue(node1 instanceof DomReadAloudNode);
+    assertTrue(node2 instanceof DomReadAloudNode);
+    assertTrue(node3 instanceof DomReadAloudNode);
+
+    // All text nodes, despite different levels of inline nesting (a, b, or
+    // direct child of p), should resolve to the same paragraph block ancestor.
+    assertEquals(paragraph, node1.getBlockAncestor());
+    assertEquals(paragraph, node2.getBlockAncestor());
+    assertEquals(paragraph, node3.getBlockAncestor());
+  });
+
+  test('getBlockAncestor returns undefined for detached node', () => {
+    const detachedText = document.createTextNode('detached');
+    const detachedNode = ReadAloudNode.create(detachedText);
+    assertTrue(detachedNode instanceof DomReadAloudNode);
+    assertEquals(undefined, detachedNode.getBlockAncestor());
   });
 
   test('equals', () => {

@@ -85,16 +85,61 @@ These custom subclasses are defined in a generated `ClassName_shared_jni.h`
 header so that they can be used from header files without pulling in all of the
 method-calling-related codegen (which lives in `ClassName_jni.h`).
 
+### Native Smart Pointers (Safe JNI Pointers)
+
+Pointers to C++ objects should be passed across JNI using typed safe pointer
+wrappers (`JniUniquePtr<T>`, `JniRawPtr<T>`, `JniPtr<T>`). Passing raw `long`
+addresses is a legacy pattern that bypasses compile-time type checks and
+use-after-free protections; prefer safe pointers for new and migrated code.
+
+To associate a Java type with a C++ pointer type, extend `JniTypeToken`:
+
+```java
+@JniType("::foo::MyClass")
+interface NativeMyClass extends JniTypeToken {}
+```
+
+| Ownership Model      | Java Type         | C++ Type                    | Description                                                                                                                                                                                                                                                             |
+| :------------------- | :---------------- | :-------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Owned                | `JniUniquePtr<T>` | `jni_zero::JniUniquePtr<T>` | Java owns the C++ object. Construct in C++ with `jni_zero::MakeUnique<T>(args...)` or `jni_zero::MakeUnique(std::move(unique_ptr))`. Java must call `destroy()` when done.                                                                                              |
+| Long-borrowed        | `JniRawPtr<T>`    | `jni_zero::JniRawPtr<T>`    | C++ owns the object; Java retains a reference across JNI calls. Construct in C++ with `jni_zero::MakeRaw(ptr)`. Java must call `release()` when done to drop the reference without deleting the C++ object. Do not store `jni_zero::JniRawPtr<T>` as a C++ class field. |
+| Short-borrowed       | `JniPtr<T>`       | `T*`                        | Temporary borrow valid for a single JNI call. Both `JniUniquePtr<T>` and `JniRawPtr<T>` implement `JniPtr<T>`. When passed to `@CalledByNative`, the reference is automatically invalidated when the call returns.                                                      |
+| Raw address (Legacy) | `long`            | `int64_t`                   | Legacy unchecked pointer value (`reinterpret_cast<int64_t>(ptr)`).                                                                                                                                                                                                      |
+
+#### Signature Rules
+
+- **`@NativeMethods` parameters**: Always declare safe pointer parameters as
+  `JniPtr<T>` (C++ receives `T*`). Callers can pass a `JniUniquePtr<T>`,
+  `JniRawPtr<T>`, or `JniPtr<T>` instance. Declaring `JniUniquePtr<T>` or
+  `JniRawPtr<T>` as a `@NativeMethods` parameter type is a parse error.
+- **`@NativeMethods` return types**: Return `JniUniquePtr<T>` or `JniRawPtr<T>`
+  from C++ (`jni_zero::JniUniquePtr<T>` or `jni_zero::JniRawPtr<T>`).
+- **`@CalledByNative` parameters**: Declare `JniPtr<T>` (C++ passes `T*`),
+  `JniRawPtr<T>` (C++ passes `jni_zero::JniRawPtr<T>`), or `JniUniquePtr<T>`
+  (C++ passes `jni_zero::JniUniquePtr<T>&&`).
+- **`@CalledByNative` return types**: Always declare safe pointer return types
+  as `JniPtr<T>` (C++ receives `T*`). The Java method may return a held
+  `JniUniquePtr<T>`, `JniRawPtr<T>`, or `JniPtr<T>`.
+- **Nullability and arrays**: A C++ `nullptr` translates into a Java `null`.
+  Safe pointers follow the same nullability rules as other reference types: in
+  `@NullMarked` code they are non-null unless annotated `@Nullable`. Safe
+  pointer array types (such as `JniPtr<T>[]`) are not supported.
+
 ### Calling Java -> Native
 
 - For each JNI method:
   - C++ stubs are generated that forward to C++ functions that you must write.
-    By default the c++ functions you are expected to implement are not
+    By default the C++ functions you are expected to implement are not
     associated with a class.
-  - If the first parameter is a C++ object (e.g.
-    `long native${OriginalClassName}`), then the bindings will not call a static
-    function but instead cast the variable into a cpp `${OriginalClassName}`
-    pointer type and then call a member method with that name on said object.
+  - If the first parameter represents a C++ receiver object, the bindings do not
+    call a static function; instead they dereference the pointer and invoke the
+    corresponding member method on that C++ object:
+    - **Safe pointer receiver**: Declare the first parameter as
+      `JniPtr<NativeMyClass> self` (the parameter name must be `self`).
+      `@Nullable` and `@NativeClassQualifiedName` cannot be used on `self`.
+    - **Raw `long` receiver (Legacy)**: Declare the first parameter as
+      `long native${OriginalClassName}` (or annotate the method with
+      `@NativeClassQualifiedName`).
 
 To add JNI to a class:
 
@@ -120,19 +165,26 @@ To add JNI to a class:
 
 ```java
 class MyClass {
+  @JniType("::MyClass")
+  interface NativeMyClass extends JniTypeToken {}
+
+  private JniUniquePtr<NativeMyClass> mNative;
+  private long mLegacyNativePointer;
+
   // Cannot be private. Must be package or public.
   @NativeMethods
   /* package */ interface Natives {
+    JniUniquePtr<NativeMyClass> init();
     void foo(List<String> list);
     double bar(int a, int b);
-    // Either the |MyClass| part of the |nativeMyClass| parameter name must
-    // match the native class name exactly, or the method annotation
-    // @NativeClassQualifiedName("MyClass") must be used.
-    //
-    // If the native class is nested, use
-    // @NativeClassQualifiedName("FooClassName::BarClassName") and call the
+    // Member dispatch: parameter must be named |self|.
+    void nonStatic(JniPtr<NativeMyClass> self);
+    // Raw long member dispatch: either the |MyClass| part of |nativeMyClass|
+    // must match the native class name, or @NativeClassQualifiedName("MyClass")
+    // must be used. If the native class is nested, use
+    // @NativeClassQualifiedName("FooClassName::BarClassName") and name the
     // parameter |nativePointer|.
-    void nonStatic(long nativeMyClass);
+    void nonStaticLegacy(long nativeMyClass);
   }
 
   void callNatives() {
@@ -140,9 +192,15 @@ class MyClass {
     // Storing MyClassJni.get() in a field defeats some of the desired R8
     // optimizations, but local variables are fine.
     Natives jni = MyClassJni.get();
+    mNative = jni.init();
     jni.foo(List.of("hi"));
-    jni.bar(1,2);
-    jni.nonStatic(mNativePointer);
+    jni.bar(1, 2);
+    jni.nonStatic(mNative);
+    jni.nonStaticLegacy(mLegacyNativePointer);
+  }
+
+  void destroy() {
+    mNative.destroy();
   }
 }
 ```
@@ -159,9 +217,14 @@ class MyClass {
 public:
   // The JNIEnv* parameter is optional.
   void NonStatic(JNIEnv* env);
-}
+  void NonStaticLegacy(JNIEnv* env);
+};
 
 namespace { // Can also declare each with `static`
+
+jni_zero::JniUniquePtr<MyClass> JNI_MyClass_Init(JNIEnv* env) {
+  return jni_zero::MakeUnique<MyClass>();
+}
 
 // The JNIEnv* parameter is optional.
 void JNI_MyClass_Foo(JNIEnv* env, const jni_zero::JavaRef<JList>& list) {
@@ -175,15 +238,10 @@ void JNI_MyClass_Bar(int32_t a, int32_t b) {
 } // namespace
 
 void MyClass::NonStatic(JNIEnv* env) { ... }
+void MyClass::NonStaticLegacy(JNIEnv* env) { ... }
 
 DEFINE_JNI(MyClass)
 ```
-
-#### Legacy Syntax
-
-Directly expose Java methods using the `native` keyword and JNI Zero will
-generate the bindings. This still works, but we are keen to drop support once
-all usage has been migrated.
 
 ### Calling Native -> Java
 
@@ -456,14 +514,19 @@ public class AnimationFrameTimeHistogramTest {
 }
 ```
 
+When mocking `@NativeMethods` that return `JniUniquePtr<T>` or `JniRawPtr<T>`,
+use `JniUniquePtr.createForTesting(fakePtr)` or
+`JniRawPtr.createForTesting(fakePtr)` to construct test handles whose
+`destroy()` and `release()` methods do not invoke native code.
+
 ### Namespacing GEN_JNI (for APK Splits, or apk_under_test)
 
-Each `generate_jni_registration` target results in a single `GEN_JNI` class. If
-you use JNI Zero in both and `Test.apk` and an `ApkUnderTest.apk`, or with
-isolated splits, then each APK should have its own `GEN_JNI`.
+Each `generate_final_jni` target results in a single `GEN_JNI` class. If you use
+JNI Zero in both and `Test.apk` and an `ApkUnderTest.apk`, or with isolated
+splits, then each APK should have its own `GEN_JNI`.
 
 To accomplish this, set `module_name = "name"` in all `generate_jni` targets, as
-well as the final `generate_jni_registration` target. This will result in
+well as the final `generate_final_jni` target. This will result in
 `<module_name>_GEN_JNI`.
 
 ### How to Know if Native is Loaded?
@@ -500,9 +563,10 @@ Minimize the surface API between the two sides. Rather than calling multiple
 functions across boundaries, call only one (and then on the other side, call as
 many little functions as required).
 
-If a Java object "owns" a native one, store the pointer via
-`"long mNativeClassName"`. Ensure to eventually call a native method to delete
-the object. For example, have a `close()` that deletes the native object.
+If a Java object owns a native one, store the pointer via
+`JniUniquePtr<NativeClassName>` and call `destroy()` when done (legacy code
+stores a raw `long mNativeClassName` field and calls a dedicated native method
+to delete the object).
 
 ## JNI Benchmarking
 
@@ -511,12 +575,48 @@ Refer to the
 
 ## Under the Hood
 
-For `@CalledByNative`, we directly call the `<jni.h>` methods, which are
-basically just reflection APIs, and then add a proguard rule to ensure the
-annotated method/field is kept in Java. The registration step does nothing for
-this direction of JNI, since we do not do any sort of proxying. However, using
-the registration step for `@CalledByNatives` has been discussed before:
-[go/proxy-called-by-natives-proposal](http://go/proxy-called-by-natives-proposal).
+### Native -> Java (@CalledByNative)
+
+For `@CalledByNative`, R8 configs are used to prevent removal & obfuscation of
+Java symbols. C++ functions are generated that use JNI APIs to invoke the
+functions.
+
+In non-multiplexed builds, each `@CalledByNative` stub generates inline string
+literals (for method names and signatures) and local `static std::atomic` caches
+for `jclass` and `jmethodID`.
+
+When JNI multiplexing is enabled (release mode), `generate_final_jni()`
+optimizes `@CalledByNative` calls by pooling metadata at link time:
+
+- Class names, method names, and method signatures are deduplicated into shared
+  string pools (`kClassNameStringPool`, `kMethodNameStringPool`,
+  `kDescriptorStringPool`).
+- Descriptor metadata and class offsets are stored in compact tables
+  (`kCbnDescriptors`, `kClassNameOffsets`).
+- Cached `jclass` and `jmethodID` atomic variables (`cached_jclasses`,
+  `cached_method_ids`) are defined once in the final registration file rather
+  than duplicated per call site.
+- Stubs in generated headers look up classes and method IDs by index, reducing
+  the per-stub size vs. non-pooled stubs.
+
+Note: `generate_jar_jni()` codegen is not pooled. Because JAR generation creates
+bindings for all public methods (many of which are never called), keeping them
+standalone allows `--gc-sections` to strip unreferenced methods and strings.
+
+#### Weak Called-by-Natives
+
+Some standalone native tools and test binaries (e.g. `sandbox_linux_unittests`,
+`quic_server`) depend on core libraries like `//base` or `//net` without having
+a Java component or a `generate_final_jni()` target.
+
+Setting `use_weak_called_by_natives = true` on `generate_jni` emits
+`@CalledByNative` functions with `[[gnu::weak]]` fallback implementations. If
+linked into a standalone binary without `generate_final_jni()`, these weak
+symbols allow the binary to link. If linked into a binary that includes a
+`generate_final_jni()` step, the pooled multiplexed implementations override the
+weak stubs.
+
+### Java -> Native (@NativeMethods)
 
 JNI Zero has 2 primary modes for `@NativeMethods`. In each, we insert a "proxy"
 class per annotated class which allows us to fake for tests and optimize better.
@@ -569,7 +669,7 @@ int Java_GEN_JNI_org_bar_Bar_b() {
 }
 ```
 
-### Debug Mode
+#### Debug Mode
 
 In debug mode, the `GEN_JNI` is a file containing `native` methods that match
 every single `@NativeMethods` from every `generate_jni` in our program.
@@ -581,7 +681,7 @@ class GEN_JNI {
 }
 ```
 
-### Release Mode
+#### Release Mode
 
 In release mode, the `GEN_JNI.java` is just a callthrough shim to `N.java` (a
 short name to reduce size), and `N` uses multiplexing by signature type to
@@ -621,7 +721,7 @@ it's so that Chrome can support multiple ABIs with a single Java file - we put
 the smaller (subset) ABI switch numbers first, and the superset ABI's unique
 classes get the final switch numbers.
 
-#### Per-File Natives
+### Per-File Natives
 
 This was added to make transitioning to JNI Zero easier. It allows using
 `@NativeMethods` without needing a registration step at the cost of extra binary
@@ -645,22 +745,6 @@ class BarJni {
 ```
 
 ### Legacy Modes
-
-These are modes which JNI provides currently, but we hope to remove. Please do
-not add any new uses of these.
-
-#### Using the "native" Keyword
-
-E.g.:
-
-```
-class Foo {
-    native someMethod();
-}
-```
-
-This is still supported by default, but is less efficient than `@NativeMethods`
-interfaces. We plan to delete support for this.
 
 #### Hashed Names
 

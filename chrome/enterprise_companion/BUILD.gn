@@ -111,6 +111,7 @@ source_set("base") {
     "url_loader_factory_provider.cc",
     "url_loader_factory_provider.h",
   ]
+  public_deps = [ "//base" ]
   deps = [
     ":branding_header",
     ":client",
@@ -118,7 +119,6 @@ source_set("base") {
     ":installer_paths",
     ":version_header",
     "mojom/",
-    "//base",
     "//chrome/enterprise_companion/device_management_storage",
     "//chrome/enterprise_companion/proto",
     "//chrome/enterprise_companion/telemetry_logger",
@@ -373,7 +373,7 @@ static_library("installer_paths") {
 
   visibility = [
     ":*",
-    "//chrome/browser/ui:*",
+    "//chrome/browser:*",
     "//chrome/browser/ui/webui/updater:*",
     "//chrome/updater:*",
   ]
@@ -399,7 +399,7 @@ static_library("constants_prod") {
   ]
   visibility = [
     ":*",
-    "//chrome/browser/ui:*",
+    "//chrome/browser:*",
     "//chrome/browser/ui/webui/updater:*",
     "//chrome/enterprise_companion/mac:*",
     "//chrome/test:*",
@@ -499,6 +499,7 @@ group("all") {
 
 if (is_mac && !is_component_build && enable_dsyms) {
   _symbols_sources = [ "$root_out_dir/$enterprise_companion_product_full_name.app/Contents/MacOS/$enterprise_companion_product_full_name" ]
+
   action("syms") {
     script = "//build/redirect_stdout.py"
     sources = _symbols_sources

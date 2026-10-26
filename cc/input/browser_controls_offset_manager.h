@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
@@ -18,6 +19,7 @@
 #include "cc/input/scroll_velocity_tracker.h"
 #include "cc/layers/layer_impl.h"
 #include "cc/trees/browser_controls_params.h"
+#include "cc/trees/render_frame_metadata.h"
 #include "components/viz/common/quads/offset_tag.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/size.h"
@@ -39,7 +41,8 @@ class CC_EXPORT BrowserControlsOffsetManager {
   static std::unique_ptr<BrowserControlsOffsetManager> Create(
       BrowserControlsOffsetManagerClient* client,
       float controls_show_threshold,
-      float controls_hide_threshold);
+      float controls_hide_threshold,
+      bool in_viz_process = false);
   BrowserControlsOffsetManager(const BrowserControlsOffsetManager&) = delete;
   virtual ~BrowserControlsOffsetManager();
 
@@ -57,7 +60,6 @@ class CC_EXPORT BrowserControlsOffsetManager {
   float TopControlsShownRatio() const;
   float TopControlsHeight() const;
   float TopControlsMinHeight() const;
-  int TopControlsAdditionalHeight() const;
 
   // The minimum shown ratio top controls can have.
   float TopControlsMinShownRatio() const;
@@ -68,9 +70,6 @@ class CC_EXPORT BrowserControlsOffsetManager {
   // this will return the same value as |TopControlsMinHeight()|.
   float TopControlsMinHeightOffset() const;
 
-  viz::OffsetTag ContentOffsetTag() const;
-  viz::OffsetTag TopControlsOffsetTag() const;
-
   // The amount of offset of the web content area, calculating from the bottom.
   // Same as the current shown height of the bottom controls.
   float ContentBottomOffset() const;
@@ -80,7 +79,6 @@ class CC_EXPORT BrowserControlsOffsetManager {
   float BottomControlsHeight() const;
   float BottomControlsMinHeight() const;
   float BottomControlsShownRatio() const;
-  int BottomControlsAdditionalHeight() const;
 
   // The minimum shown ratio bottom controls can have.
   float BottomControlsMinShownRatio() const;
@@ -91,9 +89,9 @@ class CC_EXPORT BrowserControlsOffsetManager {
   // Otherwise, this will return the same value as |BottomControlsMinHeight()|.
   float BottomControlsMinHeightOffset() const;
 
-  viz::OffsetTag BottomControlsOffsetTag() const;
-
-  bool HasOffsetTag() const;
+  // Returns the current offset tag values for the browser controls. Currently
+  // used only on Android.
+  std::vector<viz::OffsetTagValue> GetOffsetTagValues() const;
 
   // Valid shown ratio range for the top controls. The values will be (0, 1) if
   // there is no animation running.
@@ -131,6 +129,8 @@ class CC_EXPORT BrowserControlsOffsetManager {
       const {
     return offset_tag_modifications_;
   }
+
+  BrowserControlsMetadata GetMetadata() const;
 
   // Return the browser control constraint that must be synced to the
   // main renderer thread (to trigger viewport and related changes).
@@ -179,14 +179,15 @@ class CC_EXPORT BrowserControlsOffsetManager {
   // when snap animation is enabled.
   float SnapAnimationAlwaysShownRegionHeight() const;
 
-  // Returns the viewport Y-offset below which the toolbar can be hidden when
-  // snap animation is enabled.
+  // Returns a pair of floats representing the can-hide region heights from the
+  // top and bottom of the page respectively.
   //
   // `slowness` is a multiplier that controls how much the height of the
   // can-hide region changes relative to the height of the controls, where a
   // higher value means a larger region and a lower value means a smaller
   // region. The value should be between 0 and 1.
-  float SnapAnimationCanHideRegionHeight(float slowness) const;
+  std::pair<float, float> SnapAnimationCanHideRegionHeights(
+      float slowness) const;
 
   // Returns the magnitude of scroll delta in a single scroll sequence required
   // to trigger the snap animation.
@@ -200,7 +201,8 @@ class CC_EXPORT BrowserControlsOffsetManager {
  protected:
   BrowserControlsOffsetManager(BrowserControlsOffsetManagerClient* client,
                                float controls_show_threshold,
-                               float controls_hide_threshold);
+                               float controls_hide_threshold,
+                               bool in_viz_process = false);
 
  private:
   class Animation;
@@ -229,10 +231,13 @@ class CC_EXPORT BrowserControlsOffsetManager {
   void SetTopMinHeightOffsetAnimationRange(float from, float to);
   void SetBottomMinHeightOffsetAnimationRange(float from, float to);
   bool IsAnimatingHeightChange();
+  void MaybeRecordHasExistingAnimationHistogram();
 
   gfx::Vector2dF ScrollByPrecise(const gfx::Vector2dF& pending_delta);
   void ScrollBySnap(const gfx::Vector2dF& pending_delta, bool is_inertial);
   float ControlsAnimatedHeight() const;
+  float TopControlsAnimatedHeight() const;
+  float BottomControlsAnimatedHeight() const;
 
   // The client manages the lifecycle of this.
   raw_ptr<BrowserControlsOffsetManagerClient> client_;
@@ -298,9 +303,18 @@ class CC_EXPORT BrowserControlsOffsetManager {
   // scroll sequence.
   bool did_hide_this_scroll_ = false;
 
+  // Whether the currently active animation was initiated by a scroll snap
+  // animation rather than an explicit browser state update. Only set while
+  // |extra_hide_gestures_enabled_| is true.
+  bool is_snap_animation_ = false;
+
   // If set to true, browser controls will snap to fully show or hide on scroll
   // instead of moving in pixel-perfect sync with the scroll.
   const bool use_snap_animation_ = false;
+  // If set to true, an explicit hide (e.g. from a toolbar swipe) that completes
+  // in the always-shown region is not undone by a snap animation to show.
+  const bool extra_hide_gestures_enabled_ = false;
+  const bool in_viz_process_ = false;
 
   BrowserControlsOffsetTagModifications offset_tag_modifications_;
 

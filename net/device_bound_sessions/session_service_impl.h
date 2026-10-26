@@ -15,16 +15,21 @@
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/elapsed_timer.h"
+#include "components/unexportable_keys/background_task_priority.h"
 #include "components/unexportable_keys/service_error.h"
 #include "components/unexportable_keys/unexportable_key_id.h"
 #include "net/base/net_export.h"
+#include "net/cookies/canonical_cookie.h"
+#include "net/cookies/site_for_cookies.h"
 #include "net/device_bound_sessions/refresh_result.h"
 #include "net/device_bound_sessions/registration_fetcher.h"
 #include "net/device_bound_sessions/registration_fetcher_param.h"
+#include "net/device_bound_sessions/registration_request_param.h"
 #include "net/device_bound_sessions/session.h"
 #include "net/device_bound_sessions/session_key.h"
 #include "net/device_bound_sessions/session_service.h"
 #include "net/device_bound_sessions/session_store.h"
+#include "net/device_bound_sessions/single_sign_on_key_manager.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
@@ -70,6 +75,20 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/net/enums.xml:DeviceBoundSessionProactiveRefreshAttempt)
 
+  // Parameters required to initiate a session registration. It's shared by
+  // all registration flows (standalone, federated, and SSO).
+  struct RegistrationParams {
+    SessionService::OnAccessCallback access_callback;
+    RegistrationFetcherParam fetcher_param;
+    net::IsolationInfo isolation_info;
+    net::SiteForCookies site_for_cookies;
+    net::NetLogWithSource net_log;
+    std::optional<url::Origin> original_request_initiator;
+    // Measures end-to-end registration latency for histograms, starting from
+    // struct construction, which matches the registration start.
+    base::ElapsedTimer timer_since_start;
+  };
+
   SessionServiceImpl(unexportable_keys::UnexportableKeyService& key_service,
                      const URLRequestContext* request_context,
                      SessionStore* store,
@@ -84,25 +103,23 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
 
   void RegisterBoundSession(
       OnAccessCallback on_access_callback,
-      RegistrationFetcherParam registration_params,
+      RegistrationFetcherParam fetcher_param,
       const IsolationInfo& isolation_info,
+      const net::SiteForCookies& site_for_cookies,
       const NetLogWithSource& net_log,
       const std::optional<url::Origin>& original_request_initiator) override;
 
   std::optional<DeferralParams> ShouldDefer(
       DbscRequest& request,
-      HttpRequestHeaders* extra_headers,
-      const FirstPartySetMetadata& first_party_set_metadata) override;
+      HttpRequestHeaders* extra_headers) override;
 
   void DeferRequestForRefresh(DbscRequest& request,
                               DeferralParams deferral,
                               RefreshCompleteCallback callback) override;
 
-  void SetChallengeForBoundSession(
-      OnAccessCallback on_access_callback,
-      DbscRequest& request,
-      const FirstPartySetMetadata& first_party_set_metadata,
-      const SessionChallengeParam& param) override;
+  void SetChallengeForBoundSession(OnAccessCallback on_access_callback,
+                                   DbscRequest& request,
+                                   const SessionChallengeParam& param) override;
 
   void GetAllSessionsAsync(
       base::OnceCallback<void(const std::vector<SessionKey>&)> callback)
@@ -114,14 +131,11 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
       DeletionReason reason,
       const SessionKey& session_key,
       SessionService::OnAccessCallback per_request_callback) override;
-  void DeleteAllSessions(
-      DeletionReason reason,
-      std::optional<base::Time> created_after_time,
-      std::optional<base::Time> created_before_time,
-      base::RepeatingCallback<bool(const url::Origin&,
-                                   const net::SchemefulSite&)>
-          origin_and_site_matcher,
-      base::OnceClosure completion_callback) override;
+  void DeleteAllSessions(DeletionReason reason,
+                         std::optional<base::Time> created_after_time,
+                         std::optional<base::Time> created_before_time,
+                         OriginAndSiteMatcher origin_and_site_matcher,
+                         base::OnceClosure completion_callback) override;
   base::ScopedClosureRunner AddObserver(
       const GURL& url,
       base::RepeatingCallback<void(const SessionAccess&)> callback) override;
@@ -140,21 +154,59 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
       SignedRefreshChallenge signed_refresh_challenge) override;
   bool SigningQuotaExceeded(const SchemefulSite& site) override;
   void AddSigningOccurrence(const SchemefulSite& site) override;
-  void HandleResponseHeaders(
-      DbscRequest& request,
-      HttpResponseHeaders* headers,
-      const FirstPartySetMetadata& first_party_set_metadata) override;
+  void HandleResponseHeaders(DbscRequest& request,
+                             HttpResponseHeaders* headers) override;
   void SelectClientCertificate(
       const GURL& url,
       scoped_refptr<SSLCertRequestInfo> cert_info,
       SelectClientCertificateCallback callback) override;
+  void PrewarmSessionsForUrl(const GURL& url,
+                             PrewarmCallback callback) override;
 
   // The `SessionService` implementation has a const-qualified accessor
   // for sessions. This overload allows for non-const access as well.
   Session* GetSession(const SessionKey& session_key);
 
  private:
+  friend class SessionServiceImplPreProvisionedKeyTest;
   friend class SessionServiceImplWithStoreTest;
+
+  enum class RefreshTrigger {
+    // Refresh due to a request missing a bound cookie.
+    kMissingCookie,
+    // Proactive refresh due to a soon-to-expire bound cookie.
+    kProactive,
+  };
+
+  // The refresh outcome and earliest next refresh time for a single session
+  // evaluated during `PrewarmSessionsForUrl`.
+  struct PrewarmResult {
+    RefreshResult result = RefreshResult::kRefreshed;
+    base::Time earliest_next_refresh_time = base::Time::Max();
+  };
+
+  // State tracking an in-flight proactive refresh for a session, including
+  // callbacks waiting for it to finish and a timer for metrics.
+  struct ProactiveRefresh {
+    std::vector<base::OnceCallback<void(PrewarmResult)>> completion_callbacks;
+    base::ElapsedTimer timer;
+  };
+
+  // Parameters required to initiate a session refresh. Encapsulates trigger
+  // cause, isolation context, site for cookies, priority, and net logging.
+  struct RefreshParams {
+    RefreshTrigger trigger = RefreshTrigger::kProactive;
+    net::IsolationInfo isolation_info;
+    net::SiteForCookies site_for_cookies;
+    std::optional<url::Origin> initiator;
+    unexportable_keys::BackgroundTaskPriority priority =
+        unexportable_keys::BackgroundTaskPriority::kBestEffort;
+    SessionService::OnAccessCallback access_callback;
+    net::NetLogWithSource net_log;
+    // Measures end-to-end refresh latency for histograms, starting from struct
+    // construction, which matches the refresh start.
+    base::ElapsedTimer timer_since_start;
+  };
 
   // The key is the site (eTLD+1) of the session's origin and the
   // session id.
@@ -163,8 +215,7 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
   using DeferredRequestsMap =
       absl::flat_hash_map<SessionKey,
                           absl::InlinedVector<DeferredURLRequest, 1>>;
-  using ProactiveRefreshMap =
-      absl::flat_hash_map<SessionKey, base::ElapsedTimer>;
+  using ProactiveRefreshMap = absl::flat_hash_map<SessionKey, ProactiveRefresh>;
   using LatestSignedRefreshChallengesMap =
       absl::flat_hash_map<SessionKey, SignedRefreshChallenge>;
 
@@ -175,26 +226,50 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
 
   using ObserverSet = absl::flat_hash_set<std::unique_ptr<Observer>>;
 
-  enum class RefreshTrigger {
-    // Refresh due to a request missing a bound cookie.
-    kMissingCookie,
-    // Proactive refresh due to a soon-to-expire bound cookie.
-    kProactive,
+  using FetchStarter = base::OnceCallback<void(
+      RegistrationFetcher*,
+      RegistrationRequestParam,
+      RegistrationFetcher::RegistrationCompleteCallback)>;
+
+  // The type of registration for a bound session. Used for histograms.
+  // LINT.IfChange(RegistrationType)
+  enum class RegistrationType {
+    kStandalone = 0,
+    kFederated = 1,
+    kSingleSignOn = 2,
+    kMaxValue = kSingleSignOn,
   };
+
+  template <typename Sink>
+  friend void AbslStringify(Sink& sink, RegistrationType type) {
+    switch (type) {
+      case RegistrationType::kStandalone:
+        sink.Append("Standalone");
+        return;
+      case RegistrationType::kFederated:
+        sink.Append("Federated");
+        return;
+      case RegistrationType::kSingleSignOn:
+        sink.Append("SingleSignOn");
+        return;
+    }
+  }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/net/histograms.xml:RegistrationType)
 
   void OnLoadSessionsComplete(SessionsMap sessions);
 
   void OnRegistrationComplete(OnAccessCallback on_access_callback,
-                              bool is_google_subdomain_for_histograms,
-                              bool is_federated_registration_for_histograms,
-                              SchemefulSite site,
+                              GURL endpoint,
+                              RegistrationType registration_type_for_histograms,
+                              base::ElapsedTimer timer,
                               RegistrationFetcher* fetcher,
-                              RegistrationResult result);
+                              RegistrationResult registration_result);
   void OnRefreshRequestCompletion(RefreshTrigger trigger,
                                   OnAccessCallback on_access_callback,
                                   SessionKey session_key,
+                                  base::ElapsedTimer timer,
                                   RegistrationFetcher* fetcher,
-                                  RegistrationResult result);
+                                  RegistrationResult registration_result);
 
   void StartGarbageCollection();
   void OnGetAllKeysForGarbageCollection(
@@ -204,11 +279,16 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
   void DoGarbageCollection(
       std::vector<unexportable_keys::UnexportableSigningKeyId> all_key_ids);
 
-  void AddSession(const SchemefulSite& site,
-                  std::unique_ptr<Session> session,
-                  SessionStore::SaveSessionMode mode =
-                      SessionStore::SaveSessionMode::kNewSession);
-  void UnblockDeferredRequests(
+  void AddSessionAndNotify(const SchemefulSite& site,
+                           std::unique_ptr<Session> session,
+                           SessionService::OnAccessCallback on_access_callback,
+                           SessionStore::SaveSessionMode mode =
+                               SessionStore::SaveSessionMode::kNewSession);
+
+  // Continue or restart all deferred requests and complete any proactive
+  // refresh requests waiting for the session, removing the session key from
+  // both maps.
+  void UnblockWaitingRequests(
       const SessionKey& session_key,
       RefreshResult result,
       std::optional<net::device_bound_sessions::SessionError> fetch_error =
@@ -260,10 +340,12 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
   // Helper for restoring the key for the session identified by
   // `session_key`. If restoring the key succeeds, calls `callback` with
   // the key. If restoring the key fails, deletes the session and calls
-  // `callback` with `std::nullopt`.
+  // `callback` with `std::nullopt`. The key is unwrapped at `priority`, but
+  // never below `kUserVisible`.
   void RestoreSessionKey(
       const SessionKey& session_key,
       OnAccessCallback on_access_callback,
+      unexportable_keys::BackgroundTaskPriority priority,
       base::OnceCallback<
           void(std::optional<unexportable_keys::UnexportableSigningKeyId>)>
           callback);
@@ -280,10 +362,11 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
           std::optional<unexportable_keys::UnexportableSigningKeyId>)> callback,
       Session::KeyIdOrError key_id_or_error);
 
-  // Helper function for starting a refresh
+  // Helper function for starting a refresh.
+  void StartSessionRefresh(const SessionKey& session_key, RefreshParams params);
+
   void RefreshSessionInternal(
-      RefreshTrigger trigger,
-      base::WeakPtr<URLRequest> maybe_request,
+      RefreshParams params,
       const SessionKey& session_key,
       std::optional<unexportable_keys::UnexportableSigningKeyId> key_id);
 
@@ -296,14 +379,11 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
   void RemoveFetcher(RegistrationFetcher* fetcher);
 
   // Asynchronously get the federated provider session specified by
-  // `registration_params`, if allowed.
+  // `provider_params`, if allowed.
   void GetFederatedProviderSessionIfValid(
-      GURL provider_url,
-      Session::Id provider_session_id,
-      std::string provider_key_thumbprint,
+      ProviderRegistrationParams provider_params,
       OnAccessCallback on_access_callback,
-      base::OnceCallback<void(base::expected<Session*, SessionError>)>
-          callback);
+      base::OnceCallback<void(SessionErrorOr<Session*>)> callback);
 
   // Helper for getting the federated provider session. Checks that the
   // key thumbprints maps and runs `callback` with the resulting
@@ -311,7 +391,7 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
   void CheckFederatedProviderKey(
       SessionKey provider_session_key,
       std::string provider_key_thumbprint,
-      base::OnceCallback<void(base::expected<Session*, SessionError>)> callback,
+      base::OnceCallback<void(SessionErrorOr<Session*>)> callback,
       std::optional<unexportable_keys::UnexportableSigningKeyId> provider_key);
 
   void OnAddSessionKeyRestored(
@@ -335,20 +415,55 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
       const SessionKey& session_key,
       base::TimeDelta minimum_cookie_lifetime);
 
-  // Helper function for common behavior from federated and regular
-  // session registration.
-  void RegisterBoundSessionInternal(
-      OnAccessCallback on_access_callback,
-      RegistrationFetcherParam registration_params,
-      const IsolationInfo& isolation_info,
-      const NetLogWithSource& net_log,
-      const std::optional<url::Origin>& original_request_initiator,
-      base::expected<Session*, SessionError> federated_provider_session);
+  // Continuation of `PrewarmSessionsForUrl` after retrieving cookies from the
+  // cookie store. Checks each matching session's cookie lifetimes and starts
+  // proactive refreshes for any soon-to-expire sessions.
+  void OnGetCookiesForPrewarm(const GURL& url,
+                              std::vector<SessionKey> matching_sessions,
+                              PrewarmCallback callback,
+                              const CookieAccessResultList& cookies,
+                              const CookieAccessResultList& excluded_cookies);
+
+  // Completes in-flight proactive refresh requests for `session_key`. If the
+  // refresh succeeded, fetches cookies to determine
+  // `earliest_next_refresh_time` before invoking `callbacks`.
+  void CompleteProactiveRefresh(
+      const SessionKey& session_key,
+      RefreshResult result,
+      std::vector<base::OnceCallback<void(PrewarmResult)>> callbacks);
+
+  // Continuation of `UnblockWaitingRequests` for proactive refresh requests
+  // after retrieving cookies from the cookie store. Computes
+  // `earliest_next_refresh_time` and invokes waiting callbacks.
+  void OnGetCookiesAfterProactiveRefresh(
+      const SessionKey& session_key,
+      std::vector<base::OnceCallback<void(PrewarmResult)>> callbacks,
+      RefreshResult refresh_result,
+      const CookieAccessResultList& cookies,
+      const CookieAccessResultList& excluded_cookies);
+
+  // Barrier callback invoked once all sessions matching a prewarm request have
+  // completed their evaluation and any needed proactive refreshes.
+  void OnAllPrewarmSessionsDone(PrewarmCallback callback,
+                                std::vector<PrewarmResult> session_results);
+
+  void StartRegistration(RegistrationParams registration_params,
+                         RegistrationType registration_type_for_histograms,
+                         FetchStarter fetch_starter);
+
+  void RegisterStandaloneBoundSession(RegistrationParams registration_params);
+
+  void RegisterSingleSignOnBoundSession(
+      RegistrationParams registration_params,
+      unexportable_keys::UnexportableSigningKeyId pre_provisioned_key);
+
+  void RegisterFederatedBoundSession(
+      RegistrationParams registration_params,
+      SessionErrorOr<Session*> federated_provider_session);
 
   ChallengeResult SetChallengeForBoundSessionInternal(
       OnAccessCallback on_access_callback,
       DbscRequest& request,
-      const FirstPartySetMetadata& first_party_set_metadata,
       const SessionChallengeParam& param);
 
   // Helper to notify event listeners about an event only if they exist.
@@ -388,7 +503,8 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
   // All observers of sessions.
   absl::flat_hash_map<net::SchemefulSite, ObserverSet> observers_by_site_;
 
-  // Observers for DBSC events. Used for DevTools.
+  // Observers for DBSC events. Used by DevTools and by the renderer-facing
+  // RestrictedDeviceBoundSessionManager.
   base::RepeatingCallbackList<void(const SessionEvent&)> event_callbacks_;
 
   // Per-site record of the most recent refresh result. This is used
@@ -413,8 +529,8 @@ class NET_EXPORT SessionServiceImpl : public SessionService {
   absl::flat_hash_set<std::unique_ptr<RegistrationFetcher>>
       registration_fetchers_;
 
-  // Callback to check if storage access is allowed.
-  CookieAccessCallback has_cookie_access_cb_;
+  // Holds the pre-provisioned keys for DBSC-SSO registrations.
+  SingleSignOnKeyManager sso_key_manager_;
 
   base::WeakPtrFactory<SessionServiceImpl> weak_factory_{this};
 };

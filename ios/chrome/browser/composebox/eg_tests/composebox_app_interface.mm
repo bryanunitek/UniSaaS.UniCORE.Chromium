@@ -4,6 +4,7 @@
 
 #import "ios/chrome/browser/composebox/eg_tests/composebox_app_interface.h"
 
+#import "base/strings/sys_string_conversions.h"
 #import "ios/chrome/browser/aim/model/ios_chrome_aim_eligibility_service_factory.h"
 #import "ios/chrome/browser/aim/model/mock_ios_chrome_aim_eligibility_service.h"
 #import "ios/chrome/browser/composebox/model/ios_contextual_search_service_factory.h"
@@ -42,6 +43,20 @@
       ContextualSearchServiceFactory::GetForProfile(profile);
   static_cast<MockIOSContextualSearchService*>(service)
       ->SetTabUploadAutoSucceed(autoSucceed);
+
+  // Incognito tabs use a separate Off-The-Record profile and
+  // ContextualSearchService. Mock the OTR service as well so that tab uploads
+  // automatically succeed in incognito EG tests, allowing the 'Send' button to
+  // become enabled.
+  if (profile->HasOffTheRecordProfile()) {
+    contextual_search::ContextualSearchService* otr_service =
+        ContextualSearchServiceFactory::GetForProfile(
+            profile->GetOffTheRecordProfile());
+    if (otr_service) {
+      static_cast<MockIOSContextualSearchService*>(otr_service)
+          ->SetTabUploadAutoSucceed(autoSucceed);
+    }
+  }
 }
 
 + (void)enableAllTools {
@@ -54,6 +69,16 @@
 
 + (BOOL)isServerSideStateEnabled {
   return EnableComposeboxServerSideState();
+}
+
++ (NSString*)lastSentAIMQueryText {
+  ProfileIOS* profile = chrome_test_util::GetOriginalProfile();
+  contextual_search::ContextualSearchService* service =
+      ContextualSearchServiceFactory::GetForProfile(profile);
+  const std::string& queryText =
+      static_cast<MockIOSContextualSearchService*>(service)
+          ->last_search_query_text();
+  return base::SysUTF8ToNSString(queryText);
 }
 
 #pragma mark - Private

@@ -23,7 +23,9 @@ enum class FormInputAccessoryViewSubitemGroup {
   // address button.
   kManualFillButtons,
   // Navigation buttons: the previous button and the next button.
-  kNavigationButtons
+  kNavigationButtons,
+  // AtMemory button with title.
+  kAtMemoryFullButton,
 };
 
 // Informs the receiver of actions in the accessory view.
@@ -70,8 +72,9 @@ enum class FormInputAccessoryViewSubitemGroup {
 
 extern NSString* const kFormInputAccessoryViewAccessibilityID;
 
-extern NSString* const
-    kFormInputAccessoryViewAtMemoryButtonAccessibilityIdentifier;
+extern NSString* const kFormInputAccessoryViewAtMemoryButtonAccessibilityID;
+
+extern NSString* const kFormInputAccessoryViewAtMemoryFullButtonAccessibilityID;
 
 extern NSString* const
     kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID;
@@ -105,10 +108,12 @@ extern NSString* const
 // "addressManualFillSymbol". Nil otherwise.
 @property(nonatomic, readonly, weak) UIButton* addressManualFillButton;
 
-// The AtMemory button if the view was set up with a navigation delegate and a
-// "atMemoryManualFillSymbol". Nil otherwise.
-// TODO(crbug.com/522326512): Verify this property.
+// The AtMemory icon button.
 @property(nonatomic, readonly, weak) UIButton* atMemoryManualFillButton;
+
+// The AtMemory full button (icon + title). This button shows separately
+// when a `contenteditable` element is focused.
+@property(nonatomic, readonly, weak) UIButton* atMemoryFullButton;
 
 // The leading view.
 @property(nonatomic, readonly, weak) UIView* leadingView;
@@ -122,6 +127,9 @@ extern NSString* const
 
 // Whether touches in blank areas should pass through to the underlying UI.
 @property(nonatomic, assign) BOOL passThroughTouchesEnabled;
+
+// Symbol image displayed on `manualFillButton`.
+@property(nonatomic, strong) UIImage* manualFillSymbol;
 
 // Sets up the view with the given `leadingView`. Navigation controls are shown
 // on the trailing side and use `delegate` for actions.
@@ -138,7 +146,8 @@ extern NSString* const
 // - The background color is set to grey.
 // If `closeButtonSymbol` is nil, the close button will use the default text.
 // Otherwise, it will use `closeButtonSymbol` as the image instead.
-// `isTabletFormFactor` modifies the appearance of the manual fill button.
+// `isTabletFormFactor` determines whether the close button is hidden.
+// `isCompact` modifies the appearance of the manual fill button.
 - (void)setUpWithLeadingView:(UIView*)leadingView
             navigationDelegate:(id<FormInputAccessoryViewDelegate>)delegate
               manualFillSymbol:(UIImage*)manualFillSymbol
@@ -147,7 +156,8 @@ extern NSString* const
        addressManualFillSymbol:(UIImage*)addressManualFillSymbol
       atMemoryManualFillSymbol:(UIImage*)atMemoryManualFillSymbol
              closeButtonSymbol:(UIImage*)closeButtonSymbol
-            isTabletFormFactor:(BOOL)isTabletFormFactor;
+            isTabletFormFactor:(BOOL)isTabletFormFactor
+                     isCompact:(BOOL)isCompact;
 
 // Sets the height of the omnibox typing shield. Set a height of 0 to hide the
 // typing shield. The omnibox typing shield is a transparent view on the top

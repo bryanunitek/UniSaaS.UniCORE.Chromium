@@ -114,11 +114,17 @@ class BluetoothNotificationControllerTest : public AshTestBase {
     }
   }
 
-  void VerifyPairingNotificationVisibility(bool visible) {
-    EXPECT_EQ(test_message_center_.FindVisibleNotificationById(
-                  BluetoothNotificationController::
-                      kBluetoothDevicePairingNotificationId) != nullptr,
-              visible);
+  message_center::Notification* GetPairingNotification(
+      device::MockBluetoothDevice* device) {
+    const std::string notification_id =
+        BluetoothNotificationController::GetPairingNotificationId(
+            device->GetAddress());
+    return test_message_center_.FindVisibleNotificationById(notification_id);
+  }
+
+  void VerifyPairingNotificationVisibility(device::MockBluetoothDevice* device,
+                                           bool visible) {
+    EXPECT_EQ(GetPairingNotification(device) != nullptr, visible);
   }
 
   // Run the notification controller to simulate showing a toast.
@@ -205,23 +211,186 @@ TEST_F(BluetoothNotificationControllerTest,
 }
 
 TEST_F(BluetoothNotificationControllerTest, PairingNotification) {
-  VerifyPairingNotificationVisibility(/*visible=*/false);
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
 
   ShowPairingNotification(notification_controller_.get(),
                           bluetooth_device_1_.get());
-  VerifyPairingNotificationVisibility(/*visible=*/true);
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/true);
 
   // Simulate the device being paired. This should not remove the pairing
   // notification.
   SimulateDevicePaired(notification_controller_.get(),
                        bluetooth_device_1_.get());
-  VerifyPairingNotificationVisibility(/*visible=*/true);
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/true);
 
   // Simulate the device being bonded. This should remove the pairing
   // notification.
   SimulateDeviceBonded(notification_controller_.get(),
                        bluetooth_device_1_.get());
-  VerifyPairingNotificationVisibility(/*visible=*/false);
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
+}
+
+TEST_F(BluetoothNotificationControllerTest, MultiplePairingNotifications) {
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
+  VerifyPairingNotificationVisibility(bluetooth_device_2_.get(),
+                                      /*visible=*/false);
+
+  // Show pairing notification for device 1.
+  ShowPairingNotification(notification_controller_.get(),
+                          bluetooth_device_1_.get());
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/true);
+  VerifyPairingNotificationVisibility(bluetooth_device_2_.get(),
+                                      /*visible=*/false);
+
+  // Show pairing notification for device 2 while device 1 notification is
+  // active.
+  ShowPairingNotification(notification_controller_.get(),
+                          bluetooth_device_2_.get());
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/true);
+  VerifyPairingNotificationVisibility(bluetooth_device_2_.get(),
+                                      /*visible=*/true);
+
+  // Bonding device 1 dismisses only device 1's notification.
+  SimulateDeviceBonded(notification_controller_.get(),
+                       bluetooth_device_1_.get());
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
+  VerifyPairingNotificationVisibility(bluetooth_device_2_.get(),
+                                      /*visible=*/true);
+
+  // Bonding device 2 dismisses device 2's notification.
+  SimulateDeviceBonded(notification_controller_.get(),
+                       bluetooth_device_2_.get());
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
+  VerifyPairingNotificationVisibility(bluetooth_device_2_.get(),
+                                      /*visible=*/false);
+}
+
+TEST_F(BluetoothNotificationControllerTest, PairingNotification_DeviceRemoved) {
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
+
+  ShowPairingNotification(notification_controller_.get(),
+                          bluetooth_device_1_.get());
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/true);
+
+  // Device removal should immediately clear its pairing notification.
+  notification_controller_->DeviceRemoved(mock_adapter_.get(),
+                                          bluetooth_device_1_.get());
+  VerifyPairingNotificationVisibility(bluetooth_device_1_.get(),
+                                      /*visible=*/false);
+}
+
+TEST_F(BluetoothNotificationControllerTest,
+       PairingNotification_SanitizeDeviceNameWhitespace) {
+  auto malicious_device =
+      std::make_unique<NiceMock<device::MockBluetoothDevice>>(
+          mock_adapter_.get(), /*bluetooth_class=*/0,
+          "Malicious\nDevice\r\n\tName  Extra", "malicious_address",
+          /*paired=*/false, /*connected=*/false);
+
+  notification_controller_->AuthorizePairing(malicious_device.get());
+
+  message_center::Notification* notification =
+      GetPairingNotification(malicious_device.get());
+  ASSERT_NE(nullptr, notification);
+
+  // Whitespace and line breaks in the device name should be collapsed to single
+  // spaces, preventing multi-line UI injection.
+  EXPECT_NE(
+      notification->message().find(u"\u2068Malicious Device Name Extra\u2069"),
+      std::u16string::npos);
+  EXPECT_EQ(notification->message().find(u'\n'), std::u16string::npos);
+  EXPECT_EQ(notification->message().find(u'\r'), std::u16string::npos);
+}
+
+TEST_F(BluetoothNotificationControllerTest,
+       PairingNotification_SanitizeDeviceNameBidi) {
+  // Test device name containing an unclosed BiDi Right-to-Left Override
+  // (\u202E).
+  const char bidi_name[] = "Device \u202Eevil";
+  auto bidi_device = std::make_unique<NiceMock<device::MockBluetoothDevice>>(
+      mock_adapter_.get(), /*bluetooth_class=*/0, bidi_name, "bidi_address",
+      /*paired=*/false, /*connected=*/false);
+
+  notification_controller_->AuthorizePairing(bidi_device.get());
+
+  message_center::Notification* notification =
+      GetPairingNotification(bidi_device.get());
+  ASSERT_NE(nullptr, notification);
+
+  // BiDi overrides in user-supplied device names are enclosed in directional
+  // isolates to prevent formatting from bleeding into the surrounding UI.
+  EXPECT_NE(notification->message().find(u"\u2068Device \u202Eevil\u2069"),
+            std::u16string::npos);
+}
+
+TEST_F(BluetoothNotificationControllerTest,
+       PairingNotification_SanitizesAllPairingDelegateMethods) {
+  auto malicious_device =
+      std::make_unique<NiceMock<device::MockBluetoothDevice>>(
+          mock_adapter_.get(), /*bluetooth_class=*/0,
+          "Malicious\nDevice\r\n\t\u202EName", "malicious_address_2",
+          /*paired=*/false, /*connected=*/false);
+
+  // 1. ConfirmPasskey
+  notification_controller_->ConfirmPasskey(malicious_device.get(), 123456);
+  message_center::Notification* notification =
+      GetPairingNotification(malicious_device.get());
+  ASSERT_NE(nullptr, notification);
+  EXPECT_NE(
+      notification->message().find(u"\u2068Malicious Device \u202EName\u2069"),
+      std::u16string::npos);
+  EXPECT_NE(notification->message().find(u"123456"), std::u16string::npos);
+  EXPECT_EQ(notification->message().find(u'\n'), std::u16string::npos);
+  EXPECT_EQ(notification->message().find(u'\r'), std::u16string::npos);
+  test_message_center_.RemoveAllNotifications(
+      /*by_user=*/false, message_center::FakeMessageCenter::RemoveType::ALL);
+
+  // 2. DisplayPasskey
+  notification_controller_->DisplayPasskey(malicious_device.get(), 123456);
+  notification = GetPairingNotification(malicious_device.get());
+  ASSERT_NE(nullptr, notification);
+  EXPECT_NE(
+      notification->message().find(u"\u2068Malicious Device \u202EName\u2069"),
+      std::u16string::npos);
+  EXPECT_NE(notification->message().find(u"123456"), std::u16string::npos);
+  EXPECT_EQ(notification->message().find(u'\n'), std::u16string::npos);
+  EXPECT_EQ(notification->message().find(u'\r'), std::u16string::npos);
+  test_message_center_.RemoveAllNotifications(
+      /*by_user=*/false, message_center::FakeMessageCenter::RemoveType::ALL);
+
+  // 3. DisplayPinCode
+  notification_controller_->DisplayPinCode(malicious_device.get(), "1234");
+  notification = GetPairingNotification(malicious_device.get());
+  ASSERT_NE(nullptr, notification);
+  EXPECT_NE(
+      notification->message().find(u"\u2068Malicious Device \u202EName\u2069"),
+      std::u16string::npos);
+  EXPECT_NE(notification->message().find(u"1234"), std::u16string::npos);
+  EXPECT_EQ(notification->message().find(u'\n'), std::u16string::npos);
+  EXPECT_EQ(notification->message().find(u'\r'), std::u16string::npos);
+  test_message_center_.RemoveAllNotifications(
+      /*by_user=*/false, message_center::FakeMessageCenter::RemoveType::ALL);
+
+  // 4. AuthorizePairing
+  notification_controller_->AuthorizePairing(malicious_device.get());
+  notification = GetPairingNotification(malicious_device.get());
+  ASSERT_NE(nullptr, notification);
+  EXPECT_NE(
+      notification->message().find(u"\u2068Malicious Device \u202EName\u2069"),
+      std::u16string::npos);
+  EXPECT_EQ(notification->message().find(u'\n'), std::u16string::npos);
+  EXPECT_EQ(notification->message().find(u'\r'), std::u16string::npos);
 }
 
 }  // namespace ash

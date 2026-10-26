@@ -6,7 +6,6 @@
 #include "base/test/bind.h"
 #include "base/test/gtest_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -67,13 +66,13 @@ class WebContentsInteractionTestUtilInteractiveUiTest
 
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         prefs::kTabSearchPinnedToTabstrip, true);
     embedded_test_server()->StartAcceptingConnections();
   }
 
   void TearDownOnMainThread() override {
-    browser()->profile()->GetPrefs()->ClearPref(
+    browser()->GetProfile()->GetPrefs()->ClearPref(
         prefs::kTabSearchPinnedToTabstrip);
     EXPECT_TRUE(embedded_test_server()->ShutdownAndWaitUntilComplete());
     InProcessBrowserTest::TearDownOnMainThread();

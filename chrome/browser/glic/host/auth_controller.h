@@ -10,7 +10,8 @@
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/glic/host/glic.mojom.h"
+#include "chrome/browser/glic/host/glic.mojom-shared.h"
+#include "chrome/browser/glic/host/glic_webui.mojom.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 
 class Profile;
@@ -32,9 +33,10 @@ enum class GlicCookieSyncTrigger {
   kOnRefreshTokenUpdated = 3,
   kMaybeSyncCookiesOnError = 4,
   kGlicClient = 5,
-  kMaxValue = kGlicClient,
+  kInstanceCreated = 6,
+  kMaxValue = kInstanceCreated,
 };
-// LINT.ThenChange(tools/metrics/histograms/metadata/glic/enums.xml:GlicCookieSyncTrigger)
+// LINT.ThenChange(//tools/metrics/histograms/metadata/glic/enums.xml:GlicCookieSyncTrigger)
 
 bool IsPrimaryAccountGoogleInternal(signin::IdentityManager& signin_manager);
 
@@ -88,6 +90,16 @@ class AuthController : public signin::IdentityManager::Observer {
     return cookie_synchronizer_.get();
   }
 
+  // Called when a Glic instance is created due to user action.
+  void OnInstanceCreated();
+
+  bool HasInstanceBeenCreatedForTesting() const {
+    return has_instance_been_created_;
+  }
+  void SetInstanceCreatedForTesting(bool created) {
+    has_instance_been_created_ = created;
+  }
+
   bool NeedsSyncForTesting() const;
 
   // signin::IdentityManager::Observer implementation.
@@ -111,6 +123,7 @@ class AuthController : public signin::IdentityManager::Observer {
   base::WeakPtr<AuthController> GetWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();
   }
+  void DelayedForceSyncCookies(GlicCookieSyncTrigger trigger);
   void CookieSyncDone(GlicCookieSyncTrigger trigger,
                       base::OnceCallback<void(bool)> callback,
                       bool sync_success);
@@ -120,6 +133,8 @@ class AuthController : public signin::IdentityManager::Observer {
       bool sync_success);
   void RecordSyncResult(GlicCookieSyncTrigger trigger, bool success);
   void MaybeSyncCookiesOnError();
+  void MaybeSetNeedsSync();
+  bool ShouldSyncCookiesDelayed();
 
   raw_ptr<Profile> profile_;
   raw_ptr<signin::IdentityManager> identity_manager_;
@@ -129,6 +144,7 @@ class AuthController : public signin::IdentityManager::Observer {
       observation_;
   base::TimeTicks last_sync_on_error_time_;
   base::OneShotTimer token_change_sync_timer_;
+  bool has_instance_been_created_ = false;
   base::WeakPtrFactory<AuthController> weak_ptr_factory_{this};
 };
 

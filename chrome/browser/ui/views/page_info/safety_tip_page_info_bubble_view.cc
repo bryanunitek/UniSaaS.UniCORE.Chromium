@@ -7,7 +7,6 @@
 #include "base/functional/bind.h"
 #include "chrome/browser/lookalikes/safety_tip_ui_helper.h"
 #include "chrome/browser/platform_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
@@ -21,15 +20,12 @@
 #include "content/public/browser/navigation_handle.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/gfx/color_utils.h"
 #include "ui/views/bubble/bubble_frame_view.h"
-#include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/box_layout_view.h"
-#include "ui/views/style/typography.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
@@ -238,12 +234,11 @@ void ShowSafetyTipDialog(
 
   bubble_anchor_util::AnchorConfiguration configuration =
       bubble_anchor_util::GetPageInfoAnchorConfiguration(
-          browser->GetBrowserForMigrationOnly(),
-          bubble_anchor_util::Anchor::kLocationBar);
-  gfx::Rect anchor_rect = configuration.anchor.IsNull()
-                              ? bubble_anchor_util::GetPageInfoAnchorRect(
-                                    browser->GetBrowserForMigrationOnly())
-                              : gfx::Rect();
+          browser, bubble_anchor_util::Anchor::kLocationBar);
+  gfx::Rect anchor_rect =
+      configuration.anchor.IsNull()
+          ? bubble_anchor_util::GetPageInfoAnchorRect(browser)
+          : gfx::Rect();
   gfx::NativeWindow parent_window = browser->GetWindow()->GetNativeWindow();
   gfx::NativeView parent_view = platform_util::GetViewForWindow(parent_window);
 

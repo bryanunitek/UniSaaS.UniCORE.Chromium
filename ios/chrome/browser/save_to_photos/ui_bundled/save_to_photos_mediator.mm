@@ -48,9 +48,6 @@ namespace {
 
 // Maximum length of the suggested image name passed to the Photos service.
 constexpr size_t kSuggestedImageNameMaxLength = 100;
-NSString* const kNotEnoughStorageErrorLocalizedDescription =
-    @"The remaining storage in the user's account is not enough to perform "
-    @"this operation.";
 
 NSURL* GetGooglePhotosAppURL() {
   NSURLComponents* photosAppURLComponents = [[NSURLComponents alloc] init];
@@ -94,7 +91,7 @@ NSString* const kGooglePhotosRecentlyAddedURLString =
 NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
 
 @interface SaveToPhotosMediator () <AuthenticationServiceObserving,
-                                    IdentityManagerObserverBridgeDelegate>
+                                    IdentityManagerObserving>
 
 // Identity used to perform an upload. Should be set when the user selects an
 // identity, right before starting to upload. If the upload fails, should be
@@ -369,7 +366,7 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
       [[AccountPickerConfiguration alloc] init];
   configuration.useBrandedTitle = YES;
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
-  configuration.brandedSymbolName = kGoogleFullSymbol;
+  configuration.brandedSymbol = SymbolGoogleFull;
   configuration.titleText = l10n_util::GetNSString(
       IDS_IOS_SAVE_TO_PHOTOS_ACCOUNT_PICKER_GOOGLE_PHOTOS_TITLE);
 #else
@@ -453,14 +450,6 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
     _identity = nil;
     base::UmaHistogramTimes(kSaveToPhotosUploadFailureLatencyHistogram,
                             base::TimeTicks::Now() - _uploadStart);
-    // TODO(crbug.com/41486457): Emit the failure type as-is once the service is
-    // able to identify out-of-storage errors by itself.
-    if (result.failure_type == PhotosServiceUploadFailureType::kUploadPhoto2 &&
-        [result.error.localizedDescription
-            isEqualToString:kNotEnoughStorageErrorLocalizedDescription]) {
-      result.failure_type =
-          PhotosServiceUploadFailureType::kUploadPhoto2NotEnoughStorage;
-    }
     base::UmaHistogramEnumeration(kSaveToPhotosUploadFailureTypeHistogram,
                                   result.failure_type);
     // If the user is out of storage, offer to manage their storage.
@@ -615,9 +604,9 @@ NSString* const kGooglePhotosAppURLScheme = @"googlephotos";
   [self.delegate hideSaveToPhotos];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   if (event.GetEventTypeFor(signin::ConsentLevel::kSignin) ==
       signin::PrimaryAccountChangeEvent::Type::kCleared) {

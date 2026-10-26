@@ -16,7 +16,6 @@ import android.content.Intent;
 import android.text.SpannableString;
 
 import androidx.test.core.app.ApplicationProvider;
-import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -31,7 +30,9 @@ import org.robolectric.shadows.ShadowActivity;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.customtabs.CustomTabActivity;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.test.util.modaldialog.FakeModalDialogManager;
@@ -39,6 +40,7 @@ import org.chromium.ui.text.ChromeClickableSpan;
 
 /** Unit tests for {@link AutofillVirtualCardUnenrollmentDialog} */
 @RunWith(BaseRobolectricTestRunner.class)
+@EnableFeatures(ChromeFeatureList.CCT_DONT_OVERRIDE_INTENT_MIME_TYPE)
 public class AutofillVirtualCardUnenrollmentDialogTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -58,7 +60,6 @@ public class AutofillVirtualCardUnenrollmentDialogTest {
     }
 
     @Test
-    @SmallTest
     public void dialogShown() {
         assertThat(mModalDialogManager.getShownDialogModel()).isNotNull();
         // The callback should not have been called yet.
@@ -66,7 +67,6 @@ public class AutofillVirtualCardUnenrollmentDialogTest {
     }
 
     @Test
-    @SmallTest
     public void positiveButtonPressed() {
         assertThat(mModalDialogManager.getShownDialogModel()).isNotNull();
         mModalDialogManager.clickPositiveButton();
@@ -76,7 +76,6 @@ public class AutofillVirtualCardUnenrollmentDialogTest {
     }
 
     @Test
-    @SmallTest
     public void negativeButtonPressed() {
         assertThat(mModalDialogManager.getShownDialogModel()).isNotNull();
         mModalDialogManager.clickNegativeButton();
@@ -86,7 +85,6 @@ public class AutofillVirtualCardUnenrollmentDialogTest {
     }
 
     @Test
-    @SmallTest
     public void learnMoreTextClicked() {
         // Create activity and its shadow to see if CustomTabActivity is launched.
         Activity activity = Robolectric.buildActivity(Activity.class).setup().get();

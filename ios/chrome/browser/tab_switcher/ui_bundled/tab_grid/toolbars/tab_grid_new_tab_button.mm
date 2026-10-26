@@ -13,7 +13,6 @@
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/pointer_interaction_util.h"
 #import "ios/chrome/grit/ios_strings.h"
-#import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util.h"
 
 namespace {
@@ -69,54 +68,49 @@ UIButtonConfigurationUpdateHandler ConfigurationUpdateHandler() {
 }  // namespace
 
 @implementation TabGridNewTabButton {
-  // The symbol for this button.
-  UIImage* _symbol;
   // The image container, centered with the button. Not using the image of the
   // button to avoid alignment issues.
   UIImageView* _imageContainer;
+  // Constraint setting the height (and width) of the button.
+  NSLayoutConstraint* _heightConstraint;
 }
 
 - (instancetype)initWithLargeSize:(BOOL)largeSize {
   self = [super initWithFrame:CGRectZero];
   if (self) {
     _buttonColor = [UIColor colorNamed:kStaticBlue400Color];
-    CGFloat symbolSize;
-    CGFloat buttonSize;
-    if (largeSize) {
-      if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
-        symbolSize = kLargeSymbolSizeIPad;
-        buttonSize = kLargeSizeIPad;
-      } else {
-        symbolSize = kLargeSymbolSize;
-        buttonSize = kLargeSize;
-      }
-    } else {
-      symbolSize = kSmallSymbolSize;
-      buttonSize = kSmallSize;
+
+    self.configuration = [UIButtonConfiguration filledButtonConfiguration];
+    self.tintColor = UIColor.blackColor;
+    if (@available(iOS 26, *)) {
+      self.configuration = [UIButtonConfiguration glassButtonConfiguration];
     }
+    self.configurationUpdateHandler = ConfigurationUpdateHandler();
 
-    _symbol = CustomSymbolWithPointSize(kPlusCircleFillSymbol, symbolSize);
-
-    if (@available(iOS 18, *)) {
-      self.configuration = [UIButtonConfiguration filledButtonConfiguration];
-      _symbol = DefaultSymbolWithPointSize(kPlusSymbol, symbolSize);
-      self.tintColor = UIColor.blackColor;
-      if (@available(iOS 26, *)) {
-        self.configuration = [UIButtonConfiguration glassButtonConfiguration];
-      }
-      self.configurationUpdateHandler = ConfigurationUpdateHandler();
-    }
-
-    _imageContainer = [[UIImageView alloc] initWithImage:_symbol];
+    _imageContainer = [[UIImageView alloc] init];
     _imageContainer.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_imageContainer];
 
     AddSameCenterConstraints(self, _imageContainer);
 
+    _heightConstraint =
+        [self.heightAnchor constraintEqualToConstant:kSmallSize];
     [NSLayoutConstraint activateConstraints:@[
-      [self.heightAnchor constraintEqualToConstant:buttonSize],
+      _heightConstraint,
       [self.widthAnchor constraintEqualToAnchor:self.heightAnchor],
     ]];
+
+    // Only the large button's size depends on the size class.
+    if (largeSize) {
+      [self updateLargeSize];
+      [self registerForTraitChanges:@[
+        UITraitHorizontalSizeClass.class, UITraitVerticalSizeClass.class
+      ]
+                         withAction:@selector(updateLargeSize)];
+    } else {
+      _imageContainer.image = SymbolWithPointSize(SymbolPlus, kSmallSymbolSize);
+    }
+
     self.pointerInteractionEnabled = YES;
     self.pointerStyleProvider = CreateLiftEffectCirclePointerStyleProvider();
   }
@@ -144,36 +138,32 @@ UIButtonConfigurationUpdateHandler ConfigurationUpdateHandler() {
 
 #pragma mark - Private
 
+// Updates the button and symbol sizes of the large button. It is bigger in
+// Regular x Regular.
+- (void)updateLargeSize {
+  BOOL isRegularRegular =
+      self.traitCollection.horizontalSizeClass ==
+          UIUserInterfaceSizeClassRegular &&
+      self.traitCollection.verticalSizeClass == UIUserInterfaceSizeClassRegular;
+  _heightConstraint.constant = isRegularRegular ? kLargeSizeIPad : kLargeSize;
+  _imageContainer.image = SymbolWithPointSize(
+      SymbolPlus, isRegularRegular ? kLargeSymbolSizeIPad : kLargeSymbolSize);
+}
+
 // Sets page using a symbol image.
 - (void)setSymbolPage:(TabGridPage)page {
   switch (page) {
     case TabGridPageIncognitoTabs:
       self.accessibilityLabel =
           l10n_util::GetNSString(IDS_IOS_TAB_GRID_CREATE_NEW_INCOGNITO_TAB);
-
-      if (!@available(iOS 18, *)) {
-        _imageContainer.image = SymbolWithPalette(
-            _symbol, @[ UIColor.blackColor, UIColor.whiteColor ]);
-      }
       break;
     case TabGridPageRegularTabs:
       self.accessibilityLabel =
           l10n_util::GetNSString(IDS_IOS_TAB_GRID_CREATE_NEW_TAB);
-
-      if (!@available(iOS 18, *)) {
-        _imageContainer.image =
-            SymbolWithPalette(_symbol, @[ UIColor.blackColor, _buttonColor ]);
-      }
       break;
     case TabGridPageTabGroups:
       self.accessibilityLabel =
           l10n_util::GetNSString(IDS_IOS_TAB_GRID_CREATE_NEW_TAB_GROUP);
-
-      if (!@available(iOS 18, *)) {
-        _imageContainer.image =
-            SymbolWithPalette(_symbol, @[ UIColor.blackColor, _buttonColor ]);
-      }
-
       break;
   }
   _page = page;

@@ -20,15 +20,19 @@
 #include "base/test/bind.h"
 #include "base/test/run_until.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_model_delegate.h"
 #include "chrome/browser/browsing_data/counters/site_data_counting_helper.h"
+#include "chrome/browser/download/download_core_service.h"
+#include "chrome/browser/download/download_core_service_factory.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "components/browsing_data/content/browsing_data_model.h"
 #include "components/browsing_data/content/browsing_data_test_util.h"
@@ -46,11 +50,11 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/leveldatabase/env_chromium.h"
 #include "third_party/re2/src/re2/re2.h"
-#include "ui/base/models/tree_model.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/download/download_browsertest_utils.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #endif
 
@@ -84,6 +88,10 @@ class DownloadManagerWaiter : public content::DownloadManager::Observer {
   ~DownloadManagerWaiter() override { download_manager_->RemoveObserver(this); }
 
   void WaitForInitialized() {
+    if (auto* service = DownloadCoreServiceFactory::GetForBrowserContext(
+            download_manager_->GetBrowserContext())) {
+      service->InitializeHistory();
+    }
     initialized_ = download_manager_->IsManagerInitialized();
     if (initialized_)
       return;
@@ -119,7 +127,7 @@ void BrowsingDataRemoverBrowserTestBase::InitFeatureLists(
 }
 
 #if !BUILDFLAG(IS_ANDROID)
-Browser* BrowsingDataRemoverBrowserTestBase::GetBrowser() const {
+BrowserWindowInterface* BrowsingDataRemoverBrowserTestBase::GetBrowser() const {
   return incognito_browser_ ? incognito_browser_.get() : browser();
 }
 
@@ -257,7 +265,7 @@ BrowsingDataRemoverBrowserTestBase::GetActiveWebContents() {
 
 #if !BUILDFLAG(IS_ANDROID)
 content::WebContents* BrowsingDataRemoverBrowserTestBase::GetActiveWebContents(
-    Browser* browser) {
+    BrowserWindowInterface* browser) {
   return browser->tab_strip_model()->GetActiveWebContents();
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
@@ -266,7 +274,7 @@ Profile* BrowsingDataRemoverBrowserTestBase::GetProfile() {
 #if BUILDFLAG(IS_ANDROID)
   return chrome_test_utils::GetProfile(this);
 #else
-  return GetBrowser()->profile();
+  return GetBrowser()->GetProfile();
 #endif
 }
 
@@ -308,7 +316,7 @@ void BrowsingDataRemoverBrowserTestBase::CheckUserDirectoryForString(
     }
 
     // Check file name.
-    if (file.find(hostname) != std::string::npos) {
+    if (file.contains(hostname)) {
       ADD_FAILURE() << "Found file name: " << file << " containing "
                     << hostname;
     }
@@ -348,7 +356,7 @@ void BrowsingDataRemoverBrowserTestBase::CheckUserDirectoryForString(
         for (it->SeekToFirst(); it->Valid(); it->Next()) {
           std::string entry =
               it->key().ToString() + ":" + it->value().ToString();
-          if (entry.find(hostname) != std::string::npos) {
+          if (entry.contains(hostname)) {
             ADD_FAILURE() << "Found leveldb entry: " << file << " " << entry;
           }
         }

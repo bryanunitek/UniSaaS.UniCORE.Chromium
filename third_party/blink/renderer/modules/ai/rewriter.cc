@@ -31,9 +31,9 @@ void AIWritingAssistanceCreateClient<
             client_remote) {
   HeapMojoRemote<mojom::blink::AIManager>& ai_manager_remote =
       AIInterfaceProxy::GetAIManagerRemote(GetExecutionContext());
-  ai_manager_remote->CreateRewriter(
-      std::move(client_remote), ToMojoRewriterCreateOptions(options_),
-      monitor_ ? monitor_->BindRemote() : mojo::NullRemote());
+  ai_manager_remote->CreateRewriter(std::move(client_remote),
+                                    ToMojoRewriterCreateOptions(options_),
+                                    BindMonitorRemote());
 }
 
 template <>
@@ -152,7 +152,8 @@ void RewriterBase::RecordCreateOptionMetrics(
 Rewriter::Rewriter(ScriptState* script_state,
                    scoped_refptr<base::SequencedTaskRunner> task_runner,
                    mojo::PendingRemote<mojom::blink::AIRewriter> pending_remote,
-                   RewriterCreateOptions* options)
+                   RewriterCreateOptions* options,
+                   uint64_t context_window)
     : AIWritingAssistanceBase<Rewriter,
                               mojom::blink::AIRewriter,
                               mojom::blink::AIManagerCreateRewriterClient,
@@ -163,6 +164,7 @@ Rewriter::Rewriter(ScriptState* script_state,
           task_runner,
           std::move(pending_remote),
           std::move(options),
+          context_window,
           /*echo_whitespace_input=*/true) {}
 
 void Rewriter::Trace(Visitor* visitor) const {

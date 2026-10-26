@@ -16,7 +16,7 @@ import android.view.inputmethod.BaseInputConnection;
 
 import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.omnibox.OmniboxFeatures;
 
 import java.util.Locale;
@@ -39,39 +39,40 @@ class SpanCursorController {
         mDelegate = delegate;
         mAutocompleteBgColorSpan = new BackgroundColorSpan(mDelegate.getHighlightColor());
         mAdditionalTextFgColorSpan =
-                new ForegroundColorSpan(OmniboxResourceProvider.getAdditionalTextColor(context));
+                new ForegroundColorSpan(SemanticColorUtils.getDefaultTextColorSecondary(context));
     }
 
     public void setSpan(AutocompleteState state) {
         int sel = state.getSelection().from;
 
         Editable editable = mDelegate.getEditableText();
+        try (var capture = new UndoStackCapture(editable)) {
+            String autocompleteText = state.getAutocompleteText();
+            if (autocompleteText != null) {
+                SpannableString spanString = new SpannableString(autocompleteText);
+                // The flag here helps make sure that span does not get spill to other part of the
+                // text.
+                spanString.setSpan(
+                        mAutocompleteBgColorSpan,
+                        0,
+                        autocompleteText.length(),
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                editable.append(spanString);
+            }
 
-        String autocompleteText = state.getAutocompleteText();
-        if (autocompleteText != null) {
-            SpannableString spanString = new SpannableString(autocompleteText);
-            // The flag here helps make sure that span does not get spill to other part of the
-            // text.
-            spanString.setSpan(
-                    mAutocompleteBgColorSpan,
-                    0,
-                    autocompleteText.length(),
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            editable.append(spanString);
-        }
-
-        String additionalTextStr = state.getAdditionalText();
-        if (additionalTextStr != null
-                && OmniboxFeatures.shouldShowRichInlineAutocompleteUrl(
-                        state.getUserText().length())) {
-            String additionalText = " - " + additionalTextStr;
-            SpannableString additionalTextSpanString = new SpannableString(additionalText);
-            additionalTextSpanString.setSpan(
-                    mAdditionalTextFgColorSpan,
-                    0,
-                    additionalText.length(),
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            editable.append(additionalTextSpanString);
+            String additionalTextStr = state.getAdditionalText();
+            if (additionalTextStr != null
+                    && OmniboxFeatures.shouldShowRichInlineAutocompleteUrl(
+                            state.getUserText().length())) {
+                String additionalText = " - " + additionalTextStr;
+                SpannableString additionalTextSpanString = new SpannableString(additionalText);
+                additionalTextSpanString.setSpan(
+                        mAdditionalTextFgColorSpan,
+                        0,
+                        additionalText.length(),
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                editable.append(additionalTextSpanString);
+            }
         }
 
         // Keep the original selection before adding spannable string.
@@ -135,8 +136,10 @@ class SpanCursorController {
         int idx = getSpanIndex(editable, span);
         if (idx == -1) return false;
         if (DEBUG) Log.i(TAG, "removeSpan IDX[%d]", idx);
-        editable.removeSpan(span);
-        editable.delete(idx, editable.length());
+        try (var capture = new UndoStackCapture(editable)) {
+            editable.removeSpan(span);
+            editable.delete(idx, editable.length());
+        }
         if (DEBUG) {
             Log.i(TAG, "removeSpan - after removal: " + toDebugString(editable));
         }
@@ -165,7 +168,7 @@ class SpanCursorController {
 
     /**
      * @param editable The editable.
-     * @return Debug string for the given {@Editable}.
+     * @return Debug string for the given {@link Editable}.
      */
     private static String toDebugString(Editable editable) {
         return String.format(

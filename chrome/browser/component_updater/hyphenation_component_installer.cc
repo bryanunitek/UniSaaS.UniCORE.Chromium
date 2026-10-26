@@ -4,6 +4,13 @@
 
 #include "chrome/browser/component_updater/hyphenation_component_installer.h"
 
+#include <stdint.h>
+
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
@@ -33,7 +40,7 @@ class HyphenationDirectory {
 
   void Get(base::OnceCallback<void(const base::FilePath&)> callback) {
     DVLOG(1) << __func__;
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
     callbacks_.push_back(std::move(callback));
     if (!dir_.empty()) {
       FireCallbacks();
@@ -42,7 +49,7 @@ class HyphenationDirectory {
 
   void Set(const base::FilePath& new_dir) {
     DVLOG(1) << __func__ << "\"" << new_dir << "\"";
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
     CHECK(!new_dir.empty());
     if (new_dir == dir_) {
       return;
@@ -55,7 +62,7 @@ class HyphenationDirectory {
   void FireCallbacks() {
     DVLOG(1) << __func__ << " \"" << dir_
              << "\", callbacks=" << callbacks_.size();
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
     CHECK(!dir_.empty());
     std::vector<base::OnceCallback<void(const base::FilePath&)>> callbacks;
     std::swap(callbacks, callbacks_);
@@ -124,8 +131,7 @@ base::FilePath HyphenationComponentInstallerPolicy::GetRelativeInstallDir()
 
 void HyphenationComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(std::begin(kHyphenationPublicKeySHA256),
-               std::end(kHyphenationPublicKeySHA256));
+  hash->assign_range(kHyphenationPublicKeySHA256);
 }
 
 std::string HyphenationComponentInstallerPolicy::GetName() const {

@@ -28,6 +28,10 @@ namespace {
 // it, and returns the infobar type to show.
 std::optional<StartupLaunchInfoBarManager::InfoBarType>
 UpdatePrefAndGetInfoBarType(PrefService* local_state) {
+  // Don't show the infobar or update the pref if promotions are disabled.
+  if (!local_state->GetBoolean(prefs::kPromotionsEnabled)) {
+    return std::nullopt;
+  }
   if (!local_state->FindPreference(prefs::kForegroundLaunchOnLogin)
            ->IsDefaultValue()) {
     return std::nullopt;
@@ -53,6 +57,18 @@ bool ShouldShowInfoBars() {
   constexpr int kRepromptDurationDays = 21;
 
   PrefService* local_state = g_browser_process->local_state();
+
+  if (!local_state->GetBoolean(prefs::kPromotionsEnabled)) {
+    return false;
+  }
+
+  // Admins set this via the LaunchOnStartupEnabled policy, possibly after
+  // startup; prompting the user to change it would be pointless.
+  const PrefService::Preference* launch_pref =
+      local_state->FindPreference(prefs::kForegroundLaunchOnLogin);
+  if (launch_pref->IsManaged() || launch_pref->IsRecommended()) {
+    return false;
+  }
 
   const bool is_accepted =
       local_state->GetBoolean(prefs::kStartupLaunchInfobarAccepted);
@@ -85,7 +101,9 @@ StartupLaunchManager::Client::Client(StartupLaunchReason launch_reason)
   // processing the final launch configuration until this client has
   // initialized.
   auto* launch_manager = StartupLaunchManager::From(g_browser_process);
-  launch_manager->AcquireSharedWriteLock();
+  if (launch_manager) {
+    launch_manager->AcquireSharedWriteLock();
+  }
 }
 
 StartupLaunchManager::Client::~Client() {
@@ -108,14 +126,16 @@ void StartupLaunchManager::Client::SetLaunchOnStartup(bool enable_launch) {
   launch_enabled_.emplace(enable_launch);
 
   auto* launch_manager = StartupLaunchManager::From(g_browser_process);
-  if (enable_launch) {
-    launch_manager->RegisterLaunchOnStartup(launch_reason_);
-  } else {
-    launch_manager->UnregisterLaunchOnStartup(launch_reason_);
-  }
+  if (launch_manager) {
+    if (enable_launch) {
+      launch_manager->RegisterLaunchOnStartup(launch_reason_);
+    } else {
+      launch_manager->UnregisterLaunchOnStartup(launch_reason_);
+    }
 
-  if (release_lock) {
-    launch_manager->ReleaseSharedWriteLock();
+    if (release_lock) {
+      launch_manager->ReleaseSharedWriteLock();
+    }
   }
 }
 
@@ -168,7 +188,8 @@ void StartupLaunchManager::SetInfoBarManager(
 }
 
 void StartupLaunchManager::MaybeShowInfoBars() {
-  if (infobar_type_.has_value() && ShouldShowInfoBars()) {
+  if (features::IsForegroundLaunchInfoBarEnabled() &&
+      infobar_type_.has_value() && ShouldShowInfoBars()) {
     infobar_manager_->ShowInfoBars(*infobar_type_);
     is_showing_infobar_ = true;
   }
@@ -226,6 +247,12 @@ void StartupLaunchManager::ForceReleaseAllLocks() {
 void StartupLaunchManager::OnLaunchOnStartupPrefChanged() {
   UpdateForegroundLaunchRegistration();
 
+  // The observer also fires for policy changes, which aren't user toggles.
+  if (!g_browser_process->local_state()
+           ->FindPreference(prefs::kForegroundLaunchOnLogin)
+           ->IsUserControlled()) {
+    return;
+  }
   constexpr char histogram_name[] =
       "Startup.Launch.Foreground.PreferenceChanged";
   base::UmaHistogramBoolean(histogram_name,

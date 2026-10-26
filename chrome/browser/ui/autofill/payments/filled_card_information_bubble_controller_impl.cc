@@ -8,10 +8,10 @@
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_handler.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/payments/bnpl_manager.h"
@@ -23,7 +23,9 @@
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace autofill {
 
@@ -89,7 +91,7 @@ void FilledCardInformationBubbleControllerImpl::SetupAndShowBubble(
 void FilledCardInformationBubbleControllerImpl::SetupBubbleState(
     FilledCardInformationBubbleOptions options) {
   was_bubble_shown_ = false;
-  DCHECK(options.IsValid());
+  CHECK(options.IsValid(), base::NotFatalUntil::M162);
   options_ = std::move(options);
   is_user_gesture_ = false;
   should_icon_be_visible_ = true;
@@ -226,9 +228,9 @@ bool FilledCardInformationBubbleControllerImpl::ShouldIconBeVisible() const {
 
 void FilledCardInformationBubbleControllerImpl::OnLinkClicked() {
   web_contents()->OpenURL(
-      content::OpenURLParams(GetLearnMoreUrl(), content::Referrer(),
-                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                             ui::PAGE_TRANSITION_LINK, false),
+      content::OpenURLParams::CreateBrowserInitiated(
+          GetLearnMoreUrl(), WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_LINK),
       /*navigation_handle_callback=*/{});
 }
 
@@ -272,9 +274,10 @@ void FilledCardInformationBubbleControllerImpl::OnFieldClicked(
   clicked_field_ = field;
   LogFilledCardInformationBubbleFieldClicked(field);
   // Strip the whitespaces that were added to the card number for legibility.
-  UpdateClipboard(field == FilledCardInformationBubbleField::kCardNumber
-                      ? StripCardNumberSeparators(GetValueForField(field))
-                      : GetValueForField(field));
+  UpdateClipboard(
+      field == FilledCardInformationBubbleField::kCardNumber
+          ? StripSeparatorsAndNormalizeDigits(GetValueForField(field))
+          : GetValueForField(field));
 }
 
 bool FilledCardInformationBubbleControllerImpl::ShouldShowGooglePayIconInTitle()
@@ -425,7 +428,7 @@ void FilledCardInformationBubbleControllerImpl::DoShowBubble() {
                      ->GetAutofillBubbleHandler()
                      ->ShowFilledCardInformationBubble(web_contents(), this,
                                                        is_user_gesture_));
-  DCHECK(bubble_view());
+  CHECK(bubble_view(), base::NotFatalUntil::M162);
   bubble_has_been_shown_ = true;
 
   autofill_metrics::LogFilledCardInformationBubbleShown(is_user_gesture_);

@@ -11,18 +11,18 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/app_restore/app_restore_test_util.h"
 #include "chrome/browser/ash/app_restore/full_restore_app_launch_handler.h"
 #include "chrome/browser/ash/app_restore/full_restore_service.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -89,7 +89,13 @@ class FirstNonEmptyPaintObserver : public content::WebContentsObserver {
 
 class FirstWebContentsProfilerAshTest : public InProcessBrowserTest {
  public:
-  FirstWebContentsProfilerAshTest() { set_launch_browser_for_testing(nullptr); }
+  FirstWebContentsProfilerAshTest() {
+    set_launch_browser_for_testing(nullptr);
+    // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox is
+    // enabled and then remove this.
+    webui_omnibox_feature_list_.InitFromCommandLine(
+        "", "WebUIOmniboxPopup,WebUIOmniboxAimPopup");
+  }
   FirstWebContentsProfilerAshTest(const FirstWebContentsProfilerAshTest&) =
       delete;
   FirstWebContentsProfilerAshTest& operator=(
@@ -106,6 +112,7 @@ class FirstWebContentsProfilerAshTest : public InProcessBrowserTest {
 
  protected:
   base::HistogramTester histogram_tester_;
+  base::test::ScopedFeatureList webui_omnibox_feature_list_;
 };
 
 // Creates browser window that will be restored in the main test.

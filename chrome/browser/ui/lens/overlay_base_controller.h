@@ -25,6 +25,7 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/views/controls/webview/web_contents_delegate_views.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
 #include "ui/views/widget/widget.h"
@@ -43,12 +44,13 @@ class PrefService;
 // Manages all state associated with the overlay.
 // This class is not thread safe. It should only be used from the browser
 // thread.
-class OverlayBaseController : public content::WebContentsDelegate,
-                              public views::ViewObserver,
-                              public views::WidgetObserver,
-                              public content::RenderProcessHostObserver,
-                              public ImmersiveModeController::Observer,
-                              public content::WebContentsObserver {
+class OverlayBaseController
+    : public views::WebContentsDelegateViews<OverlayBaseController>,
+      public views::ViewObserver,
+      public views::WidgetObserver,
+      public content::RenderProcessHostObserver,
+      public ImmersiveModeController::Observer,
+      public content::WebContentsObserver {
  public:
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kOverlayId);
 
@@ -159,6 +161,7 @@ class OverlayBaseController : public content::WebContentsDelegate,
   void RenderProcessExited(
       content::RenderProcessHost* host,
       const content::ChildProcessTerminationInfo& info) override;
+  void RenderProcessHostDestroyed(content::RenderProcessHost* host) override;
 
   // Called when the UI needs to create the view to show in the overlay.
   raw_ptr<views::View> CreateViewForOverlay();
@@ -335,8 +338,10 @@ class OverlayBaseController : public content::WebContentsDelegate,
   void ShowOverlay();
 
   // Hides the overlay view and restores input to the tab contents web view.
-  // This does not change any overlay state.
-  void HideOverlay();
+  // This does not change any overlay state. `entering_background` is true when
+  // the overlay is only being hidden because its tab is entering the
+  // background, in which case it is re-shown when the tab is foregrounded.
+  virtual void HideOverlay(bool entering_background);
 
   // Hides the overlay, but also sets the state to kHidden.
   void HideOverlayAndSetHiddenState();
@@ -356,6 +361,9 @@ class OverlayBaseController : public content::WebContentsDelegate,
 
   // Close the preselection bubble.
   void ClosePreselectionBubbleImpl();
+
+  // Returns the web view hosting the overlay WebUI if it exists.
+  views::WebView* GetOverlayWebView() const;
 
   // Returns the host view that the overlay should be attached to. Can be null.
   views::View* GetHostView() const;
@@ -408,6 +416,11 @@ class OverlayBaseController : public content::WebContentsDelegate,
   base::ScopedObservation<ImmersiveModeController,
                           ImmersiveModeController::Observer>
       immersive_mode_observer_{this};
+
+  // Observer to get notifications when the overlay's renderer process exits.
+  base::ScopedObservation<content::RenderProcessHost,
+                          content::RenderProcessHostObserver>
+      render_process_host_observation_{this};
 
   // Layer delegate that handles blurring the background behind the WebUI.
   std::unique_ptr<lens::LensOverlayBlurLayerDelegate>

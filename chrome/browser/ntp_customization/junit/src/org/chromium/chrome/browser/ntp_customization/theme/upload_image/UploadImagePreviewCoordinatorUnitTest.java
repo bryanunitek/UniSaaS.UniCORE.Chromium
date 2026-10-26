@@ -18,6 +18,7 @@ import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.app.Dialog;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Matrix;
 import android.graphics.Point;
@@ -43,6 +44,7 @@ import org.robolectric.shadows.ShadowDialog;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.composeplate.ComposeplateUtils;
 import org.chromium.chrome.browser.composeplate.ComposeplateUtilsJni;
@@ -54,8 +56,8 @@ import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBa
 import org.chromium.chrome.browser.ntp_customization.R;
 import org.chromium.chrome.browser.ntp_customization.theme.NtpThemeProperty;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase.PlatformType;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataUploadImage;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
@@ -63,6 +65,7 @@ import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /** Unit tests for {@link UploadImagePreviewCoordinator}. */
+@Features.EnableFeatures(ChromeFeatureList.FEED_CONTAINMENT)
 @RunWith(BaseRobolectricTestRunner.class)
 public class UploadImagePreviewCoordinatorUnitTest {
     private static final String TEST_FILE_ID_HASH = "test_file_id_hash";
@@ -74,12 +77,12 @@ public class UploadImagePreviewCoordinatorUnitTest {
     @Mock
     private UploadImagePreviewCoordinator.UploadImagePreviewClickedCallback mOnClickedCallback;
 
-    @Mock private CropImageView mCropImageView;
     @Mock private TemplateUrlService mTemplateUrlService;
     @Mock private Profile mProfile;
     @Mock private ComposeplateUtils.Natives mComposeplateUtilsJni;
 
     private Dialog mDialog;
+    private CropImageView mCropImageView;
     private UploadImagePreviewCoordinator mUploadImagePreviewCoordinator;
     private View mSaveButton;
     private View mCancelButton;
@@ -114,6 +117,7 @@ public class UploadImagePreviewCoordinatorUnitTest {
         View contentView = mDialog.findViewById(android.R.id.content);
         mSaveButton = contentView.findViewById(R.id.save_button);
         mCancelButton = contentView.findViewById(R.id.cancel_button);
+        mCropImageView = contentView.findViewById(R.id.preview_image);
         mLogoBitmap = Bitmap.createBitmap(5, 5, Bitmap.Config.ARGB_8888);
         mToolbarHeight =
                 mActivity.getResources().getDimensionPixelSize(R.dimen.toolbar_height_no_shadow);
@@ -275,34 +279,36 @@ public class UploadImagePreviewCoordinatorUnitTest {
     }
 
     private void setupCropImageView() {
-        mUploadImagePreviewCoordinator.setCropImageViewForTesting(mCropImageView);
         mPortraitMatrix = new Matrix();
         mPortraitMatrix.setTranslate(100f, 200f); // Translate X=100, Y=200
 
         mLandscapeMatrix = new Matrix();
         mLandscapeMatrix.setScale(2.5f, 3.5f);
 
-        when(mCropImageView.getPortraitMatrix()).thenReturn(mPortraitMatrix);
-        when(mCropImageView.getLandscapeMatrix()).thenReturn(mLandscapeMatrix);
+        mCropImageView.setPortraitMatrixForTesting(mPortraitMatrix);
+        mCropImageView.setIsInitializedPortraitForTesting(true);
+        mCropImageView.setLandscapeMatrixForTesting(mLandscapeMatrix);
+        mCropImageView.setIsInitializedLandscapeForTesting(true);
 
-        when(mCropImageView.getPortraitWindowSize()).thenReturn(PORTRAIT_POINT);
-        when(mCropImageView.getLandscapeWindowSize()).thenReturn(LANDSCAPE_POINT);
+        mCropImageView.setWindowSizeForTesting(Configuration.ORIENTATION_PORTRAIT, PORTRAIT_POINT);
+        mCropImageView.setWindowSizeForTesting(
+                Configuration.ORIENTATION_LANDSCAPE, LANDSCAPE_POINT);
     }
 
     private void setupCropImageView_pinchToResize() {
         setupCropImageView();
-        when(mCropImageView.getIsScaled()).thenReturn(true);
-        when(mCropImageView.getIsScrolled()).thenReturn(true);
+        mCropImageView.setIsScaledForTesting(true);
+        mCropImageView.setIsScrolledForTesting(true);
     }
 
     private void setupCropImageView_rotateScreen() {
         setupCropImageView();
-        when(mCropImageView.getIsScreenRotated()).thenReturn(true);
+        mCropImageView.setIsScreenRotatedForTesting(true);
     }
 
     private void setupCropImageView_rotateScreenAndPinchToResize() {
         setupCropImageView_pinchToResize();
-        when(mCropImageView.getIsScreenRotated()).thenReturn(true);
+        mCropImageView.setIsScreenRotatedForTesting(true);
     }
 
     @Test
@@ -758,7 +764,7 @@ public class UploadImagePreviewCoordinatorUnitTest {
                         mPortraitMatrix, mLandscapeMatrix, PORTRAIT_POINT, LANDSCAPE_POINT);
         NtpBackgroundDataUploadImage currentUploadImage =
                 new NtpBackgroundDataUploadImage(
-                        PlatformType.ANDROID_LOCAL,
+                        PlatformType.ANDROID,
                         info,
                         mBitmap,
                         /* primaryColor= */ null,

@@ -16,7 +16,7 @@
 #include "chrome/browser/history/web_history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
 #include "components/browsing_data/core/pref_names.h"
@@ -40,8 +40,10 @@ class HistoryCounterTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     time_ = base::Time::Now();
-    history_service_ = HistoryServiceFactory::GetForProfileWithoutCreating(
-        browser()->GetProfile());
+    Profile* profile = browser()->GetProfile();
+    history_service_ =
+        HistoryServiceFactory::GetForProfileWithoutCreating(profile);
+    web_history_service_ = WebHistoryServiceFactory::GetForProfile(profile);
     fake_web_history_service_ =
         std::make_unique<history::FakeWebHistoryService>();
 
@@ -51,6 +53,7 @@ class HistoryCounterTest : public InProcessBrowserTest {
 
   void TearDownOnMainThread() override {
     fake_web_history_service_.reset();
+    web_history_service_ = nullptr;
     history_service_ = nullptr;
   }
 
@@ -65,12 +68,12 @@ class HistoryCounterTest : public InProcessBrowserTest {
   void RevertTimeInDays(int days) { time_ -= base::Days(days); }
 
   void SetHistoryDeletionPref(bool value) {
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         browsing_data::prefs::kDeleteBrowsingHistory, value);
   }
 
   void SetDeletionPeriodPref(browsing_data::TimePeriod period) {
-    browser()->profile()->GetPrefs()->SetInteger(
+    browser()->GetProfile()->GetPrefs()->SetInteger(
         browsing_data::prefs::kDeleteTimePeriod, static_cast<int>(period));
   }
 
@@ -111,19 +114,12 @@ class HistoryCounterTest : public InProcessBrowserTest {
     }
   }
 
-  history::WebHistoryService* GetFakeWebHistoryService(Profile* profile,
-                                                       bool check_sync_status) {
-    // |check_sync_status| is true when the factory should check if
-    // history sync is enabled.
-    if (!check_sync_status ||
-        WebHistoryServiceFactory::GetForProfile(profile)) {
-      return fake_web_history_service_.get();
-    }
-    return nullptr;
+  history::FakeWebHistoryService* GetFakeWebHistoryService() {
+    return fake_web_history_service_.get();
   }
 
-  history::WebHistoryService* GetRealWebHistoryService(Profile* profile) {
-    return WebHistoryServiceFactory::GetForProfile(profile);
+  history::WebHistoryService* GetRealWebHistoryService() {
+    return web_history_service_;
   }
 
   history::HistoryService* GetHistoryService() { return history_service_; }
@@ -131,6 +127,7 @@ class HistoryCounterTest : public InProcessBrowserTest {
  private:
   std::unique_ptr<base::RunLoop> run_loop_;
   raw_ptr<history::HistoryService> history_service_ = nullptr;
+  raw_ptr<history::WebHistoryService> web_history_service_ = nullptr;
   std::unique_ptr<history::FakeWebHistoryService> fake_web_history_service_;
   base::Time time_;
 
@@ -169,13 +166,10 @@ IN_PROC_BROWSER_TEST_F(HistoryCounterTest, DuplicateVisits) {
   AddVisit("https://www.google.com");
   AddVisit("https://www.chrome.com");
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
-  HistoryCounter counter(
-      GetHistoryService(),
-      base::BindRepeating(&HistoryCounterTest::GetRealWebHistoryService,
-                          base::Unretained(this), base::Unretained(profile)),
-      SyncServiceFactory::GetForProfile(profile));
+  HistoryCounter counter(GetHistoryService(), GetRealWebHistoryService(),
+                         SyncServiceFactory::GetForProfile(profile));
 
   counter.Init(profile->GetPrefs(),
                base::BindRepeating(&HistoryCounterTest::Callback,
@@ -187,18 +181,17 @@ IN_PROC_BROWSER_TEST_F(HistoryCounterTest, DuplicateVisits) {
   EXPECT_EQ(3u, GetUniqueDomainsResult());
 }
 
-// Tests that the counter works without |web_history_service_callback| and
+// Tests that the counter works without |web_history_service| and
 // |sync_service|.
 IN_PROC_BROWSER_TEST_F(HistoryCounterTest, WithoutSyncService) {
   AddVisit("https://www.google.com");
   AddVisit("https://www.chrome.com");
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
-  browsing_data::HistoryCounter counter(
-      GetHistoryService(),
-      browsing_data::HistoryCounter::GetUpdatedWebHistoryServiceCallback(),
-      nullptr /* sync_service */);
+  browsing_data::HistoryCounter counter(GetHistoryService(),
+                                        /*web_history_service=*/nullptr,
+                                        nullptr /* sync_service */);
 
   counter.Init(profile->GetPrefs(),
                base::BindRepeating(&HistoryCounterTest::Callback,
@@ -217,13 +210,10 @@ IN_PROC_BROWSER_TEST_F(HistoryCounterTest, PrefChanged) {
   AddVisit("https://www.google.com");
   AddVisit("https://www.chrome.com");
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
-  HistoryCounter counter(
-      GetHistoryService(),
-      base::BindRepeating(&HistoryCounterTest::GetRealWebHistoryService,
-                          base::Unretained(this), base::Unretained(profile)),
-      SyncServiceFactory::GetForProfile(profile));
+  HistoryCounter counter(GetHistoryService(), GetRealWebHistoryService(),
+                         SyncServiceFactory::GetForProfile(profile));
 
   counter.Init(profile->GetPrefs(),
                base::BindRepeating(&HistoryCounterTest::Callback,
@@ -264,13 +254,10 @@ IN_PROC_BROWSER_TEST_F(HistoryCounterTest, PeriodChanged) {
   AddVisit("https://www.example.com");
   AddVisit("https://www.example.com");
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
-  HistoryCounter counter(
-      GetHistoryService(),
-      base::BindRepeating(&HistoryCounterTest::GetRealWebHistoryService,
-                          base::Unretained(this), base::Unretained(profile)),
-      SyncServiceFactory::GetForProfile(profile));
+  HistoryCounter counter(GetHistoryService(), GetRealWebHistoryService(),
+                         SyncServiceFactory::GetForProfile(profile));
 
   counter.Init(profile->GetPrefs(),
                base::BindRepeating(&HistoryCounterTest::Callback,
@@ -311,22 +298,16 @@ IN_PROC_BROWSER_TEST_F(HistoryCounterTest, PeriodChanged) {
 IN_PROC_BROWSER_TEST_F(HistoryCounterTest, Synced) {
   // WebHistoryService makes network requests, so we need to use a fake one
   // for testing.
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
-  HistoryCounter counter(
-      GetHistoryService(),
-      base::BindRepeating(&HistoryCounterTest::GetFakeWebHistoryService,
-                          base::Unretained(this), base::Unretained(profile),
-                          false),
-      SyncServiceFactory::GetForProfile(profile));
+  HistoryCounter counter(GetHistoryService(), GetFakeWebHistoryService(),
+                         SyncServiceFactory::GetForProfile(profile));
 
   counter.Init(profile->GetPrefs(),
                base::BindRepeating(&HistoryCounterTest::Callback,
                                    base::Unretained(this)));
 
-  history::FakeWebHistoryService* service =
-      static_cast<history::FakeWebHistoryService*>(
-          GetFakeWebHistoryService(profile, false));
+  history::FakeWebHistoryService* service = GetFakeWebHistoryService();
 
   // No entries locally and no entries in Sync.
   service->SetupFakeResponse(true /* success */, net::HTTP_OK);

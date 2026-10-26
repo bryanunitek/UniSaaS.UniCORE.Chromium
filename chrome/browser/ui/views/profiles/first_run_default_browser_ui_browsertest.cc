@@ -8,13 +8,12 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/browser/ui/views/profiles/first_run_flow_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_management_step_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view_test_utils.h"
 #include "chrome/browser/ui/views/profiles/profiles_pixel_test_utils.h"
-#include "chrome/common/chrome_switches.h"
 #include "components/policy/core/common/management/scoped_management_service_override_for_testing.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "content/public/test/browser_test.h"
@@ -107,7 +106,7 @@ class FirstRunDefaultBrowserPixelTest
                 -> std::unique_ptr<ProfileManagementStepController> {
               return CreateDefaultBrowserStep(host, profile, base::DoNothing());
             },
-            browser()->profile()));
+            browser()->GetProfile()));
     profile_picker_view_->views::View::AddObserver(this);
     profile_picker_view_->ShowAndWait(GetParam().pixel_test_param.window_size);
   }
@@ -117,8 +116,9 @@ class FirstRunDefaultBrowserPixelTest
 
     const testing::TestInfo* test_info =
         testing::UnitTest::GetInstance()->current_test_info();
-    const std::string screenshot_name =
-        base::StrCat({test_info->test_suite_name(), "_", test_info->name()});
+    const std::string baseline = "8481376";
+    const std::string screenshot_name = base::StrCat(
+        {test_info->test_suite_name(), "_", test_info->name(), "_", baseline});
 
     return VerifyPixelUi(widget, "FirstRunDefaultBrowserPixelTest",
                          screenshot_name) != ui::test::ActionResult::kFailed;

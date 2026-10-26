@@ -9,9 +9,8 @@
 
 namespace enterprise_auth {
 
-BASE_DECLARE_FEATURE(kEnableExtensibleEnterpriseSSO);
-
-BASE_DECLARE_FEATURE(kAndroidEntraSSO);
+// Enables extensible enterprise SSO support for the Ping Identity IdP.
+BASE_DECLARE_FEATURE(kPingSso);
 
 }  // namespace enterprise_auth
 

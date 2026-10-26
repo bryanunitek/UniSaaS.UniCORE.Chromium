@@ -5,22 +5,28 @@
 #ifndef CHROME_BROWSER_GLIC_WIDGET_GLIC_SIDE_PANEL_UI_ANDROID_H_
 #define CHROME_BROWSER_GLIC_WIDGET_GLIC_SIDE_PANEL_UI_ANDROID_H_
 
+#include <set>
+
+#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/glic/common/local_hotkey_manager.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
+#include "chrome/browser/glic/host/glic_webui.mojom.h"
 #include "chrome/browser/glic/host/host.h"
 #include "chrome/browser/glic/public/glic_side_panel_coordinator.h"
 #include "chrome/browser/glic/service/glic_ui_embedder.h"
+#include "chrome/browser/pwc/privileged_web_contents.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "components/embedder_support/android/delegate/web_contents_delegate_android.h"
+#include "content/public/browser/keyboard_event_processing_result.h"
+#include "content/public/browser/media_stream_request.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-forward.h"
+#include "ui/base/accelerators/accelerator.h"
 
 class BrowserWindowInterface;
 class GlobalBrowserCollection;
 class Profile;
-
-namespace gfx {
-class Image;
-}
 
 namespace tabs {
 class TabInterface;
@@ -33,17 +39,28 @@ class FileChooserParams;
 namespace content {
 class FileSelectListener;
 class RenderFrameHost;
+struct DropData;
 }  // namespace content
+
+namespace input {
+struct NativeWebKeyboardEvent;
+}
 
 namespace glic {
 
 class GlicInstanceMetrics;
+class MicPermissionUi;
+class PanelVisibilityDependentHotkeyManager;
+class PanelFocusDependentHotkeyManager;
 
 class GlicSidePanelUi
     : public GlicUiEmbedder,
       public Host::EmbedderDelegate,
+      public Host::Observer,
+      public LocalHotkeyManager::Panel,
       public BrowserCollectionObserver,
-      public web_contents_delegate_android::WebContentsDelegateAndroid {
+      public web_contents_delegate_android::WebContentsDelegateAndroid,
+      public pwc::PrivilegedWebContents::EmbedderDelegate {
  public:
   GlicSidePanelUi(Profile* profile,
                   base::WeakPtr<tabs::TabInterface> tab,
@@ -52,7 +69,6 @@ class GlicSidePanelUi
   ~GlicSidePanelUi() override;
 
   // GlicUiEmbedder:
-  void OnClientReady() override;
   Host::EmbedderDelegate* GetHostEmbedderDelegate() override;
   void Show(const ShowOptions& options) override;
   void Close(const CloseOptions& options) override;
@@ -69,9 +85,6 @@ class GlicSidePanelUi
   void SwitchConversation(
       glic::mojom::ConversationInfoPtr info,
       mojom::WebClientHandler::SwitchConversationCallback callback) override;
-  void CaptureScreenshot(
-      glic::mojom::WebClientHandler::CaptureScreenshotCallback callback)
-      override;
 
   // GlicUiEmbedder and Host::Delegate:
   bool IsShowing() const override;
@@ -80,15 +93,35 @@ class GlicSidePanelUi
   void OnReload() override;
   void OnMicrophoneStatusChanged(mojom::MicrophoneStatus status) override {}
 
-  // web_contents_delegate_android::WebContentsDelegateAndroid:
+  // Host::Observer:
+  void ActiveWebContentsChanged(content::WebContents* new_contents) override;
+
+  // web_contents_delegate_android::WebContentsDelegateAndroid and
+  // pwc::PrivilegedWebContents::EmbedderDelegate:
+  void ContentsZoomChange(bool zoom_in) override;
+  content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
+      content::WebContents* source,
+      const input::NativeWebKeyboardEvent& event) override;
+  bool HandleKeyboardEvent(content::WebContents* source,
+                           const input::NativeWebKeyboardEvent& event) override;
+  bool CanDragEnter(content::WebContents* source,
+                    const content::DropData& data,
+                    blink::DragOperationsMask operations_allowed) override;
+  void RequestMediaAccessPermission(
+      content::WebContents* web_contents,
+      const content::MediaStreamRequest& request,
+      content::MediaResponseCallback callback) override;
+  bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
+                                  const url::Origin& security_origin,
+                                  blink::mojom::MediaStreamType type) override;
   void RunFileChooser(content::RenderFrameHost* render_frame_host,
                       scoped_refptr<content::FileSelectListener> listener,
                       const blink::mojom::FileChooserParams& params) override;
-  void PrintCrossProcessSubframe(
-      content::WebContents* web_contents,
-      const gfx::Rect& rect,
-      int document_cookie,
-      content::RenderFrameHost* subframe_host) const override;
+  bool HandleWindowCreation(
+      content::RenderFrameHost* opener,
+      const GURL& target_url,
+      WindowOpenDisposition disposition,
+      const blink::mojom::WindowFeatures& features) override;
 
   // BrowserCollectionObserver
   void OnBrowserActivated(BrowserWindowInterface* browser) override;
@@ -96,12 +129,107 @@ class GlicSidePanelUi
 
   void SidePanelStateChanged(GlicSidePanelCoordinator::State state);
 
+  // LocalHotkeyManager::Panel:
+  void FocusIfOpen() override;
+  bool ActivateBrowser() override;
+  void Zoom(mojom::ZoomAction action, ZoomSource source) override;
+  BrowserWindowInterface* GetBrowserWindowInterface() override;
+
+  PanelFocusDependentHotkeyManager*
+  GetPanelFocusDependentHotkeyManagerForTesting() {
+    return panel_focus_dependent_hotkey_manager_.get();
+  }
+  PanelVisibilityDependentHotkeyManager*
+  GetPanelVisibilityDependentHotkeyManagerForTesting() {
+    return panel_visibility_dependent_hotkey_manager_.get();
+  }
+
+  void SetMicPermissionUiForTesting(MicPermissionUi* mic_permission_ui) {
+    mic_permission_ui_for_testing_ = mic_permission_ui;
+  }
+
  private:
-  void OnScreenshotCaptured(
-      glic::mojom::WebClientHandler::CaptureScreenshotCallback callback,
-      gfx::Image snapshot);
+  FRIEND_TEST_ALL_PREFIXES(GlicSidePanelUiAndroidTest,
+                           MicPermissionDialogDenied);
+  FRIEND_TEST_ALL_PREFIXES(GlicSidePanelUiAndroidTest,
+                           MicPermissionDialogAcceptedWithDeadWebContents);
+  FRIEND_TEST_ALL_PREFIXES(GlicSidePanelUiAndroidTest,
+                           MicPermissionDialogAcceptedAndSystemGranted);
+  FRIEND_TEST_ALL_PREFIXES(
+      GlicSidePanelUiAndroidTest,
+      MicPermissionDialogAcceptedWhenMicSettingDisabledSkipsOsPrompt);
+  FRIEND_TEST_ALL_PREFIXES(
+      GlicSidePanelUiAndroidTest,
+      MicPermissionDialogAcceptedAndSystemGrantedUpdatesMicPref);
+  FRIEND_TEST_ALL_PREFIXES(GlicSidePanelUiAndroidTest,
+                           MicPermissionDialogAcceptedButSystemDenied);
+  FRIEND_TEST_ALL_PREFIXES(
+      GlicSidePanelUiAndroidTest,
+      MicPermissionDialogAcceptedButSystemDeniedDoesNotUpdateMicPref);
+  FRIEND_TEST_ALL_PREFIXES(
+      GlicSidePanelUiAndroidTest,
+      WindowDeactivatedDuringPermissionRequestIsSuppressed);
+  FRIEND_TEST_ALL_PREFIXES(GlicSidePanelUiAndroidTest,
+                           SuppressedDeactivationDeliveredAfterDialogDismissed);
+  FRIEND_TEST_ALL_PREFIXES(
+      GlicSidePanelUiAndroidTest,
+      SuppressedDeactivationDeliveredAfterSystemPromptCompletes);
+  FRIEND_TEST_ALL_PREFIXES(GlicSidePanelUiAndroidTest,
+                           NoDeactivationWhenWindowRegainsFocusAfterPrompt);
+  FRIEND_TEST_ALL_PREFIXES(GlicSidePanelUiAndroidTest,
+                           MicOsPermissionResultRejectsWhenWebContentsGone);
 
   GlicSidePanelCoordinator* GetGlicSidePanelCoordinator() const;
+
+  // Called with the user's answer to Chrome's microphone pre-prompt. Requests
+  // the Android RECORD_AUDIO permission when `allowed`, otherwise fails the
+  // request.
+  void OnMicPermissionDialogResult(
+      base::WeakPtr<content::WebContents> web_contents,
+      const content::MediaStreamRequest& request,
+      content::MediaResponseCallback callback,
+      bool allowed);
+
+  // Called with the result of the Android RECORD_AUDIO permission request.
+  // Continues the request when `granted`, otherwise shows the "microphone
+  // disabled" snackbar and fails the request.
+  void OnMicOsPermissionResult(base::WeakPtr<content::WebContents> web_contents,
+                               const content::MediaStreamRequest& request,
+                               content::MediaResponseCallback callback,
+                               bool granted);
+
+  // Returns the GlicKeyedService's microphone permission UI, or null if there
+  // is no service.
+  MicPermissionUi* GetMicPermissionUi();
+
+  // Returns true when GlicVoice is disabled or the Glic microphone setting is
+  // on.
+  bool IsMicSettingEnabled() const;
+
+  // Forwards `request` to MediaCaptureDevicesDispatcher. For the mic, the OS
+  // permission is requested beforehand (see OnMicPermissionDialogResult()).
+  void RequestSystemMediaAccessPermission(
+      content::WebContents* web_contents,
+      const content::MediaStreamRequest& request,
+      content::MediaResponseCallback callback);
+
+  // Handles the outcome of the OS permission flow, updating the Glic microphone
+  // pref if granted or showing a snackbar if microphone access ended up denied.
+  void OnMediaAccessPermissionResult(
+      base::WeakPtr<content::WebContents> web_contents,
+      blink::mojom::MediaStreamType audio_type,
+      content::MediaResponseCallback callback,
+      const blink::mojom::StreamDevicesSet& stream_devices_set,
+      blink::mojom::MediaStreamRequestResult result,
+      std::unique_ptr<content::MediaStreamUI> ui);
+
+  // Fails `callback` with `result` without consulting the OS.
+  void RejectMediaAccessRequest(content::MediaResponseCallback callback,
+                                blink::mojom::MediaStreamRequestResult result);
+
+  // Notifies the delegate if the embedder window is no longer active. Used to
+  // catch up on deactivations suppressed during a permission prompt.
+  void SyncEmbedderWindowActivation();
 
   base::CallbackListSubscription panel_visibility_subscription_;
   base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
@@ -110,6 +238,19 @@ class GlicSidePanelUi
   base::WeakPtr<tabs::TabInterface> tab_;
   const raw_ref<GlicUiEmbedder::Delegate> delegate_;
   const raw_ref<GlicInstanceMetrics> instance_metrics_;
+  std::unique_ptr<PanelVisibilityDependentHotkeyManager>
+      panel_visibility_dependent_hotkey_manager_;
+  std::unique_ptr<PanelFocusDependentHotkeyManager>
+      panel_focus_dependent_hotkey_manager_;
+  raw_ptr<Profile> profile_;
+  raw_ptr<MicPermissionUi> mic_permission_ui_for_testing_ = nullptr;
+
+  // True while a microphone/camera permission prompt is in front of the
+  // window. Deactivation notifications are suppressed during this time so the
+  // panel is not treated as backgrounded by the prompt itself.
+  bool is_requesting_media_permission_ = false;
+
+  base::ScopedObservation<Host, Host::Observer> host_observation_{this};
 
   base::WeakPtrFactory<GlicSidePanelUi> weak_ptr_factory_{this};
 };

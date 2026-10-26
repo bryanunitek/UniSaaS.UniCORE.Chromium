@@ -40,7 +40,7 @@ LayoutQuote::LayoutQuote(LayoutObject& owner, QuoteType quote)
       type_(quote),
       depth_(0),
       owning_pseudo_(DynamicTo<PseudoElement>(owner.GetNode())) {
-  SetDocumentForAnonymous(&owner.GetDocument());
+  SetDocumentForAnonymous(owner.GetDocument());
 }
 
 LayoutQuote::~LayoutQuote() {
@@ -53,7 +53,7 @@ void LayoutQuote::Trace(Visitor* visitor) const {
   LayoutInline::Trace(visitor);
 }
 
-void LayoutQuote::WillBeDestroyed() {
+void LayoutQuote::WillBeDestroyed(const ComputedStyle* style) {
   NOT_DESTROYED();
   if (scope_) {
     GetDocument()
@@ -62,7 +62,7 @@ void LayoutQuote::WillBeDestroyed() {
         .UpdateOutermostDirtyScope(scope_);
     scope_->DetachItem(*this);
   }
-  LayoutInline::WillBeDestroyed();
+  LayoutInline::WillBeDestroyed(style);
 }
 
 void LayoutQuote::WillBeRemovedFromTree() {
@@ -80,9 +80,11 @@ void LayoutQuote::WillBeRemovedFromTree() {
 void LayoutQuote::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutInline::StyleDidChange(diff, old_style, style_change_context);
+  LayoutInline::StyleDidChange(diff, old_style, new_style,
+                               style_change_context);
   UpdateText();
 }
 
@@ -142,10 +144,11 @@ String LayoutQuote::ComputeText() const {
 
 scoped_refptr<const QuotesData> LayoutQuote::GetQuotesData() const {
   NOT_DESTROYED();
-  if (scoped_refptr<const QuotesData> custom_quotes = StyleRef().Quotes())
+  if (scoped_refptr<const QuotesData> custom_quotes = Style().Quotes()) {
     return custom_quotes;
+  }
 
-  if (const LayoutLocale* locale = StyleRef().GetFontDescription().Locale()) {
+  if (const LayoutLocale* locale = Style().GetFontDescription().Locale()) {
     if (scoped_refptr<const QuotesData> custom_quotes = locale->GetQuotesData())
       return custom_quotes;
   }

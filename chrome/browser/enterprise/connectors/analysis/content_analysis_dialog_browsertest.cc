@@ -10,6 +10,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -21,14 +22,16 @@
 #include "chrome/browser/enterprise/connectors/test/fake_content_analysis_delegate.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/deep_scanning_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/webui/chrome_web_contents_handler.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
 #include "components/download/public/common/mock_download_item.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
+#include "components/enterprise/connectors/core/features.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -232,33 +235,28 @@ class ContentAnalysisDialogBehaviorBrowserTest
   base::TimeDelta response_delay() const { return std::get<2>(GetParam()); }
 
   void SetUpOnMainThread() override {
-    ui::test::TestWebDialogDelegate* delegate =
-        new ui::test::TestWebDialogDelegate(GURL(url::kAboutBlankURL));
-    delegate->SetDeleteOnClosedAndObserve(&web_dialog_delegate_destroyed_);
-
     auto view = std::make_unique<views::WebDialogView>(
-        browser()->GetProfile(), delegate,
+        browser()->GetProfile(), &delegate_,
         std::make_unique<ChromeWebContentsHandler>());
     gfx::NativeView parent_view =
-        browser()->tab_strip_model()->GetActiveWebContents()->GetNativeView();
-    view_ = view.get();
-    view_tracker_.SetView(view_);
+        browser()->GetTabStripModel()->GetActiveWebContents()->GetNativeView();
+    view_tracker_.SetView(view.get());
 
     auto* widget =
         views::Widget::CreateWindowWithParent(std::move(view), parent_view);
     widget->Show();
 
-    EXPECT_TRUE(content::WaitForLoadStop(view_->web_contents()));
+    EXPECT_TRUE(content::WaitForLoadStop(GetWebViewDialogContents()));
   }
 
   content::WebContents* GetWebViewDialogContents() {
-    return view_->web_contents();
+    return static_cast<views::WebDialogView*>(view_tracker_.view())
+        ->web_contents();
   }
 
  private:
+  ui::test::TestWebDialogDelegate delegate_{GURL(url::kAboutBlankURL)};
   views::ViewTracker view_tracker_;
-  raw_ptr<views::WebDialogView, DisableDanglingPtrDetection> view_ = nullptr;
-  bool web_dialog_delegate_destroyed_ = false;
 
   raw_ptr<ContentAnalysisDialogDelegate, DanglingUntriaged> dialog_;
 
@@ -371,6 +369,23 @@ class ContentAnalysisDialogCancelPendingScanBrowserTest
 
  private:
   base::HistogramTester histograms_;
+};
+
+// Same flow as above, but with the non-blocking cancellation path enabled. In
+// that mode ContentAnalysisDelegate::Cancel() signals the FileOpeningJob
+// straight away instead of leaving teardown to join it on the UI thread.
+class ContentAnalysisDialogNonBlockingCancelBrowserTest
+    : public ContentAnalysisDialogCancelPendingScanBrowserTest {
+ public:
+  ContentAnalysisDialogNonBlockingCancelBrowserTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {enterprise_connectors::kEnableCancelUploadOnContentAnalysis,
+         enterprise_connectors::kNonBlockingFileOpeningJobCancel},
+        {});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Tests the behavior of the dialog in the following ways:
@@ -622,7 +637,7 @@ IN_PROC_BROWSER_TEST_P(ContentAnalysisDialogBehaviorBrowserTest, Test) {
       enterprise_connectors::AnalysisConnector::FILE_ATTACHED));
 
   ContentAnalysisDelegate::CreateForWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents(), std::move(data),
+      browser()->GetTabStripModel()->GetActiveWebContents(), std::move(data),
       base::BindOnce(
           [](bool* called, const ContentAnalysisDelegate::Data& data,
              ContentAnalysisDelegate::Result& result) { *called = true; },
@@ -715,12 +730,59 @@ IN_PROC_BROWSER_TEST_F(ContentAnalysisDialogCancelPendingScanBrowserTest,
       enterprise_connectors::AnalysisConnector::FILE_ATTACHED));
 
   ContentAnalysisDelegate::CreateForWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents(), std::move(data),
+      browser()->GetTabStripModel()->GetActiveWebContents(), std::move(data),
       base::BindOnce(
           [](bool* called, const ContentAnalysisDelegate::Data& data,
              ContentAnalysisDelegate::Result& result) {
             for (bool paths_result : result.paths_results)
               ASSERT_FALSE(paths_result);
+            *called = true;
+          },
+          &called),
+      DeepScanAccessPoint::UPLOAD);
+  run_loop.Run();
+  EXPECT_TRUE(called);
+
+  ValidateMetrics();
+}
+
+// Cancelling with kNonBlockingFileOpeningJobCancel enabled must reach
+// FilesRequestHandler::StopFileWork() and still produce the same user visible
+// outcome: the dialog closes, the content is rejected, and the cancellation
+// metrics are recorded.
+IN_PROC_BROWSER_TEST_F(ContentAnalysisDialogNonBlockingCancelBrowserTest,
+                       Test) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  enterprise_connectors::test::SetAnalysisConnector(
+      browser()->GetProfile()->GetPrefs(), FILE_ATTACHED, kBlockingScansForDlp);
+  SetStatusCallbackResponse(
+      safe_browsing::SimpleContentAnalysisResponseForTesting(
+          /*dlp_success=*/true, /*malware_success=*/std::nullopt,
+          /*has_custom_rule_message=*/false));
+
+  test::FakeContentAnalysisDelegate::SetResponseDelay(kSmallDelay);
+  SetUpUnresponsiveDelegate();
+
+  bool called = false;
+  base::RunLoop run_loop;
+  SetQuitClosure(run_loop.QuitClosure());
+
+  ContentAnalysisDelegate::Data data;
+  CreateFilesForTest({"foo.doc", "bar.doc", "baz.doc"},
+                     {"random", "file", "contents"}, &data);
+  ASSERT_TRUE(ContentAnalysisDelegate::IsEnabled(
+      browser()->GetProfile(), GURL(kTestUrl), &data,
+      enterprise_connectors::AnalysisConnector::FILE_ATTACHED));
+
+  ContentAnalysisDelegate::CreateForWebContents(
+      browser()->GetTabStripModel()->GetActiveWebContents(), std::move(data),
+      base::BindOnce(
+          [](bool* called, const ContentAnalysisDelegate::Data& data,
+             ContentAnalysisDelegate::Result& result) {
+            for (bool paths_result : result.paths_results) {
+              ASSERT_FALSE(paths_result);
+            }
             *called = true;
           },
           &called),
@@ -765,7 +827,7 @@ IN_PROC_BROWSER_TEST_P(ContentAnalysisDialogWarningBrowserTest, Test) {
       enterprise_connectors::AnalysisConnector::FILE_ATTACHED));
 
   ContentAnalysisDelegate::CreateForWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents(), std::move(data),
+      browser()->GetTabStripModel()->GetActiveWebContents(), std::move(data),
       base::BindOnce(
           [](bool* called, bool user_bypasses_warning,
              const ContentAnalysisDelegate::Data& data,
@@ -823,7 +885,7 @@ IN_PROC_BROWSER_TEST_P(ContentAnalysisDialogAppearanceBrowserTest, Test) {
       enterprise_connectors::AnalysisConnector::FILE_ATTACHED));
 
   ContentAnalysisDelegate::CreateForWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents(), std::move(data),
+      browser()->GetTabStripModel()->GetActiveWebContents(), std::move(data),
       base::BindLambdaForTesting(
           [this, &called](const ContentAnalysisDelegate::Data& data,
                           ContentAnalysisDelegate::Result& result) {
@@ -884,7 +946,7 @@ IN_PROC_BROWSER_TEST_P(ContentAnalysisDialogCustomMessageBrowserTest, Test) {
       enterprise_connectors::AnalysisConnector::FILE_ATTACHED));
 
   ContentAnalysisDelegate::CreateForWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents(), std::move(data),
+      browser()->GetTabStripModel()->GetActiveWebContents(), std::move(data),
       base::BindLambdaForTesting(
           [this, &called](const ContentAnalysisDelegate::Data& data,
                           ContentAnalysisDelegate::Result& result) {
@@ -1021,7 +1083,7 @@ class ContentAnalysisDialogPlainTests : public InProcessBrowserTest {
     // let it be deleted by the constrained_window code.
     return new ContentAnalysisDialogController(
         std::move(delegate), true,
-        browser()->tab_strip_model()->GetActiveWebContents(),
+        browser()->GetTabStripModel()->GetActiveWebContents(),
         DeepScanAccessPoint::DOWNLOAD, 0, result);
   }
 
@@ -1354,7 +1416,7 @@ class ContentAnalysisDialogUiTest
     // let it be deleted by the constrained_window code.
     new ContentAnalysisDialogController(
         std::move(delegate), true,
-        browser()->tab_strip_model()->GetActiveWebContents(),
+        browser()->GetTabStripModel()->GetActiveWebContents(),
         DeepScanAccessPoint::DOWNLOAD, 1, final_result());
   }
 };
@@ -1409,7 +1471,7 @@ class ContentAnalysisDialogCustomRuleMessageUiTest
     // let it be deleted by the constrained_window code.
     new ContentAnalysisDialogController(
         std::move(delegate), true,
-        browser()->tab_strip_model()->GetActiveWebContents(),
+        browser()->GetTabStripModel()->GetActiveWebContents(),
         DeepScanAccessPoint::DOWNLOAD, 1, final_result());
   }
 
@@ -1487,7 +1549,7 @@ IN_PROC_BROWSER_TEST_F(ContentAnalysisDialogDownloadObserverTest,
           /* discard_callback */ base::DoNothing(), &mock_download_item,
           ContentAnalysisResponse::Result::TriggeredRule::CustomRuleMessage(),
           u""),
-      true, browser()->tab_strip_model()->GetActiveWebContents(),
+      true, browser()->GetTabStripModel()->GetActiveWebContents(),
       DeepScanAccessPoint::DOWNLOAD, /* file_count */ 1,
       FinalContentAnalysisResult::WARNING, &mock_download_item);
 
@@ -1515,7 +1577,7 @@ IN_PROC_BROWSER_TEST_F(ContentAnalysisDialogDownloadObserverTest,
           /* discard_callback */ base::DoNothing(), &mock_download_item,
           ContentAnalysisResponse::Result::TriggeredRule::CustomRuleMessage(),
           u""),
-      true, browser()->tab_strip_model()->GetActiveWebContents(),
+      true, browser()->GetTabStripModel()->GetActiveWebContents(),
       DeepScanAccessPoint::DOWNLOAD, /* file_count */ 1,
       FinalContentAnalysisResult::WARNING, &mock_download_item);
 
@@ -1552,7 +1614,7 @@ IN_PROC_BROWSER_TEST_F(ContentAnalysisDialogDownloadObserverTest,
           /* discard_callback */ base::DoNothing(), mock_download_item.get(),
           ContentAnalysisResponse::Result::TriggeredRule::CustomRuleMessage(),
           u""),
-      true, browser()->tab_strip_model()->GetActiveWebContents(),
+      true, browser()->GetTabStripModel()->GetActiveWebContents(),
       DeepScanAccessPoint::DOWNLOAD, /* file_count */ 1,
       FinalContentAnalysisResult::WARNING, mock_download_item.get());
 
@@ -1565,6 +1627,191 @@ IN_PROC_BROWSER_TEST_F(ContentAnalysisDialogDownloadObserverTest,
 
   mock_download_item.reset();
   dtor_run_loop.Run();
+}
+
+using ContentAnalysisDialogCopyJustificationBrowserTest =
+    test::DeepScanningBrowserTestBase;
+
+IN_PROC_BROWSER_TEST_F(ContentAnalysisDialogCopyJustificationBrowserTest,
+                       ShowJustificationDialogAndCancel) {
+  enterprise_connectors::ContentAnalysisDelegate::Data data;
+  data.text.emplace_back("copy text");
+  data.settings.tags["dlp"].requires_justification = true;
+  class TestDelegate
+      : public enterprise_connectors::test::FakeContentAnalysisDelegate {
+   public:
+    using FakeContentAnalysisDelegate::FakeContentAnalysisDelegate;
+    bool BypassRequiresJustification() const override { return true; }
+  };
+
+  base::RunLoop run_loop;
+  bool callback_called = false;
+
+  auto* delegate = new TestDelegate(
+      run_loop.QuitClosure(),
+      base::BindRepeating([](const std::string&, const base::FilePath&) {
+        return enterprise_connectors::test::FakeContentAnalysisDelegate::
+            SuccessfulResponse({"dlp"});
+      }),
+      "dm_token", browser()->GetTabStripModel()->GetActiveWebContents(),
+      std::move(data),
+      base::BindLambdaForTesting(
+          [&callback_called](
+              const enterprise_connectors::ContentAnalysisDelegate::Data& data,
+              enterprise_connectors::ContentAnalysisDelegate::Result& result) {
+            callback_called = true;
+            ASSERT_EQ(result.text_results.size(), 1u);
+            // Verify that cancelling the dialog correctly blocks the data.
+            EXPECT_FALSE(result.text_results[0]);
+          }),
+      enterprise_connectors::DeepScanAccessPoint::COPY);
+
+  auto* controller = enterprise_connectors::ContentAnalysisDialogController::
+      ShowForCopyJustification(
+          browser()->GetTabStripModel()->GetActiveWebContents(),
+          base::WrapUnique(delegate));
+  base::WeakPtr<enterprise_connectors::ContentAnalysisDialogDelegate>
+      active_dialog = controller->dialog_delegate_for_testing()->GetWeakPtr();
+
+  ASSERT_TRUE(active_dialog);
+  EXPECT_TRUE(active_dialog->is_warning());
+
+  // Cancel the dialog.
+  active_dialog->CancelDialog();
+  run_loop.Run();
+  EXPECT_TRUE(callback_called);
+}
+
+IN_PROC_BROWSER_TEST_F(ContentAnalysisDialogCopyJustificationBrowserTest,
+                       ShowJustificationDialogAndTriggerAccept) {
+  enterprise_connectors::ContentAnalysisDelegate::Data data;
+  data.text.emplace_back("copy text");
+  data.settings.tags["dlp"].requires_justification = true;
+
+  class TestDelegate
+      : public enterprise_connectors::test::FakeContentAnalysisDelegate {
+   public:
+    using FakeContentAnalysisDelegate::FakeContentAnalysisDelegate;
+    bool BypassRequiresJustification() const override { return true; }
+    void BypassWarnings(
+        std::optional<std::u16string> user_justification) override {
+      std::fill(GetResultForTesting().text_results.begin(),
+                GetResultForTesting().text_results.end(), true);
+      RunCallbackForTesting();
+    }
+  };
+
+  bool callback_called = false;
+  base::RunLoop run_loop;
+  auto* delegate = new TestDelegate(
+      run_loop.QuitClosure(),
+      base::BindRepeating([](const std::string&, const base::FilePath&) {
+        return enterprise_connectors::test::FakeContentAnalysisDelegate::
+            SuccessfulResponse({"dlp"});
+      }),
+      "dm_token", browser()->GetTabStripModel()->GetActiveWebContents(),
+      std::move(data),
+      base::BindLambdaForTesting(
+          [&callback_called](
+              const enterprise_connectors::ContentAnalysisDelegate::Data& data,
+              enterprise_connectors::ContentAnalysisDelegate::Result& result) {
+            callback_called = true;
+            ASSERT_EQ(result.text_results.size(), 1u);
+            EXPECT_TRUE(result.text_results[0]);
+          }),
+      enterprise_connectors::DeepScanAccessPoint::COPY);
+
+  auto* controller = enterprise_connectors::ContentAnalysisDialogController::
+      ShowForCopyJustification(
+          browser()->GetTabStripModel()->GetActiveWebContents(),
+          base::WrapUnique(delegate));
+  base::WeakPtr<enterprise_connectors::ContentAnalysisDialogDelegate>
+      active_dialog = controller->dialog_delegate_for_testing()->GetWeakPtr();
+
+  ASSERT_TRUE(active_dialog);
+  EXPECT_TRUE(active_dialog->is_warning());
+  EXPECT_FALSE(
+      active_dialog->IsDialogButtonEnabled(ui::mojom::DialogButton::kOk));
+  views::Textarea* textarea =
+      active_dialog->GetBypassJustificationTextareaForTesting();
+  ASSERT_TRUE(textarea);
+  textarea->InsertOrReplaceText(u"My justification text");
+  EXPECT_TRUE(
+      active_dialog->IsDialogButtonEnabled(ui::mojom::DialogButton::kOk));
+
+  // Accept the dialog.
+  active_dialog->AcceptDialog();
+  run_loop.Run();
+  EXPECT_TRUE(callback_called);
+}
+
+class ContentAnalysisDialogCopyJustificationUiTest : public DialogBrowserTest {
+ public:
+  ContentAnalysisDialogCopyJustificationUiTest() {
+    ContentAnalysisDialogController::SetShowDialogDelayForTesting(kNoDelay);
+  }
+
+  void ShowUi(const std::string& name) override {
+    delegate_ = std::make_unique<MockDelegate>();
+    delegate_->SetBypassRequiresJustification(true);
+    ContentAnalysisDialogController::ShowForCopyJustification(
+        browser()->GetTabStripModel()->GetActiveWebContents(),
+        std::move(delegate_));
+  }
+
+  void DismissUi() override {
+    web_modal::WebContentsModalDialogManager* manager =
+        web_modal::WebContentsModalDialogManager::FromWebContents(
+            browser()->GetTabStripModel()->GetActiveWebContents());
+    if (manager) {
+      manager->CloseAllDialogs();
+    }
+  }
+
+ protected:
+  class MockDelegate : public ContentAnalysisDelegateBase {
+   public:
+    ~MockDelegate() override = default;
+    void BypassWarnings(
+        std::optional<std::u16string> user_justification) override {}
+    void Cancel(bool warning) override {}
+
+    std::optional<std::u16string> GetCustomMessage() const override {
+      return std::nullopt;
+    }
+    std::optional<GURL> GetCustomLearnMoreUrl() const override {
+      return std::nullopt;
+    }
+    std::optional<std::vector<std::pair<gfx::Range, GURL>>>
+    GetCustomRuleMessageRanges() const override {
+      return std::nullopt;
+    }
+    bool BypassRequiresJustification() const override {
+      return bypass_requires_justification_;
+    }
+    std::u16string GetBypassJustificationLabel() const override {
+      return l10n_util::GetStringUTF16(
+          IDS_DEEP_SCANNING_DIALOG_COPY_BYPASS_JUSTIFICATION_LABEL);
+    }
+    std::optional<std::u16string> OverrideCancelButtonText() const override {
+      return std::nullopt;
+    }
+    std::optional<std::u16string> GetFilename() const override {
+      return std::nullopt;
+    }
+    void SetBypassRequiresJustification(bool value) {
+      bypass_requires_justification_ = value;
+    }
+
+   private:
+    bool bypass_requires_justification_ = false;
+  };
+
+  std::unique_ptr<MockDelegate> delegate_;
+};
+
+IN_PROC_BROWSER_TEST_F(ContentAnalysisDialogCopyJustificationUiTest, InvokeUi) {
+  ShowAndVerifyUi();
 }
 
 }  // namespace enterprise_connectors

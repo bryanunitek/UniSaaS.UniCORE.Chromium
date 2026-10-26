@@ -39,7 +39,8 @@ namespace {
 BrowserWindowInterface* GetBrowser() {
   chrome::ScopedTabbedBrowserDisplayer browser_displayer(
       ProfileManager::GetLastUsedProfileAllowedByPolicy());
-  DCHECK(browser_displayer.browser_window_interface());
+  CHECK(browser_displayer.browser_window_interface(),
+        base::NotFatalUntil::M162);
   return browser_displayer.browser_window_interface();
 }
 
@@ -63,13 +64,11 @@ void ChromeBluetoothChooserController::OpenAdapterOffHelpUrl() const {
       chromeos::settings::mojom::kBluetoothDevicesSubpagePath);
 #else
   // For other operating systems, show a help center page in a tab.
-  GetBrowser()->OpenURL(
-      content::OpenURLParams(GURL(chrome::kBluetoothAdapterOffHelpURL),
-                             content::Referrer(),
-                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                             ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
-                             false /* is_renderer_initialized */),
-      /*navigation_handle_callback=*/{});
+  GetBrowser()->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
+                            GURL(chrome::kBluetoothAdapterOffHelpURL),
+                            WindowOpenDisposition::kNewForegroundTab,
+                            ui::PAGE_TRANSITION_AUTO_TOPLEVEL),
+                        /*navigation_handle_callback=*/{});
 #endif
 }
 
@@ -83,11 +82,9 @@ void ChromeBluetoothChooserController::OpenPermissionPreferences() const {
 }
 
 void ChromeBluetoothChooserController::OpenHelpCenterUrl() const {
-  GetBrowser()->OpenURL(
-      content::OpenURLParams(GURL(permissions::kChooserBluetoothOverviewURL),
-                             content::Referrer(),
-                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                             ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
-                             false /* is_renderer_initialized */),
-      /*navigation_handle_callback=*/{});
+  GetBrowser()->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
+                            GURL(permissions::kChooserBluetoothOverviewURL),
+                            WindowOpenDisposition::kNewForegroundTab,
+                            ui::PAGE_TRANSITION_AUTO_TOPLEVEL),
+                        /*navigation_handle_callback=*/{});
 }

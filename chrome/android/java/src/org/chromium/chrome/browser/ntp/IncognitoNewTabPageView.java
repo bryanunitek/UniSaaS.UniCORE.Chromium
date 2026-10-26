@@ -17,6 +17,8 @@ import androidx.annotation.ColorInt;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.native_page.ContextMenuManager;
+import org.chromium.chrome.browser.native_page.NativePageNavigationDelegate;
 import org.chromium.components.browser_ui.widget.FadingShadow;
 import org.chromium.components.browser_ui.widget.FadingShadowView;
 import org.chromium.ui.base.ViewUtils;
@@ -28,7 +30,6 @@ public class IncognitoNewTabPageView extends FrameLayout {
     private boolean mFirstShow = true;
     private FadingShadowView mFadingShadowBottom;
     private NewTabPageScrollView mScrollView;
-    private IncognitoDescriptionView mDescriptionView;
 
     private int mSnapshotWidth;
     private int mSnapshotHeight;
@@ -67,45 +68,42 @@ public class IncognitoNewTabPageView extends FrameLayout {
         mFadingShadowBottom = findViewById(R.id.shadow_bottom);
         mFadingShadowBottom.init(bgColor, FadingShadow.POSITION_BOTTOM);
         mScrollView.setOnScrollChangeListener(
-                new OnScrollChangeListener() {
-                    @Override
-                    public void onScrollChange(
-                            View v, int scrollX, int scrollY, int oldScrollX, int oldScrollY) {
+                (_, _, _, _, _) ->
                         mFadingShadowBottom.setVisibility(
-                                mScrollView.canScrollVertically(1) ? View.VISIBLE : View.GONE);
-                    }
-                });
+                                mScrollView.canScrollVertically(1) ? View.VISIBLE : View.GONE));
     }
 
     /**
      * Initialize the incognito New Tab Page.
      *
      * @param manager The manager that handles external dependencies of the view.
+     * @param contextMenuManager The manager for context menus on links.
+     * @param navigationDelegate The delegate for handling link navigation from context menus.
      */
     @Initializer
-    void initialize(IncognitoNewTabPageManager manager) {
+    void initialize(
+            IncognitoNewTabPageManager manager,
+            ContextMenuManager contextMenuManager,
+            NativePageNavigationDelegate navigationDelegate) {
         mManager = manager;
-        inflateConditionalLayouts();
+        inflateConditionalLayouts(contextMenuManager, navigationDelegate);
     }
 
-    private void inflateConditionalLayouts() {
+    private void inflateConditionalLayouts(
+            ContextMenuManager contextMenuManager,
+            NativePageNavigationDelegate navigationDelegate) {
         ViewStub viewStub = findViewById(R.id.incognito_description_layout_stub);
         viewStub.setLayoutResource(R.layout.incognito_description_layout);
-        mDescriptionView = (IncognitoDescriptionView) viewStub.inflate();
-        mDescriptionView.setLearnMoreOnclickListener(
-                new OnClickListener() {
-                    @Override
-                    public void onClick(View view) {
-                        mManager.loadIncognitoLearnMore();
-                    }
-                });
+        IncognitoDescriptionView descriptionView = (IncognitoDescriptionView) viewStub.inflate();
+        descriptionView.setLearnMoreOnclickListener(_ -> mManager.loadIncognitoLearnMore());
+        descriptionView.setContextMenuManager(contextMenuManager, navigationDelegate);
 
         // Inflate the tracking protection card.
         ViewStub cardStub = findViewById(R.id.cookie_card_stub);
         if (cardStub == null) return;
         cardStub.setLayoutResource(R.layout.incognito_tracking_protection_card);
         cardStub.inflate();
-        mDescriptionView.formatTrackingProtectionText(getContext(), this);
+        descriptionView.formatTrackingProtectionText(getContext(), this);
     }
 
     @Override

@@ -91,7 +91,13 @@ void HttpEquiv::ProcessHttpEquivContentSecurityPolicy(
             network::mojom::blink::ContentSecurityPolicySource::kMeta,
             *(window->GetSecurityOrigin()));
     window->GetContentSecurityPolicy()->AddPolicies(mojo::Clone(parsed));
-    window->GetPolicyContainer()->AddContentSecurityPolicies(std::move(parsed));
+
+    // Generate a new initiator state token to pass to the browser process and
+    // to update `window`.
+    InitiatorStateToken new_initiator_state_token;
+    window->GetPolicyContainer()->AddContentSecurityPolicies(
+        std::move(parsed), new_initiator_state_token);
+    window->SetInitiatorStateToken(new_initiator_state_token);
   } else if (EqualIgnoringAsciiCase(equiv,
                                     "content-security-policy-report-only")) {
     window->GetContentSecurityPolicy()->ReportReportOnlyInMeta(content);
@@ -145,7 +151,8 @@ void HttpEquiv::ProcessHttpEquivRefresh(LocalDOMWindow* window,
   UseCounter::Count(window, WebFeature::kMetaRefresh);
   if (!window->GetContentSecurityPolicy()->AllowInline(
           ContentSecurityPolicy::InlineType::kScript, element, "" /* content */,
-          "" /* nonce */, NullUrl(), OrdinalNumber::First(),
+          "" /* nonce */, NullUrl(),
+          TextPosition(OrdinalNumber::First(), OrdinalNumber::BeforeFirst()),
           ReportingDisposition::kSuppressReporting)) {
     UseCounter::Count(window,
                       WebFeature::kMetaRefreshWhenCSPBlocksInlineScript);

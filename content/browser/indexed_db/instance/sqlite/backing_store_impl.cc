@@ -6,6 +6,7 @@
 
 #include <inttypes.h>
 
+#include <algorithm>
 #include <atomic>
 #include <limits>
 #include <memory>
@@ -23,7 +24,6 @@
 #include "base/notimplemented.h"
 #include "base/numerics/checked_math.h"
 #include "base/run_loop.h"
-#include "base/strings/stringprintf.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/trace_event/memory_allocator_dump.h"
@@ -36,6 +36,8 @@
 #include "content/browser/indexed_db/instance/sqlite/backing_store_database_impl.h"
 #include "content/browser/indexed_db/instance/sqlite/database_connection.h"
 #include "content/browser/indexed_db/status.h"
+#include "sql/database.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 namespace content::indexed_db::sqlite {
 
@@ -58,11 +60,16 @@ BackingStoreImpl::~BackingStoreImpl() = default;
 // static
 uint64_t BackingStoreImpl::SumSizesOfDatabaseFiles(
     const base::FilePath& directory,
+    bool include_legacy_blobs,
     base::FunctionRef<bool(const base::FilePath&)> filter) {
   uint64_t total_size = 0;
   EnumerateDatabasesInDirectory(directory, [&](const base::FilePath& path) {
     if (filter(path)) {
       total_size += base::GetFileSize(path).value_or(0);
+      if (include_legacy_blobs) {
+        total_size += base::ComputeDirectorySize(
+            DatabaseConnection::GetLegacyBlobDirectory(path));
+      }
     }
   });
   return total_size;
@@ -142,8 +149,9 @@ uint64_t BackingStoreImpl::EstimateSize(bool /*write_in_progress*/) const {
   }
 
   if (!in_memory()) {
-    total_size +=
-        SumSizesOfDatabaseFiles(directory_, [&](const base::FilePath& path) {
+    total_size += SumSizesOfDatabaseFiles(
+        directory_, /*include_legacy_blobs=*/true,
+        [&](const base::FilePath& path) {
           return !already_open_file_names.contains(path.BaseName());
         });
   }
@@ -204,8 +212,7 @@ BackingStoreImpl::GetDatabaseNamesAndVersions() {
         return;
       }
       std::ignore =
-          LOG_RESULT(DatabaseConnection::Open(/*name=*/{}, path, *this,
-                                              /*erase_if_zygotic=*/true),
+          LOG_RESULT(DatabaseConnection::Open(/*name=*/{}, path, *this),
                      "IndexedDB.SQLite.OpenToReadMetadataResult",
                      in_memory() ? ".InMemory" : ".OnDisk")
               .transform([&](std::unique_ptr<DatabaseConnection> connection) {
@@ -253,16 +260,20 @@ uintptr_t BackingStoreImpl::GetIdentifierForMemoryDump() {
   return reinterpret_cast<uintptr_t>(this);
 }
 
-void BackingStoreImpl::ReportMemoryUsage(
+bool BackingStoreImpl::ReportMemoryUsage(
     base::trace_event::ProcessMemoryDump* pmd,
     const std::string& dump_name) {
   // Create the dump as an organizational container.
   pmd->CreateAllocatorDump(dump_name);
-  for (const auto& [name, connection] : open_connections_) {
-    connection->ReportMemoryUsage(
-        pmd, base::StringPrintf("%s/sqlite_db_0x%" PRIXPTR, dump_name.c_str(),
-                                reinterpret_cast<uintptr_t>(connection.get())));
-  }
+  return std::all_of(
+      open_connections_.begin(), open_connections_.end(),
+      [&pmd, &dump_name](const auto& entry) {
+        const auto& [_, connection] = entry;
+        return connection->ReportMemoryUsage(
+            pmd,
+            absl::StrFormat("%s/sqlite_db_0x%" PRIXPTR, dump_name,
+                            reinterpret_cast<uintptr_t>(connection.get())));
+      });
 }
 
 void BackingStoreImpl::FlushForTesting() {
@@ -334,9 +345,17 @@ void BackingStoreImpl::OnCleanupComplete(const std::u16string& name,
   }
 }
 
-Status BackingStoreImpl::MigrateFrom(BackingStore& source) {
+Status BackingStoreImpl::MigrateFrom(BackingStore& source, bool verify) {
   CHECK(!in_memory());
-  DCHECK(GetDatabaseNamesAndVersions()->empty());
+
+  bool clean_start = true;
+  EnumerateDatabasesInDirectory(
+      directory_, [&clean_start](const base::FilePath& path) {
+        clean_start = sql::Database::Delete(path) && clean_start;
+      });
+  if (!clean_start) {
+    return Status::IOError("Unable to delete existing SQLite databases");
+  }
 
   ASSIGN_OR_RETURN(
       std::vector<blink::mojom::IDBNameAndVersionPtr> names_and_versions,
@@ -347,10 +366,10 @@ Status BackingStoreImpl::MigrateFrom(BackingStore& source) {
       legacy_blob_files_to_move;
 
   for (const auto& name_and_version : names_and_versions) {
-    std::unique_ptr<BackingStore::Database> source_db =
-        source.CreateOrOpenDatabase(name_and_version->name).value();
-    std::unique_ptr<BackingStore::Database> target_db =
-        CreateOrOpenDatabase(name_and_version->name).value();
+    ASSIGN_OR_RETURN(std::unique_ptr<BackingStore::Database> source_db,
+                     source.CreateOrOpenDatabase(name_and_version->name));
+    ASSIGN_OR_RETURN(std::unique_ptr<BackingStore::Database> target_db,
+                     CreateOrOpenDatabase(name_and_version->name));
 
     auto connection_it = open_connections_.find(name_and_version->name);
     CHECK(connection_it != open_connections_.end());
@@ -358,6 +377,14 @@ Status BackingStoreImpl::MigrateFrom(BackingStore& source) {
     CHECK(target_connection->IsZygotic());
 
     IDB_RETURN_IF_ERROR(MigrateDatabase(*source_db, *target_db));
+
+    if (verify) {
+      StatusOr<base::DictValue> before = SnapshotDatabase(*source_db);
+      CHECK(before.has_value());
+      StatusOr<base::DictValue> after = SnapshotDatabase(*target_db);
+      CHECK(after.has_value());
+      CHECK_EQ(before.value(), after.value());
+    }
 
     auto& files_to_move = target_connection->legacy_blob_files_to_move();
     if (!files_to_move.empty() &&

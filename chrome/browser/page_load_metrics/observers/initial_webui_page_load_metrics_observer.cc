@@ -4,16 +4,12 @@
 
 #include "chrome/browser/page_load_metrics/observers/initial_webui_page_load_metrics_observer.h"
 
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
-#include "chrome/browser/ui/waap/initial_webui_window_metrics_manager.h"
-#include "chrome/browser/ui/waap/waap_ui_metrics_service.h"
+#include "base/barrier_closure.h"
+#include "base/strings/strcat.h"
+#include "chrome/browser/ui/waap/initial_webui_metrics_dispatcher.h"
 #include "chrome/browser/ui/waap/waap_utils.h"
 #include "chrome/browser/ui/webui/metrics_reporter/metrics_reporter.h"
 #include "chrome/browser/ui/webui/metrics_reporter/metrics_reporter_service.h"
-#include "chrome/common/chrome_features.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer_delegate.h"
 #include "components/page_load_metrics/browser/page_load_metrics_util.h"
 #include "content/public/browser/navigation_handle.h"
@@ -26,12 +22,15 @@
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
+#include "ui/base/page_transition_types.h"
 
 namespace {
-// Measurement marks.
-constexpr char kInputMouseReleaseStartMark[] =
-    "ReloadButton.Input.MouseRelease.Start";
-constexpr char kInputKeyPressStartMark[] = "ReloadButton.Input.KeyPress.Start";
+
+// LINT.IfChange(InitialWebUIRendererMilestones)
+constexpr char kMarkJsResourcesLoaded[] = "JsResourcesLoaded";
+constexpr char kMarkLoadTimeDataRead[] = "LoadTimeDataRead";
+constexpr char kMarkJsCompositionComplete[] = "JsCompositionComplete";
+// LINT.ThenChange(//chrome/browser/resources/webui_toolbar/app.ts:InitialWebUIRendererMilestones)
 
 }  // namespace
 
@@ -52,10 +51,8 @@ void InitialWebUIPageLoadMetricsObserver::OnMonotonicFirstPaintInPage(
     return;
   }
 
-  if (auto* manager = GetMetricsManager()) {
-    manager->OnReloadButtonFirstPaint(
-        timing.monotonic_paint_timing->first_paint.value());
-  }
+  GetMetricsDispatcher().OnFirstPaint(
+      timing.monotonic_paint_timing->first_paint.value());
 }
 
 void InitialWebUIPageLoadMetricsObserver::OnMonotonicFirstContentfulPaintInPage(
@@ -65,10 +62,8 @@ void InitialWebUIPageLoadMetricsObserver::OnMonotonicFirstContentfulPaintInPage(
     return;
   }
 
-  if (auto* manager = GetMetricsManager()) {
-    manager->OnReloadButtonFirstContentfulPaint(
-        timing.monotonic_paint_timing->first_contentful_paint.value());
-  }
+  GetMetricsDispatcher().OnFirstContentfulPaint(
+      timing.monotonic_paint_timing->first_contentful_paint.value());
 }
 
 void InitialWebUIPageLoadMetricsObserver::OnFirstContentfulPaintInPage(
@@ -80,26 +75,24 @@ void InitialWebUIPageLoadMetricsObserver::OnFirstContentfulPaintInPage(
   // `OnMonotonicFirstContentfulPaintInPage()` so that the paint time is more
   // accurate, see the comments from
   // https://chromium-review.git.corp.google.com/c/chromium/src/+/7991315/comment/5d8434b4_4546404c/
-  ukm::builders::InitialWebUIPageLoad(GetDelegate().GetPageUkmSourceId())
-      .SetPaintTiming_NavigationToFirstContentfulPaint(
-          timing.paint_timing->first_contentful_paint.value().InMilliseconds())
-      .Record(ukm::UkmRecorder::Get());
-}
-
-void InitialWebUIPageLoadMetricsObserver::OnUserInput(
-    const blink::WebInputEvent& event,
-    const page_load_metrics::mojom::PageLoadTiming& timing) {
-  auto& metrics_reporter = GetMetricsReporter();
-  switch (event.GetType()) {
-    case blink::WebInputEvent::Type::kMouseUp:
-      metrics_reporter.Mark(kInputMouseReleaseStartMark, event.TimeStamp());
-      break;
-    case blink::WebInputEvent::Type::kRawKeyDown:
-      metrics_reporter.Mark(kInputKeyPressStartMark, event.TimeStamp());
-      break;
-    default:
-      break;
+  ukm::builders::InitialWebUIPageLoad builder(
+      GetDelegate().GetPageUkmSourceId());
+  builder.SetPaintTiming_NavigationToFirstContentfulPaint(
+      timing.paint_timing->first_contentful_paint.value().InMilliseconds());
+  if (timing.monotonic_paint_timing &&
+      timing.monotonic_paint_timing->first_contentful_paint_submitted) {
+    base::TimeTicks fcp_submitted =
+        timing.monotonic_paint_timing->first_contentful_paint_submitted.value();
+    base::TimeTicks navigation_start = GetDelegate().GetNavigationStart();
+    builder.SetPaintTiming_FirstContentfulPaintSubmittedMs(
+        (fcp_submitted - navigation_start).InMilliseconds());
   }
+  builder.Record(ukm::UkmRecorder::Get());
+
+  // FCP cannot occur before WebUI JS composition completes, because the root
+  // WebUI component returns `nothing` from render() until it is initialized.
+  // Therefore, renderer timing marks are guaranteed to be present by FCP time.
+  RecordRendererMilestones();
 }
 
 page_load_metrics::PageLoadMetricsObserver::ObservePolicy
@@ -144,11 +137,7 @@ InitialWebUIPageLoadMetricsObserver::OnCommit(
     base::TimeTicks init_time = rfh->GetProcess()->GetLastInitTime();
     base::TimeTicks launched_time = rfh->GetProcess()->GetProcessLaunchedTime();
 
-    if (auto* manager = GetMetricsManager()) {
-      // Record the renderer process creation timing.
-      manager->OnReloadButtonRendererProcessCreatedAndLaunched(init_time,
-                                                               launched_time);
-    }
+    GetMetricsDispatcher().OnCommit(init_time, launched_time);
   }
 
   const net::HttpResponseHeaders* response_headers =
@@ -168,17 +157,10 @@ InitialWebUIPageLoadMetricsObserver::OnCommit(
                                    ->GetSiteInstance()
                                    ->GetLastProcessAssignmentOutcome();
 
-  return CONTINUE_OBSERVING;
-}
+  GetMetricsReporter().Mark("NavigationStart",
+                            GetDelegate().GetNavigationStart());
 
-WaapUIMetricsService* InitialWebUIPageLoadMetricsObserver::service() const {
-  CHECK(GetDelegate().GetWebContents()->GetBrowserContext());
-  auto* profile = Profile::FromBrowserContext(
-      GetDelegate().GetWebContents()->GetBrowserContext());
-  // The service is null only if the profile is null or the feature is disabled.
-  auto* service = WaapUIMetricsService::Get(profile);
-  CHECK(service);
-  return service;
+  return CONTINUE_OBSERVING;
 }
 
 MetricsReporter& InitialWebUIPageLoadMetricsObserver::GetMetricsReporter() {
@@ -190,15 +172,14 @@ MetricsReporter& InitialWebUIPageLoadMetricsObserver::GetMetricsReporter() {
   return *service->metrics_reporter();
 }
 
-InitialWebUIWindowMetricsManager*
-InitialWebUIPageLoadMetricsObserver::GetMetricsManager() const {
+InitialWebUIMetricsDispatcher&
+InitialWebUIPageLoadMetricsObserver::GetMetricsDispatcher() {
   content::WebContents* web_contents = GetDelegate().GetWebContents();
-  gfx::NativeWindow window = web_contents
-                                 ? web_contents->GetTopLevelNativeWindow()
-                                 : gfx::NativeWindow();
-  BrowserWindowInterface* browser =
-      GlobalBrowserCollection::GetInstance()->FindBrowserWithWindow(window);
-  return browser ? InitialWebUIWindowMetricsManager::From(browser) : nullptr;
+  CHECK(web_contents);
+  auto* dispatcher =
+      InitialWebUIMetricsDispatcher::GetOrCreateForWebContents(web_contents);
+  CHECK(dispatcher);
+  return *dispatcher;
 }
 
 page_load_metrics::PageLoadMetricsObserver::ObservePolicy
@@ -239,7 +220,7 @@ void InitialWebUIPageLoadMetricsObserver::OnFailedProvisionalLoad(
   // for UMA histograms using the equivalent positive value. For consistency in
   // UKM, we convert to a positive value here.
   int64_t net_error_code = static_cast<int64_t>(failed_load_info.error) * -1;
-  DCHECK_GE(net_error_code, 0);
+  CHECK_GE(net_error_code, 0, base::NotFatalUntil::M161);
 
   ukm::builders::InitialWebUIPageLoad(GetDelegate().GetPageUkmSourceId())
       .SetNet_ErrorCode_OnFailedProvisionalLoad(net_error_code)
@@ -432,7 +413,7 @@ void InitialWebUIPageLoadMetricsObserver::RecordRendererUsageMetrics() {
 
 void InitialWebUIPageLoadMetricsObserver::RecordPageLoadTimestampMetrics(
     ukm::builders::InitialWebUIPageLoad& builder) {
-  DCHECK(!navigation_start_time_.is_null());
+  CHECK(!navigation_start_time_.is_null(), base::NotFatalUntil::M161);
 
   base::Time::Exploded exploded;
   navigation_start_time_.LocalExplode(&exploded);
@@ -476,4 +457,115 @@ void InitialWebUIPageLoadMetricsObserver::RecordAbortMetrics(
   builder->SetPageTiming_TotalForegroundDurationMs(
       ukm::GetSemanticBucketMinForDurationTiming(
           total_foreground_duration_.InMilliseconds()));
+}
+
+struct InitialWebUIPageLoadMetricsObserver::TimingData {
+  // Time from navigation start until WebUI JS resources finish loading.
+  std::optional<base::TimeDelta> js_resources_loaded;
+  // Time from navigation start until loadTimeData is read by the frontend.
+  std::optional<base::TimeDelta> load_time_data_read;
+  // Time from navigation start until initial JS/Lit UI composition is complete.
+  std::optional<base::TimeDelta> js_composition_complete;
+};
+
+void InitialWebUIPageLoadMetricsObserver::RecordRendererMilestones() {
+  auto data = std::make_unique<TimingData>();
+  base::TimeTicks navigation_start = GetDelegate().GetNavigationStart();
+  std::vector<std::string> mark_names = {kMarkJsResourcesLoaded,
+                                         kMarkLoadTimeDataRead,
+                                         kMarkJsCompositionComplete};
+
+  // TODO(crbug.com/542030476): Replace individual Mojo queries with a single
+  // batch Mojo IPC (e.g., `OnGetMarks()`) to retrieve all timestamps at once.
+  // The current implementation queries marks in parallel via a BarrierClosure.
+  FetchMarks(std::move(data), mark_names, navigation_start);
+}
+
+void InitialWebUIPageLoadMetricsObserver::FetchMarks(
+    std::unique_ptr<TimingData> data,
+    const std::vector<std::string>& mark_names,
+    base::TimeTicks navigation_start) {
+  if (mark_names.empty()) {
+    OnRendererMilestonesRecorded(std::move(data));
+    return;
+  }
+
+  TimingData* data_ptr = data.get();
+  auto barrier = base::BarrierClosure(
+      mark_names.size(),
+      base::BindOnce(
+          &InitialWebUIPageLoadMetricsObserver::OnRendererMilestonesRecorded,
+          weak_factory_.GetWeakPtr(), std::move(data)));
+
+  for (const std::string& mark_name : mark_names) {
+    FetchMark(mark_name, data_ptr, navigation_start, barrier);
+  }
+}
+
+void InitialWebUIPageLoadMetricsObserver::FetchMark(
+    const std::string& mark_name,
+    TimingData* data_ptr,
+    base::TimeTicks navigation_start,
+    base::OnceClosure barrier) {
+  GetMetricsReporter().HasMark(
+      mark_name,
+      base::BindOnce(&InitialWebUIPageLoadMetricsObserver::OnMarkChecked,
+                     weak_factory_.GetWeakPtr(), mark_name, data_ptr,
+                     navigation_start, std::move(barrier)));
+}
+
+void InitialWebUIPageLoadMetricsObserver::OnMarkChecked(
+    const std::string& mark_name,
+    TimingData* data_ptr,
+    base::TimeTicks navigation_start,
+    base::OnceClosure barrier,
+    bool has_mark) {
+  if (!has_mark) {
+    std::move(barrier).Run();
+    return;
+  }
+
+  GetMetricsReporter().Measure(
+      mark_name, navigation_start,
+      base::BindOnce(&InitialWebUIPageLoadMetricsObserver::OnMarkMeasured,
+                     weak_factory_.GetWeakPtr(), mark_name, data_ptr,
+                     std::move(barrier)));
+}
+
+void InitialWebUIPageLoadMetricsObserver::OnMarkMeasured(
+    const std::string& mark_name,
+    TimingData* data_ptr,
+    base::OnceClosure barrier,
+    base::TimeDelta delta) {
+  std::optional<base::TimeDelta> value = std::make_optional(-delta);
+
+  if (mark_name == kMarkJsResourcesLoaded) {
+    data_ptr->js_resources_loaded = value;
+  } else if (mark_name == kMarkLoadTimeDataRead) {
+    data_ptr->load_time_data_read = value;
+  } else if (mark_name == kMarkJsCompositionComplete) {
+    data_ptr->js_composition_complete = value;
+  }
+
+  std::move(barrier).Run();
+}
+
+void InitialWebUIPageLoadMetricsObserver::OnRendererMilestonesRecorded(
+    std::unique_ptr<TimingData> data) {
+  ukm::builders::InitialWebUIPageLoad builder(
+      GetDelegate().GetPageUkmSourceId());
+
+  if (data->js_resources_loaded) {
+    builder.SetPaintTiming_JsResourcesLoadedMs(
+        data->js_resources_loaded->InMilliseconds());
+  }
+  if (data->load_time_data_read) {
+    builder.SetPaintTiming_LoadTimeDataReadMs(
+        data->load_time_data_read->InMilliseconds());
+  }
+  if (data->js_composition_complete) {
+    builder.SetPaintTiming_JsCompositionCompleteMs(
+        data->js_composition_complete->InMilliseconds());
+  }
+  builder.Record(ukm::UkmRecorder::Get());
 }

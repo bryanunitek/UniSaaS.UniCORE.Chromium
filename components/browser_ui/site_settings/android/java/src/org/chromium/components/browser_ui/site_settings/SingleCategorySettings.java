@@ -36,6 +36,7 @@ import android.widget.TextView;
 import androidx.annotation.IntDef;
 import androidx.annotation.StringRes;
 import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.widget.SearchView;
 import androidx.preference.Preference;
 import androidx.preference.Preference.OnPreferenceChangeListener;
 import androidx.preference.Preference.OnPreferenceClickListener;
@@ -73,7 +74,6 @@ import org.chromium.components.browser_ui.settings.SettingsNavigation;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
 import org.chromium.components.browser_ui.settings.search.BaseSearchIndexProvider;
 import org.chromium.components.browser_ui.site_settings.AddExceptionPreference.SiteAddedCallback;
-import org.chromium.components.browser_ui.site_settings.AutoDarkMetrics.AutoDarkSettingsChangeSource;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.util.TraceEventVectorDrawableCompat;
 import org.chromium.components.browser_ui.widget.BrowserUiListMenuUtils;
@@ -347,6 +347,7 @@ public class SingleCategorySettings extends BaseSiteSettingsFragment
             // No need to fetch any data if we're not going to show it, but we do need to update
             // the global toggle to reflect updates in Android settings (e.g. Location).
             resetList();
+            updateContainment();
             return;
         }
 
@@ -508,10 +509,24 @@ public class SingleCategorySettings extends BaseSiteSettingsFragment
     @Override
     public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
         String title = getArguments().getString(EXTRA_TITLE);
+        // The title is only a display string, so a Url that omits it still names a real page.
+        // Recover it from the category rather than leaving the toolbar empty.
+        if (title == null) title = defaultTitle();
         if (title != null) mPageTitle.set(title);
 
         // Handled in onActivityCreated. Moving the addPreferencesFromResource call up to here
         // causes animation jank (crbug.com/985734).
+    }
+
+    /** Returns the category's own name, or null if the arguments do not name a known category. */
+    private @Nullable String defaultTitle() {
+        SiteSettingsCategory category =
+                SiteSettingsCategory.createFromPreferenceKey(
+                        getSiteSettingsDelegate().getBrowserContextHandle(),
+                        getArguments().getString(EXTRA_CATEGORY, ""));
+        if (category == null) return null;
+        int titleRes = ContentSettingsResources.getTitleForCategory(category.getType());
+        return titleRes == 0 ? null : getString(titleRes);
     }
 
     @Override
@@ -544,6 +559,29 @@ public class SingleCategorySettings extends BaseSiteSettingsFragment
         mSearchViewObserver = observer;
     }
 
+    private void onSearchQueryChanged(String query) {
+        boolean queryHasChanged =
+                mSearch == null ? query != null && !query.isEmpty() : !mSearch.equals(query);
+        mSearch = query;
+        if (queryHasChanged) {
+            if (mSearchRunnable != null) {
+                mSearchHandler.removeCallbacks(mSearchRunnable);
+            }
+            mSearchRunnable = () -> getInfoForOrigins();
+            mSearchHandler.postDelayed(mSearchRunnable, 200);
+        }
+    }
+
+    @Override
+    public void initSearchView(SearchView searchView) {
+        SearchUtils.initializeSearchView(
+                searchView,
+                mSearch,
+                getActivity(),
+                mSearchViewObserver,
+                this::onSearchQueryChanged);
+    }
+
     @Override
     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
         menu.clear();
@@ -555,20 +593,7 @@ public class SingleCategorySettings extends BaseSiteSettingsFragment
                 mSearch,
                 getActivity(),
                 assumeNonNull(mSearchViewObserver),
-                (query) -> {
-                    boolean queryHasChanged =
-                            mSearch == null
-                                    ? query != null && !query.isEmpty()
-                                    : !mSearch.equals(query);
-                    mSearch = query;
-                    if (queryHasChanged) {
-                        if (mSearchRunnable != null) {
-                            mSearchHandler.removeCallbacks(mSearchRunnable);
-                        }
-                        mSearchRunnable = () -> getInfoForOrigins();
-                        mSearchHandler.postDelayed(mSearchRunnable, 200);
-                    }
-                });
+                this::onSearchQueryChanged);
 
         if (getSiteSettingsDelegate().isHelpAndFeedbackEnabled()) {
             MenuItem help =
@@ -679,9 +704,7 @@ public class SingleCategorySettings extends BaseSiteSettingsFragment
                 updateNotificationsSecondaryControls();
             } else if (type == SiteSettingsCategory.Type.DEVICE_LOCATION) {
                 updateLocationSecondaryControls();
-            } else if (type == SiteSettingsCategory.Type.AUTO_DARK_WEB_CONTENT) {
-                AutoDarkMetrics.recordAutoDarkSettingsChangeSource(
-                        AutoDarkSettingsChangeSource.SITE_SETTINGS_GLOBAL, toggleValue);
+
             } else if (type == SiteSettingsCategory.Type.REQUEST_DESKTOP_SITE) {
                 recordSiteLayoutChanged(toggleValue);
                 updateDesktopSiteWindowSetting();
@@ -776,12 +799,9 @@ public class SingleCategorySettings extends BaseSiteSettingsFragment
 
     private void setThirdPartyCookieSettingsPreference(@CookieControlsMode int mode) {
         assert mCategory.getType() == SiteSettingsCategory.Type.THIRD_PARTY_COOKIES;
-        getSiteSettingsDelegate().dismissPrivacySandboxSnackbar();
 
-        // Display the Privacy Sandbox snackbar whenever third-party cookies are blocked.
         if (mode == CookieControlsMode.BLOCK_THIRD_PARTY) {
             RecordUserAction.record("Settings.PrivacySandbox.Block3PCookies");
-            getSiteSettingsDelegate().maybeDisplayPrivacySandboxSnackbar();
         }
         PrefService prefService = UserPrefs.get(getBrowserContextHandle());
         prefService.setInteger(COOKIE_CONTROLS_MODE, mode);
@@ -1177,71 +1197,71 @@ public class SingleCategorySettings extends BaseSiteSettingsFragment
     }
 
     private @StringRes int getTextInfoResourceId() {
-        if (mCategory.getType() == SiteSettingsCategory.Type.SITE_DATA) {
-            return R.string.website_settings_site_data_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.THIRD_PARTY_COOKIES) {
-            return R.string.website_settings_third_party_cookies_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.JAVASCRIPT_OPTIMIZER) {
-            return R.string.website_settings_category_javascript_optimizer_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.DEVICE_LOCATION) {
-            return R.string.website_settings_location_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.NOTIFICATIONS) {
-            return R.string.website_settings_notifications_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.CAMERA) {
-            return R.string.website_settings_camera_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.MICROPHONE) {
-            return R.string.website_settings_mic_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.SENSORS) {
-            boolean extraSensorClassesEnabled =
-                    FeatureList.isNativeInitialized()
-                            && DeviceFeatureMap.isEnabled(
-                                    DeviceFeatureList.GENERIC_SENSOR_EXTRA_CLASSES);
-            return extraSensorClassesEnabled
-                    ? R.string.website_settings_motion_and_light_sensors_page_description
-                    : R.string.website_settings_motion_sensors_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.NFC) {
-            return R.string.website_settings_nfc_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.USB) {
-            return R.string.website_settings_usb_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.CLIPBOARD) {
-            return R.string.website_settings_clipboard_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.VIRTUAL_REALITY) {
-            return R.string.website_settings_vr_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.AUGMENTED_REALITY) {
-            return R.string.website_settings_ar_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.IDLE_DETECTION) {
-            return R.string.website_settings_idle_detection_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.JAVASCRIPT) {
-            return R.string.website_settings_javascript_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.POPUPS) {
-            return R.string.website_settings_popups_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.ADS) {
-            return R.string.website_settings_ads_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.SOUND) {
-            return R.string.website_settings_sound_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.FEDERATED_IDENTITY_API) {
-            return R.string.website_settings_federated_identity_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.REQUEST_DESKTOP_SITE) {
-            return R.string.website_settings_desktop_site_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.BACKGROUND_SYNC) {
-            return R.string.website_settings_background_sync_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.AUTOMATIC_DOWNLOADS) {
-            return R.string.website_settings_automatic_downloads_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.FILE_EDITING) {
-            return R.string.website_settings_file_editing_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.SERIAL_PORT) {
-            return R.string.website_settings_serial_port_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.LOCAL_NETWORK) {
-            return R.string.website_settings_local_network_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.LOOPBACK_NETWORK) {
-            return R.string.website_settings_loopback_network_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.WINDOW_MANAGEMENT) {
-            return R.string.website_settings_window_management_page_description;
-        } else if (mCategory.getType() == SiteSettingsCategory.Type.AUTO_PICTURE_IN_PICTURE) {
-            return R.string.website_settings_automatic_picture_in_picture_page_description;
-        }
-
-        return -1;
+        return switch (mCategory.getType()) {
+            case SiteSettingsCategory.Type.SITE_DATA ->
+                    R.string.website_settings_site_data_page_description;
+            case SiteSettingsCategory.Type.THIRD_PARTY_COOKIES ->
+                    R.string.website_settings_third_party_cookies_page_description;
+            case SiteSettingsCategory.Type.JAVASCRIPT_OPTIMIZER ->
+                    R.string.website_settings_category_javascript_optimizer_page_description;
+            case SiteSettingsCategory.Type.DEVICE_LOCATION ->
+                    R.string.website_settings_location_page_description;
+            case SiteSettingsCategory.Type.NOTIFICATIONS ->
+                    R.string.website_settings_notifications_page_description;
+            case SiteSettingsCategory.Type.CAMERA ->
+                    R.string.website_settings_camera_page_description;
+            case SiteSettingsCategory.Type.MICROPHONE ->
+                    R.string.website_settings_mic_page_description;
+            case SiteSettingsCategory.Type.SENSORS -> {
+                boolean extraSensorClassesEnabled =
+                        FeatureList.isNativeInitialized()
+                                && DeviceFeatureMap.isEnabled(
+                                        DeviceFeatureList.GENERIC_SENSOR_EXTRA_CLASSES);
+                yield extraSensorClassesEnabled
+                        ? R.string.website_settings_motion_and_light_sensors_page_description
+                        : R.string.website_settings_motion_sensors_page_description;
+            }
+            case SiteSettingsCategory.Type.NFC -> R.string.website_settings_nfc_page_description;
+            case SiteSettingsCategory.Type.USB -> R.string.website_settings_usb_page_description;
+            case SiteSettingsCategory.Type.CLIPBOARD ->
+                    R.string.website_settings_clipboard_page_description;
+            case SiteSettingsCategory.Type.VIRTUAL_REALITY ->
+                    R.string.website_settings_vr_page_description;
+            case SiteSettingsCategory.Type.AUGMENTED_REALITY ->
+                    R.string.website_settings_ar_page_description;
+            case SiteSettingsCategory.Type.IDLE_DETECTION ->
+                    R.string.website_settings_idle_detection_page_description;
+            case SiteSettingsCategory.Type.JAVASCRIPT ->
+                    R.string.website_settings_javascript_page_description;
+            case SiteSettingsCategory.Type.POPUPS ->
+                    R.string.website_settings_popups_page_description;
+            case SiteSettingsCategory.Type.ADS -> R.string.website_settings_ads_page_description;
+            case SiteSettingsCategory.Type.SOUND ->
+                    R.string.website_settings_sound_page_description;
+            case SiteSettingsCategory.Type.FEDERATED_IDENTITY_API ->
+                    R.string.website_settings_federated_identity_page_description;
+            case SiteSettingsCategory.Type.REQUEST_DESKTOP_SITE ->
+                    R.string.website_settings_desktop_site_page_description;
+            case SiteSettingsCategory.Type.BACKGROUND_SYNC ->
+                    R.string.website_settings_background_sync_page_description;
+            case SiteSettingsCategory.Type.AUTOMATIC_DOWNLOADS ->
+                    R.string.website_settings_automatic_downloads_page_description;
+            case SiteSettingsCategory.Type.FILE_EDITING ->
+                    R.string.website_settings_file_editing_page_description;
+            case SiteSettingsCategory.Type.SERIAL_PORT ->
+                    R.string.website_settings_serial_port_page_description;
+            case SiteSettingsCategory.Type.HID_DEVICES ->
+                    R.string.website_settings_hid_devices_page_description;
+            case SiteSettingsCategory.Type.LOCAL_NETWORK ->
+                    R.string.website_settings_local_network_page_description;
+            case SiteSettingsCategory.Type.LOOPBACK_NETWORK ->
+                    R.string.website_settings_loopback_network_page_description;
+            case SiteSettingsCategory.Type.WINDOW_MANAGEMENT ->
+                    R.string.website_settings_window_management_page_description;
+            case SiteSettingsCategory.Type.AUTO_PICTURE_IN_PICTURE ->
+                    R.string.website_settings_automatic_picture_in_picture_page_description;
+            default -> -1;
+        };
     }
 
     private void configureGlobalToggles() {
@@ -1350,6 +1370,8 @@ public class SingleCategorySettings extends BaseSiteSettingsFragment
 
         if (permissionBlockedByOs) {
             maybeShowOsWarning(screen);
+        }
+        if (permissionBlockedByOs || !mCategory.enabledInAndroid(getContext())) {
             screen.removePreference(notificationsVibrate);
             screen.removePreference(mNotificationsQuietUiPref);
             screen.removePreference(mNotificationsTriStatePref);
@@ -1702,12 +1724,6 @@ public class SingleCategorySettings extends BaseSiteSettingsFragment
                                             browserContextHandle,
                                             contentSettingsType,
                                             ContentSetting.DEFAULT);
-                        }
-                        if (mCategory.getType()
-                                == SiteSettingsCategory.Type.AUTO_DARK_WEB_CONTENT) {
-                            AutoDarkMetrics.recordAutoDarkSettingsChangeSource(
-                                    AutoDarkSettingsChangeSource.SITE_SETTINGS_EXCEPTION_LIST,
-                                    false);
                         }
 
                         getInfoForOrigins();

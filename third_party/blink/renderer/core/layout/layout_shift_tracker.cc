@@ -23,7 +23,7 @@
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
-#include "third_party/blink/renderer/core/paint/timing/paint_timing_utils.h"
+#include "third_party/blink/renderer/core/paint/timing/web_vitals_hud_helper.h"
 #include "third_party/blink/renderer/core/timing/dom_window_performance.h"
 #include "third_party/blink/renderer/core/timing/performance_entry.h"
 #include "third_party/blink/renderer/core/timing/window_performance.h"
@@ -57,7 +57,7 @@ gfx::PointF StartingPoint(const PhysicalOffset& paint_offset,
                           const LayoutBox& box,
                           const PhysicalSize& size) {
   PhysicalOffset starting_point = paint_offset;
-  auto writing_direction = box.StyleRef().GetWritingDirection();
+  auto writing_direction = box.Style().GetWritingDirection();
   if (writing_direction.IsFlippedBlocks()) [[unlikely]] {
     starting_point.left += size.width;
   }
@@ -173,7 +173,7 @@ bool LayoutShiftTracker::NeedsToTrack(const LayoutObject& object) const {
   if (object.IsSVGChild())
     return false;
 
-  if (object.StyleRef().Visibility() != EVisibility::kVisible) {
+  if (object.Style().Visibility() != EVisibility::kVisible) {
     return false;
   }
 
@@ -182,7 +182,7 @@ bool LayoutShiftTracker::NeedsToTrack(const LayoutObject& object) const {
       return false;
     if (object.IsBR())
       return false;
-    if (object.StyleRef().GetFont()->ShouldSkipDrawing()) {
+    if (object.Style().GetFont()->ShouldSkipDrawing()) {
       return false;
     }
     return true;
@@ -231,7 +231,7 @@ bool LayoutShiftTracker::NeedsToTrack(const LayoutObject& object) const {
       return true;
     }
     if (box->HasBoxDecorationBackground() || box->GetScrollableArea() ||
-        box->StyleRef().HasVisualOverflowingEffect()) {
+        box->Style().HasVisualOverflowingEffect()) {
       return true;
     }
     return false;
@@ -255,7 +255,7 @@ void LayoutShiftTracker::ObjectShifted(
   DCHECK(!new_rect.IsEmpty());
 
   float threshold_physical_px =
-      kMovementThreshold * object.StyleRef().EffectiveZoom();
+      kMovementThreshold * object.Style().EffectiveZoom();
 
   // Check shift of starting point, including 2d-translation and scroll
   // deltas.
@@ -467,7 +467,7 @@ void LayoutShiftTracker::NotifyTextPrePaint(
   auto* block = ContainingBlockScope::top_;
   DCHECK(block);
 
-  auto writing_direction = text.StyleRef().GetWritingDirection();
+  auto writing_direction = text.Style().GetWritingDirection();
   PhysicalOffset old_physical_starting_point =
       old_paint_offset + old_starting_point.ConvertToPhysical(writing_direction,
                                                               block->old_size_,
@@ -623,10 +623,11 @@ LayoutShift::AttributionList LayoutShiftTracker::CreateAttributionList() const {
             << "Attribution rects will be in physical pixels.";
       }
     }
-    list.push_back(LayoutShiftAttribution::Create(
-        DOMNodeIds::NodeForId(att.node_id),
-        DOMRectReadOnly::FromRectF(old_css_rect),
-        DOMRectReadOnly::FromRectF(new_css_rect)));
+    list.push_back(
+        LayoutShiftAttribution::Create(DOMNodeIds::NodeForId(att.node_id),
+                                       DOMRectReadOnly::FromRectF(old_css_rect),
+                                       DOMRectReadOnly::FromRectF(new_css_rect),
+                                       frame_view_->GetFrame().DomWindow()));
   }
   return list;
 }
@@ -634,17 +635,19 @@ LayoutShift::AttributionList LayoutShiftTracker::CreateAttributionList() const {
 void LayoutShiftTracker::SubmitPerformanceEntry(double score_delta,
                                                 bool had_recent_input) const {
   LocalDOMWindow* window = frame_view_->GetFrame().DomWindow();
-  if (!window)
+  if (!window) {
     return;
+  }
   WindowPerformance* performance = DOMWindowPerformance::performance(*window);
-  DCHECK(performance);
+  if (!performance) {
+    return;
+  }
 
   double input_timestamp = LastInputTimestamp();
-  LayoutShift* entry = LayoutShift::Create(
-      performance->now(), score_delta, had_recent_input, input_timestamp,
-      CreateAttributionList(), window, performance->NavigationId());
-
-  // Add WPT for LayoutShift. See crbug.com/1320878.
+  LayoutShift* entry =
+      LayoutShift::Create(performance->now(), score_delta, had_recent_input,
+                          input_timestamp, CreateAttributionList(), window,
+                          performance->NavigationId().web_exposed_id);
 
   performance->AddLayoutShiftEntry(entry);
 }
@@ -658,8 +661,14 @@ void LayoutShiftTracker::ReportShift(double score_delta,
     score_ += score_delta;
     if (weighted_score_delta > 0) {
       weighted_score_ += weighted_score_delta;
-      frame.Client()->DidObserveLayoutShift(weighted_score_delta,
-                                            observed_input_or_scroll_);
+      LocalDOMWindow* window = frame.DomWindow();
+      WindowPerformance* performance =
+          window ? DOMWindowPerformance::performance(*window) : nullptr;
+      PerformanceTimelineEntryIdInfo navigation_id =
+          performance ? performance->NavigationId()
+                      : PerformanceTimelineEntryIdInfo::kNone;
+      frame.Client()->DidObserveLayoutShift(
+          weighted_score_delta, observed_input_or_scroll_, navigation_id);
     }
   }
 
@@ -876,16 +885,17 @@ void LayoutShiftTracker::AttributionsToTracedValue(TracedValue& value) const {
 
 void LayoutShiftTracker::SendLayoutShiftRectsToHud(
     const Vector<gfx::Rect>& int_rects) {
-  if (auto* hud_layer =
-          paint_timing::GetHUDLayerIfLayoutShiftRectsEnabled(frame_view_)) {
-    cc::Region blink_region;
-    for (const gfx::Rect& rect : int_rects) {
-      blink_region.Union(rect);
-    }
-    for (gfx::Rect rect : blink_region) {
-      hud_layer->AddWebVitalsDebugRect(
-          {cc::WebVitalMetricType::kLayoutShift, rect});
-    }
+  WebVitalsHudHelper hud_helper(cc::WebVitalMetricType::kLayoutShift,
+                                frame_view_);
+  if (!hud_helper.IsEnabled()) {
+    return;
+  }
+  cc::Region blink_region;
+  for (const gfx::Rect& rect : int_rects) {
+    blink_region.Union(rect);
+  }
+  for (gfx::Rect rect : blink_region) {
+    hud_helper.AddWebVitalsDebugRect(rect);
   }
 }
 

@@ -46,14 +46,20 @@ inline constexpr char kWebNNOrtDumpModel[] = "webnn-ort-dump-model";
 // --allow-third-party-modules
 inline constexpr char kWebNNOrtLibraryPathForTesting[] =
     "webnn-ort-library-path-for-testing";
-// Specify the ORT EP name and library path pair via this switch for testing
-// development EP builds. Libraries of the ORT EP specified by the EP name
-// are forced to be loaded from the specified path. This switch is not to be
-// used in shipping scenarios and is ignored by default.
-// The value should be in the format <ep_name>?<ep_library_path>.
+// Specify one or more ORT EP name and library path pairs via this switch for
+// testing development EP builds. Libraries of each ORT EP specified by the EP
+// name are forced to be loaded from the specified path. This switch is not to
+// be used in shipping scenarios and is ignored by default.
+// Each pair should be in the format <ep_name>?<ep_library_path>, and multiple
+// pairs are separated by ",", e.g.
+// <ep_name1>?<ep_library_path1>,<ep_name2>?<ep_library_path2>.
+// Library paths must not contain ",". Each EP name may only appear once. Any
+// invalid pair disables the whole switch.
 // Usage:
-// --webnn-ort-ep-library-path-for-testing=OpenVINOExecutionProvider?"C:\Program
-// Files\ONNXRuntime-EP\onnxruntime_providers_openvino_plugin.dll"
+// --webnn-ort-ep-library-path-for-testing="OpenVINOExecutionProvider?C:\Program
+// Files\ONNXRuntime-EP\onnxruntime_providers_openvino_plugin.dll,
+// WebGpuExecutionProvider?C:\Program
+// Files\ONNXRuntime-EP\onnxruntime_providers_webgpu.dll"
 // --allow-third-party-modules
 inline constexpr char kWebNNOrtEpLibraryPathForTesting[] =
     "webnn-ort-ep-library-path-for-testing";
@@ -77,6 +83,18 @@ inline constexpr char kWebNNOrtEpLibraryPathForTesting[] =
 // --webnn-ort-ep-device=OpenVINOExecutionProvider,0x8086,0x4680
 inline constexpr char kWebNNOrtEpDevice[] = "webnn-ort-ep-device";
 
+// Add arbitrary ONNX Runtime session configuration entries for testing.
+// The value must use the format <key>,<value>[,<key>,<value>...].
+// Like other testing switches, this is available in release builds and must
+// only be supplied through a trusted startup command line. Existing session
+// configuration entries, including dispatch security settings, cannot be
+// replaced.
+// Usage:
+// --webnn-ort-session-config-entries-for-testing=
+//   ep.qnnexecutionprovider.webnn_scenario,1,key2,value2
+inline constexpr char kWebNNOrtSessionConfigEntriesForTesting[] =
+    "webnn-ort-session-config-entries-for-testing";
+
 // Enable all execution providers, ignoring the enabled flag blocklist.
 inline constexpr char kWebNNOrtIgnoreEpBlocklist[] =
     "webnn-ort-ignore-ep-blocklist";
@@ -84,6 +102,20 @@ inline constexpr char kWebNNOrtIgnoreEpBlocklist[] =
 // Ignore all IHV execution providers, only the default CPUExecutionProvider and
 // DmlExecutionProvider will be used.
 inline constexpr char kWebNNOrtIgnoreIhvEps[] = "webnn-ort-ignore-ihv-eps";
+
+// Disable ORT virtual devices in the Compiler process, requiring actual
+// hardware devices for compilation instead. This switch is for testing only.
+// Note that online compilation requires access to actual hardware which is
+// blocked by the compiler sandbox, so this switch is usually used together with
+// `--disable-webnn-compiler-sandbox`.
+inline constexpr char kWebNNOrtDisableVirtualDevices[] =
+    "webnn-ort-disable-virtual-devices";
+
+// Allow all EP devices to be selected for the Compiler process, regardless of
+// whether `kKnownEPs` declares offline compilation support for them. For
+// testing only.
+inline constexpr char kWebNNOrtAllowAllCompilerDevices[] =
+    "webnn-ort-allow-all-compiler-devices";
 
 // Configure the graph optimization level of ONNX Runtime.
 // Usage: --webnn-ort-graph-optimization-level=DISABLE_ALL
@@ -108,14 +140,27 @@ inline constexpr char kWebNNOrtEnableProfiling[] = "webnn-ort-enable-profiling";
 // Usage: --webnn-ort-disable-cpu-fallback
 inline constexpr char kWebNNOrtDisableCpuFallback[] =
     "webnn-ort-disable-cpu-fallback";
+
+// Used internally to pass the target EP library path from the browser process
+// to the WebNN Compiler utility process. The compiler process reads this switch
+// during PreSandboxInit() to load the EP libraries before sandbox lockdown.
+inline constexpr char kWebNNCompilerEpLibrary[] = "webnn-compiler-ep-library";
+
+// Used internally to pass the target EP device info from the browser process to
+// the WebNN Compiler utility process, alongside `kWebNNCompilerEpLibrary`. The
+// compiler process parses this switch during PreSandboxInit() to register the
+// correct EP device before sandbox lockdown. The value is produced by
+// webnn::EpDeviceInfo::ToSwitchValue().
+inline constexpr char kWebNNCompilerEpDeviceInfo[] =
+    "webnn-compiler-ep-device-info";
 #endif  // BUILDFLAG(IS_WIN)
 
-extern base::span<const char* const> GetWebNNSwitchesCopiedFromGpuProcessHost();
+base::span<const char* const> GetWebNNSwitchesCopiedFromGpuProcessHost();
 
 // Returns the list of WebNN switches forwarded from the browser process to
 // the renderer process. Only backends that actually run inside the renderer
 // should appear here.
-extern base::span<const char* const> GetWebNNSwitchesForRendererProcess();
+base::span<const char* const> GetWebNNSwitchesForRendererProcess();
 
 }  // namespace switches
 

@@ -7,9 +7,8 @@
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browser_controller.h"
@@ -17,7 +16,6 @@
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
-#include "third_party/blink/public/common/features.h"
 #include "ui/views/test/widget_test_api.h"
 #include "ui/views/widget/any_widget_observer.h"
 #include "ui/views/widget/widget.h"
@@ -31,11 +29,6 @@ class WebAppSamplingMetricsProviderBrowserTest : public WebAppBrowserTestBase {
   static constexpr std::string_view kMigrateToSuggestUrl =
       "/web_apps/migration/migrate_to/suggest.html";
 
-  WebAppSamplingMetricsProviderBrowserTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        blink::features::kWebAppMigrationApi);
-  }
-
   void EmitMetrics() {
     base::RunLoop run_loop;
     content::GetUIThreadTaskRunner({})->PostTask(
@@ -45,9 +38,6 @@ class WebAppSamplingMetricsProviderBrowserTest : public WebAppBrowserTestBase {
         }));
     run_loop.Run();
   }
-
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // `Measure()` should not cause a crash when called between the close request
@@ -56,7 +46,7 @@ IN_PROC_BROWSER_TEST_F(WebAppSamplingMetricsProviderBrowserTest,
                        NoCrashOnClose) {
   // Install and launch an app browser.
   webapps::AppId app_id = InstallPWA(GetInstallableAppURL());
-  Browser* app_browser = LaunchWebAppBrowserAndWait(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowserAndWait(app_id);
 
   bool measure_called = false;
   content::GetUIThreadTaskRunner({})->PostTask(
@@ -129,7 +119,7 @@ IN_PROC_BROWSER_TEST_F(WebAppSamplingMetricsProviderBrowserTest,
       browser(), embedded_https_test_server().GetURL(kMigrateToSuggestUrl));
 
   // Launch app A in a standalone window.
-  Browser* app_a_browser = LaunchWebAppBrowser(app_a_id);
+  BrowserWindowInterface* app_a_browser = LaunchWebAppBrowser(app_a_id);
 
   // Trigger the migration dialog.
   views::NamedWidgetShownWaiter update_dialog_waiter(

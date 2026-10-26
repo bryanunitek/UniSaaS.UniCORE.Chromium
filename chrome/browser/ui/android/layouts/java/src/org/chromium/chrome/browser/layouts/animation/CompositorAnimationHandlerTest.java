@@ -4,19 +4,15 @@
 
 package org.chromium.chrome.browser.layouts.animation;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.CallbackUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 
 /** Unit tests for {@link CompositorAnimationHandler}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class CompositorAnimationHandlerTest {
     private static final long FAST_DURATION_MS = 100;
     private static final long SLOW_DURATION_MS = 1000;
@@ -24,7 +20,6 @@ public class CompositorAnimationHandlerTest {
     private CompositorAnimationHandler mAnimations;
 
     @Test
-    @SmallTest
     public void testConcurrentAnimationsFinishSeparately() {
         mAnimations = new CompositorAnimationHandler(CallbackUtils.emptyRunnable());
 

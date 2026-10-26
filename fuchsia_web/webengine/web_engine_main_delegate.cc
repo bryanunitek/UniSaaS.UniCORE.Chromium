@@ -11,7 +11,11 @@
 #include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/fuchsia/intl_profile_watcher.h"
+#include "base/fuchsia/scheduler.h"
+#include "base/i18n/icubridge/default_icu_locale.h"
+#include "base/i18n/language_tag.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/tag_converters.h"
 #include "base/path_service.h"
 #include "base/strings/string_split.h"
 #include "content/public/common/content_switches.h"
@@ -86,6 +90,25 @@ std::optional<int> WebEngineMainDelegate::BasicStartupComplete() {
           switches::kCorsExemptHeaders),
       ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY));
 
+  if (command_line->HasSwitch(switches::kUseSchedulerRoles)) {
+    const std::string mode =
+        command_line->GetSwitchValueASCII(switches::kUseSchedulerRoles);
+    if (mode == "unused") {
+      base::SetSchedulerRoles(base::SchedulerRoles::kUnused);
+    } else if (mode == "ignore-missing") {
+      base::SetSchedulerRoles(base::SchedulerRoles::kIgnoreMissing);
+    } else if (mode == "error-missing") {
+      base::SetSchedulerRoles(base::SchedulerRoles::kErrorMissing);
+    } else if (mode == "require") {
+      base::SetSchedulerRoles(base::SchedulerRoles::kRequire);
+    } else {
+      LOG(FATAL) << "Invalid --" << switches::kUseSchedulerRoles
+                 << " value: " << mode;
+    }
+  } else {
+    base::SetSchedulerRoles(base::SchedulerRoles::kErrorMissing);
+  }
+
   return std::nullopt;
 }
 
@@ -95,9 +118,13 @@ void WebEngineMainDelegate::PreSandboxStartup() {
   // explicitly reloaded after each change to the primary locale.
   // In the browser process the locale determines the accept-language header
   // contents, and is supplied to renderers for Blink to report to web content.
-  std::string initial_locale =
-      base::FuchsiaIntlProfileWatcher::GetPrimaryLocaleIdForInitialization();
-  base::i18n::SetICUDefaultLocale(initial_locale);
+  base::i18n::LanguageTag initial_locale =
+      base::i18n::GetLanguageTagFromString(
+          base::FuchsiaIntlProfileWatcher::
+              GetPrimaryLocaleIdForInitialization())
+          .value_or(base::i18n::GetKnownLanguageTag("en-US"));
+  base::i18n::SetDefaultIcuLocale(base::i18n::DefaultIcuLocaleSetterKey(),
+                                  initial_locale);
 
   InitializeResources();
 }

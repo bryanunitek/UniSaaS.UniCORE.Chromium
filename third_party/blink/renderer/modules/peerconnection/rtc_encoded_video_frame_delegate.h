@@ -8,8 +8,12 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
+#include <string>
 
+#include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
@@ -18,7 +22,9 @@
 #include "third_party/blink/renderer/modules/peerconnection/peer_connection_util.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/webrtc/api/frame_transformer_interface.h"
+#include "third_party/webrtc/api/units/timestamp.h"
 #include "third_party/webrtc/api/video/video_frame_metadata.h"
 
 namespace blink {
@@ -35,9 +41,9 @@ class RTCEncodedVideoFrameDelegate
       std::unique_ptr<webrtc::TransformableVideoFrameInterface> webrtc_frame);
 
   V8RTCEncodedVideoFrameType::Enum Type() const;
-  uint32_t RtpTimestamp() const;
+  std::optional<uint32_t> RtpTimestamp() const;
   std::optional<webrtc::Timestamp> PresentationTimestamp() const;
-  DOMArrayBuffer* CreateDataBuffer(v8::Isolate* isolate) const;
+  DOMArrayBuffer* CreateDataBuffer() const;
   void SetData(const DOMArrayBuffer* data);
   std::optional<uint8_t> PayloadType() const;
   std::optional<std::string> MimeType() const;
@@ -74,7 +80,7 @@ class RTCEncodedVideoFrameDelegate
     std::optional<base::TimeTicks> receive_time;
     std::optional<CaptureTimeInfo> capture_time;
     std::optional<base::TimeDelta> sender_capture_time_offset;
-    uint32_t rtp_timestamp = 0;
+    std::optional<webrtc::RtpTimestampInfo> rtp_timestamp_info;
     std::optional<webrtc::Timestamp> presentation_timestamp;
   };
   // This field is set after the frame is neutered (e.g., written to a stream or

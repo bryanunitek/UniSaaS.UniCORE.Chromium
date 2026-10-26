@@ -7,10 +7,6 @@ specific_include_rules = {
   "ad_tracker_test\\.cc": [
     "+base/run_loop.h",
   ],
-  "attribution_src_loader(\\.cc|\\.h|_test\\.cc)": [
-    "+components/attribution_reporting",
-    "+services/network/public/cpp/attribution_utils.h",
-  ],
   "child_frame_compositing_helper\\.h": [
     "+components/viz/common/surfaces/surface_id.h",
   ],
@@ -56,10 +52,10 @@ specific_include_rules = {
   "local_frame_test\\.cc": [
     "+base/callback_list.h",
   ],
-  "local_frame_ukm_aggregator\\.cc": [
+  "local_frame_metrics_aggregator\\.cc": [
     "+base/cpu_reduction_experiment.h",
   ],
-  "local_frame_ukm_aggregator_test\\.cc": [
+  "local_frame_metrics_aggregator_test\\.cc": [
     "+base/metrics/statistics_recorder.h"
   ],
   "local_frame_view\\.cc": [
@@ -81,15 +77,15 @@ specific_include_rules = {
   "remote_frame\\.cc": [
     "+ui/base/window_open_disposition.h",
   ],
+  "remote_frame_test\\.cc": [
+    "+components/viz/common/surfaces/frame_sink_id.h",
+  ],
   "remote_frame_view\\.cc": [
     "+cc/base/math_util.h",
     "+components/paint_preview/common/paint_preview_tracker.h",
     "+printing/buildflags/buildflags.h",
     "+printing/metafile_skia.h",
     "+ui/gfx/transform_util.h",
-  ],
-  "navigator_language\\.cc" : [
-    "+base/command_line.h"
   ],
   "visual_viewport\\.cc": [
     "+cc/layers/solid_color_scrollbar_layer.h",
@@ -109,6 +105,7 @@ specific_include_rules = {
     "+ui/gfx/ca_layer_result.h",
   ],
   "web_frame_test\\.cc": [
+    "+base/memory/unsafe_shared_memory_region.h",
     "+ui/base/mojom/menu_source_type.mojom-blink.h",
     "+ui/gfx/transform.h",
   ],
@@ -116,7 +113,11 @@ specific_include_rules = {
     "+base/run_loop.h",
     "+components/stylus_handwriting/win/features.h",
     "+components/viz/common/surfaces/parent_local_surface_id_allocator.h",
-    "+ui/events/types/scroll_input_type.h",
+  ],
+  "web_local_frame_impl\\.cc": [
+    # PostEmbedderMessageEvent() takes a region by value, so the complete type
+    # is required here; the public header only needs the forward declaration.
+    "+base/memory/unsafe_shared_memory_region.h",
   ],
   "settings\\.h": [
     "+ui/base/pointer/pointer_device.h",

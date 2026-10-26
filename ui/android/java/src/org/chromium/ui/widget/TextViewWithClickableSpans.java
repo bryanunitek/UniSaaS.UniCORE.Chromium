@@ -14,6 +14,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.text.Layout;
+import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.ClickableSpan;
 import android.util.AttributeSet;
@@ -36,6 +37,7 @@ import org.chromium.ui.accessibility.AccessibilityState;
 import org.chromium.ui.text.ChromeClickableSpan;
 import org.chromium.ui.util.AttrUtils;
 import org.chromium.ui.util.KeyboardNavigationListener;
+import org.chromium.ui.util.MotionEventUtils;
 
 /**
  * ClickableSpan isn't accessible by default, so we create a subclass of TextView that tries to
@@ -50,6 +52,8 @@ public class TextViewWithClickableSpans extends TextViewWithLeading
     private static final int INVALID_INDEX = -1;
 
     private @Nullable PopupMenu mDisambiguationMenu;
+    private View.@Nullable OnLongClickListener mOnSpanLongClickListener;
+    private boolean mLastTouchEventIntersectsClickableSpan;
     private int mFocusedSpanIndex = INVALID_INDEX;
     private final OnKeyListener mOnKeyListener;
     private final SpanBackgroundHelper mSpanBackgroundHelper;
@@ -218,13 +222,38 @@ public class TextViewWithClickableSpans extends TextViewWithLeading
     @Override
     public boolean onLongClick(View v) {
         assert v == this;
-        if (!AccessibilityState.isTouchExplorationEnabled()) {
-            // If no accessibility services that requested touch exploration are enabled, then this
-            // view should not consume the long click action.
-            return false;
+        if (AccessibilityState.isTouchExplorationEnabled()) {
+            openDisambiguationMenu();
+            return true;
         }
-        openDisambiguationMenu();
-        return true;
+        if (mOnSpanLongClickListener != null
+                && (mLastTouchEventIntersectsClickableSpan
+                        || isFocusedSpanIndexValid(getClickableSpans()))) {
+            return mOnSpanLongClickListener.onLongClick(this);
+        }
+        // If neither touch exploration nor a span long-click listener handled the event, then this
+        // view should not consume the long click action.
+        return false;
+    }
+
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        OnLongClickListener listener = mOnSpanLongClickListener;
+        if (listener != null
+                && event.getActionMasked() == MotionEvent.ACTION_BUTTON_PRESS
+                && MotionEventUtils.isSecondaryClick(event.getButtonState())
+                && touchIntersectsAnyClickableSpans(event)) {
+            return listener.onLongClick(this);
+        }
+        return super.onGenericMotionEvent(event);
+    }
+
+    /**
+     * Sets a listener to be invoked when a clickable span in this TextView is long-clicked or
+     * secondary-clicked (right-clicked).
+     */
+    public void setOnSpanLongClickListener(View.@Nullable OnLongClickListener listener) {
+        mOnSpanLongClickListener = listener;
     }
 
     @Override
@@ -232,6 +261,35 @@ public class TextViewWithClickableSpans extends TextViewWithLeading
         // Ensure that no one changes the long click listener to anything but this view.
         assert listener == this || listener == null;
         super.setOnLongClickListener(listener);
+    }
+
+    @Override
+    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
+        super.onInitializeAccessibilityNodeInfo(info);
+
+        if (getContentDescription() != null) return;
+        if (!(getText() instanceof Spanned text)) return;
+        ClickableSpan[] spans = getClickableSpans();
+        if (spans == null) return;
+
+        SpannableStringBuilder builder = new SpannableStringBuilder(text);
+        boolean changed = false;
+        for (ClickableSpan span : spans) {
+            if (!(span instanceof ChromeClickableSpan chromeSpan)) continue;
+            String description = chromeSpan.getContentDescription();
+            if (description == null) continue;
+
+            int start = builder.getSpanStart(span);
+            int end = builder.getSpanEnd(span);
+            if (start != -1 && end != -1) {
+                builder.replace(start, end, description);
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            info.setContentDescription(builder);
+        }
     }
 
     @Override
@@ -248,17 +306,27 @@ public class TextViewWithClickableSpans extends TextViewWithLeading
     @Override
     @SuppressLint("ClickableViewAccessibility")
     public boolean onTouchEvent(MotionEvent event) {
-        if (touchIntersectsAnyClickableSpans(event)) {
-            return super.onTouchEvent(event);
+        boolean touchIntersectsSpan = touchIntersectsAnyClickableSpans(event);
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            mLastTouchEventIntersectsClickableSpan = touchIntersectsSpan;
         }
+        try {
+            if (touchIntersectsSpan) {
+                return super.onTouchEvent(event);
+            }
 
-        if (event.getAction() != MotionEvent.ACTION_UP
-                && AccessibilityState.isTouchExplorationEnabled()) {
-            handleAccessibilityClick();
-            return true;
+            if (action != MotionEvent.ACTION_UP && AccessibilityState.isTouchExplorationEnabled()) {
+                handleAccessibilityClick();
+                return true;
+            }
+
+            return false;
+        } finally {
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                mLastTouchEventIntersectsClickableSpan = false;
+            }
         }
-
-        return false;
     }
 
     /**
@@ -285,12 +353,33 @@ public class TextViewWithClickableSpans extends TextViewWithLeading
         x += getScrollX();
         y += getScrollY();
 
-        Layout layout = assumeNonNull(getLayout());
+        Layout layout = getLayout();
+        if (layout == null) return false;
         int line = layout.getLineForVertical(y);
         int off = layout.getOffsetForHorizontal(line, x);
 
         ClickableSpan[] clickableSpans = text.getSpans(off, off, ClickableSpan.class);
-        return clickableSpans.length > 0;
+        if (clickableSpans.length > 0) return true;
+
+        int lineStart = layout.getLineStart(line);
+        int lineEnd = layout.getLineEnd(line);
+        boolean isRtl = layout.getParagraphDirection(line) == Layout.DIR_RIGHT_TO_LEFT;
+        for (ClickableSpan span : text.getSpans(lineStart, lineEnd, ClickableSpan.class)) {
+            int rawSpanStart = text.getSpanStart(span);
+            int rawSpanEnd = text.getSpanEnd(span);
+            float startX =
+                    rawSpanStart < lineStart
+                            ? (isRtl ? layout.getLineRight(line) : layout.getLineLeft(line))
+                            : layout.getPrimaryHorizontal(rawSpanStart);
+            float endX =
+                    rawSpanEnd >= lineEnd
+                            ? (isRtl ? layout.getLineLeft(line) : layout.getLineRight(line))
+                            : layout.getPrimaryHorizontal(rawSpanEnd);
+            if (x >= Math.floor(Math.min(startX, endX)) && x <= Math.ceil(Math.max(startX, endX))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Returns the ClickableSpans in this TextView's text. */

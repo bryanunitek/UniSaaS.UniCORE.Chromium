@@ -43,8 +43,16 @@
 #include "ui/display/manager/test/action_logger.h"
 #include "ui/display/manager/test/test_native_display_delegate.h"
 #else
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/test_with_browser_view.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
+#include "chrome/browser/ui/views/chrome_constrained_window_views_client.h"
+#include "chrome/test/base/testing_profile.h"
+#include "chrome/test/views/chrome_views_test_base.h"
+#include "components/constrained_window/constrained_window_views.h"
+#include "ui/base/test/mock_base_window.h"
+#include "ui/views/widget/widget.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 using ::testing::_;
@@ -939,16 +947,17 @@ class RelaunchNotificationControllerPlatformImplTest : public ::testing::Test {
   ~RelaunchNotificationControllerPlatformImplTest() override = default;
 
   void SetUp() override {
+    user_manager_.Reset(std::make_unique<user_manager::UserManagerImpl>(
+        std::make_unique<user_manager::FakeUserManagerDelegate>(),
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        /*cros_settings=*/nullptr));
+
     // Set up Ash global instances.
     ash::AshTestHelper::InitParams init_params;
     init_params.start_session = false;
     ash_test_helper_ = std::make_unique<ash::AshTestHelper>();
     ash_test_helper_->SetUp(std::move(init_params));
 
-    user_manager_.Reset(std::make_unique<user_manager::UserManagerImpl>(
-        std::make_unique<user_manager::FakeUserManagerDelegate>(),
-        TestingBrowserProcess::GetGlobal()->local_state(),
-        /*cros_settings=*/nullptr));
     auto* session_manager = session_manager::SessionManager::Get();
     session_manager->OnUserManagerCreated(user_manager_.Get());
 
@@ -1353,20 +1362,57 @@ TEST_F(RelaunchNotificationControllerTest,
 }
 
 class RelaunchNotificationControllerPlatformImplTest
-    : public TestWithBrowserView {
+    : public ChromeViewsTestBase {
  protected:
   RelaunchNotificationControllerPlatformImplTest() = default;
 
+  BrowserCollectionObserver* platform_delegate() {
+    return GlobalBrowserCollection::GetInstance()->GetPlatformDelegate();
+  }
+
   void SetUp() override {
-    TestWithBrowserView::SetUp();
+    ChromeViewsTestBase::SetUp();
+    constrained_window::SetConstrainedWindowViewsClient(
+        CreateChromeConstrainedWindowViewsClient());
+    profile_ = std::make_unique<TestingProfile>();
+    widget_ = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+
+    ON_CALL(mock_browser_window_interface_, GetProfile())
+        .WillByDefault(Return(profile_.get()));
+    ON_CALL(mock_browser_window_interface_, GetType())
+        .WillByDefault(Return(BrowserWindowInterface::Type::TYPE_NORMAL));
+    ON_CALL(mock_browser_window_interface_, GetWindow())
+        .WillByDefault(Return(&mock_base_window_));
+    ON_CALL(mock_base_window_, GetNativeWindow())
+        .WillByDefault(Return(widget_->GetNativeWindow()));
+    ON_CALL(mock_base_window_, IsActive()).WillByDefault([this]() {
+      return is_visible_;
+    });
+
+    platform_delegate()->OnBrowserCreated(&mock_browser_window_interface_);
+
     impl_.emplace();
   }
 
+  void TearDown() override {
+    impl_->CloseRelaunchNotification();
+    impl_.reset();
+    platform_delegate()->OnBrowserClosed(&mock_browser_window_interface_);
+    widget_.reset();
+    profile_.reset();
+    constrained_window::SetConstrainedWindowViewsClient(nullptr);
+    ChromeViewsTestBase::TearDown();
+  }
+
   void SetVisibility(bool is_visible) {
+    is_visible_ = is_visible;
     if (is_visible) {
-      browser_view()->Show();
+      widget_->Show();
+      platform_delegate()->OnBrowserActivated(&mock_browser_window_interface_);
     } else {
-      browser_view()->Hide();
+      widget_->Hide();
+      platform_delegate()->OnBrowserDeactivated(
+          &mock_browser_window_interface_);
     }
 
     // Allow UI tasks to run so that the browser becomes fully active/inactive.
@@ -1376,6 +1422,11 @@ class RelaunchNotificationControllerPlatformImplTest
   RelaunchNotificationControllerPlatformImpl& platform_impl() { return *impl_; }
 
  private:
+  std::unique_ptr<TestingProfile> profile_;
+  std::unique_ptr<views::Widget> widget_;
+  testing::NiceMock<MockBrowserWindowInterface> mock_browser_window_interface_;
+  testing::NiceMock<ui::MockBaseWindow> mock_base_window_;
+  bool is_visible_ = false;
   std::optional<RelaunchNotificationControllerPlatformImpl> impl_;
 };
 

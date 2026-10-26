@@ -6,20 +6,25 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/check_is_test.h"
+#include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
+#include "chrome/browser/extensions/api/identity/identity_api.h"
 #include "chrome/browser/extensions/api/identity/identity_constants.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/identity.h"
 #include "components/prefs/pref_service.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "extensions/browser/pref_names.h"
 #include "extensions/buildflags/buildflags.h"
 #include "net/cookies/cookie_util.h"
+#include "url/origin.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/extensions/api/identity/launch_web_auth_flow_delegate_ash.h"
@@ -76,6 +81,8 @@ std::string ErrorToString(IdentityLaunchWebAuthFlowFunction::Error error) {
       return identity_constants::kInvalidURLScheme;
     case IdentityLaunchWebAuthFlowFunction::Error::kBrowserContextShutDown:
       return identity_constants::kBrowserContextShutDown;
+    case IdentityLaunchWebAuthFlowFunction::Error::kWebAuthFlowInProgress:
+      return identity_constants::kWebAuthFlowInProgress;
   }
 }
 
@@ -101,6 +108,13 @@ IdentityLaunchWebAuthFlowFunction::~IdentityLaunchWebAuthFlowFunction() {
 
 ExtensionFunction::ResponseAction IdentityLaunchWebAuthFlowFunction::Run() {
   Profile* profile = Profile::FromBrowserContext(browser_context());
+  if (!profile || profile->ShutdownStarted()) {
+    Error error = Error::kBrowserContextShutDown;
+
+    RecordHistogramFunctionResult(error);
+    return RespondNow(ExtensionFunction::Error(ErrorToString(error)));
+  }
+
   if (profile->IsOffTheRecord()) {
     Error error = Error::kOffTheRecord;
 
@@ -145,6 +159,16 @@ ExtensionFunction::ResponseAction IdentityLaunchWebAuthFlowFunction::Run() {
           ->GetDict(extensions::pref_names::kOAuthRedirectUrls)
           .FindList(extension()->id()));
 
+  auto* id_api = IdentityAPI::GetFactoryInstance()->Get(browser_context());
+  if (mode == WebAuthFlow::INTERACTIVE) {
+    auth_flow_tracker_ = id_api->StartTrackingWebAuthFlow(extension()->id());
+    if (!auth_flow_tracker_) {
+      RecordHistogramFunctionResult(Error::kWebAuthFlowInProgress);
+      return RespondNow(ExtensionFunction::Error(
+          ErrorToString(Error::kWebAuthFlowInProgress)));
+    }
+  }
+
   AddRef();  // Balanced in OnAuthFlowSuccess/Failure.
 
   if (delegate_) {
@@ -169,10 +193,25 @@ void IdentityLaunchWebAuthFlowFunction::StartAuthFlow(
     WebAuthFlow::AbortOnLoad abort_on_load_for_non_interactive,
     std::optional<base::TimeDelta> timeout_for_non_interactive,
     std::optional<gfx::Rect> popup_bounds) {
+  if (did_respond()) {
+    return;
+  }
+
+  if (!profile || profile->ShutdownStarted()) {
+    OnBrowserContextShutdown();
+    return;
+  }
+
+  std::optional<url::Origin> initiator_origin =
+      base::FeatureList::IsEnabled(
+          switches::kExtensionWebAuthFlowInitiatorOrigin)
+          ? std::make_optional(extension()->origin())
+          : std::nullopt;
+
   auth_flow_ = std::make_unique<WebAuthFlow>(
       this, profile, auth_url, mode, user_gesture(),
-      abort_on_load_for_non_interactive, timeout_for_non_interactive,
-      popup_bounds);
+      std::move(initiator_origin), abort_on_load_for_non_interactive,
+      timeout_for_non_interactive, popup_bounds);
 
   // An extension might call `launchWebAuthFlow()` with any URL. Add an infobar
   // to attribute displayed URL to the extension.

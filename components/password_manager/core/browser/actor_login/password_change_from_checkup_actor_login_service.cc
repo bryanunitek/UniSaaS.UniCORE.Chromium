@@ -13,11 +13,13 @@
 #include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/password_manager/core/browser/actor_login/actor_login_quality_logger_interface.h"
 #include "components/password_manager/core/browser/actor_login/automated_password_change_credential_filler.h"
 #include "components/password_manager/core/browser/actor_login/internal/actor_login_delegate_client.h"
 #include "components/password_manager/core/browser/actor_login/internal/actor_login_form_finder.h"
 #include "components/password_manager/core/browser/password_form_manager.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/url_formatter/elide_url.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/base/schemeful_site.h"
@@ -26,24 +28,21 @@
 namespace actor_login {
 
 PasswordChangeFromCheckupActorLoginService::
-    PasswordChangeFromCheckupActorLoginService(std::u16string username,
-                                               std::u16string password,
-                                               GURL url)
-    : username_(std::move(username)),
-      password_(std::move(password)),
-      url_(std::move(url)) {}
+    PasswordChangeFromCheckupActorLoginService(
+        password_manager::StoredCredential credential)
+    : credential_(std::move(credential)) {}
 
 PasswordChangeFromCheckupActorLoginService::
     ~PasswordChangeFromCheckupActorLoginService() = default;
 
 // TODO(crbug.com/509823221): Actor Login MQLS logs should be uploaded and
 // recorded as APC flows. Currently, MQLS is disabled for Actor Login
-// when `kPasswordCheckupPrototype` is enabled. Instead, the MQLS logs
+// when `kPasswordChangeWithGlic` is enabled. Instead, the MQLS logs
 // should be marked as APC flows and uploaded.
 void PasswordChangeFromCheckupActorLoginService::GetCredentials(
     ActorLoginDelegateClient* client,
     bool has_sign_in_with_google_button,
-    base::WeakPtr<ActorLoginQualityLoggerInterface> mqls_logger,
+    scoped_refptr<ActorLoginQualityLoggerInterface> mqls_logger,
     CredentialsOrErrorReply callback) {
   CredentialsOrErrorReply async_callback =
       base::BindPostTaskToCurrentDefault(std::move(callback));
@@ -54,7 +53,8 @@ void PasswordChangeFromCheckupActorLoginService::GetCredentials(
     return;
   }
   url::Origin request_origin = client->GetLastCommittedOriginForMainFrame();
-  if (!net::SchemefulSite::IsSameSite(url_, request_origin.GetURL())) {
+  if (!net::SchemefulSite::IsSameSite(credential_.url,
+                                      request_origin.GetURL())) {
     // TODO(crbug.com/511976430): Update metrics for Actor Login.
     std::move(async_callback)
         .Run(base::unexpected(ActorLoginError::kFillingNotAllowed));
@@ -91,9 +91,10 @@ void PasswordChangeFromCheckupActorLoginService::
   std::vector<Credential> credentials;
   Credential credential;
   credential.id = Credential::Id(1);
-  credential.username = username_;
+  credential.username = credential_.username_value;
   credential.source_site_or_app =
-      actor_login::ActorLoginFormFinder::GetSourceSiteOrAppFromUrl(url_);
+      actor_login::ActorLoginFormFinder::GetSourceSiteOrAppFromUrl(
+          credential_.url);
   credential.request_origin = request_origin;
   credential.display_origin = url_formatter::FormatOriginForSecurityDisplay(
       credential.request_origin,
@@ -115,7 +116,7 @@ void PasswordChangeFromCheckupActorLoginService::AttemptLogin(
     ActorLoginDelegateClient* client,
     const Credential& credential,
     bool should_store_permission,
-    base::WeakPtr<ActorLoginQualityLoggerInterface> mqls_logger,
+    scoped_refptr<ActorLoginQualityLoggerInterface> mqls_logger,
     base::TimeTicks attempt_login_tool_start_time,
     FrameFillingStartedCallback frame_filling_started_cb,
     LoginStatusResultOrErrorReply done_callback,
@@ -127,10 +128,11 @@ void PasswordChangeFromCheckupActorLoginService::AttemptLogin(
         .Run(base::unexpected(ActorLoginError::kInvalidTabInterface));
     return;
   }
-  CHECK(credential.username == username_);
+  CHECK(credential.username == credential_.username_value);
 
   url::Origin request_origin = client->GetLastCommittedOriginForMainFrame();
-  if (!net::SchemefulSite::IsSameSite(url_, request_origin.GetURL())) {
+  if (!net::SchemefulSite::IsSameSite(credential_.url,
+                                      request_origin.GetURL())) {
     // TODO(crbug.com/511976430): Update metrics for Actor Login.
     std::move(async_callback).Run(LoginStatusResult::kErrorNoSigninForm);
     return;
@@ -155,14 +157,14 @@ void PasswordChangeFromCheckupActorLoginService::AttemptLogin(
 
   // TODO(crbug.com/509823221): Actor Login MQLS logs should be uploaded and
   // recorded as APC flows. Currently, MQLS is disabled for Actor Login
-  // when `kPasswordCheckupPrototype` is enabled. Instead, the MQLS logs
+  // when `kPasswordChangeWithGlic` is enabled. Instead, the MQLS logs
   // should be marked as APC flows and uploaded.
   credential_filler_ =
       std::make_unique<AutomatedPasswordChangeCredentialFiller>(
           request_origin, credential, password_manager_client,
           /*mqls_logger=*/nullptr, attempt_login_tool_start_time,
-          base::NullCallback(), std::move(async_callback), username_,
-          password_);
+          base::NullCallback(), std::move(async_callback),
+          password_manager::CloneStoredCredential(credential_));
 
   credential_filler_->AttemptLogin(password_manager);
 }

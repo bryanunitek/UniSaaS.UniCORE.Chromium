@@ -18,7 +18,6 @@
 #include "extensions/buildflags/buildflags.h"
 #include "mojo/public/cpp/bindings/unique_receiver_set.h"
 #include "net/cookies/cookie_store.h"
-#include "net/first_party_sets/first_party_set_metadata.h"
 #include "services/network/cookie_settings.h"
 #include "services/network/public/mojom/cookie_manager.mojom-forward.h"
 #include "services/network/public/mojom/restricted_cookie_manager.mojom.h"
@@ -64,6 +63,7 @@ class ChromeExtensionCookies
   void CreateRestrictedCookieManager(
       const url::Origin& origin,
       const net::IsolationInfo& isolation_info,
+      bool prefer_bound_cookie_context,
       mojo::PendingReceiver<network::mojom::RestrictedCookieManager> receiver);
 
   // Deletes all cookies matching the host of `origin` and
@@ -93,6 +93,7 @@ class ChromeExtensionCookies
     void CreateRestrictedCookieManager(
         const url::Origin& origin,
         const net::IsolationInfo& isolation_info,
+        bool prefer_bound_cookie_context,
         mojo::PendingReceiver<network::mojom::RestrictedCookieManager>
             receiver);
 

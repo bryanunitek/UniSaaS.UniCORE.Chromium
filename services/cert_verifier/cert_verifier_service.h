@@ -12,7 +12,7 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/receiver_set.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "net/cert/cert_net_fetcher.h"
 #include "net/cert/cert_verifier.h"
 #include "net/cert/cert_verify_proc.h"
@@ -124,6 +124,7 @@ class CertVerifierServiceImpl : public mojom::CertVerifierService,
       service_factory_impl_;
   // Will queue requests for processing until this is false.
   bool waiting_for_update_;
+  bool enable_network_access_called_ = false;
   std::vector<QueuedCertVerifyRequest> queued_requests_;
   WaitUntilNextUpdateForTestingCallback update_complete_callback_;
 };

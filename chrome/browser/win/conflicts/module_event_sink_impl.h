@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/functional/callback_forward.h"
+#include "base/memory/ref_counted.h"
 #include "base/process/process.h"
 #include "chrome/common/conflicts/module_event_sink_win.mojom.h"
 #include "content/public/common/process_type.h"
@@ -30,7 +31,7 @@ class ModuleEventSinkImpl : public mojom::ModuleEventSink {
 
   using OnModuleLoadCallback =
       base::RepeatingCallback<void(content::ProcessType process_type,
-                                   const base::FilePath& module_path,
+                                   base::FilePath module_path,
                                    uint32_t module_size,
                                    uint32_t module_time_date_stamp)>;
 
@@ -62,8 +63,11 @@ class ModuleEventSinkImpl : public mojom::ModuleEventSink {
  private:
   friend class ModuleEventSinkImplTest;
 
-  // A handle to the process on the other side of the pipe.
-  base::Process process_;
+  // A handle to the process on the other side of the pipe. Held by refcounted
+  // pointer so that it can be shared with the background tasks posted by
+  // OnModuleEvents() without duplicating the handle for each one. See
+  // OnModuleEvents().
+  scoped_refptr<base::RefCountedData<base::Process>> process_;
 
   // The process ID of the remote process on the other end of the pipe. This is
   // forwarded along to the ModuleDatabase for each call.

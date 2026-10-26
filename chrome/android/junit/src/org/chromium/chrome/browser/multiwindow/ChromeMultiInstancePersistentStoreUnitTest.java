@@ -15,7 +15,6 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowSystemClock;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -25,6 +24,7 @@ import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -32,11 +32,7 @@ import java.util.Set;
  * for instance-specific fields.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@EnableFeatures({
-    ChromeFeatureList.MULTI_INSTANCE_SHARED_PREFS_MIGRATION,
-    ChromeFeatureList.SESSION_RESTORE_AFTER_CRASH
-})
+@EnableFeatures(ChromeFeatureList.SESSION_RESTORE_AFTER_CRASH)
 public class ChromeMultiInstancePersistentStoreUnitTest {
 
     private static final int INSTANCE_ID_0 = 0;
@@ -84,7 +80,7 @@ public class ChromeMultiInstancePersistentStoreUnitTest {
         ChromeMultiInstancePersistentStore.writeCustomTitle(INSTANCE_ID_0, WINDOW_TITLE);
         ChromeMultiInstancePersistentStore.writeTaskId(INSTANCE_ID_0, TASK_ID_0);
         ChromeMultiInstancePersistentStore.writeTabCount(INSTANCE_ID_0, 1, 1);
-        ChromeMultiInstancePersistentStore.writeTabCountForRelaunchSync(INSTANCE_ID_0, 1);
+        ChromeMultiInstancePersistentStore.writeTabCountForRelaunch(INSTANCE_ID_0, 1);
         ChromeMultiInstancePersistentStore.writeProfileType(
                 INSTANCE_ID_0, SupportedProfileType.REGULAR);
         ChromeMultiInstancePersistentStore.writeIncognitoSelected(INSTANCE_ID_0, true);
@@ -131,7 +127,7 @@ public class ChromeMultiInstancePersistentStoreUnitTest {
         assertEquals(0, ChromeMultiInstancePersistentStore.readNormalTabCount(INSTANCE_ID_0));
         assertEquals(0, ChromeMultiInstancePersistentStore.readIncognitoTabCount(INSTANCE_ID_0));
 
-        ChromeMultiInstancePersistentStore.writeTabCountForRelaunchSync(INSTANCE_ID_0, 7);
+        ChromeMultiInstancePersistentStore.writeTabCountForRelaunch(INSTANCE_ID_0, 7);
         assertEquals(0, ChromeMultiInstancePersistentStore.readTabCountForRelaunch(INSTANCE_ID_0));
 
         ChromeMultiInstancePersistentStore.writeLatestPersistentStateId(INSTANCE_ID_0, 1);
@@ -241,7 +237,7 @@ public class ChromeMultiInstancePersistentStoreUnitTest {
 
         // Verify that the value is successfully written to the store.
         int tabCount = 7;
-        ChromeMultiInstancePersistentStore.writeTabCountForRelaunchSync(INSTANCE_ID_0, tabCount);
+        ChromeMultiInstancePersistentStore.writeTabCountForRelaunch(INSTANCE_ID_0, tabCount);
         assertEquals(
                 tabCount,
                 ChromeMultiInstancePersistentStore.readTabCountForRelaunch(INSTANCE_ID_0));
@@ -457,22 +453,25 @@ public class ChromeMultiInstancePersistentStoreUnitTest {
     }
 
     @Test
-    public void testReadCrashRecoveryData_excludesWindowsWithOnlyIncognitoTabs() {
+    public void testReadCrashRecoveryData_includesWindowsWithOnlyIncognitoOrEmptyTabs() {
         // Instance 0: recoverable with 1 normal tab. Should be included.
         ChromeMultiInstancePersistentStore.writeLastAccessedTime(INSTANCE_ID_0);
         ChromeMultiInstancePersistentStore.writeIsRecoverable(INSTANCE_ID_0, true);
         ChromeMultiInstancePersistentStore.writeTabCount(
                 INSTANCE_ID_0, /* normalTabCount= */ 1, /* incognitoTabCount= */ 0);
 
-        // Instance 1: recoverable with 0 normal tabs and 2 incognito tabs. Should be filtered out.
+        ShadowSystemClock.advanceBy(Duration.ofSeconds(1));
+
+        // Instance 1: recoverable with 0 normal tabs and 2 incognito tabs. Should also be included.
         ChromeMultiInstancePersistentStore.writeLastAccessedTime(INSTANCE_ID_1);
         ChromeMultiInstancePersistentStore.writeIsRecoverable(INSTANCE_ID_1, true);
         ChromeMultiInstancePersistentStore.writeTabCount(
                 INSTANCE_ID_1, /* normalTabCount= */ 0, /* incognitoTabCount= */ 2);
 
         var recoveryData = ChromeMultiInstancePersistentStore.readCrashRecoveryData();
-        assertEquals(1, recoveryData.size());
+        assertEquals(2, recoveryData.size());
         assertEquals(INSTANCE_ID_0, recoveryData.get(0).windowId);
+        assertEquals(INSTANCE_ID_1, recoveryData.get(1).windowId);
     }
 
     @Test
@@ -486,5 +485,35 @@ public class ChromeMultiInstancePersistentStoreUnitTest {
 
         ChromeMultiInstancePersistentStore.writeIsCrashRecoveryPending(false);
         assertFalse(ChromeMultiInstancePersistentStore.readIsCrashRecoveryPending());
+    }
+
+    @Test
+    public void testRestoreOnStartupPrefValue() {
+        // Verify default value.
+        assertEquals(
+                TabbedStartupWindowPolicyDelegate.PREF_UNSET,
+                ChromeMultiInstancePersistentStore.readRestoreOnStartupPrefValue());
+
+        // Verify writing and reading.
+        ChromeMultiInstancePersistentStore.writeRestoreOnStartupPrefValue(
+                SessionStartupPref.NEW_TAB);
+        assertEquals(
+                SessionStartupPref.NEW_TAB,
+                ChromeMultiInstancePersistentStore.readRestoreOnStartupPrefValue());
+    }
+
+    @Test
+    public void testRestoreOnStartupUrls() {
+        // Verify default value is empty list when unset.
+        assertTrue(ChromeMultiInstancePersistentStore.readRestoreOnStartupUrls().isEmpty());
+
+        // Verify writing and reading non-empty list.
+        List<String> urls = List.of("https://www.google.com", "https://www.example.com");
+        ChromeMultiInstancePersistentStore.writeRestoreOnStartupUrls(urls);
+        assertEquals(urls, ChromeMultiInstancePersistentStore.readRestoreOnStartupUrls());
+
+        // Verify writing an empty list clears the field and returns empty list.
+        ChromeMultiInstancePersistentStore.writeRestoreOnStartupUrls(List.of());
+        assertTrue(ChromeMultiInstancePersistentStore.readRestoreOnStartupUrls().isEmpty());
     }
 }

@@ -12,9 +12,10 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/supervised_user/core/browser/list_family_members_service.h"
 #include "components/supervised_user/core/common/pref_names.h"
 #include "net/base/backoff_entry.h"
 
@@ -22,6 +23,8 @@ class ChildAccountServiceFactory;
 class PrefService;
 
 namespace supervised_user {
+
+class FamilyLinkSettingsService;
 
 // This class handles detection of child accounts (on sign-in as well as on
 // browser restart), and triggers the appropriate behavior (e.g. enable the
@@ -47,12 +50,14 @@ class ChildAccountService : public KeyedService,
     TRANSIENT_MOVING_TO_AUTHENTICATED,
   };
 
+  ChildAccountService(
+      PrefService& user_prefs,
+      signin::IdentityManager* identity_manager,
+      FamilyLinkSettingsService& family_link_settings_service,
+      base::OnceCallback<void(bool)> check_user_child_status_callback);
   ChildAccountService(const ChildAccountService&) = delete;
   ChildAccountService& operator=(const ChildAccountService&) = delete;
-
   ~ChildAccountService() override;
-
-  void Init();
 
   // KeyedService:
   void Shutdown() override;
@@ -75,19 +80,15 @@ class ChildAccountService : public KeyedService,
   base::CallbackListSubscription ObserveGoogleAuthState(
       const base::RepeatingCallback<void()>& callback);
 
-  // Use |ChildAccountServiceFactory::GetForProfile(...)| to get an instance of
-  // this service.
-  ChildAccountService(
-      PrefService& user_prefs,
-      signin::IdentityManager* identity_manager,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      base::OnceCallback<void(bool)> check_user_child_status_callback,
-      ListFamilyMembersService& list_family_members_service);
-
  private:
   // Sets whether the signed-in account is a supervised account.
   void SetSupervisionStatusAndNotifyObservers(
       bool is_subject_to_parental_controls);
+
+  // Self-observation callback. Required for correctness: since the driven pref
+  // is a user-pref, it might be set from persistent storage, rather than by
+  // actions from the IdentityManager.
+  void OnSupervisionStatusChanged();
 
   // Updates whether Google SafeSearch should be forced.
   void UpdateForceGoogleSafeSearch();
@@ -96,7 +97,8 @@ class ChildAccountService : public KeyedService,
   void OnPrimaryAccountChanged(
       const signin::PrimaryAccountChangeEvent& event_details) override;
   void OnExtendedAccountInfoUpdated(const AccountInfo& info) override;
-  void OnRefreshTokenUpdatedForAccount(const CoreAccountInfo& account_info) override;
+  void OnRefreshTokenUpdatedForAccount(
+      const CoreAccountInfo& account_info) override;
   void OnErrorStateOfRefreshTokenUpdatedForAccount(
       const CoreAccountInfo& account_info,
       const GoogleServiceAuthError& error,
@@ -108,17 +110,15 @@ class ChildAccountService : public KeyedService,
 
   void OnAuthStateUpdated();
 
-  // Subscription to set custodian preferences from successful fetch of
-  // ListFamilyMembersService.
-  base::CallbackListSubscription set_custodian_prefs_subscription_;
-
   const raw_ptr<signin::IdentityManager> identity_manager_;
+
+  const raw_ref<FamilyLinkSettingsService> family_link_settings_service_;
 
   const raw_ref<PrefService> user_prefs_;
 
-  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-
   base::RepeatingClosureList google_auth_state_observers_;
+
+  PrefChangeRegistrar pref_change_registrar_;
 
   // Callback relevant on Chrome OS platform.
   // Asserts that a supervised user matches the child status of the primary
@@ -127,6 +127,10 @@ class ChildAccountService : public KeyedService,
 
   // Callbacks to run when the user status becomes known.
   std::vector<base::OnceClosure> status_received_callback_list_;
+
+  base::ScopedObservation<signin::IdentityManager,
+                          signin::IdentityManager::Observer>
+      identity_manager_observer_{this};
 
   base::WeakPtrFactory<ChildAccountService> weak_ptr_factory_{this};
 };

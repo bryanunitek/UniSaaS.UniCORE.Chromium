@@ -5,13 +5,18 @@
 package org.chromium.chrome.browser.tab;
 
 import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.app.tabmodel.HeadlessTabDelegateFactory;
 import org.chromium.chrome.browser.price_tracking.PriceTrackingFeatures;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.tabmodel.TabModelType;
 import org.chromium.content_public.browser.LoadUrlParams;
+import org.chromium.content_public.browser.WebContents;
 
 /** Used by tab_android_unittest.cc to initialize a tab. */
+@NullMarked
 public class TabAndroidTestHelper {
     private TabAndroidTestHelper() {}
 
@@ -20,8 +25,9 @@ public class TabAndroidTestHelper {
      * present in C++ unit tests so just disable the feature.
      */
     private static void disablePriceTracking() {
-        PriceTrackingFeatures.setIsSignedInAndSyncEnabledForTesting(false);
-        PriceTrackingFeatures.setPriceAnnotationsEnabledForTesting(false);
+        PriceTrackingFeatures.setIsSignedInAndSyncEnabledForTesting(
+                /* isSignedInAndSyncEnabled= */ false);
+        PriceTrackingFeatures.setPriceAnnotationsEnabledForTesting(/* enabled= */ false);
     }
 
     /** Creates and initializes a tab for C++ unit test usage. */
@@ -31,18 +37,24 @@ public class TabAndroidTestHelper {
         disablePriceTracking();
 
         // Create a frozen tab.
-        TabImpl tab = new TabImpl(tabId, profile, tabLaunchType, /* isArchived= */ false);
+        TabImpl tab = new TabImpl(tabId, profile, tabLaunchType);
         tab.initialize(
                 /* parent= */ null,
                 /* creationState= */ null,
                 new LoadUrlParams("about:blank"),
                 /* pendingTitle= */ null,
                 /* webContents= */ null,
-                new HeadlessTabDelegateFactory(),
+                new HeadlessTabDelegateFactory(TabModelType.HEADLESS),
                 /* initiallyHidden= */ true,
                 /* tabState= */ null,
                 /* initializeRenderer= */ false,
                 /* isPinned= */ false);
         return tab;
+    }
+
+    /** Triggers the native openFile flow for C++ unit test usage. */
+    @CalledByNative
+    public static void openFile(@JniType("content::WebContents*") WebContents webContents) {
+        TabWebContentsDelegateAndroidImplJni.get().openFile(webContents);
     }
 }

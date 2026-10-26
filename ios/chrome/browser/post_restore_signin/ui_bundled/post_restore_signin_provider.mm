@@ -20,6 +20,7 @@
 #import "ios/chrome/browser/promos_manager/model/constants.h"
 #import "ios/chrome/browser/promos_manager/model/promo_config.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
+#import "ios/chrome/browser/shared/public/commands/scene_sign_in_commands.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
@@ -175,13 +176,13 @@
 
 // Shows the signin / sync UI flow.
 - (void)showSignin {
-  DCHECK(self.handler);
+  CHECK(self.sceneSignInHandler, base::NotFatalUntil::M160);
 
   __weak __typeof(self) weakSelf = self;
   SigninCoordinatorCompletionCallback completion =
-      ^(SigninCoordinator* coordinator, SigninCoordinatorResult result,
-        id<SystemIdentity> completionIdentity) {
-        if (result == SigninCoordinatorResultSuccess) {
+      ^(SigninCoordinator* coordinator,
+        SigninCoordinatorResultOrIdentity result) {
+        if (result.has_value()) {
           [weakSelf signinDone];
         }
       };
@@ -193,13 +194,12 @@
             promoAction:signin_metrics::PromoAction::
                             PROMO_ACTION_NO_SIGNIN_PROMO
              completion:completion];
-  [self.handler showSignin:command];
+  [self.sceneSignInHandler showSignin:command baseViewController:nil];
 }
 
 - (void)signinDone {
   if (![self isSignedIn]) {
-    NOTREACHED(base::NotFatalUntil::M150);
-    return;
+    NOTREACHED();
   }
   _syncService->GetUserSettings()->SetSelectedType(
       syncer::UserSelectableType::kHistory, _historySyncEnabled);

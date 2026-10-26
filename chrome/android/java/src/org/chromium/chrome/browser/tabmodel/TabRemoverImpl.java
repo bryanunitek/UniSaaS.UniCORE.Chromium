@@ -13,7 +13,7 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.actor.ActorServiceTabUtils;
+import org.chromium.chrome.browser.actor.background_tabs.ActorServiceTabUtils;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabGroupUtils;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabGroupUtils.GroupsPendingDestroy;
 import org.chromium.chrome.browser.tab.Tab;
@@ -38,6 +38,8 @@ import java.util.function.Supplier;
 @NullMarked
 public class TabRemoverImpl implements TabRemover {
     private final TabModelRemover mTabModelRemover;
+    private final TabRemover.TabClosePrompter mBeforeUnloadPrompter =
+            new BeforeUnloadTabClosePrompter();
 
     /**
      * @param context The activity context.
@@ -66,6 +68,47 @@ public class TabRemoverImpl implements TabRemover {
 
     @Override
     public void prepareCloseTabs(
+            TabClosureParams tabClosureParams,
+            boolean allowDialog,
+            @Nullable TabModelActionListener listener,
+            Callback<TabClosureParams> onPreparedCallback) {
+        if (!allowDialog) {
+            proceedWithClose(tabClosureParams, allowDialog, listener, onPreparedCallback);
+            return;
+        }
+
+        List<Tab> tabsToClose =
+                tabClosureParams.isAllTabs
+                        ? TabModelUtils.convertTabListToListOfTabs(
+                                mTabModelRemover.getTabModelInternal())
+                        : tabClosureParams.tabs;
+        if (tabsToClose == null) {
+            proceedWithClose(tabClosureParams, allowDialog, listener, onPreparedCallback);
+            return;
+        }
+
+        TabRemover.checkBeforeUnloadAndProceed(
+                tabClosureParams,
+                tabsToClose,
+                mBeforeUnloadPrompter,
+                /* abandonBatchOnCancel= */ tabClosureParams.isAllTabs,
+                listener,
+                confirmedTabs ->
+                        TabRemover.proceedWithConfirmedTabs(
+                                tabClosureParams,
+                                mTabModelRemover.getTabModelInternal(),
+                                tabsToClose,
+                                confirmedTabs,
+                                listener,
+                                params ->
+                                        proceedWithClose(
+                                                params,
+                                                allowDialog,
+                                                listener,
+                                                onPreparedCallback)));
+    }
+
+    private void proceedWithClose(
             TabClosureParams tabClosureParams,
             boolean allowDialog,
             @Nullable TabModelActionListener listener,
@@ -372,22 +415,20 @@ public class TabRemoverImpl implements TabRemover {
                     };
         }
 
-        // These calls should be kept up-to-date with any params in TabClosureParams.
+        TabClosureParams.Builder builder =
+                isAllTabs
+                        ? params.toPartialClosureBuilder(tabsToClose)
+                        : params.toBuilder(tabsToClose);
+
         if (params.tabCloseType == TabCloseType.SINGLE) {
-            assert tabsToClose.size() == 1;
-            return TabClosureParams.closeTab(tabsToClose.get(0))
-                    .recommendedNextTab(params.recommendedNextTab)
-                    .uponExit(params.uponExit && !createdPlaceholders)
-                    .allowUndo(params.allowUndo && !preventUndo)
-                    .tabClosingSource(params.tabClosingSource)
-                    .withUndoRunnable(undoRunnable)
-                    .build();
+            // Placeholder tabs left in the model mean the closure no longer exits the app. SINGLE
+            // is the only close type that needs that correction applied here. MULTIPLE cannot
+            // carry uponExit at all, and an ALL closure only reaches this line when placeholders
+            // were created, by which point toPartialClosureBuilder has narrowed it to MULTIPLE and
+            // dropped uponExit -- the same answer this expression would have produced.
+            builder.uponExit(params.uponExit && !createdPlaceholders);
         }
-        return TabClosureParams.closeTabs(tabsToClose)
-                .allowUndo(params.allowUndo && !preventUndo)
-                .hideTabGroups(params.hideTabGroups)
-                .saveToTabRestoreService(params.saveToTabRestoreService)
-                .tabClosingSource(params.tabClosingSource)
+        return builder.allowUndo(params.allowUndo && !preventUndo)
                 .withUndoRunnable(undoRunnable)
                 .build();
     }

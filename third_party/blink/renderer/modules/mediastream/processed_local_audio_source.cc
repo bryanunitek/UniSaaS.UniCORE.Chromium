@@ -32,6 +32,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_audio_processor.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_constraints_util.h"
+#include "third_party/blink/renderer/modules/mediastream/media_stream_constraints_util_audio.h"
 #include "third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.h"
 #include "third_party/blink/renderer/modules/webrtc/webrtc_audio_device_impl.h"
 #include "third_party/blink/renderer/platform/mediastream/audio_service_audio_processor_proxy.h"
@@ -131,9 +132,39 @@ void ProcessedLocalAudioSource::SendLogMessageWithSessionId(
 }
 
 std::optional<blink::AudioProcessingProperties>
-ProcessedLocalAudioSource::GetAudioProcessingProperties() const {
+ProcessedLocalAudioSource::GetInitialAudioProcessingProperties() const {
   return processing_layout_.properties();
 }
+
+std::optional<blink::AudioProcessingProperties>
+ProcessedLocalAudioSource::GetAudioProcessingProperties() const {
+  std::optional<AudioProcessingProperties> properties =
+      GetInitialAudioProcessingProperties();
+  if (!properties || !audio_processor_proxy_) {
+    return properties;
+  }
+
+  // Voice isolation can be reconfigured dynamically at runtime. Override the
+  // initial track creation setting with the current dynamic setting from the
+  // audio processor proxy if available.
+  if (std::optional<bool> voice_isolation =
+          audio_processor_proxy_->VoiceIsolation()) {
+    properties->voice_isolation =
+        *voice_isolation ? AudioProcessingProperties::VoiceIsolationType::
+                               kVoiceIsolationEnabled
+                         : AudioProcessingProperties::VoiceIsolationType::
+                               kVoiceIsolationDisabled;
+  }
+  return properties;
+}
+
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+void ProcessedLocalAudioSource::SetVoiceIsolation(bool enabled) {
+  if (audio_processor_proxy_) {
+    audio_processor_proxy_->SetVoiceIsolation(enabled);
+  }
+}
+#endif
 
 void* ProcessedLocalAudioSource::GetClassIdentifier() const {
   return kProcessedLocalAudioSourceIdentifier;
@@ -220,6 +251,16 @@ bool ProcessedLocalAudioSource::EnsureSourceIsStarted() {
     source_config.processing = processing_layout_.webrtc_processing_settings();
 
   } else {
+    // MediaStreamAudioProcessor runs in the Renderer process.
+    // Invariant: MediaStreamAudioProcessor must NEVER be created with Voice
+    // Isolation enabled, as the ML model execution only exists in the Audio
+    // Service.
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+    CHECK(!processing_layout_.webrtc_processing_settings().voice_isolation)
+        << "Voice isolation requested in Renderer APM, which lacks ML execution "
+           "support!";
+#endif
+
     // Create the MediaStreamAudioProcessor, bound to the WebRTC audio device
     // module.
 

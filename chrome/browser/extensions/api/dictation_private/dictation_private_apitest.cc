@@ -15,6 +15,7 @@
 #include "chrome/browser/dictation/dictation_keyed_service.h"
 #include "chrome/browser/dictation/dictation_multiplexer.h"
 #include "chrome/browser/dictation/features.h"
+#include "chrome/browser/dictation/logging.h"
 #include "chrome/browser/dictation/stream_provider.h"
 #include "chrome/browser/dictation/test_util.h"
 #include "chrome/browser/extensions/extension_apitest.h"
@@ -36,6 +37,10 @@ namespace extensions {
 
 namespace {
 
+// TODO(b/538580887): Update these tests to use a session like a real stream
+// provider would.
+// TODO(b/538580230): Add a test for UpdateAudioLevel once the above bug is
+// fixed.
 class ExtensionApiTestStreamProvider : public dictation::StreamProvider {
  public:
   ExtensionApiTestStreamProvider(
@@ -61,11 +66,11 @@ class ExtensionApiTestStreamProvider : public dictation::StreamProvider {
 
     api::dictation_private::StartStreamFlags flags;
     flags.eval_mode = dictation::kDictationEvalMode.Get();
+    flags.web_speech_api_backend = dictation::kWebSpeechApiBackend.Get();
     details.flags = std::move(flags);
 
-    base::ListValue event_args =
-        api::dictation_private::OnStartStream::Create(details);
-
+    auto event_args = base::MakeRefCounted<EventArgs>(
+        api::dictation_private::OnStartStream::Create(details));
     auto event = std::make_unique<Event>(
         events::DICTATION_PRIVATE_ON_START_STREAM,
         api::dictation_private::OnStartStream::kEventName,
@@ -75,13 +80,12 @@ class ExtensionApiTestStreamProvider : public dictation::StreamProvider {
         ->DispatchEventToExtension(extension_id_, std::move(event));
   }
 
-  void Stop() override {
+  void Stop(dictation::DictationStreamEndTrigger trigger) override {
     api::dictation_private::EndStreamDetails details;
     details.stream_id = stream_id_.value();
 
-    base::ListValue event_args =
-        api::dictation_private::OnEndStream::Create(details);
-
+    auto event_args = base::MakeRefCounted<EventArgs>(
+        api::dictation_private::OnEndStream::Create(details));
     auto event =
         std::make_unique<Event>(events::DICTATION_PRIVATE_ON_END_STREAM,
                                 api::dictation_private::OnEndStream::kEventName,
@@ -95,8 +99,8 @@ class ExtensionApiTestStreamProvider : public dictation::StreamProvider {
     transcription_updates_.push_back({data, is_final});
   }
 
-  void OnStreamStateChanged(
-      dictation::StreamProvider::StreamState state) override {
+  void OnStreamStateChanged(dictation::StreamProvider::StreamState state,
+                            dictation::StreamErrorReason reason) override {
     state_changes_.push_back(state);
   }
 
@@ -106,6 +110,7 @@ class ExtensionApiTestStreamProvider : public dictation::StreamProvider {
                : state_changes_.back();
   }
 
+  dictation::Target* GetTarget() override { return target_.get(); }
   const dictation::Target* GetTarget() const override { return target_.get(); }
 
   struct TranscriptionUpdate {
@@ -153,19 +158,6 @@ class DictationPrivateApiTest : public ExtensionApiTest {
       dictation::CreateEnablingFeatureList();
 };
 
-class DictationPrivateApiEvalModeTest : public DictationPrivateApiTest {
- public:
-  DictationPrivateApiEvalModeTest() {
-    feature_list_.InitAndEnableFeatureWithParameters(
-        dictation::kDictation,
-        {{"use_component_extension", "false"}, {"eval_mode", "true"}});
-  }
-  ~DictationPrivateApiEvalModeTest() override = default;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
 IN_PROC_BROWSER_TEST_F(DictationPrivateApiTest, Basic) {
   ResultCatcher catcher;
   ExtensionTestMessageListener ready_listener("ready");
@@ -187,9 +179,12 @@ IN_PROC_BROWSER_TEST_F(DictationPrivateApiTest, Basic) {
   ExtensionApiTestStreamProvider test_stream_provider(
       profile(), extension->id(), test_stream_id);
   multiplexer.RegisterStreamProvider(test_stream_id, &test_stream_provider);
+  VT_LOG(profile()) << "Test browser log message";
+  // Flush the buffered log immediately so the test does not wait for the timer.
+  service->log_buffer().Flush();
 
-  auto target = std::make_unique<dictation::Target>(
-      content::GlobalDOMNodeId{content::WeakDocumentPtr()});
+  auto target = std::make_unique<dictation::Target>(dictation::TargetDetails(
+      content::GlobalDOMNodeId{content::WeakDocumentPtr()}));
   test_stream_provider.BindToTargetAndConnect(std::move(target));
 
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
@@ -215,10 +210,44 @@ IN_PROC_BROWSER_TEST_F(DictationPrivateApiTest, Basic) {
             state_changes[1]);
 }
 
-IN_PROC_BROWSER_TEST_F(DictationPrivateApiEvalModeTest, StartStreamFlags) {
-  // This must match the STREAM_ID_EXPECTING_EVAL_MODE const in the test
-  // extension.
-  constexpr int kStreamIdExpectingEvalMode = 456;
+// Test that a non-allowlisted extension cannot access the API.
+IN_PROC_BROWSER_TEST_F(DictationPrivateApiTest, BlockedCannotAccessApi) {
+  base::FilePath extension_path =
+      test_data_dir_.AppendASCII("dictation_private/blocked");
+
+  ResultCatcher catcher;
+  const Extension* extension =
+      LoadExtension(extension_path, {.ignore_manifest_warnings = true});
+  ASSERT_TRUE(extension);
+  EXPECT_THAT(extension->install_warnings(),
+              testing::Contains(testing::Field(
+                  &extensions::InstallWarning::message,
+                  testing::StartsWith("'dictationPrivate' is not allowed"))));
+
+  ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
+}
+
+// Tests for start stream flags bound to a base::FeatureParam
+class DictationPrivateApiStartStreamFlagsTest
+    : public DictationPrivateApiTest,
+      public testing::WithParamInterface<
+          std::pair<std::string, dictation::DictationMultiplexer::StreamId>> {
+ public:
+  DictationPrivateApiStartStreamFlagsTest() {
+    feature_list_.InitAndEnableFeatureWithParameters(
+        dictation::kDictation,
+        {{"use_component_extension", "false"}, {GetParam().first, "true"}});
+  }
+  ~DictationPrivateApiStartStreamFlagsTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(DictationPrivateApiStartStreamFlagsTest,
+                       StartStreamFlags) {
+  const dictation::DictationMultiplexer::StreamId test_stream_id =
+      GetParam().second;
 
   ResultCatcher catcher;
   ExtensionTestMessageListener ready_listener("ready");
@@ -236,14 +265,12 @@ IN_PROC_BROWSER_TEST_F(DictationPrivateApiEvalModeTest, StartStreamFlags) {
   ASSERT_TRUE(service);
   dictation::DictationMultiplexer& multiplexer = service->multiplexer();
 
-  const dictation::DictationMultiplexer::StreamId test_stream_id(
-      kStreamIdExpectingEvalMode);
   ExtensionApiTestStreamProvider test_stream_provider(
       profile(), extension->id(), test_stream_id);
   multiplexer.RegisterStreamProvider(test_stream_id, &test_stream_provider);
 
-  auto target = std::make_unique<dictation::Target>(
-      content::GlobalDOMNodeId{content::WeakDocumentPtr()});
+  auto target = std::make_unique<dictation::Target>(dictation::TargetDetails(
+      content::GlobalDOMNodeId{content::WeakDocumentPtr()}));
   test_stream_provider.BindToTargetAndConnect(std::move(target));
 
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
@@ -251,21 +278,20 @@ IN_PROC_BROWSER_TEST_F(DictationPrivateApiEvalModeTest, StartStreamFlags) {
   multiplexer.UnregisterStreamProvider(test_stream_id);
 }
 
-// Test that a non-allowlisted extension cannot access the API.
-IN_PROC_BROWSER_TEST_F(DictationPrivateApiTest, BlockedCannotAccessApi) {
-  base::FilePath extension_path =
-      test_data_dir_.AppendASCII("dictation_private/blocked");
-
-  ResultCatcher catcher;
-  const Extension* extension =
-      LoadExtension(extension_path, {.ignore_manifest_warnings = true});
-  ASSERT_TRUE(extension);
-  EXPECT_THAT(extension->install_warnings(),
-              testing::Contains(testing::Field(
-                  &extensions::InstallWarning::message,
-                  testing::StartsWith("'dictationPrivate' is not allowed"))));
-
-  ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
-}
+// Flag tests use stream IDs starting from 1001 and must be unique for each
+// flag since they correspond to checks in the testFlags function of
+// chrome/test/data/extensions/api_test/dictation_private/allowed/test.js
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    DictationPrivateApiStartStreamFlagsTest,
+    testing::Values(
+        std::make_pair("eval_mode",
+                       dictation::DictationMultiplexer::StreamId(1001)),
+        std::make_pair("web_speech_api_backend",
+                       dictation::DictationMultiplexer::StreamId(1002))),
+    [](const testing::TestParamInfo<
+        DictationPrivateApiStartStreamFlagsTest::ParamType>& info) {
+      return info.param.first;
+    });
 
 }  // namespace extensions

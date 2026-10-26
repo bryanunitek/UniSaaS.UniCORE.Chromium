@@ -6,6 +6,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_PROPERTY_HANDLE_H_
 
 #include "base/check_op.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_property_name.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
@@ -43,13 +44,9 @@ class CORE_EXPORT PropertyHandle {
 
   bool operator==(const PropertyHandle&) const;
 
-  unsigned GetHash() const;
+  uint32_t GetHash() const;
 
-  bool IsCSSProperty() const {
-    return handle_type_ == kHandleCSSProperty || IsCSSCustomProperty();
-  }
   const CSSProperty& GetCSSProperty() const {
-    DCHECK(IsCSSProperty());
     return *css_property_;
   }
 
@@ -64,7 +61,6 @@ class CORE_EXPORT PropertyHandle {
   CSSPropertyName GetCSSPropertyName() const {
     if (handle_type_ == kHandleCSSCustomProperty)
       return CSSPropertyName(property_name_);
-    DCHECK(IsCSSProperty());
     return CSSPropertyName(css_property_->PropertyID());
   }
 
@@ -91,7 +87,8 @@ class CORE_EXPORT PropertyHandle {
   }
 
   HandleType handle_type_;
-  const CSSProperty* css_property_;
+  raw_ptr<const CSSProperty, UnprotectedInRelease | DanglingUntriaged>
+      css_property_;
   AtomicString property_name_;
 
   friend struct HashTraits<PropertyHandle>;
@@ -99,7 +96,7 @@ class CORE_EXPORT PropertyHandle {
 
 template <>
 struct HashTraits<PropertyHandle> : SimpleClassHashTraits<PropertyHandle> {
-  static unsigned GetHash(const PropertyHandle& handle) {
+  static uint32_t GetHash(const PropertyHandle& handle) {
     return handle.GetHash();
   }
 

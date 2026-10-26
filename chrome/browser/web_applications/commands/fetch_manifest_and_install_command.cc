@@ -22,7 +22,7 @@
 #include "chrome/browser/web_applications/commands/launch_or_reparent_web_contents_into_app_command.h"
 #include "chrome/browser/web_applications/commands/web_app_command.h"
 #include "chrome/browser/web_applications/install_bounce_metric.h"
-#include "chrome/browser/web_applications/jobs/finalize_install_job.h"
+#include "chrome/browser/web_applications/jobs/finalize_install_or_update_job.h"
 #include "chrome/browser/web_applications/jobs/manifest_to_web_app_install_info_job.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/locks/noop_lock.h"
@@ -191,6 +191,7 @@ FetchManifestAndInstallCommand::FetchManifestAndInstallCommand(
                              base::ToString(install_surface_));
   GetMutableDebugValue().Set("fallback_behavior",
                              base::ToString(fallback_behavior_));
+  GetMutableDebugValue().Set("dialog_shown", dialog_shown_);
 }
 
 FetchManifestAndInstallCommand::~FetchManifestAndInstallCommand() = default;
@@ -312,10 +313,18 @@ void FetchManifestAndInstallCommand::OnVisibilityChanged(
     return;
   }
 
-  // This prevents us from closing the dialog if the visibility of the window
-  // itself changes but the tab doesn't. A more thorough fix here is to listen
-  // to the tab strip changing (AKA a different tab being opened / changed to),
-  // but due to needing to use code in `ui`, this is a bit hard to do.
+  // Once the install dialog is shown, `WebAppModalDialogDelegate` owns
+  // visibility-driven closure (`CloseDialogAsIgnored()`) while pre-acceptance,
+  // and accepted installs should finish in the background without aborting.
+  if (dialog_shown_) {
+    return;
+  }
+
+  // This prevents us from cancelling the installation before the dialog is
+  // shown if the visibility of the window itself changes but the tab doesn't.
+  // A more thorough fix here is to listen to the tab strip changing (AKA a
+  // different tab being opened / changed to), but due to needing to use code in
+  // `ui`, this is a bit hard to do.
   if (ui_manager_->IsWebContentsActiveTabInBrowser(web_contents())) {
     return;
   }
@@ -332,11 +341,9 @@ void FetchManifestAndInstallCommand::WebContentsDestroyed() {
 
 void FetchManifestAndInstallCommand::Abort(webapps::InstallResultCode code,
                                            const base::Location& location) {
-  GetMutableDebugValue().Set("result_code", base::ToString(code));
-  webapps::InstallableMetrics::TrackInstallResult(false, install_surface_);
   Observe(nullptr);
-  MeasureUserInstalledAppHistogram(code);
-  CompleteAndSelfDestruct(CommandResult::kFailure, webapps::AppId(), code,
+  MeasureUserInstalledAppHistograms(code);
+  CompleteAndSelfDestruct(CommandResult::kSuccess, webapps::AppId(), code,
                           location);
 }
 
@@ -640,6 +647,8 @@ void FetchManifestAndInstallCommand::ShowInstallDialog() {
               }
             }));
   } else {
+    dialog_shown_ = true;
+    GetMutableDebugValue().Set("dialog_shown", dialog_shown_);
     std::move(dialog_callback_)
         .Run((!screenshot_sizes_.empty() ? weak_ptr_factory_.GetWeakPtr()
                                          : nullptr),
@@ -682,7 +691,7 @@ void FetchManifestAndInstallCommand::OnDialogCompleted(
   auto* profile =
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
 
-  install_job_ = std::make_unique<FinalizeInstallJob>(
+  install_job_ = std::make_unique<FinalizeInstallOrUpdateJob>(
       *profile, app_lock_.get(), app_lock_.get(), *web_app_info_,
       finalize_options);
 
@@ -738,24 +747,15 @@ void FetchManifestAndInstallCommand::OnInstallFinalizedMaybeReparentTab(
         .Run(true, std::move(reparent_closure));
   }
 
-  OnInstallCompleted(app_id, code);
+  MeasureUserInstalledAppHistograms(code);
+  CompleteAndSelfDestruct(CommandResult::kSuccess, app_id, code);
 }
 
-void FetchManifestAndInstallCommand::OnInstallCompleted(
-    const webapps::AppId& app_id,
+void FetchManifestAndInstallCommand::MeasureUserInstalledAppHistograms(
     webapps::InstallResultCode code) {
   GetMutableDebugValue().Set("result_code", base::ToString(code));
-
   webapps::InstallableMetrics::TrackInstallResult(webapps::IsSuccess(code),
                                                   install_surface_);
-  MeasureUserInstalledAppHistogram(code);
-  CompleteAndSelfDestruct(webapps::IsSuccess(code) ? CommandResult::kSuccess
-                                                   : CommandResult::kFailure,
-                          app_id, code);
-}
-
-void FetchManifestAndInstallCommand::MeasureUserInstalledAppHistogram(
-    webapps::InstallResultCode code) {
   if (!web_app_info_) {
     RecordInstallMetrics(InstallCommand::kFetchManifestAndInstall,
                          WebAppType::kUnknown, code, install_surface_);

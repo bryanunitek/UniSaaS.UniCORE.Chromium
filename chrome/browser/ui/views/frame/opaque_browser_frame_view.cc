@@ -179,7 +179,7 @@ void OpaqueBrowserFrameView::InitViews() {
     restore_button_ = CreateFrameCaptionButton(
         views::CAPTION_BUTTON_ICON_MAXIMIZE_RESTORE, HTMAXBUTTON,
         features::IsRoundedIconsEnabled()
-            ? views::kChromeRestoreFilledIcon
+            ? views::kChromeRestoreIcon
             : views::kWindowControlRestoreOldIcon);
     close_button_ = CreateFrameCaptionButton(
         views::CAPTION_BUTTON_ICON_CLOSE, HTMAXBUTTON,
@@ -439,7 +439,7 @@ int OpaqueBrowserFrameView::NonClientHitTest(const gfx::Point& point) {
 
 void OpaqueBrowserFrameView::GetWindowMask(const gfx::Size& size,
                                            SkPath* window_mask) {
-  DCHECK(window_mask);
+  CHECK(window_mask, base::NotFatalUntil::M162);
 
   if (IsFrameCondensed()) {
     return;

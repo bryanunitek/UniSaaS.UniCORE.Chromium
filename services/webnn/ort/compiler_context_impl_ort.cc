@@ -7,8 +7,8 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/task/thread_pool.h"
 #include "base/types/expected_macros.h"
@@ -17,14 +17,12 @@
 #include "services/webnn/ort/environment.h"
 #include "services/webnn/ort/graph_builder_ort.h"
 #include "services/webnn/ort/model_editor.h"
-#include "services/webnn/ort/ort_data_type.h"
 #include "services/webnn/ort/ort_session_options.h"
 #include "services/webnn/ort/ort_status.h"
 #include "services/webnn/ort/platform_functions_ort.h"
 #include "services/webnn/ort/scoped_ort_types.h"
 #include "services/webnn/public/cpp/ep_device_info.h"
 #include "services/webnn/webnn_constant_operand.h"
-#include "services/webnn/webnn_tensor_impl.h"
 
 namespace webnn::ort {
 
@@ -45,40 +43,19 @@ struct CompilerContextImplOrt::CompilationResult {
       operand_output_name_to_onnx_output_name;
 };
 
-// static
-std::unique_ptr<CompilerContextImplOrt> CompilerContextImplOrt::Create(
-    const base::FilePath& ep_library_path,
-    const EpDeviceInfo& target_device,
-    mojom::CreateContextOptionsPtr options,
-    ContextProperties properties,
-    mojo::PendingRemote<mojom::WebNNModelLoader> model_loader) {
-  // TODO(crbug.com/502249078): Create the environment before sandbox lockdown.
-  auto env = Environment::GetOrCreateInstanceForCompiler(target_device.ep_name,
-                                                         ep_library_path);
-  if (!env.has_value()) {
-    LOG(ERROR) << "[WebNN] Failed to create ONNX Runtime environment: "
-               << env.error();
-    return nullptr;
-  }
-
-  return std::make_unique<CompilerContextImplOrt>(
-      target_device, std::move(env.value()), std::move(options),
-      std::move(properties), std::move(model_loader),
-      base::PassKey<CompilerContextImplOrt>());
-}
-
 CompilerContextImplOrt::CompilerContextImplOrt(
+    WebNNCompilerServiceImpl& service,
     const EpDeviceInfo& target_device,
-    scoped_refptr<Environment> env,
     mojom::CreateContextOptionsPtr options,
     ContextProperties properties,
-    mojo::PendingRemote<mojom::WebNNModelLoader> model_loader,
-    base::PassKey<CompilerContextImplOrt> /*pass_key*/)
-    : properties_(std::move(properties)),
+    mojo::PendingRemote<mojom::WebNNModelLoader> model_loader)
+    : service_(service),
+      properties_(std::move(properties)),
       options_(std::move(options)),
       model_loader_(std::move(model_loader)),
-      env_(std::move(env)) {
-  session_options_ = SessionOptions::Create(target_device, env_);
+      // The environment is guaranteed to be initialized in PreSandboxInit().
+      env_(Environment::GetInstance().value()) {
+  session_options_ = SessionOptions::CreateForCompilation(target_device, env_);
 
   model_loader_.set_disconnect_handler(
       base::BindOnce(&CompilerContextImplOrt::OnModelLoaderDisconnected,
@@ -86,6 +63,12 @@ CompilerContextImplOrt::CompilerContextImplOrt(
 }
 
 CompilerContextImplOrt::~CompilerContextImplOrt() = default;
+
+void CompilerContextImplOrt::SetId(
+    mojo::ReceiverId id,
+    base::PassKey<WebNNCompilerServiceImpl> /*pass_key*/) {
+  id_ = id;
+}
 
 const ContextProperties& CompilerContextImplOrt::properties() const {
   return properties_;
@@ -100,14 +83,11 @@ void CompilerContextImplOrt::CreateGraphBuilder(
   CreateGraphBuilderImpl(std::move(receiver));
 }
 
-// TODO(crbug.com/508864477): Remove the constant tensor operands parameter.
 void CompilerContextImplOrt::BuildGraph(
     mojom::GraphInfoPtr graph_info,
-    WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
+    WebNNGraphImpl::ComputeResourceInfo /*compute_resource_info*/,
     base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
         constant_operands,
-    base::flat_map<OperandId, scoped_refptr<WebNNTensorImpl>>
-    /*constant_tensor_operands*/,
     BuildGraphCallback callback) {
   // Wrap the callback so it is automatically called with an error if dropped
   // without being run (e.g. the model loader is disconnected).
@@ -126,8 +106,7 @@ void CompilerContextImplOrt::BuildGraph(
                      std::move(graph_info), session_options_, env_, properties_,
                      std::move(constant_operands)),
       base::BindOnce(&CompilerContextImplOrt::DidCompile,
-                     base::Unretained(this), std::move(compute_resource_info),
-                     std::move(wrapped_callback)));
+                     base::Unretained(this), std::move(wrapped_callback)));
 }
 
 // static
@@ -141,11 +120,10 @@ CompilerContextImplOrt::CompileOnBackgroundThread(
     base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
         constant_operands) {
   // Step 1: Build the ORT model from GraphInfo.
-  ASSIGN_OR_RETURN(std::unique_ptr<ModelEditor::ModelInfo> model_info,
-                   GraphBuilderOrt::CreateAndBuild(
-                       *graph_info, std::move(context_properties),
-                       std::move(constant_operands),
-                       session_options->batched_matmul_k_dimension_limit()));
+  std::unique_ptr<ModelEditor::ModelInfo> model_info =
+      GraphBuilderOrt::CreateAndBuild(*graph_info,
+                                      std::move(context_properties),
+                                      std::move(constant_operands));
 
   // Step 2: Compile the model using ORT Compile API.
   const OrtApi* ort_api = PlatformFunctions::GetInstance()->ort_api();
@@ -158,6 +136,20 @@ CompilerContextImplOrt::CompileOnBackgroundThread(
               env->get(), session_options->get(),
               ScopedOrtModelCompilationOptions::Receiver(compile_options)
                   .get()))) {
+    return BuildGraphError();
+  }
+
+  // Run all graph optimizations (L1-L4) in this sandboxed Compiler process so
+  // the fully optimized graph is captured in the compiled output buffer. The
+  // GPU process consumes that buffer with ORT_DISABLE_ALL (see
+  // ort_session_options.cc), performing zero graph transformation on untrusted
+  // input. The level must be set on the compile options here, not on the
+  // session options: CreateModelCompilationOptionsFromSessionOptions forces the
+  // level back to Default (see model_compilation_options.cc), so any level on
+  // the session options is ignored on the compile path.
+  if (ORT_CALL_FAILED(
+          ort_compile_api->ModelCompilationOptions_SetGraphOptimizationLevel(
+              compile_options.get(), ORT_ENABLE_ALL))) {
     return BuildGraphError();
   }
 
@@ -188,11 +180,18 @@ CompilerContextImplOrt::CompileOnBackgroundThread(
     return BuildGraphError();
   }
 
+  // Ensure the buffer is freed when it goes out of scope, even if the
+  // compilation fails.
+  base::ScopedClosureRunner free_output_model_buffer(base::BindOnce(
+      [](OrtAllocator* allocator, void** buffer) {
+        if (*buffer) {
+          allocator->Free(allocator, *buffer);
+        }
+      },
+      default_allocator, &output_model_buffer));
+
   if (ORT_CALL_FAILED(
           ort_compile_api->CompileModel(env->get(), compile_options.get()))) {
-    if (output_model_buffer) {
-      default_allocator->Free(default_allocator, output_model_buffer);
-    }
     return BuildGraphError();
   }
   CHECK(output_model_buffer);
@@ -208,9 +207,6 @@ CompilerContextImplOrt::CompileOnBackgroundThread(
                  output_model_buffer_size));
   result->compiled_model_data = mojo_base::BigBuffer(output_model_buffer_span);
 
-  // Free the ORT-allocated output buffer.
-  default_allocator->Free(default_allocator, output_model_buffer);
-
   // Transfer name mappings.
   result->operand_input_name_to_onnx_input_name =
       std::move(model_info->operand_input_name_to_onnx_input_name);
@@ -221,7 +217,6 @@ CompilerContextImplOrt::CompileOnBackgroundThread(
 }
 
 void CompilerContextImplOrt::DidCompile(
-    WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
     BuildGraphCallback callback,
     base::expected<std::unique_ptr<CompilationResult>, mojom::ErrorPtr>
         result) {
@@ -235,28 +230,10 @@ void CompilerContextImplOrt::DidCompile(
 
   auto& compilation = result.value();
 
-  base::flat_map<std::string, mojom::CompiledOperandDescriptorPtr> inputs;
-  for (auto& [name, descriptor] :
-       compute_resource_info.input_names_to_descriptors) {
-    inputs.emplace(
-        name,
-        mojom::CompiledOperandDescriptor::New(
-            std::move(compilation->operand_input_name_to_onnx_input_name[name]),
-            std::move(descriptor)));
-  }
-  base::flat_map<std::string, mojom::CompiledOperandDescriptorPtr> outputs;
-  for (auto& [name, descriptor] :
-       compute_resource_info.output_names_to_descriptors) {
-    outputs.emplace(
-        name,
-        mojom::CompiledOperandDescriptor::New(
-            std::move(
-                compilation->operand_output_name_to_onnx_output_name[name]),
-            std::move(descriptor)));
-  }
-  auto compiled_graph =
-      mojom::CompiledGraph::New(std::move(compilation->compiled_model_data),
-                                std::move(inputs), std::move(outputs));
+  auto compiled_graph = mojom::CompiledGraph::New(
+      std::move(compilation->compiled_model_data),
+      std::move(compilation->operand_input_name_to_onnx_input_name),
+      std::move(compilation->operand_output_name_to_onnx_output_name));
 
   // Send compiled graph to GPU process.
   model_loader_->LoadCompiledGraph(
@@ -281,6 +258,13 @@ void CompilerContextImplOrt::OnModelLoaderDisconnected() {
   // Cancel any ongoing compilation tasks since the GPU process is no longer
   // available to load the compiled graphs.
   cancelable_task_tracker_.TryCancelAll();
+
+  // Destroy the context now instead of waiting for the WebNNCompilerContext
+  // receiver to disconnect: that end is held by the renderer, which may keep it
+  // open indefinitely while requesting replacement contexts (each replacing the
+  // GPU process's ModelLoader pipe), accumulating dead contexts in this
+  // process.
+  service_->RemoveCompilerContext(id_, base::PassKey<CompilerContextImplOrt>());
 }
 
 }  // namespace webnn::ort

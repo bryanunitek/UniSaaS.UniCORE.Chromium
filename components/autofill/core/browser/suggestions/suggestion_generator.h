@@ -15,12 +15,13 @@
 #include "base/containers/flat_map.h"
 #include "base/functional/callback_forward.h"
 #include "components/autofill/core/browser/data_quality/addresses/profile_token_quality.h"
-#include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/common/dense_set.h"
 #include "components/autofill/core/common/form_data.h"
 
 namespace autofill {
+
+class AutofillClient;
 
 // SuggestionGenerator is an interface that is used to generate suggestions for
 // a specific `FillingProduct`. Each `FillingProduct` has their own
@@ -93,13 +94,12 @@ class SuggestionGenerator {
        {SuggestionDataSource::kOneTimePassword,
         {SuggestionDataSource::kPasskey}},
        // Address can merge with:
-       // - Plus Addresses: To replace GAIA emails or show inline.
-       // - Verified Identity: To show verified details alongside profiles.
        // - Loyalty Cards: To extend email suggestions.
+       // - Autocomplete: To complement non-stored email addresses.
        // - Passkeys: Every SuggestionDataSource can be merged with passkeys.
        {SuggestionDataSource::kAddress,
-        {SuggestionDataSource::kIdentityCredential,
-         SuggestionDataSource::kLoyaltyCard, SuggestionDataSource::kPasskey}},
+        {SuggestionDataSource::kLoyaltyCard, SuggestionDataSource::kPasskey,
+         SuggestionDataSource::kAutocomplete}},
        {SuggestionDataSource::kIdentityCredential,
         {SuggestionDataSource::kPasskey}},
        {SuggestionDataSource::kLoyaltyCard, {SuggestionDataSource::kPasskey}},

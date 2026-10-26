@@ -4,11 +4,14 @@
 
 import("//ui/webui/resources/tools/build_webui.gni")
 
+assert(!is_android)
+
 build_webui("build") {
   grd_prefix = "search_engine_choice"
 
   static_files = [
     "images/arrow_downward.svg",
+    "images/arrow_downward_old.svg",
     "images/info_dialog_illustration.svg",
     "images/info_dialog_illustration_dark.svg",
     "images/refresh_bg_bottom_dark.svg",
@@ -24,7 +27,7 @@ build_webui("build") {
     "app.ts",
     "app_refresh.html.ts",
     "app_refresh.ts",
-    "browser_proxy.ts",
+    "search_engine_choice.ts",
   ]
 
   css_files = [

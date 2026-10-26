@@ -17,6 +17,7 @@
 #include "content/public/browser/render_process_host_creation_observer.h"
 #include "content/public/browser/render_process_host_observer.h"
 #include "content/public/browser/render_widget_host_observer.h"
+#include "content/public/common/child_process_id.h"
 
 namespace content {
 class BrowserContext;
@@ -41,7 +42,8 @@ class VisitedLinkEventListener
   // Used by PartitionedVisitedLinkWriter to provide and store a raw pointer to
   // the owning object.
   VisitedLinkEventListener(content::BrowserContext* browser_context,
-                           PartitionedVisitedLinkWriter* partitioned_writer);
+                           PartitionedVisitedLinkWriter* partitioned_writer,
+                           bool is_pseudo_partitioned);
 
   VisitedLinkEventListener(const VisitedLinkEventListener&) = delete;
   VisitedLinkEventListener& operator=(const VisitedLinkEventListener&) = delete;
@@ -57,6 +59,8 @@ class VisitedLinkEventListener
   // Sets a custom timer to use for coalescing events for testing.
   // |coalesce_timer_override| must outlive this.
   void SetCoalesceTimerForTest(base::OneShotTimer* coalesce_timer_override);
+
+  bool is_pseudo_partitioned() const { return is_pseudo_partitioned_; }
 
   // content::RenderProcessHostCreationObserver:
   void OnRenderProcessHostCreated(content::RenderProcessHost* rph) override;
@@ -89,8 +93,9 @@ class VisitedLinkEventListener
                                      content::RenderWidgetHostObserver>
       widget_observation_{this};
 
-  // Map between renderer child ids and their VisitedLinkUpdater.
-  std::map<int, std::unique_ptr<VisitedLinkUpdater>> updaters_;
+  // Map between renderer child process IDs and their VisitedLinkUpdater.
+  std::map<content::ChildProcessId, std::unique_ptr<VisitedLinkUpdater>>
+      updaters_;
 
   base::ReadOnlySharedMemoryRegion table_region_;
 
@@ -103,6 +108,9 @@ class VisitedLinkEventListener
   // Used to filter RENDERER_PROCESS_CREATED notifications to renderers that
   // belong to this BrowserContext.
   raw_ptr<content::BrowserContext> browser_context_;
+
+  // Whether the visited link hashtable is pseudo-partitioned.
+  bool is_pseudo_partitioned_ = false;
 };
 
 }  // namespace visitedlink

@@ -28,7 +28,7 @@ class TabsFromOtherDevicesSidePanelMetrics : public SidePanelEntryObserver {
     kTabOpened = 3,
     kMaxValue = kTabOpened,
   };
-  // LINT.ThenChange(//tools/metrics/histograms/metadata/sync/enums.xml:TabsFromOtherDevicesSidePanelEvent)
+  // LINT.ThenChange(//tools/metrics/histograms/enums.xml:TabsFromOtherDevicesSidePanelEvent)
 
   TabsFromOtherDevicesSidePanelMetrics();
   TabsFromOtherDevicesSidePanelMetrics(
@@ -53,8 +53,6 @@ class TabsFromOtherDevicesSidePanelMetrics : public SidePanelEntryObserver {
   base::WeakPtr<TabsFromOtherDevicesSidePanelMetrics> GetWeakPtr();
 
  private:
-  const std::string histogram_prefix_;
-
   base::ScopedObservation<SidePanelEntry, SidePanelEntryObserver> observation_{
       this};
 

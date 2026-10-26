@@ -13,13 +13,15 @@
 #include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/function_ref.h"
-#include "base/memory/advanced_memory_safety_checks.h"
+#include "base/memory/sanitized_object.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/back_forward_cache.h"
+#include "content/public/browser/editable_level.h"
 #include "content/public/browser/frame_tree_node_id.h"
+#include "content/public/browser/initiator_navigation_state.h"
 #include "content/public/browser/web_exposed_isolation_level.h"
 #include "content/public/common/bindings_policy.h"
 #include "content/public/common/extra_mojo_js_features.mojom.h"
@@ -33,8 +35,10 @@
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-forward.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-forward.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/common/frame/frame_owner_element_type.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
+#include "third_party/blink/public/mojom/browser_interface_broker.mojom-forward.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-forward.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-forward.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom-forward.h"
@@ -45,6 +49,7 @@
 #include "third_party/blink/public/mojom/page/page_visibility_state.mojom-forward.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 #include "ui/accessibility/ax_node_id_forward.h"
+#include "ui/base/ime/text_input_type.h"
 #include "ui/gfx/native_ui_types.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -88,6 +93,8 @@ class Size;
 namespace mojo {
 template <typename T>
 class PendingReceiver;
+template <typename T>
+class PendingRemote;
 }  // namespace mojo
 
 namespace net {
@@ -156,7 +163,7 @@ class Page;
 class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
   // Do not remove this macro!
   // The macro is maintained by the memory safety team.
-  ADVANCED_MEMORY_SAFETY_CHECKS();
+  SANITIZED_OBJECT();
 
  public:
   // Returns the RenderFrameHost given its ID and the ID of its render process.
@@ -222,6 +229,18 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
 
   // Returns the route id for this frame.
   virtual int GetRoutingID() const = 0;
+
+  // Returns the ID of the NavigationHandle that created the document that this
+  // RenderFrameHost represents, if there was such a navigation. The value is
+  // assigned after receiving the DidCommitNavigation IPC. It is not updated
+  // after same-document navigations (which may have their own navigation
+  // IDs).
+  //
+  // Returns 0 if this RenderFrameHost is for an initial empty document of a
+  // frame, and thus was not created for a navigation. This may later change to
+  // a non-zero value if the RenderFrameHost is reused for a navigation to a
+  // non-initial document.
+  virtual int64_t GetNavigationId() const = 0;
 
   // Returns the frame token for this frame.
   virtual const blink::LocalFrameToken& GetFrameToken() const = 0;
@@ -445,6 +464,23 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
   // with a single document, DocumentUserData can be used.
   virtual FrameTreeNodeId GetFrameTreeNodeId() const = 0;
 
+  // Returns the DOMNodeId of the focused editable element in this frame, or
+  // an invalid ID if none is focused or editable.
+  virtual blink::DOMNodeIdType GetFocusedDOMNodeId() const = 0;
+
+  // Returns the editability level of the focused element in this frame.
+  virtual EditableLevel GetFocusedEditableLevel() const = 0;
+
+  // Returns true if the focused editable element in this frame is a password or
+  // password-like field, per its text input state. Returns false if that state
+  // has not yet arrived for the currently focused element.
+  virtual bool IsFocusedElementPasswordLike() = 0;
+
+  // Returns the text input type (e.g. text area, plain text input, search box)
+  // of the focused editable element in this frame. Returns std::nullopt if no
+  // editable element is focused, or if its text input state hasn't arrived yet.
+  virtual std::optional<ui::TextInputType> GetFocusedElementTextInputType() = 0;
+
   // Used for devtools instrumentation and trace-ability. The token is
   // propagated to Blink's LocalFrame and both Blink and content/
   // can tag calls and requests with this token in order to attribute them
@@ -518,6 +554,15 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
   // Note that this does not reflect navigations in other RenderFrameHosts,
   // frames, or pages within the same WebContents, so it may differ from
   // NavigationController::GetLastCommittedEntry().
+  //
+  // Note: When a navigation fails and commits an error page (e.g.
+  // `chrome-error://chromewebdata/`), `GetLastCommittedURL()` continues to
+  // return the failed destination target URL rather than an error URL.
+  // Therefore, this should not be used directly for security, authorization,
+  // or permission checks without verifying `!IsErrorDocument()`.
+  // Higher-level layers (such as extensions) should use their dedicated
+  // permission-check URL helper (e.g.,
+  // `extensions::util::GetURLForExtensionPermissionCheck()`).
   virtual const GURL& GetLastCommittedURL() const = 0;
 
   // Returns the last committed origin of this RenderFrameHost.
@@ -668,18 +713,18 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
 
   // Defines different states the RenderFrameHost can be in during its lifetime,
   // i.e., from the point of creation to deletion. Please see comments in
-  // RenderFrameHostImpl::LifecycleStateImpl for more details.
+  // RenderFrameHostLifecycleStateImpl for more details.
   //
-  // Compared to the internal LifecycleStateImpl, this public LifecycleState has
-  // two main differences. First, it collapses kRunningUnloadHandlers and
-  // kReadyToBeDeleted into a single kPendingDeletion state, since embedders
-  // need not care about the difference between having started and having
-  // finished running unload handlers. Second, it intentionally does not expose
-  // speculative RenderFrameHosts (corresponding to the kSpeculative internal
-  // state): this is a content-internal implementation detail that is planned to
-  // be eventually removed, and //content embedders shouldn't rely on their
-  // existence.
-  // A Java counterpart will be generated for this enum.
+  // Compared to the internal RenderFrameHostLifecycleStateImpl, this public
+  // LifecycleState has two main differences. First, it collapses
+  // kRunningUnloadHandlers and kReadyToBeDeleted into a single kPendingDeletion
+  // state, since embedders need not care about the difference between having
+  // started and having finished running unload handlers. Second, it
+  // intentionally does not expose speculative RenderFrameHosts (corresponding
+  // to the kSpeculative internal state): this is a content-internal
+  // implementation detail that is planned to be eventually removed, and
+  // //content embedders shouldn't rely on their existence. A Java counterpart
+  // will be generated for this enum.
   // GENERATED_JAVA_ENUM_PACKAGE: (
   //   org.chromium.content_public.browser)
   enum class LifecycleState {
@@ -812,6 +857,11 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
   // Embedders should use a value equal to or greater than
   // DisallowActivationReasonId.kMinEmbedderDisallowActivationReason.
   virtual bool IsInactiveAndDisallowActivation(uint64_t reason) = 0;
+
+  // Returns whether the frame is focused. A frame is considered focused when it
+  // is the parent chain of the focused frame within the frame tree. In
+  // addition, its associated RenderWidgetHost has to be focused.
+  virtual bool IsFocused() = 0;
 
   // Get the number of proxies to this frame, in all processes. Exposed for
   // use by resource metrics.
@@ -1010,6 +1060,17 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
   // FrameTreeNode associated with this RenderFrameHost.
   virtual bool HasTransientUserActivation() = 0;
 
+  // Consumes the transient bit of the User Activation v2 state across the
+  // frame tree of the FrameTreeNode associated with this RenderFrameHost.
+  // Returns true if there was an active transient activation to consume.
+  //
+  // Prefer this over HasTransientUserActivation() when gating a privileged
+  // operation on a user gesture, so that a single gesture cannot be replayed
+  // into several such operations. Renderer code that also consumes the
+  // activation locally must pass UserActivationUpdateScope::kCurrentRenderer,
+  // otherwise the browser-side state is cleared before this is called.
+  [[nodiscard]] virtual bool ConsumeTransientUserActivation() = 0;
+
   // Notifies the renderer of a user activation event for the associated frame.
   // The |notification_type| parameter is used for histograms only.
   virtual void NotifyUserActivation(
@@ -1023,15 +1084,14 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
   // Returns true if this frame has fired DOMContentLoaded.
   virtual bool IsDOMContentLoaded() = 0;
 
-  // Update or retrieve whether the frame is considered an ad frame by Ad
-  // Tagging.
+  // Marks the frame as an ad frame.
   //
   // Note: This ad status is currently maintained and updated *outside* content.
   // This is used to ensure the render frame proxies are in sync (since they
   // aren't exposed in the public API). Eventually, we might be able to simplify
   // this somewhat (maybe //content would be responsible for maintaining the
   // state, with some content client method used to update it).
-  virtual void UpdateIsAdFrame(bool is_ad_frame) = 0;
+  virtual void UpdateToAdFrame() = 0;
   virtual bool IsAdFrame() const = 0;
 
   // Tells the host that this is part of setting up a WebXR DOM Overlay. This
@@ -1123,6 +1183,20 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
   // example, helper methods for MojoJs to better work with Web API objects.
   virtual void EnableMojoJsBindings(mojom::ExtraMojoJsFeaturesPtr features) = 0;
 
+  // Like EnableMojoJsBindings(), but JavaScript calls to Mojo.bindInterface
+  // are routed to |broker| instead of the frame's BrowserInterfaceBroker, so
+  // the page can only reach the interfaces |broker| chooses to serve. Should
+  // be called in ReadyToCommitNavigation. The caller retains ownership of the
+  // broker implementation and must keep it alive for as long as the document
+  // may use it. Callers for frames without an associated WebUI must be
+  // sanctioned by ContentBrowserClient::ShouldAllowMojoJsBindingsForFrame().
+  virtual void EnableMojoJsBindingsWithBroker(
+      mojo::PendingRemote<blink::mojom::BrowserInterfaceBroker> broker) = 0;
+
+  // Indicates that this frame wants stack traces included in console error
+  // notifications (`untrusted_stack_trace` in `DidAddMessageToConsole`).
+  virtual void SetWantErrorMessageStackTrace() = 0;
+
   // Whether the current document is loaded inside iframe credentialless.
   // Updated on every cross-document navigation.
   virtual bool IsCredentialless() const = 0;
@@ -1156,13 +1230,6 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
   // TODO(crbug.com/40615943): Remove this from the content public API when
   // RenderDocument is fully enabled.
   virtual bool ShouldChangeRenderFrameHostOnSameSiteNavigation() const = 0;
-
-  // The embedder calls this method when a prediction model believes that the
-  // user is likely to click on an anchor element and wants to report the
-  // likelihood of the click. The `score` is the probability that a user will
-  // click on the `url`, and it is a value between 0 and 1.
-  virtual void OnPreloadingHeuristicsModelDone(const GURL& url,
-                                               float score) = 0;
 
   // Checks if `seqno` is known to have originated from this RFH. `callback`
   // will only be called with true if `seqno` represents the last clipboard
@@ -1199,6 +1266,10 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
   // Returns true if this RenderFrameHost has access to cookies.
   virtual bool IsFullCookieAccessAllowed() = 0;
 
+  // Returns true if this RenderFrameHost is disallowed from interacting with
+  // unpartitioned storage and the Storage Access API.
+  virtual bool IsStorageAccessRestricted() = 0;
+
   // Sets the Storage Access API status for this RenderFrameHost.
   //
   // Note: this is not trusted by the browser. This input alone does not grant
@@ -1216,6 +1287,12 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener {
   CreateDownloadUrlParameters(
       const GURL& url,
       const net::NetworkTrafficAnnotationTag& traffic_annotation) const = 0;
+
+  // Returns a record of the current state of the document hosted in the
+  // RenderFrameHost. This should be passed to all navigations started by this
+  // RenderFrameHost.
+  virtual scoped_refptr<InitiatorNavigationState>
+  GetCurrentInitiatorNavigationState() const = 0;
 
  private:
   // This interface should only be implemented inside content.

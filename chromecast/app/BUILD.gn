@@ -18,6 +18,7 @@ cast_source_set("app") {
     ":cast_crash_client",
     "//chromecast:chromecast_buildflags",
     "//chromecast/base",
+    "//chromecast/base:cast_version",
     "//chromecast/browser",
     "//chromecast/common",
     "//chromecast/gpu",
@@ -41,6 +42,7 @@ cast_source_set("cast_crash_client") {
   deps = [
     "//base",
     "//chromecast/base",
+    "//chromecast/base:cast_version",
     "//chromecast/common",
     "//content/public/common",
   ]
@@ -109,6 +111,7 @@ cast_source_set("test_support") {
     "//base",
     "//base/test:test_support",
     "//chromecast/base",
+    "//chromecast/base:cast_version",
     "//content/test:test_support",
     "//ipc",
     "//mojo/core/embedder",
@@ -141,6 +144,10 @@ cast_source_set("unittests") {
 
 grit("resources") {
   source = "//chromecast/app/resources/shell_resources.grd"
+  inputs = [
+    "resources/shell_devtools_discovery_page.html",
+    "resources/shell_speaker_icon.png",
+  ]
 
   outputs = [
     "grit/shell_resources.h",
@@ -153,6 +160,10 @@ grit_strings("chromecast_settings") {
 
   outputs = [ "grit/chromecast_settings.h" ]
   locales = cast_locales
+
+  inputs = process_file_template(
+          cast_locales - [ "en-US" ],
+          [ "resources/chromecast_settings_{{source_name_part}}.xtb" ])
 
   deps = [ ":verify_cast_locales" ]
 }

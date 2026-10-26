@@ -10,17 +10,20 @@ namespace autofillPrivate {
     DOMString email;
     boolean isSyncEnabledForAutofillProfiles;
     boolean isEligibleForAddressAccountStorage;
+  };
 
-    // Controls whether the Autofill Sync toggle should be available (duplicated
-    // from the Sync Settings page) on the Autofill Settings page.
-    // TODO(crbug.com/40943238): Remove when toggle becomes available on the Sync
-    // page for non-syncing users.
-    boolean isAutofillSyncToggleAvailable;
+  // State of the user data processing consent.
+  enum UserDataProcessingConsentState {
+    UNDEFINED,
+    UNKNOWN,
+    ENABLED,
+    DISABLED
+  };
 
-    // Represents the UserSelectableType::kAutofill state (enabled or not).
-    // TODO(crbug.com/40943238): Remove when toggle becomes available on the Sync
-    // page for non-syncing users.
-    boolean isAutofillSyncToggleEnabled;
+  // Consent states for Gmail OTP filling.
+  dictionary UserDataProcessingConsentStates {
+    UserDataProcessingConsentState commsApps;
+    UserDataProcessingConsentState googleApps;
   };
 
   // A copy of FieldType from components/autofill/core/browser/field_types.h.
@@ -152,6 +155,8 @@ namespace autofillPrivate {
     FLIGHT_RESERVATION_FLIGHT_NUMBER,
     FLIGHT_RESERVATION_TICKET_NUMBER,
     FLIGHT_RESERVATION_CONFIRMATION_CODE,
+    FLIGHT_RESERVATION_DEPARTURE_AIRPORT,
+    FLIGHT_RESERVATION_ARRIVAL_AIRPORT,
     FLIGHT_RESERVATION_PASSENGER_NAME,
     FLIGHT_RESERVATION_DEPARTURE_DATE,
     ADDRESS_HOME_ZIP_AND_CITY,
@@ -435,6 +440,8 @@ namespace autofillPrivate {
     boolean? storedInWallet;
     // Whether the entity is read only.
     boolean? isReadOnly;
+    // The context token for upserting a pass to Google Wallet.
+    DOMString? contextToken;
   };
 
   // Contains the minimum amount of information needed to display an entity
@@ -479,6 +486,25 @@ namespace autofillPrivate {
     DOMString? imageSrcDark;
   };
 
+  // A link inside a legal message line.
+  dictionary LegalMessageLink {
+    long start;
+    long end;
+    DOMString url;
+  };
+
+  // A line of legal message text with embedded links.
+  dictionary LegalMessageLine {
+    DOMString text;
+    LegalMessageLink[] links;
+  };
+
+  // Details returned by GetDetailsForUpsertPass RPC for public pass disclosure.
+  dictionary UpsertPassDetails {
+    LegalMessageLine[] legalMessageLines;
+    DOMString contextToken;
+  };
+
   callback VoidCallback = void();
   callback GetAccountInfoCallback = void(optional AccountInfo accountInfo);
   callback GetCountryListCallback = void(CountryEntry[] countries);
@@ -499,6 +525,8 @@ namespace autofillPrivate {
   callback SetWalletablePassDetectionOptInStatusCallback = void(boolean success);
   callback GetPayOverTimeIssuerListCallback = void(PayOverTimeIssuerEntry[] entries);
   callback AuthenticateUserBeforeViewingEntityDataCallback = void(boolean success);
+  callback UserDataProcessingConsentCallback = void(UserDataProcessingConsentStates states);
+  callback GetDetailsForUpsertPassCallback = void(optional UpsertPassDetails details);
 
   interface Functions {
     // Gets currently signed-in user profile info, no value is returned if
@@ -620,10 +648,6 @@ namespace autofillPrivate {
     // sync server and thus other devices.
     static void bulkDeleteAllCvcs();
 
-    // Sets the Sync Autofill toggle value, which corresponds to
-    // `syncer::UserSelectableType::kAutofill` in `SyncUserSettings`.
-    static void setAutofillSyncToggleEnabled(boolean enabled);
-
     // Adds a new entity instance if it doesn't exist yet. Otherwise, it updates
     // the entity instance.
     static void addOrUpdateEntityInstance(
@@ -677,6 +701,20 @@ namespace autofillPrivate {
     static void setWalletablePassDetectionOptInStatus(
       boolean optedIn,
       SetWalletablePassDetectionOptInStatusCallback callback);
+
+    // Gets the user data processing consent states for the current user.
+    static void fetchUserDataProcessingConsent(
+      UserDataProcessingConsentCallback callback);
+
+    // Fetches legal disclosure lines and context token for upserting a
+    // public pass.
+    static void getDetailsForUpsertPass(
+      long entityTypeName,
+      GetDetailsForUpsertPassCallback callback);
+
+    // Preloads legal disclosure lines and context token for upserting a
+    // public pass.
+    static void preloadDetailsForUpsertPass(long entityTypeName);
   };
 
   interface Events {

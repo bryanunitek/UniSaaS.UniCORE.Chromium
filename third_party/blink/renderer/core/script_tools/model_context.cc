@@ -8,39 +8,47 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
+#include "third_party/blink/public/common/script_tools/script_tool_utils.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/web/web_script_tool_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/capture_source_location.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_execute_tool_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_model_context_get_tool_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_model_context_register_tool_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_model_context_tool.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_registered_tool.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_script_runner.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_tool_annotations.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_tool_execute_callback.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_tool_execute_callback_options.h"
 #include "third_party/blink/renderer/core/dom/abort_controller.h"
 #include "third_party/blink/renderer/core/dom/abort_signal.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/scoped_abort_state.h"
+#include "third_party/blink/renderer/core/event_target_names.h"
 #include "third_party/blink/renderer/core/event_type_names.h"
-#include "third_party/blink/renderer/core/events/web_mcp_event.h"
+#include "third_party/blink/renderer/core/events/tool_activated_event.h"
+#include "third_party/blink/renderer/core/events/tool_cancel_event.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
-#include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/html_script_element.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
+#include "third_party/blink/renderer/core/script_tools/model_context_supplement.h"
+#include "third_party/blink/renderer/core/script_tools/model_context_tool_invocation.h"
 #include "third_party/blink/renderer/core/script_tools/script_tool_context.h"
+#include "third_party/blink/renderer/core/script_tools/tool.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "third_party/blink/renderer/platform/bindings/v8_binding.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/json/json_parser.h"
 #include "third_party/blink/renderer/platform/json/json_values.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/public/task_attribution_tracker.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
@@ -48,7 +56,6 @@
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
-#include "url/url_constants.h"
 
 namespace blink {
 
@@ -65,15 +72,22 @@ STATIC_ASSERT_ENUM(ScriptToolErrorCode::kToolCancelled,
 
 namespace {
 
-const char kPermissionPolicyNotEnabledError[] =
+const char kPermissionPolicyNotEnabledErrorMessage[] =
     "Access to the feature \"tools\" is disallowed by permissions policy.";
-const char kInactiveDocumentError[] = "The document is not active.";
-const char kDocumentDomainEnabledError[] =
-    "document.modelContext cannot be used when document.domain is enabled.";
+const char kInactiveDocumentErrorMessage[] = "The document is not active.";
+const char kTargetFrameNotAccessibleErrorMessage[] =
+    "Target frame is not accessible.";
+const char kNotFoundErrorMessage[] =
+    "The requested tool was not found or is not accessible.";
+const char kDataErrorMessage[] = "Failed to parse tool input arguments.";
+const char kOperationErrorMessage[] = "Tool execution failed.";
+const char kAbortErrorMessage[] = "Tool execution aborted.";
 
-String ValidateAndStringifyObject(ScriptState* script_state,
-                                  ExceptionState& exception_state,
-                                  const ScriptObject& input) {
+// `input` must be a non-empty, non-null object.
+String ValidateAndStringifyValue(ScriptState* script_state,
+                                 ExceptionState& exception_state,
+                                 const ScriptObject& input,
+                                 const String& value_name) {
   v8::Local<v8::String> value;
   TryRethrowScope rethrow_scope(script_state->GetIsolate(), exception_state);
   if (!v8::JSON::Stringify(script_state->GetContext(), input.V8Object())
@@ -94,36 +108,18 @@ String ValidateAndStringifyObject(ScriptState* script_state,
   // which the spec uses in
   // https://webmachinelearning.github.io/webmcp/#dom-modelcontext-registertool.
   if (result == "undefined") {
-    exception_state.ThrowTypeError(
-        "invalid input schema: toJSON() returns undefined");
+    exception_state.ThrowTypeError("invalid " + value_name +
+                                   ": toJSON() returns undefined");
     return String();
   }
 
   return result;
 }
 
-bool IsValidToolName(const String& name) {
-  if (name.empty() || name.length() > 128) {
-    return false;
-  }
-  for (wtf_size_t i = 0; i < name.length(); ++i) {
-    UChar c = name[i];
-    if (!IsAsciiAlphanumeric(c) && c != '_' && c != '-' && c != '.') {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 ScriptObject JSONStringToScriptObject(ScriptState* script_state,
                                       const String& json_string) {
-  v8::Local<v8::String> v8_json_string;
-  if (!v8::String::NewFromUtf8(script_state->GetIsolate(),
-                               json_string.Utf8().c_str())
-           .ToLocal(&v8_json_string)) {
-    return ScriptObject();
-  }
+  v8::Local<v8::String> v8_json_string =
+      V8String(script_state->GetIsolate(), json_string);
 
   v8::Local<v8::Value> parsed_value;
   if (!v8::JSON::Parse(script_state->GetContext(), v8_json_string)
@@ -131,6 +127,11 @@ ScriptObject JSONStringToScriptObject(ScriptState* script_state,
     return ScriptObject();
   }
 
+  // `v8::JSON::Parse()` parses any valid JSON primitive, which means
+  // `parsed_value` could be a Number, a String, etc. We want to explicitly
+  // reject non-objects. Note that arrays are considered objects by v8 and
+  // ECMAScript; see
+  // `external/wpt/webmcp/imperative/object-arguments.https.html`.
   if (!parsed_value->IsObject()) {
     return ScriptObject();
   }
@@ -176,52 +177,22 @@ String ComputeScriptToolResult(const Document& document) {
   return builder.ToString();
 }
 
-String GetToolErrorMessage(const ScriptToolError& error) {
-  if (!error.message.empty()) {
-    return error.message;
-  }
-  String conversion;
-  switch (error.code) {
-    case ScriptToolErrorCode::kInvalidToolName:
-      conversion = "Tool was not executed due to invalid name";
-      break;
-    case ScriptToolErrorCode::kInvalidInputArguments:
-      conversion = "Tool was not executed due to invalid input arguments";
-      break;
-    case ScriptToolErrorCode::kMissingRequiredSubmitButton:
-      conversion =
-          "Tool was not executed due to missing required submit button";
-      break;
-    case ScriptToolErrorCode::kToolInvocationFailed:
-      conversion =
-          "Tool was executed but the invocation failed. For example, the "
-          "script function threw an error";
-      break;
-    case ScriptToolErrorCode::kToolCancelled:
-      conversion = "Tool was cancelled";
-      break;
-    default:
-      conversion = "Unknown failure";
-  }
-  return conversion;
-}
-
 }  // namespace
 
 class ModelContext::ToolUnregisterAbortAlgorithm final
     : public AbortSignal::Algorithm {
  public:
   ToolUnregisterAbortAlgorithm(ModelContext* model_context,
-                               const String& tool_name,
+                               const base::UnguessableToken& tool_id,
                                ScriptPromiseResolverBase* resolver,
                                AbortSignal* signal)
       : model_context_(model_context),
-        tool_name_(tool_name),
+        tool_id_(tool_id),
         resolver_(resolver),
         signal_(signal) {}
 
   void Run() override {
-    model_context_->UnregisterTool(tool_name_);
+    model_context_->UnregisterTool(tool_id_);
     resolver_->Reject(signal_->reason(resolver_->GetScriptState()));
   }
 
@@ -234,7 +205,9 @@ class ModelContext::ToolUnregisterAbortAlgorithm final
 
  private:
   Member<ModelContext> model_context_;
-  String tool_name_;
+  // The specific tool this algorithm was created for. Keyed by id rather than
+  // by name, so that this can only ever unregister that exact tool.
+  const base::UnguessableToken tool_id_;
   // Never null. The `ScriptPromiseResolverBase` that `this` must reject when
   // `signal_` is aborted (as notified by `Run()` above).
   Member<ScriptPromiseResolverBase> resolver_;
@@ -248,7 +221,7 @@ class ModelContext::ToolFunctionFinishedCallback
  public:
   explicit ToolFunctionFinishedCallback(
       ModelContext* model_context,
-      const base::UnguessableToken& invocation_id,
+      const ToolInvocationToken& invocation_id,
       bool success)
       : model_context_(model_context),
         invocation_id_(invocation_id),
@@ -259,11 +232,17 @@ class ModelContext::ToolFunctionFinishedCallback
     if (success_) {
       std::optional<String> result;
       if (value.IsObject()) {
+        v8::TryCatch try_catch(script_state->GetIsolate());
         v8::Local<v8::String> json_string;
         if (v8::JSON::Stringify(script_state->GetContext(), value.V8Value())
                 .ToLocal(&json_string)) {
           result = ToBlinkString<String>(script_state->GetIsolate(),
                                          json_string, kDoNotExternalize);
+        } else {
+          CHECK(try_catch.HasCaught());
+          HandleFailure(script_state, ScriptValue(script_state->GetIsolate(),
+                                                  try_catch.Exception()));
+          return;
         }
       }
 
@@ -279,25 +258,7 @@ class ModelContext::ToolFunctionFinishedCallback
       }
       model_context_->OnToolExecuted(invocation_id_, *result);
     } else {
-      v8::Isolate* isolate = script_state->GetIsolate();
-      v8::Local<v8::Message> message =
-          v8::Exception::CreateMessage(isolate, value.V8Value());
-      String message_text = ToCoreStringWithNullCheck(isolate, message->Get());
-      if (message_text.empty()) {
-        message_text = "Unknown error";
-      }
-      SourceLocation* location = CaptureSourceLocation(
-          isolate, message, model_context_->GetExecutionContext());
-
-      model_context_->GetExecutionContext()->AddConsoleMessage(
-          MakeGarbageCollected<ConsoleMessage>(
-              mojom::blink::ConsoleMessageSource::kJavaScript,
-              mojom::blink::ConsoleMessageLevel::kError,
-              "WebMCP tool execution failed: " + message_text, location));
-
-      model_context_->OnToolExecuted(
-          invocation_id_,
-          base::unexpected(std::make_pair(value, script_state)));
+      HandleFailure(script_state, value);
     }
   }
 
@@ -307,10 +268,37 @@ class ModelContext::ToolFunctionFinishedCallback
   }
 
  private:
+  void HandleFailure(ScriptState* script_state, ScriptValue value) {
+    v8::Isolate* isolate = script_state->GetIsolate();
+    v8::Local<v8::Message> message =
+        v8::Exception::CreateMessage(isolate, value.V8Value());
+    String message_text = ToCoreStringWithNullCheck(isolate, message->Get());
+    if (message_text.empty()) {
+      message_text = "Unknown error";
+    }
+    SourceLocation* location = CaptureSourceLocation(
+        isolate, message, model_context_->GetExecutionContext());
+
+    model_context_->GetExecutionContext()->AddConsoleMessage(
+        MakeGarbageCollected<ConsoleMessage>(
+            mojom::blink::ConsoleMessageSource::kJavaScript,
+            mojom::blink::ConsoleMessageLevel::kError,
+            "WebMCP tool execution failed: " + message_text, location));
+
+    model_context_->OnToolExecuted(
+        invocation_id_, base::unexpected(std::make_pair(value, script_state)));
+  }
+
   Member<ModelContext> model_context_;
-  const base::UnguessableToken invocation_id_;
+  const ToolInvocationToken invocation_id_;
   const bool success_;
 };
+
+// static
+bool ModelContext::IsDeclarativeWebMCPEnabled(const ExecutionContext* context) {
+  return RuntimeEnabledFeatures::DeclarativeWebMCPEnabled(context) &&
+         RuntimeEnabledFeatures::WebMCPEnabled(context);
+}
 
 ModelContext::ModelContext(Document& document)
     : document_(document),
@@ -318,7 +306,14 @@ ModelContext::ModelContext(Document& document)
       script_tool_host_remote_(document.GetExecutionContext()),
       model_context_host_remote_(document.GetExecutionContext()),
       model_context_receiver_(this, document.GetExecutionContext()) {
-  document.GetExecutionContext()->GetBrowserInterfaceBroker().GetInterface(
+  // Documents without a frame can share another document's execution context,
+  // but must not bind to that document's browser host.
+  if (!document.GetFrame()) {
+    return;
+  }
+  auto* execution_context = document.GetExecutionContext();
+  CHECK(execution_context);
+  execution_context->GetBrowserInterfaceBroker().GetInterface(
       model_context_host_remote_.BindNewPipeAndPassReceiver(task_runner_));
   model_context_host_remote_->BindModelContext(
       model_context_receiver_.BindNewPipeAndPassRemote(task_runner_));
@@ -339,33 +334,26 @@ ScriptPromise<IDLUndefined> ModelContext::registerTool(
     return ScriptPromise<IDLUndefined>::RejectWithDOMException(
         script_state,
         MakeGarbageCollected<DOMException>(DOMExceptionCode::kInvalidStateError,
-                                           kInactiveDocumentError));
-  }
-
-  if (!IsModelContextAllowed()) {
-    return ScriptPromise<IDLUndefined>::RejectWithDOMException(
-        script_state,
-        MakeGarbageCollected<DOMException>(DOMExceptionCode::kSecurityError,
-                                           kDocumentDomainEnabledError));
+                                           kInactiveDocumentErrorMessage));
   }
 
   if (!ExecutionContext::From(script_state)
            ->IsFeatureEnabled(
                network::mojom::PermissionsPolicyFeature::kTools)) {
     return ScriptPromise<IDLUndefined>::RejectWithDOMException(
-        script_state,
-        MakeGarbageCollected<DOMException>(DOMExceptionCode::kNotAllowedError,
-                                           kPermissionPolicyNotEnabledError));
+        script_state, MakeGarbageCollected<DOMException>(
+                          DOMExceptionCode::kNotAllowedError,
+                          kPermissionPolicyNotEnabledErrorMessage));
   }
 
-  if (tool_map_.find(tool->name()) != tool_map_.end()) {
+  if (FindToolDataByName(tool->name())) {
     return ScriptPromise<IDLUndefined>::RejectWithDOMException(
         script_state,
         MakeGarbageCollected<DOMException>(DOMExceptionCode::kInvalidStateError,
                                            "Duplicate tool name"));
   }
 
-  if (!IsValidToolName(tool->name())) {
+  if (!IsValidScriptToolName(tool->name().Utf8())) {
     return ScriptPromise<IDLUndefined>::RejectWithDOMException(
         script_state,
         MakeGarbageCollected<DOMException>(DOMExceptionCode::kInvalidStateError,
@@ -381,32 +369,43 @@ ScriptPromise<IDLUndefined> ModelContext::registerTool(
 
   String input_schema;
   if (tool->hasInputSchema()) {
-    ExceptionState exception_state(script_state->GetIsolate());
-    input_schema = ValidateAndStringifyObject(script_state, exception_state,
-                                              tool->inputSchema());
+    input_schema = ValidateAndStringifyValue(
+        script_state, PassThroughException(script_state->GetIsolate()),
+        tool->inputSchema(), "input schema");
     if (!input_schema) {
-      // Exception already thrown by ValidateAndStringifyObject
+      // Exception already thrown by ValidateAndStringifyValue.
       return EmptyPromise();
     }
+  }
+
+  // Serializing `inputSchema` above can run script (e.g., a `toJSON()` method)
+  // that makes the document inactive, for example by removing its iframe. The
+  // rest of this method requires an active document (e.g., it uses
+  // `model_context_host_remote_`), so check again.
+  if (!document_->IsActive()) {
+    return ScriptPromise<IDLUndefined>::RejectWithDOMException(
+        script_state,
+        MakeGarbageCollected<DOMException>(DOMExceptionCode::kInvalidStateError,
+                                           kInactiveDocumentErrorMessage));
+  }
+
+  // Likewise, that script could have registered a tool with the same name, so
+  // check for a duplicate again. Otherwise, the browser would receive two tools
+  // with the same name from this document, and kill the renderer.
+  if (FindToolDataByName(tool->name())) {
+    return ScriptPromise<IDLUndefined>::RejectWithDOMException(
+        script_state,
+        MakeGarbageCollected<DOMException>(DOMExceptionCode::kInvalidStateError,
+                                           "Duplicate tool name"));
   }
 
   auto* resolver =
       MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
   ScriptPromise promise = resolver->Promise();
 
-  AbortSignal::AlgorithmHandle* abort_handle = nullptr;
-  if (options && options->hasSignal()) {
-    AbortSignal* signal = options->signal();
-    if (signal->aborted()) {
-      resolver->Reject(signal->reason(script_state));
-      return promise;
-    }
-
-    // Grab the `AlgorithmHandle` and tie its lifetime to `ToolData` farther
-    // below.
-    abort_handle =
-        signal->AddAlgorithm(MakeGarbageCollected<ToolUnregisterAbortAlgorithm>(
-            this, tool->name(), resolver, signal));
+  if (options && options->hasSignal() && options->signal()->aborted()) {
+    resolver->Reject(options->signal()->reason(script_state));
+    return promise;
   }
 
   Vector<scoped_refptr<const SecurityOrigin>> exposed_origins;
@@ -424,16 +423,30 @@ ScriptPromise<IDLUndefined> ModelContext::registerTool(
     }
   }
 
+  // Mint the tool's identity up-front, so that the unregistration abort
+  // algorithm below can be bound to this specific tool.
+  const base::UnguessableToken tool_id = base::UnguessableToken::Create();
+
+  AbortSignal::AlgorithmHandle* abort_handle = nullptr;
+  if (options && options->hasSignal()) {
+    AbortSignal* signal = options->signal();
+    CHECK(!signal->aborted());
+
+    // Grab the `AlgorithmHandle` and tie its lifetime to `ToolData` farther
+    // below.
+    abort_handle =
+        signal->AddAlgorithm(MakeGarbageCollected<ToolUnregisterAbortAlgorithm>(
+            this, tool_id, resolver, signal));
+  }
+
   auto script_tool = mojom::blink::ScriptTool::New();
+  script_tool->tool_id = tool_id;
   script_tool->name = tool->name();
   // If `tool` is not provided, the null string fallback is treated as a
   // nullable member by mojo.
   script_tool->title = tool->hasTitle() ? tool->title() : String();
   script_tool->description = tool->description();
   script_tool->input_schema = input_schema;
-  // TODO(https://crbug.com/509568047): Stop setting these two members.
-  script_tool->tool_owner_frame_token = document_->GetFrame()->GetFrameToken();
-  script_tool->origin = document_->GetExecutionContext()->GetSecurityOrigin();
   script_tool->exposed_origins = std::move(exposed_origins);
 
   if (tool->hasAnnotations()) {
@@ -443,6 +456,11 @@ ScriptPromise<IDLUndefined> ModelContext::registerTool(
     CHECK(tool->annotations()->hasUntrustedContentHint());
     script_tool->annotations->untrusted_content =
         tool->annotations()->untrustedContentHint();
+    CHECK(tool->annotations()->hasConsequentialHint());
+    script_tool->annotations->consequential =
+        tool->annotations()->consequentialHint();
+    CHECK(tool->annotations()->hasDebugging());
+    script_tool->annotations->debugging = tool->annotations()->debugging();
   }
 
   auto* tool_data = MakeGarbageCollected<ToolData>(
@@ -451,7 +469,7 @@ ScriptPromise<IDLUndefined> ModelContext::registerTool(
       CaptureSourceLocation(ExecutionContext::From(script_state)),
       abort_handle);
 
-  tool_map_.insert(tool->name(), tool_data);
+  tool_map_.insert(tool_id, tool_data);
   model_context_host_remote_->RegisterScriptTool(
       tool_data->ScriptTool().Clone(),
       blink::BindOnce(
@@ -466,36 +484,50 @@ ScriptPromise<IDLUndefined> ModelContext::registerTool(
   return promise;
 }
 
-void ModelContext::UnregisterTool(const String& name) {
-  auto it = tool_map_.find(name);
-  if (it == tool_map_.end()) {
-    return;
-  }
+void ModelContext::UnregisterTool(const base::UnguessableToken& tool_id) {
+  // The tool must still be registered:
+  //  - An imperative tool's `AbortSignal` aborts at most once, and nothing
+  //    else unregisters imperative tools.
+  //  - A form only holds onto a declarative tool that was successfully
+  //    registered with the `ModelContext` of its document, and unregisters it
+  //    from that same `ModelContext`.
+  auto it = tool_map_.find(tool_id);
+  CHECK(it != tool_map_.end());
 
   probe::WebMCPToolRemoved(document_, *it->value);
   tool_map_.erase(it);
-  model_context_host_remote_->UnregisterScriptTool(name);
+  // An inactive document (e.g., one whose frame was removed) has no browser
+  // host to notify: its `model_context_host_remote_` is reset when its
+  // execution context is destroyed. This is reachable, e.g., by aborting an
+  // imperative tool's `AbortSignal` after the registering document's iframe is
+  // removed, or by removing a declarative tool's form from a removed iframe's
+  // document, e.g., to adopt it into another document.
+  if (document_->IsActive()) {
+    model_context_host_remote_->UnregisterScriptTool(tool_id);
+  }
 }
 
 std::optional<ScriptToolDeclaration> ModelContext::GetScriptToolDeclaration(
     const String& name) const {
-  auto it = tool_map_.find(name);
-  if (it == tool_map_.end()) {
+  ToolData* tool_data = FindToolDataByName(name);
+  if (!tool_data) {
     return std::nullopt;
   }
   ScriptToolDeclaration declaration;
-  const mojom::blink::ScriptTool& script_tool = it->value->ScriptTool();
+  const mojom::blink::ScriptTool& script_tool = tool_data->ScriptTool();
   declaration.description = script_tool.description;
   declaration.input_schema = script_tool.input_schema;
   if (script_tool.annotations) {
     declaration.read_only = script_tool.annotations->read_only;
     declaration.untrusted_content = script_tool.annotations->untrusted_content;
+    declaration.consequential = script_tool.annotations->consequential;
+    declaration.debugging = script_tool.annotations->debugging;
   }
   return declaration;
 }
 
 void ModelContext::OnToolFailed(ScriptToolExecutedCallback callback,
-                                const base::UnguessableToken& invocation_id,
+                                const ToolInvocationToken& invocation_id,
                                 ScriptToolError&& error) {
   probe::WebMCPToolFailed(document_, error, invocation_id,
                           /*exception=*/std::nullopt);
@@ -504,8 +536,24 @@ void ModelContext::OnToolFailed(ScriptToolExecutedCallback callback,
       blink::BindOnce(std::move(callback), base::unexpected(std::move(error))));
 }
 
-bool ModelContext::ExecuteTool(const base::UnguessableToken& invocation_id,
-                               const String& name,
+bool ModelContext::ExecuteToolByName(
+    ToolInvocationToken invocation_id,
+    const String& name,
+    const String& input_arguments,
+    ScriptToolExecutedCallback tool_executed_cb) {
+  if (ToolData* tool_data = FindToolDataByName(name)) {
+    return ExecuteTool(invocation_id, tool_data->Id(), input_arguments,
+                       std::move(tool_executed_cb));
+  }
+  probe::WebMCPToolExecuted(document_, name, input_arguments, invocation_id);
+  OnToolFailed(std::move(tool_executed_cb), invocation_id,
+               ScriptToolError(ScriptToolErrorCode::kInvalidToolName,
+                               StrCat({"Tool not found: ", name})));
+  return false;
+}
+
+bool ModelContext::ExecuteTool(ToolInvocationToken invocation_id,
+                               const base::UnguessableToken& tool_id,
                                const String& input_arguments,
                                ScriptToolExecutedCallback tool_executed_cb) {
   CHECK(document_->GetFrame());
@@ -522,69 +570,128 @@ bool ModelContext::ExecuteTool(const base::UnguessableToken& invocation_id,
   }
   CHECK(abort_controller);
 
-  probe::WebMCPToolExecuted(document_, name, input_arguments, invocation_id);
-
-  auto it = tool_map_.find(name);
+  // Look the tool's name up before the probe below, so that DevTools reports
+  // the name rather than the (non-web-exposed) id. An empty token is never a
+  // valid key (ids are always minted at registration), and Blink's `HashMap`
+  // disallows looking up the empty value, so check for it separately.
+  auto it = tool_id.is_empty() ? tool_map_.end() : tool_map_.find(tool_id);
   if (it == tool_map_.end()) {
+    // There's no name to report for a tool we can't find, so the probe falls
+    // back to the id. DevTools is trusted with the id, but the error message
+    // below is surfaced to the `executeTool()` caller, and the id is not
+    // web-exposed, so keep the message generic.
+    //
+    // TODO(https://crbug.com/536063275): Once DevTools' `toolInvoked` event
+    // carries a dedicated tool ID, report the ID there instead of in place of
+    // the name.
+    probe::WebMCPToolExecuted(document_, String::FromUtf8(tool_id.ToString()),
+                              input_arguments, invocation_id);
     OnToolFailed(std::move(tool_executed_cb), invocation_id,
                  ScriptToolError(ScriptToolErrorCode::kInvalidToolName,
-                                 String("Tool not found: " + name)));
+                                 "The tool is no longer registered."));
     return false;
   }
+
+  const String name = it->value->Name();
+  probe::WebMCPToolExecuted(document_, name, input_arguments, invocation_id);
 
   bool success = true;
   if (V8ToolExecuteCallback* v8_tool_function =
           it->value->GetV8ToolExecuteCallback()) {
-    success =
-        ExecuteV8Tool(v8_tool_function, invocation_id, name, input_arguments,
-                      abort_controller, std::move(tool_executed_cb));
+    success = ExecuteV8Tool(v8_tool_function, invocation_id, tool_id, name,
+                            input_arguments, abort_controller,
+                            std::move(tool_executed_cb));
   } else {
-    ExecuteDeclarativeTool(it->value->DeclarativeTool(), invocation_id,
+    ExecuteDeclarativeTool(it->value->DeclarativeTool(), invocation_id, tool_id,
                            input_arguments, abort_controller,
                            std::move(tool_executed_cb));
   }
 
-  // Fire the `toolactivate` event *after* activating the tool, but potentially
+  // Fire the `toolactivated` event *after* activating the tool, but potentially
   // *before* the tool call finishes. Importantly, if the tool is a declarative
   // WebMCP tool, the form will be filled out synchronously above in
   // ExecuteDeclarativeTool(), so by the time the event is fired, the form will
   // be populated.
-  if (LocalDOMWindow* window = document_->domWindow()) {
-    // This is a synchronous, non-cancelable event.
-    window->DispatchEvent(
-        *WebMCPEvent::Create(event_type_names::kToolactivated, name));
-  }
+  // This is a synchronous, non-cancelable event.
+  DispatchEvent(
+      *ToolActivatedEvent::Create(event_type_names::kToolactivated, name));
 
   return success;
 }
 
-bool ModelContext::CancelTool(const base::UnguessableToken& invocation_id) {
-  auto it = pending_executions_.find(String(invocation_id.ToString()));
+bool ModelContext::CancelTool(ToolInvocationToken invocation_id) {
+  CHECK(document_->IsActive());
+
+  // It's possible for `invocation_id` to not match any pending execution, for
+  // example, if the tool execution finishes before a tool caller's signal to
+  // cancel execution comes in.
+  auto it = pending_executions_.find(invocation_id);
   if (it == pending_executions_.end()) {
     return false;
   }
-  String tool_name = it->value.tool_name;
+  String tool_name = it->value->tool_name;
+  base::UnguessableToken tool_id = it->value->tool_id;
 
-  if (LocalDOMWindow* window = document_->domWindow()) {
-    // This is a synchronous, non-cancelable event. Note that this can re-enter
-    // JavaScript and modify `pending_executions_`.
-    window->DispatchEvent(
-        *WebMCPEvent::Create(event_type_names::kToolcancel, tool_name));
+  // It's possible that `invocation_id` matches an existing ID in
+  // `pending_executions_`, but that `tool_id` is not found in `tool_map_`.
+  // This can only happen for imperative tools. Consider this race:
+  //   1. The caller document of an imperative tool aborts its execution. This
+  //      sends an IPC to this method.
+  //   2. Before this method runs, the tool is unregistered. Imperative tool
+  //      unregistration synchronously removes the tool from `tool_map_`,
+  //      but leaves pending executions in `pending_executions_`. Pending
+  //      executions are cleaned up asynchronously in an IPC sent by the
+  //      unregistration flow.
+  //   3. This method finally runs, which finds a pending execution, but no
+  //      registered tool. The imperative path below can proceed OK!
+  //
+  // Note that this kind of `tool_id` and `pending_executions_` desync cannot
+  // happen for declarative tools. Whenever a declarative tool is unregistered,
+  // it immediately invokes its `done_callback_` which removes the entry from
+  // `pending_executions_`, and removes the tool from `tool_map_` at the same
+  // time.
+  auto tool_it = tool_map_.find(tool_id);
+  if (tool_it != tool_map_.end() && tool_it->value->DeclarativeTool()) {
+    // For declarative tools, we can forcefully cancel the internal state
+    // machine and make the declarative tool "resolve" with an error. This will
+    // synchronously run the `HTMLFormMcpTool::done_callback_`, which handles
+    // removing the execution from `pending_executions_`.
+    tool_it->value->DeclarativeTool()->CancelTool();
+    CHECK(!pending_executions_.Contains(invocation_id));
+  } else {
+    // For imperative tools, we cannot forcefully reject the Promise that the
+    // tool returned. Instead, we remove the pending execution, manually run its
+    // callback to notify the browser of cancellation, and abort the signal that
+    // the tool execution function is observing. When the tool's returned
+    // Promise eventually settles, it will be safely ignored.
+    PendingExecution* pending_execution =
+        pending_executions_.Take(invocation_id);
+    CHECK(pending_execution);
+    CHECK(pending_execution->abort_controller);
+    CHECK(pending_execution->callback);
+
+    ScriptState* script_state =
+        ToScriptStateForMainWorld(document_->GetFrame());
+    if (script_state && script_state->ContextIsValid()) {
+      ScriptState::Scope scope(script_state);
+      pending_execution->abort_controller->abort(script_state);
+    }
+
+    // This invokes a DevTools probe which can enter script and detach the
+    // document.
+    OnToolFailed(std::move(pending_execution->callback), invocation_id,
+                 ScriptToolError(ScriptToolErrorCode::kToolCancelled));
   }
 
-  // The pending_executions_ map might have been rehashed during DispatchEvent.
-  auto pending_execution =
-      pending_executions_.Take(String(invocation_id.ToString()));
-  if (pending_execution.callback.is_null()) {
-    return false;
-  }
-  OnToolFailed(std::move(pending_execution.callback), invocation_id,
-               ScriptToolError(ScriptToolErrorCode::kToolCancelled));
+  // Dispatch the synchronous toolcancel event for both types of tools.
+  DispatchEvent(
+      *ToolCancelEvent::Create(event_type_names::kToolcancel, tool_name));
+
   return true;
 }
 
 void ModelContext::GetCrossDocumentScriptToolResult(
-    const base::UnguessableToken& invocation_id,
+    const ToolInvocationToken& invocation_id,
     CrossDocumentScriptToolResultCallback result_callback) {
   if (document_->HasFinishedParsing()) {
     String result = ComputeScriptToolResult(*document_);
@@ -595,7 +702,7 @@ void ModelContext::GetCrossDocumentScriptToolResult(
 
   cross_document_result_callbacks_.push_back(blink::BindOnce(
       [](CrossDocumentScriptToolResultCallback original_callback,
-         const base::UnguessableToken& invocation_id, Document* document,
+         const ToolInvocationToken& invocation_id, Document* document,
          String result) {
         probe::WebMCPToolResponded(document, result, invocation_id);
         std::move(original_callback).Run(result);
@@ -629,12 +736,13 @@ void ModelContext::DidFinishParsing() {
 //     but respondWith() isn't called, an error is reported back to the agent.)
 void ModelContext::ExecuteDeclarativeTool(
     DeclarativeWebMCPTool* tool,
-    const base::UnguessableToken& invocation_id,
+    ToolInvocationToken invocation_id,
+    const base::UnguessableToken& tool_id,
     const String& input_arguments,
     AbortController* abort_controller,
     ScriptToolExecutedCallback tool_executed_cb) {
-  // TODO(479598776): Add support for tracking execution of
-  // declarative tools in pending_executions_, so that they can be cancelled.
+  CHECK(abort_controller);
+
   std::optional<scheduler::TaskAttributionTracker::TaskScope> task_scope;
   if (auto* tracker = document_->GetAgent().isolate()
                           ? scheduler::TaskAttributionTracker::From(
@@ -643,12 +751,21 @@ void ModelContext::ExecuteDeclarativeTool(
     task_scope = tracker->SetTaskStateVariable(
         MakeGarbageCollected<ScriptToolContext>(invocation_id));
   }
+
+  pending_executions_.insert(
+      invocation_id, MakeGarbageCollected<PendingExecution>(
+                         tool->ToolName(), tool_id, std::move(tool_executed_cb),
+                         abort_controller));
+
   tool->ExecuteTool(
       invocation_id, input_arguments,
       blink::BindOnce(
-          [](Document* document, base::UnguessableToken invocation_id,
-             ScriptToolExecutedCallback tool_executed_cb,
+          [](Document* document, ToolInvocationToken invocation_id,
              base::expected<String, ScriptToolError> result) {
+            CHECK(document);
+            ModelContext* model_context =
+                ModelContextSupplement::modelContext(*document);
+            CHECK(model_context);
             if (result.has_value()) {
               // A null string indicates a cross-document navigation, in which
               // case we don't want to emit a toolResponded event here. The
@@ -660,10 +777,13 @@ void ModelContext::ExecuteDeclarativeTool(
               probe::WebMCPToolFailed(document, result.error(), invocation_id,
                                       /*exception=*/std::nullopt);
             }
-            std::move(tool_executed_cb).Run(result);
+            PendingExecution* pending_execution =
+                model_context->pending_executions_.Take(invocation_id);
+            if (pending_execution) {
+              std::move(pending_execution->callback).Run(result);
+            }
           },
-          WrapWeakPersistent(document_.Get()), invocation_id,
-          std::move(tool_executed_cb)));
+          WrapWeakPersistent(document_.Get()), invocation_id));
 }
 
 // This overload is used for JS-provided tool functions. It converts the input
@@ -671,14 +791,14 @@ void ModelContext::ExecuteDeclarativeTool(
 // waits for the promise to resolve, JSON-stringifies the result, and passes
 // it to OnToolExecuted().
 bool ModelContext::ExecuteV8Tool(V8ToolExecuteCallback* tool_function,
-                                 const base::UnguessableToken& invocation_id,
+                                 ToolInvocationToken invocation_id,
+                                 const base::UnguessableToken& tool_id,
                                  const String& name,
                                  const String& input_arguments,
                                  AbortController* abort_controller,
                                  ScriptToolExecutedCallback tool_executed_cb) {
   UseCounter::Count(document_, WebFeature::kModelContextExecuteImperativeTool);
   CHECK(abort_controller);
-  AbortSignal* signal = abort_controller->signal();
 
   ScriptState* script_state = tool_function->CallbackRelevantScriptState();
   ScriptState::Scope scope(script_state);
@@ -694,52 +814,42 @@ bool ModelContext::ExecuteV8Tool(V8ToolExecuteCallback* tool_function,
     return false;
   }
 
-  ScriptPromise<IDLAny> result;
-  if (signal && signal->aborted()) {
-    result = ScriptPromise<IDLAny>::Reject(script_state,
-                                           signal->reason(script_state));
-  } else {
-    std::optional<scheduler::TaskAttributionTracker::TaskScope> task_scope;
-    if (auto* tracker = scheduler::TaskAttributionTracker::From(
-            script_state->GetIsolate())) {
-      task_scope = tracker->SetTaskStateVariable(
-          MakeGarbageCollected<ScriptToolContext>(invocation_id));
-    }
-    v8::Maybe<ScriptPromise<IDLAny>> maybe_result =
-        tool_function->Invoke(nullptr, {std::move(script_object)});
-
-    // If the callback couldn't be run for some reason, treat it as an empty
-    // promise rejected with an abort exception.
-    if (maybe_result.IsNothing()) {
-      result = ScriptPromise<IDLAny>::RejectWithDOMException(
-          script_state, MakeGarbageCollected<DOMException>(
-                            DOMExceptionCode::kAbortError, "Failure"));
-    } else {
-      result = maybe_result.FromJust();
-    }
+  std::optional<scheduler::TaskAttributionTracker::TaskScope> task_scope;
+  if (auto* tracker =
+          scheduler::TaskAttributionTracker::From(script_state->GetIsolate())) {
+    task_scope = tracker->SetTaskStateVariable(
+        MakeGarbageCollected<ScriptToolContext>(invocation_id));
   }
 
-  // Use blink::ScopedAbortState to manage the abort algorithm lifecycle.
-  // The state is wrapped in a unique_ptr and passed to the cleanup callback
-  // to ensure the abort algorithm is unregistered when the tool finishes.
-  std::unique_ptr<ScopedAbortState> scoped_abort_state;
-  if (signal && !signal->aborted()) {
-    auto callback =
-        blink::BindOnce(base::IgnoreResult(&ModelContext::CancelTool),
-                        WrapWeakPersistent(this), invocation_id);
-    auto* handle = signal->AddAlgorithm(std::move(callback));
-    scoped_abort_state = std::make_unique<ScopedAbortState>(signal, handle);
-  }
-
+  // Insert into `pending_executions_` before invoking `tool_function` so that
+  // synchronous calls to `options.invocation.requestToken()` inside the
+  // callback can find the active execution.
   pending_executions_.insert(
-      String(invocation_id.ToString()),
-      PendingExecution{
-          .tool_name = name,
-          .callback = std::move(tool_executed_cb),
-          .invocation_id = invocation_id,
-          .abort_controller = abort_controller,
-          .scoped_abort_state = std::move(scoped_abort_state),
-      });
+      invocation_id,
+      MakeGarbageCollected<PendingExecution>(
+          name, tool_id, std::move(tool_executed_cb), abort_controller));
+
+  ToolExecuteCallbackOptions* execute_options =
+      ToolExecuteCallbackOptions::Create();
+  execute_options->setSignal(abort_controller->signal());
+  if (RuntimeEnabledFeatures::WebMCPContinuationsEnabled(
+          GetExecutionContext())) {
+    execute_options->setInvocation(
+        MakeGarbageCollected<ModelContextToolInvocation>(this, invocation_id));
+  }
+  v8::Maybe<ScriptPromise<IDLAny>> maybe_result =
+      tool_function->Invoke(nullptr, std::move(script_object), execute_options);
+
+  ScriptPromise<IDLAny> result;
+  // If the callback couldn't be run for some reason, treat it as an empty
+  // promise rejected with an abort exception.
+  if (maybe_result.IsNothing()) {
+    result = ScriptPromise<IDLAny>::RejectWithDOMException(
+        script_state, MakeGarbageCollected<DOMException>(
+                          DOMExceptionCode::kAbortError, kAbortErrorMessage));
+  } else {
+    result = maybe_result.FromJust();
+  }
 
   result.Then(script_state,
               MakeGarbageCollected<ToolFunctionFinishedCallback>(
@@ -749,65 +859,63 @@ bool ModelContext::ExecuteV8Tool(V8ToolExecuteCallback* tool_function,
   return true;
 }
 
-void ModelContext::RegisterDeclarativeTool(
+bool ModelContext::RegisterDeclarativeTool(
     DeclarativeWebMCPTool* declarative_tool) {
+  // The form code must ensure the document has a frame before calling this.
+  // Frameless documents do not have a bound ModelContextHost.
   if (!document_->GetExecutionContext()->IsFeatureEnabled(
           network::mojom::PermissionsPolicyFeature::kTools)) {
     // TODO(crbug.com/507724727) Surface an error if the `tools` permission
     // policy is not enabled
-    return;
+    return false;
   }
 
-  if (!IsModelContextAllowed()) {
-    return;
+  if (FindToolDataByName(declarative_tool->ToolName())) {
+    return false;
   }
 
-  // TODO(https://crbug.com/509983792): Surface an error to the form when tool
-  // registration fails.
-  if (tool_map_.find(declarative_tool->ToolName()) != tool_map_.end()) {
-    return;
+  if (!IsValidScriptToolName(declarative_tool->ToolName().Utf8())) {
+    return false;
   }
-
-  // TODO(https://crbug.com/509983792): Surface an error if the tool's name is
-  // not valid.
   UseCounter::Count(document_,
                     WebFeature::kModelContextRegisterDeclarativeTool);
 
+  const base::UnguessableToken& tool_id = declarative_tool->ToolId();
+
   auto script_tool = mojom::blink::ScriptTool::New();
+  script_tool->tool_id = tool_id;
   script_tool->name = declarative_tool->ToolName();
   script_tool->description = declarative_tool->ToolDescription();
   script_tool->title = declarative_tool->ToolTitle();
   script_tool->input_schema = declarative_tool->ComputeInputSchema();
-  // TODO(https://crbug.com/509568047): Stop setting these two members.
-  script_tool->tool_owner_frame_token = document_->GetFrame()->GetFrameToken();
-  script_tool->origin = document_->GetExecutionContext()->GetSecurityOrigin();
 
   auto* tool_data = MakeGarbageCollected<ToolData>(
       base::PassKey<ModelContext>(), std::move(script_tool), declarative_tool);
 
-  tool_map_.insert(declarative_tool->ToolName(), tool_data);
+  tool_map_.insert(tool_id, tool_data);
   model_context_host_remote_->RegisterScriptTool(
       tool_data->ScriptTool().Clone(), base::DoNothing());
   probe::WebMCPToolAdded(document_, *tool_data);
   MaybeRecordToolCount();
+  return true;
 }
 
 void ModelContext::OnToolExecuted(
-    const base::UnguessableToken& invocation_id,
+    const ToolInvocationToken& invocation_id,
     base::expected<String, std::pair<ScriptValue, ScriptState*>> result) {
-  auto pending_execution =
-      pending_executions_.Take(String(invocation_id.ToString()));
-  if (pending_execution.callback.is_null()) {
+  PendingExecution* pending_execution = pending_executions_.Take(invocation_id);
+  if (!pending_execution) {
     return;
   }
+  CHECK(pending_execution->callback);
 
   if (result.has_value()) {
     probe::WebMCPToolResponded(document_, result.value(), invocation_id);
-    std::move(pending_execution.callback).Run(result.value());
+    std::move(pending_execution->callback).Run(result.value());
   } else {
     ScriptToolError error(ScriptToolErrorCode::kToolInvocationFailed);
     probe::WebMCPToolFailed(document_, error, invocation_id, result.error());
-    std::move(pending_execution.callback).Run(base::unexpected(error));
+    std::move(pending_execution->callback).Run(base::unexpected(error));
   }
 }
 
@@ -830,6 +938,8 @@ void ModelContext::MaybeRecordToolCount() {
 }
 
 void ModelContext::PauseExecution() {
+  // The form code must ensure the document is active before calling this.
+  // Pausing execution requires a browser connection for the document's frame.
   if (!script_tool_host_remote_.is_bound()) {
     document_->GetExecutionContext()->GetBrowserInterfaceBroker().GetInterface(
         script_tool_host_remote_.BindNewPipeAndPassReceiver(task_runner_));
@@ -841,23 +951,25 @@ void ModelContext::NotifyToolChange() {
   DispatchEvent(*Event::Create(event_type_names::kToolchange));
 }
 
-void ModelContext::ExecuteScriptTool(
-    const base::UnguessableToken& invocation_id,
-    const String& name,
-    const String& input_arguments,
-    ExecuteScriptToolCallback callback) {
-  ExecuteTool(invocation_id, name, input_arguments,
+void ModelContext::ExecuteScriptTool(const ToolInvocationToken& invocation_id,
+                                     const base::UnguessableToken& tool_id,
+                                     const String& input_arguments,
+                                     ExecuteScriptToolCallback callback) {
+  ExecuteTool(invocation_id, tool_id, input_arguments,
               blink::BindOnce(
                   [](ExecuteScriptToolCallback callback,
                      base::expected<String, ScriptToolError> result) {
                     if (result.has_value()) {
-                      std::move(callback).Run(result.value(), true);
+                      std::move(callback).Run(result.value(), std::nullopt);
                     } else {
-                      std::move(callback).Run(
-                          GetToolErrorMessage(result.error()), false);
+                      std::move(callback).Run(String(), result.error().code);
                     }
                   },
                   std::move(callback)));
+}
+
+void ModelContext::CancelScriptTool(const ToolInvocationToken& invocation_id) {
+  CancelTool(invocation_id);
 }
 
 HeapVector<Member<const ToolData>> ModelContext::ListTools() const {
@@ -878,6 +990,15 @@ HeapVector<Member<const ToolData>> ModelContext::ListTools() const {
   return tools;
 }
 
+ToolData* ModelContext::FindToolDataByName(const String& name) const {
+  for (const auto& entry : tool_map_) {
+    if (entry.value->Name() == name) {
+      return entry.value.Get();
+    }
+  }
+  return nullptr;
+}
+
 ExecutionContext* ModelContext::GetExecutionContext() const {
   return document_ ? document_->GetExecutionContext() : nullptr;
 }
@@ -887,46 +1008,23 @@ const AtomicString& ModelContext::InterfaceName() const {
   return name;
 }
 
-bool ModelContext::IsModelContextAllowed() const {
-  const Agent* agent = document_->GetExecutionContext()->GetAgent();
-  const AgentClusterKey& key = agent->GetAgentClusterKey();
-  // ModelContext is allowed under any of the following conditions:
-  // 1. The document is in a standard origin-keyed agent cluster.
-  // 2. The document is a local file:// URL and is in the universal file agent
-  // cluster.
-  // 3. Web security is disabled (e.g., via --disable-web-security for testing).
-  return key.IsOriginKeyed() ||
-         (document_->GetExecutionContext()->GetSecurityOrigin()->Protocol() ==
-              url::kFileScheme &&
-          key.IsUniversalFileAgent()) ||
-         (document_->GetSettings() &&
-          !document_->GetSettings()->GetWebSecurityEnabled());
-}
-
-ScriptPromise<IDLSequence<RegisteredTool>> ModelContext::getTools(
+ScriptPromise<IDLSequence<Tool>> ModelContext::getTools(
     ScriptState* script_state,
     const ModelContextGetToolOptions* options) {
   if (!document_->IsActive()) {
-    return ScriptPromise<IDLSequence<RegisteredTool>>::RejectWithDOMException(
+    return ScriptPromise<IDLSequence<Tool>>::RejectWithDOMException(
         script_state,
         MakeGarbageCollected<DOMException>(DOMExceptionCode::kInvalidStateError,
-                                           kInactiveDocumentError));
-  }
-
-  if (!IsModelContextAllowed()) {
-    return ScriptPromise<IDLSequence<RegisteredTool>>::RejectWithDOMException(
-        script_state,
-        MakeGarbageCollected<DOMException>(DOMExceptionCode::kSecurityError,
-                                           kDocumentDomainEnabledError));
+                                           kInactiveDocumentErrorMessage));
   }
 
   if (!ExecutionContext::From(script_state)
            ->IsFeatureEnabled(
                network::mojom::PermissionsPolicyFeature::kTools)) {
-    return ScriptPromise<IDLSequence<RegisteredTool>>::RejectWithDOMException(
-        script_state,
-        MakeGarbageCollected<DOMException>(DOMExceptionCode::kNotAllowedError,
-                                           kPermissionPolicyNotEnabledError));
+    return ScriptPromise<IDLSequence<Tool>>::RejectWithDOMException(
+        script_state, MakeGarbageCollected<DOMException>(
+                          DOMExceptionCode::kNotAllowedError,
+                          kPermissionPolicyNotEnabledErrorMessage));
   }
 
   Vector<scoped_refptr<const SecurityOrigin>> from_origins;
@@ -935,19 +1033,18 @@ ScriptPromise<IDLSequence<RegisteredTool>> ModelContext::getTools(
       scoped_refptr<const SecurityOrigin> origin =
           SecurityOrigin::CreateFromString(origin_str);
       if (!origin->IsPotentiallyTrustworthy()) {
-        return ScriptPromise<IDLSequence<RegisteredTool>>::
-            RejectWithDOMException(script_state,
-                                   MakeGarbageCollected<DOMException>(
-                                       DOMExceptionCode::kSecurityError,
-                                       "Only secure origins are allowed in the "
-                                       "fromOrigins list."));
+        return ScriptPromise<IDLSequence<Tool>>::RejectWithDOMException(
+            script_state, MakeGarbageCollected<DOMException>(
+                              DOMExceptionCode::kSecurityError,
+                              "Only secure origins are allowed in the "
+                              "fromOrigins list."));
       }
       from_origins.push_back(origin);
     }
   }
 
   auto* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver<IDLSequence<RegisteredTool>>>(
+      MakeGarbageCollected<ScriptPromiseResolver<IDLSequence<Tool>>>(
           script_state);
   ScriptPromise promise = resolver->Promise();
 
@@ -960,74 +1057,98 @@ ScriptPromise<IDLSequence<RegisteredTool>> ModelContext::getTools(
 }
 
 void ModelContext::OnGetScriptToolsCompleted(
-    ScriptPromiseResolver<IDLSequence<RegisteredTool>>* resolver,
-    Vector<mojom::blink::ScriptToolPtr> tools) {
-  HeapVector<Member<RegisteredTool>> registered_tools;
-  registered_tools.ReserveInitialCapacity(tools.size());
+    ScriptPromiseResolver<IDLSequence<Tool>>* resolver,
+    Vector<mojom::blink::ExposedScriptToolPtr> tools) {
+  HeapVector<Member<Tool>> result_tools;
+  result_tools.ReserveInitialCapacity(tools.size());
 
-  for (const auto& t : tools) {
-    auto* result = RegisteredTool::Create();
-    result->setName(t->name);
-    // Because `ScriptTool`'s `title` member is nullable, `t->title` will always
-    // be a `String` but it could be `String::IsNull()`. Unconditionally assign
-    // it here, since the bindings will convert null strings to empty string,
-    // and we always want to expose a string to JavaScript here (never
-    // `undefined`).
-    result->setTitle(t->title);
-    result->setDescription(t->description);
-    if (!t->input_schema.IsNull()) {
-      result->setInputSchema(t->input_schema);
-    }
-    if (t->annotations) {
-      auto* annotations = ToolAnnotations::Create();
-      annotations->setReadOnlyHint(t->annotations->read_only);
-      annotations->setUntrustedContentHint(t->annotations->untrusted_content);
-      result->setAnnotations(annotations);
-    }
+  // Parsing each tool's input schema, and handing the parsed value to `Tool`,
+  // both require the resolver's context to be entered.
+  ScriptState* script_state = resolver->GetScriptState();
+  ScriptState::Scope scope(script_state);
 
-    Frame* frame = Frame::ResolveFrame(t->tool_owner_frame_token);
+  for (auto& exposed_tool : tools) {
+    mojom::blink::ScriptToolPtr& t = exposed_tool->tool;
+    Frame* frame = Frame::ResolveFrame(exposed_tool->tool_owner_frame_token);
     // If we can't resolve the token into a concrete frame, that means the
     // document could have been discarded by the time the response IPC comes
     // back to the renderer. In that case, the tool is unusable from our
-    // perspective, so exclude it from `registered_tools`.
+    // perspective, so exclude it from `result_tools`.
     if (!frame) {
       continue;
     }
 
-    result->setWindow(frame->DomWindow());
-    result->setOrigin(t->origin->ToString());
-    registered_tools.push_back(result);
+    ScriptValue input_schema;
+    if (!t->input_schema.IsNull()) {
+      v8::TryCatch try_catch(script_state->GetIsolate());
+      auto script_object =
+          JSONStringToScriptObject(script_state, t->input_schema);
+      input_schema = script_object;
+      if (try_catch.HasCaught() || input_schema.IsEmpty()) {
+        continue;
+      }
+    }
+
+    result_tools.push_back(MakeGarbageCollected<Tool>(
+        frame->DomWindow(), std::move(exposed_tool->origin), std::move(t),
+        input_schema));
   }
 
-  resolver->Resolve(registered_tools);
+  resolver->Resolve(result_tools);
 }
 
 ScriptPromise<IDLNullable<IDLString>> ModelContext::executeTool(
     ScriptState* script_state,
-    RegisteredTool* tool,
-    String input_arguments,
+    Tool* tool,
+    ScriptObject input_object,
     const ExecuteToolOptions* options) {
   if (!document_->IsActive()) {
     return ScriptPromise<IDLNullable<IDLString>>::RejectWithDOMException(
         script_state,
         MakeGarbageCollected<DOMException>(DOMExceptionCode::kInvalidStateError,
-                                           kInactiveDocumentError));
-  }
-
-  if (!IsModelContextAllowed()) {
-    return ScriptPromise<IDLNullable<IDLString>>::RejectWithDOMException(
-        script_state,
-        MakeGarbageCollected<DOMException>(DOMExceptionCode::kSecurityError,
-                                           kDocumentDomainEnabledError));
+                                           kInactiveDocumentErrorMessage));
   }
 
   if (!ExecutionContext::From(script_state)
            ->IsFeatureEnabled(
                network::mojom::PermissionsPolicyFeature::kTools)) {
     return ScriptPromise<IDLNullable<IDLString>>::RejectWithDOMException(
+        script_state, MakeGarbageCollected<DOMException>(
+                          DOMExceptionCode::kNotAllowedError,
+                          kPermissionPolicyNotEnabledErrorMessage));
+  }
+
+  KURL expected_url(NullUrl(), tool->origin());
+  if (!expected_url.IsValid()) {
+    return ScriptPromise<IDLNullable<IDLString>>::RejectWithDOMException(
         script_state,
-        MakeGarbageCollected<DOMException>(DOMExceptionCode::kNotAllowedError,
-                                           kPermissionPolicyNotEnabledError));
+        MakeGarbageCollected<DOMException>(DOMExceptionCode::kNotSupportedError,
+                                           "The provided origin is invalid."));
+  }
+
+  scoped_refptr<SecurityOrigin> expected_target_origin =
+      SecurityOrigin::Create(expected_url);
+  if (expected_target_origin->IsOpaque()) {
+    return ScriptPromise<IDLNullable<IDLString>>::RejectWithDOMException(
+        script_state, MakeGarbageCollected<DOMException>(
+                          DOMExceptionCode::kNotSupportedError,
+                          "Cannot execute tools that live in a document with "
+                          "an opaque origin."));
+  }
+
+  // Per Web IDL, an omitted or explicitly-undefined optional argument is
+  // "missing", which is represented by `IsEmpty()`. We treat a "missing"
+  // optional input object as the empty object.
+  v8::Isolate* isolate = script_state->GetIsolate();
+  if (input_object.IsEmpty()) {
+    input_object = ScriptObject(isolate, v8::Object::New(isolate));
+  }
+  String input_arguments =
+      ValidateAndStringifyValue(script_state, PassThroughException(isolate),
+                                input_object, "input object");
+  if (!input_arguments) {
+    // Exception already thrown by ValidateAndStringifyValue.
+    return EmptyPromise();
   }
 
   auto* resolver =
@@ -1035,16 +1156,14 @@ ScriptPromise<IDLNullable<IDLString>> ModelContext::executeTool(
           script_state);
   ScriptPromise promise = resolver->Promise();
 
+  // `window` is null if it was garbage collected, and its frame is missing if
+  // the window was disconnected, i.e., the registering document was detached or
+  // discarded in the gap between tool retrieval and tool execution.
   DOMWindow* window = tool->window();
-  // `window` is always non-null, but its frame might be missing if the document
-  // was detached or discarded in the gap between tool retrieval and tool
-  // execution.
-  CHECK(window);
-
-  Frame* target_frame = window->GetFrame();
+  Frame* target_frame = window ? window->GetFrame() : nullptr;
   if (!target_frame) {
     resolver->RejectWithDOMException(DOMExceptionCode::kInvalidStateError,
-                                     "Target frame is detached.");
+                                     kTargetFrameNotAccessibleErrorMessage);
     return promise;
   }
   blink::FrameToken frame_token = target_frame->GetFrameToken();
@@ -1053,68 +1172,154 @@ ScriptPromise<IDLNullable<IDLString>> ModelContext::executeTool(
   LocalFrame* local_frame = document_->GetFrame();
   CHECK(local_frame);
 
+  ToolInvocationToken invocation_id;
+
   std::unique_ptr<ScopedAbortState> scoped_abort_state;
   if (options && options->hasSignal()) {
     AbortSignal* signal = options->signal();
     if (signal->aborted()) {
-      resolver->RejectWithDOMException(DOMExceptionCode::kAbortError,
-                                       "Execution cancelled.");
+      resolver->Reject(signal->reason(resolver->GetScriptState()));
       return promise;
     }
 
-    auto* handle = signal->AddAlgorithm(BindOnce(
-        [](ScriptPromiseResolver<IDLNullable<IDLString>>* resolver,
-           ScriptState* script_state, AbortSignal* signal) {
+    auto* handle = signal->AddAlgorithm(blink::BindOnce(
+        [](ModelContext* self,
+           ScriptPromiseResolver<IDLNullable<IDLString>>* resolver,
+           ScriptState* script_state, AbortSignal* signal,
+           const ToolInvocationToken& invocation_id) {
           if (resolver->GetScriptState() &&
               resolver->GetScriptState()->ContextIsValid()) {
             resolver->Reject(signal->reason(script_state));
           }
+          if (self && self->model_context_host_remote_.is_bound()) {
+            self->model_context_host_remote_->CancelRemoteScriptTool(
+                invocation_id);
+          }
         },
-        WrapPersistent(resolver), WrapPersistent(script_state),
-        WrapPersistent(signal)));
+        WrapWeakPersistent(this), WrapPersistent(resolver),
+        WrapPersistent(script_state), WrapPersistent(signal), invocation_id));
 
     scoped_abort_state = std::make_unique<ScopedAbortState>(signal, handle);
   }
 
-  base::UnguessableToken invocation_id = base::UnguessableToken::Create();
-
   model_context_host_remote_->ExecuteRemoteScriptTool(
-      invocation_id, frame_token,
-      SecurityOrigin::CreateFromString(tool->origin()), tool->name(),
+      invocation_id, tool->ToolId(), frame_token, expected_target_origin,
       input_arguments,
-      blink::BindOnce(
-          [](ModelContext* self,
-             ScriptPromiseResolver<IDLNullable<IDLString>>* resolver,
-             std::unique_ptr<ScopedAbortState> abort_state,
-             const String& result, bool success) {
-            if (self) {
-              self->OnExecuteScriptToolCompleted(resolver, result, success);
-            }
-          },
-          WrapWeakPersistent(this), WrapPersistent(resolver),
-          std::move(scoped_abort_state)));
+      blink::BindOnce(&ModelContext::OnExecuteScriptToolCompleted,
+                      WrapWeakPersistent(this), WrapPersistent(resolver),
+                      std::move(scoped_abort_state)));
   return promise;
 }
 
 void ModelContext::OnExecuteScriptToolCompleted(
     ScriptPromiseResolver<IDLNullable<IDLString>>* resolver,
+    std::unique_ptr<ScopedAbortState> abort_state,
     const String& result,
-    bool success) {
+    std::optional<mojom::blink::ExecuteRemoteScriptToolError> error) {
   // For the execution result to have been received from the browser process
   // over mojo, the frame/Document that sent the execution must not be detached,
   // and the same goes for the `resolver` that is tied to those objects.
   CHECK(resolver->GetScriptState() &&
         resolver->GetScriptState()->ContextIsValid());
 
-  // `result` is either the result or the error string, so we can use it
-  // unconditionally below.
-  if (success) {
+  if (!error.has_value()) {
     resolver->Resolve(result);
-  } else {
-    // TODO(https://crbug.com/509555636): Support more granular execution error
-    // reasons.
-    resolver->RejectWithDOMException(DOMExceptionCode::kUnknownError, result);
+    return;
   }
+
+  switch (*error) {
+    case mojom::blink::ExecuteRemoteScriptToolError::kInvalidStateError:
+      resolver->RejectWithDOMException(DOMExceptionCode::kInvalidStateError,
+                                       kTargetFrameNotAccessibleErrorMessage);
+      break;
+    case mojom::blink::ExecuteRemoteScriptToolError::kNotFoundError:
+      resolver->RejectWithDOMException(DOMExceptionCode::kNotFoundError,
+                                       kNotFoundErrorMessage);
+      break;
+    case mojom::blink::ExecuteRemoteScriptToolError::kDataError:
+      resolver->RejectWithDOMException(DOMExceptionCode::kDataError,
+                                       kDataErrorMessage);
+      break;
+    case mojom::blink::ExecuteRemoteScriptToolError::kOperationError:
+      resolver->RejectWithDOMException(DOMExceptionCode::kOperationError,
+                                       kOperationErrorMessage);
+      break;
+    case mojom::blink::ExecuteRemoteScriptToolError::kAbortError:
+      resolver->RejectWithDOMException(DOMExceptionCode::kAbortError,
+                                       kAbortErrorMessage);
+      break;
+  }
+}
+
+ScriptPromise<IDLString> ModelContext::RequestContinuationToken(
+    base::PassKey<ModelContextToolInvocation>,
+    ScriptState* script_state,
+    const ToolInvocationToken& invocation_id,
+    bool& did_request_token) {
+  if (!document_->IsActive()) {
+    return ScriptPromise<IDLString>::RejectWithDOMException(
+        script_state,
+        MakeGarbageCollected<DOMException>(DOMExceptionCode::kInvalidStateError,
+                                           kInactiveDocumentErrorMessage));
+  }
+
+  // The `kTools` permission has already been checked for the execution context
+  // associated with `script_state`.
+  CHECK(
+      ExecutionContext::From(script_state)
+          ->IsFeatureEnabled(network::mojom::PermissionsPolicyFeature::kTools));
+
+  auto it = pending_executions_.find(invocation_id);
+  if (it == pending_executions_.end() || did_request_token) {
+    return ScriptPromise<IDLString>::RejectWithDOMException(
+        script_state,
+        MakeGarbageCollected<DOMException>(
+            DOMExceptionCode::kInvalidStateError,
+            "Cannot request a continuation token for a tool that isn't running "
+            "or more than once per invocation."));
+  }
+
+  did_request_token = true;
+
+  return ScriptPromise<IDLString>::RejectWithDOMException(
+      script_state, MakeGarbageCollected<DOMException>(
+                        DOMExceptionCode::kNotSupportedError,
+                        "Continuation tokens are not yet implemented."));
+}
+
+ScriptPromise<IDLUndefined> ModelContext::resumeTool(
+    ScriptState* script_state,
+    const String& token_str,
+    V8ToolExecuteCallback* callback) {
+  if (!document_->IsActive()) {
+    return ScriptPromise<IDLUndefined>::RejectWithDOMException(
+        script_state,
+        MakeGarbageCollected<DOMException>(DOMExceptionCode::kInvalidStateError,
+                                           kInactiveDocumentErrorMessage));
+  }
+
+  if (!ExecutionContext::From(script_state)
+           ->IsFeatureEnabled(
+               network::mojom::PermissionsPolicyFeature::kTools)) {
+    return ScriptPromise<IDLUndefined>::RejectWithDOMException(
+        script_state, MakeGarbageCollected<DOMException>(
+                          DOMExceptionCode::kNotAllowedError,
+                          kPermissionPolicyNotEnabledErrorMessage));
+  }
+
+  std::optional<base::UnguessableToken> token =
+      base::UnguessableToken::DeserializeFromString(token_str.Utf8());
+  if (!token.has_value()) {
+    return ScriptPromise<IDLUndefined>::RejectWithDOMException(
+        script_state, MakeGarbageCollected<DOMException>(
+                          DOMExceptionCode::kInvalidAccessError,
+                          "Invalid or already redeemed continuation token."));
+  }
+
+  return ScriptPromise<IDLUndefined>::RejectWithDOMException(
+      script_state, MakeGarbageCollected<DOMException>(
+                        DOMExceptionCode::kInvalidAccessError,
+                        "Continuation token could not be redeemed."));
 }
 
 void ModelContext::PendingExecution::Trace(Visitor* visitor) const {

@@ -5,9 +5,10 @@
 #include <curl/curl.h>
 #include <curl/system.h>
 #include <dlfcn.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include <array>
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -120,7 +121,7 @@ class LibcurlNetworkFetcherImpl {
   }
 
   CurlUniquePtr curl_;
-  std::array<char, CURL_ERROR_SIZE> curl_error_buf_;
+  std::array<char, CURL_ERROR_SIZE> curl_error_buf_ = {};
 
   // Sequence to post callbacks to.
   scoped_refptr<base::SequencedTaskRunner> callback_sequence_;
@@ -191,6 +192,7 @@ void LibcurlNetworkFetcherImpl::PostRequest(
   response_started_callback_ = std::move(response_started_callback);
   progress_callback_ = std::move(progress_callback);
 
+  curl_error_buf_[0] = '\0';
   CURLcode result = curl_easy_perform(curl_.get());
   if (result != CURLE_OK) {
     VLOG(1) << "Failed to perform HTTP POST. "

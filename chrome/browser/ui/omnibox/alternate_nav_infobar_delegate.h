@@ -8,14 +8,13 @@
 #include <stddef.h>
 
 #include <memory>
+#include <vector>
 
-#include "base/memory/raw_ptr.h"
+#include "base/containers/span.h"
 #include "build/build_config.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar_delegate.h"
 #include "components/omnibox/browser/autocomplete_match.h"
-
-class Profile;
 
 namespace content {
 class WebContents;
@@ -51,15 +50,15 @@ class AlternateNavInfoBarDelegate : public ConfirmInfoBarDelegate {
   // ConfirmInfoBarDelegate:
   std::u16string GetMessageText() const override;
   std::u16string GetMessageTextTemplate() const override;
-  std::vector<MessageSubstitution> GetMessageSubstitutions() const override;
+  base::span<const MessageSubstitution> GetMessageSubstitutions()
+      const override;
   bool InlineSubstitutionLinkClicked(
       size_t index,
       WindowOpenDisposition disposition) override;
   int GetButtons() const override;
 
  private:
-  AlternateNavInfoBarDelegate(Profile* profile,
-                              const std::u16string& text,
+  AlternateNavInfoBarDelegate(const std::u16string& text,
                               std::unique_ptr<AutocompleteMatch> match,
                               const GURL& destination_url,
                               const GURL& original_url);
@@ -68,7 +67,6 @@ class AlternateNavInfoBarDelegate : public ConfirmInfoBarDelegate {
   static std::unique_ptr<infobars::InfoBar> CreateInfoBar(
       std::unique_ptr<AlternateNavInfoBarDelegate> delegate);
 
-  raw_ptr<Profile> profile_;
   const std::u16string text_;
 
   // The autocomplete match to be used when deleting the corresponding shortcut.
@@ -83,6 +81,8 @@ class AlternateNavInfoBarDelegate : public ConfirmInfoBarDelegate {
   // navigation link, this will be removed from history.
   // For search navigations this is the search URL.
   const GURL original_url_;
+
+  std::vector<MessageSubstitution> substitutions_;
 };
 
 #endif  // CHROME_BROWSER_UI_OMNIBOX_ALTERNATE_NAV_INFOBAR_DELEGATE_H_

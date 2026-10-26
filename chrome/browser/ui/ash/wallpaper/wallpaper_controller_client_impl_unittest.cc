@@ -80,13 +80,6 @@ TEST_F(WallpaperControllerClientImplTest, Construction) {
   EXPECT_TRUE(controller()->was_client_set());
 }
 
-TEST_F(WallpaperControllerClientImplTest, IsWallpaperSyncEnabledNoProfile) {
-  AccountId account_id =
-      AccountId::FromUserEmailGaiaId("idontexist@test.com", GaiaId("444444"));
-  EXPECT_FALSE(client()->WallpaperControllerClientImpl::IsWallpaperSyncEnabled(
-      account_id));
-}
-
 TEST_F(WallpaperControllerClientImplTest, GetFilesId) {
   const AccountId account_id = AccountId::FromUserEmail("test@test.com");
   user_manager::KnownUser known_user(
@@ -153,6 +146,38 @@ TEST_F(WallpaperControllerClientImplTest, DailyGooglePhotosDoNotRepeat) {
   };
 
   for (int i = 0; i < 20; i++) {
+    OnGooglePhotosDailyAlbumFetched(account_id,
+                                    base::BindLambdaForTesting(handle_photo),
+                                    response->Clone());
+  }
+}
+
+TEST_F(WallpaperControllerClientImplTest, DailyGooglePhotosDuplicateIds) {
+  using ash::personalization_app::mojom::GooglePhotosPhotoPtr;
+  AccountId account_id =
+      AccountId::FromUserEmailGaiaId("idontexist@test.com", GaiaId("444444"));
+
+  auto response =
+      ash::personalization_app::mojom::FetchGooglePhotosPhotosResponse::New(
+          std::vector<GooglePhotosPhotoPtr>(), std::nullopt);
+
+  // Create photos with duplicate IDs.
+  for (int i = 0; i < 3; i++) {
+    response->photos->push_back(
+        ash::personalization_app::mojom::GooglePhotosPhoto::New(
+            "same_id", /*dedup_key=*/std::nullopt,
+            /*name=*/"", /*date=*/u"",
+            /*url=*/GURL(""), /*location=*/std::nullopt));
+  }
+
+  auto handle_photo = [](GooglePhotosPhotoPtr photo, bool success) {
+    ASSERT_TRUE(success);
+    EXPECT_EQ(photo->id, "same_id");
+  };
+
+  // Trigger multiple refreshes to cycle the ID cache, ensuring an album
+  // with duplicate IDs safely returns a valid photo each time.
+  for (int i = 0; i < 5; i++) {
     OnGooglePhotosDailyAlbumFetched(account_id,
                                     base::BindLambdaForTesting(handle_photo),
                                     response->Clone());

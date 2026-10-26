@@ -4,20 +4,16 @@
 
 package org.chromium.content.browser;
 
-import android.app.Activity;
-
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.Callback;
+import org.chromium.base.TriState;
+import org.chromium.base.TriStateUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.content.R;
 import org.chromium.content_public.browser.RenderWidgetHostView;
-import org.chromium.ui.base.DeviceInput;
-import org.chromium.ui.base.WindowAndroid;
-import org.chromium.ui.widget.Toast;
 
 /**
  * The Android implementation of RenderWidgetHostView. This is a Java wrapper to allow communicating
@@ -32,9 +28,7 @@ public class RenderWidgetHostViewImpl implements RenderWidgetHostView {
     // Remember the stack for clearing native the native stack for debugging use after destroy.
     private @Nullable Throwable mNativeDestroyThrowable;
 
-    private @Nullable Boolean mIsGestureNavigationModeCached;
-
-    private @Nullable Toast mPointerLockToast;
+    private @TriState int mIsGestureNavigationModeCached;
 
     @CalledByNative
     private static RenderWidgetHostViewImpl create(long renderWidgetHostViewLong) {
@@ -96,37 +90,13 @@ public class RenderWidgetHostViewImpl implements RenderWidgetHostView {
     @Override
     public void setIsGestureNavigationMode(boolean isGestureNavigationMode) {
         if (isDestroyed()) return;
-        if (mIsGestureNavigationModeCached != null
-                && mIsGestureNavigationModeCached == isGestureNavigationMode) {
+        @TriState int mode = TriStateUtils.from(isGestureNavigationMode);
+        if (mIsGestureNavigationModeCached == mode) {
             return;
         }
-        mIsGestureNavigationModeCached = isGestureNavigationMode;
+        mIsGestureNavigationModeCached = mode;
         RenderWidgetHostViewImplJni.get()
                 .setIsGestureNavigationMode(getNativePtr(), isGestureNavigationMode);
-    }
-
-    // TODO(https://crbug.com/419544853): Move the pointer lock logic to a separate class once
-    // WindowAndroid implements SupportsUserData
-    @CalledByNative
-    private void showPointerLockToast(WindowAndroid windowAndroid) {
-        int messageId = R.string.pointer_lock_api_notification;
-        if (!DeviceInput.supportsAlphabeticKeyboard()) {
-            messageId = R.string.pointer_lock_api_notification_no_keyboard;
-        }
-
-        Activity activity = windowAndroid.getActivity().get();
-        if (activity != null) {
-            mPointerLockToast = Toast.makeText(activity, messageId, Toast.LENGTH_SHORT);
-            mPointerLockToast.show();
-        }
-    }
-
-    @CalledByNative
-    private void hidePointerLockToast() {
-        if (mPointerLockToast != null) {
-            mPointerLockToast.cancel();
-            mPointerLockToast = null;
-        }
     }
 
     // ====================

@@ -32,7 +32,7 @@
 #import "components/autofill/core/browser/heuristic_source.h"
 #import "components/autofill/core/common/autofill_features.h"
 #import "components/autofill/core/common/autofill_payments_features.h"
-#import "components/autofill/core/common/autofill_test_utils.h"
+#import "components/autofill/core/common/autofill_test_util.h"
 #import "components/autofill/core/common/unique_ids.h"
 #import "components/autofill/ios/browser/autofill_agent.h"
 #import "components/autofill/ios/browser/autofill_driver_ios.h"
@@ -193,7 +193,7 @@ class FormStructureBrowserTest : public PlatformTest,
   std::unique_ptr<web::WebState> web_state_;
   std::unique_ptr<AutofillClient> autofill_client_;
   AutofillAgent* autofill_agent_;
-  std::unique_ptr<TestAutofillManagerInjector<TestAutofillManager>>
+  std::unique_ptr<TestAutofillManagerInjectorIOS<TestAutofillManager>>
       autofill_manager_injector_;
   FormSuggestionController* suggestion_controller_;
 
@@ -229,11 +229,12 @@ FormStructureBrowserTest::FormStructureBrowserTest()
       {
           // TODO(crbug.com/40266396): Remove once launched.
           features::kAutofillEnableExpirationDateImprovements,
-          features::kAutofillIgnoreCheckableElements,
           // TODO(crbug.com/369503318): Remove once launched.
           features::kAutofillSupportSplitZipCode,
           features::kAutofillSupportStandaloneZipCodeGlobally,
           features::kAutofillEnableOneTimeCodeHeuristics,
+          // TODO(crbug.com/566051797): Remove once launched.
+          features::kAutofillOnlyConsiderSingleFieldFormsAsSearchForms,
       },
       // Disabled
       {
@@ -281,7 +282,7 @@ void FormStructureBrowserTest::SetUp() {
       std::make_unique<TestAutofillClientIOS>(web_state(), autofill_agent_);
 
   autofill_manager_injector_ =
-      std::make_unique<TestAutofillManagerInjector<TestAutofillManager>>(
+      std::make_unique<TestAutofillManagerInjectorIOS<TestAutofillManager>>(
           web_state());
 }
 
@@ -395,6 +396,7 @@ bool IsFailingTestName(const std::string& test_name) {
           // TODO(crbug.com/40229922): These pages contain labels which are only
           // inferred by the label detection improvements that haven't been
           // implemented on iOS.
+          "018_checkout_ae.com.html",
           "074_register_threadless.com.html",
           "097_register_alaskaair.com.html",
           "115_checkout_walgreens.com.html",

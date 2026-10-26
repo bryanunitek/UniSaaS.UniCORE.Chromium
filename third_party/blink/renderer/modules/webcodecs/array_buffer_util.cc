@@ -13,14 +13,14 @@ ArrayBufferContents PinSharedArrayBufferContent(
   switch (buffer_union->GetContentType()) {
     case AllowSharedBufferSource::ContentType::kArrayBufferAllowShared: {
       auto* buffer = buffer_union->GetAsArrayBufferAllowShared();
-      if (buffer && !buffer->IsDetached() && buffer->IsShared()) {
+      if (buffer->IsShared()) {
         buffer->Content()->ShareWith(result);
       }
       break;
     }
     case AllowSharedBufferSource::ContentType::kArrayBufferViewAllowShared: {
       auto* view = buffer_union->GetAsArrayBufferViewAllowShared().Get();
-      if (view && !view->IsDetached() && view->IsShared()) {
+      if (view->IsShared()) {
         view->BufferShared()->Content()->ShareWith(result);
       }
       break;
@@ -85,7 +85,7 @@ ArrayBufferContents TransferArrayBufferForSpan(
     if (!result.IsValid()) {
       // We haven't found a matching arraybuffer yet, and this one meets
       // all the criteria. It is our result.
-      contents.Transfer(result);
+      result = std::move(contents);
     }
   }
   return result;

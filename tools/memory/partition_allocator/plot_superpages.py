@@ -32,6 +32,9 @@ def ParseJson(filename: str) -> dict:
 
 
 def PlotSuperPageData(data: dict, output_filename: str):
+  if not data:
+    print('No superpages to plot.')
+    return
   num_superpages = len(data)
   num_partition_pages = len(data[0]['partition_pages'])
   data_np = np.zeros((num_superpages, num_partition_pages, 3))
@@ -39,12 +42,12 @@ def PlotSuperPageData(data: dict, output_filename: str):
   address_to_superpage = {superpage['address']: superpage for superpage in data}
   addresses = sorted(address_to_superpage.keys())
 
-  BLACK = (0., 0., 0.)
-  GRAY = (.5, .5, .5)
-  RED = (1., 0., 0.)
-  GREEN = (0., .8, 0.)
-  WHITE = (1., 1., 1.)
-  cmap = matplotlib.cm.get_cmap('coolwarm')
+  BLACK = (0.0, 0.0, 0.0)
+  GRAY = (0.5, 0.5, 0.5)
+  RED = (1.0, 0.0, 0.0)
+  GREEN = (0.0, 0.8, 0.0)
+  WHITE = (1.0, 1.0, 1.0)
+  cmap = plt.get_cmap('coolwarm')
 
   for superpage_index in range(len(addresses)):
     superpage = address_to_superpage[addresses[superpage_index]]
@@ -54,9 +57,8 @@ def PlotSuperPageData(data: dict, output_filename: str):
         value = BLACK
       elif partition_page['type'] == 'guard':
         value = GRAY
-      elif partition_page['all_zeros'] and not 'is_active' in partition_page:
-        # Otherwise it may be the subsequent partition page of a decommitted
-        # slot span.
+      elif 'is_active' not in partition_page:
+        # Otherwise it may be the subsequent partition page of a slot span.
         if partition_page['page_index_in_span'] == 0:
           value = WHITE
 
@@ -67,15 +69,19 @@ def PlotSuperPageData(data: dict, output_filename: str):
       assert partition_page['type'] == 'payload'
       if partition_page['page_index_in_span'] == 0:
         num_partition_pages_in_slot_span = math.ceil(
-            partition_page['num_system_pages_per_slot_span'] / 4)
+          partition_page['num_system_pages_per_slot_span'] / 4
+        )
         if partition_page['is_decommitted'] or partition_page['is_empty']:
           value = GREEN
         else:
-          fullness = (partition_page['num_allocated_slots'] /
-                      partition_page['slots_per_span'])
+          fullness = (
+            partition_page['num_allocated_slots']
+            / partition_page['slots_per_span']
+          )
           value = cmap(fullness)[:3]
-        data_np[superpage_index, index:index +
-                num_partition_pages_in_slot_span, :] = value
+        data_np[
+          superpage_index, index : index + num_partition_pages_in_slot_span, :
+        ] = value
 
   plt.figure(figsize=(20, len(address_to_superpage) / 2))
   plt.imshow(data_np)
@@ -84,26 +90,28 @@ def PlotSuperPageData(data: dict, output_filename: str):
   plt.xlabel('PartitionPage index')
 
   handles = [
-      matplotlib.patches.Patch(facecolor=BLACK, edgecolor='k',
-                               label='Metadata'),
-      matplotlib.patches.Patch(facecolor=GRAY, edgecolor='k', label='Guard'),
-      matplotlib.patches.Patch(facecolor=WHITE, edgecolor='k', label='Empty'),
-      matplotlib.patches.Patch(facecolor=GREEN,
-                               edgecolor='k',
-                               label='Decommitted'),
-      matplotlib.patches.Patch(facecolor=cmap(0.),
-                               edgecolor='k',
-                               label='Committed Empty'),
-      matplotlib.patches.Patch(facecolor=cmap(1.),
-                               edgecolor='k',
-                               label='Committed Full'),
+    matplotlib.patches.Patch(facecolor=BLACK, edgecolor='k', label='Metadata'),
+    matplotlib.patches.Patch(facecolor=GRAY, edgecolor='k', label='Guard'),
+    matplotlib.patches.Patch(facecolor=WHITE, edgecolor='k', label='Empty'),
+    matplotlib.patches.Patch(
+      facecolor=GREEN, edgecolor='k', label='Decommitted'
+    ),
+    matplotlib.patches.Patch(
+      facecolor=cmap(0.0), edgecolor='k', label='Committed Empty'
+    ),
+    matplotlib.patches.Patch(
+      facecolor=cmap(1.0), edgecolor='k', label='Committed Full'
+    ),
   ]
-  plt.legend(handles=handles, loc='lower left', fontsize=12, framealpha=.7)
+  plt.legend(handles=handles, loc='lower left', fontsize=12, framealpha=0.7)
 
   plt.savefig(output_filename, bbox_inches='tight')
 
 
 def PlotSuperPageCompressionData(data: dict, output_filename: str):
+  if not data:
+    print('No superpages to plot.')
+    return
   num_superpages = len(data)
   num_pages = len(data[0]['page_sizes'])
   data_np = np.zeros((num_superpages, num_pages, 3))
@@ -111,8 +119,8 @@ def PlotSuperPageCompressionData(data: dict, output_filename: str):
   address_to_superpage = {superpage['address']: superpage for superpage in data}
   addresses = sorted(address_to_superpage.keys())
 
-  WHITE = (1., 1., 1.)
-  cmap = matplotlib.cm.get_cmap('coolwarm')
+  WHITE = (1.0, 1.0, 1.0)
+  cmap = plt.get_cmap('coolwarm')
 
   total_compressed_size = 0
   total_uncompressed_size = 0
@@ -128,28 +136,32 @@ def PlotSuperPageCompressionData(data: dict, output_filename: str):
       data_np[superpage_index, index] = value
 
   overall_compression_ratio = (
-      100. * total_compressed_size /
-      (total_uncompressed_size)) if total_uncompressed_size else 0
+    (100.0 * total_compressed_size / (total_uncompressed_size))
+    if total_uncompressed_size
+    else 0
+  )
   plt.figure(figsize=(20, len(address_to_superpage)))
   plt.imshow(data_np, aspect=8)
-  plt.title('Super page compression ratio map - Ratio = %.1f%% '
-            '- Compressed Size = %.1fMiB' %
-            (overall_compression_ratio, total_compressed_size / (1 << 20)))
+  plt.title(
+    'Super page compression ratio map - Ratio = %.1f%% '
+    '- Compressed Size = %.1fMiB'
+    % (overall_compression_ratio, total_compressed_size / (1 << 20))
+  )
   plt.yticks(ticks=range(len(addresses)), labels=addresses)
   plt.xlabel('Page index in SuperPage')
 
   handles = [
-      matplotlib.patches.Patch(facecolor=WHITE,
-                               edgecolor='k',
-                               label='Empty / Decommitted'),
-      matplotlib.patches.Patch(facecolor=cmap(0.),
-                               edgecolor='k',
-                               label='Compressible'),
-      matplotlib.patches.Patch(facecolor=cmap(1.),
-                               edgecolor='k',
-                               label='Incompressible'),
+    matplotlib.patches.Patch(
+      facecolor=WHITE, edgecolor='k', label='Empty / Decommitted'
+    ),
+    matplotlib.patches.Patch(
+      facecolor=cmap(0.0), edgecolor='k', label='Compressible'
+    ),
+    matplotlib.patches.Patch(
+      facecolor=cmap(1.0), edgecolor='k', label='Incompressible'
+    ),
   ]
-  plt.legend(handles=handles, loc='lower left', fontsize=12, framealpha=.7)
+  plt.legend(handles=handles, loc='lower left', fontsize=12, framealpha=0.7)
   plt.savefig(output_filename, bbox_inches='tight')
 
 
@@ -165,28 +177,32 @@ def _PlotFragmentationCommon(bucket_to_allocated: dict, output_filename: str):
   plt.figure(figsize=(18, 8))
   indices = range(len(slot_sizes))
   plt.bar(indices, allocated, label='Requested Memory')
-  b = plt.bar(indices,
-              waste,
-              bottom=allocated,
-              label='Waste due to padding + bucketing')
+  b = plt.bar(
+    indices, waste, bottom=allocated, label='Waste due to padding + bucketing'
+  )
 
-  waste_percentage = [('%d%%' % (int(100. * w / (w + a)))) if a else ''
-                      for (w, a) in zip(waste, allocated)]
+  waste_percentage = [
+    ('%d%%' % (int(100.0 * w / (w + a)))) if a else ''
+    for (w, a) in zip(waste, allocated)
+  ]
 
   plt.bar_label(b, labels=waste_percentage)
   plt.xticks(indices, slot_sizes, rotation='vertical')
-  plt.xlim(left=-.5, right=len(indices))
+  plt.xlim(left=-0.5, right=len(indices))
   plt.xlabel('Bucket size')
   plt.ylabel('Memory (bytes)')
   plt.legend()
 
   total_allocated = np.sum(allocated)
   total_waste = np.sum(waste)
-  plt.title('Absolute and relative waste due to bucketing and padding'
-            ' per bucket - Total Allocated = %dMiB, Waste = %d%%' %
-            (total_allocated /
-             (1 << 20), int(100 * total_waste /
-                            (total_allocated + total_waste))))
+  plt.title(
+    'Absolute and relative waste due to bucketing and padding'
+    ' per bucket - Total Allocated = %dMiB, Waste = %d%%'
+    % (
+      total_allocated / (1 << 20),
+      int(100 * total_waste / (total_allocated + total_waste)),
+    )
+  )
   plt.savefig(output_filename, bbox_inches='tight')
 
 
@@ -210,8 +226,9 @@ def _AdjustSizes(data: dict, bucket_sizes: list, adjustment_size: int) -> dict:
   return bucket_to_allocated
 
 
-def PlotSimulatedFragmentationData(data: dict, bucket_sizes: list,
-                                   output_filename: str):
+def PlotSimulatedFragmentationData(
+  data: dict, bucket_sizes: list, output_filename: str
+):
   # No adjustment, want to check waste without any padding.
   bucket_to_allocated = _AdjustSizes(data, bucket_sizes, 0)
   _PlotFragmentationCommon(bucket_to_allocated, output_filename)
@@ -231,51 +248,123 @@ def PlotDelta(data: dict, bucket_sizes: list, output_filename: str):
   slot_sizes = sorted(bucket_to_allocated_no_brp)
 
   allocated_per_bucket_brp = {
-      slot_size: len(bucket_to_allocated_brp[slot_size]) * slot_size
-      for slot_size in bucket_to_allocated_brp
+    slot_size: len(bucket_to_allocated_brp[slot_size]) * slot_size
+    for slot_size in bucket_to_allocated_brp
   }
   allocated_per_bucket_no_brp = {
-      slot_size: len(bucket_to_allocated_no_brp[slot_size]) * slot_size
-      for slot_size in bucket_to_allocated_no_brp
+    slot_size: len(bucket_to_allocated_no_brp[slot_size]) * slot_size
+    for slot_size in bucket_to_allocated_no_brp
   }
   delta = [
-      allocated_per_bucket_brp[slot_size] -
-      allocated_per_bucket_no_brp[slot_size] for slot_size in slot_sizes
+    allocated_per_bucket_brp[slot_size] - allocated_per_bucket_no_brp[slot_size]
+    for slot_size in slot_sizes
   ]
 
   plt.figure(figsize=(18, 8))
   indices = range(len(slot_sizes))
   plt.bar(indices, delta, label='Delta')
   plt.xticks(indices, slot_sizes, rotation='vertical')
-  plt.xlim(left=-.5, right=len(indices))
+  plt.xlim(left=-0.5, right=len(indices))
   plt.xlabel('Bucket size')
   plt.ylabel('Memory delta (bytes)')
-  plt.title('Per-bucket size difference BRP/No-BRP - Total = %.1fMiB' %
-            (sum(delta) / (1 << 20)))
+  plt.title(
+    'Per-bucket size difference BRP/No-BRP - Total = %.1fMiB'
+    % (sum(delta) / (1 << 20))
+  )
+  plt.savefig(output_filename, bbox_inches='tight')
+
+
+def PlotGigacageData(data: dict, output_filename: str):
+  if not data or 'superpages' not in data:
+    return
+
+  superpages = data['superpages']
+  pool_base = int(data['pool_base'], 16)
+  superpage_size_mib = 2
+  superpage_size = superpage_size_mib * (1 << 20)
+  cols = 128
+  rows = len(superpages) // cols
+
+  GRAY = (0.9, 0.9, 0.9)
+  BLUE = (0.17, 0.48, 0.73)
+  PURPLE = (0.48, 0.20, 0.58)
+  color_map = {'free': GRAY, 'normal': BLUE, 'direct_mapped': PURPLE}
+
+  grid = np.array([color_map[sp] for sp in superpages]).reshape(rows, cols, 3)
+
+  normal_count = superpages.count('normal')
+  dm_count = superpages.count('direct_mapped')
+  free_count = superpages.count('free')
+  allocated = normal_count + dm_count
+
+  plt.figure(figsize=(20, 10))
+  plt.imshow(grid, aspect='auto', interpolation='nearest')
+  plt.title(
+    'GigaCage SuperPage Map (Base: %s) - Allocated: %d / %d (%d MiB / %d GiB)'
+    % (
+      data['pool_base'],
+      allocated,
+      len(superpages),
+      allocated * superpage_size_mib,
+      (len(superpages) * superpage_size_mib) // 1024,
+    )
+  )
+  plt.yticks(
+    ticks=range(0, rows, 8),
+    labels=[
+      '0x%x (+%d GiB)'
+      % (
+        pool_base + r * cols * superpage_size,
+        (r * cols * superpage_size_mib) // 1024,
+      )
+      for r in range(0, rows, 8)
+    ],
+  )
+  plt.xlabel('SuperPage index in 256 MiB row (2 MiB per SuperPage)')
+
+  handles = [
+    matplotlib.patches.Patch(
+      facecolor=BLUE, edgecolor='k', label='Normal Buckets (%d)' % normal_count
+    ),
+    matplotlib.patches.Patch(
+      facecolor=PURPLE, edgecolor='k', label='Direct Mapped (%d)' % dm_count
+    ),
+    matplotlib.patches.Patch(
+      facecolor=GRAY, edgecolor='k', label='Free (%d)' % free_count
+    ),
+  ]
+  plt.legend(handles=handles, loc='lower right', fontsize=12, framealpha=0.7)
   plt.savefig(output_filename, bbox_inches='tight')
 
 
 def main():
   parser = argparse.ArgumentParser()
-  parser.add_argument('--json',
-                      help='JSON dump from pa_tcache_inspect',
-                      required=True)
+  parser.add_argument(
+    '--json', help='JSON dump from pa_tcache_inspect', required=True
+  )
   parser.add_argument('--output', help='Output filename prefix', required=True)
 
   args = parser.parse_args()
   data = ParseJson(args.json)
 
   PlotSuperPageData(data['superpages'], args.output + '_superpage.png')
-  PlotSuperPageCompressionData(data['superpages'],
-                               args.output + '_compression.png')
+  PlotSuperPageCompressionData(
+    data['superpages'], args.output + '_compression.png'
+  )
+  if 'gigacage' in data:
+    PlotGigacageData(data['gigacage'], args.output + '_gigacage.png')
 
   # Allocated object data is not always available.
   if 'allocated_sizes' in data:
     bucket_sizes = [x['slot_size'] for x in data['buckets']]
-    PlotFragmentationData(data['allocated_sizes'], bucket_sizes,
-                          args.output + '_waste.png')
-    PlotSimulatedFragmentationData(data['allocated_sizes'], bucket_sizes,
-                                   args.output + '_waste_simulated.png')
+    PlotFragmentationData(
+      data['allocated_sizes'], bucket_sizes, args.output + '_waste.png'
+    )
+    PlotSimulatedFragmentationData(
+      data['allocated_sizes'],
+      bucket_sizes,
+      args.output + '_waste_simulated.png',
+    )
     PlotDelta(data['allocated_sizes'], bucket_sizes, args.output + '_delta.png')
 
 

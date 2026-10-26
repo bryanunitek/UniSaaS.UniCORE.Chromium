@@ -22,18 +22,22 @@ class AutofillDialogViewAndroid : public AutofillDialogView {
   ~AutofillDialogViewAndroid() override;
 
   void Show() override;
+  void ShowLoadingDialog() override;
   void Dismiss() override;
 
   // --------------------------------------------------------------------------
   // Methods called from Java via JNI
   // --------------------------------------------------------------------------
-  void OnPositiveButtonClicked(JNIEnv* env);
-  void OnDismissed(JNIEnv* env);
+  void OnPositiveButtonClicked();
+  void OnNegativeButtonClicked();
+  void OnDismissed();
 
  private:
+  void InitJavaObject();
+
   raw_ref<AutofillDialogController> controller_;
   // The corresponding java object.
-  base::android::ScopedJavaGlobalRef<jobject> java_object_;
+  jni_zero::ScopedJavaGlobalRef<jobject> java_object_;
 };
 }  // namespace autofill
 

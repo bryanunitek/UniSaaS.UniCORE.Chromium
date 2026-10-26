@@ -435,13 +435,6 @@ class MarketingOptInScreenTester extends ScreenElementApi {
   getGetStartedButtonName(): string {
     return loadTimeData.getString('marketingOptInScreenAllSet');
   }
-
-  /**
-   * Returns gaming-specific title.
-   */
-  getCloudGamingDeviceTitle(): string {
-    return loadTimeData.getString('marketingOptInScreenGameDeviceTitle');
-  }
 }
 
 class ThemeSelectionScreenTester extends ScreenElementApi {
@@ -1419,7 +1412,7 @@ class SplitModifierKeyboardInfoScreenTester extends ScreenElementApi {
 
 export class OobeApiProvider {
   private screens: Record<string, ScreenElementApi>;
-  private metricsClientID: string;
+  private metricsClientID: string = '';
 
   private loginWithPin: (username: string, pin: string) => void;
   private advanceToScreen: (screen: string) => void;

@@ -13,7 +13,7 @@ namespace content {
 class WebContents;
 }  // namespace content
 
-class LocationBarView;
+class LocationBar;
 class OmniboxController;
 class OmniboxPopupAimHandler;
 class OmniboxPopupPresenterBase;
@@ -25,7 +25,7 @@ class OmniboxAimPopupWebUIContent : public OmniboxPopupWebUIBaseContent {
  public:
   OmniboxAimPopupWebUIContent() = delete;
   OmniboxAimPopupWebUIContent(OmniboxPopupPresenterBase* presenter,
-                              LocationBarView* location_bar_view,
+                              LocationBar* location_bar,
                               OmniboxController* controller);
   OmniboxAimPopupWebUIContent(const OmniboxAimPopupWebUIContent&) = delete;
   OmniboxAimPopupWebUIContent& operator=(const OmniboxAimPopupWebUIContent&) =
@@ -45,17 +45,31 @@ class OmniboxAimPopupWebUIContent : public OmniboxPopupWebUIBaseContent {
   //    b. OmniboxPopupWebUIBaseContent::Detach() (Detaches WebContents
   //       and breaks recursion loops).
   //    c. OmniboxAimPopupWebUIContent::ApplyInputAndCleanup() (Resets the
-  //       OmniboxView text).
+  //       OmniboxView text and, under Full WebUI, restores focus unless a
+  //       query was submitted from the popup). Skipped on a tab switch or when
+  //       `CloseUI()` already applied the draft.
+  //
+  // Step 5c is where drafts from native closes reach the omnibox. WebUI closes
+  // run `CloseUI()` first, which applies the draft and then triggers this same
+  // flow via the popup state change; `draft_applied_on_close_` skips 5c.
   void Clear() override;
   void OnContextMenuClosed() override;
 
-  // Called from the browser after popup has already closed. `input` is
-  // the possibly empty input that should replace the omnibox text.
-  void ApplyInputAndCleanup(const std::string& input);
+  // Hands `input` to the omnibox, replacing its text. Under Full WebUI this
+  // also restores focus by reopening the full popup, unless `query_submitted`
+  // indicates the popup is closing because a query was submitted from it.
+  void ApplyInputAndCleanup(const std::string& input, bool query_submitted);
+
+  // Focuses the input element inside the WebUI AIM popup via Mojo.
+  void FocusInput();
 
   // Refocuses the location bar if screen readers are enabled and the popup is
   // active.
   void UpdateLocationBarFocusForScreenReader();
+
+  // If the popup is shown, sends the current show to `handler`, with the
+  // pending searchbox context.
+  void SendShow(OmniboxPopupAimHandler& handler);
 
  protected:
   std::string_view GetMetricPrefix() const override;
@@ -70,6 +84,7 @@ class OmniboxAimPopupWebUIContent : public OmniboxPopupWebUIBaseContent {
   // <escape>, presses the 'x' button, or moves focus out of the popup.
   void CloseUI() override;
   void ShowUI() override;
+  bool EscClosesUI() const override;
   bool HandleContextMenu(content::RenderFrameHost& render_frame_host,
                          const content::ContextMenuParams& params) override;
 
@@ -77,13 +92,22 @@ class OmniboxAimPopupWebUIContent : public OmniboxPopupWebUIBaseContent {
   OmniboxPopupAimHandler* popup_aim_handler();
 
   // Called when the popup is hidden and the WebUI has painted a clean frame.
-  void OnClearCallback(base::WeakPtr<content::WebContents> original_web_contents,
-                       const std::string& input);
+  // `query_submitted` is true if a query was submitted from the popup.
+  void OnClearCallback(
+      base::WeakPtr<content::WebContents> original_web_contents,
+      const std::string& input,
+      bool query_submitted);
 
   FRIEND_TEST_ALL_PREFIXES(OmniboxAimPopupBrowserTest,
                            DraftTextPreservedOnTabSwitch);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxAimPopupFullWebUIBrowserTest,
+                           CloseUISetsPopupStateToFull);
 
   base::WeakPtr<content::WebContents> active_web_contents_;
+
+  // Prevents `OnClearCallback()` from re-applying a draft that `CloseUI()`
+  // already transferred.
+  bool draft_applied_on_close_ = false;
 
   base::WeakPtrFactory<OmniboxAimPopupWebUIContent> weak_factory_{this};
 };

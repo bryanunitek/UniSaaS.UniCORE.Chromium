@@ -24,12 +24,10 @@
 #include "net/url_request/referrer_policy.h"
 #include "services/network/public/cpp/cookie_manager_shared_mojom_traits.h"
 #include "services/network/public/cpp/data_element.h"
-#include "services/network/public/cpp/network_isolation_key_mojom_traits.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_mojom_traits.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/resource_request_body.h"
 #include "services/network/public/cpp/source_type_mojom_traits.h"
-#include "services/network/public/mojom/attribution.mojom-forward.h"
 #include "services/network/public/mojom/chunked_data_pipe_getter.mojom.h"
 #include "services/network/public/mojom/client_security_state.mojom-forward.h"
 #include "services/network/public/mojom/cookie_access_observer.mojom-forward.h"
@@ -204,11 +202,6 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
     return trusted_params.expected_response_headers_for_synthetic_response;
   }
 
-  static bool is_ad_auction_trusted_signals_request(
-      const network::ResourceRequest::TrustedParams& trusted_params) {
-    return trusted_params.is_ad_auction_trusted_signals_request;
-  }
-
   static bool Read(network::mojom::TrustedUrlRequestParamsDataView data,
                    network::ResourceRequest::TrustedParams* out);
 };
@@ -264,7 +257,7 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
       const network::ResourceRequest& request) {
     return request.request_initiator;
   }
-  static const std::vector<GURL> navigation_redirect_chain(
+  static const std::vector<GURL>& navigation_redirect_chain(
       const network::ResourceRequest& request) {
     return request.navigation_redirect_chain;
   }
@@ -342,16 +335,6 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
   static bool keepalive(const network::ResourceRequest& request) {
     return request.keepalive;
   }
-  static bool browsing_topics(const network::ResourceRequest& request) {
-    return request.browsing_topics;
-  }
-  static bool ad_auction_headers(const network::ResourceRequest& request) {
-    return request.ad_auction_headers;
-  }
-  static bool shared_storage_writable_eligible(
-      const network::ResourceRequest& request) {
-    return request.shared_storage_writable_eligible;
-  }
   static bool has_user_gesture(const network::ResourceRequest& request) {
     return request.has_user_gesture;
   }
@@ -381,6 +364,14 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
   }
   static bool is_revalidating(const network::ResourceRequest& request) {
     return request.is_revalidating;
+  }
+  static const std::optional<std::string>& revalidation_etag(
+      const network::ResourceRequest& request) {
+    return request.revalidation_etag;
+  }
+  static const std::optional<std::string>& revalidation_last_modified(
+      const network::ResourceRequest& request) {
+    return request.revalidation_last_modified;
   }
   static const std::optional<base::UnguessableToken>& throttling_profile_id(
       const network::ResourceRequest& request) {
@@ -442,18 +433,6 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
   static net::StorageAccessApiStatus storage_access_api_status(
       const network::ResourceRequest& request) {
     return request.storage_access_api_status;
-  }
-  static network::mojom::AttributionSupport attribution_reporting_support(
-      const network::ResourceRequest& request) {
-    return request.attribution_reporting_support;
-  }
-  static network::mojom::AttributionReportingEligibility
-  attribution_reporting_eligibility(const network::ResourceRequest& request) {
-    return request.attribution_reporting_eligibility;
-  }
-  static const std::optional<base::UnguessableToken>&
-  attribution_reporting_src_token(const network::ResourceRequest& request) {
-    return request.attribution_reporting_src_token;
   }
   static const std::optional<base::UnguessableToken>& keepalive_token(
       const network::ResourceRequest& request) {

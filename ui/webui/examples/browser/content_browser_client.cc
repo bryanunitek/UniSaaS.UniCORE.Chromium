@@ -50,20 +50,26 @@ void ContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
       webui_examples::mojom::PageHandlerFactory, Browser>(map);
   RegisterWebUIControllerInterfaceBinder<
       guest_contents::mojom::GuestContentsHost, Browser>(map);
+}
 
+void ContentBrowserClient::RegisterAssociatedInterfaceBindersForRenderFrameHost(
+    content::RenderFrameHost& render_frame_host,
+    blink::AssociatedInterfaceRegistry& associated_registry) {
   if (base::FeatureList::IsEnabled(surface_embed::features::kSurfaceEmbed)) {
-    map->Add<surface_embed::mojom::SurfaceEmbedHost>(base::BindRepeating(
-        [](content::RenderFrameHost* render_frame_host,
-           mojo::PendingReceiver<surface_embed::mojom::SurfaceEmbedHost>
-               receiver) {
-          auto* web_ui = render_frame_host->GetWebUI();
-          if (!web_ui ||
-              !web_ui->GetController()->GetAs<webui_examples::Browser>()) {
-            return;
-          }
-          surface_embed::SurfaceEmbedHost::Create(render_frame_host,
-                                                  std::move(receiver));
-        }));
+    associated_registry.AddInterface<surface_embed::mojom::SurfaceEmbedHost>(
+        base::BindRepeating(
+            [](content::RenderFrameHost* render_frame_host,
+               mojo::PendingAssociatedReceiver<
+                   surface_embed::mojom::SurfaceEmbedHost> receiver) {
+              auto* web_ui = render_frame_host->GetWebUI();
+              if (!web_ui ||
+                  !web_ui->GetController()->GetAs<webui_examples::Browser>()) {
+                return;
+              }
+              surface_embed::SurfaceEmbedHost::Create(render_frame_host,
+                                                      std::move(receiver));
+            },
+            &render_frame_host));
   }
 }
 

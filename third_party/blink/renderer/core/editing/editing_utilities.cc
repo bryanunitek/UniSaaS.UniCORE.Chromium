@@ -100,6 +100,7 @@
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/unicode.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 #include "ui/base/clipboard/clipboard_constants.h"
 
 namespace blink {
@@ -435,9 +436,7 @@ static PositionTemplate<Strategy> NextVisuallyDistinctCandidateAlgorithm(
   // Only skip non-editable content when explicitly requested via
   // kCanSkipOverEditingBoundary (used for caret navigation).
   const bool skip_non_editable =
-      rule == kCanSkipOverEditingBoundary &&
-      RuntimeEnabledFeatures::SkipNonEditableInAtomicMoveEnabled() &&
-      IsEditablePosition(position);
+      rule == kCanSkipOverEditingBoundary && IsEditablePosition(position);
   const EditingBoundaryCrossingRule boundary_rule =
       skip_non_editable ? kCanCrossEditingBoundary : rule;
   const PositionTemplate<Strategy> downstream_start =
@@ -530,9 +529,7 @@ PositionTemplate<Strategy> PreviousVisuallyDistinctCandidateAlgorithm(
   // Only skip non-editable content when explicitly requested via
   // kCanSkipOverEditingBoundary (used for caret navigation).
   const bool skip_non_editable =
-      rule == kCanSkipOverEditingBoundary &&
-      RuntimeEnabledFeatures::SkipNonEditableInAtomicMoveEnabled() &&
-      IsEditablePosition(position);
+      rule == kCanSkipOverEditingBoundary && IsEditablePosition(position);
   const EditingBoundaryCrossingRule boundary_rule =
       skip_non_editable ? kCanCrossEditingBoundary : rule;
   const PositionTemplate<Strategy> downstream_start =
@@ -716,12 +713,12 @@ PositionInFlatTree LastEditablePositionBeforePositionInRoot(
 }
 
 template <typename StateMachine>
-int FindNextBoundaryOffset(const String& str, int current) {
+wtf_size_t FindNextBoundaryOffset(const String& str, wtf_size_t current) {
   StateMachine machine;
   TextSegmentationMachineState state = TextSegmentationMachineState::kInvalid;
 
-  for (int i = current - 1; i >= 0; --i) {
-    state = machine.FeedPrecedingCodeUnit(str[i]);
+  for (wtf_size_t i = current; i > 0; --i) {
+    state = machine.FeedPrecedingCodeUnit(str[i - 1]);
     if (state != TextSegmentationMachineState::kNeedMoreCodeUnit)
       break;
   }
@@ -729,9 +726,9 @@ int FindNextBoundaryOffset(const String& str, int current) {
     state = machine.TellEndOfPrecedingText();
   if (state == TextSegmentationMachineState::kFinished)
     return current + machine.FinalizeAndGetBoundaryOffset();
-  const int length = str.length();
+  const wtf_size_t length = str.length();
   DCHECK_EQ(TextSegmentationMachineState::kNeedFollowingCodeUnit, state);
-  for (int i = current; i < length; ++i) {
+  for (wtf_size_t i = current; i < length; ++i) {
     state = machine.FeedFollowingCodeUnit(str[i]);
     if (state != TextSegmentationMachineState::kNeedMoreCodeUnit)
       break;
@@ -740,29 +737,29 @@ int FindNextBoundaryOffset(const String& str, int current) {
 }
 
 // Explicit instantiation to avoid link error for the usage in EditContext.
-template int FindNextBoundaryOffset<BackwardGraphemeBoundaryStateMachine>(
+template wtf_size_t FindNextBoundaryOffset<
+    BackwardGraphemeBoundaryStateMachine>(const String& str,
+                                          wtf_size_t current);
+template wtf_size_t FindNextBoundaryOffset<ForwardGraphemeBoundaryStateMachine>(
     const String& str,
-    int current);
-template int FindNextBoundaryOffset<ForwardGraphemeBoundaryStateMachine>(
-    const String& str,
-    int current);
+    wtf_size_t current);
 
-int PreviousGraphemeBoundaryOf(const Node& node, int current) {
+wtf_size_t PreviousGraphemeBoundaryOf(const Node& node, wtf_size_t current) {
   // TODO(yosin): Need to support grapheme crossing |Node| boundary.
-  DCHECK_GE(current, 0);
   auto* text_node = DynamicTo<Text>(node);
   if (current <= 1 || !text_node)
     return current - 1;
   const String& text = text_node->data();
   // TODO(yosin): Replace with DCHECK for out-of-range request.
-  if (static_cast<unsigned>(current) > text.length())
+  if (current > text.length()) {
     return current - 1;
+  }
   return FindNextBoundaryOffset<BackwardGraphemeBoundaryStateMachine>(text,
                                                                       current);
 }
 
-static int PreviousBackwardDeletionOffsetOf(const Node& node, int current) {
-  DCHECK_GE(current, 0);
+static wtf_size_t PreviousBackwardDeletionOffsetOf(const Node& node,
+                                                   wtf_size_t current) {
   if (current <= 1)
     return 0;
   auto* text_node = DynamicTo<Text>(node);
@@ -770,17 +767,17 @@ static int PreviousBackwardDeletionOffsetOf(const Node& node, int current) {
     return current - 1;
 
   const String& text = text_node->data();
-  DCHECK_LT(static_cast<unsigned>(current - 1), text.length());
+  DCHECK_LT(current - 1, text.length());
   return FindNextBoundaryOffset<BackspaceStateMachine>(text, current);
 }
 
-int NextGraphemeBoundaryOf(const Node& node, int current) {
+wtf_size_t NextGraphemeBoundaryOf(const Node& node, wtf_size_t current) {
   // TODO(yosin): Need to support grapheme crossing |Node| boundary.
   auto* text_node = DynamicTo<Text>(node);
   if (!text_node)
     return current + 1;
   const String& text = text_node->data();
-  const int length = text.length();
+  const wtf_size_t length = text.length();
   DCHECK_LE(current, length);
   if (current >= length - 1)
     return current + 1;
@@ -846,6 +843,28 @@ PositionInFlatTree PreviousPositionOf(const PositionInFlatTree& position,
                                                                 move_type);
 }
 
+SelectionInDomTree NarrowSelectionToBackwardDeletionUnit(
+    const SelectionInDomTree& selection) {
+  if (!selection.IsRange()) {
+    return selection;
+  }
+  const Position& anchor = selection.Anchor();
+  const Position& focus = selection.Focus();
+  if (anchor.ComputeContainerNode() != focus.ComputeContainerNode()) {
+    return selection;
+  }
+  if (anchor.ComputeOffsetInContainerNode() -
+          focus.ComputeOffsetInContainerNode() <=
+      1) {
+    return selection;
+  }
+  const Position& end = selection.ComputeEndPosition();
+  return SelectionInDomTree::Builder()
+      .SetAsBackwardSelection(EphemeralRange(
+          PreviousPositionOf(end, PositionMoveType::kBackwardDeletion), end))
+      .Build();
+}
+
 template <typename Strategy>
 PositionTemplate<Strategy> NextPositionOfAlgorithm(
     const PositionTemplate<Strategy>& position,
@@ -857,7 +876,7 @@ PositionTemplate<Strategy> NextPositionOfAlgorithm(
   if (!node)
     return position;
 
-  const int offset = position.ComputeEditingOffset();
+  const wtf_size_t offset = position.ComputeEditingOffset();
 
   if (Node* child = Strategy::ChildAt(*node, offset)) {
     return PositionTemplate<Strategy>::FirstPositionInOrBeforeNode(*child);
@@ -959,7 +978,7 @@ TextDirection DirectionOfEnclosingBlockOfAlgorithm(
   if (!enclosing_block_element)
     return TextDirection::kLtr;
   LayoutObject* layout_object = enclosing_block_element->GetLayoutObject();
-  return layout_object ? layout_object->StyleRef().Direction()
+  return layout_object ? layout_object->Style().Direction()
                        : TextDirection::kLtr;
 }
 
@@ -976,7 +995,7 @@ TextDirection PrimaryDirectionOf(const Node& node) {
   TextDirection primary_direction = TextDirection::kLtr;
   for (const LayoutObject* r = node.GetLayoutObject(); r; r = r->Parent()) {
     if (r->IsLayoutBlockFlow()) {
-      primary_direction = r->StyleRef().Direction();
+      primary_direction = r->Style().Direction();
       break;
     }
   }
@@ -990,8 +1009,8 @@ const ComputedStyle* GetComputedStyleForElementOrLayoutObject(
     return element->GetComputedStyle();
   }
   // Text nodes and Document.
-  if (LayoutObject* layout_object = node.GetLayoutObject()) {
-    return layout_object->Style();
+  if (const LayoutObject* layout_object = node.GetLayoutObject()) {
+    return &layout_object->Style();
   }
   return nullptr;
 }
@@ -999,7 +1018,7 @@ const ComputedStyle* GetComputedStyleForElementOrLayoutObject(
 String StringWithRebalancedWhitespace(const StringView& string,
                                       bool start_is_start_of_paragraph,
                                       bool should_emit_nbs_pbefore_end) {
-  unsigned length = string.length();
+  wtf_size_t length = string.length();
 
   StringBuilder rebalanced_string;
   rebalanced_string.ReserveCapacity(length);
@@ -1017,11 +1036,12 @@ String StringWithRebalancedWhitespace(const StringView& string,
   return rebalanced_string.ToString();
 }
 
-String RepeatString(const String& string, unsigned count) {
+String RepeatString(const String& string, wtf_size_t count) {
   StringBuilder builder;
   builder.ReserveCapacity(string.length() * count);
-  for (unsigned counter = 0; counter < count; ++counter)
+  for (wtf_size_t counter = 0; counter < count; ++counter) {
     builder.Append(string);
+  }
   return builder.ToString();
 }
 
@@ -1383,14 +1403,18 @@ PositionWithAffinity PositionRespectingEditingBoundary(
   if (!target_object)
     return PositionWithAffinity();
 
-  if (RuntimeEnabledFeatures::
+  Element* editable_element = UserSelectContainBoundaryOf(position);
+
+  if ((!editable_element ||
+       !RuntimeEnabledFeatures::
+           NoExtendSelectionToUserSelectNoneOutOfFlowUnlessEditableEnabled()) &&
+      RuntimeEnabledFeatures::
           NoExtendSelectionToUserSelectNoneOutOfFlowEnabled() &&
       !position.IsNull() && !target_object->IsSelectable() &&
       !HaveSameOutOfFlowAncestor(*position.AnchorNode(), *target_node)) {
     return PositionWithAffinity();
   }
 
-  Element* editable_element = UserSelectContainBoundaryOf(position);
   if (!editable_element || editable_element->contains(target_node))
     return hit_test_result.GetPosition();
 
@@ -1401,9 +1425,9 @@ PositionWithAffinity PositionRespectingEditingBoundary(
   // TODO(yosin): Is this kIgnoreTransforms correct here?
   PhysicalOffset selection_end_point = hit_test_result.LocalPoint();
   PhysicalOffset absolute_point = target_object->LocalToAbsolutePoint(
-      selection_end_point, kIgnoreTransforms);
-  selection_end_point =
-      editable_object->AbsoluteToLocalPoint(absolute_point, kIgnoreTransforms);
+      selection_end_point, {MapCoordinatesMode::kIgnoreTransforms});
+  selection_end_point = editable_object->AbsoluteToLocalPoint(
+      absolute_point, {MapCoordinatesMode::kIgnoreTransforms});
   target_object = editable_object;
   // TODO(kojii): Support fragment-based |PositionForPoint|. LayoutObject-based
   // |PositionForPoint| may not work if NG block fragmented.
@@ -1483,8 +1507,7 @@ Position ComputePositionForNodeRemoval(const Position& position,
     case PositionAnchorType::kOffsetInAnchor:
       container_node = position.ComputeContainerNode();
       if (container_node == node.parentNode() &&
-          static_cast<unsigned>(position.OffsetInContainerNode()) >
-              node.NodeIndex()) {
+          position.OffsetInContainerNode() > node.NodeIndex()) {
         return Position(container_node, position.OffsetInContainerNode() - 1);
       }
       if (!container_node ||
@@ -1535,8 +1558,8 @@ bool ElementCannotHaveEndTag(const Node& node) {
 // VisiblePositions.
 // FIXME: Deploy these functions everywhere that TextIterators are used to
 // convert between VisiblePositions and indices.
-int IndexForVisiblePosition(const VisiblePosition& visible_position,
-                            ContainerNode*& scope) {
+wtf_size_t IndexForVisiblePosition(const VisiblePosition& visible_position,
+                                   ContainerNode*& scope) {
   if (visible_position.IsNull())
     return 0;
 
@@ -1853,16 +1876,10 @@ void InsertTextAndSendInputEventsOfTypeInsertReplacementText(
   if (is_canceled) {
     return;
   }
-  if (RuntimeEnabledFeatures::InputEventDataTransferForInsertCmdEnabled()) {
-    frame.GetEditor().InsertTextWithoutSendingTextEvent(
-        replacement, false, nullptr,
-        InputEvent::InputType::kInsertReplacementText,
-        EditCommand::PasswordEchoBehavior::kDoNotEcho, data_transfer);
-  } else {
-    frame.GetEditor().InsertTextWithoutSendingTextEvent(
-        replacement, false, nullptr,
-        InputEvent::InputType::kInsertReplacementText);
-  }
+  frame.GetEditor().InsertTextWithoutSendingTextEvent(
+      replacement, false, nullptr,
+      InputEvent::InputType::kInsertReplacementText,
+      EditCommand::PasswordEchoBehavior::kDoNotEcho, data_transfer);
 }
 
 // |IsEmptyNonEditableNodeInEditable()| is introduced for fixing
@@ -1910,8 +1927,11 @@ static scoped_refptr<Image> ImageFromNode(const Node& node) {
     return nullptr;
 
   if (layout_object->IsCanvas()) {
-    return To<HTMLCanvasElement>(const_cast<Node&>(node))
-        .Snapshot(kFrontBuffer);
+    const auto& canvas = To<HTMLCanvasElement>(node);
+    if (!canvas.OriginClean()) {
+      return nullptr;
+    }
+    return canvas.Snapshot(kFrontBuffer);
   }
 
   if (!layout_object->IsImage())

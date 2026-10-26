@@ -21,7 +21,7 @@ import java.util.Objects;
 /**
  * A class that defines user-agent metadata, it's used to override user-agent client hints.
  *
- * To provide a better experience on using the WebView public API to override user-agent client
+ * <p>To provide a better experience on using the WebView public API to override user-agent client
  * hints API, this class is implemented a little different from the existing blink Chromium
  * UserAgentMetadata. See: third_party/blink/public/common/user_agent/user_agent_metadata.h.
  */
@@ -63,7 +63,7 @@ public class AwUserAgentMetadata {
         String BITNESS = "BITNESS";
         String WOW64 = "WOW64";
         String FORM_FACTORS = "FORM_FACTORS";
-    };
+    }
 
     public static final int BITNESS_DEFAULT = 0;
 
@@ -94,7 +94,7 @@ public class AwUserAgentMetadata {
         String XR = "XR";
         String EINK = "EInk";
         String WATCH = "Watch";
-    };
+    }
 
     // To better manage the data within this class, make the constructor as private to avoid
     // creating instances outside of the class.
@@ -183,7 +183,7 @@ public class AwUserAgentMetadata {
     }
 
     @CalledByNative
-    private @FormFactors String[] getFormFactors() {
+    private @FormFactors @JniType("std::vector<std::string>") String[] getFormFactors() {
         return mFormFactors;
     }
 
@@ -202,7 +202,7 @@ public class AwUserAgentMetadata {
             boolean mobile,
             @JniType("std::string") String bitness,
             boolean wow64,
-            @FormFactors String[] formFactors) {
+            @FormFactors @JniType("std::vector<std::string>") String[] formFactors) {
         AwUserAgentMetadata result = new AwUserAgentMetadata();
         result.mBrandVersionList = new String[brandVersionList.length][BRAND_VERSION_LENGTH];
         for (int i = 0; i < brandVersionList.length; i++) {
@@ -273,16 +273,16 @@ public class AwUserAgentMetadata {
      * Return an instance based on the provided override user-agent metadata map and the default
      * user-agent metadata settings.
      *
-     * Here we only validate some basic requirements for the input, we need to do more strictly
+     * <p>Here we only validate some basic requirements for the input, we need to do more strictly
      * validation on Android public API, like check whether brand full version either all empty or
      * all non-empty. Return a boolean indicate whether it needs to update the user-agent metadata.
      *
      * @param uaMetadataMap an object represent what users intend to override user-agent metadata
-     *         setting.
+     *     setting.
      * @param defaultData an object represent system default user-agent metadata.
      * @return For system default override settings, we maintain a shallow copy instance of
-     *         AwUserAgentMetadata, while for outside override settings(e.g brand version array)
-     *         we will deep copy them when constructing a new instance of AwUserAgentMetadata.
+     *     AwUserAgentMetadata, while for outside override settings(e.g brand version array) we will
+     *     deep copy them when constructing a new instance of AwUserAgentMetadata.
      */
     public static AwUserAgentMetadata fromMap(
             Map<String, Object> uaMetadataMap, @NonNull AwUserAgentMetadata defaultData) {

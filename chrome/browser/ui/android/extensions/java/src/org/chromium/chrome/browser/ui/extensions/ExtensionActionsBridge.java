@@ -5,7 +5,10 @@
 package org.chromium.chrome.browser.ui.extensions;
 
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniPtr;
 import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.JniUniquePtr;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.lifetime.Destroyable;
@@ -14,43 +17,34 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask.NativeBrowserWindowInterface;
 
 /** A JNI bridge to interact with extension actions for the toolbar. */
 @NullMarked
 @JNINamespace("extensions")
 public class ExtensionActionsBridge implements Destroyable {
+    @JniType("::extensions::ExtensionActionsBridge")
+    interface NativeExtensionActionsBridge extends JniTypeToken {}
+
     private final @Nullable LifetimeAssert mLifetimeAssert = LifetimeAssert.create(this);
-    private long mNativeExtensionActionsBridge;
+    private final JniUniquePtr<NativeExtensionActionsBridge> mNative;
 
     public ExtensionActionsBridge(ChromeAndroidTask task, Profile profile) {
-        mNativeExtensionActionsBridge =
+        mNative =
                 ExtensionActionsBridgeJni.get()
-                        .init(this, task.getOrCreateNativeBrowserWindowPtr(profile));
+                        .init(this, task.getOrCreateNativeBrowserWindow(profile));
     }
 
     @Override
     public void destroy() {
-        assert mNativeExtensionActionsBridge != 0;
-        ExtensionActionsBridgeJni.get().destroy(mNativeExtensionActionsBridge);
-        mNativeExtensionActionsBridge = 0;
+        mNative.destroy();
         LifetimeAssert.destroy(mLifetimeAssert);
     }
 
-    /**
-     * Returns whether the extensions are disabled on the profile for Desktop Android. This is
-     * temporary for until extensions are ready for dogfooding. TODO(crbug.com/422307625): Remove
-     * this check once extensions are ready for dogfooding.
-     */
-    public static boolean extensionsEnabled(Profile profile) {
-        return ExtensionActionsBridgeJni.get().extensionsEnabled(profile);
-    }
-
     @NativeMethods
-    public interface Natives {
-        boolean extensionsEnabled(@JniType("Profile*") Profile profile);
+    interface Natives {
 
-        long init(ExtensionActionsBridge bridge, long browserWindowInterfacePtr);
-
-        void destroy(long nativeExtensionActionsBridge);
+        JniUniquePtr<NativeExtensionActionsBridge> init(
+                ExtensionActionsBridge bridge, JniPtr<NativeBrowserWindowInterface> browserWindow);
     }
 }

@@ -17,6 +17,17 @@ const char kCameraSettingsToggledOff[] =
     "MobileGeminiCameraSettingsGeminiCameraPermissionToggledOff";
 const char kCameraSettingsToggleHistogram[] =
     "IOS.Gemini.Camera.Settings.GeminiCameraPermissionToggled";
+const char kSuggestionsSettingsClose[] = "MobileGeminiSuggestionsSettingsClose";
+const char kSuggestionsSettingsBack[] = "MobileGeminiSuggestionsSettingsBack";
+const char kSuggestionsSettingsToggledOn[] =
+    "MobileGeminiSuggestionsSettingsSuggestionsToggledOn";
+const char kSuggestionsSettingsToggledOff[] =
+    "MobileGeminiSuggestionsSettingsSuggestionsToggledOff";
+const char kSuggestionsSettingsToggleHistogram[] =
+    "IOS.Gemini.Suggestions.Settings.SuggestionsToggled";
+const char kUsageLimitsAction[] = "Settings.GeminiSettings.GeminiUsageLimits";
+const char kItemShownHistogram[] = "IOS.Gemini.DynamicSettings.ItemShown";
+const char kItemUsedHistogram[] = "IOS.Gemini.DynamicSettings.ItemUsed";
 }  // namespace
 
 class GeminiSettingsMetricsTest : public PlatformTest {
@@ -24,6 +35,25 @@ class GeminiSettingsMetricsTest : public PlatformTest {
   base::HistogramTester histogram_tester_;
   base::UserActionTester user_action_tester_;
 };
+
+TEST_F(GeminiSettingsMetricsTest, RecordGeminiSettingsUsageLimits) {
+  RecordGeminiSettingsUsageLimits();
+  EXPECT_EQ(1, user_action_tester_.GetActionCount(kUsageLimitsAction));
+}
+
+TEST_F(GeminiSettingsMetricsTest, RecordGeminiSettingsItemShown) {
+  RecordGeminiSettingsItemShown(IOSGeminiSettingsItem::kUsageLimits);
+  histogram_tester_.ExpectUniqueSample(
+      kItemShownHistogram,
+      static_cast<int>(IOSGeminiSettingsItem::kUsageLimits), 1);
+}
+
+TEST_F(GeminiSettingsMetricsTest, RecordGeminiSettingsItemUsed) {
+  RecordGeminiSettingsItemUsed(IOSGeminiSettingsItem::kUsageLimits);
+  histogram_tester_.ExpectUniqueSample(
+      kItemUsedHistogram, static_cast<int>(IOSGeminiSettingsItem::kUsageLimits),
+      1);
+}
 
 TEST_F(GeminiSettingsMetricsTest, RecordGeminiCameraSettingsClose) {
   RecordGeminiCameraSettingsClose();
@@ -45,4 +75,32 @@ TEST_F(GeminiSettingsMetricsTest, RecordGeminiCameraSettingsToggled) {
   histogram_tester_.ExpectBucketCount(kCameraSettingsToggleHistogram, false, 1);
   EXPECT_EQ(1, user_action_tester_.GetActionCount(kCameraSettingsToggledOn));
   EXPECT_EQ(1, user_action_tester_.GetActionCount(kCameraSettingsToggledOff));
+}
+
+TEST_F(GeminiSettingsMetricsTest, RecordGeminiSuggestionsSettingsClose) {
+  RecordGeminiSuggestionsSettingsClose();
+  EXPECT_EQ(1, user_action_tester_.GetActionCount(kSuggestionsSettingsClose));
+}
+
+TEST_F(GeminiSettingsMetricsTest, RecordGeminiSuggestionsSettingsBack) {
+  RecordGeminiSuggestionsSettingsBack();
+  EXPECT_EQ(1, user_action_tester_.GetActionCount(kSuggestionsSettingsBack));
+}
+
+TEST_F(GeminiSettingsMetricsTest, RecordGeminiSuggestionsSettingsToggled) {
+  RecordGeminiSuggestionsSettingsToggled(YES);
+  histogram_tester_.ExpectUniqueSample(kSuggestionsSettingsToggleHistogram,
+                                       true, 1);
+  EXPECT_EQ(1,
+            user_action_tester_.GetActionCount(kSuggestionsSettingsToggledOn));
+  EXPECT_EQ(0,
+            user_action_tester_.GetActionCount(kSuggestionsSettingsToggledOff));
+
+  RecordGeminiSuggestionsSettingsToggled(NO);
+  histogram_tester_.ExpectBucketCount(kSuggestionsSettingsToggleHistogram,
+                                      false, 1);
+  EXPECT_EQ(1,
+            user_action_tester_.GetActionCount(kSuggestionsSettingsToggledOn));
+  EXPECT_EQ(1,
+            user_action_tester_.GetActionCount(kSuggestionsSettingsToggledOff));
 }

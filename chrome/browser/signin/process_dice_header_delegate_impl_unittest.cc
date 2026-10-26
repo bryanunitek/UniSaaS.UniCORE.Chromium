@@ -17,6 +17,7 @@
 #include "chrome/browser/signin/dice_web_signin_interceptor_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/webui/signin/signin_ui_error.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
@@ -26,7 +27,6 @@
 #include "components/signin/public/base/signin_prefs.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
-#include "components/sync/base/features.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/navigation_simulator.h"
 #include "google_apis/gaia/core_account_id.h"
@@ -79,7 +79,7 @@ class TestDiceWebSigninInterceptorDelegate
   }
 
   void ShowFirstRunExperienceInNewProfile(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       const CoreAccountId& account_id,
       WebSigninInterceptor::SigninInterceptionType interception_type) override {
   }
@@ -103,7 +103,8 @@ class MockDiceWebSigninInterceptor : public DiceWebSigninInterceptor {
                CoreAccountId account_id,
                signin_metrics::AccessPoint access_point,
                bool is_new_account,
-               bool is_sync_signin),
+               bool is_chrome_signin,
+               signin::Tribool primary_is_connected),
               (override));
 
  private:
@@ -121,7 +122,8 @@ class ProcessDiceHeaderDelegateImplTest
  public:
   ProcessDiceHeaderDelegateImplTest()
       : email_("foo@bar.com"),
-        auth_error_(GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS) {
+        auth_error_(GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+            GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN)) {
     account_info_.gaia = GaiaId("12345");
     account_info_.account_id = CoreAccountId::FromGaiaId(account_info_.gaia);
     account_info_.email = "email@gmail.com";
@@ -129,17 +131,18 @@ class ProcessDiceHeaderDelegateImplTest
 
   ~ProcessDiceHeaderDelegateImplTest() override = default;
 
-  void AddAccount(bool is_primary) {
+  void AddAccount(const std::string& email,
+                  bool is_primary,
+                  const GaiaId& gaia_id = GaiaId()) {
     if (!identity_test_environment_profile_adaptor_) {
       InitializeIdentityTestEnvironment();
     }
+    signin::SimpleAccountAvailabilityOptions options{.gaia_id = gaia_id};
     if (is_primary) {
-      identity_test_environment_profile_adaptor_->identity_test_env()
-          ->SetPrimaryAccount(email_, signin::ConsentLevel::kSignin);
-    } else {
-      identity_test_environment_profile_adaptor_->identity_test_env()
-          ->MakeAccountAvailable(email_);
+      options.primary_account_consent_level = signin::ConsentLevel::kSignin;
     }
+    identity_test_environment_profile_adaptor_->identity_test_env()
+        ->MakeAccountAvailable(email, options);
   }
 
   void InitializeIdentityTestEnvironment() {
@@ -151,7 +154,7 @@ class ProcessDiceHeaderDelegateImplTest
   // Creates a ProcessDiceHeaderDelegateImpl instance.
   std::unique_ptr<ProcessDiceHeaderDelegateImpl>
   CreateDelegateAndNavigateToSignin(
-      bool is_sync_signin_tab,
+      bool is_chrome_signin_tab,
       const GURL& redirect_url,
       Reason reason = Reason::kSigninPrimaryAccount,
       signin_metrics::AccessPoint access_point = kTestAccessPoint) {
@@ -164,7 +167,7 @@ class ProcessDiceHeaderDelegateImplTest
         content::NavigationSimulator::CreateRendererInitiated(signin_url_,
                                                               main_rfh());
     simulator->Start();
-    if (is_sync_signin_tab) {
+    if (is_chrome_signin_tab) {
       DiceTabHelper::CreateForWebContents(web_contents());
       DiceTabHelper* dice_tab_helper =
           DiceTabHelper::FromWebContents(web_contents());
@@ -172,9 +175,6 @@ class ProcessDiceHeaderDelegateImplTest
           signin_url_, access_point, signin_reason_, kTestPromoAction,
           redirect_url,
           /*record_signin_started_metrics=*/true,
-          base::BindRepeating(
-              &ProcessDiceHeaderDelegateImplTest::StartSyncCallback,
-              base::Unretained(this)),
           base::BindRepeating(
               &ProcessDiceHeaderDelegateImplTest::OnHistorySyncOptinStarted,
               base::Unretained(this)),
@@ -188,15 +188,14 @@ class ProcessDiceHeaderDelegateImplTest
     simulator->Commit();
     DCHECK_EQ(signin_url_, web_contents()->GetVisibleURL());
 
-    if (is_sync_signin_tab) {
+    if (is_chrome_signin_tab) {
       return ProcessDiceHeaderDelegateImpl::Create(web_contents());
     } else {
       // Use the constructor rather than the `Create()` method, to specify the
       // error callback.
       return std::make_unique<ProcessDiceHeaderDelegateImpl>(
-          web_contents(), /*is_sync_signin_tab=*/false,
-          signin_metrics::AccessPoint::kWebSignin, kTestPromoAction, GURL(),
-          ProcessDiceHeaderDelegateImpl::EnableSyncCallback(),
+          web_contents(), /*is_chrome_signin_tab=*/false,
+          signin_metrics::AccessPoint::kWebSignin, GURL(),
           ProcessDiceHeaderDelegateImpl::EnableHistorySyncOptinCallback(),
           base::BindRepeating(
               &ProcessDiceHeaderDelegateImplTest::OnSigninHeaderReceived,
@@ -219,20 +218,6 @@ class ProcessDiceHeaderDelegateImplTest
   void TearDown() override {
     identity_test_environment_profile_adaptor_.reset();
     ChromeRenderViewHostTestHarness::TearDown();
-  }
-
-  // Callback for the ProcessDiceHeaderDelegateImpl.
-  void StartSyncCallback(Profile* profile,
-                         signin_metrics::AccessPoint access_point,
-                         signin_metrics::PromoAction promo_action,
-                         content::WebContents* contents,
-                         const CoreAccountInfo& account_info) {
-    EXPECT_EQ(profile, this->profile());
-    EXPECT_EQ(access_point, kTestAccessPoint);
-    EXPECT_EQ(promo_action, kTestPromoAction);
-    EXPECT_EQ(web_contents(), contents);
-    EXPECT_EQ(account_info_, account_info);
-    enable_sync_called_ = true;
   }
 
   void OnSigninHeaderReceived() { signin_header_received_ = true; }
@@ -268,7 +253,6 @@ class ProcessDiceHeaderDelegateImplTest
       identity_test_environment_profile_adaptor_;
 
   const GURL signin_url_ = GURL("https://accounts.google.com");
-  bool enable_sync_called_ = false;
   bool signin_header_received_ = false;
   bool show_error_called_ = false;
   bool history_sync_optin_started_ = false;
@@ -278,11 +262,12 @@ class ProcessDiceHeaderDelegateImplTest
   Reason signin_reason_ = Reason::kSigninPrimaryAccount;
 };
 
-// Check that sync is enabled if the tab is closed during signin.
+// Check that history sync opt-in is started if the tab is closed during signin.
 TEST_F(ProcessDiceHeaderDelegateImplTest,
        CloseTabWhileCompletingProfileSignIn) {
+  AddAccount(account_info_.email, /*is_primary=*/false, account_info_.gaia);
   std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
-      CreateDelegateAndNavigateToSignin(/*is_sync_signin_tab=*/true,
+      CreateDelegateAndNavigateToSignin(/*is_chrome_signin_tab=*/true,
                                         /*redirect_url=*/GURL());
 
   // Close the tab.
@@ -290,21 +275,15 @@ TEST_F(ProcessDiceHeaderDelegateImplTest,
 
   // Check expectations.
   delegate->CompleteChromeSignInAfterGaiaSignin(account_info_);
-  EXPECT_NE(enable_sync_called_,
-            syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
-  EXPECT_EQ(history_sync_optin_started_,
-            syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
+  EXPECT_TRUE(history_sync_optin_started_);
   EXPECT_FALSE(show_error_called_);
 }
 
 TEST_F(ProcessDiceHeaderDelegateImplTest,
        UnsupportedAccessPointForHistorySync) {
-  base::test::ScopedFeatureList scoped_feature_list_{
-      syncer::kReplaceSyncPromosWithSignInPromos};
-
   std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
       CreateDelegateAndNavigateToSignin(
-          /*is_sync_signin_tab=*/true,
+          /*is_chrome_signin_tab=*/true,
           /*redirect_url=*/GURL(), Reason::kSigninPrimaryAccount,
           signin_metrics::AccessPoint::kBookmarkBubble);
 
@@ -317,11 +296,58 @@ TEST_F(ProcessDiceHeaderDelegateImplTest,
   EXPECT_FALSE(show_error_called_);
 }
 
+// Regression test for https://crbug.com/552764207: a concurrent sign-in flow
+// may make a different account primary while this Gaia flow is in progress. As
+// the history sync opt-in applies to the primary account, it must not be
+// offered for the account of the Gaia header.
+TEST_F(ProcessDiceHeaderDelegateImplTest,
+       EnableSyncHeaderForNonPrimaryAccount) {
+  base::HistogramTester histogram_tester;
+
+  // Another account than `account_info_` is the primary account.
+  AddAccount(email_, /*is_primary=*/true);
+
+  const GURL& kNtpUrl = chrome::ChromeUINewTabURLAsGURL();
+  std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
+      CreateDelegateAndNavigateToSignin(/*is_chrome_signin_tab=*/true,
+                                        /*redirect_url=*/kNtpUrl);
+
+  delegate->CompleteChromeSignInAfterGaiaSignin(account_info_);
+
+  EXPECT_FALSE(history_sync_optin_started_);
+  EXPECT_FALSE(show_error_called_);
+  // The flow did not succeed, there is no redirect.
+  EXPECT_EQ(signin_url_, web_contents()->GetVisibleURL());
+  histogram_tester.ExpectUniqueSample(
+      "Signin.EnableSyncHeader.AccountMatchesPrimaryAccount", false, 1);
+}
+
+// The history sync opt-in is offered when the account of the Gaia header is
+// the primary account.
+TEST_F(ProcessDiceHeaderDelegateImplTest, EnableSyncHeaderForPrimaryAccount) {
+  base::HistogramTester histogram_tester;
+
+  AddAccount(account_info_.email, /*is_primary=*/true, account_info_.gaia);
+
+  const GURL& kNtpUrl = chrome::ChromeUINewTabURLAsGURL();
+  std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
+      CreateDelegateAndNavigateToSignin(/*is_chrome_signin_tab=*/true,
+                                        /*redirect_url=*/kNtpUrl);
+
+  delegate->CompleteChromeSignInAfterGaiaSignin(account_info_);
+
+  EXPECT_TRUE(history_sync_optin_started_);
+  EXPECT_FALSE(show_error_called_);
+  EXPECT_EQ(kNtpUrl, web_contents()->GetVisibleURL());
+  histogram_tester.ExpectUniqueSample(
+      "Signin.EnableSyncHeader.AccountMatchesPrimaryAccount", true, 1);
+}
+
 // Check that the error is still shown if the tab is closed before the error is
 // received.
 TEST_F(ProcessDiceHeaderDelegateImplTest, CloseTabWhileFailingSignin) {
   std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
-      CreateDelegateAndNavigateToSignin(/*is_sync_signin_tab=*/true,
+      CreateDelegateAndNavigateToSignin(/*is_chrome_signin_tab=*/true,
                                         /*redirect_url=*/GURL());
 
   // Close the tab.
@@ -329,20 +355,18 @@ TEST_F(ProcessDiceHeaderDelegateImplTest, CloseTabWhileFailingSignin) {
 
   // Check expectations.
   delegate->HandleTokenExchangeFailure(email_, auth_error_);
-  EXPECT_FALSE(enable_sync_called_);
+  EXPECT_FALSE(history_sync_optin_started_);
   EXPECT_TRUE(show_error_called_);
 }
 
 // Tests that there is no redirect when `redirect_url` is empty.
 TEST_F(ProcessDiceHeaderDelegateImplTest, NoRedirect) {
+  AddAccount(account_info_.email, /*is_primary=*/false, account_info_.gaia);
   std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
-      CreateDelegateAndNavigateToSignin(/*is_sync_signin_tab=*/true,
+      CreateDelegateAndNavigateToSignin(/*is_chrome_signin_tab=*/true,
                                         /*redirect_url=*/GURL());
   delegate->CompleteChromeSignInAfterGaiaSignin(account_info_);
-  EXPECT_NE(enable_sync_called_,
-            syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
-  EXPECT_EQ(history_sync_optin_started_,
-            syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
+  EXPECT_TRUE(history_sync_optin_started_);
 
   // There was no redirect.
   EXPECT_EQ(signin_url_, web_contents()->GetVisibleURL());
@@ -351,30 +375,27 @@ TEST_F(ProcessDiceHeaderDelegateImplTest, NoRedirect) {
   DiceTabHelper* dice_tab_helper =
       DiceTabHelper::FromWebContents(web_contents());
   ASSERT_TRUE(dice_tab_helper);
-  EXPECT_FALSE(dice_tab_helper->IsSyncSigninInProgress());
+  EXPECT_FALSE(dice_tab_helper->IsChromeSigninInProgress());
 }
 
 // Check that a Dice header can still be processed in a reused tab.
 // Regression test for https://crbug.com/40069069
 TEST_F(ProcessDiceHeaderDelegateImplTest, TabReuse) {
+  AddAccount(account_info_.email, /*is_primary=*/false, account_info_.gaia);
   // Complete a first signin flow.
   std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
-      CreateDelegateAndNavigateToSignin(/*is_sync_signin_tab=*/true,
+      CreateDelegateAndNavigateToSignin(/*is_chrome_signin_tab=*/true,
                                         /*redirect_url=*/GURL());
   delegate->CompleteChromeSignInAfterGaiaSignin(account_info_);
-  EXPECT_NE(enable_sync_called_,
-            syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
-  EXPECT_EQ(history_sync_optin_started_,
-            syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
+  EXPECT_TRUE(history_sync_optin_started_);
   EXPECT_FALSE(show_error_called_);
 
   // Receive another Dice header in the same tab.
-  enable_sync_called_ = false;
   history_sync_optin_started_ = false;
   ProcessDiceHeaderDelegateImpl::Create(web_contents());
-  // Calling `EnableSync()` does nothing because the tab has already been used.
+  // Calling `CompleteChromeSignInAfterGaiaSignin()` does nothing because the
+  // tab has already been used.
   delegate->CompleteChromeSignInAfterGaiaSignin(account_info_);
-  EXPECT_FALSE(enable_sync_called_);
   EXPECT_FALSE(history_sync_optin_started_);
   EXPECT_FALSE(show_error_called_);
 }
@@ -382,7 +403,7 @@ TEST_F(ProcessDiceHeaderDelegateImplTest, TabReuse) {
 TEST_F(ProcessDiceHeaderDelegateImplTest, SigninHeaderReceived) {
   // Complete a first signin flow.
   std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
-      CreateDelegateAndNavigateToSignin(/*is_sync_signin_tab=*/true,
+      CreateDelegateAndNavigateToSignin(/*is_chrome_signin_tab=*/true,
                                         /*redirect_url=*/GURL());
   ASSERT_FALSE(signin_header_received_);
 
@@ -402,7 +423,7 @@ TEST_F(ProcessDiceHeaderDelegateImplTest, SigninHeaderReceived) {
 TEST_F(ProcessDiceHeaderDelegateImplTest, SigninHeaderReceived_SyncingTabOff) {
   // Complete a first signin flow.
   std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
-      CreateDelegateAndNavigateToSignin(/*is_sync_signin_tab=*/false,
+      CreateDelegateAndNavigateToSignin(/*is_chrome_signin_tab=*/false,
                                         /*redirect_url=*/GURL());
   ASSERT_FALSE(signin_header_received_);
 
@@ -428,11 +449,13 @@ TEST_F(ProcessDiceHeaderDelegateImplTest, AttemptChromeSigninChoiceRemembered) {
       account_info_.gaia, ChromeSigninUserChoice::kSignin);
 
   std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
-      CreateDelegateAndNavigateToSignin(/*is_sync_signin_tab=*/false,
+      CreateDelegateAndNavigateToSignin(/*is_chrome_signin_tab=*/false,
                                         /*redirect_url=*/GURL());
 
-  delegate->HandleTokenExchangeSuccess(account_info_.account_id,
-                                       /*is_new_account=*/true);
+  delegate->HandleTokenExchangeSuccess(
+      account_info_.account_id,
+      /*is_new_account=*/true,
+      /*primary_is_connected=*/signin::Tribool::kUnknown);
 
   histogram_tester.ExpectUniqueSample(
       "Signin.SignIn.Offered",
@@ -459,8 +482,9 @@ TestConfiguration kEnableSyncTestCases[] = {
     {  false,      false,       false,            false},
     {  false,      true,        true,             true},
     {  true,       false,       false,            false},
-    // If the user is already syncing, the callback is called, but the flow
-    // aborts before actually showing the dialog.
+    // The user is already signed in with the account of the Gaia header: the
+    // primary account is not set again, and the history sync opt-in is still
+    // offered.
     {  true,       true,        true,             true},
     // clang-format on
 };
@@ -468,17 +492,12 @@ TestConfiguration kEnableSyncTestCases[] = {
 // Parameterized version of ProcessDiceHeaderDelegateImplTest.
 class ProcessDiceHeaderDelegateImplTestEnableSync
     : public ProcessDiceHeaderDelegateImplTest,
-      public ::testing::WithParamInterface<TestConfiguration> {
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{
-      syncer::kReplaceSyncPromosWithSignInPromos};
-};
+      public ::testing::WithParamInterface<TestConfiguration> {};
 
-// Test the EnableSync() method in all configurations.
+// Test the CompleteChromeSignInAfterGaiaSignin() method in all configurations.
 TEST_P(ProcessDiceHeaderDelegateImplTestEnableSync, EnableSync) {
-  if (GetParam().signed_in) {
-    AddAccount(/*is_primary=*/true);
-  }
+  AddAccount(account_info_.email, /*is_primary=*/GetParam().signed_in,
+             account_info_.gaia);
   const GURL& kNtpUrl = chrome::ChromeUINewTabURLAsGURL();
   std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
       CreateDelegateAndNavigateToSignin(GetParam().signin_tab,
@@ -486,7 +505,6 @@ TEST_P(ProcessDiceHeaderDelegateImplTestEnableSync, EnableSync) {
   delegate->CompleteChromeSignInAfterGaiaSignin(account_info_);
 
   EXPECT_EQ(GetParam().callback_called, history_sync_optin_started_);
-  EXPECT_FALSE(enable_sync_called_);
 
   GURL expected_url = GetParam().show_ntp ? kNtpUrl : signin_url_;
   EXPECT_EQ(expected_url, web_contents()->GetVisibleURL());
@@ -496,7 +514,7 @@ TEST_P(ProcessDiceHeaderDelegateImplTestEnableSync, EnableSync) {
     DiceTabHelper* dice_tab_helper =
         DiceTabHelper::FromWebContents(web_contents());
     ASSERT_TRUE(dice_tab_helper);
-    EXPECT_FALSE(dice_tab_helper->IsSyncSigninInProgress());
+    EXPECT_FALSE(dice_tab_helper->IsChromeSigninInProgress());
   }
 }
 
@@ -517,24 +535,20 @@ TestConfiguration kHandleTokenExchangeFailureTestCases[] = {
 // Parameterized version of ProcessDiceHeaderDelegateImplTest.
 class ProcessDiceHeaderDelegateImplTestHandleTokenExchangeFailure
     : public ProcessDiceHeaderDelegateImplTest,
-      public ::testing::WithParamInterface<TestConfiguration> {
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{
-      syncer::kReplaceSyncPromosWithSignInPromos};
-};
+      public ::testing::WithParamInterface<TestConfiguration> {};
 
 // Test the HandleTokenExchangeFailure() method in all configurations.
 TEST_P(ProcessDiceHeaderDelegateImplTestHandleTokenExchangeFailure,
        HandleTokenExchangeFailure) {
   if (GetParam().signed_in) {
-    AddAccount(/*is_primary=*/true);
+    AddAccount(email_, /*is_primary=*/true);
   }
   const GURL& kNtpUrl = chrome::ChromeUINewTabURLAsGURL();
   std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
       CreateDelegateAndNavigateToSignin(GetParam().signin_tab,
                                         /*redirect_url=*/kNtpUrl);
   delegate->HandleTokenExchangeFailure(email_, auth_error_);
-  EXPECT_FALSE(enable_sync_called_);
+  EXPECT_FALSE(history_sync_optin_started_);
   EXPECT_EQ(GetParam().callback_called, show_error_called_);
   GURL expected_url = GetParam().show_ntp ? kNtpUrl : signin_url_;
   EXPECT_EQ(expected_url, web_contents()->GetVisibleURL());
@@ -543,7 +557,7 @@ TEST_P(ProcessDiceHeaderDelegateImplTestHandleTokenExchangeFailure,
     DiceTabHelper* dice_tab_helper =
         DiceTabHelper::FromWebContents(web_contents());
     ASSERT_TRUE(dice_tab_helper);
-    EXPECT_FALSE(dice_tab_helper->IsSyncSigninInProgress());
+    EXPECT_FALSE(dice_tab_helper->IsChromeSigninInProgress());
   }
 }
 
@@ -585,7 +599,7 @@ class ProcessDiceHeaderDelegateImplTestHandleTokenExchangeSuccess
 TEST_P(ProcessDiceHeaderDelegateImplTestHandleTokenExchangeSuccess,
        HandleTokenExchangeSuccess) {
   if (GetParam().is_reauth) {
-    AddAccount(/*is_primary=*/false);
+    AddAccount(email_, /*is_primary=*/false);
   }
   std::unique_ptr<ProcessDiceHeaderDelegateImpl> delegate =
       CreateDelegateAndNavigateToSignin(
@@ -595,11 +609,13 @@ TEST_P(ProcessDiceHeaderDelegateImplTestHandleTokenExchangeSuccess,
 
   EXPECT_CALL(
       *mock_interceptor(),
-      MaybeInterceptWebSignin(web_contents(), account_info_.account_id,
-                              GetParam().access_point, !GetParam().is_reauth,
-                              GetParam().sync_signin));
-  delegate->HandleTokenExchangeSuccess(account_info_.account_id,
-                                       !GetParam().is_reauth);
+      MaybeInterceptWebSignin(
+          web_contents(), account_info_.account_id, GetParam().access_point,
+          !GetParam().is_reauth, GetParam().sync_signin,
+          /*primary_is_connected=*/signin::Tribool::kUnknown));
+  delegate->HandleTokenExchangeSuccess(
+      account_info_.account_id, !GetParam().is_reauth,
+      /*primary_is_connected=*/signin::Tribool::kUnknown);
 
   // Check that the sync signin flow is complete.
   if (GetParam().signin_tab) {
@@ -607,7 +623,7 @@ TEST_P(ProcessDiceHeaderDelegateImplTestHandleTokenExchangeSuccess,
         DiceTabHelper::FromWebContents(web_contents());
     ASSERT_TRUE(dice_tab_helper);
     EXPECT_EQ(GetParam().sync_signin,
-              dice_tab_helper->IsSyncSigninInProgress());
+              dice_tab_helper->IsChromeSigninInProgress());
   }
 }
 

@@ -15,9 +15,12 @@ found in the LICENSE file.
 -->
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
               xmlns:app="http://schemas.android.com/apk/res-auto"
+              xmlns:tools="http://schemas.android.com/tools"
               android:layout_width="match_parent"
               android:layout_height="wrap_content"
-              android:gravity="center_vertical">
+              android:descendantFocusability="afterDescendants"
+              android:gravity="center_vertical"
+              tools:ignore="UnknownId">
     <ViewStub android:id="@+id/menu_item_container_stub"
         android:inflatedId="@+id/menu_item_container"
         android:layout_width="match_parent"
@@ -55,6 +58,6 @@ found in the LICENSE file.
             android:background="?attr/listChoiceBackgroundIndicator"
             android:scaleType="fitCenter"
             android:paddingHorizontal="?attr/listItemIconPadding"
-            android:layout_marginEnd="4dp" />
+            android:layout_marginEnd="?attr/listItemIconPadding" />
     </FrameLayout>
 </RelativeLayout>

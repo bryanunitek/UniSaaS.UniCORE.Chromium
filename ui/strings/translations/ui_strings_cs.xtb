@@ -11,7 +11,6 @@
 <translation id="1253734725326687145">Místo dotyku se přesunulo doprava nahoru. Klepněte sem.</translation>
 <translation id="1266864766717917324">Sdílení obsahu typu <ph name="CONTENT_TYPE" /> se nezdařilo</translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Zkuste text sdílet po menších částech.</translation>
 <translation id="1293699935367580298">Klávesa Esc</translation>
 <translation id="1368832886055348810">Zleva doprava</translation>
 <translation id="1383876407941801731">Vyhledávání</translation>
@@ -38,7 +37,6 @@
 <translation id="1901303067676059328">&amp;Vybrat vše</translation>
 <translation id="19085484004813472">Toto je nová funkce</translation>
 <translation id="2006524834898217237">Zkontrolujte, zda je toto zařízení připojeno k internetu.</translation>
-<translation id="208586643495776849">Zkuste to znovu</translation>
 <translation id="2111134541987263231">Zapněte možnost <ph name="BEGIN_BOLD" />Povolit v anonymním režimu<ph name="END_BOLD" />.</translation>
 <translation id="2141853158323869627">{DAYS,plural, =1{1 d}few{# d}many{# d}other{# d}}</translation>
 <translation id="2148716181193084225">Dnes</translation>
@@ -85,7 +83,6 @@
 <translation id="3306688585798492231">Integrovaný displej</translation>
 <translation id="335581015389089642">Řeč</translation>
 <translation id="3372635229069101468">Klikněte na <ph name="BEGIN_BOLD" />Podrobnosti<ph name="END_BOLD" />.</translation>
-<translation id="3389286852084373014">Text je příliš dlouhý</translation>
 <translation id="3406306243914553062">Obsah ve formátu HTML</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{Zbývá 1 den}few{Zbývají # dny}many{Zbývá # dne}other{Zbývá # dnů}}</translation>
 <translation id="3600969208114796418">Soubor <ph name="SAVEAS_EXTENSION_TYPE" /></translation>
@@ -128,7 +125,6 @@
 <translation id="5046499563572181734">Klepněte sem</translation>
 <translation id="5076340679995252485">Vložit</translation>
 <translation id="520299402983819650"><ph name="QUANTITY" /> PB</translation>
-<translation id="5278860589123563674">Odeslání se nezdařilo</translation>
 <translation id="5283101102242354279">Zapnutí rozšíření v anonymním režimu:</translation>
 <translation id="528468243742722775">Konec</translation>
 <translation id="5329858601952122676">&amp;Smazat</translation>

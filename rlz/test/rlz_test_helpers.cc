@@ -61,7 +61,10 @@ void ReadRegistryTree(const base::win::RegKey& src, RegistryKeyData* data) {
       const uint8_t* value_bytes = reinterpret_cast<const uint8_t*>(i.Value());
       value.name.assign(i.Name());
       value.type = i.Type();
-      value.data.assign(value_bytes, UNSAFE_TODO(value_bytes + i.ValueSize()));
+      // SAFETY: `i.Value()` returns a pointer to a buffer of `i.ValueSize()`
+      // bytes from the Windows registry.
+      value.data.assign(value_bytes,
+                        UNSAFE_BUFFERS(value_bytes + i.ValueSize()));
     }
   }
 
@@ -181,6 +184,12 @@ void RlzLibTestBase::SetUp() {
   EXPECT_TRUE(rlz_lib::SetAccessPointRlz(rlz_lib::IETB_SEARCH_BOX, ""));
   EXPECT_TRUE(rlz_lib::SetAccessPointRlz(rlz_lib::IE_HOME_PAGE, ""));
 #endif  // BUILDFLAG(IS_POSIX)
+
+#if BUILDFLAG(IS_POSIX)
+  for (int p = rlz_lib::IE_TOOLBAR; p <= rlz_lib::PARTNER; p++) {
+    rlz_lib::ClearAllProductEvents(static_cast<rlz_lib::Product>(p));
+  }
+#endif
 
 #if BUILDFLAG(IS_CHROMEOS)
   statistics_provider_ =

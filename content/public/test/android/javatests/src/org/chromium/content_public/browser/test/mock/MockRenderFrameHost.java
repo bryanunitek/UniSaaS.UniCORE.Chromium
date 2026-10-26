@@ -38,6 +38,11 @@ public class MockRenderFrameHost implements RenderFrameHost {
     }
 
     @Override
+    public boolean isOutermostMainFrame() {
+        return false;
+    }
+
+    @Override
     public void getCanonicalUrlForSharing(Callback<GURL> callback) {}
 
     @Override
@@ -61,6 +66,11 @@ public class MockRenderFrameHost implements RenderFrameHost {
 
     @Override
     public void notifyUserActivation() {}
+
+    @Override
+    public boolean consumeTransientUserActivation() {
+        return false;
+    }
 
     @Override
     public void notifyWebAuthnAssertionRequestSucceeded() {}
@@ -144,4 +154,9 @@ public class MockRenderFrameHost implements RenderFrameHost {
 
     @Override
     public void viewSource() {}
+
+    @Override
+    public boolean isCrossOriginIsolated() {
+        return false;
+    }
 }

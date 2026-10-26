@@ -11,6 +11,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/metrics/user_action_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -44,8 +45,10 @@
 #include "components/permissions/test/mock_permission_prompt_factory.h"
 #include "components/permissions/test/mock_permission_request.h"
 #include "components/prefs/pref_service.h"
+#include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/cookie_access_details.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "net/cookies/cookie_options.h"
@@ -401,10 +404,6 @@ TEST_F(ContentSettingImageModelTest, SensorUnavailable) {
 // Test the correct ContentSettingImageModel for various permutations of site
 // and system level Geolocation permissions
 TEST_F(ContentSettingImageModelTest, GeolocationAccessPermissionsChanged) {
-#if BUILDFLAG(IS_WIN)
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({features::kWinSystemLocationPermission}, {});
-#endif  // BUILDFLAG(IS_WIN)
   system_permission_settings::MockPlatformHandle mock_platform_handle;
   system_permission_settings::SetInstanceForTesting(&mock_platform_handle);
   EXPECT_CALL(mock_platform_handle, IsAllowed(ContentSettingsType::GEOLOCATION))
@@ -467,10 +466,6 @@ TEST_F(ContentSettingImageModelTest, GeolocationAccessPermissionsChanged) {
 // This test verifies the UI behavior when OS-level geolocation permission is
 // undetermined. This state is only applicable on macOS and Windows.
 TEST_F(ContentSettingImageModelTest, GeolocationAccessPermissionsUndetermined) {
-#if BUILDFLAG(IS_WIN)
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({features::kWinSystemLocationPermission}, {});
-#endif  // BUILDFLAG(IS_WIN)
   system_permission_settings::MockPlatformHandle mock_platform_handle;
   system_permission_settings::SetInstanceForTesting(&mock_platform_handle);
   EXPECT_CALL(mock_platform_handle, IsAllowed(ContentSettingsType::GEOLOCATION))
@@ -731,14 +726,15 @@ TEST_F(ContentSettingImageModelTest, NotificationsIconSystemPermission) {
 
   // Same, but the system level permission has previously been denied.
   AppShimRegistry::Get()->SaveNotificationPermissionStatusForApp(
-      app_id, mac_notifications::mojom::PermissionStatus::kDenied);
+      app_id, AppShimRegistry::NotificationPermissionStatus::kExplicitlyDenied);
   content_setting_image_model->Update(web_contents());
   EXPECT_FALSE(content_setting_image_model->is_visible());
   EXPECT_FALSE(content_setting_image_model->should_auto_open_bubble());
   EXPECT_FALSE(content_setting_image_model->blocked_on_system_level());
 
   // If notification permission is allowed at the chrome level, the indicator
-  // should show.
+  // should show. Since the system permission was explicitly denied, the label
+  // should not be shown.
   HostContentSettingsMapFactory::GetForProfile(profile())
       ->SetDefaultContentSetting(ContentSettingsType::NOTIFICATIONS,
                                  CONTENT_SETTING_ALLOW);
@@ -746,15 +742,31 @@ TEST_F(ContentSettingImageModelTest, NotificationsIconSystemPermission) {
   content_setting_image_model->Update(web_contents());
   EXPECT_TRUE(content_setting_image_model->is_visible());
   EXPECT_TRUE(content_setting_image_model->is_blocked());
+  EXPECT_EQ(content_setting_image_model->explanatory_string_id(), 0);
   EXPECT_FALSE(content_setting_image_model->should_auto_open_bubble());
+  EXPECT_FALSE(content_setting_image_model->should_keep_label_expanded());
+  EXPECT_TRUE(content_setting_image_model->blocked_on_system_level());
+
+  // If the system permission was implicitly denied, the label should be shown
+  // and kept expanded.
+  AppShimRegistry::Get()->SaveNotificationPermissionStatusForApp(
+      app_id, AppShimRegistry::NotificationPermissionStatus::kImplicitlyDenied);
+  content_setting_image_model->Update(web_contents());
+  EXPECT_TRUE(content_setting_image_model->is_visible());
+  EXPECT_TRUE(content_setting_image_model->is_blocked());
+  EXPECT_EQ(content_setting_image_model->explanatory_string_id(),
+            IDS_NOTIFICATIONS_OFF_EXPLANATORY_TEXT);
+  EXPECT_FALSE(content_setting_image_model->should_auto_open_bubble());
+  EXPECT_TRUE(content_setting_image_model->should_keep_label_expanded());
   EXPECT_TRUE(content_setting_image_model->blocked_on_system_level());
 
   // Granting system permission should remove the indicator.
   AppShimRegistry::Get()->SaveNotificationPermissionStatusForApp(
-      app_id, mac_notifications::mojom::PermissionStatus::kGranted);
+      app_id, AppShimRegistry::NotificationPermissionStatus::kGranted);
   content_setting_image_model->Update(web_contents());
   EXPECT_FALSE(content_setting_image_model->is_visible());
   EXPECT_FALSE(content_setting_image_model->should_auto_open_bubble());
+  EXPECT_FALSE(content_setting_image_model->should_keep_label_expanded());
   EXPECT_FALSE(content_setting_image_model->blocked_on_system_level());
 }
 
@@ -790,13 +802,60 @@ TEST_F(ContentSettingImageModelTest,
 
   // If the app requests notification permission while the system permission was
   // denied, the notification should show and the bubble should auto open.
+  base::UserActionTester user_action_tester;
   AppShimRegistry::Get()->SaveNotificationPermissionStatusForApp(
-      app_id, mac_notifications::mojom::PermissionStatus::kDenied);
+      app_id, AppShimRegistry::NotificationPermissionStatus::kImplicitlyDenied);
   content_settings->SetNotificationsWasDeniedBecauseOfSystemPermission();
   content_setting_image_model->Update(web_contents());
   EXPECT_TRUE(content_setting_image_model->is_visible());
   EXPECT_TRUE(content_setting_image_model->is_blocked());
+  EXPECT_EQ(content_setting_image_model->explanatory_string_id(),
+            IDS_NOTIFICATIONS_OFF_EXPLANATORY_TEXT);
   EXPECT_TRUE(content_setting_image_model->should_auto_open_bubble());
+  EXPECT_TRUE(content_setting_image_model->should_keep_label_expanded());
+  EXPECT_TRUE(content_setting_image_model->blocked_on_system_level());
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "ContentSettings.Notifications.SystemPermissionIconShown"));
+
+  // Subsequent updates while the icon stays visible should not record the
+  // action again.
+  content_setting_image_model->Update(web_contents());
+  EXPECT_TRUE(content_setting_image_model->is_visible());
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "ContentSettings.Notifications.SystemPermissionIconShown"));
+
+  {
+    auto bubble =
+        content_setting_image_model->CreateBubbleModel(nullptr, web_contents());
+    EXPECT_EQ(1, user_action_tester.GetActionCount(
+                     "ContentSettings.NotificationsDialog.Shown"));
+  }
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "ContentSettings.NotificationsDialog.Closed"));
+
+  // Once the icon is hidden and shown again, the action should be recorded
+  // again.
+  AppShimRegistry::Get()->SaveNotificationPermissionStatusForApp(
+      app_id, AppShimRegistry::NotificationPermissionStatus::kGranted);
+  content_setting_image_model->Update(web_contents());
+  EXPECT_FALSE(content_setting_image_model->is_visible());
+  AppShimRegistry::Get()->SaveNotificationPermissionStatusForApp(
+      app_id, AppShimRegistry::NotificationPermissionStatus::kImplicitlyDenied);
+  content_setting_image_model->Update(web_contents());
+  EXPECT_TRUE(content_setting_image_model->is_visible());
+  EXPECT_EQ(2, user_action_tester.GetActionCount(
+                   "ContentSettings.Notifications.SystemPermissionIconShown"));
+
+  // If the system permission was explicitly denied, the icon should show, but
+  // without the label or auto-opening the bubble.
+  AppShimRegistry::Get()->SaveNotificationPermissionStatusForApp(
+      app_id, AppShimRegistry::NotificationPermissionStatus::kExplicitlyDenied);
+  content_setting_image_model->Update(web_contents());
+  EXPECT_TRUE(content_setting_image_model->is_visible());
+  EXPECT_TRUE(content_setting_image_model->is_blocked());
+  EXPECT_EQ(content_setting_image_model->explanatory_string_id(), 0);
+  EXPECT_FALSE(content_setting_image_model->should_auto_open_bubble());
+  EXPECT_FALSE(content_setting_image_model->should_keep_label_expanded());
   EXPECT_TRUE(content_setting_image_model->blocked_on_system_level());
 }
 #endif

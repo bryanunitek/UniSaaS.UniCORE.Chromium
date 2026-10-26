@@ -60,7 +60,8 @@ class CAPTURE_EXPORT VideoCaptureBufferPoolImpl
       const mojom::PlaneStridesPtr& strides,
       int frame_feedback_id,
       int* buffer_id,
-      int* buffer_id_to_drop) override;
+      int* buffer_id_to_drop,
+      const gfx::ColorSpace& color_space) override;
   void RelinquishProducerReservation(int buffer_id) override;
   VideoCaptureDevice::Client::ReserveResult ReserveIdForExternalBuffer(
       CapturedExternalVideoBuffer buffer,
@@ -70,6 +71,7 @@ class CAPTURE_EXPORT VideoCaptureBufferPoolImpl
   double GetBufferPoolUtilization() const override;
   void HoldForConsumers(int buffer_id, int num_clients) override;
   void RelinquishConsumerHold(int buffer_id, int num_clients) override;
+  void InvalidateBuffers() override;
 
  private:
   ~VideoCaptureBufferPoolImpl() override;
@@ -80,7 +82,8 @@ class CAPTURE_EXPORT VideoCaptureBufferPoolImpl
       const mojom::PlaneStridesPtr& strides,
       int frame_feedback_id,
       int* buffer_id,
-      int* tracker_id_to_drop);
+      int* tracker_id_to_drop,
+      const gfx::ColorSpace& color_space);
 
   VideoCaptureBufferTracker* GetTracker(int buffer_id)
       EXCLUSIVE_LOCKS_REQUIRED(lock_);
@@ -96,6 +99,11 @@ class CAPTURE_EXPORT VideoCaptureBufferPoolImpl
 
   // The ID of the next buffer.
   int next_buffer_id_ GUARDED_BY(lock_) = 0;
+
+  // The ID of the most recently invalidated buffer. Buffers with IDs less than
+  // or equal to this are dropped instead of being returned to the pool.
+  int last_invalidated_id_ GUARDED_BY(lock_) =
+      VideoCaptureBufferPool::kInvalidId;
 
   // The buffers, indexed by the first parameter, a buffer id.
   std::map<int, std::unique_ptr<VideoCaptureBufferTracker>> trackers_

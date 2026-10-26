@@ -22,7 +22,6 @@
 #include "content/public/browser/storage_partition_config.h"
 #include "content/public/test/browser_task_environment.h"
 #include "crypto/sha2.h"
-#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -151,7 +150,6 @@ class IsolatedWebAppUrlInfoFromIsolatedWebAppLocationTest
     : public ::testing::Test {
  private:
   base::test::TaskEnvironment task_environment_;
-  data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
 };
 
 TEST_F(IsolatedWebAppUrlInfoFromIsolatedWebAppLocationTest,
@@ -276,9 +274,9 @@ TEST_F(IsolatedWebAppStoragePartitionTest, BackwardsCompatible) {
           &testing_profile, partition_domain, /*partition_name=*/"",
           /*in_memory=*/false);
 
-  // Invoke the new impl from the components/ layer.
   content::StoragePartitionConfig new_config =
-      IwaOrigin(test::GetDefaultEd25519WebBundleId())
+      IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(
+          test::GetDefaultEd25519WebBundleId())
           .storage_partition_config(&testing_profile);
 
   ASSERT_EQ(old_config, new_config);

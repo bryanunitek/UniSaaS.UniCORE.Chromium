@@ -13,11 +13,11 @@
 #import "ios/chrome/browser/sessions/model/test_session_restoration_service.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/tab_group.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/tips_manager/model/tips_manager_ios_factory.h"
@@ -72,8 +72,7 @@ class TabsClosureUtilTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
-            std::make_unique<FakeAuthenticationServiceDelegate>()));
+        AuthenticationServiceFactory::GetDefaultFactory());
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateTestSyncService));
     builder.AddTestingFactory(
@@ -88,8 +87,8 @@ class TabsClosureUtilTest : public PlatformTest {
         tab_groups::TabGroupSyncServiceFactory::GetDefaultFactory());
     profile_ = std::move(builder).Build();
 
-    scene_state_ = OCMClassMock([SceneState class]);
-    browser_ = Browser::Create(profile_.get(), scene_state_);
+    scene_state_ = [[SceneState alloc] init];
+    browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
   }
 
   Browser* browser() { return browser_.get(); }

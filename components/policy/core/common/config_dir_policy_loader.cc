@@ -8,10 +8,10 @@
 
 #include <algorithm>
 #include <array>
+#include <ranges>
 #include <set>
 #include <string>
 
-#include "base/containers/adapters.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -127,7 +127,7 @@ void ConfigDirPolicyLoader::LoadFromPath(const base::FilePath& path,
   // The files are processed in reverse order because |MergeFrom| gives priority
   // to existing keys, but the ConfigDirPolicyProvider gives priority to the
   // last file in lexicographic order.
-  for (const base::FilePath& config_file : base::Reversed(files)) {
+  for (const base::FilePath& config_file : std::views::reverse(files)) {
     JSONFileValueDeserializer deserializer(
         config_file, base::JSON_PARSE_CHROMIUM_EXTENSIONS |
                          base::JSON_ALLOW_TRAILING_COMMAS);
@@ -186,7 +186,8 @@ void ConfigDirPolicyLoader::Merge3rdPartyPolicy(const base::Value* policies,
                                         : POLICY_DOMAIN_EXTENSIONS;
 
   for (auto domains_it : *domains_dictionary) {
-    if (!supported_domains.contains(domains_it.first)) {
+    auto domain_it = supported_domains.find(domains_it.first);
+    if (domain_it == supported_domains.end()) {
       SYSLOG(WARNING) << "Unsupported 3rd party policy domain: "
                       << domains_it.first;
       continue;
@@ -200,7 +201,7 @@ void ConfigDirPolicyLoader::Merge3rdPartyPolicy(const base::Value* policies,
       continue;
     }
 
-    PolicyDomain domain = supported_domains[domains_it.first];
+    PolicyDomain domain = domain_it->second;
     for (auto components_it : *components_dictionary) {
       const base::DictValue* policy_dictionary =
           components_it.second.GetIfDict();

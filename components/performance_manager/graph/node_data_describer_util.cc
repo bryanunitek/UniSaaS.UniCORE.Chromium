@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "base/i18n/time_formatting.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/task_traits.h"
 #include "components/performance_manager/graph/frame_node_impl.h"
 #include "components/performance_manager/graph/frame_node_impl_describer.h"
@@ -41,8 +42,11 @@ base::Value TimeSinceEpochToValue(base::TimeTicks time_ticks) {
   // current instant.
   const base::Time time =
       base::Time::Now() - (base::TimeTicks::Now() - time_ticks);
-  return base::Value(
-      base::UnlocalizedTimeFormatWithPattern(time, "yyyy-MM-dd HH:mm:ss"));
+  base::Time::Exploded exploded;
+  time.LocalExplode(&exploded);
+  return base::Value(base::StringPrintf(
+      "%04d-%02d-%02d %02d:%02d:%02d", exploded.year, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second));
 }
 
 base::Value MaybeNullStringToValue(std::string_view str) {
@@ -53,7 +57,7 @@ base::Value MaybeNullStringToValue(std::string_view str) {
 }
 
 base::Value PriorityAndReasonToValue(
-    const execution_context_priority::PriorityAndReason& priority_and_reason) {
+    const priority::PriorityAndReason& priority_and_reason) {
   base::DictValue priority;
   priority.Set("priority",
                base::ProcessPriorityToString(priority_and_reason.priority()));

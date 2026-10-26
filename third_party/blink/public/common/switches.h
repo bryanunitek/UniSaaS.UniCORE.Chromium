@@ -16,11 +16,13 @@ namespace switches {
 // All switches in alphabetical order. The switches should be documented
 // alongside the definition of their values in the .cc file.
 BLINK_COMMON_EXPORT extern const char kAllowPreCommitInput[];
+BLINK_COMMON_EXPORT extern const char kAsyncTouchMoveThrottleTimeMs[];
 BLINK_COMMON_EXPORT extern const char kBlinkSettings[];
 BLINK_COMMON_EXPORT extern const char kDarkModeSettings[];
 BLINK_COMMON_EXPORT extern const char kDataUrlInSvgUseEnabled[];
 BLINK_COMMON_EXPORT extern const char kDefaultTileHeight[];
 BLINK_COMMON_EXPORT extern const char kDefaultTileWidth[];
+BLINK_COMMON_EXPORT extern const char kDisableBackForwardCacheForWebSockets[];
 BLINK_COMMON_EXPORT extern const char kDisableImageAnimationResync[];
 BLINK_COMMON_EXPORT extern const char kDisablePartialRaster[];
 BLINK_COMMON_EXPORT extern const char kDisablePreferCompositingToLCDText[];
@@ -64,10 +66,10 @@ BLINK_COMMON_EXPORT extern const char kTouchTextSelectionStrategy_Character[];
 BLINK_COMMON_EXPORT extern const char kTouchTextSelectionStrategy_Direction[];
 BLINK_COMMON_EXPORT extern const char kDisableStandardizedBrowserZoom[];
 BLINK_COMMON_EXPORT extern const char kWebAudioBypassOutputBufferingOptOut[];
-BLINK_COMMON_EXPORT extern const char kDisableReduceAcceptLanguage[];
 BLINK_COMMON_EXPORT extern const char kXSLTEnabledPolicy[];
 BLINK_COMMON_EXPORT extern const char
     kRestrictBackgroundFetchFromServiceWorker[];
+BLINK_COMMON_EXPORT extern const char kTopChromeWebUI[];
 }  // namespace switches
 }  // namespace blink
 

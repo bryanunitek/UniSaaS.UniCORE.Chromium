@@ -1645,12 +1645,12 @@ TEST_P(PaintPropertyTreeUpdateTest, ChangeDuringAnimation) {
   )HTML");
 
   auto* target = GetLayoutObjectByElementId("target");
-  ComputedStyleBuilder builder(target->StyleRef());
+  ComputedStyleBuilder builder(target->Style());
   GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kInStyleRecalc);
   // Simulates starting a composite animation.
   builder.SetHasCurrentTransformAnimation(true);
   builder.SetIsRunningTransformAnimationOnCompositor(true);
-  target->SetStyle(builder.TakeStyle());
+  target->SetStyle(*builder.TakeStyle());
   EXPECT_TRUE(target->NeedsPaintPropertyUpdate());
   GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kStyleClean);
   UpdateAllLifecyclePhasesExceptPaint();
@@ -1672,7 +1672,7 @@ TEST_P(PaintPropertyTreeUpdateTest, ChangeDuringAnimation) {
 
   // Simulates changing transform and transform-origin during an animation.
   GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kInStyleRecalc);
-  builder = ComputedStyleBuilder(target->StyleRef());
+  builder = ComputedStyleBuilder(target->Style());
   TransformOperations transform;
   transform.Operations().push_back(
       MakeGarbageCollected<RotateTransformOperation>(
@@ -1680,7 +1680,7 @@ TEST_P(PaintPropertyTreeUpdateTest, ChangeDuringAnimation) {
   builder.SetTransform(transform);
   builder.SetTransformOrigin(
       TransformOrigin(Length::Fixed(70), Length::Fixed(30), 0));
-  target->SetStyle(builder.TakeStyle());
+  target->SetStyle(*builder.TakeStyle());
   EXPECT_TRUE(target->NeedsPaintPropertyUpdate());
   GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kStyleClean);
   {
@@ -1705,9 +1705,9 @@ TEST_P(PaintPropertyTreeUpdateTest, ChangeDuringAnimation) {
 
   // Simulates changing backface visibility during animation.
   GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kInStyleRecalc);
-  builder = ComputedStyleBuilder(target->StyleRef());
+  builder = ComputedStyleBuilder(target->Style());
   builder.SetBackfaceVisibility(EBackfaceVisibility::kHidden);
-  target->SetStyle(builder.TakeStyle());
+  target->SetStyle(*builder.TakeStyle());
   EXPECT_TRUE(target->NeedsPaintPropertyUpdate());
   GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kStyleClean);
   UpdateAllLifecyclePhasesExceptPaint();
@@ -2395,8 +2395,8 @@ TEST_P(PaintPropertyTreeUpdateTest, CanvasSubtreePseudoElementFilter) {
         filter: drop-shadow(0px 0px 0px rgba(0,0,0,0));
       }
     </style>
-    <canvas id="canvas" layoutsubtree>
-      <div id="target"></div>
+    <canvas id="canvas" content=drawable>
+      <div id="target" drawable></div>
     </canvas>
   )HTML");
 
@@ -2405,10 +2405,10 @@ TEST_P(PaintPropertyTreeUpdateTest, CanvasSubtreePseudoElementFilter) {
   LayoutObject* before_layout = before->GetLayoutObject();
   const auto* properties = before_layout->FirstFragment().PaintProperties();
 
-  // Initially, the pseudo-element is inside the layoutsubtree canvas,
+  // Initially, the pseudo-element is inside the content=drawable canvas,
   // so its filter effect node should have is_in_canvas_subtree set to true.
   const auto* filter_effect = properties->Filter();
-  EXPECT_TRUE(filter_effect->IsInCanvasSubtree());
+  EXPECT_TRUE(filter_effect->IsInDrawableCanvasSubtree());
 
   // Now, dynamically move the target out of the canvas.
   GetDocument().body()->appendChild(target);
@@ -2419,7 +2419,7 @@ TEST_P(PaintPropertyTreeUpdateTest, CanvasSubtreePseudoElementFilter) {
   before_layout = before->GetLayoutObject();
   properties = before_layout->FirstFragment().PaintProperties();
   filter_effect = properties->Filter();
-  EXPECT_FALSE(filter_effect->IsInCanvasSubtree());
+  EXPECT_FALSE(filter_effect->IsInDrawableCanvasSubtree());
 }
 
 TEST_P(PaintPropertyTreeUpdateTest, CanvasScriptsDisabled) {
@@ -2427,12 +2427,90 @@ TEST_P(PaintPropertyTreeUpdateTest, CanvasScriptsDisabled) {
   GetDocument().GetSettings()->SetScriptEnabled(false);
 
   SetBodyInnerHTML(R"HTML(
-    <canvas layoutsubtree style="display: inline;">
-      <div id="target">Hello</div>
+    <canvas content=drawable style="display: inline;">
+      <div id="target" drawable>Hello</div>
     </canvas>
   )HTML");
   UpdateAllLifecyclePhasesForTest();
   // Pass if no crash.
+}
+
+TEST_P(PaintPropertyTreeUpdateTest, CanvasSubtreeScrollbarInIframe) {
+  ScopedCanvasDrawElementForTest forced_canvas_draw_element_feature(true);
+  GetDocument().GetSettings()->SetScriptEnabled(true);
+
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      canvas, iframe {
+        width: 200px;
+        height: 200px;
+      }
+    </style>
+    <canvas id="canvas" content=drawable></canvas>
+    <iframe id="iframe" drawable></iframe>
+  )HTML");
+  SetChildFrameHTML(R"HTML(
+    <style>
+      #scroll {
+        width: 100px;
+        height: 100px;
+        overflow: scroll;
+      }
+      .tall { height: 500px; }
+    </style>
+    <div id="scroll">
+      <div class="tall"></div>
+    </div>
+    <div class="tall"></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* iframe = To<HTMLIFrameElement>(
+      GetDocument().getElementById(AtomicString("iframe")));
+  auto* canvas = GetDocument().getElementById(AtomicString("canvas"));
+  auto* child_layout_view = ChildDocument().GetLayoutView();
+  auto* child_scroll =
+      ChildDocument().getElementById(AtomicString("scroll"))->GetLayoutObject();
+
+  auto check_scrollbar_items = [&](bool expected_composited) {
+    int scrollbar_count = 0;
+    for (const auto& item :
+         GetDocument().View()->GetPaintArtifact().GetDisplayItemList()) {
+      if (const auto* scrollbar = DynamicTo<ScrollbarDisplayItem>(&item)) {
+        EXPECT_EQ(expected_composited, !!scrollbar->ScrollTranslation());
+        scrollbar_count++;
+      }
+    }
+    EXPECT_EQ(2, scrollbar_count);
+  };
+  auto check_scrollbar_effect_in_canvas_subtree =
+      [&](const LayoutObject* object, bool expected_in_canvas_subtree) {
+        EXPECT_EQ(expected_in_canvas_subtree,
+                  object->FirstFragment()
+                      .PaintProperties()
+                      ->VerticalScrollbarEffect()
+                      ->IsInDrawableCanvasSubtree());
+      };
+
+  // Outside canvas, scrollbar is composited.
+  check_scrollbar_items(true);
+  check_scrollbar_effect_in_canvas_subtree(child_layout_view, false);
+  check_scrollbar_effect_in_canvas_subtree(child_scroll, false);
+
+  const auto* v_scrollbar_effect = child_layout_view->FirstFragment()
+                                       .PaintProperties()
+                                       ->VerticalScrollbarEffect();
+  EXPECT_FALSE(v_scrollbar_effect->IsInDrawableCanvasSubtree());
+
+  // Move the iframe into the canvas subtree.
+  canvas->moveBefore(iframe, nullptr, ASSERT_NO_EXCEPTION);
+  UpdateAllLifecyclePhasesForTest();
+
+  // Inside canvas, composited scrollbars are disabled; the scrollbar must be
+  // repainted without a scroll translation.
+  check_scrollbar_items(false);
+  check_scrollbar_effect_in_canvas_subtree(child_layout_view, true);
+  check_scrollbar_effect_in_canvas_subtree(child_scroll, true);
 }
 
 }  // namespace blink

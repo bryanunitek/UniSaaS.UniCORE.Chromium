@@ -36,6 +36,7 @@
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/core/SkYUVAPixmaps.h"
 #include "third_party/skia/include/gpu/GpuTypes.h"
+#include "ui/gfx/color_space.h"
 
 namespace media {
 
@@ -96,6 +97,9 @@ VideoPixelFormat ReadbackFormat(const VideoFrame& frame) {
     case PIXEL_FORMAT_NV16:
     case PIXEL_FORMAT_NV24:
     case PIXEL_FORMAT_NV12A:
+    case PIXEL_FORMAT_P010LE:
+    case PIXEL_FORMAT_P210LE:
+    case PIXEL_FORMAT_P410LE:
       return frame.format();
     default:
       // Currently unsupported.
@@ -217,6 +221,7 @@ void ProcessAsyncMappingResult(
   }
 
   mapped_frame->set_color_space(video_frame->ColorSpace());
+  mapped_frame->set_hdr_metadata(video_frame->hdr_metadata());
   mapped_frame->metadata().MergeMetadataFrom(video_frame->metadata());
 
   // Pass |video_frame| so that it outlives |mapped_frame| and the mapped buffer
@@ -589,6 +594,7 @@ scoped_refptr<VideoFrame> ConvertToMemoryMappedFrame(
   }
 
   mapped_frame->set_color_space(video_frame->ColorSpace());
+  mapped_frame->set_hdr_metadata(video_frame->hdr_metadata());
   mapped_frame->metadata().MergeMetadataFrom(video_frame->metadata());
 
   // Pass |video_frame| so that it outlives |mapped_frame| and the mapped buffer
@@ -705,6 +711,7 @@ scoped_refptr<VideoFrame> ReadbackTextureBackedFrameToMemorySync(
     return nullptr;
   }
   result->set_color_space(txt_frame.ColorSpace());
+  result->set_hdr_metadata(txt_frame.hdr_metadata());
   result->metadata().MergeMetadataFrom(txt_frame.metadata());
   result->metadata().ClearTextureFrameMetadata();
 
@@ -751,9 +758,11 @@ bool ReadbackTexturePlaneToMemorySync(VideoFrame& src_frame,
   std::unique_ptr<gpu::RasterScopedAccess> ri_access =
       src_frame.shared_image()->BeginRasterAccess(ri, sync_token,
                                                   /*readonly=*/true);
-  bool readback_result =
-      ri->ReadbackImagePixels(mailbox, info, dest_stride, src_rect.x(),
-                              src_rect.y(), src_plane, dest_pixels);
+  gfx::Size plane_size = src_frame.shared_image()->format().GetPlaneSize(
+      src_plane, src_frame.shared_image()->size());
+  bool readback_result = ri->ReadbackImagePixels(
+      mailbox, plane_size, info, dest_stride, src_rect.x(), src_rect.y(),
+      src_plane, dest_pixels);
 
   bool result = readback_result &&
                 ri->GetGraphicsResetStatusKHR() == GL_NO_ERROR &&
@@ -927,6 +936,10 @@ scoped_refptr<VideoFrame> CreateFromSkImage(sk_sp<SkImage> sk_image,
       timestamp);
   if (!frame)
     return nullptr;
+
+  if (sk_image->colorSpace()) {
+    frame->set_color_space(gfx::ColorSpace(sk_image->colorSpace()));
+  }
 
   frame->AddDestructionObserver(
       base::DoNothingWithBoundArgs(std::move(sk_image)));

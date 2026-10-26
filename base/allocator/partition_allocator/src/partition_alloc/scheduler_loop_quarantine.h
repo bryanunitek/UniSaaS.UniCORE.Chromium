@@ -2,10 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "partition_alloc/slot_start.h"
-
 // Scheduler-loop Quarantine is a quarantine pool behind PartitionAlloc with
-// Advanced Checks and `ADVANCED_MEMORY_SAFETY_CHECKS()`.
+// Advanced Checks and `SANITIZED_OBJECT()`.
 // Both requests to prevent `free()`d allocation getting released to free-list,
 // by passing `FreeFlags::kSchedulerLoopQuarantine` at time of `free()`.
 // This will keep these allocations in Scheduler-Loop Quarantine for while.
@@ -51,6 +49,8 @@
 #include <type_traits>
 #include <vector>
 
+#include "partition_alloc/bucket_lookup.h"
+#include "partition_alloc/buildflags.h"
 #include "partition_alloc/internal_allocator_forward.h"
 #include "partition_alloc/partition_alloc_base/component_export.h"
 #include "partition_alloc/partition_alloc_base/export_template.h"
@@ -60,11 +60,17 @@
 #include "partition_alloc/partition_alloc_forward.h"
 #include "partition_alloc/partition_lock.h"
 #include "partition_alloc/partition_stats.h"
+#include "partition_alloc/slot_start.h"
 
 namespace partition_alloc {
 
 class PartitionRoot;
 struct SchedulerLoopQuarantineStats;
+
+enum class QuarantineTaskType {
+  kNormal,
+  kMojoIPC,
+};
 
 namespace internal {
 
@@ -90,14 +96,27 @@ struct SchedulerLoopQuarantineConfig {
   bool enable_zapping = false;
   bool enable_task_controlled_purge = false;
   bool pause_in_between_tasks = false;
+  bool exclude_non_ipc_tasks = false;
   // Accepts allocations up to this bucket size. If the given number does not
   // match bucket size, it is rounded up to next bucket size.
   size_t max_quarantine_size = BucketIndexLookup::kMaxBucketSize;
+  // When the branch is full, dequarantine enough entries to free up this
+  // percentage of the capacity (in addition to the space needed by the
+  // incoming entry), instead of just enough to fit the incoming entry. This
+  // amortizes the cost of purging over multiple quarantined entries, at the
+  // cost of a lower average quarantine occupancy. Clamped to
+  // `kMaxPurgeHeadroomPercent`.
+  size_t purge_headroom_percent = 0;
   // For informational purposes only.
   char branch_name[32] = "";
 };
 
-struct BucketSizeDetails;
+inline constexpr size_t kMaxPurgeHeadroomPercent = 50;
+
+enum class QuarantineTarget {
+  kMiracleObjects = 0,
+  kSanitizedObjects,
+};
 
 class PA_COMPONENT_EXPORT(PARTITION_ALLOC) SchedulerLoopQuarantineRoot {
  public:
@@ -106,6 +125,9 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC) SchedulerLoopQuarantineRoot {
 
   PartitionRoot& GetAllocatorRoot() { return allocator_root_; }
 
+  // Note: branches publish their stats lazily, so the returned stats may not
+  // account for the most recent operations of each branch (up to 64 quarantined
+  // entries per branch). Branches publish all their stats when fully purged.
   void AccumulateStats(SchedulerLoopQuarantineStats& stats) const {
     stats.count += count_.load(std::memory_order_relaxed);
     stats.size_in_bytes += size_in_bytes_.load(std::memory_order_relaxed);
@@ -126,13 +148,13 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC) SchedulerLoopQuarantineRoot {
   std::atomic_size_t cumulative_size_in_bytes_ = 0;
   std::atomic_size_t quarantine_miss_count_ = 0;
 
-  template <bool>
+  template <bool, QuarantineTarget>
   friend class SchedulerLoopQuarantineBranch;
 };
 
 // When set to `thread_bound = true`, the branch is for single-thread use
 // (faster).
-template <bool thread_bound>
+template <bool thread_bound, QuarantineTarget quarantine_target>
 class SchedulerLoopQuarantineBranch {
  public:
   static constexpr bool kThreadBound = thread_bound;
@@ -164,6 +186,12 @@ class SchedulerLoopQuarantineBranch {
   // Determines this list contains an object.
   bool IsQuarantinedForTesting(void* object) PA_LOCKS_EXCLUDED(lock_);
 
+  // The stats of the root are updated lazily, see `UnpublishedStats`. This
+  // forces an update.
+  void PublishStatsForTesting() PA_LOCKS_EXCLUDED(lock_);
+
+  bool IsQuarantineTarget(internal::BucketSizeDetails size_details) const;
+
   size_t GetCapacityInBytes() {
     return branch_capacity_in_bytes_.load(std::memory_order_relaxed);
   }
@@ -173,7 +201,7 @@ class SchedulerLoopQuarantineBranch {
 
   void Quarantine(SlotStart slot_start,
                   SlotSpanMetadata* slot_span,
-                  const internal::BucketSizeDetails& size_details)
+                  internal::BucketSizeDetails size_details)
       PA_LOCKS_EXCLUDED(lock_);
 
   // TODO(crbug.com/329027914): Make these private once migration to
@@ -207,7 +235,8 @@ class SchedulerLoopQuarantineBranch {
   }
 
   PA_EXCLUDE_FROM_EXPLICIT_INSTANTIATION
-  PA_ALWAYS_INLINE void OnTaskStart()
+  PA_ALWAYS_INLINE void OnTaskStart(
+      QuarantineTaskType task_type = QuarantineTaskType::kNormal)
     requires kThreadBound
   {
     PA_DCHECK(thread_id_ == base::PlatformThread::CurrentId());
@@ -215,33 +244,48 @@ class SchedulerLoopQuarantineBranch {
     // We only un-pause quarantine on entering the outermost task to avoid
     // decrementing `pause_quarantine_` multiple times in nested tasks.
     if (task_nesting_depth_ == 1) {
-      if (pause_in_between_tasks_) {
+      const bool is_mojo_ipc = task_type == QuarantineTaskType::kMojoIPC;
+      is_outermost_task_mojo_ipc_ = is_mojo_ipc;
+      if (pause_in_between_tasks_ &&
+          !(exclude_non_ipc_tasks_ && !is_mojo_ipc)) {
         PA_DCHECK(pause_quarantine_ > 0);
         --pause_quarantine_;  // Un-pause
+      } else if (!pause_in_between_tasks_ &&
+                 (exclude_non_ipc_tasks_ && !is_mojo_ipc)) {
+        ++pause_quarantine_;  // Pause
       }
     }
     // Both features require disallowing scanless purge during task execution.
-    if (enable_task_controlled_purge_ || pause_in_between_tasks_) {
+    if (enable_task_controlled_purge_ || pause_in_between_tasks_ ||
+        exclude_non_ipc_tasks_) {
       DisallowScanlessPurge();
     }
   }
 
   PA_EXCLUDE_FROM_EXPLICIT_INSTANTIATION
-  PA_ALWAYS_INLINE void OnTaskFinish()
+  PA_ALWAYS_INLINE void OnTaskFinish(
+      QuarantineTaskType task_type = QuarantineTaskType::kNormal)
     requires kThreadBound
   {
     PA_DCHECK(thread_id_ == base::PlatformThread::CurrentId());
     // Both features require allowing scanless purge (and potentially purging)
     // after task execution.
-    if (enable_task_controlled_purge_ || pause_in_between_tasks_) {
+    if (enable_task_controlled_purge_ || pause_in_between_tasks_ ||
+        exclude_non_ipc_tasks_) {
       AllowScanlessPurge();
     }
     PA_DCHECK(task_nesting_depth_ > 0);
     task_nesting_depth_--;
     // We only restore the paused state on exiting the outermost task.
     if (task_nesting_depth_ == 0) {
-      if (pause_in_between_tasks_) {
+      const bool is_mojo_ipc = task_type == QuarantineTaskType::kMojoIPC;
+      if (pause_in_between_tasks_ &&
+          !(exclude_non_ipc_tasks_ && !is_mojo_ipc)) {
         ++pause_quarantine_;  // Pause
+      } else if (!pause_in_between_tasks_ &&
+                 (exclude_non_ipc_tasks_ && !is_mojo_ipc)) {
+        PA_DCHECK(pause_quarantine_ > 0);
+        --pause_quarantine_;  // Un-pause
       }
     }
   }
@@ -251,7 +295,7 @@ class SchedulerLoopQuarantineBranch {
   // is being terminated, this can help reduce hangs.
   static void DangerouslyDisablePurge();
 
-  const SchedulerLoopQuarantineConfig& GetConfigurationForTesting();
+  bool IsQuarantineEnabledForTesting() const { return enable_quarantine_; }
 
   class ScopedQuarantineExclusion {
     SchedulerLoopQuarantineBranch& branch_;
@@ -289,6 +333,9 @@ class SchedulerLoopQuarantineBranch {
                      [[maybe_unused]] bool for_destruction = false)
       PA_EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
+  // Publishes `unpublished_stats_` to `root_`.
+  void PublishStats() PA_EXCLUSIVE_LOCKS_REQUIRED(lock_);
+
   PartitionRoot* const allocator_root_;
   ThreadCache* const tcache_;
   const base::PlatformThreadId thread_id_;
@@ -304,7 +351,11 @@ class SchedulerLoopQuarantineBranch {
   bool leak_on_destruction_ = false;
   bool enable_task_controlled_purge_ = false;
   bool pause_in_between_tasks_ = false;
+  bool exclude_non_ipc_tasks_ = false;
   int task_nesting_depth_ = 0;
+  bool is_outermost_task_mojo_ipc_ = false;
+  // See `SchedulerLoopQuarantineConfig::purge_headroom_percent`.
+  uint8_t purge_headroom_percent_ = 0;
 
   uint16_t largest_bucket_index_ = BucketIndexLookup::kNumBuckets - 1;
 
@@ -333,24 +384,43 @@ class SchedulerLoopQuarantineBranch {
   // optimization.
   uint32_t disallow_scanless_purge_ PA_GUARDED_BY(lock_) = 0;
 
+  // Stats that are not published to `root_` yet. Updating the stats of `root_`
+  // requires atomic read-modify-write operations on cache lines shared by all
+  // the branches, which is costly when done for every quarantined entry.
+  // Instead, stats are accumulated locally and published every
+  // `kMaxUnpublishedCount` quarantined entries, and when the branch is fully
+  // purged (e.g. at the end of a task). See `PublishStats()`.
+  static constexpr size_t kMaxUnpublishedCount = 64;
+  struct UnpublishedStats {
+    size_t quarantined_count = 0;
+    size_t quarantined_size_in_bytes = 0;
+    size_t dequarantined_count = 0;
+    size_t dequarantined_size_in_bytes = 0;
+  };
+  UnpublishedStats unpublished_stats_ PA_GUARDED_BY(lock_);
+
   // Debug and testing data.
 #if PA_BUILDFLAG(DCHECKS_ARE_ON)
   std::atomic_bool being_destructed_ = false;
 #endif  // PA_BUILDFLAG(DCHECKS_ARE_ON)
-
-  // Kept for testing purposes only.
-  SchedulerLoopQuarantineConfig config_for_testing_;
 };
 
+using SanitizedObjectSchedulerLoopQuarantineBranch =
+    SchedulerLoopQuarantineBranch<false, QuarantineTarget::kSanitizedObjects>;
 using GlobalSchedulerLoopQuarantineBranch =
-    SchedulerLoopQuarantineBranch<false>;
+    SchedulerLoopQuarantineBranch<false, QuarantineTarget::kMiracleObjects>;
 using ThreadBoundSchedulerLoopQuarantineBranch =
-    SchedulerLoopQuarantineBranch<true>;
+    SchedulerLoopQuarantineBranch<true, QuarantineTarget::kMiracleObjects>;
 
 extern template class PA_EXPORT_TEMPLATE_DECLARE(
-    PA_COMPONENT_EXPORT(PARTITION_ALLOC)) SchedulerLoopQuarantineBranch<false>;
+    PA_COMPONENT_EXPORT(PARTITION_ALLOC))
+    SchedulerLoopQuarantineBranch<false, QuarantineTarget::kMiracleObjects>;
 extern template class PA_EXPORT_TEMPLATE_DECLARE(
-    PA_COMPONENT_EXPORT(PARTITION_ALLOC)) SchedulerLoopQuarantineBranch<true>;
+    PA_COMPONENT_EXPORT(PARTITION_ALLOC))
+    SchedulerLoopQuarantineBranch<false, QuarantineTarget::kSanitizedObjects>;
+extern template class PA_EXPORT_TEMPLATE_DECLARE(
+    PA_COMPONENT_EXPORT(PARTITION_ALLOC))
+    SchedulerLoopQuarantineBranch<true, QuarantineTarget::kMiracleObjects>;
 
 }  // namespace internal
 

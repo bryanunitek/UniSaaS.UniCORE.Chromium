@@ -7,7 +7,6 @@ package org.chromium.chrome.browser.multiwindow;
 import android.app.Activity;
 import android.app.ActivityManager.AppTask;
 import android.app.ApplicationExitInfo;
-import android.content.Intent;
 import android.os.Build;
 import android.util.SparseIntArray;
 
@@ -16,7 +15,6 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.Callback;
 import org.chromium.base.Log;
 import org.chromium.base.ResettersForTesting;
-import org.chromium.base.TimeUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
@@ -25,7 +23,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.NewWindowAppSource;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
@@ -36,70 +33,57 @@ import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.PropertyModel;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Delegate to help recover ChromeTabbedActivity windows from a previous session during app launch
  * after a crash.
  */
 @NullMarked
-public class TabbedCrashRecoveryDelegate {
+/* package */ class TabbedCrashRecoveryDelegate extends BaseTabbedStartupDelegate {
     private static final String TAG = "TabbedCrashRecovery";
 
     private static @Nullable TabbedCrashRecoveryDelegate sInstance;
 
-    private long mRecoveryStartTime;
-    private boolean mIsCrashRecoveryEligible;
-    private @Nullable List<CrashRecoveryWindowInfo> mCrashedWindows;
-    private Map<Integer, AppTask> mPreRecoveryAppTasks = new HashMap<>();
     private final List<CrashRecoveryWindowInfo> mNonVisibleWindows = new ArrayList<>();
     private final List<CrashRecoveryWindowInfo> mVisibleWindows = new ArrayList<>();
-    private final Set<Integer> mWindowIdsPendingRecovery = new HashSet<>();
+
+    private boolean mIsCrashRecoveryEligible;
+    private @Nullable List<CrashRecoveryWindowInfo> mCrashedWindows;
 
     private TabbedCrashRecoveryDelegate() {}
 
-    public static TabbedCrashRecoveryDelegate getInstance() {
+    // BaseTabbedStartupDelegate implementation.
+    @Override
+    protected void onRestorationInitiated() {
+        RecordUserAction.record("Android.MultiWindow.CrashRecoveryInitiated");
+    }
+
+    @Override
+    protected void onAllWindowsRestored(long durationMillis) {
+        RecordHistogram.recordTimesHistogram(
+                "Android.MultiWindow.CrashRecoveryDuration", durationMillis);
+        RecordUserAction.record("Android.MultiWindow.CrashRecoveryCompleted");
+        Log.i(TAG, "Successfully completed crash recovery.");
+        resetState();
+    }
+
+    @Override
+    protected void resetState() {
+        super.resetState();
+        ChromeMultiInstancePersistentStore.writeIsCrashRecoveryPending(false);
+        resetStateExceptIdsPendingRestoration();
+    }
+
+    /* package */ static TabbedCrashRecoveryDelegate getInstance() {
         if (sInstance == null) {
             sInstance = new TabbedCrashRecoveryDelegate();
         }
         return sInstance;
     }
 
-    /* package */ static void setInstanceForTesting(TabbedCrashRecoveryDelegate delegate) {
-        sInstance = delegate;
-        ResettersForTesting.register(() -> sInstance = null);
-    }
-
-    /**
-     * Registers successful recovery of a window after a crash.
-     *
-     * @param windowId The id of the window that was successfully recovered after a crash.
-     */
-    public void registerRecovery(int windowId) {
-        boolean updated = mWindowIdsPendingRecovery.remove(windowId);
-        if (updated && mWindowIdsPendingRecovery.isEmpty()) {
-            // After the last window is recovered, update success metrics.
-            long duration = TimeUtils.elapsedRealtimeMillis() - mRecoveryStartTime;
-            RecordHistogram.recordTimesHistogram(
-                    "Android.MultiWindow.CrashRecoveryDuration", duration);
-            RecordUserAction.record("Android.MultiWindow.CrashRecoveryCompleted");
-            Log.i(TAG, "Successfully completed crash recovery.");
-        }
-    }
-
-    /**
-     * Shows a crash recovery dialog if applicable, when the {@link ModalDialogManager} for the host
-     * activity is available.
-     *
-     * @param modalDialogManagerSupplier Supplier for ModalDialogManager.
-     * @param activity The host activity where the prompt will be displayed.
-     * @return true if the dialog was shown/triggered; false otherwise.
-     */
-    public boolean maybeShowCrashRecoveryDialog(
+    /* package */ boolean maybeShowCrashRecoveryDialog(
             MonotonicObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
             Activity activity) {
         if (!mIsCrashRecoveryEligible) return false;
@@ -111,31 +95,68 @@ public class TabbedCrashRecoveryDelegate {
         // Reset state before processing a new crash recovery request to avoid using stale state.
         resetState();
 
+        // Avoid showing the dialog on an incognito host window. We will clean up crash recovery
+        // data because of the uncertainty surrounding when the next regular window will be opened,
+        // which could happen after several incognito windows are opened, at which point recovering
+        // these crashed windows may be confusing.
+        if (hostActivity.isIncognitoWindow()) {
+            Map<Integer, AppTask> appTasks = MultiWindowUtils.getAppTasksById(hostActivity);
+            for (CrashRecoveryWindowInfo windowInfo : crashedWindows) {
+                int windowId = windowInfo.windowId;
+                if (windowId == hostActivity.getWindowId()) continue;
+                // Since recovery is cancelled, mark all windows as non-recoverable. Additionally,
+                // finish tasks for windows without any normal tabs to avoid keeping unusable tasks.
+                int taskId = ChromeMultiInstancePersistentStore.readTaskId(windowId);
+                cleanUpWindow(
+                        windowId,
+                        MultiWindowUtils.hasNoNormalTabs(windowId) ? appTasks.get(taskId) : null);
+            }
+            return false;
+        }
+
         // If the only crashed window is the host activity itself, do not show the dialog.
         if (crashedWindows.size() == 1
                 && crashedWindows.get(0).windowId == hostActivity.getWindowId()) {
             return false;
         }
 
-        mPreRecoveryAppTasks = MultiWindowUtils.getAppTasksById(hostActivity);
+        Map<Integer, AppTask> appTasks = MultiWindowUtils.getAppTasksById(hostActivity);
         int nonHostCrashedWindowCount = 0;
-        int crashedWindowTaskCount = 0;
+        int nonHostCrashedTaskCount = 0;
         for (CrashRecoveryWindowInfo windowInfo : crashedWindows) {
             int windowId = windowInfo.windowId;
             // Exclude host activity from crash recovery task.
             if (hostActivity.getWindowId() == windowInfo.windowId) continue;
-            nonHostCrashedWindowCount++;
-            int persistedTaskId = ChromeMultiInstancePersistentStore.readTaskId(windowId);
-            if (mPreRecoveryAppTasks.containsKey(persistedTaskId)) {
-                crashedWindowTaskCount++;
+
+            int taskId = ChromeMultiInstancePersistentStore.readTaskId(windowId);
+            AppTask task = appTasks.get(taskId);
+
+            // Windows with no regular tabs (e.g. empty or windows with incognito-only tabs) should
+            // not be usable after a crash. Clean them up (e.g. finish their live tasks and mark
+            // them as non-recoverable) so we don't restore them or leave orphaned, unusable tasks
+            // in Android Recents.
+            if (MultiWindowUtils.hasNoNormalTabs(windowId)) {
+                cleanUpWindow(windowId, task);
+                continue;
             }
 
-            mWindowIdsPendingRecovery.add(windowId);
+            nonHostCrashedWindowCount++;
+            if (task != null) {
+                nonHostCrashedTaskCount++;
+            }
+
             if (!windowInfo.isVisible) mNonVisibleWindows.add(windowInfo);
             else mVisibleWindows.add(windowInfo);
         }
 
-        if (crashedWindowTaskCount == nonHostCrashedWindowCount
+        // If there are no recoverable windows pending restoration (e.g. they were all empty or
+        // incognito windows that got cleaned up above), skip showing the dialog.
+        if (nonHostCrashedWindowCount == 0) {
+            resetState();
+            return false;
+        }
+
+        if (nonHostCrashedTaskCount == nonHostCrashedWindowCount
                 && !hostActivity.isInMultiWindowMode()) {
             // If all crashed windows (other than the current window) have live tasks already, and
             // the host is not in multi-window mode, do not show the crash recovery prompt.
@@ -146,9 +167,9 @@ public class TabbedCrashRecoveryDelegate {
             for (CrashRecoveryWindowInfo windowInfo : crashedWindows) {
                 int windowId = windowInfo.windowId;
                 if (windowId == hostActivity.getWindowId()) continue;
-                ChromeMultiInstancePersistentStore.writeIsRecoverable(
-                        windowId, /* isRecoverable= */ false);
+                cleanUpWindow(windowId, /* task= */ null);
             }
+            resetState();
             return false;
         }
 
@@ -156,31 +177,32 @@ public class TabbedCrashRecoveryDelegate {
                 new Callback<>() {
                     @Override
                     public void onResult(ModalDialogManager modalDialogManager) {
-                        showRecoveryDialog(modalDialogManager, hostActivity, crashedWindows);
+                        showRecoveryDialog(modalDialogManager, hostActivity, appTasks);
                         modalDialogManagerSupplier.removeObserver(this);
                     }
                 });
         return true;
     }
 
-    /**
-     * Flags a pending crash recovery if the last session ended in a crash/ANR and there are
-     * recoverable windows, so that recovery can be handled when the next ChromeTabbedActivity
-     * starts.
-     */
     /* package */ void maybeDeferCrashRecovery() {
+        // If there is no ChromeTabbedActivity to initiate crash recovery when the browser process
+        // starts after a crash, track this as a pending task that can be addressed when the next
+        // ChromeTabbedActivity is registered with the orchestrator.
         if (didLastSessionCrashWithRecoverableWindows()) {
             ChromeMultiInstancePersistentStore.writeIsCrashRecoveryPending(true);
         }
     }
 
     /**
-     * Evaluates and caches crash recovery metadata synchronously on ChromeTabbedActivity
-     * initialization.
+     * Initializes crash recovery metadata if the previous session crashed with recoverable windows
+     * or if a deferred crash recovery is pending.
+     *
+     * @return {@code true} if crash recovery metadata was initialized and the session is eligible
+     *     for crash recovery; {@code false} otherwise.
      */
-    /* package */ void initializeCrashRecoveryMetadata() {
-        if (!ChromeFeatureList.sSessionRestoreAfterCrash.isEnabled()) {
-            return;
+    /* package */ boolean initializeCrashRecoveryMetadata() {
+        if (!MultiWindowUtils.isSessionRestoreAfterCrashEnabled()) {
+            return false;
         }
 
         // This method runs synchronously inside onCreate() of ChromeTabbedActivity on the UI
@@ -198,7 +220,7 @@ public class TabbedCrashRecoveryDelegate {
                     "Crash recovery initiated. Pending recovery: %b, New crash detected: %b",
                     isRecoveryPending,
                     didLastSessionCrash);
-            // Lazy load mCrashedWindows if it was not loaded yet (e.g. if isRecoveryNeeded
+            // Lazy load mCrashedWindows if it was not loaded yet (e.g. if shouldInitializeMetadata
             // evaluated to true due to a pending recovery flag from a prior session, which
             // short-circuited it during didLastSessionCrashWithRecoverableWindows() evaluation).
             if (mCrashedWindows == null) {
@@ -226,16 +248,11 @@ public class TabbedCrashRecoveryDelegate {
                     TAG,
                     "Multi-window crash recovery metadata initialized. Total crashed windows: %d.",
                     mCrashedWindows.size());
-
-            // Reset persisted pending state since metadata has been successfully processed.
-            ChromeMultiInstancePersistentStore.writeIsCrashRecoveryPending(false);
         }
+        return mIsCrashRecoveryEligible;
     }
 
-    /**
-     * Returns whether the last session ended in a crash/ANR and there are recoverable
-     * ChromeTabbedActivity windows.
-     */
+    @VisibleForTesting
     /* package */ boolean didLastSessionCrashWithRecoverableWindows() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false;
 
@@ -250,14 +267,6 @@ public class TabbedCrashRecoveryDelegate {
                         || reason == ApplicationExitInfo.REASON_CRASH_NATIVE
                         || reason == ApplicationExitInfo.REASON_ANR;
         if (!isCrash) {
-            // Clear crash recovery state for all windows when we detect an exit reason ineligible
-            // for crash recovery so that we don't attempt stale crash recovery in the future.
-            // Do not clear the state if there is already a pending recovery from a prior session.
-            if (!ChromeMultiInstancePersistentStore.readIsCrashRecoveryPending()) {
-                for (int windowId : ChromeMultiInstancePersistentStore.readAllInstanceIds()) {
-                    ChromeMultiInstancePersistentStore.writeIsRecoverable(windowId, false);
-                }
-            }
             return false;
         }
 
@@ -267,10 +276,53 @@ public class TabbedCrashRecoveryDelegate {
         return !mCrashedWindows.isEmpty();
     }
 
+    @VisibleForTesting
+    /* package */ void restoreWindows(
+            ChromeTabbedActivity hostActivity, Map<Integer, AppTask> appTasks) {
+        SparseIntArray initialTabbedActivityIds =
+                MultiWindowUtils.getWindowIdsOfRunningTabbedActivities();
+        assert initialTabbedActivityIds.size() == 1
+                : "Expected exactly one host activity to be present before initiating crash"
+                        + " recovery.";
+
+        Log.i(
+                TAG,
+                "Initiating restoration of %d non-visible windows and %d visible windows.",
+                mNonVisibleWindows.size(),
+                mVisibleWindows.size());
+
+        // Restore non-visible windows prior to visible ones to ensure that visible windows end up
+        // at the top of the stack. Additionally, the windows restored first may be automatically
+        // minimized by Android to honor the system-enforced on-screen visible task limit.
+        for (CrashRecoveryWindowInfo nonVisibleWindow : mNonVisibleWindows) {
+            int windowId = nonVisibleWindow.windowId;
+            int taskId = ChromeMultiInstancePersistentStore.readTaskId(windowId);
+            restoreWindow(
+                    hostActivity,
+                    windowId,
+                    appTasks.get(taskId),
+                    NewWindowAppSource.CRASH_RECOVERY);
+        }
+
+        for (CrashRecoveryWindowInfo visibleWindow : mVisibleWindows) {
+            int windowId = visibleWindow.windowId;
+            int taskId = ChromeMultiInstancePersistentStore.readTaskId(windowId);
+            restoreWindow(
+                    hostActivity,
+                    windowId,
+                    appTasks.get(taskId),
+                    NewWindowAppSource.CRASH_RECOVERY);
+        }
+
+        // Clear eligibility and cached window lists immediately so stale state is not retained or
+        // re-triggered while restored window activities launch asynchronously.
+        resetStateExceptIdsPendingRestoration();
+    }
+
     private void showRecoveryDialog(
             ModalDialogManager modalDialogManager,
             ChromeTabbedActivity hostActivity,
-            List<CrashRecoveryWindowInfo> crashedWindows) {
+            Map<Integer, AppTask> appTasks) {
         ModalDialogProperties.Controller controller =
                 new ModalDialogProperties.Controller() {
                     @Override
@@ -279,17 +331,15 @@ public class TabbedCrashRecoveryDelegate {
                         if (dismissalCause != DialogDismissalCause.POSITIVE_BUTTON_CLICKED) {
                             // When the recovery dialog is dismissed, cleanup recovery state for
                             // non-recovered windows since this data will now be stale.
-                            for (CrashRecoveryWindowInfo windowInfo : crashedWindows) {
-                                int windowId = windowInfo.windowId;
-                                if (windowId == hostActivity.getWindowId()) continue;
-                                ChromeMultiInstancePersistentStore.writeIsRecoverable(
-                                        windowId, /* isRecoverable= */ false);
-                                int persistedTaskId =
-                                        ChromeMultiInstancePersistentStore.readTaskId(windowId);
-                                if (mPreRecoveryAppTasks.containsKey(persistedTaskId)) {
-                                    mPreRecoveryAppTasks.get(persistedTaskId).finishAndRemoveTask();
+                            for (var windowList : List.of(mNonVisibleWindows, mVisibleWindows)) {
+                                for (CrashRecoveryWindowInfo windowInfo : windowList) {
+                                    int windowId = windowInfo.windowId;
+                                    int taskId =
+                                            ChromeMultiInstancePersistentStore.readTaskId(windowId);
+                                    cleanUpWindow(windowId, appTasks.get(taskId));
                                 }
                             }
+                            resetState();
                         }
                     }
 
@@ -302,7 +352,7 @@ public class TabbedCrashRecoveryDelegate {
                                 break;
                             case ModalDialogProperties.ButtonType.POSITIVE:
                                 RecordUserAction.record("Android.MultiWindow.CrashRecoveryOptIn");
-                                restoreWindows(hostActivity);
+                                restoreWindows(hostActivity, appTasks);
                                 modalDialogManager.dismissDialog(
                                         model, DialogDismissalCause.POSITIVE_BUTTON_CLICKED);
                                 break;
@@ -336,78 +386,32 @@ public class TabbedCrashRecoveryDelegate {
         modalDialogManager.showDialog(model, ModalDialogManager.ModalDialogType.APP);
     }
 
-    /* package */ void restoreWindows(ChromeTabbedActivity hostActivity) {
-        SparseIntArray initialTabbedActivityIds =
-                MultiWindowUtils.getWindowIdsOfRunningTabbedActivities();
-        assert initialTabbedActivityIds.size() == 1
-                : "Expected exactly one host activity to be present before initiating crash"
-                        + " recovery.";
-
-        mRecoveryStartTime = TimeUtils.elapsedRealtimeMillis();
-        RecordUserAction.record("Android.MultiWindow.CrashRecoveryInitiated");
-        Log.i(
-                TAG,
-                "Initiating restoration of %d non-visible windows and %d visible windows.",
-                mNonVisibleWindows.size(),
-                mVisibleWindows.size());
-
-        boolean isInMultiWindowMode = hostActivity.isInMultiWindowMode();
-
-        // Restore non-visible windows prior to visible ones to ensure that visible windows end up
-        // at the top of the stack. Additionally, the windows restored first may be automatically
-        // minimized by Android to honor the system-enforced on-screen visible task limit.
-        for (CrashRecoveryWindowInfo nonVisibleWindow : mNonVisibleWindows) {
-            int windowId = nonVisibleWindow.windowId;
-            restoreWindow(hostActivity, windowId, isInMultiWindowMode);
-        }
-
-        for (CrashRecoveryWindowInfo visibleWindow : mVisibleWindows) {
-            int windowId = visibleWindow.windowId;
-            restoreWindow(hostActivity, windowId, isInMultiWindowMode);
-        }
-    }
-
-    private void restoreWindow(
-            ChromeTabbedActivity hostActivity, int windowId, boolean isInMultiWindowMode) {
-        // Clear crash recovery state for instance.
-        ChromeMultiInstancePersistentStore.writeIsRecoverable(windowId, /* isRecoverable= */ false);
-
-        int persistedTaskId = ChromeMultiInstancePersistentStore.readTaskId(windowId);
-        AppTask task = mPreRecoveryAppTasks.get(persistedTaskId);
-        if (task != null) {
-            if (!isInMultiWindowMode) {
-                // When we have a subset of tasks that sustained a crash while others got killed,
-                // and Chrome starts in a fullscreen window after the crash, we will only target
-                // creating new tasks for windows whose tasks got killed and skip recovery for
-                // windows with live tasks. This is because recovery in non-multi-window mode will
-                // result in at most one visible window at the end of recovery and keep all other
-                // tasks in the background anyway.
-                registerRecovery(windowId);
-                return;
-            }
-            // If the host is in multi-window mode, bring the restored window to the foreground by
-            // finishing an existing live task before starting a new task. Bringing an existing live
-            // task to the foreground via the moveTaskToFront() Android API is known to fail when
-            // there is no activity in the task (as in the case of a task that sustains a crash).
-            task.finishAndRemoveTask();
-        }
-        Intent intent =
-                MultiWindowUtils.createNewWindowIntent(
-                        hostActivity,
-                        windowId,
-                        /* preferNew= */ false,
-                        isInMultiWindowMode,
-                        NewWindowAppSource.CRASH_RECOVERY);
-        hostActivity.startActivity(intent);
-    }
-
-    @VisibleForTesting
-    /* package */ void resetState() {
+    private void resetStateExceptIdsPendingRestoration() {
         mIsCrashRecoveryEligible = false;
         mCrashedWindows = null;
-        mPreRecoveryAppTasks.clear();
         mNonVisibleWindows.clear();
         mVisibleWindows.clear();
-        mWindowIdsPendingRecovery.clear();
+    }
+
+    /* package */ static void setInstanceForTesting(
+            @Nullable TabbedCrashRecoveryDelegate delegate) {
+        sInstance = delegate;
+        ResettersForTesting.register(() -> sInstance = null);
+    }
+
+    /* package */ boolean isCrashRecoveryEligibleForTesting() {
+        return mIsCrashRecoveryEligible;
+    }
+
+    /* package */ @Nullable List<CrashRecoveryWindowInfo> getCrashedWindowsForTesting() {
+        return mCrashedWindows;
+    }
+
+    /* package */ List<CrashRecoveryWindowInfo> getNonVisibleWindowsForTesting() {
+        return mNonVisibleWindows;
+    }
+
+    /* package */ List<CrashRecoveryWindowInfo> getVisibleWindowsForTesting() {
+        return mVisibleWindows;
     }
 }

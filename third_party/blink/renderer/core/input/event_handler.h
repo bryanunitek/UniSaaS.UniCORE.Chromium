@@ -521,6 +521,10 @@ class CORE_EXPORT EventHandler final : public GarbageCollected<EventHandler> {
   FRIEND_TEST_ALL_PREFIXES(EventHandlerTest,
                            CursorForInlineVerticalWritingMode);
   FRIEND_TEST_ALL_PREFIXES(EventHandlerTest, CursorForBlockVerticalWritingMode);
+  FRIEND_TEST_ALL_PREFIXES(EventHandlerTest, CursorForLayoutlessArea);
+  FRIEND_TEST_ALL_PREFIXES(EventHandlerTest,
+                           CursorForLayoutlessAreaWithImageCursor);
+  FRIEND_TEST_ALL_PREFIXES(EventHandlerTest, CursorForAreaInDisplayNoneMap);
 };
 
 }  // namespace blink

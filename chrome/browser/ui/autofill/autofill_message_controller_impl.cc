@@ -8,18 +8,44 @@
 
 #include "base/check_op.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/ui/autofill/autofill_message_model.h"
 #include "components/messages/android/message_dispatcher_bridge.h"
 
 namespace autofill {
 
+namespace {
+
+// LINT.IfChange(ShouldLogMessageMetrics)
+bool ShouldLogMessageMetrics(AutofillMessageModel::Type type) {
+  switch (type) {
+    case AutofillMessageModel::Type::kEntitySaveUpdateFlow:
+    case AutofillMessageModel::Type::kResurrectChurnedUsers:
+      return true;
+    case AutofillMessageModel::Type::kUnspecified:
+    case AutofillMessageModel::Type::kSaveCardFailure:
+    case AutofillMessageModel::Type::kVirtualCardEnrollFailure:
+    case AutofillMessageModel::Type::kAddressSaveUpdateFlow:
+    case AutofillMessageModel::Type::kPersonalContextFetchingFailure:
+    case AutofillMessageModel::Type::kPrivateInferenceNotice:
+    case AutofillMessageModel::Type::kEmailVerified:
+    case AutofillMessageModel::Type::kEmailVerificationError:
+    case AutofillMessageModel::Type::kEmailVerificationLoading:
+      return false;
+  }
+  NOTREACHED();
+}
+// LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/histograms.xml:Autofill.Message.Type)
+
+}  // namespace
+
 AutofillMessageControllerImpl::AutofillMessageControllerImpl(
     content::WebContents* web_contents)
     : web_contents_(*web_contents) {}
 
 AutofillMessageControllerImpl::~AutofillMessageControllerImpl() {
-  Dismiss();
+  Dismiss(messages::DismissReason::UNKNOWN);
 }
 
 void AutofillMessageControllerImpl::Show(
@@ -41,8 +67,7 @@ void AutofillMessageControllerImpl::Show(
       messages::MessageScopeType::WEB_CONTENTS,
       messages::MessagePriority::kNormal);
 
-  if (message_model_ptr->GetType() ==
-      AutofillMessageModel::Type::kEntitySaveUpdateFlow) {
+  if (ShouldLogMessageMetrics(message_model_ptr->GetType())) {
     base::UmaHistogramBoolean(
         base::StrCat({"Autofill.Message.", message_model_ptr->GetTypeAsString(),
                       ".Shown"}),
@@ -56,8 +81,7 @@ void AutofillMessageControllerImpl::OnActionClicked(
   CHECK(message_model_it != message_models_.end());
   (*message_model_it)->OnActionClicked();
 
-  if (message_model_ptr->GetType() ==
-      AutofillMessageModel::Type::kEntitySaveUpdateFlow) {
+  if (ShouldLogMessageMetrics(message_model_ptr->GetType())) {
     base::UmaHistogramBoolean(
         base::StrCat({"Autofill.Message.",
                       (*message_model_it)->GetTypeAsString(),
@@ -73,8 +97,7 @@ void AutofillMessageControllerImpl::OnDismissed(
   CHECK(message_model_it != message_models_.end());
   (*message_model_it)->OnDismissed(reason);
 
-  if (message_model_ptr->GetType() ==
-      AutofillMessageModel::Type::kEntitySaveUpdateFlow) {
+  if (ShouldLogMessageMetrics(message_model_ptr->GetType())) {
     base::UmaHistogramEnumeration(
         base::StrCat({"Autofill.Message.",
                       (*message_model_it)->GetTypeAsString(), ".Dismissed"}),
@@ -84,11 +107,10 @@ void AutofillMessageControllerImpl::OnDismissed(
   message_models_.erase(message_model_it);
 }
 
-void AutofillMessageControllerImpl::Dismiss() {
+void AutofillMessageControllerImpl::Dismiss(messages::DismissReason reason) {
   for (auto it = message_models_.begin(); it != message_models_.end();) {
     messages::MessageDispatcherBridge::Get()->DismissMessage(
-        &(*it++)->GetMessage(/*pass_key=*/{}),
-        messages::DismissReason::UNKNOWN);
+        &(*it++)->GetMessage(/*pass_key=*/{}), reason);
   }
 }
 

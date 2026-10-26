@@ -156,6 +156,14 @@ interface GpuChannel {
   viz.mojom.SharedImageFormat format, gfx.mojom.BufferUsage buffer_usage)
   => (gfx.mojom.GpuMemoryBufferHandle buffer_handle);
 
+  // Create a GpuMemoryBuffer on IO thread and schedule creation of the
+  // SharedImage from it to the main thread. Note that this needs to be a
+  // blocking call on calling client's thread in order to return the
+  // GpuMemoryBufferHandle before it's used to create client shared image.
+  [Sync] CreateSharedImageWithHandle(Mailbox mailbox, SharedImageInfo info,
+      gfx.mojom.BufferUsage buffer_usage, SharedImagePoolId? pool_id)
+  => (gfx.mojom.GpuMemoryBufferHandle buffer_handle);
+
   // Creates a DCOMPTexture and attaches to the provided `route_id`.
   // Note: this `route_id` must not conflict with the routing ids for command
   // buffers or shared image stub. Otherwise, unexpected behaviour can happen
@@ -215,6 +223,9 @@ interface GpuChannel {
   CopyNativeGmbToSharedMemoryAsync(gfx.mojom.GpuMemoryBufferHandle
       buffer_handle, mojo_base.mojom.UnsafeSharedMemoryRegion shared_memory)
                      => (bool success);
+
+  // Signals the completion of an asynchronous wait for `sync_tokens`.
+  SignalSyncToken(array<SyncToken> sync_tokens) => ();
 };
 
 // Interface used to issue commands to a specific CommandBuffer instance in the
@@ -248,10 +259,6 @@ interface CommandBuffer {
   SignalQuery(uint32 query, uint32 signal_id);
 };
 
-// Corresponds to gpu::SwapBuffersCompleteParams.
-[Native]
-struct SwapBuffersCompleteParams;
-
 // Interface used by the GPU process to send the client messages from a specific
 // CommandBuffer instance.
 interface CommandBufferClient {
@@ -259,9 +266,6 @@ interface CommandBufferClient {
   // command buffer. These messages are intended to be exposed by
   // developer-facing UI such as the DevTools console.
   OnConsoleMessage(string message);
-
-  // Notifies the client of a GPU switch.
-  OnGpuSwitched();
 
   // Tells the proxy that there was an error and the command buffer had to be
   // destroyed for some reason.

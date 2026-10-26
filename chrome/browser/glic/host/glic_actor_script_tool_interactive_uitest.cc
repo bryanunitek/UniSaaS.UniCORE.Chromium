@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// TODO(crbug.com/537846557): Migrate this test suite to GlicBrowserTest.
+
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/glic/host/glic_actor_interactive_uitest_common.h"
@@ -104,8 +106,8 @@ class GlicActorWithScriptToolsTest : public GlicActorUiTest {
 IN_PROC_BROWSER_TEST_F(GlicActorWithScriptToolsTest, Basic) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
 
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/script_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/script_tool.html");
 
   const std::string expected_result = "This is an example sentence.";
   const std::string input_arguments =
@@ -119,8 +121,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorWithScriptToolsTest, Basic) {
 IN_PROC_BROWSER_TEST_F(GlicActorWithScriptToolsTest, InvalidToolName) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
 
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/script_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/script_tool.html");
 
   const std::string input_arguments = "{}";
   RunTestSequence(
@@ -150,8 +152,8 @@ class GlicActorWithScriptToolsDisabledTest
 IN_PROC_BROWSER_TEST_F(GlicActorWithScriptToolsDisabledTest, Disabled) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
 
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/script_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/script_tool.html");
 
   const std::string input_arguments = "{}";
   // If the feature is disabled, CreateToolRequest returns nullptr for

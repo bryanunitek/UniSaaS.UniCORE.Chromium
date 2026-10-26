@@ -30,12 +30,16 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.FakeTimeTestRule;
 import org.chromium.base.TimeUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Features;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationTestHelper;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
@@ -55,9 +59,12 @@ import java.time.Duration;
 
 /** Unit tests for {@link NtpCustomizationPromoManager} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, sdk = Build.VERSION_CODES.R)
+@Config(sdk = Build.VERSION_CODES.R)
 @EnableFeatures(ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2)
+@DisableFeatures(ChromeFeatureList.USE_WEB_UI_NTP_ANDROID)
 public class NtpCustomizationPromoManagerUnitTest {
+    private static final int NTP_OPENED_COUNT_FOR_BOTTOM_SHEET = 2;
+
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Rule public FakeTimeTestRule mFakeTimeTestRule = new FakeTimeTestRule();
 
@@ -78,6 +85,7 @@ public class NtpCustomizationPromoManagerUnitTest {
         NtpCustomizationPolicyManager policyManager = mock(NtpCustomizationPolicyManager.class);
         NtpCustomizationPolicyManager.setInstanceForTesting(policyManager);
         when(policyManager.isNtpCustomBackgroundEnabled()).thenReturn(true);
+        NtpCustomizationPromoManager.setEnableForTesting(true);
 
         mEdgeToEdgeStateProvider = NtpCustomizationTestHelper.setupEdgeToEdge(mWindowAndroid);
     }
@@ -97,6 +105,7 @@ public class NtpCustomizationPromoManagerUnitTest {
                         mWindowAndroid, /* isLff= */ false));
 
         // Case 1: Feature flag is disabled.
+        ChromeFeatureList.sNewTabPageCustomizationV2ShowTipBottomSheet.setForTesting(false);
         assertFalse(ChromeFeatureList.sNewTabPageCustomizationV2ShowTipBottomSheet.getValue());
         assertFalse(
                 NtpCustomizationPromoManager.canTriggerCustomizationBottomSheet(
@@ -166,6 +175,7 @@ public class NtpCustomizationPromoManagerUnitTest {
     public void testCanShowCustomizationIph() {
         when(mTab.isIncognitoBranded()).thenReturn(false);
         when(mTab.getUrl()).thenReturn(JUnitTestGURLs.NTP_URL);
+        ChromeFeatureList.sNewTabPageCustomizationV2ShowTipBottomSheet.setForTesting(false);
 
         // Case 1: All conditions met.
         assertTrue(
@@ -395,6 +405,7 @@ public class NtpCustomizationPromoManagerUnitTest {
         ChromeFeatureList.USE_WEB_UI_NTP_ANDROID
     })
     public void testNtpThemeDisabled_whenWebUiNtpOverrideEnabled() {
+        DeviceInfo.setIsDesktopForTesting(true);
         assertTrue(UrlOverrideUtils.isWebUiNtpOverrideEnabled());
         assertFalse(
                 NtpCustomizationUtils.isNtpThemeCustomizationEnabled(
@@ -432,6 +443,7 @@ public class NtpCustomizationPromoManagerUnitTest {
     @EnableFeatures(ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2)
     @Features.DisableFeatures(ChromeFeatureList.USE_WEB_UI_NTP_ANDROID)
     public void testNtpThemeEnabled_whenWebUiNtpOverrideDisabled() {
+        DeviceInfo.setIsDesktopForTesting(true);
         assertFalse(UrlOverrideUtils.isWebUiNtpOverrideEnabled());
         assertTrue(
                 NtpCustomizationUtils.isNtpThemeCustomizationEnabled(
@@ -463,5 +475,44 @@ public class NtpCustomizationPromoManagerUnitTest {
         assertTrue(
                 NtpCustomizationPromoManager.canTriggerCustomizationPromo(
                         mWindowAndroid, /* isLff= */ true));
+    }
+
+    @Test
+    @CommandLineFlags.Add(ChromeSwitches.DISABLE_NTP_THEME_PROMO_BOTTOM_SHEET_FOR_TESTING)
+    public void testCanTriggerCustomizationBottomSheet_disableNtpThemePromoSwitchEnabled() {
+        testCanTriggerCustomizationBottomSheet_disableNtpThemePromoSwitchImpl(
+                /* expectedCanTrigger= */ false);
+    }
+
+    @Test
+    public void testCanTriggerCustomizationBottomSheet_disableNtpThemePromoSwitchDisabled() {
+        testCanTriggerCustomizationBottomSheet_disableNtpThemePromoSwitchImpl(
+                /* expectedCanTrigger= */ true);
+    }
+
+    @Test
+    @CommandLineFlags.Add(ChromeSwitches.NO_FIRST_RUN)
+    public void testCanTriggerCustomizationBottomSheet_noFirstRunSwitchEnabled() {
+        testCanTriggerCustomizationBottomSheet_disableNtpThemePromoSwitchImpl(
+                /* expectedCanTrigger= */ false);
+    }
+
+    private void testCanTriggerCustomizationBottomSheet_disableNtpThemePromoSwitchImpl(
+            boolean expectedCanTrigger) {
+        mFakeTimeTestRule.advanceMillis(Duration.ofDays(10).toMillis());
+        ChromeFeatureList.sNewTabPageCustomizationV2ShowTipBottomSheet.setForTesting(true);
+        NtpCustomizationConfigManager configManager = mock(NtpCustomizationConfigManager.class);
+        NtpCustomizationConfigManager.setInstanceForTesting(configManager);
+        when(configManager.getBackgroundType()).thenReturn(NtpBackgroundType.DEFAULT);
+
+        assertEquals(
+                expectedCanTrigger,
+                NtpCustomizationPromoManager.canTriggerCustomizationBottomSheet(
+                        mWindowAndroid,
+                        /* isLff= */ false,
+                        /* ntpOpenedCount= */ NTP_OPENED_COUNT_FOR_BOTTOM_SHEET));
+
+        ChromeFeatureList.sNewTabPageCustomizationV2ShowTipBottomSheet.setForTesting(false);
+        NtpCustomizationConfigManager.setInstanceForTesting(null);
     }
 }

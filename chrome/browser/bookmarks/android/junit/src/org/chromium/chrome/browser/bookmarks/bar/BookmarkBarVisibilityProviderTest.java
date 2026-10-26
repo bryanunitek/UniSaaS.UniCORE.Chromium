@@ -18,10 +18,8 @@ import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.content.res.Configuration;
-import android.content.res.Resources;
 
 import androidx.annotation.NonNull;
-import androidx.test.filters.SmallTest;
 
 import org.junit.AfterClass;
 import org.junit.Before;
@@ -35,15 +33,22 @@ import org.mockito.junit.MockitoRule;
 import org.mockito.stubbing.Answer;
 import org.robolectric.Robolectric;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.bookmarks.R;
 import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarVisibilityProvider.BookmarkBarVisibilityObserver;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.ConfigurationChangedObserver;
+import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.test.OverrideContextWrapperTestRule;
+import org.chromium.components.bookmarks.BookmarkBarVisibilityState;
 import org.chromium.components.prefs.PrefChangeRegistrar;
 import org.chromium.components.prefs.PrefChangeRegistrar.PrefObserver;
 import org.chromium.components.prefs.PrefChangeRegistrarJni;
@@ -56,6 +61,7 @@ import java.util.Set;
 
 /** Unit tests for {@link BookmarkBarVisibilityProvider}. */
 @RunWith(BaseRobolectricTestRunner.class)
+@DisableFeatures(ChromeFeatureList.BOOKMARKS_BAR_NTP)
 public class BookmarkBarVisibilityProviderTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -64,8 +70,6 @@ public class BookmarkBarVisibilityProviderTest {
     public OverrideContextWrapperTestRule mOverrideContextRule =
             new OverrideContextWrapperTestRule();
 
-    @Mock private Activity mActivity;
-    @Mock private Resources mResources;
     @Mock private ActivityLifecycleDispatcher mActivityLifecycleDispatcher;
     @Mock private Configuration mConfig;
     @Mock private PrefChangeRegistrar.Natives mPrefChangeRegistrarJni;
@@ -74,6 +78,9 @@ public class BookmarkBarVisibilityProviderTest {
     @Mock private UserPrefs.Natives mUserPrefsJni;
     @Mock private BookmarkBarVisibilityObserver mObserver;
 
+    private Activity mActivity;
+    private int mItemMinWidth;
+    private int mItemMaxWidth;
     private final Set<ConfigurationChangedObserver> mConfigChangeObserverCache = new HashSet<>();
     private final SettableMonotonicObservableSupplier<Profile> mProfileSupplier =
             ObservableSuppliers.createMonotonic();
@@ -83,14 +90,17 @@ public class BookmarkBarVisibilityProviderTest {
 
     @Before
     public void setUp() {
+        mActivity = Robolectric.buildActivity(Activity.class).get();
+        mItemMinWidth =
+                mActivity.getResources().getDimensionPixelSize(R.dimen.bookmark_bar_item_min_width);
+        mItemMaxWidth =
+                mActivity.getResources().getDimensionPixelSize(R.dimen.bookmark_bar_item_max_width);
         mProfileSupplier.set(mProfile);
         mOverrideContextRule.setIsDesktop(true);
 
         // Set up mocks.
         when(mProfile.getOriginalProfile()).thenReturn(mProfile);
         when(mUserPrefsJni.get(mProfile)).thenReturn(mPrefService);
-        when(mActivity.getResources()).thenReturn(mResources);
-        when(mResources.getDimensionPixelSize(anyInt())).thenReturn(12);
 
         // Set up natives.
         PrefChangeRegistrarJni.setInstanceForTesting(mPrefChangeRegistrarJni);
@@ -114,8 +124,11 @@ public class BookmarkBarVisibilityProviderTest {
         UserPrefsJni.setInstanceForTesting(null);
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Group 1: V1 (Boolean)
+    // ---------------------------------------------------------------------------------------------
+
     @Test
-    @SmallTest
     public void testConstructAndDestroy() {
         // Case: Construct w/ feature disallowed and setting disabled.
         BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(false);
@@ -175,7 +188,6 @@ public class BookmarkBarVisibilityProviderTest {
     }
 
     @Test
-    @SmallTest
     public void testConfigurationChange() {
         // Set up.
         BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
@@ -187,21 +199,20 @@ public class BookmarkBarVisibilityProviderTest {
         BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(false);
         mConfigChangeObserverCache.stream().forEach(obs -> obs.onConfigurationChanged(mConfig));
         verify(mObserver, times(1)).onVisibilityChanged(false);
-        verify(mObserver, times(1)).onItemWidthConstraintsChanged(12, 12);
+        verify(mObserver, times(1)).onItemWidthConstraintsChanged(mItemMinWidth, mItemMaxWidth);
         clearInvocations(mObserver);
 
         // Case: Configuration changed to allow feature.
         BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
         mConfigChangeObserverCache.stream().forEach(obs -> obs.onConfigurationChanged(mConfig));
         verify(mObserver, times(1)).onVisibilityChanged(true);
-        verify(mObserver, times(1)).onItemWidthConstraintsChanged(12, 12);
+        verify(mObserver, times(1)).onItemWidthConstraintsChanged(mItemMinWidth, mItemMaxWidth);
 
         // Clean up.
         provider.destroy();
     }
 
     @Test
-    @SmallTest
     public void testPrefChange() {
         // Set up.
         BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
@@ -227,7 +238,6 @@ public class BookmarkBarVisibilityProviderTest {
     }
 
     @Test
-    @SmallTest
     public void testProfileChange() {
         // Set up.
         BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
@@ -247,7 +257,6 @@ public class BookmarkBarVisibilityProviderTest {
     }
 
     @Test
-    @SmallTest
     public void testXrSpaceModeChange() {
         // Set up.
         BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
@@ -273,6 +282,279 @@ public class BookmarkBarVisibilityProviderTest {
         assertTrue(
                 BookmarkBarUtils.isBookmarkBarVisible(
                         mActivity, mProfile, /* isXrFullSpaceMode= */ false));
+        clearInvocations(mObserver);
+
+        // Clean up.
+        provider.destroy();
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Group 2: V2 (Tri-State Integers)
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.BOOKMARKS_BAR_NTP)
+    public void testConstructAndDestroy_TriState() {
+        // Case: Construct w/ feature disallowed and state ALWAYS_HIDE.
+        BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(false);
+        when(mPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ALWAYS_HIDE);
+        BookmarkBarVisibilityProvider provider = createProvider();
+        Robolectric.flushForegroundThreadScheduler();
+        verify(mObserver, times(2))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ALWAYS_HIDE);
+        verify(mObserver, never()).onVisibilityChanged(anyBoolean());
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+        clearInvocations(mObserver);
+
+        // Clean up.
+        provider.destroy();
+        verify(mObserver, never()).onVisibilityChanged_TriState(anyInt());
+        verify(mObserver, never()).onVisibilityChanged(anyBoolean());
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+
+        // Case: Construct w/ feature disallowed and state ALWAYS_SHOW.
+        when(mPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ALWAYS_SHOW);
+        provider = createProvider();
+        Robolectric.flushForegroundThreadScheduler();
+        // Called 2 times because mXrSpaceModeSupplier will also call it when initialized.
+        verify(mObserver, times(2))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ALWAYS_HIDE);
+        verify(mObserver, never()).onVisibilityChanged(anyBoolean());
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+        clearInvocations(mObserver);
+
+        // Clean up.
+        provider.destroy();
+        verify(mObserver, never()).onVisibilityChanged_TriState(anyInt());
+        verify(mObserver, never()).onVisibilityChanged(anyBoolean());
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+
+        // Case: Construct w/ feature allowed and state ALWAYS_HIDE.
+        BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
+        when(mPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ALWAYS_HIDE);
+        provider = createProvider();
+        Robolectric.flushForegroundThreadScheduler();
+        verify(mObserver, times(2))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ALWAYS_HIDE);
+        verify(mObserver, never()).onVisibilityChanged(anyBoolean());
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+        clearInvocations(mObserver);
+
+        // Clean up.
+        provider.destroy();
+        verify(mObserver, never()).onVisibilityChanged_TriState(anyInt());
+        verify(mObserver, never()).onVisibilityChanged(anyBoolean());
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+
+        // Case: Construct w/ feature allowed and state ALWAYS_SHOW.
+        when(mPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ALWAYS_SHOW);
+        provider = createProvider();
+        Robolectric.flushForegroundThreadScheduler();
+        verify(mObserver, times(2))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ALWAYS_SHOW);
+        verify(mObserver, never()).onVisibilityChanged(anyBoolean());
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+        clearInvocations(mObserver);
+
+        // Clean up.
+        provider.destroy();
+        verify(mObserver, never()).onVisibilityChanged_TriState(anyInt());
+        verify(mObserver, never()).onVisibilityChanged(anyBoolean());
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+
+        // Case: Construct w/ feature allowed and state ONLY_SHOW_ON_NTP.
+        when(mPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ONLY_SHOW_ON_NTP);
+        provider = createProvider();
+        Robolectric.flushForegroundThreadScheduler();
+        verify(mObserver, times(2))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ONLY_SHOW_ON_NTP);
+        verify(mObserver, never()).onVisibilityChanged(anyBoolean());
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+        clearInvocations(mObserver);
+
+        // Clean up.
+        provider.destroy();
+        verify(mObserver, never()).onVisibilityChanged_TriState(anyInt());
+        verify(mObserver, never()).onVisibilityChanged(anyBoolean());
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.BOOKMARKS_BAR_NTP)
+    public void testConfigurationChange_TriState() {
+        // Set up.
+        BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
+        when(mPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ALWAYS_SHOW);
+        BookmarkBarVisibilityProvider provider = createProvider();
+        Robolectric.flushForegroundThreadScheduler();
+
+        // Case: Configuration changed to disallow feature.
+        BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(false);
+        mConfigChangeObserverCache.stream().forEach(obs -> obs.onConfigurationChanged(mConfig));
+        verify(mObserver, times(1))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ALWAYS_HIDE);
+        verify(mObserver, times(1)).onItemWidthConstraintsChanged(mItemMinWidth, mItemMaxWidth);
+        clearInvocations(mObserver);
+
+        // Case: Configuration changed to allow feature.
+        BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
+        mConfigChangeObserverCache.stream().forEach(obs -> obs.onConfigurationChanged(mConfig));
+        verify(mObserver, times(1))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ALWAYS_SHOW);
+        verify(mObserver, times(1)).onItemWidthConstraintsChanged(mItemMinWidth, mItemMaxWidth);
+
+        // Clean up.
+        provider.destroy();
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.BOOKMARKS_BAR_NTP)
+    public void testPrefChange_TriState_Desktop() {
+        // Set up.
+        BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
+        when(mPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ALWAYS_SHOW);
+        BookmarkBarVisibilityProvider provider = createProvider();
+        Robolectric.flushForegroundThreadScheduler();
+
+        // Case: Preference changed to ALWAYS_HIDE.
+        when(mPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ALWAYS_HIDE);
+        mSettingObserverCache.stream().forEach(PrefObserver::onPreferenceChange);
+        verify(mObserver, times(1))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ALWAYS_HIDE);
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+        clearInvocations(mObserver);
+
+        // Case: Preference changed to ONLY_SHOW_ON_NTP.
+        when(mPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ONLY_SHOW_ON_NTP);
+        mSettingObserverCache.stream().forEach(PrefObserver::onPreferenceChange);
+        verify(mObserver, times(1))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ONLY_SHOW_ON_NTP);
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+        clearInvocations(mObserver);
+
+        // Case: Preference changed to ALWAYS_SHOW.
+        when(mPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ALWAYS_SHOW);
+        mSettingObserverCache.stream().forEach(PrefObserver::onPreferenceChange);
+        verify(mObserver, times(1))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ALWAYS_SHOW);
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+
+        // Clean up.
+        provider.destroy();
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.BOOKMARKS_BAR_NTP)
+    public void testPrefChange_TriState_Tablet() {
+        // Set up tablet context.
+        mOverrideContextRule.setIsDesktop(false);
+        ContextUtils.getAppSharedPreferences().edit().clear().apply();
+        BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
+
+        BookmarkBarVisibilityProvider provider = createProvider();
+        Robolectric.flushForegroundThreadScheduler();
+
+        // Case: Tablet shared preference changed to ALWAYS_SHOW.
+        clearInvocations(mObserver);
+        ContextUtils.getAppSharedPreferences()
+                .edit()
+                .putInt(
+                        BookmarkBarConstants.BOOKMARK_BAR_BOOKMARK_BAR_VISIBILITY_STATE,
+                        BookmarkBarVisibilityState.ALWAYS_SHOW)
+                .apply();
+        Robolectric.flushForegroundThreadScheduler();
+        verify(mObserver, times(1))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ALWAYS_SHOW);
+        clearInvocations(mObserver);
+
+        // Case: Tablet shared preference changed to ONLY_SHOW_ON_NTP.
+        ContextUtils.getAppSharedPreferences()
+                .edit()
+                .putInt(
+                        BookmarkBarConstants.BOOKMARK_BAR_BOOKMARK_BAR_VISIBILITY_STATE,
+                        BookmarkBarVisibilityState.ONLY_SHOW_ON_NTP)
+                .apply();
+        Robolectric.flushForegroundThreadScheduler();
+        verify(mObserver, times(1))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ONLY_SHOW_ON_NTP);
+        clearInvocations(mObserver);
+
+        // Case: Legacy boolean pref change does NOT trigger observer when tri-state flag is
+        // enabled.
+        ContextUtils.getAppSharedPreferences()
+                .edit()
+                .putBoolean(BookmarkBarConstants.BOOKMARK_BAR_SHOW_BOOKMARK_BAR, true)
+                .apply();
+        Robolectric.flushForegroundThreadScheduler();
+        verify(mObserver, never()).onVisibilityChanged_TriState(anyInt());
+
+        // Clean up.
+        provider.destroy();
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.BOOKMARKS_BAR_NTP)
+    public void testProfileChange_TriState() {
+        // Set up.
+        BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
+        when(mPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ALWAYS_SHOW);
+        BookmarkBarVisibilityProvider provider = createProvider();
+        Robolectric.flushForegroundThreadScheduler();
+
+        // Case: Profile changed.
+        clearInvocations(mObserver);
+        Profile newProfile = Mockito.mock(Profile.class);
+        when(newProfile.getOriginalProfile()).thenReturn(newProfile);
+        PrefService newPrefService = Mockito.mock(PrefService.class);
+        when(mUserPrefsJni.get(newProfile)).thenReturn(newPrefService);
+        when(newPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ONLY_SHOW_ON_NTP);
+
+        mProfileSupplier.set(newProfile);
+        verify(mObserver, times(1))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ONLY_SHOW_ON_NTP);
+        verify(mObserver, never()).onItemWidthConstraintsChanged(anyInt(), anyInt());
+
+        // Clean up.
+        provider.destroy();
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.BOOKMARKS_BAR_NTP)
+    public void testXrSpaceModeChange_TriState() {
+        // Set up.
+        BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
+        when(mPrefService.getInteger(Pref.BOOKMARK_BAR_VISIBILITY_STATE))
+                .thenReturn(BookmarkBarVisibilityState.ALWAYS_SHOW);
+        BookmarkBarVisibilityProvider provider = createProvider();
+        Robolectric.flushForegroundThreadScheduler();
+
+        // Verify initial state.
+        verify(mObserver, times(2))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ALWAYS_SHOW);
+        clearInvocations(mObserver);
+
+        // Case: XR space mode changed to true.
+        mXrSpaceModeSupplier.set(true);
+        verify(mObserver, times(1))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ALWAYS_HIDE);
+        clearInvocations(mObserver);
+
+        // Case: XR space mode changed to false.
+        mXrSpaceModeSupplier.set(false);
+        verify(mObserver, times(1))
+                .onVisibilityChanged_TriState(BookmarkBarVisibilityState.ALWAYS_SHOW);
         clearInvocations(mObserver);
 
         // Clean up.

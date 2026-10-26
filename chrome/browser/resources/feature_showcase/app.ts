@@ -3,25 +3,26 @@
 // found in the LICENSE file.
 
 import '//resources/cr_elements/cr_button/cr_button.js';
-import '//resources/cr_elements/cr_lottie/cr_lottie.js';
+import '//resources/cr_components/cr_lottie/cr_lottie.js';
 import '//resources/cr_elements/cr_view_manager/cr_view_manager.js';
 import '/strings.m.js';
 import './feature_showcase_step.js';
 import './feature_showcase_stepper.js';
 import './default_browser/default_browser_step.js';
+import './gemini/gemini_step.js';
 import './google_lens/google_lens_step.js';
 import './themes_and_customization/themes_and_customization_step.js';
 import './password_manager/password_manager_step.js';
 
 import {ColorChangeUpdater} from '//resources/cr_components/color_change_listener/colors_css_updater.js';
-import type {CrLottieElement} from '//resources/cr_elements/cr_lottie/cr_lottie.js';
+import type {CrLottieElement} from '//resources/cr_components/cr_lottie/cr_lottie.js';
 import type {CrViewManagerElement} from '//resources/cr_elements/cr_view_manager/cr_view_manager.js';
 import {assert} from '//resources/js/assert.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
 import {getCss} from './app.css.js';
 import {getHtml} from './app.html.js';
-import {FeatureShowcaseBrowserProxyImpl} from './feature_showcase_browser_proxy.js';
+import {browserProxyFactory} from './feature_showcase.mojom-webui.js';
 
 export interface FeatureShowcaseAppElement {
   $: {
@@ -120,7 +121,7 @@ export class FeatureShowcaseAppElement extends CrLitElement {
     return this.steps.includes(stepId);
   }
 
-  protected onStepCompleted_() {
+  protected onStepCompleted_(e: Event) {
     assert(!this.areButtonsDisabled_, 'Buttons should not be disabled.');
     this.areButtonsDisabled_ = true;
     this.activeStepIndex++;
@@ -135,12 +136,17 @@ export class FeatureShowcaseAppElement extends CrLitElement {
       return;
     }
 
-    FeatureShowcaseBrowserProxyImpl.getInstance()
-        .handler.finishFeatureShowcase();
+    const stepper = (e.currentTarget as HTMLElement)
+                        .querySelector('feature-showcase-stepper');
+    assert(stepper);
+    this.updateComplete.then(() => stepper.waitForAnimationComplete())
+        .then(() => {
+          browserProxyFactory.getInstance().handler.finishFeatureShowcase();
+        });
   }
 
   private notifyStepShown_() {
-    FeatureShowcaseBrowserProxyImpl.getInstance().handler.nextStepShown();
+    browserProxyFactory.getInstance().handler.nextStepShown();
   }
 
   private tryPlayingTransitionAnimations() {

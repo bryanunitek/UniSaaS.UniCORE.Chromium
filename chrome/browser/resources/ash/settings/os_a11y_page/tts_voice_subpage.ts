@@ -27,7 +27,7 @@ import type {PrefsState} from '../common/types.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
 import type {LanguagesBrowserProxy} from '../os_languages_page/languages_browser_proxy.js';
 import {LanguagesBrowserProxyImpl} from '../os_languages_page/languages_browser_proxy.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {routes} from '../router.js';
 
 import {getTemplate} from './tts_voice_subpage.html.js';
@@ -149,16 +149,21 @@ export class SettingsTtsVoiceSubpageElement extends
         type: Boolean,
         value: false,
       },
+
+      extensions: {
+        type: Array,
+        value: () => [],
+      },
     };
   }
 
-  allVoices: TtsHandlerVoice[];
-  defaultPreviewVoice: string;
-  extensions: TtsHandlerExtension[];
-  hasVoices: boolean;
-  languagesOpened: boolean;
-  languagesToVoices: TtsLanguage[];
-  prefs: PrefsState;
+  declare allVoices: TtsHandlerVoice[];
+  declare defaultPreviewVoice: string;
+  declare extensions: TtsHandlerExtension[];
+  declare hasVoices: boolean;
+  declare languagesOpened: boolean;
+  declare languagesToVoices: TtsLanguage[];
+  declare prefs: PrefsState;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -169,9 +174,9 @@ export class SettingsTtsVoiceSubpageElement extends
     Setting.kTextToSpeechEngines,
   ]);
 
-  private isPreviewing_: boolean;
+  declare private isPreviewing_: boolean;
   private langBrowserProxy_: LanguagesBrowserProxy;
-  private previewText_: string;
+  declare private previewText_: string;
   private ttsBrowserProxy_: TtsVoiceSubpageBrowserProxy;
 
   // Regular expressions that will match against a voice name if it contains a
@@ -187,7 +192,6 @@ export class SettingsTtsVoiceSubpageElement extends
 
     this.ttsBrowserProxy_ = TtsVoiceSubpageBrowserProxyImpl.getInstance();
     this.langBrowserProxy_ = LanguagesBrowserProxyImpl.getInstance();
-    this.extensions = [];
   }
 
   override ready(): void {

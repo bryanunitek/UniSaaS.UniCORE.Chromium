@@ -22,6 +22,7 @@ import {AnchorAlignment} from 'chrome://resources/cr_elements/cr_action_menu/cr_
 import {assert} from 'chrome://resources/js/assert.js';
 // </if>
 // <if expr="enable_pdf_ink2">
+import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 // </if>
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -85,7 +86,6 @@ export class ViewerToolbarElement extends CrLitElement {
       docLength: {type: Number},
       embeddedViewer: {type: Boolean},
       hasEdits: {type: Boolean},
-      hasEnteredAnnotationMode: {type: Boolean},
       formFieldFocus: {type: String},
       loadProgress: {type: Number},
 
@@ -126,6 +126,7 @@ export class ViewerToolbarElement extends CrLitElement {
       pdfInk2Enabled: {type: Boolean},
       shouldEnableRedo_: {type: Boolean},
       shouldEnableUndo_: {type: Boolean},
+      pdfSignaturesEnabled_: {type: Boolean},
       pdfTextAnnotationsEnabled_: {type: Boolean},
       // </if> enable_pdf_ink2
 
@@ -141,7 +142,6 @@ export class ViewerToolbarElement extends CrLitElement {
   accessor docLength: number = 0;
   accessor embeddedViewer: boolean = false;
   accessor hasEdits: boolean = false;
-  accessor hasEnteredAnnotationMode: boolean = false;
   accessor formFieldFocus: FormFieldFocusType = FormFieldFocusType.NONE;
   accessor loadProgress: number = 0;
   accessor pageNo: number = 0;
@@ -175,6 +175,7 @@ export class ViewerToolbarElement extends CrLitElement {
   accessor pdfInk2Enabled: boolean = false;
   protected accessor shouldEnableRedo_: boolean = false;
   protected accessor shouldEnableUndo_: boolean = false;
+  protected accessor pdfSignaturesEnabled_: boolean = false;
   protected accessor pdfTextAnnotationsEnabled_: boolean = false;
 
   // Ink2 class members
@@ -237,6 +238,8 @@ export class ViewerToolbarElement extends CrLitElement {
     this.pdfGlicSummarizeEnabled_ =
         loadTimeData.getBoolean('pdfGlicSummarizeEnabled');
     // <if expr="enable_pdf_ink2">
+    this.pdfSignaturesEnabled_ =
+        loadTimeData.getBoolean('pdfSignaturesEnabled');
     this.pdfTextAnnotationsEnabled_ =
         loadTimeData.getBoolean('pdfTextAnnotationsEnabled');
     // </if>
@@ -249,8 +252,8 @@ export class ViewerToolbarElement extends CrLitElement {
 
   protected fitToButtonIcon_(): string {
     return 'pdf' +
-        (this.fittingType_ === FittingType.FIT_TO_PAGE ? ':fit-to-height' :
-                                                         ':fit-to-width');
+        (this.fittingType_ === FittingType.FIT_TO_PAGE ? ':fit-page-height' :
+                                                         ':fit-page-width');
   }
 
   /** @return The appropriate tooltip for the current state. */
@@ -445,6 +448,13 @@ export class ViewerToolbarElement extends CrLitElement {
                                                       AnnotationMode.TEXT);
   }
 
+  protected onSignatureClick_() {
+    this.setAnnotationMode(
+        this.annotationMode === AnnotationMode.SIGNATURE ?
+            AnnotationMode.OFF :
+            AnnotationMode.SIGNATURE);
+  }
+
   /**
    * Handles when the user starts a stroke. While the stroke is in progress,
    * disallow undo/redo operations.
@@ -486,6 +496,8 @@ export class ViewerToolbarElement extends CrLitElement {
     assert(this.formFieldFocus !== FormFieldFocusType.TEXT);
 
     Ink2Manager.getInstance().undo();
+    getAnnouncerInstance().announce(
+        loadTimeData.getString('ink2AnnotationUndone'));
     record(UserAction.UNDO_INK2);
   }
 
@@ -504,6 +516,8 @@ export class ViewerToolbarElement extends CrLitElement {
     assert(this.formFieldFocus !== FormFieldFocusType.TEXT);
 
     Ink2Manager.getInstance().redo();
+    getAnnouncerInstance().announce(
+        loadTimeData.getString('ink2AnnotationRedone'));
     record(UserAction.REDO_INK2);
   }
 

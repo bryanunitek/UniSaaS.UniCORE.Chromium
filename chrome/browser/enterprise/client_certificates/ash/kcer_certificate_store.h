@@ -12,7 +12,6 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/task/sequenced_task_runner.h"
 #include "chromeos/ash/components/kcer/kcer.h"
 #include "components/enterprise/client_certificates/core/certificate_store.h"
 #include "components/enterprise/client_certificates/core/store_error.h"
@@ -47,10 +46,8 @@ class KcerCertificateStore : public CertificateStore {
   // thread.
   static std::unique_ptr<CertificateStore> CreateForProfile(Profile* profile);
 
-  KcerCertificateStore(
-      PrefService* pref_service,
-      base::WeakPtr<kcer::Kcer> kcer,
-      scoped_refptr<base::SequencedTaskRunner> kcer_task_runner);
+  KcerCertificateStore(PrefService* pref_service,
+                       base::WeakPtr<kcer::Kcer> kcer);
   ~KcerCertificateStore() override;
 
   // CertificateStore:
@@ -92,9 +89,22 @@ class KcerCertificateStore : public CertificateStore {
           callback,
       scoped_refptr<PrivateKey> private_key);
 
+  // Checks the browser enterprise client certificate tag of each key returned
+  // by ListKeys; `done_closure` runs once all checks complete.
+  void OnBrowserEnterpriseKeysListedForDeletion(
+      base::OnceClosure done_closure,
+      std::vector<kcer::PublicKey> keys,
+      base::flat_map<kcer::Token, kcer::Error> errors);
+
+  // Removes the key for `spki` if it is tagged as a browser enterprise client
+  // certificate key, then runs `done_closure`.
+  void OnBrowserEnterpriseTagCheckedForDeletion(
+      kcer::PublicKeySpki spki,
+      base::RepeatingClosure done_closure,
+      base::expected<bool, kcer::Error> tag_present);
+
   raw_ptr<PrefService> pref_service_;
   base::WeakPtr<kcer::Kcer> kcer_;
-  scoped_refptr<base::SequencedTaskRunner> kcer_task_runner_;
   std::unique_ptr<KcerPrivateKeyFactory> key_factory_;
 
   base::WeakPtrFactory<KcerCertificateStore> weak_factory_{this};

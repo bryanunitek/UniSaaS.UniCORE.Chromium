@@ -7,7 +7,6 @@ package org.chromium.chrome.browser.ntp_customization.theme;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.CHROME_COLORS;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.THEME;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.THEME_COLLECTIONS;
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.CHROME_COLOR;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.IMAGE_FROM_DISK;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.THEME_COLLECTION;
 import static org.chromium.chrome.browser.ntp_customization.theme.NtpThemeProperty.THEME_KEYS;
@@ -40,8 +39,8 @@ import org.chromium.chrome.browser.ntp_customization.theme.theme_collections.Ntp
 import org.chromium.chrome.browser.ntp_customization.theme.upload_image.BackgroundImageInfo;
 import org.chromium.chrome.browser.ntp_customization.theme.upload_image.UploadImagePreviewCoordinator;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase.PlatformType;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataUploadImage;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -62,7 +61,7 @@ public class NtpThemeCoordinator {
     private final CallbackController mCallbackController = new CallbackController();
     private final boolean mIsNtpThemeSyncEnabled;
     private NtpThemeMediator mMediator;
-    private NtpThemeBottomSheetView mNtpThemeBottomSheetView;
+    private final NtpThemeBottomSheetView mNtpThemeBottomSheetView;
     private @Nullable UploadImagePreviewCoordinator mUploadPreviewCoordinator;
     private @Nullable NtpThemeCollectionsCoordinator mNtpThemeCollectionsCoordinator;
     private @Nullable NtpChromeColorsCoordinator mNtpChromeColorsCoordinator;
@@ -122,7 +121,6 @@ public class NtpThemeCoordinator {
                                             THEME_COLLECTION);
                                     mBottomSheetDelegate.onNewColorSelected(
                                             /* isDifferentColor= */ true);
-                                    mBottomSheetDelegate.onNewThemeCollectionImageSelected(bitmap);
                                     notifyBottomSheetBackgroundTypeChanged();
                                 }));
         mNtpThemeDelegate = createNtpThemeDelegate();
@@ -163,7 +161,7 @@ public class NtpThemeCoordinator {
                     NtpCustomizationUtils.getDefaultBackgroundImageInfo(mContext, bitmap);
             NtpBackgroundDataUploadImage uploadImageData =
                     new NtpBackgroundDataUploadImage(
-                            PlatformType.ANDROID_LOCAL,
+                            PlatformType.ANDROID,
                             info,
                             bitmap,
                             /* primaryColor= */ null,
@@ -243,7 +241,7 @@ public class NtpThemeCoordinator {
 
     @VisibleForTesting
     void onChromeColorSelected() {
-        mMediator.updateForChoosingDefaultOrChromeColorOption(CHROME_COLOR);
+        mMediator.onChromeColorSelected();
         notifyBottomSheetBackgroundTypeChanged();
     }
 
@@ -331,10 +329,6 @@ public class NtpThemeCoordinator {
         var oldValue = mMediator;
         mMediator = mediator;
         ResettersForTesting.register(() -> mMediator = oldValue);
-    }
-
-    void setNtpThemeBottomSheetViewForTesting(NtpThemeBottomSheetView ntpThemeBottomSheetView) {
-        mNtpThemeBottomSheetView = ntpThemeBottomSheetView;
     }
 
     NtpThemeCollectionManager getNtpThemeManagerForTesting() {

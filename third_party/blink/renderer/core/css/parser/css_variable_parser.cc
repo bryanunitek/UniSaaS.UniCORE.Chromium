@@ -381,7 +381,8 @@ static bool ConsumeCustomFunction(CSSParserTokenStream& stream,
         return false;
       }
       if (!ConsumeUnparsedValue(stream, /*restricted_value=*/false,
-                                /*stop_type=*/kEOFToken, features, context)) {
+                                /*stop_type=*/kEOFToken, features, context) ||
+          !stream.AtEnd()) {
         return false;
       }
     } else {
@@ -569,7 +570,7 @@ static bool ConsumeUnparsedValue(CSSParserTokenStream& stream,
           continue;
         case CSSValueID::kInherit:
           if (!RuntimeEnabledFeatures::CSSInheritFunctionEnabled()) {
-            return false;
+            break;
           }
           [[fallthrough]];
         case CSSValueID::kVar:
@@ -731,6 +732,12 @@ CSSVariableData* CSSVariableParser::ConsumeUnparsedDeclaration(
   original_text =
       CSSVariableParser::StripTrailingWhitespaceAndComments(original_text);
 
+  // We consumed the leading whitespace before taking `value_start_offset`, and
+  // just stripped the trailing one. (The test needs to be after the trailing
+  // strip, or we could look at trailing space believing it was leading.)
+  DCHECK(original_text.empty() ||
+         original_text.Find(IsNotHTMLSpace<UChar>) == 0u);
+
   return CSSVariableData::Create(original_text, is_animation_tainted, false,
                                  features);
 }
@@ -772,7 +779,10 @@ StringView CSSVariableParser::StripTrailingWhitespaceAndComments(
   // (i.e. not CSSOM, where we just get a string), we know we can't
   // have unfinished comments, so consider piping that knowledge all
   // the way through here.
-  if (text.Is8Bit() && !std::ranges::contains(text.Span8(), '/')) {
+  const bool may_contain_comments =
+      text.Is8Bit() ? std::ranges::contains(text.Span8(), '/')
+                    : std::ranges::contains(text.Span16(), '/');
+  if (!may_contain_comments) {
     // No comments, so we can strip whitespace only.
     // SAFETY: empty strings short-circuited in &&-expression means that
     // the last character is valid.
@@ -846,15 +856,7 @@ StringView CSSVariableParser::StripTrailingWhitespaceAndComments(
     }
   }
 
-  StringView ret = StringView(text, 0, string_len);
-
-  // Leading whitespace should already have been stripped.
-  // (This test needs to be after we stripped trailing spaces,
-  // or we could look at trailing space believing it was leading.)
-  // SAFETY: ret is checked for emptiness before access.
-  DCHECK(ret.empty() || !IsHTMLSpace(UNSAFE_BUFFERS(ret[0])));
-
-  return ret;
+  return StringView(text, 0, string_len);
 }
 
 void CSSVariableParser::CollectDashedFunctions(CSSParserTokenStream& stream,

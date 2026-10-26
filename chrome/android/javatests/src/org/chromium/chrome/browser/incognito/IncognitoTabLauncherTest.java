@@ -18,19 +18,20 @@ import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.MediumTest;
 import androidx.test.filters.SmallTest;
 
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mockito;
 
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
-import org.chromium.chrome.browser.customtabs.CustomTabsConnection;
 import org.chromium.chrome.browser.customtabs.CustomTabsTestUtils;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
@@ -46,10 +47,16 @@ import java.util.concurrent.TimeoutException;
 /** Tests for {@link IncognitoTabLauncher}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class IncognitoTabLauncherTest {
     @Rule
     public final FreshCtaTransitTestRule mActivityRule =
             ChromeTransitTestRules.freshChromeTabbedActivityRule();
+
+    @After
+    public void tearDown() {
+        IncognitoTabLauncher.setComponentEnabled(true);
+    }
 
     @Test
     @Feature("Incognito")
@@ -126,7 +133,7 @@ public class IncognitoTabLauncherTest {
         // To emulate first party we create a CustomTabIntent with an associated
         // session token. Then, we create a normal intent and copy the session token
         // from CustomTabIntent to the normal intent.
-        CustomTabsConnection connection = CustomTabsTestUtils.setUpConnection();
+        CustomTabsTestUtils.setUpConnection();
         CustomTabsSession session = CustomTabsTestUtils.bindWithCallback(null).session;
 
         CustomTabsIntent customTabIntent = new CustomTabsIntent.Builder(session).build();

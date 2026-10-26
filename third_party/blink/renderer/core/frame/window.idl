@@ -53,6 +53,7 @@
     attribute DOMString status;
     [CrossOrigin, CallWith=Isolate, Measure] void close();
     [MeasureAs=WindowClosed, CrossOrigin] readonly attribute boolean closed;
+    [RuntimeEnabled=WindowOpenAlwaysOnTop] readonly attribute boolean alwaysOnTopPopup;
     void stop();
     [CrossOrigin, CallWith=Isolate, Measure] void focus();
     [CrossOrigin, Measure] void blur();
@@ -212,7 +213,7 @@
 
     // Collection of fenced frame APIs
     // https://github.com/shivanigithub/fenced-frame/issues/14
-    [RuntimeEnabled=FencedFrames] readonly attribute Fence? fence;
+    [RuntimeEnabled=FencedFrames, DeprecateAs=HTMLFencedFrameElement] readonly attribute Fence? fence;
 
     // See
     // https://github.com/WICG/crash-reporting/blob/gh-pages/crashStorage-explainer.md.

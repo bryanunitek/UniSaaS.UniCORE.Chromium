@@ -35,6 +35,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
@@ -79,8 +80,10 @@ import java.util.concurrent.TimeoutException;
 /** Tests for {@link TabbedNavigationBarColorController}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 @Features.DisableFeatures({
     ChromeFeatureList.EDGE_TO_EDGE_EVERYWHERE,
+    ChromeFeatureList.EDGE_TO_EDGE_MONITOR_CONFIGURATIONS,
     ChromeFeatureList.ANDROID_BOTTOM_BAR
 })
 @SuppressLint("NewApi")
@@ -372,12 +375,14 @@ public class TabbedNavigationBarColorControllerTest {
     @EnableAnimations
     @Restriction({DeviceFormFactor.PHONE, DeviceRestriction.RESTRICTION_TYPE_NON_AUTO})
     @MinAndroidSdkLevel(Build.VERSION_CODES.R)
+    @DisabledTest(message = "https://crbug.com/576880040")
     public void testNavBarColorAnimationsEdgeToEdgeBottomChin() throws InterruptedException {
         initialize();
 
         Assume.assumeTrue(
                 "E2E not applicable.",
-                EdgeToEdgeUtils.isEdgeToEdgeBottomChinEnabled(mActivityTestRule.getActivity()));
+                EdgeToEdgeUtils.isEdgeToEdgeBottomChinSupportedByDevice(
+                        mActivityTestRule.getActivity()));
         testNavBarColorAnimations();
     }
 
@@ -387,6 +392,7 @@ public class TabbedNavigationBarColorControllerTest {
     @EnableAnimations
     @Restriction({DeviceFormFactor.PHONE, DeviceRestriction.RESTRICTION_TYPE_NON_AUTO})
     @MinAndroidSdkLevel(Build.VERSION_CODES.R)
+    @DisabledTest(message = "https://crbug.com/576880040")
     public void testNavBarColorAnimationsEdgeToEdgeEverywhere() throws InterruptedException {
         initialize();
         testNavBarColorAnimations();

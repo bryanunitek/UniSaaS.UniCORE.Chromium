@@ -13,6 +13,7 @@
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/util/webui_util_desktop.h"
 #include "chrome/common/url_constants.h"
@@ -23,6 +24,7 @@
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/ui_base_features.h"
 
 class WebUISourcesTest : public testing::Test {
  public:
@@ -133,14 +135,19 @@ TEST_F(WebUISourcesTest, ThemeSourceCSS) {
 }
 
 TEST_F(WebUISourcesTest, ThemeSourceColorsCSS) {
-  // Check for a successful request and that the data is non-null. The actual
-  // conversion of color provider colors to css colors is tested in helper
-  // functions.
-  size_t empty_size = 0;
+  // Check for a successful request and that the data is non-null under both
+  // optimized and unoptimized (baseline) paths. The actual conversion of color
+  // provider colors to css colors is tested in helper functions.
+  for (bool feature_enabled : {false, true}) {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitWithFeatureState(
+        features::kColorIdCssStyleSheetOptimization, feature_enabled);
 
-  StartDataRequest("colors.css?sets=ui");
-  base::RunLoop().RunUntilIdle();
-  EXPECT_NE(result_data_size_, empty_size);
+    result_data_size_ = 0;
+    StartDataRequest("colors.css?sets=ui");
+    base::RunLoop().RunUntilIdle();
+    EXPECT_NE(result_data_size_, 0u);
+  }
 }
 
 TEST_F(WebUISourcesTest, ThemeAllowedOrigin) {
@@ -153,4 +160,54 @@ TEST_F(WebUISourcesTest, ThemeAllowedOrigin) {
   EXPECT_EQ(
       theme_source()->GetAccessControlAllowOriginForOrigin("http://google.com"),
       "");
+  // Only the source serving chrome-untrusted://theme allows
+  // chrome-untrusted:// origins.
+  EXPECT_EQ(theme_source()->GetAccessControlAllowOriginForOrigin(
+                "chrome-untrusted://new-tab-page"),
+            "");
+}
+
+TEST_F(WebUISourcesTest, ThemeAllowedOriginUntrusted) {
+  ThemeSource untrusted_theme_source(profile(), /*serve_untrusted=*/true);
+  EXPECT_EQ(untrusted_theme_source.GetAccessControlAllowOriginForOrigin(
+                "chrome-untrusted://new-tab-page"),
+            "chrome-untrusted://new-tab-page");
+  EXPECT_EQ(untrusted_theme_source.GetAccessControlAllowOriginForOrigin(
+                "chrome://settings"),
+            "chrome://settings");
+  EXPECT_EQ(untrusted_theme_source.GetAccessControlAllowOriginForOrigin(
+                "chrome-extensions://some-id"),
+            "");
+  EXPECT_EQ(untrusted_theme_source.GetAccessControlAllowOriginForOrigin(
+                "http://google.com"),
+            "");
+}
+
+TEST_F(WebUISourcesTest, ThemeSourceShouldServiceRequest) {
+  EXPECT_TRUE(theme_source()->ShouldServiceRequest(
+      GURL("chrome://theme/colors.css"), nullptr, -1));
+  EXPECT_TRUE(theme_source()->ShouldServiceRequest(
+      GURL("chrome://theme/IDR_THEME_FRAME"), nullptr, -1));
+
+  EXPECT_TRUE(theme_source()->ShouldServiceRequest(
+      GURL("devtools://theme/colors.css"), nullptr, -1));
+  EXPECT_TRUE(theme_source()->ShouldServiceRequest(
+      GURL("devtools://theme/colors.css?sets=ui,chrome"), nullptr, -1));
+
+  EXPECT_FALSE(theme_source()->ShouldServiceRequest(
+      GURL("devtools://theme/IDR_THEME_FRAME"), nullptr, -1));
+  EXPECT_FALSE(theme_source()->ShouldServiceRequest(
+      GURL("devtools://theme/css/new_tab_theme.css"), nullptr, -1));
+  EXPECT_FALSE(theme_source()->ShouldServiceRequest(GURL("devtools://theme/"),
+                                                    nullptr, -1));
+  EXPECT_FALSE(theme_source()->ShouldServiceRequest(
+      GURL("chrome-untrusted://theme/colors.css"), nullptr, -1));
+  EXPECT_FALSE(theme_source()->ShouldServiceRequest(
+      GURL("https://theme/colors.css"), nullptr, -1));
+
+  ThemeSource untrusted_theme_source(profile(), /*serve_untrusted=*/true);
+  EXPECT_TRUE(untrusted_theme_source.ShouldServiceRequest(
+      GURL("chrome-untrusted://theme/colors.css"), nullptr, -1));
+  EXPECT_FALSE(untrusted_theme_source.ShouldServiceRequest(
+      GURL("chrome://theme/colors.css"), nullptr, -1));
 }

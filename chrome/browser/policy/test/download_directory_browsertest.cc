@@ -12,7 +12,7 @@
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/download/public/common/download_item.h"
@@ -35,7 +35,7 @@ namespace policy {
 namespace {
 // Downloads a file named |file| and expects it to be saved to |dir|, which
 // must be empty.
-void DownloadAndVerifyFile(Browser* browser,
+void DownloadAndVerifyFile(BrowserWindowInterface* browser,
                            const base::FilePath& dir,
                            const base::FilePath& file) {
   net::EmbeddedTestServer embedded_test_server;
@@ -66,8 +66,8 @@ void DownloadAndVerifyFile(Browser* browser,
 // Verifies that the download directory can be forced by policy.
 IN_PROC_BROWSER_TEST_F(PolicyTest, DownloadDirectory) {
   // Don't prompt for the download location during this test.
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
+                                                  false);
 
   base::FilePath initial_dir =
       DownloadPrefs(browser()->GetProfile()).DownloadPath();

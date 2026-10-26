@@ -7,8 +7,8 @@
 
 #include "base/command_line.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -32,9 +32,13 @@ class DataSaverWebAPIsBrowserTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUp();
   }
 
-  void VerifySaveDataAPI(bool expected_header_set, Browser* browser = nullptr) {
+  void VerifySaveDataAPI(bool expected_header_set,
+                         BrowserWindowInterface* browser = nullptr) {
     if (!browser)
       browser = InProcessBrowserTest::browser();
+    browser->GetTabStripModel()
+        ->GetActiveWebContents()
+        ->NotifyPreferencesChanged();
     ASSERT_TRUE(ui_test_utils::NavigateToURL(
         browser, test_server_.GetURL("/net_info.html")));
     EXPECT_EQ(expected_header_set,
@@ -47,8 +51,9 @@ class DataSaverWebAPIsBrowserTest : public InProcessBrowserTest {
   }
 
  private:
-  bool RunScriptExtractBool(Browser* browser, const std::string& script) {
-    return content::EvalJs(browser->tab_strip_model()->GetActiveWebContents(),
+  bool RunScriptExtractBool(BrowserWindowInterface* browser,
+                            const std::string& script) {
+    return content::EvalJs(browser->GetTabStripModel()->GetActiveWebContents(),
                            script)
         .ExtractBool();
   }
@@ -56,9 +61,7 @@ class DataSaverWebAPIsBrowserTest : public InProcessBrowserTest {
   net::EmbeddedTestServer test_server_;
 };
 
-// TODO(crbug.com/40250644): Fix and enable test.
-IN_PROC_BROWSER_TEST_F(DataSaverWebAPIsBrowserTest,
-                       DISABLED_DataSaverEnabledJS) {
+IN_PROC_BROWSER_TEST_F(DataSaverWebAPIsBrowserTest, DataSaverEnabledJS) {
   data_saver::OverrideIsDataSaverEnabledForTesting(true);
   VerifySaveDataAPI(true);
 }
@@ -68,9 +71,7 @@ IN_PROC_BROWSER_TEST_F(DataSaverWebAPIsBrowserTest, DataSaverDisabledJS) {
   VerifySaveDataAPI(false);
 }
 
-// TODO(crbug.com/40250644): Fix and enable test.
-IN_PROC_BROWSER_TEST_F(DataSaverWebAPIsBrowserTest,
-                       DISABLED_DataSaverToggleJS) {
+IN_PROC_BROWSER_TEST_F(DataSaverWebAPIsBrowserTest, DataSaverToggleJS) {
   data_saver::OverrideIsDataSaverEnabledForTesting(false);
   VerifySaveDataAPI(false);
 

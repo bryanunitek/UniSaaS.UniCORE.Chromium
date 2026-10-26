@@ -4,10 +4,14 @@
 
 #include "media/formats/mp4/h265_annex_b_to_hevc_bitstream_converter.h"
 
+#include <algorithm>
+#include <variant>
+
 #include "base/compiler_specific.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
 #include "base/containers/span_writer.h"
+#include "media/parsers/h26x_parser.h"
 
 namespace media {
 
@@ -15,8 +19,8 @@ H265AnnexBToHevcBitstreamConverter::H265AnnexBToHevcBitstreamConverter(
     bool add_parameter_sets_in_bitstream)
     : add_parameter_sets_in_bitstream_(add_parameter_sets_in_bitstream) {
   // These configuration items never change.
-  config_.configurationVersion = 1;
-  config_.lengthSizeMinusOne = 3;
+  config_.configuration_version = 1;
+  config_.length_size_minus_one = 3;
 }
 
 H265AnnexBToHevcBitstreamConverter::~H265AnnexBToHevcBitstreamConverter() =
@@ -48,6 +52,10 @@ MP4Status H265AnnexBToHevcBitstreamConverter::ConvertChunk(
   base::flat_set<int> sps_to_include;
   base::flat_set<int> pps_to_include;
   base::flat_set<int> vps_to_include;
+  // Prefix SEI NAL units carrying HDR10 static metadata, which needs to reach
+  // muxers that only look at the decoder configuration record.
+  std::vector<blob> hdr_sei_to_include;
+  bool has_parameter_sets = false;
 
   // Scan input buffer looking for two main types of NALUs
   //  1. VPS, SPS and PPS. They'll be added to the HEVC configuration `config_`
@@ -84,6 +92,7 @@ MP4Status H265AnnexBToHevcBitstreamConverter::ConvertChunk(
         if (auto* sps = parser_.GetSPS(sps_id)) {
           vps_to_include.insert(sps->sps_video_parameter_set_id);
         }
+        has_parameter_sets = true;
         config_changed = true;
         break;
       }
@@ -100,6 +109,7 @@ MP4Status H265AnnexBToHevcBitstreamConverter::ConvertChunk(
         id2vps_.insert_or_assign(vps_id,
                                  blob(nalu.data.begin(), nalu.data.end()));
         vps_to_include.insert(vps_id);
+        has_parameter_sets = true;
         config_changed = true;
         break;
       }
@@ -118,12 +128,24 @@ MP4Status H265AnnexBToHevcBitstreamConverter::ConvertChunk(
         pps_to_include.insert(pps_id);
         if (auto* pps = parser_.GetPPS(pps_id))
           sps_to_include.insert(pps->pps_seq_parameter_set_id);
+        has_parameter_sets = true;
         config_changed = true;
         break;
       }
 
-      // TODO: when HDR encoding is supported, we need to also move the prefix
-      // SEI out of slice data and put it into the hvccBox.
+      case H265NALU::PREFIX_SEI_NUT: {
+        H265SEI sei;
+        if (parser_.ParseSEI(&sei) == H265Parser::kOk &&
+            std::ranges::any_of(sei.msgs, [](const H265SEIMessage& msg) {
+              return std::holds_alternative<H26xSEIMasteringDisplayInfo>(msg) ||
+                     std::holds_alternative<H26xSEIContentLightLevelInfo>(msg);
+            })) {
+          hdr_sei_to_include.emplace_back(nalu.data.begin(), nalu.data.end());
+        }
+        slice_units.emplace_back(nalu.data);
+        data_size += config_.length_size_minus_one + 1 + nalu.data.size();
+        break;
+      }
 
       // VCL, Non-IRAP
       case H265NALU::TRAIL_N:
@@ -182,9 +204,18 @@ MP4Status H265AnnexBToHevcBitstreamConverter::ConvertChunk(
         [[fallthrough]];
       default:
         slice_units.emplace_back(nalu.data);
-        data_size += config_.lengthSizeMinusOne + 1 + nalu.data.size();
+        data_size += config_.length_size_minus_one + 1 + nalu.data.size();
         break;
     }
+  }
+
+  // The HDR10 SEI describes the same configuration as the parameter sets it
+  // travels with, so it is only refreshed by chunks that carry parameter sets.
+  // Encoders that repeat the SEI on every frame must not keep reporting a
+  // configuration change for it.
+  if (has_parameter_sets && hdr_sei_nalus_ != hdr_sei_to_include) {
+    hdr_sei_nalus_ = std::move(hdr_sei_to_include);
+    config_changed = true;
   }
 
   if (config_changed && add_parameter_sets_in_bitstream_) {
@@ -195,7 +226,7 @@ MP4Status H265AnnexBToHevcBitstreamConverter::ConvertChunk(
         return MP4Status::Codes::kFailedToLookupPPS;
       }
       slice_units.insert(slice_units.begin(), it->second);
-      data_size += config_.lengthSizeMinusOne + 1 + it->second.size();
+      data_size += config_.length_size_minus_one + 1 + it->second.size();
     }
     for (auto& id : sps_to_include) {
       auto it = id2sps_.find(id);
@@ -203,7 +234,7 @@ MP4Status H265AnnexBToHevcBitstreamConverter::ConvertChunk(
         return MP4Status::Codes::kFailedToLookupSPS;
       }
       slice_units.insert(slice_units.begin(), it->second);
-      data_size += config_.lengthSizeMinusOne + 1 + it->second.size();
+      data_size += config_.length_size_minus_one + 1 + it->second.size();
     }
     for (auto& id : vps_to_include) {
       auto it = id2vps_.find(id);
@@ -211,7 +242,7 @@ MP4Status H265AnnexBToHevcBitstreamConverter::ConvertChunk(
         return MP4Status::Codes::kFailedToLookupVPS;
       }
       slice_units.insert(slice_units.begin(), it->second);
-      data_size += config_.lengthSizeMinusOne + 1 + it->second.size();
+      data_size += config_.length_size_minus_one + 1 + it->second.size();
     }
   }
 
@@ -290,34 +321,35 @@ MP4Status H265AnnexBToHevcBitstreamConverter::ConvertChunk(
     config_.min_spatial_segmentation_idc =
         active_sps->vui_parameters.min_spatial_segmentation_idc;
     if (active_sps->vui_parameters.min_spatial_segmentation_idc == 0) {
-      config_.parallelismType =
+      config_.parallelism_type =
           mp4::HEVCDecoderConfigurationRecord::kMixedParallel;
     } else if (active_pps->entropy_coding_sync_enabled_flag &&
                active_pps->tiles_enabled_flag) {
-      config_.parallelismType =
+      config_.parallelism_type =
           mp4::HEVCDecoderConfigurationRecord::kMixedParallel;
     } else if (active_pps->entropy_coding_sync_enabled_flag) {
-      config_.parallelismType =
+      config_.parallelism_type =
           mp4::HEVCDecoderConfigurationRecord::kWaveFrontParallel;
     } else if (active_pps->tiles_enabled_flag) {
-      config_.parallelismType =
+      config_.parallelism_type =
           mp4::HEVCDecoderConfigurationRecord::kTileParallel;
     } else {
-      config_.parallelismType =
+      config_.parallelism_type =
           mp4::HEVCDecoderConfigurationRecord::kSliceParallel;
     }
-    config_.chromaFormat = active_sps->chroma_format_idc;
-    config_.bitDepthLumaMinus8 = active_sps->bit_depth_luma_minus8;
-    config_.bitDepthChromaMinus8 = active_sps->bit_depth_chroma_minus8;
+    config_.chroma_format = active_sps->chroma_format_idc;
+    config_.bit_depth_luma_minus8 = active_sps->bit_depth_luma_minus8;
+    config_.bit_depth_chroma_minus8 = active_sps->bit_depth_chroma_minus8;
     // Gives the average frame rate in units of frames per 256 seconds.
     // A value of 0 indicates an unspecified average frame rate.
-    config_.avgFrameRate = 0;
+    config_.avg_frame_rate = 0;
     // Set to 0 to indicate it may or may not be of constant frame rate.
-    config_.constantFrameRate = 0;
-    config_.numTemporalLayers = active_sps->sps_max_sub_layers_minus1 + 1;
-    config_.temporalIdNested = active_sps->sps_temporal_id_nesting_flag;
+    config_.constant_frame_rate = 0;
+    config_.num_temporal_layers = active_sps->sps_max_sub_layers_minus1 + 1;
+    config_.temporal_id_nested = active_sps->sps_temporal_id_nesting_flag;
 
-    // We write 3 arrays, in the order of VPS array, SPS array and PPS array.
+    // Arrays are written in the order mandated by ISO/IEC 14496-15 8.3.3.1.2:
+    // VPS, SPS, PPS and then prefix SEI.
     auto hvcc_array_idx = 0;
 
     mp4::HEVCDecoderConfigurationRecord::HVCCNALArray nalu_array;
@@ -371,7 +403,16 @@ MP4Status H265AnnexBToHevcBitstreamConverter::ConvertChunk(
       hvcc_array_idx++;
     }
 
-    config_.numOfArrays = hvcc_array_idx;
+    // The prefix SEI NAL units are left in the bitstream as well, so this array
+    // is never complete.
+    if (!hdr_sei_nalus_.empty()) {
+      nalu_array.first_byte = H265NALU::PREFIX_SEI_NUT & 0x3F;
+      nalu_array.units = hdr_sei_nalus_;
+      config_.arrays.push_back(nalu_array);
+      hvcc_array_idx++;
+    }
+
+    config_.num_of_arrays = hvcc_array_idx;
   }
 
   if (config_changed_out) {

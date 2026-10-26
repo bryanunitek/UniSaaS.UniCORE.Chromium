@@ -10,6 +10,7 @@
 #import "base/memory/weak_ptr.h"
 #import "base/no_destructor.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/action_target.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
 #import "ios/web/public/js_messaging/java_script_feature.h"
@@ -45,13 +46,15 @@ class ScrollToolJavaScriptFeature : public web::JavaScriptFeature {
   // Attempts to apply a directional scroll to a target element in the given
   // WebFrame.
   void Scroll(base::WeakPtr<web::WebFrame> target_frame,
-              const optimization_guide::proto::ScrollAction& action,
+              const ActionTarget& target,
+              optimization_guide::proto::ScrollAction_ScrollDirection direction,
+              float distance,
               ToolExecutionCallback callback);
 
   // Attempts to bring a target element into visibility within the given
   // WebFrame by scrolling the page or any parent scroll views as needed.
   void ScrollTo(base::WeakPtr<web::WebFrame> target_frame,
-                const optimization_guide::proto::ScrollToAction& action,
+                const ActionTarget& target,
                 ToolExecutionCallback callback);
 
  protected:
@@ -61,17 +64,20 @@ class ScrollToolJavaScriptFeature : public web::JavaScriptFeature {
  private:
   friend class base::NoDestructor<ScrollToolJavaScriptFeature>;
 
-  // Helper to try executing a Scroll or ScrollTo action in the given WebFrame.
+  // Executes a `Scroll` or `ScrollTo` action in the given `web_frame`.
   //
   // If `direction_and_distance` is not provided, this scrolls the page in
-  // `web_frame` until the `target` is in view. If it is provided, this
-  // scrolls the `target` in `web_frame` by that distance in that direction.
+  // `web_frame` until the `target` is in view
+  // (`ActorJavaScriptCall::kScrollTo`). If it is provided, this scrolls the
+  // `target` in `web_frame` by that distance in that direction
+  // (`ActorJavaScriptCall::kScroll`).
   void ExecuteScrollAction(
       base::WeakPtr<web::WebFrame> web_frame,
-      const optimization_guide::proto::ActionTarget& target,
+      const ActionTarget& target,
       std::optional<
           std::pair<optimization_guide::proto::ScrollAction_ScrollDirection,
                     int>> direction_and_distance,
+      ActorJavaScriptCall call,
       ToolExecutionCallback callback);
 };
 

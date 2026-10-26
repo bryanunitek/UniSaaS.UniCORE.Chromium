@@ -4,13 +4,14 @@
 
 #import "ios/chrome/browser/page_content_annotations/model/page_content_annotations_service_factory.h"
 
+#import <utility>
+
 #import "base/feature_list.h"
 #import "base/path_service.h"
 #import "base/task/sequenced_task_runner.h"
 #import "base/task/task_traits.h"
 #import "base/task/thread_pool.h"
 #import "components/application_locale_storage/application_locale_storage.h"
-#import "components/keyed_service/core/service_access_type.h"
 #import "components/page_content_annotations/core/page_content_annotations_features.h"
 #import "components/page_content_annotations/core/page_content_annotations_service.h"
 #import "components/variations/service/variations_service_utils.h"
@@ -41,8 +42,7 @@ std::unique_ptr<KeyedService> BuildPageContentAnnotationsService(
   OptimizationGuideService* optimization_guide_keyed_service =
       OptimizationGuideServiceFactory::GetForProfile(profile);
   history::HistoryService* history_service =
-      ios::HistoryServiceFactory::GetForProfile(
-          profile, ServiceAccessType::EXPLICIT_ACCESS);
+      ios::HistoryServiceFactory::GetForProfile(profile);
   if (!optimization_guide_keyed_service || !history_service) {
     return nullptr;
   }
@@ -53,7 +53,10 @@ std::unique_ptr<KeyedService> BuildPageContentAnnotationsService(
 
   return std::make_unique<
       page_content_annotations::PageContentAnnotationsService>(
-      GetApplicationContext()->GetApplicationLocaleStorage()->Get(),
+      std::string(GetApplicationContext()
+                      ->GetApplicationLocaleStorage()
+                      ->GetTag()
+                      .tag_string()),
       GetCurrentCountryCode(GetApplicationContext()->GetVariationsService()),
       optimization_guide_keyed_service, history_service,
       ios::TemplateURLServiceFactory::GetForProfile(profile),
@@ -67,34 +70,17 @@ std::unique_ptr<KeyedService> BuildPageContentAnnotationsService(
 
 }  // namespace
 
-// static
-page_content_annotations::PageContentAnnotationsService*
-PageContentAnnotationsServiceFactory::GetForProfile(ProfileIOS* profile) {
-  return GetInstance()
-      ->GetServiceForProfileAs<
-          page_content_annotations::PageContentAnnotationsService>(
-          profile, /*create=*/true);
-}
-
-// static
-PageContentAnnotationsServiceFactory*
-PageContentAnnotationsServiceFactory::GetInstance() {
-  static base::NoDestructor<PageContentAnnotationsServiceFactory> instance;
-  return instance.get();
-}
-
-PageContentAnnotationsServiceFactory::PageContentAnnotationsServiceFactory()
-    : ProfileKeyedServiceFactoryIOS("PageContentAnnotationsService",
-                                    ServiceCreation::kCreateWithProfile,
-                                    TestingCreation::kNoServiceForTests) {
+PageContentAnnotationsServiceFactory::PageContentAnnotationsServiceFactory(
+    PassKey key)
+    : TypedProfileKeyedServiceFactoryIOS(std::move(key),
+                                         "PageContentAnnotationsService",
+                                         ServiceCreation::kCreateWithProfile,
+                                         TestingCreation::kNoServiceForTests) {
   DependsOn(OptimizationGuideServiceFactory::GetInstance());
   DependsOn(ios::HistoryServiceFactory::GetInstance());
   DependsOn(ios::TemplateURLServiceFactory::GetInstance());
   DependsOn(ios::ZeroSuggestCacheServiceFactory::GetInstance());
 }
-
-PageContentAnnotationsServiceFactory::~PageContentAnnotationsServiceFactory() =
-    default;
 
 // static
 PageContentAnnotationsServiceFactory::TestingFactory

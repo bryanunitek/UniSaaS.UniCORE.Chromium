@@ -15,16 +15,18 @@
 namespace features {
 
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(kComputeRasterTranslateForExternalScale);
+CC_BASE_EXPORT BASE_DECLARE_FEATURE(kSizeOopifEffectSurfacesAtExternalScale);
+
+// Optimizes removal of empty and orphan render passes by combining reference
+// collection with the unreferenced-pass traversal. This is a killswitch for the
+// optimized path; disable it to fall back to the previous implementation.
+CC_BASE_EXPORT BASE_DECLARE_FEATURE(kOptimizeRemoveRenderPasses);
 
 // When enabled, the scheduler will allow deferring impl invalidation frames
 // for N frames (default 1) to reduce contention with main frames, allowing
 // main a chance to commit.
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(kDeferImplInvalidation);
-CC_BASE_EXPORT extern const base::FeatureParam<int>
-    kDeferImplInvalidationFrames;
-
-// Use DMSAA instead of MSAA for rastering tiles.
-CC_BASE_EXPORT BASE_DECLARE_FEATURE(kUseDMSAAForTiles);
+CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(int, kDeferImplInvalidationFrames);
 
 // When no frames are produced in a certain time interval, reclaim prepaint
 // tiles.
@@ -35,12 +37,12 @@ CC_BASE_EXPORT BASE_DECLARE_FEATURE(kSmallerInterestArea);
 
 constexpr static int kDefaultInterestAreaSizeInPixels = 3000;
 constexpr static int kDefaultInterestAreaSizeInPixelsWhenEnabled = 500;
-CC_BASE_EXPORT extern const base::FeatureParam<int> kInterestAreaSizeInPixels;
+CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(int, kInterestAreaSizeInPixels);
 
 // When enabled, old prepaint tiles in the "eventually" region get reclaimed
 // after some time.
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(kReclaimOldPrepaintTiles);
-CC_BASE_EXPORT extern const base::FeatureParam<int> kReclaimDelayInSeconds;
+CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(int, kReclaimDelayInSeconds);
 
 // When enabled, TileManager running into OOM will forcibly mark tiles as OOM so
 // that it doesn't wait for resource releases that will never come.
@@ -63,27 +65,27 @@ CC_BASE_EXPORT BASE_DECLARE_FEATURE(kClearCanvasResourcesInBackground);
 // When this feature is enabled we will use the corresponding mode definted by
 // `kScrollEventDispatchModeParamName`.
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(kWaitForLateScrollEvents);
-CC_BASE_EXPORT extern const base::FeatureParam<double>
-    kWaitForLateScrollEventsDeadlineRatio;
+CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
+    double,
+    kWaitForLateScrollEventsDeadlineRatio);
 
 // When enabled, image quality settings will be preserved in the discardable
 // image map.
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(kPreserveDiscardableImageMapQuality);
 
-// When enabled, the scroll jank v4 metric handles slow-path scrolls more
-// reliably. Specifically, we send GSEs to the main thread if the corresponding
-// GSUs were also routed to the main thread.
-CC_BASE_EXPORT BASE_DECLARE_FEATURE(kScrollEndRepaintFollowsScrollUpdate);
-
 // Kill switch for a bunch of optimizations for cc-slimming project.
 // Please see crbug.com/335450599 for more details.
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(kCCSlimming);
+
+// Android Webview Memory Multiplier configurations.
+CC_BASE_EXPORT BASE_DECLARE_FEATURE(kWebViewMemoryMultiplier);
+CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(int, kWebViewMemoryMultiplierParam);
+CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
+    int,
+    kWebViewMemoryMultiplierSoftPercentageParam);
+
 // Check if the above feature is enabled. For performance purpose.
 CC_BASE_EXPORT bool IsCCSlimmingEnabled();
-
-// When enabled, the scheduler will use SlimSchedulerStateMachine which ensures
-// that each action is returned only once per begin frame.
-CC_BASE_EXPORT BASE_DECLARE_FEATURE(kSlimScheduler);
 
 // Modes for `kWaitForLateScrollEvents` changing event dispatch. Where the
 // default is to just always enqueue scroll events.
@@ -116,8 +118,8 @@ CC_BASE_EXPORT BASE_DECLARE_FEATURE(kSlimScheduler);
 // `blink::InputHandlerProxy` to directly enforce the deadline. This isolates us
 // from cc scheduling bugs. Allowing us to no longer dispatch events, even if
 // frame production has yet to complete.
-CC_BASE_EXPORT extern const base::FeatureParam<std::string>
-    kScrollEventDispatchMode;
+CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(std::string,
+                                          kScrollEventDispatchMode);
 CC_BASE_EXPORT extern const char
     kScrollEventDispatchModeDispatchScrollEventsImmediately[];
 CC_BASE_EXPORT extern const char
@@ -148,20 +150,19 @@ CC_BASE_EXPORT extern const char kNewContentForCheckerboardedScrollsPerScroll[];
 // priority will be changed *before* a frame is drawn with checkerboarding, and
 // will be reset at the first frame that is painted without checkerboarding.
 CC_BASE_EXPORT extern const char kNewContentForCheckerboardedScrollsPerFrame[];
-CC_BASE_EXPORT extern const base::FeatureParam<std::string>
-    kNewContentForCheckerboardedScrollsParam;
-
-// When enabled, LCD text is allowed with some filters and backdrop filters.
-// Killswitch M135.
-CC_BASE_EXPORT BASE_DECLARE_FEATURE(kAllowLCDTextWithFilter);
+// Modes for `kNewContentForCheckerboardedScrolls`; the string values above are
+// the corresponding field trial param values.
+enum class NewContentForCheckerboardedScrollsMode {
+  kPerScroll,
+  kPerFrame,
+};
+CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
+    NewContentForCheckerboardedScrollsMode,
+    kNewContentForCheckerboardedScrollsParam);
 
 // When enabled, and an image decode is requested by both a tile task and
 // explicitly via img.decode(), it will be decoded only once.
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(kPreventDuplicateImageDecodes);
-
-// When enabled, HTMLImageElement::decode() promises resolve even if the image
-// is too large to fit into the image decode cache budget.
-CC_BASE_EXPORT BASE_DECLARE_FEATURE(kResolveLargeImageDecodes);
 
 // When enabled, fix bug where an image decode cache entry last use timestamp is
 // initialized to 0 instead of now.
@@ -171,25 +172,34 @@ CC_BASE_EXPORT BASE_DECLARE_FEATURE(kInitImageDecodeLastUseTime);
 // frames in a row.
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(kThrottleRepeatedNoDamageFrames);
 // Number of frames after which we start throttling.
-CC_BASE_EXPORT extern const base::FeatureParam<int>
-    kThrottleRepeatedNoDamageFramesThreshold1;
+CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
+    int,
+    kThrottleRepeatedNoDamageFramesThreshold1);
 // Number of frames beyond |Threshhold1| after which we increase throttling.
-CC_BASE_EXPORT extern const base::FeatureParam<int>
-    kThrottleRepeatedNoDamageFramesThreshold2;
+CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
+    int,
+    kThrottleRepeatedNoDamageFramesThreshold2);
 // Factor by which we throttle after |Threshold1| frames have passed. E.g. a
 // value of 2 would throttle the framerate to 1/2.
-CC_BASE_EXPORT extern const base::FeatureParam<int>
-    kThrottleRepeatedNoDamageFramesIntervalFactor1;
+CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
+    int,
+    kThrottleRepeatedNoDamageFramesIntervalFactor1);
 // Factor by which we increase the throttling after |Threshold1 + Threshold2|
 // frames have passed. Compounds on the throttling from |Factor1|. E.g. with
 // |Factor1 = 2| and |Factor2 = 3|, we would throttle to 1/6 the original
 // (unthrottled) framerate.
-CC_BASE_EXPORT extern const base::FeatureParam<int>
-    kThrottleRepeatedNoDamageFramesIntervalFactor2;
+CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
+    int,
+    kThrottleRepeatedNoDamageFramesIntervalFactor2);
 
 // On devices with a high refresh rate, whether to throttle main (not impl)
 // frame production to 60Hz.
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(kThrottleMainFrameTo60Hz);
+
+// When enabled alongside kThrottleMainFrameTo60Hz (or
+// kThrottleMainFrameTo60HzWebView on WebView), also throttles OffscreenCanvas
+// and Worker requestAnimationFrame() to 60Hz.
+CC_BASE_EXPORT BASE_DECLARE_FEATURE(kThrottleOffscreenCanvasTo60Hz);
 
 #if BUILDFLAG(IS_ANDROID)
 // Same as above, for WebView.
@@ -197,6 +207,11 @@ CC_BASE_EXPORT BASE_DECLARE_FEATURE(kThrottleMainFrameTo60HzWebView);
 
 // Same as above, for Desktop Android.
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(kThrottleMainFrameTo60HzDesktopAndroid);
+
+// When enabled, compositor limit settings (such as visible GPU memory limit,
+// prepaint percentage, and image decode cache budget) on Desktop Android are
+// unified with other desktop platforms. This is only for Chromium, not WebView.
+CC_BASE_EXPORT BASE_DECLARE_FEATURE(kDesktopAndroidUnifiedCompositorLimits);
 #endif
 
 // When enabled, clients can request a high framerate, which disables
@@ -212,13 +227,7 @@ CC_BASE_EXPORT BASE_DECLARE_FEATURE(kHighFramerateRequestFromClient);
 // samt pool.
 CC_BASE_EXPORT bool IsEligibleForThrottleMainFrameTo60Hz();
 CC_BASE_EXPORT void SetIsEligibleForThrottleMainFrameTo60Hz(bool is_eligible);
-
-// A mode of ViewTransition capture that does not display unstyled frame,
-// instead displays the properly constructed frame while at the same doing
-// capture.
-CC_BASE_EXPORT BASE_DECLARE_FEATURE(kViewTransitionCaptureAndDisplay);
-
-
+CC_BASE_EXPORT bool IsThrottleMainFrameTo60HzEnabled(bool is_webview);
 
 // When enabled, the LayerTreeHost will expect to use layer lists instead of
 // layer trees by default; the caller can explicitly opt into enabled or
@@ -235,10 +244,6 @@ CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(double, kCubicBezierX2);
 CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(double, kCubicBezierY2);
 CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(base::TimeDelta,
                                           kMaxAnimationDuration);
-
-// When enabled, slim will receive CompositorFrameSink messages directly without
-// the intermediate IO-thread hop.
-CC_BASE_EXPORT BASE_DECLARE_FEATURE(kSlimDirectReceiverIpc);
 
 // When enabled, the overscroll effect will display on non-root scrollers.
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(kOverscrollEffectOnNonRootScrollers);
@@ -271,15 +276,14 @@ CC_BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(
     kScrollJankV4MetricFastScrollContinuityRequiresSameDirection);
 
-// When disabled, `cc::ScrollJankV4FrameStageCalculator` relies on the
-// timestamps of arrival of individual `cc::ScrollEventMetrics` in the renderer
-// compositor (`scroll_event_metrics->GetDispatchStageTimestamp(
-// cc::EventMetrics::DispatchStage::kGenerated)`) when calculating the
-// `ScrollJankV4Frame::Stage`s that happened in a single frame. When enabled,
-// `cc::ScrollJankV4FrameStageCalculator` uses the scroll IDs
-// (`scroll_event_metrics->scroll_begin_arrival_timestamp()`) instead.
+#if BUILDFLAG(IS_ANDROID)
+// When enabled, the V4 scroll jank metric will report statistics via
+// `View.reportAppJankStats()` on Android at the end of each damaging scroll.
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(
-    kUseScrollIdToCalculateScrollJankV4FrameStages);
+    kScrollJankV4MetricReportAndroidAppJankStats);
+
+bool ShouldScrollJankV4MetricReportAndroidAppJankStats();
+#endif
 
 // When enabled, AsyncLayerTreeFrameSink will generate its own BeginFrameArgs
 // when auto_needs_begin_frame_ is enabled.
@@ -319,6 +323,39 @@ CC_BASE_EXPORT BASE_DECLARE_FEATURE(kResourcePoolPreferExactSizeReuse);
 // not occur otherwise.
 CC_BASE_EXPORT BASE_DECLARE_FEATURE(kSendEarlyFinalBeginMainFrame);
 CC_BASE_EXPORT bool SendEarlyFinalBeginMainFrameIsEnabled();
+
+// When enabled, rounded corner radii are populated in HitTestRegion
+// submissions (cc side) and used for point containment checks in HitTestQuery
+// (viz side).
+CC_BASE_EXPORT BASE_DECLARE_FEATURE(kVizHitTestRoundedCorners);
+
+// When enabled, ViewTransitionContentLayerImpl does not double-apply pixel
+// alignment offsets for live render passes and preserves exact subpixel
+// alignment offsets for snapshot textures.
+CC_BASE_EXPORT BASE_DECLARE_FEATURE(kViewTransitionsNewRoundingChange);
+
+// When enabled, allows hiding browser controls via additional swipe and scroll
+// gestures, such as swiping on the toolbar or scrolling on non-scrollable
+// pages.
+CC_BASE_EXPORT BASE_DECLARE_FEATURE(kBrowserControlsExtraHideGestures);
+
+// When enabled, prevents sending a pipelined BeginMainFrame when the primary
+// BeginMainFrame is READY_TO_COMMIT but blocked from committing by an
+// unactivated pending tree. Killswitch for crbug.com/467678916.
+CC_BASE_EXPORT BASE_DECLARE_FEATURE(kDeferMainFrameBeforeCommitWithPendingTree);
+
+// When enabled, SolidColorLayerImpl::AppendSolidQuads omits transparent solid
+// quads for all blend modes where a transparent source does not modify the
+// destination, not only kSrcOver.
+CC_BASE_EXPORT BASE_DECLARE_FEATURE(
+    kOmitTransparentSolidQuadsForNoopBlendModes);
+
+// When enabled, a view transition capture surface without nested capture
+// surfaces only produces a single render pass, which is used for both capture
+// and display, instead of a separate capture render pass in addition to the
+// regular render pass.
+CC_BASE_EXPORT BASE_DECLARE_FEATURE(
+    kViewTransitionsAvoidDuplicateCaptureRenderPass);
 
 }  // namespace features
 

@@ -10,6 +10,11 @@
 namespace browser_actuator {
 
 // Service that provides browser actuation capabilities.
+//
+// The transport it sends and receives actions over is a KeyedService of its
+// own: features that only need the transport use
+// `browser_actuator::transport::TransportService` (`TransportServiceFactory` in
+// //chrome) directly.
 class BrowserActuatorService : public KeyedService {
  public:
   ~BrowserActuatorService() override;

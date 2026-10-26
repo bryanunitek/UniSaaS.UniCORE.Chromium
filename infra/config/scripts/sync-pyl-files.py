@@ -21,10 +21,6 @@ import shutil
 import sys
 
 INFRA_CONFIG_DIR = os.path.abspath(f'{__file__}/../..')
-TESTING_BUILDBOT_DIR = os.path.normpath(
-    f'{INFRA_CONFIG_DIR}/../../testing/buildbot')
-GENERATED_TESTING_DIR = os.path.normpath(
-    f'{INFRA_CONFIG_DIR}/generated/testing')
 
 
 def copy_file(src, dst):
@@ -32,32 +28,61 @@ def copy_file(src, dst):
   return None
 
 
-_DOC_LINK = ('https://chromium.googlesource.com/chromium/src'
-             '/+/HEAD/infra/config/targets#tests-in-starlark')
+_DOC_LINK = (
+  'https://chromium.googlesource.com/chromium/src'
+  '/+/HEAD/infra/config/targets#tests-in-starlark'
+)
 
 
 def check_file(src, dst):
   if os.path.exists(dst) and filecmp.cmp(src, dst):
     return None
-  return ('files in //testing/buildbot differ from those in'
-          f' //infra/config/generated/testing, see {_DOC_LINK} for information'
-          ' on the process for updating pyl files')
+  return (
+    'files in //testing/buildbot differ from those in'
+    f' //infra/config/generated/testing, see {_DOC_LINK} for information'
+    ' on the process for updating pyl files'
+  )
 
 
 def parse_args(argv):
   parser = argparse.ArgumentParser()
   parser.set_defaults(func=copy_file)
-  parser.add_argument('--check',
-                      help='check that files are synced',
-                      action='store_const',
-                      dest='func',
-                      const=check_file)
+  parser.add_argument(
+    '--check',
+    help='check that files are synced',
+    action='store_const',
+    dest='func',
+    const=check_file,
+  )
+  parser.add_argument(
+    '--infra-config-dir',
+    default=INFRA_CONFIG_DIR,
+    help=(
+      'infra/config directory whose generated/testing files are the source.'
+      ' Defaults to the directory containing this script.'
+    ),
+  )
+  parser.add_argument(
+    '--testing-buildbot-dir',
+    default=None,
+    help=(
+      'Directory to sync the files to. Defaults to ../../testing/buildbot'
+      ' relative to --infra-config-dir.'
+    ),
+  )
   return parser.parse_args(argv)
 
 
 def main(args):
-  error = args.func(os.path.normpath(f'{GENERATED_TESTING_DIR}/mixins.pyl'),
-                    os.path.normpath(f'{TESTING_BUILDBOT_DIR}/mixins.pyl'))
+  generated_testing_dir = f'{args.infra_config_dir}/generated/testing'
+  testing_buildbot_dir = (
+    args.testing_buildbot_dir
+    or f'{args.infra_config_dir}/../../testing/buildbot'
+  )
+  error = args.func(
+    os.path.normpath(f'{generated_testing_dir}/mixins.pyl'),
+    os.path.normpath(f'{testing_buildbot_dir}/mixins.pyl'),
+  )
   if error is not None:
     print(error, file=sys.stderr)
     return 1

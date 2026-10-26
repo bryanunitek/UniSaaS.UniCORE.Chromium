@@ -61,6 +61,11 @@ enum class AutofillTriggerSource {
   kGlic = 15,
   // A refill was triggered by JavaScript.
   kProgrammaticRefill = 16,
+  // Autofill was triggered from accepting a suggestion in the Omnibox Autofill
+  // bubble.
+  kOmniboxAutofill = 17,
+  // Autofill was triggered when a Gmail one-time password became available.
+  kGmailOneTimePasswordAvailable = 18,
 };
 
 // The `AutofillTriggerSource` indicates what caused an Autofill fill or preview

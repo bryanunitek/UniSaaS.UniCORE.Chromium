@@ -13,6 +13,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/uuid.h"
@@ -20,7 +21,9 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/multistep_filter/core/data_models/filter_annotation.h"
 #include "components/multistep_filter/core/data_models/suggestion_user_decision.h"
+#include "components/multistep_filter/core/data_models/suggestions_consent_state.h"
 #include "components/multistep_filter/core/data_models/url_filter_suggestion.h"
+#include "components/multistep_filter/core/prefs/retention_state_snapshot.h"
 #include "components/sync/service/sync_service.h"
 
 class PrefService;
@@ -53,6 +56,7 @@ class FilterSuggestionGenerator;
 class MultistepFilterService : public KeyedService,
                                public history::HistoryServiceObserver {
  public:
+
   struct Params {
     std::unique_ptr<AnnotationIndexClient> annotation_index_client;
     std::unique_ptr<FilterStore> filter_store;
@@ -75,11 +79,14 @@ class MultistepFilterService : public KeyedService,
   // KeyedService:
   void Shutdown() override;
 
-  // Checks if the user has provided consent (signed in, URL-keyed data
-  // collection enabled, and history sync enabled), and logs the eligibility
-  // check.
-  virtual bool HasUserProvidedConsent(int64_t navigation_id,
-                                      std::string_view host);
+  // Returns the current account status/capabilities for the user.
+  virtual AccountState GetAccountState() const;
+
+  // Returns the current consent state for the user.
+  virtual ConsentState GetConsentState() const;
+
+  // Returns the current settings state for the user.
+  virtual SettingsState GetSettingsState() const;
 
   // Records a suggestion impression in Profile retention preferences.
   virtual void RecordSuggestionImpression();
@@ -88,6 +95,9 @@ class MultistepFilterService : public KeyedService,
   // preferences.
   virtual void RecordUserInteractionWithSuggestion(
       SuggestionUserDecision decision);
+
+  // Returns the current snapshot of user retention metrics.
+  virtual RetentionStateSnapshot GetRetentionState() const;
 
   // Deletes all annotations for the given `task_type`.
   virtual void DeleteAnnotationsForTask(std::string_view task_type,
@@ -119,6 +129,10 @@ class MultistepFilterService : public KeyedService,
   // Returns true if history sync is enabled.
   bool IsHistorySyncEnabled() const;
 
+  // Returns true if the user's account capabilities allow using model execution
+  // features.
+  bool CanUseModelExecutionFeatures() const;
+
   // Client used to interact with the `SiteAutomationIndexServer` on the server
   // side.
   std::unique_ptr<AnnotationIndexClient> annotation_index_client_;
@@ -129,7 +143,7 @@ class MultistepFilterService : public KeyedService,
 
   // Used to check if the user is signed in, as the feature is only available
   // for signed-in users.
-  raw_ptr<signin::IdentityManager> identity_manager_;
+  const raw_ref<signin::IdentityManager> identity_manager_;
 
   // Used to check for URL-keyed data collection consent.
   std::unique_ptr<unified_consent::UrlKeyedDataCollectionConsentHelper>
@@ -139,7 +153,7 @@ class MultistepFilterService : public KeyedService,
   raw_ptr<MultistepFilterLogRouter> log_router_;
 
   // Pref service to record retention statistics.
-  raw_ptr<PrefService> pref_service_;
+  const raw_ref<PrefService> pref_service_;
 
   // Sync service to check for history sync state.
   raw_ptr<syncer::SyncService> sync_service_;

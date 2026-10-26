@@ -27,6 +27,7 @@
 #include "services/network/public/mojom/cross_origin_embedder_policy.mojom-forward.h"
 #include "services/network/public/mojom/document_isolation_policy.mojom-forward.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_ancestor_frame_type.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_client.mojom-forward.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_container.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom-forward.h"
@@ -288,6 +289,14 @@ class CONTENT_EXPORT ServiceWorkerClient final
   // for more details.
   GlobalRenderFrameHostId GetRenderFrameHostId() const;
 
+  blink::mojom::AncestorFrameType ancestor_frame_type() const {
+    return ancestor_frame_type_;
+  }
+  void SetAncestorFrameTypeForTesting(
+      blink::mojom::AncestorFrameType ancestor_frame_type) {
+    ancestor_frame_type_ = ancestor_frame_type;
+  }
+
   // For service worker clients. For window clients, this is not populated until
   // after navigation commit.
   ChildProcessId GetProcessId() const;
@@ -327,6 +336,11 @@ class CONTENT_EXPORT ServiceWorkerClient final
   std::optional<ContentBrowserClient::URLLoaderRequestHandler>
   TakeInterceptingPreloadHandler(
       const network::ResourceRequest& resource_request);
+
+  // Returns the FrameTreeNodeId of the ongoing navigation for window clients.
+  FrameTreeNodeId GetFrameTreeNodeId() const {
+    return ongoing_navigation_frame_tree_node_id_;
+  }
 
   // For service worker clients.
   // The type of `ongoing_navigation_frame_tree_node_id_` (if any) for metrics.
@@ -389,6 +403,18 @@ class CONTENT_EXPORT ServiceWorkerClient final
 
   bool is_inherited() const { return is_inherited_; }
   void SetInherited() { is_inherited_ = true; }
+
+  // A client hosted by a privileged WebContents (see //chrome's
+  // PrivilegedWebContents) that forbids service worker control is permanently
+  // ineligible to be controlled by a service worker (see
+  // IsEligibleForServiceWorkerController). The bit is set for window clients at
+  // response commit and inherited by worker clients from their creator.
+  bool disallows_service_worker_control() const {
+    return disallows_service_worker_control_;
+  }
+  void SetDisallowsServiceWorkerControl() {
+    disallows_service_worker_control_ = true;
+  }
 
   const base::WeakPtr<ServiceWorkerContextCore>& context() const {
     return context_;
@@ -603,6 +629,11 @@ class CONTENT_EXPORT ServiceWorkerClient final
   // Become true if the container is inherited by other container.
   bool is_inherited_ = false;
 
+  // Set once for a client hosted by a privileged WebContents that forbids
+  // service worker control; makes the client permanently ineligible to be
+  // controlled. See disallows_service_worker_control().
+  bool disallows_service_worker_control_ = false;
+
   // The observer for the running status change.
   // It is used for notifying the ServiceWorker running status change to
   // the ServiceWorkerContainerHost in the renderer.
@@ -655,6 +686,11 @@ class CONTENT_EXPORT ServiceWorkerClient final
   // The frame tree node ID that is set in the constructor and is reset in
   // CommitResponse().
   FrameTreeNodeId ongoing_navigation_frame_tree_node_id_;
+
+  // Set in CommitResponse() so it remains available after the RenderFrameHost
+  // is destroyed.
+  blink::mojom::AncestorFrameType ancestor_frame_type_ =
+      blink::mojom::AncestorFrameType::kNormalFrame;
 
   // URLLoaderFactory used for navigation preload etc.
   // Only set/used for clients for prefetch.

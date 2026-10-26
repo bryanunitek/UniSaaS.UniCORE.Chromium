@@ -35,7 +35,9 @@
 #include <algorithm>
 #include <memory>
 
+#include "base/feature_list.h"
 #include "base/numerics/safe_conversions.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/platform/web_url_request.h"
@@ -160,11 +162,17 @@ void EventSource::Connect() {
   request.SetCacheMode(blink::mojom::FetchCacheMode::kNoStore);
   request.SetCorsPreflightPolicy(
       network::mojom::CorsPreflightPolicy::kPreventPreflight);
+  // Prevents web service workers from intercepting isolated world requests.
+  if (base::FeatureList::IsEnabled(
+          features::kIsolatedWorldEventSourceAndBeaconsSkipServiceWorker)) {
+    request.SetSkipServiceWorker(world_ && world_->IsIsolatedWorld());
+  }
   if (parser_ && !parser_->LastEventId().empty()) {
     request.SetEventSourceLastEventId(parser_->LastEventId());
   }
 
-  ResourceLoaderOptions resource_loader_options(world_);
+  ResourceLoaderOptions resource_loader_options =
+      ResourceLoaderOptions::CreateForTargetWorld(world_.Get());
   resource_loader_options.data_buffering_policy = kDoNotBufferData;
 
   probe::WillSendEventSourceRequest(&execution_context);
@@ -250,30 +258,27 @@ void EventSource::DidReceiveResponse(uint64_t identifier,
     response_is_valid =
         charset.empty() || EqualIgnoringAsciiCase(charset, "UTF-8");
     if (!response_is_valid) {
-      StringBuilder message;
-      message.Append("EventSource's response has a charset (\"");
-      message.Append(charset);
-      message.Append("\") that is not UTF-8. Aborting the connection.");
+      String message =
+          StrCat({"EventSource's response has a charset (\"", charset,
+                  "\") that is not UTF-8. Aborting the connection."});
       // FIXME: We are missing the source line.
       GetExecutionContext()->AddConsoleMessage(
           MakeGarbageCollected<ConsoleMessage>(
-              mojom::ConsoleMessageSource::kJavaScript,
-              mojom::ConsoleMessageLevel::kError, message.ToString()));
+              mojom::blink::ConsoleMessageSource::kJavaScript,
+              mojom::blink::ConsoleMessageLevel::kError, message));
     }
   } else {
     // To keep the signal-to-noise ratio low, we only log 200-response with an
     // invalid MIME type.
     if (status_code == 200 && !mime_type_is_valid) {
-      StringBuilder message;
-      message.Append("EventSource's response has a MIME type (\"");
-      message.Append(response.MimeType());
-      message.Append(
-          "\") that is not \"text/event-stream\". Aborting the connection.");
+      String message = StrCat(
+          {"EventSource's response has a MIME type (\"", response.MimeType(),
+           "\") that is not \"text/event-stream\". Aborting the connection."});
       // FIXME: We are missing the source line.
       GetExecutionContext()->AddConsoleMessage(
           MakeGarbageCollected<ConsoleMessage>(
-              mojom::ConsoleMessageSource::kJavaScript,
-              mojom::ConsoleMessageLevel::kError, message.ToString()));
+              mojom::blink::ConsoleMessageSource::kJavaScript,
+              mojom::blink::ConsoleMessageLevel::kError, message));
     }
   }
 

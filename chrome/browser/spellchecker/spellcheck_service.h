@@ -290,6 +290,15 @@ class SpellcheckService : public KeyedService,
       const std::vector<std::string>& languages);
 #endif  // BUILDFLAG(IS_WIN)
 
+#if BUILDFLAG(IS_MAC)
+  // Sets the platform language on the macOS spellcheck platform.
+  void InitializePlatformLanguageMacWithLanguage(
+      const std::string& platform_lang);
+
+  // Orchestrates deferred startup initialization for macOS spellchecking.
+  void InitMacDeferredSpellcheck();
+#endif
+
   // WindowsSpellChecker must be created before the dictionary instantiation and
   // destroyed after dictionary destruction.
   std::unique_ptr<PlatformSpellChecker> platform_spell_checker_;

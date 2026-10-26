@@ -4,6 +4,8 @@
 
 #include "chrome/browser/glic/browser_ui/glic_button_controller.h"
 
+#include "base/functional/bind.h"
+#include "chrome/browser/glic/browser_ui/glic_split_button_controller.h"
 #include "chrome/browser/glic/browser_ui/glic_split_button_delegate.h"
 #include "chrome/browser/glic/browser_ui/glic_vector_icon_manager.h"
 #include "chrome/browser/glic/glic_pref_names.h"
@@ -11,29 +13,34 @@
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/feature_engagement/public/feature_list.h"
 #include "components/prefs/pref_service.h"
 #include "ui/views/widget/widget.h"
 
 namespace glic {
 
+DEFINE_USER_DATA(GlicButtonController);
+
+// static
+GlicButtonController* GlicButtonController::From(
+    BrowserWindowInterface* browser) {
+  return browser ? GlicButtonController::Get(browser->GetUnownedUserDataHost())
+                 : nullptr;
+}
+
 GlicButtonController::GlicButtonController(
     Profile* profile,
     BrowserWindowInterface& browser,
-    GlicSplitButtonDelegate* tab_strip_delegate,
-    GlicSplitButtonDelegate* toolbar_delegate,
+    GlicSplitButtonController* split_button_controller,
     GlicKeyedService* service)
     : profile_(profile),
       browser_(browser),
-      tab_strip_glic_controller_delegate_(tab_strip_delegate),
-      toolbar_glic_controller_delegate_(toolbar_delegate),
-      glic_keyed_service_(service) {
-  CHECK(tab_strip_glic_controller_delegate_);
-  CHECK(toolbar_glic_controller_delegate_);
+      glic_keyed_service_(service),
+      split_button_controller_(split_button_controller),
+      scoped_unowned_user_data_(browser.GetUnownedUserDataHost(), *this) {
+  CHECK(split_button_controller_);
   CHECK(glic_keyed_service_);
-
-  tab_strip_glic_controller_delegate_->SetButtonController(this);
-  toolbar_glic_controller_delegate_->SetButtonController(this);
 
   // Set initial button state.
   UpdateButton();
@@ -52,13 +59,20 @@ GlicButtonController::GlicButtonController(
           update_callback));
 }
 
-GlicButtonController::~GlicButtonController() {
-  if (tab_strip_glic_controller_delegate_) {
-    tab_strip_glic_controller_delegate_->SetButtonController(nullptr);
-  }
-  if (toolbar_glic_controller_delegate_) {
-    toolbar_glic_controller_delegate_->SetButtonController(nullptr);
-  }
+GlicButtonController::~GlicButtonController() = default;
+
+void GlicButtonController::SetHorizontalTabsDelegate(
+    GlicSplitButtonDelegate* delegate) {
+  split_button_controller_->SetHorizontalTabsDelegate(delegate);
+}
+
+void GlicButtonController::SetVerticalTabsDelegate(
+    GlicSplitButtonDelegate* delegate) {
+  split_button_controller_->SetVerticalTabsDelegate(delegate);
+}
+
+base::WeakPtr<GlicButtonController> GlicButtonController::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 void GlicButtonController::UpdateButton() {
@@ -75,20 +89,26 @@ void GlicButtonController::UpdateButton() {
       profile_->GetPrefs()->GetBoolean(prefs::kGlicPinnedToTabstrip);
   if (!should_show_button || !is_pinned_to_tabstrip) {
     // If the button shouldn't be shown, just hide it.
-    tab_strip_glic_controller_delegate_->SetGlicShowState(false);
-    toolbar_glic_controller_delegate_->SetGlicShowState(false);
+    CallOnBoth(base::BindRepeating([](GlicSplitButtonDelegate& delegate) {
+      delegate.SetGlicShowState(false);
+    }));
     return;
   }
 
-  tab_strip_glic_controller_delegate_->SetGlicShowState(true);
-  toolbar_glic_controller_delegate_->SetGlicShowState(true);
-
-  bool is_glic_panel_open =
+  const bool is_glic_panel_open =
       glic_keyed_service_->IsPanelShowingForBrowser(*browser_);
-  tab_strip_glic_controller_delegate_->SetGlicPanelIsOpen(is_glic_panel_open);
-  toolbar_glic_controller_delegate_->SetGlicPanelIsOpen(is_glic_panel_open);
+  CallOnBoth(base::BindRepeating(
+      [](bool is_glic_panel_open, GlicSplitButtonDelegate& delegate) {
+        delegate.SetGlicShowState(true);
+        delegate.SetGlicPanelIsOpen(is_glic_panel_open);
+      },
+      is_glic_panel_open));
 }
 
+void GlicButtonController::CallOnBoth(
+    base::RepeatingCallback<void(GlicSplitButtonDelegate&)> fn) {
+  split_button_controller_->CallOnBoth(fn);
+}
 
 mojom::InvocationSource GlicButtonController::GetInvocationSource(
     bool is_showing_nudge,

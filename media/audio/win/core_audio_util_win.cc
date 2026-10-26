@@ -22,6 +22,7 @@
 #include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -1223,6 +1224,8 @@ HRESULT CoreAudioUtil::SharedModeInitialize(IAudioClient* client,
                                             uint32_t* endpoint_buffer_size,
                                             const GUID* session_guid,
                                             bool is_offload_stream) {
+  SCOPED_UMA_HISTOGRAM_TIMER(
+      "Media.Audio.Win.CoreAudioUtil.SharedModeInitializeTime");
   TRACE_EVENT0("audio", "CoreAudioUtil::SharedModeInitialize");
   // Use default flags (i.e, dont set AUDCLNT_STREAMFLAGS_NOPERSIST) to
   // ensure that the volume level and muting state for a rendering session
@@ -1245,21 +1248,31 @@ HRESULT CoreAudioUtil::SharedModeInitialize(IAudioClient* client,
   HRESULT hr;
 
   if (is_offload_stream) {
-    hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, stream_flags,
-                            GetOffloadBufferTimeIn100Ns(), 0, format,
-                            session_guid);
+    {
+      TRACE_EVENT0("audio", "IAudioClient::Initialize_Offload");
+      hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, stream_flags,
+                              GetOffloadBufferTimeIn100Ns(), 0, format,
+                              session_guid);
+    }
     // Typically GetBufferSize() must be called after successfully
     // initialization. AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED is the only case we
     // allow with an initialization failure.
     if (hr == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED) {
       uint32_t buffer_size_in_frames = 0;
-      hr = client->GetBufferSize(&buffer_size_in_frames);
+      {
+        TRACE_EVENT0("audio", "IAudioClient::GetBufferSize_Offload");
+        hr = client->GetBufferSize(&buffer_size_in_frames);
+      }
       if (SUCCEEDED(hr)) {
         REFERENCE_TIME buffer_duration_in_ns = BufferSizeInFramesToTimeDelta(
             buffer_size_in_frames, format->nAvgBytesPerSec,
             format->nBlockAlign);
-        hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, stream_flags,
-                                buffer_duration_in_ns, 0, format, session_guid);
+        {
+          TRACE_EVENT0("audio", "IAudioClient::Initialize_OffloadAligned");
+          hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, stream_flags,
+                                  buffer_duration_in_ns, 0, format,
+                                  session_guid);
+        }
       }
     }
   } else if (requested_buffer_size > 0) {
@@ -1267,15 +1280,21 @@ HRESULT CoreAudioUtil::SharedModeInitialize(IAudioClient* client,
     // Use ComPtr::As for doing QueryInterface calls on COM objects.
     ComPtr<IAudioClient> audio_client(client);
     ComPtr<IAudioClient3> audio_client_3;
-    hr = audio_client.As(&audio_client_3);
+    {
+      TRACE_EVENT0("audio", "IAudioClient::QueryInterface_IAudioClient3");
+      hr = audio_client.As(&audio_client_3);
+    }
     if (FAILED(hr)) {
       DVLOG(1) << "Failed to obtain IAudioClient3 interface: " << std::hex
                << hr;
       return hr;
     }
     // Initialize a low-latency client using IAudioClient3.
-    hr = audio_client_3->InitializeSharedAudioStream(
-        stream_flags, requested_buffer_size, format, session_guid);
+    {
+      TRACE_EVENT0("audio", "IAudioClient3::InitializeSharedAudioStream");
+      hr = audio_client_3->InitializeSharedAudioStream(
+          stream_flags, requested_buffer_size, format, session_guid);
+    }
     if (FAILED(hr)) {
       DVLOG(1) << "IAudioClient3::InitializeSharedAudioStream: " << std::hex
                << hr;
@@ -1283,8 +1302,11 @@ HRESULT CoreAudioUtil::SharedModeInitialize(IAudioClient* client,
     }
   } else {
     // Initialize the shared mode client for minimal delay.
-    hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, stream_flags, 0, 0,
-                            format, session_guid);
+    {
+      TRACE_EVENT0("audio", "IAudioClient::Initialize");
+      hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, stream_flags, 0, 0,
+                              format, session_guid);
+    }
     if (FAILED(hr)) {
       DVLOG(1) << "IAudioClient::Initialize: " << std::hex << hr;
       return hr;
@@ -1292,7 +1314,10 @@ HRESULT CoreAudioUtil::SharedModeInitialize(IAudioClient* client,
   }
 
   if (use_event) {
-    hr = client->SetEventHandle(event_handle);
+    {
+      TRACE_EVENT0("audio", "IAudioClient::SetEventHandle");
+      hr = client->SetEventHandle(event_handle);
+    }
     if (FAILED(hr)) {
       DVLOG(1) << "IAudioClient::SetEventHandle: " << std::hex << hr;
       return hr;
@@ -1300,7 +1325,10 @@ HRESULT CoreAudioUtil::SharedModeInitialize(IAudioClient* client,
   }
 
   UINT32 buffer_size_in_frames = 0;
-  hr = client->GetBufferSize(&buffer_size_in_frames);
+  {
+    TRACE_EVENT0("audio", "IAudioClient::GetBufferSize");
+    hr = client->GetBufferSize(&buffer_size_in_frames);
+  }
   if (FAILED(hr)) {
     DVLOG(1) << "IAudioClient::GetBufferSize: " << std::hex << hr;
     return hr;
@@ -1311,7 +1339,10 @@ HRESULT CoreAudioUtil::SharedModeInitialize(IAudioClient* client,
 
   // TODO(henrika): utilize when delay measurements are added.
   REFERENCE_TIME latency = 0;
-  hr = client->GetStreamLatency(&latency);
+  {
+    TRACE_EVENT0("audio", "IAudioClient::GetStreamLatency");
+    hr = client->GetStreamLatency(&latency);
+  }
   DVLOG(2) << "stream latency: "
            << ReferenceTimeToTimeDelta(latency).InMillisecondsF() << " [ms]";
   return hr;

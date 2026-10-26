@@ -31,6 +31,7 @@ import android.widget.ImageView;
 
 import androidx.annotation.Nullable;
 import androidx.browser.customtabs.CustomTabsIntent;
+import androidx.browser.customtabs.CustomTabsSessionToken;
 import androidx.core.widget.ImageViewCompat;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.SmallTest;
@@ -69,7 +70,6 @@ import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbar;
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbar.CustomTabLocationBar;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.offlinepages.ClientId;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
@@ -282,9 +282,10 @@ public class TrustedCdnPublisherUrlTest {
                 "com.example.test",
                 "example.com",
                 R.drawable.omnibox_https_valid_page_info);
+        int clickTargetId = R.id.title_url_container;
         TestTouchUtils.performClickOnMainSync(
                 InstrumentationRegistry.getInstrumentation(),
-                mCustomTabActivityTestRule.getActivity().findViewById(R.id.security_button));
+                mCustomTabActivityTestRule.getActivity().findViewById(clickTargetId));
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
         mScreenShooter.shoot("Page Info");
     }
@@ -459,9 +460,10 @@ public class TrustedCdnPublisherUrlTest {
                 CustomTabsIntentTestUtils.createMinimalCustomTabIntent(targetContext, testUrl);
         intent.putExtra(
                 CustomTabsIntent.EXTRA_TITLE_VISIBILITY_STATE, CustomTabsIntent.SHOW_PAGE_TITLE);
-        var sessionHolder = SessionHolder.getSessionHolderFromIntent(intent);
+        var sessionHolder =
+                SessionHolder.of(CustomTabsSessionToken.getSessionTokenFromIntent(intent));
         CustomTabsConnection connection = CustomTabsTestUtils.warmUpAndWait();
-        connection.newSession(sessionHolder.getSessionAsCustomTab());
+        connection.newSession(sessionHolder.getToken());
         connection.overridePackageNameForSessionForTesting(sessionHolder, clientPackage);
         connection.setTrustedPublisherUrlPackageForTest("com.example.test");
 
@@ -487,22 +489,17 @@ public class TrustedCdnPublisherUrlTest {
     }
 
     private void verifySecurityIcon(int expectedSecurityIcon) {
-        // TODO(sinansahin): Clean up once the feature flag is removed.
-        boolean nestIcon = ChromeFeatureList.sCctNestedSecurityIcon.isEnabled();
-
-        if (nestIcon
-                && (expectedSecurityIcon == R.drawable.omnibox_https_valid_page_info
-                        || expectedSecurityIcon == R.drawable.omnibox_info)) {
+        if (expectedSecurityIcon == R.drawable.omnibox_https_valid_page_info
+                || expectedSecurityIcon == R.drawable.omnibox_info) {
             expectedSecurityIcon = 0;
         }
 
-        int securityId = nestIcon ? R.id.security_icon : R.id.security_button;
+        int securityId = R.id.security_icon;
         ImageView securityButton =
                 mCustomTabActivityTestRule.getActivity().findViewById(securityId);
-        // Clean up -- end
 
         if (expectedSecurityIcon == 0) {
-            Assert.assertEquals(View.INVISIBLE, securityButton.getVisibility());
+            Assert.assertEquals(View.GONE, securityButton.getVisibility());
         } else {
             onViewWaiting(withId(securityId)).check(matches(isDisplayed()));
 

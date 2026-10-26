@@ -20,7 +20,6 @@ import android.view.View;
 
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -30,7 +29,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.RobolectricUtil;
@@ -53,7 +51,6 @@ import java.util.function.Supplier;
 
 /** Unit tests for {@link FeedStream} Ctrl+Click behavior. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class FeedStreamCtrlClickTest {
     private static final String TEST_URL = JUnitTestGURLs.EXAMPLE_URL.getSpec();
 
@@ -147,7 +144,6 @@ public class FeedStreamCtrlClickTest {
     }
 
     @Test
-    @SmallTest
     public void testOpenUrlSameTab_withCtrlClick() {
         // Simulate Ctrl down touch event
         long downTime = SystemClock.uptimeMillis();
@@ -178,7 +174,6 @@ public class FeedStreamCtrlClickTest {
     }
 
     @Test
-    @SmallTest
     public void testOpenUrlSameTab_withoutCtrlClick() {
         // Simulate normal touch event
         long downTime = SystemClock.uptimeMillis();
@@ -209,7 +204,6 @@ public class FeedStreamCtrlClickTest {
     }
 
     @Test
-    @SmallTest
     public void testOpenUrlSameTab_withShiftClick() {
         // Simulate Shift down touch event
         long downTime = SystemClock.uptimeMillis();
@@ -240,7 +234,6 @@ public class FeedStreamCtrlClickTest {
     }
 
     @Test
-    @SmallTest
     public void testOpenUrlSameTab_withCtrlShiftClick() {
         // Simulate Ctrl+Shift down touch event
         long downTime = SystemClock.uptimeMillis();

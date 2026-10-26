@@ -31,12 +31,15 @@
 #include "extensions/buildflags/buildflags.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "components/user_manager/scoped_user_manager.h"
+
+namespace ash {
+class ScopedCrosSettingsTestHelper;
+}  // namespace ash
 #endif
 
 #if BUILDFLAG(IS_WIN)
-#include "chrome/browser/profiles/profile_load_tracker_win.h"
+class ProfileLoadTracker;
 #endif
 
 class ExtensionSpecialStoragePolicy;
@@ -251,6 +254,8 @@ class TestingProfile : public Profile {
 #endif
 
     const base::FilePath& GetPath() const { return path_; }
+    const std::string& profile_name() const { return profile_name_; }
+    bool is_supervised_profile() const { return is_supervised_profile_; }
 
    private:
     // If true, Build() has already been called.
@@ -265,7 +270,7 @@ class TestingProfile : public Profile {
     raw_ptr<Delegate> delegate_ = nullptr;
     CreateMode create_mode_ = CreateMode::kSynchronous;
     bool guest_session_ = false;
-    bool allows_browser_windows_ = true;
+    std::optional<bool> allows_browser_windows_;
     bool is_new_profile_ = false;
     bool is_supervised_profile_ = false;
 #if BUILDFLAG(IS_CHROMEOS)
@@ -313,7 +318,7 @@ class TestingProfile : public Profile {
       std::unique_ptr<sync_preferences::PrefServiceSyncable> prefs,
       TestingProfile* parent,
       bool guest_session,
-      bool allows_browser_windows,
+      std::optional<bool> allows_browser_windows,
       bool is_new_profile,
       bool is_supervised_profile,
 #if BUILDFLAG(IS_CHROMEOS)

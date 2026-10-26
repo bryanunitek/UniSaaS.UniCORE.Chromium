@@ -74,6 +74,7 @@ enum DeviceBoundSessionDeletionReason {
   kInvalidSessionParams = 6,  // Refresh provided invalid params.
   kRefreshFatalError = 7,  // Fatal error during refresh.
   kDevTools = 8,  // Deleted via DevTools.
+  kReplaced = 9,  // Session was replaced by a new session.
 };
 
 // LINT.ThenChange(//net/device_bound_sessions/deletion_reason.h:DeletionReason)
@@ -210,6 +211,9 @@ enum DeviceBoundSessionError {
   kInvalidPreProvisionedKeyInitiatorMissing = 85,
   kPreProvisionedKeyAccessNotGranted = 86,
   kPreProvisionedKeyNotFound = 87,
+  kAttestationCertificationError = 88,
+  kAttestationSigningError = 89,
+  kFederatedRegistrationRedirected = 90,
 };
 
 // LINT.ThenChange(//net/device_bound_sessions/session_error.h:DeviceBoundSessionError)
@@ -225,6 +229,8 @@ enum DeviceBoundSessionRefreshResult {
   kSigningQuotaExceeded = 6,
   kRefreshedAsWaiter = 7,
   kTransientSigningError = 8,
+  kInScopeRefreshNotYetNeeded = 9,
+  kCanceled = 10,
 };
 
 // LINT.ThenChange(//net/device_bound_sessions/refresh_result.h:DeviceBoundSessionRefreshResult)
@@ -278,6 +284,20 @@ interface DeviceBoundSessionManager {
                       CookieOptions cookie_options)
       => (array<DeviceBoundSessionError> session_results,
           array<CookieInclusionStatus> cookie_results);
+
+  // Asynchronously inspects all Device Bound Sessions whose scope includes
+  // `url`. For sessions whose bound cookie is expiring within the next 120s
+  // (`kProactiveRefreshThreshold`), initiates a background refresh without
+  // deferring a live network request.
+  //
+  // Returns:
+  // - `results`: Outcome of each prewarm attempt.
+  // - `earliest_next_refresh_time`: The timestamp when the earliest matching
+  //   session will enter its proactive refresh window (`cookie_expiry - 120s`).
+  //   If no sessions match or exist, returns null.
+  PrewarmSessionsForUrl(url.mojom.Url url)
+      => (array<DeviceBoundSessionRefreshResult> results,
+          mojo_base.mojom.Time? earliest_next_refresh_time);
 };
 
 // Observer that is notified on use of a device bound session.

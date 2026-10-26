@@ -4,10 +4,12 @@
 
 #include "components/performance_manager/public/decorators/page_live_state_decorator.h"
 
+#include <memory>
 #include <ostream>
 #include <utility>
 
 #include "base/check.h"
+#include "base/check_is_test.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/not_fatal_until.h"
@@ -104,9 +106,21 @@ class PageLiveStateDataImpl
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return glic_actuation_state_;
   }
+  bool IsGlicPinnedToVisibleInstance() const override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return is_glic_pinned_to_visible_instance_;
+  }
+  bool IsWithheldFromView() const override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return is_withheld_from_view_;
+  }
   bool UpdatedTitleOrFaviconInBackground() const override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return updated_title_or_favicon_in_background_;
+  }
+
+  base::WeakPtr<PageLiveStateDataImpl> GetWeakPtr() {
+    return weak_factory_.GetWeakPtr();
   }
 
   void SetIsConnectedToUSBDeviceForTesting(bool value) override {
@@ -154,6 +168,11 @@ class PageLiveStateDataImpl
   void SetGlicActuationStateForTesting(GlicActuationState value) override {
     set_glic_actuation_state(value);
   }
+  void SetIsGlicPinnedToVisibleInstanceForTesting(bool value) override {
+    set_is_glic_pinned_to_visible_instance(value);
+  }
+  std::unique_ptr<PageLiveStateDecorator::ScopedWithheldFromView>
+  MarkWithheldFromViewForTesting() override;
   void SetUpdatedTitleOrFaviconInBackgroundForTesting(bool value) override {
     set_updated_title_or_favicon_in_background(value);
   }
@@ -237,7 +256,13 @@ class PageLiveStateDataImpl
   }
   void set_is_discarded(bool is_discarded) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    if (is_discarded_ == is_discarded) {
+      return;
+    }
     is_discarded_ = is_discarded;
+    for (auto& obs : observers_) {
+      obs.OnIsDiscardedChanged(page_node_);
+    }
   }
   void set_is_auto_discardable(bool is_auto_discardable) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -286,6 +311,30 @@ class PageLiveStateDataImpl
       obs.OnGlicActuationStateChanged(page_node_, previous_state);
     }
   }
+  void set_is_glic_pinned_to_visible_instance(
+      bool is_glic_pinned_to_visible_instance) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    if (is_glic_pinned_to_visible_instance_ ==
+        is_glic_pinned_to_visible_instance) {
+      return;
+    }
+    is_glic_pinned_to_visible_instance_ = is_glic_pinned_to_visible_instance;
+    for (auto& obs : observers_) {
+      obs.OnIsGlicPinnedToVisibleInstanceChanged(page_node_);
+    }
+  }
+  void set_is_withheld_from_view(bool withheld) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    // A page is withheld by the single UI surface that is waiting to show it,
+    // so this always toggles. Two overlapping holders would mean two surfaces
+    // own the same page.
+    CHECK_NE(is_withheld_from_view_, withheld);
+    is_withheld_from_view_ = withheld;
+    for (auto& obs : observers_) {
+      obs.OnIsWithheldFromViewChanged(page_node_);
+    }
+  }
+
   void set_updated_title_or_favicon_in_background(bool updated) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     if (updated_title_or_favicon_in_background_ == updated) {
@@ -318,11 +367,45 @@ class PageLiveStateDataImpl
   bool is_dev_tools_open_ GUARDED_BY_CONTEXT(sequence_checker_) = false;
   GlicActuationState glic_actuation_state_
       GUARDED_BY_CONTEXT(sequence_checker_) = GlicActuationState::kNone;
+  bool is_glic_pinned_to_visible_instance_
+      GUARDED_BY_CONTEXT(sequence_checker_) = false;
+  bool is_withheld_from_view_ GUARDED_BY_CONTEXT(sequence_checker_) = false;
   bool updated_title_or_favicon_in_background_
       GUARDED_BY_CONTEXT(sequence_checker_) = false;
 
   const raw_ptr<const PageNode> page_node_;
+
+  base::WeakPtrFactory<PageLiveStateDataImpl> weak_factory_{this};
 };
+
+// Handed out by PageLiveStateDecorator::MarkWithheldFromView(). Holds a weak
+// reference so that a token outliving its page (e.g. a UI object torn down
+// after its WebContents) is inert rather than dangling.
+class ScopedWithheldFromViewImpl
+    : public PageLiveStateDecorator::ScopedWithheldFromView {
+ public:
+  explicit ScopedWithheldFromViewImpl(base::WeakPtr<PageLiveStateDataImpl> data)
+      : data_(std::move(data)) {
+    if (data_) {
+      data_->set_is_withheld_from_view(true);
+    }
+  }
+
+  ~ScopedWithheldFromViewImpl() override {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    if (data_) {
+      data_->set_is_withheld_from_view(false);
+    }
+  }
+
+ private:
+  const base::WeakPtr<PageLiveStateDataImpl> data_;
+};
+
+std::unique_ptr<PageLiveStateDecorator::ScopedWithheldFromView>
+PageLiveStateDataImpl::MarkWithheldFromViewForTesting() {
+  return std::make_unique<ScopedWithheldFromViewImpl>(GetWeakPtr());
+}
 
 const char kDescriberName[] = "PageLiveStateDecorator";
 
@@ -518,6 +601,35 @@ void PageLiveStateDecorator::SetGlicActuationState(
 }
 
 // static
+void PageLiveStateDecorator::SetIsGlicPinnedToVisibleInstance(
+    content::WebContents* contents,
+    bool is_glic_pinned_to_visible_instance) {
+  SetPropertyForWebContentsPageNode(
+      contents, &PageLiveStateDataImpl::set_is_glic_pinned_to_visible_instance,
+      is_glic_pinned_to_visible_instance);
+}
+
+// static
+std::unique_ptr<PageLiveStateDecorator::ScopedWithheldFromView>
+PageLiveStateDecorator::MarkWithheldFromView(content::WebContents* contents) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  base::WeakPtr<PageNode> page_node =
+      PerformanceManager::GetPrimaryPageNodeForWebContents(contents);
+  if (!page_node) {
+    // `contents` isn't registered with Performance Manager, which shouldn't
+    // happen in production. Hand back an inert token rather than null, so that
+    // tests don't have to handle this case.
+    CHECK_IS_TEST();
+    return std::make_unique<ScopedWithheldFromViewImpl>(
+        base::WeakPtr<PageLiveStateDataImpl>());
+  }
+  return std::make_unique<ScopedWithheldFromViewImpl>(
+      PageLiveStateDataImpl::GetOrCreate(
+          PageNodeImpl::FromNode(page_node.get()))
+          ->GetWeakPtr());
+}
+
+// static
 bool PageLiveStateDecorator::IsConnectedToUSBDevice(
     content::WebContents* contents) {
   return GetPropertyForWebContentsPageNode<bool>(
@@ -614,6 +726,20 @@ GlicActuationState PageLiveStateDecorator::GetGlicActuationState(
 }
 
 // static
+bool PageLiveStateDecorator::IsGlicPinnedToVisibleInstance(
+    content::WebContents* contents) {
+  return GetPropertyForWebContentsPageNode<bool>(
+      contents, &PageLiveStateDataImpl::IsGlicPinnedToVisibleInstance);
+}
+
+// static
+bool PageLiveStateDecorator::IsWithheldFromView(
+    content::WebContents* contents) {
+  return GetPropertyForWebContentsPageNode<bool>(
+      contents, &PageLiveStateDataImpl::IsWithheldFromView);
+}
+
+// static
 bool PageLiveStateDecorator::UpdatedTitleOrFaviconInBackground(
     content::WebContents* contents) {
   return GetPropertyForWebContentsPageNode<bool>(
@@ -653,6 +779,9 @@ base::DictValue PageLiveStateDecorator::DescribePageNodeData(
   ret.Set("IsPinnedTab", data->IsPinnedTab());
   ret.Set("IsDevToolsOpen", data->IsDevToolsOpen());
   ret.Set("GlicActuationState", base::ToString(data->GetGlicActuationState()));
+  ret.Set("IsGlicPinnedToVisibleInstance",
+          data->IsGlicPinnedToVisibleInstance());
+  ret.Set("IsWithheldFromView", data->IsWithheldFromView());
   ret.Set("UpdatedTitleOrFaviconInBackground",
           data->UpdatedTitleOrFaviconInBackground());
 
@@ -727,8 +856,11 @@ void PageLiveStateDecorator::OnAboutToBeDiscarded(
   if (const auto* data =
           PageLiveStateDataImpl::Get(PageNodeImpl::FromNode(page_node))) {
     // IsAutoDiscardable is a tab property so applies to the new PageNode too.
-    PageLiveStateDataImpl::GetOrCreate(PageNodeImpl::FromNode(new_page_node))
-        ->set_is_auto_discardable(data->IsAutoDiscardable());
+    auto* new_data = PageLiveStateDataImpl::GetOrCreate(
+        PageNodeImpl::FromNode(new_page_node));
+    new_data->set_is_auto_discardable(data->IsAutoDiscardable());
+    new_data->set_is_glic_pinned_to_visible_instance(
+        data->IsGlicPinnedToVisibleInstance());
   }
 }
 

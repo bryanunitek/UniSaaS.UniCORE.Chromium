@@ -9,35 +9,8 @@ namespace page_load_metrics {
 NAVIGATION_HANDLE_USER_DATA_KEY_IMPL(NavigationHandleUserData);
 
 NavigationHandleUserData::NavigationHandleUserData(
-    content::NavigationHandle& navigation,
-    InitiatorLocation navigation_type)
-    : navigation_type_(navigation_type) {}
+    content::NavigationHandle& navigation) {}
 
-// static
-void NavigationHandleUserData::AttachNewTabPageNavigationHandleUserData(
-    content::NavigationHandle& navigation_handle) {
-  page_load_metrics::NavigationHandleUserData::CreateForNavigationHandle(
-      navigation_handle,
-      page_load_metrics::NavigationHandleUserData::InitiatorLocation::
-      kNewTabPage);
-}
-
-// static
-void NavigationHandleUserData::
-    AttachOmniboxDirectUrlInputNavigationHandleUserData(
-        content::NavigationHandle& navigation_handle) {
-  page_load_metrics::NavigationHandleUserData::CreateForNavigationHandle(
-      navigation_handle, page_load_metrics::NavigationHandleUserData::
-                             InitiatorLocation::kOmniboxDirectUrlInput);
-}
-
-// static
-void NavigationHandleUserData::
-    AttachOmniboxDefaultSearchEngineNavigationHandleUserData(
-        content::NavigationHandle& navigation_handle) {
-  page_load_metrics::NavigationHandleUserData::CreateForNavigationHandle(
-      navigation_handle, page_load_metrics::NavigationHandleUserData::
-                             InitiatorLocation::kOmniboxDefaultSearchEngine);
-}
+NavigationHandleUserData::~NavigationHandleUserData() = default;
 
 }  // namespace page_load_metrics

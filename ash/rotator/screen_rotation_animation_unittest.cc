@@ -10,9 +10,9 @@
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/window.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
@@ -79,7 +79,7 @@ TEST_F(ScreenRotationAnimationTest, LayerTransformGetsSetToTargetWhenAborted) {
 TEST_F(ScreenRotationAnimationTest, DestroyLayerDuringAnimation) {
   // Create a ui::Layer directly rather than an aura::Window, as the latter
   // finishes all of its animation before destroying its layer.
-  std::unique_ptr<ui::Layer> layer = std::make_unique<ui::Layer>();
+  auto layer = std::make_unique<ui::LayerTextured>();
 
   ui::Layer* root_layer = GetContext()->layer();
   layer->SetBounds(gfx::Rect(root_layer->bounds().size()));

@@ -11,7 +11,6 @@
 #import "components/google/core/common/google_util.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service_factory.h"
-#import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/reader_mode/model/reader_mode_java_script_feature.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/web/public/js_messaging/web_frame.h"
@@ -50,15 +49,13 @@ ReaderModeEligibilityDecider::ReaderModeEligibilityDecider(
     web::WebState* web_state,
     ReaderModeMetricsHelper* metrics_helper)
     : web_state_(web_state), metrics_helper_(metrics_helper) {
-  if (IsReaderModeOptimizationGuideEligibilityAvailable()) {
-    OptimizationGuideService* optimization_guide_service =
-        OptimizationGuideServiceFactory::GetForProfile(
-            ProfileIOS::FromBrowserState(web_state->GetBrowserState()));
-    if (optimization_guide_service) {
-      optimization_guide_service->RegisterOptimizationTypes(
-          {optimization_guide::proto::READER_MODE_ELIGIBLE});
-      optimization_guide_decider_ = optimization_guide_service;
-    }
+  OptimizationGuideService* optimization_guide_service =
+      OptimizationGuideServiceFactory::GetForProfile(
+          ProfileIOS::FromBrowserState(web_state->GetBrowserState()));
+  if (optimization_guide_service) {
+    optimization_guide_service->RegisterOptimizationTypes(
+        {optimization_guide::proto::READER_MODE_ELIGIBLE});
+    optimization_guide_decider_ = optimization_guide_service;
   }
 }
 
@@ -67,8 +64,7 @@ ReaderModeEligibilityDecider::~ReaderModeEligibilityDecider() = default;
 void ReaderModeEligibilityDecider::HandleReaderModeHeuristicResult(
     ReaderModeHeuristicResult result) {
   if (result == ReaderModeHeuristicResult::kReaderModeEligible &&
-      optimization_guide_decider_ && eligibility_heuristic_url_.has_value() &&
-      IsReaderModeOptimizationGuideEligibilityAvailable()) {
+      optimization_guide_decider_ && eligibility_heuristic_url_.has_value()) {
     // Do additional checks.
     optimization_guide_decider_->CanApplyOptimization(
         eligibility_heuristic_url_.value(),
@@ -82,9 +78,6 @@ void ReaderModeEligibilityDecider::HandleReaderModeHeuristicResult(
 }
 
 void ReaderModeEligibilityDecider::StartDecision(const GURL& url) {
-  if (!IsReaderModeAvailable()) {
-    return;
-  }
   // Guarantee that there is only one trigger heuristic running at a time.
   ResetDecision(url);
 
@@ -159,9 +152,6 @@ void ReaderModeEligibilityDecider::SetLastCommittedUrl(const GURL& url) {
 }
 
 void ReaderModeEligibilityDecider::TriggerReaderModeHeuristic(const GURL& url) {
-  if (!IsReaderModeAvailable()) {
-    return;
-  }
   if (!CurrentPageIsEligibleForReaderMode()) {
     // If the current page does not support running the heuristic, then the
     // eligibility of the current page is already known.
@@ -183,16 +173,11 @@ void ReaderModeEligibilityDecider::TriggerReaderModeHeuristic(const GURL& url) {
 
   metrics_helper_->RecordReaderHeuristicTriggered();
   eligibility_heuristic_url_ = url;
-  if (base::FeatureList::IsEnabled(kEnableReadabilityHeuristic)) {
-    main_frame->ExecuteJavaScript(
-        base::UTF8ToUTF16(dom_distiller::GetReadabilityTriggeringScript()),
-        base::BindOnce(
-            &ReaderModeEligibilityDecider::HandleReadabilityHeuristicResult,
-            weak_ptr_factory_.GetWeakPtr()));
-  } else {
-    ReaderModeJavaScriptFeature::GetInstance()->TriggerReaderModeHeuristic(
-        main_frame);
-  }
+  main_frame->ExecuteJavaScript(
+      base::UTF8ToUTF16(dom_distiller::GetReadabilityTriggeringScript()),
+      base::BindOnce(
+          &ReaderModeEligibilityDecider::HandleReadabilityHeuristicResult,
+          weak_ptr_factory_.GetWeakPtr()));
 }
 
 void ReaderModeEligibilityDecider::HandleReadabilityHeuristicResult(

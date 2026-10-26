@@ -7,8 +7,8 @@
 #include <algorithm>
 
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_actions.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/media_router/media_router_ui_service.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -17,6 +17,7 @@
 #include "components/media_router/browser/media_router_dialog_controller.h"
 #include "components/media_router/browser/media_router_factory.h"
 #include "components/media_router/browser/media_router_metrics.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/ui_base_features.h"
@@ -29,16 +30,25 @@ constexpr char kLoggerComponent[] = "CastBrowserController";
 
 using Severity = media_router::IssueInfo::Severity;
 
-CastBrowserController::CastBrowserController(Browser* browser)
+DEFINE_USER_DATA(CastBrowserController);
+
+// static
+CastBrowserController* CastBrowserController::From(
+    BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
+
+CastBrowserController::CastBrowserController(BrowserWindowInterface* browser)
     : CastBrowserController(
           browser,
-          MediaRouterFactory::GetApiForBrowserContext(browser->profile())) {}
+          MediaRouterFactory::GetApiForBrowserContext(browser->GetProfile())) {}
 
-CastBrowserController::CastBrowserController(Browser* browser,
+CastBrowserController::CastBrowserController(BrowserWindowInterface* browser,
                                              MediaRouter* media_router)
     : IssuesObserver(media_router->GetIssueManager()),
       MediaRoutesObserver(media_router),
       browser_(browser),
+      scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this),
       logger_(media_router->GetLogger()) {
   IssuesObserver::Init();
 }
@@ -65,7 +75,7 @@ void CastBrowserController::OnRoutesUpdated(
   for (const auto& route : routes) {
     const auto& route_id = route.media_route_id();
     MirroringMediaControllerHost* mirroring_controller_host =
-        MediaRouterFactory::GetApiForBrowserContext(browser_->profile())
+        MediaRouterFactory::GetApiForBrowserContext(browser_->GetProfile())
             ->GetMirroringMediaControllerHost(route_id);
     if (mirroring_controller_host) {
       mirroring_controller_host->AddObserver(this);
@@ -84,14 +94,15 @@ void CastBrowserController::OnFreezeInfoChanged() {
 void CastBrowserController::UpdateIcon() {
   auto* action_item = static_cast<actions::StatefulImageActionItem*>(
       actions::ActionManager::Get().FindAction(
-          kActionRouteMedia, browser_->browser_actions()->root_action_item()));
+          kActionRouteMedia,
+          BrowserActions::From(browser_)->root_action_item()));
   const gfx::VectorIcon* new_icon = nullptr;
   bool active = false;
 
   bool is_frozen = false;
   for (const auto& route_id : tracked_mirroring_routes_) {
     MirroringMediaControllerHost* mirroring_controller_host =
-        MediaRouterFactory::GetApiForBrowserContext(browser_->profile())
+        MediaRouterFactory::GetApiForBrowserContext(browser_->GetProfile())
             ->GetMirroringMediaControllerHost(route_id);
     if (mirroring_controller_host) {
       is_frozen = is_frozen || mirroring_controller_host->IsFrozen();
@@ -140,7 +151,7 @@ void CastBrowserController::UpdateIcon() {
 
 CastToolbarButtonController* CastBrowserController::GetActionController()
     const {
-  return MediaRouterUIService::Get(browser_->profile())->action_controller();
+  return MediaRouterUIService::Get(browser_->GetProfile())->action_controller();
 }
 
 ToolbarButton* CastBrowserController::GetToolbarButton() const {
@@ -170,9 +181,13 @@ ToolbarButton* CastBrowserController::GetToolbarButton() const {
 }
 
 void CastBrowserController::ToggleDialog() {
+  tabs::TabInterface* const tab = browser_->GetActiveTabInterface();
+  if (!tab || !tab->GetContents()) {
+    return;
+  }
   MediaRouterDialogController* dialog_controller =
       MediaRouterDialogController::GetOrCreateForWebContents(
-          browser_->tab_strip_model()->GetActiveWebContents());
+          tab->GetContents());
   if (dialog_controller->IsShowingMediaRouterDialog()) {
     dialog_controller->HideMediaRouterDialog();
   } else {
@@ -219,7 +234,7 @@ void CastBrowserController::LogIconChange(const gfx::VectorIcon* icon) {
 void CastBrowserController::StopObservingMirroringMediaControllerHosts() {
   for (const auto& route_id : tracked_mirroring_routes_) {
     media_router::MirroringMediaControllerHost* mirroring_controller_host =
-        MediaRouterFactory::GetApiForBrowserContext(browser_->profile())
+        MediaRouterFactory::GetApiForBrowserContext(browser_->GetProfile())
             ->GetMirroringMediaControllerHost(route_id);
     if (mirroring_controller_host) {
       mirroring_controller_host->RemoveObserver(this);

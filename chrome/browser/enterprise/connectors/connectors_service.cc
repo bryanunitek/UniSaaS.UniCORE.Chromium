@@ -90,6 +90,9 @@ std::string GetDeviceClientId(Profile* profile) {
 
 std::string MaybeGetProfileEmail(Profile* profile) {
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+  if (profile && profile->IsEnterpriseIsolatedModeProfile()) {
+    profile = profile->GetOriginalProfile();
+  }
   auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
   if (!identity_manager) {
     return std::string();
@@ -129,7 +132,7 @@ ConnectorsService::ConnectorsService(
     content::BrowserContext* context,
     std::unique_ptr<ConnectorsManagerBase> manager)
     : ConnectorsServiceBase(std::move(manager)), context_(context) {
-  DCHECK(context_);
+  CHECK(context_, base::NotFatalUntil::M161);
 }
 
 ConnectorsService::~ConnectorsService() = default;
@@ -193,7 +196,8 @@ std::optional<AnalysisSettings> ConnectorsService::GetAnalysisSettings(
     const storage::FileSystemURL& source_url,
     const storage::FileSystemURL& destination_url,
     AnalysisConnector connector) {
-  DCHECK_EQ(connector, AnalysisConnector::FILE_TRANSFER);
+  CHECK_EQ(connector, AnalysisConnector::FILE_TRANSFER,
+           base::NotFatalUntil::M161);
   if (!ConnectorsEnabled()) {
     return std::nullopt;
   }
@@ -216,10 +220,14 @@ std::string ConnectorsService::GetManagementDomain() {
   std::optional<policy::PolicyScope> scope;
   for (const char* scope_pref :
        {enterprise_connectors::kEnterpriseRealTimeUrlCheckScope,
+#if !BUILDFLAG(IS_ANDROID)
         AnalysisConnectorScopePref(AnalysisConnector::FILE_ATTACHED),
+#endif
         AnalysisConnectorScopePref(AnalysisConnector::FILE_DOWNLOADED),
+#if !BUILDFLAG(IS_ANDROID)
         AnalysisConnectorScopePref(AnalysisConnector::BULK_DATA_ENTRY),
         AnalysisConnectorScopePref(AnalysisConnector::PRINT),
+#endif
         kOnSecurityEventScopePref}) {
     std::optional<DmToken> dm_token = GetDmToken(scope_pref);
     if (dm_token.has_value()) {
@@ -260,27 +268,17 @@ std::string ConnectorsService::GetManagementDomain() {
 #endif
 }
 
-std::string ConnectorsService::GetRealTimeUrlCheckIdentifier() const {
-  auto dm_token = GetDmToken(kEnterpriseRealTimeUrlCheckScope);
-  if (!dm_token) {
-    return std::string();
-  }
+bool ConnectorsService::IsProfileAffiliated() const {
+  return IsAffiliated(Profile::FromBrowserContext(context_));
+}
 
-  Profile* profile = Profile::FromBrowserContext(context_);
-  if (IsAffiliated(profile)) {
-    std::string result = GetDeviceClientId(profile);
-    std::string email = MaybeGetProfileEmail(profile);
-    if (!email.empty()) {
-      return base::StrCat({result, "\n", email});
-    }
-    return result;
-  }
+std::string ConnectorsService::GetProfileEmail() const {
+  return MaybeGetProfileEmail(Profile::FromBrowserContext(context_));
+}
 
-  if (dm_token->scope == policy::POLICY_SCOPE_MACHINE) {
-    return GetDeviceClientId(profile);
-  }
-
-  return MaybeGetProfileEmail(profile);
+std::string ConnectorsService::GetDeviceClientId() const {
+  return ::enterprise_connectors::GetDeviceClientId(
+      Profile::FromBrowserContext(context_));
 }
 
 std::optional<ConnectorsService::DmToken> ConnectorsService::GetDmToken(
@@ -346,7 +344,8 @@ bool ConnectorsService::ConnectorsEnabled() const {
   }
 #endif
 
-  return !profile->IsOffTheRecord() || profile->IsGuestSession();
+  return !profile->IsOffTheRecord() || profile->IsGuestSession() ||
+         profile->IsEnterpriseIsolatedModeProfile();
 }
 
 PrefService* ConnectorsService::GetPrefs() {
@@ -449,11 +448,14 @@ ConnectorsServiceFactory::BuildServiceInstanceForBrowserContext(
 
 content::BrowserContext* ConnectorsServiceFactory::GetBrowserContextToUse(
     content::BrowserContext* context) const {
+  Profile* profile = Profile::FromBrowserContext(context);
+  if (!profile) {
+    return nullptr;
+  }
+
 #if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
-  // Do not construct the connectors service if the extensions are disabled for
-  // the given context.
-  if (extensions::ChromeContentBrowserClientExtensionsPart::
-          AreExtensionsDisabledForProfile(context)) {
+  // Do not construct the connectors service for the system profile.
+  if (profile->IsSystemProfile()) {
     return nullptr;
   }
 #endif
@@ -462,9 +464,9 @@ content::BrowserContext* ConnectorsServiceFactory::GetBrowserContextToUse(
   // profiles, besides incognito.
   // However, the primary/main profile might not exist in tests - then the
   // provided |context| is still used.
-  if (context && !context->IsOffTheRecord() &&
-      !Profile::FromBrowserContext(context)->AsTestingProfile() &&
-      !context->ShutdownStarted()) {
+  if (!profile->IsOffTheRecord() &&
+      !profile->AsTestingProfile() &&
+      !profile->ShutdownStarted()) {
 #if BUILDFLAG(IS_CHROMEOS)
     auto* user_manager = user_manager::UserManager::Get();
     if (auto* primary_user = user_manager->GetPrimaryUser()) {
@@ -476,7 +478,7 @@ content::BrowserContext* ConnectorsServiceFactory::GetBrowserContextToUse(
     }
 #endif
   }
-  return context;
+  return profile;
 }
 
 }  // namespace enterprise_connectors

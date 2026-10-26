@@ -58,7 +58,7 @@ public abstract class CafBaseMediaRouteProvider
 
     /**
      * @return A MediaSource object constructed from |sourceId|, or null if the derived class does
-     * not support the source.
+     *     not support the source.
      */
     protected abstract @Nullable MediaSource getSourceFromId(String sourceId);
 
@@ -85,7 +85,7 @@ public abstract class CafBaseMediaRouteProvider
 
     @Override
     public final void startObservingMediaSinks(String sourceId, String origin) {
-        Log.d(TAG, "startObservingMediaSinks: " + sourceId);
+        Log.d(TAG, "startObservingMediaSinks: %s", sourceId);
 
         MediaSource source = getSourceFromId(sourceId);
         if (source == null) {
@@ -144,7 +144,7 @@ public abstract class CafBaseMediaRouteProvider
 
     @Override
     public final void stopObservingMediaSinks(String sourceId) {
-        Log.d(TAG, "stopObservingMediaSinks: " + sourceId);
+        Log.d(TAG, "stopObservingMediaSinks: %s", sourceId);
 
         MediaSource source = getSourceFromId(sourceId);
         if (source == null) {
@@ -163,6 +163,18 @@ public abstract class CafBaseMediaRouteProvider
         if (callback.isEmpty()) {
             mAndroidMediaRouter.removeCallback(callback);
             mDiscoveryCallbacks.remove(applicationId);
+        }
+    }
+
+    @Override
+    public void onLocalNetworkPermissionGranted() {
+        for (DiscoveryCallback callback : mDiscoveryCallbacks.values()) {
+            MediaRouteSelector routeSelector = callback.getRouteSelector();
+            mAndroidMediaRouter.removeCallback(callback);
+            List<MediaSink> knownSinks = getKnownSinksFromAndroidMediaRouter(routeSelector);
+            callback.setAndUpdateSinks(knownSinks);
+            mAndroidMediaRouter.addCallback(
+                    routeSelector, callback, MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY);
         }
     }
 
@@ -301,7 +313,7 @@ public abstract class CafBaseMediaRouteProvider
 
     @Override
     public final void onSessionEnded(CastSession session, int error) {
-        Log.d(TAG, "Session ended with error code " + error);
+        Log.d(TAG, "Session ended with error code %d", error);
         handleSessionEnd();
     }
 
@@ -435,7 +447,7 @@ public abstract class CafBaseMediaRouteProvider
      * Removes a route for bookkeeping. This method can only be called from {@link #removeRoute()},
      * {@link #removeAllRoutes()} and {@link #terminateAllRoutes()}.
      *
-     * Sub-classes can extend this method for additional cleanup.
+     * <p>Sub-classes can extend this method for additional cleanup.
      */
     protected void removeRouteFromRecord(String routeId) {
         mRoutes.remove(routeId);

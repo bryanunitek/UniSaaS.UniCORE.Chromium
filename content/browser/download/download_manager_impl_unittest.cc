@@ -24,6 +24,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/uuid.h"
@@ -108,6 +109,13 @@ class MockDownloadManagerDelegate : public DownloadManagerDelegate {
                     SavePackagePathPickedCallback));
   MOCK_METHOD0(ApplicationClientIdForFileScanning, std::string());
   MOCK_METHOD1(AttachExtraInfo, void(download::DownloadItem*));
+  bool SupportsHistoryLoading() override { return supports_history_loading_; }
+  void set_supports_history_loading(bool supports) {
+    supports_history_loading_ = supports;
+  }
+
+ private:
+  bool supports_history_loading_ = true;
 };
 
 MockDownloadManagerDelegate::MockDownloadManagerDelegate() {}
@@ -260,6 +268,17 @@ download::DownloadItemImpl* MockDownloadItemFactory::CreatePersistedItem(
   EXPECT_CALL(*result, GetId()).WillRepeatedly(Return(download_id));
   EXPECT_CALL(*result, GetGuid()).WillRepeatedly(ReturnRefOfCopy(guid));
   EXPECT_CALL(*result, IsTransient()).WillRepeatedly(Return(transient));
+#if BUILDFLAG(IS_ANDROID)
+  if (target_path.IsContentUri()) {
+    EXPECT_CALL(*result, SetDisplayName(_))
+        .WillOnce([result](const base::FilePath& name) {
+          result->DownloadItemImpl::SetDisplayName(name);
+        });
+    EXPECT_CALL(*result, GetFileNameToReportUser()).WillRepeatedly([result]() {
+      return result->DownloadItemImpl::GetFileNameToReportUser();
+    });
+  }
+#endif
   items_[download_id] = result;
   return result;
 }
@@ -527,7 +546,8 @@ class DownloadManagerTest : public testing::Test {
             download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
             download::DOWNLOAD_INTERRUPT_REASON_SERVER_FAILED, false,
             base::Time::Now(), true,
-            std::vector<download::DownloadItem::ReceivedSlice>());
+            std::vector<download::DownloadItem::ReceivedSlice>(),
+            base::FilePath());
     return download_item;
   }
 
@@ -749,6 +769,10 @@ base::RepeatingCallback<bool(const GURL&)> GetSingleURLFilter(const GURL& url) {
 
 // Confirm that only downloads with the specified URL are removed.
 TEST_F(DownloadManagerTest, RemoveDownloadsByURL) {
+  GetMockDownloadManagerDelegate().set_supports_history_loading(false);
+  OnInProgressDownloadManagerInitialized();
+  EXPECT_TRUE(download_manager_->IsManagerInitialized());
+
   base::Time now(base::Time::Now());
   for (uint32_t i = 0; i < 2; ++i) {
     download::MockDownloadItemImpl& item(AddItemToManager());
@@ -762,9 +786,28 @@ TEST_F(DownloadManagerTest, RemoveDownloadsByURL) {
 
   base::RepeatingCallback<bool(const GURL&)> url_filter =
       GetSingleURLFilter(download_urls_[0]);
-  int remove_count = download_manager_->RemoveDownloadsByURLAndTime(
-      std::move(url_filter), base::Time(), base::Time::Max());
-  EXPECT_EQ(remove_count, 1);
+  bool called = false;
+  download_manager_->RemoveDownloadsByURLAndTime(
+      std::move(url_filter), base::Time(), base::Time::Max(),
+      base::BindOnce([](bool* called) { *called = true; }, &called));
+  EXPECT_TRUE(called);
+}
+
+TEST_F(DownloadManagerTest, RemoveDownloadsByURLUninitialized) {
+  GetMockDownloadManagerDelegate().set_supports_history_loading(false);
+  EXPECT_FALSE(download_manager_->IsManagerInitialized());
+
+  base::RepeatingCallback<bool(const GURL&)> url_filter =
+      GetSingleURLFilter(download_urls_[0]);
+  bool called = false;
+  download_manager_->RemoveDownloadsByURLAndTime(
+      std::move(url_filter), base::Time(), base::Time::Max(),
+      base::BindOnce([](bool* called) { *called = true; }, &called));
+  EXPECT_FALSE(called);
+
+  OnInProgressDownloadManagerInitialized();
+  EXPECT_TRUE(download_manager_->IsManagerInitialized());
+  EXPECT_TRUE(called);
 }
 
 // Confirm that in-progress downloads will be taken and managed by
@@ -957,6 +1000,33 @@ TEST_F(DownloadManagerTest, DeleteExpiredDownload) {
       << "Expired complete download will not be deleted.";
 }
 
+#if BUILDFLAG(IS_ANDROID)
+TEST_F(DownloadManagerTest, CreateDownloadItemWithContentUri) {
+  std::vector<GURL> url_chain;
+  url_chain.emplace_back("http://example.com/1.zip");
+  base::FilePath content_uri("content://media/external/downloads/123");
+  base::FilePath display_name("1.zip");
+
+  EXPECT_CALL(GetMockObserver(), OnDownloadCreated(download_manager_.get(), _));
+  EXPECT_CALL(GetMockDownloadManagerDelegate(), AttachExtraInfo(_));
+  download::DownloadItem* download_item = download_manager_->CreateDownloadItem(
+      kGuid, 10, content_uri, content_uri, url_chain,
+      GURL("http://example.com/a"),
+      StoragePartitionConfig::CreateDefault(
+          download_manager_->GetBrowserContext()),
+      GURL("http://example.com/a"), GURL("http://example.com/a"),
+      url::Origin::Create(GURL("http://example.com/")),
+      "application/octet-stream", "application/octet-stream", base::Time::Now(),
+      base::Time::Now(), std::string(), std::string(), 10, 10, std::string(),
+      download::DownloadItem::COMPLETE,
+      download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+      download::DOWNLOAD_INTERRUPT_REASON_NONE, false, base::Time::Now(), true,
+      std::vector<download::DownloadItem::ReceivedSlice>(), display_name);
+  ASSERT_TRUE(download_item);
+  EXPECT_EQ(display_name, download_item->GetFileNameToReportUser());
+}
+#endif
+
 class DownloadManagerShutdownTest : public DownloadManagerTest {
  public:
   void TearDown() override { download_manager_.reset(); }
@@ -989,6 +1059,46 @@ TEST_F(DownloadManagerShutdownTest,
        OnDownloadCanceledAtShutdownNotCalledForCompleteDownload) {
   RunOnDownloadCanceledAtShutdownCalledTest(download::DownloadItem::COMPLETE,
                                             /*expected_canceled_call_times=*/0);
+}
+
+TEST_F(DownloadManagerTest, PostInitializationWithoutHistoryLoadingSupport) {
+  GetMockDownloadManagerDelegate().set_supports_history_loading(false);
+  EXPECT_FALSE(download_manager_->IsManagerInitialized());
+
+  OnInProgressDownloadManagerInitialized();
+
+  // Since history loading is not supported by the delegate, DownloadManager
+  // becomes initialized immediately after in-progress cache initialization,
+  // without waiting for OnHistoryDBInitialized().
+  EXPECT_TRUE(download_manager_->IsManagerInitialized());
+}
+
+TEST_F(DownloadManagerTest, WaitForActiveDownloadsInitialization) {
+  bool active_initialized = false;
+  base::RunLoop run_loop;
+  download_manager_->WaitForActiveDownloadsInitialization(
+      base::BindLambdaForTesting([&]() {
+        active_initialized = true;
+        run_loop.Quit();
+      }));
+  EXPECT_FALSE(active_initialized);
+
+  OnInProgressDownloadManagerInitialized();
+  run_loop.Run();
+
+  EXPECT_TRUE(active_initialized);
+  EXPECT_FALSE(download_manager_->IsManagerInitialized());
+
+  bool active_initialized_post = false;
+  base::RunLoop run_loop2;
+  download_manager_->WaitForActiveDownloadsInitialization(
+      base::BindLambdaForTesting([&]() {
+        active_initialized_post = true;
+        run_loop2.Quit();
+      }));
+  EXPECT_FALSE(active_initialized_post);
+  run_loop2.Run();
+  EXPECT_TRUE(active_initialized_post);
 }
 
 }  // namespace content

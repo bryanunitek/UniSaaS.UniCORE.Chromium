@@ -35,10 +35,16 @@ BASE_FEATURE(kNetworkServiceFileAllowlist, base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #endif  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_FUCHSIA)
 
+#if BUILDFLAG(IS_MAC)
+// Enables sandbox violation logging on macOS (equivalent to the
+// --enable-sandbox-logging command-line flag). When enabled, every attempt to
+// access a resource denied by the sandbox will be logged to the system log.
+BASE_FEATURE(kEnableSandboxLogging, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
+
 #if BUILDFLAG(IS_WIN)
 // Enables the Windows speech recognition sandbox hardening.
 BASE_FEATURE(kSpeechRecognitionSandboxHardening,
-             "SpeechRecognitionSandboxHardening",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Experiment for Windows sandbox security mitigation,
@@ -95,16 +101,11 @@ BASE_FEATURE(kEnableCsrssLockdown, base::FEATURE_DISABLED_BY_DEFAULT);
 // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-process_mitigation_strict_handle_check_policy.
 BASE_FEATURE(kWinSboxStrictHandleChecks, base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Raise the job memory limit for the GPU process sandbox to 1TB. When disabled,
-// the GPU process will use a physical-memory-based scaling heuristic with a
-// maximum of 64GB.
-BASE_FEATURE(kWinSboxHighGPUJobMemoryLimits, base::FEATURE_DISABLED_BY_DEFAULT);
-
 // Enables Module Tampering Protection for CIG processes. When enabled, the
 // loader remaps a clean main image if IAT tampering is detected, preventing
 // process startup failures caused by injected non-Microsoft-signed imports.
 BASE_FEATURE(kWinSboxModuleTamperingProtection,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 #endif  // BUILDFLAG(IS_WIN)
 

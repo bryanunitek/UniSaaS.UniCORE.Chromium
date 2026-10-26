@@ -21,6 +21,7 @@
 #include "components/skills/internal/skills_fetcher.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
 #include "components/skills/public/skill.h"
+#include "components/skills/public/skills_provider.h"
 #include "components/skills/public/skills_service.h"
 #include "components/skills/public/skills_types.h"
 #include "components/sync/model/data_type_store.h"
@@ -80,7 +81,8 @@ class SkillsServiceImpl : public SkillsService {
                                         std::string_view description,
                                         base::Time creation_time,
                                         base::Time last_update_time,
-                                        sync_pb::SkillSource source) override;
+                                        sync_pb::SkillSource source,
+                                        bool enabled = true) override;
 
   // TODO(crbug.com/475863107) Add strong typing to help caller avoid swapping
   // order of arguments.
@@ -91,6 +93,8 @@ class SkillsServiceImpl : public SkillsService {
 
   void DeleteSkill(std::string_view skill_id,
                    UpdateSource update_source) override;
+  void DeleteSkillsModifiedBetween(base::Time delete_begin,
+                                   base::Time delete_end) override;
   const Skill* GetSkillById(std::string_view skill_id) const override;
   void RefreshDiscoverySkills() override;
   void FetchDiscoverySkills() override;
@@ -103,6 +107,8 @@ class SkillsServiceImpl : public SkillsService {
   const SkillProtoList& Get1PSkills() const override;
   const std::vector<skills::proto::TopicInfo>& Get1PTopicsInfo() const override;
   const std::vector<std::unique_ptr<Skill>>& GetSkills() const override;
+  const std::unordered_map<std::string, std::unique_ptr<Skill>>&
+  GetProvidedSkills() const override;
   void AddObserver(Observer* observer) override;
   void RemoveObserver(Observer* observer) override;
   base::WeakPtr<syncer::DataTypeControllerDelegate> GetControllerDelegate()
@@ -112,6 +118,9 @@ class SkillsServiceImpl : public SkillsService {
   void NotifyTemporarySkillDisplayChanged(std::string_view skill_id,
                                           DisplayState display_state) override;
   void NotifyPanelWillOpen() override;
+  void AddProvider(std::unique_ptr<SkillsProvider> provider) override;
+
+  void OnProviderSkillsChanged(SkillsProvider* provider);
 
  private:
   void NotifySkillChanged(std::string_view skill_id,
@@ -122,12 +131,13 @@ class SkillsServiceImpl : public SkillsService {
   const Skill* AddSkillImpl(std::unique_ptr<Skill> skill,
                             UpdateSource update_source);
 
-  // Returns a mutable skill with the given ID or nullptr if not found.
-  Skill* GetMutableSkillById(std::string_view skill_id);
+  // Returns a mutable user skill with the given ID or nullptr if not found.
+  // First-party and provided skills are not mutable and will return nullptr.
+  Skill* GetMutableUserSkillById(std::string_view skill_id);
 
-  // Returns the position of the skill with the given ID or nullopt if not
+  // Returns the position of the user skill with the given ID or nullopt if not
   // found.
-  std::optional<size_t> GetSkillPosition(std::string_view skill_id) const;
+  std::optional<size_t> GetUserSkillPosition(std::string_view skill_id) const;
 
   // Updates an existing `skill` with the given data. `update_time` is used only
   // if the skill is actually updated with new data or if updated from sync.
@@ -137,7 +147,8 @@ class SkillsServiceImpl : public SkillsService {
                        std::string_view prompt,
                        std::string_view description,
                        base::Time update_time,
-                       UpdateSource update_source);
+                       UpdateSource update_source,
+                       bool enabled = true);
 
   // Whether the service is initialized, i.e. LoadInitialSkills() has been
   // called.
@@ -151,6 +162,17 @@ class SkillsServiceImpl : public SkillsService {
 
   // The list of skills managed by this service.
   std::vector<std::unique_ptr<Skill>> skills_;
+
+  // The map of non-1P discovery skills provided by registered SkillsProviders
+  // to be shown on the browse page.
+  std::unordered_map<std::string, std::unique_ptr<Skill>>
+      provided_skill_objects_map_;
+
+  // The list of skill providers.
+  std::vector<std::unique_ptr<SkillsProvider>> providers_;
+
+  // The list of subscriptions to the skills providers.
+  std::vector<base::CallbackListSubscription> provider_subscriptions_;
 
   // The struct of loaded 1p discovery skill protos and topics list.
   FirstPartySkillData first_party_data_;

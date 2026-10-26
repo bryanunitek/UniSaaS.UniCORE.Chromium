@@ -41,7 +41,11 @@ public class VariationsSeedHolder {
     private static void writeSeedWithoutClosing(SeedInfo seed, ParcelFileDescriptor destination) {
         // writeSeed() will close "out", but closing "out" will not close "destination".
         FileOutputStream out = new FileOutputStream(destination.getFileDescriptor());
-        VariationsUtils.writeSeed(out, seed, AwEntropyState.getLowEntropySource());
+        VariationsUtils.writeSeed(
+                out,
+                seed,
+                AwEntropyState.getLowEntropySource(),
+                AwEntropyState.getLimitedEntropyRandomizationSource());
     }
 
     // Use mSeedHandler to send tasks to mSeedThread.
@@ -123,7 +127,15 @@ public class VariationsSeedHolder {
                     Log.e(TAG, "Failed to open seed file " + newSeedFile + " for update");
                     return;
                 }
-                if (!VariationsUtils.writeSeed(out, VariationsSeedHolder.this.mSeed, -1)) {
+                // SafeModeVariationsSeedContentProvider serves this seed file directly to apps
+                // during FastVariationsSeed SafeMode without going through SeedWriter. Therefore,
+                // the device-level entropy sources must be persisted here so SafeMode clients
+                // stay synchronized.
+                if (!VariationsUtils.writeSeed(
+                        out,
+                        VariationsSeedHolder.this.mSeed,
+                        AwEntropyState.getLowEntropySource(),
+                        AwEntropyState.getLimitedEntropyRandomizationSource())) {
                     Log.e(TAG, "Failed to write seed file " + newSeedFile + " for update");
                     return;
                 }
@@ -139,6 +151,7 @@ public class VariationsSeedHolder {
     @VisibleForTesting
     protected VariationsSeedHolder() {
         AwEntropyState.ensureLowEntropySourceInitialized();
+        AwEntropyState.ensureLimitedEntropyRandomizationSourceInitialized();
         mSeedThread = new HandlerThread(/* name= */ "seed_holder");
         mSeedThread.start();
         mSeedHandler = new Handler(mSeedThread.getLooper());

@@ -13,6 +13,7 @@
 #include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/page_action/page_action_enums.h"
 #include "chrome/browser/ui/page_action/page_action_model.h"
 #include "chrome/browser/ui/page_action/page_action_model_observer.h"
@@ -22,6 +23,7 @@
 #include "chrome/browser/ui/page_action/test_support/test_page_action_properties_provider.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_pref_names.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/tabs/public/mock_tab_interface.h"
@@ -88,6 +90,10 @@ class TestDelegate : public PageActionController::Delegate {
       base::RepeatingClosure callback) override {
     collapse_callback_ = std::move(callback);
   }
+  void SetAnchoredMessageDowngradeCallback(
+      base::RepeatingClosure callback) override {
+    downgrade_callback_ = std::move(callback);
+  }
   void SetClickCallback(
       base::RepeatingCallback<void(PageActionTrigger)> callback) override {
     click_callback_ = std::move(callback);
@@ -95,6 +101,7 @@ class TestDelegate : public PageActionController::Delegate {
 
   base::RepeatingClosure expand_callback_;
   base::RepeatingClosure collapse_callback_;
+  base::RepeatingClosure downgrade_callback_;
   base::RepeatingCallback<void(PageActionTrigger)> click_callback_;
 };
 
@@ -452,16 +459,22 @@ TEST_F(PageActionControllerTest, NotifyActionClickedLogsHistogram) {
 class PageActionControllerMockModelTest : public testing::Test {
  public:
   PageActionControllerMockModelTest()
-      : properties_provider_(kTestProperties),
-        tab_interface_(&profile_),
-        controller_(tab_interface_,
-                    {kFirstActionItemId, kSecondActionItemId},
-                    properties_provider_,
-                    /*pinned_actions_model=*/nullptr,
-                    &model_factory_) {}
+      : properties_provider_(kTestProperties), tab_interface_(&profile_) {
+    RecreateController();
+  }
 
-  PageActionControllerImpl& controller() { return controller_; }
-  MockPageActionModelFactory& models() { return model_factory_; }
+  void RecreateController() {
+    controller_.reset();
+    model_factory_ = std::make_unique<MockPageActionModelFactory>();
+    controller_ = std::make_unique<PageActionControllerImpl>(
+        tab_interface_,
+        std::vector<actions::ActionId>{kFirstActionItemId, kSecondActionItemId},
+        properties_provider_,
+        /*pinned_actions_model=*/nullptr, model_factory_.get());
+  }
+
+  PageActionControllerImpl& controller() { return *controller_; }
+  MockPageActionModelFactory& models() { return *model_factory_; }
   FakeTabInterface& tab_interface() { return tab_interface_; }
 
  protected:
@@ -471,9 +484,9 @@ class PageActionControllerMockModelTest : public testing::Test {
 
  private:
   TestingProfile profile_;
-  MockPageActionModelFactory model_factory_;
+  std::unique_ptr<MockPageActionModelFactory> model_factory_;
   FakeTabInterface tab_interface_;
-  PageActionControllerImpl controller_;
+  std::unique_ptr<PageActionControllerImpl> controller_;
 };
 
 TEST_F(PageActionControllerMockModelTest,
@@ -880,6 +893,237 @@ TEST_F(PageActionControllerMockModelTest, ShowAnchoredMessage) {
               SetShouldShowAnchoredMessage(_, false))
       .Times(1);
   controller().HideAnchoredMessage(kFirstActionItemId);
+}
+
+TEST_F(PageActionControllerMockModelTest,
+       AnchoredMessageDowngradedOnTabDeactivation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {features::kPageActionAnchoredMessageActiveTabOnly,
+       features::kPageActionsPrioritySelector},
+      {});
+  RecreateController();
+
+  tab_interface().Activate();
+
+  EXPECT_CALL(models().Get(kFirstActionItemId),
+              SetShouldShowAnchoredMessage(_, true))
+      .Times(1);
+  controller().ShowAnchoredMessage(
+      kFirstActionItemId,
+      {.priority = PageActionPriorityCategory::kPrivacySecurity});
+  EXPECT_EQ(controller().GetActiveAnchoredMessage(), kFirstActionItemId);
+
+  EXPECT_CALL(models().Get(kFirstActionItemId),
+              SetShouldShowAnchoredMessage(_, false))
+      .Times(1);
+  EXPECT_CALL(models().Get(kFirstActionItemId),
+              SetShouldShowSuggestionChip(_, true))
+      .Times(1);
+  EXPECT_CALL(models().Get(kFirstActionItemId), SetTabActive(_, false))
+      .Times(1);
+  tab_interface().Deactivate();
+
+  EXPECT_EQ(controller().GetActiveAnchoredMessage(), std::nullopt);
+}
+
+TEST_F(PageActionControllerMockModelTest,
+       AnchoredMessageDowngradedWhenRequestedOnInactiveTab) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {features::kPageActionAnchoredMessageActiveTabOnly,
+       features::kPageActionsPrioritySelector},
+      {});
+  RecreateController();
+
+  tab_interface().Deactivate();
+
+  EXPECT_CALL(models().Get(kFirstActionItemId),
+              SetShouldShowAnchoredMessage(_, _))
+      .Times(0);
+  EXPECT_CALL(
+      models().Get(kFirstActionItemId),
+      SetSuggestionChipConfig(
+          _,
+          SuggestionChipConfig{
+              .priority = PageActionPriorityCategory::kPrivacySecurity}))
+      .Times(1);
+  EXPECT_CALL(models().Get(kFirstActionItemId),
+              SetShouldShowSuggestionChip(_, true))
+      .Times(1);
+  controller().ShowAnchoredMessage(
+      kFirstActionItemId,
+      {.priority = PageActionPriorityCategory::kPrivacySecurity});
+
+  EXPECT_EQ(controller().GetActiveAnchoredMessage(), std::nullopt);
+}
+
+TEST_F(PageActionControllerMockModelTest,
+       AnchoredMessageDowngradedWhenActionItemBubbleShowing) {
+  EXPECT_CALL(models().Get(kFirstActionItemId), GetActionItemIsShowingBubble())
+      .WillRepeatedly(testing::Return(true));
+
+  EXPECT_CALL(models().Get(kSecondActionItemId),
+              SetShouldShowAnchoredMessage(_, _))
+      .Times(0);
+  EXPECT_CALL(models().Get(kSecondActionItemId),
+              SetShouldShowSuggestionChip(_, true))
+      .Times(1);
+
+  controller().ShowAnchoredMessage(
+      kSecondActionItemId,
+      {.priority = PageActionPriorityCategory::kPrivacySecurity});
+
+  EXPECT_EQ(controller().GetActiveAnchoredMessage(), std::nullopt);
+}
+
+TEST_F(PageActionControllerMockModelTest,
+       AnchoredMessageDowngradedWhenActivityActive) {
+  EXPECT_CALL(models().Get(kFirstActionItemId), GetActionActive())
+      .WillRepeatedly(testing::Return(true));
+
+  EXPECT_CALL(models().Get(kSecondActionItemId),
+              SetShouldShowAnchoredMessage(_, _))
+      .Times(0);
+  EXPECT_CALL(models().Get(kSecondActionItemId),
+              SetShouldShowSuggestionChip(_, true))
+      .Times(1);
+
+  controller().ShowAnchoredMessage(
+      kSecondActionItemId,
+      {.priority = PageActionPriorityCategory::kContextualCue});
+
+  EXPECT_EQ(controller().GetActiveAnchoredMessage(), std::nullopt);
+}
+
+TEST_F(PageActionControllerMockModelTest,
+       UserInteractionAnchoredMessageNotDowngradedWhenBubbleShowing) {
+  EXPECT_CALL(models().Get(kFirstActionItemId), GetActionItemIsShowingBubble())
+      .WillRepeatedly(testing::Return(true));
+
+  EXPECT_CALL(models().Get(kSecondActionItemId),
+              SetShouldShowAnchoredMessage(_, true))
+      .Times(1);
+  EXPECT_CALL(models().Get(kSecondActionItemId),
+              SetShouldShowSuggestionChip(_, _))
+      .Times(0);
+
+  controller().ShowAnchoredMessage(
+      kSecondActionItemId,
+      {.priority = PageActionPriorityCategory::kUserInteraction});
+
+  EXPECT_EQ(controller().GetActiveAnchoredMessage(), kSecondActionItemId);
+}
+
+TEST_F(
+    PageActionControllerMockModelTest,
+    AnchoredMessageDowngradedImmediatelyWhenNewActivityShownWhileTimeoutRunning) {
+  EXPECT_CALL(models().Get(kFirstActionItemId),
+              SetShouldShowAnchoredMessage(_, true))
+      .Times(1);
+  controller().ShowAnchoredMessage(
+      kFirstActionItemId,
+      {.priority = PageActionPriorityCategory::kPrivacySecurity});
+  EXPECT_EQ(controller().GetActiveAnchoredMessage(), kFirstActionItemId);
+
+  EXPECT_CALL(models().Get(kSecondActionItemId), SetActionActive(_, true))
+      .Times(1);
+  EXPECT_CALL(models().Get(kSecondActionItemId), SetActionActive(_, false))
+      .Times(1);
+  EXPECT_CALL(models().Get(kFirstActionItemId),
+              SetShouldShowAnchoredMessage(_, false))
+      .Times(1);
+  EXPECT_CALL(models().Get(kFirstActionItemId),
+              SetShouldShowSuggestionChip(_, true))
+      .Times(1);
+
+  ScopedPageActionActivity activity =
+      controller().AddActivity(kSecondActionItemId);
+
+  EXPECT_EQ(controller().GetActiveAnchoredMessage(), std::nullopt);
+}
+
+TEST_F(
+    PageActionControllerTest,
+    AnchoredMessageDowngradedImmediatelyWhenNewActionItemBubbleShownWhileTimeoutRunning) {
+  auto action_item_a = BuildActionItem(0);
+  base::CallbackListSubscription subscription_a =
+      controller()->CreateActionItemSubscription(action_item_a.get());
+  auto action_item_b = BuildActionItem(kSecondActionItemId);
+  base::CallbackListSubscription subscription_b =
+      controller()->CreateActionItemSubscription(action_item_b.get());
+
+  controller()->ShowAnchoredMessage(
+      0, {.priority = PageActionPriorityCategory::kPrivacySecurity});
+  EXPECT_EQ(controller()->GetActiveAnchoredMessage(), 0);
+
+  action_item_b->SetIsShowingBubble(true);
+
+  EXPECT_EQ(controller()->GetActiveAnchoredMessage(), std::nullopt);
+}
+
+TEST_F(PageActionControllerMockModelTest,
+       AnchoredMessageNotDowngradedWhenNewBubbleShownWhileTimeoutPaused) {
+  TestDelegate delegate;
+  controller().RegisterCallbacks(PageActionPassKey::PassKeyForTesting(),
+                                 kFirstActionItemId, &delegate);
+
+  EXPECT_CALL(models().Get(kFirstActionItemId),
+              SetShouldShowAnchoredMessage(_, true))
+      .Times(1);
+  controller().ShowAnchoredMessage(
+      kFirstActionItemId,
+      {.priority = PageActionPriorityCategory::kPrivacySecurity});
+  EXPECT_EQ(controller().GetActiveAnchoredMessage(), kFirstActionItemId);
+
+  delegate.expand_callback_.Run();
+
+  EXPECT_CALL(models().Get(kSecondActionItemId), SetActionActive(_, true))
+      .Times(1);
+  EXPECT_CALL(models().Get(kSecondActionItemId), SetActionActive(_, false))
+      .Times(1);
+  EXPECT_CALL(models().Get(kFirstActionItemId),
+              SetShouldShowAnchoredMessage(_, false))
+      .Times(0);
+
+  ScopedPageActionActivity activity =
+      controller().AddActivity(kSecondActionItemId);
+
+  EXPECT_EQ(controller().GetActiveAnchoredMessage(), kFirstActionItemId);
+}
+
+TEST_F(PageActionControllerMockModelTest,
+       QueuedAnchoredMessagesDowngradedWhenNewBubbleShown) {
+  EXPECT_CALL(models().Get(kFirstActionItemId),
+              SetShouldShowAnchoredMessage(_, true))
+      .Times(1);
+  controller().ShowAnchoredMessage(
+      kFirstActionItemId,
+      {.priority = PageActionPriorityCategory::kUserInteraction});
+  EXPECT_EQ(controller().GetActiveAnchoredMessage(), kFirstActionItemId);
+
+  // Queue a second anchored message behind the active UserInteraction message.
+  controller().ShowAnchoredMessage(
+      kSecondActionItemId,
+      {.priority = PageActionPriorityCategory::kContextualCue});
+
+  EXPECT_CALL(models().Get(kFirstActionItemId), SetActionActive(_, true))
+      .Times(1);
+  EXPECT_CALL(models().Get(kFirstActionItemId), SetActionActive(_, false))
+      .Times(1);
+  // The queued anchored message should be downgraded to a chip immediately.
+  EXPECT_CALL(models().Get(kSecondActionItemId),
+              SetShouldShowSuggestionChip(_, true))
+      .Times(1);
+  // The active UserInteraction message should remain showing.
+  EXPECT_CALL(models().Get(kFirstActionItemId),
+              SetShouldShowAnchoredMessage(_, false))
+      .Times(0);
+
+  ScopedPageActionActivity activity =
+      controller().AddActivity(kFirstActionItemId);
+
+  EXPECT_EQ(controller().GetActiveAnchoredMessage(), kFirstActionItemId);
 }
 
 }  // namespace

@@ -6,12 +6,11 @@
 // https://developers.google.com/open-source/licenses/bsd
 
 #include "python/convert.h"
+
 #include "python/message.h"
 #include "python/protobuf.h"
 #include "upb/message/compare.h"
-#include "upb/message/map.h"
 #include "upb/reflection/def.h"
-#include "upb/reflection/message.h"
 #include "utf8_range.h"
 
 // Must be last.
@@ -61,21 +60,12 @@ PyObject* PyUpb_UpbToPy(upb_MessageValue val, const upb_FieldDef* f,
   }
 }
 
-// TODO: raise error in 2026 Q1 release
-static void WarnBool(const upb_FieldDef* f) {
-  static int bool_warning_count = 100;
-  if (bool_warning_count > 0) {
-    --bool_warning_count;
-    PyErr_WarnFormat(PyExc_DeprecationWarning, 3,
-                     "Field %s: Expected an int, got a boolean. This "
-                     "will be rejected in 7.34.0, please fix it before that",
-                     upb_FieldDef_FullName(f));
-  }
-}
-
 static bool PyUpb_GetInt64(PyObject* obj, const upb_FieldDef* f, int64_t* val) {
   if (PyBool_Check(obj)) {
-    WarnBool(f);
+    PyErr_Format(PyExc_TypeError,
+                 "Field %s: Expected an int, got a boolean.",
+                 upb_FieldDef_FullName(f));
+    return false;
   }
   // We require that the value is either an integer or has an __index__
   // conversion.
@@ -98,7 +88,10 @@ static bool PyUpb_GetInt64(PyObject* obj, const upb_FieldDef* f, int64_t* val) {
 static bool PyUpb_GetUint64(PyObject* obj, const upb_FieldDef* f,
                             uint64_t* val) {
   if (PyBool_Check(obj)) {
-    WarnBool(f);
+    PyErr_Format(PyExc_TypeError,
+                 "Field %s: Expected an int, got a boolean.",
+                 upb_FieldDef_FullName(f));
+    return false;
   }
   // We require that the value is either an integer or has an __index__
   // conversion.
@@ -189,6 +182,9 @@ static bool PyUpb_PyToUpbEnum(PyObject* obj, const upb_FieldDef* f,
   if (PyUnicode_Check(obj)) {
     Py_ssize_t size;
     const char* name = PyUnicode_AsUTF8AndSize(obj, &size);
+    if (name == NULL) {
+      return false;
+    }
     const upb_EnumValueDef* ev =
         upb_EnumDef_FindValueByNameWithSize(e, name, size);
     if (!ev) {
@@ -199,7 +195,10 @@ static bool PyUpb_PyToUpbEnum(PyObject* obj, const upb_FieldDef* f,
     return true;
   } else {
     if (PyBool_Check(obj)) {
-      WarnBool(f);
+      PyErr_Format(PyExc_TypeError,
+                   "Field %s: Expected an int, got a boolean.",
+                   upb_FieldDef_FullName(f));
+      return false;
     }
     int32_t i32;
     if (!PyUpb_GetInt32(obj, f, &i32)) return false;
@@ -215,6 +214,10 @@ static bool PyUpb_PyToUpbEnum(PyObject* obj, const upb_FieldDef* f,
 bool PyUpb_IsNumpyNdarray(PyObject* obj, const upb_FieldDef* f) {
   PyObject* type_name_obj =
       PyObject_GetAttrString((PyObject*)Py_TYPE(obj), "__name__");
+  if (!type_name_obj) {
+    PyErr_Clear();
+    return false;
+  }
   bool is_ndarray = false;
   if (!strcmp(PyUpb_GetStrData(type_name_obj), "ndarray")) {
     PyErr_Format(PyExc_TypeError,
@@ -229,6 +232,10 @@ bool PyUpb_IsNumpyNdarray(PyObject* obj, const upb_FieldDef* f) {
 bool PyUpb_IsNumpyBoolScalar(PyObject* obj) {
   PyObject* type_module_obj =
       PyObject_GetAttrString((PyObject*)Py_TYPE(obj), "__module__");
+  if (!type_module_obj) {
+    PyErr_Clear();
+    return false;
+  }
   bool is_numpy = !strcmp(PyUpb_GetStrData(type_module_obj), "numpy");
   Py_DECREF(type_module_obj);
   if (!is_numpy) {
@@ -237,6 +244,10 @@ bool PyUpb_IsNumpyBoolScalar(PyObject* obj) {
 
   PyObject* type_name_obj =
       PyObject_GetAttrString((PyObject*)Py_TYPE(obj), "__name__");
+  if (!type_name_obj) {
+    PyErr_Clear();
+    return false;
+  }
   bool is_bool = !strcmp(PyUpb_GetStrData(type_name_obj), "bool");
   Py_DECREF(type_name_obj);
   if (!is_bool) {
@@ -303,13 +314,11 @@ bool PyUpb_PyToUpb(PyObject* obj, const upb_FieldDef* f, upb_MessageValue* val,
         }
         *val = PyUpb_MaybeCopyString(ptr, size, arena);
         return true;
-      } else {
-        const char* ptr;
-        ptr = PyUnicode_AsUTF8AndSize(obj, &size);
-        if (PyErr_Occurred()) return false;
-        *val = PyUpb_MaybeCopyString(ptr, size, arena);
-        return true;
       }
+      const char* ptr = PyUnicode_AsUTF8AndSize(obj, &size);
+      if (PyErr_Occurred()) return false;
+      *val = PyUpb_MaybeCopyString(ptr, size, arena);
+      return true;
     }
     case kUpb_CType_Message:
       PyErr_Format(PyExc_ValueError, "Message objects may not be assigned");

@@ -15,7 +15,6 @@
 #include "base/threading/thread.h"
 #include "build/build_config.h"
 #include "components/enterprise/buildflags/buildflags.h"
-#include "content/public/browser/browser_thread.h"
 #include "printing/page_number.h"
 #include "printing/printing_context.h"
 
@@ -105,7 +104,8 @@ class PrintJobWorker {
 
   // Get the document.  Only to be called from the worker thread.
   PrintedDocument* document() {
-    DCHECK(task_runner_->RunsTasksInCurrentSequence());
+    CHECK(task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M162);
     return document_.get();
   }
 

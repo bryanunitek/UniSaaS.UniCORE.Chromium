@@ -54,6 +54,18 @@ class CONTENT_EXPORT SecurityPrincipal {
   // URLDataManagerBackend::GetWebUISchemes().
   virtual bool IsWebUI() const = 0;
 
+  // Returns true if this SecurityPrincipal is keyed to a single origin rather
+  // than to a site (scheme plus eTLD+1). An origin-keyed principal never
+  // shares its process with other origins of the same site, e.g. due to an
+  // Origin-Agent-Cluster opt-in backed by process isolation. Note that origin
+  // isolation is not guaranteed to be available in every configuration, so a
+  // request for it (via the OAC header or embedder policy) does not imply
+  // this returns true for the resulting principal. In particular, this only
+  // returns true for origin-keyed principals backed by actual process
+  // isolation, and false for logical Origin-Agent-Cluster (i.e., OAC enabled
+  // only in the renderer process).
+  virtual bool IsOriginKeyed() const = 0;
+
   // Get the StoragePartitionConfig, which describes the StoragePartition this
   // SecurityPrincipal is associated with.  For example, this will correspond to
   // a non-default StoragePartition for <webview> guests.
@@ -75,7 +87,7 @@ class CONTENT_EXPORT SecurityPrincipal {
   // Note that when a principal uses an effective URL, the host will correspond
   // to that effective URL rather than the original (see SchemeIs() for an
   // example with hosted apps).
-  virtual std::string GetHost() const = 0;
+  virtual std::string_view GetHost() const = 0;
 
   // Returns the site URL associated with all of the documents and workers in
   // this principal, as described above.

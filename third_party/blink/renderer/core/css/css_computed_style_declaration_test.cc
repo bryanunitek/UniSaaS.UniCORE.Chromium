@@ -32,7 +32,7 @@ TEST_F(CSSComputedStyleDeclarationTest, CleanAncestorsNoRecalc) {
                                         AtomicString("color:pink"));
   EXPECT_TRUE(GetDocument().NeedsLayoutTreeUpdate());
 
-  Element* target = GetDocument().getElementById(AtomicString("target"));
+  Element* target = GetElementById("target");
   auto* computed = MakeGarbageCollected<CSSComputedStyleDeclaration>(target);
 
   EXPECT_EQ("rgb(0, 128, 0)",
@@ -48,7 +48,7 @@ TEST_F(CSSComputedStyleDeclarationTest, CleanShadowAncestorsNoRecalc) {
     <div id=host></div>
   )HTML");
 
-  Element* host = GetDocument().getElementById(AtomicString("host"));
+  Element* host = GetElementById("host");
 
   ShadowRoot& shadow_root =
       host->AttachShadowRootForTesting(ShadowRootMode::kOpen);
@@ -88,9 +88,9 @@ TEST_F(CSSComputedStyleDeclarationTest, AdjacentInvalidation) {
 
   EXPECT_FALSE(GetDocument().NeedsLayoutTreeUpdate());
 
-  Element* a = GetDocument().getElementById(AtomicString("a"));
-  Element* b = GetDocument().getElementById(AtomicString("b"));
-  Element* c = GetDocument().getElementById(AtomicString("c"));
+  Element* a = GetElementById("a");
+  Element* b = GetElementById("b");
+  Element* c = GetElementById("c");
 
   EXPECT_FALSE(GetDocument().NeedsLayoutTreeUpdate());
   EXPECT_FALSE(GetDocument().NeedsLayoutTreeUpdateForNode(*a));
@@ -123,6 +123,57 @@ TEST_F(CSSComputedStyleDeclarationTest,
       computed->GetPropertyCSSValue(CSSPropertyID::kVariable);
   EXPECT_FALSE(result);
   // Don't crash.
+}
+
+TEST_F(CSSComputedStyleDeclarationTest,
+       TimelineShorthandWithMismatchedListLengths) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <div id="scroll" style="scroll-timeline-name: --a, --b, --c;
+                            scroll-timeline-axis: inline, inline"></div>
+    <div id="scroll-extra-axis" style="scroll-timeline-name: --a, --b;
+                                       scroll-timeline-axis: inline, inline, inline"></div>
+    <div id="view" style="view-timeline-name: --a, --b;
+                          view-timeline-axis: inline, inline;
+                          view-timeline-inset: auto, auto, auto"></div>
+  )HTML");
+
+  auto* scroll = MakeGarbageCollected<CSSComputedStyleDeclaration>(
+      GetElementById("scroll"));
+  EXPECT_EQ("", scroll->GetPropertyValue(CSSPropertyID::kScrollTimeline));
+
+  auto* scroll_extra_axis = MakeGarbageCollected<CSSComputedStyleDeclaration>(
+      GetElementById("scroll-extra-axis"));
+  EXPECT_EQ(
+      "", scroll_extra_axis->GetPropertyValue(CSSPropertyID::kScrollTimeline));
+
+  auto* view =
+      MakeGarbageCollected<CSSComputedStyleDeclaration>(GetElementById("view"));
+  EXPECT_EQ("", view->GetPropertyValue(CSSPropertyID::kViewTimeline));
+}
+
+TEST_F(CSSComputedStyleDeclarationTest, TimelineShorthandWithInitialLonghands) {
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <div id="scroll" style="scroll-timeline-name: --a, --b"></div>
+    <div id="view-axis" style="view-timeline-name: --a, --b;
+                               view-timeline-inset: 1px, 2px"></div>
+    <div id="view-inset" style="view-timeline-name: --a, --b;
+                                view-timeline-axis: inline, inline"></div>
+  )HTML");
+
+  auto* scroll = MakeGarbageCollected<CSSComputedStyleDeclaration>(
+      GetElementById("scroll"));
+  EXPECT_EQ("--a, --b",
+            scroll->GetPropertyValue(CSSPropertyID::kScrollTimeline));
+
+  auto* view_axis = MakeGarbageCollected<CSSComputedStyleDeclaration>(
+      GetElementById("view-axis"));
+  EXPECT_EQ("--a 1px, --b 2px",
+            view_axis->GetPropertyValue(CSSPropertyID::kViewTimeline));
+
+  auto* view_inset = MakeGarbageCollected<CSSComputedStyleDeclaration>(
+      GetElementById("view-inset"));
+  EXPECT_EQ("--a inline, --b inline",
+            view_inset->GetPropertyValue(CSSPropertyID::kViewTimeline));
 }
 
 // https://crbug.com/1115877
@@ -175,7 +226,7 @@ TEST_F(CSSComputedStyleDeclarationTest, UseCountDurationZero) {
   )HTML");
   UpdateAllLifecyclePhasesForTest();
 
-  Element* div = GetDocument().getElementById(AtomicString("div"));
+  Element* div = GetElementById("div");
   ASSERT_TRUE(div);
   auto* style = MakeGarbageCollected<CSSComputedStyleDeclaration>(div);
 

@@ -34,6 +34,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/microsoft_dxheaders/src/include/directx/d3dx12_core.h"
 #include "ui/gfx/color_space.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 
 #if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
@@ -606,7 +607,7 @@ class FuzzerVideoEncoderWrapper : public D3D12VideoEncoderWrapper {
         .WillByDefault([](UINT, const D3D12_RANGE*) {});
   }
 
-  bool Initialize(uint32_t) override { return true; }
+  bool Initialize(uint32_t, uint64_t) override { return true; }
   bool Wait(D3D12FenceAndValue) override { return true; }
   EncoderStatus Encode(
       const D3D12_VIDEO_ENCODER_ENCODEFRAME_INPUT_ARGUMENTS&,
@@ -614,11 +615,12 @@ class FuzzerVideoEncoderWrapper : public D3D12VideoEncoderWrapper {
     return EncoderStatus::Codes::kOk;
   }
 
-  EncoderStatus::Or<ScopedD3D12ResourceMap> GetEncoderOutputMetadata()
-      const override {
+  base::expected<ScopedD3D12ResourceMap, EncoderStatus>
+  GetEncoderOutputMetadata() const override {
     ScopedD3D12ResourceMap map;
     if (!map.Map(metadata_resource_.Get(), 0, nullptr)) {
-      return EncoderStatus::Codes::kEncoderInitializationError;
+      return base::unexpected(
+          EncoderStatus::Codes::kEncoderInitializationError);
     }
     return map;
   }
@@ -1179,7 +1181,8 @@ int RunD3D12VideoEncodeDelegateFuzzer(FuzzedDataProvider& provider) {
   }
 
   gfx::ColorSpace color_space = gfx::ColorSpace::CreateREC709();
-  delegate->Encode(picture_buffer, color_space, bitstream_buffer, options);
+  auto status = delegate->Encode(picture_buffer, gfx::Rect(frame_size),
+                                 color_space, bitstream_buffer, options);
 
   return 0;
 }

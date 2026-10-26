@@ -2,8 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/toolbar/app_menu_model.h"
+
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
@@ -16,17 +19,17 @@
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/ui/accelerator_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/toolbar/app_menu_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
@@ -45,11 +48,15 @@
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/crx_file/id_util.h"
+#include "components/optimization_guide/core/feature_registry/feature_registration.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "components/performance_manager/public/features.h"
+#include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "components/skills/features.h"
 #include "components/supervised_user/core/common/features.h"
 #include "components/supervised_user/test_support/supervised_user_signin_test_utils.h"
+#include "components/vector_icons/vector_icons.h"
 #include "components/webapps/browser/banners/app_banner_manager.h"
 #include "components/webapps/browser/banners/installable_web_app_check_result.h"
 #include "components/webapps/browser/banners/web_app_banner_data.h"
@@ -117,7 +124,8 @@ class AppMenuModelInteractiveTest : public InteractiveBrowserTest {
   }
 
  protected:
-  auto CheckIncognitoWindowOpened(const Browser* default_browser) {
+  auto CheckIncognitoWindowOpened(
+      const BrowserWindowInterface* default_browser) {
     return Check(base::BindLambdaForTesting([default_browser]() {
       BrowserWindowInterface* new_browser = nullptr;
       if (GlobalBrowserCollection::GetInstance()->GetIncognitoBrowserCount() ==
@@ -138,7 +146,7 @@ class AppMenuModelInteractiveTest : public InteractiveBrowserTest {
     }));
   }
 
-  auto CheckGuestWindowOpened(const Browser* default_browser) {
+  auto CheckGuestWindowOpened(const BrowserWindowInterface* default_browser) {
     return Check(base::BindLambdaForTesting([default_browser]() {
       BrowserWindowInterface* new_browser = nullptr;
       if (GlobalBrowserCollection::GetInstance()->GetGuestBrowserCount() == 1) {
@@ -174,7 +182,9 @@ IN_PROC_BROWSER_TEST_F(AppMenuModelInteractiveTest, PerformanceNavigation) {
 
 IN_PROC_BROWSER_TEST_F(AppMenuModelInteractiveTest, IncognitoMenuItem) {
   RunTestSequence(PressButton(kToolbarAppMenuButtonElementId),
-                  SelectMenuItem(AppMenuModel::kIncognitoMenuItem),
+                  base::FeatureList::IsEnabled(features::kAppMenuGlowUp)
+                      ? PressButton(AppMenuModel::kIncognitoMenuItem)
+                      : SelectMenuItem(AppMenuModel::kIncognitoMenuItem),
                   CheckIncognitoWindowOpened(browser()));
 }
 
@@ -386,41 +396,89 @@ IN_PROC_BROWSER_TEST_P(AppMenuModelExtensionsInteractiveTest,
                                 MENU_ACTION_MANAGE_EXTENSIONS, 0);
 }
 
-class AppMenuModelCreateNewTabGroupTest : public AppMenuModelInteractiveTest {
+class AppMenuModelSkillsAndExtensionsInteractiveTest
+    : public AppMenuModelInteractiveTest,
+      public testing::WithParamInterface<bool> {
  public:
-  AppMenuModelCreateNewTabGroupTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kCreateNewTabGroupAppMenuTopLevel}, {});
+  AppMenuModelSkillsAndExtensionsInteractiveTest() {
+    std::vector<base::test::FeatureRef> enabled_features = {
+        features::kSkillsEnabled, features::kSkillsAndExtensionsAppMenu};
+    std::vector<base::test::FeatureRef> disabled_features;
+    if (GetParam()) {
+      enabled_features.push_back(features::kAppMenuGlowUp);
+    } else {
+      disabled_features.push_back(features::kAppMenuGlowUp);
+    }
+    feature_list_.InitWithFeatures(enabled_features, disabled_features);
   }
 
+  ~AppMenuModelSkillsAndExtensionsInteractiveTest() override = default;
+
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
+  glic::GlicTestEnvironment glic_test_env_;
+  base::test::ScopedFeatureList feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(AppMenuModelCreateNewTabGroupTest,
-                       CheckCreateNewTabGroupAppMenuTopLevel) {
-  RunTestSequence(InstrumentTab(kPrimaryTabPageElementId),
-                  PressButton(kToolbarAppMenuButtonElementId),
-                  EnsurePresent(AppMenuModel::kCreateNewTabGroupTopLevel));
+INSTANTIATE_TEST_SUITE_P(,
+                         AppMenuModelSkillsAndExtensionsInteractiveTest,
+                         testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& param) {
+                           return param.param ? "GlowUpEnabled"
+                                              : "GlowUpDisabled";
+                         });
+
+IN_PROC_BROWSER_TEST_P(AppMenuModelSkillsAndExtensionsInteractiveTest,
+                       ManageSkills) {
+  base::HistogramTester histogram_tester;
+  RunTestSequence(
+      InstrumentTab(kPrimaryTabPageElementId),
+      PressButton(kToolbarAppMenuButtonElementId),
+      SelectMenuItem(AppMenuModel::kSkillsAndExtensionsMenuItem),
+      SelectMenuItem(SkillsAndExtensionsMenuModel::kManageSkillsMenuItem),
+      WaitForWebContentsNavigation(
+          kPrimaryTabPageElementId,
+          GURL(chrome::kChromeUISkillsURL)
+              .Resolve(chrome::kChromeUISkillsYourSkillsPath)));
+
+  histogram_tester.ExpectTotalCount(
+      "WrenchMenu.TimeToAction.ShowSkillsAndExtensions", 1);
+  histogram_tester.ExpectBucketCount("WrenchMenu.MenuAction",
+                                     MENU_ACTION_SHOW_SKILLS_AND_EXTENSIONS, 1);
+  histogram_tester.ExpectTotalCount("WrenchMenu.TimeToAction.ManageSkills", 1);
+  histogram_tester.ExpectBucketCount("WrenchMenu.MenuAction",
+                                     MENU_ACTION_MANAGE_SKILLS, 1);
 }
 
-class AppMenuModelCreateNewTabGroupDisabled
-    : public AppMenuModelInteractiveTest {
- public:
-  AppMenuModelCreateNewTabGroupDisabled() {
-    scoped_feature_list_.InitWithFeatures(
-        {}, {features::kCreateNewTabGroupAppMenuTopLevel});
-  }
+IN_PROC_BROWSER_TEST_P(AppMenuModelSkillsAndExtensionsInteractiveTest,
+                       ManageExtensions) {
+  base::HistogramTester histogram_tester;
+  RunTestSequence(
+      InstrumentTab(kPrimaryTabPageElementId),
+      PressButton(kToolbarAppMenuButtonElementId),
+      SelectMenuItem(AppMenuModel::kSkillsAndExtensionsMenuItem),
+      SelectMenuItem(ExtensionsMenuModel::kManageExtensionsMenuItem),
+      WaitForWebContentsNavigation(kPrimaryTabPageElementId,
+                                   GURL(chrome::kChromeUIExtensionsURL)));
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
+  histogram_tester.ExpectTotalCount(
+      "WrenchMenu.TimeToAction.ShowSkillsAndExtensions", 1);
+  histogram_tester.ExpectBucketCount("WrenchMenu.MenuAction",
+                                     MENU_ACTION_SHOW_SKILLS_AND_EXTENSIONS, 1);
+  histogram_tester.ExpectTotalCount("WrenchMenu.TimeToAction.ManageExtensions",
+                                    1);
+  histogram_tester.ExpectBucketCount("WrenchMenu.MenuAction",
+                                     MENU_ACTION_MANAGE_EXTENSIONS, 1);
+}
 
-IN_PROC_BROWSER_TEST_F(AppMenuModelCreateNewTabGroupDisabled,
-                       CheckCreateNewTabGroupAppMenuTopLevelNotPresent) {
-  RunTestSequence(InstrumentTab(kPrimaryTabPageElementId),
-                  PressButton(kToolbarAppMenuButtonElementId),
-                  EnsureNotPresent(AppMenuModel::kCreateNewTabGroupTopLevel));
+IN_PROC_BROWSER_TEST_P(AppMenuModelSkillsAndExtensionsInteractiveTest,
+                       GlicDisabledShowsExtensionsMenu) {
+  browser()->GetProfile()->GetPrefs()->SetInteger(
+      optimization_guide::prefs::kGeminiSettings,
+      std::to_underlying(
+          optimization_guide::prefs::GeminiSettingsPolicyState::kDisabled));
+  RunTestSequence(PressButton(kToolbarAppMenuButtonElementId),
+                  EnsureNotPresent(AppMenuModel::kSkillsAndExtensionsMenuItem),
+                  EnsurePresent(AppMenuModel::kExtensionsMenuItem));
 }
 
 class PasswordManagerMenuItemInteractiveTest
@@ -525,7 +583,7 @@ class UniversalInstallAppMenuModelInteractiveTest
   // install icon next to them.
   auto VerifyDiyAppMenuItemViews() {
     const ui::ImageModel icon_image = ui::ImageModel::FromVectorIcon(
-        features::IsRoundedIconsEnabled() ? kInstallDesktopIcon
+        features::IsRoundedIconsEnabled() ? vector_icons::kInstallDesktopIcon
                                           : kInstallDesktopChromeRefreshOldIcon,
         ui::kColorMenuIcon, ui::SimpleMenuModel::kDefaultIconSize);
     return Steps(
@@ -697,20 +755,7 @@ IN_PROC_BROWSER_TEST_F(UniversalInstallAppMenuModelInteractiveTest,
       EnsurePresent(AppMenuModel::kInstallAppItem));
 }
 
-class YourSavedInfoMenuItemInteractiveTest
-    : public AppMenuModelInteractiveTest {
- public:
-  YourSavedInfoMenuItemInteractiveTest() {
-    feature_list_.InitAndEnableFeature(
-        autofill::features::kYourSavedInfoSettingsPage);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(YourSavedInfoMenuItemInteractiveTest,
-                       ContactInfoNavigation) {
+IN_PROC_BROWSER_TEST_F(AppMenuModelInteractiveTest, ContactInfoNavigation) {
   base::HistogramTester histograms;
   RunTestSequence(
       InstrumentTab(kPrimaryTabPageElementId),
@@ -726,8 +771,7 @@ IN_PROC_BROWSER_TEST_F(YourSavedInfoMenuItemInteractiveTest,
                                MENU_ACTION_SHOW_CONTACT_INFO, 1);
 }
 
-IN_PROC_BROWSER_TEST_F(YourSavedInfoMenuItemInteractiveTest,
-                       IdentityDocsNavigation) {
+IN_PROC_BROWSER_TEST_F(AppMenuModelInteractiveTest, IdentityDocsNavigation) {
   base::HistogramTester histograms;
   RunTestSequence(
       InstrumentTab(kPrimaryTabPageElementId),
@@ -743,7 +787,7 @@ IN_PROC_BROWSER_TEST_F(YourSavedInfoMenuItemInteractiveTest,
                                MENU_ACTION_SHOW_IDENTITY_DOCS, 1);
 }
 
-IN_PROC_BROWSER_TEST_F(YourSavedInfoMenuItemInteractiveTest, TravelNavigation) {
+IN_PROC_BROWSER_TEST_F(AppMenuModelInteractiveTest, TravelNavigation) {
   base::HistogramTester histograms;
   RunTestSequence(InstrumentTab(kPrimaryTabPageElementId),
                   PressButton(kToolbarAppMenuButtonElementId),

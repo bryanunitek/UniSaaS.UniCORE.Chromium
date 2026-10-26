@@ -22,7 +22,6 @@
 #include "gpu/command_buffer/service/shared_image/d3d_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/d3d_image_utils.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_format_service_utils.h"
-#include "gpu/config/gpu_finch_features.h"
 #include "gpu/ipc/common/dxgi_helpers.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/buffer_usage_util.h"
@@ -213,6 +212,8 @@ DXGI_FORMAT GetDXGIFormatForGMB(viz::SharedImageFormat format) {
     return DXGI_FORMAT_R16G16B16A16_FLOAT;
   } else if (format == viz::MultiPlaneFormat::kNV12) {
     return DXGI_FORMAT_NV12;
+  } else if (format == viz::MultiPlaneFormat::kP010) {
+    return DXGI_FORMAT_P010;
   }
 
   return DXGI_FORMAT_UNKNOWN;
@@ -229,12 +230,6 @@ DXGI_FORMAT GetDXGITypelessFormat(viz::SharedImageFormat format) {
   }
 
   return DXGI_FORMAT_UNKNOWN;
-}
-
-bool UseUpdateSubresource1(const GpuDriverBugWorkarounds& workarounds) {
-  return base::FeatureList::IsEnabled(
-             features::kD3DBackingUploadWithUpdateSubresource) &&
-         !workarounds.disable_d3d11_update_subresource1;
 }
 
 // CPU_READ is needed for RenderableGMBVideoFramePool case where the DXGI handle
@@ -270,7 +265,7 @@ D3DImageBackingFactory::D3DImageBackingFactory(
       dxgi_shared_handle_manager_(std::move(dxgi_shared_handle_manager)),
       angle_d3d11_device_(gl::QueryD3D11DeviceObjectFromANGLE()),
       gl_format_caps_(gl_format_caps),
-      use_update_subresource1_(UseUpdateSubresource1(workarounds)),
+      use_update_subresource1_(!workarounds.disable_d3d11_update_subresource1),
       enable_webnn_only_d3d_factory_(enable_webnn_only_d3d_factory) {
   CHECK(angle_d3d11_device_ || enable_webnn_only_d3d_factory)
       << "D3DImageBackingFactory requires a D3D11 device.";
@@ -286,16 +281,22 @@ D3DImageBackingFactory::D3DImageBackingFactory(
         (format_support & kRequiredUsage) == kRequiredUsage;
     d3d11_supports_nv12_ = SUCCEEDED(hr) && has_required_format_support;
 
+    hr = d3d11_device_->CheckFormatSupport(DXGI_FORMAT_P010, &format_support);
+    has_required_format_support =
+        (format_support & kRequiredUsage) == kRequiredUsage;
+    d3d11_supports_p010_ = SUCCEEDED(hr) && has_required_format_support;
+
     D3D_FEATURE_LEVEL feature_level = d3d11_device_->GetFeatureLevel();
     if (feature_level < D3D_FEATURE_LEVEL_9_3) {
-      max_nv12_dim_supported_ = 2048;
+      max_2d_texture_dim_supported_ = 2048;
     } else if (feature_level < D3D_FEATURE_LEVEL_11_0) {
-      max_nv12_dim_supported_ = 4096;
+      max_2d_texture_dim_supported_ = 4096;
     } else {
-      max_nv12_dim_supported_ = 16384;
+      max_2d_texture_dim_supported_ = 16384;
     }
   } else {
     d3d11_supports_nv12_ = false;
+    d3d11_supports_p010_ = false;
   }
 }
 
@@ -482,7 +483,7 @@ bool D3DImageBackingFactory::IsSwapChainSupported(
 }
 
 // static
-bool D3DImageBackingFactory::ClearBackBufferToColor(IDXGISwapChain1* swap_chain,
+bool D3DImageBackingFactory::ClearBackBufferToColor(IDXGISwapChain3* swap_chain,
                                                     const SkColor4f& color) {
   Microsoft::WRL::ComPtr<ID3D11Texture2D> d3d11_texture;
   HRESULT hr = swap_chain->GetBuffer(0, IID_PPV_ARGS(&d3d11_texture));
@@ -496,7 +497,7 @@ bool D3DImageBackingFactory::ClearBackBufferToColor(IDXGISwapChain1* swap_chain,
 }
 
 bool D3DImageBackingFactory::CreateSwapChainInternal(
-    Microsoft::WRL::ComPtr<IDXGISwapChain1>& swap_chain,
+    Microsoft::WRL::ComPtr<IDXGISwapChain3>& swap_chain,
     Microsoft::WRL::ComPtr<ID3D11Texture2D>& back_buffer_texture,
     Microsoft::WRL::ComPtr<ID3D11Texture2D>& front_buffer_texture,
     viz::SharedImageFormat format,
@@ -545,24 +546,25 @@ bool D3DImageBackingFactory::CreateSwapChainInternal(
   desc.AlphaMode = format.HasAlpha() ? DXGI_ALPHA_MODE_PREMULTIPLIED
                                      : DXGI_ALPHA_MODE_IGNORE;
 
+  Microsoft::WRL::ComPtr<IDXGISwapChain1> swap_chain1;
   hr = dxgi_factory->CreateSwapChainForComposition(d3d11_device_.Get(), &desc,
-                                                   nullptr, &swap_chain);
+                                                   nullptr, &swap_chain1);
   if (FAILED(hr)) {
     LOG(ERROR) << "CreateSwapChainForComposition failed with error " << std::hex
                << hr;
     return false;
   }
 
+  // IDXGISwapChain3 is supported on all Windows versions >= 10. Windows 10
+  // which is the minimum Windows version Chromium supports.
+  CHECK_EQ(swap_chain1.As(&swap_chain), S_OK);
   gl::LabelSwapChainAndBuffers(swap_chain.Get(), kD3DImageBackingLabel);
 
   if (gl::DXGIWaitableSwapChainEnabled()) {
-    Microsoft::WRL::ComPtr<IDXGISwapChain3> swap_chain3;
-    if (SUCCEEDED(swap_chain.As(&swap_chain3))) {
-      hr = swap_chain3->SetMaximumFrameLatency(
-          gl::GetDXGIWaitableSwapChainMaxQueuedFrames());
-      DCHECK(SUCCEEDED(hr)) << "SetMaximumFrameLatency failed with error "
-                            << logging::SystemErrorCodeToString(hr);
-    }
+    hr = swap_chain->SetMaximumFrameLatency(
+        gl::GetDXGIWaitableSwapChainMaxQueuedFrames());
+    DCHECK(SUCCEEDED(hr)) << "SetMaximumFrameLatency failed with error "
+                          << logging::SystemErrorCodeToString(hr);
   }
 
   // Explicitly clear front and back buffers to ensure that there are no
@@ -607,7 +609,7 @@ std::unique_ptr<SharedImageBacking> D3DImageBackingFactory::CreateSharedImage(
   const auto size = si_info.size;
   const auto usage = si_info.usage;
   if (usage.Has(SHARED_IMAGE_USAGE_CONCURRENT_READ_WRITE)) {
-    Microsoft::WRL::ComPtr<IDXGISwapChain1> swap_chain;
+    Microsoft::WRL::ComPtr<IDXGISwapChain3> swap_chain;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> back_buffer_texture;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> front_buffer_texture;
     if (!CreateSwapChainInternal(swap_chain, back_buffer_texture,
@@ -849,15 +851,7 @@ std::unique_ptr<SharedImageBacking> D3DImageBackingFactory::CreateSharedImage(
   }
 
   gfx::DXGIHandle dxgi_handle = std::move(handle).dxgi_handle();
-  // This shouldn't happen as the GpuMemoryBufferHandle constructor that takes a
-  // DXGIHandle asserts the handle is valid. However, it is currently possible
-  // for code to set the type to DXGI_SHARED_HANDLE directly but never actually
-  // set the handle. Make this an eventual CHECK() but handle this gracefully
-  // for now just in case.
-  CHECK(dxgi_handle.IsValid(), base::NotFatalUntil::M138);
-  if (!dxgi_handle.IsValid()) {
-    return nullptr;
-  }
+  CHECK(dxgi_handle.IsValid());
   scoped_refptr<DXGISharedHandleState> dxgi_shared_handle_state =
       dxgi_shared_handle_manager_->GetOrCreateSharedHandleState(
           dxgi_handle.token(), dxgi_handle.TakeBufferHandle(), d3d11_device_);
@@ -1178,21 +1172,22 @@ bool D3DImageBackingFactory::IsSupported(SharedImageUsageSet usage,
     return false;
   }
 
-  if (format == viz::MultiPlaneFormat::kNV12) {
-    // Return early if d3d11 cannot support nv12 formats.
-    if (!d3d11_supports_nv12_) {
-      LOG(ERROR) << "D3D device does not support NV12 texture creation";
+  if (format == viz::MultiPlaneFormat::kNV12 ||
+      format == viz::MultiPlaneFormat::kP010) {
+    const bool format_supported = format == viz::MultiPlaneFormat::kNV12
+                                      ? d3d11_supports_nv12_
+                                      : d3d11_supports_p010_;
+    if (!format_supported) {
+      LOG(ERROR) << "D3D device does not support " << format.ToString()
+                 << " texture creation";
       return false;
     }
-    // We know current size width and height must be within
-    // `max_nv12_dim_supported_` as nv12 creation is supported for
-    // `max_nv12_dim_supported_`.
-    if (size.width() > max_nv12_dim_supported_ ||
-        size.height() > max_nv12_dim_supported_) {
+    if (size.width() > max_2d_texture_dim_supported_ ||
+        size.height() > max_2d_texture_dim_supported_) {
       LOG(ERROR)
           << "Provided size=" << size.ToString()
           << "is not supported by d3d device, with max supported dimensions="
-          << max_nv12_dim_supported_;
+          << max_2d_texture_dim_supported_;
       return false;
     }
   }

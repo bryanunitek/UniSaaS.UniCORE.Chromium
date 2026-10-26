@@ -5,9 +5,10 @@
 #import "ios/chrome/browser/passwords/bottom_sheet/coordinator/passkey_suggestion_bottom_sheet_mediator.h"
 
 #import "base/functional/bind.h"
-#import "base/memory/raw_ptr.h"
+#import "base/memory/weak_ptr.h"
 #import "components/autofill/core/common/unique_ids.h"
 #import "components/autofill/ios/browser/form_suggestion.h"
+#import "components/password_manager/core/browser/passkey_credential.h"
 #import "components/webauthn/ios/ios_webauthn_credentials_delegate.h"
 #import "components/webauthn/ios/passkey_suggestion_utils.h"
 #import "ios/chrome/browser/passwords/bottom_sheet/coordinator/credential_suggestion_bottom_sheet_mediator_base+Subclassing.h"
@@ -30,16 +31,18 @@
 }
 
 - (void)setWebAuthnCredentialsDelegate:
-    (raw_ptr<webauthn::IOSWebAuthnCredentialsDelegate>)delegate {
+    (base::WeakPtr<webauthn::IOSWebAuthnCredentialsDelegate>)delegate {
   [super setWebAuthnCredentialsDelegate:delegate];
+  [self clearCredentials];
   if (delegate) {
     base::expected<const std::vector<password_manager::PasskeyCredential>*,
                    password_manager::WebAuthnCredentialsDelegate::
                        PasskeysUnavailableReason>
         passkeys = delegate->GetPasskeys();
-    if (passkeys.has_value()) {
+    if (passkeys.has_value() && *passkeys) {
       self.suggestions =
           webauthn::FormSuggestionsFromPasskeyCredentials(**passkeys);
+      [self fetchPasskeyCredentials];
     }
   }
 }
@@ -60,9 +63,8 @@
                                  IDS_IOS_CREDENTIAL_BOTTOM_SHEET_CONTINUE)
        secondaryActionString:l10n_util::GetNSString(
                                  IDS_IOS_CREDENTIAL_BOTTOM_SHEET_MORE_PASSKEYS)
-        secondaryActionImage:DefaultSymbolWithPointSize(
-                                 kPersonBadgeKeyFillSymbol,
-                                 kSymbolActionPointSize)];
+        secondaryActionImage:SymbolWithPointSize(SymbolPersonBadgeKeyFill,
+                                                 kSymbolActionPointSize)];
 }
 
 - (void)didSelectSuggestion:(FormSuggestion*)suggestion

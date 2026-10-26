@@ -63,7 +63,7 @@ void CriticalClientHintsThrottle::BeforeWillProcessResponse(
     const GURL& response_url,
     const network::mojom::URLResponseHead& response_head,
     RestartWithURLReset* restart_with_url_reset) {
-  DCHECK_EQ(response_url, response_url_);
+  CHECK_EQ(response_url, response_url_, base::NotFatalUntil::M160);
   MaybeRestartWithHints(response_head, restart_with_url_reset);
 }
 
@@ -156,7 +156,7 @@ void CriticalClientHintsThrottle::MaybeRestartWithHints(
   // TODO(crbug.com/40175866): If the frame tree node doesn't have an associated
   // navigation_request (e.g. a service worker request) it might not override
   // the user agent correctly.
-  if (frame_tree_node) {
+  if (frame_tree_node && frame_tree_node->navigation_request()) {
     AddNavigationRequestClientHintsHeaders(
         response_origin, &modified_headers, context_, client_hint_delegate_,
         frame_tree_node->navigation_request()->is_overriding_user_agent(),
@@ -165,6 +165,8 @@ void CriticalClientHintsThrottle::MaybeRestartWithHints(
             ->commit_params()
             .frame_policy.container_policy);
   } else {
+    // Uses default UA metadata and persistent origin client hints when there
+    // is no active navigation_request (e.g. prefetch requests).
     // TODO(crbug.com/427866914): Set correct `ftn_for_devtools_override` to
     // apply DevTools-initiated UA overrides.
     AddPrefetchNavigationRequestClientHintsHeaders(

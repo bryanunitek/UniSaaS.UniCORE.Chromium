@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.ui.side_ui;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.SideUiId;
 import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.SideUiSpecs;
 
@@ -37,8 +38,25 @@ public interface SideUiStateProvider {
     /** Returns the current {@link SideUiSpecs}. */
     SideUiSpecs getCurrentSideUiSpecs();
 
+    /**
+     * Returns the expected {@link SideUiSpecs} for a given {@link Tab}.
+     *
+     * @param tab The {@link Tab} to compute expected specs for.
+     */
+    SideUiSpecs getExpectedSideUiSpecsForTab(Tab tab);
+
     /** Returns whether the SideUIContainer of the given ID is currently showing. */
     boolean isSideUiShowing(@SideUiId int sideUidId);
+
+    /** Returns whether any SideUIContainer is currently showing. */
+    default boolean isAnySideUiShowing() {
+        for (@SideUiId int id = 0; id < SideUiId.NUM_ENTRIES; id++) {
+            if (isSideUiShowing(id)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /**
      * Returns whether the SideUIContainer of the given ID can currently be shown given the window

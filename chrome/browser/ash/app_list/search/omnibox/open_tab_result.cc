@@ -54,7 +54,7 @@ OpenTabResult::OpenTabResult(Profile* profile,
       drive_id_(GetDriveId(search_result_->destination_url)),
       description_(search_result_->description.value_or(u"")) {
   CHECK(favicon_cache);
-  DCHECK(search_result_->destination_url.is_valid());
+  CHECK(search_result_->destination_url.is_valid(), base::NotFatalUntil::M160);
 
   // TODO(crbug.com/1293702): This may not be unique. Once we have a mechanism
   // for opening a specific tab, add that info too to ensure uniqueness.
@@ -89,7 +89,7 @@ void OpenTabResult::Open(int event_flags) {
       profile_, search_result_->destination_url,
       search_result_->page_transition,
       ui::DispositionFromEventFlags(event_flags,
-                                    WindowOpenDisposition::SWITCH_TO_TAB));
+                                    WindowOpenDisposition::kSwitchToTab));
 }
 
 std::optional<GURL> OpenTabResult::url() const {

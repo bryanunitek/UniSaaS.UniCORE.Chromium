@@ -3,5 +3,25 @@
 # found in the LICENSE file.
 
 source_set("public") {
-  sources = [ "autofill_settings_navigator.h" ]
+  sources = [
+    "autofill_settings_navigator.h",
+    "autofill_settings_navigator.mm",
+  ]
+  deps = [
+    "//base",
+    "//components/autofill/core/browser",
+    "//ios/chrome/browser/shared/public/features",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "autofill_settings_navigator_unittest.mm" ]
+  deps = [
+    ":public",
+    "//base/test:test_support",
+    "//components/autofill/core/browser",
+    "//ios/chrome/browser/shared/public/features",
+    "//testing/gtest",
+  ]
 }

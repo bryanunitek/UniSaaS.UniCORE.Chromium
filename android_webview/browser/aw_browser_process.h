@@ -7,16 +7,18 @@
 #ifndef ANDROID_WEBVIEW_BROWSER_AW_BROWSER_PROCESS_H_
 #define ANDROID_WEBVIEW_BROWSER_AW_BROWSER_PROCESS_H_
 
-#include "android_webview/browser/aw_apk_type.h"
 #include "android_webview/browser/aw_browser_context.h"
 #include "android_webview/browser/aw_content_browser_client.h"
 #include "android_webview/browser/aw_enterprise_authentication_app_link_manager.h"
 #include "android_webview/browser/aw_feature_list_creator.h"
 #include "android_webview/browser/lifecycle/aw_contents_lifecycle_notifier.h"
+#include "android_webview/browser/lifecycle/webview_app_state_observer.h"
 #include "android_webview/browser/safe_browsing/aw_safe_browsing_allowlist_manager.h"
 #include "android_webview/browser/safe_browsing/aw_safe_browsing_ui_manager.h"
 #include "android_webview/common/aw_features.h"
+#include "base/memory/post_delayed_memory_reduction_task.h"
 #include "base/memory/raw_ptr.h"
+#include "base/timer/timer.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
@@ -37,7 +39,6 @@ namespace prefs {
 // Used for Kerberos authentication.
 extern const char kAuthAndroidNegotiateAccountType[];
 extern const char kAuthServerAllowlist[];
-extern const char kEnterpriseAuthAppLinkPolicy[];
 extern const char kLastKnownAppCacheQuota[];
 
 }  // namespace prefs
@@ -46,14 +47,14 @@ class AwContentsLifecycleNotifier;
 class VisibilityMetricsLogger;
 
 // Lifetime: Singleton
-class AwBrowserProcess {
+class AwBrowserProcess : public WebViewAppStateObserver {
  public:
   explicit AwBrowserProcess(AwContentBrowserClient* browser_client);
 
   AwBrowserProcess(const AwBrowserProcess&) = delete;
   AwBrowserProcess& operator=(const AwBrowserProcess&) = delete;
 
-  ~AwBrowserProcess();
+  ~AwBrowserProcess() override;
 
   static AwBrowserProcess* GetInstance();
 
@@ -96,8 +97,6 @@ class AwBrowserProcess {
 
   static void RegisterNetworkContextLocalStatePrefs(
       PrefRegistrySimple* pref_registry);
-  static void RegisterEnterpriseAuthenticationAppLinkPolicyPref(
-      PrefRegistrySimple* pref_registry);
   static void RegisterAppCacheQuotaLocalStatePref(
       PrefRegistrySimple* pref_registry);
 
@@ -105,10 +104,6 @@ class AwBrowserProcess {
   network::mojom::HttpAuthDynamicParamsPtr CreateHttpAuthDynamicParams();
 
   void PreMainMessageLoopRun();
-
-  static void TriggerMinidumpUploading();
-  static ApkType GetApkType();
-  static bool IsAppVisibleToUser();
 
   EnterpriseAuthenticationAppLinkManager*
   GetEnterpriseAuthenticationAppLinkManager();
@@ -129,6 +124,11 @@ class AwBrowserProcess {
 
   static void SetNativeWebViewZygoteEnabled(bool enabled);
   static bool IsNativeWebViewZygoteEnabled();
+
+  // WebViewAppStateObserver implementation:
+  void OnAppStateChanged(State state) override;
+
+  void PurgeMemory();
 
  private:
   void CreateSafeBrowsingUIManager();
@@ -167,6 +167,7 @@ class AwBrowserProcess {
       safe_browsing_allowlist_manager_;
   base::Lock lock_;
   int64_t app_cache_quota_ GUARDED_BY(lock_) = -1;
+  base::OneShotDelayedBackgroundTimer purge_memory_timer_;
   std::unique_ptr<VisibilityMetricsLogger> visibility_metrics_logger_;
   std::unique_ptr<AwContentsLifecycleNotifier> aw_contents_lifecycle_notifier_;
   std::unique_ptr<EnterpriseAuthenticationAppLinkManager> app_link_manager_;

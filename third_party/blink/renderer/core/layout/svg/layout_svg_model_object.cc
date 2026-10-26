@@ -69,7 +69,8 @@ void LayoutSVGModelObject::MapAncestorToLocal(
 void LayoutSVGModelObject::QuadsInAncestorInternal(
     Vector<gfx::QuadF>& quads,
     const LayoutBoxModelObject* ancestor,
-    MapCoordinatesFlags mode) const {
+    MapCoordinatesFlags mode,
+    BoxQuadType) const {
   NOT_DESTROYED();
   quads.push_back(
       LocalToAncestorQuad(gfx::QuadF(DecoratedBoundingBox()), ancestor, mode));
@@ -91,7 +92,7 @@ void LayoutSVGModelObject::AddOutlineRects(OutlineRectCollector& collector,
     return;
   collector.AddRect(PhysicalRect::EnclosingRect(visual_rect));
   if (info)
-    *info = OutlineInfo::GetUnzoomedFromStyle(StyleRef());
+    *info = OutlineInfo::GetUnzoomedFromStyle(Style());
 }
 
 gfx::RectF LayoutSVGModelObject::LocalBoundingBoxRectForAccessibility(
@@ -100,10 +101,10 @@ gfx::RectF LayoutSVGModelObject::LocalBoundingBoxRectForAccessibility(
   return DecoratedBoundingBox();
 }
 
-void LayoutSVGModelObject::WillBeDestroyed() {
+void LayoutSVGModelObject::WillBeDestroyed(const ComputedStyle* style) {
   NOT_DESTROYED();
-  SVGResources::ClearEffects(*this);
-  LayoutObject::WillBeDestroyed();
+  SVGResources::ClearEffects(*this, style);
+  LayoutObject::WillBeDestroyed(style);
 }
 
 bool LayoutSVGModelObject::MapToVisualRectInAncestorSpaceInternal(
@@ -127,7 +128,7 @@ bool LayoutSVGModelObject::CheckForImplicitTransformChange(
   NOT_DESTROYED();
   // If the transform is relative to the reference box, check relevant
   // conditions to see if we need to recompute the transform.
-  switch (StyleRef().TransformBox()) {
+  switch (Style().TransformBox()) {
     case ETransformBox::kViewBox:
       return layout_info.viewport_changed;
     case ETransformBox::kFillBox:
@@ -142,8 +143,8 @@ bool LayoutSVGModelObject::CheckForImplicitTransformChange(
 void LayoutSVGModelObject::ImageChanged(WrappedImagePtr image,
                                         CanDeferInvalidation defer) {
   NOT_DESTROYED();
-  for (const FillLayer* layer = &StyleRef().MaskLayers(); layer;
-       layer = layer->Next()) {
+  for (const FillLayer* layer = &Style().MaskLayers(); layer;
+       layer = layer->NextForUsedValue()) {
     const StyleImage* style_image = layer->GetImage();
     if (style_image && image == style_image->Data()) {
       SetShouldDoFullPaintInvalidationWithoutLayoutChange(
@@ -160,9 +161,11 @@ void LayoutSVGModelObject::ImageChanged(WrappedImagePtr image,
 void LayoutSVGModelObject::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutObject::StyleDidChange(diff, old_style, style_change_context);
+  LayoutObject::StyleDidChange(diff, old_style, new_style,
+                               style_change_context);
 
   if (diff.NeedsFullLayout()) {
     if (diff.transform_changed) {
@@ -170,8 +173,7 @@ void LayoutSVGModelObject::StyleDidChange(
     }
   }
 
-  SetHasTransformRelatedProperty(
-      StyleRef().HasTransformRelatedPropertyForSVG());
+  SetHasTransformRelatedProperty(new_style.HasTransformRelatedPropertyForSVG());
 
   SVGResources::UpdateEffects(*this, diff, old_style);
 
@@ -182,12 +184,12 @@ void LayoutSVGModelObject::StyleDidChange(
     if (diff.blend_mode_changed) {
       DCHECK(IsBlendingAllowed());
       Parent()->DescendantIsolationRequirementsChanged(
-          StyleRef().HasBlendMode() ? kDescendantIsolationRequired
-                                    : kDescendantIsolationNeedsUpdate);
+          new_style.HasBlendMode() ? kDescendantIsolationRequired
+                                   : kDescendantIsolationNeedsUpdate);
     }
-    if ((StyleRef().HasCurrentTransformRelatedAnimation() &&
+    if ((new_style.HasCurrentTransformRelatedAnimation() &&
          !old_style->HasCurrentTransformRelatedAnimation()) ||
-        (StyleRef().HasNonIdentityTransformOperation() &&
+        (new_style.HasNonIdentityTransformOperation() &&
          !old_style->HasNonIdentityTransformOperation())) {
       Parent()->SetSVGDescendantMayHaveTransformRelatedOperations();
     }
@@ -202,16 +204,18 @@ void LayoutSVGModelObject::InsertedIntoTree() {
   LayoutObject::InsertedIntoTree();
   LayoutSVGResourceContainer::MarkForLayoutAndParentResourceInvalidation(*this,
                                                                          false);
-  if (StyleRef().HasSVGEffect())
+  if (Style().HasSVGEffect()) {
     SetNeedsPaintPropertyUpdate();
+  }
 }
 
 void LayoutSVGModelObject::WillBeRemovedFromTree() {
   NOT_DESTROYED();
   LayoutSVGResourceContainer::MarkForLayoutAndParentResourceInvalidation(*this,
                                                                          false);
-  if (StyleRef().HasSVGEffect())
+  if (Style().HasSVGEffect()) {
     SetNeedsPaintPropertyUpdate();
+  }
   LayoutObject::WillBeRemovedFromTree();
 }
 

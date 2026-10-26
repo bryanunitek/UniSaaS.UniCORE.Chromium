@@ -18,7 +18,7 @@ import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.browser_ui.widget.BrowserUiListMenuUtils;
 import org.chromium.components.browser_ui.widget.ListItemBuilder;
 import org.chromium.components.collaboration.messaging.MessagingBackendService;
@@ -34,8 +34,6 @@ import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
-import org.chromium.ui.widget.RectProvider;
-import org.chromium.ui.widget.ViewRectProvider;
 import org.chromium.url.GURL;
 
 /**
@@ -131,7 +129,7 @@ public class RecentActivityListCoordinator {
         mContentRecyclerView.setAdapter(adapter);
 
         mBottomSheetController.addObserver(
-                new EmptyBottomSheetObserver() {
+                new BottomSheetObserver() {
                     @Override
                     public void onSheetClosed(int reason) {
                         faviconProvider.destroy();
@@ -164,7 +162,7 @@ public class RecentActivityListCoordinator {
                             .withMenuId(R.id.see_full_activity)
                             .build());
             ListMenu.Delegate delegate =
-                    (model, unusedView) -> {
+                    (model, _) -> {
                         int textId = model.get(ListMenuItemProperties.TITLE_ID);
                         if (textId == R.string.data_sharing_shared_tab_groups_activity) {
                             mShowFullActivityRunnable.run();
@@ -174,25 +172,7 @@ public class RecentActivityListCoordinator {
             BasicListMenu listMenu =
                     BrowserUiListMenuUtils.getBasicListMenu(mContext, modelList, delegate);
 
-            ListMenuDelegate listMenuDelegate =
-                    new ListMenuDelegate() {
-                        @Override
-                        public ListMenu getListMenu() {
-                            return listMenu;
-                        }
-
-                        @Override
-                        public RectProvider getRectProvider(View listMenuButton) {
-                            ViewRectProvider rectProvider = new ViewRectProvider(listMenuButton);
-                            rectProvider.setIncludePadding(true);
-
-                            int handleBarHeight =
-                                    mContentContainer.findViewById(R.id.handlebar).getHeight();
-                            int buttonHeight = listMenuButton.getHeight();
-                            rectProvider.setInsetPx(0, handleBarHeight + buttonHeight, 0, 0);
-                            return rectProvider;
-                        }
-                    };
+            ListMenuDelegate listMenuDelegate = () -> listMenu;
 
             menuView.setMenuMaxWidth(
                     view.getResources().getDimensionPixelSize(R.dimen.recent_activity_menu_width));

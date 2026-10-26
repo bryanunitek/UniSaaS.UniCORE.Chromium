@@ -10,13 +10,16 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/navigation_predictor/search_engine_preconnector.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_selections.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -24,12 +27,17 @@
 #include "components/commerce/core/commerce_feature_list.h"
 #include "components/contextual_tasks/public/features.h"
 #include "components/enterprise/buildflags/buildflags.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/keyed_service/core/dependency_graph.h"
 #include "components/keyed_service/core/keyed_service_base_factory.h"
 #include "components/omnibox/common/omnibox_features.h"
+#include "components/policy/core/common/management/management_service.h"
+#include "components/policy/core/common/management/scoped_management_service_override_for_testing.h"
 #include "components/signin/public/base/signin_switches.h"
+#include "components/spellcheck/common/spellcheck_features.h"
 #include "components/supervised_user/core/common/features.h"
+#include "components/universal_optout/features.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
@@ -53,6 +61,14 @@
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "components/policy/core/common/features.h"
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_profile.h"
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/test/base/scoped_channel_override.h"
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
 
 namespace {
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -195,6 +211,8 @@ class ProfileKeyedServiceBrowserTest : public InProcessBrowserTest {
 #if !BUILDFLAG(IS_ANDROID)
           features::kInitialWebUI,
           features::kWebUIReloadButton,
+          features::kTopChromeWebUISharedRenderer,
+          features::kLazyKeyedServiceInstantiation,
 #endif  // !BUILDFLAG(IS_ANDROID)
           features::kTrustSafetySentimentSurvey,
 #if BUILDFLAG(IS_WIN)
@@ -208,7 +226,6 @@ class ProfileKeyedServiceBrowserTest : public InProcessBrowserTest {
           omnibox::kOnDeviceHeadProviderNonIncognito,
           switches::kSyncEnableBookmarksInTransportMode,
           contextual_tasks::kContextualTasks,
-          supervised_user::kSupervisedUserUseUrlFilteringService,
         },
         {});
     // clang-format on
@@ -368,11 +385,42 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceBrowserTest,
 
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
+#if !BUILDFLAG(IS_ANDROID)
+IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceBrowserTest,
+                       TopChromeWebUIProfile_NeededServices) {
+  Profile* profile = webui::GetTopChromeWebUIProfile();
+  ASSERT_TRUE(profile);
+  TestKeyedProfileServicesActives(profile,
+                                  /*expected_active_services_names=*/{});
+}
+
+IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceBrowserTest,
+                       TopChromeWebUIProfile_ServicesThatCanBeCreated) {
+  Profile* profile = webui::GetTopChromeWebUIProfile();
+  ASSERT_TRUE(profile);
+  ASSERT_TRUE(profile->IsOffTheRecord());
+
+  // Only factories that explicitly allow the Top Chrome WebUI Profile can
+  // create a service for it, and none does.
+  TestKeyedProfileServicesActives(profile,
+                                  /*expected_active_services_names=*/{},
+                                  /*force_create_services=*/true);
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
+
 #if BUILDFLAG(IS_CHROMEOS)
 class ProfileKeyedServiceGuestBrowserTest
     : public ProfileKeyedServiceBrowserTest {
  public:
-  ProfileKeyedServiceGuestBrowserTest() = default;
+  ProfileKeyedServiceGuestBrowserTest() {
+    // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox is
+    // enabled and then remove this.
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/
+        {omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
+  }
   ~ProfileKeyedServiceGuestBrowserTest() override = default;
 
   // ProfileKeyedServiceBrowserTest:
@@ -384,22 +432,38 @@ class ProfileKeyedServiceGuestBrowserTest
         ash::switches::kLoginUser,
         user_manager::GuestAccountId().GetUserEmail());
   }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 #else
-using ProfileKeyedServiceGuestBrowserTest = ProfileKeyedServiceBrowserTest;
+class ProfileKeyedServiceGuestBrowserTest
+    : public ProfileKeyedServiceBrowserTest {
+ public:
+  ProfileKeyedServiceGuestBrowserTest() {
+    // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox is
+    // enabled and then remove this.
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{omnibox::internal::kWebUIOmniboxPopup,
+                               omnibox::internal::kWebUIOmniboxAimPopup});
+  }
+  ~ProfileKeyedServiceGuestBrowserTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
 #endif
 
 IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
                        GuestProfileOTR_NeededServices) {
   // clang-format off
   std::set<std::string> guest_otr_active_services {
-    "AimEligibilityExtensionBridge",
     "AlarmManager",
     "AXMainNodeAnnotatorController",
     "AutocompleteActionPredictor",
     "AutocompleteClassifier",
     "AutocompleteControllerEmitter",
-    "AutocompleteHistoryManager",
     "BackgroundContentsService",
     "BackgroundSyncService",
 #if BUILDFLAG(IS_CHROMEOS)
@@ -423,17 +487,9 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "ExtensionInstallEventRouter",
 #endif  // BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
     "ChromeEnterpriseRealTimeUrlLookupService",
-#if !BUILDFLAG(IS_ANDROID)
-#if BUILDFLAG(IS_CHROMEOS)
-    "AshPolicyBlocklistService",
-#else
-    "ChromePolicyBlocklistService",
-#endif  // !BUILDFLAG(IS_CHROMEOS)
-#endif  // !BUILDFLAG(IS_ANDROID)
 #if BUILDFLAG(IS_CHROMEOS)
     "ComponentExtensionContentSettingsAllowlist",
 #endif
-    "DeveloperToolsPolicyChecker",
     "EnterpriseReportingPrivateEventRouter",
     "ExtensionKeybindingRegistryShutdownNotifierFactory",
     "ExtensionNavigationRegistry",
@@ -463,12 +519,12 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "OneTimePermissionsTrackerKeyedService",
     "OptimizationGuideGlobalStateHolderKeyedService",
     "OptimizationGuideKeyedService",
+    "OriginGatingService",
     "PermissionDecisionAutoBlocker",
     "PinnedToolbarActionsModel",
     "PlatformNotificationService",
     "PredictionModelHandlerProvider",
     "PrefWatcher",
-    "PrivacySandboxSettings",
     "ProcessManager",
     "ProfileNetworkContextService",
     "ProtocolHandlersManager",
@@ -504,6 +560,7 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "UsbDeviceManager",
     "UsbDeviceResourceManager",
 #if !BUILDFLAG(IS_ANDROID)
+    "UserEducationService",
     "WaapUIMetricsService",
 #endif  // !BUILDFLAG(IS_ANDROID)
     "sct_reporting::Factory",
@@ -512,6 +569,7 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "ClientHints",
     "ConnectorsService",
     "DataControlsRulesService",
+    "DevToolsNavigationGatingService",
 #if !BUILDFLAG(IS_CHROMEOS)
     // TODO(crbug.com/374351946): This is most likely unnesssary on CrOS because
     // it has its own UI, but factory is created, which should probably be
@@ -525,7 +583,6 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "LanguageDetectionModelService",
     "MediaEngagementServiceFactory",
     "MediaNotificationService",
-    "MerchantPromoCodeManager",
     "NoStatePrefetchManager",
 #if !BUILDFLAG(IS_CHROMEOS)
     // TODO(crbug.com/374351946): Investigate if this is necessary on CrOS.
@@ -537,6 +594,8 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "StatefulSSLHostStateDelegate",
     "StorageAccessAPIService",
     "SubresourceFilterProfileContext",
+    "V5GetHashProtocolManager",
+    "V5SearchHashesCache",
     "VerdictCacheManager",
     "WebRequestProxyingURLLoaderFactory",
     "captive_portal::CaptivePortalService",
@@ -558,7 +617,6 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "PrimaryProfileServices",
     "PrinterEventTracker",
     "SharesheetService",
-    "SupervisedUserService",
     "SupervisedUserUrlFilteringService",
     "SystemWebAppManager",
     "VirtualKeyboardAPI",
@@ -571,21 +629,91 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
       SearchEnginePreconnector::ShouldBeEnabledForOffTheRecord()) {
     guest_otr_active_services.insert("SearchEnginePreconnector");
   }
+  if (base::FeatureList::IsEnabled(
+          omnibox::kAimEligibilityComponentExtension)) {
+    guest_otr_active_services.insert("AimEligibilityExtensionBridge");
+    guest_otr_active_services.insert("ExtensionMojoBinderRegistry");
+  }
+
+  // On ChromeOS, Guest session startup navigates to chrome://newtab (a WebUI)
+  // by default, whereas Desktop CreateGuestBrowser() navigates to about:blank.
+  // Loading a WebUI initializes the embedded WebUI toolbar
+  // (WebUIToolbarWebView), which opts into V2 resource loading and
+  // instantiates ThemeColorsSourceManager for the Guest OTR profile.
+  if (base::FeatureList::IsEnabled(
+          features::kWebUIInProcessResourceLoadingV2)) {
+    guest_otr_active_services.insert("ThemeColorsSourceManager");
+  }
 
 #if BUILDFLAG(IS_CHROMEOS)
   EXPECT_TRUE(user_manager::UserManager::Get()->IsLoggedInAsGuest());
   // ChromeOS Guest mode starts with the guest otr profile.
-  Profile* guest_otr_profile = browser()->profile();
+  Profile* guest_otr_profile = browser()->GetProfile();
   // Some key services are created asynchronosly. Wait util they're ready.
 #else
-  Browser* guest_browser = CreateGuestBrowser();
-  Profile* guest_otr_profile = guest_browser->profile();
+  BrowserWindowInterface* guest_browser = CreateGuestBrowser();
+  Profile* guest_otr_profile = guest_browser->GetProfile();
 #endif  // BUILDFLAG(IS_CHROMEOS)
   content::RunAllTasksUntilIdle();
 
   ASSERT_FALSE(guest_otr_profile->IsRegularProfile());
   ASSERT_TRUE(guest_otr_profile->IsOffTheRecord());
   ASSERT_TRUE(guest_otr_profile->IsGuestSession());
+  if (features::IsLazyOptimizationGuideModelsEnabled()) {
+    // OptimizationGuideGlobalStateHolderKeyedService remains active here
+    // because CreateGuestBrowser() creates a WebContents whose
+    // ChromeTranslateClient instantiates LanguageDetectionModelService.
+    guest_otr_active_services.erase("OnDeviceTailModelService");
+    guest_otr_active_services.erase("PredictionModelHandlerProvider");
+  }
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationExtensions.Get()) {
+    guest_otr_active_services.erase("SafeBrowsingPrivateEventRouter");
+  }
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationExtensionsApi.Get()) {
+    guest_otr_active_services.erase("HidConnectionResourceManager");
+  }
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationExtensionsSocketsAndUsb.Get()) {
+    guest_otr_active_services.erase("ResumableTCPServerSocketManager");
+    guest_otr_active_services.erase("ResumableTCPSocketManager");
+    guest_otr_active_services.erase("ResumableUDPSocketManager");
+    guest_otr_active_services.erase("SocketManager");
+    guest_otr_active_services.erase("TCPServerSocketEventDispatcher");
+    guest_otr_active_services.erase("TCPSocketEventDispatcher");
+    guest_otr_active_services.erase("UDPSocketEventDispatcher");
+    guest_otr_active_services.erase("UsbDeviceResourceManager");
+  }
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationCommerceAndUI.Get()) {
+    guest_otr_active_services.erase("AutocompleteClassifier");
+    guest_otr_active_services.erase("ReadAnythingServiceFactory");
+  }
+#if BUILDFLAG(IS_CHROMEOS)
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationSharesheet.Get()) {
+    guest_otr_active_services.erase("SharesheetService");
+  }
+#endif
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationStorageNotification.Get()) {
+    guest_otr_active_services.erase("StorageNotificationService");
+  }
+#if BUILDFLAG(IS_CHROMEOS)
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationExtensionsChromeOSResources
+          .Get()) {
+    guest_otr_active_services.erase("BluetoothApiAdvertisementManager");
+    guest_otr_active_services.erase("BluetoothApiSocketManager");
+    guest_otr_active_services.erase("BluetoothLowEnergyConnectionManager");
+    guest_otr_active_services.erase("BluetoothLowEnergyNotifySessionManager");
+    guest_otr_active_services.erase("BluetoothSocketEventDispatcher");
+    guest_otr_active_services.erase("LogSourceResource");
+    guest_otr_active_services.erase("SerialConnectionManager");
+    guest_otr_active_services.erase("SerialPortManager");
+  }
+#endif
   TestKeyedProfileServicesActives(guest_otr_profile, guest_otr_active_services);
 }
 
@@ -599,7 +727,6 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "ActivityLogPrivateAPI",
     "AdvancedProtectionStatusManager",
     "AiModeButtonService",
-    "AimEligibilityExtensionBridge",
     "AimEligibilityService",
     "AlarmManager",
     "AnnouncementNotificationService",
@@ -619,8 +746,8 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
 #endif // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)|| BUILDFLAG(IS_WIN)
     "AppTerminationObserver",
     "AppWindowRegistry",
-    "AudioAPI",
     "AutocompleteActionPredictor",
+    "AutocompleteHistoryManager",
     "AutocompleteScoringModelService",
     "AutofillClientProvider",
     "AutofillImageFetcher",
@@ -630,6 +757,7 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "BackgroundSyncService",
     "Blocklist",
 #if BUILDFLAG(IS_CHROMEOS)
+    "AudioAPI",
     "BluetoothAPI",
     "BluetoothApiSocketManager",
     "BluetoothApiAdvertisementManager",
@@ -641,7 +769,6 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
 #endif  // BUILDFLAG(IS_CHROMEOS)
     "BookmarkManagerPrivateAPI",
 #if defined(TOOLKIT_VIEWS)
-    "BookmarkExpandedStateTracker",
     "BookmarkMergedSurfaceService",
 #endif
     "BookmarkModel",
@@ -651,7 +778,6 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
     "BrowserBoundKeyDeleterService",
 #endif
-    "BrowsingTopicsService",
     "ChildAccountService",
     "ChromeSigninClient",
     "CommandService",
@@ -718,7 +844,6 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "FederatedIdentityAutoReauthnPermissionContext",
     "FeedbackPrivateAPI",
     "FileSystemAccessPermissionContext",
-    "FirstPartySetsPolicyService",
     "FontPrefChangeNotifier",
     "FontSettingsAPI",
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -769,6 +894,9 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "MediaRouter",
     "MediaRouterUIService",
     "MenuManager",
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+    "MimeHandlerRegistry",
+#endif
 
     "NavigationPredictorKeyedService",
     "NetworkingPrivateEventRouter",
@@ -785,6 +913,7 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "OperationManager",
     "OptimizationGuideGlobalStateHolderKeyedService",
     "OptimizationGuideKeyedService",
+    "OriginGatingService",
 #if !BUILDFLAG(IS_CHROMEOS)
     // TODO(crbug.com/374351946): Investigate if this is necessary on CrOS.
     "PageContentAnnotationsService",
@@ -832,7 +961,6 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "RulesRegistryService",
     "RuntimeAPI",
     "SafeBrowsingMetricsCollector",
-
     "SafeBrowsingPrivateEventRouter",
     "SafeBrowsingTailoredSecurityService",
     "SearchEngineChoiceServiceFactory",
@@ -857,15 +985,8 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
     "SiteDataCacheFacadeFactory",
     "SiteEngagementService",
     "SocketManager",
-#if !BUILDFLAG(IS_CHROMEOS)
-    // TODO(crbug.com/374351946): Desktop chrome create this via
-    // ShoppingService->SyncService->Spellchecker. Investigate if this is
-    // expected on desktop chrome.
-    "SpellcheckService",
-#endif
     "StorageFrontend",
     "StorageNotificationService",
-    "SupervisedUserService",
     "SystemInfoAPI",
     "TCPServerSocketEventDispatcher",
     "TCPSocketEventDispatcher",
@@ -970,27 +1091,165 @@ IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceGuestBrowserTest,
   if (SearchEnginePreconnector::ShouldBeEnabledAsKeyedService()) {
     guest_active_services.insert("SearchEnginePreconnector");
   }
+  if (base::FeatureList::IsEnabled(
+          omnibox::kAimEligibilityComponentExtension)) {
+    guest_active_services.insert("AimEligibilityExtensionBridge");
+    guest_active_services.insert("ExtensionMojoBinderRegistry");
+  }
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (base::FeatureList::IsEnabled(
           policy::features::kEnableExtensionInstallPolicyFetching)) {
     guest_active_services.insert("ExtensionInstallPolicyService");
   }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  if (base::FeatureList::IsEnabled(
+          universal_optout::features::kUniversalOptOut)) {
+    guest_active_services.insert("UniversalOptOutService");
+  }
+#if !BUILDFLAG(IS_CHROMEOS)
+  if (!base::FeatureList::IsEnabled(
+          spellcheck::kOnDemandSpellcheckInitialization)) {
+    // TODO(crbug.com/374351946): Desktop chrome create this via
+    // ShoppingService->SyncService->Spellchecker. Investigate if this is
+    // expected on desktop chrome.
+    guest_active_services.insert("SpellcheckService");
+  }
+#endif
 #if BUILDFLAG(IS_CHROMEOS)
   EXPECT_TRUE(user_manager::UserManager::Get()->IsLoggedInAsGuest());
   // ChromeOS Guest mode starts with the guest otr profile.
-  Profile* guest_otr_profile = browser()->profile();
+  Profile* guest_otr_profile = browser()->GetProfile();
   Profile* guest_parent_profile = guest_otr_profile->GetOriginalProfile();
   // Some key services are created asynchronosly. Wait util they're ready.
 #else
-  Browser* guest_browser = CreateGuestBrowser();
+  BrowserWindowInterface* guest_browser = CreateGuestBrowser();
   Profile* guest_parent_profile =
-      guest_browser->profile()->GetOriginalProfile();
+      guest_browser->GetProfile()->GetOriginalProfile();
 #endif  // BUILDFLAG(IS_CHROMEOS)
   content::RunAllTasksUntilIdle();
 
   ASSERT_FALSE(guest_parent_profile->IsRegularProfile());
   ASSERT_FALSE(guest_parent_profile->IsOffTheRecord());
   ASSERT_TRUE(guest_parent_profile->IsGuestSession());
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationOptimizationGuide.Get()) {
+    guest_active_services.erase("PageContentAnnotationsService");
+    guest_active_services.erase("ZeroSuggestCacheServiceFactory");
+  }
+  if (features::IsLazyOptimizationGuideModelsEnabled()) {
+    guest_active_services.erase("AutocompleteScoringModelService");
+    guest_active_services.erase("OnDeviceTailModelService");
+    guest_active_services.erase(
+        "OptimizationGuideGlobalStateHolderKeyedService");
+    guest_active_services.erase("PredictionModelHandlerProvider");
+  }
+  if (features::IsLazyAfterStartupKeyedServicesEnabled()) {
+    guest_active_services.erase("AutofillPrivateEventRouter");
+  }
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationExtensions.Get()) {
+    guest_active_services.erase("SafeBrowsingPrivateEventRouter");
+  }
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationExtensionsApi.Get()) {
+    guest_active_services.erase("HidConnectionResourceManager");
+    guest_active_services.erase("OperationManager");
+    guest_active_services.erase("PasswordsPrivateEventRouter");
+    guest_active_services.erase("SidePanelService");
+  }
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationExtensionsSocketsAndUsb.Get()) {
+    guest_active_services.erase("PrinterProviderInternal");
+    guest_active_services.erase("ResumableTCPServerSocketManager");
+    guest_active_services.erase("ResumableTCPSocketManager");
+    guest_active_services.erase("ResumableUDPSocketManager");
+    guest_active_services.erase("SocketManager");
+    guest_active_services.erase("TCPServerSocketEventDispatcher");
+    guest_active_services.erase("TCPSocketEventDispatcher");
+    guest_active_services.erase("UDPSocketEventDispatcher");
+    guest_active_services.erase("UsbDeviceResourceManager");
+    guest_active_services.erase("WriteQuotaChecker");
+  }
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationSafeBrowsing.Get()) {
+    guest_active_services.erase("SafeBrowsingTailoredSecurityService");
+  }
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationCommerceAndUI.Get()) {
+    guest_active_services.erase("LoginUIServiceFactory");
+  }
+#if BUILDFLAG(IS_CHROMEOS)
+  if (base::FeatureList::IsEnabled(features::kLazyKeyedServiceInstantiation) &&
+      features::kLazyKeyedServiceInstantiationExtensionsChromeOSResources
+          .Get()) {
+    guest_active_services.erase("BluetoothApiAdvertisementManager");
+    guest_active_services.erase("BluetoothApiSocketManager");
+    guest_active_services.erase("BluetoothLowEnergyConnectionManager");
+    guest_active_services.erase("BluetoothLowEnergyNotifySessionManager");
+    guest_active_services.erase("BluetoothSocketEventDispatcher");
+    guest_active_services.erase("LogSourceResource");
+    guest_active_services.erase("SerialConnectionManager");
+    guest_active_services.erase("SerialPortManager");
+    guest_active_services.erase("WebcamPrivateAPI");
+  }
+#endif
   TestKeyedProfileServicesActives(guest_parent_profile, guest_active_services);
 }
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+class ProfileKeyedServiceIsolatedModeBrowserTest
+    : public ProfileKeyedServiceBrowserTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    ProfileKeyedServiceBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(
+        enterprise_isolated_mode::switches::
+            kForceEnterpriseIsolatedModeReplacesIncognito);
+  }
+
+ private:
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+  // `kForceEnterpriseIsolatedModeReplacesIncognito` is ignored on Stable and
+  // Beta channels, and Chrome-branded builds default to Stable unless
+  // overridden.
+  chrome::ScopedChannelOverride channel_override_{
+      chrome::ScopedChannelOverride::Channel::kDev};
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+};
+
+// This test forces the creation of all registered KeyedServices on an
+// Enterprise Isolated Mode profile under an enterprise-managed environment to
+// verify that no service crashes or triggers DCHECK failures during
+// instantiation.
+//
+// Services that should not be created in Isolated Mode should be appropriately
+// configured in their factory's `ProfileSelections` (usually using
+// `ProfileSelection::kOriginalOnly` so they are not created in Incognito or
+// Isolated Mode, or `.WithIsolatedMode(ProfileSelection::kNone)`).
+IN_PROC_BROWSER_TEST_F(ProfileKeyedServiceIsolatedModeBrowserTest,
+                       IsolatedModeProfile_ForceCreateAllServices) {
+  Profile* regular_profile = browser()->GetProfile();
+  BrowserWindowInterface* isolated_browser = CreateIncognitoBrowser();
+  Profile* isolated_profile = isolated_browser->GetProfile();
+  ASSERT_TRUE(isolated_profile->IsEnterpriseIsolatedModeProfile());
+
+  // Simulate an enterprise-managed environment on both the regular and
+  // Isolated Mode profiles (since ManagementServiceFactory uses kOwnInstance)
+  // so enterprise-only services do not early-return nullptr on IsManaged()
+  // checks.
+  policy::ScopedManagementServiceOverrideForTesting regular_management_override(
+      policy::ManagementServiceFactory::GetForProfile(regular_profile),
+      policy::EnterpriseManagementAuthority::CLOUD_DOMAIN);
+  policy::ScopedManagementServiceOverrideForTesting
+      isolated_management_override(
+          policy::ManagementServiceFactory::GetForProfile(isolated_profile),
+          policy::EnterpriseManagementAuthority::CLOUD_DOMAIN);
+
+  const std::vector<KeyedServiceBaseFactory*> keyed_service_factories =
+      GetKeyedServiceBaseFactories();
+
+  for (KeyedServiceBaseFactory* service_factory : keyed_service_factories) {
+    service_factory->CreateServiceNowForTesting(isolated_profile);
+  }
+}
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)

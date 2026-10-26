@@ -14,7 +14,6 @@ import '../controls/settings_toggle_button.js';
 import '../settings_shared.css.js';
 import './metrics_consent_toggle_button.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
 import {assertNotReached} from 'chrome://resources/js/assert.js';
@@ -25,7 +24,8 @@ import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {MediaDevicesProxy} from '../common/media_devices_proxy.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import type {PrivacyHubBrowserProxy} from './privacy_hub_browser_proxy.js';
@@ -33,16 +33,24 @@ import {PrivacyHubBrowserProxyImpl} from './privacy_hub_browser_proxy.js';
 import {GeolocationAccessLevel} from './privacy_hub_geolocation_subpage.js';
 import {getTemplate} from './privacy_hub_subpage.html.js';
 
+
+
 /**
  * These values are persisted to logs and should not be renumbered or reused.
  * Keep in sync with PrivacyHubNavigationOrigin in
  * tools/metrics/histograms/enums.xml and
  * ash/system/privacy_hub/privacy_hub_metrics.h.
  */
-export const PrivacyHubNavigationOrigin = {
-  SYSTEM_SETTINGS: 0,
-  NOTIFICATION: 1,
-};
+// LINT.IfChange(PrivacyHubNavigationOrigin)
+export enum PrivacyHubNavigationOrigin {
+  SYSTEM_SETTINGS = 0,
+  NOTIFICATION = 1,
+  COUNT = NOTIFICATION + 1,
+}
+// LINT.ThenChange(
+//   //ash/system/privacy_hub/privacy_hub_metrics.h:PrivacyHubNavigationOrigin,
+//   //tools/metrics/histograms/metadata/chromeos/enums.xml:PrivacyHubNavigationOrigin
+// )
 
 const SettingsPrivacyHubSubpageBase = PrefsMixin(DeepLinkingMixin(
     RouteObserverMixin(WebUiListenerMixin(I18nMixin(PolymerElement)))));
@@ -164,20 +172,20 @@ export class SettingsPrivacyHubSubpage extends SettingsPrivacyHubSubpageBase {
   ]);
 
   private browserProxy_: PrivacyHubBrowserProxy;
-  private showPrivacyHubLocationControl_: boolean;
-  private shouldUseMetricsConsentRestructure_: boolean;
-  private locationSubLabel_: string;
-  private cameraFallbackMechanismEnabled_: boolean;
-  private cameraRowSubtext_: string;
-  private isCameraListEmpty_: boolean;
-  private isMicListEmpty_: boolean;
-  private microphoneRowSubtext_: string;
-  private microphoneHardwareToggleActive_: boolean;
-  private microphoneToggleTooltipText_: string;
-  private shouldDisableMicrophoneToggle_: boolean;
-  private cameraSwitchForceDisabled_: boolean;
-  private shouldDisableCameraToggle_: boolean;
-  private showSpeakOnMuteDetectionPage_: boolean;
+  declare private showPrivacyHubLocationControl_: boolean;
+  declare private shouldUseMetricsConsentRestructure_: boolean;
+  declare private locationSubLabel_: string;
+  declare private cameraFallbackMechanismEnabled_: boolean;
+  declare private cameraRowSubtext_: string;
+  declare private isCameraListEmpty_: boolean;
+  declare private isMicListEmpty_: boolean;
+  declare private microphoneRowSubtext_: string;
+  declare private microphoneHardwareToggleActive_: boolean;
+  declare private microphoneToggleTooltipText_: string;
+  declare private shouldDisableMicrophoneToggle_: boolean;
+  declare private cameraSwitchForceDisabled_: boolean;
+  declare private shouldDisableCameraToggle_: boolean;
+  declare private showSpeakOnMuteDetectionPage_: boolean;
 
   constructor() {
     super();

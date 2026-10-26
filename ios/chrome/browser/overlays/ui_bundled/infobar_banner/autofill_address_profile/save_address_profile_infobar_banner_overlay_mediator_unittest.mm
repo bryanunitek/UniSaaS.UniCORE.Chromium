@@ -13,7 +13,7 @@
 #import "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #import "components/autofill/core/browser/form_import/addresses/autofill_save_update_address_profile_delegate_ios.h"
 #import "components/autofill/core/browser/foundations/autofill_client.h"
-#import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #import "ios/chrome/browser/infobars/model/infobar_ios.h"
 #import "ios/chrome/browser/infobars/ui_bundled/banners/test/fake_infobar_banner_consumer.h"
 #import "ios/chrome/browser/overlays/model/public/infobar_banner/infobar_banner_overlay_responses.h"
@@ -74,9 +74,8 @@ TEST_F(SaveAddressProfileInfobarBannerOverlayMediatorTest, SetUpConsumer) {
               consumer.buttonText);
   EXPECT_NSEQ(base::SysUTF16ToNSString(delegate->GetDescription()),
               consumer.subtitleText);
-  EXPECT_NSEQ(
-      CustomSymbolWithPointSize(kLocationSymbol, kInfobarSymbolPointSize),
-      consumer.iconImage);
+  EXPECT_NSEQ(SymbolWithPointSize(SymbolLocation, kInfobarSymbolPointSize),
+              consumer.iconImage);
 }
 
 // Tests that the modal is shown when infobar button is pressed.

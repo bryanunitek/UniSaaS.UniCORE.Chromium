@@ -17,7 +17,6 @@
 #include "third_party/blink/public/common/security/protocol_handler_security_level.h"
 #include "third_party/blink/public/platform/web_audio_device.h"
 #include "third_party/blink/public/platform/web_prescient_networking.h"
-#include "ui/gfx/icc_profile.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "v8/include/v8-initialization.h"
@@ -61,6 +60,10 @@ bool ContentRendererClient::IsPluginHandledExternally(
 }
 
 bool ContentRendererClient::IsDomStorageDisabled() const {
+  return false;
+}
+
+bool ContentRendererClient::AreDedicatedWorkersDisabled() const {
   return false;
 }
 
@@ -126,6 +129,11 @@ bool ContentRendererClient::AllowPopup() {
   return false;
 }
 
+bool ContentRendererClient::IsUnboundedElementAllowed(
+    const blink::WebSecurityOrigin& origin) {
+  return false;
+}
+
 bool ContentRendererClient::ShouldNotifyServiceWorkerOnWebSocketActivity(
     v8::Local<v8::Context> context) {
   return false;
@@ -143,8 +151,7 @@ bool ContentRendererClient::HandleNavigation(
     blink::WebFrame* frame,
     const blink::WebURLRequest& request,
     blink::WebNavigationType type,
-    blink::WebNavigationPolicy default_policy,
-    bool is_redirect) {
+    blink::WebNavigationPolicy default_policy) {
   return false;
 }
 #endif
@@ -192,7 +199,7 @@ std::unique_ptr<media::KeySystemSupportRegistration>
 ContentRendererClient::GetSupportedKeySystems(
     RenderFrame* render_frame,
     media::GetSupportedKeySystemsCB cb) {
-  std::move(cb).Run({});
+  std::move(cb).Run(/*key_systems=*/{}, /*pending_key_systems=*/{});
   return nullptr;
 }
 
@@ -259,11 +266,6 @@ ContentRendererClient::CreateSpeechRecognitionClient(
 }
 #endif
 
-bool ContentRendererClient::AllowScriptExtensionForServiceWorker(
-    const url::Origin& script_origin) {
-  return false;
-}
-
 bool ContentRendererClient::ShouldEnforceWebRTCRoutingPreferences() {
   return true;
 }
@@ -325,5 +327,9 @@ ContentRendererClient::CreateCastStreamingResourceProvider() {
 }
 #endif
 
+bool ContentRendererClient::ShouldUsePerBrowsingInstanceWindowAgent(
+    const url::Origin& origin) {
+  return false;
+}
 
 }  // namespace content

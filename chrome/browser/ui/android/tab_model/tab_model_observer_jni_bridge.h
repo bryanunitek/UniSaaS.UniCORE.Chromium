@@ -9,7 +9,6 @@
 
 #include <vector>
 
-#include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ref.h"
 #include "base/observer_list.h"
@@ -18,7 +17,6 @@
 
 class TabAndroid;
 class TabModel;
-class TabAndroid;
 
 namespace base {
 class Token;
@@ -40,11 +38,14 @@ class TabModelObserverJniBridge {
 
   ~TabModelObserverJniBridge();
 
-  void Destroy(JNIEnv* env);
-
   // The following functions are called by JNI.
 
-  void DidSelectTab(JNIEnv* env, TabAndroid* tab, int type, int last_id);
+  void DidSelectTab(JNIEnv* env, TabAndroid* tab);
+
+  void WillCloseTabs(JNIEnv* env,
+                     const std::vector<TabAndroid*>& tabs,
+                     bool is_all_tabs,
+                     bool allow_undo);
 
   void WillCloseTab(JNIEnv* env, TabAndroid* tab);
 
@@ -56,15 +57,17 @@ class TabModelObserverJniBridge {
                                      const std::vector<TabAndroid*>& tabs,
                                      bool can_restore);
 
-  void WillAddTab(JNIEnv* env, TabAndroid* tab, int type);
+  void OnTabCloseCommitted(JNIEnv* env,
+                           const std::vector<TabAndroid*>& tabs,
+                           bool is_all_tabs,
+                           bool can_restore,
+                           int source);
 
   void DidAddTab(JNIEnv* env, TabAndroid* tab, int type, int index);
 
   void DidMoveTab(JNIEnv* env, TabAndroid* tab, int new_index, int cur_index);
 
-  void OnTabClosePending(JNIEnv* env,
-                         const std::vector<TabAndroid*>& tabs,
-                         int source);
+  void OnTabClosePending(JNIEnv* env, const std::vector<TabAndroid*>& tabs);
 
   void TabClosureUndone(JNIEnv* env, TabAndroid* tab, int index);
 
@@ -86,9 +89,12 @@ class TabModelObserverJniBridge {
 
   void OnTabGroupRemoving(JNIEnv* env, base::Token group_id);
 
-  void OnTabGroupMoved(JNIEnv* env, base::Token group_id, int old_index);
+  void OnTabGroupMoved(JNIEnv* env, base::Token group_id);
 
   void OnTabGroupVisualsChanged(JNIEnv* env, base::Token group_id);
+
+  void OnWillActiveStateChange(JNIEnv* env, TabModel* tab_model, bool active);
+  void OnDidActiveStateChange(JNIEnv* env, TabModel* tab_model, bool active);
 
   void AddObserver(TabModelObserver* observer);
   void AddTabListInterfaceObserver(TabListInterfaceObserver* observer);

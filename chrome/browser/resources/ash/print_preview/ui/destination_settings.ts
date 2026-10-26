@@ -2,12 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_lazy_render/cr_lazy_render.js';
-import 'chrome://resources/cr_elements/cr_hidden_style.css.js';
-import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
-
+import 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
+import 'chrome://resources/ash/common/cr_elements/cr_lazy_render/cr_lazy_render.js';
+import 'chrome://resources/ash/common/cr_elements/cr_hidden_style.css.js';
+import 'chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js';
 import './destination_dialog_cros.js';
-
 import './destination_select_cros.js';
 import './print_preview_shared.css.js';
 import './print_preview_vars.css.js';
@@ -15,23 +14,20 @@ import './throbber.css.js';
 import './settings_section.js';
 import '/strings.m.js';
 
-import type {CrLazyRenderElement} from 'chrome://resources/cr_elements/cr_lazy_render/cr_lazy_render.js';
-import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
-import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
+import type {CrButtonElement} from 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
+import type {CrLazyRenderElement} from 'chrome://resources/ash/common/cr_elements/cr_lazy_render/cr_lazy_render.js';
+import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
+import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 import {beforeNextRender, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-
 import type {Destination, RecentDestination} from '../data/destination_cros.js';
 import {createRecentDestinationKey, isPdfPrinter, makeRecentDestination, PrinterType, SAVE_TO_DRIVE_CROS_DESTINATION_KEY} from '../data/destination_cros.js';
-
 import {DestinationErrorType, DestinationStore, DestinationStoreEventType} from '../data/destination_store.js';
 import {Error, State} from '../data/state.js';
 
-
 import type {PrintPreviewDestinationDialogCrosElement} from './destination_dialog_cros.js';
-
 import type {PrintPreviewDestinationSelectCrosElement} from './destination_select_cros.js';
 import {getTemplate} from './destination_settings.html.js';
 import {SettingsMixin} from './settings_mixin.js';
@@ -59,6 +55,7 @@ export interface PrintPreviewDestinationSettingsElement {
     destinationDialog:
         CrLazyRenderElement<PrintPreviewDestinationDialogCrosElement>,
     destinationSelect: PrintPreviewDestinationSelectCrosElement,
+    seeMore: CrButtonElement,
   };
 }
 
@@ -122,11 +119,6 @@ export class PrintPreviewDestinationSettingsElement extends
         reflectToAttribute: true,
       },
 
-      isDialogOpen_: {
-        type: Boolean,
-        value: false,
-      },
-
       noDestinations_: {
         type: Boolean,
         value: false,
@@ -141,25 +133,23 @@ export class PrintPreviewDestinationSettingsElement extends
     };
   }
 
-  dark: boolean;
-  destination: Destination;
-  destinationState: DestinationState;
-  disabled: boolean;
-  error: Error;
-  firstLoad: boolean;
-  state: State;
-  private destinationStore_: DestinationStore|null;
-  private displayedDestinations_: Destination[];
-
-  private driveDestinationKey_: string;
-  private hasPinSetting_: boolean;
-
-  private isDialogOpen_: boolean;
-  private noDestinations_: boolean;
-  private pdfPrinterDisabled_: boolean;
-  private loaded_: boolean;
+  declare dark: boolean;
+  declare destination: Destination;
+  declare destinationState: DestinationState;
+  declare disabled: boolean;
+  declare error: Error;
+  declare firstLoad: boolean;
+  declare state: State;
+  declare private destinationStore_: DestinationStore|null;
+  declare private displayedDestinations_: Destination[];
+  declare private driveDestinationKey_: string;
+  declare private hasPinSetting_: boolean;
+  declare private noDestinations_: boolean;
+  declare private pdfPrinterDisabled_: boolean;
+  declare private loaded_: boolean;
 
   private lastUser_: string = '';
+  private shouldFocusDropdown_: boolean = false;
   private tracker_: EventTracker = new EventTracker();
 
   override connectedCallback() {
@@ -278,6 +268,7 @@ export class PrintPreviewDestinationSettingsElement extends
     this.notifyPath('destination.allowedManagedPrintOptionsApplied.color');
     this.notifyPath('destination.allowedManagedPrintOptionsApplied.dpi');
     this.notifyPath('destination.allowedManagedPrintOptionsApplied.quality');
+    this.notifyPath('destination.allowedManagedPrintOptionsApplied.layout');
 
     this.updateRecentDestinations_();
     if (this.destinationState === DestinationState.SET) {
@@ -398,6 +389,13 @@ export class PrintPreviewDestinationSettingsElement extends
          this.state !== State.NOT_READY);
   }
 
+  /**
+   * @return Whether the See More button should be disabled.
+   */
+  private shouldDisableSeeMore_(): boolean {
+    return !this.loaded_ || this.shouldDisableDropdown_();
+  }
+
   private computeLoaded_(): boolean {
     return this.destinationState === DestinationState.ERROR ||
         this.destinationState === DestinationState.UPDATED ||
@@ -412,24 +410,21 @@ export class PrintPreviewDestinationSettingsElement extends
 
   /**
    * @param e Event containing the key of the recent destination that was
-   *     selected, or "seeMore".
+   *     selected.
    */
   private onSelectedDestinationOptionChange_(e: CustomEvent<string>) {
-    const value = e.detail;
-    if (value === 'seeMore') {
-      this.destinationStore_!.startLoadAllDestinations();
-      this.$.destinationDialog.get().show();
-      this.isDialogOpen_ = true;
-    } else {
-      this.destinationStore_!.selectDestinationByKey(value);
-    }
+    this.shouldFocusDropdown_ = true;
+    this.destinationStore_!.selectDestinationByKey(e.detail);
+  }
+
+  private onSeeMoreClick_() {
+    this.destinationStore_!.startLoadAllDestinations();
+    this.$.destinationDialog.get().show();
   }
 
   private onDialogClose_() {
-    // Reset the select value if the user dismissed the dialog without
-    // selecting a new destination.
-    this.updateDestinationSelect_();
-    this.isDialogOpen_ = false;
+    this.shouldFocusDropdown_ = false;
+    this.$.seeMore.focus();
   }
 
   private updateDestinationSelect_() {
@@ -445,7 +440,8 @@ export class PrintPreviewDestinationSettingsElement extends
         this.destinationState !== DestinationState.SET && !this.firstLoad;
     beforeNextRender(this.$.destinationSelect, () => {
       this.$.destinationSelect.updateDestination();
-      if (shouldFocus) {
+      if (shouldFocus && this.shouldFocusDropdown_) {
+        this.shouldFocusDropdown_ = false;
         this.$.destinationSelect.focus();
       }
     });

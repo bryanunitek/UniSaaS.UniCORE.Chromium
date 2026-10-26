@@ -10,6 +10,7 @@
 #include <optional>
 #include <utility>
 
+#include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
@@ -71,7 +72,7 @@ enum class SearchPrefetchEligibilityReason {
   // A URLLoaderThrottle decided this request should not be issued.
   kThrottled = 8,
   // The prefetch was suppressed because the network is too slow.
-  kSlowNetwork = 9,
+  // kSlowNetwork = 9,  // No longer used.
   // The prefetch was suppressed because Data Saver is enabled.
   kDataSaverEnabled = 10,
   // The prefetch was suppressed because Battery Saver is enabled.
@@ -166,12 +167,17 @@ class SearchPrefetchService : public KeyedService,
   void OnPrerenderedRequestUsed(const GURL& canonical_search_url,
                                 const GURL& navigation_url);
 
-  // Creates a response reader if this instance has prefetched a response for
-  // the given `tentative_resource_request`, and the caller can read the
-  // response with the returned value. Returns an empty callback if the response
-  // is not found.
-  SearchPrefetchURLLoader::RequestHandler MaybeCreateResponseReader(
+  // Creates a response reader for a prerender navigation if this instance has
+  // prefetched a response for the given `tentative_resource_request`, and the
+  // caller can read the response with the returned value. Returns an empty
+  // callback if the response is not found.
+  SearchPrefetchURLLoader::RequestHandler MaybeCreateResponseReaderForPrerender(
       const network::ResourceRequest& tentative_resource_request);
+
+  // Tracks navigation IDs currently being served by a search prefetch.
+  void AddServingNavigationId(int64_t navigation_id);
+  bool IsServingNavigation(int64_t navigation_id) const;
+  void RemoveServingNavigationId(int64_t navigation_id);
 
   // Reports the status of a prefetch for a given search suggestion URL.
   std::optional<SearchPrefetchStatus> GetSearchPrefetchStatusForTesting(
@@ -223,6 +229,19 @@ class SearchPrefetchService : public KeyedService,
   friend class PrerenderOmniboxSearchSuggestionBrowserTest;
   friend class SearchPrefetchServiceEnabledBrowserTest;
 
+  // Bundles an active search prefetch request with its lifetime expiry timer.
+  struct PrefetchEntry {
+    PrefetchEntry();
+    PrefetchEntry(const PrefetchEntry&) = delete;
+    PrefetchEntry& operator=(const PrefetchEntry&) = delete;
+    PrefetchEntry(PrefetchEntry&&);
+    PrefetchEntry& operator=(PrefetchEntry&&);
+    ~PrefetchEntry();
+
+    std::unique_ptr<SearchPrefetchRequest> request;
+    std::unique_ptr<base::OneShotTimer> expiry_timer;
+  };
+  using PrefetchMap = std::map<GURL, PrefetchEntry>;
 
   // Returns whether the prefetch started or not.
   bool MaybePrefetchURL(const GURL& url,
@@ -241,6 +260,7 @@ class SearchPrefetchService : public KeyedService,
   // Note: Always call this method to remove prefetch requests from memory
   // cache; Do not delete it from `prefetches_` directly.
   void DeletePrefetch(GURL canonical_search_url);
+  void ErasePrefetch(PrefetchMap::iterator it);
 
   // Records metrics around the error rate of prefetches. When |error| is true,
   // records the current time to prevent prefetches for a set duration.
@@ -255,8 +275,7 @@ class SearchPrefetchService : public KeyedService,
   void SaveToPrefs() const;
 
   // Retrieved the started prefetches by search_terms.
-  std::map<GURL, std::unique_ptr<SearchPrefetchRequest>>::iterator
-  RetrieveSearchTermsInMemoryCache(
+  PrefetchMap::iterator RetrieveSearchTermsInMemoryCache(
       const network::ResourceRequest& tentative_resource_request,
       SearchPrefetchServingReasonRecorder& recorder);
 
@@ -271,14 +290,10 @@ class SearchPrefetchService : public KeyedService,
                                        TemplateURLService* template_url_service,
                                        const GURL& canonical_search_url);
 
-
-  // Prefetches that are started are stored using search terms as a key. Only
-  // one prefetch should be started for a given search term until the old
-  // prefetch expires.
-  std::map<GURL, std::unique_ptr<SearchPrefetchRequest>> prefetches_;
-
-  // A group of timers to expire |prefetches_| based on the same key.
-  std::map<GURL, std::unique_ptr<base::OneShotTimer>> prefetch_expiry_timers_;
+  // Prefetches that are started are stored using search terms as a key, along
+  // with their expiry timers. Only one prefetch should be started for a given
+  // search term until the old prefetch expires.
+  PrefetchMap prefetches_;
 
   // The time of the last prefetch network/server error.
   base::TimeTicks last_error_time_ticks_ = base::TimeTicks::Min();
@@ -296,6 +311,8 @@ class SearchPrefetchService : public KeyedService,
   // serving time of the response.
   std::map<GURL, std::pair<GURL, base::Time>> prefetch_cache_;
 
+  // Navigation IDs currently being served by a search prefetch.
+  base::flat_set<int64_t> serving_navigation_ids_;
 
   base::WeakPtrFactory<SearchPrefetchService> weak_factory_{this};
 };

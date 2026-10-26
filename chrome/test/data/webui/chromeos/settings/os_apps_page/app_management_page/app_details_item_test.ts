@@ -6,11 +6,13 @@ import 'chrome://os-settings/lazy_load.js';
 
 import type {AppManagementAppDetailsItem} from 'chrome://os-settings/lazy_load.js';
 import {AppManagementStore, updateSelectedAppId} from 'chrome://os-settings/os_settings.js';
+import type {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
 import type {App} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
 import {AppType, InstallReason, InstallSource} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertNull, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
+import {eventToPromise} from 'chrome://webui-test/test_util.js';
 
 import type {FakePageHandler} from '../../app_management/fake_page_handler.js';
 import type {TestAppManagementStore} from '../../app_management/test_store.js';
@@ -54,6 +56,14 @@ suite('<app-management-app-details-item>', () => {
     flushTasks();
   }
 
+  test('App details heading has heading role and level 2', async () => {
+    await addApp({});
+    const heading = appDetailsItem.shadowRoot!.querySelector('#heading');
+    assertTrue(!!heading);
+    assertEquals('heading', heading.getAttribute('role'));
+    assertEquals('2', heading.getAttribute('aria-level'));
+  });
+
   test('PWA type from unknown source', async () => {
     await addApp({
       type: AppType.kWeb,
@@ -85,6 +95,22 @@ suite('<app-management-app-details-item>', () => {
         appDetailsItem.shadowRoot!.querySelector('cr-tooltip-icon');
     assertTrue(!!infoIconTooltip);
     assertEquals(publisherId, infoIconTooltip.tooltipText.trim());
+  });
+
+  test('IWA type from browser has info icon with app title', async () => {
+    const publisherId = 'isolated-app://pt20shjf.../';
+    const title = 'Sample IWA Title';
+    await addApp({
+      type: AppType.kWeb,
+      installSource: InstallSource.kBrowser,
+      publisherId,
+      title,
+    });
+
+    const infoIconTooltip =
+        appDetailsItem.shadowRoot!.querySelector('cr-tooltip-icon');
+    assertTrue(!!infoIconTooltip);
+    assertEquals(title, infoIconTooltip.tooltipText.trim());
   });
 
   test(
@@ -322,5 +348,391 @@ suite('<app-management-app-details-item>', () => {
 
     assertEquals('App size: 17 MB', appSize.textContent.trim());
     assertEquals('Data stored in app: 124.6 GB', dataSize.textContent.trim());
+  });
+
+  test('IWA update section hidden if flag is off', async () => {
+    loadTimeData.overrideValues({isIwaInlineUpdateEnabled: false});
+    await addApp({
+      type: AppType.kWeb,
+      publisherId: 'isolated-app://pt2igw6.../',
+      version: '1.0.0',
+    });
+
+    const updateSection =
+        appDetailsItem.shadowRoot!.querySelector('.update-section');
+    assertNull(updateSection);
+  });
+
+  test('IWA update flow with open windows', async () => {
+    loadTimeData.overrideValues({isIwaInlineUpdateEnabled: true});
+    await addApp({
+      type: AppType.kWeb,
+      publisherId: 'isolated-app://pt2igw6.../',
+      version: '1.0.0',
+      title: 'Kitchen Sink IWA',
+    });
+
+    const updateSection =
+        appDetailsItem.shadowRoot!.querySelector('.update-section');
+    assertTrue(!!updateSection);
+
+    const checkUpdateButton =
+        appDetailsItem.shadowRoot!.querySelector<HTMLElement>(
+            '#checkUpdateButton');
+    assertTrue(!!checkUpdateButton);
+    assertEquals('Check for updates', checkUpdateButton.innerText.trim());
+
+    const lastCheckText = appDetailsItem.shadowRoot!.querySelector<HTMLElement>(
+        '.last-check-text');
+    assertTrue(!!lastCheckText);
+    assertEquals('', lastCheckText.innerText.trim());
+
+    fakeHandler.updateVersion = {components: [1, 2, 0]};
+    // Mock open windows
+    fakeHandler.numWindowsForApp = 1;
+
+    checkUpdateButton.click();
+    await fakeHandler.whenCalled('checkForIsolatedWebAppUpdate');
+    await fakeHandler.whenCalled('getNumWindowsForApp');
+    await fakeHandler.flushPipesForTesting();
+    await flushTasks();
+
+    // Verify Dialog 1 (Update Found Dialog) is shown
+    const updateFoundDialog =
+        appDetailsItem.shadowRoot!.querySelector<HTMLElement>(
+            '#updateFoundDialog');
+    assertTrue(!!updateFoundDialog);
+
+    const foundTitle = updateFoundDialog.querySelector('[slot="title"]');
+    assertTrue(!!foundTitle);
+    assertEquals('Update found', foundTitle.textContent.trim());
+
+    // Should display the merged warning body because windows are open
+    const foundBody = updateFoundDialog.querySelector('[slot="body"]');
+    assertTrue(!!foundBody);
+    assertTrue(foundBody.textContent.includes('1.2.0'));
+
+    // Verify main page button text does NOT change
+    assertEquals('Check for updates', checkUpdateButton.innerText.trim());
+    assertEquals('', lastCheckText.innerText.trim());
+
+    const confirmFoundButton =
+        updateFoundDialog.querySelector<HTMLElement>('#confirmFound');
+    assertTrue(!!confirmFoundButton);
+
+    fakeHandler.applyUpdateSuccess = true;
+    confirmFoundButton.click();
+
+    await fakeHandler.whenCalled('applyIsolatedWebAppUpdate');
+    await fakeHandler.flushPipesForTesting();
+    await flushTasks();
+
+    // All dialogues closed, and button is back to default
+    assertNull(appDetailsItem.shadowRoot!.querySelector('#updateFoundDialog'));
+    assertEquals('Check for updates', checkUpdateButton.innerText.trim());
+    assertEquals(checkUpdateButton, appDetailsItem.shadowRoot!.activeElement);
+    assertEquals('', lastCheckText.innerText.trim());
+  });
+
+  test('IWA update flow without open windows', async () => {
+    loadTimeData.overrideValues({isIwaInlineUpdateEnabled: true});
+    await addApp({
+      type: AppType.kWeb,
+      publisherId: 'isolated-app://pt2igw6.../',
+      version: '1.0.0',
+      title: 'Kitchen Sink IWA',
+    });
+
+    const checkUpdateButton =
+        appDetailsItem.shadowRoot!.querySelector<HTMLElement>(
+            '#checkUpdateButton');
+    assertTrue(!!checkUpdateButton);
+
+    fakeHandler.updateVersion = {components: [1, 2, 0]};
+    // Mock no windows running
+    fakeHandler.numWindowsForApp = 0;
+
+    checkUpdateButton.click();
+    await fakeHandler.whenCalled('checkForIsolatedWebAppUpdate');
+    await fakeHandler.whenCalled('getNumWindowsForApp');
+    await fakeHandler.flushPipesForTesting();
+    await flushTasks();
+
+    const updateFoundDialog =
+        appDetailsItem.shadowRoot!.querySelector<HTMLElement>(
+            '#updateFoundDialog');
+    assertTrue(!!updateFoundDialog);
+
+    const foundTitle = updateFoundDialog.querySelector('[slot="title"]');
+    assertTrue(!!foundTitle);
+    assertEquals('Update found', foundTitle.textContent.trim());
+
+    // Should display the simple body prompt because windows are not open
+    const foundBody = updateFoundDialog.querySelector('[slot="body"]');
+    assertTrue(!!foundBody);
+    assertTrue(foundBody.textContent.includes('1.2.0'));
+
+    const confirmFoundButton =
+        updateFoundDialog.querySelector<HTMLElement>('#confirmFound');
+    assertTrue(!!confirmFoundButton);
+
+    fakeHandler.applyUpdateSuccess = true;
+    confirmFoundButton.click();
+
+    await fakeHandler.whenCalled('applyIsolatedWebAppUpdate');
+    await fakeHandler.flushPipesForTesting();
+    await flushTasks();
+
+    // All dialogues closed
+    assertNull(appDetailsItem.shadowRoot!.querySelector('#updateFoundDialog'));
+    assertEquals('Check for updates', checkUpdateButton.innerText.trim());
+  });
+
+  test('IWA update flow with no update found', async () => {
+    loadTimeData.overrideValues({isIwaInlineUpdateEnabled: true});
+    await addApp({
+      type: AppType.kWeb,
+      publisherId: 'isolated-app://pt2igw6.../',
+      version: '1.0.0',
+      title: 'Kitchen Sink IWA',
+    });
+
+    const checkUpdateButton =
+        appDetailsItem.shadowRoot!.querySelector<HTMLElement>(
+            '#checkUpdateButton');
+    assertTrue(!!checkUpdateButton);
+
+    const lastCheckText = appDetailsItem.shadowRoot!.querySelector<HTMLElement>(
+        '.last-check-text');
+    assertTrue(!!lastCheckText);
+
+    // Mock no update found
+    fakeHandler.updateVersion = null;
+
+    checkUpdateButton.click();
+    await fakeHandler.whenCalled('checkForIsolatedWebAppUpdate');
+    await fakeHandler.flushPipesForTesting();
+    await flushTasks();
+
+    // Verify no dialog is shown
+    assertNull(appDetailsItem.shadowRoot!.querySelector('#updateFoundDialog'));
+
+    // Verify button is re-enabled, and inline status updates to "App is up to
+    // date."
+    assertEquals('Check for updates', checkUpdateButton.innerText.trim());
+    assertTrue(lastCheckText.innerText.includes('up to date'));
+  });
+
+  test(
+      'IWA update button disabled and loading state accessibility',
+      async () => {
+        loadTimeData.overrideValues({isIwaInlineUpdateEnabled: true});
+        await addApp({
+          type: AppType.kWeb,
+          publisherId: 'isolated-app://pt2igw6.../',
+          version: '1.0.0',
+          title: 'Kitchen Sink IWA',
+        });
+
+        const checkUpdateButton =
+            appDetailsItem.shadowRoot!.querySelector<HTMLElement>(
+                '#checkUpdateButton');
+        assertTrue(!!checkUpdateButton);
+        // Initially enabled
+        assertEquals(null, checkUpdateButton.getAttribute('disabled'));
+
+        fakeHandler.updateVersion = null;
+
+        checkUpdateButton.click();
+        await flushTasks();
+
+        // Spinner and disabled state during check
+        const spinner =
+            appDetailsItem.shadowRoot!.querySelector('paper-spinner-lite');
+        assertTrue(!!spinner);
+        assertTrue(spinner.hasAttribute('active'));
+
+        await fakeHandler.whenCalled('checkForIsolatedWebAppUpdate');
+        await fakeHandler.flushPipesForTesting();
+        await flushTasks();
+
+        // Button is re-enabled and status announces up to date
+        assertEquals(null, checkUpdateButton.getAttribute('disabled'));
+        const lastCheckText =
+            appDetailsItem.shadowRoot!.querySelector<HTMLElement>(
+                '.last-check-text');
+        assertTrue(!!lastCheckText);
+        assertTrue(lastCheckText.innerText.includes('up to date'));
+      });
+
+  test(
+      'IWA update dialog accessibility structure and cancellation',
+      async () => {
+        loadTimeData.overrideValues({isIwaInlineUpdateEnabled: true});
+        await addApp({
+          type: AppType.kWeb,
+          publisherId: 'isolated-app://pt2igw6.../',
+          version: '1.0.0',
+          title: 'Kitchen Sink IWA',
+        });
+
+        const checkUpdateButton =
+            appDetailsItem.shadowRoot!.querySelector<HTMLElement>(
+                '#checkUpdateButton');
+        assertTrue(!!checkUpdateButton);
+
+        fakeHandler.updateVersion = {components: [1, 2, 0]};
+        fakeHandler.numWindowsForApp = 1;
+
+        checkUpdateButton.click();
+        await fakeHandler.whenCalled('checkForIsolatedWebAppUpdate');
+        await fakeHandler.whenCalled('getNumWindowsForApp');
+        await fakeHandler.flushPipesForTesting();
+        await flushTasks();
+
+        // Verify dialog accessibility container and attributes
+        const updateFoundDialog =
+            appDetailsItem.shadowRoot!.querySelector('#updateFoundDialog');
+        assertTrue(!!updateFoundDialog);
+
+        // Verify title and body slots for screen readers
+        const titleSlot = updateFoundDialog.querySelector('[slot="title"]');
+        assertTrue(!!titleSlot);
+        assertEquals('Update found', titleSlot.textContent.trim());
+
+        const bodySlot = updateFoundDialog.querySelector('[slot="body"]');
+        assertTrue(!!bodySlot);
+        assertTrue(bodySlot.textContent.includes('1.2.0'));
+        assertTrue(bodySlot.textContent.includes('Kitchen Sink IWA'));
+
+        // Verify action and cancel buttons
+        const cancelButton =
+            updateFoundDialog.querySelector<HTMLElement>('#cancelFound');
+        assertTrue(!!cancelButton);
+        assertEquals('Cancel', cancelButton.innerText.trim());
+
+        const applyButton =
+            updateFoundDialog.querySelector<HTMLElement>('#confirmFound');
+        assertTrue(!!applyButton);
+        assertEquals('Apply update', applyButton.innerText.trim());
+
+        // Test cancelling the dialog closes it without applying update
+        // and restores focus.
+        const whenClosed = eventToPromise('close', updateFoundDialog);
+        cancelButton.click();
+
+        await whenClosed;
+        await flushTasks();
+
+        assertNull(
+            appDetailsItem.shadowRoot!.querySelector('#updateFoundDialog'));
+        assertEquals('Check for updates', checkUpdateButton.innerText.trim());
+        assertEquals(
+            checkUpdateButton, appDetailsItem.shadowRoot!.activeElement);
+      });
+
+  /**
+   * Adds an IWA with a pending update and opens the "Update found" dialog.
+   * Returns the elements involved in the focus restoration flow.
+   */
+  async function showUpdateFoundDialog():
+      Promise<{checkUpdateButton: HTMLElement, dialog: CrDialogElement}> {
+    loadTimeData.overrideValues({isIwaInlineUpdateEnabled: true});
+    await addApp({
+      type: AppType.kWeb,
+      publisherId: 'isolated-app://pt2igw6.../',
+      version: '1.0.0',
+      title: 'Kitchen Sink IWA',
+    });
+
+    const checkUpdateButton =
+        appDetailsItem.shadowRoot!.querySelector<HTMLElement>(
+            '#checkUpdateButton');
+    assertTrue(!!checkUpdateButton);
+
+    fakeHandler.updateVersion = {components: [1, 2, 0]};
+    fakeHandler.numWindowsForApp = 0;
+
+    checkUpdateButton.click();
+    await fakeHandler.whenCalled('checkForIsolatedWebAppUpdate');
+    await fakeHandler.whenCalled('getNumWindowsForApp');
+    await fakeHandler.flushPipesForTesting();
+    await flushTasks();
+
+    const dialog = appDetailsItem.shadowRoot!.querySelector<CrDialogElement>(
+        '#updateFoundDialog');
+    assertTrue(!!dialog);
+
+    return {checkUpdateButton, dialog};
+  }
+
+  test(
+      'IWA update dialog restores focus when dismissed with Escape',
+      async () => {
+        const {checkUpdateButton, dialog} = await showUpdateFoundDialog();
+        const whenClosed = eventToPromise('close', dialog);
+
+        // Emulate an 'Escape' key dismissal: the native <dialog> fires
+        // 'cancel' and then closes, firing 'close' with an empty
+        // `returnValue`.
+        const nativeDialog = dialog.getNative();
+        nativeDialog.dispatchEvent(new Event('cancel', {cancelable: true}));
+        nativeDialog.close();
+
+        await whenClosed;
+        await flushTasks();
+
+        assertNull(
+            appDetailsItem.shadowRoot!.querySelector('#updateFoundDialog'));
+        assertEquals(
+            checkUpdateButton, appDetailsItem.shadowRoot!.activeElement);
+      });
+
+  test(
+      'IWA update dialog restores focus when cancelled by the dialog',
+      async () => {
+        const {checkUpdateButton, dialog} = await showUpdateFoundDialog();
+
+        // `#updateFoundDialog` does not set `show-close-button`, so the 'X'
+        // button stays hidden and is not reachable by the user. `cancel()` is
+        // the shared entry point that the 'X' button would otherwise invoke.
+        const closeButton =
+            dialog.shadowRoot!.querySelector<HTMLElement>('#close');
+        assertTrue(!!closeButton);
+        assertTrue(closeButton.hidden);
+
+        const whenClosed = eventToPromise('close', dialog);
+        dialog.cancel();
+
+        await whenClosed;
+        await flushTasks();
+
+        assertNull(
+            appDetailsItem.shadowRoot!.querySelector('#updateFoundDialog'));
+        assertEquals(
+            checkUpdateButton, appDetailsItem.shadowRoot!.activeElement);
+      });
+
+  test('IWA update restores focus when applying the update fails', async () => {
+    const {checkUpdateButton, dialog} = await showUpdateFoundDialog();
+
+    const confirmFoundButton =
+        dialog.querySelector<HTMLElement>('#confirmFound');
+    assertTrue(!!confirmFoundButton);
+
+    const whenClosed = eventToPromise('close', dialog);
+    fakeHandler.applyUpdateSuccess = false;
+    confirmFoundButton.click();
+
+    await whenClosed;
+    await fakeHandler.whenCalled('applyIsolatedWebAppUpdate');
+    await fakeHandler.flushPipesForTesting();
+    await flushTasks();
+
+    // The update failed, so the update remains available. Focus is
+    // restored once `#checkUpdateButton` is re-enabled.
+    assertNull(appDetailsItem.shadowRoot!.querySelector('#updateFoundDialog'));
+    assertEquals('Check for updates', checkUpdateButton.innerText.trim());
+    assertEquals(checkUpdateButton, appDetailsItem.shadowRoot!.activeElement);
   });
 });

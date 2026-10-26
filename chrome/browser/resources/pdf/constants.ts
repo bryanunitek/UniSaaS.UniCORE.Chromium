@@ -9,6 +9,7 @@ export enum AnnotationMode {
   OFF = 'off',
   DRAW = 'draw',
   TEXT = 'text',
+  SIGNATURE = 'signature',
 }
 
 // The different types of annotation brushes.
@@ -36,6 +37,12 @@ export interface AnnotationBrush {
   type: AnnotationBrushType;
   color?: Color;
   size?: number;
+}
+
+export interface DeleteTextAnnotationMessageData {
+  id: number;
+  pageIndex: number;
+  source: TextAnnotationSource;
 }
 
 export interface TextAnnotation {
@@ -70,22 +77,28 @@ export interface TextAnnotationMessageData extends TextAnnotation {
   source: TextAnnotationSource;
 }
 
+// LINT.IfChange(TextAlignment)
 export enum TextAlignment {
   LEFT = 'left',
   CENTER = 'center',
   RIGHT = 'right',
 }
+// LINT.ThenChange(//pdf/pdf_ink_text.h:TextAlignment)
 
 export enum TextStyle {
   BOLD = 'bold',
   ITALIC = 'italic',
+  UNDERLINE = 'underline',
+  STRIKETHROUGH = 'strikethrough',
 }
 
+// LINT.IfChange(TextTypeface)
 export enum TextTypeface {
   SANS_SERIF = 'sans-serif',
   SERIF = 'serif',
   MONOSPACE = 'monospace',
 }
+// LINT.ThenChange(//pdf/pdf_ink_text.h:TextTypeface)
 
 export type TextStyles = {
   [key in TextStyle]: boolean
@@ -158,7 +171,7 @@ export enum FormFieldFocusType {
 
 export interface NamedDestinationMessageData {
   messageId: string;
-  pageNumber: number;
+  pageIndex: number;
   namedDestinationView?: string;
 }
 

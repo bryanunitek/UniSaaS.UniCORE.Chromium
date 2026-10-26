@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/auto_reset.h"
-#include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/observer_list.h"
@@ -32,13 +31,6 @@
 namespace views {
 
 namespace {
-
-// When enabled, a call to gfx::Animation::ShouldRenderRichAnimation() is
-// avoided when not needed. Behind a feature to assess impact
-// (go/chrome-performance-work-should-be-finched).
-// TODO(crbug.com/40897031): Clean up when experiment is complete.
-BASE_FEATURE(kAvoidUnnecessaryShouldRenderRichAnimation,
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Returns the ChildLayout data for the child view in the proposed layout, or
 // nullptr if not found.
@@ -474,9 +466,7 @@ gfx::Size AnimatingLayoutManager::GetPreferredSize(const View* host) const {
   // (go/jank-from-should-render-rich-animation-jun2025). Avoid calling it when
   // `bounds_animation_mode_` is `kUseHostBounds`, since it won't affect the
   // outcome.
-  if (base::FeatureList::IsEnabled(
-          kAvoidUnnecessaryShouldRenderRichAnimation) &&
-      bounds_animation_mode_ == BoundsAnimationMode::kUseHostBounds) {
+  if (bounds_animation_mode_ == BoundsAnimationMode::kUseHostBounds) {
     return target_layout_manager()->GetPreferredSize(host);
   }
 
@@ -488,9 +478,7 @@ gfx::Size AnimatingLayoutManager::GetPreferredSize(const View* host) const {
 
   switch (bounds_animation_mode_) {
     case BoundsAnimationMode::kUseHostBounds: {
-      CHECK(!base::FeatureList::IsEnabled(
-          kAvoidUnnecessaryShouldRenderRichAnimation));
-      return target_layout_manager()->GetPreferredSize(host);
+      NOTREACHED();
     }
     case BoundsAnimationMode::kAnimateMainAxis: {
       // Animating only main axis, so cross axis is preferred size.
@@ -622,10 +610,10 @@ bool AnimatingLayoutManager::OnViewRemoved(View* host, View* view) {
 
   // Remove any elements in the current layout corresponding to the removed
   // view.
-  std::erase_if(current_layout_.child_layouts,
-                [view](const ChildLayout& child_layout) {
-                  return child_layout.child_view == view;
-                });
+  absl::erase_if(current_layout_.child_layouts,
+                 [view](const ChildLayout& child_layout) {
+                   return child_layout.child_view == view;
+                 });
 
   return LayoutManagerBase::OnViewRemoved(host, view);
 }
@@ -674,7 +662,7 @@ bool AnimatingLayoutManager::OnViewAdded(View* host, View* view) {
   // set the view to not be visible.
   if (IsChildIncludedInLayout(view) && cached_layout_size() && !is_animating_) {
     const gfx::Size target_size = GetAvailableTargetLayoutSize();
-    ProposedLayout proposed_layout =
+    const ProposedLayout& proposed_layout =
         target_layout_manager()->GetProposedLayout(target_size);
     if (HaveSameVisibleViews(current_layout_, proposed_layout)) {
       SetViewVisibility(view, false);
@@ -815,7 +803,7 @@ bool AnimatingLayoutManager::RecalculateTarget() {
 
   // If there has been no appreciable change in layout, there's no reason to
   // start or update an animation.
-  const ProposedLayout proposed_layout =
+  const ProposedLayout& proposed_layout =
       target_layout_manager()->GetProposedLayout(target_size);
 
   if (target_layout_ == proposed_layout) {

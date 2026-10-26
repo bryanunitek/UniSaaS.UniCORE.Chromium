@@ -17,6 +17,7 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/common/chrome_features.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -25,6 +26,11 @@
 #include "content/public/test/test_renderer_host.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/l10n/l10n_util.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/tabs/page_context_eligibility_helper.h"
+#endif
 
 namespace glic {
 
@@ -50,14 +56,11 @@ class GlicContextMenuInvocationHelperUnittest : public testing::Test {
                       &GlicContextMenuInvocationHelperUnittest::CreateService,
                       base::Unretained(this)));
 
-    GlicEnabling::SetBypassEnablementChecksForTesting(true);
-
     // Create the service so mock_service_ is not null.
     GlicKeyedServiceFactory::GetGlicKeyedService(profile_, /*create=*/true);
   }
 
   void TearDown() override {
-    GlicEnabling::SetBypassEnablementChecksForTesting(false);
     identity_test_env_adaptor_.reset();
     profile_ = nullptr;
     mock_service_ = nullptr;
@@ -78,6 +81,7 @@ class GlicContextMenuInvocationHelperUnittest : public testing::Test {
   }
 
  protected:
+  GlicEnabling::ScopedBypassEnablementChecksForTesting scoped_glic_bypass_;
   content::BrowserTaskEnvironment task_environment_;
   content::RenderViewHostTestEnabler enabler_;
   raw_ptr<TestingProfile> profile_;
@@ -109,6 +113,27 @@ inline auto TargetTabAndFreOverride(
 TEST_F(GlicContextMenuInvocationHelperUnittest, HandleClickStandard) {
   feature_list_.InitWithFeatures({features::kGlic, features::kGlicContextMenu},
                                  {});
+
+  tabs::MockTabInterface mock_tab;
+  std::unique_ptr<content::WebContents> web_contents =
+      content::WebContents::Create(
+          content::WebContents::CreateParams(profile_.get()));
+  ON_CALL(mock_tab, GetContents())
+      .WillByDefault(testing::Return(web_contents.get()));
+
+  EXPECT_CALL(*mock_service_,
+              Invoke(TargetTabAndFreOverride(
+                  &mock_tab, glic::mojom::FreOverride::kTrustFirstClick)))
+      .Times(1);
+  GlicContextMenuInvocationHelper::HandleContextualMenuClick(&mock_tab);
+}
+
+TEST_F(GlicContextMenuInvocationHelperUnittest, HandleClickArm1) {
+  feature_list_.InitWithFeaturesAndParameters(
+      {{features::kGlic, {}},
+       {features::kGlicContextMenu,
+        {{features::kGlicContextMenuArm.name, "arm1"}}}},
+      {});
 
   tabs::MockTabInterface mock_tab;
   std::unique_ptr<content::WebContents> web_contents =
@@ -188,5 +213,155 @@ TEST_F(GlicContextMenuInvocationHelperUnittest, HandleClickDisabled) {
       .Times(0);
   GlicContextMenuInvocationHelper::HandleContextualMenuClick(&mock_tab);
 }
+
+#if !BUILDFLAG(IS_ANDROID)
+class FakePageContextEligibilityHelper
+    : public tabs::PageContextEligibilityHelper {
+ public:
+  explicit FakePageContextEligibilityHelper(tabs::TabInterface& tab)
+      : tabs::PageContextEligibilityHelper(tab) {}
+  optimization_guide::PageContextEligibilityStatus IsPageContextEligible()
+      const override {
+    return optimization_guide::PageContextEligibilityStatus::kEligible;
+  }
+};
+
+TEST_F(GlicContextMenuInvocationHelperUnittest,
+       HandleClickWithTextSelectionDefaultTrustFirst) {
+  feature_list_.InitWithFeatures({features::kGlic, features::kGlicContextMenu,
+                                  features::kGlicTextSelectionContextMenu},
+                                 {});
+
+  tabs::MockTabInterface mock_tab;
+  std::unique_ptr<content::WebContents> web_contents =
+      content::WebContents::Create(
+          content::WebContents::CreateParams(profile_.get()));
+  ON_CALL(mock_tab, GetContents())
+      .WillByDefault(testing::Return(web_contents.get()));
+
+  FakePageContextEligibilityHelper fake_helper(mock_tab);
+
+  EXPECT_CALL(*mock_service_,
+              Invoke(TargetTabAndFreOverride(
+                  &mock_tab, glic::mojom::FreOverride::kTrustFirstClick)))
+      .Times(1);
+  GlicContextMenuInvocationHelper::HandleContextualMenuClick(
+      &mock_tab, u"Selected text to ask Gemini");
+}
+
+TEST_F(GlicContextMenuInvocationHelperUnittest,
+       HandleClickWithTextSelectionMessageFirst) {
+  feature_list_.InitWithFeaturesAndParameters(
+      {{features::kGlic, {}},
+       {features::kGlicContextMenu, {}},
+       {features::kGlicTextSelectionContextMenu,
+        {{features::kGlicTextSelectionContextMenuMessageFirstFre.name,
+          "true"}}}},
+      {});
+
+  tabs::MockTabInterface mock_tab;
+  std::unique_ptr<content::WebContents> web_contents =
+      content::WebContents::Create(
+          content::WebContents::CreateParams(profile_.get()));
+  ON_CALL(mock_tab, GetContents())
+      .WillByDefault(testing::Return(web_contents.get()));
+
+  FakePageContextEligibilityHelper fake_helper(mock_tab);
+
+  EXPECT_CALL(*mock_service_,
+              Invoke(TargetTabAndFreOverride(
+                  &mock_tab, glic::mojom::FreOverride::kTrustFirstInline)))
+      .Times(1);
+  GlicContextMenuInvocationHelper::HandleContextualMenuClick(
+      &mock_tab, u"Selected text to ask Gemini");
+}
+
+// Enables auto-submit without the message-first FRE.
+class GlicContextMenuInvocationHelperTextSelectionAutoSubmitUnittest
+    : public GlicContextMenuInvocationHelperUnittest {
+ public:
+  GlicContextMenuInvocationHelperTextSelectionAutoSubmitUnittest() {
+    feature_list_.InitWithFeaturesAndParameters(
+        {{features::kGlic, {}},
+         {features::kGlicContextMenu, {}},
+         {features::kGlicTextSelectionContextMenu,
+          {{features::kGlicTextSelectionContextMenuAutoSubmit.name, "true"}}}},
+        {});
+  }
+};
+
+TEST_F(GlicContextMenuInvocationHelperTextSelectionAutoSubmitUnittest,
+       HandleClickAutoSubmitsDefaultPrompt) {
+  tabs::MockTabInterface mock_tab;
+  std::unique_ptr<content::WebContents> web_contents =
+      content::WebContents::Create(
+          content::WebContents::CreateParams(profile_.get()));
+  ON_CALL(mock_tab, GetContents())
+      .WillByDefault(testing::Return(web_contents.get()));
+
+  FakePageContextEligibilityHelper fake_helper(mock_tab);
+
+  EXPECT_CALL(*mock_service_, Invoke(testing::_)).Times(0);
+  EXPECT_CALL(
+      *mock_service_,
+      InvokeWithAutoSubmit(
+          testing::_,
+          testing::AllOf(
+              TargetTabAndFreOverride(
+                  &mock_tab, glic::mojom::FreOverride::kTrustFirstClick),
+              testing::Field(
+                  &GlicInvokeOptions::prompts,
+                  testing::ElementsAre(l10n_util::GetStringUTF8(
+                      IDS_GLIC_SELECTION_AUTO_SEND_PROMPT_TELL_ME))))))
+      .Times(1);
+  GlicContextMenuInvocationHelper::HandleContextualMenuClick(
+      &mock_tab, u"Selected text to ask Gemini");
+}
+
+// Enables auto-submit together with the message-first FRE.
+class GlicContextMenuInvocationHelperTextSelectionAutoSubmitMessageFirstUnittest
+    : public GlicContextMenuInvocationHelperUnittest {
+ public:
+  GlicContextMenuInvocationHelperTextSelectionAutoSubmitMessageFirstUnittest() {
+    feature_list_.InitWithFeaturesAndParameters(
+        {{features::kGlic, {}},
+         {features::kGlicContextMenu, {}},
+         {features::kGlicTextSelectionContextMenu,
+          {{features::kGlicTextSelectionContextMenuMessageFirstFre.name,
+            "true"},
+           {features::kGlicTextSelectionContextMenuAutoSubmit.name, "true"}}}},
+        {});
+  }
+};
+
+TEST_F(
+    GlicContextMenuInvocationHelperTextSelectionAutoSubmitMessageFirstUnittest,
+    HandleClickAutoSubmitsWithInlineFre) {
+  tabs::MockTabInterface mock_tab;
+  std::unique_ptr<content::WebContents> web_contents =
+      content::WebContents::Create(
+          content::WebContents::CreateParams(profile_.get()));
+  ON_CALL(mock_tab, GetContents())
+      .WillByDefault(testing::Return(web_contents.get()));
+
+  FakePageContextEligibilityHelper fake_helper(mock_tab);
+
+  EXPECT_CALL(*mock_service_, Invoke(testing::_)).Times(0);
+  EXPECT_CALL(
+      *mock_service_,
+      InvokeWithAutoSubmit(
+          testing::_,
+          testing::AllOf(
+              TargetTabAndFreOverride(
+                  &mock_tab, glic::mojom::FreOverride::kTrustFirstInline),
+              testing::Field(
+                  &GlicInvokeOptions::prompts,
+                  testing::ElementsAre(l10n_util::GetStringUTF8(
+                      IDS_GLIC_SELECTION_AUTO_SEND_PROMPT_TELL_ME))))))
+      .Times(1);
+  GlicContextMenuInvocationHelper::HandleContextualMenuClick(
+      &mock_tab, u"Selected text to ask Gemini");
+}
+#endif
 
 }  // namespace glic

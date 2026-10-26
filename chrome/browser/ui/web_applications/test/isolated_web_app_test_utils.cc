@@ -17,10 +17,10 @@
 #include "chrome/browser/apps/app_service/browser_app_launcher.h"
 #include "chrome/browser/chrome_browser_main.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/isolated_web_apps/commands/install_isolated_web_app_command.h"
@@ -43,6 +43,7 @@
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/common/web_app_id.h"
 #include "components/webapps/isolated_web_apps/types/iwa_origin.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test_utils.h"
@@ -175,13 +176,13 @@ content::RenderFrameHost* IsolatedWebAppBrowserTestHarness::OpenApp(
 
 content::RenderFrameHost*
 IsolatedWebAppBrowserTestHarness::NavigateToURLInNewTab(
-    Browser* window,
+    BrowserWindowInterface* window,
     const GURL& url,
     WindowOpenDisposition disposition) {
   auto new_contents = content::WebContents::Create(
       content::WebContents::CreateParams(browser()->GetProfile()));
-  window->tab_strip_model()->AppendWebContents(std::move(new_contents),
-                                               /*foreground=*/true);
+  window->GetTabStripModel()->AppendWebContents(std::move(new_contents),
+                                                /*foreground=*/true);
   return ui_test_utils::NavigateToURLWithDisposition(
       window, url, disposition, ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 }
@@ -201,7 +202,7 @@ UpdateDiscoveryTaskResultWaiter::~UpdateDiscoveryTaskResultWaiter() = default;
 // IsolatedWebAppUpdateManager::Observer:
 void UpdateDiscoveryTaskResultWaiter::OnUpdateDiscoverAndPrepareTaskCompleted(
     const webapps::AppId& app_id,
-    IsolatedWebAppUpdateCheckAndPrepareTask::CompletionStatus status) {
+    IwaUpdateCheckAndPrepareResult status) {
   if (app_id != expected_app_id_) {
     return;
   }

@@ -123,14 +123,7 @@ bool ShouldPaintEmphasisMark(const ComputedStyle& style,
     return false;
   }
 
-  if (RuntimeEnabledFeatures::TextEmphasisWithRubyEnabled()) {
-    return true;
-  }
-
-  if (style.GetTextEmphasisLineLogicalSide() == LineLogicalSide::kOver) {
-    return !text_item.HasOverAnnotation();
-  }
-  return !text_item.HasUnderAnnotation();
+  return true;
 }
 
 bool IsDecorationSkipSpace(UChar c) {
@@ -158,13 +151,12 @@ Vector<gfx::RectF> ComputeInteriorSpaceRects(const FragmentItem& text_item,
     return rects;
   }
 
-  const string_size_t len = item_text.length();
-  const string_size_t item_start = text_item.StartOffset();
-  string_size_t last_non_space =
-      item_text.ReverseFind(IsNotDecorationSkipSpace);
+  const wtf_size_t len = item_text.length();
+  const wtf_size_t item_start = text_item.StartOffset();
+  wtf_size_t last_non_space = item_text.ReverseFind(IsNotDecorationSkipSpace);
 
   // Skip leading spaces.
-  string_size_t i = item_text.Find(IsNotDecorationSkipSpace);
+  wtf_size_t i = item_text.Find(IsNotDecorationSkipSpace);
   // Walk through the non-space portions; collect space runs encountered between
   // two non-space characters.
   while (i < len) {
@@ -175,9 +167,9 @@ Vector<gfx::RectF> ComputeInteriorSpaceRects(const FragmentItem& text_item,
     }
 
     // Found a space run starting at i. Find its end.
-    string_size_t space_start = i;
+    wtf_size_t space_start = i;
     i = item_text.Find(IsNotDecorationSkipSpace, i);
-    string_size_t space_end = i;
+    wtf_size_t space_end = i;
 
     // If this space run starts after the last non-space character, it is a
     // trailing run — stop (handled separately via SpaceSkipWidths).
@@ -207,11 +199,11 @@ SpaceSkipWidths ComputeSpaceSkipWidths(const FragmentItem& text_item,
     return result;
   }
 
-  const string_size_t item_start = text_item.StartOffset();
-  const string_size_t item_end = text_item.EndOffset();
+  const wtf_size_t item_start = text_item.StartOffset();
+  const wtf_size_t item_end = text_item.EndOffset();
   if (check_start && EnumHasFlags(skip, TextDecorationSkipSpaces::kStart)) {
     // Find how many leading spaces are in this item.
-    string_size_t i = item_text.Find(IsNotDecorationSkipSpace);
+    wtf_size_t i = item_text.Find(IsNotDecorationSkipSpace);
     i = (i == kNotFound) ? item_text.length() : i;
     if (i > 0) {
       auto [left, right] = text_item.LineLeftAndRightForOffsets(
@@ -222,9 +214,9 @@ SpaceSkipWidths ComputeSpaceSkipWidths(const FragmentItem& text_item,
 
   if (check_end && EnumHasFlags(skip, TextDecorationSkipSpaces::kEnd)) {
     // Find how many trailing spaces are in this item.
-    const string_size_t len = item_text.length();
-    string_size_t pos = item_text.ReverseFind(IsNotDecorationSkipSpace);
-    string_size_t i = (pos == kNotFound) ? 0 : pos + 1;
+    const wtf_size_t len = item_text.length();
+    wtf_size_t pos = item_text.ReverseFind(IsNotDecorationSkipSpace);
+    wtf_size_t i = (pos == kNotFound) ? 0 : pos + 1;
     if (i < len) {
       auto [left, right] = text_item.LineLeftAndRightForOffsets(
           item_text, item_start + i, item_end);
@@ -291,7 +283,7 @@ void TextFragmentPainter::PaintSymbol(const LayoutObject* layout_object,
                                       const PhysicalSize box_size,
                                       const PaintInfo& paint_info,
                                       const PhysicalOffset& paint_offset) {
-  const AtomicString& type = LayoutCounter::ListStyle(layout_object, style);
+  const AtomicString type = LayoutCounter::ListStyle(layout_object, style);
   PhysicalRect marker_rect(
       ListMarker::RelativeSymbolMarkerRect(style, type, box_size.width));
   marker_rect.Move(paint_offset);
@@ -306,7 +298,7 @@ void TextFragmentPainter::PaintSymbol(const LayoutObject* layout_object,
   }
 #endif
   GraphicsContext& context = paint_info.context;
-  Color color(layout_object->ResolveColor(GetCSSPropertyColor()));
+  Color color(layout_object->ResolveColor(GetCSSPropertyWebkitTextFillColor()));
   if (BoxModelObjectPainter::ShouldForceWhiteBackgroundForPrintEconomy(
           layout_object->GetDocument(), style)) {
     color = TextPainter::TextColorForWhiteBackground(color);
@@ -443,8 +435,7 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
     // and nested ruby annotation exist on the same side.
     bool has_over_text_emphasis =
         style.GetTextEmphasisLineLogicalSide() == LineLogicalSide::kOver;
-    if (RuntimeEnabledFeatures::TextEmphasisWithRubyEnabled() &&
-        ShouldPaintEmphasisMark(style, *layout_object, text_item) &&
+    if (ShouldPaintEmphasisMark(style, *layout_object, text_item) &&
         ((has_over_text_emphasis && text_item.HasOverAnnotation()) ||
          (!has_over_text_emphasis && text_item.HasUnderAnnotation()))) {
       gfx::Rect emphasis_rect = visual_rect;
@@ -541,6 +532,8 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
   TextPainter text_painter(context, paint_info.GetSvgContextPaints(), *font,
                            visual_rect, text_origin);
 
+  const bool has_applied_text_decorations = style.HasAppliedTextDecorations();
+
   // Apply text-decoration-skip-spaces by trimming the decoration box.
   LineRelativeRect decoration_box = rotated_box;
   const TextDecorationSkipSpaces skip_spaces =
@@ -552,7 +545,7 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
   // decoration canvas after the writing-mode rotation is applied.
   Vector<gfx::RectF> interior_space_rects;
   if (skip_spaces != TextDecorationSkipSpaces::kNone &&
-      style.HasAppliedTextDecorations()) {
+      has_applied_text_decorations) {
     const bool is_first_text_on_line = [&]() -> bool {
       if (cursor_.IsAtFirst()) {
         return true;
@@ -639,16 +632,21 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
     }
   }
 
-  TextDecorationPainter decoration_painter(text_painter, inline_context_,
-                                           paint_info, style, text_style,
-                                           decoration_box, selection);
+  TextDecorationFragmentContext fragment_context;
+  if (has_applied_text_decorations &&
+      TextDecorationInfo::NeedsFragmentContextForInset(style)) {
+    fragment_context = ComputeTextDecorationFragmentContext(cursor_);
+  }
+  TextDecorationPainter decoration_painter(
+      text_painter, inline_context_, paint_info, style, text_style,
+      decoration_box, selection, fragment_context);
   HighlightPainter highlight_painter(
       fragment_paint_info, text_painter, decoration_painter, paint_info,
       cursor_, text_item, physical_box.offset, style, text_style, selection);
   // Pass the decoration_box to HighlightPainter so that the kOverlay path
   // respects text-decoration-skip-spaces trimming.
   if (skip_spaces != TextDecorationSkipSpaces::kNone &&
-      style.HasAppliedTextDecorations()) {
+      has_applied_text_decorations) {
     highlight_painter.SetOriginatingDecorationRect(decoration_box);
   }
   if (paint_info.phase == PaintPhase::kForeground) {
@@ -657,7 +655,7 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
         PhysicalRect clipped_rect = PhysicalRect(visual_rect);
         clipped_rect.Intersect(PhysicalRect(paint_info.GetCullRect().Rect()));
         mf_checker->NotifyPaintTextFragment(
-            clipped_rect, text->StyleRef().FontSize(),
+            clipped_rect, text->Style().FontSize(),
             paint_info.context.GetPaintController()
                 .CurrentPaintChunkProperties()
                 .Transform());
@@ -754,7 +752,7 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
       // Shadows must paint before decorations, but painting shadows in their
       // own pass is less efficient, so only do it when decorations are present.
       bool paint_shadows_first =
-          text_style.shadow && style.HasAppliedTextDecorations();
+          text_style.shadow && has_applied_text_decorations;
       if (paint_shadows_first) {
         highlight_painter.PaintOriginatingShadow(text_style, node_id);
       }
@@ -837,7 +835,7 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
       paint_info.phase != PaintPhase::kTextClip &&
       RuntimeEnabledFeatures::CSSCaretColorWithOptionalSecondValueEnabled(
           layout_object->GetDocument().GetExecutionContext()) &&
-      !layout_object->StyleRef().IsCaretTextColorAuto()) [[unlikely]] {
+      !layout_object->Style().IsCaretTextColorAuto()) [[unlikely]] {
     if (LocalFrame* frame = layout_object->GetDocument().GetFrame()) {
       block_caret_char_offset =
           frame->Selection().ComputeBlockCaretCharacterOffset(cursor_);
@@ -845,7 +843,7 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
   }
   if (block_caret_char_offset) [[unlikely]] {
     std::optional<Color> block_text_color =
-        layout_object->StyleRef().ResolvedCaretTextColor();
+        layout_object->Style().ResolvedCaretTextColor();
     if (block_text_color) {
       TextPaintStyle block_style = text_style;
       block_style.fill_color = *block_text_color;

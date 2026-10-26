@@ -20,18 +20,14 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback_list.h"
 #include "base/check.h"
 #include "base/compiler_specific.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/native_library.h"
-#include "base/scoped_native_library.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -47,7 +43,6 @@
 #include "base/win/post_async_results.h"
 #include "base/win/scoped_hstring.h"
 #include "chrome/browser/enterprise/platform_auth/cloud_ap_utils_win.h"
-#include "chrome/browser/enterprise/platform_auth/platform_auth_features.h"
 #include "components/policy/core/common/policy_logger.h"
 #include "net/cookies/cookie_util.h"
 #include "net/http/http_request_headers.h"
@@ -171,8 +166,8 @@ ComPtr<IProofOfPossessionCookieInfoManager> MakeCookieInfoManager(
 
   // There is no need for SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY here
   // since this task is posted at USER_VISIBLE priority.
-  DCHECK_NE(base::PlatformThread::GetCurrentThreadType(),
-            base::ThreadType::kBackground);
+  CHECK_NE(base::PlatformThread::GetCurrentThreadType(),
+           base::ThreadType::kBackground, base::NotFatalUntil::M161);
   base::win::AssertComInitialized();
 
   ComPtr<IProofOfPossessionCookieInfoManager> manager;
@@ -231,7 +226,7 @@ void ParseCookieInfo(const ProofOfPossessionCookieInfo* cookie_info,
 // user to authenticate to the IdP/STS at `url`.
 net::HttpRequestHeaders GetAuthData(const GURL& url) {
   base::win::AssertComInitialized();
-  DCHECK(url.is_valid());
+  CHECK(url.is_valid(), base::NotFatalUntil::M161);
 
   net::HttpRequestHeaders auth_headers;
   DWORD cookie_info_count = 0;
@@ -245,7 +240,7 @@ net::HttpRequestHeaders GetAuthData(const GURL& url) {
         manager->GetCookieInfoForUri(base::ASCIIToWide(url.spec()).c_str(),
                                      &cookie_info_count, &cookie_info);
     if (SUCCEEDED(hresult)) {
-      DCHECK(!cookie_info_count || cookie_info);
+      CHECK(!cookie_info_count || cookie_info, base::NotFatalUntil::M161);
       ParseCookieInfo(cookie_info, cookie_info_count, auth_headers);
       if (cookie_info)
         FreeProofOfPossessionCookieInfoArray(cookie_info, cookie_info_count);
@@ -280,8 +275,8 @@ net::HttpRequestHeaders GetAuthData(const GURL& url) {
 CloudApProviderWin::SupportLevel GetAadJoinSupportLevel() {
   // There is no need for `SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY` here
   // since this task is posted at `USER_VISIBLE` priority.
-  DCHECK_NE(base::PlatformThread::GetCurrentThreadType(),
-            base::ThreadType::kBackground);
+  CHECK_NE(base::PlatformThread::GetCurrentThreadType(),
+           base::ThreadType::kBackground, base::NotFatalUntil::M161);
 
   // If Azure AD join info retrieval fails, this feature is not supported.
   PDSREG_JOIN_INFO join_info = nullptr;
@@ -437,22 +432,27 @@ void CloudApProviderWin::FetchOrigins(FetchOriginsCallback on_fetch_complete) {
 void CloudApProviderWin::GetData(
     const GURL& url,
     PlatformAuthProviderManager::GetDataCallback callback) {
-  get_data_subscriptions_.push_back(
-      on_get_data_callback_list_.Add(std::move(callback)));
-  if (!base::ThreadPool::CreateCOMSTATaskRunner(
-           {base::TaskPriority::USER_BLOCKING,
-            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN, base::MayBlock()})
-           ->PostTaskAndReplyWithResult(
-               FROM_HERE, base::BindOnce(&GetAuthData, url),
-               base::BindOnce(&CloudApProviderWin::OnGetDataCallback,
-                              base::Unretained(this)))) {
-    OnGetDataCallback(net::HttpRequestHeaders());
+  if (total_enqueued_requests_ >= kMaxQueueSize) {
+    VLOG_POLICY(1, EXTENSIBLE_SSO)
+        << "[CloudAPAuthEnabled] Enqueued requests limit (" << kMaxQueueSize
+        << ") exceeded. Failing request.";
+    base::UmaHistogramBoolean(
+        "Enterprise.PlatformAuth.GetAuthData.QueueOverflow", true);
+    // Global queue limit exceeded, fail the request asynchronously.
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), net::HttpRequestHeaders()));
+    return;
   }
-}
 
-void CloudApProviderWin::OnGetDataCallback(
-    net::HttpRequestHeaders auth_headers) {
-  on_get_data_callback_list_.Notify(std::move(auth_headers));
+  total_enqueued_requests_++;
+  auto& callbacks = request_queues_[url];
+  bool is_first_request = callbacks.empty();
+  callbacks.push_back(std::move(callback));
+
+  if (is_first_request) {
+    StartFetch(url);
+  }
 }
 
 // static
@@ -470,6 +470,40 @@ void CloudApProviderWin::ParseCookieInfoForTesting(
     const DWORD cookie_info_count,
     net::HttpRequestHeaders& auth_headers) {
   ParseCookieInfo(cookie_info, cookie_info_count, auth_headers);
+}
+
+void CloudApProviderWin::StartFetch(const GURL& url) {
+  if (!base::ThreadPool::CreateCOMSTATaskRunner(
+           {base::TaskPriority::USER_BLOCKING,
+            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN, base::MayBlock()})
+           ->PostTaskAndReplyWithResult(
+               FROM_HERE, base::BindOnce(&GetAuthData, url),
+               base::BindOnce(&CloudApProviderWin::OnFetchCompleted,
+                              weak_factory_.GetWeakPtr(), url))) {
+    OnFetchCompleted(url, net::HttpRequestHeaders());
+  }
+}
+
+void CloudApProviderWin::OnFetchCompleted(
+    const GURL& url,
+    net::HttpRequestHeaders auth_headers) {
+  auto it = request_queues_.find(url);
+  CHECK(it != request_queues_.end());
+  CHECK(!it->second.empty());
+
+  std::vector<PlatformAuthProviderManager::GetDataCallback> callbacks =
+      std::move(it->second);
+  request_queues_.erase(it);
+
+  CHECK_GE(total_enqueued_requests_, callbacks.size());
+  total_enqueued_requests_ -= callbacks.size();
+
+  for (size_t i = 0; i < callbacks.size(); ++i) {
+    auto callback = std::move(callbacks[i]);
+    net::HttpRequestHeaders headers =
+        (i + 1 == callbacks.size()) ? std::move(auth_headers) : auth_headers;
+    std::move(callback).Run(std::move(headers));
+  }
 }
 
 }  // namespace enterprise_auth

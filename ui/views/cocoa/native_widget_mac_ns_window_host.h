@@ -12,7 +12,9 @@
 #include <utility>
 #include <vector>
 
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
+#include "base/timer/timer.h"
 #include "components/remote_cocoa/app_shim/native_widget_ns_window_host_helper.h"
 #include "components/remote_cocoa/app_shim/ns_view_ids.h"
 #include "components/remote_cocoa/browser/application_host.h"
@@ -24,6 +26,7 @@
 #include "ui/accelerated_widget_mac/accelerated_widget_mac.h"
 #include "ui/base/cocoa/accessibility_focus_overrider.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/color/color_provider_key.h"
 #include "ui/compositor/layer_owner.h"
 #include "ui/views/cocoa/drag_drop_client_mac.h"
@@ -107,7 +110,7 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
     return native_widget_mac_;
   }
   NativeWidgetMacNSWindowHost* parent() const { return parent_; }
-  std::vector<NativeWidgetMacNSWindowHost*> children() const {
+  const std::vector<raw_ptr<NativeWidgetMacNSWindowHost>>& children() const {
     return children_;
   }
 
@@ -145,6 +148,10 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   remote_cocoa::NativeWidgetNSWindowBridge* GetInProcessNSWindowBridge() const {
     return in_process_ns_window_bridge_.get();
   }
+
+  // Request a video capture lock to prevent the compositor from being hidden
+  // while video capture is active.
+  [[nodiscard]] base::ScopedClosureRunner CreateVideoCaptureLock();
 
   TooltipManager* tooltip_manager() { return tooltip_manager_.get(); }
 
@@ -268,6 +275,12 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   // space.
   bool IsVisibleOnScreen() const { return is_visible_ && is_on_active_space_; }
 
+  // Exposes the timer that debounces becoming occluded, so tests can check
+  // whether a hide is pending and fire it without waiting.
+  base::OneShotTimer& occlusion_hide_timer_for_testing() {
+    return occlusion_hide_timer_;
+  }
+
   void SetVisibilityState(remote_cocoa::mojom::WindowVisibilityState new_state);
 
   // Add a NSEvent local event monitor, which will send events to `client`
@@ -293,6 +306,9 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
 
   // Set the color mode of the window.
   void SetColorMode(ui::ColorProviderKey::ColorMode color_mode);
+
+  // Synchronize layer opaqueness and compositor background color.
+  void SetLayerAndCompositorOpaque(bool opaque);
 
  private:
   friend class TextInputHost;
@@ -330,7 +346,6 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
                  gfx::Point* baseline_point) override;
   remote_cocoa::DragDropClient* GetDragDropClient() override;
   ui::TextInputClient* GetTextInputClient() override;
-  bool MustPostTaskToRunModalSheetAnimation() const override;
 
   // remote_cocoa::ApplicationHost::Observer:
   void OnApplicationHostDestroying(
@@ -339,6 +354,7 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   // remote_cocoa::mojom::NativeWidgetNSWindowHost:
   void OnVisibilityChanged(bool visible) override;
   void OnSpaceActivationChanged(bool is_on_active_space) override;
+  void OnWindowOcclusionChanged(bool occluded) override;
   void OnWindowNativeThemeChanged() override;
   void OnViewSizeChanged(const gfx::Size& new_size) override;
   bool GetSheetOffsetY(int32_t* offset_y) override;
@@ -501,7 +517,7 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
 
   // Parent and child widgets.
   raw_ptr<NativeWidgetMacNSWindowHost> parent_ = nullptr;
-  std::vector<NativeWidgetMacNSWindowHost*> children_;
+  std::vector<raw_ptr<NativeWidgetMacNSWindowHost>> children_;
 
   // The factory that was used to create |remote_ns_window_remote_|. This must
   // be the same as |parent_->application_host_|.
@@ -573,7 +589,8 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
 
   // Weak pointers to event monitors for this widget. The event monitors
   // themselves will remove themselves from this list.
-  std::list<NativeWidgetMacEventMonitor*> event_monitors_;
+  std::list<raw_ptr<NativeWidgetMacEventMonitor, DanglingUntriaged>>
+      event_monitors_;
 
   std::unique_ptr<ui::RecyclableCompositorMac> compositor_;
   std::unique_ptr<remote_cocoa::ScopedCGWindowID> scoped_cg_window_id_;
@@ -593,6 +610,27 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
 
   mojo::AssociatedReceiver<remote_cocoa::mojom::NativeWidgetNSWindowHost>
       remote_ns_window_host_receiver_{this};
+
+  void UpdateCompositorVisibility();
+  void OnVideoCaptureLockDestroyed();
+
+  // Applies a pending occlusion once `occlusion_hide_timer_` fires.
+  void ApplyOcclusion();
+  // Clears the occlusion state (applied or pending). Updates compositor
+  // visibility if `update_compositor` is true and the applied state changed.
+  void ResetOcclusion(bool update_compositor);
+
+  // Number of active video capture locks.
+  uint32_t video_capture_count_ = 0;
+
+  // Debounced occlusion state, as reported by WebContentsOcclusionCheckerMac.
+  // Only affects compositor visibility (behind
+  // `features::kNotifyCompositorOfWindowOcclusionOnMacOs`), not
+  // IsVisibleOnScreen().
+  bool is_occluded_ = false;
+  // Delays applying `is_occluded_ = true`, to avoid compositor churn on brief
+  // occlusions. Becoming unoccluded is applied immediately.
+  base::OneShotTimer occlusion_hide_timer_;
 
   base::ScopedObservation<View, ViewObserver> root_view_observation_{this};
 

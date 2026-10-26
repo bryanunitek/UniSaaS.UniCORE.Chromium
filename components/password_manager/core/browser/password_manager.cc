@@ -466,7 +466,6 @@ void SignalFormSubmissionIfEligibleForSaving(PasswordFormManager* manager,
 
 #endif
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 bool HasManuallyFilledFields(const PasswordForm& form) {
   return std::ranges::any_of(
       form.form_data.fields(), [&](const autofill::FormFieldData& field) {
@@ -474,7 +473,6 @@ bool HasManuallyFilledFields(const PasswordForm& form) {
                autofill::FieldPropertiesFlags::kAutofilledOnUserTrigger;
       });
 }
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
 void RecordProvisionalSaveFailure(
     password_manager::PasswordManagerClient* client,
@@ -511,6 +509,16 @@ bool HasManuallyFilledPassword(const PasswordForm& form) {
         return field_data.IsPasswordInputElement() &&
                (field_data.properties_mask() &
                 (autofill::FieldPropertiesFlags::kAutofilledOnUserTrigger));
+      });
+}
+
+bool HasActorFilledPassword(const PasswordForm& form) {
+  return std::ranges::any_of(
+      form.form_data.fields(),
+      [&](const autofill::FormFieldData& field_data) -> bool {
+        return field_data.IsPasswordInputElement() &&
+               (field_data.properties_mask() &
+                autofill::FieldPropertiesFlags::kAutofilledActorLogin);
       });
 }
 
@@ -564,6 +572,9 @@ void PasswordManager::RegisterProfilePrefs(
                              base::Time());
   registry->RegisterBooleanPref(prefs::kWereOldGoogleLoginsRemoved, false);
   registry->RegisterBooleanPref(prefs::kCredentialsEnablePasskeys, true);
+  registry->RegisterBooleanPref(prefs::kAutomatedPasswordChangeEnabled, true);
+  registry->RegisterBooleanPref(
+      prefs::kPasswordChangeWithPrivateInferenceNoticeAgreement, false);
 
 #if BUILDFLAG(IS_APPLE)
   registry->RegisterIntegerPref(prefs::kKeychainMigrationStatus,
@@ -728,7 +739,11 @@ void PasswordManager::OnPresaveGeneratedPassword(
   UMA_HISTOGRAM_BOOLEAN("PasswordManager.GeneratedFormHasNoFormManager",
                         !form_manager);
   if (form_manager) {
-    form_manager->PresaveGeneratedPassword(form_data, generated_password);
+    // TODO(crbug.com/513276101): Explicit construction of std::u16string
+    // R-Value to be removed once OnPresaveGeneratedPassword converted to take
+    // PasswordString
+    form_manager->PresaveGeneratedPassword(
+        form_data, PasswordString(std::u16string(generated_password)));
 #if BUILDFLAG(IS_IOS)
     // On iOS some field values are not propagated to PasswordManager timely.
     // Provisionally save entire |form_data| to make sure the form is parsed
@@ -1017,12 +1032,21 @@ void PasswordManager::OnInformAboutUserInput(PasswordManagerDriver* driver,
       manager && manager->GetSubmittedForm() &&
       HasManuallyFilledPassword(*(manager->GetSubmittedForm()));
 
+  const bool had_actor_filled_password_before =
+      manager && manager->GetSubmittedForm() &&
+      HasActorFilledPassword(*(manager->GetSubmittedForm()));
+
   manager = ProvisionallySaveForm(form_data, driver, true);
 
-  if (manager && !had_manually_filled_password_before) {
-    if (const PasswordForm* form = manager->GetSubmittedForm();
-        form && HasManuallyFilledPassword(*form)) {
-      manager->OnPasswordFilledManually();
+  if (manager) {
+    if (const PasswordForm* form = manager->GetSubmittedForm(); form) {
+      if (!had_manually_filled_password_before &&
+          HasManuallyFilledPassword(*form)) {
+        manager->OnPasswordFilledManually();
+      }
+      if (!had_actor_filled_password_before && HasActorFilledPassword(*form)) {
+        client_->OnPasswordFilled(driver);
+      }
     }
   }
 
@@ -1170,7 +1194,7 @@ PasswordFormManager* PasswordManager::CreateFormManager(
       /*metrics_recorder=*/nullptr);
   // Process model and server predictions in case they've already arrived.
   if (auto model_form_predictions = classifier_model_predictions_.find(
-          std::make_pair(&driver, form.renderer_id()));
+          std::make_pair(driver.GetId(), form.renderer_id()));
       model_form_predictions != classifier_model_predictions_.end()) {
     manager->ProcessModelPredictions(model_form_predictions->second);
   }
@@ -1293,11 +1317,9 @@ void PasswordManager::OnNonPasswordLoginDetected() {
     return;
   }
 
-  if (base::FeatureList::IsEnabled(features::kPreventAPCOnFederatedLogin)) {
-    PasswordFormManager* manager = GetSubmittedManager();
-    if (manager) {
-      manager->SetNonPasswordLoginDetected(true);
-    }
+  PasswordFormManager* manager = GetSubmittedManager();
+  if (manager) {
+    manager->SetNonPasswordLoginDetected(true);
   }
 }
 
@@ -1619,9 +1641,7 @@ void PasswordManager::OnLoginSuccessful() {
   const PasswordForm* submitted_form = submitted_manager->GetSubmittedForm();
   CHECK(submitted_form);
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   MaybeTriggerHatsSurvey(*submitted_manager);
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
   // User might fill several login flows during their user journey. For example,
   // Forgot Password Flow followed by sign-in flow. To not suggest usernames
@@ -1661,7 +1681,8 @@ void PasswordManager::OnLoginSuccessful() {
       password_manager_util::IsSavingBlockedByTrustedVaultError(
           client_, submitted_manager);
   bool able_to_save_passwords_after_fixing_recoverable_error =
-      password_manager_util::IsSavingBlockedByRecoverableError(client_);
+      password_manager_util::IsSavingBlockedByRecoverableError(
+          client_, submitted_manager);
   base::UmaHistogramBoolean(
       "PasswordManager.AbleToSavePasswordsOnSuccessfulLogin",
       able_to_save_passwords);
@@ -1761,9 +1782,7 @@ void PasswordManager::OnLoginFailed(PasswordManagerDriver* driver,
   CHECK(submitted_manager);
   submitted_manager->GetMetricsRecorder()->LogSubmitFailed();
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   MaybeTriggerHatsSurvey(*submitted_manager);
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   HandleFailedLoginDetectionForPasswordChange(client_, driver,
                                               *submitted_manager);
 
@@ -1859,10 +1878,10 @@ void PasswordManager::ProcessClassificationModelPredictions(
   RecordMetricsForModelPredictions(field_predictions,
                                    client_->GetUkmSourceId());
 
-  // A combination of driver and form renderer id allow to identify fields
+  // A combination of driver id and form renderer id allow to identify fields
   // uniquely, so only the renderer ids need to be kept (not global ids).
   auto& predictions_for_form = classifier_model_predictions_[std::make_pair(
-      driver, form.renderer_id())] =
+      CHECK_DEREF(driver).GetId(), form.renderer_id())] =
       KeyPredictionsByRendererIds(field_predictions);
 
   if (auto logger = password_manager_util::GetLoggerIfAvailable(client_)) {
@@ -2052,19 +2071,17 @@ bool PasswordManager::IsFormManagerPendingPasswordUpdate() const {
          owned_submitted_form_manager_->IsPasswordUpdate();
 }
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 void PasswordManager::MaybeTriggerHatsSurvey(
     PasswordFormManager& form_manager) {
   const PasswordForm* submitted_form = form_manager.GetSubmittedForm();
   if (submitted_form && HasManuallyFilledFields(*submitted_form) &&
       base::FeatureList::IsEnabled(
-          features::kAutofillPasswordUserPerceptionSurvey)) {
-    client_->TriggerUserPerceptionOfPasswordManagerSurvey(
+          features::kAutofillPersonalizationAndTrustPasswordSurvey)) {
+    client_->TriggerPersonalizationAndTrustSurvey(
         form_manager.GetMetricsRecorder()
-            ->FillingAssinstanceToHatsInProductDataString());
+            ->FillingAssistanceToHatsInProductDataString());
   }
 }
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
 #if BUILDFLAG(IS_IOS)
 bool PasswordManager::DetectPotentialSubmission(

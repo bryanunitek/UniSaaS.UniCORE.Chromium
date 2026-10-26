@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
@@ -19,26 +20,27 @@
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/types/zip.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/crowdsourcing/disambiguate_possible_field_types.h"
 #include "components/autofill/core/browser/data_model/addresses/address.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_normalization_utils.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_normalization_util.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_comparator.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
-#include "components/autofill/core/browser/data_model/data_model_utils.h"
+#include "components/autofill/core/browser/data_model/data_model_util.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/data_model/valuables/loyalty_card.h"
 #include "components/autofill/core/browser/data_quality/validation.h"
-#include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/field_type_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/geo/alternative_state_name_map.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_import_util.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/form_field_data.h"
@@ -148,7 +150,7 @@ FindDatesAndSetFormatStrings(
   std::vector<std::pair<data_util::Date, PossibleTypes*>> dates;
 
   // Match formats against individual fields.
-  for (auto [field, pt] : base::zip(fields, possible_types)) {
+  for (auto [field, pt] : std::views::zip(fields, possible_types)) {
     if (!may_be_interesting(field) || !may_be_complete_date(field)) {
       continue;
     }
@@ -195,7 +197,7 @@ void FindAndSetPossibleCvcFieldTypes(
     base::span<const std::unique_ptr<AutofillField>> fields,
     base::span<PossibleTypes> possible_types) {
   if (!last_unlocked_credit_card_cvc.empty()) {
-    for (auto [field, pt] : base::zip(fields, possible_types)) {
+    for (auto [field, pt] : std::views::zip(fields, possible_types)) {
       if (last_unlocked_credit_card_cvc ==
           base::TrimWhitespace(field->value_for_import(), base::TRIM_ALL)) {
         pt.types.insert(CREDIT_CARD_VERIFICATION_CODE);
@@ -222,7 +224,7 @@ void FindAndSetPossibleCvcFieldTypes(
   // * it does not look like an expiration year or an expiration year was
   //   already found;
   // * it is filled with a 3-4 digit number;
-  for (auto [field, pt] : base::zip(fields, possible_types)) {
+  for (auto [field, pt] : std::views::zip(fields, possible_types)) {
     if (pt.types.contains(CREDIT_CARD_NUMBER)) {
       credit_card_number_found = true;
       continue;
@@ -287,8 +289,8 @@ void AddPossibleAutofillAiTypesForUnmaskedValue(
     FieldType field_type,
     PossibleTypes& pt) {
   // Test if `value_in_field` and `value_on_file` match.
-  bool full_match =
-      AutofillProfileComparator::Compare(value_in_field, value_on_file);
+  bool full_match = AutofillProfileComparator::Compare(
+      value_in_field, value_on_file, normalization::WhitespaceSpec::kDiscard);
   if (full_match) {
     pt.types.insert(field_type);
     if (IsAffixFormatStringEnabledForType(field_type)) {
@@ -339,6 +341,10 @@ void AddPossibleAutofillAiTypesForMaskedValue(
     std::u16string_view masked_value_on_file,
     FieldType field_type,
     PossibleTypes& pt) {
+  // Single digit values are too likely to cause collisions.
+  if (masked_value_on_file.size() == 1) {
+    return;
+  }
   // Since the full value is not available on file, look for a suffix match.
   if (value_in_field.ends_with(masked_value_on_file)) {
     pt.types.insert(field_type);
@@ -371,18 +377,34 @@ void AddPossibleAutofillAiTypes(base::span<const EntityInstance> entities,
     return;
   }
 
+  // Note that `NormalizeForComparison()` replaces punctuation with whitespaces,
+  // meaning that some of the validation logic in
+  // `ShouldImportValueForAttribute()` cannot be applied correctly.
+  // This applies to `value_on_file` as well.
   const std::u16string& value_in_field =
       normalization::NormalizeForComparison(value_u16);
   for (const EntityInstance& entity : entities) {
     for (const AttributeInstance& attribute : entity.attributes()) {
+      // Don't vote for values that AutofillAi wouldn't even import for the
+      // type.
+      if (!ShouldImportValueForAttribute(attribute.type(), value_in_field)) {
+        continue;
+      }
       for (const FieldType field_type : attribute.type().field_subtypes()) {
         const std::u16string& value_on_file =
             normalization::NormalizeForComparison(
                 attribute.GetInfo(field_type, app_locale, std::nullopt));
+        if (value_on_file.empty()) {
+          continue;
+        }
+        // It is necessary to validate the `value_on_file` because
+        // `ShouldImportValueForAttribute()` isn't enforced in settings.
+        // For masked attributes, validation is not possible.
         if (attribute.masked()) {
           AddPossibleAutofillAiTypesForMaskedValue(
               value_in_field, value_on_file, field_type, pt);
-        } else {
+        } else if (ShouldImportValueForAttribute(attribute.type(),
+                                                 value_on_file)) {
           AddPossibleAutofillAiTypesForUnmaskedValue(
               value_in_field, value_on_file, field_type, pt);
         }
@@ -421,19 +443,19 @@ void FindAndSetPossibleDateFieldTypesAndFormatStrings(
 
 void RationalizePossibleSplitZipFieldTypes(
     base::span<PossibleTypes> possible_types) {
-  bool is_prev_zip_prefix = false;
-
-  for (auto& possible_type : possible_types) {
+  for (auto it = possible_types.begin(); it != possible_types.end(); ++it) {
     // Voting for ADDRESS_HOME_ZIP_SUFFIX is allowed only if the previous field
     // had ADDRESS_HOME_ZIP_PREFIX as one of its possible types.
-    if (possible_type.types.contains(ADDRESS_HOME_ZIP_SUFFIX) &&
-        !is_prev_zip_prefix) {
-      possible_type.types.erase(ADDRESS_HOME_ZIP_SUFFIX);
+    if (it->types.contains(ADDRESS_HOME_ZIP_SUFFIX)) {
+      if (it == possible_types.begin() ||
+          !(it - 1)->types.contains(ADDRESS_HOME_ZIP_PREFIX)) {
+        it->types.erase(ADDRESS_HOME_ZIP_SUFFIX);
+      }
     }
 
-    // Votes for ADDRESS_HOME_ZIP_PREFIX are mapped to ADDRESS_HOME_ZIP
-    // to prevent unexpected voting results on international forms.
-    // On such forms with a single zip code field, American users often
+    // Votes for single ADDRESS_HOME_ZIP_PREFIX fields are mapped to
+    // ADDRESS_HOME_ZIP to prevent unexpected voting results on international
+    // forms. On such forms with a single zip code field, American users often
     // enter a 5-digit zip code. Since these 5-digit values correspond to both
     // ADDRESS_HOME_ZIP and ADDRESS_HOME_ZIP_PREFIX, they can cause votes
     // for ADDRESS_HOME_ZIP_PREFIX, while users from other countries
@@ -441,10 +463,12 @@ void RationalizePossibleSplitZipFieldTypes(
     // If ADDRESS_HOME_ZIP_PREFIX wins the vote, it could result in
     // partial zip values autofilled in Japan, Brazil, and other
     // countries with split zip code formats.
-    is_prev_zip_prefix = false;
-    if (possible_type.types.erase(ADDRESS_HOME_ZIP_PREFIX)) {
-      possible_type.types.insert(ADDRESS_HOME_ZIP);
-      is_prev_zip_prefix = true;
+    if (it->types.contains(ADDRESS_HOME_ZIP_PREFIX)) {
+      if (it + 1 == possible_types.end() ||
+          !(it + 1)->types.contains(ADDRESS_HOME_ZIP_SUFFIX)) {
+        it->types.erase(ADDRESS_HOME_ZIP_PREFIX);
+        it->types.insert(ADDRESS_HOME_ZIP);
+      }
     }
   }
 }
@@ -500,7 +524,7 @@ void FindAndSetPossibleOtpFieldTypes(
     return;
   }
 
-  for (auto [field, pt] : base::zip(fields, possible_types)) {
+  for (auto [field, pt] : std::views::zip(fields, possible_types)) {
     const std::string field_value_u8 = base::UTF16ToUTF8(
         base::TrimWhitespace(field->value_for_import(), base::TRIM_ALL));
 
@@ -535,9 +559,8 @@ std::set<FieldGlobalId> PreProcessStateMatchingTypes(
       continue;
     }
 
-    const std::u16string& country_code = profile->GetInfo(
-        AutofillType(ADDRESS_HOME_COUNTRY, /*is_country_code=*/true),
-        app_locale);
+    const std::string country_code =
+        base::UTF16ToUTF8(profile->GetRawInfo(ADDRESS_HOME_COUNTRY));
 
     for (auto& field : fields) {
       if (fields_that_match_state.contains(field->global_id())) {
@@ -547,7 +570,7 @@ std::set<FieldGlobalId> PreProcessStateMatchingTypes(
       std::optional<AlternativeStateNameMap::CanonicalStateName>
           canonical_state_name_from_text =
               AlternativeStateNameMap::GetCanonicalStateName(
-                  base::UTF16ToUTF8(country_code), field->value_for_import());
+                  country_code, field->value_for_import());
 
       if (canonical_state_name_from_text &&
           canonical_state_name_from_text.value() ==
@@ -569,11 +592,14 @@ std::vector<PossibleTypes> DeterminePossibleFieldTypesForUpload(
     base::span<const OneTimeToken> recent_otps,
     const std::string& app_locale,
     base::span<const std::unique_ptr<AutofillField>> fields) {
+  SCOPED_UMA_HISTOGRAM_TIMER(
+      "Autofill.Timing.DeterminePossibleFieldTypesForUpload");
+
   std::vector<PossibleTypes> possible_types;
   possible_types.resize(fields.size());
 
   // Most type detection happens in this loop.
-  for (auto [field, pt] : base::zip(fields, possible_types)) {
+  for (auto [field, pt] : std::views::zip(fields, possible_types)) {
     pt = GetPossibleTypes(*field, profiles, credit_cards, entities,
                           loyalty_cards, fields_that_match_state, app_locale);
   }
@@ -589,8 +615,7 @@ std::vector<PossibleTypes> DeterminePossibleFieldTypesForUpload(
   FindAndSetPossibleCvcFieldTypes(last_unlocked_credit_card_cvc, fields,
                                   possible_types);
 
-  if (!recent_otps.empty() &&
-      base::FeatureList::IsEnabled(features::kAutofillSmsOtpCrowdsourcing)) {
+  if (!recent_otps.empty()) {
     // OTPs are not stored, run special logic to detect OTP values.
     FindAndSetPossibleOtpFieldTypes(fields, recent_otps, possible_types);
   }
@@ -599,7 +624,7 @@ std::vector<PossibleTypes> DeterminePossibleFieldTypesForUpload(
     RationalizePossibleSplitZipFieldTypes(possible_types);
   }
 
-  for (auto [field, pt] : base::zip(fields, possible_types)) {
+  for (auto [field, pt] : std::views::zip(fields, possible_types)) {
     if (pt.types.empty()) {
       pt.types = {UNKNOWN_TYPE};
     }
@@ -638,8 +663,7 @@ FieldTypeSet DetermineAvailableFieldTypes(
     types.insert(LOYALTY_MEMBERSHIP_ID);
   }
 
-  if (!recent_otps.empty() &&
-      base::FeatureList::IsEnabled(features::kAutofillSmsOtpCrowdsourcing)) {
+  if (!recent_otps.empty()) {
     types.insert(ONE_TIME_CODE);
   }
   return types;

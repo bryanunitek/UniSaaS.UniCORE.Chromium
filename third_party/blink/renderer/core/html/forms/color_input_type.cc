@@ -174,10 +174,8 @@ String ColorInputType::SanitizeValue(const String& proposed_value) const {
     if (CssValueKeywordID(proposed_value) == CSSValueID::kCurrentcolor) {
       color = Color::kBlack;
     } else if (!CSSParser::ParseColor(color, proposed_value) &&
-               !CSSParser::ParseSystemColor(
-                   color, proposed_value, mojom::blink::ColorScheme::kLight,
-                   /*color_provider=*/nullptr,
-                   /*can_expose_accent_color=*/false)) {
+               !CSSParser::ParseSystemColor(color, proposed_value,
+                                            ColorThemeInfo{})) {
       // An unparsable value falls back to opaque black.
       color = Color::kBlack;
     }
@@ -194,10 +192,7 @@ String ColorInputType::SanitizeValue(const String& proposed_value) const {
     // Handle most color formats (hex, rgb, hsl, etc.) and System Colors (e.g.
     // "ActiveBorder").
     if (CSSParser::ParseColor(color, proposed_value) ||
-        CSSParser::ParseSystemColor(color, proposed_value,
-                                    mojom::blink::ColorScheme::kLight,
-                                    /*color_provider=*/nullptr,
-                                    /*can_expose_accent_color=*/false)) {
+        CSSParser::ParseSystemColor(color, proposed_value, ColorThemeInfo{})) {
       // If the input color has transparency, we drop the alpha channel (make
       // it opaque). Convert to sRGB and serialize as #rrggbb.
       return Color::FromRGBA32(color.MakeOpaque().Rgb())
@@ -254,10 +249,10 @@ void ColorInputType::HandleDOMActivateEvent(Event& event) {
     document.AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
         mojom::blink::ConsoleMessageSource::kJavaScript,
         mojom::blink::ConsoleMessageLevel::kWarning,
-        "A user gesture is required to show the color picker."));
+        "User activation is required to show the color picker."));
     return;
   }
-  if (RuntimeEnabledFeatures::FileColorPickerConsumeActivationEnabled()) {
+  if (!RuntimeEnabledFeatures::PopupWidgetRequiresUserActivationEnabled()) {
     LocalFrame::ConsumeTransientUserActivation(document.GetFrame());
   }
 
@@ -268,6 +263,10 @@ void ColorInputType::HandleDOMActivateEvent(Event& event) {
                           ? WebFeature::kColorInputTypeChooserByTrustedClick
                           : WebFeature::kColorInputTypeChooserByUntrustedClick);
     OpenPopupView();
+  }
+
+  if (RuntimeEnabledFeatures::PopupWidgetRequiresUserActivationEnabled()) {
+    LocalFrame::ConsumeTransientUserActivation(document.GetFrame());
   }
 
   event.SetDefaultHandled();
@@ -321,12 +320,12 @@ void ColorInputType::WarnIfValueIsInvalid(const String& value) const {
   if (RuntimeEnabledFeatures::InputTypeColorEnhancementsEnabled() ||
       RuntimeEnabledFeatures::ColorInputAcceptsCSSColorsEnabled()) {
     AddWarningToConsole(
-        "The specified value %s does not conform to the required format.  The "
+        "The specified value {} does not conform to the required format.  The "
         "value must be a valid CSS color.",
         value);
   } else {
     AddWarningToConsole(
-        "The specified value %s does not conform to the required format.  The "
+        "The specified value {} does not conform to the required format.  The "
         "format is \"#rrggbb\" where rr, gg, bb are two-digit hexadecimal "
         "numbers.",
         value);
@@ -404,6 +403,10 @@ gfx::Rect ColorInputType::ElementRectRelativeToLocalRoot() const {
 
 Color ColorInputType::CurrentColor() {
   return ValueAsColor();
+}
+
+bool ColorInputType::ShouldShowAlpha() const {
+  return HasAlphaComponent();
 }
 
 bool ColorInputType::ShouldShowSuggestions() const {

@@ -7,17 +7,16 @@ package org.chromium.chrome.browser.omnibox.suggestions.base;
 import android.content.Context;
 import android.view.KeyEvent;
 
-import androidx.annotation.Px;
 import androidx.annotation.VisibleForTesting;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.chromium.build.annotations.CheckDiscard;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.R;
-import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.RecyclerViewSelectionController;
-import org.chromium.chrome.browser.omnibox.suggestions.SelectionController;
+import org.chromium.chrome.browser.omnibox.suggestions.SelectionController.TraversalMode;
 import org.chromium.components.browser_ui.widget.chips.ChipView;
 import org.chromium.ui.base.KeyNavigationUtil;
 
@@ -28,6 +27,7 @@ import org.chromium.ui.base.KeyNavigationUtil;
 @NullMarked
 public class ActionChipsView extends RecyclerView {
     private RecyclerViewSelectionController mSelectionController;
+    private @Nullable SpacingRecyclerViewItemDecoration mItemDecoration;
 
     /**
      * Constructs a new pedal view.
@@ -44,7 +44,7 @@ public class ActionChipsView extends RecyclerView {
 
         mSelectionController =
                 new RecyclerViewSelectionController(
-                        layoutManager, SelectionController.Mode.SATURATING_WITH_SENTINEL);
+                        layoutManager, TraversalMode.SATURATING_WITH_SENTINEL);
         addOnChildAttachStateChangeListener(mSelectionController);
 
         setMinimumHeight(
@@ -55,13 +55,6 @@ public class ActionChipsView extends RecyclerView {
                 0,
                 0,
                 getResources().getDimensionPixelSize(R.dimen.omnibox_suggestion_content_padding));
-
-        final @Px int leadInSpace =
-                OmniboxResourceProvider.getSuggestionDecorationIconSizeWidth(context);
-        final @Px int elementSpace =
-                getResources().getDimensionPixelSize(R.dimen.omnibox_action_chip_spacing);
-
-        addItemDecoration(new SpacingRecyclerViewItemDecoration(leadInSpace, elementSpace));
     }
 
     @Override
@@ -81,8 +74,8 @@ public class ActionChipsView extends RecyclerView {
     }
 
     /**
-     * Proxy calls to super.onKeyDown; call exposed for testing purposes. There is no way to detect
-     * calls to super using robolectric.
+     * Proxies calls to super.onKeyDown; call exposed for testing purposes. There is no way to
+     * detect calls to super using robolectric.
      */
     @CheckDiscard("Should be inlined except for testing")
     @VisibleForTesting
@@ -95,19 +88,20 @@ public class ActionChipsView extends RecyclerView {
         mSelectionController.reset();
     }
 
-    void setSelectionControllerForTesting(RecyclerViewSelectionController controller) {
-        mSelectionController = controller;
-    }
-
     public void setLeadInSpacing(int spacing) {
-        if (getItemDecorationCount() > 0) {
-            assert getItemDecorationCount() == 1 : "Expected at most 1 decoration";
-            removeItemDecorationAt(0);
+        if (mItemDecoration != null) {
+            if (mItemDecoration.getLeadInSpace() == spacing) return;
+            removeItemDecoration(mItemDecoration);
         }
 
-        addItemDecoration(
+        mItemDecoration =
                 new SpacingRecyclerViewItemDecoration(
                         spacing,
-                        getResources().getDimensionPixelSize(R.dimen.omnibox_action_chip_spacing)));
+                        getResources().getDimensionPixelSize(R.dimen.omnibox_action_chip_spacing));
+        addItemDecoration(mItemDecoration);
+    }
+
+    void setSelectionControllerForTesting(RecyclerViewSelectionController controller) {
+        mSelectionController = controller;
     }
 }

@@ -208,6 +208,7 @@ class NavigationManagerImpl final : public NavigationManager {
   // TODO(crbug.com/41284081): Make this private once all navigation code is
   // moved out of CRWWebController.
   NavigationItemImpl* GetCurrentItemImpl() const;
+  bool IsRestoreSessionInProgress() const;
 
   // Implementation for corresponding NavigationManager getters.
   NavigationItemImpl* GetPendingItemImpl() const;
@@ -285,9 +286,15 @@ class NavigationManagerImpl final : public NavigationManager {
     // must call ReleaseCachedItems() first.
     void ResetToAttached();
 
+    // Transfer ownership of cached_items and current_item_index. Must only be
+    // called if detached from the WKWebView.
+    void SetCachedItems(
+        int current_item_index,
+        std::vector<std::unique_ptr<NavigationItemImpl>> cached_items);
+
     // Returns ownership of the cached NavigationItems. This is convenient for
     // restoring session history when reattaching to a new web view.
-    std::vector<std::unique_ptr<NavigationItem>> ReleaseCachedItems();
+    std::vector<std::unique_ptr<NavigationItemImpl>> ReleaseCachedItems();
 
     // Returns the number of items in the back-forward history.
     size_t GetBackForwardListItemCount() const;
@@ -351,12 +358,17 @@ class NavigationManagerImpl final : public NavigationManager {
   void AppendSessionDataBlobFetcher(SessionDataBlobFetcher loader,
                                     SessionDataBlobSource source);
 
+  // Internal implementation of the public method Restore(...) after casting
+  // the NavigationItem* to NavigationItemImpl.
+  void RestoreImpl(int last_committed_item_index,
+                   std::vector<std::unique_ptr<NavigationItemImpl>> items);
+
   // Restores the state of the `items_restored` in the navigation items
   // associated with the WKBackForwardList. `back_list` is used to specify if
   // the items passed are the list containing the back list or the forward list.
   void RestoreItemsState(
       RestoreItemListType list_type,
-      std::vector<std::unique_ptr<NavigationItem>> items_restored);
+      std::vector<std::unique_ptr<NavigationItemImpl>> items_restored);
 
   // Must be called by subclasses before restoring `item_count` navigation
   // items.
@@ -377,10 +389,6 @@ class NavigationManagerImpl final : public NavigationManager {
       HttpsUpgradeType https_upgrade_type,
       const GURL& previous_url,
       const std::vector<BrowserURLRewriter::URLRewriter>* url_rewriters) const;
-
-  // Returns the most recent NavigationItem with an URL that generates an HTTP
-  // request.
-  NavigationItem* GetLastCommittedItemWithUserAgentType() const;
 
   // Returns true if `last_committed_item` matches WKWebView.URL when expected.
   // WKWebView is more aggressive than Chromium is in updating the committed
@@ -466,7 +474,7 @@ class NavigationManagerImpl final : public NavigationManager {
   // becomes true until the first post-restore navigation is finished, so that
   // clients of this navigation manager gets sane values for visible title and
   // URL.
-  std::unique_ptr<NavigationItem> restored_visible_item_;
+  std::unique_ptr<NavigationItemImpl> restored_visible_item_;
 
   // Stores the different WKWebView session data blob loaders. Loaders are
   // tried in the order they are registered, and the native session loading

@@ -16,7 +16,6 @@ import '../settings_shared.css.js';
 import './power_optimized_charging_dialog.js';
 
 import {CrPolicyPrefMixin} from '/shared/settings/controls/cr_policy_pref_mixin.js';
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {CrButtonElement} from 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
@@ -32,7 +31,8 @@ import type {SettingsToggleButtonElement} from '../controls/settings_toggle_butt
 import type {SettingsToggleV2Element} from '../controls/v2/settings_toggle_v2.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {routes} from '../router.js';
 
 import type {BatteryStatus, DevicePageBrowserProxy, PowerManagementSettings, PowerSource} from './device_page_browser_proxy.js';
@@ -237,34 +237,34 @@ export class SettingsPowerElement extends SettingsPowerElementBase {
     Setting.kChargeLimit,
   ]);
 
-  private acIdleManaged_: boolean;
-  private acIdleOptions_: IdleOption[];
-  private adaptiveChargingSupported_: boolean;
-  private adaptiveChargingManaged_: boolean;
-  private adaptiveChargingPref_: chrome.settingsPrivate.PrefObject<boolean>;
-  private chargeLimitPref_: chrome.settingsPrivate.PrefObject<boolean>;
-  private optimizedChargingSublabel_: string;
-  private optimizedChargingDialogVisible_: boolean;
-  private selectedOptimizedChargingStrategy_: OptimizedChargingStrategy;
-  private optimizedChargingEnabled_: boolean;
-  private batteryIdleManaged_: boolean;
-  private batteryIdleOptions_: IdleOption[];
-  private batterySaverHidden_: boolean;
-  private batteryStatus_: BatteryStatus|undefined;
+  declare private acIdleManaged_: boolean;
+  declare private acIdleOptions_: IdleOption[];
+  declare private adaptiveChargingSupported_: boolean;
+  declare private adaptiveChargingManaged_: boolean;
+  declare private adaptiveChargingPref_: chrome.settingsPrivate.PrefObject<boolean>;
+  declare private chargeLimitPref_: chrome.settingsPrivate.PrefObject<boolean>;
+  declare private optimizedChargingSublabel_: string;
+  declare private optimizedChargingDialogVisible_: boolean;
+  declare private selectedOptimizedChargingStrategy_: OptimizedChargingStrategy;
+  declare private optimizedChargingEnabled_: boolean;
+  declare private batteryIdleManaged_: boolean;
+  declare private batteryIdleOptions_: IdleOption[];
+  declare private batterySaverHidden_: boolean;
+  declare private batteryStatus_: BatteryStatus|undefined;
   private browserProxy_: DevicePageBrowserProxy;
-  private hasLid_: boolean;
-  private lidClosedLabel_: string;
-  private lidClosedPref_: chrome.settingsPrivate.PrefObject<boolean>;
-  private isExternalPowerUSB_: boolean;
-  private isExternalPowerAC_: boolean;
-  private powerSourceLabel_: string;
-  private powerSourceName_: string;
-  private powerSources_: PowerSource[]|undefined;
-  private shouldAcIdleSelectBeDisabled_: boolean;
-  private shouldBatteryIdleSelectBeDisabled_: boolean;
-  private showPowerSourceDropdown_: boolean;
-  private selectedPowerSourceId_: string;
-  private batterySaverFeatureEnabled_: boolean;
+  declare private hasLid_: boolean;
+  declare private lidClosedLabel_: string;
+  declare private lidClosedPref_: chrome.settingsPrivate.PrefObject<boolean>;
+  declare private isExternalPowerUSB_: boolean;
+  declare private isExternalPowerAC_: boolean;
+  declare private powerSourceLabel_: string;
+  declare private powerSourceName_: string;
+  declare private powerSources_: PowerSource[]|undefined;
+  declare private shouldAcIdleSelectBeDisabled_: boolean;
+  declare private shouldBatteryIdleSelectBeDisabled_: boolean;
+  declare private showPowerSourceDropdown_: boolean;
+  declare private selectedPowerSourceId_: string;
+  declare private batterySaverFeatureEnabled_: boolean;
 
   constructor() {
     super();

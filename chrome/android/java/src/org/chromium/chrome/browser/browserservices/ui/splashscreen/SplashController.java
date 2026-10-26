@@ -16,6 +16,7 @@ import android.view.ViewGroup;
 import android.view.ViewPropertyAnimator;
 import android.view.ViewTreeObserver;
 
+import org.chromium.base.IntentUtils;
 import org.chromium.base.ObserverList;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.TraceEvent;
@@ -24,6 +25,7 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.build.annotations.RequiresNonNull;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.browserservices.trustedwebactivityui.TwaFinishHandler;
 import org.chromium.chrome.browser.compositor.CompositorViewHolder;
 import org.chromium.chrome.browser.customtabs.BaseCustomTabActivity;
@@ -215,9 +217,15 @@ public class SplashController extends CustomTabTabObserver
 
     @Override
     public void onInteractabilityChanged(Tab tab, boolean isInteractable) {
+        boolean isRestoredOrReparentedWithoutLoad =
+                mTabProvider.getInitialTabCreationMode() == TabCreationMode.RESTORED
+                        || IntentUtils.safeGetBooleanExtra(
+                                mActivity.getIntent(),
+                                IntentHandler.EXTRA_SKIP_LOAD_ON_REPARENTING,
+                                false);
         if (!tab.isLoading()
                 && isInteractable
-                && mTabProvider.getInitialTabCreationMode() == TabCreationMode.RESTORED
+                && isRestoredOrReparentedWithoutLoad
                 && canHideSplashScreen()) {
             hideSplash(tab, /* loadFailed= */ false);
         }
@@ -264,9 +272,7 @@ public class SplashController extends CustomTabTabObserver
         assumeNonNull(mCompositorViewHolder.get())
                 .getCompositorView()
                 .surfaceRedrawNeededAsync(
-                        () -> {
-                            ThreadUtils.runOnUiThread(() -> animateHideSplash(tab));
-                        });
+                        () -> ThreadUtils.runOnUiThread(() -> animateHideSplash(tab)));
     }
 
     private void removeTranslucency() {
@@ -318,10 +324,7 @@ public class SplashController extends CustomTabTabObserver
                         .animate()
                         .alpha(0f)
                         .setDuration(mSplashHideAnimationDurationMs)
-                        .withEndAction(
-                                () -> {
-                                    hideSplashNow(tab);
-                                });
+                        .withEndAction(() -> hideSplashNow(tab));
     }
 
     private void hideSplashNow(Tab tab) {
@@ -372,10 +375,7 @@ public class SplashController extends CustomTabTabObserver
     @RequiresNonNull("mParentView")
     private void recordTraceEventsShowedSplash() {
         SingleShotOnDrawListener.install(
-                mParentView,
-                () -> {
-                    TraceEvent.startAsync("SplashScreen.visible", hashCode());
-                });
+                mParentView, () -> TraceEvent.startAsync("SplashScreen.visible", hashCode()));
     }
 
     private void recordTraceEventsStartedHidingSplash() {
@@ -387,8 +387,6 @@ public class SplashController extends CustomTabTabObserver
         TraceEvent.finishAsync("SplashScreen.hidingAnimation", hashCode());
         SingleShotOnDrawListener.install(
                 mParentView,
-                () -> {
-                    TraceEvent.finishAsync("WebappSplashScreen.visible", hashCode());
-                });
+                () -> TraceEvent.finishAsync("WebappSplashScreen.visible", hashCode()));
     }
 }

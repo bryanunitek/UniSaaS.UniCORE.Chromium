@@ -67,15 +67,23 @@ struct LabeledTextfieldWithErrorMessage {
 
   views::Textfield& GetInputTextField() const;
 
-  void SetErrorState(bool is_valid);
+  // Shows the error state and announces the error message if the input is
+  // non-empty and invalid.
+  void MaybeShowError();
 
-  // Announces the error message if the current state is invalid and an error
-  // message is being shown.
-  void MaybeAnnounceError();
+  // Hides the visual error state.
+  void HideError();
 };
 
 // Gets the user avatar icon if available, or else a placeholder.
 ui::ImageModel GetProfileAvatar(const AccountInfo& account_info);
+
+// Creates a horizontal box layout view with the user's avatar and email.
+// TODO(crbug.com/538745926): Pass in an AccountInfo object instead of user
+// email and user avatar.
+std::unique_ptr<views::BoxLayoutView> CreateUserAvatarAndEmailView(
+    const std::u16string& user_email,
+    const ui::ImageModel& user_avatar);
 
 // Defines a title view with a label and an icon, to be used by dialogs
 // that need to present the Google or Google Pay logo and custom

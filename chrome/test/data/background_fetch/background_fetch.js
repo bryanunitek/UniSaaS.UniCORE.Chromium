@@ -113,6 +113,8 @@ function filterMessage(event) {
     'backgroundfetchabort',
     'permissionerror',
     'ok',
+    'cors',
+    'null',
   ];
   if (expectedResponses.includes(event.data))
     return event.data;
@@ -221,4 +223,77 @@ function StartFetchFromIframeNoWait() {
     iframe.src = '/background_fetch/background_fetch_iframe_nowait.html';
     document.body.appendChild(iframe);
   }).then(filterMessage);
+}
+
+function StartFetchFromServiceWorkerWithUrl(url) {
+  const onMessagePromise = new Promise(resolve => {
+    navigator.serviceWorker.addEventListener('message', resolve);
+  });
+  return navigator.serviceWorker.ready
+      .then(reg => reg.active.postMessage({url: url}))
+      .then(() => onMessagePromise)
+      .then(filterMessage);
+}
+
+function StartFetchFromWindowWithUrl(url) {
+  return navigator.serviceWorker.ready
+      .then(swRegistration => {
+        const onMessagePromise = new Promise(resolve => {
+          navigator.serviceWorker.addEventListener(
+              'message', resolve, {once: true});
+        });
+        return swRegistration.backgroundFetch.fetch(kBackgroundFetchId, url)
+            .then(() => onMessagePromise)
+            .then(filterMessage);
+      })
+      .catch(formatError);
+}
+
+function StartFetchFromWindowWithOptions(url, options) {
+  return navigator.serviceWorker.ready
+      .then(swRegistration => {
+        const onMessagePromise = new Promise(resolve => {
+          navigator.serviceWorker.addEventListener(
+              'message', resolve, {once: true});
+        });
+        const request = new Request(url, options);
+        return swRegistration.backgroundFetch.fetch(kBackgroundFetchId, request)
+            .then(() => onMessagePromise)
+            .then(filterMessage);
+      })
+      .catch(formatError);
+}
+
+function StartFetchFromWindowWithCustomHeader(url, headerName, headerValue) {
+  const headers = {};
+  headers[headerName] = headerValue;
+  return StartFetchFromWindowWithOptions(url, {headers: headers});
+}
+
+function StartFetchFromWindowAndCheckResponseType(url) {
+  return navigator.serviceWorker.ready
+      .then(swRegistration => {
+        const onMessagePromise = new Promise(resolve => {
+          navigator.serviceWorker.addEventListener(
+              'message', resolve, {once: true});
+        });
+        return swRegistration.backgroundFetch.fetch('check-response-type', url)
+            .then(() => onMessagePromise)
+            .then(filterMessage);
+      })
+      .catch(formatError);
+}
+
+function StartFetchFromWindowAndCheckSecretHeader(url) {
+  return navigator.serviceWorker.ready
+      .then(swRegistration => {
+        const onMessagePromise = new Promise(resolve => {
+          navigator.serviceWorker.addEventListener(
+              'message', resolve, {once: true});
+        });
+        return swRegistration.backgroundFetch.fetch('check-secret-header', url)
+            .then(() => onMessagePromise)
+            .then(filterMessage);
+      })
+      .catch(formatError);
 }

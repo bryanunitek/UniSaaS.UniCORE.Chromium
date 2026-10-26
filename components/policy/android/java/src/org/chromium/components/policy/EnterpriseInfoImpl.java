@@ -9,15 +9,13 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.app.admin.DevicePolicyManager;
 import android.content.ComponentName;
 import android.content.Context;
-import android.content.pm.PackageInfo;
-import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.SystemClock;
 
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.CommandLine;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
@@ -53,7 +51,6 @@ public class EnterpriseInfoImpl extends EnterpriseInfo {
     }
 
     @Override
-    @SuppressWarnings("QueryPermissionsNeeded")
     public void getDeviceEnterpriseInfo(Callback<OwnedState> callback) {
         // AsyncTask requires being called from UI thread.
         ThreadUtils.assertOnUiThread();
@@ -90,7 +87,7 @@ public class EnterpriseInfoImpl extends EnterpriseInfo {
 
         // Add a placeholder callback to avoid multiple background tasks from
         // getDeviceEnterpriseInfoSync or getDeviceEnterpriseInfo.
-        mCallbackList.add(result -> {});
+        mCallbackList.add(CallbackUtils.emptyCallback());
         if (mCallbackList.size() > 1) {
             return null;
         }
@@ -111,10 +108,8 @@ public class EnterpriseInfoImpl extends EnterpriseInfo {
             new AsyncTask<OwnedState>() {
                 // TODO: Unit test this function. https://crbug.com/40137392
                 private OwnedState calculateIsRunningOnManagedProfile(Context context) {
-                    long startTime = SystemClock.elapsedRealtime();
                     boolean hasProfileOwnerApp = false;
                     boolean hasDeviceOwnerApp = false;
-                    PackageManager packageManager = context.getPackageManager();
                     DevicePolicyManager devicePolicyManager =
                             (DevicePolicyManager)
                                     context.getSystemService(Context.DEVICE_POLICY_SERVICE);
@@ -125,42 +120,20 @@ public class EnterpriseInfoImpl extends EnterpriseInfo {
                         hasDeviceOwnerApp = true;
                     }
 
-                    int systemCallCount = 1;
-                    if (PolicyFeatureMap.sAndroidUseAdminsForEnterpriseInfo.isEnabled()) {
-                        List<ComponentName> activeAdmins = devicePolicyManager.getActiveAdmins();
-                        if (activeAdmins != null) {
-                            for (ComponentName admin : activeAdmins) {
-                                systemCallCount += 2;
-                                String adminPackageName = admin.getPackageName();
-                                if (devicePolicyManager.isProfileOwnerApp(adminPackageName)) {
-                                    hasProfileOwnerApp = true;
-                                }
-                                if (devicePolicyManager.isDeviceOwnerApp(adminPackageName)) {
-                                    hasDeviceOwnerApp = true;
-                                }
-                                if (hasProfileOwnerApp && hasDeviceOwnerApp) break;
-                            }
-                        }
-                    } else {
-                        for (PackageInfo pkg :
-                                packageManager.getInstalledPackages(/* flags= */ 0)) {
-                            systemCallCount += 2;
-                            if (devicePolicyManager.isProfileOwnerApp(pkg.packageName)) {
+                    List<ComponentName> activeAdmins = devicePolicyManager.getActiveAdmins();
+                    if (activeAdmins != null) {
+                        for (ComponentName admin : activeAdmins) {
+                            String adminPackageName = admin.getPackageName();
+                            if (devicePolicyManager.isProfileOwnerApp(adminPackageName)) {
                                 hasProfileOwnerApp = true;
                             }
-                            if (devicePolicyManager.isDeviceOwnerApp(pkg.packageName)) {
+                            if (devicePolicyManager.isDeviceOwnerApp(adminPackageName)) {
                                 hasDeviceOwnerApp = true;
                             }
                             if (hasProfileOwnerApp && hasDeviceOwnerApp) break;
                         }
                     }
 
-                    long endTime = SystemClock.elapsedRealtime();
-                    RecordHistogram.recordTimesHistogram(
-                            "EnterpriseCheck.IsRunningOnManagedProfileDuration",
-                            endTime - startTime);
-                    RecordHistogram.recordCount100000Histogram(
-                            "EnterpriseCheck.SystemCallCount", systemCallCount);
                     return new OwnedState(hasDeviceOwnerApp, hasProfileOwnerApp);
                 }
 

@@ -4,6 +4,7 @@ set noparent
 ajgo@chromium.org
 andreaorru@chromium.org
 dcheng@chromium.org
+emiled@microsoft.com
 ffred@chromium.org
 tsepez@chromium.org
 # NOTE: keep this in sync with global-owners-override@chromium.org owners
@@ -11,3 +12,9 @@ tsepez@chromium.org
 
 # For Fuchsia-specific changes:
 per-file ..._fuchsia*=file://build/fuchsia/OWNERS
+
+# For Fuzzilli-specific changes:
+per-file ...*fuzzilli*=bantikyan@chromium.org
+per-file ...*fuzzilli*=ortuno@chromium.org
+per-file .../*fuzzilli*/*=bantikyan@chromium.org
+per-file .../*fuzzilli*/*=ortuno@chromium.org

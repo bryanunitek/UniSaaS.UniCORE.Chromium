@@ -4,6 +4,8 @@
 
 source_set("model") {
   sources = [
+    "lens_browser_agent.h",
+    "lens_browser_agent.mm",
     "lens_tab_helper.h",
     "lens_tab_helper.mm",
   ]
@@ -11,7 +13,6 @@ source_set("model") {
     "//components/search_engines",
     "//ios/chrome/browser/lens/ui_bundled:lens_entrypoint",
     "//ios/chrome/browser/search_engines/model:template_url_service_factory",
-    "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/model/profile",
     "//ios/chrome/browser/shared/model/web_state_list",
     "//ios/chrome/browser/shared/public/commands",
@@ -19,7 +20,10 @@ source_set("model") {
     "//ios/public/provider/chrome/browser/lens:lens_api",
     "//ios/web/public",
   ]
-  public_deps = [ "//base" ]
+  public_deps = [
+    "//base",
+    "//ios/chrome/browser/shared/model/browser",
+  ]
 }
 
 source_set("unit_tests") {

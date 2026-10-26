@@ -14,7 +14,6 @@ import '../settings_shared.css.js';
 import './ax_annotations_section.js';
 import './bluetooth_braille_display_ui.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {BrailleTable} from 'chrome://resources/ash/common/accessibility/braille_table.js';
 import {JP_BRAILLE_TENJI_TABLE} from 'chrome://resources/ash/common/accessibility/braille_table.js';
 import type {CrInputElement} from 'chrome://resources/ash/common/cr_elements/cr_input/cr_input.js';
@@ -28,14 +27,12 @@ import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteOriginMixin} from '../common/route_origin_mixin.js';
 import type {DropdownMenuOptionList, SettingsDropdownMenuElement} from '../controls/settings_dropdown_menu.js';
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './chromevox_subpage.html.js';
-import type {ChromeVoxSubpageBrowserProxy} from './chromevox_subpage_browser_proxy.js';
 import {ChromeVoxSubpageBrowserProxyImpl} from './chromevox_subpage_browser_proxy.js';
-
-export {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 
 const SYSTEM_VOICE = 'chromeos_system_voice';
 const CHROMEVOX_EXTENSION_ID = 'mndnfokpggljbaajbnioimlmbfngpief';
@@ -332,6 +329,11 @@ export class SettingsChromeVoxSubpageElement extends
         value: loadTimeData.getBoolean('japaneseBrailleEnabled'),
         readOnly: true,
       },
+
+      brailleTables_: {
+        type: Array,
+        value: () => [],
+      },
     };
   }
 
@@ -346,20 +348,21 @@ export class SettingsChromeVoxSubpageElement extends
     ];
   }
 
-  private capitalStrategyOptions_: DropdownMenuOptionList;
-  private numberReadingStyleOptions_: DropdownMenuOptionList;
-  private punctuationEchoOptions_: DropdownMenuOptionList;
-  private audioStrategyOptions_: DropdownMenuOptionList;
-  private brailleTableTypeOptions_: DropdownMenuOptionList;
-  private brailleTableOptions_: DropdownMenuOptionList;
-  private voiceOptions_: DropdownMenuOptionList;
-  private virtualBrailleDisplayStyleOptions_: DropdownMenuOptionList;
-  private chromeVoxBrowserProxy_: ChromeVoxSubpageBrowserProxy;
-  private brailleTables_: BrailleTable[];
-  private developerOptionsExpanded_: boolean;
-  private readonly eventStreamFilters_: string[];
-  private readonly mainNodeAnnotationsFeatureEnabled_: boolean;
-  private readonly japaneseBrailleEnabled_: boolean;
+  declare private capitalStrategyOptions_: DropdownMenuOptionList;
+  declare private numberReadingStyleOptions_: DropdownMenuOptionList;
+  declare private punctuationEchoOptions_: DropdownMenuOptionList;
+  declare private audioStrategyOptions_: DropdownMenuOptionList;
+  declare private brailleTableTypeOptions_: DropdownMenuOptionList;
+  declare private brailleTableOptions_: DropdownMenuOptionList;
+  declare private voiceOptions_: DropdownMenuOptionList;
+  declare private virtualBrailleDisplayStyleOptions_: DropdownMenuOptionList;
+  private chromeVoxBrowserProxy_ =
+      ChromeVoxSubpageBrowserProxyImpl.getInstance();
+  declare private brailleTables_: BrailleTable[];
+  declare private developerOptionsExpanded_: boolean;
+  declare private readonly eventStreamFilters_: string[];
+  declare private readonly mainNodeAnnotationsFeatureEnabled_: boolean;
+  declare private readonly japaneseBrailleEnabled_: boolean;
 
   // Regular expressions that will match against a voice name if it contains a
   // speaker ID in it.
@@ -369,16 +372,10 @@ export class SettingsChromeVoxSubpageElement extends
   private localSpeakerNameReplacement_ = '-x-local';
   private networkSpeakerNameReplacement_ = '-x-network';
 
+  // RouteOriginMixin override
+  override route = routes.A11Y_CHROMEVOX;
+
   // TODO(270619855): Add tests to verify these controls change their prefs.
-  constructor() {
-    super();
-
-    this.chromeVoxBrowserProxy_ =
-        ChromeVoxSubpageBrowserProxyImpl.getInstance();
-
-    /** RouteOriginMixin override */
-    this.route = routes.A11Y_CHROMEVOX;
-  }
 
   override ready(): void {
     super.ready();

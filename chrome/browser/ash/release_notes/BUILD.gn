@@ -14,7 +14,6 @@ static_library("release_notes") {
 
   public_deps = [
     "//base",
-    "//chrome/browser:browser_public_dependencies",
     "//chromeos/ash/components/network",
     "//components/session_manager/core",
   ]
@@ -28,8 +27,7 @@ static_library("release_notes") {
     "//chrome/app:generated_resources",
     "//chrome/app:generated_resources_grit",
     "//chrome/browser/ash/profiles",
-    "//chrome/browser/notifications",
-    "//chrome/browser/notifications:system_notification_helper",
+    "//chrome/browser/policy",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui:chrome_pages",
     "//chrome/common:constants",
@@ -47,6 +45,7 @@ static_library("release_notes") {
     "//google_apis",
     "//ui/base",
     "//ui/chromeos",
+    "//ui/message_center",
     "//ui/message_center/public/cpp",
   ]
 }
@@ -69,9 +68,9 @@ source_set("unit_tests") {
     "//chrome/browser",
     "//chrome/browser/ash/login/users:test_support",
     "//chrome/browser/ash/release_notes",
-    "//chrome/browser/notifications:system_notification_helper",
     "//chrome/common:constants",
     "//chrome/test:test_support",
+    "//chrome/test/base:browser_with_test_window_test",
     "//chromeos/ash/components/install_attributes:test_support",
     "//chromeos/ash/components/login/login_state",
     "//components/account_id",
@@ -82,5 +81,6 @@ source_set("unit_tests") {
     "//content/test:test_support",
     "//testing/gtest",
     "//ui/chromeos",
+    "//ui/message_center",
   ]
 }

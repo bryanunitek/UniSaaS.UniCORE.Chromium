@@ -34,6 +34,7 @@
 #include "ui/gfx/text_constants.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/controls/textarea/textarea.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
@@ -48,8 +49,8 @@ constexpr int kMaxBypassJustificationLength = 280;
 // obtained, or the full value otherwise, converted to u16string. Fails if
 // |url| is empty.
 std::u16string GetDestinationURL(DlpFileDestination destination) {
-  DCHECK(destination.url().has_value());
-  DCHECK(destination.url()->is_valid());
+  CHECK(destination.url().has_value(), base::NotFatalUntil::M160);
+  CHECK(destination.url()->is_valid(), base::NotFatalUntil::M160);
   GURL gurl = *destination.url();
   if (gurl.has_host()) {
     return base::UTF8ToUTF16(gurl.GetHost());
@@ -60,7 +61,7 @@ std::u16string GetDestinationURL(DlpFileDestination destination) {
 // Returns the u16string formatted name for |destination|'s |component|. Fails
 // if |component| is empty.
 const std::u16string GetDestinationComponent(DlpFileDestination destination) {
-  DCHECK(destination.component().has_value());
+  CHECK(destination.component().has_value(), base::NotFatalUntil::M160);
   switch (destination.component().value()) {
     case data_controls::Component::kArc:
       return l10n_util::GetStringUTF16(
@@ -68,8 +69,7 @@ const std::u16string GetDestinationComponent(DlpFileDestination destination) {
     case data_controls::Component::kCrostini:
       return l10n_util::GetStringUTF16(IDS_FILE_BROWSER_LINUX_FILES_ROOT_LABEL);
     case data_controls::Component::kPluginVm:
-      return l10n_util::GetStringUTF16(
-          IDS_FILE_BROWSER_PLUGIN_VM_DIRECTORY_LABEL);
+      return l10n_util::GetStringUTF16(IDS_FILE_BROWSER_DLP_COMPONENT_VM);
     case data_controls::Component::kUsb:
       return l10n_util::GetStringUTF16(
           IDS_POLICY_DLP_FILES_DESTINATION_REMOVABLE_STORAGE);

@@ -29,6 +29,7 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.params.ParameterAnnotations;
@@ -37,6 +38,7 @@ import org.chromium.base.test.params.ParameterProvider;
 import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
 import org.chromium.chrome.browser.omnibox.ChromeAutocompleteSchemeClassifier;
@@ -69,7 +71,7 @@ import java.util.List;
 @Batch(Batch.PER_CLASS)
 public class StatusViewRenderTest {
     @ClassRule
-    public static BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
+    public static final BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
             new BaseActivityTestRule<>(BlankUiTestActivity.class);
 
     private static Activity sActivity;
@@ -79,13 +81,13 @@ public class StatusViewRenderTest {
     private static final int RENDER_TEST_REVISION = 2;
 
     @Rule
-    public ChromeRenderTestRule mRenderTestRule =
+    public final ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(ChromeRenderTestRule.Component.UI_BROWSER_OMNIBOX)
                     .setRevision(RENDER_TEST_REVISION)
                     .build();
 
-    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private ChromeAutocompleteSchemeClassifier.Natives mChromeAutocompleteSchemeClassifierJni;
     @Mock private Profile mProfile;
@@ -99,6 +101,7 @@ public class StatusViewRenderTest {
     @BeforeClass
     public static void setupSuite() {
         sActivity = sActivityTestRule.launchActivity(null);
+        ResettersForTesting.register(() -> sActivity = null);
     }
 
     @Before
@@ -125,6 +128,7 @@ public class StatusViewRenderTest {
                                     .inflate(R.layout.location_status, view, true)
                                     .findViewById(R.id.location_bar_status);
                     mStatusView.setCompositeTouchDelegate(new CompositeTouchDelegate(view));
+                    mStatusView.setIconAnimationDurationForTesting(0);
                     mLocationBarModel =
                             new LocationBarModel(
                                     mStatusView.getContext(),
@@ -157,6 +161,11 @@ public class StatusViewRenderTest {
         runOnUiThreadBlocking(() -> mLocationBarModel.destroy());
     }
 
+    private void renderStatusView(String id) throws IOException {
+        CriteriaHelper.pollUiThread(() -> !mStatusView.isStatusIconAnimating());
+        mRenderTestRule.render(mStatusView, id);
+    }
+
     @Test
     @MediumTest
     @Feature({"RenderTest"})
@@ -169,7 +178,7 @@ public class StatusViewRenderTest {
                             StatusProperties.STATUS_ICON_RESOURCE,
                             new StatusIconResource(R.drawable.ic_search_24dp, 0));
                 });
-        mRenderTestRule.render(mStatusView, "status_view_incognito_with_icon");
+        renderStatusView("status_view_incognito_with_icon");
     }
 
     @Test
@@ -182,7 +191,7 @@ public class StatusViewRenderTest {
                     mStatusView.setIncognitoBadgeVisibility(true);
                     mStatusModel.set(StatusProperties.STATUS_ICON_RESOURCE, null);
                 });
-        mRenderTestRule.render(mStatusView, "status_view_incognito_no_icon");
+        renderStatusView("status_view_incognito_no_icon");
     }
 
     @Test
@@ -199,7 +208,7 @@ public class StatusViewRenderTest {
                             StatusProperties.STATUS_ICON_RESOURCE,
                             new StatusIconResource(R.drawable.ic_search_24dp, 0));
                 });
-        mRenderTestRule.render(mStatusView, "status_view_with_icon");
+        renderStatusView("status_view_with_icon");
     }
 
     public static class GeolocationContentSettingsParams implements ParameterProvider {
@@ -241,7 +250,7 @@ public class StatusViewRenderTest {
                             R.string.accessibility_menu_info);
                     mStatusModel.set(StatusProperties.STATUS_ICON_RESOURCE, statusIcon);
                 });
-        mRenderTestRule.render(mStatusView, "status_view_with_location_permission_icon");
+        renderStatusView("status_view_with_location_permission_icon");
     }
 
     @Test
@@ -253,7 +262,7 @@ public class StatusViewRenderTest {
                     Drawable storeIconDrawable =
                             ResourcesCompat.getDrawable(
                                     sActivity.getResources(),
-                                    R.drawable.ic_storefront_blue,
+                                    R.drawable.ic_storefront_accent1,
                                     sActivity.getTheme());
                     StatusIconResource statusIcon =
                             new PermissionIconResource(storeIconDrawable, false);
@@ -264,6 +273,6 @@ public class StatusViewRenderTest {
                             R.string.accessibility_menu_info);
                     mStatusModel.set(StatusProperties.STATUS_ICON_RESOURCE, statusIcon);
                 });
-        mRenderTestRule.render(mStatusView, "status_view_with_store_icon");
+        renderStatusView("status_view_with_store_icon");
     }
 }

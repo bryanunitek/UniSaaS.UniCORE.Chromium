@@ -13,17 +13,22 @@
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
+#include "base/test/test_future.h"
 #include "base/time/time_override.h"
 #include "base/types/strong_alias.h"
 #include "base/values.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/test/browser_test_utils.h"
 #include "services/network/public/cpp/network_switches.h"
+#include "url/gurl.h"
+#include "url/scheme_host_port.h"
 
 namespace content {
 class RenderFrameHost;
@@ -101,49 +106,22 @@ std::optional<base::FilePath> GetCommandFilePath();
 // `test_file_name` should be without the .cc suffix.
 void PrintInstructions(const char* test_file_name);
 
-// IFrameWaiter
-//
-// IFrameWaiter is an waiter object that waits for an iframe befitting a
-// criteria to appear. The criteria can be the iframe's 'name' attribute,
-// the iframe's origin, or the iframe's full url.
-class IFrameWaiter : public content::WebContentsObserver {
- public:
-  explicit IFrameWaiter(content::WebContents* webcontents);
-
-  IFrameWaiter(const IFrameWaiter&) = delete;
-  IFrameWaiter& operator=(const IFrameWaiter&) = delete;
-
-  ~IFrameWaiter() override;
-  content::RenderFrameHost* WaitForFrameMatchingName(
-      const std::string& name,
-      const base::TimeDelta timeout = default_action_timeout);
-  content::RenderFrameHost* WaitForFrameMatchingOrigin(
-      const GURL origin,
-      const base::TimeDelta timeout = default_action_timeout);
-  content::RenderFrameHost* WaitForFrameMatchingUrl(
-      const GURL url,
-      const base::TimeDelta timeout = default_action_timeout);
-
- private:
-  enum QueryType { NAME, ORIGIN, URL };
-
-  static bool FrameHasOrigin(const GURL& origin,
-                             content::RenderFrameHost* frame);
-
-  // content::WebContentsObserver
-  void RenderFrameCreated(content::RenderFrameHost* render_frame_host) override;
-  void DidFinishLoad(content::RenderFrameHost* render_frame_host,
-                     const GURL& validated_url) override;
-  void FrameNameChanged(content::RenderFrameHost* render_frame_host,
-                        const std::string& name) override;
-
-  QueryType query_type_;
-  base::RunLoop run_loop_;
-  raw_ptr<content::RenderFrameHost> target_frame_;
-  std::string frame_name_;
-  GURL origin_;
-  GURL url_;
-};
+[[nodiscard]] content::RenderFrameHost* WaitForFrameMatchingName(
+    content::WebContents& web_contents,
+    const std::string& name,
+    const base::TimeDelta timeout = default_action_timeout);
+[[nodiscard]] content::RenderFrameHost* WaitForFrameMatchingOrigin(
+    content::WebContents& web_contents,
+    const url::SchemeHostPort& origin,
+    const base::TimeDelta timeout = default_action_timeout);
+[[nodiscard]] content::RenderFrameHost* WaitForFrameMatchingUrl(
+    content::WebContents& web_contents,
+    const GURL& url,
+    const base::TimeDelta timeout = default_action_timeout);
+[[nodiscard]] content::RenderFrameHost* WaitForFrame(
+    content::WebContents& web_contents,
+    base::RepeatingCallback<bool(content::RenderFrameHost*)> predicate,
+    const base::TimeDelta timeout = default_action_timeout);
 
 // WebPageReplayServerWrapper
 
@@ -288,7 +266,7 @@ class TestRecipeReplayer {
   };
 
   TestRecipeReplayer(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       TestRecipeReplayChromeFeatureActionExecutor* feature_action_executor);
 
   TestRecipeReplayer(const TestRecipeReplayer&) = delete;
@@ -335,7 +313,7 @@ class TestRecipeReplayer {
       content::RenderFrameHost* frame,
       gfx::Rect* output_rect);
 
-  Browser* browser();
+  BrowserWindowInterface* browser();
 
   TestRecipeReplayChromeFeatureActionExecutor* feature_action_executor();
   WebPageReplayServerWrapper* web_page_replay_server_wrapper();
@@ -392,9 +370,9 @@ class TestRecipeReplayer {
       const std::string& element_xpath,
       bool expect_to_be_shown);
   // When returning true, `frame` points to the RenderFrameHost of the frame
-  // specified in `action`. This is determined dynamically because
-  // WaitForElementToBeReady may need to wait for navigations to finish and the
-  // frame to be loaded.
+  // specified in `action`, and that frame is alive. This is determined
+  // dynamically because WaitForElementToBeReady may need to wait for
+  // navigations to finish and the frame to be loaded.
   bool WaitForElementToBeReady(const std::string& xpath,
                                const int visibility_enum_val,
                                const base::DictValue& action,
@@ -446,7 +424,7 @@ class TestRecipeReplayer {
   // timeout elapses.
   bool WaitForVisualUpdate(base::TimeDelta timeout = visual_update_timeout);
 
-  raw_ptr<Browser> browser_;
+  raw_ptr<BrowserWindowInterface> browser_;
   raw_ptr<TestRecipeReplayChromeFeatureActionExecutor> feature_action_executor_;
   // The Web Page Replay server that serves the captured sites.
   std::unique_ptr<captured_sites_test_utils::WebPageReplayServerWrapper>

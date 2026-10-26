@@ -14,6 +14,16 @@ enum class TabMutedReason {
   kContentSettingChrome,  // Mute toggled on chrome:// URL.
 };
 
+// Source of the call to CloseTab().
+enum class CloseTabSource {
+  // Tab was closed by a mouse event on the tab or its close button
+  kFromMouse,
+  // Tab was closed by a touch event on the tab or its close button
+  kFromTouch,
+  // Tab is closed by some means other than direct tab interaction
+  kFromNonUIEvent,
+};
+
 // A BitField used to specify what should happen when the tab is closed.
 enum TabCloseTypes {
   CLOSE_NONE = 0,
@@ -108,5 +118,43 @@ enum class VerticalTabStripCollapseState {
   kMaxValue = kCollapsed,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:VerticalTabStripCollapseState)
+
+// Enumerates entry points for Tab Groups Focus mode.
+// KEEP IN SYNC WITH THE TabGroupFocusEntryPoint ENUM IN enums.xml.
+// LINT.IfChange(TabGroupFocusEntryPoint)
+enum class TabGroupFocusEntryPoint {
+  kEditorBubble = 0,
+  kTabContextMenu = 1,
+  kTabContextMenuNonGroup = 2,
+  kBookmarksBarContextMenu = 3,
+  kAppMenu = 4,
+  kOrganizerPanel = 5,
+  kMaxValue = kOrganizerPanel,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:TabGroupFocusEntryPoint)
+
+// Enumerates exit reasons for Tab Groups Focus mode.
+// KEEP IN SYNC WITH THE TabGroupFocusExitReason ENUM IN enums.xml.
+// LINT.IfChange(TabGroupFocusExitReason)
+enum class TabGroupFocusExitReason {
+  kEditorBubble = 0,
+  // kTabStripButton = 1,  // Deprecated, replaced by kHeaderUnfocusButton.
+  kGroupClosed = 2,
+  kGroupUngrouped = 3,
+  kLastTabClosed = 4,
+  kUnpinActiveTab = 5,
+  kGroupHeaderDraggedIn = 6,
+  kActiveTabGroupOperation = 7,
+  kTabOutsideGroupClosed = 8,
+  kTabContextMenu = 9,
+  kGroupCreated = 10,
+  kBookmarksBarContextMenu = 11,
+  kAppMenu = 12,
+  kOrganizerPanel = 13,
+  kHeaderUnfocusButton = 14,
+  kTabOutsideGroupActivated = 15,
+  kMaxValue = kTabOutsideGroupActivated,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:TabGroupFocusExitReason)
 
 #endif  // CHROME_BROWSER_UI_TABS_TAB_ENUMS_H_

@@ -6,6 +6,7 @@ package org.chromium.chrome.test.memory_leaks;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
 
 import androidx.browser.customtabs.CustomTabsSessionToken;
 import androidx.test.core.app.ApplicationProvider;
@@ -17,22 +18,31 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ServiceLoaderUtil;
+import org.chromium.base.test.transit.TripBuilder;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.EnableLeakChecks;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.ImportantFormFactors;
+import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchControllerFactory;
+import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchHooks;
 import org.chromium.chrome.browser.customtabs.CustomTabsConnection;
 import org.chromium.chrome.browser.customtabs.CustomTabsIntentTestUtils;
 import org.chromium.chrome.browser.customtabs.CustomTabsTestUtils;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.settings.SettingsInTab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.CctTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.ChromeTriggers;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
+import org.chromium.chrome.test.transit.settings.SettingsStation;
 import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
@@ -65,10 +75,15 @@ public class PublicTransitLeakTest {
     @LargeTest
     public void settingsActivityTest() {
         WebPageStation page = mChromeTabbedActivityTestRule.startOnBlankPage();
-        page.openRegularTabAppMenu()
-                .openSettings()
-                .pressBackTo()
-                .arriveAt(WebPageStation.newBuilder().initFrom(page).build());
+        SettingsStation settings = page.openRegularTabAppMenu().openSettings();
+        // On desktop, back at the task root is handled by the system and does not close the
+        // settings tab, so close it programmatically instead.
+        TripBuilder exitSettings =
+                SettingsInTab.shouldOpenSettingsInTab()
+                        ? ChromeTriggers.closeCurrentTabProgrammaticallyTo(
+                                settings, mChromeTabbedActivityTestRule.getActivity())
+                        : settings.pressBackTo();
+        exitSettings.arriveAt(WebPageStation.newBuilder().initFrom(page).build());
     }
 
     @Test
@@ -97,6 +112,30 @@ public class PublicTransitLeakTest {
     @Test
     @LargeTest
     public void customTabActivityTest() throws TimeoutException {
+        mCustomTabActivityTestRule.startCustomTabActivityWithIntent(
+                CustomTabsIntentTestUtils.createMinimalCustomTabIntent(
+                        ApplicationProvider.getApplicationContext(),
+                        mChromeTabbedActivityTestRule
+                                .getTestServer()
+                                .getURL("/chrome/test/data/android/google.html")));
+    }
+
+    @Test
+    @LargeTest
+    @MinAndroidSdkLevel(Build.VERSION_CODES.S)
+    @EnableFeatures({ChromeFeatureList.ANDROID_APP_INTEGRATION_MULTI_DATA_SOURCE})
+    public void chromeTabbedActivityWithAuxiliarySearchTest() {
+        ServiceLoaderUtil.setInstanceForTesting(AuxiliarySearchHooks.class, () -> true);
+        AuxiliarySearchControllerFactory.getInstance().setSupportMultiDataSourceForTesting(true);
+        mChromeTabbedActivityTestRule.startOnBlankPage();
+    }
+
+    @Test
+    @LargeTest
+    @MinAndroidSdkLevel(Build.VERSION_CODES.S)
+    @EnableFeatures({ChromeFeatureList.ANDROID_APP_INTEGRATION_MULTI_DATA_SOURCE})
+    public void customTabActivityWithAuxiliarySearchTest() throws TimeoutException {
+        ServiceLoaderUtil.setInstanceForTesting(AuxiliarySearchHooks.class, () -> true);
         mCustomTabActivityTestRule.startCustomTabActivityWithIntent(
                 CustomTabsIntentTestUtils.createMinimalCustomTabIntent(
                         ApplicationProvider.getApplicationContext(),

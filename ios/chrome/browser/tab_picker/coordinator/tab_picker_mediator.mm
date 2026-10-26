@@ -4,9 +4,12 @@
 
 #import "ios/chrome/browser/tab_picker/coordinator/tab_picker_mediator.h"
 
+#import <utility>
+
 #import "base/metrics/histogram_functions.h"
 #import "base/strings/string_number_conversions.h"
 #import "base/strings/sys_string_conversions.h"
+#import "components/optimization_guide/proto/features/common_quality_data.pb.h"
 #import "ios/chrome/browser/intelligence/persist_tab_context/model/persist_tab_context_browser_agent.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_utils.h"
 #import "ios/chrome/browser/shared/model/utils/web_state_deferred_executor.h"
@@ -35,7 +38,8 @@
   __weak id<TabPickerConsumer> _tabPickerConsumer;
   /// Parameters used to configure the Tab Picker.
   TabPickerParams* _params;
-  /// Called when the user confirms a new selection of tabs.
+  /// Called when the user confirms a new selection of tabs or dismisses the
+  /// tab picker.
   TabPickerCompletionBlock _tabPickerCompletionBlock;
   /// Stores the unique identifiers of web states that have valid cached APC
   /// (Annotated Page Content) data.
@@ -89,7 +93,7 @@
 }
 
 - (void)disconnect {
-  _tabPickerCompletionBlock = nil;
+  [self cancelTabPicker];
   [super disconnect];
 }
 
@@ -172,7 +176,7 @@
     return;
   }
 
-  if (!CanExtractPageContextForWebState(webState)) {
+  if (!CanExtractPageContextForWebState(webState, _params.PDFEnabled)) {
     [self handleAttemptToAttachInvalidTab:itemID];
   }
 }
@@ -212,9 +216,20 @@
   // Call this even if `selectedEditingItems` is empty as you can remove tabs
   // from tab picker.
   if (_tabPickerCompletionBlock) {
-    TabPickerCompletionBlock completion = _tabPickerCompletionBlock;
-    _tabPickerCompletionBlock = nil;
-    completion(self.selectedEditingItems.allTabs, cachedWebStateIDs);
+    TabPickerCompletionBlock completion =
+        std::exchange(_tabPickerCompletionBlock, nil);
+    completion(TabPickerSelection{
+        .selected_ids = self.selectedEditingItems.allTabs,
+        .cached_ids = cachedWebStateIDs,
+    });
+  }
+}
+
+- (void)cancelTabPicker {
+  if (_tabPickerCompletionBlock) {
+    TabPickerCompletionBlock completion =
+        std::exchange(_tabPickerCompletionBlock, nil);
+    completion(std::nullopt);
   }
 }
 
@@ -276,6 +291,11 @@
   std::set<std::string> validCachedwebStatesIDs;
   for (const auto& [webStateUniqueIDString, pageContext] : pageContextMap) {
     if (pageContext.has_value()) {
+      const std::unique_ptr<optimization_guide::proto::PageContext>& context =
+          pageContext.value();
+      if (context->has_pdf_data() && !_params.PDFEnabled) {
+        continue;
+      }
       validCachedwebStatesIDs.insert(webStateUniqueIDString);
     }
   }
@@ -370,7 +390,7 @@
     return;
   }
 
-  if (!CanExtractPageContextForWebState(webState)) {
+  if (!CanExtractPageContextForWebState(webState, _params.PDFEnabled)) {
     [self handleAttemptToAttachInvalidTab:itemID];
     return;
   }

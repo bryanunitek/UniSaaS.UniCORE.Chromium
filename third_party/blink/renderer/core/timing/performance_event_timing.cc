@@ -126,7 +126,7 @@ DOMHighResTimeStamp PerformanceEventTiming::processingEnd() const {
 }
 
 Node* PerformanceEventTiming::target() const {
-  return Performance::CanExposeNode(target_) ? target_ : nullptr;
+  return Performance::CanExposeNode(target_, source()) ? target_ : nullptr;
 }
 
 void PerformanceEventTiming::SetTarget(EventTarget* target) {
@@ -142,7 +142,7 @@ uint64_t PerformanceEventTiming::interactionId() const {
     return 0u;
   }
   CHECK(HasInteractionId());
-  return interaction_id_->id;
+  return interaction_id_->web_exposed_id;
 }
 
 UserInteractionType PerformanceEventTiming::InteractionType() const {
@@ -172,7 +172,6 @@ bool PerformanceEventTiming::IsReadyForReporting() const {
          HasInteractionId();
 }
 
-
 base::TimeTicks PerformanceEventTiming::GetStartTime() const {
   return reporting_info_.creation_time;
 }
@@ -196,7 +195,7 @@ void PerformanceEventTiming::UpdateFallbackTime(base::TimeTicks fallback_time,
 }
 
 void PerformanceEventTiming::SetDuration(double duration) {
-  // TODO(npm): enable this DCHECK once https://crbug.com/852846 is fixed.
+  // TODO: enable this DCHECK once https://crbug.com/852846 is fixed.
   // DCHECK_LE(0, duration);
   duration_ = duration;
 }
@@ -350,9 +349,9 @@ void PerformanceEventTiming::SetPerfettoData(
   event_timing->set_cancelable(cancelable());
   if (interaction_id_) {
     event_timing->set_interaction_id(
-        static_cast<uint32_t>(interaction_id_->id));
+        static_cast<uint32_t>(interaction_id_->web_exposed_id));
     event_timing->set_interaction_offset(
-        static_cast<uint32_t>(interaction_id_->offset));
+        static_cast<uint32_t>(interaction_id_->non_web_exposed_id));
   }
   event_timing->set_node_id(target_ ? target_->GetDomNodeId()
                                     : kInvalidDOMNodeId);
@@ -381,9 +380,10 @@ std::unique_ptr<TracedValue> PerformanceEventTiming::ToTracedValue(
   // If int overflows occurs, the static_cast may not work correctly.
   if (interaction_id_) {
     traced_value->SetInteger("interactionId",
-                             static_cast<int>(interaction_id_->id));
-    traced_value->SetInteger("interactionOffset",
-                             static_cast<int>(interaction_id_->offset));
+                             static_cast<int>(interaction_id_->web_exposed_id));
+    traced_value->SetInteger(
+        "interactionOffset",
+        static_cast<int>(interaction_id_->non_web_exposed_id));
   }
   traced_value->SetInteger(
       "nodeId", target_ ? target_->GetDomNodeId() : kInvalidDOMNodeId);

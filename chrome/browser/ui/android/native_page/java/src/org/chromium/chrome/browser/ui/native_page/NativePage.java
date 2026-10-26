@@ -12,7 +12,11 @@ import androidx.annotation.IntDef;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.history.HistoryFeatures;
+import org.chromium.chrome.browser.settings.SettingsInTab;
 import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.components.embedder_support.util.UrlUtilities;
+import org.chromium.components.extensions.ExtensionsBuildflags;
 import org.chromium.url.GURL;
 
 import java.lang.annotation.Retention;
@@ -84,7 +88,7 @@ public interface NativePage {
     /**
      * @param defaultColor Default color if not customized.
      * @return The toolbar (or browser controls) color used in the compositor scene layer.
-     * @see {@link Toolbar#getToolbarSceneLayerBackground()}
+     * @see Toolbar#getToolbarSceneLayerBackground()
      */
     default @ColorInt int getToolbarSceneLayerBackground(@ColorInt int defaultColor) {
         return defaultColor;
@@ -111,7 +115,7 @@ public interface NativePage {
     boolean needsToolbarShadow();
 
     /** Whether the native page supports drawing edge to edge into the bottom system bar insets. */
-    default boolean supportsEdgeToEdge() {
+    default boolean supportsEdgeToEdgeOnBottom() {
         return false;
     }
 
@@ -144,6 +148,21 @@ public interface NativePage {
     }
 
     /**
+     * Returns whether this page holds user changes that have not been persisted yet, and that would
+     * therefore be lost if the page were destroyed or frozen.
+     *
+     * <p>Pages without user-editable state return {@code false}, which is the default.
+     *
+     * <p>A frozen page reports the value captured at the time it was frozen, since the underlying
+     * page is destroyed by {@link FrozenNativePage#freeze(NativePage)}.
+     *
+     * @return {@code true} if there are unsaved changes, {@code false} otherwise.
+     */
+    default boolean hasUnsavedChanges() {
+        return false;
+    }
+
+    /**
      * @return {@code true} if the native page is a pdf page.
      */
     default boolean isPdf() {
@@ -164,6 +183,9 @@ public interface NativePage {
     default boolean isDownloadSafe() {
         return true;
     }
+
+    /** Triggers downloading for the native page. */
+    default void download() {}
 
     /** Notify the native page that it is about to be navigated back or hidden by a back press. */
     default void notifyHidingWithBack() {}
@@ -246,6 +268,10 @@ public interface NativePage {
             boolean isIncognito,
             boolean preferReuse,
             boolean hasPdfDownload) {
+        // A frozen page has no view, so it must never be reused. See crbug.com/568278676.
+        if (candidatePage != null && candidatePage.isFrozen()) {
+            candidatePage = null;
+        }
         if (hasPdfDownload) {
             String curl = candidatePage != null ? candidatePage.getUrl() : null;
             String nurl = url.getSpec();
@@ -273,12 +299,11 @@ public interface NativePage {
      */
     private static @NativePageType int chromePageType(
             GURL url, @Nullable NativePage candidatePage, boolean isIncognito) {
-        String host = url.getHost();
-        String scheme = url.getScheme();
-        if (!UrlConstants.CHROME_NATIVE_SCHEME.equals(scheme)
-                && !UrlConstants.CHROME_SCHEME.equals(scheme)) {
+        if (!UrlUtilities.isChromeScheme(url)) {
             return NativePageType.NONE;
         }
+
+        String host = url.getHost();
 
         if (candidatePage != null && candidatePage.getHost().equals(host)) {
             return NativePageType.CANDIDATE;
@@ -291,18 +316,29 @@ public interface NativePage {
         } else if (UrlConstants.DOWNLOADS_HOST.equals(host)) {
             return NativePageType.DOWNLOADS;
         } else if (UrlConstants.HISTORY_HOST.equals(host)) {
+            if (HistoryFeatures.isAndroidDesktopWebUiHistoryEnabled()) {
+                return NativePageType.NONE;
+            }
             return NativePageType.HISTORY;
         } else if (UrlConstants.RECENT_TABS_HOST.equals(host) && !isIncognito) {
             return NativePageType.RECENT_TABS;
         } else if (UrlConstants.EXPLORE_HOST.equals(host)) {
             return NativePageType.EXPLORE;
         } else if (UrlConstants.MANAGEMENT_HOST.equals(host)) {
+            // WebUI chrome://management is enabled by default on Desktop Android (which supports
+            // extensions core) and gated behind an experiment flag on Mobile Android.
+            if (ExtensionsBuildflags.ENABLE_EXTENSIONS_CORE
+                    || ChromeFeatureList.sMigrateManagementToWebUIOnMobile.isEnabled()) {
+                return NativePageType.NONE;
+            }
             return NativePageType.MANAGEMENT;
-        } else if (UrlConstants.BRICKS_HOST.equals(host)
+        } else if ((UrlConstants.BRICKS_HOST.equals(host)
+                        || UrlConstants.BRICKS_JAVA_HOST.equals(host))
                 && ChromeFeatureList.isEnabled(ChromeFeatureList.ANDROID_BRICKS_NATIVE_PAGE)) {
             return NativePageType.BRICKS;
         } else if (UrlConstants.SETTINGS_HOST.equals(host)
-                && ChromeFeatureList.isEnabled(ChromeFeatureList.SETTINGS_IN_TAB)) {
+                && SettingsInTab.isFeatureEnabled()
+                && !isIncognito) {
             return NativePageType.SETTINGS;
         } else {
             return NativePageType.NONE;

@@ -6,7 +6,6 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "chrome/browser/page_info/page_info_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
@@ -15,31 +14,28 @@
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "chrome/browser/ui/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
-#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
 #include "chrome/browser/ui/views/page_info/web_view_side_panel_view.h"
 #include "components/page_info/core/about_this_site_service.h"
-#include "components/strings/grit/components_strings.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "net/base/url_util.h"
-#include "ui/base/l10n/l10n_util.h"
-#include "ui/views/vector_icons.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 constexpr char kStaticLoadingScreenURL[] =
     "https://www.gstatic.com/diner/chrome/atp_loading.html";
 
 namespace {
 content::OpenURLParams CreateOpenUrlParams(const GURL& url) {
-  return content::OpenURLParams(
+  return content::OpenURLParams::CreateBrowserInitiated(
       net::AppendOrReplaceQueryParameter(
           url, page_info::AboutThisSiteRenderModeParameterName,
           page_info::AboutThisSiteRenderModeParameterValue),
-      content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui::PAGE_TRANSITION_LINK, /*is_renderer_initiated=*/false);
+      WindowOpenDisposition::kNewForegroundTab, ui::PAGE_TRANSITION_LINK);
 }
 }  // namespace
 
@@ -157,7 +153,7 @@ void AboutThisSideSidePanelCoordinator::DidFinishNavigation(
       about_this_site_side_panel_view_) {
     auto* entry = registry->GetEntryForKey(
         SidePanelEntry::Key(SidePanelEntry::Id::kAboutThisSite));
-    DCHECK(entry);
+    CHECK(entry, base::NotFatalUntil::M162);
     entry->ClearCachedView();
   }
 }
@@ -165,8 +161,8 @@ void AboutThisSideSidePanelCoordinator::DidFinishNavigation(
 std::unique_ptr<views::View>
 AboutThisSideSidePanelCoordinator::CreateAboutThisSiteWebView(
     SidePanelEntryScope& scope) {
-  DCHECK(GetBrowserView());
-  DCHECK(last_url_info_);
+  CHECK(GetBrowserView(), base::NotFatalUntil::M162);
+  CHECK(last_url_info_, base::NotFatalUntil::M162);
   if (registered_but_not_shown_) {
     page_info::AboutThisSiteService::OnOpenedDirectlyFromSidePanel();
     registered_but_not_shown_ = false;
@@ -191,13 +187,14 @@ SidePanelUI* AboutThisSideSidePanelCoordinator::GetSidePanelUI() {
   BrowserWindowInterface* browser =
       GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
           web_contents());
-  return browser ? browser->GetFeatures().side_panel_ui() : nullptr;
+  return browser ? SidePanelUI::From(browser) : nullptr;
 }
 
 GURL AboutThisSideSidePanelCoordinator::GetOpenInNewTabUrl() {
-  DCHECK(last_url_info_.has_value());
-  DCHECK(!last_url_info_.value().new_tab_url.query().contains(
-      page_info::AboutThisSiteRenderModeParameterName));
+  CHECK(last_url_info_.has_value(), base::NotFatalUntil::M162);
+  CHECK(!last_url_info_.value().new_tab_url.query().contains(
+            page_info::AboutThisSiteRenderModeParameterName),
+        base::NotFatalUntil::M162);
   return last_url_info_.value().new_tab_url;
 }
 

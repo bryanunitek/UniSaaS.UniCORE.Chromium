@@ -11,13 +11,11 @@
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
 #include "printing/mojom/print.mojom.h"
-#include "skia/ext/skia_utils_win.h"
-#include "third_party/skia/include/core/SkBitmap.h"
-#include "ui/gfx/codec/jpeg_codec.h"
-#include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -28,25 +26,6 @@ namespace {
 // This is less than sizeof(ENHMETARECORD) because ENHMETARECORD contains a
 // DWORD field of variable length that can sometimes have a length of 0.
 constexpr uint32_t kMinEnhMetaRecordSize = 8;
-
-bool DIBFormatNativelySupported(HDC dc,
-                                uint32_t escape,
-                                base::span<const uint8_t> bits) {
-  // ExtEscape() takes an int for its data size parameter, so reject large
-  // input sizes that do not fit in an int.
-  if (!base::IsValueInRangeForNumericType<int>(bits.size())) {
-    return false;
-  }
-
-  BOOL supported = FALSE;
-  if (ExtEscape(dc, QUERYESCSUPPORT, sizeof(escape),
-                reinterpret_cast<LPCSTR>(&escape), 0, 0) > 0) {
-    ExtEscape(dc, escape, static_cast<int>(bits.size()),
-              reinterpret_cast<LPCSTR>(bits.data()), sizeof(supported),
-              reinterpret_cast<LPSTR>(&supported));
-  }
-  return !!supported;
-}
 
 const BITMAPINFOHEADER* GetBitmapInfoHeader(
     base::span<const uint8_t> record_span) {
@@ -71,26 +50,21 @@ const BITMAPINFOHEADER* GetBitmapInfoHeader(
       record_span.subspan(sdib_record->offBmiSrc).data());
 }
 
-base::span<const uint8_t> GetBitmapBits(base::span<const uint8_t> record_span,
-                                        uint32_t expected_size) {
-  if (record_span.size() < sizeof(EMRSTRETCHDIBITS)) {
+base::span<const uint8_t> GetGdiCommentData(
+    base::span<const uint8_t> record_span) {
+  if (record_span.size() < sizeof(EMRGDICOMMENT)) {
     return {};
   }
 
-  const auto* sdib_record =
-      reinterpret_cast<const EMRSTRETCHDIBITS*>(record_span.data());
-  if (sdib_record->offBitsSrc < sizeof(EMRSTRETCHDIBITS) ||
-      sdib_record->cbBitsSrc != expected_size) {
+  const auto* comment =
+      reinterpret_cast<const EMRGDICOMMENT*>(record_span.data());
+  base::CheckedNumeric<uint32_t> end_data = offsetof(EMRGDICOMMENT, Data);
+  end_data += comment->cbData;
+  if (!end_data.IsValid() || end_data.ValueOrDie() > record_span.size()) {
     return {};
   }
 
-  base::CheckedNumeric<uint32_t> end_bits = sdib_record->offBitsSrc;
-  end_bits += sdib_record->cbBitsSrc;
-  if (!end_bits.IsValid() || end_bits.ValueOrDie() > record_span.size()) {
-    return {};
-  }
-
-  return record_span.subspan(sdib_record->offBitsSrc, sdib_record->cbBitsSrc);
+  return record_span.subspan(offsetof(EMRGDICOMMENT, Data), comment->cbData);
 }
 
 }  // namespace
@@ -238,21 +212,31 @@ bool PostScriptMetaFile::SafePlayback(HDC hdc) const {
       continue;
     }
 
-    const auto* comment = reinterpret_cast<const EMRGDICOMMENT*>(emf_record);
-    const char* data = reinterpret_cast<const char*>(comment->Data);
+    // SAFETY: `Emf::Enumerator::EnhMetaFileProc()` verified that `nSize` fits
+    // within the remaining metafile buffer.
+    base::span<const uint8_t> record_span = UNSAFE_BUFFERS(base::span(
+        reinterpret_cast<const uint8_t*>(emf_record), emf_record->nSize));
+    base::span<const uint8_t> data_span = GetGdiCommentData(record_span);
+    if (data_span.size() < sizeof(uint16_t)) {
+      continue;
+    }
+
     // First uint16_t element in `data` holds the size of the rest of `data`,
     // which is the actual PostScript data. Windows requires this payload size +
     // PS data structure.
-    const uint16_t ps_payload_size = *reinterpret_cast<const uint16_t*>(data);
+    const uint16_t ps_payload_size =
+        base::U16FromNativeEndian(data_span.first<sizeof(uint16_t)>());
     const uint32_t data_size = 2 + ps_payload_size;
     // Assume value used in PDFium's core/fxge/win32/cpsoutput.cpp is not going
     // to change.
     static constexpr uint16_t kExpectedPdfiumMax = 1024 + 2;
-    if (data_size != comment->cbData || data_size > kExpectedPdfiumMax) {
+    if (data_size != data_span.size() || data_size > kExpectedPdfiumMax) {
       continue;
     }
 
-    int ret = ExtEscape(hdc, PASSTHROUGH, data_size, data, 0, nullptr);
+    int ret =
+        ExtEscape(hdc, PASSTHROUGH, static_cast<int>(data_size),
+                  reinterpret_cast<const char*>(data_span.data()), 0, nullptr);
     DCHECK_EQ(ps_payload_size, ret);
   }
   return true;
@@ -305,12 +289,6 @@ bool Emf::Record::SafePlayback(Emf::EnumerationContext* context) const {
   // I also use this opportunity to skip over eventual EMR_SETLAYOUT record that
   // could remain.
   //
-  // Another tweak we make is for JPEGs/PNGs in calls to StretchDIBits.
-  // (Our Pepper plugin code uses a JPEG). If the printer does not support
-  // JPEGs/PNGs natively we decompress the JPEG/PNG and then set it to the
-  // device.
-  // TODO(sanjeevr): We should also add JPEG/PNG support for SetSIBitsToDevice
-  //
   // We also process any custom EMR_GDICOMMENT records which are our
   // placeholders for StartPage and EndPage.
   // Note: I should probably care about view ports and clipping, eventually.
@@ -326,61 +304,11 @@ bool Emf::Record::SafePlayback(Emf::EnumerationContext* context) const {
       }
 
       const BITMAPINFOHEADER* bmih = GetBitmapInfoHeader(record_span);
-      if (!bmih) {
+      if (!bmih || bmih->biCompression != BI_RGB) {
         return false;
       }
 
-      bool play_normally = true;
-      res = false;
-      HDC hdc = context->hdc;
-      SkBitmap bitmap;
-      if (bmih->biCompression == BI_JPEG) {
-        base::span<const uint8_t> bits =
-            GetBitmapBits(record_span, bmih->biSizeImage);
-        if (bits.empty()) {
-          return false;
-        }
-
-        if (!DIBFormatNativelySupported(hdc, CHECKJPEGFORMAT, bits)) {
-          play_normally = false;
-          bitmap = gfx::JPEGCodec::Decode(bits);
-          if (bitmap.isNull()) {
-            return false;
-          }
-        }
-      } else if (bmih->biCompression == BI_PNG) {
-        base::span<const uint8_t> bits =
-            GetBitmapBits(record_span, bmih->biSizeImage);
-        if (bits.empty()) {
-          return false;
-        }
-
-        if (!DIBFormatNativelySupported(hdc, CHECKPNGFORMAT, bits)) {
-          play_normally = false;
-          bitmap = gfx::PNGCodec::Decode(bits);
-          if (bitmap.isNull()) {
-            return false;
-          }
-        }
-      }
-      if (play_normally) {
-        res = Play(context);
-      } else {
-        const auto* sdib_record =
-            reinterpret_cast<const EMRSTRETCHDIBITS*>(record());
-        const uint32_t* pixels =
-            static_cast<const uint32_t*>(bitmap.getPixels());
-        CHECK(pixels);
-        BITMAPINFOHEADER bmi = {0};
-        skia::CreateBitmapHeaderForN32SkBitmap(bitmap, &bmi);
-        res =
-            (0 != StretchDIBits(hdc, sdib_record->xDest, sdib_record->yDest,
-                                sdib_record->cxDest, sdib_record->cyDest,
-                                sdib_record->xSrc, sdib_record->ySrc,
-                                sdib_record->cxSrc, sdib_record->cySrc, pixels,
-                                reinterpret_cast<const BITMAPINFO*>(&bmi),
-                                sdib_record->iUsageSrc, sdib_record->dwRop));
-      }
+      res = Play(context);
       break;
     }
     case EMR_SETWORLDTRANSFORM: {

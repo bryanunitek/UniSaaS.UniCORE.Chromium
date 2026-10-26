@@ -6,7 +6,10 @@
 
 #import <LinkPresentation/LinkPresentation.h>
 
+#import "base/strings/sys_string_conversions.h"
 #import "components/bookmarks/browser/bookmark_model.h"
+#import "components/signin/public/identity_manager/account_info.h"
+#import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/browser/bookmarks/model/bookmark_model_factory.h"
 #import "ios/chrome/browser/reading_list/model/reading_list_browser_agent.h"
 #import "ios/chrome/browser/shared/coordinator/default_browser_promo/non_modal_default_browser_promo_scheduler_scene_agent.h"
@@ -14,8 +17,13 @@
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/bookmarks_commands.h"
+#import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/find_in_page_commands.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
+#import "ios/chrome/browser/shared/public/commands/qr_generation_commands.h"
+#import "ios/chrome/browser/shared/public/commands/send_tab_to_self_commands.h"
+#import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
@@ -32,6 +40,9 @@
 #import "ios/chrome/browser/sharing/ui_bundled/activity_services/data/share_to_data.h"
 #import "ios/chrome/browser/sharing/ui_bundled/activity_services/data/share_to_data_builder.h"
 #import "ios/chrome/browser/sharing/ui_bundled/sharing_params.h"
+#import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/sync/model/send_tab_to_self_sync_service_factory.h"
+#import "ios/chrome/browser/tabs/model/tab_title_util.h"
 #import "ios/chrome/browser/web/model/web_navigation_browser_agent.h"
 #import "ios/web/public/web_state.h"
 #import "net/base/apple/url_conversions.h"
@@ -48,9 +59,6 @@ constexpr CGFloat kAppIconPointSize = 80;
 }  // namespace
 
 @interface ActivityServiceCoordinator ()
-
-@property(nonatomic, weak) id<BrowserCoordinatorCommands, FindInPageCommands>
-    handler;
 
 @property(nonatomic, strong) ActivityServiceMediator* mediator;
 
@@ -112,32 +120,57 @@ constexpr CGFloat kAppIconPointSize = 80;
                         name:UIApplicationDidEnterBackgroundNotification
                       object:nil];
 
-  self.handler =
-      static_cast<id<BrowserCoordinatorCommands, FindInPageCommands>>(
-          self.browser->GetCommandDispatcher());
+  CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
+  id<BrowserCoordinatorCommands> browserHandler =
+      HandlerForProtocol(dispatcher, BrowserCoordinatorCommands);
+  id<FindInPageCommands> findInPageHandler =
+      HandlerForProtocol(dispatcher, FindInPageCommands);
+  id<SendTabToSelfCommands> sendTabToSelfHandler =
+      HandlerForProtocol(dispatcher, SendTabToSelfCommands);
 
   ProfileIOS* profile = self.profile;
   self.incognito = profile->IsOffTheRecord();
   bookmarks::BookmarkModel* bookmarkModel =
       ios::BookmarkModelFactory::GetForProfile(profile);
-  id<BookmarksCommands> bookmarksHandler = HandlerForProtocol(
-      self.browser->GetCommandDispatcher(), BookmarksCommands);
-  id<HelpCommands> helpHandler =
-      HandlerForProtocol(self.browser->GetCommandDispatcher(), HelpCommands);
+  id<BookmarksCommands> bookmarksHandler =
+      HandlerForProtocol(dispatcher, BookmarksCommands);
+  id<HelpCommands> helpHandler = HandlerForProtocol(dispatcher, HelpCommands);
   WebNavigationBrowserAgent* agent =
       WebNavigationBrowserAgent::FromBrowser(self.browser);
   ReadingListBrowserAgent* readingListBrowserAgent =
       ReadingListBrowserAgent::FromBrowser(self.browser);
-  self.mediator =
-      [[ActivityServiceMediator alloc] initWithHandler:self.handler
-                                      bookmarksHandler:bookmarksHandler
-                                           helpHandler:helpHandler
-                                   qrGenerationHandler:self.scopedHandler
-                                           prefService:profile->GetPrefs()
-                                         bookmarkModel:bookmarkModel
-                                    baseViewController:self.baseViewController
-                                       navigationAgent:agent
-                               readingListBrowserAgent:readingListBrowserAgent];
+  signin::IdentityManager* identityManager =
+      IdentityManagerFactory::GetForProfile(profile);
+  NSString* userGivenName = nil;
+  if (identityManager) {
+    AccountInfo accountInfo = identityManager->FindExtendedAccountInfo(
+        identityManager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin));
+    std::optional<std::string_view> givenName = accountInfo.GetGivenName();
+    if (givenName && !givenName->empty()) {
+      userGivenName = base::SysUTF8ToNSString(*givenName);
+    } else {
+      std::optional<std::string_view> fullName = accountInfo.GetFullName();
+      if (fullName && !fullName->empty()) {
+        userGivenName = base::SysUTF8ToNSString(*fullName);
+      }
+    }
+  }
+
+  self.mediator = [[ActivityServiceMediator alloc]
+        initWithBrowserHandler:browserHandler
+             findInPageHandler:findInPageHandler
+          sendTabToSelfHandler:sendTabToSelfHandler
+              bookmarksHandler:bookmarksHandler
+                   helpHandler:helpHandler
+           qrGenerationHandler:self.scopedHandler
+                   prefService:profile->GetPrefs()
+                 bookmarkModel:bookmarkModel
+            baseViewController:self.baseViewController
+               navigationAgent:agent
+       readingListBrowserAgent:readingListBrowserAgent
+      sendTabToSelfSyncService:SendTabToSelfSyncServiceFactory::GetForProfile(
+                                   profile)
+                 userGivenName:userGivenName];
 
   SceneState* sceneState = self.browser->GetSceneState();
   self.mediator.promoScheduler = [NonModalDefaultBrowserPromoSchedulerSceneAgent
@@ -256,6 +289,9 @@ constexpr CGFloat kAppIconPointSize = 80;
     return;
   }
 
+  const GURL initialURL = currentWebState->GetVisibleURL();
+  NSString* initialTitle = tab_util::GetTabTitle(currentWebState);
+
   // Retrieve the current page's URL.
   __weak __typeof(self) weakSelf = self;
   activity_services::RetrieveCanonicalUrl(
@@ -263,6 +299,8 @@ constexpr CGFloat kAppIconPointSize = 80;
       base::BindOnce(
           ^(base::WeakPtr<web::WebState> weak_web_state, const GURL& url) {
             [weakSelf sharePageWithCanonicalURL:url
+                                     initialURL:initialURL
+                                   initialTitle:initialTitle
                                        webState:weak_web_state.get()];
           },
           currentWebState->GetWeakPtr()));
@@ -270,6 +308,8 @@ constexpr CGFloat kAppIconPointSize = 80;
 
 // Shares the current page using its `canonicalURL`.
 - (void)sharePageWithCanonicalURL:(const GURL&)canonicalURL
+                       initialURL:(const GURL&)initialURL
+                     initialTitle:(NSString*)initialTitle
                          webState:(web::WebState*)webState {
   if (!webState) {
     return;
@@ -279,8 +319,24 @@ constexpr CGFloat kAppIconPointSize = 80;
     return;
   }
 
-  ShareToData* data =
-      activity_services::ShareToDataForWebState(webState, canonicalURL);
+  ShareToData* data = nil;
+  if (webState->GetVisibleURL() == initialURL) {
+    data = activity_services::ShareToDataForWebState(webState, canonicalURL);
+  } else {
+    // If the URL changed while retrieving the canonical URL, the connection
+    // with the current page in the WebState is broken. Fall back to sharing the
+    // URL instead of the WebState. If the canonical URL exists, still use it as
+    // it was the initial intention.
+    ProfileIOS* profile =
+        ProfileIOS::FromBrowserState(webState->GetBrowserState());
+    send_tab_to_self::SendTabToSelfSyncService* sendTabToSelfService =
+        SendTabToSelfSyncServiceFactory::GetForProfile(profile);
+    const GURL& URLToShare =
+        canonicalURL.is_valid() ? canonicalURL : initialURL;
+    data = activity_services::ShareToDataForURL(
+        URLToShare, initialTitle, /*additional_text=*/nil,
+        /*link_metadata=*/nil, sendTabToSelfService);
+  }
 
   NSArray<ChromeActivityURLSource*>* items =
       [self.mediator activityItemsForDataItems:@[ data ]];
@@ -320,6 +376,9 @@ constexpr CGFloat kAppIconPointSize = 80;
     return;
   }
 
+  const GURL initialURL = currentWebState->GetVisibleURL();
+  NSString* initialTitle = tab_util::GetTabTitle(currentWebState);
+
   // Retrieve the current page's URL.
   __weak __typeof(self) weakSelf = self;
   activity_services::RetrieveCanonicalUrl(
@@ -327,6 +386,8 @@ constexpr CGFloat kAppIconPointSize = 80;
       base::BindOnce(
           ^(base::WeakPtr<web::WebState> weak_web_state, const GURL& url) {
             [weakSelf shareFileWithCanonicalURL:url
+                                     initialURL:initialURL
+                                   initialTitle:initialTitle
                                        webState:weak_web_state.get()];
           },
           currentWebState->GetWeakPtr()));
@@ -334,6 +395,8 @@ constexpr CGFloat kAppIconPointSize = 80;
 
 // Shares the current PDF using its `canonicalURL`.
 - (void)shareFileWithCanonicalURL:(const GURL&)canonicalURL
+                       initialURL:(const GURL&)initialURL
+                     initialTitle:(NSString*)initialTitle
                          webState:(web::WebState*)webState {
   if (!webState) {
     return;
@@ -343,8 +406,24 @@ constexpr CGFloat kAppIconPointSize = 80;
     return;
   }
 
-  ShareToData* URLData =
-      activity_services::ShareToDataForWebState(webState, canonicalURL);
+  ShareToData* URLData = nil;
+  if (webState->GetVisibleURL() == initialURL) {
+    URLData = activity_services::ShareToDataForWebState(webState, canonicalURL);
+  } else {
+    // If the URL changed while retrieving the canonical URL, the connection
+    // with the current page in the WebState is broken. Fall back to sharing the
+    // URL instead of the WebState. If the canonical URL exists, still use it as
+    // it was the initial intention.
+    ProfileIOS* profile =
+        ProfileIOS::FromBrowserState(webState->GetBrowserState());
+    send_tab_to_self::SendTabToSelfSyncService* sendTabToSelfService =
+        SendTabToSelfSyncServiceFactory::GetForProfile(profile);
+    const GURL& URLToShare =
+        canonicalURL.is_valid() ? canonicalURL : initialURL;
+    URLData = activity_services::ShareToDataForURL(
+        URLToShare, initialTitle, /*additional_text=*/nil,
+        /*link_metadata=*/nil, sendTabToSelfService);
+  }
 
   // As giving a PDF file to the UIActivityViewController will add the "Print"
   // activity from Apple, Chrome's print activity is disabled to avoid
@@ -374,17 +453,21 @@ constexpr CGFloat kAppIconPointSize = 80;
   NSMutableArray* dataItems = [[NSMutableArray alloc] init];
   SharingParams* params = self.params;
 
+  send_tab_to_self::SendTabToSelfSyncService* sendTabToSelfService =
+      SendTabToSelfSyncServiceFactory::GetForProfile(self.profile);
+
   // If only given a single URL, include additionalText in shared payload.
   if (params.URLs.count == 1) {
     URLWithTitle* url = params.URLs[0];
     LPLinkMetadata* metadata = [self linkMetadata:url];
     ShareToData* data = activity_services::ShareToDataForURL(
-        url.URL, url.title, params.additionalText, metadata);
+        url.URL, url.title, params.additionalText, metadata,
+        sendTabToSelfService);
     [dataItems addObject:data];
   } else {
     for (URLWithTitle* urlWithTitle in params.URLs) {
-      ShareToData* data =
-          activity_services::ShareToDataForURLWithTitle(urlWithTitle);
+      ShareToData* data = activity_services::ShareToDataForURLWithTitle(
+          urlWithTitle, sendTabToSelfService);
       [dataItems addObject:data];
     }
   }
@@ -416,11 +499,11 @@ constexpr CGFloat kAppIconPointSize = 80;
 
 - (NSItemProvider*)appIconProvider {
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
-  UIImage* image = MakeSymbolMulticolor(CustomSymbolWithPointSize(
-      kMulticolorChromeballSymbol, kAppIconPointSize));
+  UIImage* image = MakeSymbolMulticolor(
+      SymbolWithPointSize(SymbolMulticolorChromeball, kAppIconPointSize));
 #else
-  UIImage* image = DefaultSymbolTemplateWithPointSize(kDefaultBrowserSymbol,
-                                                      kAppIconPointSize);
+  UIImage* image =
+      SymbolTemplateWithPointSize(SymbolDefaultBrowser, kAppIconPointSize);
 #endif  // BUILDFLAG(IOS_USE_BRANDED_ASSETS)
   return [[NSItemProvider alloc] initWithObject:image];
 }

@@ -5,12 +5,92 @@
 #include "chrome/browser/sync/tab_context_sync_service_factory.h"
 
 #include <memory>
+#include <optional>
+#include <utility>
 
+#include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/sync/data_type_store_service_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
+#include "chrome/common/channel_info.h"
+#include "components/sync/base/passphrase_enums.h"
+#include "components/sync/base/report_unrecoverable_error.h"
 #include "components/sync/model/client_tag_based_data_type_processor.h"
+#include "components/sync/model/data_type_store_service.h"
+#include "components/sync/service/sync_service.h"
+#include "components/sync/service/sync_user_settings.h"
+#include "components/sync_tab_context/http_rpc_based_ephemeral_key_fetcher.h"
+#include "components/sync_tab_context/http_rpc_constants.h"
+#include "components/sync_tab_context/tab_context_sync_client.h"
 #include "components/sync_tab_context/tab_context_sync_service_impl.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "url/gurl.h"
+
+namespace {
+
+class TabContextSyncClientImpl : public sync_tab_context::TabContextSyncClient {
+ public:
+  explicit TabContextSyncClientImpl(Profile* profile) : profile_(profile) {
+    CHECK(profile_);
+  }
+
+  ~TabContextSyncClientImpl() override = default;
+
+  std::optional<syncer::PassphraseType> GetPassphraseType() const override {
+    // `SyncServiceFactory` depends on `TabContextSyncServiceFactory`, so
+    // `SyncService` must be retrieved lazily at runtime rather than injected at
+    // construction time.
+    const syncer::SyncService* const sync_service =
+        SyncServiceFactory::GetForProfile(profile_);
+    if (!sync_service) {
+      return std::nullopt;
+    }
+    return sync_service->GetUserSettings()->GetPassphraseType();
+  }
+
+ private:
+  const raw_ptr<Profile> profile_;
+};
+
+std::unique_ptr<KeyedService> BuildServiceInstance(
+    content::BrowserContext* context) {
+  Profile* const profile = Profile::FromBrowserContext(context);
+  syncer::DataTypeStoreService* const store_service =
+      DataTypeStoreServiceFactory::GetForProfile(profile);
+  signin::IdentityManager* const identity_manager =
+      IdentityManagerFactory::GetForProfile(profile);
+  if (!store_service || !identity_manager) {
+    return nullptr;
+  }
+
+  // `base::Unretained(profile)` is safe because `Profile` outlives all
+  // `KeyedService` instances associated with it.
+  auto ephemeral_key_fetcher =
+      std::make_unique<sync_tab_context::HttpRpcBasedEphemeralKeyFetcher>(
+          identity_manager,
+          base::BindRepeating(&Profile::GetURLLoaderFactory,
+                              base::Unretained(profile)),
+          sync_tab_context::GetEphemeralKeyServerUrl());
+
+  return std::make_unique<sync_tab_context::TabContextSyncServiceImpl>(
+      std::make_unique<TabContextSyncClientImpl>(profile),
+      store_service->GetStoreFactory(), std::move(ephemeral_key_fetcher),
+      base::BindRepeating(&syncer::ReportUnrecoverableError,
+                          chrome::GetChannel()));
+}
+
+}  // namespace
+
+// static
+BrowserContextKeyedServiceFactory::TestingFactory
+TabContextSyncServiceFactory::GetDefaultFactory() {
+  return base::BindRepeating(&BuildServiceInstance);
+}
 
 // static
 sync_tab_context::TabContextSyncService*
@@ -32,17 +112,19 @@ TabContextSyncServiceFactory::TabContextSyncServiceFactory()
               .WithRegular(ProfileSelection::kOriginalOnly)
               .WithGuest(ProfileSelection::kNone)
               .WithAshInternals(ProfileSelection::kNone)
-              .Build()) {}
+              .Build()) {
+  DependsOn(DataTypeStoreServiceFactory::GetInstance());
+  DependsOn(IdentityManagerFactory::GetInstance());
+}
 
 TabContextSyncServiceFactory::~TabContextSyncServiceFactory() = default;
 
 std::unique_ptr<KeyedService>
 TabContextSyncServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  auto change_processor =
-      std::make_unique<syncer::ClientTagBasedDataTypeProcessor>(
-          syncer::ENCRYPTED_TAB_CONTEXT_CONTAINER,
-          /*dump_stack=*/base::DoNothing());
-  return std::make_unique<sync_tab_context::TabContextSyncServiceImpl>(
-      std::move(change_processor));
+  return BuildServiceInstance(context);
+}
+
+bool TabContextSyncServiceFactory::ServiceIsNULLWhileTesting() const {
+  return true;
 }

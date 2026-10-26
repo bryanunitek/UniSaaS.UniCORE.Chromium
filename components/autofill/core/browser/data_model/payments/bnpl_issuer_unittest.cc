@@ -9,7 +9,7 @@
 #include "base/test/gtest_util.h"
 #include "components/autofill/core/browser/data_model/payments/payment_instrument.h"
 #include "components/autofill/core/browser/payments/constants.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/grit/components_scaled_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -79,7 +79,7 @@ TEST(BnplIssuerTest, GetEligiblePriceRangeForCurrency_WithRangeInUsd) {
   const base::optional_ref<const BnplIssuer::EligiblePriceRange> usd_range =
       issuer.GetEligiblePriceRangeForCurrency("USD");
   ASSERT_TRUE(usd_range.has_value());
-  EXPECT_EQ("USD", usd_range.value().currency);
+  EXPECT_EQ(usd_range.value().currency, "USD");
   EXPECT_EQ(issuer.eligible_price_ranges()[0].price_upper_bound,
             usd_range.value().price_upper_bound);
   EXPECT_EQ(issuer.eligible_price_ranges()[0].price_lower_bound,

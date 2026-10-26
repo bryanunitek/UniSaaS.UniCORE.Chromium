@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/app_home/app_home_ui.h"
 
+#include "base/memory/ref_counted_memory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/app_home/app_home.mojom.h"
 #include "chrome/browser/ui/webui/app_home/app_home_page_handler.h"
@@ -75,7 +76,7 @@ void AppHomeUI::BindInterface(
 }
 
 // static
-base::RefCountedMemory* AppHomeUI::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory> AppHomeUI::GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
       IDR_BOOKMARK_BAR_APPS_SHORTCUT, scale_factor);
@@ -84,7 +85,7 @@ base::RefCountedMemory* AppHomeUI::GetFaviconResourceBytes(
 void AppHomeUI::CreatePageHandler(
     mojo::PendingRemote<app_home::mojom::Page> page,
     mojo::PendingReceiver<app_home::mojom::PageHandler> receiver) {
-  DCHECK(page);
+  CHECK(page, base::NotFatalUntil::M162);
   Profile* profile = Profile::FromWebUI(web_ui());
   page_handler_ = std::make_unique<AppHomePageHandler>(
       web_ui(), profile, std::move(receiver), std::move(page));

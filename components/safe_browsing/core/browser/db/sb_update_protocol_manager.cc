@@ -8,43 +8,59 @@
 #include <string>
 #include <utility>
 
+#include "base/command_line.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/rand_util.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/safebrowsing_switches.h"
 #include "components/safe_browsing/core/common/utils.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 using base::Time;
 
-// TODO(crbug.com/362791941): Update/extract v4-specific parts of this file.
+namespace {
+
+int GetTimerStartIntervalSecMin() {
+  if (base::CommandLine::InitializedForCurrentProcess() &&
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          safe_browsing::switches::kSbFastInitialListsUpdate)) {
+    return safe_browsing::kTimerStartIntervalSecMinFastUpdate;
+  }
+  return safe_browsing::kTimerStartIntervalSecMin;
+}
+
+int GetTimerStartIntervalSecMax() {
+  if (base::CommandLine::InitializedForCurrentProcess() &&
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          safe_browsing::switches::kSbFastInitialListsUpdate)) {
+    return safe_browsing::kTimerStartIntervalSecMaxFastUpdate;
+  }
+  return safe_browsing::kTimerStartIntervalSecMax;
+}
+
+}  // namespace
+
 namespace safe_browsing {
 
 // SBUpdateProtocolManager implementation --------------------------------
 
 SBUpdateProtocolManager::SBUpdateProtocolManager(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    const V4ProtocolConfig& config)
+    const SBProtocolConfig& config)
     : next_update_interval_(
-          base::Seconds(base::RandIntInclusive(kTimerStartIntervalSecMin,
-                                               kTimerStartIntervalSecMax))),
+          base::Seconds(base::RandIntInclusive(GetTimerStartIntervalSecMin(),
+                                               GetTimerStartIntervalSecMax()))),
       config_(config),
-      url_loader_factory_(url_loader_factory),
-      update_error_count_(0),
-      update_back_off_mult_(1) {
+      url_loader_factory_(url_loader_factory) {
   // Do not auto-schedule updates. Let the owner (SBLocalDatabaseManager) do it
   // when it is ready to process updates.
 }
 
 SBUpdateProtocolManager::~SBUpdateProtocolManager() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-}
-
-void SBUpdateProtocolManager::ResetUpdateErrors() {
-  update_error_count_ = 0;
-  update_back_off_mult_ = 1;
 }
 
 bool SBUpdateProtocolManager::IsUpdateScheduled() const {
@@ -59,8 +75,7 @@ base::TimeDelta SBUpdateProtocolManager::GetNextUpdateInterval(bool back_off) {
 
   base::TimeDelta next = next_update_interval_;
   if (back_off) {
-    next = SBProtocolManagerUtil::GetNextBackOffInterval(
-        &update_error_count_, &update_back_off_mult_);
+    next = GetNextBackOffInterval();
   }
 
   base::UmaHistogramCustomTimes("SafeBrowsing.SBUpdate.NextUpdateInterval",

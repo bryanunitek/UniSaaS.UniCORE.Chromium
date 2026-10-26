@@ -5,6 +5,7 @@
 // clang-format off
 import 'chrome://resources/cr_elements/cr_toggle/cr_toggle.js';
 
+import {isMac} from 'chrome://resources/js/platform.js';
 import {getTrustedHTML} from 'chrome://resources/js/static_types.js';
 import type {CrToggleElement} from 'chrome://resources/cr_elements/cr_toggle/cr_toggle.js';
 import {MOVE_THRESHOLD_PX} from 'chrome://resources/cr_elements/cr_toggle/cr_toggle.js';
@@ -26,13 +27,13 @@ suite('cr-toggle', function() {
   function assertChecked() {
     assertTrue(toggle.checked);
     assertTrue(toggle.hasAttribute('checked'));
-    assertEquals('true', toggle.getAttribute('aria-pressed'));
+    assertEquals('true', toggle.getAttribute('aria-checked'));
   }
 
   function assertNotChecked() {
     assertFalse(toggle.checked);
     assertEquals(null, toggle.getAttribute('checked'));
-    assertEquals('false', toggle.getAttribute('aria-pressed'));
+    assertEquals('false', toggle.getAttribute('aria-checked'));
   }
 
   function assertDisabled() {
@@ -177,6 +178,24 @@ suite('cr-toggle', function() {
     toggle.dispatchEvent(new KeyboardEvent('keyup', {key: ' '}));
     await toggle.updateComplete;
     assertNotChecked();
+  });
+
+  test('control+enter does not toggle on Mac', async () => {
+    assertNotChecked();
+    const keydown = new KeyboardEvent(
+        'keydown', {key: 'Enter', ctrlKey: true, cancelable: true});
+    toggle.dispatchEvent(keydown);
+    assertEquals(!isMac, keydown.defaultPrevented);
+    const keyup = new KeyboardEvent(
+        'keyup', {key: 'Enter', ctrlKey: true, cancelable: true});
+    toggle.dispatchEvent(keyup);
+    assertEquals(!isMac, keyup.defaultPrevented);
+    await toggle.updateComplete;
+    if (isMac) {
+      assertNotChecked();
+    } else {
+      assertChecked();
+    }
   });
 
   // Test that the control is not affected by user interaction when disabled.

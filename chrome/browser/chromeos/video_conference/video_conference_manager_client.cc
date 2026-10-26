@@ -13,16 +13,15 @@
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/unguessable_token.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/video_conference/video_conference_manager_ash.h"
 #include "chrome/browser/chromeos/video_conference/video_conference_manager_client_common.h"
 #include "chrome/browser/chromeos/video_conference/video_conference_media_listener.h"
 #include "chrome/browser/chromeos/video_conference/video_conference_web_app.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
-#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/common/webui_url_constants.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "extensions/browser/process_manager.h"
@@ -110,7 +109,7 @@ VideoConferenceManagerClientImpl::~VideoConferenceManagerClientImpl() {
 
 void VideoConferenceManagerClientImpl::RemoveMediaApp(
     const base::UnguessableToken& id) {
-  DCHECK(id_to_webcontents_.contains(id));
+  CHECK(id_to_webcontents_.contains(id), base::NotFatalUntil::M161);
   auto it = id_to_webcontents_.find(id);
   raw_ptr<content::WebContents> web_contents = it->second;
 
@@ -194,7 +193,7 @@ void VideoConferenceManagerClientImpl::HandleMediaUsageUpdate() {
       DCHECK(web_app)
           << "WebContents with no corresponding VideoConferenceWebApp.";
 
-      DCHECK(!web_app->state().is_capturing_camera);
+      CHECK(!web_app->state().is_capturing_camera, base::NotFatalUntil::M161);
       glic_capturing_microphone |= web_app->state().is_capturing_microphone;
     } else {
       has_media_app = true;

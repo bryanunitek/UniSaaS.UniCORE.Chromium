@@ -164,7 +164,6 @@ if (is_android) {
       ":display_java",
       ":media_java_resources",
       "//base:base_java",
-      "//base:flagged_apis_java",
       "//build/android:build_java",
       "//third_party/android_deps:guava_android_java",
       "//third_party/androidx:androidx_annotation_annotation_java",
@@ -197,6 +196,7 @@ if (is_android) {
       "java/src/org/chromium/media/MediaDrmStorageBridge.java",
       "java/src/org/chromium/media/MediaFormatBuilder.java",
       "java/src/org/chromium/media/MediaServerCrashListener.java",
+      "java/src/org/chromium/media/MicrophoneMuteStateListener.java",
       "java/src/org/chromium/media/ScoStateListener.java",
       "java/src/org/chromium/media/ScreenResolutionUtil.java",
       "java/src/org/chromium/media/VideoAcceleratorUtil.java",
@@ -239,6 +239,7 @@ if (is_android) {
 } else {
   source_set("android") {
   }
+
   source_set("test_support") {
     testonly = true
   }

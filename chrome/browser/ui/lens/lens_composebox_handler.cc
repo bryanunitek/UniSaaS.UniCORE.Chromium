@@ -29,6 +29,7 @@
 #include "net/base/url_util.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/webui/resources/cr_components/composebox/composebox.mojom.h"
 #include "url/gurl.h"
@@ -53,7 +54,7 @@ class LensComposeboxOmniboxClient final : public ContextualOmniboxClient {
       TemplateURLRef::PostContent* post_content,
       WindowOpenDisposition disposition,
       ui::PageTransition transition,
-      AutocompleteMatchType::Type match_type,
+      omnibox::AutocompleteMatchType match_type,
       base::TimeTicks match_selection_timestamp,
       bool destination_url_entered_without_scheme,
       bool destination_url_entered_with_http_scheme,
@@ -87,7 +88,7 @@ void LensComposeboxOmniboxClient::OnAutocompleteAccept(
     TemplateURLRef::PostContent* post_content,
     WindowOpenDisposition disposition,
     ui::PageTransition transition,
-    AutocompleteMatchType::Type match_type,
+    omnibox::AutocompleteMatchType match_type,
     base::TimeTicks match_selection_timestamp,
     bool destination_url_entered_without_scheme,
     bool destination_url_entered_with_http_scheme,
@@ -118,7 +119,6 @@ LensComposeboxHandler::LensComposeboxHandler(
     Profile* profile,
     content::WebContents* web_contents,
     mojo::PendingReceiver<composebox::mojom::PageHandler> pending_handler,
-    mojo::PendingRemote<composebox::mojom::Page> pending_page,
     mojo::PendingReceiver<searchbox::mojom::PageHandler>
         pending_searchbox_handler,
     mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page)
@@ -132,7 +132,6 @@ LensComposeboxHandler::LensComposeboxHandler(
                            /*lens_composebox_controller=*/parent_controller),
                        lens::features::GetLensAimSuggestionTimeout()),
       lens_composebox_controller_(parent_controller),
-      page_{std::move(pending_page)},
       handler_(this, std::move(pending_handler)) {
   autocomplete_controller_observation_.Observe(autocomplete_controller());
 }
@@ -201,7 +200,7 @@ void LensComposeboxHandler::CanShowNextboxAnimation(
   std::move(callback).Run(false);
 }
 
-void LensComposeboxHandler::RecordNextboxAnimationImpression() {
+void LensComposeboxHandler::RecordNextboxAnimationImpression(bool shown) {
   // No-op for Lens composebox.
 }
 

@@ -16,7 +16,6 @@
   background: none;
   border: none;
   box-sizing: border-box;
-  color: inherit;
   cursor: pointer;
   display: flex;
   justify-content: space-between;
@@ -50,16 +49,24 @@
 }
 
 .menu-row .start-icon {
-  --cr-icon-color: var(--cr-secondary-text-color);
+  --cr-icon-color: var(--color-menu-icon, var(--cr-secondary-text-color));
 }
 
 .menu-row .label {
+  align-items: center;
+  display: flex;
   flex: 1;
+  gap: 8px;
   font-weight: 400;
 }
 
+new-badge {
+  --color-badge-background: var(--color-sys-primary);
+  color: var(--color-sys-on-primary);
+}
+
 .menu-row .end-icon {
-  --cr-icon-color: var(--cr-secondary-text-color);
+  --cr-icon-color: var(--color-menu-icon, var(--cr-secondary-text-color));
 }
 
 :host-context([dir='rtl']) .end-icon {
@@ -72,6 +79,7 @@
 
 #settings-menu-dialog::part(dialog) {
   border-radius: var(--cornerRadii-medium-small, 12px);
+  color: var(--cr-primary-text-color);
   padding-bottom: 12px;
   padding-top: 12px;
   width: clamp(92px, 100%, 340px);
@@ -85,13 +93,6 @@
   border: 1px var(--color-side-panel-divider);
   height: 1px;
   width: 100%;
-}
-
-cr-toggle {
-  --cr-toggle-width: 26px;
-  --cr-toggle-bar-height: 16px;
-  --cr-toggle-knob-diameter: 12px;
-  --cr-toggle-ripple-diameter: 12px;
 }
 
 @media (forced-colors: active) {

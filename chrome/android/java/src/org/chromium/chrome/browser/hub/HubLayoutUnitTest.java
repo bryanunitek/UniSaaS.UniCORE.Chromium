@@ -20,11 +20,9 @@ import static org.mockito.ArgumentMatchers.isNotNull;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
-import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -44,8 +42,6 @@ import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.FrameLayout.LayoutParams;
 
-import androidx.test.ext.junit.rules.ActivityScenarioRule;
-
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -60,6 +56,8 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.ParameterizedRobolectricTestRunner;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameter;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
+import org.robolectric.Robolectric;
+import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
@@ -121,8 +119,7 @@ public class HubLayoutUnitTest {
         return Arrays.asList(new Object[][] {{true}, {false}});
     }
 
-    @Parameter(0)
-    public boolean mIsXrDevice;
+    @Parameter public boolean mIsXrDevice;
 
     private static final int DEFAULT_COLOR = 0xFFABCDEF;
     private static final int INCOGNITO_COLOR = 0xFF001122;
@@ -136,10 +133,6 @@ public class HubLayoutUnitTest {
     private static final long FAKE_TIME = 0L;
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
-
-    @Rule
-    public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
-            new ActivityScenarioRule<>(TestActivity.class);
 
     @Rule public BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
 
@@ -168,8 +161,6 @@ public class HubLayoutUnitTest {
     @Mock private Tab mTab;
     @Mock private OverviewModeAlphaObserver mOnAlphaChange;
     @Mock private DesktopWindowStateManager mDesktopWindowStateManager;
-    @Mock private HubContainerView mHubContainerViewMock;
-    @Mock private HubContainerView mPaneHostViewMock;
     @Mock private HubLayoutAnimationRunner mCurrentAnimationRunner;
     @Captor private ArgumentCaptor<HubLayoutAnimationListener> mAnimationListenerCaptor;
     private SceneLayer mStaticSceneLayer;
@@ -177,11 +168,13 @@ public class HubLayoutUnitTest {
 
     private UserActionTester mActionTester;
 
+    private ActivityController<TestActivity> mActivityController;
     private Activity mActivity;
     private FrameLayout mFrameLayout;
 
     private HubLayout mHubLayout;
     private HubContainerView mHubContainerView;
+    private HubContainerView mFinalRectContainerView;
 
     private SyncOneshotSupplierImpl<HubLayoutAnimator> mHubLayoutAnimatorSupplier;
     private Supplier<TabModelSelector> mTabModelSelectorSupplier;
@@ -252,7 +245,7 @@ public class HubLayoutUnitTest {
         when(mPaneManager.getFocusedPaneSupplier()).thenReturn(mPaneSupplier);
         doAnswer(
                         invocation -> {
-                            int paneId = ((Integer) invocation.getArguments()[0]).intValue();
+                            int paneId = (Integer) invocation.getArguments()[0];
                             switch (paneId) {
                                 case PaneId.TAB_SWITCHER:
                                     mPaneSupplier.set(mTabSwitcherPane);
@@ -293,7 +286,8 @@ public class HubLayoutUnitTest {
                 .when(mHubController)
                 .getBackgroundColor(any());
 
-        mActivityScenarioRule.getScenario().onActivity(this::onActivityCreated);
+        mActivityController = Robolectric.buildActivity(TestActivity.class).setup();
+        onActivityCreated(mActivityController.get());
 
         doAnswer(
                         invocation -> {
@@ -360,6 +354,7 @@ public class HubLayoutUnitTest {
     public void tearDown() {
         mHubLayout.destroy();
         mActionTester.tearDown();
+        mActivityController.close();
     }
 
     @Test
@@ -444,9 +439,7 @@ public class HubLayoutUnitTest {
         // Successfully capture a bitmap.
         doCallback(
                         /* index= */ 2,
-                        (Callback<Bitmap> bitmapCallback) -> {
-                            bitmapCallback.onResult(mBitmap);
-                        })
+                        (Callback<Bitmap> bitmapCallback) -> bitmapCallback.onResult(mBitmap))
                 .when(mTabContentManager)
                 .cacheTabThumbnailWithCallback(any(), eq(true), any());
 
@@ -468,18 +461,14 @@ public class HubLayoutUnitTest {
         // Fail to capture a bitmap.
         doCallback(
                         /* index= */ 2,
-                        (Callback<Bitmap> bitmapCallback) -> {
-                            bitmapCallback.onResult(null);
-                        })
+                        (Callback<Bitmap> bitmapCallback) -> bitmapCallback.onResult(null))
                 .when(mTabContentManager)
                 .cacheTabThumbnailWithCallback(any(), eq(true), any());
 
         // Succeed on the NativePage fallback thumbnail attempt.
         doCallback(
                         /* index= */ 1,
-                        (Callback<Bitmap> bitmapCallback) -> {
-                            bitmapCallback.onResult(mBitmap);
-                        })
+                        (Callback<Bitmap> bitmapCallback) -> bitmapCallback.onResult(mBitmap))
                 .when(mTabContentManager)
                 .getEtc1TabThumbnailWithCallback(eq(TAB_ID), any());
 
@@ -500,9 +489,7 @@ public class HubLayoutUnitTest {
         // Fail to capture the bitmap and since this is not a native page there is no fallback.
         doCallback(
                         /* index= */ 2,
-                        (Callback<Bitmap> bitmapCallback) -> {
-                            bitmapCallback.onResult(null);
-                        })
+                        (Callback<Bitmap> bitmapCallback) -> bitmapCallback.onResult(null))
                 .when(mTabContentManager)
                 .cacheTabThumbnailWithCallback(any(), eq(true), any());
 
@@ -525,6 +512,18 @@ public class HubLayoutUnitTest {
                 /* skipStartHiding= */ false,
                 HubLayoutAnimationType.TRANSLATE_DOWN);
         verify(mTabContentManager, never()).getEtc1TabThumbnailWithCallback(anyInt(), any());
+    }
+
+    @Test
+    public void testIsHidingSupplier() {
+        assertFalse(mHubLayout.getIsHidingSupplier().get());
+
+        setupHubLayoutAnimatorAndProvider(HubLayoutAnimationType.FADE_OUT);
+        startHiding(LayoutType.BROWSING, NEW_TAB_ID);
+        assertTrue(mHubLayout.getIsHidingSupplier().get());
+
+        mHubLayout.doneHiding();
+        assertFalse(mHubLayout.getIsHidingSupplier().get());
     }
 
     @Test
@@ -571,9 +570,7 @@ public class HubLayoutUnitTest {
         // Succeed on the thumbnail attempt
         doCallback(
                         /* index= */ 1,
-                        (Callback<Bitmap> bitmapCallback) -> {
-                            bitmapCallback.onResult(mBitmap);
-                        })
+                        (Callback<Bitmap> bitmapCallback) -> bitmapCallback.onResult(mBitmap))
                 .when(mTabContentManager)
                 .getEtc1TabThumbnailWithCallback(eq(TAB_ID), any());
 
@@ -593,15 +590,14 @@ public class HubLayoutUnitTest {
         setupHubLayoutAnimatorAndProvider(HubLayoutAnimationType.EXPAND_TAB);
         mPaneSupplier.set(mTabSwitcherPane);
         when(mHubLayoutAnimatorProviderMock.getThumbnailCallback()).thenReturn(mThumbnailCallback);
-        doReturn(mHubLayoutAnimatorProviderMock).when(mHubLayout).createHideAnimatorProvider(any());
+        when(mHubLayout.createHideAnimatorProvider(any()))
+                .thenReturn(mHubLayoutAnimatorProviderMock);
         when(mTab.isNativePage()).thenReturn(true);
 
         // Succeed on the thumbnail attempt
         doCallback(
                         /* index= */ 1,
-                        (Callback<Bitmap> bitmapCallback) -> {
-                            bitmapCallback.onResult(mBitmap);
-                        })
+                        (Callback<Bitmap> bitmapCallback) -> bitmapCallback.onResult(mBitmap))
                 .when(mTabContentManager)
                 .getEtc1TabThumbnailWithCallback(eq(TAB_ID), any());
 
@@ -653,34 +649,36 @@ public class HubLayoutUnitTest {
 
     @Test
     public void testFinalRectWithHubSearch_SwitchingModel() {
-        setupFinalRectMocks(/* modelIsIncognito= */ false);
-        Rect expectedRect = new Rect(0, 0, 90, 110);
+        setupFinalRectViews();
+        // The rect starts from the top of the container when switching models.
+        Rect expectedRect = new Rect(0, 0, 90, 140);
         Rect actualRect = new Rect();
 
         mHubLayout.getFinalRectForNewTabAnimation(
-                mHubContainerViewMock, /* newIsIncognito= */ true, actualRect);
+                mFinalRectContainerView, /* newIsIncognito= */ true, actualRect);
         assertEquals(expectedRect, actualRect);
 
         when(mTabModelSelector.isIncognitoBrandedModelSelected()).thenReturn(true);
         mHubLayout.getFinalRectForNewTabAnimation(
-                mHubContainerViewMock, /* newIsIncognito= */ false, actualRect);
+                mFinalRectContainerView, /* newIsIncognito= */ false, actualRect);
         assertEquals(expectedRect, actualRect);
     }
 
     @Test
     public void testFinalRectWithHubSearch_SameModel() {
-        setupFinalRectMocks(/* modelIsIncognito= */ false);
-        Rect spyRect = spy(new Rect());
+        setupFinalRectViews();
+        // The pane host rect is moved up and extended by the search box height (10).
+        Rect expectedRect = new Rect(0, 30, 90, 140);
+        Rect actualRect = new Rect();
 
         mHubLayout.getFinalRectForNewTabAnimation(
-                mHubContainerViewMock, /* newIsIncognito= */ false, spyRect);
-        verify(spyRect, times(2)).offset(anyInt(), anyInt());
+                mFinalRectContainerView, /* newIsIncognito= */ false, actualRect);
+        assertEquals(expectedRect, actualRect);
 
         when(mTabModelSelector.isIncognitoBrandedModelSelected()).thenReturn(true);
-        reset(spyRect);
         mHubLayout.getFinalRectForNewTabAnimation(
-                mHubContainerViewMock, /* newIsIncognito= */ true, spyRect);
-        verify(spyRect, times(2)).offset(anyInt(), anyInt());
+                mFinalRectContainerView, /* newIsIncognito= */ true, actualRect);
+        assertEquals(expectedRect, actualRect);
     }
 
     @Test
@@ -930,6 +928,7 @@ public class HubLayoutUnitTest {
         mHubLayout.updateLayout(FAKE_TIME, FAKE_TIME);
         verify(mUpdateHost, never()).requestUpdate();
 
+        mHubLayout.setContentOffsetX(50);
         startAnimationRunnable.run();
 
         assertThat(mHubLayout.getSceneLayer()).isInstanceOf(StaticTabSceneLayer.class);
@@ -939,17 +938,21 @@ public class HubLayoutUnitTest {
         verify(mTabContentManager)
                 .updateVisibleIds(eq(Collections.singletonList(tabId)), eq(Tab.INVALID_TAB_ID));
 
+        assertEquals(50f, layoutTabs[0].get(LayoutTab.CONTENT_OFFSET_X), FLOAT_ERROR);
         assertEquals(0f, layoutTabs[0].get(LayoutTab.CONTENT_OFFSET_Y), FLOAT_ERROR);
 
         float contentOffset = 100f;
         when(mBrowserControlsStateProvider.getContentOffset())
                 .thenReturn(Math.round(contentOffset));
+        mHubLayout.setContentOffsetX(80);
+        assertEquals(80f, layoutTabs[0].get(LayoutTab.CONTENT_OFFSET_X), FLOAT_ERROR);
         mHubLayout.updateSceneLayer(
                 new RectF(),
                 new RectF(),
                 mTabContentManager,
                 mResourceManager,
                 mBrowserControlsStateProvider);
+        assertEquals(80f, layoutTabs[0].get(LayoutTab.CONTENT_OFFSET_X), FLOAT_ERROR);
         assertEquals(contentOffset, layoutTabs[0].get(LayoutTab.CONTENT_OFFSET_Y), FLOAT_ERROR);
 
         // Change this so updateSnap() returns true.
@@ -976,31 +979,29 @@ public class HubLayoutUnitTest {
                 .thenReturn(mHubLayoutAnimatorSupplier);
     }
 
-    private void setupFinalRectMocks(boolean modelIsIncognito) {
-        when(mTabModelSelector.isIncognitoBrandedModelSelected()).thenReturn(modelIsIncognito);
-        when(mHubController.getContainerView()).thenReturn(mHubContainerViewMock);
-        when(mHubContainerViewMock.isLaidOut()).thenReturn(true);
-        Rect hubContainerRect = new Rect(10, 10, 100, 100);
-        doAnswer(
-                        invocation -> {
-                            Rect rect = invocation.getArgument(0);
-                            rect.set(hubContainerRect);
-                            return true;
-                        })
-                .when(mHubContainerViewMock)
-                .getGlobalVisibleRect(any());
+    private void setupFinalRectViews() {
+        when(mTabModelSelector.isIncognitoBrandedModelSelected()).thenReturn(false);
 
-        when(mHubController.getPaneHostView()).thenReturn(mPaneHostViewMock);
-        when(mPaneHostViewMock.isLaidOut()).thenReturn(true);
-        Rect paneHostRect = new Rect(10, 20, 100, 120);
-        doAnswer(
-                        invocation -> {
-                            Rect rect = invocation.getArgument(0);
-                            rect.set(paneHostRect);
-                            return true;
-                        })
-                .when(mPaneHostViewMock)
-                .getGlobalVisibleRect(any());
+        // Global visible rects: container is (10, 10, 100, 160), pane host is (10, 50, 100, 150).
+        // The search box height is the hub toolbar bottom minus the action container bottom (10).
+        FrameLayout root = new FrameLayout(mActivity);
+        mFinalRectContainerView = new HubContainerView(mActivity);
+        FrameLayout paneHostView = new FrameLayout(mActivity);
+        View hubToolbarView = new View(mActivity);
+        hubToolbarView.setId(R.id.hub_toolbar);
+        View toolbarActionContainerView = new View(mActivity);
+        toolbarActionContainerView.setId(R.id.toolbar_action_container);
+        mFinalRectContainerView.addView(paneHostView);
+        mFinalRectContainerView.addView(hubToolbarView);
+        mFinalRectContainerView.addView(toolbarActionContainerView);
+        root.addView(mFinalRectContainerView);
+        root.layout(0, 0, 200, 200);
+        mFinalRectContainerView.layout(10, 10, 100, 160);
+        paneHostView.layout(0, 40, 90, 140);
+        hubToolbarView.layout(0, 0, 90, 40);
+        toolbarActionContainerView.layout(0, 0, 90, 30);
+
+        when(mHubController.getPaneHostView()).thenReturn(paneHostView);
     }
 
     private void forceLayout() {

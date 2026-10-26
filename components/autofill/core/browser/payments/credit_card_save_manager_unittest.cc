@@ -28,6 +28,7 @@
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "components/autofill/core/browser/autofill_field_test_api.h"
 #include "components/autofill/core/browser/crowdsourcing/test_votes_uploader.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager_test_api.h"
@@ -41,6 +42,7 @@
 #include "components/autofill/core/browser/form_import/form_data_importer_test_api.h"
 #include "components/autofill/core/browser/form_import/payments/payments_form_data_importer.h"
 #include "components/autofill/core/browser/form_import/payments/payments_form_data_importer_test_api.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
 #include "components/autofill/core/browser/foundations/test_autofill_driver.h"
 #include "components/autofill/core/browser/foundations/test_browser_autofill_manager.h"
@@ -62,13 +64,13 @@
 #include "components/autofill/core/browser/strike_databases/payments/test_credit_card_save_strike_database.h"
 #include "components/autofill/core/browser/strike_databases/payments/test_strike_database.h"
 #include "components/autofill/core/browser/studies/autofill_experiments.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/common/autocomplete_parsing_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/credit_card_network_identifiers.h"
 #include "components/autofill/core/common/credit_card_number_validation.h"
 #include "components/autofill/core/common/form_data.h"
@@ -296,10 +298,11 @@ class MockAutofillClient : public TestAutofillClient {
  public:
   MockAutofillClient() {
     TestPersonalDataManager& pdm = GetPersonalDataManager();
-    pdm.set_payments_data_manager(std::make_unique<MockPaymentsDataManager>());
+    pdm.set_payments_data_manager(
+        std::make_unique<testing::NiceMock<MockPaymentsDataManager>>());
     pdm.test_payments_data_manager().SetPrefService(GetPrefs());
     set_payments_autofill_client(
-        std::make_unique<MockPaymentsAutofillClient>(this));
+        std::make_unique<testing::NiceMock<MockPaymentsAutofillClient>>(this));
   }
   ~MockAutofillClient() override = default;
 };
@@ -310,10 +313,11 @@ class MockAutofillClient : public TestAutofillClient {
 
 class CreditCardSaveManagerTest
     : public testing::Test,
-      public WithTestAutofillClientDriverManager<MockAutofillClient,
-                                                 TestAutofillDriver,
-                                                 TestBrowserAutofillManager,
-                                                 MockPaymentsAutofillClient> {
+      public WithTestAutofillClientDriverManager<
+          MockAutofillClient,
+          TestAutofillDriver,
+          TestBrowserAutofillManager,
+          testing::NiceMock<MockPaymentsAutofillClient>> {
  public:
   void SetUp() override {
     // Change the year to be 20XX.
@@ -371,12 +375,14 @@ class CreditCardSaveManagerTest
 
   void FormsSeen(const std::vector<FormData>& forms) {
     autofill_manager().OnFormsSeen(/*updated_forms=*/forms,
-                                   /*removed_forms=*/{});
+                                   /*removed_forms=*/{},
+                                   AutofillManagerTestApi::pass_key());
   }
 
   void FormSubmitted(const FormData& form) {
-    autofill_manager().OnFormSubmitted(
-        form, mojom::SubmissionSource::FORM_SUBMISSION);
+    autofill_manager().OnFormSubmitted(form,
+                                       mojom::SubmissionSource::FORM_SUBMISSION,
+                                       AutofillManagerTestApi::pass_key());
   }
 
   void UserHasAcceptedCardUpload(
@@ -730,15 +736,16 @@ TEST_F(CreditCardSaveManagerTest, UploadCreditCard_OnlyCountryInAddresses) {
 
   // Verify that even though the full address profile was saved, only the
   // country was included in the upload details request to payments.
-  EXPECT_EQ(1U, personal_data().address_data_manager().GetProfiles().size());
+  EXPECT_EQ(personal_data().address_data_manager().GetProfiles().size(), 1U);
   AutofillProfile only_country(AddressCountryCode("US"));
-  EXPECT_EQ(1U,
-            payments_network_interface().addresses_in_upload_details().size());
+  EXPECT_EQ(payments_network_interface().addresses_in_upload_details().size(),
+            1U);
   // AutofillProfile::Compare will ignore the difference in guid between our
   // actual profile being sent and the expected one constructed here.
   EXPECT_EQ(
-      0, payments_network_interface().addresses_in_upload_details()[0].Compare(
-             only_country));
+      payments_network_interface().addresses_in_upload_details()[0].Compare(
+          only_country),
+      0);
 
   // Server did not send a server_id, expect copy of card is not stored.
   EXPECT_TRUE(personal_data().payments_data_manager().GetCreditCards().empty());
@@ -836,7 +843,7 @@ TEST_F(CreditCardSaveManagerTest, SaveCreditCardLocallyWithNumStrikes) {
   // Add a single strike for the card to be added and advance the required delay
   // time.
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(1, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 1);
   task_environment_.FastForwardBy(
       credit_card_save_strike_database.GetRequiredDelaySinceLastStrike()
           .value());
@@ -866,6 +873,84 @@ TEST_F(CreditCardSaveManagerTest, SaveCreditCardLocallyWithNumStrikes) {
 
   FormSubmitted(credit_card_form);
   EXPECT_FALSE(credit_card_save_manager().CreditCardWasUploaded());
+}
+
+// Tests that local card save is offered as kCardSaveOnly when CVC is empty.
+TEST_F(CreditCardSaveManagerTest, SaveCreditCardLocally_SaveTypeWithoutCvc) {
+  credit_card_save_manager().SetCreditCardUploadEnabled(false);
+  autofill_client().set_is_cvc_saving_supported(true);
+  personal_data().test_payments_data_manager().SetIsPaymentCvcStorageEnabled(
+      true);
+  prefs::SetPaymentCvcStorage(autofill_client().GetPrefs(), true);
+
+  FormData credit_card_form = CreateTestCreditCardFormData();
+  FormsSeen(std::vector<FormData>(1, credit_card_form));
+
+  test_api(credit_card_form).field(0).set_value(u"Jane Doe");
+  test_api(credit_card_form).field(1).set_value(u"4111111111111111");
+  test_api(credit_card_form)
+      .field(2)
+      .set_value(ASCIIToUTF16(test::NextMonth()));
+  test_api(credit_card_form).field(3).set_value(ASCIIToUTF16(test::NextYear()));
+  test_api(credit_card_form).field(4).set_value(u"");  // Empty CVC
+
+  EXPECT_CALL(
+      payments_autofill_client(),
+      ShowSaveCreditCardLocally(
+          /*card=*/_,
+          /*options=*/
+          Field(&payments::PaymentsAutofillClient::SaveCreditCardOptions::
+                    card_save_type,
+                payments::PaymentsAutofillClient::CardSaveType::kCardSaveOnly),
+          /*callback=*/_))
+      .WillOnce([](const CreditCard&, SaveCreditCardOptions,
+                   payments::PaymentsAutofillClient::LocalSaveCardPromptCallback
+                       callback) {
+        std::move(callback).Run(payments::PaymentsAutofillClient::
+                                    SaveCardOfferUserDecision::kAccepted);
+      });
+
+  FormSubmitted(credit_card_form);
+}
+
+// Tests that local card save is offered as kCardSaveWithCvc when CVC is
+// present.
+TEST_F(CreditCardSaveManagerTest, SaveCreditCardLocally_SaveTypeWithCvc) {
+  credit_card_save_manager().SetCreditCardUploadEnabled(false);
+  autofill_client().set_is_cvc_saving_supported(true);
+  personal_data().test_payments_data_manager().SetIsPaymentCvcStorageEnabled(
+      true);
+  prefs::SetPaymentCvcStorage(autofill_client().GetPrefs(), true);
+
+  FormData credit_card_form = CreateTestCreditCardFormData();
+  FormsSeen(std::vector<FormData>(1, credit_card_form));
+
+  test_api(credit_card_form).field(0).set_value(u"Jane Doe");
+  test_api(credit_card_form).field(1).set_value(u"4111111111111111");
+  test_api(credit_card_form)
+      .field(2)
+      .set_value(ASCIIToUTF16(test::NextMonth()));
+  test_api(credit_card_form).field(3).set_value(ASCIIToUTF16(test::NextYear()));
+  test_api(credit_card_form).field(4).set_value(u"123");  // Present CVC
+
+  EXPECT_CALL(
+      payments_autofill_client(),
+      ShowSaveCreditCardLocally(
+          /*card=*/_,
+          /*options=*/
+          Field(
+              &payments::PaymentsAutofillClient::SaveCreditCardOptions::
+                  card_save_type,
+              payments::PaymentsAutofillClient::CardSaveType::kCardSaveWithCvc),
+          /*callback=*/_))
+      .WillOnce([](const CreditCard&, SaveCreditCardOptions,
+                   payments::PaymentsAutofillClient::LocalSaveCardPromptCallback
+                       callback) {
+        std::move(callback).Run(payments::PaymentsAutofillClient::
+                                    SaveCardOfferUserDecision::kAccepted);
+      });
+
+  FormSubmitted(credit_card_form);
 }
 
 // TODO(crbug.com/40947875): Remove duplicate code present between server and
@@ -935,7 +1020,7 @@ TEST_F(CreditCardSaveManagerTest,
   CvcStorageStrikeDatabase cvc_storage_strike_database =
       CvcStorageStrikeDatabase(&strike_database());
   cvc_storage_strike_database.AddStrikes(2, local_card.guid());
-  EXPECT_EQ(2, cvc_storage_strike_database.GetStrikes(local_card.guid()));
+  EXPECT_EQ(cvc_storage_strike_database.GetStrikes(local_card.guid()), 2);
   task_environment_.FastForwardBy(
       cvc_storage_strike_database.GetRequiredDelaySinceLastStrike().value());
 
@@ -943,7 +1028,7 @@ TEST_F(CreditCardSaveManagerTest,
   // CVC.
   payments_autofill_client().ExpectLocalSaveWithPromptShown(true);
   credit_card_save_manager().AttemptToOfferCvcLocalSave(local_card);
-  EXPECT_EQ(0, cvc_storage_strike_database.GetStrikes(local_card.guid()));
+  EXPECT_EQ(cvc_storage_strike_database.GetStrikes(local_card.guid()), 0);
 }
 
 // Tests that a CVC with max strikes does not offer save at all.
@@ -1009,7 +1094,7 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Verify that the user ignoring an offer will add a strike count for that
   // CVC.
-  EXPECT_EQ(1, cvc_storage_strike_database.GetStrikes(local_card.guid()));
+  EXPECT_EQ(cvc_storage_strike_database.GetStrikes(local_card.guid()), 1);
 
   // Advance the required delay time by half and AttemptToOfferCvcLocalSave with
   // user decision of `kIgnored`.
@@ -1020,7 +1105,7 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Verify that user ignoring an offer will not add a strike count for that
   // CVC as the there hasn't been enough delay.
-  EXPECT_EQ(1, cvc_storage_strike_database.GetStrikes(local_card.guid()));
+  EXPECT_EQ(cvc_storage_strike_database.GetStrikes(local_card.guid()), 1);
 
   // Advance the required delay time by half and AttemptToOfferCvcLocalSave with
   // user decision of `kIgnored`.
@@ -1031,7 +1116,7 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Verify that user ignoring an offer after sufficient delay time will add a
   // strike count for that CVC.
-  EXPECT_EQ(2, cvc_storage_strike_database.GetStrikes(local_card.guid()));
+  EXPECT_EQ(cvc_storage_strike_database.GetStrikes(local_card.guid()), 2);
 }
 
 // Tests that 1 strike will be added if user ignores the save CVC offer and then
@@ -1047,7 +1132,7 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Verify that the user ignoring an offer will add a strike count for that
   // CVC.
-  EXPECT_EQ(1, cvc_storage_strike_database.GetStrikes(local_card.guid()));
+  EXPECT_EQ(cvc_storage_strike_database.GetStrikes(local_card.guid()), 1);
 
   // Advance the required delay time and AttemptToOfferCvcLocalSave with user
   // decision of `kDeclined`.
@@ -1072,8 +1157,9 @@ TEST_F(CreditCardSaveManagerTest,
       CvcStorageStrikeDatabase(&strike_database());
   cvc_storage_strike_database.AddStrikes(
       2, base::NumberToString(server_card.instrument_id()));
-  EXPECT_EQ(2, cvc_storage_strike_database.GetStrikes(
-                   base::NumberToString(server_card.instrument_id())));
+  EXPECT_EQ(cvc_storage_strike_database.GetStrikes(
+                base::NumberToString(server_card.instrument_id())),
+            2);
   task_environment_.FastForwardBy(
       cvc_storage_strike_database.GetRequiredDelaySinceLastStrike().value());
 
@@ -1082,8 +1168,9 @@ TEST_F(CreditCardSaveManagerTest,
   credit_card_save_manager().AttemptToOfferCvcUploadSave(server_card);
 
   // Verify that the strike count was reset for that CVC.
-  EXPECT_EQ(0, cvc_storage_strike_database.GetStrikes(
-                   base::NumberToString(server_card.instrument_id())));
+  EXPECT_EQ(cvc_storage_strike_database.GetStrikes(
+                base::NumberToString(server_card.instrument_id())),
+            0);
 }
 
 // Tests that a CVC with max strikes does not offer save at all.
@@ -1165,8 +1252,9 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Verify that the user ignoring an offer will add a strike count for that
   // CVC.
-  EXPECT_EQ(1, cvc_storage_strike_database.GetStrikes(
-                   base::NumberToString(server_card.instrument_id())));
+  EXPECT_EQ(cvc_storage_strike_database.GetStrikes(
+                base::NumberToString(server_card.instrument_id())),
+            1);
 
   // Advance the required delay time by half and AttemptToOfferCvcUpload user
   // decision of `kIgnored`.
@@ -1179,8 +1267,9 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Verify that user ignoring an offer will not add a strike count for that
   // CVC as the there hasn't been enough delay.
-  EXPECT_EQ(1, cvc_storage_strike_database.GetStrikes(
-                   base::NumberToString(server_card.instrument_id())));
+  EXPECT_EQ(cvc_storage_strike_database.GetStrikes(
+                base::NumberToString(server_card.instrument_id())),
+            1);
 
   // Advance the required delay time by half and AttemptToOfferCvcUpload user
   // decision of `kIgnored`.
@@ -1193,8 +1282,9 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Verify that user ignoring an offer after sufficient delay time will add a
   // strike count for that CVC.
-  EXPECT_EQ(2, cvc_storage_strike_database.GetStrikes(
-                   base::NumberToString(server_card.instrument_id())));
+  EXPECT_EQ(cvc_storage_strike_database.GetStrikes(
+                base::NumberToString(server_card.instrument_id())),
+            2);
 }
 
 // Tests that 1 strike will be added if user ignores the save CVC offer and then
@@ -1212,8 +1302,9 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Verify that the user ignoring an offer will add a strike count for that
   // CVC.
-  EXPECT_EQ(1, cvc_storage_strike_database.GetStrikes(
-                   base::NumberToString(server_card.instrument_id())));
+  EXPECT_EQ(cvc_storage_strike_database.GetStrikes(
+                base::NumberToString(server_card.instrument_id())),
+            1);
 
   // Advance the required delay time and AttemptToOfferCvcUploadSave with user
   // decision of `kDeclined`.
@@ -4079,6 +4170,50 @@ TEST_F(CreditCardSaveManagerTest,
       autofill_metrics::SaveCardPromptOffer::kCvcMissingForPotentialUpdate, 1);
 }
 
+TEST_F(CreditCardSaveManagerTest,
+       SaveCardPromptOfferMetric_UnionPay_CvcMissing) {
+  // Set up our credit card form data with a UnionPay card without CVC.
+  FormData credit_card_form = CreateTestCreditCardFormData();
+  FormsSeen(std::vector<FormData>(1, credit_card_form));
+
+  test_api(credit_card_form).field(0).set_value(u"Jane Doe");
+  test_api(credit_card_form).field(1).set_value(u"6247130048162403");
+  test_api(credit_card_form)
+      .field(2)
+      .set_value(ASCIIToUTF16(test::NextMonth()));
+  test_api(credit_card_form).field(3).set_value(ASCIIToUTF16(test::NextYear()));
+  test_api(credit_card_form).field(4).set_value(u"");
+
+  // Local save prompt should not be shown, and upload should not be offered.
+  EXPECT_CALL(payments_autofill_client(), ShowSaveCreditCardLocally).Times(0);
+  EXPECT_CALL(payments_autofill_client(), ShowSaveCreditCardToCloud).Times(0);
+
+  base::HistogramTester histogram_tester;
+  FormSubmitted(credit_card_form);
+
+  EXPECT_FALSE(credit_card_save_manager().CreditCardWasUploaded());
+
+  // Verify that platform-agnostic save card metric for prompt not shown is
+  // logged.
+  histogram_tester.ExpectUniqueSample(
+      "Autofill.SaveCreditCardPromptOffer.Upload.FirstShow",
+      autofill_metrics::SaveCardPromptOffer::kCvcMissingForUnionPayUpload, 1);
+
+#if BUILDFLAG(IS_ANDROID)
+  histogram_tester.ExpectUniqueSample(
+      "Autofill.SaveCreditCardPromptOffer.Android.Server",
+      autofill_metrics::SaveCardPromptOffer::kCvcMissingForUnionPayUpload, 1);
+#elif BUILDFLAG(IS_IOS)
+  histogram_tester.ExpectBucketCount(
+      "Autofill.SaveCreditCardPromptOffer.IOS.Server.BottomSheet",
+      autofill_metrics::SaveCardPromptOffer::kCvcMissingForUnionPayUpload, 1);
+#else  // BUILDFLAG(IS_DESKTOP)
+  histogram_tester.ExpectUniqueSample(
+      "Autofill.SaveCreditCardPromptOffer.Desktop.Server",
+      autofill_metrics::SaveCardPromptOffer::kCvcMissingForUnionPayUpload, 1);
+#endif
+}
+
 TEST_F(CreditCardSaveManagerTest, NothingIfNothingFound) {
   // Set up our credit card form data.
   FormData credit_card_form = CreateTestCreditCardFormData();
@@ -5329,8 +5464,8 @@ TEST_F(CreditCardSaveManagerTest,
   // Confirm that the preflight request contained
   // kUploadPaymentMethodBillableServiceNumber in the request.
   FormSubmitted(credit_card_form);
-  EXPECT_EQ(payments::kUploadPaymentMethodBillableServiceNumber,
-            payments_network_interface().billable_service_number_in_request());
+  EXPECT_EQ(payments_network_interface().billable_service_number_in_request(),
+            payments::kUploadPaymentMethodBillableServiceNumber);
 }
 
 TEST_F(CreditCardSaveManagerTest,
@@ -5363,8 +5498,8 @@ TEST_F(CreditCardSaveManagerTest,
   // Confirm that the preflight request contained billing customer number in the
   // request.
   FormSubmitted(credit_card_form);
-  EXPECT_EQ(123456L,
-            payments_network_interface().billing_customer_number_in_request());
+  EXPECT_EQ(payments_network_interface().billing_customer_number_in_request(),
+            123456L);
 }
 
 TEST_F(CreditCardSaveManagerTest,
@@ -5391,8 +5526,8 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Confirm that the preflight request contained the correct UploadCardSource.
   FormSubmitted(credit_card_form);
-  EXPECT_EQ(payments::UploadCardSource::kUpstreamCheckoutFlow,
-            payments_network_interface().upload_card_source_in_request());
+  EXPECT_EQ(payments_network_interface().upload_card_source_in_request(),
+            payments::UploadCardSource::kUpstreamCheckoutFlow);
 }
 
 // Tests that a card with some strikes (but not max strikes) should still show
@@ -5409,7 +5544,7 @@ TEST_F(CreditCardSaveManagerTest,
   // Add a single strike for the card to be added and advance the required delay
   // time.
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(1, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 1);
   task_environment_.FastForwardBy(
       credit_card_save_strike_database.GetRequiredDelaySinceLastStrike()
           .value());
@@ -5458,7 +5593,7 @@ TEST_F(CreditCardSaveManagerTest,
   // Add a single strike for the card to be added and advance the required delay
   // time.
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(1, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 1);
   task_environment_.FastForwardBy(
       credit_card_save_strike_database.GetRequiredDelaySinceLastStrike()
           .value());
@@ -5521,7 +5656,7 @@ TEST_F(
 
   // Add a single strike for the card to be added.
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(1, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 1);
 
   // Set up our credit card form data.
   FormData credit_card_form = CreateTestCreditCardFormData();
@@ -5567,7 +5702,7 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Add a single strike for the card to be added.
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(1, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 1);
 
   // Create, fill and submit an address form in order to establish a recent
   // profile which can be selected for the upload request.
@@ -5624,7 +5759,7 @@ TEST_F(CreditCardSaveManagerTest,
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(3, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 3);
 
   // Set up our credit card form data.
   FormData credit_card_form = CreateTestCreditCardFormData();
@@ -5677,7 +5812,7 @@ TEST_F(CreditCardSaveManagerTest, UploadCreditCard_MaxStrikesDisallowsSave) {
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(3, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 3);
 
   // Create, fill and submit an address form in order to establish a recent
   // profile which can be selected for the upload request.
@@ -5747,7 +5882,7 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Add a single strike for the card to be added, but do not advance the clock.
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(1, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 1);
 
   // Set up our credit card form data.
   FormData credit_card_form = CreateTestCreditCardFormData();
@@ -5803,7 +5938,7 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Add a single strike for the card to be added, but do not advance the clock.
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(1, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 1);
 
   // Create, fill and submit an address form in order to establish a recent
   // profile which can be selected for the upload request.
@@ -5870,7 +6005,7 @@ TEST_F(CreditCardSaveManagerTest,
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(3, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 3);
 
   // Create, fill and submit an address form in order to establish a recent
   // profile which can be selected for the upload request.
@@ -5931,7 +6066,7 @@ TEST_F(CreditCardSaveManagerTest,
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(3, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 3);
 
   // Set up our credit card form data.
   FormData credit_card_form = CreateTestCreditCardFormData();
@@ -5973,7 +6108,7 @@ TEST_F(CreditCardSaveManagerTest, UploadCreditCard_MaxStrikesStillAllowsSave) {
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(3, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 3);
 
   // Create, fill and submit an address form in order to establish a recent
   // profile which can be selected for the upload request.
@@ -6031,7 +6166,7 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Add a single strike for the card to be added, but do not advance the clock.
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(1, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 1);
 
   // Set up our credit card form data.
   FormData credit_card_form = CreateTestCreditCardFormData();
@@ -6076,7 +6211,7 @@ TEST_F(CreditCardSaveManagerTest,
 
   // Add a single strike for the card to be added, but do not advance the clock.
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(1, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 1);
 
   // Create, fill and submit an address form in order to establish a recent
   // profile which can be selected for the upload request.
@@ -6121,6 +6256,33 @@ TEST_F(CreditCardSaveManagerTest,
 }
 #endif
 
+class UpstreamStrikeDelayTest : public CreditCardSaveManagerTest,
+                                public testing::WithParamInterface<int> {
+ public:
+  void SetUp() override {
+    CreditCardSaveManagerTest::SetUp();
+    feature_list_.InitAndEnableFeatureWithParameters(
+        features::kAutofillUpstreamEnforceStrikeDelay,
+        {{"autofill_upstream_enforce_strike_delay_days",
+          base::NumberToString(GetParam())}});
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_P(UpstreamStrikeDelayTest, StrikeDelay) {
+  TestCreditCardSaveStrikeDatabase credit_card_save_strike_database =
+      TestCreditCardSaveStrikeDatabase(&strike_database());
+  EXPECT_EQ(base::Days(GetParam()),
+            credit_card_save_strike_database.GetRequiredDelaySinceLastStrike()
+                .value());
+}
+
+INSTANTIATE_TEST_SUITE_P(CreditCardSaveManagerTest,
+                         UpstreamStrikeDelayTest,
+                         testing::Values(1, 3, 7));
+
 // Tests that adding a card clears all strikes for that card.
 TEST_F(CreditCardSaveManagerTest, LocallySaveCreditCard_ClearStrikesOnAdd) {
   credit_card_save_manager().SetCreditCardUploadEnabled(false);
@@ -6130,7 +6292,7 @@ TEST_F(CreditCardSaveManagerTest, LocallySaveCreditCard_ClearStrikesOnAdd) {
   // Add two strikes for the card to be added.
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(2, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 2);
 
   // Set up our credit card form data.
   FormData credit_card_form = CreateTestCreditCardFormData();
@@ -6152,7 +6314,7 @@ TEST_F(CreditCardSaveManagerTest, LocallySaveCreditCard_ClearStrikesOnAdd) {
   EXPECT_FALSE(credit_card_save_manager().CreditCardWasUploaded());
 
   // Verify that adding the card reset the strike count for that card.
-  EXPECT_EQ(0, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 0);
 }
 
 TEST_F(CreditCardSaveManagerTest, LocallySaveCreditCard_WithCvc_PrefOn) {
@@ -6178,12 +6340,13 @@ TEST_F(CreditCardSaveManagerTest, LocallySaveCreditCard_WithCvc_PrefOn) {
 
   EXPECT_FALSE(credit_card_save_manager().CreditCardWasUploaded());
   EXPECT_EQ(
-      1u, personal_data().payments_data_manager().GetLocalCreditCards().size());
-  EXPECT_EQ(u"123", personal_data()
-                        .payments_data_manager()
-                        .GetLocalCreditCards()
-                        .front()
-                        ->cvc());
+      personal_data().payments_data_manager().GetLocalCreditCards().size(), 1u);
+  EXPECT_EQ(personal_data()
+                .payments_data_manager()
+                .GetLocalCreditCards()
+                .front()
+                ->cvc(),
+            u"123");
 }
 
 TEST_F(CreditCardSaveManagerTest, LocallySaveCreditCard_WithCvc_PrefOff) {
@@ -6209,12 +6372,13 @@ TEST_F(CreditCardSaveManagerTest, LocallySaveCreditCard_WithCvc_PrefOff) {
 
   EXPECT_FALSE(credit_card_save_manager().CreditCardWasUploaded());
   EXPECT_EQ(
-      1u, personal_data().payments_data_manager().GetLocalCreditCards().size());
-  EXPECT_EQ(u"", personal_data()
-                     .payments_data_manager()
-                     .GetLocalCreditCards()
-                     .front()
-                     ->cvc());
+      personal_data().payments_data_manager().GetLocalCreditCards().size(), 1u);
+  EXPECT_EQ(personal_data()
+                .payments_data_manager()
+                .GetLocalCreditCards()
+                .front()
+                ->cvc(),
+            u"");
 }
 
 #if BUILDFLAG(IS_IOS)
@@ -6243,13 +6407,14 @@ TEST_F(CreditCardSaveManagerTest,
 
   EXPECT_FALSE(credit_card_save_manager().CreditCardWasUploaded());
   EXPECT_EQ(
-      1u, personal_data().payments_data_manager().GetLocalCreditCards().size());
+      personal_data().payments_data_manager().GetLocalCreditCards().size(), 1u);
   // CVC should be empty because it should have been cleared for iOS WebView.
-  EXPECT_EQ(u"", personal_data()
-                     .payments_data_manager()
-                     .GetLocalCreditCards()
-                     .front()
-                     ->cvc());
+  EXPECT_EQ(personal_data()
+                .payments_data_manager()
+                .GetLocalCreditCards()
+                .front()
+                ->cvc(),
+            u"");
 }
 #endif
 
@@ -6261,7 +6426,7 @@ TEST_F(CreditCardSaveManagerTest, UploadCreditCard_ClearStrikesOnAdd) {
   // Add two strikes for the card to be added.
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(2, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 2);
 
   // Create, fill and submit an address form in order to establish a recent
   // profile which can be selected for the upload request.
@@ -6291,7 +6456,7 @@ TEST_F(CreditCardSaveManagerTest, UploadCreditCard_ClearStrikesOnAdd) {
   EXPECT_TRUE(credit_card_save_manager().CreditCardWasUploaded());
 
   // Verify that adding the card reset the strike count for that card.
-  EXPECT_EQ(0, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 0);
 }
 
 // Tests that adding a card clears all strikes for that card.
@@ -6304,7 +6469,7 @@ TEST_F(CreditCardSaveManagerTest, LocallySaveCreditCard_NumStrikesLoggedOnAdd) {
   // Add two strikes for the card to be added.
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(2, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 2);
 
   // Set up our credit card form data.
   FormData credit_card_form = CreateTestCreditCardFormData();
@@ -6341,7 +6506,7 @@ TEST_F(CreditCardSaveManagerTest, UploadCreditCard_NumStrikesLoggedOnAdd) {
   // Add two strikes for the card to be added.
   credit_card_save_strike_database.AddStrike("1111");
   credit_card_save_strike_database.AddStrike("1111");
-  EXPECT_EQ(2, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 2);
 
   // Create, fill and submit an address form in order to establish a recent
   // profile which can be selected for the upload request.
@@ -6387,7 +6552,7 @@ TEST_F(CreditCardSaveManagerTest,
       upload_card_response_details);
   TestCreditCardSaveStrikeDatabase credit_card_save_strike_database =
       TestCreditCardSaveStrikeDatabase(&strike_database());
-  EXPECT_EQ(0, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 0);
 
   // If upload failed and the bubble was shown, strike count should increase
   // by 1.
@@ -6397,7 +6562,7 @@ TEST_F(CreditCardSaveManagerTest,
   credit_card_save_manager().OnDidUploadCard(
       payments::PaymentsAutofillClient::PaymentsRpcResult::kTryAgainFailure,
       upload_card_response_details);
-  EXPECT_EQ(1, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 1);
 }
 
 // Tests that one strike is added when upload times out on client-side and
@@ -6409,7 +6574,7 @@ TEST_F(CreditCardSaveManagerTest,
       upload_card_response_details);
   TestCreditCardSaveStrikeDatabase credit_card_save_strike_database =
       TestCreditCardSaveStrikeDatabase(&strike_database());
-  EXPECT_EQ(0, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 0);
 
   // If upload timed out on the client side and the bubble was shown, strike
   // count should increase by 1.
@@ -6419,7 +6584,7 @@ TEST_F(CreditCardSaveManagerTest,
   credit_card_save_manager().OnDidUploadCard(
       payments::PaymentsAutofillClient::PaymentsRpcResult::kClientSideTimeout,
       upload_card_response_details);
-  EXPECT_EQ(1, credit_card_save_strike_database.GetStrikes("1111"));
+  EXPECT_EQ(credit_card_save_strike_database.GetStrikes("1111"), 1);
 }
 
 // Make sure that the PersonalDataManager gets notified when the user accepts
@@ -6960,6 +7125,86 @@ TEST_P(ProceedWithSavingIfApplicableTest, ProceedWithSavingIfApplicable_Card) {
             CreditCardImportType() == payments::PaymentsFormDataImporter::
                                           CreditCardImportType::kNewCard &&
                 !IsCreditCardUpstreamEnabled());
+}
+
+// Tests that for a UnionPay card without CVC, upload save is never offered.
+// If the card was eligible for upload save, save is dropped completely.
+// If card upload prerequisites are not met, local save is still offered for
+// new cards.
+TEST_P(ProceedWithSavingIfApplicableTest,
+       ProceedWithSavingIfApplicable_UnionPayCard_WithoutCvc) {
+  FormData form;
+  FormStructure form_structure(form);
+  CreditCard card = test::CreateCreditCardWithInfo(
+      "Test User", "6247130048162403", test::NextMonth().c_str(),
+      test::NextYear().c_str(), "1");
+  ASSERT_EQ(card.network(), kUnionPay);
+  ASSERT_TRUE(card.cvc().empty());
+
+  bool save_initiated =
+      credit_card_save_manager().ProceedWithSavingIfApplicable(
+          form_structure, card, CreditCardImportType(),
+          IsCreditCardUpstreamEnabled(), ukm_source_id());
+
+  // Upload save is never offered for UnionPay cards without CVC.
+  EXPECT_FALSE(credit_card_save_manager().CreditCardWasUploaded());
+
+  // If card upload prerequisites are not met, local save is still offered for
+  // new cards. If upload prerequisites were met, save is dropped completely.
+  const bool expected_local_save =
+      !IsCreditCardUpstreamEnabled() &&
+      CreditCardImportType() ==
+          payments::PaymentsFormDataImporter::CreditCardImportType::kNewCard;
+  const bool expected_save_initiated =
+      (IsCreditCardUpstreamEnabled() &&
+       (CreditCardImportType() == payments::PaymentsFormDataImporter::
+                                      CreditCardImportType::kNewCard ||
+        CreditCardImportType() == payments::PaymentsFormDataImporter::
+                                      CreditCardImportType::kLocalCard)) ||
+      expected_local_save;
+  EXPECT_EQ(save_initiated, expected_save_initiated);
+  EXPECT_EQ(credit_card_save_manager().CardLocalSaveStarted(),
+            expected_local_save);
+}
+
+// Tests that for a UnionPay card with CVC, upload save is offered as normal
+// when upstream is enabled.
+TEST_P(ProceedWithSavingIfApplicableTest,
+       ProceedWithSavingIfApplicable_UnionPayCard_WithCvc) {
+  FormData form = CreateTestCreditCardFormData();
+  test_api(form).field(4).set_value(u"123");
+  FormStructure form_structure(form);
+  form_structure.field(4)->SetTypeTo(
+      AutofillType(FieldType::CREDIT_CARD_VERIFICATION_CODE),
+      AutofillPredictionSource::kHeuristics);
+  test_api(*form_structure.field(4)).set_initial_value(u"");
+  CreditCard card = test::CreateCreditCardWithInfo(
+      "Test User", "6247130048162403", test::NextMonth().c_str(),
+      test::NextYear().c_str(), "1", u"123");
+  ASSERT_EQ(card.network(), kUnionPay);
+  ASSERT_FALSE(card.cvc().empty());
+
+  bool save_initiated =
+      credit_card_save_manager().ProceedWithSavingIfApplicable(
+          form_structure, card, CreditCardImportType(),
+          IsCreditCardUpstreamEnabled(), ukm_source_id());
+
+  const bool expected_upload =
+      IsCreditCardUpstreamEnabled() &&
+      (CreditCardImportType() ==
+           payments::PaymentsFormDataImporter::CreditCardImportType::kNewCard ||
+       CreditCardImportType() == payments::PaymentsFormDataImporter::
+                                     CreditCardImportType::kLocalCard);
+  const bool expected_local_save =
+      CreditCardImportType() ==
+          payments::PaymentsFormDataImporter::CreditCardImportType::kNewCard &&
+      !IsCreditCardUpstreamEnabled();
+
+  EXPECT_EQ(save_initiated, expected_upload || expected_local_save);
+  EXPECT_EQ(credit_card_save_manager().CreditCardWasUploaded(),
+            expected_upload);
+  EXPECT_EQ(credit_card_save_manager().CardLocalSaveStarted(),
+            expected_local_save);
 }
 
 // Tests that ProceedWithSavingIfApplicable should initiate CVC save or upload

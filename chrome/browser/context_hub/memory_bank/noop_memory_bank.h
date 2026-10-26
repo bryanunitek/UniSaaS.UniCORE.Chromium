@@ -5,7 +5,7 @@
 #ifndef CHROME_BROWSER_CONTEXT_HUB_MEMORY_BANK_NOOP_MEMORY_BANK_H_
 #define CHROME_BROWSER_CONTEXT_HUB_MEMORY_BANK_NOOP_MEMORY_BANK_H_
 
-#include <optional>
+#include <cstdint>
 
 #include "base/containers/span.h"
 #include "chrome/browser/context_hub/memory_bank/memory_bank.h"
@@ -18,23 +18,27 @@ namespace context_hub {
 class NoOpMemoryBank : public MemoryBank {
  public:
   NoOpMemoryBank();
-  ~NoOpMemoryBank() override;
-
   NoOpMemoryBank(const NoOpMemoryBank&) = delete;
   NoOpMemoryBank& operator=(const NoOpMemoryBank&) = delete;
+  ~NoOpMemoryBank() override;
 
   // MemoryBank:
-  void SaveTab(const GURL& url,
-               const std::string& tab_title,
-               const std::string& page_text,
-               OperationCompleteCallback callback) override;
-  void SaveTextSelection(const GURL& url,
-                         const std::string& tab_title,
-                         const std::string& selected_text,
-                         OperationCompleteCallback callback) override;
-  void GetAllEntries(GetAllEntriesCallback callback) const override;
+  void AddObserver(Observer* observer) override;
+  void RemoveObserver(Observer* observer) override;
+  void SaveMemoryBankEntry(MemoryBankEntry entry,
+                           OperationCompleteCallback callback) override;
+  void UpdateEntryAnnotations(int64_t id,
+                              std::vector<std::string> tags,
+                              std::optional<std::string> note,
+                              std::optional<std::string> collection,
+                              OperationCompleteCallback callback) override;
+  void GetAllEntries(GetEntriesCallback callback) const override;
+  void GetEntriesByIds(base::span<const int64_t> ids,
+                       GetEntriesCallback callback) const override;
   void DeleteEntries(base::span<const int64_t> ids,
                      OperationCompleteCallback callback) override;
+  void GetAllTags(GetStringsCallback callback) const override;
+  void GetAllCollections(GetStringsCallback callback) const override;
 };
 
 }  // namespace context_hub

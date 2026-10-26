@@ -11,15 +11,18 @@
 
 #include "base/apple/foundation_util.h"
 #include "base/check_deref.h"
-#include "base/containers/extend.h"
+#include "base/check_op.h"
+#include "base/containers/span_writer.h"
+#include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "base/time/time_override.h"
 #include "crypto/apple/fake_keychain_v2.h"
 #include "crypto/apple/scoped_fake_keychain_v2.h"
+#include "crypto/ecdsa_utils.h"
 #include "crypto/hash.h"
 #include "crypto/keypair.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/sign.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -48,8 +51,7 @@ MATCHER_P(WrappedKeyEq, expected_key, "") {
 constexpr char kTestKeychainAccessGroup[] = "test-keychain-access-group";
 constexpr char kTestApplicationTag[] = "test-application-tag";
 
-constexpr SignatureVerifier::SignatureAlgorithm kAcceptableAlgos[] = {
-    SignatureVerifier::ECDSA_SHA256};
+constexpr sign::SignatureKind kAcceptableAlgos[] = {sign::ECDSA_SHA256};
 
 // Tests behaviour that is unique to the macOS implementation of unexportable
 // keys.
@@ -729,17 +731,17 @@ TEST_F(UnexportableKeyMacTest, GenerateAttestationKeyAndRestore) {
   std::unique_ptr<UnexportableAttestationKey> key =
       provider_->GenerateAttestationKeySlowly(kAcceptableAlgos);
   ASSERT_TRUE(key);
-  EXPECT_EQ(key->Algorithm(), SignatureVerifier::ECDSA_SHA256);
+  EXPECT_EQ(key->Algorithm(), sign::ECDSA_SHA256);
 
   std::vector<uint8_t> wrapped_key = key->GetWrappedKey();
   std::unique_ptr<UnexportableAttestationKey> restored_key =
       provider_->FromWrappedAttestationKeySlowly(wrapped_key);
   ASSERT_TRUE(restored_key);
-  EXPECT_EQ(restored_key->Algorithm(), SignatureVerifier::ECDSA_SHA256);
+  EXPECT_EQ(restored_key->Algorithm(), sign::ECDSA_SHA256);
   EXPECT_EQ(restored_key->GetWrappedKey(), wrapped_key);
 }
 
-TEST_F(UnexportableKeyMacTest, CertifySlowlyStatementAndSignature) {
+TEST_F(UnexportableKeyMacTest, CertifySlowly) {
   ASSERT_TRUE(provider_);
   std::unique_ptr<UnexportableSigningKey> signing_key =
       provider_->GenerateSigningKeySlowly(kAcceptableAlgos);
@@ -750,24 +752,27 @@ TEST_F(UnexportableKeyMacTest, CertifySlowlyStatementAndSignature) {
   ASSERT_TRUE(attestation_key);
 
   const std::vector<uint8_t> challenge = {1, 2, 3, 4, 5, 6, 7, 8};
-  std::optional<AttestationStatement> cert =
-      attestation_key->CertifySlowly(*signing_key, challenge);
-  ASSERT_TRUE(cert);
-  EXPECT_EQ(cert->format, AttestationStatement::kSecureEnclave);
+  ASSERT_OK_AND_ASSIGN(AttestationStatement cert,
+                       attestation_key->CertifySlowly(*signing_key, challenge));
+  EXPECT_EQ(cert.format, AttestationStatement::kSecureEnclave);
+  EXPECT_EQ(cert.subject_key, signing_key->GetSubjectPublicKeyInfo());
 
-  std::vector<uint8_t> expected_statement = challenge;
-  // TODO(crbug.com/406190025): Make the hash algorithm generic once we use
-  // the crypto::sign algorithms.
-  base::Extend(expected_statement,
-               hash::Sha256(signing_key->GetSubjectPublicKeyInfo()));
-  EXPECT_EQ(cert->statement, expected_statement);
+  std::vector<uint8_t> expected_statement(2 * hash::kSha256Size);
+  base::SpanWriter<uint8_t> statement_writer(expected_statement);
+  statement_writer.Write(hash::Sha256(challenge));
+  statement_writer.Write(hash::Sha256(signing_key->GetSubjectPublicKeyInfo()));
+  CHECK_EQ(statement_writer.remaining(), 0u);
+  EXPECT_EQ(cert.statement, expected_statement);
 
-  SignatureVerifier verifier;
-  ASSERT_TRUE(verifier.VerifyInit(SignatureVerifier::ECDSA_SHA256,
-                                  cert->signature,
-                                  attestation_key->GetSubjectPublicKeyInfo()));
-  verifier.VerifyUpdate(cert->statement);
-  EXPECT_TRUE(verifier.VerifyFinal());
+  EXPECT_THAT(cert.signature, SizeIs(64u));
+  ASSERT_OK_AND_ASSIGN(keypair::PublicKey attestation_public_key,
+                       keypair::PublicKey::FromSubjectPublicKeyInfo(
+                           attestation_key->GetSubjectPublicKeyInfo()));
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<uint8_t> der_signature,
+      ConvertEcdsaRawSignatureToDer(attestation_public_key, cert.signature));
+  EXPECT_TRUE(sign::Verify(sign::ECDSA_SHA256, attestation_public_key,
+                           cert.statement, der_signature));
 }
 
 TEST_F(UnexportableKeyMacTest, FromWrappedAttestationKeyForNonExistentKey) {

@@ -102,6 +102,19 @@ export class MostVisitedElement extends MostVisitedElementBase {
     return {
       theme: {type: Object},
       /**
+       * If true, disables editing/removing shortcuts, hides action buttons and
+       * the add shortcut button, and prevents tile dragging.
+       */
+      nonEditable: {
+        type: Boolean,
+        reflect: true,
+      },
+      /** If true, hides the text title under each tile/button. */
+      hideTitle: {
+        type: Boolean,
+        reflect: true,
+      },
+      /**
        * If true, renders MV tiles in a single row up to 10 columns wide.
        * If false, renders MV tiles in up to 2 rows up to 5 columns wide.
        */
@@ -168,10 +181,15 @@ export class MostVisitedElement extends MostVisitedElementBase {
       toastSource_: {type: Number, state: true},
 
       expandableTilesEnabled: {type: Boolean, reflect: true},
+      shortcutsReorderEnabled: {type: Boolean, reflect: true},
       maxTilesInCollapsedState: {type: Number, reflect: true},
       maxShortcutsInExpandedState: {type: Number, reflect: true},
       maxMostVisitedTilesInExpandedState: {type: Number, reflect: true},
       maxEnterpriseShortcuts: {type: Number, reflect: true},
+      /**
+       * If greater than 0, caps the total number of tiles to this value.
+       */
+      maxTiles: {type: Number, reflect: true},
       showAll_: {type: Boolean, state: true},
       showShowMore_: {type: Boolean, state: true},
       showShowLess_: {type: Boolean, state: true},
@@ -180,20 +198,32 @@ export class MostVisitedElement extends MostVisitedElementBase {
         type: Boolean,
         reflect: true,
       },
+      inReorderMode_: {type: Boolean, reflect: true},
+      /**
+       * The width of the element's container. If null, the window's width is
+       * used for calculating the number of MVTs per row.
+       */
+      containerWidth: {type: Number},
     };
   }
 
   accessor theme: MostVisitedTheme|null = null;
+  accessor nonEditable: boolean = false;
+  accessor hideTitle: boolean = false;
   accessor reflowOnOverflow: boolean = false;
   accessor singleRow: boolean = false;
   accessor expandableTilesEnabled: boolean = false;
+  accessor shortcutsReorderEnabled: boolean = false;
   accessor maxTilesInCollapsedState: number = 6;
   accessor maxShortcutsInExpandedState: number = 10;
   accessor maxMostVisitedTilesInExpandedState: number = 8;
   accessor maxEnterpriseShortcuts: number = 10;
+  accessor maxTiles: number = 0;
+  accessor containerWidth: number|null = null;
   private accessor showAll_: boolean = false;
   protected accessor showShowMore_: boolean = false;
   protected accessor showShowLess_: boolean = false;
+  protected accessor inReorderMode_: boolean = false;
   protected accessor useWhiteTileIcon_: boolean = false;
   protected accessor columnCount_: number = 3;
   protected accessor rowCount_: number = 1;
@@ -232,6 +262,8 @@ export class MostVisitedElement extends MostVisitedElementBase {
   private prefetchTimer_: null|ReturnType<typeof setTimeout> = null;
   private preconnectTimer_: null|ReturnType<typeof setTimeout> = null;
   private dragImage_: HTMLImageElement;
+  private mostVisitedHighDpiFaviconsEnabled_: boolean =
+      loadTimeData.getBoolean('mostVisitedHighDpiFaviconsEnabled');
 
   private accessor info_: MostVisitedInfo|null = null;
 
@@ -316,14 +348,19 @@ export class MostVisitedElement extends MostVisitedElementBase {
       this.isDark_ = this.computeIsDark_();
     }
 
-    if (changedPrivateProperties.has('info_') && this.info_ !== null) {
+    // Re-slice `tiles_` when `maxTiles` updates dynamically.
+    if ((changedPrivateProperties.has('info_') ||
+         changedProperties.has('maxTiles')) &&
+        this.info_ !== null) {
       this.visible_ = this.info_.visible;
       this.customLinksEnabled_ = this.info_.customLinksEnabled;
       this.enterpriseShortcutsEnabled_ = this.info_.enterpriseShortcutsEnabled;
-      this.maxTiles_ =
+      const totalMax =
           (this.customLinksEnabled_ ? this.maxShortcutsInExpandedState :
                                       this.maxMostVisitedTilesInExpandedState) +
           (this.enterpriseShortcutsEnabled_ ? this.maxEnterpriseShortcuts : 0);
+      this.maxTiles_ =
+          this.maxTiles > 0 ? Math.min(this.maxTiles, totalMax) : totalMax;
       this.tiles_ = this.info_.tiles.slice(0, this.maxTiles_);
     }
 
@@ -365,7 +402,8 @@ export class MostVisitedElement extends MostVisitedElementBase {
     const changedPrivateProperties =
         changedProperties as Map<PropertyKey, unknown>;
 
-    if (changedProperties.has('singleRow')) {
+    if (changedProperties.has('singleRow') ||
+        changedProperties.has('containerWidth')) {
       this.onSingleRowChange_();
     }
 
@@ -397,7 +435,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
     const shortcutCount = this.tiles_ ? this.tiles_.length : 0;
     const canShowAdd = this.expandableTilesEnabled ?
         this.showAdd_ :
-        this.maxTiles_ > shortcutCount;
+        !this.nonEditable && this.maxTiles_ > shortcutCount;
     const canShowShowMore = this.expandableTilesEnabled && this.showShowMore_;
     const canShowShowLess = this.expandableTilesEnabled && this.showShowLess_;
     const visibleShortcutCount =
@@ -449,7 +487,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
   }
 
   private computeShowAdd_(): boolean {
-    if (this.showShowMore_) {
+    if (this.nonEditable || this.showShowMore_) {
       return false;
     }
     if (!this.customLinksEnabled_) {
@@ -726,7 +764,10 @@ export class MostVisitedElement extends MostVisitedElementBase {
   protected getFaviconUrl_(url: Url): string {
     const faviconUrl = new URL('chrome://favicon2/');
     faviconUrl.searchParams.set('size', '24');
-    faviconUrl.searchParams.set('scaleFactor', '1x');
+    const scaleFactor = this.mostVisitedHighDpiFaviconsEnabled_ ?
+        `${window.devicePixelRatio || 1}x` :
+        '1x';
+    faviconUrl.searchParams.set('scaleFactor', scaleFactor);
     faviconUrl.searchParams.set('showFallbackMonogram', '');
     faviconUrl.searchParams.set('pageUrl', url);
     return faviconUrl.href;
@@ -758,20 +799,33 @@ export class MostVisitedElement extends MostVisitedElementBase {
       return;
     }
     this.mediaEventTracker_.removeAll();
-    const queryLists: MediaQueryList[] = [];
-    const updateCount = () => {
-      const index = queryLists.findIndex(listener => listener.matches);
-      this.maxVisibleColumnCount_ =
-          3 + (index > -1 ? queryLists.length - index : 0);
-    };
+    const tileSize =
+        parseInt(
+            getComputedStyle(this).getPropertyValue('--most-visited-tile-size'),
+            10) ||
+        112;
     const maxColumnCount = this.singleRow ? 10 : 5;
-    for (let i = maxColumnCount; i >= 4; i--) {
-      const query = `(min-width: ${112 * (i + 1)}px)`;
-      const queryList = this.windowProxy_.matchMedia(query);
-      this.mediaEventTracker_.add(queryList, 'change', updateCount);
-      queryLists.push(queryList);
+    if (this.containerWidth !== null) {
+      // Same breakpoints as the media queries below: N columns need a width of
+      // at least N + 1 tiles.
+      this.maxVisibleColumnCount_ = Math.min(
+          maxColumnCount,
+          Math.max(3, Math.floor(this.containerWidth / tileSize) - 1));
+    } else {
+      const queryLists: MediaQueryList[] = [];
+      const updateCount = () => {
+        const index = queryLists.findIndex(listener => listener.matches);
+        this.maxVisibleColumnCount_ =
+            3 + (index > -1 ? queryLists.length - index : 0);
+      };
+      for (let i = maxColumnCount; i >= 4; i--) {
+        const query = `(min-width: ${tileSize * (i + 1)}px)`;
+        const queryList = this.windowProxy_.matchMedia(query);
+        this.mediaEventTracker_.add(queryList, 'change', updateCount);
+        queryLists.push(queryList);
+      }
+      updateCount();
     }
-    updateCount();
   }
 
   protected onAddClick_() {
@@ -845,6 +899,31 @@ export class MostVisitedElement extends MostVisitedElementBase {
     this.adding_ = false;
   }
 
+  protected onDialogKeydown_(e: KeyboardEvent) {
+    if (e.key !== 'Tab') {
+      return;
+    }
+
+    const focusable = Array.from(this.$.dialog.querySelectorAll<HTMLElement>(
+        'cr-input, cr-button:not([disabled]):not([hidden])'));
+
+    if (focusable.length === 0) {
+      return;
+    }
+
+    const firstEl = focusable[0]!;
+    const lastEl = focusable[focusable.length - 1]!;
+    const path = e.composedPath();
+
+    if (e.shiftKey && path.includes(firstEl)) {
+      e.preventDefault();
+      lastEl.focus();
+    } else if (!e.shiftKey && path.includes(lastEl)) {
+      e.preventDefault();
+      firstEl.focus();
+    }
+  }
+
   protected onDialogTileUrlBlur_() {
     if (this.dialogTileUrl_.length > 0 &&
         (normalizeUrl(this.dialogTileUrl_) === null ||
@@ -863,7 +942,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
   }
 
   protected onDocumentKeyDown_(e: KeyboardEvent) {
-    if (e.altKey || e.shiftKey) {
+    if (this.nonEditable || e.altKey || e.shiftKey) {
       return;
     }
 
@@ -876,6 +955,9 @@ export class MostVisitedElement extends MostVisitedElementBase {
   }
 
   protected onDragstart_(e: DragEvent) {
+    if (this.nonEditable) {
+      return;
+    }
     const item = this.tiles_[this.getCurrentTargetIndex_(e)]!;
     assert(item);
     if (!this.customLinksEnabled_ &&
@@ -935,6 +1017,14 @@ export class MostVisitedElement extends MostVisitedElementBase {
     this.dialogTileUrl_ = tile.url;
     this.dialogTileUrlInvalid_ = false;
     this.$.dialog.showModal();
+  }
+
+  protected async onReorderClick_() {
+    this.$.actionMenu.close();
+    this.inReorderMode_ = true;
+    this.reordering_ = true;
+    await this.updateComplete;
+    this.tileFocus_(this.actionMenuTargetIndex_);
   }
 
   protected onRestoreDefaultsClick_() {
@@ -1017,9 +1107,33 @@ export class MostVisitedElement extends MostVisitedElementBase {
         item, index, e.button || 0, e.altKey, e.ctrlKey, e.metaKey, e.shiftKey);
   }
 
-  protected onTileKeydown_(e: KeyboardEvent) {
+  protected async onTileKeydown_(e: KeyboardEvent) {
     if (hasKeyModifiers(e)) {
       return;
+    }
+
+    if (this.shortcutsReorderEnabled && this.inReorderMode_) {
+      // Handle reordering key events.
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        const currentIndex = this.actionMenuTargetIndex_;
+        const direction = e.key === 'ArrowLeft' ? -1 : 1;
+        const newIndex = (currentIndex + direction + this.tiles_.length) %
+            this.tiles_.length;
+
+        const selectedTile = this.tiles_[currentIndex]!;
+        const adjacentTile = this.tiles_[newIndex]!;
+        this.tiles_[currentIndex] = adjacentTile;
+        this.tiles_[newIndex] = selectedTile;
+
+        this.requestUpdate();
+        this.browserProxy_.handler.reorderMostVisitedTile(
+            selectedTile, newIndex);
+
+        this.actionMenuTargetIndex_ = newIndex;
+        await this.updateComplete;
+        this.tileFocus_(newIndex);
+        return;
+      }
     }
 
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' &&
@@ -1029,7 +1143,9 @@ export class MostVisitedElement extends MostVisitedElementBase {
 
     const index = this.getCurrentTargetIndex_(e);
     if (e.key === 'Delete') {
-      this.tileRemove_(index);
+      if (!this.nonEditable) {
+        this.tileRemove_(index);
+      }
       return;
     }
 
@@ -1116,7 +1232,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
   }
 
   protected onTouchstart_(e: TouchEvent) {
-    if (this.reordering_) {
+    if (this.nonEditable || this.reordering_) {
       return;
     }
     const item = this.tiles_[this.getCurrentTargetIndex_(e)]!;
@@ -1212,6 +1328,13 @@ export class MostVisitedElement extends MostVisitedElementBase {
 
   protected getRemoveButtonText_(title: string): string {
     return this.i18n('linkRemoveA11y', htmlEscape(title));
+  }
+
+  protected getTileAriaLabel_(title: string): string {
+    if (this.shortcutsReorderEnabled && this.inReorderMode_) {
+      return this.i18n('shortcutReorderA11y', htmlEscape(title));
+    }
+    return title;
   }
 
   protected isFromEnterpriseShortcut_(source: number) {

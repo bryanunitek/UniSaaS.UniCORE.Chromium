@@ -9,7 +9,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/media_galleries/media_galleries_dialog_controller_mock.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/extensions/media_gallery_checkbox_view.h"
@@ -56,12 +56,12 @@ class MediaGalleriesInteractiveDialogTest : public DialogBrowserTest {
     DialogBrowserTest::PreRunTestOnMainThread();
     const GURL about_blank(url::kAboutBlankURL);
     content::WebContents* content =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     ASSERT_TRUE(content);
     EXPECT_CALL(controller_, WebContents())
         .WillRepeatedly(testing::Return(content));
     ui_test_utils::NavigateToURLWithDispositionBlockUntilNavigationsComplete(
-        browser(), about_blank, 1, WindowOpenDisposition::CURRENT_TAB,
+        browser(), about_blank, 1, WindowOpenDisposition::kCurrentTab,
         IsInteractiveUi() ? ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP : 0);
   }
 

@@ -32,6 +32,7 @@
 #include "components/optimization_guide/proto/icon_view_metadata.pb.h"
 #include "components/page_content_annotations/core/page_content_annotations_features.h"
 #include "components/ukm/test_ukm_recorder.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -105,9 +106,8 @@ class ContextualCueingHelperBaseBrowserTest : public glic::GlicBrowserTest {
   }
 
   glic::GlicNudgeController* glic_nudge_controller() {
-    content::WebContents* web_contents =
-        GetTabListInterface()->GetActiveTab()->GetContents();
-    auto* helper = glic::ContextualCueingHelper::FromWebContents(web_contents);
+    tabs::TabInterface* tab = GetTabListInterface()->GetActiveTab();
+    auto* helper = glic::ContextualCueingHelper::From(tab);
     CHECK(helper);
     return helper->GetGlicNudgeController();
   }
@@ -147,7 +147,8 @@ class ContextualCueingHelperBrowserTest
          {page_content_annotations::features::kAnnotatedPageContentExtraction,
           {}},
          {contextual_tasks::kContextualTasks, {}}},
-        {contextual_cueing::kContextualCueingV2});
+        {contextual_cueing::kContextualCueingV2,
+         features::kGlicHorizontalTabToolbarButton});
   }
 };
 
@@ -849,7 +850,7 @@ IN_PROC_BROWSER_TEST_F(ContextualCueingBypassNudgeCapsTest,
         std::move(info), base::DoNothing());
   }
   glic_instance->host().instance_delegate().OnUserInputSubmitted(
-      glic::mojom::WebClientMode::kText);
+      glic::mojom::WebClientMode::kText, glic::mojom::PromptType::kUnspecified);
 
   // Close the Glic side panel.
   ASSERT_OK(CloseGlicForTabAndWait(tab));
@@ -955,7 +956,7 @@ IN_PROC_BROWSER_TEST_F(ContextualCueingAutoOpenCooldownTest,
         std::move(info), base::DoNothing());
   }
   glic_instance->host().instance_delegate().OnUserInputSubmitted(
-      glic::mojom::WebClientMode::kText);
+      glic::mojom::WebClientMode::kText, glic::mojom::PromptType::kUnspecified);
 
   // 4. Close the Glic side panel.
   ASSERT_OK(CloseGlicForTabAndWait(tab));

@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.tasks.tab_management;
 
 import static org.chromium.ui.listmenu.ListMenuItemProperties.CLICK_LISTENER;
+import static org.chromium.ui.listmenu.ListMenuItemProperties.IS_IPH_HIGHLIGHTED;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.MENU_ITEM_ID;
 import static org.chromium.ui.listmenu.ListMenuUtils.createAdapter;
 
@@ -18,6 +19,7 @@ import android.graphics.drawable.Drawable;
 import android.view.ContextThemeWrapper;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.widget.ListView;
 
 import androidx.annotation.LayoutRes;
 import androidx.annotation.StyleRes;
@@ -28,9 +30,13 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tasks.tab_management.TabOverflowMenuCoordinator.OnItemClickedCallback;
 import org.chromium.chrome.tab_ui.R;
+import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter;
+import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter.HighlightParams;
+import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter.HighlightShape;
 import org.chromium.components.browser_ui.widget.list_view.TouchTrackingListView;
 import org.chromium.ui.UiUtils;
 import org.chromium.ui.listmenu.ListMenuItemAdapter;
+import org.chromium.ui.listmenu.ListMenuItemViewBinder;
 import org.chromium.ui.listmenu.ListMenuUtils;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.widget.AnchoredPopupWindow;
@@ -56,6 +62,7 @@ public class TabOverflowMenuHolder<T> {
     private final ModelList mModelList;
     private final @Nullable LifetimeAssert mLifetimeAssert = LifetimeAssert.create(this);
     private AnchoredPopupWindow mMenuWindow;
+    private final TouchTrackingListView mListView;
 
     TabOverflowMenuHolder(
             RectProvider anchorViewRectProvider,
@@ -91,8 +98,7 @@ public class TabOverflowMenuHolder<T> {
         mContentView = LayoutInflater.from(mContext).inflate(menuLayout, null);
         ListMenuUtils.clipContentViewOutline(mContentView, R.attr.popupBgCornerRadius);
 
-        TouchTrackingListView touchTrackingListView =
-                mContentView.findViewById(R.id.tab_group_action_menu_list);
+        mListView = mContentView.findViewById(R.id.tab_group_action_menu_list);
         ListMenuItemAdapter adapter =
                 createAdapter(
                         modelList,
@@ -109,11 +115,25 @@ public class TabOverflowMenuHolder<T> {
                                     model.get(MENU_ITEM_ID),
                                     id,
                                     collaborationId,
-                                    /* listViewTouchTracker= */ touchTrackingListView);
+                                    /* listViewTouchTracker= */ mListView);
                             mMenuWindow.dismiss();
+                        },
+                        (model, view, propertyKey) -> {
+                            ListMenuItemViewBinder.binder(model, view, propertyKey);
+                            // We do this instead of adding this logic inside
+                            // ListMenuItemViewBinder.binder because ListMenuItemViewBinder is in
+                            // ui/android.
+                            if (propertyKey == IS_IPH_HIGHLIGHTED) {
+                                if (model.get(IS_IPH_HIGHLIGHTED)) {
+                                    ViewHighlighter.turnOnHighlight(
+                                            view, new HighlightParams(HighlightShape.RECTANGLE));
+                                } else {
+                                    ViewHighlighter.turnOffHighlight(view);
+                                }
+                            }
                         });
-        touchTrackingListView.setItemsCanFocus(true);
-        touchTrackingListView.setAdapter(adapter);
+        mListView.setItemsCanFocus(true);
+        mListView.setAdapter(adapter);
 
         View decorView = activity.getWindow().getDecorView();
 
@@ -137,10 +157,24 @@ public class TabOverflowMenuHolder<T> {
                                         .getDimension(R.dimen.tab_overflow_menu_elevation));
 
         if (isFlyout) {
+            int minWidthPx = mContext.getResources().getDimensionPixelSize(R.dimen.menu_width_min);
+            int marginPx =
+                    mContext.getResources().getDimensionPixelSize(R.dimen.menu_horizontal_margin);
+            int windowWidthPx = mContext.getResources().getDisplayMetrics().widthPixels;
+            int contentWidthPx = UiUtils.computeListAdapterContentDimensions(adapter, mListView)[0];
+            int popupWidthPx =
+                    UiUtils.computeMenuWidth(
+                            contentWidthPx
+                                    + mListView.getPaddingLeft()
+                                    + mListView.getPaddingRight(),
+                            minWidthPx,
+                            popupMaxWidthPx,
+                            marginPx,
+                            windowWidthPx);
+
+            builder.setDesiredContentWidth(popupWidthPx);
             builder.setAnimationStyle(R.style.PopupWindowAnimFade);
             builder.setSpecCalculator(new FlyoutPopupSpecCalculator());
-            builder.setDesiredContentWidth(
-                    UiUtils.computeListAdapterContentDimensions(adapter, touchTrackingListView)[0]);
         } else {
             // Override animation style or animate from anchor as default.
             if (animStyle == Resources.ID_NULL) {
@@ -171,6 +205,14 @@ public class TabOverflowMenuHolder<T> {
                 });
     }
 
+    public void setDesiredContentWidth(int width) {
+        mMenuWindow.updateDesiredContentSize(width, 0, false);
+    }
+
+    ListView getListView() {
+        return mListView;
+    }
+
     AnchoredPopupWindow getMenuWindow() {
         return mMenuWindow;
     }
@@ -183,8 +225,13 @@ public class TabOverflowMenuHolder<T> {
         return mContentView;
     }
 
+    void setSoftInputMode(int softInputMode) {
+        mMenuWindow.setSoftInputMode(softInputMode);
+    }
+
     void show() {
         mMenuWindow.show();
+        mContentView.findViewById(R.id.tab_group_action_menu_list).requestFocus();
     }
 
     void resize() {
@@ -200,5 +247,9 @@ public class TabOverflowMenuHolder<T> {
         // If mLifetimeAssert is GC'ed before this is called, it will throw an exception
         // with a stack trace showing the stack during LifetimeAssert.create().
         LifetimeAssert.destroy(mLifetimeAssert);
+    }
+
+    void setOnScrollChangeListener(View.OnScrollChangeListener listener) {
+        mListView.setOnScrollChangeListener(listener);
     }
 }

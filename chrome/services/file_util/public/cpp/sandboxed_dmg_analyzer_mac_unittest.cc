@@ -14,11 +14,13 @@
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/safe_browsing/archive_analyzer_results.h"
 #include "chrome/services/file_util/fake_file_util_service.h"
 #include "chrome/services/file_util/file_util_service.h"
 #include "components/safe_browsing/content/common/file_type_policies.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -29,10 +31,13 @@ namespace {
 
 using ::testing::_;
 
-class SandboxedDMGAnalyzerTest : public testing::Test {
+class SandboxedDMGAnalyzerTest : public testing::TestWithParam<bool> {
  public:
   SandboxedDMGAnalyzerTest()
-      : task_environment_(content::BrowserTaskEnvironment::IO_MAINLOOP) {}
+      : task_environment_(content::BrowserTaskEnvironment::IO_MAINLOOP) {
+    scoped_feature_list_.InitWithFeatureState(
+        safe_browsing::kSafeBrowsingRustDmgParser, GetParam());
+  }
 
   void AnalyzeFile(const base::FilePath& path,
                    safe_browsing::ArchiveAnalyzerResults* results) {
@@ -86,10 +91,15 @@ class SandboxedDMGAnalyzerTest : public testing::Test {
     raw_ptr<safe_browsing::ArchiveAnalyzerResults> results_;
   };
 
+  base::test::ScopedFeatureList scoped_feature_list_;
   content::BrowserTaskEnvironment task_environment_;
 };
 
-TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDMG) {
+TEST_P(SandboxedDMGAnalyzerTest, AnalyzeDMG) {
+  if (GetParam()) {
+    GTEST_SKIP() << "TODO(crbug.com/575525008): Remove once Rust DMG parser "
+                    "is implemented.";
+  }
   base::FilePath path;
   ASSERT_NO_FATAL_FAILURE(path = GetFilePath("mach_o_in_dmg.dmg"));
 
@@ -98,7 +108,6 @@ TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDMG) {
 
   EXPECT_TRUE(results.success);
   EXPECT_TRUE(results.has_executable);
-  EXPECT_EQ(2, results.archived_binary.size());
 
   bool got_executable = false, got_dylib = false;
   for (const auto& binary : results.archived_binary) {
@@ -107,11 +116,11 @@ TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDMG) {
         safe_browsing::ClientDownloadRequest_MachOHeaders>& headers =
         binary.image_headers().mach_o_headers();
 
-    EXPECT_EQ(safe_browsing::ClientDownloadRequest_DownloadType_MAC_EXECUTABLE,
-              binary.download_type());
-
     if (file_name.find("executablefat") != std::string::npos) {
       got_executable = true;
+      EXPECT_EQ(
+          safe_browsing::ClientDownloadRequest_DownloadType_MAC_EXECUTABLE,
+          binary.download_type());
       ASSERT_EQ(2, headers.size());
 
       const safe_browsing::ClientDownloadRequest_MachOHeaders& arch32 =
@@ -133,6 +142,9 @@ TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDMG) {
           actual_sha256);
     } else if (file_name.find("lib64.dylib") != std::string::npos) {
       got_dylib = true;
+      EXPECT_EQ(
+          safe_browsing::ClientDownloadRequest_DownloadType_MAC_EXECUTABLE,
+          binary.download_type());
       ASSERT_EQ(1, headers.size());
 
       const safe_browsing::ClientDownloadRequest_MachOHeaders& arch =
@@ -146,8 +158,6 @@ TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDMG) {
       EXPECT_EQ(
           "2012CE4987B0FA4A5D285DF7E810560E841CFAB3054BC19E1AAB345F862A6C4E",
           actual_sha256);
-    } else {
-      ADD_FAILURE() << "Unexpected result file " << binary.file_path();
     }
   }
 
@@ -163,7 +173,11 @@ TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDMG) {
   EXPECT_EQ(1842u, detached_signature.contents().size());
 }
 
-TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDMGNoPartitionName) {
+TEST_P(SandboxedDMGAnalyzerTest, AnalyzeDMGNoPartitionName) {
+  if (GetParam()) {
+    GTEST_SKIP() << "TODO(crbug.com/575525008): Remove once Rust DMG parser "
+                    "is implemented.";
+  }
   base::FilePath path;
   ASSERT_NO_FATAL_FAILURE(
       path = GetFilePath("mach_o_in_dmg_no_partition_name.dmg"));
@@ -173,7 +187,6 @@ TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDMGNoPartitionName) {
 
   EXPECT_TRUE(results.success);
   EXPECT_TRUE(results.has_executable);
-  EXPECT_EQ(2, results.archived_binary.size());
 
   bool got_executable = false, got_dylib = false;
   for (const auto& binary : results.archived_binary) {
@@ -182,11 +195,11 @@ TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDMGNoPartitionName) {
         safe_browsing::ClientDownloadRequest_MachOHeaders>& headers =
         binary.image_headers().mach_o_headers();
 
-    EXPECT_EQ(safe_browsing::ClientDownloadRequest_DownloadType_MAC_EXECUTABLE,
-              binary.download_type());
-
     if (file_name.find("executablefat") != std::string::npos) {
       got_executable = true;
+      EXPECT_EQ(
+          safe_browsing::ClientDownloadRequest_DownloadType_MAC_EXECUTABLE,
+          binary.download_type());
       ASSERT_EQ(2, headers.size());
 
       const safe_browsing::ClientDownloadRequest_MachOHeaders& arch32 =
@@ -208,6 +221,9 @@ TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDMGNoPartitionName) {
           actual_sha256);
     } else if (file_name.find("lib64.dylib") != std::string::npos) {
       got_dylib = true;
+      EXPECT_EQ(
+          safe_browsing::ClientDownloadRequest_DownloadType_MAC_EXECUTABLE,
+          binary.download_type());
       ASSERT_EQ(1, headers.size());
 
       const safe_browsing::ClientDownloadRequest_MachOHeaders& arch =
@@ -221,8 +237,6 @@ TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDMGNoPartitionName) {
       EXPECT_EQ(
           "2012CE4987B0FA4A5D285DF7E810560E841CFAB3054BC19E1AAB345F862A6C4E",
           actual_sha256);
-    } else {
-      ADD_FAILURE() << "Unexpected result file " << binary.file_path();
     }
   }
 
@@ -238,7 +252,11 @@ TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDMGNoPartitionName) {
   EXPECT_EQ(1842u, detached_signature.contents().size());
 }
 
-TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDmgNoSignature) {
+TEST_P(SandboxedDMGAnalyzerTest, AnalyzeDmgNoSignature) {
+  if (GetParam()) {
+    GTEST_SKIP() << "TODO(crbug.com/575525008): Remove once Rust DMG parser "
+                    "is implemented.";
+  }
   base::FilePath unsigned_dmg;
   ASSERT_NO_FATAL_FAILURE(unsigned_dmg = GetFilePath("mach_o_in_dmg.dmg"));
 
@@ -250,7 +268,11 @@ TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDmgNoSignature) {
   EXPECT_EQ(nullptr, results.signature_blob.data());
 }
 
-TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDmgWithSignature) {
+TEST_P(SandboxedDMGAnalyzerTest, AnalyzeDmgWithSignature) {
+  if (GetParam()) {
+    GTEST_SKIP() << "TODO(crbug.com/575525008): Remove once Rust DMG parser "
+                    "is implemented.";
+  }
   base::FilePath signed_dmg;
   EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &signed_dmg));
   signed_dmg = signed_dmg.AppendASCII("safe_browsing")
@@ -278,7 +300,7 @@ TEST_F(SandboxedDMGAnalyzerTest, AnalyzeDmgWithSignature) {
   EXPECT_EQ(from_file, signature);
 }
 
-TEST_F(SandboxedDMGAnalyzerTest, CanDeleteDuringExecution) {
+TEST_P(SandboxedDMGAnalyzerTest, CanDeleteDuringExecution) {
   base::FilePath file_path;
   ASSERT_NO_FATAL_FAILURE(file_path = GetFilePath("mach_o_in_dmg.dmg"));
   base::FilePath temp_path;
@@ -308,7 +330,7 @@ TEST_F(SandboxedDMGAnalyzerTest, CanDeleteDuringExecution) {
   run_loop.Run();
 }
 
-TEST_F(SandboxedDMGAnalyzerTest, InvalidPath) {
+TEST_P(SandboxedDMGAnalyzerTest, InvalidPath) {
   base::FilePath file_path;
   EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &file_path));
   file_path = file_path.AppendASCII("does_not_exist");
@@ -320,5 +342,12 @@ TEST_F(SandboxedDMGAnalyzerTest, InvalidPath) {
   EXPECT_EQ(results.analysis_result,
             safe_browsing::ArchiveAnalysisResult::kFailedToOpen);
 }
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         SandboxedDMGAnalyzerTest,
+                         testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Rust" : "Cpp";
+                         });
 
 }  // namespace

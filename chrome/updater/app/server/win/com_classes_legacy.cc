@@ -23,7 +23,6 @@
 #include "base/memory/ref_counted.h"
 #include "base/process/process.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
 #include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
@@ -574,7 +573,10 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
   // foreground priority and disallows same version updates.
   HRESULT CheckForUpdate() {
     VLOG(2) << __func__;
-    current_operation_ = CurrentOperation::kCheckingForUpdates;
+    {
+      base::AutoLock lock{lock_};
+      current_operation_ = CurrentOperation::kCheckingForUpdates;
+    }
     return DoOperation(
         base::BindOnce(&AppWebImpl::CheckForUpdateImpl, AppWebImplPtr(this)));
   }
@@ -595,7 +597,10 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
 
   HRESULT UpdateOrInstall() {
     VLOG(2) << __func__;
-    current_operation_ = CurrentOperation::kUpdatingOrInstalling;
+    {
+      base::AutoLock lock{lock_};
+      current_operation_ = CurrentOperation::kUpdatingOrInstalling;
+    }
     return DoOperation(base::BindOnce(
         is_install_ ? &AppWebImpl::InstallImpl : &AppWebImpl::UpdateImpl,
         AppWebImplPtr(this)));
@@ -614,9 +619,10 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
     request.brand_code = brand_code_;
     request.ap = ap_;
 
-    update_service->Install(
-        request, {}, install_data_index_, UpdateService::Priority::kForeground,
-        language_, state_change_callback, std::move(complete_callback));
+    update_service->Install(request, {}, GetInstallDataIndex(),
+                            UpdateService::Priority::kForeground, language_,
+                            state_change_callback,
+                            std::move(complete_callback));
   }
 
   void UpdateImpl(
@@ -626,7 +632,7 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
       scoped_refptr<UpdateService> update_service) {
     CHECK(update_service);
 
-    update_service->Update(app_id_, install_data_index_,
+    update_service->Update(app_id_, GetInstallDataIndex(),
                            UpdateService::Priority::kForeground,
                            policy_same_version_update_, language_,
                            state_change_callback, std::move(complete_callback));
@@ -634,7 +640,10 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
 
   // Legacy compatibility: sets a flag that causes `get_currentState` to return
   // `STATE_READY_TO_INSTALL` when the update state is `kUpdateAvailable`.
-  void SetReadyToInstall() { set_ready_to_install_ = true; }
+  void SetReadyToInstall() {
+    base::AutoLock lock{lock_};
+    set_ready_to_install_ = true;
+  }
 
   // Overrides for IAppWeb.
   IFACEMETHODIMP get_appId(BSTR* app_id) override {
@@ -855,16 +864,20 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
     }
 
     *install_data_index =
-        base::win::ScopedBstr(base::UTF8ToWide(install_data_index_)).Release();
+        base::win::ScopedBstr(base::UTF8ToWide(GetInstallDataIndex()))
+            .Release();
     return S_OK;
   }
 
   IFACEMETHODIMP put_serverInstallDataIndex(BSTR install_data_index) override {
-    if (!install_data_index) {
+    std::optional<std::string> install_data_index_str =
+        ValidateInstallDataIndex(install_data_index);
+    if (!install_data_index_str) {
       return E_INVALIDARG;
     }
 
-    install_data_index_ = base::WideToUTF8(install_data_index);
+    base::AutoLock lock{lock_};
+    install_data_index_ = *std::move(install_data_index_str);
     return S_OK;
   }
 
@@ -936,6 +949,11 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
     result_ = result;
   }
 
+  std::string GetInstallDataIndex() const {
+    base::AutoLock lock{lock_};
+    return install_data_index_;
+  }
+
   // Handles the update service callbacks.
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
@@ -945,19 +963,20 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
   std::string brand_code_;
   std::string ap_;
   std::string language_;
-  std::string install_data_index_;
   UpdateService::PolicySameVersionUpdate policy_same_version_update_ =
       UpdateService::PolicySameVersionUpdate::kNotAllowed;
-  bool set_ready_to_install_ = false;
   ProgressSampler download_progress_sampler_;
   ProgressSampler install_progress_sampler_;
 
-  // Access to `state_update_` and `result_` must be serialized by using the
-  // lock.
+  // Serializes access to the members that may be read or written on multiple
+  // COM RPC threads.
   mutable base::Lock lock_;
-  std::optional<UpdateService::UpdateState> state_update_;
-  std::optional<UpdateService::Result> result_;
-  CurrentOperation current_operation_ = CurrentOperation::kUnknown;
+  std::string install_data_index_ GUARDED_BY(lock_);
+  bool set_ready_to_install_ GUARDED_BY(lock_) = false;
+  CurrentOperation current_operation_ GUARDED_BY(lock_) =
+      CurrentOperation::kUnknown;
+  std::optional<UpdateService::UpdateState> state_update_ GUARDED_BY(lock_);
+  std::optional<UpdateService::Result> result_ GUARDED_BY(lock_);
 };
 
 // This class implements the legacy Omaha3 IAppBundleWeb interface as expected
@@ -1246,9 +1265,12 @@ STDMETHODIMP LegacyAppCommandWebImpl::get_status(UINT* status) {
 
   if (!is_valid) {
     *status = COMMAND_STATUS_INIT;
+  } else if (!app_command_runner_.value()->TimedWait()) {
+    *status = COMMAND_STATUS_RUNNING;
+  } else if (app_command_runner_.value()->exit_code().has_value()) {
+    *status = COMMAND_STATUS_COMPLETE;
   } else {
-    *status = app_command_runner_.value()->TimedWait() ? COMMAND_STATUS_COMPLETE
-                                                       : COMMAND_STATUS_RUNNING;
+    *status = COMMAND_STATUS_ERROR;
   }
 
   return S_OK;
@@ -1259,17 +1281,17 @@ STDMETHODIMP LegacyAppCommandWebImpl::get_exitCode(DWORD* exit_code) {
     return E_INVALIDARG;
   }
 
-  base::Process process_dup = process();
-  if (!process_dup.IsValid()) {
+  if (!app_command_runner_.has_value()) {
     return S_FALSE;
   }
 
-  int code = -1;
-  if (!process_dup.WaitForExitWithTimeout(base::TimeDelta(), &code)) {
+  const std::optional<DWORD> runner_exit_code =
+      app_command_runner_.value()->exit_code();
+  if (!runner_exit_code.has_value()) {
     return S_FALSE;
   }
 
-  *exit_code = code;
+  *exit_code = *runner_exit_code;
   return S_OK;
 }
 
@@ -1319,7 +1341,8 @@ STDMETHODIMP LegacyAppCommandWebImpl::execute(VARIANT substitution1,
   }
 
   base::Process process;
-  const HRESULT hr = app_command_runner_.value()->Run(substitutions, process);
+  const HRESULT hr = app_command_runner_.value()->Run(
+      substitutions, &GetCOMCallerSid, process);
   {
     base::AutoLock lock(lock_);
     if (SUCCEEDED(hr)) {
@@ -1336,8 +1359,9 @@ STDMETHODIMP LegacyAppCommandWebImpl::execute(VARIANT substitution1,
       base::BindOnce(
           [](PingSender ping_sender, UpdaterScope scope,
              const std::string& app_id, const std::string& command_id,
-             update_client::Callback callback, base::Process process,
-             HRESULT hr, base::OnceClosure done) {
+             update_client::Callback callback,
+             scoped_refptr<AppCommandRunner> app_command_runner, HRESULT hr,
+             base::OnceClosure done) {
             auto error_params = [&]() -> ErrorParams {
               if (FAILED(hr)) {
                 VLOG(2) << __func__ << ": AppCommand failed to launch: " << hr;
@@ -1347,12 +1371,16 @@ STDMETHODIMP LegacyAppCommandWebImpl::execute(VARIANT substitution1,
                 };
               }
 
-              int exit_code = -1;
-              if (process.WaitForExitWithTimeout(kWaitForAppInstaller,
-                                                 &exit_code)) {
-                VLOG(2) << "AppCommand completed: " << exit_code;
+              // Blocks until the runner stops monitoring the command, which is
+              // bounded by the runner's monitoring timeout. Use the runner's
+              // latched exit code so that the ping agrees with `get_status` and
+              // `get_exitCode`.
+              app_command_runner->Wait();
+              if (const std::optional<DWORD> exit_code =
+                      app_command_runner->exit_code()) {
+                VLOG(2) << "AppCommand completed: " << *exit_code;
                 return {
-                    .error_code = exit_code,
+                    .error_code = static_cast<int>(*exit_code),
                     .extra_code1 = 0,
                 };
               }
@@ -1380,7 +1408,7 @@ STDMETHODIMP LegacyAppCommandWebImpl::execute(VARIANT substitution1,
                         << " completed or was skipped: " << error;
               },
               LegacyAppCommandWebImplPtr(this)),
-          this->process(), hr));
+          app_command_runner_.value(), hr));
   return hr;
 }
 

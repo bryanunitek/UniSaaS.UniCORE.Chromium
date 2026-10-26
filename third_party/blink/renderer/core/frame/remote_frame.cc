@@ -32,9 +32,11 @@
 #include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/events/message_event.h"
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
+#include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
+#include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/remote_dom_window.h"
 #include "third_party/blink/renderer/core/frame/remote_frame_client.h"
 #include "third_party/blink/renderer/core/frame/remote_frame_owner.h"
@@ -53,7 +55,6 @@
 #include "third_party/blink/renderer/core/loader/mixed_content_checker.h"
 #include "third_party/blink/renderer/core/messaging/blink_transferable_message.h"
 #include "third_party/blink/renderer/core/page/page.h"
-#include "third_party/blink/renderer/core/page/plugin_script_forbidden_scope.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/scroll/scroll_into_view_util.h"
@@ -166,6 +167,7 @@ void RemoteFrame::Trace(Visitor* visitor) const {
   visitor->Trace(receiver_);
   visitor->Trace(main_frame_receiver_);
   Frame::Trace(visitor);
+  ChildFrameCompositor::Trace(visitor);
 }
 
 void RemoteFrame::Navigate(FrameLoadRequest& frame_request,
@@ -275,13 +277,15 @@ void RemoteFrame::Navigate(FrameLoadRequest& frame_request,
   params->referrer = mojom::blink::Referrer::New(
       KURL(NullUrl(), request.ReferrerString()), request.GetReferrerPolicy());
   params->is_form_submission = !!frame_request.Form();
-  params->disposition = ui::mojom::blink::WindowOpenDisposition::CURRENT_TAB;
+  params->disposition = ui::mojom::blink::WindowOpenDisposition::kCurrentTab;
   params->should_replace_current_entry =
       frame_load_type == WebFrameLoadType::kReplaceCurrentItem;
   params->user_gesture = request.HasUserGesture();
   params->triggering_event_info = mojom::blink::TriggeringEventInfo::kUnknown;
   params->blob_url_token = frame_request.GetBlobURLToken();
   params->href_translate = String(frame_request.HrefTranslate().Latin1());
+  params->initiator_state_token = frame_request.GetInitiatorStateToken();
+  params->initiator_document_token = frame_request.GetInitiatorDocumentToken();
   params->initiator_navigation_state_keep_alive_handle =
       std::move(initiator_navigation_state_keep_alive_handle);
   params->initiator_frame_token =
@@ -295,8 +299,6 @@ void RemoteFrame::Navigate(FrameLoadRequest& frame_request,
     params->source_location->line = source_location->LineNumber();
     params->source_location->column = source_location->ColumnNumber();
   }
-
-  params->impression = frame_request.Impression();
 
   // Note: For the AdFrame/Sandbox download policy here it only covers the case
   // where the navigation initiator frame is ad. The download_policy may be
@@ -313,6 +315,18 @@ void RemoteFrame::Navigate(FrameLoadRequest& frame_request,
   params->is_container_initiated = frame_request.IsContainerInitiated();
   params->has_rel_opener = frame_request.GetWindowFeatures().explicit_opener;
 
+  // Navigations initiated from an isolated world (e.g., by an extension
+  // content script) bypass the main world's CSP. This mirrors what
+  // FrameLoader::StartNavigation() does for navigations of local frames, so
+  // that CSP enforcement doesn't depend on whether the navigated frame happens
+  // to live in another process. See the comment on
+  // OpenURLParams::should_check_main_world_csp for more details.
+  params->should_check_main_world_csp =
+      ContentSecurityPolicy::ShouldBypassMainWorldDeprecated(
+          frame_request.JavascriptWorld())
+          ? network::mojom::CSPDisposition::DO_NOT_CHECK
+          : network::mojom::CSPDisposition::CHECK;
+
   GetRemoteFrameHostRemote().OpenURL(std::move(params));
 }
 
@@ -325,8 +339,6 @@ bool RemoteFrame::NavigationShouldReplaceCurrentHistoryEntry(
 }
 
 bool RemoteFrame::DetachImpl(FrameDetachType type) {
-  PluginScriptForbiddenScope forbid_plugin_destructor_scripting;
-
   if (!DetachChildren())
     return false;
 
@@ -473,6 +485,19 @@ void RemoteFrame::CreateView() {
 
   if (OwnerLayoutObject())
     DeprecatedLocalOwner()->SetEmbeddedContentView(view_);
+
+  // Force the embedding (parent) frame to recompute and propagate this frame's
+  // viewport intersection state on the next lifecycle update. This ensures the
+  // remote frame receives its initial `is_hidden_for_media_playback` bit even
+  // when it has no layout object (e.g. an out-of-process iframe that is
+  // display:none before insertion). Without this, such a frame would keep the
+  // default (not-hidden) state, allowing media to play while hidden.
+  if (LocalFrame* parent_local_frame = DynamicTo<LocalFrame>(Tree().Parent())) {
+    if (LocalFrameView* parent_view = parent_local_frame->View()) {
+      parent_view->SetIntersectionObservationState(LocalFrameView::kRequired);
+      parent_view->ScheduleAnimation();
+    }
+  }
 }
 
 void RemoteFrame::ForwardPostMessage(
@@ -603,19 +628,26 @@ void RemoteFrame::SetReplicatedOrigin(
 }
 
 bool RemoteFrame::IsAdFrame() const {
-  return is_ad_frame_;
+  return ad_frame_status_ != mojom::blink::FrameAdStatus::kNotAd;
 }
 
-void RemoteFrame::SetReplicatedIsAdFrame(bool is_ad_frame) {
-  TRACE_EVENT("navigation", "RemoteFrame::SetReplicatedIsAdFrame");
+void RemoteFrame::SetReplicatedAdFrameStatus(
+    mojom::blink::FrameAdStatus ad_frame_status) {
+  TRACE_EVENT("navigation", "RemoteFrame::SetReplicatedAdFrameStatus");
 
-  // Currently, a frame cannot be untagged.
-  DCHECK_LE(is_ad_frame_, is_ad_frame);
+  // A frame's ad status can only be upgraded monotonically. Ignore redundant
+  // updates and reject attempted downgrades. This fails safe in production
+  // and DCHECKs in debug builds.
+  if (ad_frame_status <= ad_frame_status_) {
+    DCHECK_EQ(ad_frame_status, ad_frame_status_)
+        << "A frame's ad status must not be downgraded.";
+    return;
+  }
 
-  is_ad_frame_ = is_ad_frame;
+  ad_frame_status_ = ad_frame_status;
 
   if (auto* owner_element = DynamicTo<HTMLFrameOwnerElement>(Owner())) {
-    if (is_ad_frame) {
+    if (ad_frame_status != mojom::blink::FrameAdStatus::kNotAd) {
       // If an ad script created this frame, the provenance was likely already
       // set via LocalFrame::SetAdEvidence() on the initial empty LocalFrame
       // prior to swapping, making this call a no-op. The provenance data is

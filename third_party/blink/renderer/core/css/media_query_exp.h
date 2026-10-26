@@ -143,14 +143,15 @@ class CORE_EXPORT MediaQueryExpValue {
   enum UnitFlags {
     kNone = 0,
     kFontRelative = 1 << 0,
-    kRootFontRelative = 1 << 1,
+    kRootRelative = 1 << 1,
     kDynamicViewport = 1 << 2,
     kStaticViewport = 1 << 3,
     kContainer = 1 << 4,
     kTreeCounting = 1 << 5,
+    kLineHeightRelative = 1 << 6,
   };
 
-  static const int kUnitFlagsBits = 6;
+  static const int kUnitFlagsBits = 7;
 
   unsigned GetUnitFlags() const;
 
@@ -186,7 +187,7 @@ class CORE_EXPORT MediaQueryExpValue {
 
   Type type_ = Type::kInvalid;
 
-  CSSValueID id_;
+  CSSValueID id_ = CSSValueID::kInvalid;
   Member<const CSSValue> value_;
   Member<const cssvalue::CSSRatioValue> ratio_;
 };

@@ -76,6 +76,13 @@ class AttributeInstance;
 //                          submission, or even validated by the user in the
 //                          settings.
 // -----------------------------------------------------------------------------
+// entities_metadata_wallet Contains Wallet-specific metadata for entity
+//                          instances.
+//
+//   entity_guid            Uniquely identifies the entity instance (primary
+//                          key as well as foreign key into the entities table).
+//   management_url         The URL on wallet.google.com to manage the entity.
+// -----------------------------------------------------------------------------
 class EntityTable : public WebDatabaseTable {
  public:
   EntityTable();
@@ -163,6 +170,11 @@ class EntityTable : public WebDatabaseTable {
   // moved from `autofill_ai_entities` to `autofill_ai_entities_metadata`.
   bool MigrateToVersion147AddEntitiesMetadataTable();
 
+  // In this version, orphaned entries in child tables
+  // (`autofill_ai_attributes` and `autofill_ai_entities_metadata`)
+  // left behind by previous non-cascading deletions are cleaned up.
+  bool MigrateToVersion157CleanupOrphanedEntityChildData();
+
   // Returns true if adding the entity succeeded.
   // It does not validate the entity itself, but it does check that no such
   // entity with the same GUID exists.
@@ -171,6 +183,12 @@ class EntityTable : public WebDatabaseTable {
   // Returns true if adding the entity `metadata` to the `entities_metadata`
   // table succeeded.
   bool AddEntityMetadata(const EntityInstance::EntityMetadata& metadata);
+
+  // Returns true if adding the entity's Wallet metadata to the
+  // `autofill_ai_entities_metadata_wallet` table succeeded.
+  bool AddWalletMetadata(
+      const EntityInstance::EntityId& guid,
+      const EntityInstance::WalletRecordTypePayload& payload);
 
   // Returns true if adding the attribute to the `attributes` table succeeded.
   bool AddAttribute(const EntityInstance& entity,
@@ -187,6 +205,11 @@ class EntityTable : public WebDatabaseTable {
   std::map<EntityInstance::EntityId, EntityInstance::EntityMetadata>
   LoadMetadata() const;
 
+  // Loads the content of `autofill_ai_entities_metadata_wallet` table into
+  // memory. The map returned is keyed by `EntityId` of the loaded entities.
+  std::map<EntityInstance::EntityId, EntityInstance::WalletRecordTypePayload>
+  LoadWalletMetadata() const;
+
   // Attempts to create an `EntityInstance` object provided information loaded
   // from the database. Returns the instance itself if creation was successful
   // and `std::nullopt` otherwise.
@@ -197,8 +220,8 @@ class EntityTable : public WebDatabaseTable {
       base::Time date_modified,
       int64_t use_count,
       base::Time use_date,
-      std::underlying_type_t<EntityInstance::RecordType>
-          underlying_storage_type,
+      std::underlying_type_t<EntityInstance::RecordType> underlying_record_type,
+      std::optional<EntityInstance::WalletRecordTypePayload> wallet_payload,
       std::map<std::string, std::vector<AttributeRecord>> attribute_records,
       EntityInstance::AreAttributesReadOnly are_attributes_read_only,
       std::string frecency_override) const;

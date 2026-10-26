@@ -18,8 +18,12 @@ def CheckChange(input_api, output_api):
     if input_api.is_windows:
         return []
 
+    if not input_api.HasAffectedFiles(extensions=('.py', '.j2')):
+        return []
+
     return input_api.canned_checks.RunUnitTestsInDirectory(
         input_api,
         output_api,
         input_api.PresubmitLocalPath(),
-        files_to_check=[r'.+_unittest\.py$'])
+        files_to_check=[r'.+_unittest\.py$'],
+    )

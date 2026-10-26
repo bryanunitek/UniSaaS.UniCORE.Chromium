@@ -9,14 +9,15 @@
 
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/core/inspector/inspector_overlay_agent.h"
 #include "third_party/blink/renderer/core/inspector/node_content_visibility_state.h"
+#include "third_party/blink/renderer/core/inspector/v8_session_holder.h"
 #include "third_party/blink/renderer/platform/heap/weak_cell.h"
 
 namespace blink {
 
-struct InspectorGreenDevFloatyAnchorConfig;
 class WebMouseEvent;
 class WebPointerEvent;
 
@@ -162,9 +163,6 @@ using ContainerQueryConfigs = HeapHashMap<
 using IsolatedElementConfigs =
     HeapHashMap<WeakMember<Element>,
                 std::unique_ptr<InspectorIsolationModeHighlightConfig>>;
-using GreenDevFloatyAnchorConfigs =
-    HeapHashMap<WeakMember<Node>,
-                std::unique_ptr<InspectorGreenDevFloatyAnchorConfig>>;
 
 class PersistentTool : public InspectTool {
   using InspectTool::InspectTool;
@@ -180,10 +178,6 @@ class PersistentTool : public InspectTool {
   void SetScrollSnapConfigs(ScrollSnapConfigs);
   void SetContainerQueryConfigs(ContainerQueryConfigs);
   void SetIsolatedElementConfigs(IsolatedElementConfigs);
-  void SetGreenDevFloatyAnchorConfigs(GreenDevFloatyAnchorConfigs);
-  void AddGreenDevFloatyAnchorConfig(
-      Node* node,
-      std::unique_ptr<InspectorGreenDevFloatyAnchorConfig> config);
 
   std::unique_ptr<protocol::DictionaryValue> GetGridInspectorHighlightsAsJson()
       const;
@@ -203,7 +197,6 @@ class PersistentTool : public InspectTool {
   ScrollSnapConfigs scroll_snap_configs_;
   ContainerQueryConfigs container_query_configs_;
   IsolatedElementConfigs isolated_element_configs_;
-  GreenDevFloatyAnchorConfigs green_dev_floaty_anchor_configs_;
 };
 
 // -----------------------------------------------------------------------------
@@ -241,10 +234,10 @@ class PausedInDebuggerTool : public InspectTool {
  public:
   PausedInDebuggerTool(InspectorOverlayAgent* overlay,
                        OverlayFrontend* frontend,
-                       v8_inspector::V8InspectorSession* v8_session,
+                       V8SessionHolder v8_session,
                        const String& message)
       : InspectTool(overlay, frontend),
-        v8_session_(v8_session),
+        v8_session_(std::move(v8_session)),
         message_(message) {}
   PausedInDebuggerTool(const PausedInDebuggerTool&) = delete;
   PausedInDebuggerTool& operator=(const PausedInDebuggerTool&) = delete;
@@ -257,10 +250,10 @@ class PausedInDebuggerTool : public InspectTool {
   void Dispatch(const ScriptValue& message,
                 ExceptionState& exception_state) override;
   String GetOverlayName() override;
-  void OnAgentDisable() override;
+  void Dispose() override;
   void ExecuteOnV8Session(Action action);
 
-  v8_inspector::V8InspectorSession* v8_session_;
+  V8SessionHolder v8_session_;
   String message_;
   WeakCellFactory<PausedInDebuggerTool> weak_factory_{this};
 };

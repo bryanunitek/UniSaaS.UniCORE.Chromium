@@ -12,15 +12,17 @@
 #include "base/logging.h"
 #include "base/strings/escape.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
-#include "components/safe_browsing/core/browser/db/v4_test_util.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_config.h"
+#include "components/safe_browsing/core/browser/db/sb_test_util.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "net/http/http_request_headers.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::Time;
 
-// TODO(crbug.com/362791941): Update v4-specific comments in this file.
 namespace safe_browsing {
 
 class SBProtocolManagerUtilTest : public testing::Test {};
@@ -99,11 +101,12 @@ TEST_F(SBProtocolManagerUtilTest, TestBackOffLogic) {
   EXPECT_EQ(base::Hours(24), next);
 }
 
+// TODO(crbug.com/372395685): Deprecate with v4.
 TEST_F(SBProtocolManagerUtilTest, TestGetRequestUrlAndUpdateHeaders) {
   net::HttpRequestHeaders headers;
   GURL gurl;
   SBProtocolManagerUtil::GetRequestUrlAndHeaders("request_base64", "someMethod",
-                                                 GetTestV4ProtocolConfig(),
+                                                 GetTestSBProtocolConfig(),
                                                  &gurl, &headers);
   std::string expectedUrl =
       "https://safebrowsing.googleapis.com/v4/someMethod?"
@@ -113,17 +116,38 @@ TEST_F(SBProtocolManagerUtilTest, TestGetRequestUrlAndUpdateHeaders) {
               testing::Optional(std::string("POST")));
 }
 
+class SBProtocolManagerUtilUrlParsingTest
+    : public testing::TestWithParam<bool> {
+ public:
+  SBProtocolManagerUtilUrlParsingTest() {
+    if (GetParam()) {
+      scoped_feature_list_.InitAndEnableFeature(kLocalListsUseSBv5);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(kLocalListsUseSBv5);
+    }
+  }
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         SBProtocolManagerUtilUrlParsingTest,
+                         testing::Bool());
+
 // Tests that we generate the required host/path combinations for testing
-// according to the Safe Browsing spec.
+// according to the Safe Browsing spec for both v4 and v5.
 // See: https://developers.google.com/safe-browsing/v4/urls-hashing
-TEST_F(SBProtocolManagerUtilTest, UrlParsing) {
+// See: https://developers.google.com/safe-browsing/reference/URLs.and.Hashing
+// TODO(crbug.com/372395685): make description v5-only
+TEST_P(SBProtocolManagerUtilUrlParsingTest, UrlParsing) {
   std::vector<std::string> hosts, paths;
 
   GURL url("http://a.b.c/1/2.html?param=1");
   SBProtocolManagerUtil::GenerateHostsToCheck(url, &hosts);
   SBProtocolManagerUtil::GeneratePathsToCheck(url, &paths);
-  EXPECT_EQ(hosts.size(), static_cast<size_t>(2));
-  EXPECT_EQ(paths.size(), static_cast<size_t>(4));
+  EXPECT_EQ(hosts.size(), 2u);
+  EXPECT_EQ(paths.size(), 4u);
   EXPECT_EQ(hosts[0], "b.c");
   EXPECT_EQ(hosts[1], "a.b.c");
 
@@ -135,8 +159,8 @@ TEST_F(SBProtocolManagerUtilTest, UrlParsing) {
   url = GURL("http://a.b.c.d.e.f.g/1.html");
   SBProtocolManagerUtil::GenerateHostsToCheck(url, &hosts);
   SBProtocolManagerUtil::GeneratePathsToCheck(url, &paths);
-  EXPECT_EQ(hosts.size(), static_cast<size_t>(5));
-  EXPECT_EQ(paths.size(), static_cast<size_t>(2));
+  EXPECT_EQ(hosts.size(), 5u);
+  EXPECT_EQ(paths.size(), 2u);
   EXPECT_EQ(hosts[0], "f.g");
   EXPECT_EQ(hosts[1], "e.f.g");
   EXPECT_EQ(hosts[2], "d.e.f.g");
@@ -147,14 +171,108 @@ TEST_F(SBProtocolManagerUtilTest, UrlParsing) {
 
   url = GURL("http://a.b/saw-cgi/eBayISAPI.dll/");
   SBProtocolManagerUtil::GeneratePathsToCheck(url, &paths);
-  EXPECT_EQ(paths.size(), static_cast<size_t>(3));
+  EXPECT_EQ(paths.size(), 3u);
   EXPECT_TRUE(std::ranges::contains(paths, "/saw-cgi/eBayISAPI.dll/"));
   EXPECT_TRUE(std::ranges::contains(paths, "/saw-cgi/"));
   EXPECT_TRUE(std::ranges::contains(paths, "/"));
+
+  url = GURL("http://maps.google.example.com/1");
+  SBProtocolManagerUtil::GenerateHostsToCheck(url, &hosts);
+  EXPECT_EQ(hosts.size(), 3u);
+  EXPECT_EQ(hosts[0], "example.com");
+  EXPECT_EQ(hosts[1], "google.example.com");
+  EXPECT_EQ(hosts[2], "maps.google.example.com");
+
+  url = GURL("http://some.example.co.uk/1");
+  SBProtocolManagerUtil::GenerateHostsToCheck(url, &hosts);
+  if (GetParam()) {
+    EXPECT_EQ(hosts.size(), 2u);
+    EXPECT_EQ(hosts[0], "example.co.uk");
+    EXPECT_EQ(hosts[1], "some.example.co.uk");
+  } else {
+    EXPECT_EQ(hosts.size(), 3u);
+    EXPECT_EQ(hosts[0], "co.uk");
+    EXPECT_EQ(hosts[1], "example.co.uk");
+    EXPECT_EQ(hosts[2], "some.example.co.uk");
+  }
+
+  url = GURL("http://a.b.c.d.e.f.co.uk/1");
+  SBProtocolManagerUtil::GenerateHostsToCheck(url, &hosts);
+  EXPECT_EQ(hosts.size(), 5u);
+  if (GetParam()) {
+    EXPECT_EQ(hosts[0], "f.co.uk");
+    EXPECT_EQ(hosts[1], "e.f.co.uk");
+    EXPECT_EQ(hosts[2], "d.e.f.co.uk");
+    EXPECT_EQ(hosts[3], "c.d.e.f.co.uk");
+    EXPECT_EQ(hosts[4], "a.b.c.d.e.f.co.uk");
+  } else {
+    EXPECT_EQ(hosts[0], "co.uk");
+    EXPECT_EQ(hosts[1], "f.co.uk");
+    EXPECT_EQ(hosts[2], "e.f.co.uk");
+    EXPECT_EQ(hosts[3], "d.e.f.co.uk");
+    EXPECT_EQ(hosts[4], "a.b.c.d.e.f.co.uk");
+  }
+
+  url = GURL("http://example.com/1");
+  SBProtocolManagerUtil::GenerateHostsToCheck(url, &hosts);
+  EXPECT_EQ(hosts.size(), 1u);
+  EXPECT_EQ(hosts[0], "example.com");
+
+  url = GURL("http://localhost/1");
+  SBProtocolManagerUtil::GenerateHostsToCheck(url, &hosts);
+  EXPECT_EQ(hosts.size(), 1u);
+  EXPECT_EQ(hosts[0], "localhost");
+
+  // An internal registry does not count as the eTLD, so appspot.com is the
+  // eTLD+1 for v5.
+  url = GURL("http://a.foo.appspot.com/1");
+  SBProtocolManagerUtil::GenerateHostsToCheck(url, &hosts);
+  EXPECT_EQ(hosts.size(), 3u);
+  EXPECT_EQ(hosts[0], "appspot.com");
+  EXPECT_EQ(hosts[1], "foo.appspot.com");
+  EXPECT_EQ(hosts[2], "a.foo.appspot.com");
+
+  // A case where it's not in the registry at all, so v5 falls back to the
+  // TLD+1.
+  url = GURL("http://a.b.c.domain.test/1");
+  SBProtocolManagerUtil::GenerateHostsToCheck(url, &hosts);
+  EXPECT_EQ(hosts.size(), 4u);
+  EXPECT_EQ(hosts[0], "domain.test");
+  EXPECT_EQ(hosts[1], "c.domain.test");
+  EXPECT_EQ(hosts[2], "b.c.domain.test");
+  EXPECT_EQ(hosts[3], "a.b.c.domain.test");
+
+  url = GURL("http://co.uk/1");
+  SBProtocolManagerUtil::GenerateHostsToCheck(url, &hosts);
+  EXPECT_EQ(hosts.size(), 1u);
+  EXPECT_EQ(hosts[0], "co.uk");
+
+  // Case that is not canonicalized initially.
+  url = GURL("http://a.b.example.com./1");
+  SBProtocolManagerUtil::GenerateHostsToCheck(url, &hosts);
+  EXPECT_EQ(hosts.size(), 3u);
+  EXPECT_EQ(hosts[0], "example.com");
+  EXPECT_EQ(hosts[1], "b.example.com");
+  EXPECT_EQ(hosts[2], "a.b.example.com");
+
+  // Another case that is not canonicalized initially.
+  url = GURL("http://.a.co.uk/1");
+  SBProtocolManagerUtil::GenerateHostsToCheck(url, &hosts);
+  if (GetParam()) {
+    EXPECT_EQ(hosts.size(), 1u);
+    EXPECT_EQ(hosts[0], "a.co.uk");
+  } else {
+    EXPECT_EQ(hosts.size(), 2u);
+    EXPECT_EQ(hosts[0], "co.uk");
+    EXPECT_EQ(hosts[1], "a.co.uk");
+  }
 }
 
 // Tests the url canonicalization according to the Safe Browsing spec.
-// See: https://developers.google.com/safe-browsing/v4/urls-hashing
+// For v4, see: https://developers.google.com/safe-browsing/v4/urls-hashing
+// For v5, see:
+// https://developers.google.com/safe-browsing/reference/URLs.and.Hashing
+// TODO(crbug.com/372395685): remove v4 references in this file.
 TEST_F(SBProtocolManagerUtilTest, CanonicalizeUrl) {
   struct TestCase {
     std::string_view input_url;
@@ -265,6 +383,19 @@ TEST_F(SBProtocolManagerUtilTest, TestGetHashPrefix) {
   EXPECT_EQ(
       SBProtocolManagerUtil::GetHashPrefix("dcba1111111111111111111111111111"),
       "dcba");
+}
+
+TEST_F(SBProtocolManagerUtilTest, SetV5UserAgentHeader) {
+  SBProtocolConfig config(/*client_name=*/"client",
+                          /*disable_auto_update=*/false,
+                          /*key_param=*/"",
+                          /*version=*/"1.0");
+  net::HttpRequestHeaders headers;
+  SBProtocolManagerUtil::SetV5UserAgentHeader(&headers, config);
+  std::optional<std::string> user_agent =
+      headers.GetHeader(net::HttpRequestHeaders::kUserAgent);
+  ASSERT_TRUE(user_agent.has_value());
+  EXPECT_EQ(*user_agent, "client 1.0");
 }
 
 }  // namespace safe_browsing

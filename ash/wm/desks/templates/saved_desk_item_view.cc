@@ -8,7 +8,6 @@
 #include <string>
 
 #include "ash/accessibility/accessibility_controller.h"
-#include "ash/public/cpp/style/color_provider.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
@@ -30,6 +29,8 @@
 #include "ash/wm/overview/overview_session.h"
 #include "ash/wm/overview/overview_utils.h"
 #include "ash/wm/wm_constants.h"
+#include "base/i18n/icubridge/date_time_formatter.h"
+#include "base/i18n/icubridge/icu_bridge.h"
 #include "base/i18n/time_formatting.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
@@ -58,6 +59,9 @@
 
 namespace ash {
 namespace {
+
+using ::base::i18n::DateTimeFormatterOptions;
+using ::base::i18n::IcuBridge;
 
 // The padding values of the SavedDeskItemView.
 constexpr int kVerticalPaddingDp = 14;
@@ -97,14 +101,22 @@ std::u16string GetTimeStr(base::Time timestamp) {
              // different locales. Examples:
              //  `en-US` - `Jan 1, 2022, 10:30 AM`
              //  `zh-CN` - `2022年1月1日 10:30`
-             ? base::LocalizedTimeFormatWithPattern(timestamp, "yMMMdjmm")
+             ? IcuBridge::GetInstance().date_time_formatter().Format(
+                   timestamp,
+                   base::i18n::datetime_options::YMDT::Medium()
+                       .with_time_precision(
+                           DateTimeFormatterOptions::TimePrecision::kMinute))
              // If it's a relative date, just append `jmm` to it.
              // Please note, this might be slightly different for different
              // locales. Examples:
              //  `en-US` - `Today 10:30 AM`
              //  `zh-CN` - `今天 10:30`
              : (date + u" " +
-                base::LocalizedTimeFormatWithPattern(timestamp, "jmm"));
+                IcuBridge::GetInstance().date_time_formatter().Format(
+                    timestamp,
+                    base::i18n::datetime_options::T::Medium()
+                        .with_time_precision(
+                            DateTimeFormatterOptions::TimePrecision::kMinute)));
 }
 
 }  // namespace
@@ -222,17 +234,18 @@ SavedDeskItemView::SavedDeskItemView(std::unique_ptr<DeskTemplate> saved_desk)
   layer()->SetFillsBoundsOpaquely(false);
 
   // Create a shadow for the view.
-  shadow_ = SystemShadow::CreateShadowOnNinePatchLayerForView(
-      this, SystemShadow::Type::kElevation12);
-  shadow_->SetRoundedCornerRadius(kSaveDeskCornerRadius);
+  shadow_ = SystemDecoration::CreateShadowOnNinePatchLayerForView(
+      this, SystemDecoration::ShadowType::kElevation12);
+  shadow_->SetRoundedCorners(gfx::RoundedCornersF(kSaveDeskCornerRadius));
 
   if (chromeos::features::IsSystemBlurEnabled()) {
     background_view->SetPaintToLayer();
+    background_view->layer()->SetName("SavedDeskItemView:Background");
     background_view->layer()->SetFillsBoundsOpaquely(false);
     background_view->layer()->SetBackgroundBlur(
-        ColorProvider::kBackgroundBlurSigma);
+        StyleUtil::kBackgroundBlurSigma);
     background_view->layer()->SetBackdropFilterQuality(
-        ColorProvider::kBackgroundBlurQuality);
+        StyleUtil::kBackgroundBlurQuality);
     background_view->layer()->SetRoundedCornerRadius(
         gfx::RoundedCornersF(kSaveDeskCornerRadius));
 
@@ -240,6 +253,7 @@ SavedDeskItemView::SavedDeskItemView(std::unique_ptr<DeskTemplate> saved_desk)
     // Otherwise, it will be painted to its ancestors layer and
     // `background_view` will be drawn on top of it as a result.
     box_layout_view->SetPaintToLayer();
+    box_layout_view->layer()->SetName("SavedDeskItemView:BoxLayoutView");
     box_layout_view->layer()->SetFillsBoundsOpaquely(false);
   }
 
@@ -291,6 +305,7 @@ SavedDeskItemView::SavedDeskItemView(std::unique_ptr<DeskTemplate> saved_desk)
   SetEventTargeter(std::make_unique<views::ViewTargeter>(this));
 
   hover_container_->SetPaintToLayer();
+  hover_container_->layer()->SetName("SavedDeskItemView:HoverContainer");
   icon_container_view_->SetPaintToLayer();
 
   hover_container_->layer()->SetFillsBoundsOpaquely(false);

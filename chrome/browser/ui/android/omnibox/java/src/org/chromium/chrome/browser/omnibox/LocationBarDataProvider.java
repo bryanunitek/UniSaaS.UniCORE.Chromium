@@ -8,6 +8,7 @@ import android.content.res.ColorStateList;
 
 import androidx.annotation.ColorRes;
 import androidx.annotation.DrawableRes;
+import androidx.annotation.IntDef;
 import androidx.annotation.StringRes;
 
 import org.chromium.base.supplier.NonNullObservableSupplier;
@@ -15,13 +16,38 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.components.omnibox.AutocompleteRequestType;
+import org.chromium.components.metrics.OmniboxEventProtosIntDef.PageClassification;
 import org.chromium.components.security_state.ConnectionMaliciousContentStatus;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.url.GURL;
 
-/** Interface defining a provider for data needed by the {@link LocationBar}. */
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+/**
+ * Central read-only data provider interface supplying contextual tab, page, and toolbar data to the
+ * LocationBar / Omnibox and its sub-components (such as LocationBarMediator, StatusMediator,
+ * AutocompleteMediator, HintTextUpdater, VoiceRecognitionHandler, and FuseboxSessionState).
+ *
+ * <p>Exposes properties such as the current URL ({@link GURL}), page title, connection security
+ * level & malicious content status, page classification, primary and brand theme colors, incognito
+ * / off-the-record state, offline / paint preview status, toolbar position supplier, {@link
+ * NewTabPageDelegate}, and fusebox session state.
+ *
+ * <p>Provides an {@link Observer} mechanism to notify subscribers of state transitions (e.g. {@code
+ * onTabChanged}, {@code onUrlChanged}, {@code onPrimaryColorChanged}, {@code
+ * onSecurityStateChanged}, {@code onPageLoadStopped}, {@code onTitleChanged}, {@code
+ * onIncognitoStateChanged}, {@code onTabCrashed}). Because data is typically computed lazily or on
+ * demand, observer methods pass signals rather than data payloads; consumers are expected to pull
+ * the specific data they require.
+ *
+ * <p><b>Strict Immutability:</b> This interface is intentionally immutable and read-only, and
+ * <b>must remain immutable</b>. Do NOT add setters or mutator methods to {@code
+ * LocationBarDataProvider}. Consumers of this interface should only observe and read state, never
+ * modify it directly. All state modifications belong in concrete implementors such as {@code
+ * LocationBarModel}.
+ */
 // TODO(crbug.com/40154848): Refine split between LocationBar properties and sub-component
 // properties, e.g. security state, which is only used by the status icon.
 @NullMarked
@@ -70,6 +96,31 @@ public interface LocationBarDataProvider {
 
         /** Notifies when the tab crashes. */
         default void onTabCrashed() {}
+
+        /** Notifies when whether the current URL has an installed app might have changed. */
+        default void onAppInstallationStateChanged() {}
+    }
+
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef({
+        AppInstallState.NOT_INSTALLED,
+        AppInstallState.INSTALLED,
+        AppInstallState.PENDING_INSTALL,
+    })
+    @interface AppInstallState {
+        int NOT_INSTALLED = 0;
+        int INSTALLED = 1;
+        int PENDING_INSTALL = 2;
+    }
+
+    /** Delegate to resolve the app install state for a tab. */
+    interface AppInstalledDelegate {
+        @AppInstallState
+        int getAppInstallState(@Nullable Tab tab);
+
+        default void addObserver(Runnable observer) {}
+
+        default void removeObserver(Runnable observer) {}
     }
 
     /** Adds an observer of changes to LocationBarDataProvider's data. */
@@ -121,14 +172,6 @@ public interface LocationBarDataProvider {
     @Nullable Tab getTab();
 
     /**
-     * Returns the default request type for this provider. This allows the omnibox to maintain a
-     * specialized state even when not focused.
-     */
-    default @AutocompleteRequestType int getDefaultRequestType() {
-        return AutocompleteRequestType.SEARCH;
-    }
-
-    /**
      * Returns the FuseboxSessionState linked to the current tab (if present) or context
      * (otherwise).
      */
@@ -174,14 +217,13 @@ public interface LocationBarDataProvider {
      * Returns the current page classification.
      *
      * @param prefetch whether retrieving page class in prefetch context.
-     * @return Integer value representing the {@code OmniboxEventProto.PageClassification}.
+     * @return Integer value representing the {@code PageClassification}.
      */
+    @PageClassification
     int getPageClassification(boolean prefetch);
 
     /**
      * Returns the resource ID of the icon that should be displayed or 0 if no icon should be shown.
-     *
-     * @param isTablet Whether or not the display context of the icon is a tablet.
      */
     @DrawableRes
     int getSecurityIconResource(boolean isTablet);
@@ -196,4 +238,9 @@ public interface LocationBarDataProvider {
 
     /** Returns the user-selected placement of the Toolbar. */
     NonNullObservableSupplier<@ControlsPosition Integer> getToolbarPositionSupplier();
+
+    /** Returns the app install state for the current tab. */
+    default @AppInstallState int getAppInstallState() {
+        return AppInstallState.NOT_INSTALLED;
+    }
 }

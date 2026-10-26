@@ -61,6 +61,7 @@ shared_library("chrome_elf") {
     ":crash",
     ":security",
     ":third_party_dlls",
+    "//base:compiler_specific",
     "//chrome/install_static:install_static_util",
     "//chrome/install_static:primary_module",
     "//components/crash/core/app:crash_export_thunks",
@@ -106,6 +107,7 @@ static_library("crash") {
     "//chrome/install_static:install_static_util",
     "//components/crash/core/app",
     "//components/crash/core/common",  # crash_keys
+    "//components/metrics:system_profile_user_stream",
     "//components/version_info:channel",
     "//sandbox/policy:win_hook_util",
     "//third_party/crashpad/crashpad/client",  # DumpWithoutCrash
@@ -124,6 +126,7 @@ executable("dll_hash_main") {
   sources = [ "dll_hash/dll_hash_main.cc" ]
   deps = [
     ":dll_hash",
+    "//base",
     "//build/win:default_exe_manifest",
   ]
 }
@@ -171,7 +174,6 @@ source_set("sha1") {
     "sha1/sha1.cc",
     "sha1/sha1.h",
   ]
-  deps = [ "//base:compiler_specific" ]
 }
 
 source_set("third_party_dlls") {
@@ -235,6 +237,7 @@ test("chrome_elf_unittests") {
   output_name = "chrome_elf_unittests"
   sources = [
     "chrome_elf_util_unittest.cc",
+    "get_primary_module_path_unittest.cc",
     "hook_util/test/hook_util_test.cc",
     "nt_registry/nt_registry_unittest.cc",
     "pe_image_safe/pe_image_safe_unittest.cc",
@@ -262,6 +265,7 @@ test("chrome_elf_unittests") {
     "//base/test:test_support",
     "//chrome/common:version_header",
     "//chrome/install_static:install_static_util",
+    "//chrome/install_static:secondary_module",
     "//chrome/install_static/test:test_support",
     "//components/crash/core/app:test_support",
     "//sandbox/policy:win_hook_util",

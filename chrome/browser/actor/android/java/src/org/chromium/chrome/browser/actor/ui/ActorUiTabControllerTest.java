@@ -26,9 +26,9 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
+import org.chromium.base.JniOnceCallback;
 import org.chromium.base.UserDataHost;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.EnableFeatures;
@@ -47,10 +47,10 @@ import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.url.GURL;
 
 /** Tests for {@link ActorUiTabController}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @EnableFeatures(ChromeFeatureList.GLIC)
 public class ActorUiTabControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -61,6 +61,7 @@ public class ActorUiTabControllerTest {
     @Mock private Profile mProfile;
     @Mock private ActorKeyedService mActorKeyedService;
     @Mock private Callback<Boolean> mCallback;
+    @Mock private JniOnceCallback<Boolean> mNavigationConfirmedCallback;
 
     @Captor private ArgumentCaptor<PropertyModel> mPropertyModelCaptor;
 
@@ -153,6 +154,33 @@ public class ActorUiTabControllerTest {
 
         // Verify callback was executed with false.
         verify(mCallback).onResult(false);
+    }
+
+    @Test
+    public void testMaybeDeferNavigation_showsDialog() {
+        assertTrue(
+                ActorUiTabController.maybeDeferNavigation(
+                        mTab, GURL.emptyGURL(), mNavigationConfirmedCallback));
+        verify(mModalDialogManager)
+                .showDialog(mPropertyModelCaptor.capture(), eq(ModalDialogType.APP));
+        verify(mNavigationConfirmedCallback, never()).destroy();
+
+        PropertyModel model = mPropertyModelCaptor.getValue();
+        model.get(ModalDialogProperties.CONTROLLER)
+                .onClick(model, ModalDialogProperties.ButtonType.POSITIVE);
+        verify(mNavigationConfirmedCallback).onResult(true);
+    }
+
+    @Test
+    public void testMaybeDeferNavigation_noWindow_destroysCallback() {
+        doReturn(null).when(mTab).getWindowAndroid();
+
+        assertFalse(
+                ActorUiTabController.maybeDeferNavigation(
+                        mTab, GURL.emptyGURL(), mNavigationConfirmedCallback));
+        verify(mModalDialogManager, never()).showDialog(any(), anyInt());
+        verify(mNavigationConfirmedCallback, never()).onResult(any());
+        verify(mNavigationConfirmedCallback).destroy();
     }
 
     @Test

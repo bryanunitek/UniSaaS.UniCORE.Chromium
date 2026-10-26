@@ -320,7 +320,7 @@ class UserInfoRequestTest : public RenderViewHostImplTestHarness {
     idp_ptr->client_id = kClientId;
 
     UserInfoCallbackHelper callback_helper;
-    request_ = UserInfoRequest::Create(
+    request_ = std::make_unique<UserInfoRequest>(
         std::move(network_manager), permission_delegate_.get(),
         api_permission_delegate_.get(), iframe_render_frame_host_,
         std::move(idp_ptr));
@@ -556,4 +556,29 @@ TEST_F(UserInfoRequestTest, ReturningAccountsFirst) {
                   {kAccount2Id, kAccount4Id, kAccount1Id, kAccount3Id});
 }
 
+
+// Regression test: if UpdateIdpSigninStatusForAccountsEndpointResponse triggers
+// re-entrant destruction of the UserInfoRequest (e.g. via an observer calling
+// SetIdpSigninStatus), OnAccountsResponseReceived returns cleanly without
+// use-after-free.
+TEST_F(UserInfoRequestTest, ReentrantDestructionInAccountsResponse) {
+  Config config = kValidConfig;
+  config.accounts_fetch_status = {ParseStatus::kHttpNotFoundError, 404};
+
+  // Simulate re-entrant destruction: SetIdpSigninStatus (called from
+  // UpdateIdpSigninStatusForAccountsEndpointResponse) destroys the request.
+  // The destructor calls CompleteWithError(kUnhandledRequest) which invokes
+  // the callback with kError, so RunUserInfoTest completes normally.
+  EXPECT_CALL(*permission_delegate_,
+              SetIdpSigninStatus(_, _, _))
+      .WillOnce(
+          [this](const url::Origin&, bool,
+                 base::optional_ref<
+                     const blink::common::webid::LoginStatusOptions>) {
+            request_.reset();
+          });
+
+  RunUserInfoTest(config, RequestUserInfoStatus::kError, {});
+  EXPECT_FALSE(request_);
+}
 }  // namespace content::webid

@@ -12,12 +12,40 @@
 #include "media/base/audio_bus.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/media_switches.h"
+#include "media/webrtc/ml_model_handle.h"
 #include "media/webrtc/voice_isolation/voice_isolation.h"
 #include "services/audio/ml_model_manager.h"
 #include "services/audio/processing_audio_fifo.h"
 #include "services/audio/voice_isolation_handler.h"
 
 namespace audio {
+namespace {
+
+scoped_refptr<media::MlModelHandle> GetAndLogResidualEchoEstimationModel(
+    MlModelManager* ml_model_manager,
+    bool echo_cancellation) {
+  scoped_refptr<media::MlModelHandle> model;
+  if (ml_model_manager) {
+    model =
+        ml_model_manager->GetModel(mojom::MlModelType::kResidualEchoEstimation);
+  }
+
+  // Only log model availability when ML echo estimation is enabled and echo
+  // cancellation is requested, in order to avoid diluting the metric.
+  // We log it here, in the audio service, because lower layers are also used
+  // from render processes where this feature is not available.
+  if (media::IsAudioProcessMlModelUsageEnabled() &&
+      base::FeatureList::IsEnabled(
+          media::kWebRtcAudioNeuralResidualEchoEstimation) &&
+      echo_cancellation) {
+    base::UmaHistogramBoolean(
+        "Media.Audio.Capture.NeuralResidualEchoEstimationModelAvailable",
+        model != nullptr);
+  }
+  return model;
+}
+
+}  // namespace
 
 AudioProcessorHandler::AudioProcessorHandler(
     const media::AudioProcessingSettings& settings,
@@ -25,26 +53,14 @@ AudioProcessorHandler::AudioProcessorHandler(
     const media::AudioParameters& output_format,
     LogCallback log_callback,
     DeliverProcessedAudioCallback deliver_processed_audio_callback,
+    VolumeAdjustmentCallback volume_adjustment_callback,
     ReferenceStreamErrorCallback reference_stream_error_callback,
     mojo::PendingReceiver<media::mojom::AudioProcessorControls>
         controls_receiver,
     media::AecdumpRecordingManager* aecdump_recording_manager,
     raw_ptr<MlModelManager> ml_model_manager,
-    std::unique_ptr<media::VoiceIsolation> voice_isolation)
-    : voice_isolation_handler_(
-#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
-          voice_isolation ? std::make_unique<VoiceIsolationHandler>(
-                                std::move(voice_isolation), output_format,
-                                std::move(deliver_processed_audio_callback))
-                          : nullptr
-#else
-          nullptr
-#endif
-          ),
-      residual_echo_estimation_model_handle_(
-          ml_model_manager ? ml_model_manager->GetModel(
-                                 mojom::MlModelType::kResidualEchoEstimation)
-                           : nullptr),
+    std::unique_ptr<VoiceIsolationHandler> voice_isolation_handler)
+    : voice_isolation_handler_(std::move(voice_isolation_handler)),
       audio_processor_(media::AudioProcessor::Create(
           // Unretained is safe because this class owns audio_processor_, so it
           // will be destroyed first.
@@ -54,37 +70,32 @@ AudioProcessorHandler::AudioProcessorHandler(
           settings,
           input_format,
           output_format,
-          residual_echo_estimation_model_handle_
-              ? residual_echo_estimation_model_handle_->Get()
-              : nullptr)),
+          GetAndLogResidualEchoEstimationModel(ml_model_manager,
+                                               settings.echo_cancellation))),
       deliver_processed_audio_callback_(
-          voice_isolation_handler_
-              ? DeliverProcessedAudioCallback()
-              // NOLINTNEXTLINE(bugprone-use-after-move)
-              : std::move(deliver_processed_audio_callback)),
+          std::move(deliver_processed_audio_callback)),
+      volume_adjustment_callback_(std::move(volume_adjustment_callback)),
       reference_stream_error_callback_(
           std::move(reference_stream_error_callback)),
       receiver_(this, std::move(controls_receiver)),
       aecdump_recording_manager_(aecdump_recording_manager) {
   DCHECK(settings.NeedWebrtcAudioProcessing());
+  // One and only one is defined.
+  CHECK(deliver_processed_audio_callback_.is_null() !=
+        (voice_isolation_handler_ == nullptr));
+  // Voice isolation handler must be provided if and only if voice isolation is
+  // enabled in settings.
+  CHECK_EQ(voice_isolation_handler_ != nullptr, settings.voice_isolation);
   if (aecdump_recording_manager_) {
     aecdump_recording_manager->RegisterAecdumpSource(this);
   }
-  if (media::IsAudioProcessMlModelUsageEnabled() &&
-      settings.echo_cancellation) {
-    // Only log model availability when model management is enabled and echo
-    // cancellation is requested, in order to avoid diluting the metric.
-    // We log it here, in the audio service, because lower layers are also
-    // used from render processes where this feature is not available.
-    bool is_model_available = residual_echo_estimation_model_handle_ != nullptr;
-    base::UmaHistogramBoolean(
-        "Media.Audio.Capture.NeuralResidualEchoEstimationModelAvailable",
-        is_model_available);
-  }
 
   // We need to offload work to another thread for heavy processing, ex: echo
-  // cancellation.
-  if (needs_playout_reference()) {
+  // cancellation or voice isolation.
+  const bool needs_fifo = needs_playout_reference() ||
+                          (voice_isolation_handler_ &&
+                           !voice_isolation_handler_->HasProcessingThread());
+  if (needs_fifo) {
     processing_fifo_ = std::make_unique<ProcessingAudioFifo>(
         input_format, kProcessingFifoSize,
         base::BindRepeating(
@@ -96,6 +107,7 @@ AudioProcessorHandler::AudioProcessorHandler(
 
 AudioProcessorHandler::~AudioProcessorHandler() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
+  StopProcessing();
   if (aecdump_recording_manager_) {
     // If an aecdump is currently ongoing, this will trigger a StopAecdump()
     // call.
@@ -105,6 +117,11 @@ AudioProcessorHandler::~AudioProcessorHandler() {
 
 void AudioProcessorHandler::StartProcessing() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
+  // `voice_isolation_handler_` must be started before `processing_fifo_` to
+  // prepare it before any calls to it are made.
+  if (voice_isolation_handler_) {
+    voice_isolation_handler_->StartProcessing();
+  }
   // This is safe because the caller is required to call StartProcessing()
   // before the capture stream is started, ensuring no concurrent calls to
   // ProcessCapturedAudio() can occur.
@@ -118,7 +135,15 @@ void AudioProcessorHandler::StopProcessing() {
   // This is safe because the caller is required to synchronously stop the
   // capture stream before calling StopProcessing(), guaranteeing that no
   // concurrent calls to ProcessCapturedAudio() can occur.
+  //
+  // `processing_fifo_` must be stopped and destroyed before stopping
+  // `voice_isolation_handler_` to ensure that any audio currently in the FIFO
+  // finishes processing and no further calls will be made to
+  // `voice_isolation_handler_`.
   processing_fifo_.reset();
+  if (voice_isolation_handler_) {
+    voice_isolation_handler_->StopProcessing();
+  }
 }
 
 void AudioProcessorHandler::ProcessCapturedAudio(
@@ -180,6 +205,19 @@ void AudioProcessorHandler::SetPreferredNumCaptureChannels(
                                 std::memory_order_release);
 }
 
+void AudioProcessorHandler::SetVoiceIsolation(bool enabled) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
+  if (!voice_isolation_handler_) {
+    // Voice isolation cannot be enabled if it is not available (i.e. was not
+    // requested initially).
+    if (enabled) {
+      receiver_.ReportBadMessage("Voice isolation cannot be enabled.");
+    }
+    return;
+  }
+  voice_isolation_handler_->SetVoiceIsolation(enabled);
+}
+
 void AudioProcessorHandler::StartAecdump(base::File aecdump_file) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(owning_sequence_);
   audio_processor_->OnStartDump(std::move(aecdump_file));
@@ -194,6 +232,11 @@ void AudioProcessorHandler::OnAudioProcessorOutput(
     const media::AudioBus& audio_bus,
     base::TimeTicks audio_capture_time,
     std::optional<double> new_volume) {
+  TRACE_EVENT("audio", "AudioProcessorHandler::OnAudioProcessorOutput");
+  if (new_volume && volume_adjustment_callback_) {
+    volume_adjustment_callback_.Run(*new_volume);
+  }
+
   // Retrieve and reset the accumulated glitch info to ensure it is attached
   // to the processed frame.
   const media::AudioGlitchInfo glitch_info =
@@ -202,12 +245,11 @@ void AudioProcessorHandler::OnAudioProcessorOutput(
   if (voice_isolation_handler_) {
     // Route the processed audio and its metadata through voice isolation.
     voice_isolation_handler_->ProcessCapturedAudio(
-        audio_bus, audio_capture_time, new_volume, glitch_info);
-  } else {
-    DCHECK(deliver_processed_audio_callback_);
+        audio_bus, audio_capture_time, glitch_info);
+  } else if (deliver_processed_audio_callback_) {
     // Deliver directly to the final destination callback.
     deliver_processed_audio_callback_.Run(audio_bus, audio_capture_time,
-                                          new_volume, glitch_info);
+                                          glitch_info);
   }
 }
 }  // namespace audio

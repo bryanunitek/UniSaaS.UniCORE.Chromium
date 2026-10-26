@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <memory>
+#include <optional>
 #include <string>
 
 #include "base/check.h"
@@ -24,7 +24,7 @@
 #include "components/download/public/common/download_export.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/services/quarantine/public/mojom/quarantine.mojom.h"
-#include "crypto/secure_hash.h"
+#include "crypto/hash.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/net_errors.h"
@@ -40,12 +40,18 @@ namespace download {
 // Detach().
 class COMPONENTS_DOWNLOAD_EXPORT BaseFile {
  public:
-  // Given a source and a referrer, determines the "safest" URL that can be used
-  // to determine the authority of the download source. Returns an empty URL if
-  // no HTTP/S URL can be determined for the <|source_url|, |referrer_url|>
-  // pair.
-  static GURL GetEffectiveAuthorityURL(const GURL& source_url,
-                                       const GURL& referrer_url);
+  // Given a source URL, referrer, and the request initiator origin, determines
+  // the "safest" URL that can be used to determine the authority of the
+  // download source. Returns an empty URL if no HTTP/S URL can be determined
+  // from the inputs.
+  //
+  // When `source_url` itself does not carry a usable authority (e.g. data:),
+  // the browser-validated `request_initiator` is preferred over the
+  // `referrer_url`, which originates from the renderer.
+  static GURL GetEffectiveAuthorityURL(
+      const GURL& source_url,
+      const GURL& referrer_url,
+      const std::optional<url::Origin>& request_initiator);
 
   // May be constructed on any thread.  All other routines (including
   // destruction) must occur on the same sequence.
@@ -113,7 +119,7 @@ class COMPONENTS_DOWNLOAD_EXPORT BaseFile {
       base::File file,
       int64_t bytes_so_far,
       const std::string& hash_so_far,
-      std::unique_ptr<crypto::SecureHash> hash_state,
+      std::optional<crypto::hash::Hasher> hash_state,
       bool is_sparse_file,
       int64_t* const bytes_wasted);
 
@@ -150,10 +156,12 @@ class COMPONENTS_DOWNLOAD_EXPORT BaseFile {
   void Cancel();
 
   // Indicate that the download has finished. No new data will be received.
-  // Returns the SecureHash object representing the state of the hash function
-  // at the end of the operation. If |is_sparse_file_| is true, calling this
-  // will cause |secure_hash_| to get calculated.
-  std::unique_ptr<crypto::SecureHash> Finish();
+  // Returns the hash state at the end of the operation. If |is_sparse_file_| is
+  // true, calling this will cause |secure_hash_| to get calculated.
+  //
+  // |expected_size|: The expected final size of the file in bytes. If non-zero,
+  //     BaseFile will verify that the file size matches this value.
+  std::optional<crypto::hash::Hasher> Finish(int64_t expected_size = 0);
 
   // Callback used with AnnotateWithSourceInformation.
   // Created by DownloadFileImpl::RenameWithRetryInternal
@@ -289,7 +297,7 @@ class COMPONENTS_DOWNLOAD_EXPORT BaseFile {
   int64_t bytes_so_far_ = 0;
 
   // Used to calculate hash for the file when calculate_hash_ is set.
-  std::unique_ptr<crypto::SecureHash> secure_hash_;
+  std::optional<crypto::hash::Hasher> secure_hash_;
 
   // Start time for calculating speed.
   base::TimeTicks start_tick_;

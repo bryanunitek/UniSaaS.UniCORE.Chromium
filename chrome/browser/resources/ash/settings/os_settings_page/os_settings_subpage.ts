@@ -33,7 +33,7 @@ import type {RouteObserverMixinInterface} from '../common/route_observer_mixin.j
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {getSettingIdParameter} from '../common/setting_id_param_util.js';
 import type {Constructor} from '../common/types.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router} from '../router.js';
 
 import {getTemplate} from './os_settings_subpage.html.js';
@@ -142,18 +142,18 @@ export class OsSettingsSubpageElement extends OsSettingsSubpageElementBase {
     };
   }
 
-  pageTitle: string;
-  titleIcon: string;
-  learnMoreUrl: string;
-  searchLabel: string;
-  searchTerm: string;
-  showSpinner: boolean;
-  spinnerTitle: string;
-  hideBackButton: boolean;
-  associatedControl: HTMLElement|null;
-  preserveSearchTerm: boolean;
-  multiCard: boolean;
-  private active_: boolean;
+  declare pageTitle: string;
+  declare titleIcon: string;
+  declare learnMoreUrl: string;
+  declare searchLabel: string;
+  declare searchTerm: string;
+  declare showSpinner: boolean;
+  declare spinnerTitle: string;
+  declare hideBackButton: boolean;
+  declare associatedControl: HTMLElement|null;
+  declare preserveSearchTerm: boolean;
+  declare multiCard: boolean;
+  declare private active_: boolean;
   private lastActiveValue_: boolean = false;
   private eventTracker_: EventTracker|null = null;
 

@@ -4,30 +4,22 @@
 
 import 'chrome://settings/settings.js';
 
-import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import type {Route, SettingsMainElement, SettingsPrefsElement} from 'chrome://settings/settings.js';
-import {CrSettingsPrefs, loadTimeData, pageVisibility, resetPageVisibilityForTesting, resetRouterForTesting, Router, routes, setSearchManagerForTesting} from 'chrome://settings/settings.js';
+import type {Route, SettingsMainElement} from 'chrome://settings/settings.js';
+import {loadTimeData, pageVisibility, resetPageVisibilityForTesting, resetRouterForTesting, Router, routes, setSearchManagerForTesting} from 'chrome://settings/settings.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
+import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 import {TestSearchManager} from './test_search_manager.js';
 
 suite('SettingsMain', function() {
   let searchManager: TestSearchManager;
   let settingsMain: SettingsMainElement;
-  let settingsPrefs: SettingsPrefsElement;
-
-  suiteSetup(function() {
-    settingsPrefs = document.createElement('settings-prefs');
-    return CrSettingsPrefs.initialized;
-  });
 
   function createSettingsMain(overrides?: Record<string, unknown>) {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
 
     loadTimeData.overrideValues(Object.assign(
         {
-          enableYourSavedInfoSettingsPage: false,
           isGuest: false,
           showAiPage: false,
           showResetProfileBanner: false,
@@ -40,10 +32,8 @@ suite('SettingsMain', function() {
     setSearchManagerForTesting(searchManager);
     Router.getInstance().navigateTo(routes.BASIC);
     settingsMain = document.createElement('settings-main');
-    settingsMain.prefs = settingsPrefs.prefs!;
     settingsMain.toolbarSpinnerActive = false;
     document.body.appendChild(settingsMain);
-    flush();
   }
 
   setup(function() {
@@ -54,10 +44,10 @@ suite('SettingsMain', function() {
   test('UpdatesActiveViewWhenRouteChanges', async function() {
     function assertActive(pluginTag: string, path: string) {
       assertTrue(
-          !!settingsMain.shadowRoot!.querySelector(
+          !!settingsMain.shadowRoot.querySelector(
               `.active[slot=view] > ${pluginTag}`),
           `Element '${pluginTag}' was not active for route '${path}'`);
-      assertFalse(!!settingsMain.shadowRoot!.querySelector(
+      assertFalse(!!settingsMain.shadowRoot.querySelector(
           `.active[slot=view] > :not(${pluginTag}, dom-if)`));
     }
 
@@ -65,7 +55,10 @@ suite('SettingsMain', function() {
       {route: routes.PEOPLE, pluginTag: 'settings-people-page-index'},
       {route: routes.BASIC, pluginTag: 'settings-people-page-index'},
       {route: routes.PRIVACY, pluginTag: 'settings-privacy-page-index'},
-      {route: routes.AUTOFILL, pluginTag: 'settings-autofill-page-index'},
+      {
+        route: routes.AUTOFILL,
+        pluginTag: 'settings-autofill-page-index',
+      },
       {route: routes.PERFORMANCE, pluginTag: 'settings-performance-page-index'},
       {route: routes.APPEARANCE, pluginTag: 'settings-appearance-page-index'},
       {route: routes.SEARCH, pluginTag: 'settings-search-page-index'},
@@ -77,7 +70,10 @@ suite('SettingsMain', function() {
       // </if>
       {route: routes.ON_STARTUP, pluginTag: 'settings-on-startup-page'},
       // <if expr="is_chromeos">
-      {route: routes.LANGUAGES, pluginTag: 'settings-languages-page-index-cros'},
+      {
+        route: routes.LANGUAGES,
+        pluginTag: 'settings-languages-page-index-cros',
+      },
       // </if>
       // <if expr="not is_chromeos">
       {route: routes.LANGUAGES, pluginTag: 'settings-languages-page-index'},
@@ -109,12 +105,13 @@ suite('SettingsMain', function() {
     // Navigate to a subpage while search results are displayed. Expecting the
     // cr-view-manager to only show the active view.
     Router.getInstance().navigateTo(routes.FONTS);
+    await microtasksFinished();
     assertFalse(settingsMain.$.switcher.hasAttribute('show-all'));
 
     // Navigate back to the search results. Expecting the cr-view-manager to
     // show all views.
     Router.getInstance().navigateToPreviousRoute();
-    await flushTasks();
+    await microtasksFinished();
     assertTrue(settingsMain.$.switcher.hasAttribute('show-all'));
 
     // Clear the search query. Expecting the cr-view-manager to only show the
@@ -172,7 +169,7 @@ suite('SettingsMain', function() {
 
   // Test which section is displayed when chrome://settings/ is visited.
   test('TopLevelRoute', async function() {
-    await flushTasks();
+    await microtasksFinished();
     // Case1: Default (non-guest mode)
     assertFalse(loadTimeData.getBoolean('isGuest'));
     let active = settingsMain.$.switcher.querySelector<HTMLElement>(
@@ -195,26 +192,10 @@ suite('SettingsMain', function() {
   });
 
   test('ResetProfileBannerShown', function() {
-    assertFalse(!!settingsMain.shadowRoot!.querySelector(
+    assertFalse(!!settingsMain.shadowRoot.querySelector(
         'settings-reset-profile-banner'));
     createSettingsMain({showResetProfileBanner: true});
-    assertTrue(!!settingsMain.shadowRoot!.querySelector(
+    assertTrue(!!settingsMain.shadowRoot.querySelector(
         'settings-reset-profile-banner'));
-  });
-
-    test('shows either autofill or yourSavedInfo page', function() {
-    // Reset tested element and set yourSavedInfo experiment to false
-    createSettingsMain();
-
-    // Only autofill page should be visible
-    assertTrue(!!settingsMain.shadowRoot!.querySelector(`#autofill`));
-    assertFalse(!!settingsMain.shadowRoot!.querySelector(`#yourSavedInfo`));
-
-    // Reset tested element and set yourSavedInfo experiment to true
-    createSettingsMain({enableYourSavedInfoSettingsPage: true});
-
-    // Only yourSavedInfo page should be visible
-    assertFalse(!!settingsMain.shadowRoot!.querySelector(`#autofill`));
-    assertTrue(!!settingsMain.shadowRoot!.querySelector(`#yourSavedInfo`));
   });
 });

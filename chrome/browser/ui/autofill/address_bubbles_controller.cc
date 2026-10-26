@@ -27,8 +27,8 @@
 #include "chrome/browser/ui/autofill/edit_address_profile_dialog_controller_impl.h"
 #include "chrome/browser/ui/autofill/save_address_bubble_controller.h"
 #include "chrome/browser/ui/autofill/update_address_bubble_controller.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/desktop_to_mobile_promos/ios_promos_utils.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/grit/theme_resources.h"
@@ -97,7 +97,8 @@ AddressBubblesController::AddressBubblesController(
       content::WebContentsUserData<AddressBubblesController>(*web_contents),
       app_locale_(g_browser_process->GetFeatures()
                       ->application_locale_storage()
-                      ->Get()) {}
+                      ->GetTag()
+                      .tag_string()) {}
 
 AddressBubblesController::~AddressBubblesController() {
   // `address_profile_save_prompt_callback_` must have been invoked before
@@ -105,7 +106,8 @@ AddressBubblesController::~AddressBubblesController() {
   // save/update flow. It's either invoked upon user action when accepting
   // or rejecting the flow, or in cases when users ignore it, it's invoked
   // when the web contents are destroyed.
-  DCHECK(address_profile_save_prompt_callback_.is_null());
+  CHECK(address_profile_save_prompt_callback_.is_null(),
+        base::NotFatalUntil::M162);
 }
 
 // static
@@ -311,7 +313,7 @@ void AddressBubblesController::SetUpBubble(
 }
 
 void AddressBubblesController::MaybeShowIOSDektopAddressPromo() {
-  Browser* browser =
+  BrowserWindowInterface* browser =
       BrowserWindow::FindBrowserWindowWithWebContents(web_contents())
           ->AsBrowserView()
           ->browser();

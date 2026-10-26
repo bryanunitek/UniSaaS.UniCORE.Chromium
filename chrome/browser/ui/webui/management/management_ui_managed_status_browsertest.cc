@@ -32,7 +32,8 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/management/management_ui.h"
 #include "chrome/browser/ui/webui/management/management_ui_handler.h"
@@ -219,7 +220,7 @@ class ManagementUIManagedStatusTest
   void EnableProfileManagement() {
     // Condition to deflake, some builds will initiate a client before this and
     // will crash when adding a new client
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
 #if BUILDFLAG(IS_CHROMEOS)
     profile->GetCloudPolicyManager()->core()->client()->SetupRegistration(
         "dm_token", "client_id", {});
@@ -238,7 +239,8 @@ class ManagementUIManagedStatusTest
                          .AsPrimary(signin::ConsentLevel::kSignin)
                          .WithRefreshToken(kTestRefreshToken)
                          .Build(kTestEmail))
-                     .account_id.empty());
+                     .GetAccountId()
+                     .empty());
   }
 
   void SetupFakeGaiaResponses() {
@@ -298,7 +300,7 @@ class ManagementUIManagedStatusTest
 
  protected:
   void SetPromotionBannerDismissedPref(bool is_dismissed) {
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(
         policy::policy_prefs::kHasDismissedManagementPagePromotionBanner,
         is_dismissed);
@@ -306,7 +308,7 @@ class ManagementUIManagedStatusTest
   // Helper method to setup and wait for the promotion listener
   void SetupAndListenForPromotion() {
     auto* handlers = browser()
-                         ->tab_strip_model()
+                         ->GetTabStripModel()
                          ->GetActiveWebContents()
                          ->GetWebUI()
                          ->GetHandlersForTesting();
@@ -314,7 +316,7 @@ class ManagementUIManagedStatusTest
     auto* handler = static_cast<ManagementUIHandler*>(handlers[0][0].get());
 
     // Only wait if the feature is enabled AND locale is en-US AND not dismissed
-    const bool is_dismissed = browser()->profile()->GetPrefs()->GetBoolean(
+    const bool is_dismissed = browser()->GetProfile()->GetPrefs()->GetBoolean(
         policy::policy_prefs::kHasDismissedPolicyPagePromotionBanner);
 
     if (is_feature_enabled() &&
@@ -345,7 +347,7 @@ IN_PROC_BROWSER_TEST_P(ManagementUIManagedStatusTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), GURL(chrome::kChromeUIManagementURL)));
   SetupAndListenForPromotion();
-  auto result = EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+  auto result = EvalJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                        kPromotionBannerVisibilityJavaScript)
                     .ExtractString();
   if (is_feature_enabled()) {
@@ -365,7 +367,7 @@ IN_PROC_BROWSER_TEST_P(ManagementUIManagedStatusTest,
       browser(), GURL(chrome::kChromeUIManagementURL)));
   SetupAndListenForPromotion();
 
-  auto result = EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+  auto result = EvalJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                        kPromotionBannerVisibilityJavaScript)
                     .ExtractString();
 
@@ -382,10 +384,10 @@ IN_PROC_BROWSER_TEST_P(ManagementUIManagedStatusTest,
       browser(), GURL(chrome::kChromeUIManagementURL)));
   SetupAndListenForPromotion();
 
-  EXPECT_TRUE(ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
+  EXPECT_TRUE(ExecJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                      kPromotionBannerDismissJavaScript));
 
-  auto result = EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+  auto result = EvalJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                        kPromotionBannerVisibilityJavaScript)
                     .ExtractString();
   EXPECT_EQ(result, kBannerHidden);
@@ -402,7 +404,7 @@ IN_PROC_BROWSER_TEST_P(ManagementUIManagedStatusTest,
 
   SetupAndListenForPromotion();
 
-  auto result = EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+  auto result = EvalJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                        kPromotionBannerVisibilityJavaScript)
                     .ExtractString();
   EXPECT_EQ(result, kBannerHidden);
@@ -426,7 +428,7 @@ IN_PROC_BROWSER_TEST_P(ManagementUIManagedStatusTest,
 }
 
 IN_PROC_BROWSER_TEST_P(ManagementUIManagedStatusTest, PageLoadedInGuestMode) {
-  Browser* policy_browser = OpenURLOffTheRecord(
+  BrowserWindowInterface* policy_browser = OpenURLOffTheRecord(
       browser()->GetProfile(), GURL(chrome::kChromeUIManagementURL));
   ASSERT_TRUE(policy_browser);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -436,7 +438,7 @@ IN_PROC_BROWSER_TEST_P(ManagementUIManagedStatusTest, PageLoadedInGuestMode) {
   // promotion eligibility fetch wouldn't even be initiated. So, waiting is not
   // applicable here. We explicitly omit SetupAndListenForPromotion()
   auto result =
-      EvalJs(policy_browser->tab_strip_model()->GetActiveWebContents(),
+      EvalJs(policy_browser->GetTabStripModel()->GetActiveWebContents(),
              kPromotionBannerVisibilityJavaScript)
           .ExtractString();
   EXPECT_EQ(result, kBannerHidden);

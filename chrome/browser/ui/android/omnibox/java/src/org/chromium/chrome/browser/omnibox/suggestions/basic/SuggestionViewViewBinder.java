@@ -4,89 +4,68 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions.basic;
 
-import android.content.Context;
 import android.text.TextUtils;
 import android.view.View;
 import android.widget.TextView;
 
-import androidx.annotation.ColorInt;
-
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.chrome.browser.omnibox.R;
-import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.styles.SuggestionSpannable;
-import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties;
-import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
+import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionViewBinder;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /** Properties associated with the basic suggestion view. */
 @NullMarked
-public class SuggestionViewViewBinder {
+public class SuggestionViewViewBinder extends BaseSuggestionViewBinder<TwoLineSuggestionView> {
     /**
      * @see PropertyModelChangeProcessor.ViewBinder#bind(Object, Object, Object)
      */
-    public static void bind(PropertyModel model, View view, PropertyKey propertyKey) {
-        if (propertyKey == SuggestionViewProperties.TEXT_LINE_1_TEXT) {
-            TextView tv = view.findViewById(R.id.line_1);
-            tv.setText(model.get(SuggestionViewProperties.TEXT_LINE_1_TEXT));
-            int minHeight =
-                    tv.getResources()
-                            .getDimensionPixelSize(
-                                    tv.getLineCount() > 1
-                                            ? R.dimen
-                                                    .omnibox_suggestion_minimum_content_height_multiline
-                                            : R.dimen.omnibox_suggestion_minimum_content_height);
-            view.setMinimumHeight(minHeight);
-        } else if (propertyKey == SuggestionCommonProperties.COLOR_SCHEME) {
-            updateSuggestionTextColor(view, model);
+    @Override
+    protected void bindContent(
+            PropertyModel model, TwoLineSuggestionView view, PropertyKey propertyKey) {
+        if (propertyKey == SuggestionViewProperties.CONTENT_DESCRIPTION) {
+            view.setContentDescription(model.get(SuggestionViewProperties.CONTENT_DESCRIPTION));
         } else if (propertyKey == SuggestionViewProperties.IS_SEARCH_SUGGESTION) {
-            updateSuggestionTextColor(view, model);
             // https://crbug.com/40084252: ensure URLs are always composed LTR and that their
             // components are not re-ordered.
             final boolean isSearch = model.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION);
-            final TextView tv = view.findViewById(R.id.line_2);
-            tv.setTextDirection(
-                    isSearch ? TextView.TEXT_DIRECTION_INHERIT : TextView.TEXT_DIRECTION_LTR);
+            view.getLine2()
+                    .setTextDirection(
+                            isSearch
+                                    ? TextView.TEXT_DIRECTION_INHERIT
+                                    : TextView.TEXT_DIRECTION_LTR);
+        } else if (propertyKey == SuggestionViewProperties.TEXT_LINE_1_TEXT) {
+            view.getLine1().setText(model.get(SuggestionViewProperties.TEXT_LINE_1_TEXT));
+        } else if (propertyKey == SuggestionViewProperties.TEXT_LINE_1_WRAP) {
+            updateMaxLines(view.getLine1(), model.get(SuggestionViewProperties.TEXT_LINE_1_WRAP));
         } else if (propertyKey == SuggestionViewProperties.TEXT_LINE_2_TEXT) {
-            TextView tv = view.findViewById(R.id.line_2);
-            final SuggestionSpannable span = model.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
-            if (!TextUtils.isEmpty(span)) {
-                tv.setText(span);
-                tv.setVisibility(View.VISIBLE);
-            } else {
-                tv.setVisibility(View.GONE);
-            }
-        } else if (propertyKey == SuggestionViewProperties.ALLOW_WRAP_AROUND) {
-            final boolean allowWrapAround = model.get(SuggestionViewProperties.ALLOW_WRAP_AROUND);
-            TextView tv = view.findViewById(R.id.line_1);
-            int maxLines = allowWrapAround ? 2 : 1;
-            if (tv.getMaxLines() != maxLines) {
-                tv.setMaxLines(maxLines);
-            }
-        } else if (propertyKey == SuggestionViewProperties.CONTENT_DESCRIPTION) {
-            view.setContentDescription(model.get(SuggestionViewProperties.CONTENT_DESCRIPTION));
+            bindTextLine2Text(model, view);
+        } else if (propertyKey == SuggestionViewProperties.TEXT_LINE_2_WRAP) {
+            updateMaxLines(view.getLine2(), model.get(SuggestionViewProperties.TEXT_LINE_2_WRAP));
         }
     }
 
-    private static void updateSuggestionTextColor(View view, PropertyModel model) {
-        final boolean isSearch = model.get(SuggestionViewProperties.IS_SEARCH_SUGGESTION);
-        final @BrandedColorScheme int brandedColorScheme =
-                model.get(SuggestionCommonProperties.COLOR_SCHEME);
-        final TextView line1 = view.findViewById(R.id.line_1);
-        final TextView line2 = view.findViewById(R.id.line_2);
+    private void bindTextLine2Text(PropertyModel model, TwoLineSuggestionView view) {
+        TextView line2 = view.getLine2();
+        final SuggestionSpannable span = model.get(SuggestionViewProperties.TEXT_LINE_2_TEXT);
+        final int minHeight;
+        if (!TextUtils.isEmpty(span)) {
+            line2.setText(span);
+            line2.setVisibility(View.VISIBLE);
+            minHeight = getResourceProvider(model).getSuggestionMinHeight(2);
+        } else {
+            line2.setVisibility(View.GONE);
+            minHeight = getResourceProvider(model).getSuggestionMinHeight(1);
+        }
+        if (view.getMinimumHeight() != minHeight) {
+            view.setMinimumHeight(minHeight);
+        }
+    }
 
-        final Context context = view.getContext();
-        final @ColorInt int color1 =
-                OmniboxResourceProvider.getSuggestionPrimaryTextColor(context, brandedColorScheme);
-        line1.setTextColor(color1);
-
-        final @ColorInt int color2 =
-                isSearch
-                        ? OmniboxResourceProvider.getSuggestionSecondaryTextColor(
-                                context, brandedColorScheme)
-                        : OmniboxResourceProvider.getSuggestionUrlTextColor(
-                                context, brandedColorScheme);
-        line2.setTextColor(color2);
+    private void updateMaxLines(TextView tv, boolean allowWrapAround) {
+        int maxLines = allowWrapAround ? 2 : 1;
+        if (tv.getMaxLines() != maxLines) {
+            tv.setMaxLines(maxLines);
+        }
     }
 }

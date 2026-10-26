@@ -136,6 +136,8 @@ using tab_groups::VersioningMessageController;
   [self.viewController disconnect];
   _fullscreenUIUpdater = nullptr;
   _fullscreenBrowserAgentObserverBridge = nullptr;
+  self.actionHandler.browserCoordinatorHandler = nil;
+  self.actionHandler = nil;
   _started = NO;
 }
 
@@ -169,10 +171,9 @@ using tab_groups::VersioningMessageController;
 - (void)exitFullscreen:
     (FullscreenModeTransitionTrigger)fullscreenTransitionTrigger {
   if (IsFullscreenRefactoringEnabled()) {
-    // TODO(crbug.com/500669310): Support forced fullscreen mode in
-    // FullscreenCommands.
     id<FullscreenCommands> fullscreenHandler = HandlerForProtocol(
         self.browser->GetCommandDispatcher(), FullscreenCommands);
+    [fullscreenHandler exitForceFullscreen];
     [fullscreenHandler exitFullscreenWithTrigger:fullscreenTransitionTrigger
                                         animated:YES];
   } else {
@@ -215,6 +216,10 @@ using tab_groups::VersioningMessageController;
 
 
 #pragma mark - ToolbarCommands
+
+- (void)triggerToolbarSlideInAnimation {
+  // Implemented in primary and secondary toolbars directly.
+}
 
 - (void)indicateLensOverlayVisible:(BOOL)lensOverlayVisible {
   // NO-OP

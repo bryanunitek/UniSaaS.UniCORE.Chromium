@@ -8,6 +8,7 @@
 
 #import "base/auto_reset.h"
 #import "base/check_is_test.h"
+#import "base/containers/map_util.h"
 #import "base/functional/bind.h"
 #import "base/functional/callback.h"
 #import "base/metrics/histogram_functions.h"
@@ -21,7 +22,6 @@
 #import "ios/chrome/app/change_profile_commands.h"
 #import "ios/chrome/browser/policy/model/policy_util.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
-#import "ios/chrome/browser/shared/model/profile/features.h"
 #import "ios/chrome/browser/shared/model/profile/profile_attributes_ios.h"
 #import "ios/chrome/browser/shared/model/profile/profile_attributes_storage_ios.h"
 #import "ios/chrome/browser/shared/model/profile/profile_attributes_storage_observer_ios.h"
@@ -65,8 +65,6 @@ const net::BackoffEntry::Policy kBackoffPolicy = {
 constexpr char kPersonalProfileNameForTesting[] =
     "bf09f5cf-94cc-4336-9cc2-26a5e1b8c358";
 
-constexpr base::TimeDelta kForceMigrationGracePeriod = base::Days(90);
-
 using ProfileNameToGaiaIds =
     std::map<std::string, std::set<GaiaId, std::less<>>, std::less<>>;
 
@@ -81,19 +79,6 @@ ProfileNameToGaiaIds GetMappingFromProfileAttributes(
     SystemIdentityManager* system_identity_manager,
     const ProfileAttributesStorageIOS* profile_attributes_storage) {
   ProfileNameToGaiaIds result;
-
-  if (!AreSeparateProfilesForManagedAccountsEnabled()) {
-    system_identity_manager->IterateOverIdentities(base::BindRepeating(
-        [](ProfileNameToGaiaIds& result, id<SystemIdentity> identity) {
-          // Note: In this case (with the feature flag disabled), the profile
-          // name in the mapping isn't used - every identity is considered
-          // assigned to every profile.
-          result[std::string()].insert(identity.gaiaId);
-          return SystemIdentityManager::IteratorResult::kContinueIteration;
-        },
-        std::ref(result)));
-    return result;
-  }
 
   if (!profile_attributes_storage) {
     CHECK_IS_TEST();
@@ -301,13 +286,8 @@ class AccountProfileMapper::Assigner
       identity_access_token_refresh_failed_cb_;
 
   // The mapping from profile name to the list of attached Gaia IDs.
-  // If `kSeparateProfilesForManagedAccounts` is enabled, this is a cache of
-  // the data in ProfileAttributesStorageIOS. It is used to detect when any
-  // mappings have changed.
-  // If `kSeparateProfilesForManagedAccounts` is disabled, the data from
-  // ProfileAttributesStorageIOS isn't used here, and all Gaia IDs are
-  // nominally assigned to an empty profile name (just to detect changes to
-  // the list - AccountProfileMapper won't do any filtering).
+  // This is a cache of the data in ProfileAttributesStorageIOS. It is used to
+  // detect when any mappings have changed.
   ProfileNameToGaiaIds profile_to_gaia_ids_;
 
   // The system identities for which the hosted domain must be fetched. Last
@@ -464,8 +444,6 @@ void AccountProfileMapper::Assigner::MakePersonalProfileManagedWithGaiaID(
 
   if (migrating_primary_managed_account) {
     // At this point, the migration is done.
-    local_pref_service_->ClearPref(
-        prefs::kWaitingForMultiProfileForcedMigrationTimestamp);
     local_pref_service_->SetBoolean(prefs::kMultiProfileForcedMigrationDone,
                                     true);
     base::RecordAction(base::UserMetricsAction(
@@ -527,7 +505,7 @@ void AccountProfileMapper::Assigner::UpdateIdentityProfileMappings() {
     // Check if any of the previously-assigned Gaia IDs have been removed.
     ProfileAttributesStorageIOS* attributes_storage =
         GetProfileAttributesStorage();
-    if (AreSeparateProfilesForManagedAccountsEnabled() && attributes_storage) {
+    if (attributes_storage) {
       for (const auto& [profile_name, gaia_ids] : profile_to_gaia_ids_) {
         for (const GaiaId& gaia_id : gaia_ids) {
           if (processed_gaia_ids.contains(gaia_id)) {
@@ -684,23 +662,8 @@ SystemIdentityManager::IteratorResult
 AccountProfileMapper::Assigner::ProcessIdentityForAssignmentToProfile(
     std::set<GaiaId>& processed_gaia_ids,
     id<SystemIdentity> identity) {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   processed_gaia_ids.insert(identity.gaiaId);
-
-  if (!AreSeparateProfilesForManagedAccountsEnabled()) {
-    if (!local_pref_service_) {
-      CHECK_IS_TEST();
-    } else if (local_pref_service_->GetTime(
-                   prefs::kWaitingForMultiProfileForcedMigrationTimestamp) !=
-               base::Time()) {
-      // Clear `kWaitingForMultiProfileForcedMigrationTimestamp` if the feature
-      // gets disabled.
-      local_pref_service_->ClearPref(
-          prefs::kWaitingForMultiProfileForcedMigrationTimestamp);
-    }
-    // With the feature flag disabled, no actual assignment is necessary.
-    return SystemIdentityManager::IteratorResult::kContinueIteration;
-  }
 
   NSString* hosted_domain =
       system_identity_manager_->GetCachedHostedDomainForIdentity(identity);
@@ -782,7 +745,6 @@ void AccountProfileMapper::Assigner::HostedDomainFetched(
 HostedDomainFetchEvent AccountProfileMapper::Assigner::HostedDomainFetchedImpl(
     NSString* hosted_domain,
     NSError* error) {
-  CHECK(AreSeparateProfilesForManagedAccountsEnabled());
   backoff_entry_.InformOfRequest(!error);
   if (error) {
     if (--number_of_remaining_tries_ > 0) {
@@ -820,8 +782,6 @@ HostedDomainFetchEvent AccountProfileMapper::Assigner::HostedDomainFetchedImpl(
 void AccountProfileMapper::Assigner::AssignIdentityToProfile(
     id<SystemIdentity> identity,
     bool is_managed_account) {
-  CHECK(AreSeparateProfilesForManagedAccountsEnabled());
-
   const GaiaId gaia_id(identity.gaiaId);
   const std::optional<std::string> profile_name =
       FindProfileNameForGaiaID(gaia_id);
@@ -897,37 +857,6 @@ void AccountProfileMapper::Assigner::AssignIdentityToProfile(
 
 void AccountProfileMapper::Assigner::MaybeMigratePrimaryManagedAccount(
     const GaiaId gaia_id) {
-  CHECK(AreSeparateProfilesForManagedAccountsEnabled());
-
-  base::Time recorded_at = local_pref_service_->GetTime(
-      prefs::kWaitingForMultiProfileForcedMigrationTimestamp);
-  if (recorded_at == base::Time()) {
-    // Record force migration pref for managed accounts in personal profile if
-    // not recorded yet.
-    local_pref_service_->SetTime(
-        prefs::kWaitingForMultiProfileForcedMigrationTimestamp,
-        base::Time::Now());
-    // If the *immediate* migration is not enabled (i.e. there's a non-zero
-    // grace period), there's nothing else to do for now. Otherwise, continue
-    // so that the force-migration may run now.
-    if (!base::FeatureList::IsEnabled(
-            kSeparateProfilesForManagedAccountsImmediateForceMigration)) {
-      return;
-    }
-  }
-
-  if (!base::FeatureList::IsEnabled(
-          kSeparateProfilesForManagedAccountsForceMigration)) {
-    return;
-  }
-
-  // If the grace period should be observed but is not over yet, do nothing.
-  if (!base::FeatureList::IsEnabled(
-          kSeparateProfilesForManagedAccountsImmediateForceMigration) &&
-      base::Time::Now() - recorded_at < kForceMigrationGracePeriod) {
-    return;
-  }
-
   MakePersonalProfileManagedWithGaiaID(
       gaia_id, /* migrating_primary_managed_account= */ true);
 }
@@ -983,7 +912,7 @@ AccountProfileMapper::AccountProfileMapper(
       [](SystemIdentityManager* system_identity_manager,
          size_t& num_consumer_accounts, size_t& num_managed_accounts,
          size_t& num_unknown_accounts, id<SystemIdentity> identity) {
-        CHECK(identity, base::NotFatalUntil::M147);
+        CHECK(identity);
         NSString* hosted_domain =
             system_identity_manager->GetCachedHostedDomainForIdentity(identity);
         if (hosted_domain) {
@@ -1044,16 +973,18 @@ void AccountProfileMapper::SetChangeProfileCommandsHandler(
 void AccountProfileMapper::AddObserver(AccountProfileMapper::Observer* observer,
                                        std::string_view profile_name) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  observer_lists_per_profile_name_[std::string(profile_name)].AddObserver(
-      observer);
+  base::GetOrCreate(observer_lists_per_profile_name_, profile_name)
+      .AddObserver(observer);
 }
 
 void AccountProfileMapper::RemoveObserver(
     AccountProfileMapper::Observer* observer,
     std::string_view profile_name) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  observer_lists_per_profile_name_[std::string(profile_name)].RemoveObserver(
-      observer);
+  if (auto* observers =
+          base::FindOrNull(observer_lists_per_profile_name_, profile_name)) {
+    observers->RemoveObserver(observer);
+  }
 }
 
 bool AccountProfileMapper::IsSigninSupported() {
@@ -1153,7 +1084,7 @@ AccountProfileMapper::FilterIdentitiesForProfile(
     id<SystemIdentity> identity) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (AreSeparateProfilesForManagedAccountsEnabled() && profile_manager_) {
+  if (profile_manager_) {
     ProfileAttributesIOS attr =
         profile_manager_->GetProfileAttributesStorage()
             ->GetAttributesForProfileWithName(profile_name);
@@ -1175,24 +1106,20 @@ void AccountProfileMapper::MappingUpdated(
     const ProfileNameToGaiaIds& old_mapping,
     const ProfileNameToGaiaIds& new_mapping) {
   std::set<std::string> profiles_to_notify;
-  // Note: If the feature flag is disabled, all profiles are notified, so no
-  // need to find the affected profiles.
-  if (AreSeparateProfilesForManagedAccountsEnabled()) {
-    std::set<std::string> all_profiles;
-    for (const auto& [name, gaia_ids] : old_mapping) {
-      all_profiles.insert(name);
-    }
-    for (const auto& [name, gaia_ids] : new_mapping) {
-      all_profiles.insert(name);
-    }
-    // Notify all profiles for which the mapping was added, removed, or changed.
-    for (const std::string& name : all_profiles) {
-      auto old_it = old_mapping.find(name);
-      auto new_it = new_mapping.find(name);
-      if (old_it == old_mapping.end() || new_it == new_mapping.end() ||
-          old_it->second != new_it->second) {
-        profiles_to_notify.insert(name);
-      }
+  std::set<std::string> all_profiles;
+  for (const auto& [name, gaia_ids] : old_mapping) {
+    all_profiles.insert(name);
+  }
+  for (const auto& [name, gaia_ids] : new_mapping) {
+    all_profiles.insert(name);
+  }
+  // Notify all profiles for which the mapping was added, removed, or changed.
+  for (const std::string& name : all_profiles) {
+    auto old_it = old_mapping.find(name);
+    auto new_it = new_mapping.find(name);
+    if (old_it == old_mapping.end() || new_it == new_mapping.end() ||
+        old_it->second != new_it->second) {
+      profiles_to_notify.insert(name);
     }
   }
   NotifyIdentityListChanged(profiles_to_notify);
@@ -1201,22 +1128,13 @@ void AccountProfileMapper::MappingUpdated(
 void AccountProfileMapper::NotifyIdentityListChanged(
     const std::set<std::string>& profile_names_to_notify) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (AreSeparateProfilesForManagedAccountsEnabled()) {
-    for (const std::string& profile_name : profile_names_to_notify) {
-      auto it = observer_lists_per_profile_name_.find(profile_name);
-      if (it == observer_lists_per_profile_name_.end()) {
-        continue;
-      }
-      for (Observer& observer : it->second) {
-        observer.OnIdentitiesInProfileChanged();
-      }
+  for (const std::string& profile_name : profile_names_to_notify) {
+    auto it = observer_lists_per_profile_name_.find(profile_name);
+    if (it == observer_lists_per_profile_name_.end()) {
+      continue;
     }
-  } else {
-    // If the feature flag is not enabled, notify all profiles.
-    for (const auto& [name, observer_list] : observer_lists_per_profile_name_) {
-      for (Observer& observer : observer_list) {
-        observer.OnIdentitiesInProfileChanged();
-      }
+    for (Observer& observer : it->second) {
+      observer.OnIdentitiesInProfileChanged();
     }
   }
 }
@@ -1234,25 +1152,16 @@ void AccountProfileMapper::NotifyIdentityUpdated(
     }
   }
 
-  if (AreSeparateProfilesForManagedAccountsEnabled()) {
-    // Notify observers for the affected profile.
-    if (!profile_name.has_value()) {
-      return;
-    }
-    auto it = observer_lists_per_profile_name_.find(*profile_name);
-    if (it == observer_lists_per_profile_name_.end()) {
-      return;
-    }
-    for (Observer& observer : it->second) {
-      observer.OnIdentityInProfileUpdated(identity);
-    }
-  } else {
-    // If the feature flag is not enabled, notify all profiles.
-    for (const auto& [name, observer_list] : observer_lists_per_profile_name_) {
-      for (Observer& observer : observer_list) {
-        observer.OnIdentityInProfileUpdated(identity);
-      }
-    }
+  // Notify observers for the affected profile.
+  if (!profile_name.has_value()) {
+    return;
+  }
+  auto it = observer_lists_per_profile_name_.find(*profile_name);
+  if (it == observer_lists_per_profile_name_.end()) {
+    return;
+  }
+  for (Observer& observer : it->second) {
+    observer.OnIdentityInProfileUpdated(identity);
   }
 }
 
@@ -1260,24 +1169,15 @@ void AccountProfileMapper::NotifyRefreshTokenUpdated(
     id<SystemIdentity> identity,
     const std::optional<std::string>& profile_name) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (AreSeparateProfilesForManagedAccountsEnabled()) {
-    if (!profile_name.has_value()) {
-      return;
-    }
-    auto it = observer_lists_per_profile_name_.find(*profile_name);
-    if (it == observer_lists_per_profile_name_.end()) {
-      return;
-    }
-    for (Observer& observer : it->second) {
-      observer.OnIdentityRefreshTokenUpdated(identity);
-    }
-  } else {
-    // If the feature flag is not enabled, notify all profiles.
-    for (const auto& [name, observer_list] : observer_lists_per_profile_name_) {
-      for (Observer& observer : observer_list) {
-        observer.OnIdentityRefreshTokenUpdated(identity);
-      }
-    }
+  if (!profile_name.has_value()) {
+    return;
+  }
+  auto it = observer_lists_per_profile_name_.find(*profile_name);
+  if (it == observer_lists_per_profile_name_.end()) {
+    return;
+  }
+  for (Observer& observer : it->second) {
+    observer.OnIdentityRefreshTokenUpdated(identity);
   }
 }
 
@@ -1287,23 +1187,14 @@ void AccountProfileMapper::NotifyAccessTokenRefreshFailed(
     const std::optional<std::string>& profile_name,
     const std::set<std::string>& scopes) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (AreSeparateProfilesForManagedAccountsEnabled()) {
-    if (!profile_name.has_value()) {
-      return;
-    }
-    auto it = observer_lists_per_profile_name_.find(*profile_name);
-    if (it == observer_lists_per_profile_name_.end()) {
-      return;
-    }
-    for (Observer& observer : it->second) {
-      observer.OnIdentityAccessTokenRefreshFailed(identity, error, scopes);
-    }
-  } else {
-    // If the feature flag is not enabled, notify all profiles.
-    for (const auto& [name, observer_list] : observer_lists_per_profile_name_) {
-      for (Observer& observer : observer_list) {
-        observer.OnIdentityAccessTokenRefreshFailed(identity, error, scopes);
-      }
-    }
+  if (!profile_name.has_value()) {
+    return;
+  }
+  auto it = observer_lists_per_profile_name_.find(*profile_name);
+  if (it == observer_lists_per_profile_name_.end()) {
+    return;
+  }
+  for (Observer& observer : it->second) {
+    observer.OnIdentityAccessTokenRefreshFailed(identity, error, scopes);
   }
 }

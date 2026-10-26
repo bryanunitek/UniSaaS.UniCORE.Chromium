@@ -6,12 +6,15 @@
 
 #include "base/functional/bind.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/task/sequenced_task_runner.h"
-#include "chrome/browser/ui/autofill/chrome_autofill_client.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/android/autofill/at_memory_bottom_sheet_bridge.h"
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
 #include "components/autofill/core/browser/ui/autofill_suggestion_delegate.h"
 #include "components/autofill/core/common/autofill_util.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/android/window_android.h"
 
 namespace autofill {
 
@@ -25,7 +28,7 @@ AtMemorySuggestionController::AtMemorySuggestionController(
     content::WebContents* web_contents,
     PopupControllerCommon controller_common)
     : delegate_(delegate),
-      web_contents_(web_contents->GetWeakPtr()),
+      web_contents_(web_contents ? web_contents->GetWeakPtr() : nullptr),
       controller_common_(std::move(controller_common)) {}
 
 AtMemorySuggestionController::~AtMemorySuggestionController() = default;
@@ -77,7 +80,8 @@ void AtMemorySuggestionController::OnSuggestionsChanged() {
 
 void AtMemorySuggestionController::AcceptSuggestion(
     int index,
-    AutofillMetrics::SuggestionAcceptedMethod accept_method) {
+    AutofillMetrics::SuggestionAcceptedMethod accept_method,
+    bool was_obscured) {
   if (base::checked_cast<size_t>(index) >= suggestions_.size()) {
     return;
   }
@@ -88,14 +92,23 @@ void AtMemorySuggestionController::AcceptSuggestion(
   Suggestion suggestion = suggestions_[index];
   if (delegate_) {
     delegate_->DidAcceptSuggestion(
-        suggestion, AutofillSuggestionDelegate::SuggestionMetadata{
-                        .multi_index = {static_cast<size_t>(index)}});
+        suggestion,
+        AutofillSuggestionDelegate::SuggestionMetadata{
+            .multi_index = {static_cast<size_t>(index)},
+            .was_obscured = was_obscured},
+        controller_common_.form_id, controller_common_.field_id);
   }
 }
 
-bool AtMemorySuggestionController::RemoveSuggestion(
-    int index,
-    AutofillMetrics::SingleEntryRemovalMethod removal_method) {
+void AtMemorySuggestionController::SelectSuggestion(int index) {
+  NOTREACHED();
+}
+
+void AtMemorySuggestionController::UnselectSuggestion() {
+  NOTREACHED();
+}
+
+bool AtMemorySuggestionController::RemoveSuggestion(int index) {
   NOTREACHED();
 }
 
@@ -121,17 +134,23 @@ void AtMemorySuggestionController::Show(
     std::vector<Suggestion> suggestions,
     AutofillSuggestionTriggerSource trigger_source,
     AutoselectFirstSuggestion autoselect_first_suggestion,
-    AutofillSuggestionsIgnoreFocusLoss ignore_focus_loss) {
+    AutofillSuggestionsIgnoreFocusLoss ignore_focus_loss,
+    std::u16string search_bar_initial_value) {
   ui_session_id_ = session_id;
   suggestions_ = std::move(suggestions);
-  trigger_source_ = trigger_source;
 
-  if (auto* client =
-          ChromeAutofillClient::FromWebContents(web_contents_.get())) {
-    client->ShowAtMemoryBottomSheet(suggestions_, delegate_);
+  if (!bridge_) {
+    if (!web_contents_ || !web_contents_->GetTopLevelNativeWindow()) {
+      return;
+    }
+    bridge_ = std::make_unique<AtMemoryBottomSheetBridge>(
+        web_contents_->GetTopLevelNativeWindow(),
+        Profile::FromBrowserContext(web_contents_->GetBrowserContext()), this);
   }
+  bridge_->RequestShowContent(suggestions_, search_bar_initial_value);
+
   if (delegate_) {
-    delegate_->OnSuggestionsShown(suggestions_, std::nullopt);
+    delegate_->OnSuggestionsShown(suggestions_, /*metadata=*/{});
   }
 }
 
@@ -150,12 +169,17 @@ void AtMemorySuggestionController::UpdateDataListValues(
   NOTREACHED();
 }
 
+const LocalFrameToken& AtMemorySuggestionController::GetAnchorFrameToken()
+    const {
+  return controller_common_.field_id.frame_token;
+}
+
 void AtMemorySuggestionController::HideViewAndDie() {
-  if (auto* client =
-          ChromeAutofillClient::FromWebContents(web_contents_.get())) {
-    client->HideAtMemoryBottomSheet();
-  }
   ui_session_id_ = std::nullopt;
+
+  if (bridge_) {
+    bridge_->Hide();
+  }
 
   // Invalidates in particular ChromeAutofillClient's WeakPtr to `this`, which
   // prevents recursive calls triggered by hiding or destroying the view.
@@ -183,9 +207,11 @@ void AtMemorySuggestionController::HideViewAndDie() {
 bool AtMemorySuggestionController::MayRecycle(
     base::WeakPtr<AutofillSuggestionDelegate> delegate,
     content::WebContents* web_contents,
+    const LocalFrameToken& anchor_frame_token,
     AutofillSuggestionTriggerSource trigger_source) const {
   return delegate_.get() == delegate.get() &&
          container_view() == web_contents->GetNativeView() &&
+         GetAnchorFrameToken() == anchor_frame_token &&
          IsAtMemoryTriggerSource(trigger_source);
 }
 
@@ -193,6 +219,101 @@ void AtMemorySuggestionController::Recycle(
     PopupControllerCommon controller_common,
     int32_t form_control_ax_id) {
   controller_common_ = std::move(controller_common);
+}
+
+void AtMemorySuggestionController::OnDismissed() {
+  Hide(SuggestionHidingReason::kUserAborted);
+}
+
+void AtMemorySuggestionController::OnQuerySubmitted(
+    const std::u16string& query) {
+  if (delegate_) {
+    delegate_->OnSearchSubmitted(query);
+  }
+}
+
+void AtMemorySuggestionController::OnQueryTextChanged(
+    const std::u16string& query) {
+  if (delegate_) {
+    delegate_->OnFilterChanged(query);
+  }
+}
+
+void AtMemorySuggestionController::OnSuggestionAccepted(int position) {
+  // TODO(crbug.com/561395976): Pass the `was_obscured` flag from Java.
+  AcceptSuggestion(position, AutofillMetrics::SuggestionAcceptedMethod::kTap,
+                   /*was_obscured=*/false);
+}
+
+void AtMemorySuggestionController::OnSuggestionDismissed(int position) {
+  if (position < 0 ||
+      base::checked_cast<size_t>(position) >= suggestions_.size()) {
+    return;
+  }
+
+  if (delegate_ && delegate_->RemoveSuggestion(suggestions_[position])) {
+    suggestions_.erase(suggestions_.begin() + position);
+    if (bridge_) {
+      bridge_->RequestShowContent(suggestions_, std::nullopt);
+    }
+  }
+}
+
+void AtMemorySuggestionController::OnChildSuggestionsShown(
+    int parent_position) {
+  if (parent_position < 0 ||
+      base::checked_cast<size_t>(parent_position) >= suggestions_.size()) {
+    return;
+  }
+
+  const Suggestion& parent_suggestion = suggestions_[parent_position];
+  if (delegate_) {
+    delegate_->OnSuggestionsShown(
+        parent_suggestion.children,
+        AutofillSuggestionDelegate::SuggestionUiMetadata{
+            .multi_index = {static_cast<size_t>(parent_position)}});
+  }
+}
+
+void AtMemorySuggestionController::OnChildSuggestionAccepted(
+    int parent_position,
+    int child_position) {
+  if (parent_position < 0 ||
+      base::checked_cast<size_t>(parent_position) >= suggestions_.size()) {
+    return;
+  }
+
+  const Suggestion& parent_suggestion = suggestions_[parent_position];
+  if (child_position < 0 || base::checked_cast<size_t>(child_position) >=
+                                parent_suggestion.children.size()) {
+    return;
+  }
+
+  Suggestion suggestion = parent_suggestion.children[child_position];
+  if (delegate_) {
+    // TODO(crbug.com/561395976): Populate the `was_obscured` flag.
+    delegate_->DidAcceptSuggestion(
+        suggestion,
+        AutofillSuggestionDelegate::SuggestionMetadata{
+            .multi_index = {static_cast<size_t>(parent_position),
+                            static_cast<size_t>(child_position)}},
+        controller_common_.form_id, controller_common_.field_id);
+  }
+}
+
+bool AtMemorySuggestionController::IsSearching() const {
+  return delegate_ && delegate_->IsSearching();
+}
+
+void AtMemorySuggestionController::SetBridgeForTesting(  // IN-TEST
+    std::unique_ptr<AtMemoryBottomSheetBridge> bridge) {
+  bridge_ = std::move(bridge);
+}
+
+AtMemoryBottomSheetBridge*
+AtMemorySuggestionController::bridge_for_testing()  // IN-TEST
+    const {
+  return bridge_.get();
 }
 
 }  // namespace autofill

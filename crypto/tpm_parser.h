@@ -12,58 +12,120 @@
 #include <stdint.h>
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "base/check_op.h"
 #include "base/containers/span.h"
 #include "base/types/expected.h"
 #include "crypto/crypto_export.h"
+#include "crypto/hash.h"
+#include "crypto/sign.h"
+#include "crypto/tpm.rs.h"
 
 namespace crypto::tpm {
 
-// Various errors returned during TPM certify response parsing.
+using enum TpmAlgHash;
+using enum TpmAlgPublic;
+using enum TpmAlgSigScheme;
+using enum TpmCc;
+using enum TpmConstant;
+using enum TpmEccCurve;
+using enum TpmRh;
+using enum TpmSt;
+
+// LINT.IfChange(TpmCommand)
+// Enumerates the TPM 2.0 commands implemented by this module.
+enum class TpmCommand {
+  kCreate,             // TPM2_Create
+  kCreatePrimary,      // TPM2_CreatePrimary
+  kFlushContext,       // TPM2_FlushContext
+  kHash,               // TPM2_Hash
+  kHashSequenceStart,  // TPM2_HashSequenceStart
+  kSequenceComplete,   // TPM2_SequenceComplete
+  kSequenceUpdate,     // TPM2_SequenceUpdate
+  kSign,               // TPM2_Sign
+};
+
+template <typename Sink>
+void AbslStringify(Sink& sink, TpmCommand command) {
+  switch (command) {
+    case TpmCommand::kCreate:
+      sink.Append("Create");
+      return;
+    case TpmCommand::kCreatePrimary:
+      sink.Append("CreatePrimary");
+      return;
+    case TpmCommand::kFlushContext:
+      sink.Append("FlushContext");
+      return;
+    case TpmCommand::kHash:
+      sink.Append("Hash");
+      return;
+    case TpmCommand::kHashSequenceStart:
+      sink.Append("HashSequenceStart");
+      return;
+    case TpmCommand::kSequenceComplete:
+      sink.Append("SequenceComplete");
+      return;
+    case TpmCommand::kSequenceUpdate:
+      sink.Append("SequenceUpdate");
+      return;
+    case TpmCommand::kSign:
+      sink.Append("Sign");
+      return;
+  }
+
+  NOTREACHED();
+}
+// LINT.ThenChange(//tools/metrics/histograms/metadata/crypto/histograms.xml:TpmCommand)
+
+// Various errors returned during TPM response parsing.
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
-// NOTE: Since the certify response parsing happens completely on the Rust side,
+// NOTE: Since the response parsing happens completely on the Rust side,
 // this is a strict subset of the enum defined in tpm.rs. We purposefully drop
 // the kOk option, so that it's a true error enum.
-struct CRYPTO_EXPORT CertifyResponseError {
-  // LINT.IfChange(TpmCertifyParseResult)
+struct CRYPTO_EXPORT TpmParseError {
+  // LINT.IfChange(TpmParseResult)
   enum class Type : uint8_t {
     kBufferTooSmall = 1,
     kTrailingBytes = 2,
     kTpmErrorResponse = 3,
-    kBadMagicNumber = 4,
+    // kBadMagicNumber = 4,  // Obsolete: used by deleted TPM2_Certify parser.
     kWrongType = 5,
-    kChallengeMismatch = 6,
-    kMaxValue = kChallengeMismatch
+    // kChallengeMismatch = 6,  // Obsolete: used by deleted TPM2_Certify
+    // parser.
+    kMaxValue = kWrongType,
   };
-  // LINT.ThenChange(//tools/metrics/histograms/metadata/net/enums.xml:TpmCertifyParseResult)
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/crypto/enums.xml:TpmParseResult)
 
   const Type type = Type::kBufferTooSmall;
   // Only populated if `type` is `Type::kTpmErrorResponse`.
   const std::optional<uint32_t> tpm_error_code;
 
-  explicit CertifyResponseError(
-      Type type,
-      std::optional<uint32_t> tpm_error_code = std::nullopt)
+  explicit TpmParseError(Type type,
+                         std::optional<uint32_t> tpm_error_code = std::nullopt)
       : type(type), tpm_error_code(tpm_error_code) {
     CHECK_EQ(type == Type::kTpmErrorResponse, tpm_error_code.has_value());
   }
 
-  friend bool operator==(const CertifyResponseError&,
-                         const CertifyResponseError&) = default;
+  friend bool operator==(const TpmParseError&, const TpmParseError&) = default;
 };
 
-template <typename T>
-using CertifyResponseErrorOr = base::expected<T, CertifyResponseError>;
+// Returns true if `error` is a TPM error response reporting that a handle
+// referenced by the command does not exist. Callers of single-handle commands
+// can treat this as identifying that specific handle.
+CRYPTO_EXPORT bool IsHandleError(const TpmParseError& error);
 
-inline constexpr auto kNoCertifyResponseErrorForMetrics =
-    static_cast<CertifyResponseError::Type>(0);
+template <typename T>
+using TpmParseErrorOr = base::expected<T, TpmParseError>;
+
+inline constexpr auto kNoTpmParseErrorForMetrics =
+    static_cast<TpmParseError::Type>(0);
 
 // Various errors returned during TPM signature verification.
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
+//
 // NOTE: While signature parsing happens in Rust, signature verification is
 // implemented in C++. This means this enum extends the Rust version with
 // possible verification errors, but also drops the kOk option to make it a true
@@ -76,53 +138,225 @@ enum class SignatureError : uint8_t {
   kUnsupportedHashAlgorithm = 4,
   kInvalidPublicKey = 5,
   kInvalidSignature = 6,
-  kMaxValue = kInvalidSignature
 };
 
 template <typename T>
 using SignatureErrorOr = base::expected<T, SignatureError>;
 
-inline constexpr auto kNoSignatureErrorForMetrics =
-    static_cast<SignatureError>(0);
+// Response components extracted from a parsed TPM2_Create response.
+struct CRYPTO_EXPORT CreateResponse {
+  static constexpr auto kCommand = TpmCommand::kCreate;
 
-// Response components extracted from a parsed TPM2_Certify response.
-struct CRYPTO_EXPORT CertifyResponse {
-  std::vector<uint8_t> statement;
-  std::vector<uint8_t> signature;
+  // The serialized TPM2B_PRIVATE structure returned by the TPM.
+  std::vector<uint8_t> out_private;
+  // The serialized TPM2B_PUBLIC structure returned by the TPM.
+  std::vector<uint8_t> out_public;
 
-  friend bool operator==(const CertifyResponse&,
-                         const CertifyResponse&) = default;
+  friend bool operator==(const CreateResponse&,
+                         const CreateResponse&) = default;
 };
 
-// TPM algorithm IDs returned by the parser, solely for telemetry.
+// Response components extracted from a parsed TPM2_CreatePrimary response.
+struct CRYPTO_EXPORT CreatePrimaryResponse {
+  static constexpr auto kCommand = TpmCommand::kCreatePrimary;
+
+  // Handle of the transient primary object created by the TPM. The caller owns
+  // the object and has to release it with TPM2_FlushContext.
+  uint32_t object_handle = 0;
+
+  friend bool operator==(const CreatePrimaryResponse&,
+                         const CreatePrimaryResponse&) = default;
+};
+
+// Response from parsing a TPM2_FlushContext response.
+struct CRYPTO_EXPORT FlushContextResponse {
+  static constexpr auto kCommand = TpmCommand::kFlushContext;
+
+  friend bool operator==(const FlushContextResponse&,
+                         const FlushContextResponse&) = default;
+};
+
+// Response components extracted from a parsed TPM2_Hash response.
+struct CRYPTO_EXPORT HashResponse {
+  static constexpr auto kCommand = TpmCommand::kHash;
+
+  std::vector<uint8_t> digest;
+  std::vector<uint8_t> validation_ticket;
+
+  friend bool operator==(const HashResponse&, const HashResponse&) = default;
+};
+
+// Response components extracted from a parsed TPM2_HashSequenceStart response.
+struct CRYPTO_EXPORT HashSequenceStartResponse {
+  static constexpr auto kCommand = TpmCommand::kHashSequenceStart;
+
+  uint32_t sequence_handle = 0;
+
+  friend bool operator==(const HashSequenceStartResponse&,
+                         const HashSequenceStartResponse&) = default;
+};
+
+// Response components extracted from a parsed TPM2_SequenceComplete response.
+struct CRYPTO_EXPORT SequenceCompleteResponse {
+  static constexpr auto kCommand = TpmCommand::kSequenceComplete;
+
+  std::vector<uint8_t> digest;
+  std::vector<uint8_t> validation_ticket;
+
+  friend bool operator==(const SequenceCompleteResponse&,
+                         const SequenceCompleteResponse&) = default;
+};
+
+// Response from parsing a TPM2_SequenceUpdate response.
+struct CRYPTO_EXPORT SequenceUpdateResponse {
+  static constexpr auto kCommand = TpmCommand::kSequenceUpdate;
+
+  friend bool operator==(const SequenceUpdateResponse&,
+                         const SequenceUpdateResponse&) = default;
+};
+
+// Response components extracted from a parsed TPM2_Sign response.
+struct CRYPTO_EXPORT SignResponse {
+  static constexpr auto kCommand = TpmCommand::kSign;
+
+  std::vector<uint8_t> signature;
+
+  friend bool operator==(const SignResponse&, const SignResponse&) = default;
+};
+
+// TPM algorithm IDs for a given SignatureAlgorithm.
 struct CRYPTO_EXPORT SignatureAlgorithms {
-  uint16_t sig_alg = 0;
-  uint16_t hash_alg = 0;
+  TpmAlgSigScheme sig_alg = TPM_ALG_NULL;
+  TpmAlgHash hash_alg = TPM_ALG_SHA256;
 
   friend bool operator==(const SignatureAlgorithms&,
                          const SignatureAlgorithms&) = default;
 };
 
-// Builds a serialized TPM2_Certify command buffer.
+// Builds a serialized TPM2_Create command buffer for an Attestation Identity
+// Key (AIK) configured according to the provided `kind` under `parent_handle`.
 //
-// * `object_handle` - The TPM handle of the key to be certified.
-// * `sign_handle` - The TPM handle of the attestation key used to sign the
-// certification.
-// * `challenge` - A security challenge/nonce to prevent replay attacks.
-CRYPTO_EXPORT std::vector<uint8_t> BuildCertifyCommand(
-    uint32_t object_handle,
-    uint32_t sign_handle,
-    base::span<const uint8_t> challenge);
+// Returns nullopt if `kind` is not supported for AIK creation.
+CRYPTO_EXPORT std::optional<std::vector<uint8_t>> BuildCreateAikCommand(
+    uint32_t parent_handle,
+    sign::SignatureKind kind);
 
-// Parses a serialized TPM2_Certify response and extracts the certified
-// statement and signature.
+// Parses a serialized TPM2_Create response and extracts the private area and
+// public area.
 //
-// * `response_blob` - The raw byte response from the TPM2_Certify command.
-// * `challenge` - The challenge expected in the attestation's extra data to
-// prevent replay.
-CRYPTO_EXPORT CertifyResponseErrorOr<CertifyResponse> ParseCertifyResponse(
-    base::span<const uint8_t> response_blob,
-    base::span<const uint8_t> challenge);
+// If the TPM returns an error code, an error of type `kTpmErrorResponse` will
+// be returned containing the error code.
+CRYPTO_EXPORT TpmParseErrorOr<CreateResponse> ParseCreateResponse(
+    base::span<const uint8_t> response_blob);
+
+// Builds a serialized TPM2_CreatePrimary command buffer for the ECC Storage
+// Root Key, created under the owner hierarchy.
+//
+// The template is fixed to ECC P-256 with SHA-256 and AES-128-CFB storage
+// parameters, so the command takes no parameters: it reproduces the key that
+// the Platform Crypto Provider persists at handle 0x81000009.
+//
+// The resulting object is transient. The caller owns the handle returned in the
+// response and has to release it with TPM2_FlushContext.
+CRYPTO_EXPORT std::vector<uint8_t> BuildCreatePrimaryEccSrkCommand();
+
+// Parses a serialized TPM2_CreatePrimary response and extracts the handle of
+// the created transient object.
+//
+// If the TPM returns an error code, an error of type `kTpmErrorResponse` will
+// be returned containing the error code, and no handle will be extracted.
+CRYPTO_EXPORT TpmParseErrorOr<CreatePrimaryResponse> ParseCreatePrimaryResponse(
+    base::span<const uint8_t> response_blob);
+
+// Builds a serialized TPM2_FlushContext command buffer.
+//
+// * `handle` - The handle of the item to flush.
+CRYPTO_EXPORT std::vector<uint8_t> BuildFlushContextCommand(uint32_t handle);
+
+// Parses a serialized TPM2_FlushContext response.
+CRYPTO_EXPORT TpmParseErrorOr<FlushContextResponse> ParseFlushContextResponse(
+    base::span<const uint8_t> response_blob);
+
+// Builds a serialized TPM2_Hash command buffer.
+//
+// * `data` - The byte buffer to be hashed.
+// * `hash_kind` - The hash algorithm to use.
+CRYPTO_EXPORT std::vector<uint8_t> BuildHashCommand(
+    base::span<const uint8_t> data,
+    hash::HashKind hash_kind);
+
+// Parses a serialized TPM2_Hash response.
+//
+// If the TPM returns an error code, an error of type `kTpmErrorResponse` will
+// be returned containing the error code, and no digest or validation ticket
+// will be extracted.
+CRYPTO_EXPORT TpmParseErrorOr<HashResponse> ParseHashResponse(
+    base::span<const uint8_t> response_blob);
+
+// Builds a serialized TPM2_HashSequenceStart command buffer.
+//
+// * `hash_kind` - The hash algorithm to use for the sequence.
+CRYPTO_EXPORT std::vector<uint8_t> BuildHashSequenceStartCommand(
+    hash::HashKind hash_kind);
+
+// Parses a serialized TPM2_HashSequenceStart response.
+//
+// If the TPM returns an error code, an error of type `kTpmErrorResponse` will
+// be returned containing the error code, and no sequence handle will be
+// extracted.
+CRYPTO_EXPORT TpmParseErrorOr<HashSequenceStartResponse>
+ParseHashSequenceStartResponse(base::span<const uint8_t> response_blob);
+
+// Builds a serialized TPM2_SequenceComplete command buffer.
+//
+// * `sequence_handle` - The handle of the sequence to complete.
+// * `data` - The final byte buffer to append to the hash sequence.
+CRYPTO_EXPORT std::vector<uint8_t> BuildSequenceCompleteCommand(
+    uint32_t sequence_handle,
+    base::span<const uint8_t> data);
+
+// Parses a serialized TPM2_SequenceComplete response.
+//
+// If the TPM returns an error code, an error of type `kTpmErrorResponse` will
+// be returned containing the error code, and no digest or validation ticket
+// will be extracted.
+CRYPTO_EXPORT TpmParseErrorOr<SequenceCompleteResponse>
+ParseSequenceCompleteResponse(base::span<const uint8_t> response_blob);
+
+// Builds a serialized TPM2_SequenceUpdate command buffer.
+//
+// * `sequence_handle` - The handle of the sequence to be updated.
+// * `data` - The byte buffer to append to the hash sequence.
+CRYPTO_EXPORT std::vector<uint8_t> BuildSequenceUpdateCommand(
+    uint32_t sequence_handle,
+    base::span<const uint8_t> data);
+
+// Parses a serialized TPM2_SequenceUpdate response.
+CRYPTO_EXPORT TpmParseErrorOr<SequenceUpdateResponse>
+ParseSequenceUpdateResponse(base::span<const uint8_t> response_blob);
+
+// Builds a serialized TPM2_Sign command buffer.
+//
+// Uses TPM_ALG_NULL for the signing scheme so that the TPM auto-infers
+// the scheme configured on `key_handle`.
+//
+// * `key_handle` - The handle of the signing key.
+// * `digest` - The digest to sign.
+// * `validation_ticket` - The validation ticket from TPM2_Hash or
+//   TPM2_SequenceComplete.
+CRYPTO_EXPORT std::vector<uint8_t> BuildSignCommand(
+    uint32_t key_handle,
+    base::span<const uint8_t> digest,
+    base::span<const uint8_t> validation_ticket);
+
+// Parses a serialized TPM2_Sign response.
+CRYPTO_EXPORT TpmParseErrorOr<SignResponse> ParseSignResponse(
+    base::span<const uint8_t> response_blob);
+
+// Parses a serialized `TPMT_SIGNATURE` and returns the normalized signature
+// (DER-encoded for ECDSA, raw bytes for RSA).
+CRYPTO_EXPORT std::optional<std::vector<uint8_t>> ParseTpmSignature(
+    base::span<const uint8_t> signature_blob);
 
 // Parses a serialized `TPMT_SIGNATURE` and returns the signature and hash
 // algorithms used, solely for telemetry.

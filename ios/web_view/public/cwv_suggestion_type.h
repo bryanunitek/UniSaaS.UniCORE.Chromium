@@ -89,7 +89,7 @@ typedef NS_ENUM(NSInteger, CWVSuggestionType) {
 
   // Promotion suggestions.
   CWVSuggestionTypeMerchantPromoCodeEntry = 41,
-  CWVSuggestionTypeSeePromoCodeDetails = 42,
+  // CWVSuggestionTypeSeePromoCodeDetails = 42, // DEPRECATED
 
   // Webauthn suggestions.
   CWVSuggestionTypeWebauthnCredential = 43,
@@ -98,8 +98,8 @@ typedef NS_ENUM(NSInteger, CWVSuggestionType) {
   // Other suggestions.
   CWVSuggestionTypeTitle = 45,
   CWVSuggestionTypeSeparator = 46,
-  CWVSuggestionTypeUndoOrClear = 47,
-  CWVSuggestionTypeMixedFormMessage = 48,
+  CWVSuggestionTypeUndo = 47,
+  // CWVSuggestionTypeMixedFormMessage = 48, // DEPRECATED
 
   // Top level suggestion rendered when test addresses are available. Shown only
   // when DevTools is open.

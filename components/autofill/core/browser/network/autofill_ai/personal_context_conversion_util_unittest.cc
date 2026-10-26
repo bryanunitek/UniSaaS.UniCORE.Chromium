@@ -9,6 +9,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/uuid.h"
+#include "build/build_config.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance_test_api.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
@@ -16,12 +17,19 @@
 #include "components/personal_context/proto/features/common_data.pb.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace autofill {
 
 namespace {
 
+using ::testing::IsEmpty;
 using enum AttributeTypeName;
+using GmailSourceMetadata =
+    EntityInstance::PersonalContextRecordTypePayload::GmailSourceMetadata;
+using PhotosSourceMetadata =
+    EntityInstance::PersonalContextRecordTypePayload::PhotosSourceMetadata;
+using Source = EntityInstance::PersonalContextRecordTypePayload::Source;
 
 // Helper to check the string value of an attribute.
 void ExpectAttributeValue(const EntityInstance& entity,
@@ -332,8 +340,10 @@ TEST(AutofillAiPersonalContextConverters, ConvertShipment) {
   shipment.mutable_ship_date()->set_year(2026);
   shipment.mutable_ship_date()->set_month(5);
   shipment.mutable_ship_date()->set_day(28);
-  shipment.add_associated_order_ids("ORD-001");
-  shipment.add_associated_order_ids("ORD-002");
+  shipment.set_delivery_zip_code("94043");
+  shipment.set_merchant_name("SuperStore");
+  shipment.add_product_names("Widget A");
+  shipment.add_product_names("Widget B");
 
   personal_context::proto::Entity entity;
   *entity.mutable_shipment() = shipment;
@@ -350,7 +360,301 @@ TEST(AutofillAiPersonalContextConverters, ConvertShipment) {
   ExpectAttributeValue(result, kShipmentCarrierName, u"ExpressMail");
   ExpectAttributeValue(result, kShipmentCarrierDomain, u"expressmail.com");
   ExpectAttributeValue(result, kShipmentShippedDate, u"2026-05-28");
-  ExpectAttributeValue(result, kShipmentOrderIds, u"ORD-001, ORD-002");
+  ExpectAttributeValue(result, kShipmentDeliveryZipCode, u"94043");
+  ExpectAttributeValue(result, kShipmentMerchantName, u"SuperStore");
+  ExpectAttributeValue(result, kShipmentProductNames, u"Widget A, Widget B");
+}
+
+TEST(AutofillAiPersonalContextConverters, ConvertKnownTravelerNumber) {
+  personal_context::proto::KnownTravelerNumber ktn;
+  ktn.set_name("Charlie Brown");
+  ktn.set_number("KTN12345");
+
+  personal_context::proto::Entity entity;
+  *entity.mutable_known_traveler_number() = ktn;
+
+  std::optional<EntityInstance> opt_result =
+      PersonalContextEntityToEntityInstance(entity);
+
+  ASSERT_TRUE(opt_result.has_value());
+  const EntityInstance& result = opt_result.value();
+
+  EXPECT_EQ(result.type().name(), EntityTypeName::kKnownTravelerNumber);
+  ExpectAttributeValue(result, kKnownTravelerNumberName, u"Charlie Brown");
+  ExpectMaskedAttributeValue(result, kKnownTravelerNumberNumber, u"KTN12345");
+}
+
+TEST(AutofillAiPersonalContextConverters, ConvertKnownTravelerNumber_Unmasked) {
+  personal_context::proto::KnownTravelerNumber ktn;
+  ktn.set_name("Charlie Brown");
+  ktn.set_number("KTN12345");
+
+  personal_context::proto::Entity entity;
+  *entity.mutable_known_traveler_number() = ktn;
+
+  std::optional<EntityInstance> opt_result =
+      PersonalContextEntityToEntityInstance(entity, /*is_masked=*/false);
+
+  ASSERT_TRUE(opt_result.has_value());
+  const EntityInstance& result = opt_result.value();
+
+  EXPECT_EQ(result.type().name(), EntityTypeName::kKnownTravelerNumber);
+  ExpectAttributeValue(result, kKnownTravelerNumberName, u"Charlie Brown");
+  ExpectAttributeValue(result, kKnownTravelerNumberNumber, u"KTN12345");
+}
+
+TEST(AutofillAiPersonalContextConverters, ConvertEntityWithGmailSource) {
+  personal_context::proto::Passport passport;
+  passport.set_name("Jane Doe");
+
+  personal_context::proto::Entity entity;
+  *entity.mutable_passport() = passport;
+  personal_context::proto::SourceReference* source =
+      entity.add_source_references();
+  source->mutable_gmail()->mutable_message_urls()->set_desktop_web_url(
+      "https://mail.google.com/mail/#inbox/123");
+  source->mutable_gmail()->mutable_message_urls()->set_mobile_web_url(
+      "https://mail.google.com/mail/mu/mp/#cv/Inbox/123");
+  source->mutable_gmail()->set_subject("Passport Information");
+  source->mutable_gmail()->mutable_timestamp()->set_year(2025);
+  source->mutable_gmail()->mutable_timestamp()->set_month(10);
+  source->mutable_gmail()->mutable_timestamp()->set_day(15);
+  source->mutable_gmail()->mutable_timestamp()->set_hours(14);
+  source->mutable_gmail()->mutable_timestamp()->set_minutes(30);
+
+  std::optional<EntityInstance> opt_result =
+      PersonalContextEntityToEntityInstance(entity);
+
+  ASSERT_TRUE(opt_result.has_value());
+  const EntityInstance& result = opt_result.value();
+  base::Time expected_timestamp;
+  ASSERT_TRUE(
+      base::Time::FromUTCString("2025-10-15 14:30:00", &expected_timestamp));
+  EntityInstance::PersonalContextRecordTypePayload payload{
+      .sources = {Source{
+          .url = GetGmailSourceUrl(source->gmail()),
+          .metadata = GmailSourceMetadata{.title = "Passport Information",
+                                          .timestamp = expected_timestamp}}}};
+  EXPECT_EQ(std::get<EntityInstance::PersonalContextRecordTypePayload>(
+                result.record_type_data()),
+            payload);
+}
+
+TEST(AutofillAiPersonalContextConverters,
+     ConvertEntityWithGmailSource_EmptySubject) {
+  personal_context::proto::Passport passport;
+  passport.set_name("Jane Doe");
+
+  personal_context::proto::Entity entity;
+  *entity.mutable_passport() = passport;
+  personal_context::proto::SourceReference* source =
+      entity.add_source_references();
+  source->mutable_gmail()->mutable_message_urls()->set_desktop_web_url(
+      "https://mail.google.com/mail/#inbox/123");
+  source->mutable_gmail()->mutable_message_urls()->set_mobile_web_url(
+      "https://mail.google.com/mail/mu/mp/#cv/Inbox/123");
+
+  std::optional<EntityInstance> opt_result =
+      PersonalContextEntityToEntityInstance(entity);
+
+  ASSERT_TRUE(opt_result.has_value());
+  const EntityInstance& result = opt_result.value();
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  EXPECT_THAT(std::get<EntityInstance::PersonalContextRecordTypePayload>(
+                  result.record_type_data())
+                  .sources,
+              IsEmpty());
+#else
+  EntityInstance::PersonalContextRecordTypePayload payload{
+      .sources = {Source{.url = GURL("https://mail.google.com/mail/#inbox/123"),
+                         .metadata = GmailSourceMetadata{.title = ""}}}};
+  EXPECT_EQ(std::get<EntityInstance::PersonalContextRecordTypePayload>(
+                result.record_type_data()),
+            payload);
+#endif
+}
+
+TEST(AutofillAiPersonalContextConverters, ConvertEntityWithPhotosSource) {
+  personal_context::proto::DriversLicense dl;
+  dl.set_name("John Smith");
+
+  personal_context::proto::Entity entity;
+  *entity.mutable_drivers_license() = dl;
+  personal_context::proto::SourceReference* source =
+      entity.add_source_references();
+  source->mutable_photos()->set_photos_url(
+      "https://photos.google.com/photo/abc");
+  source->mutable_photos()->mutable_timestamp()->set_year(2025);
+  source->mutable_photos()->mutable_timestamp()->set_month(10);
+  source->mutable_photos()->mutable_timestamp()->set_day(15);
+  source->mutable_photos()->mutable_timestamp()->set_hours(14);
+  source->mutable_photos()->mutable_timestamp()->set_minutes(30);
+
+  std::optional<EntityInstance> opt_result =
+      PersonalContextEntityToEntityInstance(entity);
+
+  ASSERT_TRUE(opt_result.has_value());
+  const EntityInstance& result = opt_result.value();
+  base::Time expected_timestamp;
+  ASSERT_TRUE(
+      base::Time::FromUTCString("2025-10-15 14:30:00", &expected_timestamp));
+  EntityInstance::PersonalContextRecordTypePayload payload{
+      .sources = {Source{
+          .url = GURL("https://photos.google.com/photo/abc"),
+          .metadata = PhotosSourceMetadata{.timestamp = expected_timestamp}}}};
+  EXPECT_EQ(std::get<EntityInstance::PersonalContextRecordTypePayload>(
+                result.record_type_data()),
+            payload);
+}
+
+TEST(AutofillAiPersonalContextConverters,
+     ConvertEntityWithPhotosSource_EmptyTimestamp) {
+  personal_context::proto::DriversLicense dl;
+  dl.set_name("John Smith");
+
+  personal_context::proto::Entity entity;
+  *entity.mutable_drivers_license() = dl;
+  personal_context::proto::SourceReference* source =
+      entity.add_source_references();
+  source->mutable_photos()->set_photos_url(
+      "https://photos.google.com/photo/abc");
+
+  std::optional<EntityInstance> opt_result =
+      PersonalContextEntityToEntityInstance(entity);
+
+  ASSERT_TRUE(opt_result.has_value());
+  const EntityInstance& result = opt_result.value();
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  EXPECT_THAT(std::get<EntityInstance::PersonalContextRecordTypePayload>(
+                  result.record_type_data())
+                  .sources,
+              IsEmpty());
+#else
+  EntityInstance::PersonalContextRecordTypePayload payload{
+      .sources = {Source{.url = GURL("https://photos.google.com/photo/abc"),
+                         .metadata = PhotosSourceMetadata{}}}};
+  EXPECT_EQ(std::get<EntityInstance::PersonalContextRecordTypePayload>(
+                result.record_type_data()),
+            payload);
+#endif
+}
+
+TEST(AutofillAiPersonalContextConverters,
+     ConvertEntityWithPhotosSource_InvalidTimestamp) {
+  personal_context::proto::DriversLicense dl;
+  dl.set_name("John Smith");
+
+  personal_context::proto::Entity entity;
+  *entity.mutable_drivers_license() = dl;
+  personal_context::proto::SourceReference* source =
+      entity.add_source_references();
+  source->mutable_photos()->set_photos_url(
+      "https://photos.google.com/photo/abc");
+  source->mutable_photos()->mutable_timestamp()->set_year(2025);
+  source->mutable_photos()->mutable_timestamp()->set_month(13);
+  source->mutable_photos()->mutable_timestamp()->set_day(45);
+
+  std::optional<EntityInstance> opt_result =
+      PersonalContextEntityToEntityInstance(entity);
+
+  ASSERT_TRUE(opt_result.has_value());
+  const EntityInstance& result = opt_result.value();
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  EXPECT_THAT(std::get<EntityInstance::PersonalContextRecordTypePayload>(
+                  result.record_type_data())
+                  .sources,
+              IsEmpty());
+#else
+  EntityInstance::PersonalContextRecordTypePayload payload{
+      .sources = {Source{.url = GURL("https://photos.google.com/photo/abc"),
+                         .metadata = PhotosSourceMetadata{}}}};
+  EXPECT_EQ(std::get<EntityInstance::PersonalContextRecordTypePayload>(
+                result.record_type_data()),
+            payload);
+#endif
+}
+
+TEST(AutofillAiPersonalContextConverters, ConvertEntityWithMultipleSources) {
+  personal_context::proto::Order order;
+  order.set_order_id("ORD-001");
+
+  personal_context::proto::Entity entity;
+  *entity.mutable_order() = order;
+
+  personal_context::proto::SourceReference* gmail_source =
+      entity.add_source_references();
+  gmail_source->mutable_gmail()->mutable_message_urls()->set_desktop_web_url(
+      "https://mail.google.com/mail/#inbox/123");
+  gmail_source->mutable_gmail()->mutable_message_urls()->set_mobile_web_url(
+      "https://mail.google.com/mail/mu/mp/#cv/Inbox/123");
+  gmail_source->mutable_gmail()->set_subject("Order Confirmation");
+
+  personal_context::proto::SourceReference* photos_source =
+      entity.add_source_references();
+  photos_source->mutable_photos()->set_photos_url(
+      "https://photos.google.com/photo/abc");
+  photos_source->mutable_photos()->mutable_timestamp()->set_year(2025);
+  photos_source->mutable_photos()->mutable_timestamp()->set_month(10);
+  photos_source->mutable_photos()->mutable_timestamp()->set_day(15);
+  photos_source->mutable_photos()->mutable_timestamp()->set_hours(14);
+  photos_source->mutable_photos()->mutable_timestamp()->set_minutes(30);
+
+  // Add Gmail source without subject.
+  personal_context::proto::SourceReference* invalid_gmail_source =
+      entity.add_source_references();
+  invalid_gmail_source->mutable_gmail()
+      ->mutable_message_urls()
+      ->set_desktop_web_url("https://mail.google.com/mail/#inbox/456");
+  invalid_gmail_source->mutable_gmail()
+      ->mutable_message_urls()
+      ->set_mobile_web_url("https://mail.google.com/mail/mu/mp/#cv/Inbox/456");
+
+  // Add Photos source without timestamp.
+  personal_context::proto::SourceReference* invalid_photos_source =
+      entity.add_source_references();
+  invalid_photos_source->mutable_photos()->set_photos_url(
+      "https://photos.google.com/photo/def");
+
+  // Add source with invalid URL.
+  personal_context::proto::SourceReference* invalid_url_source =
+      entity.add_source_references();
+  invalid_url_source->mutable_gmail()
+      ->mutable_message_urls()
+      ->set_desktop_web_url("not-a-valid-url");
+  invalid_url_source->mutable_gmail()
+      ->mutable_message_urls()
+      ->set_mobile_web_url("not-a-valid-url");
+  invalid_url_source->mutable_gmail()->set_subject("Subject");
+
+  // Add empty source.
+  entity.add_source_references();
+
+  std::optional<EntityInstance> opt_result =
+      PersonalContextEntityToEntityInstance(entity);
+
+  ASSERT_TRUE(opt_result.has_value());
+  const EntityInstance& result = opt_result.value();
+  base::Time expected_timestamp;
+  ASSERT_TRUE(
+      base::Time::FromUTCString("2025-10-15 14:30:00", &expected_timestamp));
+  EntityInstance::PersonalContextRecordTypePayload payload{
+      .sources = {
+          Source{
+              .url = GetGmailSourceUrl(gmail_source->gmail()),
+              .metadata = GmailSourceMetadata{.title = "Order Confirmation"}},
+          Source{.url = GURL("https://photos.google.com/photo/abc"),
+                 .metadata =
+                     PhotosSourceMetadata{.timestamp = expected_timestamp}},
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+          Source{.url = GURL("https://mail.google.com/mail/#inbox/456"),
+                 .metadata = GmailSourceMetadata{.title = ""}},
+          Source{.url = GURL("https://photos.google.com/photo/def"),
+                 .metadata = PhotosSourceMetadata{}},
+#endif
+      }};
+  EXPECT_EQ(std::get<EntityInstance::PersonalContextRecordTypePayload>(
+                result.record_type_data()),
+            payload);
 }
 
 TEST(AutofillAiPersonalContextConverters,
@@ -379,6 +683,57 @@ TEST(AutofillAiPersonalContextConverters,
   EXPECT_EQ(AutofillEntityTypeToPersonalContextEntityType(
                 autofill::EntityType(kVehicle)),
             EntityType::VEHICLE);
+  EXPECT_EQ(AutofillEntityTypeToPersonalContextEntityType(
+                autofill::EntityType(kKnownTravelerNumber)),
+            EntityType::KNOWN_TRAVELER_NUMBER);
+}
+
+TEST(AutofillAiPersonalContextConverters, MaskSpiiEntityFields) {
+  // Passport
+  {
+    personal_context::proto::Entity entity;
+    entity.mutable_passport()->set_name("Jane Doe");
+    entity.mutable_passport()->set_number("P12345");
+    MaskSpiiEntityFields(entity);
+    EXPECT_EQ(entity.passport().name(), "Jane Doe");
+    EXPECT_EQ(entity.passport().number(), "45");
+  }
+  // Drivers License
+  {
+    personal_context::proto::Entity entity;
+    entity.mutable_drivers_license()->set_name("John Smith");
+    entity.mutable_drivers_license()->set_number("DL9876");
+    MaskSpiiEntityFields(entity);
+    EXPECT_EQ(entity.drivers_license().name(), "John Smith");
+    EXPECT_EQ(entity.drivers_license().number(), "76");
+  }
+  // National ID
+  {
+    personal_context::proto::Entity entity;
+    entity.mutable_national_id()->set_name("Alex Doe");
+    entity.mutable_national_id()->set_number("4658233983");
+    MaskSpiiEntityFields(entity);
+    EXPECT_EQ(entity.national_id().name(), "Alex Doe");
+    EXPECT_EQ(entity.national_id().number(), "983");
+  }
+  // Known Traveler Number
+  {
+    personal_context::proto::Entity entity;
+    entity.mutable_known_traveler_number()->set_name("Alice");
+    entity.mutable_known_traveler_number()->set_number("T12345678");
+    MaskSpiiEntityFields(entity);
+    EXPECT_EQ(entity.known_traveler_number().name(), "Alice");
+    EXPECT_EQ(entity.known_traveler_number().number(), "678");
+  }
+  // Non-SPII entity (Order) should not be modified
+  {
+    personal_context::proto::Entity entity;
+    entity.mutable_order()->set_order_id("ORD-12345");
+    entity.mutable_order()->set_merchant_name("Merchant");
+    MaskSpiiEntityFields(entity);
+    EXPECT_EQ(entity.order().order_id(), "ORD-12345");
+    EXPECT_EQ(entity.order().merchant_name(), "Merchant");
+  }
 }
 
 }  // namespace

@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_PAGE_ACTION_PAGE_ACTION_PROPERTIES_PROVIDER_H_
 
 #include "base/containers/flat_map.h"
+#include "base/containers/span.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "ui/actions/action_id.h"
@@ -54,6 +55,9 @@ class PageActionPropertiesProvider
   ~PageActionPropertiesProvider() override;
 
   bool Contains(actions::ActionId action_id) const;
+
+  // Returns element identifiers for all configured page actions.
+  static base::span<const ui::ElementIdentifier> GetAllElementIdentifiers();
 
   // PageActionPropertiesProviderInterface
   const PageActionProperties& GetProperties(

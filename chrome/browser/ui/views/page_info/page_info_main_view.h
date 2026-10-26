@@ -51,6 +51,7 @@ class PageInfoMainView : public views::View,
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kMainLayoutElementId);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kPermissionsElementId);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kMerchantTrustElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kSeeExtensionsButtonElementId);
 
   // Container view that fills the bubble width for button rows. Supports
   // updating the layout.
@@ -68,7 +69,9 @@ class PageInfoMainView : public views::View,
                    ChromePageInfoUiDelegate* ui_delegate,
                    PageInfoNavigationHandler* navigation_handler,
                    base::OnceClosure initialized_callback,
-                   bool allow_extended_site_info);
+                   bool allow_extended_site_info,
+                   base::RepeatingClosure open_extensions_menu_callback =
+                       base::RepeatingClosure());
   ~PageInfoMainView() override;
 
   // PageInfoUI implementations.
@@ -76,7 +79,6 @@ class PageInfoMainView : public views::View,
                          ChosenObjectInfoList chosen_object_info_list) override;
   void SetIdentityInfo(const IdentityInfo& identity_info) override;
   void SetPageFeatureInfo(const PageFeatureInfo& info) override;
-  void SetAdPersonalizationInfo(const AdPersonalizationInfo& info) override;
   void SetCookieInfo(const CookiesInfo& cookie_info) override;
 
   gfx::Size CalculatePreferredSize(
@@ -96,6 +98,10 @@ class PageInfoMainView : public views::View,
   const std::vector<raw_ptr<PermissionToggleRowView, VectorExperimental>>&
   GetToggleRowsForTesting() const {
     return toggle_rows_;
+  }
+
+  RichHoverButton* GetSeeExtensionsButtonForTesting() const {
+    return see_extensions_button_;
   }
 
  protected:
@@ -129,6 +135,9 @@ class PageInfoMainView : public views::View,
   // the label depending on the number of visible permissions.
   void UpdateResetButton(const PermissionInfoList& permission_info_list);
 
+  // Handles clicks on the "Extensions" button in the site settings section.
+  void OnSeeExtensionsClicked();
+
   void OnMerchantTrustDataFetched(
       const GURL& url,
       std::optional<page_info::MerchantData> merchant_data);
@@ -137,8 +146,9 @@ class PageInfoMainView : public views::View,
   [[nodiscard]] std::unique_ptr<views::View> CreateAboutThisSiteButton(
       const page_info::proto::SiteInfo& info);
 
-  // Creates 'Ad personalization' button that opens a subpage.
-  [[nodiscard]] std::unique_ptr<views::View> CreateAdPersonalizationButton();
+  // Creates the warning banner view for suspicious sites.
+  [[nodiscard]] std::unique_ptr<views::View> CreateSuspiciousSiteBannerView(
+      const IdentityInfo& identity_info);
 
   // Creates 'Merchant trust' button.
   [[nodiscard]] std::unique_ptr<views::View> CreateMerchantTrustButton(
@@ -173,6 +183,9 @@ class PageInfoMainView : public views::View,
   // The button that opens the "Cookies" subpage.
   raw_ptr<RichHoverButton> cookie_button_ = nullptr;
 
+  // The button that opens the "Extensions" menu.
+  raw_ptr<RichHoverButton> see_extensions_button_ = nullptr;
+
   // The button that opens up "Site Settings".
   raw_ptr<RichHoverButton> site_settings_link_ = nullptr;
 
@@ -185,6 +198,9 @@ class PageInfoMainView : public views::View,
   // shown when at least of one the buttons is available.
   raw_ptr<views::View> extended_site_info_section_ = nullptr;
 
+  // Bubble header view containing the page title/URL.
+  raw_ptr<views::View> header_view_ = nullptr;
+
   // "About this site" button that opens a subpage.
   raw_ptr<views::View> about_this_site_section_ = nullptr;
 
@@ -194,9 +210,6 @@ class PageInfoMainView : public views::View,
   // The view that contains `SecurityInformationView` and a certificate button.
   raw_ptr<PageInfoSecurityContentView, AcrossTasksDanglingUntriaged>
       security_content_view_ = nullptr;
-
-  // "Ad personalization" button that opens a subpage.
-  raw_ptr<views::View> ads_personalization_section_ = nullptr;
 
 #if BUILDFLAG(IS_WIN) && BUILDFLAG(ENABLE_VR)
   // The view that contains ui related to features on a page, like a presenting
@@ -225,6 +238,8 @@ class PageInfoMainView : public views::View,
 
   raw_ptr<views::LabelButton, AcrossTasksDanglingUntriaged> reset_button_ =
       nullptr;
+
+  base::RepeatingClosure open_extensions_menu_callback_;
 
   base::WeakPtrFactory<PageInfoMainView> weak_factory_{this};
 };

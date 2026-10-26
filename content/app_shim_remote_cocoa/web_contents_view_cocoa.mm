@@ -20,9 +20,11 @@
 #include "ui/base/clipboard/clipboard_constants.h"
 #include "ui/base/clipboard/clipboard_util_mac.h"
 #include "ui/base/clipboard/custom_data_helper.h"
+#include "ui/base/cocoa/drag_permission.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/platform_event.h"
+#include "ui/gfx/geometry/clamp_float_geometry.h"
 #include "ui/gfx/image/image.h"
 #include "ui/resources/grit/ui_resources.h"
 
@@ -98,6 +100,15 @@ STATIC_ASSERT_ENUM(NSDragOperationCopy, ui::DragDropTypes::DRAG_COPY);
 STATIC_ASSERT_ENUM(NSDragOperationLink, ui::DragDropTypes::DRAG_LINK);
 STATIC_ASSERT_ENUM(NSDragOperationMove, ui::DragDropTypes::DRAG_MOVE);
 
+namespace {
+
+gfx::PointF GetSanitizedFlippedPoint(NSPoint point, CGFloat height) {
+  return gfx::PointF(gfx::ClampFloatGeometry(point.x),
+                     gfx::ClampFloatGeometry(height - point.y));
+}
+
+}  // namespace
+
 ////////////////////////////////////////////////////////////////////////////////
 // WebContentsViewCocoa
 
@@ -166,12 +177,12 @@ STATIC_ASSERT_ENUM(NSDragOperationMove, ui::DragDropTypes::DRAG_MOVE);
   NSPoint viewPoint = [self convertPoint:windowPoint fromView:nil];
   NSRect viewFrame = [self frame];
   info->location_in_view =
-      gfx::PointF(viewPoint.x, viewFrame.size.height - viewPoint.y);
+      GetSanitizedFlippedPoint(viewPoint, viewFrame.size.height);
 
   NSPoint screenPoint = [self.window convertPointToScreen:windowPoint];
   NSRect screenFrame = self.window.screen.frame;
   info->location_in_screen =
-      gfx::PointF(screenPoint.x, screenFrame.size.height - screenPoint.y);
+      GetSanitizedFlippedPoint(screenPoint, screenFrame.size.height);
 
   NSPasteboard* pboard = [nsInfo draggingPasteboard];
   NSArray<URLAndTitle*>* urls_and_titles =
@@ -231,8 +242,9 @@ STATIC_ASSERT_ENUM(NSDragOperationMove, ui::DragDropTypes::DRAG_MOVE);
                         image:(NSImage*)image
                        offset:(NSPoint)offset
                  isPrivileged:(BOOL)isPrivileged {
-  if (!_host)
+  if (!_host || !ui::IsDragSessionInitiationAllowed()) {
     return;
+  }
 
   NSPoint mouseLocation = [self.window mouseLocationOutsideOfEventStream];
   NSEvent* dragEvent = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDragged
@@ -315,10 +327,16 @@ STATIC_ASSERT_ENUM(NSDragOperationMove, ui::DragDropTypes::DRAG_MOVE);
   return _dragOperation;
 }
 
+- (void)draggingSession:(NSDraggingSession*)session
+       willBeginAtPoint:(NSPoint)screenPoint {
+  ui::SetDragSessionInProgress(true);
+}
+
 // Called when a drag initiated in our view ends.
 - (void)draggingSession:(NSDraggingSession*)session
            endedAtPoint:(NSPoint)screenPoint
               operation:(NSDragOperation)operation {
+  ui::SetDragSessionInProgress(false);
   if (!_host) {
     return;
   }
@@ -332,10 +350,14 @@ STATIC_ASSERT_ENUM(NSDragOperationMove, ui::DragDropTypes::DRAG_MOVE);
   // Flip the two points as per Cocoa's coordinate system.
   NSRect viewFrame = self.frame;
   NSRect screenFrame = self.window.screen.frame;
-  _host->EndDrag(
-      operation,
-      gfx::PointF(localPoint.x, viewFrame.size.height - localPoint.y),
-      gfx::PointF(screenPoint.x, screenFrame.size.height - screenPoint.y));
+
+  gfx::PointF local_point_f =
+      GetSanitizedFlippedPoint(localPoint, viewFrame.size.height);
+
+  gfx::PointF screen_point_f =
+      GetSanitizedFlippedPoint(screenPoint, screenFrame.size.height);
+
+  _host->EndDrag(operation, local_point_f, screen_point_f);
 
   // The drag is complete. Disconnect the drag source.
   [_dragSource webContentsIsGone];
@@ -494,7 +516,11 @@ STATIC_ASSERT_ENUM(NSDragOperationMove, ui::DragDropTypes::DRAG_MOVE);
   if (_willSetWebContentsOccludedAfterDelay)
     return;
 
-  // Coalesce one second's worth of occlusion updates.
+  // Coalesce one second's worth of occlusion updates.  Note: the occlusion hide
+  // delay in `views::NativeWidgetMacNSWindowHost::OnWindowOcclusionChanged`
+  // should stay longer than this delay. Update it if this changes. (This is not
+  // a correctness issue, which is why it's not enforced by something stronger
+  // than a comment).
   const NSTimeInterval kOcclusionUpdateDelayInSeconds = 1.0;
   [self performSelector:@selector(performDelayedSetWebContentsOccluded)
              withObject:nil
@@ -543,6 +569,13 @@ STATIC_ASSERT_ENUM(NSDragOperationMove, ui::DragDropTypes::DRAG_MOVE);
         removeObserver:self
                   name:NSWindowDidChangeOcclusionStateNotification
                 object:oldWindow];
+    if (oldWindow != newWindow && [oldWindow isOccluded]) {
+      // If removing this view leaves `oldWindow` without any web contents, an
+      // update pass will clear its occluded state (whereas a synchronous tab
+      // switch will attach the replacement before the pass runs).
+      [[WebContentsOcclusionCheckerMac sharedInstance]
+          scheduleOcclusionStateUpdates];
+    }
   }
 
   if (newWindow) {
@@ -562,14 +595,17 @@ STATIC_ASSERT_ENUM(NSDragOperationMove, ui::DragDropTypes::DRAG_MOVE);
 }
 
 - (void)viewDidMoveToWindow {
+  [super viewDidMoveToWindow];
   [self updateWebContentsVisibility];
 }
 
 - (void)viewDidHide {
+  [super viewDidHide];
   [self updateWebContentsVisibility];
 }
 
 - (void)viewDidUnhide {
+  [super viewDidUnhide];
   [self updateWebContentsVisibility];
 }
 

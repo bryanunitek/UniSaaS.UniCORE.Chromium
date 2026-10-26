@@ -17,8 +17,8 @@
 #include <vector>
 
 #include "base/lazy_instance.h"
-#include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/sanitized_object.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
@@ -92,7 +92,7 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
                                         public ui::WindowEventTarget,
                                         public ui::AXFragmentRootDelegateWin {
   // TODO(https://crbug.com/495981317): Remove this macro.
-  ADVANCED_MEMORY_SAFETY_CHECKS();
+  SANITIZED_OBJECT();
 
  public:
   // See WindowImpl for details on |debugging_id|.
@@ -116,6 +116,9 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
   virtual void CloseNow();
 
   void DestroyHandler();
+
+  // Delete `this` if `in_wnd_proc_depth_` is 0.
+  void DeleteIfStackUnwound();
 
   virtual gfx::Rect GetWindowBoundsInScreen() const;
   virtual gfx::Rect GetClientAreaBoundsInScreen() const;
@@ -286,6 +289,8 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
 
  private:
   friend class ::views::test::DesktopWindowTreeHostWinTestApi;
+
+  class ScopedWndProcDepth;
 
   using TouchIDs = std::set<DWORD>;
   enum class DwmFrameState { kOff, kOn };
@@ -927,9 +932,11 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
 
   bool delete_pending_ = false;
 
-  // Returns true if the message handler has been destroyed, and CHECKs that
-  // kDeferHWNDMessageHandlerDestruction is not enabled in that case.
-  static bool IsDestroyed(const base::WeakPtr<HWNDMessageHandler>& ref);
+  // Tracks how many instances of OnWndProc are on the stack.
+  int in_wnd_proc_depth_ = 0;
+
+  // Returns true if the message handler is pending deletion.
+  bool IsDestroyed() const;
 
   // The WeakPtrFactories below (one inside the
   // CR_MSG_MAP_CLASS_DECLARATIONS macro and autohide_factory_) must

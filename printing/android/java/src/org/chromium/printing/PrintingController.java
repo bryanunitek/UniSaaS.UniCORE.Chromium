@@ -4,10 +4,7 @@
 
 package org.chromium.printing;
 
-import android.os.ParcelFileDescriptor;
-
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.build.annotations.Nullable;
 
 /**
  * This interface describes a class which is responsible of talking to the printing backend.
@@ -20,32 +17,6 @@ import org.chromium.build.annotations.Nullable;
  */
 @NullMarked
 public interface PrintingController {
-    /**
-     * @return Dots Per Inch (DPI) of the currently selected printer.
-     */
-    int getDpi();
-
-    /**
-     * @return The ParcelFileDescriptor of the file into which Chromium will write the PDF.
-     */
-    @Nullable ParcelFileDescriptor getParcelFileDescriptor();
-
-    /**
-     * @return The media height in mils (thousands of an inch).
-     */
-    int getPageHeight();
-
-    /**
-     * @return The media width in mils (thousands of an inch).
-     */
-    int getPageWidth();
-
-    /**
-     * @return The individual page numbers of the document to be printed, of null if all pages are
-     *         to be printed.  The numbers are zero indexed.
-     */
-    int @Nullable [] getPageNumbers();
-
     /**
      * @return If the controller is busy.
      */
@@ -92,9 +63,14 @@ public interface PrintingController {
     /**
      * Starts printing, provided that the current object already has sufficient data to start the
      * process. (using {@link #setPendingPrint(Printable, PrintManagerDelegate)} for example)
+     *
+     * <p>If printing cannot be started (e.g. the Activity is finishing or destroyed, or the
+     * framework fails to initiate the print job), the callback set via {@link
+     * #setPendingPrintCallback(Runnable)} is invoked immediately. If the controller is already
+     * busy, this call is a no-op and the pending callback is neither consumed nor invoked.
      */
     void startPendingPrint();
 
-    /** Sets the callback to be run when the print dialog is completed or closed. */
+    /** Sets the callback to be run when the print dialog is completed, closed, or fails to open. */
     void setPendingPrintCallback(Runnable callback);
 }

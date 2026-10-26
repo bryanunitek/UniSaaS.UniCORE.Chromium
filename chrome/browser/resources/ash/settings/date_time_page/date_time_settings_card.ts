@@ -16,19 +16,19 @@ import '../os_settings_page/settings_card.js';
 import '../settings_shared.css.js';
 import './timezone_selector.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {isChild} from '../common/load_time_booleans.js';
 import {RouteOriginMixin} from '../common/route_origin_mixin.js';
+import type {PageCallbackRouter as DateTimePageCallbackRouter, PageHandlerRemote as DateTimePageHandlerRemote} from '../mojom-webui/date_time_handler.mojom-webui.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
-import type {Route} from '../router.js';
 
 import {DateTimeBrowserProxy} from './date_time_browser_proxy.js';
-import type {DateTimePageCallbackRouter, DateTimePageHandlerRemote} from './date_time_browser_proxy.js';
 import {getTemplate} from './date_time_settings_card.html.js';
 
 const DateTimeSettingsCardElementBase =
@@ -81,7 +81,7 @@ export class DateTimeSettingsCardElement extends
     };
   }
 
-  activeTimeZoneDisplayName: string;
+  declare activeTimeZoneDisplayName: string;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -89,9 +89,9 @@ export class DateTimeSettingsCardElement extends
     Setting.kChangeTimeZone,
   ]);
 
-  private canSetDateTime_: boolean;
-  private shouldShowManagedByParentIcon_: boolean;
-  private timeZoneSettingSublabel_: string;
+  declare private canSetDateTime_: boolean;
+  declare private shouldShowManagedByParentIcon_: boolean;
+  declare private timeZoneSettingSublabel_: string;
 
   /**
    * Returns the browser proxy page handler (to invoke functions).

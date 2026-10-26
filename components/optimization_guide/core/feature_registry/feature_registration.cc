@@ -6,9 +6,9 @@
 
 #include "base/feature_list.h"
 #include "components/optimization_guide/core/feature_registry/enterprise_policy_registry.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/feature_registry/mqls_feature_registry.h"
 #include "components/optimization_guide/core/feature_registry/settings_ui_registry.h"
-#include "components/optimization_guide/core/model_execution/feature_keys.h"
 #include "components/optimization_guide/proto/features/common_quality_data.pb.h"
 #include "components/optimization_guide/proto/model_quality_service.pb.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -62,6 +62,11 @@ const char kChromeSuggestionsSettings[] =
     "contextual_cueing.chrome_suggestions_settings";
 
 const char kGeminiSettings[] = "browser.gemini_settings";
+
+// LINT.IfChange(FindAndFillWithGeminiSettings)
+const char kFindAndFillWithGeminiSettings[] =
+    "autofill.personal_context.find_and_fill_with_gemini_settings";
+// LINT.ThenChange(//chrome/browser/ui/android/autofill/internal/java/src/org/chromium/chrome/browser/ui/autofill/AtMemoryBottomSheetMediator.java:FindAndFillWithGeminiSettings)
 }  // namespace prefs
 
 namespace features {
@@ -71,16 +76,13 @@ BASE_FEATURE(kComposeMqlsLogging, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kWallpaperSearchMqlsLogging, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kHistorySearchMqlsLogging, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kHistorySearchMqlsLogging, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kProductSpecificationsMqlsLogging,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kFormsClassificationsMqlsLogging,
-             BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) ||
-                     BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
-                 ? base::FEATURE_ENABLED_BY_DEFAULT
-                 : base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kPasswordChangeSubmissionMqlsLogging,
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -313,11 +315,13 @@ void RegisterContextualCueing() {
 void RegisterAtMemory() {
   const char kAtMemoryName[] = "AtMemory";
 
-  // TODO: b/524157152 - Add enterprise policy.
+  EnterprisePolicyPref enterprise_policy =
+      EnterprisePolicyRegistry::GetInstance().Register(
+          prefs::kFindAndFillWithGeminiSettings);
 
   auto mqls_metadata = std::make_unique<MqlsFeatureMetadata>(
       kAtMemoryName, proto::LogAiDataRequest::FeatureCase::kAtMemory,
-      /*enterprise_policy=*/std::nullopt, &features::kAtMemoryMqlsLogging,
+      enterprise_policy, &features::kAtMemoryMqlsLogging,
       FeedbackUnspecified());
   MqlsFeatureRegistry::GetInstance().Register(std::move(mqls_metadata));
 }
@@ -349,6 +353,7 @@ void RegisterGenAiFeatures(PrefRegistrySimple* pref_registry) {
     features_registered = true;
   }
   EnterprisePolicyRegistry::GetInstance().RegisterProfilePrefs(pref_registry);
+  prefs::RegisterSettingsUiPrefs(pref_registry);
 }
 
 }  // namespace optimization_guide

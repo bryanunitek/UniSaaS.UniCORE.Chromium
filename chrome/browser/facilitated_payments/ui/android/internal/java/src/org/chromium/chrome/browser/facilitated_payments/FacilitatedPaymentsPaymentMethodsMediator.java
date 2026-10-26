@@ -34,15 +34,19 @@ import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymen
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PaymentAppProperties.PAYMENT_APP_ICON;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PaymentAppProperties.PAYMENT_APP_NAME;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PixAccountLinkingPromptProperties.ACCEPT_BUTTON_CALLBACK;
+import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PixAccountLinkingPromptProperties.ACCOUNT_EMAIL;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PixAccountLinkingPromptProperties.DECLINE_BUTTON_CALLBACK;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PixAccountLinkingPromptProperties.DECLINE_BUTTON_TEXT_ID;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PixAccountLinkingPromptProperties.SETTINGS_LINK_CALLBACK;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.PixAccountLinkingPromptProperties.VIDEO_LINK_CALLBACK;
+import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.ProgressScreenProperties.MESSAGE_TEXT;
+import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.ProgressScreenProperties.SHOW_GPAY_ICON;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SCREEN;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SCREEN_VIEW_MODEL;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SURVIVES_NAVIGATION;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SequenceScreen.ACCOUNT_LINKING_SUCCESS_SCREEN;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SequenceScreen.ERROR_SCREEN;
+import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SequenceScreen.EWALLET_ACCOUNT_LINKING_PROMPT;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SequenceScreen.FOP_SELECTOR;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SequenceScreen.PIX_ACCOUNT_LINKING_PROMPT;
 import static org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsProperties.SequenceScreen.PROGRESS_SCREEN;
@@ -69,6 +73,7 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.autofill.AutofillImageFetcherFactory;
 import org.chromium.chrome.browser.autofill.AutofillUiUtils.IconSpecs;
 import org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPaymentMethodsComponent.Delegate;
@@ -82,15 +87,22 @@ import org.chromium.chrome.browser.facilitated_payments.FacilitatedPaymentsPayme
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.SnackbarController;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManagerProvider;
 import org.chromium.components.autofill.ImageSize;
 import org.chromium.components.autofill.ImageType;
 import org.chromium.components.autofill.payments.AccountType;
 import org.chromium.components.autofill.payments.BankAccount;
 import org.chromium.components.autofill.payments.Ewallet;
+import org.chromium.components.facilitated_payments.core.metrics.AccountLinkingPromptUserAction;
+import org.chromium.components.facilitated_payments.core.metrics.FacilitatedPaymentsType;
 import org.chromium.components.facilitated_payments.core.ui_utils.FopSelectorAction;
 import org.chromium.components.facilitated_payments.core.ui_utils.PaymentLinkFopSelectorAction;
 import org.chromium.components.facilitated_payments.core.ui_utils.UiEvent;
 import org.chromium.components.payments.ui.InputProtector;
+import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -106,9 +118,11 @@ import java.util.Set;
  * reacts to events like clicks.
  */
 @NullMarked
-class FacilitatedPaymentsPaymentMethodsMediator {
+class FacilitatedPaymentsPaymentMethodsMediator implements SnackbarController {
     static final String PIX_BANK_ACCOUNT_TRANSACTION_LIMIT = "500";
     static final int STRIKE_THRESHOLD_FOR_HARD_DECLINE = 2;
+    static final String DEFAULT_PIX_ACCOUNT_LINKING_VIDEO_URL =
+            "https://www.youtube.com/watch?v=zXMuvna_X4c";
 
     // This histogram name should be in sync with the one in
     // components/facilitated_payments/core/metrics/facilitated_payments_metrics.cc:LogPixFopSelected.
@@ -127,24 +141,82 @@ class FacilitatedPaymentsPaymentMethodsMediator {
     static final String PAYMENT_LINK_FOP_SELECTOR_TYPES_USER_ACTION_HISTOGRAM =
             "FacilitatedPayments.{PaymentLinkFopSelectorTypes}.FopSelector.UserAction";
 
+    @VisibleForTesting
+    static final String PIX_ACCOUNT_LINKING_VIDEO_LINK_CLICKED_HISTOGRAM =
+            "FacilitatedPayments.Pix.AccountLinking.VideoLinkClicked";
+
     private Context mContext;
     private PropertyModel mModel;
     private Delegate mDelegate;
     private Profile mProfile;
+    private @Nullable WindowAndroid mWindowAndroid;
+    private @Nullable SnackbarManager mSnackbarManager;
     private InputProtector mInputProtector = new InputProtector();
+    // Used to debounce duplicate/outdated UI events. After a user has accepted/declined
+    // the prompt, there is a brief period where new input events (e.g., a second tap, or
+    // a swipe gesture) are still processed by the UI system, which should be ignored.
+    private boolean mActionAlreadyTaken;
 
     @Initializer
-    void initialize(Context context, PropertyModel model, Delegate delegate, Profile profile) {
+    void initialize(
+            Context context,
+            PropertyModel model,
+            Delegate delegate,
+            Profile profile,
+            @Nullable WindowAndroid windowAndroid) {
         mContext = context;
         mModel = model;
         mDelegate = delegate;
         mProfile = profile;
+        mWindowAndroid = windowAndroid;
+    }
+
+    void setSnackbarManagerForTesting(SnackbarManager snackbarManager) {
+        mSnackbarManager = snackbarManager;
     }
 
     boolean isInLandscapeMode() {
         return mContext.getResources().getConfiguration().orientation
                 == Configuration.ORIENTATION_LANDSCAPE;
     }
+
+    void showAccountLinkingFailureNotification(@FacilitatedPaymentsType int fopType) {
+        SnackbarManager snackbarManager = mSnackbarManager;
+        if (snackbarManager == null && mWindowAndroid != null) {
+            snackbarManager = SnackbarManagerProvider.from(mWindowAndroid);
+        }
+        if (snackbarManager == null) {
+            return;
+        }
+
+        int messageId;
+        int umaMetric;
+
+        switch (fopType) {
+            case FacilitatedPaymentsType.PIX:
+                messageId = R.string.pix_account_linking_error_footer_message;
+                umaMetric = Snackbar.UMA_FACILITATED_PAYMENTS_PIX_ACCOUNT_LINKING_ERROR;
+                break;
+            default:
+                assert false
+                        : "Unsupported payment type for account linking failure notification: "
+                                + fopType;
+                return;
+        }
+
+        Snackbar snackbar =
+                Snackbar.make(
+                        mContext.getString(messageId), this, Snackbar.TYPE_NOTIFICATION, umaMetric);
+        // Allow multi-line text so longer error messages for any payment type are not truncated.
+        snackbar.setDefaultLines(false);
+        snackbarManager.showSnackbar(snackbar);
+    }
+
+    @Override
+    public void onAction(@Nullable Object actionData) {}
+
+    @Override
+    public void onDismissNoAction(@Nullable Object actionData) {}
 
     void showSheetForPix(List<BankAccount> bankAccounts) {
         mInputProtector.markShowTime();
@@ -215,7 +287,8 @@ class FacilitatedPaymentsPaymentMethodsMediator {
         mInputProtector.markShowTime();
     }
 
-    void showProgressScreen() {
+    /** Displays a progress screen in a bottom sheet. */
+    void showProgressScreen(@ProgressScreenType int type) {
         // The {@link VISIBLE_STATE} of {@link SHOWN} has 2 functions:
         // 1. If the bottom sheet is not open, i.e. {@code VISIBLE_STATE = HIDDEN}, setting {@code
         // VISIBLE_STATE = SHOWN} opens and shows a new screen.
@@ -227,6 +300,21 @@ class FacilitatedPaymentsPaymentMethodsMediator {
         // again.
         mModel.set(VISIBLE_STATE, SWAPPING_SCREEN);
         mModel.set(SCREEN, PROGRESS_SCREEN);
+        String progressText =
+                switch (type) {
+                    case ProgressScreenType.PAYMENT ->
+                            mContext.getString(R.string.pix_payment_progress_screen_message);
+                    case ProgressScreenType.ACCOUNT_LINKING -> "";
+                    default -> "";
+                };
+        boolean showGpayIcon =
+                switch (type) {
+                    case ProgressScreenType.PAYMENT -> true;
+                    case ProgressScreenType.ACCOUNT_LINKING -> false;
+                    default -> false;
+                };
+        mModel.get(SCREEN_VIEW_MODEL).set(MESSAGE_TEXT, progressText);
+        mModel.get(SCREEN_VIEW_MODEL).set(SHOW_GPAY_ICON, showGpayIcon);
         mModel.set(SURVIVES_NAVIGATION, false);
         mModel.set(VISIBLE_STATE, SHOWN);
     }
@@ -258,20 +346,53 @@ class FacilitatedPaymentsPaymentMethodsMediator {
     }
 
     public void onUiEvent(@UiEvent int uiEvent) {
+        int screen = mModel.get(SCREEN);
+        if (screen == EWALLET_ACCOUNT_LINKING_PROMPT || screen == PIX_ACCOUNT_LINKING_PROMPT) {
+            int fopType =
+                    screen == EWALLET_ACCOUNT_LINKING_PROMPT
+                            ? FacilitatedPaymentsType.EWALLET
+                            : FacilitatedPaymentsType.PIX;
+            if (uiEvent == UiEvent.NEW_SCREEN_SHOWN) {
+                mDelegate.onAccountLinkingPromptShown(fopType);
+            } else if (uiEvent == UiEvent.SCREEN_CLOSED_BY_USER) {
+                if (!mActionAlreadyTaken) {
+                    mDelegate.onAccountLinkingPromptAction(
+                            fopType, AccountLinkingPromptUserAction.DISMISSED);
+                }
+            }
+        }
         mDelegate.onUiEvent(uiEvent);
     }
 
-    void showPixAccountLinkingPrompt(int strikeCount) {
+    void showPixAccountLinkingPrompt(int strikeCount, String accountEmail) {
+        mActionAlreadyTaken = false;
         // Set {@link VISIBLE_STATE} to the placeholder state which is a no-op, and then update the
         // screen to the Pix account linking prompt. Finally update {@link VISIBLE_STATE} to show
         // the new screen.
         mModel.set(VISIBLE_STATE, SWAPPING_SCREEN);
         mModel.set(SCREEN, PIX_ACCOUNT_LINKING_PROMPT);
         // Set Pix account linking prompt properties and show the prompt.
+        mModel.get(SCREEN_VIEW_MODEL).set(ACCOUNT_EMAIL, accountEmail);
         mModel.get(SCREEN_VIEW_MODEL)
-                .set(ACCEPT_BUTTON_CALLBACK, v -> mDelegate.onPixAccountLinkingPromptAccepted());
+                .set(
+                        ACCEPT_BUTTON_CALLBACK,
+                        v -> {
+                            if (mActionAlreadyTaken) return;
+                            mActionAlreadyTaken = true;
+                            mDelegate.onAccountLinkingPromptAction(
+                                    FacilitatedPaymentsType.PIX,
+                                    AccountLinkingPromptUserAction.ACCEPTED);
+                        });
         mModel.get(SCREEN_VIEW_MODEL)
-                .set(DECLINE_BUTTON_CALLBACK, v -> mDelegate.onPixAccountLinkingPromptDeclined());
+                .set(
+                        DECLINE_BUTTON_CALLBACK,
+                        v -> {
+                            if (mActionAlreadyTaken) return;
+                            mActionAlreadyTaken = true;
+                            mDelegate.onAccountLinkingPromptAction(
+                                    FacilitatedPaymentsType.PIX,
+                                    AccountLinkingPromptUserAction.DECLINED);
+                        });
         int declineStringId =
                 strikeCount < STRIKE_THRESHOLD_FOR_HARD_DECLINE
                         ? R.string.pix_account_linking_prompt_decline_first_two_times
@@ -287,10 +408,65 @@ class FacilitatedPaymentsPaymentMethodsMediator {
                                     ChromeFeatureList.getFieldTrialParamByFeature(
                                             ChromeFeatureList.ENABLE_PIX_ACCOUNT_LINKING_NATIVE,
                                             "video_url_on_prompt");
-                            if (!TextUtils.isEmpty(videoUrl)) {
-                                openUrl(videoUrl);
+                            if (TextUtils.isEmpty(videoUrl)) {
+                                videoUrl = DEFAULT_PIX_ACCOUNT_LINKING_VIDEO_URL;
                             }
+                            openUrl(videoUrl);
+                            recordHistogramOnVideoLinkClicked();
                         });
+        // Prevent the bottom sheet from closing during page navigations.
+        mModel.set(SURVIVES_NAVIGATION, true);
+        mModel.set(VISIBLE_STATE, SHOWN);
+    }
+
+    void showAccountLinkingPrompt(
+            @FacilitatedPaymentsType int fopType, String fopDisplayName, int strikeCount) {
+        // TODO(crbug.com/532367369): Refactor Pix to also use this unified show method.
+        if (fopType != FacilitatedPaymentsType.EWALLET) return;
+
+        // Prevent resetting the prompt state if it's already visible to avoid double-logging
+        // metrics or re-initializing the UI, which could happen if the backend incorrectly
+        // calls show twice.
+        if (mModel.get(SCREEN) == EWALLET_ACCOUNT_LINKING_PROMPT) return;
+
+        mActionAlreadyTaken = false;
+        mModel.set(VISIBLE_STATE, SWAPPING_SCREEN);
+        mModel.set(SCREEN, EWALLET_ACCOUNT_LINKING_PROMPT);
+        mModel.get(SCREEN_VIEW_MODEL)
+                .set(
+                        FacilitatedPaymentsPaymentMethodsProperties
+                                .EwalletAccountLinkingPromptProperties.EWALLET_NAME,
+                        fopDisplayName);
+        mModel.get(SCREEN_VIEW_MODEL)
+                .set(
+                        FacilitatedPaymentsPaymentMethodsProperties
+                                .EwalletAccountLinkingPromptProperties.ACCEPT_BUTTON_CALLBACK,
+                        v -> {
+                            if (mActionAlreadyTaken) return;
+                            mActionAlreadyTaken = true;
+                            mDelegate.onAccountLinkingPromptAction(
+                                    fopType, AccountLinkingPromptUserAction.ACCEPTED);
+                        });
+        mModel.get(SCREEN_VIEW_MODEL)
+                .set(
+                        FacilitatedPaymentsPaymentMethodsProperties
+                                .EwalletAccountLinkingPromptProperties.DECLINE_BUTTON_CALLBACK,
+                        v -> {
+                            if (mActionAlreadyTaken) return;
+                            mActionAlreadyTaken = true;
+                            mDelegate.onAccountLinkingPromptAction(
+                                    fopType, AccountLinkingPromptUserAction.DECLINED);
+                        });
+        int declineStringId =
+                strikeCount < STRIKE_THRESHOLD_FOR_HARD_DECLINE
+                        ? R.string.ewallet_account_linking_prompt_action_not_now
+                        : R.string.ewallet_account_linking_prompt_action_no_thanks;
+        mModel.get(SCREEN_VIEW_MODEL)
+                .set(
+                        FacilitatedPaymentsPaymentMethodsProperties
+                                .EwalletAccountLinkingPromptProperties.DECLINE_BUTTON_TEXT_ID,
+                        declineStringId);
+
         // Prevent the bottom sheet from closing during page navigations.
         mModel.set(SURVIVES_NAVIGATION, true);
         mModel.set(VISIBLE_STATE, SHOWN);
@@ -590,7 +766,7 @@ class FacilitatedPaymentsPaymentMethodsMediator {
         RecordHistogram.recordEnumeratedHistogram(
                 histogramName,
                 FopSelectorAction.MANAGE_PAYMENT_METHODS_OPTION_SELECTED,
-                FopSelectorAction.MAX_VALUE);
+                FopSelectorAction.MAX_VALUE + 1);
     }
 
     private void recordManagePaymentMethodsOptionSelectedNonCardPaymentMethods(
@@ -598,14 +774,14 @@ class FacilitatedPaymentsPaymentMethodsMediator {
         RecordHistogram.recordEnumeratedHistogram(
                 histogramName,
                 PaymentLinkFopSelectorAction.MANAGE_PAYMENT_METHODS_OPTION_SELECTED,
-                PaymentLinkFopSelectorAction.MAX_VALUE);
+                PaymentLinkFopSelectorAction.MAX_VALUE + 1);
     }
 
     private void recordHistogramOnTurnOffPaymentPromptLinkClicked(String histogramName) {
         RecordHistogram.recordEnumeratedHistogram(
                 histogramName,
                 FopSelectorAction.TURN_OFF_PAYMENT_PROMPT_LINK_CLICKED,
-                FopSelectorAction.MAX_VALUE);
+                FopSelectorAction.MAX_VALUE + 1);
     }
 
     private void recordHistogramOnTurnOffPaymentPromptLinkNonCardPaymentMethodsClicked(
@@ -613,7 +789,12 @@ class FacilitatedPaymentsPaymentMethodsMediator {
         RecordHistogram.recordEnumeratedHistogram(
                 histogramName,
                 PaymentLinkFopSelectorAction.TURN_OFF_PAYMENT_PROMPT_LINK_CLICKED,
-                PaymentLinkFopSelectorAction.MAX_VALUE);
+                PaymentLinkFopSelectorAction.MAX_VALUE + 1);
+    }
+
+    private void recordHistogramOnVideoLinkClicked() {
+        RecordHistogram.recordBooleanHistogram(
+                PIX_ACCOUNT_LINKING_VIDEO_LINK_CLICKED_HISTOGRAM, true);
     }
 
     private String getEwalletFopSelectorUserActionHistogram(List<Ewallet> ewallets) {

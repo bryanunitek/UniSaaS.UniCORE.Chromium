@@ -8,7 +8,6 @@
 
 #include "base/numerics/safe_conversions.h"
 #include "base/time/time.h"
-#include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_util.h"
@@ -18,12 +17,9 @@
 #include "components/permissions/permission_uma_util.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/theme_provider.h"
-#include "ui/base/ui_base_features.h"
-#include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
+#include "ui/events/base_event_utils.h"
 #include "ui/gfx/animation/animation.h"
-#include "ui/gfx/color_utils.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
@@ -143,6 +139,16 @@ gfx::Size PermissionChipView::CalculatePreferredSize(
 bool PermissionChipView::OnMousePressed(const ui::MouseEvent& event) {
   observers_.Notify(&PermissionChipInterface::Observer::OnMousePressed);
   return MdTextButton::OnMousePressed(event);
+}
+
+void PermissionChipView::OnGestureEvent(ui::GestureEvent* event) {
+  // Map touch-device tap-down events to OnMousePressed(). This keeps the
+  // WebUIBubbleReopenSuppressor correctly primed for touchscreen
+  // interactions without needing to duplicate gesture-handling APIs.
+  if (event->type() == ui::EventType::kGestureTapDown) {
+    observers_.Notify(&PermissionChipInterface::Observer::OnMousePressed);
+  }
+  MdTextButton::OnGestureEvent(event);
 }
 
 void PermissionChipView::OnThemeChanged() {
@@ -370,6 +376,14 @@ void PermissionChipView::SetChipIcon(const gfx::VectorIcon* icon) {
   UpdateIconAndColors();
 }
 
+PermissionChipTheme PermissionChipView::GetThemeForTesting() const {
+  return theme();
+}
+
+std::u16string PermissionChipView::GetTextForTesting() const {
+  return std::u16string(GetText());
+}
+
 bool PermissionChipView::GetIsRequestForTesting() const {
   switch (theme()) {
     case PermissionChipTheme::kNormalVisibility:
@@ -409,12 +423,20 @@ void PermissionChipView::SetTooltipText(const std::u16string& tooltip) {
   views::View::SetTooltipText(tooltip);
 }
 
+std::u16string PermissionChipView::GetTooltipText() const {
+  return views::MdTextButton::GetTooltipText();
+}
+
 bool PermissionChipView::GetVisible() const {
   return views::View::GetVisible();
 }
 
 views::BubbleAnchor PermissionChipView::GetAnchor() {
   return views::BubbleAnchor(this);
+}
+
+void PermissionChipView::WaitForAnchor(base::OnceClosure callback) {
+  std::move(callback).Run();
 }
 
 namespace {
@@ -470,13 +492,15 @@ bool PermissionChipView::IsMouseHovered() const {
   return views::View::IsMouseHovered();
 }
 
-void PermissionChipView::SetPressedCallback(base::RepeatingClosure callback) {
+void PermissionChipView::SetPressedCallback(
+    base::RepeatingCallback<void(bool)> callback) {
   if (callback.is_null()) {
     views::Button::SetCallback(views::Button::PressedCallback());
   } else {
-    views::Button::SetCallback(base::BindRepeating(
-        [](base::RepeatingClosure cb, const ui::Event&) { cb.Run(); },
-        std::move(callback)));
+    views::Button::SetCallback(
+        base::BindRepeating([](base::RepeatingCallback<void(bool)> cb,
+                               const ui::Event& e) { cb.Run(!e.IsKeyEvent()); },
+                            std::move(callback)));
   }
 }
 
@@ -507,6 +531,17 @@ void PermissionChipView::UpdateForDividerVisibility(bool is_divider_visible,
 
 int PermissionChipView::GetIconViewWidth() const {
   return GetIconSize() + GetInsets().width();
+}
+
+void PermissionChipView::ExecuteForTesting() {
+  ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+                       ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
+                       ui::EF_LEFT_MOUSE_BUTTON);
+  NotifyClick(event);
+}
+
+void PermissionChipView::EndAnimationForTesting() {
+  animation_->End();
 }
 
 BEGIN_METADATA(PermissionChipView)

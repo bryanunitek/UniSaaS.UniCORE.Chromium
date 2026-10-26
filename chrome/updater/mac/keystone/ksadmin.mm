@@ -4,10 +4,11 @@
 
 #include "chrome/updater/mac/keystone/ksadmin.h"
 
-#include <stdio.h>
+#include <stddef.h>
 #include <sys/stat.h>
 
 #include <algorithm>
+#include <iostream>
 #include <map>
 #include <optional>
 #include <string>
@@ -21,6 +22,7 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_map.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -30,7 +32,6 @@
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_pump_type.h"
-#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/process/launch.h"
@@ -67,7 +68,7 @@ std::map<std::string, std::string> ParseCommandLine(int argc,
   std::string key;
   for (int i = 1; i < argc; ++i) {
     std::string arg(UNSAFE_TODO(argv[i]));
-    if (base::StartsWith(arg, "--")) {
+    if (arg.starts_with("--")) {
       key = arg.substr(2);
       size_t eq_idx = key.find('=');
       if (eq_idx == std::string::npos) {
@@ -76,7 +77,7 @@ std::map<std::string, std::string> ParseCommandLine(int argc,
         result[key.substr(0, eq_idx)] = key.substr(eq_idx + 1);
         key = "";
       }
-    } else if (base::StartsWith(arg, "-")) {
+    } else if (arg.starts_with('-')) {
       // Multiple short options could be combined together. For example,
       // command `ksadmin -pP com.google.Chrome` should print Chrome ticket.
       // Split the option substring into switches character by character.
@@ -137,25 +138,37 @@ bool HasSwitch(const std::string& arg,
   if (switches.contains(arg)) {
     return true;
   }
-  static const base::NoDestructor<
-      std::map<std::string, std::vector<std::string>>>
-      aliases{{
-          {kCommandDelete, {"d"}},
-          {kCommandInstall, {"i"}},
-          {kCommandList, {"l"}},
-          {kCommandKsadminVersion, {"k"}},
-          {kCommandPrintTag, {"G"}},
-          {kCommandPrintTickets, {"print", "p"}},
-          {kCommandRegister, {"r"}},
-          {kCommandSystemStore, {"S"}},
-          {kCommandUserInitiated, {"F"}},
-          {kCommandUserStore, {"U"}},
-      }};
-  if (!aliases->contains(arg)) {
+  static constexpr std::string_view kDeleteAliases[] = {"d"};
+  static constexpr std::string_view kInstallAliases[] = {"i"};
+  static constexpr std::string_view kListAliases[] = {"l"};
+  static constexpr std::string_view kKsadminVersionAliases[] = {"k"};
+  static constexpr std::string_view kPrintTagAliases[] = {"G"};
+  static constexpr std::string_view kPrintTicketsAliases[] = {"print", "p"};
+  static constexpr std::string_view kRegisterAliases[] = {"r"};
+  static constexpr std::string_view kSystemStoreAliases[] = {"S"};
+  static constexpr std::string_view kUserInitiatedAliases[] = {"F"};
+  static constexpr std::string_view kUserStoreAliases[] = {"U"};
+  static constexpr auto kAliases =
+      base::MakeFixedFlatMap<std::string_view,
+                             base::span<const std::string_view>>({
+          {kCommandDelete, kDeleteAliases},
+          {kCommandInstall, kInstallAliases},
+          {kCommandList, kListAliases},
+          {kCommandKsadminVersion, kKsadminVersionAliases},
+          {kCommandPrintTag, kPrintTagAliases},
+          {kCommandPrintTickets, kPrintTicketsAliases},
+          {kCommandRegister, kRegisterAliases},
+          {kCommandSystemStore, kSystemStoreAliases},
+          {kCommandUserInitiated, kUserInitiatedAliases},
+          {kCommandUserStore, kUserStoreAliases},
+      });
+
+  auto it = kAliases.find(arg);
+  if (it == kAliases.end()) {
     return false;
   }
-  for (const auto& alias : aliases->at(arg)) {
-    if (switches.contains(alias)) {
+  for (std::string_view alias : it->second) {
+    if (switches.contains(std::string(alias))) {
       return true;
     }
   }
@@ -164,8 +177,9 @@ bool HasSwitch(const std::string& arg,
 
 std::string SwitchValue(const std::string& arg,
                         const std::map<std::string, std::string>& switches) {
-  if (switches.contains(arg)) {
-    return switches.at(arg);
+  auto switches_it = switches.find(arg);
+  if (switches_it != switches.end()) {
+    return switches_it->second;
   }
   static constexpr auto kAliases =
       base::MakeFixedFlatMap<std::string_view, std::string_view>(
@@ -179,11 +193,13 @@ std::string SwitchValue(const std::string& arg,
            {kCommandVersionKey, "e"},
            {kCommandVersionPath, "a"},
            {kCommandXCPath, "x"}});
-  if (!kAliases.contains(arg)) {
+  auto alias_it = kAliases.find(arg);
+  if (alias_it == kAliases.end()) {
     return "";
   }
-  const std::string alias{kAliases.at(arg)};
-  return switches.contains(alias) ? switches.at(alias) : "";
+  const std::string alias{alias_it->second};
+  switches_it = switches.find(alias);
+  return switches_it != switches.end() ? switches_it->second : "";
 }
 
 enum class WriteBrandFileOption {
@@ -220,8 +236,7 @@ bool IsSystemShim() {
     return false;
   }
 
-  return base::StartsWith(
-      executable_path.value(),
+  return executable_path.value().starts_with(
       GetKeystoneFolderPath(UpdaterScope::kSystem)->value());
 }
 
@@ -447,7 +462,7 @@ bool KSAdminApp::MatchesXCPath(NSString* ticket_path) const {
     NSString* xcpath = base::SysUTF8ToNSString(xcpath_raw);
     xcpath = [xcpath stringByStandardizingPath];
     ticket_path = [ticket_path stringByStandardizingPath];
-    return static_cast<bool>([xcpath isEqual:ticket_path]);
+    return [xcpath isEqual:ticket_path];
   }
 }
 
@@ -586,7 +601,7 @@ void KSAdminApp::PrintUsage(const std::string& error_message) {
       "If neither -S nor -U are provided, ksadmin will try to deduce the\n"
       "correct store, but may return a ticket with a mismatching xcpath if\n"
       "tickets are present in both stores.\n";
-  printf("%s\n", usage_message.c_str());
+  std::cout << usage_message << "\n";
   Shutdown(error_message.empty() ? 0 : 1);
 }
 
@@ -743,13 +758,13 @@ void KSAdminApp::DoUpdateApp(UpdaterScope scope) {
       UpdateService::PolicySameVersionUpdate::kNotAllowed, /*language=*/{},
       base::BindRepeating([](const UpdateService::UpdateState& update_state) {
         if (update_state.state == UpdateService::UpdateState::State::kUpdated) {
-          printf("Finished updating (errors=%d reboot=%s)\n", 0, "YES");
+          std::cout << "Finished updating (errors=0 reboot=YES)\n";
         }
       }),
       base::BindOnce(
           [](base::OnceCallback<void(int)> cb, UpdateService::Result result) {
             if (result == UpdateService::Result::kSuccess) {
-              printf("Available updates: (\n)\n");
+              std::cout << "Available updates: (\n)\n";
               std::move(cb).Run(0);
             } else {
               LOG(ERROR) << "Error code: " << result;
@@ -791,18 +806,18 @@ void KSAdminApp::DoListAppUpdate(UpdaterScope scope) {
             if (result == UpdateService::Result::kSuccess) {
               // This output format must not be changed, because the Keystone
               // Registration Framework is expecting the exact format.
-              printf("Available updates: (\n");
+              std::cout << "Available updates: (\n";
               if (!update_check_result->next_version().empty()) {
-                printf("\t{\n"
-                       "\tkServerProductID = \"%s\";\n"
-                       "\tkServerDisplayVersion = \"%s\";\n"
-                       "\tkServerVersion = \"%s\";\n"
-                       "\t}\n",
-                       update_check_result->app_id().c_str(),
-                       update_check_result->next_version().c_str(),
-                       update_check_result->next_version().c_str());
+                std::cout << "\t{\n"
+                          << "\tkServerProductID = \""
+                          << update_check_result->app_id() << "\";\n"
+                          << "\tkServerDisplayVersion = \""
+                          << update_check_result->next_version() << "\";\n"
+                          << "\tkServerVersion = \""
+                          << update_check_result->next_version() << "\";\n"
+                          << "\t}\n";
               }
-              printf(")\n");
+              std::cout << ")\n";
               std::move(cb).Run(0);
             } else {
               LOG(ERROR) << "Error code: " << result;
@@ -850,9 +865,9 @@ int KSAdminApp::PrintKeystoneTag(UpdaterScope scope,
     KSTicket* ticket =
         [store objectForKey:[base::SysUTF8ToNSString(app_id) lowercaseString]];
     if (ticket) {
-      printf("%s\n", base::SysNSStringToUTF8([ticket determineTag]).c_str());
+      std::cout << base::SysNSStringToUTF8([ticket determineTag]) << "\n";
     } else {
-      printf("No ticket for %s\n", app_id.c_str());
+      std::cout << "No ticket for " << app_id << "\n";
       return 1;
     }
   }
@@ -885,8 +900,7 @@ void KSAdminApp::DoPrintTag(UpdaterScope scope) {
                 });
         if (it != std::end(states)) {
           KSTicket* ticket = TicketFromAppState(*it);
-          printf("%s\n",
-                 base::SysNSStringToUTF8([ticket determineTag]).c_str());
+          std::cout << base::SysNSStringToUTF8([ticket determineTag]) << "\n";
 
         } else {
           // Fallback to print tag from legacy Keystone tickets if there's no
@@ -901,7 +915,7 @@ void KSAdminApp::DoPrintTag(UpdaterScope scope) {
 }
 
 void KSAdminApp::PrintVersion() {
-  UNSAFE_TODO(printf("%s\n", kUpdaterVersion));
+  std::cout << kUpdaterVersion << "\n";
   Shutdown(0);
 }
 
@@ -914,8 +928,8 @@ bool KSAdminApp::PrintKeystoneTickets(UpdaterScope scope,
     if (app_id.empty()) {
       if (store.count > 0) {
         for (NSString* key in store) {
-          printf("%s\n",
-                 base::SysNSStringToUTF8([store[key] description]).c_str());
+          std::cout << base::SysNSStringToUTF8([store[key] description])
+                    << "\n";
         }
         return true;
       }
@@ -923,12 +937,12 @@ bool KSAdminApp::PrintKeystoneTickets(UpdaterScope scope,
       KSTicket* ticket = [store
           objectForKey:[base::SysUTF8ToNSString(app_id) lowercaseString]];
       if (ticket) {
-        printf("%s\n", base::SysNSStringToUTF8([ticket description]).c_str());
+        std::cout << base::SysNSStringToUTF8([ticket description]) << "\n";
         return true;
       }
     }
 
-    printf("No tickets.\n");
+    std::cout << "No tickets.\n";
     return false;
   }
 }
@@ -950,7 +964,7 @@ void KSAdminApp::DoPrintTickets(UpdaterScope scope) {
             continue;
           }
           KSTicket* ticket = TicketFromAppState(state);
-          printf("%s\n", base::SysNSStringToUTF8([ticket description]).c_str());
+          std::cout << base::SysNSStringToUTF8([ticket description]) << "\n";
           ticket_printed = true;
         }
 
@@ -983,7 +997,7 @@ void KSAdminApp::PrintXattrTagBrand() {
   }
 
   // Empty brand code is not an error.
-  printf("%s\n", tag_result->brand_code.c_str());
+  std::cout << tag_result->brand_code << "\n";
   Shutdown(0);
 }
 
@@ -1016,7 +1030,7 @@ void KSAdminApp::OnReadPkgTagContent(const std::string& tag_string) {
     return;
   }
 
-  printf("%s\n", tag_args.brand_code.c_str());
+  std::cout << tag_args.brand_code << "\n";
   Shutdown(0);
 }
 

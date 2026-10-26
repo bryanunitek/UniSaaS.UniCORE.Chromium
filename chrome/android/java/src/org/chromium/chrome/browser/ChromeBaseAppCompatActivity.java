@@ -40,7 +40,6 @@ import org.chromium.base.BundleUtils;
 import org.chromium.base.CommandLine;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.DeviceInfo;
-import org.chromium.base.FeatureList;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -53,6 +52,7 @@ import org.chromium.chrome.R;
 import org.chromium.chrome.browser.automotivetoolbar.AutomotiveBackButtonToolbarCoordinator;
 import org.chromium.chrome.browser.base.SplitChromeApplication;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.flags.ChromeFeatures;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.language.GlobalAppLocaleController;
 import org.chromium.chrome.browser.night_mode.GlobalNightModeStateProviderHolder;
@@ -208,14 +208,6 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
-        BundleUtils.restoreLoadedSplits(savedInstanceState);
-        if (savedInstanceState != null) {
-            Bundle fragmentsState = savedInstanceState.getBundle("android:support:fragments");
-            if (fragmentsState != null) {
-                setRecursiveClassLoader(
-                        fragmentsState, BundleUtils.getSplitCompatClassLoader());
-            }
-        }
         mInMultiWindowMode = isInMultiWindowMode();
 
         mEdgeToEdgeStateProvider = new EdgeToEdgeStateProvider(getWindow());
@@ -251,9 +243,10 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
                         mEdgeToEdgeStateProvider,
                         createSystemBarColorHelperSupplier(),
                         shouldDrawEdgeToEdgeOnCreate(),
-                        EdgeToEdgeUtils.isEdgeToEdgeEverywhereEnabled());
+                        canColorStatusBarWithEdgeToEdgeHelper(),
+                        canSetTransparentStatusBarWithoutDelegate());
 
-        if (EdgeToEdgeUtils.isEdgeToEdgeEverywhereEnabled()) {
+        if (canColorStatusBarWithEdgeToEdgeHelper()) {
             initializeSystemBarColors(mEdgeToEdgeManager.getEdgeToEdgeSystemBarColorHelper());
         }
 
@@ -279,7 +272,7 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
 
         if (NtpCustomizationUtils.isNtpThemeCustomizationEnabled()) {
             if (mNtpThemeStateObserver == null) {
-                mNtpThemeStateObserver = () -> recreate();
+                mNtpThemeStateObserver = this::recreate;
                 NtpThemeStateProvider.getInstance().addObserver(mNtpThemeStateObserver);
             }
         }
@@ -293,6 +286,16 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
             NtpThemeStateProvider.getInstance().removeObserver(mNtpThemeStateObserver);
             mNtpThemeStateObserver = null;
         }
+    }
+
+    /** Returns whether the edge-to-edge system bar helper may update the status bar color. */
+    protected boolean canColorStatusBarWithEdgeToEdgeHelper() {
+        return EdgeToEdgeUtils.isEdgeToEdgeEverywhereEnabled();
+    }
+
+    /** Returns whether the helper may make the status bar transparent without a delegate helper. */
+    protected boolean canSetTransparentStatusBarWithoutDelegate() {
+        return false;
     }
 
     /**
@@ -319,7 +322,8 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
                         new EdgeToEdgeControllerCreator(
                                 new WeakReference<Activity>(this),
                                 getInsetObserver(),
-                                this::ensureEdgeToEdgeController);
+                                this::ensureEdgeToEdgeController,
+                                /* supportsTopInset= */ false);
             }
         } else {
             ensureEdgeToEdgeController();
@@ -393,24 +397,6 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
         mActivityResultTracker.onSaveInstanceState(outState);
     }
 
-    // This method has different Nullness than Activity.onRestoreInstanceState().
-    @SuppressWarnings("NullAway")
-    @Override
-    protected void onRestoreInstanceState(@Nullable Bundle state) {
-        if (state != null) {
-            // Ensure that classes from previously loaded splits can be read from the bundle.
-            // https://crbug.com/40877199
-            ClassLoader splitClassLoader = BundleUtils.getSplitCompatClassLoader();
-            state.setClassLoader(splitClassLoader);
-            // See: https://cs.android.com/search?q=Activity.java%20symbol:onRestoreInstanceState
-            Bundle windowState = state.getBundle("android:viewHierarchyState");
-            if (windowState != null) {
-                windowState.setClassLoader(splitClassLoader);
-            }
-        }
-        super.onRestoreInstanceState(state);
-    }
-
     @Override
     public final void onMultiWindowModeChanged(
             boolean inMultiWindowMode, Configuration configuration) {
@@ -421,11 +407,7 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
     @Override
     public final void onMultiWindowModeChanged(boolean inMultiWindowMode) {
         // Some OEMs double-notify about multi-window mode changes (eg. Samsung tablets).
-        if (FeatureList.isNativeInitialized()
-                && ChromeFeatureList.isEnabled(ChromeFeatureList.AVOID_DOUBLE_MULTIWINDOW_CHANGES)
-                && mInMultiWindowMode == inMultiWindowMode) {
-            return;
-        }
+        if (mInMultiWindowMode == inMultiWindowMode) return;
         mInMultiWindowMode = inMultiWindowMode;
         handleMultiWindowModeChanged(inMultiWindowMode);
         super.onMultiWindowModeChanged(inMultiWindowMode);
@@ -523,7 +505,7 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
      * #applyOverrideConfiguration(Configuration)}.
      *
      * @param baseContext The base {@link Context} attached to this class.
-     * @param overrideConfig The {@link Configuration} that will be passed to {@link}
+     * @param overrideConfig The {@link Configuration} that will be passed to {@link
      *     #applyOverrideConfiguration(Configuration)} if necessary.
      * @return True if any configuration overrides were applied, and false otherwise.
      */
@@ -617,7 +599,9 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
         // UI that's pre-inflated using a themed application context as part of CCT warmup.
         // Note: this should be called before any calls to `Window#getDecorView`.
         if (shouldApplyDynamicColors()) {
-            applyDynamicColors();
+            if (!maybeApplyCustomizedColors()) {
+                DynamicColors.applyToActivityIfAvailable(this);
+            }
         }
 
         // TODO(https://crbug.com/392634251): Explore setting elegantTextHeight to 'true' on older
@@ -683,14 +667,19 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
 
     @Override
     public void setContentView(@LayoutRes int layoutResID) {
-        if (DeviceInfo.isAutomotive()
-                && getAutomotiveToolbarImplementation()
-                        == AutomotiveToolbarImplementation.WITH_TOOLBAR_VIEW) {
-            super.setContentView(AutomotiveUtils.getAutomotiveLayoutWithBackButtonToolbar(this));
-            setAutomotiveToolbarBackButtonAction();
-            ViewStub stub = findViewById(R.id.original_layout);
+        if (isAutomotiveWithToolbarView()) {
+            View automotiveLayout = inflateAutomotiveToolbarLayout();
+            ViewStub stub = automotiveLayout.findViewById(R.id.original_layout);
             stub.setLayoutResource(layoutResID);
             stub.inflate();
+
+            if (wrapContentWithEdgeToEdgeLayout()) {
+                automotiveLayout =
+                        ensureEdgeToEdgeLayoutCoordinator().wrapContentView(automotiveLayout);
+            }
+            super.setContentView(automotiveLayout);
+
+            setAutomotiveToolbarBackButtonAction();
         } else if (wrapContentWithEdgeToEdgeLayout()) {
             FrameLayout baseLayout = new FrameLayout(this);
             super.setContentView(ensureEdgeToEdgeLayoutCoordinator().wrapContentView(baseLayout));
@@ -702,58 +691,75 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
 
     @Override
     public void setContentView(View view) {
-        if (DeviceInfo.isAutomotive()
-                && getAutomotiveToolbarImplementation()
-                        == AutomotiveToolbarImplementation.WITH_TOOLBAR_VIEW) {
-            super.setContentView(AutomotiveUtils.getAutomotiveLayoutWithBackButtonToolbar(this));
-            setAutomotiveToolbarBackButtonAction();
-            LinearLayout linearLayout = findViewById(R.id.automotive_base_linear_layout);
+        boolean showToolbarOnAutomotive = isAutomotiveWithToolbarView();
+        if (showToolbarOnAutomotive) {
+            View automotiveLayout = inflateAutomotiveToolbarLayout();
+            LinearLayout linearLayout =
+                    automotiveLayout.findViewById(R.id.automotive_base_linear_layout);
             linearLayout.addView(view, LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
-        } else if (wrapContentWithEdgeToEdgeLayout()) {
-            super.setContentView(ensureEdgeToEdgeLayoutCoordinator().wrapContentView(view));
-        } else {
-            super.setContentView(view);
+            view = automotiveLayout;
         }
+
+        if (wrapContentWithEdgeToEdgeLayout()) {
+            view = ensureEdgeToEdgeLayoutCoordinator().wrapContentView(view);
+        }
+        super.setContentView(view);
+
+        if (showToolbarOnAutomotive) setAutomotiveToolbarBackButtonAction();
     }
 
     @Override
     public void setContentView(View view, ViewGroup.LayoutParams params) {
-        if (DeviceInfo.isAutomotive()
-                && getAutomotiveToolbarImplementation()
-                        == AutomotiveToolbarImplementation.WITH_TOOLBAR_VIEW) {
-            super.setContentView(AutomotiveUtils.getAutomotiveLayoutWithBackButtonToolbar(this));
-            setAutomotiveToolbarBackButtonAction();
-            LinearLayout linearLayout = findViewById(R.id.automotive_base_linear_layout);
+        boolean showToolbarOnAutomotive = isAutomotiveWithToolbarView();
+        if (showToolbarOnAutomotive) {
+            View automotiveLayout = inflateAutomotiveToolbarLayout();
+            LinearLayout linearLayout =
+                    automotiveLayout.findViewById(R.id.automotive_base_linear_layout);
             linearLayout.setLayoutParams(params);
             linearLayout.addView(view, LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
-        } else if (wrapContentWithEdgeToEdgeLayout()) {
-            super.setContentView(ensureEdgeToEdgeLayoutCoordinator().wrapContentView(view, params));
-        } else {
-            super.setContentView(view, params);
+            view = automotiveLayout;
         }
+
+        if (wrapContentWithEdgeToEdgeLayout()) {
+            view = ensureEdgeToEdgeLayoutCoordinator().wrapContentView(view, params);
+        }
+        super.setContentView(view, params);
+
+        if (showToolbarOnAutomotive) setAutomotiveToolbarBackButtonAction();
     }
 
     @Override
     public void addContentView(View view, ViewGroup.LayoutParams params) {
-        if (DeviceInfo.isAutomotive()
-                && params.width == MATCH_PARENT
-                && params.height == MATCH_PARENT) {
-            ViewGroup automotiveLayout =
-                    (ViewGroup)
-                            getLayoutInflater()
-                                    .inflate(
-                                            AutomotiveUtils
-                                                    .getAutomotiveLayoutWithBackButtonToolbar(this),
-                                            null);
-            super.addContentView(
-                    automotiveLayout, new LinearLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
-            setAutomotiveToolbarBackButtonAction();
+        boolean showToolbarOnAutomotive =
+                DeviceInfo.isAutomotive()
+                        && params.width == MATCH_PARENT
+                        && params.height == MATCH_PARENT;
+
+        if (showToolbarOnAutomotive) {
+            ViewGroup automotiveLayout = (ViewGroup) inflateAutomotiveToolbarLayout();
             automotiveLayout.addView(view, params);
-        } else if (wrapContentWithEdgeToEdgeLayout()) {
+            view = automotiveLayout;
+            params = new LinearLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT);
+        }
+
+        if (wrapContentWithEdgeToEdgeLayout()) {
             super.setContentView(ensureEdgeToEdgeLayoutCoordinator().wrapContentView(view, params));
         } else {
             super.addContentView(view, params);
         }
+
+        if (showToolbarOnAutomotive) setAutomotiveToolbarBackButtonAction();
+    }
+
+    private boolean isAutomotiveWithToolbarView() {
+        return DeviceInfo.isAutomotive()
+                && getAutomotiveToolbarImplementation()
+                        == AutomotiveToolbarImplementation.WITH_TOOLBAR_VIEW;
+    }
+
+    private View inflateAutomotiveToolbarLayout() {
+        return getLayoutInflater()
+                .inflate(AutomotiveUtils.getAutomotiveLayoutWithBackButtonToolbar(this), null);
     }
 
     protected int getAutomotiveToolbarImplementation() {
@@ -805,7 +811,7 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
         return new InsetObserver(
                 new ImmutableWeakReference<>(getWindow().getDecorView().getRootView()),
                 new ImmutableWeakReference<>(this),
-                ChromeFeatureList.sAccountForSuppressedKeyboardInsets.isEnabled(),
+                ChromeFeatures.AccountForSuppressedKeyboardInsets.isEnabled(),
                 ChromeFeatureList.sEdgeToEdgeExtraLogs.isEnabled());
     }
 
@@ -813,9 +819,7 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
         Toolbar backButtonToolbarForAutomotive = findViewById(R.id.back_button_toolbar);
         if (backButtonToolbarForAutomotive != null) {
             backButtonToolbarForAutomotive.setNavigationOnClickListener(
-                    backButtonClick -> {
-                        getOnBackPressedDispatcher().onBackPressed();
-                    });
+                    _ -> getOnBackPressedDispatcher().onBackPressed());
         }
         AutomotiveBackButtonToolbarCoordinator.hideBackButtonToolbar(this);
     }
@@ -825,34 +829,20 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
         return true;
     }
 
-    /** Applies dynamic colors or a selected color theme generated using DynamicColors API. */
-    private void applyDynamicColors() {
+    /**
+     * Applies a selected color theme generated using DynamicColors API if exists.
+     *
+     * @return whether a color theme has been applied.
+     */
+    protected boolean maybeApplyCustomizedColors() {
         @ColorInt
         Integer primaryColor =
                 NtpCustomizationUtils.getPrimaryColorFromCustomizedThemeColor(
                         this, /* checkDailyRefresh= */ true);
         if (primaryColor != null) {
             NtpCustomizationUtils.applyDynamicColorToActivity(this, primaryColor);
-        } else {
-            DynamicColors.applyToActivityIfAvailable(this);
+            return true;
         }
-    }
-
-    // Recursively sets the classloader on the given bundle and all nested bundles.
-    // Note: Iterating through a bundle can cause early unmarshalling, which can have side
-    // effects on framework-redirected data like intents (see crbug.com/527604007).
-    // It is safer to only call this on targeted nested bundles (like "android:support:fragments").
-    private static void setRecursiveClassLoader(Bundle bundle, ClassLoader classLoader) {
-        bundle.setClassLoader(classLoader);
-        for (String key : bundle.keySet()) {
-            try {
-                Object value = bundle.get(key);
-                if (value instanceof Bundle) {
-                    setRecursiveClassLoader((Bundle) value, classLoader);
-                }
-            } catch (Exception e) {
-                // Ignore any unmarshalling errors for unknown types.
-            }
-        }
+        return false;
     }
 }

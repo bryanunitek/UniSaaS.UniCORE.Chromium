@@ -4,15 +4,12 @@
 
 #include "chrome/browser/ui/safety_hub/abusive_notification_permissions_manager.h"
 
+#include "base/memory/scoped_refptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/engagement/site_engagement_service_factory.h"
-#include "chrome/browser/permissions/crowd_deny_fake_safe_browsing_database_manager.h"
-#include "chrome/browser/permissions/crowd_deny_preload_data.h"
 #include "chrome/browser/permissions/notifications_engagement_service_factory.h"
-#include "chrome/browser/permissions/permission_revocation_request.h"
-#include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
 #include "chrome/browser/ui/safety_hub/disruptive_notification_permissions_manager.h"
 #include "chrome/browser/ui/safety_hub/mock_safe_browsing_database_manager.h"
 #include "chrome/browser/ui/safety_hub/revoked_permissions_os_notification_display_manager.h"
@@ -30,22 +27,61 @@
 #include "components/content_settings/core/test/content_settings_test_utils.h"
 #include "components/permissions/constants.h"
 #include "components/permissions/notifications_engagement_service.h"
+#include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/content/browser/notification_content_detection/notification_content_detection_constants.h"
 #include "components/safe_browsing/core/browser/db/util.h"
+#include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
 #include "components/safe_browsing/core/browser/safe_browsing_metrics_collector.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/browser_context.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/origin.h"
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "chrome/browser/permissions/crowd_deny_fake_safe_browsing_database_manager.h"
+#include "chrome/browser/permissions/crowd_deny_preload_data.h"
+#include "chrome/browser/permissions/permission_revocation_request.h"
+#include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
+#endif
+
 namespace {
 
 const char url1[] = "https://example1.com";
 const char url2[] = "https://example2.com";
 const char url3[] = "https://example3.com";
 const char url4[] = "https://example4.com";
+
+class V5TestingDatabaseManager : public MockSafeBrowsingDatabaseManager {
+ public:
+  V5TestingDatabaseManager() = default;
+
+  bool CheckBrowseUrl(const GURL& gurl,
+                      const safe_browsing::SBThreatTypeSet& threat_types,
+                      Client* client,
+                      safe_browsing::CheckBrowseUrlType check_type) override {
+    if (client) {
+      v5_manager_from_client_ = client->GetV5GetHashProtocolManager();
+    }
+    return MockSafeBrowsingDatabaseManager::CheckBrowseUrl(gurl, threat_types,
+                                                           client, check_type);
+  }
+
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+  v5_manager_from_client() const {
+    return v5_manager_from_client_;
+  }
+
+ private:
+  ~V5TestingDatabaseManager() override = default;
+
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+      v5_manager_from_client_;
+};
 
 const int kTestMinSuspiciousCount = 2;
 const double kTestSiteEngagementCutOff = 50.0;
@@ -73,7 +109,8 @@ class MockRevokedPermissionsOSNotificationDisplayManager
 class AbusiveNotificationPermissionsManagerTest : public ::testing::Test {
  public:
   void SetUp() override {
-    mock_database_manager_ = new MockSafeBrowsingDatabaseManager();
+    mock_database_manager_ =
+        base::MakeRefCounted<MockSafeBrowsingDatabaseManager>();
     TestingProfile::Builder builder;
     builder.AddTestingFactory(
         RevokedPermissionsOSNotificationDisplayManagerFactory::GetInstance(),
@@ -153,8 +190,7 @@ class AbusiveNotificationPermissionsManagerTest : public ::testing::Test {
 
   // TODO(crbug/com/342210522): When we refactor utils to be cleaner, this
   // helper will no longer be necessary.
-  bool IsRevokedSettingValueRevoked(
-      std::string url) {
+  bool IsRevokedSettingValueRevoked(std::string url) {
     base::Value stored_value =
         safety_hub_util::GetRevokedAbusiveNotificationPermissionsSettingValue(
             hcsm(), GURL(url));
@@ -217,7 +253,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
   base::HistogramTester histogram_tester;
 
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   EXPECT_EQ(
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm()).size(),
       0u);
@@ -238,12 +275,16 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
 
   // Assert blocklist check count is recorded in UMA metrics.
   histogram_tester.ExpectUniqueSample(
-      safety_hub::kBlocklistCheckCountHistogramName, /* sample */ 2,
-      /* expected_count */ 1);
+      safety_hub::kBlocklistCheckCountHistogramName, /*sample=*/2,
+      /*expected_bucket_count=*/1);
   histogram_tester.ExpectUniqueSample(
       "SafeBrowsing.NotificationRevocationSource",
       safe_browsing::NotificationRevocationSource::kSocialEngineeringBlocklist,
-      /* expected_count */ 2);
+      /*expected_bucket_count=*/2);
+  histogram_tester.ExpectUniqueSample(
+      "Settings.SafetyHub.AbusiveNotificationPermissionRevocation.CheckResult",
+      AbusiveNotificationPermissionsManager::CheckResult::kPhishing,
+      /*expected_bucket_count=*/2);
 }
 
 TEST_F(AbusiveNotificationPermissionsManagerTest,
@@ -253,7 +294,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
   base::HistogramTester histogram_tester;
 
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   EXPECT_EQ(
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm()).size(),
       0u);
@@ -276,8 +318,28 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
 
   // Assert blocklist check count is recorded in UMA metrics.
   histogram_tester.ExpectUniqueSample(
-      safety_hub::kBlocklistCheckCountHistogramName, /* sample */ 2,
-      /* expected_count */ 1);
+      safety_hub::kBlocklistCheckCountHistogramName, /*sample=*/2,
+      /*expected_bucket_count=*/1);
+  histogram_tester.ExpectBucketCount(
+      "Settings.SafetyHub.AbusiveNotificationPermissionRevocation.CheckResult",
+      AbusiveNotificationPermissionsManager::CheckResult::kSafe, 1);
+  histogram_tester.ExpectBucketCount(
+      "Settings.SafetyHub.AbusiveNotificationPermissionRevocation.CheckResult",
+      AbusiveNotificationPermissionsManager::CheckResult::kPhishing, 1);
+}
+
+TEST_F(AbusiveNotificationPermissionsManagerTest, FileUrlsNotRevoked) {
+  AddAbusiveNotification("file:///foo/bar.txt",
+                         ContentSetting::CONTENT_SETTING_ALLOW);
+  auto manager = AbusiveNotificationPermissionsManager(
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
+  RunUntilSafeBrowsingChecksComplete(&manager);
+  EXPECT_EQ(
+      safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm()).size(),
+      0u);
+  EXPECT_EQ(GetNotificationSettingValue("file:///foo/bar.txt"),
+            ContentSetting::CONTENT_SETTING_ALLOW);
 }
 
 TEST_F(AbusiveNotificationPermissionsManagerTest,
@@ -289,7 +351,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
   base::HistogramTester histogram_tester;
 
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   EXPECT_EQ(
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm()).size(),
       0u);
@@ -316,8 +379,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
 
   // Assert blocklist check count is recorded in UMA metrics.
   histogram_tester.ExpectUniqueSample(
-      safety_hub::kBlocklistCheckCountHistogramName, /* sample */ 1,
-      /* expected_count */ 1);
+      safety_hub::kBlocklistCheckCountHistogramName, /*sample=*/1,
+      /*expected_bucket_count=*/1);
 }
 
 TEST_F(AbusiveNotificationPermissionsManagerTest,
@@ -331,7 +394,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
   base::HistogramTester histogram_tester;
 
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   RunUntilSafeBrowsingChecksComplete(&manager);
   ContentSettingsForOneType content_settings =
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm());
@@ -353,8 +417,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
 
   // Assert blocklist check count is recorded in UMA metrics.
   histogram_tester.ExpectUniqueSample(
-      safety_hub::kBlocklistCheckCountHistogramName, /* sample */ 0,
-      /* expected_count */ 1);
+      safety_hub::kBlocklistCheckCountHistogramName, /*sample=*/0,
+      /*expected_bucket_count=*/1);
 }
 
 TEST_F(AbusiveNotificationPermissionsManagerTest,
@@ -363,7 +427,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
   AddAbusiveNotification(url2, ContentSetting::CONTENT_SETTING_ALLOW);
 
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   manager.SetNullSBCheckDelayForTesting();
   EXPECT_FALSE(mock_database_manager()->HasCalledCancelCheck());
   RunUntilSafeBrowsingChecksComplete(&manager);
@@ -380,7 +445,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
   AddAbusiveNotification(url2, ContentSetting::CONTENT_SETTING_ALLOW);
 
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   RunUntilSafeBrowsingChecksComplete(&manager);
   ContentSettingsForOneType content_settings =
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm());
@@ -395,7 +461,7 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
   EXPECT_TRUE(IsRevokedSettingValueRevoked(url2));
 
   // Make sure that when we regrant url1, it is not automatically revoked again.
-  manager.RegrantPermissionForOriginIfNecessary(GURL(url1));
+  manager.RegrantPermissionForOrigin(url::Origin::Create(GURL(url1)));
   content_settings =
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm());
   EXPECT_EQ(content_settings.size(), 1u);
@@ -446,7 +512,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest, ClearRevokedPermissionsList) {
   AddAbusiveNotification(url2, ContentSetting::CONTENT_SETTING_ALLOW);
 
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   RunUntilSafeBrowsingChecksComplete(&manager);
   ContentSettingsForOneType content_settings =
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm());
@@ -475,7 +542,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest, ClearRevokedPermissionsList) {
 TEST_F(AbusiveNotificationPermissionsManagerTest,
        RestoreDeletedRevokedPermissionsList) {
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   RunUntilSafeBrowsingChecksComplete(&manager);
 
   content_settings::ContentSettingConstraints constraints;
@@ -499,7 +567,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
   AddAbusiveNotification(url2, ContentSetting::CONTENT_SETTING_ALLOW);
 
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   RunUntilSafeBrowsingChecksComplete(&manager);
   ContentSettingsForOneType content_settings =
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm());
@@ -608,13 +677,14 @@ TEST_F(
 }
 
 TEST_F(AbusiveNotificationPermissionsManagerTest,
-       UndoRegrantPermissionForOriginIfNecessary) {
+       UndoRegrantPermissionForOrigin) {
   ukm::TestAutoSetUkmRecorder ukm_recorder;
   AddAbusiveNotification(url1, ContentSetting::CONTENT_SETTING_ALLOW);
   AddAbusiveNotification(url2, ContentSetting::CONTENT_SETTING_ALLOW);
 
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   RunUntilSafeBrowsingChecksComplete(&manager);
   ContentSettingsForOneType content_settings =
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm());
@@ -623,7 +693,7 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
   EXPECT_TRUE(IsUrlInContentSettings(content_settings, url2));
 
   // Make sure that when we regrant url1, it is not automatically revoked again.
-  manager.RegrantPermissionForOriginIfNecessary(GURL(url1));
+  manager.RegrantPermissionForOrigin(url::Origin::Create(GURL(url1)));
   EXPECT_EQ(
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm()).size(),
       1u);
@@ -637,8 +707,9 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
   EXPECT_TRUE(IsRevokedSettingValueRevoked(url2));
 
   content_settings::ContentSettingConstraints constraints;
-  manager.UndoRegrantPermissionForOriginIfNecessary(
-      GURL(url1), abusive_permission_types, std::move(constraints));
+  manager.UndoRegrantPermissionForOrigin(url::Origin::Create(GURL(url1)),
+                                         abusive_permission_types,
+                                         std::move(constraints));
   EXPECT_EQ(
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm()).size(),
       2u);
@@ -696,17 +767,19 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
                    kSafeBrowsingUnwantedRevocationStr)),
       constraint);
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
 
   // Re-grant.
-  manager.RegrantPermissionForOriginIfNecessary(GURL(url1));
+  manager.RegrantPermissionForOrigin(url::Origin::Create(GURL(url1)));
   EXPECT_TRUE(safety_hub_util::IsAbusiveNotificationRevocationIgnored(
       hcsm(), GURL(url1)));
 
   // Undo re-grant.
   content_settings::ContentSettingConstraints constraints;
-  manager.UndoRegrantPermissionForOriginIfNecessary(
-      GURL(url1), abusive_permission_types, std::move(constraints));
+  manager.UndoRegrantPermissionForOrigin(url::Origin::Create(GURL(url1)),
+                                         abusive_permission_types,
+                                         std::move(constraints));
   EXPECT_TRUE(IsRevokedSettingValueRevoked(url1));
 
   ASSERT_EQ(
@@ -724,11 +797,12 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
   // Set up 2 urls with `REVOKED_ABUSIVE_NOTIFICATION_PERMISSIONS` settings,
   // then regrant one of them.
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   RunUntilSafeBrowsingChecksComplete(&manager);
   ContentSettingsForOneType content_settings =
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm());
-  manager.RegrantPermissionForOriginIfNecessary(GURL(url1));
+  manager.RegrantPermissionForOrigin(url::Origin::Create(GURL(url1)));
 
   // The notifications should be allowed for `url1` and revoked for `url2`.
   EXPECT_EQ(
@@ -770,15 +844,16 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
   base::HistogramTester histogram_tester;
 
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   RunUntilSafeBrowsingChecksComplete(&manager);
   ContentSettingsForOneType content_settings =
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm());
   EXPECT_EQ(content_settings.size(), 2u);
   // Assert blocklist check count is recorded in UMA metrics.
   histogram_tester.ExpectUniqueSample(
-      safety_hub::kBlocklistCheckCountHistogramName, /* sample */ 2,
-      /* expected_count */ 1);
+      safety_hub::kBlocklistCheckCountHistogramName, /*sample=*/2,
+      /*expected_bucket_count=*/1);
 
   // Add another abusive origin. Running the checks again should not block the
   // abusive origin, because a check was just recently run.
@@ -788,13 +863,13 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm());
   EXPECT_EQ(content_settings.size(), 2u);
   histogram_tester.ExpectTotalCount(
-      safety_hub::kBlocklistCheckCountHistogramName, /* expected_count */ 2);
+      safety_hub::kBlocklistCheckCountHistogramName, /*expected_count=*/2);
   histogram_tester.ExpectBucketCount(
-      safety_hub::kBlocklistCheckCountHistogramName, /* sample */ 2,
-      /* expected_count */ 1);
+      safety_hub::kBlocklistCheckCountHistogramName, /*sample=*/2,
+      /*expected_count=*/1);
   histogram_tester.ExpectBucketCount(
-      safety_hub::kBlocklistCheckCountHistogramName, /* sample */ 0,
-      /* expected_count */ 1);
+      safety_hub::kBlocklistCheckCountHistogramName, /*sample=*/0,
+      /*expected_count=*/1);
 
   // Fast forwarding a day should revoke the new abusive origin.
   FastForwardBy(base::Days(1));
@@ -807,16 +882,16 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
             ContentSetting::CONTENT_SETTING_ASK);
   EXPECT_TRUE(IsRevokedSettingValueRevoked(url3));
   histogram_tester.ExpectTotalCount(
-      safety_hub::kBlocklistCheckCountHistogramName, /* expected_count */ 3);
+      safety_hub::kBlocklistCheckCountHistogramName, /*expected_count=*/3);
   histogram_tester.ExpectBucketCount(
-      safety_hub::kBlocklistCheckCountHistogramName, /* sample */ 2,
-      /* expected_count */ 1);
+      safety_hub::kBlocklistCheckCountHistogramName, /*sample=*/2,
+      /*expected_count=*/1);
   histogram_tester.ExpectBucketCount(
-      safety_hub::kBlocklistCheckCountHistogramName, /* sample */ 0,
-      /* expected_count */ 1);
+      safety_hub::kBlocklistCheckCountHistogramName, /*sample=*/0,
+      /*expected_count=*/1);
   histogram_tester.ExpectBucketCount(
-      safety_hub::kBlocklistCheckCountHistogramName, /* sample */ 1,
-      /* expected_count */ 1);
+      safety_hub::kBlocklistCheckCountHistogramName, /*sample=*/1,
+      /*expected_count=*/1);
 }
 
 TEST_F(AbusiveNotificationPermissionsManagerTest, OnPermissionChanged) {
@@ -840,7 +915,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest, OnPermissionChanged) {
   EXPECT_TRUE(safety_hub_util::IsAbusiveNotificationRevocationIgnored(
       hcsm(), GURL(url4)));
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   base::HistogramTester histogram_tester;
 
   // Simulate permission changed by the user.
@@ -868,26 +944,26 @@ TEST_F(AbusiveNotificationPermissionsManagerTest, OnPermissionChanged) {
   histogram_tester.ExpectUniqueSample(
       "Settings.SafetyHub.AbusiveNotificationPermissionRevocation.Unknown."
       "Revoked.PermissionChanged",
-      /* sample */ ContentSetting::CONTENT_SETTING_ASK,
-      /* expected_count */ 1);
+      /*sample=*/ContentSetting::CONTENT_SETTING_ASK,
+      /*expected_bucket_count=*/1);
   histogram_tester.ExpectUniqueSample(
       "Settings.SafetyHub.AbusiveNotificationPermissionRevocation."
       "ManualSafeBrowsingRevocation."
       "Revoked.PermissionChanged",
-      /* sample */ ContentSetting::CONTENT_SETTING_ASK,
-      /* expected_count */ 1);
+      /*sample=*/ContentSetting::CONTENT_SETTING_ASK,
+      /*expected_bucket_count=*/1);
   histogram_tester.ExpectUniqueSample(
       "Settings.SafetyHub.AbusiveNotificationPermissionRevocation."
       "SocialEngineeringBlocklist."
       "Revoked.PermissionChanged",
-      /* sample */ ContentSetting::CONTENT_SETTING_ALLOW,
-      /* expected_count */ 1);
+      /*sample=*/ContentSetting::CONTENT_SETTING_ALLOW,
+      /*expected_bucket_count=*/1);
   histogram_tester.ExpectUniqueSample(
       "Settings.SafetyHub.AbusiveNotificationPermissionRevocation."
       "SocialEngineeringBlocklist."
       "Ignored.PermissionChanged",
-      /* sample */ ContentSetting::CONTENT_SETTING_ALLOW,
-      /* expected_count */ 1);
+      /*sample=*/ContentSetting::CONTENT_SETTING_ALLOW,
+      /*expected_bucket_count=*/1);
 }
 
 TEST_F(AbusiveNotificationPermissionsManagerTest,
@@ -899,7 +975,8 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
                                 safe_browsing::NotificationRevocationSource::
                                     kSuspiciousContentAutoRevocation);
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   base::HistogramTester histogram_tester;
 
   manager.OnPermissionChanged(
@@ -914,9 +991,34 @@ TEST_F(AbusiveNotificationPermissionsManagerTest,
       "Settings.SafetyHub.AbusiveNotificationPermissionRevocation."
       "SuspiciousContentAutoRevocation."
       "Revoked.PermissionChanged",
-      /* sample */ ContentSetting::CONTENT_SETTING_ALLOW,
-      /* expected_count */ 1);
+      /*sample=*/ContentSetting::CONTENT_SETTING_ALLOW,
+      /*expected_bucket_count=*/1);
 }
+
+TEST_F(AbusiveNotificationPermissionsManagerTest, GetV5GetHashProtocolManager) {
+  scoped_refptr<V5TestingDatabaseManager> v5_db_manager =
+      base::MakeRefCounted<V5TestingDatabaseManager>();
+
+  safe_browsing::V5GetHashProtocolManager v5_protocol_manager(
+      /*url_loader_factory=*/nullptr,
+      safe_browsing::SBProtocolConfig("test", false, "key", "1.0"),
+      /*cache=*/nullptr, /*webui_delegate=*/nullptr);
+
+  auto manager = AbusiveNotificationPermissionsManager(
+      v5_db_manager, v5_protocol_manager.GetWeakPtr(), hcsm(),
+      profile()->GetTestingPrefService());
+
+  const GURL origin_to_revoke = GURL("https://origin.com/");
+  SetNotificationPermission(origin_to_revoke, CONTENT_SETTING_ALLOW);
+
+  manager.CheckNotificationPermissionOrigins();
+
+  EXPECT_EQ(v5_db_manager->v5_manager_from_client().get(),
+            &v5_protocol_manager);
+}
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+
 class ShowManualNotificationRevocationsTest
     : public AbusiveNotificationPermissionsManagerTest {
  public:
@@ -971,7 +1073,8 @@ class ShowManualNotificationRevocationsTest
 TEST_F(ShowManualNotificationRevocationsTest,
        ManualRevocationAcklowedgeThenUndo) {
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
   base::HistogramTester histogram_tester;
 
   // Setup notification subscription.
@@ -995,7 +1098,7 @@ TEST_F(ShowManualNotificationRevocationsTest,
       profile(), origin_to_revoke, mock_callback_receiver.Get());
   EXPECT_CALL(mock_callback_receiver, Run(PermissionRevocationRequest::Outcome::
                                               PERMISSION_REVOKED_DUE_TO_ABUSE))
-      .WillOnce(testing::InvokeWithoutArgs([&run_loop]() { run_loop.Quit(); }));
+      .WillOnce([&run_loop]() { run_loop.Quit(); });
   run_loop.Run();
 
   // Check if the content setting turn to ASK, when auto-revocation happens.
@@ -1044,13 +1147,14 @@ TEST_F(ShowManualNotificationRevocationsTest,
       "SafeBrowsing.NotificationRevocationSource",
       safe_browsing::NotificationRevocationSource::
           kSafeBrowsingUnwantedRevocation,
-      /* expected_count */ 1);
+      /*expected_bucket_count=*/1);
 }
 
 TEST_F(ShowManualNotificationRevocationsTest,
        ManualRevocationRegrantPermission) {
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
 
   // Setup notification subscription.
   const GURL origin_to_revoke = GURL("https://origin.com/");
@@ -1070,12 +1174,12 @@ TEST_F(ShowManualNotificationRevocationsTest,
       profile(), origin_to_revoke, mock_callback_receiver.Get());
   EXPECT_CALL(mock_callback_receiver, Run(PermissionRevocationRequest::Outcome::
                                               PERMISSION_REVOKED_DUE_TO_ABUSE))
-      .WillOnce(testing::InvokeWithoutArgs([&run_loop]() { run_loop.Quit(); }));
+      .WillOnce([&run_loop]() { run_loop.Quit(); });
   run_loop.Run();
 
   // Regrant removes the permission from the list shown to the user and changes
   // the notification permission to allow.
-  manager.RegrantPermissionForOriginIfNecessary(origin_to_revoke);
+  manager.RegrantPermissionForOrigin(url::Origin::Create(origin_to_revoke));
   ASSERT_EQ(
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm()).size(),
       0u);
@@ -1093,8 +1197,7 @@ TEST_F(ShowManualNotificationRevocationsTest,
           profile(), origin_to_revoke, mock_callback_receiver.Get());
   EXPECT_CALL(mock_callback_receiver,
               Run(PermissionRevocationRequest::Outcome::PERMISSION_NOT_REVOKED))
-      .WillOnce(testing::InvokeWithoutArgs(
-          [&run_loop_new]() { run_loop_new.Quit(); }));
+      .WillOnce([&run_loop_new]() { run_loop_new.Quit(); });
   run_loop_new.Run();
 
   // Permission should not have been revoked, since the user allowed it from
@@ -1110,7 +1213,8 @@ TEST_F(ShowManualNotificationRevocationsTest,
 TEST_F(ShowManualNotificationRevocationsTest,
        ManualRevocationUndoRegrantPermission) {
   auto manager = AbusiveNotificationPermissionsManager(
-      mock_database_manager(), hcsm(), profile()->GetTestingPrefService());
+      mock_database_manager(), /*v5_get_hash_protocol_manager=*/nullptr, hcsm(),
+      profile()->GetTestingPrefService());
 
   // Setup notification subscription.
   const GURL origin_to_revoke = GURL("https://origin.com/");
@@ -1130,12 +1234,12 @@ TEST_F(ShowManualNotificationRevocationsTest,
       profile(), origin_to_revoke, mock_callback_receiver.Get());
   EXPECT_CALL(mock_callback_receiver, Run(PermissionRevocationRequest::Outcome::
                                               PERMISSION_REVOKED_DUE_TO_ABUSE))
-      .WillOnce(testing::InvokeWithoutArgs([&run_loop]() { run_loop.Quit(); }));
+      .WillOnce([&run_loop]() { run_loop.Quit(); });
   run_loop.Run();
 
   // Regrant removes the permission from the list shown to the user and changes
   // the notification permission to allow.
-  manager.RegrantPermissionForOriginIfNecessary(origin_to_revoke);
+  manager.RegrantPermissionForOrigin(url::Origin::Create(origin_to_revoke));
   ASSERT_EQ(
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm()).size(),
       0u);
@@ -1146,8 +1250,9 @@ TEST_F(ShowManualNotificationRevocationsTest,
   // Undo regrant adds the permission back to the list and revokes the
   // permission again.
   content_settings::ContentSettingConstraints constraints;
-  manager.UndoRegrantPermissionForOriginIfNecessary(
-      origin_to_revoke, abusive_permission_types, std::move(constraints));
+  manager.UndoRegrantPermissionForOrigin(url::Origin::Create(origin_to_revoke),
+                                         abusive_permission_types,
+                                         std::move(constraints));
   ASSERT_EQ(
       safety_hub_util::GetRevokedAbusiveNotificationPermissions(hcsm()).size(),
       1u);
@@ -1230,7 +1335,7 @@ TEST_F(SuspiciousNotificationRevocationTest,
       "SafeBrowsing.NotificationRevocationSource",
       safe_browsing::NotificationRevocationSource::
           kSuspiciousContentAutoRevocation,
-      /* expected_count */ 1);
+      /*expected_bucket_count=*/1);
 }
 
 TEST_F(SuspiciousNotificationRevocationTest,
@@ -1481,3 +1586,4 @@ TEST_F(SuspiciousNotificationRevocationTest,
       AbusiveNotificationPermissionsManager::
           MaybeRevokeSuspiciousNotificationPermission(profile(), GURL(url1)));
 }
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)

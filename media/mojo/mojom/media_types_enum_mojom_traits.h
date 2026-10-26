@@ -11,9 +11,11 @@
 #include "media/base/cdm_factory.h"
 #include "media/base/channel_layout.h"
 #include "media/base/demuxer.h"
+#include "media/base/encryption_scheme.h"
 #include "media/base/renderer_factory_selector.h"
 #include "media/base/svc_scalability_mode.h"
 #include "media/base/video_transformation.h"
+#include "media/base/video_types.h"
 #include "media/cdm/cdm_document_service.h"
 #include "media/mojo/mojom/media_types.mojom-shared.h"
 
@@ -96,6 +98,37 @@ struct EnumTraits<media::mojom::CdmSessionClosedReason,
         return ::media::CdmSessionClosedReason::kHardwareContextReset;
       case media::mojom::CdmSessionClosedReason::kResourceEvicted:
         return ::media::CdmSessionClosedReason::kResourceEvicted;
+    }
+
+    NOTREACHED();
+  }
+};
+
+template <>
+struct EnumTraits<media::mojom::EncryptionScheme, ::media::EncryptionScheme> {
+  static media::mojom::EncryptionScheme ToMojom(
+      ::media::EncryptionScheme input) {
+    switch (input) {
+      case ::media::EncryptionScheme::kUnencrypted:
+        return media::mojom::EncryptionScheme::kUnencrypted;
+      case ::media::EncryptionScheme::kCenc:
+        return media::mojom::EncryptionScheme::kCenc;
+      case ::media::EncryptionScheme::kCbcs:
+        return media::mojom::EncryptionScheme::kCbcs;
+    }
+
+    NOTREACHED();
+  }
+
+  static ::media::EncryptionScheme FromMojom(
+      media::mojom::EncryptionScheme input) {
+    switch (input) {
+      case media::mojom::EncryptionScheme::kUnencrypted:
+        return ::media::EncryptionScheme::kUnencrypted;
+      case media::mojom::EncryptionScheme::kCenc:
+        return ::media::EncryptionScheme::kCenc;
+      case media::mojom::EncryptionScheme::kCbcs:
+        return ::media::EncryptionScheme::kCbcs;
     }
 
     NOTREACHED();
@@ -362,6 +395,46 @@ struct EnumTraits<media::mojom::VideoRotation, ::media::VideoRotation> {
         return ::media::VideoRotation::VIDEO_ROTATION_180;
       case media::mojom::VideoRotation::kVideoRotation270:
         return ::media::VideoRotation::VIDEO_ROTATION_270;
+    }
+
+    NOTREACHED();
+  }
+};
+
+template <>
+struct EnumTraits<media::mojom::VideoChromaSampling,
+                  ::media::VideoChromaSampling> {
+  static media::mojom::VideoChromaSampling ToMojom(
+      ::media::VideoChromaSampling input) {
+    switch (input) {
+      case ::media::VideoChromaSampling::kUnknown:
+        return media::mojom::VideoChromaSampling::kUnknown;
+      case ::media::VideoChromaSampling::k420:
+        return media::mojom::VideoChromaSampling::k420;
+      case ::media::VideoChromaSampling::k422:
+        return media::mojom::VideoChromaSampling::k422;
+      case ::media::VideoChromaSampling::k444:
+        return media::mojom::VideoChromaSampling::k444;
+      case ::media::VideoChromaSampling::k400:
+        return media::mojom::VideoChromaSampling::k400;
+    }
+
+    NOTREACHED();
+  }
+
+  static ::media::VideoChromaSampling FromMojom(
+      media::mojom::VideoChromaSampling input) {
+    switch (input) {
+      case media::mojom::VideoChromaSampling::kUnknown:
+        return ::media::VideoChromaSampling::kUnknown;
+      case media::mojom::VideoChromaSampling::k420:
+        return ::media::VideoChromaSampling::k420;
+      case media::mojom::VideoChromaSampling::k422:
+        return ::media::VideoChromaSampling::k422;
+      case media::mojom::VideoChromaSampling::k444:
+        return ::media::VideoChromaSampling::k444;
+      case media::mojom::VideoChromaSampling::k400:
+        return ::media::VideoChromaSampling::k400;
     }
 
     NOTREACHED();

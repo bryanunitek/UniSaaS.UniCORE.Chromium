@@ -94,7 +94,7 @@ class WebrtcTransport : public Transport,
   // |video_encoder_factory| can be nullptr if the connection is not used for
   // sending video.
   WebrtcTransport(
-      webrtc::Thread* worker_thread,
+      webrtc::Thread* network_thread,
       scoped_refptr<TransportContext> transport_context,
       std::unique_ptr<webrtc::VideoEncoderFactory> video_encoder_factory,
       EventHandler* event_handler);
@@ -119,7 +119,7 @@ class WebrtcTransport : public Transport,
   void ApplyNetworkSettings(const NetworkSettings& network_settings);
 
   // Transport implementations.
-  void Start(Authenticator* authenticator,
+  void Start(const std::string& auth_key,
              SendTransportInfoCallback send_transport_info_callback) override;
   bool ProcessTransportInfo(const JingleTransportInfo& transport_info) override;
 

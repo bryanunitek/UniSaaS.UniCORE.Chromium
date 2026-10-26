@@ -62,7 +62,7 @@ const CGFloat kSpinnerButtonPadding = 18;
 }  // namespace
 
 @interface SyncEncryptionPassphraseTableViewController () <
-    IdentityManagerObserverBridgeDelegate> {
+    IdentityManagerObserving> {
   // Whether the decryption progress is currently being shown.
   BOOL _isDecryptionProgressShown;
   NSString* _savedTitle;
@@ -163,7 +163,7 @@ const CGFloat kSpinnerButtonPadding = 18;
   [self setLeftNavBarItem];
 
   SceneState* sceneState = self.browser->GetSceneState();
-  _uiBlocker = std::make_unique<ScopedUIBlocker>(sceneState);
+  _uiBlocker = ScopedUIBlocker::ProfileScoped(sceneState);
   self.view.accessibilityIdentifier =
       kSyncEncryptionPassphraseTableViewAccessibilityIdentifier;
 }
@@ -272,9 +272,10 @@ const CGFloat kSpinnerButtonPadding = 18;
                                 syncer::kSyncEnableNewSyncDashboardUrl)
                                 ? kNewSyncGoogleDashboardURL
                                 : kLegacySyncGoogleDashboardURL),
-                       GetApplicationContext()
-                           ->GetApplicationLocaleStorage()
-                           ->Get())] ];
+                       std::string(GetApplicationContext()
+                                       ->GetApplicationLocaleStorage()
+                                       ->GetTag()
+                                       .tag_string()))] ];
   return footerItem;
 }
 
@@ -559,9 +560,9 @@ const CGFloat kSpinnerButtonPadding = 18;
   [self reloadData];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onEndBatchOfRefreshTokenStateChanges {
+- (void)batchOfRefreshTokenStateChangesDidEnd {
   DCHECK(!_settingsAreDismissed);
   ProfileIOS* profile = self.browser->GetProfile();
   if (AuthenticationServiceFactory::GetForProfile(profile)

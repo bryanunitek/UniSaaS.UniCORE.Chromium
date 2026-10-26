@@ -116,6 +116,11 @@ class AppListMetricsTest : public AshTestBase {
 
   ~AppListMetricsTest() override = default;
 
+  void SetUpInitParams(AshTestHelper::InitParams& init_params) override {
+    AshTestBase::SetUpInitParams(init_params);
+    init_params.add_default_shelf_icon = false;
+  }
+
   void SetUp() override {
     AshTestBase::SetUp();
     shelf_test_api_ = std::make_unique<ShelfViewTestAPI>(

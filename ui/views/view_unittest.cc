@@ -14,7 +14,10 @@
 
 #include "base/command_line.h"
 #include "base/functional/bind.h"
+#include "base/i18n/language_tag.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/tag_converters.h"
+#include "base/i18n/test/scoped_icu_locale.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/rand_util.h"
@@ -43,11 +46,12 @@
 #include "ui/base/metadata/metadata_types.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/compositor_switches.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_element.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor/layer_not_drawn.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_context.h"
 #include "ui/compositor/test/draw_waiter_for_test.h"
 #include "ui/compositor/test/test_layers.h"
@@ -5157,7 +5161,8 @@ TEST_F(ViewTest, AddExistingChild) {
 }
 
 TEST_F(ViewTest, UseMirroredLayoutDisableMirroring) {
-  base::i18n::SetICUDefaultLocale("ar");
+  base::i18n::ScopedDefaultIcuLocale scoped_locale(
+      base::i18n::GetKnownLanguageTag("ar"));
   ASSERT_TRUE(base::i18n::IsRTL());
 
   View parent, child1, child2;
@@ -5185,7 +5190,8 @@ TEST_F(ViewTest, UseMirroredLayoutDisableMirroring) {
 }
 
 TEST_F(ViewTest, UseMirroredLayoutEnableMirroring) {
-  base::i18n::SetICUDefaultLocale("en");
+  base::i18n::ScopedDefaultIcuLocale scoped_locale(
+      base::i18n::GetKnownLanguageTag("en"));
   ASSERT_FALSE(base::i18n::IsRTL());
 
   View parent, child1, child2;
@@ -5612,7 +5618,7 @@ TEST_F(ViewLayerTest, SetClipLayerToVisibleBounds) {
 
   content_view->SetBoundsRect({100, 100});
 
-  std::unique_ptr<ui::Layer> v1_region_layer = std::make_unique<ui::Layer>();
+  auto v1_region_layer = std::make_unique<ui::LayerTextured>();
   v1_region_layer->SetBounds({80, 80});
 
   // Create an intermediate container so that the origin of `v1` will be
@@ -6100,6 +6106,105 @@ TEST_F(ViewLayerTest, ReorderUnderWidget) {
   EXPECT_EQ(c2->layer(), parent_layer->children()[0]);
 }
 
+TEST_F(ViewLayerTest, ReorderChildLayers) {
+  View* content = widget()->SetContentsView(std::make_unique<View>());
+  View* c1 = content->AddChildView(std::make_unique<View>());
+  View* c2 = content->AddChildView(std::make_unique<View>());
+  View* c3 = content->AddChildView(std::make_unique<View>());
+  c1->SetPaintToLayer();
+  c2->SetPaintToLayer();
+  c3->SetPaintToLayer();
+
+  ui::Layer* parent_layer = widget()->GetLayer();
+  ASSERT_EQ(3u, parent_layer->children().size());
+  EXPECT_EQ(c1->layer(), parent_layer->children()[0]);
+  EXPECT_EQ(c2->layer(), parent_layer->children()[1]);
+  EXPECT_EQ(c3->layer(), parent_layer->children()[2]);
+
+  // Move c3 to the back (index 0).
+  content->ReorderChildView(c3, 0);
+  EXPECT_EQ(c3->layer(), parent_layer->children()[0]);
+  EXPECT_EQ(c1->layer(), parent_layer->children()[1]);
+  EXPECT_EQ(c2->layer(), parent_layer->children()[2]);
+
+  // Move c1 to the front (end).
+  content->ReorderChildView(c1, content->children().size());
+  EXPECT_EQ(c3->layer(), parent_layer->children()[0]);
+  EXPECT_EQ(c2->layer(), parent_layer->children()[1]);
+  EXPECT_EQ(c1->layer(), parent_layer->children()[2]);
+
+  // Add child without layer between c3 and c2. Layer order should not change.
+  View* c4 = content->AddChildViewAt(std::make_unique<View>(), 1);
+  EXPECT_EQ(c3->layer(), parent_layer->children()[0]);
+  EXPECT_EQ(c2->layer(), parent_layer->children()[1]);
+  EXPECT_EQ(c1->layer(), parent_layer->children()[2]);
+
+  // Reorder c4 without layer. Layer order should not change.
+  content->ReorderChildView(c4, 0);
+  EXPECT_EQ(c3->layer(), parent_layer->children()[0]);
+  EXPECT_EQ(c2->layer(), parent_layer->children()[1]);
+  EXPECT_EQ(c1->layer(), parent_layer->children()[2]);
+}
+
+TEST_F(ViewLayerTest, ReorderChildLayersWithMultipleRegionLayers) {
+  View* content = widget()->SetContentsView(std::make_unique<View>());
+  View* v1 = content->AddChildView(std::make_unique<View>());
+  View* v2 = content->AddChildView(std::make_unique<View>());
+  v1->SetPaintToLayer();
+  v2->SetPaintToLayer();
+
+  auto b1 = std::make_unique<ui::LayerTextured>();
+  auto b2 = std::make_unique<ui::LayerTextured>();
+  auto a1 = std::make_unique<ui::LayerTextured>();
+  auto a2 = std::make_unique<ui::LayerTextured>();
+
+  v1->AddLayerToRegion(b1.get(), LayerRegion::kBelow);
+  v1->AddLayerToRegion(b2.get(), LayerRegion::kBelow);
+  v1->AddLayerToRegion(a1.get(), LayerRegion::kAbove);
+  v1->AddLayerToRegion(a2.get(), LayerRegion::kAbove);
+
+  ui::Layer* parent_layer = widget()->GetLayer();
+  // Under parent_layer, the bottom-to-top order must preserve insertion order
+  // within each region: b1, b2, v1->layer(), a1, a2, v2->layer().
+  EXPECT_THAT(parent_layer->children(),
+              testing::ElementsAre(b1.get(), b2.get(), v1->layer(), a1.get(),
+                                   a2.get(), v2->layer()));
+
+  // Reorder v2 to the bottom (index 0).
+  content->ReorderChildView(v2, 0);
+  EXPECT_THAT(parent_layer->children(),
+              testing::ElementsAre(v2->layer(), b1.get(), b2.get(), v1->layer(),
+                                   a1.get(), a2.get()));
+
+  // Move v2 back to the front (end).
+  content->ReorderChildView(v2, content->children().size());
+  EXPECT_THAT(parent_layer->children(),
+              testing::ElementsAre(b1.get(), b2.get(), v1->layer(), a1.get(),
+                                   a2.get(), v2->layer()));
+
+  v1->RemoveLayerFromRegions(b1.get());
+  v1->RemoveLayerFromRegions(b2.get());
+  v1->RemoveLayerFromRegions(a1.get());
+  v1->RemoveLayerFromRegions(a2.get());
+}
+
+TEST_F(ViewLayerTest, ReorderChildLayersWithMaskLayer) {
+  View* content = widget()->SetContentsView(std::make_unique<View>());
+  content->SetPaintToLayer();
+  content->SetClipPath(SkPath::Rect(SkRect::MakeWH(100, 100)));
+  ASSERT_TRUE(content->layer()->layer_mask_layer());
+
+  View* c1 = content->AddChildView(std::make_unique<View>());
+  View* c2 = content->AddChildView(std::make_unique<View>());
+  c1->SetPaintToLayer();
+  c2->SetPaintToLayer();
+
+  // Reordering child views under a view with a mask layer should not crash.
+  content->ReorderChildView(c2, 0);
+  EXPECT_EQ(c2->layer(), content->layer()->children()[0]);
+  EXPECT_EQ(c1->layer(), content->layer()->children()[1]);
+}
+
 // Verifies that the layer of a view can be acquired properly.
 TEST_F(ViewLayerTest, AcquireLayer) {
   View* content = widget()->SetContentsView(std::make_unique<View>());
@@ -6189,9 +6294,9 @@ TEST_F(ViewLayerTest, RecreateLayerMovesNonViewChildren) {
   ASSERT_EQ(1u, v.layer()->children().size());
   EXPECT_EQ(v.layer()->children()[0], child.layer());
 
-  ui::Layer layer(ui::LAYER_NOT_DRAWN);
-  v.layer()->Add(&layer);
-  v.layer()->StackAtBottom(&layer);
+  auto layer = std::make_unique<ui::LayerNotDrawn>();
+  v.layer()->Add(layer.get());
+  v.layer()->StackAtBottom(layer.get());
 
   std::unique_ptr<ui::Layer> old_layer(v.RecreateLayer());
 
@@ -6202,7 +6307,7 @@ TEST_F(ViewLayerTest, RecreateLayerMovesNonViewChildren) {
   // And new layer should have the two children.
   ASSERT_TRUE(v.layer() != nullptr);
   ASSERT_EQ(2u, v.layer()->children().size());
-  EXPECT_EQ(v.layer()->children()[0], &layer);
+  EXPECT_EQ(v.layer()->children()[0], layer.get());
   EXPECT_EQ(v.layer()->children()[1], child.layer());
 }
 
@@ -6274,16 +6379,16 @@ TEST_F(ViewLayerTest, LayerBeneathTriggersPaintToLayer) {
   View* view = root.AddChildView(std::make_unique<View>());
   EXPECT_EQ(nullptr, view->layer());
 
-  ui::Layer layer1;
-  ui::Layer layer2;
-  view->AddLayerToRegion(&layer1, LayerRegion::kBelow);
+  auto layer1 = std::make_unique<ui::LayerTextured>();
+  auto layer2 = std::make_unique<ui::LayerTextured>();
+  view->AddLayerToRegion(layer1.get(), LayerRegion::kBelow);
   EXPECT_NE(nullptr, view->layer());
-  view->AddLayerToRegion(&layer2, LayerRegion::kBelow);
+  view->AddLayerToRegion(layer2.get(), LayerRegion::kBelow);
   EXPECT_NE(nullptr, view->layer());
 
-  view->RemoveLayerFromRegions(&layer1);
+  view->RemoveLayerFromRegions(layer1.get());
   EXPECT_NE(nullptr, view->layer());
-  view->RemoveLayerFromRegions(&layer2);
+  view->RemoveLayerFromRegions(layer2.get());
   EXPECT_EQ(nullptr, view->layer());
 }
 
@@ -6291,15 +6396,15 @@ TEST_F(ViewLayerTest, LayerBeneathAddedToTree) {
   View root;
   root.SetPaintToLayer();
 
-  ui::Layer layer;
+  auto layer = std::make_unique<ui::LayerTextured>();
   View* view = root.AddChildView(std::make_unique<View>());
 
-  view->AddLayerToRegion(&layer, LayerRegion::kBelow);
+  view->AddLayerToRegion(layer.get(), LayerRegion::kBelow);
   ASSERT_NE(nullptr, view->layer());
-  EXPECT_TRUE(view->layer()->parent()->Contains(&layer));
+  EXPECT_TRUE(view->layer()->parent()->Contains(layer.get()));
 
-  view->RemoveLayerFromRegions(&layer);
-  EXPECT_EQ(nullptr, layer.parent());
+  view->RemoveLayerFromRegions(layer.get());
+  EXPECT_EQ(nullptr, layer->parent());
 }
 
 TEST_F(ViewLayerTest, LayerBeneathAtFractionalScale) {
@@ -6313,21 +6418,21 @@ TEST_F(ViewLayerTest, LayerBeneathAtFractionalScale) {
 
   View* view = widget()->SetContentsView(std::make_unique<View>());
 
-  ui::Layer layer;
-  view->AddLayerToRegion(&layer, LayerRegion::kBelow);
+  auto layer = std::make_unique<ui::LayerTextured>();
+  view->AddLayerToRegion(layer.get(), LayerRegion::kBelow);
 
   view->SetBoundsRect(gfx::Rect(1, 1, 10, 10));
   EXPECT_NE(gfx::Vector2dF(), view->layer()->GetSubpixelOffset());
-  EXPECT_EQ(view->layer()->GetSubpixelOffset(), layer.GetSubpixelOffset());
+  EXPECT_EQ(view->layer()->GetSubpixelOffset(), layer->GetSubpixelOffset());
 
-  view->RemoveLayerFromRegions(&layer);
+  view->RemoveLayerFromRegions(layer.get());
 }
 
 TEST_F(ViewLayerTest, LayerBeneathRemovedOnDestruction) {
   View root;
   root.SetPaintToLayer();
 
-  auto layer = std::make_unique<ui::Layer>();
+  auto layer = std::make_unique<ui::LayerTextured>();
   View* view = root.AddChildView(std::make_unique<View>());
 
   // No assertions, just get coverage of deleting the layer while it is added.
@@ -6335,6 +6440,62 @@ TEST_F(ViewLayerTest, LayerBeneathRemovedOnDestruction) {
   layer.reset();
   root.RemoveChildView(view);
   delete view;
+}
+
+TEST_F(ViewLayerTest, RemoveLayerFromRegionsWhenNoViewLayer) {
+  View root;
+  auto layer = std::make_unique<ui::LayerTextured>();
+  View* view = root.AddChildView(std::make_unique<View>());
+
+  EXPECT_EQ(nullptr, view->layer());
+
+  // Removing layer from regions should not crash even if view has no layer.
+  view->RemoveLayerFromRegions(layer.get());
+}
+
+TEST_F(ViewLayerTest, RecreateRegionLayers) {
+  View root;
+  root.SetPaintToLayer();
+
+  View* v1 = root.AddChildView(std::make_unique<View>());
+  View* v2 = root.AddChildView(std::make_unique<View>());
+  v1->SetPaintToLayer();
+  v2->SetPaintToLayer();
+
+  ui::LayerOwner below_owner(std::make_unique<ui::LayerTextured>());
+  ui::LayerOwner above_owner(std::make_unique<ui::LayerTextured>());
+  v2->AddLayerToRegion(below_owner.layer(), LayerRegion::kBelow);
+  v2->AddLayerToRegion(above_owner.layer(), LayerRegion::kAbove);
+
+  std::unique_ptr<ui::Layer> old_below = below_owner.RecreateLayer();
+  std::unique_ptr<ui::Layer> old_above = above_owner.RecreateLayer();
+
+  // Recreated layers should replace old layers in `layers_below_` and
+  // `layers_above_`.
+  EXPECT_THAT(v2->GetLayersInOrder(),
+              testing::ElementsAre(below_owner.layer(), v2->layer(),
+                                   above_owner.layer()));
+
+  // Move old layers to a separate parent (as wm::RecreateLayers does).
+  // Reordering while `old_below` and `old_above` are still alive in `old_root`
+  // must restack the new layers under `root.layer()` rather than attempting to
+  // stack `old_below` / `old_above` (which would crash in StackRelativeTo).
+  std::unique_ptr<ui::Layer> old_root = ui::Layer::Create(ui::LAYER_NOT_DRAWN);
+  old_root->Add(old_below.get());
+  old_root->Add(old_above.get());
+
+  root.ReorderChildView(v1, 1);
+  EXPECT_THAT(root.layer()->children(),
+              testing::ElementsAre(below_owner.layer(), v2->layer(),
+                                   above_owner.layer(), v1->layer()));
+
+  // Destroying the old layers afterward should not remove the new layers from
+  // `v2`'s regions.
+  old_below.reset();
+  old_above.reset();
+  EXPECT_THAT(v2->GetLayersInOrder(),
+              testing::ElementsAre(below_owner.layer(), v2->layer(),
+                                   above_owner.layer()));
 }
 
 // View::OrphanLayers() captures a bare ui::Layer* `parent` local and loops
@@ -6358,14 +6519,15 @@ TEST_F(ViewLayerTest, DestroyParentLayerOnLayerAnimationAborted) {
 
   // The parent layer is heap-owned by the test (NOT by any View) so the
   // observer can free it without a surviving raw_ptr<> quarantining the slot.
-  auto parent_layer = std::make_unique<ui::Layer>();
+  std::unique_ptr<ui::Layer> parent_layer =
+      std::make_unique<ui::LayerTextured>();
   parent_layer->SetName("parent_layer");
   parent_layer->Add(target->layer());
 
   // A region layer below `target`'s layer makes GetLayersInOrder() return two
   // entries so OrphanLayers() loops more than once. This mirrors production
   // ink-drop region layers (InkDropHost::AddInkDropLayer).
-  auto region_layer = std::make_unique<ui::Layer>();
+  auto region_layer = std::make_unique<ui::LayerTextured>();
   region_layer->SetName("region_layer");
   target->AddLayerToRegion(region_layer.get(), LayerRegion::kBelow);
   ASSERT_EQ(region_layer->parent(), parent_layer.get());
@@ -6416,47 +6578,47 @@ TEST_F(ViewLayerTest, LayerBeneathVisibilityUpdated) {
   View root;
   root.SetPaintToLayer();
 
-  ui::Layer layer;
+  auto layer = std::make_unique<ui::LayerTextured>();
 
   // Make a parent view that has no layer, and a child view that has a layer.
   View* parent = root.AddChildView(std::make_unique<View>());
   View* child = parent->AddChildView(std::make_unique<View>());
-  child->AddLayerToRegion(&layer, LayerRegion::kBelow);
+  child->AddLayerToRegion(layer.get(), LayerRegion::kBelow);
 
   EXPECT_EQ(nullptr, parent->layer());
   EXPECT_NE(nullptr, child->layer());
 
   // Test setting the views' visbilities in various orders.
-  EXPECT_TRUE(layer.visible());
+  EXPECT_TRUE(layer->visible());
   child->SetVisible(false);
-  EXPECT_FALSE(layer.visible());
+  EXPECT_FALSE(layer->visible());
   child->SetVisible(true);
-  EXPECT_TRUE(layer.visible());
+  EXPECT_TRUE(layer->visible());
 
   parent->SetVisible(false);
-  EXPECT_FALSE(layer.visible());
+  EXPECT_FALSE(layer->visible());
   parent->SetVisible(true);
-  EXPECT_TRUE(layer.visible());
+  EXPECT_TRUE(layer->visible());
 
   parent->SetVisible(false);
-  EXPECT_FALSE(layer.visible());
+  EXPECT_FALSE(layer->visible());
   child->SetVisible(false);
-  EXPECT_FALSE(layer.visible());
+  EXPECT_FALSE(layer->visible());
   parent->SetVisible(true);
-  EXPECT_FALSE(layer.visible());
+  EXPECT_FALSE(layer->visible());
   child->SetVisible(true);
-  EXPECT_TRUE(layer.visible());
+  EXPECT_TRUE(layer->visible());
 
-  child->RemoveLayerFromRegions(&layer);
+  child->RemoveLayerFromRegions(layer.get());
 
   // Now check the visibility upon adding.
   child->SetVisible(false);
-  child->AddLayerToRegion(&layer, LayerRegion::kBelow);
-  EXPECT_FALSE(layer.visible());
+  child->AddLayerToRegion(layer.get(), LayerRegion::kBelow);
+  EXPECT_FALSE(layer->visible());
   child->SetVisible(true);
-  EXPECT_TRUE(layer.visible());
+  EXPECT_TRUE(layer->visible());
 
-  child->RemoveLayerFromRegions(&layer);
+  child->RemoveLayerFromRegions(layer.get());
 }
 
 TEST_F(ViewLayerTest, LayerBeneathHasCorrectBounds) {
@@ -6468,50 +6630,50 @@ TEST_F(ViewLayerTest, LayerBeneathHasCorrectBounds) {
   view->SetBoundsRect(gfx::Rect(25, 25, 50, 50));
 
   // The layer's position will be changed, but its size should be respected.
-  ui::Layer layer;
-  layer.SetBounds(gfx::Rect(25, 25));
+  auto layer = std::make_unique<ui::LayerTextured>();
+  layer->SetBounds(gfx::Rect(25, 25));
 
   // First check when |view| is already painting to a layer.
   view->SetPaintToLayer();
-  view->AddLayerToRegion(&layer, LayerRegion::kBelow);
-  EXPECT_NE(nullptr, layer.parent());
-  EXPECT_EQ(gfx::Rect(25, 25, 25, 25), layer.bounds());
+  view->AddLayerToRegion(layer.get(), LayerRegion::kBelow);
+  EXPECT_NE(nullptr, layer->parent());
+  EXPECT_EQ(gfx::Rect(25, 25, 25, 25), layer->bounds());
 
-  view->RemoveLayerFromRegions(&layer);
-  EXPECT_EQ(nullptr, layer.parent());
-  layer.SetBounds(gfx::Rect(25, 25));
+  view->RemoveLayerFromRegions(layer.get());
+  EXPECT_EQ(nullptr, layer->parent());
+  layer->SetBounds(gfx::Rect(25, 25));
 
   // Next check when |view| wasn't painting to a layer.
   view->DestroyLayer();
   EXPECT_EQ(nullptr, view->layer());
-  view->AddLayerToRegion(&layer, LayerRegion::kBelow);
+  view->AddLayerToRegion(layer.get(), LayerRegion::kBelow);
   EXPECT_NE(nullptr, view->layer());
-  EXPECT_NE(nullptr, layer.parent());
-  EXPECT_EQ(gfx::Rect(25, 25, 25, 25), layer.bounds());
+  EXPECT_NE(nullptr, layer->parent());
+  EXPECT_EQ(gfx::Rect(25, 25, 25, 25), layer->bounds());
 
   // Finally check that moving |view| also moves the layer.
   view->SetBoundsRect(gfx::Rect(50, 50, 50, 50));
-  EXPECT_EQ(gfx::Rect(50, 50, 25, 25), layer.bounds());
+  EXPECT_EQ(gfx::Rect(50, 50, 25, 25), layer->bounds());
 
-  view->RemoveLayerFromRegions(&layer);
+  view->RemoveLayerFromRegions(layer.get());
 }
 
 TEST_F(ViewLayerTest, LayerBeneathTransformed) {
   View root;
   root.SetPaintToLayer();
 
-  ui::Layer layer;
+  auto layer = std::make_unique<ui::LayerTextured>();
   View* view = root.AddChildView(std::make_unique<View>());
   view->SetPaintToLayer();
-  view->AddLayerToRegion(&layer, LayerRegion::kBelow);
-  EXPECT_TRUE(layer.transform().IsIdentity());
+  view->AddLayerToRegion(layer.get(), LayerRegion::kBelow);
+  EXPECT_TRUE(layer->transform().IsIdentity());
 
   gfx::Transform transform;
   transform.Rotate(90);
   view->SetTransform(transform);
-  EXPECT_EQ(transform, layer.transform());
+  EXPECT_EQ(transform, layer->transform());
   view->SetTransform(gfx::Transform());
-  EXPECT_TRUE(layer.transform().IsIdentity());
+  EXPECT_TRUE(layer->transform().IsIdentity());
 }
 
 TEST_F(ViewLayerTest, UpdateChildLayerVisibilityEvenIfLayer) {
@@ -6545,15 +6707,15 @@ TEST_F(ViewLayerTest, LayerBeneathStackedCorrectly) {
   View root;
   root.SetPaintToLayer();
 
-  ui::Layer layer;
-  layer.SetName("layer");
+  auto layer = std::make_unique<ui::LayerTextured>();
+  layer->SetName("layer");
 
   View* v1 = root.AddChildView(std::make_unique<View>());
   View* v2 = root.AddChildView(std::make_unique<View>());
   View* v3 = root.AddChildView(std::make_unique<View>());
 
   // Check that |layer| is stacked correctly as we add more layers to the tree.
-  v2->AddLayerToRegion(&layer, LayerRegion::kBelow);
+  v2->AddLayerToRegion(layer.get(), LayerRegion::kBelow);
   v2->layer()->SetName("v2");
   EXPECT_EQ(ChildLayerNamesAsString(*root.layer()), "layer v2");
   v3->SetPaintToLayer();
@@ -6563,25 +6725,25 @@ TEST_F(ViewLayerTest, LayerBeneathStackedCorrectly) {
   v1->layer()->SetName("v1");
   EXPECT_EQ(ChildLayerNamesAsString(*root.layer()), "v1 layer v2 v3");
 
-  v2->RemoveLayerFromRegions(&layer);
+  v2->RemoveLayerFromRegions(layer.get());
 }
 
 TEST_F(ViewLayerTest, LayerBeneathOrphanedOnRemoval) {
   View root;
   root.SetPaintToLayer();
 
-  ui::Layer layer;
+  auto layer = std::make_unique<ui::LayerTextured>();
   View* view = root.AddChildView(std::make_unique<View>());
-  view->AddLayerToRegion(&layer, LayerRegion::kBelow);
-  EXPECT_EQ(layer.parent(), root.layer());
+  view->AddLayerToRegion(layer.get(), LayerRegion::kBelow);
+  EXPECT_EQ(layer->parent(), root.layer());
 
   // Ensure that the layer beneath is orphaned and re-parented appropriately.
   root.RemoveChildView(view);
-  EXPECT_EQ(layer.parent(), nullptr);
+  EXPECT_EQ(layer->parent(), nullptr);
   root.AddChildViewRaw(view);
-  EXPECT_EQ(layer.parent(), root.layer());
+  EXPECT_EQ(layer->parent(), root.layer());
 
-  view->RemoveLayerFromRegions(&layer);
+  view->RemoveLayerFromRegions(layer.get());
 }
 
 TEST_F(ViewLayerTest, LayerBeneathMovedWithView) {
@@ -6591,8 +6753,8 @@ TEST_F(ViewLayerTest, LayerBeneathMovedWithView) {
   root.SetPaintToLayer();
   root.layer()->SetName("root");
 
-  ui::Layer layer;
-  layer.SetName("layer");
+  auto layer = std::make_unique<ui::LayerTextured>();
+  layer->SetName("layer");
 
   View* v1 = root.AddChildView(std::make_unique<View>());
   View* v2 = root.AddChildView(std::make_unique<View>());
@@ -6606,7 +6768,7 @@ TEST_F(ViewLayerTest, LayerBeneathMovedWithView) {
   v3->layer()->SetName("v3");
 
   // Verify that |layer| is stacked correctly.
-  v3->AddLayerToRegion(&layer, LayerRegion::kBelow);
+  v3->AddLayerToRegion(layer.get(), LayerRegion::kBelow);
   EXPECT_EQ(ChildLayerNamesAsString(*v1->layer()), "layer v3");
 
   // Move |v3| to under |v2| and check |layer|'s stacking.
@@ -6752,14 +6914,14 @@ TEST_F(ViewLayerPixelCanvasTest, LayerBeneathOnPixelCanvas) {
 
   View* view = widget()->SetContentsView(std::make_unique<View>());
 
-  ui::Layer layer;
-  view->AddLayerToRegion(&layer, LayerRegion::kBelow);
+  auto layer = std::make_unique<ui::LayerTextured>();
+  view->AddLayerToRegion(layer.get(), LayerRegion::kBelow);
 
   view->SetBoundsRect(gfx::Rect(1, 1, 10, 10));
   EXPECT_NE(gfx::Vector2dF(), view->layer()->GetSubpixelOffset());
-  EXPECT_EQ(view->layer()->GetSubpixelOffset(), layer.GetSubpixelOffset());
+  EXPECT_EQ(view->layer()->GetSubpixelOffset(), layer->GetSubpixelOffset());
 
-  view->RemoveLayerFromRegions(&layer);
+  view->RemoveLayerFromRegions(layer.get());
 }
 
 TEST_F(ViewTest, FocusableAssertions) {
@@ -7686,7 +7848,7 @@ END_METADATA
 // in sync.
 TEST(ViewTestUnfixtured, ViewLayerSizeStayInSync) {
   // Make a layer with implicit animations.
-  std::unique_ptr<ui::Layer> region_layer = std::make_unique<ui::Layer>();
+  auto region_layer = std::make_unique<ui::LayerTextured>();
   region_layer->SetAnimator(ui::LayerAnimator::CreateImplicitAnimator());
 
   // Make a view, attach the layer to a region. The view keeps the bounds of the
@@ -7870,6 +8032,22 @@ TEST_F(ViewTest, GetViewByElementId) {
   EXPECT_EQ(child2, const_root->GetViewByElementId(kUniqueElementId2));
   EXPECT_EQ(nullptr, const_root->GetViewByElementId(kUnusedElementId));
   EXPECT_EQ(child1, const_root->GetViewByElementId(kDuplicateElementId));
+}
+
+// Verifies that PillBackground dynamically computes corner radii to render
+// pill/capsule shapes without crashing.
+TEST_F(ViewTest, PillBackground) {
+  auto view = std::make_unique<View>();
+  view->SetSize(gfx::Size(100, 30));
+  view->SetBackground(CreatePillBackground(SK_ColorBLUE));
+  EXPECT_NE(nullptr, view->GetBackground());
+
+  gfx::Canvas canvas(gfx::Size(100, 30), 1.0f, /*is_opaque=*/false);
+  EXPECT_NO_FATAL_FAILURE(view->GetBackground()->Paint(&canvas, view.get()));
+
+  // Test with logical theme ColorId.
+  view->SetBackground(CreatePillBackground(ui::kColorSysBaseContainerElevated));
+  EXPECT_NE(nullptr, view->GetBackground());
 }
 
 }  // namespace views

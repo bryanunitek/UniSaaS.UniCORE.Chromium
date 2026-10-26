@@ -778,20 +778,6 @@ class HoldingSpaceKeyedServiceWithExperimentalFeatureForGuestTest
     return profile_;
   }
 
-  std::unique_ptr<BrowserWindow> CreateBrowserWindow() override {
-    // Do not create browser window.
-    return nullptr;
-  }
-
-  std::unique_ptr<Browser> CreateBrowser(
-      Profile* profile,
-      Browser::Type browser_type,
-      bool hosted_app,
-      BrowserWindow* browser_window) override {
-    // Do not create browser.
-    return nullptr;
-  }
-
  private:
   raw_ptr<TestingProfile> profile_;
 };
@@ -3165,33 +3151,19 @@ class HoldingSpaceKeyedServicePrintToPdfIntegrationTest
     HoldingSpaceKeyedServiceTest::SetUp();
 
     // Create the PDF printer handler.
-    Browser* browser = GetBrowserForPdfPrinterHandler();
     pdf_printer_handler_ = std::make_unique<::printing::PdfPrinterHandler>(
-        browser->GetProfile(),
-        browser->tab_strip_model()->GetActiveWebContents(),
+        GetProfileForPdfPrinterHandler(),
+        /*preview_web_contents=*/nullptr,
         /*sticky_settings=*/nullptr);
   }
 
-  void TearDown() override {
-    incognito_browser_.reset();
-    HoldingSpaceKeyedServiceTest::TearDown();
-  }
-
-  Browser* GetBrowserForPdfPrinterHandler() {
-    if (!UseIncognitoBrowser()) {
-      return browser();
-    }
-    if (!incognito_browser_) {
-      incognito_browser_ =
-          CreateBrowserWithTestWindowForParams(Browser::CreateParams(
-              profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
-              /*user_gesture=*/true));
-    }
-    return incognito_browser_.get();
+  Profile* GetProfileForPdfPrinterHandler() {
+    return UseIncognitoBrowser()
+               ? profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true)
+               : profile();
   }
 
   std::unique_ptr<::printing::PdfPrinterHandler> pdf_printer_handler_;
-  std::unique_ptr<Browser> incognito_browser_;
 };
 
 INSTANTIATE_TEST_SUITE_P(All,

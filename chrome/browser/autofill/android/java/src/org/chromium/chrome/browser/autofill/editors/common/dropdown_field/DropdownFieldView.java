@@ -193,7 +193,7 @@ public class DropdownFieldView implements FieldView {
 
     public void setErrorMessage(@Nullable String errorMessage) {
         View view = mDropdown.getSelectedView();
-        if (errorMessage == null) {
+        if (TextUtils.isEmpty(errorMessage)) {
             // {@link Spinner#getSelectedView()} is null in JUnit tests.
             if (view != null && view instanceof TextView) {
                 ((TextView) view).setError(null);
@@ -206,7 +206,7 @@ public class DropdownFieldView implements FieldView {
 
         Drawable drawable =
                 TraceEventVectorDrawableCompat.create(
-                        mContext.getResources(), R.drawable.ic_error, mContext.getTheme());
+                        mContext.getResources(), R.drawable.ic_error_24dp, mContext.getTheme());
         assumeNonNull(drawable);
         drawable.setBounds(0, 0, drawable.getIntrinsicWidth(), drawable.getIntrinsicHeight());
         if (view != null && view instanceof TextView) {

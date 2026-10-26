@@ -9,7 +9,6 @@
 #include "base/memory/raw_ref.h"
 #include "chrome/browser/ui/extensions/extensions_menu_handler.h"
 #include "chrome/browser/ui/extensions/extensions_menu_view_model.h"
-#include "content/public/browser/web_contents.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/common/extension.h"
 #include "ui/views/view_tracker.h"
@@ -44,6 +43,7 @@ class ExtensionsMenuDelegateDesktop : public ExtensionsMenuViewModel::Delegate,
   ~ExtensionsMenuDelegateDesktop() override;
 
   // ExtensionsMenuViewModel::Delegate:
+  content::WebContents* GetActiveWebContents() const override;
   std::unique_ptr<ExtensionActionViewModel> CreateActionViewModel(
       const extensions::ExtensionId& extension_id) override;
 

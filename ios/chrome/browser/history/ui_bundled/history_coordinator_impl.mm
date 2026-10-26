@@ -6,7 +6,7 @@
 
 #import "ios/chrome/browser/history/ui_bundled/base_history_coordinator+subclassing.h"
 #import "ios/chrome/browser/history/ui_bundled/history_table_view_controller.h"
-#import "ios/chrome/browser/menu/ui_bundled/menu_histograms.h"
+#import "ios/chrome/browser/menu/public/menu_histograms.h"
 
 @interface HistoryCoordinatorImpl () {
   // ViewController being managed by this Coordinator.
@@ -65,8 +65,9 @@
 #pragma mark - Private
 
 - (void)dismissHistoryNavigationWithCompletion:(ProceduralBlock)completion {
-  [_historyNavigationController dismissViewControllerAnimated:YES
-                                                   completion:completion];
+  [_historyNavigationController.presentingViewController
+      dismissViewControllerAnimated:YES
+                         completion:completion];
   _historyNavigationController = nil;
   _viewController.historyService = nullptr;
 }

@@ -31,7 +31,6 @@ import {ConnectionStateType, DeviceStateType, IPConfigType, NetworkType, OncSour
 /** @typedef {*} SIMLockStatus */
 /** @typedef {*} SubjectAltName */
 /** @typedef {*} TetherStateProperties */
-/** @typedef {*} TrafficCounterProperties */
 
 // Used to indicate a saved but unknown credential value. Will appear as
 // placeholder character in the credential (passphrase, password, etc.) field by
@@ -766,7 +765,6 @@ export class OncMojo {
       ipAddressConfigType: OncMojo.createManagedString('DHCP'),
       nameServersConfigType: OncMojo.createManagedString('DHCP'),
       portalState: PortalState.kUnknown,
-      trafficCounterProperties: OncMojo.createTrafficCounterProperties(),
     };
     switch (type) {
       case NetworkType.kCellular:
@@ -1194,17 +1192,6 @@ export class OncMojo {
   }
 
   /**
-   * @return {!TrafficCounterProperties}
-   */
-  static createTrafficCounterProperties() {
-    return {
-      lastResetTime: null,
-      autoReset: false,
-      userSpecifiedResetDay: 1,
-    };
-  }
-
-  /**
    * Returns a string to translate for the user visible connection state.
    * @param {!ConnectionStateType}
    *     connectionState
@@ -1466,20 +1453,14 @@ export class OncMojo {
  */
 OncMojo.USE_ATTACH_APN_NAME = 'attach';
 
-/** @typedef {MojomDeviceStateProperties} */
-OncMojo.DeviceStateProperties;
+/** @typedef {MojomDeviceStateProperties} OncMojo.DeviceStateProperties */
 
-/** @typedef {MojomNetworkStateProperties} */
-OncMojo.NetworkStateProperties;
+/** @typedef {MojomNetworkStateProperties} OncMojo.NetworkStateProperties */
 
 /**
- * @typedef {ManagedBoolean|
- *           ManagedInt32|
- *           ManagedString|
- *           ManagedStringList|
- *           ManagedApnList}
+ * @typedef {ManagedBoolean|ManagedInt32|ManagedString|ManagedStringList|ManagedApnList}
+ * OncMojo.ManagedProperty
  */
-OncMojo.ManagedProperty;
 
 /**
  * Modified version of IPConfigProperties to store routingPrefix as
@@ -1490,8 +1471,7 @@ OncMojo.ManagedProperty;
  *   ipAddress: (string|null),
  *   nameServers: (Array<string>|null),
  *   netmask: (string|null),
- *   type: !IPConfigType,
+ *   type: IPConfigType,
  *   webProxyAutoDiscoveryUrl: (string|null),
- * }}
+ * }} OncMojo.IPConfigUIProperties
  */
-OncMojo.IPConfigUIProperties;

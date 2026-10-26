@@ -26,31 +26,26 @@
 #include "components/omnibox/browser/base_search_provider.h"
 #include "content/public/browser/web_contents.h"
 #include "services/network/public/cpp/constants.h"
+#include "third_party/jni_zero/jni_zero.h"
 #include "url/gurl.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/browser/ui/android/omnibox/jni_headers/OmniboxPrerender_jni.h"
 
-using base::android::JavaRef;
 using predictors::AutocompleteActionPredictor;
 using predictors::AutocompleteActionPredictorFactory;
 
-OmniboxPrerender::OmniboxPrerender(JNIEnv* env,
-                                   const jni_zero::JavaRef<jobject>& obj)
-    : weak_java_omnibox_(env, obj) {}
+OmniboxPrerender::OmniboxPrerender() = default;
 
 OmniboxPrerender::~OmniboxPrerender() = default;
 
-static int64_t JNI_OmniboxPrerender_Init(
-    JNIEnv* env,
-    const jni_zero::JavaRef<jobject>& obj) {
-  OmniboxPrerender* omnibox = new OmniboxPrerender(env, obj);
-  return reinterpret_cast<intptr_t>(omnibox);
+static jni_zero::JniUniquePtr<OmniboxPrerender> JNI_OmniboxPrerender_Init(
+    JNIEnv* env) {
+  return jni_zero::MakeUnique<OmniboxPrerender>();
 }
 
-void OmniboxPrerender::Clear(JNIEnv* env,
-                             Profile* profile) {
-  DCHECK(profile);
+void OmniboxPrerender::Clear(Profile* profile) {
+  CHECK(profile, base::NotFatalUntil::M161);
   if (!profile)
     return;
   AutocompleteActionPredictor* action_predictor =
@@ -58,27 +53,20 @@ void OmniboxPrerender::Clear(JNIEnv* env,
   action_predictor->UpdateDatabaseFromTransitionalMatches(GURL());
 }
 
-void OmniboxPrerender::InitializeForProfile(JNIEnv* env,
-                                            Profile* profile) {
+void OmniboxPrerender::InitializeForProfile(Profile* profile) {
   // Initialize the AutocompleteActionPredictor for this profile.
   // It needs to register for notifications as part of its initialization.
   AutocompleteActionPredictorFactory::GetForProfile(profile);
 }
 
-void OmniboxPrerender::PrerenderMaybe(JNIEnv* env,
-                                      const JavaRef<jstring>& j_url,
-                                      const JavaRef<jstring>& j_current_url,
+void OmniboxPrerender::PrerenderMaybe(const std::u16string& url_string,
+                                      const std::u16string& current_url_string,
                                       int64_t jsource_match,
                                       Profile* profile,
-                                      const JavaRef<jobject>& j_tab) {
+                                      TabAndroid* tab) {
   AutocompleteResult* autocomplete_result =
       reinterpret_cast<AutocompleteResult*>(jsource_match);
-  std::u16string url_string =
-      base::android::ConvertJavaStringToUTF16(env, j_url);
-  std::u16string current_url_string =
-      base::android::ConvertJavaStringToUTF16(env, j_current_url);
-  content::WebContents* web_contents =
-      TabAndroid::GetNativeTab(env, j_tab)->web_contents();
+  content::WebContents* web_contents = tab ? tab->web_contents() : nullptr;
   // TODO(apiccion) Use a delegate for communicating with web_contents.
   // This can happen in OmniboxTests since the results are generated
   // in Java only.
@@ -143,10 +131,10 @@ void OmniboxPrerender::PrerenderMaybe(JNIEnv* env,
 void OmniboxPrerender::DoPrerender(const AutocompleteMatch& match,
                                    Profile* profile,
                                    content::WebContents* web_contents) {
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M161);
   if (!profile)
     return;
-  DCHECK(web_contents);
+  CHECK(web_contents, base::NotFatalUntil::M161);
   if (!web_contents)
     return;
 
@@ -155,7 +143,8 @@ void OmniboxPrerender::DoPrerender(const AutocompleteMatch& match,
   // more information.
   // SearchPrefetchService is responsible for handling search
   // AutocompleteMatches and preloading search result pages when needed.
-  DCHECK(!AutocompleteMatch::IsSearchType(match.type));
+  CHECK(!AutocompleteMatch::IsSearchType(match.type),
+        base::NotFatalUntil::M161);
   predictors::AutocompleteActionPredictorFactory::GetForProfile(profile)
       ->StartPrerendering(match.destination_url, *web_contents);
 }

@@ -7,7 +7,7 @@
 #include "base/functional/callback.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/context_sharing/tab_bottom_sheet/android/co_browse_views_bridge.h"
-#include "chrome/browser/glic/android/jni_headers/GlicSidePanelComponentProvider_jni.h"
+#include "chrome/browser/glic/actor/glic_actor_task_manager.h"
 #include "chrome/browser/glic/browser_ui/glic_toast.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/glic/public/glic_instance.h"
@@ -17,45 +17,23 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/side_panel/android/side_panel_native_view_android.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
-#include "chrome/browser/ui/side_panel/side_panel_ui_provider.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/tabs/public/tab_interface.h"
+#include "third_party/jni_zero/jni_zero.h"
+#include "ui/base/l10n/l10n_util.h"
+
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/browser/glic/android/jni_headers/GlicSidePanelComponentProvider_jni.h"
 
 namespace glic {
-
-namespace {
-
-// TODO(crbug.com/515493573): Remove this once Glic transitions to using the
-// bottom sheet for narrow windows.
-std::unique_ptr<GlicToast> MaybeShowResizeToast(
-    tabs::TabInterface* tab,
-    GlicKeyedService* glic_service) {
-  content::WebContents* web_contents = tab->GetContents();
-  if (!web_contents || !glic_service) {
-    return nullptr;
-  }
-
-  bool is_actuating = false;
-  if (auto* instance =
-          glic_service->instance_coordinator().GetInstanceForTab(tab)) {
-    is_actuating = instance->IsActuating();
-  }
-
-  int title_res_id =
-      is_actuating ? IDS_GLIC_TASK_PAUSED_TITLE : IDS_GLIC_CHAT_HIDDEN_TITLE;
-  int description_res_id = is_actuating ? IDS_GLIC_TASK_PAUSED_DESCRIPTION
-                                        : IDS_GLIC_CHAT_HIDDEN_DESCRIPTION;
-  return GlicToast::Show(web_contents, title_res_id, description_res_id);
-}
-
-}  // namespace
 
 GlicSidePanelCoordinatorDesktopAndroid::GlicSidePanelCoordinatorDesktopAndroid(
     tabs::TabInterface* tab_interface,
@@ -90,21 +68,18 @@ void GlicSidePanelCoordinatorDesktopAndroid::CreateAndRegisterEntry() {
     return;
   }
 
-  // Note that Android only supports toolbar-height side panels, so
-  // we pass `SidePanelType::kToolbar` without checking the
-  // `kGlicUseToolbarHeightSidePanel` flag. The flag controls the rollout of
-  // toolbar-height panel on WML, so it may be disabled and not in sync with the
-  // GLiC rollout on Android.
-  //
-  // TODO(crbug.com/515153523): Consider if Android side panels should be
-  // WebContents-height.
   auto entry = std::make_unique<SidePanelEntry>(
-      SidePanelType::kToolbar, SidePanelEntry::Key(SidePanelEntry::Id::kGlic),
+      base::FeatureList::IsEnabled(features::kGlicUseToolbarHeightSidePanel)
+          ? SidePanelType::kToolbar
+          : SidePanelType::kContent,
+      SidePanelEntry::Key(SidePanelEntry::Id::kGlic),
       base::BindRepeating(&GlicSidePanelCoordinatorDesktopAndroid::CreateView,
                           base::Unretained(this)),
       base::BindRepeating(
           &GlicSidePanelCoordinatorDesktopAndroid::GetPreferredWidth,
           base::Unretained(this)));
+  entry->SetProperty(kSidePanelTitleKey,
+                     l10n_util::GetStringUTF16(IDS_GLIC_WINDOW_TITLE));
   entry->set_should_show_header(false);
   entry->set_should_show_ephemerally_in_toolbar(false);
   entry->AddObserver(this);
@@ -143,8 +118,9 @@ void GlicSidePanelCoordinatorDesktopAndroid::Close(
     return;
   }
   if (state_ == State::kBackgrounded) {
-    CHECK(IsGlicSidePanelActive());
-    side_panel_registry_->ResetActiveEntry();
+    if (IsGlicSidePanelActive()) {
+      side_panel_registry_->ResetActiveEntry();
+    }
     SetState(State::kClosed);
   }
 }
@@ -170,7 +146,7 @@ void GlicSidePanelCoordinatorDesktopAndroid::OnEntryHiddenWithReason(
       reason == SidePanelEntryHideReason::kWindowResized) {
     SetState(State::kBackgrounded);
     if (reason == SidePanelEntryHideReason::kWindowResized) {
-      resize_toast_ = MaybeShowResizeToast(tab_, glic_service_);
+      MaybeShowResizeToast();
     }
   } else {
     SetState(State::kClosed);
@@ -184,6 +160,59 @@ void GlicSidePanelCoordinatorDesktopAndroid::OnEntryShown(
   SetState(State::kShown);
 }
 
+void GlicSidePanelCoordinatorDesktopAndroid::OnEntryShowDeferred(
+    SidePanelEntry* entry) {
+  CHECK_EQ(entry->key().id(), SidePanelEntry::Id::kGlic);
+  SetState(State::kBackgrounded);
+  MaybeShowResizeToast();
+}
+
+void GlicSidePanelCoordinatorDesktopAndroid::MaybeShowResizeToast() {
+  // Avoid showing the same toast in quick succession.
+  //
+  // For example, if a tab with Glic side panel is moved from a wide window to a
+  // narrow window, SidePanelCoordinatorAndroid::Show() will be called twice
+  // since both Glic and SidePanelCoordinatorAndroid observe active tab
+  // changes.
+  //
+  // This will cause OnEntryShowDeferred() to be called twice in quick
+  // succession, but we shouldn't show the same toast, dismiss it, then show
+  // it again.
+  //
+  // SidePanelCoordinatorAndroid::Show() can't handle this by only triggering
+  // OnEntryShowDeferred() once per SidePanelEntry, because we do have cases
+  // where OnEntryShowDeferred() should be triggered multiple times, such as
+  // moving a Glic tab between multiple narrow windows.
+  //
+  // Another case is when the user repeatedly attempts to open Glic with a
+  // keyboard shortcut, but the window is too small.
+  if (resize_toast_ && resize_toast_->IsShowing()) {
+    return;
+  }
+
+  content::WebContents* web_contents = tab_->GetContents();
+  if (!web_contents || !glic_service_) {
+    return;
+  }
+
+  bool is_actuating = false;
+  if (auto* instance =
+          glic_service_->instance_coordinator().GetInstanceForTab(tab_)) {
+    is_actuating = instance->IsActuating();
+    if (auto* task_manager = instance->GetActorTaskManager()) {
+      task_manager->PauseTask();
+    }
+  }
+
+  int title_res_id =
+      is_actuating ? IDS_GLIC_TASK_PAUSED_TITLE : IDS_GLIC_CHAT_HIDDEN_TITLE;
+  int description_res_id = is_actuating ? IDS_GLIC_TASK_PAUSED_DESCRIPTION
+                                        : IDS_GLIC_CHAT_HIDDEN_DESCRIPTION;
+
+  resize_toast_ =
+      GlicToast::Show(web_contents, title_res_id, description_res_id);
+}
+
 void GlicSidePanelCoordinatorDesktopAndroid::OnGlicEnabledChanged() {
   // Maybe register side panel entry if not yet registered.
   if (glic_service_ && glic_service_->enabling().IsAllowed()) {
@@ -194,24 +223,25 @@ void GlicSidePanelCoordinatorDesktopAndroid::OnGlicEnabledChanged() {
 SidePanelNativeView GlicSidePanelCoordinatorDesktopAndroid::CreateView(
     SidePanelEntryScope& scope) {
   if (!cobrowse_views_bridge_) {
-    JNIEnv* env = base::android::AttachCurrentThread();
+    JNIEnv* env = jni_zero::AttachCurrentThread();
     java_component_provider_ =
         Java_GlicSidePanelComponentProvider_createProvider(env);
     cobrowse_views_bridge_ =
         std::make_unique<context_sharing::CoBrowseViewsBridge>(
             *tab_, context_sharing::TabBottomSheetClientType::kGlic,
             context_sharing::CoBrowseContainerType::kSidePanel,
-            java_component_provider_);
-    cobrowse_views_bridge_->CreateCoBrowseViews(web_contents_.get());
+            java_component_provider_,
+            /*enable_pinch_to_zoom=*/false, kColorGlicBackground,
+            kColorGlicPlaceholderElem);
+    cobrowse_views_bridge_->CreateCoBrowseViews(web_contents_.get(),
+                                                /*request_focus=*/false);
   }
   auto view = context_sharing::CoBrowseViewsBridge::GetViewFromCoBrowseViews(
       cobrowse_views_bridge_->GetCoBrowseViews());
   if (!view) {
     return nullptr;
   }
-  JNIEnv* env = base::android::AttachCurrentThread();
-  return std::make_unique<SidePanelNativeViewAndroid>(
-      base::android::ScopedJavaGlobalRef<jobject>(env, view));
+  return std::make_unique<SidePanelNativeViewAndroid>(view);
 }
 
 base::CallbackListSubscription
@@ -253,7 +283,7 @@ bool GlicSidePanelCoordinatorDesktopAndroid::IsGlicSidePanelActive() {
 SidePanelUI* GlicSidePanelCoordinatorDesktopAndroid::GetWindowSidePanelUI()
     const {
   if (auto* window = tab_->GetBrowserWindowInterface()) {
-    return SidePanelUIProvider::From(window);
+    return SidePanelUI::From(window);
   }
   return nullptr;
 }

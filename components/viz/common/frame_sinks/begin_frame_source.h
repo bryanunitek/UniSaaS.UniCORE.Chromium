@@ -246,10 +246,7 @@ class VIZ_COMMON_EXPORT BeginFrameSource {
   // Notifies the source that it may need to reconnect to a VSync source (e.g.,
   // DisplayLinkMac) for the specified display. This is typically triggered by
   // display configuration changes in the browser process.
-  // |is_browser_vsync_supported| indicates whether the browser-side
-  // CADisplayLink is valid.
-  virtual void UpdateVSyncDisplay(int64_t display_id,
-                                  bool is_browser_vsync_supported) {}
+  virtual void UpdateVSyncDisplay(int64_t display_id) {}
 
 #endif
 
@@ -476,7 +473,7 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSource : public BeginFrameSource {
     return last_begin_frame_args_;
   }
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC)
   // Notifies when the refresh rate of the display is updated. |refresh_rate| is
   // the rate in frames per second.
   virtual void UpdateRefreshRate(float refresh_rate) {}
@@ -486,11 +483,8 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSource : public BeginFrameSource {
   // observers.
   virtual void SetPreferredInterval(base::TimeDelta interval) {}
 
-  // Returns the minimium supported frame interval for a given BFS.
-  // This gives the maximium refresh rate that can be requested.
-  virtual base::TimeDelta GetMinimumFrameInterval();
-
-  // Sets the refresh rates supported by the display.
+  // Sets the refresh rates supported by the display. See
+  // https://developer.android.com/reference/android/view/Display#getSupportedRefreshRates().
   //
   // `supported_rates` is a map from supported VSync intervals to the equivalent
   // supported refresh rates. For example, if the display supports 60 Hz and 120
@@ -498,6 +492,10 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSource : public BeginFrameSource {
   // → `120.0f` and `base::Milliseconds(16.666)` → `60.0f`.
   virtual void SetSupportedRefreshRates(
       const base::flat_map<base::TimeDelta, float>& supported_rates) {}
+
+  // Returns the minimium supported frame interval for a given BFS.
+  // This gives the maximium refresh rate that can be requested.
+  virtual base::TimeDelta GetMinimumFrameInterval();
 
   virtual base::flat_set<base::TimeDelta> GetSupportedFrameIntervals(
       base::TimeDelta interval);

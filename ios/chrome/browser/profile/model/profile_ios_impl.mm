@@ -48,7 +48,7 @@
 #import "ios/chrome/browser/shared/model/prefs/browser_prefs.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/features.h"
-#import "ios/chrome/browser/shared/model/profile/profile_dependency_manager_ios.h"
+#import "ios/chrome/browser/shared/model/profile/internal/profile_dependency_manager_ios.h"
 #import "ios/chrome/browser/supervised_user/model/family_link_settings_service_factory.h"
 #import "ios/web/public/thread/web_thread.h"
 
@@ -135,7 +135,7 @@ struct ProfileIOSImpl::InitInfo {
 // This is a separate class to limit how much code can be allowed to block
 // the main sequence. It is required to block the sequence because we need
 // to synchronously create the directories used to store the Profile data.
-class BrowserStateDirectoryBuilder {
+class ProfileIOSDirectoryBuilder {
  public:
   // Stores the result of creating the directories.
   struct [[nodiscard]] Result {
@@ -165,10 +165,9 @@ class BrowserStateDirectoryBuilder {
 };
 
 // static
-BrowserStateDirectoryBuilder::Result
-BrowserStateDirectoryBuilder::CreateDirectories(
-    const base::FilePath& state_path,
-    const base::FilePath& otr_path) {
+ProfileIOSDirectoryBuilder::Result
+ProfileIOSDirectoryBuilder::CreateDirectories(const base::FilePath& state_path,
+                                              const base::FilePath& otr_path) {
   // Create the profile directory synchronously otherwise we would need to
   // sequence every otherwise independent I/O operation inside the profile
   // directory with this operation. base::CreateDirectory() should be a
@@ -246,9 +245,9 @@ ProfileIOSImpl::ProfileIOSImpl(
     delegate_->OnProfileCreationStarted(this, creation_mode);
   }
 
-  const BrowserStateDirectoryBuilder::Result directories_creation_result =
-      BrowserStateDirectoryBuilder::CreateDirectories(
-          state_path, GetOffTheRecordStatePath());
+  const ProfileIOSDirectoryBuilder::Result directories_creation_result =
+      ProfileIOSDirectoryBuilder::CreateDirectories(state_path,
+                                                    GetOffTheRecordStatePath());
   DCHECK(directories_creation_result.success);
 
   // Bring up the policy system before creating `prefs_`.

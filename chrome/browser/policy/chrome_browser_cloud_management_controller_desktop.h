@@ -22,7 +22,6 @@ class InstanceIDDriver;
 
 namespace invalidation {
 class InvalidationListener;
-class LegacyTopicsCleaner;
 }  // namespace invalidation
 
 namespace policy {
@@ -51,10 +50,8 @@ class ChromeBrowserCloudManagementControllerDesktop
   base::FilePath GetExternalPolicyDir() override;
   NetworkConnectionTrackerGetter CreateNetworkConnectionTrackerGetter()
       override;
-  // TODO(crbug.com/341377023): `InvalidationListener` does not use
-  // `DeviceIdentityProvider` and does not need
-  // `DeviceOAuth2TokenServiceFactory`. Check if any other service needs the
-  // factory inialialized.
+  // TODO(crbug.com/341377023): Check if any other service needs the factory
+  // initialized.
   void InitializeOAuthTokenFactory(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       PrefService* local_state) override;
@@ -120,9 +117,6 @@ class ChromeBrowserCloudManagementControllerDesktop
 
   // Responsible for storing and retrieving browser-level managed identities.
   std::unique_ptr<client_certificates::CertificateStore> certificate_store_;
-
-  // Unsubscribes any remaining invalidation topics.
-  std::unique_ptr<invalidation::LegacyTopicsCleaner> legacy_topics_cleaner_;
 };
 
 }  // namespace policy

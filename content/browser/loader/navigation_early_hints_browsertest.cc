@@ -23,7 +23,6 @@
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/content_mock_cert_verifier.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/url_loader_interceptor.h"
@@ -955,51 +954,6 @@ IN_PROC_BROWSER_TEST_F(NavigationEarlyHintsPrerenderTest,
   EXPECT_TRUE(preloads.contains(script_url));
 }
 
-class NavigationEarlyHintsFencedFrameTest : public NavigationEarlyHintsTest {
- public:
-  NavigationEarlyHintsFencedFrameTest() = default;
-
-  test::FencedFrameTestHelper& fenced_frame_test_helper() {
-    return fenced_frame_test_helper_;
-  }
-
-  ResponseEntry CreatePageEntryWithHintedScriptInFencedFrame(
-      net::HttpStatusCode status_code) {
-    RegisterHintedScriptResource();
-
-    ResponseEntry entry(kPageWithHintedScriptPath, status_code);
-    entry.headers["supports-loading-mode"] = "fenced-frame";
-    entry.body = kPageWithHintedScriptBody;
-    HeaderField link_header = CreatePreloadLinkForScript();
-    HeaderField fenced_frame_header =
-        HeaderField("supports-loading-mode", "fenced-frame");
-    entry.AddEarlyHints(
-        {std::move(link_header), std::move(fenced_frame_header)});
-    return entry;
-  }
-
- private:
-  test::FencedFrameTestHelper fenced_frame_test_helper_;
-};
-
-IN_PROC_BROWSER_TEST_F(NavigationEarlyHintsFencedFrameTest,
-                       DisallowPreloadInFencedFrame) {
-  EXPECT_TRUE(NavigateToURL(
-      shell(), net::QuicSimpleTestServer::GetFileURL("/title1.html")));
-
-  ResponseEntry entry =
-      CreatePageEntryWithHintedScriptInFencedFrame(net::HTTP_OK);
-  RegisterResponse(entry);
-
-  // Create a fenced frame.
-  RenderFrameHostImpl* fenced_frame_host = static_cast<RenderFrameHostImpl*>(
-      fenced_frame_test_helper().CreateFencedFrame(
-          shell()->web_contents()->GetPrimaryMainFrame(),
-          net::QuicSimpleTestServer::GetFileURL(kPageWithHintedScriptPath)));
-  EXPECT_NE(fenced_frame_host, nullptr);
-  EXPECT_EQ(fenced_frame_host->early_hints_manager(), nullptr);
-}
-
 namespace {
 
 const char kHttp1EarlyHintsPath[] = "/early-hints";
@@ -1084,17 +1038,12 @@ IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsHttp1Test, AllowEarlyHints) {
 }
 
 class NavigationEarlyHintsConnectionAllowlistTest
-    : public ::testing::WithParamInterface<bool>,
-      public NavigationEarlyHintsTest {
+    : public NavigationEarlyHintsTest {
  public:
   NavigationEarlyHintsConnectionAllowlistTest() {
     scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        network::features::kConnectionAllowlists,
-        {{"ConnectionAllowlistsEarlyHints",
-          IsConnectionAllowlistsInEarlyHintsEnabled() ? "true" : "false"}});
+        network::features::kConnectionAllowlists, {});
   }
-
-  bool IsConnectionAllowlistsInEarlyHintsEnabled() const { return GetParam(); }
 
   ~NavigationEarlyHintsConnectionAllowlistTest() override = default;
 
@@ -1102,7 +1051,7 @@ class NavigationEarlyHintsConnectionAllowlistTest
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsConnectionAllowlistTest,
+IN_PROC_BROWSER_TEST_F(NavigationEarlyHintsConnectionAllowlistTest,
                        PreloadAllowed) {
   const GURL kCrossOriginScriptUrl =
       cross_origin_server().GetURL("/hinted.js?corp-cross-origin");
@@ -1141,7 +1090,7 @@ IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsConnectionAllowlistTest,
   EXPECT_EQ(it->second.error_code.value(), net::OK);
 }
 
-IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsConnectionAllowlistTest,
+IN_PROC_BROWSER_TEST_F(NavigationEarlyHintsConnectionAllowlistTest,
                        PreloadBlocked) {
   const GURL kCrossOriginScriptUrl =
       cross_origin_server().GetURL("/hinted.js?corp-cross-origin");
@@ -1169,21 +1118,12 @@ IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsConnectionAllowlistTest,
   EXPECT_NE(GetEarlyHintsManager(rfh), nullptr);
   EXPECT_TRUE(GetEarlyHintsManager(rfh)->WasResourceHintsReceived());
 
-  // The preload request is blocked if feature is enabled.
+  // The preload request is blocked.
   PreloadedResources preloads = WaitForPreloadedResources();
-  if (IsConnectionAllowlistsInEarlyHintsEnabled()) {
-    EXPECT_TRUE(preloads.empty());
-  } else {
-    EXPECT_EQ(preloads.size(), 1UL);
-    auto it = preloads.find(kCrossOriginScriptUrl);
-    ASSERT_TRUE(it != preloads.end());
-    ASSERT_FALSE(it->second.was_canceled);
-    ASSERT_TRUE(it->second.error_code.has_value());
-    EXPECT_EQ(it->second.error_code.value(), net::OK);
-  }
+  EXPECT_TRUE(preloads.empty());
 }
 
-IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsConnectionAllowlistTest,
+IN_PROC_BROWSER_TEST_F(NavigationEarlyHintsConnectionAllowlistTest,
                        PreconnectAllowed) {
   const char kPageWithPreconnect[] = "/page_with_preconnect.html";
   const GURL kPreconnectUrl =
@@ -1216,7 +1156,7 @@ IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsConnectionAllowlistTest,
   EXPECT_EQ(preconnect_listener().num_accepted_sockets(), 1UL);
 }
 
-IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsConnectionAllowlistTest,
+IN_PROC_BROWSER_TEST_F(NavigationEarlyHintsConnectionAllowlistTest,
                        PreconnectBlocked) {
   const char kPageWithPreconnect[] = "/page_with_preconnect.html";
   const GURL kPreconnectUrl =
@@ -1245,15 +1185,11 @@ IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsConnectionAllowlistTest,
   EXPECT_NE(GetEarlyHintsManager(rfh), nullptr);
   EXPECT_TRUE(GetEarlyHintsManager(rfh)->WasResourceHintsReceived());
 
-  // The preconnect is blocked if feature is enabled.
-  if (IsConnectionAllowlistsInEarlyHintsEnabled()) {
-    EXPECT_EQ(preconnect_listener().num_accepted_sockets(), 0UL);
-  } else {
-    EXPECT_EQ(preconnect_listener().num_accepted_sockets(), 1UL);
-  }
+  // The preconnect is blocked.
+  EXPECT_EQ(preconnect_listener().num_accepted_sockets(), 0UL);
 }
 
-IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsConnectionAllowlistTest,
+IN_PROC_BROWSER_TEST_F(NavigationEarlyHintsConnectionAllowlistTest,
                        ModulePreloadAllowed) {
   // Module preload requests are always fetched using CORS mode. Use the Quic
   // server to make the request same origin with the document. Otherwise the
@@ -1296,7 +1232,7 @@ IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsConnectionAllowlistTest,
   EXPECT_EQ(it->second.error_code.value(), net::OK);
 }
 
-IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsConnectionAllowlistTest,
+IN_PROC_BROWSER_TEST_F(NavigationEarlyHintsConnectionAllowlistTest,
                        ModulePreloadBlocked) {
   const GURL kSameOriginScriptUrl =
       net::QuicSimpleTestServer::GetFileURL(kHintedScriptPath);
@@ -1325,22 +1261,9 @@ IN_PROC_BROWSER_TEST_P(NavigationEarlyHintsConnectionAllowlistTest,
   EXPECT_NE(GetEarlyHintsManager(rfh), nullptr);
   EXPECT_TRUE(GetEarlyHintsManager(rfh)->WasResourceHintsReceived());
 
-  // The module preload request is blocked if feature is enabled.
+  // The module preload request is blocked.
   PreloadedResources preloads = WaitForPreloadedResources();
-  if (IsConnectionAllowlistsInEarlyHintsEnabled()) {
-    EXPECT_TRUE(preloads.empty());
-  } else {
-    EXPECT_EQ(preloads.size(), 1UL);
-    auto it = preloads.find(kSameOriginScriptUrl);
-    ASSERT_TRUE(it != preloads.end());
-    ASSERT_FALSE(it->second.was_canceled);
-    ASSERT_TRUE(it->second.error_code.has_value());
-    EXPECT_EQ(it->second.error_code.value(), net::OK);
-  }
+  EXPECT_TRUE(preloads.empty());
 }
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         NavigationEarlyHintsConnectionAllowlistTest,
-                         ::testing::Bool());
 
 }  // namespace content

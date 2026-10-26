@@ -9,6 +9,9 @@
 #include "base/check_op.h"
 #include "base/metrics/persistent_memory_allocator.h"
 #include "base/rand_util.h"
+#include "base/system/sys_info.h"
+#include "components/metrics/metrics_log.h"
+#include "components/metrics/version_utils.h"
 #include "components/variations/hashing.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -251,6 +254,116 @@ TEST_F(PersistentSystemProfileTest, DeleteFieldTrials) {
   ASSERT_EQ(1, fetched.field_trial_size());
   EXPECT_EQ(variations::HashName("foo"), fetched.field_trial(0).name_id());
   EXPECT_EQ(variations::HashName("bar2"), fetched.field_trial(0).group_id());
+}
+
+TEST_F(PersistentSystemProfileTest, RecordCoreSystemProfile) {
+  // 1. Populate the profile directly using RecordCoreSystemProfile
+  SystemProfileProto system_profile;
+  MetricsLog::RecordCoreSystemProfile("version",
+                                      SystemProfileProto::CHANNEL_STABLE, false,
+                                      "en-US", "package", &system_profile);
+  system_profile.set_install_date(12345678);  // Simulate mock install date
+
+  persistent_profile()->SetSystemProfile(system_profile, /*complete=*/false);
+
+  // 2. Read it back from the allocator and verify
+  SystemProfileProto decoded_profile;
+  ASSERT_TRUE(PersistentSystemProfile::GetSystemProfile(*memory_allocator(),
+                                                        &decoded_profile));
+
+  // 3. Assert all safe fields are populated and match expected values
+  ASSERT_TRUE(decoded_profile.has_hardware());
+  EXPECT_FALSE(decoded_profile.hardware().cpu_architecture().empty());
+  EXPECT_EQ(static_cast<int64_t>(decoded_profile.hardware().system_ram_mb()),
+            static_cast<int64_t>(
+                base::SysInfo::AmountOfTotalPhysicalMemory().InMiB()));
+  EXPECT_EQ(decoded_profile.hardware().hardware_class(),
+            base::SysInfo::HardwareModelName());
+
+  ASSERT_TRUE(decoded_profile.has_os());
+  EXPECT_EQ(decoded_profile.os().name(), GetOperatingSystemName());
+  EXPECT_EQ(decoded_profile.os().version(),
+            base::SysInfo::OperatingSystemVersion());
+
+  EXPECT_EQ(decoded_profile.install_date(), 12345678U);
+}
+
+TEST_F(PersistentSystemProfileTest, CorruptUnalignedSegmentSize) {
+  constexpr uint32_t kTypeIdSystemProfile = 0x330A7150;
+  base::LocalPersistentMemoryAllocator allocator(64 << 10, 0, "");
+  base::PersistentMemoryAllocator::Reference ref =
+      allocator.Allocate(32, kTypeIdSystemProfile);
+  ASSERT_NE(0U, ref);
+  allocator.MakeIterable(ref);
+
+  // Corrupt the block header's size to 21 bytes (16-byte BlockHeader + 5 bytes
+  // of data), which is not a multiple of kAllocAlignment.
+  auto* block_header = reinterpret_cast<uint32_t*>(UNSAFE_TODO(
+      const_cast<char*>(static_cast<const char*>(allocator.data())) + ref));
+  *block_header = 21;
+
+  PersistentSystemProfile profile;
+  profile.RegisterPersistentAllocator(&allocator);
+
+  SystemProfileProto proto;
+  proto.set_client_uuid(std::string(256, 'x'));
+  profile.SetSystemProfile(proto, /*complete=*/true);
+  profile.AddFieldTrial("trial", "group");
+
+  SystemProfileProto fetched;
+  EXPECT_FALSE(PersistentSystemProfile::HasSystemProfile(allocator));
+  EXPECT_FALSE(PersistentSystemProfile::GetSystemProfile(allocator, &fetched));
+}
+
+TEST_F(PersistentSystemProfileTest, FullAllocatorDoesNotWrapAround) {
+  // Create a small allocator with only enough room for a single 4 KiB segment.
+  base::LocalPersistentMemoryAllocator allocator(8 << 10, 0, "");
+  PersistentSystemProfile profile;
+  profile.RegisterPersistentAllocator(&allocator);
+
+  // Exhaust the rest of the allocator so no additional segments can be
+  // allocated when the first segment fills up.
+  while (allocator.Allocate(64, 12345) != 0) {
+  }
+
+  SystemProfileProto proto;
+  proto.set_client_uuid("test-client-uuid");
+  profile.SetSystemProfile(proto, /*complete=*/true);
+
+  // Repeatedly add field trials until the single 4 KiB segment is full and
+  // subsequent writes fail. Ensure this does not wrap around to overwrite the
+  // start of the first segment or trigger a DCHECK.
+  for (int i = 0; i < 300; ++i) {
+    profile.AddFieldTrial("TrialNameThatTakesUpSpace", "GroupName");
+  }
+
+  SystemProfileProto fetched;
+  ASSERT_TRUE(PersistentSystemProfile::GetSystemProfile(allocator, &fetched));
+  EXPECT_EQ("test-client-uuid", fetched.client_uuid());
+}
+
+TEST_F(PersistentSystemProfileTest, PreExistingNonZeroSegmentIsReset) {
+  constexpr uint32_t kTypeIdSystemProfile = 0x330A7150;
+  base::LocalPersistentMemoryAllocator allocator(64 << 10, 0, "");
+  base::PersistentMemoryAllocator::Reference ref =
+      allocator.Allocate(4 << 10, kTypeIdSystemProfile);
+  ASSERT_NE(0U, ref);
+  uint32_t* data = allocator.GetAsArray<uint32_t>(ref, kTypeIdSystemProfile, 1);
+  ASSERT_NE(nullptr, data);
+  *data = 0xDEADBEEF;
+  allocator.MakeIterable(ref);
+
+  PersistentSystemProfile profile;
+  profile.RegisterPersistentAllocator(&allocator);
+  EXPECT_FALSE(PersistentSystemProfile::HasSystemProfile(allocator));
+
+  SystemProfileProto proto;
+  proto.set_client_uuid("clean-uuid");
+  profile.SetSystemProfile(proto, /*complete=*/true);
+
+  SystemProfileProto fetched;
+  ASSERT_TRUE(PersistentSystemProfile::GetSystemProfile(allocator, &fetched));
+  EXPECT_EQ("clean-uuid", fetched.client_uuid());
 }
 
 }  // namespace

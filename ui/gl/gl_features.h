@@ -27,13 +27,17 @@ GL_EXPORT bool UseCompositorClockVSyncInterval();
 GL_EXPORT BASE_DECLARE_FEATURE(kDefaultPassthroughCommandDecoder);
 #endif
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
-GL_EXPORT BASE_DECLARE_FEATURE(kFallbackToSWIfGLES3NotSupported);
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_WIN)
 GL_EXPORT BASE_DECLARE_FEATURE(kUseCompositorClockVSyncInterval);
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_ANDROID)
+// Controls whether 2-pixel even boundary alignment is enforced for YUV 4:2:0
+// and 4:2:2 SurfaceControl overlays to prevent odd-coordinate hardware scaler
+// rejections.
+GL_EXPORT BASE_DECLARE_FEATURE(kAndroidYuvOverlayEvenAlignment);
+#endif  // BUILDFLAG(IS_ANDROID)
 
 GL_EXPORT bool IsAndroidFrameDeadlineEnabled();
 
@@ -46,24 +50,13 @@ GL_EXPORT void GetANGLEFeaturesFromCommandLineAndFinch(
     std::vector<std::string>& enabled_angle_features,
     std::vector<std::string>& disabled_angle_features);
 
-GL_EXPORT bool ShouldFallbackToSWIfGLES3NotSupported();
-
-#if BUILDFLAG(ENABLE_SWIFTSHADER)
-GL_EXPORT BASE_DECLARE_FEATURE(kAllowSwiftShaderFallback);
-#endif
+#if BUILDFLAG(IS_APPLE)
+GL_EXPORT BASE_DECLARE_FEATURE(kANGLEPurgeableBufferPool);
+#endif  // BUILDFLAG(IS_APPLE)
 
 // If SwiftShader should be allowed as a GL implementation or WebGL fallback via
 // command line flags. Disallowed by default unless explicitly requested with
 // --use-angle=swiftshader[-for-webgl], --enable-unsafe-swiftshader
-GL_EXPORT bool IsSwiftShaderAllowedByCommandLine(
-    const base::CommandLine* command_line);
-
-// If SwiftShader should be allowed due to the AllowSwiftShaderFallback
-// killswitch feature.
-GL_EXPORT bool IsSwiftShaderAllowedByFeature();
-
-// SwiftShader is allowed by either IsSwiftShaderAllowedByCommandLine or
-// IsSwiftShaderAllowedByFeature.
 GL_EXPORT bool IsSwiftShaderAllowed(const base::CommandLine* command_line);
 
 // If SwiftShader is explicitly requested for WebGL via
@@ -89,6 +82,7 @@ GL_EXPORT bool IsSoftwareGLFallbackDueToCrashesAllowed(
 
 #if BUILDFLAG(IS_ANDROID)
 GL_EXPORT BASE_DECLARE_FEATURE(kAndroidLimitRgb565DisplayToApi32);
+GL_EXPORT BASE_DECLARE_FEATURE(kAndroidSurfaceControlPartialDamage);
 
 GL_EXPORT bool PreferRGB565ResourcesForDisplay();
 #endif

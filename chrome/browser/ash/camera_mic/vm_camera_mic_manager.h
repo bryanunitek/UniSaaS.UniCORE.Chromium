@@ -8,31 +8,23 @@
 #include <bitset>
 #include <memory>
 
-#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
-#include "components/keyed_service/core/keyed_service.h"
 #include "media/capture/video/chromeos/camera_hal_dispatcher_impl.h"
-#include "ui/message_center/public/cpp/notification.h"
-#include "ui/message_center/public/cpp/notification_delegate.h"
-
-class Profile;
 
 namespace ash {
 
-// This class manages camera/mic access (and the access notifications) for VMs
-// (crostini and parallels for now). All of the notifications are sent to the
-// primary profile since all VMs support only the primary profile. We might need
-// to change this if we extend this class to support the browser, in which case
-// we will also need to make the notification ids different for different
-// profiles.
-class VmCameraMicManager : public media::CameraActiveClientObserver,
-                           public media::CameraPrivacySwitchObserver,
+// This class manages camera/mic access (and the access notifications) for VMs.
+// All of the notifications are associated with the primary user since all VMs
+// support only the primary user. We might need to change this if we extend this
+// class to support the browser, in which case we will also need to make the
+// notification ids different for different users.
+class VmCameraMicManager : public media::CameraPrivacySwitchObserver,
                            public CrasAudioHandler::AudioObserver {
  public:
-  enum class VmType { kCrostiniVm, kPluginVm, kBorealis };
+  enum class VmType { kCrostiniVm, kBorealis };
 
   enum class DeviceType {
     kMic,
@@ -62,7 +54,7 @@ class VmCameraMicManager : public media::CameraActiveClientObserver,
   VmCameraMicManager();
   ~VmCameraMicManager() override;
 
-  void OnPrimaryUserSessionStarted(Profile* primary_profile);
+  void OnPrimaryUserSessionStarted();
 
   VmCameraMicManager(const VmCameraMicManager&) = delete;
   VmCameraMicManager& operator=(const VmCameraMicManager&) = delete;
@@ -88,12 +80,6 @@ class VmCameraMicManager : public media::CameraActiveClientObserver,
 
   void MaybeSubscribeToCameraService(bool should_use_cros_camera_service);
 
-  // media::CameraActiveClientObserver
-  void OnActiveClientChange(
-      cros::mojom::CameraClientType type,
-      bool is_new_active_client,
-      const base::flat_set<std::string>& active_device_ids) override;
-
   // media::CameraPrivacySwitchObserver
   void OnCameraHWPrivacySwitchStateChanged(
       const std::string& device_id,
@@ -111,7 +97,6 @@ class VmCameraMicManager : public media::CameraActiveClientObserver,
   void UpdateVmInfo(VmType vm, void (VmInfo::*updator)(bool), bool value);
   void NotifyActiveChanged();
 
-  raw_ptr<Profile, LeakedDanglingUntriaged> primary_profile_ = nullptr;
   std::map<VmType, VmInfo> vm_info_map_;
 
   base::ObserverList<Observer> observers_;

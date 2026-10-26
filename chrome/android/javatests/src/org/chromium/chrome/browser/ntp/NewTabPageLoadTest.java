@@ -21,6 +21,7 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.suggestions.tile.Tile;
 import org.chromium.chrome.browser.suggestions.tile.TileVisualType;
@@ -28,17 +29,19 @@ import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.ntp.RegularNewTabPageStation;
-import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.browser.suggestions.SuggestionsDependenciesRule;
 import org.chromium.chrome.test.util.browser.suggestions.mostvisited.FakeMostVisitedSites;
 import org.chromium.components.favicon.IconType;
 import org.chromium.components.favicon.LargeIconBridge;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.url.GURL;
 
 /** Tests for events around the loading of a New Tab Page. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+// Tests the Java native NTP, which is not used on desktop (it uses the WebUI NTP).
+@Restriction(DeviceFormFactor.PHONE_OR_TABLET)
 public class NewTabPageLoadTest {
     @Rule
     public AutoResetCtaTransitTestRule mActivityTestRule =
@@ -47,7 +50,6 @@ public class NewTabPageLoadTest {
     @Rule public SuggestionsDependenciesRule mSuggestionDeps = new SuggestionsDependenciesRule();
 
     private AutoVerifyingMostVisitedSites mMostVisitedSites;
-    private WebPageStation mStartPage;
 
     @Before
     public void setUp() throws Exception {
@@ -89,15 +91,12 @@ public class NewTabPageLoadTest {
                 GURL pageUrl, int desiredSizePx, final LargeIconBridge.LargeIconCallback callback) {
             new Handler()
                     .postDelayed(
-                            new Runnable() {
-                                @Override
-                                public void run() {
-                                    callback.onLargeIconAvailable(
-                                            Bitmap.createBitmap(148, 148, Bitmap.Config.ALPHA_8),
-                                            0,
-                                            false,
-                                            IconType.INVALID);
-                                }
+                            () -> {
+                                callback.onLargeIconAvailable(
+                                        Bitmap.createBitmap(148, 148, Bitmap.Config.ALPHA_8),
+                                        0,
+                                        false,
+                                        IconType.INVALID);
                             },
                             0);
 

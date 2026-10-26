@@ -94,16 +94,6 @@ void CookieInclusionStatus::MaybeClearSameSiteWarning() {
 
   if (!ShouldRecordDowngradeMetrics()) {
     RemoveWarningReason(
-        WarningReason::WARN_STRICT_LAX_DOWNGRADE_STRICT_SAMESITE);
-    RemoveWarningReason(
-        WarningReason::WARN_STRICT_CROSS_DOWNGRADE_STRICT_SAMESITE);
-    RemoveWarningReason(
-        WarningReason::WARN_STRICT_CROSS_DOWNGRADE_LAX_SAMESITE);
-    RemoveWarningReason(
-        WarningReason::WARN_LAX_CROSS_DOWNGRADE_STRICT_SAMESITE);
-    RemoveWarningReason(WarningReason::WARN_LAX_CROSS_DOWNGRADE_LAX_SAMESITE);
-
-    RemoveWarningReason(
         WarningReason::WARN_CROSS_SITE_REDIRECT_DOWNGRADE_CHANGES_INCLUSION);
   }
 }
@@ -112,14 +102,9 @@ void CookieInclusionStatus::MaybeClearThirdPartyPhaseoutReason() {
   if (!IsInclude()) {
     RemoveWarningReason(WarningReason::WARN_THIRD_PARTY_PHASEOUT);
   }
-  if (!ExclusionReasonsWithout(
-           {ExclusionReason::EXCLUDE_THIRD_PARTY_PHASEOUT,
-            ExclusionReason::
-                EXCLUDE_THIRD_PARTY_BLOCKED_WITHIN_FIRST_PARTY_SET})
+  if (!ExclusionReasonsWithout({ExclusionReason::EXCLUDE_THIRD_PARTY_PHASEOUT})
            .empty()) {
-    RemoveExclusionReasons(
-        {ExclusionReason::EXCLUDE_THIRD_PARTY_PHASEOUT,
-         ExclusionReason::EXCLUDE_THIRD_PARTY_BLOCKED_WITHIN_FIRST_PARTY_SET});
+    RemoveExclusionReasons({ExclusionReason::EXCLUDE_THIRD_PARTY_PHASEOUT});
   }
 }
 
@@ -141,76 +126,12 @@ bool CookieInclusionStatus::HasWarningReason(WarningReason reason) const {
   return warning_reasons_.Has(reason);
 }
 
-bool CookieInclusionStatus::HasSchemefulDowngradeWarning(
-    WarningReason* reason) const {
-  if (!ShouldWarn())
-    return false;
-
-  const WarningReason kDowngradeWarnings[] = {
-      WarningReason::WARN_STRICT_LAX_DOWNGRADE_STRICT_SAMESITE,
-      WarningReason::WARN_STRICT_CROSS_DOWNGRADE_STRICT_SAMESITE,
-      WarningReason::WARN_STRICT_CROSS_DOWNGRADE_LAX_SAMESITE,
-      WarningReason::WARN_LAX_CROSS_DOWNGRADE_STRICT_SAMESITE,
-      WarningReason::WARN_LAX_CROSS_DOWNGRADE_LAX_SAMESITE,
-  };
-
-  for (auto warning : kDowngradeWarnings) {
-    if (!HasWarningReason(warning))
-      continue;
-
-    if (reason)
-      *reason = warning;
-
-    return true;
-  }
-
-  return false;
-}
-
 void CookieInclusionStatus::AddWarningReason(WarningReason reason) {
   warning_reasons_.Put(reason);
 }
 
 void CookieInclusionStatus::RemoveWarningReason(WarningReason reason) {
   warning_reasons_.Remove(reason);
-}
-
-CookieInclusionStatus::ContextDowngradeMetricValues
-CookieInclusionStatus::GetBreakingDowngradeMetricsEnumValue(
-    const GURL& url) const {
-  bool url_is_secure = url.SchemeIsCryptographic();
-
-  // Start the |reason| as something other than the downgrade warnings.
-  WarningReason reason = WarningReason::MAX_WARNING_REASON;
-
-  // Don't bother checking the return value because the default switch case
-  // will handle if no reason was found.
-  HasSchemefulDowngradeWarning(&reason);
-
-  switch (reason) {
-    case WarningReason::WARN_STRICT_LAX_DOWNGRADE_STRICT_SAMESITE:
-      return url_is_secure
-                 ? ContextDowngradeMetricValues::kStrictLaxStrictSecure
-                 : ContextDowngradeMetricValues::kStrictLaxStrictInsecure;
-    case WarningReason::WARN_STRICT_CROSS_DOWNGRADE_STRICT_SAMESITE:
-      return url_is_secure
-                 ? ContextDowngradeMetricValues::kStrictCrossStrictSecure
-                 : ContextDowngradeMetricValues::kStrictCrossStrictInsecure;
-    case WarningReason::WARN_STRICT_CROSS_DOWNGRADE_LAX_SAMESITE:
-      return url_is_secure
-                 ? ContextDowngradeMetricValues::kStrictCrossLaxSecure
-                 : ContextDowngradeMetricValues::kStrictCrossLaxInsecure;
-    case WarningReason::WARN_LAX_CROSS_DOWNGRADE_STRICT_SAMESITE:
-      return url_is_secure
-                 ? ContextDowngradeMetricValues::kLaxCrossStrictSecure
-                 : ContextDowngradeMetricValues::kLaxCrossStrictInsecure;
-    case WarningReason::WARN_LAX_CROSS_DOWNGRADE_LAX_SAMESITE:
-      return url_is_secure ? ContextDowngradeMetricValues::kLaxCrossLaxSecure
-                           : ContextDowngradeMetricValues::kLaxCrossLaxInsecure;
-    default:
-      return url_is_secure ? ContextDowngradeMetricValues::kNoDowngradeSecure
-                           : ContextDowngradeMetricValues::kNoDowngradeInsecure;
-  }
 }
 
 std::string CookieInclusionStatus::GetDebugString() const {
@@ -247,8 +168,6 @@ std::string CookieInclusionStatus::GetDebugString() const {
       {ExclusionReason::EXCLUDE_ATTRIBUTE_VALUE_EXCEEDS_MAX_SIZE,
        "EXCLUDE_ATTRIBUTE_VALUE_EXCEEDS_MAX_SIZE"},
       {ExclusionReason::EXCLUDE_DOMAIN_NON_ASCII, "EXCLUDE_DOMAIN_NON_ASCII"},
-      {ExclusionReason::EXCLUDE_THIRD_PARTY_BLOCKED_WITHIN_FIRST_PARTY_SET,
-       "EXCLUDE_THIRD_PARTY_BLOCKED_WITHIN_FIRST_PARTY_SET"},
       {ExclusionReason::EXCLUDE_PORT_MISMATCH, "EXCLUDE_PORT_MISMATCH"},
       {ExclusionReason::EXCLUDE_SCHEME_MISMATCH, "EXCLUDE_SCHEME_MISMATCH"},
       {ExclusionReason::EXCLUDE_SHADOWING_DOMAIN, "EXCLUDE_SHADOWING_DOMAIN"},
@@ -287,20 +206,13 @@ std::string CookieInclusionStatus::GetDebugString() const {
        "WARN_SAMESITE_NONE_INSECURE"},
       {WarningReason::WARN_SAMESITE_UNSPECIFIED_LAX_ALLOW_UNSAFE,
        "WARN_SAMESITE_UNSPECIFIED_LAX_ALLOW_UNSAFE"},
-      {WarningReason::WARN_STRICT_LAX_DOWNGRADE_STRICT_SAMESITE,
-       "WARN_STRICT_LAX_DOWNGRADE_STRICT_SAMESITE"},
-      {WarningReason::WARN_STRICT_CROSS_DOWNGRADE_STRICT_SAMESITE,
-       "WARN_STRICT_CROSS_DOWNGRADE_STRICT_SAMESITE"},
-      {WarningReason::WARN_STRICT_CROSS_DOWNGRADE_LAX_SAMESITE,
-       "WARN_STRICT_CROSS_DOWNGRADE_LAX_SAMESITE"},
-      {WarningReason::WARN_LAX_CROSS_DOWNGRADE_STRICT_SAMESITE,
-       "WARN_LAX_CROSS_DOWNGRADE_STRICT_SAMESITE"},
-      {WarningReason::WARN_LAX_CROSS_DOWNGRADE_LAX_SAMESITE,
-       "WARN_LAX_CROSS_DOWNGRADE_LAX_SAMESITE"},
       {WarningReason::WARN_SECURE_ACCESS_GRANTED_NON_CRYPTOGRAPHIC,
        "WARN_SECURE_ACCESS_GRANTED_NON_CRYPTOGRAPHIC"},
       {WarningReason::WARN_CROSS_SITE_REDIRECT_DOWNGRADE_CHANGES_INCLUSION,
        "WARN_CROSS_SITE_REDIRECT_DOWNGRADE_CHANGES_INCLUSION"},
+      {WarningReason::
+           WARN_CROSS_SITE_REDIRECT_DOWNGRADE_CHANGES_INCLUSION_NO_INITIATOR,
+       "WARN_CROSS_SITE_REDIRECT_DOWNGRADE_CHANGES_INCLUSION_NO_INITIATOR"},
       {WarningReason::WARN_ATTRIBUTE_VALUE_EXCEEDS_MAX_SIZE,
        "WARN_ATTRIBUTE_VALUE_EXCEEDS_MAX_SIZE"},
       {WarningReason::WARN_DOMAIN_NON_ASCII, "WARN_DOMAIN_NON_ASCII"},
@@ -337,9 +249,6 @@ std::string CookieInclusionStatus::GetDebugString() const {
       break;
     case ExemptionReason::kStorageAccess:
       reason = "ExemptionStorageAccess";
-      break;
-    case ExemptionReason::kTopLevelStorageAccess:
-      reason = "ExemptionTopLevelStorageAccess";
       break;
     case ExemptionReason::kScheme:
       reason = "ExemptionScheme";
@@ -416,15 +325,8 @@ std::optional<CookieInclusionStatus> CookieInclusionStatus::MakeFromComponents(
 }
 
 bool CookieInclusionStatus::ExcludedByUserPreferencesOrTPCD() const {
-  if (HasOnlyExclusionReason(ExclusionReason::EXCLUDE_USER_PREFERENCES) ||
-      HasOnlyExclusionReason(ExclusionReason::EXCLUDE_THIRD_PARTY_PHASEOUT)) {
-    return true;
-  }
-  return exclusion_reasons_ ==
-         ExclusionReasonBitset(
-             {ExclusionReason::EXCLUDE_THIRD_PARTY_PHASEOUT,
-              ExclusionReason::
-                  EXCLUDE_THIRD_PARTY_BLOCKED_WITHIN_FIRST_PARTY_SET});
+  return HasOnlyExclusionReason(ExclusionReason::EXCLUDE_USER_PREFERENCES) ||
+         HasOnlyExclusionReason(ExclusionReason::EXCLUDE_THIRD_PARTY_PHASEOUT);
 }
 
 }  // namespace net

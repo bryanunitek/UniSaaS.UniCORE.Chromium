@@ -15,13 +15,11 @@
 #include "chromeos/ash/components/growth/action_performer.h"
 #include "chromeos/ash/components/growth/campaigns_constants.h"
 
+class AccountId;
+
 namespace base {
 class Version;
 }  // namespace base
-
-namespace signin {
-class IdentityManager;
-}  // namespace signin
 
 namespace growth {
 
@@ -48,11 +46,13 @@ class CampaignsManagerClient {
   virtual void AddOnTrackerInitializedCallback(
       OnTrackerInitializedCallback callback) = 0;
 
+  // Sets the account of the active user so the client can resolve per-user
+  // services (e.g. the feature engagement tracker). Empty when there is no
+  // active user.
+  virtual void SetActiveAccountId(const AccountId& account_id) = 0;
+
   // True if the device is in demo mode.
   virtual bool IsDeviceInDemoMode() const = 0;
-
-  // True if the device is cloud gaming device.
-  virtual bool IsCloudGamingDevice() const = 0;
 
   // True if the device is feature aware device.
   virtual bool IsFeatureAwareDevice() const = 0;
@@ -91,8 +91,6 @@ class CampaignsManagerClient {
                            bool trigger_campaigns) = 0;
   virtual bool WouldTriggerHelpUI(
       const std::map<std::string, std::string>& params) = 0;
-  // Returns the IdentityManager for the active user profile.
-  virtual signin::IdentityManager* GetIdentityManager() const = 0;
   virtual void RecordImpressionEvents(int campaign_id,
                                       std::optional<int> group_id) = 0;
 };

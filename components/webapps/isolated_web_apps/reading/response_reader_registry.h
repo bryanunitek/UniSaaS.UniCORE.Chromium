@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/callback_list.h"
+#include "base/component_export.h"
 #include "base/containers/flat_map.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
@@ -18,7 +19,6 @@
 #include "base/timer/timer.h"
 #include "base/types/expected.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/reading/response_reader.h"
 #include "components/webapps/isolated_web_apps/reading/response_reader_factory.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -36,7 +36,8 @@ namespace web_app {
 // will also check the integrity of the Signed Web Bundle. On ChromeOS, it is
 // assumed that the Signed Web Bundle has not been corrupted due to its location
 // inside cryptohome, and signatures are not checked.
-class IsolatedWebAppReaderRegistry : public KeyedService {
+class COMPONENT_EXPORT(ISOLATED_WEB_APPS) IsolatedWebAppReaderRegistry
+    : public KeyedService {
  public:
   IsolatedWebAppReaderRegistry(
       content::BrowserContext* browser_context,

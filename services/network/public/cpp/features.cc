@@ -4,36 +4,17 @@
 
 #include "services/network/public/cpp/features.h"
 
+#include "base/byte_size.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/task/current_thread.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/direct_receiver.h"
 #include "net/base/mime_sniffer.h"
-#include "url/gurl.h"
-#include "url/origin.h"
 
 namespace network::features {
-
-// Enables the Accept-CH support disabler. If this feature is activated, Chrome
-// ignore Accept-CH response headers for a site that is specified in the
-// following kBlockAcceptClientHintsBlockedSite. This is used to compare Chrome
-// performance with a dedicated site.
-BASE_FEATURE(kBlockAcceptClientHints, base::FEATURE_DISABLED_BY_DEFAULT);
-const base::FeatureParam<std::string> kBlockAcceptClientHintsBlockedSite{
-    &kBlockAcceptClientHints, /*name=*/"BlockedSite", /*default_value=*/""};
-
-bool ShouldBlockAcceptClientHintsFor(const url::Origin& origin) {
-  // Check if the Accept-CH support is disabled for a specified site.
-  static const bool block_accept_ch =
-      base::FeatureList::IsEnabled(features::kBlockAcceptClientHints);
-  static const base::NoDestructor<url::Origin> blocked_site(url::Origin::Create(
-      GURL(features::kBlockAcceptClientHintsBlockedSite.Get())));
-  return block_accept_ch && blocked_site->IsSameOriginWith(origin);
-}
 
 BASE_FEATURE(kNetworkErrorLogging, base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -192,16 +173,20 @@ BASE_FEATURE_PARAM(bool,
 BASE_FEATURE(kCorsNonWildcardRequestHeadersSupport,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+// When enabled, CORS preflight cache keys take the tainted origin flag into
+// account (using an opaque / null origin), preventing tainted preflight
+// results from satisfying untainted requests.
+BASE_FEATURE(kCorsPreflightCacheKeyTaintedOrigin,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, the network service will disallow treating 'Intervention' as a
+// CORS-safelisted header, aligning with the WHATWG Fetch specification.
+BASE_FEATURE(kDisallowInterventionInCorsSafelistedHeaders,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 // Do not send TLS client certificates in CORS preflight. Omit all client certs
 // and continue the handshake without sending one if requested.
 BASE_FEATURE(kOmitCorsClientCert, base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Ignore CorsPreflightPolicy and always perform CORS checks.
-BASE_FEATURE(kIgnoreCorsPreflightPolicy, base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Enforces that frame-type destinations require kNavigate mode.
-BASE_FEATURE(kRestrictFrameDestinationsToNavigate,
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Enables support for the `Variants` response header and reduce
 // accept-language. https://github.com/Tanych/accept-language
@@ -352,14 +337,6 @@ BASE_FEATURE(kDocumentIsolationPolicy, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kConnectionAllowlists, base::FEATURE_ENABLED_BY_DEFAULT);
 
-// TODO(crbug.com/526636731): Enable this by default when connection allowlist
-// ships.
-BASE_FEATURE_PARAM(bool,
-                   kConnectionAllowlistsEarlyHints,
-                   &kConnectionAllowlists,
-                   /*name=*/"ConnectionAllowlistsEarlyHints",
-                   /*default_value=*/false);
-
 // This feature enables the Prefetch() method on the NetworkContext, and makes
 // the PrefetchMatchingURLLoaderFactory check the match quality.
 BASE_FEATURE(kNetworkContextPrefetch, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -376,17 +353,10 @@ BASE_FEATURE(kNetworkContextPrefetchUseMatches,
 BASE_FEATURE(kCloneDevToolsConnectionOnlyIfRequested,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kAdAuctionEventRegistration, base::FEATURE_DISABLED_BY_DEFAULT);
-
-// See https://github.com/WICG/turtledove/blob/main/FLEDGE.md
-// Changes default Permissions Policy for features join-ad-interest-group and
-// run-ad-auction to a more restricted EnableForSelf.
-BASE_FEATURE(kAdInterestGroupAPIRestrictedPolicyByDefault,
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables unload handler deprecation via Permissions-Policy.
 // https://crbug.com/1324111
-BASE_FEATURE(kDeprecateUnload, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kDeprecateUnload, base::FEATURE_ENABLED_BY_DEFAULT);
 // If < 100, each user experiences the deprecation on this % of origins. Which
 // origins varies by which bucket the user is in. This parameter only takes
 // effect if DeprecateUnloadByBucket is enabled. They are are separated so that
@@ -416,7 +386,7 @@ BASE_FEATURE_PARAM(std::string,
 // another study to control what fraction of users experience a specific value
 // of `kDeprecateUnloadPercent`. Doing both in one study greatly complicates the
 // study because we must deal in 100 1% groups.
-BASE_FEATURE(kDeprecateUnloadByBucket, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kDeprecateUnloadByBucket, base::FEATURE_ENABLED_BY_DEFAULT);
 // This buckets users, with users in each bucket having a consistent experience
 // of the unload deprecation rollout.
 BASE_FEATURE_PARAM(int,
@@ -435,114 +405,16 @@ BASE_FEATURE(kFrameAncestorsHeader, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kUpdateRequestForCorsRedirect, base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kAvoidCorsURLLoaderRestartOnRedirect,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAllowSameOriginCredentialsWithDisableWebSecurity,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 // https://github.com/patcg-individual-drafts/topics
 // Kill switch for the Topics API.
 BASE_FEATURE(kBrowsingTopics, base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Enable the shared storage API. Note that enabling this feature does not
-// automatically expose this API to the web, it only allows the element to be
-// enabled by the runtime enabled feature, for origin trials.
-// https://github.com/pythagoraskitty/shared-storage/blob/main/README.md
-BASE_FEATURE(kSharedStorageAPI, base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE_PARAM(size_t,
-                   kSharedStorageURLSelectionOperationInputURLSizeLimit,
-                   &kSharedStorageAPI,
-                   "url_selection_operation_input_url_size_limit",
-                   8);
-BASE_FEATURE_PARAM(int,
-                   kMaxSharedStoragePageSize,
-                   &kSharedStorageAPI,
-                   "MaxSharedStoragePageSize",
-                   4096);
-BASE_FEATURE_PARAM(int,
-                   kMaxSharedStorageCacheSize,
-                   &kSharedStorageAPI,
-                   "MaxSharedStorageCacheSize",
-                   1024);
-BASE_FEATURE_PARAM(int,
-                   kMaxSharedStorageInitTries,
-                   &kSharedStorageAPI,
-                   "MaxSharedStorageInitTries",
-                   2);
-BASE_FEATURE_PARAM(int,
-                   kMaxSharedStorageIteratorBatchSize,
-                   &kSharedStorageAPI,
-                   "MaxSharedStorageIteratorBatchSize",
-                   100);
-BASE_FEATURE_PARAM(int,
-                   kSharedStorageBitBudget,
-                   &kSharedStorageAPI,
-                   "SharedStorageBitBudget",
-                   12);
-BASE_FEATURE_PARAM(base::TimeDelta,
-                   kSharedStorageBudgetInterval,
-                   &kSharedStorageAPI,
-                   "SharedStorageBudgetInterval",
-                   base::Hours(24));
-BASE_FEATURE_PARAM(base::TimeDelta,
-                   kSharedStorageStalePurgeInitialInterval,
-                   &kSharedStorageAPI,
-                   "SharedStorageStalePurgeInitialInterval",
-                   base::Minutes(2));
-BASE_FEATURE_PARAM(base::TimeDelta,
-                   kSharedStorageStalePurgeRecurringInterval,
-                   &kSharedStorageAPI,
-                   "SharedStorageStalePurgeRecurringInterval",
-                   base::Hours(2));
-BASE_FEATURE_PARAM(base::TimeDelta,
-                   kSharedStorageStalenessThreshold,
-                   &kSharedStorageAPI,
-                   "SharedStorageStalenessThreshold",
-                   base::Days(30));
-BASE_FEATURE_PARAM(size_t,
-                   kSharedStorageMaxAllowedFencedFrameDepthForSelectURL,
-                   &kSharedStorageAPI,
-                   "SharedStorageMaxAllowedFencedFrameDepthForSelectURL",
-                   1);
-// NOTE: To preserve user privacy, the
-// `kSharedStorageExposeDebugMessageForSettingsStatus` feature param MUST remain
-// false by default.
-BASE_FEATURE_PARAM(bool,
-                   kSharedStorageExposeDebugMessageForSettingsStatus,
-                   &kSharedStorageAPI,
-                   "ExposeDebugMessageForSettingsStatus",
-                   false);
-
-// Enables transactional behavior for sharedStorage.batchUpdate(). This also
-// disallows the 'withLock' option for methods within batchUpdate().
-// https://wicg.github.io/shared-storage/#batch-update
-BASE_FEATURE(kSharedStorageTransactionalBatchUpdate,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Kill switch for the Interest Group API, i.e. if disabled, the
-// API exposure will be disabled regardless of the OT config.
-BASE_FEATURE(kInterestGroupStorage, base::FEATURE_ENABLED_BY_DEFAULT);
-// TODO(crbug.com/40176812): Adjust these limits in response to usage.
-BASE_FEATURE_PARAM(int,
-                   kInterestGroupStorageMaxOwners,
-                   &kInterestGroupStorage,
-                   "max_owners",
-                   1000);
-BASE_FEATURE_PARAM(int,
-                   kInterestGroupStorageMaxStoragePerOwner,
-                   &kInterestGroupStorage,
-                   "max_storage_per_owner",
-                   10 * 1024 * 1024);
-BASE_FEATURE_PARAM(int,
-                   kInterestGroupStorageMaxGroupsPerOwner,
-                   &kInterestGroupStorage,
-                   "max_groups_per_owner",
-                   2000);
-BASE_FEATURE_PARAM(int,
-                   kInterestGroupStorageMaxNegativeGroupsPerOwner,
-                   &kInterestGroupStorage,
-                   "max_negative_groups_per_owner",
-                   20000);
-BASE_FEATURE_PARAM(int,
-                   kInterestGroupStorageMaxOpsBeforeMaintenance,
-                   &kInterestGroupStorage,
-                   "max_ops_before_maintenance",
-                   1000);
 
 BASE_FEATURE(kIncreaseCookieAccessCacheSize, base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -564,8 +436,13 @@ BASE_FEATURE(kCSPScriptSrcHashesInV1,
              "ScriptSrcHashesV1",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kCSPEmbeddedEnforcementTrustedTypes,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kCacheSharingForPervasiveResources,
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPervasiveSharedDictionaries, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSendSameSiteLaxForFedCM, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -596,8 +473,10 @@ BASE_FEATURE_PARAM(bool,
                    "url_loader",
                    true);
 
+// TODO(crbug.com/549684526): Enable this universally across all platforms as
+// there is no reason to keep the disabled behavior.
 BASE_FEATURE(kUseUnexportableKeyServiceInBrowserProcess,
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
              base::FEATURE_ENABLED_BY_DEFAULT
 #else
              base::FEATURE_DISABLED_BY_DEFAULT
@@ -607,9 +486,19 @@ BASE_FEATURE(kUseUnexportableKeyServiceInBrowserProcess,
 BASE_FEATURE(kBypassRequestForbiddenHeadersCheck,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-// When enabled, the network service will prohibit modifications to the Origin
-// header in FollowRedirect.
-BASE_FEATURE(kBlockOriginHeaderModificationOnRedirect,
+// When enabled, the network service will prohibit invalid modifications to the
+// Origin header in CorsURLLoader::FollowRedirect.
+BASE_FEATURE(kBlockInvalidOriginHeaderModificationOnRedirect,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, the network service will prohibit invalid Origin headers in
+// CorsURLLoader::StartRequest.
+BASE_FEATURE(kBlockInvalidOriginHeader, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, the network service will prohibit non-browser processes from
+// removing security-sensitive headers (such as Origin and Sec- headers other
+// than Client Hints) in CorsURLLoader::FollowRedirect.
+BASE_FEATURE(kBlockSecurityHeaderRemovalOnRedirect,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kServiceWorkerSyntheticResponseHeaderCheck,
@@ -659,14 +548,21 @@ BASE_FEATURE_PARAM(base::TimeDelta,
                    "initial_doh_probe_timeout",
                    base::Seconds(5));
 
-BASE_FEATURE(kRestrictForbiddenSecurityHeaders,
+BASE_FEATURE(kDirectSocketsUdpSendRequireMulticastPermissionPolicy,
              base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE_PARAM(bool,
-                   kRestrictForbiddenSecurityHeadersDump,
-                   &kRestrictForbiddenSecurityHeaders,
-                   false);
 
 BASE_FEATURE(kBrowserInitiatedFileUploadValidation,
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSafeRevalidation, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kBindURLLoaderFactoryToHighPriorityTaskRunner,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kEnforceIsolatedWorldOriginLock, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kForwardProxyAuthWithoutPrompt, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPrewarmCryptbase, base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace network::features

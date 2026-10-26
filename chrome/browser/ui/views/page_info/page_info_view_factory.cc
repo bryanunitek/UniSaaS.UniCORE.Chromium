@@ -7,19 +7,13 @@
 #include <memory>
 #include <string>
 
-#include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/utf_string_conversions.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/page_info/page_info_features.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h"
-#include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/page_info/page_info_ad_personalization_content_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_cookies_content_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_main_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_merchant_trust_content_view.h"
@@ -29,14 +23,10 @@
 #include "components/content_settings/core/browser/permission_settings_registry.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
-#include "components/content_settings/core/common/cookie_controls_state.h"
-#include "components/page_info/core/features.h"
-#include "components/page_info/core/proto/about_this_site_metadata.pb.h"
 #include "components/page_info/page_info.h"
 #include "components/permissions/permission_util.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/strings/grit/privacy_sandbox_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_features.h"
@@ -51,7 +41,6 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/metadata/view_factory.h"
-#include "ui/views/vector_icons.h"
 
 constexpr int PageInfoViewFactory::kMinBubbleWidth;
 constexpr int PageInfoViewFactory::kMaxBubbleWidth;
@@ -73,9 +62,14 @@ class PageInfoSubpageView : public views::View {
 
   gfx::Size CalculatePreferredSize(
       const views::SizeBounds& available_size) const override {
-    // Only the with of |content_| is taken into account, because the header
+    // Only the width of |content_| is taken into account, because the header
     // view contains site origin in the subtitle which can be very long.
-    const int width = content_->GetPreferredSize(available_size).width();
+    int width = 0;
+    if (available_size.width().is_bounded()) {
+      width = available_size.width().value();
+    } else if (content_) {
+      width = content_->GetPreferredSize({}).width();
+    }
     return gfx::Size(
         width, GetLayoutManager()->GetPreferredHeightForWidth(this, width));
   }
@@ -129,11 +123,16 @@ PageInfoViewFactory::PageInfoViewFactory(
     PageInfo* presenter,
     ChromePageInfoUiDelegate* ui_delegate,
     PageInfoNavigationHandler* navigation_handler,
-    bool allow_extended_site_info)
+    bool allow_extended_site_info,
+    base::RepeatingClosure open_extensions_menu_callback)
     : presenter_(presenter),
       ui_delegate_(ui_delegate),
       navigation_handler_(navigation_handler),
-      allow_extended_site_info_(allow_extended_site_info) {}
+      allow_extended_site_info_(allow_extended_site_info),
+      open_extensions_menu_callback_(std::move(open_extensions_menu_callback)) {
+}
+
+PageInfoViewFactory::~PageInfoViewFactory() = default;
 
 std::unique_ptr<views::View> PageInfoViewFactory::CreatePageView(
     std::u16string title,
@@ -147,7 +146,8 @@ std::unique_ptr<views::View> PageInfoViewFactory::CreateMainPageView(
     base::OnceClosure initialized_callback) {
   return std::make_unique<PageInfoMainView>(
       presenter_, ui_delegate_, navigation_handler_,
-      std::move(initialized_callback), allow_extended_site_info_);
+      std::move(initialized_callback), allow_extended_site_info_,
+      open_extensions_menu_callback_);
 }
 
 std::unique_ptr<views::View> PageInfoViewFactory::CreateSecurityPageView() {
@@ -167,16 +167,6 @@ std::unique_ptr<views::View> PageInfoViewFactory::CreatePermissionPageView(
                           presenter_->GetSubjectNameForDisplay()),
       std::make_unique<PageInfoPermissionContentView>(presenter_, ui_delegate_,
                                                       type, web_contents));
-}
-
-std::unique_ptr<views::View>
-PageInfoViewFactory::CreateAdPersonalizationPageView() {
-  return std::make_unique<PageInfoSubpageView>(
-      CreateSubpageHeader(
-          l10n_util::GetStringUTF16(IDS_PAGE_INFO_AD_PRIVACY_HEADER),
-          presenter_->GetSubjectNameForDisplay()),
-      std::make_unique<PageInfoAdPersonalizationContentView>(presenter_,
-                                                             ui_delegate_));
 }
 
 std::unique_ptr<views::View> PageInfoViewFactory::CreateCookiesPageView() {
@@ -323,9 +313,8 @@ const ui::ImageModel PageInfoViewFactory::GetPermissionIcon(
                  ? &(features::IsRoundedIconsEnabled()
                          ? vector_icons::kAccountCircleOffIcon
                          : vector_icons::kAccountCircleOffChromeRefreshOldIcon)
-                 : &(features::IsRoundedIconsEnabled() ? kAccountCircleIcon
-                     : features::IsRoundedIconsEnabled()
-                         ? vector_icons::kAccountCircleIcon
+                 : &(features::IsRoundedIconsEnabled()
+                         ? kAccountCircleIcon
                          : vector_icons::kAccountCircleChromeRefreshOldIcon);
       break;
     case ContentSettingsType::IMAGES:
@@ -426,8 +415,7 @@ const ui::ImageModel PageInfoViewFactory::GetPermissionIcon(
                  ? &(features::IsRoundedIconsEnabled()
                          ? vector_icons::kSyncDisabledIcon
                          : vector_icons::kSyncOffChromeRefreshOldIcon)
-                 : &(features::IsRoundedIconsEnabled() ? kSyncIcon
-                     : features::IsRoundedIconsEnabled()
+                 : &(features::IsRoundedIconsEnabled()
                          ? vector_icons::kSyncIcon
                          : vector_icons::kSyncChromeRefreshOldIcon);
       break;
@@ -565,14 +553,12 @@ const ui::ImageModel PageInfoViewFactory::GetPermissionIcon(
                          : vector_icons::kVideogameAssetChromeRefreshOldIcon);
       break;
     case ContentSettingsType::IDLE_DETECTION:
-      icon = show_blocked_badge
-                 ? &(features::IsRoundedIconsEnabled()
-                         ? vector_icons::kDevicesOffIcon
-                         : vector_icons::kDevicesOffOldIcon)
-                 : &(features::IsRoundedIconsEnabled() ? kDevicesIcon
-                     : features::IsRoundedIconsEnabled()
-                         ? vector_icons::kDevicesIcon
-                         : vector_icons::kDevicesOldIcon);
+      icon = show_blocked_badge ? &(features::IsRoundedIconsEnabled()
+                                        ? vector_icons::kDevicesOffIcon
+                                        : vector_icons::kDevicesOffOldIcon)
+                                : &(features::IsRoundedIconsEnabled()
+                                        ? kDevicesIcon
+                                        : vector_icons::kDevicesOldIcon);
       break;
     case ContentSettingsType::STORAGE_ACCESS:
       icon = show_blocked_badge
@@ -784,10 +770,9 @@ const ui::ImageModel PageInfoViewFactory::GetPermissionIcon(
                    : vector_icons::kVideogameAssetOldIcon);
       break;
     case ContentSettingsType::IDLE_DETECTION:
-      icon = &(features::IsRoundedIconsEnabled() ? kDevicesIcon
-               : features::IsRoundedIconsEnabled()
-                   ? vector_icons::kDevicesIcon
-                   : vector_icons::kDevicesOldIcon);
+      icon =
+          &(features::IsRoundedIconsEnabled() ? kDevicesIcon
+                                              : vector_icons::kDevicesOldIcon);
       break;
     case ContentSettingsType::STORAGE_ACCESS:
       icon = &(features::IsRoundedIconsEnabled()
@@ -887,6 +872,13 @@ const ui::ImageModel PageInfoViewFactory::GetSiteSettingsIcon() {
 }
 
 // static
+const ui::ImageModel PageInfoViewFactory::GetExtensionIcon() {
+  return GetImageModel(features::IsRoundedIconsEnabled()
+                           ? vector_icons::kChromeExtensionIcon
+                           : vector_icons::kExtensionChromeRefreshOldIcon);
+}
+
+// static
 const ui::ImageModel PageInfoViewFactory::GetLaunchIcon() {
   return ui::ImageModel::FromVectorIcon(
       features::IsRoundedIconsEnabled()
@@ -913,16 +905,6 @@ const ui::ImageModel PageInfoViewFactory::GetOpenSubpageIcon() {
           ? vector_icons::kKeyboardArrowRightFlippableIcon
           : vector_icons::kSubmenuArrowChromeRefreshOldIcon,
       ui::kColorIcon, kIconSize);
-}
-
-// static
-const gfx::VectorIcon& PageInfoViewFactory::GetAboutThisSiteVectorIcon() {
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  return vector_icons::kPageInsightsIcon;
-#else
-  return features::IsRoundedIconsEnabled() ? views::kInfoIcon
-                                           : views::kInfoChromeRefreshOldIcon;
-#endif  // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
 }
 
 // static

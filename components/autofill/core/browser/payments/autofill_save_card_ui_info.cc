@@ -48,6 +48,9 @@ static std::u16string GetConfirmButtonText(
       return l10n_util::GetStringUTF16(
           IDS_AUTOFILL_SAVE_CVC_MESSAGE_SAVE_ACCEPT);
     }
+    case CardSaveType::kCardholderNameUpdateOnly:
+      // This flow is not available on Android.
+      NOTREACHED();
   }
 #elif BUILDFLAG(IS_IOS)
   if (options.source_feature == SourceFeature::kScanCardSaveAndFill) {
@@ -65,6 +68,9 @@ static std::u16string GetConfirmButtonText(
       return l10n_util::GetStringUTF16(
           IDS_AUTOFILL_SAVE_CVC_MESSAGE_SAVE_ACCEPT);
     }
+    case CardSaveType::kCardholderNameUpdateOnly:
+      // This flow is not available on iOS.
+      NOTREACHED();
   }
 #else  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   NOTREACHED();
@@ -119,9 +125,9 @@ static AutofillSaveCardUiInfo CreateAutofillSaveCardUiInfo(
       card.nickname(), card.NetworkForDisplay(), card.LastFourDigits(),
       card.ExpirationDateForDisplay());
   ui_info.displayed_target_account_email =
-      base::UTF8ToUTF16((displayed_target_account.email));
+      base::UTF8ToUTF16(displayed_target_account.GetEmail());
   ui_info.displayed_target_account_avatar =
-      displayed_target_account.account_image;
+      displayed_target_account.GetAvatarImage().value_or(gfx::Image());
   ui_info.title_text = title_text;
   ui_info.confirm_text = confirm_text;
   ui_info.cancel_text = cancel_text;
@@ -167,6 +173,9 @@ AutofillSaveCardUiInfo AutofillSaveCardUiInfo::CreateForLocalSave(
           IDS_AUTOFILL_SAVE_CVC_PROMPT_EXPLANATION_LOCAL);
       break;
     }
+    case CardSaveType::kCardholderNameUpdateOnly:
+      // This flow is not available on Android.
+      NOTREACHED();
   }
 #elif BUILDFLAG(IS_IOS)
   // On iOS, the UI (infobar vs. bottom sheet) and title are determined by
@@ -206,6 +215,9 @@ AutofillSaveCardUiInfo AutofillSaveCardUiInfo::CreateForLocalSave(
           IDS_AUTOFILL_SAVE_CVC_PROMPT_EXPLANATION_LOCAL_SAVE_IOS);
       break;
     }
+    case CardSaveType::kCardholderNameUpdateOnly:
+      // This flow is not available on iOS.
+      NOTREACHED();
   }
 #else  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   NOTREACHED();
@@ -326,6 +338,9 @@ AutofillSaveCardUiInfo AutofillSaveCardUiInfo::CreateForUploadSave(
               : IDS_AUTOFILL_SAVE_CVC_PROMPT_EXPLANATION_UPLOAD);
       break;
     }
+    case CardSaveType::kCardholderNameUpdateOnly:
+      // This flow is not available on Android.
+      NOTREACHED();
   }
 #elif BUILDFLAG(IS_IOS)
   is_for_bottom_sheet = ShouldShowSaveCardBottomSheet(
@@ -373,9 +388,12 @@ AutofillSaveCardUiInfo AutofillSaveCardUiInfo::CreateForUploadSave(
           base::FeatureList::IsEnabled(features::kAutofillEnableWalletBranding)
               ? IDS_AUTOFILL_SAVE_CVC_TO_WALLET_PROMPT_EXPLANATION_UPLOAD_IOS
               : IDS_AUTOFILL_SAVE_CVC_PROMPT_EXPLANATION_UPLOAD_IOS,
-          base::UTF8ToUTF16(displayed_target_account.email));
+          base::UTF8ToUTF16(displayed_target_account.GetEmail()));
       break;
     }
+    case CardSaveType::kCardholderNameUpdateOnly:
+      // This flow is not available on iOS.
+      NOTREACHED();
   }
 #else  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   NOTREACHED();

@@ -25,7 +25,6 @@
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "components/sessions/core/session_id.h"
 #include "components/tabs/public/tab_interface.h"
-#include "content/public/browser/web_contents_observer.h"
 #include "url/gurl.h"
 
 namespace actor {
@@ -44,15 +43,16 @@ class LoadAndExtractContentTool : public Tool {
   // actor::Tool:
   void Validate(ToolCallback callback) override;
   void Invoke(ToolCallback callback) override;
+  void Cancel() override;
   void UpdateTaskAfterInvoke(ActorTask& task,
                              mojom::ActionResultPtr result,
                              ToolCallback callback) const override;
   std::string DebugString() const override;
   std::string JournalEvent() const override;
+  ActorSurfaceHandle GetTargetActorSurface() const override;
   std::unique_ptr<ObservationDelayController> GetObservationDelayer(
       ObservationDelayController::PageStabilityConfig page_stability_config)
       override;
-  tabs::TabHandle GetTargetTab() const override;
 
  private:
   struct PerTabState;
@@ -63,6 +63,11 @@ class LoadAndExtractContentTool : public Tool {
   // Should be called once we no longer need to keep the tab open, i.e. it has
   // navigated and we've extracted the content (or encountered an error).
   void OnTabReadyToClose(size_t index, PerTabResultCode result_code);
+
+  // Removes the tab opened for `state` from the task, whether or not the tab
+  // still exists, then closes it if it does. The tab is added with
+  // stop_task_on_detach=false, so the task otherwise keeps it after it closes.
+  void RemoveAndCloseTab(PerTabState& state);
 
   void OnTabObservationDelayComplete(size_t index,
                                      PerTabResultCode result_code);

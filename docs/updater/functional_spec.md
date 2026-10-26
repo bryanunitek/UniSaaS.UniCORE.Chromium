@@ -391,8 +391,10 @@ process is determined by command-line arguments:
         `--handoff` parameters.
 *   `RUNFORCEINSTALL` (for MSI installers)
     * Allows running an MSI metainstaller with the `--force-install` option.
-    * In addition, if the MSI is tagged, this also installs the application(s)
-      that are implicitly specified in the tag.
+    * This adds `--force-install` to the installer command line,
+      force-installing the updater while maintaining standard MSI
+      installation behavior, including tag extraction, application
+      installation, and product component state registration.
     * For example, `msiexec /i GoogleChrome.msi RUNFORCEINSTALL=1`.
 *   --test
     *   Exit immediately with no error.
@@ -638,9 +640,21 @@ As part of installing or updating an application, the updater executes the
 application's installer. The API for the application installer is platform-
 specific.
 
-Application installers are run with a 15-minute timeout. If the installer runs
-for longer than this, the updater assumes failure and continues operation.
-However, the updater does not kill the installer process.
+Application installers are run with a 15-minute timeout (`kWaitForAppInstaller`).
+If the installer runs for longer than this, the updater logs the failure,
+reports `GOOPDATEINSTALL_E_INSTALLER_TIMED_OUT` (`0x80040904`), cleans up its
+unpacked temporary files, and continues operation. However, **the updater does
+not kill the installer process**—it will continue running in the background.
+
+Because a timed-out installer process remains running in the background,
+subsequent install or update attempts may launch a concurrent instance of the
+installer. Therefore, application installers should implement a single-instance
+mechanism (such as a system-wide named mutex). If an installer process detects
+another instance running, it should exit with `ERROR_INSTALL_ALREADY_RUNNING`
+(`1618` / `0x652`). When the updater encounters this exit code on Windows, it
+retries launching the installer up to 4 times with exponential backoff (starting
+at 5 seconds) before failing with `GOOPDATEINSTALL_E_INSTALL_ALREADY_RUNNING`
+(`0x80040907`).
 
 The application installer API varies by platform.
 [macOS](installer_api_mac.md),
@@ -1409,6 +1423,11 @@ logon trigger on the scheduled task. For user installs, this is done via both
 the logon trigger on the scheduled task, as well as the "Run" registry entry in
 `HKCU` for redundancy.
 
+The logon trigger is delayed by 1 minute so that the updater does not compete
+for CPU and disk with the rest of the logon sequence. The delay applies only to
+the logon trigger, so the periodic triggers on the same task keep their cadence.
+The `HKCU` "Run" entry cannot be delayed and is unaffected.
+
 ### Server Lifetime
 The updater's RPC server starts and waits for incoming RPCs. The server
 considers itself idle if it has not been processing any RPC in the last ten
@@ -1748,6 +1767,23 @@ The proxy settings include a combination of auto-proxy (WPAD), proxy
 auto-configuration, or named proxy. The updater tries one of these mechanisms
 in the order described above.
 
+#### NTLM credential leakage (Windows)
+Consistent with Chrome's policy, the updater does not treat the leakage of NTLM
+credentials (for example, NTLMv2 challenge-responses sent to an
+attacker-controlled proxy or server) as a security vulnerability. This applies
+to any type of NTLM leakage, including the leakage of the machine account
+credentials when the updater runs as `SYSTEM` for system-scoped installs.
+
+NTLM is an operating-system-provided authentication mechanism that Microsoft
+has deprecated. Reducing or disabling NTLM, and migrating to Kerberos, is an
+operating system and network configuration matter. Accordingly, the updater
+does not add specific mitigations against these attacks, since doing so would
+legitimize them as a class of issue that is accepted as a security bug.
+
+See the Chrome Security FAQ entry
+[I can make Chrome perform potentially insecure NTLM requests to an attacker controlled server. Is this a security bug?](../security/faq.md#I-can-make-Chrome-perform-potentially-insecure-NTLM-requests-to-an-attacker-controlled-server_Is-this-a-security-bug)
+for more details.
+
 ## Services
 
 ### Crash Reporting
@@ -1816,6 +1852,7 @@ If "AutoRunOnOSUpgrade" is set to `1`, the corresponding command is invoked when
 the updater detects an OS upgrade. In this case, `command format` can optionally
 contain a single substitutible parameter `%1`, which is filled in with the OS
 versions in the format `{Previous OS Version}-{Current OS Version}`.
+`AutoRunOnOSUpgrade` commands do not support `%CALLER_SID%`.
 
 For example, if the `{command format}` for an `AutoRunOnOSUpgrade` command is:
 `c:\path-to\echo.exe %1 StaticParam`
@@ -1861,7 +1898,12 @@ cmd.execute();
 ```
 
 Parameters placeholders (`%1-%9`) are filled by the numbered substitutions in
-`IAppCommandWeb::execute`. Placeholders without corresponding substitutions
+`IAppCommandWeb::execute`. `%CALLER_SID%` (case-sensitive) is only supported for
+commands invoked via `IAppCommandWeb::execute` (and transitively
+`IProcessLauncher::LaunchCmdElevated`), where it is replaced with the SID (in
+SDDL format) of the invoking user. It is recommended that a command include at
+most one `%CALLER_SID%` placeholder. Placeholders without corresponding
+substitutions (or `%CALLER_SID%` when the caller's SID cannot be determined)
 cause the execution to fail.
 
 Clients may poll for the execution status of commands that they have invoked by
@@ -1869,12 +1911,18 @@ using the `status` method of `IAppCommandWeb`. When the status is
 `COMMAND_STATUS_COMPLETE`, the `exitCode` method can be used to get the process
 exit code.
 
+Commands are monitored for up to 15 minutes (`kWaitForAppInstaller`). If the
+command has not exited by then, the status becomes `COMMAND_STATUS_ERROR` and
+remains so, and `exitCode` returns `S_FALSE` without setting the exit code. The
+command process is not terminated and may continue to run.
+
 #### Command-Line Format
 * for system applications, the executable path has to be a child of
 `%ProgramFiles%` or `%ProgramFiles(x86)%` for security, since it runs elevated.
 * placeholders are not permitted in the executable path.
-* placeholders take the form of a percent character `%` followed by a digit.
-Literal `%` characters are escaped by doubling them.
+* placeholders take the form of a percent character `%` followed by a digit, or
+`%CALLER_SID%` (case-sensitive). Literal `%` characters are escaped by doubling
+them.
 
 For example, if substitutions to `IAppCommandWeb::execute` are `AA` and `BB`
 respectively, a command format of:

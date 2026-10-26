@@ -6,7 +6,6 @@
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
 #include "components/collaboration/public/collaboration_service.h"
 #include "components/collaboration/public/pref_names.h"
 #include "components/collaboration/public/service_status.h"
@@ -49,7 +48,7 @@ class TabGroupSharingTest : public PolicyTest {
     // Sign in.
     identity_test_env_adaptor_ =
         std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
-            browser()->profile());
+            browser()->GetProfile());
     auto account_info =
         identity_test_env_adaptor_->identity_test_env()
             ->MakePrimaryAccountAvailable("user@google.com",
@@ -90,7 +89,7 @@ IN_PROC_BROWSER_TEST_F(TabGroupSharingTest, TabGroupSharingEnableToDisable) {
                 collaboration::prefs::kSharedTabGroupsManagedAccountSetting));
 
   testing::StrictMock<MockCollaborationServiceObserver> mock_observer;
-  auto* profile = browser()->profile();
+  auto* profile = browser()->GetProfile();
   auto* service =
       collaboration::CollaborationServiceFactory::GetForProfile(profile);
   service->AddObserver(&mock_observer);

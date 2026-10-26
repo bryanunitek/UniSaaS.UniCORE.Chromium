@@ -5,10 +5,14 @@
 #import "ios/chrome/browser/safe_browsing/model/safe_browsing_client_impl.h"
 
 #import "base/check.h"
+#import "base/feature_list.h"
 #import "base/memory/weak_ptr.h"
+#import "base/strings/utf_string_conversions.h"
 #import "components/enterprise/connectors/core/reporting_event_router.h"
 #import "components/prefs/pref_service.h"
+#import "components/safe_browsing/core/browser/intelligent_scan_delegate.h"
 #import "components/safe_browsing/core/browser/realtime/url_lookup_service.h"
+#import "components/safe_browsing/core/common/features.h"
 #import "components/safe_browsing/core/common/proto/csd.pb.h"
 #import "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #import "components/safe_browsing/core/common/utils.h"
@@ -16,18 +20,27 @@
 #import "ios/chrome/browser/enterprise/connectors/connectors_service.h"
 #import "ios/chrome/browser/enterprise/connectors/connectors_util.h"
 #import "ios/chrome/browser/enterprise/connectors/reporting/ios_reporting_event_router_factory.h"
+#import "ios/chrome/browser/history/model/history_service_factory.h"
 #import "ios/chrome/browser/prerender/model/prerender_tab_helper.h"
+#import "ios/chrome/browser/safe_browsing/model/client_side_detection/client_side_detection_host_ios.h"
+#import "ios/chrome/browser/safe_browsing/model/client_side_detection/client_side_detection_intelligent_scan_delegate_factory.h"
+#import "ios/chrome/browser/safe_browsing/model/client_side_detection/client_side_detection_service_factory.h"
+#import "ios/chrome/browser/safe_browsing/model/verdict_cache_manager_factory.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
+#import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/snapshots/model/snapshot_tab_helper.h"
 #import "ios/web/public/web_state.h"
 
 SafeBrowsingClientImpl::SafeBrowsingClientImpl(
     PrefService* pref_service,
     safe_browsing::HashRealTimeService* hash_real_time_service,
+    safe_browsing::V5GetHashProtocolManager* v5_get_hash_protocol_manager,
     UrlLookupServiceFactory url_lookup_service_factory,
     enterprise_connectors::ConnectorsService* connectors_service)
     : pref_service_(pref_service),
       hash_real_time_service_(hash_real_time_service),
+      v5_get_hash_protocol_manager_(v5_get_hash_protocol_manager),
       url_lookup_service_factory_(url_lookup_service_factory),
       connectors_service_(connectors_service) {
   CHECK(connectors_service_);
@@ -55,6 +68,11 @@ SafeBrowsingClientImpl::GetRealTimeUrlLookupService() {
 safe_browsing::HashRealTimeService*
 SafeBrowsingClientImpl::GetHashRealTimeService() {
   return hash_real_time_service_;
+}
+
+safe_browsing::V5GetHashProtocolManager*
+SafeBrowsingClientImpl::GetV5GetHashProtocolManager() {
+  return v5_get_hash_protocol_manager_;
 }
 
 variations::VariationsService* SafeBrowsingClientImpl::GetVariationsService() {
@@ -106,6 +124,45 @@ void SafeBrowsingClientImpl::OnSecurityInterstitialShown(
         safe_browsing::GetThreatTypeStringForInterstitial(resource.threat_type),
         /*net_error_code=*/0,
         pref_service_->GetBoolean(prefs::kSafeBrowsingProceedAnywayDisabled),
-        referrer_chain);
+        referrer_chain,
+        /*tab_title=*/base::UTF16ToUTF8(web_state->GetTitle()));
   }
+}
+
+std::unique_ptr<safe_browsing::ClientSideDetectionHostBase>
+SafeBrowsingClientImpl::CreateClientSideDetectionHost(
+    web::WebState* web_state) {
+  if (!web_state) {
+    return nullptr;
+  }
+  ProfileIOS* profile =
+      ProfileIOS::FromBrowserState(web_state->GetBrowserState());
+  if (!profile || profile->IsOffTheRecord()) {
+    return nullptr;
+  }
+  if (PrerenderTabHelper::FromWebState(web_state)) {
+    return nullptr;
+  }
+  if (!SnapshotTabHelper::FromWebState(web_state)) {
+    return nullptr;
+  }
+  safe_browsing::ClientSideDetectionService* csd_service =
+      ClientSideDetectionServiceFactory::GetForProfile(profile);
+  if (!csd_service) {
+    return nullptr;
+  }
+  if (!base::FeatureList::IsEnabled(
+          safe_browsing::kClientSideDetectionEnabledIos)) {
+    return nullptr;
+  }
+
+  safe_browsing::IntelligentScanDelegate* intelligent_scan_delegate =
+      ClientSideDetectionIntelligentScanDelegateFactory::GetForProfile(profile);
+
+  return std::make_unique<safe_browsing::ClientSideDetectionHostIOS>(
+      web_state, csd_service,
+      VerdictCacheManagerFactory::GetForProfile(profile),
+      intelligent_scan_delegate, profile->GetPrefs(),
+      IdentityManagerFactory::GetForProfile(profile),
+      ios::HistoryServiceFactory::GetForProfile(profile));
 }

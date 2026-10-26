@@ -33,7 +33,6 @@
 #include "components/content_relationship_verification/digital_asset_links_handler.h"  // nogncheck
 #endif
 
-class Browser;
 class SkBitmap;
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -107,7 +106,10 @@ class WebAppBrowserController : public AppBrowserController,
       webapps::WebappUninstallSource webapp_uninstall_source) override;
   bool IsInstalled() const override;
   bool IsFirstLaunchAfterInstall() const override;
-  std::unique_ptr<TabMenuModelFactory> GetTabMenuModelFactory() const override;
+#if BUILDFLAG(IS_CHROMEOS)
+  std::optional<base::flat_set<tabs::TabContextMenuCommand>>
+  GetAllowedTabMenuCommands() const override;
+#endif
   bool AppUsesWindowControlsOverlay() const override;
   bool AppUsesTabbed() const override;
   bool IsWindowControlsOverlayEnabled() const override;
@@ -158,6 +160,8 @@ class WebAppBrowserController : public AppBrowserController,
 
  protected:
   // AppBrowserController:
+  bool IsOriginAllowedForAboutBlankPopup(
+      const url::Origin& origin) const override;
   void OnTabInserted(content::WebContents* contents) override;
   void OnTabRemoved(content::WebContents* contents) override;
 

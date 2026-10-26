@@ -35,11 +35,11 @@
 namespace ash::boca {
 namespace {
 
-const std::string kTachyonToken = "tachyon-token";
-const std::string kSecondTachyonToken = "second-tachyon-token";
-const std::string kSessionId = "session-id";
-const std::string kSenderEmail = "user@email.com";
-const std::string kGroupId = "tachyon-group-id";
+constexpr char kTachyonToken[] = "tachyon-token";
+constexpr char kSecondTachyonToken[] = "second-tachyon-token";
+constexpr char kSessionId[] = "session-id";
+constexpr char kSenderEmail[] = "user@email.com";
+constexpr char kGroupId[] = "tachyon-group-id";
 
 class MockBabelOrcaController : public babelorca::BabelOrcaController {
  public:
@@ -57,7 +57,7 @@ class BabelOrcaManagerTest : public testing::Test {
   // testing::Test:
   void SetUp() override {
     account_info_ = identity_test_env_.MakeAccountAvailable("test@school.edu");
-    identity_test_env_.SetPrimaryAccount(account_info_.email,
+    identity_test_env_.SetPrimaryAccount(account_info_.GetEmail(),
                                          signin::ConsentLevel::kSignin);
     pref_service_.registry()->RegisterStringPref(
         babelorca::prefs::kTachyonClientUuid, "");

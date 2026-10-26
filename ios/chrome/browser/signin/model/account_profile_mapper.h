@@ -131,9 +131,8 @@ class AccountProfileMapper {
 
   // For testing purposes, this moves the account with `gaia_id` from its
   // current (managed) profile into the personal profile. This simulates the
-  // situation where a managed account was already signed in before
-  // kSeparateProfilesForManagedAccounts was enabled (but makes test setup much
-  // easier).
+  // situation where a managed account was already signed in before profile
+  // separation (this makes test setup much easier).
   void MoveManagedAccountToPersonalProfileForTesting(const GaiaId& gaia_id);
 
  private:
@@ -164,25 +163,19 @@ class AccountProfileMapper {
                                         const std::set<std::string>& scopes);
 
   // Invokes `OnIdentityListChanged(...)` for all observers in
-  // `profile_names_to_notify`. If `kSeparateProfilesForManagedAccounts` is
-  // disabled, all observers are notified, and `profile_names_to_notify` is
-  // ignored.
+  // `profile_names_to_notify`.
   void NotifyIdentityListChanged(
       const std::set<std::string>& profile_names_to_notify);
-  // Invokes `OnIdentityUpdated(...)` for all observers for `profile_name`. If
-  // `kSeparateProfilesForManagedAccounts` is disabled, all observers are
-  // notified, and `profile_name` is ignored.
+  // Invokes `OnIdentityUpdated(...)` for all observers for `profile_name`.
   void NotifyIdentityUpdated(id<SystemIdentity> identity,
                              const std::optional<std::string>& profile_name);
   // Invokes `OnIdentityRefreshTokenUpdated(...)` for all observers for
-  // the profile with `profile_name`. If `kSeparateProfilesForManagedAccounts`
-  // is disabled, all observers are notified, and `profile_name` is ignored.
+  // the profile with `profile_name`.
   void NotifyRefreshTokenUpdated(
       id<SystemIdentity> identity,
       const std::optional<std::string>& profile_name);
   // Invokes `OnIdentityAccessTokenRefreshFailed(...)` for all observers for
-  // the profile with `profile_name`. If `kSeparateProfilesForManagedAccounts`
-  // is disabled, all observers are notified, and `profile_name` is ignored.
+  // the profile with `profile_name`.
   void NotifyAccessTokenRefreshFailed(
       id<SystemIdentity> identity,
       id<RefreshAccessTokenError> error,
@@ -200,8 +193,13 @@ class AccountProfileMapper {
 
   std::unique_ptr<Assigner> assigner_;
 
-  // Registered observers.
-  std::map<std::string, base::ObserverList<Observer>, std::less<>>
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  std::map<std::string,
+           base::ObserverList<
+               Observer,
+               false,
+               base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>,
+           std::less<>>
       observer_lists_per_profile_name_;
 };
 

@@ -6,6 +6,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_XML_PARSER_XML_DOCUMENT_PARSER_RS_H_
 
 #include "base/notreached.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/parser_content_policy.h"
 #include "third_party/blink/renderer/core/dom/scriptable_document_parser.h"
 #include "third_party/blink/renderer/core/script/xml_parser_script_runner.h"
@@ -17,6 +18,7 @@
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 
 namespace blink {
@@ -28,9 +30,9 @@ class Element;
 class LocalFrameView;
 class Text;
 
-class XMLDocumentParserRs final : public ScriptableDocumentParser,
-                                  public XMLParserScriptRunnerHost,
-                                  public xml_ffi::XmlCallbacks {
+class CORE_EXPORT XMLDocumentParserRs final : public ScriptableDocumentParser,
+                                              public XMLParserScriptRunnerHost,
+                                              public xml_ffi::XmlCallbacks {
  public:
   explicit XMLDocumentParserRs(Document&, LocalFrameView* = nullptr);
   XMLDocumentParserRs(DocumentFragment*, Element*, ParserContentPolicy);
@@ -48,6 +50,7 @@ class XMLDocumentParserRs final : public ScriptableDocumentParser,
   bool WellFormed() const override;
   OrdinalNumber LineNumber() const override;
   TextPosition GetTextPosition() const override;
+  bool SawXslTransformForTesting() const { return saw_xsl_transform_; }
 
   // XmlCallbacks
   void StartDocument(rust::Str version,
@@ -109,8 +112,13 @@ class XMLDocumentParserRs final : public ScriptableDocumentParser,
 
   void CheckIfBlockingStyleSheetAdded();
 
+  bool ShouldMarkScriptAlreadyStarted() const;
+  bool IsXSLTAllowed() const;
+  void UpdateScriptStartPositionIfNeeded();
+
   Member<XMLParserScriptRunner> script_runner_;
   TextPosition script_start_position_;
+  bool set_script_start_position_on_next_event_ = false;
   bool saw_error_ = false;
   bool saw_css_ = false;
 
@@ -132,13 +140,29 @@ class XMLDocumentParserRs final : public ScriptableDocumentParser,
   const bool parsing_fragment_;
   bool saw_first_element_ = false;
   bool saw_end_document_ = false;
+  bool saw_xsl_transform_ = false;
+  StringBuilder original_source_for_transform_;
 
   bool parser_paused_ = false;
+  bool in_process_events_ = false;
+  StringBuilder pending_src_;
   bool requesting_script_ = false;
   bool waiting_for_stylesheets_ = false;
   bool added_pending_parser_blocking_stylesheet_ = false;
   bool finish_called_ = false;
 
+  // The xml Rust library lacks a clean API interface for chunked/resumable
+  // parsing, see https://github.com/kornelski/xml-rs/issues/71. After receiving
+  // chunks of XML content that have arrived from the network, the XML parser
+  // runs parsing until the end of the the available data and may run into an
+  // unbalanced root error, in the assumption, we are at the end of the
+  // document. But as we have not received the full document yet, the error is
+  // not final and may be recoverable.
+  // We ask the parser if this is a potentially resumable error. If it is, we
+  // resume and carry the error. At the end of the network transfer, when finish
+  // is called, we determine: a) The document recovered from the error and
+  // finished as well-formed. b) The document is indeed malformed, and we
+  // forward the report the error upwards.
   struct CarryUnbalancedRootElementError {
     String error_message;
     TextPosition position;

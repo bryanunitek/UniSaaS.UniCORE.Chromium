@@ -20,6 +20,7 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuPropertiesDelegate.java",
     "java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuRecentEntryItemProperties.java",
     "java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuSubmenuHeaderItemProperties.java",
+    "java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuTabGroupItemProperties.java",
     "java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuTabItemProperties.java",
     "java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuUtil.java",
     "java/src/org/chromium/chrome/browser/ui/appmenu/MenuButtonDelegate.java",
@@ -27,12 +28,12 @@ android_library("java") {
   deps = [
     ":java_resources",
     "//base:supplier_java",
-    "//chrome/browser/android/lifecycle:java",
+    "//base:token_java",
     "//components/bookmarks/common/android:bookmarks_java",
     "//components/browser_ui/util/android:java",
     "//third_party/androidx:androidx_annotation_annotation_java",
-    "//third_party/androidx:androidx_interpolator_interpolator_java",
     "//ui/android:ui_java",
+    "//url:gurl_java",
   ]
   resources_package = "org.chromium.chrome.browser.ui.appmenu"
 }
@@ -54,10 +55,7 @@ android_library_factory("factory_java") {
 
 android_resources("java_resources") {
   sources = [
-    "java/res/color-night/menu_action_bar_bg_color.xml",
-    "java/res/color/menu_action_bar_bg_color.xml",
-    "java/res/drawable/menu_action_bar_bg.xml",
-    "java/res/values/attrs.xml",
+    "java/res/values/dimens.xml",
     "java/res/values/ids.xml",
   ]
   deps = [

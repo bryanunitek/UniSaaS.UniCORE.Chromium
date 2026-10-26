@@ -57,7 +57,6 @@ source_set("browser_sources") {
     "background_sync_parameters.h",
     "background_sync_registration.cc",
     "background_sync_registration.h",
-    "background_tracing.h",
     "blob_handle.h",
     "bluetooth_chooser.cc",
     "bluetooth_chooser.h",
@@ -77,6 +76,7 @@ source_set("browser_sources") {
     "browser_main_parts.cc",
     "browser_main_parts.h",
     "browser_main_runner.h",
+    "browser_memory_coordinator.h",
     "browser_plugin_guest_delegate.cc",
     "browser_plugin_guest_delegate.h",
     "browser_plugin_guest_manager.cc",
@@ -88,7 +88,6 @@ source_set("browser_sources") {
     "browsing_data_remover.h",
     "browsing_data_remover_delegate.h",
     "browsing_instance_id.h",
-    "browsing_topics_site_data_manager.h",
     "btm_redirect.cc",
     "btm_redirect.h",
     "btm_service.h",
@@ -176,6 +175,7 @@ source_set("browser_sources") {
     "download_manager_delegate.h",
     "download_request_utils.h",
     "download_utils.h",
+    "editable_level.h",
     "error_navigation_trigger.h",
     "eye_dropper.h",
     "eye_dropper_listener.h",
@@ -190,16 +190,18 @@ source_set("browser_sources") {
     "file_system_access_write_item.cc",
     "file_system_access_write_item.h",
     "file_url_loader.h",
-    "first_party_sets_handler.h",
     "focused_node_details.h",
     "font_list_async.h",
     "frame_accept_header.cc",
     "frame_accept_header.h",
+    "frame_eviction_opt_out_client.cc",
+    "frame_eviction_opt_out_client.h",
     "frame_rate_throttling.h",
     "frame_tree_node_id.h",
     "frame_type.h",
     "fullscreen_types.h",
     "generated_code_cache_settings.h",
+    "global_dom_node_id.cc",
     "global_dom_node_id.h",
     "global_request_id.cc",
     "global_request_id.h",
@@ -225,8 +227,6 @@ source_set("browser_sources") {
     "installability_error.cc",
     "installability_error.h",
     "installed_payment_apps_finder.h",
-    "interest_group_api_operation.h",
-    "interest_group_manager.h",
     "internal_webui_config.cc",
     "internal_webui_config.h",
     "invalidate_type.h",
@@ -237,7 +237,6 @@ source_set("browser_sources") {
     "jank_monitor.h",
     "javascript_dialog_manager.cc",
     "javascript_dialog_manager.h",
-    "k_anonymity_service_delegate.h",
     "keep_alive_request_tracker.cc",
     "keep_alive_request_tracker.h",
     "keyboard_event_processing_result.h",
@@ -257,6 +256,7 @@ source_set("browser_sources") {
     "media_session.h",
     "media_session_client.cc",
     "media_session_client.h",
+    "media_session_player_observer.cc",
     "media_session_player_observer.h",
     "media_session_service.h",
     "media_stream_request.cc",
@@ -264,7 +264,6 @@ source_set("browser_sources") {
     "message_port_provider.h",
     "mhtml_extra_parts.h",
     "mojo_binder_policy_map.h",
-    "mojom_devtools_agent_host_delegate.h",
     "navigation_controller.cc",
     "navigation_controller.h",
     "navigation_details.cc",
@@ -351,8 +350,6 @@ source_set("browser_sources") {
     "presentation_screen_availability_listener.h",
     "presentation_service_delegate.h",
     "privacy_sandbox_invoking_api.h",
-    "private_aggregation_data_model.cc",
-    "private_aggregation_data_model.h",
     "process_allocation_context.cc",
     "process_allocation_context.h",
     "process_selection_deferring_condition.cc",
@@ -360,9 +357,6 @@ source_set("browser_sources") {
     "process_selection_user_data.cc",
     "process_selection_user_data.h",
     "process_visibility_util.h",
-    "provision_fetcher_factory.h",
-    "provision_fetcher_impl.cc",
-    "provision_fetcher_impl.h",
     "push_messaging_service.cc",
     "push_messaging_service.h",
     "reduce_accept_language_controller_delegate.h",
@@ -393,8 +387,6 @@ source_set("browser_sources") {
     "restore_type.h",
     "runtime_feature_state/runtime_feature_state_document_data.cc",
     "runtime_feature_state/runtime_feature_state_document_data.h",
-    "sandboxed_process_launcher_delegate.cc",
-    "sandboxed_process_launcher_delegate.h",
     "save_page_type.h",
     "scoped_accessibility_mode.h",
     "scoped_authenticator_environment_for_testing.h",
@@ -425,8 +417,8 @@ source_set("browser_sources") {
     "service_worker_running_info.h",
     "service_worker_version_base_info.cc",
     "service_worker_version_base_info.h",
-    "session_storage_namespace.cc",
-    "session_storage_namespace.h",
+    "session_storage_namespace_handle.cc",
+    "session_storage_namespace_handle.h",
     "session_storage_usage_info.h",
     "shape_detection_service.h",
     "shared_cors_origin_access_list.h",
@@ -506,6 +498,7 @@ source_set("browser_sources") {
     "web_authentication_request_proxy.h",
     "web_contents.cc",
     "web_contents.h",
+    "web_contents_based_canceller.h",
     "web_contents_capability_type.h",
     "web_contents_delegate.cc",
     "web_contents_delegate.h",
@@ -545,8 +538,11 @@ source_set("browser_sources") {
     "webid/identity_request_account.h",
     "webid/identity_request_dialog_controller.cc",
     "webid/identity_request_dialog_controller.h",
+    "webid/native_idp_fetcher.cc",
+    "webid/native_idp_fetcher.h",
     "webnn_introspection_manager.cc",
     "webnn_introspection_manager.h",
+    "webrtc_diagnostics.h",
     "webrtc_event_logger.cc",
     "webrtc_event_logger.h",
     "webrtc_log.cc",
@@ -560,12 +556,19 @@ source_set("browser_sources") {
   ]
   configs += [
     "//build/config:precompiled_headers",
-    "//build/config/compiler:wexit_time_destructors",
     "//content:content_implementation",
   ]
 
   if (is_android) {
     sources += [ "color_chooser.h" ]
+  }
+
+  if (enable_cdm_provision_fetcher) {
+    sources += [
+      "provision_fetcher_factory.h",
+      "provision_fetcher_impl.cc",
+      "provision_fetcher_impl.h",
+    ]
   }
 
   if (is_linux || is_mac) {
@@ -583,7 +586,6 @@ source_set("browser_sources") {
   public_deps = [
     "//base",
     "//build:chromecast_buildflags",
-    "//components/browsing_topics/common",
     "//components/download/public/common:public",
     "//components/file_access",
     "//components/services/storage/privileged/mojom",
@@ -616,6 +618,7 @@ source_set("browser_sources") {
     "//services/viz/public/mojom",
     "//services/webnn/public/cpp",
     "//services/webnn/public/mojom:webnn_service_introspection",
+    "//url",
 
     # We expose skia headers in the public API.
     "//skia",
@@ -625,6 +628,7 @@ source_set("browser_sources") {
     "//storage/browser",
     "//third_party/webrtc_overrides:webrtc_component",
     "//ui/base/dragdrop/mojom:mojom_headers",
+    "//ui/base/ime:text_input_types",
     "//ui/base/mojom:ui_base_types",
   ]
   deps = [
@@ -647,6 +651,7 @@ source_set("browser_sources") {
     "//services/metrics/public/cpp:metrics_cpp",
     "//third_party/blink/public/common:buildflags",
     "//third_party/blink/public/common:headers",
+    "//third_party/libyuv",
     "//ui/accessibility",
     "//ui/base",
     "//ui/base/clipboard",
@@ -688,7 +693,6 @@ source_set("browser_sources") {
       "android/compositor_client.h",
       "android/devtools_auth.h",
       "android/gpu_video_accelerator_factories_provider.h",
-      "android/impression_android.h",
       "android/java_interfaces.h",
       "android/message_payload.h",
       "android/message_payload_type.h",
@@ -735,7 +739,7 @@ source_set("browser_sources") {
     sources += [ "zygote_host/zygote_host_linux.h" ]
   }
 
-  if (allow_oop_video_decoder) {
+  if (enable_oop_video_decoder) {
     sources += [ "oop_video_decoder_factory.h" ]
     public_deps += [ "//media/mojo/mojom" ]
   }
@@ -745,8 +749,8 @@ source_set("browser_sources") {
       "chromeos/delegate_to_browser_gpu_service_accelerator_factory.h",
       "lock_screen_storage.h",
       "smart_card_delegate.h",
-      "tts_controller_delegate.cc",
-      "tts_controller_delegate.h",
+      "tts_controller_delegate_chromeos.cc",
+      "tts_controller_delegate_chromeos.h",
     ]
   }
 
@@ -785,15 +789,18 @@ if (is_android) {
   java_cpp_enum("contacts_picker_properties_javagen") {
     sources = [ "contacts_picker_properties.h" ]
   }
+
   java_cpp_enum("bluetooth_chooser_event_javagen") {
     sources = [ "bluetooth_chooser.h" ]
   }
+
   java_cpp_enum("digital_identity_enum") {
     sources = [
       "digital_identity_interstitial_type.h",
       "digital_identity_provider.h",
     ]
   }
+
   java_cpp_enum("transfer_input_to_viz_result_enum") {
     sources = [ "android/transfer_input_to_viz_result.h" ]
   }

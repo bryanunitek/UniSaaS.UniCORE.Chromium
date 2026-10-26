@@ -14,7 +14,7 @@
 #include "components/autofill/core/browser/data_manager/addresses/account_name_email_store_test_api.h"
 #include "components/autofill/core/browser/data_manager/addresses/test_address_data_manager.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/prefs/pref_service.h"
@@ -674,14 +674,11 @@ TEST_F(AccountNameEmailStoreTest,
 }
 #endif  // BUILDFLAG(IS_IOS)
 
+#if BUILDFLAG(IS_CHROMEOS)
 class AccountNameEmailStoreSyncTest : public AccountNameEmailStoreTest {
  public:
   AccountNameEmailStoreSyncTest() {
-    features_.InitWithFeatures(
-        /*enabled_features=*/{},
-        /*disabled_features=*/{
-            syncer::kReplaceSyncPromosWithSignInPromos,
-            syncer::kReplaceSyncPromosWithSigninPromosNewSignin});
+    features_.InitAndDisableFeature(syncer::kReplaceSyncPromosWithSignInPromos);
   }
 };
 
@@ -702,6 +699,7 @@ TEST_F(AccountNameEmailStoreSyncTest, SyncTheFeatureState) {
                   base::UTF8ToUTF16(kTestName1),
                   base::UTF8ToUTF16(kTestEmailAddress1))));
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 struct NicknameTestCase {
   std::string account_name_with_nickname;

@@ -4,10 +4,16 @@
 
 #include "components/pdf/renderer/pdf_accessibility_tree.h"
 
+#include <limits>
 #include <utility>
 
+#include "base/containers/to_vector.h"
+#include "base/test/scoped_feature_list.h"
+#include "components/pdf/renderer/pdf_accessibility_tree_builder.h"
 #include "pdf/accessibility_structs.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/accessibility/accessibility_features.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 namespace pdf {
@@ -220,257 +226,6 @@ TEST(PdfAccessibilityTreeUnitTest, OutOfBoundHighlight) {
                                                            page_objects));
 }
 
-TEST(PdfAccessibilityTreeUnitTest, UnsortedTextFieldVector) {
-  std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
-  text_runs.emplace_back(kFirstTextRun);
-  text_runs.emplace_back(kSecondTextRun);
-
-  std::vector<chrome_pdf::AccessibilityCharInfo> chars(
-      std::begin(kDummyCharsData), std::end(kDummyCharsData));
-
-  chrome_pdf::AccessibilityPageObjects page_objects;
-
-  {
-    // Add first text field in the vector.
-    chrome_pdf::AccessibilityTextFieldInfo text_field;
-    text_field.text_run_index = 2;
-    text_field.index_in_page = 0;
-    page_objects.form_fields.text_fields.push_back(std::move(text_field));
-  }
-
-  {
-    // Add second text field in the vector.
-    chrome_pdf::AccessibilityTextFieldInfo text_field;
-    text_field.text_run_index = 0;
-    text_field.index_in_page = 1;
-    page_objects.form_fields.text_fields.push_back(std::move(text_field));
-  }
-
-  EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                           page_objects));
-}
-
-TEST(PdfAccessibilityTreeUnitTest, OutOfBoundTextField) {
-  std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
-  text_runs.emplace_back(kFirstTextRun);
-  text_runs.emplace_back(kSecondTextRun);
-
-  std::vector<chrome_pdf::AccessibilityCharInfo> chars(
-      std::begin(kDummyCharsData), std::end(kDummyCharsData));
-
-  chrome_pdf::AccessibilityPageObjects page_objects;
-
-  {
-    chrome_pdf::AccessibilityTextFieldInfo text_field;
-    text_field.text_run_index = 3;
-    text_field.index_in_page = 0;
-    page_objects.form_fields.text_fields.push_back(std::move(text_field));
-  }
-
-  EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                           page_objects));
-}
-
-TEST(PdfAccessibilityTreeUnitTest, UnsortedChoiceFieldVector) {
-  std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
-  text_runs.emplace_back(kFirstTextRun);
-  text_runs.emplace_back(kSecondTextRun);
-
-  std::vector<chrome_pdf::AccessibilityCharInfo> chars(
-      std::begin(kDummyCharsData), std::end(kDummyCharsData));
-
-  chrome_pdf::AccessibilityPageObjects page_objects;
-
-  {
-    // Add first choice field in the vector.
-    chrome_pdf::AccessibilityChoiceFieldInfo choice_field;
-    choice_field.text_run_index = 2;
-    choice_field.index_in_page = 0;
-    page_objects.form_fields.choice_fields.push_back(std::move(choice_field));
-  }
-
-  {
-    // Add second choice field in the vector.
-    chrome_pdf::AccessibilityChoiceFieldInfo choice_field;
-    choice_field.text_run_index = 0;
-    choice_field.index_in_page = 1;
-    page_objects.form_fields.choice_fields.push_back(std::move(choice_field));
-  }
-
-  EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                           page_objects));
-}
-
-TEST(PdfAccessibilityTreeUnitTest, OutOfBoundChoiceField) {
-  std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
-  text_runs.emplace_back(kFirstTextRun);
-  text_runs.emplace_back(kSecondTextRun);
-
-  std::vector<chrome_pdf::AccessibilityCharInfo> chars(
-      std::begin(kDummyCharsData), std::end(kDummyCharsData));
-
-  chrome_pdf::AccessibilityPageObjects page_objects;
-
-  {
-    chrome_pdf::AccessibilityChoiceFieldInfo choice_field;
-    choice_field.text_run_index = 3;
-    choice_field.index_in_page = 0;
-    page_objects.form_fields.choice_fields.push_back(std::move(choice_field));
-  }
-
-  EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                           page_objects));
-}
-
-TEST(PdfAccessibilityTreeUnitTest, UnsortedButtonVector) {
-  std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
-  text_runs.emplace_back(kFirstTextRun);
-  text_runs.emplace_back(kSecondTextRun);
-
-  std::vector<chrome_pdf::AccessibilityCharInfo> chars(
-      std::begin(kDummyCharsData), std::end(kDummyCharsData));
-
-  chrome_pdf::AccessibilityPageObjects page_objects;
-
-  {
-    // Add first button in the vector.
-    chrome_pdf::AccessibilityButtonInfo button;
-    button.text_run_index = 2;
-    button.index_in_page = 0;
-    page_objects.form_fields.buttons.push_back(std::move(button));
-  }
-
-  {
-    // Add second button in the vector.
-    chrome_pdf::AccessibilityButtonInfo button;
-    button.text_run_index = 0;
-    button.index_in_page = 1;
-    page_objects.form_fields.buttons.push_back(std::move(button));
-  }
-
-  EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                           page_objects));
-}
-
-TEST(PdfAccessibilityTreeUnitTest, OutOfBoundButton) {
-  std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
-  text_runs.emplace_back(kFirstTextRun);
-  text_runs.emplace_back(kSecondTextRun);
-
-  std::vector<chrome_pdf::AccessibilityCharInfo> chars(
-      std::begin(kDummyCharsData), std::end(kDummyCharsData));
-
-  chrome_pdf::AccessibilityPageObjects page_objects;
-
-  {
-    chrome_pdf::AccessibilityButtonInfo button;
-    button.text_run_index = 3;
-    button.index_in_page = 0;
-    page_objects.form_fields.buttons.push_back(std::move(button));
-  }
-
-  EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                           page_objects));
-}
-
-TEST(PdfAccessibilityTreeUnitTest, OutOfBoundRadioButton) {
-  std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
-  text_runs.emplace_back(kFirstTextRun);
-  text_runs.emplace_back(kSecondTextRun);
-
-  std::vector<chrome_pdf::AccessibilityCharInfo> chars(
-      std::begin(kDummyCharsData), std::end(kDummyCharsData));
-
-  chrome_pdf::AccessibilityPageObjects page_objects;
-
-  {
-    chrome_pdf::AccessibilityButtonInfo button;
-    button.type = chrome_pdf::ButtonType::kRadioButton;
-    button.text_run_index = 0;
-    button.control_index = 1;
-    button.control_count = 2;
-    button.index_in_page = 0;
-    page_objects.form_fields.buttons.push_back(std::move(button));
-  }
-
-  EXPECT_TRUE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                          page_objects));
-
-  {
-    chrome_pdf::AccessibilityButtonInfo button;
-    button.type = chrome_pdf::ButtonType::kRadioButton;
-    button.text_run_index = 0;
-    button.control_index = 3;
-    button.control_count = 2;
-    button.index_in_page = 1;
-    page_objects.form_fields.buttons.push_back(std::move(button));
-  }
-
-  EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                           page_objects));
-}
-
-TEST(PdfAccessibilityTreeUnitTest, OutOfBoundCheckBox) {
-  std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
-  text_runs.emplace_back(kFirstTextRun);
-  text_runs.emplace_back(kSecondTextRun);
-
-  std::vector<chrome_pdf::AccessibilityCharInfo> chars(
-      std::begin(kDummyCharsData), std::end(kDummyCharsData));
-
-  chrome_pdf::AccessibilityPageObjects page_objects;
-
-  {
-    chrome_pdf::AccessibilityButtonInfo button;
-    button.type = chrome_pdf::ButtonType::kCheckBox;
-    button.text_run_index = 0;
-    button.control_index = 1;
-    button.control_count = 2;
-    button.index_in_page = 0;
-    page_objects.form_fields.buttons.push_back(std::move(button));
-  }
-
-  EXPECT_TRUE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                          page_objects));
-
-  {
-    chrome_pdf::AccessibilityButtonInfo button;
-    button.type = chrome_pdf::ButtonType::kCheckBox;
-    button.text_run_index = 0;
-    button.control_index = 3;
-    button.control_count = 2;
-    button.index_in_page = 1;
-    page_objects.form_fields.buttons.push_back(std::move(button));
-  }
-
-  EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                           page_objects));
-}
-
-TEST(PdfAccessibilityTreeUnitTest, InvalidButtonType) {
-  std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
-  text_runs.emplace_back(kFirstTextRun);
-  text_runs.emplace_back(kSecondTextRun);
-
-  std::vector<chrome_pdf::AccessibilityCharInfo> chars(
-      std::begin(kDummyCharsData), std::end(kDummyCharsData));
-
-  chrome_pdf::AccessibilityPageObjects page_objects;
-
-  {
-    chrome_pdf::AccessibilityButtonInfo button;
-    button.type = static_cast<chrome_pdf::ButtonType>(666);
-    button.text_run_index = 0;
-    button.control_index = 1;
-    button.control_count = 2;
-    button.index_in_page = 0;
-    page_objects.form_fields.buttons.push_back(std::move(button));
-  }
-
-  EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                           page_objects));
-}
-
 TEST(PdfAccessibilityTreeUnitTest, OutOfBoundIndexInPageLink) {
   std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
   text_runs.emplace_back(kFirstTextRun);
@@ -516,68 +271,86 @@ TEST(PdfAccessibilityTreeUnitTest, OutOfBoundIndexInPageHighlight) {
                                                            page_objects));
 }
 
-TEST(PdfAccessibilityTreeUnitTest, OutOfBoundIndexInPageTextFeild) {
-  std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
-  text_runs.emplace_back(kFirstTextRun);
-  text_runs.emplace_back(kSecondTextRun);
+TEST(PdfAccessibilityTreeUnitTest, AreStylesEquivalent) {
+  chrome_pdf::AccessibilityTextStyleInfo style1;
+  style1.font_name = "Arial";
+  style1.is_italic = false;
+  style1.font_weight = 400;
 
-  std::vector<chrome_pdf::AccessibilityCharInfo> chars(
-      std::begin(kDummyCharsData), std::end(kDummyCharsData));
+  chrome_pdf::AccessibilityTextStyleInfo style2;
+  style2.font_name = "TimesNewRoman";
+  style2.is_italic = false;
+  style2.font_weight = 400;
 
-  chrome_pdf::AccessibilityPageObjects page_objects;
+  // Font family names differ, but styling (bold/italic/font_weight) is
+  // identical.
+  EXPECT_TRUE(PdfAccessibilityTreeBuilder::AreStylesEquivalent(style1, style2));
 
-  {
-    chrome_pdf::AccessibilityTextFieldInfo text_feild;
-    text_feild.text_run_index = 1;
-    text_feild.index_in_page = 1;
-    page_objects.form_fields.text_fields.push_back(std::move(text_feild));
-  }
+  // Font weights differ.
+  style2.font_weight = 700;
+  EXPECT_FALSE(
+      PdfAccessibilityTreeBuilder::AreStylesEquivalent(style1, style2));
 
-  EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                           page_objects));
+  // Both font weights identical.
+  style1.font_weight = 700;
+  EXPECT_TRUE(PdfAccessibilityTreeBuilder::AreStylesEquivalent(style1, style2));
+
+  // Italic states differ.
+  style2.is_italic = true;
+  EXPECT_FALSE(
+      PdfAccessibilityTreeBuilder::AreStylesEquivalent(style1, style2));
+
+  // Both bold and italic.
+  style1.is_italic = true;
+  EXPECT_TRUE(PdfAccessibilityTreeBuilder::AreStylesEquivalent(style1, style2));
 }
 
-TEST(PdfAccessibilityTreeUnitTest, OutOfBoundIndexInChoiceFeild) {
-  std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
-  text_runs.emplace_back(kFirstTextRun);
-  text_runs.emplace_back(kSecondTextRun);
+TEST(PdfAccessibilityTreeUnitTest, LineSegmentsValidation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      features::kPdfAccessibilityHeuristicEnhancements);
 
-  std::vector<chrome_pdf::AccessibilityCharInfo> chars(
-      std::begin(kDummyCharsData), std::end(kDummyCharsData));
+  const std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs = {
+      kFirstTextRun, kSecondTextRun};
+  const std::vector<chrome_pdf::AccessibilityCharInfo> chars =
+      base::ToVector(kDummyCharsData);
 
-  chrome_pdf::AccessibilityPageObjects page_objects;
+  // Valid segments, including diagonal and reversed ones.
+  chrome_pdf::AccessibilityPageObjects valid_objects;
+  valid_objects.line_segments = {
+      {gfx::PointF(10.0f, 20.0f), gfx::PointF(50.0f, 20.0f)},
+      {gfx::PointF(30.0f, 10.0f), gfx::PointF(30.0f, 40.0f)},
+      {gfx::PointF(10.0f, 10.0f), gfx::PointF(40.0f, 30.0f)},
+      {gfx::PointF(50.0f, 20.0f), gfx::PointF(10.0f, 20.0f)},
+  };
+  EXPECT_TRUE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
+                                                          valid_objects));
 
-  {
-    chrome_pdf::AccessibilityChoiceFieldInfo choice_field;
-    choice_field.type = chrome_pdf::ChoiceFieldType::kListBox;
-    choice_field.text_run_index = 2;
-    choice_field.index_in_page = 1;
-    page_objects.form_fields.choice_fields.push_back(std::move(choice_field));
-  }
+  // Invalid segment: zero length.
+  chrome_pdf::AccessibilityPageObjects invalid_zero_length;
+  invalid_zero_length.line_segments = {
+      {gfx::PointF(10.0f, 20.0f), gfx::PointF(10.0f, 20.0f)},
+  };
+  EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(
+      text_runs, chars, invalid_zero_length));
+
+  // Invalid segment: NaN coordinate.
+  chrome_pdf::AccessibilityPageObjects invalid_nan;
+  invalid_nan.line_segments = {
+      {gfx::PointF(std::numeric_limits<float>::quiet_NaN(), 20.0f),
+       gfx::PointF(50.0f, 20.0f)},
+  };
   EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                           page_objects));
-}
+                                                           invalid_nan));
 
-TEST(PdfAccessibilityTreeUnitTest, InvalidChoiceFieldType) {
-  std::vector<chrome_pdf::AccessibilityTextRunInfo> text_runs;
-  text_runs.emplace_back(kFirstTextRun);
-  text_runs.emplace_back(kSecondTextRun);
-
-  std::vector<chrome_pdf::AccessibilityCharInfo> chars(
-      std::begin(kDummyCharsData), std::end(kDummyCharsData));
-
-  chrome_pdf::AccessibilityPageObjects page_objects;
-
-  {
-    chrome_pdf::AccessibilityChoiceFieldInfo choice_field;
-    choice_field.type = static_cast<chrome_pdf::ChoiceFieldType>(666);
-    choice_field.text_run_index = 0;
-    choice_field.index_in_page = 0;
-    page_objects.form_fields.choice_fields.push_back(std::move(choice_field));
-  }
-
+  // Invalid segment: infinite coordinate.
+  chrome_pdf::AccessibilityPageObjects invalid_inf;
+  invalid_inf.line_segments = {
+      {gfx::PointF(30.0f, 10.0f),
+       gfx::PointF(30.0f, std::numeric_limits<float>::infinity())},
+  };
   EXPECT_FALSE(PdfAccessibilityTree::IsDataFromPluginValid(text_runs, chars,
-                                                           page_objects));
+                                                           invalid_inf));
 }
 
 }  // namespace pdf

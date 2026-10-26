@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/settings/autofill/autofill_and_passwords/utils/autofill_and_passwords_item_utils.h"
 
 #import "build/branding_buildflags.h"
+#import "components/autofill/core/common/autofill_features.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_settings_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_table_view_controller_constants.h"
@@ -19,12 +20,6 @@
 #import "ui/base/l10n/l10n_util_mac.h"
 
 namespace {
-
-// Returns the localized "On" or "Off" text based on the `enabled` state.
-NSString* DetailTextForEnabledState(BOOL enabled) {
-  return enabled ? l10n_util::GetNSString(IDS_IOS_SETTING_ON)
-                 : l10n_util::GetNSString(IDS_IOS_SETTING_OFF);
-}
 
 // Creates and returns a configured TableViewDetailIconItem.
 TableViewDetailIconItem* DetailItemWithType(
@@ -70,6 +65,10 @@ TableViewDetailIconItem* DetailItemWithType(
         detail_item.detailText =
             l10n_util::GetNSString(IDS_AUTOFILL_AND_PASSWORDS_SHOPPING_SUMMARY);
         break;
+      case SettingsItemTypeSuggestionsFromGemini:
+        detail_item.detailText = l10n_util::GetNSString(
+            IDS_IOS_PERSONAL_CONTEXT_AUTOFILL_SETTINGS_SUBPAGE_SUMMARY);
+        break;
       default:
         detail_item.detailText = nil;
         break;
@@ -84,9 +83,9 @@ TableViewDetailIconItem* DetailItemWithType(
 // Returns the branded version of the Google Services symbol.
 UIImage* GetBrandedGoogleServicesSymbol() {
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
-  return CustomSettingsRootMulticolorSymbol(kGoogleIconSymbol);
+  return SettingsRootSymbol(SymbolGoogleIconMonochrome);
 #else
-  return DefaultSettingsRootSymbol(kGearshape2Symbol);
+  return SettingsRootSymbol(SymbolGearshape2);
 #endif
 }
 
@@ -110,28 +109,9 @@ TableViewDetailIconItem* EnhancedAutofillDetailItem(NSInteger itemType,
 
 }  // namespace
 
-NSString* PasswordsItemDetailText(BOOL enabled) {
-  return DetailTextForEnabledState(enabled);
-}
-
-NSString* AutofillCreditCardItemDetailText(BOOL enabled) {
-  return DetailTextForEnabledState(enabled);
-}
-
-NSString* AutofillProfileItemDetailText(BOOL enabled) {
-  return DetailTextForEnabledState(enabled);
-}
-
-NSString* IdentityDocsItemDetailText(BOOL enabled) {
-  return DetailTextForEnabledState(enabled);
-}
-
-NSString* TravelInfoItemDetailText(BOOL enabled) {
-  return DetailTextForEnabledState(enabled);
-}
-
-NSString* ShoppingInfoItemDetailText(BOOL enabled) {
-  return DetailTextForEnabledState(enabled);
+NSString* DetailTextForEnabledState(BOOL enabled) {
+  return enabled ? l10n_util::GetNSString(IDS_IOS_SETTING_ON)
+                 : l10n_util::GetNSString(IDS_IOS_SETTING_OFF);
 }
 
 TableViewDetailIconItem* PasswordsItem(BOOL enabled) {
@@ -139,8 +119,8 @@ TableViewDetailIconItem* PasswordsItem(BOOL enabled) {
       l10n_util::GetNSString(IDS_IOS_PASSWORD_MANAGER);
 
   return DetailItemWithType(SettingsItemTypePasswords, passwordsSectionTitle,
-                            PasswordsItemDetailText(enabled),
-                            CustomSettingsRootSymbol(kPasswordSymbol),
+                            DetailTextForEnabledState(enabled),
+                            SettingsRootSymbol(SymbolPassword),
                             kSettingsPasswordsCellId);
 }
 
@@ -150,8 +130,8 @@ TableViewDetailIconItem* AutofillCreditCardItem(BOOL enabled) {
                                               : IDS_AUTOFILL_PAYMENT_METHODS);
 
   return DetailItemWithType(SettingsItemTypeAutofillCreditCard, title,
-                            AutofillCreditCardItemDetailText(enabled),
-                            DefaultSettingsRootSymbol(kCreditCardSymbol),
+                            DetailTextForEnabledState(enabled),
+                            SettingsRootSymbol(SymbolCreditCard),
                             kSettingsPaymentMethodsCellId);
 }
 
@@ -162,40 +142,53 @@ TableViewDetailIconItem* AutofillProfileItem(BOOL enabled) {
                                  : IDS_AUTOFILL_ADDRESSES_SETTINGS_TITLE);
 
   UIImage* symbol = IsYourSavedInfoSettingsPageIosEnabled()
-                        ? DefaultSettingsRootSymbol(kEnvelopeSymbol)
-                        : CustomSettingsRootSymbol(kLocationSymbol);
+                        ? SettingsRootSymbol(SymbolEnvelope)
+                        : SettingsRootSymbol(SymbolLocation);
 
   return DetailItemWithType(SettingsItemTypeAutofillProfile, title,
-                            AutofillProfileItemDetailText(enabled), symbol,
+                            DetailTextForEnabledState(enabled), symbol,
                             kSettingsAddressesAndMoreCellId);
 }
 
 TableViewDetailIconItem* IdentityDocsItem(BOOL enabled) {
   NSString* title = l10n_util::GetNSString(IDS_AUTOFILL_IDENTITY_DOCS_TITLE);
-  return DetailItemWithType(
-      SettingsItemTypeIdentityDocs, title, IdentityDocsItemDetailText(enabled),
-      DefaultSettingsRootSymbol(kPersonTextRectangleSymbol),
-      kSettingsIdentityDocsCellId);
+  return DetailItemWithType(SettingsItemTypeIdentityDocs, title,
+                            DetailTextForEnabledState(enabled),
+                            SettingsRootSymbol(SymbolPersonTextRectangle),
+                            kSettingsIdentityDocsCellId);
 }
 
 TableViewDetailIconItem* TravelInfoItem(BOOL enabled) {
   NSString* title = l10n_util::GetNSString(IDS_AUTOFILL_TRAVEL_TITLE);
   return DetailItemWithType(
-      SettingsItemTypeTravelInfo, title, TravelInfoItemDetailText(enabled),
-      DefaultSettingsRootSymbol(kSuitcaseSymbol), kSettingsTravelInfoCellId);
+      SettingsItemTypeTravelInfo, title, DetailTextForEnabledState(enabled),
+      SettingsRootSymbol(SymbolSuitcase), kSettingsTravelInfoCellId);
 }
 
 TableViewDetailIconItem* ShoppingInfoItem(BOOL enabled) {
   NSString* title = l10n_util::GetNSString(IDS_AUTOFILL_SHOPPING_TITLE);
   return DetailItemWithType(
-      SettingsItemTypeShoppingInfo, title, ShoppingInfoItemDetailText(enabled),
-      DefaultSettingsRootSymbol(kCartSymbol), kSettingsShoppingInfoCellId);
+      SettingsItemTypeShoppingInfo, title, DetailTextForEnabledState(enabled),
+      SettingsRootSymbol(SymbolCart), kSettingsShoppingInfoCellId);
+}
+
+TableViewDetailIconItem* SuggestionsFromGeminiItem(BOOL enabled) {
+  NSString* title =
+      l10n_util::GetNSString(IDS_IOS_PERSONAL_CONTEXT_AUTOFILL_SETTINGS_TITLE);
+#if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
+  UIImage* image = SettingsRootSymbol(SymbolGeminiBrandedLogo);
+#else
+  UIImage* image = SettingsRootSymbol(SymbolGeminiNonBrandedLogo);
+#endif
+  return DetailItemWithType(SettingsItemTypeSuggestionsFromGemini, title,
+                            DetailTextForEnabledState(enabled), image,
+                            kSettingsSuggestionsFromGeminiCellId);
 }
 
 TableViewDetailIconItem* AutofillSettingsItem() {
   NSString* title = l10n_util::GetNSString(IDS_IOS_SETTINGS_AUTOFILL_SETTINGS);
   return DetailItemWithType(SettingsItemTypeAutofillSettings, title, nil,
-                            DefaultSettingsRootSymbol(kSettingsSymbol),
+                            SettingsRootSymbol(SymbolSettings),
                             kSettingsAutofillSettingsCellId);
 }
 
@@ -205,7 +198,11 @@ TableViewSwitchItem* EnhancedAutofillSwitchItem(NSInteger itemType,
                                                 SEL action) {
   TableViewSwitchItem* switchItem =
       [[TableViewSwitchItem alloc] initWithType:itemType];
-  switchItem.text = l10n_util::GetNSString(IDS_SETTINGS_AUTOFILL_AI_PAGE_TITLE);
+  switchItem.text = l10n_util::GetNSString(
+      base::FeatureList::IsEnabled(
+          autofill::features::kAutofillAiOnlineModelToggleNewTitle)
+          ? IDS_SETTINGS_AUTOFILL_AI_PAGE_TITLE_V2
+          : IDS_SETTINGS_AUTOFILL_AI_PAGE_TITLE);
   switchItem.target = target;
   switchItem.selector = action;
   switchItem.on = enabled;
@@ -216,8 +213,10 @@ TableViewSwitchItem* EnhancedAutofillSwitchItem(NSInteger itemType,
 TableViewHeaderFooterItem* EnhancedAutofillSwitchFooter(NSInteger itemType) {
   TableViewLinkHeaderFooterItem* footer =
       [[TableViewLinkHeaderFooterItem alloc] initWithType:itemType];
-  footer.text =
-      l10n_util::GetNSString(IDS_SETTINGS_AUTOFILL_AI_TOGGLE_SUB_LABEL);
+  footer.text = l10n_util::GetNSString(
+      base::FeatureList::IsEnabled(autofill::features::kAutofillAiUsePrivateAi)
+          ? IDS_SETTINGS_AUTOFILL_AI_TOGGLE_SUB_LABEL_V2
+          : IDS_SETTINGS_AUTOFILL_AI_TOGGLE_SUB_LABEL);
   return footer;
 }
 
@@ -233,8 +232,8 @@ TableViewDetailIconItem* EnhancedAutofillCanFillDifficultFieldsItem(
     NSInteger itemType) {
   return EnhancedAutofillDetailItem(
       itemType, IDS_SETTINGS_AUTOFILL_AI_WHEN_ON_CAN_FILL_DIFFICULT_FIELDS,
-      CustomSymbolWithPointSize(kTextAnalysisSymbol,
-                                kSettingsRootSymbolImagePointSize));
+      SymbolWithPointSize(SymbolTextAnalysis,
+                          kSettingsRootSymbolImagePointSize));
 }
 
 TableViewHeaderFooterItem* EnhancedAutofillThingsToConsiderSectionHeader(
@@ -248,16 +247,18 @@ TableViewHeaderFooterItem* EnhancedAutofillThingsToConsiderSectionHeader(
 
 TableViewDetailIconItem* EnhancedAutofillDataUsageItem(NSInteger itemType) {
   return EnhancedAutofillDetailItem(
-      itemType, IDS_SETTINGS_AUTOFILL_AI_TO_CONSIDER_DATA_USAGE,
-      MakeSymbolMonochrome(GetBrandedGoogleServicesSymbol()));
+      itemType,
+      base::FeatureList::IsEnabled(autofill::features::kAutofillAiUsePrivateAi)
+          ? IDS_SETTINGS_AUTOFILL_AI_TO_CONSIDER_DATA_USAGE_V2
+          : IDS_SETTINGS_AUTOFILL_AI_TO_CONSIDER_DATA_USAGE,
+      GetBrandedGoogleServicesSymbol());
 }
 
 TableViewDetailIconItem* EnhancedAutofillEnterpriseManagedLoggingDisabledItem(
     NSInteger itemType) {
   return EnhancedAutofillDetailItem(
       itemType, IDS_SETTINGS_AUTOFILL_AI_ENTERPRISE_LOGGING_MANAGED_DISABLED,
-      CustomSymbolWithPointSize(kEnterpriseSymbol,
-                                kSettingsRootSymbolImagePointSize));
+      SymbolWithPointSize(SymbolEnterprise, kSettingsRootSymbolImagePointSize));
 }
 
 TableViewSwitchItem* AutofillVerificationSwitchItem(NSInteger itemType,

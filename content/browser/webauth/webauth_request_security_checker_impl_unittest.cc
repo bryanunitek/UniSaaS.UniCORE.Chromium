@@ -14,6 +14,7 @@
 #include "base/values.h"
 #include "components/webauthn/core/browser/remote_validation.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/public/browser/web_authentication_delegate.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_task_environment.h"
@@ -39,6 +40,20 @@ namespace {
 
 using ::testing::_;
 
+// A minimal WebAuthenticationDelegate that authorizes a single caller origin to
+// use the remote desktop client override, so tests can exercise the delegated
+// (remoteClientDataJSON) RP ID validation path.
+class FakeWebAuthenticationDelegate : public WebAuthenticationDelegate {
+ public:
+  bool OriginMayUseRemoteDesktopClientOverride(
+      BrowserContext* browser_context,
+      const url::Origin& caller_origin) override {
+    return authorized_origin.has_value() && caller_origin == *authorized_origin;
+  }
+
+  std::optional<url::Origin> authorized_origin;
+};
+
 class MockWebAuthnContentBrowserClient : public ContentBrowserClient {
  public:
   MockWebAuthnContentBrowserClient() = default;
@@ -58,6 +73,12 @@ class MockWebAuthnContentBrowserClient : public ContentBrowserClient {
       scoped_refptr<network::SharedURLLoaderFactory> factory) {
     shared_url_loader_factory_ = std::move(factory);
   }
+
+  WebAuthenticationDelegate* GetWebAuthenticationDelegate() override {
+    return &web_authentication_delegate;
+  }
+
+  FakeWebAuthenticationDelegate web_authentication_delegate;
 
  private:
   scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory_;
@@ -81,6 +102,16 @@ network::ParsedPermissionsPolicy CreatePolicyToDenyWebAuthn() {
       /*matches_opaque_src=*/false)};
 }
 
+network::ParsedPermissionsPolicy CreateRemoteClientDataJsonPolicy(
+    bool is_allowed) {
+  return {network::ParsedPermissionsPolicyDeclaration(
+      network::mojom::PermissionsPolicyFeature::
+          kPublicKeyCredentialsRemoteClientDataJson,
+      /*allowed_origins=*/{}, /*self_if_matches=*/std::nullopt,
+      /*matches_all_origins=*/is_allowed,
+      /*matches_opaque_src=*/false)};
+}
+
 network::ParsedPermissionsPolicy CreatePolicyToAllowWebPayments() {
   return {network::ParsedPermissionsPolicyDeclaration(
       network::mojom::PermissionsPolicyFeature::kPayment,
@@ -94,12 +125,14 @@ struct TestCase {
            const network::ParsedPermissionsPolicy& policy,
            WebAuthRequestSecurityChecker::RequestType request_type,
            bool expected_is_cross_origin,
-           blink::mojom::AuthenticatorStatus expected_status)
+           blink::mojom::AuthenticatorStatus expected_status,
+           bool uses_remote_client_data_json = false)
       : url(url),
         policy(policy),
         request_type(request_type),
         expected_is_cross_origin(expected_is_cross_origin),
-        expected_status(expected_status) {}
+        expected_status(expected_status),
+        uses_remote_client_data_json(uses_remote_client_data_json) {}
 
   ~TestCase() = default;
 
@@ -108,6 +141,7 @@ struct TestCase {
   const WebAuthRequestSecurityChecker::RequestType request_type;
   const bool expected_is_cross_origin;
   const blink::mojom::AuthenticatorStatus expected_status;
+  const bool uses_remote_client_data_json;
 };
 
 std::ostream& operator<<(std::ostream& out, const TestCase& test_case) {
@@ -173,7 +207,7 @@ TEST_P(WebAuthRequestSecurityCheckerTest, ValidateAncestorOrigins) {
   blink::mojom::AuthenticatorStatus actual_status =
       checker->ValidateAncestorOrigins(
           url::Origin::Create(GURL(GetParam().url)), GetParam().request_type,
-          &actual_is_cross_origin);
+          GetParam().uses_remote_client_data_json, &actual_is_cross_origin);
 
   EXPECT_EQ(GetParam().expected_status, actual_status);
   EXPECT_EQ(GetParam().expected_is_cross_origin, actual_is_cross_origin);
@@ -293,16 +327,19 @@ INSTANTIATE_TEST_SUITE_P(
 struct SingleFrameTestCase {
   SingleFrameTestCase(const network::ParsedPermissionsPolicy& policy,
                       WebAuthRequestSecurityChecker::RequestType request_type,
-                      blink::mojom::AuthenticatorStatus expected_status)
+                      blink::mojom::AuthenticatorStatus expected_status,
+                      bool uses_remote_client_data_json = false)
       : policy(policy),
         request_type(request_type),
-        expected_status(expected_status) {}
+        expected_status(expected_status),
+        uses_remote_client_data_json(uses_remote_client_data_json) {}
 
   ~SingleFrameTestCase() = default;
 
   const network::ParsedPermissionsPolicy policy;
   const WebAuthRequestSecurityChecker::RequestType request_type;
   const blink::mojom::AuthenticatorStatus expected_status;
+  const bool uses_remote_client_data_json;
 };
 
 class WebAuthRequestSecurityCheckerSingleFrameTest
@@ -343,7 +380,8 @@ TEST_P(WebAuthRequestSecurityCheckerSingleFrameTest,
   blink::mojom::AuthenticatorStatus actual_status =
       checker->ValidateAncestorOrigins(
           url::Origin::Create(GURL("https://same-origin.com")),
-          GetParam().request_type, &actual_is_cross_origin);
+          GetParam().request_type, GetParam().uses_remote_client_data_json,
+          &actual_is_cross_origin);
 
   EXPECT_EQ(GetParam().expected_status, actual_status);
   EXPECT_EQ(false, actual_is_cross_origin);
@@ -368,7 +406,27 @@ INSTANTIATE_TEST_SUITE_P(
         SingleFrameTestCase(
             CreatePolicyToDenyWebAuthn(),
             WebAuthRequestSecurityChecker::RequestType::kMakeCredential,
-            blink::mojom::AuthenticatorStatus::SUCCESS)));
+            blink::mojom::AuthenticatorStatus::SUCCESS),
+        SingleFrameTestCase(
+            CreateRemoteClientDataJsonPolicy(/*is_allowed=*/true),
+            WebAuthRequestSecurityChecker::RequestType::kGetAssertion,
+            blink::mojom::AuthenticatorStatus::SUCCESS,
+            /*uses_remote_client_data_json=*/true),
+        SingleFrameTestCase(
+            CreateRemoteClientDataJsonPolicy(/*is_allowed=*/false),
+            WebAuthRequestSecurityChecker::RequestType::kGetAssertion,
+            blink::mojom::AuthenticatorStatus::NOT_ALLOWED_ERROR,
+            /*uses_remote_client_data_json=*/true),
+        SingleFrameTestCase(
+            CreateRemoteClientDataJsonPolicy(/*is_allowed=*/true),
+            WebAuthRequestSecurityChecker::RequestType::kMakeCredential,
+            blink::mojom::AuthenticatorStatus::SUCCESS,
+            /*uses_remote_client_data_json=*/true),
+        SingleFrameTestCase(
+            CreateRemoteClientDataJsonPolicy(/*is_allowed=*/false),
+            WebAuthRequestSecurityChecker::RequestType::kMakeCredential,
+            blink::mojom::AuthenticatorStatus::NOT_ALLOWED_ERROR,
+            /*uses_remote_client_data_json=*/true)));
 
 class WebAuthRequestSecurityCheckerWellKnownJSONTest : public testing::Test {
  protected:
@@ -468,7 +526,7 @@ TEST_F(WebAuthRequestSecurityCheckerSingleFrameTest,
       GURL("https://example.com"));
   static_cast<RenderFrameHostImpl*>(frame)
       ->policy_container_host()
-      ->AddContentSecurityPolicies(std::move(policies));
+      ->AddContentSecurityPoliciesForTesting(std::move(policies));
 
   network::TestURLLoaderFactory test_url_loader_factory;
   auto shared_url_loader_factory =
@@ -493,7 +551,7 @@ TEST_F(WebAuthRequestSecurityCheckerSingleFrameTest,
   auto validation1 = checker->ValidateDomainAndRelyingPartyID(
       url::Origin::Create(GURL("https://example.com")), "allowed.com",
       WebAuthRequestSecurityChecker::RequestType::kGetAssertion,
-      /*remote_desktop_client_override_origin=*/std::nullopt,
+      /*remote_desktop_client_override=*/std::nullopt,
       base::BindLambdaForTesting(
           [&](blink::mojom::AuthenticatorStatus status) { run_loop1.Quit(); }));
   test_url_loader_factory.AddResponse(
@@ -512,7 +570,7 @@ TEST_F(WebAuthRequestSecurityCheckerSingleFrameTest,
   auto validation2 = checker->ValidateDomainAndRelyingPartyID(
       url::Origin::Create(GURL("https://example.com")), "disallowed.com",
       WebAuthRequestSecurityChecker::RequestType::kGetAssertion,
-      /*remote_desktop_client_override_origin=*/std::nullopt,
+      /*remote_desktop_client_override=*/std::nullopt,
       base::BindLambdaForTesting(
           [&](blink::mojom::AuthenticatorStatus status) { run_loop2.Quit(); }));
   test_url_loader_factory.AddResponse(
@@ -523,6 +581,45 @@ TEST_F(WebAuthRequestSecurityCheckerSingleFrameTest,
 
   WebAuthRequestSecurityCheckerImpl::
       UseSystemSharedURLLoaderFactoryForTesting() = false;
+  SetBrowserClientForTesting(old_client);
+}
+
+// When `skip_rp_id_validation` is true, RP ID validation is delegated to the
+// remote client and no related-origin request is attempted.
+TEST_F(WebAuthRequestSecurityCheckerSingleFrameTest,
+       ValidateDomainAndRelyingPartyID_DelegatedSkipsRpIdValidation) {
+  auto navigation = NavigationSimulator::CreateBrowserInitiated(
+      GURL("https://example.com"), web_contents());
+  navigation->Commit();
+  RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
+
+  MockWebAuthnContentBrowserClient mock_client;
+  mock_client.web_authentication_delegate.authorized_origin =
+      url::Origin::Create(GURL("https://example.com"));
+  ContentBrowserClient* old_client = SetBrowserClientForTesting(&mock_client);
+
+  scoped_refptr<WebAuthRequestSecurityCheckerImpl> checker =
+      static_cast<RenderFrameHostImpl*>(frame)
+          ->GetWebAuthRequestSecurityCheckerImpl();
+
+  // A non-matching RP ID would normally trigger the related-origin request;
+  // with delegation it must not.
+  EXPECT_CALL(mock_client, LogWebFeatureForCurrentPage(_, _)).Times(0);
+  std::optional<blink::mojom::AuthenticatorStatus> result;
+  auto validation = checker->ValidateDomainAndRelyingPartyID(
+      url::Origin::Create(GURL("https://example.com")), "unrelated.example",
+      WebAuthRequestSecurityChecker::RequestType::kGetAssertion,
+      WebAuthRequestSecurityChecker::RemoteDesktopParams{
+          .origin = url::Origin::Create(GURL("https://remote-host.example")),
+          .skip_rp_id_validation = true},
+      base::BindLambdaForTesting(
+          [&](blink::mojom::AuthenticatorStatus status) { result = status; }));
+
+  // Resolves synchronously to SUCCESS with no pending remote validation.
+  EXPECT_EQ(validation, nullptr);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(*result, blink::mojom::AuthenticatorStatus::SUCCESS);
+
   SetBrowserClientForTesting(old_client);
 }
 
@@ -542,7 +639,7 @@ TEST_F(WebAuthRequestSecurityCheckerSingleFrameTest,
       GURL("https://example.com"));
   static_cast<RenderFrameHostImpl*>(frame)
       ->policy_container_host()
-      ->AddContentSecurityPolicies(std::move(policies));
+      ->AddContentSecurityPoliciesForTesting(std::move(policies));
 
   scoped_refptr<WebAuthRequestSecurityCheckerImpl> checker =
       static_cast<RenderFrameHostImpl*>(frame)

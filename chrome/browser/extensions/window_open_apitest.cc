@@ -10,12 +10,13 @@
 #include "chrome/browser/extensions/browsertest_util.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -37,6 +38,8 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/base_window.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 using content::OpenURLParams;
 using content::Referrer;
@@ -65,7 +68,7 @@ class WindowOpenApiTest : public ExtensionApiTest {
   }
 };
 
-bool WaitForTabsPopupsApps(Browser* browser,
+bool WaitForTabsPopupsApps(BrowserWindowInterface* browser,
                            int num_tabs,
                            int num_popups,
                            int num_app_popups) {
@@ -81,7 +84,7 @@ bool WaitForTabsPopupsApps(Browser* browser,
   while (base::TimeTicks::Now() < end_time) {
     if (extensions::browsertest_util::GetWindowControllerCountInProfile(
             browser->GetProfile()) == num_browsers &&
-        browser->tab_strip_model()->count() == num_tabs) {
+        browser->GetTabStripModel()->count() == num_tabs) {
       break;
     }
 
@@ -91,7 +94,7 @@ bool WaitForTabsPopupsApps(Browser* browser,
   EXPECT_EQ(num_browsers,
             extensions::browsertest_util::GetWindowControllerCountInProfile(
                 browser->GetProfile()));
-  EXPECT_EQ(num_tabs, browser->tab_strip_model()->count());
+  EXPECT_EQ(num_tabs, browser->GetTabStripModel()->count());
 
   EXPECT_EQ(num_popups, WindowOpenApiTest::CountBrowsersForType(
                             BrowserWindowInterface::TYPE_POPUP));
@@ -101,7 +104,7 @@ bool WaitForTabsPopupsApps(Browser* browser,
   return ((num_browsers ==
            extensions::browsertest_util::GetWindowControllerCountInProfile(
                browser->GetProfile())) &&
-          (num_tabs == browser->tab_strip_model()->count()) &&
+          (num_tabs == browser->GetTabStripModel()->count()) &&
           (num_popups == WindowOpenApiTest::CountBrowsersForType(
                              BrowserWindowInterface::TYPE_POPUP)) &&
           (num_app_popups == WindowOpenApiTest::CountBrowsersForType(
@@ -192,13 +195,13 @@ IN_PROC_BROWSER_TEST_F(WindowOpenApiTest, PopupBlockingHostedApp) {
                         ->GetURL(popup_app_contents_path + "open_popup.html")
                         .ReplaceComponents(replace_host);
 
-  browser()->OpenURL(OpenURLParams(open_tab, Referrer(),
-                                   WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                                   ui::PAGE_TRANSITION_TYPED, false),
+  browser()->OpenURL(OpenURLParams::CreateBrowserInitiated(
+                         open_tab, WindowOpenDisposition::kNewForegroundTab,
+                         ui::PAGE_TRANSITION_TYPED),
                      /*navigation_handle_callback=*/{});
-  browser()->OpenURL(OpenURLParams(open_popup, Referrer(),
-                                   WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                                   ui::PAGE_TRANSITION_TYPED, false),
+  browser()->OpenURL(OpenURLParams::CreateBrowserInitiated(
+                         open_popup, WindowOpenDisposition::kNewForegroundTab,
+                         ui::PAGE_TRANSITION_TYPED),
                      /*navigation_handle_callback=*/{});
 
   EXPECT_TRUE(WaitForTabsPopupsApps(browser(), 3, 1, 0));

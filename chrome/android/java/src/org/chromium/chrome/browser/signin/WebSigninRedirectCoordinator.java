@@ -14,7 +14,7 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.signin.services.WebSigninBridge;
+import org.chromium.chrome.browser.signin.services.WebSigninTrackerBridge;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.signin.R;
 import org.chromium.components.signin.SigninFeatureMap;
@@ -31,6 +31,7 @@ import org.chromium.ui.modaldialog.ModalDialogProperties.Controller;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.util.RunnableTimer;
 import org.chromium.url.GURL;
+import org.chromium.url.Origin;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -54,6 +55,37 @@ public class WebSigninRedirectCoordinator {
 
     // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:WebSigninLoadingDialogStatus)
 
+    // LINT.IfChange(WaitOutcome)
+    @IntDef({
+        WaitOutcome.COMPLETED_WITHOUT_DIALOG,
+        WaitOutcome.COMPLETED_WITH_DIALOG,
+        WaitOutcome.ABORTED_WITHOUT_DIALOG,
+        WaitOutcome.ABORTED_WITH_DIALOG_CANCEL_BUTTON,
+        WaitOutcome.ABORTED_WITH_DIALOG_TOUCH_OUTSIDE,
+        WaitOutcome.ABORTED_WITH_DIALOG_OTHER,
+        WaitOutcome.AUTH_ERROR_WITHOUT_DIALOG,
+        WaitOutcome.AUTH_ERROR_WITH_DIALOG,
+        WaitOutcome.OTHER_ERROR_WITHOUT_DIALOG,
+        WaitOutcome.OTHER_ERROR_WITH_DIALOG
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    @VisibleForTesting
+    public @interface WaitOutcome {
+        int COMPLETED_WITHOUT_DIALOG = 0;
+        int COMPLETED_WITH_DIALOG = 1;
+        int ABORTED_WITHOUT_DIALOG = 2;
+        int ABORTED_WITH_DIALOG_CANCEL_BUTTON = 3;
+        int ABORTED_WITH_DIALOG_TOUCH_OUTSIDE = 4;
+        int ABORTED_WITH_DIALOG_OTHER = 5;
+        int AUTH_ERROR_WITHOUT_DIALOG = 6;
+        int AUTH_ERROR_WITH_DIALOG = 7;
+        int OTHER_ERROR_WITHOUT_DIALOG = 8;
+        int OTHER_ERROR_WITH_DIALOG = 9;
+        int NUM_ENTRIES = 10;
+    }
+
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:WebSigninWaitOutcome)
+
     private static final int SHOW_WEB_SIGNIN_LOADING_DIALOG_DELAY_MS = 1000;
     private static final int MIN_DIALOG_VISIBLE_DURATION_MS = 500;
     private RunnableTimer mShowDialogTimer = new RunnableTimer();
@@ -62,13 +94,15 @@ public class WebSigninRedirectCoordinator {
     private @Nullable GURL mContinueUrl;
     private @Nullable GURL mInitialTabURL;
     private @DialogState int mDialogState = DialogState.NOT_SHOWN;
-    private @Nullable WebSigninBridge mWebSigninBridge;
+    private @Nullable WebSigninTrackerBridge mWebSigninTrackerBridge;
     private @Nullable PropertyModel mModel;
     private @Nullable ModalDialogManager mDialogManager;
     private boolean mMinShowTimePassed;
     private boolean mIsSigninResultReceived;
     private @Nullable Integer mDeferredSigninResult;
     private long mInitializeStartTime;
+    private boolean mIsWaitOutcomeRecorded;
+    private @WaitOutcome int mWaitOutcomeReason = WaitOutcome.ABORTED_WITHOUT_DIALOG;
 
     /**
      * If refresh tokens and cookies are successfully minted for the account associated with the
@@ -82,17 +116,19 @@ public class WebSigninRedirectCoordinator {
             return;
         }
 
+        // It's possible that this is invoked before a previous WebSigninTrackerBridge has responded
+        // so destroy any previous bridges.
+        destroy();
+
+        mIsWaitOutcomeRecorded = false;
+        mWaitOutcomeReason = WaitOutcome.ABORTED_WITHOUT_DIALOG;
         mInitializeStartTime = SystemClock.elapsedRealtime();
         mTab = tab;
         mContinueUrl = continueUrl;
         mInitialTabURL = initialTabURL;
 
-        // It's possible that this is invoked before a previous WebSigninBridge has responded so
-        // destroy any previous bridges.
-        destroy();
-
-        mWebSigninBridge =
-                new WebSigninBridge.Factory()
+        mWebSigninTrackerBridge =
+                new WebSigninTrackerBridge.Factory()
                         .createWithEmail(tab.getProfile(), email, this::onSigninResult);
 
         startTimerOrForceShowDialog();
@@ -110,17 +146,19 @@ public class WebSigninRedirectCoordinator {
             return;
         }
 
+        // It's possible that this is invoked before a previous WebSigninTrackerBridge has responded
+        // so destroy any previous bridges.
+        destroy();
+
+        mIsWaitOutcomeRecorded = false;
+        mWaitOutcomeReason = WaitOutcome.ABORTED_WITHOUT_DIALOG;
         mInitializeStartTime = SystemClock.elapsedRealtime();
         mTab = tab;
         mContinueUrl = continueUrl;
         mInitialTabURL = initialTabURL;
 
-        // It's possible that this is invoked before a previous WebSigninBridge has responded so
-        // destroy any previous bridges.
-        destroy();
-
-        mWebSigninBridge =
-                new WebSigninBridge.Factory()
+        mWebSigninTrackerBridge =
+                new WebSigninTrackerBridge.Factory()
                         .createWithCoreAccountId(tab.getProfile(), accountId, this::onSigninResult);
 
         startTimerOrForceShowDialog();
@@ -134,9 +172,10 @@ public class WebSigninRedirectCoordinator {
         mMinDialogVisibleTimer.cancelTimer();
         mDeferredSigninResult = null;
 
-        if (mWebSigninBridge != null) {
-            mWebSigninBridge.destroy();
-            mWebSigninBridge = null;
+        if (mWebSigninTrackerBridge != null) {
+            recordWaitOutcomeAborted();
+            mWebSigninTrackerBridge.destroy();
+            mWebSigninTrackerBridge = null;
         }
 
         if (mDialogState == DialogState.SHOWN) {
@@ -199,6 +238,7 @@ public class WebSigninRedirectCoordinator {
         }
 
         mDialogState = DialogState.SHOWN;
+        mWaitOutcomeReason = WaitOutcome.ABORTED_WITH_DIALOG_OTHER;
         RecordHistogram.recordEnumeratedHistogram(
                 "Signin.ProcessMirrorHeaders.LoadingDialog.Status",
                 DialogState.SHOWN,
@@ -210,7 +250,13 @@ public class WebSigninRedirectCoordinator {
         View customView =
                 LayoutInflater.from(mTab.getContext())
                         .inflate(R.layout.web_signin_loading_dialog, null);
-        customView.findViewById(R.id.cancel_button).setOnClickListener(v -> destroy());
+        customView
+                .findViewById(R.id.cancel_button)
+                .setOnClickListener(
+                        v -> {
+                            mWaitOutcomeReason = WaitOutcome.ABORTED_WITH_DIALOG_CANCEL_BUTTON;
+                            destroy();
+                        });
 
         mModel =
                 new PropertyModel.Builder(ModalDialogProperties.ALL_KEYS)
@@ -233,6 +279,12 @@ public class WebSigninRedirectCoordinator {
 
             @Override
             public void onDismiss(PropertyModel model, int dismissalCause) {
+                if (dismissalCause == DialogDismissalCause.TOUCH_OUTSIDE) {
+                    mWaitOutcomeReason = WaitOutcome.ABORTED_WITH_DIALOG_TOUCH_OUTSIDE;
+                } else {
+                    mWaitOutcomeReason = WaitOutcome.ABORTED_WITH_DIALOG_OTHER;
+                }
+
                 destroy();
             }
         };
@@ -246,8 +298,8 @@ public class WebSigninRedirectCoordinator {
     }
 
     private void onSigninResult(@WebSigninTrackerResult int result) {
-        if (mWebSigninBridge == null) {
-            // mWebSigninBridge has already been destroyed so return early.
+        if (mWebSigninTrackerBridge == null) {
+            // mWebSigninTrackerBridge has already been destroyed so return early.
             return;
         }
         assert mTab != null;
@@ -279,22 +331,44 @@ public class WebSigninRedirectCoordinator {
             return;
         }
 
-        destroy();
-
+        boolean willRedirect = false;
         switch (result) {
             case WebSigninTrackerResult.SUCCESS:
                 if (!mTab.isDestroyed()
                         && mTab.getWebContents() != null
                         && mTab.getWebContents().getLastCommittedUrl().equals(mInitialTabURL)) {
-                    mTab.loadUrl(new LoadUrlParams(mContinueUrl));
+                    willRedirect = true;
                 }
                 break;
-            // TODO(crbug.com/456445865): Handle cases where WebSigninTracker returns an error.
             case WebSigninTrackerResult.AUTH_ERROR:
+                mWaitOutcomeReason =
+                        mDialogState == DialogState.NOT_SHOWN
+                                ? WaitOutcome.AUTH_ERROR_WITHOUT_DIALOG
+                                : WaitOutcome.AUTH_ERROR_WITH_DIALOG;
                 break;
             case WebSigninTrackerResult.OTHER_ERROR:
+                mWaitOutcomeReason =
+                        mDialogState == DialogState.NOT_SHOWN
+                                ? WaitOutcome.OTHER_ERROR_WITHOUT_DIALOG
+                                : WaitOutcome.OTHER_ERROR_WITH_DIALOG;
                 break;
         }
+
+        if (!willRedirect) {
+            destroy();
+            return;
+        }
+
+        recordWaitOutcomeCompleted();
+        destroy();
+        LoadUrlParams params = new LoadUrlParams(mContinueUrl);
+        // Mark the navigation as renderer-initiated rather than browser-initiated as the continue
+        // URL originates from the web page.
+        params.setIsRendererInitiated(true);
+        // Use an opaque origin because the source cannot be trusted and should not have same-origin
+        // privileges.
+        params.setInitiatorOrigin(Origin.createOpaqueOrigin());
+        mTab.loadUrl(params);
     }
 
     private void startTimerOrForceShowDialog() {
@@ -319,5 +393,34 @@ public class WebSigninRedirectCoordinator {
                 break;
         }
         return resultSuffix;
+    }
+
+    private void recordWaitOutcomeCompleted() {
+        if (mIsWaitOutcomeRecorded) return;
+        mIsWaitOutcomeRecorded = true;
+        int outcome =
+                (mDialogState == DialogState.NOT_SHOWN)
+                        ? WaitOutcome.COMPLETED_WITHOUT_DIALOG
+                        : WaitOutcome.COMPLETED_WITH_DIALOG;
+        RecordHistogram.recordEnumeratedHistogram(
+                "Signin.ProcessMirrorHeaders.WaitOutcome", outcome, WaitOutcome.NUM_ENTRIES);
+    }
+
+    private void recordWaitOutcomeAborted() {
+        if (mIsWaitOutcomeRecorded) return;
+        mIsWaitOutcomeRecorded = true;
+        int outcome = mWaitOutcomeReason;
+        RecordHistogram.recordEnumeratedHistogram(
+                "Signin.ProcessMirrorHeaders.WaitOutcome", outcome, WaitOutcome.NUM_ENTRIES);
+        boolean isErrorOutcome =
+                outcome == WaitOutcome.AUTH_ERROR_WITH_DIALOG
+                        || outcome == WaitOutcome.AUTH_ERROR_WITHOUT_DIALOG
+                        || outcome == WaitOutcome.OTHER_ERROR_WITH_DIALOG
+                        || outcome == WaitOutcome.OTHER_ERROR_WITHOUT_DIALOG;
+        if (mInitializeStartTime != 0 && !mIsSigninResultReceived && !isErrorOutcome) {
+            RecordHistogram.recordTimesHistogram(
+                    "Signin.ProcessMirrorHeaders.LoadingDuration.Aborted",
+                    SystemClock.elapsedRealtime() - mInitializeStartTime);
+        }
     }
 }

@@ -44,6 +44,7 @@
 #include "net/test/embedded_test_server/http_response.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/test/test_network_context.h"
 #include "services/network/test/test_network_context_client.h"
 #include "services/network/test/test_shared_url_loader_factory.h"
@@ -225,9 +226,10 @@ class FakeOAuth2AccessTokenManagerDelegate
 
 class InterceptingURLLoaderFactory : public ::network::SharedURLLoaderFactory {
  public:
-  explicit InterceptingURLLoaderFactory(
-      scoped_refptr<::network::SharedURLLoaderFactory> impl)
-      : impl_(std::move(impl)) {}
+  InterceptingURLLoaderFactory(
+      scoped_refptr<::network::SharedURLLoaderFactory> impl,
+      const ::net::EmbeddedTestServer* test_server)
+      : impl_(std::move(impl)), test_server_(test_server) {}
 
   void CreateLoaderAndStart(
       ::mojo::PendingReceiver<::network::mojom::URLLoader> loader,
@@ -241,8 +243,11 @@ class InterceptingURLLoaderFactory : public ::network::SharedURLLoaderFactory {
       base::AutoLock auto_lock(lock_);
       intercepted_requests_.push_back(request);
     }
-    impl_->CreateLoaderAndStart(std::move(loader), request_id, options, request,
-                                std::move(client), traffic_annotation);
+    ::network::ResourceRequest forwarded_request = request;
+    forwarded_request.url = test_server_->GetURL(request.url.PathForRequest());
+    impl_->CreateLoaderAndStart(std::move(loader), request_id, options,
+                                forwarded_request, std::move(client),
+                                traffic_annotation);
   }
 
   void Clone(::mojo::PendingReceiver<::network::mojom::URLLoaderFactory>
@@ -273,6 +278,7 @@ class InterceptingURLLoaderFactory : public ::network::SharedURLLoaderFactory {
   ~InterceptingURLLoaderFactory() override = default;
 
   scoped_refptr<::network::SharedURLLoaderFactory> impl_;
+  const raw_ptr<const ::net::EmbeddedTestServer> test_server_;
   base::Lock lock_;
   std::vector<::network::ResourceRequest> intercepted_requests_
       GUARDED_BY(lock_);
@@ -284,7 +290,7 @@ class FileUploadDelegateTest : public ::testing::Test {
   FileUploadDelegateTest() { DETACH_FROM_SEQUENCE(sequence_checker_); }
 
   const GURL GetServerURL(std::string_view relative_path) const {
-    return test_server_.GetURL(relative_path);
+    return GURL(base::StrCat({"https://m.google.com", relative_path}));
   }
 
   void SetUp() override {
@@ -292,7 +298,8 @@ class FileUploadDelegateTest : public ::testing::Test {
         base::MakeRefCounted<ResourceManager>(4u * 1024LLu * 1024LLu);  // 4 MiB
 
     url_loader_factory_ = base::MakeRefCounted<InterceptingURLLoaderFactory>(
-        base::MakeRefCounted<::network::TestSharedURLLoaderFactory>());
+        base::MakeRefCounted<::network::TestSharedURLLoaderFactory>(),
+        &test_server_);
     test_server_.RegisterRequestHandler(base::BindRepeating(
         &FileUploadDelegateTest::HandlePostRequest, base::Unretained(this)));
     ASSERT_TRUE(test_server_.Start());
@@ -1115,6 +1122,74 @@ TEST_F(FileUploadDelegateTest, RejectUnallowedDirectory) {
       init_done;
   delegate->DoInitiate("/etc/passwd", "some_parameters", init_done.cb());
   EXPECT_THAT(init_done.result().error(),
+              Property(&Status::error_code, Eq(error::INVALID_ARGUMENT)));
+}
+
+TEST_F(FileUploadDelegateTest, RejectResumableUrlOriginMismatchOnInitiate) {
+  std::unique_ptr<FileUploadJob::Delegate> delegate =
+      PrepareFileUploadDelegate();
+
+  // Prepare access token.
+  access_token_manager_.SetTokenValid(kTokenValid);
+  access_token_manager_.AddTokenToQueue(kTokenValid);
+
+  // Set up response that returns an upload URL on a different origin.
+  EXPECT_CALL(mock_request_call_, Call(_, _))
+      .WillOnce([this](const ::net::test_server::HttpRequest& request,
+                       ::net::test_server::BasicHttpResponse* response) {
+        ExpectStart(request);
+        response->AddCustomHeader(kUploadStatusHeader, "active");
+        response->AddCustomHeader(kUploadChunkGranularityHeader,
+                                  base::NumberToString(kDataGranularity));
+        response->AddCustomHeader(kUploadUrlHeader,
+                                  "https://other.googleapis.com/upload");
+        response->set_code(::net::HTTP_OK);
+      });
+
+  test::TestEvent<
+      StatusOr<std::pair<int64_t /*total*/, std::string /*session_token*/>>>
+      init_done;
+  delegate->DoInitiate(
+      origin_path(),
+      /*upload_parameters=*/
+      base::StrCat({kUploadMedata, kUploadMetadataContentType}),
+      init_done.cb());
+  EXPECT_THAT(init_done.result().error(),
+              Property(&Status::error_code, Eq(error::INVALID_ARGUMENT)));
+}
+
+TEST_F(FileUploadDelegateTest, RejectResumableUrlOriginMismatchOnNextStep) {
+  std::unique_ptr<FileUploadJob::Delegate> delegate =
+      PrepareFileUploadDelegate();
+
+  // No request should reach the server.
+  EXPECT_CALL(mock_request_call_, Call(_, _)).Times(0);
+
+  test::TestEvent<
+      StatusOr<std::pair<int64_t /*uploaded*/, std::string /*session_token*/>>>
+      step_done;
+  delegate->DoNextStep(
+      kTestDataSize, /*uploaded=*/0,
+      /*session_token=*/
+      base::StrCat({origin_path(), "\nhttps://other.googleapis.com/upload"}),
+      ScopedReservation(0uL, memory_resource_), step_done.cb());
+  EXPECT_THAT(step_done.result().error(),
+              Property(&Status::error_code, Eq(error::INVALID_ARGUMENT)));
+}
+
+TEST_F(FileUploadDelegateTest, RejectResumableUrlOriginMismatchOnFinalize) {
+  std::unique_ptr<FileUploadJob::Delegate> delegate =
+      PrepareFileUploadDelegate();
+
+  // No request should reach the server.
+  EXPECT_CALL(mock_request_call_, Call(_, _)).Times(0);
+
+  test::TestEvent<StatusOr<std::string /*access_parameters*/>> finish_done;
+  delegate->DoFinalize(
+      /*session_token=*/
+      base::StrCat({origin_path(), "\nhttps://other.googleapis.com/upload"}),
+      finish_done.cb());
+  EXPECT_THAT(finish_done.result().error(),
               Property(&Status::error_code, Eq(error::INVALID_ARGUMENT)));
 }
 

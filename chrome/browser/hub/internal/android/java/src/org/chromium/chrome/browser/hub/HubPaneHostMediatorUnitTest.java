@@ -17,8 +17,7 @@ import static org.chromium.chrome.browser.hub.HubPaneHostProperties.SLIDE_ANIMAT
 import static org.chromium.chrome.browser.hub.HubPaneHostProperties.SNACKBAR_CONTAINER_CALLBACK;
 
 import android.view.ViewGroup;
-
-import androidx.test.filters.SmallTest;
+import android.widget.FrameLayout;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -28,6 +27,7 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -45,9 +45,11 @@ public class HubPaneHostMediatorUnitTest {
 
     private @Mock Pane mPane;
     private @Mock Pane mIncognitoPane;
-    private @Mock ViewGroup mRootView;
-    private @Mock ViewGroup mSnackbarContainer;
     private @Mock HubColorMixer mColorMixer;
+
+    private final ViewGroup mRootView = new FrameLayout(ContextUtils.getApplicationContext());
+    private final ViewGroup mSnackbarContainer =
+            new FrameLayout(ContextUtils.getApplicationContext());
 
     private final SettableMonotonicObservableSupplier<Pane> mPaneSupplier =
             ObservableSuppliers.createMonotonic();
@@ -77,7 +79,6 @@ public class HubPaneHostMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testDestroy() {
         mPaneSupplier.set(mPane);
         HubPaneHostMediator mediator =
@@ -96,7 +97,6 @@ public class HubPaneHostMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testRootView() {
         new HubPaneHostMediator(
                 mModel,
@@ -110,7 +110,6 @@ public class HubPaneHostMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSlideAnimationDirection_NewPaneToTheRight() {
         // ORDER: PaneId.TAB_SWITCHER, PaneId.INCOGNITO_TAB_SWITCHER
         new HubPaneHostMediator(
@@ -128,7 +127,6 @@ public class HubPaneHostMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSlideAnimationDirection_NewPaneToTheLeft() {
         // ORDER: PaneId.TAB_SWITCHER, PaneId.INCOGNITO_TAB_SWITCHER
         new HubPaneHostMediator(
@@ -146,7 +144,6 @@ public class HubPaneHostMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSlideAnimationDirection_multiplePaneChanges() {
         // ORDER: PaneId.TAB_SWITCHER, PaneId.INCOGNITO_TAB_SWITCHER
         new HubPaneHostMediator(
@@ -167,7 +164,6 @@ public class HubPaneHostMediatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testRootView_paneAlreadySet() {
         mPaneSupplier.set(mPane);
 

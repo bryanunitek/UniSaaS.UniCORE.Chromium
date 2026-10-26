@@ -14,10 +14,13 @@ class MoveToDesksMenuModel;
 // Menu model for the menu button in a web app browser window.
 class WebAppMenuModel : public AppMenuModel {
  public:
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kAppInfoMenuItem);
+
   static constexpr int kUninstallAppCommandId = 1;
   static constexpr int kExtensionsMenuCommandId = 2;
 
-  WebAppMenuModel(ui::AcceleratorProvider* provider, Browser* browser);
+  WebAppMenuModel(ui::AcceleratorProvider* provider,
+                  BrowserWindowInterface* browser);
   WebAppMenuModel(const WebAppMenuModel&) = delete;
   WebAppMenuModel& operator=(const WebAppMenuModel&) = delete;
   ~WebAppMenuModel() override;

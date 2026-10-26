@@ -4,11 +4,11 @@
 
 #include "chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/tree_builder/mojo_tree_builder.h"
 
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/browser_apis/tab_strip/tab_strip_api.mojom.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -46,7 +46,7 @@ IN_PROC_BROWSER_TEST_F(TabStripServiceMojoTreeBuilderBrowserTest,
 
   auto result =
       MojoTreeBuilder(GetTabStripModel(),
-                      base::NumberToString(browser()->session_id().id()))
+                      base::NumberToString(browser()->GetSessionID().id()))
           .Build(GetTabStripModel()->Root()->GetHandle());
 
   // First layer is just the root collection (TabStrip).

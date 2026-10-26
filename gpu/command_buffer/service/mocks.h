@@ -104,7 +104,6 @@ class MockDecoderClient : public DecoderClient {
   ~MockDecoderClient() override;
 
   MOCK_METHOD(void, OnConsoleMessage, (int32_t id, const std::string& message));
-  MOCK_METHOD(void, OnGpuSwitched, ());
   MOCK_METHOD(void,
               CacheBlob,
               (gpu::GpuDiskCacheType type,
@@ -116,7 +115,6 @@ class MockDecoderClient : public DecoderClient {
   MOCK_METHOD(void, ScheduleGrContextCleanup, ());
   MOCK_METHOD(void, SetActiveURL, (GURL url));
   MOCK_METHOD(void, HandleReturnData, (base::span<const uint8_t> data));
-  MOCK_METHOD(bool, ShouldYield, ());
 };
 
 class MockIsolationKeyProvider : public IsolationKeyProvider {

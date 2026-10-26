@@ -15,7 +15,6 @@
 #include "chrome/browser/accessibility/accessibility_labels_service.h"
 #include "chrome/browser/accessibility/accessibility_labels_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -263,7 +262,7 @@ class ImageAnnotationBrowserTest : public InProcessBrowserTest {
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
 
-    AccessibilityLabelsServiceFactory::GetForProfile(browser()->profile())
+    AccessibilityLabelsServiceFactory::GetForProfile(browser()->GetProfile())
         ->OverrideImageAnnotatorBinderForTesting(
             base::BindRepeating(&BindImageAnnotatorService));
 
@@ -275,14 +274,14 @@ class ImageAnnotationBrowserTest : public InProcessBrowserTest {
 
   void TearDownOnMainThread() override {
     scoped_accessibility_mode_.reset();
-    AccessibilityLabelsServiceFactory::GetForProfile(browser()->profile())
+    AccessibilityLabelsServiceFactory::GetForProfile(browser()->GetProfile())
         ->OverrideImageAnnotatorBinderForTesting(base::NullCallback());
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
   void SetAcceptLanguages(const std::string& accept_languages) {
     content::BrowserContext* context =
-        static_cast<content::BrowserContext*>(browser()->profile());
+        static_cast<content::BrowserContext*>(browser()->GetProfile());
     DCHECK(context);
 
     PrefService* prefs = user_prefs::UserPrefs::Get(context);

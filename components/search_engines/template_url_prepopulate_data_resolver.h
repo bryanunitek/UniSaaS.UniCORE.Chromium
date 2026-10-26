@@ -6,8 +6,10 @@
 #define COMPONENTS_SEARCH_ENGINES_TEMPLATE_URL_PREPOPULATE_DATA_RESOLVER_H_
 
 #include <optional>
+#include <string_view>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/regional_capabilities/regional_capabilities_country_id.h"
@@ -32,9 +34,10 @@ struct BuiltinKeywordsMetadata {
   // Version of the built-in prepopulated keywords data.
   int data_version;
 
-  // Whether the data is a post-migration version, see
-  // `switches::kPrepopulatedEnginesMigration`.
-  bool prepopulated_engines_migration_enabled;
+  // The migration state of the database, indicating which prepopulated engine
+  // migrations have been applied.
+  KeywordTable::PrepopulatedEngineMigrationSet
+      prepopulated_engines_migration_state;
 };
 
 // Resolves prepopulated engines using on various information from the browser
@@ -62,6 +65,18 @@ class Resolver : public KeyedService {
   std::unique_ptr<TemplateURLData> GetEngineFromFullList(
       int prepopulated_id) const;
 
+  // Returns the prepopulated search engine with the given `keyword` from the
+  // full list of known prepopulated search engines, or `nullptr` if it's not
+  // known there.
+  std::unique_ptr<TemplateURLData> GetEngineFromFullList(
+      std::u16string_view keyword) const;
+
+  // Returns every known prepopulated engine, deduplicated by ID. When several
+  // definitions share an ID, the profile country's one is used, matching
+  // `GetEngineFromFullList(id)`.
+  std::vector<raw_ptr<const PrepopulatedEngine>> GetAllPrepopulatedEngines()
+      const;
+
   // Returns the fallback default search provider, currently hardcoded to be
   // Google, or whichever one is the first of the list if Google is not in the
   // list of prepopulated search engines.
@@ -72,8 +87,9 @@ class Resolver : public KeyedService {
   // Computes whether updates relative to prepopulated search engines need to be
   // made in the local search engines database.
   //
-  // Returns `std::nullopt` when no updates are needed, or a `Metadata`
-  // providing country and data version info about the data to be merged in.
+  // Returns `std::nullopt` when no updates are needed, or a
+  // `BuiltinKeywordsMetadata`when data needs to be merged in, that provides the
+  // relevant country, data version and migration state info for the new data.
   std::optional<BuiltinKeywordsMetadata> ComputeDatabaseUpdateRequirements(
       const WDKeywordsResult::Metadata& keywords_database_metadata) const;
 

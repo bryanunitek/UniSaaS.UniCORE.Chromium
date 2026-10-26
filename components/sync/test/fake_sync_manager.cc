@@ -16,10 +16,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "components/sync/engine/cycle/sync_cycle_snapshot.h"
 #include "components/sync/engine/engine_components_factory.h"
-#include "components/sync/engine/net/http_post_provider_factory.h"
 #include "components/sync/test/fake_data_type_connector.h"
-
-class GURL;
 
 namespace syncer {
 
@@ -114,6 +111,8 @@ void FakeSyncManager::UpdateCredentials(const SyncCredentials& credentials) {
 void FakeSyncManager::InvalidateCredentials() {
   NOTIMPLEMENTED();
 }
+
+void FakeSyncManager::OnCredentialsChanged() {}
 
 void FakeSyncManager::StartSyncingNormally(base::Time last_poll_time) {
   // Do nothing.

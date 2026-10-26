@@ -16,15 +16,19 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
 #include "chrome/browser/signin/web_signin_interceptor.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/policy/core/browser/cloud/user_cloud_management_status_fetcher.h"
 #include "components/policy/core/browser/signin/profile_separation_policies.h"
 #include "components/search_engines/template_url_data.h"
+#include "components/signin/core/browser/account_preview_data_service.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_prefs.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/tribool.h"
 #include "google_apis/gaia/core_account_id.h"
 #include "third_party/skia/include/core/SkColor.h"
 
@@ -38,7 +42,7 @@ class WebContents;
 
 namespace policy {
 class UserCloudSigninRestrictionPolicyFetcher;
-}
+}  // namespace policy
 
 namespace metrics {
 class ProfileMetricsService;
@@ -48,7 +52,7 @@ namespace user_prefs {
 class PrefRegistrySyncable;
 }
 
-struct AccountInfo;
+class AccountInfo;
 class DiceSignedInProfileCreator;
 class DiceInterceptedSessionStartupHelper;
 class Profile;
@@ -67,6 +71,30 @@ enum class SinginInterceptSupervisionState {
   kMaxValue = kUnknownSupervision,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:SinginInterceptSupervisionState)
+
+// With `kMigrateSecureConnectApiToDmServer`, how the interceptor decided
+// whether enterprise policies apply to the intercepted account, once no more
+// asynchronous information is awaited. Recorded in
+// "Signin.Intercept.EnterprisePolicyDecisionSource".
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(SigninInterceptEnterprisePolicyDecisionSource)
+enum class SigninInterceptEnterprisePolicyDecisionSource {
+  // The DM Server management status was available and used.
+  kDmServerStatus = 0,
+  // The account is not subject to enterprise features: no DM Server status is
+  // needed, the account is unmanaged.
+  kNotSubjectToEnterpriseFeatures = 1,
+  // The account is subject to enterprise features, but the DM Server status is
+  // unavailable (fetch failed, timed out or could not be started): fail open.
+  kFailOpenNoManagementStatus = 2,
+  // The enterprise capability of the account is unknown, so the DM Server
+  // status was not fetched: fail open.
+  kFailOpenCapabilityUnknown = 3,
+  kMaxValue = kFailOpenCapabilityUnknown,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:SigninInterceptEnterprisePolicyDecisionSource)
 
 // Called after web signed in, after a successful token exchange through Dice.
 // The DiceWebSigninInterceptor may offer the user to create a new profile or
@@ -107,14 +135,19 @@ class DiceWebSigninInterceptor : public KeyedService,
   // was closed.
   // `is_new_account` is true if the account was not already in Chrome (i.e.
   // this is not a reauth).
-  // `is_sync_signin` is true if the user is signing in with the intent of
-  // enabling sync for that account.
+  // `is_chrome_signin` is true if the user is signing in to Chrome (rather than
+  // performing a web-only sign-in).
+  // `primary_is_connected` is relevant during a multi-account sign-in event.
+  // It indicates whether the account is connected to the primary account
+  // (`kTrue` if connected, `kFalse` if not connected—including when the profile
+  // is not signed in, and `kUnknown` otherwise).
   // Virtual for testing.
   virtual void MaybeInterceptWebSignin(content::WebContents* web_contents,
                                        CoreAccountId account_id,
                                        signin_metrics::AccessPoint access_point,
                                        bool is_new_account,
-                                       bool is_sync_signin);
+                                       bool is_chrome_signin,
+                                       signin::Tribool primary_is_connected);
 
   void OnDiceSigninSessionComplete(
       const CoreAccountId& initiator_account_id,
@@ -140,12 +173,17 @@ class DiceWebSigninInterceptor : public KeyedService,
   // happens, the signin interception is highly likely (but not guaranteed).
   // `gaia_id` is optional as some usages may not have the information yet. It
   // is currently only mandatory for the checks of the Chrome Signin bubble.
+  // `primary_is_connected` is relevant during a multi-account sign-in event.
+  // It indicates whether the account is connected to the primary account
+  // (`kTrue` if connected, `kFalse` if not connected—including when the profile
+  // is not signed in, and `kUnknown` otherwise).
   std::optional<SigninInterceptionHeuristicOutcome> GetHeuristicOutcome(
       bool is_new_account,
-      bool is_sync_signin,
-      const std::string& email,
+      bool is_chrome_signin,
+      std::string_view email,
       const GaiaId& gaia_id = GaiaId(),
-      const ProfileAttributesEntry** entry = nullptr) const;
+      const ProfileAttributesEntry** entry = nullptr,
+      signin::Tribool primary_is_connected = signin::Tribool::kUnknown) const;
 
   // Returns true if the interception is in progress (running the heuristic or
   // showing on screen).
@@ -180,6 +218,12 @@ class DiceWebSigninInterceptor : public KeyedService,
   void SetInterceptedAccountProfileSeparationPoliciesForTesting(
       std::optional<policy::ProfileSeparationPolicies> value) {
     intercepted_account_profile_separation_policies_response_for_testing_ =
+        std::move(value);
+  }
+
+  void SetInterceptedAccountManagementStatusForTesting(
+      std::optional<policy::UserManagementStatus> value) {
+    intercepted_account_management_status_response_for_testing_ =
         std::move(value);
   }
 
@@ -225,6 +269,11 @@ class DiceWebSigninInterceptor : public KeyedService,
   FRIEND_TEST_ALL_PREFIXES(DiceWebSigninInterceptorTest,
                            ShouldShowEnterpriseDialog_AlwaysAsk);
   FRIEND_TEST_ALL_PREFIXES(DiceWebSigninInterceptorTest, StateResetTest);
+  FRIEND_TEST_ALL_PREFIXES(
+      DiceWebSigninInterceptorTestWithAccountPreview,
+      InterceptBubbleWithAccountPreviewDataDelayedCallbackAfterReset);
+  FRIEND_TEST_ALL_PREFIXES(DiceWebSigninInterceptorTest,
+                           MultiUserInterceptionPrimaryNotConnectedSameName);
   FRIEND_TEST_ALL_PREFIXES(ManagedProfileRequiredNavigationThrottleTest,
                            CancelsWithInterstitialWhenForcedInterception);
 
@@ -254,7 +303,7 @@ class DiceWebSigninInterceptor : public KeyedService,
   // Helper functions to determine which interception UI should be shown.
   const ProfileAttributesEntry* ShouldShowProfileSwitchBubble(
       const GaiaId& intercepted_gaia_id,
-      const std::string& intercepted_email_fallback,
+      std::string_view intercepted_email_fallback,
       ProfileAttributesStorage* profile_attribute_storage) const;
   bool ShouldEnforceEnterpriseProfileSeparation(
       const AccountInfo& intercepted_account_info) const;
@@ -265,10 +314,12 @@ class DiceWebSigninInterceptor : public KeyedService,
   bool ShouldShowMultiUserBubble(
       const AccountInfo& intercepted_account_info) const;
   bool ShouldShowChromeSigninBubble(const GaiaId& gaia_id,
-                                    const std::string& email) const;
+                                    std::string_view email) const;
 
   // Helper function to call `delegate_->ShowSigninInterceptionBubble()`.
-  void ShowSigninInterceptionBubble(
+  // Does not show the bubble and resets the interception if it is
+  // no longer eligible.
+  void MaybeShowSigninInterceptionBubble(
       const WebSigninInterceptor::Delegate::BubbleParameters& bubble_parameters,
       base::OnceCallback<void(SigninInterceptionResult)> callback);
 
@@ -294,8 +345,7 @@ class DiceWebSigninInterceptor : public KeyedService,
                                SigninInterceptionResult create);
   // Called after the user chose whether the session should continue in a new
   // profile.
-  void OnProfileSwitchChoice(const std::string& email,
-                             const base::FilePath& profile_path,
+  void OnProfileSwitchChoice(const base::FilePath& profile_path,
                              SigninInterceptionResult switch_profile);
   // Called after the user chose whether they want to sign in to chrome or not
   // via the Chrome Signin Bubble.
@@ -333,7 +383,7 @@ class DiceWebSigninInterceptor : public KeyedService,
   void OnNewBrowserCreated(bool is_new_profile);
 
   // Returns a 8-bit hash of the email that can be persisted.
-  static std::string GetPersistentEmailHash(const std::string& email);
+  static std::string GetPersistentEmailHash(std::string_view email);
 
   // Increments the current entry count corresponding to the `email` of the
   // given pref. The given `pref_name` is expected to be a DictionaryPref with a
@@ -345,7 +395,7 @@ class DiceWebSigninInterceptor : public KeyedService,
   // ensure it cannot be reversed.
   // Returns the incremented value of the pref.
   size_t IncrementEmailToCountDictionaryPref(const char* pref_name,
-                                             const std::string& email);
+                                             std::string_view email);
 
   // Records the number of times the user previously dismissed the Chrome Signin
   // bubble when accepting/declining it. Result is expected to be either
@@ -357,20 +407,44 @@ class DiceWebSigninInterceptor : public KeyedService,
 
   // Checks if the user previously declined 2 times creating a new profile for
   // this account.
-  bool HasUserDeclinedProfileCreation(const std::string& email) const;
+  bool HasUserDeclinedProfileCreation(std::string_view email) const;
 
-  // Fetches the value of the cloud user level value of the
-  // ManagedAccountsSigninRestriction policy for 'account_info' and runs
-  // `callback` with the result. This is a network call that has a 5 seconds
-  // timeout.
+  // Fetches the user management status and the cloud user level value of the
+  // profile separation policies for `account_info` and runs `callback` with the
+  // result. The fetch is attempted at most once per interception. This is a
+  // network call that has a 5 seconds timeout.
   void EnsureAccountLevelSigninRestrictionFetchInProgress(
       const AccountInfo& account_info,
-      base::OnceCallback<void(policy::ProfileSeparationPolicies)> callback);
+      base::OnceCallback<void(std::optional<policy::UserManagementStatus>,
+                              policy::ProfileSeparationPolicies)> callback);
 
-  // Called when the the value of the cloud user level value of the
-  // ManagedAccountsSigninRestriction is received.
+  // Fetches account-level management status and profile separation policies via
+  // the Device Management (DM) Server.
+  void FetchAccountLevelSigninRestrictionWithDmServer(
+      const AccountInfo& account_info,
+      base::OnceCallback<void(std::optional<policy::UserManagementStatus>,
+                              policy::ProfileSeparationPolicies)> callback);
+
+  // Fetches account-level profile separation policies via the legacy
+  // SecureConnect API.
+  void FetchAccountLevelSigninRestrictionWithSecureConnect(
+      const AccountInfo& account_info,
+      base::OnceCallback<void(std::optional<policy::UserManagementStatus>,
+                              policy::ProfileSeparationPolicies)> callback);
+
+  // Returns whether enterprise policies can be applied to the intercepted
+  // account. With `kMigrateSecureConnectApiToDmServer`, only the DM Server
+  // management status is used, and this fails open (returns false) if it is
+  // unavailable. Must only be called once the required extended account info
+  // is available.
+  bool CanApplyEnterprisePoliciesToInterceptedAccount(
+      const AccountInfo& intercepted_account_info) const;
+
+  // Called when the user management status and the value of the cloud user
+  // level value of the ManagedAccountsSigninRestriction are received.
   void OnAccountLevelManagedAccountsSigninRestrictionReceived(
       const AccountInfo& account_info,
+      std::optional<policy::UserManagementStatus> management_status,
       policy::ProfileSeparationPolicies profile_separation_policies);
 
   // Records the heuristic outcome and latency metrics.
@@ -427,18 +501,51 @@ class DiceWebSigninInterceptor : public KeyedService,
     // time.
     std::unique_ptr<policy::UserCloudSigninRestrictionPolicyFetcher>
         account_level_signin_restriction_policy_fetcher_;
+    std::unique_ptr<policy::UserCloudManagementStatusFetcher>
+        account_level_management_status_fetcher_;
+    // Value of the management status for the intercepted account, set only if
+    // the `kMigrateSecureConnectApiToDmServer` feature is enabled and the DM
+    // Server fetch succeeded.
+    std::optional<policy::UserManagementStatus>
+        intercepted_account_management_status_;
     // Value of  the profile separation policies for the intercepted account. If
     // no value is set, then we have not yet received the policy value.
     std::optional<policy::ProfileSeparationPolicies>
         intercepted_account_profile_separation_policies_;
+    // Whether the account level fetch was started for this interception.
+    bool account_level_signin_restriction_fetch_attempted_ = false;
+    // Whether the account level fetch completed (successfully or not), or the
+    // interception info fetch timed out. Once true, no more asynchronous
+    // information is awaited.
+    bool account_level_signin_restriction_fetch_completed_ = false;
 
     base::ScopedClosureRunner disable_management_disclaimer_until_reset_;
 
     std::vector<CoreAccountId> secondary_accounts_;
     bool dice_signin_session_complete_ = false;
     bool waiting_for_dice_signin_session_completion_ = false;
+    std::optional<base::TimeTicks> session_completion_wait_start_time_;
     base::OnceClosure deferred_action_callback_;
+
+    // Stores `primary_is_connected` from the initial token exchange during a
+    // multi-account sign-in so downstream heuristics can evaluate it after
+    // asynchronous fetches complete.
+    signin::Tribool primary_is_connected_ = signin::Tribool::kUnknown;
+
+    bool account_preview_fetch_started_ = false;
+    base::OneShotTimer account_preview_timeout_timer_;
+    // Callback to be invoked after the user makes a choice in the interception
+    // bubble. Stored here while awaiting asynchronous fetches (e.g. account
+    // preview data) before showing the bubble.
+    base::OnceCallback<void(SigninInterceptionResult)>
+        interception_bubble_callback_;
   };
+
+  void OnAccountPreviewPreferenceReceived(
+      WebSigninInterceptor::Delegate::BubbleParameters bubble_parameters,
+      bool is_timeout,
+      std::optional<signin::AccountPreviewDataService::AccountPreviewPreference>
+          preference);
 
   const raw_ptr<Profile> profile_;
   const raw_ptr<signin::IdentityManager> identity_manager_;
@@ -457,6 +564,10 @@ class DiceWebSigninInterceptor : public KeyedService,
   // reset this value, it is expected to be sticky across tests.
   std::optional<policy::ProfileSeparationPolicies>
       intercepted_account_profile_separation_policies_response_for_testing_;
+  std::optional<policy::UserManagementStatus>
+      intercepted_account_management_status_response_for_testing_;
+
+  base::WeakPtrFactory<DiceWebSigninInterceptor> weak_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_SIGNIN_DICE_WEB_SIGNIN_INTERCEPTOR_H_

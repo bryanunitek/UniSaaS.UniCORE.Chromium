@@ -12,11 +12,21 @@
 
 namespace base {
 
+namespace {
+
+constexpr MemoryConsumerTraits kTestTraits(
+    MemoryConsumerTraits::EstimatedMemoryUsage::kSmall,
+    MemoryConsumerTraits::ReleaseMemoryDataAccess::kNone,
+    MemoryConsumerTraits::InformationRetention::kLossless,
+    MemoryConsumerTraits::ExecutionType::kSynchronous);
+
+}  // namespace
+
 TEST(MemoryConsumerTest, MemoryConsumerRegistration) {
   TestMemoryConsumerRegistry test_registry;
 
   MockMemoryConsumer consumer;
-  MemoryConsumerRegistration registration("consumer", {}, &consumer);
+  MemoryConsumerRegistration registration("consumer", kTestTraits, &consumer);
 
   EXPECT_CALL(consumer, OnReleaseMemory());
   test_registry.NotifyReleaseMemory();
@@ -26,58 +36,25 @@ TEST(MemoryConsumerTest, UpdateMemoryLimit) {
   TestMemoryConsumerRegistry test_registry;
 
   MockMemoryConsumer consumer;
-  MemoryConsumerRegistration registration("consumer", {}, &consumer);
+  MemoryConsumerRegistration registration("consumer", kTestTraits, &consumer);
 
   // Initial limit value of 100.
-  EXPECT_EQ(consumer.memory_limit(), 100);
+  EXPECT_EQ(consumer.memory_limit(), MemoryLimit::Default());
+  EXPECT_EQ(consumer.memory_limit().percent(), 100);
   EXPECT_DOUBLE_EQ(consumer.memory_limit_ratio(), 1.0);
 
   // Try a couple values.
   EXPECT_CALL(consumer, OnUpdateMemoryLimit());
-  test_registry.NotifyUpdateMemoryLimit(20);
+  test_registry.NotifyUpdateMemoryLimit(MemoryLimit::FromPercent(20));
 
-  EXPECT_EQ(consumer.memory_limit(), 20);
+  EXPECT_EQ(consumer.memory_limit(), MemoryLimit::FromPercent(20));
   EXPECT_DOUBLE_EQ(consumer.memory_limit_ratio(), 0.2);
 
   EXPECT_CALL(consumer, OnUpdateMemoryLimit());
-  test_registry.NotifyUpdateMemoryLimit(150);
+  test_registry.NotifyUpdateMemoryLimit(MemoryLimit::FromPercent(150));
 
-  EXPECT_EQ(consumer.memory_limit(), 150);
+  EXPECT_EQ(consumer.memory_limit(), MemoryLimit::FromPercent(150));
   EXPECT_DOUBLE_EQ(consumer.memory_limit_ratio(), 1.5);
-}
-
-TEST(MemoryConsumerTest, ScaleByMemoryLimit) {
-  TestMemoryConsumerRegistry test_registry;
-
-  MockMemoryConsumer consumer;
-  MemoryConsumerRegistration registration("consumer", {}, &consumer);
-
-  EXPECT_CALL(consumer, OnUpdateMemoryLimit()).Times(4);
-
-  // Default limit is 100.
-  EXPECT_EQ(ScaleByMemoryLimit(100, consumer.memory_limit()), 100);
-  EXPECT_EQ(ScaleByMemoryLimit(100u, consumer.memory_limit()), 100u);
-
-  // Test at 50%
-  test_registry.NotifyUpdateMemoryLimit(50);
-  EXPECT_EQ(ScaleByMemoryLimit(100, consumer.memory_limit()), 50);
-  EXPECT_EQ(ScaleByMemoryLimit(100u, consumer.memory_limit()), 50u);
-
-  // Test truncation for integer types (15% of 10 is 1.5, which truncates to 1)
-  test_registry.NotifyUpdateMemoryLimit(15);
-  EXPECT_EQ(ScaleByMemoryLimit(10, consumer.memory_limit()), 1);
-  EXPECT_EQ(ScaleByMemoryLimit(10u, consumer.memory_limit()), 1u);
-
-  // Test zero limit
-  test_registry.NotifyUpdateMemoryLimit(0);
-  EXPECT_EQ(ScaleByMemoryLimit(100, consumer.memory_limit()), 0);
-  EXPECT_EQ(ScaleByMemoryLimit(100u, consumer.memory_limit()), 0u);
-
-  // Test large limits (scaling up) and saturation
-  test_registry.NotifyUpdateMemoryLimit(200);
-  EXPECT_EQ(ScaleByMemoryLimit(100, consumer.memory_limit()), 200);
-  EXPECT_EQ(ScaleByMemoryLimit(100u, consumer.memory_limit()), 200u);
-  EXPECT_EQ(ScaleByMemoryLimit<int8_t>(100, consumer.memory_limit()), 127);
 }
 
 #if !BUILDFLAG(IS_IOS)
@@ -85,7 +62,7 @@ TEST(MemoryConsumerTest, RegistrationWithoutRegistryAllowedInTests) {
   MockMemoryConsumer consumer;
   // This would have crashed previously because the global registry is not
   // initialized and the check is enabled by default.
-  MemoryConsumerRegistration registration("consumer", {}, &consumer);
+  MemoryConsumerRegistration registration("consumer", kTestTraits, &consumer);
   // Expecting no crash in test environment.
 }
 #endif
@@ -101,7 +78,7 @@ TEST(MemoryConsumerTraitsTest, ActiveConsumerWithActiveTraits) {
   MockMemoryConsumer consumer;
   constexpr MemoryConsumerTraits kActiveTraits(
       MemoryConsumerTraits::EstimatedMemoryUsage::kSmall,
-      MemoryConsumerTraits::ReleaseMemoryCost::kFreesPagesWithoutTraversal,
+      MemoryConsumerTraits::ReleaseMemoryDataAccess::kNone,
       MemoryConsumerTraits::InformationRetention::kLossless,
       MemoryConsumerTraits::ExecutionType::kSynchronous);
   MemoryConsumerRegistration registration("consumer", kActiveTraits, &consumer);
@@ -131,8 +108,8 @@ TEST(MemoryConsumerTraitsTest, PassiveConsumerTraitsValidation) {
   // Non-customizable traits for passive should have default passive values
   EXPECT_EQ(kDefaultPassive.estimated_memory_usage,
             MemoryConsumerTraits::EstimatedMemoryUsage::kNA);
-  EXPECT_EQ(kDefaultPassive.release_memory_cost,
-            MemoryConsumerTraits::ReleaseMemoryCost::kNA);
+  EXPECT_EQ(kDefaultPassive.release_memory_data_access,
+            MemoryConsumerTraits::ReleaseMemoryDataAccess::kNA);
   EXPECT_EQ(kDefaultPassive.information_retention,
             MemoryConsumerTraits::InformationRetention::kNA);
   EXPECT_EQ(kDefaultPassive.execution_type,
@@ -143,6 +120,10 @@ TEST(MemoryConsumerTraitsTest, PassiveConsumerTraitsValidation) {
             MemoryConsumerTraits::GarbageCollectsV8Heap::kNo);
   EXPECT_EQ(kDefaultPassive.is_stateful,
             MemoryConsumerTraits::IsStateful::kYes);
+  EXPECT_EQ(kDefaultPassive.recovery_behavior,
+            MemoryConsumerTraits::RecoveryBehavior::kNA);
+  EXPECT_EQ(kDefaultPassive.release_memory_cpu_cost,
+            MemoryConsumerTraits::ReleaseMemoryCpuCost::kNA);
 
   // 2. Custom passive traits
   constexpr MemoryConsumerTraits kCustomPassive(
@@ -161,8 +142,8 @@ TEST(MemoryConsumerTraitsTest, PassiveConsumerTraitsValidation) {
   // Non-customizable traits should still be default passive values
   EXPECT_EQ(kCustomPassive.estimated_memory_usage,
             MemoryConsumerTraits::EstimatedMemoryUsage::kNA);
-  EXPECT_EQ(kCustomPassive.release_memory_cost,
-            MemoryConsumerTraits::ReleaseMemoryCost::kNA);
+  EXPECT_EQ(kCustomPassive.release_memory_data_access,
+            MemoryConsumerTraits::ReleaseMemoryDataAccess::kNA);
   EXPECT_EQ(kCustomPassive.information_retention,
             MemoryConsumerTraits::InformationRetention::kNA);
   EXPECT_EQ(kCustomPassive.execution_type,
@@ -172,6 +153,10 @@ TEST(MemoryConsumerTraitsTest, PassiveConsumerTraitsValidation) {
   EXPECT_EQ(kCustomPassive.garbage_collects_v8_heap,
             MemoryConsumerTraits::GarbageCollectsV8Heap::kNo);
   EXPECT_EQ(kCustomPassive.is_stateful, MemoryConsumerTraits::IsStateful::kYes);
+  EXPECT_EQ(kCustomPassive.recovery_behavior,
+            MemoryConsumerTraits::RecoveryBehavior::kNA);
+  EXPECT_EQ(kCustomPassive.release_memory_cpu_cost,
+            MemoryConsumerTraits::ReleaseMemoryCpuCost::kNA);
 }
 
 #if defined(GTEST_HAS_DEATH_TEST)

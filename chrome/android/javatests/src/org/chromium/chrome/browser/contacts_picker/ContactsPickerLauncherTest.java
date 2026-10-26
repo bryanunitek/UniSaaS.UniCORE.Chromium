@@ -14,21 +14,24 @@ import androidx.annotation.Nullable;
 import androidx.test.filters.LargeTest;
 
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.task.AsyncTask;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.CriteriaNotSatisfiedException;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
+import org.chromium.components.browser_ui.contacts_picker.ContactsPickerFeatureMap;
 import org.chromium.content_public.browser.ContactsFetcher;
 import org.chromium.content_public.browser.ContactsPicker;
 import org.chromium.content_public.browser.ContactsPickerListener;
@@ -41,12 +44,18 @@ import java.util.List;
 /** TestSuite for Chrome's Contacts Picker implementation. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class ContactsPickerLauncherTest {
     private static final String FILE_PATH = "/chrome/test/data/android/test.html";
 
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
+
+    @Before
+    public void setUp() {
+        ContactsPickerFeatureMap.setSystemContactsPickerEnabledForTesting(false);
+    }
 
     private boolean showContactsPicker(WebContents webContents) {
         ContactsFetcher fetcher =

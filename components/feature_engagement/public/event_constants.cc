@@ -51,6 +51,10 @@ const char kGlicOnboardingCompleted[] = "glic_onboarding_completed";
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
 
+#if BUILDFLAG(IS_WIN)
+const char kSearchPromotionAccepted[] = "search_promotion_accepted";
+#endif  // BUILDFLAG(IS_WIN)
+
 #if BUILDFLAG(IS_IOS)
 const char kChromeOpened[] = "chrome_opened";
 const char kChromeActiveSessionDay[] = "chrome_active_session_day";
@@ -106,6 +110,7 @@ const char kHistoryOnOverflowMenuUsed[] = "history_on_overflow_menu_used";
 const char kSettingsOnOverflowMenuUsed[] = "settings_on_overflow_menu_used";
 const char kLensButtonKeyboardUsed[] = "lens_keyboard_used";
 const char kIOSLensButtonComposeboxUsed[] = "lens_compose_box_used";
+const char kIOSLevelUpPromoUsed[] = "ios_level_up_promo_used";
 const char kIOSMultiGestureRefreshUsed[] = "multi_gesture_refresh_used";
 const char kIOSPullToRefreshUsed[] = "pull_to_refresh_feature_used";
 const char kIOSPullToRefreshIPHDismissButtonTapped[] =
@@ -158,6 +163,7 @@ const char kIOSContextualPanelPriceInsightsEntrypointExplicitlyDismissed[] =
 const char kHomeCustomizationMenuUsed[] = "home_customization_menu_used";
 const char kHomeBackgroundCustomizationMenuUsed[] =
     "home_customization_background_menu_used";
+const char kEphemeralThemePromoUsed[] = "ephemeral_theme_promo_used";
 const char kHomeCustomizationPromoTriggered[] =
     "home_customization_menu_iph_triggered";
 const char kNTPCustomBackgroundLoaded[] = "ntp_custom_background_loaded";
@@ -220,13 +226,25 @@ const char kIOSGeminiWhatCanGeminiDoTriggered[] =
     "ios_gemini_what_can_gemini_do_triggered";
 const char kIOSPinMVTSiteUsed[] = "ios_pin_mvt_site_used";
 const char kIOSChromeOpenedFromIcon[] = "ios_chrome_opened_from_icon";
+const char kDefaultBrowserSettingsCardPromoUsed[] =
+    "default_browser_settings_card_promo_used";
+const char kDefaultBrowserSettingsCellPromoUsed[] =
+    "default_browser_settings_cell_promo_used";
+const char kDefaultBrowserPromoOverflowMenuDestinationUsed[] =
+    "default_browser_promo_overflow_menu_destination_used";
+const char kDefaultBrowserPromoOverflowMenuShortcutsUsed[] =
+    "default_browser_promo_overflow_menu_shortcuts_used";
+const char kDefaultBrowserPromoContextualGeminiUsed[] =
+    "default_browser_promo_contextual_gemini_used";
+const char kGeminiSessionTerminated[] = "gemini_session_terminated";
+const char kIOSBottomOmniboxUsed[] = "ios_bottom_omnibox_used";
 #endif  // BUILDFLAG(IS_IOS)
 
 #if BUILDFLAG(IS_ANDROID)
 const char kPwaInstallMenuSelected[] = "pwa_install_menu_clicked";
 #endif  // BUILDFLAG(IS_ANDROID)
 
-const char kTabSearchComboButtonUsed[] = "tab_search_combo_button_used";
+const char kSendTabToSelfOmniboxUsed[] = "send_tab_to_self_omnibox_used";
 
 }  // namespace events
 

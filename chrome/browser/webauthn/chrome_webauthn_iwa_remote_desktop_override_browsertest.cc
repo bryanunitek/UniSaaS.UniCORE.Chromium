@@ -16,7 +16,6 @@
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
@@ -32,7 +31,6 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_launcher.h"
-#include "device/fido/public/features.h"
 #include "device/fido/virtual_fido_device_factory.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -114,10 +112,7 @@ class WebAuthnIWARemoteDesktopOverrideBrowserTest :
 
     affiliation_mixin_.set_affiliated(GetParam());
 #endif
-    scoped_feature_list_.InitWithFeatures(
-        {device::kWebAuthnIWARemoteDesktopAllowedOriginsPolicy,
-         features::kIsolatedWebApps},
-        {});
+    scoped_feature_list_.InitAndEnableFeature(features::kIsolatedWebApps);
   }
 
   WebAuthnIWARemoteDesktopOverrideBrowserTest(
@@ -164,7 +159,7 @@ class WebAuthnIWARemoteDesktopOverrideBrowserTest :
     return ::ash::ProfileHelper::Get()->GetProfileByAccountId(
         affiliation_mixin_.account_id());
 #else
-    return browser()->profile();
+    return browser()->GetProfile();
 #endif
   }
 

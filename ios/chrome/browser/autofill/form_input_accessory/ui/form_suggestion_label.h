@@ -20,8 +20,8 @@
 // User tapped on the suggestion.
 - (void)didTapFormSuggestionLabel:(FormSuggestionLabel*)formSuggestionLabel;
 
-// Request if the suggestion label with the given RP ID should show its RP ID.
-- (BOOL)shouldShowRPId:(NSString*)rpId;
+// Returns the display description for a suggestion.
+- (NSString*)displayDescriptionForSuggestion:(FormSuggestion*)suggestion;
 
 @end
 
@@ -33,6 +33,8 @@
                              index:(NSUInteger)index
                numberOfSuggestions:(NSUInteger)numberOfSuggestions
              accessoryTrailingView:(UIView*)accessoryTrailingView
+              isContextMenuEnabled:(BOOL)isContextMenuEnabled
+                         isCompact:(BOOL)isCompact
                           delegate:(id<FormSuggestionLabelDelegate>)delegate
     NS_DESIGNATED_INITIALIZER;
 
@@ -45,6 +47,10 @@
 
 // Returns the label's associated suggestion's index.
 - (NSUInteger)suggestionIndex;
+
+// Updates the layout of the suggestion label depending on whether the UI is in
+// compact mode.
+- (void)setIsCompact:(BOOL)isCompact;
 
 @end
 

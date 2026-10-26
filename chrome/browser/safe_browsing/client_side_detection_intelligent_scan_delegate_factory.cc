@@ -9,6 +9,7 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/common/chrome_features.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "components/safe_browsing/core/browser/intelligent_scan_delegate.h"
@@ -61,16 +62,21 @@ ClientSideDetectionIntelligentScanDelegateFactory::
   }
 #if BUILDFLAG(IS_ANDROID)
   return std::make_unique<ClientSideDetectionIntelligentScanDelegateAndroid>(
-      *profile->GetPrefs(), opt_guide->CreateModelBrokerClient(), opt_guide);
+      *profile->GetPrefs(), opt_guide);
 #else
   return std::make_unique<ClientSideDetectionIntelligentScanDelegateDesktop>(
       *profile->GetPrefs(), opt_guide,
-      policy::ManagementServiceFactory::GetForProfile(profile));
+      policy::ManagementServiceFactory::GetForProfile(profile), opt_guide);
 #endif
 }
 
 bool ClientSideDetectionIntelligentScanDelegateFactory::
     ServiceIsCreatedWithBrowserContext() const {
+  if (base::FeatureList::IsEnabled(
+          ::features::kLazyKeyedServiceInstantiation) &&
+      ::features::kLazyKeyedServiceInstantiationOptimizationGuide.Get()) {
+    return false;
+  }
   // The service is created early to start listening to on-device model updates.
   return true;
 }

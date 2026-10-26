@@ -11,21 +11,35 @@
 #include "base/files/file_path.h"
 #include "base/metrics/user_metrics.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/filename_util.h"
 #include "ui/base/base_window.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
+#include "ui/display/types/display_constants.h"
 #include "ui/shell_dialogs/selected_file_info.h"
 #include "url/gurl.h"
+
+DEFINE_USER_DATA(BrowserSelectFileDialogController);
+
+// static
+BrowserSelectFileDialogController* BrowserSelectFileDialogController::From(
+    BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
 
 BrowserSelectFileDialogController::BrowserSelectFileDialogController(
     Profile* profile,
     TabStripModel* tab_strip_model,
     ui::BaseWindow* base_window,
-    content::PageNavigator* page_navigator)
-    : profile_(CHECK_DEREF(profile)),
+    content::PageNavigator* page_navigator,
+    ui::UnownedUserDataHost& host)
+    : scoped_unowned_user_data_(host, *this),
+      profile_(CHECK_DEREF(profile)),
       tab_strip_model_(CHECK_DEREF(tab_strip_model)),
       base_window_(CHECK_DEREF(base_window)),
       page_navigator_(CHECK_DEREF(page_navigator)) {}
@@ -47,6 +61,16 @@ void BrowserSelectFileDialogController::OpenFile() {
     return;
   }
 
+  base::ScopedClosureRunner fullscreen_block;
+  if (web_contents) {
+    auto blocker =
+        web_contents->ForSecurityDropFullscreen(display::kInvalidDisplayId);
+    if (!blocker) {
+      return;
+    }
+    fullscreen_block = std::move(*blocker);
+  }
+
   base::RecordAction(base::UserMetricsAction("OpenFile"));
   select_file_dialog_ = ui::SelectFileDialog::Create(
       this, std::make_unique<ChromeSelectFilePolicy>(web_contents));
@@ -54,6 +78,7 @@ void BrowserSelectFileDialogController::OpenFile() {
   if (!select_file_dialog_) {
     return;
   }
+  fullscreen_block_ = std::move(fullscreen_block);
 
   const base::FilePath directory = profile_->last_selected_directory();
   // TODO(beng): figure out how to juggle this.
@@ -68,6 +93,8 @@ void BrowserSelectFileDialogController::OpenFile() {
 void BrowserSelectFileDialogController::FileSelected(
     const ui::SelectedFileInfo& file_info,
     int index) {
+  fullscreen_block_.RunAndReset();
+
   // Transfer the ownership of select file dialog so that the ref count is
   // released after the function returns. This is needed because the passed-in
   // data such as |file_info| and |params| could be owned by the dialog.
@@ -80,13 +107,13 @@ void BrowserSelectFileDialogController::FileSelected(
 
   if (!url.is_empty()) {
     page_navigator_->OpenURL(
-        content::OpenURLParams(
-            url, content::Referrer(), WindowOpenDisposition::CURRENT_TAB,
-            ui::PAGE_TRANSITION_TYPED, /*is_renderer_initiated=*/false),
+        content::OpenURLParams::CreateBrowserInitiated(
+            url, WindowOpenDisposition::kCurrentTab, ui::PAGE_TRANSITION_TYPED),
         /*navigation_handle_callback=*/{});
   }
 }
 
 void BrowserSelectFileDialogController::FileSelectionCanceled() {
+  fullscreen_block_.RunAndReset();
   select_file_dialog_.reset();
 }

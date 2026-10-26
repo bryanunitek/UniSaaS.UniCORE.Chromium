@@ -103,9 +103,10 @@ class BookmarkUIOperationsHelperTest : public testing::Test {
           model_.get(), parent);
     } else if (std::is_same<T,
                             BookmarkUIOperationsHelperMergedSurfaces>::value) {
-      parent_folder_ = BookmarkParentFolder::FromFolderNode(parent);
+      BookmarkParentFolder parent_folder =
+          BookmarkParentFolder::FromFolderNode(parent);
       helper_ = std::make_unique<BookmarkUIOperationsHelperMergedSurfaces>(
-          bookmark_merged_surface_service_.get(), &parent_folder_.value());
+          bookmark_merged_surface_service_.get(), &parent_folder);
     }
     return helper_.get();
   }
@@ -124,7 +125,6 @@ class BookmarkUIOperationsHelperTest : public testing::Test {
   raw_ptr<bookmarks::BookmarkModel> model_ = nullptr;
   raw_ptr<BookmarkMergedSurfaceService> bookmark_merged_surface_service_ =
       nullptr;
-  std::optional<BookmarkParentFolder> parent_folder_;
   std::unique_ptr<internal::BookmarkUIOperationsHelper> helper_;
 };
 
@@ -262,6 +262,128 @@ TYPED_TEST(BookmarkUIOperationsHelperTest, PasteBookmarkFromURL) {
   // Url for added node should be same as url_text.
   EXPECT_EQ(url_text,
             ASCIIToUTF16(new_folder->children().front()->url().spec()));
+}
+
+TYPED_TEST(BookmarkUIOperationsHelperTest, PasteBookmarksFromMultilineUrls) {
+  BookmarkModel* model = this->model();
+  const BookmarkNode* bookmark_bar_node = model->bookmark_bar_node();
+  const BookmarkNode* source = model->AddURL(bookmark_bar_node, 0, u"source",
+                                             GURL("https://source.example/"));
+  internal::BookmarkUIOperationsHelper* helper =
+      this->CreateHelper(bookmark_bar_node);
+
+  {
+    ui::ScopedClipboardWriter clipboard_writer(ui::ClipboardBuffer::kCopyPaste);
+    clipboard_writer.WriteText(
+        u"https://www.google.com/\nhttps://www.example.com/");
+  }
+
+  ASSERT_TRUE(this->CanPasteFromClipboardSync(helper));
+
+  {
+    base::test::TestFuture<void> future;
+    helper->PasteFromClipboard(1, future.GetCallback());
+    EXPECT_TRUE(future.Wait());
+  }
+
+  ASSERT_EQ(3u, bookmark_bar_node->children().size());
+  EXPECT_EQ(source, bookmark_bar_node->children()[0].get());
+  EXPECT_EQ(GURL("https://www.google.com/"),
+            bookmark_bar_node->children()[1]->url());
+  EXPECT_EQ(u"https://www.google.com/",
+            bookmark_bar_node->children()[1]->GetTitle());
+  EXPECT_EQ(GURL("https://www.example.com/"),
+            bookmark_bar_node->children()[2]->url());
+  EXPECT_EQ(u"https://www.example.com/",
+            bookmark_bar_node->children()[2]->GetTitle());
+}
+
+TYPED_TEST(BookmarkUIOperationsHelperTest,
+           PasteBookmarksFromMultilineUrlsWithBlankLines) {
+  BookmarkModel* model = this->model();
+  const BookmarkNode* bookmark_bar_node = model->bookmark_bar_node();
+  internal::BookmarkUIOperationsHelper* helper =
+      this->CreateHelper(bookmark_bar_node);
+
+  {
+    ui::ScopedClipboardWriter clipboard_writer(ui::ClipboardBuffer::kCopyPaste);
+    clipboard_writer.WriteText(
+        u"\n  https://www.google.com/  \r\n\r\n"
+        u"https://www.example.com/  \n");
+  }
+
+  ASSERT_TRUE(this->CanPasteFromClipboardSync(helper));
+
+  {
+    base::test::TestFuture<void> future;
+    helper->PasteFromClipboard(0, future.GetCallback());
+    EXPECT_TRUE(future.Wait());
+  }
+
+  ASSERT_EQ(2u, bookmark_bar_node->children().size());
+  EXPECT_EQ(GURL("https://www.google.com/"),
+            bookmark_bar_node->children()[0]->url());
+  EXPECT_EQ(GURL("https://www.example.com/"),
+            bookmark_bar_node->children()[1]->url());
+}
+
+TYPED_TEST(BookmarkUIOperationsHelperTest,
+           PasteBookmarksFromMultilineUrlsMakesTitlesUniqueInOrder) {
+  BookmarkModel* model = this->model();
+  const BookmarkNode* bookmark_bar_node = model->bookmark_bar_node();
+  model->AddURL(bookmark_bar_node, 0, u"https://www.google.com/",
+                GURL("https://www.google.com/"));
+  internal::BookmarkUIOperationsHelper* helper =
+      this->CreateHelper(bookmark_bar_node);
+
+  {
+    ui::ScopedClipboardWriter clipboard_writer(ui::ClipboardBuffer::kCopyPaste);
+    clipboard_writer.WriteText(
+        u"https://www.google.com/\nhttps://www.google.com/");
+  }
+
+  ASSERT_TRUE(this->CanPasteFromClipboardSync(helper));
+
+  {
+    base::test::TestFuture<void> future;
+    helper->PasteFromClipboard(1, future.GetCallback());
+    EXPECT_TRUE(future.Wait());
+  }
+
+  ASSERT_EQ(3u, bookmark_bar_node->children().size());
+  EXPECT_EQ(u"https://www.google.com/",
+            bookmark_bar_node->children()[0]->GetTitle());
+  EXPECT_EQ(u"https://www.google.com/ (1)",
+            bookmark_bar_node->children()[1]->GetTitle());
+  EXPECT_EQ(u"https://www.google.com/ (2)",
+            bookmark_bar_node->children()[2]->GetTitle());
+  EXPECT_TRUE(bookmark_bar_node->children()[1]->uuid().is_valid());
+  EXPECT_TRUE(bookmark_bar_node->children()[2]->uuid().is_valid());
+  EXPECT_NE(bookmark_bar_node->children()[1]->uuid(),
+            bookmark_bar_node->children()[2]->uuid());
+}
+
+TYPED_TEST(BookmarkUIOperationsHelperTest,
+           CannotPasteMultilineTextWithInvalidUrl) {
+  BookmarkModel* model = this->model();
+  const BookmarkNode* bookmark_bar_node = model->bookmark_bar_node();
+  internal::BookmarkUIOperationsHelper* helper =
+      this->CreateHelper(bookmark_bar_node);
+
+  {
+    ui::ScopedClipboardWriter clipboard_writer(ui::ClipboardBuffer::kCopyPaste);
+    clipboard_writer.WriteText(u"https://www.google.com/\nnot a url");
+  }
+
+  EXPECT_FALSE(this->CanPasteFromClipboardSync(helper));
+
+  {
+    base::test::TestFuture<void> future;
+    helper->PasteFromClipboard(0, future.GetCallback());
+    EXPECT_TRUE(future.Wait());
+  }
+
+  EXPECT_TRUE(bookmark_bar_node->children().empty());
 }
 
 // Test for updating title such that url and title pair are unique among the
@@ -506,6 +628,35 @@ TYPED_TEST(BookmarkUIOperationsHelperTest, PasteBookmarkFromEmptyBookmarkNode) {
   }
   ASSERT_EQ(1u, bar_folder->children().size());
   EXPECT_EQ(url, bar_folder->children()[0]->url().spec());
+}
+
+TYPED_TEST(BookmarkUIOperationsHelperTest,
+           PasteFromClipboardAfterParentFolderRemoved) {
+  BookmarkModel* model = this->model();
+  const BookmarkNode* folder =
+      model->AddFolder(model->bookmark_bar_node(), 0, u"Folder");
+  model->AddURL(folder, 0, u"existing", GURL("https://existing.example/"));
+
+  {
+    ui::ScopedClipboardWriter clipboard_writer(ui::ClipboardBuffer::kCopyPaste);
+    clipboard_writer.WriteText(u"https://www.google.com/");
+  }
+
+  internal::BookmarkUIOperationsHelper* helper = this->CreateHelper(folder);
+  EXPECT_TRUE(this->CanPasteFromClipboardSync(helper));
+
+  // Remove the target folder before PasteFromClipboard completes.
+  model->Remove(folder, bookmarks::metrics::BookmarkEditSource::kOther,
+                FROM_HERE);
+
+  EXPECT_FALSE(this->CanPasteFromClipboardSync(helper));
+
+  {
+    base::test::TestFuture<void> future;
+    helper->PasteFromClipboard(1, future.GetCallback());
+    EXPECT_TRUE(future.Wait());
+  }
+  EXPECT_TRUE(model->bookmark_bar_node()->children().empty());
 }
 
 #endif  // !BUILDFLAG(IS_MAC)

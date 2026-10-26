@@ -14,6 +14,7 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/types/expected.h"
+#include "components/private_verification_tokens/common/private_verification_tokens_parameters.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_request_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -36,17 +37,24 @@ constexpr char kExpectedAcceptHeaderValue[] =
 constexpr char kExpectedContentTypeHeaderValue[] =
     "application/private-token-request";
 constexpr base::TimeDelta kFetchTimeout = base::Minutes(1);
-constexpr size_t kResponseMaxBodySize = 2 * 1024;
 constexpr char kIssuerServerUrl[] = "http://main.example:8080/issuepvt";
 
 class PrivateVerificationTokensFetcherTest : public testing::Test {
  protected:
   void SetUp() override {
-    pvt_server_issue_url_ = GURL(kIssuerServerUrl);
+    pvt_server_issuer_request_url_ = GURL(kIssuerServerUrl);
     fetcher_ = PrivateVerificationTokensFetcher::Create(
-        pvt_server_issue_url_,
-        test_url_loader_factory_.GetSafeWeakWrapper()->Clone());
+        pvt_server_issuer_request_url_,
+        test_url_loader_factory_.GetSafeWeakWrapper()->Clone(),
+        MaxResponseBodySize());
     ASSERT_TRUE(fetcher_);
+  }
+
+  size_t MaxResponseBodySize() const {
+    std::optional<PrivateVerificationTokensParameters> params =
+        private_verification_tokens::GetParametersForVersion(1);
+    CHECK(params.has_value());
+    return params->max_response_body_size;
   }
 
  public:
@@ -57,7 +65,7 @@ class PrivateVerificationTokensFetcherTest : public testing::Test {
         [this, response, expected_request_body,
          response_delay](const network::ResourceRequest& request) {
           EXPECT_TRUE(request.url.is_valid());
-          EXPECT_EQ(request.url, pvt_server_issue_url_);
+          EXPECT_EQ(request.url, pvt_server_issuer_request_url_);
           EXPECT_EQ(request.method, net::HttpRequestHeaders::kPostMethod);
           EXPECT_EQ(request.credentials_mode,
                     network::mojom::CredentialsMode::kInclude);
@@ -73,7 +81,7 @@ class PrivateVerificationTokensFetcherTest : public testing::Test {
           task_environment_.FastForwardBy(response_delay);
           auto head = network::mojom::URLResponseHead::New();
           test_url_loader_factory_.AddResponse(
-              pvt_server_issue_url_, std::move(head), response,
+              pvt_server_issuer_request_url_, std::move(head), response,
               network::URLLoaderCompletionStatus(net::OK));
         }));
   }
@@ -81,7 +89,7 @@ class PrivateVerificationTokensFetcherTest : public testing::Test {
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   network::TestURLLoaderFactory test_url_loader_factory_;
-  GURL pvt_server_issue_url_;
+  GURL pvt_server_issuer_request_url_;
   std::unique_ptr<PrivateVerificationTokensFetcher> fetcher_;
 };
 
@@ -115,7 +123,7 @@ TEST_F(PrivateVerificationTokensFetcherTest, EmptyResponse) {
 
 TEST_F(PrivateVerificationTokensFetcherTest, LargeResponseWithinLimit) {
   const std::string request_body = "token-request-bytes";
-  const std::string response_body(kResponseMaxBodySize, 'a');
+  const std::string response_body(MaxResponseBodySize(), 'a');
   SetResponse(response_body, /*expected_request_body = */ request_body);
 
   base::test::TestFuture<base::expected<std::string, TryGetTokensResult>>
@@ -129,7 +137,7 @@ TEST_F(PrivateVerificationTokensFetcherTest, LargeResponseWithinLimit) {
 
 TEST_F(PrivateVerificationTokensFetcherTest, LargeResponseOverLimit) {
   const std::string request_body = "token-request-bytes";
-  const std::string response_body(kResponseMaxBodySize + 1, 'a');
+  const std::string response_body(MaxResponseBodySize() + 1, 'a');
   SetResponse(response_body, /*expected_request_body = */ request_body);
 
   base::test::TestFuture<base::expected<std::string, TryGetTokensResult>>
@@ -148,7 +156,7 @@ TEST_F(PrivateVerificationTokensFetcherTest, OutOfMemory) {
       base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
         auto head = network::mojom::URLResponseHead::New();
         test_url_loader_factory_.AddResponse(
-            pvt_server_issue_url_, std::move(head), response_body,
+            pvt_server_issuer_request_url_, std::move(head), response_body,
             network::URLLoaderCompletionStatus(net::ERR_OUT_OF_MEMORY));
       }));
 
@@ -213,7 +221,7 @@ TEST_F(PrivateVerificationTokensFetcherTest, TrafficAnnotation) {
 
 TEST(PrivateVerificationTokensFetcherCreateTest, NullURLLoaderFactory) {
   EXPECT_THAT(PrivateVerificationTokensFetcher::Create(
-                  GURL("http://example.com"), nullptr),
+                  GURL("http://example.com"), nullptr, 0),
               testing::IsNull());
 }
 
@@ -222,7 +230,7 @@ TEST(PrivateVerificationTokensFetcherCreateTest, InvalidURL) {
   network::TestURLLoaderFactory test_url_loader_factory;
   EXPECT_THAT(
       PrivateVerificationTokensFetcher::Create(
-          GURL(), test_url_loader_factory.GetSafeWeakWrapper()->Clone()),
+          GURL(), test_url_loader_factory.GetSafeWeakWrapper()->Clone(), 0),
       testing::IsNull());
 }
 

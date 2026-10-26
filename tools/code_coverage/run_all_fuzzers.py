@@ -2,10 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Run all Chromium libfuzzer targets that have corresponding corpora,
-   then save the profdata files.
+ then save the profdata files.
 
-  * Example usage: run_all_fuzzers.py --fuzzer-binaries-dir foo
-                   --fuzzer-corpora-dir bar --profdata-outdir baz
+* Example usage: run_all_fuzzers.py --fuzzer-binaries-dir foo
+                 --fuzzer-corpora-dir bar --profdata-outdir baz
 """
 
 import argparse
@@ -17,6 +17,7 @@ import logging
 import math
 import os
 import pathlib
+import shlex
 import subprocess
 import sys
 import shutil
@@ -40,7 +41,9 @@ FUZZILLI = 'fuzzilli'
 ALL_FUZZER_TYPES = [BLACKBOX, LIBFUZZER, CENTIPEDE, FUZZILLI]
 REPORT_DIR = 'out/report'
 
-LLVM_PROFDATA = 'third_party/llvm-build/Release+Asserts/bin/llvm-profdata'
+LLVM_PROFDATA = 'third_party/llvm-build/Release+Asserts/bin/llvm-profdata' + (
+  '.exe' if sys.platform == 'win32' else ''
+)
 
 
 class EngineRunner(abc.ABC):
@@ -50,8 +53,13 @@ class EngineRunner(abc.ABC):
   """
 
   @abc.abstractmethod
-  def run_full_corpus(self, env: Mapping[str, str], timeout: float,
-                      annotation: str, corpus_dir: Optional[str]) -> bool:
+  def run_full_corpus(
+    self,
+    env: Mapping[str, str],
+    timeout: float,
+    annotation: str,
+    corpus_dir: Optional[str],
+  ) -> bool:
     """Runs the current engine against the full corpus. It returns True if the
     command succeeded and False otherwise.
 
@@ -68,8 +76,13 @@ class EngineRunner(abc.ABC):
     pass
 
   @abc.abstractmethod
-  def run_testcases(self, env: Mapping[str, str], timeout: float,
-                    annotation: str, testcases: Sequence[str]) -> bool:
+  def run_testcases(
+    self,
+    env: Mapping[str, str],
+    timeout: float,
+    annotation: str,
+    testcases: Sequence[str],
+  ) -> bool:
     """Runs the current engine against some testcases (can be one). It returns
     True if the command succeeded and False otherwise.
 
@@ -84,8 +97,13 @@ class EngineRunner(abc.ABC):
     """
     pass
 
-  def _run_command(self, cmd: Sequence[str], env: Mapping[str, str],
-                   timeout: float, annotation: str) -> bool:
+  def _run_command(
+    self,
+    cmd: Sequence[str],
+    env: Mapping[str, str],
+    timeout: float,
+    annotation: str,
+  ) -> bool:
     return _run_and_log(cmd, env, timeout, annotation)
 
 
@@ -95,49 +113,78 @@ class CmdRunner(EngineRunner):
   mode or testcases mode, this will simply append the extra parameters at the
   end of the provided command.
   """
+
   cmd: Sequence[str]
 
-  def run_full_corpus(self, env: Mapping[str, str], timeout: float,
-                      annotation: str, corpus_dir: Optional[str]) -> bool:
+  def run_full_corpus(
+    self,
+    env: Mapping[str, str],
+    timeout: float,
+    annotation: str,
+    corpus_dir: Optional[str],
+  ) -> bool:
     extra_args = []
     if corpus_dir:
       extra_args += [corpus_dir]
     return self._run_command(self.cmd + extra_args, env, timeout, annotation)
 
-  def run_testcases(self, env: Mapping[str, str], timeout: float,
-                    annotation: str, testcases: Sequence[str]) -> bool:
+  def run_testcases(
+    self,
+    env: Mapping[str, str],
+    timeout: float,
+    annotation: str,
+    testcases: Sequence[str],
+  ) -> bool:
     return self._run_command(self.cmd + testcases, env, timeout, annotation)
 
 
 @dataclasses.dataclass
 class CentipedeRunner(EngineRunner):
-  """Runs a given target with the centipede fuzzing engine.
-  """
+  """Runs a given target with the centipede fuzzing engine."""
+
   centipede_path: str
   fuzz_target_path: str
 
-  def run_full_corpus(self, env: Mapping[str, str], timeout: float,
-                      annotation: str, corpus_dir: Optional[str]) -> bool:
+  def run_full_corpus(
+    self,
+    env: Mapping[str, str],
+    timeout: float,
+    annotation: str,
+    corpus_dir: Optional[str],
+  ) -> bool:
     workdir = tempfile.TemporaryDirectory()
     tmpdir = tempfile.TemporaryDirectory()
     this_env = env.copy()
     this_env['TMPDIR'] = tmpdir.name
     cmd = [
-        self.centipede_path, f'-binary={self.fuzz_target_path}',
-        '-shmem_size_mb=4096', '-address_space_limit_mb=0', '-rss_limit_mb=0',
-        '-symbolizer_path=/dev/null', '-num_runs=0', '-require_pc_table=false',
-        f'-workdir={workdir.name}', '-populate_binary_info=false',
-        '-batch_triage_suspect_only', '-ignore_timeout_reports=true',
-        '-exit_on_crash=true'
+      self.centipede_path,
+      f'-binary={self.fuzz_target_path}',
+      '-shmem_size_mb=4096',
+      '-address_space_limit_mb=0',
+      '-rss_limit_mb=0',
+      '-symbolizer_path=/dev/null',
+      '-num_runs=0',
+      '-require_pc_table=false',
+      f'-workdir={workdir.name}',
+      '-populate_binary_info=false',
+      '-batch_triage_suspect_only',
+      '-ignore_timeout_reports=true',
+      '-exit_on_crash=true',
     ]
     if corpus_dir:
       cmd += [f'-corpus_dir={corpus_dir}']
     return self._run_command(cmd, this_env, timeout, annotation)
 
-  def run_testcases(self, env: Mapping[str, str], timeout: float,
-                    annotation: str, testcases: Sequence[str]) -> bool:
-    res = self._run_command([self.fuzz_target_path] + testcases, env, timeout,
-                            annotation)
+  def run_testcases(
+    self,
+    env: Mapping[str, str],
+    timeout: float,
+    annotation: str,
+    testcases: Sequence[str],
+  ) -> bool:
+    res = self._run_command(
+      [self.fuzz_target_path] + testcases, env, timeout, annotation
+    )
     # running Centipede in that particular mode will generate feature files for
     # each of the testcase. Since we're running in an environment with limited
     # disk space, we must delete those files after the run.
@@ -150,8 +197,8 @@ class CentipedeRunner(EngineRunner):
 
 @dataclasses.dataclass
 class FuzzilliRunner(EngineRunner):
-  """Runs a given target with Fuzzilli.
-  """
+  """Runs a given target with Fuzzilli."""
+
   d8_path: str
   target_arguments: Sequence[str]
   source_dir: str
@@ -164,26 +211,40 @@ class FuzzilliRunner(EngineRunner):
   def cmd(self):
     return [self.d8_path] + self.target_arguments
 
-  def run_full_corpus(self, env: Mapping[str, str], timeout: float,
-                      annotation: str, corpus_dir: Optional[str]) -> bool:
+  def run_full_corpus(
+    self,
+    env: Mapping[str, str],
+    timeout: float,
+    annotation: str,
+    corpus_dir: Optional[str],
+  ) -> bool:
     # This is not supported for the `d8` runner, so we simply return False so
     # that user can only use `run_testcases` inherited from CmdRunner.
     return False
 
-  def run_testcases(self, env: Mapping[str, str], timeout: float,
-                    annotation: str, testcases: Sequence[str]) -> bool:
+  def run_testcases(
+    self,
+    env: Mapping[str, str],
+    timeout: float,
+    annotation: str,
+    testcases: Sequence[str],
+  ) -> bool:
     run_dir = tempfile.TemporaryDirectory()
-    os.symlink(os.path.join(self.source_dir, 'v8/test/'),
-               os.path.join(run_dir.name, 'test'))
+    os.symlink(
+      os.path.join(self.source_dir, 'v8/test/'),
+      os.path.join(run_dir.name, 'test'),
+    )
     # We need to run the test cases separately, because otherwise the JS files
     # will be ran in the same JS namespace.
     for testcase in testcases:
       testcase = os.path.abspath(testcase)
-      _run_and_log(cmd=self.cmd + [testcase],
-                   env=env,
-                   timeout=timeout,
-                   annotation=annotation,
-                   cwd=run_dir.name)
+      _run_and_log(
+        cmd=self.cmd + [testcase],
+        env=env,
+        timeout=timeout,
+        annotation=annotation,
+        cwd=run_dir.name,
+      )
     return True
 
 
@@ -192,15 +253,26 @@ class ChromeRunner(EngineRunner):
   """Runs chrome with the provided timeout as the duration, ensuring chrome
   exits gracefully to flush coverage data.
   """
+
   cmd: Sequence[str]
 
-  def run_full_corpus(self, env: Mapping[str, str], timeout: float,
-                      annotation: str, corpus_dir: Optional[str]) -> bool:
+  def run_full_corpus(
+    self,
+    env: Mapping[str, str],
+    timeout: float,
+    annotation: str,
+    corpus_dir: Optional[str],
+  ) -> bool:
     # Not supported for Chrome blackbox fuzzing.
     return False
 
-  def run_testcases(self, env: Mapping[str, str], timeout: float,
-                    annotation: str, testcases: Sequence[str]) -> bool:
+  def run_testcases(
+    self,
+    env: Mapping[str, str],
+    timeout: float,
+    annotation: str,
+    testcases: Sequence[str],
+  ) -> bool:
     for testcase in testcases:
       # Prepend file:// for absolute paths to ensure Chrome resolves them.
       testcase_path = os.path.abspath(testcase)
@@ -237,8 +309,9 @@ def _profdata_merge(inputs: Sequence[str], output: str) -> bool:
   Returns:
     True if it worked.
   """
-  llvm_profdata_cmd = [LLVM_PROFDATA, 'merge', '-sparse'
-                       ] + inputs + ['-o', output]
+  llvm_profdata_cmd = (
+    [LLVM_PROFDATA, 'merge', '-sparse'] + inputs + ['-o', output]
+  )
   try:
     subprocess.check_call(llvm_profdata_cmd)
     return True
@@ -252,11 +325,13 @@ def _profdata_merge(inputs: Sequence[str], output: str) -> bool:
   return False
 
 
-def _run_and_log(cmd: Sequence[str],
-                 env: Mapping[str, str],
-                 timeout: float,
-                 annotation: str,
-                 cwd: str = None) -> bool:
+def _run_and_log(
+  cmd: Sequence[str],
+  env: Mapping[str, str],
+  timeout: float,
+  annotation: str,
+  cwd: str = None,
+) -> bool:
   """Runs a given command and logs output in case of failure.
 
   Args:
@@ -270,32 +345,56 @@ def _run_and_log(cmd: Sequence[str],
   """
   logging.debug('Trying command: %s (%s)', cmd, annotation)
   try:
-    subprocess.run(cmd,
-                   env=env,
-                   timeout=timeout,
-                   capture_output=True,
-                   check=True,
-                   cwd=cwd)
+    subprocess.run(
+      cmd, env=env, timeout=timeout, capture_output=True, check=True, cwd=cwd
+    )
     return True
-  except Exception as e:
-    if type(e) == subprocess.TimeoutExpired:
-      logging.warning('Command %s (%s) timed out after %s seconds', cmd,
-                      annotation, e.timeout)
-    else:
-      logging.warning(
-          'Command %s (%s) return code: %i\nStdout:\n%s\nStderr:\n%s', cmd,
-          annotation, e.returncode, e.output, e.stderr)
+  except subprocess.TimeoutExpired as e:
+    logging.warning(
+      'Command %s (%s) timed out after %s seconds', cmd, annotation, e.timeout
+    )
+  except subprocess.CalledProcessError as e:
+    logging.warning(
+      'Command %s (%s) return code: %i\nStdout:\n%s\nStderr:\n%s',
+      cmd,
+      annotation,
+      e.returncode,
+      e.output,
+      e.stderr,
+    )
+  except OSError as e:
+    # Process creation failures (e.g. FileNotFoundError, WinError 193) have
+    # no `returncode`.
+    size_info = ''
+    if cmd and os.path.isfile(cmd[0]):
+      size_info = ' (%s is %d bytes)' % (cmd[0], os.path.getsize(cmd[0]))
+    logging.warning(
+      'Command %s (%s) could not be started%s: %s',
+      cmd,
+      annotation,
+      size_info,
+      e,
+    )
   return False
 
 
-def _run_with_duration(cmd: Sequence[str], env: Mapping[str, str],
-                       duration: float, annotation: str) -> bool:
+def _run_with_duration(
+  cmd: Sequence[str], env: Mapping[str, str], duration: float, annotation: str
+) -> bool:
   """Runs `cmd` via `_run_and_log` for the provided `duration`.
 
   Returns:
     True if the command finishes within the duration, otherwise returns False if
     the command is stopped after the duration.
   """
+  # On POSIX, `timeout --signal=SIGTERM` is used so the fuzzer binary can shut
+  # down cleanly and flush coverage data to its profile before exiting.
+  # Windows does not have the `timeout` utility and `subprocess.run` terminates
+  # timed-out processes directly, so we should monitor Windows builders to
+  # ensure timeouts do not cause coverage data to be dropped.
+  if sys.platform == 'win32':
+    return _run_and_log(cmd, env, duration, annotation)
+
   # subprocess.run doesn't support sending a specific signal on timeout
   # directly in a way that guarantees flushing, so we use 'timeout'
   duration_secs = f'{duration}s'
@@ -345,21 +444,18 @@ def _accumulated_profdata_merge(inputs: Sequence[str], profdata: str) -> bool:
   if not os.path.exists(profdata):
     return _profdata_merge(inputs, profdata)
 
-  # This file will be used as a clone of the initial profdata file.
-  copy = tempfile.NamedTemporaryFile()
-  # This file will be used as a copy of the profdata file to be used as input
-  # of the _profdata_merge function. It will always be deleted by
-  # `_profdata_merge`, so we disable `delete` to avoid a warning from cpython.
-  file = tempfile.NamedTemporaryFile(delete=False)
-  shutil.copy2(profdata, copy.name)
-  shutil.copy2(profdata, file.name)
-  res = _profdata_merge(inputs + [file.name], profdata)
-  if not res:
-    # If the merge wasn't successful, let's ensure that the profdata file is
-    # reverted with its previous content. This helps keep track of the profile
-    # information gathered from the successful runs.
-    shutil.copy2(copy.name, profdata)
-  return res
+  with tempfile.TemporaryDirectory() as temp_dir:
+    copy_path = os.path.join(temp_dir, 'copy.profdata')
+    input_path = os.path.join(temp_dir, 'input.profdata')
+    shutil.copy2(profdata, copy_path)
+    shutil.copy2(profdata, input_path)
+    res = _profdata_merge(inputs + [input_path], profdata)
+    if not res:
+      # If the merge wasn't successful, let's ensure that the profdata file is
+      # reverted with its previous content. This helps keep track of the profile
+      # information gathered from the successful runs.
+      shutil.copy2(copy_path, profdata)
+    return res
 
 
 def _get_target_corpus_files(target_details) -> Sequence[str]:
@@ -383,8 +479,11 @@ def _get_target_corpus_files(target_details) -> Sequence[str]:
     return corpus_files
 
   return [
-      file for file in glob.glob(os.path.join(corpus_dir, "**", corpus_files),
-                                 recursive=True) if os.path.isfile(file)
+    file
+    for file in glob.glob(
+      os.path.join(corpus_dir, "**", corpus_files), recursive=True
+    )
+    if os.path.isfile(file)
   ]
 
 
@@ -395,8 +494,8 @@ def _split_corpus_files_into_chunks(corpus_files: Sequence[str]):
   else:
     chunk_num = MAX_FILES_PER_CHUNK
   chunks = [
-      corpus_files[i:i + chunk_num]
-      for i in range(0, len(corpus_files), chunk_num)
+    corpus_files[i : i + chunk_num]
+    for i in range(0, len(corpus_files), chunk_num)
   ]
   return chunks
 
@@ -421,11 +520,16 @@ def _run_full_corpus(target_details) -> bool:
   profraw_dir = tempfile.TemporaryDirectory()
   fullcorpus_profraw = os.path.join(profraw_dir.name, target + "_%p.profraw")
   env['LLVM_PROFILE_FILE'] = fullcorpus_profraw
-  if cmd_runner.run_full_corpus(env, WHOLE_CORPUS_TIMEOUT_SECS,
-                                'full corpus attempt', corpus_dir):
+  if cmd_runner.run_full_corpus(
+    env, WHOLE_CORPUS_TIMEOUT_SECS, 'full corpus attempt', corpus_dir
+  ):
     matching_profraws = list(_matching_profraws(fullcorpus_profraw))
-    logging.info('[%s][full corpus] merging %s into %s', target,
-                 matching_profraws, target_profdata)
+    logging.info(
+      '[%s][full corpus] merging %s into %s',
+      target,
+      matching_profraws,
+      target_profdata,
+    )
     if _profdata_merge(matching_profraws, target_profdata):
       logging.info('[%s][full corpus] done, success', target)
       return True
@@ -452,8 +556,9 @@ def _run_corpus_in_chunks(target_details) -> bool:
 
   corpus_files = _get_target_corpus_files(target_details)
   if not corpus_files:
-    logging.info('[%s][chunk strategy] cannot get corpus files, aborting',
-                 target)
+    logging.info(
+      '[%s][chunk strategy] cannot get corpus files, aborting', target
+    )
     return False
 
   # There is no concept of chunking a corpus for blackbox fuzzers. Each testcase
@@ -462,50 +567,64 @@ def _run_corpus_in_chunks(target_details) -> bool:
     return False
 
   if len(corpus_files) < MIN_FILES_FOR_CHUNK_STRATEGY:
-    logging.info('[%s][chunk strategy] number of corpus files too low %i',
-                 target, len(corpus_files))
+    logging.info(
+      '[%s][chunk strategy] number of corpus files too low %i',
+      target,
+      len(corpus_files),
+    )
     return False
 
   chunks = _split_corpus_files_into_chunks(corpus_files)
   profdata_dir = tempfile.TemporaryDirectory()
   temp_target_profdata = os.path.join(profdata_dir.name, f'{target}.profdata')
   failed_chunks = []
-  logging.info('[%s][chunk strategy] starting, %i chunks to run', target,
-               len(chunks))
+  logging.info(
+    '[%s][chunk strategy] starting, %i chunks to run', target, len(chunks)
+  )
 
   # Let's run the fuzzer chunks by chunks. If it fails too much, we early bail
   # out to avoid spending too much time on a target that most likely won't give
   # good results.
   for idx, chunk in enumerate(chunks):
-    logging.info('[%s][chunk strategy] running chunk %i / %i', target, idx,
-                 len(chunks))
+    logging.info(
+      '[%s][chunk strategy] running chunk %i / %i', target, idx, len(chunks)
+    )
     profraw_dir = tempfile.TemporaryDirectory()
-    fullcorpus_profraw = os.path.join(profraw_dir.name,
-                                      f'{target}_{idx}_%p.profraw')
+    fullcorpus_profraw = os.path.join(
+      profraw_dir.name, f'{target}_{idx}_%p.profraw'
+    )
     env['LLVM_PROFILE_FILE'] = fullcorpus_profraw
     chunk_profdata = os.path.join(profdata_dir.name, f'{target}_{idx}.profdata')
-    if cmd_runner.run_testcases(env, CHUNK_EXECUTION_TIMEOUT,
-                                f"Running chunk {idx}", chunk):
+    if cmd_runner.run_testcases(
+      env, CHUNK_EXECUTION_TIMEOUT, f"Running chunk {idx}", chunk
+    ):
       matching_profraws = list(_matching_profraws(fullcorpus_profraw))
       if _profdata_merge(matching_profraws, chunk_profdata):
         # we accumulate the profile data to avoid taking too much disk space.
-        if not _accumulated_profdata_merge([chunk_profdata],
-                                           temp_target_profdata):
+        if not _accumulated_profdata_merge(
+          [chunk_profdata], temp_target_profdata
+        ):
           logging.warning(
-              '[%s][chunk strategy] accumulation failed for chunk %i', target,
-              idx)
+            '[%s][chunk strategy] accumulation failed for chunk %i', target, idx
+          )
         continue
     failed_chunks.append(chunk)
     failure_rate = len(failed_chunks) / (idx + 1)
     logging.debug(
-        '[%s][chunk strategy] chunk failed (%i / %i), failure rate %.2f',
-        target, idx, len(chunks), failure_rate)
+      '[%s][chunk strategy] chunk failed (%i / %i), failure rate %.2f',
+      target,
+      idx,
+      len(chunks),
+      failure_rate,
+    )
     if idx > 4 and failure_rate > 0.75:
       # This is mostly to exclude always failing fuzzers and avoid wasting time
       # on that.
       logging.warning(
-          '[%s][chunk strategy] chunk failrue rate (%.2f) too high, stopping',
-          target, failure_rate)
+        '[%s][chunk strategy] chunk failrue rate (%.2f) too high, stopping',
+        target,
+        failure_rate,
+      )
       return False
 
   # Sometimes, some state sensitive fuzzers spuriously fail when ran in batch,
@@ -516,8 +635,10 @@ def _run_corpus_in_chunks(target_details) -> bool:
   # strategy.
   if sum(len(c) for c in failed_chunks) > INDIVIDUAL_TESTCASES_MAX_TO_TRY:
     logging.warning(
-        '[%s][chunk strategy] flaky fuzzer,'
-        ' will shrink the number of test cases to retry', target)
+      '[%s][chunk strategy] flaky fuzzer,'
+      ' will shrink the number of test cases to retry',
+      target,
+    )
     failed_testcases = [e for chunk in failed_chunks for e in chunk]
     failed_testcases = failed_testcases[:INDIVIDUAL_TESTCASES_MAX_TO_TRY]
     failed_chunks = _split_corpus_files_into_chunks(failed_testcases)
@@ -527,10 +648,17 @@ def _run_corpus_in_chunks(target_details) -> bool:
   # to bail out early if the chunk contains too much test cases that runs into
   # errors.
   for idx, chunk in enumerate(failed_chunks):
-    chunk_profdata = os.path.join(profdata_dir.name,
-                                  f'{target}_{idx + len(chunks)}.profdata')
-    if _run_testcases(target, cmd_runner, env, chunk, chunk_profdata,
-                      target_details['testcase_timeout']):
+    chunk_profdata = os.path.join(
+      profdata_dir.name, f'{target}_{idx + len(chunks)}.profdata'
+    )
+    if _run_testcases(
+      target,
+      cmd_runner,
+      env,
+      chunk,
+      chunk_profdata,
+      target_details['testcase_timeout'],
+    ):
       # we accumulate the profile data to avoid taking too much disk space.
       _accumulated_profdata_merge([chunk_profdata], temp_target_profdata)
   if os.path.exists(temp_target_profdata):
@@ -539,9 +667,15 @@ def _run_corpus_in_chunks(target_details) -> bool:
   return os.path.exists(target_profdata)
 
 
-def _run_testcases(target: str, runner: EngineRunner, env: Mapping[str, str],
-                   testcases: Sequence[str], target_profdata: str,
-                   timeout: float) -> bool:
+def _run_testcases(
+  target: str,
+  runner: EngineRunner,
+  env: Mapping[str, str],
+  testcases: Sequence[str],
+  target_profdata: str,
+  timeout: float,
+  continuous_profiling: bool = False,
+) -> bool:
   """Runs the given testcases and tries to generate a profdata file out of the
   runs. If the testcases are failing too frequently, the execution will be
   stopped, but the profile file might still be generated.
@@ -553,29 +687,42 @@ def _run_testcases(target: str, runner: EngineRunner, env: Mapping[str, str],
       testcases: the list of test cases to run.
       target_profdata: the profdata to write to.
       timeout: the timeout for each test case.
+      continuous_profiling: write counters to disk as they change (%c), rather
+        than at exit. Needed when processes are terminated without running exit
+        handlers, e.g. Chrome's child processes.
 
   Returns:
       whether it succeeded or not.
   """
   profraw_dir = tempfile.TemporaryDirectory()
-  profraw_file = os.path.join(profraw_dir.name, f'testcase_strategy_%p.profraw')
-  env['LLVM_PROFILE_FILE'] = profraw_file
+  pid_pattern = '%p%c' if continuous_profiling else '%p'
+  env['LLVM_PROFILE_FILE'] = os.path.join(
+    profraw_dir.name, f'testcase_strategy_{pid_pattern}.profraw'
+  )
   failures = 0
   total_runs = 0
-  logging.info('[%s][testcase strategy] starting, %i inputs to run', target,
-               len(testcases))
+  logging.info(
+    '[%s][testcase strategy] starting, %i inputs to run', target, len(testcases)
+  )
   for testcase in testcases:
     if total_runs > 5 and failures / total_runs > 0.75:
       logging.warning(
-          '[%s][testcase strategy] abandonning, too much failures...', target)
+        '[%s][testcase strategy] abandonning, too much failures...', target
+      )
       break
-    if not runner.run_testcases(env=env,
-                                timeout=timeout,
-                                annotation="testcase runner",
-                                testcases=[testcase]):
+    if not runner.run_testcases(
+      env=env,
+      timeout=timeout,
+      annotation="testcase runner",
+      testcases=[testcase],
+    ):
       failures += 1
     total_runs += 1
-    matching_profraws = list(_matching_profraws(profraw_file))
+    # Not just LLVM_PROFILE_FILE matches: Chrome's sandboxed children write to
+    # child_pool-N.profraw.
+    matching_profraws = _matching_profraws(
+      os.path.join(profraw_dir.name, '*.profraw')
+    )
     _accumulated_profdata_merge(matching_profraws, target_profdata)
   res = os.path.exists(target_profdata)
   res_str = 'success' if res else 'failure'
@@ -614,29 +761,46 @@ def _run_fuzzer_target(args):
   env = target_details['env']
   target_profdata = target_details['profdata_file']
 
-  logging.info('Starting target %s (completed %d/%d, of which %d succeeded)',
-               target,
-               len(verified_fuzzer_targets) + len(failed_targets), num_targets,
-               len(verified_fuzzer_targets))
+  logging.info(
+    'Starting target %s (completed %d/%d, of which %d succeeded)',
+    target,
+    len(verified_fuzzer_targets) + len(failed_targets),
+    num_targets,
+    len(verified_fuzzer_targets),
+  )
 
   # Override TMPDIR to force the fuzzer and Chrome to write all temp files,
   # scoped profiles, and SQLite databases to this target-isolated directory.
   # Note: TMPDIR is POSIX-only (not read on Windows/macOS).
   # We also set SQL_RECOVERY_FUZZER_TEMP_DIR for sql_recovery_lpm_fuzzer,
   # which bypasses TMPDIR and uses base::GetShmemTempDir().
-  target_temp_dir = os.path.join('/dev/shm', f'fuzzer_temp_{target}')
+  # /dev/shm only exists on Linux
+  base_temp_dir = (
+    '/dev/shm' if sys.platform == 'linux' else tempfile.gettempdir()
+  )
+  target_temp_dir = os.path.join(base_temp_dir, f'fuzzer_temp_{target}')
   os.makedirs(target_temp_dir, exist_ok=True)
   env['TMPDIR'] = target_temp_dir
   env['SQL_RECOVERY_FUZZER_TEMP_DIR'] = target_temp_dir
+  if sys.platform == 'win32':
+    env['TEMP'] = target_temp_dir
+    env['TMP'] = target_temp_dir
 
   try:
     res = _run_full_corpus(target_details) or _run_corpus_in_chunks(
-        target_details)
+      target_details
+    )
     corpus_files = _get_target_corpus_files(target_details)
     if not res and corpus_files:
-      res = _run_testcases(target, cmd_runner, env,
-                           corpus_files[:INDIVIDUAL_TESTCASES_MAX_TO_TRY],
-                           target_profdata, target_details['testcase_timeout'])
+      res = _run_testcases(
+        target,
+        cmd_runner,
+        env,
+        corpus_files[:INDIVIDUAL_TESTCASES_MAX_TO_TRY],
+        target_profdata,
+        target_details['testcase_timeout'],
+        target_details.get('continuous_profiling', False),
+      )
 
     if res:
       verified_fuzzer_targets.append(target)
@@ -645,10 +809,13 @@ def _run_fuzzer_target(args):
   finally:
     shutil.rmtree(target_temp_dir, ignore_errors=True)
 
-  logging.info('Finishing target %s (completed %d/%d, of which %d succeeded)',
-               target,
-               len(verified_fuzzer_targets) + len(failed_targets), num_targets,
-               len(verified_fuzzer_targets))
+  logging.info(
+    'Finishing target %s (completed %d/%d, of which %d succeeded)',
+    target,
+    len(verified_fuzzer_targets) + len(failed_targets),
+    num_targets,
+    len(verified_fuzzer_targets),
+  )
 
 
 def _parse_command_arguments():
@@ -664,66 +831,98 @@ def _parse_command_arguments():
   arg_parser.usage = __doc__
 
   arg_parser.add_argument(
-      '--fuzzer-binaries-dir',
-      required=True,
-      type=str,
-      help='Directory where the fuzzer binaries have been built.')
+    '--fuzzer-binaries-dir',
+    required=True,
+    type=str,
+    help='Directory where the fuzzer binaries have been built.',
+  )
 
   arg_parser.add_argument(
-      '--fuzzer-corpora-dir',
-      required=True,
-      type=str,
-      help='Directory into which corpora have been downloaded.')
-
-  arg_parser.add_argument('--profdata-outdir',
-                          required=True,
-                          type=str,
-                          help='Directory where profdata will be stored.')
-
-  arg_parser.add_argument('--fuzzer',
-                          choices=ALL_FUZZER_TYPES,
-                          default=LIBFUZZER,
-                          help='The type of fuzzer tests to run.')
+    '--fuzzer-corpora-dir',
+    required=True,
+    type=str,
+    help='Directory into which corpora have been downloaded.',
+  )
 
   arg_parser.add_argument(
-      '--target-list-dir',
-      type=str,
-      help='Directory where the json files for target list will be stored.')
-
-  arg_parser.add_argument('--target',
-                          type=str,
-                          help='The target binary to use for blackbox fuzzers.')
+    '--profdata-outdir',
+    required=True,
+    type=str,
+    help='Directory where profdata will be stored.',
+  )
 
   arg_parser.add_argument(
-      '--testcase-timeout',
-      type=int,
-      default=60,
-      help='Timeout in seconds for each testcase. Defaults to 60 seconds.')
+    '--fuzzer',
+    choices=ALL_FUZZER_TYPES,
+    default=LIBFUZZER,
+    help='The type of fuzzer tests to run.',
+  )
+
+  arg_parser.add_argument(
+    '--target-list-dir',
+    type=str,
+    help='Directory where the json files for target list will be stored.',
+  )
+
+  arg_parser.add_argument(
+    '--target', type=str, help='The target binary to use for blackbox fuzzers.'
+  )
+
+  arg_parser.add_argument(
+    '--testcase-timeout',
+    type=int,
+    default=60,
+    help='Timeout in seconds for each testcase. Defaults to 60 seconds.',
+  )
+
+  arg_parser.add_argument(
+    '--target-args',
+    default='',
+    help='Extra arguments for the blackbox target, as one shell-quoted '
+    'string, e.g. --target-args="--use-fake-ui-for-media-stream".',
+  )
   args = arg_parser.parse_args()
   return args
+
+
+def _resolve_target_binary(binaries_dir: str, target: str) -> str | None:
+  """Returns the path to the executable for `target` in `binaries_dir`."""
+  if sys.platform == 'win32' and not target.endswith('.exe'):
+    target += '.exe'
+  target_binary = os.path.join(binaries_dir, target)
+  if not os.path.isfile(target_binary):
+    return None
+  if sys.platform != 'win32' and not os.access(target_binary, os.X_OK):
+    return None
+  return target_binary
 
 
 def _get_all_target_details(args):
   incomplete_targets = []
   all_target_details = []
 
-  centipede_target_binpath = os.path.join(args.fuzzer_binaries_dir, "centipede")
+  centipede_target_binpath = _resolve_target_binary(
+    args.fuzzer_binaries_dir, 'centipede'
+  )
   if args.fuzzer == CENTIPEDE:
-    if not os.path.isfile(centipede_target_binpath):
-      logging.warning('%s does not exist.', centipede_target_binpath)
+    if not centipede_target_binpath:
+      logging.warning('No centipede binary in %s.', args.fuzzer_binaries_dir)
       return []
 
   for fuzzer_target in os.listdir(args.fuzzer_corpora_dir):
-    fuzzer_target_binpath = os.path.join(args.fuzzer_binaries_dir,
-                                         fuzzer_target)
-    fuzzer_target_corporadir = os.path.join(args.fuzzer_corpora_dir,
-                                            fuzzer_target)
+    fuzzer_target_binpath = _resolve_target_binary(
+      args.fuzzer_binaries_dir, fuzzer_target
+    )
+    fuzzer_target_corporadir = os.path.join(
+      args.fuzzer_corpora_dir, fuzzer_target
+    )
 
-    if not (os.path.isfile(fuzzer_target_binpath)
-            and os.path.isdir(fuzzer_target_corporadir)):
+    if not (fuzzer_target_binpath and os.path.isdir(fuzzer_target_corporadir)):
       logging.warning(
-          'Could not find binary file for %s, or, the provided corpora path is '
-          'not a directory', fuzzer_target)
+        'Could not find binary file for %s, or, the provided corpora path is '
+        'not a directory',
+        fuzzer_target,
+      )
       incomplete_targets.append(fuzzer_target)
     else:
       env = dict()
@@ -734,29 +933,27 @@ def _get_all_target_details(args):
       # due to some dependencies redefining symbols.
       env['ASAN_OPTIONS'] = 'detect_odr_violation=0'
       if args.fuzzer == CENTIPEDE:
-        cmd = CentipedeRunner(centipede_path=centipede_target_binpath,
-                              fuzz_target_path=fuzzer_target_binpath)
+        cmd = CentipedeRunner(
+          centipede_path=centipede_target_binpath,
+          fuzz_target_path=fuzzer_target_binpath,
+        )
       else:  # libfuzzer
         cmd = CmdRunner(
-            [fuzzer_target_binpath, '-runs=0', '-rss_limit_mb=8192'])
-      all_target_details.append({
-          'name':
-          fuzzer_target,
-          'profdata_file':
-          os.path.join(REPORT_DIR, fuzzer_target + ".profdata"),
-          'env':
-          env,
-          # RSS limit 8GB. Some of our fuzzers which involve running significant
-          # chunks of Chromium code require more than the 2GB default.
-          'cmd_runner':
-          cmd,
-          'corpus':
-          fuzzer_target_corporadir,
-          'files':
-          '*',
-          'testcase_timeout':
-          args.testcase_timeout
-      })
+          [fuzzer_target_binpath, '-runs=0', '-rss_limit_mb=0']
+        )
+      all_target_details.append(
+        {
+          'name': fuzzer_target,
+          'profdata_file': os.path.join(
+            REPORT_DIR, fuzzer_target + ".profdata"
+          ),
+          'env': env,
+          'cmd_runner': cmd,
+          'corpus': fuzzer_target_corporadir,
+          'files': '*',
+          'testcase_timeout': args.testcase_timeout,
+        }
+      )
 
   # We also want to run ./chrome without a valid X server.
   # It will almost immediately exit.
@@ -764,27 +961,33 @@ def _get_all_target_details(args):
   # of code in the Chrome binary being marked as 0 in the code coverage
   # report. Without doing this step, many of the files of Chrome source
   # code simply don't appear in the coverage report at all.
-  chrome_target_binpath = os.path.join(args.fuzzer_binaries_dir, "chrome")
-  if not os.path.isfile(chrome_target_binpath):
-    logging.warning('Could not find binary file for Chrome itself')
-  else:
-    env = {'DISPLAY': 'not-a-real-display'}
-    all_target_details.append({
-        'name':
-        "chrome",
-        'profdata_file':
-        os.path.join(REPORT_DIR, "chrome.profdata"),
-        'env':
-        env,
-        'cmd_runner':
-        AlwaysSuccessfulRunner([chrome_target_binpath]),
-        'corpus':
-        None,
-        'files':
-        None
-    })
-  logging.warning("Incomplete targets (couldn't find binary): %s",
-                  incomplete_targets)
+  # TODO(crbug.com/570145474): Find a way to immediately exit Chrome while
+  # dumping a zero-coverage baseline profile on Windows (where DISPLAY is not
+  # used).
+  if sys.platform != 'win32':
+    chrome_target_binpath = _resolve_target_binary(
+      args.fuzzer_binaries_dir, 'chrome'
+    )
+    if not chrome_target_binpath:
+      logging.warning(
+        'Could not find binary file for Chrome itself in %s',
+        args.fuzzer_binaries_dir,
+      )
+    else:
+      env = {'DISPLAY': 'not-a-real-display'}
+      all_target_details.append(
+        {
+          'name': "chrome",
+          'profdata_file': os.path.join(REPORT_DIR, "chrome.profdata"),
+          'env': env,
+          'cmd_runner': AlwaysSuccessfulRunner([chrome_target_binpath]),
+          'corpus': None,
+          'files': None,
+        }
+      )
+  logging.warning(
+    "Incomplete targets (couldn't find binary): %s", incomplete_targets
+  )
   return all_target_details
 
 
@@ -792,9 +995,15 @@ def _get_blackbox_target_details(args):
   target_details = []
   # Blackbox fuzzers run the provided target against the files in
   # fuzzer_corpora_dir. e.g. run 'chrome corpora/fuzz-output.html'
-  fuzzer_target_binpath = os.path.join(args.fuzzer_binaries_dir, args.target)
-  if not os.path.isfile(fuzzer_target_binpath):
-    logging.warning('Could not find binary file for %s', fuzzer_target_binpath)
+  fuzzer_target_binpath = _resolve_target_binary(
+    args.fuzzer_binaries_dir, args.target
+  )
+  if not fuzzer_target_binpath:
+    logging.warning(
+      'Could not find binary file for %s in %s',
+      args.target,
+      args.fuzzer_binaries_dir,
+    )
     return target_details
 
   file_pattern = '*.html' if args.target == 'chrome' else '*.js'
@@ -802,14 +1011,17 @@ def _get_blackbox_target_details(args):
   env = {'DISPLAY': os.environ['DISPLAY']}
 
   details = {
-      'name': args.target,
-      'profdata_file': os.path.join(REPORT_DIR, args.target + ".profdata"),
-      'env': env,
-      'cmd_runner': ChromeRunner([fuzzer_target_binpath]),
-      'corpus': args.fuzzer_corpora_dir,
-      'files': file_pattern,
-      'testcase_timeout': args.testcase_timeout,
-      'fuzzer_type': args.fuzzer
+    'name': args.target,
+    'profdata_file': os.path.join(REPORT_DIR, args.target + ".profdata"),
+    'env': env,
+    'cmd_runner': ChromeRunner(
+      [fuzzer_target_binpath] + shlex.split(args.target_args)
+    ),
+    'corpus': args.fuzzer_corpora_dir,
+    'files': file_pattern,
+    'testcase_timeout': args.testcase_timeout,
+    'fuzzer_type': args.fuzzer,
+    'continuous_profiling': True,
   }
 
   target_details.append(details)
@@ -818,10 +1030,10 @@ def _get_blackbox_target_details(args):
 
 def _get_fuzzilli_target_details(args):
   all_target_details = []
-  fuzzer_target_binpath = os.path.join(args.fuzzer_binaries_dir, 'd8')
+  fuzzer_target_binpath = _resolve_target_binary(args.fuzzer_binaries_dir, 'd8')
   source_dir = os.path.abspath(os.path.join(args.fuzzer_binaries_dir, '../../'))
-  if not os.path.isfile(fuzzer_target_binpath):
-    logging.warning('Could not find binary file: %s', fuzzer_target_binpath)
+  if not fuzzer_target_binpath:
+    logging.warning('Could not find d8 binary in %s', args.fuzzer_binaries_dir)
     return all_target_details
 
   for corpora_dir in os.listdir(args.fuzzer_corpora_dir):
@@ -830,39 +1042,39 @@ def _get_fuzzilli_target_details(args):
       continue
     # for each corpora dir, the json file containing the command line args is at
     # x/fuzzdir/settings.json. Javascript files are at x/fuzzdir/corpus
-    path_to_settings = os.path.join(target_corpora_dir, 'fuzzdir',
-                                    'settings.json')
+    path_to_settings = os.path.join(
+      target_corpora_dir, 'fuzzdir', 'settings.json'
+    )
     with open(path_to_settings, 'r') as fp:
       settings = json.load(fp)
     path_to_js_dir = os.path.join(target_corpora_dir, 'fuzzdir', 'corpus')
     jsfiles = [
-        os.path.join(path_to_js_dir, file)
-        for file in os.listdir(path_to_js_dir) if file.endswith('.js')
+      os.path.join(path_to_js_dir, file)
+      for file in os.listdir(path_to_js_dir)
+      if file.endswith('.js')
     ]
     files_per_chunk = 80
     num_of_chunks = math.ceil(len(jsfiles) / files_per_chunk)
     for i in range(num_of_chunks):
-      chunk = jsfiles[files_per_chunk * i:files_per_chunk * (i + 1)]
-      all_target_details.append({
-          'name':
-          f'{corpora_dir}_{i}',
-          'profdata_file':
-          os.path.join(REPORT_DIR, f'{corpora_dir}_{i}.profdata'),
-          'env':
-          dict(),
-          'cmd_runner':
-          FuzzilliRunner(d8_path=fuzzer_target_binpath,
-                         target_arguments=settings['processArguments'],
-                         source_dir=source_dir),
-          'corpus':
-          None,
-          'files':
-          chunk,
-          'testcase_timeout':
-          args.testcase_timeout,
-          'fuzzer_type':
-          FUZZILLI
-      })
+      chunk = jsfiles[files_per_chunk * i : files_per_chunk * (i + 1)]
+      all_target_details.append(
+        {
+          'name': f'{corpora_dir}_{i}',
+          'profdata_file': os.path.join(
+            REPORT_DIR, f'{corpora_dir}_{i}.profdata'
+          ),
+          'env': dict(),
+          'cmd_runner': FuzzilliRunner(
+            d8_path=fuzzer_target_binpath,
+            target_arguments=settings['processArguments'],
+            source_dir=source_dir,
+          ),
+          'corpus': None,
+          'files': chunk,
+          'testcase_timeout': args.testcase_timeout,
+          'fuzzer_type': FUZZILLI,
+        }
+      )
   return all_target_details
 
 
@@ -882,8 +1094,9 @@ def main():
     exit(2)
 
   if not (os.path.isdir(args.profdata_outdir)):
-    logging.warning('%s does not exist or is not a directory',
-                    args.profdata_outdir)
+    logging.warning(
+      '%s does not exist or is not a directory', args.profdata_outdir
+    )
     exit(2)
 
   if args.fuzzer == FUZZILLI:
@@ -899,9 +1112,12 @@ def main():
   logging.info('Running %d fuzzers across %d CPUs', num_targets, num_cpus)
   with Pool(num_cpus) as p:
     results = p.map(
-        _run_fuzzer_target,
-        [(target_details, verified_fuzzer_targets, failed_targets, num_targets)
-         for target_details in all_target_details])
+      _run_fuzzer_target,
+      [
+        (target_details, verified_fuzzer_targets, failed_targets, num_targets)
+        for target_details in all_target_details
+      ],
+    )
 
   logging.info('Successful targets: %s', verified_fuzzer_targets)
   logging.info('Failed targets: %s', failed_targets)
@@ -914,18 +1130,17 @@ def main():
     with open(json_path, "w") as fp:
       json.dump(list(verified_fuzzer_targets) + list(failed_targets), fp)
 
-  logging.info('Finished getting coverage information. Copying to %s',
-               args.profdata_outdir)
+  logging.info(
+    'Finished getting coverage information. Moving to %s', args.profdata_outdir
+  )
   for fuzzer in verified_fuzzer_targets:
-    cmd = [
-        'cp',
-        os.path.join(REPORT_DIR, fuzzer + '.profdata'), args.profdata_outdir
-    ]
-    logging.info(cmd)
+    src_profdata = os.path.join(REPORT_DIR, fuzzer + '.profdata')
+    dst_profdata = os.path.join(args.profdata_outdir, fuzzer + '.profdata')
+    logging.info('Moving %s to %s', src_profdata, dst_profdata)
     try:
-      subprocess.check_call(cmd)
-    except:
-      logging.warning('Warning: failed to copy profdata for %s', fuzzer)
+      shutil.move(src_profdata, dst_profdata)
+    except Exception as e:
+      logging.warning('Warning: failed to move profdata for %s: %s', fuzzer, e)
 
 
 if __name__ == '__main__':

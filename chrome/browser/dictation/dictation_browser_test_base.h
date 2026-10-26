@@ -5,32 +5,40 @@
 #ifndef CHROME_BROWSER_DICTATION_DICTATION_BROWSER_TEST_BASE_H_
 #define CHROME_BROWSER_DICTATION_DICTATION_BROWSER_TEST_BASE_H_
 
+#include <memory>
+
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/dictation/session_state.h"
 #include "chrome/test/base/platform_browser_test.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 
 class Profile;
 
 namespace content {
+class RenderFrameHost;
 class WebContents;
-struct GlobalDOMNodeId;
 }  // namespace content
 
 namespace dictation {
 
 class DictationKeyedService;
+class FakeGlobalAcceleratorListener;
 class ListenerStreamProvider;
+class ScopedFakeGlobalAcceleratorListener;
 class SessionController;
+struct TargetDetails;
 
 // Base class for browser tests with common settings and setup.
 class DictationBrowserTestBase : public PlatformBrowserTest {
  public:
   DictationBrowserTestBase();
+  explicit DictationBrowserTestBase(bool session_ends_on_stream_end);
   ~DictationBrowserTestBase() override;
 
   // PlatformBrowserTest:
   void SetUpCommandLine(base::CommandLine* command_line) override;
   void SetUpOnMainThread() override;
+  void TearDownOnMainThread() override;
 
   Profile* profile();
   content::WebContents* web_contents();
@@ -38,13 +46,28 @@ class DictationBrowserTestBase : public PlatformBrowserTest {
   SessionController* session_controller();
   ListenerStreamProvider* attached_stream();
 
+  // The fake OS-wide accelerator listener installed on `dictation_service()`.
+  // Use it to observe global hotkey registration and simulate presses.
+  FakeGlobalAcceleratorListener& fake_global_listener();
+
   // Starts a session for the given target.
-  void StartSession(const content::GlobalDOMNodeId& target_id);
+  void StartSession(const TargetDetails& target_details);
   // Starts a session for the focused editable.
   void StartSession();
 
+  // Simulates opening the context menu on the given render frame host and node
+  // ID and executing the dictation command. Fails the test if the context menu
+  // item isn't available.
+  void SimulateInvokeViaContextMenu(content::RenderFrameHost* render_frame_host,
+                                    blink::DOMNodeIdType node_id);
+
+  // Waits until the session reaches the expected state.
+  void WaitForSessionState(SessionState target_state);
+
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
+  // Prevents tests from registering real OS-wide hotkeys.
+  std::unique_ptr<ScopedFakeGlobalAcceleratorListener> fake_global_listener_;
 };
 
 }  // namespace dictation

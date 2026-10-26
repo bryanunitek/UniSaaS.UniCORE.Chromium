@@ -5,6 +5,7 @@
 #include <string>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/web_app_id_constants.h"
 #include "ash/webui/projector_app/public/cpp/projector_app_constants.h"
 #include "base/auto_reset.h"
 #include "base/memory/scoped_refptr.h"
@@ -16,7 +17,6 @@
 #include "chrome/browser/apps/app_service/metrics/app_service_metrics.h"
 #include "chrome/browser/apps/link_capturing/chromeos_reimpl_navigation_capturing_throttle.h"
 #include "chrome/browser/apps/link_capturing/link_capturing_feature_test_support.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/global_features.h"
@@ -27,8 +27,10 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "components/application_locale_storage/application_locale_storage.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/common/page_type.h"
 #include "content/public/test/browser_test.h"
@@ -85,7 +87,7 @@ class ProjectorNavigationThrottleTest : public InProcessBrowserTest {
   }
 
  protected:
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
   scoped_refptr<base::TestMockTimeTaskRunner> task_runner_;
 
  private:
@@ -162,7 +164,7 @@ IN_PROC_BROWSER_TEST_P(ProjectorNavigationCapturingParameterizedTest,
   } else {
     // Simulate the user typing the url into the omnibox.
     ui_test_utils::NavigateToURLWithDisposition(
-        browser(), gurl, WindowOpenDisposition::CURRENT_TAB,
+        browser(), gurl, WindowOpenDisposition::kCurrentTab,
         ui_test_utils::BrowserTestWaitFlags::BROWSER_TEST_WAIT_FOR_BROWSER);
     browser_destroyed_observer.Wait();
   }
@@ -285,7 +287,7 @@ IN_PROC_BROWSER_TEST_P(ProjectorNavigationThrottleRedirectionParameterized,
   // servers to prevent flakiness.
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(kChromeUIUntrustedProjectorPwaUrl),
-      WindowOpenDisposition::CURRENT_TAB,
+      WindowOpenDisposition::kCurrentTab,
       ui_test_utils::BrowserTestWaitFlags::BROWSER_TEST_WAIT_FOR_BROWSER);
   browser_destroyed_observer.Wait();
   BrowserWindowInterface* const swa_browser = browser_created_observer.Wait();
@@ -318,7 +320,7 @@ IN_PROC_BROWSER_TEST_P(ProjectorNavigationThrottleRedirectionParameterized,
   GURL untrusted_url(kChromeUIUntrustedProjectorUrl);
 
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), untrusted_url, WindowOpenDisposition::NEW_WINDOW,
+      browser(), untrusted_url, WindowOpenDisposition::kNewWindow,
       ui_test_utils::BrowserTestWaitFlags::BROWSER_TEST_WAIT_FOR_BROWSER);
 
   ash::BrowserDelegate* app_browser = FindSystemWebAppBrowser(

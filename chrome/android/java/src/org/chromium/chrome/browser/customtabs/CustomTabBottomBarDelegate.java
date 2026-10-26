@@ -29,6 +29,7 @@ import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.Callback;
 import org.chromium.base.Log;
 import org.chromium.base.metrics.RecordUserAction;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -103,23 +104,7 @@ public class CustomTabBottomBarDelegate
      */
     private int mBottomBarHeightOverride = -1;
 
-    private final OnClickListener mBottomBarClickListener =
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (mClickPendingIntent == null) return;
-                    Intent extraIntent = new Intent();
-                    int originalId = (Integer) v.getTag(R.id.view_id_tag_key);
-                    extraIntent.putExtra(CustomTabsIntent.EXTRA_REMOTEVIEWS_CLICKED_ID, originalId);
-                    sendPendingIntentWithUrl(
-                            mClickPendingIntent,
-                            extraIntent,
-                            mActivity,
-                            mTabProvider,
-                            mDataProvider,
-                            originalId);
-                }
-            };
+    private final OnClickListener mBottomBarClickListener;
 
     public CustomTabBottomBarDelegate(
             Activity activity,
@@ -147,6 +132,20 @@ public class CustomTabBottomBarDelegate
         mShadowHeightPx =
                 activity.getResources()
                         .getDimensionPixelSize(R.dimen.custom_tabs_bottom_bar_shadow_height);
+        mBottomBarClickListener =
+                v -> {
+                    if (mClickPendingIntent == null) return;
+                    Intent extraIntent = new Intent();
+                    int originalId = (Integer) v.getTag(R.id.view_id_tag_key);
+                    extraIntent.putExtra(CustomTabsIntent.EXTRA_REMOTEVIEWS_CLICKED_ID, originalId);
+                    sendPendingIntentWithUrl(
+                            mClickPendingIntent,
+                            extraIntent,
+                            mActivity,
+                            mTabProvider,
+                            mDataProvider,
+                            originalId);
+                };
     }
 
     /** Cleans up observers registered in the constructor. */
@@ -216,7 +215,7 @@ public class CustomTabBottomBarDelegate
             OnClickListener clickListener = null;
             if (pendingIntent != null) {
                 clickListener =
-                        v ->
+                        _ ->
                                 sendPendingIntentWithUrl(
                                         pendingIntent,
                                         null,
@@ -425,13 +424,10 @@ public class CustomTabBottomBarDelegate
                 .setInterpolator(Interpolators.FAST_OUT_SLOW_IN_INTERPOLATOR)
                 .setDuration(SLIDE_ANIMATION_DURATION_MS)
                 .withEndAction(
-                        new Runnable() {
-                            @Override
-                            public void run() {
-                                assumeNonNull(mBottomBarView);
-                                ((ViewGroup) mBottomBarView.getParent()).removeView(mBottomBarView);
-                                mBottomBarView = null;
-                            }
+                        () -> {
+                            assumeNonNull(mBottomBarView);
+                            ((ViewGroup) mBottomBarView.getParent()).removeView(mBottomBarView);
+                            mBottomBarView = null;
                         })
                 .start();
         setBottomControlsHeight(0);
@@ -639,7 +635,7 @@ public class CustomTabBottomBarDelegate
                 mSwipeUpPendingIntent,
                 null,
                 mActivity,
-                () -> null,
+                SupplierUtils.ofNull(),
                 mDataProvider,
                 /* viewId= */ null);
     }

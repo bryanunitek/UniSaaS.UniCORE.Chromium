@@ -60,23 +60,6 @@ suite('<settings-device-page>', () => {
     Router.getInstance().resetRouteForTesting();
   });
 
-  /**
-   * Set enablePeripheralCustomization feature flag to true for tests.
-   */
-  function setPeripheralCustomizationEnabled(isEnabled: boolean): void {
-    loadTimeData.overrideValues({
-      enablePeripheralCustomization: isEnabled,
-    });
-  }
-
-  /**
-   * Set enableSpatialAudioToggle feature flag to true for tests.
-   */
-  function setEnableSpatialAudioToggleEnabled(isEnabled: boolean): void {
-    loadTimeData.overrideValues({
-      enableSpatialAudioToggle: isEnabled,
-    });
-  }
 
   test('device page', async () => {
     const provider = new FakeInputDeviceSettingsProvider();
@@ -99,7 +82,6 @@ suite('<settings-device-page>', () => {
     assertTrue(isVisible(
         devicePage.shadowRoot!.querySelector('#perDeviceKeyboardRow')));
 
-    // enablePeripheralCustomization feature flag by default is turned on.
     assertTrue(isVisible(devicePage.shadowRoot!.querySelector('#tabletRow')));
   });
 
@@ -186,8 +168,6 @@ suite('<settings-device-page>', () => {
           setInputDeviceSettingsProviderForTesting(provider);
           provider.setFakeGraphicsTablets(fakeGraphicsTablets);
 
-          // Tests with flag on.
-          setPeripheralCustomizationEnabled(true);
           await init();
 
           assertTrue(isVisible(queryTabletRow()));
@@ -206,8 +186,6 @@ suite('<settings-device-page>', () => {
       setInputDeviceSettingsProviderForTesting(provider);
       provider.setFakeGraphicsTablets(fakeGraphicsTablets);
 
-      // Tests with flag on.
-      setPeripheralCustomizationEnabled(true);
       await init();
 
       const row = queryTabletRow();
@@ -865,6 +843,59 @@ suite('<settings-device-page>', () => {
           maximumValue);
     });
 
+    test(
+        'audio subpage renders before audioSystemProperties are received',
+        async () => {
+          audioPage.remove();
+
+          class AsyncFakeCrosAudioConfig extends fakeCrosAudioConfig
+                                                     .FakeCrosAudioConfig {
+            private audioObserver?:
+                fakeCrosAudioConfig.FakePropertiesObserverInterface;
+
+            override observeAudioSystemProperties(
+                observer: fakeCrosAudioConfig.FakePropertiesObserverInterface):
+                void {
+              this.audioObserver = observer;
+            }
+
+            notifyObservers(): void {
+              if (this.audioObserver) {
+                this.audioObserver.onPropertiesUpdated(
+                    fakeCrosAudioConfig.defaultFakeAudioSystemProperties);
+              }
+            }
+          }
+
+          const asyncCrosAudioConfig = new AsyncFakeCrosAudioConfig();
+          setCrosAudioConfigForTesting(asyncCrosAudioConfig);
+
+          Router.getInstance().navigateTo(routes.AUDIO);
+          const asyncAudioPage = document.createElement('settings-audio') as
+                  unknown as SettingsAudioElement &
+              HTMLElement;
+          document.body.appendChild(asyncAudioPage);
+          await flushTasks();
+
+          // Ensure the audio subpage stamped without throwing an error when
+          // audioSystemProperties_ is undefined.
+          assertTrue(!!asyncAudioPage.shadowRoot);
+          const muteButton = asyncAudioPage.shadowRoot.querySelector(
+              '#audioInputGainMuteButton');
+          assertTrue(!!muteButton);
+          const outputMuteButton =
+              asyncAudioPage.shadowRoot.querySelector('#audioOutputMuteButton');
+          assertTrue(!!outputMuteButton);
+
+          // Now notify observers and verify that the page updates cleanly.
+          asyncCrosAudioConfig.notifyObservers();
+          await flushTasks();
+          assertTrue(isVisible(asyncAudioPage.shadowRoot.querySelector(
+              '#audioOutputSubsection')));
+
+          asyncAudioPage.remove();
+        });
+
     suite('voice isolation', () => {
       let voiceIsolationToggleSection: SettingsToggleButtonElement;
 
@@ -932,7 +963,7 @@ suite('<settings-device-page>', () => {
         assertTrue(voiceIsolationToggleSection.checked);
         assertEquals(
             /* expected_call_count */ 1,
-            recordVoiceIsolationEnabledChange['calls_'].length);
+            recordVoiceIsolationEnabledChange.calls.length);
 
         // Toggle off
         await voiceIsolationToggleSection.click();
@@ -940,7 +971,7 @@ suite('<settings-device-page>', () => {
         assertFalse(voiceIsolationToggleSection.checked);
         assertEquals(
             /* expected_call_count */ 2,
-            recordVoiceIsolationEnabledChange['calls_'].length);
+            recordVoiceIsolationEnabledChange.calls.length);
       });
 
       test('system properties change', async () => {
@@ -951,24 +982,21 @@ suite('<settings-device-page>', () => {
             crosAudioConfig, 'setVoiceIsolationEnabled');
 
         assertEquals(
-            /* expected_call_count */ 0,
-            setVoiceIsolationEnabled['calls_'].length);
+            /* expected_call_count */ 0, setVoiceIsolationEnabled.calls.length);
 
         crosAudioConfig.setAudioSystemProperties(
             effectNoiseCancellationAudioSystemProperties);
         await flushTasks();
 
         assertEquals(
-            /* expected_call_count */ 0,
-            setVoiceIsolationEnabled['calls_'].length);
+            /* expected_call_count */ 0, setVoiceIsolationEnabled.calls.length);
 
         crosAudioConfig.setAudioSystemProperties(
             effectNoneAudioSystemProperties);
         await flushTasks();
 
         assertEquals(
-            /* expected_call_count */ 0,
-            setVoiceIsolationEnabled['calls_'].length);
+            /* expected_call_count */ 0, setVoiceIsolationEnabled.calls.length);
       });
 
       test('effect mode - visibility', async () => {
@@ -1388,7 +1416,6 @@ suite('<settings-device-page>', () => {
     };
 
     setup(async () => {
-      setEnableSpatialAudioToggleEnabled(true);
       await init();
 
       // FakeAudioConfig must be set before audio subpage is loaded.
@@ -1511,7 +1538,7 @@ suite('<settings-device-page>', () => {
     setup(async () => {
       await init();
       const row = devicePage.shadowRoot!.querySelector<HTMLButtonElement>(
-          `#main #perDeviceKeyboardRow`);
+          '#main #perDeviceKeyboardRow');
       assertTrue(!!row);
       row.click();
       assertEquals(
@@ -1564,7 +1591,7 @@ suite('<settings-device-page>', () => {
 
     test('per-device mouse subpage visibility', () => {
       const row = devicePage.shadowRoot!.querySelector<HTMLButtonElement>(
-          `#main #perDeviceMouseRow`);
+          '#main #perDeviceMouseRow');
       assertTrue(!!row);
       row.click();
       assertEquals(routes.PER_DEVICE_MOUSE, Router.getInstance().currentRoute);
@@ -1589,7 +1616,7 @@ suite('<settings-device-page>', () => {
 
     test('per-device touchpad subpage visibility', () => {
       const row = devicePage.shadowRoot!.querySelector<HTMLButtonElement>(
-          `#main #perDeviceTouchpadRow`);
+          '#main #perDeviceTouchpadRow');
       assertTrue(!!row);
       row.click();
       assertEquals(
@@ -1615,7 +1642,7 @@ suite('<settings-device-page>', () => {
 
     test('per-device pointing stick subpage visibility', () => {
       const row = devicePage.shadowRoot!.querySelector<HTMLButtonElement>(
-          `#main #perDevicePointingStickRow`);
+          '#main #perDevicePointingStickRow');
       assertTrue(!!row);
       row.click();
       assertEquals(
@@ -1659,5 +1686,31 @@ suite('<settings-device-page>', () => {
     const printingSettingsCard =
         devicePage.shadowRoot!.querySelector('printing-settings-card');
     assertTrue(isVisible(printingSettingsCard));
+  });
+
+  suite('pointers subpage navigation', () => {
+    teardown(() => {
+      const provider = new FakeInputDeviceSettingsProvider();
+      provider.setFakeMice(fakeMice);
+      provider.setFakePointingSticks(fakePointingSticks);
+      provider.setFakeTouchpads(fakeTouchpads);
+      setInputDeviceSettingsProviderForTesting(provider);
+      Router.getInstance().resetRouteForTesting();
+    });
+
+    test(
+        'pointer subpage redirects to device route when pointers are empty',
+        async () => {
+          const provider = new FakeInputDeviceSettingsProvider();
+          provider.setFakeMice([]);
+          provider.setFakePointingSticks([]);
+          provider.setFakeTouchpads([]);
+          setInputDeviceSettingsProviderForTesting(provider);
+
+          Router.getInstance().navigateTo(routes.POINTERS);
+          await init();
+
+          assertEquals(routes.DEVICE, Router.getInstance().currentRoute);
+        });
   });
 });

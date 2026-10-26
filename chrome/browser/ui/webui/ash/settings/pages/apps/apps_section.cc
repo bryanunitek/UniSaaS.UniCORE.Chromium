@@ -49,8 +49,6 @@ using ::chromeos::settings::mojom::kAppParentalControlsSubpagePath;
 using ::chromeos::settings::mojom::kAppsSectionPath;
 using ::chromeos::settings::mojom::kArcVmUsbPreferencesSubpagePath;
 using ::chromeos::settings::mojom::kGooglePlayStoreSubpagePath;
-using ::chromeos::settings::mojom::kPluginVmSharedPathsSubpagePath;
-using ::chromeos::settings::mojom::kPluginVmUsbPreferencesSubpagePath;
 using ::chromeos::settings::mojom::Section;
 using ::chromeos::settings::mojom::Setting;
 using ::chromeos::settings::mojom::Subpage;
@@ -354,12 +352,23 @@ void AddAppManagementStrings(content::WebUIDataSource* html_source) {
        IDS_APP_MANAGEMENT_FILE_HANDLING_OVERFLOW_DIALOG_TITLE},
       {"fileHandlingSetDefaults",
        IDS_APP_MANAGEMENT_FILE_HANDLING_SET_DEFAULTS_LINK},
+      {"appManagementCheckForUpdates",
+       IDS_SETTINGS_ABOUT_PAGE_CHECK_FOR_UPDATES},
+      {"appManagementCheckingForUpdates", IDS_APP_MANAGEMENT_CHECKING},
+      {"appManagementApplyUpdate", IDS_APP_MANAGEMENT_APPLY_UPDATE},
+      {"appManagementAppIsUpToDate", IDS_APP_MANAGEMENT_APP_IS_UP_TO_DATE},
+      {"appManagementUpdateFoundDialogTitle",
+       IDS_APP_MANAGEMENT_UPDATE_FOUND_DIALOG_TITLE},
+      {"appManagementUpdateFoundDialogDescription",
+       IDS_APP_MANAGEMENT_UPDATE_FOUND_DIALOG_DESCRIPTION},
+      {"appManagementUpdateFoundWarningDialogDescription",
+       IDS_APP_MANAGEMENT_UPDATE_FOUND_WARNING_DIALOG_DESCRIPTION},
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
 }
 
 void AddGuestOsStrings(content::WebUIDataSource* html_source) {
-  // These strings are used for both Crostini and Plugin VM.
+  // These strings are shared by the supported guest environments.
   static constexpr webui::LocalizedString kLocalizedStrings[] = {
       {"guestOsSharedPaths", IDS_SETTINGS_GUEST_OS_SHARED_PATHS},
       {"guestOsSharedPathsListHeading",
@@ -626,6 +635,9 @@ void AppsSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
                              ash::external_urls::kIsolatedWebAppsLearnMoreUrl));
   html_source->AddString("isolatedWebAppsLearnMoreUrl",
                          ash::external_urls::kIsolatedWebAppsLearnMoreUrl);
+  html_source->AddBoolean(
+      "isIwaInlineUpdateEnabled",
+      base::FeatureList::IsEnabled(ash::features::kIsolatedWebAppInlineUpdate));
 
   html_source->AddBoolean("privacyHubLocationAccessControlEnabled",
                           ash::features::IsCrosPrivacyHubLocationEnabled());
@@ -726,18 +738,6 @@ void AppsSection::RegisterHierarchy(HierarchyGenerator* generator) const {
                                    mojom::Subpage::kAppDetails);
   generator->RegisterNestedSetting(mojom::Setting::kAppResizeLockOnOff,
                                    mojom::Subpage::kAppDetails);
-
-  generator->RegisterNestedSubpage(
-      IDS_SETTINGS_GUEST_OS_SHARED_PATHS, mojom::Subpage::kPluginVmSharedPaths,
-      mojom::Subpage::kAppManagement, mojom::SearchResultIcon::kAppsGrid,
-      mojom::SearchResultDefaultRank::kMedium,
-      mojom::kPluginVmSharedPathsSubpagePath);
-  generator->RegisterNestedSubpage(
-      IDS_SETTINGS_GUEST_OS_SHARED_USB_DEVICES_LABEL,
-      mojom::Subpage::kPluginVmUsbPreferences, mojom::Subpage::kAppManagement,
-      mojom::SearchResultIcon::kAppsGrid,
-      mojom::SearchResultDefaultRank::kMedium,
-      mojom::kPluginVmUsbPreferencesSubpagePath);
 
   // Google Play Store.
   generator->RegisterTopLevelSubpage(IDS_OS_SETTINGS_ANDROID_APPS_LABEL,

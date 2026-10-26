@@ -14,7 +14,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/window.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/compositor/layer_type.h"
 #include "ui/display/display.h"
 #include "ui/gfx/geometry/point.h"
@@ -111,7 +111,7 @@ TEST_P(ArcCurvePathUtilPixelTest, basic) {
   auto contents_view = std::make_unique<ArcCurveClippedView>(
       GetCornerLocation(), GetCornerRadius());
   contents_view->SetPaintToLayer(ui::LAYER_SOLID_COLOR);
-  contents_view->layer()->SetColor(SK_ColorBLUE);
+  contents_view->layer()->AsSolidColor()->SetColor(SkColors::kBlue);
   widget->SetContentsView(std::move(contents_view));
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/md_select.css.js';
+import 'chrome://resources/ash/common/cr_elements/md_select.css.js';
 import './print_preview_shared.css.js';
 import './settings_section.js';
 
@@ -42,8 +42,8 @@ export class PrintPreviewColorSettingsElement extends
     return ['onColorSettingChange_(settings.color.*)'];
   }
 
-  disabled: boolean;
-  private disabled_: boolean;
+  declare disabled: boolean;
+  declare private disabled_: boolean;
 
   private onColorSettingChange_() {
     this.selectedValue = this.getSettingValue('color') ? 'color' : 'bw';

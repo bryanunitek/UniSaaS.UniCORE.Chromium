@@ -106,7 +106,6 @@ source_set("nearby_sharing") {
     "//chrome/services/sharing/public/proto",
     "//chromeos/ash/components/feature_usage",
     "//chromeos/ash/components/nearby/common/connections_manager",
-    "//chromeos/ash/components/nearby/presence",
     "//chromeos/ash/services/nearby/public/cpp",
     "//chromeos/ash/services/nearby/public/mojom",
     "//chromeos/ash/services/nearby/public/mojom:nearby_share_settings",
@@ -141,8 +140,6 @@ source_set("impl") {
     "instantmessaging/send_message_express.cc",
     "instantmessaging/stream_parser.cc",
     "instantmessaging/token_fetcher.cc",
-    "mdns/nearby_connections_mdns_manager.cc",
-    "mdns/nearby_connections_mdns_manager.h",
     "metrics/attachment_metric_logger.cc",
     "metrics/discovery_metric_logger.cc",
     "metrics/metric_common.cc",
@@ -180,15 +177,7 @@ source_set("impl") {
     "wifi_network_configuration/wifi_network_configuration_handler.cc",
   ]
 
-  public_deps = [
-    ":nearby_sharing",
-    "//chrome/browser:browser_public_dependencies",
-  ]
-
-  # //chrome/browser/ash/nearby includes
-  # chrome/browser/nearby_sharing/mdns/nearby_connections_mdns_manager.h
-  # from :impl.
-  allow_circular_includes_from = [ "//chrome/browser/ash/nearby" ]
+  public_deps = [ ":nearby_sharing" ]
 
   deps = [
     "//ash/constants",
@@ -211,6 +200,7 @@ source_set("impl") {
     "//chrome/browser/nearby_sharing/logging:util",
     "//chrome/browser/nearby_sharing/proto:tachyon_proto",
     "//chrome/browser/signin",
+    "//chrome/browser/ui:settings_window_manager_chromeos",
     "//chrome/browser/ui/ash/holding_space",
     "//chrome/browser/ui/ash/session",
     "//chrome/browser/ui/webui/nearby_share",
@@ -252,6 +242,7 @@ source_set("impl") {
     "//ui/base/clipboard",
     "//ui/chromeos/styles:cros_tokens_color_mappings",
     "//ui/gfx",
+    "//ui/message_center",
     "//ui/message_center/public/cpp",
     "//ui/strings",
     "//ui/views",
@@ -298,10 +289,6 @@ source_set("test_support") {
 
 source_set("unit_tests") {
   testonly = true
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # remove this.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
   if (is_chromeos) {
     sources = [
       "bluetooth_advertising_interval_client_unittest.cc",
@@ -314,7 +301,6 @@ source_set("unit_tests") {
       "instantmessaging/receive_messages_express_unittest.cc",
       "instantmessaging/send_message_express_unittest.cc",
       "instantmessaging/stream_parser_unittest.cc",
-      "mdns/nearby_connections_mdns_manager_unittest.cc",
       "nearby_confirmation_manager_unittest.cc",
       "nearby_notification_manager_unittest.cc",
       "nearby_per_session_discovery_manager_unittest.cc",
@@ -354,7 +340,6 @@ source_set("unit_tests") {
       "//chrome/browser/nearby_sharing/contacts:test_support",
       "//chrome/browser/nearby_sharing/local_device_data:test_support",
       "//chrome/browser/nearby_sharing/proto:tachyon_proto",
-      "//chrome/browser/notifications",
       "//chrome/browser/ui/ash/holding_space",
       "//chrome/browser/ui/ash/holding_space:test_support",
       "//chrome/browser/ui/ash/session:test_support",
@@ -363,6 +348,7 @@ source_set("unit_tests") {
       "//chrome/services/sharing/nearby/decoder",
       "//chrome/services/sharing/public/cpp",
       "//chrome/test:test_support",
+      "//chrome/test/base:testing_browser_process",
       "//chromeos/ash/components/browser_context_helper",
       "//chromeos/ash/components/feature_usage",
       "//chromeos/ash/components/nearby/common/connections_manager",
@@ -410,6 +396,9 @@ source_set("unit_tests") {
       "//ui/gfx:gfx_skia",
       "//ui/gfx:test_support",
       "//ui/gfx/codec",
+      "//ui/message_center",
+      "//ui/message_center:test_support",
+      "//ui/message_center/public/cpp",
     ]
     if (is_internal_chrome_branded) {
       deps += [ "//chrome/browser/nearby_sharing/internal/icons:vector_icons" ]

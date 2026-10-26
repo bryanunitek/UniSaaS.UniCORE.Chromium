@@ -35,7 +35,6 @@ import org.json.JSONObject;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -43,13 +42,11 @@ import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType;
 import org.chromium.chrome.browser.ntp_customization.R;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase.PlatformType;
 
 import java.io.File;
 
 /** Tests for {@link NtpBackgroundDataUtils}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class NtpBackgroundDataUtilsUnitTest {
     private Context mContext;
 
@@ -78,7 +75,7 @@ public class NtpBackgroundDataUtilsUnitTest {
 
         // NtpBackgroundDataCustomizedColor case.
         JSONObject customColorJson = new JSONObject();
-        customColorJson.put(NtpBackgroundDataBase.PLATFORM_TYPE_KEY, PlatformType.ANDROID_LOCAL);
+        customColorJson.put(NtpBackgroundDataBase.PLATFORM_TYPE_KEY, PlatformType.ANDROID);
         customColorJson.put(
                 NtpBackgroundDataBase.BACKGROUND_TYPE_KEY, NtpBackgroundType.COLOR_FROM_HEX);
         customColorJson.put(

@@ -6,16 +6,22 @@
  * @fileoverview
  * `pref-toggle-button` is a toggle that controls a supplied preference.
  */
-import '//resources/cr_elements/cr_actionable_row_style.css.js';
 import '//resources/cr_elements/cr_shared_vars.css.js';
 import '//resources/cr_elements/cr_toggle/cr_toggle.js';
 import '/shared/settings/controls/cr_policy_pref_indicator.js';
+import '../cr_actionable_row_style.css.js';
 
+import {PrefKeyObserverMixin} from '/shared/settings/prefs2/pref_key_observer_mixin.js';
+import {PrefService} from '/shared/settings/prefs2/pref_service.js';
+import {OpenWindowProxyImpl} from 'chrome://resources/js/open_window_proxy.js';
+import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {getTemplate} from './pref_toggle_button.html.js';
 
-export class PrefToggleButtonElement extends PolymerElement {
+const PrefToggleButtonElementBase = PrefKeyObserverMixin(PolymerElement);
+
+export class PrefToggleButtonElement extends PrefToggleButtonElementBase {
   static get is() {
     return 'pref-toggle-button';
   }
@@ -26,6 +32,13 @@ export class PrefToggleButtonElement extends PolymerElement {
 
   static get properties() {
     return {
+      ariaLabel: {
+        type: String,
+        reflectToAttribute: false,  // Handled by #control.
+        observer: 'onAriaLabelSet_',
+        value: '',
+      },
+
       /** The main label. */
       label: {
         type: String,
@@ -34,6 +47,12 @@ export class PrefToggleButtonElement extends PolymerElement {
 
       /** Additional (optional) sub-label. */
       subLabel: {
+        type: String,
+        value: '',
+      },
+
+      /** Additional (optional) sub-label that has a link. */
+      subLabelWithLink: {
         type: String,
         value: '',
       },
@@ -66,8 +85,6 @@ export class PrefToggleButtonElement extends PolymerElement {
       },
 
       noExtensionIndicator: Boolean,
-
-      pref: Object,
     };
   }
 
@@ -78,13 +95,14 @@ export class PrefToggleButtonElement extends PolymerElement {
     ];
   }
 
+  declare ariaLabel: string;
   declare label: string;
   declare subLabel: string;
+  declare subLabelWithLink: string;
   declare checked: boolean;
   declare disabled: boolean;
   declare changeRequiresValidation: boolean;
   declare noExtensionIndicator: boolean;
-  declare pref: chrome.settingsPrivate.PrefObject;
 
   override ready() {
     super.ready();
@@ -112,6 +130,35 @@ export class PrefToggleButtonElement extends PolymerElement {
     this.updatePrefValue_();
   }
 
+  private onSubLabelTextWithLinkClick_(e: Event) {
+    const anchor = (e.target as HTMLElement).closest('a');
+    if (anchor) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (anchor.href) {
+        OpenWindowProxyImpl.getInstance().openUrl(anchor.href);
+      }
+    }
+  }
+
+  private hasSubLabel_(subLabel: string, subLabelWithLink: string): boolean {
+    return !!subLabel || !!subLabelWithLink;
+  }
+
+  private getSubLabelWithLinkContent_(subLabelWithLink: string): TrustedHTML {
+    return sanitizeInnerHtml(subLabelWithLink, {
+      attrs: [
+        'id',
+        'is',
+        'aria-description',
+        'aria-hidden',
+        'aria-label',
+        'aria-labelledby',
+        'tabindex',
+      ],
+    });
+  }
+
   private onToggleClick_() {
     if (this.changeRequiresValidation) {
       this.checked = !this.checked;
@@ -137,14 +184,29 @@ export class PrefToggleButtonElement extends PolymerElement {
 
   /** Update the pref to the current |checked| value. */
   private updatePrefValue_() {
-    this.set('pref.value', this.checked);
+    PrefService.getInstance().setPrefValue(this.prefKey, this.checked);
   }
 
-  private getAriaLabel_(): string {
-    if (!this.subLabel) {
-      return this.label;
+  /**
+   * Removes the aria-label attribute if it's added by $i18n{...}.
+   */
+  private onAriaLabelSet_() {
+    if (this.hasAttribute('aria-label')) {
+      const ariaLabel = this.ariaLabel;
+      this.removeAttribute('aria-label');
+      this.ariaLabel = ariaLabel;
     }
-    return [this.label, this.subLabel].join('. ');
+  }
+
+  private getAriaLabel_(label: string, subLabel: string, ariaLabel: string):
+      string {
+    if (ariaLabel) {
+      return ariaLabel;
+    }
+    if (!subLabel) {
+      return label;
+    }
+    return [label, subLabel].join('. ');
   }
 
   private isPrefEnforced_(): boolean {

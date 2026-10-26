@@ -7,11 +7,11 @@
 <translation id="1046742265332833834">Motyw niebieski</translation>
 <translation id="1070329623210597193">Pliki, które ta witryna może wyświetlać lub edytować</translation>
 <translation id="1074758928858737435">Możesz poprosić o wyświetlenie witryn w wersji na komputer</translation>
+<translation id="1089791933924803646">Otrzymuj sugestie Chrome w innych aplikacjach</translation>
 <translation id="1109482864356262001">Nie będą działać funkcje, które potrzebują czujników ruchu lub światła</translation>
 <translation id="1126523729897810826">Wykonaj te sugerowane działania, aby w pełni wykorzystać możliwości Chrome</translation>
 <translation id="113098737392899175">Gdy klawiatura jest podłączona, poruszaj się po stronach przy użyciu kursora tekstowego</translation>
 <translation id="1148624853678088576">Wszystko gotowe</translation>
-<translation id="1149644372535087155">Zapisuj hasła w Chrome</translation>
 <translation id="1178015372320901893">Plansza dolna Moje skróty</translation>
 <translation id="1178581264944972037">Wstrzymaj</translation>
 <translation id="1181037720776840403">Usuń</translation>
@@ -31,7 +31,6 @@
 <translation id="1321110954513621549">Dozwolona • Przybliżona</translation>
 <translation id="1323433172918577554">Pokaż więcej</translation>
 <translation id="1333965224356556482">Nie zezwalaj witrynom na wyświetlanie lokalizacji</translation>
-<translation id="1343356790768851700">Witryna określa Twoje zainteresowania, a potem sugeruje reklamy innym witrynom</translation>
 <translation id="1369915414381695676">Strona <ph name="SITE_NAME" /> została dodana</translation>
 <translation id="1371239764779356792">Zezwól witrynie na zapisywanie danych na Twoim urządzeniu</translation>
 <translation id="1383876407941801731">Szukaj</translation>
@@ -47,12 +46,14 @@
 <translation id="1464044141348608623">Nie zezwalaj witrynom na sprawdzanie, kiedy używasz urządzenia</translation>
 <translation id="146867109637325312">{COUNT,plural, =1{<ph name="SITE_COUNT" /> witryna}few{<ph name="SITE_COUNT" /> witryny}many{<ph name="SITE_COUNT" /> witryn}other{<ph name="SITE_COUNT" /> witryny}}</translation>
 <translation id="1476700086976862423">Kolor motywu: sepia</translation>
+<translation id="1497214680865404175">Obraz przesłany przez użytkownika</translation>
 <translation id="1500473259453106018">Ukryj kartę Obniżki cen na kartach</translation>
 <translation id="1508931164824684991">Strony mogą używać JavaScriptu</translation>
 <translation id="1510341833810331442">Witryny nie mogą zapisywać danych na Twoim urządzeniu</translation>
 <translation id="1532175480576580256">Plansza dolna Moje skróty otwarta na całą wysokość</translation>
 <translation id="1538031354170655462">Strony zwykle używają komunikacji Near Field Communication (NFC) do obsługi tagów lub urządzeń w pobliżu, na przykład do skanowania identyfikatorów lub dokonywania płatności zbliżeniowych</translation>
 <translation id="1547123415014299762">Pliki cookie innych firm są dozwolone</translation>
+<translation id="1565353932454306569"><ph name="ORIGIN" /> – aby zamknąć pełny ekran, przeciągnij od krawędzi ekranu.</translation>
 <translation id="1569054338208717605">Witryny będą działać szybciej dzięki mechanizmowi V8 w przeglądarce Chrome, ale będzie ona trochę mniej odporna na ataki</translation>
 <translation id="1593426485665524382">Nowe działania są dostępne u góry ekranu</translation>
 <translation id="1594521731409209842">Aby zmienić rozmiar zdjęcia, ściągnij ekran palcami</translation>
@@ -84,6 +85,7 @@
 <translation id="1818308510395330587">Aby w aplikacji <ph name="APP_NAME" /> można było korzystać z rzeczywistości rozszerzonej, włącz też aparat w <ph name="BEGIN_LINK" />ustawieniach Androida<ph name="END_LINK" />.</translation>
 <translation id="1822318649925991542">Zmień położenie, aby dostosować przeglądanie do własnych potrzeb</translation>
 <translation id="1848033246551405023">Czcionka Sans Serif</translation>
+<translation id="1861244985839668297">Gdy ta opcja jest włączona, strony internetowe mogą prosić o zgodę na korzystanie z urządzeń HID. Gdy jest wyłączona, strony nie mogą korzystać z urządzeń HID.</translation>
 <translation id="1861262398884155592">Ten folder jest pusty</translation>
 <translation id="1881806992065048905">Plansza dolna wyglądu strony nowej karty</translation>
 <translation id="1887786770086287077">Dostęp do lokalizacji jest wyłączony na tym urządzeniu. Włącz go w <ph name="BEGIN_LINK" />Ustawieniach Androida<ph name="END_LINK" />.</translation>
@@ -136,6 +138,7 @@
 <translation id="2315043854645842844">Wybieranie certyfikatu klienta nie jest obsługiwane przez ten system operacyjny.</translation>
 <translation id="2347601491101454548">Plansza dolna Moje skróty otwarta do połowy wysokości</translation>
 <translation id="2359808026110333948">Dalej</translation>
+<translation id="2364212713469273030"><ph name="ORIGIN" /> – aby zamknąć pełny ekran, przeciągnij od góry i przesuń palcem od lewej lub prawej krawędzi.</translation>
 <translation id="2379925928934107488">Stosuj ciemny motyw witryn w przypadkach, w których stosuje go Chrome, tam, gdzie to możliwe</translation>
 <translation id="2390272837142897736">Zwiększ powiększenie</translation>
 <translation id="2397689164757137845">Dozwolona • Dokładna</translation>
@@ -178,9 +181,7 @@
 <translation id="2710883118091822664">Zaloguj się, aby móc łatwo kontynuować zadania na wszystkich swoich urządzeniach</translation>
 <translation id="2713106313042589954">Wyłącz kamerę</translation>
 <translation id="2717722538473713889">Adresy e-mail</translation>
-<translation id="2726059656860238749">Uruchamiaj Chrome z zaznaczonym paskiem adresu, aby skrócić czas uruchamiania na mało wydajnych urządzeniach.</translation>
 <translation id="2750481671343847896">Witryny mogą wyświetlać prośby o zalogowanie się pochodzące od usług tożsamości.</translation>
-<translation id="2787357173144933081">Szybki start omniboksa</translation>
 <translation id="2789132527330338807">Strony mogą prosić o utworzenie mapy 3D otoczenia lub śledzenie pozycji kamery</translation>
 <translation id="2790501146643349491">Gdy ta opcja jest włączona, ostatnio zamknięte strony internetowe mogą dokończyć wysyłanie i odbieranie danych. Gdy jest wyłączona, nie mogą tego zrobić.</translation>
 <translation id="2795716239552913152">Strony zwykle używają lokalizacji w celu dobierania funkcji lub informacji, na przykład wiadomości lokalnych lub sklepów w pobliżu</translation>
@@ -192,6 +193,7 @@
 <translation id="2850913818900871965">Żądaj wersji na urządzenia mobilne</translation>
 <translation id="2870560284913253234">Witryna</translation>
 <translation id="2874939134665556319">Poprzedni utwór</translation>
+<translation id="2890412325133442491">Ustawienia domyślne Chrome</translation>
 <translation id="2891975107962658722">Nie zezwalaj witrynie na zapisywanie danych na Twoim urządzeniu</translation>
 <translation id="2903493209154104877">Adresy</translation>
 <translation id="2903764741244499151">Witryny mogą automatycznie włączać obraz w obrazie. Dzięki temu możesz kontynuować oglądanie filmu, a jednocześnie zyskać miejsce na ekranie na inne zadania.</translation>
@@ -224,7 +226,6 @@
 <translation id="3167868116600277716">Karty Discover</translation>
 <translation id="3198916472715691905"><ph name="STORAGE_AMOUNT" /> zapisanych danych</translation>
 <translation id="3199078925536734975">Dozwolona jednorazowo • Przybliżona</translation>
-<translation id="3208584281581115441">Sprawdź teraz</translation>
 <translation id="321187648315454507">Aby zezwolić aplikacji <ph name="APP_NAME" /> na wysyłanie do Ciebie powiadomień, musisz je też włączyć w <ph name="BEGIN_LINK" />ustawieniach Androida<ph name="END_LINK" />.</translation>
 <translation id="3223425961342298674">Lokalizacja nie jest dozwolona</translation>
 <translation id="3227137524299004712">Mikrofon</translation>
@@ -280,11 +281,9 @@
 <translation id="3779154269823594982">Zmień hasła</translation>
 <translation id="3797520601150691162">Nie stosuj ciemnego motywu konkretnej witryny</translation>
 <translation id="3803367742635802571">Strony, które odwiedzasz, mogą przestać działać zgodnie z założeniami ich twórców</translation>
-<translation id="3816118180265633665">Kolory Chrome</translation>
 <translation id="381841723434055211">Numery telefonów</translation>
 <translation id="3823453485268218808">Czcionka o stałej szerokości znaków</translation>
 <translation id="3826050100957962900">Logowanie przez inną usługę</translation>
-<translation id="3831065134033923230">Sprawdzanie zapisanych haseł</translation>
 <translation id="3835233591525155343">Korzystanie z urządzenia</translation>
 <translation id="3843916486309149084">Chrome ponownie zablokuje pliki cookie dzisiaj</translation>
 <translation id="385051799172605136">Wstecz</translation>
@@ -292,8 +291,6 @@
 <translation id="3870711497942672548">Dostosuj Chrome za pomocą spersonalizowanych kolorów i obrazów na stronie głównej</translation>
 <translation id="389521680295183045">Witryny mogą prosić o pozwolenie na sprawdzanie, kiedy używasz urządzenia</translation>
 <translation id="3895926599014793903">Wymuś powiększenie</translation>
-<translation id="3903738175795615004">Aby zamknąć pełny ekran, przeciągnij od góry lub naciśnij klawisz Esc.</translation>
-<translation id="3905475044299942653">Zatrzymaj wiele powiadomień</translation>
 <translation id="3922092564198021702">Na telefonie otwórz Ustawienia.</translation>
 <translation id="3924858949939391676">Pokaż linki po włączeniu Trybu czytania</translation>
 <translation id="3933121352599513978">Zwiń niechciane żądania (zalecane)</translation>
@@ -353,7 +350,6 @@
 <translation id="4479647676395637221">Pytaj, zanim zezwolisz stronom na korzystanie z aparatu (zalecane)</translation>
 <translation id="4505788138578415521">URL pokazany w całości</translation>
 <translation id="4522570452068850558">Szczegóły</translation>
-<translation id="4523472416386354622">Zaloguj się, aby rozpocząć</translation>
 <translation id="4529207923544043455">Plansza dolna wyświetlająca ukończone i nieukończone zadania z listy konfiguracji</translation>
 <translation id="4534723447064627427">Aby zezwolić aplikacji <ph name="APP_NAME" /> na dostęp do mikrofonu, musisz go też włączyć w <ph name="BEGIN_LINK" />ustawieniach Androida<ph name="END_LINK" />.</translation>
 <translation id="4545694195887112015">Plansza konfiguracji została zamknięta</translation>
@@ -366,13 +362,13 @@
 <translation id="4645575059429386691">Zarządzany przez Twojego rodzica</translation>
 <translation id="4651224148644053314">Więcej kolorów i opcji</translation>
 <translation id="4652266463001779298">Niedozwolone</translation>
-<translation id="4655846733459137112">Kliknij Tak, aby łatwo użyć tego hasła przy następnym logowaniu</translation>
 <translation id="4663373278480897665">Zezwolono na dostęp do kamery</translation>
 <translation id="4670064810192446073">Rzeczywistość wirtualna</translation>
 <translation id="4672315773691449562">Kliknij Przeglądarka, a potem Chrome</translation>
 <translation id="4676059169848868271">Aby umożliwić <ph name="APP_NAME" /> śledzenie rąk, włącz tę opcję w <ph name="BEGIN_LINK" />ustawieniach systemu<ph name="END_LINK" />.</translation>
 <translation id="4688045258817337666">Zarządzanie kartami</translation>
 <translation id="4722332387043141878">Strony zwykle używają dostępnych na urządzeniu czujników ruchu i światła do obsługi funkcji takich jak rzeczywistość wirtualna czy śledzenie aktywności</translation>
+<translation id="4748783296226936791">Witryny zwykle łączą się z urządzeniami HID w celu obsługi funkcji, które korzystają z niestandardowych klawiatur, kontrolerów gier i innych urządzeń</translation>
 <translation id="4755971844837804407">Gdy ta opcja jest włączona, strony internetowe mogą wyświetlać dowolne reklamy. Gdy jest wyłączona, strony nie mogą wyświetlać reklam uciążliwych ani wprowadzających w błąd.</translation>
 <translation id="4779083564647765204">Powiększ</translation>
 <translation id="4807122856660838973">Włącz Bezpieczne przeglądanie</translation>
@@ -388,7 +384,6 @@
 <translation id="4936863036653376783">Grupy znajdziesz w sekcji grup kart na wszystkich swoich urządzeniach</translation>
 <translation id="4945443401464700059">Witryna <ph name="SITE" /> nie może używać Twoich danych na</translation>
 <translation id="4953688446973710931">Gdy ta opcja jest włączona, strony internetowe mogą prosić o zgodę na automatyczne pobieranie kilku plików. Gdy jest wyłączona, strony nie mogą automatycznie pobierać kilku plików.</translation>
-<translation id="4962975101802056554">Anuluj wszystkie uprawnienia urządzenia</translation>
 <translation id="4972737347717125191">Strony mogą prosić o zgodę na używanie urządzeń i danych rzeczywistości wirtualnej</translation>
 <translation id="4973805849704516244">Plansza dolna Kolory Chrome</translation>
 <translation id="497421865427891073">Dalej</translation>
@@ -412,7 +407,6 @@
 <translation id="512938610812707830">Plansza dolna kolekcji motywów wyglądu strony Nowa karta, otwarta na całą wysokość</translation>
 <translation id="5137460097045297858">Plansza dolna kart Discover otwarta do połowy wysokości</translation>
 <translation id="5139253256813381453">{PRICE_DROP_COUNT,plural, =1{Obniżka ceny na otwartych kartach}few{Obniżki cen na otwartych kartach}many{Obniżki cen na otwartych kartach}other{Obniżki cen na otwartych kartach}}</translation>
-<translation id="5150048675001754041">Szybko i łatwo loguj się w witrynach oraz aplikacjach</translation>
 <translation id="5186036860380548585">Opcja dostępna u góry ekranu</translation>
 <translation id="5197729504361054390">Wybrane kontakty zostaną udostępnione witrynie <ph name="BEGIN_BOLD" /><ph name="SITE" /><ph name="END_BOLD" />.</translation>
 <translation id="5198930230016462977">Plansza dolna Dostosuj stronę nowej karty zamknięta</translation>
@@ -422,14 +416,12 @@
 <translation id="5239623327352565343">Lokalizacja jest dozwolona</translation>
 <translation id="5246825184569358663">Spowoduje to usunięcie wszystkich danych lokalnych (w tym plików cookie) oraz zresetowanie wszystkich uprawnień witryny <ph name="DOMAIN" /> i jej wszystkich podstron</translation>
 <translation id="5264323282659631142">Usuń: „<ph name="CHIP_LABEL" />”</translation>
-<translation id="528192093759286357">Przeciągnij od góry i kliknij przycisk Wstecz, by wyjść z trybu pełnoekranowego.</translation>
 <translation id="5286194356314741248">Skanowanie</translation>
 <translation id="5300589172476337783">Pokaż</translation>
 <translation id="5301954838959518834">OK</translation>
 <translation id="5317780077021120954">Zapisz</translation>
 <translation id="5335288049665977812">Zezwalaj na wykonywanie kodu JavaScript w witrynach (zalecane)</translation>
 <translation id="534295439873310000">Urządzenia z funkcją NFC</translation>
-<translation id="5344522958567249764">Zarządzaj prywatnością w reklamach</translation>
 <translation id="5373874281522292782">Twoje grupy kart zostały zapisane</translation>
 <translation id="5394307150471348411">{DETAIL_COUNT,plural, =1{(i jeszcze 1)}few{(i jeszcze #)}many{(i jeszcze #)}other{(i jeszcze #)}}</translation>
 <translation id="5403592356182871684">Nazwy</translation>
@@ -453,11 +445,13 @@
 <translation id="5668404140385795438">Zignoruj żądanie strony, gdy chce zapobiec powiększeniu widoku</translation>
 <translation id="5668843533782548925">Strony są wolniejsze, ale bezpieczniejsze</translation>
 <translation id="5677928146339483299">Zablokowane</translation>
+<translation id="5679089750838794164">Chrome może teraz wyświetlać sugestie w innych aplikacjach na podstawie Twoich danych przeglądania, takich jak ostatnia historia przeglądania. Dane te są bezpiecznie przetwarzane na Twoim urządzeniu. Tę funkcję możesz w każdej chwili wyłączyć w ustawieniach Chrome.</translation>
 <translation id="5689516760719285838">Lokalizacja</translation>
 <translation id="5690795753582697420">Kamera jest wyłączona w ustawieniach Androida</translation>
 <translation id="5700761515355162635">Pliki cookie innych firm są dozwolone</translation>
 <translation id="5706552988683188916">Spowoduje to usunięcie plików cookie i innych danych witryny <ph name="WEBSITE" /></translation>
 <translation id="571222594670061844">Witryny mogą wyświetlać prośby o zalogowanie się pochodzące od usług tożsamości</translation>
+<translation id="5719854774000914513">Witryny mogą prosić o zgodę na połączenie z urządzeniami HID</translation>
 <translation id="5740126560802162366">Witryny mogą zapisywać dane na Twoim urządzeniu</translation>
 <translation id="5743425052258407233">Zyskaj dostęp do swojej historii na wszystkich urządzeniach, aby móc łatwo wznawiać przeglądanie od ostatniego miejsca</translation>
 <translation id="5749158352074143502">Kontynuuj na tej karcie</translation>
@@ -469,7 +463,6 @@
 <translation id="5804241973901381774">Uprawnienia</translation>
 <translation id="5817042798620209981">Informacje o witrynie, okno</translation>
 <translation id="5822675474983796325">Plansza dolna Dostosuj stronę nowej karty otwarta na całą wysokość</translation>
-<translation id="5826403277762134844">Plansza dolna z instrukcjami dotyczącymi zapisywania haseł w Chrome</translation>
 <translation id="5833899990800318936">Nie zezwalaj witrynom na używanie JavaScriptu</translation>
 <translation id="583673505367439042">Strony mogą prosić o zgodę na edytowanie plików i folderów na urządzeniu</translation>
 <translation id="5844448279347999754">Gdy ta opcja jest włączona, strony internetowe mogą prosić o dostęp do tekstu i obrazów zapisanych w schowku. Gdy jest wyłączona, strony nie mają dostępu do tekstu ani obrazów zapisanych w schowku.</translation>
@@ -506,7 +499,7 @@
 <translation id="6085954183010297841">Usunąć uprawnienia do edycji pliku? <ph name="FILE" /></translation>
 <translation id="6104860901391833523">Gdy ta opcja jest włączona, strony internetowe mogą automatycznie włączać obraz w obrazie. Gdy jest wyłączona, strony nie mogą automatycznie włączać obrazu w obrazie.</translation>
 <translation id="6120483543004435978">Gdy ta opcja jest włączona, strony internetowe mogą prosić o pozwolenie na sprawdzanie, kiedy używasz urządzenia. Gdy jest wyłączona, strony nie mogą się dowiedzieć, kiedy używasz urządzenia.</translation>
-<translation id="6132075343662013154">Chrome zaproponuje zapisanie hasła</translation>
+<translation id="612871598708395517">Ukryj opcję „Otrzymuj sugestie Chrome w innych aplikacjach”</translation>
 <translation id="615886654739818377">Nie zezwalaj stronom na zarządzanie oknami na wszystkich wyświetlaczach</translation>
 <translation id="6165508094623778733">Dowiedz się więcej</translation>
 <translation id="6171020522141473435">Gdy ta opcja jest włączona, strony internetowe mogą prosić o zgodę na używanie urządzeń Bluetooth. Gdy jest wyłączona, strony nie mogą używać urządzeń Bluetooth.</translation>
@@ -514,7 +507,6 @@
 <translation id="6181444274883918285">Dodaj witrynę do wyjątków</translation>
 <translation id="6194967801833346599">{DAYS,plural, =1{Chrome ponownie zablokuje pliki cookie jutro}few{Do ponownego zablokowania plików cookie pozostały # dni}many{Do ponownego zablokowania plików cookie pozostało # dni}other{Do ponownego zablokowania plików cookie pozostało # dnia}}</translation>
 <translation id="6196640612572343990">Blokuj pliki cookie innych firm</translation>
-<translation id="6205314730813004066">Prywatność w reklamach</translation>
 <translation id="6207207788774442484">Usuwanie danych i resetowanie uprawnień</translation>
 <translation id="6211409961905616543">Strony mogą używać czujników ruchu i światła</translation>
 <translation id="6218508144653756827">Motyw fuksjowy</translation>
@@ -530,10 +522,10 @@
 <translation id="6398765197997659313">Zamknij pełny ekran</translation>
 <translation id="640163077447496506">Wygasa dzisiaj</translation>
 <translation id="6405650995156823521"><ph name="FIRST_PART" /> • <ph name="SECOND_PART" /></translation>
-<translation id="6413980879783180524">Kolekcje motywów</translation>
 <translation id="6439114592976064011">Nie zezwalaj stronom na korzystanie z urządzenia ani danych rzeczywistości wirtualnej</translation>
 <translation id="6447842834002726250">Pliki cookie</translation>
 <translation id="6452138246455930388">Obniżka ceny na otwartej karcie. Poprzednio: <ph name="OLD_PRICE" />, teraz: <ph name="NEW_PRICE" />, <ph name="PRODUCT_NAME" />, <ph name="DOMAIN_NAME" /></translation>
+<translation id="6495608040096939405">Anuluj uprawnienia urządzenia dla: <ph name="NAME" /></translation>
 <translation id="6500423977866688905">Jeśli okno jest wąskie, poproś o wersję na urządzenia mobilne</translation>
 <translation id="6527303717912515753">Udostępnij</translation>
 <translation id="6530703012083415527">Gdy ta opcja jest włączona, strony internetowe mogą używać wyskakujących okienek i przekierowań. Gdy jest wyłączona, nie mają tej możliwości.</translation>
@@ -579,20 +571,18 @@
 <translation id="6950072572526089586">Aby strona, na którą wchodzisz, działała zgodnie z oczekiwaniami – na przykład nie wylogowywała Cię lub pokazywała produkty w koszyku na zakupy – może ona zapisywać informacje o tym, co robisz. Strony często zapisują te informacje tymczasowo na Twoim urządzeniu.</translation>
 <translation id="6964291282260073066">Opcja „WebGPU” jest wyłączona.</translation>
 <translation id="6965382102122355670">OK</translation>
+<translation id="6972629891077993081">Urządzenia HID</translation>
 <translation id="6980507581230208647">Motyw różowy</translation>
 <translation id="6980861169612950611">Usunąć dane witryny? <ph name="SITE_NAME" /></translation>
 <translation id="6981982820502123353">Ułatwienia dostępu</translation>
 <translation id="6991142177939282156">Dozwolona • Używana jest przybliżona lokalizacja</translation>
-<translation id="6992014788289743568">Zwiększ bezpieczeństwo i ochronę danych przez sprawdzanie haseł</translation>
 <translation id="6992289844737586249">Pytaj, zanim zezwolisz stronom na korzystanie z mikrofonu (zalecane)</translation>
 <translation id="7000754031042624318">Wyłączone w ustawieniach Androida</translation>
-<translation id="702275896380648118">Witryna określa Twoje zainteresowania, a potem sugeruje reklamy innym witrynom. Witryna wykorzystuje też gromadzone przez Chrome informacje o interesujących Cię tematach, aby wyświetlać trafniejsze reklamy.</translation>
 <translation id="7036823721811529709">Słuchaj w tle</translation>
 <translation id="7044081119134178347">Przyznano jednorazowy dostęp do aparatu</translation>
 <translation id="7053983685419859001">Blokuj</translation>
 <translation id="7055552182600664515">W przypadku odtwarzania treści chronionych prawem autorskim może być wymagane, aby strony korzystały z usługi ochrony treści. <ph name="BEGIN_LINK" />Więcej informacji<ph name="END_LINK" /></translation>
 <translation id="7066151586745993502">{NUM_SELECTED,plural, =1{Wybrano 1}few{Wybrano #}many{Wybrano #}other{Wybrano #}}</translation>
-<translation id="708014373017851679">Aplikacja „<ph name="APP_NAME" />” jest nieaktualna. Zaktualizuj ją.</translation>
 <translation id="7084115944294706056">Wybierz pozycję paska adresu</translation>
 <translation id="7087918508125750058">Wybrano <ph name="ITEM_COUNT" />. Opcje dostępne na górze ekranu</translation>
 <translation id="7141896414559753902">Blokuj wyskakujące okienka i przekierowania na stronach (zalecane)</translation>
@@ -601,6 +591,7 @@
 <translation id="7188508872042490670">Dane witryn na urządzeniu</translation>
 <translation id="7201549776650881587">Spowoduje to usunięcie wszystkich danych i plików cookie zapisanych przez strony internetowe w grupie <ph name="ORIGIN" /> lub jej aplikację na ekranie głównym</translation>
 <translation id="7219254577985949841">Usunąć dane witryny?</translation>
+<translation id="7225256190577194089">Anuluj wszystkie uprawnienia urządzenia <ph name="DEVICE_NAME" /></translation>
 <translation id="723171743924126238">Wybierz zdjęcia</translation>
 <translation id="7243246278722455312">Plansza dolna Dostosuj stronę nowej karty</translation>
 <translation id="7243308994586599757">Opcje dostępne u dołu ekranu</translation>
@@ -625,6 +616,7 @@ Ochrona zaawansowana kontroluje te ustawienia Chrome:</translation>
 <translation id="7423098979219808738">Najpierw zapytaj</translation>
 <translation id="7423538860840206698">Zablokowano odczytywanie schowka</translation>
 <translation id="7425915948813553151">Ciemny motyw witryn</translation>
+<translation id="7429767477925996803">Kolory Chrome</translation>
 <translation id="746412105358554870">Optymalizacja i zabezpieczenia JavaScriptu</translation>
 <translation id="7478658909253570368">Nie zezwalaj witrynom na łączenie się z portami szeregowymi</translation>
 <translation id="7488573225650545859">Ukrywaj karty Widok na liście aplikacji</translation>
@@ -651,7 +643,6 @@ Ochrona zaawansowana kontroluje te ustawienia Chrome:</translation>
 <translation id="775043444390799886">Unieważnij uprawnienia</translation>
 <translation id="7758789811447313947">Motyw fioletowy</translation>
 <translation id="7759147511335618829">Urządzenia MIDI: sterowanie/przeprogramowywanie</translation>
-<translation id="7771089277295008211">Plansza dolna z instrukcjami dotyczącymi zapisywania haseł została zamknięta</translation>
 <translation id="7781829728241885113">Wczoraj</translation>
 <translation id="7791543448312431591">Dodaj</translation>
 <translation id="780301667611848630">Nie, dziękuję</translation>
@@ -668,7 +659,6 @@ Ochrona zaawansowana kontroluje te ustawienia Chrome:</translation>
 <translation id="7940722705963108451">Przypomnij mi</translation>
 <translation id="7948081750384205628">Dowiedz się więcej o ustawieniu <ph name="SETTING_TITLE" /></translation>
 <translation id="7952708427581814389">Strony mogą prosić o dostęp do tekstu i obrazów w schowku</translation>
-<translation id="7958779728312669715">Plansza dolna z instrukcjami dotyczącymi zapisywania haseł została w pełni otwarta</translation>
 <translation id="798299424881500862">Motyw pomarańczowy</translation>
 <translation id="7986741934819883144">Wybierz kontakt</translation>
 <translation id="7990211076305263060">Gdy ta opcja jest włączona, strony internetowe mogą prosić o dostęp do mikrofonu. Gdy jest wyłączona, strony nie mogą go używać.</translation>
@@ -676,7 +666,6 @@ Ochrona zaawansowana kontroluje te ustawienia Chrome:</translation>
 <translation id="802154636333426148">Nie udało się pobrać</translation>
 <translation id="8033047164036749181">Zasubskrybuj powiadomienia z tej witryny</translation>
 <translation id="8051193500142930381">Nie będą działać funkcje, które potrzebują kamery</translation>
-<translation id="8056330801132235235">Wartość domyślna Chrome</translation>
 <translation id="8067883171444229417">Odtwórz film</translation>
 <translation id="8068648041423924542">Nie można wybrać certyfikatu.</translation>
 <translation id="8077120325605624147">Każda witryna, którą odwiedzasz, może wyświetlać Ci dowolne reklamy</translation>
@@ -715,7 +704,6 @@ Ochrona zaawansowana kontroluje te ustawienia Chrome:</translation>
 <translation id="8428213095426709021">Ustawienia</translation>
 <translation id="8441146129660941386">Przewiń do tyłu</translation>
 <translation id="8444433999583714703">Aby zezwolić aplikacji <ph name="APP_NAME" /> na dostęp do lokalizacji, musisz ją też włączyć w <ph name="BEGIN_LINK" />ustawieniach Androida<ph name="END_LINK" />.</translation>
-<translation id="8447861592752582886">Cofnij zgodę na dostęp do urządzenia</translation>
 <translation id="8463843545738141778">To ustawienie jest wyłączone, ponieważ w ustawieniach Androida włączono Ochronę zaawansowaną.</translation>
 <translation id="8467359479529706065">Plansza dolna wyglądu strony nowej karty otwarta do połowy wysokości</translation>
 <translation id="8471525937465764768">Strony zwykle łączą się z urządzeniami USB na przykład w celu drukowania dokumentów lub zapisywania plików na urządzeniu pamięci masowej</translation>
@@ -730,7 +718,6 @@ Ochrona zaawansowana kontroluje te ustawienia Chrome:</translation>
 <translation id="8514955299594277296">Nie zezwalaj witrynom na zapisywanie danych na urządzeniu (niezalecane)</translation>
 <translation id="851751545965956758">Nie zezwalaj stronom na łączenie się z urządzeniami</translation>
 <translation id="8525306231823319788">Pełny ekran</translation>
-<translation id="8541410041357371550">Witryna wykorzystuje gromadzone przez Chrome informacje o interesujących Cię tematach, aby wyświetlać trafniejsze reklamy.</translation>
 <translation id="854876774113449365">Witryny, które odwiedzasz, mogą zawierać umieszczone treści z innych witryn, np. obrazy, reklamy i tekst. Te inne witryny mogą prosić o zgodę na korzystanie z informacji o Tobie zapisanych przez nie podczas przeglądania tych witryn. <ph name="BEGIN_LINK" />Więcej informacji o ustawieniu „Umieszczona treść”<ph name="END_LINK" /></translation>
 <translation id="8549127125482561383">Jak wyświetlać żądania</translation>
 <translation id="8558480467877843976">Teraz możesz używać Chrome za każdym razem, gdy przeglądasz lub klikasz linki w wiadomościach, dokumentach i innych aplikacjach.</translation>
@@ -738,6 +725,7 @@ Ochrona zaawansowana kontroluje te ustawienia Chrome:</translation>
 <translation id="8593422116412089302">Gdy ta opcja jest włączona, strony internetowe mogą prosić o zgodę na wykorzystanie zapisanych informacji o Tobie. Gdy jest wyłączona, nie mogą o to prosić.</translation>
 <translation id="8609465669617005112">W górę</translation>
 <translation id="8617611086246832542">Gdy ta opcja jest włączona, strony internetowe są wyświetlane w wersji na komputery. Gdy jest wyłączona, strony są wyświetlane w wersji na urządzenia mobilne.</translation>
+<translation id="8625916342247441948">Nie zezwalaj witrynom na łączenie się z urządzeniami HID</translation>
 <translation id="8670078035093027626">Plansza dolna przeglądarki domyślnej otwarta na całą wysokość</translation>
 <translation id="8676316391139423634">Gdy ta opcja jest włączona, witryny mogą prosić o zgodę na śledzenie Twoich rąk. Gdy jest wyłączona, nie mogą śledzić Twoich rąk.</translation>
 <translation id="8676374126336081632">Wyczyść wpisany tekst</translation>
@@ -764,7 +752,6 @@ Ochrona zaawansowana kontroluje te ustawienia Chrome:</translation>
 <translation id="8889294078294184559">Witryny, które przeglądasz, mogą sprawdzać te informacje w Chrome i uzyskiwać potwierdzenie z wcześniej odwiedzonej witryny, że prawdopodobnie jesteś prawdziwą osobą.</translation>
 <translation id="8899807382908246773">Uciążliwe reklamy</translation>
 <translation id="8903921497873541725">Powiększ</translation>
-<translation id="8919911527569629802">Zaloguj się na dowolnej stronie</translation>
 <translation id="8921772741368021346"><ph name="POSITION" />/<ph name="DURATION" /></translation>
 <translation id="8926389886865778422">Nie pytaj ponownie</translation>
 <translation id="8926666909099850184">Funkcja NFC na tym urządzeniu jest wyłączona. Włącz ją w <ph name="BEGIN_LINK" />Ustawieniach Androida<ph name="END_LINK" />.</translation>
@@ -788,6 +775,7 @@ Ochrona zaawansowana kontroluje te ustawienia Chrome:</translation>
 <translation id="9138217887606523162">Obecne powiększenie: <ph name="ZOOM_LEVEL" />%%</translation>
 <translation id="9156722768168878035">Pozwól Chrome wyświetlać ostatnie karty na liście aplikacji i w wynikach wyszukiwania na urządzeniu. Tę funkcję możesz w każdej chwili wyłączyć w ustawieniach Chrome.</translation>
 <translation id="9162462602695099906">Ten pakiet jest niebezpieczny</translation>
+<translation id="9172068157980844189">Pasek zakładek możesz włączyć, klikając Ustawienia &gt; Wygląd</translation>
 <translation id="9182556968660520230">Nie zezwalaj witrynom na odtwarzanie chronionych treści</translation>
 <translation id="927148002081263046">Udostępnianie kontaktu</translation>
 <translation id="947156494302904893">Witryny, które odwiedzasz, mogą sprawdzać, czy jesteś prawdziwą osobą, a nie botem</translation>

@@ -5,15 +5,21 @@
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_browser_agent.h"
 
 #import <AVFoundation/AVFoundation.h>
+#import <UIKit/UIKit.h>
+
+#import <optional>
+#import <string>
+#import <string_view>
 
 #import "base/apple/foundation_util.h"
 #import "base/run_loop.h"
-#import "base/strings/utf_string_conversions.h"
-#import "base/test/ios/wait_util.h"
+#import "base/strings/stringprintf.h"
 #import "base/test/metrics/histogram_tester.h"
+#import "base/test/metrics/user_action_tester.h"
 #import "base/test/run_until.h"
 #import "base/test/scoped_feature_list.h"
 #import "base/test/task_environment.h"
+#import "base/test/values_test_util.h"
 #import "components/favicon/core/favicon_service.h"
 #import "components/favicon/ios/web_favicon_driver.h"
 #import "components/feature_engagement/public/event_constants.h"
@@ -24,12 +30,18 @@
 #import "components/signin/public/identity_manager/primary_account_change_event.h"
 #import "ios/chrome/browser/favicon/model/favicon_service_factory.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
+#import "ios/chrome/browser/fullscreen/coordinator/fullscreen_coordinator.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
+#import "ios/chrome/browser/intelligence/bwg/coordinator/gemini_container_mediator.h"
 #import "ios/chrome/browser/intelligence/bwg/metrics/gemini_metrics.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_configuration.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_page_context.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_session_handler.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_tab_helper.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_test_utils.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
+#import "ios/chrome/browser/intelligence/persist_tab_context/model/persist_tab_context_browser_agent.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_extractor_java_script_feature.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service.h"
@@ -45,10 +57,16 @@
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/fullscreen_commands.h"
 #import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
+#import "ios/chrome/browser/shared/public/commands/location_bar_badge_commands.h"
+#import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_message.h"
+#import "ios/chrome/browser/signin/model/fake_system_identity.h"
+#import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/signin/model/identity_test_environment_browser_state_adaptor.h"
+#import "ios/chrome/browser/signin/model/signin_test_util.h"
 #import "ios/chrome/browser/snapshots/model/fake_snapshot_generator_delegate.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_source_tab_helper.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_tab_helper.h"
@@ -57,7 +75,6 @@
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/find_in_page/find_in_page_java_script_feature.h"
-#import "ios/web/js_messaging/java_script_feature_manager.h"
 #import "ios/web/public/js_messaging/java_script_feature_util.h"
 #import "ios/web/public/test/fakes/fake_navigation_manager.h"
 #import "ios/web/public/test/fakes/fake_web_client.h"
@@ -74,11 +91,58 @@
 #import "ui/base/l10n/l10n_util.h"
 
 namespace {
+
+// Mirrors `kAutoSubmitPageContextTimeout` in `gemini_browser_agent.mm`.
+constexpr base::TimeDelta kAutoSubmitPageContextTimeout = base::Seconds(2);
+
+// URL and MIME type of a page whose context can be extracted.
+constexpr std::string_view kEligiblePageURL = "https://example.com";
+constexpr std::string_view kEligiblePageMimeType = "text/html";
+
+// Prompt auto-submitted by `CreateAutoSubmitStartupState()`.
+NSString* const kAutoSubmitPrompt = @"Explain this page";
+
 std::unique_ptr<KeyedService> BuildFeatureEngagementMockTracker(
     ProfileIOS* profile) {
   return std::make_unique<feature_engagement::test::MockTracker>();
 }
+
+// Test web state that allows intercepting TakeSnapshot calls.
+class TestWebState : public web::FakeWebState {
+ public:
+  void SetTakeSnapshotCallback(
+      base::RepeatingCallback<void(const CGRect)> callback) {
+    take_snapshot_callback_ = std::move(callback);
+  }
+
+  void TakeSnapshot(const CGRect rect, SnapshotCallback callback) override {
+    if (take_snapshot_callback_) {
+      take_snapshot_callback_.Run(rect);
+    }
+    UIGraphicsImageRenderer* renderer =
+        [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(1, 1)];
+    UIImage* dummy_image =
+        [renderer imageWithActions:^(UIGraphicsImageRendererContext* context){
+        }];
+    std::move(callback).Run(dummy_image);
+  }
+
+ private:
+  base::RepeatingCallback<void(const CGRect)> take_snapshot_callback_;
+};
+
 }  // namespace
+
+namespace ios::provider {
+bool WasForceRefreshQuotaInfoCalled();
+void ResetForceRefreshQuotaInfoCalled();
+std::optional<gemini::EntryPoint> GetLastUpdatePromptActionEntryPoint();
+NSString* GetLastUpdatePromptActionPrompt();
+BOOL GetLastUpdatePromptActionShouldAutoSubmit();
+GeminiConfiguration* GetLastStartGeminiOverlayConfiguration();
+int GetUpdateActivePageContextCallCount();
+void ResetGemini();
+}  // namespace ios::provider
 
 // Test fixture for GeminiBrowserAgent.
 class GeminiBrowserAgentTest : public PlatformTest {
@@ -99,21 +163,29 @@ class GeminiBrowserAgentTest : public PlatformTest {
     profile_builder.AddTestingFactory(
         feature_engagement::TrackerFactory::GetInstance(),
         base::BindRepeating(&BuildFeatureEngagementMockTracker));
-    profile_ =
+    profile_builder.AddTestingFactory(
+        IdentityManagerFactory::GetInstance(),
+        base::BindRepeating(IdentityTestEnvironmentBrowserStateAdaptor::
+                                BuildIdentityManagerForTests));
+    personal_profile_ =
         profile_manager_.AddProfileWithBuilder(std::move(profile_builder));
+
+    gemini::test::SetUpEligibleAccount(personal_profile_);
     mock_tracker_ = static_cast<feature_engagement::test::MockTracker*>(
-        feature_engagement::TrackerFactory::GetForProfile(profile_));
-    web::JavaScriptFeatureManager::FromBrowserState(profile_)
-        ->ConfigureFeatures(
-            {web::FindInPageJavaScriptFeature::GetInstance(),
-             PageContextExtractorJavaScriptFeature::GetInstance()});
-    SceneState* scene_state = [[SceneState alloc] initWithAppState:nil];
-    browser_ = std::make_unique<TestBrowser>(profile_, scene_state);
+        feature_engagement::TrackerFactory::GetForProfile(personal_profile_));
+    web::test::OverrideJavaScriptFeatures(
+        personal_profile_,
+        {web::FindInPageJavaScriptFeature::GetInstance(),
+         PageContextExtractorJavaScriptFeature::GetInstance()});
+    scene_state_ = [[SceneState alloc] init];
+    browser_ = std::make_unique<TestBrowser>(personal_profile_, scene_state_);
+    InitFullscreenCoordinatorIfNeeded();
+    PersistTabContextBrowserAgent::CreateForBrowser(browser_.get());
     GeminiBrowserAgent::CreateForBrowser(browser_.get());
     gemini_browser_agent_ = GeminiBrowserAgent::FromBrowser(browser_.get());
 
     optimization_guide_service_ =
-        OptimizationGuideServiceFactory::GetForProfile(profile_);
+        OptimizationGuideServiceFactory::GetForProfile(personal_profile_);
 
     mock_settings_handler_ = OCMProtocolMock(@protocol(SettingsCommands));
     [browser_->GetCommandDispatcher()
@@ -123,11 +195,19 @@ class GeminiBrowserAgentTest : public PlatformTest {
     [browser_->GetCommandDispatcher()
         startDispatchingToTarget:mock_gemini_handler_
                      forProtocol:@protocol(GeminiCommands)];
+    mock_omnibox_handler_ = OCMProtocolMock(@protocol(OmniboxCommands));
+    [browser_->GetCommandDispatcher()
+        startDispatchingToTarget:mock_omnibox_handler_
+                     forProtocol:@protocol(OmniboxCommands)];
+    mock_location_bar_badge_handler_ =
+        OCMProtocolMock(@protocol(LocationBarBadgeCommands));
+    [browser_->GetCommandDispatcher()
+        startDispatchingToTarget:mock_location_bar_badge_handler_
+                     forProtocol:@protocol(LocationBarBadgeCommands)];
 
-    std::unique_ptr<web::FakeWebState> web_state =
-        std::make_unique<web::FakeWebState>();
+    std::unique_ptr<TestWebState> web_state = std::make_unique<TestWebState>();
     web_state_ = web_state.get();
-    web_state->SetBrowserState(profile_);
+    web_state->SetBrowserState(personal_profile_);
     web_state->SetCurrentURL(GURL("chrome://newtab/"));
     web_state->SetNavigationManager(
         std::make_unique<web::FakeNavigationManager>());
@@ -145,14 +225,15 @@ class GeminiBrowserAgentTest : public PlatformTest {
         ->SetDelegate(fake_snapshot_delegate_);
 
     favicon::WebFaviconDriver::CreateForWebState(
-        web_state.get(), ios::FaviconServiceFactory::GetForProfile(
-                             profile_, ServiceAccessType::IMPLICIT_ACCESS));
+        web_state.get(),
+        ios::FaviconServiceFactory::GetForProfile(
+            personal_profile_, ServiceAccessType::IMPLICIT_ACCESS));
 
     auto web_frames_manager = std::make_unique<web::FakeWebFramesManager>();
     auto main_frame =
         web::FakeWebFrame::CreateMainWebFrame(GURL("https://example.com"));
     fake_main_frame_ = main_frame.get();
-    main_frame->set_browser_state(profile_);
+    main_frame->set_browser_state(personal_profile_);
     web_frames_manager->AddWebFrame(std::move(main_frame));
     web_state->SetWebFramesManager(web::ContentWorld::kIsolatedWorld,
                                    std::move(web_frames_manager));
@@ -163,7 +244,7 @@ class GeminiBrowserAgentTest : public PlatformTest {
         std::make_unique<web::FakeWebFramesManager>();
     auto main_frame_page_content =
         web::FakeWebFrame::CreateMainWebFrame(GURL("https://example.com"));
-    main_frame_page_content->set_browser_state(profile_);
+    main_frame_page_content->set_browser_state(personal_profile_);
     page_content_frames_manager->AddWebFrame(
         std::move(main_frame_page_content));
     web_state->SetWebFramesManager(web::ContentWorld::kPageContentWorld,
@@ -175,16 +256,21 @@ class GeminiBrowserAgentTest : public PlatformTest {
   }
 
   void TearDown() override {
+    [fullscreen_coordinator_ stop];
+    fullscreen_coordinator_ = nil;
     fake_main_frame_ = nullptr;
     web_state_ = nullptr;
-    profile_ = nullptr;
+    personal_profile_ = nullptr;
     gemini_browser_agent_ = nullptr;
     gemini_tab_helper_ = nullptr;
     optimization_guide_service_ = nullptr;
-    mock_settings_handler_ = nullptr;
-    mock_gemini_handler_ = nullptr;
+    mock_settings_handler_ = nil;
+    mock_gemini_handler_ = nil;
+    mock_omnibox_handler_ = nil;
+    mock_location_bar_badge_handler_ = nil;
     fake_snapshot_delegate_ = nullptr;
     browser_.reset();
+    scene_state_ = nil;
     profile_manager_.PrepareForDestruction();
   }
 
@@ -203,7 +289,7 @@ class GeminiBrowserAgentTest : public PlatformTest {
 
   // Returns true if the conversation ID preference is empty.
   bool IsConversationIdPrefCleared() {
-    return profile_->GetPrefs()
+    return personal_profile_->GetPrefs()
         ->GetString(prefs::kGeminiConversationId)
         .empty();
   }
@@ -211,6 +297,11 @@ class GeminiBrowserAgentTest : public PlatformTest {
   // Setter for `is_floaty_invoked_`.
   void SetIsFloatyInvoked(bool is_invoked) {
     gemini_browser_agent_->is_floaty_invoked_ = is_invoked;
+    if (is_invoked) {
+      [gemini_browser_agent_->gemini_container_mediator_ onFloatyInvoked];
+    } else {
+      [gemini_browser_agent_->gemini_container_mediator_ onFloatyDismiss];
+    }
   }
 
   // Setter for `is_floaty_temporarily_hidden_`.
@@ -227,19 +318,57 @@ class GeminiBrowserAgentTest : public PlatformTest {
     gemini_browser_agent_->floaty_hidden_timestamp_ = timestamp;
   }
 
-  // Triggers `RequestPageContextGeneration()` in the browser agent.
-  void RequestPageContextGeneration() {
-    gemini_browser_agent_->RequestPageContextGeneration();
+  // Triggers `requestActivePageContextGeneration` on the mediator.
+  void RequestActivePageContextGeneration() {
+    [gemini_browser_agent_
+            ->gemini_container_mediator_ requestActivePageContextGeneration];
   }
 
-  // Wrapper for `CreateGeminiConfiguration`.
-  GeminiConfiguration* CreateGeminiConfiguration(
-      UIViewController* base_view_controller,
-      GeminiStartupState* startup_state,
-      web::WebState* web_state,
-      GeminiPageContext* page_context) {
-    return gemini_browser_agent_->CreateGeminiConfiguration(
-        base_view_controller, startup_state, web_state, page_context);
+  // Getter for `gemini_container_mediator_`.
+  GeminiContainerMediator* GetGeminiContainerMediator() {
+    return gemini_browser_agent_->gemini_container_mediator_;
+  }
+
+  // Returns true if a presentation is waiting for page context generation.
+  bool HasPendingPresentation() {
+    return !gemini_browser_agent_->pending_presentation_.is_null();
+  }
+
+  // Simulates page context generation completing with `page_context`.
+  void RunPendingPresentation(GeminiPageContext* page_context) {
+    gemini_browser_agent_->RunPendingPresentation(page_context);
+  }
+
+  // Returns a startup state that auto-submits a prompt from a contextual cue.
+  GeminiStartupState* CreateAutoSubmitStartupState() {
+    GeminiStartupState* startup_state = [[GeminiStartupState alloc]
+        initWithEntryPoint:gemini::EntryPoint::ContextualCueInfobar];
+    startup_state.prepopulatedPrompt = kAutoSubmitPrompt;
+    startup_state.shouldAutoSubmit = YES;
+    return startup_state;
+  }
+
+  // Inserts a web state with an eligible page that is still loading, which
+  // defers its page context generation, and activates it if `activate` is
+  // true. Returns the index of the inserted web state.
+  int InsertLoadingWebState(bool activate) {
+    auto web_state = std::make_unique<web::FakeWebState>();
+    web_state->SetBrowserState(personal_profile_);
+    web_state->SetCurrentURL(GURL(kEligiblePageURL));
+    web_state->SetContentsMimeType(std::string(kEligiblePageMimeType));
+    web_state->SetLoading(true);
+    GeminiTabHelper::CreateForWebState(web_state.get());
+    WebViewProxyTabHelper::CreateForWebState(web_state.get());
+    return browser_->GetWebStateList()->InsertWebState(
+        std::move(web_state),
+        WebStateList::InsertionParams::Automatic().Activate(activate));
+  }
+
+  // Triggers `OnPersistTabContextLookupComplete()` in the browser agent.
+  void TriggerPersistTabContextLookupComplete(
+      PersistTabContextBrowserAgent::PageContextMap contexts_map) {
+    gemini_browser_agent_->OnPersistTabContextLookupComplete(
+        std::move(contexts_map));
   }
 
   // Setter for `processing_status_`.
@@ -252,14 +381,29 @@ class GeminiBrowserAgentTest : public PlatformTest {
     return gemini_browser_agent_->processing_status_;
   }
 
-  // Getter for raw `attached_tabs_` member.
-  std::map<web::WebStateID, GeminiPageContext*> GetRawAttachedTabs() {
-    return gemini_browser_agent_->attached_tabs_;
+  // Getter for raw `shared_tabs_` member.
+  GeminiBrowserAgent::SharedTabsList GetRawSharedTabs() {
+    return gemini_browser_agent_->shared_tabs_;
   }
 
-  // Setter for raw `attached_tabs_` member.
-  void SetRawAttachedTab(web::WebStateID id, GeminiPageContext* context) {
-    gemini_browser_agent_->attached_tabs_[id] = context;
+  // Getter for an attached tab context by ID.
+  GeminiPageContext* GetRawAttachedTabContext(web::WebStateID id) {
+    return gemini_browser_agent_->GetSharedPageContext(id);
+  }
+
+  // Setter for raw `shared_tabs_` member.
+  void SetRawAttachedTab(web::WebStateID id, GeminiPageContext* page_context) {
+    gemini_browser_agent_->SetSharedPageContext(id, page_context);
+  }
+
+  // Wrapper for `SharedTabsCount`.
+  NSUInteger SharedTabsCount() {
+    return gemini_browser_agent_->SharedTabsCount();
+  }
+
+  // Wrapper for `GetInactiveSharedTabs`.
+  NSUInteger GetInactiveSharedTabsCount() {
+    return gemini_browser_agent_->GetInactiveSharedTabs().count;
   }
 
   // Wrapper for `DetachTabWithID`.
@@ -267,13 +411,26 @@ class GeminiBrowserAgentTest : public PlatformTest {
     gemini_browser_agent_->DetachTabWithID(tab_id);
   }
 
+  // Wrapper for `UpdateLocalTabAttachmentState`.
+  void UpdateLocalTabAttachmentState(
+      NSString* tab_id,
+      ios::provider::GeminiPageContextAttachmentState new_state) {
+    gemini_browser_agent_->UpdateLocalTabAttachmentState(tab_id, new_state);
+  }
+
+  // Wrapper for `HasGivenAllLivePermissions`.
+  bool HasGivenAllLivePermissions() {
+    return gemini_browser_agent_->HasGivenAllLivePermissions();
+  }
+
   base::test::ScopedFeatureList feature_list_;
   web::ScopedTestingWebClient web_client_;
   web::WebTaskEnvironment task_environment_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
+  SceneState* scene_state_;
   std::unique_ptr<TestBrowser> browser_;
   TestProfileManagerIOS profile_manager_;
-  raw_ptr<TestProfileIOS> profile_;
+  raw_ptr<TestProfileIOS> personal_profile_;
   raw_ptr<GeminiBrowserAgent> gemini_browser_agent_;
   raw_ptr<GeminiTabHelper> gemini_tab_helper_;
   raw_ptr<OptimizationGuideService> optimization_guide_service_;
@@ -281,8 +438,37 @@ class GeminiBrowserAgentTest : public PlatformTest {
   raw_ptr<web::FakeWebFrame> fake_main_frame_;
   id mock_settings_handler_;
   id mock_gemini_handler_;
+  id mock_omnibox_handler_;
+  id mock_location_bar_badge_handler_;
   FakeSnapshotGeneratorDelegate* fake_snapshot_delegate_;
   raw_ptr<feature_engagement::test::MockTracker> mock_tracker_;
+  FullscreenCoordinator* fullscreen_coordinator_;
+
+  // Instantiates FullscreenBrowserAgent and starts FullscreenCoordinator if
+  // FullscreenRefactoring feature is enabled and coordinator is not yet
+  // created.
+  void InitFullscreenCoordinatorIfNeeded() {
+    if (IsFullscreenRefactoringEnabled() && !fullscreen_coordinator_) {
+      FullscreenBrowserAgent::CreateForBrowser(browser_.get());
+      fullscreen_coordinator_ = [[FullscreenCoordinator alloc]
+          initWithBaseViewController:nil
+                             browser:browser_.get()];
+      [fullscreen_coordinator_ start];
+    }
+  }
+
+  // Returns whether fullscreen is enabled using FullscreenBrowserAgent if the
+  // refactoring is enabled, or FullscreenController otherwise.
+  bool IsFullscreenEnabled() {
+    if (IsFullscreenRefactoringEnabled()) {
+      FullscreenBrowserAgent* agent =
+          FullscreenBrowserAgent::FromBrowser(browser_.get());
+      return agent && agent->IsEnabled();
+    }
+    FullscreenController* controller =
+        FullscreenController::FromBrowser(browser_.get());
+    return controller && controller->IsEnabled();
+  }
 };
 
 // A test observer for GeminiBrowserAgent.
@@ -326,6 +512,31 @@ TEST_F(GeminiBrowserAgentTest, TestObserverNotification) {
   gemini_browser_agent_->RemoveObserver(&observer);
 }
 
+// Test that observers are notified when the Gemini container invocation state
+// changes.
+TEST_F(GeminiBrowserAgentTest, TestContainerInvokedObserverNotification) {
+  TestGeminiObserver observer;
+  gemini_browser_agent_->AddObserver(&observer);
+
+  EXPECT_FALSE(gemini_browser_agent_->is_floaty_invoked());
+
+  gemini_browser_agent_->SetContainerInvoked(true);
+  EXPECT_TRUE(gemini_browser_agent_->is_floaty_invoked());
+  EXPECT_TRUE(observer.is_invoked_);
+  EXPECT_EQ(1, observer.call_count_);
+
+  // Setting to the same value does not notify again.
+  gemini_browser_agent_->SetContainerInvoked(true);
+  EXPECT_EQ(1, observer.call_count_);
+
+  gemini_browser_agent_->SetContainerInvoked(false);
+  EXPECT_FALSE(gemini_browser_agent_->is_floaty_invoked());
+  EXPECT_FALSE(observer.is_invoked_);
+  EXPECT_EQ(2, observer.call_count_);
+
+  gemini_browser_agent_->RemoveObserver(&observer);
+}
+
 // Tests the presentation of the BWG overlay and state of tab helper side
 // effects.
 TEST_F(GeminiBrowserAgentTest, TestGeminiBrowserAgentStartGeminiFlow) {
@@ -343,45 +554,30 @@ TEST_F(GeminiBrowserAgentTest, TestGeminiBrowserAgentStartGeminiFlow) {
       "pageContextExtractor.extractPageContext");
 
   // Simulate FRE completion.
-  profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
 
-  // Create a protocol mock to intercept the delegate call.
-  id mock_delegate = OCMProtocolMock(@protocol(SnapshotGeneratorDelegate));
-
-  // Set the mock as the delegate.
-  SnapshotTabHelper::FromWebState(web_state_)->SetDelegate(mock_delegate);
-
-  // Expect the snapshot delegate to be notified. Use a flag to wait for the
-  // async call. Use shared_ptr to safely share state between ObjC block and C++
-  // lambda.
-  auto delegate_called = std::make_shared<bool>(false);
-  [[[mock_delegate expect] andDo:^(NSInvocation*) {
-    *delegate_called = true;
-  }] willUpdateSnapshotWithWebStateInfo:[OCMArg any]];
-
-  // Stub the canTakeSnapshot method to return YES.
-  OCMStub([mock_delegate canTakeSnapshotWithWebStateInfo:[OCMArg any]])
-      .andReturn(YES);
+  // Expect the snapshot to be taken. Use a flag to wait for the async call. Use
+  // shared_ptr to safely share state between ObjC block and C++ lambda.
+  auto snapshot_called = std::make_shared<bool>(false);
+  static_cast<TestWebState*>(web_state_.get())
+      ->SetTakeSnapshotCallback(base::BindRepeating(^(const CGRect rect) {
+        *snapshot_called = true;
+      }));
 
   // Ensure the WebState is visible so PageContextWrapper attempts a snapshot.
   web_state_->WasShown();
 
-  base::HistogramTester histogram_tester;
-
   gemini_browser_agent_->StartGeminiFlow(
-      base_view_controller, [[GeminiStartupState alloc]
-                                initWithEntryPoint:gemini::EntryPoint::Promo]);
+      base_view_controller,
+      [[GeminiStartupState alloc]
+          initWithEntryPoint:gemini::EntryPoint::OverflowMenu]);
 
-  // Wait for the delegate method to be called.
+  // Wait for the snapshot method to be called.
   ASSERT_TRUE(
-      base::test::RunUntil([delegate_called]() { return *delegate_called; }));
+      base::test::RunUntil([snapshot_called]() { return *snapshot_called; }));
 
-  [mock_delegate verify];
-
-  histogram_tester.ExpectUniqueSample(
-      kGeminiInvocationPageTypeHistogram,
-      IOSGeminiInvocationPageType::kExtractableWebPage, 1);
-  EXPECT_EQ(gemini_browser_agent_->GetEntryPoint(), gemini::EntryPoint::Promo);
+  EXPECT_EQ(gemini_browser_agent_->GetEntryPoint(),
+            gemini::EntryPoint::OverflowMenu);
 }
 
 // Tests that switching active web states handles observations correctly.
@@ -390,14 +586,17 @@ TEST_F(GeminiBrowserAgentTest, TestActiveWebStateChanged) {
   // the feature flag enabled.
 
   std::unique_ptr<TestBrowser> scoped_browser =
-      std::make_unique<TestBrowser>(profile_);
+      std::make_unique<TestBrowser>(personal_profile_);
+  if (IsFullscreenRefactoringEnabled()) {
+    FullscreenBrowserAgent::CreateForBrowser(scoped_browser.get());
+  }
   GeminiBrowserAgent::CreateForBrowser(scoped_browser.get());
   GeminiBrowserAgent* agent =
       GeminiBrowserAgent::FromBrowser(scoped_browser.get());
 
   std::unique_ptr<web::FakeWebState> web_state1 =
       std::make_unique<web::FakeWebState>();
-  web_state1->SetBrowserState(profile_);
+  web_state1->SetBrowserState(personal_profile_);
   GeminiTabHelper::CreateForWebState(web_state1.get());
   WebViewProxyTabHelper::CreateForWebState(web_state1.get());
   GeminiTabHelper* helper1 = GeminiTabHelper::FromWebState(web_state1.get());
@@ -411,7 +610,7 @@ TEST_F(GeminiBrowserAgentTest, TestActiveWebStateChanged) {
 
   std::unique_ptr<web::FakeWebState> web_state2 =
       std::make_unique<web::FakeWebState>();
-  web_state2->SetBrowserState(profile_);
+  web_state2->SetBrowserState(personal_profile_);
   GeminiTabHelper::CreateForWebState(web_state2.get());
   WebViewProxyTabHelper::CreateForWebState(web_state2.get());
   GeminiTabHelper* helper2 = GeminiTabHelper::FromWebState(web_state2.get());
@@ -427,8 +626,37 @@ TEST_F(GeminiBrowserAgentTest, TestActiveWebStateChanged) {
   EXPECT_TRUE(helper2->HasObserver(agent));
 }
 
-// Tests that RequestPageContextGeneration triggers page context generation.
-TEST_F(GeminiBrowserAgentTest, TestRequestPageContextGeneration) {
+// Tests that switching active web states while floaty is invoked records a user
+// action and records session metrics when dismissed.
+TEST_F(GeminiBrowserAgentTest, TestFloatyTabSwitchMetrics) {
+  base::UserActionTester user_action_tester;
+  base::HistogramTester histogram_tester;
+
+  // Invoke floaty when `web_state_` is active.
+  GeminiConfiguration* config = [[GeminiConfiguration alloc] init];
+  InvokeFloaty(config);
+
+  // Insert and activate a second tab while floaty is invoked.
+  std::unique_ptr<web::FakeWebState> web_state2 =
+      std::make_unique<web::FakeWebState>();
+  web_state2->SetBrowserState(personal_profile_);
+  GeminiTabHelper::CreateForWebState(web_state2.get());
+  WebViewProxyTabHelper::CreateForWebState(web_state2.get());
+  browser_->GetWebStateList()->InsertWebState(
+      std::move(web_state2),
+      WebStateList::InsertionParams::Automatic().Activate(true));
+
+  EXPECT_EQ(1,
+            user_action_tester.GetActionCount("MobileGeminiFloatyTabSwitched"));
+
+  // Dismiss floaty and verify histograms are recorded.
+  gemini_browser_agent_->DismissFloaty();
+  histogram_tester.ExpectUniqueSample(kSessionTabSwitchCountHistogram, 1, 1);
+}
+
+// Tests that RequestActivePageContextGeneration triggers page context
+// generation.
+TEST_F(GeminiBrowserAgentTest, TestRequestActivePageContextGeneration) {
   // Set a valid URL.
   web_state_->SetCurrentURL(GURL("https://example.com"));
   web_state_->SetContentsMimeType("text/html");
@@ -440,32 +668,21 @@ TEST_F(GeminiBrowserAgentTest, TestRequestPageContextGeneration) {
       std::make_unique<base::Value>(std::move(result)).release(),
       "pageContextExtractor.extractPageContext");
 
-  // Create a protocol mock to intercept the delegate call.
-  id mock_delegate = OCMProtocolMock(@protocol(SnapshotGeneratorDelegate));
-
-  // Set the mock as the delegate.
-  SnapshotTabHelper::FromWebState(web_state_)->SetDelegate(mock_delegate);
-
-  // Expect the snapshot delegate to be notified.
-  auto delegate_called = std::make_shared<bool>(false);
-  [[[mock_delegate expect] andDo:^(NSInvocation*) {
-    *delegate_called = true;
-  }] willUpdateSnapshotWithWebStateInfo:[OCMArg any]];
-
-  // Stub the canTakeSnapshot method to return YES.
-  OCMStub([mock_delegate canTakeSnapshotWithWebStateInfo:[OCMArg any]])
-      .andReturn(YES);
+  // Expect the snapshot to be taken.
+  auto snapshot_called = std::make_shared<bool>(false);
+  static_cast<TestWebState*>(web_state_.get())
+      ->SetTakeSnapshotCallback(base::BindRepeating(^(const CGRect rect) {
+        *snapshot_called = true;
+      }));
 
   // Ensure the WebState is visible so PageContextWrapper attempts a snapshot.
   web_state_->WasShown();
 
-  RequestPageContextGeneration();
+  RequestActivePageContextGeneration();
 
-  // Wait for the delegate method to be called.
+  // Wait for the snapshot method to be called.
   ASSERT_TRUE(
-      base::test::RunUntil([delegate_called]() { return *delegate_called; }));
-
-  [mock_delegate verify];
+      base::test::RunUntil([snapshot_called]() { return *snapshot_called; }));
 }
 
 // Tests hiding the floaty.
@@ -577,15 +794,14 @@ TEST_F(GeminiBrowserAgentTest, TestCollapseFloatyIfInvoked) {
 
 // Tests that DismissGeminiFromOtherWindows dismisses Gemini in other browsers.
 TEST_F(GeminiBrowserAgentTest, TestDismissGeminiFromOtherWindows) {
-  TestProfileIOS::Builder second_profile_builder;
-  second_profile_builder.SetName("profile2");
-  TestProfileIOS* second_profile =
-      profile_manager_.AddProfileWithBuilder(std::move(second_profile_builder));
+  TestProfileIOS* managed_profile = AddManagedProfileWithBuilder(
+      profile_manager_, [FakeSystemIdentity fakeManagedIdentity]);
 
   // Emulate opening a new window.
   std::unique_ptr<TestBrowser> second_browser =
-      std::make_unique<TestBrowser>(second_profile);
-  BrowserList* browser_list = BrowserListFactory::GetForProfile(second_profile);
+      std::make_unique<TestBrowser>(managed_profile);
+  BrowserList* browser_list =
+      BrowserListFactory::GetForProfile(managed_profile);
   browser_list->AddBrowser(second_browser.get());
 
   id mock_second_handler = OCMProtocolMock(@protocol(GeminiCommands));
@@ -609,9 +825,13 @@ TEST_F(GeminiBrowserAgentTest, TestDismissGeminiFromOtherWindows) {
   browser_list->RemoveBrowser(second_browser.get());
 }
 
-// Tests that the floaty is dismissed when the primary account changes.
-TEST_F(GeminiBrowserAgentTest, TestDismissedOnPrimaryAccountChanged) {
-  SetIsFloatyInvoked(true);
+// Tests that the conversation ID pref is cleared when the primary account
+// changes.
+TEST_F(GeminiBrowserAgentTest,
+       TestConversationIdClearedOnPrimaryAccountChanged) {
+  personal_profile_->GetPrefs()->SetString(prefs::kGeminiConversationId,
+                                           "test_id");
+  EXPECT_FALSE(IsConversationIdPrefCleared());
 
   signin::PrimaryAccountChangeEvent::State previous_state;
   CoreAccountInfo account_info;
@@ -626,31 +846,19 @@ TEST_F(GeminiBrowserAgentTest, TestDismissedOnPrimaryAccountChanged) {
 
   gemini_browser_agent_->OnPrimaryAccountChanged(event);
 
-  EXPECT_FALSE(IsFloatyInvoked());
   EXPECT_TRUE(IsConversationIdPrefCleared());
 }
 
-// Tests that the floaty is dismissed even if it is temporarily hidden.
+// Tests that the floaty is dismissed even if it is temporarily hidden when
+// `ForceDismissFloaty` is called.
 TEST_F(GeminiBrowserAgentTest, TestForceDismissedWhenTemporarilyHidden) {
   SetIsFloatyInvoked(true);
   SetIsFloatyTemporarilyHidden(true);
 
-  signin::PrimaryAccountChangeEvent::State previous_state;
-  CoreAccountInfo account_info;
-  account_info.account_id = CoreAccountId::FromGaiaId(GaiaId("gaia_id"));
-  account_info.gaia = GaiaId("gaia_id");
-  account_info.email = "test@test.com";
-  signin::PrimaryAccountChangeEvent::State current_state(
-      account_info, signin::ConsentLevel::kSignin);
-
-  signin::PrimaryAccountChangeEvent event(
-      previous_state, current_state, signin_metrics::AccessPoint::kSettings);
-
-  gemini_browser_agent_->OnPrimaryAccountChanged(event);
+  gemini_browser_agent_->ForceDismissFloaty();
 
   EXPECT_FALSE(IsFloatyInvoked());
   EXPECT_FALSE(IsFloatyTemporarilyHidden());
-  EXPECT_TRUE(IsConversationIdPrefCleared());
 }
 
 // Tests that when the floaty is expanded/focused while temporarily hidden,
@@ -749,7 +957,7 @@ TEST_F(GeminiBrowserAgentTest, TestOnGeminiAvailabilityChanged) {
 
   // Add active WebState with GeminiTabHelper.
   auto web_state = std::make_unique<web::FakeWebState>();
-  web_state->SetBrowserState(profile_);
+  web_state->SetBrowserState(personal_profile_);
   GeminiTabHelper::CreateForWebState(web_state.get());
   WebViewProxyTabHelper::CreateForWebState(web_state.get());
   web_state->SetCurrentURL(GURL("https://example.com"));
@@ -778,32 +986,6 @@ TEST_F(GeminiBrowserAgentTest, TestOnGeminiAvailabilityChanged) {
   gemini_browser_agent_->RemoveObserver(&observer);
 }
 
-// Tests that kNoWebState is recorded when StartGeminiFlow is invoked with no
-// active WebState.
-TEST_F(GeminiBrowserAgentTest, TestStartGeminiFlowNoActiveWebState) {
-  UIViewController* base_view_controller = [[UIViewController alloc] init];
-
-  // Initialize browser agent on a browser with no active WebStates.
-  std::unique_ptr<TestBrowser> empty_browser =
-      std::make_unique<TestBrowser>(profile_);
-  id mock_gemini_handler = OCMProtocolMock(@protocol(GeminiCommands));
-  [empty_browser->GetCommandDispatcher()
-      startDispatchingToTarget:mock_gemini_handler
-                   forProtocol:@protocol(GeminiCommands)];
-  GeminiBrowserAgent::CreateForBrowser(empty_browser.get());
-  GeminiBrowserAgent* empty_agent =
-      GeminiBrowserAgent::FromBrowser(empty_browser.get());
-
-  base::HistogramTester histogram_tester;
-  empty_agent->StartGeminiFlow(
-      base_view_controller, [[GeminiStartupState alloc]
-                                initWithEntryPoint:gemini::EntryPoint::Promo]);
-
-  histogram_tester.ExpectUniqueSample(kGeminiInvocationPageTypeHistogram,
-                                      IOSGeminiInvocationPageType::kNoWebState,
-                                      1);
-}
-
 // Tests that OnLiveButtonTapped triggers the feature engagement event.
 TEST_F(GeminiBrowserAgentTest, TestOnLiveButtonTappedTriggersEvent) {
   EXPECT_CALL(
@@ -830,17 +1012,14 @@ TEST_F(GeminiBrowserAgentTest, TestGeminiLiveIPHAndNewBadgeFET) {
                   feature_engagement::kIPHiOSGeminiLiveNewBadgeFeature)))
       .WillOnce(testing::Return(true));
 
+  // Simulate FRE completion.
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
+
+  // Start Gemini, which should trigger the IPHs.
   UIViewController* base_view_controller = [[UIViewController alloc] init];
-  GeminiStartupState* startup_state =
-      [[GeminiStartupState alloc] initWithEntryPoint:gemini::EntryPoint::Promo];
-  GeminiPageContext* page_context = [[GeminiPageContext alloc] init];
-
-  // Call CreateGeminiConfiguration to trigger the features.
-  GeminiConfiguration* config = CreateGeminiConfiguration(
-      base_view_controller, startup_state, web_state_, page_context);
-
-  EXPECT_TRUE(config.shouldShowGeminiLiveIPH);
-  EXPECT_TRUE(config.shouldShowGeminiLiveNewBadge);
+  GeminiStartupState* startup_state = [[GeminiStartupState alloc]
+      initWithEntryPoint:gemini::EntryPoint::OverflowMenu];
+  gemini_browser_agent_->StartGeminiFlow(base_view_controller, startup_state);
 
   // Setup mock tracker expectations for dismissal
   EXPECT_CALL(
@@ -851,9 +1030,6 @@ TEST_F(GeminiBrowserAgentTest, TestGeminiLiveIPHAndNewBadgeFET) {
               Dismissed(testing::Ref(
                   feature_engagement::kIPHiOSGeminiLiveNewBadgeFeature)))
       .Times(1);
-
-  // Emulate the floaty being invoked so DismissFloaty actually runs fully.
-  SetIsFloatyInvoked(true);
 
   gemini_browser_agent_->DismissFloaty();
 }
@@ -870,10 +1046,6 @@ TEST_F(GeminiBrowserAgentTest, TestOnProcessingStatusChangedLiveDormant) {
   [browser_->GetCommandDispatcher()
       startDispatchingToTarget:mock_snackbar_handler
                    forProtocol:@protocol(SnackbarCommands)];
-  id mock_fullscreen_handler = OCMProtocolMock(@protocol(FullscreenCommands));
-  [browser_->GetCommandDispatcher()
-      startDispatchingToTarget:mock_fullscreen_handler
-                   forProtocol:@protocol(FullscreenCommands)];
 
   SetIsFloatyInvoked(true);
   web_state_->SetCurrentURL(GURL("https://example.com"));
@@ -908,10 +1080,6 @@ TEST_F(GeminiBrowserAgentTest,
   [browser_->GetCommandDispatcher()
       startDispatchingToTarget:mock_snackbar_handler
                    forProtocol:@protocol(SnackbarCommands)];
-  id mock_fullscreen_handler = OCMProtocolMock(@protocol(FullscreenCommands));
-  [browser_->GetCommandDispatcher()
-      startDispatchingToTarget:mock_fullscreen_handler
-                   forProtocol:@protocol(FullscreenCommands)];
 
   SetIsFloatyInvoked(true);
   web_state_->SetCurrentURL(GURL("https://example.com"));
@@ -955,10 +1123,6 @@ TEST_F(GeminiBrowserAgentTest,
   [browser_->GetCommandDispatcher()
       startDispatchingToTarget:mock_snackbar_handler
                    forProtocol:@protocol(SnackbarCommands)];
-  id mock_fullscreen_handler = OCMProtocolMock(@protocol(FullscreenCommands));
-  [browser_->GetCommandDispatcher()
-      startDispatchingToTarget:mock_fullscreen_handler
-                   forProtocol:@protocol(FullscreenCommands)];
 
   SetIsFloatyInvoked(true);
   web_state_->SetCurrentURL(GURL("https://example.com"));
@@ -1004,10 +1168,6 @@ TEST_F(GeminiBrowserAgentTest,
   [browser_->GetCommandDispatcher()
       startDispatchingToTarget:mock_snackbar_handler
                    forProtocol:@protocol(SnackbarCommands)];
-  id mock_fullscreen_handler = OCMProtocolMock(@protocol(FullscreenCommands));
-  [browser_->GetCommandDispatcher()
-      startDispatchingToTarget:mock_fullscreen_handler
-                   forProtocol:@protocol(FullscreenCommands)];
 
   SetIsFloatyInvoked(true);
   web_state_->SetCurrentURL(GURL("https://example.com"));
@@ -1061,43 +1221,124 @@ TEST_F(GeminiBrowserAgentTest, TestOnGeminiLiveUserDidBargeIn) {
             ios::provider::GeminiClientMode::kTranscribing);
 }
 
-// Tests that fullscreen remains disabled while floaty is invoked, until
-// floaty is dismissed.
+// Tests that OnProcessingStatusChanged records prompt context attachment
+// Tests that OnProcessingStatusChanged records prompt context attachment
+// metrics when transitioning to kThinking in Live mode.
 TEST_F(GeminiBrowserAgentTest,
-       TestFloatyKeepsFullscreenDisabledUntilDismissed) {
+       TestOnProcessingStatusChangedThinkingLivePromptMetric) {
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {kChromeNextIa, kAppBarHideInFullscreen, kComposeboxIpad}, {});
+  scoped_feature_list.InitWithFeatures({kGeminiLive}, {});
+  base::HistogramTester histogram_tester;
+  base::UserActionTester user_action_tester;
 
-  FullscreenController* controller =
-      FullscreenController::FromBrowser(browser_.get());
-  ASSERT_NE(controller, nullptr);
-  EXPECT_TRUE(controller->IsEnabled());
+  SetIsFloatyInvoked(true);
+
+  // Switch to Live mode.
+  ios::provider::SwitchToMode(ios::provider::GeminiViewMode::kLive,
+                              /*animated=*/false);
+  ASSERT_TRUE(gemini_browser_agent_->IsInGeminiLiveMode());
+
+  // By default, page context is attached.
+  ios::provider::UpdatePageAttachmentState(
+      ios::provider::GeminiPageContextAttachmentState::kAttached);
+
+  // Transitioning to kTranscribing should not record prompt sent metrics yet.
+  gemini_browser_agent_->OnProcessingStatusChanged(
+      ios::provider::GeminiClientMode::kTranscribing,
+      ios::provider::GeminiDormantReason::kUnknown);
+
+  histogram_tester.ExpectTotalCount(kPromptContextAttachmentHistogram, 0);
+  histogram_tester.ExpectTotalCount(kPromptLiveContextAttachmentHistogram, 0);
+  EXPECT_EQ(0, user_action_tester.GetActionCount("MobileGeminiPromptSent"));
+  EXPECT_EQ(0, user_action_tester.GetActionCount("MobileGeminiLivePromptSent"));
+  EXPECT_EQ(0, user_action_tester.GetActionCount("MobileGeminiChatPromptSent"));
+
+  // Transitioning to kThinking records the Live prompt sent metric.
+  gemini_browser_agent_->OnProcessingStatusChanged(
+      ios::provider::GeminiClientMode::kThinking,
+      ios::provider::GeminiDormantReason::kUnknown);
+
+  histogram_tester.ExpectUniqueSample(kPromptContextAttachmentHistogram, true,
+                                      1);
+  histogram_tester.ExpectUniqueSample(kPromptLiveContextAttachmentHistogram,
+                                      true, 1);
+  histogram_tester.ExpectTotalCount(kPromptChatContextAttachmentHistogram, 0);
+  EXPECT_EQ(1, user_action_tester.GetActionCount("MobileGeminiPromptSent"));
+  EXPECT_EQ(1, user_action_tester.GetActionCount("MobileGeminiLivePromptSent"));
+  EXPECT_EQ(0, user_action_tester.GetActionCount("MobileGeminiChatPromptSent"));
+
+  // Consecutive kThinking call should not record duplicate metrics.
+  gemini_browser_agent_->OnProcessingStatusChanged(
+      ios::provider::GeminiClientMode::kThinking,
+      ios::provider::GeminiDormantReason::kUnknown);
+
+  histogram_tester.ExpectTotalCount(kPromptContextAttachmentHistogram, 1);
+  histogram_tester.ExpectTotalCount(kPromptLiveContextAttachmentHistogram, 1);
+  EXPECT_EQ(1, user_action_tester.GetActionCount("MobileGeminiPromptSent"));
+  EXPECT_EQ(1, user_action_tester.GetActionCount("MobileGeminiLivePromptSent"));
+  EXPECT_EQ(0, user_action_tester.GetActionCount("MobileGeminiChatPromptSent"));
+
+  // Transition to responding, then detach context and transition to
+  // thinking again.
+  gemini_browser_agent_->OnProcessingStatusChanged(
+      ios::provider::GeminiClientMode::kResponding,
+      ios::provider::GeminiDormantReason::kUnknown);
+  ios::provider::UpdatePageAttachmentState(
+      ios::provider::GeminiPageContextAttachmentState::kDetached);
+
+  gemini_browser_agent_->OnProcessingStatusChanged(
+      ios::provider::GeminiClientMode::kThinking,
+      ios::provider::GeminiDormantReason::kUnknown);
+
+  histogram_tester.ExpectBucketCount(kPromptContextAttachmentHistogram, false,
+                                     1);
+  histogram_tester.ExpectBucketCount(kPromptLiveContextAttachmentHistogram,
+                                     false, 1);
+  histogram_tester.ExpectTotalCount(kPromptContextAttachmentHistogram, 2);
+  histogram_tester.ExpectTotalCount(kPromptLiveContextAttachmentHistogram, 2);
+  histogram_tester.ExpectTotalCount(kPromptChatContextAttachmentHistogram, 0);
+  EXPECT_EQ(2, user_action_tester.GetActionCount("MobileGeminiPromptSent"));
+  EXPECT_EQ(2, user_action_tester.GetActionCount("MobileGeminiLivePromptSent"));
+  EXPECT_EQ(0, user_action_tester.GetActionCount("MobileGeminiChatPromptSent"));
+}
+
+// Tests that fullscreen is disabled when floaty is invoked, and re-enabled
+// once the UI appears.
+TEST_F(GeminiBrowserAgentTest, TestFloatyReenablesFullscreenWhenUIAppears) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kChromeNextIa);
+
+  InitFullscreenCoordinatorIfNeeded();
+
+  EXPECT_TRUE(IsFullscreenEnabled());
 
   InvokeFloaty([[GeminiConfiguration alloc] init]);
-  EXPECT_FALSE(controller->IsEnabled());
+  EXPECT_FALSE(IsFullscreenEnabled());
 
-  // Fullscreen should remain disabled even when UI appears or state collapses.
+  // Fullscreen should be re-enabled once the floaty UI appears.
   gemini_browser_agent_->OnGeminiUIDidAppear();
-  EXPECT_FALSE(controller->IsEnabled());
+  EXPECT_TRUE(IsFullscreenEnabled());
 
+  // Fullscreen should remain enabled when state is collapsed.
   gemini_browser_agent_->OnViewStateChanged(
       ios::provider::GeminiViewState::kCollapsed);
-  EXPECT_FALSE(controller->IsEnabled());
+  EXPECT_TRUE(IsFullscreenEnabled());
 
-  // Fullscreen should be re-enabled once floaty is dismissed.
+  // Fullscreen should remain enabled once floaty is dismissed.
   gemini_browser_agent_->DismissFloaty();
-  EXPECT_TRUE(controller->IsEnabled());
+  EXPECT_TRUE(IsFullscreenEnabled());
 
   // Fullscreen should be disabled once the state transitions to expanded again.
+  gemini_browser_agent_->SetLastShownViewState(
+      ios::provider::GeminiViewState::kCollapsed);
   gemini_browser_agent_->OnViewStateChanged(
       ios::provider::GeminiViewState::kExpanded);
-  EXPECT_FALSE(controller->IsEnabled());
+  EXPECT_FALSE(IsFullscreenEnabled());
 
   // Fullscreen should be re-enabled once the state transitions to hidden.
   gemini_browser_agent_->OnViewStateChanged(
       ios::provider::GeminiViewState::kHidden);
-  EXPECT_TRUE(controller->IsEnabled());
+  EXPECT_TRUE(IsFullscreenEnabled());
 }
 
 // Tests that when the floaty is un-minimized (expanded), we check if the
@@ -1113,7 +1354,7 @@ TEST_F(GeminiBrowserAgentTest, TestPersistSelectedTabsOnUnMinimize) {
 
   std::unique_ptr<web::FakeWebState> other_web_state =
       std::make_unique<web::FakeWebState>();
-  other_web_state->SetBrowserState(profile_);
+  other_web_state->SetBrowserState(personal_profile_);
   GeminiTabHelper::CreateForWebState(other_web_state.get());
   WebViewProxyTabHelper::CreateForWebState(other_web_state.get());
   web::WebStateID other_id = other_web_state->GetUniqueIdentifier();
@@ -1123,7 +1364,7 @@ TEST_F(GeminiBrowserAgentTest, TestPersistSelectedTabsOnUnMinimize) {
 
   std::unique_ptr<web::FakeWebState> non_selected_web_state =
       std::make_unique<web::FakeWebState>();
-  non_selected_web_state->SetBrowserState(profile_);
+  non_selected_web_state->SetBrowserState(personal_profile_);
   GeminiTabHelper::CreateForWebState(non_selected_web_state.get());
   WebViewProxyTabHelper::CreateForWebState(non_selected_web_state.get());
   browser_->GetWebStateList()->InsertWebState(
@@ -1141,7 +1382,7 @@ TEST_F(GeminiBrowserAgentTest, TestPersistSelectedTabsOnUnMinimize) {
   SetRawAttachedTab(active_id, active_context);
 
   gemini_browser_agent_->OnTabPickerSelectionChanged({active_id, other_id});
-  EXPECT_EQ(GetRawAttachedTabs().size(), 2u);
+  EXPECT_EQ(GetRawSharedTabs().size(), 2u);
   // GetSelectedWebStateIDs() may return size 1 in downstream unit tests if
   // GCRGemini provider is uninitialized/nil, so we assert on raw selected IDs.
 
@@ -1165,9 +1406,9 @@ TEST_F(GeminiBrowserAgentTest, TestPersistSelectedTabsOnUnMinimize) {
       raw_non_selected_web_state->GetUniqueIdentifier();
 
   // Verify that attached tabs now contains only the new active tab.
-  auto raw_tabs = GetRawAttachedTabs();
+  auto raw_tabs = GetRawSharedTabs();
   EXPECT_EQ(raw_tabs.size(), 1u);
-  EXPECT_TRUE(raw_tabs.count(new_active_id));
+  EXPECT_NE(nil, GetRawAttachedTabContext(new_active_id));
 
   // Simulate un-minimizing the floaty.
   gemini_browser_agent_->OnViewStateChanged(
@@ -1177,7 +1418,7 @@ TEST_F(GeminiBrowserAgentTest, TestPersistSelectedTabsOnUnMinimize) {
 
   // Verify that attached tabs now remains only the new active tab.
   EXPECT_EQ(raw_tabs.size(), 1u);
-  EXPECT_TRUE(raw_tabs.count(new_active_id));
+  EXPECT_NE(nil, GetRawAttachedTabContext(new_active_id));
 }
 
 // Tests that switching from live to floaty mode on an eligible page keeps the
@@ -1191,10 +1432,6 @@ TEST_F(GeminiBrowserAgentTest, TestSwitchFromLiveToChatEligible) {
   [browser_->GetCommandDispatcher()
       startDispatchingToTarget:mock_snackbar_handler
                    forProtocol:@protocol(SnackbarCommands)];
-  id mock_fullscreen_handler = OCMProtocolMock(@protocol(FullscreenCommands));
-  [browser_->GetCommandDispatcher()
-      startDispatchingToTarget:mock_fullscreen_handler
-                   forProtocol:@protocol(FullscreenCommands)];
 
   SetIsFloatyInvoked(true);
   web_state_->SetCurrentURL(GURL("https://example.com"));
@@ -1278,40 +1515,18 @@ TEST_F(GeminiBrowserAgentTest, TestDetachInvalidTabId) {
   SetRawAttachedTab(active_id, active_context);
 
   gemini_browser_agent_->OnTabPickerSelectionChanged({active_id});
-  size_t initial_size = GetRawAttachedTabs().size();
+  size_t initial_size = GetRawSharedTabs().size();
 
   DetachTabWithID(@"invalid_id");
 
   // The map size should be unchanged.
-  EXPECT_EQ(initial_size, GetRawAttachedTabs().size());
+  EXPECT_EQ(initial_size, GetRawSharedTabs().size());
 }
 
-// Tests that DetachTabWithID gracefully early-exits when there is no active
-// web state.
-TEST_F(GeminiBrowserAgentTest, TestDetachTabWithoutActiveWebState) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({kGeminiMultiTabContext, kPageActionMenu}, {});
-
-  // Clear raw_ptrs to prevent DanglingPtr crashes during TearDown when the
-  // WebState (and its associated frames/helpers) is destroyed.
-  web_state_ = nullptr;
-  fake_main_frame_ = nullptr;
-  gemini_tab_helper_ = nullptr;
-
-  // Close the active web state so that GetActiveWebState() returns nullptr.
-  browser_->GetWebStateList()->CloseWebStateAt(
-      0, WebStateList::ClosingReason::kDefault);
-  ASSERT_EQ(nullptr, browser_->GetWebStateList()->GetActiveWebState());
-
-  DetachTabWithID(@"123");
-
-  // Should not crash.
-  EXPECT_EQ(0u, GetRawAttachedTabs().size());
-}
-
-// Tests that DetachTabWithID updates the attachment state of the active tab
-// without removing it.
-TEST_F(GeminiBrowserAgentTest, TestDetachActiveTab) {
+// Tests that UpdateLocalTabAttachmentState updates the attachment state of the
+// active tab without removing it.
+TEST_F(GeminiBrowserAgentTest,
+       TestUpdateLocalTabAttachmentStateDetachesActiveTab) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures({kGeminiMultiTabContext, kPageActionMenu}, {});
 
@@ -1325,20 +1540,31 @@ TEST_F(GeminiBrowserAgentTest, TestDetachActiveTab) {
   gemini_browser_agent_->OnTabPickerSelectionChanged({active_id});
 
   // Verify it starts as attached.
-  auto tabs = GetRawAttachedTabs();
+  auto tabs = GetRawSharedTabs();
   ASSERT_EQ(1u, tabs.size());
-  ASSERT_EQ(ios::provider::GeminiPageContextAttachmentState::kAttached,
-            tabs[active_id].geminiPageContextAttachmentState);
+  ASSERT_EQ(
+      ios::provider::GeminiPageContextAttachmentState::kAttached,
+      GetRawAttachedTabContext(active_id).geminiPageContextAttachmentState);
 
   NSString* tab_id_str =
       [NSString stringWithFormat:@"%d", active_id.identifier()];
-  DetachTabWithID(tab_id_str);
+  base::UserActionTester user_action_tester;
+  UpdateLocalTabAttachmentState(
+      tab_id_str, ios::provider::GeminiPageContextAttachmentState::kDetached);
+  EXPECT_EQ(1,
+            user_action_tester.GetActionCount("MobileGeminiActiveTabDetached"));
 
-  // Verify it is still in the map but detached.
-  tabs = GetRawAttachedTabs();
+  UpdateLocalTabAttachmentState(
+      tab_id_str, ios::provider::GeminiPageContextAttachmentState::kAttached);
+  EXPECT_EQ(1,
+            user_action_tester.GetActionCount("MobileGeminiActiveTabAttached"));
+
+  // Verify it is in the map as attached.
+  tabs = GetRawSharedTabs();
   EXPECT_EQ(1u, tabs.size());
-  EXPECT_EQ(ios::provider::GeminiPageContextAttachmentState::kDetached,
-            tabs[active_id].geminiPageContextAttachmentState);
+  EXPECT_EQ(
+      ios::provider::GeminiPageContextAttachmentState::kAttached,
+      GetRawAttachedTabContext(active_id).geminiPageContextAttachmentState);
 }
 
 // Tests that DetachTabWithID completely removes a shared tab from the cache.
@@ -1350,7 +1576,7 @@ TEST_F(GeminiBrowserAgentTest, TestDetachSharedTab) {
 
   std::unique_ptr<web::FakeWebState> other_web_state =
       std::make_unique<web::FakeWebState>();
-  other_web_state->SetBrowserState(profile_);
+  other_web_state->SetBrowserState(personal_profile_);
   GeminiTabHelper::CreateForWebState(other_web_state.get());
   WebViewProxyTabHelper::CreateForWebState(other_web_state.get());
   web::WebStateID other_id = other_web_state->GetUniqueIdentifier();
@@ -1365,21 +1591,23 @@ TEST_F(GeminiBrowserAgentTest, TestDetachSharedTab) {
 
   gemini_browser_agent_->OnTabPickerSelectionChanged({active_id, other_id});
 
-  auto tabs = GetRawAttachedTabs();
+  auto tabs = GetRawSharedTabs();
   ASSERT_EQ(2u, tabs.size());
 
   NSString* other_tab_id_str =
       [NSString stringWithFormat:@"%d", other_id.identifier()];
+  base::UserActionTester user_action_tester;
   DetachTabWithID(other_tab_id_str);
+  EXPECT_EQ(1, user_action_tester.GetActionCount("MobileGeminiTabDetached"));
 
   // Verify the shared tab is completely removed.
-  tabs = GetRawAttachedTabs();
+  tabs = GetRawSharedTabs();
   EXPECT_EQ(1u, tabs.size());
-  EXPECT_EQ(0u, tabs.count(other_id));
+  EXPECT_EQ(nil, GetRawAttachedTabContext(other_id));
 }
 
 // Tests that disabling the page content sharing pref clears attached tabs.
-TEST_F(GeminiBrowserAgentTest, TestClearAttachedTabsOnPageContentPrefDisabled) {
+TEST_F(GeminiBrowserAgentTest, TestClearSharedTabsOnPageContentPrefDisabled) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures({kGeminiMultiTabContext, kPageActionMenu}, {});
 
@@ -1397,13 +1625,328 @@ TEST_F(GeminiBrowserAgentTest, TestClearAttachedTabsOnPageContentPrefDisabled) {
       ios::provider::GeminiPageContextAttachmentState::kAttached;
   SetRawAttachedTab(other_id, other_context);
 
-  EXPECT_EQ(2u, GetRawAttachedTabs().size());
+  EXPECT_EQ(2u, GetRawSharedTabs().size());
 
   // Toggle the preference to disabled.
-  profile_->GetPrefs()->SetBoolean(prefs::kIOSBWGPageContentSetting, false);
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBWGPageContentSetting,
+                                            false);
 
-  // Verify that `attached_tabs_` was cleared.
-  EXPECT_EQ(0u, GetRawAttachedTabs().size());
+  // Verify that `shared_tabs_` was cleared.
+  EXPECT_EQ(0u, GetRawSharedTabs().size());
+}
+
+// Tests that OnTabPickerSelectionChanged correctly assigns partial contexts to
+// newly selected tabs and triggers a fetch.
+TEST_F(GeminiBrowserAgentTest, TestOnTabPickerSelectionChangedNewlyAddedTab) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kGeminiMultiTabContext, kPageActionMenu}, {});
+
+  // Add the active tab.
+  web::WebStateID active_id = web_state_->GetUniqueIdentifier();
+  GeminiPageContext* active_context = [[GeminiPageContext alloc] init];
+  active_context.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kAttached;
+  SetRawAttachedTab(active_id, active_context);
+
+  // Add a newly selected tab.
+  std::unique_ptr<web::FakeWebState> other_web_state =
+      std::make_unique<web::FakeWebState>();
+  other_web_state->SetBrowserState(personal_profile_);
+  GeminiTabHelper::CreateForWebState(other_web_state.get());
+  WebViewProxyTabHelper::CreateForWebState(other_web_state.get());
+  web::WebStateID other_id = other_web_state->GetUniqueIdentifier();
+  browser_->GetWebStateList()->InsertWebState(
+      std::move(other_web_state),
+      WebStateList::InsertionParams::Automatic().Activate(false));
+
+  gemini_browser_agent_->OnTabPickerSelectionChanged({active_id, other_id});
+
+  // Verify that `shared_tabs_` now contains a partial context for the new
+  // tab.
+  auto tabs = GetRawSharedTabs();
+  ASSERT_EQ(2u, tabs.size());
+
+  GeminiPageContext* other_context = GetRawAttachedTabContext(other_id);
+  ASSERT_TRUE(other_context);
+  EXPECT_EQ(ios::provider::GeminiPageContextAttachmentState::kAttached,
+            other_context.geminiPageContextAttachmentState);
+  // FakeWebState lacks a URL and MIME type, making it ineligible for Gemini
+  // context extraction. We leave it ineligible so that it falls back to
+  // kBlocked, avoiding actual native view snapshot logic which crashes tests.
+  EXPECT_EQ(ios::provider::GeminiPageContextComputationState::kBlocked,
+            other_context.geminiPageContextComputationState);
+}
+
+// Tests that OnPersistTabContextLookupComplete delegates to GeneratePageContext
+// when cached APC does not exist (empty optional).
+TEST_F(GeminiBrowserAgentTest,
+       TestOnPersistTabContextLookupCompleteCachedAPCDoesNotExist) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kGeminiMultiTabContext, kPageActionMenu}, {});
+
+  web::WebStateID active_id = web_state_->GetUniqueIdentifier();
+  GeminiPageContext* active_context = [[GeminiPageContext alloc] init];
+  active_context.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kAttached;
+  SetRawAttachedTab(active_id, active_context);
+
+  std::unique_ptr<web::FakeWebState> other_web_state =
+      std::make_unique<web::FakeWebState>();
+  other_web_state->SetBrowserState(personal_profile_);
+  GeminiTabHelper::CreateForWebState(other_web_state.get());
+  WebViewProxyTabHelper::CreateForWebState(other_web_state.get());
+  web::WebStateID other_id = other_web_state->GetUniqueIdentifier();
+  browser_->GetWebStateList()->InsertWebState(
+      std::move(other_web_state),
+      WebStateList::InsertionParams::Automatic().Activate(false));
+
+  gemini_browser_agent_->OnTabPickerSelectionChanged({active_id, other_id});
+
+  // Fire callback indicating cached APC does not exist.
+  PersistTabContextBrowserAgent::PageContextMap cache_map;
+  cache_map[base::NumberToString(other_id.identifier())] = std::nullopt;
+  TriggerPersistTabContextLookupComplete(std::move(cache_map));
+
+  // Since cached APC does not exist, GeneratePageContext is triggered. However,
+  // because FakeWebState is naturally ineligible (no URL or MIME type), it
+  // falls back to kBlocked without attempting to take a native view snapshot
+  // (which would crash the test runner).
+  GeminiPageContext* other_context = GetRawAttachedTabContext(other_id);
+  EXPECT_EQ(ios::provider::GeminiPageContextComputationState::kBlocked,
+            other_context.geminiPageContextComputationState);
+}
+
+// Tests that OnPersistTabContextLookupComplete correctly upgrades the context
+// to kSuccess when cached APC exists.
+TEST_F(GeminiBrowserAgentTest,
+       TestOnPersistTabContextLookupCompleteCachedAPCExists) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kGeminiMultiTabContext, kPageActionMenu}, {});
+
+  web::WebStateID active_id = web_state_->GetUniqueIdentifier();
+  GeminiPageContext* active_context = [[GeminiPageContext alloc] init];
+  active_context.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kAttached;
+  SetRawAttachedTab(active_id, active_context);
+
+  std::unique_ptr<web::FakeWebState> other_web_state =
+      std::make_unique<web::FakeWebState>();
+  other_web_state->SetBrowserState(personal_profile_);
+  GeminiTabHelper::CreateForWebState(other_web_state.get());
+  WebViewProxyTabHelper::CreateForWebState(other_web_state.get());
+  web::WebStateID other_id = other_web_state->GetUniqueIdentifier();
+  browser_->GetWebStateList()->InsertWebState(
+      std::move(other_web_state),
+      WebStateList::InsertionParams::Automatic().Activate(false));
+
+  gemini_browser_agent_->OnTabPickerSelectionChanged({active_id, other_id});
+
+  // Fire callback indicating cached APC exists.
+  PersistTabContextBrowserAgent::PageContextMap cache_map;
+  cache_map[base::NumberToString(other_id.identifier())] =
+      std::make_unique<optimization_guide::proto::PageContext>();
+  TriggerPersistTabContextLookupComplete(std::move(cache_map));
+
+  // Since cached APC exists, the page context should be updated to kSuccess.
+  GeminiPageContext* other_context = GetRawAttachedTabContext(other_id);
+  EXPECT_EQ(ios::provider::GeminiPageContextComputationState::kSuccess,
+            other_context.geminiPageContextComputationState);
+  EXPECT_TRUE(other_context.uniquePageContext != nullptr);
+}
+
+// Tests that a shared tab's page context fetched while the floaty is invoked is
+// sent to the provider.
+TEST_F(GeminiBrowserAgentTest,
+       TestSharedTabPageContextSentToProviderWhileFloatyInvoked) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kGeminiMultiTabContext, kPageActionMenu}, {});
+
+  web::WebStateID active_id = web_state_->GetUniqueIdentifier();
+  GeminiPageContext* active_context = [[GeminiPageContext alloc] init];
+  active_context.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kAttached;
+  SetRawAttachedTab(active_id, active_context);
+
+  std::unique_ptr<web::FakeWebState> other_web_state =
+      std::make_unique<web::FakeWebState>();
+  other_web_state->SetBrowserState(personal_profile_);
+  GeminiTabHelper::CreateForWebState(other_web_state.get());
+  WebViewProxyTabHelper::CreateForWebState(other_web_state.get());
+  web::WebStateID other_id = other_web_state->GetUniqueIdentifier();
+  browser_->GetWebStateList()->InsertWebState(
+      std::move(other_web_state),
+      WebStateList::InsertionParams::Automatic().Activate(false));
+
+  SetIsFloatyInvoked(true);
+  gemini_browser_agent_->OnTabPickerSelectionChanged({active_id, other_id});
+  ios::provider::ResetGemini();
+
+  PersistTabContextBrowserAgent::PageContextMap cache_map;
+  cache_map[base::NumberToString(other_id.identifier())] =
+      std::make_unique<optimization_guide::proto::PageContext>();
+  TriggerPersistTabContextLookupComplete(std::move(cache_map));
+
+  EXPECT_EQ(1, ios::provider::GetUpdateActivePageContextCallCount());
+}
+
+// Tests that a shared tab's page context fetched after the floaty was dismissed
+// is kept for the next invocation without being sent to the provider.
+TEST_F(GeminiBrowserAgentTest,
+       TestSharedTabPageContextNotSentToProviderAfterFloatyDismissed) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kGeminiMultiTabContext, kPageActionMenu}, {});
+
+  web::WebStateID active_id = web_state_->GetUniqueIdentifier();
+  GeminiPageContext* active_context = [[GeminiPageContext alloc] init];
+  active_context.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kAttached;
+  SetRawAttachedTab(active_id, active_context);
+
+  std::unique_ptr<web::FakeWebState> other_web_state =
+      std::make_unique<web::FakeWebState>();
+  other_web_state->SetBrowserState(personal_profile_);
+  GeminiTabHelper::CreateForWebState(other_web_state.get());
+  WebViewProxyTabHelper::CreateForWebState(other_web_state.get());
+  web::WebStateID other_id = other_web_state->GetUniqueIdentifier();
+  browser_->GetWebStateList()->InsertWebState(
+      std::move(other_web_state),
+      WebStateList::InsertionParams::Automatic().Activate(false));
+
+  SetIsFloatyInvoked(true);
+  gemini_browser_agent_->OnTabPickerSelectionChanged({active_id, other_id});
+  // Dismissing the floaty resets the provider, including its recorded calls.
+  gemini_browser_agent_->DismissFloaty();
+
+  PersistTabContextBrowserAgent::PageContextMap cache_map;
+  cache_map[base::NumberToString(other_id.identifier())] =
+      std::make_unique<optimization_guide::proto::PageContext>();
+  TriggerPersistTabContextLookupComplete(std::move(cache_map));
+
+  GeminiPageContext* other_context = GetRawAttachedTabContext(other_id);
+  ASSERT_TRUE(other_context);
+  EXPECT_EQ(ios::provider::GeminiPageContextComputationState::kSuccess,
+            other_context.geminiPageContextComputationState);
+  EXPECT_EQ(0, ios::provider::GetUpdateActivePageContextCallCount());
+}
+
+// Tests that switching away from a shared tab immediately triggers a page
+// context refetch for that tab.
+TEST_F(GeminiBrowserAgentTest, TestSwitchingTabRefetchesSharedTab) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kGeminiMultiTabContext, kPageActionMenu}, {});
+
+  web::WebStateID active_id = web_state_->GetUniqueIdentifier();
+  GeminiPageContext* active_context = [[GeminiPageContext alloc] init];
+  active_context.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kAttached;
+  SetRawAttachedTab(active_id, active_context);
+
+  std::unique_ptr<web::FakeWebState> other_web_state =
+      std::make_unique<web::FakeWebState>();
+  other_web_state->SetBrowserState(personal_profile_);
+  GeminiTabHelper::CreateForWebState(other_web_state.get());
+  WebViewProxyTabHelper::CreateForWebState(other_web_state.get());
+  web::WebStateID other_id = other_web_state->GetUniqueIdentifier();
+  browser_->GetWebStateList()->InsertWebState(
+      std::move(other_web_state),
+      WebStateList::InsertionParams::Automatic().Activate(false));
+
+  gemini_browser_agent_->OnTabPickerSelectionChanged({active_id, other_id});
+
+  // Switch to `other_id` and manually set its computation state to kSuccess.
+  browser_->GetWebStateList()->ActivateWebStateAt(1);
+  GetRawAttachedTabContext(other_id).geminiPageContextComputationState =
+      ios::provider::GeminiPageContextComputationState::kSuccess;
+
+  // Switch back to `active_id` so that we switch away from `other_id`, which
+  // should immediately trigger a refetch for `other_id`.
+  browser_->GetWebStateList()->ActivateWebStateAt(0);
+
+  // Verify that a fresh partial context was generated for `other_id`. Since
+  // `FakeWebState` lacks a URL, it is ineligible and the refetch immediately
+  // sets its partial context state to `kBlocked`.
+  EXPECT_EQ(
+      ios::provider::GeminiPageContextComputationState::kBlocked,
+      GetRawAttachedTabContext(other_id).geminiPageContextComputationState);
+}
+
+// Tests the logic backing the metrics block providers.
+TEST_F(GeminiBrowserAgentTest, TestMetricsBlockProviders) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kGeminiMultiTabContext, kPageActionMenu}, {});
+
+  // Add the active tab.
+  web::WebStateID active_id = web_state_->GetUniqueIdentifier();
+  GeminiPageContext* active_context = [[GeminiPageContext alloc] init];
+  active_context.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kAttached;
+  SetRawAttachedTab(active_id, active_context);
+
+  EXPECT_EQ(1u, SharedTabsCount());
+  EXPECT_FALSE(GetInactiveSharedTabsCount() > 0);
+
+  // Add a shared tab.
+  web::WebStateID other_id = web::WebStateID::NewUnique();
+  GeminiPageContext* other_context = [[GeminiPageContext alloc] init];
+  other_context.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kAttached;
+  SetRawAttachedTab(other_id, other_context);
+
+  EXPECT_EQ(2u, SharedTabsCount());
+  EXPECT_TRUE(GetInactiveSharedTabsCount() > 0);
+
+  // Set active tab to detached.
+  active_context.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kDetached;
+  EXPECT_EQ(1u, SharedTabsCount());
+  EXPECT_TRUE(GetInactiveSharedTabsCount() > 0);
+}
+
+// Test that attached inactive shared tabs preserve their insertion order
+// regardless of WebStateID values or subsequent context updates.
+TEST_F(GeminiBrowserAgentTest, TestInactiveSharedTabsPreserveInsertionOrder) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kGeminiMultiTabContext, kPageActionMenu}, {});
+
+  // Create WebStateIDs out of numerical order to verify that sorting is by
+  // insertion order rather than by WebStateID value.
+  web::WebStateID id_first = web::WebStateID::FromSerializedValue(100);
+  web::WebStateID id_second = web::WebStateID::FromSerializedValue(50);
+  web::WebStateID id_third = web::WebStateID::FromSerializedValue(200);
+
+  GeminiPageContext* context_first = [[GeminiPageContext alloc] init];
+  context_first.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kAttached;
+  SetRawAttachedTab(id_first, context_first);
+
+  GeminiPageContext* context_second = [[GeminiPageContext alloc] init];
+  context_second.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kAttached;
+  SetRawAttachedTab(id_second, context_second);
+
+  GeminiPageContext* context_third = [[GeminiPageContext alloc] init];
+  context_third.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kAttached;
+  SetRawAttachedTab(id_third, context_third);
+
+  auto raw_tabs = GetRawSharedTabs();
+  ASSERT_EQ(3u, raw_tabs.size());
+  EXPECT_EQ(id_first, raw_tabs[0].first);
+  EXPECT_EQ(id_second, raw_tabs[1].first);
+  EXPECT_EQ(id_third, raw_tabs[2].first);
+
+  // Updating an existing tab's context should not alter insertion order.
+  GeminiPageContext* updated_context_first = [[GeminiPageContext alloc] init];
+  updated_context_first.geminiPageContextAttachmentState =
+      ios::provider::GeminiPageContextAttachmentState::kAttached;
+  SetRawAttachedTab(id_first, updated_context_first);
+
+  raw_tabs = GetRawSharedTabs();
+  ASSERT_EQ(3u, raw_tabs.size());
+  EXPECT_EQ(id_first, raw_tabs[0].first);
+  EXPECT_EQ(id_second, raw_tabs[1].first);
+  EXPECT_EQ(id_third, raw_tabs[2].first);
+  EXPECT_EQ(updated_context_first, raw_tabs[0].second);
 }
 
 // Tests that ShowGeminiLiveMicrophoneAlert presents the OS settings alert when
@@ -1446,8 +1989,8 @@ TEST_F(GeminiBrowserAgentTest, TestShowGeminiLiveMicrophoneAlertWhenOSDenied) {
 TEST_F(GeminiBrowserAgentTest,
        TestShowGeminiLiveMicrophoneAlertWhenChromePrefDisabled) {
   // Disable Chrome-level Gemini Live microphone setting.
-  profile_->GetPrefs()->SetBoolean(prefs::kIOSGeminiLiveMicrophoneSetting,
-                                   false);
+  personal_profile_->GetPrefs()->SetBoolean(
+      prefs::kIOSGeminiLiveMicrophoneSetting, false);
 
   // Enable OS level microphone permission.
   id mock_device = OCMClassMock([AVCaptureDevice class]);
@@ -1484,8 +2027,8 @@ TEST_F(GeminiBrowserAgentTest,
 TEST_F(GeminiBrowserAgentTest,
        TestShowGeminiLiveMicrophoneAlertWhenAuthorizedAndEnabled) {
   // Enable Chrome-level Gemini Live microphone setting.
-  profile_->GetPrefs()->SetBoolean(prefs::kIOSGeminiLiveMicrophoneSetting,
-                                   true);
+  personal_profile_->GetPrefs()->SetBoolean(
+      prefs::kIOSGeminiLiveMicrophoneSetting, true);
 
   // Enable OS level microphone permission.
   id mock_device = OCMClassMock([AVCaptureDevice class]);
@@ -1509,4 +2052,502 @@ TEST_F(GeminiBrowserAgentTest,
   EXPECT_TRUE(completion_called);
   EXPECT_TRUE(completion_granted);
   [mock_device stopMocking];
+}
+
+// Tests that switching to Live mode only records session started metrics if all
+// Live permissions and preferences have been granted.
+TEST_F(GeminiBrowserAgentTest,
+       TestOnModeChangedLiveSessionMetricsGatedOnPermissions) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures({kGeminiLive}, {});
+  base::UserActionTester user_action_tester;
+
+  // Initially, permissions are not granted.
+  EXPECT_FALSE(HasGivenAllLivePermissions());
+
+  gemini_browser_agent_->OnModeChanged(ios::provider::GeminiViewMode::kLive);
+  EXPECT_EQ(
+      0, user_action_tester.GetActionCount("MobileGeminiLiveSessionStarted"));
+
+  // Grant user consent, intro played, and Chrome microphone preference.
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSGeminiLiveConsent, true);
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSGeminiLiveIntroPlayed,
+                                            true);
+  personal_profile_->GetPrefs()->SetBoolean(
+      prefs::kIOSGeminiLiveMicrophoneSetting, true);
+
+  // Stub OS-level microphone authorization.
+  id mock_device = OCMClassMock([AVCaptureDevice class]);
+  OCMStub([mock_device authorizationStatusForMediaType:AVMediaTypeAudio])
+      .andReturn(AVAuthorizationStatusAuthorized);
+
+  EXPECT_TRUE(HasGivenAllLivePermissions());
+
+  gemini_browser_agent_->OnModeChanged(ios::provider::GeminiViewMode::kLive);
+  EXPECT_EQ(
+      1, user_action_tester.GetActionCount("MobileGeminiLiveSessionStarted"));
+
+  [mock_device stopMocking];
+}
+
+// Test that `HasGivenAllLivePermissions` returns true without
+// `kIOSGeminiLiveIntroPlayed` when `kGeminiLiveSkipIntroParam` is enabled.
+TEST_F(GeminiBrowserAgentTest,
+       TestHasGivenAllLivePermissionsWithSkipIntroFlag) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeaturesAndParameters(
+      {{kGeminiLive, {{kGeminiLiveSkipIntroParam, "true"}}},
+       {kPageActionMenu, {}}},
+      {});
+
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSGeminiLiveConsent, true);
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSGeminiLiveIntroPlayed,
+                                            false);
+  personal_profile_->GetPrefs()->SetBoolean(
+      prefs::kIOSGeminiLiveMicrophoneSetting, true);
+
+  id mock_device = OCMClassMock([AVCaptureDevice class]);
+  OCMStub([mock_device authorizationStatusForMediaType:AVMediaTypeAudio])
+      .andReturn(AVAuthorizationStatusAuthorized);
+
+  EXPECT_TRUE(HasGivenAllLivePermissions());
+
+  [mock_device stopMocking];
+}
+
+// Tests that Gemini quota info is refreshed when the app enters the foreground
+// and foreground quota refresh is enabled.
+TEST_F(GeminiBrowserAgentTest,
+       TestForceRefreshQuotaInfoOnForegroundWhenEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeaturesAndParameters(
+      /*enabled_features=*/{base::test::FeatureRefAndParams(
+          kGeminiAureus, {{kGeminiAureusForegroundQuotaRefreshParam, "true"}})},
+      /*disabled_features=*/{});
+
+  ios::provider::ResetForceRefreshQuotaInfoCalled();
+  EXPECT_FALSE(ios::provider::WasForceRefreshQuotaInfoCalled());
+
+  [[NSNotificationCenter defaultCenter]
+      postNotificationName:UIApplicationWillEnterForegroundNotification
+                    object:nil];
+
+  EXPECT_TRUE(ios::provider::WasForceRefreshQuotaInfoCalled());
+}
+
+// Tests that Gemini quota info is not refreshed when the app enters the
+// foreground foreground quota refresh is not enabled.
+TEST_F(GeminiBrowserAgentTest,
+       TestForceRefreshQuotaInfoOnForegroundWhenParamDefaultDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kGeminiAureus);
+
+  ios::provider::ResetForceRefreshQuotaInfoCalled();
+  EXPECT_FALSE(ios::provider::WasForceRefreshQuotaInfoCalled());
+
+  [[NSNotificationCenter defaultCenter]
+      postNotificationName:UIApplicationWillEnterForegroundNotification
+                    object:nil];
+
+  EXPECT_FALSE(ios::provider::WasForceRefreshQuotaInfoCalled());
+}
+
+// Tests that StartGeminiFlow updates prompt action and passes
+// `shouldAutoSubmit` when floaty is already invoked.
+TEST_F(GeminiBrowserAgentTest,
+       TestStartGeminiFlowWithAutoSubmitWhenFloatyInvoked) {
+  // Simulate FRE completion.
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
+  web_state_->SetCurrentURL(GURL("https://example.com"));
+  web_state_->WasShown();
+
+  ios::provider::ResetGemini();
+  SetIsFloatyInvoked(true);
+
+  UIViewController* base_view_controller = [[UIViewController alloc] init];
+  GeminiStartupState* startup_state = [[GeminiStartupState alloc]
+      initWithEntryPoint:gemini::EntryPoint::ContextualCueInfobar];
+  startup_state.prepopulatedPrompt = @"Explain this page";
+  startup_state.shouldAutoSubmit = YES;
+
+  gemini_browser_agent_->StartGeminiFlow(base_view_controller, startup_state);
+
+  // An invoked floaty is updated right away rather than deferred.
+  EXPECT_FALSE(HasPendingPresentation());
+  EXPECT_EQ(ios::provider::GetLastUpdatePromptActionEntryPoint(),
+            gemini::EntryPoint::ContextualCueInfobar);
+  EXPECT_NSEQ(ios::provider::GetLastUpdatePromptActionPrompt(),
+              @"Explain this page");
+  EXPECT_TRUE(ios::provider::GetLastUpdatePromptActionShouldAutoSubmit());
+
+  // Test when `shouldAutoSubmit` is NO.
+  startup_state.entryPoint = gemini::EntryPoint::ContextualCueChip;
+  startup_state.prepopulatedPrompt = @"Summarize this page";
+  startup_state.shouldAutoSubmit = NO;
+
+  gemini_browser_agent_->StartGeminiFlow(base_view_controller, startup_state);
+
+  EXPECT_EQ(ios::provider::GetLastUpdatePromptActionEntryPoint(),
+            gemini::EntryPoint::ContextualCueChip);
+  EXPECT_NSEQ(ios::provider::GetLastUpdatePromptActionPrompt(),
+              @"Summarize this page");
+  EXPECT_FALSE(ios::provider::GetLastUpdatePromptActionShouldAutoSubmit());
+}
+
+// Tests that StartGeminiFlow defers presenting a floaty that auto-submits a
+// prompt until the active page context is generated, then invokes the floaty
+// with that page context.
+TEST_F(GeminiBrowserAgentTest,
+       TestStartGeminiFlowWithAutoSubmitWaitsForPageContext) {
+  // Simulate FRE completion and an eligible, loaded page.
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
+  web_state_->SetCurrentURL(GURL("https://example.com"));
+  web_state_->SetContentsMimeType("text/html");
+  web_state_->WasShown();
+
+  ios::provider::ResetGemini();
+
+  UIViewController* base_view_controller = [[UIViewController alloc] init];
+  GeminiStartupState* startup_state = [[GeminiStartupState alloc]
+      initWithEntryPoint:gemini::EntryPoint::ContextualCueInfobar];
+  startup_state.prepopulatedPrompt = @"Explain this page";
+  startup_state.shouldAutoSubmit = YES;
+
+  gemini_browser_agent_->StartGeminiFlow(base_view_controller, startup_state);
+
+  // The floaty is not presented until page context generation completes.
+  EXPECT_FALSE(IsFloatyInvoked());
+  EXPECT_TRUE(HasPendingPresentation());
+  EXPECT_EQ(nil, ios::provider::GetLastStartGeminiOverlayConfiguration());
+  EXPECT_EQ(gemini::EntryPoint::Unknown,
+            gemini_browser_agent_->GetEntryPoint());
+
+  GeminiPageContext* page_context = [[GeminiPageContext alloc] init];
+  page_context.geminiPageContextComputationState =
+      ios::provider::GeminiPageContextComputationState::kSuccess;
+  RunPendingPresentation(page_context);
+
+  EXPECT_TRUE(IsFloatyInvoked());
+  EXPECT_FALSE(HasPendingPresentation());
+  EXPECT_EQ(gemini::EntryPoint::ContextualCueInfobar,
+            gemini_browser_agent_->GetEntryPoint());
+  GeminiConfiguration* config =
+      ios::provider::GetLastStartGeminiOverlayConfiguration();
+  ASSERT_TRUE(config);
+  EXPECT_TRUE(config.shouldAutoSubmit);
+  EXPECT_NSEQ(@"Explain this page", config.contextualCueChipLabel);
+  EXPECT_EQ(page_context, config.pageContext);
+
+  // A later generation callback (e.g. once a loading page finishes) does not
+  // present again nor update the already invoked floaty.
+  RunPendingPresentation([[GeminiPageContext alloc] init]);
+  EXPECT_EQ(config, ios::provider::GetLastStartGeminiOverlayConfiguration());
+  EXPECT_FALSE(
+      ios::provider::GetLastUpdatePromptActionEntryPoint().has_value());
+}
+
+// Tests that a floaty that auto-submits a prompt is presented with the partial
+// page context when page context generation does not complete in time.
+TEST_F(GeminiBrowserAgentTest,
+       TestStartGeminiFlowWithAutoSubmitPresentsOnPageContextTimeout) {
+  // Simulate FRE completion and an eligible page that is still loading, which
+  // defers page context generation until the page finishes loading.
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
+  web_state_->SetCurrentURL(GURL("https://example.com"));
+  web_state_->SetContentsMimeType("text/html");
+  web_state_->SetLoading(true);
+  web_state_->WasShown();
+
+  ios::provider::ResetGemini();
+
+  UIViewController* base_view_controller = [[UIViewController alloc] init];
+  GeminiStartupState* startup_state = [[GeminiStartupState alloc]
+      initWithEntryPoint:gemini::EntryPoint::ContextualCueInfobar];
+  startup_state.prepopulatedPrompt = @"Explain this page";
+  startup_state.shouldAutoSubmit = YES;
+
+  gemini_browser_agent_->StartGeminiFlow(base_view_controller, startup_state);
+  EXPECT_FALSE(IsFloatyInvoked());
+
+  task_environment_.FastForwardBy(kAutoSubmitPageContextTimeout);
+
+  EXPECT_TRUE(IsFloatyInvoked());
+  EXPECT_FALSE(HasPendingPresentation());
+  GeminiConfiguration* config =
+      ios::provider::GetLastStartGeminiOverlayConfiguration();
+  ASSERT_TRUE(config);
+  EXPECT_TRUE(config.shouldAutoSubmit);
+  EXPECT_EQ(ios::provider::GeminiPageContextComputationState::kPending,
+            config.pageContext.geminiPageContextComputationState);
+}
+
+// Tests that a presentation waiting for page context is dropped when a new
+// Gemini flow is started, so that it does not run on top of the new floaty.
+TEST_F(GeminiBrowserAgentTest,
+       TestStartGeminiFlowSupersedesPendingPresentation) {
+  // Simulate FRE completion and an eligible page that is still loading.
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
+  web_state_->SetCurrentURL(GURL("https://example.com"));
+  web_state_->SetContentsMimeType("text/html");
+  web_state_->SetLoading(true);
+  web_state_->WasShown();
+
+  ios::provider::ResetGemini();
+
+  UIViewController* base_view_controller = [[UIViewController alloc] init];
+  GeminiStartupState* auto_submit_startup_state = [[GeminiStartupState alloc]
+      initWithEntryPoint:gemini::EntryPoint::ContextualCueInfobar];
+  auto_submit_startup_state.prepopulatedPrompt = @"Explain this page";
+  auto_submit_startup_state.shouldAutoSubmit = YES;
+
+  gemini_browser_agent_->StartGeminiFlow(base_view_controller,
+                                         auto_submit_startup_state);
+  EXPECT_TRUE(HasPendingPresentation());
+
+  // A flow that does not auto-submit presents immediately.
+  gemini_browser_agent_->StartGeminiFlow(
+      base_view_controller,
+      [[GeminiStartupState alloc]
+          initWithEntryPoint:gemini::EntryPoint::OverflowMenu]);
+  EXPECT_TRUE(IsFloatyInvoked());
+  EXPECT_FALSE(HasPendingPresentation());
+  GeminiConfiguration* config =
+      ios::provider::GetLastStartGeminiOverlayConfiguration();
+  ASSERT_TRUE(config);
+  EXPECT_FALSE(config.shouldAutoSubmit);
+
+  // The superseded presentation does not run when its timeout elapses.
+  task_environment_.FastForwardBy(kAutoSubmitPageContextTimeout);
+  EXPECT_EQ(config, ios::provider::GetLastStartGeminiOverlayConfiguration());
+  EXPECT_FALSE(
+      ios::provider::GetLastUpdatePromptActionEntryPoint().has_value());
+}
+
+// Tests that a presentation waiting for page context is dropped when the active
+// tab changes, so that its prompt is not presented on the new tab, and that it
+// leaves no stale entry point behind.
+TEST_F(GeminiBrowserAgentTest, TestSwitchingTabsDropsPendingPresentation) {
+  // Simulate FRE completion and an eligible page that is still loading.
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
+  web_state_->SetCurrentURL(GURL(kEligiblePageURL));
+  web_state_->SetContentsMimeType(std::string(kEligiblePageMimeType));
+  web_state_->SetLoading(true);
+  web_state_->WasShown();
+  int other_index = InsertLoadingWebState(/*activate=*/false);
+
+  ios::provider::ResetGemini();
+
+  gemini_browser_agent_->StartGeminiFlow([[UIViewController alloc] init],
+                                         CreateAutoSubmitStartupState());
+  ASSERT_TRUE(HasPendingPresentation());
+
+  browser_->GetWebStateList()->ActivateWebStateAt(other_index);
+  EXPECT_FALSE(HasPendingPresentation());
+  EXPECT_EQ(gemini::EntryPoint::Unknown,
+            gemini_browser_agent_->GetEntryPoint());
+
+  // The dropped presentation does not run when its timeout elapses.
+  task_environment_.FastForwardBy(kAutoSubmitPageContextTimeout);
+  EXPECT_FALSE(IsFloatyInvoked());
+  EXPECT_EQ(nil, ios::provider::GetLastStartGeminiOverlayConfiguration());
+}
+
+// Tests that a presentation waiting for page context is dropped when its tab is
+// closed, but not when a background tab is closed.
+TEST_F(GeminiBrowserAgentTest, TestClosingTabDropsPendingPresentation) {
+  // Simulate FRE completion and an eligible page that is still loading in the
+  // active tab.
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
+  InsertLoadingWebState(/*activate=*/true);
+  int background_index = InsertLoadingWebState(/*activate=*/false);
+
+  ios::provider::ResetGemini();
+
+  gemini_browser_agent_->StartGeminiFlow([[UIViewController alloc] init],
+                                         CreateAutoSubmitStartupState());
+  ASSERT_TRUE(HasPendingPresentation());
+
+  WebStateList* web_state_list = browser_->GetWebStateList();
+  web_state_list->CloseWebStateAt(background_index,
+                                  WebStateList::ClosingReason::kUserAction);
+  EXPECT_TRUE(HasPendingPresentation());
+
+  web_state_list->CloseWebStateAt(web_state_list->active_index(),
+                                  WebStateList::ClosingReason::kUserAction);
+  EXPECT_FALSE(HasPendingPresentation());
+
+  // The dropped presentation does not run when its timeout elapses.
+  task_environment_.FastForwardBy(kAutoSubmitPageContextTimeout);
+  EXPECT_FALSE(IsFloatyInvoked());
+  EXPECT_EQ(nil, ios::provider::GetLastStartGeminiOverlayConfiguration());
+}
+
+// Tests that page context generated for a presentation dropped by a tab switch
+// is not used for a presentation later requested on the new tab.
+TEST_F(GeminiBrowserAgentTest,
+       TestDroppedPresentationPageContextIsNotUsedOnNewTab) {
+  // Simulate FRE completion and an eligible, loaded page, whose page context
+  // generation starts right away.
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
+  web_state_->SetCurrentURL(GURL(kEligiblePageURL));
+  web_state_->SetContentsMimeType(std::string(kEligiblePageMimeType));
+  web_state_->WasShown();
+  int other_index = InsertLoadingWebState(/*activate=*/false);
+
+  ios::provider::ResetGemini();
+
+  UIViewController* base_view_controller = [[UIViewController alloc] init];
+  gemini_browser_agent_->StartGeminiFlow(base_view_controller,
+                                         CreateAutoSubmitStartupState());
+  browser_->GetWebStateList()->ActivateWebStateAt(other_index);
+  // The new tab is still loading, so its presentation waits for its own page
+  // context.
+  gemini_browser_agent_->StartGeminiFlow(base_view_controller,
+                                         CreateAutoSubmitStartupState());
+  ASSERT_TRUE(HasPendingPresentation());
+
+  // Page context generation for the first tab completes before the
+  // presentation for the new tab times out, which then presents it with the
+  // new tab's partial page context rather than the first tab's generated one.
+  task_environment_.FastForwardBy(kAutoSubmitPageContextTimeout);
+  EXPECT_TRUE(IsFloatyInvoked());
+  GeminiConfiguration* config =
+      ios::provider::GetLastStartGeminiOverlayConfiguration();
+  ASSERT_TRUE(config);
+  EXPECT_EQ(ios::provider::GeminiPageContextComputationState::kPending,
+            config.pageContext.geminiPageContextComputationState);
+}
+
+// Tests that, end to end, a floaty that auto-submits a prompt is invoked with
+// the page context generated for the active web state.
+TEST_F(GeminiBrowserAgentTest,
+       TestStartGeminiFlowWithAutoSubmitUsesGeneratedPageContext) {
+  static constexpr char kPageText[] = "Example Text";
+
+  // Simulate FRE completion and an eligible, loaded page whose content and
+  // screenshot can be extracted.
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
+  web_state_->SetCurrentURL(GURL("https://example.com"));
+  web_state_->SetContentsMimeType("text/html");
+  web_state_->WasShown();
+  // `GeminiTabHelper` uses rich extraction, which builds the annotated page
+  // content from the `rootNode` tree returned by the extraction script.
+  base::DictValue result = base::test::ParseJsonDict(base::StringPrintf(
+      R"({
+        "rootNode": {
+          "contentAttributes": {
+            "attributeType": %d
+          },
+          "childrenNodes": [{
+            "contentAttributes": {
+              "attributeType": %d,
+              "textInfo": { "textContent": "%s" }
+            }
+          }]
+        }
+      })",
+      optimization_guide::proto::CONTENT_ATTRIBUTE_ROOT,
+      optimization_guide::proto::CONTENT_ATTRIBUTE_TEXT, kPageText));
+  fake_main_frame_->AddJsResultForFunctionCall(
+      std::make_unique<base::Value>(std::move(result)).release(),
+      "pageContextExtractor.extractPageContext");
+
+  ios::provider::ResetGemini();
+
+  UIViewController* base_view_controller = [[UIViewController alloc] init];
+  GeminiStartupState* startup_state = [[GeminiStartupState alloc]
+      initWithEntryPoint:gemini::EntryPoint::ContextualCueInfobar];
+  startup_state.prepopulatedPrompt = @"Explain this page";
+  startup_state.shouldAutoSubmit = YES;
+
+  gemini_browser_agent_->StartGeminiFlow(base_view_controller, startup_state);
+  EXPECT_FALSE(IsFloatyInvoked());
+
+  ASSERT_TRUE(base::test::RunUntil([this]() { return IsFloatyInvoked(); }));
+
+  // The successfully generated page context, rather than the partial one used
+  // on timeout, was passed to the floaty with the page's content and
+  // screenshot.
+  GeminiConfiguration* config =
+      ios::provider::GetLastStartGeminiOverlayConfiguration();
+  ASSERT_TRUE(config);
+  EXPECT_TRUE(config.shouldAutoSubmit);
+  EXPECT_EQ(ios::provider::GeminiPageContextComputationState::kSuccess,
+            config.pageContext.geminiPageContextComputationState);
+  std::unique_ptr<optimization_guide::proto::PageContext> page_context =
+      config.pageContext.uniquePageContext;
+  ASSERT_TRUE(page_context);
+  ASSERT_TRUE(page_context->has_annotated_page_content());
+  // The annotated page content always has a root node, so check that the
+  // extracted text node was added under it.
+  const optimization_guide::proto::ContentNode& root_node =
+      page_context->annotated_page_content().root_node();
+  ASSERT_EQ(1, root_node.children_nodes_size());
+  EXPECT_EQ(kPageText, root_node.children_nodes(0)
+                           .content_attributes()
+                           .text_data()
+                           .text_content());
+  EXPECT_TRUE(page_context->has_tab_screenshot());
+}
+
+// Tests that a floaty invoked with a generated page context to auto-submit a
+// prompt does not regenerate the page context when presented nor on its first
+// expansion, which it reports as soon as it appears, but does on later
+// expansions.
+TEST_F(GeminiBrowserAgentTest,
+       TestAutoSubmitPresentationSkipsPageContextGenerationOnFirstExpansion) {
+  // Simulate FRE completion and an eligible, loaded page.
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
+  web_state_->SetCurrentURL(GURL("https://example.com"));
+  web_state_->SetContentsMimeType("text/html");
+  web_state_->WasShown();
+
+  GeminiStartupState* startup_state = [[GeminiStartupState alloc]
+      initWithEntryPoint:gemini::EntryPoint::ContextualCueInfobar];
+  startup_state.prepopulatedPrompt = @"Explain this page";
+  startup_state.shouldAutoSubmit = YES;
+  gemini_browser_agent_->StartGeminiFlow([[UIViewController alloc] init],
+                                         startup_state);
+
+  id mediator = OCMPartialMock(GetGeminiContainerMediator());
+  OCMReject([mediator requestActivePageContextGeneration]);
+  RunPendingPresentation([[GeminiPageContext alloc] init]);
+  EXPECT_TRUE(IsFloatyInvoked());
+  gemini_browser_agent_->OnViewStateChanged(
+      ios::provider::GeminiViewState::kExpanded);
+  EXPECT_OCMOCK_VERIFY(mediator);
+  [mediator stopMocking];
+
+  mediator = OCMPartialMock(GetGeminiContainerMediator());
+  OCMExpect([mediator requestActivePageContextGeneration]);
+  gemini_browser_agent_->OnViewStateChanged(
+      ios::provider::GeminiViewState::kCollapsed);
+  gemini_browser_agent_->OnViewStateChanged(
+      ios::provider::GeminiViewState::kExpanded);
+  EXPECT_OCMOCK_VERIFY(mediator);
+  [mediator stopMocking];
+}
+
+// Tests that a floaty invoked without a generated page context regenerates the
+// page context on its first expansion.
+TEST_F(GeminiBrowserAgentTest,
+       TestPresentationWithoutPageContextGeneratesPageContextOnFirstExpansion) {
+  // Simulate FRE completion and an eligible, loaded page.
+  personal_profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
+  web_state_->SetCurrentURL(GURL("https://example.com"));
+  web_state_->SetContentsMimeType("text/html");
+  web_state_->WasShown();
+
+  gemini_browser_agent_->StartGeminiFlow(
+      [[UIViewController alloc] init],
+      [[GeminiStartupState alloc]
+          initWithEntryPoint:gemini::EntryPoint::OverflowMenu]);
+  EXPECT_TRUE(IsFloatyInvoked());
+
+  id mediator = OCMPartialMock(GetGeminiContainerMediator());
+  OCMExpect([mediator requestActivePageContextGeneration]);
+  gemini_browser_agent_->OnViewStateChanged(
+      ios::provider::GeminiViewState::kExpanded);
+  EXPECT_OCMOCK_VERIFY(mediator);
+  [mediator stopMocking];
 }

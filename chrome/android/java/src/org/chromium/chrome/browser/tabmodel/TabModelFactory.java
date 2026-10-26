@@ -25,7 +25,7 @@ import org.chromium.chrome.browser.tabmodel.NextTabPolicy.NextTabPolicySupplier;
 public class TabModelFactory {
     private TabModelFactory() {}
 
-    /** Creates a regular mode {@link TabModelInternal}, {@see TabModelImpl}'s constructor. */
+    /** Creates a regular mode {@link TabModelInternal}, {@link TabModelImpl}'s constructor. */
     public static TabModelInternal createTabModel(
             Profile profile,
             @ActivityType int activityType,
@@ -42,7 +42,7 @@ public class TabModelFactory {
             @TabModelType int tabModelType,
             TabUngrouperFactory tabUngrouperFactory,
             @SupportedProfileType int supportedProfileType) {
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.ENFORCE_INCOGNITO_ISOLATION)
+        if (ChromeFeatureList.sEnforceIncognitoIsolation.isEnabled()
                 && supportedProfileType == SupportedProfileType.OFF_THE_RECORD) {
             return new StubTabModel(/* isIncognito= */ false, profile);
         }
@@ -65,7 +65,7 @@ public class TabModelFactory {
     }
 
     /**
-     * Creates an incognito mode {@link IncognitoTabModelInternal}, {@see
+     * Creates an incognito mode {@link IncognitoTabModelInternal}, {@link *
      * IncognitoTabModelImplCreator}'s constructor.
      */
     public static IncognitoTabModelInternal createIncognitoTabModel(
@@ -82,7 +82,7 @@ public class TabModelFactory {
             TabRemover tabRemover,
             TabUngrouperFactory tabUngrouperFactory,
             @SupportedProfileType int supportedProfileType) {
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.ENFORCE_INCOGNITO_ISOLATION)
+        if (ChromeFeatureList.sEnforceIncognitoIsolation.isEnabled()
                 && supportedProfileType == SupportedProfileType.REGULAR) {
             return new StubTabModel(/* isIncognito= */ true, /* profile= */ null);
         }

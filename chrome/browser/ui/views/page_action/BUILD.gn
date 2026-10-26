@@ -8,6 +8,7 @@ source_set("page_action") {
   friend = [
     ":impl",
     ":unit_tests",
+    ":interactive_test_support",
     ":interactive_ui_tests",
     ":test_support",
   ]
@@ -15,27 +16,22 @@ source_set("page_action") {
   public = [
     "anchored_message_view.h",
     "page_action_container_view.h",
-    "page_action_icon_container.h",
-    "page_action_icon_controller.h",
-    "page_action_icon_loading_indicator_view.h",
-    "page_action_icon_params.h",
-    "page_action_icon_view.h",
-    "page_action_icon_view_observer.h",
     "page_action_view.h",
     "page_action_view_interface.h",
     "page_action_view_params.h",
+    "page_action_view_util.h",
     "webui_page_action_control.h",
-    "zoom_view.h",
+    "webui_page_action_view.h",
   ]
 
   public_deps = [
     "//base",
-    "//chrome/browser:browser_public_dependencies",
     "//chrome/browser/profiles",
     "//chrome/browser/ui:browser_element_identifiers",
     "//chrome/browser/ui/actions:actions_headers",
     "//chrome/browser/ui/page_action",
     "//chrome/browser/ui/page_action:icon_type",
+    "//chrome/browser/ui/side_panel",
     "//chrome/browser/ui/tabs",
     "//chrome/browser/ui/toolbar",
     "//chrome/browser/ui/toolbar/pinned_toolbar",
@@ -62,17 +58,11 @@ source_set("impl") {
     "multi_icon_button.cc",
     "multi_icon_button.h",
     "page_action_container_view.cc",
-    "page_action_icon_container.cc",
-    "page_action_icon_controller.cc",
-    "page_action_icon_loading_indicator_view.cc",
-    "page_action_icon_params.cc",
-    "page_action_icon_view.cc",
     "page_action_view.cc",
+    "page_action_view_util.cc",
     "webui_page_action_control.cc",
-    "zoom_view.cc",
+    "webui_page_action_view.cc",
   ]
-
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
 
   deps = [
     ":page_action",
@@ -85,6 +75,7 @@ source_set("impl") {
     "//chrome/browser/themes",
     "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/interaction",
     "//chrome/browser/ui/lens",
     "//chrome/browser/ui/page_action:page_action_impl",
     "//chrome/browser/ui/search",
@@ -93,6 +84,7 @@ source_set("impl") {
     "//chrome/browser/ui/views/interaction",
     "//chrome/browser/ui/views/location_bar",
     "//chrome/browser/ui/views/location_bar/cookie_controls",
+    "//chrome/browser/ui/views/sharing",
     "//chrome/browser/ui/views/sharing_hub",
     "//chrome/browser/ui/views/toolbar",
     "//chrome/browser/ui/web_applications",
@@ -113,29 +105,63 @@ source_set("impl") {
     "//ui/gfx",
     "//ui/views",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("page_action_test_support") {
   testonly = true
 
   sources = [
-    "test_support/page_action_test_support.cc",
-    "test_support/page_action_test_support.h",
+    "test_support/page_action_test_accessor.cc",
+    "test_support/page_action_test_accessor.h",
   ]
 
   public_deps = [
     ":page_action",
+    "//chrome/browser/ui/page_action",
     "//ui/actions:actions_headers",
   ]
 
   deps = [
     "//base",
     "//chrome/browser/ui:ui_features",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/interaction",
+    "//chrome/browser/ui/views/frame",
+    "//chrome/browser/ui/views/frame:browser_view_header",
+    "//chrome/browser/ui/views/toolbar",
+    "//chrome/browser/ui/views/toolbar:test_support",
+    "//chrome/browser/ui/webui/webui_toolbar/utils",
+    "//content/test:test_support",
+    "//testing/gtest",
+    "//ui/base",
+    "//ui/events",
+    "//ui/events:test_support",
+    "//ui/views",
+    "//ui/views:test_support",
+    "//ui/webui/tracked_element",
+  ]
+}
+
+source_set("interactive_test_support") {
+  testonly = true
+
+  sources = [
+    "test_support/page_action_interactive_test_mixin.cc",
+    "test_support/page_action_interactive_test_mixin.h",
+  ]
+
+  public_deps = [
+    ":page_action",
+    ":page_action_test_support",
+    "//base",
+    "//chrome/browser/ui:browser_element_identifiers",
+    "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/page_action",
+    "//chrome/browser/ui/views/frame:toolbar_button_provider",
+    "//chrome/browser/ui/views/location_bar:icon_label_bubble",
+    "//chrome/test/interaction",
+    "//ui/actions:actions_headers",
+    "//ui/base/interaction:test_support",
   ]
 }
 
@@ -167,7 +193,6 @@ source_set("unit_tests") {
   sources = [
     "anchored_message_view_unittest.cc",
     "page_action_container_view_unittest.cc",
-    "page_action_icon_view_unittest.cc",
     "page_action_view_unittest.cc",
     "webui_page_action_control_unittest.cc",
   ]
@@ -181,6 +206,7 @@ source_set("unit_tests") {
     "//chrome/browser/ui/views/location_bar",
     "//chrome/browser/ui/views/toolbar",
     "//chrome/test:test_support",
+    "//chrome/test/base:chrome_render_view_host_test_harness",
     "//components/tabs:test_support",
     "//ui/events:test_support",
   ]
@@ -195,12 +221,15 @@ source_set("interactive_ui_tests") {
 
   defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
 
-  sources = [ "page_action_interactive_uitest.cc" ]
+  sources = [
+    "collaboration_messaging_page_action_icon_view_interactive_uitest.cc",
+    "page_action_interactive_uitest.cc",
+  ]
 
   deps = [
     ":page_action",
-    "//chrome/browser/ui",
     "//chrome/browser/ui:browser_actions",
+    "//chrome/browser/ui:browser_commands",
     "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/views/toolbar",
     "//chrome/test:test_support",
@@ -209,5 +238,20 @@ source_set("interactive_ui_tests") {
     "//content/test:test_support",
     "//ui/base:test_support",
     "//ui/views:test_support",
+  ]
+}
+
+source_set("browser_tests") {
+  testonly = true
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+  sources = [ "zoom_view_browsertest.cc" ]
+
+  deps = [
+    ":page_action",
+    "//chrome/browser/ui/views/frame:browser_view_header",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//testing/gtest",
   ]
 }

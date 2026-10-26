@@ -16,13 +16,11 @@
 #include "chrome/browser/optimization_guide/model_execution/optimization_guide_global_state.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/hints/optimization_guide_decider.h"
-#include "components/optimization_guide/core/model_execution/feature_keys.h"
-#include "components/optimization_guide/core/model_execution/model_broker_client.h"
-#include "components/optimization_guide/core/model_execution/model_execution_features_controller.h"
 #include "components/optimization_guide/core/model_execution/on_device_capability.h"
-#include "components/optimization_guide/core/model_execution/on_device_model_adaptation_loader.h"
 #include "components/optimization_guide/core/model_execution/remote_model_executor.h"
 #include "components/optimization_guide/proto/hints.pb.h"
 #include "components/optimization_guide/proto/model_execution.pb.h"
@@ -51,10 +49,11 @@ class PageHandler;
 
 namespace optimization_guide {
 class ChromeHintsManager;
+class ModelBrokerClient;
 class ModelExecutionEnabledBrowserTest;
+class ModelExecutionFeaturesController;
 class ModelExecutionLiveTest;
 class ModelExecutionManager;
-struct ModelInfo;
 class ModelQualityLogsUploaderService;
 class ModelValidatorKeyedService;
 class OnDeviceModelAvailabilityObserver;
@@ -64,6 +63,7 @@ class PredictionManagerBrowserTestBase;
 class PredictionModelDownloadClient;
 class PredictionModelStoreBrowserTestBase;
 class PushNotificationManager;
+class SettingsEnabledObserver;
 class TabUrlProvider;
 class TopHostProvider;
 
@@ -144,6 +144,12 @@ class OptimizationGuideKeyedService
       const google::protobuf::MessageLite& request_metadata,
       const optimization_guide::ModelExecutionOptions& options,
       optimization_guide::OptimizationGuideModelExecutionResultCallback
+          callback) override;
+  std::unique_ptr<optimization_guide::RemoteModelExecutionSession>
+  StartStreamingSession(
+      optimization_guide::ModelBasedCapabilityKey feature,
+      const optimization_guide::StreamingModelExecutionOptions& options,
+      optimization_guide::OptimizationGuideModelExecutionStreamingCallback
           callback) override;
 
   // optimization_guide::OnDeviceCapability
@@ -252,11 +258,11 @@ class OptimizationGuideKeyedService
       optimization_guide::OptimizationGuideModelExecutionResult result);
 
   // Override the model file sent to observers of |optimization_target|. Use
-  // |TestModelInfoBuilder| to construct the model metadata. For
+  // ModelInfo aggregate initialization to construct the model metadata. For
   // testing purposes only.
   void OverrideTargetModelForTesting(
       optimization_guide::proto::OptimizationTarget optimization_target,
-      std::unique_ptr<optimization_guide::ModelInfo> model_info);
+      std::optional<optimization_guide::ModelInfo> model_info);
 
   void SetModelQualityLogsUploaderServiceForTesting(
       std::unique_ptr<optimization_guide::ModelQualityLogsUploaderService>

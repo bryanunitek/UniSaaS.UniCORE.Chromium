@@ -9,18 +9,22 @@
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
 #include "components/optimization_guide/core/model_execution/on_device_features.h"
-#include "components/optimization_guide/core/model_execution/on_device_model_adaptation_loader.h"
-#include "components/optimization_guide/core/model_execution/on_device_model_component.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_feature_adapter.h"
+#include "components/optimization_guide/core/model_execution/on_device_model_names.h"
 #include "components/optimization_guide/core/model_execution/test/feature_config_builder.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_proto_util.h"
 #include "components/optimization_guide/proto/on_device_model_execution_config.pb.h"
 #include "services/on_device_model/public/cpp/test_support/fake_service.h"
+#include "third_party/dawn/include/dawn/dawn_proc.h"
 
 namespace optimization_guide {
+
+#if BUILDFLAG(IS_WIN)
+const char kTestAbsoluteFilePath[] = "C:\\absolute\\file\\path";
+#else
+const char kTestAbsoluteFilePath[] = "/absolutefilepath";
+#endif
 
 FakeBaseModelAsset::FakeBaseModelAsset()
     : FakeBaseModelAsset(FakeBaseModelAsset::Content{}) {}
@@ -74,8 +78,15 @@ void FakeBaseModelAsset::Write(Content&& content) {
                           base::NumberToString(content.adapter_cache_weight)));
   }
   if (content.shader_cache_data) {
-    CHECK(base::WriteFile(temp_dir_.GetPath().Append(kProgramCacheFile),
+    base::FilePath program_cache_path =
+        temp_dir_.GetPath().Append(kProgramCacheFile);
+    CHECK(base::WriteFile(program_cache_path,
                           std::string(content.shader_cache_data)));
+    std::string current_version(
+        reinterpret_cast<const char*>(dawnProcGetVersion()), 20);
+    CHECK(base::WriteFile(
+        program_cache_path.AddExtension(FILE_PATH_LITERAL(".dawn_version")),
+        current_version));
   }
   CHECK(base::WriteFile(
       temp_dir_.GetPath().Append(kOnDeviceModelExecutionConfigFile),
@@ -89,11 +100,6 @@ base::DictValue FakeBaseModelAsset::Manifest() const {
                                    .Set("name", "Test")
                                    .Set("supported_performance_hints",
                                         supported_performance_hints_.Clone()));
-}
-
-void FakeBaseModelAsset::SetReadyIn(
-    OnDeviceModelComponentStateManager& manager) const {
-  manager.SetReady(base::Version(version()), path(), Manifest());
 }
 
 proto::OnDeviceBaseModelMetadata FakeBaseModelAsset::DefaultSpec() {
@@ -119,64 +125,21 @@ FakeAdaptationAsset::FakeAdaptationAsset(FakeAdaptationAsset::Content&& content)
     *config.add_feature_configs() = content.config;
     CHECK(base::WriteFile(config_path, config.SerializeAsString()));
   }
-  TestModelInfoBuilder builder;
-  builder.SetVersion(version())
-      .SetAdditionalFiles({config_path})
-      .SetModelMetadata(AnyWrapProto(content.metadata));
+  std::vector<base::FilePath> additional_files = {config_path};
   if (content.weight) {
-    paths_ = std::make_unique<on_device_model::AdaptationAssetPaths>();
-    paths_->weights =
+    base::FilePath weights_path =
         temp_dir_.GetPath().Append(kOnDeviceModelAdaptationWeightsFile);
-    CHECK(base::WriteFile(paths_->weights,
+    CHECK(base::WriteFile(weights_path,
                           base::NumberToString(content.weight.value())));
-    builder.SetAdditionalFiles({config_path, paths_->weights});
+    additional_files.push_back(weights_path);
   }
-  model_info_ = builder.Build();
-  metadata_ = std::make_unique<OnDeviceModelAdaptationMetadata>(
-      paths_.get(), version(),
-      base::MakeRefCounted<OnDeviceModelFeatureAdapter>(
-          std::move(content.config)));
+  model_info_ = {
+      .model_file_path = base::FilePath::FromUTF8Unsafe(kTestAbsoluteFilePath),
+      .additional_files = std::move(additional_files),
+      .version = version(),
+      .model_metadata = AnyWrapProto(content.metadata),
+  };
 }
 FakeAdaptationAsset::~FakeAdaptationAsset() = default;
-
-void FakeAdaptationAsset::SendTo(
-    OnDeviceModelServiceController& controller) const {
-  controller.MaybeUpdateModelAdaptation(feature(), metadata());
-}
-
-FakeLanguageModelAsset::FakeLanguageModelAsset() {
-  CHECK(temp_dir_.CreateUniqueTempDir());
-  auto model_path = this->model_path();
-  CHECK(base::WriteFile(model_path, on_device_model::FakeLanguageModel()));
-  model_info_ = TestModelInfoBuilder()
-                    .SetModelFilePath(model_path)
-                    .SetVersion(123)
-                    .Build();
-}
-FakeLanguageModelAsset::~FakeLanguageModelAsset() = default;
-
-base::FilePath FakeLanguageModelAsset::model_path() const {
-  return temp_dir_.GetPath().Append(kWeightsFile);
-}
-
-FakeSafetyModelAsset::FakeSafetyModelAsset(
-    proto::FeatureTextSafetyConfiguration&& config)
-    : FakeSafetyModelAsset(FakeSafetyModelAsset::Content{
-          .metadata = SafetyMetadata({std::move(config)})}) {}
-
-FakeSafetyModelAsset::FakeSafetyModelAsset(
-    FakeSafetyModelAsset::Content&& content) {
-  CHECK(temp_dir_.CreateUniqueTempDir());
-  auto data_path =
-      temp_dir_.GetPath().Append(FILE_PATH_LITERAL("model.tflite"));
-  CHECK(base::WriteFile(data_path, on_device_model::FakeTsData()));
-  model_info_ = TestModelInfoBuilder()
-                    .SetModelFilePath(data_path)
-                    .SetVersion(content.model_info_version)
-                    .SetModelMetadata(AnyWrapProto(content.metadata))
-                    .Build();
-}
-
-FakeSafetyModelAsset::~FakeSafetyModelAsset() = default;
 
 }  // namespace optimization_guide

@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/features.gni")
 import("//chrome/common/features.gni")
 
 source_set("termination_notification") {
@@ -9,8 +10,6 @@ source_set("termination_notification") {
     "termination_notification.cc",
     "termination_notification.h",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   public_deps = [ "//base" ]
 
@@ -48,6 +47,22 @@ source_set("lifetime") {
     ]
   }
 
+  if (is_win || is_mac || is_linux) {
+    public += [ "scheduled_restart_manager.h" ]
+    public_deps += [
+      "//chrome/browser/upgrade_detector",
+      "//ui/base/idle",
+    ]
+  }
+
+  if (is_linux && use_dbus) {
+    public += [ "session_end_listener_linux.h" ]
+    public_deps += [
+      "//components/dbus",
+      "//dbus",
+    ]
+  }
+
   if (!is_android && !is_chromeos) {
     public += [ "switch_utils.h" ]
   }
@@ -59,20 +74,20 @@ source_set("impl") {
     "browser_shutdown.cc",
   ]
 
-  public_deps = [
-    ":lifetime",
-    "//chrome/browser:browser_public_dependencies",
-  ]
+  public_deps = [ ":lifetime" ]
 
   deps = [
     ":termination_notification",
     "//build/config/compiler:compiler_buildflags",
     "//chrome/browser:browser_process",
     "//chrome/browser:browser_process_platform_part",
-    "//chrome/browser:flags",
+    "//chrome/browser:buildflags",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/profiles:profile_util",
     "//chrome/common:buildflags",
+    "//chrome/common:chrome_features",
+    "//chrome/common:constants",
+    "//chrome/common:non_code_constants",
     "//components/crash/core/common:crash_key",
     "//components/language/core/browser",
     "//components/language/core/common",
@@ -95,6 +110,8 @@ source_set("impl") {
     deps += [
       "//ash/constants",
       "//chrome/browser/ash/boot_times_recorder",
+      "//chrome/browser/ui/browser_window",
+      "//chrome/browser/ui/tabs:tab_strip",
       "//chromeos/ash/components/browser_context_helper",
       "//chromeos/ash/components/dbus",
       "//chromeos/ash/components/dbus/session_manager",
@@ -111,6 +128,7 @@ source_set("impl") {
     deps += [
       "//chrome/browser:app_controller_mac",
       "//chrome/browser:chrome_browser_application_mac",
+      "//chrome/browser:shutdown_watchdog_mac",
       "//ui/views",
     ]
   }
@@ -127,7 +145,10 @@ source_set("impl") {
   }
 
   if (is_win) {
-    deps += [ "//chrome/browser/win" ]
+    deps += [
+      "//chrome/browser/win",
+      "//components/app_launch_prefetch",
+    ]
   }
 
   if (!is_android) {
@@ -140,6 +161,7 @@ source_set("impl") {
       "smart_restart_policy.cc",
     ]
     deps += [
+      "//chrome/browser:global_features",
       "//chrome/browser/background/glic",
       "//chrome/browser/download",
       "//chrome/browser/first_run",
@@ -149,8 +171,14 @@ source_set("impl") {
       "//chrome/browser/notifications",
       "//chrome/browser/profiles:profile_manager",
       "//chrome/browser/sessions",
+      "//chrome/browser/ui:browser_init_state",
+      "//chrome/browser/ui:browser_manager_service",
+      "//chrome/browser/ui:browser_window_header",
       "//chrome/browser/ui:chrome_pages",
+      "//chrome/browser/ui:scoped_tabbed_browser_displayer",
+      "//chrome/browser/ui:unload_controller",
       "//chrome/browser/ui/lens",
+      "//chrome/browser/ui/omnibox/omnibox_everywhere",
       "//chrome/browser/ui/profiles",
       "//chrome/browser/ui/startup",
       "//chrome/browser/ui/tabs:tab_strip",
@@ -159,6 +187,25 @@ source_set("impl") {
       "//components/performance_manager",
       "//components/site_engagement/content",
       "//ui/base/idle",
+    ]
+  }
+
+  if (is_win || is_mac || is_linux) {
+    sources += [ "scheduled_restart_manager.cc" ]
+    deps += [
+      "//chrome/browser/enterprise",
+      "//chrome/common:constants",
+      "//components/policy/core/common",
+      "//components/prefs",
+    ]
+  }
+
+  if (is_linux && use_dbus) {
+    sources += [ "session_end_listener_linux.cc" ]
+    deps += [
+      "//chrome/common:chrome_features",
+      "//components/dbus",
+      "//components/version_info",
     ]
   }
 
@@ -186,9 +233,11 @@ if (!is_android) {
       "//base/test:test_support",
       "//chrome/browser/upgrade_detector",
       "//chrome/test:test_support",
+      "//chrome/test/base:testing_browser_process",
       "//content/test:test_support",
       "//testing/gmock",
       "//testing/gtest",
+      "//ui/base/idle:test_support",
     ]
 
     if (is_chromeos) {
@@ -197,11 +246,48 @@ if (!is_android) {
         ":lifetime",
         "//base",
         "//chrome/test:test_support",
+        "//components/crash/core/common:crash_key",
         "//content/test:test_support",
         "//testing/gtest",
+        "//third_party/abseil-cpp:absl",
       ]
-    } else {
+    }
+
+    if (!is_android && !is_chromeos) {
       sources += [ "switch_utils_unittest.cc" ]
+    }
+
+    if (is_win || is_mac || is_linux) {
+      sources += [ "scheduled_restart_manager_unittest.cc" ]
+      deps += [
+        ":test_support",
+        "//build/config/linux/dbus:buildflags",
+        "//chrome/browser/enterprise",
+        "//components/policy/core/common",
+        "//components/policy/core/common:test_support",
+      ]
+    }
+    if (is_linux && use_dbus) {
+      sources += [ "session_end_listener_linux_unittest.cc" ]
+      deps += [
+        "//chrome/common:chrome_features",
+        "//components/dbus",
+        "//components/version_info",
+        "//dbus:test_support",
+      ]
+    }
+  }
+
+  if (is_win || is_mac || is_linux) {
+    source_set("test_support") {
+      testonly = true
+      public = [ "scheduled_restart_test_utils.h" ]
+      sources = [ "scheduled_restart_test_utils.cc" ]
+      public_deps = [
+        "//base",
+        "//chrome/browser/upgrade_detector",
+      ]
+      deps = [ ":lifetime" ]
     }
   }
 
@@ -225,11 +311,14 @@ if (!is_android) {
       "//chrome/browser/download:test_support",
       "//chrome/browser/policy:test_support",
       "//chrome/browser/prefs:util",
-      "//chrome/browser/ui",
+      "//chrome/browser/ui:browser_commands",
+      "//chrome/browser/ui:browser_window_header",
       "//chrome/browser/ui:ui_features",
       "//chrome/browser/ui/tabs:tab_strip",
+      "//chrome/browser/user_education",
       "//chrome/test:test_support",
       "//chrome/test:test_support_ui",
+      "//chrome/test/base:testing_browser_process",
       "//components/javascript_dialogs",
       "//content/test:test_support",
       "//testing/gtest",
@@ -240,8 +329,17 @@ if (!is_android) {
       deps += [ "//chrome/browser/background/extensions" ]
     }
 
+    if (is_win) {
+      deps += [ "//components/app_launch_prefetch" ]
+    }
+
     if (!is_chromeos) {
       sources += [ "application_lifetime_browsertest.cc" ]
+    }
+
+    if (is_win || is_mac || is_linux) {
+      sources += [ "scheduled_restart_manager_browsertest.cc" ]
+      deps += [ ":test_support" ]
     }
 
     if (is_chromeos) {

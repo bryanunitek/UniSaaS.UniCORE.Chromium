@@ -21,8 +21,8 @@ namespace blink {
 class ExceptionState;
 class GPUBuffer;
 class GPUCommandBuffer;
-class GPUCopyElementImageDestination;
-class GPUCopyElementImageSource;
+class GPUDrawElementImageDestination;
+class GPUDrawElementImageSource;
 class GPUImageCopyExternalImage;
 class GPUImageCopyTextureTagged;
 class GPUTexelCopyBufferLayout;
@@ -87,8 +87,8 @@ class GPUQueue : public DawnObject<wgpu::Queue> {
                                   GPUImageCopyTextureTagged* destination,
                                   const V8GPUExtent3D* copySize,
                                   ExceptionState& exception_state);
-  void copyElementImageToTexture(GPUCopyElementImageSource* source,
-                                 GPUCopyElementImageDestination* destination,
+  void drawElementImageToTexture(GPUDrawElementImageSource* source,
+                                 GPUDrawElementImageDestination* destination,
                                  ExceptionState& exception_state);
   // }}} End of WebIDL binding implementation.
 
@@ -96,15 +96,16 @@ class GPUQueue : public DawnObject<wgpu::Queue> {
   bool IsValidDestinationTexture(GPUImageCopyTextureTagged* destination,
                                  wgpu::TexelCopyTextureInfo& dawn_destination,
                                  ExceptionState& exception_state);
-  void CopyFromVideoElement(const ExternalTextureSource source,
-                            const wgpu::Extent2D& video_frame_natural_size,
-                            const wgpu::Origin2D& origin,
-                            const wgpu::Extent3D& copy_size,
-                            const wgpu::TexelCopyTextureInfo& destination,
-                            bool dst_premultiplied_alpha,
-                            PredefinedColorSpace dst_color_space,
-                            bool flipY);
-  void CopyElementImageToTextureInternal(
+  [[nodiscard]] bool CopyFromVideoElement(
+      const ExternalTextureSource source,
+      const wgpu::Extent2D& video_frame_natural_size,
+      const wgpu::Origin2D& origin,
+      const wgpu::Extent3D& copy_size,
+      const wgpu::TexelCopyTextureInfo& destination,
+      bool dst_premultiplied_alpha,
+      PredefinedColorSpace dst_color_space,
+      bool flipY);
+  void DrawElementImageToTextureInternal(
       const V8UnionElementOrElementImage* source,
       std::optional<float> sx,
       std::optional<float> sy,
@@ -134,9 +135,8 @@ class GPUQueue : public DawnObject<wgpu::Queue> {
       scoped_refptr<WebGPUMailboxTexture> mailbox_texture);
 
  private:
-  void SetLabelImpl(const String& value) override {
-    std::string utf8_label = value.Utf8();
-    GetHandle().SetLabel(utf8_label.c_str());
+  void SetLabelImpl(std::string_view value) override {
+    GetHandle().SetLabel(value);
   }
 };
 

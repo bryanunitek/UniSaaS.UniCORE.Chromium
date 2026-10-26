@@ -5,9 +5,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TESTING_PAGE_TEST_BASE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TESTING_PAGE_TEST_BASE_H_
 
+#include <gtest/gtest.h>
+
 #include <memory>
 
-#include <gtest/gtest.h>
+#include "base/memory/raw_ptr.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/core/testing/mock_clipboard_host.h"
@@ -15,10 +17,6 @@
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
-
-namespace base {
-class TickClock;
-}
 
 namespace blink {
 
@@ -54,7 +52,9 @@ class PageTestBase : public testing::Test, public ScopedMockOverlayScrollbars {
    private:
     void BindClipboardHost(mojo::ScopedMessagePipeHandle handle);
 
-    const blink::BrowserInterfaceBrokerProxy* interface_broker_ = nullptr;
+    raw_ptr<const blink::BrowserInterfaceBrokerProxy,
+            UnprotectedInRelease | DanglingUntriaged>
+        interface_broker_ = nullptr;
     MockClipboardHost host_;
   };
 
@@ -123,13 +123,6 @@ class PageTestBase : public testing::Test, public ScopedMockOverlayScrollbars {
   void LoadAhem();
   void LoadNoto();
   void EnablePlatform();
-
-  // Used by subclasses to provide a different tick clock. At the moment is only
-  // used to initialize DummyPageHolder. Note that subclasses calling
-  // EnablePlatform() do not need to redefine this because the platform's mock
-  // tick clock will be automatically used (see the default implementation in
-  // the source file).
-  virtual const base::TickClock* GetTickClock();
 
   TestingPlatformSupport* platform() {
     DCHECK(platform_);

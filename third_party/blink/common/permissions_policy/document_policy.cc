@@ -6,7 +6,9 @@
 
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
+#include "base/notreached.h"
 #include "net/http/structured_headers.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "third_party/blink/public/common/permissions_policy/document_policy_enum_values.h"
 
 namespace blink {
@@ -36,27 +38,41 @@ std::unique_ptr<DocumentPolicy> DocumentPolicy::CopyStateFrom(
   return new_policy;
 }
 
+DocumentPolicy::ParsedDocumentPolicy DocumentPolicy::GetParsedPolicy() const {
+  DocumentPolicyFeatureState feature_state;
+  FeatureEndpointMap endpoint_map;
+  for (const auto& entry : GetDocumentPolicyFeatureInfoMap()) {
+    PolicyValue current_value =
+        internal_feature_state_[static_cast<size_t>(entry.first)];
+    if (current_value != entry.second.default_value) {
+      feature_state.emplace(entry.first, current_value);
+      auto endpoint = endpoint_map_.find(entry.first);
+      if (endpoint != endpoint_map_.end()) {
+        endpoint_map.insert(*endpoint);
+      }
+    }
+  }
+  return ParsedDocumentPolicy{std::move(feature_state),
+                              std::move(endpoint_map)};
+}
+
 namespace {
 
 net::structured_headers::Item PolicyValueToItem(
     mojom::DocumentPolicyFeature feature,
     const PolicyValue& value) {
-  switch (value.Type()) {
-    case mojom::PolicyValueType::kBool:
-      return net::structured_headers::Item{value.BoolValue()};
-    case mojom::PolicyValueType::kDecDouble:
-      return net::structured_headers::Item{value.DoubleValue()};
-    case mojom::PolicyValueType::kEnum: {
-      std::optional<std::string_view> token =
-          DocumentPolicyEnumValueToToken(feature, value.IntValue());
-      CHECK(token);
-      return net::structured_headers::Item{
-          std::string(*token),
-          net::structured_headers::Item::ItemType::kTokenType};
-    }
-    default:
-      NOTREACHED();
-  }
+  return value.Visit(absl::Overload{
+      [](bool b) { return net::structured_headers::Item{b}; },
+      [](double d) { return net::structured_headers::Item{d}; },
+      [&](int32_t i) {
+        std::optional<std::string_view> token =
+            DocumentPolicyEnumValueToToken(feature, i);
+        CHECK(token);
+        return net::structured_headers::Item(
+            net::structured_headers::Item::token, *token);
+      },
+      [](std::monostate) -> net::structured_headers::Item { NOTREACHED(); },
+  });
 }
 
 }  // namespace
@@ -93,8 +109,8 @@ std::optional<std::string> DocumentPolicy::SerializeInternal(
     // Skip enum features whose value has no token representation — this covers
     // the sentinel default (value out of valid token range) meaning "not
     // explicitly set in the header".
-    if (value.Type() == mojom::PolicyValueType::kEnum &&
-        !DocumentPolicyEnumValueToToken(feature, value.IntValue())) {
+    if (std::optional<int32_t> v = value.GetIfEnum();
+        v && !DocumentPolicyEnumValueToToken(feature, *v)) {
       continue;
     }
 

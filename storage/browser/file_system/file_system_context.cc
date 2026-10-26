@@ -120,7 +120,7 @@ int FileSystemContext::GetPermissionPolicy(FileSystemType type) {
     // Following types are only accessed via IsolatedFileSystem, and
     // don't have their own permission policies.
     case kFileSystemTypeDragged:
-    case kFileSystemTypeForTransientFile:
+    case kFileSystemTypeInMemory:
       return FILE_PERMISSION_ALWAYS_DENY;
 
     // Following types only appear as mount_type, and will not be
@@ -423,7 +423,7 @@ void FileSystemContext::OnGetOrCreateBucket(
     OpenFileSystemMode mode,
     OpenFileSystemCallback callback,
     QuotaErrorOr<BucketInfo> result) {
-  if (!result.has_value()) {
+  if (!result.has_value() || result->storage_key != storage_key) {
     std::move(callback).Run(FileSystemURL(), std::string(),
                             base::File::FILE_ERROR_FAILED);
     return;

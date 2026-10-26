@@ -29,7 +29,6 @@
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/style/ash_color_provider.h"
 #include "ash/style/pill_button.h"
 #include "ash/style/style_util.h"
 #include "ash/style/switch.h"
@@ -54,8 +53,7 @@
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
-#include "ui/compositor/layer.h"
-#include "ui/compositor/layer_type.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
@@ -717,12 +715,13 @@ class GameDashboardMainMenuView::GameControlsDetailsRow : public views::Button {
 
     // Initiate pulse layer if it starts to pulse for the first time.
     if (pulse_count == 0) {
-      gc_setup_button_pulse_layer_ =
-          std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
+      gc_setup_button_pulse_layer_ = std::make_unique<ui::LayerSolidColor>();
+      gc_setup_button_pulse_layer_->SetName(
+          "GameDashboardMainMenuView:SetupButtonPulse");
       widget->GetLayer()->Add(gc_setup_button_pulse_layer_.get());
       gc_setup_button_pulse_layer_->SetColor(
-          widget->GetColorProvider()->GetColor(
-              cros_tokens::kCrosSysHighlightText));
+          SkColor4f::FromColor(widget->GetColorProvider()->GetColor(
+              cros_tokens::kCrosSysHighlightText)));
     }
 
     DCHECK(gc_setup_button_pulse_layer_);
@@ -799,7 +798,7 @@ class GameDashboardMainMenuView::GameControlsDetailsRow : public views::Button {
   std::string app_name_;
 
   // Layer for setup button pulse animation.
-  std::unique_ptr<ui::Layer> gc_setup_button_pulse_layer_;
+  std::unique_ptr<ui::LayerSolidColor> gc_setup_button_pulse_layer_;
 };
 
 BEGIN_METADATA(GameDashboardMainMenuView, GameControlsDetailsRow)

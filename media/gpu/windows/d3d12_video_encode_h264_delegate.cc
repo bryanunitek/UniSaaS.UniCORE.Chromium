@@ -268,11 +268,12 @@ size_t D3D12VideoEncodeH264Delegate::GetMaxNumOfRefFrames() const {
 }
 
 size_t D3D12VideoEncodeH264Delegate::GetMaxNumOfManualRefBuffers() const {
-  // We should have initialized.
-  CHECK_GT(max_num_ref_frames_, 1u);
-
-  // Same as L1Tx modes, we must reserve 1 DPB slot internally for handling
-  // frame_num gap.
+  if (max_num_ref_frames_ <= 1) {
+    return 0;
+  }
+  // We always reserve 1 DPB slot internally for handling frame_num gap (same
+  // as L1Tx modes). When the non-reference-frame workaround is active, reserve
+  // 1 more slot for the forced non-reference frame.
   if (gpu_workarounds_.disable_d3d12_h264_encoder_non_reference_frames) {
     return max_num_ref_frames_ - 2;
   }
@@ -351,7 +352,8 @@ EncoderStatus D3D12VideoEncodeH264Delegate::EncodeImpl(
     ID3D12Resource* input_frame,
     UINT input_frame_subresource,
     const VideoEncoder::EncodeOptions& options,
-    const gfx::ColorSpace& input_color_space) {
+    const gfx::ColorSpace& input_color_space,
+    const gfx::HDRMetadata& input_hdr_metadata) {
   // Filling the |input_arguments_| according to
   // https://github.com/microsoft/DirectX-Specs/blob/master/d3d/D3D12VideoEncoding.md#6120-struct-d3d12_video_encoder_input_arguments
 
@@ -855,8 +857,13 @@ EncoderStatus D3D12VideoEncodeH264Delegate::InitializeVideoEncoder(
       {.DataSize = sizeof(codec_config_h264_),
        .pH264Config = &codec_config_h264_},
       input_size_);
+  if (!video_encoder_wrapper_) {
+    return {EncoderStatus::Codes::kEncoderInitializationError,
+            "Failed to create D3D12VideoEncoderWrapper."};
+  }
   // We use full frame mode so the number of subregions is always 1.
-  if (!video_encoder_wrapper_->Initialize(/*max_subregions_number=*/1)) {
+  if (!video_encoder_wrapper_->Initialize(/*max_subregions_number=*/1,
+                                          min_bitstream_buffer_size_)) {
     return EncoderStatus::Codes::kEncoderInitializationError;
   }
 
@@ -868,7 +875,8 @@ EncoderStatus D3D12VideoEncodeH264Delegate::InitializeVideoEncoder(
   return EncoderStatus::Codes::kOk;
 }
 
-EncoderStatus::Or<size_t> D3D12VideoEncodeH264Delegate::ReadbackBitstream(
+base::expected<size_t, EncoderStatus>
+D3D12VideoEncodeH264Delegate::ReadbackBitstream(
     base::span<uint8_t> bitstream_buffer) {
   size_t packed_header_size = packed_header_.BytesInBuffer();
   // The |bitstream_buffer| is from outer shared memory, and the
@@ -879,7 +887,7 @@ EncoderStatus::Or<size_t> D3D12VideoEncodeH264Delegate::ReadbackBitstream(
   auto size_or_error = D3D12VideoEncodeDelegate::ReadbackBitstream(
       bitstream_buffer.subspan(packed_header_size));
   if (!size_or_error.has_value()) {
-    return std::move(size_or_error).error();
+    return base::unexpected(std::move(size_or_error).error());
   }
   size_t payload_size = packed_header_size + std::move(size_or_error).value();
   if (software_rate_controller_) {

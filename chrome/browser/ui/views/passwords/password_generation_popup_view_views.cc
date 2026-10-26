@@ -7,26 +7,22 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/passwords/password_generation_popup_controller.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/passwords/views_utils.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "ui/accessibility/ax_enums.mojom.h"
-#include "ui/accessibility/ax_node_data.h"
-#include "ui/accessibility/platform/ax_platform.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/resource/resource_bundle.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -39,7 +35,6 @@
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/metadata/view_factory.h"
-#include "ui/views/vector_icons.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget.h"
 
@@ -112,7 +107,8 @@ class NudgePasswordButtons : public views::View {
                             base::Unretained(this)),
         cancel_button_label);
     cancel_button_has_focus_ = controller->cancel_button_selected();
-    cancel_button->GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
+    cancel_button->GetViewAccessibility().SetRole(
+        ax::mojom::Role::kListBoxOption);
     cancel_button->GetViewAccessibility().SetName(cancel_button_label);
     cancel_button->GetViewAccessibility().SetIsSelected(
         cancel_button_has_focus_);
@@ -128,9 +124,16 @@ class NudgePasswordButtons : public views::View {
         accept_button_label);
     accept_button_has_focus_ = controller->accept_button_selected();
     accept_button->SetStyle(ui::ButtonStyle::kProminent);
-    accept_button->GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
-    accept_button->GetViewAccessibility().SetName(
-        base::JoinString({accept_button_label, controller_->password()}, u" "));
+    accept_button->GetViewAccessibility().SetRole(
+        ax::mojom::Role::kListBoxOption);
+    accept_button->GetViewAccessibility().SetName(base::JoinString(
+        {accept_button_label, controller_->password().secure_value()}, u" "));
+    accept_button->GetViewAccessibility().SetDescription(
+        l10n_util::GetStringFUTF16(
+            IDS_PASSWORD_GENERATION_PROMPT_GOOGLE_PASSWORD_MANAGER,
+            l10n_util::GetStringUTF16(
+                IDS_PASSWORD_BUBBLES_PASSWORD_MANAGER_LINK_TEXT_SYNCED_TO_ACCOUNT),
+            controller_->GetPrimaryAccountEmail()));
     accept_button->GetViewAccessibility().SetIsSelected(
         accept_button_has_focus_);
     accept_button_ = AddChildView(std::move(accept_button));
@@ -161,6 +164,26 @@ class NudgePasswordButtons : public views::View {
         cancel_button_has_focus_);
     views::FocusRing::Get(accept_button_)->Refresh();
     views::FocusRing::Get(cancel_button_)->Refresh();
+  }
+
+  void UpdateGeneratedPassword() {
+    if (!controller_) {
+      return;
+    }
+    const std::u16string accept_button_label = controller_->SuggestedText();
+    accept_button_->GetViewAccessibility().SetName(base::JoinString(
+        {accept_button_label, controller_->password().secure_value()}, u" "));
+  }
+
+  void reset_controller() {
+    controller_ = nullptr;
+    if (accept_button_) {
+      accept_button_->GetViewAccessibility().RemoveName();
+      accept_button_->GetViewAccessibility().RemoveDescription();
+    }
+    if (cancel_button_) {
+      cancel_button_->GetViewAccessibility().RemoveName();
+    }
   }
 
   views::View* GetAcceptButton() { return accept_button_; }
@@ -231,7 +254,7 @@ class PasswordGenerationPopupViewViews::GeneratedPasswordBox
   // Fills the view with strings provided by |controller|.
   void Init(base::WeakPtr<PasswordGenerationPopupController> controller);
 
-  void UpdateGeneratedPassword(const std::u16string& password) {
+  void UpdateGeneratedPassword(std::u16string_view password) {
     password_label_->SetText(password);
   }
 
@@ -249,7 +272,8 @@ class PasswordGenerationPopupViewViews::GeneratedPasswordBox
     }
 
     GetViewAccessibility().SetName(base::JoinString(
-        {controller_->SuggestedText(), controller_->password()}, u" "));
+        {controller_->SuggestedText(), controller_->password().secure_value()},
+        u" "));
     GetViewAccessibility().SetDescription(l10n_util::GetStringFUTF16(
         IDS_PASSWORD_GENERATION_PROMPT_GOOGLE_PASSWORD_MANAGER,
         l10n_util::GetStringUTF16(
@@ -292,10 +316,11 @@ void PasswordGenerationPopupViewViews::GeneratedPasswordBox::Init(
           DISTANCE_BETWEEN_PRIMARY_AND_SECONDARY_LABELS_HORIZONTAL),
       /*resize=*/true, this);
 
-  DCHECK(!password_label_);
-  password_label_ = AddChildView(std::make_unique<views::Label>(
-      controller_->password(), views::style::CONTEXT_DIALOG_BODY_TEXT,
-      views::style::STYLE_SECONDARY_MONOSPACED));
+  CHECK(!password_label_, base::NotFatalUntil::M162);
+  password_label_ = AddChildView(
+      std::make_unique<views::Label>(controller_->password().secure_value(),
+                                     views::style::CONTEXT_DIALOG_BODY_TEXT,
+                                     views::style::STYLE_SECONDARY_MONOSPACED));
   layout->SetFlexForView(password_label_, 1);
   UpdateAccessibleNameAndDescription();
 }
@@ -304,13 +329,15 @@ BEGIN_METADATA(PasswordGenerationPopupViewViews, GeneratedPasswordBox)
 END_METADATA
 
 PasswordGenerationPopupViewViews::PasswordGenerationPopupViewViews(
-    views::Widget::InitParams::Activatable widget_activatable,
     base::WeakPtr<PasswordGenerationPopupController> controller,
     views::Widget* parent_widget)
-    : PopupBaseView(controller, parent_widget, widget_activatable),
-      controller_(controller) {
+    : PopupBaseView(controller, parent_widget), controller_(controller) {
   CreateLayoutAndChildren();
-  GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
+
+  // TODO(crbug.com/40885943): kListBox is used for the same reason as in
+  // `autofill::PopupViewViews`. See crrev.com/c/2545285 for details.
+  // Consider using a more appropriate role (e.g. kMenuListPopup or similar).
+  GetViewAccessibility().SetRole(ax::mojom::Role::kListBox);
   UpdateInvisibleAccessibleState();
   UpdateExpandedCollapsedAccessibleState();
 }
@@ -336,6 +363,10 @@ void PasswordGenerationPopupViewViews::Hide() {
   if (password_view_) {
     password_view_->reset_controller();
   }
+  if (nudge_password_buttons_view_) {
+    static_cast<NudgePasswordButtons*>(nudge_password_buttons_view_)
+        ->reset_controller();
+  }
 
   DoHide();
 }
@@ -349,7 +380,12 @@ void PasswordGenerationPopupViewViews::UpdateState() {
 
 void PasswordGenerationPopupViewViews::UpdateGeneratedPasswordValue() {
   if (password_view_) {
-    password_view_->UpdateGeneratedPassword(controller_->password());
+    password_view_->UpdateGeneratedPassword(
+        controller_->password().secure_value());
+  }
+  if (nudge_password_buttons_view_) {
+    static_cast<NudgePasswordButtons*>(nudge_password_buttons_view_)
+        ->UpdateGeneratedPassword();
   }
   DeprecatedLayoutImmediately();
 }
@@ -379,10 +415,6 @@ void PasswordGenerationPopupViewViews::ButtonSelectionUpdated() {
   }
 
   nudge_password_buttons->UpdateFocus(controller_->accept_button_selected());
-}
-
-bool PasswordGenerationPopupViewViews::IsWidgetActive() const {
-  return GetWidget() && GetWidget()->IsActive();
 }
 
 void PasswordGenerationPopupViewViews::CreateLayoutAndChildren() {
@@ -476,17 +508,7 @@ PasswordGenerationPopupView* PasswordGenerationPopupView::Create(
       views::Widget::GetTopLevelWidgetForNativeView(
           controller->container_view());
 
-  // The widget should be activated for screen reader users in generation state,
-  // so the dialog is announced and navigation between its elements is possible.
-  views::Widget::InitParams::Activatable widget_activatable =
-      (controller->state() ==
-           PasswordGenerationPopupController::kOfferGeneration &&
-       ui::AXPlatform::GetInstance().IsScreenReaderActive())
-          ? views::Widget::InitParams::Activatable::kYes
-          : views::Widget::InitParams::Activatable::kNo;
-
-  return new PasswordGenerationPopupViewViews(widget_activatable, controller,
-                                              observing_widget);
+  return new PasswordGenerationPopupViewViews(controller, observing_widget);
 }
 
 const views::ViewAccessibility&

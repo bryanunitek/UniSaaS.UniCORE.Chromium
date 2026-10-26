@@ -370,6 +370,7 @@ component("core") {
     ":buildflags",
     ":core_generated",
     ":core_hot",
+    ":font_resource_header",
     "//cc",
     "//skia",
     "//third_party/blink/public/mojom:mojom_core_blink",
@@ -404,17 +405,16 @@ component("core") {
   }
 
   deps = [
+    ":font_resource",
     ":generate_eventhandler_names",
+    ":ift_custom_font_data",
     ":make_deprecation_info",
     ":xml_ffi",
     "//base",
-    "//components/attribution_reporting",
-    "//components/attribution_reporting:mojom_blink",
     "//components/paint_preview/common",
     "//components/performance_manager/public/mojom:mojom_blink",
     "//components/shared_highlighting/core/common",
     "//components/subresource_filter/core/common",
-    "//components/web_package",
     "//gin",
     "//gpu/config",
     "//mojo/public/cpp/bindings",
@@ -463,6 +463,7 @@ component("core") {
   allow_circular_includes_from = [
     ":core_generated",
     ":core_hot",
+    ":ift_custom_font_data",
     "//third_party/blink/renderer/core/animation",
     "//third_party/blink/renderer/core/exported",
     "//third_party/blink/renderer/core/probe",
@@ -478,6 +479,48 @@ component("core") {
       "Carbon.framework",
     ]
   }
+}
+
+# Isolate loader/resource/font_resource.{h,cc} from component("core") because
+# font_resource.cc is the only non-test file in core that includes
+# //third_party/blink/renderer/platform:font_rust_headers. Keeping
+# :font_rust_headers on a headerless target (":font_resource") prevents
+# Crubit-generated font bindings from being added to core's harddeps and
+# blocking compilation of core and its downstream dependents.
+#
+# These use blink_core_sources (like ":core_hot") so that they inherit the
+# common configs and deps of core from core.gni.
+blink_core_sources("font_resource_header") {
+  sources = [ "loader/resource/font_resource.h" ]
+}
+
+blink_core_sources("font_resource") {
+  public = []
+  sources = [ "loader/resource/font_resource.cc" ]
+
+  deps = [
+    ":buildflags",
+    ":font_resource_header",
+    "//third_party/blink/public/common",
+    "//third_party/blink/renderer/platform:font_rust_headers",
+  ]
+}
+
+# Like ":font_resource", css/ift_custom_font_data.cc includes
+# //third_party/blink/renderer/platform:font_rust_headers, so it is kept on a
+# headerless target. Its header (in core's sources) only forward declares the
+# Crubit-backed types. It includes core headers, so ":core" lists it in
+# allow_circular_includes_from.
+blink_core_sources("ift_custom_font_data") {
+  public = []
+  sources = [ "css/ift_custom_font_data.cc" ]
+
+  deps = [
+    ":font_resource_header",
+    "//services/network/public/cpp",
+    "//third_party/blink/public/common",
+    "//third_party/blink/renderer/platform:font_rust_headers",
+  ]
 }
 
 # Certain sources should be compiled with heavy optimization enabled.
@@ -603,6 +646,8 @@ source_set("testing") {
     "testing/internals_get_all_cookies.h",
     "testing/internals_get_named_cookie.cc",
     "testing/internals_get_named_cookie.h",
+    "testing/internals_select_file_dialog.cc",
+    "testing/internals_select_file_dialog.h",
     "testing/internals_ukm_recorder.cc",
     "testing/internals_ukm_recorder.h",
     "testing/intersection_observer_test_helper.h",
@@ -621,6 +666,7 @@ source_set("testing") {
     "testing/origin_trials_test.h",
     "testing/origin_trials_test_global.h",
     "testing/origin_trials_test_partial.h",
+    "testing/pass_as_span_test.h",
     "testing/record_test.cc",
     "testing/record_test.h",
     "testing/scoped_mock_overlay_scrollbars.h",
@@ -649,10 +695,12 @@ if (is_ios) {
     testonly = true
     filelist_name = "testing/data/core_test_bundle_data.filelist"
   }
+
   bundle_data_from_filelist("animation_test_bundle_data") {
     testonly = true
     filelist_name = "animation/test_data/animation_test_bundle_data.filelist"
   }
+
   bundle_data_from_filelist("paint_test_bundle_data") {
     testonly = true
     filelist_name = "paint/test_data/paint_test_bundle_data.filelist"
@@ -1456,6 +1504,10 @@ action("generate_eventhandler_names") {
              "//tools/idl_parser/idl_lexer.py",
              "//tools/idl_parser/idl_node.py",
              "//tools/idl_parser/idl_parser.py",
+             "events/event_type_names.json5",
+             "html/html_attribute_names.json5",
+             "mathml/mathml_attribute_names.json5",
+             "svg/svg_attribute_names.json5",
              web_idl_database_filepath,
              real_script,
            ]
@@ -1470,6 +1522,14 @@ action("generate_eventhandler_names") {
     rebase_path(web_idl_database_filepath, root_build_dir),
     "--out",
     rebase_path(outputs[0], root_build_dir),
+    "--event-handler-names",
+    rebase_path("events/event_type_names.json5", root_build_dir),
+    "--html-attribute-names",
+    rebase_path("html/html_attribute_names.json5", root_build_dir),
+    "--svg-attribute-names",
+    rebase_path("svg/svg_attribute_names.json5", root_build_dir),
+    "--mathml-attribute-names",
+    rebase_path("mathml/mathml_attribute_names.json5", root_build_dir),
   ]
 }
 
@@ -1609,6 +1669,7 @@ source_set("unit_tests") {
     "//third_party/blink/renderer/core:testing",
     "//third_party/blink/renderer/core:unit_test_support",
     "//third_party/blink/renderer/core/sanitizer:unit_test_support",
+    "//third_party/blink/renderer/platform:font_rust_headers",
     "//third_party/blink/renderer/platform:test_support",
     "//third_party/fuzztest",
     "//third_party/harfbuzz",
@@ -1644,8 +1705,6 @@ source_set("unit_tests") {
       "//third_party/blink/public:blink",
       "//third_party/blink/public:test_support",
       "//third_party/blink/public/common/tokens:tokens_headers",
-      "//third_party/blink/public/platform/media",
-      "//third_party/blink/renderer/platform/media",
       "//ui/gfx/geometry",
     ]
   }
@@ -1657,6 +1716,17 @@ source_set("unit_tests") {
 
 group("unit_tests_data") {
   data = [
+    # Used by core/loader/resource/font_resource_test.cc.
+    "//third_party/blink/renderer/platform/testing/data/roboto-ift.woff2",
+
+    # Used by core/css/ift_custom_font_data_test.cc.
+    "//third_party/blink/renderer/platform/testing/data/04.1.ift_gk",
+    "//third_party/blink/renderer/platform/testing/data/08.1.ift_gk",
+    "//third_party/blink/renderer/platform/testing/data/0C.ift_tk",
+    "//third_party/blink/renderer/platform/testing/data/0G.ift_tk",
+    "//third_party/blink/renderer/platform/testing/data/0K.ift_tk",
+    "//third_party/blink/renderer/platform/testing/data/0O.ift_tk",
+    "//third_party/blink/renderer/platform/testing/data/roboto-ift.ttf",
     "//third_party/blink/web_tests/svg/animations/path-animation.svg",
     "//third_party/blink/web_tests/svg/stroke/zero-length-path-linecap-rendering.svg",
     "//third_party/blink/web_tests/svg/foreignObject/fixed-position.svg",
@@ -1691,6 +1761,7 @@ source_set("perf_tests") {
     "layout/inline/inline_node_data_perftest.cc",
     "layout/svg/svg_hit_test_perftest.cc",
     "layout/visual_rect_mapping_perftest.cc",
+    "paint/timing/container_timing_perftest.cc",
     "testing/no_network_url_loader.h",
   ]
 
@@ -1706,6 +1777,7 @@ source_set("perf_tests") {
     "//mojo/public/cpp/system",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/blink/renderer/core:testing",
     "//third_party/blink/renderer/platform:test_support",
   ]
 }
@@ -1728,6 +1800,7 @@ source_set("unit_test_support") {
     "html/html_permission_element_test_helper.h",
     "html/media/html_media_test_helper.cc",
     "html/media/html_media_test_helper.h",
+    "paint/timing/container_timing_test_utils.h",
     "script/mock_script_element_base.h",
     "speculation_rules/auto_speculation_rules_test_helper.cc",
     "speculation_rules/auto_speculation_rules_test_helper.h",
@@ -1755,6 +1828,7 @@ source_set("unit_test_support") {
     "testing/sim/sim_test.h",
     "testing/web_view_test_helper.cc",
     "testing/web_view_test_helper.h",
+    "workers/worker_thread_test_helper.cc",
     "workers/worker_thread_test_helper.h",
   ]
 
@@ -1771,12 +1845,14 @@ source_set("unit_test_support") {
     "//testing/gtest",
     "//third_party/blink/renderer/core:testing",
     "//third_party/blink/renderer/platform:test_support",
+    "//ui/events/blink",
   ]
 
   data = [
     "//third_party/blink/renderer/platform/testing/data/third_party/Roboto/roboto-regular.woff2",
     "//third_party/blink/renderer/platform/testing/data/third_party/Noto/NotoNaskhArabic-regular.woff2",
     "//third_party/blink/web_tests/external/wpt/fonts/mplus-1p-regular.woff",
+    "//third_party/blink/web_tests/third_party/DroidSans/DroidSans.ttf.subset-U002E-U0041-42.ttf",
   ]
 }
 

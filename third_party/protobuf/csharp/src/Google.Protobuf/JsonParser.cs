@@ -1,6 +1,6 @@
 #region Copyright notice and license
 // Protocol Buffers - Google's data interchange format
-// Copyright 2015 Google Inc.  All rights reserved.
+// Copyright 2015 Google LLC.  All rights reserved.
 //
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file or at
@@ -11,12 +11,14 @@ using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace Google.Protobuf
 {
@@ -124,70 +126,86 @@ namespace Google.Protobuf
         /// of tokens provided by the tokenizer. This token stream is assumed to be valid JSON, with the
         /// tokenizer performing that validation - but not every token stream is valid "protobuf JSON".
         /// </summary>
+        /// <remarks>
+        /// This method maintains and checks the recursion depth, so *must* be called for any nested parsing.
+        /// </remarks>
         private void Merge(IMessage message, JsonTokenizer tokenizer)
         {
-            if (tokenizer.ObjectDepth > settings.RecursionLimit)
+            if (tokenizer.RecursionDepth > settings.RecursionLimit)
             {
                 throw InvalidProtocolBufferException.JsonRecursionLimitExceeded();
             }
-            if (message.Descriptor.IsWellKnownType)
+            tokenizer.RecursionDepth++;
+
+            // try/finally used in order to decrement the recursion depth regardless of outcome.
+            // If an exception is thrown, the recursion depth is irrelevant anyway - but as the method
+            // has multiple return statements, this is the simplest way of ensuring the recursion depth
+            // is always decremented. An alternative would be to use a local function.
+            try
             {
-                if (WellKnownTypeHandlers.TryGetValue(message.Descriptor.FullName, out Action<JsonParser, IMessage, JsonTokenizer> handler))
+                if (message.Descriptor.IsWellKnownType)
                 {
-                    handler(this, message, tokenizer);
-                    return;
-                }
-                // Well-known types with no special handling continue in the normal way.
-            }
-            var token = tokenizer.Next();
-            if (token.Type != JsonToken.TokenType.StartObject)
-            {
-                throw new InvalidProtocolBufferException("Expected an object");
-            }
-            var descriptor = message.Descriptor;
-            var jsonFieldMap = descriptor.Fields.ByJsonName();
-            // All the oneof fields we've already accounted for - we can only see each of them once.
-            // The set is created lazily to avoid the overhead of creating a set for every message
-            // we parsed, when oneofs are relatively rare.
-            HashSet<OneofDescriptor> seenOneofs = null;
-            while (true)
-            {
-                token = tokenizer.Next();
-                if (token.Type == JsonToken.TokenType.EndObject)
-                {
-                    return;
-                }
-                if (token.Type != JsonToken.TokenType.Name)
-                {
-                    throw new InvalidOperationException("Unexpected token type " + token.Type);
-                }
-                string name = token.StringValue;
-                if (jsonFieldMap.TryGetValue(name, out FieldDescriptor field))
-                {
-                    if (field.ContainingOneof != null)
+                    if (WellKnownTypeHandlers.TryGetValue(message.Descriptor.FullName, out Action<JsonParser, IMessage, JsonTokenizer> handler))
                     {
-                        if (seenOneofs == null)
-                        {
-                            seenOneofs = new HashSet<OneofDescriptor>();
-                        }
-                        if (!seenOneofs.Add(field.ContainingOneof))
-                        {
-                            throw new InvalidProtocolBufferException($"Multiple values specified for oneof {field.ContainingOneof.Name}");
-                        }
+                        handler(this, message, tokenizer);
+                        return;
                     }
-                    MergeField(message, field, tokenizer);
+                    // Well-known types with no special handling continue in the normal way.
                 }
-                else
+                var token = tokenizer.Next();
+                if (token.Type != JsonToken.TokenType.StartObject)
                 {
-                    if (settings.IgnoreUnknownFields)
+                    throw new InvalidProtocolBufferException("Expected an object");
+                }
+                var descriptor = message.Descriptor;
+                var jsonFieldMap = descriptor.Fields.ByJsonName();
+                // All the oneof fields we've already accounted for - we can only see each of them once.
+                // The set is created lazily to avoid the overhead of creating a set for every message
+                // we parsed, when oneofs are relatively rare.
+                HashSet<OneofDescriptor> seenOneofs = null;
+                while (true)
+                {
+                    token = tokenizer.Next();
+                    if (token.Type == JsonToken.TokenType.EndObject)
                     {
-                        tokenizer.SkipValue();
+                        return;
+                    }
+                    if (token.Type != JsonToken.TokenType.Name)
+                    {
+                        throw new InvalidOperationException("Unexpected token type " + token.Type);
+                    }
+                    string name = token.StringValue;
+                    if (jsonFieldMap.TryGetValue(name, out FieldDescriptor field))
+                    {
+                        if (field.ContainingOneof != null)
+                        {
+                            if (seenOneofs == null)
+                            {
+                                seenOneofs = new HashSet<OneofDescriptor>();
+                            }
+                            if (!seenOneofs.Add(field.ContainingOneof))
+                            {
+                                throw new InvalidProtocolBufferException($"Multiple values specified for oneof {field.ContainingOneof.Name}");
+                            }
+                        }
+                        MergeField(message, field, tokenizer);
                     }
                     else
                     {
-                        throw new InvalidProtocolBufferException("Unknown field: " + name);
+                        if (settings.IgnoreUnknownFields)
+                        {
+                            tokenizer.SkipValue();
+                        }
+                        else
+                        {
+                            throw new InvalidProtocolBufferException("Unknown field: " + name);
+                        }
                     }
                 }
+            }
+            finally
+            {
+                tokenizer.RecursionDepth--;
             }
         }
 
@@ -740,9 +758,47 @@ namespace Google.Protobuf
             }
         }
 
-        private bool TryParseEnumStringValue(FieldDescriptor field, string text, out object value)
+        private static readonly
+            ConcurrentDictionary<EnumDescriptor,
+                                 Lazy<Dictionary<string, EnumValueDescriptor>>>
+                enumCustomJsonNameCache =
+                    new ConcurrentDictionary<
+                        EnumDescriptor,
+                        Lazy<Dictionary<string, EnumValueDescriptor>>>();
+
+        private static Dictionary<string, EnumValueDescriptor>
+        CreateCustomJsonNameMap(EnumDescriptor enumDescriptor)
+        {
+            var map = new Dictionary<string, EnumValueDescriptor>();
+            foreach (var value in enumDescriptor.Values)
+            {
+                var jsonOptions = value.GetOptions()?.GetExtension(
+                    Pb.Enumvalue.JsonEnumvalueOptionsExtensions.Json);
+                if (jsonOptions != null && jsonOptions.HasString &&
+                    !map.ContainsKey(jsonOptions.String))
+                {
+                    map[jsonOptions.String] = value;
+                }
+            }
+            return map;
+        }
+
+        private bool TryParseEnumStringValue(
+            FieldDescriptor field, string text, out object value)
         {
             var enumValue = field.EnumType.FindValueByName(text);
+            if (enumValue == null)
+            {
+                var map = enumCustomJsonNameCache.GetOrAdd(
+                    field.EnumType,
+                    static desc =>
+                        new Lazy<Dictionary<string, EnumValueDescriptor>>(
+                            () => CreateCustomJsonNameMap(desc),
+                            LazyThreadSafetyMode
+                                .ExecutionAndPublication)).Value;
+                map.TryGetValue(text, out enumValue);
+            }
+
             if (enumValue == null)
             {
                 if (settings.IgnoreUnknownFields)

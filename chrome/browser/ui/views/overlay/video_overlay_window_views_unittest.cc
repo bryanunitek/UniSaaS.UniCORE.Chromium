@@ -38,6 +38,7 @@
 #include "components/prefs/testing_pref_service.h"
 #include "components/soda/mock_soda_installer.h"
 #include "components/vector_icons/vector_icons.h"
+#include "components/viz/common/surfaces/surface_id.h"
 #include "content/public/browser/overlay_window.h"
 #include "content/public/browser/video_picture_in_picture_window_controller.h"
 #include "content/public/browser/web_contents.h"
@@ -178,7 +179,7 @@ class VideoOverlayWindowViewsTest : public ChromeViewsTestBase {
   // ChromeViewsTestBase:
   void SetUp() override {
     enabled_features_.push_back(media::kPictureInPictureOcclusionTracking);
-    feature_list_.InitWithFeatures(enabled_features_, {});
+    feature_list_.InitWithFeatures(enabled_features_, disabled_features_);
     display::Screen::SetScreenInstance(&test_screen_);
 
     // Purposely skip ChromeViewsTestBase::SetUp() as that creates ash::Shell
@@ -191,9 +192,6 @@ class VideoOverlayWindowViewsTest : public ChromeViewsTestBase {
     // web_contents_ needs to be created after the constructor, so that
     // |feature_list_| can be initialized before other threads check if a
     // feature is enabled.
-    web_contents_ = web_contents_factory_.CreateWebContents(&profile_);
-    pip_window_controller_.set_web_contents(web_contents_);
-
 #if BUILDFLAG(IS_CHROMEOS)
     test_views_delegate()->set_context(GetContext());
 #endif
@@ -203,18 +201,7 @@ class VideoOverlayWindowViewsTest : public ChromeViewsTestBase {
     // VideoOverlayWindowViews size.
     SetDisplayWorkArea({0, 0, 1000, 1000});
 
-    overlay_window_ = VideoOverlayWindowViews::Create(&pip_window_controller_);
-    overlay_window_->set_overlay_view_cb_for_testing(
-        base::BindRepeating(&VideoOverlayWindowViewsTest::GetOverlayViewImpl,
-                            base::Unretained(this)));
-    overlay_window_->set_meets_user_interaction_for_testing(true);
-
-    // On some platforms, OnNativeWidgetMove is invoked on creation.
-    WaitForMove();
-    overlay_window_->set_minimum_size_for_testing(kMinWindowSize);
-
-    event_generator_ = std::make_unique<ui::test::EventGenerator>(
-        views::GetRootWindow(overlay_window_.get()));
+    InitOverlayWindowWithProfile(&profile_);
   }
 
   void TearDown() override {
@@ -258,8 +245,28 @@ class VideoOverlayWindowViewsTest : public ChromeViewsTestBase {
 
   void DestroyOverlayWindow() { overlay_window_.reset(); }
 
+  void InitOverlayWindowWithProfile(Profile* profile) {
+    event_generator_.reset();
+    overlay_window_.reset();
+    web_contents_ = web_contents_factory_.CreateWebContents(profile);
+    pip_window_controller_.set_web_contents(web_contents_);
+    overlay_window_ = VideoOverlayWindowViews::Create(&pip_window_controller_);
+    overlay_window_->set_overlay_view_cb_for_testing(
+        base::BindRepeating(&VideoOverlayWindowViewsTest::GetOverlayViewImpl,
+                            base::Unretained(this)));
+    overlay_window_->set_meets_user_interaction_for_testing(true);
+    WaitForMove();
+    overlay_window_->set_minimum_size_for_testing(kMinWindowSize);
+    event_generator_ = std::make_unique<ui::test::EventGenerator>(
+        views::GetRootWindow(overlay_window_.get()));
+  }
+
   void AddEnabledFeature(base::test::FeatureRef feature) {
     enabled_features_.push_back(feature);
+  }
+
+  void AddDisabledFeature(base::test::FeatureRef feature) {
+    disabled_features_.push_back(feature);
   }
 
   void GestureTapOnView(views::View* view) {
@@ -289,6 +296,8 @@ class VideoOverlayWindowViewsTest : public ChromeViewsTestBase {
   std::unique_ptr<VideoOverlayWindowViews> overlay_window_;
 
   std::vector<base::test::FeatureRef> enabled_features_;
+
+  std::vector<base::test::FeatureRef> disabled_features_;
 
   base::test::ScopedFeatureList feature_list_;
 };
@@ -1396,6 +1405,28 @@ TEST_F(VideoOverlayWindowViewsTest, LiveCaption) {
   profile().GetPrefs()->SetBoolean(prefs::kLiveCaptionEnabled, false);
 }
 
+TEST_F(VideoOverlayWindowViewsTest, LiveCaption_Incognito) {
+  InitOverlayWindowWithProfile(
+      profile().GetPrimaryOTRProfile(/*create_if_needed=*/true));
+
+  profile().GetPrefs()->SetBoolean(prefs::kLiveCaptionEnabled, false);
+  views::ToggleButton* live_caption_toggle_button =
+      overlay_window()
+          .live_caption_dialog_for_testing()
+          ->live_caption_button_for_testing();
+  ui::MouseEvent dummy_event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
+  views::test::ButtonTestApi(live_caption_toggle_button)
+      .NotifyClick(dummy_event);
+  WaitForLayout();
+
+  EXPECT_TRUE(profile().GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled));
+
+  // Turn off LiveCaption, because leaving it on breaks the test harness when it
+  // tries to destroy the UI.
+  profile().GetPrefs()->SetBoolean(prefs::kLiveCaptionEnabled, false);
+}
+
 TEST_F(VideoOverlayWindowViewsTest, LiveCaption_MouseClickOutside) {
   overlay_window().ForceControlsVisibleForTesting(true);
   OverlayWindowLiveCaptionButton* live_caption_button =
@@ -1760,9 +1791,20 @@ class VideoOverlayWindowWithMuteControlTest
   }
 };
 
-// When the feature is disabled (default), the mute button should not be
+// Test fixture with kPictureInPictureMuteControl disabled.
+class VideoOverlayWindowWithMuteControlDisabledTest
+    : public VideoOverlayWindowViewsTest {
+ public:
+  void SetUp() override {
+    AddDisabledFeature(media::kPictureInPictureMuteControl);
+    VideoOverlayWindowViewsTest::SetUp();
+  }
+};
+
+// When the feature is disabled, the mute button should not be
 // created and SetMediaMuted should be a no-op.
-TEST_F(VideoOverlayWindowViewsTest, ToggleMuteButton_FeatureFlagDisabled) {
+TEST_F(VideoOverlayWindowWithMuteControlDisabledTest,
+       ToggleMuteButton_FeatureFlagDisabled) {
   EXPECT_EQ(nullptr, overlay_window().toggle_mute_button_for_testing());
 
   // Calling SetMediaMuted with no button should not crash.

@@ -14,8 +14,8 @@
 
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
-#include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/sanitized_object.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/threading/thread_checker.h"
@@ -46,7 +46,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
     : public DownloadItem,
       public DownloadDestinationObserver {
   // TODO(crbug.com/422045023): Remove this macro once the bug gets fixed.
-  ADVANCED_MEMORY_SAFETY_CHECKS();
+  SANITIZED_OBJECT();
 
  public:
   // Information about the initial request that triggers the download. Most of
@@ -68,6 +68,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
                 const std::string& remote_address,
                 base::Time start_time,
                 ::network::mojom::CredentialsMode credentials_mode,
+                ::network::mojom::RequestMode fetch_request_mode,
                 const std::optional<net::IsolationInfo>& isolation_info,
                 int64_t range_request_from,
                 int64_t range_request_to);
@@ -121,6 +122,10 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
     // The credentials mode of the request.
     ::network::mojom::CredentialsMode credentials_mode =
         ::network::mojom::CredentialsMode::kInclude;
+
+    // The fetch request mode of the request.
+    ::network::mojom::RequestMode fetch_request_mode =
+        ::network::mojom::RequestMode::kNavigate;
 
     // Isolation info for the request.
     std::optional<net::IsolationInfo> isolation_info;
@@ -287,6 +292,10 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   int32_t GetAutoResumeCount() const override;
   const GURL& GetURL() const override;
   const std::vector<GURL>& GetUrlChain() const override;
+  bool IsUrlTruncated() const override;
+  void SetURLLoaderFactory(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
+      override;
   const GURL& GetOriginalUrl() const override;
   const GURL& GetReferrerUrl() const override;
   const std::string& GetSerializedEmbedderDownloadData() const override;
@@ -350,6 +359,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   bool IsParallelDownload() const override;
   DownloadCreationType GetDownloadCreationType() const override;
   ::network::mojom::CredentialsMode GetCredentialsMode() const override;
+  ::network::mojom::RequestMode GetFetchRequestMode() const override;
   const std::optional<net::IsolationInfo>& GetIsolationInfo() const override;
   void OnContentCheckCompleted(DownloadDangerType danger_type,
                                DownloadInterruptReason reason) override;
@@ -397,7 +407,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   virtual void SetTotalBytes(int64_t total_bytes);
 
   virtual void OnAllDataSaved(int64_t total_bytes,
-                              std::unique_ptr<crypto::SecureHash> hash_state);
+                              std::optional<crypto::hash::Hasher> hash_state);
 
   // Called by SavePackage to display progress when the DownloadItem
   // should be considered complete.
@@ -411,10 +421,10 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   void DestinationError(
       DownloadInterruptReason reason,
       int64_t bytes_so_far,
-      std::unique_ptr<crypto::SecureHash> hash_state) override;
+      std::optional<crypto::hash::Hasher> hash_state) override;
   void DestinationCompleted(
       int64_t total_bytes,
-      std::unique_ptr<crypto::SecureHash> hash_state) override;
+      std::optional<crypto::hash::Hasher> hash_state) override;
 
   void SetDelegate(DownloadItemImplDelegate* delegate);
 
@@ -657,7 +667,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   // interrupt reason allows, this partial state may be allowed to continue the
   // interrupted download upon resumption.
   void InterruptWithPartialState(int64_t bytes_so_far,
-                                 std::unique_ptr<crypto::SecureHash> hash_state,
+                                 std::optional<crypto::hash::Hasher> hash_state,
                                  DownloadInterruptReason reason);
 
   void UpdateProgress(int64_t bytes_so_far, int64_t bytes_per_sec);
@@ -665,7 +675,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   void UpdateResumptionInfo(bool user_resume);
 
   // Set |hash_| and |hash_state_| based on |hash_state|.
-  void SetHashState(std::unique_ptr<crypto::SecureHash> hash_state);
+  void SetHashState(std::optional<crypto::hash::Hasher> hash_state);
 
   // Destroy the DownloadFile object.  If |destroy_file| is true, the file is
   // destroyed with it.  Otherwise, DownloadFile::Detach() is called before
@@ -868,7 +878,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   // In the event of an interruption, the DownloadDestinationObserver interface
   // exposes the partial hash state. This state can be held by the download item
   // in case it's needed for resumption.
-  std::unique_ptr<crypto::SecureHash> hash_state_;
+  std::optional<crypto::hash::Hasher> hash_state_;
 
   // Contents of the Last-Modified header for the most recent server response.
   std::string last_modified_time_;
@@ -918,12 +928,17 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   // Whether user has confirmed dialog.
   bool is_user_confirmed_ = false;
 
+  // Whether the URL was truncated to save memory.
+  bool url_truncated_ = false;
+
 #if BUILDFLAG(IS_ANDROID)
   bool is_from_external_app_ = false;
   bool allow_auto_open_after_completion_ = true;
 #endif  // BUILDFLAG(IS_ANDROID)
 
   THREAD_CHECKER(thread_checker_);
+
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
   base::WeakPtrFactory<DownloadItemImpl> weak_ptr_factory_{this};
 };

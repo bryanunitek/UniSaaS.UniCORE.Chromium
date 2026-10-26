@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.download.home.list.mutator;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.download.home.list.ListItem;
+import org.chromium.chrome.browser.download.home.list.ListItem.CardDividerListItem.Position;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -73,8 +74,7 @@ public class PrefetchListPaginator implements DateOrderedListMutator.ListPaginat
     }
 
     private boolean isCardFooter(ListItem listItem) {
-        if (!(listItem instanceof ListItem.CardDividerListItem)) return false;
-        ListItem.CardDividerListItem item = (ListItem.CardDividerListItem) listItem;
-        return item.position == ListItem.CardDividerListItem.Position.BOTTOM;
+        if (!(listItem instanceof ListItem.CardDividerListItem item)) return false;
+        return item.position == Position.BOTTOM;
     }
 }

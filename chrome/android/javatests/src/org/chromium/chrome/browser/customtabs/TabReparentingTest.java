@@ -28,22 +28,21 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ContextUtils;
-import org.chromium.base.ObserverList;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.app.metrics.LaunchCauseMetrics;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
 import org.chromium.chrome.browser.tab.TabObserver;
@@ -54,7 +53,6 @@ import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.test.util.DOMUtils;
 import org.chromium.content_public.browser.test.util.WebContentsUtils;
 import org.chromium.net.test.EmbeddedTestServer;
-import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
 
@@ -63,6 +61,7 @@ import java.util.concurrent.TimeoutException;
  * ChromeTabbedActivity.
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
+@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 public class TabReparentingTest {
     private static final String TEST_PAGE = "/chrome/test/data/android/google.html";
     private static final String SELECT_POPUP_PAGE = "/chrome/test/data/android/select.html";
@@ -126,7 +125,7 @@ public class TabReparentingTest {
             final Tab tabToBeReparented = getActivity().getActivityTab();
             final CallbackHelper tabHiddenHelper = new CallbackHelper();
             TabObserver observer =
-                    new EmptyTabObserver() {
+                    new TabObserver() {
                         @Override
                         public void onHidden(Tab tab, @TabHidingType int type) {
                             tabHiddenHelper.notifyCalled();
@@ -171,10 +170,9 @@ public class TabReparentingTest {
             ThreadUtils.runOnUiThreadBlocking(
                     () -> {
                         tabToBeReparented.removeObserver(observer);
-                        ObserverList.RewindableIterator<TabObserver> observers =
-                                TabTestUtils.getTabObservers(tabToBeReparented);
-                        while (observers.hasNext()) {
-                            Assert.assertFalse(observers.next() instanceof CustomTabObserver);
+                        for (TabObserver tabObserver :
+                                TabTestUtils.getTabObservers(tabToBeReparented)) {
+                            Assert.assertFalse(tabObserver instanceof CustomTabObserver);
                         }
                     });
             return newActivity;
@@ -210,7 +208,6 @@ public class TabReparentingTest {
      */
     @SmallTest
     @Test
-    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481445694
     public void testTabReparentingSelectPopup() throws TimeoutException {
         LocationSettingsTestUtil.setSystemLocationSettingEnabled(true);
         mCustomTabActivityTestRule.startCustomTabActivityWithIntent(

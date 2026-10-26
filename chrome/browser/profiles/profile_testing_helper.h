@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_PROFILES_PROFILE_TESTING_HELPER_H_
 
 #include "base/memory/raw_ptr.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "content/public/test/browser_task_environment.h"
 
@@ -24,6 +25,11 @@ class ProfileTestingHelper {
   TestingProfile* regular_profile() { return regular_profile_; }
   Profile* incognito_profile() { return incognito_profile_; }
 
+  TestingProfile* isolated_mode_parent_profile() {
+    return isolated_mode_parent_profile_;
+  }
+  Profile* isolated_mode_profile() { return isolated_mode_profile_; }
+
   TestingProfile* guest_profile() { return guest_profile_; }
   Profile* guest_profile_otr() { return guest_profile_otr_; }
 
@@ -38,29 +44,43 @@ class ProfileTestingHelper {
 
   TestingProfile* lockscreen_profile() { return lockscreen_profile_; }
   Profile* lockscreen_profile_otr() { return lockscreen_profile_otr_; }
+
+  TestingProfile* shimless_rma_app_profile() {
+    return shimless_rma_app_profile_;
+  }
+  Profile* shimless_rma_app_profile_otr() {
+    return shimless_rma_app_profile_otr_;
+  }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
  private:
+  base::test::ScopedFeatureList scoped_feature_list_;
   content::BrowserTaskEnvironment task_environment_;
   TestingProfileManager manager_;
 
-  raw_ptr<TestingProfile, DanglingUntriaged> regular_profile_ = nullptr;
-  raw_ptr<Profile, DanglingUntriaged> incognito_profile_ = nullptr;
+  raw_ptr<TestingProfile> regular_profile_ = nullptr;
+  raw_ptr<Profile> incognito_profile_ = nullptr;
 
-  raw_ptr<TestingProfile, DanglingUntriaged> guest_profile_ = nullptr;
-  raw_ptr<Profile, DanglingUntriaged> guest_profile_otr_ = nullptr;
+  raw_ptr<TestingProfile> isolated_mode_parent_profile_ = nullptr;
+  raw_ptr<Profile> isolated_mode_profile_ = nullptr;
+
+  raw_ptr<TestingProfile> guest_profile_ = nullptr;
+  raw_ptr<Profile> guest_profile_otr_ = nullptr;
 
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
-  raw_ptr<TestingProfile, DanglingUntriaged> system_profile_ = nullptr;
-  raw_ptr<Profile, DanglingUntriaged> system_profile_otr_ = nullptr;
+  raw_ptr<TestingProfile> system_profile_ = nullptr;
+  raw_ptr<Profile> system_profile_otr_ = nullptr;
 #endif  // !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_CHROMEOS)
-  raw_ptr<TestingProfile, DanglingUntriaged> signin_profile_ = nullptr;
-  raw_ptr<Profile, DanglingUntriaged> signin_profile_otr_ = nullptr;
+  raw_ptr<TestingProfile> signin_profile_ = nullptr;
+  raw_ptr<Profile> signin_profile_otr_ = nullptr;
 
-  raw_ptr<TestingProfile, DanglingUntriaged> lockscreen_profile_ = nullptr;
-  raw_ptr<Profile, DanglingUntriaged> lockscreen_profile_otr_ = nullptr;
+  raw_ptr<TestingProfile> lockscreen_profile_ = nullptr;
+  raw_ptr<Profile> lockscreen_profile_otr_ = nullptr;
+
+  raw_ptr<TestingProfile> shimless_rma_app_profile_ = nullptr;
+  raw_ptr<Profile> shimless_rma_app_profile_otr_ = nullptr;
 #endif  // BUILDFLAG(IS_CHROMEOS)
 };
 

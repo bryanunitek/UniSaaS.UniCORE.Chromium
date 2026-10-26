@@ -52,6 +52,7 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.hub.HubLayout;
 import org.chromium.chrome.browser.multiwindow.MultiWindowTestHelper;
+import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper;
 import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.toolbar.top.ToolbarTablet;
@@ -162,6 +163,7 @@ public class AppHeaderCoordinatorBrowserTest {
 
     @Test
     @MediumTest
+    @DisabledTest(message = "crbug.com/540949052")
     public void testToggleTabStripVisibilityInDesktopWindow() {
         ChromeTabbedActivity activity = mActivityTestRule.getActivity();
         triggerDesktopWindowingModeChange(activity, true);
@@ -665,6 +667,8 @@ public class AppHeaderCoordinatorBrowserTest {
                             .setStateForTesting(
                                     isInDesktopWindow, appHeaderState, /* isFocused= */ true);
                     AppHeaderUtils.setAppInDesktopWindowForTesting(isInDesktopWindow);
+                    MultiWindowUtils.getInstance()
+                            .setIsInMultiWindowModeForTesting(isInDesktopWindow);
                 });
     }
 

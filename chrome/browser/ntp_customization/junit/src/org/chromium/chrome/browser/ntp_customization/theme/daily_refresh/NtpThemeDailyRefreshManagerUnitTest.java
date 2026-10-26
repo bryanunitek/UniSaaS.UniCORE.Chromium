@@ -10,6 +10,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import android.graphics.Bitmap;
@@ -27,7 +28,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.FakeTimeTestRule;
 import org.chromium.base.TimeUtils;
@@ -46,9 +46,11 @@ import java.io.File;
 
 /** Unit tests for {@link NtpThemeDailyRefreshManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @Features.EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
 public class NtpThemeDailyRefreshManagerUnitTest {
+    private static final String COLLECTION_ID = "id";
+    private static final String DAILY_REFRESH_COLLECTION_ID = "id_daily";
+
     @Rule public MockitoRule mMockitoJUnit = MockitoJUnit.rule();
     @Rule public FakeTimeTestRule mFakeTime = new FakeTimeTestRule();
 
@@ -63,6 +65,9 @@ public class NtpThemeDailyRefreshManagerUnitTest {
 
     @After
     public void tearDown() {
+        NtpCustomizationUtils.maybeDeleteFile(
+                NtpCustomizationUtils.createDailyRefreshBackgroundImageFile());
+        NtpCustomizationUtils.maybeDeleteFile(NtpCustomizationUtils.createBackgroundImageFile());
         NtpCustomizationUtils.resetSharedPreferenceForTesting();
         mFakeTime.resetTimes();
     }
@@ -175,7 +180,7 @@ public class NtpThemeDailyRefreshManagerUnitTest {
         CustomBackgroundInfo infoDisabled =
                 new CustomBackgroundInfo(
                         JUnitTestGURLs.URL_1,
-                        /* collectionId= */ "id",
+                        COLLECTION_ID,
                         /* isUploadedImage= */ false,
                         /* isDailyRefreshEnabled= */ false);
         NtpCustomizationUtils.setCustomBackgroundInfoToSharedPreference(infoDisabled);
@@ -187,7 +192,7 @@ public class NtpThemeDailyRefreshManagerUnitTest {
         CustomBackgroundInfo infoEnabled =
                 new CustomBackgroundInfo(
                         JUnitTestGURLs.URL_1,
-                        /* collectionId= */ "id",
+                        COLLECTION_ID,
                         /* isUploadedImage= */ false,
                         /* isDailyRefreshEnabled= */ true);
         NtpCustomizationUtils.setCustomBackgroundInfoToSharedPreference(infoEnabled);
@@ -207,13 +212,9 @@ public class NtpThemeDailyRefreshManagerUnitTest {
 
     @Test
     public void testMaybeApplyDailyRefreshForThemeCollection() {
-        CustomBackgroundInfo info =
-                new CustomBackgroundInfo(
-                        JUnitTestGURLs.URL_1,
-                        /* collectionId= */ "id",
-                        /* isUploadedImage= */ false,
-                        /* isDailyRefreshEnabled= */ true);
-        NtpCustomizationUtils.setCustomBackgroundInfoToSharedPreference(info);
+        setDailyRefreshThemeCollection();
+        // The next image has been prefetched.
+        setPrefetchedDailyRefreshInfo();
         mFakeTime.advanceMillis(TimeUtils.MILLISECONDS_PER_DAY + 10);
         assertFalse(mManager.getIsDailyUpdateAppliedForTesting());
 
@@ -222,6 +223,51 @@ public class NtpThemeDailyRefreshManagerUnitTest {
         assertTrue(mManager.getIsDailyUpdateAppliedForTesting());
         assertNotNull(mManager.getLastDailyUpdateTimestampForTesting());
         assertNull(mManager.getNtpThemeColorIdForTesting());
+        assertEquals(
+                DAILY_REFRESH_COLLECTION_ID,
+                mManager.getNtpCustomBackgroundInfoForThemeCollection().collectionId);
+    }
+
+    @Test
+    public void testMaybeApplyDailyRefreshForThemeCollection_noDailyRefreshInfo_skipped() {
+        setDailyRefreshThemeCollection();
+        NtpCustomizationUtils.setCustomizedPrimaryColorToSharedPreference(Color.RED);
+        // A stale or partially written daily refresh color without the daily refresh info.
+        NtpCustomizationUtils.setDailyRefreshCustomizedPrimaryColorToSharedPreference(Color.BLUE);
+        long lastTimestamp = TimeUtils.currentTimeMillis();
+        NtpCustomizationUtils.setDailyRefreshTimestampToSharedPreference(lastTimestamp);
+        mFakeTime.advanceMillis(TimeUtils.MILLISECONDS_PER_DAY + 10);
+
+        mManager.maybeApplyDailyRefreshForThemeCollection();
+
+        // The daily refresh is skipped and the getters keep returning the current theme.
+        assertFalse(mManager.getIsDailyUpdateAppliedForTesting());
+        assertTrue(mManager.getShouldSkipDailyRefreshForThemeCollectionForTesting());
+        assertEquals(
+                Long.valueOf(TimeUtils.currentTimeMillis()),
+                mManager.getLastDailyUpdateTimestampForTesting());
+        assertEquals(Integer.valueOf(Color.RED), mManager.getNtpThemeColorForThemeCollection());
+        assertEquals(
+                COLLECTION_ID,
+                mManager.getNtpCustomBackgroundInfoForThemeCollection().collectionId);
+        assertEquals(
+                NtpBackgroundType.THEME_COLLECTION,
+                NtpCustomizationUtils.getNtpBackgroundTypeFromSharedPreference());
+        // Nothing is persisted until maybeSaveDailyRefreshAndReset().
+        assertEquals(
+                lastTimestamp, NtpCustomizationUtils.getDailyRefreshTimestampToSharedPreference());
+
+        // The re-fetch completes later in the same process, e.g., before another activity is
+        // created. The daily refresh isn't applied after the current image has been loaded.
+        setPrefetchedDailyRefreshInfo();
+        mFakeTime.advanceMillis(1);
+        mManager.maybeApplyDailyRefreshForThemeCollection();
+
+        assertFalse(mManager.getIsDailyUpdateAppliedForTesting());
+        assertTrue(mManager.getShouldSkipDailyRefreshForThemeCollectionForTesting());
+        assertEquals(
+                COLLECTION_ID,
+                mManager.getNtpCustomBackgroundInfoForThemeCollection().collectionId);
     }
 
     @Test
@@ -238,13 +284,13 @@ public class NtpThemeDailyRefreshManagerUnitTest {
         CustomBackgroundInfo customInfo =
                 new CustomBackgroundInfo(
                         JUnitTestGURLs.URL_1,
-                        /* collectionId= */ "id",
+                        COLLECTION_ID,
                         /* isUploadedImage= */ false,
                         /* isDailyRefreshEnabled= */ false);
         NtpCustomizationUtils.setCustomBackgroundInfoToSharedPreference(customInfo);
 
         // Verify getters return regular info.
-        assertEquals(Color.RED, mManager.getNtpThemeColorForThemeCollection());
+        assertEquals(Integer.valueOf(Color.RED), mManager.getNtpThemeColorForThemeCollection());
         assertEquals(
                 imageInfo.getPortraitMatrix(),
                 mManager.getNtpBackgroundImageInfoForThemeCollection().getPortraitMatrix());
@@ -265,17 +311,18 @@ public class NtpThemeDailyRefreshManagerUnitTest {
         CustomBackgroundInfo dailyRefreshCustomInfo =
                 new CustomBackgroundInfo(
                         JUnitTestGURLs.URL_2,
-                        /* collectionId= */ "id_daily",
+                        DAILY_REFRESH_COLLECTION_ID,
                         /* isUploadedImage= */ false,
                         /* isDailyRefreshEnabled= */ true);
         NtpCustomizationUtils.setDailyRefreshCustomBackgroundInfoToSharedPreference(
                 dailyRefreshCustomInfo);
 
         // Apply daily update.
-        mManager.setDailyUpdateStatusForThemeCollection(TimeUtils.currentTimeMillis());
+        mManager.setDailyUpdateStatusForThemeCollection(
+                TimeUtils.currentTimeMillis(), /* shouldApply= */ true);
 
         // Verify getters return daily refresh info.
-        assertEquals(Color.BLUE, mManager.getNtpThemeColorForThemeCollection());
+        assertEquals(Integer.valueOf(Color.BLUE), mManager.getNtpThemeColorForThemeCollection());
         assertEquals(
                 dailyRefreshImageInfo.getPortraitMatrix(),
                 mManager.getNtpBackgroundImageInfoForThemeCollection().getPortraitMatrix());
@@ -293,6 +340,7 @@ public class NtpThemeDailyRefreshManagerUnitTest {
         NtpCustomizationUtils.setNtpBackgroundTypeToSharedPreference(
                 NtpBackgroundType.THEME_COLLECTION);
         // 2. Set up daily refresh info. This is what will be "committed".
+        setPrefetchedDailyRefreshInfo();
         NtpCustomizationUtils.setDailyRefreshCustomizedPrimaryColorToSharedPreference(Color.BLUE);
         File dailyRefreshFile = NtpCustomizationUtils.createDailyRefreshBackgroundImageFile();
         NtpCustomizationUtils.saveBitmapImageToFile(
@@ -302,7 +350,7 @@ public class NtpThemeDailyRefreshManagerUnitTest {
 
         // 3. Apply daily update status in the manager.
         long timeStamp = 100;
-        mManager.setDailyUpdateStatusForThemeCollection(timeStamp);
+        mManager.setDailyUpdateStatusForThemeCollection(timeStamp, /* shouldApply= */ true);
 
         // 4. Call the method.
         mManager.maybeSaveDailyRefreshAndReset(mOnDailyRefreshThemeCollectionApplied);
@@ -311,7 +359,11 @@ public class NtpThemeDailyRefreshManagerUnitTest {
         // 5. Verify results.
         assertEquals(timeStamp, NtpCustomizationUtils.getDailyRefreshTimestampToSharedPreference());
         assertEquals(
-                Color.BLUE, NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
+                Integer.valueOf(Color.BLUE),
+                NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
+        assertEquals(
+                DAILY_REFRESH_COLLECTION_ID,
+                NtpCustomizationUtils.getCustomBackgroundInfoFromSharedPreference().collectionId);
         // Verify file was moved.
         assertTrue(NtpCustomizationUtils.createBackgroundImageFile().exists());
         assertFalse(dailyRefreshFile.exists());
@@ -322,6 +374,49 @@ public class NtpThemeDailyRefreshManagerUnitTest {
         assertNull(mManager.getLastDailyUpdateTimestampForTesting());
         assertNull(mManager.getNtpThemeColorIdForTesting());
         assertFalse(mManager.getIsDailyUpdateAppliedForTesting());
+    }
+
+    @Test
+    public void testMaybeSaveDailyRefreshAndReset_forThemeCollection_noDailyRefreshInfo() {
+        File dailyRefreshFile = NtpCustomizationUtils.createDailyRefreshBackgroundImageFile();
+        File mainFile = NtpCustomizationUtils.createBackgroundImageFile();
+        setDailyRefreshThemeCollection();
+        NtpCustomizationUtils.setCustomizedPrimaryColorToSharedPreference(Color.RED);
+        // A stale daily refresh image file without the daily refresh info.
+        NtpCustomizationUtils.saveBitmapImageToFile(
+                Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888), dailyRefreshFile);
+        RobolectricUtil.runAllBackgroundAndUi(); // Wait for async file operations.
+        assertTrue(dailyRefreshFile.exists());
+        assertFalse(mainFile.exists());
+
+        mFakeTime.advanceMillis(TimeUtils.MILLISECONDS_PER_DAY + 10);
+        long now = TimeUtils.currentTimeMillis();
+
+        mManager.maybeApplyDailyRefreshForThemeCollection();
+        mManager.maybeSaveDailyRefreshAndReset(mOnDailyRefreshThemeCollectionApplied);
+        RobolectricUtil.runAllBackgroundAndUi(); // Wait for a possible rename.
+
+        // The next image is fetched again.
+        verify(mOnDailyRefreshThemeCollectionApplied).run();
+        assertEquals(now, NtpCustomizationUtils.getDailyRefreshTimestampToSharedPreference());
+        // Nothing is committed: the current theme is kept and the stale file isn't renamed.
+        assertEquals(
+                Integer.valueOf(Color.RED),
+                NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
+        assertEquals(
+                COLLECTION_ID,
+                NtpCustomizationUtils.getCustomBackgroundInfoFromSharedPreference().collectionId);
+        assertTrue(dailyRefreshFile.exists());
+        assertFalse(mainFile.exists());
+
+        // Verify manager state is reset.
+        assertNull(mManager.getLastDailyUpdateTimestampForTesting());
+        assertFalse(mManager.getIsDailyUpdateAppliedForTesting());
+        assertFalse(mManager.getShouldSkipDailyRefreshForThemeCollectionForTesting());
+
+        // A second call is a no-op.
+        mManager.maybeSaveDailyRefreshAndReset(mOnDailyRefreshThemeCollectionApplied);
+        verify(mOnDailyRefreshThemeCollectionApplied, times(1)).run();
     }
 
     @Test
@@ -349,10 +444,32 @@ public class NtpThemeDailyRefreshManagerUnitTest {
         RobolectricUtil.runAllBackgroundAndUi();
 
         if (isDailyUpdateApplied) {
-            mManager.setDailyUpdateStatusForThemeCollection(100);
+            mManager.setDailyUpdateStatusForThemeCollection(100, /* shouldApply= */ true);
         }
         mManager.readNtpBackgroundImageForThemeCollection(
                 (result) -> assertNotNull(result), /* executor= */ Runnable::run, filePath);
         RobolectricUtil.runAllBackgroundAndUi();
+    }
+
+    /** Sets the background to the theme collection {@link #COLLECTION_ID} with daily refresh. */
+    private static void setDailyRefreshThemeCollection() {
+        NtpCustomizationUtils.setNtpBackgroundTypeToSharedPreference(
+                NtpBackgroundType.THEME_COLLECTION);
+        NtpCustomizationUtils.setCustomBackgroundInfoToSharedPreference(
+                new CustomBackgroundInfo(
+                        JUnitTestGURLs.URL_1,
+                        COLLECTION_ID,
+                        /* isUploadedImage= */ false,
+                        /* isDailyRefreshEnabled= */ true));
+    }
+
+    /** Saves the prefetched daily refresh info of {@link #DAILY_REFRESH_COLLECTION_ID}. */
+    private static void setPrefetchedDailyRefreshInfo() {
+        NtpCustomizationUtils.setDailyRefreshCustomBackgroundInfoToSharedPreference(
+                new CustomBackgroundInfo(
+                        JUnitTestGURLs.URL_2,
+                        DAILY_REFRESH_COLLECTION_ID,
+                        /* isUploadedImage= */ false,
+                        /* isDailyRefreshEnabled= */ true));
     }
 }

@@ -13,29 +13,13 @@ RequestPageData::~RequestPageData() = default;
 
 PAGE_USER_DATA_KEY_IMPL(RequestPageData);
 
-Request* RequestPageData::PendingWebIdentityRequest() {
-  return pending_web_identity_request_;
+RequestHandler* RequestPageData::PendingRequestHandler() {
+  return pending_request_handler_;
 }
 
-void RequestPageData::SetPendingWebIdentityRequest(Request* request) {
-  pending_web_identity_request_ = request;
-}
-
-void RequestPageData::SetUserInfoAccountsResponseTime(
-    const GURL& idp_url,
-    const base::TimeTicks& time) {
-  user_info_accounts_response_time_[idp_url] = time;
-}
-
-std::optional<base::TimeTicks>
-RequestPageData::ConsumeUserInfoAccountsResponseTime(const GURL& idp_url) {
-  const auto& it = user_info_accounts_response_time_.find(idp_url);
-  if (it != user_info_accounts_response_time_.end()) {
-    base::TimeTicks time = it->second;
-    user_info_accounts_response_time_.erase(it);
-    return time;
-  }
-  return std::nullopt;
+void RequestPageData::SetPendingRequestHandler(
+    RequestHandler* request_handler) {
+  pending_request_handler_ = request_handler;
 }
 
 }  // namespace content::webid

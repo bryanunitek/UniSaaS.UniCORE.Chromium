@@ -7,7 +7,6 @@ import {html} from '//resources/lit/v3_0/lit.rollup.js';
 import type {AppElement} from './app.js';
 
 export function getHtml(this: AppElement) {
-  // clang-format off
   return html`<!--_html_template_start_-->
 <div id="appFlexParent"
     class="${this.getImmersiveClass_()} ${
@@ -15,18 +14,22 @@ export function getHtml(this: AppElement) {
   <!-- Overlay to prevent cursor from interacting with background elements when
   the settings menu is open. -->
   <div id="settingsOverlay" class="settings-overlay"></div>
-  <div id="lineFocus"
-      class="${this.getLineFocusClass_()}"
+  <div id="lineFocus" class="${this.getLineFocusClass_()}"
       ?hidden="${!this.computeHasContent()}">
   </div>
   <div id="toolbar-container">
-    <read-anything-toolbar
+    <read-anything-toolbar .isReadAnythingPinned="${this.isReadAnythingPinned_}"
         .presentationState="${this.presentationState_}"
         .isSpeechActive="${this.isSpeechActive_}"
         .isAudioCurrentlyPlaying="${this.isAudioCurrentlyPlaying_}"
         .isReadAloudPlayable="${this.computeIsReadAloudPlayable()}"
-        .selectedVoice="${this.selectedVoice_}"
-        .settingsPrefs="${this.settingsPrefs_}"
+        .selectedVoice="${this.selectedVoice_}" .theme="${this.theme_}"
+        .lineSpacing="${this.lineSpacing_}"
+        .letterSpacing="${this.letterSpacing_}" .font="${this.font_}"
+        .fontSize="${this.fontSize_}" .speechRate="${this.speechRate_}"
+        .highlightGranularity="${this.highlightGranularity_}"
+        .linksEnabled="${this.linksEnabled_}"
+        .imagesEnabled="${this.imagesEnabled_}"
         .enabledLangs="${this.enabledLangs_}"
         .availableVoices="${this.availableVoices_}"
         .previewVoicePlaying="${this.previewVoicePlaying_}"
@@ -34,35 +37,40 @@ export function getHtml(this: AppElement) {
         .pageLanguage="${this.pageLanguage_}"
         .isImmersiveMode="${this.isImmersiveMode()}"
         .lineFocusStyle="${this.lineFocusStyle_}"
+        .lineFocusEnabled="${this.lineFocusEnabled_}"
         .lineFocusMovement="${this.lineFocusMovement_}"
+        .isLineFocusShowing="${this.computeIsLineFocusShowing_()}"
         @select-voice="${this.onSelectVoice_}"
         @voice-language-toggle="${this.onVoiceLanguageToggle_}"
+        @voice-language-selected="${this.onVoiceLanguageSelected_}"
         @preview-voice="${this.onPreviewVoice_}"
         @voice-menu-close="${this.onVoiceMenuClose_}"
         @voice-menu-open="${this.onVoiceMenuOpen_}"
         @play-pause-click="${this.onPlayPauseClick_}"
         @font-size-change="${this.onFontSizeChange_}"
+        @font-size-reset="${this.onFontSizeReset_}"
         @font-change="${this.onFontChange_}"
         @rate-change="${this.onSpeechRateChange_}"
         @next-granularity-click="${this.onNextGranularityClick_}"
         @previous-granularity-click="${this.onPreviousGranularityClick_}"
         @links-toggle="${this.onLinksToggle_}"
         @images-toggle="${this.onImagesToggle_}"
+        @pin-toggle="${this.onPinToggle_}"
+        @translation-requested="${this.onTranslationRequested_}"
         @letter-spacing-change="${this.onLetterSpacingChange_}"
         @theme-change="${this.onThemeChange_}"
         @presentation-change="${this.onPresentationChange_}"
         @line-spacing-change="${this.onLineSpacingChange_}"
         @highlight-change="${this.onHighlightChange_}"
-        @reset-toolbar="${this.onResetToolbar_}"
-        @toolbar-overflow="${this.onToolbarOverflow_}"
         @language-menu-open="${this.onLanguageMenuOpen_}"
         @language-menu-close="${this.onLanguageMenuClose_}"
         @line-focus-style-change="${this.onLineFocusStyleChange_}"
+        @line-focus-toggle-change="${this.onLineFocusToggleChange_}"
         @line-focus-movement-change="${this.onLineFocusMovementChange_}"
         @close-all-menus="${this.onCloseAllMenus_}"
         @settings-opened="${this.onSettingsOpened_}"
-        @settings-closed="${this.onSettingsClosed_}"
-        id="toolbar">
+        @settings-closed="${this.onSettingsClosed_}" translate="no"
+        class="notranslate" id="toolbar">
     </read-anything-toolbar>
   </div>
   <div id="containerParent" class="sp-card"
@@ -73,19 +81,12 @@ export function getHtml(this: AppElement) {
         @mousemove="${this.onScrollerMousemove_}"
         @mouseleave="${this.onScrollerMouseleave_}">
       <div id="container"
-        class=
-          "user-select-disabled-when-speech-active-${this.isSpeechActive_}">
+          class="user-select-disabled-when-speech-active-${
+              this.isSpeechActive_}">
       </div>
     </div>
-    <!-- TODO: crbug.com/324143642- Localize the "Load More" string. -->
-    <cr-button id="docs-load-more-button" tabindex="0"
-        @click="${this.onDocsLoadMoreButtonClick_}"
-        ?hidden="${!this.isDocsLoadMoreButtonVisible_}">
-      Load More
-    </cr-button>
   </div>
-  <div id="empty-state-container"
-      class="sp-scroller"
+  <div id="empty-state-container" class="sp-scroller notranslate" translate="no"
       @mousemove="${this.onScrollerMousemove_}"
       @mouseleave="${this.onScrollerMouseleave_}"
       ?hidden="${this.computeHasContent()}">
@@ -100,5 +101,4 @@ export function getHtml(this: AppElement) {
     .numAvailableVoices="${this.availableVoices_.length}">
 </language-toast>
 <!--_html_template_end_-->`;
-  // clang-format on
 }

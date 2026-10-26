@@ -40,6 +40,9 @@ class WebUIHomeControl {
   // Sets whether or not the button has overflowed - that is, not displayed on
   // the toolbar because there's no space for it. When not pinned, overflowed
   // should be set to false. Updates state if needed.
+  //
+  // May only be set to true if features::IsWebUIToolbarFullyEnabled() is false.
+  // Otherwise, overflow is managed in Javascript.
   void SetIsOverflowed(bool is_overflowed);
   bool is_overflowed() const { return is_overflowed_; }
 
@@ -51,14 +54,20 @@ class WebUIHomeControl {
   // and displays the undo bubble.
   void OnHomeButtonDropUrl(const GURL& url);
 
+  // Called when plain text is dropped on the home button. Returns whether the
+  // text should be forwarded to the shared toolbar text navigation logic.
+  // Returning false consumes the pending drag state so it does not leak into
+  // subsequent navigations.
+  bool ShouldHandleDropText();
+
   ui::MenuModel* GetMenuModelForTesting() { return &home_menu_; }
 
  private:
   FRIEND_TEST_ALL_PREFIXES(WebUIToolbarWebViewPixelBrowserTest,
                            CheckHomeButtonColor);
-  FRIEND_TEST_ALL_PREFIXES(WebUIToolbarWebViewHomeButtonBrowserTest,
-                           RightClickHomeButton);
-  FRIEND_TEST_ALL_PREFIXES(WebUIToolbarWebViewHomeButtonBrowserTest,
+  FRIEND_TEST_ALL_PREFIXES(WebUIToolbarRightClickContextMenuTest,
+                           RightClickShowsContextMenu);
+  FRIEND_TEST_ALL_PREFIXES(WebUIHomeControlInteractiveUiTest,
                            LongPressHomeButton);
   FRIEND_TEST_ALL_PREFIXES(WebUIToolbarButtonPressAndDragTest,
                            PressAndDragDown);

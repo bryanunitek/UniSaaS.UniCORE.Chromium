@@ -52,8 +52,24 @@ class ProfilePicker {
     // enumerator value.
     kMaxValue = kAbandonedFlow
   };
+
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(FirstRunFinishReason)
+  enum class FirstRunFinishReason {
+    kExperimentCounterfactual = 0,
+    kFinishedFlow = 1,
+    kProfileAlreadySetUp = 2,
+    kSkippedByPolicies = 3,
+    kForceSignin = 4,
+
+    kMaxValue = kForceSignin,
+  };
+  // LINT.ThenChange(/tools/metrics/histograms/metadata/profile/enums.xml:FirstRunFinishReason)
+
   using FirstRunExitedCallback =
-      base::OnceCallback<void(FirstRunExitStatus status)>;
+      base::OnceCallback<void(FirstRunExitStatus status,
+                              FirstRunFinishReason finish_reason)>;
 
   // Only work when passed as the argument 'on_select_profile_target_url' to
   // ProfilePicker::Show.
@@ -103,7 +119,10 @@ class ProfilePicker {
     // address.
     kOnStartupCreateProfileWithEmail = 17,
 
-    kMaxValue = kOnStartupCreateProfileWithEmail,
+    // Opens the Omnibox Everywhere version of the Profile Picker.
+    kOmniboxEverywhere = 18,
+
+    kMaxValue = kOmniboxEverywhere,
   };
   // LINT.ThenChange(/tools/metrics/histograms/metadata/profile/enums.xml:ProfilePickerEntryPoint)
 
@@ -150,7 +169,7 @@ class ProfilePicker {
     // `profile_path` is the profile for which to open the FRE.
     // `first_run_exited_callback` is called when the first run experience is
     // exited, with a `FirstRunExitStatus` indicating how the user responded to
-    // it.
+    // it and a `FirstRunFinishReason` indicating how the FRE finished.
     static Params ForFirstRun(const base::FilePath& profile_path,
                               FirstRunExitedCallback first_run_exited_callback);
 
@@ -162,18 +181,24 @@ class ProfilePicker {
     static Params ForGlicManager(
         base::OnceCallback<void(Profile*)> picked_profile_callback);
 
+    // Builds parameter for the `kOmniboxEverywhere` entry point.
+    static Params ForOmniboxEverywhere(
+        base::OnceCallback<void(Profile*)> picked_profile_callback);
+
     // Builds parameters for testing purposes, allowing any entry point and
     // profile path to be specified.
     static Params ForTesting(EntryPoint entry_point,
                              const base::FilePath& profile_path);
 
-    // Calls `first_run_exited_callback_`, forwarding `exit_status`.See
-    // `ForFirstRun()` for more details.
+    // Calls `first_run_exited_callback_`, forwarding `exit_status` and
+    // `finish_reason`. See `ForFirstRun()` for more details.
     //
     // If this method is not called by the time this `Param` is destroyed, an
     // intent to quit will be assumed and `first_run_exited_callback_` will be
     // called by the destructor with quit-related arguments.
-    void NotifyFirstRunExited(FirstRunExitStatus exit_status);
+    void NotifyFirstRunExited(FirstRunExitStatus exit_status,
+                              FirstRunFinishReason finish_reason =
+                                  FirstRunFinishReason::kFinishedFlow);
 
     // Calls `picked_profile_callback_`, forwarding the `profile`. See
     // `ForGlicManager()` for more details.
@@ -324,6 +349,11 @@ class ProfilePicker {
   // startup or when Chrome is re-opened, e.g. when clicking on the dock icon on
   // MacOS when there are no windows, or from Windows tray icon.
   static StartupProfileMode GetStartupMode();
+
+  // Computes the skip reason for the First Run experience, if any. Returns
+  // `std::nullopt` if the First Run experience should proceed.
+  static std::optional<FirstRunFinishReason> ComputeFirstRunSkipReason(
+      Profile& profile);
 
   // Opens the command line urls in the next profile that is opened.
   static void SetOpenCommandLineUrlsInNextProfileOpened(bool value);

@@ -19,6 +19,7 @@
 #include "third_party/blink/renderer/modules/webaudio/convolver_node.h"
 #include "third_party/blink/renderer/modules/webaudio/gain_node.h"
 #include "third_party/blink/renderer/modules/webaudio/offline_audio_context.h"
+#include "third_party/blink/renderer/modules/webaudio/testing/fake_audio_thread.h"
 #include "third_party/blink/renderer/platform/scheduler/public/non_main_thread.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
@@ -33,72 +34,67 @@ class ConvolverHandlerTest : public testing::Test {
     context_ = OfflineAudioContext::Create(
         page_->GetFrame().DomWindow(), 2, 1, 48000, ASSERT_NO_EXCEPTION);
 
-    // Create a background thread to simulate the audio thread.
-    audio_thread_ = NonMainThread::CreateThread(
-        ThreadCreationParams(ThreadType::kTestThread));
-
     GainNode* source = context_->createGain(ASSERT_NO_EXCEPTION);
     source->setChannelCount(2, ASSERT_NO_EXCEPTION);
     convolver_ = context_->createConvolver(ASSERT_NO_EXCEPTION);
     source->connect(convolver_, 0, 0, ASSERT_NO_EXCEPTION);
   }
 
-  void TearDown() override { audio_thread_.reset(); }
-
   ConvolverHandler* GetHandler() const {
     return &static_cast<ConvolverHandler&>(convolver_->Handler());
   }
 
-  void RunOnAudioThread(CrossThreadOnceClosure closure) {
-    base::WaitableEvent event;
-    PostCrossThreadTask(
-        *audio_thread_->GetTaskRunner(), FROM_HERE,
-        CrossThreadBindOnce(
-            [](CrossThreadOnceClosure closure, base::WaitableEvent* event) {
-              std::move(closure).Run();
-              event->Signal();
-            },
-            std::move(closure), CrossThreadUnretained(&event)));
-    event.Wait();
-  }
-
   void CheckNumberOfChannelsForInputInternalOnAudioThread() {
-    RunOnAudioThread(CrossThreadBindOnce(
-        [](OfflineAudioContext* context, ConvolverHandler* handler) {
-          // In a test environment, we must manually register this background
-          // thread as the audio thread so that `IsAudioThread()` checks and
-          // `DCHECK`s pass correctly.
-          context->GetDeferredTaskHandler().SetAudioThreadToCurrentThread();
-          DeferredTaskHandler::GraphAutoLocker locker(
-              context->GetDeferredTaskHandler());
-          handler->CheckNumberOfChannelsForInput(&handler->Input(0));
-        },
-        WrapCrossThreadPersistent(context_.Get()),
-        CrossThreadUnretained(GetHandler())));
+    audio_thread_.RunOnAudioThreadWithContext(
+        context_.Get(),
+        CrossThreadBindOnce(
+            [](OfflineAudioContext* context, ConvolverHandler* handler) {
+              DeferredTaskHandler::GraphAutoLocker locker(
+                  context->GetDeferredTaskHandler());
+              handler->CheckNumberOfChannelsForInput(&handler->Input(0));
+            },
+            WrapCrossThreadPersistent(context_.Get()),
+            CrossThreadUnretained(GetHandler())));
   }
 
   void SetOutputNumberOfChannelsOnAudioThread(unsigned number_of_channels) {
-    RunOnAudioThread(CrossThreadBindOnce(
-        [](OfflineAudioContext* context, ConvolverHandler* handler,
-           unsigned channels) {
-          DeferredTaskHandler::GraphAutoLocker locker(
-              context->GetDeferredTaskHandler());
-          handler->Output(0).SetNumberOfChannels(channels);
-        },
-        WrapCrossThreadPersistent(context_.Get()),
-        CrossThreadUnretained(GetHandler()), number_of_channels));
+    audio_thread_.RunOnAudioThreadWithContext(
+        context_.Get(),
+        CrossThreadBindOnce(
+            [](OfflineAudioContext* context, ConvolverHandler* handler,
+               unsigned channels) {
+              DeferredTaskHandler::GraphAutoLocker locker(
+                  context->GetDeferredTaskHandler());
+              handler->Output(0).SetNumberOfChannels(channels);
+            },
+            WrapCrossThreadPersistent(context_.Get()),
+            CrossThreadUnretained(GetHandler()), number_of_channels));
+  }
+
+  void HandleDeferredTasksOnAudioThread() {
+    audio_thread_.RunOnAudioThreadWithContext(
+        context_.Get(),
+        CrossThreadBindOnce(
+            [](OfflineAudioContext* context) {
+              DeferredTaskHandler::GraphAutoLocker locker(
+                  context->GetDeferredTaskHandler());
+              context->GetDeferredTaskHandler().HandleDeferredTasks();
+            },
+            WrapCrossThreadPersistent(context_.Get())));
   }
 
   void RunProcessOnAudioThread() {
-    RunOnAudioThread(CrossThreadBindOnce(
-        [](ConvolverHandler* handler) { handler->Process(128); },
-        CrossThreadUnretained(GetHandler())));
+    audio_thread_.RunOnAudioThreadWithContext(
+        context_.Get(),
+        CrossThreadBindOnce(
+            [](ConvolverHandler* handler) { handler->Process(128); },
+            CrossThreadUnretained(GetHandler())));
   }
 
   test::TaskEnvironment task_environment_;
   std::unique_ptr<DummyPageHolder> page_;
   Persistent<OfflineAudioContext> context_;
-  std::unique_ptr<NonMainThread> audio_thread_;
+  FakeAudioThread audio_thread_;
   Persistent<ConvolverNode> convolver_;
 };
 
@@ -119,34 +115,20 @@ TEST_F(ConvolverHandlerTest, CheckNumberOfChannelsForInputWithLockContention) {
 
   // 3. Start contention on the main thread.
   {
-    base::WaitableEvent task_finished_event;
+    base::AutoLock contention_lock(GetHandler()->process_lock_);
 
-    {
-      base::AutoLock contention_lock(GetHandler()->process_lock_);
-
-      // 4. Audio thread tries to update. It will take graph lock but safely
-      // bail out on process_lock_ via AutoTryLock.
-      PostCrossThreadTask(
-          *audio_thread_->GetTaskRunner(), FROM_HERE,
-          CrossThreadBindOnce(
-              [](OfflineAudioContext* context, ConvolverHandler* handler,
-                 base::WaitableEvent* finished) {
-                context->GetDeferredTaskHandler()
-                    .SetAudioThreadToCurrentThread();
-                DeferredTaskHandler::GraphAutoLocker locker(
-                    context->GetDeferredTaskHandler());
-                handler->CheckNumberOfChannelsForInput(&handler->Input(0));
-                finished->Signal();
-              },
-              WrapCrossThreadPersistent(context_.Get()),
-              CrossThreadUnretained(GetHandler()),
-              CrossThreadUnretained(&task_finished_event)));
-
-      // Because AutoTryLock is non-blocking, we can just wait for the task
-      // to finish while holding contention_lock to securely guarantee the
-      // race condition occurs.
-      task_finished_event.Wait();
-    }
+    // 4. Audio thread tries to update. It will take graph lock but safely
+    // bail out on process_lock_ via AutoTryLock.
+    audio_thread_.RunOnAudioThreadWithContext(
+        context_.Get(),
+        CrossThreadBindOnce(
+            [](OfflineAudioContext* context, ConvolverHandler* handler) {
+              DeferredTaskHandler::GraphAutoLocker locker(
+                  context->GetDeferredTaskHandler());
+              handler->CheckNumberOfChannelsForInput(&handler->Input(0));
+            },
+            WrapCrossThreadPersistent(context_.Get()),
+            CrossThreadUnretained(GetHandler())));
   }
 
   // 5. Verify the state. Output(0) should STILL be 1 because of early return.
@@ -157,6 +139,47 @@ TEST_F(ConvolverHandlerTest, CheckNumberOfChannelsForInputWithLockContention) {
   EXPECT_EQ(GetHandler()->Output(0).NumberOfChannels(), 2u);
 
   // 7. Run Process() on the audio thread.
+  RunProcessOnAudioThread();
+}
+
+TEST_F(ConvolverHandlerTest,
+       ChannelCountUpdatesAcrossBufferAndModeTransitions) {
+  AudioBuffer* mono_buffer = AudioBuffer::Create(1, 128, 48000);
+  AudioBuffer* stereo_buffer = AudioBuffer::Create(2, 128, 48000);
+
+  convolver_->setChannelCount(1, ASSERT_NO_EXCEPTION);
+  convolver_->setChannelCountMode(
+      V8ChannelCountMode(V8ChannelCountMode::Enum::kExplicit),
+      ASSERT_NO_EXCEPTION);
+  HandleDeferredTasksOnAudioThread();
+
+  // 1. Set a mono buffer while the main thread sees a 2-channel explicit input
+  // (queuing desired_number_of_channels_ = 2 on Output(0) while
+  // Output(0).NumberOfChannels() is still 1), then switch back to 1-channel
+  // input before HandleDeferredTasks() runs on the audio thread.
+  convolver_->setChannelCount(2, ASSERT_NO_EXCEPTION);
+  convolver_->setBuffer(mono_buffer, ASSERT_NO_EXCEPTION);
+  convolver_->setChannelCount(1, ASSERT_NO_EXCEPTION);
+
+  HandleDeferredTasksOnAudioThread();
+
+  // Input is 1 channel and buffer is 1 channel, so output must be 1 channel
+  // (stale desired_number_of_channels_ = 2 from setBuffer must not win).
+  EXPECT_EQ(GetHandler()->Input(0).NumberOfChannels(), 1u);
+  EXPECT_EQ(GetHandler()->Output(0).NumberOfChannels(), 1u);
+  RunProcessOnAudioThread();
+
+  // 2. Switch to a stereo buffer with 1-channel input -> output becomes 2ch.
+  convolver_->setBuffer(stereo_buffer, ASSERT_NO_EXCEPTION);
+  HandleDeferredTasksOnAudioThread();
+  EXPECT_EQ(GetHandler()->Output(0).NumberOfChannels(), 2u);
+  RunProcessOnAudioThread();
+
+  // 3. Clear buffer (setBuffer(nullptr)) with 1-channel input -> output resets
+  // to 1ch.
+  convolver_->setBuffer(nullptr, ASSERT_NO_EXCEPTION);
+  HandleDeferredTasksOnAudioThread();
+  EXPECT_EQ(GetHandler()->Output(0).NumberOfChannels(), 1u);
   RunProcessOnAudioThread();
 }
 

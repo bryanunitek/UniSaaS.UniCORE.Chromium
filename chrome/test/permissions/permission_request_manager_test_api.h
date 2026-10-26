@@ -10,7 +10,7 @@
 #include "components/permissions/permission_request_manager.h"
 #include "components/permissions/request_type.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace content {
 class RenderFrameHost;
@@ -28,7 +28,7 @@ class PermissionRequestManagerTestApi {
       permissions::PermissionRequestManager* manager);
 
   // Wraps the PermissionRequestManager for the active tab in |browser|.
-  explicit PermissionRequestManagerTestApi(Browser* browser);
+  explicit PermissionRequestManagerTestApi(BrowserWindowInterface* browser);
 
   PermissionRequestManagerTestApi(const PermissionRequestManagerTestApi&) =
       delete;
@@ -39,9 +39,11 @@ class PermissionRequestManagerTestApi {
 
   // Add a "simple" permission request originating from the given frame. One
   // that uses base PermissionRequest, such as for RequestType kMidiSysex,
-  // kNotifications, or kGeolocation.
+  // kNotifications, or kGeolocation. The request has a user gesture unless
+  // `user_gesture` is false.
   void AddSimpleRequest(content::RenderFrameHost* source_frame,
-                        permissions::RequestType type);
+                        permissions::RequestType type,
+                        bool user_gesture = true);
 
   void SetOrigin(const GURL& permission_request_origin);
 

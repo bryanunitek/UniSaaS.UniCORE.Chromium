@@ -5,25 +5,23 @@
 // gpu/command_buffer/common/shared_image_capabilities.h
 module gpu.mojom;
 
+import "services/viz/public/mojom/compositing/shared_image_format.mojom";
+
 struct SharedImageCapabilities {
   bool supports_scanout_shared_images;
 
   [EnableIf=is_win]
   bool supports_scanout_shared_images_for_software_video_frames;
 
-  bool supports_luminance_shared_images;
   bool supports_r16_shared_images;
   bool supports_ycbcr_nv12_sampling;
   bool supports_ycbcr_p010_sampling;
+  array<viz.mojom.SharedImageFormat> skia_writable_yuv_formats;
   bool is_r16f_supported;
-  bool disable_r8_shared_images;
   bool disable_webgpu_shared_images;
   bool disable_one_component_textures;
 
   bool shared_image_d3d;
   [EnableIf=is_win]
   bool shared_image_swap_chain;
-
-  [EnableIf=is_mac]
-  uint32 texture_target_for_io_surfaces;
 };

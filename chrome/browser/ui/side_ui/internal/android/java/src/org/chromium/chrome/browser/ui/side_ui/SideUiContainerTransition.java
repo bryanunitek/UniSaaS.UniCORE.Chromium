@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.ui.side_ui;
 
+import android.transition.ChangeBounds;
 import android.transition.ChangeTransform;
 import android.transition.Transition;
 import android.view.View;
@@ -18,18 +19,26 @@ public final class SideUiContainerTransition {
     private SideUiContainerTransition() {}
 
     /**
-     * Create a Transition for opening or closing a view on a specific side.
+     * Create a Transition for showing, hiding, or resizing a view on a specific side.
      *
      * @param view The side UI container view for which to create a Transition animation.
      * @param anchorSide The side the view is anchored to.
-     * @param acceptedWidth The accepted width for the view.
-     * @return The {@link Transition} animating the view showing or hiding.
+     * @param oldRenderedWidth The current rendered width of the view.
+     * @param newRenderedWidth The target rendered width for the view.
+     * @return The {@link Transition} animating the view showing, hiding, or resizing.
      */
     public static Transition createContainerTransition(
-            View view, @SideUiCoordinator.AnchorSide int anchorSide, int acceptedWidth) {
-        if (acceptedWidth != 0) {
+            View view,
+            @SideUiCoordinator.AnchorSide int anchorSide,
+            int oldRenderedWidth,
+            int newRenderedWidth) {
+        if (oldRenderedWidth > 0 && newRenderedWidth > 0) {
+            // Resize transition (collapse/expand)
+            return new ChangeBounds().addTarget(view);
+        }
+        if (newRenderedWidth != 0) {
             // Showing the view - position the view offscreen, so that it can slide in.
-            view.setTranslationX(getOffscreenOffset(anchorSide, acceptedWidth));
+            view.setTranslationX(getOffscreenOffset(anchorSide, newRenderedWidth));
         } else {
             // Hiding the view - keep the view in its position, so that it can slide off.
             view.setTranslationX(0);
@@ -38,24 +47,53 @@ public final class SideUiContainerTransition {
     }
 
     /**
-     * Trigger a Transition for opening or closing a view on a specific side.
+     * Trigger a Transition for showing, hiding, or resizing a view on a specific side.
      *
-     * @param view The view for which to trigger the Transition change.
-     * @param currentWidth The current width of the view.
+     * @param anchorContainerView The parent anchor container view to translate.
+     * @param sideUiContainer The {@link SideUiContainer} corresponding to the view.
      * @param anchorSide The side the view is anchored to.
-     * @param acceptedWidth The accepted width for the view.
+     * @param oldRenderedWidth The current rendered width of the view.
+     * @param newRenderedWidth The target rendered width for the view.
      */
     public static void triggerContainerTransition(
-            View view,
-            int currentWidth,
+            View anchorContainerView,
+            SideUiContainer sideUiContainer,
             @SideUiCoordinator.AnchorSide int anchorSide,
-            int acceptedWidth) {
-        if (acceptedWidth != 0) {
+            int oldRenderedWidth,
+            int newRenderedWidth) {
+        if (newRenderedWidth != 0 && oldRenderedWidth > 0) {
+            triggerResizeTransition(sideUiContainer, newRenderedWidth);
+        } else {
+            triggerOpenCloseTransition(anchorContainerView, anchorSide, newRenderedWidth);
+        }
+    }
+
+    /**
+     * Trigger a resize Transition by applying the new rendered width to the {@link
+     * SideUiContainer}.
+     *
+     * <p>Note: We pass {@link SideUiContainer} rather than the parent anchor container View because
+     * the anchor container uses wrap_content width. Updating the width on the child {@link
+     * SideUiContainer} changes its layout parameters, which automatically resizes the parent anchor
+     * container during the layout pass.
+     */
+    private static void triggerResizeTransition(
+            SideUiContainer sideUiContainer, int newRenderedWidth) {
+        sideUiContainer.setRenderedWidth(newRenderedWidth);
+    }
+
+    /** Trigger a slide Transition for opening or closing an anchor container view. */
+    private static void triggerOpenCloseTransition(
+            View anchorContainerView,
+            @SideUiCoordinator.AnchorSide int anchorSide,
+            int newRenderedWidth) {
+        if (newRenderedWidth != 0) {
             // Reset the translation so the view can slide into its position.
-            view.setTranslationX(0);
+            anchorContainerView.setTranslationX(0);
         } else {
             // Move the view offscreen so it can slide off.
-            view.setTranslationX(getOffscreenOffset(anchorSide, currentWidth));
+            anchorContainerView.setTranslationX(
+                    getOffscreenOffset(anchorSide, anchorContainerView.getWidth()));
         }
     }
 
@@ -72,13 +110,13 @@ public final class SideUiContainerTransition {
      * Returns the translation offset that needs to be offset to a container on a particular anchor
      * side to place it fully offscreen.
      */
-    private static int getOffscreenOffset(@AnchorSide int anchorSide, int acceptedWidth) {
+    private static int getOffscreenOffset(@AnchorSide int anchorSide, int renderedWidth) {
         // TODO(crbug.com/478338737): When adding support for START/END anchor side, flip the
         // starting translation offset if the container is anchored to the left side, i.e.
         // the START in LTR or the END in RTL.
         assert anchorSide == AnchorSide.LEFT || anchorSide == AnchorSide.RIGHT
                 : "Only LEFT/RIGHT anchor side are supported now.";
         boolean flipOffset = anchorSide == AnchorSide.LEFT;
-        return flipOffset ? -acceptedWidth : acceptedWidth;
+        return flipOffset ? -renderedWidth : renderedWidth;
     }
 }

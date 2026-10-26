@@ -29,7 +29,6 @@
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_live_tab_context.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
@@ -43,12 +42,16 @@
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/history/core/browser/top_sites.h"
 #include "components/prefs/pref_service.h"
+#include "components/sessions/core/session_id.h"
 #include "components/sessions/core/tab_restore_service.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/browser/navigation_entry.h"
 #include "dbus/object_path.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/base/models/menu_separator_types.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/text_elider.h"
 
 // A line in the static menu definitions.
@@ -212,7 +215,7 @@ DbusAppmenu::DbusAppmenu(BrowserView* browser_view,
                          ui::PlatformWindow* platform_window,
                          uint32_t browser_frame_id)
     : browser_(browser_view->browser()),
-      profile_(browser_->profile()),
+      profile_(browser_->GetProfile()),
       browser_view_(browser_view),
       platform_window_(platform_window),
       browser_frame_id_(browser_frame_id),
@@ -243,7 +246,7 @@ DbusAppmenu::~DbusAppmenu() {
 }
 
 void DbusAppmenu::Initialize(DbusMenu::InitializedCallback callback) {
-  DCHECK(!initialized_);
+  CHECK(!initialized_, base::NotFatalUntil::M162);
   initialized_ = true;
 
   // First build static menu content.
@@ -255,9 +258,9 @@ void DbusAppmenu::Initialize(DbusMenu::InitializedCallback callback) {
   history_menu_ = BuildStaticMenu(IDS_HISTORY_MENU_LINUX, kHistoryMenu);
   BuildStaticMenu(IDS_TOOLS_MENU_LINUX, kToolsMenu);
   profiles_menu_ = BuildStaticMenu(IDS_PROFILES_MENU_NAME, kProfilesMenu);
-  BuildStaticMenu(IDS_HELP_MENU_LINUX, BuildHelpMenu(*browser_->profile()));
+  BuildStaticMenu(IDS_HELP_MENU_LINUX, BuildHelpMenu(*browser_->GetProfile()));
 
-  pref_change_registrar_.Init(browser_->profile()->GetPrefs());
+  pref_change_registrar_.Init(browser_->GetProfile()->GetPrefs());
   pref_change_registrar_.Add(
       bookmarks::prefs::kShowBookmarkBar,
       base::BindRepeating(&DbusAppmenu::OnBookmarkBarVisibilityChanged,
@@ -273,7 +276,7 @@ void DbusAppmenu::Initialize(DbusMenu::InitializedCallback callback) {
   }
 
   ProfileManager* profile_manager = g_browser_process->profile_manager();
-  DCHECK(profile_manager);
+  CHECK(profile_manager, base::NotFatalUntil::M162);
   avatar_menu_ = std::make_unique<AvatarMenu>(
       &profile_manager->GetProfileAttributesStorage(), this, browser_.get());
   avatar_menu_->RebuildMenu();
@@ -382,7 +385,7 @@ void DbusAppmenu::AddEntryToHistoryMenu(
 }
 
 void DbusAppmenu::GetTopSitesData() {
-  DCHECK(top_sites_);
+  CHECK(top_sites_, base::NotFatalUntil::M162);
 
   top_sites_->GetMostVisitedURLs(base::BindOnce(
       &DbusAppmenu::OnTopSitesReceived, weak_ptr_factory_.GetWeakPtr()));
@@ -605,7 +608,7 @@ void DbusAppmenu::TabRestoreServiceDestroyed(
 
 bool DbusAppmenu::IsCommandIdChecked(int command_id) const {
   if (command_id == IDC_SHOW_BOOKMARK_BAR) {
-    return browser_->profile()->GetPrefs()->GetBoolean(
+    return browser_->GetProfile()->GetPrefs()->GetBoolean(
         bookmarks::prefs::kShowBookmarkBar);
   }
 
@@ -640,16 +643,15 @@ void DbusAppmenu::ExecuteCommand(int command_id, int event_flags) {
     sessions::TabRestoreService* service =
         TabRestoreServiceFactory::GetForProfile(profile_);
     if (item->session_id.is_valid() && service) {
-      service->RestoreEntryById(browser_->GetFeatures().live_tab_context(),
+      service->RestoreEntryById(BrowserLiveTabContext::From(browser_),
                                 item->session_id,
-                                WindowOpenDisposition::UNKNOWN);
+                                WindowOpenDisposition::kUnknown);
     } else {
-      DCHECK(item->url.is_valid());
-      browser_->OpenURL(
-          content::OpenURLParams(item->url, content::Referrer(),
-                                 WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                                 ui::PAGE_TRANSITION_AUTO_BOOKMARK, false),
-          /*navigation_handle_callback=*/{});
+      CHECK(item->url.is_valid(), base::NotFatalUntil::M162);
+      browser_->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
+                            item->url, WindowOpenDisposition::kNewForegroundTab,
+                            ui::PAGE_TRANSITION_AUTO_BOOKMARK),
+                        /*navigation_handle_callback=*/{});
     }
   } else if (profile_commands_.contains(command_id)) {
     avatar_menu_->SwitchToProfile(profile_commands_[command_id], false);

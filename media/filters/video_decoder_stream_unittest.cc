@@ -359,7 +359,10 @@ class VideoDecoderStreamTest
   // Callback for VideoDecoderStream::Read().
   void FrameReady(VideoDecoderStream::ReadResult result) {
     DCHECK(pending_read_);
-    last_read_status_code_ = result.code();
+    last_read_status_code_ = DecoderStatus::Codes::kOk;
+    if (!result.has_value()) {
+      last_read_status_code_ = result.error().code();
+    }
     scoped_refptr<VideoFrame> frame =
         last_read_status_code_ == DecoderStatus::Codes::kOk
             ? std::move(result).value()
@@ -512,10 +515,10 @@ class VideoDecoderStreamTest
     SatisfyPendingCallback(DECODER_REINIT);
   }
 
-  base::test::SingleThreadTaskEnvironment task_environment_{
-      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   base::test::ScopedFeatureList enabled_features_{
       kResolutionBasedDecoderPriority};
+  base::test::SingleThreadTaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
   StrictMock<MockMediaLog> media_log_;
   std::unique_ptr<VideoDecoderStream> video_decoder_stream_;

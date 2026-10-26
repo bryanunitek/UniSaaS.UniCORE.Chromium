@@ -24,7 +24,7 @@ import type {PolymerElementProperties} from 'chrome://resources/polymer/v3_0/pol
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {routes} from '../router.js';
 
 import type {Mouse, MousePolicies} from './input_device_settings_types.js';
@@ -57,8 +57,8 @@ export class SettingsPerDeviceMouseElement extends
     };
   }
 
-  protected mice: Mouse[];
-  protected mousePolicies: MousePolicies;
+  declare protected mice: Mouse[];
+  declare protected mousePolicies: MousePolicies;
 
   override currentRouteChanged(route: Route): void {
     // Does not apply to this page.

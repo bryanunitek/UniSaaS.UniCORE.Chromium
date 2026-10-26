@@ -37,7 +37,6 @@ import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.ui.test.util.BlankUiTestActivity;
-import org.chromium.ui.widget.ChromeImageView;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -54,8 +53,6 @@ import java.util.List;
 @UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @Batch(ProfileDataCacheRenderTest.PROFILE_DATA_BATCH_NAME)
 public class ProfileDataCacheWithBadgeRenderTest {
-    private static final long NATIVE_IDENTITY_MANAGER = 10002L;
-
     @ClassParameter
     private static final List<ParameterSet> sClassParams =
             Arrays.asList(
@@ -71,7 +68,7 @@ public class ProfileDataCacheWithBadgeRenderTest {
     @Rule
     public final ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
-                    .setRevision(1)
+                    .setRevision(2)
                     .setBugComponent(ChromeRenderTestRule.Component.SERVICES_SIGN_IN)
                     .build();
 
@@ -105,7 +102,7 @@ public class ProfileDataCacheWithBadgeRenderTest {
                 () -> {
                     mIdentityManager = mAccountManagerTestRule.getIdentityManager();
                     mContentView = new FrameLayout(sActivity);
-                    mImageView = new ChromeImageView(sActivity);
+                    mImageView = new ImageView(sActivity);
                     mContentView.addView(
                             mImageView,
                             ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -118,23 +115,7 @@ public class ProfileDataCacheWithBadgeRenderTest {
     @MediumTest
     @Feature("RenderTest")
     public void testProfileDataWithChildBadge() throws IOException {
-        setUpProfileDataCache(R.drawable.ic_account_child_20dp);
-        mRenderTestRule.render(mImageView, "profile_data_cache_with_child_badge");
-    }
-
-    @Test
-    @MediumTest
-    @Feature("RenderTest")
-    public void testProfileDataWithoutBadge() throws IOException {
-        setUpProfileDataCache(0);
-        mRenderTestRule.render(mImageView, "profile_data_cache_without_badge");
-    }
-
-    @Test
-    @MediumTest
-    @Feature("RenderTest")
-    public void testProfileDataWithSettingBadgeDynamically() throws IOException {
-        setUpProfileDataCache(0);
+        setUpProfileDataCache();
         mRenderTestRule.render(mImageView, "profile_data_cache_without_badge");
         setBadge(R.drawable.ic_account_child_20dp);
         mRenderTestRule.render(mImageView, "profile_data_cache_with_child_badge");
@@ -143,30 +124,28 @@ public class ProfileDataCacheWithBadgeRenderTest {
     @Test
     @MediumTest
     @Feature("RenderTest")
-    public void testProfileDataWithRemovingBadgeDynamically() throws IOException {
-        setUpProfileDataCache(R.drawable.ic_account_child_20dp);
-        mRenderTestRule.render(mImageView, "profile_data_cache_with_child_badge");
-        setBadge(0);
+    public void testProfileDataWithoutBadge() throws IOException {
+        setUpProfileDataCache();
         mRenderTestRule.render(mImageView, "profile_data_cache_without_badge");
     }
 
     @Test
     @MediumTest
     @Feature("RenderTest")
-    public void testProfileDataWithExistingBadge() throws IOException {
-        setUpProfileDataCache(R.drawable.ic_account_child_20dp);
+    public void testProfileDataWithRemovingBadgeDynamically() throws IOException {
+        setUpProfileDataCache();
+        setBadge(R.drawable.ic_account_child_20dp);
         mRenderTestRule.render(mImageView, "profile_data_cache_with_child_badge");
+        setBadge(0);
+        mRenderTestRule.render(mImageView, "profile_data_cache_without_badge");
     }
 
-    private void setUpProfileDataCache(@DrawableRes int badgeResId) {
+    private void setUpProfileDataCache() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mProfileDataCache =
-                            badgeResId != 0
-                                    ? ProfileDataCache.createWithDefaultImageSize(
-                                            sActivity, mIdentityManager, badgeResId)
-                                    : ProfileDataCache.createWithoutBadge(
-                                            sActivity, mIdentityManager, R.dimen.user_picture_size);
+                            ProfileDataCache.createWithoutBadge(
+                                    sActivity, mIdentityManager, R.dimen.user_picture_size);
                 });
         CriteriaHelper.pollUiThread(
                 () -> {

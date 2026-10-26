@@ -9,8 +9,10 @@
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/color/color_provider_manager.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_delegate.h"
+#include "ui/compositor/layer_not_drawn.h"
+#include "ui/compositor/layer_solid_color.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/color_palette.h"
@@ -294,13 +296,13 @@ const Layer* TouchSelectionMagnifierAura::GetMagnifierParentForTesting() const {
 void TouchSelectionMagnifierAura::CreateMagnifierLayer() {
   // Create the magnifier layer, which will parent the zoom layer and border
   // layer.
-  magnifier_layer_ = std::make_unique<Layer>(LAYER_NOT_DRAWN);
-  magnifier_layer_->SetName("TouchSelectionMagnifierAura/MagnifierLayer");
+  magnifier_layer_ = std::make_unique<LayerNotDrawn>();
+  magnifier_layer_->SetName("TouchSelectionMagnifierAura:MagnifierLayer");
   magnifier_layer_->SetFillsBoundsOpaquely(false);
 
   // Create the zoom layer, which will show the zoomed contents.
-  zoom_layer_ = std::make_unique<Layer>(LAYER_SOLID_COLOR);
-  zoom_layer_->SetName("TouchSelectionMagnifierAura/ZoomLayer");
+  zoom_layer_ = std::make_unique<LayerSolidColor>();
+  zoom_layer_->SetName("TouchSelectionMagnifierAura:ZoomLayer");
   zoom_layer_->SetBackgroundZoom(kMagnifierScale, 0);
 
   // BackdropFilterBounds applies after the backdrop filter (the zoom effect)
@@ -315,8 +317,8 @@ void TouchSelectionMagnifierAura::CreateMagnifierLayer() {
   // Create the border layer. This is stacked above the zoom layer so that the
   // magnifier border and shadows aren't shown in the zoomed contents drawn by
   // the zoom layer.
-  border_layer_ = std::make_unique<Layer>();
-  border_layer_->SetName("TouchSelectionMagnifierAura/BorderLayer");
+  border_layer_ = std::make_unique<LayerTextured>();
+  border_layer_->SetName("TouchSelectionMagnifierAura:BorderLayer");
 
   border_layer_->SetBounds(gfx::Rect(GetBorderLayerSize()));
   border_renderer_ = std::make_unique<BorderRenderer>();

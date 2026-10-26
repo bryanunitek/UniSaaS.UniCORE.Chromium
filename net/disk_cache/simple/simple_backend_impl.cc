@@ -75,13 +75,15 @@ SimpleFileTracker* GetSimpleFileTracker() {
 // with the fresh structure.
 SimpleCacheConsistencyResult FileStructureConsistent(
     BackendFileOperations* file_operations,
-    const base::FilePath& path) {
+    const base::FilePath& path,
+    net::CacheType cache_type) {
   if (!file_operations->PathExists(path) &&
       !file_operations->CreateDirectory(path)) {
     LOG(ERROR) << "Failed to create directory: " << path.LossyDisplayName();
     return SimpleCacheConsistencyResult::kCreateDirectoryFailed;
   }
-  return disk_cache::UpgradeSimpleCacheOnDisk(file_operations, path);
+  return disk_cache::UpgradeSimpleCacheOnDisk(file_operations, path,
+                                              cache_type);
 }
 
 // A context used by a BarrierCompletionCallback to track state.
@@ -715,7 +717,7 @@ SimpleBackendImpl::DiskStatResult SimpleBackendImpl::InitCacheStructureOnDisk(
   result.max_size = suggested_max_size;
   result.net_error = net::OK;
   SimpleCacheConsistencyResult consistency =
-      FileStructureConsistent(file_operations.get(), path);
+      FileStructureConsistent(file_operations.get(), path, cache_type);
   SIMPLE_CACHE_UMA(ENUMERATION, "ConsistencyResult2", cache_type, consistency);
 
   // If the cache structure is inconsistent make a single attempt at
@@ -730,7 +732,8 @@ SimpleBackendImpl::DiskStatResult SimpleBackendImpl::InitCacheStructureOnDisk(
                      cache_type, deleted_files);
     if (base::IsDirectoryEmpty(path)) {
       SimpleCacheConsistencyResult orig_consistency = consistency;
-      consistency = FileStructureConsistent(file_operations.get(), path);
+      consistency =
+          FileStructureConsistent(file_operations.get(), path, cache_type);
       SIMPLE_CACHE_UMA(ENUMERATION, "RetryConsistencyResult", cache_type,
                        consistency);
       if (IsOK(consistency)) {
@@ -765,7 +768,7 @@ SimpleBackendImpl::DiskStatResult SimpleBackendImpl::InitCacheStructureOnDisk(
       result.cache_dir_mtime = file_info->last_modified;
       if (!result.max_size) {
         result.max_size =
-            disk_cache::PreferredCacheSizeForPath(path, cache_type);
+            disk_cache::PreferredCacheSizeForPath(path, cache_type).InBytes();
         DCHECK(result.max_size);
       }
     }
@@ -913,8 +916,12 @@ void SimpleBackendImpl::DoomEntriesComplete(
     std::unique_ptr<std::vector<uint64_t>> entry_hashes,
     CompletionOnceCallback callback,
     int result) {
+  // Save `post_doom_waiting_` locally in case something invoked from us
+  // deletes `this`.
+  scoped_refptr<SimplePostOperationWaiterTable> post_doom_waiting =
+      post_doom_waiting_;
   for (const uint64_t& entry_hash : *entry_hashes)
-    post_doom_waiting_->OnOperationComplete(entry_hash);
+    post_doom_waiting->OnOperationComplete(entry_hash);
   std::move(callback).Run(result);
 }
 

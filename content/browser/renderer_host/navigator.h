@@ -17,7 +17,6 @@
 #include "content/public/browser/navigation_discard_reason.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "net/storage_access_api/status.h"
-#include "third_party/blink/public/common/navigation/impression.h"
 #include "third_party/blink/public/mojom/frame/triggering_event_info.mojom-shared.h"
 #include "third_party/blink/public/mojom/navigation/navigation_params.mojom-forward.h"
 #include "ui/base/window_open_disposition.h"
@@ -118,8 +117,9 @@ class CONTENT_EXPORT Navigator {
   // |navigation_request|. The NavigationController should be called back with
   // RendererDidNavigate on success or DiscardPendingEntry on failure. The
   // callbacks should be called in a future iteration of the message loop.
-  void Navigate(std::unique_ptr<NavigationRequest> request,
-                ReloadType reload_type);
+  std::optional<NavigationNotStartedReason> Navigate(
+      std::unique_ptr<NavigationRequest> request,
+      ReloadType reload_type);
 
   // The RenderFrameHostImpl has received a request to open a URL with the
   // specified |disposition|.
@@ -140,7 +140,6 @@ class CONTENT_EXPORT Navigator {
       blink::mojom::TriggeringEventInfo triggering_event_info,
       const std::string& href_translate,
       scoped_refptr<network::SharedURLLoaderFactory> blob_url_loader_factory,
-      const std::optional<blink::Impression>& impression,
       bool has_rel_opener,
       bool started_by_ad);
 
@@ -166,7 +165,6 @@ class CONTENT_EXPORT Navigator {
       network::mojom::SourceLocationPtr source_location,
       bool has_user_gesture,
       bool is_form_submission,
-      const std::optional<blink::Impression>& impression,
       bool started_by_ad,
       base::TimeTicks actual_navigation_start_time,
       base::TimeTicks navigation_start_time,
@@ -175,8 +173,8 @@ class CONTENT_EXPORT Navigator {
       bool force_new_browsing_instance = false,
       bool is_container_initiated = false,
       bool has_rel_opener = false,
-      std::optional<std::u16string> embedder_shared_storage_context =
-          std::nullopt);
+      network::mojom::CSPDisposition should_check_main_world_csp =
+          network::mojom::CSPDisposition::CHECK);
 
   // Called after BeforeUnloadCompleted callback is invoked from the renderer.
   // If `frame_tree_node` has a NavigationRequest waiting for the renderer

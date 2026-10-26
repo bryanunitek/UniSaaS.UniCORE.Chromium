@@ -25,6 +25,7 @@
 #include "ui/compositor/layer.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/views/controls/native/native_view_host.h"
 #include "ui/views/controls/native/native_view_host_aura_with_clip_window.h"
 #include "ui/views/painter.h"
@@ -39,7 +40,7 @@ NativeViewHostAura::NativeViewHostAura(NativeViewHost* host) : host_(host) {}
 
 NativeViewHostAura::~NativeViewHostAura() {
   if (host_->native_view()) {
-    host_->native_view()->RemoveObserver(this);
+    native_view_observation_.Reset();
     if (host_->layer_managed_by_views()) {
       host_->native_view()->SetLayerManagedByParent(true);
     } else {
@@ -71,6 +72,9 @@ void NativeViewHostAura::AttachNativeView() {
                              host_->GetWidget()->GetNativeView());
   if (host_->layer_managed_by_views()) {
     host_->native_view()->SetLayerManagedByParent(false);
+    // Native views in views should be above independent native views
+    host_->GetWidget()->GetNativeView()->StackChildAtBottom(
+        host_->native_view());
     if (host_->create_layer()) {
       host_->SetPaintToLayer(ui::LAYER_NOT_DRAWN);
     } else {
@@ -78,10 +82,13 @@ void NativeViewHostAura::AttachNativeView() {
     }
     host_->layer()->Add(GetUILayer());
   }
-  host_->native_view()->AddObserver(this);
+  native_view_observation_.Observe(host_->native_view());
   original_transform_ = host_->native_view()->transform();
   original_transform_changed_ = false;
   UpdateLayerClip();
+  if (host_->layer_managed_by_views() && host_->GetWidget()) {
+    host_->GetWidget()->ReorderNativeViews();
+  }
 }
 
 void NativeViewHostAura::SetParentAccessible(
@@ -114,7 +121,7 @@ void NativeViewHostAura::NativeViewDetaching(bool destroyed) {
   }
 
   if (!destroyed) {
-    host_->native_view()->RemoveObserver(this);
+    native_view_observation_.Reset();
     if (host_->layer_managed_by_views()) {
       host_->native_view()->SetLayerManagedByParent(true);
       if (host_->create_layer()) {
@@ -142,6 +149,13 @@ void NativeViewHostAura::AddedToWidget() {
   if (host_->GetWidget()->GetNativeView()) {
     Widget::ReparentNativeView(host_->native_view(),
                                host_->GetWidget()->GetNativeView());
+    if (host_->layer_managed_by_views()) {
+      // Native views in views should be above independent native views, which
+      // should be above views.
+      host_->GetWidget()->GetNativeView()->StackChildAtBottom(
+          host_->native_view());
+      host_->GetWidget()->ReorderNativeViews();
+    }
   }
   if (host_->IsDrawn()) {
     host_->native_view()->Show();
@@ -166,14 +180,29 @@ void NativeViewHostAura::RemovedFromWidget() {
   }
 }
 
-bool NativeViewHostAura::SetCornerRadii(
+bool NativeViewHostAura::SetNativeViewCornerRadii(
     const gfx::RoundedCornersF& corner_radii) {
   corner_radii_ = corner_radii;
   ApplyRoundedCorners();
   return true;
 }
 
+gfx::RoundedCornersF NativeViewHostAura::GetNativeViewCornerRadii() const {
+  return corner_radii_;
+}
+
+gfx::Rect NativeViewHostAura::GetNativeViewClipRect() const {
+  ui::Layer* layer = const_cast<NativeViewHostAura*>(this)->GetUILayer();
+  return layer ? layer->clip_rect() : gfx::Rect();
+}
+
 void NativeViewHostAura::SetHitTestTopInset(int top_inset) {
+  if (host_->layer_managed_by_views()) {
+    // Event targeting works correctly when the content layer is managed by
+    // view.
+    return;
+  }
+
   if (top_inset_ == top_inset) {
     return;
   }
@@ -276,17 +305,17 @@ void NativeViewHostAura::OnWindowDestroying(aura::Window* window) {
 
 void NativeViewHostAura::OnWindowDestroyed(aura::Window* window) {
   DCHECK(window == host_->native_view());
+  native_view_observation_.Reset();
   host_->NativeViewDestroyed();
 }
 
 // static
 NativeViewHostWrapper* NativeViewHostWrapper::CreateWrapper(
     NativeViewHost* host) {
-  if (base::FeatureList::IsEnabled(
-          views::features::kUseNativeViewHostAuraWithClipWindow)) {
-    return new NativeViewHostAuraWithClipWindow(host);
+  if (host->layer_managed_by_views()) {
+    return new NativeViewHostAura(host);
   }
-  return new NativeViewHostAura(host);
+  return new NativeViewHostAuraWithClipWindow(host);
 }
 
 void NativeViewHostAura::ApplyRoundedCorners() {

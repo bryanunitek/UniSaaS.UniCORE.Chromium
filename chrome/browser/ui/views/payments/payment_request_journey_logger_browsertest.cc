@@ -5,14 +5,14 @@
 #include <utility>
 
 #include "base/numerics/safe_conversions.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/ui/browser.h"
+#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/payments/payment_request_browsertest_base.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/payments/core/features.h"
 #include "components/payments/core/journey_logger.h"
 #include "components/ukm/test_ukm_recorder.h"
@@ -34,8 +34,17 @@ int toInt(Event2 event) {
 
 }  // namespace
 
+class PaymentRequestJourneyLoggerTest : public PaymentRequestBrowserTestBase {
+ protected:
+  PaymentRequestJourneyLoggerTest() { SetBypassUserInteractionForTesting(); }
+
+ private:
+  base::test::ScopedFeatureList feature_list_{
+      features::kPaymentRequestMandatoryPaymentAppUi};
+};
+
 using PaymentRequestJourneyLoggerSelectedPaymentAppTest =
-    PaymentRequestBrowserTestBase;
+    PaymentRequestJourneyLoggerTest;
 
 // Tests that the selected app metric is correctly logged when the
 // Payment Request is completed with a payment handler.
@@ -57,7 +66,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestJourneyLoggerSelectedPaymentAppTest,
       "buyWithMethods([{supportedMethods:$1}, {supportedMethods:$2}]);",
       a_method_name, b_method_name));
   ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   // Make sure the correct events were logged.
@@ -83,7 +92,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestJourneyLoggerSelectedPaymentAppTest,
 }
 
 using PaymentRequestJourneyLoggerNoSupportedPaymentMethodTest =
-    PaymentRequestBrowserTestBase;
+    PaymentRequestJourneyLoggerTest;
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestJourneyLoggerNoSupportedPaymentMethodTest,
                        OnlyBobpaySupported) {
@@ -122,7 +131,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestJourneyLoggerNoSupportedPaymentMethodTest,
 }
 
 using PaymentRequestJourneyLoggerMultipleShowTest =
-    PaymentRequestBrowserTestBase;
+    PaymentRequestJourneyLoggerTest;
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestJourneyLoggerMultipleShowTest,
                        ShowSameRequest) {
@@ -151,7 +160,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestJourneyLoggerMultipleShowTest,
 
   // Complete the original Payment Request.
   ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   // Trying to show the same request twice is not considered a concurrent
@@ -215,7 +224,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestJourneyLoggerMultipleShowTest,
 
   // Complete the original Payment Request.
   ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, first_dialog_view);
 
   // Make sure the correct events were logged.
@@ -276,7 +285,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestJourneyLoggerMultipleShowTest,
 }
 
 using PaymentRequestJourneyLoggerAllSectionStatsTest =
-    PaymentRequestBrowserTestBase;
+    PaymentRequestJourneyLoggerTest;
 
 // Tests that the correct PaymentRequest.Events metrics are logged when a
 // Payment Request is completed.
@@ -304,7 +313,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestJourneyLoggerAllSectionStatsTest,
       "buyWithMethods([{supportedMethods:$1}, {supportedMethods:$2}]);",
       a_method_name, b_method_name));
   ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   // Make sure the correct events were logged.
@@ -379,7 +388,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestJourneyLoggerAllSectionStatsTest,
 }
 
 using PaymentRequestJourneyLoggerNoShippingSectionStatsTest =
-    PaymentRequestBrowserTestBase;
+    PaymentRequestJourneyLoggerTest;
 
 // Tests that the correct PaymentRequest.Events metrics are logged when a
 // Payment Request is completed.
@@ -405,7 +414,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestJourneyLoggerNoShippingSectionStatsTest,
       "buyWithMethods([{supportedMethods:$1}, {supportedMethods:$2}]);",
       a_method_name, b_method_name));
   ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   // Make sure the correct events were logged.
@@ -478,7 +487,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestJourneyLoggerNoShippingSectionStatsTest,
 }
 
 using PaymentRequestJourneyLoggerNoContactDetailSectionStatsTest =
-    PaymentRequestBrowserTestBase;
+    PaymentRequestJourneyLoggerTest;
 
 // Tests that the correct PaymentRequest.Events metrics are logged when a
 // Payment Request is completed.
@@ -505,7 +514,7 @@ IN_PROC_BROWSER_TEST_F(
       "buyWithMethods([{supportedMethods:$1}, {supportedMethods:$2}]);",
       a_method_name, b_method_name));
   ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   // Make sure the correct events were logged.
@@ -578,7 +587,7 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_FALSE(buckets[0].min & toInt(Event2::kCouldNotShow));
 }
 
-using PaymentRequestNotShownTest = PaymentRequestBrowserTestBase;
+using PaymentRequestNotShownTest = PaymentRequestJourneyLoggerTest;
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestNotShownTest, OnlyNotShownMetricsLogged) {
   // Installs two apps so that canMakePayment is true.
@@ -615,12 +624,14 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestNotShownTest, OnlyNotShownMetricsLogged) {
   ASSERT_EQ(1U, buckets.size());
   EXPECT_EQ(toInt(Event2::kUserAborted) |
                 toInt(Event2::kHadInitialFormOfPayment) |
-                toInt(Event2::kRequestMethodOther),
+                toInt(Event2::kRequestMethodOther) |
+                toInt(Event2::kCanMakePaymentCalled) |
+                toInt(Event2::kHasEnrolledInstrumentCalled),
             buckets[0].min);
 }
 
 using PaymentRequestCompleteSuggestionsForEverythingTest =
-    PaymentRequestBrowserTestBase;
+    PaymentRequestJourneyLoggerTest;
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestCompleteSuggestionsForEverythingTest,
                        UserHadCompleteSuggestionsForEverything) {
@@ -725,7 +736,7 @@ IN_PROC_BROWSER_TEST_P(PaymentRequestIframeFeatureParamTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
 
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   GURL iframe_url =
       https_server()->GetURL("d.com", "/payment_request_iframe.html");
@@ -747,7 +758,8 @@ IN_PROC_BROWSER_TEST_P(PaymentRequestIframeFeatureParamTest,
 
   int64_t expected_step_metric =
       toInt(Event2::kShown) | toInt(Event2::kRequestMethodOther) |
-      toInt(Event2::kUserAborted) | toInt(Event2::kHadInitialFormOfPayment);
+      toInt(Event2::kUserAborted) | toInt(Event2::kHadInitialFormOfPayment) |
+      toInt(Event2::kInitiatedInCrossSiteIframe);
 
   // Make sure the correct UMA events were logged.
   std::vector<base::Bucket> buckets =
@@ -804,7 +816,7 @@ class PaymentRequestIframeTest : public PaymentRequestBrowserTestBase {
   PaymentRequestIframeTest& operator=(const PaymentRequestIframeTest&) = delete;
 
  protected:
-  PaymentRequestIframeTest() = default;
+  PaymentRequestIframeTest() { SetBypassUserInteractionForTesting(); }
 
   void PreRunTestOnMainThread() override {
     InProcessBrowserTest::PreRunTestOnMainThread();
@@ -813,6 +825,10 @@ class PaymentRequestIframeTest : public PaymentRequestBrowserTestBase {
   }
 
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder_;
+
+ private:
+  base::test::ScopedFeatureList feature_list_{
+      features::kPaymentRequestMandatoryPaymentAppUi};
 };
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestIframeTest, IframeNavigation_UserAborted) {
@@ -888,7 +904,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestIframeTest, IframeNavigation_Completed) {
 
   // Complete the Payment Request.
   ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   // Make sure the correct events were logged.
@@ -990,7 +1006,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestIframeTest, HistoryPushState_Completed) {
 
   // Complete the Payment Request.
   ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   // Make sure the correct events were logged.

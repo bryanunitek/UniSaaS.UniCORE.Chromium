@@ -398,20 +398,14 @@ const int kMaxNumberOfAttemptsAtTypingTextInOmnibox = 3;
         performAction:grey_tap()];
   } else {
     [self openToolsMenu];
-    id<GREYMatcher> newTabButtonMatcher =
-        grey_accessibilityID(kToolsMenuNewTabId);
-    [[EarlGrey selectElementWithMatcher:newTabButtonMatcher]
-        performAction:grey_tap()];
+    [self tapToolsMenuAction:grey_accessibilityID(kToolsMenuNewTabId)];
   }
   [self waitForAppToIdle];
 }
 
 - (void)openNewIncognitoTab {
   [self openToolsMenu];
-  id<GREYMatcher> newIncognitoTabMatcher =
-      grey_accessibilityID(kToolsMenuNewIncognitoTabId);
-  [[EarlGrey selectElementWithMatcher:newIncognitoTabMatcher]
-      performAction:grey_tap()];
+  [self tapToolsMenuAction:grey_accessibilityID(kToolsMenuNewIncognitoTabId)];
   [self waitForAppToIdle];
 }
 
@@ -448,33 +442,13 @@ const int kMaxNumberOfAttemptsAtTypingTextInOmnibox = 3;
 }
 
 - (void)openShareMenu {
-  NSError* error = nil;
-  // In ChromeNext IA, the share button may be hidden on the toolbar in portrait
-  // mode and moved to the overflow menu. Check if it's visible on the toolbar
-  // first, and if not, fall back to opening the tools menu and tapping the
-  // share action there.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabShareButton()]
-      assertWithMatcher:grey_sufficientlyVisible()
-                  error:&error];
-  if (error) {
-    [self openToolsMenu];
-    [self tapToolsMenuAction:chrome_test_util::ButtonWithAccessibilityLabelId(
-                                 IDS_IOS_TOOLS_MENU_SHARE_THIS_PAGE)];
-    return;
-  }
   [[EarlGrey selectElementWithMatcher:chrome_test_util::TabShareButton()]
       performAction:grey_tap()];
 }
 
 - (void)shareCurrentPage {
-  if ([ChromeEarlGrey isChromeNextEnabled] &&
-      ![ChromeEarlGrey isCompactHeight]) {
-    [self openToolsMenu];
-    [self tapToolsMenuAction:chrome_test_util::OverflowMenuShareButton()];
-  } else {
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::TabShareButton()]
-        performAction:grey_tap()];
-  }
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabShareButton()]
+      performAction:grey_tap()];
 }
 
 - (void)waitForToolbarVisible:(BOOL)isVisible {

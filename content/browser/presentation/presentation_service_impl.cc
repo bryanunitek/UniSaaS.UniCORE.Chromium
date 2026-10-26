@@ -70,8 +70,8 @@ PresentationServiceImpl::PresentationServiceImpl(
       render_process_id_(render_frame_host->GetProcess()->GetDeprecatedID()),
       render_frame_id_(render_frame_host->GetRoutingID()),
       is_outermost_document_(!render_frame_host->GetParentOrOuterDocument()) {
-  DCHECK(render_frame_host_);
-  DCHECK(web_contents);
+  CHECK(render_frame_host_, base::NotFatalUntil::M159);
+  CHECK(web_contents, base::NotFatalUntil::M159);
   CHECK(render_frame_host_->IsRenderFrameLive());
 
   DVLOG(2) << "PresentationServiceImpl: " << render_process_id_ << ", "
@@ -101,7 +101,7 @@ std::unique_ptr<PresentationServiceImpl> PresentationServiceImpl::Create(
            << render_frame_host->GetRoutingID();
   WebContents* web_contents =
       WebContents::FromRenderFrameHost(render_frame_host);
-  DCHECK(web_contents);
+  CHECK(web_contents, base::NotFatalUntil::M159);
 
   auto* browser = GetContentClient()->browser();
   auto* receiver_delegate =
@@ -125,6 +125,16 @@ void PresentationServiceImpl::Bind(
       &PresentationServiceImpl::OnConnectionError, base::Unretained(this)));
 }
 
+void PresentationServiceImpl::BindReceiverService(
+    mojo::PendingReceiver<blink::mojom::PresentationReceiverService> receiver) {
+  presentation_receiver_service_receivers_.Add(this, std::move(receiver));
+  // TODO(crbug.com/566111376): Consider not closing both pipes when one of them
+  // closes.
+  presentation_receiver_service_receivers_.set_disconnect_handler(
+      base::BindRepeating(&PresentationServiceImpl::OnConnectionError,
+                          base::Unretained(this)));
+}
+
 void PresentationServiceImpl::SetController(
     mojo::PendingRemote<blink::mojom::PresentationController>
         presentation_controller_remote) {
@@ -144,8 +154,9 @@ void PresentationServiceImpl::SetReceiver(
     mojo::PendingRemote<blink::mojom::PresentationReceiver>
         presentation_receiver_remote) {
   // Mojo interfaces for Presentation API are disabled during pre-rendering.
-  DCHECK_NE(render_frame_host_->GetLifecycleState(),
-            content::RenderFrameHost::LifecycleState::kPrerendering);
+  CHECK_NE(render_frame_host_->GetLifecycleState(),
+           content::RenderFrameHost::LifecycleState::kPrerendering,
+           base::NotFatalUntil::M159);
 
   // Presentation receiver virtual web tests (which have the flag set) has no
   // ReceiverPresentationServiceDelegate implementation.
@@ -156,15 +167,14 @@ void PresentationServiceImpl::SetReceiver(
     return;
   }
 
-  if (!receiver_delegate_ || !is_outermost_document_) {
-    presentation_service_receivers_.ReportBadMessage(
-        "SetReceiver can only be called from a "
-        "presentation receiver outermost document.");
+  if (!receiver_delegate_) {
+    presentation_receiver_service_receivers_.ReportBadMessage(
+        "SetReceiver can only be called from a presentation receiver page.");
     return;
   }
 
   if (presentation_receiver_remote_) {
-    presentation_service_receivers_.ReportBadMessage(
+    presentation_receiver_service_receivers_.ReportBadMessage(
         "SetReceiver can only be called once.");
     return;
   }
@@ -220,6 +230,17 @@ void PresentationServiceImpl::StartPresentation(
     const std::vector<GURL>& presentation_urls,
     NewPresentationCallback callback) {
   DVLOG(2) << "StartPresentation";
+
+  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kDisableGestureRequirementForPresentation) &&
+      !render_frame_host_->HasTransientUserActivation()) {
+    std::move(callback).Run(
+        /** PresentationConnectionResultPtr */ nullptr,
+        PresentationError::New(
+            PresentationErrorType::PRESENTATION_REQUEST_CANCELLED,
+            "PresentationRequest::start() requires user gesture."));
+    return;
+  }
 
   // There is a StartPresentation request in progress. To avoid queueing up
   // requests, the incoming request is rejected.
@@ -290,7 +311,7 @@ int PresentationServiceImpl::RegisterReconnectPresentationCallback(
   int request_id = GetNextRequestId();
   pending_reconnect_presentation_cbs_[request_id] =
       std::make_unique<NewPresentationCallbackWrapper>(std::move(*callback));
-  DCHECK_NE(kInvalidRequestId, request_id);
+  CHECK_NE(kInvalidRequestId, request_id, base::NotFatalUntil::M159);
   return request_id;
 }
 
@@ -313,8 +334,9 @@ void PresentationServiceImpl::OnStartPresentationSucceeded(
     return;
 
   auto presentation_info = *result->presentation_info;
-  DCHECK(pending_start_presentation_cb_.get());
-  DCHECK(presentation_info.id.length() <= kMaxPresentationIdLength);
+  CHECK(pending_start_presentation_cb_.get(), base::NotFatalUntil::M159);
+  CHECK(presentation_info.id.length() <= kMaxPresentationIdLength,
+        base::NotFatalUntil::M159);
   pending_start_presentation_cb_->Run(std::move(result),
                                       /** PresentationErrorPtr */ nullptr);
   ListenForConnectionStateChange(presentation_info);
@@ -362,7 +384,7 @@ bool PresentationServiceImpl::RunAndEraseReconnectPresentationMojoCallback(
   if (it == pending_reconnect_presentation_cbs_.end())
     return false;
 
-  DCHECK(it->second.get());
+  CHECK(it->second.get(), base::NotFatalUntil::M159);
   it->second->Run(std::move(result), std::move(error));
   pending_reconnect_presentation_cbs_.erase(it);
   return true;
@@ -501,6 +523,7 @@ void PresentationServiceImpl::Reset() {
   pending_reconnect_presentation_cbs_.clear();
 
   presentation_service_receivers_.Clear();
+  presentation_receiver_service_receivers_.Clear();
   presentation_controller_remote_.reset();
   presentation_receiver_remote_.reset();
 }
@@ -529,8 +552,8 @@ PresentationServiceImpl::ScreenAvailabilityListenerImpl::
     ScreenAvailabilityListenerImpl(const GURL& availability_url,
                                    PresentationServiceImpl* service)
     : availability_url_(availability_url), service_(service) {
-  DCHECK(availability_url_.is_valid());
-  DCHECK(service_);
+  CHECK(availability_url_.is_valid(), base::NotFatalUntil::M159);
+  CHECK(service_, base::NotFatalUntil::M159);
 }
 
 PresentationServiceImpl::ScreenAvailabilityListenerImpl::
@@ -567,7 +590,7 @@ PresentationServiceImpl::NewPresentationCallbackWrapper::
 void PresentationServiceImpl::NewPresentationCallbackWrapper::Run(
     blink::mojom::PresentationConnectionResultPtr result,
     blink::mojom::PresentationErrorPtr error) {
-  DCHECK(!callback_.is_null());
+  CHECK(!callback_.is_null(), base::NotFatalUntil::M159);
   std::move(callback_).Run(std::move(result), std::move(error));
 }
 

@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/extensions/extension_install_friction_dialog.h"
+
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/ui/extensions/extension_dialog_utils.h"
-#include "chrome/browser/ui/extensions/extensions_dialogs.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
@@ -16,7 +17,9 @@
 #include "extensions/common/constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -77,15 +80,21 @@ class ExtensionInstallFrictionDialogDelegate : public ui::DialogModelDelegate {
   void OnLearnMoreLinkClicked() {
     learn_more_clicked_ = true;
 
-    if (original_web_contents_) {
-      GURL url(chrome::kCwsEnhancedSafeBrowsingLearnMoreURL);
-      content::OpenURLParams params(
-          url, content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-          ui::PAGE_TRANSITION_LINK, /*is_renderer_initiated=*/false);
-      original_web_contents_->OpenURL(params, {});
-    }
+    // Closing the dialog can destroy `this`, so take what is needed onto the
+    // stack and close before navigating.
+    base::WeakPtr<content::WebContents> web_contents = original_web_contents_;
 
     dialog_model()->host()->Close();
+    // `this` might be deleted when `Close()` is called.
+
+    if (web_contents) {
+      GURL url(chrome::kCwsEnhancedSafeBrowsingLearnMoreURL);
+      content::OpenURLParams params =
+          content::OpenURLParams::CreateBrowserInitiated(
+              url, WindowOpenDisposition::kNewForegroundTab,
+              ui::PAGE_TRANSITION_LINK);
+      web_contents->OpenURL(params, {});
+    }
   }
 
  private:

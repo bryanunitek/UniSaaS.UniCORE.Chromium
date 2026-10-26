@@ -8,16 +8,20 @@
 #include "base/metrics/histogram_functions.h"
 #include "content/browser/declarative_performance_observer/declarative_performance_observer_store.h"
 #include "content/browser/storage_partition_impl.h"
+#include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_handle_timing.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_client.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "net/base/load_timing_info.h"
 #include "net/base/net_errors.h"
+#include "services/network/public/cpp/url_util.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 
 namespace content {
 
@@ -30,6 +34,9 @@ DeclarativePerformanceObserver::DeclarativePerformanceObserver(
     RenderFrameHost* rfh,
     NavigationHandle* navigation_handle)
     : DocumentUserData<DeclarativePerformanceObserver>(rfh) {
+  GetContentClient()->browser()->LogWebFeatureForCurrentPage(
+      rfh, blink::mojom::WebFeature::kDeclarativePerformanceObserver);
+
   const network::mojom::DeclarativePerformanceObserverPolicy* policy =
       navigation_handle->GetDeclarativePerformanceObserverPolicy();
   CHECK(policy);
@@ -45,7 +52,8 @@ DeclarativePerformanceObserver::DeclarativePerformanceObserver(
   }
 
   navigation_start_ = navigation_handle->NavigationStart();
-  committed_url_ = navigation_handle->GetURL();
+  committed_url_ =
+      network::SerializeResponseUrlForReporting(navigation_handle->GetURL());
 
   network_anonymization_key_ =
       rfh->GetIsolationInfoForSubresources().network_anonymization_key();
@@ -141,10 +149,14 @@ DeclarativePerformanceObserver::~DeclarativePerformanceObserver() {
 
 void DeclarativePerformanceObserver::OnDidFinishNavigation(
     NavigationHandle* navigation_handle) {
-  DCHECK_EQ(navigation_handle->GetRenderFrameHost(), &render_frame_host());
-  DCHECK(navigation_handle->IsServedFromBackForwardCache());
+  CHECK_EQ(navigation_handle->GetRenderFrameHost(), &render_frame_host(),
+           base::NotFatalUntil::M160);
+  CHECK(navigation_handle->IsServedFromBackForwardCache(),
+        base::NotFatalUntil::M160);
 
   navigation_start_ = navigation_handle->NavigationStart();
+  committed_url_ =
+      network::SerializeResponseUrlForReporting(navigation_handle->GetURL());
   buffered_entries_.clear();
   current_buffer_bytes_ = 0;
 
@@ -175,8 +187,10 @@ void DeclarativePerformanceObserver::OnDidFinishNavigation(
 
 void DeclarativePerformanceObserver::OnPrerenderActivation(
     NavigationHandle* navigation_handle) {
-  DCHECK_EQ(navigation_handle->GetRenderFrameHost(), &render_frame_host());
-  DCHECK(navigation_handle->IsPrerenderedPageActivation());
+  CHECK_EQ(navigation_handle->GetRenderFrameHost(), &render_frame_host(),
+           base::NotFatalUntil::M160);
+  CHECK(navigation_handle->IsPrerenderedPageActivation(),
+        base::NotFatalUntil::M160);
 
   for (auto& entry : buffered_entries_) {
     if (entry.is_dict()) {
@@ -230,6 +244,30 @@ void DeclarativePerformanceObserver::SetStoragePartitionForTesting(  // IN-TEST
   storage_partition_for_testing_ = storage_partition;
 }
 
+StoragePartition* DeclarativePerformanceObserver::GetStoragePartition() const {
+  return storage_partition_for_testing_.has_value()
+             ? storage_partition_for_testing_->get()
+             : render_frame_host().GetStoragePartition();
+}
+
+void DeclarativePerformanceObserver::QueueAndSendReport(const GURL& url,
+                                                        base::DictValue body) {
+  StoragePartition* storage_partition = GetStoragePartition();
+  if (!storage_partition) {
+    return;
+  }
+  network::mojom::NetworkContext* network_context =
+      storage_partition->GetNetworkContext();
+  network_context->QueueReport(kDeclarativePerformanceObserverReportType,
+                               reporting_endpoint_, url, reporting_source_,
+                               network_anonymization_key_, std::move(body));
+  // Immediately dispatch the queued report without expiring `reporting_source_`
+  // so that multiple reports across the document's lifecycle (early failure
+  // reports, BackForwardCache entry, or session end) are delivered as soon as
+  // they are queued rather than waiting for the periodic Reporting API timer.
+  network_context->SendReportsForSource(reporting_source_);
+}
+
 void DeclarativePerformanceObserver::FlushMetrics() {
   if (buffered_entries_.empty()) {
     return;
@@ -240,17 +278,7 @@ void DeclarativePerformanceObserver::FlushMetrics() {
   buffered_entries_.clear();
   current_buffer_bytes_ = 0;
 
-  StoragePartition* storage_partition =
-      storage_partition_for_testing_
-          ? storage_partition_for_testing_.get()
-          : render_frame_host().GetStoragePartition();
-
-  if (storage_partition) {
-    storage_partition->GetNetworkContext()->QueueReport(
-        kDeclarativePerformanceObserverReportType, reporting_endpoint_,
-        committed_url_, reporting_source_, network_anonymization_key_,
-        std::move(body));
-  }
+  QueueAndSendReport(committed_url_, std::move(body));
 }
 
 void DeclarativePerformanceObserver::AppendSessionEndEntry() {
@@ -323,23 +351,62 @@ void DeclarativePerformanceObserver::BindReceiver(
 void DeclarativePerformanceObserver::DidObservePerformanceEntries(
     std::vector<blink::mojom::DeclarativePerformanceEntryPtr> entries) {
   for (auto& entry : entries) {
-    if (!enabled_types_.contains(network::mojom::PerformanceEntryType::kMark)) {
-      continue;
-    }
-    if (include_user_timing_ && !include_user_timing_->contains(entry->name)) {
-      continue;
-    }
+    switch (entry->which()) {
+      case blink::mojom::DeclarativePerformanceEntry::Tag::kMark: {
+        auto& mark = *entry->get_mark();
+        if (!enabled_types_.contains(
+                network::mojom::PerformanceEntryType::kMark)) {
+          continue;
+        }
+        if (include_user_timing_ &&
+            !include_user_timing_->contains(mark.name)) {
+          continue;
+        }
 
-    base::DictValue dict;
-    dict.Set("name", entry->name);
-    dict.Set("entryType", "mark");
-    dict.Set("startTime", entry->start_time.InMillisecondsF());
-    dict.Set("duration", 0.0);
+        base::DictValue dict;
+        dict.Set("name", mark.name);
+        dict.Set("entryType", "mark");
+        dict.Set("startTime", mark.start_time.InMillisecondsF());
+        dict.Set("duration", 0.0);
 
-    if (entry->detail.has_value()) {
-      dict.Set("detail", std::move(entry->detail.value()));
+        if (mark.detail.has_value()) {
+          dict.Set("detail", std::move(mark.detail).value());
+        }
+        AddEntryToBuffer(std::move(dict));
+        break;
+      }
+      case blink::mojom::DeclarativePerformanceEntry::Tag::kLcp: {
+        auto& lcp = entry->get_lcp();
+        if (!enabled_types_.contains(network::mojom::PerformanceEntryType::
+                                         kLargestContentfulPaint)) {
+          continue;
+        }
+
+        base::DictValue dict;
+        dict.Set("name", "");
+        dict.Set("entryType", "largest-contentful-paint");
+        dict.Set("startTime", lcp->start_time.InMillisecondsF());
+        dict.Set("duration", 0.0);
+        dict.Set("size", static_cast<double>(lcp->size));
+        dict.Set("renderTime", lcp->render_time.InMillisecondsF());
+        dict.Set("loadTime", lcp->load_time.InMillisecondsF());
+        dict.Set("id", lcp->id.value_or(""));
+        std::string lcp_url = "";
+        if (lcp->url.has_value() && !lcp->url->empty()) {
+          GURL url(lcp->url.value());
+          if (url.is_valid()) {
+            lcp_url = network::SerializeResponseUrlForReporting(url).spec();
+          } else {
+            lcp_url = lcp->url.value();
+          }
+        }
+        dict.Set("url", lcp_url);
+        dict.Set("element", lcp->element.value_or(""));
+
+        AddEntryToBuffer(std::move(dict));
+        break;
+      }
     }
-    AddEntryToBuffer(std::move(dict));
   }
 }
 
@@ -439,13 +506,6 @@ void DeclarativePerformanceObserver::RecordEarlyNavigationFailure(
 
 void DeclarativePerformanceObserver::OnEarlyFailureReportsTaken(
     base::ListValue reports) {
-  StoragePartition* storage_partition =
-      storage_partition_for_testing_
-          ? storage_partition_for_testing_.get()
-          : render_frame_host().GetStoragePartition();
-  if (!storage_partition) {
-    return;
-  }
   for (auto& val : reports) {
     if (val.is_dict()) {
       base::DictValue entry = std::move(val).TakeDict();
@@ -458,10 +518,11 @@ void DeclarativePerformanceObserver::OnEarlyFailureReportsTaken(
       entries_list.Append(base::Value(std::move(entry)));
       report_body.Set("entries", std::move(entries_list));
 
-      storage_partition->GetNetworkContext()->QueueReport(
-          kDeclarativePerformanceObserverReportType, reporting_endpoint_,
-          failed_url, reporting_source_, network_anonymization_key_,
-          std::move(report_body));
+      // Dispatch each early failure report individually rather than batching
+      // across the loop so that each failed navigation is delivered in its own
+      // HTTP POST request instead of combining multiple navigations into a
+      // single payload.
+      QueueAndSendReport(failed_url, std::move(report_body));
     }
   }
 }

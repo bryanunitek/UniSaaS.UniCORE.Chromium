@@ -55,8 +55,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -88,8 +88,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -115,8 +115,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -149,8 +149,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -183,8 +183,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -207,7 +207,8 @@
           "--enforce-browser-version",
           "--use-worker=dedicated",
           "--jobs=4",
-          "--use-webgpu-power-preference=default-high-performance"
+          "--use-webgpu-power-preference=default-high-performance",
+          "--clear-system-shader-cache"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -222,8 +223,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -247,7 +248,8 @@
           "--enforce-browser-version",
           "--use-fxc",
           "--jobs=4",
-          "--use-webgpu-power-preference=default-high-performance"
+          "--use-webgpu-power-preference=default-high-performance",
+          "--clear-system-shader-cache"
         ],
         "ci_only": true,
         "merge": {
@@ -263,8 +265,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -290,7 +292,8 @@
           "--enable-dawn-backend-validation",
           "--use-fxc",
           "--jobs=4",
-          "--use-webgpu-power-preference=default-high-performance"
+          "--use-webgpu-power-preference=default-high-performance",
+          "--clear-system-shader-cache"
         ],
         "ci_only": true,
         "merge": {
@@ -306,8 +309,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -332,7 +335,8 @@
           "--enforce-browser-version",
           "--use-worker=service",
           "--jobs=4",
-          "--use-webgpu-power-preference=default-high-performance"
+          "--use-webgpu-power-preference=default-high-performance",
+          "--clear-system-shader-cache"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -347,8 +351,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -372,7 +376,8 @@
           "--enforce-browser-version",
           "--use-worker=shared",
           "--jobs=4",
-          "--use-webgpu-power-preference=default-high-performance"
+          "--use-webgpu-power-preference=default-high-performance",
+          "--clear-system-shader-cache"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -387,8 +392,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -411,7 +416,8 @@
           "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --force_high_performance_gpu",
           "--enforce-browser-version",
           "--jobs=4",
-          "--use-webgpu-power-preference=default-high-performance"
+          "--use-webgpu-power-preference=default-high-performance",
+          "--clear-system-shader-cache"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -426,8 +432,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -452,7 +458,8 @@
           "--enforce-browser-version",
           "--enable-dawn-backend-validation",
           "--jobs=4",
-          "--use-webgpu-power-preference=default-high-performance"
+          "--use-webgpu-power-preference=default-high-performance",
+          "--clear-system-shader-cache"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -467,8 +474,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -502,8 +509,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -536,8 +543,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -561,7 +568,8 @@
           "--use-webgpu-adapter=swiftshader",
           "--test-filter=*web_platform*",
           "--jobs=4",
-          "--use-webgpu-power-preference=default-high-performance"
+          "--use-webgpu-power-preference=default-high-performance",
+          "--clear-system-shader-cache"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -576,8 +584,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -604,7 +612,8 @@
           "--test-filter=*web_platform*",
           "--enable-dawn-backend-validation",
           "--jobs=4",
-          "--use-webgpu-power-preference=default-high-performance"
+          "--use-webgpu-power-preference=default-high-performance",
+          "--clear-system-shader-cache"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -619,8 +628,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "expiration": 21600,
@@ -1838,8 +1847,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -1869,8 +1878,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -1895,8 +1904,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -1928,8 +1937,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -1961,8 +1970,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -1999,8 +2008,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -2039,8 +2048,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -2080,8 +2089,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -2122,8 +2131,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -2162,8 +2171,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -2201,8 +2210,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -2226,6 +2235,7 @@
           "--jobs=4",
           "--use-webgpu-power-preference=default-high-performance"
         ],
+        "ci_only": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -2239,8 +2249,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -2279,8 +2289,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -2313,8 +2323,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -2346,8 +2356,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -2385,8 +2395,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,
@@ -2427,8 +2437,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 1800,

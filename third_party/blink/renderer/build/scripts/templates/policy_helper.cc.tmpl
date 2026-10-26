@@ -7,6 +7,7 @@
 
 #include "third_party/blink/public/mojom/permissions_policy/document_policy_feature.mojom-blink.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+#include "third_party/blink/renderer/core/context_features/context_feature_settings.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/inspector/protocol/page.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
@@ -153,11 +154,21 @@ bool DisabledByOriginTrial(mojom::blink::DocumentPolicyFeature feature,
   return false;
 }
 
+bool DisabledByContext(const String& feature_name,
+                       ExecutionContext* execution_context) {
+  if (feature_name == kUnboundedElementPolicyName) {
+    return ContextFeatureSettings::GetUnboundedElementAuth(
+               execution_context) ==
+           ContextFeatureSettings::UnboundedElementAuth::kDenied;
+  }
+  return false;
+}
+
 String PermissionsPolicyFeatureToProtocol(network::mojom::PermissionsPolicyFeature feature, ExecutionContext* execution_context) {
   if (execution_context && execution_context->IsIsolatedContext()) {
     switch (feature) {
       {% for feature in permissions_policy_features %}
-      {% if feature.visibility == "IsolatedContext" %}
+      {% if feature.visibility == "IsolatedContext" and not feature.name.original.startswith("Deleted_") %}
       case network::mojom::PermissionsPolicyFeature::k{{feature.name}}:
         return protocol::Page::PermissionsPolicyFeatureEnum::{{feature.devtools_enum_name}};
       {% endif %}
@@ -168,7 +179,7 @@ String PermissionsPolicyFeatureToProtocol(network::mojom::PermissionsPolicyFeatu
   }
   switch (feature) {
     {% for feature in permissions_policy_features %}
-    {% if feature.visibility == "All" %}
+    {% if feature.visibility == "All" and not feature.name.original.startswith("Deleted_") %}
     case network::mojom::PermissionsPolicyFeature::k{{feature.name}}:
       return protocol::Page::PermissionsPolicyFeatureEnum::{{feature.devtools_enum_name}};
     {% endif %}

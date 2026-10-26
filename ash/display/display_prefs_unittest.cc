@@ -139,12 +139,15 @@ class DisplayPrefsTest : public AshTestBase {
     AshTestBase::TearDown();
   }
 
-  void LoggedInAsUser() { SimulateUserLogin({"user1@test.com"}); }
+  void LoggedInAsUser() {
+    SimulateUserLogin(AccountId::FromUserEmail("user1@test.com"));
+  }
 
   void LoggedInAsGuest() { SimulateGuestLogin(); }
 
   void LoggedInAsPublicAccount() {
-    SimulateUserLogin({"pa@test.com", user_manager::UserType::kPublicAccount});
+    SimulateUserLogin({.account_id = AccountId::FromUserEmail("pa@test.com"),
+                       .user_type = user_manager::UserType::kPublicAccount});
   }
 
   void LoadDisplayPreferences() { display_prefs()->LoadDisplayPreferences(); }
@@ -314,10 +317,16 @@ class DisplayPrefsTest : public AshTestBase {
 
 class DisplayPrefsTestGuest : public DisplayPrefsTest {
  public:
-  DisplayPrefsTestGuest() { set_start_session(false); }
+  DisplayPrefsTestGuest() = default;
 
   DisplayPrefsTestGuest(const DisplayPrefsTestGuest&) = delete;
   DisplayPrefsTestGuest& operator=(const DisplayPrefsTestGuest&) = delete;
+
+  // DisplayPrefsTest:
+  void SetUpInitParams(AshTestHelper::InitParams& init_params) override {
+    DisplayPrefsTest::SetUpInitParams(init_params);
+    init_params.start_session = false;
+  }
 };
 
 TEST_F(DisplayPrefsTest, ListedLayoutOverrides) {

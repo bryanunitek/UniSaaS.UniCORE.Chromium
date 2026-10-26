@@ -9,7 +9,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -90,12 +89,12 @@ class CertificateSelectorTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     ASSERT_TRUE(content::WaitForLoadStop(
-        browser()->tab_strip_model()->GetActiveWebContents()));
+        browser()->GetTabStripModel()->GetActiveWebContents()));
 
     selector_ = new TestCertificateSelector(
         net::FakeClientCertIdentityListFromCertificateList(
             {client_1_, client_2_}),
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
     selector_->Init();
     selector_->Show();
   }
@@ -119,14 +118,14 @@ IN_PROC_BROWSER_TEST_F(CertificateSelectorTest, GetRowText) {
   EXPECT_EQ(u"B CA", model->GetText(0, IDS_CERT_SELECTOR_ISSUER_COLUMN));
   EXPECT_EQ(std::u16string(),
             model->GetText(0, IDS_CERT_SELECTOR_PROVIDER_COLUMN));
-  EXPECT_EQ(u"1000", model->GetText(0, IDS_CERT_SELECTOR_SERIAL_COLUMN));
+  EXPECT_EQ(u"2003", model->GetText(0, IDS_CERT_SELECTOR_SERIAL_COLUMN));
 
   EXPECT_EQ(u"Client Cert D",
             model->GetText(1, IDS_CERT_SELECTOR_SUBJECT_COLUMN));
   EXPECT_EQ(u"E CA", model->GetText(1, IDS_CERT_SELECTOR_ISSUER_COLUMN));
   EXPECT_EQ(std::u16string(),
             model->GetText(1, IDS_CERT_SELECTOR_PROVIDER_COLUMN));
-  EXPECT_EQ(u"1002", model->GetText(1, IDS_CERT_SELECTOR_SERIAL_COLUMN));
+  EXPECT_EQ(u"2004", model->GetText(1, IDS_CERT_SELECTOR_SERIAL_COLUMN));
 }
 
 IN_PROC_BROWSER_TEST_F(CertificateSelectorTest, GetSelectedCert) {
@@ -150,6 +149,8 @@ IN_PROC_BROWSER_TEST_F(CertificateSelectorTest, DoubleClick) {
   base::RunLoop loop;
   selector_->set_on_destroy(loop.QuitClosure());
 
+  selector_->ResetViewShownTimeStampForTesting();
+
   // Simulate double clicking on an entry in the certificate list.
   selector_->OnDoubleClick();
 
@@ -159,5 +160,19 @@ IN_PROC_BROWSER_TEST_F(CertificateSelectorTest, DoubleClick) {
   // Closing the dialog through a double click must call only the Accept()
   // function and not Cancel().
   EXPECT_TRUE(accepted);
+  EXPECT_FALSE(canceled);
+}
+
+IN_PROC_BROWSER_TEST_F(CertificateSelectorTest,
+                       DoubleClickSoonAfterShowIsIgnored) {
+  bool accepted = false;
+  bool canceled = false;
+  selector_->TrackState(&accepted, &canceled);
+
+  // Simulate double clicking immediately after the dialog is shown. It should
+  // be ignored by the input protector.
+  selector_->OnDoubleClick();
+
+  EXPECT_FALSE(accepted);
   EXPECT_FALSE(canceled);
 }

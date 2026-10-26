@@ -44,6 +44,11 @@ namespace strike_database {
 class StrikeDatabase;
 }  // namespace strike_database
 
+namespace device_reauth {
+class DeviceAuthAvailabilityChecker;
+class DeviceAuthenticator;
+}  // namespace device_reauth
+
 namespace syncer {
 class SyncService;
 }
@@ -127,6 +132,7 @@ class AndroidAutofillClient : public autofill::ContentAutofillClient,
       const autofill::AutofillClient::PopupOpenArgs& open_args,
       base::WeakPtr<autofill::AutofillSuggestionDelegate> delegate) final;
   void UpdateAutofillDataListValues(
+      const autofill::LocalFrameToken& frame_token,
       base::span<const autofill::SelectOption> datalist) final;
   void HideSuggestions(autofill::SuggestionHidingReason reason,
                        std::optional<autofill::FillingProduct> product) final;
@@ -135,10 +141,15 @@ class AndroidAutofillClient : public autofill::ContentAutofillClient,
   bool IsWalletPublicPassStorageEnabled() const final;
   bool IsAutocompleteEnabled() const final;
   bool IsPasswordManagerEnabled() const final;
+  bool UsesPlatformAutofill() const final;
   bool IsContextSecure() const final;
   autofill::autofill_metrics::FormInteractionsUkmLogger&
   GetFormInteractionsUkmLogger() final;
   metrics::ProfileMetricsService* GetProfileMetricsService() override;
+  std::unique_ptr<device_reauth::DeviceAuthenticator> GetDeviceAuthenticator(
+      std::string histogram) const final;
+  std::unique_ptr<device_reauth::DeviceAuthAvailabilityChecker>
+  GetDeviceAuthAvailabilityChecker() const final;
 
   // ContentAutofillClient:
   std::unique_ptr<autofill::AutofillManager> CreateManager(

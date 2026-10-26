@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
@@ -14,9 +15,10 @@
 #include "chrome/browser/signin/account_preview_data_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/core/browser/account_metrics_id_allocator.h"
+#include "components/signin/core/browser/account_preview_data_fetcher.h"
 #include "components/signin/core/browser/account_preview_data_service_impl.h"
 #include "components/signin/public/base/signin_prefs.h"
 #include "components/signin/public/base/signin_switches.h"
@@ -32,7 +34,10 @@ namespace {
 class AccountPreviewDataServiceBrowserTest : public SigninBrowserTestBase {
  public:
   AccountPreviewDataServiceBrowserTest() {
-    feature_list_.InitAndEnableFeature(switches::kEnableAccountPreviewData);
+    feature_list_.InitWithFeatures(
+        {switches::kEnableAccountPreviewData,
+         switches::kEnableAccountPreviewDataFetchOptimizations},
+        {});
   }
   ~AccountPreviewDataServiceBrowserTest() override = default;
 
@@ -40,8 +45,17 @@ class AccountPreviewDataServiceBrowserTest : public SigninBrowserTestBase {
   CreateMockNetworkInterceptor() {
     return std::make_unique<content::URLLoaderInterceptor>(base::BindRepeating(
         [](content::URLLoaderInterceptor::RequestParams* params) {
+          std::string expected_query;
+          for (syncer::DataType data_type : signin::GetRequestedDataTypes()) {
+            expected_query +=
+                (expected_query.empty() ? "" : "&") +
+                std::string("dataTypes=") +
+                base::NumberToString(
+                    syncer::GetSpecificsFieldNumberFromDataType(data_type));
+          }
           if (params->url_request.url.path() ==
-              "/v1/dataTypes/-/dataTypesStatistics") {
+                  "/v1/dataTypes/-/dataTypesStatistics" &&
+              params->url_request.url.query() == expected_query) {
             std::string response = R"({
                "dataTypeStatistics": [
                  {
@@ -68,7 +82,11 @@ class AccountPreviewDataServiceBrowserTest : public SigninBrowserTestBase {
             return true;
           }
           if (params->url_request.url.path() ==
-              "/v1/dataTypes/154522/entitiesPreviews") {
+              base::StrCat({"/v1/dataTypes/",
+                            base::NumberToString(
+                                syncer::GetSpecificsFieldNumberFromDataType(
+                                    syncer::DEVICE_INFO)),
+                            "/entitiesPreviews"})) {
             std::string response = R"({
                "entitiesPreviews": []
              })";
@@ -134,11 +152,11 @@ IN_PROC_BROWSER_TEST_F(AccountPreviewDataServiceBrowserTest, LogMetrics) {
       "Signin.SmartAccountSelection.OnSyncPreviewFetched.PASSWORD" +
           account_suffix,
       5, 1);
-  histogram_tester.ExpectUniqueSample(
+  histogram_tester.ExpectTotalCount(
       "Signin.SmartAccountSelection.OnSyncPreviewFetched.AUTOFILL_WALLET_"
       "CREDENTIAL" +
           account_suffix,
-      3, 1);
+      0);
   histogram_tester.ExpectUniqueSample(
       "Signin.SmartAccountSelection.OnSyncPreviewFetched.WALLET_METADATA" +
           account_suffix,
@@ -159,11 +177,11 @@ IN_PROC_BROWSER_TEST_F(AccountPreviewDataServiceBrowserTest, LogMetrics) {
       "Signin.SmartAccountSelection.OnSyncPreviewFetched.PASSWORD" +
           account_suffix + profile_suffix,
       5, 1);
-  histogram_tester.ExpectUniqueSample(
+  histogram_tester.ExpectTotalCount(
       "Signin.SmartAccountSelection.OnSyncPreviewFetched.AUTOFILL_WALLET_"
       "CREDENTIAL" +
           account_suffix + profile_suffix,
-      3, 1);
+      0);
   histogram_tester.ExpectUniqueSample(
       "Signin.SmartAccountSelection.OnSyncPreviewFetched.WALLET_METADATA" +
           account_suffix + profile_suffix,
@@ -225,11 +243,11 @@ IN_PROC_BROWSER_TEST_F(AccountPreviewDataServiceBrowserTest,
       "Signin.SmartAccountSelection.OnSyncPreviewFetched.PASSWORD" +
           account_suffix,
       5, 1);
-  histogram_tester.ExpectUniqueSample(
+  histogram_tester.ExpectTotalCount(
       "Signin.SmartAccountSelection.OnSyncPreviewFetched.AUTOFILL_WALLET_"
       "CREDENTIAL" +
           account_suffix,
-      3, 1);
+      0);
   histogram_tester.ExpectUniqueSample(
       "Signin.SmartAccountSelection.OnSyncPreviewFetched.WALLET_METADATA" +
           account_suffix,
@@ -250,11 +268,11 @@ IN_PROC_BROWSER_TEST_F(AccountPreviewDataServiceBrowserTest,
       "Signin.SmartAccountSelection.OnSyncPreviewFetched.PASSWORD" +
           account_suffix + profile_suffix,
       5, 1);
-  histogram_tester.ExpectUniqueSample(
+  histogram_tester.ExpectTotalCount(
       "Signin.SmartAccountSelection.OnSyncPreviewFetched.AUTOFILL_WALLET_"
       "CREDENTIAL" +
           account_suffix + profile_suffix,
-      3, 1);
+      0);
   histogram_tester.ExpectUniqueSample(
       "Signin.SmartAccountSelection.OnSyncPreviewFetched.WALLET_METADATA" +
           account_suffix + profile_suffix,

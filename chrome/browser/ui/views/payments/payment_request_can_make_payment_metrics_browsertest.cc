@@ -4,20 +4,17 @@
 
 #include <vector>
 
-#include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/views/payments/payment_request_browsertest_base.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/data_model/payments/credit_card.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/payments/core/features.h"
 #include "components/payments/core/journey_logger.h"
-#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 namespace payments {
@@ -42,7 +39,9 @@ class PaymentRequestCanMakePaymentMetricsTest
 
  protected:
   PaymentRequestCanMakePaymentMetricsTest()
-      : nickpay_server_(net::EmbeddedTestServer::TYPE_HTTPS) {}
+      : nickpay_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
+    SetBypassUserInteractionForTesting();
+  }
 
   void SetUpOnMainThread() override {
     PaymentRequestBrowserTestBase::SetUpOnMainThread();
@@ -69,9 +68,9 @@ class PaymentRequestCanMakePaymentMetricsTest
                                  DialogEvent::CAN_MAKE_PAYMENT_RETURNED,
                                  DialogEvent::HAS_ENROLLED_INSTRUMENT_CALLED,
                                  DialogEvent::HAS_ENROLLED_INSTRUMENT_RETURNED,
-                                 DialogEvent::PROCESSING_SPINNER_SHOWN,
-                                 DialogEvent::PROCESSING_SPINNER_HIDDEN,
-                                 DialogEvent::DIALOG_OPENED});
+                                 DialogEvent::LOADING_VIEW_SHOWN,
+                                 DialogEvent::DIALOG_OPENED,
+                                 DialogEvent::LOADING_VIEW_HIDDEN});
     ASSERT_EQ("success",
               content::EvalJs(GetActiveWebContents(),
                               content::JsReplace(
@@ -111,6 +110,10 @@ class PaymentRequestCanMakePaymentMetricsTest
   }
 
   net::EmbeddedTestServer nickpay_server_;
+
+ private:
+  base::test::ScopedFeatureList feature_list_{
+      features::kPaymentRequestMandatoryPaymentAppUi};
 };
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentMetricsTest,
@@ -197,9 +200,9 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentMetricsTest,
                                DialogEvent::CAN_MAKE_PAYMENT_RETURNED,
                                DialogEvent::HAS_ENROLLED_INSTRUMENT_CALLED,
                                DialogEvent::HAS_ENROLLED_INSTRUMENT_RETURNED,
-                               DialogEvent::PROCESSING_SPINNER_SHOWN,
-                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
-                               DialogEvent::DIALOG_OPENED});
+                               DialogEvent::LOADING_VIEW_SHOWN,
+                               DialogEvent::DIALOG_OPENED,
+                               DialogEvent::LOADING_VIEW_HIDDEN});
   // Install payment apps JIT, so HasEnrolledInstrument returns false.
   ASSERT_EQ("success",
             content::EvalJs(
@@ -214,7 +217,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentMetricsTest,
   base::RunLoop().RunUntilIdle();
 
   ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   // Make sure the correct events were logged.
@@ -246,9 +249,9 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentMetricsTest,
                                DialogEvent::CAN_MAKE_PAYMENT_RETURNED,
                                DialogEvent::HAS_ENROLLED_INSTRUMENT_CALLED,
                                DialogEvent::HAS_ENROLLED_INSTRUMENT_RETURNED,
-                               DialogEvent::PROCESSING_SPINNER_SHOWN,
-                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
-                               DialogEvent::DIALOG_OPENED});
+                               DialogEvent::LOADING_VIEW_SHOWN,
+                               DialogEvent::DIALOG_OPENED,
+                               DialogEvent::LOADING_VIEW_HIDDEN});
   // Install payment apps JIT, so HasEnrolledInstrument returns false.
   ASSERT_EQ("success",
             content::EvalJs(
@@ -299,9 +302,9 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentMetricsTest,
                                DialogEvent::CAN_MAKE_PAYMENT_RETURNED,
                                DialogEvent::HAS_ENROLLED_INSTRUMENT_CALLED,
                                DialogEvent::HAS_ENROLLED_INSTRUMENT_RETURNED,
-                               DialogEvent::PROCESSING_SPINNER_SHOWN,
-                               DialogEvent::PROCESSING_SPINNER_HIDDEN,
-                               DialogEvent::DIALOG_OPENED});
+                               DialogEvent::LOADING_VIEW_SHOWN,
+                               DialogEvent::DIALOG_OPENED,
+                               DialogEvent::LOADING_VIEW_HIDDEN});
   // Install payment apps JIT, so HasEnrolledInstrument returns false.
   ASSERT_EQ("success",
             content::EvalJs(
@@ -429,7 +432,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentMetricsTest,
 
   // Complete the Payment Request.
   ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
   ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   // Make sure that no canMakePayment events were logged.
@@ -561,7 +564,7 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestCanMakePaymentMetricsTest,
 
   // Simulate that the user reloads the page containing the Payment Request.
   ResetEventWaiterForSequence({DialogEvent::DIALOG_CLOSED});
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   ASSERT_TRUE(WaitForObservedEvent());
 
   // Make sure the correct events were logged.

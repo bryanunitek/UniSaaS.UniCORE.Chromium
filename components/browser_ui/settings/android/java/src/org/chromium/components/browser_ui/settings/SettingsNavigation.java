@@ -21,15 +21,21 @@ import java.lang.annotation.RetentionPolicy;
 /** Interface for navigating Settings. */
 @NullMarked
 public interface SettingsNavigation {
+    /**
+     * Fragment argument key for the preference key to scroll to and highlight when opening a
+     * settings fragment.
+     */
+    String EXTRA_HIGHLIGHT_PREFERENCE = "highlight_preference";
+
     @IntDef({
         SettingsFragment.ABOUT_CHROME,
         SettingsFragment.ACCESSIBILITY,
-        SettingsFragment.AD_MEASUREMENT,
         SettingsFragment.ADAPTIVE_TOOLBAR,
         SettingsFragment.ADDRESS_BAR,
         SettingsFragment.ALL_SITES,
         SettingsFragment.ANDROID_PAYMENT_APPS,
         SettingsFragment.APPEARANCE,
+        SettingsFragment.AUTOFILL_AND_PASSWORDS,
         SettingsFragment.AUTOFILL_BUY_NOW_PAY_LATER,
         SettingsFragment.AUTOFILL_CARD_BENEFITS,
         SettingsFragment.AUTOFILL_IDENTITY_DOCS,
@@ -50,7 +56,6 @@ public interface SettingsNavigation {
         SettingsFragment.GLIC_PERMISSIONS,
         SettingsFragment.GOOGLE_SERVICES,
         SettingsFragment.GROUPED_WEBSITES,
-        SettingsFragment.HOME_OF_TRANSACTIONS,
         SettingsFragment.HOMEPAGE,
         SettingsFragment.HTTPS_FIRST_MODE,
         SettingsFragment.IMAGE_DESCRIPTIONS,
@@ -69,14 +74,6 @@ public interface SettingsNavigation {
         SettingsFragment.PRELOAD_PAGES_STANDARD,
         SettingsFragment.PRICE_NOTIFICATION,
         SettingsFragment.PRIVACY,
-        SettingsFragment.PRIVACY_SANDBOX_FLEDGE,
-        SettingsFragment.PRIVACY_SANDBOX_FLEDGE_ALL_SITES,
-        SettingsFragment.PRIVACY_SANDBOX_FLEDGE_BLOCKED_SITES,
-        SettingsFragment.PRIVACY_SANDBOX_FLEDGE_LEARN_MORE,
-        SettingsFragment.PRIVACY_SANDBOX_SETTINGS,
-        SettingsFragment.PRIVACY_SANDBOX_TOPICS,
-        SettingsFragment.PRIVACY_SANDBOX_TOPICS_BLOCKED,
-        SettingsFragment.PRIVACY_SANDBOX_TOPICS_MANAGE,
         SettingsFragment.SAFE_BROWSING,
         SettingsFragment.SAFE_BROWSING_ENHANCED,
         SettingsFragment.SAFE_BROWSING_STANDARD,
@@ -100,12 +97,13 @@ public interface SettingsNavigation {
     @interface SettingsFragment {
         int ABOUT_CHROME = 0;
         int ACCESSIBILITY = 1;
-        int AD_MEASUREMENT = 2;
+        // int AD_MEASUREMENT = 2; (OBSOLETE)
         int ADAPTIVE_TOOLBAR = 3;
         int ADDRESS_BAR = 4;
         int ALL_SITES = 5;
         int ANDROID_PAYMENT_APPS = 6;
         int APPEARANCE = 7;
+        int AUTOFILL_AND_PASSWORDS = 28;
         int AUTOFILL_BUY_NOW_PAY_LATER = 8;
         int AUTOFILL_CARD_BENEFITS = 9;
         int AUTOFILL_IDENTITY_DOCS = 10;
@@ -126,7 +124,6 @@ public interface SettingsNavigation {
         int GLIC_PERMISSIONS = 25;
         int GOOGLE_SERVICES = 26;
         int GROUPED_WEBSITES = 27;
-        int HOME_OF_TRANSACTIONS = 28;
         int HOMEPAGE = 29;
         int HTTPS_FIRST_MODE = 30;
         int IMAGE_DESCRIPTIONS = 31;
@@ -145,14 +142,14 @@ public interface SettingsNavigation {
         int PRELOAD_PAGES_STANDARD = 44;
         int PRICE_NOTIFICATION = 45;
         int PRIVACY = 46;
-        int PRIVACY_SANDBOX_FLEDGE = 47;
-        int PRIVACY_SANDBOX_FLEDGE_ALL_SITES = 48;
-        int PRIVACY_SANDBOX_FLEDGE_BLOCKED_SITES = 49;
-        int PRIVACY_SANDBOX_FLEDGE_LEARN_MORE = 50;
-        int PRIVACY_SANDBOX_SETTINGS = 51;
-        int PRIVACY_SANDBOX_TOPICS = 52;
-        int PRIVACY_SANDBOX_TOPICS_BLOCKED = 53;
-        int PRIVACY_SANDBOX_TOPICS_MANAGE = 54;
+        // int PRIVACY_SANDBOX_FLEDGE = 47; (OBSOLETE)
+        // int PRIVACY_SANDBOX_FLEDGE_ALL_SITES = 48; (OBSOLETE)
+        // int PRIVACY_SANDBOX_FLEDGE_BLOCKED_SITES = 49; (OBSOLETE)
+        // int PRIVACY_SANDBOX_FLEDGE_LEARN_MORE = 50; (OBSOLETE)
+        // int PRIVACY_SANDBOX_SETTINGS = 51; (OBSOLETE)
+        // int PRIVACY_SANDBOX_TOPICS = 52; (OBSOLETE)
+        // int PRIVACY_SANDBOX_TOPICS_BLOCKED = 53; (OBSOLETE)
+        // int PRIVACY_SANDBOX_TOPICS_MANAGE = 54; (OBSOLETE)
         int SAFE_BROWSING = 55;
         int SAFE_BROWSING_ENHANCED = 56;
         int SAFE_BROWSING_STANDARD = 57;
@@ -243,6 +240,19 @@ public interface SettingsNavigation {
             boolean addToBackStack);
 
     /**
+     * Creates a {@link Bundle} of fragment arguments that scrolls to and highlights the preference
+     * with {@code preferenceKey}, copying any existing entries from {@code fragmentArgs}.
+     *
+     * @param fragmentArgs Existing fragment arguments, or null.
+     * @param preferenceKey The key of the preference to scroll to and highlight.
+     */
+    static Bundle createHighlightArgs(@Nullable Bundle fragmentArgs, String preferenceKey) {
+        Bundle args = fragmentArgs != null ? new Bundle(fragmentArgs) : new Bundle();
+        args.putString(EXTRA_HIGHLIGHT_PREFERENCE, preferenceKey);
+        return args;
+    }
+
+    /**
      * Starts settings with the specified fragment and arguments.
      *
      * @param context The current Activity, or an application context if no Activity is available.
@@ -258,6 +268,23 @@ public interface SettingsNavigation {
             @Nullable Bundle fragmentArgs,
             boolean addToBackStack,
             @Nullable String tag);
+
+    /**
+     * Starts settings with the specified fragment and arguments, scrolling to and highlighting the
+     * preference with {@code highlightPreferenceKey}.
+     *
+     * @param context The current Activity, or an application context if no Activity is available.
+     * @param fragment The fragment to show, or null to show the default fragment.
+     * @param fragmentArgs A bundle of additional fragment arguments.
+     * @param highlightPreferenceKey The key of the preference to scroll to and highlight.
+     */
+    default void startSettings(
+            Context context,
+            @Nullable Class<? extends Fragment> fragment,
+            @Nullable Bundle fragmentArgs,
+            String highlightPreferenceKey) {
+        startSettings(context, fragment, createHighlightArgs(fragmentArgs, highlightPreferenceKey));
+    }
 
     /**
      * Creates an intent for starting settings with the specified fragment.
@@ -312,6 +339,24 @@ public interface SettingsNavigation {
             @Nullable String tag);
 
     /**
+     * Creates an intent for starting settings with the specified fragment and arguments, scrolling
+     * to and highlighting the preference with {@code highlightPreferenceKey}.
+     *
+     * @param context The current Activity, or an application context if no Activity is available.
+     * @param fragment The class of the fragment to show, or null to show the default fragment.
+     * @param fragmentArgs A bundle of additional fragment arguments.
+     * @param highlightPreferenceKey The key of the preference to scroll to and highlight.
+     */
+    default Intent createSettingsIntent(
+            Context context,
+            @Nullable Class<? extends Fragment> fragment,
+            @Nullable Bundle fragmentArgs,
+            String highlightPreferenceKey) {
+        return createSettingsIntent(
+                context, fragment, createHighlightArgs(fragmentArgs, highlightPreferenceKey));
+    }
+
+    /**
      * Creates an intent for starting settings with the specified fragment and arguments.
      *
      * @param context The current Activity, or an application context if no Activity is available.
@@ -320,6 +365,24 @@ public interface SettingsNavigation {
      */
     Intent createSettingsIntent(
             Context context, @SettingsFragment int fragment, @Nullable Bundle fragmentArgs);
+
+    /**
+     * Creates an intent for starting settings with the specified fragment and arguments, scrolling
+     * to and highlighting the preference with {@code highlightPreferenceKey}.
+     *
+     * @param context The current Activity, or an application context if no Activity is available.
+     * @param fragment The fragment to show.
+     * @param fragmentArgs A bundle of additional fragment arguments.
+     * @param highlightPreferenceKey The key of the preference to scroll to and highlight.
+     */
+    default Intent createSettingsIntent(
+            Context context,
+            @SettingsFragment int fragment,
+            @Nullable Bundle fragmentArgs,
+            String highlightPreferenceKey) {
+        return createSettingsIntent(
+                context, fragment, createHighlightArgs(fragmentArgs, highlightPreferenceKey));
+    }
 
     /**
      * Finishes the current settings.
@@ -343,6 +406,31 @@ public interface SettingsNavigation {
     void finishCurrentSettings(Fragment fragment);
 
     /**
+     * Finishes the current settings page and lands on {@code parentFragment}.
+     *
+     * <p>Use this instead of {@link #finishCurrentSettings(Fragment)} when the current page is
+     * being left because the data behind it no longer exists, for example after the user deletes
+     * the site group the page is showing. Naming the destination matters under URL navigation:
+     * there is no fragment back stack to pop, and the page occupies a navigation entry that is now
+     * dead. Implementations navigate to the parent's URL in place of that entry, so the user lands
+     * on a useful page and does not run into the dead entry again by going back.
+     *
+     * <p>The default implementation ignores the parent and behaves like {@link
+     * #finishCurrentSettings(Fragment)}, which is correct when the page was shown by a fragment
+     * transaction: popping the back stack already returns to the parent.
+     *
+     * @param fragment The expected current fragment.
+     * @param parentFragment The page to land on, or null to just finish.
+     * @param parentArgs Arguments for {@code parentFragment}, if any.
+     */
+    default void finishCurrentSettings(
+            Fragment fragment,
+            @Nullable Class<? extends Fragment> parentFragment,
+            @Nullable Bundle parentArgs) {
+        finishCurrentSettings(fragment);
+    }
+
+    /**
      * Executes pending navigations immediately.
      *
      * <p>See {@link finishCurrentSettings} for a valid use case of this method.
@@ -350,4 +438,13 @@ public interface SettingsNavigation {
      * @param activity The settings activity.
      */
     void executePendingNavigations(Activity activity);
+
+    /**
+     * Forces the SettingsNavigation to use SettingsActivity, even if it would normally open
+     * settings in a tab. TODO(crbug.com/521895796): Remove this after collecting data from canary
+     * channel.
+     *
+     * @param value Whether to use SettingsActivity for testing.
+     */
+    void setUseSettingsActivityForTesting(boolean value);
 }

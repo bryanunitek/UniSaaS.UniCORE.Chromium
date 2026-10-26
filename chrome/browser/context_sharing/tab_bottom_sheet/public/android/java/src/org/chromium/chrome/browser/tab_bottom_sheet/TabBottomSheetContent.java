@@ -19,20 +19,37 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent.GlowSpec;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent.HeightMode;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
+
+import java.util.function.BooleanSupplier;
 
 /** The bottom sheet content for the tab bottom sheet. */
 @NullMarked
 public abstract class TabBottomSheetContent implements BottomSheetContent {
+    private static final BottomSheetType BOTTOM_SHEET_TYPE =
+            new BottomSheetType.Builder()
+                    .setUserInitiated(true)
+                    .setModal(false)
+                    .setPersistent(true)
+                    .build();
+
     private final View mContentView;
+    private final float mDefaultHeightRatio;
+
+    @SuppressWarnings(
+            "UnusedVariable") // Used by getMaxResizeContentHeightRatio() in downstream CL.
     private final float mFullHeightRatio;
+
     private final @ColorInt int mBackgroundColor;
     private final @Px int mPeekViewHeight;
     private final Runnable mOnBackPressed;
+    private BooleanSupplier mCanCoverBottomControlsSupplier = () -> true;
 
     /**
      * Constructor.
      *
      * @param contentView The inflated view for the bottom sheet.
+     * @param defaultHeightRatio The default height ratio for the bottom sheet.
      * @param fullHeightRatio The full height ratio for the bottom sheet.
      * @param backgroundColor The background color for the bottom sheet.
      * @param peekViewHeight The height of the peek view in pixels.
@@ -41,12 +58,14 @@ public abstract class TabBottomSheetContent implements BottomSheetContent {
      */
     public TabBottomSheetContent(
             View contentView,
+            float defaultHeightRatio,
             float fullHeightRatio,
             @ColorInt int backgroundColor,
             @Px int peekViewHeight,
             @IdRes int peekViewContainerId,
             Runnable onBackPressed) {
         mContentView = contentView;
+        mDefaultHeightRatio = defaultHeightRatio;
         mFullHeightRatio = fullHeightRatio;
         mBackgroundColor = backgroundColor;
         mPeekViewHeight = peekViewHeight;
@@ -78,6 +97,11 @@ public abstract class TabBottomSheetContent implements BottomSheetContent {
 
     @Override
     public void destroy() {}
+
+    @Override
+    public BottomSheetType getSheetType() {
+        return BOTTOM_SHEET_TYPE;
+    }
 
     @Override
     public int getPriority() {
@@ -126,7 +150,7 @@ public abstract class TabBottomSheetContent implements BottomSheetContent {
         // TODO(crbug.com/502611927): Update this for AIM.
         return (ChromeFeatureList.sTabBottomSheet.isEnabled()
                         && ChromeFeatureList.sTabBottomSheetResizeWebview.isEnabled())
-                ? mFullHeightRatio
+                ? mDefaultHeightRatio
                 : HeightMode.DISABLED;
     }
 
@@ -140,17 +164,17 @@ public abstract class TabBottomSheetContent implements BottomSheetContent {
     }
 
     @Override
+    public float getMaxResizeContentHeightRatio() {
+        return mFullHeightRatio;
+    }
+
+    @Override
     public String getSheetContentDescription(Context context) {
         return "";
     }
 
     @Override
     public boolean skipHalfStateOnScrollingDown() {
-        return false;
-    }
-
-    @Override
-    public boolean hideOnScroll() {
         return false;
     }
 
@@ -173,6 +197,22 @@ public abstract class TabBottomSheetContent implements BottomSheetContent {
         // TODO(crbug.com/491512853): Revisit if this is correct for landscape mode or in non-PEEK
         // states. For now, always returning true seems most correct.
         return true;
+    }
+
+    /**
+     * Sets the supplier used to check whether the bottom sheet can cover the bottom browser
+     * controls.
+     */
+    public void setCanCoverBottomControlsSupplier(BooleanSupplier canCoverBottomControlsSupplier) {
+        mCanCoverBottomControlsSupplier = canCoverBottomControlsSupplier;
+    }
+
+    @Override
+    public boolean coversBottomControls() {
+        return ChromeFeatureList.sTabBottomSheet.isEnabled()
+                && ChromeFeatureList.sTabBottomSheetEdgeToEdge.isEnabled()
+                && ChromeFeatureList.sGlicNoWebview.isEnabled()
+                && mCanCoverBottomControlsSupplier.getAsBoolean();
     }
 
     @Override

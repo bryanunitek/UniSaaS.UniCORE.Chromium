@@ -10,8 +10,8 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "ui/compositor/compositor.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_sequence.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/gfx/geometry/point3_f.h"
@@ -169,8 +169,7 @@ SquareInkDropRipple::SquareInkDropRipple(InkDropHost* ink_drop_host,
           color,
           std::min(large_size_.width(), large_size_.height()) / 2)),
       rect_layer_delegate_(
-          new RectangleLayerDelegate(color, gfx::SizeF(large_size_))),
-      root_layer_(ui::LAYER_NOT_DRAWN) {
+          new RectangleLayerDelegate(color, gfx::SizeF(large_size_))) {
   root_layer_.SetName("SquareInkDropRipple:ROOT_LAYER");
 
   for (size_t i = 0; i < PAINTED_SHAPE_COUNT; ++i) {
@@ -573,8 +572,8 @@ void SquareInkDropRipple::AddPaintLayer(PaintedShape painted_shape) {
       NOTREACHED() << "PAINTED_SHAPE_COUNT is not an actual shape type.";
   }
 
-  ui::Layer* layer = new ui::Layer();
-  root_layer_.Add(layer);
+  auto layer = std::make_unique<ui::LayerTextured>();
+  root_layer_.Add(layer.get());
 
   layer->SetBounds(gfx::Rect(large_size_));
   layer->SetFillsBoundsOpaquely(false);
@@ -582,13 +581,13 @@ void SquareInkDropRipple::AddPaintLayer(PaintedShape painted_shape) {
   layer->SetVisible(true);
   layer->SetOpacity(1.0);
   layer->SetMasksToBounds(false);
-  layer->SetName("PAINTED_SHAPE_COUNT:" + ToLayerName(painted_shape));
+  layer->SetName("SquareInkDropRipple:" + ToLayerName(painted_shape));
   callback_subscriptions_[painted_shape] =
       layer->GetAnimator()->AddSequenceScheduledCallback(base::BindRepeating(
           &SquareInkDropRipple::OnLayerAnimationSequenceScheduled,
           base::Unretained(this)));
 
-  painted_layers_[painted_shape].reset(layer);
+  painted_layers_[painted_shape] = std::move(layer);
 }
 
 void SquareInkDropRipple::OnLayerAnimationSequenceScheduled(

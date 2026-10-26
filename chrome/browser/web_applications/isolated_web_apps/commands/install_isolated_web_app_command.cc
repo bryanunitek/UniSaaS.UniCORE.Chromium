@@ -34,13 +34,13 @@
 #include "chrome/browser/web_applications/isolated_web_apps/remove_isolated_web_app_data.h"
 #include "chrome/browser/web_applications/isolated_web_apps/storage_util.h"
 #include "chrome/browser/web_applications/isolated_web_apps/trust_and_signature_verifier.h"
-#include "chrome/browser/web_applications/jobs/finalize_install_job.h"
+#include "chrome/browser/web_applications/jobs/finalize_install_or_update_job.h"
 #include "chrome/browser/web_applications/jobs/finalizer_delegate.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/model/integrity_block_data.h"
+#include "chrome/browser/web_applications/model/iwa_update_info.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
-#include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -56,7 +56,7 @@
 #include "components/webapps/browser/web_contents/web_app_url_loader.h"
 #include "components/webapps/common/web_app_id.h"
 #include "components/webapps/isolated_web_apps/error/uma_logging.h"
-#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
+#include "components/webapps/isolated_web_apps/key_distribution/iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/types/storage_location.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
@@ -70,10 +70,12 @@ class InstallIsolationDataDelegate : public FinalizerDelegate {
   InstallIsolationDataDelegate(
       Profile& profile,
       IsolatedWebAppStorageLocation location,
-      std::optional<IntegrityBlockData> integrity_block_data)
+      std::optional<IntegrityBlockData> integrity_block_data,
+      std::optional<IwaUpdateInfo> optional_update_info)
       : profile_(profile),
         location_(std::move(location)),
-        integrity_block_data_(std::move(integrity_block_data)) {}
+        integrity_block_data_(std::move(integrity_block_data)),
+        optional_update_info_(std::move(optional_update_info)) {}
 
   void ConfigureCustomFields(WebApp* web_app,
                              const WebAppInstallInfo& web_app_info) override {
@@ -93,6 +95,13 @@ class InstallIsolationDataDelegate : public FinalizerDelegate {
       builder.SetUpdateManifestUrl(*web_app_info.iwa_update_manifest_url);
     }
 
+    if (optional_update_info_) {
+      builder.SetUpdateManifestUrl(optional_update_info_->update_manifest_url);
+      if (optional_update_info_->update_channel) {
+        builder.SetUpdateChannel(*optional_update_info_->update_channel);
+      }
+    }
+
     if (integrity_block_data_) {
       builder.SetIntegrityBlockData(std::move(*integrity_block_data_));
     }
@@ -110,6 +119,7 @@ class InstallIsolationDataDelegate : public FinalizerDelegate {
   const raw_ref<Profile> profile_;
   IsolatedWebAppStorageLocation location_;
   std::optional<IntegrityBlockData> integrity_block_data_;
+  std::optional<IwaUpdateInfo> optional_update_info_;
 };
 
 }  // namespace
@@ -152,7 +162,8 @@ InstallIsolatedWebAppCommand::InstallIsolatedWebAppCommand(
     std::unique_ptr<ScopedProfileKeepAlive> optional_profile_keep_alive,
     base::OnceCallback<void(base::expected<InstallIsolatedWebAppCommandSuccess,
                                            InstallIsolatedWebAppCommandError>)>
-        callback)
+        callback,
+    std::optional<IwaUpdateInfo> optional_update_info)
     : WebAppCommand<AppLock,
                     base::expected<InstallIsolatedWebAppCommandSuccess,
                                    InstallIsolatedWebAppCommandError>>(
@@ -181,6 +192,7 @@ InstallIsolatedWebAppCommand::InstallIsolatedWebAppCommand(
       url_info_(url_info),
       expected_version_(expected_version),
       install_surface_(install_source.install_surface()),
+      optional_update_info_(std::move(optional_update_info)),
       install_source_(install_source.source()),
       profile_(profile),
       optional_keep_alive_(std::move(optional_keep_alive)),
@@ -363,6 +375,11 @@ void InstallIsolatedWebAppCommand::ProcessInstallInfoResultAndProceed(
             web_app_error =
                 webapps::InstallResultCode::kNotValidManifestForWebApp;
             break;
+          case PrepareInstallInfoJob::Error::kProfileWillBeDestroyed:
+            iwa_error = InstallIwaError::kCantLoadInstallUrl;
+            web_app_error = webapps::InstallResultCode::
+                kCancelledOnWebAppProviderShuttingDown;
+            break;
         }
         ReportFailure(iwa_error, web_app_error, failure.message);
       });
@@ -399,9 +416,9 @@ void InstallIsolatedWebAppCommand::FinalizeInstall(
 
   auto finalizer_delegate = std::make_unique<InstallIsolationDataDelegate>(
       profile(), *destination_storage_location_,
-      std::move(integrity_block_data_));
+      std::move(integrity_block_data_), std::move(optional_update_info_));
 
-  install_job_ = std::make_unique<FinalizeInstallJob>(
+  install_job_ = std::make_unique<FinalizeInstallOrUpdateJob>(
       profile(), lock_.get(), lock_.get(), std::move(install_info), options,
       std::move(finalizer_delegate));
 

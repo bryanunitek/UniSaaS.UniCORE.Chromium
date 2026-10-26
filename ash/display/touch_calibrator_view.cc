@@ -296,7 +296,6 @@ class HintBox : public views::View {
 
   // views::View:
   void OnPaint(gfx::Canvas* canvas) override;
-  void OnAccessibilityInitializing(ui::AXNodeData* data) override;
 
   void SetLabel(const std::u16string& text, const SkColor& color);
   void SetSubLabel(const std::u16string& text, const SkColor& color);
@@ -336,7 +335,7 @@ HintBox::HintBox(const gfx::Rect& bounds, int border_radius)
       base::i18n::IsRTL() ? views::BubbleBorder::RIGHT_CENTER
                           : views::BubbleBorder::LEFT_CENTER,
       views::BubbleBorder::NO_SHADOW);
-  border->SetColor(SK_ColorWHITE);
+  border->set_background_color(SK_ColorWHITE);
   SetBorder(std::move(border));
 
   arrow_width_ = (GetInsets().right() - GetInsets().left()) *
@@ -430,10 +429,6 @@ void HintBox::OnPaint(gfx::Canvas* canvas) {
   canvas->DrawStringRectWithFlags(sublabel_text_, sublabel_font_list_,
                                   sublabel_color_, sublabel_text_bounds_,
                                   gfx::Canvas::NO_ELLIPSIS);
-}
-void HintBox::OnAccessibilityInitializing(ui::AXNodeData* ax_data) {
-  views::View::OnAccessibilityInitializing(ax_data);
-  UpdateAccessibleName();
 }
 
 void HintBox::UpdateAccessibleName() {
@@ -590,6 +585,7 @@ void TouchCalibratorView::InitViewContents(bool is_for_touchscreen_mapping) {
                                kTapLabelWidth, kTouchPointViewHeight);
   touch_point_view_->SetVisible(false);
   touch_point_view_->SetPaintToLayer();
+  touch_point_view_->layer()->SetName("TouchCalibratorView:TouchPointView");
   touch_point_view_->layer()->SetFillsBoundsOpaquely(false);
   touch_point_view_->layer()->GetAnimator()->AddObserver(this);
   touch_point_view_->SetBackground(

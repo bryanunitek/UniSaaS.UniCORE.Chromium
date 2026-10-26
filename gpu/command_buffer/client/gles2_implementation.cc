@@ -59,6 +59,7 @@
 #include "gpu/command_buffer/common/swap_buffers_complete_params.h"
 #include "gpu/command_buffer/common/sync_token.h"
 #include "third_party/skia/include/core/SkAlphaType.h"
+#include "third_party/skia/include/core/SkColorType.h"
 #include "third_party/skia/include/gpu/ganesh/GrTypes.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
@@ -439,19 +440,6 @@ void GLES2Implementation::OnGpuControlLostContextMaybeReentrant() {
 void GLES2Implementation::OnGpuControlErrorMessage(const char* message,
                                                    int32_t id) {
   SendErrorMessage(message, id);
-}
-
-void GLES2Implementation::OnGpuSwitched() {
-  gpu_switched_ = true;
-}
-
-GLboolean GLES2Implementation::DidGpuSwitch(gl::GpuPreference* active_gpu) {
-  if (gpu_switched_) {
-    *active_gpu = gl::GpuPreference::kDefault;
-  }
-  GLboolean result = gpu_switched_ ? GL_TRUE : GL_FALSE;
-  gpu_switched_ = false;
-  return result;
 }
 
 bool GLES2Implementation::CanCopySharedImageDirectlyToGLTexture(
@@ -1617,18 +1605,6 @@ void GLES2Implementation::Finish() {
   GPU_CLIENT_SINGLE_THREAD_CHECK();
   flush_id_ = GenerateNextFlushId();
   FinishHelper();
-}
-
-void GLES2Implementation::ShallowFinishCHROMIUM() {
-  GPU_CLIENT_SINGLE_THREAD_CHECK();
-  TRACE_EVENT0("gpu", "GLES2::ShallowFinishCHROMIUM");
-  flush_id_ = GenerateNextFlushId();
-  // Flush our command buffer (tell the service to execute up to the flush cmd
-  // and don't return until it completes).
-  helper_->CommandBufferHelper::Finish();
-
-  if (aggressively_free_resources_)
-    FreeEverything();
 }
 
 void GLES2Implementation::FinishHelper() {
@@ -4649,12 +4625,16 @@ GLboolean GLES2Implementation::ReadbackARGBImagePixelsINTERNAL(
   if (!*readback_result) {
     return GL_FALSE;
   }
-  // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing into
-  // memory observed by JS at the same time.
   auto dst = UNSAFE_TODO(base::span(static_cast<uint8_t*>(pixels), dst_size));
   auto src = UNSAFE_TODO(
       base::span(static_cast<uint8_t*>(shm_address) + pixels_offset, dst_size));
-  base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
+  size_t min_row_bytes =
+      dst_width *
+      SkColorTypeBytesPerPixel(static_cast<SkColorType>(dst_sk_color_type));
+  RelaxedAtomicWriteMemcpyImageRowsSkippingPadding(
+      /*dst=*/dst, /*src=*/src, /*row_bytes=*/min_row_bytes,
+      /*height=*/dst_height, /*dst_stride=*/dst_row_bytes,
+      /*src_stride=*/dst_row_bytes);
   return GL_TRUE;
 }
 

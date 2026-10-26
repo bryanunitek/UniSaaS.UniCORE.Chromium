@@ -4,6 +4,7 @@
 
 #include "components/contextual_search/internal/test_composebox_query_controller.h"
 
+#include "base/base64.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/endpoint_fetcher/endpoint_fetcher.h"
 #include "components/lens/lens_features.h"
@@ -64,7 +65,8 @@ TestComposeboxQueryController::TestComposeboxQueryController(
                                 locale,
                                 template_url_service,
                                 variations_client,
-                                std::move(config_params)),
+                                std::move(config_params),
+                                base::DoNothing()),
       enable_cluster_info_ttl_(enable_cluster_info_ttl) {}
 TestComposeboxQueryController::~TestComposeboxQueryController() = default;
 
@@ -132,7 +134,16 @@ TestComposeboxQueryController::CreateEndpointFetcher(
       sent_interaction_requests_.push_back(sent_request);
     } else {
       sent_upload_requests_.push_back(sent_request);
+      if (disable_file_upload_response_) {
+        disable_response = true;
+      }
     }
+  }
+
+  if (lens::features::UseIdentityDelegationForLensComposeboxRequests() &&
+      !fake_server_response_string.empty()) {
+    fake_server_response_string =
+        base::Base64Encode(fake_server_response_string);
   }
 
   last_sent_cors_exempt_headers_.clear();
@@ -143,7 +154,12 @@ TestComposeboxQueryController::CreateEndpointFetcher(
   // Create the fake endpoint fetcher to return the fake response.
   EndpointResponse fake_endpoint_response;
   fake_endpoint_response.response = fake_server_response_string;
-  fake_endpoint_response.http_status_code = fake_server_response_code;
+  fake_endpoint_response.http_status_code =
+      is_cluster_info_request ? fake_server_response_code
+                              : fake_server_response_http_status_code_.value_or(
+                                    fake_server_response_code);
+  fake_endpoint_response.net_error_code =
+      is_cluster_info_request ? 0 : fake_server_response_net_error_code_;
 
   auto response = std::make_unique<FakeEndpointFetcher>(fake_endpoint_response);
   response->disable_responding_ = disable_response;
@@ -159,6 +175,10 @@ void TestComposeboxQueryController::ResetRequestClusterInfoState() {
     return;
   }
   ComposeboxQueryController::ResetRequestClusterInfoState();
+}
+
+bool TestComposeboxQueryController::IsGoogleChromeApiKeyUsed() const {
+  return is_google_chrome_api_key_used_;
 }
 
 }  // namespace contextual_search

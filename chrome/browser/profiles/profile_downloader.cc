@@ -45,7 +45,7 @@ constexpr char kAuthorizationHeader[] = "Bearer %s";
 
 ProfileDownloader::ProfileDownloader(ProfileDownloaderDelegate* delegate)
     : delegate_(delegate), identity_manager_(delegate_->GetIdentityManager()) {
-  DCHECK(delegate_);
+  CHECK(delegate_, base::NotFatalUntil::M162);
   identity_manager_observation_.Observe(identity_manager_.get());
 }
 
@@ -80,7 +80,7 @@ std::u16string ProfileDownloader::GetProfileGivenName() const {
 }
 
 std::string ProfileDownloader::GetProfileLocale() const {
-  return account_info_.locale;
+  return std::string(account_info_.GetLocale().value_or(""));
 }
 
 SkBitmap ProfileDownloader::GetProfilePicture() const {
@@ -132,12 +132,13 @@ void ProfileDownloader::StartFetchingOAuth2AccessToken() {
 
 ProfileDownloader::~ProfileDownloader() {
   oauth2_access_token_fetcher_.reset();
-  DCHECK(
-      identity_manager_observation_.IsObservingSource(identity_manager_.get()));
+  CHECK(
+      identity_manager_observation_.IsObservingSource(identity_manager_.get()),
+      base::NotFatalUntil::M162);
 }
 
 void ProfileDownloader::FetchImageData() {
-  DCHECK(account_info_.IsValid());
+  CHECK(account_info_.IsValid(), base::NotFatalUntil::M162);
 
   if (!delegate_->NeedsProfilePicture()) {
     VLOG(1) << "Skipping profile picture download";
@@ -294,7 +295,7 @@ void ProfileDownloader::OnAccessTokenFetchComplete(
 }
 
 void ProfileDownloader::OnExtendedAccountInfoUpdated(const AccountInfo& info) {
-  if (info.account_id == account_id_ && info.IsValid()) {
+  if (info.GetAccountId() == account_id_ && info.IsValid()) {
     account_info_ = info;
 
     // If the StartFetchingImage was called before we had valid info, the

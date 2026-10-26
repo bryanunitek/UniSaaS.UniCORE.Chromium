@@ -17,7 +17,6 @@
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/puma_histogram_functions.h"
 #include "base/metrics/user_metrics.h"
 #include "base/not_fatal_until.h"
 #include "base/strings/stringprintf.h"
@@ -185,29 +184,17 @@ void RecordChoiceScreenDefaultSearchProviderType(
   profile_metrics_service.UmaHistogramEnumeration(
       kSearchEngineChoiceScreenDefaultSearchEngineTypeHistogram, engine_type,
       SEARCH_ENGINE_MAX);
-  base::PumaHistogramEnumeration(
-      base::PumaType::kRc,
-      kPumaSearchEngineChoiceScreenDefaultSearchEngineTypeHistogram,
-      engine_type, SEARCH_ENGINE_MAX);
   if (choice_location == ChoiceMadeLocation::kChoiceScreen ||
       choice_location == ChoiceMadeLocation::kDeviceChoiceImport) {
     profile_metrics_service.UmaHistogramEnumeration(
         kSearchEngineChoiceScreenDefaultSearchEngineType2Histogram, engine_type,
         SEARCH_ENGINE_MAX);
-    base::PumaHistogramEnumeration(
-        base::PumaType::kRc,
-        kPumaSearchEngineChoiceScreenDefaultSearchEngineType2Histogram,
-        engine_type, SEARCH_ENGINE_MAX);
   }
 }
 
 void RecordChoiceScreenSelectedIndex(int selected_engine_index) {
   base::UmaHistogramExactLinear(
       kSearchEngineChoiceScreenSelectedEngineIndexHistogram,
-      selected_engine_index,
-      TemplateURLPrepopulateData::kMaxEeaPrepopulatedEngines);
-  base::PumaHistogramExactLinear(
-      base::PumaType::kRc, kPumaSearchChoiceScreenSelectedEngineIndexHistogram,
       selected_engine_index,
       TemplateURLPrepopulateData::kMaxEeaPrepopulatedEngines);
 }
@@ -308,8 +295,8 @@ void ClearSearchEngineChoiceInvalidation(PrefService& prefs) {
 }
 
 bool IsSearchEngineChoiceInvalid(const PrefService& prefs) {
-  if (!base::FeatureList::IsEnabled(
-          switches::kInvalidateSearchEngineChoiceOnDeviceRestoreDetection)) {
+  if (!switches::
+          IsInvalidateSearchEngineChoiceOnDeviceRestoreDetectionEnabled()) {
     // Ensure that we never consider a search engine choice invalid when the
     // feature is disabled. This could happen if a user changes experiment
     // groups for example.
@@ -340,7 +327,7 @@ void SetChoiceCompletionMetadata(PrefService& prefs,
                                  ChoiceCompletionMetadata metadata) {
   // Verify that any invalidation has already been cleared. Otherwise the
   // completion will be ignored.
-  CHECK(!IsSearchEngineChoiceInvalid(prefs), base::NotFatalUntil::M140);
+  CHECK(!IsSearchEngineChoiceInvalid(prefs));
 
   prefs.SetInt64(prefs::kDefaultSearchProviderChoiceScreenCompletionTimestamp,
                  metadata.timestamp.ToDeltaSinceWindowsEpoch().InSeconds());

@@ -9,8 +9,6 @@ import static org.junit.Assert.assertNull;
 
 import android.os.SystemClock;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -22,9 +20,7 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
 
 /** JUnit tests for {@link AnimationPerformanceTracker}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowSystemClock.class})
+@Config(shadows = {ShadowSystemClock.class})
 public class AnimationPerformanceTrackerUnitTest implements AnimationPerformanceTracker.Listener {
     private static final long INITIAL_TIME = 1000;
     private static final long INVALID_TIME = -1L;
@@ -46,7 +42,6 @@ public class AnimationPerformanceTrackerUnitTest implements AnimationPerformance
     }
 
     @Test
-    @SmallTest
     public void testStartEndNoUpdate() {
         assertNull(mMetrics);
 
@@ -68,7 +63,6 @@ public class AnimationPerformanceTrackerUnitTest implements AnimationPerformance
     }
 
     @Test
-    @SmallTest
     public void testStartUpdateEnd() {
         assertNull(mMetrics);
 

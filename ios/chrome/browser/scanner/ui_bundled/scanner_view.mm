@@ -51,6 +51,8 @@ const CGFloat kFlashDuration = 0.5;
   // The constraint relating the size of the `_previewOverlay` to the height of
   // te ScannerView.
   NSLayoutConstraint* _overlayHeightConstraint;
+  // The top constraint positioning `_captionContainer` below the viewport.
+  NSLayoutConstraint* _captionContainerTopConstraint;
 }
 
 @end
@@ -67,8 +69,10 @@ const CGFloat kFlashDuration = 0.5;
   }
   DCHECK(delegate);
   _delegate = delegate;
-  [self registerForTraitChanges:@[ UITraitVerticalSizeClass.class ]
-                     withAction:@selector(maybeHideCaptions)];
+  [self
+      registerForTraitChanges:
+          @[ UITraitHorizontalSizeClass.class, UITraitVerticalSizeClass.class ]
+                   withAction:@selector(updateForTraitChanges)];
 
   return self;
 }
@@ -209,8 +213,7 @@ const CGFloat kFlashDuration = 0.5;
 
 // Adds the subviews.
 - (void)addSubviews {
-  UIImage* closeIcon =
-      DefaultSymbolWithPointSize(kXMarkSymbol, kSymbolActionPointSize);
+  UIImage* closeIcon = SymbolWithPointSize(SymbolXMark, kSymbolActionPointSize);
   UIBarButtonItem* close =
       [[UIBarButtonItem alloc] initWithImage:closeIcon
                                        style:UIBarButtonItemStylePlain
@@ -245,8 +248,7 @@ const CGFloat kFlashDuration = 0.5;
   toolbar.translatesAutoresizingMaskIntoConstraints = NO;
   [self addSubview:toolbar];
 
-  AddSameConstraintsToSides(self, toolbar,
-                            LayoutSides::kLeading | LayoutSides::kTrailing);
+  AddSameConstraintsToSides(self, toolbar, LayoutSides::kHorizontal);
   [toolbar.bottomAnchor
       constraintEqualToAnchor:self.safeAreaLayoutGuide.bottomAnchor]
       .active = YES;
@@ -278,11 +280,13 @@ const CGFloat kFlashDuration = 0.5;
   _captionContainer.translatesAutoresizingMaskIntoConstraints = NO;
   viewportCaption.translatesAutoresizingMaskIntoConstraints = NO;
 
+  _captionContainerTopConstraint = [_captionContainer.topAnchor
+      constraintEqualToAnchor:self.centerYAnchor
+                     constant:self.viewportSize.height / 2 +
+                              kViewportCaptionVerticalPadding];
+
   [NSLayoutConstraint activateConstraints:@[
-    [_captionContainer.topAnchor
-        constraintEqualToAnchor:self.centerYAnchor
-                       constant:self.viewportSize.height / 2 +
-                                kViewportCaptionVerticalPadding],
+    _captionContainerTopConstraint,
     [_captionContainer.bottomAnchor constraintEqualToAnchor:toolbar.topAnchor],
     [_captionContainer.centerXAnchor
         constraintEqualToAnchor:_previewOverlay.centerXAnchor],
@@ -354,6 +358,16 @@ const CGFloat kFlashDuration = 0.5;
         constraintEqualToAnchor:[self centerYAnchor]],
     _overlaySquareConstraint, _overlayWidthConstraint, _overlayHeightConstraint
   ]];
+}
+
+// Updates caption visibility and viewport size when size class traits change.
+- (void)updateForTraitChanges {
+  [self maybeHideCaptions];
+  CGSize viewportSize = [self viewportSize];
+  _previewView.viewportSize = viewportSize;
+  _previewOverlay.viewportSize = viewportSize;
+  _captionContainerTopConstraint.constant =
+      viewportSize.height / 2 + kViewportCaptionVerticalPadding;
 }
 
 // Hides the UIScrollView that contains the caption if the UI's vertical size is

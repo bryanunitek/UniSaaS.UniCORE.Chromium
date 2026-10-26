@@ -6,6 +6,7 @@
 #define CONTENT_BROWSER_RENDERER_HOST_IPC_UTILS_H_
 
 #include "base/memory/scoped_refptr.h"
+#include "content/common/content_export.h"
 #include "content/common/frame.mojom.h"
 #include "content/public/browser/render_process_host.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -59,6 +60,24 @@ bool VerifyBeginNavigationCommonParams(
     blink::mojom::CommonNavigationParams* common_params,
     std::optional<blink::LocalFrameToken>& initiator_frame_token);
 
+// Verifies that `client_side_redirect_url` in BeginNavigationParams can be
+// accessed by `current_rfh`'s process.
+//
+// FilterURL is run on `client_side_redirect_url` as a side effect (rewriting
+// any unrequestable or invalid URLs to about:blank#blocked).
+//
+// Returns true if `client_side_redirect_url` is empty, was filtered (and
+// rewritten to about:blank#blocked), or its origin is hosted by `current_rfh`'s
+// process.
+//
+// Terminates `current_rfh`'s process and returns false if
+// `client_side_redirect_url` attempts to claim an origin not hosted by the
+// process.
+//
+// This function has to be called on the UI thread.
+bool VerifyClientSideRedirectUrl(const RenderFrameHostImpl& current_rfh,
+                                 GURL* client_side_redirect_url);
+
 // Verifies that the CreateNewWindowParams are valid and can be accessed by
 // `current_rfh`'s process.
 //
@@ -68,8 +87,9 @@ bool VerifyBeginNavigationCommonParams(
 // CreateNewWindowParams are invalid.
 //
 // This function has to be called on the UI thread.
-bool VerifyCreateNewWindowParams(const RenderFrameHostImpl& current_rfh,
-                                 const mojom::CreateNewWindowParams& params);
+CONTENT_EXPORT bool VerifyCreateNewWindowParams(
+    const RenderFrameHostImpl& current_rfh,
+    const mojom::CreateNewWindowParams& params);
 
 // Verify that the initiator frame identified by `initiator_frame_token` and
 // `initiator_process_id` can navigate `current_rfh`.

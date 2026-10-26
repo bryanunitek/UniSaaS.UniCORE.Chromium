@@ -8,6 +8,7 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/sessions/core/session_id.h"
 
 namespace tabs_api::tab_strip_model {
 
@@ -38,7 +39,8 @@ TabStripModelInjector::TabStripModelInjector(
       browser_adapter_(
           std::make_unique<BrowserAdapterImpl>(browser_window_interface)),
       translator_(*tab_strip_model_adapter_),
-      event_bridge_(*tab_strip_model_adapter_) {}
+      event_bridge_(*tab_strip_model_adapter_),
+      browser_event_bridge_(*browser_window_interface, event_bridge_) {}
 
 TabStripModelInjector::~TabStripModelInjector() = default;
 

@@ -4,36 +4,19 @@
 
 #include "chrome/browser/contextual_tasks/contextual_tasks_eligibility_manager.h"
 
+#include "chrome/browser/contextual_tasks/contextual_tasks_ui_service.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_ui_service_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/contextual_search/contextual_search_service.h"
 #include "components/contextual_search/pref_names.h"
 #include "components/contextual_tasks/public/account_utils.h"
 #include "components/contextual_tasks/public/features.h"
+#include "components/lens/lens_features.h"
 #include "components/omnibox/browser/aim_eligibility_service.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 
 namespace contextual_tasks {
-
-namespace {
-
-bool IsSignedInToBrowserWithValidCredentials(
-    signin::IdentityManager* identity_manager) {
-  if (!identity_manager) {
-    return false;
-  }
-
-  if (!identity_manager->HasPrimaryAccountWithRefreshToken(
-          signin::ConsentLevel::kSignin)) {
-    return false;
-  }
-
-  const CoreAccountId primary_account =
-      identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
-  return !identity_manager->HasAccountWithRefreshTokenInPersistentErrorState(
-      primary_account);
-}
-
-}  // namespace
 
 ContextualTasksEligibilityManager::ContextualTasksEligibilityManager(
     PrefService* pref_service,
@@ -111,7 +94,7 @@ bool ContextualTasksEligibilityManager::IsEligible() const {
 }
 
 bool ContextualTasksEligibilityManager::IsEligibleWithoutIdentity() const {
-  if (!base::FeatureList::IsEnabled(kContextualTasks)) {
+  if (!contextual_tasks::IsContextualTasksUIEnabled()) {
     return false;
   }
 
@@ -119,17 +102,59 @@ bool ContextualTasksEligibilityManager::IsEligibleWithoutIdentity() const {
     return false;
   }
 
-  if (!aim_eligibility_service_->IsCobrowseEligible()) {
-    return false;
-  }
-
-  if (pref_service_ &&
+  // Only check if context sharing is enabled if the panel container is not
+  // being initialized without context (i.e. ContextualTasks feature is
+  // enabled).
+  if (base::FeatureList::IsEnabled(kContextualTasks) && pref_service_ &&
       !contextual_search::ContextualSearchService::IsContextSharingEnabled(
           pref_service_)) {
     return false;
   }
 
   return true;
+}
+
+// static
+ContextualTasksEligibilityManager*
+ContextualTasksEligibilityManager::GetForProfile(Profile* profile) {
+  if (!profile) {
+    return nullptr;
+  }
+
+  ContextualTasksUiService* const ui_service =
+      ContextualTasksUiServiceFactory::GetForBrowserContext(profile);
+  if (!ui_service) {
+    return nullptr;
+  }
+
+  return ui_service->GetEligibilityManager();
+}
+
+bool ContextualTasksEligibilityManager::IsSidePanelAvailable() const {
+  if (!contextual_tasks::IsContextualTasksUIEnabled()) {
+    return false;
+  }
+
+  if (base::FeatureList::IsEnabled(
+          kContextualTasksForceEntryPointEligibility)) {
+    return true;
+  }
+
+  // Only check if context sharing is enabled if the panel container is not
+  // being initialized without context (i.e. ContextualTasks feature is
+  // enabled).
+  if (base::FeatureList::IsEnabled(kContextualTasks) && pref_service_ &&
+      !contextual_search::ContextualSearchService::IsContextSharingEnabled(
+          pref_service_)) {
+    return false;
+  }
+
+  if (IsSignedInToBrowserWithValidCredentials(identity_manager_) &&
+      contextual_tasks::CookieJarContainsPrimaryAccount(identity_manager_)) {
+    return true;
+  }
+
+  return lens::features::IsLensSidePanelUnificationAllowSignedOut();
 }
 
 base::CallbackListSubscription

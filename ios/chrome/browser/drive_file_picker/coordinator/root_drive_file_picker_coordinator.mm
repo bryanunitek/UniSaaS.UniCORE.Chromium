@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/drive_file_picker/coordinator/root_drive_file_picker_coordinator.h"
 
 #import <memory>
+#import <utility>
 
 #import "base/memory/raw_ptr.h"
 #import "base/memory/weak_ptr.h"
@@ -17,6 +18,7 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 #import "ios/chrome/browser/composebox/shared/coordinator/composebox_picker_drive_result.h"
 #import "ios/chrome/browser/composebox/shared/coordinator/composebox_picker_presenter.h"
+#import "ios/chrome/browser/composebox/shared/ui/composebox_snackbar_presenter.h"
 #import "ios/chrome/browser/drive/model/drive_list.h"
 #import "ios/chrome/browser/drive/model/drive_service_factory.h"
 #import "ios/chrome/browser/drive_file_picker/coordinator/browse_drive_file_picker_coordinator.h"
@@ -48,7 +50,6 @@
 #import "ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "services/network/public/cpp/shared_url_loader_factory.h"
-#import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
 @interface RootDriveFilePickerCoordinator () <
@@ -109,6 +110,8 @@ void ConfirmChangeProfileWithCompletion(
   UITapGestureRecognizer* _tapToDismissGestureRecognizer;
   // Whether the coordinator is launched from/for the Composebox.
   BOOL _forComposebox;
+  // Whether items have been picked and submitted.
+  BOOL _itemsPicked;
   // Alert controller used to confirm profile switching.
   UIAlertController* _alertController;
 }
@@ -157,6 +160,7 @@ void ConfirmChangeProfileWithCompletion(
   _mediator.accountManagerService =
       ChromeAccountManagerServiceFactory::GetForProfile(profile);
   _mediator.imageFetcher = _imageFetcher.get();
+  _mediator.maxAttachmentCount = _maxAttachmentCount;
   _metricsHelper = [[DriveFilePickerMetricsHelper alloc] init];
   if (base::FeatureList::IsEnabled(kIOSChooseFromDriveSignedOut)) {
     signin::IdentityManager* identity_manager =
@@ -178,6 +182,10 @@ void ConfirmChangeProfileWithCompletion(
 }
 
 - (void)stop {
+  if (!_itemsPicked && self.responseHandler) {
+    [self.responseHandler driveFilePickerDidCancel];
+    self.responseHandler = nil;
+  }
   [self stopAddAccountCoordinator];
   [_alertController dismissViewControllerAnimated:NO completion:nil];
   _alertController = nil;
@@ -259,6 +267,8 @@ void ConfirmChangeProfileWithCompletion(
                              metricsHelper:_metricsHelper];
   _childBrowseCoordinator.delegate = self;
   _childBrowseCoordinator.forComposebox = _forComposebox;
+  _childBrowseCoordinator.maxAttachmentCount = _maxAttachmentCount;
+  _childBrowseCoordinator.snackbarPresenter = _snackbarPresenter;
   [_childBrowseCoordinator start];
 }
 
@@ -284,16 +294,10 @@ void ConfirmChangeProfileWithCompletion(
 }
 
 - (void)mediator:(DriveFilePickerMediator*)mediator
-    didActivateSearch:(BOOL)searchActivated {
-  _navigationController.sheetPresentationController.prefersGrabberVisible =
-      !searchActivated &&
-      (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_PHONE);
-}
-
-- (void)mediator:(DriveFilePickerMediator*)mediator
     didPickDriveItems:(const std::vector<DriveItem>&)driveItems {
   CHECK(_forComposebox);
-  CHECK(self.composeboxDelegate);
+  CHECK(self.responseHandler);
+  _itemsPicked = YES;
 
   NSMutableArray<ComposeboxPickerDriveResult*>* results =
       [NSMutableArray array];
@@ -303,15 +307,18 @@ void ConfirmChangeProfileWithCompletion(
     result.identifier = item.identifier;
     result.fileName = item.name;
     result.mimeType = item.mime_type;
+    UIImage* fetchedIcon =
+        _imageFetcher ? _imageFetcher->GetFetchedImage(item) : nil;
+    result.icon = fetchedIcon ?: item.GetPlaceholderImage();
     [results addObject:result];
   }
-  // Pass nil for the presenter because this coordinator manages its own
-  // asynchronous dismissal, and the presenter reference is unused by the
-  // delegate.
-  [self.composeboxDelegate composeboxPickerPresenter:nil
-                                   didPickDriveItems:results];
+  [self.responseHandler driveFilePickerDidPickItems:results];
 
   [self stopAnimated];
+}
+
+- (void)mediatorDidReachAttachmentLimit:(DriveFilePickerMediator*)mediator {
+  [_snackbarPresenter showSnackbarForAttachmentLimit:_maxAttachmentCount];
 }
 
 #pragma mark - BrowseDriveFilePickerCoordinatorDelegate
@@ -367,24 +374,11 @@ void ConfirmChangeProfileWithCompletion(
 
   _navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
   _navigationController.presentationController.delegate = self;
-  if (ui::GetDeviceFormFactor() ==
-      ui::DeviceFormFactor::DEVICE_FORM_FACTOR_PHONE) {
-    _navigationController.sheetPresentationController.prefersGrabberVisible =
-        YES;
-    // TODO(crbug.com/441764702): Add `mediumDetent` back.
-    _navigationController.sheetPresentationController.detents = @[
-      [UISheetPresentationControllerDetent largeDetent],
-    ];
-    _navigationController.sheetPresentationController.selectedDetentIdentifier =
-        UISheetPresentationControllerDetentIdentifierLarge;
-  } else {
-    _navigationController.sheetPresentationController.prefersGrabberVisible =
-        NO;
-    _navigationController.sheetPresentationController.detents =
-        @[ [UISheetPresentationControllerDetent largeDetent] ];
-    _navigationController.sheetPresentationController.selectedDetentIdentifier =
-        UISheetPresentationControllerDetentIdentifierLarge;
-  }
+  // TODO(crbug.com/441764702): Add `mediumDetent` back.
+  _navigationController.sheetPresentationController.detents =
+      @[ [UISheetPresentationControllerDetent largeDetent] ];
+  _navigationController.sheetPresentationController.selectedDetentIdentifier =
+      UISheetPresentationControllerDetentIdentifierLarge;
 
   [self.baseViewController presentViewController:_navigationController
                                         animated:YES
@@ -425,13 +419,12 @@ void ConfirmChangeProfileWithCompletion(
 }
 
 - (void)addAccountCompletionWithCoordinator:(SigninCoordinator*)coordinator
-                                     result:(SigninCoordinatorResult)result
-                         completionIdentity:
-                             (id<SystemIdentity>)completionIdentity {
-  CHECK_EQ(_addAccountCoordinator, coordinator, base::NotFatalUntil::M151);
-  if (result == SigninCoordinatorResultSuccess) {
-    CHECK(completionIdentity);
-    [self addAndSelectNewIdentity:completionIdentity];
+                                     result:(SigninCoordinatorResultOrIdentity)
+                                                result {
+  CHECK_EQ(_addAccountCoordinator, coordinator);
+  if (result.has_value()) {
+    CHECK(result.value());
+    [self addAndSelectNewIdentity:result.value()];
   } else {
     [self reportAddingIdentityFailure];
   }
@@ -458,11 +451,10 @@ void ConfirmChangeProfileWithCompletion(
                              continuationProvider:
                                  DoNothingContinuationProvider()];
   _addAccountCoordinator.signinCompletion =
-      ^(SigninCoordinator* coordinator, SigninCoordinatorResult result,
-        id<SystemIdentity> completionIdentity) {
+      ^(SigninCoordinator* coordinator,
+        SigninCoordinatorResultOrIdentity result) {
         [weakSelf addAccountCompletionWithCoordinator:coordinator
-                                               result:result
-                                   completionIdentity:completionIdentity];
+                                               result:std::move(result)];
       };
   [_addAccountCoordinator start];
 }
@@ -480,9 +472,8 @@ void ConfirmChangeProfileWithCompletion(
             promoAction:signin_metrics::PromoAction::
                             PROMO_ACTION_NO_SIGNIN_PROMO
              completion:^(SigninCoordinator* coordinator,
-                          SigninCoordinatorResult result,
-                          id<SystemIdentity> identity) {
-               [weakSelf handleSignInResult:result identity:identity];
+                          SigninCoordinatorResultOrIdentity result) {
+               [weakSelf handleSignInResult:std::move(result)];
              }];
   command.confirmChangeProfile = ^(void (^completion)(BOOL)) {
     ConfirmChangeProfileWithCompletion(weakSelf, completion);
@@ -494,12 +485,11 @@ void ConfirmChangeProfileWithCompletion(
   [_signinCoordinator start];
 }
 
-- (void)handleSignInResult:(SigninCoordinatorResult)result
-                  identity:(id<SystemIdentity>)identity {
+- (void)handleSignInResult:(SigninCoordinatorResultOrIdentity)result {
   [_signinCoordinator stop];
   _signinCoordinator = nil;
   [_metricsHelper reportDriveSignInResult:result];
-  if (result == SigninCoordinatorResultSuccess) {
+  if (result.has_value()) {
     [self startRootFilePicker];
     return;
   }
@@ -511,16 +501,18 @@ void ConfirmChangeProfileWithCompletion(
 // Shows an alert letting the user know that switching profiles will cancel the
 // current file picker operation and asking them to confirm.
 - (void)confirmChangeProfileWithCompletion:(void (^)(BOOL))completion {
-  // TODO(crbug.com/484897335): Replace placeholders with the localized string.
-  NSString* message = @"THIS_IS_A_PLACEHOLDER";
   if (_alertController) {
     [_alertController dismissViewControllerAnimated:NO completion:nil];
     _alertController = nil;
   }
-  _alertController =
-      [UIAlertController alertControllerWithTitle:@"THIS_IS_A_PLACEHOLDER"
-                                          message:message
-                                   preferredStyle:UIAlertControllerStyleAlert];
+  _alertController = [UIAlertController
+      alertControllerWithTitle:
+          l10n_util::GetNSString(
+              IDS_IOS_CHOOSE_FROM_DRIVE_CONFIRM_CHANGE_PROFILE_TITLE)
+                       message:
+                           l10n_util::GetNSString(
+                               IDS_IOS_CHOOSE_FROM_DRIVE_CONFIRM_CHANGE_PROFILE_MESSAGE)
+                preferredStyle:UIAlertControllerStyleAlert];
   __weak __typeof(self) weakSelf = self;
   UIAlertAction* cancelAction = [UIAlertAction
       actionWithTitle:l10n_util::GetNSString(IDS_CANCEL)
@@ -528,9 +520,10 @@ void ConfirmChangeProfileWithCompletion(
               handler:^(UIAlertAction* action) {
                 HandleConfirmChangeProfile(weakSelf, completion, NO);
               }];
-  // TODO(crbug.com/484897335): Replace placeholder with the localized string.
   UIAlertAction* confirmChangeProfileAction = [UIAlertAction
-      actionWithTitle:@"THIS_IS_A_PLACEHOLDER"
+      actionWithTitle:
+          l10n_util::GetNSString(
+              IDS_IOS_CHOOSE_FROM_DRIVE_CONFIRM_CHANGE_PROFILE_BUTTON)
                 style:UIAlertActionStyleDestructive
               handler:^(UIAlertAction* action) {
                 HandleConfirmChangeProfile(weakSelf, completion, YES);
@@ -552,6 +545,11 @@ void ConfirmChangeProfileWithCompletion(
                                          completion(proceed);
                                        }];
   _alertController = nil;
+  if (!proceed) {
+    id<DriveFilePickerCommands> driveFilePickerHandler = HandlerForProtocol(
+        self.browser->GetCommandDispatcher(), DriveFilePickerCommands);
+    [driveFilePickerHandler hideDriveFilePicker];
+  }
 }
 
 // Called when user interrupted a download/upload.
@@ -602,7 +600,8 @@ void ConfirmChangeProfileWithCompletion(
     [weakSelf userInterrupted];
   };
   UIAlertController* discardSelectionAlertController =
-      DiscardSelectionAlertController(discardSelectionBlock, nil);
+      DiscardSelectionAlertController(discardSelectionBlock, nil,
+                                      self.baseViewController.traitCollection);
   [_navigationController presentViewController:discardSelectionAlertController
                                       animated:YES
                                     completion:nil];

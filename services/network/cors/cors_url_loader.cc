@@ -12,18 +12,24 @@
 #include "base/containers/flat_set.h"
 #include "base/dcheck_is_on.h"
 #include "base/debug/crash_logging.h"
-#include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/types/optional_util.h"
 #include "net/base/load_flags.h"
 #include "net/base/request_priority.h"
+#include "net/cert/cert_status_flags.h"
 #include "net/cookies/cookie_partition_key.h"
 #include "net/cookies/cookie_setting_override.h"
 #include "net/cookies/cookie_util.h"
+#include "net/disk_cache/buildflags.h"
+#include "net/disk_cache/disk_cache.h"
+#include "net/http/http_cache.h"
 #include "net/http/http_log_util.h"
+#include "net/http/http_request_headers.h"
+#include "net/http/http_response_info.h"
 #include "net/http/http_status_code.h"
 #include "net/http/http_util.h"
 #include "net/log/net_log_util.h"
@@ -36,13 +42,16 @@
 #include "services/network/cors/cors_util.h"
 #include "services/network/cors/preflight_controller.h"
 #include "services/network/network_context.h"
+#include "services/network/pervasive_resources/shared_resource_checker.h"
 #include "services/network/public/cpp/cors/cors.h"
 #include "services/network/public/cpp/cors/origin_access_list.h"
+#include "services/network/public/cpp/cross_origin_resource_policy.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/header_util.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "services/network/public/cpp/record_ontransfersizeupdate_utils.h"
 #include "services/network/public/cpp/request_mode.h"
+#include "services/network/public/cpp/shared_http_cache_util.h"
 #include "services/network/public/cpp/timing_allow_origin_parser.h"
 #include "services/network/public/mojom/device_bound_sessions.mojom-shared.h"
 #include "services/network/public/mojom/devtools_observer.mojom.h"
@@ -57,7 +66,6 @@
 #include "services/network/shared_dictionary/shared_dictionary_manager.h"
 #include "services/network/shared_dictionary/shared_dictionary_storage.h"
 #include "services/network/shared_dictionary/shared_dictionary_writer.h"
-#include "services/network/shared_storage/shared_storage_header_utils.h"
 #include "services/network/trust_tokens/trust_token_operation_metrics_recorder.h"
 #include "services/network/url_loader.h"
 #include "services/network/url_loader_factory.h"
@@ -75,6 +83,14 @@ enum class PreflightRequiredReason {
   kDisallowedHeader
 };
 
+bool IsRevalidatingRequest(const ResourceRequest& request) {
+  if (base::FeatureList::IsEnabled(features::kSafeRevalidation)) {
+    return request.revalidation_etag.has_value() ||
+           request.revalidation_last_modified.has_value();
+  }
+  return request.is_revalidating;
+}
+
 // Returns std::nullopt when a preflight isn't needed. Otherwise returns the
 // reason why a preflight is needed.
 std::optional<PreflightRequiredReason> NeedsPreflight(
@@ -86,22 +102,16 @@ std::optional<PreflightRequiredReason> NeedsPreflight(
     return PreflightRequiredReason::kCorsWithForcedPreflightMode;
   }
 
-  if (!base::FeatureList::IsEnabled(features::kIgnoreCorsPreflightPolicy) &&
-      request.cors_preflight_policy ==
-          mojom::CorsPreflightPolicy::kPreventPreflight) {
-    return std::nullopt;
-  }
-
   if (!IsCorsSafelistedMethod(request.method))
     return PreflightRequiredReason::kDisallowedMethod;
 
-  bool is_ad_auction_trusted_signals_request =
-      request.trusted_params &&
-      request.trusted_params->is_ad_auction_trusted_signals_request;
+  const bool is_revalidating_for_headers =
+      base::FeatureList::IsEnabled(features::kSafeRevalidation)
+          ? false
+          : request.is_revalidating;
 
   if (!CorsUnsafeNotForbiddenRequestHeaderNames(
-           request.headers.GetHeaderVector(), request.is_revalidating,
-           is_ad_auction_trusted_signals_request)
+           request.headers.GetHeaderVector(), is_revalidating_for_headers)
            .empty()) {
     return PreflightRequiredReason::kDisallowedHeader;
   }
@@ -283,6 +293,112 @@ void RecordNetworkLoaderCompletionTime(const char* source,
 
 constexpr const char kTimingAllowOrigin[] = "Timing-Allow-Origin";
 
+#if BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
+// Converts a URLResponseHead to net::HttpResponseInfo if the response is
+// eligible to be cached in the Renderer Accessible HTTP Cache.
+std::unique_ptr<net::HttpResponseInfo>
+MaybeCreateHttpResponseInfoForRendererAccessibleCache(
+    const net::IsolationInfo& isolation_info,
+    const mojom::URLResponseHead& response_head,
+    const ResourceRequest& request,
+    const GURL& last_response_url,
+    int redirect_count,
+    SharedResourceChecker& shared_resource_checker) {
+  // Redirected responses must not be cached in the Renderer Accessible HTTP
+  // Cache. Redirects involve multi-hop CORS checks, Timing-Allow-Origin
+  // propagation, tainted origin flags, and URL changes (request.url becomes the
+  // target URL rather than the initial requested URL), which are not preserved
+  // or validated when serving directly from the shared cache.
+  if (redirect_count > 0) {
+    return nullptr;
+  }
+
+  const net::NetworkIsolationKey& network_isolation_key =
+      isolation_info.network_isolation_key();
+
+  // Do not cache responses with a transient NetworkIsolationKey in the Renderer
+  // Accessible HTTP Cache, as transient keys have no persistent cache key
+  // string and caching them could cause cross-site leaks.
+  if (network_isolation_key.IsTransient()) {
+    return nullptr;
+  }
+
+  if (!IsRequestEligibleForSharedHttpCacheWrite(request)) {
+    return nullptr;
+  }
+
+  CHECK(response_head.headers);
+
+  // Only 200 OK complete responses can be cached in the Renderer Accessible
+  // HTTP Cache. Other response codes (e.g. 206 Partial Content, 204 No
+  // Content) cannot be cached.
+  if (response_head.headers->response_code() != net::HTTP_OK ||
+      response_head.has_range_requested) {
+    return nullptr;
+  }
+
+  const auto lifetimes =
+      response_head.headers->GetFreshnessLifetimes(response_head.response_time);
+  if (lifetimes.freshness.is_zero() && lifetimes.staleness.is_zero()) {
+    // Responses that cannot be served fresh or stale-while-revalidate without
+    // server revalidation should not be moved to the Renderer Accessible HTTP
+    // Cache, because the renderer cannot perform revalidation directly.
+    return nullptr;
+  }
+
+  // Responses with an `Access-Control-Allow-Origin` header whose value is not
+  // "*" must not be stored in the Renderer Accessible HTTP Cache, because they
+  // require origin-level isolation rather than site-level isolation.
+  if (std::optional<std::string> acao =
+          response_head.headers->GetNormalizedHeader(
+              header_names::kAccessControlAllowOrigin);
+      acao && *acao != "*") {
+    return nullptr;
+  }
+
+  // Responses with `Cross-Origin-Resource-Policy: same-origin` must not be
+  // stored in the site-level partitioned Renderer Accessible HTTP Cache,
+  // because they restrict resource access strictly to the same origin, whereas
+  // the Renderer Accessible HTTP Cache is isolated at the site level.
+  if (std::optional<std::string> corp =
+          response_head.headers->GetNormalizedHeader(
+              CrossOriginResourcePolicy::kHeaderName);
+      corp && base::EqualsCaseInsensitiveASCII(*corp, "same-origin")) {
+    return nullptr;
+  }
+
+  // Pervasive resources that use the cross-partition shared HTTP cache (via
+  // kCacheSharingForPervasiveResources) should not be moved to the partitioned
+  // Renderer Accessible HTTP Cache.
+  if (shared_resource_checker.IsSharedResource(
+          request, isolation_info.frame_origin(),
+          net::CookiePartitionKey::FromNetworkIsolationKey(
+              isolation_info.network_isolation_key(),
+              isolation_info.site_for_cookies(),
+              net::SchemefulSite(last_response_url),
+              /*main_frame_navigation=*/false))) {
+    return nullptr;
+  }
+
+  auto response_info = std::make_unique<net::HttpResponseInfo>();
+  response_info->headers = response_head.headers;
+  if (response_head.ssl_info.has_value()) {
+    response_info->ssl_info = *response_head.ssl_info;
+    DCHECK(response_info->ssl_info.is_valid());
+  }
+  response_info->was_fetched_via_spdy = response_head.was_fetched_via_spdy;
+  response_info->was_alpn_negotiated = response_head.was_alpn_negotiated;
+  response_info->alpn_negotiated_protocol =
+      response_head.alpn_negotiated_protocol;
+  response_info->connection_info = response_head.connection_info;
+  response_info->remote_endpoint = response_head.remote_endpoint;
+  response_info->request_time = response_head.request_time;
+  response_info->response_time = response_head.response_time;
+  response_info->original_response_time = response_head.original_response_time;
+  return response_info;
+}
+#endif  // BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
+
 }  // namespace
 
 CorsURLLoader::CorsURLLoader(
@@ -294,6 +410,7 @@ CorsURLLoader::CorsURLLoader(
     ResourceRequest resource_request,
     bool ignore_isolated_world_origin,
     bool skip_cors_enabled_scheme_check,
+    bool renderer_accessible_http_cache_write_enabled,
     mojo::PendingRemote<mojom::URLLoaderClient> client,
     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
     mojom::URLLoaderFactory* network_loader_factory,
@@ -334,6 +451,8 @@ CorsURLLoader::CorsURLLoader(
       net_log_(net::NetLogWithSource::Make(net::NetLog::Get(),
                                            net::NetLogSourceType::URL_REQUEST)),
       context_(context),
+      renderer_accessible_http_cache_write_enabled_(
+          renderer_accessible_http_cache_write_enabled),
       network_restrictions_id_(network_restrictions_id),
       shared_dictionary_storage_(std::move(shared_dictionary_storage)),
       shared_dictionary_observer_(shared_dictionary_observer),
@@ -394,8 +513,10 @@ CorsURLLoader::CorsURLLoader(
 CorsURLLoader::~CorsURLLoader() {
   TRACE_EVENT("loading", "CorsURLLoader::~CorsURLLoader",
               net::NetLogWithSourceToFlow(net_log_));
-  // Reset pipes first to ignore possible subsequent callback invocations
-  // caused by `network_loader_`
+  // Must cancel an in-flight preflight before disconnecting pipes, then
+  // disconnect `network_client_receiver_` before `network_loader_` is
+  // destroyed to drop any subsequent callbacks.
+  preflight_check_handle_.reset();
   network_client_receiver_.reset();
 }
 
@@ -442,9 +563,29 @@ void CorsURLLoader::FollowRedirect(
     return;
   }
 
-  if (new_url && (new_url->DeprecatedGetOriginAsURL() !=
-                  deferred_redirect_url_->DeprecatedGetOriginAsURL())) {
-    NOTREACHED() << "Can only change the URL within the same origin.";
+  // Note: Calling HandleComplete() before mojo::ReportBadMessage() is
+  // intentional and required. HandleComplete() notifies forwarding_client_
+  // of completion and cleanly destroys this loader via delete_callback_.
+  // mojo::ReportBadMessage() operates on thread-local message dispatch
+  // context and does not access `this`. Reversing the order would cause
+  // premature pipe disconnection and break client completion expectations.
+  if (new_url) {
+    if (!new_url->is_valid() ||
+        new_url->scheme() != deferred_redirect_url_->scheme() ||
+        !url::IsSameOriginWith(*new_url, *deferred_redirect_url_)) {
+      HandleComplete(URLLoaderCompletionStatus(net::ERR_INVALID_ARGUMENT));
+      mojo::ReportBadMessage(
+          "CorsURLLoader: cross-origin or cross-scheme new_url in "
+          "FollowRedirect is not permitted");
+      return;
+    }
+    if (new_url->has_username() || new_url->has_password()) {
+      HandleComplete(URLLoaderCompletionStatus(net::ERR_INVALID_ARGUMENT));
+      mojo::ReportBadMessage(
+          "CorsURLLoader: new_url with credentials in FollowRedirect is not "
+          "permitted");
+      return;
+    }
   }
 
   deferred_redirect_url_.reset();
@@ -462,12 +603,13 @@ void CorsURLLoader::FollowRedirect(
                                       &forbidden_header)) {
     SCOPED_CRASH_KEY_STRING32("network", "forbidden_sec_header",
                               forbidden_header);
-    if (features::kRestrictForbiddenSecurityHeadersDump.Get()) {
-      mojo::ReportBadMessage(
-          "CorsURLLoader: Forbidden Sec- header from renderer in "
-          "FollowRedirect");
-    }
+    // Note: Calling HandleComplete() before mojo::ReportBadMessage() is
+    // intentional and required to fulfill client completion notification
+    // before the pipe teardown.
     HandleComplete(URLLoaderCompletionStatus(net::ERR_INVALID_ARGUMENT));
+    mojo::ReportBadMessage(
+        "CorsURLLoader: Forbidden Sec- header from renderer in "
+        "FollowRedirect");
     return;
   }
 
@@ -482,31 +624,40 @@ void CorsURLLoader::FollowRedirect(
     }
   }
 
-  if (base::FeatureList::IsEnabled(
-          features::kBlockOriginHeaderModificationOnRedirect) &&
-      headers_update_params.modified_headers.HasHeader(
-          net::HttpRequestHeaders::kOrigin)) {
+  std::optional<std::string> modified_origin_header =
+      headers_update_params.modified_headers.GetHeader(
+          net::HttpRequestHeaders::kOrigin);
+  if (modified_origin_header &&
+      base::FeatureList::IsEnabled(
+          features::kBlockInvalidOriginHeaderModificationOnRedirect) &&
+      !HasValidOriginHeader(*modified_origin_header)) {
     HandleComplete(URLLoaderCompletionStatus(net::ERR_INVALID_ARGUMENT));
     mojo::ReportBadMessage(
-        "CorsURLLoader: Origin header modification on redirect is not "
+        "CorsURLLoader: Invalid Origin header modification on redirect is not "
         "permitted");
     return;
   }
 
+  std::string forbidden_removed_header;
+  if (!process_id_.is_browser() &&
+      base::FeatureList::IsEnabled(
+          features::kBlockSecurityHeaderRemovalOnRedirect) &&
+      !ValidateRemovedHeaders(headers_update_params.removed_headers,
+                              &forbidden_removed_header)) {
+    SCOPED_CRASH_KEY_STRING32("network", "forbidden_sec_header",
+                              forbidden_removed_header);
+    HandleComplete(URLLoaderCompletionStatus(net::ERR_INVALID_ARGUMENT));
+    mojo::ReportBadMessage(
+        "CorsURLLoader: Forbidden header removal from renderer in "
+        "FollowRedirect");
+    return;
+  }
   for (const auto& name : headers_update_params.removed_headers) {
     request_.headers.RemoveHeader(name);
     request_.cors_exempt_headers.RemoveHeader(name);
   }
 
   request_.headers.MergeFrom(headers_update_params.modified_headers);
-
-  if (GetSecSharedStorageWritableHeader(
-          headers_update_params.modified_headers)) {
-    request_.shared_storage_writable_eligible = true;
-  } else if (std::ranges::contains(headers_update_params.removed_headers,
-                                   kSecSharedStorageWritableHeader)) {
-    request_.shared_storage_writable_eligible = false;
-  }
 
   if (!CorsURLLoaderFactory::IsValidCorsExemptHeaders(
           *context_->cors_exempt_header_list(),
@@ -524,6 +675,9 @@ void CorsURLLoader::FollowRedirect(
 
   const std::string original_method = std::move(request_.method);
   request_.UpdateOnRedirect(redirect_info_);
+  if (new_url) {
+    request_.url = *new_url;
+  }
 
   // Update isolation_info_ and the shared dictionary storage location if they
   // changed as a result of the redirect for a browser-initiated request (e.g.
@@ -561,36 +715,81 @@ void CorsURLLoader::FollowRedirect(
   const bool original_fetch_cors_flag = fetch_cors_flag_;
   SetCorsFlagIfNeeded();
 
-  // We cannot use FollowRedirect for a request with preflight (i.e., when
-  // `fetch_cors_flag_` is true and `NeedsPreflight(request_)` is not nullopt).
-  //
-  // When `original_fetch_cors_flag` is false, `fetch_cors_flag_` is true and
-  // `NeedsPreflight(request)` is nullopt, the net/ implementation won't attach
-  // an "origin" header on redirect, as the original request didn't have one.
-  //
-  // When the request method is changed (due to 302 status code, for example),
-  // the net/ implementation removes the origin header.
-  //
-  // In such cases we need to re-issue a request manually in order to attach the
-  // correct origin header. For "no-cors" requests we rely on redirect logic in
-  // net/ (specifically in net/url_request/redirect_util.cc).
-  //
-  // After both OOR-CORS and network service are fully shipped, we may be able
-  // to remove the logic in net/.
-  if ((fetch_cors_flag_ && NeedsPreflight(request_)) ||
-      (!original_fetch_cors_flag && fetch_cors_flag_) ||
-      (fetch_cors_flag_ && original_method != request_.method)) {
-    DCHECK_NE(request_.mode, mojom::RequestMode::kNoCors);
-    network_client_receiver_.reset();
-    sync_client_receiver_factory_.InvalidateWeakPtrs();
-    StartRequest();
+  if (!base::FeatureList::IsEnabled(
+          features::kAvoidCorsURLLoaderRestartOnRedirect) ||
+      request_.trust_token_params) {
+    // We cannot use FollowRedirect for a request with preflight (i.e., when
+    // `fetch_cors_flag_` is true and `NeedsPreflight(request_)` is not
+    // nullopt).
+    //
+    // When `original_fetch_cors_flag` is false, `fetch_cors_flag_` is true and
+    // `NeedsPreflight(request)` is nullopt, the net/ implementation won't
+    // attach an "origin" header on redirect, as the original request didn't
+    // have one.
+    //
+    // When the request method is changed (due to 302 status code, for example),
+    // the net/ implementation removes the origin header.
+    //
+    // In such cases we need to re-issue a request manually in order to attach
+    // the correct origin header. For "no-cors" requests we rely on redirect
+    // logic in net/ (specifically in net/url_request/redirect_util.cc).
+    //
+    // After both OOR-CORS and network service are fully shipped, we may be able
+    // to remove the logic in net/.
+    if ((fetch_cors_flag_ && NeedsPreflight(request_)) ||
+        (!original_fetch_cors_flag && fetch_cors_flag_) ||
+        (fetch_cors_flag_ && original_method != request_.method)) {
+      DCHECK_NE(request_.mode, mojom::RequestMode::kNoCors);
+      network_client_receiver_.reset();
+      sync_client_receiver_factory_.InvalidateWeakPtrs();
+      StartRequest();
+      return;
+    }
+
+    response_tainting_ = CalculateResponseTainting(
+        request_.url, request_.mode, request_.request_initiator,
+        request_.isolated_world_origin, fetch_cors_flag_, tainted_,
+        *origin_access_list_);
+    network_loader_->FollowRedirect(std::move(headers_update_params), new_url);
     return;
+  }
+
+  if (fetch_cors_flag_ && request_.mode == mojom::RequestMode::kSameOrigin) {
+    CHECK(request_.request_initiator);
+    HandleComplete(URLLoaderCompletionStatus(
+        CorsErrorStatus(mojom::CorsError::kDisallowedByMode)));
+    return;
+  }
+
+  if (fetch_cors_flag_ && !skip_cors_enabled_scheme_check_ &&
+      !std::ranges::contains(url::GetCorsEnabledSchemes(),
+                             request_.url.scheme())) {
+    HandleComplete(URLLoaderCompletionStatus(
+        CorsErrorStatus(mojom::CorsError::kCorsDisabledScheme)));
+    return;
+  }
+
+  if (request_.mode != mojom::RequestMode::kNoCors) {
+    MaybeSetOriginHeader(&headers_update_params);
   }
 
   response_tainting_ = CalculateResponseTainting(
       request_.url, request_.mode, request_.request_initiator,
       request_.isolated_world_origin, fetch_cors_flag_, tainted_,
       *origin_access_list_);
+
+  has_authorization_covered_by_wildcard_ = false;
+  if (CheckPreflightRequired()) {
+    CHECK(!deferred_redirect_preflight_.has_value());
+    deferred_redirect_preflight_ = DeferredRedirectPreflight{
+        .headers_update_params = std::move(headers_update_params),
+        .new_url = new_url,
+    };
+
+    StartPreflightCheck();
+    return;
+  }
+
   network_loader_->FollowRedirect(std::move(headers_update_params), new_url);
 }
 
@@ -619,7 +818,7 @@ void CorsURLLoader::OnReceiveResponse(
 
   // See 10.7.4 of https://fetch.spec.whatwg.org/#http-network-or-cache-fetch
   const bool is_304_for_revalidation =
-      request_.is_revalidating && response_head->headers &&
+      IsRevalidatingRequest(request_) && response_head->headers &&
       response_head->headers->response_code() == 304;
   if (fetch_cors_flag_ && !is_304_for_revalidation) {
     const auto result = CheckAccess(
@@ -636,30 +835,31 @@ void CorsURLLoader::OnReceiveResponse(
     }
   }
 
-  if (request_.destination ==
-      mojom::RequestDestination::kSharedStorageWorklet) {
-    CHECK(request_.request_initiator);
-
-    if (!request_.request_initiator->IsSameOriginWith(request_.url) &&
-        !CheckSharedStorageCrossOriginWorkletAllowedResponseHeaderIfNeeded(
-            *response_head)) {
-      HandleComplete(URLLoaderCompletionStatus(net::ERR_FAILED));
-      return;
-    }
-  }
-
   std::optional<std::string> use_as_dictionary_header = GetHeaderString(
       *response_head, shared_dictionary::kUseAsDictionaryHeaderName);
-  if (use_as_dictionary_header) {
+  if (use_as_dictionary_header &&
+      !net::IsCertStatusError(response_head->cert_status)) {
+    // Write pervasive dictionary responses into the pervasive-specific storage
+    // if it is enabled.
+    SharedDictionaryStorage* dictionary_storage =
+        shared_dictionary_storage_.get();
+    scoped_refptr<SharedDictionaryStorage> pervasive_storage;
+    if (dictionary_storage && response_head->is_shared_resource &&
+        context_->GetSharedDictionaryManager()) {
+      pervasive_storage =
+          context_->GetSharedDictionaryManager()->GetPervasiveStorage();
+      if (pervasive_storage) {
+        dictionary_storage = pervasive_storage.get();
+      }
+    }
     base::expected<scoped_refptr<SharedDictionaryWriter>,
                    mojom::SharedDictionaryError>
         writer_or_error = SharedDictionaryStorage::MaybeCreateWriter(
             *use_as_dictionary_header,
-            request_.shared_dictionary_writer_enabled,
-            shared_dictionary_storage_.get(), request_.mode, response_tainting_,
-            request_.url, response_head->request_time,
-            response_head->response_time, *response_head->headers,
-            response_head->was_fetched_via_cache,
+            request_.shared_dictionary_writer_enabled, dictionary_storage,
+            request_.mode, response_tainting_, request_.url,
+            response_head->request_time, response_head->response_time,
+            *response_head->headers, response_head->was_fetched_via_cache,
             base::BindOnce(
                 &SharedDictionaryAccessChecker::CheckAllowedToWriteAndReport,
                 std::make_unique<SharedDictionaryAccessChecker>(
@@ -708,7 +908,19 @@ void CorsURLLoader::OnReceiveResponse(
     response_head->device_bound_session_usage =
         mojom::DeviceBoundSessionUsage::kUnknown;
     response_head->did_use_server_http_auth = false;
+    response_head->was_cookie_in_request = false;
   }
+
+#if BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
+  if (disk_cache::Backend* backend = GetCurrentBackend();
+      backend && backend->SupportsSharedCache() &&
+      renderer_accessible_http_cache_write_enabled_) {
+    response_info_for_renderer_accessible_cache_ =
+        MaybeCreateHttpResponseInfoForRendererAccessibleCache(
+            isolation_info_, *response_head, request_, last_response_url_,
+            redirect_count_, *context_->GetSharedResourceChecker());
+  }
+#endif  // BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
 
   forwarding_client_->OnReceiveResponse(
       std::move(response_head), std::move(body), std::move(cached_metadata));
@@ -787,6 +999,7 @@ void CorsURLLoader::OnReceiveRedirect(const net::RedirectInfo& redirect_info,
     response_head->device_bound_session_usage =
         mojom::DeviceBoundSessionUsage::kUnknown;
     response_head->did_use_server_http_auth = false;
+    response_head->was_cookie_in_request = false;
     forwarding_client_->OnReceiveRedirect(censored_redirect_info,
                                           std::move(response_head));
     return;
@@ -866,6 +1079,7 @@ void CorsURLLoader::OnReceiveRedirect(const net::RedirectInfo& redirect_info,
     response_head->device_bound_session_usage =
         mojom::DeviceBoundSessionUsage::kUnknown;
     response_head->did_use_server_http_auth = false;
+    response_head->was_cookie_in_request = false;
   }
   forwarding_client_->OnReceiveRedirect(redirect_info,
                                         std::move(response_head));
@@ -918,7 +1132,7 @@ void CorsURLLoader::OnComplete(const URLLoaderCompletionStatus& status) {
 }
 
 std::optional<net::cookie_util::StorageAccessStatus>
-CorsURLLoader::GetStorageAccessStatus() {
+CorsURLLoader::GetStorageAccessStatus() const {
   if (isolation_info_.network_isolation_key().GetNonce()) {
     return net::cookie_util::StorageAccessStatus::kNone;
   }
@@ -928,9 +1142,101 @@ CorsURLLoader::GetStorageAccessStatus() {
       isolation_info_.top_frame_origin(),
       url_loader_util::CalculateCookieSettingOverrides(
           factory_cookie_setting_overrides_, devtools_cookie_setting_overrides_,
-          request_,
-          /*emit_metrics=*/false),
+          request_),
       /*cookie_partition_key=*/std::nullopt, request_.permissions_policy);
+}
+
+bool CorsURLLoader::AllowUnsafeHeaders() const {
+  return process_id_.is_browser() ||
+         cors::ShouldAllowUnsafeHeaders(*origin_access_list_,
+                                        request_.isolated_world_origin
+                                            ? request_.isolated_world_origin
+                                            : request_.request_initiator,
+                                        request_.url);
+}
+
+bool CorsURLLoader::HasValidOriginHeader(
+    const std::string& origin_header_value) const {
+  if (AllowUnsafeHeaders()) {
+    return true;
+  }
+
+  // "null" is always allowed (e.g. tainted or opaque origins).
+  if (origin_header_value == url::Origin().Serialize()) {
+    return true;
+  }
+
+  // Check against legitimate candidate origins for this request context.
+  const std::optional<url::Origin> candidate_origins[] = {
+      request_.isolated_world_origin,
+      request_.request_initiator,
+      isolation_info_.frame_origin(),
+  };
+  for (const auto& origin : candidate_origins) {
+    if (origin.has_value() && origin_header_value == origin->Serialize()) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool CorsURLLoader::ShouldIncludeOriginHeader() const {
+  if (!request_.request_initiator) {
+    return false;
+  }
+
+  if (request_.credentials_mode == mojom::CredentialsMode::kInclude &&
+      GetStorageAccessStatus() ==
+          net::cookie_util::StorageAccessStatus::kInactive) {
+    // Lower layers will add the Sec-Fetch-Storage-Access header, and the
+    // server may respond with a "retry" header. The server needs to know the
+    // origin in that event.
+    return true;
+  }
+
+  // If the `CORS flag` is set, `httpRequest`’s method is neither `GET` nor
+  // `HEAD`, or `httpRequest`’s mode is "websocket", then append
+  // `Origin`/the result of serializing a request origin with `httpRequest`,
+  // to `httpRequest`’s header list.
+  //
+  // We exclude navigation requests to keep the existing behavior.
+  // TODO(yhirano): Reconsider this.
+  if (request_.mode == network::mojom::RequestMode::kNavigate) {
+    return false;
+  }
+  if (fetch_cors_flag_) {
+    return true;
+  }
+  return request_.method != net::HttpRequestHeaders::kGetMethod &&
+         request_.method != net::HttpRequestHeaders::kHeadMethod;
+}
+
+void CorsURLLoader::MaybeSetOriginHeader(
+    network::HttpRequestHeadersUpdateParams* headers_update_params) {
+  if (!ShouldIncludeOriginHeader()) {
+    return;
+  }
+
+  // If the Origin header is given, check if the initiator has a permission to
+  // override unsafe headers for the target URL. This Allowlist is given from
+  // a trustworthy process per factory, and safe to trust as a secondary
+  // security check here in the network service.
+  if (request_.headers.HasHeader(net::HttpRequestHeaders::kOrigin) &&
+      AllowUnsafeHeaders()) {
+    return;
+  }
+
+  std::string origin_value = tainted_
+                                 ? url::Origin().Serialize()
+                                 : request_.request_initiator->Serialize();
+  if (headers_update_params) {
+    std::erase(headers_update_params->removed_headers,
+               net::HttpRequestHeaders::kOrigin);
+    headers_update_params->modified_headers.SetHeader(
+        net::HttpRequestHeaders::kOrigin, origin_value);
+  }
+  request_.headers.SetHeader(net::HttpRequestHeaders::kOrigin, origin_value);
 }
 
 void CorsURLLoader::StartRequest() {
@@ -938,66 +1244,28 @@ void CorsURLLoader::StartRequest() {
               net::NetLogWithSourceToFlow(net_log_));
   if (fetch_cors_flag_ && !skip_cors_enabled_scheme_check_ &&
       !std::ranges::contains(url::GetCorsEnabledSchemes(),
-                             request_.url.GetScheme())) {
+                             request_.url.scheme())) {
     HandleComplete(URLLoaderCompletionStatus(
         CorsErrorStatus(mojom::CorsError::kCorsDisabledScheme)));
     return;
   }
 
-  auto should_include_origin_header = [&]() -> bool {
-    if (!request_.request_initiator) {
-      return false;
-    }
-
-    if (request_.credentials_mode == mojom::CredentialsMode::kInclude &&
-        GetStorageAccessStatus() ==
-            net::cookie_util::StorageAccessStatus::kInactive) {
-      // Lower layers will add the Sec-Fetch-Storage-Access header, and the
-      // server may respond with a "retry" header. The server needs to know the
-      // origin in that event.
-      return true;
-    }
-
-    // If the `CORS flag` is set, `httpRequest`’s method is neither `GET` nor
-    // `HEAD`, or `httpRequest`’s mode is "websocket", then append
-    // `Origin`/the result of serializing a request origin with `httpRequest`,
-    // to `httpRequest`’s header list.
-    //
-    // We exclude navigation requests to keep the existing behavior.
-    // TODO(yhirano): Reconsider this.
-    if (request_.mode == network::mojom::RequestMode::kNavigate) {
-      return false;
-    }
-    if (fetch_cors_flag_) {
-      return true;
-    }
-    return request_.method != net::HttpRequestHeaders::kGetMethod &&
-           request_.method != net::HttpRequestHeaders::kHeadMethod;
-  };
-
-  if (should_include_origin_header()) {
-    // If the Origin header is given, check if the initiator has a permission to
-    // override unsafe headers for the target URL. This Allowlist is given from
-    // a trustworthy process per factory, and safe to trust as a secondary
-    // security check here in the network service.
-    const bool has_custom_origin_header_with_bypass =
-        request_.headers.HasHeader(net::HttpRequestHeaders::kOrigin) &&
-        cors::ShouldAllowUnsafeHeaders(
-            *origin_access_list_, request_.request_initiator, request_.url);
-
-    if (!has_custom_origin_header_with_bypass) {
-      if (tainted_) {
-        request_.headers.SetHeader(net::HttpRequestHeaders::kOrigin,
-                                   url::Origin().Serialize());
-      } else {
-        request_.headers.SetHeader(net::HttpRequestHeaders::kOrigin,
-                                   request_.request_initiator->Serialize());
-      }
-    }
+  std::optional<std::string> origin_header_value =
+      request_.headers.GetHeader(net::HttpRequestHeaders::kOrigin);
+  if (origin_header_value &&
+      base::FeatureList::IsEnabled(features::kBlockInvalidOriginHeader) &&
+      !HasValidOriginHeader(*origin_header_value)) {
+    HandleComplete(URLLoaderCompletionStatus(net::ERR_INVALID_ARGUMENT));
+    mojo::ReportBadMessage(
+        "CorsURLLoader: Invalid Origin header is not permitted for this "
+        "request");
+    return;
   }
 
+  MaybeSetOriginHeader(/*headers_update_params=*/nullptr);
+
   if (fetch_cors_flag_ && request_.mode == mojom::RequestMode::kSameOrigin) {
-    DCHECK(request_.request_initiator);
+    CHECK(request_.request_initiator);
     HandleComplete(URLLoaderCompletionStatus(
         CorsErrorStatus(mojom::CorsError::kDisallowedByMode)));
     return;
@@ -1007,19 +1275,8 @@ void CorsURLLoader::StartRequest() {
       request_.url, request_.mode, request_.request_initiator,
       request_.isolated_world_origin, fetch_cors_flag_, tainted_,
       *origin_access_list_);
-
-  // Note that even when `needs_preflight` holds we might not make a preflight
-  // request. This happens when `fetch_cors_flag_` is false, e.g. when the
-  // origin of the url is equal to the origin of the request.
-  std::optional<PreflightRequiredReason> needs_preflight =
-      NeedsPreflight(request_);
-  bool preflight_required = needs_preflight.has_value() && fetch_cors_flag_;
-  net_log_.AddEvent(net::NetLogEventType::CHECK_CORS_PREFLIGHT_REQUIRED, [&] {
-    return NetLogPreflightRequiredParams(needs_preflight);
-  });
-
   has_authorization_covered_by_wildcard_ = false;
-  if (!preflight_required) {
+  if (!CheckPreflightRequired()) {
     StartNetworkRequest();
     return;
   }
@@ -1028,19 +1285,40 @@ void CorsURLLoader::StartRequest() {
   // it now to free up the socket.
   network_loader_.reset();
 
+  StartPreflightCheck();
+}
+
+bool CorsURLLoader::CheckPreflightRequired() {
+  std::optional<PreflightRequiredReason> needs_preflight =
+      NeedsPreflight(request_);
+  net_log_.AddEvent(net::NetLogEventType::CHECK_CORS_PREFLIGHT_REQUIRED, [&] {
+    return NetLogPreflightRequiredParams(needs_preflight);
+  });
+  return needs_preflight.has_value() && fetch_cors_flag_;
+}
+
+void CorsURLLoader::StartPreflightCheck() {
   mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver> remote_observer;
 
-  context_->cors_preflight_controller()->PerformPreflightCheck(
-      base::BindOnce(&CorsURLLoader::OnPreflightRequestComplete,
-                     weak_factory_.GetWeakPtr()),
-      request_id_, request_,
-      PreflightController::WithTrustedHeaderClient(
-          options_ & mojom::kURLLoadOptionUseHeaderClient),
-      context_->cors_non_wildcard_request_headers_support(), tainted_,
-      net::NetworkTrafficAnnotationTag(traffic_annotation_),
-      network_loader_factory_, isolation_info_,
-      weak_devtools_observer_factory_.GetWeakPtr(), net_log_,
-      context_->acam_preflight_spec_conformant(), std::move(remote_observer));
+  std::unique_ptr<PreflightController::PreflightCheckHandle> handle =
+      context_->cors_preflight_controller()->PerformPreflightCheck(
+          base::BindOnce(&CorsURLLoader::OnPreflightRequestComplete,
+                         weak_factory_.GetWeakPtr()),
+          request_id_, request_,
+          PreflightController::WithTrustedHeaderClient(
+              options_ & mojom::kURLLoadOptionUseHeaderClient),
+          context_->cors_non_wildcard_request_headers_support(), tainted_,
+          net::NetworkTrafficAnnotationTag(traffic_annotation_),
+          network_loader_factory_, isolation_info_,
+          weak_devtools_observer_factory_.GetWeakPtr(), net_log_,
+          context_->acam_preflight_spec_conformant(),
+          std::move(remote_observer));
+  // On a cache hit, `PerformPreflightCheck()` synchronously runs
+  // `OnPreflightRequestComplete()` (which can destroy `this`), so
+  // `preflight_check_handle_` must only be assigned when `handle` is non-null.
+  if (handle) {
+    preflight_check_handle_ = std::move(handle);
+  }
 }
 
 void CorsURLLoader::ReportCorsErrorToDevTools(const CorsErrorStatus& status,
@@ -1098,13 +1376,26 @@ void CorsURLLoader::OnPreflightRequestComplete(
     int net_error,
     std::optional<CorsErrorStatus> status,
     bool has_authorization_covered_by_wildcard) {
+  preflight_check_handle_.reset();
+
   has_authorization_covered_by_wildcard_ =
       has_authorization_covered_by_wildcard;
+
+  std::optional<DeferredRedirectPreflight> deferred_redirect =
+      std::exchange(deferred_redirect_preflight_, std::nullopt);
 
   std::optional<URLLoaderCompletionStatus> completion_status =
       ConvertPreflightResult(net_error, std::move(status));
   if (completion_status) {
     HandleComplete(*std::move(completion_status));
+    return;
+  }
+
+  if (deferred_redirect) {
+    CHECK(network_loader_);
+    network_loader_->FollowRedirect(
+        std::move(deferred_redirect->headers_update_params),
+        deferred_redirect->new_url);
     return;
   }
 
@@ -1114,11 +1405,14 @@ void CorsURLLoader::OnPreflightRequestComplete(
 void CorsURLLoader::StartNetworkRequest() {
   TRACE_EVENT("loading", "CorsURLLoader::StartNetworkRequest",
               net::NetLogWithSourceToFlow(net_log_));
-  // Here we overwrite the credentials mode sent to URLLoader because
-  // network::URLLoader doesn't understand |kSameOrigin|.
-  // TODO(crbug.com/40619226): Fix this.
+  // When `kAvoidCorsURLLoaderRestartOnRedirect` is disabled (legacy behavior),
+  // overwrite the credentials mode sent to URLLoader because legacy
+  // network::URLLoader didn't handle `kSameOrigin` on redirects.
   auto original_credentials_mode = request_.credentials_mode;
-  if (original_credentials_mode == mojom::CredentialsMode::kSameOrigin) {
+  if ((!base::FeatureList::IsEnabled(
+           features::kAvoidCorsURLLoaderRestartOnRedirect) ||
+       request_.trust_token_params) &&
+      original_credentials_mode == mojom::CredentialsMode::kSameOrigin) {
     request_.credentials_mode =
         CalculateCredentialsFlag(original_credentials_mode, response_tainting_)
             ? mojom::CredentialsMode::kInclude
@@ -1130,6 +1424,17 @@ void CorsURLLoader::StartNetworkRequest() {
   network_loader_.reset();
 
   network_loader_start_time_ = base::TimeTicks::Now();
+
+  if (base::FeatureList::IsEnabled(features::kSafeRevalidation)) {
+    if (request_.revalidation_etag) {
+      request_.headers.SetHeader(net::HttpRequestHeaders::kIfNoneMatch,
+                                 *request_.revalidation_etag);
+    }
+    if (request_.revalidation_last_modified) {
+      request_.headers.SetHeader(net::HttpRequestHeaders::kIfModifiedSince,
+                                 *request_.revalidation_last_modified);
+    }
+  }
 
   if (sync_network_loader_factory_) {
     sync_network_loader_factory_->CreateLoaderAndStartWithSyncClient(
@@ -1169,6 +1474,9 @@ void CorsURLLoader::HandleComplete(URLLoaderCompletionStatus status) {
     } else {
       RecordNetworkLoaderCompletionTime("Network", request_.priority, elapsed);
     }
+#if BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
+    NotifyEntryEligibleForSharedCache();
+#endif  // BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
   }
 
   if (devtools_observer_ && status.cors_error_status) {
@@ -1188,6 +1496,41 @@ void CorsURLLoader::HandleComplete(URLLoaderCompletionStatus status) {
   std::move(delete_callback_).Run(this);
   // |this| is deleted here.
 }
+
+#if BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
+void CorsURLLoader::NotifyEntryEligibleForSharedCache() {
+  if (!response_info_for_renderer_accessible_cache_) {
+    return;
+  }
+
+  disk_cache::Backend* backend = GetCurrentBackend();
+  if (!backend || !backend->SupportsSharedCache()) {
+    return;
+  }
+
+  // Note: We use the nullopt upload_data_identifier because we only care
+  // about GET requests for the Renderer Accessible HTTP Cache, which don't have
+  // upload data. Also assuming is_upload is false.
+  if (auto key = net::HttpCache::GenerateCacheKey(
+          request_.url, request_.load_flags,
+          isolation_info_.network_isolation_key(),
+          /*upload_data_identifier=*/std::nullopt,
+          /*is_subframe_document_resource=*/false,
+          /*is_mainframe_navigation=*/false,
+          /*is_shared_resource=*/false, request_.request_initiator,
+          /*include_url=*/true)) {
+    backend->OnEntryEligibleForSharedCache(
+        *key, request_.url,
+        std::move(response_info_for_renderer_accessible_cache_),
+        isolation_info_.network_isolation_key());
+  }
+}
+
+disk_cache::Backend* CorsURLLoader::GetCurrentBackend() const {
+  net::HttpCache* cache = context_->GetHttpCache();
+  return cache ? cache->GetCurrentBackend() : nullptr;
+}
+#endif  // BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
 
 void CorsURLLoader::OnMojoDisconnect() {
   HandleComplete(URLLoaderCompletionStatus(net::ERR_ABORTED));
@@ -1335,52 +1678,5 @@ std::optional<std::string> CorsURLLoader::GetHeaderString(
   return response.headers->GetNormalizedHeader(header_name);
 }
 
-bool CorsURLLoader::
-    CheckSharedStorageCrossOriginWorkletAllowedResponseHeaderIfNeeded(
-        const mojom::URLResponseHead& response) {
-  // We currently only set the "Sec-Shared-Storage-Data-Origin" request header
-  // for requests of cross-origin shared storage worklet module script where the
-  // script origin is used as the data origin. Moreover, the request header is a
-  // forbidden request header (non-modifiable by regular JavaScript), and it is
-  // set in the browser process, using the serialized script origin (which is
-  // not allowed to be opaque) as the value.
-  //
-  // Extensions could have modified or removed the
-  // "Sec-Shared-Storage-Data-Origin" request header before the request was sent
-  // to the server, but the `CorsURLLoader` still sees the original header, if
-  // any, set by `SharedStorageURLLoaderFactoryProxy`.
-  std::optional<std::string> request_header =
-      request_.headers.GetHeader("Sec-Shared-Storage-Data-Origin");
-  if (!request_header) {
-    // The data partition origin used is the invoking context's origin, so we
-    // don't require the "Shared-Storage-Cross-Origin-Worklet-Allowed" response
-    // header.
-    return true;
-  }
-
-  GURL data_origin_url(*request_header);
-  CHECK(data_origin_url.is_valid());
-
-  if (!url::Origin::Create(data_origin_url).IsSameOriginWith(request_.url)) {
-    // The data origin used is not the worklet script's origin, so we don't
-    // require the "Shared-Storage-Cross-Origin-Worklet-Allowed" response
-    // header. Instead, a separate request is sent in parallel to the origin of
-    // `data_origin_url`, with path
-    // "/.well-known/shared-storage/trusted-origins", to confirm whether or not
-    // this worklet script is allowed to process that origin's data.
-    return true;
-  }
-
-  std::optional<std::string> response_header =
-      GetHeaderString(response, "Shared-Storage-Cross-Origin-Worklet-Allowed");
-  if (!response_header) {
-    return false;
-  }
-
-  std::optional<net::structured_headers::ParameterizedItem> item =
-      net::structured_headers::ParseItem(*response_header);
-
-  return item && item->item.is_boolean() && item->item.GetBoolean();
-}
 
 }  // namespace network::cors

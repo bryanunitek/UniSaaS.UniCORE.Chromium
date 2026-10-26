@@ -15,6 +15,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "components/certificate_matching/certificate_principal_pattern.h"
 #include "components/device_signals/core/browser/signals_aggregator.h"
 #include "components/device_signals/core/common/signals_features.h"
 #include "components/enterprise/browser/reporting/os_report_generator.h"
@@ -22,6 +23,7 @@
 #include "components/enterprise/browser/reporting/report_util.h"
 #include "components/enterprise/browser/reporting/reporting_delegate_factory.h"
 #include "components/enterprise/device_attestation/device_attestation_service_factory.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
 #include "components/policy/core/common/policy_logger.h"
 
 namespace enterprise_reporting {
@@ -195,6 +197,9 @@ void ChromeProfileRequestGenerator::OnBaseReportsReady(
   // Start signals collection process.
   device_signals::SignalsAggregationRequest signals_request;
   signals_request.signal_names.emplace(device_signals::SignalName::kOsSignals);
+#if BUILDFLAG(IS_ANDROID)
+  signals_request.signal_names.emplace(device_signals::SignalName::kVerifyApps);
+#endif  // BUILDFLAG(IS_ANDROID)
   signals_request.signal_names.emplace(
       device_signals::SignalName::kBrowserContextSignals);
 
@@ -208,6 +213,41 @@ void ChromeProfileRequestGenerator::OnBaseReportsReady(
   signals_request.signal_names.emplace(device_signals::SignalName::kAntiVirus);
   signals_request.signal_names.emplace(device_signals::SignalName::kHotfixes);
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  if (enterprise_signals::features::IsCertificateCollectionEnabled() &&
+      generation_config.challenge.has_value() &&
+      !generation_config.challenge.value().empty()) {
+    signals_request.signal_names.emplace(
+        device_signals::SignalName::kCertificates);
+
+    if (generation_config.client_certificates_selectors.empty()) {
+      device_signals::GetCertificateOptions cert_option;
+      cert_option.challenge = generation_config.challenge.value();
+      signals_request.certificate_signal_parameters.push_back(
+          std::move(cert_option));
+    } else {
+      for (const auto& entry :
+           generation_config.client_certificates_selectors) {
+        const base::DictValue* selector_dict = entry.GetIfDict();
+        if (!selector_dict) {
+          continue;
+        }
+        device_signals::GetCertificateOptions cert_option;
+        cert_option.challenge = generation_config.challenge.value();
+        cert_option.issuer_pattern = certificate_matching::
+            CertificatePrincipalPattern::ParseFromOptionalDict(
+                selector_dict->FindDict("ISSUER"), "CN", "L", "O", "OU");
+        cert_option.subject_pattern = certificate_matching::
+            CertificatePrincipalPattern::ParseFromOptionalDict(
+                selector_dict->FindDict("SUBJECT"), "CN", "L", "O", "OU");
+        signals_request.certificate_signal_parameters.push_back(
+            std::move(cert_option));
+      }
+    }
+  }
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+
   signals_request.trigger = device_signals::Trigger::kSignalsReport;
 
   signals_aggregator_->GetSignals(
@@ -295,14 +335,17 @@ void ChromeProfileRequestGenerator::OnAggregatedSignalsReceived(
     }
 
 #if BUILDFLAG(IS_ANDROID)
-    os_report->set_has_potentially_harmful_apps(
-        os_signals.has_potentially_harmful_apps);
-    os_report->set_verified_apps_enabled(os_signals.verified_apps_enabled);
-
     if (os_signals.security_patch_ms) {
       os_report->set_security_patch_ms(os_signals.security_patch_ms.value());
     }
 #endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_IOS)
+    if (os_signals.vendor_id) {
+      auto* ios_attributes = os_report->mutable_ios_specific_attributes();
+      ios_attributes->set_vendor_id(os_signals.vendor_id.value());
+    }
+#endif  // BUILDFLAG(IS_IOS)
 
     browser_report->set_browser_version(os_signals.browser_version);
   }
@@ -343,7 +386,14 @@ void ChromeProfileRequestGenerator::OnAggregatedSignalsReceived(
     profile_signals_report->mutable_security_event_providers()->Add(
         profile_signals.security_event_providers.begin(),
         profile_signals.security_event_providers.end());
-
+    if (enterprise_isolated_mode::IsCaaEnabledInIsolatedMode()) {
+      profile_signals_report->set_is_isolated_mode(
+          profile_signals.is_isolated_mode);
+      profile_report->set_profile_type(
+          profile_signals.is_isolated_mode
+              ? em::ChromeUserProfileInfo::ISOLATED
+              : em::ChromeUserProfileInfo::REGULAR);
+    }
     profile_report->set_allocated_profile_signals_report(
         profile_signals_report.release());
 
@@ -379,6 +429,41 @@ void ChromeProfileRequestGenerator::OnAggregatedSignalsReceived(
     }
   }
 #endif  // BUILDFLAG(IS_WIN)
+
+  if (response.certificate_signals_response) {
+    const auto& cert_signals = response.certificate_signals_response.value();
+    VLOG_POLICY(1, REPORTING)
+        << "Retrieved " << cert_signals.serialized_caa_responses.size()
+        << " certificate signals (truncated: "
+        << cert_signals.truncated_certificates << ")";
+    profile_report->set_certificates_were_truncated(
+        cert_signals.truncated_certificates);
+    for (const std::string& serialized_cert :
+         cert_signals.serialized_caa_responses) {
+      em::SignedCertificateDetails cert_details;
+      if (cert_details.ParseFromString(serialized_cert)) {
+        *profile_report->add_certificates() = std::move(cert_details);
+      } else {
+        LOG_POLICY(ERROR, REPORTING)
+            << "Failed to parse SignedCertificateDetails";
+      }
+    }
+  }
+
+#if BUILDFLAG(IS_ANDROID)
+  if (response.verify_apps_signals_response) {
+    const auto& verify_apps_signals =
+        response.verify_apps_signals_response.value();
+    if (verify_apps_signals.has_potentially_harmful_apps.has_value()) {
+      os_report->set_has_potentially_harmful_apps(
+          verify_apps_signals.has_potentially_harmful_apps.value());
+    }
+    if (verify_apps_signals.verified_apps_enabled.has_value()) {
+      os_report->set_verified_apps_enabled(
+          verify_apps_signals.verified_apps_enabled.value());
+    }
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
 
   request->GetChromeProfileReportRequest()
       .set_allocated_browser_device_identifier(device_identifier.release());

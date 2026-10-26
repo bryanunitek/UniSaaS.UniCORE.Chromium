@@ -19,7 +19,7 @@
 #include "chrome/browser/performance_manager/persistence/site_data/site_data_cache_facade_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -148,7 +148,7 @@ class SiteDataCacheFacadeBrowserTest : public InProcessBrowserTest {
   void ExpectSiteData(const std::string& site,
                       SiteFeatureUsage expected_updates_title_in_background,
                       bool expected_is_dirty) {
-    const auto browser_context_id = browser()->profile()->UniqueToken();
+    const auto browser_context_id = browser()->GetProfile()->UniqueToken();
     const url::Origin origin = embedded_test_server()->GetOrigin(site);
 
     // Look up the reader and writer for `origin`.
@@ -185,7 +185,7 @@ class SiteDataCacheFacadeBrowserTest : public InProcessBrowserTest {
     NavigateParams params(browser(), url,
                           ui::PageTransition::PAGE_TRANSITION_LINK);
     params.tabstrip_index = index;
-    params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewBackgroundTab;
     Navigate(&params);
     content::WebContents* web_contents = params.navigated_or_inserted_contents;
     return content::WaitForLoadStop(web_contents) ? web_contents : nullptr;

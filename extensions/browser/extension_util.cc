@@ -16,10 +16,12 @@
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/child_process_security_policy.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/storage_partition_config.h"
+#include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
@@ -38,6 +40,7 @@
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_handlers/incognito_info.h"
 #include "extensions/common/manifest_handlers/shared_module_info.h"
+#include "extensions/common/mojom/api_permission_id.mojom.h"
 #include "extensions/common/mojom/manifest.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/switches.h"
@@ -156,6 +159,23 @@ bool CanCrossIncognito(const Extension* extension,
   CHECK(extension);
   return IsIncognitoEnabled(extension->id(), context) &&
          !IncognitoInfo::IsSplitMode(extension);
+}
+
+bool IsWebContentsInContext(content::WebContents& web_contents,
+                            content::BrowserContext& browser_context,
+                            bool include_incognito) {
+  content::BrowserContext* web_contents_browser_context =
+      web_contents.GetBrowserContext();
+  if (web_contents_browser_context == &browser_context) {
+    return true;
+  }
+
+  if (!include_incognito) {
+    return false;
+  }
+
+  return ExtensionsBrowserClient::Get()->IsSameContext(
+      web_contents_browser_context, &browser_context);
 }
 
 bool IsExtensionIdle(const std::string& extension_id,
@@ -412,7 +432,7 @@ ExtensionId GetExtensionIdForSiteInstance(
 
   // Navigating to a disabled (or uninstalled or not-yet-installed) extension
   // will set the site URL to chrome-extension://invalid.
-  ExtensionId maybe_extension_id =
+  std::string_view maybe_extension_id =
       site_instance.GetSecurityPrincipal().GetHost();
   if (maybe_extension_id == "invalid") {
     return ExtensionId();
@@ -424,7 +444,7 @@ ExtensionId GetExtensionIdForSiteInstance(
   // known, extension-id-based hostname).
   DCHECK(crx_file::id_util::IdIsValid(maybe_extension_id))
       << "; maybe_extension_id = " << maybe_extension_id;
-  return maybe_extension_id;
+  return ExtensionId(maybe_extension_id);
 }
 
 std::string GetExtensionIdFromFrame(
@@ -435,7 +455,7 @@ std::string GetExtensionIdFromFrame(
     return std::string();
   }
 
-  return site_instance->GetSecurityPrincipal().GetHost();
+  return std::string(site_instance->GetSecurityPrincipal().GetHost());
 }
 
 bool CanRendererHostExtensionOrigin(int render_process_id,
@@ -551,6 +571,15 @@ bool IsChromeApp(const ExtensionId& extension_id,
   return extension->is_platform_app();
 }
 
+bool HasClipboardWritePermission(const ExtensionId& extension_id,
+                                 content::BrowserContext* context) {
+  const Extension* extension =
+      ExtensionRegistry::Get(context)->enabled_extensions().GetByID(
+          extension_id);
+  return extension && extension->permissions_data()->HasAPIPermission(
+                          mojom::APIPermissionID::kClipboardWrite);
+}
+
 bool IsAppLaunchable(const ExtensionId& extension_id,
                      content::BrowserContext* context) {
   DisableReasonSet reason =
@@ -585,6 +614,19 @@ bool IsExtensionDownload(const download::DownloadItem& download_item) {
     return true;
   }
   return false;
+}
+
+const GURL& GetURLForExtensionPermissionCheck(content::RenderFrameHost* rfh) {
+  // Avoid `CHECK_NE(lifecycle_state(), LifecycleStateImpl::kSpeculative)` in
+  // `content::RenderFrameHost::IsErrorDocument()` by checking for an empty
+  // `GURL` first.
+  if (!rfh || rfh->GetLastCommittedURL().is_empty()) {
+    return GURL::EmptyGURL();
+  }
+  if (rfh->IsErrorDocument()) {
+    return GURL::EmptyGURL();
+  }
+  return rfh->GetLastCommittedURL();
 }
 
 }  // namespace extensions::util

@@ -8,15 +8,16 @@
 
 #include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/i18n/rtl.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/profiles/profile_view_utils.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
-#include "chrome/common/webui_url_constants.h"
 #include "ui/base/pointer/touch_ui_controller.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/views/style/typography_provider.h"
@@ -72,8 +73,18 @@ std::string_view LayoutConstantToCssVarName(LayoutConstant layout_constant) {
       return "--location-bar-page-info-icon-dangerous-leading-padding";
     case kLocationBarPageInfoIconDangerousTrailingPadding:
       return "--location-bar-page-info-icon-dangerous-trailing-padding";
+    case kLocationBarLeadingDecorationEdgePadding:
+      return "--location-bar-leading-decoration-edge-padding";
+    case kLocationBarLeadingDecorationInnerPadding:
+      return "--location-bar-leading-decoration-inner-padding";
+    case kLocationBarInputIconIndent:
+      return "--location-bar-input-icon-indent";
+    case kLocationBarInputTextIndent:
+      return "--location-bar-input-text-indent";
     case kLocationBarTrailingDecorationEdgePadding:
       return "--location-bar-trailing-decoration-edge-padding";
+    case kLocationBarTrailingDecorationAimEdgePadding:
+      return "--location-bar-trailing-decoration-aim-edge-padding";
     case kLocationBarTrailingDecorationInnerPadding:
       return "--location-bar-trailing-decoration-inner-padding";
     case kLocationBarIconSize:
@@ -114,6 +125,10 @@ std::string_view LayoutConstantToCssVarName(LayoutConstant layout_constant) {
       return "--tab-separator-height";
     case kTabPreTitlePadding:
       return "--tab-pre-title-padding";
+    case kTabVerticalPadding:
+      return "--tab-vertical-padding";
+    case kTabHorizontalPadding:
+      return "--tab-horizontal-padding";
     case kTabStackDistance:
       return "--tab-stack-distance";
     case kTabstripToolbarOverlap:
@@ -134,6 +149,8 @@ std::string_view LayoutConstantToCssVarName(LayoutConstant layout_constant) {
       return "--toolbar-element-padding";
     case kToolbarIconDefaultMargin:
       return "--toolbar-icon-default-margin";
+    case kToolbarButtonRefreshExpandedMargin:
+      return "--toolbar-button-refresh-expanded-margin";
     case kToolbarCornerRadius:
       return "--toolbar-corner-radius";
     case kSidePanelInset:
@@ -183,8 +200,8 @@ std::string_view LayoutConstantToCssVarName(LayoutConstant layout_constant) {
 // static
 std::string WebUIToolbarLayoutCssHelper::GenerateLayoutConstantsCss() {
   std::string css_string;
-  // At the time of this update, actual usage was about 3.7K.
-  css_string.reserve(5 * 1024);
+  // At the time of this update, actual usage was about 5.9KiB.
+  css_string.reserve(8 * 1024);
 
   // Add some boolean flags.
   css_string.append(
@@ -194,18 +211,15 @@ std::string WebUIToolbarLayoutCssHelper::GenerateLayoutConstantsCss() {
       "  initial-value: 0;\n"
       "}\n");
 
-  css_string.append(":host{");
+  // `:host` serves a `<link>` in a shadow root (toolbar, contextual tasks).
+  // `:root` serves a `<link>` in a document `<head>` (the omnibox popup).
+  // Neither matches in the other context.
+  css_string.append(":host,:root{");
 
   if (ui::TouchUiController::Get()->touch_ui()) {
     css_string.append("--touch-mode: 1;");
   } else {
     css_string.append("--touch-mode: 0;");
-  }
-
-  if (gfx::Animation::ShouldRenderRichAnimation()) {
-    css_string.append("--animations-enabled: 1;");
-  } else {
-    css_string.append("--animations-enabled: 0;");
   }
 
   // Add LayoutConstant values.
@@ -221,6 +235,9 @@ std::string WebUIToolbarLayoutCssHelper::GenerateLayoutConstantsCss() {
   }
 
   // Add insets.
+  AddInsets("--location-bar-page-action-icon-padding",
+            GetLayoutInsets(LOCATION_BAR_PAGE_ACTION_ICON_PADDING), css_string);
+
   AddInsets("--location-bar-page-info-icon-padding",
             GetLayoutInsets(LOCATION_BAR_PAGE_INFO_ICON_PADDING), css_string);
 
@@ -234,9 +251,17 @@ std::string WebUIToolbarLayoutCssHelper::GenerateLayoutConstantsCss() {
             css_string);
   AddInsets("--toolbar-button-padding", GetLayoutInsets(TOOLBAR_BUTTON),
             css_string);
+  AddInsets("--toolbar-interior-margin",
+            GetLayoutInsets(TOOLBAR_INTERIOR_MARGIN), css_string);
   base::StrAppend(&css_string,
                   {"--avatar-chip-icon-label-spacing:",
                    base::NumberToString(kAvatarChipIconLabelSpacing), "px;"});
+  const int avatar_size =
+      GetLayoutConstant(LayoutConstant::kToolbarButtonIconSize);
+  const int ring_delta = kAvatarRingGapDip + GetAvatarRingThickness(avatar_size);
+  base::StrAppend(
+      &css_string,
+      {"--avatar-ring-delta:", base::NumberToString(ring_delta), "px;"});
 
   // Add fonts.
   const auto& typography_provider = views::TypographyProvider::Get();
@@ -253,6 +278,12 @@ std::string WebUIToolbarLayoutCssHelper::GenerateLayoutConstantsCss() {
                    views::style::STYLE_PRIMARY, typography_provider,
                    css_string);
   AddFontVariables("--toolbar-button", CONTEXT_TOOLBAR_BUTTON,
+                   views::style::STYLE_PRIMARY, typography_provider,
+                   css_string);
+  AddFontVariables("--glic-button", views::style::CONTEXT_BUTTON_MD,
+                   views::style::STYLE_BODY_3_EMPHASIS, typography_provider,
+                   css_string);
+  AddFontVariables("--drag-template", views::style::CONTEXT_BUTTON,
                    views::style::STYLE_PRIMARY, typography_provider,
                    css_string);
 
@@ -300,11 +331,10 @@ void WebUIToolbarLayoutCssHelper::SetAsRequestFilter(
 
 // static
 void WebUIToolbarLayoutCssHelper::PopulateLocalResourceLoaderConfig(
-    blink::mojom::LocalResourceLoaderConfig* config) {
+    blink::mojom::LocalResourceLoaderConfig* config,
+    const url::Origin& origin) {
   std::string layout_css = GenerateLayoutConstantsCss();
-  url::Origin layout_css_origin =
-      url::Origin::Create(GURL(chrome::kChromeUIWebUIToolbarURL));
-  auto& source = config->sources[layout_css_origin];
+  auto& source = config->sources[origin];
   if (source.is_null()) {
     source = blink::mojom::LocalResourceSource::New();
   }
@@ -383,10 +413,26 @@ void WebUIToolbarLayoutCssHelper::AddInsets(std::string_view prefix,
   base::StrAppend(
       &css_string,
       {prefix, "-bottom:", base::NumberToString(insets.bottom()), "px;"});
+  // TODO(crbug.com/538651978): Deprecate physical -left and -right variables
+  // in favor of logical -start and -end once all WebUI toolbar components
+  // adopt logical CSS properties.
   base::StrAppend(
       &css_string,
       {prefix, "-left:", base::NumberToString(insets.left()), "px;"});
   base::StrAppend(
       &css_string,
       {prefix, "-right:", base::NumberToString(insets.right()), "px;"});
+  // Output logical -start and -end variables so WebUI stylesheets can use
+  // logical CSS rules without relying on physical -left or -right variables,
+  // correctly accommodating both LTR and RTL layouts.
+  base::StrAppend(&css_string,
+                  {prefix, "-start:",
+                   base::NumberToString(base::i18n::IsRTL() ? insets.right()
+                                                            : insets.left()),
+                   "px;"});
+  base::StrAppend(&css_string,
+                  {prefix, "-end:",
+                   base::NumberToString(base::i18n::IsRTL() ? insets.left()
+                                                            : insets.right()),
+                   "px;"});
 }

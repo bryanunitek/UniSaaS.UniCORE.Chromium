@@ -217,8 +217,7 @@ void VideoCaptureController::AddClient(
     const GlobalRenderFrameHostId& render_frame_host_id,
     VideoCaptureControllerEventHandler* event_handler,
     const media::VideoCaptureSessionId& session_id,
-    const media::VideoCaptureParams& params,
-    std::optional<url::Origin> origin) {
+    const media::VideoCaptureParams& params) {
   CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
   std::ostringstream string_stream;
   string_stream << "VideoCaptureController::AddClient(): id = " << id
@@ -251,7 +250,6 @@ void VideoCaptureController::AddClient(
   // If this is the first client added to the controller, cache the parameters.
   if (controller_clients_.empty()) {
     video_capture_format_ = params.requested_format;
-    first_client_origin_ = origin;
   }
 
   // Signal error in case device is already in error state.
@@ -393,11 +391,11 @@ void VideoCaptureController::StopSession(
                 << session_id;
   EmitLogMessage(string_stream.str(), 1);
 
-  ControllerClient* client = FindClient(session_id);
-
-  if (client) {
-    client->session_closed = true;
-    client->event_handler->OnEnded(client->controller_id);
+  for (const auto& client : controller_clients_) {
+    if (client->session_id == session_id && !client->session_closed) {
+      client->session_closed = true;
+      client->event_handler->OnEnded(client->controller_id);
+    }
   }
 }
 
@@ -433,11 +431,6 @@ VideoCaptureController::GetVideoCaptureFormat() const {
   return video_capture_format_;
 }
 
-const std::optional<url::Origin> VideoCaptureController::GetFirstClientOrigin()
-    const {
-  return first_client_origin_;
-}
-
 void VideoCaptureController::OnCaptureConfigurationChanged() {
   CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
   EmitLogMessage(__func__, 3);
@@ -453,9 +446,10 @@ void VideoCaptureController::OnNewBuffer(
     int32_t buffer_id,
     media::mojom::VideoBufferHandlePtr buffer_handle) {
   CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
-  CHECK(FindUnretiredBufferContextFromBufferId(buffer_id) ==
-            buffer_contexts_.end(),
-        base::NotFatalUntil::M152);
+  // TODO(crbug.com/543790950): CHECK-exclusion: Convert to a CHECK once we
+  // are confident it won't be triggered.
+  DCHECK(FindUnretiredBufferContextFromBufferId(buffer_id) ==
+         buffer_contexts_.end());
   buffer_contexts_.emplace_back(next_buffer_context_id_++, buffer_id,
                                 launched_device_.get(),
                                 std::move(buffer_handle));
@@ -495,11 +489,6 @@ void VideoCaptureController::OnFrameReadyInBuffer(
   if (!has_received_frames_) {
     // Check the following group of metrics is captured only for cameras.
     if (stream_type() == blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE) {
-      // This metric combines width and height into a single UMA metric.
-      media::LogCaptureCurrentDeviceResolution(
-          frame_ready_buffer.frame_info->coded_size.width(),
-          frame_ready_buffer.frame_info->coded_size.height());
-
       media::LogCaptureCurrentDevicePixelFormat(
           frame_ready_buffer.frame_info->pixel_format);
     }
@@ -805,13 +794,10 @@ void VideoCaptureController::RequestRefreshFrame() {
   launched_device_->RequestRefreshFrame();
 }
 
-void VideoCaptureController::SetDesktopCaptureWindowIdAsync(
-    gfx::NativeViewId window_id,
-    base::OnceClosure done_cb) {
+void VideoCaptureController::InvalidateBuffers() {
   CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M152);
   CHECK(launched_device_, base::NotFatalUntil::M152);
-  launched_device_->SetDesktopCaptureWindowIdAsync(window_id,
-                                                   std::move(done_cb));
+  launched_device_->InvalidateBuffers();
 }
 
 VideoCaptureController::ControllerClient* VideoCaptureController::FindClient(
@@ -819,15 +805,6 @@ VideoCaptureController::ControllerClient* VideoCaptureController::FindClient(
     VideoCaptureControllerEventHandler* handler) {
   for (const auto& client : controller_clients_) {
     if (client->controller_id == id && client->event_handler == handler)
-      return client.get();
-  }
-  return nullptr;
-}
-
-VideoCaptureController::ControllerClient* VideoCaptureController::FindClient(
-    const base::UnguessableToken& session_id) {
-  for (const auto& client : controller_clients_) {
-    if (client->session_id == session_id)
       return client.get();
   }
   return nullptr;

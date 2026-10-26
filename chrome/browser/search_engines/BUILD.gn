@@ -34,10 +34,10 @@ source_set("search_engines") {
   ]
 
   deps = [
-    "//chrome/app:branded_strings",
     "//chrome/browser:browser_process",
     "//chrome/browser/google",
     "//chrome/browser/history",
+    "//chrome/browser/metrics",
     "//chrome/browser/regional_capabilities",
     "//chrome/browser/search_engine_choice",
     "//chrome/browser/webdata_services",
@@ -46,6 +46,7 @@ source_set("search_engines") {
     "//components/google/core/common",
     "//components/pref_registry",
     "//components/regional_capabilities",
+    "//components/strings",
     "//components/version_info",
     "//content/public/browser",
     "//rlz/buildflags",
@@ -80,6 +81,47 @@ source_set("search_engines") {
   }
 }
 
+source_set("test_support") {
+  testonly = true
+
+  sources = [
+    "template_url_service_factory_test_util.cc",
+    "template_url_service_factory_test_util.h",
+    "template_url_service_test_util.cc",
+    "template_url_service_test_util.h",
+  ]
+
+  public_deps = [
+    ":search_engines",
+    "//base",
+    "//chrome/test/base:testing_profile",
+    "//components/search_engines",
+    "//services/data_decoder/public/cpp:test_support",
+  ]
+
+  deps = [
+    "//chrome/browser:browser_process",
+    "//chrome/browser/enterprise",
+    "//chrome/browser/history",
+    "//chrome/browser/metrics",
+    "//chrome/browser/regional_capabilities",
+    "//chrome/browser/search_engine_choice",
+    "//chrome/browser/signin",
+    "//chrome/browser/webdata_services",
+    "//chrome/test/base:testing_browser_process_impl",
+    "//chrome/test/base:testing_profile_impl",
+    "//components/prefs:test_support",
+    "//components/regional_capabilities",
+    "//components/regional_capabilities:test_support",
+    "//components/search_engines:test_support",
+    "//components/sync_preferences:test_support",
+    "//components/webdata/common",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
 source_set("unit_tests") {
   testonly = true
   sources = [
@@ -93,6 +135,7 @@ source_set("unit_tests") {
     "//base",
     "//base/test:test_support",
     "//chrome/test:test_support",
+    "//components/google/core/common",
     "//components/search_engines",
     "//components/search_engines:test_support",
     "//components/sync:test_support",
@@ -128,7 +171,6 @@ if (!is_android) {
     deps = [
       ":search_engines",
       "//base",
-      "//chrome/browser/ui",
       "//chrome/test:test_support",
       "//chrome/test:test_support_ui",
       "//content/test:test_support",

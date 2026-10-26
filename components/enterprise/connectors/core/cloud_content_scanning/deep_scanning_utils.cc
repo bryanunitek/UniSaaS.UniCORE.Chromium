@@ -10,6 +10,7 @@
 #include "build/build_config.h"
 #include "components/crash/core/common/crash_key.h"
 #include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_request.h"
+#include "components/download/public/common/download_utils.h"
 #include "components/enterprise/connectors/core/common.h"
 #include "components/enterprise/connectors/core/features.h"
 #include "components/safe_browsing/core/common/features.h"
@@ -64,6 +65,7 @@ bool ContentAnalysisActionAllowsDataUse(TriggeredRule::Action action) {
     case TriggeredRule::WARN:
     case TriggeredRule::BLOCK:
     case TriggeredRule::FORCE_SAVE_TO_CLOUD:
+    case TriggeredRule::JUSTIFICATION_REQUIRED:
     case TriggeredRule::KEEP_IN_MANAGED_CHROME:
       return false;
   }
@@ -78,6 +80,8 @@ crash_reporter::CrashKeyString<7>* GetScanCrashKey(ScanningCrashKey key) {
       "pending-file-download-scans");
   static crash_reporter::CrashKeyString<7> pending_prints(
       "pending-print-scans");
+  static crash_reporter::CrashKeyString<7> pending_network_requests(
+      "pending-network-request-scans");
   static crash_reporter::CrashKeyString<7> total_file_uploads(
       "total-file-upload-scans");
   static crash_reporter::CrashKeyString<7> total_text_uploads(
@@ -85,6 +89,8 @@ crash_reporter::CrashKeyString<7>* GetScanCrashKey(ScanningCrashKey key) {
   static crash_reporter::CrashKeyString<7> total_file_downloads(
       "total-file-download-scans");
   static crash_reporter::CrashKeyString<7> total_prints("total-print-scans");
+  static crash_reporter::CrashKeyString<7> total_network_requests(
+      "total-network-request-scans");
   switch (key) {
     case ScanningCrashKey::PENDING_FILE_UPLOADS:
       return &pending_file_uploads;
@@ -94,6 +100,8 @@ crash_reporter::CrashKeyString<7>* GetScanCrashKey(ScanningCrashKey key) {
       return &pending_file_downloads;
     case ScanningCrashKey::PENDING_PRINTS:
       return &pending_prints;
+    case ScanningCrashKey::PENDING_NETWORK_REQUESTS:
+      return &pending_network_requests;
     case ScanningCrashKey::TOTAL_FILE_UPLOADS:
       return &total_file_uploads;
     case ScanningCrashKey::TOTAL_TEXT_UPLOADS:
@@ -102,6 +110,8 @@ crash_reporter::CrashKeyString<7>* GetScanCrashKey(ScanningCrashKey key) {
       return &total_file_downloads;
     case ScanningCrashKey::TOTAL_PRINTS:
       return &total_prints;
+    case ScanningCrashKey::TOTAL_NETWORK_REQUESTS:
+      return &total_network_requests;
   }
 }
 
@@ -110,10 +120,12 @@ int* GetScanCrashKeyCount(ScanningCrashKey key) {
   static int pending_text_uploads = 0;
   static int pending_file_downloads = 0;
   static int pending_prints = 0;
+  static int pending_network_requests = 0;
   static int total_file_uploads = 0;
   static int total_text_uploads = 0;
   static int total_file_downloads = 0;
   static int total_prints = 0;
+  static int total_network_requests = 0;
   switch (key) {
     case ScanningCrashKey::PENDING_FILE_UPLOADS:
       return &pending_file_uploads;
@@ -123,6 +135,8 @@ int* GetScanCrashKeyCount(ScanningCrashKey key) {
       return &pending_file_downloads;
     case ScanningCrashKey::PENDING_PRINTS:
       return &pending_prints;
+    case ScanningCrashKey::PENDING_NETWORK_REQUESTS:
+      return &pending_network_requests;
     case ScanningCrashKey::TOTAL_FILE_UPLOADS:
       return &total_file_uploads;
     case ScanningCrashKey::TOTAL_TEXT_UPLOADS:
@@ -131,6 +145,8 @@ int* GetScanCrashKeyCount(ScanningCrashKey key) {
       return &total_file_downloads;
     case ScanningCrashKey::TOTAL_PRINTS:
       return &total_prints;
+    case ScanningCrashKey::TOTAL_NETWORK_REQUESTS:
+      return &total_network_requests;
   }
 }
 
@@ -165,7 +181,7 @@ void MaybeReportDeepScanningVerdict(
     const std::string& file_name,
     const HashCallbackVariant& sha256_or_cb,
     const std::string& mime_type,
-    const std::string& trigger,
+    DataTransferEventTrigger trigger,
     const std::string& content_transfer_method,
     const std::string& source_email,
     const int64_t content_size,
@@ -184,7 +200,8 @@ void MaybeReportDeepScanningVerdict(
         GURL(content_analysis_info->url()), content_analysis_info->tab_url(),
         source, destination, file_name, sha256_or_cb, mime_type, trigger,
         response.request_token(), unscanned_reason, content_transfer_method,
-        content_size, content_analysis_info->referrer_chain(), event_result);
+        content_size, content_analysis_info->referrer_chain(), event_result,
+        content_analysis_info->extension_initiator());
   }
 
   if (result != ScanRequestUploadResult::kSuccess) {
@@ -205,7 +222,8 @@ void MaybeReportDeepScanningVerdict(
           source, destination, file_name, sha256_or_cb, mime_type, trigger,
           response.request_token(), std::move(unscanned_reason),
           content_transfer_method, content_size,
-          content_analysis_info->referrer_chain(), event_result);
+          content_analysis_info->referrer_chain(), event_result,
+          content_analysis_info->extension_initiator());
     } else if (response_result.triggered_rules_size() > 0) {
       reporting_event_router->OnAnalysisConnectorResult(
           GURL(content_analysis_info->url()), content_analysis_info->tab_url(),
@@ -213,7 +231,8 @@ void MaybeReportDeepScanningVerdict(
           response.request_token(), content_transfer_method, source_email,
           content_analysis_info->GetContentAreaAccountEmail(), response_result,
           content_size, content_analysis_info->referrer_chain(),
-          content_analysis_info->frame_url_chain(), event_result);
+          content_analysis_info->frame_url_chain(), event_result,
+          content_analysis_info->extension_initiator());
     }
   }
 }
@@ -226,7 +245,7 @@ void ReportAnalysisConnectorWarningBypass(
     const std::string& file_name,
     const enterprise_connectors::HashCallbackVariant& sha256_or_cb,
     const std::string& mime_type,
-    const std::string& trigger,
+    DataTransferEventTrigger trigger,
     const std::string& content_transfer_method,
     const int64_t content_size,
     const ContentAnalysisResponse& response,
@@ -250,7 +269,8 @@ void ReportAnalysisConnectorWarningBypass(
         /*source_email=*/"",
         content_analysis_info->GetContentAreaAccountEmail(), user_justification,
         result, content_size, content_analysis_info->referrer_chain(),
-        content_analysis_info->frame_url_chain(), EventResult::BYPASSED);
+        content_analysis_info->frame_url_chain(), EventResult::BYPASSED,
+        content_analysis_info->extension_initiator());
   }
 }
 
@@ -325,7 +345,20 @@ void InitializeBinaryUploadRequest(BinaryUploadRequest* request,
     }
 
     if (base::FeatureList::IsEnabled(safe_browsing::kEnhancedFieldsForSecOps)) {
-      request->set_referrer_chain(info.referrer_chain());
+      // Only trim the referrer_chain for reporting.
+      auto referrer_chain_copy(info.referrer_chain());
+      GURL mutable_url;
+      for (auto& entry : referrer_chain_copy) {
+        mutable_url = GURL(entry.url());
+        download::TruncateDataUrlAtTheEndIfNeeded(mutable_url);
+        entry.set_url(mutable_url.spec());
+        for (auto& server_redirect : *entry.mutable_server_redirect_chain()) {
+          mutable_url = GURL(server_redirect.url());
+          download::TruncateDataUrlAtTheEndIfNeeded(mutable_url);
+          server_redirect.set_url(mutable_url.spec());
+        }
+      }
+      request->set_referrer_chain(referrer_chain_copy);
     }
 
     std::string email = info.GetContentAreaAccountEmail();
@@ -341,7 +374,9 @@ void InitializeBinaryUploadRequest(BinaryUploadRequest* request,
   request->set_user_action_requests_count(info.user_action_requests_count());
   request->set_user_action_id(info.user_action_id());
   request->set_email(info.email());
-  request->set_url(info.url());
+  GURL mutable_url(info.url());
+  download::TruncateDataUrlAtTheEndIfNeeded(mutable_url);
+  request->set_url(mutable_url);
   request->set_tab_url(info.tab_url());
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
@@ -539,7 +574,7 @@ void RecordDeepScanMetrics(bool is_cloud,
         prefix + access_point_string + ".BytesPerSeconds",
         (1000 * total_bytes) / duration.InMilliseconds(),
         /*min=*/kMinBytesPerSecond,
-        /*max=*/kMaxBytesPerSecond,
+        /*exclusive_max=*/kMaxBytesPerSecond,
         /*buckets=*/50);
   }
 

@@ -9,8 +9,7 @@
 #include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "components/viz/common/gpu/raster_context_provider.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_deferred_paint_record.h"
-#include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
+#include "third_party/blink/renderer/platform/graphics/web_graphics_context_3d_provider_wrapper.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 
 namespace blink {
@@ -20,8 +19,10 @@ CanvasImageProvider::CanvasImageProvider(
     cc::ImageDecodeCache* cache_f16,
     const gfx::ColorSpace& target_color_space,
     viz::SharedImageFormat canvas_format,
-    cc::PlaybackImageProvider::RasterMode raster_mode)
-    : raster_mode_(raster_mode) {
+    cc::PlaybackImageProvider::RasterMode raster_mode,
+    base::WeakPtr<WebGraphicsContext3DProviderWrapper> context_provider_wrapper)
+    : raster_mode_(raster_mode),
+      context_provider_wrapper_(std::move(context_provider_wrapper)) {
   std::optional<cc::PlaybackImageProvider::Settings> settings =
       cc::PlaybackImageProvider::Settings();
   settings->raster_mode = raster_mode_;
@@ -64,22 +65,14 @@ void CanvasImageProvider::SetAnimatedImageFrameIndexes(
 cc::ImageProvider::ScopedResult CanvasImageProvider::GetRasterContent(
     const cc::DrawImage& draw_image) {
   cc::PaintImage paint_image = draw_image.paint_image();
-  if (paint_image.IsDeferredPaintRecord()) {
-    CHECK(!paint_image.IsPaintWorklet());
-    scoped_refptr<CanvasDeferredPaintRecord> canvas_deferred_paint_record(
-        static_cast<CanvasDeferredPaintRecord*>(
-            paint_image.deferred_paint_record().get()));
-    return cc::ImageProvider::ScopedResult(
-        canvas_deferred_paint_record->GetPaintRecord());
-  }
+  CHECK(!paint_image.IsDeferredPaintRecord());
 
   // Bind texture backing to RasterContextProvider if necessary
   if (paint_image.IsTextureBacked()) {
-    if (auto context_provider_wrapper =
-            SharedGpuContext::ContextProviderWrapper()) {
+    if (context_provider_wrapper_) {
       paint_image.BindTextureBacking(
           base::MakeRefCounted<viz::RasterContextProviderWrapper>(
-              context_provider_wrapper->ContextProvider()
+              context_provider_wrapper_->ContextProvider()
                   .RasterContextProvider()));
       bound_texture_backed_images_.emplace_back(paint_image);
     }

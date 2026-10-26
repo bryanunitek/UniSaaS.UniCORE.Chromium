@@ -53,13 +53,15 @@ MultiStep GlicActorMouseMoveToolUiTest::MouseMoveAction(
 
 IN_PROC_BROWSER_TEST_F(GlicActorMouseMoveToolUiTest, NonExistentNode) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/mouse_log.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/mouse_log.html");
 
   RunTestSequence(
       InitializeWithOpenGlicWindow(),
       StartActorTaskInNewTab(task_url, kNewActorTabId),
       GetPageContextForActorTab(),
       WaitForJsResult(kNewActorTabId, "()=>{ return event_log.join(',') }", ""),
+      // The fake id is missing from the saved APC, so the browser rejects it.
       ExecuteAction(
           base::BindLambdaForTesting([this]() {
             content::RenderFrameHost* frame =
@@ -73,7 +75,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorMouseMoveToolUiTest, NonExistentNode) {
 
 IN_PROC_BROWSER_TEST_F(GlicActorMouseMoveToolUiTest, Events) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/mouse_log.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/mouse_log.html");
 
   RunTestSequence(
       InitializeWithOpenGlicWindow(),
@@ -92,7 +95,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorMouseMoveToolUiTest, Events) {
 
 IN_PROC_BROWSER_TEST_F(GlicActorMouseMoveToolUiTest, TargetOutsideViewport) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/mouse_log.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/mouse_log.html");
 
   RunTestSequence(
       InitializeWithOpenGlicWindow(),
@@ -108,7 +112,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorMouseMoveToolUiTest, TargetOutsideViewport) {
 
 IN_PROC_BROWSER_TEST_F(GlicActorMouseMoveToolUiTest, MoveToCoordinate) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/mouse_log.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/mouse_log.html");
   gfx::Rect first_bounds;
   auto move_provider = base::BindLambdaForTesting([this, &first_bounds]() {
     Actions action =
@@ -129,7 +134,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorMouseMoveToolUiTest, MoveToCoordinate) {
 IN_PROC_BROWSER_TEST_F(GlicActorMouseMoveToolUiTest,
                        MoveToCoordinateOffScreen) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/mouse_log.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/mouse_log.html");
   gfx::Rect offscreen_bounds;
   auto move_provider = base::BindLambdaForTesting([this, &offscreen_bounds]() {
     Actions action = actor::MakeMouseMove(

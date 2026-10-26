@@ -73,7 +73,6 @@ import org.chromium.chrome.browser.tabwindow.TabWindowManager;
 import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
 import org.chromium.chrome.browser.toolbar.ToolbarManager;
 import org.chromium.chrome.browser.ui.edge_to_edge.NoOpTopInsetProvider;
-import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
@@ -82,6 +81,7 @@ import org.chromium.chrome.test.util.browser.tabmodel.MockTabModelSelector;
 import org.chromium.components.browser_ui.util.motion.MotionEventTestUtils;
 import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener.ScrollDirection;
 import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener.SwipeHandler;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
@@ -103,10 +103,9 @@ public class LayoutManagerTest implements MockTabModelDelegate {
     @Mock private HubLayoutDependencyHolder mHubLayoutDependencyHolder;
     @Mock private TabWindowManager mTabWindowManager;
     @Mock private ToolbarManager mToolbarManager;
-    @Mock private ViewGroup mContentView;
-    @Mock private CompositorViewHolder mCompositorViewHolder;
     @Mock private OverridableTabCount mOverridableTabCount;
 
+    private ViewGroup mContentView;
     private NonNullObservableSupplier<CompositorViewHolder> mCompositorViewHolderSupplier;
     private TabModelSelector mTabModelSelector;
     private OneshotSupplierImpl<TabSwitcher> mTabSwitcherSupplier;
@@ -142,11 +141,6 @@ public class LayoutManagerTest implements MockTabModelDelegate {
         mPointerCoords[1].y = 0;
         mPointerCoords[1].pressure = 1;
         mPointerCoords[1].size = 1;
-    }
-
-    private void setAccessibilityEnabledForTesting(Boolean value) {
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(value));
     }
 
     /**
@@ -185,11 +179,13 @@ public class LayoutManagerTest implements MockTabModelDelegate {
             int standardIndexSelected,
             int incognitoIndexSelected,
             boolean incognitoSelected) {
-        mCompositorViewHolderSupplier = ObservableSuppliers.createNonNull(mCompositorViewHolder);
         Context context =
                 new ContextThemeWrapper(
                         ApplicationProvider.getApplicationContext(),
                         R.style.Theme_BrowserUI_DayNight);
+        mCompositorViewHolderSupplier =
+                ObservableSuppliers.createNonNull(
+                        new CompositorViewHolder(context, /* attrs= */ null));
 
         mDpToPx = context.getResources().getDisplayMetrics().density;
 
@@ -679,28 +675,28 @@ public class LayoutManagerTest implements MockTabModelDelegate {
                             new LayoutStateProvider.LayoutStateObserver() {
                                 @Override
                                 public void onStartedShowing(int layoutType) {
-                                    Log.d(TAG, "Started to show: " + layoutType);
+                                    Log.d(TAG, "Started to show: %d", layoutType);
                                     startedShowingCallback.layoutType = layoutType;
                                     startedShowingCallback.notifyCalled();
                                 }
 
                                 @Override
                                 public void onFinishedShowing(int layoutType) {
-                                    Log.d(TAG, "Finished showing: " + layoutType);
+                                    Log.d(TAG, "Finished showing: %d", layoutType);
                                     finishedShowingCallback.layoutType = layoutType;
                                     finishedShowingCallback.notifyCalled();
                                 }
 
                                 @Override
                                 public void onStartedHiding(int layoutType) {
-                                    Log.d(TAG, "Started to hide: " + layoutType);
+                                    Log.d(TAG, "Started to hide: %d", layoutType);
                                     startedHidingCallback.layoutType = layoutType;
                                     startedHidingCallback.notifyCalled();
                                 }
 
                                 @Override
                                 public void onFinishedHiding(int layoutType) {
-                                    Log.d(TAG, "Finished hiding: " + layoutType);
+                                    Log.d(TAG, "Finished hiding: %d", layoutType);
                                     finishedHidingCallback.layoutType = layoutType;
                                     finishedHidingCallback.notifyCalled();
                                 }
@@ -733,7 +729,8 @@ public class LayoutManagerTest implements MockTabModelDelegate {
 
     @After
     public void tearDown() {
-        setAccessibilityEnabledForTesting(null);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> AccessibilityStateTestHelper.uninitializeForTesting());
     }
 
     private void launchedChromeAndEnterTabSwitcher() {

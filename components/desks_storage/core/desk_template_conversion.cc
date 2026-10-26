@@ -30,6 +30,7 @@
 #include "components/tab_groups/tab_group_visual_data.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/gfx/geometry/rect.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -181,6 +182,17 @@ constexpr auto kValidTabGroupColors = base::MakeFixedFlatSet<std::string_view>(
 
 // Version number.
 constexpr int kVersionNum = 1;
+
+constexpr char kChromeUINewTabURL[] = "chrome://newtab/";
+bool IsURLValidForDeskTemplate(const GURL& url) {
+  if (url.is_empty()) {
+    return true;
+  }
+  if (!url.is_valid()) {
+    return false;
+  }
+  return url.SchemeIsHTTPOrHTTPS() || url == GURL(kChromeUINewTabURL);
+}
 
 // Conversion to desk methods.
 bool GetString(const base::DictValue& dict, const char* key, std::string* out) {
@@ -393,33 +405,33 @@ bool IsValidWindowOpenDisposition(const std::string& disposition) {
 // Returns a casted WindowOpenDisposition to be set in the app restore data.
 int32_t StringToWindowOpenDisposition(const std::string& disposition) {
   if (disposition == kWindowOpenDispositionUnknown) {
-    return static_cast<int32_t>(WindowOpenDisposition::UNKNOWN);
+    return static_cast<int32_t>(WindowOpenDisposition::kUnknown);
   } else if (disposition == kWindowOpenDispositionCurrentTab) {
-    return static_cast<int32_t>(WindowOpenDisposition::CURRENT_TAB);
+    return static_cast<int32_t>(WindowOpenDisposition::kCurrentTab);
   } else if (disposition == kWindowOpenDispositionSingletonTab) {
-    return static_cast<int32_t>(WindowOpenDisposition::SINGLETON_TAB);
+    return static_cast<int32_t>(WindowOpenDisposition::kSingletonTab);
   } else if (disposition == kWindowOpenDispositionNewForegroundTab) {
-    return static_cast<int32_t>(WindowOpenDisposition::NEW_FOREGROUND_TAB);
+    return static_cast<int32_t>(WindowOpenDisposition::kNewForegroundTab);
   } else if (disposition == kWindowOpenDispositionNewBackgroundTab) {
-    return static_cast<int32_t>(WindowOpenDisposition::NEW_BACKGROUND_TAB);
+    return static_cast<int32_t>(WindowOpenDisposition::kNewBackgroundTab);
   } else if (disposition == kWindowOpenDispositionNewPopup) {
-    return static_cast<int32_t>(WindowOpenDisposition::NEW_POPUP);
+    return static_cast<int32_t>(WindowOpenDisposition::kNewPopup);
   } else if (disposition == kWindowOpenDispositionNewWindow) {
-    return static_cast<int32_t>(WindowOpenDisposition::NEW_WINDOW);
+    return static_cast<int32_t>(WindowOpenDisposition::kNewWindow);
   } else if (disposition == kWindowOpenDispositionSaveToDisk) {
-    return static_cast<int32_t>(WindowOpenDisposition::SAVE_TO_DISK);
+    return static_cast<int32_t>(WindowOpenDisposition::kSaveToDisk);
   } else if (disposition == kWindowOpenDispositionOffTheRecord) {
-    return static_cast<int32_t>(WindowOpenDisposition::OFF_THE_RECORD);
+    return static_cast<int32_t>(WindowOpenDisposition::kOffTheRecord);
   } else if (disposition == kWindowOpenDispositionIgnoreAction) {
-    return static_cast<int32_t>(WindowOpenDisposition::IGNORE_ACTION);
+    return static_cast<int32_t>(WindowOpenDisposition::kIgnoreAction);
   } else if (disposition == kWindowOpenDispositionNewPictureInPicture) {
-    return static_cast<int32_t>(WindowOpenDisposition::NEW_PICTURE_IN_PICTURE);
+    return static_cast<int32_t>(WindowOpenDisposition::kNewPictureInPicture);
 
     // Dcheck that the disposition is valid, we should never get here unless
     // the disposition is invalid.
   } else {
     DCHECK(IsValidWindowOpenDisposition(disposition));
-    return static_cast<int32_t>(WindowOpenDisposition::UNKNOWN);
+    return static_cast<int32_t>(WindowOpenDisposition::kUnknown);
   }
 }
 
@@ -790,31 +802,31 @@ std::string UiWindowStateToString(
 // casts the disposition from a int32_t.
 std::string WindowOpenDispositionToString(WindowOpenDisposition disposition) {
   switch (disposition) {
-    case WindowOpenDisposition::UNKNOWN:
+    case WindowOpenDisposition::kUnknown:
       return kWindowOpenDispositionUnknown;
-    case WindowOpenDisposition::CURRENT_TAB:
+    case WindowOpenDisposition::kCurrentTab:
       return kWindowOpenDispositionCurrentTab;
-    case WindowOpenDisposition::SINGLETON_TAB:
+    case WindowOpenDisposition::kSingletonTab:
       return kWindowOpenDispositionSingletonTab;
-    case WindowOpenDisposition::NEW_FOREGROUND_TAB:
+    case WindowOpenDisposition::kNewForegroundTab:
       return kWindowOpenDispositionNewForegroundTab;
-    case WindowOpenDisposition::NEW_BACKGROUND_TAB:
+    case WindowOpenDisposition::kNewBackgroundTab:
       return kWindowOpenDispositionNewBackgroundTab;
-    case WindowOpenDisposition::NEW_POPUP:
+    case WindowOpenDisposition::kNewPopup:
       return kWindowOpenDispositionNewPopup;
-    case WindowOpenDisposition::NEW_WINDOW:
+    case WindowOpenDisposition::kNewWindow:
       return kWindowOpenDispositionNewWindow;
-    case WindowOpenDisposition::SAVE_TO_DISK:
+    case WindowOpenDisposition::kSaveToDisk:
       return kWindowOpenDispositionSaveToDisk;
-    case WindowOpenDisposition::SWITCH_TO_TAB:
+    case WindowOpenDisposition::kSwitchToTab:
       return kWindowOpenDispositionSwitchToTab;
-    case WindowOpenDisposition::OFF_THE_RECORD:
+    case WindowOpenDisposition::kOffTheRecord:
       return kWindowOpenDispositionOffTheRecord;
-    case WindowOpenDisposition::IGNORE_ACTION:
+    case WindowOpenDisposition::kIgnoreAction:
       return kWindowOpenDispositionIgnoreAction;
-    case WindowOpenDisposition::NEW_PICTURE_IN_PICTURE:
+    case WindowOpenDisposition::kNewPictureInPicture:
       return kWindowOpenDispositionNewPictureInPicture;
-    case WindowOpenDisposition::NEW_SPLIT_VIEW:
+    case WindowOpenDisposition::kNewSplitView:
       return kWindowOpenDispositionUnknown;
   }
 }
@@ -1113,32 +1125,32 @@ WindowOpenDisposition ToBaseWindowOpenDisposition(
     SyncWindowOpenDisposition disposition) {
   switch (disposition) {
     case sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_UNKNOWN:
-      return WindowOpenDisposition::UNKNOWN;
+      return WindowOpenDisposition::kUnknown;
     case sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_CURRENT_TAB:
-      return WindowOpenDisposition::CURRENT_TAB;
+      return WindowOpenDisposition::kCurrentTab;
     case sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_SINGLETON_TAB:
-      return WindowOpenDisposition::SINGLETON_TAB;
+      return WindowOpenDisposition::kSingletonTab;
     case sync_pb::
         WorkspaceDeskSpecifics_WindowOpenDisposition_NEW_FOREGROUND_TAB:
-      return WindowOpenDisposition::NEW_FOREGROUND_TAB;
+      return WindowOpenDisposition::kNewForegroundTab;
     case sync_pb::
         WorkspaceDeskSpecifics_WindowOpenDisposition_NEW_BACKGROUND_TAB:
-      return WindowOpenDisposition::NEW_BACKGROUND_TAB;
+      return WindowOpenDisposition::kNewBackgroundTab;
     case sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_NEW_POPUP:
-      return WindowOpenDisposition::NEW_POPUP;
+      return WindowOpenDisposition::kNewPopup;
     case sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_NEW_WINDOW:
-      return WindowOpenDisposition::NEW_WINDOW;
+      return WindowOpenDisposition::kNewWindow;
     case sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_SAVE_TO_DISK:
-      return WindowOpenDisposition::SAVE_TO_DISK;
+      return WindowOpenDisposition::kSaveToDisk;
     case sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_OFF_THE_RECORD:
-      return WindowOpenDisposition::OFF_THE_RECORD;
+      return WindowOpenDisposition::kOffTheRecord;
     case sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_IGNORE_ACTION:
-      return WindowOpenDisposition::IGNORE_ACTION;
+      return WindowOpenDisposition::kIgnoreAction;
     case sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_SWITCH_TO_TAB:
-      return WindowOpenDisposition::SWITCH_TO_TAB;
+      return WindowOpenDisposition::kSwitchToTab;
     case sync_pb::
         WorkspaceDeskSpecifics_WindowOpenDisposition_NEW_PICTURE_IN_PICTURE:
-      return WindowOpenDisposition::NEW_PICTURE_IN_PICTURE;
+      return WindowOpenDisposition::kNewPictureInPicture;
   }
 }
 
@@ -1146,8 +1158,16 @@ WindowOpenDisposition ToBaseWindowOpenDisposition(
 void FillUrlList(const BrowserAppWindow& browser_app_window,
                  std::vector<GURL>* out_gurls) {
   for (auto tab : browser_app_window.tabs()) {
-    if (tab.has_url())
-      out_gurls->emplace_back(tab.url());
+    if (tab.has_url()) {
+      GURL url(tab.url());
+      if (!IsURLValidForDeskTemplate(url)) {
+        // Replace invalid URL with empty page.
+        // We are keeping the tab here to avoid changing active tab indexes as
+        // well as avoiding potentially removing all tabs from a window.
+        url = GURL();
+      }
+      out_gurls->emplace_back(url);
+    }
   }
 }
 
@@ -1264,7 +1284,10 @@ std::unique_ptr<app_restore::AppLaunchInfo> ConvertToAppLaunchInfo(
   }
 
   if (app.has_override_url()) {
-    app_launch_info->override_url = GURL(app.override_url());
+    GURL override_url(app.override_url());
+    if (IsURLValidForDeskTemplate(override_url)) {
+      app_launch_info->override_url = override_url;
+    }
   }
 
   // This is a short-term fix as `event_flag` is required to launch ArcApp.
@@ -1327,38 +1350,38 @@ std::unique_ptr<app_restore::AppLaunchInfo> ConvertToAppLaunchInfo(
 SyncWindowOpenDisposition FromBaseWindowOpenDisposition(
     WindowOpenDisposition disposition) {
   switch (disposition) {
-    case WindowOpenDisposition::UNKNOWN:
+    case WindowOpenDisposition::kUnknown:
       return sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_UNKNOWN;
-    case WindowOpenDisposition::CURRENT_TAB:
+    case WindowOpenDisposition::kCurrentTab:
       return sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_CURRENT_TAB;
-    case WindowOpenDisposition::SINGLETON_TAB:
+    case WindowOpenDisposition::kSingletonTab:
       return sync_pb::
           WorkspaceDeskSpecifics_WindowOpenDisposition_SINGLETON_TAB;
-    case WindowOpenDisposition::NEW_FOREGROUND_TAB:
+    case WindowOpenDisposition::kNewForegroundTab:
       return sync_pb::
           WorkspaceDeskSpecifics_WindowOpenDisposition_NEW_FOREGROUND_TAB;
-    case WindowOpenDisposition::NEW_BACKGROUND_TAB:
+    case WindowOpenDisposition::kNewBackgroundTab:
       return sync_pb::
           WorkspaceDeskSpecifics_WindowOpenDisposition_NEW_BACKGROUND_TAB;
-    case WindowOpenDisposition::NEW_POPUP:
+    case WindowOpenDisposition::kNewPopup:
       return sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_NEW_POPUP;
-    case WindowOpenDisposition::NEW_WINDOW:
+    case WindowOpenDisposition::kNewWindow:
       return sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_NEW_WINDOW;
-    case WindowOpenDisposition::SAVE_TO_DISK:
+    case WindowOpenDisposition::kSaveToDisk:
       return sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_SAVE_TO_DISK;
-    case WindowOpenDisposition::OFF_THE_RECORD:
+    case WindowOpenDisposition::kOffTheRecord:
       return sync_pb::
           WorkspaceDeskSpecifics_WindowOpenDisposition_OFF_THE_RECORD;
-    case WindowOpenDisposition::IGNORE_ACTION:
+    case WindowOpenDisposition::kIgnoreAction:
       return sync_pb::
           WorkspaceDeskSpecifics_WindowOpenDisposition_IGNORE_ACTION;
-    case WindowOpenDisposition::SWITCH_TO_TAB:
+    case WindowOpenDisposition::kSwitchToTab:
       return sync_pb::
           WorkspaceDeskSpecifics_WindowOpenDisposition_SWITCH_TO_TAB;
-    case WindowOpenDisposition::NEW_PICTURE_IN_PICTURE:
+    case WindowOpenDisposition::kNewPictureInPicture:
       return sync_pb::
           WorkspaceDeskSpecifics_WindowOpenDisposition_NEW_PICTURE_IN_PICTURE;
-    case WindowOpenDisposition::NEW_SPLIT_VIEW:
+    case WindowOpenDisposition::kNewSplitView:
       return sync_pb::WorkspaceDeskSpecifics_WindowOpenDisposition_UNKNOWN;
   }
 }
@@ -1416,7 +1439,7 @@ WindowState FromChromeOsWindowState(chromeos::WindowStateType state) {
     case chromeos::WindowStateType::kNormal:
     case chromeos::WindowStateType::kInactive:
     case chromeos::WindowStateType::kPinned:
-    case chromeos::WindowStateType::kLockedFullscreen:
+    case chromeos::WindowStateType::kTrustedPinned:
     case chromeos::WindowStateType::kPip:
       // TODO(crbug.com/1331825): Float state support for desk template.
       return WindowState::WorkspaceDeskSpecifics_WindowState_NORMAL;
@@ -1954,9 +1977,12 @@ std::vector<coral::mojom::EntityPtr> GetCoralTabAppEntitiesFromProto(
   std::vector<coral::mojom::EntityPtr> tab_app_entities;
   for (const auto& tab_proto :
        entry_proto.coral_tab_app_entities().tab_entities()) {
-    tab_app_entities.emplace_back(
-        coral::mojom::Entity::NewTab(coral::mojom::Tab::New(
-            tab_proto.tab_title(), GURL(tab_proto.tab_url()))));
+    GURL url(tab_proto.tab_url());
+    if (!IsURLValidForDeskTemplate(url)) {
+      url = GURL();
+    }
+    tab_app_entities.emplace_back(coral::mojom::Entity::NewTab(
+        coral::mojom::Tab::New(tab_proto.tab_title(), url)));
   }
 
   for (const auto& app_proto :

@@ -16,6 +16,9 @@
 
 namespace ui {
 
+// Set to true to enable heatmap palm detection for local testing.
+inline constexpr bool kHeatmapPalmDetection = false;
+
 // Interface for touch screen heatmap palm detector.
 class COMPONENT_EXPORT(EVDEV) HeatmapPalmDetector {
  public:
@@ -46,8 +49,8 @@ class COMPONENT_EXPORT(EVDEV) HeatmapPalmDetector {
     std::vector<int> tracking_ids;
   };
 
-  static void SetInstance(std::unique_ptr<HeatmapPalmDetector> detector);
-
+  // Returns the live detector, if any. A detector registers itself on
+  // construction and unregisters on destruction; at most one may exist.
   static HeatmapPalmDetector* GetInstance();
 
   HeatmapPalmDetector();

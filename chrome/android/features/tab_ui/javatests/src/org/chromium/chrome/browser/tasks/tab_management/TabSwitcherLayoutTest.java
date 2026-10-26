@@ -12,9 +12,7 @@ import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.Visibility.GONE;
 import static androidx.test.espresso.matcher.ViewMatchers.Visibility.VISIBLE;
-import static androidx.test.espresso.matcher.ViewMatchers.isCompletelyDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.isDescendantOfA;
-import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
 import static androidx.test.espresso.matcher.ViewMatchers.withEffectiveVisibility;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
@@ -23,9 +21,11 @@ import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
 import static org.hamcrest.core.AllOf.allOf;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import static org.chromium.base.test.transit.ViewElement.displayingAtLeastOption;
 import static org.chromium.base.test.transit.ViewFinder.waitForView;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.closeFirstTabGroupInTabSwitcher;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.closeFirstTabInTabSwitcher;
@@ -37,7 +37,6 @@ import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.g
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.mergeAllNormalTabsToAGroup;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.verifyTabModelTabCount;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.verifyTabSwitcherCardCount;
-import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
@@ -69,7 +68,6 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.Token;
 import org.chromium.base.supplier.NonNullObservableSupplier;
@@ -85,7 +83,7 @@ import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.night_mode.ChromeNightModeTestUtils;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
-import org.chromium.chrome.browser.tab.TabUtils;
+import org.chromium.chrome.browser.tab_ui.TabCardThemeUtil;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabThumbnailView;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
@@ -94,7 +92,6 @@ import org.chromium.chrome.browser.tabmodel.TabGroupColorUtils;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.undo_tab_close_snackbar.UndoBarController;
-import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
@@ -107,6 +104,7 @@ import org.chromium.components.tab_groups.TabGroupColorPickerUtils;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.ui.KeyboardVisibilityDelegate;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.PageTransition;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
@@ -116,7 +114,6 @@ import org.chromium.ui.widget.ViewLookupCachingFrameLayout;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -136,9 +133,7 @@ public class TabSwitcherLayoutTest {
 
     private String mUrl;
     private int mRepeat;
-    private final List<WeakReference<Bitmap>> mAllBitmaps = new ArrayList<>();
-    private final Callback<Bitmap> mBitmapListener =
-            (bitmap) -> mAllBitmaps.add(new WeakReference<>(bitmap));
+
     private NonNullObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
     private RegularNewTabPageStation mNtp;
 
@@ -164,7 +159,7 @@ public class TabSwitcherLayoutTest {
     @After
     public void tearDown() {
         ThreadUtils.runOnUiThreadBlocking(
-                () -> ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(null));
+                () -> AccessibilityStateTestHelper.uninitializeForTesting());
         if (mModalDialogManagerSupplier != null) {
             dismissAllModalDialogs();
         }
@@ -220,10 +215,10 @@ public class TabSwitcherLayoutTest {
     public void testThumbnailAspectRatio_default() {
         prepareTabs(2, 0, "about:blank");
         enterTabSwitcher(mActivityTestRule.getActivity());
-        onViewWaiting(tabSwitcherViewMatcher())
+        waitForView(tabSwitcherViewMatcher())
                 .check(
                         ThumbnailAspectRatioAssertion.havingAspectRatio(
-                                TabUtils.getTabThumbnailAspectRatio(
+                                TabCardThemeUtil.getTabThumbnailAspectRatio(
                                         mActivityTestRule.getActivity(),
                                         mActivityTestRule
                                                 .getActivity()
@@ -247,14 +242,12 @@ public class TabSwitcherLayoutTest {
 
         enterTabSwitcher(mActivityTestRule.getActivity());
 
-        onViewWaiting(
-                        allOf(
-                                isDescendantOfA(
-                                        withId(
-                                                TabUiTestHelper.getTabSwitcherAncestorId(
-                                                        mActivityTestRule.getActivity()))),
-                                withId(R.id.tab_thumbnail)))
-                .check(matches(isDisplayed()));
+        waitForView(
+                isDescendantOfA(
+                        withId(
+                                TabUiTestHelper.getTabSwitcherAncestorId(
+                                        mActivityTestRule.getActivity()))),
+                withId(R.id.tab_thumbnail));
 
         histograms.assertExpected();
     }
@@ -418,7 +411,6 @@ public class TabSwitcherLayoutTest {
                         InstrumentationRegistry.getInstrumentation(), ChromeTabbedActivity.class);
         assertTrue(ColorUtils.inNightMode(ctaNightMode));
         CriteriaHelper.pollUiThread(ctaNightMode.getTabModelSelector()::isTabStateInitialized);
-        enterTabSwitcher(ctaNightMode);
         verifyTabSwitcherCardCount(ctaNightMode, 2);
     }
 
@@ -426,7 +418,7 @@ public class TabSwitcherLayoutTest {
     @MediumTest
     public void testUndoClosure_AccessibilityMode() {
         ThreadUtils.runOnUiThreadBlocking(
-                () -> ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(true));
+                () -> AccessibilityStateTestHelper.setAccessibilityEnabledForTesting(true));
         ChromeTabbedActivity cta = mActivityTestRule.getActivity();
         SnackbarManager snackbarManager = mActivityTestRule.getActivity().getSnackbarManager();
         createTabs(cta, false, 3);
@@ -943,7 +935,7 @@ public class TabSwitcherLayoutTest {
         // Merge tab group of 2 at first index with the 3rd tab.
         mergeAllNormalTabsToAGroup(cta);
 
-        onViewWaiting(withId(R.id.snackbar_button)).check(matches(isCompletelyDisplayed()));
+        waitForView(withId(R.id.snackbar_button), displayingAtLeastOption(100));
 
         String ungroupButtonText = cta.getString(R.string.ungroup_tab_group_menu_item);
         onView(withId(R.id.action_button)).perform(click());
@@ -1175,7 +1167,6 @@ public class TabSwitcherLayoutTest {
     public void testUndoClosure_AcceptGroupClosure() {
         ChromeTabbedActivity cta = mActivityTestRule.getActivity();
         SnackbarManager snackbarManager = mActivityTestRule.getActivity().getSnackbarManager();
-        TabModel tabModel = getCurrentModel();
         createTabs(cta, false, 2);
 
         enterTabSwitcher(cta);
@@ -1195,9 +1186,10 @@ public class TabSwitcherLayoutTest {
         assertEquals(nextSuggestedColorId, getTabGroupColorForTabAt(1));
         ThreadUtils.runOnUiThreadBlocking(() -> snackbarManager.dismissAllSnackbars());
 
-        // Temporarily save the rootID to check during closure.
+        // Check that the tab group ID is set before closure.
         Tab tab2 = ThreadUtils.runOnUiThreadBlocking(() -> normalTabModel.getTabAt(1));
         Token groupId = tab2.getTabGroupId();
+        assertNotNull(groupId);
 
         closeFirstTabGroupInTabSwitcher(cta);
         assertTrue(
@@ -1252,7 +1244,7 @@ public class TabSwitcherLayoutTest {
 
     private void simulateJpegHasCachedWithDefaultAspectRatio() throws IOException {
         simulateJpegHasCachedWithAspectRatio(
-                TabUtils.getTabThumbnailAspectRatio(
+                TabCardThemeUtil.getTabThumbnailAspectRatio(
                         mActivityTestRule.getActivity(),
                         mActivityTestRule.getActivity().getBrowserControlsManager()));
     }
@@ -1356,6 +1348,49 @@ public class TabSwitcherLayoutTest {
                                                             false)),
                                     drawable.getColor());
                         });
+    }
+
+    @Test
+    @MediumTest
+    public void testPinnedTabGroupUngroupRepro() throws Exception {
+        ChromeTabbedActivity cta = mActivityTestRule.getActivity();
+        prepareTabs(3, 0, null);
+        enterTabSwitcher(cta);
+        verifyTabSwitcherCardCount(cta, 3);
+
+        TabModel tabModel = cta.getTabModelSelector().getCurrentModel();
+        Tab tab0 = ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabAt(0));
+        Tab tab1 = ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabAt(1));
+        Tab tab2 = ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabAt(2));
+
+        // Pin all 3 tabs
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    tabModel.pinTab(tab0.getId(), false);
+                    tabModel.pinTab(tab1.getId(), false);
+                    tabModel.pinTab(tab2.getId(), false);
+                });
+
+        int ancestorId = TabUiTestHelper.getTabSwitcherAncestorId(cta);
+
+        // Group Tab 2 (tab1)
+        ThreadUtils.runOnUiThreadBlocking(() -> tabModel.createSingleTabGroup(tab1));
+
+        // Verify Tab 2 (tab1) moved to index 2 (slot 3 outside pinned range) in TabModel
+        assertEquals(
+                tab1.getId(),
+                (int) ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabAt(2).getId()));
+
+        // Click 3rd card (index 2) in Tab Switcher (opens tab group dialog)
+        TabUiTestHelper.clickNthCardFromTabSwitcher(cta, 2);
+        TabUiTestHelper.clickFirstTabInDialog(cta);
+
+        // Tab 2 (tab1) should be selected and active
+        assertEquals(
+                tab1.getId(),
+                (int)
+                        ThreadUtils.runOnUiThreadBlocking(
+                                () -> tabModel.getTabAt(tabModel.index()).getId()));
     }
 
     private void verifyModalDialogShowingAnimationCompleteInTabSwitcher() {

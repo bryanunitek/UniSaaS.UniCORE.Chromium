@@ -9,7 +9,6 @@
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
@@ -21,7 +20,7 @@ class GenAIWallpaperPolicyTest : public PolicyTest {};
 
 IN_PROC_BROWSER_TEST_F(GenAIWallpaperPolicyTest,
                        EnableFeatureIfGenAIWallpaperPolicyUnset) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   profile->GetProfilePolicyConnector()->OverrideIsManagedForTesting(true);
   UpdateProviderPolicy(PolicyMap());
@@ -35,7 +34,7 @@ IN_PROC_BROWSER_TEST_F(GenAIWallpaperPolicyTest,
 
 IN_PROC_BROWSER_TEST_F(GenAIWallpaperPolicyTest,
                        EnableFeatureIfGenAIWallpaperPolicyEnabled) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PolicyMap policies;
 
   profile->GetProfilePolicyConnector()->OverrideIsManagedForTesting(true);
@@ -58,7 +57,7 @@ IN_PROC_BROWSER_TEST_F(GenAIWallpaperPolicyTest,
 IN_PROC_BROWSER_TEST_F(
     GenAIWallpaperPolicyTest,
     EnableFeatureIfGenAIWallpaperPolicyEnabledWithoutLogging) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PolicyMap policies;
 
   profile->GetProfilePolicyConnector()->OverrideIsManagedForTesting(true);
@@ -81,7 +80,7 @@ IN_PROC_BROWSER_TEST_F(
 
 IN_PROC_BROWSER_TEST_F(GenAIWallpaperPolicyTest,
                        DisableFeatureIfGenAIWallpaperPolicyDisabled) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PolicyMap policies;
 
   profile->GetProfilePolicyConnector()->OverrideIsManagedForTesting(true);

@@ -15,8 +15,9 @@ import androidx.recyclerview.widget.RecyclerView;
 import org.chromium.build.annotations.CheckDiscard;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.omnibox.suggestions.ActivatableSuggestionView;
 import org.chromium.chrome.browser.omnibox.suggestions.RecyclerViewSelectionController;
-import org.chromium.chrome.browser.omnibox.suggestions.SelectionController;
+import org.chromium.chrome.browser.omnibox.suggestions.SelectionController.TraversalMode;
 import org.chromium.chrome.browser.omnibox.suggestions.base.SpacingRecyclerViewItemDecoration;
 import org.chromium.ui.base.KeyNavigationUtil;
 import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
@@ -49,7 +50,7 @@ public class BaseCarouselSuggestionView extends RecyclerView {
 
         mSelectionController =
                 new RecyclerViewSelectionController(
-                        layoutManager, SelectionController.Mode.SATURATING_WITH_SENTINEL);
+                        layoutManager, TraversalMode.SATURATING_WITH_SENTINEL);
         addOnChildAttachStateChangeListener(mSelectionController);
 
         if (adapter != null) {
@@ -65,7 +66,12 @@ public class BaseCarouselSuggestionView extends RecyclerView {
             return mSelectionController.selectNextItem();
         } else if (KeyNavigationUtil.isEnter(event)) {
             var tile = mSelectionController.getSelectedView();
-            if (tile != null) return tile.performClick();
+            if (tile != null) {
+                if (tile instanceof ActivatableSuggestionView) {
+                    return ((ActivatableSuggestionView) tile).activate(event.getMetaState());
+                }
+                return tile.performClick();
+            }
         }
         return superOnKeyDown(keyCode, event);
     }
@@ -104,13 +110,6 @@ public class BaseCarouselSuggestionView extends RecyclerView {
         }
     }
 
-    /* package */ void setSelectionControllerForTesting(
-            RecyclerViewSelectionController controller) {
-        removeOnChildAttachStateChangeListener(mSelectionController);
-        mSelectionController = controller;
-        addOnChildAttachStateChangeListener(mSelectionController);
-    }
-
     /* package */ void setItemDecoration(SpacingRecyclerViewItemDecoration decoration) {
         if (mDecoration != null) {
             removeItemDecoration(mDecoration);
@@ -119,5 +118,12 @@ public class BaseCarouselSuggestionView extends RecyclerView {
         if (mDecoration != null) {
             addItemDecoration(mDecoration);
         }
+    }
+
+    /* package */ void setSelectionControllerForTesting(
+            RecyclerViewSelectionController controller) {
+        removeOnChildAttachStateChangeListener(mSelectionController);
+        mSelectionController = controller;
+        addOnChildAttachStateChangeListener(mSelectionController);
     }
 }

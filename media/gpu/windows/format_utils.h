@@ -17,17 +17,19 @@ namespace media {
 // Get the number of planes that a D3D12Resource of |format| has.
 MEDIA_GPU_EXPORT size_t GetFormatPlaneCount(DXGI_FORMAT format);
 
+// Get the coded bit depth of |format|. Covers actual DXGI formats the encoder
+// pipeline consumes as its direct input.
+MEDIA_GPU_EXPORT uint8_t GetDxgiFormatBitDepth(DXGI_FORMAT format);
+
 MEDIA_GPU_EXPORT const char* DxgiFormatToString(DXGI_FORMAT format);
+
+MEDIA_GPU_EXPORT bool IsYuvDxgiFormat(DXGI_FORMAT format);
 
 MEDIA_GPU_EXPORT DXGI_FORMAT
 VideoPixelFormatToDxgiFormat(VideoPixelFormat format);
 
 MEDIA_GPU_EXPORT DXGI_FORMAT
 SharedImageFormatToDXGIFormat(viz::SharedImageFormat format);
-
-MEDIA_GPU_EXPORT bool IsRec709(const gfx::ColorSpace& color_space);
-
-MEDIA_GPU_EXPORT bool IsRec601(const gfx::ColorSpace& color_space);
 
 MEDIA_GPU_EXPORT gfx::ColorSpace GetEncoderOutputColorSpaceFromInputColorSpace(
     const gfx::ColorSpace& input_color_space);

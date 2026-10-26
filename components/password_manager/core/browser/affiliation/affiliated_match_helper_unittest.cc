@@ -8,7 +8,6 @@
 
 #include <memory>
 #include <utility>
-#include <variant>
 
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -24,6 +23,7 @@
 #include "components/affiliations/core/browser/affiliation_utils.h"
 #include "components/affiliations/core/browser/mock_affiliation_service.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "services/network/test/test_shared_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -118,7 +118,7 @@ PasswordForm GetTestAndroidCredentials(const char* signon_realm) {
   form.scheme = PasswordForm::Scheme::kHtml;
   form.signon_realm = signon_realm;
   form.username_value = kTestUsername;
-  form.password_value = kTestPassword;
+  form.password_value = PasswordString(kTestPassword);
   return form;
 }
 
@@ -372,15 +372,21 @@ TEST_F(AffiliatedMatchHelperTest, InjectAffiliationAndBrandingInformation) {
                   FacetURI::FromCanonicalSpec(kTestAndroidFacetURIGamma), _))
       .WillOnce(RunOnceCallback<1>(AffiliatedFacets(), false));
 
-  LoginsResultOrError result;
-  base::MockCallback<base::OnceCallback<void(LoginsResultOrError)>> mock_reply;
-  EXPECT_CALL(mock_reply, Run).WillOnce([&result](LoginsResultOrError res) {
-    result = std::move(res);
-  });
+  base::expected<std::vector<StoredCredential>, PasswordStoreBackendError>
+      result;
+  base::MockCallback<
+      base::OnceCallback<void(base::expected<std::vector<StoredCredential>,
+                                             PasswordStoreBackendError>)>>
+      mock_reply;
+  EXPECT_CALL(mock_reply, Run)
+      .WillOnce([&result](base::expected<std::vector<StoredCredential>,
+                                         PasswordStoreBackendError> res) {
+        result = std::move(res);
+      });
   match_helper()->InjectAffiliationAndBrandingInformation(
       FromPasswordForms(std::move(forms)), mock_reply.Get());
 
-  auto result_credentials = std::move(std::get<LoginsResult>(result));
+  std::vector<StoredCredential> result_credentials = std::move(*result);
 
   ASSERT_EQ(expected_form_count, result_credentials.size());
   EXPECT_THAT(result_credentials[0].affiliated_web_realm,

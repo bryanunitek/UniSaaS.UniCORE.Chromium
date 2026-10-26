@@ -6,6 +6,7 @@
 #define COMPONENTS_SKILLS_MOCKS_MOCK_SKILLS_SERVICE_H_
 
 #include "components/skills/public/skill.h"
+#include "components/skills/public/skills_provider.h"
 #include "components/skills/public/skills_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -24,6 +25,10 @@ class MockSkillsService : public SkillsService {
               GetSkills,
               (),
               (const));
+  MOCK_METHOD((const std::unordered_map<std::string, std::unique_ptr<Skill>>&),
+              GetProvidedSkills,
+              (),
+              (const, override));
   MOCK_METHOD(const SkillProtoList&, Get1PSkills, (), (const, override));
   MOCK_METHOD(const std::vector<skills::proto::TopicInfo>&,
               Get1PTopicsInfo,
@@ -45,7 +50,8 @@ class MockSkillsService : public SkillsService {
                std::string_view,
                base::Time,
                base::Time,
-               sync_pb::SkillSource));
+               sync_pb::SkillSource,
+               bool));
   MOCK_METHOD(
       const Skill*,
       UpdateSkill,
@@ -53,6 +59,10 @@ class MockSkillsService : public SkillsService {
   MOCK_METHOD(bool, IsInitialized, (), (const));
   MOCK_METHOD(ServiceStatus, GetServiceStatus, (), (const));
   MOCK_METHOD(void, DeleteSkill, (std::string_view, UpdateSource));
+  MOCK_METHOD(void,
+              DeleteSkillsModifiedBetween,
+              (base::Time, base::Time),
+              (override));
   MOCK_METHOD(void, FetchDiscoverySkills, ());
   MOCK_METHOD(void, RefreshDiscoverySkills, ());
   MOCK_METHOD(void,
@@ -70,6 +80,12 @@ class MockSkillsService : public SkillsService {
               NotifyTemporarySkillDisplayChanged,
               (std::string_view, DisplayState));
   MOCK_METHOD(void, NotifyPanelWillOpen, ());
+  MOCK_METHOD(void, AddProvider, (std::unique_ptr<SkillsProvider>));
+
+ private:
+  std::vector<std::unique_ptr<Skill>> empty_skills_;
+  std::unordered_map<std::string, std::unique_ptr<Skill>>
+      empty_provided_skill_objects_map_;
 };
 
 }  // namespace skills

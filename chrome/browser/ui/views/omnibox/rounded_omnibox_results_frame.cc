@@ -7,25 +7,24 @@
 #include <memory>
 #include <utility>
 
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_aim_popup_webui_content.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_webui_base_content.h"
+#include "components/omnibox/common/omnibox_features.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/pointer/touch_ui_controller.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
-#include "ui/gfx/color_palette.h"
-#include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/layout/layout_provider.h"
@@ -129,7 +128,7 @@ WidgetEventPair GetParentWidgetAndEvent(views::View* this_view,
       parent_widget->GetNativeView());
 #endif
 
-  DCHECK_NE(this_widget, top_level);
+  CHECK_NE(this_widget, top_level, base::NotFatalUntil::M162);
   if (!top_level) {
     return {nullptr, std::move(event)};
   }
@@ -237,23 +236,43 @@ RoundedOmniboxResultsFrame::RoundedOmniboxResultsFrame(
     bool forward_mouse_events)
     : contents_(contents), forward_mouse_events_(forward_mouse_events) {
   const int corner_radius = views::LayoutProvider::Get()->GetCornerRadiusMetric(
-      views::ShapeContextTokens::kOmniboxExpandedRadius);
+      ChromeShapeContextTokens::kOmniboxExpandedRadius);
+  auto* webui_content = GetOmniboxPopupWebUIBaseContent();
+  // When the page paints the popup's shadow, this frame must not paint a
+  // background, rounded corners or a shadow: the renderer draws all of them,
+  // including transparent shadow pixels in the margin around the content.
+  draw_shadow_in_webui_ =
+      webui_content && webui_content->ShouldDrawShadowInWebUI();
+  const bool masks_to_bounds =
+      webui_content && webui_content->ShouldSizeWebViewToPreferredHeight();
+  // Skipped entirely when the WebUI paints the background itself.
+  std::unique_ptr<views::Background> background;
+  if (!draw_shadow_in_webui_) {
+    background = views::CreateSolidBackground(kColorOmniboxResultsBackground);
+  }
   // Host the contents in its own View to simplify layout and customization.
   auto contents_host_builder =
       views::Builder<views::View>()
           .CopyAddressTo(&contents_host_)
-          .SetBackground(
-              views::CreateSolidBackground(kColorOmniboxResultsBackground))
+          .SetBackground(std::move(background))
           .SetPaintToLayer()
           .CustomConfigure(base::BindOnce(
-              [](const int corner_radius, views::View* view) {
+              [](const int corner_radius, const bool masks_to_bounds,
+                 const bool draw_shadow_in_webui, views::View* view) {
                 view->layer()->SetFillsBoundsOpaquely(false);
+                if (draw_shadow_in_webui) {
+                  // Rounded corners would clip the WebUI-drawn shadow.
+                  return;
+                }
+                if (masks_to_bounds) {
+                  view->layer()->SetMasksToBounds(true);
+                }
                 // Use rounded corners.
                 view->layer()->SetRoundedCornerRadius(
                     gfx::RoundedCornersF(corner_radius));
                 view->layer()->SetIsFastRoundedCorner(true);
               },
-              corner_radius))
+              corner_radius, masks_to_bounds, draw_shadow_in_webui_))
           .AddChild(views::Builder<TopBackgroundView>(
                         std::make_unique<TopBackgroundView>(location_bar))
                         .CopyAddressTo(&top_background_));
@@ -261,8 +280,9 @@ RoundedOmniboxResultsFrame::RoundedOmniboxResultsFrame(
   auto contents_host = std::move(contents_host_builder).Build();
   contents_host->AddChildViewRaw(contents_.get());
 
-  // Initialize the shadow.
-  SetElevation(kDefaultElevation);
+  if (!draw_shadow_in_webui_) {
+    SetElevation(kDefaultElevation);
+  }
 
   AddChildView(std::move(contents_host));
 }
@@ -307,9 +327,12 @@ gfx::Insets RoundedOmniboxResultsFrame::GetLocationBarAlignmentInsets() {
 }
 
 // static
+// Popups that paint their own shadow reserve this margin as `body` padding.
+// LINT.IfChange(ShadowInsets)
 gfx::Insets RoundedOmniboxResultsFrame::GetShadowInsets() {
   return views::BubbleBorder::GetBorderAndShadowInsets(kDefaultElevation);
 }
+// LINT.ThenChange(//chrome/browser/resources/omnibox_popup/omnibox_popup_document_style.css:ShadowMargin)
 
 std::unique_ptr<views::View> RoundedOmniboxResultsFrame::ExtractContents() {
   auto contents = std::exchange(contents_, nullptr);
@@ -341,7 +364,7 @@ void RoundedOmniboxResultsFrame::SetCutoutVisibility(bool visible) {
 
 void RoundedOmniboxResultsFrame::SetElevation(int elevation) {
   const int corner_radius = views::LayoutProvider::Get()->GetCornerRadiusMetric(
-      views::ShapeContextTokens::kOmniboxExpandedRadius);
+      ChromeShapeContextTokens::kOmniboxExpandedRadius);
   auto border = std::make_unique<views::BubbleBorder>(
       views::BubbleBorder::Arrow::NONE,
       elevation == 0 ? views::BubbleBorder::Shadow::NO_SHADOW
@@ -368,22 +391,47 @@ void RoundedOmniboxResultsFrame::Layout(PassKey) {
     top_background_->SetBoundsRect(top_bounds);
   }
 
+  // `contents_` is null once it has been extracted during widget teardown (see
+  // `OmniboxPopupPresenterBase::OnWidgetClosed()`). The widget can still be
+  // laid out by the compositor between that point and its actual destruction,
+  // so there may be nothing left to position.
+  if (!contents_) {
+    return;
+  }
+
   gfx::Rect results_bounds(contents_host_->GetContentsBounds());
+  if (draw_shadow_in_webui_) {
+    // The WebUI paints the shadow, so the WebView must cover the whole widget,
+    // shadow margin included. There is also no location bar cutout to skip.
+    contents_->SetBoundsRect(results_bounds);
+    return;
+  }
   results_bounds.Inset(GetContentInsets());
 
   // Align webview horizontal bounds and positioning with the outer view.
   results_bounds.set_x(0);
   results_bounds.set_width(contents_host_->GetContentsBounds().width());
 
-  // Workaround for 1px visual artifact. The WebUI requests a 1px minimum height
-  // when empty, creating a visual artifact. Clamping to 0 hides the widget and
-  // breaks future resize events. Instead, clamp to a 1x1 centered rect to keep
-  // the widget active while making the artifact unnoticeable.
-  // TODO(crbug.com/460908495) WebUI should not be sending min height resize
-  // requests.
-  if (results_bounds.height() <= 1) {
-    results_bounds.ClampToCenteredSize(gfx::Size(1, 1));
+  auto* webui_content = GetOmniboxPopupWebUIBaseContent();
+  if (webui_content && webui_content->ShouldSizeWebViewToPreferredHeight()) {
+    const int preferred_height = webui_content->GetPreferredSize().height();
+    if (preferred_height > 0) {
+      results_bounds.set_height(preferred_height);
+    }
+  } else {
+    // Workaround for 1px visual artifact. The WebUI requests a 1px minimum
+    // height when empty, creating a visual artifact. Clamping to 0 hides the
+    // widget and breaks future resize events. Instead, clamp to a 1x1 centered
+    // rect to keep the widget active while making the artifact unnoticeable.
+    // TODO(crbug.com/460908495) WebUI should not be sending min height resize
+    // requests.
+    const bool should_apply_workarounds =
+        !webui_content || webui_content->ShouldApplyHeightWorkarounds();
+    if (should_apply_workarounds && results_bounds.height() <= 1) {
+      results_bounds.ClampToCenteredSize(gfx::Size(1, 1));
+    }
   }
+
   contents_->SetBoundsRect(results_bounds);
 }
 

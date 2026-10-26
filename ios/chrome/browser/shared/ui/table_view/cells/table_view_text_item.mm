@@ -21,7 +21,7 @@
   if (self) {
     self.cellClass = [LegacyTableViewCell class];
     _enabled = YES;
-    _titleNumberOfLines = 1;
+    _titleNumberOfLines = 2;
   }
   return self;
 }
@@ -52,6 +52,7 @@
   }
   configuration.titleColor = self.textColor;
   configuration.titleNumberOfLines = self.titleNumberOfLines;
+  configuration.reservesLeadingSpace = self.reservesLeadingSpace;
 
   cell.contentConfiguration = configuration;
 

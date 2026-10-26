@@ -13,16 +13,18 @@ source_set("ui") {
     ":public",
     ":ui_util",
     "//base",
-    "//ios/chrome/browser/content_suggestions/magic_stack/public:constants",
     "//ios/chrome/browser/content_suggestions/magic_stack/ui:cells",
     "//ios/chrome/browser/content_suggestions/magic_stack/ui:public",
     "//ios/chrome/browser/content_suggestions/model:metrics_recorder",
+    "//ios/chrome/browser/content_suggestions/most_visited_tiles/public",
     "//ios/chrome/browser/content_suggestions/most_visited_tiles/ui",
     "//ios/chrome/browser/content_suggestions/public:constants",
     "//ios/chrome/browser/drag_and_drop/model",
     "//ios/chrome/browser/ntp/ui_bundled:constants",
+    "//ios/chrome/browser/ntp/ui_bundled:feature_flags",
     "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/url_loading/model",
+    "//ios/chrome/common/ui/util",
   ]
   frameworks = [ "UIKit.framework" ]
 }
@@ -44,14 +46,18 @@ source_set("ui_util") {
     "content_suggestions_collection_utils.mm",
   ]
   deps = [
+    "//base",
     "//base:i18n",
+    "//components/ntp_tiles",
     "//components/strings",
     "//ios/chrome/app/strings",
+    "//ios/chrome/browser/content_suggestions/most_visited_tiles/public",
     "//ios/chrome/browser/content_suggestions/public:ntp_home_constants",
     "//ios/chrome/browser/location_bar/ui_bundled:constants",
     "//ios/chrome/browser/ntp/search_engine_logo/ui",
     "//ios/chrome/browser/ntp/ui_bundled:constants",
     "//ios/chrome/browser/ntp/ui_bundled:feature_flags",
+    "//ios/chrome/browser/ntp/ui_bundled:utils",
     "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/shared/ui/elements",
     "//ios/chrome/browser/shared/ui/symbols",
@@ -63,7 +69,6 @@ source_set("ui_util") {
     "//ios/chrome/common/ui/util",
     "//ios/components/ui_util",
     "//ui/base",
-    "//ui/gfx/ios:uikit_util",
   ]
   frameworks = [ "UIKit.framework" ]
 }
@@ -79,6 +84,7 @@ source_set("unit_tests") {
     ":ui_util",
     "//base/test:test_support",
     "//ios/chrome/browser/ntp/search_engine_logo/ui",
+    "//ios/chrome/browser/ntp/ui_bundled:constants",
     "//ios/chrome/browser/ntp/ui_bundled:feature_flags",
     "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/start_surface/ui_bundled:feature_flags",

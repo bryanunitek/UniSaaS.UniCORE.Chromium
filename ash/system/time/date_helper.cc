@@ -9,6 +9,9 @@
 #include "ash/system/model/clock_model.h"
 #include "ash/system/model/system_tray_model.h"
 #include "ash/system/time/calendar_utils.h"
+#include "base/i18n/icubridge/calendar.h"
+#include "base/i18n/icubridge/date_time_formatter.h"
+#include "base/i18n/icubridge/icu_bridge.h"
 #include "base/i18n/unicodestring.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/singleton.h"
@@ -26,49 +29,9 @@ namespace {
 // Milliseconds per minute.
 constexpr int kMillisecondsPerMinute = 60000;
 
-// Default week title for a few special languages that cannot find the start of
-// a week. So far the known languages that cannot return their day of week are:
-// 'bn', 'fa', 'mr', 'pa-PK'.
-const std::vector<std::u16string> kDefaultWeekTitle = {u"S", u"M", u"T", u"W",
-                                                       u"T", u"F", u"S"};
-
 UDate TimeToUDate(const base::Time& time) {
   return static_cast<UDate>(time.InSecondsFSinceUnixEpoch() *
                             base::Time::kMillisecondsPerSecond);
-}
-
-// Receives an input `unicode_pattern` in the "Hm" format (HH:mm, aK:mm, h:mm a,
-// a hh:mm, etc.) and extracts the hours part of the pattern.
-icu::UnicodeString getHoursPattern(const icu::UnicodeString& unicode_pattern) {
-  std::string pattern;
-  unicode_pattern.toUTF8String(pattern);
-
-  if (pattern.contains("hh")) {
-    return icu::UnicodeString("hh");
-  }
-  if (pattern.contains("h")) {
-    return icu::UnicodeString("h");
-  }
-  if (pattern.contains("HH")) {
-    return icu::UnicodeString("HH");
-  }
-  if (pattern.contains("H")) {
-    return icu::UnicodeString("H");
-  }
-  if (pattern.contains("KK")) {
-    return icu::UnicodeString("KK");
-  }
-  if (pattern.contains("K")) {
-    return icu::UnicodeString("K");
-  }
-  if (pattern.contains("kk")) {
-    return icu::UnicodeString("kk");
-  }
-  if (pattern.contains("k")) {
-    return icu::UnicodeString("k");
-  }
-
-  NOTREACHED() << "Hours pattern not found.";
 }
 
 }  // namespace
@@ -78,37 +41,6 @@ DateHelper* DateHelper::GetInstance() {
   return base::Singleton<DateHelper>::get();
 }
 
-icu::SimpleDateFormat DateHelper::CreateSimpleDateFormatter(
-    const char* pattern) {
-  // Generate a locale-dependent format pattern. The generator will take
-  // care of locale-dependent formatting issues like which separator to
-  // use (some locales use '.' instead of ':'), and where to put the am/pm
-  // marker.
-  UErrorCode status = U_ZERO_ERROR;
-  DCHECK(U_SUCCESS(status));
-  std::unique_ptr<icu::DateTimePatternGenerator> generator(
-      icu::DateTimePatternGenerator::createInstance(status));
-  DCHECK(U_SUCCESS(status));
-  icu::UnicodeString generated_pattern =
-      generator->getBestPattern(icu::UnicodeString(pattern), status);
-  DCHECK(U_SUCCESS(status));
-
-  // Then, create a formatter object using the generated pattern.
-  icu::SimpleDateFormat formatter(generated_pattern, status);
-  DCHECK(U_SUCCESS(status));
-
-  return formatter;
-}
-
-icu::SimpleDateFormat DateHelper::CreateSimpleDateFormatterWithoutBestPattern(
-    const char* pattern) {
-  UErrorCode status = U_ZERO_ERROR;
-  DCHECK(U_SUCCESS(status));
-  icu::SimpleDateFormat formatter(icu::UnicodeString(pattern), status);
-  DCHECK(U_SUCCESS(status));
-  return formatter;
-}
-
 std::unique_ptr<icu::DateIntervalFormat>
 DateHelper::CreateDateIntervalFormatter(const char* pattern) {
   UErrorCode status = U_ZERO_ERROR;
@@ -116,42 +48,6 @@ DateHelper::CreateDateIntervalFormatter(const char* pattern) {
       icu::DateIntervalFormat::createInstance(pattern, status);
   DCHECK(U_SUCCESS(status));
   return base::WrapUnique(formatter);
-}
-
-icu::SimpleDateFormat DateHelper::CreateHoursFormatter(const char* pattern) {
-  UErrorCode status = U_ZERO_ERROR;
-  DCHECK(U_SUCCESS(status));
-  std::unique_ptr<icu::DateTimePatternGenerator> generator(
-      icu::DateTimePatternGenerator::createInstance(status));
-  DCHECK(U_SUCCESS(status));
-  icu::UnicodeString generated_pattern =
-      generator->getBestPattern(icu::UnicodeString(pattern), status);
-  DCHECK(U_SUCCESS(status));
-  // Since ICU 74, getBestPattern can return a gibberish pattern ""H
-  // ├'Minute': m┤ ├'Dayperiod': a┤"" if the locale resource is missing. Instead
-  // of using the gibberish pattern, this should fallback to the proposed
-  // pattern.
-  std::string gen_string;
-  generated_pattern.toUTF8String(gen_string);
-  if (gen_string.contains("├")) {
-    // Fallback to the suggested pattern.
-    generated_pattern = icu::UnicodeString(pattern);
-  }
-  // Extract the hours from the generated pattern.
-  icu::UnicodeString hours_pattern = getHoursPattern(generated_pattern);
-  icu::SimpleDateFormat formatter(hours_pattern, status);
-  DCHECK(U_SUCCESS(status));
-
-  return formatter;
-}
-
-std::u16string DateHelper::GetFormattedTime(const icu::DateFormat* formatter,
-                                            const base::Time& time) {
-  DCHECK(formatter);
-  icu::UnicodeString date_string;
-
-  formatter->format(TimeToUDate(time), date_string);
-  return base::i18n::UnicodeStringToString16(date_string);
 }
 
 std::u16string DateHelper::GetFormattedInterval(
@@ -208,26 +104,7 @@ base::Time DateHelper::GetLocalMidnight(base::Time date) {
 }
 
 DateHelper::DateHelper()
-    : day_of_month_formatter_(CreateSimpleDateFormatter("d")),
-      month_day_formatter_(CreateSimpleDateFormatter("MMMMd")),
-      month_day_year_formatter_(CreateSimpleDateFormatter("MMMMdyyyy")),
-      month_day_year_week_formatter_(
-          CreateSimpleDateFormatter("MMMMEEEEdyyyy")),
-      month_name_formatter_(CreateSimpleDateFormatter("MMMM")),
-      month_name_year_formatter_(CreateSimpleDateFormatter("MMMM yyyy")),
-      time_zone_formatter_(CreateSimpleDateFormatter("zzzz")),
-      twelve_hour_clock_formatter_(CreateSimpleDateFormatter("h:mm a")),
-      twenty_four_hour_clock_formatter_(CreateSimpleDateFormatter("HH:mm")),
-      day_of_week_formatter_(CreateSimpleDateFormatter("ee")),
-      week_title_formatter_(CreateSimpleDateFormatter("EEEEE")),
-      // Note: "yyyy" represents a four-digit calendar year (e.g. "2023"),
-      // while "YYYY" represents a so called 'week year' (which might be "2022"
-      // if the first day is on the last week of 2022).
-      year_formatter_(CreateSimpleDateFormatter("yyyy")),
-      twelve_hour_clock_hours_formatter_(CreateHoursFormatter("h:mm a")),
-      twenty_four_hour_clock_hours_formatter_(CreateHoursFormatter("HH:mm")),
-      minutes_formatter_(CreateSimpleDateFormatterWithoutBestPattern("mm")),
-      twelve_hour_clock_interval_formatter_(CreateDateIntervalFormatter("hm")),
+    : twelve_hour_clock_interval_formatter_(CreateDateIntervalFormatter("hm")),
       twenty_four_hour_clock_interval_formatter_(
           CreateDateIntervalFormatter("Hm")) {
   const icu::TimeZone& time_zone =
@@ -254,21 +131,6 @@ DateHelper::~DateHelper() {
 }
 
 void DateHelper::ResetFormatters() {
-  day_of_month_formatter_ = CreateSimpleDateFormatter("d");
-  month_day_formatter_ = CreateSimpleDateFormatter("MMMMd");
-  month_day_year_formatter_ = CreateSimpleDateFormatter("MMMMdyyyy");
-  month_day_year_week_formatter_ = CreateSimpleDateFormatter("MMMMEEEEdyyyy");
-  month_name_formatter_ = CreateSimpleDateFormatter("MMMM");
-  month_name_year_formatter_ = CreateSimpleDateFormatter("MMMM yyyy");
-  time_zone_formatter_ = CreateSimpleDateFormatter("zzzz");
-  twelve_hour_clock_formatter_ = CreateSimpleDateFormatter("h:mm a");
-  twenty_four_hour_clock_formatter_ = CreateSimpleDateFormatter("HH:mm");
-  day_of_week_formatter_ = CreateSimpleDateFormatter("ee");
-  week_title_formatter_ = CreateSimpleDateFormatter("EEEEE");
-  year_formatter_ = CreateSimpleDateFormatter("yyyy");
-  twelve_hour_clock_hours_formatter_ = CreateHoursFormatter("h:mm a");
-  twenty_four_hour_clock_hours_formatter_ = CreateHoursFormatter("HH:mm");
-  minutes_formatter_ = CreateSimpleDateFormatterWithoutBestPattern("mm");
   twelve_hour_clock_interval_formatter_ = CreateDateIntervalFormatter("hm");
   twenty_four_hour_clock_interval_formatter_ =
       CreateDateIntervalFormatter("Hm");
@@ -291,37 +153,32 @@ void DateHelper::CalculateLocalWeekTitles() {
   bool result = base::Time::FromString("15 Jun 2021 10:00 GMT", &start_date);
   DCHECK(result);
   start_date = GetLocalMidnight(start_date);
-  std::u16string day_of_week =
-      GetFormattedTime(&day_of_week_formatter_, start_date);
 
-  // For a few special locales the day of week is not in a number. In these
-  // cases, use the default week titles.
-  int day_int;
-  if (!base::StringToInt(day_of_week, &day_int)) {
-    week_titles_ = kDefaultWeekTitle;
-    return;
-  }
+  // Explode the local midnight start_date to determine its local weekday.
+  base::Time::Exploded exploded;
+  (start_date + GetTimeDifference(start_date)).UTCExplode(&exploded);
 
-  int safe_index = 0;
-  // Find a first day of a week.
-  while (day_int != 1) {
-    start_date += base::Hours(25);
-    day_of_week = GetFormattedTime(&day_of_week_formatter_, start_date);
-    result = base::StringToInt(day_of_week, &day_int);
-    DCHECK(result);
-    ++safe_index;
-    if (safe_index == calendar_utils::kDateInOneWeek) {
-      NOTREACHED() << "Should already find the first day within 7 times, since "
-                      "there are only 7 days in a week";
-    }
-  }
+  // Both exploded.day_of_week (0-based: 0 = Sunday, 1 = Monday, etc.) and
+  // IcuBridge::Calendar::Weekday (1 = Sunday, 2 = Monday, etc.) use the same
+  // standard day mapping. We convert the exploded day of week to 1-based
+  // to match.
+  const int current_day_of_week = exploded.day_of_week + 1;
+  const int first_day_of_week =
+      static_cast<int>(base::i18n::IcuBridge::GetInstance()
+                           .calendar()
+                           .GetWeekInformation()
+                           .first_weekday);
 
-  int day_index = 0;
-  while (day_index < calendar_utils::kDateInOneWeek) {
+  // Calculate the difference in days to reach the first day of the week,
+  // and shift our start_date accordingly.
+  const int diff_days = (first_day_of_week - current_day_of_week + 7) % 7;
+  start_date += base::Days(diff_days);
+
+  for (int i = 0; i < calendar_utils::kDateInOneWeek; ++i) {
     week_titles_.push_back(
-        GetFormattedTime(&week_title_formatter_, start_date));
-    start_date += base::Hours(25);
-    ++day_index;
+        base::i18n::IcuBridge::GetInstance().date_time_formatter().Format(
+            start_date, base::i18n::datetime_options::E::Short()));
+    start_date += base::Days(1);
   }
 }
 

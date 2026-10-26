@@ -5,11 +5,11 @@
 #include "services/audio/loopback_signal_provider.h"
 
 #include <memory>
+#include <ranges>
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/trace_event/trace_event.h"
-#include "base/types/zip.h"
 #include "media/base/audio_bus.h"
 #include "media/base/vector_math.h"
 
@@ -60,9 +60,9 @@ base::TimeTicks LoopbackSignalProvider::PullLoopbackData(
   base::AutoLock scoped_lock(lock_);
 
   base::TimeTicks delayed_capture_time = capture_time - capture_delay_;
-  for (auto& map_entry : snoopers_) {
+  for (auto& [_, source] : snoopers_) {
     const std::optional<base::TimeTicks> suggestion =
-        map_entry.second->SuggestLatestRenderTime(destination->frames());
+        source->SuggestLatestRenderTime(destination->frames());
     if (suggestion.value_or(delayed_capture_time) < delayed_capture_time) {
       const base::TimeDelta increase = delayed_capture_time - (*suggestion);
       TRACE_EVENT_INSTANT("audio", "PullLoopbackData Capture Delay Change",
@@ -93,8 +93,8 @@ base::TimeTicks LoopbackSignalProvider::PullLoopbackData(
     if (it != snoopers_.end()) {
       do {
         it->second->Render(delayed_capture_time, transfer_bus_.get());
-        for (auto [src_ch, dest_ch] : base::zip(transfer_bus_->AllChannels(),
-                                                destination->AllChannels())) {
+        for (auto [src_ch, dest_ch] : std::views::zip(
+                 transfer_bus_->AllChannels(), destination->AllChannels())) {
           media::vector_math::FMAC(src_ch, volume, dest_ch);
         }
         ++it;

@@ -51,11 +51,12 @@ class HeadlessContentRendererUrlLoaderThrottleProvider
       const network::ResourceRequest& request) override {
     std::vector<std::unique_ptr<blink::URLLoaderThrottle>> throttles;
     if (local_frame_token.has_value()) {
-      auto throttle =
-          content::MaybeCreateIdentityUrlLoaderThrottle(base::BindRepeating(
+      auto throttle = content::MaybeCreateIdentityUrlLoaderThrottle(
+          base::BindRepeating(
               [](const blink::LocalFrameToken& token,
                  const scoped_refptr<base::SequencedTaskRunner>
                      main_thread_task_runner,
+                 network::mojom::RequestDestination destination,
                  const std::optional<url::Origin>& initiator,
                  const url::Origin& idp_origin,
                  blink::mojom::IdpSigninStatus status) {
@@ -69,7 +70,8 @@ class HeadlessContentRendererUrlLoaderThrottleProvider
                                                 token, idp_origin, status));
                 }
               },
-              local_frame_token.value(), main_thread_task_runner_));
+              local_frame_token.value(), main_thread_task_runner_),
+          content::GetSetLoginHeaderInProcessParser());
       if (throttle) {
         throttles.push_back(std::move(throttle));
       }

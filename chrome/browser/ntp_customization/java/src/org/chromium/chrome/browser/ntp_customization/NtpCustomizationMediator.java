@@ -21,11 +21,9 @@ import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationView
 
 import android.app.Activity;
 import android.content.Context;
-import android.graphics.Bitmap;
 import android.view.View;
 import android.widget.ViewFlipper;
 
-import androidx.annotation.ColorInt;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
 
@@ -39,7 +37,6 @@ import org.chromium.chrome.browser.feed.FeedFeatures;
 import org.chromium.chrome.browser.ntp_customization.theme.NtpCustomizationPromoManager;
 import org.chromium.chrome.browser.ntp_customization.theme.NtpCustomizationPromoManager.SnackBarState;
 import org.chromium.chrome.browser.ntp_customization.theme.NtpThemeStateProvider;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataThemeCollection;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
@@ -47,7 +44,6 @@ import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.components.search_engines.TemplateUrlService.TemplateUrlServiceObserver;
@@ -92,7 +88,6 @@ public class NtpCustomizationMediator implements TemplateUrlServiceObserver {
     private final @Nullable Profile mProfile;
     private @Nullable Integer mCurrentBottomSheet;
     private boolean mShouldRecreate;
-    private @Nullable Bitmap mNewThemeCollectionImage;
     private @Nullable TemplateUrlService mTemplateUrlService;
     private boolean mIsDefaultSearchEngineGoogle;
     private static @Nullable PrefService sPrefServiceForTest;
@@ -136,7 +131,7 @@ public class NtpCustomizationMediator implements TemplateUrlServiceObserver {
         mThemeBackNavigationMap.put(CHROME_COLORS, THEME);
 
         mBottomSheetObserver =
-                new EmptyBottomSheetObserver() {
+                new BottomSheetObserver() {
                     @Override
                     public void onSheetOpened(@BottomSheetController.StateChangeReason int reason) {
                         mBottomSheetContent.onSheetOpened();
@@ -144,22 +139,17 @@ public class NtpCustomizationMediator implements TemplateUrlServiceObserver {
 
                     @Override
                     public void onSheetClosed(@BottomSheetController.StateChangeReason int reason) {
-                        // Pick and save the primary color if a new theme collection image is
-                        // selected.
                         NtpCustomizationConfigManager configManager =
                                 NtpCustomizationConfigManager.getInstance();
-                        if (mNewThemeCollectionImage != null
-                                && configManager.getNtpBackgroundData()
-                                        instanceof
-                                        NtpBackgroundDataThemeCollection themeCollectionData) {
-                            saveColorAndImageFilePathForThemeCollectionData(
-                                    mNewThemeCollectionImage, themeCollectionData);
-                        }
                         mBottomSheetContent.onSheetClosed();
                         mBottomSheetController.removeObserver(mBottomSheetObserver);
                         // Notify to recreate activities if a new customized theme color is selected
                         // or removed.
                         if (mShouldRecreate) {
+                            // Saves the newly selected theme data to the local history list in the
+                            // SharedPreference.
+                            configManager.maybeSaveUserSelectedBackgroundTypeToSharedPreference(
+                                    mContext);
                             if (context instanceof Activity activity) {
                                 NtpCustomizationPromoManager.maybeUpdateShowThemeTipSnackbarState(
                                         SnackBarState.PENDING_ON_RECREATE,
@@ -176,23 +166,6 @@ public class NtpCustomizationMediator implements TemplateUrlServiceObserver {
                     }
                 };
         mBottomSheetController.addObserver(mBottomSheetObserver);
-    }
-
-    /**
-     * Saves the primary color of the selected theme collection image and its file path to the
-     * SharedPreference.
-     */
-    private void saveColorAndImageFilePathForThemeCollectionData(
-            Bitmap bitmap, NtpBackgroundDataThemeCollection themeCollectionData) {
-        assert themeCollectionData.getPrimaryColor() == null;
-        @ColorInt Integer primaryColor = NtpCustomizationUtils.pickAndSavePrimaryColor(bitmap);
-
-        if (!mIsNtpCustomizationSyncEnabled) return;
-
-        themeCollectionData.setPrimaryColor(primaryColor);
-        NtpCustomizationConfigManager.getInstance()
-                .maybeSaveUserSelectedBackgroundTypeToSharedPreference(
-                        mContext, themeCollectionData);
     }
 
     /**
@@ -227,11 +200,6 @@ public class NtpCustomizationMediator implements TemplateUrlServiceObserver {
     // Called when a customized theme color is selected or removed.
     void onNewColorSelected(boolean isDifferentColor) {
         mShouldRecreate = isDifferentColor;
-    }
-
-    // Called when a new theme collection image is selected or removed.
-    void onNewThemeCollectionImageSelected(@Nullable Bitmap image) {
-        mNewThemeCollectionImage = image;
     }
 
     /** Handles system back press and back button clicks on the bottom sheet. */

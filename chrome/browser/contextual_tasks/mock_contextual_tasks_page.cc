@@ -14,4 +14,22 @@ mojo::PendingRemote<mojom::Page> MockContextualTasksPage::BindAndGetRemote() {
   return receiver_.BindNewPipeAndPassRemote();
 }
 
+MockContextualTasksExtensionPage::MockContextualTasksExtensionPage() = default;
+
+MockContextualTasksExtensionPage::~MockContextualTasksExtensionPage() = default;
+
+mojo::PendingRemote<mojom::ExtensionPage>
+MockContextualTasksExtensionPage::BindAndGetRemote() {
+  return receiver_.BindNewPipeAndPassRemote();
+}
+
+MockContextualTasksToolbarPage::MockContextualTasksToolbarPage() = default;
+
+MockContextualTasksToolbarPage::~MockContextualTasksToolbarPage() = default;
+
+mojo::PendingRemote<contextual_tasks_toolbar::mojom::Page>
+MockContextualTasksToolbarPage::BindAndGetRemote() {
+  return receiver_.BindNewPipeAndPassRemote();
+}
+
 }  // namespace contextual_tasks

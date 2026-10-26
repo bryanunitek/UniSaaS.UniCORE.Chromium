@@ -8,7 +8,9 @@ import("//build/config/ui.gni")
 import("//extensions/buildflags/buildflags.gni")
 
 # TODO(crbug.com/378487333): Look into renaming from accelerator to hotkey.
-source_set("global_accelerator_listener") {
+component("global_accelerator_listener") {
+  defines = [ "IS_GLOBAL_ACCELERATOR_LISTENER_IMPL" ]
+
   sources = [
     "global_accelerator_listener.cc",
     "global_accelerator_listener.h",
@@ -16,12 +18,15 @@ source_set("global_accelerator_listener") {
 
   deps = [
     "//base",
-    "//content/public/browser",
     "//ui/base",
     "//ui/events:event_constants",
     "//ui/events:events_base",
     "//ui/gfx",
   ]
+
+  if (is_android || is_mac || is_win) {
+    deps += [ "//content/public/browser" ]
+  }
 
   if (is_android) {
     sources += [
@@ -34,6 +39,11 @@ source_set("global_accelerator_listener") {
     sources += [
       "global_accelerator_listener_mac.h",
       "global_accelerator_listener_mac.mm",
+    ]
+    frameworks = [
+      "AppKit.framework",
+      "Carbon.framework",
+      "Foundation.framework",
     ]
   }
 
@@ -64,5 +74,12 @@ source_set("global_accelerator_listener") {
       ]
       deps += [ "//components/dbus" ]
     }
+  }
+
+  if (is_chromeos) {
+    sources += [
+      "global_accelerator_listener_chromeos.cc",
+      "global_accelerator_listener_chromeos.h",
+    ]
   }
 }

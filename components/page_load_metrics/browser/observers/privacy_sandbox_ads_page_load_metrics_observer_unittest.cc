@@ -77,20 +77,12 @@ class PrivacySandboxAdsPageLoadMetricsObserverTest
 
     static const base::flat_map<PrivacySandboxAdsApi, std::vector<WebFeature>>
         kFeaturesMap = {
-            {PrivacySandboxAdsApi::kAttributionReporting,
-             {WebFeature::kAttributionReportingAPIAll}},
             {PrivacySandboxAdsApi::kFencedFrames,
              {WebFeature::kHTMLFencedFrameElement}},
             {PrivacySandboxAdsApi::kProtectedAudienceRunAdAuction,
              {WebFeature::kV8Navigator_RunAdAuction_Method}},
             {PrivacySandboxAdsApi::kProtectedAudienceJoinAdInterestGroup,
              {WebFeature::kV8Navigator_JoinAdInterestGroup_Method}},
-            {PrivacySandboxAdsApi::kPrivateAggregation,
-             {WebFeature::kPrivateAggregationApiAll}},
-            {PrivacySandboxAdsApi::kSharedStorage,
-             {WebFeature::kSharedStorageAPI_SharedStorage_DOMReference,
-              WebFeature::kSharedStorageAPI_Run_Method,
-              WebFeature::kSharedStorageAPI_SelectURL_Method}},
             {PrivacySandboxAdsApi::kTopics,
              {WebFeature::kTopicsAPI_BrowsingTopics_Method}},
         };
@@ -171,14 +163,9 @@ INSTANTIATE_TEST_SUITE_P(
         TestCase{
             .name = "all",
             .web_features =
-                {WebFeature::kAttributionReportingAPIAll,
-                 WebFeature::kHTMLFencedFrameElement,
+                {WebFeature::kHTMLFencedFrameElement,
                  WebFeature::kV8Navigator_RunAdAuction_Method,
                  WebFeature::kV8Navigator_JoinAdInterestGroup_Method,
-                 WebFeature::kPrivateAggregationApiAll,
-                 WebFeature::kSharedStorageAPI_SharedStorage_DOMReference,
-                 WebFeature::kSharedStorageAPI_Run_Method,
-                 WebFeature::kSharedStorageAPI_SelectURL_Method,
                  WebFeature::kTopicsAPI_BrowsingTopics_Method},
         },
         TestCase{
@@ -189,19 +176,6 @@ INSTANTIATE_TEST_SUITE_P(
             .name = "join_ad_interest_group",
             .web_features =
                 {WebFeature::kV8Navigator_JoinAdInterestGroup_Method},
-        },
-        TestCase{
-            .name = "shared_storage_dom_reference",
-            .web_features =
-                {WebFeature::kSharedStorageAPI_SharedStorage_DOMReference},
-        },
-        TestCase{
-            .name = "shared_storage_run",
-            .web_features = {WebFeature::kSharedStorageAPI_Run_Method},
-        },
-        TestCase{
-            .name = "shared_storage_select_url",
-            .web_features = {WebFeature::kSharedStorageAPI_SelectURL_Method},
         }),
     [](const auto& info) { return info.param.name; });  // test name generator
 

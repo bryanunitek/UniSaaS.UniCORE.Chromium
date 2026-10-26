@@ -26,7 +26,6 @@ extern const char kWebViewForceCrashJava[];
 extern const char kWebViewForceCrashNative[];
 extern const char kWebViewUseSeparateResourceContext[];
 extern const char kDebugBsa[];
-extern const char kWebViewInterceptedCookieHeader[];
 extern const char kStartupNonBlockingWebViewConstructor[];
 extern const char kPostChromiumStartupInWebViewConstructor[];
 extern const char kWebViewStaticMethodsNotTriggerStartup[];
@@ -34,6 +33,7 @@ extern const char kWebViewProfileStoreNotTriggerStartup[];
 extern const char kWebViewOptInToGmsBindServiceOptimization[];
 extern const char kWebViewReduceUserAgentMinorVersion[];
 extern const char kWebViewReduceUAAndroidVersionDeviceModel[];
+extern const char kWebViewRunStartupTasksSync[];
 
 }  // namespace switches
 

@@ -10,8 +10,9 @@
 #include "chrome/browser/compose/chrome_compose_client.h"
 #include "chrome/browser/compose/compose_enabling.h"
 #include "chrome/browser/compose/compose_session.h"
+#include "chrome/browser/media/webrtc/desktop_capture_access_handler.h"
+#include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/compose/compose_dialog_view.h"
@@ -31,6 +32,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "third_party/blink/public/common/context_menu_data/edit_flags.h"
+#include "third_party/blink/public/common/input/web_gesture_event.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/ime/input_method.h"
@@ -53,6 +55,20 @@ class ComposeSessionBrowserTest : public InteractiveBrowserTest {
   }
 
   void TearDown() override { InteractiveBrowserTest::TearDown(); }
+
+  void SetUpOnMainThread() override {
+    InteractiveBrowserTest::SetUpOnMainThread();
+    MediaCaptureDevicesDispatcher::GetInstance()
+        ->desktop_capture_access_handler_for_test()
+        ->SetRequestApprovedForTest(true);
+  }
+
+  void TearDownOnMainThread() override {
+    MediaCaptureDevicesDispatcher::GetInstance()
+        ->desktop_capture_access_handler_for_test()
+        ->SetRequestApprovedForTest(false);
+    InteractiveBrowserTest::TearDownOnMainThread();
+  }
 
   feature_engagement::test::ScopedIphFeatureList* feature_list() {
     return &feature_list_;
@@ -174,7 +190,7 @@ IN_PROC_BROWSER_TEST_F(ComposeSessionBrowserTest, OpenFeedbackPage) {
   // is flaky on Linux MSan builders. This requires further investigation, but
   // the MSBB dialog state is not on the feedback page testing path so the
   // current state still satisfies the test requirement.
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetBoolean(
       unified_consent::prefs::kUrlKeyedAnonymizedDataCollectionEnabled, true);
 

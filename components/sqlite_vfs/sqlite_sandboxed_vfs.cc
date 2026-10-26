@@ -13,7 +13,6 @@
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/synchronization/lock.h"
@@ -61,6 +60,9 @@ FileType GetFileType(int sqlite_requested_type) {
 
 // Returns true if `file1` and `file2` have the same cached ID.
 bool IsSameFile(const SandboxedFile& file1, const SandboxedFile& file2) {
+  if (&file1 == &file2) {
+    return true;
+  }
   const auto& id1 = file1.file_system_id();
   const auto& id2 = file2.file_system_id();
   return id1.has_value() && id2.has_value() && *id1 == *id2;
@@ -227,8 +229,7 @@ SqliteSandboxedVfsDelegate::RegisterSandboxedFiles(
       // If either database connection is opened in single-connection mode (no
       // shared locks segment GUID), it cannot co-exist with any other
       // connection targeting the same physical file in this process.
-      CHECK(!registered_shm_guid.is_empty() && !incoming_shm_guid.is_empty(),
-            base::NotFatalUntil::M151);
+      CHECK(!registered_shm_guid.is_empty() && !incoming_shm_guid.is_empty());
 
       // Allow duplicate registrations of shared databases if at least one of
       // the two has been abandoned. In this case, only one of the two will be
@@ -240,8 +241,7 @@ SqliteSandboxedVfsDelegate::RegisterSandboxedFiles(
 
       // Two connections to the same database file with different shared locks
       // results in data corruption.
-      CHECK_EQ(registered_shm_guid, incoming_shm_guid,
-               base::NotFatalUntil::M151);
+      CHECK_EQ(registered_shm_guid, incoming_shm_guid);
     }
   }
 

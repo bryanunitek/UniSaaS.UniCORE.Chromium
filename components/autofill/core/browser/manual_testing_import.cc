@@ -4,21 +4,27 @@
 
 #include "components/autofill/core/browser/manual_testing_import.h"
 
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/containers/fixed_flat_map.h"
+#include "base/containers/map_util.h"
 #include "base/containers/to_vector.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
+#include "base/values.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #include "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
@@ -27,9 +33,10 @@
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
-#include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/field_type_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/network/autofill_ai/autofill_ai_personal_context_access_manager_impl.h"
+#include "url/gurl.h"
 
 namespace autofill {
 
@@ -55,6 +62,13 @@ constexpr std::string_view kKeyRecordType = "record_type";
 constexpr std::string_view kKeyNickname = "nickname";
 constexpr std::string_view kKeyEntityType = "entity_type";
 constexpr std::string_view kKeyAttributes = "attributes";
+constexpr std::string_view kKeyManagementUrl = "management_url";
+constexpr std::string_view kKeySources = "sources";
+constexpr std::string_view kKeySourceType = "type";
+constexpr std::string_view kKeySourceUrl = "url";
+constexpr std::string_view kKeySourceTitle = "title";
+constexpr std::string_view kKeySourceTimestamp = "timestamp";
+constexpr std::string_view kKeyInitialCreatorId = "initial_creator_id";
 constexpr auto kRecordTypeMapping =
     base::MakeFixedFlatMap<std::string_view, AutofillProfile::RecordType>(
         {{"account", AutofillProfile::RecordType::kAccount},
@@ -67,7 +81,13 @@ constexpr auto kEntityRecordTypeMapping =
         {{"local", EntityInstance::RecordType::kLocal},
          {"serverWallet", EntityInstance::RecordType::kServerWallet},
          {"personalContext", EntityInstance::RecordType::kPersonalContext}});
-constexpr std::string_view kKeyInitialCreatorId = "initial_creator_id";
+constexpr auto kEntityPayloadSourceTypeMapping = base::MakeFixedFlatMap<
+    std::string_view,
+    EntityInstance::PersonalContextRecordTypePayload::Source::Type>(
+    {{"gmail",
+      EntityInstance::PersonalContextRecordTypePayload::Source::Type::kGmail},
+     {"photos", EntityInstance::PersonalContextRecordTypePayload::Source::Type::
+                    kPhotos}});
 
 // Checks if the `profile` is changed by `FinalizeAfterImport()`. See
 // documentation of `AutofillProfilesFromJSON()` for a rationale.
@@ -190,6 +210,77 @@ std::optional<CreditCard> MakeCard(const base::DictValue& dict) {
   return card;
 }
 
+// Returns the `timestamp` entry of `src_dict` parsed as UTC, or
+// `base::Time::Now()` if the key is absent so manual test data ranks as fresh.
+// Returns nullopt (after logging) if the value is present but unparsable.
+std::optional<base::Time> ParseSourceTimestamp(
+    const base::DictValue& src_dict) {
+  base::Time timestamp = base::Time::Now();
+  if (const std::string* timestamp_str =
+          src_dict.FindString(kKeySourceTimestamp)) {
+    if (!base::Time::FromUTCString(timestamp_str->c_str(), &timestamp)) {
+      LOG(ERROR) << "Invalid timestamp: " << *timestamp_str << ".";
+      return std::nullopt;
+    }
+  }
+  return timestamp;
+}
+
+std::vector<EntityInstance::PersonalContextRecordTypePayload::Source>
+GetPersonalContextSourcesFromDict(const base::DictValue& dict) {
+  using Source = EntityInstance::PersonalContextRecordTypePayload::Source;
+  const base::ListValue* sources_list = dict.FindList(kKeySources);
+  if (!sources_list) {
+    return {};
+  }
+
+  std::vector<Source> sources;
+  sources.reserve(sources_list->size());
+  for (const base::Value& item : *sources_list) {
+    if (!item.is_dict()) {
+      LOG(ERROR) << "Source entry is not a dictionary.";
+      continue;
+    }
+    const base::DictValue& src_dict = item.GetDict();
+    const std::string* type_str = src_dict.FindString(kKeySourceType);
+    const std::string* url_str = src_dict.FindString(kKeySourceUrl);
+    if (!type_str || !url_str) {
+      LOG(ERROR) << "Source entry missing 'type' or 'url'.";
+      continue;
+    }
+    const Source::Type* type =
+        base::FindOrNull(kEntityPayloadSourceTypeMapping, *type_str);
+    if (!type) {
+      LOG(ERROR) << "Invalid source type: " << *type_str << ".";
+      continue;
+    }
+    GURL url(*url_str);
+    std::optional<base::Time> timestamp = ParseSourceTimestamp(src_dict);
+    if (!timestamp) {
+      continue;
+    }
+    switch (*type) {
+      case Source::Type::kGmail: {
+        const std::string* title_str = src_dict.FindString(kKeySourceTitle);
+        sources.push_back(
+            {.url = std::move(url),
+             .metadata = EntityInstance::PersonalContextRecordTypePayload::
+                 GmailSourceMetadata{.title = title_str ? *title_str : "",
+                                     .timestamp = *timestamp}});
+        break;
+      }
+      case Source::Type::kPhotos: {
+        sources.push_back(
+            {.url = std::move(url),
+             .metadata = EntityInstance::PersonalContextRecordTypePayload::
+                 PhotosSourceMetadata{.timestamp = *timestamp}});
+        break;
+      }
+    }
+  }
+  return sources;
+}
+
 std::optional<EntityInstance> MakeEntity(const base::DictValue& dict) {
   const std::string* entity_type_str = dict.FindString(kKeyEntityType);
   if (!entity_type_str) {
@@ -237,11 +328,26 @@ std::optional<EntityInstance> MakeEntity(const base::DictValue& dict) {
     return std::nullopt;
   }
 
+  auto record_type_data = [&] -> EntityInstance::RecordTypeData {
+    switch (*record_type) {
+      case EntityInstance::RecordType::kLocal:
+        return EntityInstance::LocalRecordTypePayload{};
+      case EntityInstance::RecordType::kServerWallet: {
+        const std::string* management_url = dict.FindString(kKeyManagementUrl);
+        return EntityInstance::WalletRecordTypePayload{
+            .management_url = management_url ? GURL(*management_url) : GURL()};
+      }
+      case EntityInstance::RecordType::kPersonalContext:
+        return EntityInstance::PersonalContextRecordTypePayload{
+            .sources = GetPersonalContextSourcesFromDict(dict)};
+    }
+    NOTREACHED();
+  }();
   return EntityInstance(
       *entity_type, std::move(attributes),
       EntityInstance::EntityId(base::Uuid::GenerateRandomV4()),
       /*nickname=*/"", base::Time::Now(), /*use_count=*/0,
-      /*use_date=*/base::Time(), *record_type,
+      /*use_date=*/base::Time(), std::move(record_type_data),
       EntityInstance::AreAttributesReadOnly(false),
       /*frecency_override=*/"");
 }

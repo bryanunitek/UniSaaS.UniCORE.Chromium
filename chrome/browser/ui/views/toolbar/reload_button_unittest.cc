@@ -8,7 +8,6 @@
 
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "chrome/browser/command_updater.h"
 #include "chrome/browser/command_updater_impl.h"
@@ -290,7 +289,6 @@ class ReloadButtonMetricsTest : public ChromeViewsTestBase,
                                 public ReloadButtonTestBase {
  public:
   void SetUp() override {
-    feature_list_.InitAndEnableFeature(features::kInitialWebUIMetrics);
     ChromeViewsTestBase::SetUp();
     profile_ = std::make_unique<TestingProfile>();
     WaapUIMetricsServiceFactory::GetForProfile(profile_.get());
@@ -334,9 +332,7 @@ class ReloadButtonMetricsTest : public ChromeViewsTestBase,
     viz::FrameTimingDetails frame_timing_details;
     frame_timing_details.presentation_feedback.timestamp =
         presentation_timestamp;
-    reload_button()->OnNextPresentation(reload_button()->GetVisibleMode(),
-                                        reload_button()->GetState(),
-                                        frame_timing_details);
+    reload_button()->OnNextPresentation(frame_timing_details);
   }
 
  protected:
@@ -348,7 +344,6 @@ class ReloadButtonMetricsTest : public ChromeViewsTestBase,
 
  private:
   content::RenderViewHostTestEnabler render_view_host_test_enabler_;
-  base::test::ScopedFeatureList feature_list_;
   base::HistogramTester histogram_tester_;
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<CommandUpdaterImpl> command_updater_;
@@ -398,175 +393,6 @@ TEST_F(ReloadButtonMetricsTest, DISABLED_LogFirstPaintMetrics) {
       "InitialWebUI.ReloadButton.InputToNextPaint.MouseRelease", 0);
 }
 
-// Tests that the MousePressToNextPaint histogram is correctly logged. It
-// simulates mouse press and release events followed by painting the button,
-// verifying that a metric is recorded only after a press and a corresponding
-// paint.
-TEST_F(ReloadButtonMetricsTest, LogMousePressToNextPaintMetric) {
-  // Initial State.
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.MousePressToNextPaint", 0);
-  gfx::Canvas canvas(gfx::Size(20, 20), 1.0f, false);
-
-  // Press 1.
-  reload_button()->OnMousePressed(
-      CreateMouseEvent(ui::EventType::kMousePressed, {0, 0}));
-  // Release 1.
-  reload_button()->OnMouseReleased(
-      CreateMouseEvent(ui::EventType::kMouseReleased, {0, 0}));
-
-  // Press 2.
-  reload_button()->OnMousePressed(
-      CreateMouseEvent(ui::EventType::kMousePressed, {0, 0}));
-  // Paint 1: Should record only once for Press 2 to this paint.
-  SimulatePaint(base::TimeTicks() + base::Microseconds(1));
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.MousePressToNextPaint", 1);
-
-  // Release 2.
-  reload_button()->OnMouseReleased(
-      CreateMouseEvent(ui::EventType::kMouseReleased, {0, 0}));
-  // Paint 2: Should not record as there is no mouse press.
-  SimulatePaint(base::TimeTicks() + base::Microseconds(2));
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.MousePressToNextPaint", 1);
-
-  // Press 3.
-  reload_button()->OnMousePressed(
-      CreateMouseEvent(ui::EventType::kMousePressed, {0, 0}));
-  // Paint 3 - Should record again.
-  SimulatePaint(base::TimeTicks() + base::Microseconds(3));
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.MousePressToNextPaint", 2);
-}
-
-// Tests the logging for the MouseHoverToNextPaint metric. It simulates mouse
-// enter and exit events and verifies that a metric is recorded after a mouse
-// enter event is followed by a paint, but not after a mouse exit.
-TEST_F(ReloadButtonMetricsTest, LogMouseHoverToNextPaintMetric) {
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.MouseHoverToNextPaint", 0);
-  gfx::Canvas canvas(gfx::Size(20, 20), 1.0f, false);
-
-  reload_button()->SetState(views::Button::STATE_NORMAL);
-
-  // Simulate MouseEnter.
-  ui::MouseEvent enter_event(ui::EventType::kMouseEntered, gfx::Point(),
-                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
-  reload_button()->OnMouseEntered(enter_event);
-  EXPECT_EQ(reload_button()->GetState(), views::Button::STATE_HOVERED);
-
-  // Simulate Paint.
-  SimulatePaint(base::TimeTicks() + base::Microseconds(1));
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.MouseHoverToNextPaint", 1);
-
-  // Simulate MouseExit.
-  ui::MouseEvent exit_event(ui::EventType::kMouseExited, gfx::Point(),
-                            gfx::Point(), ui::EventTimeForNow(), 0, 0);
-  reload_button()->OnMouseExited(exit_event);
-  EXPECT_EQ(reload_button()->GetState(), views::Button::STATE_NORMAL);
-
-  // Paint again, should not record.
-  SimulatePaint(base::TimeTicks() + base::Microseconds(2));
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.MouseHoverToNextPaint", 1);
-
-  // Enter again.
-  reload_button()->OnMouseEntered(enter_event);
-  // Paint again, should record.
-  SimulatePaint(base::TimeTicks() + base::Microseconds(3));
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.MouseHoverToNextPaint", 2);
-}
-
-// Verifies that the latency from an input event (both mouse release and key
-// press) to the next paint of the button is recorded.
-TEST_F(ReloadButtonMetricsTest, LogInputToNextPaintMetric) {
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.InputToNextPaint.MouseRelease", 0);
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.InputToNextPaint.KeyPress", 0);
-
-  // Test mouse input event.
-  reload_button()->OnMousePressed(
-      CreateMouseEvent(ui::EventType::kMousePressed, {0, 0}));
-  reload_button()->OnMouseReleased(
-      CreateMouseEvent(ui::EventType::kMouseReleased, {0, 0}));
-  SimulatePaint(base::TimeTicks() + base::Microseconds(1));
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.InputToNextPaint.MouseRelease", 1);
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.InputToNextPaint.KeyPress", 0);
-
-  // TODO(crbug.com/448794588): Test or remove key input event.
-}
-
-// Verifies that the latency from a mouse input event to the execution of the
-// reload command is recorded.
-// TODO(crbug.com/448794588): Test or remove key input event.
-TEST_F(ReloadButtonMetricsTest, LogMouseInputToReloadMetric) {
-  // The button defaults to Reload mode.
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.InputToStop.MouseRelease", 0);
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.InputToStop.KeyPress", 0);
-
-  // Test mouse click to Reload.
-  reload_button()->OnMousePressed(
-      CreateMouseEvent(ui::EventType::kMousePressed, {0, 0}));
-  reload_button()->OnMouseReleased(
-      CreateMouseEvent(ui::EventType::kMouseReleased, {0, 0}));
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.InputToReload.MouseRelease", 1);
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.InputToReload.KeyPress", 0);
-}
-
-// Verifies that the latency from a mouse input event to the execution of the
-// stop command is recorded.
-// TODO(crbug.com/448794588): Test or remove key input event.
-TEST_F(ReloadButtonMetricsTest, LogMouseInputToStopMetric) {
-  // Sets the button to Stop mode to test input on the Stop button.
-  reload_button()->ChangeMode(ReloadButton::Mode::kStop, true);
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.InputToStop.MouseRelease", 0);
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.InputToStop.KeyPress", 0);
-
-  // Test mouse click to Stop.
-  reload_button()->OnMousePressed(
-      CreateMouseEvent(ui::EventType::kMousePressed, {0, 0}));
-  reload_button()->OnMouseReleased(
-      CreateMouseEvent(ui::EventType::kMouseReleased, {0, 0}));
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.InputToStop.MouseRelease", 1);
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.InputToStop.KeyPress", 0);
-}
-
-// Ensures that the latency from changing the button's visible mode to the next
-// paint is correctly logged for both Stop and Reload modes.
-TEST_F(ReloadButtonMetricsTest, LogChangeVisibleModeToNextPaintMetric) {
-  gfx::Canvas canvas(gfx::Size(20, 20), 1.0f, false);
-
-  // 1. Test change to Stop.
-  reload_button()->ChangeMode(ReloadButton::Mode::kStop, true);
-  SimulatePaint(base::TimeTicks() + base::Microseconds(1));
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.ChangeVisibleModeToNextPaintInStop", 1);
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.ChangeVisibleModeToNextPaintInReload", 0);
-
-  // 2. Test change to Reload.
-  reload_button()->ChangeMode(ReloadButton::Mode::kReload, true);
-  SimulatePaint(base::TimeTicks() + base::Microseconds(2));
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.ChangeVisibleModeToNextPaintInStop", 1);
-  histogram_tester().ExpectTotalCount(
-      "InitialWebUI.ReloadButton.ChangeVisibleModeToNextPaintInReload", 1);
-}
-
 // Verifies that the latency from a mouse input event to the execution of the
 // reload command is recorded in the new unified InteractionToReload metric.
 TEST_F(ReloadButtonMetricsTest, LogInteractionToReloadMetric) {
@@ -576,10 +402,9 @@ TEST_F(ReloadButtonMetricsTest, LogInteractionToReloadMetric) {
       "InitialWebUI.ReloadButton.InteractionToReload", 0);
 
   // Simulate a mouse click.
-  reload_button()->OnMousePressed(
-      CreateMouseEvent(ui::EventType::kMousePressed, {0, 0}));
-  reload_button()->OnMouseReleased(
-      CreateMouseEvent(ui::EventType::kMouseReleased, {0, 0}));
+  ui::MouseEvent click_event =
+      CreateMouseEvent(ui::EventType::kMouseReleased, {0, 0});
+  views::test::ButtonTestApi(reload_button()).NotifyClick(click_event);
 
   // It should log immediately (synchronously) because we call
   // WaapUIMetricsService.
@@ -593,10 +418,9 @@ TEST_F(ReloadButtonMetricsTest, LogInteractionToReloadMetric) {
 // key press) is correctly recorded.
 TEST_F(ReloadButtonMetricsTest, LogInputCountMetric) {
   // Simulate a mouse click.
-  reload_button()->OnMousePressed(
-      CreateMouseEvent(ui::EventType::kMousePressed, {0, 0}));
-  reload_button()->OnMouseReleased(
-      CreateMouseEvent(ui::EventType::kMouseReleased, {0, 0}));
+  ui::MouseEvent click_event =
+      CreateMouseEvent(ui::EventType::kMouseReleased, {0, 0});
+  views::test::ButtonTestApi(reload_button()).NotifyClick(click_event);
   histogram_tester().ExpectBucketCount(
       "InitialWebUI.ReloadButton.InputCount",
       WaapUIMetricsRecorder::ReloadButtonInputType::kMouseRelease, 1);
@@ -634,4 +458,25 @@ TEST_F(ReloadButtonTest, AnimateTransitionsOnButtonPress) {
 
   EXPECT_FALSE(animate_transitions());
   EXPECT_EQ(ReloadButton::Mode::kReload, reload_button()->GetVisibleMode());
+}
+
+// A button hosted outside a browser window, such as the one in the ChromeOS
+// login screen captive portal dialog, has no profile. Clicking it must not
+// crash and must not record WaaP UI metrics.
+using ReloadButtonWithoutProfileTest = ChromeViewsTestBase;
+
+TEST_F(ReloadButtonWithoutProfileTest, ClickRecordsNoMetrics) {
+  base::HistogramTester histogram_tester;
+  ReloadButton button(/*profile=*/nullptr, /*command_updater=*/nullptr,
+                      /*window_metrics_manager=*/nullptr);
+
+  ui::MouseEvent click_event(ui::EventType::kMouseReleased, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(),
+                             ui::EF_LEFT_MOUSE_BUTTON,
+                             ui::EF_LEFT_MOUSE_BUTTON);
+  views::test::ButtonTestApi(&button).NotifyClick(click_event);
+
+  histogram_tester.ExpectTotalCount("InitialWebUI.ReloadButton.InputCount", 0);
+  histogram_tester.ExpectTotalCount(
+      "InitialWebUI.ReloadButton.InteractionToReload", 0);
 }

@@ -10,6 +10,7 @@
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/facilitated_payments/core/browser/native_account_linking_handler.h"
 #include "components/facilitated_payments/core/browser/network_api/facilitated_payments_network_interface.h"
 #include "components/facilitated_payments/core/browser/strike_databases/pix_account_linking_strike_database.h"
 #include "components/facilitated_payments/core/utils/facilitated_payments_ui_utils.h"
@@ -26,23 +27,44 @@ class FacilitatedPaymentsClient;
 // app and returned to Chrome. Some merchants show the order status causing page
 // navigations. To overcome such cases, the manager should be associated with
 // the tab, and not a single frame.
-class PixAccountLinkingManager {
+class PixAccountLinkingManager : public NativeAccountLinkingHandler {
  public:
-  explicit PixAccountLinkingManager(FacilitatedPaymentsClient* client);
-  virtual ~PixAccountLinkingManager();
+  explicit PixAccountLinkingManager(
+      FacilitatedPaymentsClient* client,
+      FacilitatedPaymentsApiClientCreator api_client_creator =
+          FacilitatedPaymentsApiClientCreator());
+  ~PixAccountLinkingManager() override;
 
   // Initialize the Pix account linking flow. Virtual so it can be overridden in
   // tests.
   virtual void MaybeShowPixAccountLinkingPrompt(
       const url::Origin& pix_payment_page_origin);
 
-  // Sets the internal UI state and triggers dismissal.
-  virtual void DismissPrompt();
+ protected:
+  std::optional<AccountLinkingParams> CreateAccountLinkingParams() override;
+  // NativeAccountLinkingHandler:
+  std::string_view GetHistogramSuffix() const override;
+  strike_database::StrikeDatabaseIntegratorBase* GetStrikeDatabase() override;
+  bool IsUserPrefEnabled() const override;
+  base::DictValue GetPayloadForGetDetailsForCreatePaymentInstrument() override;
+  void DoOnClientTokenReceived(
+      const std::vector<uint8_t>& client_token) override;
+  void DoOnGetDetailsForCreatePaymentInstrumentResponse(
+      bool is_eligible) override;
+  void DoOnAccepted() override;
+  void DoOnAccountLinkingResult(AccountLinkingResult result) override;
+  base::WeakPtr<NativeAccountLinkingHandler> GetWeakPtr() override;
 
  private:
   friend class PixAccountLinkingManagerTestApi;
 
   void Reset();
+
+  // Called when the user returns to Chrome after paying in bank app.
+  void OnUserReturnedToChrome();
+
+  // Called after the predefined wait time following user return to Chrome.
+  void OnPostReturnDelayPassed();
 
   // Sets the UI event listener, sets the internal UI state, and triggers
   // showing the Pix account linking prompt if the user is eligible.
@@ -52,23 +74,17 @@ class PixAccountLinkingManager {
   // time.
   void ShowPixAccountLinkingPromptAfterDelay();
 
-  void OnAccepted();
-
-  void OnDeclined();
-
   // Called by the view to communicate UI events.
   void OnUiScreenEvent(UiEvent ui_event_type);
 
-  // Callback for when the payments request to check Pix account linking
-  // eligibility is completed.
-  void OnGetDetailsForCreatePaymentInstrumentResponseReceived(
-      base::TimeTicks start_time,
-      autofill::payments::PaymentsAutofillClient::PaymentsRpcResult result,
-      bool is_eligible_for_pix_account_linking,
-      const std::vector<uint8_t>& action_token);
+  // Stores the client token received from FetchClientToken().
+  std::vector<uint8_t> client_token_;
 
-  // Owner.
-  const raw_ref<FacilitatedPaymentsClient> client_;
+  // Track if the user has returned to Chrome tab from the bank app.
+  bool has_user_returned_to_chrome_ = false;
+
+  // Track if the delay after returning to Chrome has elapsed.
+  bool has_post_return_delay_passed_ = false;
 
   // Optional bool to indicate whether the user is eligible for Pix account
   // linking based on the response from payments backend. This field is set to
@@ -76,12 +92,12 @@ class PixAccountLinkingManager {
   // response is not received yet.
   std::optional<bool> is_eligible_for_pix_account_linking_ = std::nullopt;
 
-  // True when the Pix account linking prompt is being shown to the user. Used
-  // to catch instances where the prompt is unexpectedly closed.
-  bool is_prompt_showing_ = false;
-
   // The origin of the Pix payment page that triggered the account linking flow.
   url::Origin pix_payment_page_origin_;
+
+  // Set to true when the user accepts the prompt to differentiate between
+  // prompt decline and GMSCore flow cancellation.
+  bool is_prompt_accepted_ = false;
 
   // Returns the strike database for Pix account linking, creating it if needed.
   PixAccountLinkingStrikeDatabase* GetOrCreateStrikeDatabase();

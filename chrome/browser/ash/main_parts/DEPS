@@ -1,8 +1,6 @@
 include_rules = [
   "-chrome",
 
-  "+chromeos/ash/components/mojo_service_manager",
-  "+chromeos/ash/components/scheduler_config",
   "+chrome/browser/ash/main_parts",
   "+chrome/browser/ash/accessibility",
   "+chrome/browser/ash/ambient",
@@ -17,8 +15,8 @@ include_rules = [
   "+chrome/browser/ash/certs",
   "+chrome/browser/ash/child_accounts/parent_access_code",
   "+chrome/browser/ash/chromebox_for_meetings",
-  "+chrome/browser/ash/crosapi",
   "+chrome/browser/ash/crostini",
+  "+chrome/browser/ash/customization",
   "+chrome/browser/ash/dbus",
   "+chrome/browser/ash/diagnostics",
   "+chrome/browser/ash/events",
@@ -38,7 +36,6 @@ include_rules = [
   "+chrome/browser/ash/note_taking",
   "+chrome/browser/ash/notifications",
   "+chrome/browser/ash/ownership",
-  "+chrome/browser/ash/pcie_peripheral",
   "+chrome/browser/ash/performance",
   "+chrome/browser/ash/platform_keys/key_permissions",
   "+chrome/browser/ash/policy/core",
@@ -61,6 +58,7 @@ include_rules = [
   "+chrome/browser/component_updater",
   "+chrome/browser/defaults.h",
   "+chrome/browser/device_identity",
+  "+chrome/browser/device_reauth",
   "+chrome/browser/first_run",
   "+chrome/browser/global_features.h",
   "+chrome/browser/memory",
@@ -72,12 +70,11 @@ include_rules = [
   "+chrome/browser/tracing",
   "+chrome/browser/ui/ash/assistant",
   "+chrome/browser/ui/ash/keyboard",
+  "+chrome/browser/ui/ash/login",
   "+chrome/browser/ui/ash/session",
+  "+chrome/browser/ui/webui/ash/config",
   "+chrome/browser/ui/webui/ash/emoji",
   "+chrome/common/chrome_constants.h",
-  "+chrome/common/chrome_features.h",
-  "+chrome/common/chrome_paths.h",
-  "+chrome/common/chrome_switches.h",
   "+chrome/common/logging_chrome.h",
   "+chrome/common/pref_names.h",
 ]
@@ -86,6 +83,9 @@ specific_include_rules = {
   "chrome_browser_main_parts_ash\\.cc": [
     # For fake SIGTERM handler implementation.
     "+chrome/browser/lifetime/application_lifetime.h",
+
+    # For ChromeOS shutdown phase tracking.
+    "+chrome/browser/lifetime/browser_shutdown.h",
 
     # To bridge Chrome's termination notification to Ash system.
     "+chrome/browser/lifetime/termination_notification.h",

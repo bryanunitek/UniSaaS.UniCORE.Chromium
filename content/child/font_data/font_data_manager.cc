@@ -9,31 +9,47 @@
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/functional/bind.h"
+#include "base/i18n/case_conversion.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
 #include "content/common/features.h"
 #include "content/public/child/child_thread.h"
 #include "skia/ext/font_utils.h"
 #if BUILDFLAG(IS_WIN)
+#include "third_party/blink/public/web/win/web_font_rendering.h"
 #include "third_party/skia/src/ports/SkTypeface_win_dw.h"  // nogncheck
 #endif
+#if !BUILDFLAG(IS_WIN)
 #if BUILDFLAG(ENABLE_FREETYPE)
 #include "third_party/skia/include/ports/SkFontMgr_empty.h"
 #endif
 #include "third_party/skia/include/ports/SkTypeface_fontations.h"
+#endif
 
 namespace font_data_service {
 
 namespace {
 
-const int kTypefaceCacheSize = 128;
+constexpr size_t kTypefaceCacheSize = 128;
+constexpr size_t kUnmatchedFamilyCacheSize = 64;
+
+std::optional<std::string> CanonicalizeFontFamilyNameForCache(
+    std::optional<std::string> name) {
+  if (name) {
+    return base::UTF16ToUTF8(base::i18n::FoldCase(base::UTF8ToUTF16(*name)));
+  }
+  return std::nullopt;
+}
 
 // Binds a pending receiver. Must be invoked from the main thread.
 void BindHostReceiverOnMainThread(
@@ -73,7 +89,8 @@ UNSAFE_BUFFER_USAGE std::vector<std::string> bcp47ArrayToVector(
 
 FontDataManager::FontDataManager()
     : typeface_cache_(kTypefaceCacheSize),
-#if BUILDFLAG(ENABLE_FREETYPE)
+      unmatched_families_(kUnmatchedFamilyCacheSize),
+#if !BUILDFLAG(IS_WIN) && BUILDFLAG(ENABLE_FREETYPE)
       custom_fnt_mgr_(SkFontMgr_New_Custom_Empty()),
 #endif
       main_task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()) {
@@ -85,7 +102,49 @@ FontDataManager::~FontDataManager() = default;
 void FontDataManager::CreateAndInitialize() {
   sk_sp<FontDataManager> font_data_manager = sk_make_sp<FontDataManager>();
 
+#if BUILDFLAG(IS_WIN)
+  if (base::FeatureList::IsEnabled(features::kFontDataManagerPrewarming)) {
+    blink::WebFontRendering::SetFontPrewarmer(font_data_manager.get());
+  }
+#endif
   skia::OverrideDefaultSkFontMgr(font_data_manager);
+}
+
+void FontDataManager::PrewarmFamily(const blink::WebString& family_name) {
+  PrewarmFamilyImpl(family_name, base::OnceClosure());
+}
+
+void FontDataManager::PrewarmFamilyForTesting(  // IN-TEST
+    const blink::WebString& family_name,
+    base::OnceClosure completion_callback) {
+  PrewarmFamilyImpl(family_name, std::move(completion_callback));
+}
+
+void FontDataManager::PrewarmFamilyImpl(const blink::WebString& family_name,
+                                        base::OnceClosure completion_callback) {
+  CHECK(main_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(base::FeatureList::IsEnabled(features::kFontDataManagerPrewarming));
+  if (family_name.IsEmpty()) {
+    if (completion_callback) {
+      std::move(completion_callback).Run();
+    }
+    return;
+  }
+
+  if (!prewarm_task_runner_) {
+    CHECK(content::ChildThread::Get());
+    InitializePrewarmer();
+  }
+
+  prewarm_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](sk_sp<FontDataManager> font_data_manager, std::string family_name,
+             base::OnceClosure completion_callback) {
+            font_data_manager->PrewarmFamilyOnWorker(
+                std::move(family_name), std::move(completion_callback));
+          },
+          sk_ref_sp(this), family_name.Utf8(), std::move(completion_callback)));
 }
 
 int FontDataManager::onCountFamilies() const {
@@ -141,6 +200,9 @@ sk_sp<SkTypeface> FontDataManager::onMatchFamilyStyle(
   if (typeface_result) {
     return *typeface_result;
   }
+  if (IsKnownUnmatchedFamily(request)) {
+    return nullptr;
+  }
 
   // Proxy the font request to the font service.
   mojom::TypefaceStylePtr style(mojom::TypefaceStyle::New());
@@ -148,21 +210,20 @@ sk_sp<SkTypeface> FontDataManager::onMatchFamilyStyle(
   style->width = requested_style.width();
   style->slant = ConvertToMojomFontStyle(requested_style.slant());
 
-  mojom::MatchFamilyNameResultPtr match_result;
+  mojom::MatchFamilyNameResponsePtr response;
   {
     TRACE_EVENT1("fonts", "FontDataManager::onMatchFamilyStyle", "family_name",
                  cpp_requested_family_name);
     GetRemoteFontDataService().MatchFamilyName(cpp_requested_family_name,
-                                               std::move(style), &match_result);
+                                               std::move(style), &response);
   }
-
-  auto typeface = CreateTypefaceFromMatchResult(std::move(match_result));
 
   // Update the cache with the resulting typeface even in case of a failure to
   // avoid calling the font service again. Failed typeface will go to the font
   // fallback stack.
+  sk_sp<SkTypeface> typeface =
+      CreateTypefaceFromMatchResponse(request, std::move(response));
   AddToCache(request, typeface);
-
   return typeface;
 }
 
@@ -220,17 +281,11 @@ sk_sp<SkTypeface> FontDataManager::onMakeFromStreamArgs(
     const SkFontArguments& args) const {
   TRACE_EVENT1("fonts", "FontDataManager::onMakeFromStreamArgs", "size",
                stream->getLength());
+#if BUILDFLAG(IS_WIN)
+  return DWriteFontTypeface::MakeFromStream(std::move(stream), args);
+#else
   // Experiment will test the performance of different SkTypefaces.
   // 'custom_fnt_mgr_' is a wrapper to create an SkFreeType typeface.
-
-  // DWRITE is only an option on Windows. Other platforms must use Freetype or
-  // Fontations.
-#if BUILDFLAG(IS_WIN)
-  if (features::kFontDataServiceTypefaceType.Get() ==
-      features::FontDataServiceTypefaceType::kDwrite) {
-    return DWriteFontTypeface::MakeFromStream(std::move(stream), args);
-  }
-#endif
   // Chromium currently always sets ENABLE_FREETYPE, but nonetheless allow
   // falling back to fontations if the param is set to freetype but freetype
   // isn't enabled.
@@ -242,6 +297,7 @@ sk_sp<SkTypeface> FontDataManager::onMakeFromStreamArgs(
 #endif
 
   return SkTypeface_Make_Fontations(std::move(stream), args);
+#endif
 }
 
 sk_sp<SkTypeface> FontDataManager::onMakeFromFile(const char path[],
@@ -298,9 +354,94 @@ void FontDataManager::SetFontServiceForTesting(
   remote.Bind(std::move(font_data_service));
 }
 
+void FontDataManager::InitializePrewarmerForTesting(  // IN-TEST
+    mojo::PendingRemote<font_data_service::mojom::FontDataService>
+        font_data_service) {
+  CHECK(!prewarm_task_runner_);
+  prewarm_task_runner_ = base::ThreadPool::CreateSequencedTaskRunner(
+      {base::TaskPriority::USER_VISIBLE, base::MayBlock()});
+  prewarm_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](sk_sp<FontDataManager> font_data_manager,
+             mojo::PendingRemote<font_data_service::mojom::FontDataService>
+                 font_data_service) {
+            font_data_manager->SetFontServiceForTesting(  // IN-TEST
+                std::move(font_data_service));
+          },
+          sk_ref_sp(this), std::move(font_data_service)));
+}
+
+void FontDataManager::ShutdownPrewarmerForTesting(  // IN-TEST
+    base::OnceClosure completion_callback) {
+  CHECK(main_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(prewarm_task_runner_);
+
+  prewarm_task_runner_->PostTaskAndReply(
+      FROM_HERE,
+      base::BindOnce(
+          [](sk_sp<FontDataManager> font_data_manager) {
+            font_data_manager->font_data_service_slot_.reset();
+          },
+          sk_ref_sp(this)),
+      base::BindOnce(
+          [](sk_sp<FontDataManager> font_data_manager,
+             base::OnceClosure completion_callback) {
+            font_data_manager->prewarm_task_runner_.reset();
+            std::move(completion_callback).Run();
+          },
+          sk_ref_sp(this), std::move(completion_callback)));
+}
+
 size_t FontDataManager::GetMappedFilesCountForTesting() const {
   base::AutoLock locked(mapped_files_lock_);
   return mapped_files_.size();
+}
+
+void FontDataManager::InitializePrewarmer() {
+  CHECK(main_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(!prewarm_task_runner_);
+  CHECK(base::FeatureList::IsEnabled(features::kFontDataManagerPrewarming));
+
+  prewarm_task_runner_ = base::ThreadPool::CreateSequencedTaskRunner(
+      {base::TaskPriority::USER_VISIBLE, base::MayBlock()});
+}
+
+void FontDataManager::PrewarmFamilyOnWorker(
+    std::string family_name,
+    base::OnceClosure completion_callback) {
+  CHECK(base::FeatureList::IsEnabled(features::kFontDataManagerPrewarming));
+  SkFontStyle requested_style;
+  MatchFamilyRequest request(family_name, requested_style.weight(),
+                             requested_style.width(), requested_style.slant());
+  if (TryGetFromCache(request) || IsKnownUnmatchedFamily(request)) {
+    if (completion_callback) {
+      std::move(completion_callback).Run();
+    }
+    return;
+  }
+
+  auto style = mojom::TypefaceStyle::New();
+  style->weight = requested_style.weight();
+  style->width = requested_style.width();
+  style->slant = ConvertToMojomFontStyle(requested_style.slant());
+  GetRemoteFontDataService().MatchFamilyName(
+      family_name, std::move(style),
+      base::BindOnce(
+          [](sk_sp<FontDataManager> font_data_manager,
+             MatchFamilyRequest request, base::OnceClosure completion_callback,
+             mojom::MatchFamilyNameResponsePtr response) {
+            sk_sp<SkTypeface> typeface =
+                font_data_manager->CreateTypefaceFromMatchResponse(
+                    request, std::move(response));
+            if (typeface) {
+              font_data_manager->AddToCache(request, std::move(typeface));
+            }
+            if (completion_callback) {
+              std::move(completion_callback).Run();
+            }
+          },
+          sk_ref_sp(this), std::move(request), std::move(completion_callback)));
 }
 
 font_data_service::mojom::FontDataService&
@@ -398,13 +539,13 @@ sk_sp<SkTypeface> FontDataManager::CreateTypefaceFromMatchResult(
             mapped_regions_.find(font_data_memory_region.GetGUID());
 
         if (iter != mapped_regions_.end()) {
-          mapped_memory = iter->second.memory();
+          mapped_memory = iter->second.data();
           mapped_size = iter->second.size();
         } else {
           base::ReadOnlySharedMemoryMapping mapping =
               font_data_memory_region.Map();
           if (mapping.IsValid()) {
-            mapped_memory = mapping.memory();
+            mapped_memory = mapping.data();
             mapped_size = mapping.size();
             mapped_regions_.emplace(font_data_memory_region.GetGUID(),
                                     std::move(mapping));
@@ -445,12 +586,49 @@ void FontDataManager::AddToCache(
   typeface_cache_.Put(std::move(request), typeface);
 }
 
+sk_sp<SkTypeface> FontDataManager::CreateTypefaceFromMatchResponse(
+    const MatchFamilyRequest& request,
+    mojom::MatchFamilyNameResponsePtr response) const {
+  if (!response) {
+    return nullptr;
+  }
+  if (response->is_result()) {
+    return CreateTypefaceFromMatchResult(std::move(response->get_result()));
+  }
+  if (response->is_failure() &&
+      response->get_failure() == mojom::MatchFamilyNameFailure::kNoSuchFamily) {
+    AddUnmatchedFamily(request);
+  }
+  return nullptr;
+}
+
+bool FontDataManager::IsKnownUnmatchedFamily(
+    const MatchFamilyRequest& request) const {
+  if (!request.name || request.name->empty()) {
+    return false;
+  }
+  base::AutoLock locked(unmatched_families_lock_);
+  return unmatched_families_.Get(*request.name) != unmatched_families_.end();
+}
+
+void FontDataManager::AddUnmatchedFamily(
+    const MatchFamilyRequest& request) const {
+  if (!request.name || request.name->empty()) {
+    return;
+  }
+  base::AutoLock locked(unmatched_families_lock_);
+  unmatched_families_.Put(std::string(*request.name));
+}
+
 FontDataManager::MatchFamilyRequest::MatchFamilyRequest(
     std::optional<std::string> name,
     int weight,
     int width,
     SkFontStyle::Slant slant)
-    : name(name), weight(weight), width(width), slant(slant) {}
+    : name(CanonicalizeFontFamilyNameForCache(std::move(name))),
+      weight(weight),
+      width(width),
+      slant(slant) {}
 FontDataManager::MatchFamilyRequest::MatchFamilyRequest(
     const MatchFamilyRequest&) = default;
 FontDataManager::MatchFamilyRequest::MatchFamilyRequest(

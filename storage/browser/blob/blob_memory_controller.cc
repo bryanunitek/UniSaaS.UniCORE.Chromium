@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <memory>
 #include <numeric>
+#include <string_view>
 
 #include "base/byte_size.h"
 #include "base/check.h"
@@ -24,6 +25,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory_coordinator/memory_coordinator_features.h"
+#include "base/memory_coordinator/traits.h"
 #include "base/memory_coordinator/utils.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
@@ -38,6 +40,7 @@
 #include "build/build_config.h"
 #include "storage/browser/blob/blob_data_builder.h"
 #include "storage/browser/blob/blob_data_item.h"
+#include "storage/browser/blob/features.h"
 #include "storage/browser/blob/shareable_blob_data_item.h"
 #include "storage/browser/blob/shareable_file_reference.h"
 
@@ -95,7 +98,7 @@ BlobStorageLimits CalculateBlobStorageLimitsImpl(
   if (memory_size > 0) {
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID) && \
     defined(ARCH_CPU_64_BITS)
-    limits.max_blob_in_memory_space = base::GiBU(2).InBytes();
+    limits.max_blob_in_memory_space = base::GiB(2).InBytes();
 #elif BUILDFLAG(IS_ANDROID)
     limits.max_blob_in_memory_space = static_cast<size_t>(memory_size / 100);
 #else
@@ -298,6 +301,36 @@ uint64_t GetTotalSizeAndFileSizes(
   return total_size_output;
 }
 
+// Returns true if the stateful memory pressure behavior should be used. When
+// false, the controller behaves exactly as if base::kStatefulMemoryPressure was
+// disabled.
+bool IsStatefulMemoryPressureEnabled() {
+  return base::FeatureList::IsEnabled(base::kStatefulMemoryPressure) &&
+         base::FeatureList::IsEnabled(features::kBlobStatefulMemoryPressure);
+}
+
+base::MemoryConsumerTraits GetBlobMemoryControllerTraits() {
+  return base::MemoryConsumerTraits(
+      // Can hold up to ~2GB of blob data in memory (platform-dependent).
+      base::MemoryConsumerTraits::EstimatedMemoryUsage::kLarge,
+      // Paging items to disk reads their data and writes it to files.
+      base::MemoryConsumerTraits::ReleaseMemoryDataAccess::
+          kReadsAndWritesToDisk,
+      // Paged items can be read back from disk.
+      base::MemoryConsumerTraits::InformationRetention::kLossless,
+      // Eviction is asynchronous, and it uses AsyncMemoryConsumerRegistration.
+      base::MemoryConsumerTraits::ExecutionType::kAsynchronous,
+      // Blob data lives in-process.
+      base::MemoryConsumerTraits::InProcess::kYes,
+      // Reading paged data back from disk.
+      base::MemoryConsumerTraits::RecreateMemoryCost::kCheap,
+      // When not stateful, the memory coordinator must repeat release signals
+      // while under pressure, matching the legacy behavior.
+      IsStatefulMemoryPressureEnabled()
+          ? base::MemoryConsumerTraits::IsStateful::kYes
+          : base::MemoryConsumerTraits::IsStateful::kNo);
+}
+
 }  // namespace
 
 FileCreationInfo::FileCreationInfo() = default;
@@ -311,15 +344,43 @@ FileCreationInfo::~FileCreationInfo() {
 FileCreationInfo::FileCreationInfo(FileCreationInfo&&) = default;
 FileCreationInfo& FileCreationInfo::operator=(FileCreationInfo&&) = default;
 
+size_t BlobMemoryController::CreatorIdentityHash::operator()(
+    const scoped_refptr<base::RefCountedString>& s) const {
+  return std::hash<std::string_view>{}(s ? std::string_view(s->as_string())
+                                         : std::string_view());
+}
+
+bool BlobMemoryController::CreatorIdentityEq::operator()(
+    const scoped_refptr<base::RefCountedString>& a,
+    const scoped_refptr<base::RefCountedString>& b) const {
+  if (a == b) {
+    return true;
+  }
+  std::string_view sa =
+      a ? std::string_view(a->as_string()) : std::string_view();
+  std::string_view sb =
+      b ? std::string_view(b->as_string()) : std::string_view();
+  return sa == sb;
+}
+
 MemoryAllocation::MemoryAllocation(
     base::WeakPtr<BlobMemoryController> controller,
     uint64_t item_id,
-    size_t length)
-    : controller_(std::move(controller)), item_id_(item_id), length_(length) {}
+    size_t length,
+    scoped_refptr<base::RefCountedString> creator_identity)
+    : controller_(std::move(controller)),
+      item_id_(item_id),
+      length_(length),
+      creator_identity_(std::move(creator_identity)) {
+  CHECK(controller_);
+  controller_->memory_usage_by_creator_identity_[creator_identity_] +=
+      base::ByteSize(length_);
+}
 
 MemoryAllocation::~MemoryAllocation() {
-  if (controller_)
-    controller_->RevokeMemoryAllocation(item_id_, length_);
+  if (controller_) {
+    controller_->RevokeMemoryAllocation(item_id_, length_, creator_identity_);
+  }
 }
 
 BlobMemoryController::QuotaAllocationTask::~QuotaAllocationTask() = default;
@@ -553,7 +614,7 @@ BlobMemoryController::BlobMemoryController(
           base::LRUCache<uint64_t, ShareableBlobDataItem*>::NO_AUTO_EVICT),
       memory_consumer_registration_(
           "BlobMemoryController",
-          std::nullopt,  // TODO(crbug.com/489671163): Add traits.
+          GetBlobMemoryControllerTraits(),
           this,
           base::AsyncMemoryConsumerRegistration::CheckUnregister::kDisabled) {}
 
@@ -661,7 +722,8 @@ base::WeakPtr<QuotaAllocationTask> BlobMemoryController::ReserveMemoryQuota(
   if (total_bytes_needed <= GetAvailableMemoryForBlobs()) {
     GrantMemoryAllocations(&unreserved_memory_items,
                            static_cast<size_t>(total_bytes_needed));
-    MaybeScheduleEvictionUntilSystemHealthy(base::kNoMemoryPressureThreshold);
+    MaybeScheduleEvictionUntilSystemHealthy(
+        base::MemoryLimit::NoPressureThreshold());
     std::move(done_callback).Run(true);
     return base::WeakPtr<QuotaAllocationTask>();
   }
@@ -673,7 +735,8 @@ base::WeakPtr<QuotaAllocationTask> BlobMemoryController::ReserveMemoryQuota(
   auto weak_ptr =
       AppendMemoryTask(total_bytes_needed, std::move(unreserved_memory_items),
                        std::move(done_callback));
-  MaybeScheduleEvictionUntilSystemHealthy(base::kNoMemoryPressureThreshold);
+  MaybeScheduleEvictionUntilSystemHealthy(
+      base::MemoryLimit::NoPressureThreshold());
   return weak_ptr;
 }
 
@@ -699,7 +762,8 @@ void BlobMemoryController::ShrinkMemoryAllocation(ShareableBlobDataItem* item) {
   blob_memory_used_ += item->item()->length();
   item->set_memory_allocation(std::make_unique<MemoryAllocation>(
       weak_factory_.GetWeakPtr(), item->item_id(),
-      base::checked_cast<size_t>(item->item()->length())));
+      base::checked_cast<size_t>(item->item()->length()),
+      item->creator_identity()));
   MaybeGrantPendingMemoryRequests();
 }
 
@@ -735,7 +799,7 @@ void BlobMemoryController::NotifyMemoryItemsUsed(
     }
     // We don't want to re-add the item if we're currently paging it to disk.
     if (items_paging_to_file_.contains(item->item_id())) {
-      return;
+      continue;
     }
     auto iterator = populated_memory_items_.Get(item->item_id());
     if (iterator == populated_memory_items_.end()) {
@@ -744,7 +808,8 @@ void BlobMemoryController::NotifyMemoryItemsUsed(
       populated_memory_items_.Put(item->item_id(), item.get());
     }
   }
-  MaybeScheduleEvictionUntilSystemHealthy(base::kNoMemoryPressureThreshold);
+  MaybeScheduleEvictionUntilSystemHealthy(
+      base::MemoryLimit::NoPressureThreshold());
 }
 
 void BlobMemoryController::CallWhenStorageLimitsAreKnown(
@@ -785,9 +850,9 @@ void BlobMemoryController::OnStorageLimitsCalculated(BlobStorageLimits limits) {
   base_limits_ = limits;
   limits_ = limits;
 
-  if (base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
-    size_t target_max_memory = base::ScaleByMemoryLimit(
-        base_limits_.max_blob_in_memory_space, memory_limit());
+  if (IsStatefulMemoryPressureEnabled()) {
+    size_t target_max_memory =
+        memory_limit().Scale(base_limits_.max_blob_in_memory_space);
     limits_.max_blob_in_memory_space =
         std::max(blob_memory_used_, target_max_memory);
   }
@@ -873,7 +938,7 @@ size_t BlobMemoryController::CollectItemsForEviction(
 }
 
 void BlobMemoryController::MaybeScheduleEvictionUntilSystemHealthy(
-    int memory_limit_percent) {
+    base::MemoryLimit memory_limit) {
   // Don't do eviction when others are happening, as we don't change our
   // pending_memory_quota_total_size_ value until after the paging files have
   // been written.
@@ -884,16 +949,14 @@ void BlobMemoryController::MaybeScheduleEvictionUntilSystemHealthy(
       static_cast<uint64_t>(pending_memory_quota_total_size_) +
       blob_memory_used_;
 
-  int effective_limit =
-      base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)
-          ? memory_limit()
-          : memory_limit_percent;
+  base::MemoryLimit effective_limit =
+      IsStatefulMemoryPressureEnabled() ? this->memory_limit() : memory_limit;
 
   size_t in_memory_limit = limits_.memory_limit_before_paging();
   uint64_t min_page_file_size = limits_.min_page_file_size;
 
-  if (effective_limit <= base::kModerateMemoryPressureThreshold) {
-    if (!base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+  if (effective_limit <= base::MemoryLimit::ModeratePressureThreshold()) {
+    if (!IsStatefulMemoryPressureEnabled()) {
       // One-shot pressure logic
       in_memory_limit = 0;
     }
@@ -920,6 +983,7 @@ void BlobMemoryController::MaybeScheduleEvictionUntilSystemHealthy(
         CollectItemsForEviction(&items_to_swap, min_page_file_size);
     if (total_items_size == 0)
       break;
+    CHECK_GE(total_memory_usage, total_items_size);
 
     std::vector<base::span<const uint8_t>> data_for_paging;
     for (auto& shared_blob_item : items_to_swap) {
@@ -931,6 +995,8 @@ void BlobMemoryController::MaybeScheduleEvictionUntilSystemHealthy(
     pending_evictions_++;
     disk_used_ += total_items_size;
     in_flight_memory_used_ += total_items_size;
+    // These items will no longer use memory once they are written to disk.
+    total_memory_usage -= total_items_size;
 
     // Create our file reference.
     FilePath page_file_path = GenerateNextPageFileName();
@@ -1002,18 +1068,19 @@ void BlobMemoryController::OnEvictionComplete(
 
   // If we still have more blobs waiting and we're not waiting on more paging
   // operations, schedule more.
-  MaybeScheduleEvictionUntilSystemHealthy(base::kNoMemoryPressureThreshold);
+  MaybeScheduleEvictionUntilSystemHealthy(
+      base::MemoryLimit::NoPressureThreshold());
 }
 
 void BlobMemoryController::OnUpdateMemoryLimit() {
-  if (!base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+  if (!IsStatefulMemoryPressureEnabled()) {
     return;
   }
-  if (memory_limit() < base::kModerateMemoryPressureThreshold) {
+  if (memory_limit() < base::MemoryLimit::ModeratePressureThreshold()) {
     return;
   }
-  size_t target_max_memory = base::ScaleByMemoryLimit(
-      base_limits_.max_blob_in_memory_space, memory_limit());
+  size_t target_max_memory =
+      memory_limit().Scale(base_limits_.max_blob_in_memory_space);
   // Clamping prevents synchronous evictions during subsequent allocation
   // checks.
   limits_.max_blob_in_memory_space =
@@ -1021,18 +1088,19 @@ void BlobMemoryController::OnUpdateMemoryLimit() {
 }
 
 void BlobMemoryController::OnReleaseMemory() {
-  if (base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
-    if (memory_limit() < base::kModerateMemoryPressureThreshold) {
+  if (IsStatefulMemoryPressureEnabled()) {
+    if (memory_limit() < base::MemoryLimit::ModeratePressureThreshold()) {
       return;
     }
     // Enforce the actual scaled target limit now
-    limits_.max_blob_in_memory_space = base::ScaleByMemoryLimit(
-        base_limits_.max_blob_in_memory_space, memory_limit());
-    MaybeScheduleEvictionUntilSystemHealthy(base::kNoMemoryPressureThreshold);
+    limits_.max_blob_in_memory_space =
+        memory_limit().Scale(base_limits_.max_blob_in_memory_space);
+    MaybeScheduleEvictionUntilSystemHealthy(
+        base::MemoryLimit::NoPressureThreshold());
     return;
   }
   // Nothing to do if no pressure.
-  if (memory_limit() > base::kModerateMemoryPressureThreshold) {
+  if (memory_limit() > base::MemoryLimit::ModeratePressureThreshold()) {
     return;
   }
 
@@ -1041,7 +1109,7 @@ void BlobMemoryController::OnReleaseMemory() {
   // Furthermore, scheduling a task to write files to disk risks paging-in
   // memory that was already committed to disk which compounds the problem. Do
   // not take any action on critical memory pressure.
-  if (memory_limit() <= base::kCriticalMemoryPressureThreshold) {
+  if (memory_limit() <= base::MemoryLimit::CriticalPressureThreshold()) {
     return;
   }
 
@@ -1099,14 +1167,29 @@ void BlobMemoryController::GrantMemoryAllocations(
     item->set_state(ShareableBlobDataItem::QUOTA_GRANTED);
     item->set_memory_allocation(std::make_unique<MemoryAllocation>(
         weak_factory_.GetWeakPtr(), item->item_id(),
-        base::checked_cast<size_t>(item->item()->length())));
+        base::checked_cast<size_t>(item->item()->length()),
+        item->creator_identity()));
   }
 }
 
-void BlobMemoryController::RevokeMemoryAllocation(uint64_t item_id,
-                                                  size_t length) {
+void BlobMemoryController::RevokeMemoryAllocation(
+    uint64_t item_id,
+    size_t length,
+    scoped_refptr<base::RefCountedString> creator_identity) {
   DCHECK_LE(length, blob_memory_used_);
   blob_memory_used_ -= length;
+
+  auto it = memory_usage_by_creator_identity_.find(creator_identity);
+  if (it != memory_usage_by_creator_identity_.end()) {
+    base::ByteSize byte_length(length);
+    if (byte_length > it->second) {
+      NOTREACHED();
+    } else if (byte_length == it->second) {
+      memory_usage_by_creator_identity_.erase(it);
+    } else {
+      it->second -= byte_length;
+    }
+  }
 
   auto iterator = populated_memory_items_.Get(item_id);
   if (iterator != populated_memory_items_.end()) {

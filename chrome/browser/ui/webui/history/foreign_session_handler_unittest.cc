@@ -41,6 +41,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/base/mojom/window_open_disposition.mojom.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace browser_sync {
 
@@ -73,17 +74,6 @@ class FakeSessionSyncService : public sync_sessions::SessionSyncService {
 
   sync_sessions::FakeOpenTabsUIDelegate* GetOpenTabsUIDelegate() override {
     return &open_tabs_ui_delegate_;
-  }
-
-  void AddTabScreenshot(SessionID tab_id,
-                        std::string&& screenshot_data,
-                        const GURL& url) override {}
-
-  void ReadTabScreenshot(
-      const std::string& session_tag,
-      SessionID tab_id,
-      base::OnceCallback<void(std::optional<std::string>)> callback) override {
-    std::move(callback).Run(std::nullopt);
   }
 
   base::CallbackListSubscription SubscribeToForeignSessionsChanged(
@@ -209,7 +199,7 @@ TEST_F(ForeignSessionHandlerTest, OpenForeignSessionTabLeftClick) {
 
   EXPECT_CALL(restore_tab_callback_,
               Run(web_contents(), TabHasUrl(GURL("https://www.google.com")),
-                  WindowOpenDisposition::CURRENT_TAB));
+                  WindowOpenDisposition::kCurrentTab));
 
   ui::mojom::ClickModifiersPtr modifiers = ui::mojom::ClickModifiers::New();
   handler_->OpenForeignSessionTab("my_session_tag", tab->tab_id.id(),
@@ -223,7 +213,7 @@ TEST_F(ForeignSessionHandlerTest, OpenForeignSessionTabMiddleClick) {
 
   EXPECT_CALL(restore_tab_callback_,
               Run(web_contents(), TabHasUrl(GURL("https://www.google.com")),
-                  WindowOpenDisposition::NEW_BACKGROUND_TAB));
+                  WindowOpenDisposition::kNewBackgroundTab));
 
   ui::mojom::ClickModifiersPtr modifiers = ui::mojom::ClickModifiers::New();
   modifiers->middle_button = true;
@@ -374,7 +364,7 @@ TEST_F(ForeignSessionHandlerSidePanelTest,
   EXPECT_CALL(restore_tab_callback_,
               Run(tab_strip_model_->GetActiveWebContents(),
                   TabHasUrl(GURL("https://www.google.com")),
-                  WindowOpenDisposition::NEW_FOREGROUND_TAB));
+                  WindowOpenDisposition::kNewForegroundTab));
 
   handler_->OpenForeignSessionTab("my_session_tag", tab->tab_id.id(),
                                   std::move(modifiers));
@@ -398,7 +388,7 @@ TEST_F(ForeignSessionHandlerSidePanelTest,
   EXPECT_CALL(restore_tab_callback_,
               Run(tab_strip_model_->GetActiveWebContents(),
                   TabHasUrl(GURL("https://www.google.com")),
-                  WindowOpenDisposition::NEW_BACKGROUND_TAB));
+                  WindowOpenDisposition::kNewBackgroundTab));
 
   handler_->OpenForeignSessionTab("my_session_tag", tab->tab_id.id(),
                                   std::move(modifiers));
@@ -650,65 +640,6 @@ TEST_F(ForeignSessionHandlerSidePanelTest,
   ASSERT_EQ(result_sessions.size(), 2u);
   EXPECT_EQ(result_sessions[0]->name, "My Device");  // Stable gets no suffix
   EXPECT_EQ(result_sessions[1]->name, "My Device (Canary)");
-}
-
-TEST_F(ForeignSessionHandlerSidePanelTest,
-       GetForeignSessions_ExcludeStableChannel) {
-  base::test::ScopedFeatureList feature_list{
-      features::kTabsFromOtherDevicesSidePanelExcludeStableChannel};
-
-  CreateSidePanelUI();
-
-  syncer::DeviceInfoSyncService* device_info_sync_service =
-      DeviceInfoSyncServiceFactory::GetForProfile(profile());
-  syncer::FakeDeviceInfoTracker* device_info_tracker =
-      static_cast<syncer::FakeDeviceInfoTracker*>(
-          device_info_sync_service->GetDeviceInfoTracker());
-
-  // Create one stable and one canary device.
-  auto device1 =
-      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kAndroid)
-          .WithGuid("tag1")
-          .WithClientName("Stable Device")
-          .WithSyncUserAgent("Mozilla/5.0 channel(stable)")
-          .Build();
-
-  auto device2 =
-      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kAndroid)
-          .WithGuid("tag2")
-          .WithClientName("Canary Device")
-          .WithSyncUserAgent("Mozilla/5.0 channel(canary)")
-          .Build();
-
-  device_info_tracker->Add(std::move(device1));
-  device_info_tracker->Add(std::move(device2));
-
-  // Set up fake sessions.
-  session_sync_service()
-      ->GetOpenTabsUIDelegate()
-      ->AddForeignSession("tag1")
-      ->SetSessionName("Stable Device");
-
-  session_sync_service()
-      ->GetOpenTabsUIDelegate()
-      ->AddForeignSession("tag2", base::Time::Now() - base::Seconds(1))
-      ->SetSessionName("Canary Device");
-
-  base::MockCallback<ForeignSessionHandler::GetForeignSessionsCallback>
-      callback;
-
-  std::vector<history::mojom::ForeignSessionPtr> result_sessions;
-  EXPECT_CALL(callback, Run)
-      .WillOnce([&result_sessions](
-                    std::vector<history::mojom::ForeignSessionPtr> sessions) {
-        result_sessions = std::move(sessions);
-      });
-
-  handler_->GetForeignSessions(callback.Get());
-
-  // Only the canary device should be returned.
-  ASSERT_EQ(result_sessions.size(), 1u);
-  EXPECT_EQ(result_sessions[0]->name, "Canary Device");
 }
 
 }  // namespace

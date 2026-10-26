@@ -14,13 +14,11 @@ import android.view.View;
 import android.view.View.OnClickListener;
 
 import androidx.annotation.DrawableRes;
-import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NonNullObservableSupplier;
-import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -28,8 +26,9 @@ import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsV
 import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
 import org.chromium.chrome.browser.omnibox.R;
-import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxLayoutMode;
-import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxState;
+import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.FuseboxLayoutMode;
+import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.FuseboxState;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.page_info.ChromePageInfoHighlight;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
@@ -40,7 +39,6 @@ import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
-import org.chromium.url.GURL;
 
 import java.util.function.Supplier;
 
@@ -70,10 +68,13 @@ public class StatusCoordinator implements LocationBarDataProvider.Observer {
     /**
      * Creates a new {@link StatusCoordinator}.
      *
+     * @param resourceProvider Provides omnibox-specific resources.
      * @param isTablet Whether the UI is shown on a tablet.
      * @param statusView The status view, used to supply and manipulate child views.
+     * @param locationBarDataProvider Provider for location bar and page state.
      * @param templateUrlServiceSupplier A supplier for {@link TemplateUrlService} used to query the
      *     default search engine.
+     * @param profileSupplier Supplier providing the active user Profile.
      * @param windowAndroid The {@link WindowAndroid} that is used by the owning {@link Activity}.
      * @param pageInfoAction Displays page info popup.
      * @param browserControlsVisibilityDelegate Delegate interface allowing control of the
@@ -81,9 +82,9 @@ public class StatusCoordinator implements LocationBarDataProvider.Observer {
      * @param fuseboxStateSupplier Used to decide if an plus button for fusebox should be shown.
      * @param fuseboxLayoutModeSupplier Used to decide if the plus button should be hidden (AL).
      * @param onPlusButtonClicked Toggle the fusebox attachments menu when plus button used.
-     * @param exactMatchUrlSupplier The URL if there is an exact match.
      */
     public StatusCoordinator(
+            OmniboxResourceProvider resourceProvider,
             boolean isTablet,
             StatusView statusView,
             LocationBarDataProvider locationBarDataProvider,
@@ -95,13 +96,15 @@ public class StatusCoordinator implements LocationBarDataProvider.Observer {
                     browserControlsVisibilityDelegate,
             NonNullObservableSupplier<@FuseboxState Integer> fuseboxStateSupplier,
             NonNullObservableSupplier<@FuseboxLayoutMode Integer> fuseboxLayoutModeSupplier,
-            Runnable onPlusButtonClicked,
-            NullableObservableSupplier<GURL> exactMatchUrlSupplier) {
+            Runnable onPlusButtonClicked) {
         mIsTablet = isTablet;
         mStatusView = statusView;
         mLocationBarDataProvider = locationBarDataProvider;
 
-        mModel = new PropertyModel(StatusProperties.ALL_KEYS);
+        mModel =
+                new PropertyModel.Builder(StatusProperties.ALL_KEYS)
+                        .with(StatusProperties.RESOURCE_PROVIDER, resourceProvider)
+                        .build();
 
         PropertyModelChangeProcessor.create(mModel, mStatusView, new StatusViewBinder());
 
@@ -117,6 +120,7 @@ public class StatusCoordinator implements LocationBarDataProvider.Observer {
 
         mMediator =
                 new StatusMediator(
+                        resourceProvider,
                         mModel,
                         mStatusView.getContext(),
                         locationBarDataProvider,
@@ -128,13 +132,13 @@ public class StatusCoordinator implements LocationBarDataProvider.Observer {
                         pageInfoAction,
                         fuseboxStateSupplier,
                         fuseboxLayoutModeSupplier,
-                        onPlusButtonClicked,
-                        exactMatchUrlSupplier);
+                        onPlusButtonClicked);
 
         Resources res = mStatusView.getResources();
+        int statusIconWidth = resourceProvider.getStatusIconSize();
         mMediator.setUrlMinWidth(
                 res.getDimensionPixelSize(R.dimen.location_bar_min_url_width)
-                        + res.getDimensionPixelSize(R.dimen.location_bar_status_icon_width)
+                        + statusIconWidth
                         + res.getDimensionPixelSize(R.dimen.location_bar_start_padding)
                         + res.getDimensionPixelSize(R.dimen.location_bar_end_padding));
 
@@ -153,16 +157,12 @@ public class StatusCoordinator implements LocationBarDataProvider.Observer {
         mLocationBarDataProvider.addObserver(this);
         mStatusView.setBrowserControlsVisibilityDelegate(browserControlsVisibilityDelegate);
 
-        if (isSearchEngineStatusIconVisible()) {
-            setTooltipText(R.string.accessibility_menu_info);
-        } else {
-            setTooltipText(Resources.ID_NULL);
-        }
         setBackground();
     }
 
     /** Signals that native initialization has completed. */
     public void onNativeInitialized() {
+        updateSecurityIcon();
         mMediator.updateLocationBarIcon(StatusView.IconTransitionType.CROSSFADE);
     }
 
@@ -190,16 +190,6 @@ public class StatusCoordinator implements LocationBarDataProvider.Observer {
     /** Toggle whether the status icon should be hidden for secure origins. */
     public void setShowStatusIconForSecureOrigins(boolean showStatusIconForSecureOrigins) {
         mMediator.setShowStatusIconForSecureOrigins(showStatusIconForSecureOrigins);
-    }
-
-    /** Set the x translation of the status view. */
-    public void setTranslationX(float translationX) {
-        mMediator.setTranslationX(translationX);
-    }
-
-    /** Set the tooltip text of the status view. */
-    public void setTooltipText(@StringRes int tooltipTextResId) {
-        mMediator.setTooltipText(tooltipTextResId);
     }
 
     /** Set the highlight background of the status view. */
@@ -270,7 +260,7 @@ public class StatusCoordinator implements LocationBarDataProvider.Observer {
     }
 
     /** Returns the view displaying the security icon. */
-    public View getSecurityIconView() {
+    private View getSecurityIconView() {
         return mStatusView.getSecurityView();
     }
 
@@ -284,18 +274,6 @@ public class StatusCoordinator implements LocationBarDataProvider.Observer {
     public boolean isSearchEngineStatusIconVisible() {
         // TODO(crbug.com/40707964): try to hide this method
         return mStatusView.isSearchEngineStatusIconVisible();
-    }
-
-    /** Returns {@code true} if the search engine icon is currently being displayed. */
-    public boolean shouldDisplaySearchEngineIcon() {
-        return mMediator.shouldDisplaySearchEngineIcon();
-    }
-
-    /** Returns the ID of the drawable currently shown in the security icon. */
-    public @DrawableRes int getSecurityIconResourceIdForTesting() {
-        return mModel.get(StatusProperties.STATUS_ICON_RESOURCE) == null
-                ? 0
-                : mModel.get(StatusProperties.STATUS_ICON_RESOURCE).getIconRes();
     }
 
     /**
@@ -331,14 +309,6 @@ public class StatusCoordinator implements LocationBarDataProvider.Observer {
     }
 
     /**
-     * @see View#getMeasuredWidth()
-     */
-    public int getMeasuredWidth() {
-        // TODO(crbug.com/40707964): try to hide this method
-        return mStatusView.getMeasuredWidth();
-    }
-
-    /**
      * Sets the callback to be executed when the status view is hidden due to the Page Info removal
      * feature.
      *
@@ -346,11 +316,6 @@ public class StatusCoordinator implements LocationBarDataProvider.Observer {
      */
     public void setOnStatusViewHiddenForPageInfoRemoval(Runnable runnable) {
         mMediator.setOnStatusViewHiddenForPageInfoRemoval(runnable);
-    }
-
-    @SuppressWarnings("NullAway")
-    public StatusMediator getMediatorForTesting() {
-        return mMediator;
     }
 
     @SuppressWarnings("NullAway")
@@ -367,5 +332,17 @@ public class StatusCoordinator implements LocationBarDataProvider.Observer {
 
     public long getAnimationStartTimeMs() {
         return mStatusView.getAnimationStartTimeMs();
+    }
+
+    /** Returns the ID of the drawable currently shown in the security icon. */
+    public @DrawableRes int getSecurityIconResourceIdForTesting() {
+        return mModel.get(StatusProperties.STATUS_ICON_RESOURCE) == null
+                ? 0
+                : mModel.get(StatusProperties.STATUS_ICON_RESOURCE).getIconRes();
+    }
+
+    @SuppressWarnings("NullAway")
+    public StatusMediator getMediatorForTesting() {
+        return mMediator;
     }
 }

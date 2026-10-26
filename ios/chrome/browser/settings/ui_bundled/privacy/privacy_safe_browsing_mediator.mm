@@ -255,7 +255,7 @@ typedef NS_ENUM(NSInteger, ItemType) {
                           weight:UIImageSymbolWeightSemibold
                            scale:UIImageSymbolScaleMedium];
   infoButtonItem.iconImage =
-      DefaultSymbolWithConfiguration(kCheckmarkSymbol, configuration);
+      SymbolWithConfiguration(SymbolCheckmark, configuration);
   infoButtonItem.iconTintColor = [self iconTintColorForItemType:type];
   infoButtonItem.accessibilityIdentifier = accessibilityIdentifier;
   infoButtonItem.target = self;
@@ -283,7 +283,7 @@ typedef NS_ENUM(NSInteger, ItemType) {
                           weight:UIImageSymbolWeightSemibold
                            scale:UIImageSymbolScaleMedium];
   detailIconItem.iconImage =
-      DefaultSymbolWithConfiguration(kCheckmarkSymbol, configuration);
+      SymbolWithConfiguration(SymbolCheckmark, configuration);
   detailIconItem.iconTintColor = [self iconTintColorForItemType:type];
   detailIconItem.accessibilityIdentifier = accessibilityIdentifier;
   detailIconItem.accessibilityTraits = UIAccessibilityTraitButton;
@@ -420,6 +420,31 @@ typedef NS_ENUM(NSInteger, ItemType) {
       [self.consumer selectItem:item];
       break;
     }
+  }
+}
+
+- (void)recordCloseUserAction {
+  if (!self.userPrefService) {
+    return;
+  }
+  if (safe_browsing::GetSafeBrowsingState(*self.userPrefService) !=
+      safe_browsing::SafeBrowsingState::NO_SAFE_BROWSING) {
+    base::RecordAction(base::UserMetricsAction(
+        "MobilePrivacySafeBrowsingSettingsCloseWithProtection"));
+  }
+  switch (safe_browsing::GetSafeBrowsingState(*self.userPrefService)) {
+    case safe_browsing::SafeBrowsingState::ENHANCED_PROTECTION:
+      base::RecordAction(base::UserMetricsAction(
+          "MobilePrivacySafeBrowsingSettingsCloseWithEnhancedProtection"));
+      break;
+    case safe_browsing::SafeBrowsingState::STANDARD_PROTECTION:
+      base::RecordAction(base::UserMetricsAction(
+          "MobilePrivacySafeBrowsingSettingsCloseWithStandardProtection"));
+      break;
+    case safe_browsing::SafeBrowsingState::NO_SAFE_BROWSING:
+      base::RecordAction(base::UserMetricsAction(
+          "MobilePrivacySafeBrowsingSettingsCloseWithNoProtection"));
+      break;
   }
 }
 

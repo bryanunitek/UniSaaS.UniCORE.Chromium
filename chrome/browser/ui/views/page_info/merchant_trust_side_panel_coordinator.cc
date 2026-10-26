@@ -7,7 +7,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "chrome/browser/page_info/merchant_trust_service_factory.h"
-#include "chrome/browser/page_info/page_info_features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -18,33 +17,30 @@
 #include "chrome/browser/ui/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
-#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
 #include "chrome/browser/ui/views/page_info/web_view_side_panel_view.h"
 #include "components/page_info/core/merchant_trust_service.h"
 #include "components/page_info/core/page_info_types.h"
-#include "components/strings/grit/components_strings.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "net/base/url_util.h"
-#include "ui/base/l10n/l10n_util.h"
-#include "ui/views/vector_icons.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 constexpr char kStaticLoadingScreenURL[] =
     "https://www.gstatic.com/diner/chrome/atp_loading.html";
 
 namespace {
 content::OpenURLParams CreateOpenUrlParams(const GURL& url) {
-  return content::OpenURLParams(
-          net::AppendOrReplaceQueryParameter(
-              url, kMerchantTrustContextParameterName,
-              kMerchantTrustContextParameterValue),
-      content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui::PAGE_TRANSITION_LINK, /*is_renderer_initiated=*/false);
+  return content::OpenURLParams::CreateBrowserInitiated(
+      net::AppendOrReplaceQueryParameter(url,
+                                         kMerchantTrustContextParameterName,
+                                         kMerchantTrustContextParameterValue),
+      WindowOpenDisposition::kNewForegroundTab, ui::PAGE_TRANSITION_LINK);
 }
 }  // namespace
 
@@ -119,8 +115,8 @@ void MerchantTrustSidePanelCoordinator::RegisterEntryAndShow(
 std::unique_ptr<views::View>
 MerchantTrustSidePanelCoordinator::CreateMerchantTrustWebView(
     SidePanelEntryScope& scope) {
-  DCHECK(GetBrowserView());
-  DCHECK(last_url_info_);
+  CHECK(GetBrowserView(), base::NotFatalUntil::M162);
+  CHECK(last_url_info_, base::NotFatalUntil::M162);
   if (registered_but_not_shown_) {
     registered_but_not_shown_ = false;
   }
@@ -144,7 +140,7 @@ SidePanelUI* MerchantTrustSidePanelCoordinator::GetSidePanelUI() {
   BrowserWindowInterface* browser =
       GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
           web_contents());
-  return browser ? browser->GetFeatures().side_panel_ui() : nullptr;
+  return browser ? SidePanelUI::From(browser) : nullptr;
 }
 
 GURL MerchantTrustSidePanelCoordinator::GetOpenInNewTabUrl() {
@@ -203,7 +199,7 @@ void MerchantTrustSidePanelCoordinator::DidFinishNavigation(
       web_view_side_panel_view_) {
     auto* entry = registry->GetEntryForKey(
         SidePanelEntry::Key(SidePanelEntry::Id::kMerchantTrust));
-    DCHECK(entry);
+    CHECK(entry, base::NotFatalUntil::M162);
     entry->ClearCachedView();
   }
 }

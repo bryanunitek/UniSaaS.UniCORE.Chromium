@@ -11,12 +11,13 @@
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/logging/stub_log_manager.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/save_password_progress_logger.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -91,6 +92,12 @@ TEST_F(BrowserSavePasswordProgressLoggerTest, LogFormData) {
   logger.LogFormData(Logger::STRING_FORM_PARSING_INPUT, form_);
   SCOPED_TRACE(testing::Message()
                << "Log string = [" << logger.accumulated_log() << "]");
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "Signature of form: 3370253896397449141 - 503"));
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "Alternative signature of form: 17762915768143057786 - 169"));
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "Structural signature of form: 6439815544192158303 - 599"));
   EXPECT_TRUE(logger.LogsContainSubstring("Origin: http://myform.com"));
   EXPECT_TRUE(logger.LogsContainSubstring("Action: http://m.myform.com"));
   EXPECT_TRUE(logger.LogsContainSubstring("Form name: form_name"));
@@ -119,6 +126,10 @@ TEST_F(BrowserSavePasswordProgressLoggerTest,
   EXPECT_TRUE(logger.LogsContainSubstring("Server predictions:"));
   EXPECT_TRUE(logger.LogsContainSubstring(
       "Signature of form: 3370253896397449141 - 503"));
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "Alternative signature of form: 17762915768143057786 - 169"));
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "Structural signature of form: 6439815544192158303 - 599"));
   EXPECT_TRUE(logger.LogsContainSubstring("Origin: http://myform.com"));
   EXPECT_TRUE(logger.LogsContainSubstring("Action: http://m.myform.com"));
   EXPECT_TRUE(logger.LogsContainSubstring("Form fields:"));
@@ -142,6 +153,10 @@ TEST_F(BrowserSavePasswordProgressLoggerTest, LogFormDataWithModelPredictions) {
   EXPECT_TRUE(logger.LogsContainSubstring("Model predictions:"));
   EXPECT_TRUE(logger.LogsContainSubstring(
       "Signature of form: 3370253896397449141 - 503"));
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "Alternative signature of form: 17762915768143057786 - 169"));
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "Structural signature of form: 6439815544192158303 - 599"));
   EXPECT_TRUE(logger.LogsContainSubstring("Origin: http://myform.com"));
   EXPECT_TRUE(logger.LogsContainSubstring("Action: http://m.myform.com"));
   EXPECT_TRUE(logger.LogsContainSubstring("Form fields:"));
@@ -152,13 +167,30 @@ TEST_F(BrowserSavePasswordProgressLoggerTest, LogFormDataWithModelPredictions) {
       "email: signature=420638584, type=text, renderer_id=42"));
 }
 
+TEST_F(BrowserSavePasswordProgressLoggerTest, LogFormStructure) {
+  StubLogManager log_manager;
+  TestLogger logger(&log_manager);
+  autofill::FormStructure form_structure(form_);
+  logger.LogFormStructure(Logger::STRING_PASSWORD_FORM_VOTE, form_structure,
+                          autofill::EncodeUploadRequestOptions(), std::nullopt);
+
+  SCOPED_TRACE(testing::Message()
+               << "Log string = [" << logger.accumulated_log() << "]");
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "Signature of form: 3370253896397449141 - 503"));
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "Alternative signature of form: 17762915768143057786 - 169"));
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "Structural signature of form: 6439815544192158303 - 599"));
+}
+
 TEST(SavePasswordProgressLoggerTest, LogPasswordForm) {
   StubLogManager log_manager;
   TestLogger logger(&log_manager);
   PasswordForm form;
   form.action = GURL("http://example.org/verysecret?verysecret");
   form.password_element = u"pwdelement";
-  form.password_value = u"verysecret";
+  form.password_value = PasswordString(u"verysecret");
   form.username_value = u"verysecret";
   logger.LogPasswordForm(Logger::STRING_MESSAGE, form);
   SCOPED_TRACE(testing::Message()

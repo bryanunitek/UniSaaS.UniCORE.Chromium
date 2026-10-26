@@ -67,8 +67,7 @@ class FakeIt2MeHost : public It2MeHost {
                std::unique_ptr<It2MeConfirmationDialogFactory> dialog_factory,
                base::WeakPtr<It2MeHost::Observer> observer,
                CreateDeferredConnectContext create_context,
-               const std::string& user_name,
-               const protocol::IceConfig& ice_config) override {
+               const std::string& user_name) override {
     observer_ = observer;
     user_name_ = user_name;
     connect_waiter_.SetValue();
@@ -345,16 +344,6 @@ TEST_F(RemoteSupportHostAshTest, ShouldPassUserNameToIt2MeHostWhenStarting) {
   StartSession(params, GetEnterpriseParams());
 
   EXPECT_EQ(it2me_host().user_name(), params.user_name);
-}
-
-// TODO(b/309958013): Remove this test when we remove the oauth prefix logic.
-TEST_F(RemoteSupportHostAshTest, ValidLegacyAccessTokenFormatSucceeds) {
-  mojom::SupportSessionParams params = GetSupportSessionParams();
-  params.oauth_access_token = "oauth2:<the-oauth-token>";
-
-  StartSession(params, GetEnterpriseParams());
-
-  EXPECT_TRUE(it2me_host().WaitForConnectCall());
 }
 
 TEST_P(RemoteSupportHostAshTest,

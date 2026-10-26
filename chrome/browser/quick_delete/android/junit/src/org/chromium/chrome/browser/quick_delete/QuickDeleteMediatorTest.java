@@ -13,8 +13,6 @@ import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -22,10 +20,8 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.browser.browsing_data.TimePeriod;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
@@ -37,8 +33,6 @@ import java.util.List;
 
 /** Robolectric tests for {@link QuickDeleteMediator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@Batch(Batch.UNIT_TESTS)
 public class QuickDeleteMediatorTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -70,7 +64,6 @@ public class QuickDeleteMediatorTest {
     }
 
     @Test
-    @SmallTest
     public void testQuickDeleteMediatorInit_InvokesChanges() {
         setSignedInStatus(true);
 
@@ -97,7 +90,6 @@ public class QuickDeleteMediatorTest {
     }
 
     @Test
-    @SmallTest
     public void testQuickDeleteMediatorInit_InvokesChanges_NonNullArchivedTabs() {
         setSignedInStatus(true);
 

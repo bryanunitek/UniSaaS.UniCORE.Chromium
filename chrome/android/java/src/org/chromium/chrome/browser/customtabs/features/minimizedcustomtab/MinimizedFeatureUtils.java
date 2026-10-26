@@ -25,7 +25,10 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
+import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider.CustomTabsUiType;
+import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.util.BrowserUiUtils;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -73,7 +76,8 @@ public class MinimizedFeatureUtils {
      * @return Whether the Minimized Custom Tab feature is available.
      */
     public static boolean isMinimizedCustomTabAvailable(Context context) {
-        return isDeviceEligibleForMinimizedCustomTab(context);
+        return !BrowserUiUtils.isAndroidAutoProjected(context)
+                && isDeviceEligibleForMinimizedCustomTab(context);
     }
 
     /**
@@ -153,6 +157,11 @@ public class MinimizedFeatureUtils {
     public static boolean shouldEnableMinimizedCustomTabs(
             BrowserServicesIntentDataProvider intentDataProvider) {
         if (intentDataProvider.hasTargetNetwork()) return false;
+
+        // DevToolsActivity does not support minimization into Picture-in-Picture mode.
+        if (intentDataProvider.getActivityType() == ActivityType.DEV_TOOLS) return false;
+
+        if (intentDataProvider.getUiType() == CustomTabsUiType.POPUP) return false;
 
         boolean isWebApp =
                 intentDataProvider.isWebappOrWebApkActivity()

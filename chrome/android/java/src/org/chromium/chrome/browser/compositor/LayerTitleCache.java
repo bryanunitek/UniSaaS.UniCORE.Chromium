@@ -22,7 +22,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.compositor.layouts.content.TitleBitmapFactory;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabFavicon;
@@ -39,6 +38,7 @@ import org.chromium.ui.resources.ResourceManager;
 import org.chromium.ui.resources.dynamics.BitmapDynamicResource;
 import org.chromium.ui.resources.dynamics.DynamicResourceLoader;
 import org.chromium.ui.resources.dynamics.ViewResourceAdapter;
+import org.chromium.url.GURL;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -236,7 +236,7 @@ public class LayerTitleCache {
     @CalledByNative
     private void buildUpdatedGroupTitle(Token groupId, boolean incognito) {
         TabModel tabModel = mTabModelSelector.getModel(incognito);
-        if (!tabModel.tabGroupExists(groupId)) return;
+        if (!tabModel.containsTabGroup(groupId)) return;
 
         String titleString = TabGroupTitleUtils.getDisplayableTitle(mContext, tabModel, groupId);
         getUpdatedGroupTitle(groupId, titleString, incognito);
@@ -342,7 +342,14 @@ public class LayerTitleCache {
     }
 
     private void fetchFaviconForTab(final Tab tab) {
-        fetchFaviconWithCallback(tab, (favicon, iconUrl) -> updateFaviconFromHistory(tab, favicon));
+        final GURL originalUrl = tab.getUrl();
+        fetchFaviconWithCallback(
+                tab,
+                (favicon, iconUrl) -> {
+                    if (originalUrl.equals(tab.getUrl())) {
+                        updateFaviconFromHistory(tab, favicon);
+                    }
+                });
     }
 
     /**
@@ -354,16 +361,23 @@ public class LayerTitleCache {
     public void fetchFaviconWithCallback(final Tab tab, FaviconImageCallback callback) {
         if (mFaviconHelper == null) mFaviconHelper = new FaviconHelper();
 
-        boolean fallbackToHost = !ChromeFeatureList.sFaviconDisableHostFallback.isEnabled();
         if (tab.getTabGroupId() != null && !tab.isOffTheRecord()) {
             // This mirrors the async tab favicon request implementation for tab list.
             // See TabListFaviconProvider#getFaviconForTabAsync for more detailed notes.
             // TODO(crbug.com/394165786): Unify with the aforementioned TabListFaviconProvider code.
             mFaviconHelper.getForeignFaviconImageForURL(
-                    tab.getProfile(), tab.getUrl(), mFaviconSize, fallbackToHost, callback);
+                    tab.getProfile(),
+                    tab.getUrl(),
+                    mFaviconSize,
+                    /* fallbackToHost= */ false,
+                    callback);
         } else {
             mFaviconHelper.getLocalFaviconImageForURL(
-                    tab.getProfile(), tab.getUrl(), mFaviconSize, fallbackToHost, callback);
+                    tab.getProfile(),
+                    tab.getUrl(),
+                    mFaviconSize,
+                    /* fallbackToHost= */ false,
+                    callback);
         }
     }
 

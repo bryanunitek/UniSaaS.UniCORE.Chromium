@@ -5,12 +5,13 @@
 #include "chrome/browser/memory_details.h"
 
 #include <algorithm>
+#include <ranges>
 #include <set>
 #include <vector>
 
-#include "base/containers/adapters.h"
 #include "base/file_version_info.h"
 #include "base/functional/bind.h"
+#include "base/process/process.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -32,6 +33,7 @@
 #include "content/public/common/bindings_policy.h"
 #include "content/public/common/child_process_id.h"
 #include "content/public/common/content_constants.h"
+#include "content/public/common/process_type.h"
 #include "content/public/common/zygote/zygote_buildflags.h"
 #include "extensions/buildflags/buildflags.h"
 #include "services/resource_coordinator/public/cpp/memory_instrumentation/global_memory_dump.h"
@@ -79,7 +81,7 @@ void UpdateProcessTypeAndTitles(
     return;
 
   WebContents* contents = WebContents::FromRenderFrameHost(rfh);
-  DCHECK(contents);
+  CHECK(contents, base::NotFatalUntil::M162);
 
   // The rest of this block will happen only once per WebContents.
   GURL page_url = contents->GetLastCommittedURL();
@@ -189,7 +191,8 @@ ProcessData& ProcessData::operator=(const ProcessData& rhs) {
 void MemoryDetails::StartFetch() {
   // This might get called from the UI or FILE threads, but should not be
   // getting called from the IO thread.
-  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::IO));
+  CHECK(!BrowserThread::CurrentlyOn(BrowserThread::IO),
+        base::NotFatalUntil::M162);
 
   std::vector<ProcessMemoryInformation> child_info;
 
@@ -197,11 +200,14 @@ void MemoryDetails::StartFetch() {
   // the process is being launched, so we skip it.
   for (BrowserChildProcessHostIterator iter; !iter.Done(); ++iter) {
     ProcessMemoryInformation info;
-    if (!iter.GetData().GetProcess().IsValid())
+    const base::Process& process = iter.GetProcess();
+    if (!process.IsValid()) {
       continue;
-    info.pid = iter.GetData().GetProcess().Pid();
-    if (!info.pid)
+    }
+    info.pid = process.Pid();
+    if (!info.pid) {
       continue;
+    }
 
     info.process_type = iter.GetData().process_type;
     info.renderer_type = ProcessMemoryInformation::RENDERER_UNKNOWN;
@@ -227,7 +233,7 @@ std::string MemoryDetails::ToLogString(bool include_tab_title) {
   std::sort(processes.begin(), processes.end());
   // Print from high to low.
   for (const ProcessMemoryInformation& process_info :
-       base::Reversed(processes)) {
+       std::views::reverse(processes)) {
     log += ProcessMemoryInformation::GetFullTypeNameInEnglish(
         process_info.process_type, process_info.renderer_type);
     // The title of a renderer may contain PII.
@@ -258,7 +264,8 @@ std::string MemoryDetails::ToLogString(bool include_tab_title) {
 }
 
 void MemoryDetails::CollectChildInfoOnUIThread() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI),
+        base::NotFatalUntil::M162);
   ProcessData* const chrome_browser = ChromeBrowser();
 
   // First pass, collate the widgets by process ID.
@@ -300,11 +307,11 @@ void MemoryDetails::CollectChildInfoOnUIThread() {
           render_process_host->GetBrowserContext();
       extensions::ExtensionRegistry* extension_registry =
           extensions::ExtensionRegistry::Get(context);
-      DCHECK(extension_registry);
+      CHECK(extension_registry, base::NotFatalUntil::M162);
       extension_set = &extension_registry->enabled_extensions();
       extensions::ProcessMap* process_map =
           extensions::ProcessMap::Get(context);
-      DCHECK(process_map);
+      CHECK(process_map, base::NotFatalUntil::M162);
       content::ChildProcessId rph_id = render_process_host->GetID();
       process_is_for_extensions = process_map->Contains(rph_id);
 

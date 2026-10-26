@@ -44,7 +44,7 @@ void FinalizeNewProfileSetup(Profile* profile,
 
   // We don't expect this to be run for profiles where the user already had a
   // chance to set a custom profile name.
-  DCHECK(entry->IsUsingDefaultName());
+  CHECK(entry->IsUsingDefaultName(), base::NotFatalUntil::M162);
 
   entry->SetLocalProfileName(profile_name, is_default_name);
 
@@ -136,7 +136,7 @@ void ProfileNameResolver::RunWithProfileName(NameResolvedCallback callback) {
 void ProfileNameResolver::OnExtendedAccountInfoUpdated(
     const AccountInfo& account_info) {
   if (!account_info.IsValid() ||
-      core_account_info_.account_id != account_info.account_id) {
+      core_account_info_.account_id != account_info.GetAccountId()) {
     return;
   }
 
@@ -149,7 +149,8 @@ void ProfileNameResolver::OnExtendedAccountInfoUpdated(
 void ProfileNameResolver::OnProfileNameResolved(
     const std::u16string& profile_name) {
   CHECK(!profile_name.empty());
-  DCHECK(resolved_profile_name_.empty());  // Should be resolved only once.
+  CHECK(resolved_profile_name_.empty(),
+        base::NotFatalUntil::M162);  // Should be resolved only once.
 
   // Cancel timeout and stop listening to further changes.
   extended_account_info_timeout_closure_.Cancel();

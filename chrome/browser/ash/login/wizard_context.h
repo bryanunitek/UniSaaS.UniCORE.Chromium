@@ -10,11 +10,12 @@
 #include <string>
 
 #include "base/values.h"
-#include "chrome/browser/ash/login/enrollment/timebound_user_context_holder.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "chromeos/ash/components/osauth/public/common_types.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom.h"
+
+class PrefService;
 
 namespace ash {
 
@@ -29,6 +30,11 @@ class WizardContext {
 
   WizardContext(const WizardContext&) = delete;
   WizardContext& operator=(const WizardContext&) = delete;
+
+  // Returns true if the device is configured to automatically wipe the
+  // cryptohome on password mismatch, and the current user is an
+  // enterprise-managed account.
+  bool ShouldTriggerAutoWipe(PrefService& local_state) const;
 
   // Should be tweaked by the tests only in case we need this early in the init
   // process. Otherwise tweak context from `GetWizardContextForTesting`.
@@ -294,10 +300,6 @@ class WizardContext {
 
   // Information that is used during Cryptohome recovery or password changed.
   std::unique_ptr<UserContext> user_context;
-
-  // Holds the UserContext for the flow which allows to skip the gaia
-  // screen. The wrapper manages the lifetime of the UserContext inside.
-  std::unique_ptr<TimeboundUserContextHolder> timebound_user_context_holder;
 
   // Configuration for GAIA screen. If the configs needs to be updated, it
   // should be updated before showing the GAIA screen. If the GAIA screen is

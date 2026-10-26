@@ -49,7 +49,8 @@ enum class MediaItemUIUpdatedViewAction {
   kCloseDeviceListForCasting = 10,
   kEnterPictureInPicture = 11,
   kExitPictureInPicture = 12,
-  kMaxValue = kExitPictureInPicture,
+  kSaveVideoFrame = 13,
+  kMaxValue = kSaveVideoFrame,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/media/enums.xml:MediaItemUIUpdatedViewAction)
 
@@ -115,6 +116,13 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaItemUIUpdatedView
       std::unique_ptr<MediaItemUIDeviceSelector> device_selector_view);
   void UpdateFooterView(std::unique_ptr<MediaItemUIFooter> footer_view);
   void UpdateDeviceSelectorIssue(bool has_issue);
+
+  // Moves focus to the start casting button, e.g. when the device list is
+  // closed from within.
+  void FocusStartCastingButton();
+
+  MediaActionButton* GetMediaActionButton(
+      media_session::mojom::MediaSessionAction action);
 
   // Helper functions for testing:
   views::ImageView* GetArtworkViewForTesting();
@@ -213,6 +221,7 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaItemUIUpdatedView
   raw_ptr<MediaProgressView> progress_view_ = nullptr;
   raw_ptr<MediaLiveStatusView> live_status_view_ = nullptr;
   std::vector<raw_ptr<MediaActionButton>> media_action_buttons_;
+  raw_ptr<MediaActionButton> save_video_frame_button_ = nullptr;
   raw_ptr<MediaActionButton> start_casting_button_ = nullptr;
   raw_ptr<MediaActionButton> picture_in_picture_button_ = nullptr;
   raw_ptr<MediaActionButton> play_pause_button_ = nullptr;

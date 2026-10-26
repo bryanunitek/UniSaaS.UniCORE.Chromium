@@ -17,6 +17,7 @@
 #import "base/task/sequenced_task_runner.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/permissions/system/media_authorization_wrapper_mac.h"
+#include "chrome/browser/permissions/system/system_permission_common.h"
 #include "media/base/media_switches.h"
 #include "ui/base/cocoa/permissions_utils.h"
 
@@ -174,7 +175,8 @@ void SetMediaAuthorizationWrapperForTesting(
   g_media_authorization_wrapper_for_tests = wrapper;
 }
 
-void SetIsScreenCaptureAllowedForTesting(bool is_screen_capture_allowed) {
+void SetIsScreenCaptureAllowedForTesting(
+    std::optional<bool> is_screen_capture_allowed) {
   g_is_screen_capture_allowed_for_testing = is_screen_capture_allowed;
 }
 

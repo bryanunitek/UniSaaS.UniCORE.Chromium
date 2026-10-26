@@ -6,12 +6,13 @@
 
 #include "base/json/json_reader.h"
 #include "chrome/browser/ui/autofill/payments/payments_view_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
 #include "components/autofill/core/browser/payments/bnpl_util.h"
 #include "components/autofill/core/browser/ui/payments/bnpl_tos_controller_impl.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/test/browser_test.h"
 
 namespace autofill {
@@ -47,7 +48,8 @@ class BnplTosViewDesktopBrowserTest : public DialogBrowserTest {
         .SetAccountInfoForPayments(
             test_autofill_client_->identity_test_environment()
                 .MakePrimaryAccountAvailable("somebody@example.test",
-                                             signin::ConsentLevel::kSignin));
+                                             signin::ConsentLevel::kSignin)
+                .GetCoreAccountInfo());
     controller_ =
         std::make_unique<BnplTosControllerImpl>(test_autofill_client_.get());
     controller_->Show(
@@ -62,7 +64,7 @@ class BnplTosViewDesktopBrowserTest : public DialogBrowserTest {
   }
 
   content::WebContents* web_contents() const {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetActiveTabInterface()->GetContents();
   }
 
   std::unique_ptr<TestAutofillClient> test_autofill_client_;

@@ -21,8 +21,8 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/threading/sequence_bound.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_config.h"
 #include "components/safe_browsing/core/browser/db/util.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_config.h"
 #include "components/safe_browsing/core/browser/safe_browsing_hats_delegate.h"
 #include "components/safe_browsing/core/browser/safe_browsing_token_fetcher.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
@@ -108,7 +108,7 @@ class PingManager : public KeyedService {
   };
 
   explicit PingManager(
-      const V4ProtocolConfig& config,
+      const SBProtocolConfig& config,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       std::unique_ptr<SafeBrowsingTokenFetcher> token_fetcher,
       base::RepeatingCallback<bool()> get_should_fetch_access_token,
@@ -128,7 +128,7 @@ class PingManager : public KeyedService {
 
   // Create an instance of the safe browsing ping manager.
   static std::unique_ptr<PingManager> Create(
-      const V4ProtocolConfig& config,
+      const SBProtocolConfig& config,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       std::unique_ptr<SafeBrowsingTokenFetcher> token_fetcher,
       base::RepeatingCallback<bool()> get_should_fetch_access_token,
@@ -155,7 +155,8 @@ class PingManager : public KeyedService {
 
   // Launches a survey and attaches ThreatDetails to the survey response.
   virtual void AttachThreatDetailsAndLaunchSurvey(
-      std::unique_ptr<ClientSafeBrowsingReportRequest> report);
+      std::unique_ptr<ClientSafeBrowsingReportRequest> report,
+      bool is_tab_closed);
 
   // Only used for tests
   void SetURLLoaderFactoryForTesting(
@@ -175,7 +176,7 @@ class PingManager : public KeyedService {
   FRIEND_TEST_ALL_PREFIXES(PingManagerTest, TestReportThreatDetails);
   FRIEND_TEST_ALL_PREFIXES(PingManagerTest, TestSanitizeThreatDetailsReport);
 
-  const V4ProtocolConfig config_;
+  const SBProtocolConfig config_;
 
   using Reports = std::set<std::unique_ptr<network::SimpleURLLoader>,
                            base::UniquePtrComparator>;

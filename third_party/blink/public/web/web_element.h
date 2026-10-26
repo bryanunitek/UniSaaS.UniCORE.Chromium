@@ -34,8 +34,12 @@
 #include <optional>
 #include <vector>
 
+#include "base/functional/callback_forward.h"
+#include "base/time/time.h"
+#include "third_party/blink/public/mojom/input/scroll_direction.mojom-shared.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/web/web_node.h"
+#include "ui/events/types/scroll_types.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 #include "v8/include/v8-forward.h"
 
@@ -160,8 +164,11 @@ class BLINK_EXPORT WebElement : public WebNode {
   // - Otherwise, the current selection is unchanged, so that the paste replaces
   //   the selected text.
   //
+  // The `smart_replace` parameter controls whether spaces may be added around
+  // the pasted value.
+  //
   // This is a no-op if the element is not editable.
-  void PasteText(const WebString& text, bool replace_all);
+  void PasteText(const WebString& text, bool replace_all, bool smart_replace);
 
   // Returns all <label> elements associated to this element.
   std::vector<WebLabelElement> Labels() const;
@@ -239,6 +246,33 @@ class BLINK_EXPORT WebElement : public WebNode {
   bool IsUserScrollableX() const;
   bool IsUserScrollableY() const;
 
+  enum class ScrollByGranularityResult {
+    // This element's scroller was scrolled.
+    kScrolled,
+    // This element has no scroller (e.g. it isn't rendered).
+    kNotScrollable,
+    // This element's scroller can't move any further in the given direction.
+    kNoRoomToScroll,
+  };
+  using ScrollByGranularityCallback =
+      base::OnceCallback<void(ScrollByGranularityResult)>;
+
+  // Performs a user scroll of this element's scroller by a page, or to its
+  // start/end, in `direction`, the way the PageUp/PageDown/Home/End keys do:
+  // scroll snap points are honored, and the scroll animates if smooth
+  // scrolling is enabled. If this is the document's scrolling element, the
+  // viewport is scrolled. Only this element's scroller is scrolled; the scroll
+  // never chains to ancestor scrollers.
+  //
+  // `on_finish` is run once the scroll has completed (which may be after an
+  // animation), or immediately if nothing could be scrolled. When the scroll
+  // goes to a snap point, `on_finish` runs as soon as the snap scroll starts.
+  //
+  // `granularity` must be kScrollByPage or kScrollByDocument.
+  void UserScrollByGranularity(mojom::ScrollDirectionPhysical direction,
+                               ui::ScrollGranularity granularity,
+                               ScrollByGranularityCallback on_finish);
+
   // Returns the effective zoom factor for this element. This includes the zoom
   // factor coming from device scale factor and browser zoom but also the
   // cumulative effects of the CSS zoom property in ancestor elements.
@@ -252,6 +286,21 @@ class BLINK_EXPORT WebElement : public WebNode {
   // strings directly to WebElement and enable public component usage through
   // /public/web interfaces.
   WebString GetComputedValue(const WebString& property_name);
+
+  // Observes the visibility of this element.
+  //
+  // Invokes `callback` once this element has been visible for at least
+  // `minimum_visible_duration`. `visibility_threshold` specifies the minimum
+  // unoccluded visible ratio (defaults to 1.0 for fully visible, with lower
+  // values tolerating partial occlusion). If the observer is disconnected via
+  // the returned closure runner before the threshold is met, `callback` is
+  // dropped.
+  //
+  // The returned closure runner removes the observer.
+  base::ScopedClosureRunner MonitorVisibility(
+      base::TimeDelta minimum_visible_duration,
+      base::OnceClosure callback,
+      float visibility_threshold = 1.0f);
 
 #if INSIDE_BLINK
   WebElement(Element*);

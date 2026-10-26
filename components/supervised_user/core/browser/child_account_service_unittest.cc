@@ -23,7 +23,6 @@
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/supervised_user/core/browser/family_link_settings_service.h"
-#include "components/supervised_user/core/browser/list_family_members_service.h"
 #include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "components/supervised_user/test_support/supervised_user_signin_test_utils.h"
@@ -65,17 +64,10 @@ class ChildAccountServiceTest : public ::testing::Test {
     registry->RegisterBooleanPref(policy::policy_prefs::kForceGoogleSafeSearch,
                                   false);
 
-    list_family_members_service_ = std::make_unique<ListFamilyMembersService>(
-        identity_test_environment_->identity_manager(),
-        weak_wrapped_subresource_loader_factory, syncable_pref_service_);
-
     child_account_service_ = std::make_unique<ChildAccountService>(
         syncable_pref_service_, identity_test_environment_->identity_manager(),
-        weak_wrapped_subresource_loader_factory,
-        /*check_user_child_status_callback=*/base::DoNothing(),
-        *list_family_members_service_.get());
-
-    child_account_service_->Init();
+        family_link_settings_service_,
+        /*check_user_child_status_callback=*/base::DoNothing());
   }
 
   void TearDown() override {
@@ -105,14 +97,12 @@ class ChildAccountServiceTest : public ::testing::Test {
   }
 
   base::test::TaskEnvironment task_environment_;
-  network::TestURLLoaderFactory test_url_loader_factory_;
   sync_preferences::TestingPrefServiceSyncable syncable_pref_service_;
   syncer::MockSyncService sync_service_;
   FamilyLinkSettingsService family_link_settings_service_;
 
   std::unique_ptr<TestSigninClient> test_signin_client_;
   std::unique_ptr<signin::IdentityTestEnvironment> identity_test_environment_;
-  std::unique_ptr<ListFamilyMembersService> list_family_members_service_;
   std::unique_ptr<ChildAccountService> child_account_service_;
 };
 
@@ -151,7 +141,7 @@ TEST_F(ChildAccountServiceTest, GetGoogleAuthStateAuthenticated) {
 
   // A valid, signed-in account means authenticated.
   signin::SetListAccountsResponseOneAccountWithParams(
-      {kEmail, account_info.gaia,
+      {kEmail, account_info.GetGaiaId(),
        /*valid= */ true,
        /*signed_out=*/false,
        /*verified=*/true},
@@ -216,7 +206,7 @@ TEST_F(ChildAccountServiceTest, UpdateForceGoogleSafeSearch) {
       policy::policy_prefs::kForceGoogleSafeSearch));
 
   // SafeSearch should not be forced for a fully signed in supervised user.
-  SetListAccountsResponseAndTriggerCookieJarUpdate({kEmail, account.gaia,
+  SetListAccountsResponseAndTriggerCookieJarUpdate({kEmail, account.GetGaiaId(),
                                                     /*valid= */ true,
                                                     /*signed_out=*/false,
                                                     /*verified=*/true});
@@ -244,5 +234,30 @@ TEST_F(ChildAccountServiceTest, GoogleSafeSearchNotForcedAfterSignOut) {
       policy::policy_prefs::kForceGoogleSafeSearch));
 }
 #endif
+
+TEST_F(ChildAccountServiceTest, FamilyLinkSettingsServiceActiveState) {
+  // Initial state should be inactive as there is no supervised primary account.
+  EXPECT_FALSE(family_link_settings_service_.IsActive());
+
+  // Sign in with a supervised account.
+  AccountInfo account_info =
+      identity_test_environment_->MakePrimaryAccountAvailable(
+          kEmail, signin::ConsentLevel::kSignin);
+  supervised_user::UpdateSupervisionStatusForAccount(
+      account_info, identity_test_environment_->identity_manager(),
+      /*is_subject_to_parental_controls=*/true);
+
+  // Settings service should now be active.
+  EXPECT_TRUE(family_link_settings_service_.IsActive());
+
+  // Sign out not supported on ChromeOS.
+#if !BUILDFLAG(IS_CHROMEOS)
+  // Sign out.
+  identity_test_environment_->ClearPrimaryAccount();
+
+  // Settings service should be deactivated.
+  EXPECT_FALSE(family_link_settings_service_.IsActive());
+#endif
+}
 
 }  // namespace supervised_user

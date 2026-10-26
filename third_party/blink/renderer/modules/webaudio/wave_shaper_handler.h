@@ -5,6 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_WAVE_SHAPER_HANDLER_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_WAVE_SHAPER_HANDLER_H_
 
+#include <atomic>
+
 #include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_over_sample_type.h"
@@ -28,7 +30,7 @@ class WaveShaperHandler final : public AudioHandler {
   V8OverSampleType::Enum Oversample() const;
 
  private:
-  WaveShaperHandler(AudioNode& iirfilter_node, float sample_rate);
+  WaveShaperHandler(AudioNode& node, float sample_rate);
 
   // AudioHandler
   void Process(uint32_t frames_to_process) override;
@@ -48,6 +50,7 @@ class WaveShaperHandler final : public AudioHandler {
 
   const float sample_rate_;
   const unsigned render_quantum_frames_;
+  const uint32_t sub_block_frames_;
 
   mutable base::Lock process_lock_;
   Vector<std::unique_ptr<WaveShaperKernel>> kernels_ GUARDED_BY(process_lock_);
@@ -57,9 +60,9 @@ class WaveShaperHandler final : public AudioHandler {
   // is such that a zero input produces a non-zero output.  In this case, the
   // node has an infinite tail so that silent input continues to produce
   // non-silent output.
-  double tail_time_ GUARDED_BY(process_lock_) = 0;
+  std::atomic<double> tail_time_{0.0};
 
-  double latency_time_ GUARDED_BY(process_lock_) = 0;
+  std::atomic<double> latency_time_{0.0};
 
   // `curve_` represents the non-linear shaping curve.  It can be read on the
   // main thread without holding `process_lock_`.

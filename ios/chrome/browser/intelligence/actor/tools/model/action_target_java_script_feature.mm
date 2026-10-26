@@ -11,12 +11,14 @@
 #import "base/functional/callback_helpers.h"
 #import "base/memory/weak_ptr.h"
 #import "base/time/time.h"
+#import "base/timer/elapsed_timer.h"
 #import "base/unguessable_token.h"
 #import "base/values.h"
 #import "components/autofill/core/common/unique_ids.h"
 #import "components/autofill/ios/browser/autofill_util.h"
 #import "components/autofill/ios/form_util/child_frame_registrar.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool_constants.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool_java_script_feature_util.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
 #import "ios/web/public/js_messaging/web_frame.h"
@@ -41,19 +43,21 @@ mojom::ActionResultCode ToActionResultCode(int code) {
       return mojom::ActionResultCode::kOk;
     case ActionTargetResultCode::kCoordinatesOutOfBounds:
       return mojom::ActionResultCode::kCoordinatesOutOfBounds;
+    case ActionTargetResultCode::kArgumentsInvalid:
+      return mojom::ActionResultCode::kArgumentsInvalid;
   }
   NOTREACHED();
 }
 
-/**
- * Parses and validates the result of action_target.resolveTargetIframe.
- */
+// Parses and validates the result of `action_target.resolveTargetIframe()`.
+// `timer` measures the JavaScript call duration for UMA.
 base::expected<std::optional<ChildFrameData>, ToolExecutionResult>
-ParseResolveTargetIframeResult(const base::Value* result) {
-  ToolExecutionResult tool_result =
-      ParseJavaScriptResultWithResultCode(&ToActionResultCode, result);
+ParseResolveTargetIframeResult(const base::Value* result,
+                               const base::ElapsedTimer& timer) {
+  ToolExecutionResult tool_result = ParseJavaScriptResultWithResultCode(
+      ActorJavaScriptCall::kActionTarget, &ToActionResultCode, result, timer);
   if (!tool_result.IsOk()) {
-    return base::unexpected(tool_result);
+    return base::unexpected(std::move(tool_result));
   }
   CHECK(result->is_dict());
   const base::DictValue* child_frame = result->GetDict().FindDict("childFrame");
@@ -86,15 +90,13 @@ ActionTargetJavaScriptFeature* ActionTargetJavaScriptFeature::GetInstance() {
   return instance.get();
 }
 
-void ActionTargetJavaScriptFeature::GetTargetFrame(
-    web::WebState* web_state,
-    web::WebFrame* web_frame,
-    const optimization_guide::proto::ActionTarget& target,
-    TargetFrameCallback callback,
-    int depth) {
+void ActionTargetJavaScriptFeature::GetTargetFrame(web::WebState* web_state,
+                                                   web::WebFrame* web_frame,
+                                                   const ActionTarget& target,
+                                                   TargetFrameCallback callback,
+                                                   int depth) {
   CHECK(web_frame);
   CHECK(web_state);
-  CHECK(target.has_coordinate() || target.has_document_identifier());
 
   if (depth >= kMaxTargetIframeDepth) {
     std::move(callback).Run(base::unexpected(
@@ -102,10 +104,10 @@ void ActionTargetJavaScriptFeature::GetTargetFrame(
     return;
   }
 
-  if (target.has_document_identifier()) {
+  if (target.node_id().has_value()) {
     GetTargetFrameByDocumentIdentifier(web_state, target, std::move(callback));
     return;
-  } else if (target.has_coordinate()) {
+  } else if (target.coordinate().has_value()) {
     GetTargetFrameByCoordinate(web_state, web_frame, target,
                                std::move(callback), depth);
   }
@@ -124,11 +126,12 @@ ActionTargetJavaScriptFeature::~ActionTargetJavaScriptFeature() = default;
 
 void ActionTargetJavaScriptFeature::GetTargetFrameByDocumentIdentifier(
     web::WebState* web_state,
-    const optimization_guide::proto::ActionTarget& target,
+    const ActionTarget& target,
     TargetFrameCallback callback) {
+  CHECK(target.node_id().has_value());
   base::expected<web::WebFrame*, ToolExecutionResult> target_frame =
-      GetWebFrameByRemoteFrameToken(
-          web_state, target.document_identifier().serialized_token());
+      GetWebFrameByRemoteFrameToken(web_state,
+                                    target.node_id()->document_identifier);
 
   if (!target_frame.has_value()) {
     std::move(callback).Run(base::unexpected(target_frame.error()));
@@ -141,13 +144,12 @@ void ActionTargetJavaScriptFeature::GetTargetFrameByDocumentIdentifier(
 void ActionTargetJavaScriptFeature::GetTargetFrameByCoordinate(
     web::WebState* web_state,
     web::WebFrame* web_frame,
-    const optimization_guide::proto::ActionTarget& target,
+    const ActionTarget& target,
     TargetFrameCallback callback,
     int depth) {
+  CHECK(target.coordinate().has_value());
   base::ListValue parameters;
-  parameters.Append(target.coordinate().x());
-  parameters.Append(target.coordinate().y());
-  parameters.Append(static_cast<int>(target.coordinate().pixel_type()));
+  parameters.Append(target.ToDictValue());
 
   auto [cb_for_js, cb_for_error] = base::SplitOnceCallback(std::move(callback));
   bool sent = CallJavaScriptFunction(
@@ -155,8 +157,8 @@ void ActionTargetJavaScriptFeature::GetTargetFrameByCoordinate(
       base::BindOnce(&ActionTargetJavaScriptFeature::OnTargetIframeResolved,
                      base::Unretained(GetInstance()), target,
                      web_state->GetWeakPtr(), web_frame->AsWeakPtr(),
-                     std::move(cb_for_js), depth),
-      base::Milliseconds(web::kJavaScriptFunctionCallDefaultTimeout));
+                     std::move(cb_for_js), depth, base::ElapsedTimer()),
+      kActorJavaScriptExecutionTimeout);
   if (!sent) {
     std::move(cb_for_error)
         .Run(base::unexpected(ToolExecutionResult(
@@ -166,11 +168,12 @@ void ActionTargetJavaScriptFeature::GetTargetFrameByCoordinate(
 }
 
 void ActionTargetJavaScriptFeature::OnTargetIframeResolved(
-    optimization_guide::proto::ActionTarget target,
+    ActionTarget target,
     base::WeakPtr<web::WebState> web_state,
     base::WeakPtr<web::WebFrame> current_frame,
     TargetFrameCallback callback,
     int depth,
+    base::ElapsedTimer timer,
     const base::Value* result) {
   if (!web_state) {
     std::move(callback).Run(base::unexpected(
@@ -184,14 +187,15 @@ void ActionTargetJavaScriptFeature::OnTargetIframeResolved(
     return;
   }
 
-  auto parsed_result = ParseResolveTargetIframeResult(result);
+  auto parsed_result = ParseResolveTargetIframeResult(result, timer);
   if (!parsed_result.has_value()) {
     std::move(callback).Run(base::unexpected(parsed_result.error()));
     return;
   }
 
   if (!parsed_result->has_value()) {
-    std::move(callback).Run(TargetFrameResult{current_frame.get(), target});
+    std::move(callback).Run(
+        TargetFrameResult{current_frame.get(), std::move(target)});
     return;
   }
 
@@ -205,9 +209,8 @@ void ActionTargetJavaScriptFeature::OnTargetIframeResolved(
     return;
   }
 
-  optimization_guide::proto::ActionTarget child_target = target;
-  child_target.mutable_coordinate()->set_x(child_data.frame_x);
-  child_target.mutable_coordinate()->set_y(child_data.frame_y);
+  ActionTarget child_target = target;
+  child_target.UpdateCoordinate(child_data.frame_x, child_data.frame_y);
 
   // Recurse into the frame to find nested frames.
   GetTargetFrame(web_state.get(), *target_frame, child_target,

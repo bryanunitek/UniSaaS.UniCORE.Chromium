@@ -28,11 +28,10 @@
 #include "pdf/ui/thumbnail.h"
 #include "third_party/ink/src/ink/geometry/affine_transform.h"
 #include "third_party/ink/src/ink/geometry/partitioned_mesh.h"
-#include "third_party/ink/src/ink/rendering/skia/native/skia_renderer.h"
 #include "third_party/ink/src/ink/strokes/in_progress_stroke.h"
 #include "third_party/ink/src/ink/strokes/input/stroke_input.h"
-#include "third_party/ink/src/ink/strokes/input/stroke_input_batch.h"
 #include "third_party/ink/src/ink/strokes/stroke.h"
+#include "third_party/skia/include/core/SkRect.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/transform.h"
 
@@ -65,12 +64,12 @@ class PdfInkModule {
   // prevent modifying the clipboard content.
   bool ShouldBlockTextSelectionChanged();
 
-  // Determines if there are any in-progress inputs to be drawn.
+  // Determines if there are any in-progress strokes to be drawn.
   bool HasInputsToDraw() const;
 
-  // Draws any in-progress inputs into `canvas`.  Must either be in text
+  // Draws any in-progress strokes into `canvas`.  Must either be in text
   // highlighting state or in drawing stroke state with non-empty
-  // `drawing_stroke_state().inputs`.
+  // `drawing_stroke_state().in_progress_strokes`.
   void Draw(SkCanvas& canvas);
 
   // Returns whether the event was handled or not.
@@ -81,6 +80,10 @@ class PdfInkModule {
 
   // Informs PdfInkModule that the plugin geometry changed.
   void OnGeometryChanged();
+
+  // Reports session metrics (e.g. net text annotation count change) when the
+  // PDF is being saved.
+  void RecordMetricsOnSave();
 
   // For testing only. Returns the current `PdfInkBrush` used to draw strokes,
   // or nullptr if there is no brush because `PdfInkModule` is not in the
@@ -178,12 +181,12 @@ class PdfInkModule {
     // PdfInkModule finally sees input events again.
     std::optional<EventDetails> input_last_event;
 
-    // The points that make up the current stroke, divided into segments.
-    // A new segment will be necessary each time the input leaves the page
-    // during collection and then returns back into the original starting page.
-    // The coordinates added into each segment are stored in a canonical format
-    // specified in pdf_ink_transform.h.
-    std::vector<ink::StrokeInputBatch> inputs;
+    // The in-progress strokes for the current stroking action. A new stroke
+    // will be necessary each time the input leaves the page during collection
+    // and then returns back into the original starting page. The coordinates
+    // added into each stroke are stored in a canonical format specified in
+    // pdf_ink_transform.h.
+    std::vector<ink::InProgressStroke> in_progress_strokes;
   };
 
   // Generates globally unique, monotonically increasing IDs for all user-added
@@ -294,16 +297,16 @@ class PdfInkModule {
   // Event handlers. Returns whether the event was handled or not.
   bool OnKeyDown(const blink::WebKeyboardEvent& event);
   bool OnMouseDown(const blink::WebMouseEvent& event);
-  bool OnMouseUp(const blink::WebMouseEvent& event);
   bool OnMouseMove(const blink::WebMouseEvent& event);
+  bool OnMouseUp(const blink::WebMouseEvent& event);
   bool OnTouchStart(const blink::WebTouchEvent& event);
-  bool OnTouchEnd(const blink::WebTouchEvent& event);
   bool OnTouchMove(const blink::WebTouchEvent& event);
+  bool OnTouchEnd(const blink::WebTouchEvent& event);
 
   // Dedicated handlers for eraser tip events from stylus devices.
   bool OnEraserTipTouchStart(const blink::WebTouchEvent& event);
-  bool OnEraserTipTouchEnd(const blink::WebTouchEvent& event);
   bool OnEraserTipTouchMove(const blink::WebTouchEvent& event);
+  bool OnEraserTipTouchEnd(const blink::WebTouchEvent& event);
 
   // Helper for event handlers above that deals with potentially missing events.
   // Can only be called when is_drawing_stroke() returns true.
@@ -377,6 +380,7 @@ class PdfInkModule {
 
   void HandleAnnotationRedoMessage(const base::DictValue& message);
   void HandleAnnotationUndoMessage(const base::DictValue& message);
+  void HandleDeleteTextAnnotationMessage(const base::DictValue& message);
   void HandleEditTextAnnotationMessage(const base::DictValue& message);
   void HandleFinishTextAnnotationMessage(const base::DictValue& message);
   void HandleGetAllTextAnnotationsMessage(const base::DictValue& message);
@@ -425,13 +429,6 @@ class PdfInkModule {
   // Returns the brush with type `brush_type`.
   const PdfInkBrush& GetBrush(PdfInkBrush::Type brush_type) const;
 
-  // Converts `current_tool_state_` into segments of `ink::InProgressStroke`.
-  // Requires `current_tool_state_` to hold a `DrawingStrokeState`. If there is
-  // no `DrawingStrokeState`, or the state currently has no inputs, then the
-  // segments will be empty.
-  std::vector<ink::InProgressStroke> CreateInProgressStrokeSegmentsFromInputs()
-      const;
-
   // Wrapper around GetEventToCanonicalTransform(). `page_index` is the page
   // that the to-be-transformed position is on. The page must be visible.
   gfx::Transform GetEventToCanonicalTransformForPage(int page_index);
@@ -457,6 +454,10 @@ class PdfInkModule {
   // nullopt.
   void ApplyUndoRedoDiscards(std::optional<IdType> lowest_discard);
 
+  // Removes the text annotation with `frontend_id`, if it exists. Returns
+  // the ID of the removed annotation, or std::nullopt if it does not exist.
+  std::optional<TextId> MaybeDeleteExistingTextAnnotation(int frontend_id);
+
   // Sets the cursor to a drawing/erasing brush cursor when necessary.
   void MaybeSetCursor();
 
@@ -468,15 +469,9 @@ class PdfInkModule {
   // Returns whether the drawing brush was set or not.
   bool MaybeSetDrawingBrush();
 
-  void DrawStrokeInRenderer(ink::SkiaRenderer& skia_renderer,
-                            SkCanvas& canvas,
-                            int page_index,
-                            const ink::Stroke& stroke);
-
-  void DrawInProgressStrokeInRenderer(ink::SkiaRenderer& skia_renderer,
-                                      SkCanvas& canvas,
-                                      int page_index,
-                                      const ink::InProgressStroke& stroke);
+  // Returns whether there are any active brush/highlighter strokes in the
+  // document, including shapes loaded from the PDF.
+  bool HasStrokes() const;
 
   // Returns the transform and the clip page rect needed to render strokes on
   // page `page_index`.
@@ -534,6 +529,11 @@ class PdfInkModule {
   // Key: Frontend text annotation ID.
   // Value: Backend text annotation ID.
   std::map<int, TextId> text_id_map_;
+
+  // The baseline `text_id_map_` size, initially based on the text annotations
+  // loaded from the PDF, or std::nullopt if text annotations never got loaded.
+  // Updated after each save operation.
+  std::optional<size_t> baseline_text_annotation_count_;
 
   base::WeakPtrFactory<PdfInkModule> weak_factory_{this};
 };

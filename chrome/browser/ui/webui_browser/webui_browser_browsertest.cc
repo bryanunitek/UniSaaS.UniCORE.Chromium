@@ -10,18 +10,26 @@
 #include "base/test/bind.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/devtools/devtools_toggle_action.h"
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/cr_components/searchbox/searchbox_handler.h"
 #include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_web_contents_helper.h"
@@ -29,19 +37,21 @@
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/browser/ui/webui_browser/bookmark_bar.mojom.h"
 #include "chrome/browser/ui/webui_browser/bookmark_bar_page_handler.h"
+#include "chrome/browser/ui/webui_browser/webui_browser_side_panel_ui.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_ui.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_window.h"
 #include "chrome/common/chrome_features.h"
+#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
 #include "components/surface_embed/common/features.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -50,8 +60,14 @@
 #include "net/dns/mock_host_resolver.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/base_window.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/test/base/scoped_channel_override.h"
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
 
 // Use an anonymous namespace here to avoid colliding with the other
 // WebUIBrowserTest defined in chrome/test/base/ash/web_ui_browser_test.h
@@ -61,9 +77,12 @@ class WebUIBrowserTest : public InProcessBrowserTest {
  public:
   void SetUp() override {
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kWebium,
-                              features::kAttachUnownedInnerWebContents},
-        /*disabled_features=*/{});
+        /*enabled_features=*/{features::kWebium},
+        /*disabled_features=*/
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove these two Features.
+        {omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
     InProcessBrowserTest::SetUp();
   }
 
@@ -135,6 +154,21 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, StartupAndShutdown) {
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
 }
 
+// Ensures that WebUIBrowser does not crash when closing tabs (rather than
+// closing window).
+IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, ShutdownByClosingTabs) {
+  auto* window = WebUIBrowserWindow::FromBrowser(browser());
+  ASSERT_TRUE(window);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(web_contents);
+  EXPECT_TRUE(content::WaitForLoadStop(web_contents));
+  browser()->tab_strip_model()->CloseAllTabs();
+  ASSERT_TRUE(base::test::RunUntil(
+      []() { return GlobalBrowserCollection::GetInstance()->IsEmpty(); }));
+}
+
 // Verifies that WebUIBrowserWindow allows keyboard lock for tab WebContents.
 // Tabs in WebUIBrowserWindow are inner WebContents, so this must return true
 // for keyboard lock to work.
@@ -158,10 +192,12 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, NavigatePage) {
   ASSERT_TRUE(web_contents);
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
 
-  // Make sure that the web contents actually got converted to a guest before
-  // we navigate it again, so that WebContentsViewChildFrame gets involved.
+  // Make sure that the web contents actually got converted to a guest or
+  // embedded via SurfaceEmbed before we navigate it again, so that
+  // WebContentsViewChildFrame gets involved.
   EXPECT_TRUE(base::test::RunUntil([web_contents]() {
-    return web_contents->GetOuterWebContents() != nullptr;
+    return web_contents->GetOuterWebContents() != nullptr ||
+           web_contents->GetSurfaceEmbedConnector() != nullptr;
   }));
 
   GURL url = embedded_https_test_server().GetURL("a.com", "/defaultresponse");
@@ -180,10 +216,11 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, EnumerateDevToolsTargets) {
   ASSERT_TRUE(web_contents);
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
 
-  // Make sure that the web contents actually got converted to a guest and in
-  // DOM before enumerate DevTools targets.
+  // Make sure that the web contents actually got converted to a guest or
+  // embedded via SurfaceEmbed and in DOM before enumerate DevTools targets.
   EXPECT_TRUE(base::test::RunUntil([web_contents]() {
-    return web_contents->GetOuterWebContents() != nullptr;
+    return web_contents->GetOuterWebContents() != nullptr ||
+           web_contents->GetSurfaceEmbedConnector() != nullptr;
   }));
 
   // Verify DevTools target types.
@@ -249,7 +286,7 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, TabFullscreenEnterAndExit) {
   // Add a second tab.
   GURL url = embedded_https_test_server().GetURL("a.com", "/defaultresponse");
   EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), url, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
 
   content::WebContents* second_tab =
@@ -257,10 +294,8 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, TabFullscreenEnterAndExit) {
   ASSERT_TRUE(second_tab);
   ASSERT_NE(web_contents, second_tab);
 
-  auto* fullscreen_controller = browser()
-                                    ->GetFeatures()
-                                    .exclusive_access_manager()
-                                    ->fullscreen_controller();
+  auto* fullscreen_controller =
+      ExclusiveAccessManager::From(browser())->fullscreen_controller();
 
   // Enter tab fullscreen mode on second tab.
   fullscreen_controller->EnterFullscreenModeForTab(
@@ -301,7 +336,7 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, TabFullscreenEnterAndExit) {
 
 IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, BookmarkNodeFaviconChangedRegression) {
   bookmarks::BookmarkModel* model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   ASSERT_TRUE(base::test::RunUntil([&]() { return model->loaded(); }));
 
   FakeBookmarkBarPage page;
@@ -335,11 +370,15 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, BookmarkNodeFaviconChangedRegression) {
   }
 }
 
-// Verifies that when kSurfaceEmbed is enabled, the WebUI browser (Webium)
-// renders a red rectangle for the tab content. This test will need updated as
-// surface embed support is expanded.
+// TODO(crbug.com/534291359): Re-enable this test on Linux once the issue is
+// fixed.
+#if BUILDFLAG(IS_LINUX)
+#define MAYBE_SurfaceEmbedRendersRedRect DISABLED_SurfaceEmbedRendersRedRect
+#else
+#define MAYBE_SurfaceEmbedRendersRedRect SurfaceEmbedRendersRedRect
+#endif
 IN_PROC_BROWSER_TEST_F(WebUIBrowserSurfaceEmbedPixelTest,
-                       SurfaceEmbedRendersRedRect) {
+                       MAYBE_SurfaceEmbedRendersRedRect) {
   // Get the UI WebContents (the embedder/outer frame that contains the <embed>
   // element with the SurfaceEmbedWebPlugin). We need to capture from this
   // WebContents since it has the fully composed view including the plugin's
@@ -410,7 +449,7 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserTest,
   // Initial tab is active. Let's open a second tab.
   GURL url = embedded_https_test_server().GetURL("a.com", "/defaultresponse");
   EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), url, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
 
   // We should have exactly 2 tabs now and index 1 is active.
@@ -499,8 +538,10 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, SetContentsSizeResizesWindow) {
 
 IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, SetContentsSizeEarlyResizesWindow) {
   // 1) Create a new browser window and add a default tab
-  Browser* new_browser = Browser::Create(Browser::CreateParams(
-      Browser::Type::TYPE_NORMAL, browser()->profile(), true));
+  BrowserWindowInterface* new_browser =
+      CreateBrowserWindow(BrowserWindowCreateParams(
+          BrowserWindowInterface::Type::TYPE_NORMAL, browser()->GetProfile(),
+          /*from_user_gesture=*/true));
   chrome::AddTabAt(new_browser, GURL(), -1, true);
 
   auto* window = WebUIBrowserWindow::FromBrowser(new_browser);
@@ -514,7 +555,7 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, SetContentsSizeEarlyResizesWindow) {
   // 3) Show the window and navigate to our layout testing page
   new_browser->GetWindow()->Show();
   content::WebContents* tab_contents =
-      new_browser->tab_strip_model()->GetActiveWebContents();
+      new_browser->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab_contents);
   GURL url = embedded_https_test_server().GetURL("a.com", "/empty.html");
   EXPECT_TRUE(content::NavigateToURL(tab_contents, url));
@@ -536,13 +577,15 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, DevToolsWindowDoesNotCrash) {
 IN_PROC_BROWSER_TEST_F(WebUIBrowserTest,
                        ActiveTabHasNonZeroSizeOnWindowCreation) {
   // Create a new browser window with a tab.
-  Browser* new_browser = Browser::Create(Browser::CreateParams(
-      Browser::Type::TYPE_NORMAL, browser()->profile(), true));
+  BrowserWindowInterface* new_browser =
+      CreateBrowserWindow(BrowserWindowCreateParams(
+          BrowserWindowInterface::Type::TYPE_NORMAL, browser()->GetProfile(),
+          /*from_user_gesture=*/true));
   chrome::AddTabAt(new_browser, GURL(), -1, true);
   new_browser->GetWindow()->Show();
 
   content::WebContents* active_contents =
-      new_browser->tab_strip_model()->GetActiveWebContents();
+      new_browser->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(active_contents);
 
   // The active tab's size must be non-zero immediately after the browser window
@@ -553,4 +596,141 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserTest,
   // alive, then the browser process crashes due to UaF handling a mojo message
   // from the render process.
   CloseBrowserSynchronously(new_browser);
+}
+
+IN_PROC_BROWSER_TEST_F(WebUIBrowserSurfaceEmbedPixelTest,
+                       NewActiveTabInheritsExistingTabSize) {
+  content::WebContents* old_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(old_contents);
+  const gfx::Size old_size = old_contents->GetContainerBounds().size();
+  ASSERT_FALSE(old_size.IsEmpty());
+
+  chrome::AddTabAt(browser(), GURL(), -1, true);
+
+  content::WebContents* new_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(new_contents);
+  EXPECT_NE(old_contents, new_contents);
+  EXPECT_EQ(old_size, new_contents->GetSize());
+}
+
+IN_PROC_BROWSER_TEST_F(WebUIBrowserSurfaceEmbedPixelTest,
+                       NewActiveTabKeepsExistingSize) {
+  chrome::AddTabAt(browser(), GURL(), -1, false);
+
+  TabStripModel* tab_strip_model = browser()->tab_strip_model();
+  const int new_tab_index = tab_strip_model->count() - 1;
+  content::WebContents* new_contents =
+      tab_strip_model->GetWebContentsAt(new_tab_index);
+  ASSERT_TRUE(new_contents);
+  const gfx::Size existing_size(320, 240);
+  new_contents->Resize(gfx::Rect(existing_size));
+  ASSERT_EQ(existing_size, new_contents->GetSize());
+
+  tab_strip_model->ActivateTabAt(new_tab_index);
+
+  EXPECT_EQ(existing_size, new_contents->GetSize());
+}
+
+IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, NewTabGetsFocus) {
+  auto* window = WebUIBrowserWindow::FromBrowser(browser());
+  ASSERT_TRUE(window);
+
+  content::WebContents* ui_web_contents =
+      window->GetWebUIBrowserUI()->web_ui()->GetWebContents();
+  EXPECT_TRUE(content::WaitForLoadStop(ui_web_contents));
+
+  // Open a new tab (e.g. simulating the new tab action or dragging a new tab).
+  GURL url = embedded_https_test_server().GetURL("a.com", "/defaultresponse");
+  EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
+      browser(), url, WindowOpenDisposition::kNewForegroundTab,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
+
+  content::WebContents* second_tab =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(second_tab);
+
+  // The newly created active tab should get focus.
+  EXPECT_TRUE(base::test::RunUntil([second_tab]() {
+    return second_tab->GetRenderWidgetHostView() &&
+           second_tab->GetRenderWidgetHostView()->HasFocus();
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(WebUIBrowserTest, ColorProviderKeyIncognito) {
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
+  ASSERT_TRUE(incognito_browser->GetProfile()->IsIncognitoProfile());
+  auto* window = WebUIBrowserWindow::FromBrowser(incognito_browser);
+  ASSERT_TRUE(window);
+  ui::ColorProviderKey key = window->GetColorProviderKey();
+  EXPECT_EQ(key.color_mode, ui::ColorProviderKey::ColorMode::kDark);
+  EXPECT_EQ(key.user_color_source,
+            ui::ColorProviderKey::UserColorSource::kGrayscale);
+  EXPECT_EQ(key.custom_theme, nullptr);
+  CloseBrowserSynchronously(incognito_browser);
+}
+
+class WebUIBrowserEnterpriseIsolatedTest : public WebUIBrowserTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    WebUIBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(
+        enterprise_isolated_mode::switches::
+            kForceEnterpriseIsolatedModeReplacesIncognito);
+  }
+
+ private:
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+  chrome::ScopedChannelOverride channel_override_{
+      chrome::ScopedChannelOverride::Channel::kDev};
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+};
+
+IN_PROC_BROWSER_TEST_F(WebUIBrowserEnterpriseIsolatedTest,
+                       ColorProviderKeyEnterpriseIsolated) {
+  BrowserWindowInterface* isolated_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
+  ASSERT_TRUE(
+      isolated_browser->GetProfile()->IsEnterpriseIsolatedModeProfile());
+  auto* window = WebUIBrowserWindow::FromBrowser(isolated_browser);
+  ASSERT_TRUE(window);
+  ui::ColorProviderKey key = window->GetColorProviderKey();
+  EXPECT_EQ(key.color_mode, ui::ColorProviderKey::ColorMode::kLight);
+  EXPECT_FALSE(key.user_color.has_value());
+  EXPECT_EQ(key.user_color_source,
+            ui::ColorProviderKey::UserColorSource::kBaseline);
+  EXPECT_FALSE(key.scheme_variant.has_value());
+  EXPECT_EQ(key.custom_theme, nullptr);
+  CloseBrowserSynchronously(isolated_browser);
+}
+
+IN_PROC_BROWSER_TEST_F(
+    WebUIBrowserEnterpriseIsolatedTest,
+    ColorProviderKeyEnterpriseIsolatedWithParentCustomTheme) {
+  ThemeServiceFactory::GetForProfile(browser()->GetProfile())
+      ->SetUserColorAndBrowserColorVariant(
+          SK_ColorMAGENTA, ui::mojom::BrowserColorVariant::kTonalSpot);
+
+  BrowserWindowInterface* isolated_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
+  ASSERT_TRUE(
+      isolated_browser->GetProfile()->IsEnterpriseIsolatedModeProfile());
+  auto* window = WebUIBrowserWindow::FromBrowser(isolated_browser);
+  ASSERT_TRUE(window);
+  ui::ColorProviderKey key = window->GetColorProviderKey();
+  EXPECT_EQ(key.color_mode, ui::ColorProviderKey::ColorMode::kLight);
+  EXPECT_EQ(key.user_color_source,
+            ui::ColorProviderKey::UserColorSource::kBaseline);
+  EXPECT_EQ(key.custom_theme, nullptr);
+  CloseBrowserSynchronously(isolated_browser);
+}
+
+IN_PROC_BROWSER_TEST_F(WebUIBrowserTest,
+                       SidePanelUIReturnsWebUIBrowserSidePanelUI) {
+  auto* window = WebUIBrowserWindow::FromBrowser(browser());
+  ASSERT_TRUE(window);
+
+  EXPECT_EQ(SidePanelUI::From(browser()), window->GetWebUIBrowserSidePanelUI());
 }

@@ -74,7 +74,7 @@ NSAttributedString* AttributedSubstringFromRange(LocalFrame* frame,
   size_t length = range.EndPosition().ComputeOffsetInContainerNode() -
                   range.StartPosition().ComputeOffsetInContainerNode();
 
-  unsigned position = 0;
+  wtf_size_t position = 0;
 
   // TODO(editing-dev): The use of updateStyleAndLayout
   // needs to be audited.  see http://crbug.com/590369 for more details.
@@ -83,7 +83,7 @@ NSAttributedString* AttributedSubstringFromRange(LocalFrame* frame,
 
   for (TextIterator it(range.StartPosition(), range.EndPosition());
        !it.AtEnd() && [string length] < length; it.Advance()) {
-    unsigned num_characters = it.length();
+    wtf_size_t num_characters = it.length();
     if (!num_characters) {
       continue;
     }
@@ -103,7 +103,7 @@ NSAttributedString* AttributedSubstringFromRange(LocalFrame* frame,
     // device scale factor must be divided out from the font size and the page
     // scale factor must be multiplied in.
 
-    const ComputedStyle& style = layout_object->StyleRef();
+    const ComputedStyle& style = layout_object->Style();
     const SimpleFontData* primaryFont = style.GetFont()->PrimaryFont();
     const FontPlatformData& font_platform_data = primaryFont->PlatformData();
 

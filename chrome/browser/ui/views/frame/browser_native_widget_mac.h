@@ -9,6 +9,7 @@
 
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/command_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/frame/browser_native_widget.h"
@@ -22,9 +23,15 @@ class BrowserWidget;
 class BrowserView;
 @class BrowserWindowTouchBarController;
 @class BrowserWindowTouchBarViewsDelegate;
+
 namespace tabs {
+enum class VerticalTabStripCollapseState;
 class VerticalTabStripStateController;
 }  // namespace tabs
+
+namespace viz {
+class FrameTimingDetails;
+}  // namespace viz
 
 ////////////////////////////////////////////////////////////////////////////////
 //  BrowserNativeWidgetMac is a NativeWidgetMac subclass that provides
@@ -49,6 +56,8 @@ class BrowserNativeWidgetMac : public views::NativeWidgetMac,
   void OnFocusWindowToolbar() override;
   void OnWindowFullscreenTransitionStart() override;
   void OnWindowFullscreenTransitionComplete() override;
+  void OnWindowWillStartLiveResize() override;
+  void OnWindowDidEndLiveResize() override;
   void OnWidgetDestroyed(views::Widget* widget) override;
 
   // Overridden from BrowserNativeWidget:
@@ -90,25 +99,56 @@ class BrowserNativeWidgetMac : public views::NativeWidgetMac,
   void OnWidgetInitDone() override;
   void OnWidgetThemeChanged(views::Widget* widget) override;
   void OnWindowDestroying(gfx::NativeWindow window) override;
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
   // Overridden from CommandObserver:
   void EnabledStateChangedForCommand(int id, bool enabled) override;
 
  private:
-  bool IsBrowserWidgetEligible() const;
-  void UpdateBackground(bool is_eligible);
+  bool IsGlassEligible() const;
+  void UpdateGlassEligibility(bool is_glass_eligible);
+  void UpdateBackgroundGeometry();
+  void UpdateBackgroundColor();
+  std::optional<int> GetGlassFrameHeight() const;
+  std::optional<int> GetGlassFrameWidth() const;
   void OnVerticalTabStripModeChanged(
       tabs::VerticalTabStripStateController* controller);
+  void OnVerticalTabStripCollapseChanged(
+      tabs::VerticalTabStripCollapseState state);
+  void OnVerticalTabStripResizingChanged(bool is_resizing);
+  void RemoveGlassBackground(
+      const viz::FrameTimingDetails& frame_timing_details);
+  // Called when the window's first frame is on screen. Posts
+  // EndInputContextDeferral().
+  void OnFirstFramePresented(
+      const viz::FrameTimingDetails& frame_timing_details);
+  // Ends the input-context deferral set up in OnWidgetInitDone().
+  void EndInputContextDeferral();
 
   raw_ptr<BrowserView> browser_view_;  // Weak. Our ClientView.
   BrowserWindowTouchBarViewsDelegate* __strong touch_bar_delegate_;
-  NSView* __strong background_view_;
+  NSView* __strong glass_background_view_;
+  NSView* __strong tint_view_;
+  NSView* __strong opaque_background_view_;
 
-  std::optional<ui::NativeTheme::PreferredColorScheme>
-      last_preferred_color_scheme_;
   std::optional<SkColor> last_theme_color_;
+  std::optional<bool> last_is_vertical_tabs_;
+  bool has_multiple_profiles_open_ = false;
+  bool last_is_glass_eligible_ = false;
+  bool is_window_live_resizing_ = false;
   base::CallbackListSubscription vertical_tab_subscription_;
-  base::CallbackListSubscription glass_frame_service_subscription_;
+  base::CallbackListSubscription vertical_tab_collapse_subscription_;
+  base::CallbackListSubscription vertical_tab_resizing_subscription_;
+  base::CallbackListSubscription glass_eligibility_subscription_;
+  base::CallbackListSubscription multiple_open_profiles_subscription_;
+  base::CallbackListSubscription paint_as_active_subscription_;
+
+  // Kept apart from `weak_ptr_factory_`, which UpdateGlassEligibility()
+  // invalidates, so a glass eligibility change does not cancel the
+  // first-frame callback that ends the input-context deferral.
+  base::WeakPtrFactory<BrowserNativeWidgetMac> input_context_weak_ptr_factory_{
+      this};
+  base::WeakPtrFactory<BrowserNativeWidgetMac> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_NATIVE_WIDGET_MAC_H_

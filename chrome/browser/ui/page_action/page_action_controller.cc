@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -20,7 +21,10 @@
 #include "chrome/browser/ui/page_action/page_action_model.h"
 #include "chrome/browser/ui/page_action/page_action_properties_provider.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
+#include "chrome/browser/user_education/user_education_service.h"
+#include "chrome/browser/user_education/user_education_service_factory.h"
 #include "components/tabs/public/tab_interface.h"
+#include "components/user_education/product_messaging/product_messaging_controller.h"
 #include "ui/actions/action_id.h"
 #include "ui/actions/actions.h"
 #include "ui/menus/simple_menu_model.h"
@@ -97,7 +101,19 @@ PageActionControllerImpl::PageActionControllerImpl(
   tab_deactivated_callback_subscription_ = tab_interface.RegisterWillDeactivate(
       base::BindRepeating(&PageActionControllerImpl::OnTabWillDeactivate,
                           base::Unretained(this)));
+  user_education::ProductMessagingController* product_messaging_controller =
+      nullptr;
+  if (auto* profile = tab_interface.GetProfile()) {
+    if (auto* user_education_service =
+            UserEducationServiceFactory::GetForBrowserContext(profile)) {
+      product_messaging_controller =
+          &user_education_service->product_messaging_controller();
+    }
+  }
   chip_selector_ = CreateChipSelector(
+      base::BindRepeating(
+          &PageActionControllerImpl::IsPageActionSuppressedByOmnibox,
+          base::Unretained(this)),
       base::BindRepeating(&PageActionControllerImpl::DoShowSuggestionChip,
                           base::Unretained(this)),
       base::BindRepeating(&PageActionControllerImpl::DoHideSuggestionChip,
@@ -105,7 +121,9 @@ PageActionControllerImpl::PageActionControllerImpl(
       base::BindRepeating(&PageActionControllerImpl::DoShowAnchoredMessage,
                           base::Unretained(this)),
       base::BindRepeating(&PageActionControllerImpl::DoHideAnchoredMessage,
-                          base::Unretained(this)));
+                          base::Unretained(this)),
+      product_messaging_controller);
+  chip_selector_->OnTabActiveChanged(tab_interface.IsActivated());
 
   metrics_recorder_ = CreateMetricsRecorder(
       tab_interface,
@@ -197,6 +215,11 @@ void PageActionControllerImpl::DoHideSuggestionChip(
 void PageActionControllerImpl::ShowAnchoredMessage(
     actions::ActionId action_id,
     const AnchoredMessageConfig& config) {
+  if (config.priority != PageActionPriorityCategory::kUserInteraction &&
+      IsAnyPageActionBubbleShowing()) {
+    ShowSuggestionChip(action_id, {.priority = config.priority});
+    return;
+  }
   if (config.priority == PageActionPriorityCategory::kUnknown &&
       default_priorities_.contains(action_id)) {
     // If the config does not specify the priority level, we fall back to the
@@ -280,6 +303,25 @@ void PageActionControllerImpl::ResumeAnchoredMessageTimeout(
   }
 }
 
+bool PageActionControllerImpl::IsAnyPageActionBubbleShowing() const {
+  return std::ranges::any_of(page_actions_, [](const auto& pair) {
+    return pair.second->GetActionItemIsShowingBubble() ||
+           pair.second->GetActionActive();
+  });
+}
+
+void PageActionControllerImpl::OnPageActionAnchoredUiShown() {
+  chip_selector_->DowngradeQueuedAnchoredMessageRequests();
+  // Only downgrade if the timeout is running so that we don't downgrade
+  // anchored messages that users are actively interacting with (e.g. expanded
+  // or user-triggered messages).
+  if (anchored_message_timeout_.IsRunning()) {
+    anchored_message_timeout_.Stop();
+    CHECK(active_anchored_message_.has_value());
+    DowngradeAnchoredMessage(active_anchored_message_.value());
+  }
+}
+
 std::optional<actions::ActionId>
 PageActionControllerImpl::GetActiveAnchoredMessage() const {
   return active_anchored_message_;
@@ -288,9 +330,18 @@ PageActionControllerImpl::GetActiveAnchoredMessage() const {
 ScopedPageActionActivity PageActionControllerImpl::AddActivity(
     actions::ActionId action_id) {
   auto& counter = activity_counters_[action_id];
+  const bool was_active = (counter > 0);
   ++counter;
   FindPageActionModel(action_id).SetActionActive(PageActionPassKey(), true);
+  if (!was_active) {
+    OnPageActionAnchoredUiShown();
+  }
   return ScopedPageActionActivity(*this, action_id);
+}
+
+bool PageActionControllerImpl::IsPageActionSuppressedByOmnibox(
+    actions::ActionId page_action_id) {
+  return FindPageActionModel(page_action_id).IsAffectedByOmniboxSuppression();
 }
 
 void PageActionControllerImpl::DecrementActivityCounter(
@@ -307,17 +358,23 @@ void PageActionControllerImpl::DecrementActivityCounter(
 void PageActionControllerImpl::ActionItemChanged(
     const actions::ActionItem* action_item) {
   auto& model = FindPageActionModel(action_item->GetActionId().value());
+  const bool was_showing_bubble = model.GetActionItemIsShowingBubble();
   model.SetActionItemProperties(PageActionPassKey(), action_item);
+  if (!was_showing_bubble && model.GetActionItemIsShowingBubble()) {
+    OnPageActionAnchoredUiShown();
+  }
 }
 
 void PageActionControllerImpl::OnTabActivated(tabs::TabInterface* tab) {
   SetModelsTabActive(/*is_active=*/true);
+  chip_selector_->OnTabActiveChanged(/*is_tab_active=*/true);
   if (anchored_message_timeout_.IsRunning()) {
     anchored_message_timeout_.Reset();
   }
 }
 
 void PageActionControllerImpl::OnTabWillDeactivate(tabs::TabInterface* tab) {
+  chip_selector_->OnTabActiveChanged(/*is_tab_active=*/false);
   SetModelsTabActive(/*is_active=*/false);
 }
 
@@ -419,6 +476,20 @@ void PageActionControllerImpl::ClearOverrideTooltip(
       PageActionPassKey(), /*override_tooltip=*/std::nullopt);
 }
 
+void PageActionControllerImpl::OverrideBackgroundColor(
+    actions::ActionId action_id,
+    std::optional<ui::ColorId> override_background_color_id) {
+  FindPageActionModel(action_id).SetOverrideBackgroundColorId(
+      PageActionPassKey(), override_background_color_id);
+}
+
+void PageActionControllerImpl::OverrideForegroundColor(
+    actions::ActionId action_id,
+    std::optional<ui::ColorId> override_foreground_color_id) {
+  FindPageActionModel(action_id).SetOverrideForegroundColorId(
+      PageActionPassKey(), override_foreground_color_id);
+}
+
 void PageActionControllerImpl::SetAnchoredMessageText(
     actions::ActionId action_id,
     const std::u16string& anchored_message_text) {
@@ -488,6 +559,7 @@ void PageActionControllerImpl::SetShouldHidePageActions(
     model->SetIsSuppressedByOmnibox(PageActionPassKey(),
                                     should_hide_page_actions);
   }
+  chip_selector_->ReevaluateAfterSuppressionChange();
 }
 
 void PageActionControllerImpl::OnActionsChanged() {
@@ -560,6 +632,9 @@ void PageActionControllerImpl::RegisterCallbacks(PageActionPassKey,
   delegate->SetAnchoredMessageCollapseCallback(base::BindRepeating(
       &PageActionControllerImpl::ResumeAnchoredMessageTimeout,
       weak_factory_.GetWeakPtr(), action_id));
+  delegate->SetAnchoredMessageDowngradeCallback(
+      base::BindRepeating(&PageActionControllerImpl::DowngradeAnchoredMessage,
+                          weak_factory_.GetWeakPtr(), action_id));
 }
 
 void PageActionControllerImpl::RecordClickMetric(
@@ -604,7 +679,7 @@ std::ostream& operator<<(std::ostream& os, const SuggestionChipConfig& config) {
 
 std::vector<actions::ActionId> GetActivePageActionIds(
     BrowserWindowInterface& bwi) {
-  auto* browser_actions = bwi.GetActions();
+  auto* browser_actions = BrowserActions::From(&bwi);
   if (!browser_actions) {
     return {};
   }
@@ -626,7 +701,7 @@ std::vector<actions::ActionId> GetActivePageActionIds(
 
 std::vector<actions::ActionItem*> GetActivePageActionItems(
     BrowserWindowInterface& bwi) {
-  auto* browser_actions = bwi.GetActions();
+  auto* browser_actions = BrowserActions::From(&bwi);
   if (!browser_actions) {
     return {};
   }

@@ -138,8 +138,8 @@ void ReportViolation(
     const String& sample = String(),
     const String& sample_prefix = String(),
     std::optional<base::UnguessableToken> issue_id = std::nullopt,
-    std::optional<String> eval_hash = std::nullopt,
-    std::optional<String> url_hash = std::nullopt) {
+    const String& eval_hash = String(),
+    const String& url_hash = String()) {
   String message =
       StrCat({console_message,
               CSPDirectiveListIsReportOnly(csp)
@@ -168,7 +168,7 @@ void ReportViolationWithLocation(
     const String& console_message,
     const KURL& blocked_url,
     const String& context_url,
-    const OrdinalNumber& context_line,
+    const TextPosition& context_position,
     Element* element,
     const String& source) {
   String message =
@@ -182,7 +182,8 @@ void ReportViolationWithLocation(
                          ? mojom::blink::ConsoleMessageLevel::kInfo
                          : mojom::blink::ConsoleMessageLevel::kError;
   SourceLocation* source_location =
-      CaptureSourceLocation(context_url, context_line.OneBasedInt(), 0);
+      CaptureSourceLocation(context_url, context_position.line_.OneBasedInt(),
+                            context_position.column_.OneBasedInt());
   policy->LogToConsole(MakeGarbageCollected<ConsoleMessage>(
       mojom::ConsoleMessageSource::kSecurity, error_level, message,
       source_location));
@@ -203,7 +204,7 @@ void ReportEvalViolation(
     const KURL& blocked_url,
     const ContentSecurityPolicy::ExceptionStatus exception_status,
     const String& content,
-    std::optional<String> eval_hash) {
+    const String& eval_hash = String()) {
   String report_message =
       StrCat({message, CSPDirectiveListIsReportOnly(csp)
                            ? " The policy is report-only, so the violation has "
@@ -411,13 +412,10 @@ bool CheckEvalAndReportViolation(
 
   String raw_directive =
       GetRawDirectiveForMessage(csp.raw_directives, directive.type);
-  std::optional<String> hash;
+  String hash;
   if (csp_extended_script_src_hashes_enabled) {
     hash = GetEvalSha256String(content);
-    suffix =
-        StrCat({suffix, " Hash of blocked script: \"", hash.value(), "\"."});
-  } else {
-    hash = std::nullopt;
+    suffix = StrCat({suffix, " Hash of blocked script: \"", hash, "\"."});
   }
 
   // The console message will only be printed inside ReportEvalViolation if the
@@ -485,7 +483,7 @@ bool CheckInlineAndReportViolation(
     Element* element,
     const String& source,
     const String& context_url,
-    const OrdinalNumber& context_line,
+    const TextPosition& context_position,
     ContentSecurityPolicy::InlineType inline_type,
     const String& hash_value,
     CSPDirectiveName effective_type) {
@@ -557,7 +555,7 @@ bool CheckInlineAndReportViolation(
       StrCat({console_message,
               " violates the following Content Security Policy directive '",
               raw_directive, "'.", suffix}),
-      NullUrl(), context_url, context_line, element,
+      NullUrl(), context_url, context_position, element,
       directive.source_list->report_sample ? source : g_empty_string);
 
   if (!CSPDirectiveListIsReportOnly(csp)) {
@@ -635,7 +633,6 @@ void ReportViolationForCheckSource(
     case CSPDirectiveName::ReportURI:
     case CSPDirectiveName::RequireTrustedTypesFor:
     case CSPDirectiveName::Sandbox:
-    case CSPDirectiveName::TreatAsPublicAddress:
     case CSPDirectiveName::TrustedTypes:
     case CSPDirectiveName::UpgradeInsecureRequests:
     case CSPDirectiveName::Unknown:
@@ -668,7 +665,7 @@ void ReportViolationForCheckSource(
   String raw_directive =
       GetRawDirectiveForMessage(csp.raw_directives, directive.type);
 
-  std::optional<String> url_hash;
+  String url_hash;
   if (policy && policy->ScriptSrcExtendedHashesEnabled() &&
       (effective_type == CSPDirectiveName::ScriptSrc ||
        effective_type == CSPDirectiveName::ScriptSrcElem ||
@@ -686,7 +683,7 @@ void ReportViolationForCheckSource(
               "' violates the following Content Security Policy directive: \"",
               raw_directive, "\".", suffix}),
       url_before_redirects, ContentSecurityPolicyViolationType::kURLViolation,
-      String(), String(), std::nullopt, std::nullopt, url_hash);
+      String(), String(), std::nullopt, String(), url_hash);
 }
 
 CSPCheckResult CheckSource(
@@ -778,7 +775,7 @@ bool CSPDirectiveListAllowInline(
     const String& content,
     const String& nonce,
     const String& context_url,
-    const OrdinalNumber& context_line,
+    const TextPosition& context_position,
     ReportingDisposition reporting_disposition) {
   CSPDirectiveName type = EffectiveDirectiveForInlineCheck(inline_type);
 
@@ -812,7 +809,7 @@ bool CSPDirectiveListAllowInline(
     }
 
     return CheckInlineAndReportViolation(csp, policy, directive, element,
-                                         content, context_url, context_line,
+                                         content, context_url, context_position,
                                          inline_type, hash_value, type);
   }
 
@@ -834,7 +831,14 @@ bool CSPDirectiveListAllowEval(
     ContentSecurityPolicy::ExceptionStatus exception_status,
     const String& content,
     const Vector<network::IntegrityMetadata>& script_hash_values,
-    bool csp_extended_script_src_hashes_enabled) {
+    bool csp_extended_script_src_hashes_enabled,
+    bool trusted_types_enforced) {
+  // https://w3c.github.io/webappsec-csp/#can-compile-strings: If Trusted Types
+  // are enforced and this policy's source list contains 'trusted-types-eval',
+  // this policy does not block (nor report) the evaluation.
+  if (trusted_types_enforced && CheckTrustedTypesEval(csp, policy)) {
+    return true;
+  }
   CSPOperativeDirective directive =
       OperativeDirective(csp, CSPDirectiveName::ScriptSrc);
   if (reporting_disposition == ReportingDisposition::kReport) {
@@ -903,16 +907,6 @@ bool CSPDirectiveListAllowWasmCodeGeneration(
         exception_status, content);
   }
   return CSPDirectiveListIsReportOnly(csp) || CheckWasmEval(csp, policy);
-}
-
-CORE_EXPORT
-bool CSPDirectiveListAllowTrustedTypesEval(
-    const network::mojom::blink::ContentSecurityPolicy& csp,
-    ContentSecurityPolicy* policy,
-    ReportingDisposition reporting_disposition,
-    ContentSecurityPolicy::ExceptionStatus exception_status) {
-  return !CSPDirectiveListIsReportOnly(csp) &&
-         CheckTrustedTypesEval(csp, policy);
 }
 
 bool CSPDirectiveListShouldDisableEval(

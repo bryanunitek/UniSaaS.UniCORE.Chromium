@@ -9,8 +9,10 @@
 #include <string>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/uuid.h"
+#include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
 #include "chrome/browser/skills/skills_functional_browsertest.h"
 #include "chrome/browser/skills/skills_glic_mojom_util.h"
@@ -61,7 +63,10 @@ class SkillsInteractiveUiTestBase
   // Polls the UI until a Toast with the given `toast_id` is visibly shown.
   ui::test::InteractiveTestApi::MultiStep CheckToastIsShowing(ToastId toast_id);
 
+  void SetUpBrowserContextKeyedServices(
+      content::BrowserContext* context) override;
   void SetUpOnMainThread() override;
+  void TearDownOnMainThread() override;
 
   std::unique_ptr<KeyedService> CreateSkillsService(
       content::BrowserContext* context);
@@ -87,10 +92,12 @@ class SkillsInteractiveUiTestBase
   ui::test::InteractiveTestApi::StepBuilder UpdateSkill(
       const std::string* skill_id_ptr);
 
-  // Verifies the skill invocation prompt in the test client matches
-  // `expected_prompt`.
+  // Verifies the skill invocation prompt, name, and icon in the test client
+  // match `expected_prompt`, `expected_name`, and `expected_icon`.
   ui::test::InteractiveTestApi::MultiStep VerifyInvocationInWebUI(
-      const std::string& expected_prompt);
+      const std::string& expected_prompt,
+      const std::string& expected_name = "",
+      const std::string& expected_icon = "");
 
   // Edits the value of an input field in the Skills Dialog at `query` to
   // `value`.
@@ -121,6 +128,12 @@ class SkillsInteractiveUiTestBase
   // Skills list (Observes the getSkillPreviews() API endpoint).
   ui::test::InteractiveTestApi::MultiStep WaitForSkillPreviewShown(
       std::string_view skill_name);
+
+  // Waits for a SkillPreview with `skill_name` and `expected_creation_time`
+  // to be shown in the test client's Skills list.
+  ui::test::InteractiveTestApi::MultiStep WaitForSkillPreviewWithCreationTime(
+      std::string_view skill_name,
+      base::Time expected_creation_time);
 
   // Waits for the SkillPreviews in the test client's Skills list to be in the
   // same order as the given skill names.
@@ -165,6 +178,8 @@ class SkillsInteractiveUiTestBase
   network::TestURLLoaderFactory test_url_loader_factory_;
   base::HistogramTester histogram_tester_;
   base::test::ScopedFeatureList scoped_feature_list_;
+  std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
+      identity_test_env_adaptor_;
 };
 
 testing::Matcher<const Skill*> VerifyUserCreatedSkill(const Skill& expected);

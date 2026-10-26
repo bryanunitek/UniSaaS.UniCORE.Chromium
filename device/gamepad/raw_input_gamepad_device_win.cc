@@ -78,9 +78,10 @@ float NormalizeAxis(T value, T min, T max) {
   return (2.0f * (value - min) / static_cast<float>(max - min)) - 1.0f;
 }
 
-// Returns a 32-bit mask with the lowest |bits| bits set.
+// Returns a 32-bit mask with the lowest |bits| bits set. |bits| can be 32, so
+// the shift is done in 64 bits to avoid undefined behavior.
 unsigned long GetBitmask(unsigned short bits) {
-  return (1 << bits) - 1;
+  return static_cast<unsigned long>((1ULL << bits) - 1);
 }
 
 // Interprets `value` as a signed value with `bits` bits and extends the sign
@@ -139,16 +140,20 @@ void RawInputGamepadDeviceWin::DoShutdown() {
 
 void RawInputGamepadDeviceWin::UpdateGamepad(RAWINPUT* input) {
   NTSTATUS status;
+  if (input->data.hid.dwSizeHid == 0 || input->data.hid.dwCount == 0) {
+    return;
+  }
 
   if (dualshock4_) {
     // Handle Dualshock4 input reports that do not specify HID gamepad usages in
     // the report descriptor.
     uint8_t report_id = input->data.hid.bRawData[0];
-    // SAFETY: The Windows RAWHID API prepends the report ID byte to bRawData
-    // but does not include it in dwSizeHid. Therefore, the actual size of
-    // bRawData is dwSizeHid + 1.
+    // SAFETY: bRawData is a variable-length array of dwCount reports, each of
+    // size dwSizeHid bytes (including the 1-byte report ID). Get a single
+    // report starting from the first byte.
     auto raw_data = UNSAFE_BUFFERS(
-        base::span(input->data.hid.bRawData, input->data.hid.dwSizeHid + 1));
+        base::span(input->data.hid.bRawData,
+                   static_cast<size_t>(input->data.hid.dwSizeHid)));
     auto report = raw_data.subspan(1u);
     Gamepad pad;
     bool is_multitouch_enabled = features::IsGamepadMultitouchEnabled();

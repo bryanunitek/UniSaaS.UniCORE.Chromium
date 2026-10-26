@@ -259,18 +259,14 @@ QuicTestPacketMaker::MakeRequestHeadersAndMultipleDataFramesPacket(
   return builder.Build();
 }
 
-std::unique_ptr<quic::QuicReceivedPacket>
-QuicTestPacketMaker::MakeRequestHeadersPacket(
-    uint64_t packet_number,
+void QuicTestPacketMaker::AddRequestHeadersFrames(
+    QuicTestPacketBuilder& builder,
     quic::QuicStreamId stream_id,
     bool fin,
     spdy::SpdyPriority spdy_priority,
     quiche::HttpHeaderBlock headers,
     size_t* spdy_headers_frame_length,
     bool should_include_priority_frame) {
-  auto& builder = Packet(packet_number);
-  builder.MaybeAddHttp3SettingsFrames();
-
   if (should_include_priority_frame) {
     std::string priority_data =
         GenerateHttp3PriorityData(spdy_priority, stream_id);
@@ -283,6 +279,22 @@ QuicTestPacketMaker::MakeRequestHeadersPacket(
   std::string data = QpackEncodeHeaders(stream_id, std::move(headers),
                                         spdy_headers_frame_length);
   builder.AddStreamFrame(stream_id, fin, data);
+}
+
+std::unique_ptr<quic::QuicReceivedPacket>
+QuicTestPacketMaker::MakeRequestHeadersPacket(
+    uint64_t packet_number,
+    quic::QuicStreamId stream_id,
+    bool fin,
+    spdy::SpdyPriority spdy_priority,
+    quiche::HttpHeaderBlock headers,
+    size_t* spdy_headers_frame_length,
+    bool should_include_priority_frame) {
+  auto& builder = Packet(packet_number);
+  builder.MaybeAddHttp3SettingsFrames();
+  AddRequestHeadersFrames(builder, stream_id, fin, spdy_priority,
+                          std::move(headers), spdy_headers_frame_length,
+                          should_include_priority_frame);
   return builder.Build();
 }
 
@@ -344,6 +356,28 @@ QuicTestPacketMaker::MakeRequestHeadersAndRstPacket(
 }
 
 std::unique_ptr<quic::QuicReceivedPacket>
+QuicTestPacketMaker::MakeAckAndRequestHeadersPacket(
+    uint64_t packet_number,
+    quic::QuicStreamId stream_id,
+    bool fin,
+    spdy::SpdyPriority spdy_priority,
+    quiche::HttpHeaderBlock headers,
+    uint64_t largest_received,
+    uint64_t smallest_received,
+    size_t* spdy_headers_frame_length,
+    bool should_include_priority_frame) {
+  DCHECK_GE(largest_received, smallest_received);
+  auto& builder = Packet(packet_number);
+  builder.MaybeAddHttp3SettingsFrames();
+  builder.AddAckFrame(/*first_received=*/1, largest_received,
+                      smallest_received);
+  AddRequestHeadersFrames(builder, stream_id, fin, spdy_priority,
+                          std::move(headers), spdy_headers_frame_length,
+                          should_include_priority_frame);
+  return builder.Build();
+}
+
+std::unique_ptr<quic::QuicReceivedPacket>
 QuicTestPacketMaker::MakeResponseHeadersPacket(
     uint64_t packet_number,
     quic::QuicStreamId stream_id,
@@ -382,8 +416,8 @@ QuicTestPacketMaker::MakeRetransmissionPacket(uint64_t original_packet_number,
 }
 
 std::unique_ptr<quic::QuicEncryptedPacket>
-QuicTestPacketMaker::MakeStatelessResetPacket() {
-  auto connection_id = quic::test::TestConnectionId();
+QuicTestPacketMaker::MakeStatelessResetPacket(
+    quic::QuicConnectionId& connection_id) {
   return quic::QuicFramer::BuildIetfStatelessResetPacket(
       connection_id, quic::QuicFramer::GetMinStatelessResetPacketLength() + 1,
       quic::QuicUtils::GenerateStatelessResetToken(connection_id));

@@ -4,23 +4,22 @@
 
 #include "chrome/browser/ui/views/record_replay/replay_recording_bubble_view.h"
 
-#include <memory>
 #include <string>
 
 #include "base/functional/callback.h"
 #include "base/test/mock_callback.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/view.h"
 #include "ui/views/view_tracker.h"
-#include "ui/views/widget/widget.h"
 
 namespace record_replay {
 
@@ -35,7 +34,7 @@ class ReplayRecordingBubbleViewTest : public DialogBrowserTest {
     record_replay::Recording recording;
     recording.set_name("Test Recording");
     auto* bubble = new ReplayRecordingBubbleView(
-        anchor, browser()->tab_strip_model()->GetActiveWebContents(),
+        anchor, browser()->GetTabStripModel()->GetActiveWebContents(),
         {recording}, nullptr /* manager */);
     views::BubbleDialogDelegateView::CreateBubble(bubble);
     bubble->ShowForReason(LocationBarBubbleDelegateView::USER_GESTURE);

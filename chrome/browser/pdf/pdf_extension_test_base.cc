@@ -14,7 +14,7 @@
 #include "chrome/browser/pdf/pdf_extension_test_util.h"
 #include "chrome/browser/pdf/test_mime_handler_stream_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -32,6 +32,7 @@
 #include "pdf/pdf_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/point.h"
 
 using ::content::WebContents;
@@ -115,7 +116,7 @@ testing::AssertionResult PDFExtensionTestBase::LoadPdf(const GURL& url) {
 testing::AssertionResult PDFExtensionTestBase::LoadPdfInNewTab(
     const GURL& url) {
   EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), url, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
   return EnsureFullPagePDFHasLoadedWithValidFrameTree(
       GetActiveWebContents(), /*allow_multiple_frames=*/false);
@@ -203,7 +204,7 @@ void PDFExtensionTestBase::TestGetSelectedTextReply(
 }
 
 WebContents* PDFExtensionTestBase::GetActiveWebContents() {
-  return browser()->tab_strip_model()->GetActiveWebContents();
+  return browser()->GetTabStripModel()->GetActiveWebContents();
 }
 
 void PDFExtensionTestBase::ResetFeatureList() {
@@ -229,7 +230,7 @@ TestGuestViewManager* PDFExtensionTestBase::GetGuestViewManager() {
 TestGuestViewManager* PDFExtensionTestBase::GetGuestViewManagerForProfile(
     content::BrowserContext* profile) {
   if (!profile) {
-    profile = browser()->profile();
+    profile = browser()->GetProfile();
   }
   return std::get<std::unique_ptr<guest_view::TestGuestViewManagerFactory>>(
              factory_)

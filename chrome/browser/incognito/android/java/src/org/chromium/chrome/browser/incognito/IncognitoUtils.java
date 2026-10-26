@@ -11,13 +11,19 @@ import android.os.Build;
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
+import org.chromium.base.CommandLine;
 import org.chromium.base.DeviceInfo;
+import org.chromium.base.FeatureList;
+import org.chromium.base.FeatureOverrides;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.TriState;
+import org.chromium.base.TriStateUtils;
 import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.OtrProfileId;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileKey;
@@ -34,7 +40,7 @@ public class IncognitoUtils {
     // Test emulators run as ~8" or ~9" tablets. We need a lower threshold of 8.0" to allow tests to
     // execute incognito multi-window flows without being blocked by the 10.0" production limit.
     private static final double LARGE_DIAGONAL_DISPLAY_THRESHOLD_INCHES_FOR_TEST = 8.0;
-    private static @Nullable Boolean sIsEnabledForTesting;
+    private static @TriState int sIsEnabledForTesting;
     private static @Nullable Boolean sShouldOpenIncognitoAsWindowForTesting;
 
     private IncognitoUtils() {}
@@ -44,8 +50,8 @@ public class IncognitoUtils {
      * @return Whether incognito mode is enabled.
      */
     public static boolean isIncognitoModeEnabled(Profile profile) {
-        if (sIsEnabledForTesting != null) {
-            return sIsEnabledForTesting;
+        if (sIsEnabledForTesting != TriState.NOT_SET) {
+            return sIsEnabledForTesting == TriState.TRUE;
         }
         return IncognitoUtilsJni.get().getIncognitoModeEnabled(profile);
     }
@@ -56,6 +62,11 @@ public class IncognitoUtils {
      */
     public static boolean isIncognitoModeForced(Profile profile) {
         // TODO(b/509871328): Remove feature flag and combine with isIncognitoModeEnabled.
+        if (!FeatureList.isNativeInitialized()
+                && !FeatureOverrides.hasTestFeature(
+                        ChromeFeatureList.INCOGNITO_MODE_FORCED_ANDROID)) {
+            return false;
+        }
         if (!ChromeFeatureList.isEnabled(ChromeFeatureList.INCOGNITO_MODE_FORCED_ANDROID)) {
             return false;
         }
@@ -88,9 +99,9 @@ public class IncognitoUtils {
         return profile.getProfileKey();
     }
 
-    public static void setEnabledForTesting(Boolean enabled) {
-        sIsEnabledForTesting = enabled;
-        ResettersForTesting.register(() -> sIsEnabledForTesting = null);
+    public static void setEnabledForTesting(boolean enabled) {
+        sIsEnabledForTesting = TriStateUtils.from(enabled);
+        ResettersForTesting.register(() -> sIsEnabledForTesting = TriState.NOT_SET);
     }
 
     /**
@@ -103,6 +114,9 @@ public class IncognitoUtils {
         // Honor test override first. This is needed by Unit Test.
         if (sShouldOpenIncognitoAsWindowForTesting != null) {
             return sShouldOpenIncognitoAsWindowForTesting;
+        }
+        if (CommandLine.getInstance().hasSwitch(ChromeSwitches.OPEN_INCOGNITO_AS_WINDOW)) {
+            return true;
         }
         // Automotive is currently restricted to a single window.
         // The form factor check must happen before the display size check; because Automotive and
@@ -150,13 +164,6 @@ public class IncognitoUtils {
     public static void setShouldOpenIncognitoAsWindowForTesting(Boolean enabled) {
         sShouldOpenIncognitoAsWindowForTesting = enabled;
         ResettersForTesting.register(() -> sShouldOpenIncognitoAsWindowForTesting = null);
-    }
-
-    /**
-     * @return Whether incognito theme overlay is enabled for testing on current window.
-     */
-    public static boolean isIncognitoThemeOverlayEnabledForTesting() {
-        return ChromeFeatureList.sIncognitoThemeOverlayTesting.isEnabled();
     }
 
     @NativeMethods

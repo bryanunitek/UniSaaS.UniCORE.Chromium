@@ -5,6 +5,7 @@
 import("//build/config/sanitizers/sanitizers.gni")
 import("//third_party/flatbuffers/flatbuffer.gni")
 import("//third_party/protobuf/proto_library.gni")
+import("//third_party/tflite/features.gni")
 
 config("tflite_support_config") {
   include_dirs = [
@@ -32,8 +33,13 @@ proto_library("tflite_support_proto") {
   ]
   cc_generator_options = "lite=true:"
 
-  import_dirs = [ "//third_party/tflite/src" ]
-  deps = [ "//third_party/tflite:tflite_proto" ]
+  if (use_litert_tflite) {
+    import_dirs = [ "//third_party/litert/src" ]
+    deps = [ "//third_party/litert:tflite_proto" ]
+  } else {
+    import_dirs = [ "//third_party/tflite/src" ]
+    deps = [ "//third_party/tflite:tflite_proto" ]
+  }
 }
 
 config("tflite_support_flags") {
@@ -143,21 +149,21 @@ static_library("tflite_support") {
 
   deps = [
     ":metadata_schema",
-    ":tflite_support_proto",
     "//base",
     "//third_party/flatbuffers",
     "//third_party/libyuv",
     "//third_party/libzip",
     "//third_party/tensorflow-text",
     "//third_party/tflite",
-    "//third_party/tflite:tflite_proto",
-    "//third_party/tflite:tflite_public_headers",
     "//third_party/zlib:minizip",
   ]
 
   public_deps = [
+    ":tflite_support_proto",
     "//third_party/abseil-cpp:absl",
     "//third_party/re2",
+    "//third_party/tflite:tflite_proto",
+    "//third_party/tflite:tflite_public_headers",
   ]
 
   configs -= [

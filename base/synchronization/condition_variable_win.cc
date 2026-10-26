@@ -18,7 +18,7 @@ namespace base {
 
 ConditionVariable::ConditionVariable(Lock* user_lock)
     : srwlock_(user_lock->lock_.native_handle())
-#if DCHECK_IS_ON()
+#if EXPENSIVE_DCHECKS_ARE_ON()
       ,
       user_lock_(user_lock)
 #endif
@@ -33,7 +33,7 @@ void ConditionVariable::Wait(const Location& location) {
   TimedWait(TimeDelta::Max(), location);
 }
 
-void ConditionVariable::TimedWait(const TimeDelta& max_time,
+void ConditionVariable::TimedWait(TimeDelta max_time,
                                   const Location& location) {
   std::optional<internal::ScopedBlockingCallWithBaseSyncPrimitives>
       scoped_blocking_call;
@@ -44,7 +44,7 @@ void ConditionVariable::TimedWait(const TimeDelta& max_time,
   // Limit timeout to INFINITE.
   DWORD timeout = saturated_cast<DWORD>(max_time.InMilliseconds());
 
-#if DCHECK_IS_ON()
+#if EXPENSIVE_DCHECKS_ARE_ON()
   user_lock_->CheckHeldAndUnmark();
 #endif
 
@@ -59,7 +59,7 @@ void ConditionVariable::TimedWait(const TimeDelta& max_time,
     DCHECK_EQ(static_cast<DWORD>(ERROR_TIMEOUT), GetLastError());
   }
 
-#if DCHECK_IS_ON()
+#if EXPENSIVE_DCHECKS_ARE_ON()
   user_lock_->CheckUnheldAndMark();
 #endif
 }

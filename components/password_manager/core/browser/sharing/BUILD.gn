@@ -47,7 +47,6 @@ source_set("sharing") {
     "//services/network/public/cpp",
     "//services/network/public/mojom",
   ]
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
 static_library("test_support") {
@@ -90,5 +89,6 @@ source_set("unit_tests") {
     "//components/sync/protocol",
     "//testing/gmock",
     "//testing/gtest",
+    "//url",
   ]
 }

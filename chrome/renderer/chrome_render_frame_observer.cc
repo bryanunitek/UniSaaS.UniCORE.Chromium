@@ -25,18 +25,20 @@
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/open_search_description_document_handler.mojom.h"
 #include "chrome/common/webui_url_constants.h"
+#include "chrome/renderer/actor/chrome_page_stability_monitor_delegate.h"
 #include "chrome/renderer/actor/journal.h"
-#include "chrome/renderer/actor/page_stability_monitor_delegate.h"
 #include "chrome/renderer/actor/tool_executor.h"
 #include "chrome/renderer/benchmarking_bindings.h"
 #include "chrome/renderer/chrome_content_settings_agent_delegate.h"
 #include "chrome/renderer/loadtimes_bindings.h"
 #include "chrome/renderer/media/media_feeds.h"
 #include "chrome/renderer/process_state.h"
+#include "components/actor/core/actor_features.h"
 #include "components/crash/core/common/crash_key.h"
 #include "components/guest_view/buildflags/buildflags.h"
 #include "components/guest_view/renderer/slim_web_view/slim_web_view_bindings.h"
@@ -58,6 +60,7 @@
 #include "content/public/renderer/render_frame_visitor.h"
 #include "content/public/renderer/render_thread.h"
 #include "content/public/renderer/window_features_converter.h"
+#include "extensions/buildflags/buildflags.h"
 #include "printing/buildflags/buildflags.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "skia/ext/image_operations.h"
@@ -76,20 +79,22 @@
 #include "third_party/blink/public/web/web_view.h"
 #include "third_party/libwebp/src/src/webp/decode.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/codec/webp_codec.h"
 #include "ui/gfx/geometry/size_f.h"
+#include "ui/webui/buildflags.h"
 #include "url/gurl.h"
+#include "url/url_constants.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/renderer/accessibility/read_anything/read_anything_app_controller.h"
-#include "chrome/renderer/searchbox/searchbox_extension.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-#include "components/safe_browsing/content/renderer/phishing_classifier/phishing_classifier_delegate.h"
-#include "components/safe_browsing/content/renderer/phishing_classifier/phishing_image_embedder_delegate.h"
+#include "components/safe_browsing/content/renderer/phishing_classifier/content_phishing_classifier_delegate.h"
+#include "components/safe_browsing/content/renderer/phishing_classifier/content_phishing_image_embedder_delegate.h"
 #endif
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
@@ -98,6 +103,10 @@
 
 #if BUILDFLAG(ENABLE_PLUGINS)
 #include "chrome/renderer/plugins/chrome_plugin_placeholder.h"
+#endif
+
+#if BUILDFLAG(ENABLE_WEBUI_NTP)
+#include "chrome/renderer/searchbox/searchbox_extension.h"
 #endif
 
 using blink::WebDocumentLoader;
@@ -189,6 +198,23 @@ void UpdateLoadedOriginCrashKeys() {
   }
 }
 
+bool ShouldForceTranslateAgentCreation(const GURL& url) {
+#if !BUILDFLAG(IS_ANDROID)
+  // The Reading Mode side panel is a Top Chrome WebUI, but it exceptionally
+  // requires a TranslateAgent to support PDF translation.
+  return url.SchemeIs("chrome-untrusted") &&
+         url.host() == chrome::kChromeUIUntrustedReadAnythingSidePanelHost;
+#else
+  return false;
+#endif
+}
+
+#if BUILDFLAG(ENABLE_PDF)
+bool IsLocalPage(const GURL& url) {
+  return url.SchemeIs(url::kFileScheme) || url.SchemeIs(url::kContentScheme);
+}
+#endif  // BUILDFLAG(ENABLE_PDF)
+
 }  // namespace
 
 ChromeRenderFrameObserver::ChromeRenderFrameObserver(
@@ -212,10 +238,15 @@ ChromeRenderFrameObserver::ChromeRenderFrameObserver(
   SetClientSidePhishingDetection();
 #endif
 
-  bool skip_translate = base::FeatureList::IsEnabled(features::kInitialWebUI) &&
-                        features::kInitialWebUIWithoutTranslate.Get() &&
-                        base::CommandLine::ForCurrentProcess()->HasSwitch(
-                            switches::kTopChromeWebUI);
+  bool skip_translate =
+      (base::FeatureList::IsEnabled(features::kInitialWebUI) &&
+       features::kInitialWebUIWithoutTranslate.Get() &&
+       base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kTopChromeWebUI)) ||
+      (base::FeatureList::IsEnabled(
+           features::kInitialWebUIWithoutTranslateForNtp) &&
+       base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kNtpProcess));
 
   if (!skip_translate) {
     translate_agent_ = new translate::TranslateAgent(
@@ -253,6 +284,16 @@ void ChromeRenderFrameObserver::ReadyToCommitNavigation(
   // event (including tab reload).
   if (render_frame()->IsMainFrame() && web_cache_impl_)
     web_cache_impl_->ExecutePendingClearCache();
+
+  // Dynamically instantiate TranslateAgent on-the-fly if this WebUI
+  // exceptionally requires it.
+  if (!translate_agent_ && render_frame()->IsMainFrame() && document_loader) {
+    GURL url = GURL(document_loader->GetUrl());
+    if (ShouldForceTranslateAgentCreation(url)) {
+      translate_agent_ = new translate::TranslateAgent(
+          render_frame(), ISOLATED_WORLD_ID_TRANSLATE);
+    }
+  }
 
   // Let translate_agent do any preparatory work before the new document loads.
   if (translate_agent_) {
@@ -348,11 +389,13 @@ void ChromeRenderFrameObserver::DidCommitProvisionalLoad(
 }
 
 void ChromeRenderFrameObserver::DidClearWindowObject() {
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(ENABLE_WEBUI_NTP)
   if (process_state::IsInstantProcess()) {
     SearchBoxExtension::Install(render_frame()->GetWebFrame());
   }
+#endif
 
+#if !BUILDFLAG(IS_ANDROID)
   // Install ReadAnythingAppController on render frames with the Read Anything
   // url, which is chrome-untrusted. ReadAnythingAppController installs v8
   // bindings in the chrome.readingMode namespace which are consumed by
@@ -688,7 +731,7 @@ void ChromeRenderFrameObserver::StartActorJournal(
 }
 
 void ChromeRenderFrameObserver::GetCrossDocumentScriptToolResult(
-    const base::UnguessableToken& execution_id,
+    const blink::ToolInvocationToken& execution_id,
     GetCrossDocumentScriptToolResultCallback callback) {
   render_frame()->GetWebFrame()->GetDocument().GetCrossDocumentScriptToolResult(
       execution_id,
@@ -706,17 +749,27 @@ void ChromeRenderFrameObserver::CreatePageStabilityMonitor(
   page_stability_monitor_ =
       std::make_unique<page_content_annotations::PageStabilityMonitor>(
           *render_frame(), supports_paint_stability,
-          std::make_unique<actor::PageStabilityMonitorDelegate>(
-              task_id, *actor_journal_));
+          std::make_unique<actor::ChromePageStabilityMonitorDelegate>(
+              task_id, *actor_journal_,
+              actor::PageStabilityMonitorDelegate::Thresholds{
+                  .timeout_delay = actor::kActorPageStabilityTimeout.Get(),
+                  .min_wait = actor::kActorPageStabilityMinWait.Get(),
+                  .initial_paint_timeout =
+                      actor::kActorPaintStabilityInitialPaintTimeout.Get(),
+                  .subsequent_paint_timeout =
+                      actor::kActorPaintStabilitySubsequentPaintTimeout.Get(),
+              }));
   page_stability_monitor_->Bind(std::move(monitor));
 }
 
 void ChromeRenderFrameObserver::SetClientSidePhishingDetection() {
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-  phishing_classifier_ = safe_browsing::PhishingClassifierDelegate::Create(
-      render_frame(), nullptr);
+  phishing_classifier_ =
+      safe_browsing::ContentPhishingClassifierDelegate::Create(render_frame(),
+                                                               nullptr);
   phishing_image_embedder_ =
-      safe_browsing::PhishingImageEmbedderDelegate::Create(render_frame());
+      safe_browsing::ContentPhishingImageEmbedderDelegate::Create(
+          render_frame());
 #endif
 }
 
@@ -724,7 +777,7 @@ void ChromeRenderFrameObserver::SetClientSidePhishingDetection() {
 void ChromeRenderFrameObserver::PdfPageCaptured(const std::u16string& contents,
                                                 const std::string& pdf_lang,
                                                 const GURL& page_url) {
-  if (translate_agent_) {
+  if (translate_agent_ && !IsLocalPage(page_url)) {
     translate_agent_->PdfPageCaptured(contents, pdf_lang, page_url);
   }
 }

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/offline_pages/background_loader_offliner.h"
 
+#include <array>
 #include <memory>
 #include <string>
 #include <utility>
@@ -22,7 +23,7 @@
 #include "chrome/browser/offline_pages/offliner_user_data.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_preferences_util.h"
-#include "chrome/browser/ssl/chrome_security_state_tab_helper.h"
+#include "chrome/browser/ssl/chrome_security_state_util.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/offline_pages/core/background/offliner_policy.h"
@@ -34,6 +35,7 @@
 #include "components/security_state/core/security_state.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/mhtml_extra_parts.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
@@ -69,17 +71,13 @@ BackgroundLoaderOffliner::BackgroundLoaderOffliner(
       network_bytes_(0LL),
       is_low_bar_met_(false),
       did_snapshot_on_last_retry_(false) {
-  DCHECK(offline_page_model_);
-  DCHECK(browser_context_);
+  CHECK(offline_page_model_, base::NotFatalUntil::M161);
+  CHECK(browser_context_, base::NotFatalUntil::M161);
   // When the offliner is created for test harness runs, the
   // |load_termination_listener_| will be set to nullptr, in order to prevent
   // crashing, adding a check here.
-  if (load_termination_listener_)
+  if (load_termination_listener_) {
     load_termination_listener_->set_offliner(this);
-
-  for (int i = 0; i < ResourceDataType::RESOURCE_DATA_TYPE_COUNT; ++i) {
-    UNSAFE_TODO(stats_[i]).requested = 0;
-    UNSAFE_TODO(stats_[i]).completed = 0;
   }
 }
 
@@ -91,8 +89,9 @@ BackgroundLoaderOffliner* BackgroundLoaderOffliner::FromWebContents(
   Offliner* offliner = OfflinerUserData::OfflinerFromWebContents(contents);
   // Today we only have one kind of offliner that uses OfflinerUserData.  If we
   // add other types, revisit this cast.
-  if (offliner)
+  if (offliner) {
     return static_cast<BackgroundLoaderOffliner*>(offliner);
+  }
   return nullptr;
 }
 
@@ -100,9 +99,9 @@ bool BackgroundLoaderOffliner::LoadAndSave(
     const SavePageRequest& request,
     CompletionCallback completion_callback,
     const ProgressCallback& progress_callback) {
-  DCHECK(completion_callback);
-  DCHECK(progress_callback);
-  DCHECK(offline_page_model_);
+  CHECK(completion_callback, base::NotFatalUntil::M161);
+  CHECK(progress_callback, base::NotFatalUntil::M161);
+  CHECK(offline_page_model_, base::NotFatalUntil::M161);
 
   if (pending_request_) {
     DVLOG(1) << "Already have pending request";
@@ -143,11 +142,14 @@ bool BackgroundLoaderOffliner::LoadAndSave(
 }
 
 bool BackgroundLoaderOffliner::Cancel(CancelCallback callback) {
+  // TODO(crbug.com/575156065): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(pending_request_);
   // We ignore the case where pending_request_ is not set, but given the checks
   // in RequestCoordinator this should not happen.
-  if (!pending_request_)
+  if (!pending_request_) {
     return false;
+  }
   completion_callback_.Reset();
 
   // TODO(chili): We are not able to cancel a pending
@@ -177,7 +179,8 @@ void BackgroundLoaderOffliner::TerminateLoadIfInProgress() {
 
 bool BackgroundLoaderOffliner::HandleTimeout(int64_t request_id) {
   if (pending_request_) {
-    DCHECK(request_id == pending_request_->request_id());
+    CHECK(request_id == pending_request_->request_id(),
+          base::NotFatalUntil::M161);
     if (is_low_bar_met_ && (pending_request_->started_attempt_count() + 1 >=
                                 policy_->GetMaxStartedTries() ||
                             pending_request_->completed_attempt_count() + 1 >=
@@ -275,8 +278,9 @@ void BackgroundLoaderOffliner::WebContentsDestroyed() {
 
 void BackgroundLoaderOffliner::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  if (!navigation_handle->IsInPrimaryMainFrame())
+  if (!navigation_handle->IsInPrimaryMainFrame()) {
     return;
+  }
   // If there was an error of any kind (certificate, client, DNS, etc),
   // Mark as error page. Resetting here causes RecordNavigationMetrics to crash.
   if (navigation_handle->IsErrorPage()) {
@@ -284,8 +288,9 @@ void BackgroundLoaderOffliner::DidFinishNavigation(
   } else {
     int status_code = 200;  // Default to OK.
     // No response header can imply intermediate navigation state.
-    if (navigation_handle->GetResponseHeaders())
+    if (navigation_handle->GetResponseHeaders()) {
       status_code = navigation_handle->GetResponseHeaders()->response_code();
+    }
     // 2XX and 3XX are ok because they indicate success or redirection.
     // We track 301 because it's MOVED_PERMANENTLY and usually accompanies an
     // error page with new address.
@@ -307,11 +312,12 @@ void BackgroundLoaderOffliner::ObserveResourceLoading(
     bool started) {
   // Add the signal to extra data, and use for tracking.
 
-  RequestStats& found_stats = UNSAFE_TODO(stats_[type]);
-  if (started)
+  RequestStats& found_stats = stats_[type];
+  if (started) {
     ++found_stats.requested;
-  else
+  } else {
     ++found_stats.completed;
+  }
 }
 
 void BackgroundLoaderOffliner::OnNetworkBytesChanged(int64_t bytes) {
@@ -380,10 +386,11 @@ void BackgroundLoaderOffliner::StartSnapshot() {
 
   // Pass in the original URL if it's different from last committed
   // when redirects occur.
-  if (!request.original_url().is_empty())
+  if (!request.original_url().is_empty()) {
     params.original_url = request.original_url();
-  else if (params.url != request.url())
+  } else if (params.url != request.url()) {
     params.original_url = request.url();
+  }
 
   offline_page_model_->SavePage(
       params, std::move(archiver), web_contents,
@@ -393,8 +400,9 @@ void BackgroundLoaderOffliner::StartSnapshot() {
 
 void BackgroundLoaderOffliner::OnPageSaved(SavePageResult save_result,
                                            int64_t offline_id) {
-  if (!pending_request_)
+  if (!pending_request_) {
     return;
+  }
 
   SavePageRequest request(*pending_request_.get());
   bool did_snapshot_on_last_retry = did_snapshot_on_last_retry_;
@@ -418,10 +426,11 @@ void BackgroundLoaderOffliner::OnPageSaved(SavePageResult save_result,
   if (save_result == SavePageResult::ALREADY_EXISTS) {
     save_status = RequestStatus::SAVED;
   } else if (save_result == SavePageResult::SUCCESS) {
-    if (did_snapshot_on_last_retry)
+    if (did_snapshot_on_last_retry) {
       save_status = RequestStatus::SAVED_ON_LAST_RETRY;
-    else
+    } else {
       save_status = RequestStatus::SAVED;
+    }
   } else {
     save_status = RequestStatus::SAVE_FAILED;
   }
@@ -457,10 +466,7 @@ void BackgroundLoaderOffliner::ResetState() {
   base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(
       FROM_HERE, std::move(loader_));
 
-  for (int i = 0; i < ResourceDataType::RESOURCE_DATA_TYPE_COUNT; ++i) {
-    UNSAFE_TODO(stats_[i]).requested = 0;
-    UNSAFE_TODO(stats_[i]).completed = 0;
-  }
+  stats_ = {};
 }
 
 void BackgroundLoaderOffliner::ResetLoader() {
@@ -505,8 +511,9 @@ Offliner::RequestStatus BackgroundLoaderOffliner::CanSavePageInBackground(
   std::unique_ptr<security_state::VisibleSecurityState> visible_security_state =
       GetVisibleSecurityState(web_contents);
   // Checks for HTTPS certificate errors (HTTP connections are not affected).
-  if (security_state::HasMajorCertificateError(*visible_security_state))
+  if (security_state::HasMajorCertificateError(*visible_security_state)) {
     return Offliner::RequestStatus::LOADED_PAGE_HAS_CERTIFICATE_ERROR;
+  }
 
   // Checks if the page is blocked by SafeBrowsing.
   if (visible_security_state->malicious_content_status !=
@@ -515,8 +522,9 @@ Offliner::RequestStatus BackgroundLoaderOffliner::CanSavePageInBackground(
   }
 
   // Don't save Chrome error or interstitial pages.
-  if (GetPageType(web_contents) != content::PageType::PAGE_TYPE_NORMAL)
+  if (GetPageType(web_contents) != content::PageType::PAGE_TYPE_NORMAL) {
     return Offliner::RequestStatus::LOADED_PAGE_IS_CHROME_INTERNAL;
+  }
 
   return Offliner::RequestStatus::UNKNOWN;
 }
@@ -524,13 +532,7 @@ Offliner::RequestStatus BackgroundLoaderOffliner::CanSavePageInBackground(
 std::unique_ptr<security_state::VisibleSecurityState>
 BackgroundLoaderOffliner::GetVisibleSecurityState(
     content::WebContents* web_contents) {
-  // Note: this tab helper needs to be created here as in the background it is
-  // not created by default.
-  ChromeSecurityStateTabHelper::CreateForWebContents(web_contents);
-  SecurityStateTabHelper* helper =
-      SecurityStateTabHelper::FromWebContents(web_contents);
-  DCHECK(helper);
-  return helper->GetVisibleSecurityState();
+  return chrome_security_state::GetVisibleSecurityState(web_contents);
 }
 
 content::PageType BackgroundLoaderOffliner::GetPageType(

@@ -9,6 +9,8 @@
 #include "components/autofill/core/browser/payments/client_behavior_constants.h"
 #include "components/autofill/core/browser/payments/payments_request_details.h"
 #include "components/autofill/core/browser/payments/payments_requests/get_details_for_create_card_request_test_api.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request_test_api.h"
+#include "components/version_info/version_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace autofill::payments {
@@ -40,11 +42,18 @@ TEST(GetDetailsForCreateCardRequestTest,
                         PaymentsRequest::BuildCustomerContextDictionary(
                             kBillingCustomerNumber))
                    .Set("language_code", "en"))
-          .Set("chrome_user_context",
-               base::DictValue().Set(
-                   "client_behavior_signals",
-                   base::ListValue().Append(static_cast<int>(
-                       ClientBehaviorConstants::kOfferingToSaveCvc))))
+          .Set(
+              "chrome_user_context",
+              base::DictValue()
+                  .Set("client_behavior_signals",
+                       base::ListValue().Append(static_cast<int>(
+                           ClientBehaviorConstants::kOfferingToSaveCvc)))
+                  .Set("full_sync_enabled", false)
+                  .Set("chrome_major_version",
+                       version_info::GetMajorVersionNumberAsInt())
+                  .Set("client_type",
+                       static_cast<int>(test_api(request.get())
+                                            .GetChromeUserContextClientType())))
           .Set("card_info",
                base::DictValue()
                    .Set("unique_country_code", "US")

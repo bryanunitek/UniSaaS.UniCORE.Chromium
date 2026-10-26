@@ -4,27 +4,23 @@
 
 #include "components/optimization_guide/core/feature_registry/enterprise_policy_registry.h"
 
-#include <string.h>
+#include <string_view>
 
-#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
-#include "base/strings/string_util.h"
-#include "components/optimization_guide/core/model_execution/feature_keys.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "enterprise_policy_registry.h"
 
 namespace optimization_guide {
 
-EnterprisePolicyPref::EnterprisePolicyPref(const char* name) : name_(name) {}
+EnterprisePolicyPref::EnterprisePolicyPref(std::string_view name)
+    : name_(name) {}
 
-model_execution::prefs::ModelExecutionEnterprisePolicyValue
-EnterprisePolicyPref::GetValue(const PrefService* pref_service) const {
+EnterprisePolicyValue EnterprisePolicyPref::GetValue(
+    const PrefService* pref_service) const {
   CHECK(pref_service);
-  return static_cast<
-      model_execution::prefs::ModelExecutionEnterprisePolicyValue>(
-      pref_service->GetInteger(name_));
+  return static_cast<EnterprisePolicyValue>(pref_service->GetInteger(name_));
 }
 
 EnterprisePolicyRegistry::EnterprisePolicyRegistry() = default;
@@ -40,14 +36,14 @@ EnterprisePolicyRegistry::CreateForTesting() {
   return base::WrapUnique(new EnterprisePolicyRegistry());
 }
 
-EnterprisePolicyPref EnterprisePolicyRegistry::Register(const char* name) {
+EnterprisePolicyPref EnterprisePolicyRegistry::Register(std::string_view name) {
   // We shouldn't be registering new policies after the prefs have been
   // registered in the pref service.
   CHECK(!immutable_);
   for (const EnterprisePolicyPref& policy : enterprise_policies_) {
     // Make sure there isn't already an enterprise policy registered with that
     // name.
-    UNSAFE_TODO(CHECK(strcmp(policy.name(), name) != 0));
+    CHECK(policy.name() != name);
   }
   enterprise_policies_.emplace_back(name);
   return EnterprisePolicyPref(name);
@@ -57,9 +53,7 @@ void EnterprisePolicyRegistry::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
   for (const EnterprisePolicyPref& policy : enterprise_policies_) {
     registry->RegisterIntegerPref(
-        policy.name(),
-        static_cast<int>(model_execution::prefs::
-                             ModelExecutionEnterprisePolicyValue::kAllow),
+        policy.name(), static_cast<int>(EnterprisePolicyValue::kAllow),
         PrefRegistry::LOSSY_PREF);
   }
   // From that point on, it's too late to modify the registry as the prefs

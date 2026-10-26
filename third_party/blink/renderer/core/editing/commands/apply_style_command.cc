@@ -74,11 +74,11 @@ static bool HasNoAttributeOrOnlyStyleAttribute(
   if (attributes.IsEmpty())
     return true;
 
-  unsigned matched_attributes = 0;
+  wtf_size_t matched_attributes = 0;
   if (element->hasAttribute(html_names::kStyleAttr) &&
       (should_style_attribute_be_empty == kAllowNonEmptyStyleAttribute ||
        !element->InlineStyle() || element->InlineStyle()->IsEmpty()))
-    matched_attributes++;
+    ++matched_attributes;
 
   DCHECK_LE(matched_attributes, attributes.size());
   return matched_attributes == attributes.size();
@@ -131,11 +131,7 @@ ApplyStyleCommand::ApplyStyleCommand(Document& document,
       input_type_(input_type),
       property_level_(property_level),
       start_(MostForwardCaretPosition(EndingSelection().Start())),
-      end_(MostBackwardCaretPosition(EndingSelection().End())),
-      use_ending_selection_(true),
-      styled_inline_element_(nullptr),
-      remove_only_(false),
-      is_inline_element_to_remove_function_(nullptr) {}
+      end_(MostBackwardCaretPosition(EndingSelection().End())) {}
 
 ApplyStyleCommand::ApplyStyleCommand(Document& document,
                                      const EditingStyle* style,
@@ -143,26 +139,17 @@ ApplyStyleCommand::ApplyStyleCommand(Document& document,
                                      const Position& end)
     : CompositeEditCommand(document),
       style_(style->Copy()),
-      input_type_(InputEvent::InputType::kNone),
-      property_level_(kPropertyDefault),
       start_(start),
       end_(end),
-      use_ending_selection_(false),
-      styled_inline_element_(nullptr),
-      remove_only_(false),
-      is_inline_element_to_remove_function_(nullptr) {}
+      use_ending_selection_(false) {}
 
 ApplyStyleCommand::ApplyStyleCommand(Element* element, bool remove_only)
     : CompositeEditCommand(element->GetDocument()),
       style_(MakeGarbageCollected<EditingStyle>()),
-      input_type_(InputEvent::InputType::kNone),
-      property_level_(kPropertyDefault),
       start_(MostForwardCaretPosition(EndingSelection().Start())),
       end_(MostBackwardCaretPosition(EndingSelection().End())),
-      use_ending_selection_(true),
       styled_inline_element_(element),
-      remove_only_(remove_only),
-      is_inline_element_to_remove_function_(nullptr) {}
+      remove_only_(remove_only) {}
 
 ApplyStyleCommand::ApplyStyleCommand(
     Document& document,
@@ -172,11 +159,8 @@ ApplyStyleCommand::ApplyStyleCommand(
     : CompositeEditCommand(document),
       style_(style->Copy()),
       input_type_(input_type),
-      property_level_(kPropertyDefault),
       start_(MostForwardCaretPosition(EndingSelection().Start())),
       end_(MostBackwardCaretPosition(EndingSelection().End())),
-      use_ending_selection_(true),
-      styled_inline_element_(nullptr),
       remove_only_(true),
       is_inline_element_to_remove_function_(
           is_inline_element_to_remove_function) {}
@@ -291,13 +275,11 @@ void ApplyStyleCommand::ApplyBlockStyle(EditingStyle* style,
       Position::FirstPositionInNode(scope),
       visible_end.DeepEquivalent().ParentAnchoredEquivalent());
 
-  const TextIteratorBehavior behavior =
-      RuntimeEnabledFeatures::EnterInOpenShadowRootsEnabled()
-          ? TextIteratorBehavior::
-                AllVisiblePositionsIncludingShadowRootRangeLengthBehavior()
-          : TextIteratorBehavior::AllVisiblePositionsRangeLengthBehavior();
-  const int start_index = TextIterator::RangeLength(start_range, behavior);
-  const int end_index = TextIterator::RangeLength(end_range, behavior);
+  const TextIteratorBehavior behavior = TextIteratorBehavior::
+      AllVisiblePositionsIncludingShadowRootRangeLengthBehavior();
+  const wtf_size_t start_index =
+      TextIterator::RangeLength(start_range, behavior);
+  const wtf_size_t end_index = TextIterator::RangeLength(end_range, behavior);
 
   VisiblePosition paragraph_start(StartOfParagraph(visible_start));
   RelocatablePosition* relocatable_beyond_end =
@@ -476,11 +458,8 @@ void ApplyStyleCommand::ApplyRelativeFontStyleChange(
       auto* span = MakeGarbageCollected<HTMLSpanElement>(GetDocument());
       // Prevent merging the span with adjacent siblings, to ensure the DOM
       // structure and traversal order do not change.
-      SurroundNodeRangeWithElement(
-          node, node, span, editing_state,
-          RuntimeEnabledFeatures::AvoidMergingStyledSpanWithSiblingsEnabled()
-              ? kDoNotMergeSiblings
-              : kMergeSiblings);
+      SurroundNodeRangeWithElement(node, node, span, editing_state,
+                                   kDoNotMergeSiblings);
       if (editing_state->IsAborted())
         return;
       element = span;
@@ -1502,7 +1481,7 @@ void ApplyStyleCommand::RemoveInlineStyle(EditingStyle* style,
   // removing the style from this node. e.g. if pushDownStart was at
   // Position("hello", 5) in <b>hello<div>world</div></b>, we want
   // Position("world", 0) instead.
-  const unsigned push_down_start_offset =
+  const wtf_size_t push_down_start_offset =
       push_down_start.ComputeOffsetInContainerNode();
   auto* push_down_start_container =
       DynamicTo<Text>(push_down_start.ComputeContainerNode());
@@ -1606,21 +1585,17 @@ void ApplyStyleCommand::RemoveInlineStyle(EditingStyle* style,
       }
 
       if (style_to_push_down) {
-        EditingStyle* filtered_style_to_push_down = style_to_push_down;
-
-        if (RuntimeEnabledFeatures::
-                RemoveFormatFilterBackgroundColorEnabled()) {
-          // Filter out styles that should be removed - don't push down styles
-          // that conflict with the styles we're trying to remove
-          filtered_style_to_push_down = style_to_push_down->Copy();
-          if (style && style->Style() && filtered_style_to_push_down->Style()) {
-            // Remove any properties from style_to_push_down that are present in
-            // the style being removed
-            for (const CSSPropertyValue& property :
-                 style->Style()->Properties()) {
-              filtered_style_to_push_down->Style()->RemoveProperty(
-                  property.PropertyID());
-            }
+        EditingStyle* const filtered_style_to_push_down =
+            style_to_push_down->Copy();
+        // Filter out styles that should be removed - don't push down styles
+        // that conflict with the styles we're trying to remove
+        if (style && style->Style() && filtered_style_to_push_down->Style()) {
+          // Remove any properties from style_to_push_down that are present in
+          // the style being removed
+          for (const CSSPropertyValue& property :
+               style->Style()->Properties()) {
+            filtered_style_to_push_down->Style()->RemoveProperty(
+                property.PropertyID());
           }
         }
 
@@ -1754,7 +1729,7 @@ bool ApplyStyleCommand::IsValidCaretPositionInTextNode(
   Node* node = position.ComputeContainerNode();
   if (!position.IsOffsetInAnchor() || !node->IsTextNode())
     return false;
-  int offset_in_text = position.OffsetInContainerNode();
+  wtf_size_t offset_in_text = position.OffsetInContainerNode();
   return offset_in_text > CaretMinOffset(node) &&
          offset_in_text < CaretMaxOffset(node);
 }

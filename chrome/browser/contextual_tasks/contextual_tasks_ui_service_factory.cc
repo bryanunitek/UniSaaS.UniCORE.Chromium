@@ -61,7 +61,7 @@ ContextualTasksUiServiceFactory::ContextualTasksUiServiceFactory()
 std::unique_ptr<KeyedService>
 ContextualTasksUiServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  if (!base::FeatureList::IsEnabled(kContextualTasks)) {
+  if (!contextual_tasks::IsContextualTasksUIEnabled()) {
     return nullptr;
   }
 
@@ -97,7 +97,7 @@ void ContextualTasksUiServiceFactory::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterIntegerPref(kContextualTasksOnboardingTooltipDismissedCount,
                                 0);
-  registry->RegisterIntegerPref(kContextualTasksLensSearchTooltipDismissedCount,
+  registry->RegisterIntegerPref(kContextualTasksAskGTooltipDismissedCount,
                                 0);
 
   registry->RegisterBooleanPref(kContextualTasksShareOpenTabsEveryThread,

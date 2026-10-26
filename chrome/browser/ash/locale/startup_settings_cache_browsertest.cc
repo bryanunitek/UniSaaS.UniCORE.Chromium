@@ -5,7 +5,6 @@
 #include "chrome/browser/ash/locale/startup_settings_cache.h"
 
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/language/core/browser/pref_names.h"
@@ -25,7 +24,7 @@ using StartupSettingsCacheTest = InProcessBrowserTest;
 IN_PROC_BROWSER_TEST_F(StartupSettingsCacheTest, PRE_RendererLocale) {
   // Simulate the user changing the browser's language setting. The setting
   // takes effect after restart.
-  browser()->profile()->GetPrefs()->SetString(
+  browser()->GetProfile()->GetPrefs()->SetString(
       language::prefs::kApplicationLocale, kSpanishLocale);
 }
 
@@ -45,7 +44,7 @@ IN_PROC_BROWSER_TEST_F(StartupSettingsCacheTest, RendererLocale) {
 
   // The localized button label in the renderer is in Spanish.
   WaitForAccessibilityTreeToContainNodeWithName(
-      browser()->tab_strip_model()->GetActiveWebContents(),
+      browser()->GetActiveTabInterface()->GetContents(),
       "Seleccionar archivo: Ning\u00FAn archivo seleccionado");
 }
 

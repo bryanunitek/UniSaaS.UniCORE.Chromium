@@ -23,7 +23,6 @@
 #include "content/public/browser/reload_type.h"
 #include "content/public/common/referrer.h"
 #include "ipc/constants.mojom-forward.h"
-#include "third_party/blink/public/common/navigation/impression.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/frame/triggering_event_info.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
@@ -66,6 +65,29 @@ struct CONTENT_EXPORT OpenURLParams {
   // (URL, referrer, initiator, etc.) with OpenURLParams equivalents and 2) fill
   // in reasonable defaults for other properties (like WindowOpenDisposition).
   static OpenURLParams FromNavigationHandle(NavigationHandle* handle);
+
+  // Creates OpenURLParams for a browser-initiated navigation.
+  static OpenURLParams CreateBrowserInitiated(
+      const GURL& url,
+      WindowOpenDisposition disposition,
+      ui::PageTransition transition,
+      const Referrer& referrer = Referrer(),
+      bool started_from_context_menu = false,
+      FrameTreeNodeId frame_tree_node_id = FrameTreeNodeId());
+
+  // Creates OpenURLParams for a renderer-initiated navigation.
+  // `initiator_navigation_state` should be non-null.
+  // TODO(crbug.com/510258191): Enforce that `initiator_navigation_state` be
+  // non-null, once we enforce that all renderer-initiated NavigationHandles
+  // have a non-null InitiatorNavigationState.
+  static OpenURLParams CreateRendererInitiated(
+      const GURL& url,
+      WindowOpenDisposition disposition,
+      ui::PageTransition transition,
+      const Referrer& referrer,
+      scoped_refptr<InitiatorNavigationState> initiator_navigation_state,
+      bool started_from_context_menu = false,
+      FrameTreeNodeId frame_tree_node_id = FrameTreeNodeId());
 
 #if DCHECK_IS_ON()
   // Returns true if the contents of this struct are considered valid and
@@ -171,11 +193,6 @@ struct CONTENT_EXPORT OpenURLParams {
 
   // Indicates if this navigation is a reload.
   ReloadType reload_type = ReloadType::NONE;
-
-  // Optional impression associated with this navigation. Only set on
-  // navigations that originate from links with impression attributes. Used for
-  // conversion measurement.
-  std::optional<blink::Impression> impression;
 
   // Indicates that this navigation is for PDF content in a renderer.
   bool is_pdf = false;

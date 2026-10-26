@@ -32,7 +32,7 @@ import {isChild} from '../common/load_time_booleans.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {routes} from '../router.js';
 
 import type {Account, AccountManagerBrowserProxy} from './account_manager_browser_proxy.js';
@@ -96,7 +96,7 @@ export class AdditionalAccountsSettingsCardElement extends
     };
   }
 
-  accounts: Account[];
+  declare accounts: Account[];
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -104,11 +104,11 @@ export class AdditionalAccountsSettingsCardElement extends
     Setting.kRemoveAccount,
   ]);
 
-  private actionMenuAccount_: Account|null;
+  declare private actionMenuAccount_: Account|null;
   private browserProxy_: AccountManagerBrowserProxy;
-  private isChildUser_: boolean;
-  private isDeviceAccountManaged_: boolean;
-  private isSecondaryGoogleAccountSigninAllowed_: boolean;
+  declare private isChildUser_: boolean;
+  declare private isDeviceAccountManaged_: boolean;
+  declare private isSecondaryGoogleAccountSigninAllowed_: boolean;
 
   constructor() {
     super();

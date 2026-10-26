@@ -92,7 +92,6 @@ RequestResourceType RequestResourceTypeFromResourceRequest(
     case network::mojom::RequestDestination::kWorker:
     case network::mojom::RequestDestination::kSharedWorker:
     case network::mojom::RequestDestination::kServiceWorker:
-    case network::mojom::RequestDestination::kSharedStorageWorklet:
       return RequestResourceType::kScript;
     case network::mojom::RequestDestination::kReport:
       return RequestResourceType::kCspReport;
@@ -108,7 +107,7 @@ RequestResourceType RequestResourceTypeFromResourceRequest(
     case network::mojom::RequestDestination::kPaintWorklet:
     case network::mojom::RequestDestination::kWebIdentity:
     case network::mojom::RequestDestination::kEmailVerification:
-    case network::mojom::RequestDestination::kDictionary:
+    case network::mojom::RequestDestination::kCompressionDictionary:
     case network::mojom::RequestDestination::kSpeculationRules:
       return RequestResourceType::kOther;
   }

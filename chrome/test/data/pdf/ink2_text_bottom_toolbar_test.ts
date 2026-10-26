@@ -58,7 +58,7 @@ chrome.test.runTests([
     chrome.test.assertEq(2, toolbarDropdowns.length);
     const alignmentIcon = toolbarDropdowns[0]!.querySelector('cr-icon');
     chrome.test.assertTrue(!!alignmentIcon);
-    chrome.test.assertEq('pdf-ink:text-align-left', alignmentIcon.icon);
+    chrome.test.assertEq('pdf-ink:format-align-left', alignmentIcon.icon);
     assertColorChipFillColor(toolbar, hexToColor(TEXT_COLORS[0]!.color));
 
     chrome.test.succeed();
@@ -71,23 +71,23 @@ chrome.test.runTests([
         viewer.shadowRoot.querySelector('viewer-text-bottom-toolbar');
     chrome.test.assertTrue(!!toolbar);
 
-    // Font is the first select.
-    const fontSelect = toolbar.shadowRoot.querySelector('select');
-    chrome.test.assertTrue(!!fontSelect);
+    const typefaceSelect =
+        toolbar.shadowRoot.querySelector<HTMLSelectElement>('#typefaceSelect');
+    chrome.test.assertTrue(!!typefaceSelect);
     const initialTypeface =
         Ink2Manager.getInstance().getCurrentTextAttributes().typeface;
-    chrome.test.assertEq(initialTypeface, fontSelect.value);
+    chrome.test.assertEq(initialTypeface, typefaceSelect.value);
 
     const whenChanged = eventToPromise<CustomEvent<TextAttributes>>(
         'attributes-changed', Ink2Manager.getInstance());
     const newValue = TextTypeface.SERIF;
-    fontSelect.focus();
-    fontSelect.value = newValue;
-    fontSelect.dispatchEvent(new CustomEvent('change'));
+    typefaceSelect.focus();
+    typefaceSelect.value = newValue;
+    typefaceSelect.dispatchEvent(new CustomEvent('change'));
     const changedEvent = await whenChanged;
     chrome.test.assertEq(newValue, changedEvent.detail.typeface);
     await microtasksFinished();
-    chrome.test.assertEq(newValue, fontSelect.value);
+    chrome.test.assertEq(newValue, typefaceSelect.value);
 
     chrome.test.succeed();
   },
@@ -99,10 +99,9 @@ chrome.test.runTests([
         viewer.shadowRoot.querySelector('viewer-text-bottom-toolbar');
     chrome.test.assertTrue(!!toolbar);
 
-    // Size is the second select.
-    const selects = toolbar.shadowRoot.querySelectorAll('select');
-    chrome.test.assertEq(2, selects.length);
-    const sizeSelect = selects[1]!;
+    const sizeSelect =
+        toolbar.shadowRoot.querySelector<HTMLSelectElement>('#sizeSelect');
+    chrome.test.assertTrue(!!sizeSelect);
     const initialSize =
         Ink2Manager.getInstance().getCurrentTextAttributes().size;
     chrome.test.assertEq(initialSize.toString(), sizeSelect.value);
@@ -144,7 +143,7 @@ chrome.test.runTests([
     chrome.test.assertTrue(buttons[1]!.checked);
     const alignmentIcon = toolbar.$.alignment.querySelector('cr-icon');
     chrome.test.assertTrue(!!alignmentIcon);
-    chrome.test.assertEq('pdf-ink:text-align-center', alignmentIcon.icon);
+    chrome.test.assertEq('pdf-ink:format-align-center', alignmentIcon.icon);
 
     chrome.test.succeed();
   },

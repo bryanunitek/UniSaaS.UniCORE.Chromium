@@ -4,14 +4,23 @@
 
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
 
-#include "chrome/browser/new_tab_page/ntp_pref_names.h"
+#include "base/functional/bind.h"
+#include "chrome/browser/new_tab_page/prefs/ntp_pref_names.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/ui/webui/cr_components/most_visited/most_visited_pref_observer.h"
+#include "chrome/test/base/scoped_browser_locale.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/ntp_tiles/tile_type.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "components/variations/scoped_variations_ids_provider.h"
 #include "content/public/test/browser_task_environment.h"
+#include "net/base/url_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/native_theme/mock_os_settings_provider.h"
+#include "ui/native_theme/native_theme.h"
+#include "url/gurl.h"
 
 class NewTabPageUITest : public testing::Test {
  public:
@@ -29,7 +38,7 @@ TEST_F(NewTabPageUITest,
   PrefService* prefs = profile().GetPrefs();
   prefs->SetBoolean(ntp_prefs::kNtpUseMostVisitedTiles, true);
 
-  NewTabPageUI::MigrateDeprecatedUseMostVisitedTilesPref(prefs);
+  MostVisitedPrefObserver::MigrateDeprecatedUseMostVisitedTilesPref(prefs);
 
   EXPECT_EQ(static_cast<int>(ntp_tiles::TileType::kTopSites),
             prefs->GetInteger(ntp_prefs::kNtpShortcutsType));
@@ -43,7 +52,7 @@ TEST_F(NewTabPageUITest,
   PrefService* prefs = profile().GetPrefs();
   prefs->SetBoolean(ntp_prefs::kNtpUseMostVisitedTiles, false);
 
-  NewTabPageUI::MigrateDeprecatedUseMostVisitedTilesPref(prefs);
+  MostVisitedPrefObserver::MigrateDeprecatedUseMostVisitedTilesPref(prefs);
 
   EXPECT_EQ(static_cast<int>(ntp_tiles::TileType::kCustomLinks),
             prefs->GetInteger(ntp_prefs::kNtpShortcutsType));
@@ -60,7 +69,7 @@ TEST_F(NewTabPageUITest,
             prefs->GetUserPrefValue(ntp_prefs::kNtpUseMostVisitedTiles));
 
   // The function should not crash and should not modify the new pref.
-  NewTabPageUI::MigrateDeprecatedUseMostVisitedTilesPref(prefs);
+  MostVisitedPrefObserver::MigrateDeprecatedUseMostVisitedTilesPref(prefs);
 
   // Check that the old and new pref are not set.
   EXPECT_EQ(nullptr, prefs->GetUserPrefValue(ntp_prefs::kNtpShortcutsType));
@@ -81,7 +90,7 @@ TEST_F(
   prefs->SetInteger(ntp_prefs::kNtpShortcutsType, initial_value);
 
   // The function should not crash and should not modify the new pref.
-  NewTabPageUI::MigrateDeprecatedUseMostVisitedTilesPref(prefs);
+  MostVisitedPrefObserver::MigrateDeprecatedUseMostVisitedTilesPref(prefs);
 
   // Check that the new pref is set properly and the old pref is not set.
   EXPECT_EQ(initial_value, prefs->GetInteger(ntp_prefs::kNtpShortcutsType));
@@ -94,7 +103,7 @@ TEST_F(NewTabPageUITest, MigrateDeprecatedShortcutsTypePref_TopSites) {
   prefs->SetInteger(ntp_prefs::kNtpShortcutsType,
                     static_cast<int>(ntp_tiles::TileType::kTopSites));
 
-  NewTabPageUI::MigrateDeprecatedShortcutsTypePref(prefs);
+  MostVisitedPrefObserver::MigrateDeprecatedShortcutsTypePref(prefs);
 
   EXPECT_FALSE(prefs->GetBoolean(ntp_prefs::kNtpCustomLinksVisible));
   EXPECT_FALSE(prefs->GetBoolean(ntp_prefs::kNtpEnterpriseShortcutsVisible));
@@ -107,7 +116,7 @@ TEST_F(NewTabPageUITest, MigrateDeprecatedShortcutsTypePref_CustomLinks) {
   prefs->SetInteger(ntp_prefs::kNtpShortcutsType,
                     static_cast<int>(ntp_tiles::TileType::kCustomLinks));
 
-  NewTabPageUI::MigrateDeprecatedShortcutsTypePref(prefs);
+  MostVisitedPrefObserver::MigrateDeprecatedShortcutsTypePref(prefs);
 
   EXPECT_TRUE(prefs->GetBoolean(ntp_prefs::kNtpCustomLinksVisible));
   EXPECT_FALSE(prefs->GetBoolean(ntp_prefs::kNtpEnterpriseShortcutsVisible));
@@ -121,7 +130,7 @@ TEST_F(NewTabPageUITest, MigrateDeprecatedShortcutsTypePref_Enterprise) {
       ntp_prefs::kNtpShortcutsType,
       static_cast<int>(ntp_tiles::TileType::kEnterpriseShortcuts));
 
-  NewTabPageUI::MigrateDeprecatedShortcutsTypePref(prefs);
+  MostVisitedPrefObserver::MigrateDeprecatedShortcutsTypePref(prefs);
 
   EXPECT_FALSE(prefs->GetBoolean(ntp_prefs::kNtpCustomLinksVisible));
   EXPECT_TRUE(prefs->GetBoolean(ntp_prefs::kNtpEnterpriseShortcutsVisible));
@@ -135,7 +144,7 @@ TEST_F(NewTabPageUITest, MigrateDeprecatedShortcutsTypePref_NotSet) {
   ASSERT_EQ(nullptr, prefs->GetUserPrefValue(ntp_prefs::kNtpShortcutsType));
 
   // The function should not crash and should not modify the new pref.
-  NewTabPageUI::MigrateDeprecatedShortcutsTypePref(prefs);
+  MostVisitedPrefObserver::MigrateDeprecatedShortcutsTypePref(prefs);
 
   // Check that the new prefs are not set by the migration.
   EXPECT_EQ(nullptr,
@@ -155,7 +164,7 @@ TEST_F(NewTabPageUITest,
   prefs->SetBoolean(ntp_prefs::kNtpEnterpriseShortcutsVisible, false);
 
   // The function should not crash and should not modify the new pref.
-  NewTabPageUI::MigrateDeprecatedShortcutsTypePref(prefs);
+  MostVisitedPrefObserver::MigrateDeprecatedShortcutsTypePref(prefs);
 
   // Check that the new pref is set properly and the old pref is not set.
   ASSERT_EQ(nullptr, prefs->GetUserPrefValue(ntp_prefs::kNtpShortcutsType));
@@ -191,4 +200,40 @@ TEST_F(NewTabPageUITest, ShortcutsAutoRemovalDisabledPref_Set_True) {
   // Set the pref to true.
   prefs->SetBoolean(ntp_prefs::kNtpShortcutsAutoRemovalDisabled, true);
   EXPECT_TRUE(prefs->GetBoolean(ntp_prefs::kNtpShortcutsAutoRemovalDisabled));
+}
+
+TEST_F(NewTabPageUITest,
+       GetLoadTimeData_ExpandedLhsUrlIncludesColorSchemeAndLocale) {
+  variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider(
+      variations::VariationsIdsProvider::Mode::kUseSignedInState);
+  TemplateURLServiceFactory::GetInstance()->SetTestingFactoryAndUse(
+      &profile(),
+      base::BindRepeating(&TemplateURLServiceFactory::BuildInstanceFor));
+  ScopedBrowserLocale scoped_locale("he");
+  ui::MockOsSettingsProvider os_settings_provider;
+
+  for (const auto& [color_scheme, expected_cs] :
+       {std::pair{ui::NativeTheme::PreferredColorScheme::kLight, "0"},
+        std::pair{ui::NativeTheme::PreferredColorScheme::kDark, "1"}}) {
+    os_settings_provider.SetPreferredColorScheme(color_scheme);
+    base::DictValue load_time_data = NewTabPageUI::GetLoadTimeData(
+        &profile(), /*session_allows_drag_and_drop=*/false);
+
+    const std::string* url_str = load_time_data.FindString("expandedLhsUrl");
+    ASSERT_NE(nullptr, url_str);
+    GURL url(*url_str);
+    ASSERT_TRUE(url.is_valid());
+
+    std::string cs_value;
+    EXPECT_TRUE(net::GetValueForKeyInQuery(url, "cs", &cs_value));
+    EXPECT_EQ(expected_cs, cs_value);
+
+    std::string csui_value;
+    EXPECT_TRUE(net::GetValueForKeyInQuery(url, "csui", &csui_value));
+    EXPECT_EQ("3", csui_value);
+
+    std::string hl_value;
+    EXPECT_TRUE(net::GetValueForKeyInQuery(url, "hl", &hl_value));
+    EXPECT_EQ("he", hl_value);
+  }
 }

@@ -4,7 +4,7 @@
 
 package org.chromium.chrome.browser.password_manager;
 
-import android.app.Activity;
+import android.content.Context;
 import android.graphics.drawable.Drawable;
 
 import androidx.appcompat.content.res.AppCompatResources;
@@ -15,11 +15,9 @@ import org.jni_zero.JniType;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
 import org.chromium.chrome.browser.tab.TabObserver;
-import org.chromium.chrome.browser.tab.TabUtils;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManagerProvider;
@@ -42,8 +40,7 @@ public class AutoSigninSnackbarController implements SnackbarManager.SnackbarCon
      */
     @CalledByNative
     private static void showSnackbar(Tab tab, @JniType("std::u16string") String text) {
-        Activity activity = TabUtils.getActivity(tab);
-        if (activity == null) return;
+        Context context = tab.getContext();
         WindowAndroid windowAndroid = tab.getWindowAndroid();
         if (windowAndroid == null) return;
         SnackbarManager snackbarManager = SnackbarManagerProvider.from(windowAndroid);
@@ -56,8 +53,8 @@ public class AutoSigninSnackbarController implements SnackbarManager.SnackbarCon
                         snackbarController,
                         Snackbar.TYPE_NOTIFICATION,
                         Snackbar.UMA_AUTO_LOGIN);
-        int backgroundColor = SemanticColorUtils.getDefaultControlColorActive(activity);
-        Drawable icon = AppCompatResources.getDrawable(activity, R.drawable.logo_avatar_anonymous);
+        int backgroundColor = SemanticColorUtils.getDefaultControlColorActive(context);
+        Drawable icon = AppCompatResources.getDrawable(context, R.drawable.logo_avatar_anonymous);
         snackbar.setDefaultLines(false)
                 .setBackgroundColor(backgroundColor)
                 .setProfileImage(icon)
@@ -73,7 +70,7 @@ public class AutoSigninSnackbarController implements SnackbarManager.SnackbarCon
         mTab = tab;
         mSnackbarManager = snackbarManager;
         mTabObserver =
-                new EmptyTabObserver() {
+                new TabObserver() {
                     @Override
                     public void onHidden(Tab tab, @TabHidingType int type) {
                         AutoSigninSnackbarController.this.dismissAutoSigninSnackbar();

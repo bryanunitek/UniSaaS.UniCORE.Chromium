@@ -9,6 +9,8 @@ import './synced_device_card.js';
 import '/strings.m.js';
 
 import {browserProxyFactory} from 'chrome://resources/cr_components/history/foreign_sessions.mojom-webui.js';
+import type {ForeignSession, ForeignSessionTab} from 'chrome://resources/cr_components/history/foreign_sessions.mojom-webui.js';
+import {AccessPoint} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
 // <if expr="not is_chromeos">
 import type {AccountInfo} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
 // </if>
@@ -23,8 +25,8 @@ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {BrowserProxyImpl} from './browser_proxy.js';
+import type {HistoryIdentityState} from './browser_proxy.js';
 import {HistorySignInState, SYNCED_TABS_HISTOGRAM_NAME, SyncedTabsHistogram, SyncState} from './constants.js';
-import type {ForeignSession, ForeignSessionTab, HistoryIdentityState} from './externs.js';
 import type {HistorySyncedDeviceCardElement} from './synced_device_card.js';
 import {getCss} from './synced_device_manager.css.js';
 import {getHtml} from './synced_device_manager.html.js';
@@ -251,7 +253,8 @@ export class HistorySyncedDeviceManagerElement extends
 
   // <if expr="not is_chromeos">
   protected onTurnOnHistorySyncClick_() {
-    BrowserProxyImpl.getInstance().handler.turnOnHistorySync();
+    BrowserProxyImpl.getInstance().handler.turnOnHistorySync(
+        AccessPoint.kRecentTabs);
   }
 
   private handleAccountInfoChanged_(accountInfo: AccountInfo) {
@@ -473,7 +476,8 @@ export class HistorySyncedDeviceManagerElement extends
       return;
     }
 
-    BrowserProxyImpl.getInstance().recordSigninPendingOffered();
+    BrowserProxyImpl.getInstance().recordSigninPendingOffered(
+        AccessPoint.kRecentTabs);
     this.signinPausedImpressionRecorded_ = true;
   }
 

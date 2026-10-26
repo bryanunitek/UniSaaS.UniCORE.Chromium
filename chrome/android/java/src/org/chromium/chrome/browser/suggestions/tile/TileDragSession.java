@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.suggestions.tile;
 
 import android.os.Handler;
+import android.view.View;
 import android.widget.HorizontalScrollView;
 
 import androidx.annotation.Px;
@@ -205,7 +206,7 @@ class TileDragSession implements TileDragAutoScroll.Delegate {
      * @param eventX The X coordinate of the The ACTION_MOVE event on the "from" tile.
      * @param eventY The Y coordinate of same.
      * @return The Euclidean distance squared from ({@link mStartX}, {@link mStartY}) to ({@param
-     *     eventX}, {@param eventY}).
+     *     eventX}, {@code eventY}).
      */
     public float getDragDisplacementSquared(float eventX, float eventY) {
         float rawDx = fixEventX(eventX) - mStartX;
@@ -279,13 +280,18 @@ class TileDragSession implements TileDragAutoScroll.Delegate {
         };
     }
 
+    /** Returns whether the given {@code view} is the tile being dragged in this session. */
+    public boolean isFromView(View view) {
+        return mFromView == view;
+    }
+
     /** Helper to instantiate {@link TileMovement}, extract to method to allow testing override. */
     protected TileMovement createTileMovement(List<TileView> tileViews) {
         return new TileMovement(tileViews);
     }
 
     /**
-     * Converts {@param eventX} from a fresh {@plink MotionEvent} from being relative to {@link
+     * Converts {@code eventX} from a fresh {@link MotionEvent} from being relative to {@link
      * #mFromView} to relative to Inner.
      */
     private float fixEventX(float eventX) {

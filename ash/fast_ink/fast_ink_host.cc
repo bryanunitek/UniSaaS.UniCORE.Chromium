@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "ash/fast_ink/fast_ink_host_frame_utils.h"
+#include "ash/frame_sink/frame_sink_utils.h"
 #include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
@@ -97,10 +98,9 @@ std::unique_ptr<FastInkHost::ScopedPaint> FastInkHost::CreateScopedPaint(
 
 std::unique_ptr<viz::CompositorFrame> FastInkHost::CreateCompositorFrame(
     const viz::BeginFrameAck& begin_frame_ack,
-    UiResourceManager& resource_manager,
-    bool auto_update,
-    const gfx::Size& last_submitted_frame_size,
-    float last_submitted_frame_dsf) {
+    viz::ClientResourceProvider& client_resource_provider,
+    cc::ResourcePool& resource_pool,
+    bool auto_update) {
   TRACE_EVENT1("ui", "FastInkHost::SubmitCompositorFrame", "damage",
                GetTotalDamage().ToString());
 
@@ -108,7 +108,8 @@ std::unique_ptr<viz::CompositorFrame> FastInkHost::CreateCompositorFrame(
 
   auto frame = fast_ink_internal::CreateCompositorFrame(
       begin_frame_ack, GetContentRect(), GetTotalDamage(), auto_update,
-      *host_window(), &resource_manager, client_shared_image_, sync_token_);
+      *host_window(), client_resource_provider, client_shared_image_,
+      sync_token_);
 
   ResetDamage();
 
@@ -151,7 +152,7 @@ void FastInkHost::InitializeFastInkBuffer(aura::Window* host_window) {
   // latency but with potential tearing. Note that to avoid flicker, we draw
   // into a temporary surface and copy it into the mappable SI (see the
   // DrawBitmap() method below).
-  context_provider_ = fast_ink_internal::GetContextProvider();
+  context_provider_ = frame_sink_utils::GetContextProvider();
   gpu::SharedImageInterface* sii = context_provider_->SharedImageInterface();
 
   // This SharedImage will be used by the display compositor, will be updated

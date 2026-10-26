@@ -21,7 +21,6 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/profiles/profile_window.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
@@ -29,6 +28,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
+#import "ui/base/cocoa/macos27_sdk.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "ui/gfx/image/image.h"
 
@@ -62,13 +62,10 @@ class Observer : public BrowserCollectionObserver, public AvatarMenuObserver {
   void OnBrowserClosed(BrowserWindowInterface* browser) override {
     BrowserWindowInterface* last_active =
         GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
-    [controller_
-        activeBrowserChangedTo:last_active
-                                   ? last_active->GetBrowserForMigrationOnly()
-                                   : nullptr];
+    [controller_ activeBrowserChangedTo:last_active];
   }
   void OnBrowserActivated(BrowserWindowInterface* browser) override {
-    [controller_ activeBrowserChangedTo:browser->GetBrowserForMigrationOnly()];
+    [controller_ activeBrowserChangedTo:browser];
   }
 
   // AvatarMenuObserver:
@@ -159,7 +156,7 @@ class Observer : public BrowserCollectionObserver, public AvatarMenuObserver {
 - (IBAction)editProfile:(id)sender {
   std::optional<size_t> active_profile_index =
       _avatarMenu->GetActiveProfileIndex();
-  DCHECK(active_profile_index);
+  CHECK(active_profile_index, base::NotFatalUntil::M162);
   _avatarMenu->EditProfile(*active_profile_index);
 }
 
@@ -203,6 +200,9 @@ class Observer : public BrowserCollectionObserver, public AvatarMenuObserver {
       gfx::Image itemIcon =
           profiles::GetAvatarIconForNSMenu(itemData.profile_path);
       item.image = itemIcon.ToNSImage();
+      if (@available(macOS 27, *)) {
+        item.preferredImageVisibility = NSMenuItemImageVisibilityVisible;
+      }
       item.state =
           itemData.active ? NSControlStateValueOn : NSControlStateValueOff;
     }
@@ -261,7 +261,7 @@ class Observer : public BrowserCollectionObserver, public AvatarMenuObserver {
 
 // Notifies the controller that the active browser has changed and that the
 // menu item and menu need to be updated to reflect that.
-- (void)activeBrowserChangedTo:(Browser*)browser {
+- (void)activeBrowserChangedTo:(BrowserWindowInterface*)browser {
   // Tell the menu that the browser has changed.
   _avatarMenu->ActiveBrowserChanged(browser);
 

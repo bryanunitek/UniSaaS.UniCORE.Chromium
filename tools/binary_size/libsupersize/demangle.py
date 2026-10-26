@@ -5,11 +5,14 @@
 """Utilities for demangling C++ symbols."""
 
 import collections
+import concurrent.futures
 import itertools
 import logging
+import os
 import re
 import subprocess
 
+import parallel
 import path_util
 
 _LOWER_HEX_PATTERN = re.compile(r'^[0-9a-f]*$')
@@ -20,7 +23,8 @@ _LOWER_HEX_PATTERN = re.compile(r'^[0-9a-f]*$')
 #   "foo (.1.llvm.1234)"
 #   "foo (.1.490f3479656f7a156e853d39281f6211)"
 _PROMOTED_GLOBAL_NAME_DEMANGLED_PATTERN = re.compile(
-    r' \((\.\d+)?(?:\.llvm\.\d+|\.[0-9a-f]{16,32})\)$')
+  r' \((\.\d+)?(?:\.llvm\.\d+|\.[0-9a-f]{16,32})\)$'
+)
 # Matches LLVM promoted global names suffix in raw (mangled) names.
 # E.g. matches the suffix in:
 #   "_ZN3fooEv.llvm.1234"
@@ -28,7 +32,9 @@ _PROMOTED_GLOBAL_NAME_DEMANGLED_PATTERN = re.compile(
 #   "_ZN3fooEv.1.llvm.1234"
 #   "_ZN3fooEv.1.490f3479656f7a156e853d39281f6211"
 _PROMOTED_GLOBAL_NAME_RAW_PATTERN = re.compile(
-    r'(\.\d+)?(?:\.llvm\.\d+|\.[0-9a-f]{16,32})$')
+  r'(\.\d+)?(?:\.llvm\.\d+|\.[0-9a-f]{16,32})$'
+)
+
 
 def StripLlvmPromotedGlobalNames(name):
   """Strips LLVM promoted global names suffix, and returns the result.
@@ -42,13 +48,18 @@ def StripLlvmPromotedGlobalNames(name):
   if '.' not in name:
     return name
   if name.endswith(')'):
+    if ' (.' not in name:
+      return name
     return _PROMOTED_GLOBAL_NAME_DEMANGLED_PATTERN.sub('', name)
   return _PROMOTED_GLOBAL_NAME_RAW_PATTERN.sub('', name)
 
 
 def _CanDemangle(name):
-  return (name.startswith('_Z') or name.startswith('.Lswitch.table._Z')
-          or name.startswith('_R'))
+  return (
+    name.startswith('_Z')
+    or name.startswith('.Lswitch.table._Z')
+    or name.startswith('_R')
+  )
 
 
 def _ExtractDemanglablePart(names):
@@ -83,18 +94,35 @@ def _PostProcessDemangledSymbol(old_name, new_name):
 
 def _DemangleNames(names):
   """Uses cxxfilt to demangle a list of names."""
-  # pylint: disable=unexpected-keyword-arg
-  proc = subprocess.Popen([path_util.GetCppFiltPath()],
-                          stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE,
-                          encoding='utf-8')
-  in_data = '\n'.join(_ExtractDemanglablePart(names))
-  stdout = proc.communicate(in_data)[0]
-  assert proc.returncode == 0
-  ret = [
+
+  def _RunChunk(chunk):
+    proc = subprocess.Popen(
+      [path_util.GetCppFiltPath()],
+      stdin=subprocess.PIPE,
+      stdout=subprocess.PIPE,
+      encoding='utf-8',
+    )
+    in_data = '\n'.join(_ExtractDemanglablePart(chunk))
+    stdout = proc.communicate(in_data)[0]
+    assert proc.returncode == 0
+    return [
       _PostProcessDemangledSymbol(old_name, new_name)
-      for (old_name, new_name) in zip(names, stdout.splitlines())
-  ]
+      for (old_name, new_name) in zip(chunk, stdout.splitlines())
+    ]
+
+  if len(names) >= 50000 and not parallel.DISABLE_ASYNC:
+    num_workers = min(8, os.cpu_count() or 4)
+    chunk_size = (len(names) + num_workers - 1) // num_workers
+    chunks = [
+      names[i : i + chunk_size] for i in range(0, len(names), chunk_size)
+    ]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+      ret = [
+        name for chunk_ret in pool.map(_RunChunk, chunks) for name in chunk_ret
+      ]
+  else:
+    ret = _RunChunk(names)
+
   if logging.getLogger().isEnabledFor(logging.INFO):
     fail_count = sum(1 for s in ret if _CanDemangle(s))
     if fail_count:
@@ -129,7 +157,7 @@ def DemangleSetsInDictsInPlace(key_to_names):
   it = iter(_DemangleNames(all_names))
   for key, names in key_to_names.items():
     key_to_names[key] = set(next(it) if _CanDemangle(n) else n for n in names)
-  assert(next(it, None) is None)
+  assert next(it, None) is None
 
   return None
 
@@ -149,6 +177,6 @@ def DemangleKeysAndMergeLists(name_to_list):
   ret = collections.defaultdict(list)
   for key, val in name_to_list.items():
     ret[next(key_iter) if _CanDemangle(key) else key] += val
-  assert(next(key_iter, None) is None)
+  assert next(key_iter, None) is None
   logging.info('* %d keys become %d keys' % (len(name_to_list), len(ret)))
   return ret

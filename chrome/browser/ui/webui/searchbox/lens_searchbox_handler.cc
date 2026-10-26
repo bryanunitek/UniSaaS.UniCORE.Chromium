@@ -17,7 +17,9 @@
 #include "components/prefs/pref_service.h"
 #include "components/sessions/core/session_id.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 namespace {
@@ -43,7 +45,7 @@ class LensOmniboxClient : public SearchboxOmniboxClient {
       TemplateURLRef::PostContent* post_content,
       WindowOpenDisposition disposition,
       ui::PageTransition transition,
-      AutocompleteMatchType::Type match_type,
+      omnibox::AutocompleteMatchType match_type,
       base::TimeTicks match_selection_timestamp,
       bool destination_url_entered_without_scheme,
       bool destination_url_entered_with_http_scheme,
@@ -89,7 +91,7 @@ void LensOmniboxClient::OnAutocompleteAccept(
     TemplateURLRef::PostContent* post_content,
     WindowOpenDisposition disposition,
     ui::PageTransition transition,
-    AutocompleteMatchType::Type match_type,
+    omnibox::AutocompleteMatchType match_type,
     base::TimeTicks match_selection_timestamp,
     bool destination_url_entered_without_scheme,
     bool destination_url_entered_with_http_scheme,
@@ -143,26 +145,21 @@ void LensSearchboxHandler::OnFocusChanged(bool focused) {
   lens_searchbox_client_->OnFocusChanged(focused);
 }
 
-void LensSearchboxHandler::QueryAutocomplete(int32_t query_id,
-                                             const std::u16string& input,
-                                             bool prevent_inline_autocomplete,
-                                             uint32_t cursor_position) {
-  QueryAutocompleteWithSuggestInventory(
-      query_id, input, prevent_inline_autocomplete, cursor_position,
-      omnibox::SuggestInventory::SUGGEST_INVENTORY_DEFAULT);
-}
-
-void LensSearchboxHandler::QueryAutocompleteWithSuggestInventory(
+void LensSearchboxHandler::QueryAutocomplete(
     int32_t query_id,
+    std::optional<int32_t> tab_id,
     const std::u16string& input,
     bool prevent_inline_autocomplete,
     uint32_t cursor_position,
-    omnibox::SuggestInventory suggest_inventory) {
+    omnibox::SuggestInventory suggest_inventory,
+    bool is_on_focus,
+    const std::string& keyword,
+    searchbox::mojom::InputMethod input_method) {
   lens_searchbox_client_->OnTextModified();
 
-  SearchboxHandler::QueryAutocompleteWithSuggestInventory(
-      query_id, input, prevent_inline_autocomplete, cursor_position,
-      suggest_inventory);
+  SearchboxHandler::QueryAutocomplete(
+      query_id, tab_id, input, prevent_inline_autocomplete, cursor_position,
+      suggest_inventory, is_on_focus, keyword, input_method);
 }
 
 void LensSearchboxHandler::SetInputText(const std::string& input_text) {

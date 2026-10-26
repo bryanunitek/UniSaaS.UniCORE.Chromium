@@ -17,7 +17,7 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/login/login_handler.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
@@ -50,7 +50,7 @@
 namespace {
 
 // Verify kPACScript is installed as the PAC script.
-void VerifyProxyScript(Browser* browser) {
+void VerifyProxyScript(BrowserWindowInterface* browser) {
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(browser, GURL("https://google.com")));
 
@@ -309,7 +309,8 @@ IN_PROC_BROWSER_TEST_F(HangingPacRequestProxyScriptBrowserTest, Shutdown) {
   auto simple_loader = network::SimpleURLLoader::Create(
       std::move(resource_request), TRAFFIC_ANNOTATION_FOR_TESTS);
 
-  auto* storage_partition = browser()->profile()->GetDefaultStoragePartition();
+  auto* storage_partition =
+      browser()->GetProfile()->GetDefaultStoragePartition();
   auto url_loader_factory =
       storage_partition->GetURLLoaderFactoryForBrowserProcess();
   simple_loader->DownloadHeadersOnly(

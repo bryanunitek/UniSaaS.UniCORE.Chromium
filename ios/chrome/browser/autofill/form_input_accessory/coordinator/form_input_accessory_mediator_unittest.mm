@@ -5,12 +5,20 @@
 #import "ios/chrome/browser/autofill/form_input_accessory/coordinator/form_input_accessory_mediator.h"
 
 #import "base/test/scoped_feature_list.h"
+#import "components/autofill/core/browser/data_manager/test_personal_data_manager.h"
 #import "components/autofill/core/browser/filling/filling_product.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
+#import "components/autofill/core/common/autofill_debug_features.h"
+#import "components/autofill/core/common/autofill_features.h"
+#import "components/autofill/ios/browser/autofill_driver_ios.h"
+#import "components/autofill/ios/browser/autofill_java_script_feature.h"
 #import "components/autofill/ios/browser/form_suggestion.h"
 #import "components/autofill/ios/browser/form_suggestion_provider.h"
+#import "components/autofill/ios/browser/test_autofill_client_ios.h"
 #import "components/autofill/ios/common/javascript_feature_util.h"
 #import "components/autofill/ios/form_util/form_activity_params.h"
 #import "components/autofill/ios/form_util/test_form_activity_tab_helper.h"
+#import "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #import "components/test/ios/test_utils.h"
 #import "ios/chrome/browser/autofill/form_input_accessory/coordinator/form_input_accessory_mediator+testing.h"
 #import "ios/chrome/browser/autofill/form_input_accessory/coordinator/form_input_accessory_mediator_handler.h"
@@ -19,6 +27,10 @@
 #import "ios/chrome/browser/autofill/model/bottom_sheet/autofill_bottom_sheet_tab_helper.h"
 #import "ios/chrome/browser/autofill/model/features.h"
 #import "ios/chrome/browser/autofill/model/form_input_suggestions_provider.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_prefs.h"
+#import "ios/chrome/browser/passwords/model/password_tab_helper.h"
+#import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/test/fake_web_state_list_delegate.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
@@ -33,22 +45,19 @@
 #import "third_party/ocmock/gtest_support.h"
 #import "ui/base/device_form_factor.h"
 
+using autofill::FieldGlobalId;
+using autofill::FieldRendererId;
 using autofill::FormActivityParams;
 
 namespace {
 
-// A period for unit tests to fast forward time to observe the result of
-// optional updates. This is used to wait out cooldowns and delays. The 10ms
-// buffer is added to create a slighly longer time delta.
-const base::TimeDelta kDelayForAcceptingOptionalUpdates =
-    kOptionalUpdateCooldownPeriod + base::Milliseconds(10);
-
-FormActivityParams CreateFormActivityParams(const std::string field_type) {
+FormActivityParams CreateFormActivityParams(
+    FormActivityParams::FieldType field_type) {
   FormActivityParams params;
   params.form_name = "form";
   params.field_identifier = "field_id";
   params.field_type = field_type;
-  params.type = "type";
+  params.type = FormActivityParams::ActivityType::kFocus;
   params.value = "value";
   params.input_missing = false;
   return params;
@@ -71,6 +80,8 @@ FormSuggestion* CreateFormSuggestion(NSString* value) {
                   payload:autofill::Suggestion::Payload()
            requiresReauth:NO];
 }
+
+NSString* const kTestSuggestionValue = @"value";
 
 }  // namespace
 
@@ -127,7 +138,10 @@ class FormInputAccessoryMediatorTest : public PlatformTest {
   FormInputAccessoryMediatorTest()
       : test_web_state_(std::make_unique<web::FakeWebState>()),
         web_state_list_(&web_state_list_delegate_),
-        test_form_activity_tab_helper_(test_web_state_.get()) {}
+        test_form_activity_tab_helper_(test_web_state_.get()) {
+    profile_ = TestProfileIOS::Builder().Build();
+    test_web_state_->SetBrowserState(profile_.get());
+  }
 
   void SetUp() override {
     PlatformTest::SetUp();
@@ -155,16 +169,20 @@ class FormInputAccessoryMediatorTest : public PlatformTest {
     consumer_ = OCMProtocolMock(@protocol(FormInputAccessoryConsumer));
     handler_ = OCMProtocolMock(@protocol(FormInputAccessoryMediatorHandler));
 
-    mediator_ =
-        [[FormInputAccessoryMediator alloc] initWithConsumer:consumer_
-                                                     handler:handler_
-                                                webStateList:&web_state_list_
-                                         personalDataManager:nullptr
-                                        profilePasswordStore:nullptr
-                                        accountPasswordStore:nullptr
-                                        securityAlertHandler:nil
-                                      reauthenticationModule:nil
-                                           engagementTracker:nullptr];
+    personal_data_manager_ =
+        std::make_unique<autofill::TestPersonalDataManager>();
+    personal_data_manager_->SetPrefService(profile_->GetPrefs());
+
+    mediator_ = [[FormInputAccessoryMediator alloc]
+              initWithConsumer:consumer_
+                       handler:handler_
+                  webStateList:&web_state_list_
+           personalDataManager:personal_data_manager_.get()
+          profilePasswordStore:nullptr
+          accountPasswordStore:nullptr
+          securityAlertHandler:nil
+        reauthenticationModule:nil
+             engagementTracker:nullptr];
   }
 
   void TearDown() override {
@@ -236,6 +254,7 @@ class FormInputAccessoryMediatorTest : public PlatformTest {
   web::WebTaskEnvironment task_environment_{
       web::WebTaskEnvironment::TimeSource::MOCK_TIME};
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
+  std::unique_ptr<TestProfileIOS> profile_;
   std::unique_ptr<web::FakeWebState> test_web_state_;
   std::unique_ptr<web::FakeWebFrame> main_frame_;
   FakeWebStateListDelegate web_state_list_delegate_;
@@ -245,6 +264,7 @@ class FormInputAccessoryMediatorTest : public PlatformTest {
   id provider_;
   NSArray* received_suggestions_ = nil;
   autofill::TestFormActivityTabHelper test_form_activity_tab_helper_;
+  std::unique_ptr<autofill::TestPersonalDataManager> personal_data_manager_;
   FormInputAccessoryMediator* mediator_;
 };
 
@@ -264,7 +284,7 @@ TEST_F(FormInputAccessoryMediatorTest, PickerReset) {
   }
 
   FormActivityParams params =
-      CreateFormActivityParams(/*field_type=*/"select-one");
+      CreateFormActivityParams(FormActivityParams::FieldType::kSelectOne);
 
   OCMExpect([handler_ resetFormInputView]);
   test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
@@ -283,7 +303,7 @@ TEST_F(FormInputAccessoryMediatorTest, PickerDoesNotReset) {
   }
 
   FormActivityParams params =
-      CreateFormActivityParams(/*field_type=*/"select-one");
+      CreateFormActivityParams(FormActivityParams::FieldType::kSelectOne);
 
   OCMExpect([consumer_ showNavigationButtons]);
   test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
@@ -293,7 +313,8 @@ TEST_F(FormInputAccessoryMediatorTest, PickerDoesNotReset) {
 
 // Tests consumer and handler are not reset when a field is text.
 TEST_F(FormInputAccessoryMediatorTest, TextDoesNotReset) {
-  FormActivityParams params = CreateFormActivityParams(/*field_type=*/"text");
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
 
   [[handler_ reject] resetFormInputView];
   test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
@@ -309,7 +330,8 @@ TEST_F(FormInputAccessoryMediatorTest,
 
   OCMExpect([handler_ resetFormInputView]);
   test_form_activity_tab_helper_.FormActivityRegistered(
-      main_frame_.get(), CreateFormActivityParams(/*field_type=*/"text"));
+      main_frame_.get(),
+      CreateFormActivityParams(FormActivityParams::FieldType::kText));
 
   EXPECT_FALSE(received_suggestions_.count);
 }
@@ -322,7 +344,8 @@ TEST_F(FormInputAccessoryMediatorTest, FormActivityShouldBeIgnoredWhenNotHtml) {
 
   OCMExpect([handler_ resetFormInputView]);
   test_form_activity_tab_helper_.FormActivityRegistered(
-      main_frame_.get(), CreateFormActivityParams(/*field_type=*/"text"));
+      main_frame_.get(),
+      CreateFormActivityParams(FormActivityParams::FieldType::kText));
 
   EXPECT_FALSE(received_suggestions_.count);
 }
@@ -331,7 +354,8 @@ TEST_F(FormInputAccessoryMediatorTest, FormActivityShouldBeIgnoredWhenNotHtml) {
 TEST_F(FormInputAccessoryMediatorTest,
        NavigationShouldRestoreKeyboardAccessoryView) {
   CaptureAccessorySuggestions();
-  FormActivityParams params = CreateFormActivityParams(/*field_type=*/"text");
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
   SetUpProviderWithSuggestions(params, @[ CreateFormSuggestion(@"foo") ]);
 
   test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
@@ -350,7 +374,8 @@ TEST_F(FormInputAccessoryMediatorTest,
 TEST_F(FormInputAccessoryMediatorTest,
        SameDocumentNavigationShouldNotResetKeyboardAccessorySuggestions) {
   CaptureAccessorySuggestions();
-  FormActivityParams params = CreateFormActivityParams(/*field_type=*/"text");
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
   SetUpProviderWithSuggestions(params, @[ CreateFormSuggestion(@"foo") ]);
 
   test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
@@ -372,8 +397,9 @@ TEST_F(FormInputAccessoryMediatorTest, FormActivityBlurShouldBeIgnored) {
   provider_ = OCMProtocolMock(@protocol(FormInputSuggestionsProvider));
   [mediator_ injectProvider:provider_];
 
-  FormActivityParams params = CreateFormActivityParams(/*field_type=*/"text");
-  params.type = "blur";
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
+  params.type = FormActivityParams::ActivityType::kBlur;
   [[handler_ reject] resetFormInputView];
   [[provider_ reject] retrieveSuggestionsForForm:params
                                         webState:static_cast<web::WebState*>(
@@ -394,7 +420,8 @@ TEST_F(FormInputAccessoryMediatorTest, ShowSuggestions_NotStateless) {
   id providerMock = OCMProtocolMock(@protocol(FormInputSuggestionsProvider));
   [mediator_ injectProvider:providerMock];
 
-  FormActivityParams params = CreateFormActivityParams(/*field_type=*/"text");
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
 
   __block FormSuggestionsReadyCompletion suggestionsQueryCompletion;
 
@@ -446,7 +473,8 @@ TEST_F(FormInputAccessoryMediatorTest, ShowSuggestions) {
   [testSuggestionProvider
       setMainFillingProduct:autofill::FillingProduct::kAutocomplete];
 
-  FormActivityParams params = CreateFormActivityParams(/*field_type=*/"text");
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
 
   __block FormSuggestionsReadyCompletion suggestionsQueryCompletion;
 
@@ -493,7 +521,8 @@ TEST_F(FormInputAccessoryMediatorTest, AutofillSuggestionIPH) {
   [testSuggestionProvider
       setType:SuggestionProviderType::SuggestionProviderTypeAutofill];
 
-  FormActivityParams params = CreateFormActivityParams(/*field_type=*/"text");
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
   FormSuggestion* suggestion = CreateFormSuggestion(@"foo");
   suggestion.featureForIPH =
       SuggestionFeatureForIPH::kAutofillExternalAccountProfile;
@@ -514,7 +543,8 @@ TEST_F(FormInputAccessoryMediatorTest, AutofillSuggestionIPH) {
 // Tests that only the suggestions from the latest query in concurrent queries
 // are updated and shown.
 TEST_F(FormInputAccessoryMediatorTest, ShowSuggestions_WithConcurrentQueries) {
-  FormActivityParams params = CreateFormActivityParams(/*field_type=*/"text");
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
   NSMutableArray<FormSuggestionsReadyCompletion>* suggestionsCompletionsQueue =
       SetUpProviderWithPendingSuggestionQueries(params);
 
@@ -568,7 +598,8 @@ TEST_F(FormInputAccessoryMediatorTest, ShowSuggestions_WithConcurrentQueries) {
 TEST_F(FormInputAccessoryMediatorTest,
        ShowEmptySuggestions_WithConcurrentQueries) {
   CaptureAccessorySuggestions();
-  FormActivityParams params = CreateFormActivityParams(/*field_type=*/"text");
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
   NSMutableArray<FormSuggestionsReadyCompletion>* suggestionsCompletionsQueue =
       SetUpProviderWithPendingSuggestionQueries(params);
 
@@ -598,7 +629,8 @@ TEST_F(FormInputAccessoryMediatorTest, DidSelectSuggestion_NoReauth) {
 
   // Make a credit card suggestion that wraps all the information needed by
   // Stateless.
-  FormActivityParams params = CreateFormActivityParams(/*field_type=*/"text");
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
   TestFormSuggestionProvider* testSuggestionProvider =
       [[TestFormSuggestionProvider alloc] init];
   [testSuggestionProvider
@@ -634,7 +666,8 @@ TEST_F(FormInputAccessoryMediatorTest, DidSelectSuggestion_AfterDisconnect) {
       OCMProtocolMock(@protocol(FormInputSuggestionsProvider));
   [mediator_ injectCurrentProvider:formInputSuggestionProviderMock];
 
-  FormActivityParams params = CreateFormActivityParams(/*field_type=*/"text");
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
   TestFormSuggestionProvider* testSuggestionProvider =
       [[TestFormSuggestionProvider alloc] init];
   [testSuggestionProvider
@@ -686,13 +719,9 @@ TEST_F(FormInputAccessoryMediatorTest, DidSelectSuggestion_AfterDisconnect) {
 #endif
 TEST_F(FormInputAccessoryMediatorTest,
        MAYBE_keyboardWillShowRefresh_NotThrottledOrSuppressed) {
-  base::test::ScopedFeatureList scoped_featurelist;
-  scoped_featurelist.InitWithFeatures(
-      /*enabled_features=*/{},
-      /*disabled_features=*/{kSuppressKeyboardWillShowSuggestionRefresh,
-                             kAutofillThrottleOptionalSuggestionRefresh});
 
-  FormActivityParams params = CreateFormActivityParams("text");
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
   test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
                                                         params);
 
@@ -711,134 +740,6 @@ TEST_F(FormInputAccessoryMediatorTest,
   EXPECT_EQ(count, 3);
 }
 
-// Tests that suggestion refreshes triggered by keyboardWillShow are throttled
-// when only kAutofillThrottleOptionalSuggestionRefresh is enabled.
-// TODO(crbug.com/477866475): Flaky on device.
-#if TARGET_OS_SIMULATOR
-#define MAYBE_keyboardWillShowRefresh_Throttled \
-  keyboardWillShowRefresh_Throttled
-#else
-#define MAYBE_keyboardWillShowRefresh_Throttled \
-  DISABLED_keyboardWillShowRefresh_Throttled
-#endif
-TEST_F(FormInputAccessoryMediatorTest,
-       MAYBE_keyboardWillShowRefresh_Throttled) {
-  base::test::ScopedFeatureList scoped_featurelist;
-  scoped_featurelist.InitWithFeatures(
-      /*enabled_features=*/{kAutofillThrottleOptionalSuggestionRefresh},
-      /*disabled_features=*/{kSuppressKeyboardWillShowSuggestionRefresh});
-
-  FormActivityParams params = CreateFormActivityParams("text");
-  test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
-                                                        params);
-  task_environment_.FastForwardBy(kDelayForAcceptingOptionalUpdates);
-
-  FormInputAccessoryMediator* mock_mediator_ = OCMPartialMock(mediator_);
-  __block int count = 0;
-  OCMStub([mock_mediator_
-              retrieveSuggestionsForForm:params
-                                webState:static_cast<web::WebState*>(
-                                             [OCMArg anyPointer])])
-      .ignoringNonObjectArgs()
-      .andDo(^(NSInvocation*) {
-        count++;
-      });
-
-  PostKeyboardWillShowNotifications(3);
-  // Update isn't immediately triggered -- delayed.
-  EXPECT_EQ(count, 0);
-
-  task_environment_.FastForwardBy(kOptionalUpdateDelay +
-                                  base::Milliseconds(10));
-  // Update is triggered once -- throttled.
-  EXPECT_EQ(count, 1);
-}
-
-// Tests that suggestion refreshes triggered by keyboardWillShow restarts the
-// delay when throttled.
-// TODO(crbug.com/477866475): Flaky on device.
-#if TARGET_OS_SIMULATOR
-#define MAYBE_keyboardWillShowRefresh_Throttled_RollingOver \
-  keyboardWillShowRefresh_Throttled_RollingOver
-#else
-#define MAYBE_keyboardWillShowRefresh_Throttled_RollingOver \
-  DISABLED_keyboardWillShowRefresh_Throttled_RollingOver
-#endif
-TEST_F(FormInputAccessoryMediatorTest,
-       MAYBE_keyboardWillShowRefresh_Throttled_RollingOver) {
-  base::test::ScopedFeatureList scoped_featurelist;
-  scoped_featurelist.InitWithFeatures(
-      /*enabled_features=*/{kAutofillThrottleOptionalSuggestionRefresh},
-      /*disabled_features=*/{kSuppressKeyboardWillShowSuggestionRefresh});
-
-  FormActivityParams params = CreateFormActivityParams("text");
-  test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
-                                                        params);
-  task_environment_.FastForwardBy(kDelayForAcceptingOptionalUpdates);
-
-  FormInputAccessoryMediator* mock_mediator_ = OCMPartialMock(mediator_);
-  __block int count = 0;
-  OCMStub([mock_mediator_
-              retrieveSuggestionsForForm:params
-                                webState:static_cast<web::WebState*>(
-                                             [OCMArg anyPointer])])
-      .ignoringNonObjectArgs()
-      .andDo(^(NSInvocation*) {
-        count++;
-      });
-
-  const base::TimeDelta halfDelay =
-      kOptionalUpdateDelay / 2 + base::Milliseconds(10);
-
-  // keyboardWillShow notification should not trigger a refresh immediately.
-  PostKeyboardWillShowNotifications(1);
-  EXPECT_EQ(count, 0);
-
-  // After half of the delay, no refreshes should be triggered.
-  task_environment_.FastForwardBy(halfDelay);
-  EXPECT_EQ(count, 0);
-
-  // A new notification restarts the delay. So, no refreshes should be triggered
-  // after the delay since the first event.
-  PostKeyboardWillShowNotifications(1);
-  task_environment_.FastForwardBy(halfDelay);
-  EXPECT_EQ(count, 0);
-
-  // After another half delay, the refresh should now be triggered.
-  task_environment_.FastForwardBy(halfDelay);
-  EXPECT_EQ(count, 1);
-}
-
-// Tests that suggestion refreshes triggered by keyboardWillShow are suppressed
-// when kSuppressKeyboardWillShowSuggestionRefresh is enabled.
-TEST_F(FormInputAccessoryMediatorTest, keyboardWillShowRefresh_Suppressed) {
-  base::test::ScopedFeatureList scoped_featurelist;
-  scoped_featurelist.InitWithFeatures(
-      /*enabled_features=*/{kSuppressKeyboardWillShowSuggestionRefresh},
-      /*disabled_features=*/{kAutofillThrottleOptionalSuggestionRefresh});
-
-  FormActivityParams params = CreateFormActivityParams("text");
-  test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
-                                                        params);
-  task_environment_.FastForwardBy(kDelayForAcceptingOptionalUpdates);
-
-  FormInputAccessoryMediator* mock_mediator_ = OCMPartialMock(mediator_);
-  __block int count = 0;
-  OCMStub([mock_mediator_
-              retrieveSuggestionsForForm:params
-                                webState:static_cast<web::WebState*>(
-                                             [OCMArg anyPointer])])
-      .ignoringNonObjectArgs()
-      .andDo(^(NSInvocation*) {
-        count++;
-      });
-
-  PostKeyboardWillShowNotifications(3);
-  EXPECT_EQ(count, 0);
-
-  task_environment_.FastForwardBy(kDelayForAcceptingOptionalUpdates);
-  EXPECT_EQ(count, 0);
-}
 // Tests that shouldShowRPId returns YES if and only if the suggestion RP ID
 // does not match the active WebState's host.
 TEST_F(FormInputAccessoryMediatorTest, ShouldShowRPId) {
@@ -868,4 +769,342 @@ TEST_F(FormInputAccessoryMediatorTest, ShouldShowRPId) {
   EXPECT_FALSE([mediator shouldShowRPId:nil]);
 
   [mediator disconnect];
+}
+
+// Tests that `openEditForSuggestion:` calls the handler with correct password
+// details.
+TEST_F(FormInputAccessoryMediatorTest, OpenPasswordEditTriggered) {
+  // Setup PasswordTabHelper.
+  PasswordTabHelper::CreateForWebState(web_state_list_.GetActiveWebState());
+
+  // Setup a password suggestion.
+  autofill::Suggestion::PasswordSuggestionDetails details;
+  details.username = u"test_user";
+  details.password = u"test_password";
+  details.signon_realm = "https://example.com";
+
+  autofill::Suggestion::Payload payload(details);
+  FormSuggestion* suggestion = [FormSuggestion
+      suggestionWithValue:@"test_user"
+       displayDescription:@"example.com"
+                     icon:nil
+                     type:autofill::SuggestionType::kPasswordEntry
+                  payload:payload
+           requiresReauth:NO];
+
+  // Set expectations on the mock handler.
+  OCMExpect(
+      [handler_
+          openPasswordDetailsInEditMode:password_manager::CredentialUIEntry()])
+      .ignoringNonObjectArgs();
+
+  // Trigger the mediator edit action.
+  [mediator_ openEditForSuggestion:suggestion];
+
+  // Verify expectations.
+  EXPECT_OCMOCK_VERIFY(handler_);
+}
+
+// Tests that `openEditForSuggestion:` calls the handler with correct credit
+// card details.
+TEST_F(FormInputAccessoryMediatorTest, OpenCreditCardEditTriggered) {
+  autofill::CreditCard card = autofill::test::GetCreditCard();
+  personal_data_manager_->payments_data_manager().AddCreditCard(card);
+
+  autofill::Suggestion::Payload payload(
+      autofill::Suggestion::Guid(card.guid()));
+  FormSuggestion* suggestion = [FormSuggestion
+      suggestionWithValue:@"Visa"
+       displayDescription:@"1111"
+                     icon:nil
+                     type:autofill::SuggestionType::kCreditCardEntry
+                  payload:payload
+           requiresReauth:NO];
+
+  OCMExpect([handler_ openCreditCardDetails:card inEditMode:YES])
+      .ignoringNonObjectArgs();
+
+  [mediator_ openEditForSuggestion:suggestion];
+
+  EXPECT_OCMOCK_VERIFY(handler_);
+}
+
+// Tests that `openEditForSuggestion:` calls the handler with correct address
+// details.
+TEST_F(FormInputAccessoryMediatorTest, OpenAddressEditTriggered) {
+  autofill::AutofillProfile profile = autofill::test::GetFullProfile();
+  personal_data_manager_->address_data_manager().AddProfile(profile);
+
+  autofill::Suggestion::AutofillProfilePayload profile_payload(
+      autofill::Suggestion::Guid(profile.guid()));
+  autofill::Suggestion::Payload payload(profile_payload);
+
+  FormSuggestion* suggestion = [FormSuggestion
+      suggestionWithValue:@"John Doe"
+       displayDescription:@"123 Main St"
+                     icon:nil
+                     type:autofill::SuggestionType::kAddressEntry
+                  payload:payload
+           requiresReauth:NO];
+
+  OCMExpect([handler_ openAddressDetailsInEditModeForSuggestion:profile])
+      .ignoringNonObjectArgs();
+
+  [mediator_ openEditForSuggestion:suggestion];
+
+  EXPECT_OCMOCK_VERIFY(handler_);
+}
+
+// Tests that `updateWithNewWebState:` updates `atMemoryButtonHidden` on the
+// consumer.
+TEST_F(FormInputAccessoryMediatorTest,
+       UpdateWithNewWebStateSetsAtMemoryButtonHidden) {
+  OCMExpect([consumer_ setAtMemoryButtonHidden:YES]);
+
+  [mediator_ updateWithNewWebState:nullptr];
+
+  EXPECT_OCMOCK_VERIFY(consumer_);
+}
+
+// Tests that `updateWithNewWebState:` does not hide `atMemoryButtonHidden` when
+// AutofillAtMemory and SkipEligibility are enabled and user consented to
+// Gemini.
+TEST_F(FormInputAccessoryMediatorTest,
+       UpdateWithNewWebStateAtMemoryButtonNotHidden) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {autofill::features::kAutofillAtMemory,
+       autofill::features::debug::kAtMemorySkipEnablementChecks},
+      {});
+
+  autofill::TestAutofillClientIOS autofill_client(
+      web_state_list_.GetActiveWebState(), nil);
+  autofill_client.GetPrefs()->registry()->RegisterBooleanPref(
+      prefs::kIOSBwgConsent, false);
+  gemini::UpdateUserConsentPrefs(true, autofill_client.GetPrefs());
+
+  OCMExpect([consumer_ setAtMemoryButtonHidden:NO]);
+
+  [mediator_ updateWithNewWebState:web_state_list_.GetActiveWebState()];
+
+  EXPECT_OCMOCK_VERIFY(consumer_);
+}
+
+// Tests that focusing a form field updates `atMemoryButtonHidden` on the active
+// `WebState` when Gemini consent changes without switching tabs.
+TEST_F(FormInputAccessoryMediatorTest,
+       FormActivityUpdatesAtMemoryButtonVisibility) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      {autofill::features::kAutofillAtMemory,
+       autofill::features::debug::kAtMemorySkipEnablementChecks},
+      {});
+
+  autofill::TestAutofillClientIOS autofill_client(
+      web_state_list_.GetActiveWebState(), nil);
+  autofill_client.GetPrefs()->registry()->RegisterBooleanPref(
+      prefs::kIOSBwgConsent, false);
+
+  FormActivityParams focus_params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
+
+  OCMExpect([consumer_ setAtMemoryButtonHidden:YES]);
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
+                                                        focus_params);
+  EXPECT_OCMOCK_VERIFY(consumer_);
+
+  gemini::UpdateUserConsentPrefs(true, autofill_client.GetPrefs());
+  OCMExpect([consumer_ setAtMemoryButtonHidden:NO]);
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
+                                                        focus_params);
+  EXPECT_OCMOCK_VERIFY(consumer_);
+}
+
+// Tests that lastFocusedFieldGlobalId returns nullopt when no field is focused.
+TEST_F(FormInputAccessoryMediatorTest,
+       LastFocusedFieldGlobalIdEmptyWhenNoFieldFocused) {
+  EXPECT_EQ(mediator_.lastFocusedFieldGlobalId, std::nullopt);
+}
+
+// Tests that lastFocusedFieldGlobalId returns a valid FieldGlobalId when a
+// field is focused on an HTTPS frame.
+TEST_F(FormInputAccessoryMediatorTest,
+       LastFocusedFieldGlobalIdValidOnHttpsFrame) {
+  autofill::TestAutofillClientIOS autofill_client(
+      web_state_list_.GetActiveWebState(), nil);
+
+  auto* fake_frames_manager = static_cast<web::FakeWebFramesManager*>(
+      autofill::AutofillJavaScriptFeature::GetInstance()->GetWebFramesManager(
+          web_state_list_.GetActiveWebState()));
+  auto https_frame =
+      web::FakeWebFrame::CreateMainWebFrame(GURL("https://example.com"));
+  std::string frame_id = https_frame->GetFrameId();
+  web::WebFrame* frame_ptr = https_frame.get();
+  fake_frames_manager->AddWebFrame(std::move(https_frame));
+
+  autofill::AutofillDriverIOS* driver =
+      autofill::AutofillDriverIOS::FromWebStateAndWebFrame(
+          web_state_list_.GetActiveWebState(), frame_ptr);
+  ASSERT_TRUE(driver);
+
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
+  params.frame_id = frame_id;
+  params.field_renderer_id = autofill::FieldRendererId(123);
+
+  test_form_activity_tab_helper_.FormActivityRegistered(frame_ptr, params);
+
+  FieldGlobalId expected_field_id(driver->GetFrameToken(),
+                                  autofill::FieldRendererId(123));
+  EXPECT_EQ(mediator_.lastFocusedFieldGlobalId, expected_field_id);
+}
+
+// Tests that lastFocusedFieldGlobalId returns nullopt on a non-cryptographic
+// HTTP frame.
+TEST_F(FormInputAccessoryMediatorTest,
+       LastFocusedFieldGlobalIdEmptyOnHttpFrame) {
+  autofill::TestAutofillClientIOS autofill_client(
+      web_state_list_.GetActiveWebState(), nil);
+
+  auto* fake_frames_manager = static_cast<web::FakeWebFramesManager*>(
+      autofill::AutofillJavaScriptFeature::GetInstance()->GetWebFramesManager(
+          web_state_list_.GetActiveWebState()));
+  auto http_frame =
+      web::FakeWebFrame::CreateMainWebFrame(GURL("http://example.com"));
+  std::string frame_id = http_frame->GetFrameId();
+  web::WebFrame* frame_ptr = http_frame.get();
+  fake_frames_manager->AddWebFrame(std::move(http_frame));
+
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
+  params.frame_id = frame_id;
+  params.field_renderer_id = autofill::FieldRendererId(123);
+
+  test_form_activity_tab_helper_.FormActivityRegistered(frame_ptr, params);
+
+  EXPECT_EQ(mediator_.lastFocusedFieldGlobalId, std::nullopt);
+}
+
+// Tests that lastFocusedFieldGlobalId returns nullopt after disconnecting the
+// mediator.
+TEST_F(FormInputAccessoryMediatorTest,
+       LastFocusedFieldGlobalIdResetOnDisconnect) {
+  autofill::TestAutofillClientIOS autofill_client(
+      web_state_list_.GetActiveWebState(), nil);
+
+  auto* fake_frames_manager = static_cast<web::FakeWebFramesManager*>(
+      autofill::AutofillJavaScriptFeature::GetInstance()->GetWebFramesManager(
+          web_state_list_.GetActiveWebState()));
+  auto https_frame =
+      web::FakeWebFrame::CreateMainWebFrame(GURL("https://example.com"));
+  std::string frame_id = https_frame->GetFrameId();
+  web::WebFrame* frame_ptr = https_frame.get();
+  fake_frames_manager->AddWebFrame(std::move(https_frame));
+
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
+  params.frame_id = frame_id;
+  params.field_renderer_id = autofill::FieldRendererId(123);
+
+  test_form_activity_tab_helper_.FormActivityRegistered(frame_ptr, params);
+  EXPECT_NE(mediator_.lastFocusedFieldGlobalId, std::nullopt);
+
+  [mediator_ disconnect];
+
+  EXPECT_EQ(mediator_.lastFocusedFieldGlobalId, std::nullopt);
+}
+
+// Test that `setSuggestionsEnabled:YES` with
+// `kThrottleFormInputAccessorySuggestionRefresh` enabled refreshes suggestions
+// when suggestions have not yet been shown (even though `suggestionsEnabled` is
+// `YES` by default), and throttles redundant refreshes once suggestions have
+// been shown.
+TEST_F(FormInputAccessoryMediatorTest,
+       SetSuggestionsEnabledThrottlesOnlyAfterSuggestionsShown) {
+  base::test::ScopedFeatureList scoped_feature_list(
+      kThrottleFormInputAccessorySuggestionRefresh);
+
+  CaptureAccessorySuggestions();
+  FormActivityParams params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
+  NSMutableArray<FormSuggestionsReadyCompletion>* suggestions_completions =
+      SetUpProviderWithPendingSuggestionQueries(params);
+
+  // Register a form activity so `_hasLastSeenParams` is set, and return empty
+  // suggestions initially so `_suggestionsHaveBeenShown` remains `NO`.
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
+                                                        params);
+  ASSERT_EQ(suggestions_completions.count, 1ul);
+  suggestions_completions[0](@[], provider_);
+  EXPECT_EQ(received_suggestions_.count, 0u);
+
+  // Even though `suggestionsEnabled` is `YES` by default, calling
+  // `setSuggestionsEnabled:YES` must refresh suggestions because no
+  // suggestions have been shown yet.
+  [mediator_ setSuggestionsEnabled:YES];
+  ASSERT_EQ(suggestions_completions.count, 2ul);
+
+  // Deliver non-empty suggestions so `_suggestionsHaveBeenShown` becomes `YES`.
+  NSArray<FormSuggestion*>* suggestions =
+      @[ CreateFormSuggestion(kTestSuggestionValue) ];
+  suggestions_completions[1](suggestions, provider_);
+  EXPECT_EQ(received_suggestions_.count, 1u);
+
+  // Calling `setSuggestionsEnabled:YES` again while `suggestionsEnabled` is
+  // already `YES` and suggestions have been shown should now be throttled.
+  [mediator_ setSuggestionsEnabled:YES];
+  EXPECT_EQ(suggestions_completions.count, 2ul);
+
+  // Disabling and re-enabling suggestions should still trigger a refresh.
+  [mediator_ setSuggestionsEnabled:NO];
+  [mediator_ setSuggestionsEnabled:YES];
+  EXPECT_EQ(suggestions_completions.count, 3ul);
+}
+
+// Tests that `form_changed` events do not deactivate the input accessory view.
+TEST_F(FormInputAccessoryMediatorTest,
+       FormActivityFormChangedDoesNotDeactivateAccessoryView) {
+  FormActivityParams focus_params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
+                                                        focus_params);
+  EXPECT_TRUE(mediator_.inputAccessoryViewActive);
+
+  FormActivityParams form_changed_params;
+  form_changed_params.type = FormActivityParams::ActivityType::kFormChanged;
+  form_changed_params.field_type = FormActivityParams::FieldType::kUnknown;
+  form_changed_params.input_missing = false;
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
+                                                        form_changed_params);
+
+  EXPECT_TRUE(mediator_.inputAccessoryViewActive);
+}
+
+// Tests that focusing a text field reloads first responder input views if the
+// accessory view was previously deactivated (even when `_lastSeenParams`
+// already had a keyboard-triggering field type).
+TEST_F(FormInputAccessoryMediatorTest,
+       SubsequentFocusAfterInactiveAccessoryViewReloadsInputViews) {
+  FormActivityParams focus_params =
+      CreateFormActivityParams(FormActivityParams::FieldType::kText);
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
+                                                        focus_params);
+  EXPECT_TRUE(mediator_.inputAccessoryViewActive);
+
+  // Register an incomplete activity that deactivates the accessory view without
+  // resetting `_lastSeenParams`.
+  FormActivityParams missing_input_params = focus_params;
+  missing_input_params.input_missing = true;
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
+                                                        missing_input_params);
+  EXPECT_FALSE(mediator_.inputAccessoryViewActive);
+
+  // Focusing another text field should reactivate the accessory view and reload
+  // the first responder's input views.
+  FormInputAccessoryMediator* mock_mediator = OCMPartialMock(mediator_);
+  OCMExpect([mock_mediator reloadFirstResponderInputViews]);
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame_.get(),
+                                                        focus_params);
+  EXPECT_TRUE(mediator_.inputAccessoryViewActive);
+  EXPECT_OCMOCK_VERIFY((id)mock_mediator);
 }

@@ -50,7 +50,7 @@ import type {MultiDevicePageContentData} from '../multidevice_page/multidevice_c
 import {MultiDeviceSettingsMode} from '../multidevice_page/multidevice_constants.js';
 import type {OsPageAvailability} from '../os_page_availability.js';
 import {AccountManagerBrowserProxyImpl} from '../os_people_page/account_manager_browser_proxy.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 
 import {getTemplate} from './os_settings_menu.html.js';
 
@@ -215,27 +215,28 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
     };
   }
 
-  isDrawerMenu: boolean;
-  pageAvailability: OsPageAvailability;
-  private menuItems_: MenuItemData[];
-  private isRtl_: boolean;
-  private selectedItemPath_: string;
+  declare isDrawerMenu: boolean;
+  declare pageAvailability: OsPageAvailability;
+  declare private menuItems_: MenuItemData[];
+  declare private isRtl_: boolean;
+  declare private selectedItemPath_: string;
 
   // Accounts section members.
-  private accountsMenuItemDescription_: string;
+  declare private accountsMenuItemDescription_: string;
 
   // Bluetooth section members.
-  private bluetoothMenuItemDescription_: string;
+  declare private bluetoothMenuItemDescription_: string;
   private bluetoothPropertiesObserverReceiver_:
       BluetoothPropertiesObserverReceiver|undefined;
 
   // Device section members.
-  private deviceMenuItemDescription_: string;
-  private hasKeyboard_: boolean|undefined;
-  private hasMouse_: boolean|undefined;
-  private hasPointingStick_: boolean|undefined;
-  private hasTouchpad_: boolean|undefined;
-  private inputDeviceSettingsProvider_: InputDeviceSettingsProviderInterface;
+  declare private deviceMenuItemDescription_: string;
+  declare private hasKeyboard_: boolean|undefined;
+  declare private hasMouse_: boolean|undefined;
+  declare private hasPointingStick_: boolean|undefined;
+  declare private hasTouchpad_: boolean|undefined;
+  private inputDeviceSettingsProvider_: InputDeviceSettingsProviderInterface =
+      getInputDeviceSettingsProvider();
   private keyboardSettingsObserverReceiver_: KeyboardSettingsObserverReceiver|
       undefined;
   private mouseSettingsObserverReceiver_: MouseSettingsObserverReceiver|
@@ -246,20 +247,15 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
       undefined;
 
   // Internet section members.
-  private networkConfig_: CrosNetworkConfigInterface;
-  private internetMenuItemDescription_: string;
-  private isDeviceCellularCapable_: boolean;
+  private networkConfig_: CrosNetworkConfigInterface =
+      MojoInterfaceProviderImpl.getInstance().getMojoServiceRemote();
+  declare private internetMenuItemDescription_: string;
+  private isDeviceCellularCapable_: boolean = false;
 
   // Multidevice section members.
-  private multideviceBrowserProxy_: MultiDeviceBrowserProxy;
-  private multideviceMenuItemDescription_: string;
-
-  constructor() {
-    super();
-
-    this.inputDeviceSettingsProvider_ = getInputDeviceSettingsProvider();
-    this.multideviceBrowserProxy_ = MultiDeviceBrowserProxyImpl.getInstance();
-  }
+  private multideviceBrowserProxy_: MultiDeviceBrowserProxy =
+      MultiDeviceBrowserProxyImpl.getInstance();
+  declare private multideviceMenuItemDescription_: string;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -282,8 +278,6 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
     this.observeTouchpadSettings_();
 
     // Internet menu item.
-    this.networkConfig_ =
-        MojoInterfaceProviderImpl.getInstance().getMojoServiceRemote();
     this.computeIsDeviceCellularCapable_().then(() => {
       this.updateInternetMenuItemDescription_();
     });

@@ -128,11 +128,11 @@ bool AdvancedProtectionStatusManagerDesktop::IsRefreshScheduled() {
 void AdvancedProtectionStatusManagerDesktop::OnExtendedAccountInfoUpdated(
     const AccountInfo& info) {
   // Ignore update if the updated account is not the primary account.
-  if (!IsUnconsentedPrimaryAccount(info)) {
+  if (!IsUnconsentedPrimaryAccount(info.GetAccountId())) {
     return;
   }
 
-  if (info.is_under_advanced_protection) {
+  if (info.IsUnderAdvancedProtection()) {
     // User just enrolled into advanced protection.
     OnAdvancedProtectionEnabled();
   } else {
@@ -147,7 +147,7 @@ void AdvancedProtectionStatusManagerDesktop::OnExtendedAccountInfoRemoved(
   CoreAccountId unconsented_primary_account_id =
       GetUnconsentedPrimaryAccountId();
   if (!unconsented_primary_account_id.empty() &&
-      unconsented_primary_account_id == info.account_id) {
+      unconsented_primary_account_id == info.GetAccountId()) {
     OnAdvancedProtectionDisabled();
   }
 }
@@ -192,7 +192,7 @@ void AdvancedProtectionStatusManagerDesktop::OnAccessTokenFetchComplete(
     CoreAccountId account_id,
     GoogleServiceAuthError error,
     signin::AccessTokenInfo token_info) {
-  DCHECK(access_token_fetcher_);
+  CHECK(access_token_fetcher_, base::NotFatalUntil::M162);
 
   if (error.state() == GoogleServiceAuthError::NONE) {
     OnGetIDToken(account_id, token_info.id_token);
@@ -267,9 +267,8 @@ void AdvancedProtectionStatusManagerDesktop::UpdateLastRefreshTime() {
 }
 
 bool AdvancedProtectionStatusManagerDesktop::IsUnconsentedPrimaryAccount(
-    const CoreAccountInfo& account_info) {
-  return !account_info.account_id.empty() &&
-         account_info.account_id == GetUnconsentedPrimaryAccountId();
+    const CoreAccountId& account_id) {
+  return !account_id.empty() && account_id == GetUnconsentedPrimaryAccountId();
 }
 
 void AdvancedProtectionStatusManagerDesktop::OnGetIDToken(
@@ -309,8 +308,8 @@ AdvancedProtectionStatusManagerDesktop::AdvancedProtectionStatusManagerDesktop(
     : pref_service_(pref_service),
       identity_manager_(identity_manager),
       minimum_delay_(min_delay) {
-  DCHECK(identity_manager_);
-  DCHECK(pref_service_);
+  CHECK(identity_manager_, base::NotFatalUntil::M162);
+  CHECK(pref_service_, base::NotFatalUntil::M162);
 
   Initialize();
   MaybeRefreshOnStartUp();

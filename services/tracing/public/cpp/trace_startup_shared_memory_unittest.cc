@@ -24,6 +24,10 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
 
+#if BUILDFLAG(IS_WIN)
+#include <shlobj.h>
+#endif
+
 namespace tracing {
 namespace {
 
@@ -88,7 +92,8 @@ MULTIPROCESS_TEST_MAIN(InitFromLaunchParameters) {
 class TraceStartupSharedMemoryTest : public ::testing::TestWithParam<bool> {
  protected:
   void Initialize() {
-    startup_config_ = base::WrapUnique(new TraceStartupConfig());
+    startup_config_ = base::WrapUnique(
+        new TraceStartupConfig(*base::CommandLine::ForCurrentProcess()));
   }
 
   std::unique_ptr<TraceStartupConfig> startup_config_;
@@ -103,7 +108,14 @@ INSTANTIATE_TEST_SUITE_P(All,
 #endif
                                            ));
 
-TEST_P(TraceStartupSharedMemoryTest, PassSharedMemoryRegion) {
+// TODO(crbug.com/567738166): The child process crashes on Android before
+// running its test body, so this test has never passed there.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_PassSharedMemoryRegion DISABLED_PassSharedMemoryRegion
+#else
+#define MAYBE_PassSharedMemoryRegion PassSharedMemoryRegion
+#endif
+TEST_P(TraceStartupSharedMemoryTest, MAYBE_PassSharedMemoryRegion) {
   base::CommandLine::ForCurrentProcess()->AppendSwitch(switches::kTraceStartup);
 
   Initialize();
@@ -122,6 +134,9 @@ TEST_P(TraceStartupSharedMemoryTest, PassSharedMemoryRegion) {
 #if BUILDFLAG(IS_WIN)
   launch_options.start_hidden = true;
   launch_options.elevated = GetParam();
+  if (launch_options.elevated && !::IsUserAnAdmin()) {
+    GTEST_SKIP() << "This test must be run by an admin user";
+  }
 #endif
 
   // Update the launch parameters.
@@ -169,11 +184,15 @@ TEST_P(TraceStartupSharedMemoryTest, PassSharedMemoryRegion) {
             EXPECT_TRUE(WaitForMultiprocessTestChildExit(
                 process, TestTimeouts::action_timeout(), &exit_code));
             EXPECT_EQ(0, exit_code);
+            wait->Signal();
           },
           &wait, command_line, launch_options));
 
-  EXPECT_TRUE(success);
-  wait.TimedWait(TestTimeouts::action_timeout());
+  ASSERT_TRUE(success);
+  // `WaitForMultiprocessTestChildExit()` is already bounded by
+  // `action_timeout()`, and the task always signals afterwards. Wait without a
+  // timeout so `wait` is guaranteed to outlive the task.
+  wait.Wait();
 }
 
 }  // namespace tracing

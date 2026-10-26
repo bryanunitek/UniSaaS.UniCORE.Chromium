@@ -644,28 +644,36 @@ TEST_F(DisplayTest, BackdropFilterTest) {
   //   |    |  D|  |
   //   |    +---+  |
   //   +-----------+
+  cc::FilterOperation backdrop_filter =
+      cc::FilterOperation::CreateBlurFilter(5.0);
   const gfx::Size display_size(100, 100);
-  const gfx::Rect damage_rect(20, 20, 40, 40);
+  const gfx::Rect isolated_damage_rect(20, 20, 40, 40);
   display_->Resize(display_size);
   const gfx::Rect sub_surface_rect(5, 5, 25, 25);
   const gfx::Rect no_damage;
+
+  // By this time, the compositor should have already calculated the damage rect
+  // taking into consideration backdrop filters. Therefore, to correctly
+  // simulate the compositor's behavior, we need to calculate the damage rect
+  // while taking the backdrop filters into account so that no damage expansion
+  // occurs during surface aggregation.
+  gfx::Rect intersection_damage_rect = isolated_damage_rect;
+  intersection_damage_rect.Intersect(sub_surface_rect);
+  gfx::Rect expanded_intersection_damage_rect =
+      backdrop_filter.MapRect(intersection_damage_rect, SkMatrix());
+  gfx::Rect damage_rect = expanded_intersection_damage_rect;
+  damage_rect.Union(isolated_damage_rect);
 
   CompositorRenderPassId::Generator render_pass_id_generator;
   for (size_t frame_num = 1; frame_num <= 2; ++frame_num) {
     bool first_frame = frame_num == 1;
     ResetDamageForTest();
     {
-      // Sub-surface with backdrop-filter.
+      // To-be-filtered sub-surface.
       CompositorRenderPassList pass_list;
       auto bd_pass = CompositorRenderPass::Create();
-      cc::FilterOperations backdrop_filters;
-      backdrop_filters.Append(cc::FilterOperation::CreateBlurFilter(5.0));
-      bd_pass->SetAll(
-          render_pass_id_generator.GenerateNextId(), sub_surface_rect,
-          no_damage, gfx::Transform(), cc::FilterOperations(), backdrop_filters,
-          SkPath::Rect(gfx::RectToSkRect(sub_surface_rect)), SubtreeCaptureId(),
-          sub_surface_rect.size(), ViewTransitionElementResourceId(), false,
-          false, false, false, false);
+      bd_pass->SetNew(render_pass_id_generator.GenerateNextId(),
+                      sub_surface_rect, no_damage, gfx::Transform());
       pass_list.push_back(std::move(bd_pass));
 
       CompositorFrame frame = CompositorFrameBuilder()
@@ -692,50 +700,30 @@ TEST_F(DisplayTest, BackdropFilterTest) {
     }
 
     {
-      CompositorRenderPassList pass_list;
-      auto pass = CompositorRenderPass::Create();
-      pass->output_rect = gfx::Rect(display_size);
-      pass->damage_rect = damage_rect;
-      pass->id = render_pass_id_generator.GenerateNextId();
+      // Child render pass embedding sub surface 1 via a SurfaceDrawQuad.
+      auto child_pass_id = render_pass_id_generator.GenerateNextId();
+      auto root_pass_id = render_pass_id_generator.GenerateNextId();
 
-      // Embed sub surface 1, with backdrop filter.
-      auto* shared_quad_state1 = pass->CreateAndAppendSharedQuadState();
-      shared_quad_state1->SetAll(
-          gfx::Transform(), /*quad_layer_rect=*/sub_surface_rect,
-          /*visible_quad_layer_rect=*/sub_surface_rect,
-          /*mask_filter_info=*/gfx::MaskFilterInfo(),
-          /*clip=*/std::nullopt, /*contents_opaque=*/true,
-          /*opacity=*/1.0f, SkBlendMode::kSrcOver, /*sorting_context=*/0,
-          /*layer_id=*/0u, /*fast_rounded_corner=*/false);
-      auto* quad1 = pass->quad_list.AllocateAndConstruct<SurfaceDrawQuad>();
-      quad1->SetNew(shared_quad_state1, /*rect=*/sub_surface_rect,
-                    /*visible_rect=*/sub_surface_rect,
-                    SurfaceRange(std::nullopt, sub_surface_id1),
-                    SkColors::kBlack,
-                    /*stretch_content_to_fill_bounds=*/false);
-      quad1->allow_merge = false;
-
-      // Embed sub surface 2, with damage.
-      auto* shared_quad_state2 = pass->CreateAndAppendSharedQuadState();
-      gfx::Rect rect1(display_size);
-      shared_quad_state2->SetAll(
-          gfx::Transform(), /*quad_layer_rect=*/rect1,
-          /*visible_quad_layer_rect=*/rect1,
-          /*mask_filter_info=*/gfx::MaskFilterInfo(),
-          /*clip_rect=*/std::nullopt,
-          /*are_contents_opaque=*/true, /*opacity=*/1.0f, SkBlendMode::kSrcOver,
-          /*sorting_context=*/0,
-          /*layer_id=*/0u, /*fast_rounded_corner=*/false);
-      auto* quad2 = pass->quad_list.AllocateAndConstruct<SurfaceDrawQuad>();
-      quad2->SetNew(shared_quad_state2, /*rect=*/rect1,
-                    /*visible_rect=*/rect1,
-                    SurfaceRange(std::nullopt, sub_surface_id2),
-                    SkColors::kBlack,
-                    /*stretch_content_to_fill_bounds=*/false);
-      quad2->allow_merge = false;
-
-      pass_list.push_back(std::move(pass));
-      SubmitCompositorFrame(&pass_list, local_surface_id);
+      auto frame =
+          CompositorFrameBuilder()
+              .AddRenderPass(RenderPassBuilder(child_pass_id, sub_surface_rect)
+                                 .AddSurfaceQuad(sub_surface_rect,
+                                                 SurfaceRange(std::nullopt,
+                                                              sub_surface_id1),
+                                                 {.allow_merge = false}))
+              .AddRenderPass(
+                  RenderPassBuilder(root_pass_id, gfx::Rect(display_size))
+                      .AddRenderPassQuad(
+                          sub_surface_rect, child_pass_id,
+                          {.backdrop_filters =
+                               cc::FilterOperations({backdrop_filter})})
+                      .AddSurfaceQuad(
+                          gfx::Rect(display_size),
+                          SurfaceRange(std::nullopt, sub_surface_id2),
+                          {.allow_merge = false})
+                      .SetDamageRect(damage_rect))
+              .Build();
+      support_->SubmitCompositorFrame(local_surface_id, std::move(frame));
 
       scheduler_->reset_swapped_for_test();
       DrawAndSwapParams backdrop_params;
@@ -748,7 +736,7 @@ TEST_F(DisplayTest, BackdropFilterTest) {
       // damaged surface rect, and is not expanded for the backdrop-filter
       // surface.
       auto expected_damage =
-          first_frame ? gfx::Rect(display_size) : gfx::Rect(20, 20, 40, 40);
+          first_frame ? gfx::Rect(display_size) : damage_rect;
       EXPECT_EQ(expected_damage, software_output_device_->damage_rect());
       // The scissor rect is expanded by direct_renderer to include the
       // overlapping pixel-moving backdrop filter surface.
@@ -1170,6 +1158,149 @@ TEST_F(DisplayTest, DontThrottleWhenParentBlocked) {
   UpdateBeginFrameTime(sub_support.get(), frame_time);
 }
 
+// Tests that a client is not throttled for undrawn frames while the active
+// frame of its embedder references a newer surface of that client. The
+// embedder's frame activated, e.g. at its deadline, without the client's newer
+// surface, so the embedder isn't blocked on it.
+TEST_F(DisplayTest, DontThrottleUndrawnFramesWhileEmbedderAwaitsSurface) {
+  base::test::ScopedFeatureList scoped_features;
+  scoped_features.InitWithFeatures(
+      {features::kNoUndrawnFrameThrottleWhileEmbedderWaits},
+      {features::kNoCompositorFrameAcks});
+  id_allocator_.GenerateId();
+  SetUpGpuDisplay(RendererSettings());
+  display_->Initialize(client_.get(), manager_.surface_manager());
+  display_->SetLocalSurfaceId(id_allocator_.GetCurrentLocalSurfaceId(), 1.f);
+  support_->SetNeedsBeginFrame(true);
+
+  // Both surfaces of the sub client are in the same allocation group.
+  const base::UnguessableToken sub_embed_token =
+      base::UnguessableToken::Create();
+  const LocalSurfaceId sub_local_surface_id(6, sub_embed_token);
+  const LocalSurfaceId sub_local_surface_id2(7, sub_embed_token);
+  const SurfaceId sub_surface_id2(kAnotherFrameSinkId, sub_local_surface_id2);
+
+  MockCompositorFrameSinkClient sub_client;
+  auto sub_support = std::make_unique<CompositorFrameSinkSupport>(
+      &sub_client, &manager_, kAnotherFrameSinkId, /*is_root=*/false);
+  sub_support->SetNeedsBeginFrame(true);
+
+  // Submit kUndrawnFrameLimit+1 undrawn frames, so that the sub client is
+  // throttled.
+  base::TimeTicks frame_time;
+  for (uint32_t i = 0; i < CompositorFrameSinkSupport::kUndrawnFrameLimit + 1;
+       ++i) {
+    frame_time = base::TimeTicks::Now();
+    EXPECT_TRUE(ShouldSendBeginFrame(sub_support.get(), frame_time));
+    UpdateBeginFrameTime(sub_support.get(), frame_time);
+    sub_support->SubmitCompositorFrame(sub_local_surface_id,
+                                       MakeDefaultCompositorFrame());
+    UpdateBeginFrameTime(sub_support.get(), frame_time);
+  }
+  frame_time = base::TimeTicks::Now();
+  EXPECT_FALSE(ShouldSendBeginFrame(sub_support.get(), frame_time));
+  UpdateBeginFrameTime(sub_support.get(), frame_time);
+
+  // The display's frame references only |sub_surface_id2|, which doesn't exist
+  // yet, and has no activation dependencies, so it activates immediately.
+  CompositorFrame frame = CompositorFrameBuilder()
+                              .AddDefaultRenderPass()
+                              .SetReferencedSurfaces({SurfaceRange(
+                                  sub_surface_id2, sub_surface_id2)})
+                              .Build();
+  support_->SubmitCompositorFrame(id_allocator_.GetCurrentLocalSurfaceId(),
+                                  std::move(frame));
+  EXPECT_FALSE(
+      manager_.surface_manager()->HasBlockedEmbedder(kAnotherFrameSinkId));
+
+  // The sub client keeps receiving BeginFrames while it submits undrawn frames
+  // to the older surface.
+  for (uint32_t i = 0; i < CompositorFrameSinkSupport::kUndrawnFrameLimit * 3;
+       ++i) {
+    frame_time = base::TimeTicks::Now();
+    EXPECT_TRUE(ShouldSendBeginFrame(sub_support.get(), frame_time));
+    UpdateBeginFrameTime(sub_support.get(), frame_time);
+    sub_support->SubmitCompositorFrame(sub_local_surface_id,
+                                       MakeDefaultCompositorFrame());
+    UpdateBeginFrameTime(sub_support.get(), frame_time);
+  }
+
+  // If the embedder stops referencing the sub client, throttling resumes.
+  support_->SubmitCompositorFrame(
+      id_allocator_.GetCurrentLocalSurfaceId(),
+      CompositorFrameBuilder().AddDefaultRenderPass().Build());
+  frame_time = base::TimeTicks::Now();
+  EXPECT_FALSE(ShouldSendBeginFrame(sub_support.get(), frame_time));
+  UpdateBeginFrameTime(sub_support.get(), frame_time);
+
+  // Restore the reference so the embedder awaits |sub_surface_id2| again.
+  support_->SubmitCompositorFrame(id_allocator_.GetCurrentLocalSurfaceId(),
+                                  CompositorFrameBuilder()
+                                      .AddDefaultRenderPass()
+                                      .SetReferencedSurfaces({SurfaceRange(
+                                          sub_surface_id2, sub_surface_id2)})
+                                      .Build());
+
+  // Once the sub client submits |sub_surface_id2|, the embedder no longer
+  // awaits a newer surface, and throttling resumes, since nothing was drawn.
+  frame_time = base::TimeTicks::Now();
+  EXPECT_TRUE(ShouldSendBeginFrame(sub_support.get(), frame_time));
+  UpdateBeginFrameTime(sub_support.get(), frame_time);
+  sub_support->SubmitCompositorFrame(sub_local_surface_id2,
+                                     MakeDefaultCompositorFrame());
+  frame_time = base::TimeTicks::Now();
+  EXPECT_FALSE(ShouldSendBeginFrame(sub_support.get(), frame_time));
+  UpdateBeginFrameTime(sub_support.get(), frame_time);
+}
+
+// Tests that when `kNoUndrawnFrameThrottleWhileEmbedderWaits` is disabled, a
+// client is throttled for undrawn frames even though the active frame of its
+// embedder references a newer surface of that client.
+TEST_F(DisplayTest, ThrottleUndrawnFramesWhileEmbedderAwaitsWhenDisabled) {
+  base::test::ScopedFeatureList scoped_features;
+  scoped_features.InitWithFeatures(
+      {}, {features::kNoUndrawnFrameThrottleWhileEmbedderWaits,
+           features::kNoCompositorFrameAcks});
+  id_allocator_.GenerateId();
+  SetUpGpuDisplay(RendererSettings());
+  display_->Initialize(client_.get(), manager_.surface_manager());
+  display_->SetLocalSurfaceId(id_allocator_.GetCurrentLocalSurfaceId(), 1.f);
+  support_->SetNeedsBeginFrame(true);
+
+  const base::UnguessableToken sub_embed_token =
+      base::UnguessableToken::Create();
+  const LocalSurfaceId sub_local_surface_id(6, sub_embed_token);
+  const LocalSurfaceId sub_local_surface_id2(7, sub_embed_token);
+  const SurfaceId sub_surface_id2(kAnotherFrameSinkId, sub_local_surface_id2);
+
+  MockCompositorFrameSinkClient sub_client;
+  auto sub_support = std::make_unique<CompositorFrameSinkSupport>(
+      &sub_client, &manager_, kAnotherFrameSinkId, /*is_root=*/false);
+  sub_support->SetNeedsBeginFrame(true);
+
+  CompositorFrame frame = CompositorFrameBuilder()
+                              .AddDefaultRenderPass()
+                              .SetReferencedSurfaces({SurfaceRange(
+                                  sub_surface_id2, sub_surface_id2)})
+                              .Build();
+  support_->SubmitCompositorFrame(id_allocator_.GetCurrentLocalSurfaceId(),
+                                  std::move(frame));
+
+  base::TimeTicks frame_time;
+  for (uint32_t i = 0; i < CompositorFrameSinkSupport::kUndrawnFrameLimit + 1;
+       ++i) {
+    frame_time = base::TimeTicks::Now();
+    EXPECT_TRUE(ShouldSendBeginFrame(sub_support.get(), frame_time));
+    UpdateBeginFrameTime(sub_support.get(), frame_time);
+    sub_support->SubmitCompositorFrame(sub_local_surface_id,
+                                       MakeDefaultCompositorFrame());
+    UpdateBeginFrameTime(sub_support.get(), frame_time);
+  }
+  frame_time = base::TimeTicks::Now();
+  EXPECT_FALSE(ShouldSendBeginFrame(sub_support.get(), frame_time));
+  UpdateBeginFrameTime(sub_support.get(), frame_time);
+}
+
 TEST_F(DisplayTest, DisplayTransformHint) {
   SetUpSoftwareDisplay(RendererSettings());
   display_->Initialize(client_.get(), manager_.surface_manager());
@@ -1311,29 +1442,34 @@ TEST_F(DisplayTest, PixelMovingForegroundFilterTest) {
   //   |    +---+  |
   //   +-----------+
   const gfx::Size display_size(100, 100);
-  const gfx::Rect damage_rect(20, 20, 40, 40);
+  const gfx::Rect isolated_damage_rect(20, 20, 40, 40);
   display_->Resize(display_size);
   const gfx::Rect sub_surface_rect(5, 5, 25, 25);
   const gfx::Rect no_damage;
+
+  // By this time, the compositor should have already calculated the damage rect
+  // taking into consideration foreground filters. Therefore, to correctly
+  // simulate the compositor's behavior, we need to calculate the damage rect
+  // while taking the foreground filters into account so that no damage
+  // expansion occurs during surface aggregation.
+  cc::FilterOperation foreground_filter =
+      cc::FilterOperation::CreateDropShadowFilter(gfx::Point(5, 10), 2.f,
+                                                  SkColors::kTransparent);
+  gfx::Rect expanded_filter_rect = foreground_filter.MapRect(sub_surface_rect);
+  gfx::Rect damage_rect = isolated_damage_rect;
+  ASSERT_TRUE(expanded_filter_rect.Intersects(damage_rect));
+  damage_rect.Union(expanded_filter_rect);
 
   CompositorRenderPassId::Generator render_pass_id_generator;
   for (size_t frame_num = 1; frame_num <= 2; ++frame_num) {
     bool first_frame = frame_num == 1;
     ResetDamageForTest();
     {
-      // Sub-surface with pixel-moving foreground filter - drop shadow filter
+      // To-be-filtered Sub-surface.
       CompositorRenderPassList pass_list;
       auto bd_pass = CompositorRenderPass::Create();
-      cc::FilterOperations foreground_filters;
-      foreground_filters.Append(cc::FilterOperation::CreateDropShadowFilter(
-          gfx::Point(5, 10), 2.f, SkColors::kTransparent));
-      bd_pass->SetAll(render_pass_id_generator.GenerateNextId(),
-                      sub_surface_rect, no_damage, gfx::Transform(),
-                      foreground_filters, cc::FilterOperations(),
-                      SkPath::Rect(gfx::RectToSkRect(sub_surface_rect)),
-                      SubtreeCaptureId(), sub_surface_rect.size(),
-                      ViewTransitionElementResourceId(), false, false, false,
-                      false, false);
+      bd_pass->SetNew(render_pass_id_generator.GenerateNextId(),
+                      sub_surface_rect, no_damage, gfx::Transform());
       pass_list.push_back(std::move(bd_pass));
 
       CompositorFrame frame = CompositorFrameBuilder()
@@ -1360,19 +1496,28 @@ TEST_F(DisplayTest, PixelMovingForegroundFilterTest) {
     }
 
     {
-      auto frame = CompositorFrameBuilder()
-                       .AddRenderPass(
-                           RenderPassBuilder(display_size)
-                               .AddSurfaceQuad(
-                                   sub_surface_rect,
-                                   SurfaceRange(std::nullopt, sub_surface_id1),
-                                   {.allow_merge = false})
-                               .AddSurfaceQuad(
-                                   gfx::Rect(display_size),
-                                   SurfaceRange(std::nullopt, sub_surface_id2),
-                                   {.allow_merge = false})
-                               .SetDamageRect(damage_rect))
-                       .Build();
+      // Child render pass embedding sub surface 1 via a SurfaceDrawQuad.
+      auto child_pass_id = render_pass_id_generator.GenerateNextId();
+      auto root_pass_id = render_pass_id_generator.GenerateNextId();
+
+      auto frame =
+          CompositorFrameBuilder()
+              .AddRenderPass(RenderPassBuilder(child_pass_id, sub_surface_rect)
+                                 .AddSurfaceQuad(sub_surface_rect,
+                                                 SurfaceRange(std::nullopt,
+                                                              sub_surface_id1),
+                                                 {.allow_merge = false}))
+              .AddRenderPass(
+                  RenderPassBuilder(root_pass_id, gfx::Rect(display_size))
+                      .AddRenderPassQuad(sub_surface_rect, child_pass_id,
+                                         {.filters = cc::FilterOperations(
+                                              {foreground_filter})})
+                      .AddSurfaceQuad(
+                          gfx::Rect(display_size),
+                          SurfaceRange(std::nullopt, sub_surface_id2),
+                          {.allow_merge = false})
+                      .SetDamageRect(damage_rect))
+              .Build();
       support_->SubmitCompositorFrame(local_surface_id, std::move(frame));
 
       scheduler_->reset_swapped_for_test();
@@ -2314,13 +2459,17 @@ TEST_F(DisplayVisibilityTest, DiscardBuffersOnVisibilityChangeGated) {
   // Verify we allocated some buffers (they are not destroyed yet)
   EXPECT_TRUE(skia_output_surface_->destroyed_mailboxes().empty());
 
-  // Enabled, buffers are discarded.
+  // Enabled, buffers are retained for kPaused and discarded for kInvisible.
   {
     base::test::ScopedFeatureList feature_list;
     feature_list.InitAndEnableFeature(
         features::kVizBufferQueueDiscardOnVisibilityChange);
 
-    display_->SetVisible(false);
+    display_->SetVisible(mojom::DisplayVisibility::kPaused);
+    EXPECT_FALSE(display_->visible());
+    EXPECT_TRUE(skia_output_surface_->destroyed_mailboxes().empty());
+
+    display_->SetVisible(mojom::DisplayVisibility::kInvisible);
     EXPECT_FALSE(skia_output_surface_->destroyed_mailboxes().empty());
   }
 
@@ -2346,6 +2495,61 @@ TEST_F(DisplayVisibilityTest, DiscardBuffersOnVisibilityChangeGated) {
     display_->SetVisible(false);
     EXPECT_TRUE(skia_output_surface_->destroyed_mailboxes().empty());
   }
+}
+
+TEST_F(DisplayVisibilityTest, SetVisibleMarksRootSurfaceDamagedAndFullDamage) {
+  RendererSettings settings;
+  settings.partial_swap_enabled = true;
+  SetUpSoftwareDisplay(settings);
+  display_->Initialize(client_.get(), manager_.surface_manager());
+
+  const gfx::Size size(100, 100);
+  display_->Resize(size);
+
+  ParentLocalSurfaceIdAllocator allocator;
+  allocator.GenerateId();
+  LocalSurfaceId local_surface_id = allocator.GetCurrentLocalSurfaceId();
+
+  auto submit_frame_with_damage = [&](const gfx::Rect& damage_rect) {
+    CompositorRenderPassList pass_list;
+    auto pass = CompositorRenderPass::Create();
+    pass->SetNew(CompositorRenderPassId{1}, gfx::Rect(size), damage_rect,
+                 gfx::Transform());
+    pass_list.push_back(std::move(pass));
+    SubmitCompositorFrame(&pass_list, local_surface_id);
+  };
+
+  submit_frame_with_damage(gfx::Rect(size));
+  display_->SetLocalSurfaceId(local_surface_id, 1.f);
+
+  DrawAndSwapParams params;
+  params.expected_display_time = base::TimeTicks::Now();
+  EXPECT_TRUE(display_->DrawAndSwap(params));
+  EXPECT_EQ(gfx::Rect(size), software_output_device_->damage_rect());
+
+  // Draw a second frame with partial damage so the last aggregated damage rect
+  // is 10x10 rather than full-frame.
+  submit_frame_with_damage(gfx::Rect(10, 10));
+  EXPECT_TRUE(display_->DrawAndSwap(params));
+  EXPECT_EQ(gfx::Rect(10, 10), software_output_device_->damage_rect());
+
+  // Pausing drawing with buffers retained (kPaused) and then resuming
+  // (kVisible) should not mark the root surface damaged.
+  scheduler_->ResetDamageForTest();
+  display_->SetVisible(mojom::DisplayVisibility::kPaused);
+  EXPECT_FALSE(scheduler_->damaged());
+  display_->SetVisible(mojom::DisplayVisibility::kVisible);
+  EXPECT_FALSE(scheduler_->damaged());
+
+  // Hiding without buffers and re-showing the display without submitting a new
+  // frame should mark the root surface damaged for DisplayScheduler and force
+  // full-frame damage in SurfaceAggregator.
+  display_->SetVisible(false);
+  EXPECT_TRUE(scheduler_->damaged());
+
+  display_->SetVisible(true);
+  EXPECT_TRUE(display_->DrawAndSwap(params));
+  EXPECT_EQ(gfx::Rect(size), software_output_device_->damage_rect());
 }
 
 }  // namespace viz

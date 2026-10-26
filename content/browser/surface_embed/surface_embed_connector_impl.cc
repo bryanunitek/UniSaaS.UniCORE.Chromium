@@ -104,7 +104,8 @@ class SurfaceEmbedConnectorImpl::ParentWCObserver : public WebContentsObserver {
 // static
 void SurfaceEmbedConnector::Attach(WebContents* child_web_contents,
                                    RenderFrameHost* outer_document_rfh,
-                                   SurfaceEmbedConnector::Delegate* delegate) {
+                                   SurfaceEmbedConnector::Delegate* delegate,
+                                   PinchGestureMode pinch_gesture_mode) {
   CHECK(child_web_contents);
   CHECK(outer_document_rfh);
   WebContents* parent_web_contents =
@@ -113,13 +114,10 @@ void SurfaceEmbedConnector::Attach(WebContents* child_web_contents,
   // Must Detach the child before re-Attaching.
   CHECK(!child_web_contents->GetSurfaceEmbedConnector());
   auto connector = base::WrapUnique(new SurfaceEmbedConnectorImpl(
-      child_web_contents, parent_web_contents, outer_document_rfh, delegate));
+      child_web_contents, parent_web_contents, outer_document_rfh, delegate,
+      pinch_gesture_mode));
   static_cast<WebContentsImpl*>(child_web_contents)
       ->SetSurfaceEmbedConnector(std::move(connector));
-
-  static_cast<WebContentsImpl*>(parent_web_contents)
-      ->SurfaceEmbedChildWebContentsAttached(child_web_contents,
-                                             outer_document_rfh);
 }
 
 // static
@@ -135,12 +133,6 @@ void SurfaceEmbedConnector::Detach(WebContents* child_web_contents) {
     // Clear the container accessibility info so we don't try to stitch later.
     connector->SetParentAccessibilityInfo(ui::kInvalidAXNodeID,
                                           ui::AXTreeIDUnknown());
-
-    if (WebContentsImpl* parent_web_contents =
-            connector->parent_web_contents()) {
-      parent_web_contents->SurfaceEmbedChildWebContentsDetached(
-          child_web_contents);
-    }
   }
 
   // Frees the connector and refreshes the child main frame's AX data.
@@ -152,18 +144,18 @@ SurfaceEmbedConnectorImpl::SurfaceEmbedConnectorImpl(
     WebContents* child_web_contents,
     WebContents* parent_web_contents,
     RenderFrameHost* embedder_rfh,
-    SurfaceEmbedConnector::Delegate* delegate)
+    SurfaceEmbedConnector::Delegate* delegate,
+    PinchGestureMode pinch_gesture_mode)
     : delegate_(delegate),
       child_web_contents_(static_cast<WebContentsImpl*>(child_web_contents)),
       // Rely on Chromium's WeakPtrFactory to automatically invalidate this
       // pointer safely at the start of parent_web_contents's destructor.
-      parent_web_contents_(
-          parent_web_contents ? parent_web_contents->GetWeakPtr() : nullptr) {
+      parent_web_contents_(parent_web_contents->GetWeakPtr()),
+      embedder_rfh_(
+          static_cast<RenderFrameHostImpl*>(embedder_rfh)->GetWeakPtr()),
+      pinch_gesture_mode_(pinch_gesture_mode) {
+  CHECK_EQ(WebContents::FromRenderFrameHost(embedder_rfh), parent_web_contents);
   wc_observer_ = std::make_unique<WCObserver>(this, child_web_contents);
-  // The parent WebContents could be null if the child is being moved from one
-  // parent to another.
-  // TODO(crbug.com/496266440): Repoint this observer to the new parent
-  // WebContents when the move occurs.
   parent_wc_observer_ =
       std::make_unique<ParentWCObserver>(this, parent_web_contents);
   CHECK(current_child_frame_host());
@@ -201,6 +193,36 @@ TextInputManager* SurfaceEmbedConnectorImpl::GetTextInputManager() {
                                : nullptr;
 }
 
+WebContentsDelegate* SurfaceEmbedConnectorImpl::GetFirstWebContentsDelegate()
+    const {
+  return parent_web_contents()
+             ? parent_web_contents()->GetFirstWebContentsDelegate()
+             : nullptr;
+}
+
+bool SurfaceEmbedConnectorImpl::HasPointerLockWidgetInParentChain() const {
+  return parent_web_contents() &&
+         parent_web_contents()->HasPointerLockWidgetInParentChain();
+}
+
+void SurfaceEmbedConnectorImpl::SetPointerLockWidgetInParentChain(
+    RenderWidgetHostImpl* widget) {
+  if (parent_web_contents()) {
+    parent_web_contents()->SetPointerLockWidgetInParentChain(widget);
+  }
+}
+
+bool SurfaceEmbedConnectorImpl::HasPointerLock(
+    RenderWidgetHostImpl* render_widget_host) const {
+  return parent_web_contents() &&
+         parent_web_contents()->HasPointerLock(render_widget_host);
+}
+
+RenderWidgetHostImpl* SurfaceEmbedConnectorImpl::GetPointerLockWidget() const {
+  return parent_web_contents() ? parent_web_contents()->GetPointerLockWidget()
+                               : nullptr;
+}
+
 SurfaceEmbedConnector::Delegate* SurfaceEmbedConnectorImpl::GetDelegate() {
   return delegate_;
 }
@@ -224,6 +246,22 @@ void SurfaceEmbedConnectorImpl::OnSynchronizeVisualProperties(
     return;
   }
   SynchronizeVisualProperties(visual_properties, true);
+}
+
+void SurfaceEmbedConnectorImpl::UpdateRenderThrottlingStatus(
+    bool is_throttled,
+    bool subtree_throttled,
+    bool display_locked) {
+  if (is_throttled != is_throttled_ ||
+      subtree_throttled != subtree_throttled_ ||
+      display_locked != display_locked_) {
+    is_throttled_ = is_throttled;
+    subtree_throttled_ = subtree_throttled;
+    display_locked_ = display_locked;
+    if (view_) {
+      view_->UpdateRenderThrottlingStatus();
+    }
+  }
 }
 
 // static
@@ -286,8 +324,21 @@ void SurfaceEmbedConnectorImpl::SetFocusedFrameTree(
   // SetFocusedFrameTree should not be involved.
   CHECK(ContainsOrIsFocusedWebContents(child_web_contents()));
 
+  CHECK(embedder_rfh_);
+  FrameTreeNode* embedder_node = embedder_rfh_->frame_tree_node();
+  embedder_node->frame_tree().SetFocusedFrame(embedder_node,
+                                              /*source=*/nullptr);
+  delegate_->RequestFocusOnEmbedElement();
+
   // Ensure that outer frame trees are focused.
   parent_web_contents()->GetPrimaryFrameTree().FocusOuterFrameTrees();
+
+  // Ensure that the embedded page has focus. This is needed when the focused
+  // frame tree belongs to an inner WebContents of the SurfaceEmbed child.
+  child_web_contents()
+      ->GetPrimaryMainFrame()
+      ->GetRenderWidgetHost()
+      ->SetPageFocus(true);
 
   // Ensure that the embedder's page has focus so that it can display active UI
   // and therefore the embedded plugin is also active.
@@ -355,6 +406,7 @@ void SurfaceEmbedConnectorImpl::SetView(RenderWidgetHostViewChildFrame* view,
   // try to move these updates to a single IPC (see https://crbug.com/750179).
   if (view_) {
     view_->SetFrameConnector(this);
+    view_->host()->UpdateVisualProperties(/*propagate=*/true);
 
     // If the child frame is already visible, it became visible before the
     // frame connector was attached. We need to retroactively update the
@@ -391,19 +443,17 @@ SurfaceEmbedConnectorImpl::GetRootRenderWidgetHostView() {
   if (!parent_web_contents_) {
     return nullptr;
   }
-  WebContentsImpl* root_web_contents = parent_web_contents();
-  while (SurfaceEmbedConnectorImpl* root_connector =
-             static_cast<SurfaceEmbedConnectorImpl*>(
-                 root_web_contents->GetSurfaceEmbedConnector())) {
-    WebContentsImpl* parent = root_connector->parent_web_contents();
-    if (!parent) {
-      break;
-    }
-    root_web_contents = parent;
-  }
-  CHECK(root_web_contents);
   return static_cast<RenderWidgetHostViewBase*>(
-      root_web_contents->GetRenderWidgetHostView());
+      GetRootWebContents(parent_web_contents())->GetRenderWidgetHostView());
+}
+
+input::RenderWidgetHostViewInput*
+SurfaceEmbedConnectorImpl::GetPinchZoomTarget() {
+  if (pinch_gesture_mode_ == PinchGestureMode::kScaleChildWebContents) {
+    return view_;
+  }
+  input::RenderWidgetHostViewInput* parent = GetParentViewInput();
+  return parent ? parent->GetPinchZoomTarget() : nullptr;
 }
 
 void SurfaceEmbedConnectorImpl::RenderProcessGone() {
@@ -482,19 +532,33 @@ FrameConnector::RootViewFocusState SurfaceEmbedConnectorImpl::HasFocus() {
                                : RootViewFocusState::kNotFocused;
 }
 
-void SurfaceEmbedConnectorImpl::FocusRootView() {}
+void SurfaceEmbedConnectorImpl::FocusRootView() {
+  if (RenderWidgetHostViewBase* root_view = GetRootRenderWidgetHostView()) {
+    root_view->Focus();
+  }
+}
 
 blink::mojom::PointerLockResult SurfaceEmbedConnectorImpl::LockPointer(
     bool request_unadjusted_movement) {
-  return blink::mojom::PointerLockResult::kUnknownError;
+  if (RenderWidgetHostViewBase* root_view = GetRootRenderWidgetHostView()) {
+    return root_view->LockPointer(request_unadjusted_movement);
+  }
+  return blink::mojom::PointerLockResult::kWrongDocument;
 }
 
 blink::mojom::PointerLockResult SurfaceEmbedConnectorImpl::ChangePointerLock(
     bool request_unadjusted_movement) {
-  return blink::mojom::PointerLockResult::kUnknownError;
+  if (RenderWidgetHostViewBase* root_view = GetRootRenderWidgetHostView()) {
+    return root_view->ChangePointerLock(request_unadjusted_movement);
+  }
+  return blink::mojom::PointerLockResult::kWrongDocument;
 }
 
-void SurfaceEmbedConnectorImpl::UnlockPointer() {}
+void SurfaceEmbedConnectorImpl::UnlockPointer() {
+  if (RenderWidgetHostViewBase* root_view = GetRootRenderWidgetHostView()) {
+    root_view->UnlockPointer();
+  }
+}
 
 bool SurfaceEmbedConnectorImpl::HasSize() {
   return has_size_;
@@ -537,6 +601,27 @@ double SurfaceEmbedConnectorImpl::GetCssZoomFactorForTesting() {
 const gfx::Size&
 SurfaceEmbedConnectorImpl::GetLocalFrameSizeInPixelsForTesting() {
   return local_frame_size_in_pixels_;
+}
+
+bool SurfaceEmbedConnectorImpl::IsThrottledForTesting() {
+  return IsThrottled();
+}
+
+bool SurfaceEmbedConnectorImpl::IsSubtreeThrottledForTesting() {
+  return IsSubtreeThrottled();
+}
+
+bool SurfaceEmbedConnectorImpl::IsDisplayLockedForTesting() {
+  return IsDisplayLocked();
+}
+
+SurfaceEmbedConnector::PinchGestureMode
+SurfaceEmbedConnectorImpl::GetPinchGestureModeForTesting() const {
+  return pinch_gesture_mode_;
+}
+
+void SurfaceEmbedConnectorImpl::SetPinchGestureMode(PinchGestureMode mode) {
+  pinch_gesture_mode_ = mode;
 }
 
 void SurfaceEmbedConnectorImpl::EnableAutoResize(const gfx::Size& min_size,
@@ -724,6 +809,22 @@ void SurfaceEmbedConnectorImpl::UpdateViewForCurrentRenderFrameHost() {
   UpdateAccessibilityTree();
 }
 
+void SurfaceEmbedConnectorImpl::OnAttachedToParent() {
+  UpdateViewForCurrentRenderFrameHost();
+  if (parent_web_contents()) {
+    CHECK(embedder_rfh_);
+    parent_web_contents()->SurfaceEmbedChildWebContentsAttached(
+        child_web_contents_, embedder_rfh_.get());
+  }
+}
+
+void SurfaceEmbedConnectorImpl::OnDetachedFromParent() {
+  if (parent_web_contents()) {
+    parent_web_contents()->SurfaceEmbedChildWebContentsDetached(
+        child_web_contents_);
+  }
+}
+
 void SurfaceEmbedConnectorImpl::ResetRectInParentView() {
   local_surface_id_ = viz::LocalSurfaceId();
   // TODO(crbug.com/40561516): Consider whether we actually need the next 2
@@ -811,10 +912,18 @@ void SurfaceEmbedConnectorImpl::UpdateChildVisibility() {
     return;
   }
 
-  bool parent_is_visible = (EmbedderVisibility() == Visibility::VISIBLE);
+  const Visibility parent_visibility = EmbedderVisibility();
+  const bool parent_is_hidden = (parent_visibility == Visibility::HIDDEN);
+  const bool parent_is_occluded = (parent_visibility == Visibility::OCCLUDED);
 
-  if (!parent_is_visible) {
+  if (parent_is_hidden) {
     child_web_contents_->WasHidden();
+    return;
+  }
+
+  if (parent_is_occluded &&
+      visibility_ != blink::mojom::FrameVisibility::kNotRendered) {
+    child_web_contents_->WasOccluded();
     return;
   }
 

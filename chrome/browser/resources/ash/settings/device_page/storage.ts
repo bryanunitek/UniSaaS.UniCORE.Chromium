@@ -10,7 +10,6 @@ import 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
 import '../settings_shared.css.js';
 import './storage_external.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {CrLinkRowElement} from 'chrome://resources/ash/common/cr_elements/cr_link_row/cr_link_row.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
@@ -19,7 +18,8 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {isCrostiniSupported, isExternalStorageEnabled, isSkyVaultEnabled} from '../common/load_time_booleans.js';
 import {RouteOriginMixin} from '../common/route_origin_mixin.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import type {DevicePageBrowserProxy} from './device_page_browser_proxy.js';
@@ -127,16 +127,16 @@ export class SettingsStorageElement extends SettingsStorageElementBase {
   }
 
   private browserProxy_: DevicePageBrowserProxy;
-  private isEphemeralUser_: boolean;
-  private showCrostiniStorage_: boolean;
-  private isDriveEnabled_: boolean;
-  private isExternalStorageEnabled_: boolean;
-  private showOtherUsers_: boolean;
-  private sizeStat_: StorageSizeStat;
+  declare private isEphemeralUser_: boolean;
+  declare private showCrostiniStorage_: boolean;
+  declare private isDriveEnabled_: boolean;
+  declare private isExternalStorageEnabled_: boolean;
+  declare private showOtherUsers_: boolean;
+  declare private sizeStat_: StorageSizeStat;
   private updateTimerId_: number;
-  private myFilesSizeSubLabel_: string;
-  private storageEncryptionSubLabel_: string;
-  private readonly isSkyVaultEnabled_: boolean;
+  declare private myFilesSizeSubLabel_: string;
+  declare private storageEncryptionSubLabel_: string;
+  declare private readonly isSkyVaultEnabled_: boolean;
 
   constructor() {
     super();

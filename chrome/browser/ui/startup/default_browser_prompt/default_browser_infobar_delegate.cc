@@ -56,7 +56,7 @@ bool DefaultBrowserInfoBarDelegate::ShouldExpire(
 }
 
 void DefaultBrowserInfoBarDelegate::InfoBarDismissed() {
-  // |profile_| may be null in tests.
+  // `profile_` may be null in tests.
   if (profile_) {
     chrome::startup::default_prompt::UpdatePrefsForDismissedPrompt(profile_);
   }
@@ -76,12 +76,12 @@ int DefaultBrowserInfoBarDelegate::GetButtons() const {
 
 std::u16string DefaultBrowserInfoBarDelegate::GetButtonLabel(
     InfoBarButton button) const {
-  DCHECK_EQ(BUTTON_OK, button);
+  CHECK_EQ(BUTTON_OK, button, base::NotFatalUntil::M162);
   return l10n_util::GetStringUTF16(IDS_DEFAULT_BROWSER_INFOBAR_OK_BUTTON_LABEL);
 }
 
 bool DefaultBrowserInfoBarDelegate::Accept() {
-  // |profile_| may be null in tests.
+  // `profile_` may be null in tests.
   if (profile_) {
     chrome::startup::default_prompt::UpdatePrefsForDismissedPrompt(profile_);
   }

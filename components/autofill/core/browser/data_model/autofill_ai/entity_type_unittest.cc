@@ -191,10 +191,16 @@ TEST(AutofillEntityTypeTest, AttributeGetNameForI18n) {
   AttributeType l = AttributeType(kShipmentCarrierDomain);
   AttributeType m = AttributeType(kShipmentDeliveryZipCode);
   AttributeType n = AttributeType(kShipmentShippedDate);
-  AttributeType o = AttributeType(kShipmentOrderIds);
-  AttributeType p = AttributeType(kShipmentOrderDates);
   AttributeType q = AttributeType(kShipmentMerchantName);
   AttributeType r = AttributeType(kShipmentProductNames);
+
+  AttributeType s = AttributeType(kFlightReservationFlightNumber);
+  AttributeType t = AttributeType(kFlightReservationTicketNumber);
+  AttributeType u = AttributeType(kFlightReservationConfirmationCode);
+  AttributeType v = AttributeType(kFlightReservationPassengerName);
+  AttributeType w = AttributeType(kFlightReservationDepartureAirport);
+  AttributeType x = AttributeType(kFlightReservationArrivalAirport);
+  AttributeType y = AttributeType(kFlightReservationDepartureDate);
 
   EXPECT_EQ(a.GetNameForI18n(), u"Country");
   EXPECT_EQ(b.GetNameForI18n(), u"License plate");
@@ -212,10 +218,16 @@ TEST(AutofillEntityTypeTest, AttributeGetNameForI18n) {
   EXPECT_EQ(l.GetNameForI18n(), u"Carrier domain");
   EXPECT_EQ(m.GetNameForI18n(), u"Delivery zip code");
   EXPECT_EQ(n.GetNameForI18n(), u"Shipped date");
-  EXPECT_EQ(o.GetNameForI18n(), u"Order ids");
-  EXPECT_EQ(p.GetNameForI18n(), u"Order dates");
   EXPECT_EQ(q.GetNameForI18n(), u"Merchant name");
   EXPECT_EQ(r.GetNameForI18n(), u"Product names");
+
+  EXPECT_EQ(s.GetNameForI18n(), u"Flight number");
+  EXPECT_EQ(t.GetNameForI18n(), u"Flight ticket");
+  EXPECT_EQ(u.GetNameForI18n(), u"Booking code");
+  EXPECT_EQ(v.GetNameForI18n(), u"Passenger");
+  EXPECT_EQ(w.GetNameForI18n(), u"Departure airport");
+  EXPECT_EQ(x.GetNameForI18n(), u"Arrival airport");
+  EXPECT_EQ(y.GetNameForI18n(), u"Departure date");
 }
 
 TEST(AutofillEntityTypeTest, DataType) {

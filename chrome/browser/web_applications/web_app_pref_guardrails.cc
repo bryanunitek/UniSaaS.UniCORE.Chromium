@@ -121,14 +121,13 @@ WebAppPrefGuardrails WebAppPrefGuardrails::GetForDefaultAppUpdateOnStartup(
 // static
 void WebAppPrefGuardrails::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
+  // LINT.IfChange(WebAppPrefs)
   registry->RegisterDictionaryPref(prefs::kWebAppsPreferences);
   registry->RegisterDictionaryPref(prefs::kWebAppsAppAgnosticIphState);
   registry->RegisterDictionaryPref(prefs::kWebAppsAppAgnosticMlState);
   registry->RegisterDictionaryPref(
       prefs::kWebAppsAppAgnosticIPHLinkCapturingState);
-  // NOTE: If you add new prefs here that should be cleared during database
-  // corruption recovery, make sure to update
-  // `RemoveWebAppJob::RemoveForCorruptDatabase`.
+  // LINT.ThenChange(chrome/browser/web_applications/web_app_utils.cc:WebAppPrefs)
 }
 
 // static
@@ -176,8 +175,7 @@ void WebAppPrefGuardrails::RecordDismiss(const webapps::AppId& app_id,
 }
 
 void WebAppPrefGuardrails::RecordAccept(const webapps::AppId& app_id) {
-  ScopedDictPrefUpdate update(pref_service_,
-                              std::string(pref_names_->global_pref_name));
+  ScopedDictPrefUpdate update(pref_service_, pref_names_->global_pref_name);
   if (!pref_names_->not_accepted_count_name.empty()) {
     UpdateIntWebAppPref(app_id, pref_names_->not_accepted_count_name, 0);
     update->Set(pref_names_->not_accepted_count_name, 0);
@@ -198,8 +196,8 @@ bool WebAppPrefGuardrails::IsBlockedByGuardrails(const webapps::AppId& app_id) {
   std::optional<std::string> app_block_reason = IsAppBlocked(app_id);
   if (app_block_reason.has_value()) {
     if (HasGlobalPrefs()) {
-      ScopedDictPrefUpdate global_update(
-          pref_service_, std::string(pref_names_->global_pref_name));
+      ScopedDictPrefUpdate global_update(pref_service_,
+                                         pref_names_->global_pref_name);
       LogGlobalBlockReason(global_update, app_block_reason.value());
     }
     return true;
@@ -208,8 +206,8 @@ bool WebAppPrefGuardrails::IsBlockedByGuardrails(const webapps::AppId& app_id) {
   std::optional<std::string> global_block_reason = IsGloballyBlocked();
   if (global_block_reason.has_value()) {
     CHECK(HasGlobalPrefs());
-    ScopedDictPrefUpdate global_update(
-        pref_service_, std::string(pref_names_->global_pref_name));
+    ScopedDictPrefUpdate global_update(pref_service_,
+                                       pref_names_->global_pref_name);
     LogGlobalBlockReason(global_update, global_block_reason.value());
     if (global_block_reason == "global_not_accept_count_exceeded" &&
         !pref_names_->all_blocked_time_name.empty() && !IsGlobalBlockActive()) {
@@ -346,8 +344,7 @@ void WebAppPrefGuardrails::UpdateGlobalNotAcceptedPrefs(
   // place instead of 2. Break this up into seaparate functions that increment
   // the integer pref and sset the time pref, and tkaes in a reference to
   // ScopedDictPrefUpdate.
-  ScopedDictPrefUpdate update(pref_service_,
-                              std::string(pref_names_->global_pref_name));
+  ScopedDictPrefUpdate update(pref_service_, pref_names_->global_pref_name);
   int global_count =
       update->FindInt(pref_names_->not_accepted_count_name).value_or(0);
   update->Set(pref_names_->not_accepted_count_name,
@@ -391,8 +388,7 @@ void WebAppPrefGuardrails::ResetGlobalGuardrails(const webapps::AppId& app_id) {
   if (!HasGlobalPrefs()) {
     return;
   }
-  ScopedDictPrefUpdate update(pref_service_,
-                              std::string(pref_names_->global_pref_name));
+  ScopedDictPrefUpdate update(pref_service_, pref_names_->global_pref_name);
   if (!pref_names_->all_blocked_time_name.empty()) {
     update->Remove(pref_names_->all_blocked_time_name);
   }

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/check_deref.h"
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_item_span.h"
 #include "third_party/blink/renderer/core/layout/inline/offset_mapping.h"
@@ -192,14 +193,17 @@ AXBlockFlowData::Neighbor AXBlockFlowData::ComputeNeighborOnLine(
         return FailureReason::kAtLineBoundary;
 
       case FragmentItem::kBox:
-        if (it->BoxFragment()) {
+        if (it->BoxFragment() && !it->IsInlineBox()) {
           // TODO(accessibility): Add a test that exercises this branch.
           // TODO(crbug.com/399204651): Implement navigating into separate
           // PhysicalBox
           // fragments.
           return FailureReason::kAtBoxFragment;
         }
-        // Inline-box continues on to the next/previous item.
+        // Inline-box continues on to the next/previous item. An inline box
+        // like <span> or <a> can have a box fragment of its own, for instance
+        // when it has an outline, but its contents are still in this item
+        // list and it does not change where the lines break.
         break;
 
       case FragmentItem::kInvalid:
@@ -435,9 +439,8 @@ void AXBlockFlowIterator::GetCharacterLayoutPixelOffsets(Vector<int>& offsets) {
     return;
   }
 
-  const ShapeResult* shape_result = shape_result_view->CreateShapeResult();
   const Vector<CharacterRange> ranges =
-      shape_result->IndividualCharacterRanges();
+      shape_result_view->IndividualCharacterRanges();
   float width_so_far = 0.0;
   for (wtf_size_t i = 0; i < offsets.size(); ++i) {
     if (i < ranges.size()) {
@@ -539,7 +542,7 @@ TextOffsetRange AXBlockFlowIterator::TextOffset() const {
 
 PhysicalDirection AXBlockFlowIterator::GetDirection() const {
   auto* layout_text = To<LayoutText>(layout_object_);
-  return WritingDirectionMode(layout_text->StyleRef().GetWritingMode(),
+  return WritingDirectionMode(layout_text->Style().GetWritingMode(),
                               block_flow_data_->ItemAt(current_index_.value())
                                   ->ResolvedDirection())
       .InlineEnd();

@@ -4,14 +4,12 @@
 
 #include "chrome/browser/ui/views/page_info/page_info_bubble_specification.h"
 
-#include <algorithm>
 #include <memory>
 
 #include "base/check.h"
 #include "base/functional/callback_helpers.h"
 #include "chrome/browser/ui/page_info/page_info_dialog.h"
 #include "components/content_settings/core/common/content_settings_types.h"
-#include "ui/views/view.h"
 
 PageInfoBubbleSpecification::Builder::Builder(
     views::BubbleAnchor anchor,
@@ -54,6 +52,13 @@ PageInfoBubbleSpecification::Builder::AddPageInfoClosingCallback(
 }
 
 PageInfoBubbleSpecification::Builder&
+PageInfoBubbleSpecification::Builder::AddGetBrowserCallback(
+    ChromePageInfoDelegate::GetBrowserCallback callback) {
+  page_info_bubble_specification_->AddGetBrowserCallback(std::move(callback));
+  return *this;
+}
+
+PageInfoBubbleSpecification::Builder&
 PageInfoBubbleSpecification::Builder::HideExtendedSiteInfo() {
   page_info_bubble_specification_->HideExtendedSiteInfo();
   return *this;
@@ -63,6 +68,24 @@ PageInfoBubbleSpecification::Builder&
 PageInfoBubbleSpecification::Builder::ShowPermissionPage(
     ContentSettingsType type) {
   page_info_bubble_specification_->ShowPermissionPage(type);
+  return *this;
+}
+
+PageInfoBubbleSpecification::Builder&
+PageInfoBubbleSpecification::Builder::SetOnExtensionsClickedCallback(
+    base::RepeatingClosure callback) {
+  // The extensions menu item visibility is tied to this callback. If called,
+  // a valid callback is required so clicking the item executes an action.
+  CHECK(!callback.is_null())
+      << "The extensions menu item must have a callback to call when clicked";
+  page_info_bubble_specification_->SetOnExtensionsClickedCallback(
+      std::move(callback));
+  return *this;
+}
+
+PageInfoBubbleSpecification::Builder&
+PageInfoBubbleSpecification::Builder::SetSurface(PageInfo::Surface surface) {
+  page_info_bubble_specification_->SetSurface(surface);
   return *this;
 }
 
@@ -103,12 +126,35 @@ void PageInfoBubbleSpecification::AddPageInfoClosingCallback(
   page_info_closing_callback_ = std::move(callback);
 }
 
+void PageInfoBubbleSpecification::AddGetBrowserCallback(
+    ChromePageInfoDelegate::GetBrowserCallback callback) {
+  get_browser_callback_ = std::move(callback);
+}
+
 void PageInfoBubbleSpecification::HideExtendedSiteInfo() {
   show_extended_site_info_ = false;
 }
 
 void PageInfoBubbleSpecification::ShowPermissionPage(ContentSettingsType type) {
   permission_page_type_ = type;
+}
+
+void PageInfoBubbleSpecification::SetOnExtensionsClickedCallback(
+    base::RepeatingClosure callback) {
+  // The extensions menu item visibility is tied to this callback. If called,
+  // a valid callback is required so clicking the item executes an action.
+  CHECK(!callback.is_null())
+      << "The extensions menu item must have a callback to call when clicked";
+  open_extensions_menu_callback_ = std::move(callback);
+}
+
+bool PageInfoBubbleSpecification::should_show_extensions_menu() const {
+  return !open_extensions_menu_callback_.is_null();
+}
+
+const base::RepeatingClosure&
+PageInfoBubbleSpecification::get_open_extensions_menu_callback() const {
+  return open_extensions_menu_callback_;
 }
 
 views::BubbleAnchor PageInfoBubbleSpecification::anchor() {
@@ -143,6 +189,11 @@ PageInfoBubbleSpecification::page_info_closing_callback() {
              : std::move(page_info_closing_callback_);
 }
 
+ChromePageInfoDelegate::GetBrowserCallback
+PageInfoBubbleSpecification::get_browser_callback() {
+  return get_browser_callback_;
+}
+
 bool PageInfoBubbleSpecification::show_extended_site_info() {
   return show_extended_site_info_;
 }
@@ -150,4 +201,12 @@ bool PageInfoBubbleSpecification::show_extended_site_info() {
 std::optional<ContentSettingsType>
 PageInfoBubbleSpecification::permission_page_type() {
   return permission_page_type_;
+}
+
+void PageInfoBubbleSpecification::SetSurface(PageInfo::Surface surface) {
+  surface_ = surface;
+}
+
+PageInfo::Surface PageInfoBubbleSpecification::surface() const {
+  return surface_;
 }

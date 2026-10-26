@@ -14,7 +14,6 @@
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/resource_coordinator/tab_load_tracker_test_support.h"
 #include "chrome/browser/search/search.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/search/ntp_test_utils.h"
@@ -32,6 +31,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 namespace policy {
@@ -207,7 +207,7 @@ IN_PROC_BROWSER_TEST_P(RestoreOnStartupPolicyTest, RunTest) {
       if (blocked_) {
         CheckURLIsBlockedInWebContents(web_contents, expected_urls_[i]);
       } else if (expected_urls_[i] == chrome::ChromeUINewTabURLAsGURL()) {
-        EXPECT_EQ(ntp_test_utils::GetFinalNtpUrl(browser()->profile()),
+        EXPECT_EQ(ntp_test_utils::GetFinalNtpUrl(browser()->GetProfile()),
                   web_contents->GetLastCommittedURL());
       } else {
         EXPECT_EQ(expected_urls_[i], web_contents->GetLastCommittedURL());
@@ -217,10 +217,11 @@ IN_PROC_BROWSER_TEST_P(RestoreOnStartupPolicyTest, RunTest) {
   // Policy urls should be opened on a new window if the startup policy is set
   // as kPrefValueLastAndURLs.
   if (!expected_urls_in_new_window_.empty()) {
-    ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->profile())
-                      ->GetSize());
+    ASSERT_EQ(2u,
+              ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                  ->GetSize());
     BrowserWindowInterface* const pref_urls_opened_browser =
-        ProfileBrowserCollection::GetForProfile(browser()->profile())
+        ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
             ->GetLastActiveBrowser();
     ASSERT_TRUE(pref_urls_opened_browser);
     TabStripModel* model = pref_urls_opened_browser->GetTabStripModel();

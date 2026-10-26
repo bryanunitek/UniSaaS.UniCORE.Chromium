@@ -59,10 +59,12 @@ ts_modules = [
   "background/braille/braille_translator_manager.ts",
   "background/braille/cursor_dots.ts",
   "background/braille/expanding_braille_translator.ts",
+  "background/braille/composition_candidate_provider.ts",
   "background/braille/liblouis.ts",
   "background/braille/pan_strategy.ts",
   "background/braille/spans.ts",
   "background/braille/tenji_translator.ts",
+  "background/braille/wasm_kana_kanji_provider.ts",
   "background/captions_handler.ts",
   "background/chromevox.ts",
   "background/chromevox_range.ts",
@@ -116,6 +118,7 @@ ts_modules = [
   "background/output/output_logger.ts",
   "background/output/output_rules.ts",
   "background/output/output_types.ts",
+  "background/panel/candidate_menu_background.ts",
   "background/panel/i_search.ts",
   "background/panel/i_search_handler.ts",
   "background/panel/panel_background.ts",
@@ -327,6 +330,7 @@ template("generate_deps_js") {
   } else {
     rewrite_rules = []
   }
+
   action(target_name) {
     if (defined(invoker.testonly)) {
       testonly = invoker.testonly
@@ -462,6 +466,7 @@ js2gtest("chromevox_extension_js_tests") {
     "background/braille/expanding_braille_translator_test.js",
     "background/braille/pan_strategy_test.js",
     "background/braille/tenji_translator_test.js",
+    "background/braille/wasm_kana_kanji_provider_test.js",
     "background/editing/editable_text_test.js",
     "background/phonetic_data_test.js",
     "common/key_sequence_test.js",
@@ -487,6 +492,7 @@ js2gtest("chromevox_extension_js_tests") {
     "//chrome/browser/ash/accessibility",
     "//chrome/browser/ash/system_web_apps",
     "//chrome/common",
+    "//chrome/test/base:cros_extension_js_browser_test",
   ]
   test_deps_js_outputs = get_target_outputs(":chromevox_test_deps_js")
   deps_js = test_deps_js_outputs[0]

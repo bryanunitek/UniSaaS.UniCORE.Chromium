@@ -7,14 +7,17 @@
 #include "base/stl_util.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
 #include "chrome/browser/ui/views/tabs/common/tab_group_view.h"
 #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/split_tab_data.h"
 #include "components/tabs/public/tab_collection.h"
 #include "components/tabs/public/tab_collection_types.h"
 #include "components/tabs/public/tab_group.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 
 namespace {
 
@@ -62,7 +65,7 @@ void RootTabCollectionNode::Reset() {
 
 base::CallbackListSubscription
 RootTabCollectionNode::RegisterOnChildrenAddedCallback(
-    base::RepeatingClosure callback) {
+    ChildrenAddedCallback callback) {
   return on_children_added_callback_list_.Add(std::move(callback));
 }
 
@@ -79,6 +82,12 @@ RootTabCollectionNode::RegisterOnChildMovedCallback(
 }
 
 base::CallbackListSubscription
+RootTabCollectionNode::RegisterOnChildWillBeRemovedCallback(
+    RootTabCollectionNode::ChildWillBeRemovedCallback callback) {
+  return on_child_will_be_removed_callback_list_.Add(std::move(callback));
+}
+
+base::CallbackListSubscription
 RootTabCollectionNode::RegisterOnActiveTabChangedCallback(
     RootTabCollectionNode::ActiveTabChangedCallback callback) {
   return on_active_tab_changed_callback_list_.Add(std::move(callback));
@@ -88,13 +97,14 @@ void RootTabCollectionNode::OnChildrenAdded(
     const tabs::TabCollection::Position& position,
     const tabs::TabCollectionNodes& handles,
     bool insert_from_detached) {
+  auto animate_layout = GetController()->ScopedAnimateLayout();
   for (auto handle : handles) {
     tabs::ConstChildPtr child = GetNodeFromHandle(handle);
     GetNodeForHandle(position.parent_handle)
         ->AddNewChild(GetPassKey(), child, position.index,
                       /*perform_initialization=*/insert_from_detached);
   }
-  on_children_added_callback_list_.Notify();
+  on_children_added_callback_list_.Notify(handles);
 }
 
 void RootTabCollectionNode::OnChildrenRemoved(
@@ -105,7 +115,12 @@ void RootTabCollectionNode::OnChildrenRemoved(
     return;
   }
 
+  auto animate_layout = GetController()->ScopedAnimateLayout();
   for (auto& handle : handles) {
+    TabCollectionNode* child_node = parent_node->GetNodeForHandle(handle);
+    if (child_node) {
+      on_child_will_be_removed_callback_list_.Notify(child_node);
+    }
     parent_node->RemoveChild(GetPassKey(), handle,
                              /*perform_deinitialization=*/false);
   }
@@ -132,6 +147,8 @@ void RootTabCollectionNode::OnChildMoved(
       pinned_node->GetNodeForHandle(dst_parent_node->GetHandle()) != nullptr;
 
   bool pin_state_changed = src_pinned != dst_pinned;
+
+  auto animate_layout = GetController()->ScopedAnimateLayout();
 
   if (pin_state_changed) {
     // Pin state change is treated as a remove and add instead of an attach and
@@ -227,6 +244,14 @@ void RootTabCollectionNode::OnTabGroupChanged(const TabGroupChange& change) {
 
   if (change.type == TabGroupChange::kEditorOpened) {
     group_node->GetController()->ShowGroupEditorBubble(group_node);
+  } else if (change.type == TabGroupChange::kVisualsChanged) {
+    // If the group whose visual data (e.g., color) changed is currently
+    // focused, update the focus mode theme color.
+    if (tab_strip_model_->GetFocusedGroup() == change.group) {
+      if (auto* controller = group_node->GetController()) {
+        controller->UpdateFocusModeTheme(change.group);
+      }
+    }
   }
 }
 
@@ -237,8 +262,13 @@ void RootTabCollectionNode::OnTabGroupFocusChanged(
     return;
   }
 
+  auto animate_layout = GetController()->ScopedAnimateLayout();
   tab_strip_controller_->TabGroupFocusChanged(new_focused_group_id,
                                               old_focused_group_id);
+
+  if (view()) {
+    view()->InvalidateLayout();
+  }
 }
 
 void RootTabCollectionNode::NotifyTabSelectionChanged(
@@ -273,8 +303,4 @@ void RootTabCollectionNode::NotifyTabSelectionChanged(
   for (auto* node : nodes_to_notify) {
     node->NotifyTabSelectionChanged();
   }
-}
-
-void RootTabCollectionNode::NotifyOnChildrenAdded() {
-  on_children_added_callback_list_.Notify();
 }

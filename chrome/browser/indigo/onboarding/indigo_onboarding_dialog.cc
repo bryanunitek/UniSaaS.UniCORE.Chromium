@@ -17,16 +17,17 @@
 #include "chrome/common/chrome_features.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/ui_base_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/controls/native/native_view_host.h"
-#include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/layout/layout_provider.h"
 #include "ui/views/view_class_properties.h"
@@ -62,7 +63,10 @@ constexpr gfx::Size kMaxSize{448, 960};
 
 class OnboardingWebView : public views::WebView {
  public:
-  using WebView::WebView;
+  explicit OnboardingWebView(content::BrowserContext* context = nullptr)
+      : WebView(context) {
+    SetAcceleratorHandling(views::WebContentsAcceleratorHandling::kEnabled);
+  }
 
   void SetOnCloseCallback(base::OnceClosure close_callback) {
     close_callback_ = std::move(close_callback);
@@ -87,13 +91,6 @@ class OnboardingWebView : public views::WebView {
                       const blink::mojom::FileChooserParams& params) override {
     FileSelectHelper::RunFileChooser(render_frame_host, std::move(listener),
                                      params);
-  }
-
-  bool HandleKeyboardEvent(
-      content::WebContents* web_contents,
-      const input::NativeWebKeyboardEvent& event) override {
-    return unhandled_keyboard_event_handler_.HandleKeyboardEvent(
-        event, GetFocusManager());
   }
 
   content::WebContents* OpenURLFromTab(
@@ -129,7 +126,6 @@ class OnboardingWebView : public views::WebView {
 
   base::RepeatingCallback<BrowserWindowInterface*()> browser_window_callback_;
   base::OnceClosure close_callback_;
-  views::UnhandledKeyboardEventHandler unhandled_keyboard_event_handler_;
 };
 
 }  // namespace
@@ -187,6 +183,7 @@ IndigoOnboardingDialog::IndigoOnboardingDialog(
   view_observation_.Observe(web_view.get());
 
   delegate_ = std::make_unique<views::DialogDelegate>();
+  delegate_->SetInitiallyFocusedView(web_view.get());
   delegate_->SetContentsView(std::move(web_view));
   delegate_->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   delegate_->SetShowCloseButton(false);
@@ -203,12 +200,13 @@ IndigoOnboardingDialog::IndigoOnboardingDialog(
   // SearchEngineChoiceDialogView for similar examples.
   views::WebView* web_view_ptr =
       static_cast<views::WebView*>(delegate_->GetContentsView());
-  web_view_ptr->holder()->SetCornerRadii(
+  web_view_ptr->holder()->SetNativeViewCornerRadii(
       gfx::RoundedCornersF(views::LayoutProvider::Get()->GetCornerRadiusMetric(
           views::ShapeContextTokens::kDialogRadius)));
 
   auto params = std::make_unique<tabs::TabDialogManager::Params>();
   tab_dialog_manager->ShowDialog(widget_.get(), std::move(params));
+  web_view_ptr->RequestFocus();
 }
 
 IndigoOnboardingDialog::~IndigoOnboardingDialog() {

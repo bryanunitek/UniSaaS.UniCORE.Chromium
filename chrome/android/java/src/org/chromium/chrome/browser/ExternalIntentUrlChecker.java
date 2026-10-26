@@ -7,7 +7,7 @@ package org.chromium.chrome.browser;
 import org.jni_zero.JNINamespace;
 import org.jni_zero.NativeMethods;
 
-import org.chromium.base.library_loader.LibraryLoader;
+import org.chromium.base.ContextUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.embedder_support.util.UrlConstants;
@@ -49,19 +49,28 @@ public class ExternalIntentUrlChecker {
             return true;
         }
 
+        // Block external intents that target Chrome's own content providers (e.g., FileProvider).
+        // Untrusted apps should not be able to force Chrome to open its own protected files,
+        // which could lead to Confused Deputy vulnerabilities.
+        if (UrlConstants.CONTENT_SCHEME.equals(scheme)) {
+            String host = url.getHost();
+            if (host != null && !host.isEmpty()) {
+                String packageName = ContextUtils.getApplicationContext().getPackageName();
+                if (host.equals(packageName) || host.startsWith(packageName + ".")) {
+                    return true;
+                }
+            }
+        }
+
         String urlString = url.getSpec();
 
-        // The native library may be uninitialized at this point. Ensure it's initialized before
-        // calling a native function validateUrl().
-        LibraryLoader.getInstance().ensureInitialized();
         if (!ExternalIntentUrlCheckerJni.get().validateUrl(url)) {
             // Check for safe internal exceptions.
             // Note: GURL spec is canonicalized and scheme/host are lowercase.
             if (urlString.equals(ContentUrlConstants.ABOUT_BLANK_DISPLAY_URL)
                     || urlString.equals(ContentUrlConstants.ABOUT_BLANK_URL)
                     || urlString.equals(UrlConstants.CHROME_DINO_URL)
-                    || urlString.startsWith(UrlConstants.CHROME_EXTENSIONS_URL)
-                    || urlString.startsWith(UrlConstants.PDF_URL)) {
+                    || urlString.startsWith(UrlConstants.CHROME_EXTENSIONS_URL)) {
                 return false;
             }
             return true;

@@ -24,19 +24,20 @@ import org.chromium.chrome.browser.layouts.LayoutStateProvider.LayoutStateObserv
 import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.CurrentTabObserver;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab_ui.TabModelDotInfo;
+import org.chromium.chrome.browser.tab_ui.TabSwitcherUtils;
 import org.chromium.chrome.browser.tabmodel.IncognitoStateProvider;
 import org.chromium.chrome.browser.tabmodel.IncognitoStateProvider.IncognitoStateObserver;
 import org.chromium.chrome.browser.tabmodel.OverridableTabCount;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
-import org.chromium.chrome.browser.toolbar.R;
 import org.chromium.chrome.browser.ui.actions.ActionId;
 import org.chromium.chrome.browser.ui.actions.ActionProperties;
 import org.chromium.chrome.browser.ui.actions.ActionRegistry;
 import org.chromium.chrome.browser.ui.actions.ActionUtils;
+import org.chromium.chrome.browser.ui.actions.R;
 import org.chromium.chrome.browser.ui.actions.ResourceTextResolver;
 import org.chromium.chrome.browser.ui.actions.button.ButtonState;
 import org.chromium.chrome.browser.ui.android.bars_common.IphIntent;
@@ -147,7 +148,7 @@ public class TabSwitcherActionProvider implements Destroyable {
         TabModelUtils.runOnTabStateInitialized(
                 mTabModelSelector,
                 mCallbackController.makeCancelable(
-                        (unusedTabModelSelector) -> {
+                        _ -> {
                             mIsTabStateInitialized = true;
                             updateDependentProperties();
                         }));
@@ -160,7 +161,7 @@ public class TabSwitcherActionProvider implements Destroyable {
         mPageLoadObserver =
                 new CurrentTabObserver(
                         mTabModelSelector.getCurrentTabSupplier(),
-                        new EmptyTabObserver() {
+                        new TabObserver() {
                             @Override
                             public void onPageLoadFinished(Tab tab, GURL url) {
                                 handlePageLoadFinished();
@@ -303,14 +304,18 @@ public class TabSwitcherActionProvider implements Destroyable {
     private void updateDependentProperties() {
         mModel.set(TabSwitcherActionProperties.IS_INCOGNITO, mIsIncognito);
 
-        @PluralsRes
-        int contentDescriptionRes =
-                mShowDot && ActionUtils.isDataSharingEnabled()
-                        ? R.plurals
-                                .accessibility_toolbar_btn_tabswitcher_toggle_default_with_notification
-                        : R.plurals.accessibility_toolbar_btn_tabswitcher_toggle_default;
-
-        ResourceTextResolver resolver = new ResourceTextResolver(contentDescriptionRes, mTabCount);
+        ResourceTextResolver resolver;
+        if (!mIsTabStateInitialized) {
+            resolver = new ResourceTextResolver(R.string.tab_switcher_button_label);
+        } else {
+            @PluralsRes
+            int contentDescriptionRes =
+                    mShowDot && ActionUtils.isDataSharingEnabled()
+                            ? R.plurals
+                                    .accessibility_toolbar_btn_tabswitcher_toggle_default_with_notification
+                            : R.plurals.accessibility_toolbar_btn_tabswitcher_toggle_default;
+            resolver = new ResourceTextResolver(contentDescriptionRes, mTabCount);
+        }
 
         mModel.set(ActionProperties.CONTENT_DESCRIPTION_RESOLVER, resolver);
         mModel.set(ActionProperties.TOOLTIP_TEXT_RESOLVER, resolver);
@@ -326,7 +331,9 @@ public class TabSwitcherActionProvider implements Destroyable {
                                 || mLayoutStateProvider.isLayoutStartingToHide(
                                         LayoutType.BROWSING));
 
-        if (!mIsTabStateInitialized || mTabCount < 1) {
+        if (TabSwitcherUtils.isGridTabSwitcherDisabled()
+                || !mIsTabStateInitialized
+                || mTabCount < 1) {
             buttonState = ButtonState.UNCLICKABLE;
         } else if (buttonState == ButtonState.UNCLICKABLE) {
             buttonState = ButtonState.DEFAULT;

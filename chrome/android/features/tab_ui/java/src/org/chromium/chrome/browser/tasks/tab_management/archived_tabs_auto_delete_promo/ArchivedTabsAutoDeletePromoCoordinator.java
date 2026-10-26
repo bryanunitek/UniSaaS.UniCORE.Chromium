@@ -16,11 +16,10 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
 import org.chromium.chrome.browser.tab.TabArchiveSettings;
-import org.chromium.chrome.browser.tasks.tab_management.TabArchiveSettingsFragment;
+import org.chromium.chrome.browser.tasks.tab_management.archived_tabs.TabArchiveSettingsFragment;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
 import org.chromium.components.browser_ui.settings.SettingsNavigation;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
@@ -83,15 +82,11 @@ public class ArchivedTabsAutoDeletePromoCoordinator {
 
         mModel.set(
                 ArchivedTabsAutoDeletePromoProperties.ON_YES_BUTTON_CLICK_LISTENER,
-                (v) -> {
-                    onPromoChoice(UserChoice.YES);
-                });
+                _ -> onPromoChoice(UserChoice.YES));
 
         mModel.set(
                 ArchivedTabsAutoDeletePromoProperties.ON_NO_BUTTON_CLICK_LISTENER,
-                (v) -> {
-                    onPromoChoice(UserChoice.NO);
-                });
+                _ -> onPromoChoice(UserChoice.NO));
     }
 
     /** Cleans up resources. */
@@ -131,7 +126,7 @@ public class ArchivedTabsAutoDeletePromoCoordinator {
         mSheetContent = new ArchivedTabsAutoDeletePromoSheetContent(contentView, descriptionString);
 
         mSheetObserver =
-                new EmptyBottomSheetObserver() {
+                new BottomSheetObserver() {
                     @Override
                     public void onSheetClosed(@StateChangeReason int reason) {
                         if (reason != StateChangeReason.INTERACTION_COMPLETE) {
@@ -201,6 +196,9 @@ public class ArchivedTabsAutoDeletePromoCoordinator {
             mSheetObserver = null;
         }
         if (mSheetContent != null) {
+            if (mBottomSheetController != null) {
+                mBottomSheetController.hideContent(mSheetContent, false);
+            }
             mSheetContent.destroy();
             mSheetContent = null;
         }

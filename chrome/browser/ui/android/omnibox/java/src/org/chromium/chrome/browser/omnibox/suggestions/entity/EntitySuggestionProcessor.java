@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.omnibox.suggestions.entity;
 import android.graphics.Color;
 import android.text.TextUtils;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.build.annotations.NullMarked;
@@ -15,8 +16,6 @@ import org.chromium.chrome.browser.omnibox.styles.OmniboxDrawableState;
 import org.chromium.chrome.browser.omnibox.styles.SuggestionSpannable;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteUIContext;
 import org.chromium.chrome.browser.omnibox.suggestions.basic.BasicSuggestionProcessor;
-import org.chromium.chrome.browser.omnibox.suggestions.basic.SuggestionViewProperties;
-import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.omnibox.OmniboxSuggestionType;
@@ -50,17 +49,7 @@ public class EntitySuggestionProcessor extends BasicSuggestionProcessor {
 
     @Override
     public PropertyModel createModel() {
-        return new PropertyModel(EntitySuggestionViewProperties.ALL_KEYS);
-    }
-
-    @Override
-    public void populateModel(
-            AutocompleteInput input,
-            AutocompleteMatch suggestion,
-            PropertyModel model,
-            int position) {
-        super.populateModel(input, suggestion, model, position);
-        model.set(SuggestionViewProperties.ALLOW_WRAP_AROUND, false);
+        return createPropertyModel(EntitySuggestionViewProperties.ALL_KEYS);
     }
 
     @VisibleForTesting
@@ -74,7 +63,7 @@ public class EntitySuggestionProcessor extends BasicSuggestionProcessor {
         if (TextUtils.isEmpty(colorSpec)) return super.getFallbackIcon(match);
 
         try {
-            int color = Color.parseColor(colorSpec);
+            @ColorInt int color = Color.parseColor(colorSpec);
             return OmniboxDrawableState.forColor(color);
         } catch (IllegalArgumentException e) {
             return super.getFallbackIcon(match);

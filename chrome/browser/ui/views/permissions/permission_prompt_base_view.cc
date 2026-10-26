@@ -4,16 +4,20 @@
 
 #include "chrome/browser/ui/views/permissions/permission_prompt_base_view.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
+#include "base/check_is_test.h"
 #include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_tracker.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
@@ -22,13 +26,14 @@
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/permissions/features.h"
 #include "components/permissions/permission_request.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
+#include "components/permissions/request_type.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/webapps/isolated_web_apps/scheme.h"
+#include "ui/base/base_window.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -87,7 +92,8 @@ PermissionPromptBaseView::PermissionPromptBaseView(
                                views::BubbleBorder::DIALOG_SHADOW,
                                /*autosize=*/true),
       WebContentsObserver(web_contents),
-      url_identity_(GetUrlIdentity(web_contents, *delegate)) {
+      url_identity_(GetUrlIdentity(web_contents, *delegate)),
+      permission_prompt_delegate_(delegate) {
   auto* host_widget =
       views::Widget::GetWidgetForNativeWindow(GetNativeWindow());
   record_host_always_active_value_ =
@@ -148,7 +154,12 @@ void PermissionPromptBaseView::AnchorToPageInfoOrChip() {
     set_parent_window(platform_util::GetViewForWindow(GetNativeWindow()));
   }
   if (configuration.highlighted_element) {
-    SetHighlightedElement(*configuration.highlighted_element);
+    if (configuration.highlighted_element_context) {
+      SetHighlightedElement(*configuration.highlighted_element,
+                            configuration.highlighted_element_context);
+    } else {
+      SetHighlightedElement(*configuration.highlighted_element);
+    }
   }
   if (configuration.anchor.IsNull()) {
     SetAnchorRect(bubble_anchor_util::GetPageInfoAnchorRect(GetBrowser()));
@@ -172,6 +183,65 @@ void PermissionPromptBaseView::OnOcclusionStateChanged(bool occluded) {
   occluded_by_picture_in_picture_ = occluded;
 }
 
+bool PermissionPromptBaseView::MaybeAddMediaPreview(size_t index) {
+#if !BUILDFLAG(IS_CHROMEOS)
+  if (media_previews_.has_value()) {
+    return false;
+  }
+  if (!permission_prompt_delegate_ || !web_contents()) {
+    return false;
+  }
+
+  // Unit tests may call this without initializing the host window, but this
+  // should not happen in production code.
+  if (!GetNativeWindow()) {
+    CHECK_IS_TEST();
+    return false;
+  }
+
+  std::vector<std::string> requested_audio_capture_device_ids;
+  std::vector<std::string> requested_video_capture_device_ids;
+  const auto& requests = permission_prompt_delegate_->Requests();
+  const bool has_ptz = std::ranges::contains(
+      requests, permissions::RequestType::kCameraPanTiltZoom,
+      &permissions::PermissionRequest::request_type);
+  for (const auto& request : requests) {
+    if (request->request_type() ==
+            permissions::RequestType::kCameraPanTiltZoom ||
+        (request->request_type() == permissions::RequestType::kCameraStream &&
+         !has_ptz)) {
+      requested_video_capture_device_ids =
+          request->GetRequestedVideoCaptureDeviceIds();
+    } else if (request->request_type() ==
+               permissions::RequestType::kMicStream) {
+      requested_audio_capture_device_ids =
+          request->GetRequestedAudioCaptureDeviceIds();
+    }
+  }
+
+  if (requested_audio_capture_device_ids.empty() &&
+      requested_video_capture_device_ids.empty()) {
+    return false;
+  }
+
+  media_previews_.emplace(
+      Profile::FromBrowserContext(web_contents()->GetBrowserContext()), this,
+      index, std::move(requested_audio_capture_device_ids),
+      std::move(requested_video_capture_device_ids));
+  return true;
+#else
+  return false;
+#endif
+}
+
+void PermissionPromptBaseView::UpdateMediaDevicePreferenceRanking() {
+#if !BUILDFLAG(IS_CHROMEOS)
+  if (media_previews_.has_value()) {
+    media_previews_->UpdateDevicePreferenceRanking();
+  }
+#endif
+}
+
 void PermissionPromptBaseView::FilterUnintenedEventsAndRunCallbacks(
     int button_id,
     const ui::Event& event) {
@@ -193,7 +263,7 @@ void PermissionPromptBaseView::FilterUnintenedEventsAndRunCallbacks(
 UrlIdentity PermissionPromptBaseView::GetUrlIdentity(
     content::WebContents* web_contents,
     permissions::PermissionPrompt::Delegate& delegate) {
-  DCHECK(!delegate.Requests().empty());
+  CHECK(!delegate.Requests().empty(), base::NotFatalUntil::M162);
 
   GURL origin_url = delegate.GetRequestingOrigin();
   // Use the full URL for Isolated Web Apps to match it with the app scope.
@@ -225,11 +295,10 @@ std::u16string PermissionPromptBaseView::GetAllowAlwaysText(
 }
 
 std::u16string PermissionPromptBaseView::GetAllowAlwaysText(
-    const std::vector<base::SafeRef<permissions::PermissionRequest>>&
-        visible_requests) {
+    const std::vector<permissions::PermissionRequest*>& visible_requests) {
   CHECK_GT(visible_requests.size(), 0u);
   return GetAllowAlwaysTextInternal(visible_requests.size(),
-                                    &*visible_requests[0]);
+                                    visible_requests[0]);
 }
 
 std::u16string PermissionPromptBaseView::GetBlockText(
@@ -241,10 +310,9 @@ std::u16string PermissionPromptBaseView::GetBlockText(
 }
 
 std::u16string PermissionPromptBaseView::GetBlockText(
-    const std::vector<base::SafeRef<permissions::PermissionRequest>>&
-        visible_requests) {
+    const std::vector<permissions::PermissionRequest*>& visible_requests) {
   CHECK_GT(visible_requests.size(), 0u);
-  return GetBlockTextInternal(visible_requests.size(), &*visible_requests[0]);
+  return GetBlockTextInternal(visible_requests.size(), visible_requests[0]);
 }
 
 void PermissionPromptBaseView::StartTrackingPictureInPictureOcclusion() {
@@ -307,8 +375,7 @@ void PermissionPromptBaseView::HostPaintAsActiveChanged() {
 
 bool PermissionPromptBaseView::IsForPictureInPictureWindow() const {
   if (const BrowserWindowInterface* browser = GetBrowser()) {
-    return browser->GetType() ==
-           BrowserWindowInterface::Type::TYPE_PICTURE_IN_PICTURE;
+    return browser->GetType() == BrowserWindowInterface::Type::TYPE_FLOATING;
   }
   return !!DocumentPipHost::FromChildWebContents(web_contents());
 }

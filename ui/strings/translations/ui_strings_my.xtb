@@ -11,7 +11,6 @@
 <translation id="1253734725326687145">တို့ထိရမည့် နေရာသည် ညာဘက်အပေါ်သို့ ရွေ့သွားပါပြီ။ ဤနေရာကို တို့ပါ။</translation>
 <translation id="1266864766717917324"><ph name="CONTENT_TYPE" /> ကို မျှဝေ၍မရပါ။</translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">စာသားကို ပိုသေးသော အပိုင်းများအဖြစ် မျှဝေကြည့်ပါ။</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">ညာမှ ဘယ်သို့</translation>
 <translation id="1383876407941801731">ရှာဖွေမှု</translation>
@@ -38,7 +37,6 @@
 <translation id="1901303067676059328">အားလုံးကို &amp;ရွေးရန်</translation>
 <translation id="19085484004813472">၎င်းသည် ဝန်ဆောင်မှုအသစ်ဖြစ်သည်</translation>
 <translation id="2006524834898217237">ဤစက်သည် အင်တာနက်ချိတ်ထားမှု ရှိမရှိ စစ်ဆေးပါ။</translation>
-<translation id="208586643495776849">ထပ်လုပ်ကြည့်ပါ</translation>
 <translation id="2111134541987263231"><ph name="BEGIN_BOLD" />ရုပ်ဖျက်မုဒ်တွင် ခွင့်ပြုရန်<ph name="END_BOLD" /> ဖွင့်ပါ</translation>
 <translation id="2141853158323869627">{DAYS,plural, =1{၁ ရက်}other{# ရက်}}</translation>
 <translation id="2148716181193084225">ယနေ့</translation>
@@ -85,7 +83,6 @@
 <translation id="3306688585798492231">အသင့်ပါ ဖန်သားပြင်ပြသမှု</translation>
 <translation id="335581015389089642">စကားပြောမှု</translation>
 <translation id="3372635229069101468"><ph name="BEGIN_BOLD" />အသေးစိတ်<ph name="END_BOLD" /> ကိုနှိပ်ပါ</translation>
-<translation id="3389286852084373014">စာသား အလွန်ကြီးနေသည်</translation>
 <translation id="3406306243914553062">HTML အကြောင်းအရာ</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{၁ ရက်ကျန်၏}other{# ရက်ကျန်၏}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> ဖိုင်</translation>
@@ -128,7 +125,6 @@
 <translation id="5046499563572181734">ဤနေရာကို တို့ပါ</translation>
 <translation id="5076340679995252485">&amp;ကူးထည့်ရန်</translation>
 <translation id="520299402983819650"><ph name="QUANTITY" /> PB</translation>
-<translation id="5278860589123563674">ပို့၍ မရပါ</translation>
 <translation id="5283101102242354279">‘ရုပ်ဖျက်မုဒ်’ တွင် နောက်ဆက်တွဲဖွင့်ရန်-</translation>
 <translation id="528468243742722775">အဆုံး</translation>
 <translation id="5329858601952122676">&amp;ဖျက်ရန်</translation>

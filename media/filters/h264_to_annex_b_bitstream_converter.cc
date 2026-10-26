@@ -8,7 +8,10 @@
 
 #include "base/containers/span_reader.h"
 #include "base/containers/span_writer.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
+#include "base/numerics/checked_math.h"
+#include "media/base/media_switches.h"
 #include "media/formats/mp4/box_definitions.h"
 #include "media/parsers/h264_parser.h"
 
@@ -30,6 +33,20 @@ static bool IsAccessUnitBoundaryNal(int nal_unit_type) {
     return true;
   }
   return false;
+}
+
+// Returns true if a NAL unit should be dropped instead of being written to the
+// output. Keep in sync with `ShouldSkipNALU()` in media/formats/mp4/avc.cc.
+static bool ShouldSkipNalUnit(uint32_t nal_unit_length, int nal_unit_type) {
+  // Dummy NALUs inserted by buggy encoders.
+  if (nal_unit_length == 1 && nal_unit_type == H264NALU::kUnspecified) {
+    return true;
+  }
+  // NALUs of the unspecified type 31, which some platform decoders fail on
+  // (b/567236166).
+  constexpr int kNalUnitTypeUnspecified31 = 31;
+  return nal_unit_type == kNalUnitTypeUnspecified31 &&
+         base::FeatureList::IsEnabled(kH264SkipUnspecifiedNalus);
 }
 
 H264ToAnnexBBitstreamConverter::H264ToAnnexBBitstreamConverter()
@@ -73,7 +90,7 @@ uint32_t H264ToAnnexBBitstreamConverter::GetConfigSize(
 uint32_t H264ToAnnexBBitstreamConverter::CalculateNeededOutputBufferSize(
     base::span<const uint8_t> input,
     const mp4::AVCDecoderConfigurationRecord* avc_config) const {
-  uint32_t output_size = 0;
+  base::CheckedNumeric<uint32_t> output_size = 0;
   bool first_nal_in_this_access_unit = first_nal_unit_in_access_unit_;
 
   if (input.empty()) {
@@ -117,6 +134,10 @@ uint32_t H264ToAnnexBBitstreamConverter::CalculateNeededOutputBufferSize(
 
     // five least significant bits of first NAL unit byte signify nal_unit_type
     int nal_unit_type = input_reader.remaining_span()[0] & 0x1F;
+    if (ShouldSkipNalUnit(nal_unit_length, nal_unit_type)) {
+      input_reader.Skip(nal_unit_length);
+      continue;
+    }
     if (first_nal_in_this_access_unit ||
         IsAccessUnitBoundaryNal(nal_unit_type)) {
       output_size += 1;  // Extra zero_byte for these nal units
@@ -129,7 +150,7 @@ uint32_t H264ToAnnexBBitstreamConverter::CalculateNeededOutputBufferSize(
     input_reader.Skip(nal_unit_length);
     // No need for trailing zero bits
   }
-  return output_size;
+  return output_size.ValueOrDefault(0);
 }
 
 bool H264ToAnnexBBitstreamConverter::ConvertAVCDecoderConfigToByteStream(
@@ -201,6 +222,10 @@ bool H264ToAnnexBBitstreamConverter::ConvertNalUnitStreamToByteStream(
     // Five least significant bits of first NAL unit byte signify
     // nal_unit_type.
     int nal_unit_type = input_reader.remaining_span()[0] & 0x1F;
+    if (ShouldSkipNalUnit(nal_unit_length, nal_unit_type)) {
+      input_reader.Skip(nal_unit_length);
+      continue;
+    }
     nal_unit_count++;
 
     // Insert the config after the AUD if an AUD is the first NAL unit or

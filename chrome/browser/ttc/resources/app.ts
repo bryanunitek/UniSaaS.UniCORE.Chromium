@@ -6,35 +6,67 @@ import '/strings.m.js';
 
 import {loadTimeData} from '//resources/js/load_time_data.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
+import type {BigBuffer} from '//resources/mojo/mojo/public/mojom/base/big_buffer.mojom-webui.js';
 
+import type {PageContentNode, WebMcpToolDefinition} from './ai_overlay_dialog.mojom-webui.js';
 import {PageCallbackRouter, PageHandlerFactory, PageHandlerRemote} from './ai_overlay_dialog.mojom-webui.js';
 import {getCss} from './app.css.js';
 import {getHtml} from './app.html.js';
 import type {AudioCapturer} from './audio_capturer.js';
 import {BlobAudioCapturer, MicrophoneAudioCapturer} from './audio_capturer.js';
 import {AudioPlayer} from './audio_player.js';
+import {CaptionBlockManager, formatCaptions} from './caption_block_manager.js';
 // <if expr="_google_chrome">
-import {Conversation, State} from './internal/conversation.js';
-import type {ApiConfig, ConversationConfig, OutputTranscriptionMessage, Persona} from './internal/conversation.js';
+import {Conversation, DEFAULT_API_CONFIG, DEFAULT_PERSONA, DEFAULT_SYSTEM_INSTRUCTION, DEFAULT_TTC_BUNDLE_URL, State} from './internal/conversation.js';
+import type {ApiConfig, ConversationConfig, Persona} from './internal/conversation.js';
+// </if>
+import {LocalSpeechRecognition} from './local_speech_recognition.js';
+import {errorLog, log, warnLog} from './logging.js';
+import type {PageContext} from './page_context_manager.js';
+import {AiOverlayToolsRemote} from './tools.mojom-webui.js';
+
+// <if expr="_google_chrome">
+export type ConversationMessage =|{
+  type: 'inputTranscription',
+  text: string,
+}|{
+  type: 'outputTranscription',
+  text: string,
+}|{type: 'clearTranscription'};
 // </if>
 // TODO(crbug.com/532098288): Replace `any` types with proper interfaces when sharing types between branded and unbranded builds.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // Empty stub implementation of Conversation and State for non-branded (Unbranded Chromium) builds
 // where internal resources are omitted.
 // <if expr="not _google_chrome">
-enum State { STOPPED = 'stopped', LISTENING = 'listening', THINKING = 'thinking', SPEAKING = 'speaking', ERROR = 'error' }
+enum State {
+  STOPPED = 'stopped',
+  LISTENING = 'listening',
+  THINKING = 'thinking',
+  TALKING = 'talking',
+  ERROR = 'error'
+}
 class Conversation {
   connected: boolean = false;
   pageContext: any = null;
-  constructor(_config: any, _callbacks: {
-    sendToUI: (msg: any) => void,
-    onStateChange: (state: any, oldState: any) => void,
-    onResponse: (audioData: any) => void,
-  }, _tools?: any, _router?: any, _context?: any) {}
+  constructor(
+      _config: any, _callbacks: {
+        sendToUI: (msg: any) => void,
+        onStateChange: (state: any, oldState: any) => void,
+        onResponse: (audioData: any) => void,
+      },
+      _tools?: any, _router?: any, _context?: any, _pageHandler?: any) {}
   sendAudio(..._args: any[]): void {}
   sendText(..._args: any[]): void {}
   markMockAudioEndTime(..._args: any[]): void {}
-  start(): Promise<void> { return Promise.resolve(); }
+  onTranscription(..._args: any[]): void {}
+  onTurnComplete(): void {}
+  interrupt(): void {}
+  recordOnDeviceSpeechTranscript(..._args: any[]): void {}
+  start(): Promise<void> {
+    return Promise.resolve();
+  }
   stop(): void {}
 }
 type ApiConfig = any;
@@ -44,13 +76,24 @@ type ConversationConfig = {
   api_config?: any,
   [key: string]: any,
 };
-type OutputTranscriptionMessage = any;
+type ConversationMessage = any;
 type Persona = any;
+const DEFAULT_TTC_BUNDLE_URL = '';
+const DEFAULT_API_CONFIG: ApiConfig = {
+  endpointUrl: '',
+  model: '',
+  apiKey: '',
+};
+const DEFAULT_PERSONA: Persona = {
+  id: 'generic',
+  name: 'Chrome',
+  nicknames: [],
+  persona: '',
+  voice: 'Achernar',
+};
+const DEFAULT_SYSTEM_INSTRUCTION = '';
 // </if>
 /* eslint-enable @typescript-eslint/no-explicit-any */
-import {errorLog, log, warnLog} from './logging.js';
-import type {PageContext} from './page_context_manager.js';
-import {AiOverlayToolsRemote} from './tools.mojom-webui.js';
 
 const FILE = 'App';
 
@@ -64,14 +107,6 @@ enum InitializationState {
   INITIALIZED = 'initialized',
 }
 
-/**
- * Used to describe the state of the app after InitializationState reaches
- * INITIALIZED.
- */
-enum UiState {
-  LISTENING = 'listening',
-  SPEAKING = 'speaking',
-}
 
 interface MockAudioButton {
   name: string;
@@ -91,8 +126,8 @@ interface PersonaConfig {
 interface ResourceBundle {
   persona: Persona;
   apiConfig: ApiConfig;
-  speakingBlob: Blob;
-  listeningBlob: Blob;
+  speakingBlob: Blob|null;
+  listeningBlob: Blob|null;
   instruction: string;
 }
 
@@ -119,7 +154,19 @@ export class AppElement extends CrLitElement {
       sequences: {
         type: Array,
       },
-      transcription: {
+      inputTranscription: {
+        type: String,
+      },
+      outputTranscription: {
+        type: String,
+      },
+      inputCaptionsVisible: {
+        type: Boolean,
+      },
+      outputCaptionsVisible: {
+        type: Boolean,
+      },
+      activeType: {
         type: String,
       },
       speakingBlobUrl: {
@@ -131,11 +178,8 @@ export class AppElement extends CrLitElement {
       initializationState: {
         type: String,
       },
-      uiState: {
+      state: {
         type: String,
-      },
-      captionsVisible: {
-        type: Boolean,
       },
       usePersona: {
         type: Boolean,
@@ -144,14 +188,66 @@ export class AppElement extends CrLitElement {
   }
 
   protected accessor initializationState = InitializationState.UNINITIALIZED;
-  protected accessor uiState = UiState.LISTENING;
+  protected accessor state = State.LISTENING;
   protected accessor mockButtons: MockAudioButton[] = [];
   protected accessor sequences: Sequence[] = [];
-  protected accessor transcription: string = '';
+  protected accessor inputTranscription: string = '';
+  protected accessor outputTranscription: string = '';
+  protected accessor inputCaptionsVisible: boolean = true;
+  protected accessor outputCaptionsVisible: boolean = true;
+  protected accessor activeType: 'input'|'output' = 'output';
   protected accessor speakingBlobUrl: string = '';
   protected accessor listeningBlobUrl: string = '';
-  protected accessor captionsVisible: boolean = true;
   protected accessor usePersona: boolean = false;
+
+  private isLocalTranscription: boolean = false;
+  private uiStateListeningTimeout: number = 0;
+  private audioPlaybackStartTime: number = 0;
+
+  private localSpeechRecognition = new LocalSpeechRecognition({
+    onLocalTranscript: (text: string) => this.onLocalInputTranscription(text),
+    isAssistantSpeaking: () => this.isAssistantSpeaking(),
+    isSessionListening: () =>
+        Boolean(this.conversation?.connected) && this.state === State.LISTENING,
+  });
+
+  private captionBlockManager = new CaptionBlockManager({
+    onCaptionBlockUpdated: (blockText: string) => {
+      this.outputTranscription = blockText;
+    },
+  });
+
+  protected isAssistantSpeaking(): boolean {
+    return this.state === State.TALKING ||
+        (this.audioPlayer?.isPlaying() ?? false);
+  }
+
+  protected shouldHideCaptionsContainer(): boolean {
+    if (this.isAssistantSpeaking()) {
+      return !this.outputTranscription || !this.outputCaptionsVisible;
+    }
+    return !this.inputTranscription || !this.inputCaptionsVisible;
+  }
+
+  protected activeCaptionText(): string {
+    const text = this.isAssistantSpeaking() ? this.outputTranscription :
+                                              this.inputTranscription;
+    return this.formatCaptionsText(text);
+  }
+
+  protected isOutputCaptionActive(): boolean {
+    return this.isAssistantSpeaking() && this.outputCaptionsVisible;
+  }
+
+  protected isInputCaptionActive(): boolean {
+    return !this.isAssistantSpeaking() && this.inputCaptionsVisible;
+  }
+
+  protected formatCaptionsText(text: string): string {
+    return formatCaptions(text, this.usePersona ? 50 : 60);
+  }
+
+
 
   private pageHandler: PageHandlerRemote;
   private toolsRemote: AiOverlayToolsRemote;
@@ -179,14 +275,17 @@ export class AppElement extends CrLitElement {
     // Start listening for page context updates immediately to ensure we catch
     // any initial updates before the Conversation is initialized.
     const didChangePageId = this.pageCallbackRouter.didChangePage.addListener(
-        (url, title, content) => this.initialPageContext =
-            {url, title, content, hasHadContent: (content?.length ?? 0) > 0});
+        (url, title) => this.initialPageContext =
+            {url, title, content: null, hasHadContent: false});
     const updateContextId =
         this.pageCallbackRouter.updateCurrentPageContext.addListener(
-            (title, content) => {
+            (title: string, rootNode: PageContentNode|null,
+             webmcpTools: WebMcpToolDefinition[]) => {
               if (this.initialPageContext) {
                 this.initialPageContext.title = title;
-                this.initialPageContext.content = content;
+                this.initialPageContext.content = rootNode ?? null;
+                this.initialPageContext.webmcpTools = webmcpTools ?? [];
+                this.initialPageContext.hasHadContent ||= Boolean(rootNode);
               }
             });
     this.unregisterPageContextListeners = () => {
@@ -198,9 +297,16 @@ export class AppElement extends CrLitElement {
       this.unregisterPageContextListeners = null;
     };
 
-    this.pageCallbackRouter.setCaptionsVisible.addListener(visible => {
-      log(FILE, `setCaptionsVisible: ${visible}`);
-      this.captionsVisible = visible;
+    this.pageCallbackRouter.setInputCaptionsVisible.addListener(visible => {
+      log(FILE, `setInputCaptionsVisible: ${visible}`);
+      this.inputCaptionsVisible = visible;
+      this.requestUpdate();
+    });
+
+    this.pageCallbackRouter.setOutputCaptionsVisible.addListener(visible => {
+      log(FILE, `setOutputCaptionsVisible: ${visible}`);
+      this.outputCaptionsVisible = visible;
+      this.requestUpdate();
     });
 
     this.pageCallbackRouter.setUsePersona.addListener(usePersona => {
@@ -209,6 +315,7 @@ export class AppElement extends CrLitElement {
         return;
       }
       this.usePersona = usePersona;
+      this.requestUpdate();
       if (this.conversation?.connected || this.initializationState === InitializationState.ERROR) {
         log(FILE, 'Restarting conversation for persona change');
         // TODO(gklassen): Make it so that conversation can trigger and block on
@@ -227,12 +334,87 @@ export class AppElement extends CrLitElement {
         this.pageHandler.$.bindNewPipeAndPassReceiver(),
         this.pageCallbackRouter.$.bindNewPipeAndPassRemote(),
         this.toolsRemote.$.bindNewPipeAndPassReceiver());
+
+    this.pageCallbackRouter.onStreamingSessionStateChanged.addListener(
+        (connected: boolean, sessionId: string, errorMessage: string) => {
+          log(FILE, `onStreamingSessionStateChanged: connected=${connected}, session=${sessionId}, err=${errorMessage}`);
+          if (connected) {
+            this.initializationState = InitializationState.INITIALIZED;
+            this.state = State.LISTENING;
+          } else if (errorMessage) {
+            this.initializationState = InitializationState.ERROR;
+          }
+          this.requestUpdate();
+        });
+
+    this.pageCallbackRouter.onTranscriptions.addListener(
+        (input: string, output: string) => {
+          if (input) {
+            this.inputTranscription = input;
+            this.activeType = 'input';
+          }
+          if (output) {
+            this.outputTranscription = output;
+            this.activeType = 'output';
+            if (this.state !== State.TALKING) {
+              this.state = State.TALKING;
+            }
+            this.captionBlockManager.updateBlocks(
+                output, this.usePersona, Boolean(this.audioPlayer?.isPlaying()),
+                this.audioPlaybackStartTime);
+          }
+          this.requestUpdate();
+        });
+
+    this.pageCallbackRouter.onAudioOutput.addListener(
+        (audioData: BigBuffer, sequenceNumber: bigint) => {
+          if (!this.audioPlayer) {
+            this.audioPlayer = this.createAudioPlayer();
+          }
+          let uint8: Uint8Array | null = null;
+          if (audioData.bytes !== undefined) {
+            uint8 = new Uint8Array(audioData.bytes);
+          } else if (audioData.sharedMemory?.bufferHandle) {
+            const buffer = audioData.sharedMemory.bufferHandle
+                .mapBuffer(0, audioData.sharedMemory.size)
+                .buffer;
+            uint8 = new Uint8Array(buffer, 0, audioData.sharedMemory.size);
+          }
+          if (uint8 && uint8.length > 0) {
+            this.audioPlayer.playPcmBytes(uint8);
+          }
+          this.pageHandler.reportPlaybackStatus(sequenceNumber);
+        });
+
+    this.pageCallbackRouter.onGenerationStateChanged.addListener(
+        (started: boolean, completed: boolean, interrupted: boolean) => {
+          if (interrupted) {
+            this.audioPlayer?.stop();
+            this.state = State.LISTENING;
+          } else if (started) {
+            this.state = State.TALKING;
+          } else if (completed) {
+            this.state = State.LISTENING;
+          }
+          this.requestUpdate();
+        });
+  }
+
+  private isAndroidBackend(): boolean {
+    return loadTimeData.valueExists('isAndroidBackend') &&
+        loadTimeData.getBoolean('isAndroidBackend');
+  }
+
+  private isMesEnabled(): boolean {
+    return loadTimeData.valueExists('useMes') &&
+        loadTimeData.getBoolean('useMes');
   }
 
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener('visibilitychange', this.onVisibilityChange);
-    if (document.visibilityState === 'visible') {
+    window.addEventListener('focus', this.onWindowFocus);
+    if (document.visibilityState === 'visible' || this.isAndroidBackend()) {
       this.startConversation();
     }
   }
@@ -240,6 +422,7 @@ export class AppElement extends CrLitElement {
   override disconnectedCallback() {
     super.disconnectedCallback();
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    window.removeEventListener('focus', this.onWindowFocus);
     if (this.speakingBlobUrl) {
       URL.revokeObjectURL(this.speakingBlobUrl);
     }
@@ -248,7 +431,27 @@ export class AppElement extends CrLitElement {
     }
   }
 
+  override updated(_changedProperties: PropertyValues<this>) {
+    super.updated(_changedProperties);
+    const changed = _changedProperties as Map<PropertyKey, unknown>;
+    if (changed.has('inputTranscription')) {
+      const bubble = this.shadowRoot?.querySelector('.caption-bubble.input');
+      if (bubble) {
+        bubble.scrollTop = bubble.scrollHeight;
+      }
+    }
+    if (changed.has('outputTranscription')) {
+      const bubble = this.shadowRoot?.querySelector('.caption-bubble.output');
+      if (bubble) {
+        bubble.scrollTop = bubble.scrollHeight;
+      }
+    }
+  }
+
   private onVisibilityChange = () => {
+    if (this.isAndroidBackend()) {
+      return;
+    }
     if (document.visibilityState === 'visible') {
       this.startConversation();
     } else {
@@ -256,261 +459,12 @@ export class AppElement extends CrLitElement {
     }
   };
 
-  private energyAnimationLoop = () => {
-    if (this.energyAnimationId === null) {
-      return;
-    }
-
-    let energy = 0;
-    if (this.uiState === UiState.SPEAKING && this.audioPlayer) {
-      energy = this.audioPlayer.getEnergy();
-    } else if (this.uiState === UiState.LISTENING && this.audioCapturer) {
-      energy = this.audioCapturer.getEnergy();
-    }
-
-    this.pageHandler.updateAudioEnergy(energy);
-
-    this.energyAnimationId = requestAnimationFrame(this.energyAnimationLoop);
-  };
-
-  private startEnergyAnimation() {
-    if (this.energyAnimationId === null) {
-      this.energyAnimationId = requestAnimationFrame(this.energyAnimationLoop);
-    }
-  }
-
-  private stopEnergyAnimation() {
-    if (this.energyAnimationId !== null) {
-      cancelAnimationFrame(this.energyAnimationId);
-      this.energyAnimationId = null;
-      this.pageHandler.updateAudioEnergy(0.0);
-    }
-  }
-
-  private onAudioInput(sampleRate: number, data: string) {
-    this.conversation?.sendAudio(sampleRate, data);
-  }
-
-  private onAudioOutput(audioData: string) {
-    // TODO(bokan): 24000 Hz (the default sampleRate in AudioPlayer) happens to
-    // be what we receive from the server but we should be looking at the value
-    // on the mime type and recreate the AudioPlayer if necessary.
-    this.audioPlayer?.play(audioData);
-  }
-
-  private runButtonByIndex(index: number) {
-    const button = this.mockButtons[index];
-    if (!button) {
-      return;
-    }
-
-    if (button.text) {
-      log(FILE, `Injecting text: ${button.name}, text: ${button.text}`);
-      this.conversation?.sendText(button.text);
-      return;
-    }
-
-    if (!this.blobCapturer || !button.wavdata) {
-      return;
-    }
-
-    log(FILE,
-        `Injecting audio: ${button.name}, length: ${button.wavdata.length}`);
-    const binaryString = atob(button.wavdata);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    const blob = new Blob([bytes], {type: 'audio/wav'});
-    this.blobCapturer.send(blob).then(() => {
-      this.conversation?.markMockAudioEndTime(performance.now());
-    });
-  }
-
-  protected onInjectAudioClick = (e: Event) => {
-    const index = Number((e.currentTarget as HTMLElement).dataset['index']);
-    this.runButtonByIndex(index);
-  };
-
-  protected onTextInputKeydown = (e: KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      const input = e.target as HTMLInputElement;
-      const text = input.value.trim();
-      if (text) {
-        log(FILE, `Injecting text: ${text}`);
-        this.conversation?.sendText(text);
-        input.value = '';
-      }
+  private onWindowFocus = () => {
+    if (document.visibilityState === 'visible' &&
+        this.state === State.LISTENING && this.conversation?.connected) {
+      this.localSpeechRecognition.start();
     }
   };
-
-  protected onSequenceClick = async (e: Event) => {
-    const index = Number((e.currentTarget as HTMLElement).dataset['index']);
-    const sequence = this.sequences[index];
-    if (!sequence) {
-      return;
-    }
-
-    log(FILE, `Running sequence: ${sequence.name}`);
-    for (const item of sequence.buttons) {
-      if (typeof item === 'number') {
-        log(FILE, `Sequence pause: ${item}s`);
-        await new Promise(resolve => setTimeout(resolve, item * 1000));
-        continue;
-      }
-
-      const buttonName = item;
-      const buttonIndex =
-          this.mockButtons.findIndex(b => b.name === buttonName);
-      if (buttonIndex !== -1) {
-        this.runButtonByIndex(buttonIndex);
-        // Add a small default delay between commands if no explicit pause is
-        // provided, to avoid overwhelming the API.
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } else {
-        warnLog(FILE, `Button not found for sequence: ${buttonName}`);
-      }
-    }
-  };
-
-  private createAudioPlayer(): AudioPlayer {
-    return new AudioPlayer(/*onStart=*/
-                           () => {
-                             this.uiState = UiState.SPEAKING;
-                           },
-                           /*onDone=*/
-                           () => {
-                             this.uiState = UiState.LISTENING;
-                           });
-  }
-
-  private async createAudioCapturer(): Promise<AudioCapturer|null> {
-    try {
-      const {jsonData} = await this.pageHandler.getMockAudioData();
-      if (jsonData) {
-        log(FILE,
-            'Received mock audio data:', jsonData.substring(0, 100) + '...');
-        try {
-          const config = JSON.parse(jsonData);
-          this.mockButtons = config.buttons || [];
-          this.sequences = config.sequences || [];
-          log(FILE,
-              `Loaded ${this.mockButtons.length} mock buttons and ${
-                  this.sequences.length} sequences`);
-        } catch (parseError) {
-          errorLog(FILE, 'Failed to parse mock audio JSON:', parseError);
-        }
-      }
-    } catch (mojoError) {
-      log(FILE, 'Failed to get mock audio data', mojoError);
-    }
-
-    if (this.mockButtons.length > 0) {
-      this.blobCapturer = new BlobAudioCapturer();
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-      return new MicrophoneAudioCapturer(stream);
-    } catch (e) {
-      log(FILE, 'No Microphone Found', e);
-      return this.blobCapturer;
-    }
-  }
-
-  private async startConversation() {
-    if (this.initializationState === InitializationState.CONNECTING ||
-        this.initializationState === InitializationState.INITIALIZED) {
-      return;
-    }
-
-    this.initializationState = InitializationState.CONNECTING;
-
-    try {
-      const ttcBundleUrl = loadTimeData.getString('ttcBundleUrl');
-      const bundle = await this.initializeResourceBundle(ttcBundleUrl);
-
-      log(FILE, 'Bundle initialized');
-      this.speakingBlobUrl = URL.createObjectURL(bundle.speakingBlob);
-      this.listeningBlobUrl = URL.createObjectURL(bundle.listeningBlob);
-
-      // Locally specified key overrides the fetched one.
-      const apiKey =
-          loadTimeData.getString('apiKey') || bundle.apiConfig.apiKey;
-      const genericPersona: Persona = {
-        id: 'generic',
-        name: 'Chrome',
-        nicknames: [],
-        persona: '',
-        voice: bundle.persona.voice,
-      };
-      const config: ConversationConfig = {
-        persona: this.usePersona ? bundle.persona : genericPersona,
-        system_instruction: bundle.instruction,
-        api_config: {
-          ...bundle.apiConfig,
-          apiKey,
-        },
-      };
-
-      if (!this.conversation) {
-        this.conversation = this.createConversation(config);
-      }
-
-      await this.conversation.start();
-
-      this.audioPlayer = this.createAudioPlayer();
-      this.audioCapturer = await this.createAudioCapturer();
-      if (this.audioCapturer) {
-        this.audioCapturer.start(
-            this.onAudioInput.bind(this, this.audioCapturer.getSampleRate()));
-      }
-      this.startEnergyAnimation();
-
-      this.initializationState = InitializationState.INITIALIZED;
-    } catch (e) {
-      this.initializationState = InitializationState.ERROR;
-      errorLog(FILE, 'startConversation failed: ', e);
-    }
-  }
-
-  private stopConversation() {
-    if (this.conversation?.connected) {
-      log(FILE, 'Conversation connected, stopping it.');
-      this.conversation.stop();
-    }
-  }
-
-  private onConversationStateChanged(state: State, oldState: State) {
-    log(FILE, `onConversationStateChanged: from ${oldState} to ${state}`);
-
-    if (state === State.STOPPED) {
-      this.stopEnergyAnimation();
-      this.mockButtons = [];
-      this.blobCapturer = null;
-      this.audioCapturer?.stop();
-      this.audioPlayer?.stop();
-      this.audioCapturer = null;
-      this.audioPlayer = null;
-
-      this.initializationState = InitializationState.UNINITIALIZED;
-    } else if (state === State.LISTENING) {
-      this.audioPlayer?.stop();
-    }
-  }
-
-  private onMessageFromConversation(msg: OutputTranscriptionMessage) {
-    if (msg.type === 'outputTranscription') {
-      this.transcription = msg.text;
-
-      clearTimeout(this.transcriptionTimeout);
-      if (this.transcription) {
-        this.transcriptionTimeout = setTimeout(() => {
-          this.transcription = '';
-        }, 3000);
-      }
-    }
-  }
 
   private async initializeResourceBundle(baseUrl: string):
       Promise<ResourceBundle> {
@@ -560,18 +514,473 @@ export class AppElement extends CrLitElement {
   private createConversation(config: ConversationConfig) {
     const conversation = new Conversation(
         config, {
-          sendToUI: (msg) => this.onMessageFromConversation(msg),
-          onStateChange: (state, oldState) =>
-              this.onConversationStateChanged(state, oldState),
+          sendToUI: (msg: ConversationMessage) =>
+              this.onMessageFromConversation(msg),
+          onStateChange: (state) => this.onConversationStateChanged(state),
           onResponse: (audioData) => this.onAudioOutput(audioData),
         },
-        this.toolsRemote, this.pageCallbackRouter, this.initialPageContext);
+        this.toolsRemote, this.pageCallbackRouter, this.initialPageContext,
+        this.pageHandler);
 
     if (this.unregisterPageContextListeners) {
       this.unregisterPageContextListeners();
     }
 
     return conversation;
+  }
+
+  private energyAnimationLoop = () => {
+    if (this.energyAnimationId === null) {
+      return;
+    }
+
+    let energy = 0;
+    if (this.state === State.TALKING && this.audioPlayer) {
+      energy = this.audioPlayer.getEnergy();
+    } else if (this.state === State.LISTENING && this.audioCapturer) {
+      energy = this.audioCapturer.getEnergy();
+    }
+
+    this.pageHandler.updateAudioEnergy(energy);
+
+    if (!this.isAndroidBackend()) {
+      this.energyAnimationId = requestAnimationFrame(this.energyAnimationLoop);
+    }
+  };
+
+  private startEnergyAnimation() {
+    if (this.energyAnimationId === null) {
+      // On Android, this runs in a background/offscreen WebContents without
+      // active rendering, so requestAnimationFrame does not tick. Fallback to
+      // setInterval to pump audio energy updates to the native toolbar.
+      this.energyAnimationId = this.isAndroidBackend() ?
+          window.setInterval(this.energyAnimationLoop, 50) :
+          requestAnimationFrame(this.energyAnimationLoop);
+    }
+  }
+
+  private stopEnergyAnimation() {
+    if (this.energyAnimationId !== null) {
+      if (this.isAndroidBackend()) {
+        window.clearInterval(this.energyAnimationId);
+      } else {
+        cancelAnimationFrame(this.energyAnimationId);
+      }
+      this.energyAnimationId = null;
+      this.pageHandler.updateAudioEnergy(0.0);
+    }
+  }
+
+  private onAudioInput(sampleRate: number, data: string) {
+    if (this.isMesEnabled()) {
+      try {
+        const binaryString = atob(data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        this.pageHandler.sendAudioChunk({bytes: Array.from(bytes)});
+      } catch (_e) {}
+    } else {
+      this.conversation?.sendAudio(sampleRate, data);
+    }
+  }
+
+  private onAudioOutput(audioData: string) {
+    // TODO(bokan): 24000 Hz (the default sampleRate in AudioPlayer) happens to
+    // be what we receive from the server but we should be looking at the value
+    // on the mime type and recreate the AudioPlayer if necessary.
+    this.audioPlayer?.play(audioData);
+  }
+
+  private runButtonByIndex(index: number) {
+    const button = this.mockButtons[index];
+    if (!button) {
+      return;
+    }
+
+    if (button.text) {
+      this.localSpeechRecognition.stop();
+      this.onLocalInputTranscription(button.text);
+      log(FILE, `Injecting text: ${button.name}, text: ${button.text}`);
+      this.conversation?.sendText(button.text);
+      return;
+    }
+
+    if (!this.blobCapturer || !button.wavdata) {
+      return;
+    }
+
+    log(FILE,
+        `Injecting audio: ${button.name}, length: ${button.wavdata.length}`);
+    const binaryString = atob(button.wavdata);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], {type: 'audio/wav'});
+    this.localSpeechRecognition.stop();
+    // Simulate local speech recognition using the button's name/text
+    if (button.text) {
+      this.onLocalInputTranscription(button.text);
+    } else {
+      this.onLocalInputTranscription(button.name);
+    }
+    this.blobCapturer.send(blob).then(() => {
+      this.conversation?.markMockAudioEndTime(performance.now());
+    });
+  }
+
+  private executeSequence(sequence: Sequence) {
+    let delay = 0;
+    for (const item of sequence.buttons) {
+      if (typeof item === 'number') {
+        delay += item;
+      } else if (typeof item === 'string') {
+        const index = this.mockButtons.findIndex(b => b.name === item);
+        if (index !== -1) {
+          window.setTimeout(() => this.runButtonByIndex(index), delay);
+        } else {
+          log(FILE, `Sequence button not found: ${item}`);
+        }
+      }
+    }
+  }
+
+  private injectAudio(button: MockAudioButton) {
+    const index = this.mockButtons.indexOf(button);
+    if (index !== -1) {
+      this.runButtonByIndex(index);
+    }
+  }
+
+  protected onInjectAudioClick = (e: Event) => {
+    const target = e.currentTarget as HTMLElement;
+    const index = Number(target.dataset['index']);
+    const button = this.mockButtons[index];
+    if (button) {
+      this.injectAudio(button);
+    }
+  };
+
+  protected onTextInputKeydown = (e: KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      const input = e.target as HTMLInputElement;
+      const text = input.value.trim();
+      if (text) {
+        this.localSpeechRecognition.stop();
+        log(FILE, `Injecting text: ${text}`);
+        if (this.isMesEnabled()) {
+          this.pageHandler.sendTextInput(text);
+        } else {
+          this.conversation?.sendText(text);
+        }
+        input.value = '';
+      }
+    }
+  };
+
+  protected onSequenceClick = (e: Event) => {
+    const index = Number((e.currentTarget as HTMLElement).dataset['index']);
+    const sequence = this.sequences[index];
+    if (!sequence) {
+      return;
+    }
+
+    log(FILE, `Running sequence: ${sequence.name}`);
+    this.executeSequence(sequence);
+  };
+
+  private createAudioPlayer(): AudioPlayer {
+    const onStart = () => {
+      clearTimeout(this.uiStateListeningTimeout);
+      this.state = State.TALKING;
+      this.audioPlaybackStartTime = Date.now();
+      log(FILE, `AudioPlayer: Started playing audio`);
+    };
+
+    const onDone = () => {
+      clearTimeout(this.uiStateListeningTimeout);
+
+      // Calculate the remaining delay using our dynamic accessibility formula:
+      // Ensure the last block is visible for at least 6 seconds (4s reading +
+      // 2s additional) and there is at least a 2-second comfortable cooldown
+      // after the audio stops.
+      const elapsed = this.captionBlockManager.getLastBlockSwitchTime() ?
+          (Date.now() - this.captionBlockManager.getLastBlockSwitchTime()) :
+          0;
+      const delayMs = Math.max(2000, 6000 - elapsed);
+
+      log(FILE,
+          `AudioPlayer: Finished playing audio. Elapsed since last block: ${
+              elapsed}ms. Scheduling LISTENING transition in ${delayMs}ms`);
+
+      this.uiStateListeningTimeout = setTimeout(() => {
+        log(FILE,
+            `LISTENING transition timer fired. Setting state to LISTENING`);
+        if (this.state === State.TALKING) {
+          this.state = State.LISTENING;
+        }
+        this.inputTranscription = '';
+        this.outputTranscription = '';  // Clear output captions!
+        this.captionBlockManager.reset();
+        this.isLocalTranscription = false;
+      }, delayMs);
+    };
+
+    return new AudioPlayer(onStart, onDone);
+  }
+
+  private async createAudioCapturer(): Promise<AudioCapturer|null> {
+    try {
+      const {jsonData} = await this.pageHandler.getMockAudioData();
+      if (jsonData) {
+        log(FILE,
+            'Received mock audio data:', jsonData.substring(0, 100) + '...');
+        try {
+          const config = JSON.parse(jsonData);
+          this.mockButtons = config.buttons || [];
+          this.sequences = config.sequences || [];
+          log(FILE,
+              `Loaded ${this.mockButtons.length} mock buttons and ${
+                  this.sequences.length} sequences`);
+        } catch (parseError) {
+          errorLog(FILE, 'Failed to parse mock audio JSON:', parseError);
+        }
+      }
+    } catch (mojoError) {
+      log(FILE, 'Failed to get mock audio data', mojoError);
+    }
+
+    if (this.mockButtons.length > 0) {
+      this.blobCapturer = new BlobAudioCapturer();
+      log(FILE,
+          'Mock audio buttons detected. Using BlobAudioCapturer and ' +
+              'skipping physical microphone.');
+      return this.blobCapturer;
+    }
+
+    try {
+      // On Android, enabling echoCancellation activates the platform
+      // ECHO_CANCELLER effect, which puts Android into VoIP communication mode
+      // (MODE_IN_COMMUNICATION / AAUDIO_INPUT_PRESET_VOICE_COMMUNICATION) and
+      // causes Android AudioPolicy to silence concurrent microphone streams
+      // (such as Screen Recorder). Disabling echoCancellation keeps Android in
+      // MODE_NORMAL while still allowing WebRTC software noiseSuppression and
+      // autoGainControl.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: this.isAndroidBackend() ? {
+          echoCancellation: false,
+          noiseSuppression: true,
+          autoGainControl: true,
+        } :
+                                         true,
+      });
+      return new MicrophoneAudioCapturer(stream);
+    } catch (e) {
+      log(FILE, 'No Microphone Found', e);
+      return this.blobCapturer;
+    }
+  }
+
+  private getBuiltInResourceBundle(): ResourceBundle {
+    return {
+      persona: DEFAULT_PERSONA,
+      apiConfig: {...DEFAULT_API_CONFIG},
+      speakingBlob: null,
+      listeningBlob: null,
+      instruction: DEFAULT_SYSTEM_INSTRUCTION,
+    };
+  }
+
+  private async startConversation() {
+    if (this.initializationState === InitializationState.CONNECTING ||
+        this.initializationState === InitializationState.INITIALIZED) {
+      return;
+    }
+
+    this.initializationState = InitializationState.CONNECTING;
+
+    try {
+      const customBundleUrl = loadTimeData.valueExists('ttcBundleUrl') ?
+          loadTimeData.getString('ttcBundleUrl') :
+          '';
+      const localApiKey = loadTimeData.valueExists('apiKey') ?
+          loadTimeData.getString('apiKey') :
+          '';
+      const allowBuiltInDefaults =
+          !loadTimeData.valueExists('allowBuiltInDefaults') ||
+          loadTimeData.getBoolean('allowBuiltInDefaults');
+      const hasLocalAuth = allowBuiltInDefaults &&
+          (Boolean(localApiKey || DEFAULT_API_CONFIG.apiKey) ||
+           this.isMesEnabled());
+
+      let bundle: ResourceBundle;
+      if (!this.usePersona && !customBundleUrl && hasLocalAuth) {
+        log(FILE, 'Using built-in resource bundle (local auth / MES mode)');
+        bundle = this.getBuiltInResourceBundle();
+      } else {
+        const ttcBundleUrl = customBundleUrl || DEFAULT_TTC_BUNDLE_URL;
+        try {
+          bundle = await this.initializeResourceBundle(ttcBundleUrl);
+          log(FILE, 'Remote resource bundle initialized');
+        } catch (e) {
+          if (hasLocalAuth) {
+            warnLog(
+                FILE,
+                'Failed to load remote resource bundle, falling back to built-in defaults:',
+                e);
+            bundle = this.getBuiltInResourceBundle();
+          } else {
+            throw e;
+          }
+        }
+      }
+
+      if (this.speakingBlobUrl) {
+        URL.revokeObjectURL(this.speakingBlobUrl);
+      }
+      if (this.listeningBlobUrl) {
+        URL.revokeObjectURL(this.listeningBlobUrl);
+      }
+      this.speakingBlobUrl =
+          bundle.speakingBlob ? URL.createObjectURL(bundle.speakingBlob) : '';
+      this.listeningBlobUrl =
+          bundle.listeningBlob ? URL.createObjectURL(bundle.listeningBlob) : '';
+
+      // Locally specified key overrides the fetched one.
+      const apiKey = localApiKey || bundle.apiConfig.apiKey;
+      const genericPersona: Persona = {
+        id: 'generic',
+        name: 'Chrome',
+        nicknames: [],
+        persona: '',
+        voice: bundle.persona.voice,
+      };
+      const config: ConversationConfig = {
+        persona: this.usePersona ? bundle.persona : genericPersona,
+        system_instruction: bundle.instruction,
+        api_config: {
+          ...bundle.apiConfig,
+          apiKey,
+        },
+      };
+
+      if (this.isMesEnabled()) {
+        this.pageHandler.startStreamingSession();
+      } else {
+        if (!this.conversation) {
+          this.conversation = this.createConversation(config);
+        }
+        await this.conversation.start();
+      }
+
+      this.audioPlayer = this.createAudioPlayer();
+      this.audioCapturer = await this.createAudioCapturer();
+      if (this.audioCapturer) {
+        this.audioCapturer.start(
+            this.onAudioInput.bind(this, this.audioCapturer.getSampleRate()));
+      }
+      this.startEnergyAnimation();
+
+      this.state = State.LISTENING;
+      this.initializationState = InitializationState.INITIALIZED;
+    } catch (e) {
+      this.initializationState = InitializationState.ERROR;
+      errorLog(FILE, 'startConversation failed: ', e);
+      this.stopConversation();
+    }
+  }
+
+  private stopConversation() {
+    if (this.isMesEnabled()) {
+      this.pageHandler.stopStreamingSession();
+    }
+    if (this.conversation?.connected) {
+      log(FILE, 'Conversation connected, stopping it.');
+      this.conversation.stop();
+    }
+    log(FILE, `stopConversation: Stopping conversation and audio capture...`);
+    this.stopEnergyAnimation();
+    this.mockButtons = [];
+    this.blobCapturer = null;
+    this.audioCapturer?.stop();
+    this.audioPlayer?.stop();
+    this.audioCapturer = null;
+    this.audioPlayer = null;
+
+    this.localSpeechRecognition.stop();
+    this.isLocalTranscription = false;
+
+    this.initializationState = InitializationState.UNINITIALIZED;
+  }
+
+  private onConversationStateChanged(state: State) {
+    log(FILE, `onConversationStateChanged: transitioned to ${state}`);
+    this.state = state;
+
+    if (state === State.STOPPED) {
+      this.stopConversation();
+    } else if (state === State.LISTENING) {
+      this.audioPlayer?.stop();
+      clearTimeout(this.uiStateListeningTimeout);
+      this.inputTranscription = '';
+      this.outputTranscription = '';
+      this.captionBlockManager.reset();
+      this.isLocalTranscription = false;
+      this.localSpeechRecognition.start();
+    } else if (state === State.TALKING) {
+      clearTimeout(this.uiStateListeningTimeout);
+      this.inputTranscription = '';
+      log(FILE,
+          'onConversationStateChanged: transitioned to TALKING. ' +
+              'Preserving caption blocks.');
+    }
+  }
+
+  private onMessageFromConversation(msg: ConversationMessage) {
+    if (msg.type === 'outputTranscription') {
+      log(FILE,
+          `onMessageFromConversation: Received outputTranscription (length: ${
+              msg.text.length})`);
+      clearTimeout(this.uiStateListeningTimeout);
+      if (this.state !== State.TALKING) {
+        this.state = State.TALKING;
+      }
+      this.inputTranscription = '';
+      this.activeType = 'output';
+
+      this.captionBlockManager.updateBlocks(
+          msg.text, this.usePersona, Boolean(this.audioPlayer?.isPlaying()),
+          this.audioPlaybackStartTime);
+    } else if (msg.type === 'clearTranscription') {
+      log(FILE,
+          `onMessageFromConversation: Received clearTranscription (state: ${
+              this.state})`);
+      if (this.state !== State.TALKING && !(this.audioPlayer?.isPlaying())) {
+        this.captionBlockManager.reset();
+        this.inputTranscription = '';
+        this.outputTranscription = '';
+      }
+    }
+  }
+
+  private onLocalInputTranscription(text: string) {
+    this.inputTranscription = text;
+    this.isLocalTranscription = true;
+    this.activeType = 'input';
+
+    if (this.conversation) {
+      this.conversation.recordOnDeviceSpeechTranscript(text);
+    }
+
+    clearTimeout(this.transcriptionTimeout);
+    this.transcriptionTimeout = window.setTimeout(() => {
+      if (this.isLocalTranscription && this.inputTranscription === text) {
+        log(FILE, `Clearing stale local transcription after 3 seconds.`);
+        this.inputTranscription = '';
+      }
+    }, 3000);
   }
 }
 

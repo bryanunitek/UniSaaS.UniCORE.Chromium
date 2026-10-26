@@ -7,6 +7,11 @@
 #import "ios/chrome/browser/alert_view/ui_bundled/alert_action.h"
 #import "ios/chrome/browser/alert_view/ui_bundled/alert_view_controller.h"
 #import "ios/chrome/browser/catalogs/ui/demo_button_stack_view_controller.h"
+#import "ios/chrome/browser/shared/ui/animated_promo/animated_promo_configuration.h"
+#import "ios/chrome/browser/shared/ui/animated_promo/animated_promo_view_controller.h"
+#import "ios/chrome/browser/shared/ui/animated_promo/animated_promo_with_bricks_view_controller.h"
+#import "ios/chrome/browser/shared/ui/brick_configurations/animation_brick_configuration.h"
+#import "ios/chrome/browser/shared/ui/brick_configurations/title_brick_configuration.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_item.h"
 #import "ios/chrome/common/ui/button_stack/button_stack_configuration.h"
 #import "ios/chrome/common/ui/confirmation_alert/confirmation_alert_view_controller.h"
@@ -23,6 +28,9 @@ enum ItemType {
   kItemTypeAlertViewController = kItemTypeEnumZero,
   kItemTypeButtonStackViewController,
   kItemTypeConfirmationAlertViewController,
+  kItemTypeButtonStackWithCustomDetentViewController,
+  kItemTypeLegacyAnimatedPromoViewController,
+  kItemTypeAnimatedPromoViewController,
 };
 
 // Spacing Constant.
@@ -65,9 +73,22 @@ const CGFloat kImageTopSpacing = 20;
       initWithType:kItemTypeButtonStackViewController];
   buttonStackItem.text = @"ButtonStackViewController";
 
+  TableViewTextItem* buttonStackWithCustomDetentItem =
+      [[TableViewTextItem alloc]
+          initWithType:kItemTypeButtonStackWithCustomDetentViewController];
+  buttonStackWithCustomDetentItem.text = @"ButtonStack + CustomDetent";
+
   TableViewTextItem* confirmationAlertItem = [[TableViewTextItem alloc]
       initWithType:kItemTypeConfirmationAlertViewController];
   confirmationAlertItem.text = @"ConfirmationAlertViewController";
+
+  TableViewTextItem* legacyAnimatedPromoItem = [[TableViewTextItem alloc]
+      initWithType:kItemTypeLegacyAnimatedPromoViewController];
+  legacyAnimatedPromoItem.text = @"LegacyAnimatedPromoViewController";
+
+  TableViewTextItem* animatedPromoItem = [[TableViewTextItem alloc]
+      initWithType:kItemTypeAnimatedPromoViewController];
+  animatedPromoItem.text = @"AnimatedPromoViewController";
 
   // Add sections.
   [model addSectionWithIdentifier:kSectionIdentifierViewController];
@@ -77,14 +98,20 @@ const CGFloat kImageTopSpacing = 20;
       toSectionWithIdentifier:kSectionIdentifierViewController];
   [model addItem:buttonStackItem
       toSectionWithIdentifier:kSectionIdentifierViewController];
+  [model addItem:buttonStackWithCustomDetentItem
+      toSectionWithIdentifier:kSectionIdentifierViewController];
   [model addItem:confirmationAlertItem
+      toSectionWithIdentifier:kSectionIdentifierViewController];
+  [model addItem:legacyAnimatedPromoItem
+      toSectionWithIdentifier:kSectionIdentifierViewController];
+  [model addItem:animatedPromoItem
       toSectionWithIdentifier:kSectionIdentifierViewController];
 }
 
 #pragma mark - UITableViewDelegate
 
 - (void)tableView:(UITableView*)tableView
-    didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
+    performPrimaryActionForRowAtIndexPath:(NSIndexPath*)indexPath {
   switch ([self.tableViewModel itemTypeForIndexPath:indexPath]) {
     case kItemTypeAlertViewController: {
       [self presentViewController:[self configuredAlertViewController]
@@ -98,6 +125,13 @@ const CGFloat kImageTopSpacing = 20;
                        completion:nil];
       break;
     }
+    case kItemTypeButtonStackWithCustomDetentViewController: {
+      [self presentViewController:
+                [self configuredButtonStackViewControllerWithCustomDetent]
+                         animated:YES
+                       completion:nil];
+      break;
+    }
     case kItemTypeConfirmationAlertViewController: {
       [self
           presentViewController:[self configuredConfirmationAlertViewController]
@@ -105,7 +139,24 @@ const CGFloat kImageTopSpacing = 20;
                      completion:nil];
       break;
     }
+    case kItemTypeLegacyAnimatedPromoViewController: {
+      [self presentViewController:[self configuredLegacyPromo]
+                         animated:YES
+                       completion:nil];
+      break;
+    }
+    case kItemTypeAnimatedPromoViewController: {
+      [self presentViewController:[self configuredPromoWithBrick]
+                         animated:YES
+                       completion:nil];
+      break;
+    }
   }
+}
+
+- (void)tableView:(UITableView*)tableView
+    didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
+  [tableView deselectRowAtIndexPath:indexPath animated:YES];
 }
 
 #pragma mark - Private
@@ -153,7 +204,27 @@ const CGFloat kImageTopSpacing = 20;
   // The `ButtonStackViewController` should always be subclassed.
   DemoButtonStackViewController* buttonStackViewController =
       [[DemoButtonStackViewController alloc]
-          initWithConfiguration:_configuration];
+          initWithConfiguration:_configuration
+              scrollableContent:YES];
+
+  return buttonStackViewController;
+}
+
+// Initializes and configures the `ButtonStackViewController` with custom
+// detent.
+- (DemoButtonStackViewController*)
+    configuredButtonStackViewControllerWithCustomDetent {
+  DemoButtonStackViewController* buttonStackViewController =
+      [[DemoButtonStackViewController alloc]
+          initWithConfiguration:_configuration
+              scrollableContent:NO];
+
+  buttonStackViewController.modalPresentationStyle =
+      UIModalPresentationPageSheet;
+  UISheetPresentationControllerDetent* customDetent =
+      [buttonStackViewController preferredHeightDetent];
+  buttonStackViewController.sheetPresentationController.detents =
+      @[ customDetent ];
 
   return buttonStackViewController;
 }
@@ -165,6 +236,8 @@ const CGFloat kImageTopSpacing = 20;
           initWithConfiguration:_configuration];
 
   confirmationAlertViewController.titleString = @"This is the Title string";
+  confirmationAlertViewController.secondaryTitleString =
+      @"This is the secondary title string";
   confirmationAlertViewController.subtitleString =
       @"This is the subtitle string";
 
@@ -178,6 +251,50 @@ const CGFloat kImageTopSpacing = 20;
   confirmationAlertViewController.customSpacingBeforeImage = kImageTopSpacing;
 
   return confirmationAlertViewController;
+}
+
+- (AnimatedPromoWithBricksViewController*)configuredPromoWithBrick {
+  AnimationBrickConfiguration* animationConfig =
+      [[AnimationBrickConfiguration alloc] init];
+  animationConfig.animationName = @"default_browser_animation";
+  animationConfig.darkAnimationName = @"default_browser_animation";
+  animationConfig.animationBackgroundColor = UIColor.redColor;
+
+  TitleBrickConfiguration* titleConfig = [[TitleBrickConfiguration alloc] init];
+  titleConfig.title = @"This is the Title string";
+  titleConfig.subtitle = @"This is the subtitle string";
+  titleConfig.titleStyle = UIFontTextStyleTitle2;
+
+  AnimatedPromoConfiguration* config = [[AnimatedPromoConfiguration alloc]
+      initWithAnimationBrickConfiguration:animationConfig
+                 buttonStackConfiguration:_configuration
+                  titleBrickConfiguration:titleConfig
+                           underTitleView:
+                               [self configuredLabelWithString:
+                                         @"This is the underTitleView"]];
+
+  AnimatedPromoWithBricksViewController* promo =
+      [[AnimatedPromoWithBricksViewController alloc]
+          initWithConfiguration:config];
+
+  return promo;
+}
+
+- (AnimatedPromoViewController*)configuredLegacyPromo {
+  AnimatedPromoViewController* promo =
+      [[AnimatedPromoViewController alloc] init];
+  promo.animationName = @"default_browser_animation";
+  promo.animationNameDarkMode = @"default_browser_animation";
+  promo.animationBackgroundColor = UIColor.redColor;
+  promo.primaryActionString = @"Primary";
+  promo.secondaryActionString = @"Secondary";
+  promo.tertiaryActionString = @"Tertiary";
+  promo.titleString = @"This is the Title string";
+  promo.subtitleString = @"This is the subtitle string";
+  promo.underTitleView =
+      [self configuredLabelWithString:@"This is the underTitleView"];
+
+  return promo;
 }
 
 #pragma mark - Private Helpers

@@ -42,6 +42,7 @@ import org.chromium.net.CronetTestRule.RequiresMinAndroidApi;
 import org.chromium.net.CronetTestRule.RequiresMinApi;
 import org.chromium.net.TestBidirectionalStreamCallback.FailureType;
 import org.chromium.net.TestBidirectionalStreamCallback.ResponseStep;
+import org.chromium.net.impl.AndroidRequestFinishedInfoWrapper;
 import org.chromium.net.impl.BidirectionalStreamNetworkException;
 import org.chromium.net.impl.CronetBidirectionalStream;
 import org.chromium.net.impl.CronetExceptionImpl;
@@ -97,24 +98,18 @@ public class BidirectionalStreamTest {
             }
             ctx.fireChannelRead(msg);
         }
-    };
+    }
 
     @Before
     public void setUp() throws Exception {
         mTestLogger = mLoggerTestRule.mTestLogger;
         mDropConnectionPackets = false;
-        // TODO(crbug.com/40284777): Fallback to MockCertVerifier when custom CAs are not supported.
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.M) {
-            mTestRule
-                    .getTestFramework()
-                    .applyEngineBuilderPatch(
-                            (builder) ->
-                                    CronetTestUtil.setMockCertVerifierForTesting(
-                                            builder, QuicTestServer.createMockCertVerifier()));
-        }
         mCronetEngine = mTestRule.getTestFramework().startEngine();
-        assertThat(Http2TestServer.startHttp2TestServer(new Http2TestServer.ServerStartOptions(mTestRule.getTestFramework().getContext())
-                        .setPreTlsPacketHandler(new DroppingPacketHandler())))
+        assertThat(
+                        Http2TestServer.startHttp2TestServer(
+                                new Http2TestServer.ServerStartOptions(
+                                                mTestRule.getTestFramework().getContext())
+                                        .setPreTlsPacketHandler(new DroppingPacketHandler())))
                 .isTrue();
     }
 
@@ -297,7 +292,7 @@ public class BidirectionalStreamTest {
             reason = "The output differs depending on the type of Cronet Impl.")
     @RequiresMinAndroidApi(Build.VERSION_CODES.O)
     public void testTrafficInfoAtomSourceStaticallyLinked() throws Exception {
-        testSimpleGet();
+        testSimpleGetImpl();
         mTestLogger.waitForLogCronetTrafficInfo();
         assertThat(mTestLogger.getLastCronetTrafficInfo().getCronetSource())
                 .isEqualTo(
@@ -309,6 +304,10 @@ public class BidirectionalStreamTest {
     @Test
     @SmallTest
     public void testSimpleGet() throws Exception {
+        testSimpleGetImpl();
+    }
+
+    private void testSimpleGetImpl() throws Exception {
         // Since this is the first request on the connection, the expected received bytes count
         // must account for an HPACK dynamic table size update.
         int expectedReceivedBytes = 31;
@@ -415,7 +414,6 @@ public class BidirectionalStreamTest {
     @Test
     @SmallTest
     @Flags(boolFlags = {@BoolFlag(name = JavaCronetProvider.FORCE_HTTPENGINE_FLAG, value = false)})
-    @RequiresMinAndroidApi(Build.VERSION_CODES.N)
     public void testSimpleGetWithFallbackForcingHttpEngineDisabled() throws Exception {
         String url = Http2TestServer.getEchoMethodUrl();
         TestBidirectionalStreamCallback callback = new TestBidirectionalStreamCallback();
@@ -1249,11 +1247,6 @@ public class BidirectionalStreamTest {
         ExperimentalCronetEngine.Builder engineBuilder =
                 new ExperimentalCronetEngine.Builder(mTestRule.getTestFramework().getContext());
         engineBuilder.setUserAgent(userAgentValue);
-        // TODO(crbug.com/40284777): Fallback to MockCertVerifier when custom CAs are not supported.
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.M) {
-            CronetTestUtil.setMockCertVerifierForTesting(
-                    engineBuilder, QuicTestServer.createMockCertVerifier());
-        }
         ExperimentalCronetEngine engine = engineBuilder.build();
         TestBidirectionalStreamCallback callback = new TestBidirectionalStreamCallback();
         BidirectionalStream.Builder builder =
@@ -1663,11 +1656,6 @@ public class BidirectionalStreamTest {
                 (ExperimentalCronetEngine.Builder)
                         new NativeCronetProvider(mTestRule.getTestFramework().getContext())
                                 .createBuilder();
-        // TODO(crbug.com/40284777): Fallback to MockCertVerifier when custom CAs are not supported.
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.M) {
-            CronetTestUtil.setMockCertVerifierForTesting(
-                    builder, QuicTestServer.createMockCertVerifier());
-        }
         mCronetEngine = builder.build();
         TestBidirectionalStreamCallback callback = new TestBidirectionalStreamCallback();
         callback.setFailure(failureType, failureStep);
@@ -1695,8 +1683,9 @@ public class BidirectionalStreamTest {
         }
         CronetImplementation implementationUnderTest = mTestRule.implementationUnderTest();
         // RequestFinishedInfoListener HttpEngineWrapper implementation has placeholder ie null
-        // metrics. Don't bother checking timing metrics for AOSP whether it passes or not.
-        if (implementationUnderTest != CronetImplementation.AOSP_PLATFORM) {
+        // metrics when FinishedRequestTimings is unsupported.
+        if (implementationUnderTest != CronetImplementation.AOSP_PLATFORM
+                || AndroidRequestFinishedInfoWrapper.isFinishedRequestTimingsSupported()) {
             // Check metrics information.
             if (failureStep == ResponseStep.ON_RESPONSE_STARTED
                     || failureStep == ResponseStep.ON_READ_COMPLETED
@@ -2084,8 +2073,6 @@ public class BidirectionalStreamTest {
     }
 
     @Test
-    // TODO(crbug.com/41494733): Enable on Android M once fixed.
-    @RequiresMinAndroidApi(Build.VERSION_CODES.N)
     public void testBindToDefaultNetworkSucceeds() {
         ConnectivityManagerWrapper wrapper =
                 new ConnectivityManagerWrapper(mTestRule.getTestFramework().getContext());

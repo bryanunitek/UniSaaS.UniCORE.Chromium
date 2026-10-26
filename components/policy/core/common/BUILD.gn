@@ -52,7 +52,7 @@ source_set("util") {
   if (is_chromeos) {
     deps += [
       "//chromeos/ash/components/system",
-      "//components/user_manager",
+      "//components/session_manager/core",
     ]
   }
 }
@@ -82,6 +82,8 @@ source_set("internal") {
     "cloud/cloud_external_data_store.h",
     "cloud/cloud_policy_client.cc",
     "cloud/cloud_policy_client.h",
+    "cloud/cloud_policy_client_proto_types.cc",
+    "cloud/cloud_policy_client_proto_types.h",
     "cloud/cloud_policy_client_registration_helper.cc",
     "cloud/cloud_policy_client_registration_helper.h",
     "cloud/cloud_policy_client_types.cc",
@@ -152,8 +154,10 @@ source_set("internal") {
     "config_dir_policy_loader.h",
     "configuration_policy_provider.cc",
     "configuration_policy_provider.h",
-    "enterprise_management_metrics_service.cc",
-    "enterprise_management_metrics_service.h",
+    "enterprise_management_metrics_provider.cc",
+    "enterprise_management_metrics_provider.h",
+    "enterprise_management_status_util.cc",
+    "enterprise_management_status_util.h",
     "external_data_fetcher.cc",
     "external_data_fetcher.h",
     "external_data_manager.h",
@@ -227,24 +231,24 @@ source_set("internal") {
     ":common_constants",
     ":policy_namespace",
     ":util",
+    "//components/enterprise/common/proto:upload_request_response",
     "//components/invalidation",
     "//components/policy:generated",
     "//components/policy/proto",
+    "//components/policy/resources/webui/mojom:mojo_bindings",
     "//components/reporting/proto:record_constants",
     "//components/reporting/proto:record_proto",
     "//extensions/buildflags",
   ]
 
   deps = [
-    "//base:i18n",
     "//build:android_buildflags",
     "//components/account_id",
     "//components/enterprise/common:strings",
     "//components/enterprise/common/proto:chrome_reporting_entity",
-    "//components/enterprise/common/proto:upload_request_response",
     "//components/enterprise/connectors/core:constants",
     "//components/keyed_service/core",
-    "//components/policy/resources/webui/mojom:mojo_bindings",
+    "//components/metrics",
     "//components/prefs",
     "//components/signin/public/identity_manager",
     "//components/strings",
@@ -253,8 +257,11 @@ source_set("internal") {
     "//google_apis",
     "//net",
     "//services/network/public/cpp",
+    "//third_party/abseil-cpp:absl",
     "//third_party/libxml:xml_writer",
+    "//third_party/metrics_proto",
     "//third_party/re2",
+    "//third_party/zlib/google:compression_utils",
     "//ui/base",
     "//url",
   ]
@@ -497,6 +504,7 @@ static_library("test_support") {
 
 source_set("common_constants") {
   configs += [ "//components/policy:component_implementation" ]
+  public_deps = [ "//build:branding_buildflags" ]
   deps = [ "//base" ]
   sources = [
     "../../policy_export.h",
@@ -534,6 +542,7 @@ source_set("policy_path_constants") {
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "async_policy_loader_unittest.cc",
     "cloud/affiliation_unittest.cc",
     "cloud/cloud_policy_client_unittest.cc",
     "cloud/cloud_policy_core_unittest.cc",
@@ -544,7 +553,7 @@ source_set("unit_tests") {
     "cloud/user_info_fetcher_unittest.cc",
     "cloud/user_policy_metrics_recorder_unittest.cc",
     "command_line_policy_provider_unittest.cc",
-    "enterprise_management_metrics_service_unittest.cc",
+    "enterprise_management_metrics_provider_unittest.cc",
     "generate_policy_source_unittest.cc",
     "local_test_policy_loader_unittest.cc",
     "management/management_service_unittest.cc",
@@ -666,6 +675,7 @@ source_set("unit_tests") {
     "//components/enterprise/common/proto:upload_request_response",
     "//components/enterprise/connectors/core:constants",
     "//components/invalidation:test_support",
+    "//components/metrics",
     "//components/policy:generated",
     "//components/prefs:test_support",
     "//components/version_info",
@@ -676,6 +686,7 @@ source_set("unit_tests") {
     "//testing/gmock",
     "//testing/gtest",
     "//third_party/libxml:xml_reader",
+    "//third_party/metrics_proto",
     "//ui/base",
   ]
   if (is_chromeos) {

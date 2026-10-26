@@ -9,6 +9,7 @@
 
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -28,6 +29,10 @@
 #include "extensions/common/constants.h"
 #include "ui/display/screen.h"
 #include "ui/views/widget/widget.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 using views::BubbleBorder;
 
@@ -383,8 +388,10 @@ bool IsPopupPlaceableOnSideOfElement(
   }
 }
 
-gfx::Rect IntersectWithDisplayBounds(const gfx::Rect& element_bounds) {
-  std::optional<gfx::Rect> display_bounds = GetDisplayBounds(element_bounds);
+gfx::Rect IntersectWithDisplayBounds(content::WebContents* web_contents,
+                                     const gfx::Rect& element_bounds) {
+  std::optional<gfx::Rect> display_bounds =
+      GetDisplayBounds(web_contents, element_bounds);
   if (display_bounds == std::nullopt) {
     return element_bounds;
   }
@@ -392,11 +399,39 @@ gfx::Rect IntersectWithDisplayBounds(const gfx::Rect& element_bounds) {
   return display_bounds.value();
 }
 
-std::optional<gfx::Rect> GetDisplayBounds(const gfx::Rect& element_bounds) {
+std::optional<gfx::Rect> GetDisplayBounds(content::WebContents* web_contents,
+                                          const gfx::Rect& element_bounds) {
   display::Screen* screen = display::Screen::Get();
   if (!screen) {
     return std::nullopt;
   }
+
+#if BUILDFLAG(IS_OZONE)
+  // On Ozone/Wayland platforms that don't support global screen coordinates,
+  // the display returned by `GetDisplayMatching` may be incorrect because the
+  // coordinates for `element_bounds` aren't global. Instead, fall back to
+  // getting the display from the native window hosting the web contents.
+  if (ui::OzonePlatform::IsInitialized() &&
+      !ui::OzonePlatform::GetInstance()
+           ->GetPlatformProperties()
+           .supports_global_screen_coordinates) {
+    gfx::Rect work_area;
+    if (web_contents && web_contents->GetTopLevelNativeWindow()) {
+      work_area =
+          screen
+              ->GetDisplayNearestWindow(web_contents->GetTopLevelNativeWindow())
+              .work_area();
+    } else {
+      work_area = screen->GetDisplayMatching(element_bounds).work_area();
+    }
+
+    // When global screen coordinates aren't supported, shift the work area to
+    // (0,0) to translate the global display bounds into local coordinate space
+    // used by the Views layer.
+    work_area.set_origin(gfx::Point(0, 0));
+    return work_area;
+  }
+#endif
 
   return screen->GetDisplayMatching(element_bounds).work_area();
 }
@@ -568,9 +603,11 @@ bool IsExpandableSuggestionType(SuggestionType type) {
     // This opens the submenu where different suggestions related to the same
     // query response are present.
     case SuggestionType::kAtMemorySearchResult:
-    // This opens the submenu with all other Autofill AI orders suggestions
-    // that are not displayed in the first level.
+    // This opens the submenu with all other Autofill AI orders/shipments
+    // suggestions that are not displayed in the first level.
     case SuggestionType::kAutofillAiOtherOrders:
+    case SuggestionType::kAutofillAiOtherShipments:
+    case SuggestionType::kFillAutofillAi:
       return true;
     case SuggestionType::kAccountStoragePasswordEntry:
     case SuggestionType::kAddressEntry:
@@ -578,13 +615,18 @@ bool IsExpandableSuggestionType(SuggestionType type) {
     case SuggestionType::kAddressFieldByFieldFilling:
     case SuggestionType::kAllSavedPasswordsEntry:
     case SuggestionType::kAtMemoryAiDisclosure:
+    case SuggestionType::kAtMemoryFetching:
     case SuggestionType::kAtMemoryGenericError:
     case SuggestionType::kAtMemoryInactivityNudge:
     case SuggestionType::kAtMemoryNoConnection:
+    case SuggestionType::kAtMemoryOpenGemini:
     case SuggestionType::kAtMemorySearchAffordance:
+    case SuggestionType::kAtMemoryShortcutSettingsPromo:
+    case SuggestionType::kAtMemorySourceAttribution:
     case SuggestionType::kAutocompleteAtMemoryButton:
     case SuggestionType::kAutocompleteEntry:
     case SuggestionType::kAutofillAiPrivateInferenceNotice:
+    case SuggestionType::kAutofillAiSourceAttribution:
     case SuggestionType::kBackupPasswordEntry:
     case SuggestionType::kBnplEntry:
     case SuggestionType::kBnplFootnote:
@@ -598,10 +640,11 @@ bool IsExpandableSuggestionType(SuggestionType type) {
     case SuggestionType::kDevtoolsTestAddressByCountry:
     case SuggestionType::kDevtoolsTestAddressEntry:
     case SuggestionType::kFetchingAmbientData:
-    case SuggestionType::kFillAutofillAi:
+    case SuggestionType::kRemoveAutofillAi:
     case SuggestionType::kFillPassword:
     case SuggestionType::kFreeformFooter:
     case SuggestionType::kGeneratePasswordEntry:
+    case SuggestionType::kGmailOneTimePasswordEntry:
     case SuggestionType::kIbanEntry:
     case SuggestionType::kIdentityCredential:
     case SuggestionType::kInsecureContextPaymentDisabledMessage:
@@ -615,22 +658,21 @@ bool IsExpandableSuggestionType(SuggestionType type) {
     case SuggestionType::kManageCreditCard:
     case SuggestionType::kManageIban:
     case SuggestionType::kManageLoyaltyCard:
+    case SuggestionType::kManageOffers:
     case SuggestionType::kManageEnhancedAutofill:
     case SuggestionType::kMaximizeCreditCardBenefitsEntry:
     case SuggestionType::kMerchantPromoCodeEntry:
-    case SuggestionType::kMixedFormMessage:
     case SuggestionType::kOneTimePasswordEntry:
-    case SuggestionType::kOpenGemini:
+    case SuggestionType::kOpenGmailForOtps:
     case SuggestionType::kPasswordFieldByFieldFilling:
     case SuggestionType::kPendingStateSignin:
     case SuggestionType::kPersonalContextNotice:
     case SuggestionType::kSaveAndFillCreditCardEntry:
     case SuggestionType::kScanCreditCard:
-    case SuggestionType::kSeePromoCodeDetails:
     case SuggestionType::kSeparator:
     case SuggestionType::kTitle:
     case SuggestionType::kTroubleSigningInEntry:
-    case SuggestionType::kUndoOrClear:
+    case SuggestionType::kUndo:
     case SuggestionType::kViewPasswordDetails:
     case SuggestionType::kVirtualCreditCardEntry:
     case SuggestionType::kWebauthnCredential:
@@ -638,91 +680,6 @@ bool IsExpandableSuggestionType(SuggestionType type) {
     case SuggestionType::kWebauthnSignInWithAnotherDevice:
       return false;
   }
-}
-
-bool IsSuggestionTypeAutoselected(SuggestionType type) {
-  switch (type) {
-    case SuggestionType::kAtMemorySearchAffordance:
-      return true;
-    case SuggestionType::kAccountStoragePasswordEntry:
-    case SuggestionType::kAddressEntry:
-    case SuggestionType::kAddressEntryOnTyping:
-    case SuggestionType::kAddressFieldByFieldFilling:
-    case SuggestionType::kAllLoyaltyCardsEntry:
-    case SuggestionType::kAllSavedPasswordsEntry:
-    case SuggestionType::kAtMemoryAiDisclosure:
-    case SuggestionType::kAtMemoryGenericError:
-    case SuggestionType::kAtMemoryInactivityNudge:
-    case SuggestionType::kAtMemoryNoConnection:
-    case SuggestionType::kAtMemorySearchResult:
-    case SuggestionType::kAutocompleteAtMemoryButton:
-    case SuggestionType::kAutocompleteEntry:
-    case SuggestionType::kAutofillAiOtherOrders:
-    case SuggestionType::kAutofillAiPrivateInferenceNotice:
-    case SuggestionType::kBackupPasswordEntry:
-    case SuggestionType::kBnplEntry:
-    case SuggestionType::kBnplFootnote:
-    case SuggestionType::kComposeDisable:
-    case SuggestionType::kComposeGoToSettings:
-    case SuggestionType::kComposeNeverShowOnThisSiteAgain:
-    case SuggestionType::kComposeProactiveNudge:
-    case SuggestionType::kComposeResumeNudge:
-    case SuggestionType::kComposeSavedStateNotification:
-    case SuggestionType::kCreditCardEntry:
-    case SuggestionType::kDatalistEntry:
-    case SuggestionType::kDevtoolsTestAddressByCountry:
-    case SuggestionType::kDevtoolsTestAddressEntry:
-    case SuggestionType::kDevtoolsTestAddresses:
-    case SuggestionType::kFetchingAmbientData:
-    case SuggestionType::kFillAutofillAi:
-    case SuggestionType::kFillPassword:
-    case SuggestionType::kFreeformFooter:
-    case SuggestionType::kGeneratePasswordEntry:
-    case SuggestionType::kIbanEntry:
-    case SuggestionType::kIdentityCredential:
-    case SuggestionType::kInsecureContextPaymentDisabledMessage:
-    case SuggestionType::kLoadingThrobber:
-    case SuggestionType::kLoyaltyCardEntry:
-    case SuggestionType::kManageAddress:
-    case SuggestionType::kManageAutofillAi:
-    case SuggestionType::kManageAutofillAiIdentityDocs:
-    case SuggestionType::kManageAutofillAiShopping:
-    case SuggestionType::kManageAutofillAiTravel:
-    case SuggestionType::kManageCreditCard:
-    case SuggestionType::kManageIban:
-    case SuggestionType::kManageLoyaltyCard:
-    case SuggestionType::kManageEnhancedAutofill:
-    case SuggestionType::kMaximizeCreditCardBenefitsEntry:
-    case SuggestionType::kMerchantPromoCodeEntry:
-    case SuggestionType::kMixedFormMessage:
-    case SuggestionType::kOneTimePasswordEntry:
-    case SuggestionType::kOpenGemini:
-    case SuggestionType::kPasswordEntry:
-    case SuggestionType::kPasswordFieldByFieldFilling:
-    case SuggestionType::kPendingStateSignin:
-    case SuggestionType::kPersonalContextNotice:
-    case SuggestionType::kSaveAndFillCreditCardEntry:
-    case SuggestionType::kScanCreditCard:
-    case SuggestionType::kSeePromoCodeDetails:
-    case SuggestionType::kSeparator:
-    case SuggestionType::kTitle:
-    case SuggestionType::kTroubleSigningInEntry:
-    case SuggestionType::kUndoOrClear:
-    case SuggestionType::kViewPasswordDetails:
-    case SuggestionType::kVirtualCreditCardEntry:
-    case SuggestionType::kWebauthnCredential:
-    case SuggestionType::kWebauthnPasskeyQrCode:
-    case SuggestionType::kWebauthnSignInWithAnotherDevice:
-      return false;
-  }
-}
-
-bool ShouldAutoselectFirstSuggestion(
-    AutoselectFirstSuggestion trigger_source_autoselect,
-    std::optional<SuggestionType> first_suggestion_type) {
-  return trigger_source_autoselect.value() ||
-         (first_suggestion_type &&
-          IsSuggestionTypeAutoselected(*first_suggestion_type));
 }
 
 ui::ElementIdentifier GetAutofillPopupCellElementIdentifier(
@@ -772,6 +729,10 @@ ui::ElementIdentifier GetAutofillPopupCellElementIdentifier(
   }
   if (feature == &feature_engagement::kIPHAutofillAiValuablesFeature) {
     return PopupViewViews::kAutofillAiValuablesElementId;
+  }
+  if (feature ==
+      &feature_engagement::kIPH_AutofillAmbientAutofillSpiiDisclaimer) {
+    return PopupViewViews::kAutofillAmbientAutofillSpiiDisclaimerElementId;
   }
   return ui::ElementIdentifier();
 }

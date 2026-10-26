@@ -18,6 +18,7 @@
 #include "components/media_router/common/media_source.h"
 #include "components/media_router/common/route_request_result.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 #include "media/base/test_data_util.h"
@@ -44,7 +45,7 @@ MediaRouterE2EBrowserTest::~MediaRouterE2EBrowserTest() = default;
 void MediaRouterE2EBrowserTest::SetUpOnMainThread() {
   MediaRouterIntegrationBrowserTest::SetUpOnMainThread();
   media_router_ =
-      MediaRouterFactory::GetApiForBrowserContext(browser()->profile());
+      MediaRouterFactory::GetApiForBrowserContext(browser()->GetProfile());
   DCHECK(media_router_);
 // On Mac, cast device discovery isn't started until explicit user gesture.
 // Starting sink discovery now for tests.
@@ -134,12 +135,12 @@ void MediaRouterE2EBrowserTest::OpenMediaPage() {
 
 IN_PROC_BROWSER_TEST_F(MediaRouterE2EBrowserTest, MANUAL_TabMirroring) {
   EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
 
   ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
       browser(), GURL("about:blank"), 1);
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   SessionID tab_id = sessions::SessionTabHelper::IdForTab(web_contents);
 
   // Wait for 30 seconds to make sure the route is stable.

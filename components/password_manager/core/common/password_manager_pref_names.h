@@ -12,6 +12,10 @@ namespace password_manager::prefs {
 // Alphabetical list of preference names specific to the PasswordManager
 // component.
 
+// Boolean controlling whether automated password change is enabled by the user.
+inline constexpr char kAutomatedPasswordChangeEnabled[] =
+    "automated_password_change_enabled";
+
 // Boolean controlling whether websites and apps can automatically upgrade
 // existing accounts to use passkeys when available.
 //
@@ -171,6 +175,24 @@ inline constexpr char kObsoleteAccountStoragePerAccountSettings[] =
     "profile.password_account_storage_settings";
 #endif  // !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
 
+// Timestamp of the last time on-device encryption state for passkeys was
+// reported to UMA.
+inline constexpr char kOnDeviceEncryptionStatePasskeyLastReportingTime[] =
+    "password_manager.on_device_encryption_state_passkey_last_reporting_time";
+
+// Integer bucket of the last reported on-device encryption state for passkeys.
+inline constexpr char kOnDeviceEncryptionStatePasskeyLastReportedBucket[] =
+    "password_manager.on_device_encryption_state_passkey_last_reported_bucket";
+
+// Timestamp of the last time on-device encryption state for passwords was
+// reported to UMA.
+inline constexpr char kOnDeviceEncryptionStatePasswordLastReportingTime[] =
+    "password_manager.on_device_encryption_state_password_last_reporting_time";
+
+// Integer bucket of the last reported on-device encryption state for passwords.
+inline constexpr char kOnDeviceEncryptionStatePasswordLastReportedBucket[] =
+    "password_manager.on_device_encryption_state_password_last_reported_bucket";
+
 // Indicates the time (in seconds) when last cleaning of obsolete HTTP
 // credentials was performed.
 inline constexpr char kLastTimeObsoleteHttpCredentialsRemoved[] =
@@ -247,6 +269,11 @@ inline constexpr char kBiometricAuthenticationBeforeFilling[] =
 inline constexpr char kPasswordManagerPromoCardsList[] =
     "password_manager.password_promo_cards_list";
 #endif
+
+// Boolean pref indicating whether the user has accepted the privacy notice
+// agreement for starting the password change flow with private inference.
+inline constexpr char kPasswordChangeWithPrivateInferenceNoticeAgreement[] =
+    "password_manager.password_change_with_private_inference_notice_agreement";
 
 // Boolean pref indicating whether password sharing is enabled. Enables both
 // sending and receiving passwords.

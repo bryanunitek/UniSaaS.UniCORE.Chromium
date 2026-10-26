@@ -88,6 +88,7 @@
 #include "net/base/backoff_entry.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_request_headers.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -314,7 +315,7 @@ class TestDownloaderFactory {
     return identity_test_env_.get();
   }
 
-  const CoreAccountId& account_id() { return account_info_.account_id; }
+  const CoreAccountId& account_id() { return account_info_.GetAccountId(); }
 
   ExtensionDownloader::Factory GetDownloaderFactory() {
     return base::BindRepeating(
@@ -715,9 +716,10 @@ class ExtensionUpdaterTest : public testing::Test {
     // option to appear in the x= parameter.
     std::unique_ptr<ManifestFetchData> fetch_data(
         CreateManifestFetchData(GURL("http://localhost/foo")));
-    fetch_data->AddExtension(id, version,
-                             ExtensionDownloaderTestHelper::GetTestPingData(),
-                             "bar", std::string(), ManifestLocation::kInternal,
+    const DownloadPingData ping_data =
+        ExtensionDownloaderTestHelper::GetTestPingData();
+    fetch_data->AddExtension(id, version, &ping_data, "bar", std::string(),
+                             ManifestLocation::kInternal,
                              DownloadFetchPriority::kBackground);
     std::map<std::string, std::string> params;
     VerifyQueryAndExtractParameters(fetch_data->full_url().GetQuery(), &params);
@@ -734,10 +736,11 @@ class ExtensionUpdaterTest : public testing::Test {
     // option to appear in the x= parameter.
     std::unique_ptr<ManifestFetchData> fetch_data(
         CreateManifestFetchData(GURL("http://localhost/foo")));
-    fetch_data->AddExtension(
-        id, version, ExtensionDownloaderTestHelper::GetTestPingData(),
-        "a=1&b=2&c", std::string(), ManifestLocation::kInternal,
-        DownloadFetchPriority::kBackground);
+    const DownloadPingData ping_data =
+        ExtensionDownloaderTestHelper::GetTestPingData();
+    fetch_data->AddExtension(id, version, &ping_data, "a=1&b=2&c",
+                             std::string(), ManifestLocation::kInternal,
+                             DownloadFetchPriority::kBackground);
     std::map<std::string, std::string> params;
     VerifyQueryAndExtractParameters(fetch_data->full_url().GetQuery(), &params);
     EXPECT_EQ(id, params["id"]);
@@ -843,10 +846,12 @@ class ExtensionUpdaterTest : public testing::Test {
     // Make sure that an installsource= appears in the x= parameter.
     std::unique_ptr<ManifestFetchData> fetch_data(
         CreateManifestFetchData(GURL("http://localhost/foo")));
-    fetch_data->AddExtension(
-        id, version, ExtensionDownloaderTestHelper::GetTestPingData(),
-        ExtensionDownloaderTestHelper::kEmptyUpdateUrlData, install_source,
-        ManifestLocation::kInternal, DownloadFetchPriority::kBackground);
+    const DownloadPingData ping_data =
+        ExtensionDownloaderTestHelper::GetTestPingData();
+    fetch_data->AddExtension(id, version, &ping_data,
+                             ExtensionDownloaderTestHelper::kEmptyUpdateUrlData,
+                             install_source, ManifestLocation::kInternal,
+                             DownloadFetchPriority::kBackground);
     std::map<std::string, std::string> params;
     VerifyQueryAndExtractParameters(fetch_data->full_url().GetQuery(), &params);
     EXPECT_EQ(id, params["id"]);
@@ -862,11 +867,13 @@ class ExtensionUpdaterTest : public testing::Test {
     // Make sure that installedby= appears in the x= parameter.
     std::unique_ptr<ManifestFetchData> fetch_data(
         CreateManifestFetchData(GURL("http://localhost/foo")));
-    fetch_data->AddExtension(
-        id, version, ExtensionDownloaderTestHelper::GetTestPingData(),
-        ExtensionDownloaderTestHelper::kEmptyUpdateUrlData, std::string(),
-        ManifestLocation::kExternalPrefDownload,
-        DownloadFetchPriority::kBackground);
+    const DownloadPingData ping_data =
+        ExtensionDownloaderTestHelper::GetTestPingData();
+    fetch_data->AddExtension(id, version, &ping_data,
+                             ExtensionDownloaderTestHelper::kEmptyUpdateUrlData,
+                             std::string(),
+                             ManifestLocation::kExternalPrefDownload,
+                             DownloadFetchPriority::kBackground);
     std::map<std::string, std::string> params;
     VerifyQueryAndExtractParameters(fetch_data->full_url().GetQuery(), &params);
     EXPECT_EQ(id, params["id"]);
@@ -1616,9 +1623,7 @@ class ExtensionUpdaterTest : public testing::Test {
     TestingProfile profile;
     // TODO(crbug.com/396722906): Delete this when CrxInstaller no longer has
     // dependencies on ExtensionService.
-    static_cast<TestExtensionSystem*>(ExtensionSystem::Get(&profile))
-        ->CreateExtensionService(base::CommandLine::ForCurrentProcess(),
-                                 base::FilePath(), false);
+    static_cast<TestExtensionSystem*>(ExtensionSystem::Get(&profile))->Init();
     scoped_refptr<MockCrxInstaller> mock_installer =
         base::MakeRefCounted<MockCrxInstaller>(&profile);
 
@@ -1680,12 +1685,14 @@ class ExtensionUpdaterTest : public testing::Test {
 
     // Add crx file entry in the cache.
     base::RunLoop put_extension_run_loop;
+    base::FilePath cached_crx_path;
     test_extension_cache.AllowCaching("test_app");
     test_extension_cache.PutExtension(
         kTestExtensionId, "" /* expected hash*/, filename, version,
         base::BindLambdaForTesting(
-            [&put_extension_run_loop](const base::FilePath& file_path,
-                                      bool file_ownership_passed) {
+            [&put_extension_run_loop, &cached_crx_path](
+                const base::FilePath& file_path, bool file_ownership_passed) {
+              cached_crx_path = file_path;
               put_extension_run_loop.Quit();
             }));
     put_extension_run_loop.Run();
@@ -1743,7 +1750,7 @@ class ExtensionUpdaterTest : public testing::Test {
     LoadErrorReporter::Init(false);
 
     updater.SetExtensionCacheForTesting(&test_extension_cache);
-    CRXFileInfo crx_info(filename, GetTestVerifierFormat());
+    CRXFileInfo crx_info(cached_crx_path, GetTestVerifierFormat());
     crx_info.extension_id = kTestExtensionId;
     crx_info.expected_hash = hash;
 
@@ -2322,10 +2329,11 @@ class ExtensionUpdaterTest : public testing::Test {
 
     std::unique_ptr<ManifestFetchData> fetch_data(
         CreateManifestFetchData(GURL("http://localhost/foo"), data_priority));
+    const DownloadPingData ping_data =
+        ExtensionDownloaderTestHelper::GetTestPingData();
     ASSERT_TRUE(fetch_data->AddExtension(
-        id, version, ExtensionDownloaderTestHelper::GetTestPingData(),
-        std::string(), std::string(), ManifestLocation::kInternal,
-        extension_priority));
+        id, version, &ping_data, std::string(), std::string(),
+        ManifestLocation::kInternal, extension_priority));
     ASSERT_EQ(expected_priority, fetch_data->fetch_priority());
   }
 
@@ -2840,6 +2848,47 @@ TEST_F(ExtensionUpdaterTest, TestCheckSoon) {
   EXPECT_TRUE(updater.WillCheckSoon());
   updater.Stop();
   EXPECT_FALSE(updater.WillCheckSoon());
+}
+
+// Verifies that HasFullCheckInProgress() distinguishes full update checks from
+// targeted single-extension update checks, remaining false during targeted
+// checks and transitioning to true during full checks.
+TEST_F(ExtensionUpdaterTest, TestHasFullCheckInProgress) {
+  ExtensionDownloaderTestHelper helper;
+  TestDownloaderFactory factory(helper.url_loader_factory());
+  TestCrxInstallerFactory crx_installer_factory;
+  ExtensionList tmp;
+  CreateTestExtensions(2, 2, &tmp, nullptr, ManifestLocation::kInternal);
+  SetExtensions(tmp, ExtensionList());
+
+  ASSERT_EQ(2u, tmp.size());
+  ExtensionId id1 = tmp[0]->id();
+  ExtensionId id2 = tmp[1]->id();
+  ExtensionRegistry* registry = ExtensionRegistry::Get(profile());
+  ASSERT_TRUE(registry->enabled_extensions().GetByID(id1));
+  ASSERT_TRUE(registry->enabled_extensions().GetByID(id2));
+
+  ExtensionUpdater updater(profile());
+  updater.InitAndEnable(extension_prefs(), pref_service(), kUpdateFrequency,
+                        nullptr, factory.GetDownloaderFactory());
+  updater.set_crx_installer_factory_for_test(&crx_installer_factory);
+
+  updater.Start();
+  EXPECT_FALSE(updater.HasFullCheckInProgress());
+
+  // A targeted check must not report as a full check.
+  ExtensionUpdater::CheckParams params;
+  params.ids = {id1};
+  updater.CheckNow(std::move(params));
+  EXPECT_FALSE(updater.HasFullCheckInProgress());
+
+  // A parameterless check covers all extensions and must report as a full
+  // check.
+  updater.CheckNow(ExtensionUpdater::CheckParams());
+  EXPECT_TRUE(updater.HasFullCheckInProgress());
+
+  updater.Stop();
+  EXPECT_FALSE(updater.HasFullCheckInProgress());
 }
 
 TEST_F(ExtensionUpdaterTest, TestUninstallWhileUpdateCheck) {

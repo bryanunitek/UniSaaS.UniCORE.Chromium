@@ -26,6 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SCROLL_SCROLLBAR_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SCROLL_SCROLLBAR_H_
 
+#include "base/memory/raw_ref.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/mojom/css/preferred_contrast.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/color_scheme.mojom-blink-forward.h"
@@ -164,10 +165,7 @@ class CORE_EXPORT Scrollbar : public GarbageCollected<Scrollbar>,
   void MouseUp(const WebMouseEvent&);
   void MouseDown(const WebMouseEvent&);
 
-  ScrollbarTheme& GetTheme() const { return theme_; }
-
-  gfx::Rect ConvertToContainingEmbeddedContentView(const gfx::Rect&) const;
-  gfx::Point ConvertFromContainingEmbeddedContentView(const gfx::Point&) const;
+  ScrollbarTheme& GetTheme() const { return *theme_; }
 
   void MoveThumb(int pos, bool dragging_document = false);
 
@@ -205,7 +203,7 @@ class CORE_EXPORT Scrollbar : public GarbageCollected<Scrollbar>,
   // Even if no parts are invalidated, the scrollbar may need to be redrawn
   // if, for instance, the thumb moves without changing the appearance of any
   // part.
-  void SetNeedsPaintInvalidation(ScrollbarPart invalid_parts);
+  void SetNeedsPaintInvalidation(int invalid_parts);
 
   CompositorElementId GetElementId() const;
 
@@ -257,12 +255,13 @@ class CORE_EXPORT Scrollbar : public GarbageCollected<Scrollbar>,
   void InjectScrollGesture(WebInputEvent::Type type,
                            ScrollOffset delta,
                            ui::ScrollGranularity granularity);
-  ScrollDirectionPhysical PressedPartScrollDirectionPhysical();
+  mojom::blink::ScrollDirectionPhysical PressedPartScrollDirectionPhysical();
   ui::ScrollGranularity PressedPartScrollGranularity();
 
   Member<ScrollableArea> scrollable_area_;
   ScrollbarOrientation orientation_;
-  ScrollbarTheme& theme_;
+  const raw_ref<ScrollbarTheme, UnprotectedInRelease | DanglingUntriaged>
+      theme_;
 
   int visible_size_;
   int total_size_;

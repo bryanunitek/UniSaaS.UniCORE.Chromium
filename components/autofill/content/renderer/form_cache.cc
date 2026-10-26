@@ -26,22 +26,9 @@ namespace autofill {
 namespace {
 
 // Determines whether the form is interesting enough to be sent to the browser
-// for further operations. This is the case if any of the below holds:
-// (1) At least one form field is not-checkable. (See crbug.com/1489075.)
-// (2) At least one field has a non-empty autocomplete attribute.
-// (3) There is at least one iframe.
-// TODO(crbug.com/40283901): Remove check for radio buttons and checkboxes when
-// we they're not extracted anymore.
+// for further operations.
 bool IsFormInteresting(const FormData& form) {
-  auto is_checkable = [](FormControlType type) {
-    return type == FormControlType::kInputCheckbox ||
-           type == FormControlType::kInputRadio;
-  };
-  return !form.child_frames().empty() ||
-         std::ranges::any_of(form.fields(), std::not_fn(is_checkable),
-                             &FormFieldData::form_control_type) ||
-         std::ranges::any_of(form.fields(), std::not_fn(&std::string::empty),
-                             &FormFieldData::autocomplete_attribute);
+  return !form.fields().empty() || !form.child_frames().empty();
 }
 
 }  // namespace
@@ -58,6 +45,12 @@ FormCache::~FormCache() = default;
 
 void FormCache::Reset() {
   extracted_forms_.clear();
+}
+
+void FormCache::ClearCache() {
+  for (auto& [id, form] : extracted_forms_) {
+    form.reset();
+  }
 }
 
 FormCache::UpdateFormCacheResult FormCache::UpdateFormCache(
@@ -109,6 +102,8 @@ FormCache::UpdateFormCacheResult FormCache::UpdateFormCache(
     if (IsFormInteresting(form)) {
       FormRendererId form_id = form.renderer_id();
       auto it = old_extracted_forms.find(form_id);
+      // it->second may be null because the cache was cleared. In this case
+      // we want to list the form as an updated form.
       if (it == old_extracted_forms.end() || !it->second ||
           !FormData::IdenticalAndEquivalentDomElements(
               *it->second, form, {FormFieldData::Exclusion::kValue})) {
@@ -125,18 +120,19 @@ FormCache::UpdateFormCacheResult FormCache::UpdateFormCache(
     return r;
   }
   std::vector<blink::WebFormElement> form_elements =
-      document.GetTopLevelForms();
+      document.GetOutermostForms();
   // Add a null WebFormElement to account for the form of unowned elements.
   form_elements.emplace_back();
 
   bool stop_extracting_forms = false;
   for (const blink::WebFormElement& form_element : form_elements) {
-    extracted_forms_[form_util::GetFormRendererId(form_element)] = nullptr;
+    FormRendererId form_id = form_util::GetFormRendererId(form_element);
+    extracted_forms_[form_id] = nullptr;
     if (stop_extracting_forms) {
       continue;
     }
     if (std::optional<FormData> form = form_util::ExtractFormData(
-            document, form_element, field_data_manager,
+            document, form_id, field_data_manager,
             agent_->GetCallTimerState(kUpdateFormCache),
             agent_->button_titles_cache())) {
       if (!ProcessForm(std::move(*form))) {

@@ -17,8 +17,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/sanitized_object.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -90,7 +90,7 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
 
   class NET_EXPORT_PRIVATE Request {
     // TODO(crbug.com/422046500): Remove this macro once the bug gets fixed.
-    ADVANCED_MEMORY_SAFETY_CHECKS();
+    SANITIZED_OBJECT();
 
    public:
     // If |proxy_auth_callback| is null, proxy auth challenges will
@@ -155,7 +155,6 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
   TransportClientSocketPool(
       size_t socket_soft_cap,
       size_t max_sockets_per_group,
-      SocketPoolAdditionalCapacity additional_capacity,
       base::TimeDelta unused_idle_socket_timeout,
       const ProxyChain& proxy_chain,
       bool is_for_websockets,
@@ -174,7 +173,6 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
   static std::unique_ptr<TransportClientSocketPool> CreateForTesting(
       size_t socket_soft_cap,
       size_t max_sockets_per_group,
-      SocketPoolAdditionalCapacity additional_capacity,
       base::TimeDelta unused_idle_socket_timeout,
       base::TimeDelta used_idle_socket_timeout,
       const ProxyChain& proxy_chain_,
@@ -352,7 +350,7 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
     bool IsEmpty() const {
       return active_socket_count_ == 0 && idle_sockets_.empty() &&
              jobs_.empty() && unbound_requests_.empty() &&
-             bound_requests_.empty();
+             bound_requests_.empty() && jobs_being_destroyed_ == 0;
     }
 
     bool HasAvailableSocketSlot(size_t max_sockets_per_group) const {
@@ -393,9 +391,15 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
     bool TryToUseNeverAssignedConnectJob();
 
     void AddJob(std::unique_ptr<ConnectJob> job, bool is_preconnect);
-    // Remove |job| from this group, which must already own |job|. Returns the
+    // Remove `job` from this group, which must already own `job`. Returns the
     // removed ConnectJob.
     std::unique_ptr<ConnectJob> RemoveUnboundJob(ConnectJob* job);
+    // Destroys `job` while preventing this Group from being considered empty
+    // and deleted if `job`'s destructor reentrantly completes or cancels
+    // another ConnectJob in this Group. Must be called to destroy all
+    // ConnectJobs associated with this Group, even those that completed
+    // synchronously without being added to `jobs_`.
+    void DestroyConnectJob(std::unique_ptr<ConnectJob> job);
     void RemoveAllUnboundJobs();
 
     bool has_unbound_requests() const { return !unbound_requests_.empty(); }
@@ -438,16 +442,14 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
     // callback, returns nullptr.
     const Request* BindRequestToConnectJob(ConnectJob* connect_job);
 
-    // Finds the request, if any, bound to |connect_job|, and returns the
+    // Finds the request, if any, bound to `connect_job`, and returns the
     // BoundRequest or std::nullopt if there was none.
     std::optional<BoundRequest> FindAndRemoveBoundRequestForConnectJob(
         ConnectJob* connect_job);
 
-    // Finds the bound request, if any, corresponding to |client_socket_handle|
-    // and returns it. Destroys the ConnectJob bound to the request, if there
-    // was one.
-    std::unique_ptr<Request> FindAndRemoveBoundRequest(
-        ClientSocketHandle* client_socket_handle);
+    // Finds the bound request, if any, corresponding to `client_socket_handle`
+    // and deletes it. Returns true if there was one.
+    bool FindAndRemoveBoundRequest(ClientSocketHandle* client_socket_handle);
 
     // Change the priority of the request named by |*handle|.  |*handle|
     // must refer to a request currently present in the group.  If |priority|
@@ -553,6 +555,11 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
     std::list<raw_ptr<ConnectJob, CtnExperimental>> unassigned_jobs_;
     RequestQueue unbound_requests_;
     size_t active_socket_count_ = 0;  // number of active client sockets
+    // Number of ConnectJobs currently being destroyed on the stack. While
+    // non-zero, the Group is not considered empty so that reentrant ConnectJob
+    // completions or cancellations during ~ConnectJob() cannot delete the Group
+    // while an outer call is still operating on it.
+    size_t jobs_being_destroyed_ = 0;
     // A timer for when to start the backup job.
     base::OneShotTimer backup_job_timer_;
 
@@ -589,7 +596,6 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
   TransportClientSocketPool(
       size_t socket_soft_cap,
       size_t max_sockets_per_group,
-      SocketPoolAdditionalCapacity additional_capacity,
       base::TimeDelta unused_idle_socket_timeout,
       base::TimeDelta used_idle_socket_timeout,
       const ProxyChain& proxy_chain,
@@ -766,6 +772,13 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
                                   const base::TimeTicks& now,
                                   const char* net_log_reason_utf8);
 
+  // Destroys |socket| immediately for direct connections, or queues it for
+  // asynchronous destruction when using a proxy, where destroying a tunneled
+  // socket can synchronously drain a shared session and reentrantly complete
+  // ConnectJobs in |this|.
+  void QueueDestroySocket(std::unique_ptr<StreamSocket> socket);
+  void DestroyQueuedSockets();
+
   // Called when a preconnect connect job completes.
   void OnPreconnectConnectJobComplete(
       PreconnectCompletionCallback callback,
@@ -808,6 +821,8 @@ class NET_EXPORT_PRIVATE TransportClientSocketPool
   std::set<raw_ptr<HigherLayeredPool, SetExperimental>> higher_pools_;
 
   const raw_ptr<SSLClientContext> ssl_client_context_;
+
+  std::vector<std::unique_ptr<StreamSocket>> sockets_queued_for_destruction_;
 
 #if DCHECK_IS_ON()
   // Reentrancy guard for RequestSocketInternal().

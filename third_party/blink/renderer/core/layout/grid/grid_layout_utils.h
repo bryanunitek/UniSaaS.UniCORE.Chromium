@@ -8,6 +8,8 @@
 #include "base/functional/function_ref.h"
 #include "third_party/blink/renderer/core/layout/grid/grid_layout_algorithm.h"
 #include "third_party/blink/renderer/core/layout/grid/grid_sizing_tree.h"
+#include "third_party/blink/renderer/core/layout/grid_lanes/grid_lanes_layout_algorithm.h"
+#include "third_party/blink/renderer/core/layout/grid_lanes/grid_lanes_node.h"
 #include "third_party/blink/renderer/core/style/grid_enums.h"
 #include "third_party/blink/renderer/core/style/grid_track_size.h"
 #include "third_party/blink/renderer/platform/fonts/font_baseline.h"
@@ -19,7 +21,9 @@ namespace blink {
 
 class BlockNode;
 class BoxFragmentBuilder;
+class ComputedStyle;
 class ConstraintSpace;
+class GapGeometry;
 class GridLayoutData;
 class GridItems;
 class GridLayoutTrackCollection;
@@ -35,6 +39,26 @@ struct GridItemData;
 struct LogicalSize;
 struct LogicalStaticPosition;
 struct MinMaxSizesResult;
+
+struct GridTrackGap {
+  wtf_size_t line_index;
+  LayoutUnit center_offset;
+};
+
+struct GridTrackGapData {
+  Vector<GridTrackGap> gaps;
+  LayoutUnit content_start;
+  LayoutUnit content_end;
+  // Expanded track count, including collapsed tracks, used by Grid's existing
+  // gap-segment aggregators.
+  wtf_size_t track_count = 0;
+};
+
+// Main/cross is independent of track direction for grid-lanes.
+enum class GridTrackGapType {
+  kMain,
+  kCross,
+};
 
 // Base class for accumulating baseline information across grid and grid-lanes
 // layouts. Provides a unified interface for handling baselines in both grid
@@ -54,12 +78,16 @@ class BaselineAccumulator {
   virtual std::optional<LayoutUnit> LastBaseline() const = 0;
 };
 
-// Performs a layout of `grid_item` for measurement purposes. Disables layout
-// side effects when appropriate.
+// Performs a layout of `grid_item` for measurement purposes, disabling layout
+// side effects when the resulting fragment must not be written back to the
+// item. Set `is_measure_after_layout` when this item has already been laid out
+// and its fragment stored, as no subsequent layout will overwrite the fragment
+// measured here.
 const LayoutResult* LayoutGridItemForMeasure(
     const GridItemData& grid_item,
     const ConstraintSpace& constraint_space,
-    SizingConstraint sizing_constraint);
+    SizingConstraint sizing_constraint,
+    bool is_measure_after_layout = false);
 
 // Update the provided `available_size`, `min_available_size`, and
 // `max_available_size` to their appropriate values.
@@ -100,6 +128,14 @@ void AlignmentOffsetForOutOfFlow(AxisEdge inline_axis_edge,
                                  AxisEdge block_axis_edge,
                                  LogicalSize container_size,
                                  LogicalStaticPosition*);
+
+// Builds gap metadata and geometry from expanded track positions.
+//
+// An all-collapsed collection returns no gaps.
+GridTrackGapData BuildGridTrackGapData(
+    const GridLayoutTrackCollection& track_collection,
+    GridTrackGapType gap_type,
+    GapGeometry& gap_geometry);
 
 // Per the Grid spec [1] there is special logic for the contribution size to use
 // for intrinsic minimums. This method returns the contribution size of
@@ -154,6 +190,13 @@ LayoutUnit GetLogicalBaseline(const LogicalBoxFragment& baseline_fragment,
                               FontBaseline font_baseline,
                               bool is_last_baseline);
 
+// Returns an item's baseline extra margin: its baseline-side margin plus the
+// surrounding subgrid's edge margin.
+LayoutUnit GetExtraMarginForBaseline(const BoxStrut& margins,
+                                     const SubgriddedItemData& subgridded_item,
+                                     GridTrackSizingDirection track_direction,
+                                     WritingMode writing_mode);
+
 // Updates `layout_data` with a baseline value on the appropriate track for the
 // given item, based on its baseline-sharing group (major → start-most track,
 // minor → end-most track).
@@ -171,6 +214,18 @@ void StoreItemBaseline(const LogicalBoxFragment& baseline_fragment,
                        LayoutUnit extra_margin,
                        GridLayoutData& layout_data,
                        GridItemData& item);
+
+// Builds the baseline fragment for a measured item, derives its extra margin,
+// and stores its baseline via `StoreItemBaseline`. Returns early for items
+// that aren't baseline aligned.
+void MeasureAndStoreItemBaseline(const LayoutResult& result,
+                                 GridItemData& item,
+                                 const SubgriddedItemData& subgridded_item,
+                                 const ConstraintSpace& space,
+                                 GridTrackSizingDirection track_direction,
+                                 FontBaseline font_baseline,
+                                 WritingMode writing_mode,
+                                 GridLayoutData& layout_data);
 
 // Computes the baseline offset for aligning a grid item within its
 // baseline-sharing group. Returns the offset needed to align the item's
@@ -222,7 +277,12 @@ FragmentGeometry CalculateInitialFragmentGeometryForSubgrid(
 
 // Helper which iterates over the sizing tree, and instantiates a subgrid
 // algorithm to invoke the callback with.
-template <typename LayoutAlgorithmType, typename CallbackFunc>
+//
+// TODO(yanlingwang): Eventually remove `skip_grid_lanes_subgrids` once
+// grid-lanes subgrid baseline alignment is supported.
+template <bool skip_grid_lanes_subgrids = false,
+          typename LayoutAlgorithmType,
+          typename CallbackFunc>
 void ForEachSubgrid(const GridSizingSubtree& sizing_subtree,
                     const LayoutAlgorithmType& algorithm,
                     const CallbackFunc& callback_func,
@@ -240,6 +300,12 @@ void ForEachSubgrid(const GridSizingSubtree& sizing_subtree,
       continue;
     }
 
+    CHECK(next_subgrid_subtree);
+    if (skip_grid_lanes_subgrids && grid_item.node.IsGridLanes()) {
+      next_subgrid_subtree = next_subgrid_subtree.NextSibling();
+      continue;
+    }
+
     const SubgriddedItemData subgridded_item(
         grid_item, &layout_data,
         algorithm.GetConstraintSpace().GetWritingMode());
@@ -250,13 +316,18 @@ void ForEachSubgrid(const GridSizingSubtree& sizing_subtree,
         should_compute_min_max_sizes ? next_subgrid_subtree
                                      : kNoGridSizingSubtree);
 
-    // TODO(almaher): This should use GridLanesLayoutAlgorithm when the subgrid
-    // is a grid-lanes container.
-    const GridLayoutAlgorithm subgrid_algorithm(
-        {grid_item.node, fragment_geometry, space});
-
-    DCHECK(next_subgrid_subtree);
-    callback_func(subgrid_algorithm, next_subgrid_subtree, subgridded_item);
+    if (grid_item.node.IsGridLanes()) {
+      if constexpr (!skip_grid_lanes_subgrids) {
+        callback_func(GridLanesLayoutAlgorithm(
+                          {grid_item.node, fragment_geometry, space}),
+                      next_subgrid_subtree, subgridded_item);
+      }
+    } else {
+      CHECK(grid_item.node.IsGrid());
+      callback_func(
+          GridLayoutAlgorithm({grid_item.node, fragment_geometry, space}),
+          next_subgrid_subtree, subgridded_item);
+    }
 
     next_subgrid_subtree = next_subgrid_subtree.NextSibling();
   }
@@ -306,16 +377,24 @@ void AppendSubgriddedItems(const NodeType& node, GridItems* grid_items) {
       continue;
     }
 
-    // TODO(almaher): This should eventually support grid lanes, as well.
     bool must_invalidate_placement_cache = false;
-    const auto subgrid = To<GridNode>(current_item.node);
-
-    auto* subgridded_items = subgrid.ConstructGridItems(
-        subgrid.CachedLineResolver(), root_grid_style, subgrid.Style(),
-        current_item.must_consider_grid_items_for_column_sizing,
-        current_item.must_consider_grid_items_for_row_sizing,
-        &must_invalidate_placement_cache,
-        /*parent_is_auto_placed=*/current_item.is_auto_placed);
+    GridItems* subgridded_items;
+    if (current_item.node.IsGridLanes()) {
+      const auto subgrid = To<GridLanesNode>(current_item.node);
+      subgridded_items = subgrid.ConstructGridItems(
+          subgrid.CachedLineResolver(), root_grid_style, subgrid.Style(),
+          current_item.must_consider_grid_items_for_column_sizing,
+          &must_invalidate_placement_cache,
+          /*parent_is_auto_placed=*/current_item.is_auto_placed);
+    } else {
+      const auto subgrid = To<GridNode>(current_item.node);
+      subgridded_items = subgrid.ConstructGridItems(
+          subgrid.CachedLineResolver(), root_grid_style, subgrid.Style(),
+          current_item.must_consider_grid_items_for_column_sizing,
+          current_item.must_consider_grid_items_for_row_sizing,
+          &must_invalidate_placement_cache,
+          /*parent_is_auto_placed=*/current_item.is_auto_placed);
+    }
 
     DCHECK(!must_invalidate_placement_cache)
         << "We shouldn't need to invalidate the placement cache if we relied "
@@ -346,10 +425,9 @@ void InitializeTrackSizesForEachSubgrid(
     const GridSizingSubtree& sizing_subtree,
     const LayoutAlgorithmType& algorithm,
     const std::optional<GridTrackSizingDirection>& opt_track_direction) {
-  // TODO(almaher): Support grid-lanes subgrids as well.
   ForEachSubgrid(
       sizing_subtree, algorithm,
-      [&](const GridLayoutAlgorithm& subgrid_algorithm,
+      [&](const auto& subgrid_algorithm,
           const GridSizingSubtree& subgrid_subtree,
           const SubgriddedItemData& subgrid_data) {
         subgrid_algorithm.InitializeTrackSizes(
@@ -369,10 +447,9 @@ void CompleteTrackSizingAlgorithmForEachSubgrid(
     GridTrackSizingDirection track_direction,
     SizingConstraint sizing_constraint,
     bool* opt_needs_additional_pass) {
-  // TODO(almaher): Support grid-lanes subgrids as well.
   ForEachSubgrid(
       sizing_subtree, algorithm,
-      [&](const GridLayoutAlgorithm& subgrid_algorithm,
+      [&](const auto& subgrid_algorithm,
           const GridSizingSubtree& subgrid_subtree,
           const SubgriddedItemData& subgrid_data) {
         subgrid_algorithm.CompleteTrackSizingAlgorithm(
@@ -390,9 +467,11 @@ void ComputeBaselineAlignmentForEachSubgrid(
     const LayoutAlgorithmType& algorithm,
     const GridLayoutTree* layout_tree,
     const std::optional<GridTrackSizingDirection>& opt_track_direction,
-    SizingConstraint sizing_constraint) {
-  // TODO(almaher): Support grid-lanes subgrids as well.
-  ForEachSubgrid(
+    SizingConstraint sizing_constraint,
+    bool is_measure_after_layout = false) {
+  // TODO(yanlingwang): Include grid-lanes subgrids once their baseline
+  // alignment is supported.
+  ForEachSubgrid</*skip_grid_lanes_subgrids=*/true>(
       sizing_subtree, algorithm,
       [&](const GridLayoutAlgorithm& subgrid_algorithm,
           const GridSizingSubtree& subgrid_subtree,
@@ -400,14 +479,14 @@ void ComputeBaselineAlignmentForEachSubgrid(
         subgrid_algorithm.ComputeBaselineAlignment(
             layout_tree, subgrid_subtree, subgrid_data,
             subgrid_data->RelativeDirectionFilterInSubgrid(opt_track_direction),
-            sizing_constraint);
+            sizing_constraint, is_measure_after_layout);
       });
 }
 
 // Validates the min/max sizes cache for subgrids in the sizing tree. A
 // subgrid might need to invalidate the cache if it inherited a different track
 // collection in its subgridded axis. Returns true if invalidation was needed.
-bool ValidateMinMaxSizesCache(const BlockNode& grid_node,
+bool ValidateMinMaxSizesCache(const BlockNode& node,
                               const GridSizingSubtree& sizing_subtree,
                               GridTrackSizingDirection track_direction);
 
@@ -445,6 +524,17 @@ LayoutUnit LargestAutoPlacedSubgridContribution(LayoutUnit start_extra_margin,
 void AccommodateSubgridExtraMargins(const GridSizingSubtree& sizing_subtree,
                                     GridSizingTrackCollection& track_collection,
                                     GridTrackSizingDirection track_direction);
+
+// Determines whether an item *may* grow to encompass content pushed down by
+// fragmentation (lines pushed down by a fragmentation line, etc).
+// `opt_row_track_collection` should be nullptr if there is no row track
+// collection available in the given layout algorithm (for example, grid lanes
+// column containers).
+bool MinBlockSizeShouldEncompassIntrinsicSize(
+    const GridItemData& grid_item,
+    const ComputedStyle& container_style,
+    bool has_descendant_that_depends_on_percentage_block_size,
+    const GridLayoutTrackCollection* opt_row_track_collection);
 
 }  // namespace blink
 

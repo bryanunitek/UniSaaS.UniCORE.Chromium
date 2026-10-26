@@ -17,7 +17,7 @@
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_identity_view.h"
-#include "chrome/browser/ui/views/web_apps/isolated_web_apps/sub_app_identity_view.h"
+#include "chrome/browser/ui/views/web_apps/isolated_web_apps/uninstall_sub_app_identity_view.h"
 #include "chrome/browser/ui/views/web_apps/web_app_icon_name_and_origin_view.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/ui/web_applications/web_app_info_image_source.h"
@@ -83,9 +83,9 @@ std::unique_ptr<views::View> CreateAppIdentityView(
   std::u16string app_name =
       base::UTF8ToUTF16(registrar.GetAppShortName(app_id));
   if (auto parent_app_name = registrar.GetParentAppShortName(app_id)) {
-    return SubAppIdentityView::Create(image, std::move(app_name),
-                                      base::UTF8ToUTF16(*parent_app_name),
-                                      is_maskable);
+    return UninstallSubAppIdentityView::Create(
+        image, std::move(app_name), base::UTF8ToUTF16(*parent_app_name),
+        is_maskable);
   }
   if (auto* web_app = registrar.GetAppById(
           app_id, web_app::WebAppFilter::IsIsolatedApp())) {
@@ -111,7 +111,7 @@ WebAppUninstallDialogDelegateView::WebAppUninstallDialogDelegateView(
       profile_(profile),
       uninstall_choice_callback_(std::move(uninstall_choice_callback)) {
   provider_ = web_app::WebAppProvider::GetForWebApps(profile_)->AsWeakPtr();
-  DCHECK(provider_);
+  CHECK(provider_, base::NotFatalUntil::M162);
 
   web_app::UnorderedSizeToBitmap icon_bitmaps(icon_metadata.icons_map.begin(),
                                               icon_metadata.icons_map.end());
@@ -275,7 +275,7 @@ WebAppUninstallDialogDelegateView::~WebAppUninstallDialogDelegateView() {
 }
 
 void WebAppUninstallDialogDelegateView::OnDialogAccepted() {
-  DCHECK(provider_);
+  CHECK(provider_, base::NotFatalUntil::M162);
   bool is_isolated_web_app = provider_->registrar_unsafe().AppMatches(
       app_id_, web_app::WebAppFilter::IsIsolatedApp());
   bool clear_site_data = checkbox_ && checkbox_->GetChecked();

@@ -287,7 +287,13 @@ namespace {
 
 class NoSessionTrayBackgroundViewTest : public TrayBackgroundViewTest {
  public:
-  NoSessionTrayBackgroundViewTest() { set_start_session(false); }
+  NoSessionTrayBackgroundViewTest() = default;
+
+  // TrayBackgroundViewTest:
+  void SetUpInitParams(AshTestHelper::InitParams& init_params) override {
+    TrayBackgroundViewTest::SetUpInitParams(init_params);
+    init_params.start_session = false;
+  }
 };
 
 }  // namespace
@@ -350,7 +356,7 @@ TEST_F(NoSessionTrayBackgroundViewTest, HandleSessionChange) {
       test_tray_background_view()->layer()->GetAnimator()->is_animating());
   EXPECT_TRUE(test_tray_background_view()->GetVisible());
 
-  SimulateUserLogin({"a@tray"});
+  SimulateUserLogin(AccountId::FromUserEmail("a@tray"));
   task_environment()->FastForwardBy(base::Milliseconds(20));
   EXPECT_FALSE(
       test_tray_background_view()->layer()->GetAnimator()->is_animating());

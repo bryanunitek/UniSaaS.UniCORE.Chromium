@@ -7,6 +7,7 @@
 #include "base/check.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
@@ -18,7 +19,7 @@
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/tabs/tab_data.h"
-#include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/tabs/tab_favicon_theming.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/browser/ui/views/dotted_icon.h"
 #include "components/feature_engagement/public/feature_constants.h"
@@ -30,18 +31,12 @@
 #include "ui/base/theme_provider.h"
 #include "ui/color/color_provider.h"
 #include "ui/compositor/layer.h"
-#include "ui/compositor/layer_animation_element.h"
-#include "ui/compositor/layer_animation_sequence.h"
-#include "ui/compositor/layer_animator.h"
-#include "ui/compositor/paint_recorder.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/linear_animation.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/favicon_size.h"
-#include "ui/gfx/geometry/transform_util.h"
 #include "ui/gfx/image/image_skia_operations.h"
-#include "ui/gfx/interpolated_transform.h"
 #include "ui/gfx/paint_throbber.h"
 #include "ui/gfx/scoped_canvas.h"
 #include "ui/native_theme/native_theme.h"
@@ -61,34 +56,6 @@ bool NetworkStateIsAnimated(tabs::TabNetworkState network_state) {
   return network_state != tabs::TabNetworkState::kNone &&
          network_state != tabs::TabNetworkState::kError;
 }
-
-// Helper class that manages the compositor-driven throbber animation.
-// This view is promoted to its own layer and receives a transform animation,
-// allowing the spinner to rotate without triggering any UI-thread repaints.
-class ThrobberView : public views::View {
-  METADATA_HEADER(ThrobberView, views::View)
-
- public:
-  ThrobberView() {
-    SetPaintToLayer();
-    layer()->SetFillsBoundsOpaquely(false);
-    layer()->SetName("TabIconThrobberLayer");
-  }
-
-  void OnPaint(gfx::Canvas* canvas) override {
-    const SkColor spinning_color = views::GetCascadingAccentColor(this);
-
-    // We paint a static ~270 degree arc. The rotation is handled by the
-    // compositor via a transform animation on the layer. We use a fixed
-    // time of 1500ms to ensure the arc length is visually consistent.
-    gfx::PaintThrobberSpinning(canvas, GetLocalBounds(), spinning_color,
-                               base::Milliseconds(1500),
-                               kLoadingAnimationStrokeWidthDp);
-  }
-};
-
-BEGIN_METADATA(ThrobberView)
-END_METADATA
 
 }  // namespace
 
@@ -114,7 +81,6 @@ class TabIcon::CrashAnimation : public gfx::LinearAnimation,
       target_->should_display_crashed_favicon_ = true;
       target_->hiding_fraction_ = 1.0 - (state - 0.5) * 2.0;
     }
-    target_->UpdateThrobber();
     target_->SchedulePaint();
   }
 
@@ -138,7 +104,7 @@ TabIcon::TabIcon()
   SetPreferredSize(gfx::Size(preferred_width, preferred_width));
 
   // Initial state (before any data) should not be animating.
-  DCHECK(!GetShowingLoadingAnimation());
+  CHECK(!GetShowingLoadingAnimation(), base::NotFatalUntil::M162);
 
   SetProperty(views::kElementIdentifierKey, kTabIconElementId);
 
@@ -223,12 +189,6 @@ void TabIcon::SetCanPaintToLayer(bool can_paint_to_layer) {
 }
 
 void TabIcon::StepLoadingAnimation(const base::TimeDelta& elapsed_time) {
-  // If the compositor-driven throbber is active, we don't need to trigger
-  // periodic SchedulePaint() calls. The throbber is rotating smoothly on
-  // the compositor thread, and the UI thread can remain idle.
-  if (throbber_view_) {
-    return;
-  }
   if (GetShowingLoadingAnimation()) {
     SchedulePaint();
   }
@@ -288,25 +248,12 @@ void TabIcon::OnPaint(gfx::Canvas* canvas) {
     MaybePaintFavicon(canvas, GetIconToPaint(), icon_bounds);
   }
 
-  // If the compositor optimization is disable, we paint the
-  // throbber arc here on the UI thread.
-  if (GetShowingLoadingAnimation() && !throbber_view_) {
+  if (GetShowingLoadingAnimation()) {
     PaintLoadingAnimation(canvas, icon_bounds);
   }
 }
 
 void TabIcon::OnBoundsChanged(const gfx::Rect& previous_bounds) {
-  UpdateThrobber();
-}
-
-void TabIcon::ViewHierarchyChanged(
-    const views::ViewHierarchyChangedDetails& details) {
-  if (details.is_add && details.child == this) {
-    UpdateThrobber();
-  }
-}
-
-void TabIcon::AddedToWidget() {
   UpdateThrobber();
 }
 
@@ -321,7 +268,6 @@ void TabIcon::OnThemeChanged() {
 }
 
 void TabIcon::AnimationProgressed(const gfx::Animation* animation) {
-  UpdateThrobber();
   SchedulePaint();
 }
 
@@ -411,8 +357,8 @@ gfx::ImageSkia TabIcon::GetIconToPaint() {
     if (crashed_icon_.isNull()) {
       // Lazily create a themed sad tab icon.
       ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
-      crashed_icon_ =
-          ThemeFavicon(*rb.GetImageSkiaNamed(IDR_CRASH_SAD_FAVICON));
+      crashed_icon_ = tabs::ThemeFaviconForTab(
+          *rb.GetImageSkiaNamed(IDR_CRASH_SAD_FAVICON), *GetColorProvider());
     }
     return crashed_icon_;
   }
@@ -603,15 +549,30 @@ bool TabIcon::GetCrashed() const {
 }
 
 void TabIcon::UpdateThrobber() {
+  TRACE_EVENT0("ui", "TabIcon::UpdateThrobber");
+  base::ScopedUmaHistogramTimer timer(
+      "Tab.Icon.UpdateThrobber.Time",
+      base::ScopedUmaHistogramTimer::ScopedHistogramTiming::kMicrosecondTimes);
+
   // Since the loading animation can run for a long time, paint to a
   // separate layer when possible to reduce repaint overhead.
   bool should_paint_to_layer =
       can_paint_to_layer_ &&
       (GetShowingLoadingAnimation() || favicon_size_animation_.is_animating() ||
        tab_discard_animation_.is_animating());
+  // SetData() can update loading state before layout assigns icon bounds. Avoid
+  // allocating compositor resources for a layer that cannot paint while still
+  // updating the lifecycle of an existing layer.
+  if (GetContentsBounds().IsEmpty() && should_paint_to_layer && !layer()) {
+    should_paint_to_layer = false;
+  }
   if (should_paint_to_layer != !!layer()) {
-    // Change layer mode. Promoting to a layer reduces composition cost
-    // regardless of whether we use the compositor-driven throbber or not.
+    TRACE_EVENT0("ui", "TabIcon::UpdateThrobber (Toggle Layer)");
+    std::optional<base::ScopedUmaHistogramTimer> not_cached_timer;
+    not_cached_timer.emplace("Tab.Icon.UpdateThrobber.Time.NotCached",
+                             base::ScopedUmaHistogramTimer::
+                                 ScopedHistogramTiming::kMicrosecondTimes);
+    // Change layer mode.
     if (should_paint_to_layer) {
       SetPaintToLayer();
       layer()->SetFillsBoundsOpaquely(false);
@@ -619,96 +580,6 @@ void TabIcon::UpdateThrobber() {
       DestroyLayer();
     }
   }
-
-  // Use a compositor-driven throbber animation if enabled.
-  const bool use_compositor_throbber =
-      base::FeatureList::IsEnabled(features::kCompositorLoadingThrobber) &&
-      GetShowingLoadingAnimation();
-
-  if (use_compositor_throbber) {
-    const gfx::Rect contents_bounds = GetContentsBounds();
-    if (contents_bounds.IsEmpty()) {
-      if (throbber_view_) {
-        RemoveChildViewT(std::exchange(throbber_view_, nullptr));
-      }
-      return;
-    }
-
-    if (!throbber_view_) {
-      throbber_view_ = AddChildView(std::make_unique<ThrobberView>());
-    }
-    CHECK(throbber_view_);
-
-    // Calculate and update the icon's visual bounds.
-    gfx::Rect icon_bounds(
-        GetMirroredXWithWidthInView(contents_bounds.x(), gfx::kFaviconSize),
-        contents_bounds.y() +
-            static_cast<int>(contents_bounds.height() * hiding_fraction_),
-        std::min(gfx::kFaviconSize, contents_bounds.width()),
-        std::min(gfx::kFaviconSize, contents_bounds.height()));
-
-    if (throbber_view_->bounds() != icon_bounds) {
-      throbber_view_->SetBoundsRect(icon_bounds);
-    }
-
-    // Ensure the throbber is positioned at the front.
-    ReorderChildView(throbber_view_, -1);
-
-    // Apply or refresh the compositor-driven rotation animation.
-    ui::Layer* throbber_layer = throbber_view_->layer();
-    CHECK(throbber_layer);
-    if (!throbber_layer->GetAnimator()->IsAnimatingProperty(
-            ui::LayerAnimationElement::TRANSFORM)) {
-      throbber_layer->SetTransform(gfx::Transform());
-
-      // Calculate the rotation center (the center of the throbber view).
-      gfx::Point center(throbber_layer->bounds().width() / 2,
-                        throbber_layer->bounds().height() / 2);
-
-      // Create a 360-degree rotation that repeats indefinitely.
-      // ui::InterpolatedRotation ensures the compositor handles the math.
-      std::unique_ptr<ui::InterpolatedTransform> rotation =
-          std::make_unique<ui::InterpolatedRotation>(0, 360);
-      std::unique_ptr<ui::InterpolatedTransform> rotation_about_pivot =
-          std::make_unique<ui::InterpolatedTransformAboutPivot>(
-              center, std::move(rotation));
-
-      auto sequence = std::make_unique<ui::LayerAnimationSequence>();
-      // 1568ms matches the legacy throbber's rotation time
-      // (gfx::kRotationTime).
-      static constexpr base::TimeDelta kRotationTime = base::Milliseconds(1568);
-      auto element =
-          ui::LayerAnimationElement::CreateInterpolatedTransformElement(
-              std::move(rotation_about_pivot), kRotationTime);
-
-      if (!element->duration().is_zero()) {
-        sequence->set_is_repeating(true);
-        sequence->AddElement(std::move(element));
-        throbber_layer->GetAnimator()->StartAnimation(sequence.release());
-      }
-    }
-  } else if (throbber_view_) {
-    // If we can no longer use the compositor throbber,
-    // destroy the helper view. TabIcon::OnPaint will automatically fall back
-    // to the legacy UI-thread painting.
-    RemoveChildViewT(std::exchange(throbber_view_, nullptr));
-  }
-}
-
-gfx::ImageSkia TabIcon::ThemeFavicon(const gfx::ImageSkia& source) {
-  const auto* cp = GetColorProvider();
-  return favicon::ThemeFavicon(
-      source, cp->GetColor(kColorToolbarButtonIcon),
-      cp->GetColor(kColorTabBackgroundActiveFrameActive),
-      cp->GetColor(kColorTabBackgroundInactiveFrameActive));
-}
-
-gfx::ImageSkia TabIcon::ThemeMonochromeFavicon(const gfx::ImageSkia& source) {
-  const auto* cp = GetColorProvider();
-  return favicon::ThemeMonochromeFavicon(
-      source, is_active_tab_
-                  ? cp->GetColor(kColorTabBackgroundActiveFrameActive)
-                  : cp->GetColor(kColorTabBackgroundInactiveFrameActive));
 }
 
 void TabIcon::UpdateThemedFavicon() {
@@ -717,10 +588,12 @@ void TabIcon::UpdateThemedFavicon() {
   }
 
   if (!GetNonDefaultFavicon() || should_themify_favicon_) {
-    themed_favicon_ = ThemeFavicon(favicon_.Rasterize(GetColorProvider()));
+    themed_favicon_ = tabs::ThemeFaviconForTab(
+        favicon_.Rasterize(GetColorProvider()), *GetColorProvider());
   } else if (is_monochrome_favicon_) {
-    themed_favicon_ =
-        ThemeMonochromeFavicon(favicon_.Rasterize(GetColorProvider()));
+    themed_favicon_ = tabs::ThemeMonochromeFaviconForTab(
+        favicon_.Rasterize(GetColorProvider()), *GetColorProvider(),
+        is_active_tab_);
   } else {
     themed_favicon_ = gfx::ImageSkia();
   }

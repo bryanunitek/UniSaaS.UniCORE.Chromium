@@ -37,7 +37,12 @@ void ShowAutofillShoppingSettings(content::WebContents* web_contents) {
       base::android::AttachCurrentThread(), web_contents->GetJavaWebContents());
 }
 
-void ShowAutofillSettings(content::WebContents* web_contents) {
+void ShowAutofillPersonalContextSettings(content::WebContents* web_contents) {
+  Java_SettingsNavigationHelper_showAutofillPersonalContextSettings(
+      base::android::AttachCurrentThread(), web_contents->GetJavaWebContents());
+}
+
+void ShowAutofillSettingsPage(content::WebContents* web_contents) {
   Java_SettingsNavigationHelper_showAutofillSettings(
       base::android::AttachCurrentThread(), web_contents->GetJavaWebContents());
 }

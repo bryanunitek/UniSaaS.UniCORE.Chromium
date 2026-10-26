@@ -4,7 +4,8 @@
 
 #include "chrome/browser/ui/webui/ash/settings/pages/privacy/metrics_choice_handler.h"
 
-#include "base/containers/adapters.h"
+#include <ranges>
+
 #include "base/metrics/user_metrics.h"
 #include "base/values.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash.h"
@@ -13,7 +14,6 @@
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_test_device_settings_service.h"
 #include "chrome/browser/ash/settings/stats_reporting_controller.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/chrome_metrics_service_client.h"
 #include "chrome/browser/metrics/profile_pref_names.h"
 #include "chrome/browser/net/fake_nss_service.h"
@@ -21,6 +21,7 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
 #include "chromeos/ash/components/policy/device_policy/device_policy_builder.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/device_settings_cache.h"
@@ -30,7 +31,7 @@
 #include "components/ownership/mock_owner_key_util.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/testing_pref_service.h"
-#include "components/session_manager/test/test_user_session_manager.h"
+#include "components/session_manager/test/user_session_test_environment.h"
 #include "components/sync_preferences/pref_service_mock_factory.h"
 #include "components/sync_preferences/pref_service_syncable.h"
 #include "components/user_manager/test_helper.h"
@@ -128,7 +129,7 @@ class MetricsChoiceHandlerTest : public testing::Test {
         TestingBrowserProcess::GetGlobal()->local_state(),
         &fake_session_manager_client_, owner_keys);
     owner = CreateUser(kOwner, owner_keys);
-    ASSERT_TRUE(test_user_session_manager_->AddRegularUser(account_id));
+    ASSERT_TRUE(user_session_test_environment_->AddRegularUser(account_id));
     user_manager::TestHelper::RegisterOwner(
         *TestingBrowserProcess::GetGlobal()->local_state(),
         account_id.GetUserEmail());
@@ -168,7 +169,7 @@ class MetricsChoiceHandlerTest : public testing::Test {
   }
 
   void LoginUser(const AccountId& account_id) {
-    test_user_session_manager_->LogIn(account_id);
+    user_session_test_environment_->LogIn(account_id);
   }
 
  protected:
@@ -186,8 +187,8 @@ class MetricsChoiceHandlerTest : public testing::Test {
 
     StatsReportingController::Initialize(&pref_service_);
 
-    test_user_session_manager_ =
-        std::make_unique<ash::test::TestUserSessionManager>(
+    user_session_test_environment_ =
+        std::make_unique<ash::test::UserSessionTestEnvironment>(
             TestingBrowserProcess::GetGlobal()->local_state());
     web_ui_ = std::make_unique<content::TestWebUI>();
 
@@ -209,13 +210,13 @@ class MetricsChoiceHandlerTest : public testing::Test {
 
   void TearDown() override {
     handler_->DisallowJavascript();
-    test_user_session_manager_.reset();
+    user_session_test_environment_.reset();
   }
 
   bool GetMetricsChoiceStateMessage(std::string* pref_name,
                                     bool* is_configurable) {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
-         base::Reversed(web_ui_->call_data())) {
+         std::views::reverse(web_ui_->call_data())) {
       const std::string* name = data->arg1()->GetIfString();
 
       if (data->function_name() != "cr.webUIResponse" || !name ||
@@ -238,7 +239,7 @@ class MetricsChoiceHandlerTest : public testing::Test {
 
   bool UpdateMetricsChoiceMessage(bool* current_choice) {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
-         base::Reversed(web_ui_->call_data())) {
+         std::views::reverse(web_ui_->call_data())) {
       const std::string* name = data->arg1()->GetIfString();
 
       if (data->function_name() != "cr.webUIResponse" || !name ||
@@ -268,7 +269,8 @@ class MetricsChoiceHandlerTest : public testing::Test {
                                            RegisterPrefs(&pref_service_)};
 
   std::unique_ptr<TestMetricsChoiceHandler> handler_;
-  std::unique_ptr<ash::test::TestUserSessionManager> test_user_session_manager_;
+  std::unique_ptr<ash::test::UserSessionTestEnvironment>
+      user_session_test_environment_;
   std::unique_ptr<content::TestWebUI> web_ui_;
 
   // MetricsService.
@@ -333,7 +335,7 @@ TEST_F(MetricsChoiceHandlerTest, NonOwnerWithUserConsentCanToggle) {
   auto non_owner_id = AccountId::FromUserEmailGaiaId(kNonOwner, GaiaId("1"));
   std::unique_ptr<TestingProfile> non_owner =
       CreateUser(kNonOwner, non_owner_keys);
-  ASSERT_TRUE(test_user_session_manager_->AddRegularUser(non_owner_id));
+  ASSERT_TRUE(user_session_test_environment_->AddRegularUser(non_owner_id));
 
   // User should use user choice pref.
   test_metrics_service_client_->SetShouldUseUserConsent(true);
@@ -374,7 +376,7 @@ TEST_F(MetricsChoiceHandlerTest, NonOwnerWithoutUserConsentCannotToggle) {
   auto non_owner_id = AccountId::FromUserEmailGaiaId(kNonOwner, GaiaId("1"));
   std::unique_ptr<TestingProfile> non_owner =
       CreateUser(kNonOwner, non_owner_keys);
-  ASSERT_TRUE(test_user_session_manager_->AddRegularUser(non_owner_id));
+  ASSERT_TRUE(user_session_test_environment_->AddRegularUser(non_owner_id));
 
   // User cannot use user choice. This happens if the device is managed.
   test_metrics_service_client_->SetShouldUseUserConsent(false);
@@ -415,7 +417,7 @@ TEST_F(MetricsChoiceHandlerTest, ChildUserCannotToggleAsNonOwner) {
   auto child_id = AccountId::FromUserEmailGaiaId("child@user.com", GaiaId("3"));
   std::unique_ptr<TestingProfile> child =
       CreateUser("child@user.com", non_owner_keys);
-  ASSERT_TRUE(test_user_session_manager_->AddChildUser(child_id));
+  ASSERT_TRUE(user_session_test_environment_->AddChildUser(child_id));
 
   // User cannot use user choice. This happens if the device is managed.
   test_metrics_service_client_->SetShouldUseUserConsent(true);

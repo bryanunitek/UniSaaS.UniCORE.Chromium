@@ -16,11 +16,14 @@
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/devtools_agent_coverage_observer.h"
 #include "chrome/test/base/test_switches.h"
 #include "chrome/test/interaction/interaction_test_util_browser.h"
 #include "chrome/test/interaction/tracked_element_webcontents.h"
+#include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
@@ -37,6 +40,109 @@
 namespace internal {
 
 DEFINE_SAFE_CAST_TARGET(InteractiveBrowserTestPrivate)
+
+// static
+const std::string_view InteractiveBrowserTestPrivate::kDumpElementsScript =
+    R"(
+  function gatherHtmlContent(node, active, params) {
+    const result = {
+      text: '',
+      children: [],
+    };
+    if (params.count !== undefined && params.count <= 0) {
+      return null;
+    }
+    let hidden = false;
+    if (node instanceof ShadowRoot) {
+      result.text = '(shadow root)';
+      active = node.activeElement;
+    } else if (node instanceof Element) {
+      if (active === node && !node.shadowRoot) {
+        result.text += '[FOCUSED] ';
+      }
+      if (node.id) {
+        result.text += '#' + node.id + ' ';
+      }
+      result.text += node.tagName.toLowerCase();
+      const rect = node.getBoundingClientRect();
+      hidden = rect.width <= 0 || rect.height <= 0;
+      if (hidden) {
+        result.text += ' (not visible)';
+      } else {
+        const round = (n) => Math.round(n * 10) / 10;
+        // x:86-120 y:56-90 (34x34)
+        result.text +=
+            ' at x:' + round(rect.x) + '-' + round(rect.x + rect.width);
+        result.text +=
+            ' y:' + round(rect.y) + '-' + round(rect.y + rect.height);
+        result.text +=
+            ' (' + round(rect.width) + 'x' + round(rect.height) + ')';
+      }
+    } else {
+      return null;
+    }
+
+    if (params.count !== undefined) {
+      --params.count;
+      if (params.count <= 0) {
+        result.text += ' --- node limit reached ---';
+        return result;
+      }
+    }
+
+    if (!hidden) {
+      if (params.depth === undefined || params.depth > 0) {
+        if (params.depth !== undefined) {
+          --params.depth;
+        }
+        for (const child of node.childNodes) {
+          const childData = gatherHtmlContent(child, active, params);
+          if (childData) {
+            result.children.push(childData);
+          }
+        }
+        if (node instanceof Element && node.shadowRoot) {
+          const childData = gatherHtmlContent(node.shadowRoot, null, params);
+          if (childData) {
+            result.children.push(childData);
+          }
+        }
+        if (params.depth !== undefined) {
+          ++params.depth;
+        }
+      } else {
+        result.children.push(
+            { text: ' --- depth limit reached --- ', children: [] });
+      }
+    }
+    return result;
+  }
+  function stringifyHtmlContent(node, prefix, last) {
+    let text = prefix;
+    if (!prefix) {
+      prefix += '  ';
+    } else {
+      if (last) {
+        text += '╰─';
+        prefix += '   ';
+      } else {
+        text += '├─';
+        prefix += '│  ';
+      }
+    }
+    text += node.text + '\n';
+    for (let i = 0; i < node.children.length; ++i) {
+      const last_child = (i == node.children.length - 1);
+      text += stringifyHtmlContent(node.children[i], prefix, last_child);
+    }
+    return text;
+  }
+  function dumpHtmlContent(node, active, params) {
+    return stringifyHtmlContent(
+        gatherHtmlContent(node, active, params),
+        '', false);
+  }
+)";
 
 InteractiveBrowserTestPrivate::InteractiveBrowserTestPrivate(
     ui::test::internal::InteractiveTestPrivate& test_impl)
@@ -136,6 +242,19 @@ std::string InteractiveBrowserTestPrivate::DeepQueryToString(
   return oss.str();
 }
 
+std::string InteractiveBrowserTestPrivate::MakeDumpParams() const {
+  std::ostringstream oss;
+  oss << "{";
+  if (max_dom_nodes_) {
+    oss << " count: " << *max_dom_nodes_ << ",";
+  }
+  if (max_dom_depth_) {
+    oss << " depth: " << *max_dom_depth_ << ",";
+  }
+  oss << " }";
+  return oss.str();
+}
+
 gfx::NativeWindow InteractiveBrowserTestPrivate::GetNativeWindowFromElement(
     const ui::TrackedElement* el) const {
   gfx::NativeWindow window = gfx::NativeWindow();
@@ -169,20 +288,20 @@ std::string InteractiveBrowserTestPrivate::DebugDescribeContext(
           InteractionTestUtilBrowser::GetBrowserFromContext(context)) {
     std::string type;
     switch (browser->GetType()) {
-      case Browser::TYPE_APP:
+      case BrowserWindowInterface::Type::TYPE_APP:
         type = "App window";
         break;
-      case Browser::TYPE_APP_POPUP:
+      case BrowserWindowInterface::Type::TYPE_APP_POPUP:
         type = "Popup app window";
         break;
-      case Browser::TYPE_NORMAL:
+      case BrowserWindowInterface::Type::TYPE_NORMAL:
         type = "Tabbed browser window";
         break;
-      case Browser::TYPE_DEVTOOLS:
+      case BrowserWindowInterface::Type::TYPE_DEVTOOLS:
         type = "Devtools window";
         break;
-      case Browser::TYPE_PICTURE_IN_PICTURE:
-        type = "Picture-in-picture window";
+      case BrowserWindowInterface::Type::TYPE_FLOATING:
+        type = "Floating window";
         break;
       default:
         type = "Other browser window";
@@ -202,6 +321,34 @@ std::string InteractiveBrowserTestPrivate::DebugDescribeContext(
   return std::string();
 }
 
+namespace {
+
+// Converts `dump_info` to debug tree nodes and adds it as a child of `node`.
+void AddWebDumpNodes(InteractiveBrowserTestPrivate::DebugTreeNode& node,
+                     const base::Value& dump_info) {
+  if (!dump_info.is_dict()) {
+    LOG(ERROR) << "Expected dict type but got "
+               << base::Value::GetTypeName(dump_info.type());
+    return;
+  }
+  const auto& dict = dump_info.GetDict();
+  const auto* const text = dict.FindString("text");
+  if (!text) {
+    LOG(ERROR)
+        << "Expected dict to have 'text' field but did not or was wrong type.";
+    return;
+  }
+  auto& new_node = node.children.emplace_back(*text);
+  const auto* const children = dict.FindList("children");
+  if (children) {
+    for (const auto& child : *children) {
+      AddWebDumpNodes(new_node, child);
+    }
+  }
+}
+
+}  // namespace
+
 std::vector<InteractiveBrowserTestPrivate::DebugTreeNode>
 InteractiveBrowserTestPrivate::DebugDumpElements(
     std::set<const ui::TrackedElement*>& elements) const {
@@ -217,7 +364,7 @@ InteractiveBrowserTestPrivate::DebugDumpElements(
         index =
             browser->GetTabStripModel()->GetIndexOfWebContents(web_contents);
       }
-      nodes.emplace_back(base::StringPrintf(
+      auto& new_node = nodes.emplace_back(base::StringPrintf(
           "WebContents %s - %s at %s with URL \"%s\"",
           (index == TabStripModel::kNoTab
                ? "in secondary UI"
@@ -225,6 +372,28 @@ InteractiveBrowserTestPrivate::DebugDumpElements(
           el->identifier().GetName(), DebugDumpBounds(el->GetScreenBounds()),
           web_contents->GetURL().spec().c_str()));
       it = elements.erase(it);
+      if (auto* const util =
+              const_cast<WebContentsInteractionTestUtil*>(contents->owner());
+          util && util->is_page_loaded()) {
+        std::string error_message;
+        const auto value =
+            util->Evaluate(base::StringPrintf(
+                               R"(function() {
+              %s;
+              return gatherHtmlContent(
+                  document.body, document.activeElement, %s);
+            })",
+                               kDumpElementsScript, MakeDumpParams()),
+                           &error_message);
+        if (!error_message.empty()) {
+          LOG(ERROR) << "Unable to retrieve contents of " << *contents << ": "
+                     << error_message;
+        } else {
+          new_node.text +=
+              " (note that descendant bounds are relative to this element)";
+          AddWebDumpNodes(new_node, value);
+        }
+      }
     } else {
       ++it;
     }

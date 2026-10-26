@@ -15,11 +15,13 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/process/process_handle.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "base/timer/mock_timer.h"
@@ -67,7 +69,7 @@ GURL TestURL(int i) {
   return GURL(base::StringPrintf("%s%d", kTestPrefix, i));
 }
 
-std::vector<VisitedLinkReader*> g_readers;
+std::vector<raw_ptr<VisitedLinkReader>> g_readers;
 
 class TestVisitedLinkDelegate : public VisitedLinkDelegate {
  public:
@@ -641,6 +643,45 @@ TEST_F(VisitedLinkTest, ResizeErrorHandling) {
   // Verify contents.
   ASSERT_EQ(writer_->GetUsedCount(), 1);
   ASSERT_TRUE(writer_->IsVisited(url));
+}
+
+TEST_F(VisitedLinkTest, WebViewUnpartitionedHistogramLogging) {
+  ASSERT_TRUE(InitVisited(0, true, true));
+
+  VisitedLinkReader reader;
+  reader.UpdateVisitedLinks(writer_->mapped_table_memory().region.Duplicate());
+  g_readers.push_back(&reader);
+
+  base::HistogramTester histogram_tester;
+
+  GURL url("https://example.com");
+
+  // Before lookup, histogram should be empty.
+  histogram_tester.ExpectTotalCount(
+      "History.VisitedLinks.WebView.LookupCollisionCount2", 0);
+
+  // Lookup in reader (which is NOT pseudo-partitioned).
+  // Since DB is empty, this should be a fail lookup.
+  // It should log 0 collisions because the slot it checks will be empty.
+  EXPECT_FALSE(reader.IsVisited(url));
+
+  histogram_tester.ExpectUniqueSample(
+      "History.VisitedLinks.WebView.LookupCollisionCount2", 0, 1);
+
+  // Add the link.
+  writer_->AddURL(url);
+
+  // Lookup again. This should be a success lookup.
+  // It should log 0 collisions because it should find it on the first try.
+  EXPECT_TRUE(reader.IsVisited(url));
+
+  // We expect two samples now, both should be 0.
+  histogram_tester.ExpectBucketCount(
+      "History.VisitedLinks.WebView.LookupCollisionCount2", 0, 2);
+  histogram_tester.ExpectTotalCount(
+      "History.VisitedLinks.WebView.LookupCollisionCount2", 2);
+
+  g_readers.clear();
 }
 
 class PartitionedVisitedLinkTest : public testing::Test {
@@ -1343,6 +1384,46 @@ TEST_F(PseudoPartitionedVisitedLinkTest, Listener) {
   EXPECT_EQ(3, listener->reset_count());
 }
 
+TEST_F(PseudoPartitionedVisitedLinkTest, HistogramLogging) {
+  ASSERT_TRUE(InitVisited(true, 0));
+
+  VisitedLinkReader reader;
+  reader.SetIsPseudoPartitioned(true);
+  reader.UpdateVisitedLinks(
+      partitioned_writer_->GetMappedTableMemoryForTesting().region.Duplicate());
+  g_readers.push_back(&reader);
+
+  base::HistogramTester histogram_tester;
+
+  GURL url("https://example.com");
+
+  // Before lookup, histogram should be empty.
+  histogram_tester.ExpectTotalCount(
+      "History.VisitedLinks.WebView.LookupCollisionCount2", 0);
+
+  // Lookup in reader (which is pseudo-partitioned).
+  // Since DB is empty, this should be a fail lookup.
+  // It should log 0 collisions because the slot it checks will be empty.
+  EXPECT_FALSE(reader.IsVisited(url));
+
+  histogram_tester.ExpectUniqueSample(
+      "History.VisitedLinks.WebView.LookupCollisionCount2", 0, 1);
+
+  // Add the link.
+  partitioned_writer_->AddPseudoPartitionedVisitedLink(url);
+  EXPECT_EQ(partitioned_writer_->GetUsedCount(), 1);
+
+  // Lookup again. This should be a success lookup.
+  // It should log 0 collisions because it should find it on the first try.
+  EXPECT_TRUE(reader.IsVisited(url));
+
+  // We expect two samples now, both should be 0.
+  histogram_tester.ExpectBucketCount(
+      "History.VisitedLinks.WebView.LookupCollisionCount2", 0, 2);
+  histogram_tester.ExpectTotalCount(
+      "History.VisitedLinks.WebView.LookupCollisionCount2", 2);
+}
+
 class VisitCountingContext : public mojom::VisitedLinkNotificationSink {
  public:
   VisitCountingContext()
@@ -1773,6 +1854,26 @@ class PartitionedVisitedLinkEventsTest
   std::unique_ptr<base::MockOneShotTimer> timer_;
   std::unique_ptr<PartitionedVisitedLinkWriter> partitioned_writer_;
 };
+
+TEST_F(PartitionedVisitedLinkEventsTest, IsPseudoPartitionedState) {
+  content::TestBrowserContext context;
+
+  // Test when use_constant_salt is false (truly partitioned).
+  auto writer_partitioned = std::make_unique<PartitionedVisitedLinkWriter>(
+      &context, &delegate_, /*use_constant_salt=*/false);
+  auto* listener_partitioned =
+      static_cast<VisitedLinkEventListener*>(writer_partitioned->GetListener());
+  ASSERT_TRUE(listener_partitioned);
+  EXPECT_FALSE(listener_partitioned->is_pseudo_partitioned());
+
+  // Test when use_constant_salt is true (pseudo-partitioned).
+  auto writer_pseudo = std::make_unique<PartitionedVisitedLinkWriter>(
+      &context, &delegate_, /*use_constant_salt=*/true);
+  auto* listener_pseudo =
+      static_cast<VisitedLinkEventListener*>(writer_pseudo->GetListener());
+  ASSERT_TRUE(listener_pseudo);
+  EXPECT_TRUE(listener_pseudo->is_pseudo_partitioned());
+}
 
 TEST_F(PartitionedVisitedLinkEventsTest, Coalescence) {
   // Waiting for notifications that the table build is complete.

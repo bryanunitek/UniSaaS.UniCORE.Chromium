@@ -24,11 +24,11 @@ constexpr base::MemoryConsumerTraits kLRURendererCacheTraits(
     // Pools pre-launched renderer processes (tens of MBs each).
     base::MemoryConsumerTraits::EstimatedMemoryUsage::kMedium,
     // Process termination lets the OS to reclaim memory pages directly.
-    base::MemoryConsumerTraits::ReleaseMemoryCost::kFreesPagesWithoutTraversal,
+    base::MemoryConsumerTraits::ReleaseMemoryDataAccess::kNone,
     // Eviction results in a cold start, but no user state is lost.
     base::MemoryConsumerTraits::InformationRetention::kLossless,
-    // Process termination by the OS is asynchronous.
-    base::MemoryConsumerTraits::ExecutionType::kAsynchronous,
+    // Cleans up host objects synchronously on the browser main thread.
+    base::MemoryConsumerTraits::ExecutionType::kSynchronous,
     // Cached memory resides out-of-process.
     base::MemoryConsumerTraits::InProcess::kNo,
     // Launching a replacement renderer processes is expensive.
@@ -140,8 +140,7 @@ void LRURendererCache::OnUpdateMemoryLimit() {
     // preventing growth without triggering immediate eviction.
     // The target size is calculated by scaling the baseline maximum
     // |max_renderers_basis_| by the memory allocation ratio.
-    size_t target_size =
-        base::ScaleByMemoryLimit(max_renderers_basis_, memory_limit());
+    size_t target_size = memory_limit().Scale(max_renderers_basis_);
     current_max_renderers_ =
         std::max(in_use_count_ + cache_.size(), target_size);
   }
@@ -149,10 +148,9 @@ void LRURendererCache::OnUpdateMemoryLimit() {
 
 void LRURendererCache::OnReleaseMemory() {
   if (base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
-    current_max_renderers_ =
-        base::ScaleByMemoryLimit(max_renderers_basis_, memory_limit());
+    current_max_renderers_ = memory_limit().Scale(max_renderers_basis_);
     EvictCache();
-  } else if (memory_limit_ratio() <= base::kCriticalMemoryPressureThreshold) {
+  } else if (memory_limit() <= base::kCriticalMemoryPressureThreshold) {
     DLOG(INFO) << "Dropping prelauncher cache due to memory coordinator "
                   "notification.";
     cache_.clear();

@@ -1,4 +1,5 @@
 include_rules = [
+  "+components/crash/core/common/crash_key.h",
   "+components/paint_preview/common",
   "+components/optimization_guide",
   "+cc/paint",
@@ -7,4 +8,5 @@ include_rules = [
   "+third_party/smhasher",
   "+ui/base/page_transition_types.h",
   "+ui/gfx/geometry",
+  "+ui/gfx/image/image.h",
 ]

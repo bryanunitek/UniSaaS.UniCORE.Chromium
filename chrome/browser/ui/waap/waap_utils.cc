@@ -8,21 +8,30 @@
 #include "build/build_config.h"
 #include "chrome/browser/page_load_metrics/page_load_metrics_initialize.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/task_manager/web_contents_tags.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
+#include "chrome/browser/ui/prefs/prefs_tab_helper.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/webui_url_constants.h"
+#include "chrome/grit/generated_resources.h"
+#include "components/performance_manager/embedder/performance_manager_registry.h"
+#include "components/performance_manager/public/graph/page_node.h"
 #include "components/ukm/content/source_url_recorder.h"
+#include "content/public/browser/frame_eviction_opt_out_client.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/url_constants.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/color/color_provider_manager.h"
 #include "ui/color/color_provider_source.h"
 #include "ui/color/color_provider_utils.h"
 #include "ui/native_theme/native_theme.h"
+#include "ui/views/controls/webview/web_contents_set_background_color.h"
 #include "url/gurl.h"
 
 namespace {
@@ -75,19 +84,41 @@ bool IsForInitialWebUI(const GURL& url) {
   return false;
 }
 
-bool IsInitialWebUIMetricsLoggingEnabled() {
-  return base::FeatureList::IsEnabled(features::kInitialWebUIMetrics);
+bool IsForInitialWebUI(const content::SecurityPrincipal& principal) {
+  if (base::FeatureList::IsEnabled(features::kInitialWebUI) &&
+      base::FeatureList::IsEnabled(features::kWebUIReloadButton)) {
+    return principal.SchemeIs(content::kChromeUIScheme) &&
+           principal.GetHost() == chrome::kChromeUIWebUIToolbarHost;
+  }
+  return false;
 }
 
 void PrewarmHelper::ConfigureWebUIContents(content::WebContents* web_contents,
                                            Profile* profile) {
+  if (auto* registry =
+          performance_manager::PerformanceManagerRegistry::GetInstance()) {
+    registry->SetPageType(web_contents,
+                          performance_manager::PageType::kNonTabWebUI);
+  }
+
   // `PageLoadMetrics` needs to be initialized before loading the URL.
   InitializePageLoadMetricsForWebContents(web_contents);
   // Needed for UKM PageLoad metrics.
   ukm::InitializeSourceUrlRecorderForWebContents(web_contents);
 
+  PrefsTabHelper::CreateForWebContents(web_contents);
+  task_manager::WebContentsTags::CreateForToolContents(
+      web_contents, IDS_TASK_MANAGER_WEBUI_TOOLBAR);
+
   web_contents->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
+  views::WebContentsSetBackgroundColor::CreateForWebContentsWithColor(
+      web_contents, SK_ColorTRANSPARENT);
   web_contents->SetIgnoreZoomGestures(true);
+  if (base::FeatureList::IsEnabled(
+          features::kWebUIToolbarFrameEvictionOptOut)) {
+    web_contents->OptOutFrameEviction(
+        content::FrameEvictionOptOutClient::GetPassKey());
+  }
 
   // Set up the color provider source so that early navigation can resolve
   // theme color properties.

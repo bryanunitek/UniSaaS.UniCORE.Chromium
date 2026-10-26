@@ -75,7 +75,7 @@ class CommandStorageBackendTest : public testing::Test {
   CommandStorageBackendTest() : os_crypt_(CreateOSCryptAsync()) {}
 
  protected:
-  using ReadStatus = CommandStorageBackend::ReadStatus;
+  using ReadStatus = CommandStorageReadStatus;
   using WriteStatus = CommandStorageBackend::WriteStatus;
   using ReadCommandsResult = CommandStorageBackend::ReadCommandsResult;
 
@@ -129,7 +129,15 @@ class CommandStorageBackendTest : public testing::Test {
       CommandStorageBackend* backend) {
     // Force `last_session_info_` to be updated.
     backend->InitIfNecessary();
-    return backend->last_session_info_;
+    if (!backend->last_session_info_) {
+      return std::nullopt;
+    }
+    return *backend->last_session_info_;
+  }
+
+  std::unique_ptr<base::File> OpenAndWriteHeader(CommandStorageBackend* backend,
+                                                 const base::FilePath& path) {
+    return backend->OpenAndWriteHeader(path);
   }
 
   std::vector<base::FilePath> GetSessionFilePathsSortedByReverseTimestamp(
@@ -267,7 +275,7 @@ TEST_F(CommandStorageBackendTest, ReadSessionFileV1) {
   ASSERT_FALSE(backend->IsValidFileForTest(
       sessions_dir(false).AppendASCII("Session_1234")));
   ReadCommandsResult result = backend->ReadLastSessionCommands();
-  ASSERT_TRUE(result.error_reading);
+  ASSERT_TRUE(IsCommandStorageReadError(result.status));
   ASSERT_TRUE(result.commands.empty());
   histogram_tester.ExpectUniqueSample(
       "Session.CommandStorageBackend.SessionRestore.Cleartext."
@@ -290,7 +298,7 @@ TEST_F(CommandStorageBackendTest, ReadSessionFileV2) {
       sessions_dir(false).AppendASCII("Session_1234")));
   ReadCommandsResult result = backend->ReadLastSessionCommands();
   ASSERT_TRUE(result.commands.empty());
-  ASSERT_TRUE(result.error_reading);
+  ASSERT_TRUE(IsCommandStorageReadError(result.status));
   histogram_tester.ExpectUniqueSample(
       "Session.CommandStorageBackend.SessionRestore.Cleartext."
       "ReadLastSessionCommands.Status",
@@ -309,7 +317,7 @@ TEST_F(CommandStorageBackendTest, ReadSessionFileV3) {
       CreateBackend(SessionType::kSessionRestore, /*encrypted=*/false);
   ReadCommandsResult result = backend->ReadLastSessionCommands();
   ASSERT_EQ(1u, result.commands.size());
-  ASSERT_FALSE(result.error_reading);
+  ASSERT_FALSE(IsCommandStorageReadError(result.status));
   AssertCommandEqualsData(TestData({1, "a"}), result.commands[0].get());
   histogram_tester.ExpectUniqueSample(
       "Session.CommandStorageBackend.SessionRestore.Cleartext."
@@ -371,7 +379,7 @@ TEST_F(CommandStorageBackendTest, ReadSessionFileV3With2Appends) {
       CreateBackend(SessionType::kSessionRestore, /*encrypted=*/false);
   ReadCommandsResult result = backend->ReadLastSessionCommands();
 
-  ASSERT_FALSE(result.error_reading);
+  ASSERT_FALSE(IsCommandStorageReadError(result.status));
   ASSERT_EQ(4u, result.commands.size());
   AssertCommandEqualsData(TestData({1, "apple"}), result.commands[0].get());
   AssertCommandEqualsData(TestData({2, "banana"}), result.commands[1].get());
@@ -428,7 +436,7 @@ TEST_F(CommandStorageBackendTest, ReadSessionFileV3WithEncryptorAvailable) {
       CreateBackend(SessionType::kSessionRestore, /*encrypted=*/true);
   ReadCommandsResult result = backend->ReadLastSessionCommands();
   ASSERT_EQ(1u, result.commands.size());
-  ASSERT_FALSE(result.error_reading);
+  ASSERT_FALSE(IsCommandStorageReadError(result.status));
   AssertCommandEqualsData(TestData({1, "a"}), result.commands[0].get());
   histogram_tester.ExpectUniqueSample(
       "Session.CommandStorageBackend.SessionRestore.Encrypted."
@@ -450,7 +458,7 @@ TEST_F(CommandStorageBackendTest, ReadSessionFileV4) {
       sessions_dir(false).AppendASCII("Session_1234")));
   ReadCommandsResult result = backend->ReadLastSessionCommands();
 
-  ASSERT_TRUE(result.error_reading);
+  ASSERT_TRUE(IsCommandStorageReadError(result.status));
   ASSERT_TRUE(result.commands.empty());
   histogram_tester.ExpectUniqueSample(
       "Session.CommandStorageBackend.SessionRestore.Cleartext."
@@ -500,7 +508,7 @@ TEST_F(CommandStorageBackendTest, ReadSessionFileV5FailsWithoutEncryptor) {
       CreateBackend(SessionType::kSessionRestore, /*encrypted=*/false);
   ReadCommandsResult result = backend->ReadLastSessionCommands();
   ASSERT_TRUE(result.commands.empty());
-  ASSERT_TRUE(result.error_reading);
+  ASSERT_TRUE(IsCommandStorageReadError(result.status));
   histogram_tester.ExpectUniqueSample(
       "Session.CommandStorageBackend.SessionRestore.Cleartext."
       "ReadLastSessionCommands.Status",
@@ -569,6 +577,18 @@ class CommandStorageBackendParamTest
     return CommandStorageBackendTest::GetFilePath(
         GetParam().session_type, init_path(), time_delta_microseconds,
         GetParam().encrypted);
+  }
+
+  base::FilePath WriteValidSessionFile(uint64_t time_delta_microseconds) {
+    base::SimpleTestClock test_clock;
+    test_clock.SetNow(base::Time::FromDeltaSinceWindowsEpoch(
+        base::Microseconds(time_delta_microseconds)));
+    scoped_refptr<CommandStorageBackend> backend = CreateBackend(&test_clock);
+    backend->AppendCommands({}, true, base::DoNothing());
+    base::FilePath expected_path = GetFilePath(time_delta_microseconds);
+    EXPECT_EQ(expected_path, backend->current_path_for_testing());
+    backend.reset();
+    return expected_path;
   }
 
   std::string GetHistogramName(std::string_view operation,
@@ -924,6 +944,33 @@ TEST_P(CommandStorageBackendParamTest, DeterminePreviousSessionInvalid) {
   ASSERT_FALSE(last_session_info);
 }
 
+// Test that a file with an invalid header won't be used.
+TEST_P(CommandStorageBackendParamTest, DeterminePreviousSessionInvalidHeader) {
+  const auto invalid_header_path = GetFilePath(9999);
+  const char kInvalidHeader[] = "INVALID_HEADER";
+  ASSERT_TRUE(base::WriteFile(invalid_header_path, kInvalidHeader));
+
+  scoped_refptr<CommandStorageBackend> backend = CreateBackend();
+  auto last_session_info = GetLastSessionInfo(backend.get());
+  ASSERT_FALSE(last_session_info);
+}
+
+// Test that an older valid file is selected if the newer file is invalid.
+TEST_P(CommandStorageBackendParamTest, DeterminePreviousSessionLatestValid) {
+  // Newer file is invalid.
+  const auto invalid_header_path = GetFilePath(9999);
+  const char kInvalidHeader[] = "";
+  ASSERT_TRUE(base::WriteFile(invalid_header_path, kInvalidHeader));
+
+  // But older file is valid.
+  const base::FilePath older_valid = WriteValidSessionFile(8888);
+
+  scoped_refptr<CommandStorageBackend> backend = CreateBackend();
+  auto last_session_info = GetLastSessionInfo(backend.get());
+  ASSERT_TRUE(last_session_info);
+  EXPECT_EQ(older_valid, last_session_info->path);
+}
+
 TEST_P(CommandStorageBackendParamTest, IsValidFileWithInvalidFiles) {
   bool encrypted = GetParam().encrypted;
   const auto file_path = sessions_dir(encrypted).AppendASCII("Session_123");
@@ -954,7 +1001,7 @@ TEST_P(CommandStorageBackendParamTest, DeleteLastSession) {
   backend = CreateBackend();  // Necessary to recognize the file we just wrote.
   backend->DeleteLastSession();
   ReadCommandsResult result = backend->ReadLastSessionCommands();
-  ASSERT_FALSE(result.error_reading);
+  ASSERT_FALSE(IsCommandStorageReadError(result.status));
   ASSERT_TRUE(result.commands.empty());
   histogram_tester.ExpectUniqueSample(
       GetHistogramName("ReadLastSessionCommands", "", "Status"),
@@ -963,7 +1010,7 @@ TEST_P(CommandStorageBackendParamTest, DeleteLastSession) {
   // Also confirm deletion with a new backend.
   backend = CreateBackend();
   result = backend->ReadLastSessionCommands();
-  ASSERT_FALSE(result.error_reading);
+  ASSERT_FALSE(IsCommandStorageReadError(result.status));
   ASSERT_TRUE(result.commands.empty());
   histogram_tester.ExpectBucketCount(
       GetHistogramName("ReadLastSessionCommands", "", "Status"),
@@ -979,7 +1026,7 @@ TEST_P(CommandStorageBackendParamTest, ReadEmptyCommands) {
 
   ReadCommandsResult result = backend->ReadLastSessionCommands();
 
-  ASSERT_FALSE(result.error_reading);
+  ASSERT_FALSE(IsCommandStorageReadError(result.status));
   ASSERT_EQ(0U, result.commands.size());
   histogram_tester.ExpectUniqueSample(
       GetHistogramName("ReadLastSessionCommands", "", "Status"),
@@ -996,7 +1043,7 @@ TEST_P(CommandStorageBackendParamTest, ReadErrorWithEmptyFile) {
 
   ReadCommandsResult result = backend->ReadLastSessionCommands();
 
-  ASSERT_TRUE(result.error_reading);
+  ASSERT_TRUE(IsCommandStorageReadError(result.status));
   ASSERT_EQ(0U, result.commands.size());
   histogram_tester.ExpectUniqueSample(
       GetHistogramName("ReadLastSessionCommands", "", "Status"),
@@ -1014,7 +1061,7 @@ TEST_P(CommandStorageBackendParamTest, ReadErrorWithInvalidHeader) {
 
   ReadCommandsResult result = backend->ReadLastSessionCommands();
 
-  ASSERT_TRUE(result.error_reading);
+  ASSERT_TRUE(IsCommandStorageReadError(result.status));
   ASSERT_EQ(0U, result.commands.size());
   histogram_tester.ExpectUniqueSample(
       GetHistogramName("ReadLastSessionCommands", "", "Status"),
@@ -1044,7 +1091,7 @@ TEST_P(CommandStorageBackendParamTest, ReadErrorWithCommandSizeZero) {
   backend = CreateBackend();
   ReadCommandsResult result = backend->ReadLastSessionCommands();
 
-  ASSERT_TRUE(result.error_reading);
+  ASSERT_TRUE(IsCommandStorageReadError(result.status));
   histogram_tester.ExpectUniqueSample(
       GetHistogramName("ReadLastSessionCommands", "", "Status"),
       ReadStatus::kInvalidCommand, 1);
@@ -1074,7 +1121,7 @@ TEST_P(CommandStorageBackendParamTest, ReadErrorWithIncompleteCommand) {
   backend = CreateBackend();
   ReadCommandsResult result = backend->ReadLastSessionCommands();
 
-  ASSERT_TRUE(result.error_reading);
+  ASSERT_TRUE(IsCommandStorageReadError(result.status));
   ASSERT_EQ(0U, result.commands.size());
   histogram_tester.ExpectUniqueSample(
       GetHistogramName("ReadLastSessionCommands", "", "Status"),
@@ -1151,39 +1198,33 @@ TEST_P(CommandStorageBackendParamTest, DeterminePreviousSessionEmpty) {
 // Test that the previous session is selected correctly when a file is
 // present.
 TEST_P(CommandStorageBackendParamTest, DeterminePreviousSessionSingle) {
-  const auto prev_path = GetFilePath(13235178308836991);
-  ASSERT_TRUE(base::CreateDirectory(prev_path.DirName()));
-  ASSERT_TRUE(base::WriteFile(prev_path, ""));
+  const base::FilePath prev_path = WriteValidSessionFile(13235178308836991);
 
   scoped_refptr<CommandStorageBackend> backend = CreateBackend();
   auto last_session_info = GetLastSessionInfo(backend.get());
   ASSERT_TRUE(last_session_info);
-  ASSERT_EQ(prev_path, last_session_info->path);
+  EXPECT_EQ(prev_path, last_session_info->path);
 }
 
 // Test that the previous session is selected correctly when multiple session
 // files are present.
 TEST_P(CommandStorageBackendParamTest, DeterminePreviousSessionMultiple) {
-  base::FilePath prev_path = GetFilePath(13235178308836991);
-  base::FilePath old_path_1 = GetFilePath(13235178308548874);
-  base::FilePath old_path_2 = GetFilePath(0);
-  ASSERT_TRUE(base::CreateDirectory(prev_path.DirName()));
-  ASSERT_TRUE(base::WriteFile(prev_path, ""));
-  ASSERT_TRUE(base::WriteFile(old_path_1, ""));
-  ASSERT_TRUE(base::WriteFile(old_path_2, ""));
+  const base::FilePath prev_path = WriteValidSessionFile(13235178308836991);
+  const base::FilePath old_path_1 = GetFilePath(13235178308548874);
+  const base::FilePath old_path_2 = GetFilePath(0);
+  ASSERT_TRUE(base::CopyFile(prev_path, old_path_1));
+  ASSERT_TRUE(base::CopyFile(prev_path, old_path_2));
 
   scoped_refptr<CommandStorageBackend> backend = CreateBackend();
   auto last_session_info = GetLastSessionInfo(backend.get());
   ASSERT_TRUE(last_session_info);
-  ASSERT_EQ(prev_path, last_session_info->path);
+  EXPECT_EQ(prev_path, last_session_info->path);
 }
 
 // Tests that MoveCurrentSessionToLastSession deletes the last session file.
 TEST_P(CommandStorageBackendParamTest,
        MoveCurrentSessionToLastDeletesLastSession) {
-  base::FilePath last_session = GetFilePath(13235178308836991);
-  ASSERT_TRUE(base::CreateDirectory(last_session.DirName()));
-  ASSERT_TRUE(base::WriteFile(last_session, ""));
+  const base::FilePath last_session = WriteValidSessionFile(13235178308836991);
 
   scoped_refptr<CommandStorageBackend> backend = CreateBackend();
   char buffer[1];
@@ -1235,6 +1276,121 @@ TEST_P(CommandStorageBackendParamTest, UseMarkerWithoutValidMarker) {
   if (!GetParam().encrypted) {
     EXPECT_FALSE(GetLastSessionInfo(backend.get()));
   }
+}
+
+TEST_P(CommandStorageBackendParamTest, FindLastSessionFile_FilesRead_NoFiles) {
+  base::HistogramTester histogram_tester;
+  scoped_refptr<CommandStorageBackend> backend = CreateBackend();
+  // Initialize backend to trigger FindLastSessionFile().
+  backend->ReadLastSessionCommands();
+
+  histogram_tester.ExpectUniqueSample(
+      GetHistogramName("FindLastSessionFile", "NotFound", "FilesRead"), 0, 1);
+  histogram_tester.ExpectTotalCount(
+      GetHistogramName("FindLastSessionFile", "Found", "FilesRead"), 0);
+}
+
+TEST_P(CommandStorageBackendParamTest,
+       FindLastSessionFile_FilesRead_SingleValidFile) {
+  // Write a valid session file.
+  scoped_refptr<CommandStorageBackend> backend = CreateBackend();
+  SessionCommands commands;
+  commands.push_back(CreateCommandFromData({1, "a"}));
+  backend->AppendCommands(std::move(commands), /*truncate=*/true,
+                          base::DoNothing());
+  backend.reset();
+
+  base::HistogramTester histogram_tester;
+  backend = CreateBackend();
+  backend->ReadLastSessionCommands();
+
+  histogram_tester.ExpectUniqueSample(
+      GetHistogramName("FindLastSessionFile", "Found", "FilesRead"), 1, 1);
+  histogram_tester.ExpectTotalCount(
+      GetHistogramName("FindLastSessionFile", "NotFound", "FilesRead"), 0);
+}
+
+TEST_P(CommandStorageBackendParamTest,
+       FindLastSessionFile_FilesRead_FallbackToOlderFile) {
+  base::SimpleTestClock test_clock;
+  test_clock.SetNow(base::Time::Now());
+
+  // 1. Write an older valid session file with a marker at T1.
+  scoped_refptr<CommandStorageBackend> backend = CreateBackend(&test_clock);
+  SessionCommands commands;
+  commands.push_back(CreateCommandFromData({1, "older_session"}));
+  backend->AppendCommands(std::move(commands), /*truncate=*/true,
+                          base::DoNothing());
+  const base::FilePath older_path = backend->current_path_for_testing();
+  EXPECT_FALSE(older_path.empty());
+  backend.reset();
+
+  // 2. Write a newer invalid session file (header only, no marker) at T2.
+  test_clock.Advance(base::Minutes(5));
+  base::FilePath newer_path = GetFilePath(static_cast<uint64_t>(
+      test_clock.Now().ToDeltaSinceWindowsEpoch().InMicroseconds()));
+  backend = CreateBackend(&test_clock);
+  std::unique_ptr<base::File> newer_file =
+      OpenAndWriteHeader(backend.get(), newer_path);
+  ASSERT_TRUE(newer_file);
+  ASSERT_TRUE(newer_file->IsValid());
+  newer_file.reset();
+  backend.reset();
+
+  // 3. Initialize a new backend. It should inspect `newer_path` first, find no
+  // marker, then fall back to `older_path`.
+  base::HistogramTester histogram_tester;
+  backend = CreateBackend(&test_clock);
+  ReadCommandsResult result = backend->ReadLastSessionCommands();
+  EXPECT_FALSE(IsCommandStorageReadError(result.status));
+  ASSERT_EQ(1u, result.commands.size());
+  AssertCommandEqualsData({1, "older_session"}, result.commands[0].get());
+
+  histogram_tester.ExpectUniqueSample(
+      GetHistogramName("FindLastSessionFile", "Found", "FilesRead"), 2, 1);
+  histogram_tester.ExpectTotalCount(
+      GetHistogramName("FindLastSessionFile", "NotFound", "FilesRead"), 0);
+}
+
+TEST_P(CommandStorageBackendParamTest,
+       FindLastSessionFile_FilesRead_AllFilesInvalid) {
+  base::SimpleTestClock test_clock;
+  test_clock.SetNow(base::Time::Now());
+
+  scoped_refptr<CommandStorageBackend> backend = CreateBackend(&test_clock);
+
+  // Write two files with headers but without markers.
+  base::FilePath path1 = GetFilePath(static_cast<uint64_t>(
+      test_clock.Now().ToDeltaSinceWindowsEpoch().InMicroseconds()));
+  std::unique_ptr<base::File> file1 = OpenAndWriteHeader(backend.get(), path1);
+  ASSERT_TRUE(file1);
+  ASSERT_TRUE(file1->IsValid());
+  file1.reset();
+
+  test_clock.Advance(base::Minutes(1));
+  base::FilePath path2 = GetFilePath(static_cast<uint64_t>(
+      test_clock.Now().ToDeltaSinceWindowsEpoch().InMicroseconds()));
+  std::unique_ptr<base::File> file2 = OpenAndWriteHeader(backend.get(), path2);
+  ASSERT_TRUE(file2);
+  ASSERT_TRUE(file2->IsValid());
+  file2.reset();
+
+  backend.reset();
+
+  // Initialize a new backend. Both files should be inspected and rejected.
+  base::HistogramTester histogram_tester;
+  backend = CreateBackend(&test_clock);
+  ReadCommandsResult result = backend->ReadLastSessionCommands();
+
+  // The files were read, but no valid marker was found, so the result is an
+  // error.
+  EXPECT_TRUE(IsCommandStorageReadError(result.status));
+  EXPECT_TRUE(result.commands.empty());
+
+  histogram_tester.ExpectUniqueSample(
+      GetHistogramName("FindLastSessionFile", "NotFound", "FilesRead"), 2, 1);
+  histogram_tester.ExpectTotalCount(
+      GetHistogramName("FindLastSessionFile", "Found", "FilesRead"), 0);
 }
 
 TEST_P(CommandStorageBackendParamTest, NewFileOnTruncate) {

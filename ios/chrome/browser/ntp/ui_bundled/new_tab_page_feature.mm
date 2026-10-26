@@ -18,18 +18,19 @@
 
 BASE_FEATURE(kOverrideFeedSettings, base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kNTPHeaderUseTransformsForAnimations,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 BASE_FEATURE(kFeedSwipeInProductHelp, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kUseFeedEligibilityService, base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kEnableNTPBackgroundImageCache, base::FEATURE_DISABLED_BY_DEFAULT);
-
 BASE_FEATURE(kConsistentLogoDoodleHeight, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kNewTabPageRedesign, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kMVTInBottomSheet, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kNewTabPageUICleanup, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kNewTabPageEphemeralTheme, base::FEATURE_DISABLED_BY_DEFAULT);
 
 #pragma mark - Feature parameters
 
@@ -53,7 +54,47 @@ BASE_FEATURE_PARAM(int,
                    kFeedSwipeInProductHelpArmParam,
                    static_cast<int>(FeedSwipeIPHVariation::kStaticAfterFRE));
 
+const char kNewTabPageUICleanupArmParam[] = "new-tab-page-ui-cleanup-arm";
+
+BASE_FEATURE_PARAM(int,
+                   kNewTabPageUICleanupArmParamFeature,
+                   &kNewTabPageUICleanup,
+                   kNewTabPageUICleanupArmParam,
+                   static_cast<int>(NTPUICleanupVariation::kTightPadding));
+
+BASE_FEATURE_PARAM(std::string,
+                   kNewTabPageEphemeralThemeAnimationUrlParam,
+                   &kNewTabPageEphemeralTheme,
+                   "animation-url",
+                   "");
+
+BASE_FEATURE_PARAM(std::string,
+                   kNewTabPageEphemeralThemeAnimationColorMappingParam,
+                   &kNewTabPageEphemeralTheme,
+                   "animation-colormapping",
+                   "");
+
+BASE_FEATURE_PARAM(std::string,
+                   kNewTabPageEphemeralThemeSeedColorParam,
+                   &kNewTabPageEphemeralTheme,
+                   "seed-color",
+                   "");
+
+BASE_FEATURE_PARAM(int,
+                   kNewTabPageEphemeralThemeVersionParam,
+                   &kNewTabPageEphemeralTheme,
+                   "version",
+                   0);
+
 #pragma mark - Helpers
+
+bool IsMVTInBottomSheetEnabled() {
+  return base::FeatureList::IsEnabled(kMVTInBottomSheet);
+}
+
+bool IsNTPEphemeralThemeEnabled() {
+  return base::FeatureList::IsEnabled(kNewTabPageEphemeralTheme);
+}
 
 bool IsDiscoverFeedTopSyncPromoEnabled() {
   // Promo should not be shown on FRE, or for users in Great Britain for AADC
@@ -90,19 +131,31 @@ bool IsAimEnabledInNtp() {
   return YES;
 }
 
-bool IsNTPBackgroundImageCacheEnabled() {
-  return base::FeatureList::IsEnabled(kEnableNTPBackgroundImageCache);
-}
-
 bool IsConsistentLogoDoodleHeightEnabled() {
   return base::FeatureList::IsEnabled(kConsistentLogoDoodleHeight);
 }
 
-bool IsNTPHeaderTransformsForAnimationsEnabled() {
-  return base::FeatureList::IsEnabled(kNTPHeaderUseTransformsForAnimations);
+bool IsNTPRedesignEnabled() {
+  return base::FeatureList::IsEnabled(kNewTabPageRedesign);
 }
 
-bool IsNTPRedesignEnabled() {
-  return base::FeatureList::IsEnabled(kNewTabPageRedesign) &&
-         ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_TABLET;
+NTPUICleanupVariation GetNewTabPageUICleanupVariation() {
+  if (base::FeatureList::IsEnabled(kNewTabPageUICleanup)) {
+    return static_cast<NTPUICleanupVariation>(
+        kNewTabPageUICleanupArmParamFeature.Get());
+  }
+  return NTPUICleanupVariation::kDisabled;
+}
+
+bool IsNewTabPageUICleanupEnabled() {
+  NTPUICleanupVariation variation = GetNewTabPageUICleanupVariation();
+  return variation == NTPUICleanupVariation::kTightPadding ||
+         variation == NTPUICleanupVariation::kMediumPadding ||
+         variation == NTPUICleanupVariation::kPreferredPadding;
+}
+
+bool ShouldApplyFakeboxBackgroundAndShadow() {
+  return IsNewTabPageUICleanupEnabled() ||
+         GetNewTabPageUICleanupVariation() ==
+             NTPUICleanupVariation::kFakeboxBackgroundAndShadow;
 }

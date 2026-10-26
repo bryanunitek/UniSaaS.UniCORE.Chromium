@@ -38,7 +38,8 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/policy/policy_ui.h"
 #include "chrome/browser/ui/webui/policy/policy_ui_handler.h"
 #include "chrome/common/url_constants.h"
@@ -96,20 +97,38 @@ constexpr char kInvalidLocale[] = "en-GB";
 
 constexpr char kPromotionBannerVisibilityJavaScript[] = R"(
   (function () {
-    const element =
-      document.getElementsByTagName('promotion-banner-section-container')[0];
+    let element =
+      document.querySelector('promotion-banner-section-container');
+    if (!element) {
+      const app = document.querySelector('policy-app');
+      if (app && app.shadowRoot) {
+        element = app.shadowRoot.querySelector(
+            'promotion-banner-section-container');
+      }
+    }
     return element ? 'visible' : 'hidden';
   })();
 )";
 
 constexpr char kPromotionBannerDismissJavaScript[] = R"(
-  const promotionContainer =
-    document.getElementsByTagName('promotion-banner-section-container')[0];
-  if (promotionContainer){
-    const dismissButton =
-      promotionContainer.shadowRoot.getElementById('promotion-dismiss-button');
-    dismissButton.click();
-  }
+  (function () {
+    let promotionContainer =
+      document.querySelector('promotion-banner-section-container');
+    if (!promotionContainer) {
+      const app = document.querySelector('policy-app');
+      if (app && app.shadowRoot) {
+        promotionContainer = app.shadowRoot.querySelector(
+            'promotion-banner-section-container');
+      }
+    }
+    if (promotionContainer) {
+      const dismissButton =
+        promotionContainer.shadowRoot.getElementById('promotion-dismiss-button');
+      if (dismissButton) {
+        dismissButton.click();
+      }
+    }
+  })();
 )";
 
 }  // namespace
@@ -202,7 +221,7 @@ class PolicyUIManagedStatusTest : public PlatformBrowserTest,
   }
 
   void EnableProfileManagement() {
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
     // ChromeOS creates a client on profile creation, so we only need to setup
     // the registration for it there.
 #if BUILDFLAG(IS_CHROMEOS)
@@ -222,7 +241,8 @@ class PolicyUIManagedStatusTest : public PlatformBrowserTest,
                          .AsPrimary(signin::ConsentLevel::kSignin)
                          .WithRefreshToken(kTestRefreshToken)
                          .Build(kTestEmail))
-                     .account_id.empty());
+                     .GetAccountId()
+                     .empty());
   }
 
   void SetupFakeGaiaResponses() {
@@ -282,7 +302,7 @@ class PolicyUIManagedStatusTest : public PlatformBrowserTest,
 
  protected:
   void SetPromotionBannerDismissedPref(bool is_dismissed) {
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(
         policy::policy_prefs::kHasDismissedPolicyPagePromotionBanner,
         is_dismissed);
@@ -291,14 +311,14 @@ class PolicyUIManagedStatusTest : public PlatformBrowserTest,
   // Helper method to setup and wait for the promotion listener.
   void SetupAndListenForPromotion() {
     // Only wait if the locale is en-US AND not dismissed.
-    const bool is_dismissed = browser()->profile()->GetPrefs()->GetBoolean(
+    const bool is_dismissed = browser()->GetProfile()->GetPrefs()->GetBoolean(
         policy::policy_prefs::kHasDismissedPolicyPagePromotionBanner);
 
     if (g_browser_process->GetApplicationLocale() == kValidLocale &&
         !is_dismissed) {
       ASSERT_TRUE(base::test::RunUntil([&]() {
         auto result =
-            EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+            EvalJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                    kPromotionBannerVisibilityJavaScript)
                 .ExtractString();
 
@@ -322,7 +342,7 @@ IN_PROC_BROWSER_TEST_P(PolicyUIManagedStatusTest,
                                            GURL(chrome::kChromeUIPolicyURL)));
   SetupAndListenForPromotion();
 
-  auto result = EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+  auto result = EvalJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                        kPromotionBannerVisibilityJavaScript)
                     .ExtractString();
 
@@ -339,7 +359,7 @@ IN_PROC_BROWSER_TEST_P(PolicyUIManagedStatusTest,
                                            GURL(chrome::kChromeUIPolicyURL)));
   SetupAndListenForPromotion();
 
-  auto result = EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+  auto result = EvalJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                        kPromotionBannerVisibilityJavaScript)
                     .ExtractString();
 
@@ -356,10 +376,10 @@ IN_PROC_BROWSER_TEST_P(PolicyUIManagedStatusTest,
                                            GURL(chrome::kChromeUIPolicyURL)));
   SetupAndListenForPromotion();
 
-  EXPECT_TRUE(ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
+  EXPECT_TRUE(ExecJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                      kPromotionBannerDismissJavaScript));
 
-  auto result = EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+  auto result = EvalJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                        kPromotionBannerVisibilityJavaScript)
                     .ExtractString();
   EXPECT_EQ(result, kBannerHidden);
@@ -376,7 +396,7 @@ IN_PROC_BROWSER_TEST_P(PolicyUIManagedStatusTest,
                                            GURL(chrome::kChromeUIPolicyURL)));
   SetupAndListenForPromotion();
 
-  auto result = EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+  auto result = EvalJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                        kPromotionBannerVisibilityJavaScript)
                     .ExtractString();
   EXPECT_EQ(result, kBannerHidden);
@@ -399,7 +419,7 @@ IN_PROC_BROWSER_TEST_P(PolicyUIManagedStatusTest,
 }
 
 IN_PROC_BROWSER_TEST_P(PolicyUIManagedStatusTest, PageLoadedInGuestMode) {
-  Browser* policy_browser = OpenURLOffTheRecord(
+  BrowserWindowInterface* policy_browser = OpenURLOffTheRecord(
       browser()->GetProfile(), GURL(chrome::kChromeUIPolicyURL));
   ASSERT_TRUE(policy_browser);
   // In guest mode, the banner should always be hidden, and typically, the
@@ -409,7 +429,7 @@ IN_PROC_BROWSER_TEST_P(PolicyUIManagedStatusTest, PageLoadedInGuestMode) {
                                            GURL(chrome::kChromeUIPolicyURL)));
 
   auto result =
-      EvalJs(policy_browser->tab_strip_model()->GetActiveWebContents(),
+      EvalJs(policy_browser->GetTabStripModel()->GetActiveWebContents(),
              kPromotionBannerVisibilityJavaScript)
           .ExtractString();
   EXPECT_EQ(result, kBannerHidden);

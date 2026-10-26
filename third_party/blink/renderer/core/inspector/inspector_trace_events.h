@@ -11,6 +11,7 @@
 #include "base/containers/span_or_size.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_streamer.h"
+#include "third_party/blink/renderer/core/animation/compositing/specific_compositing_decision.h"
 #include "third_party/blink/renderer/core/animation/compositor_animations.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/core_probe_sink.h"
@@ -116,6 +117,7 @@ class CORE_EXPORT InspectorTraceEvents
                         DocumentLoader*,
                         base::TimeTicks monotonic_finish_time,
                         int64_t encoded_data_length,
+                        uint64_t encoded_body_length,
                         int64_t decoded_body_length);
   void DidFailLoading(
       CoreProbeSink* sink,
@@ -443,6 +445,15 @@ void Data(perfetto::TracedValue context,
           const TextPosition&);
 }
 
+namespace inspector_evaluate_module_event {
+void Data(perfetto::TracedValue context,
+          v8::Isolate*,
+          LocalFrame*,
+          const String& url,
+          int script_id,
+          const TextPosition&);
+}
+
 namespace inspector_target_rundown_event {
 
 void Data(perfetto::TracedValue context,
@@ -573,7 +584,7 @@ void Data(perfetto::TracedValue context, const Animation&);
 namespace inspector_animation_compositor_event {
 void Data(perfetto::TracedValue context,
           blink::CompositorAnimations::FailureReasons failure_reasons,
-          const blink::PropertyHandleSet& unsupported_properties_for_tracing);
+          const blink::CompositingDecisionDetailsMap& specific_reasons);
 }
 
 namespace inspector_hit_test_event {

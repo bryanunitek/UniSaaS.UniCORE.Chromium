@@ -12,6 +12,8 @@
 #include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ref.h"
+#include "base/scoped_observation.h"
+#include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/payments/autofill_error_dialog_context.h"
 #include "components/autofill/core/browser/payments/iban_manager.h"
@@ -28,8 +30,6 @@
 #include "components/autofill/core/browser/ui/payments/card_expiration_date_fix_flow_controller_impl.h"
 #include "components/autofill/core/browser/ui/payments/card_name_fix_flow_controller_impl.h"
 #endif  // BUILDFLAG(IS_ANDROID)
-
-class GURL;
 
 namespace webauthn {
 class InternalAuthenticator;
@@ -61,10 +61,10 @@ class CreditCardRiskBasedAuthenticator;
 struct FilledCardInformationBubbleOptions;
 class IbanAccessManager;
 class MerchantPromoCodeManager;
+class OfferNotificationHandler;
 struct OfferNotificationOptions;
 class OtpUnmaskDelegate;
 enum class OtpUnmaskResult;
-class PaymentsDataManager;
 class SaveAndFillDialogControllerImpl;
 class SaveAndFillManager;
 class TouchToFillPaymentMethodDelegate;
@@ -80,14 +80,18 @@ class BnplUiDelegate;
 class MandatoryReauthManager;
 class MultipleRequestPaymentsNetworkInterface;
 class PaymentsChurnedUsersManager;
+class PaymentsChurnedUsersUiDelegate;
 class PaymentsWindowManager;
+class WalletReminderNoticeManager;
+class WalletReminderNoticeUiDelegate;
 
 // Chrome implementation of PaymentsAutofillClient. Used for Chrome Desktop
 // and Clank. Owned by the ChromeAutofillClient. Created lazily in the
 // ChromeAutofillClient when it is needed, and it observes the same
 // WebContents as its owning ChromeAutofillClient.
 class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
-                                     public content::WebContentsObserver {
+                                     public content::WebContentsObserver,
+                                     public PaymentsDataManager::Observer {
  public:
   explicit ChromePaymentsAutofillClient(ContentAutofillClient* client);
   ChromePaymentsAutofillClient(const ChromePaymentsAutofillClient&) = delete;
@@ -197,12 +201,12 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
   IbanManager* GetIbanManager() override;
   IbanAccessManager* GetIbanAccessManager() override;
   MerchantPromoCodeManager* GetMerchantPromoCodeManager() override;
-  void OpenPromoCodeOfferDetailsURL(const GURL& url) override;
   AutofillOfferManager* GetAutofillOfferManager() override;
   void UpdateOfferNotification(
       const AutofillOfferData& offer,
       const OfferNotificationOptions& options) override;
   void DismissOfferNotification() override;
+  bool IsTabVisibleForOfferNotification() const override;
   bool ShowTouchToFillCreditCard(
       base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
       base::span<const Suggestion> suggestions) override;
@@ -251,22 +255,26 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
   bool IsTabModalPopup() const override;
   BnplStrategy* GetBnplStrategy() override;
   BnplUiDelegate* GetBnplUiDelegate() override;
+  WalletReminderNoticeUiDelegate* GetWalletReminderNoticeUiDelegate() override;
+  WalletReminderNoticeManager* GetWalletReminderNoticeManager() override;
+  PaymentsChurnedUsersUiDelegate* GetPaymentsChurnedUsersUiDelegate() override;
 #if !BUILDFLAG(IS_ANDROID)
   OmniboxAutofillDelegate* GetOmniboxAutofillDelegate() override;
-  void ShowOmniboxAutofillChip(
+  void ShowExpandedOmniboxAutofillChip(
       std::vector<Suggestion> suggestions,
+      base::OnceClosure on_chip_shown,
       base::RepeatingCallback<void(base::span<const Suggestion>)>
           on_suggestions_shown,
       base::RepeatingCallback<void(SuggestionHidingReason)>
           on_suggestions_hidden,
       base::RepeatingCallback<void(const Suggestion&)> did_select_suggestion,
+      base::RepeatingClosure did_deselect_suggestion,
       base::RepeatingCallback<
           void(const Suggestion&,
                const AutofillSuggestionDelegate::SuggestionMetadata&)>
           did_accept_suggestion) override;
   void HideOmniboxAutofillChip() override;
 #endif
-  void ShowPaymentsChurnedUsersUI() final;
 
   // Begin ChromePaymentsAutofillClient-specific section.
 
@@ -304,22 +312,18 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
           touch_to_fill_payment_method_controller);
 #endif
 
-  void SetRiskDataForTesting(const std::string& risk_data);
-
-  void SetCachedRiskDataLoadedCallbackForTesting(
-      base::OnceCallback<void(const std::string&)>
-          cached_risk_data_loaded_callback_for_testing);
-
  private:
+  // content::WebContentsObserver:
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
+  void OnVisibilityChanged(content::Visibility visibility) override;
+
+  // PaymentsDataManager::Observer:
+  void OnPaymentsDataChanged() override;
+
   std::u16string GetAccountHolderName() const;
 
   const raw_ref<ContentAutofillClient> client_;
-
-  // The method takes `risk_data` and caches it in `risk_data_`, logs the start
-  // time and runs the callback with the risk_data.
-  void OnRiskDataLoaded(base::OnceCallback<void(const std::string&)> callback,
-                        base::TimeTicks start_time,
-                        const std::string& risk_data);
 
 #if BUILDFLAG(IS_ANDROID)
   std::unique_ptr<AutofillCvcSaveMessageDelegate>
@@ -379,6 +383,7 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
 
   std::unique_ptr<IbanManager> iban_manager_;
   std::unique_ptr<IbanAccessManager> iban_access_manager_;
+  std::unique_ptr<MerchantPromoCodeManager> merchant_promo_code_manager_;
 
   std::unique_ptr<payments::MandatoryReauthManager>
       payments_mandatory_reauth_manager_;
@@ -387,6 +392,12 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
       save_and_fill_dialog_controller_;
 
   std::unique_ptr<SaveAndFillManager> save_and_fill_manager_;
+
+  // The PaymentsChurnedUsersUiDelegate used to handle the resurrection UI in
+  // the Payments Churned Users flow. Lazily initialized: access only through
+  // `GetPaymentsChurnedUsersUiDelegate()`.
+  std::unique_ptr<PaymentsChurnedUsersUiDelegate>
+      payments_churned_users_ui_delegate_;
 
   // Manages the flows related to getting users that have payments autofill
   // turned off back. Initiated upon construction of `this`.
@@ -403,15 +414,26 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
   // Lazily initialized: access only through `GetBnplUiDelegate()`.
   std::unique_ptr<BnplUiDelegate> bnpl_ui_delegate_;
 
+  // The WalletReminderNoticeUiDelegate used to handle the UI in the Wallet
+  // Reminder Notice flow. Lazily initialized: access only through
+  // `GetWalletReminderNoticeUiDelegate()`.
+  std::unique_ptr<WalletReminderNoticeUiDelegate>
+      wallet_reminder_notice_ui_delegate_;
+
+  // The WalletReminderNoticeManager used to orchestrate the Wallet Reminder
+  // Notice flow. Lazily initialized: access only through
+  // `GetWalletReminderNoticeManager()`.
+  std::unique_ptr<WalletReminderNoticeManager> wallet_reminder_notice_manager_;
+
 #if !BUILDFLAG(IS_ANDROID)
   // The OmniboxAutofillDelegate used to handle the logic flow and user
   // interactions when the user triggers Autofill from the Omnibox.
   std::unique_ptr<OmniboxAutofillDelegate> omnibox_autofill_delegate_;
 #endif
 
-  // Used to cache client side risk data. The cache is invalidated when the
-  // chrome browser tab is closed.
-  std::string risk_data_;
+  // Shows the offer notification on this tab. Nullptr if there is no
+  // `AutofillOfferManager`, e.g. in off-the-record profiles.
+  std::unique_ptr<OfferNotificationHandler> offer_notification_handler_;
 
   // Whether autofill payment methods are supported for this client. Is true by
   // default, and is flipped manually when `DisablePaymentsAutofill` is called.
@@ -420,10 +442,8 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
   // is owned by.
   bool autofill_payment_methods_supported_ = true;
 
-  base::OnceCallback<void(const std::string&)>
-      cached_risk_data_loaded_callback_for_testing_;
-
-  base::WeakPtrFactory<ChromePaymentsAutofillClient> weak_ptr_factory_{this};
+  base::ScopedObservation<PaymentsDataManager, PaymentsDataManager::Observer>
+      payments_data_manager_observation_{this};
 };
 
 }  // namespace payments

@@ -52,6 +52,7 @@ struct NigoriState {
 
   DataTypeSet GetEncryptedTypes() const;
   bool NeedsGenerateCrossUserSharingKeyPair() const;
+  bool NeedsImplicitPassphraseMigration() const;
 
   // TODO(crbug.com/40141634): Make this const unique_ptr to avoid the object
   // being destroyed after it's been injected to the DataTypeWorker-s.
@@ -86,10 +87,6 @@ struct NigoriState {
   // can't be decrypted right after remote update arrival due to lack of
   // keystore keys. May be set only for keystore Nigori.
   std::optional<sync_pb::EncryptedData> pending_keystore_decryptor_token;
-
-  // The name of the latest available trusted vault key that was used as the
-  // default encryption key.
-  std::optional<std::string> last_default_trusted_vault_key_name;
 
   // Some debug-only fields for passphrase type TRUSTED_VAULT_PASSPHRASE.
   sync_pb::NigoriSpecifics::TrustedVaultDebugInfo trusted_vault_debug_info;

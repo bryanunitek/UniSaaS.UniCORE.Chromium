@@ -4,7 +4,9 @@
 
 #include "chrome/enterprise_companion/enterprise_companion.h"
 
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
+
 #include <memory>
 #include <optional>
 
@@ -15,6 +17,7 @@
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/logging/logging_settings.h"
+#include "base/memory_coordinator/dummy_memory_consumer_registry.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/process/memory.h"
 #include "base/process/process_handle.h"
@@ -170,6 +173,8 @@ int EnterpriseCompanionMain(int argc, const char* const* argv) {
           << ", System uptime (seconds): "
           << base::SysInfo::Uptime().InSeconds() << ", parent pid: "
           << base::GetParentProcessId(base::GetCurrentProcessHandle());
+  base::ScopedMemoryConsumerRegistry<base::DummyMemoryConsumerRegistry>
+      memory_consumer_registry;
   InitThreadPool();
   base::AtExitManager exit_manager;
 

@@ -11,9 +11,11 @@
 #include <utility>
 
 #include "base/base64.h"
+#include "base/check.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
@@ -39,7 +41,7 @@
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/password_manager/chrome_webauthn_credentials_delegate.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ssl/chrome_security_state_tab_helper.h"
+#include "chrome/browser/ssl/chrome_security_state_util.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
 #include "chrome/browser/webauthn/android/webauthn_request_delegate_android.h"
 #include "chrome/grit/generated_resources.h"
@@ -47,9 +49,11 @@
 #include "components/autofill/core/common/autofill_util.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/password_generation_util.h"
+#include "components/device_reauth/device_auth_availability_checker.h"
 #include "components/device_reauth/device_authenticator.h"
 #include "components/password_manager/content/browser/content_password_manager_driver.h"
 #include "components/password_manager/core/browser/credential_cache.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/origin_credential_store.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
 #include "components/password_manager/core/browser/password_manager_driver.h"
@@ -100,7 +104,7 @@ bool RequiresTrustedVaultRetrieval(
 autofill::UserInfo TranslateCredentials(const UiCredential& credential,
                                         const url::Origin& frame_origin,
                                         bool current_field_is_password) {
-  DCHECK(!credential.origin().opaque());
+  CHECK(!credential.origin().opaque(), base::NotFatalUntil::M161);
 
   UserInfo user_info(
       credential.origin().Serialize(),
@@ -172,6 +176,7 @@ ShouldShowAction ShouldShowCredManReentryAction(
     case FocusedFieldType::kFillableNonSearchField:
     case FocusedFieldType::kFillableSearchField:
     case FocusedFieldType::kFillableTextArea:
+    case FocusedFieldType::kContenteditableField:
     case FocusedFieldType::kUnfillableElement:
     case FocusedFieldType::kUnknown:
       return ShouldShowAction(false);
@@ -226,13 +231,11 @@ PasswordAccessoryControllerImpl::GetSheetData() const {
   const bool is_password_field = last_focus_info_->focused_field_type ==
                                  FocusedFieldType::kFillablePasswordField;
   if (autofill::IsFillable(last_focus_info_->focused_field_type)) {
-    base::span<const UiCredential> suggestions =
-        credential_cache_->GetCredentialStore(origin).GetCredentials();
-    info_to_add.reserve(suggestions.size());
-    for (const auto& credential : suggestions) {
-      info_to_add.emplace_back(
-          TranslateCredentials(credential, origin, is_password_field));
-    }
+    info_to_add = base::ToVector(
+        credential_cache_->GetCredentialStore(origin).GetCredentials(),
+        [&origin, is_password_field](const UiCredential& credential) {
+          return TranslateCredentials(credential, origin, is_password_field);
+        });
   }
 
   if (password_manager::PasswordManagerDriver* driver =
@@ -242,12 +245,12 @@ PasswordAccessoryControllerImpl::GetSheetData() const {
       credentials_delegate->NotifyForPasskeysDisplay();
       auto passkeys = credentials_delegate->GetPasskeys();
       if (passkeys.has_value()) {
-        passkeys_to_add.reserve(passkeys.value()->size());
-        for (const password_manager::PasskeyCredential& passkey :
-             *passkeys.value()) {
-          passkeys_to_add.emplace_back(passkey.display_name(),
-                                       passkey.credential_id());
-        }
+        passkeys_to_add = base::ToVector(
+            *passkeys.value(),
+            [](const password_manager::PasskeyCredential& passkey) {
+              return PasskeySection(passkey.display_name(),
+                                    passkey.credential_id());
+            });
       }
     }
   }
@@ -315,7 +318,7 @@ void PasswordAccessoryControllerImpl::CreateForWebContents(
     content::WebContents* web_contents,
     CredentialCache* credential_cache) {
   DCHECK(web_contents) << "Need valid WebContents to attach controller to!";
-  DCHECK(credential_cache);
+  CHECK(credential_cache, base::NotFatalUntil::M161);
 
   if (!FromWebContents(web_contents)) {
     web_contents->SetUserData(
@@ -342,8 +345,8 @@ void PasswordAccessoryControllerImpl::CreateForWebContentsForTesting(
         password_manager_error_message_helper_bridge) {
   DCHECK(web_contents) << "Need valid WebContents to attach controller to!";
   DCHECK(!FromWebContents(web_contents)) << "Controller already attached!";
-  DCHECK(manual_filling_controller);
-  DCHECK(password_client);
+  CHECK(manual_filling_controller, base::NotFatalUntil::M161);
+  CHECK(password_client, base::NotFatalUntil::M161);
 
   web_contents->SetUserData(
       UserDataKey(),
@@ -416,11 +419,20 @@ void PasswordAccessoryControllerImpl::OnOptionSelected(
           ->StartTrustedVaultKeyRetrievalFlow(
               &GetWebContents(),
               trusted_vault::TrustedVaultUserActionTriggerForUMA::
-                  kPasswordManagerKeyboardAccessory);
+                  kPasswordManagerKeyboardAccessory,
+              base::DoNothing());
       return;
-    default:
+    case autofill::AccessoryAction::AUTOFILL_SUGGESTION:
+    case autofill::AccessoryAction::MANAGE_CREDIT_CARDS:
+    case autofill::AccessoryAction::MANAGE_ADDRESSES:
+    case autofill::AccessoryAction::TOGGLE_SAVE_PASSWORDS:
+    case autofill::AccessoryAction::MANAGE_LOYALTY_CARDS:
+    case autofill::AccessoryAction::AUTOFILL_SUGGESTION_FROM_ACCESSORY_SHEET:
+    case autofill::AccessoryAction::DISMISS:
+    case autofill::AccessoryAction::SHOW_AT_MEMORY_BOTTOMSHEET:
+    case autofill::AccessoryAction::COUNT:
       NOTREACHED() << "Unhandled selected action: "
-                   << static_cast<int>(selected_action);
+                   << std::to_underlying(selected_action);
   }
 }
 
@@ -432,7 +444,7 @@ void PasswordAccessoryControllerImpl::OnToggleChanged(
     return;
   }
   NOTREACHED() << "Unhandled selected action: "
-               << static_cast<int>(toggled_action);
+               << std::to_underlying(toggled_action);
 }
 
 void PasswordAccessoryControllerImpl::RefreshSuggestionsForField(
@@ -477,7 +489,7 @@ void PasswordAccessoryControllerImpl::OnGenerationRequested(
   PasswordGenerationController* pwd_generation_controller =
       PasswordGenerationController::GetIfExisting(&GetWebContents());
 
-  DCHECK(pwd_generation_controller);
+  CHECK(pwd_generation_controller, base::NotFatalUntil::M161);
   pwd_generation_controller->OnGenerationRequested(type);
 }
 
@@ -673,7 +685,7 @@ PasswordAccessoryControllerImpl::GetManualFillingController() {
     manual_filling_controller_ =
         ManualFillingController::GetOrCreate(&GetWebContents());
   }
-  DCHECK(manual_filling_controller_);
+  CHECK(manual_filling_controller_, base::NotFatalUntil::M161);
   return manual_filling_controller_;
 }
 
@@ -722,7 +734,15 @@ bool PasswordAccessoryControllerImpl::ShouldTriggerBiometricReauth(
     return false;
   }
 
-  return password_client_->IsReauthBeforeFillingRequired(authenticator_.get());
+  if (!base::FeatureList::IsEnabled(
+          password_manager::features::kDeviceReauthRefactor)) {
+    return password_client_->IsReauthBeforeFillingRequiredLegacy(
+        authenticator_.get());
+  }
+
+  std::unique_ptr<device_reauth::DeviceAuthAvailabilityChecker> checker =
+      password_client_->GetDeviceAuthAvailabilityChecker();
+  return password_client_->IsReauthBeforeFillingRequired(checker.get());
 }
 
 void PasswordAccessoryControllerImpl::OnReauthCompleted(
@@ -862,12 +882,25 @@ void PasswordAccessoryControllerImpl::OnAcknowledgementBeforeFillingReceived(
 void PasswordAccessoryControllerImpl::ReauthenticateAndFill(
     const autofill::AccessorySheetField& selection,
     const url::Origin& origin_to_fill_on) {
-  authenticator_ = password_client_->GetDeviceAuthenticator();
-  if (!ShouldTriggerBiometricReauth(selection)) {
+  bool should_reauth = false;
+  if (!base::FeatureList::IsEnabled(
+          password_manager::features::kDeviceReauthRefactor)) {
+    authenticator_ = password_client_->GetDeviceAuthenticator();
+    should_reauth = ShouldTriggerBiometricReauth(selection);
+  } else {
+    should_reauth = ShouldTriggerBiometricReauth(selection);
+    if (should_reauth) {
+      authenticator_ = password_client_->GetDeviceAuthenticator();
+    }
+  }
+
+  if (!should_reauth) {
     authenticator_.reset();
     FillSelection(selection, origin_to_fill_on);
     return;
   }
+
+  CHECK(authenticator_);
   // |this| cancels the authentication when it is destroyed if one is ongoing,
   // which resets the callback, so it's safe to use base::Unretained(this) here.
   authenticator_->AuthenticateWithMessage(
@@ -881,11 +914,8 @@ bool PasswordAccessoryControllerImpl::IsSecureSite() const {
     return security_level_for_testing_ == security_state::SECURE;
   }
 
-  ChromeSecurityStateTabHelper::CreateForWebContents(&GetWebContents());
-  SecurityStateTabHelper* helper =
-      SecurityStateTabHelper::FromWebContents(&GetWebContents());
-
-  return helper && helper->GetSecurityLevel() == security_state::SECURE;
+  return chrome_security_state::GetSecurityLevel(&GetWebContents()) ==
+         security_state::SECURE;
 }
 
 content::WebContents& PasswordAccessoryControllerImpl::GetWebContents() const {

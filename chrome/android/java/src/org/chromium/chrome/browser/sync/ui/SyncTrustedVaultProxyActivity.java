@@ -11,6 +11,7 @@ import android.content.Intent;
 import android.content.IntentSender;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.IntentUtils;
 import org.chromium.base.Log;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.supplier.OneshotSupplierImpl;
@@ -19,6 +20,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.init.AsyncInitializationActivity;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
+import org.chromium.components.trusted_vault.SecurityDomainId;
 import org.chromium.components.trusted_vault.TrustedVaultClient;
 import org.chromium.components.trusted_vault.TrustedVaultUserActionTriggerForUMA;
 
@@ -106,7 +108,8 @@ public class SyncTrustedVaultProxyActivity extends AsyncInitializationActivity {
         // This Activity has no own UI and uses external pending intent to provide it. Since this
         // Activity requires native initialization it implements AsyncInitializationActivity and
         // thus the pending intent is sent inside triggerLayoutInflation() instead of onCreate().
-        PendingIntent proxiedIntent = getIntent().getParcelableExtra(EXTRA_KEY_PROXIED_INTENT);
+        PendingIntent proxiedIntent =
+                IntentUtils.safeGetParcelableExtra(getIntent(), EXTRA_KEY_PROXIED_INTENT);
         mRequestCode = getIntent().getIntExtra(EXTRA_KEY_REQUEST_CODE, -1);
         mUserActionTrigger = getIntent().getIntExtra(EXTRA_KEY_USER_ACTION_TRIGGER, -1);
 
@@ -168,11 +171,13 @@ public class SyncTrustedVaultProxyActivity extends AsyncInitializationActivity {
         // notifications (SyncErrorNotifier), because the user may ignore or dismiss a notification.
         switch (mRequestCode) {
             case REQUEST_CODE_TRUSTED_VAULT_KEY_RETRIEVAL:
-                TrustedVaultClient.get().recordKeyRetrievalTrigger(mUserActionTrigger);
+                TrustedVaultClient.get(SecurityDomainId.CHROME_SYNC)
+                        .recordKeyRetrievalTrigger(mUserActionTrigger);
                 break;
 
             case REQUEST_CODE_TRUSTED_VAULT_RECOVERABILITY_DEGRADED:
-                TrustedVaultClient.get().recordRecoverabilityDegradedFixTrigger(mUserActionTrigger);
+                TrustedVaultClient.get(SecurityDomainId.CHROME_SYNC)
+                        .recordRecoverabilityDegradedFixTrigger(mUserActionTrigger);
                 break;
 
             default:
@@ -190,12 +195,13 @@ public class SyncTrustedVaultProxyActivity extends AsyncInitializationActivity {
                 // Upon key retrieval completion, the keys in TrustedVaultClient could have changed.
                 // This is done even if the user cancelled the flow (i.e. resultCode != RESULT_OK)
                 // because it's harmless to issue a redundant notifyKeysChanged().
-                TrustedVaultClient.get().notifyKeysChanged(mUserActionTrigger);
+                TrustedVaultClient.get(SecurityDomainId.CHROME_SYNC)
+                        .notifyKeysChanged(mUserActionTrigger);
                 break;
 
             case REQUEST_CODE_TRUSTED_VAULT_RECOVERABILITY_DEGRADED:
                 // Same as above, it is harmless to issue redundant notifyRecoverabilityChanged().
-                TrustedVaultClient.get().notifyRecoverabilityChanged();
+                TrustedVaultClient.get(SecurityDomainId.CHROME_SYNC).notifyRecoverabilityChanged();
                 break;
 
             default:

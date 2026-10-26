@@ -2,7 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//third_party/libprotobuf-mutator/fuzzable_proto_library.gni")
+import("//third_party/protobuf/proto_library.gni")
 
 static_library("strike_database") {
   sources = [
@@ -40,11 +40,9 @@ component("features") {
   ]
 
   public_deps = [ "//base" ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
-fuzzable_proto_library("proto") {
+proto_library("proto") {
   sources = [ "strike_data.proto" ]
 }
 

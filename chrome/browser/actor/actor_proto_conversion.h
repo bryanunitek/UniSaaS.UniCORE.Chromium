@@ -17,6 +17,8 @@
 #include "components/actor/core/aggregated_journal.h"
 #include "components/actor/public/mojom/actor_types.mojom-forward.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
+#include "components/optimization_guide/proto/features/common_quality_data.pb.h"
+#include "components/origin_gating/core/task_policy_config.h"
 #include "components/page_content_annotations/content/page_context_fetcher.h"
 #include "components/tabs/public/tab_interface.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
@@ -27,13 +29,33 @@ namespace content {
 class BrowserContext;
 }
 
-namespace optimization_guide::proto {
-class Actions;
-}  // namespace optimization_guide::proto
+class Profile;
+
+namespace origin_gating {
+template <>
+inline const ToolDomain ToolDomain::kInstance<
+    optimization_guide::proto::RuleMetadata::ActuationCapability>{};
+}  // namespace origin_gating
 
 namespace actor {
+class ActorSurface;
 class ActorTask;
 class ToolRequest;
+
+// Returns the set of all supported Actor ClientTools.
+absl::flat_hash_set<origin_gating::ClientTool> GetAllActorTools();
+
+// Converts RuleMetadata capabilities into a set of allowed ClientTools.
+absl::flat_hash_set<origin_gating::ClientTool> ConvertCapabilitiesToTools(
+    const optimization_guide::proto::RuleMetadata& metadata);
+
+// Returns the ClientTool corresponding to a ToolRequest. Requests without a
+// corresponding capability map to `CAPABILITY_UNKNOWN`, which is never allowed
+// by a TaskPolicyConfig.
+origin_gating::ClientTool GetClientToolForRequest(const ToolRequest& request);
+
+origin_gating::TaskPolicyConfig ConvertAgentContainerConfig(
+    const optimization_guide::proto::AgentContainerConfig& config);
 
 // Input type used for ActorKeyedService acting APIs, created from
 // BuildToolRequest functions below. Aliased for convenience.
@@ -51,6 +73,28 @@ using BuildToolRequestResult = base::expected<
 // returns the index of the failing action.
 BuildToolRequestResult BuildToolRequest(
     const optimization_guide::proto::Actions& actions);
+
+// Returns true if all actions in `actions` are script tool actions, or if
+// `actions` is empty.
+bool ValidateActionsAreScriptTools(
+    const optimization_guide::proto::Actions& actions);
+
+// Resolves document identifiers to tab IDs for script tool actions in `actions`
+// that lack a tab ID, searching open tabs within `profile`.
+// `active_tab` is used solely as a fast-path cache for document identifier
+// resolution; actions do not fall back to `active_tab` if both `tab_id` and
+// `document_identifier` are missing.
+// Normally tab IDs should be pre-populated; this is primarily to support the
+// Glic experimental triggering path.
+// TODO(crbug.com/541366310): Remove or consolidate once callers populate tab
+// IDs directly.
+// Returns true if every script tool action has a valid tab ID or a document
+// identifier successfully resolved to an open tab in `profile`, false
+// otherwise.
+bool PopulateTabIdsForScriptToolActions(
+    Profile& profile,
+    optimization_guide::proto::Actions& actions,
+    tabs::TabInterface* active_tab = nullptr);
 
 // Builds the ActionsResult proto from the output of a call to the
 // ActorKeyedService::PerformActions API and fetches new observations for
@@ -144,8 +188,8 @@ CreateActorJournalFetchPageProgressListener(
 
 std::string ToBase64(const google::protobuf::MessageLite& proto);
 
-std::optional<mojom::ActionResultCode> MaybeGetErrorCodeForTab(
-    tabs::TabInterface* tab);
+std::optional<mojom::ActionResultCode> MaybeGetErrorCodeForActorSurface(
+    ActorSurface* actor_surface);
 
 }  // namespace actor
 

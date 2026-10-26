@@ -4,10 +4,10 @@
 
 #include "third_party/blink/renderer/core/layout/inline/inline_items_builder.h"
 
+#include <ranges>
 #include <type_traits>
 
 #include "base/compiler_specific.h"
-#include "base/containers/adapters.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/html_area_element.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_item_span.h"
@@ -34,19 +34,7 @@ InlineItemsBuilderTemplate<MappingBuilder>::InlineItemsBuilderTemplate(
     : block_flow_(block_flow),
       items_(items),
       text_chunk_offsets_(chunk_offsets),
-      is_text_combine_(block_flow_->IsLayoutTextCombine()) {
-  const LayoutObject* child = block_flow->FirstChild();
-  if (!previous_text_content.IsNull() && child && child->NextSibling()) {
-    // 10 avoids reallocations in many cases of Speedometer3.
-    constexpr wtf_size_t kAdditionalSize = 10;
-    wtf_size_t capacity = previous_text_content.length() + kAdditionalSize;
-    if (previous_text_content.Is8Bit()) {
-      text_.ReserveCapacity(capacity);
-    } else {
-      text_.Reserve16BitCapacity(capacity);
-    }
-  }
-}
+      is_text_combine_(block_flow_->IsLayoutTextCombine()) {}
 
 // Returns true if items builder is used for other than offset mapping.
 template <typename MappingBuilder>
@@ -67,7 +55,7 @@ String InlineItemsBuilderTemplate<MappingBuilder>::ToString() {
 
 namespace {
 
-// TODO(curbug.com/324111880): We can't support forced-breaks in ruby-base boxes
+// TODO(crbug.com/324111880): We can't support forced-breaks in ruby-base boxes
 // until ruby-columns become actually line-breakable. So we replace
 // forced-breaks in ruby-base boxes with spaces for now. This flag should be
 // removed before shipping RubyLineBreakable.
@@ -137,14 +125,15 @@ bool ShouldRemoveNewlineSlow(const StringBuilder& before,
     if (U16_IS_LEAD(last_last))
       last = U16_GET_SUPPLEMENTARY(last_last, last);
   }
-  if (!Character::IsHangul(last) && IsEastAsianWidthWide(last, before_style)) {
+  if (!unicode::IsHangul(last) && IsEastAsianWidthWide(last, before_style)) {
     if (U16_IS_LEAD(next) && after.length() > 1) {
       UChar next_next = after[1];
       if (U16_IS_TRAIL(next_next))
         next = U16_GET_SUPPLEMENTARY(next, next_next);
     }
-    if (!Character::IsHangul(next) && IsEastAsianWidthWide(next, after_style))
+    if (!unicode::IsHangul(next) && IsEastAsianWidthWide(next, after_style)) {
       return true;
+    }
   }
 #endif
 
@@ -202,13 +191,14 @@ inline bool MoveToEndOfCollapsibleSpaces(const StringView& string,
                                          unsigned* offset,
                                          UChar* c) {
   DCHECK_EQ(*c, UNSAFE_TODO(string[*offset]));
-  DCHECK(Character::IsCollapsibleSpace(*c));
+  DCHECK(unicode::IsCollapsibleSpace(*c));
   bool space_run_has_newline = *c == uchar::kLineFeed;
   for ((*offset)++; *offset < string.length(); (*offset)++) {
     *c = UNSAFE_TODO(string[*offset]);
     space_run_has_newline |= *c == uchar::kLineFeed;
-    if (!Character::IsCollapsibleSpace(*c))
+    if (!unicode::IsCollapsibleSpace(*c)) {
       break;
+    }
   }
   return space_run_has_newline;
 }
@@ -217,7 +207,7 @@ inline bool MoveToEndOfCollapsibleSpaces(const StringView& string,
 // open/close or bidi controls are ignored.
 // Returns nullptr if there were no previous items.
 InlineItem* LastItemToCollapseWith(InlineItems* items) {
-  for (auto& item : base::Reversed(*items)) {
+  for (auto& item : std::views::reverse(*items)) {
     if (item->EndCollapseType() != InlineItem::kOpaqueToCollapsing) {
       return item;
     }
@@ -272,6 +262,16 @@ bool InlineItemsBuilderTemplate<MappingBuilder>::BoxInfo::
   // they may have different heights and/or locations in block direction.
   if (text_metrics != child.text_metrics)
     return true;
+
+  // `BoxInfo::text_metrics` is computed before `text-box-trim` is applied. When
+  // `child` has `text-box-trim`, its height and/or location in the block
+  // direction may differ from this box, and a culled parent would otherwise use
+  // the child's trimmed fragment.
+  if (child_style.TextBoxTrim() != ETextBoxTrim::kNone &&
+      RuntimeEnabledFeatures::TextBoxTrimOnInlineBoxTextDecorationEnabled())
+      [[unlikely]] {
+    return true;
+  }
 
   return false;
 }
@@ -383,7 +383,7 @@ bool InlineItemsBuilderTemplate<MappingBuilder>::AppendTextReusing(
   // collapsing.
   // TODO(layout-dev): This could likely be optimized further.
   // TODO(layout-dev): Handle cases where the old items are not consecutive.
-  const ComputedStyle& new_style = layout_text->StyleRef();
+  const ComputedStyle& new_style = layout_text->Style();
   const bool collapse_spaces = new_style.ShouldCollapseWhiteSpaces();
   bool preserve_newlines = new_style.ShouldPreserveBreaks();
   if (preserve_newlines && is_text_combine_) [[unlikely]] {
@@ -422,9 +422,7 @@ bool InlineItemsBuilderTemplate<MappingBuilder>::AppendTextReusing(
               // `text_`. If the `original_string` starts with a zero width
               // space, it should be collapsed. See
               // https://issues.chromium.org/issues/389738294 for more details.
-              if (RuntimeEnabledFeatures::
-                      CollapseZeroWidthSpaceWhenReuseItemEnabled() &&
-                  old_item0.TextType() == TextItemType::kFlowControl) {
+              if (old_item0.TextType() == TextItemType::kFlowControl) {
                 return false;
               }
               break;
@@ -446,7 +444,7 @@ bool InlineItemsBuilderTemplate<MappingBuilder>::AppendTextReusing(
         case InlineItem::kNotCollapsible: {
           const String& source_text = layout_text->TransformedText();
           if (source_text.length() &&
-              Character::IsCollapsibleSpace(source_text[0])) {
+              unicode::IsCollapsibleSpace(source_text[0])) {
             // If the start of the original string was collapsed, it may be
             // restored.
             if (original_string[old_item0.StartOffset()] != uchar::kSpace) {
@@ -656,13 +654,8 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendText(
   }
 
   const wtf_size_t estimated_length = text_.length() + string.length();
-  // Don't reserve on the first append, as it will reallocate the string buffer
-  // causing duplication.
-  if (!text_.empty() && estimated_length > text_.Capacity()) {
-    // The reallocations may occur very frequently for large text such as log
-    // files. We use a more aggressive expansion strategy, the same as
-    // |Vector::ExpandCapacity| does for |Vector|s with inline storage.
-    // |ReserveCapacity| reserves only the requested size.
+  // Only grow an already-materialized buffer to preserve string sharing.
+  if (text_.Capacity() && estimated_length > text_.Capacity()) {
     const wtf_size_t new_capacity =
         std::max(estimated_length, text_.Capacity() * 2);
     if (string.Is8Bit())
@@ -674,7 +667,7 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendText(
   typename MappingBuilder::SourceNodeScope scope(&mapping_builder_,
                                                  &layout_object);
 
-  const ComputedStyle& style = layout_object.StyleRef();
+  const ComputedStyle& style = layout_object.Style();
   bool should_not_preserve_newline;
   if (layout_object.IsSVGInlineText() || is_text_combine_ ||
       ruby_text_nesting_level_ > 0) [[unlikely]] {
@@ -704,7 +697,7 @@ bool InlineItemsBuilderTemplate<MappingBuilder>::AppendTextChunks(
   auto iter = text_chunk_offsets_->find(&layout_text);
   if (iter == text_chunk_offsets_->end())
     return false;
-  const ComputedStyle& style = layout_text.StyleRef();
+  const ComputedStyle& style = layout_text.Style();
   const bool should_collapse_space = style.ShouldCollapseWhiteSpaces();
   unsigned length = transformed.View().length();
   unsigned start = 0;
@@ -823,7 +816,7 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendCollapseWhitespace(
   unsigned i = 0;
   UChar c = UNSAFE_TODO(string[i]);
   bool space_run_has_newline = false;
-  if (Character::IsCollapsibleSpace(c)) {
+  if (unicode::IsCollapsibleSpace(c)) {
     // Find the end of the collapsible space run.
     space_run_has_newline = MoveToEndOfCollapsibleSpaces(string, &i, &c);
 
@@ -934,13 +927,14 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendCollapseWhitespace(
     while (true) {
       // Append the non-space text until we find a collapsible space.
       // |string[i]| is guaranteed not to be a space.
-      DCHECK(!Character::IsCollapsibleSpace(UNSAFE_TODO(string[i])));
+      DCHECK(!unicode::IsCollapsibleSpace(UNSAFE_TODO(string[i])));
       unsigned start_of_non_space = i;
       for (i++; i < string.length(); i++) {
         // SAFETY: index checked against length in for-statement.
         c = UNSAFE_BUFFERS(string[i]);
-        if (Character::IsCollapsibleSpace(c))
+        if (unicode::IsCollapsibleSpace(c)) {
           break;
+        }
       }
       AppendTransformedString(
           transformed.Substring(start_of_non_space, i - start_of_non_space),
@@ -953,7 +947,7 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendCollapseWhitespace(
 
       // Process a collapsible space run. First, find the end of the run.
       DCHECK_EQ(c, UNSAFE_TODO(string[i]));
-      DCHECK(Character::IsCollapsibleSpace(c));
+      DCHECK(unicode::IsCollapsibleSpace(c));
       unsigned start_of_spaces = i;
       space_run_has_newline = MoveToEndOfCollapsibleSpaces(string, &i, &c);
 
@@ -1189,7 +1183,7 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendForcedBreak(
     typename MappingBuilder::SourceNodeScope scope(&mapping_builder_, nullptr);
     // These bidi controls need to be associated with the |layout_object| so
     // that items from a LayoutObject are consecutive.
-    for (const auto& bidi : base::Reversed(bidi_context_)) {
+    for (const auto& bidi : std::views::reverse(bidi_context_)) {
       AppendOpaque(InlineItem::kBidiControl, bidi.exit, layout_object);
     }
   }
@@ -1246,8 +1240,9 @@ void InlineItemsBuilderTemplate<MappingBuilder>::ExitAndEnterSvgTextChunk(
   typename MappingBuilder::SourceNodeScope scope(&mapping_builder_, nullptr);
   // These bidi controls need to be associated with the |layout_text| so
   // that items from a LayoutObject are consecutive.
-  for (const auto& bidi : base::Reversed(bidi_context_))
+  for (const auto& bidi : std::views::reverse(bidi_context_)) {
     AppendOpaque(InlineItem::kBidiControl, bidi.exit, &layout_text);
+  }
 
   // Then re-add bidi controls to restore the bidi context.
   for (const auto& bidi : bidi_context_)
@@ -1447,17 +1442,7 @@ void InlineItemsBuilderTemplate<
   mapping_builder_.RestoreTrailingCollapsibleSpace(
       To<LayoutText>(*item->GetLayoutObject()), item->EndOffset());
 
-  // TODO(kojii): Implement StringBuilder::insert().
-  UChar space_char = GetCollapsedSpaceChar(item->Style());
-  if (text_.length() == item->EndOffset()) {
-    text_.Append(space_char);
-  } else {
-    String current = text_.ToString();
-    text_.Clear();
-    text_.Append(StringView(current, 0, item->EndOffset()));
-    text_.Append(space_char);
-    text_.Append(StringView(current, item->EndOffset()));
-  }
+  text_.Insert(item->EndOffset(), GetCollapsedSpaceChar(item->Style()));
 
   item->SetEndOffset(item->EndOffset() + 1);
   item->SetEndCollapseType(InlineItem::kCollapsible);
@@ -1549,23 +1534,23 @@ void InlineItemsBuilderTemplate<MappingBuilder>::EnterInline(
   DCHECK(node);
 
   // https://drafts.csswg.org/css-writing-modes-3/#bidi-control-codes-injection-table
-  const ComputedStyle* style = node->Style();
-  if (style->RtlOrdering() == EOrder::kLogical) {
-    switch (style->GetUnicodeBidi()) {
+  const ComputedStyle& style = node->Style();
+  if (style.RtlOrdering() == EOrder::kLogical) {
+    switch (style.GetUnicodeBidi()) {
       case UnicodeBidi::kNormal:
         break;
       case UnicodeBidi::kEmbed:
-        EnterBidiContext(node, style, uchar::kLeftToRightEmbedding,
+        EnterBidiContext(node, &style, uchar::kLeftToRightEmbedding,
                          uchar::kRightToLeftEmbedding,
                          uchar::kPopDirectionalFormatting);
         break;
       case UnicodeBidi::kBidiOverride:
-        EnterBidiContext(node, style, uchar::kLeftToRightOverride,
+        EnterBidiContext(node, &style, uchar::kLeftToRightOverride,
                          uchar::kRightToLeftOverride,
                          uchar::kPopDirectionalFormatting);
         break;
       case UnicodeBidi::kIsolate:
-        EnterBidiContext(node, style, uchar::kLeftToRightIsolate,
+        EnterBidiContext(node, &style, uchar::kLeftToRightIsolate,
                          uchar::kRightToLeftIsolate,
                          uchar::kPopDirectionalIsolate);
         break;
@@ -1577,14 +1562,14 @@ void InlineItemsBuilderTemplate<MappingBuilder>::EnterInline(
       case UnicodeBidi::kIsolateOverride:
         EnterBidiContext(node, uchar::kFirstStrongIsolate,
                          uchar::kPopDirectionalIsolate);
-        EnterBidiContext(node, style, uchar::kLeftToRightOverride,
+        EnterBidiContext(node, &style, uchar::kLeftToRightOverride,
                          uchar::kRightToLeftOverride,
                          uchar::kPopDirectionalFormatting);
         break;
     }
   }
 
-  if (style->GetTextEmphasisMark() != TextEmphasisMark::kNone) {
+  if (style.GetTextEmphasisMark() != TextEmphasisMark::kNone) {
     has_text_emphasis_ = true;
   }
 
@@ -1595,8 +1580,8 @@ void InlineItemsBuilderTemplate<MappingBuilder>::EnterInline(
     if (!node->Parent()->IsInlineRuby()) {
       // This creates a ruby column with a placeholder-only ruby-base.
       AppendOpaque(InlineItem::kOpenRubyColumn,
-                   IsLtr(style->Direction()) ? uchar::kLeftToRightIsolate
-                                             : uchar::kRightToLeftIsolate,
+                   IsLtr(style.Direction()) ? uchar::kLeftToRightIsolate
+                                            : uchar::kRightToLeftIsolate,
                    nullptr);
       AppendOpaque(InlineItem::kRubyLinePlaceholder, nullptr);
       is_score_line_break_disabled_ = true;
@@ -1622,8 +1607,8 @@ void InlineItemsBuilderTemplate<MappingBuilder>::EnterInline(
   typename MappingBuilder::SourceNodeScope scope(&mapping_builder_, nullptr);
   if (node->IsInlineRuby()) {
     AppendOpaque(InlineItem::kOpenRubyColumn,
-                 IsLtr(style->Direction()) ? uchar::kLeftToRightIsolate
-                                           : uchar::kRightToLeftIsolate,
+                 IsLtr(style.Direction()) ? uchar::kLeftToRightIsolate
+                                          : uchar::kRightToLeftIsolate,
                  node);
     if (kDisableForcedBreakInRubyColumn) {
       ++ruby_text_nesting_level_;
@@ -1725,7 +1710,7 @@ void InlineItemsBuilderTemplate<MappingBuilder>::ExitInline(
       // This produces almost-empty ruby-columns if </ruby> follows.
       // The beginning part of this function removes such ruby-columns.
       AppendOpaque(InlineItem::kOpenRubyColumn,
-                   IsLtr(node->Parent()->Style()->Direction())
+                   IsLtr(node->Parent()->Style().Direction())
                        ? uchar::kLeftToRightIsolate
                        : uchar::kRightToLeftIsolate,
                    ruby_container);
@@ -1760,7 +1745,7 @@ void InlineItemsBuilderTemplate<MappingBuilder>::DidFinishCollectInlines(
   // doesn't contain any RTL characters.
   data->is_bidi_enabled_ =
       HasBidiControls() ||
-      (has_non_orc_16bit_ && Character::MaybeBidiRtl(data->text_content));
+      (has_non_orc_16bit_ && unicode::MaybeBidiRtl(data->text_content));
   data->has_floats_ = has_floats_;
   data->has_out_of_flow_positioned_ = has_out_of_flow_positioned_;
   data->has_initial_letter_box_ = has_initial_letter_box_;

@@ -8,10 +8,11 @@
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller_delegate.h"
+#include "chrome/browser/ui/views/global_media_controls/media_toolbar_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 
-class Browser;
+class BrowserWindowInterface;
 class BrowserView;
 class MediaNotificationService;
 class MediaToolbarButtonController;
@@ -22,7 +23,8 @@ class MediaToolbarButtonContextualMenu;
 // of its parent ToolbarView. The icon is made visible when there is an active
 // media session.
 class MediaToolbarButtonView : public ToolbarButton,
-                               public MediaToolbarButtonControllerDelegate {
+                               public MediaToolbarButtonControllerDelegate,
+                               public MediaToolbarButton {
   METADATA_HEADER(MediaToolbarButtonView, ToolbarButton)
 
  public:
@@ -44,15 +46,15 @@ class MediaToolbarButtonView : public ToolbarButton,
   void MaybeShowLocalMediaCastingPromo() override;
   void MaybeShowStopCastingPromo() override;
 
-  MediaToolbarButtonController* media_toolbar_button_controller() {
-    return controller_.get();
-  }
+  // MediaToolbarButton implementation.
+  views::BubbleAnchor GetBubbleAnchor() override;
+  MediaToolbarButtonController* GetController() override;
 
  private:
   void ButtonPressed();
   void ClosePromoBubble(bool engaged);
 
-  const raw_ptr<Browser> browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
 
   const raw_ptr<MediaNotificationService> service_;
 

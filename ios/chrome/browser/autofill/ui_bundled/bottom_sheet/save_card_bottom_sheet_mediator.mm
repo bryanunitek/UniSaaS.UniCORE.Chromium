@@ -13,13 +13,13 @@
 #import "base/time/time.h"
 #import "base/timer/timer.h"
 #import "components/application_locale_storage/application_locale_storage.h"
-#import "components/autofill/core/browser/data_model/data_model_utils.h"
+#import "components/autofill/core/browser/data_model/data_model_util.h"
 #import "components/autofill/core/browser/metrics/payments/credit_card_save_metrics.h"
 #import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/autofill/ios/browser/credit_card_save_metrics_ios.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/autofill/model/bottom_sheet/save_card_bottom_sheet_model.h"
-#import "ios/chrome/browser/autofill/model/message/save_card_message_with_links.h"
+#import "ios/chrome/browser/autofill/model/message/autofill_legal_message_line.h"
 #import "ios/chrome/browser/autofill/ui_bundled/bottom_sheet/bottom_sheet_constants.h"
 #import "ios/chrome/browser/autofill/ui_bundled/bottom_sheet/save_card_bottom_sheet_consumer.h"
 #import "ios/chrome/browser/autofill/ui_bundled/util/autofill_credit_card_util.h"
@@ -79,7 +79,6 @@ std::pair<NSString*, NSString*> ParseExpirationDate(NSString* expirationDate) {
 
 }  // namespace
 
-// TODO(crbug.com/402511942): Implement SaveCardBottomSheetMediator.
 @implementation SaveCardBottomSheetMediator {
   // `_modelObserverBridge` holds a scoped observation of the model for the
   // mediator and must be destroyed before the `_saveCardBottomSheetModel`
@@ -206,7 +205,7 @@ std::pair<NSString*, NSString*> ParseExpirationDate(NSString* expirationDate) {
                               _saveCardBottomSheetModel->cancel_button_text())];
 
   if (_saveCardBottomSheetModel->is_for_upload()) {
-    [self.consumer setLegalMessages:[SaveCardMessageWithLinks
+    [self.consumer setLegalMessages:[AutofillLegalMessageLine
                                         convertFrom:_saveCardBottomSheetModel
                                                         ->legal_messages()]];
   }
@@ -261,10 +260,7 @@ std::pair<NSString*, NSString*> ParseExpirationDate(NSString* expirationDate) {
   return base::SysUTF16ToNSString(
       _saveCardBottomSheetModel->is_for_upload()
           ? l10n_util::GetStringUTF16(
-                base::FeatureList::IsEnabled(
-                    autofill::features::kAutofillEnableWalletBranding)
-                    ? IDS_AUTOFILL_GOOGLE_WALLET_LOGO_ACCESSIBLE_NAME
-                    : IDS_AUTOFILL_GOOGLE_PAY_LOGO_ACCESSIBLE_NAME)
+                IDS_AUTOFILL_GOOGLE_WALLET_LOGO_ACCESSIBLE_NAME)
           : l10n_util::GetStringUTF16(
                 IDS_AUTOFILL_CHROME_LOGO_ACCESSIBLE_NAME));
 }
@@ -336,8 +332,8 @@ std::pair<NSString*, NSString*> ParseExpirationDate(NSString* expirationDate) {
 
   NSString* errorMessage =
       isValid ? nil : [AutofillSettingsUtil errorMessageForUIType:type];
-  if ([self.consumer respondsToSelector:@selector(setField:
-                                                   isValid:errorMessage:)]) {
+  if ([self.consumer
+          respondsToSelector:@selector(setField:isValid:errorMessage:)]) {
     [self.consumer setField:type isValid:isValid errorMessage:errorMessage];
   }
   [self updateSaveButtonStatus];
@@ -381,9 +377,11 @@ std::pair<NSString*, NSString*> ParseExpirationDate(NSString* expirationDate) {
     case AutofillCreditCardUIType::kNumber:
       return [AutofillCreditCardUtil
           isValidCreditCardNumber:value
-                         appLocal:GetApplicationContext()
-                                      ->GetApplicationLocaleStorage()
-                                      ->Get()];
+                         appLocal:std::string(
+                                      GetApplicationContext()
+                                          ->GetApplicationLocaleStorage()
+                                          ->GetTag()
+                                          .tag_string())];
     case AutofillCreditCardUIType::kExpMonth: {
       std::pair<NSString*, NSString*> parsedDate = ParseExpirationDate(value);
       NSString* expMonth = parsedDate.first;
@@ -396,9 +394,11 @@ std::pair<NSString*, NSString*> ParseExpirationDate(NSString* expirationDate) {
             [AutofillCreditCardUtil
                 isValidCreditCardExpirationYear:expYear
                                        appLocal:
-                                           GetApplicationContext()
-                                               ->GetApplicationLocaleStorage()
-                                               ->Get()];
+                                           std::string(
+                                               GetApplicationContext()
+                                                   ->GetApplicationLocaleStorage()
+                                                   ->GetTag()
+                                                   .tag_string())];
       }
       return NO;
     }

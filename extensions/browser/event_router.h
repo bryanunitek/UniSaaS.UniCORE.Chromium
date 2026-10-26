@@ -5,6 +5,7 @@
 #ifndef EXTENSIONS_BROWSER_EVENT_ROUTER_H_
 #define EXTENSIONS_BROWSER_EVENT_ROUTER_H_
 
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -16,6 +17,7 @@
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
@@ -26,6 +28,7 @@
 #include "extensions/browser/event_listener_map.h"
 #include "extensions/browser/events/event_ack_data.h"
 #include "extensions/browser/events/lazy_event_dispatch_util.h"
+#include "extensions/browser/events/listener_registration_phase_map.h"
 #include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
@@ -33,6 +36,7 @@
 #include "extensions/browser/process_manager_observer.h"
 #include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/event_args.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/features/feature.h"
 #include "extensions/common/mojom/context_type.mojom-forward.h"
@@ -135,6 +139,7 @@ class EventRouter : public KeyedService,
     virtual void OnDidDispatchEventToProcess(const Event& event,
                                              int process_id) = 0;
     virtual void OnNonExtensionEventDispatched(const std::string& event_name) {}
+    virtual void OnWillBroadcastEvent(const Event& event) {}
   };
 
   // Gets the EventRouter for `browser_context`.
@@ -164,7 +169,7 @@ class EventRouter : public KeyedService,
                              const std::string& event_name,
                              int worker_thread_id,
                              int64_t service_worker_version_id,
-                             base::ListValue event_args,
+                             scoped_refptr<const EventArgs> event_args,
                              mojom::EventFilteringInfoPtr info);
 
   static void BindForRenderer(
@@ -274,6 +279,9 @@ class EventRouter : public KeyedService,
   // Adds/removes test observers.
   void AddObserverForTesting(TestObserver* observer);
   void RemoveObserverForTesting(TestObserver* observer);
+  void AddEventListenerForTesting(const std::string& event_name,
+                                  content::RenderProcessHost* process,
+                                  const ExtensionId& extension_id);
 
   // If `add_lazy_listener` is true also add the lazy version of this listener.
   void AddFilteredEventListener(
@@ -296,6 +304,11 @@ class EventRouter : public KeyedService,
 
   // Returns true if there is at least one listener for the given event.
   bool HasEventListener(const std::string& event_name) const;
+
+  // Returns `true` if there is at least one listener for the given event
+  // outside `process_id`. `process_id` must be valid (`!process_id.is_null()`).
+  bool HasEventListenerOutsideProcess(const std::string& event_name,
+                                      content::ChildProcessId process_id) const;
 
   // Returns true if the extension is listening to the given event.
   // (virtual for testing only.)
@@ -351,6 +364,13 @@ class EventRouter : public KeyedService,
 
   EventAckData* event_ack_data() { return &event_ack_data_; }
 
+  // Tracks listener registration phases for service workers using
+  // `background.async_listener_registration`. Driven by
+  // ServiceWorkerTaskQueue.
+  ListenerRegistrationPhaseMap& listener_registration_phases() {
+    return listener_registration_phases_;
+  }
+
   // Returns true if there is a registered lazy/non-lazy listener for the given
   // `event_name`.
   bool HasLazyEventListenerForTesting(const std::string& event_name);
@@ -360,6 +380,9 @@ class EventRouter : public KeyedService,
   // filter matches `filter`.
   bool HasLazyEventListenerWithFilterForTesting(const std::string& event_name,
                                                 const base::DictValue& filter);
+
+  // Flushes all pending `mojom::EventRouter` IPC messages across all receivers.
+  void FlushForTesting() { receivers_.FlushForTesting(); }
 
   void BindServiceWorkerEventDispatcher(
       int render_process_id,
@@ -386,6 +409,10 @@ class EventRouter : public KeyedService,
   FRIEND_TEST_ALL_PREFIXES(EventRouterTest, DispatchPendingEvent_NullContext);
   FRIEND_TEST_ALL_PREFIXES(EventRouterDispatchTest, TestDispatch);
   FRIEND_TEST_ALL_PREFIXES(EventRouterDispatchTest, TestDispatchCallback);
+  FRIEND_TEST_ALL_PREFIXES(EventRouterDispatchTest,
+                           ActiveDispatchTargetRestrictsToWorker);
+  FRIEND_TEST_ALL_PREFIXES(EventRouterDispatchTest,
+                           ActiveDispatchTargetMissingFiresCannotDispatch);
   FRIEND_TEST_ALL_PREFIXES(EventRouterFilterTest,
                            AddFilteredLazyListenerForUnloadedExtension);
   FRIEND_TEST_ALL_PREFIXES(
@@ -428,9 +455,9 @@ class EventRouter : public KeyedService,
       const mojom::HostID& host_id,
       int event_id,
       const std::string& event_name,
-      base::ListValue event_args,
+      scoped_refptr<const EventArgs> event_args,
       UserGestureState user_gesture,
-      extensions::mojom::EventFilteringInfoPtr info,
+      mojom::EventFilteringInfoPtr info,
       mojom::EventDispatcher::DispatchEventCallback callback);
 
   void ObserveProcess(content::RenderProcessHost* process);
@@ -459,6 +486,13 @@ class EventRouter : public KeyedService,
   bool CanProcessAccessOrigin(content::RenderProcessHost& process,
                               const GURL& url) const;
 
+  // Reports a bad message when `process` is not authorized for `extension_id`,
+  // recording crash keys to help diagnose unexpected renderer kills.
+  // `event_name` is the event whose listener was being updated.
+  void ReportUnauthorizedExtensionProcess(const ExtensionId& extension_id,
+                                          std::string_view event_name,
+                                          content::RenderProcessHost& process);
+
   // Validates a main-thread listener owner from a renderer-originated message.
   // If `require_extension_process` is true, content and user script processes
   // are rejected. Returns true if the listener owner is valid and authorized.
@@ -467,6 +501,7 @@ class EventRouter : public KeyedService,
   // reported).
   bool ValidateMainThreadListenerOwner(
       const mojom::EventListenerOwner& listener_owner,
+      std::string_view event_name,
       content::RenderProcessHost& process,
       bool require_extension_process);
 
@@ -474,6 +509,7 @@ class EventRouter : public KeyedService,
   // acting for an extension-owned worker scope that `process` may host.
   bool ValidateServiceWorkerListenerForExtension(
       const ExtensionId& extension_id,
+      std::string_view event_name,
       const GURL& worker_scope_url,
       content::RenderProcessHost& process);
 
@@ -513,6 +549,7 @@ class EventRouter : public KeyedService,
 
   // ProcessManagerObserver:
   void OnStoppedTrackingServiceWorkerInstance(
+      content::BrowserContext& browser_context,
       const WorkerId& worker_id) override;
 
   // Adds/removes lazy listeners for trusted browser-internal callers that do
@@ -594,7 +631,7 @@ class EventRouter : public KeyedService,
   void RouteDispatchEvent(
       content::RenderProcessHost* rph,
       mojom::DispatchEventParamsPtr params,
-      base::ListValue event_args,
+      scoped_refptr<const EventArgs> event_args,
       mojom::EventDispatcher::DispatchEventCallback callback);
 
   void DispatchPendingEvent(
@@ -647,6 +684,9 @@ class EventRouter : public KeyedService,
                mojo::AssociatedRemote<mojom::EventDispatcher>>;
   std::map<content::RenderProcessHost*, DispatcherMap> rph_dispatcher_map_;
 
+  // Listener registration phases for service worker instances.
+  ListenerRegistrationPhaseMap listener_registration_phases_;
+
   // All the Mojo receivers for the EventRouter. Keeps track of the render
   // process id.
   mojo::AssociatedReceiverSet<mojom::EventRouter, content::ChildProcessId>
@@ -689,8 +729,11 @@ struct Event {
   // The event to dispatch.
   const std::string event_name;
 
-  // Arguments to send to the event listener.
-  base::ListValue event_args;
+  // Returns a reference to the event arguments for read-only access.
+  // The reference is valid only for the lifetime of the current arguments
+  // on this Event. Use `args_ptr()` if retaining ownership is needed.
+  const base::ListValue& args() const { return event_args_->data; }
+  const scoped_refptr<const EventArgs>& args_ptr() const { return event_args_; }
 
   // If non-null, then the event will not be sent to other BrowserContexts
   // unless the extension has permission (e.g. incognito tab update -> normal
@@ -703,6 +746,24 @@ struct Event {
 
   // If present, then the event will only be sent to this context type.
   const std::optional<mojom::ContextType> restrict_to_context_type;
+
+  // Identifies a single renderer-side target for `restrict_to_dispatch_target`.
+  struct DispatchTarget {
+    content::ChildProcessId render_process_id;
+    int worker_thread_id = kMainThreadId;
+    int64_t service_worker_version_id =
+        blink::mojom::kInvalidServiceWorkerVersionId;
+
+    bool IsLazy() const { return render_process_id.is_null(); }
+
+    friend bool operator==(const DispatchTarget&,
+                           const DispatchTarget&) = default;
+  };
+
+  // If set, the event is delivered only to the identified target. Only
+  // meaningful with extension-scoped dispatch (`DispatchEventToExtension()`).
+  // If no matching listener handles it, `cannot_dispatch_callback` fires.
+  std::optional<DispatchTarget> restrict_to_dispatch_target;
 
   // If not empty, the event is only sent to extensions with host permissions
   // for this url.
@@ -766,18 +827,18 @@ struct Event {
   // related browser_contexts. See https://crbug.com/40522431.
   Event(events::HistogramValue histogram_value,
         std::string_view event_name,
-        base::ListValue event_args);
+        scoped_refptr<const EventArgs> event_args);
 
   Event(events::HistogramValue histogram_value,
         std::string_view event_name,
-        base::ListValue event_args,
+        scoped_refptr<const EventArgs> event_args,
         content::BrowserContext* restrict_to_browser_context,
         std::optional<mojom::ContextType> restrict_to_context_type =
             std::nullopt);
 
   Event(events::HistogramValue histogram_value,
         std::string_view event_name,
-        base::ListValue event_args,
+        scoped_refptr<const EventArgs> event_args,
         content::BrowserContext* restrict_to_browser_context,
         std::optional<mojom::ContextType> restrict_to_context_type,
         const GURL& event_url,
@@ -788,15 +849,20 @@ struct Event {
 
   ~Event();
 
-  // Creates a copy of this event, selectively choosing whether to also copy the
-  // event arguments and filtering info.
-  // If `copy_event_args` or `copy_filter_info` are false, the respective
-  // members will be initialized to empty values.
-  std::unique_ptr<Event> CopySelectively(bool copy_event_args,
-                                         bool copy_filter_info) const;
+  // Creates a copy of this event, optionally overriding event arguments or
+  // filtering info. If `modified_event_args` is nullopt, the existing arguments
+  // reference is reused (or cloned if sharing is disabled). If
+  // `modified_filter_info` is null, the existing filter info is cloned.
+  std::unique_ptr<Event> CopySelectively(
+      std::optional<base::ListValue> modified_event_args = std::nullopt,
+      mojom::EventFilteringInfoPtr modified_filter_info = nullptr) const;
 
-  // Makes a deep copy of this instance.
-  std::unique_ptr<Event> DeepCopy() const;
+  // Makes a copy of this instance, sharing the ref-counted event arguments when
+  // the `kShareEventArgsOnDispatch` experiment is enabled.
+  std::unique_ptr<Event> Clone() const;
+
+ private:
+  scoped_refptr<const EventArgs> event_args_;
 };
 
 struct EventListenerInfo {

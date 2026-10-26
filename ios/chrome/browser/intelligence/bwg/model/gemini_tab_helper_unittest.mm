@@ -22,9 +22,6 @@
 #import "components/optimization_guide/proto/contextual_cueing_metadata.pb.h"
 #import "components/optimization_guide/proto/hints.pb.h"
 #import "components/prefs/testing_pref_service.h"
-#import "components/signin/public/base/consent_level.h"
-#import "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
-#import "components/signin/public/identity_manager/identity_test_utils.h"
 #import "components/sync/test/test_sync_service.h"
 #import "components/unified_consent/pref_names.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
@@ -32,6 +29,7 @@
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_page_context.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_service_factory.h"
 #import "ios/chrome/browser/intelligence/bwg/utils/gemini_prefs.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_test_utils.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper.h"
 #import "ios/chrome/browser/intelligence/zero_state_suggestions/zero_state_suggestions_service.h"
@@ -47,7 +45,6 @@
 #import "ios/chrome/browser/shared/public/commands/location_bar_badge_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/signin/model/identity_test_environment_browser_state_adaptor.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
@@ -84,8 +81,7 @@ class GeminiTabHelperTest : public PlatformTest {
         feature_engagement::TrackerFactory::GetDefaultFactory());
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
-            std::make_unique<FakeAuthenticationServiceDelegate>()));
+        AuthenticationServiceFactory::GetDefaultFactory());
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateTestSyncService));
     builder.AddTestingFactory(
@@ -96,15 +92,7 @@ class GeminiTabHelperTest : public PlatformTest {
                               GeminiServiceFactory::GetDefaultFactory());
     profile_ = std::move(builder).Build();
 
-    // Set up a signed in user with the capability to enable Gemini.
-    signin::IdentityManager* identity_manager =
-        IdentityManagerFactory::GetForProfile(profile_.get());
-    AccountInfo account = signin::MakePrimaryAccountAvailable(
-        identity_manager, "test@example.com", signin::ConsentLevel::kSignin);
-    // Grant the user the capability to use Gemini.
-    AccountCapabilitiesTestMutator mutator(&account);
-    mutator.set_can_use_model_execution_features(true);
-    signin::UpdateAccountInfoForAccount(identity_manager, account);
+    gemini::test::SetUpEligibleAccount(profile_.get());
     profile_->GetPrefs()->SetInteger(prefs::kGeminiEnabledByPolicy, 0);
 
     web_state_ = std::make_unique<web::FakeWebState>();
@@ -336,7 +324,7 @@ TEST_F(GeminiTabHelperTest, TestDidStartNavigation_ShowsImageRemixTooltip) {
   feature_engagement::test::ScopedIphFeatureList iph_feature_list;
   iph_feature_list.InitAndEnableFeatures(
       {feature_engagement::kIPHiOSGeminiImageRemixFeature, kPageActionMenu,
-       kGeminiImageRemixTool, kZeroStateSuggestions});
+       kZeroStateSuggestions});
 
   web_state_ = std::make_unique<web::FakeWebState>();
   web_state_->SetBrowserState(profile_.get());
@@ -371,7 +359,7 @@ TEST_F(GeminiTabHelperTest,
   feature_engagement::test::ScopedIphFeatureList iph_feature_list;
   iph_feature_list.InitAndEnableFeatures(
       {feature_engagement::kIPHiOSGeminiImageRemixFeature, kPageActionMenu,
-       kGeminiImageRemixTool, kZeroStateSuggestions});
+       kZeroStateSuggestions});
 
   web_state_ = std::make_unique<web::FakeWebState>();
   web_state_->SetBrowserState(profile_.get());
@@ -406,7 +394,7 @@ TEST_F(GeminiTabHelperTest,
   feature_engagement::test::ScopedIphFeatureList iph_feature_list;
   iph_feature_list.InitAndEnableFeatures(
       {feature_engagement::kIPHiOSGeminiImageRemixFeature, kPageActionMenu,
-       kGeminiImageRemixTool, kZeroStateSuggestions});
+       kZeroStateSuggestions});
 
   web_state_ = std::make_unique<web::FakeWebState>();
   web_state_->SetBrowserState(profile_.get());
@@ -452,149 +440,6 @@ TEST_F(GeminiTabHelperTest,
   FlushTaskRunner();
 
   EXPECT_OCMOCK_VERIFY(mock_help_handler_);
-}
-
-TEST_F(GeminiTabHelperTest, TestDidStartNavigation_ShowsPromo) {
-  feature_engagement::test::ScopedIphFeatureList iph_feature_list;
-  iph_feature_list.InitAndEnableFeatures(
-      {feature_engagement::kIPHiOSGeminiFullscreenPromoFeature, kPageActionMenu,
-       kGeminiNavigationPromo});
-
-  feature_engagement::Tracker* tracker = InitializeTracker();
-
-  OCMExpect([mock_gemini_handler_ showGeminiPromoIfPageIsEligible]);
-
-  SimulateFirstRunRecency(tracker, 2);
-
-  GURL url("https://www.chromium.org");
-  AddOptimizationGuideHint(url);
-
-  auto navigation_context = std::make_unique<web::FakeNavigationContext>();
-  navigation_context->SetUrl(url);
-  navigation_context->SetHasCommitted(true);
-  tab_helper_->DidFinishNavigation(web_state_.get(), navigation_context.get());
-  EXPECT_OCMOCK_VERIFY(mock_gemini_handler_);
-}
-
-TEST_F(GeminiTabHelperTest,
-       TestDidStartNavigation_DoesNotShowPromoIfConsentGiven) {
-  feature_list_.InitWithFeatures({kGeminiNavigationPromo, kPageActionMenu}, {});
-
-  feature_engagement::Tracker* tracker = InitializeTracker();
-
-  OCMReject([mock_gemini_handler_ showGeminiPromoIfPageIsEligible]);
-
-  SimulateFirstRunRecency(tracker, 2);
-
-  // Send signal that the user has already given his consent to the feature.
-  tracker->NotifyEvent(feature_engagement::events::kIOSGeminiConsentGiven);
-
-  GURL url("https://www.chromium.org");
-  AddOptimizationGuideHint(url);
-
-  auto navigation_context = std::make_unique<web::FakeNavigationContext>();
-  navigation_context->SetUrl(url);
-  navigation_context->SetHasCommitted(true);
-  tab_helper_->DidFinishNavigation(web_state_.get(), navigation_context.get());
-  EXPECT_OCMOCK_VERIFY(mock_gemini_handler_);
-}
-
-TEST_F(GeminiTabHelperTest, TestDidStartNavigation_DoesNotShowPromoForNewUser) {
-  feature_list_.InitWithFeatures({kGeminiNavigationPromo, kPageActionMenu}, {});
-
-  feature_engagement::Tracker* tracker = InitializeTracker();
-
-  OCMReject([mock_gemini_handler_ showGeminiPromoIfPageIsEligible]);
-
-  SimulateFirstRunRecency(tracker, 0);
-
-  GURL url("https://www.chromium.org");
-  AddOptimizationGuideHint(url);
-
-  auto navigation_context = std::make_unique<web::FakeNavigationContext>();
-  navigation_context->SetUrl(url);
-  navigation_context->SetHasCommitted(true);
-  tab_helper_->DidFinishNavigation(web_state_.get(), navigation_context.get());
-  EXPECT_OCMOCK_VERIFY(mock_gemini_handler_);
-}
-
-TEST_F(GeminiTabHelperTest,
-       TestDidStartNavigation_DoesNotShowPromoIfBWGStarted) {
-  feature_list_.InitWithFeatures({kGeminiNavigationPromo, kPageActionMenu}, {});
-
-  feature_engagement::Tracker* tracker = InitializeTracker();
-
-  OCMReject([mock_gemini_handler_ showGeminiPromoIfPageIsEligible]);
-
-  SimulateFirstRunRecency(tracker, 2);
-
-  // Send signal that the user has started Gemini flow from a non-promo entry
-  // point.
-  tracker->NotifyEvent(
-      feature_engagement::events::kIOSGeminiFlowStartedNonPromo);
-
-  GURL url("https://www.chromium.org");
-  AddOptimizationGuideHint(url);
-
-  auto navigation_context = std::make_unique<web::FakeNavigationContext>();
-  navigation_context->SetUrl(url);
-  navigation_context->SetHasCommitted(true);
-  tab_helper_->DidFinishNavigation(web_state_.get(), navigation_context.get());
-  EXPECT_OCMOCK_VERIFY(mock_gemini_handler_);
-}
-
-TEST_F(GeminiTabHelperTest, TestDidStartNavigation_ShowsPromoPrefs) {
-  feature_list_.InitWithFeatures(
-      /*enabled_features=*/{kPageActionMenu, kGeminiNavigationPromo,
-                            feature_engagement::
-                                kIPHiOSGeminiFullscreenPromoFeature},
-      /*disabled_features=*/{});
-
-  OCMExpect([mock_gemini_handler_ showGeminiPromoIfPageIsEligible]);
-
-  feature_engagement::Tracker* tracker = InitializeTracker();
-
-  // Set prefs to a state where the promo should be shown.
-  profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, false);
-  profile_->GetPrefs()->SetInteger(prefs::kIOSBWGPromoImpressionCount, 0);
-
-  // Make first run not recent.
-  SimulateFirstRunRecency(tracker, 2);
-
-  GURL url("https://www.chromium.org");
-  AddOptimizationGuideHint(url);
-
-  auto navigation_context = std::make_unique<web::FakeNavigationContext>();
-  navigation_context->SetUrl(url);
-  navigation_context->SetHasCommitted(true);
-  tab_helper_->DidFinishNavigation(web_state_.get(), navigation_context.get());
-  EXPECT_OCMOCK_VERIFY(mock_gemini_handler_);
-}
-
-TEST_F(GeminiTabHelperTest, TestDidStartNavigation_DoesNotShowPromoPrefs) {
-  feature_list_.InitWithFeatures(
-      /*enabled_features=*/{kPageActionMenu, kGeminiNavigationPromo},
-      /*disabled_features=*/{});
-
-  OCMReject([mock_gemini_handler_ showGeminiPromoIfPageIsEligible]);
-
-  feature_engagement::Tracker* tracker = InitializeTracker();
-
-  // Set prefs to a state where the promo should not be shown.
-  profile_->GetPrefs()->SetBoolean(prefs::kIOSBwgConsent, true);
-  profile_->GetPrefs()->SetInteger(prefs::kIOSBWGPromoImpressionCount, 0);
-
-  // Make first run not recent.
-  SimulateFirstRunRecency(tracker, 2);
-
-  GURL url("https://www.chromium.org");
-  AddOptimizationGuideHint(url);
-
-  auto navigation_context = std::make_unique<web::FakeNavigationContext>();
-  navigation_context->SetUrl(url);
-  navigation_context->SetHasCommitted(true);
-  tab_helper_->DidFinishNavigation(web_state_.get(), navigation_context.get());
-  EXPECT_OCMOCK_VERIFY(mock_gemini_handler_);
 }
 
 TEST_F(GeminiTabHelperTest, WebStateDestroyed) {
@@ -662,6 +507,31 @@ TEST_F(GeminiTabHelperTest, TestGeneratePageContext) {
   EXPECT_TRUE(fakeWrapper.populateCalled);
 }
 
+// Test that PDF extraction is triggered for PDFs when the feature is enabled.
+TEST_F(GeminiTabHelperTest, TestGeneratePageContext_Pdf) {
+  feature_list_.InitWithFeatures(/*enabled_features=*/{kPageContextPdf},
+                                 /*disabled_features=*/{});
+  web_state_->SetCurrentURL(GURL("https://example.com/test.pdf"));
+  web_state_->SetContentsMimeType("application/pdf");
+
+  id mockWrapperClass = OCMClassMock([PageContextWrapper class]);
+  FakePageContextWrapper* fakeWrapper =
+      [[FakePageContextWrapper alloc] initWithWebState:web_state_.get()
+                                    completionCallback:base::DoNothing()];
+  OCMStub([mockWrapperClass alloc]).andReturn(fakeWrapper);
+
+  base::RunLoop run_loop;
+  tab_helper_->GeneratePageContext(
+      base::BindRepeating([](base::RunLoop* run_loop,
+                             GeminiPageContext* response) { run_loop->Quit(); },
+                          &run_loop));
+
+  EXPECT_FALSE(fakeWrapper.shouldGetAnnotatedPageContent);
+  EXPECT_TRUE(fakeWrapper.shouldGetFullPagePDF);
+  EXPECT_TRUE(fakeWrapper.shouldGetSnapshot);
+  EXPECT_TRUE(fakeWrapper.populateCalled);
+}
+
 TEST_F(GeminiTabHelperTest, TestGeneratePageContext_WaitsForLoad) {
   web_state_->SetCurrentURL(GURL("https://example.com"));
   web_state_->SetContentsMimeType("text/html");
@@ -693,7 +563,7 @@ TEST_F(
   feature_engagement::test::ScopedIphFeatureList iph_feature_list;
   iph_feature_list.InitAndEnableFeatures(
       {feature_engagement::kIPHiOSGeminiImageRemixFeature, kPageActionMenu,
-       kGeminiImageRemixTool, kZeroStateSuggestions});
+       kZeroStateSuggestions});
 
   web_state_ = std::make_unique<web::FakeWebState>();
   web_state_->SetBrowserState(profile_.get());
@@ -890,10 +760,10 @@ TEST_F(GeminiTabHelperTest,
   EXPECT_TRUE(tab_helper_->IsGeminiAvailableForWebState());
 }
 
-// Tests that Gemini is not available for a web state when the URL is a PDF and
-// the AllPages flag is disabled.
-TEST_F(GeminiTabHelperTest,
-       IsGeminiAvailableForWebState_WhenUrlIsPdf_AllPagesDisabled) {
+// Tests that Gemini is available for a web state when the URL is a PDF.
+TEST_F(GeminiTabHelperTest, IsGeminiAvailableForWebState_WhenUrlIsPdf) {
+  feature_list_.InitWithFeatures(/*enabled_features=*/{kPageContextPdf},
+                                 /*disabled_features=*/{});
   web_state_ = std::make_unique<web::FakeWebState>();
   web_state_->SetBrowserState(profile_.get());
   web_state_->WasShown();
@@ -901,7 +771,7 @@ TEST_F(GeminiTabHelperTest,
   web_state_->SetContentsMimeType("application/pdf");
   GeminiTabHelper::CreateForWebState(web_state_.get());
   tab_helper_ = GeminiTabHelper::FromWebState(web_state_.get());
-  EXPECT_FALSE(tab_helper_->IsGeminiAvailableForWebState());
+  EXPECT_TRUE(tab_helper_->IsGeminiAvailableForWebState());
 }
 
 // Tests that Gemini is available for a web state when the URL is a PDF and
@@ -909,7 +779,7 @@ TEST_F(GeminiTabHelperTest,
 TEST_F(GeminiTabHelperTest,
        IsGeminiAvailableForWebState_WhenUrlIsPdf_AllPagesEnabled) {
   feature_list_.InitWithFeatures(
-      /*enabled_features=*/{kPageActionMenu},
+      /*enabled_features=*/{kPageActionMenu, kPageContextPdf},
       /*disabled_features=*/{});
   web_state_ = std::make_unique<web::FakeWebState>();
   web_state_->SetBrowserState(profile_.get());
@@ -983,7 +853,7 @@ TEST_F(GeminiTabHelperTest, IsGeminiAvailableForWebState_Copresence) {
 TEST_F(GeminiTabHelperTest,
        IsGeminiAvailableForWebState_WhenUrlIsNtp_ChromeNextIaEnabled) {
   feature_list_.InitWithFeatures(
-      /*enabled_features=*/{kChromeNextIa, kPageActionMenu, kComposeboxIpad},
+      /*enabled_features=*/{kChromeNextIa, kPageActionMenu},
       /*disabled_features=*/{});
 
   web_state_->SetBrowserState(profile_.get());
@@ -1024,6 +894,8 @@ TEST_F(GeminiTabHelperTest, GetCurrentPageType_ChromeInternal) {
 
 // Tests that `GetCurrentPageType` correctly categorizes PDF documents.
 TEST_F(GeminiTabHelperTest, GetCurrentPageType_Pdf) {
+  feature_list_.InitWithFeatures(/*enabled_features=*/{kPageContextPdf},
+                                 /*disabled_features=*/{});
   web_state_->SetCurrentURL(GURL("https://www.example.com/test.pdf"));
   web_state_->SetContentsMimeType("application/pdf");
   EXPECT_EQ(tab_helper_->GetCurrentPageType(),

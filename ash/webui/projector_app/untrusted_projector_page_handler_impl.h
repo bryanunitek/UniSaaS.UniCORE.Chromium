@@ -12,12 +12,21 @@
 #include "base/files/safe_base_name.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "url/gurl.h"
+
+namespace network::mojom {
+class URLLoaderFactory;
+}  // namespace network::mojom
+
+namespace signin {
+class IdentityManager;
+}  // namespace signin
 
 namespace ash {
 
@@ -32,14 +41,18 @@ class UntrustedProjectorPageHandlerImpl
           receiver,
       mojo::PendingRemote<projector::mojom::UntrustedProjectorPage>
           projector_remote,
-      PrefService* pref_service);
+      PrefService* pref_service,
+      signin::IdentityManager* identity_manager,
+      network::mojom::URLLoaderFactory* url_loader_factory,
+      const AccountId& account_id = EmptyAccountId());
   UntrustedProjectorPageHandlerImpl(const UntrustedProjectorPageHandlerImpl&) =
       delete;
   UntrustedProjectorPageHandlerImpl& operator=(
       const UntrustedProjectorPageHandlerImpl&) = delete;
   ~UntrustedProjectorPageHandlerImpl() override;
 
-  // ProjectorAppClient:Observer:
+  // ProjectorAppClient::Observer:
+  const AccountId& GetAccountId() const override;
   void OnNewScreencastPreconditionChanged(
       const NewScreencastPrecondition& precondition) override;
   void OnSodaProgress(int percentage) override;
@@ -92,8 +105,12 @@ class UntrustedProjectorPageHandlerImpl
   mojo::Receiver<projector::mojom::UntrustedProjectorPageHandler> receiver_;
   mojo::Remote<projector::mojom::UntrustedProjectorPage> projector_remote_;
 
-  // Primary user pref service.
+  // The pref service for the profile that owns the WebUI.
   const raw_ptr<PrefService> pref_service_;
+  // The identity manager for the profile that owns the WebUI.
+  const raw_ptr<signin::IdentityManager> identity_manager_;
+  // The account that owns the WebUI.
+  const AccountId account_id_;
   ProjectorXhrSender xhr_sender_;
 
   base::WeakPtrFactory<UntrustedProjectorPageHandlerImpl> weak_ptr_factory_{

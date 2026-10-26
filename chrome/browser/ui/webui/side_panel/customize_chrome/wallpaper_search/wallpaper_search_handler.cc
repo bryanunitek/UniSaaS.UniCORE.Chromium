@@ -32,7 +32,6 @@
 #include "chrome/browser/search/background/wallpaper_search/wallpaper_search_background_manager.h"
 #include "chrome/browser/search/background/wallpaper_search/wallpaper_search_data.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
@@ -58,6 +57,7 @@
 #include "components/optimization_guide/proto/model_quality_service.pb.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/search/ntp_features.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -68,6 +68,8 @@
 #include "skia/ext/skia_utils_base.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image.h"
@@ -559,7 +561,7 @@ void WallpaperSearchHandler::OpenHelpArticle() {
                                  GURL(chrome::kWallpaperSearchLearnMorePageURL),
                                  ui::PAGE_TRANSITION_LINK);
   navigate_params.window_action = NavigateParams::WindowAction::kShowWindow;
-  navigate_params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  navigate_params.disposition = WindowOpenDisposition::kNewForegroundTab;
   Navigate(&navigate_params);
 }
 

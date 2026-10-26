@@ -8,8 +8,9 @@
 #include "base/callback_list.h"
 #include "base/time/time.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor/layer_not_drawn.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
@@ -19,10 +20,6 @@
 #include "ui/views/animation/ink_drop_ripple.h"
 #include "ui/views/animation/ink_drop_state.h"
 #include "ui/views/views_export.h"
-
-namespace ui {
-class Layer;
-}  // namespace ui
 
 namespace views {
 class CircleLayerDelegate;
@@ -188,7 +185,7 @@ class VIEWS_EXPORT FloodFillInkDropRipple : public InkDropRipple {
   // The root layer that parents the animating layer. The root layer is used to
   // manipulate opacity and clipping bounds, and it child is used to manipulate
   // the different shape of the ink drop.
-  ui::Layer root_layer_;
+  ui::LayerNotDrawn root_layer_;
 
   // Sequence scheduled callback subscription for the root layer.
   base::CallbackListSubscription root_callback_subscription_;
@@ -198,7 +195,7 @@ class VIEWS_EXPORT FloodFillInkDropRipple : public InkDropRipple {
 
   // Child ui::Layer of |root_layer_|. Used to  manipulate the different size
   // and shape of the ink drop.
-  ui::Layer painted_layer_;
+  ui::LayerTextured painted_layer_;
 
   // Sequence scheduled callback subscriptions for the painted layer.
   base::CallbackListSubscription painted_layer_callback_subscription_;

@@ -32,10 +32,10 @@ import org.chromium.chrome.browser.customtabs.content.TabObserverRegistrar;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preloading.PreloadingDataBridge;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.RedirectHandlerTabHelper;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.content_public.browser.LoadUrlParams;
@@ -60,13 +60,13 @@ public class HiddenTabHolder {
     /** Holds the parameters for the current hidden tab speculation. */
     @VisibleForTesting
     static final class SpeculationParams {
-        public final @Nullable SessionHolder<?> session;
+        public final @Nullable SessionHolder session;
         public final HiddenTab hiddenTab;
         public final String referrer;
         public final boolean isEarlyNav;
 
         private SpeculationParams(
-                @Nullable SessionHolder<?> session,
+                @Nullable SessionHolder session,
                 @Nullable String url,
                 Tab tab,
                 String referrer,
@@ -108,7 +108,7 @@ public class HiddenTabHolder {
         }
     }
 
-    private class HiddenTabObserver extends EmptyTabObserver {
+    private class HiddenTabObserver implements TabObserver {
         @Override
         public void onCrash(Tab tab) {
             if (mSpeculation == null || mSpeculation.hiddenTab.tab != tab) return;
@@ -139,7 +139,7 @@ public class HiddenTabHolder {
      */
     void launchUrlInHiddenTab(
             Callback<Tab> tabCreatedCallback,
-            SessionHolder<?> session,
+            SessionHolder session,
             Profile profile,
             ClientManager clientManager,
             String url,
@@ -229,7 +229,7 @@ public class HiddenTabHolder {
      * @return The hidden tab, or null.
      */
     @Nullable HiddenTab takeHiddenTab(
-            @Nullable SessionHolder<?> session,
+            @Nullable SessionHolder session,
             boolean ignoreFragments,
             String url,
             BrowserServicesIntentDataProvider intentDataProvider) {
@@ -264,7 +264,7 @@ public class HiddenTabHolder {
     }
 
     /** Cancels the speculation for a given session, or any session if null. */
-    void destroyHiddenTab(@Nullable SessionHolder<?> session) {
+    void destroyHiddenTab(@Nullable SessionHolder session) {
         if (mSpeculation == null) return;
         if (session != null && !session.equals(mSpeculation.session)) return;
         if (mSpeculation.isEarlyNav) return;
@@ -320,7 +320,7 @@ public class HiddenTabHolder {
         if (referrer == null) referrer = "";
 
         TabObserverRegistrar registrar = new TabObserverRegistrar();
-        SessionHolder<?> token = SessionHolder.getSessionHolderFromIntent(intent);
+        SessionHolder token = SessionHolder.getSessionHolderFromIntent(intent);
         CustomTabObserver customTabObserver =
                 new CustomTabObserver(/* openedByChrome= */ false, token);
         CustomTabNavigationEventObserver customTabNavigationEventObserver =

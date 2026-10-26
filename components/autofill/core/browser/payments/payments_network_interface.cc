@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
@@ -34,7 +35,9 @@
 #include "components/autofill/core/browser/payments/payments_requests/get_details_for_update_bnpl_payment_instrument_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/get_iban_upload_details_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/get_unmask_details_request.h"
+#include "components/autofill/core/browser/payments/payments_requests/get_wallet_reminder_notice_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/opt_change_request.h"
+#include "components/autofill/core/browser/payments/payments_requests/record_legal_reminder_acknowledgment_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/select_challenge_option_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/unmask_card_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/unmask_iban_request.h"
@@ -42,6 +45,7 @@
 #include "components/autofill/core/browser/payments/payments_requests/update_virtual_card_enrollment_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/upload_card_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/upload_iban_request.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace autofill::payments {
@@ -64,8 +68,14 @@ PaymentsNetworkInterface::PaymentsNetworkInterface(
 PaymentsNetworkInterface::~PaymentsNetworkInterface() = default;
 
 void PaymentsNetworkInterface::Prepare() {
-  if (access_token_.empty()) {
-    StartTokenFetch(false);
+  // Delegate token caching to `IdentityManager` rather than caching
+  // `access_token_` here. Although warming the cache has value, pre-fetching
+  // adds complexity for the minor cost of `IssueRequest()` waiting a few ms
+  // if `IdentityManager` needs a network call for a missing or stale token.
+  if (base::FeatureList::IsEnabled(features::kAutofillEnableOAuth2TokenFix)) {
+    return;
+  } else if (access_token_.empty()) {
+    StartTokenFetch(/*invalidate_old=*/false);
   }
 }
 
@@ -263,6 +273,22 @@ void PaymentsNetworkInterface::UpdateBnplPaymentInstrument(
       /*full_sync_enabled=*/
       account_info_getter_->IsSyncFeatureEnabledForPaymentsServerMetrics(),
       std::move(callback)));
+}
+
+void PaymentsNetworkInterface::GetWalletReminderNotice(
+    const GetWalletReminderNoticeRequestDetails& request_details,
+    base::OnceCallback<void(PaymentsRpcResult,
+                            const GetWalletReminderNoticeResponseDetails&)>
+        callback) {
+  IssueRequest(std::make_unique<GetWalletReminderNoticeRequest>(
+      request_details, std::move(callback)));
+}
+
+void PaymentsNetworkInterface::RecordLegalReminderAcknowledgment(
+    const RecordLegalReminderAcknowledgmentRequestDetails& request_details,
+    base::OnceCallback<void(PaymentsRpcResult)> callback) {
+  IssueRequest(std::make_unique<RecordLegalReminderAcknowledgmentRequest>(
+      request_details, std::move(callback)));
 }
 
 }  // namespace autofill::payments

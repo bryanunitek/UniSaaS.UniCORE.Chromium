@@ -43,6 +43,8 @@ import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.compositor.layouts.Layout.Orientation;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeControllerImpl;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
@@ -81,7 +83,7 @@ public class EdgeToEdgeInstrumentationTest {
             new RenderTestRule.Builder()
                     .setBugComponent(Component.UI_BROWSER_MOBILE_EDGE_TO_EDGE)
                     .setCorpus(Corpus.ANDROID_RENDER_TESTS_PUBLIC)
-                    .setRevision(0)
+                    .setRevision(1)
                     .build();
 
     private static final String TEST_AUTO_PAGE =
@@ -126,10 +128,11 @@ public class EdgeToEdgeInstrumentationTest {
 
     @After
     public void tearDown() {
-        if (mActivity.getResources().getConfiguration().orientation
-                != Configuration.ORIENTATION_PORTRAIT) {
-            rotate(Configuration.ORIENTATION_PORTRAIT);
-        }
+        ActivityTestUtils.clearActivityOrientation(mActivity);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    NtpCustomizationConfigManager.getInstance().resetForTesting();
+                });
     }
 
     /** Puts the screen ToEdge by loading a page that has the appropriate HTML. */
@@ -362,17 +365,27 @@ public class EdgeToEdgeInstrumentationTest {
     @DisableFeatures(ChromeFeatureList.HOME_BUTTON_REMOVAL)
     @CommandLineFlags.Add(UiSwitches.ENABLE_EDGE_TO_EDGE_DEBUG_LAYERS)
     public void testPadWithEdgeToEdgeLayout() throws IOException {
-        testPadWithEdgeToEdgeLayoutImpl("e2e-everywhere-no-bottom-padding");
+        testPadWithEdgeToEdgeLayoutImpl("e2e-everywhere-no-bottom-padding_v1");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    @DisableFeatures({ChromeFeatureList.ANDROID_BOTTOM_BAR})
+    @CommandLineFlags.Add(UiSwitches.ENABLE_EDGE_TO_EDGE_DEBUG_LAYERS)
+    public void testPadWithEdgeToEdgeLayout_NoBottomBar() throws IOException {
+        testPadWithEdgeToEdgeLayoutImpl("e2e-everywhere-no-bottom-padding-no-bottom-bar");
     }
 
     @Test
     @MediumTest
     @Feature({"RenderTest"})
     @EnableFeatures({ChromeFeatureList.HOME_BUTTON_REMOVAL + ":keep_home_button_on_ntp/true"})
+    @DisableFeatures({ChromeFeatureList.ANDROID_BOTTOM_BAR})
     @CommandLineFlags.Add(UiSwitches.ENABLE_EDGE_TO_EDGE_DEBUG_LAYERS)
     public void testPadWithEdgeToEdgeLayout_withHomeButtonRemovalKeepOnNtp() throws IOException {
         testPadWithEdgeToEdgeLayoutImpl(
-                "e2e-everywhere-no-bottom-padding-with-home-button-removal");
+                "e2e-everywhere-no-bottom-padding-with-home-button-removal_v1");
     }
 
     private void testPadWithEdgeToEdgeLayoutImpl(String goldenId) throws IOException {
@@ -418,5 +431,40 @@ public class EdgeToEdgeInstrumentationTest {
                                         .getEdgeToEdgeManager()
                                         .getEdgeToEdgeSystemBarColorHelper()
                                         .getNavigationBarColor());
+    }
+
+    /**
+     * Verifies that when NEW_TAB_PAGE_CUSTOMIZATION_V2 and EDGE_TO_EDGE_TOP_INSET are enabled,
+     * navigating from an NTP with a customized background theme (where top edge-to-edge is active)
+     * to a standard web page properly transitions isDrawingToTopEdge to false without displacing
+     * browser controls.
+     */
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.EDGE_TO_EDGE_TOP_INSET)
+    public void testTopEdgeToEdge_restoresAfterNtpNavigation() {
+        try {
+            ThreadUtils.runOnUiThreadBlocking(
+                    () -> {
+                        NtpCustomizationConfigManager.getInstance()
+                                .setBackgroundTypeForTesting(NtpBackgroundType.CHROME_COLOR);
+                    });
+            mActivityTestRule.loadUrl("chrome-native://newtab/");
+            CriteriaHelper.pollUiThread(
+                    () -> {
+                        Criteria.checkThat(mEdgeToEdgeController.isDrawingToTopEdge(), is(true));
+                    });
+
+            mActivityTestRule.loadUrl(mTestServer.getURL(TEST_AUTO_PAGE));
+            CriteriaHelper.pollUiThread(
+                    () -> {
+                        Criteria.checkThat(mEdgeToEdgeController.isDrawingToTopEdge(), is(false));
+                    });
+        } finally {
+            ThreadUtils.runOnUiThreadBlocking(
+                    () -> {
+                        NtpCustomizationConfigManager.getInstance().resetForTesting();
+                    });
+        }
     }
 }

@@ -30,7 +30,6 @@ class WebAppMenuButton : public AppMenuButton,
   METADATA_HEADER(WebAppMenuButton, AppMenuButton)
 
  public:
-  static int GetMenuButtonSizeForBrowser(Browser* browser);
   explicit WebAppMenuButton(BrowserView* browser_view);
   WebAppMenuButton(const WebAppMenuButton&) = delete;
   WebAppMenuButton& operator=(const WebAppMenuButton&) = delete;
@@ -54,10 +53,8 @@ class WebAppMenuButton : public AppMenuButton,
   // alongside the three-dot icon. Only exposed for tests.
   void UpdateStateForTesting();
 
-  // Shows the app menu. |run_types| denotes the MenuRunner::RunTypes associated
-  // with the menu.
-  using AppMenuButton::ShowMenu;
-  void ShowMenu(int run_types);
+  // AppMenuControl:
+  void ShowMenuWithFlags(int run_types) override;
 
   // Safely waits for the label text to be updated, as per the contracts of
   // `base::CallbackListSubscription`. Currently only used by tests, but can be

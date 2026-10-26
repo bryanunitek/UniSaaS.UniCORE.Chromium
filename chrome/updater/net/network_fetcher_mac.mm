@@ -3,8 +3,9 @@
 // found in the LICENSE file.
 
 #import <Foundation/Foundation.h>
+#include <stddef.h>
+#include <stdint.h>
 
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -29,7 +30,6 @@
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
@@ -597,14 +597,18 @@ class DownloadStreamReader : public mojo::DataPipeDrainer::Client {
 
   void OnDataComplete() override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    drainer_.reset();
+    // Defer resetting the drainer to avoid UAF in DataPipeDrainer::ReadData().
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::DoNothingWithBoundArgs(std::move(drainer_)));
     MaybeSignalComplete();
   }
 
  private:
   void ClosePipeAndSignalMojoError() {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    drainer_.reset();
+    // Defer resetting the drainer to avoid UAF in DataPipeDrainer::ReadData().
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::DoNothingWithBoundArgs(std::move(drainer_)));
     file_.Close();
     if (completion_callback_) {
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(

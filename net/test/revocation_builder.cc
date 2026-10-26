@@ -10,7 +10,10 @@
 #include "base/functional/callback.h"
 #include "base/hash/sha1.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/test/bind.h"
+#include "crypto/evp.h"
+#include "crypto/openssl_util.h"
 #include "net/cert/asn1_util.h"
 #include "net/cert/time_conversions.h"
 #include "net/cert/x509_util.h"
@@ -63,28 +66,19 @@ bool CBBAddGeneralizedTime(CBB* cbb, base::Time time) {
 
 // Finalizes the CBB to a std::string.
 std::string FinishCBB(CBB* cbb) {
-  size_t cbb_len;
-  uint8_t* cbb_bytes;
-
-  if (!CBB_finish(cbb, &cbb_bytes, &cbb_len)) {
-    ADD_FAILURE() << "CBB_finish() failed";
+  if (!CBB_flush(cbb)) {
+    ADD_FAILURE() << "CBB_flush() failed";
     return std::string();
   }
-
-  bssl::UniquePtr<uint8_t> delete_bytes(cbb_bytes);
-  return std::string(reinterpret_cast<char*>(cbb_bytes), cbb_len);
+  return std::string(base::as_string_view(crypto::CbbAsSpan(cbb)));
 }
 
 std::string PKeyToSPK(const EVP_PKEY* pkey) {
-  bssl::ScopedCBB cbb;
-  if (!CBB_init(cbb.get(), 64) || !EVP_marshal_public_key(cbb.get(), pkey)) {
-    ADD_FAILURE();
-    return std::string();
-  }
-  std::string spki = FinishCBB(cbb.get());
+  std::vector<uint8_t> spki = crypto::evp::PublicKeyToBytes(pkey);
 
   std::string_view spk;
-  if (!asn1::ExtractSubjectPublicKeyFromSPKI(spki, &spk)) {
+  if (!asn1::ExtractSubjectPublicKeyFromSPKI(base::as_string_view(spki),
+                                             &spk)) {
     ADD_FAILURE();
     return std::string();
   }
@@ -275,7 +269,8 @@ std::string BuildOCSPResponse(
     const std::string& responder_subject,
     EVP_PKEY* responder_key,
     base::Time produced_at,
-    const std::vector<OCSPBuilderSingleResponse>& responses) {
+    const std::vector<OCSPBuilderSingleResponse>& responses,
+    std::optional<bssl::SignatureAlgorithm> signature_algorithm) {
   std::string responder_name_hash = base::SHA1HashString(responder_subject);
   std::string responder_key_hash =
       base::SHA1HashString(PKeyToSPK(responder_key));
@@ -320,8 +315,8 @@ std::string BuildOCSPResponse(
 
   // responseExtensions not currently supported.
 
-  return BuildOCSPResponseWithResponseData(responder_key,
-                                           FinishCBB(tbs_cbb.get()));
+  return BuildOCSPResponseWithResponseData(
+      responder_key, FinishCBB(tbs_cbb.get()), signature_algorithm);
 }
 
 std::string BuildOCSPResponseWithResponseData(

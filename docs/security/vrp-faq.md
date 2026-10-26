@@ -10,6 +10,7 @@ Please report all Chromium security bugs in the tracker using
 
 Please check here for any news and updates about the Chrome VRP.
 
+* October 2026: Updates for external fuzzer contribution.
 * April 2026 : Updates for new reward structure.
 * March 2026 : Updated formatting criteria & added self-service hotlists.
 
@@ -66,8 +67,11 @@ reports:
   * Your PoC should be constructed to reproduce locally when at all possible.
 * Do *not* provide links to websites (public or unlisted) as PoCs.
   * The PoC should ALWAYS be a file directly attached to the report.
-* Example servers should be written only in Python, other languages may lead
-  to your report being rejected.
+* Example servers should be written only in Python (other languages will lead to
+  your report being rejected). Please name your server `server.py` so that it
+  can be run without arguments (`python3 server.py`) and serves `poc.html` at
+  `http://localhost:8000/poc.html` (with `/gen/` resolving to the build's
+  `gen` directory if MojoJS bindings are used).
 
 ### Patches to simulate a compromised renderer
 
@@ -137,13 +141,16 @@ reports:
   * For a full reward,  please consider performing a full bisection, detailing
     the commit that introduced the issue and / or all the active release
     channels impacted by the bug.
+* Focus your report: the robots which perform our initial triage work best when
+  provided with a concise report that clearly describes a security bug.
 * Empty initial comments will lead to your report being closed and may lead to
   your account being suspended. Do not create placeholder issues.
 
 ### Demonstrating controlled read or write
 
 Mojom interfaces to demonstrate controlled reads or controlled writes in
-privileged processes are available in [vrp_flags.mojom](../../components/vrp_flags/vrp_flags.mojom).
+privileged processes or cross-site victim renderers are available in
+[vrp_flags.mojom](../../components/vrp_flags/vrp_flags.mojom).
 
 To prove a controlled read or write you must attach a small json file
 `vrp-flag.json` to your report:
@@ -153,7 +160,7 @@ To prove a controlled read or write you must attach a small json file
   "flag": "read",
   "params": {
     "process": "browser",
-    "poc": "poc-read.html",
+    "poc": "poc.html",
     "chrome_version": "123.6789.0.1",
     "os": "win",
     "arch": "x64",
@@ -162,16 +169,20 @@ To prove a controlled read or write you must attach a small json file
 }
 ```
 
-* attach a minimized `poc.html` that triggers the bug under ASAN
-* attach an additional `poc-read.html` or `poc-write.html`
+* attach a minimized `poc-asan.html` that triggers the bug under ASAN
+* attach an additional `poc.html` to demonstrate controlled read or write
 * provide additional command line arguments needed to run the poc
 * provide the full version of the released version of Chrome the poc targets
 * provide the operating system the poc targets
-* provide the process the poc targets
+* provide the process the poc targets (`browser`, `network`, `gpu`, or
+  `renderer`)
 
-`poc-read.html` or `poc-write.html` will be loaded from a local server, with
-mojojs files available under `/gen/`. If your poc reliably hits the VRP flag,
-your report will be eligible for the controlled read or controlled write reward.
+`poc.html` will be loaded from a local server served on `localhost:8000`, with
+mojojs files available under `/gen/`. For cross-renderer exploits, `poc.html`
+will also be loaded in the victim process with the origin
+`victim.test:<port_number>`, where the attacker can request an arbitrary
+number of port numbers. If your poc reliably hits the VRP flag, your report
+will be eligible for the controlled read or controlled write reward.
 
 If the controlled read or write is not reproducible or not reliable, but the
 minimized poc does trigger an ASAN report, your issue will receive the standard
@@ -196,6 +207,32 @@ enabled):
 Non-standard, debugging or unsafe command line flags and features are not
 accepted.
 
+### Reporting full-chains
+
+Please report each individual bug in the chain as distinct bugs including the
+information we need to reproduce each bug in isolation. Once you have done so,
+create an additional vulnerability report that describes how the components
+chain together and refers to each bug for its details. Attach a video or logs
+showing the chain, and the command line, Chrome version, Operating System and
+hardware that you've used to demonstrate the full-chain exploit. Finally, add
+the
+[Security-Request-Exploit-Assessment](https://issues.chromium.org/hotlists/8186895)
+hotlist to the issue (you can do this after it has been filed).
+
+### Contributing Fuzzers
+
+We welcome contributions of blackbox fuzzers with a proven track record, and
+will run them on our clusterfuzz infrastructure so that reports are created
+automatically. To submit a fuzzer please first submit three valid security
+vulnerabilities using our normal processes. Once three vulnerabilities have
+been confirmed, and did not dupe against our internal fuzzers or AI tools,
+you are welcome to submit your fuzzer. Reach out to fuzzing@chromium.org
+with details of your fuzzer and links to the previously submitted
+vulnerabilities.
+
+All issues reported by hosted fuzzers are eligible for baseline rewards
+and a fuzzer bonus, as outlined in our [VRP Rules page](https://bughunters.google.com/about/rules/chrome-friends/chrome-vulnerability-reward-program-rules#fuzzer-bonus).
+
 ## Frequently Asked Questions (FAQ)
 
 ### Scope / Reward Eligibility
@@ -218,6 +255,31 @@ This list is not exhaustive but should help reporters focus on issues in Chrome:
     debugging only.
 * *--single-process* mode is purely for test and debugging and can lead to
     races and ownership issues that do not manifest in multi-process mode.
+
+#### My report was closed by a robot?
+
+Incoming security reports are automatically checked against our threat model,
+FAQs and reporting standards. Reports may be closed as invalid for several
+reasons and the robot is designed to limit disclosure of its reasoning when
+closing issues.
+
+The following can lead our robots to reject reports:
+
+* Describing both a security problem and a non-problem (e.g. reporting both a
+  UAF and a safe CHECK crash):
+  * Remove discussion of the safe crash and focus on the UAF, then resubmit.
+* Long reports with theoretical impacts:
+  * Remove unproven discussion and resubmit a brief, concise report.
+* Reports of memory safety issues lacking a full symbolized ASAN stack:
+  * Attach a symbolized ASAN stack showing the issue affects Chrome and
+    resubmit.
+  * Prove the issue using the `--vrp-flags` mode and resubmit.
+* Reports that use unittests or browser_tests to demonstrate an issue:
+  * Prove that the issue affects Chrome by using a poc.html or poc.js.
+
+We generally do not respond to closed security issues but you are encouraged
+to resubmit your report after making it more concise, clearly describing the
+security problem, and adding necessary pocs and traces as attachments.
 
 #### How do I know if my bug report is possibly eligible for a VRP reward?
 
@@ -309,8 +371,7 @@ This list is not exhaustive but should help reporters focus on issues in Chrome:
 * The exploit must work against a released Chrome build on the latest operating
   system versions and architectures, and prove code execution by executing a
   command shell with the credentials of the user running Chrome.
-* r/w and arbitrary read must work using Chrome in a special mode - details will
-  be released here soon.
+* r/w and arbitrary read must work using Chrome using `--vrp-flags` (see above).
 * If you have a proof to add to a bug after it has been rewarded, add the hotlist
   [Security-Request-Exploit-Assessment](https://issues.chromium.org/hotlists/8186895)
   (hotlist id:8186895) along with a poc and comment that demonstrates the proof.
@@ -368,6 +429,13 @@ This list is not exhaustive but should help reporters focus on issues in Chrome:
 * The CVE number will be updated directly on the report itself and listed in
   the Chrome Browser release notes for that Stable channel update.
 
+#### My bug got a CVE but I didn't get a reward?
+
+* Chrome sometimes issues a CVE then later reexamines a report and determines
+  that it does not have security impact. Chrome does not routinely revoke
+  CVEs when this happens, but does update the bug status to reflect our new
+  assessment.
+
 ### Disclosure / Report Visibility
 
 #### What if I disclose the bug publicly before you have fixed or disclosed it?
@@ -382,7 +450,7 @@ This list is not exhaustive but should help reporters focus on issues in Chrome:
 
 #### When will the bug I reported be publicly disclosed?
 
-* Most security bugs are automatically opened for public access 14 weeks after
+* Most security bugs are automatically opened for public access 30 days after
   the bug is closed as Fixed, meaning the fix commit is landed on Chromium main.
 * Our automation removes the view restrictions, opening the report for public
   visibility at that time.

@@ -11,11 +11,11 @@
 #include "gpu/command_buffer/client/shared_image_interface.h"
 #include "gpu/config/gpu_driver_bug_workarounds.h"
 #include "gpu/config/gpu_preferences.h"
+#include "media/base/decoder.h"
 #include "media/base/media_log.h"
 #include "media/base/media_switches.h"
 #include "media/base/media_util.h"
 #include "media/gpu/buildflags.h"
-#include "media/gpu/chromeos/dmabuf_video_frame_converter.h"
 #include "media/gpu/chromeos/frame_registry.h"
 #include "media/gpu/chromeos/mailbox_video_frame_converter.h"
 #include "media/gpu/chromeos/platform_video_frame_pool.h"
@@ -27,6 +27,11 @@
 #include "media/mojo/services/oop_video_decoder_service.h"
 #include "media/video/video_decode_accelerator.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+
+#if !(BUILDFLAG(USE_VAAPI) || BUILDFLAG(USE_V4L2_CODEC))
+#error OOPVideoDecoderFactoryService should only be built on platforms that
+#error support video decode acceleration through either VA-API or V4L2.
+#endif
 
 namespace media {
 
@@ -65,14 +70,7 @@ class MojoMediaClientImpl : public MojoMediaClient {
   VideoDecoderType GetDecoderImplementationType() final {
     // TODO(b/195769334): how can we keep this in sync with
     // VideoDecoderPipeline::GetDecoderType()?
-#if BUILDFLAG(USE_VAAPI)
-    return VideoDecoderType::kVaapi;
-#elif BUILDFLAG(USE_V4L2_CODEC)
-    return VideoDecoderType::kV4L2;
-#else
-#error OOPVideoDecoderFactoryService should only be built on platforms that
-#error support video decode acceleration through either VA-API or V4L2.
-#endif
+    return ActiveLinuxVideoDecoderType();
   }
   std::unique_ptr<VideoDecoder> CreateVideoDecoder(
       scoped_refptr<base::SequencedTaskRunner> task_runner,
@@ -95,9 +93,7 @@ class MojoMediaClientImpl : public MojoMediaClient {
     auto sii = shared_image_interface_ && !shared_image_interface_->IsLost()
                    ? shared_image_interface_
                    : nullptr;
-    auto converter = base::FeatureList::IsEnabled(kUseSharedImageInOOPVDProcess)
-                         ? MailboxVideoFrameConverter::Create(std::move(sii))
-                         : DmabufVideoFrameConverter::Create();
+    auto converter = MailboxVideoFrameConverter::Create(std::move(sii));
     return VideoDecoderPipeline::Create(
         gpu_driver_bug_workarounds_,
         /*client_task_runner=*/std::move(task_runner),
@@ -148,7 +144,7 @@ void OOPVideoDecoderFactoryService::BindReceiver(
   receiver_.set_disconnect_handler(std::move(disconnect_cb));
 }
 
-#if BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
+#if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
 void OOPVideoDecoderFactoryService::CreateVideoDecoderWithTracker(
     mojo::PendingReceiver<mojom::VideoDecoder> receiver,
     mojo::PendingRemote<mojom::VideoDecoderTracker> tracker) {
@@ -168,7 +164,7 @@ void OOPVideoDecoderFactoryService::CreateVideoDecoderWithTracker(
                           &cdm_service_context_),
                       std::move(receiver));
 }
-#endif  // BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
+#endif  // BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
 
 // The client of the OOPVideoDecoderFactoryService is the browser process which
 // is up the trust gradient. The browser process should never use this service

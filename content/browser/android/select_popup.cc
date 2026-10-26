@@ -14,6 +14,8 @@
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "content/public/android/content_jni_headers/SelectPopup_jni.h"
+#include "content/public/browser/content_browser_client.h"
+#include "content/public/common/content_client.h"
 
 using base::android::AttachCurrentThread;
 using base::android::JavaRef;
@@ -60,6 +62,7 @@ SelectPopup::~SelectPopup() {
 void SelectPopup::ShowMenu(
     mojo::PendingRemote<blink::mojom::PopupMenuClient> popup_client,
     const gfx::Rect& bounds,
+    double item_font_size,
     std::vector<blink::mojom::MenuItemPtr> items,
     int selected_item,
     bool multiple,
@@ -68,6 +71,11 @@ void SelectPopup::ShowMenu(
   ScopedJavaLocalRef<jobject> j_obj = java_obj_.get(env);
   if (j_obj.is_null())
     return;
+
+  if (!GetContentClient()->browser()->ShouldAllowSystemUiPopups(
+          web_contents_)) {
+    return;
+  }
 
   // Hide the popup menu if the mojo connection is still open.
   if (popup_client_)
@@ -118,13 +126,17 @@ void SelectPopup::ShowMenu(
   popup_client_.set_disconnect_handler(
       base::BindOnce(&SelectPopup::HideMenu, base::Unretained(this)));
 
-  // |bounds| is in physical pixels.
+  // |bounds| is in DIPs.
   gfx::RectF bounds_dip = gfx::RectF(bounds);
-  bounds_dip.Scale(1 / web_contents_->GetNativeView()->GetDipScale());
   view->SetAnchorRect(popup_view, bounds_dip);
-  Java_SelectPopup_show(
-      env, j_obj, popup_view, reinterpret_cast<int64_t>(popup_client_.get()),
-      items_array, enabled_array, multiple, selected_array, right_aligned);
+
+  float dip_scale = web_contents_->GetNativeView()->GetDipScale();
+  int item_height = std::round(bounds.height() * dip_scale);
+  double font_size_px = item_font_size * dip_scale;
+  Java_SelectPopup_show(env, j_obj, popup_view,
+                        reinterpret_cast<int64_t>(popup_client_.get()),
+                        items_array, enabled_array, multiple, selected_array,
+                        right_aligned, item_height, font_size_px);
 }
 
 void SelectPopup::HideMenu() {
@@ -141,7 +153,8 @@ void SelectPopup::SelectMenuItems(JNIEnv* env,
                                   const JavaRef<jintArray>& indices) {
   blink::mojom::PopupMenuClient* popup_client_raw_ptr =
       reinterpret_cast<blink::mojom::PopupMenuClient*>(selectPopupDelegate);
-  DCHECK(popup_client_raw_ptr && popup_client_.get() == popup_client_raw_ptr);
+  CHECK(popup_client_raw_ptr && popup_client_.get() == popup_client_raw_ptr,
+        base::NotFatalUntil::M159);
 
   if (indices.is_null()) {
     popup_client_->DidCancel();

@@ -15,6 +15,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/i18n/time_formatting.h"
+#include "base/i18n/timezone.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
@@ -103,8 +104,9 @@ bool IsPathReservedInternal(const base::FilePath& path, ReservationKey item) {
        iter != g_reservation_map->end(); ++iter) {
     if ((!item || iter->first != item) &&
         base::FilePath::CompareEqualIgnoreCase(iter->second.value(),
-                                               path.value()))
+                                               path.value())) {
       return true;
+    }
   }
   return false;
 }
@@ -160,15 +162,16 @@ bool CreateUniqueFilename(int max_path_component_length,
        uniquifier <= DownloadPathReservationTracker::kMaxUniqueFiles + 1;
        ++uniquifier) {
     // Append uniquifier.
-    std::string suffix =
-        (uniquifier > DownloadPathReservationTracker::kMaxUniqueFiles)
-            ? base::UnlocalizedTimeFormatWithPattern(
-                  download_start_time,
-                  // ISO8601-compliant local timestamp suffix that avoids
-                  // reserved characters that are forbidden on some OSes like
-                  // Windows.
-                  " - yyyy-MM-dd'T'HHmmss.SSS")
-            : base::StringPrintf(" (%d)", uniquifier);
+    std::string suffix;
+    if (uniquifier > DownloadPathReservationTracker::kMaxUniqueFiles) {
+      std::string formatted = base::TimeFormatAsIso8601WithTimeZone(
+          download_start_time, base::i18n::TimeZone::Default(),
+          /*include_offset_suffix=*/false);
+      std::erase(formatted, ':');
+      suffix = " - " + formatted;
+    } else {
+      suffix = base::StringPrintf(" (%d)", uniquifier);
+    }
 
     base::FilePath path_to_check(*path);
     // If the name length limit is available (max_length != -1), and the
@@ -260,8 +263,9 @@ PathValidationResult ValidatePathAndResolveConflicts(
     const CreateReservationInfo& info,
     base::FilePath* target_path) {
   // Enforce that the suggested path does not escape the default download
-  // directory via symlink/junction traversal.
+  // directory via symlink/junction traversal on desktop platforms.
   bool path_escaped = false;
+#if !BUILDFLAG(IS_ANDROID)
   base::FilePath containment_dir = info.containment_directory.empty()
                                        ? info.default_download_path
                                        : info.containment_directory;
@@ -282,6 +286,7 @@ PathValidationResult ValidatePathAndResolveConflicts(
       }
     }
   }
+#endif
 
   // Check writability of the suggested path. If we can't write to it, use
   // |default_download_path| if it is not empty or |fallback_directory|.
@@ -322,8 +327,10 @@ PathValidationResult ValidatePathAndResolveConflicts(
   // onto another file that differs only by case is not enough of a legitimate
   // edge case to justify determining the case sensitivity of the underlying
   // filesystem.
-  if (*target_path == info.source_path)
+  if (base::FilePath::CompareEqualIgnoreCase(target_path->value(),
+                                             info.source_path.value())) {
     return PathValidationResult::SAME_AS_SOURCE;
+  }
 
   if (!IsPathInUse(*target_path))
     return PathValidationResult::SUCCESS;
@@ -367,7 +374,11 @@ PathValidationResult CreateReservation(const CreateReservationInfo& info,
   if (DownloadCollectionBridge::ShouldPublishDownload(target_path)) {
     PathValidationResult result = PathValidationResult::SUCCESS;
     // Disallow downloading a file onto itself. Assume that downloading a file
-    if (target_path == info.source_path) {
+    // onto another file that differs only by case is not enough of a legitimate
+    // edge case to justify determining the case sensitivity of the underlying
+    // filesystem.
+    if (base::FilePath::CompareEqualIgnoreCase(target_path.value(),
+                                               info.source_path.value())) {
       result = PathValidationResult::SAME_AS_SOURCE;
     } else if (IsPathInUse(target_path)) {
       // If the download is written to a content URI, put file name in the

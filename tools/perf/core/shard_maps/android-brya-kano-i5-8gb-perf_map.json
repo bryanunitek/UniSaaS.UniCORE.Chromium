@@ -4,86 +4,25 @@
             "jetstream2": {
                 "abridged": false
             }
-        },
-        "crossbench": {
-            "loadline_tablet.crossbench": {
-                "crossbench_name": "loadline-tablet-fast",
-                "arguments": [
-                    "--debug",
-                    "--disable-field-trials"
-                ]
-            }
         }
     },
     "1": {
-        "crossbench": {
-            "loadline_tablet.crossbench": {
-                "crossbench_name": "loadline-tablet-fast",
-                "arguments": [
-                    "--debug",
-                    "--disable-field-trials"
-                ]
-            }
-        },
         "benchmarks": {}
     },
     "2": {
-        "crossbench": {
-            "loadline_tablet.crossbench": {
-                "crossbench_name": "loadline-tablet-fast",
-                "arguments": [
-                    "--debug",
-                    "--disable-field-trials"
-                ]
-            }
-        },
         "benchmarks": {}
     },
     "3": {
-        "crossbench": {
-            "loadline_tablet.crossbench": {
-                "crossbench_name": "loadline-tablet-fast",
-                "arguments": [
-                    "--debug",
-                    "--disable-field-trials"
-                ]
-            }
-        },
         "benchmarks": {}
     },
     "4": {
-        "crossbench": {
-            "loadline_tablet.crossbench": {
-                "crossbench_name": "loadline-tablet-fast",
-                "arguments": [
-                    "--debug",
-                    "--disable-field-trials"
-                ]
-            }
-        },
         "benchmarks": {}
     },
     "5": {
-        "crossbench": {
-            "loadline_tablet.crossbench": {
-                "crossbench_name": "loadline-tablet-fast",
-                "arguments": [
-                    "--debug",
-                    "--disable-field-trials"
-                ]
-            }
-        },
         "benchmarks": {}
     },
     "6": {
         "crossbench": {
-            "loadline_tablet.crossbench": {
-                "crossbench_name": "loadline-tablet-fast",
-                "arguments": [
-                    "--debug",
-                    "--disable-field-trials"
-                ]
-            },
             "motionmark1.3.crossbench": {
                 "crossbench_name": "motionmark_1.3",
                 "arguments": [
@@ -101,13 +40,6 @@
             }
         },
         "crossbench": {
-            "loadline_tablet.crossbench": {
-                "crossbench_name": "loadline-tablet-fast",
-                "arguments": [
-                    "--debug",
-                    "--disable-field-trials"
-                ]
-            },
             "speedometer3.crossbench": {
                 "crossbench_name": "speedometer_3",
                 "arguments": [
@@ -121,7 +53,7 @@
                 "arguments": [
                     "--web-tests-cuj",
                     "--debug",
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             }
         }
@@ -132,13 +64,13 @@
         "predicted_min_shard_index": 1,
         "predicted_max_shard_time": 3960,
         "predicted_max_shard_index": 6,
-        "shard #0": 3678.0,
+        "shard #0": 3686.0,
         "shard #1": 3600,
         "shard #2": 3600,
         "shard #3": 3600,
         "shard #4": 3600,
         "shard #5": 3600,
         "shard #6": 3960,
-        "shard #7": 3701.0
+        "shard #7": 3703.0
     }
 }

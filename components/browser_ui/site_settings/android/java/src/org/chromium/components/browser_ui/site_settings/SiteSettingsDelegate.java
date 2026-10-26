@@ -157,15 +157,6 @@ public interface SiteSettingsDelegate {
     void revokeFileSystemAccessGrant(String origin, String file);
 
     /**
-     * Displays a snackbar, informing the user about the Privacy Sandbox settings page, when the
-     * corresponding flag is enabled.
-     */
-    void maybeDisplayPrivacySandboxSnackbar();
-
-    /** Dismisses the Privacy Sandbox snackbar, if active. */
-    void dismissPrivacySandboxSnackbar();
-
-    /**
      * @return true if Related Website Sets data access is enabled.
      */
     boolean isRelatedWebsiteSetsDataAccessEnabled();
@@ -190,7 +181,7 @@ public interface SiteSettingsDelegate {
      * @param memberOrigin RWS member origin.
      * @return A string containing the owner hostname, null if it doesn't exist.
      */
-    String getRelatedWebsiteSetOwner(String memberOrigin);
+    @Nullable String getRelatedWebsiteSetOwner(String memberOrigin);
 
     /**
      * Returns whether the current implementation of the delegate is able to launch the Clear
@@ -223,11 +214,6 @@ public interface SiteSettingsDelegate {
      * @return whether the related website sets UI is enabled.
      */
     boolean isRelatedWebsiteSetsUiEnabled();
-
-    /**
-     * @return whether the settings containment feature is enabled.
-     */
-    boolean isSettingsContainmentEnabled();
 
     /** Enable/Disable unused site permission autorevocation. */
     void setPermissionAutorevocationEnabled(boolean isEnabled);

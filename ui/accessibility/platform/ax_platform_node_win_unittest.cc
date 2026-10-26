@@ -43,14 +43,11 @@ using base::win::ScopedVariant;
 
 namespace ui {
 
-const std::u16string AXPlatformNodeWinTest::kEmbeddedCharacterAsString = {
-    AXPlatformNodeBase::kEmbeddedCharacter};
-
 namespace {
 
 // Most IAccessible functions require a VARIANT set to CHILDID_SELF as
 // the first argument.
-ScopedVariant SELF(CHILDID_SELF);
+constexpr VARIANT SELF = {.vt = VT_I4, .lVal = CHILDID_SELF};
 
 // Calls `Release()` on each of the `count` interface pointers in `pointers`.
 void ReleasePointers(IUnknown** pointers, LONG count) {
@@ -463,7 +460,7 @@ AXPlatformNodeWinTest::GetSupportedPatternsFromNodeId(AXNodeID id) {
   ComPtr<IRawElementProviderSimple> raw_element_provider_simple =
       QueryInterfaceFromNodeId<IRawElementProviderSimple>(id);
   PatternSet supported_patterns;
-  static const std::vector<LONG> all_supported_patterns_ = {
+  static constexpr LONG kAllSupportedPatterns[] = {
       UIA_TextChildPatternId,  UIA_TextEditPatternId,
       UIA_TextPatternId,       UIA_WindowPatternId,
       UIA_InvokePatternId,     UIA_ExpandCollapsePatternId,
@@ -474,7 +471,7 @@ AXPlatformNodeWinTest::GetSupportedPatternsFromNodeId(AXNodeID id) {
       UIA_SelectionPatternId,  UIA_TogglePatternId,
       UIA_ValuePatternId,
   };
-  for (LONG property_id : all_supported_patterns_) {
+  for (LONG property_id : kAllSupportedPatterns) {
     ComPtr<IUnknown> provider;
     if (SUCCEEDED(raw_element_provider_simple->GetPatternProvider(property_id,
                                                                   &provider)) &&
@@ -4142,6 +4139,58 @@ TEST_F(AXPlatformNodeWinTest, UIAGetPropertySimple) {
       L"required=false;hasactions=false");
 }
 
+TEST_F(AXPlatformNodeWinTest, UIAAriaPropertiesForCellIndexText) {
+  AXNodeData root;
+  root.id = 1;
+  root.role = ax::mojom::Role::kCell;
+  root.AddStringAttribute(ax::mojom::StringAttribute::kAriaCellColumnIndexText,
+                          "A");
+  root.AddStringAttribute(ax::mojom::StringAttribute::kAriaCellRowIndexText,
+                          "10");
+  Init(root);
+
+  ComPtr<IRawElementProviderSimple> root_node =
+      GetRootIRawElementProviderSimple();
+  EXPECT_UIA_BSTR_EQ(
+      root_node, UIA_AriaPropertiesPropertyId,
+      L"colindextext=A;rowindextext=10;readonly=true;expanded=false;"
+      L"multiline=false;multiselectable=false;required=false;hasactions=false");
+}
+
+TEST_F(AXPlatformNodeWinTest, UIAAriaPropertiesForBrailleAttributes) {
+  AXNodeData root;
+  root.id = 1;
+  root.role = ax::mojom::Role::kList;
+  root.AddStringAttribute(ax::mojom::StringAttribute::kAriaBrailleLabel,
+                          "Label");
+  root.AddStringAttribute(
+      ax::mojom::StringAttribute::kAriaBrailleRoleDescription, "Role");
+  Init(root);
+
+  ComPtr<IRawElementProviderSimple> root_node =
+      GetRootIRawElementProviderSimple();
+  EXPECT_UIA_BSTR_EQ(
+      root_node, UIA_AriaPropertiesPropertyId,
+      L"braillelabel=Label;brailleroledescription=Role;readonly=true;"
+      L"expanded=false;multiline=false;multiselectable=false;required=false;"
+      L"hasactions=false");
+}
+
+TEST_F(AXPlatformNodeWinTest, UIAAriaPropertiesForHasInterestFor) {
+  AXNodeData root;
+  root.id = 1;
+  root.role = ax::mojom::Role::kButton;
+  root.AddState(ax::mojom::State::kHasInterestFor);
+  Init(root);
+
+  ComPtr<IRawElementProviderSimple> root_node =
+      GetRootIRawElementProviderSimple();
+  EXPECT_UIA_BSTR_EQ(
+      root_node, UIA_AriaPropertiesPropertyId,
+      L"readonly=true;expanded=false;multiline=false;multiselectable=false;"
+      L"required=false;hasactions=false;hasinterestfor=true");
+}
+
 TEST_F(AXPlatformNodeWinTest, UIAControlContentPropertyForTableElements) {
   AXNodeData root;
   root.id = 1;
@@ -5435,6 +5484,35 @@ TEST_F(AXPlatformNodeWinTest, UIANavigate) {
 
   TestNavigate(element3_node, element1_node, nullptr, nullptr, nullptr,
                nullptr);
+}
+
+namespace {
+
+class InconsistentChildDelegate : public AXPlatformNodeDelegate {
+ public:
+  AXPlatformNodeId GetUniqueId() const override { return unique_id_; }
+  size_t GetChildCount() const override { return 1; }
+
+ private:
+  const AXUniqueId unique_id_{AXUniqueId::Create()};
+};
+
+}  // namespace
+
+TEST_F(AXPlatformNodeWinTest, UIANavigateWithNullChildAccessible) {
+  InconsistentChildDelegate delegate;
+  AXPlatformNode::Pointer node = AXPlatformNode::Create(delegate);
+
+  ComPtr<IRawElementProviderFragment> provider;
+  ASSERT_HRESULT_SUCCEEDED(static_cast<AXPlatformNodeWin*>(node.get())
+                               ->QueryInterface(IID_PPV_ARGS(&provider)));
+
+  for (NavigateDirection direction :
+       {NavigateDirection_FirstChild, NavigateDirection_LastChild}) {
+    ComPtr<IRawElementProviderFragment> child_provider;
+    EXPECT_EQ(S_OK, provider->Navigate(direction, &child_provider));
+    EXPECT_EQ(nullptr, child_provider.Get());
+  }
 }
 
 TEST_F(AXPlatformNodeWinTest, IAnnotationProvider) {
@@ -8479,14 +8557,7 @@ TEST_F(AXPlatformNodeWinTest, OwnedNodeSurvivesUnexpectedReleases) {
 // Test for UIA's MathML Implementation.
 TEST_F(AXPlatformNodeWinTest, UiaMathMlFeatureFlag) {
   // Verify flag is disabled by default.
-  EXPECT_FALSE(base::FeatureList::IsEnabled(features::kUiaMathMlSupport));
-
-  // Verify flag can be enabled.
-  {
-    base::test::ScopedFeatureList scoped_feature_list;
-    scoped_feature_list.InitAndEnableFeature(features::kUiaMathMlSupport);
-    EXPECT_TRUE(base::FeatureList::IsEnabled(features::kUiaMathMlSupport));
-  }
+  EXPECT_TRUE(base::FeatureList::IsEnabled(features::kUiaMathMlSupport));
 
   // Verify flag can be explicitly disabled.
   {

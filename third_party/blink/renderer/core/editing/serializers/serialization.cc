@@ -66,6 +66,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/html_anchor_element.h"
+#include "third_party/blink/renderer/core/html/html_base_element.h"
 #include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/html/html_br_element.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
@@ -73,6 +74,8 @@
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/html_head_element.h"
 #include "third_party/blink/renderer/core/html/html_html_element.h"
+#include "third_party/blink/renderer/core/html/html_link_element.h"
+#include "third_party/blink/renderer/core/html/html_meta_element.h"
 #include "third_party/blink/renderer/core/html/html_quote_element.h"
 #include "third_party/blink/renderer/core/html/html_span_element.h"
 #include "third_party/blink/renderer/core/html/html_style_element.h"
@@ -89,10 +92,12 @@
 #include "third_party/blink/renderer/core/sanitizer/sanitizer_api.h"
 #include "third_party/blink/renderer/core/svg/svg_style_element.h"
 #include "third_party/blink/renderer/core/svg/svg_use_element.h"
+#include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_types_names.h"
 #include "third_party/blink/renderer/platform/bindings/exception_context.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/runtime_call_stats.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/url_loader_client.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
@@ -270,13 +275,11 @@ Element* HighestAncestorToWrapMarkup(
       // Retain MathML structure by including ancestor <math> elements.
       // This ensures that when copying MathML content, the semantic context
       // is preserved even for partial selections within math expressions.
-      if (RuntimeEnabledFeatures::MathMLSerializationOnCopyEnabled()) {
-        if (auto* highest_math_element =
-                To<MathMLElement>(HighestEnclosingNodeOfType(
-                    first_node_position, IsMathmlMathElement,
-                    kCanCrossEditingBoundary))) {
-          special_common_ancestor = highest_math_element;
-        }
+      if (auto* highest_math_element =
+              To<MathMLElement>(HighestEnclosingNodeOfType(
+                  first_node_position, IsMathmlMathElement,
+                  kCanCrossEditingBoundary))) {
+        special_common_ancestor = highest_math_element;
       }
     }
   }
@@ -325,7 +328,47 @@ Element* HighestAncestorToWrapMarkup(
   return special_common_ancestor;
 }
 
+bool IsForeignElementForSerialization(const Element& element) {
+  if (!IsA<HTMLElement>(element)) {
+    return true;
+  }
+  const AtomicString& local_name = element.localName();
+  return EqualIgnoringAsciiCase(local_name,
+                                mathml_names::kMathTag.LocalName()) ||
+         EqualIgnoringAsciiCase(local_name, svg_names::kSVGTag.LocalName());
+}
+
 }  // namespace
+
+bool IsInForeignContentForSerialization(const Node& node) {
+  // Check both DOM tree (`NodeTraversal`) and flat tree (`FlatTreeTraversal`)
+  // ancestors because serialization can run with either `EditingStrategy` or
+  // `EditingInFlatTreeStrategy` (and `StyledMarkupAccumulator` is not templated
+  // on `Strategy`):
+  // - A light-DOM node slotted into a `<slot>` inside a shadow-DOM `<math>` has
+  //   `<math>` as an ancestor only in `FlatTreeTraversal`, not `NodeTraversal`.
+  // - Conversely, `<slot>` elements or unslotted children inside `<math>`
+  //   serialized via `EditingStrategy` have `<math>` as an ancestor only in
+  //   `NodeTraversal`, not `FlatTreeTraversal`.
+  for (const Node& runner : NodeTraversal::InclusiveAncestorsOf(node)) {
+    if (const auto* element = DynamicTo<Element>(runner)) {
+      if (IsForeignElementForSerialization(*element)) {
+        return true;
+      }
+    }
+  }
+  if (!node.GetDocument().IsFlatTreeTraversalForbidden() &&
+      !node.IsShadowRoot()) {
+    for (const Node& runner : FlatTreeTraversal::InclusiveAncestorsOf(node)) {
+      if (const auto* element = DynamicTo<Element>(runner)) {
+        if (IsForeignElementForSerialization(*element)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
 
 bool PropertyMissingOrEqualToNone(CSSPropertyValueSet* style,
                                   CSSPropertyID property_id) {
@@ -471,8 +514,8 @@ static void TrimFragment(DocumentFragment* fragment,
 DocumentFragment* CreateFragmentFromMarkupWithContext(
     Document& document,
     const String& markup,
-    unsigned fragment_start,
-    unsigned fragment_end,
+    wtf_size_t fragment_start,
+    wtf_size_t fragment_end,
     const String& base_url,
     ParserContentPolicy parser_content_policy) {
   // FIXME: Need to handle the case where the markup already contains these
@@ -608,12 +651,12 @@ bool IsPlainTextMarkup(Node* node) {
 static bool ShouldPreserveNewline(const EphemeralRange& range) {
   if (Node* node = range.StartPosition().NodeAsRangeFirstNode()) {
     if (LayoutObject* layout_object = node->GetLayoutObject())
-      return layout_object->StyleRef().ShouldPreserveBreaks();
+      return layout_object->Style().ShouldPreserveBreaks();
   }
 
   if (Node* node = range.StartPosition().AnchorNode()) {
     if (LayoutObject* layout_object = node->GetLayoutObject())
-      return layout_object->StyleRef().ShouldPreserveBreaks();
+      return layout_object->Style().ShouldPreserveBreaks();
   }
 
   return false;
@@ -727,6 +770,11 @@ void ReplaceChildrenWithFragment(ContainerNode* container,
       RuntimeCallStats::CounterId::kReplaceChildrenWithFragment);
   ContainerNode* container_node(container);
 
+  if (RuntimeEnabledFeatures::ReplaceChildrenWithFragmentFastPathEnabled() &&
+      !fragment->firstChild() && !container_node->hasChildren()) {
+    return;
+  }
+
   ChildListMutationScope mutation(*container_node);
 
   if (!fragment->firstChild()) {
@@ -742,7 +790,10 @@ void ReplaceChildrenWithFragment(ContainerNode* container,
     return;
   }
 
-  container_node->RemoveChildren();
+  if (!RuntimeEnabledFeatures::ReplaceChildrenWithFragmentFastPathEnabled() ||
+      container_node->hasChildren()) {
+    container_node->RemoveChildren();
+  }
   container_node->AppendChild(fragment, exception_state);
 }
 
@@ -812,8 +863,10 @@ static Document* CreateStagingDocumentForMarkupSanitization(
       MakeGarbageCollected<LocalFrameView>(*frame, gfx::Size(800, 600));
   frame->SetView(frame_view);
   // TODO(https://crbug.com/1355751) Initialize `storage_key`.
-  frame->Init(/*opener=*/nullptr, DocumentToken(), /*policy_container=*/nullptr,
-              StorageKey(), /*document_ukm_source_id=*/ukm::kInvalidSourceId,
+  frame->Init(/*opener=*/nullptr, DocumentToken(),
+              /*initiator_state_token=*/InitiatorStateToken(),
+              /*policy_container=*/nullptr, StorageKey(),
+              /*document_ukm_source_id=*/ukm::kInvalidSourceId,
               /*creator_base_url=*/NullUrl());
 
   Document* document = frame->GetDocument();
@@ -832,6 +885,34 @@ static bool ContainsStyleElements(const DocumentFragment& fragment) {
       return true;
   }
   return false;
+}
+
+// Remove <base>, <link>, and <meta>, which can change URL resolution, load
+// resources, or navigate when inserted into a document. Do not rely on
+// unrendered-element filtering: author CSS can make these elements rendered.
+static void StripBaseLinkAndMetaElements(DocumentFragment& fragment) {
+  HeapVector<Member<DocumentFragment>> fragments;
+  fragments.push_back(&fragment);
+  while (!fragments.empty()) {
+    DocumentFragment* current_fragment = fragments.back();
+    fragments.pop_back();
+    Node* next = nullptr;
+    for (Node* node = current_fragment->firstChild(); node; node = next) {
+      if (IsA<HTMLBaseElement>(*node) || IsA<HTMLLinkElement>(*node) ||
+          IsA<HTMLMetaElement>(*node)) {
+        next = NodeTraversal::NextSkippingChildren(*node, current_fragment);
+        node->remove();
+      } else {
+        // Template contents are separate fragments, not ordinary DOM children.
+        if (auto* template_element = DynamicTo<HTMLTemplateElement>(*node)) {
+          if (DocumentFragment* content = template_element->getContent()) {
+            fragments.push_back(content);
+          }
+        }
+        next = NodeTraversal::Next(*node, current_fragment);
+      }
+    }
+  }
 }
 
 // Returns true if any svg <use> element is removed.
@@ -856,15 +937,15 @@ static bool StripSvgUseNonLocalHrefs(Node& node) {
 
 namespace {
 
-constexpr unsigned kMaxSanitizationIterations = 16;
+constexpr wtf_size_t kMaxSanitizationIterations = 16;
 
 }  // namespace
 
 String CreateStrictlyProcessedMarkupWithContext(
     Document& document,
     const String& raw_markup,
-    unsigned fragment_start,
-    unsigned fragment_end,
+    wtf_size_t fragment_start,
+    wtf_size_t fragment_end,
     const String& base_url,
     ChildrenOnly children_only,
     ResolveUrls should_resolve_urls,
@@ -879,7 +960,7 @@ String CreateStrictlyProcessedMarkupWithContext(
   // stable, or if we have exceeded the maximum allowed number of iterations.
   String last_markup;
   String markup = raw_markup;
-  for (unsigned iteration = 0;
+  for (wtf_size_t iteration = 0;
        iteration < kMaxSanitizationIterations && last_markup != markup;
        ++iteration) {
     last_markup = markup;
@@ -891,6 +972,8 @@ String CreateStrictlyProcessedMarkupWithContext(
       staging_document->GetPage()->WillBeDestroyed();
       return String();
     }
+
+    StripBaseLinkAndMetaElements(*fragment);
 
     bool needs_sanitization = false;
     if (ContainsStyleElements(*fragment))
@@ -937,8 +1020,8 @@ String CreateStrictlyProcessedMarkupWithContext(
 DocumentFragment* CreateStrictlyProcessedFragmentFromMarkupWithContext(
     Document& document,
     const String& raw_markup,
-    unsigned fragment_start,
-    unsigned fragment_end,
+    wtf_size_t fragment_start,
+    wtf_size_t fragment_end,
     const String& base_url) {
   String sanitized_markup = CreateStrictlyProcessedMarkupWithContext(
       document, raw_markup, fragment_start, fragment_end, NullUrl());

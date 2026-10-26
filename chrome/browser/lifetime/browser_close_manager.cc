@@ -17,13 +17,16 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_core_service.h"
 #include "chrome/browser/download/download_core_service_factory.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/browser_manager_service.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_controller.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/unload_controller.h"
@@ -78,8 +81,7 @@ void BrowserCloseManager::CancelBrowserClose() {
   browser_shutdown::SetTryingToQuit(false);
   GlobalBrowserCollection::GetInstance()->ForEach(
       [](BrowserWindowInterface* browser) {
-        UnloadController::From(browser->GetBrowserForMigrationOnly())
-            ->ResetTryToCloseWindow();
+        UnloadController::From(browser)->ResetBeforeUnloadForShutdown();
         return true;
       },
       BrowserCollection::Order::kCreation);
@@ -94,11 +96,10 @@ void BrowserCloseManager::TryToCloseBrowsers() {
   bool should_stop = false;
   GlobalBrowserCollection::GetInstance()->ForEach(
       [this, &should_stop](BrowserWindowInterface* browser) {
-        if (UnloadController::From(browser->GetBrowserForMigrationOnly())
-                ->TryToCloseWindow(
-                    false, base::BindRepeating(
-                               &BrowserCloseManager::OnBrowserReportCloseable,
-                               this))) {
+        if (UnloadController::From(browser)->RunBeforeUnloadForShutdown(
+                false,
+                base::BindRepeating(
+                    &BrowserCloseManager::OnBrowserReportCloseable, this))) {
           current_browser_ = browser;
           should_stop = true;
         }
@@ -209,12 +210,16 @@ void BrowserCloseManager::CloseBrowsers() {
     glic_background_mode_manager->ExitBackgroundMode();
   }
 
+  if (auto* controller =
+          g_browser_process->GetFeatures()->omnibox_everywhere_controller()) {
+    controller->ExitBackgroundMode();
+  }
+
   ForEachCurrentAndNewBrowserWindowInterfaceOrderedByActivation(
       [](BrowserWindowInterface* browser_window) {
         bool ignore_unload_handlers =
             browser_shutdown::ShouldIgnoreUnloadHandlers();
 
-        Browser* const browser = browser_window->GetBrowserForMigrationOnly();
         UnloadController::From(browser_window)
             ->set_force_skip_warning_user_on_close(ignore_unload_handlers);
         browser_window->GetWindow()->Close();
@@ -228,7 +233,7 @@ void BrowserCloseManager::CloseBrowsers() {
           // the tabs to make sure the browser is destroyed and cleanup can
           // happen.
           browser_window->GetTabStripModel()->CloseAllTabs();
-          browser->SynchronouslyDestroyBrowser();
+          BrowserManagerService::SynchronouslyDestroyBrowser(browser_window);
         }
         return true;
       });

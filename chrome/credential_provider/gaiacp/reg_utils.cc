@@ -2,19 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "chrome/credential_provider/gaiacp/reg_utils.h"
 
 #include "base/base64.h"
+#include "base/compiler_specific.h"
 #include "base/strings/strcat.h"
 #include "base/strings/strcat_win.h"
 #include "base/strings/string_number_conversions_win.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/win/atl.h"
 #include "base/win/registry.h"
 #include "base/win/win_util.h"
 #include "build/branding_buildflags.h"
@@ -227,7 +222,7 @@ HRESULT GetMachineRegString(const std::wstring& key_name,
     return HRESULT_FROM_WIN32(sts);
   }
 
-  value[local_length] = 0;
+  UNSAFE_TODO(value[local_length]) = 0;
   *length = local_length;
   return S_OK;
 }
@@ -366,8 +361,8 @@ HRESULT GetUserProperty(const std::wstring& sid,
                         const std::wstring& name,
                         DWORD* value) {
   wchar_t key_name[128];
-  swprintf_s(key_name, std::size(key_name), L"%s\\%s", kGcpUsersRootKeyName,
-             sid.c_str());
+  UNSAFE_TODO(swprintf_s(key_name, std::size(key_name), L"%s\\%s",
+                         kGcpUsersRootKeyName, sid.c_str()));
   return GetMachineRegDWORD(key_name, name, value);
 }
 
@@ -376,8 +371,8 @@ HRESULT GetUserProperty(const std::wstring& sid,
                         wchar_t* value,
                         ULONG* length) {
   wchar_t key_name[128];
-  swprintf_s(key_name, std::size(key_name), L"%s\\%s", kGcpUsersRootKeyName,
-             sid.c_str());
+  UNSAFE_TODO(swprintf_s(key_name, std::size(key_name), L"%s\\%s",
+                         kGcpUsersRootKeyName, sid.c_str()));
   return GetMachineRegString(key_name, name, value, length);
 }
 
@@ -385,8 +380,8 @@ HRESULT SetUserProperty(const std::wstring& sid,
                         const std::wstring& name,
                         DWORD value) {
   wchar_t key_name[128];
-  swprintf_s(key_name, std::size(key_name), L"%s\\%s", kGcpUsersRootKeyName,
-             sid.c_str());
+  UNSAFE_TODO(swprintf_s(key_name, std::size(key_name), L"%s\\%s",
+                         kGcpUsersRootKeyName, sid.c_str()));
   return SetMachineRegDWORD(key_name, name, value);
 }
 
@@ -394,8 +389,8 @@ HRESULT SetUserProperty(const std::wstring& sid,
                         const std::wstring& name,
                         const std::wstring& value) {
   wchar_t key_name[128];
-  swprintf_s(key_name, std::size(key_name), L"%s\\%s", kGcpUsersRootKeyName,
-             sid.c_str());
+  UNSAFE_TODO(swprintf_s(key_name, std::size(key_name), L"%s\\%s",
+                         kGcpUsersRootKeyName, sid.c_str()));
   return SetMachineRegString(key_name, name, value);
 }
 
@@ -437,24 +432,32 @@ HRESULT GetUserTokenHandles(
   return S_OK;
 }
 
-HRESULT GetSidFromKey(const wchar_t* key,
-                      const std::wstring& value,
-                      wchar_t* sid,
-                      ULONG length) {
+HRESULT GetSidFromIdAndEmail(const std::wstring& id,
+                             const std::wstring& email,
+                             wchar_t* sid,
+                             ULONG length) {
   DCHECK(sid);
   bool result_found = false;
   base::win::RegistryKeyIterator iter(HKEY_LOCAL_MACHINE, kGcpUsersRootKeyName);
   for (; iter.Valid(); ++iter) {
     const wchar_t* user_sid = iter.Name();
-    wchar_t result[256];
-    ULONG result_length = std::size(result);
-    HRESULT hr = GetUserProperty(user_sid, key, result, &result_length);
-    if (SUCCEEDED(hr) && value == result) {
-      // Make sure there are not 2 users with the same SID.
-      if (result_found)
-        return HRESULT_FROM_WIN32(ERROR_USER_EXISTS);
+    wchar_t user_id[256];
+    ULONG user_id_length = std::size(user_id);
+    wchar_t user_email[256];
+    ULONG user_email_length = std::size(user_email);
 
-      wcsncpy_s(sid, length, user_sid, wcslen(user_sid));
+    if (SUCCEEDED(
+            GetUserProperty(user_sid, kUserId, user_id, &user_id_length)) &&
+        id == user_id &&
+        SUCCEEDED(GetUserProperty(user_sid, kUserEmail, user_email,
+                                  &user_email_length)) &&
+        email == user_email) {
+      // Make sure there are not 2 users with the same SID.
+      if (result_found) {
+        return HRESULT_FROM_WIN32(ERROR_USER_EXISTS);
+      }
+
+      UNSAFE_TODO(wcsncpy_s(sid, length, user_sid, wcslen(user_sid)));
       result_found = true;
     }
   }
@@ -462,33 +465,39 @@ HRESULT GetSidFromKey(const wchar_t* key,
   return result_found ? S_OK : HRESULT_FROM_WIN32(ERROR_NONE_MAPPED);
 }
 
-HRESULT GetSidFromEmail(const std::wstring& email, wchar_t* sid, ULONG length) {
-  return GetSidFromKey(kUserEmail, email, sid, length);
-}
-
-HRESULT GetSidFromId(const std::wstring& id, wchar_t* sid, ULONG length) {
-  return GetSidFromKey(kUserId, id, sid, length);
-}
-
 HRESULT GetSidFromDomainAccountInfo(const std::wstring& domain,
                                     const std::wstring& username,
                                     wchar_t* sid,
                                     ULONG length) {
-  // Max SID length is 256 characters.
-  // https://docs.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-shell-setup-offlineuseraccounts-offlinedomainaccounts-offlinedomainaccount-sid
-  wchar_t sid1[256];
-  wchar_t sid2[256];
+  DCHECK(sid);
+  bool result_found = false;
+  base::win::RegistryKeyIterator iter(HKEY_LOCAL_MACHINE, kGcpUsersRootKeyName);
+  for (; iter.Valid(); ++iter) {
+    const wchar_t* user_sid = iter.Name();
+    wchar_t user_domain[256];
+    ULONG user_domain_length = std::size(user_domain);
+    wchar_t user_username[256];
+    ULONG user_username_length = std::size(user_username);
 
-  if (SUCCEEDED(GetSidFromKey(base::UTF8ToWide(kKeyDomain).c_str(), domain,
-                              sid1, length)) &&
-      SUCCEEDED(GetSidFromKey(base::UTF8ToWide(kKeyUsername).c_str(), username,
-                              sid2, length)) &&
-      wcsicmp(sid1, sid2) == 0) {
-    wcscpy_s(sid, length, sid1);
-    return S_OK;
-  } else {
-    return E_FAIL;
+    if (SUCCEEDED(GetUserProperty(user_sid,
+                                  base::UTF8ToWide(kKeyDomain).c_str(),
+                                  user_domain, &user_domain_length)) &&
+        domain == user_domain &&
+        SUCCEEDED(GetUserProperty(user_sid,
+                                  base::UTF8ToWide(kKeyUsername).c_str(),
+                                  user_username, &user_username_length)) &&
+        username == user_username) {
+      // Make sure there are not 2 users with the same SID.
+      if (result_found) {
+        return HRESULT_FROM_WIN32(ERROR_USER_EXISTS);
+      }
+
+      UNSAFE_TODO(wcsncpy_s(sid, length, user_sid, wcslen(user_sid)));
+      result_found = true;
+    }
   }
+
+  return result_found ? S_OK : E_FAIL;
 }
 
 HRESULT GetIdFromSid(const wchar_t* sid, std::wstring* id) {
@@ -498,7 +507,7 @@ HRESULT GetIdFromSid(const wchar_t* sid, std::wstring* id) {
   for (; iter.Valid(); ++iter) {
     const wchar_t* user_sid = iter.Name();
 
-    if (wcscmp(sid, user_sid) == 0) {
+    if (UNSAFE_TODO(wcscmp(sid, user_sid) == 0)) {
       wchar_t user_id[256];
       ULONG user_length = std::size(user_id);
       HRESULT hr = GetUserProperty(user_sid, kUserId, user_id, &user_length);

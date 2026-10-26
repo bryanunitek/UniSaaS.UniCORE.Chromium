@@ -6,11 +6,14 @@
 
 #import "base/strings/stringprintf.h"
 #import "base/test/bind.h"
+#import "base/test/metrics/histogram_tester.h"
 #import "base/test/test_future.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/action_target.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool_java_script_feature_test_base.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
+#import "ios/chrome/browser/intelligence/actor/tools/public/metrics.h"
 #import "testing/gtest/include/gtest/gtest.h"
 
 using optimization_guide::proto::ScrollAction;
@@ -29,67 +32,39 @@ class ScrollToolJavaScriptFeatureTest
     return ScrollToolJavaScriptFeature::GetInstance();
   }
 
-  // Mocks both JavaScript functions for scrolling to return the given result.
+  // Mocks JavaScript function for scrolling to return the given result.
   void MockScrollJsFunctions(const std::string& mock_return_value) {
-    MockJsFunction(feature(), "scroll_tool", "scrollByCoordinate",
-                   mock_return_value);
-    MockJsFunction(feature(), "scroll_tool", "scrollByNodeId",
-                   mock_return_value);
+    MockJsFunction(feature(), "scroll_tool", "scroll", mock_return_value);
   }
 
-  ScrollAction CreateScrollActionWithCoordinates() {
-    ScrollAction action;
+  ActionTarget CreateTargetWithCoordinates() {
+    optimization_guide::proto::ActionTarget target;
     // Use arbitrary constants since the JS calls are mocked.
-    action.mutable_target()->mutable_coordinate()->set_x(1);
-    action.mutable_target()->mutable_coordinate()->set_y(2);
-    action.mutable_target()->mutable_coordinate()->set_pixel_type(
+    target.mutable_coordinate()->set_x(1);
+    target.mutable_coordinate()->set_y(2);
+    target.mutable_coordinate()->set_pixel_type(
         optimization_guide::proto::Coordinate::PIXEL_TYPE_UNSPECIFIED);
-    action.set_direction(optimization_guide::proto::ScrollAction::DOWN);
-    action.set_distance(123.0);
-    return action;
+    return ActionTarget::FromProto(target);
   }
 
-  ScrollAction CreateScrollActionWithIdentifiers() {
-    ScrollAction action;
+  ActionTarget CreateTargetWithIdentifiers() {
+    optimization_guide::proto::ActionTarget target;
     // Use arbitrary constants since the JS calls are mocked.
-    action.mutable_target()->set_content_node_id(0);
-    action.mutable_target()
-        ->mutable_document_identifier()
-        ->set_serialized_token("token");
-    action.set_direction(optimization_guide::proto::ScrollAction::DOWN);
-    action.set_distance(123.0);
-    return action;
-  }
-
-  ScrollToAction CreateScrollToActionWithCoordinates() {
-    ScrollToAction action;
-    // Use arbitrary constants since the JS calls are mocked.
-    action.mutable_target()->mutable_coordinate()->set_x(1);
-    action.mutable_target()->mutable_coordinate()->set_y(2);
-    action.mutable_target()->mutable_coordinate()->set_pixel_type(
-        optimization_guide::proto::Coordinate::PIXEL_TYPE_UNSPECIFIED);
-    return action;
-  }
-
-  ScrollToAction CreateScrollToActionWithIdentifiers() {
-    // Use arbitrary constants since the JS calls are mocked.
-    ScrollToAction action;
-    action.mutable_target()->set_content_node_id(0);
-    action.mutable_target()
-        ->mutable_document_identifier()
-        ->set_serialized_token("token");
-    return action;
+    target.set_content_node_id(0);
+    target.mutable_document_identifier()->set_serialized_token("token");
+    return ActionTarget::FromProto(target);
   }
 };
 
 TEST_F(ScrollToolJavaScriptFeatureTest, JsReturnsNonDict) {
   MockScrollJsFunctions(/*mock_return_value=*/"'unexpected type'");
-  ScrollAction scroll_by_coordinate = CreateScrollActionWithCoordinates();
-  ScrollToAction scroll_to_by_node_id = CreateScrollToActionWithIdentifiers();
+  ActionTarget scroll_by_coordinate = CreateTargetWithCoordinates();
+  ActionTarget scroll_to_by_node_id = CreateTargetWithIdentifiers();
   base::test::TestFuture<ToolExecutionResult> scroll_future;
   base::test::TestFuture<ToolExecutionResult> scroll_to_future;
 
   feature()->Scroll(GetMainFrame(feature()), scroll_by_coordinate,
+                    optimization_guide::proto::ScrollAction::DOWN, 123.0,
                     scroll_future.GetCallback());
   feature()->ScrollTo(GetMainFrame(feature()), scroll_to_by_node_id,
                       scroll_to_future.GetCallback());
@@ -111,12 +86,13 @@ TEST_F(ScrollToolJavaScriptFeatureTest, JsReturnsError) {
   MockScrollJsFunctions(
       /*mock_return_value=*/base::StringPrintf(
           "{resultCode: %d, message: 'Custom JS Error'}", js_code));
-  ScrollAction scroll_by_coordinate = CreateScrollActionWithCoordinates();
-  ScrollToAction scroll_to_by_node_id = CreateScrollToActionWithIdentifiers();
+  ActionTarget scroll_by_coordinate = CreateTargetWithCoordinates();
+  ActionTarget scroll_to_by_node_id = CreateTargetWithIdentifiers();
   base::test::TestFuture<ToolExecutionResult> scroll_future;
   base::test::TestFuture<ToolExecutionResult> scroll_to_future;
 
   feature()->Scroll(GetMainFrame(feature()), scroll_by_coordinate,
+                    optimization_guide::proto::ScrollAction::DOWN, 123.0,
                     scroll_future.GetCallback());
   feature()->ScrollTo(GetMainFrame(feature()), scroll_to_by_node_id,
                       scroll_to_future.GetCallback());
@@ -135,12 +111,13 @@ TEST_F(ScrollToolJavaScriptFeatureTest, JsReturnsError) {
 TEST_F(ScrollToolJavaScriptFeatureTest, WebFrameInvalidated) {
   MockScrollJsFunctions(
       /*mock_return_value=*/"{resultCode: 0, message: 'fake success!'}");
-  ScrollAction scroll_by_coordinate = CreateScrollActionWithCoordinates();
-  ScrollToAction scroll_to_by_node_id = CreateScrollToActionWithIdentifiers();
+  ActionTarget scroll_by_coordinate = CreateTargetWithCoordinates();
+  ActionTarget scroll_to_by_node_id = CreateTargetWithIdentifiers();
   base::test::TestFuture<ToolExecutionResult> scroll_future;
   base::test::TestFuture<ToolExecutionResult> scroll_to_future;
 
   feature()->Scroll(/*target_frame=*/nullptr, scroll_by_coordinate,
+                    optimization_guide::proto::ScrollAction::DOWN, 123.0,
                     scroll_future.GetCallback());
   feature()->ScrollTo(/*target_frame=*/nullptr, scroll_to_by_node_id,
                       scroll_to_future.GetCallback());
@@ -153,46 +130,68 @@ TEST_F(ScrollToolJavaScriptFeatureTest, WebFrameInvalidated) {
   EXPECT_EQ(scroll_to_result.code(), mojom::ActionResultCode::kFrameWentAway);
 }
 
+// Tests that executing a scroll action records the expected Scroll variant
+// histograms.
 TEST_F(ScrollToolJavaScriptFeatureTest, Scroll_ByCoordinate_Success) {
+  base::HistogramTester histogram_tester;
   MockScrollJsFunctions(
       /*mock_return_value=*/"{resultCode: 0, message: 'fake success!'}");
-  ScrollAction action = CreateScrollActionWithCoordinates();
+  ActionTarget action = CreateTargetWithCoordinates();
   base::test::TestFuture<ToolExecutionResult> future;
 
-  feature()->Scroll(GetMainFrame(feature()), action, future.GetCallback());
+  feature()->Scroll(GetMainFrame(feature()), action,
+                    optimization_guide::proto::ScrollAction::DOWN, 123.0,
+                    future.GetCallback());
 
   auto result = future.Get();
   EXPECT_TRUE(result.IsOk());
+  histogram_tester.ExpectUniqueSample(
+      GetJavaScriptResultCodeHistogramName(ActorJavaScriptCall::kScroll),
+      mojom::ActionResultCode::kOk, 1);
+  histogram_tester.ExpectTotalCount(
+      GetJavaScriptExecutionDurationHistogramName(ActorJavaScriptCall::kScroll),
+      1);
 }
 
 TEST_F(ScrollToolJavaScriptFeatureTest, Scroll_ByIdentifier_Success) {
   MockScrollJsFunctions(
       /*mock_return_value=*/"{resultCode: 0, message: 'fake success!'}");
-  ScrollAction action = CreateScrollActionWithIdentifiers();
+  ActionTarget action = CreateTargetWithIdentifiers();
   base::test::TestFuture<ToolExecutionResult> future;
 
-  feature()->Scroll(GetMainFrame(feature()), action, future.GetCallback());
+  feature()->Scroll(GetMainFrame(feature()), action,
+                    optimization_guide::proto::ScrollAction::DOWN, 123.0,
+                    future.GetCallback());
 
   auto result = future.Get();
   EXPECT_TRUE(result.IsOk());
 }
 
+// Tests that executing a scroll-to action records the expected ScrollTo
+// variant histograms.
 TEST_F(ScrollToolJavaScriptFeatureTest, ScrollTo_ByCoordinate_Success) {
+  base::HistogramTester histogram_tester;
   MockScrollJsFunctions(
       /*mock_return_value=*/"{resultCode: 0, message: 'fake success!'}");
-  ScrollToAction action = CreateScrollToActionWithCoordinates();
+  ActionTarget action = CreateTargetWithCoordinates();
   base::test::TestFuture<ToolExecutionResult> future;
 
   feature()->ScrollTo(GetMainFrame(feature()), action, future.GetCallback());
 
   auto result = future.Get();
   EXPECT_TRUE(result.IsOk());
+  histogram_tester.ExpectUniqueSample(
+      GetJavaScriptResultCodeHistogramName(ActorJavaScriptCall::kScrollTo),
+      mojom::ActionResultCode::kOk, 1);
+  histogram_tester.ExpectTotalCount(GetJavaScriptExecutionDurationHistogramName(
+                                        ActorJavaScriptCall::kScrollTo),
+                                    1);
 }
 
 TEST_F(ScrollToolJavaScriptFeatureTest, ScrollTo_ByIdentifier_Success) {
   MockScrollJsFunctions(
       /*mock_return_value=*/"{resultCode: 0, message: 'fake success!'}");
-  ScrollToAction action = CreateScrollToActionWithIdentifiers();
+  ActionTarget action = CreateTargetWithIdentifiers();
   base::test::TestFuture<ToolExecutionResult> future;
 
   feature()->ScrollTo(GetMainFrame(feature()), action, future.GetCallback());

@@ -30,7 +30,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.readaloud.player.InteractionHandler;
@@ -44,7 +43,6 @@ import java.util.List;
 
 /** Unit tests for {@link VoiceMenu}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class VoiceMenuUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private InteractionHandler mInteractionHandler;
@@ -130,7 +128,7 @@ public class VoiceMenuUnitTest {
 
     @Test
     public void testUserSelectsVoice() {
-        mMenu.getItem(1).getChildAt(0).performClick();
+        mMenu.getItem(1).findViewById(R.id.readaloud_menu_item_row).performClick();
         verify(mInteractionHandler, times(1)).onVoiceSelected(mVoiceCaptor.capture());
 
         PlaybackVoice voice = mVoiceCaptor.getValue();

@@ -7,7 +7,6 @@ import("//build/config/chrome_build.gni")
 import("//third_party/tflite/features.gni")
 
 extra_configs = [
-  "//build/config/compiler:wexit_time_destructors",
   "//content:content_implementation",
   "//v8:external_startup_data",
 ]
@@ -102,7 +101,7 @@ source_set("app") {
   ]
 
   configs += extra_configs
-  deps = content_app_deps + [ "//ipc" ]
+  deps = content_app_deps
 
   public_deps = [ ":content_main_runner_app" ]
 
@@ -147,5 +146,17 @@ group("for_content_tests") {
   visibility = [ "//content/test/*" ]
   if (!is_component_build) {
     public_deps = [ ":app" ]
+  }
+}
+
+if (is_mac) {
+  source_set("aperitif") {
+    sources = [ "aperitif_mac.cc" ]
+    deps = [
+      "//base:compiler_specific",
+      "//base/allocator:early_zone_registration_apple",
+      "//sandbox/mac:seatbelt",
+    ]
+    visibility = [ "//content/public/app:aperitif" ]
   }
 }

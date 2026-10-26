@@ -20,7 +20,6 @@
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_id.h"
-#include "ash/style/ash_color_provider.h"
 #include "ash/system/eche/eche_icon_loading_indicator_view.h"
 #include "ash/system/eche/eche_tray.h"
 #include "ash/system/model/system_tray_model.h"
@@ -109,27 +108,24 @@ PhoneHubTray::PhoneHubTray(Shelf* shelf)
   tray_container()->SetMargin(kTrayIconMainAxisInset, kTrayIconCrossAxisInset);
   // TODO(nayebi): Think about constructing the eche_icon outside of this class,
   // either as an input argument or being set through a setter.
-  if (features::IsEcheSWAEnabled()) {
-    auto eche_icon = std::make_unique<views::ImageButton>(base::BindRepeating(
-        &PhoneHubTray::EcheIconActivated, weak_factory_.GetWeakPtr()));
-    eche_icon->SetButtonController(std::make_unique<views::ButtonController>(
-        /*views::Button*=*/eche_icon.get(),
-        std::make_unique<TrayBackgroundView::TrayButtonControllerDelegate>(
-            /*views::Button*=*/eche_icon.get(),
-            TrayBackgroundViewCatalogName::kPhoneHub)));
-    eche_icon->SetImageVerticalAlignment(
-        views::ImageButton::VerticalAlignment::ALIGN_MIDDLE);
-    eche_icon->SetImageHorizontalAlignment(
-        views::ImageButton::HorizontalAlignment::ALIGN_CENTER);
-    eche_icon->SetMinimumImageSize(
-        gfx::Size(kEcheIconMinSize, kEcheIconMinSize));
-    eche_icon->SetVisible(false);
-    eche_loading_indicator_ = eche_icon->AddChildView(
-        std::make_unique<EcheIconLoadingIndicatorView>(eche_icon.get()));
-    eche_loading_indicator_->SetVisible(false);
-    eche_icon_ = tray_container()->AddChildView(std::move(eche_icon));
-    tray_container()->SetSpacingBetweenChildren(kIconSpacing);
-  }
+  auto eche_icon = std::make_unique<views::ImageButton>(base::BindRepeating(
+      &PhoneHubTray::EcheIconActivated, weak_factory_.GetWeakPtr()));
+  eche_icon->SetButtonController(std::make_unique<views::ButtonController>(
+      /*views::Button*=*/eche_icon.get(),
+      std::make_unique<TrayBackgroundView::TrayButtonControllerDelegate>(
+          /*views::Button*=*/eche_icon.get(),
+          TrayBackgroundViewCatalogName::kPhoneHub)));
+  eche_icon->SetImageVerticalAlignment(
+      views::ImageButton::VerticalAlignment::ALIGN_MIDDLE);
+  eche_icon->SetImageHorizontalAlignment(
+      views::ImageButton::HorizontalAlignment::ALIGN_CENTER);
+  eche_icon->SetMinimumImageSize(gfx::Size(kEcheIconMinSize, kEcheIconMinSize));
+  eche_icon->SetVisible(false);
+  eche_loading_indicator_ = eche_icon->AddChildView(
+      std::make_unique<EcheIconLoadingIndicatorView>(eche_icon.get()));
+  eche_loading_indicator_->SetVisible(false);
+  eche_icon_ = tray_container()->AddChildView(std::move(eche_icon));
+  tray_container()->SetSpacingBetweenChildren(kIconSpacing);
   auto icon = std::make_unique<views::ImageButton>(base::BindRepeating(
       &PhoneHubTray::PhoneHubIconActivated, weak_factory_.GetWeakPtr()));
   icon->SetButtonController(std::make_unique<views::ButtonController>(
@@ -446,8 +442,7 @@ void PhoneHubTray::CloseBubbleInternal() {
     phone_status_view_dont_use_ = nullptr;
   }
 
-  if (features::IsEcheSWAEnabled() &&
-      phone_hub_manager_->GetAppStreamLauncherDataModel()) {
+  if (phone_hub_manager_->GetAppStreamLauncherDataModel()) {
     phone_hub_manager_->GetAppStreamLauncherDataModel()
         ->SetShouldShowMiniLauncher(false);
   }

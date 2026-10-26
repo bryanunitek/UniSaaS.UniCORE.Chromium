@@ -44,12 +44,16 @@ XRWebGLTextureArraySwapChain::XRWebGLTextureArraySwapChain(
 }
 
 void XRWebGLTextureArraySwapChain::Dispose() {
-  if (owned_texture_) {
-    gpu::gles2::GLES2Interface* gl = context()->ContextGL();
-    if (!gl) {
-      return;
-    }
+  gpu::gles2::GLES2Interface* gl = context()->ContextGL();
+  if (!gl) {
+    return;
+  }
 
+  if (vao_) {
+    gl->DeleteVertexArraysOES(1, &vao_);
+  }
+
+  if (owned_texture_) {
     gl->DeleteTextures(1, &owned_texture_);
   }
 }
@@ -84,6 +88,7 @@ void XRWebGLTextureArraySwapChain::SetLayer(XRCompositionLayer* layer) {
 }
 
 void XRWebGLTextureArraySwapChain::OnFrameStart() {
+  XRWebGLSwapChain::OnFrameStart();
   wrapped_swap_chain_->OnFrameStart();
 }
 
@@ -96,6 +101,12 @@ void XRWebGLTextureArraySwapChain::OnFrameEnd() {
   gpu::gles2::GLES2Interface* gl = context()->ContextGL();
   if (!gl) {
     return;
+  }
+
+  // Generate an internal VAO if one hasn't been already to more easily handle
+  // the default vertex state needed for this copy.
+  if (!vao_) {
+    gl->GenVertexArraysOES(1, &vao_);
   }
 
   // Copy from the layers texture to the side-by-side wrapped texture.
@@ -215,6 +226,11 @@ GLuint XRWebGLTextureArraySwapChain::GetCopyProgram() {
 std::unique_ptr<SharedImageHolder>
 XRWebGLTextureArraySwapChain::TransferToSharedImageHolder() {
   return wrapped_swap_chain_->TransferToSharedImageHolder();
+}
+
+std::unique_ptr<SharedImageHolder>
+XRWebGLTextureArraySwapChain::DoneWithSharedBuffer() {
+  return wrapped_swap_chain_->DoneWithSharedBuffer();
 }
 
 void XRWebGLTextureArraySwapChain::Trace(Visitor* visitor) const {

@@ -24,15 +24,13 @@ import type {TabStripObserver} from '/tab_strip_api/tab_strip_observer.js';
 import {DropTargetReceiver, DropTargetRegistrationRemote, TabDragService} from '../tab_drag_api.mojom-webui.js';
 import type {DropTargetInterface, DropTargetRegistrationRemote as DropTargetRegistrationRemoteType, TabDragServiceRemote} from '../tab_drag_api.mojom-webui.js';
 
-import type {TabActivated, TabAdded, TabClosed, TabUpdated} from './events.js';
-import type {TabGroupItem, TabItem, TabStripItem} from './items.js';
+import type {TabAdded, TabClosed, TabUpdated} from './events.js';
+import type {TabGroupItem, TabStripItem} from './items.js';
 import type {TabElement} from './tab.js';
 import {TabDragDelegate} from './tab_drag_delegate.js';
 import type {TabDragHost} from './tab_drag_host.js';
 import {getCss} from './tab_strip.css.js';
 import {getHtml} from './tab_strip.html.js';
-
-export type {TabGroupItem, TabItem, TabStripItem};
 
 export interface TabStripElement {
   $: {
@@ -92,7 +90,8 @@ export class TabStripElement extends CrLitElement implements
       },
       dragInProgress_: {
         type: Boolean,
-        state: true,
+        reflect: true,
+        attribute: 'drag-in-progress',
       },
       inactiveFrame: {
         type: Boolean,
@@ -239,14 +238,23 @@ export class TabStripElement extends CrLitElement implements
       if (!this.dropTargetRegistration_) {
         return;
       }
-      const rect = this.$.tabstrip.getBoundingClientRect();
+      const hostRect = this.getBoundingClientRect();
+      const tabstripRect = this.$.tabstrip.getBoundingClientRect();
+      const x = tabstripRect.left;
+      const y = tabstripRect.top;
+      const width = Math.max(0, hostRect.right - tabstripRect.left);
+      const height = tabstripRect.height;
+
       this.dropTargetRegistration_.onBoundsChanged({
-        x: Math.round(rect.left),
-        y: Math.round(rect.top),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
+        x: Math.round(x),
+        y: Math.round(y),
+        width: Math.round(width),
+        height: Math.round(height),
       });
+
+      this.dragDelegate_.onRecalculateBounds();
     });
+    this.resizeObserver_.observe(this);
     this.resizeObserver_.observe(this.$.tabstrip);
   }
 
@@ -327,14 +335,10 @@ export class TabStripElement extends CrLitElement implements
   }
 
   protected activateTab(tabId: NodeId) {
-    const item = this.findItem_<TabItem>(tabId, 'tab');
-    if (!item) {
-      return;
-    }
-
-    this.setActiveTab_(tabId);
+    // Only request the activation. The active state is applied when the
+    // browser reports the change through OnDataChanged (see updateTab()), so
+    // the UI never disagrees with the TabStripModel.
     this.tabStripService_.activateTab(tabId);
-    this.fire<TabActivated>('tab-activated', item.tabData);
   }
 
   // TODO(webium): implement this.
@@ -465,8 +469,12 @@ export class TabStripElement extends CrLitElement implements
     this.$.tabstrip.classList.toggle('nodrag', noDrag);
   }
 
-  getDragContainerBounds() {
-    return this.$.tabstrip.getBoundingClientRect();
+  getDragContainerBounds(): DOMRect {
+    const hostRect = this.getBoundingClientRect();
+    const tabstripRect = this.$.tabstrip.getBoundingClientRect();
+    return new DOMRect(
+        tabstripRect.left, tabstripRect.top,
+        Math.max(0, hostRect.right - tabstripRect.left), tabstripRect.height);
   }
 
   dragMouseDown(e: MouseEvent) {
@@ -474,10 +482,11 @@ export class TabStripElement extends CrLitElement implements
   }
 
   // DropTargetInterface implementation
-  onDragEntered(sourceTabIds: NodeId[], localPoint: Point) {
+  onDragEntered(
+      sourceTabIds: NodeId[], localPoint: Point, mouseToTabXRatio: number) {
     this.dragInProgress_ = true;
     const nodeId = sourceTabIds[0]!;
-    this.dragDelegate_.onMojoDragEntered(nodeId, localPoint);
+    this.dragDelegate_.onMojoDragEntered(nodeId, localPoint, mouseToTabXRatio);
   }
 
   onDrag(localPoint: Point) {

@@ -95,6 +95,7 @@ enum class RequestTypeForUma {
   PERMISSION_GEOLOCATION_APPROXIMATE_OR_PRECISE = 46,
   PERMISSION_GEOLOCATION_APPROXIMATE = 47,
   PERMISSION_GEOLOCATION_UPGRADE = 48,
+  PERMISSION_AMBIENT_LOGIN = 49,
   // NUM must be the last value in the enum.
   NUM,
 };
@@ -235,8 +236,7 @@ enum class PermissionPromptDisposition {
 
   // Only used on desktop, a chip on the left-hand side of the location bar that
   // shows a bubble when clicked.
-  // DEPRECATED: This disposition is no longer existent.
-  // LOCATION_BAR_LEFT_CHIP = 6,
+  LOCATION_BAR_LEFT_CHIP = 6,
 
   // There was no UI being shown. This is usually because the user closed an
   // inactive tab that had a pending permission request.
@@ -599,6 +599,15 @@ enum class DismissalType {
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/permissions/enums.xml:PermissionPromptDismissMethod)
 
+// LINT.IfChange(UkmPermissionPromptOptions)
+// This enum backs the UKM Permission.PromptOptions, so it must be treated as
+// append-only.
+enum class UkmPermissionPromptOptions {
+  APPROXIMATE_LOCATION = 1,
+  PRECISE_LOCATION = 2,
+};
+// LINT.ThenChange(//tools/metrics/ukm/ukm.xml:UkmPermissionPromptOptions)
+
 // LINT.IfChange(PromptDispositionSets)
 inline constexpr auto kQuietPromptDispositions =
     base::MakeFixedFlatSet<PermissionPromptDisposition>({
@@ -618,6 +627,7 @@ inline constexpr auto kLoudPromptDispositions =
         PermissionPromptDisposition::CUSTOM_MODAL_DIALOG,
         PermissionPromptDisposition::MODAL_DIALOG,
         PermissionPromptDisposition::MAC_OS_PROMPT,
+        PermissionPromptDisposition::LOCATION_BAR_LEFT_CHIP,
         PermissionPromptDisposition::LOCATION_BAR_LEFT_CHIP_AUTO_BUBBLE,
         PermissionPromptDisposition::MESSAGE_UI_LOUD,
     });
@@ -626,11 +636,10 @@ inline constexpr auto kLoudPromptDispositions =
 // We want to assign every new prompt disposition either to quiet or loud
 // prompts set. Left out:
 //  - NOT_APPLICABLE (0 anyways)
-//  - LOCATION_BAR_LEFT_CHIP (deprecated)
 //  - NONE_VISIBLE
 static_assert(kLoudPromptDispositions.size() +
                   kQuietPromptDispositions.size() ==
-              static_cast<size_t>(PermissionPromptDisposition::kMaxValue) - 2);
+              static_cast<size_t>(PermissionPromptDisposition::kMaxValue) - 1);
 
 }  // namespace permissions
 

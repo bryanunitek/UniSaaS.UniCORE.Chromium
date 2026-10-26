@@ -25,12 +25,12 @@
 #include <stdint.h>
 
 #include <limits>
+#include <ranges>
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/dcheck_is_on.h"
-#include "base/types/zip.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/platform/wtf/text/ascii_ctype.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
@@ -82,11 +82,11 @@ struct AsciiStringAttributes {
   AsciiStringAttributes(bool contains_only_ascii, bool is_lower_ascii)
       : contains_only_ascii(contains_only_ascii),
         is_lower_ascii(is_lower_ascii) {}
-  unsigned contains_only_ascii : 1;
+  uint32_t contains_only_ascii : 1;
 
   // True if there are no upper-case ascii characters in the string.
   // Only valid if contains_only_ascii is true.
-  unsigned is_lower_ascii : 1;
+  uint32_t is_lower_ascii : 1;
 };
 
 // Note: This function assumes the input is likely all ASCII, and
@@ -173,7 +173,7 @@ ALWAYS_INLINE typename Allocator::ResultStringType ConvertAsciiCase(
     base::span<typename decltype(chars)::value_type> data;
     auto new_impl = allocator.Alloc(string.length(), data);
 
-    for (auto [dest, src] : base::zip(data, chars)) {
+    for (auto [dest, src] : std::views::zip(data, chars)) {
       dest = converter.Convert(src);
     }
     return new_impl;

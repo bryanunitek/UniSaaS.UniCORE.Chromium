@@ -22,17 +22,17 @@
 #include "base/test/gmock_callback_support.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/autofill/autofill_uitest_util.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/webdata_services/web_data_service_factory.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -42,13 +42,13 @@
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager_test_api.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager_observer.h"
-#include "components/autofill/core/browser/data_manager/personal_data_manager_test_utils.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager_test_util.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/keyed_service/core/service_access_type.h"
@@ -72,6 +72,8 @@
 #include "third_party/blink/public/common/switches.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_mode.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 
 namespace autofill {
@@ -173,7 +175,7 @@ class AutofillTest : public InProcessBrowserTest {
       bool simulate_click = true) {
     GURL url = embedded_test_server()->GetURL("/autofill/" + filename);
     NavigateParams params(browser(), url, ui::PAGE_TRANSITION_LINK);
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     ui_test_utils::NavigateToURL(&params);
     ASSERT_TRUE(
         autofill_manager_injector_[web_contents()]->WaitForFormsSeen(1));
@@ -814,7 +816,9 @@ class AutofillTestPrerendering : public InProcessBrowserTest {
     }
     MOCK_METHOD(void,
                 OnFormsSeen,
-                (std::vector<FormData>, std::vector<FormGlobalId>),
+                (std::vector<FormData>,
+                 std::vector<FormGlobalId>,
+                 RendererEventPassKey),
                 (override));
     MOCK_METHOD(void,
                 OnFocusOnFormFieldImpl,

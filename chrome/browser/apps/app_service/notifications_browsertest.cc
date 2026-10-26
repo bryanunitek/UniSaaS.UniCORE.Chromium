@@ -31,7 +31,6 @@
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/notifications/profile_notification.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/common/chrome_switches.h"
@@ -274,11 +273,11 @@ class AppNotificationsWebNotificationTest
     auto web_app_info =
         web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(url);
     web_app_info->scope = scope;
-    std::string app_id = web_app::test::InstallWebApp(browser()->profile(),
+    std::string app_id = web_app::test::InstallWebApp(browser()->GetProfile(),
                                                       std::move(web_app_info));
     content::TestNavigationObserver navigation_observer(url);
     navigation_observer.StartWatchingNewWebContents();
-    web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
+    web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
     navigation_observer.WaitForNavigationFinished();
     return app_id;
   }
@@ -295,7 +294,7 @@ class AppNotificationsWebNotificationTest
   }
 
   void UninstallWebApp(const std::string& app_id) const {
-    web_app::test::UninstallWebApp(browser()->profile(), app_id);
+    web_app::test::UninstallWebApp(browser()->GetProfile(), app_id);
   }
 
   GURL GetOrigin() const { return https_server_.GetURL("app.com", "/"); }

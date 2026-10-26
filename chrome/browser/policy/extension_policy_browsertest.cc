@@ -45,6 +45,8 @@
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/common/extensions/extension_test_util.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
+#include "chrome/common/pref_names.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/policy_constants.h"
@@ -80,6 +82,7 @@
 #include "extensions/browser/unpacked_installer.h"
 #include "extensions/browser/updater/extension_cache_fake.h"
 #include "extensions/browser/updater/extension_downloader_test_helper.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/feature_switch.h"
 #include "extensions/common/features/feature_channel.h"
@@ -97,7 +100,6 @@
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/background/background_contents_service.h"
 #include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"  // nogncheck
 #include "chrome/browser/web_applications/test/web_app_test_observers.h"
@@ -424,7 +426,6 @@ IN_PROC_BROWSER_TEST_F(ExtensionPolicyTest,
   extensions::ComponentLoader::EnableBackgroundExtensionsForTesting();
   auto* loader = extensions::ComponentLoader::Get(browser()->GetProfile());
   loader->AddDefaultComponentExtensions(false);
-  base::RunLoop().RunUntilIdle();
 
   extensions::ExtensionRegistry* registry = extension_registry();
   ASSERT_TRUE(

@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/settings/ui_bundled/safety_check/safety_check_mediator.h"
 
 #import "base/apple/foundation_util.h"
+#import "base/callback_list.h"
 #import "base/functional/bind.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/metrics/histogram_macros.h"
@@ -229,7 +230,10 @@ void ResetSettingsCheckItem(SettingsCheckItem* item) {
 
 @end
 
-@implementation SafetyCheckMediator
+@implementation SafetyCheckMediator {
+  // Subscription for pings with OmahaService.
+  base::CallbackListSubscription _omahaPingSubscription;
+}
 
 @synthesize passwordCheckManager = _passwordCheckManager;
 
@@ -286,8 +290,8 @@ void ResetSettingsCheckItem(SettingsCheckItem* item) {
     _updateCheckItem = [[SettingsCheckItem alloc] initWithType:UpdateItemType];
     _updateCheckItem.text =
         l10n_util::GetNSString(IDS_IOS_SETTINGS_SAFETY_CHECK_UPDATES_TITLE);
-    UIImage* updateCheckIcon = DefaultSymbolTemplateWithPointSize(
-        kInfoCircleSymbol, kLeadingSymbolImagePointSize);
+    UIImage* updateCheckIcon = SymbolTemplateWithPointSize(
+        SymbolInfoCircle, kLeadingSymbolImagePointSize);
     _updateCheckItem.leadingIcon = updateCheckIcon;
     _updateCheckItem.leadingIconTintColor = [UIColor colorNamed:kGrey400Color];
     _updateCheckItem.infoButtonTarget = self;
@@ -312,8 +316,8 @@ void ResetSettingsCheckItem(SettingsCheckItem* item) {
     _passwordCheckItem.infoButtonSelector = @selector(infoButtonWasTapped:);
     _passwordCheckItem.infoButtonTag = PasswordItemType;
 
-    UIImage* passwordCheckIcon = CustomSymbolTemplateWithPointSize(
-        kPasswordSymbol, kLeadingSymbolImagePointSize);
+    UIImage* passwordCheckIcon = SymbolTemplateWithPointSize(
+        SymbolPassword, kLeadingSymbolImagePointSize);
 
     _passwordCheckItem.leadingIcon = passwordCheckIcon;
     _passwordCheckItem.leadingIconTintColor =
@@ -339,7 +343,7 @@ void ResetSettingsCheckItem(SettingsCheckItem* item) {
     _safeBrowsingCheckItem.text = l10n_util::GetNSString(
         IDS_IOS_SETTINGS_SAFETY_CHECK_SAFE_BROWSING_TITLE);
     UIImage* safeBrowsingCheckIcon =
-        CustomSymbolWithPointSize(kPrivacySymbol, kLeadingSymbolImagePointSize);
+        SymbolWithPointSize(SymbolPrivacy, kLeadingSymbolImagePointSize);
     _safeBrowsingCheckItem.leadingIcon = safeBrowsingCheckIcon;
     _safeBrowsingCheckItem.leadingIconTintColor =
         [UIColor colorNamed:kGrey400Color];
@@ -996,6 +1000,7 @@ void ResetSettingsCheckItem(SettingsCheckItem* item) {
 // `updateCheckItem` to an Omaha error state.
 - (void)verifyUpdateCheckComplete {
   // If still in running state assume Omaha error.
+  _omahaPingSubscription = {};
   if (self.updateCheckRowState == UpdateCheckRowStateRunning) {
     self.updateCheckRowState = UpdateCheckRowStateOmahaError;
     [self reconfigureUpdateCheckItem];
@@ -1083,10 +1088,12 @@ void ResetSettingsCheckItem(SettingsCheckItem* item) {
 - (void)performUpdateCheck {
   __weak __typeof__(self) weakSelf = self;
 
-  if (OmahaService::HasStarted()) {
-    OmahaService::CheckNow(base::BindOnce(^(UpgradeRecommendedDetails details) {
-      [weakSelf handleOmahaResponse:details];
-    }));
+  OmahaService& omahaService = GetApplicationContext()->GetOmahaService();
+  if (omahaService.HasStarted()) {
+    _omahaPingSubscription = omahaService.CheckNow(
+        base::BindOnce(^(const UpgradeRecommendedDetails& details) {
+          [weakSelf handleOmahaResponse:details];
+        }));
   }
 
   // If after 30 seconds the Omaha server has not responded, assume Omaha error.

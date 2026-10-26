@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "base/check.h"
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
 #include "base/containers/flat_map.h"
@@ -68,7 +69,6 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
   static FakeSessionManagerClient* Get();
 
   // SessionManagerClient overrides
-  void SetStubDelegate(StubDelegate* delegate) override;
   void AddObserver(Observer* observer) override;
   void RemoveObserver(Observer* observer) override;
   bool HasObserver(const Observer* observer) const override;
@@ -138,7 +138,7 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
       const cryptohome::AccountIdentifier& cryptohome_id,
       const std::vector<std::string>& feature_flags,
       const std::map<std::string, std::string>& origin_list_flags) override;
-  void GetServerBackedStateKeys(StateKeysCallback callback) override;
+  void GetStateKeysWithTimeQuantumIndex(StateKeysCallback callback) override;
   void GetPsmDeviceActiveSecret(
       PsmDeviceActiveSecretCallback callback) override;
 
@@ -198,6 +198,21 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
     return restart_job_reason_;
   }
 
+  // Returns how many times RestartJob() was called.
+  int restart_job_call_count() const { return restart_job_call_count_; }
+
+  // If set to true, RestartJob() holds its reply until
+  // SendDeferredRestartJobReplies() is called, instead of replying
+  // immediately. Note that on success the real session_manager kills Chrome
+  // before replying. Must not be called while any reply is held.
+  void set_defer_restart_job_reply(bool defer_restart_job_reply) {
+    CHECK(deferred_restart_job_replies_.empty());
+    defer_restart_job_reply_ = defer_restart_job_reply;
+  }
+
+  // Replies with `result` to the RestartJob() calls whose replies are held.
+  void SendDeferredRestartJobReplies(bool result);
+
   void set_stop_session_callback(base::OnceClosure callback) {
     stop_session_callback_ = std::move(callback);
   }
@@ -244,13 +259,35 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
   // Notify observers about a property change completion.
   void OnPropertyChangeComplete(bool success);
 
+  // Default realistic time quantum index (representing year ~2026, where
+  // 1.78e9 seconds / 2^23 ~= 213).
+  static constexpr int64_t kDefaultCurrentTimeQuantumIndex = 213;
+
   // Configures the list of state keys used to satisfy
-  // GetServerBackedStateKeys() requests. Only available for
+  // GetStateKeysWithTimeQuantumIndex() requests. Only available for
   // PolicyStorageType::kInMemory.
   void set_server_backed_state_keys(
       const std::vector<std::string>& state_keys) {
     DCHECK_EQ(policy_storage_, PolicyStorageType::kInMemory);
-    server_backed_state_keys_ = state_keys;
+    server_backed_state_keys_ = SessionManagerClient::StateKeysData{
+        state_keys, state_keys.empty() ? 0 : kDefaultCurrentTimeQuantumIndex};
+  }
+
+  void set_current_time_quantum_index(int64_t current_time_quantum_index) {
+    DCHECK_EQ(policy_storage_, PolicyStorageType::kInMemory);
+    if (server_backed_state_keys_.has_value()) {
+      server_backed_state_keys_->current_time_quantum_index =
+          current_time_quantum_index;
+    } else {
+      server_backed_state_keys_ = SessionManagerClient::StateKeysData{
+          /*state_keys=*/{}, current_time_quantum_index};
+    }
+  }
+
+  void set_server_backed_state_keys_data(
+      SessionManagerClient::StateKeysData state_keys_data) {
+    DCHECK_EQ(policy_storage_, PolicyStorageType::kInMemory);
+    server_backed_state_keys_ = std::move(state_keys_data);
   }
 
   void set_psm_device_active_secret(
@@ -325,6 +362,10 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
     on_load_shill_profile_callback_ = std::move(callback);
   }
 
+  void set_on_request_lock_screen_callback(base::RepeatingClosure callback) {
+    on_request_lock_screen_callback_ = std::move(callback);
+  }
+
   bool session_stopped() const { return session_stopped_; }
 
   const SessionManagerClient::ActiveSessionsMap& user_sessions() const {
@@ -357,13 +398,21 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
   // requested restart reason.
   std::optional<RestartJobReason> restart_job_reason_;
 
+  int restart_job_call_count_ = 0;
+
+  // If set to true, RestartJob() replies are held in
+  // `deferred_restart_job_replies_` until SendDeferredRestartJobReplies() is
+  // called.
+  bool defer_restart_job_reply_ = false;
+  std::vector<chromeos::VoidDBusMethodCallback> deferred_restart_job_replies_;
+
   // Callback that will be run, if set, when StopSession() is called.
   base::OnceClosure stop_session_callback_;
 
   base::ObserverList<Observer> observers_{
       SessionManagerClient::kObserverListPolicy};
   SessionManagerClient::ActiveSessionsMap user_sessions_;
-  base::expected<std::vector<std::string>, StateKeyErrorType>
+  base::expected<SessionManagerClient::StateKeysData, StateKeyErrorType>
       server_backed_state_keys_;
 
   std::string psm_device_active_secret_;
@@ -402,6 +451,9 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
       ServerBackedStateKeysHandling::kRegular;
   OnLoadShillProfileCallback on_load_shill_profile_callback_;
 
+  // Callback which is triggered on `RequestLockScreen` call.
+  base::RepeatingClosure on_request_lock_screen_callback_;
+
   bool arc_available_ = false;
   bool force_upgrade_failure_ = false;
   base::TimeTicks arc_start_time_;
@@ -417,8 +469,6 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
 
   // Contains last request passed to StartArcInstance
   arc::UpgradeArcContainerRequest last_upgrade_arc_request_;
-
-  raw_ptr<StubDelegate> delegate_ = nullptr;
 
   bool session_stopped_ = false;
 

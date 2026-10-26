@@ -4,12 +4,35 @@
 
 #include "third_party/blink/renderer/modules/peerconnection/adapters/ice_transport_adapter_impl.h"
 
+#include <optional>
 #include <utility>
+#include <vector>
 
-#include "base/notreached.h"
-#include "third_party/webrtc/api/ice_transport_factory.h"
+#include "base/check_op.h"
+#include "base/feature_list.h"
+#include "base/logging.h"
+#include "third_party/blink/renderer/modules/peerconnection/adapters/ice_transport_adapter.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/webrtc/api/candidate.h"
+#include "third_party/webrtc/api/ice_transport_interface.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
+#include "third_party/webrtc/p2p/base/candidate_pair_interface.h"
+#include "third_party/webrtc/p2p/base/ice_transport_internal.h"
+#include "third_party/webrtc/p2p/base/port.h"
+#include "third_party/webrtc/p2p/base/port_allocator.h"
+#include "third_party/webrtc/p2p/base/transport_description.h"
+#include "third_party/webrtc/rtc_base/network_route.h"
 
 namespace blink {
+
+namespace {
+
+// TODO(crbug.com/488071544): Remove this kill switch after the new behavior
+// has been stable for one or two milestones without regressions.
+BASE_FEATURE(kWebRtcPreserveIceGatheringStateOrdering,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+}  // namespace
 
 IceTransportAdapterImpl::IceTransportAdapterImpl(
     Delegate* delegate,
@@ -120,6 +143,22 @@ void IceTransportAdapterImpl::SetupIceTransportChannel() {
           that->OnRoleConflict(transport);
         }
       });
+
+  if (base::FeatureList::IsEnabled(
+          kWebRtcPreserveIceGatheringStateOrdering)) {
+    // The native transport may have started or completed gathering before this
+    // adapter was initialized. Replay the missed transitions so that the
+    // web-observable state still progresses through "gathering" before
+    // "complete".
+    const webrtc::IceGatheringState gathering_state =
+        ice_transport_channel()->gathering_state();
+    if (gathering_state != webrtc::kIceGatheringNew) {
+      delegate_->OnGatheringStateChanged(webrtc::kIceGatheringGathering);
+    }
+    if (gathering_state == webrtc::kIceGatheringComplete) {
+      delegate_->OnGatheringStateChanged(webrtc::kIceGatheringComplete);
+    }
+  }
 }
 
 void IceTransportAdapterImpl::OnGatheringStateChanged(

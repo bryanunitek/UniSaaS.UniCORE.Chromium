@@ -115,6 +115,10 @@ export const BAR_GAP = 3;
 // `bar-pill.is-unspawned` CSS rule.
 const MAX_BAR_HEIGHT = 36;
 
+// Maximum allowed bar height including spring overshoot, in px, matching
+// --bar-max-height in recording_wave.css to prevent vertical clipping.
+export const MAX_BAR_BOUND_HEIGHT = 40;
+
 // Spring constants to match Android spring behavior.
 // Force of the spring.
 const SPRING_STIFFNESS = 200.0;
@@ -291,11 +295,15 @@ export class RecordingWaveElement extends CrLitElement {
         reflect: true,
         type: Boolean,
       },
+      transcript: {type: String},
+      receivedSpeech: {type: Boolean},
     };
   }
 
   accessor isListening: boolean = false;
   accessor darkThemeColorsEnabled: boolean = true;
+  accessor transcript: string = '';
+  accessor receivedSpeech: boolean = false;
 
   private barsData_: Bar[] = [];
   private lastDrawTimestamp_: number = performance.now();
@@ -333,6 +341,13 @@ export class RecordingWaveElement extends CrLitElement {
 
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
+
+    if (changedProperties.has('transcript')) {
+      AudioProcessor.updateTranscript(this.transcript);
+    }
+    if (changedProperties.has('receivedSpeech')) {
+      AudioProcessor.updateReceivedSpeech(this.receivedSpeech);
+    }
 
     if (changedProperties.has('isListening') ||
         changedProperties.has('darkThemeColorsEnabled')) {
@@ -608,7 +623,11 @@ export class RecordingWaveElement extends CrLitElement {
           // - scaleY: Stretches the height from the initial px up to
           //   full size.
           const scaleX = lerp(0.5, 1, bar.currentScaleX);
-          const scaleY = lerp(bar.initialScale, 1, bar.currentScaleY);
+          const rawScaleY = lerp(bar.initialScale, 1, bar.currentScaleY);
+          // Clamp scaleY to ensure the bar height (including spring overshoot)
+          // does not exceed MAX_BAR_BOUND_HEIGHT to prevent vertical clipping.
+          const scaleY =
+              Math.min(rawScaleY, MAX_BAR_BOUND_HEIGHT / bar.targetHeightPx);
           pill.style.transform = `scaleX(${scaleX}) scaleY(${scaleY})`;
 
           // Redundancy check/action:

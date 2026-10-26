@@ -15,7 +15,7 @@ VideoCaptureDeviceChromeOSHalv3::VideoCaptureDeviceChromeOSHalv3(
     VideoCaptureDeviceChromeOSDelegate* delegate,
     const VideoCaptureDeviceDescriptor& vcd_descriptor)
     : vcd_delegate_(delegate) {
-  client_type_ = base::StartsWith(vcd_descriptor.device_id, kVirtualPrefix)
+  client_type_ = vcd_descriptor.device_id.starts_with(kVirtualPrefix)
                      ? ClientType::kVideoClient
                      : ClientType::kPreviewClient;
 }
@@ -50,6 +50,10 @@ void VideoCaptureDeviceChromeOSHalv3::SetPhotoOptions(
     mojom::PhotoSettingsPtr settings,
     SetPhotoOptionsCallback callback) {
   vcd_delegate_->SetPhotoOptions(std::move(settings), std::move(callback));
+}
+
+void VideoCaptureDeviceChromeOSHalv3::InvalidateBuffers() {
+  vcd_delegate_->InvalidateBuffers(client_type_);
 }
 
 }  // namespace media

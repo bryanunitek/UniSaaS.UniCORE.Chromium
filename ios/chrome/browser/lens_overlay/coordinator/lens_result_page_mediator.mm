@@ -347,6 +347,10 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
       return;
     }
 
+    if (!URL.SchemeIsHTTPOrHTTPS()) {
+      return;
+    }
+
     [self.delegate lensResultPageOpenURLInNewTabRequested:URL];
     [self.delegate
          lensResultPageMediator:self
@@ -362,8 +366,7 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
     [self.delegate
          lensResultPageMediator:self
         didOpenNewTabFromSource:lens::LensOverlayNewTabSource::kExploreBarTab];
-  } else if (base::FeatureList::IsEnabled(kLensSearchHeadersCheckEnabled) &&
-             requestInfo.target_frame_is_main && lens::IsGoogleHostURL(URL) &&
+  } else if (requestInfo.target_frame_is_main && lens::IsGoogleHostURL(URL) &&
              [self shouldAddHeaders:request]) {
     // Only attach headers for navigation clicks targeting main frame.
     [self loadResultsURL:URL httpHeaders:_latestHttpHeaders];
@@ -421,23 +424,20 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
 - (void)webState:(web::WebState*)webState
     didStartNavigation:(web::NavigationContext*)navigationContext {
   BOOL isSameDocument = navigationContext->IsSameDocument();
-  if (isSameDocument) {
-    // Disregard same document navigation from initiating progress loading.
-
-    // Check for overlay status.
-    GURL URL = navigationContext->GetUrl();
-    if (IsAIMOverlayShownUrl(URL)) {
-      _isAIMOverlayShown = YES;
-      [self.bottomSheetCommands requestMaximizeBottomSheet];
-      [self.bottomSheetCommands hideSearchBar];
-    } else if (_isAIMOverlayShown) {
-      _isAIMOverlayShown = NO;
-      [self.bottomSheetCommands showSearchBar];
-    }
-  } else {
+  if (!isSameDocument) {
     // Reset progress for new page.
     _lastCommitedProgress = 0;
+  }
+
+  // Check for overlay status.
+  GURL URL = navigationContext->GetUrl();
+  if (IsAIMOverlayShownUrl(URL)) {
+    _isAIMOverlayShown = YES;
+    [self.bottomSheetCommands requestMaximizeBottomSheet];
+    [self.bottomSheetCommands hideSearchBar];
+  } else if (_isAIMOverlayShown) {
     _isAIMOverlayShown = NO;
+    [self.bottomSheetCommands showSearchBar];
   }
 }
 
@@ -491,7 +491,7 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
     web::Referrer referrer(_webState->GetLastCommittedURL(),
                            web::ReferrerPolicyDefault);
     _webState->OpenURL(web::WebState::OpenURLParams(
-        URLToLoad, referrer, WindowOpenDisposition::CURRENT_TAB,
+        URLToLoad, referrer, WindowOpenDisposition::kCurrentTab,
         ui::PAGE_TRANSITION_LINK, false));
   }
 }
@@ -527,6 +527,11 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
       return nullptr;
     }
   }
+
+  if (!URL.SchemeIsHTTPOrHTTPS()) {
+    return nullptr;
+  }
+
   // Open the URL in a new tab.
   [self.delegate lensResultPageOpenURLInNewTabRequested:URL];
   [self.delegate
@@ -571,6 +576,22 @@ inline constexpr char kDarkModeParameterDarkValue[] = "1";
                                  (void (^)(SecIdentityRef))handler {
   _browserWebStateDelegate->OnAuthRequired(webState, protectionSpace,
                                            base::BindOnce(handler));
+}
+
+- (void)webState:(web::WebState*)webState
+    didRequestProxyAuthForProtectionSpace:(NSURLProtectionSpace*)protectionSpace
+                       proposedCredential:(NSURLCredential*)proposedCredential
+                          failureResponse:(NSURLResponse*)failureResponse
+                        completionHandler:(void (^)(NSString* username,
+                                                    NSString* password,
+                                                    NSError* error))handler
+    API_AVAILABLE(ios(18.1)) {
+  if (!handler) {
+    return;
+  }
+  _browserWebStateDelegate->OnProxyAuthChallenge(
+      webState, protectionSpace, proposedCredential, failureResponse,
+      base::BindOnce(handler));
 }
 
 // This API can be used to show custom input views in the web view.

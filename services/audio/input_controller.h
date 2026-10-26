@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
@@ -29,9 +30,9 @@
 namespace media {
 class AecdumpRecordingManager;
 class AudioBus;
+class AudioDebugRecordingManager;
 class AudioInputStream;
 class AudioManager;
-class VoiceIsolation;
 struct AudioGlitchInfo;
 }  // namespace media
 
@@ -41,6 +42,7 @@ class AudioCallback;
 class MlModelManager;
 class OutputTapper;
 class ReferenceSignalProvider;
+class VoiceIsolationHandler;
 
 // Only do power monitoring for non-mobile platforms to save resources.
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
@@ -159,14 +161,14 @@ class InputController final {
     virtual void OnMuted(bool is_muted) = 0;
 
    protected:
-    virtual ~EventHandler() {}
+    virtual ~EventHandler() = default;
   };
 
   // A synchronous writer interface used by InputController for
   // synchronous writing.
   class SyncWriter {
    public:
-    virtual ~SyncWriter() {}
+    virtual ~SyncWriter() = default;
 
     // Write certain amount of data from |data|.
     virtual void Write(const media::AudioBus* data,
@@ -248,27 +250,24 @@ class InputController final {
   static void LogCaptureStartupResult(StreamType type,
                                       CaptureStartupResult result);
 
-  InputController(
-      EventHandler* event_handler,
-      SyncWriter* sync_writer,
-      std::unique_ptr<ReferenceSignalProvider> reference_signal_provider,
-      media::AecdumpRecordingManager* aecdump_recording_manager,
-      raw_ptr<MlModelManager> ml_model_manager,
-      media::mojom::AudioProcessingConfigPtr processing_config,
-      const media::AudioParameters& output_params,
-      const media::AudioParameters& device_params,
-      StreamType type
-#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
-      , std::unique_ptr<media::VoiceIsolation> voice_isolation
-#endif
-  );
+  InputController(EventHandler* event_handler,
+                  SyncWriter* sync_writer,
+                  StreamType type);
 
   void DoCreate(
       media::AudioManager* audio_manager,
       const media::AudioParameters& params,
       const std::string& device_id,
       bool enable_agc,
-      LoopbackMixin::MaybeCreateCallback maybe_create_loopback_mixin_cb);
+      LoopbackMixin::MaybeCreateCallback maybe_create_loopback_mixin_cb,
+      media::mojom::AudioProcessingConfigPtr processing_config,
+      const media::AudioParameters& device_params,
+      std::unique_ptr<ReferenceSignalProvider> reference_signal_provider,
+      media::AecdumpRecordingManager* aecdump_recording_manager,
+      raw_ptr<MlModelManager> ml_model_manager);
+  // Forwards `error_code` to the EventHandler at most once. Subsequent calls
+  // (e.g. second runtime errors, or errors arriving after DoCreate() failure
+  // or Close()) are ignored.
   void DoReportError(ErrorCode error_code);
   void DoLogAudioLevels(float level_dbfs, int microphone_volume_percent);
 
@@ -301,7 +300,13 @@ class InputController final {
                        float* average_power_dbfs,
                        int* mic_volume_percent);
 
+  // Polls the input stream's mute state when push notifications are not
+  // supported by the platform.
   void CheckMutedState();
+
+  // Deduplicates and forwards mute state changes received through either push
+  // notifications or polling.
+  void OnMuteStateChanged(bool is_muted);
 
   // Called once at first audio callback.
   void ReportIsAlive();
@@ -313,8 +318,13 @@ class InputController final {
               const media::AudioGlitchInfo& glitch_info);
 
 #if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
-  // Called from the constructor. Helper to isolate logic setting up audio
-  // processing components.
+  using DeliverProcessedAudioCallback = base::RepeatingCallback<void(
+      const media::AudioBus& audio_bus,
+      base::TimeTicks audio_capture_time,
+      const media::AudioGlitchInfo& audio_glitch_info)>;
+
+  // Called from DoCreate. Helper to isolate logic setting up audio processing
+  // components.
   void MaybeSetUpAudioProcessing(
       media::mojom::AudioProcessingConfigPtr processing_config,
       const media::AudioParameters& processing_output_params,
@@ -322,12 +332,21 @@ class InputController final {
       std::unique_ptr<ReferenceSignalProvider> reference_signal_provider,
       media::AecdumpRecordingManager* aecdump_recording_manager,
       raw_ptr<MlModelManager> ml_model_manager,
-      std::unique_ptr<media::VoiceIsolation> voice_isolation);
+      std::unique_ptr<VoiceIsolationHandler> voice_isolation,
+      DeliverProcessedAudioCallback deliver_processed_audio_callback);
+
+  // Called from DoCreate. Helper to create a VoiceIsolationHandler. It might
+  // return nullptr if the VoiceIsolation component is not created. If created,
+  // `deliver_processed_audio_callback` should be consumed.
+  std::unique_ptr<VoiceIsolationHandler> MaybeCreateVoiceIsolationHandler(
+      raw_ptr<MlModelManager> ml_model_manager,
+      media::AudioDebugRecordingManager* debug_recording_manager,
+      const media::AudioParameters& processing_output_params,
+      DeliverProcessedAudioCallback deliver_processed_audio_callback);
 
   // Used as a callback for |audio_processor_handler_|.
   void DeliverProcessedAudio(const media::AudioBus& audio_bus,
                              base::TimeTicks audio_capture_time,
-                             std::optional<double> new_volume,
                              const media::AudioGlitchInfo& glitch_info);
 #endif
 
@@ -380,6 +399,14 @@ class InputController final {
   base::TimeTicks stream_create_time_;
 
   bool is_muted_ = false;
+
+  // Cleared once an error has been reported to the EventHandler or Close() has
+  // been called, so that at most one error is ever dispatched.
+  bool can_report_error_ = true;
+
+  // Mute state changes are monitored by either a platform subscription or,
+  // when subscriptions are not supported, the polling timer.
+  std::optional<base::CallbackListSubscription> mute_state_subscription_;
   base::RepeatingTimer check_muted_state_timer_;
 
   // If configured, used to add chromium playout to the captured audio signal.

@@ -14,8 +14,13 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.util.Base64;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowManager;
 
+import androidx.core.view.WindowInsetsCompat;
 import androidx.test.filters.LargeTest;
 import androidx.test.filters.SmallTest;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -39,6 +44,8 @@ import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.blink.mojom.DisplayMode;
 import org.chromium.cc.input.BrowserControlsState;
@@ -48,6 +55,7 @@ import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
 import org.chromium.chrome.browser.customtabs.CustomTabsTestUtils;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.test.MockCertVerifierRuleAndroid;
@@ -76,6 +84,10 @@ import java.util.concurrent.TimeoutException;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @DisableIf.Device(DeviceFormFactor.TABLET_OR_DESKTOP) // crbug.com/463649037
 public class WebappNavigationTest {
+    /** Opts standalone webapps into the short-edges cutout mode, which is off by default. */
+    private static final String SHORT_EDGES_CUTOUT_MODE_STANDALONE =
+            ChromeFeatureList.WEB_APP_SHORT_EDGES_CUTOUT_MODE + ":enable_standalone/true";
+
     public final WebappActivityTestRule mActivityTestRule = new WebappActivityTestRule();
 
     public MockCertVerifierRuleAndroid mCertVerifierRule =
@@ -188,6 +200,140 @@ public class WebappNavigationTest {
         assertEquals(Color.CYAN, activity.getToolbarManager().getPrimaryColor());
     }
 
+    @Test
+    @SmallTest
+    @Feature({"Webapps"})
+    @Restriction(DeviceFormFactor.PHONE)
+    // The coordinated cutout path requires edge-to-edge everywhere, unsupported pre-R.
+    @MinAndroidSdkLevel(Build.VERSION_CODES.R)
+    @EnableFeatures(ChromeFeatureList.WEB_APP_SHORT_EDGES_CUTOUT_MODE)
+    public void testRegularLinkOffOriginFullscreenShortEdgesCutoutMode() throws Exception {
+        runOffOriginShortEdgesCutoutModeTest(DisplayMode.FULLSCREEN);
+    }
+
+    private void runOffOriginShortEdgesCutoutModeTest(@DisplayMode.EnumType int displayMode)
+            throws Exception {
+        Intent intent =
+                mActivityTestRule
+                        .createIntent()
+                        .putExtra(WebappConstants.EXTRA_DISPLAY_MODE, displayMode);
+        WebappActivity activity = runWebappActivityAndWaitForIdle(intent);
+        assertEquals(
+                BrowserControlsState.HIDDEN, WebappActivityTestRule.getToolbarShowState(activity));
+
+        mActivityTestRule.runJavaScriptCodeInCurrentTab(
+                "var meta = document.createElement('meta');"
+                        + "meta.setAttribute('name', 'viewport');"
+                        + "meta.setAttribute('content', 'viewport-fit=cover');"
+                        + "document.head.appendChild(meta);");
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            activity.getWindow().getAttributes().layoutInDisplayCutoutMode,
+                            Matchers.is(
+                                    WindowManager.LayoutParams
+                                            .LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES));
+                });
+
+        // Navigate off-origin via JS; clicking an anchor is unreliable while the page draws
+        // edge-to-edge because the click coordinates are offset.
+        mActivityTestRule.runJavaScriptCodeInCurrentTab(
+                String.format("location.assign('%s');", offOriginUrl()));
+        ChromeTabUtils.waitForTabPageLoaded(
+                ThreadUtils.runOnUiThreadBlocking(() -> activity.getActivityTab()), offOriginUrl());
+        WebappActivityTestRule.assertToolbarShownMaybeHideable(activity);
+
+        // The new page never declared viewport-fit=cover; the cutout mode should be restored.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            activity.getWindow().getAttributes().layoutInDisplayCutoutMode,
+                            Matchers.is(
+                                    WindowManager.LayoutParams
+                                            .LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT));
+                });
+
+        // The page-driven edge-to-edge state should be released and the toolbar laid out normally.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    View controlContainer = activity.findViewById(R.id.control_container);
+                    Criteria.checkThat(controlContainer, Matchers.notNullValue());
+                    Criteria.checkThat(controlContainer.getVisibility(), Matchers.is(View.VISIBLE));
+                    Criteria.checkThat(controlContainer.getHeight(), Matchers.greaterThan(0));
+
+                    WindowInsets rootInsets =
+                            activity.getWindow().getDecorView().getRootWindowInsets();
+                    Criteria.checkThat(rootInsets, Matchers.notNullValue());
+                    int statusBarInset =
+                            WindowInsetsCompat.toWindowInsetsCompat(rootInsets)
+                                    .getInsets(WindowInsetsCompat.Type.statusBars())
+                                    .top;
+                    Criteria.checkThat(statusBarInset, Matchers.greaterThan(0));
+
+                    int[] location = new int[2];
+                    controlContainer.getLocationOnScreen(location);
+                    Criteria.checkThat(location[1], Matchers.greaterThanOrEqualTo(statusBarInset));
+                });
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Webapps"})
+    @Restriction(DeviceFormFactor.PHONE)
+    @MinAndroidSdkLevel(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    @EnableFeatures({SHORT_EDGES_CUTOUT_MODE_STANDALONE, ChromeFeatureList.EDGE_TO_EDGE_EVERYWHERE})
+    public void testRegularLinkOffOriginShortEdgesCutoutMode_EdgeToEdgeEverywhere()
+            throws Exception {
+        WebappActivity activity = runWebappActivityAndWaitForIdle(mActivityTestRule.createIntent());
+        assertEquals(
+                BrowserControlsState.HIDDEN, WebappActivityTestRule.getToolbarShowState(activity));
+
+        mActivityTestRule.runJavaScriptCodeInCurrentTab(
+                "var meta = document.createElement('meta');"
+                        + "meta.setAttribute('name', 'viewport');"
+                        + "meta.setAttribute('content', 'viewport-fit=cover');"
+                        + "document.head.appendChild(meta);");
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            activity.getWindow().getAttributes().layoutInDisplayCutoutMode,
+                            Matchers.is(
+                                    WindowManager.LayoutParams
+                                            .LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES));
+                });
+
+        // Navigate off-origin via JS; clicking an anchor is unreliable while the page draws
+        // edge-to-edge because the click coordinates are offset.
+        mActivityTestRule.runJavaScriptCodeInCurrentTab(
+                String.format("location.assign('%s');", offOriginUrl()));
+        ChromeTabUtils.waitForTabPageLoaded(
+                ThreadUtils.runOnUiThreadBlocking(() -> activity.getActivityTab()), offOriginUrl());
+        WebappActivityTestRule.assertToolbarShownMaybeHideable(activity);
+
+        // The new page never declared viewport-fit=cover; the cutout mode should be restored.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            activity.getWindow().getAttributes().layoutInDisplayCutoutMode,
+                            Matchers.is(
+                                    WindowManager.LayoutParams
+                                            .LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT));
+                });
+
+        // The page-driven edge-to-edge state should be released and the toolbar laid out normally.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            activity.getEdgeToEdgeManager().shouldContentFitsWindowInsets(),
+                            Matchers.is(false));
+
+                    View controlContainer = activity.findViewById(R.id.control_container);
+                    Criteria.checkThat(controlContainer, Matchers.notNullValue());
+                    Criteria.checkThat(controlContainer.getVisibility(), Matchers.is(View.VISIBLE));
+                    Criteria.checkThat(controlContainer.getHeight(), Matchers.greaterThan(0));
+                });
+    }
+
     /**
      * Test that navigating outside of the webapp scope as a result of submitting a form with method
      * "POST": - Shows a CCT-like webapp toolbar. - Preserves the theme color specified in the
@@ -292,6 +438,8 @@ public class WebappNavigationTest {
     @Test
     @SmallTest
     @Feature({"Webapps"})
+    // TODO(crbug.com/571163249): Re-enable this test.
+    @DisabledTest(message = "https://crbug.com/571163249")
     public void testOpenInChromeFromContextMenuTabbedChrome() throws Exception {
         // Needed to get full context menu.
         FirstRunStatus.setFirstRunFlowComplete(true);
@@ -384,7 +532,6 @@ public class WebappNavigationTest {
     @Test
     @LargeTest
     @Feature({"Webapps"})
-    @DisabledTest(message = "crbug.com/529449577")
     public void testCloseButtonReturnsToUrlBeforeRedirects() throws Exception {
         Intent launchIntent = mActivityTestRule.createIntent();
         mActivityTestRule.addTwaExtrasToIntent(launchIntent);
@@ -441,7 +588,8 @@ public class WebappNavigationTest {
                         mActivityTestRule
                                 .getTestServer()
                                 .getURL("/content/test/data/android/permission_navigation.html"));
-        mActivityTestRule.runJavaScriptCodeInCurrentTab("requestGeolocationPermission()");
+        mActivityTestRule.runJavaScriptCodeWithUserGestureInCurrentTab(
+                "requestGeolocationPermission()");
         CriteriaHelper.pollUiThread(
                 () -> PermissionDialogController.getInstance().isDialogShownForTest(),
                 "Permission prompt did not appear in allotted time");
@@ -502,7 +650,7 @@ public class WebappNavigationTest {
     }
 
     private void clickNodeWithId(String id) throws Exception {
-        DOMUtils.clickNode(
+        DOMUtils.clickNodeWithJavaScript(
                 ThreadUtils.runOnUiThreadBlocking(
                                 () -> mActivityTestRule.getActivity().getActivityTab())
                         .getWebContents(),

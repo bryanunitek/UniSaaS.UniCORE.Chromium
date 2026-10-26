@@ -39,7 +39,7 @@ class InlineItemsBuilderTest : public RenderingTest {
   void SetUp() override {
     RenderingTest::SetUp();
     style_ = &GetDocument().GetStyleResolver().InitialStyle();
-    block_flow_ = LayoutBlockFlow::CreateAnonymous(&GetDocument(), style_);
+    block_flow_ = LayoutBlockFlow::CreateAnonymous(GetDocument(), *style_);
     items_ = MakeGarbageCollected<InlineItemsHolder>();
     anonymous_objects_ =
         MakeGarbageCollected<GCedHeapVector<Member<LayoutObject>>>();
@@ -58,7 +58,7 @@ class InlineItemsBuilderTest : public RenderingTest {
     ComputedStyleBuilder builder(*style_);
     builder.SetWhiteSpace(whitespace);
     style_ = builder.TakeStyle();
-    block_flow_->SetStyle(style_, LayoutObject::ApplyStyleChanges::kNo);
+    block_flow_->SetStyle(*style_, LayoutObject::ApplyStyleChanges::kNo);
   }
 
   const ComputedStyle* GetStyle(EWhiteSpace whitespace) {
@@ -76,21 +76,21 @@ class InlineItemsBuilderTest : public RenderingTest {
 
   void AppendText(const String& text, InlineItemsBuilder* builder) {
     LayoutText* layout_text =
-        LayoutText::CreateEmptyAnonymous(GetDocument(), style_);
+        LayoutText::CreateEmptyAnonymous(GetDocument(), *style_);
     anonymous_objects_->push_back(layout_text);
     builder->AppendText(text, layout_text);
   }
 
   void AppendAtomicInline(InlineItemsBuilder* builder) {
     LayoutBlockFlow* layout_block_flow =
-        LayoutBlockFlow::CreateAnonymous(&GetDocument(), style_);
+        LayoutBlockFlow::CreateAnonymous(GetDocument(), *style_);
     anonymous_objects_->push_back(layout_block_flow);
     builder->AppendAtomicInline(layout_block_flow);
   }
 
   void AppendBlockInInline(InlineItemsBuilder* builder) {
     LayoutBlockFlow* layout_block_flow =
-        LayoutBlockFlow::CreateAnonymous(&GetDocument(), style_);
+        LayoutBlockFlow::CreateAnonymous(GetDocument(), *style_);
     anonymous_objects_->push_back(layout_block_flow);
     builder->AppendBlockInInline(layout_block_flow);
   }
@@ -108,7 +108,7 @@ class InlineItemsBuilderTest : public RenderingTest {
     for (Input& input : inputs) {
       if (!input.layout_text) {
         input.layout_text = LayoutText::CreateEmptyAnonymous(
-            GetDocument(), GetStyle(input.whitespace));
+            GetDocument(), *GetStyle(input.whitespace));
         anonymous_objects.push_back(input.layout_text);
       }
       builder.AppendText(input.text, input.layout_text);
@@ -487,13 +487,13 @@ TEST_F(InlineItemsBuilderTest, BidiBlockOverride) {
 }
 
 static LayoutInline* CreateLayoutInline(
-    Document* document,
+    Document& document,
     void (*initialize_style)(ComputedStyleBuilder&)) {
   ComputedStyleBuilder builder =
-      document->GetStyleResolver().CreateComputedStyleBuilder();
+      document.GetStyleResolver().CreateComputedStyleBuilder();
   initialize_style(builder);
   LayoutInline* const node = LayoutInline::CreateAnonymous(document);
-  node->SetStyle(builder.TakeStyle(), LayoutObject::ApplyStyleChanges::kNo);
+  node->SetStyle(*builder.TakeStyle(), LayoutObject::ApplyStyleChanges::kNo);
   node->SetIsInLayoutNGInlineFormattingContext(true);
   return node;
 }
@@ -503,7 +503,7 @@ TEST_F(InlineItemsBuilderTest, BidiIsolate) {
   InlineItemsBuilder builder(GetLayoutBlockFlow(), &items);
   AppendText("Hello ", &builder);
   LayoutInline* const isolate_rtl =
-      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+      CreateLayoutInline(GetDocument(), [](ComputedStyleBuilder& builder) {
         builder.SetUnicodeBidi(UnicodeBidi::kIsolate);
         builder.SetDirection(TextDirection::kRtl);
       });
@@ -528,7 +528,7 @@ TEST_F(InlineItemsBuilderTest, BidiIsolateOverride) {
   InlineItemsBuilder builder(GetLayoutBlockFlow(), &items);
   AppendText("Hello ", &builder);
   LayoutInline* const isolate_override_rtl =
-      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+      CreateLayoutInline(GetDocument(), [](ComputedStyleBuilder& builder) {
         builder.SetUnicodeBidi(UnicodeBidi::kIsolateOverride);
         builder.SetDirection(TextDirection::kRtl);
       });
@@ -561,17 +561,17 @@ TEST_F(InlineItemsBuilderTest, BlockInInline) {
 TEST_F(InlineItemsBuilderTest, OpenCloseRubyColumns) {
   GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kInStyleRecalc);
   LayoutInline* ruby =
-      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+      CreateLayoutInline(GetDocument(), [](ComputedStyleBuilder& builder) {
         builder.SetDisplay(EDisplay::kRuby);
       });
   LayoutInline* rt =
-      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+      CreateLayoutInline(GetDocument(), [](ComputedStyleBuilder& builder) {
         builder.SetDisplay(EDisplay::kRubyText);
       });
   ruby->AddChild(rt);
   GetLayoutBlockFlow()->AddChild(ruby);
   LayoutInline* orphan_rt =
-      CreateLayoutInline(&GetDocument(), [](ComputedStyleBuilder& builder) {
+      CreateLayoutInline(GetDocument(), [](ComputedStyleBuilder& builder) {
         builder.SetDisplay(EDisplay::kRubyText);
       });
   GetLayoutBlockFlow()->AddChild(orphan_rt);

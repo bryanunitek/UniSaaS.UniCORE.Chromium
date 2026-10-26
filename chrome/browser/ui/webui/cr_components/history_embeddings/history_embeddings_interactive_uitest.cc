@@ -22,9 +22,9 @@
 #include "components/history_embeddings/content/history_embeddings_service.h"
 #include "components/history_embeddings/core/history_embeddings_features.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/page_content_annotations/content/page_content_extraction_service.h"
-#include "components/page_content_annotations/core/page_content_annotations_features.h"
 #include "components/page_content_annotations/core/page_content_annotations_service.h"
 #include "components/page_content_annotations/core/test_page_content_annotator.h"
 #include "components/passage_embeddings/core/passage_embeddings_test_util.h"
@@ -92,8 +92,7 @@ class HistoryEmbeddingsInteractiveTest
 
   void SetUp() override {
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        {{history_embeddings::kHistoryEmbeddings, {{}}},
-         {page_content_annotations::features::kPageContentAnnotations, {{}}}},
+        {{history_embeddings::kHistoryEmbeddings, {{}}}},
         /*disabled_features=*/{});
 
     InteractiveBrowserTest::SetUp();
@@ -113,14 +112,12 @@ class HistoryEmbeddingsInteractiveTest
 
   void OverrideVisibilityScoresForTesting(
       const base::flat_map<std::string, double>& visibility_scores_for_input) {
-    std::unique_ptr<optimization_guide::ModelInfo> model_info =
-        optimization_guide::TestModelInfoBuilder()
-            .SetModelFilePath(
-                base::FilePath(FILE_PATH_LITERAL("visibility_model")))
-            .SetVersion(123)
-            .Build();
-    CHECK(model_info);
-    page_content_annotator_.UseVisibilityScores(*model_info,
+    optimization_guide::ModelInfo model_info = {
+        .model_file_path =
+            base::FilePath(FILE_PATH_LITERAL("visibility_model")),
+        .version = 123,
+    };
+    page_content_annotator_.UseVisibilityScores(model_info,
                                                 visibility_scores_for_input);
     page_content_annotations_service()->OverridePageContentAnnotatorForTesting(
         &page_content_annotator_);

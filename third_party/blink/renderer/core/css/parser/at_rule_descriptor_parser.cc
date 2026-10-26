@@ -111,6 +111,8 @@ CSSFontFaceSrcValue::FontTechnology ValueIDToTechnology(CSSValueID valueID) {
       return CSSFontFaceSrcValue::FontTechnology::kTechnologyCDBT;
     case CSSValueID::kColorSbix:
       return CSSFontFaceSrcValue::FontTechnology::kTechnologySBIX;
+    case CSSValueID::kIncremental:
+      return CSSFontFaceSrcValue::FontTechnology::kTechnologyIncremental;
     default:
       NOTREACHED();
   }
@@ -296,8 +298,8 @@ CSSValue* ConsumeDescriptor(StyleRule::RuleType rule_type,
     case StyleRule::kMixin:
       return Parser::ParseAtFunctionOrMixinDescriptor(rule_type, id, stream,
                                                       context);
-    case StyleRule::kRoute:
-      return Parser::ParseAtRouteDescriptor(id, stream, context);
+    case StyleRule::kLocation:
+      return Parser::ParseAtLocationDescriptor(id, stream, context);
     case StyleRule::kCharset:
     case StyleRule::kContainer:
     case StyleRule::kStyle:
@@ -319,6 +321,7 @@ CSSValue* ConsumeDescriptor(StyleRule::RuleType rule_type,
     case StyleRule::kSupports:
     case StyleRule::kStartingStyle:
     case StyleRule::kResult:
+    case StyleRule::kPrivate:
     case StyleRule::kApplyMixin:
     case StyleRule::kContents:
     case StyleRule::kPositionTry:
@@ -436,20 +439,6 @@ CSSValue* AtRuleDescriptorParser::ParseFontFaceDescriptor(
     StringView string,
     const CSSParserContext& context) {
   CSSParserTokenStream stream(string);
-  return ParseFontFaceDescriptor(id, stream, context);
-}
-
-CSSValue* AtRuleDescriptorParser::ParseFontFaceDeclaration(
-    CSSParserTokenStream& stream,
-    const CSSParserContext& context) {
-  DCHECK_EQ(stream.Peek().GetType(), kIdentToken);
-  const CSSParserToken& token = stream.ConsumeIncludingWhitespace();
-  AtRuleDescriptorID id = token.ParseAsAtRuleDescriptorID();
-
-  if (stream.Consume().GetType() != kColonToken) {
-    return nullptr;  // Parse error
-  }
-
   return ParseFontFaceDescriptor(id, stream, context);
 }
 
@@ -597,7 +586,7 @@ CSSValue* AtRuleDescriptorParser::ParseAtFunctionOrMixinDescriptor(
                                                            &context);
 }
 
-CSSValue* AtRuleDescriptorParser::ParseAtRouteDescriptor(
+CSSValue* AtRuleDescriptorParser::ParseAtLocationDescriptor(
     AtRuleDescriptorID id,
     CSSParserTokenStream& stream,
     const CSSParserContext& context) {

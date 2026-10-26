@@ -4,21 +4,28 @@
 
 #include "ui/gtk/gtk_util.h"
 
+#include <glib.h>
 #include <locale.h>
 #include <stddef.h>
 
+#include <cmath>
 #include <memory>
-#include <optional>
 #include <string_view>
 
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/span.h"
 #include "base/environment.h"
-#include "base/files/file_path.h"
 #include "base/functional/callback.h"
+#include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_tokenizer.h"
 #include "base/strings/string_util.h"
+#include "base/synchronization/lock.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -37,6 +44,34 @@
 namespace gtk {
 
 namespace {
+
+// Colors read from the GTK theme, keyed by the CSS selector they were queried
+// with. Each query builds a chain of style contexts and renders into a small
+// bitmap, which costs 50-100 microseconds, and the same selectors are queried
+// for every GTK ColorProvider that is built and again on each theme load. The
+// results only change with the theme, so they are cached until
+// ClearStyleColorCache().
+struct StyleColorCache {
+  base::flat_map<std::string, SkColor> bg;
+  base::flat_map<std::string, SkColor> fg;
+  base::flat_map<std::string, SkColor> border;
+  base::flat_map<std::string, SkColor> separator;
+};
+
+StyleColorCache& GetStyleColorCache() {
+  static base::NoDestructor<StyleColorCache> cache;
+  return *cache;
+}
+
+SkColor GetCachedStyleColor(base::flat_map<std::string, SkColor>& cache,
+                            const std::string& css_selector,
+                            SkColor (*compute)(const std::string&)) {
+  auto it = cache.find(css_selector);
+  if (it == cache.end()) {
+    it = cache.emplace(css_selector, compute(css_selector)).first;
+  }
+  return it->second;
+}
 
 const char kAuraTransientParent[] = "aura-transient-parent";
 
@@ -198,10 +233,11 @@ bool GtkInitFromCommandLine(int* argc, char** argv) {
   // Callers should have already called setlocale(LC_ALL, "") and
   // setlocale(LC_NUMERIC, "C") by now. Chrome does this in
   // service_manager::Main.
-  UNSAFE_TODO(DCHECK_EQ(strcmp(setlocale(LC_NUMERIC, nullptr), "C"), 0));
+  DCHECK_EQ(std::string_view(setlocale(LC_NUMERIC, nullptr)), "C");
   // This prevents GTK from calling setlocale(LC_ALL, ""), which potentially
   // overwrites the LC_NUMERIC locale to something other than "C".
   gtk_disable_setlocale();
+  InstallGtkLogWriter();
   return GtkInitCheck(argc, argv);
 }
 
@@ -331,15 +367,19 @@ CairoSurface::~CairoSurface() {
 
 SkColor CairoSurface::GetAveragePixelValue(bool frame) {
   cairo_surface_flush(surface_);
-  SkColor* data =
-      reinterpret_cast<SkColor*>(cairo_image_surface_get_data(surface_));
-  int width = cairo_image_surface_get_width(surface_);
-  int height = cairo_image_surface_get_height(surface_);
-  DCHECK(4 * width == cairo_image_surface_get_stride(surface_));
+  const int width = cairo_image_surface_get_width(surface_);
+  const int height = cairo_image_surface_get_height(surface_);
+  CHECK_EQ(4 * width, cairo_image_surface_get_stride(surface_));
+  // SAFETY: `cairo_image_surface_get_data` returns a pointer to the surface's
+  // pixel buffer of `height * stride` bytes. `CHECK_EQ` above verifies that
+  // `stride == 4 * width` (`sizeof(SkColor) * width`), so the buffer contains
+  // `width * height` contiguous `SkColor` elements.
+  base::span<const SkColor> data = UNSAFE_BUFFERS(base::span(
+      reinterpret_cast<const SkColor*>(cairo_image_surface_get_data(surface_)),
+      base::checked_cast<size_t>(width * height)));
   long a = 0, r = 0, g = 0, b = 0;
   unsigned int max_alpha = 0;
-  for (int i = 0; i < width * height; i++) {
-    SkColor color = UNSAFE_TODO(data[i]);
+  for (SkColor color : data) {
     max_alpha = std::max(SkColorGetA(color), max_alpha);
     a += SkColorGetA(color);
     r += SkColorGetR(color);
@@ -425,7 +465,7 @@ GtkCssContext AppendCssNodeToStyleContext(GtkCssContext context,
   } part_type = CSS_OBJECT_NAME;
 
   static const struct {
-    const char* name;
+    std::string_view name;
     GtkStateFlags state_flag;
   } pseudo_classes[] = {
       {"active", GTK_STATE_FLAG_ACTIVE},
@@ -480,8 +520,7 @@ GtkCssContext AppendCssNodeToStyleContext(GtkCssContext context,
         case CSS_PSEUDOCLASS: {
           GtkStateFlags state_flag = GTK_STATE_FLAG_NORMAL;
           for (const auto& pseudo_class_entry : pseudo_classes) {
-            if (UNSAFE_TODO(
-                    strcmp(pseudo_class_entry.name, t.token().c_str())) == 0) {
+            if (pseudo_class_entry.name == t.token_piece()) {
               state_flag = pseudo_class_entry.state_flag;
               break;
             }
@@ -522,6 +561,8 @@ GtkCssContext GetStyleContextFromCss(const std::string& css_selector) {
   return context;
 }
 
+void ApplyCssProviderToContext(GtkCssContext context, GtkCssProvider* provider);
+
 SkColor GetBgColorFromStyleContext(GtkCssContext context) {
   // Backgrounds are more general than solid colors (eg. gradients),
   // but chromium requires us to boil this down to one color.  We
@@ -529,19 +570,22 @@ SkColor GetBgColorFromStyleContext(GtkCssContext context) {
   // set to a garbage color because a background-image will cover it
   // anyway.  So we instead render the background into a 24x24 bitmap,
   // removing any borders, and hope that we get a good color.
-  ApplyCssToContext(context,
-                    "* {"
-                    "border-radius: 0px;"
-                    "border-style: none;"
-                    "box-shadow: none;"
-                    "}");
+  static base::NoDestructor<ScopedCssProvider> strip_borders(
+      GetCssProvider("* {"
+                     "border-radius: 0px;"
+                     "border-style: none;"
+                     "box-shadow: none;"
+                     "}"));
+  ApplyCssProviderToContext(context, *strip_borders);
   gfx::Size size(24, 24);
   CairoSurface surface(size);
   RenderBackground(size, surface.cairo(), context);
   return surface.GetAveragePixelValue(false);
 }
 
-SkColor GetFgColor(const std::string& css_selector) {
+namespace {
+
+SkColor ComputeFgColor(const std::string& css_selector) {
   auto context = GetStyleContextFromCss(css_selector);
   auto fg = GtkStyleContextGetColor(context);
   if (SkColorGetA(fg) == SK_AlphaOPAQUE) {
@@ -549,6 +593,13 @@ SkColor GetFgColor(const std::string& css_selector) {
   }
   return color_utils::GetResultingPaintColor(
       fg, GetBgColorFromStyleContext(context));
+}
+
+}  // namespace
+
+SkColor GetFgColor(const std::string& css_selector) {
+  return GetCachedStyleColor(GetStyleColorCache().fg, css_selector,
+                             &ComputeFgColor);
 }
 
 ScopedCssProvider GetCssProvider(const std::string& css) {
@@ -581,11 +632,22 @@ void RenderBackground(const gfx::Size& size,
   gtk_render_background(context, cr, 0, 0, size.width(), size.height());
 }
 
-SkColor GetBgColor(const std::string& css_selector) {
+namespace {
+
+SkColor ComputeBgColor(const std::string& css_selector) {
   return GetBgColorFromStyleContext(GetStyleContextFromCss(css_selector));
 }
 
-SkColor GetBorderColor(const std::string& css_selector) {
+}  // namespace
+
+SkColor GetBgColor(const std::string& css_selector) {
+  return GetCachedStyleColor(GetStyleColorCache().bg, css_selector,
+                             &ComputeBgColor);
+}
+
+namespace {
+
+SkColor ComputeBorderColor(const std::string& css_selector) {
   // Borders have the same issue as backgrounds, due to the
   // border-image property.
   auto context = GetStyleContextFromCss(css_selector);
@@ -600,6 +662,13 @@ SkColor GetBorderColor(const std::string& css_selector) {
       border, GetBgColorFromStyleContext(context));
 }
 
+}  // namespace
+
+SkColor GetBorderColor(const std::string& css_selector) {
+  return GetCachedStyleColor(GetStyleColorCache().border, css_selector,
+                             &ComputeBorderColor);
+}
+
 bool ContextHasClass(GtkCssContext context, const std::string& style_class) {
   bool has_class = gtk_style_context_has_class(context, style_class.c_str());
   if (!GtkCheckVersion(4)) {
@@ -609,7 +678,9 @@ bool ContextHasClass(GtkCssContext context, const std::string& style_class) {
   return has_class;
 }
 
-SkColor GetSeparatorColor(const std::string& css_selector) {
+namespace {
+
+SkColor ComputeSeparatorColor(const std::string& css_selector) {
   auto context = GetStyleContextFromCss(css_selector);
   bool horizontal = ContextHasClass(context, "horizontal");
 
@@ -639,6 +710,29 @@ SkColor GetSeparatorColor(const std::string& css_selector) {
   gtk_render_background(context, surface.cairo(), 0, 0, w, h);
   gtk_render_frame(context, surface.cairo(), 0, 0, w, h);
   return surface.GetAveragePixelValue(false);
+}
+
+}  // namespace
+
+SkColor GetSeparatorColor(const std::string& css_selector) {
+  return GetCachedStyleColor(GetStyleColorCache().separator, css_selector,
+                             &ComputeSeparatorColor);
+}
+
+void ClearStyleColorCache() {
+  StyleColorCache& cache = GetStyleColorCache();
+  cache.bg.clear();
+  cache.fg.clear();
+  cache.border.clear();
+  cache.separator.clear();
+}
+
+bool IsGtkThemeDark() {
+  return color_utils::IsDark(GetBgColor({}));
+}
+
+SkColor GetThemeAccentColor() {
+  return GetBgColor("treeview.view treeview.view.cell:selected:focus");
 }
 
 std::string GetGtkSettingsStringProperty(GtkSettings* settings,
@@ -712,6 +806,33 @@ float GetDeviceScaleFactor() {
   return 1.0f;
 }
 
+int GetXftDpi() {
+  int dpi = -1;
+  g_object_get(gtk_settings_get_default(), "gtk-xft-dpi", &dpi, nullptr);
+  return dpi < 0 ? 0 : dpi;
+}
+
+GtkSettings* GetDefaultGtkSettings() {
+  return gtk_settings_get_default();
+}
+
+double GetFontScale() {
+  double resolution = 0;
+  if (const int dpi = GetXftDpi()) {
+    resolution = dpi / 1024.0;
+  } else if (!GtkCheckVersion(4)) {
+    // GdkScreen was removed in GTK4.  On GTK4, `gtk-xft-dpi` may be unset
+    // (eg. on Wayland without the xdg-desktop-portal Settings interface), in
+    // which case the default font scale is used.
+    GdkScreen* screen = gdk_screen_get_default();
+    resolution = gdk_screen_get_resolution(screen);
+  }
+  const double font_scale = resolution > 0 ? resolution / kDefaultDPI : 1.0;
+  // Round to the nearest 1/64th so that UI can losslessly multiply and divide
+  // the scale factor.
+  return std::round(font_scale * 64) / 64;
+}
+
 GdkTexture* GetTextureFromRenderNode(GskRenderNode* node) {
   DCHECK(GtkCheckVersion(4));
   if (!node) {
@@ -760,93 +881,117 @@ double GetOpacityFromContext(GtkStyleContext* context) {
   return opacity;
 }
 
-bool IsValidThemeName(ThemeProperty property, const char* theme) {
-  const bool is_key_theme = property == ThemeProperty::kKeyThemeName;
-  if (!theme) {
-    return is_key_theme;
-  }
-  std::string_view theme_str(theme);
-  if (theme_str.empty()) {
-    return is_key_theme;
-  }
-  base::FilePath theme_path(theme_str);
-  return theme_str != "." && !theme_path.IsAbsolute() &&
-         !theme_path.ReferencesParent() && theme_path.BaseName() == theme_path;
-}
-
-const char* GetThemeFallback(ThemeProperty property) {
-  switch (property) {
-    case ThemeProperty::kIconThemeName:
-      return "hicolor";
-    case ThemeProperty::kThemeName:
-      return "Adwaita";
-    case ThemeProperty::kKeyThemeName:
-      return nullptr;
-  }
-  NOTREACHED();
-}
-
 namespace {
 
-void (*g_orig_set_property)(GObject* object,
-                            guint property_id,
-                            const GValue* value,
-                            GParamSpec* pspec) = nullptr;
+base::Lock& GetShutdownLock() {
+  static base::NoDestructor<base::Lock> lock;
+  return *lock;
+}
 
-DISABLE_CFI_ICALL
-void GtkSettingsSetProperty(GObject* object,
-                            guint property_id,
-                            const GValue* value,
-                            GParamSpec* pspec) {
-  if (pspec && pspec->name) {
-    std::string_view prop_name(pspec->name);
-    std::optional<ThemeProperty> property;
-    if (prop_name == "gtk-theme-name") {
-      property = ThemeProperty::kThemeName;
-    } else if (prop_name == "gtk-icon-theme-name") {
-      property = ThemeProperty::kIconThemeName;
-    } else if (prop_name == "gtk-key-theme-name") {
-      property = ThemeProperty::kKeyThemeName;
-    }
-    if (property) {
-      const gchar* name = g_value_get_string(value);
-      if (!IsValidThemeName(*property, name)) {
-        GValue sanitized_value = G_VALUE_INIT;
-        g_value_init(&sanitized_value, G_TYPE_STRING);
-        g_value_set_string(&sanitized_value, GetThemeFallback(*property));
-        g_orig_set_property(object, property_id, &sanitized_value, pspec);
-        g_value_unset(&sanitized_value);
-        return;
+base::OnceClosure& GetShutdownCb() {
+  static base::NoDestructor<base::OnceClosure> shutdown_cb;
+  return *shutdown_cb;
+}
+
+GLogWriterOutput GtkLogWriter(GLogLevelFlags log_level,
+                              const GLogField* fields,
+                              gsize n_fields,
+                              gpointer user_data) {
+  std::string_view log_domain;
+  std::string_view message;
+  // SAFETY: GLib passes `fields` as an array of `n_fields` elements to the
+  // log writer function.
+  auto fields_span =
+      UNSAFE_BUFFERS(base::span(fields, base::checked_cast<size_t>(n_fields)));
+  for (const auto& field : fields_span) {
+    if (field.key) {
+      std::string_view key(field.key);
+      if (key == "GLIB_DOMAIN") {
+        if (field.value) {
+          const char* val = static_cast<const char*>(field.value);
+          // Per GLib's GLogField specification, length < 0 indicates that value
+          // is a null-terminated string. If length >= 0, the string is not
+          // guaranteed to be null-terminated and length specifies its size.
+          // SAFETY: When `field.length >= 0`, GLib guarantees `field.value`
+          // points to a buffer of at least `field.length` bytes.
+          log_domain = field.length < 0
+                           ? std::string_view(val)
+                           : UNSAFE_BUFFERS(std::string_view(
+                                 val, static_cast<size_t>(field.length)));
+        }
+      } else if (key == "MESSAGE") {
+        if (field.value) {
+          const char* val = static_cast<const char*>(field.value);
+          // Per GLib's GLogField specification, length < 0 indicates that value
+          // is a null-terminated string. If length >= 0, the string is not
+          // guaranteed to be null-terminated and length specifies its size.
+          // SAFETY: When `field.length >= 0`, GLib guarantees `field.value`
+          // points to a buffer of at least `field.length` bytes.
+          message = field.length < 0
+                        ? std::string_view(val)
+                        : UNSAFE_BUFFERS(std::string_view(
+                              val, static_cast<size_t>(field.length)));
+        }
       }
     }
   }
-  g_orig_set_property(object, property_id, value, pspec);
+
+  if (IsGdkFatalErrorMessage(log_domain, message)) {
+    base::OnceClosure cb;
+    {
+      base::AutoLock lock(GetShutdownLock());
+      cb = std::move(GetShutdownCb());
+    }
+    if (cb) {
+      LOG(WARNING) << "GDK lost display connection: \"" << message
+                   << "\"; invoking shutdown callback.";
+      std::move(cb).Run();
+    }
+  }
+
+  return g_log_writer_default(log_level, fields, n_fields, user_data);
 }
 
 }  // namespace
 
-void InstallGtkSettingsInterceptor() {
-  if (!g_orig_set_property) {
-    GObjectClass* gobject_class =
-        G_OBJECT_CLASS(g_type_class_ref(GTK_TYPE_SETTINGS));
-    g_orig_set_property = gobject_class->set_property;
-    gobject_class->set_property = GtkSettingsSetProperty;
-    g_type_class_unref(gobject_class);
+void InstallGtkLogWriter() {
+  static bool installed = false;
+  if (installed) {
+    return;
   }
+  installed = true;
+  g_log_set_writer_func(GtkLogWriter, nullptr, nullptr);
 }
 
-void UninstallGtkSettingsInterceptor() {
-  if (g_orig_set_property) {
-    GObjectClass* gobject_class =
-        G_OBJECT_CLASS(g_type_class_ref(GTK_TYPE_SETTINGS));
-    gobject_class->set_property = g_orig_set_property;
-    g_orig_set_property = nullptr;
-    g_type_class_unref(gobject_class);
-  }
+void SetGtkShutdownCb(base::OnceClosure shutdown_cb) {
+  // A lock is required because `GtkLogWriter()` may be invoked concurrently
+  // from any thread if GLib logs on a worker or driver thread.
+  base::AutoLock lock(GetShutdownLock());
+  GetShutdownCb() = std::move(shutdown_cb);
 }
 
-GtkSettings* GetDefaultGtkSettings() {
-  return gtk_settings_get_default();
+bool IsGdkFatalErrorMessage(std::string_view log_domain,
+                            std::string_view message) {
+  if (log_domain != "Gdk") {
+    return false;
+  }
+  // Low-level display connection and fatal IO error messages in GDK are
+  // hardcoded English string literals passed directly to g_message() without
+  // gettext localization. Therefore, matching English substrings works across
+  // all locales.
+  constexpr std::string_view kFatalSubstrings[] = {
+      "Lost connection to Wayland compositor",
+      "dispatching to Wayland display",
+      "reading events from display",
+      "flushing display",
+      "Fatal IO error",
+  };
+  for (const auto& substring : kFatalSubstrings) {
+    if (message.contains(substring)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace gtk

@@ -17,8 +17,9 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
-#include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
 #include "ui/webui/resources/cr_components/composebox/composebox.mojom.h"
+#include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
+#include "ui/webui/resources/cr_components/search/plural_string_provider.mojom.h"
 
 class LensOverlayController;
 class LensSearchController;
@@ -82,6 +83,12 @@ class LensSidePanelUntrustedUI
       mojo::PendingReceiver<composebox::mojom::PageHandlerFactory>
           receiver);
 
+  // Binds the plural_string::mojom::PluralStringProvider used by the shared
+  // searchbox and composebox components.
+  void BindInterface(
+      mojo::PendingReceiver<plural_string::mojom::PluralStringProvider>
+          receiver);
+
   static constexpr std::string_view GetWebUIName() {
     return "LensSidePanelUntrusted";
   }
@@ -113,11 +120,11 @@ class LensSidePanelUntrustedUI
     // Instantiates the implementor of the composebox::mojom::PageHandler mojo
   // interface passing the pending receiver that will be internally bound.
   void CreatePageHandler(
-    mojo::PendingRemote<composebox::mojom::Page> pending_page,
-    mojo::PendingReceiver<composebox::mojom::PageHandler> pending_page_handler,
-    mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page,
-    mojo::PendingReceiver<searchbox::mojom::PageHandler>
-        pending_searchbox_handler) override;
+      mojo::PendingReceiver<composebox::mojom::PageHandler>
+          pending_page_handler,
+      mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page,
+      mojo::PendingReceiver<searchbox::mojom::PageHandler>
+          pending_searchbox_handler) override;
 
   mojo::Receiver<lens::mojom::LensSidePanelPageHandlerFactory>
       lens_side_panel_page_factory_receiver_{this};

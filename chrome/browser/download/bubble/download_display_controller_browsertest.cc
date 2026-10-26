@@ -21,7 +21,6 @@
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/download/offline_item_model_manager_factory.h"
 #include "chrome/browser/offline_items_collection/offline_content_aggregator_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/download/download_display.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -337,7 +336,7 @@ class DownloadDisplayControllerTest : public InProcessBrowserTest {
       items.push_back(&item(i));
     }
     content::DownloadItemUtils::AttachInfoForTesting(
-        &(item(index)), browser()->profile(), nullptr);
+        &(item(index)), browser()->GetProfile(), nullptr);
     mock_update_service_->AddModel(
         MockDownloadBubbleUpdateService::ModelType::kDownloadItem);
     DownloadDisplay::ProgressInfo progress_info;

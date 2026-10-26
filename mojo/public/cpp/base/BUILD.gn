@@ -11,19 +11,14 @@ component("base") {
   sources = [
     "big_buffer.cc",
     "big_buffer.h",
-    "shared_memory_utils.cc",
-    "shared_memory_utils.h",
     "shared_memory_version.cc",
     "shared_memory_version.h",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   defines = [ "IS_MOJO_BASE_IMPL" ]
 
   public_deps = [
     "//base",
-    "//mojo/core/embedder",
     "//mojo/public/cpp/bindings",
     "//mojo/public/cpp/system",
   ]
@@ -38,14 +33,11 @@ component("protobuf_support") {
     "proto_wrapper_passkeys.h",
   ]
 
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
-
   defines = [ "IS_MOJO_BASE_PROTOBUF_SUPPORT_IMPL" ]
 
   public_deps = [
     ":base",
     "//base",
-    "//mojo/core/embedder",
     "//mojo/public/cpp/bindings",
     "//mojo/public/cpp/system",
     "//third_party/protobuf:protobuf_lite",
@@ -96,8 +88,6 @@ component("typemap_traits") {
     ]
   }
 
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
-
   defines = [ "IS_MOJO_BASE_TRAITS_IMPL" ]
 
   public_deps = [
@@ -136,6 +126,8 @@ component("shared_typemap_traits") {
     "int128_mojom_traits.h",
     "language_tag_mojom_traits.cc",
     "language_tag_mojom_traits.h",
+    "memory_limit_mojom_traits.cc",
+    "memory_limit_mojom_traits.h",
     "read_only_buffer_mojom_traits.cc",
     "read_only_buffer_mojom_traits.h",
     "read_only_file_mojom_traits.cc",
@@ -158,8 +150,6 @@ component("shared_typemap_traits") {
     "version_mojom_traits.h",
   ]
 
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
-
   defines = [ "IS_MOJO_BASE_SHARED_TRAITS_IMPL" ]
 
   public_deps = [
@@ -177,8 +167,6 @@ component("protobuf_support_traits") {
     "proto_wrapper_mojom_traits.cc",
     "proto_wrapper_mojom_traits.h",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   defines = [ "IS_MOJO_BASE_PROTOBUF_SUPPORT_TRAITS_IMPL" ]
 
@@ -212,6 +200,7 @@ source_set("tests") {
     "int128_unittest.cc",
     "language_tag_unittest.cc",
     "memory_allocator_dump_cross_process_uid_unittest.cc",
+    "memory_limit_unittest.cc",
     "process_id_unittest.cc",
     "proto_wrapper_unittest.cc",
     "read_only_buffer_unittest.cc",

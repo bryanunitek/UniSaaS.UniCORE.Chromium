@@ -34,3 +34,19 @@ std::u16string_view OmniboxPopupView::GetAccessibleButtonTextForResult(
 OmniboxPopupViewBrowserView* OmniboxPopupView::AsOmniboxPopupViewBrowserView() {
   return nullptr;
 }
+
+bool OmniboxPopupView::IsPopupHandlerReady() const {
+  return false;
+}
+
+bool OmniboxPopupView::IsReverting() const {
+  return false;
+}
+
+void OmniboxPopupView::SetIsReverting(bool reverting) {}
+
+bool OmniboxPopupView::RequestWebUIContextMenu(
+    const gfx::Point& screen_point,
+    ui::mojom::MenuSourceType source_type) {
+  return false;
+}

@@ -2,26 +2,74 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/buildflag_header.gni")
+import("//build/config/cronet/config.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 
-component("cbor") {
+buildflag_header("buildflags") {
+  header = "cbor_buildflags.h"
+
+  # TODO(crbug.com/535682335): Remove `USE_CBOR_RUST` buildflag entirely,
+  # unconditionally enable Rust CBOR parser, and drop `is_cronet_build` check
+  # once Cronet supports Crubit dependencies.
+  flags = [ "USE_CBOR_RUST=!$is_cronet_build" ]
+}
+
+source_set("cbor_headers") {
+  visibility = [ ":*" ]
   sources = [
     "constants.h",
-    "diagnostic_writer.cc",
     "diagnostic_writer.h",
-    "float_conversions.cc",
-    "float_conversions.h",
-    "reader.cc",
+    "experiment_metrics.h",
     "reader.h",
-    "values.cc",
     "values.h",
-    "writer.cc",
     "writer.h",
+  ]
+
+  public_deps = [
+    ":buildflags",
+    "//base",
+  ]
+}
+
+source_set("cbor_rust_impl") {
+  visibility = [ ":*" ]
+  public = []
+  sources = [
+    "reader.cc",
+    "writer.cc",
   ]
 
   defines = [ "CBOR_IMPLEMENTATION" ]
 
-  deps = [ "//base" ]
+  deps = [
+    ":buildflags",
+    ":cbor_headers",
+    "//base",
+  ]
+
+  if (!is_cronet_build) {
+    deps += [
+      "//build/rust/crubit",
+      "//components/cbor/rust:cbor_rust_bindings",
+    ]
+  }
+}
+
+component("cbor") {
+  sources = [
+    "diagnostic_writer.cc",
+    "values.cc",
+  ]
+
+  defines = [ "CBOR_IMPLEMENTATION" ]
+
+  public_deps = [
+    ":buildflags",
+    ":cbor_headers",
+    "//base",
+  ]
+  deps = [ ":cbor_rust_impl" ]
 }
 
 source_set("unit_tests") {
@@ -35,13 +83,20 @@ source_set("unit_tests") {
   ]
 
   deps = [
+    ":buildflags",
     ":cbor",
     "//base",
-    "//components/cbor/rust:cbor_rust_unittests",
+    "//base/test:test_support",
     "//testing/gmock",
     "//testing/gtest",
     "//third_party/fuzztest",
   ]
+  if (!is_cronet_build) {
+    deps += [
+      "//components/cbor/rust:cbor_rust_bindings",
+      "//components/cbor/rust:cbor_rust_unittests",
+    ]
+  }
 
   data = [ "reader_fuzzer_corpus/" ]
 

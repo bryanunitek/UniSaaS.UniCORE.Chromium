@@ -9,8 +9,10 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/ui/tabbed_pane_enums.h"
 #include "components/autofill/core/common/aliases.h"
@@ -29,8 +31,19 @@ class AutofillPopupController;
 class AutofillPopupView {
  public:
   struct SearchBarConfig {
-    std::u16string placeholder;
+    // Must not be empty. The first entry is the default placeholder. If there
+    // are more, the search bar cycles through the remaining ones, in order and
+    // starting at a random one, while its input field is empty.
+    std::vector<std::u16string> placeholders;
+    std::u16string initial_value;
     std::u16string no_results_message;
+  };
+
+  // Configuration for sub-popup behavior.
+  struct SubPopupConfig {
+    // The delay before closing the sub-popup if either a sub-popup suggestion
+    // nor the control cell of the anchor suggestion is selected.
+    base::TimeDelta no_selection_hide_delay;
   };
 
   // Configuration for displaying a tabbed pane within the Autofill popup.
@@ -41,13 +54,6 @@ class AutofillPopupView {
       std::u16string title;
     };
 
-    explicit TabbedPaneConfig(std::vector<TabbedPaneConfig::Tab> tabs);
-    TabbedPaneConfig(const TabbedPaneConfig&);
-    TabbedPaneConfig(TabbedPaneConfig&&);
-    TabbedPaneConfig& operator=(const TabbedPaneConfig&);
-    TabbedPaneConfig& operator=(TabbedPaneConfig&&);
-    ~TabbedPaneConfig();
-
     // The ordered list of tabs that should be displayed in the tabbed pane.
     std::vector<Tab> tabs;
   };
@@ -57,10 +63,13 @@ class AutofillPopupView {
   // present.
   // `tabbed_pane_config` will be used to create a popup with a tabbed pane,
   // if present.
+  // `sub_popup_config` will be used to configure sub-popup behavior, if
+  // present.
   static base::WeakPtr<AutofillPopupView> Create(
       base::WeakPtr<AutofillPopupController> controller,
       std::optional<const SearchBarConfig> search_bar_config = std::nullopt,
-      std::optional<const TabbedPaneConfig> tabbed_pane_config = std::nullopt);
+      std::optional<const TabbedPaneConfig> tabbed_pane_config = std::nullopt,
+      std::optional<const SubPopupConfig> sub_popup_config = std::nullopt);
 
   // Attempts to display the Autofill popup and fills it with data from the
   // controller. Returns whether the popup was shown.

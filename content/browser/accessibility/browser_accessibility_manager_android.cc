@@ -10,9 +10,10 @@
 #include "base/android/android_info.h"
 #include "base/check.h"
 #include "base/i18n/char_iterator.h"
+#include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/browser/accessibility/browser_accessibility_android.h"
-#include "content/browser/accessibility/web_contents_accessibility_android.h"
+#include "content/browser/accessibility/web_contents_accessibility_base.h"
 #include "content/common/features.h"
 #include "content/public/common/content_features.h"
 #include "ui/accessibility/accessibility_features.h"
@@ -27,6 +28,105 @@
 
 namespace content {
 
+namespace {
+
+// Attempts to restore the original anchor container for a tree position.
+//
+// When resolving a Chrome tree position, `AsUnignoredSelectionPosition()` may
+// descend into a deeply nested descendant. If the resolved position is at the
+// start (offset 0) or end (offset child_count) of every intermediate container
+// along that descent path, it is equivalent to a child offset on the
+// `original_anchor`.
+//
+// For a (`descendant_container`, `descendant_child_offset`) position pair, this
+// helper walks up through unignored ancestors as long as the child offset
+// remains at the start or end boundary, re-anchoring the position on
+// `original_anchor` (or its nearest unignored ancestor). Returns the converted
+// position if reached, or std::nullopt otherwise.
+std::optional<BrowserAccessibilityManagerAndroid::AndroidPosition>
+TryReanchorToOriginalAnchor(const ui::AXNode* original_anchor,
+                            BrowserAccessibilityAndroid* descendant_container,
+                            int descendant_child_offset) {
+  if (!original_anchor || !descendant_container) {
+    return std::nullopt;
+  }
+
+  const ui::AXNode* original_unignored_anchor =
+      original_anchor->IsIgnored() ? original_anchor->GetUnignoredParent()
+                                   : original_anchor;
+
+  // Fast return: the descendant is the original anchor itself.
+  if (descendant_container->node() == original_unignored_anchor) {
+    return BrowserAccessibilityManagerAndroid::AndroidPosition{
+        descendant_container, descendant_child_offset,
+        ExtendedSelectionOffsetType::OFFSET_TYPE_CHILD};
+  }
+
+  BrowserAccessibilityAndroid* current_container = descendant_container;
+  int current_child_offset = descendant_child_offset;
+
+  const bool is_at_start = (current_child_offset == 0);
+  const bool is_at_end =
+      (current_child_offset ==
+       static_cast<int>(current_container->node()->GetUnignoredChildCount()));
+
+  if (!is_at_start && !is_at_end) {
+    return std::nullopt;
+  }
+
+  while (current_container->node() != original_unignored_anchor) {
+    const ui::AXNode* next_unignored_parent_node =
+        current_container->node()->GetUnignoredParent();
+    if (!next_unignored_parent_node) {
+      break;
+    }
+    BrowserAccessibilityAndroid* next_parent =
+        static_cast<BrowserAccessibilityAndroid*>(
+            current_container->manager()->GetFromAXNode(
+                next_unignored_parent_node));
+    if (!next_parent) {
+      break;
+    }
+
+    const bool is_intermediate_ancestor =
+        (next_unignored_parent_node != original_unignored_anchor);
+
+    // Intermediate ancestors along the descent path must strictly remain at
+    // the start (offset 0) or end (offset child_count) boundary. When
+    // reaching the final target `original_unignored_anchor`, any child index is
+    // accepted.
+    if (is_at_start) {
+      current_child_offset =
+          current_container->node()->GetUnignoredIndexInParent();
+      if (is_intermediate_ancestor && current_child_offset != 0) {
+        break;
+      }
+    } else {
+      // To stay at the end boundary, use the child offset after
+      // `current_container` in the `next_parent`.
+      current_child_offset =
+          current_container->node()->GetUnignoredIndexInParent() + 1;
+      if (is_intermediate_ancestor &&
+          current_child_offset !=
+              static_cast<int>(
+                  next_unignored_parent_node->GetUnignoredChildCount())) {
+        break;
+      }
+    }
+    current_container = next_parent;
+  }
+
+  if (current_container->node() == original_unignored_anchor) {
+    return BrowserAccessibilityManagerAndroid::AndroidPosition{
+        current_container, current_child_offset,
+        ExtendedSelectionOffsetType::OFFSET_TYPE_CHILD};
+  }
+
+  return std::nullopt;
+}
+
+}  // namespace
+
 // static
 ui::BrowserAccessibilityManager* BrowserAccessibilityManagerAndroid::Create(
     const ui::AXTreeUpdate& initial_tree,
@@ -37,9 +137,9 @@ ui::BrowserAccessibilityManager* BrowserAccessibilityManagerAndroid::Create(
                                                   node_id_delegate, nullptr);
   }
 
-  WebContentsAccessibilityAndroid* wcax = nullptr;
+  WebContentsAccessibilityBase* wcax = nullptr;
   if (delegate->AccessibilityIsRootFrame()) {
-    wcax = static_cast<WebContentsAccessibilityAndroid*>(
+    wcax = static_cast<WebContentsAccessibilityBase*>(
         delegate->AccessibilityGetWebContentsAccessibility());
   }
   return new BrowserAccessibilityManagerAndroid(
@@ -58,7 +158,7 @@ ui::BrowserAccessibilityManager* BrowserAccessibilityManagerAndroid::Create(
 
 BrowserAccessibilityManagerAndroid::BrowserAccessibilityManagerAndroid(
     const ui::AXTreeUpdate& initial_tree,
-    base::WeakPtr<WebContentsAccessibilityAndroid> web_contents_accessibility,
+    base::WeakPtr<WebContentsAccessibilityBase> web_contents_accessibility,
     ui::AXNodeIdDelegate& node_id_delegate,
     ui::AXPlatformTreeManagerDelegate* delegate)
     : ui::BrowserAccessibilityManager(node_id_delegate, delegate),
@@ -101,7 +201,7 @@ void BrowserAccessibilityManagerAndroid::ResetWebContentsAccessibility() {
 }
 
 bool BrowserAccessibilityManagerAndroid::ShouldAllowImageDescriptions() {
-  WebContentsAccessibilityAndroid* wcax = GetWebContentsAXFromRootManager();
+  WebContentsAccessibilityBase* wcax = GetWebContentsAXFromRootManager();
   return (wcax && wcax->should_allow_image_descriptions()) ||
          allow_image_descriptions_for_testing_;
 }
@@ -152,7 +252,7 @@ ui::AXNode* BrowserAccessibilityManagerAndroid::RetargetForEvents(
   DUMP_WILL_BE_CHECK(wrapper);
   ui::BrowserAccessibility* updated =
       wrapper->PlatformGetLowestPlatformAncestor();
-  DCHECK(updated);
+  CHECK(updated, base::NotFatalUntil::M159);
 
   switch (type) {
     case RetargetEventType::RetargetEventTypeGenerated: {
@@ -197,15 +297,16 @@ ui::AXNode* BrowserAccessibilityManagerAndroid::RetargetForEvents(
 
 void BrowserAccessibilityManagerAndroid::FireFocusEvent(ui::AXNode* node) {
   ui::AXTreeManager::FireFocusEvent(node);
-  WebContentsAccessibilityAndroid* wcax = GetWebContentsAXFromRootManager();
+  WebContentsAccessibilityBase* wcax = GetWebContentsAXFromRootManager();
   if (!wcax) {
     return;
   }
 
   // When focusing a node on Android, we want to ensure that we clear the
   // Java-side cache for the previously focused node as well.
+  ui::AXNode* last_focused_ax_node = GetLastFocusedNode();
   if (ui::BrowserAccessibility* last_focused_node =
-          GetFromAXNode(GetLastFocusedNode())) {
+          GetFromAXNode(last_focused_ax_node)) {
     BrowserAccessibilityAndroid* android_last_focused_node =
         static_cast<BrowserAccessibilityAndroid*>(last_focused_node);
     ClearNodeInfoCacheForGivenId(android_last_focused_node->GetUniqueId());
@@ -216,11 +317,29 @@ void BrowserAccessibilityManagerAndroid::FireFocusEvent(ui::AXNode* node) {
   wcax->HandleFocusChanged(
       android_node->GetUniqueId(),
       android_node->manager()->GetBrowserAccessibilityRoot() == android_node);
+
+  // TODO(crbug.com/481134054): Fire a selection changed event on the root of
+  // the main frame when the focused frame changes or is removed, since the
+  // selection of the page is the selection of the focused frame, and remove the
+  // following.
+  // Until then, the root's cached node info, which exposes that selection, is
+  // at least refreshed when the focus moves to another frame. The last focused
+  // node is not updated yet at this point, so comparing trees detects that.
+  if (!last_focused_ax_node || last_focused_ax_node->tree() != node->tree()) {
+    auto* root_manager = static_cast<BrowserAccessibilityManagerAndroid*>(
+        GetManagerForRootFrame());
+    if (root_manager) {
+      if (auto* android_root_object = static_cast<BrowserAccessibilityAndroid*>(
+              root_manager->GetBrowserAccessibilityRoot())) {
+        wcax->ClearNodeInfoCacheForGivenId(android_root_object->GetUniqueId());
+      }
+    }
+  }
 }
 
 void BrowserAccessibilityManagerAndroid::FireLocationChanged(
     ui::BrowserAccessibility* node) {
-  WebContentsAccessibilityAndroid* wcax = GetWebContentsAXFromRootManager();
+  WebContentsAccessibilityBase* wcax = GetWebContentsAXFromRootManager();
   if (!wcax) {
     return;
   }
@@ -238,7 +357,7 @@ void BrowserAccessibilityManagerAndroid::FireSourceEvent(
     int action_request_id) {
   ui::BrowserAccessibilityManager::FireSourceEvent(event_type, node,
                                                    action_request_id);
-  WebContentsAccessibilityAndroid* wcax = GetWebContentsAXFromRootManager();
+  WebContentsAccessibilityBase* wcax = GetWebContentsAXFromRootManager();
   if (!wcax) {
     return;
   }
@@ -268,67 +387,96 @@ void BrowserAccessibilityManagerAndroid::FireSourceEvent(
   }
 }
 
+void BrowserAccessibilityManagerAndroid::FireSelectionChangedOnMainFrameRoot(
+    WebContentsAccessibilityBase* wcax) {
+  auto* target_manager = static_cast<BrowserAccessibilityManagerAndroid*>(
+      GetManagerForRootFrame());
+  if (!target_manager) {
+    return;
+  }
+  auto* android_root_object = static_cast<BrowserAccessibilityAndroid*>(
+      target_manager->GetBrowserAccessibilityRoot());
+  if (!android_root_object) {
+    return;
+  }
+
+  wcax->ClearNodeInfoCacheForGivenId(android_root_object->GetUniqueId());
+  wcax->HandleTextSelectionChanged(android_root_object->GetUniqueId());
+}
+
 void BrowserAccessibilityManagerAndroid::FireDocumentSelectionChangedEvent(
-    WebContentsAccessibilityAndroid* wcax) {
+    WebContentsAccessibilityBase* wcax) {
+  // The selection exposed to Android is strictly that of the focused frame, so
+  // selection changes in unfocused frames are dropped.
+  if (this != GetManagerForFocusedFrame()) {
+    return;
+  }
   std::optional<SelectionRange> selection = GetSelectionRange();
-  const bool extended_selection_enabled =
-      base::FeatureList::IsEnabled(features::kAccessibilityExtendedSelection);
   const bool expose_children_enabled = base::FeatureList::IsEnabled(
       features::kAccessibilityExposeNonAtomicTextFieldChildren);
 
-  if (extended_selection_enabled) {
-    bool should_send_to_root = false;
+  bool should_send_to_root = false;
 
-    if (expose_children_enabled) {
-      // Send the event to the root of the frame if selection should be
-      // cleared, or multiple nodes are selected, or
-      // a non-atomic text field. Atomic text fields will continue to receive
-      // their event on them, the rest should go to the root web area.
-      // Note that this is to support contenteditables, where the
-      // contenteditable root itself is a non-atomic text field, and its
-      // children may be editable.
-      should_send_to_root = !selection.has_value() ||
-                            selection->focus.node != selection->anchor.node ||
-                            !selection->focus.node->IsAtomicTextField();
-    } else {
-      // Send the event to the root of the frame if selection should be
-      // cleared, or multiple nodes are selected, or the node is not editable.
-      should_send_to_root = !selection.has_value() ||
-                            selection->focus.node != selection->anchor.node ||
-                            !selection->focus.node->IsTextField();
-    }
+  if (expose_children_enabled) {
+    // Send the event to the root of the main frame if selection should be
+    // cleared, or multiple nodes are selected, or
+    // a non-atomic text field. Atomic text fields will continue to receive
+    // their event on them, the rest should go to the main frame's root.
+    // Note that this is to support contenteditables, where the
+    // contenteditable root itself is a non-atomic text field, and its
+    // children may be editable.
+    should_send_to_root = !selection.has_value() ||
+                          selection->focus.node != selection->anchor.node ||
+                          !selection->focus.node->IsAtomicTextField();
+  } else {
+    // Send the event to the root of the main frame if selection should be
+    // cleared, or multiple nodes are selected, or the node is not editable.
+    should_send_to_root = !selection.has_value() ||
+                          selection->focus.node != selection->anchor.node ||
+                          !selection->focus.node->IsTextField();
+  }
 
-    if (should_send_to_root) {
-      BrowserAccessibilityAndroid* android_root_object =
-          static_cast<BrowserAccessibilityAndroid*>(
-              GetFromAXNode(ax_tree()->root()));
-      ClearNodeInfoCacheForGivenId(android_root_object->GetUniqueId());
-      wcax->HandleTextSelectionChanged(android_root_object->GetUniqueId());
-      return;
-    }
-  } else if (!selection.has_value()) {
-    // If focus object does not exist and extended selection is not
-    // enabled, there is nothing more to do since previous selection node is
-    // not known here and can't be cleared.
+  if (should_send_to_root) {
+    FireSelectionChangedOnMainFrameRoot(wcax);
     return;
   }
 
   // Send event to the focus node.
   CHECK(selection->focus.node);
   wcax->HandleTextSelectionChanged(selection->focus.node->GetUniqueId());
+
+  // The event is sent to the text field, but the extended selection which is
+  // exposed on the root of the main frame is the page selection, and now must
+  // be updated.
+  auto* root_manager = static_cast<BrowserAccessibilityManagerAndroid*>(
+      GetManagerForRootFrame());
+  if (root_manager) {
+    if (auto* android_root_object = static_cast<BrowserAccessibilityAndroid*>(
+            root_manager->GetBrowserAccessibilityRoot())) {
+      wcax->ClearNodeInfoCacheForGivenId(android_root_object->GetUniqueId());
+    }
+  }
+}
+
+bool isNodeLikelyKnownForExperiment(WebContentsAccessibilityBase* wcax,
+                                    int32_t unique_id) {
+  if (features::kPreventWindowContentChangesForNodesNotLikelyInAndroid.Get()) {
+    return wcax->IsNodeLikelyKnownByAndroidFrameworkForExperiment(unique_id);
+  }
+  return true;
 }
 
 void BrowserAccessibilityManagerAndroid::FireGeneratedEvent(
     ui::AXEventGenerator::Event event_type,
     const ui::AXNode* node) {
   BrowserAccessibilityManager::FireGeneratedEvent(event_type, node);
-  WebContentsAccessibilityAndroid* wcax = GetWebContentsAXFromRootManager();
+  WebContentsAccessibilityBase* wcax = GetWebContentsAXFromRootManager();
   if (!wcax) {
     return;
   }
 
   ui::BrowserAccessibility* wrapper = GetFromAXNode(node);
-  DCHECK(wrapper);
+  CHECK(wrapper, base::NotFatalUntil::M159);
   BrowserAccessibilityAndroid* android_node =
       static_cast<BrowserAccessibilityAndroid*>(wrapper);
 
@@ -353,9 +501,7 @@ void BrowserAccessibilityManagerAndroid::FireGeneratedEvent(
       wcax->HandlePaneOpened(android_node->GetUniqueId());
       // ALERT events are only fired on the root node of the alert live region,
       // but verify that `node` is in fact an atomic live region root.
-      if (base::FeatureList::IsEnabled(
-              features::kAccessibilityAtomicLiveRegions) &&
-          node->data().IsAtomicLiveRegionRoot()) {
+      if (node->data().IsAtomicLiveRegionRoot()) {
         wcax->HandleAtomicLiveRegionChanged(android_node->GetUniqueId());
       }
       break;
@@ -365,23 +511,29 @@ void BrowserAccessibilityManagerAndroid::FireGeneratedEvent(
       if (android_node->GetRole() == ax::mojom::Role::kToggleButton ||
           android_node->GetRole() == ax::mojom::Role::kSwitch ||
           android_node->GetRole() == ax::mojom::Role::kRadioButton) {
-        wcax->HandleWindowContentChange(
-            android_node->GetUniqueId(),
-            ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_STATE_DESCRIPTION);
+        if (isNodeLikelyKnownForExperiment(wcax, android_node->GetUniqueId())) {
+          wcax->HandleWindowContentChange(
+              android_node->GetUniqueId(),
+              ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_STATE_DESCRIPTION);
+        }
       }
       break;
     case ui::AXEventGenerator::Event::DEFAULT_ACTION_VERB_CHANGED:
       wcax->HandleDefaultActionVerbChanged(android_node->GetUniqueId());
       break;
     case ui::AXEventGenerator::Event::DESCRIPTION_CHANGED: {
-      wcax->HandleWindowContentChange(
-          android_node->GetUniqueId(),
-          ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_UNDEFINED);
-      if (android_node->GetRole() == ax::mojom::Role::kDialog ||
-          android_node->GetRole() == ax::mojom::Role::kAlertDialog) {
+      if (isNodeLikelyKnownForExperiment(wcax, android_node->GetUniqueId())) {
         wcax->HandleWindowContentChange(
             android_node->GetUniqueId(),
-            ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_PANE_TITLE);
+            ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_UNDEFINED);
+      }
+      if (android_node->GetRole() == ax::mojom::Role::kDialog ||
+          android_node->GetRole() == ax::mojom::Role::kAlertDialog) {
+        if (isNodeLikelyKnownForExperiment(wcax, android_node->GetUniqueId())) {
+          wcax->HandleWindowContentChange(
+              android_node->GetUniqueId(),
+              ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_PANE_TITLE);
+        }
       }
       break;
     }
@@ -394,29 +546,37 @@ void BrowserAccessibilityManagerAndroid::FireGeneratedEvent(
           GetFocus()->IsDescendantOf(android_node)) {
         wcax->HandlePaneOpened(android_node->GetUniqueId());
       }
-      wcax->HandleWindowContentChange(
+      if (isNodeLikelyKnownForExperiment(wcax, android_node->GetUniqueId())) {
+        wcax->HandleWindowContentChange(
             android_node->GetUniqueId(),
             ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_EXPANDED);
+      }
       break;
     }
     case ui::AXEventGenerator::Event::COLLAPSED: {
-      wcax->HandleWindowContentChange(
+      if (isNodeLikelyKnownForExperiment(wcax, android_node->GetUniqueId())) {
+        wcax->HandleWindowContentChange(
             android_node->GetUniqueId(),
             ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_EXPANDED);
+      }
       break;
     }
     case ui::AXEventGenerator::Event::IMAGE_ANNOTATION_CHANGED: {
-      wcax->HandleWindowContentChange(
-          android_node->GetUniqueId(),
-          ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_TEXT);
+      if (isNodeLikelyKnownForExperiment(wcax, android_node->GetUniqueId())) {
+        wcax->HandleWindowContentChange(
+            android_node->GetUniqueId(),
+            ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_TEXT);
+      }
       break;
     }
     case ui::AXEventGenerator::Event::INVALID_STATUS_CHANGED: {
       if (base::FeatureList::IsEnabled(
               features::kAccessibilityAriaInvalidAndErrorMessage)) {
-        wcax->HandleWindowContentChange(
-            android_node->GetUniqueId(),
-            ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_CONTENT_INVALID);
+        if (isNodeLikelyKnownForExperiment(wcax, android_node->GetUniqueId())) {
+          wcax->HandleWindowContentChange(
+              android_node->GetUniqueId(),
+              ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_CONTENT_INVALID);
+        }
       }
       break;
     }
@@ -425,43 +585,22 @@ void BrowserAccessibilityManagerAndroid::FireGeneratedEvent(
       // root node of that live region. For atomic live regions, we should begin
       // at the root node and notify Android of every single node within the
       // subtree of this atomic live region root.
-      if (base::FeatureList::IsEnabled(
-              features::kAccessibilityAtomicLiveRegions) &&
-          node->data().IsAtomicLiveRegionRoot()) {
+      if (node->data().IsAtomicLiveRegionRoot()) {
         wcax->HandleAtomicLiveRegionChanged(android_node->GetUniqueId());
       }
       break;
     }
     case ui::AXEventGenerator::Event::LIVE_REGION_NODE_CHANGED: {
       //  This event is fired when an object appears in a live region.
-      if (base::FeatureList::IsEnabled(
-              features::kAccessibilityImproveLiveRegionAnnounce)) {
-        bool is_atomic = node->data().IsAtomicLiveRegionRoot() ||
-                         node->data().IsContainedInAtomicLiveRegion();
-        // If kAccessibilityAtomicLiveRegions is enabled and our node is atomic,
-        // it will have been handled by the LIVE_REGION_CHANGED case above.
-        // Otherwise, fire a WINDOW_CONTENT_CHANGED event to inform the Android
-        // Framework of the individual node change.
-        if (!(is_atomic && base::FeatureList::IsEnabled(
-                               features::kAccessibilityAtomicLiveRegions))) {
-          wcax->HandleLiveRegionNodeChanged(android_node->GetUniqueId());
-        }
+      bool is_atomic = node->data().IsAtomicLiveRegionRoot() ||
+                       node->data().IsContainedInAtomicLiveRegion();
+      // If our node is atomic, it will have been handled by the
+      // LIVE_REGION_CHANGED case above. Otherwise, fire a
+      // WINDOW_CONTENT_CHANGED event to inform the Android Framework of the
+      // individual node change.
+      if (!is_atomic) {
+        wcax->HandleLiveRegionNodeChanged(android_node->GetUniqueId());
       }
-      // TODO(crbug.com/507858294): Remove TYPE_ANNOUNCE and new live region
-      // behavior flags once stability has been reached in several stable
-      // releases.
-      if (!base::FeatureList::IsEnabled(
-              features::kAccessibilityDeprecateTypeAnnounce)) {
-        // If we don't support WINDOW_CONTENT_CHANGED events BUT have not yet
-        // deprecated TYPE_ANNOUNCEMENT, we should fire a TYPE_ANNOUNCEMENT
-        // event which contains the text of the changed node.
-        std::u16string text = android_node->GetTextContentUTF16();
-        wcax->AnnounceLiveRegionText(text);
-      }
-      // If kAccessibilityImproveLiveRegionAnnounce is disabled and
-      // kAccessibilityDeprecateTypeAnnounce is enabled, we choose not to fire
-      // an event here. However, this should not happen in practice as we should
-      // not deprecate TYPE_ANNOUNCEMENT until we have landed its replacements.
       break;
     }
     case ui::AXEventGenerator::Event::MENU_POPUP_START: {
@@ -472,34 +611,43 @@ void BrowserAccessibilityManagerAndroid::FireGeneratedEvent(
       // If this is a simple text element, also send an event to the framework.
       if (ui::IsText(android_node->GetRole()) ||
           android_node->IsAndroidTextView()) {
-        wcax->HandleWindowContentChange(
-            android_node->GetUniqueId(),
-            ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_TEXT);
+        if (isNodeLikelyKnownForExperiment(wcax, android_node->GetUniqueId())) {
+          wcax->HandleWindowContentChange(
+              android_node->GetUniqueId(),
+              ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_TEXT);
+        }
       }
 
       // If the name of a dialog changes, its pane title also changes.
       // Notify the Android framework about the pane title change.
       if (ui::IsDialog(android_node->GetRole())) {
-        wcax->HandleWindowContentChange(
-            android_node->GetUniqueId(),
-            ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_PANE_TITLE);
+        if (isNodeLikelyKnownForExperiment(wcax, android_node->GetUniqueId())) {
+          wcax->HandleWindowContentChange(
+              android_node->GetUniqueId(),
+              ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_PANE_TITLE);
+        }
       }
       break;
     }
     case ui::AXEventGenerator::Event::RANGE_VALUE_CHANGED:
+      // TODO(crbug.com/557330338): CHECK-exclusion: Convert to a CHECK once we
+      // are confident it won't be triggered.
       DCHECK(android_node->GetData().IsRangeValueSupported());
-      if (android_node->IsSlider()) {
+      if ((android_node->GetRole() == ax::mojom::Role::kSpinButton &&
+           !android_node->IsTextField()) ||
+          android_node->GetRole() == ax::mojom::Role::kMeter ||
+          (android_node->IsSlider() &&
+           base::FeatureList::IsEnabled(
+               features::kAccessibilitySliderStateDescription))) {
+        // TalkBack expects SpinButtons (non-editable), Meter and Slider value
+        // to be changed via state description.
+        if (isNodeLikelyKnownForExperiment(wcax, android_node->GetUniqueId())) {
+          wcax->HandleWindowContentChange(
+              android_node->GetUniqueId(),
+              ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_STATE_DESCRIPTION);
+        }
+      } else if (android_node->IsSlider()) {
         wcax->HandleSliderChanged(android_node->GetUniqueId());
-      } else if ((android_node->GetRole() == ax::mojom::Role::kSpinButton &&
-                  !android_node->IsTextField()) ||
-                 (base::FeatureList::IsEnabled(
-                      features::kAccessibilityMeterEventsOnAndroid) &&
-                  android_node->GetRole() == ax::mojom::Role::kMeter)) {
-        // TalkBack expects non-editable SpinButtons and Meter value to be
-        // changed via state description.
-        wcax->HandleWindowContentChange(
-            android_node->GetUniqueId(),
-            ANDROID_ACCESSIBILITY_EVENT_CONTENT_CHANGE_TYPE_STATE_DESCRIPTION);
       }
       break;
     case ui::AXEventGenerator::Event::SCROLL_HORIZONTAL_POSITION_CHANGED:
@@ -524,8 +672,6 @@ void BrowserAccessibilityManagerAndroid::FireGeneratedEvent(
       break;
     }
     case ui::AXEventGenerator::Event::VALUE_IN_TEXT_FIELD_CHANGED:
-    case ui::AXEventGenerator::Event::VALUE_IN_SPIN_BUTTON_DECREMENTED:
-    case ui::AXEventGenerator::Event::VALUE_IN_SPIN_BUTTON_INCREMENTED:
       // Sometimes `RetargetForEvents` will walk up to the lowest platform leaf
       // and fire the same event on that node. However, in some rare cases the
       // leaf node might not be a text field. For example, in the unusual case
@@ -534,25 +680,29 @@ void BrowserAccessibilityManagerAndroid::FireGeneratedEvent(
       if (android_node->IsTextField() && GetFocus() == wrapper) {
         int32_t text_change_types =
             ANDROID_ACCESSIBILITY_EVENT_TEXT_CHANGE_TYPE_UNDEFINED;
-        if (::features::IsAccessibilityTextChangeTypesEnabled()) {
-          if (android_node->GetBoolAttribute(
-                  ax::mojom::BoolAttribute::kHasComposition)) {
-            text_change_types |=
-                ANDROID_ACCESSIBILITY_EVENT_TEXT_CHANGE_TYPE_IN_COMPOSITION;
-          }
-          if (android_node->GetBoolAttribute(
-                  ax::mojom::BoolAttribute::kTextSuggestionSelectedByIME)) {
-            text_change_types |=
-                ANDROID_ACCESSIBILITY_EVENT_TEXT_CHANGE_TYPE_CONVERSION_SUGGESTION_SELECTED_BY_IME;
-          }
-          if (android_node->GetIntAttribute(
-                  ax::mojom::IntAttribute::kCommittedTextLength) > 0) {
-            text_change_types |=
-                ANDROID_ACCESSIBILITY_EVENT_TEXT_CHANGE_TYPE_COMMITTED_BY_IME;
-          }
+        if (android_node->GetBoolAttribute(
+                ax::mojom::BoolAttribute::kHasComposition)) {
+          text_change_types |=
+              ANDROID_ACCESSIBILITY_EVENT_TEXT_CHANGE_TYPE_IN_COMPOSITION;
+        }
+        if (android_node->GetBoolAttribute(
+                ax::mojom::BoolAttribute::kTextSuggestionSelectedByIME)) {
+          text_change_types |=
+              ANDROID_ACCESSIBILITY_EVENT_TEXT_CHANGE_TYPE_CONVERSION_SUGGESTION_SELECTED_BY_IME;
+        }
+        if (android_node->GetIntAttribute(
+                ax::mojom::IntAttribute::kCommittedTextLength) > 0) {
+          text_change_types |=
+              ANDROID_ACCESSIBILITY_EVENT_TEXT_CHANGE_TYPE_COMMITTED_BY_IME;
         }
         wcax->HandleEditableTextChanged(android_node->GetUniqueId(),
                                         text_change_types);
+      }
+      break;
+    case ui::AXEventGenerator::Event::VALUE_IN_SPIN_BUTTON_DECREMENTED:
+    case ui::AXEventGenerator::Event::VALUE_IN_SPIN_BUTTON_INCREMENTED:
+      if (GetFocus() == wrapper) {
+        wcax->HandleSpinButtonStepIntent(android_node->GetUniqueId());
       }
       break;
 
@@ -617,27 +767,6 @@ void BrowserAccessibilityManagerAndroid::FireGeneratedEvent(
     case ui::AXEventGenerator::Event::TEXT_SELECTION_CHANGED:
     case ui::AXEventGenerator::Event::WIN_IACCESSIBLE_STATE_CHANGED:
       break;
-  }
-}
-
-void BrowserAccessibilityManagerAndroid::FireAriaNotificationEvent(
-    ui::BrowserAccessibility* node,
-    const std::string& announcement,
-    ax::mojom::AriaNotificationPriority priority_property,
-    ax::mojom::AriaNotificationInterrupt interrupt_property,
-    const std::string& type) {
-  DCHECK(node);
-
-  auto* wcax = GetWebContentsAXFromRootManager();
-  if (!wcax) {
-    return;
-  }
-
-  // TODO(aleventhal): If aria-notification becomes a web standard, a solution
-  // that doesn't use a forced announcement must be implemented.
-  if (!base::FeatureList::IsEnabled(
-          features::kAccessibilityDeprecateTypeAnnounce)) {
-    wcax->AnnounceLiveRegionText(base::UTF8ToUTF16(announcement));
   }
 }
 
@@ -763,7 +892,7 @@ bool BrowserAccessibilityManagerAndroid::PreviousAtGranularity(
 
 void BrowserAccessibilityManagerAndroid::ClearNodeInfoCacheForGivenId(
     int32_t unique_id) {
-  WebContentsAccessibilityAndroid* wcax = GetWebContentsAXFromRootManager();
+  WebContentsAccessibilityBase* wcax = GetWebContentsAXFromRootManager();
   if (!wcax) {
     return;
   }
@@ -778,13 +907,13 @@ void BrowserAccessibilityManagerAndroid::ClearNodeInfoCacheForGivenId(
 
 bool BrowserAccessibilityManagerAndroid::OnHoverEvent(
     const ui::MotionEventAndroid& event) {
-  WebContentsAccessibilityAndroid* wcax = GetWebContentsAXFromRootManager();
+  WebContentsAccessibilityBase* wcax = GetWebContentsAXFromRootManager();
   return wcax ? wcax->OnHoverEvent(event) : false;
 }
 
 void BrowserAccessibilityManagerAndroid::HandleHoverEvent(
     ui::BrowserAccessibility* node) {
-  WebContentsAccessibilityAndroid* wcax = GetWebContentsAXFromRootManager();
+  WebContentsAccessibilityBase* wcax = GetWebContentsAXFromRootManager();
   if (!wcax) {
     return;
   }
@@ -807,7 +936,7 @@ void BrowserAccessibilityManagerAndroid::OnAtomicUpdateStarting(
     ui::AXTree* tree,
     const absl::flat_hash_set<ui::AXNodeID>& deleting_nodes,
     const absl::flat_hash_set<ui::AXNodeID>& reparenting_nodes) {
-  WebContentsAccessibilityAndroid* wcax = GetWebContentsAXFromRootManager();
+  WebContentsAccessibilityBase* wcax = GetWebContentsAXFromRootManager();
   if (wcax) {
     // This set needs to start fresh. This secondary cache is of requests to
     // java to clear that primary cache of Android objects. The idea being only
@@ -852,24 +981,31 @@ void BrowserAccessibilityManagerAndroid::OnAtomicUpdateFinished(
   BrowserAccessibilityManager::OnAtomicUpdateFinished(tree, root_changed,
                                                       changes);
 
-  WebContentsAccessibilityAndroid* wcax = GetWebContentsAXFromRootManager();
+  WebContentsAccessibilityBase* wcax = GetWebContentsAXFromRootManager();
   if (wcax) {
     // Reset content changed events counter every time we finish an atomic
     // update.
     wcax->ResetContentChangedEventsCounter();
 
-    // When the root changes, send the new root id and a navigate signal to
-    // Java.
     if (root_changed) {
-      auto* root_manager = static_cast<BrowserAccessibilityManagerAndroid*>(
-          GetManagerForRootFrame());
-      DCHECK(root_manager);
+      if (IsRootFrameManager()) {
+        // When the root frame's root changes, send the new root id and a
+        // navigate signal to Java.
+        auto* root = static_cast<BrowserAccessibilityAndroid*>(
+            GetBrowserAccessibilityRoot());
+        CHECK(root, base::NotFatalUntil::M159);
 
-      auto* root = static_cast<BrowserAccessibilityAndroid*>(
-          root_manager->GetBrowserAccessibilityRoot());
-      DCHECK(root);
-
-      wcax->HandleNavigate(root->GetUniqueId());
+        wcax->HandleNavigate(root->GetUniqueId());
+      } else if (ui::BrowserAccessibility* host =
+                     GetParentNodeFromParentTreeAsBrowserAccessibility()) {
+        // When a child frame's root changes, the node hosting that frame has a
+        // different child, so it is invalidated to have its subtree refetched.
+        // The state of the root frame, including accessibility focus, is left
+        // untouched.
+        wcax->HandleContentChanged(
+            static_cast<BrowserAccessibilityAndroid*>(host)->GetUniqueId(),
+            /*set_subtree_changed=*/true);
+      }
     }
   }
 
@@ -904,7 +1040,7 @@ void BrowserAccessibilityManagerAndroid::OnAtomicUpdateFinished(
   }
 }
 
-WebContentsAccessibilityAndroid*
+WebContentsAccessibilityBase*
 BrowserAccessibilityManagerAndroid::GetWebContentsAXFromRootManager() const {
   ui::BrowserAccessibility* parent_node =
       GetParentNodeFromParentTreeAsBrowserAccessibility();
@@ -920,17 +1056,12 @@ BrowserAccessibilityManagerAndroid::GetWebContentsAXFromRootManager() const {
 std::u16string
 BrowserAccessibilityManagerAndroid::GenerateAccessibilityNodeInfoString(
     int32_t unique_id) {
-  WebContentsAccessibilityAndroid* wcax = GetWebContentsAXFromRootManager();
+  WebContentsAccessibilityBase* wcax = GetWebContentsAXFromRootManager();
   if (!wcax) {
     return {};
   }
 
   return wcax->GenerateAccessibilityNodeInfoString(unique_id);
-}
-
-std::optional<std::vector<std::string>>
-BrowserAccessibilityManagerAndroid::GetMetadataForTree() const {
-  return GetTreeData().metadata;
 }
 
 std::optional<BrowserAccessibilityManagerAndroid::SelectionRange>
@@ -960,6 +1091,37 @@ BrowserAccessibilityManagerAndroid::GetSelectionRange() const {
   return selection_range;
 }
 
+BrowserAccessibilityManagerAndroid*
+BrowserAccessibilityManagerAndroid::GetManagerForFocusedFrame() const {
+  ui::BrowserAccessibilityManager* root_manager = GetManagerForRootFrame();
+  if (!root_manager) {
+    return nullptr;
+  }
+  // `GetFocus()` can only be null if the root frame has no tree yet.
+  ui::BrowserAccessibility* focus = root_manager->GetFocus();
+  return static_cast<BrowserAccessibilityManagerAndroid*>(
+      focus ? focus->manager() : root_manager);
+}
+
+void BrowserAccessibilityManagerAndroid::ClearSelection() {
+  ui::BrowserAccessibility* root = GetBrowserAccessibilityRoot();
+  if (!root) {
+    return;
+  }
+
+  // The selection is cleared by anchoring both endpoints on the root of this
+  // frame with `kNoSelectionOffset`. Selection positions are not used here,
+  // since normalizing them to a leaf can move them into a subframe, whose nodes
+  // cannot be resolved by the renderer of this frame.
+  ui::AXActionData action_data;
+  action_data.action = ax::mojom::Action::kSetSelection;
+  action_data.anchor_node_id = root->GetId();
+  action_data.anchor_offset = ax::mojom::kNoSelectionOffset;
+  action_data.focus_node_id = root->GetId();
+  action_data.focus_offset = ax::mojom::kNoSelectionOffset;
+  SetSelection(action_data);
+}
+
 std::optional<BrowserAccessibilityManagerAndroid::AndroidPosition>
 BrowserAccessibilityManagerAndroid::ConvertChromeSelectionPositionToAndroid(
     ui::AXNodeID node_id,
@@ -973,10 +1135,28 @@ BrowserAccessibilityManagerAndroid::ConvertChromeSelectionPositionToAndroid(
 
   ui::AXNodePosition::AXPositionInstance position =
       ui::AXNodePosition::CreatePosition(*node, offset, affinity);
+  const ui::AXNodePosition::AXPositionInstance original_position =
+      position->Clone();
+  // Move the position to the nearest unignored node. This node can be a
+  // descendant of the current node and Android specific logic in the rest of
+  // this function will not handle it.
+  // See `text-selection-inside-hidden-element.html` as an example.
   position = position->AsUnignoredSelectionPosition(
       is_backward ? ui::AXPositionAdjustmentBehavior::kMoveForward
                   : ui::AXPositionAdjustmentBehavior::kMoveBackward,
       /*force_convert_leaf_to_text=*/false);
+
+  // Moving to the nearest unignored node can leave this frame, because leaf
+  // traversal in `AXPosition` crosses frame boundaries. If such a position is
+  // sent back to Chrome as part of a selection, the selection would be
+  // rejected as the endpoints are in different frames.
+  // To avoid this, move the position up to the node that hosts the frame that
+  // it descended into, which is in `this` frame.
+  // A position that moved into an ancestor frame instead has no such equivalent
+  // and the loop ends with a null position.
+  while (!position->IsNullPosition() && position->tree_id() != GetTreeID()) {
+    position = position->CreateParentPosition();
+  }
   if (position->IsNullPosition()) {
     return std::nullopt;
   }
@@ -988,22 +1168,66 @@ BrowserAccessibilityManagerAndroid::ConvertChromeSelectionPositionToAndroid(
     return std::nullopt;
   }
 
+  BrowserAccessibilityAndroid* lowest_platform_ancestor =
+      static_cast<BrowserAccessibilityAndroid*>(
+          android_node->PlatformGetLowestPlatformAncestor());
+  if (!lowest_platform_ancestor) {
+    return std::nullopt;
+  }
+
+  // If a tree position's lowest platform ancestor is a text-selectable leaf on
+  // the platform with text content, convert it to a text position. This will
+  // result in more accurate representation of the position on Android as the
+  // child node are flattened.
+  if (position->IsTreePosition() && lowest_platform_ancestor->IsLeaf() &&
+      lowest_platform_ancestor->HasTextContent() &&
+      lowest_platform_ancestor->IsTextSelectable()) {
+    position = position->AsTextPosition();
+  }
+
   if (position->IsTextPosition()) {
-    ui::BrowserAccessibility* platform_ancestor =
-        android_node->PlatformGetLowestPlatformAncestor();
-    CHECK(platform_ancestor);
     // Move Chrome position up to the lowest leaf in Android and perform the
     // right adjustments for offset and affinity.
-    while (position->GetAnchor()->id() != platform_ancestor->GetId()) {
+    while (position->GetAnchor()->id() != lowest_platform_ancestor->GetId()) {
       position = position->CreateParentPosition();
     }
     CHECK(position->IsTextPosition());
-    return AndroidPosition{
-        static_cast<BrowserAccessibilityAndroid*>(platform_ancestor),
-        position->text_offset(), ExtendedSelectionOffsetType::OFFSET_TYPE_TEXT};
+
+    // If original position was a tree position and the resolved position is at
+    // the start or end of the node, try converting it to a child position on
+    // its unignored parent and re-anchoring to the original anchor. This will
+    // keep a closer parity with the original position and helps avoid a text
+    // position that Blink does not support, like a cross boundary selection.
+    if (original_position->IsTreePosition() && position->text_offset() == 0) {
+      if (ui::AXNode* parent_ax_node =
+              lowest_platform_ancestor->node()->GetUnignoredParent()) {
+        if (auto* parent_node = static_cast<BrowserAccessibilityAndroid*>(
+                GetFromAXNode(parent_ax_node))) {
+          int child_offset =
+              lowest_platform_ancestor->node()->GetUnignoredIndexInParent();
+          if (auto android_pos = TryReanchorToOriginalAnchor(
+                  original_position->GetAnchor(), parent_node, child_offset)) {
+            return android_pos;
+          }
+        }
+      }
+    }
+
+    if (lowest_platform_ancestor->IsTextSelectable()) {
+      return AndroidPosition{lowest_platform_ancestor, position->text_offset(),
+                             ExtendedSelectionOffsetType::OFFSET_TYPE_TEXT};
+    }
+
+    // A non-text-selectable node can only be represented as a child offset
+    // within its (unignored) parent. If it has no unignored parent (e.g.
+    // childless root), no valid Android position can be formed.
+    if (!lowest_platform_ancestor->node()->GetUnignoredParent()) {
+      return std::nullopt;
+    }
+    position = position->AsTreePosition();
   }
 
-  // Since the parent of the target node may be ignored, find the target node in
+  // Since the parent of the target node may be ignored, find the target node
   // in Android accessibility tree, then find its parent in Android and compute
   // the offset based on that.
   // The conversion below is lossy and should be improved by including affinity
@@ -1018,9 +1242,6 @@ BrowserAccessibilityManagerAndroid::ConvertChromeSelectionPositionToAndroid(
     // A non BEFORE_TEXT child offset for a leaf node points to after the anchor
     // point. Hence again the target is set to the anchor node, but keeping a
     // note to select after it.
-    // TODO(crbug.com/443078007): Add test for both cases. The position is
-    // inside the container and not before or after the container, hence moving
-    // it before or after the `target_node` is not right.
     target_node = position->GetAnchor();
     at_end_of_anchor =
         (position->child_index() != ui::AXNodePosition::BEFORE_TEXT);
@@ -1050,11 +1271,23 @@ BrowserAccessibilityManagerAndroid::ConvertChromeSelectionPositionToAndroid(
   BrowserAccessibilityAndroid* parent_node =
       static_cast<BrowserAccessibilityAndroid*>(
           GetFromAXNode(target_node->GetUnignoredParent()));
-  // TODO(crbug.com/498376490): Find a test case that triggers this behavior.
+
   if (!parent_node) {
+    // A node with no unignored parent is expected to be a root node.
+    // TODO(crbug.com/564162661): Convert to CHECK.
+    DUMP_WILL_BE_CHECK(ui::IsPlatformDocument(target_node->GetRole()));
     return std::nullopt;
   }
 
+  // If original position was a tree position and the resolved position is at
+  // the start or end boundary of intermediate ancestors, re-anchor it on the
+  // original anchor (or its nearest unignored ancestor).
+  if (original_position->IsTreePosition()) {
+    if (auto android_pos = TryReanchorToOriginalAnchor(
+            original_position->GetAnchor(), parent_node, offset)) {
+      return android_pos;
+    }
+  }
   return AndroidPosition{parent_node, offset,
                          ExtendedSelectionOffsetType::OFFSET_TYPE_CHILD};
 }
@@ -1065,7 +1298,19 @@ BrowserAccessibilityManagerAndroid::ConvertAndroidSelectionPositionToChrome(
     int32_t offset,
     ExtendedSelectionOffsetType offset_type) {
   if (offset_type == ExtendedSelectionOffsetType::OFFSET_TYPE_TEXT) {
-    return node->CreatePositionForSelectionAt(offset);
+    ui::BrowserAccessibility::AXPosition position =
+        node->CreatePositionForSelectionAt(offset);
+    // If the node is an empty text-selectable container (e.g., an empty
+    // paragraph or heading treated as an Android TextView) with no text
+    // descendants, `CreatePositionForSelectionAt` returns a text position
+    // anchored at the container itself. Blink expects text positions only on
+    // text nodes or text fields, so convert it to a tree position.
+    if (position->IsTextPosition() &&
+        !position->GetAnchor()->data().IsTextField() &&
+        !position->GetAnchor()->IsText()) {
+      return position->AsTreePosition();
+    }
+    return position;
   }
 
   // When node 'c' is a child of node 'p' in the Android accessibility tree,
@@ -1112,7 +1357,7 @@ BrowserAccessibilityManagerAndroid::ConvertAndroidSelectionPositionToChrome(
 // TODO(crbug.com/485227837): Remove experiment's methods
 void BrowserAccessibilityManagerAndroid::
     OnAccessibilityEventsProcessedForExperiment() {
-  WebContentsAccessibilityAndroid* wcax = GetWebContentsAXFromRootManager();
+  WebContentsAccessibilityBase* wcax = GetWebContentsAXFromRootManager();
   if (!wcax) {
     return;
   }

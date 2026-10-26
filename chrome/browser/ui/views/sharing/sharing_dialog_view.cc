@@ -14,13 +14,14 @@
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/controls/hover_button.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "components/sharing_message/sharing_app.h"
 #include "components/sharing_message/sharing_metrics.h"
 #include "components/sync/protocol/sync_enums.pb.h"
 #include "components/sync_device_info/device_info.h"
 #include "components/url_formatter/elide_url.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
@@ -63,12 +64,12 @@ bool ShouldShowOrigin(const SharingDialogData& data,
 }
 
 std::u16string PrepareHelpTextWithoutOrigin(const SharingDialogData& data) {
-  DCHECK_NE(0, data.help_text_id);
+  CHECK_NE(0, data.help_text_id, base::NotFatalUntil::M162);
   return l10n_util::GetStringUTF16(data.help_text_id);
 }
 
 std::u16string PrepareHelpTextWithOrigin(const SharingDialogData& data) {
-  DCHECK_NE(0, data.help_text_origin_id);
+  CHECK_NE(0, data.help_text_origin_id, base::NotFatalUntil::M162);
   std::u16string origin = url_formatter::FormatOriginForSecurityDisplay(
       *data.initiating_origin,
       url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS);
@@ -77,8 +78,8 @@ std::u16string PrepareHelpTextWithOrigin(const SharingDialogData& data) {
 }
 
 std::unique_ptr<views::View> CreateOriginView(const SharingDialogData& data) {
-  DCHECK(data.initiating_origin);
-  DCHECK_NE(0, data.origin_text_id);
+  CHECK(data.initiating_origin, base::NotFatalUntil::M162);
+  CHECK_NE(0, data.origin_text_id, base::NotFatalUntil::M162);
   auto label = std::make_unique<views::Label>(
       l10n_util::GetStringFUTF16(
           data.origin_text_id,
@@ -182,14 +183,14 @@ SharingDialogType SharingDialogView::GetDialogType() const {
 }
 
 void SharingDialogView::DeviceButtonPressed(size_t index) {
-  DCHECK_LT(index, data_.devices.size());
+  CHECK_LT(index, data_.devices.size(), base::NotFatalUntil::M162);
   LogSharingSelectedIndex(data_.prefix, kSharingUiDialog, index);
   std::move(data_.device_callback).Run(data_.devices[index]);
   CloseBubble();
 }
 
 void SharingDialogView::AppButtonPressed(size_t index) {
-  DCHECK_LT(index, data_.apps.size());
+  CHECK_LT(index, data_.apps.size(), base::NotFatalUntil::M162);
   LogSharingSelectedIndex(data_.prefix, kSharingUiDialog, index,
                           SharingIndexType::kApp);
   std::move(data_.app_callback).Run(data_.apps[index]);
@@ -199,21 +200,6 @@ void SharingDialogView::AppButtonPressed(size_t index) {
 // static
 views::BubbleDialogDelegateView* SharingDialogView::GetAsBubble(
     SharingDialog* dialog) {
-  return static_cast<SharingDialogView*>(dialog);
-}
-
-// static
-views::BubbleDialogDelegateView* SharingDialogView::GetAsBubbleForClickToCall(
-    SharingDialog* dialog) {
-#if BUILDFLAG(IS_CHROMEOS)
-  if (!dialog) {
-    auto* bubble = IntentPickerBubbleView::intent_picker_bubble();
-    if (bubble && bubble->bubble_type() ==
-                      IntentPickerBubbleView::BubbleType::kClickToCall) {
-      return bubble;
-    }
-  }
-#endif
   return static_cast<SharingDialogView*>(dialog);
 }
 
@@ -312,7 +298,7 @@ void SharingDialogView::InitListView() {
       max_list_height +=
           button_list->children()[i]->GetHeightForWidth(bubble_width);
     }
-    DCHECK_GT(max_list_height, 0);
+    CHECK_GT(max_list_height, 0, base::NotFatalUntil::M162);
 
     auto* scroll_view = AddChildView(std::make_unique<views::ScrollView>());
     scroll_view->ClipHeightTo(0, max_list_height);

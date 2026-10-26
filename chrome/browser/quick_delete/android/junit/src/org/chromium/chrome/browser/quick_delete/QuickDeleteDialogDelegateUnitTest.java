@@ -16,8 +16,6 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Spinner;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -32,7 +30,6 @@ import org.robolectric.Robolectric;
 import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browsing_data.TimePeriod;
@@ -52,7 +49,6 @@ import org.chromium.ui.widget.TextViewWithClickableSpans;
 
 /** Unit tests for Quick Delete dialog. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
 public class QuickDeleteDialogDelegateUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -84,7 +80,6 @@ public class QuickDeleteDialogDelegateUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testObserverFired_OnSpinnerChanges() {
         new QuickDeleteDialogDelegate(
                         mActivity,
@@ -112,7 +107,6 @@ public class QuickDeleteDialogDelegateUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testCancelQuickDelete() {
         new QuickDeleteDialogDelegate(
                         mActivity,
@@ -129,7 +123,6 @@ public class QuickDeleteDialogDelegateUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testConfirmQuickDelete() {
         new QuickDeleteDialogDelegate(
                         mActivity,
@@ -146,7 +139,6 @@ public class QuickDeleteDialogDelegateUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSearchHistoryDisambiguation_SearchHistoryLink() {
         HistogramWatcher histogramWatcher =
                 HistogramWatcher.newSingleRecordWatcher(
@@ -178,7 +170,6 @@ public class QuickDeleteDialogDelegateUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSearchHistoryDisambiguation_OtherActivityLink() {
         HistogramWatcher histogramWatcher =
                 HistogramWatcher.newSingleRecordWatcher(

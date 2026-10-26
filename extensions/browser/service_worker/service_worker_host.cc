@@ -25,6 +25,7 @@
 #include "extensions/browser/service_worker/service_worker_task_queue.h"
 #include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/common/api/messaging/port_context.h"
+#include "extensions/common/api/messaging/signing_certificate.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/mojom/frame.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
@@ -75,12 +76,10 @@ ServiceWorkerHost::ServiceWorkerHost(
   receiver_.set_disconnect_handler(base::BindOnce(
       &ServiceWorkerHost::RemoteDisconnected, base::Unretained(this)));
 
-  render_process_host_->AddObserver(this);
+  render_process_host_observation_.Observe(render_process_host_);
 }
 
-ServiceWorkerHost::~ServiceWorkerHost() {
-  render_process_host_->RemoveObserver(this);
-}
+ServiceWorkerHost::~ServiceWorkerHost() = default;
 
 // static
 base::AutoReset<ServiceWorkerHost::FactoryCallback*>
@@ -366,6 +365,9 @@ void ServiceWorkerHost::OpenChannelToExtension(
 
 void ServiceWorkerHost::OpenChannelToNativeApp(
     const std::string& native_app_name,
+#if BUILDFLAG(IS_ANDROID)
+    const MojomSigningCertificates& android_certificates,
+#endif
     const PortId& port_id,
     mojo::PendingAssociatedRemote<extensions::mojom::MessagePort> port,
     mojo::PendingAssociatedReceiver<extensions::mojom::MessagePortHost>
@@ -377,9 +379,16 @@ void ServiceWorkerHost::OpenChannelToNativeApp(
     return;
   }
 
+#if BUILDFLAG(IS_ANDROID)
+  SigningCertificates parsed_certificates =
+      ParseCertificatesFromMojom(android_certificates);
+#else
+  SigningCertificates parsed_certificates = {};
+#endif
+
   MessageServiceApi::GetMessageService()->OpenChannelToNativeApp(
-      browser_context, worker_id_, port_id, native_app_name, std::move(port),
-      std::move(port_host));
+      browser_context, worker_id_, port_id, native_app_name,
+      std::move(parsed_certificates), std::move(port), std::move(port_host));
 }
 
 void ServiceWorkerHost::OpenChannelToTab(

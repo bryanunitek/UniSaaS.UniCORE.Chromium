@@ -19,6 +19,7 @@
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "components/sync/base/data_type.h"
+#include "components/sync/base/features.h"
 #include "components/sync/base/sync_invalidation.h"
 #include "components/sync/engine/cancelation_signal.h"
 #include "components/sync/engine/configure_reason.h"
@@ -27,10 +28,7 @@
 #include "components/sync/engine/data_type_worker.h"
 #include "components/sync/engine/engine_components_factory.h"
 #include "components/sync/engine/keystore_keys_handler.h"
-#include "components/sync/engine/loopback_server/loopback_connection_manager.h"
-#include "components/sync/engine/net/http_post_provider_factory.h"
-#include "components/sync/engine/net/sync_server_connection_manager.h"
-#include "components/sync/engine/net/url_translator.h"
+#include "components/sync/engine/net/server_connection_manager.h"
 #include "components/sync/engine/polling_constants.h"
 #include "components/sync/engine/required_passphrase_verifier.h"
 #include "components/sync/engine/sync_scheduler.h"
@@ -63,28 +61,6 @@ sync_pb::SyncEnums::GetUpdatesOrigin GetOriginFromReason(
       NOTREACHED();
   }
   return sync_pb::SyncEnums::UNKNOWN_ORIGIN;
-}
-
-constexpr char kSyncServerSyncPath[] = "/command/";
-
-std::string StripTrailingSlash(const std::string& s) {
-  int stripped_end_pos = s.size();
-  if (s.at(stripped_end_pos - 1) == '/') {
-    stripped_end_pos = stripped_end_pos - 1;
-  }
-
-  return s.substr(0, stripped_end_pos);
-}
-
-GURL MakeConnectionURL(const GURL& sync_server, const std::string& client_id) {
-  DCHECK_EQ(kSyncServerSyncPath[0], '/');
-  std::string full_path =
-      StripTrailingSlash(sync_server.GetPath()) + kSyncServerSyncPath;
-
-  GURL::Replacements path_replacement;
-  path_replacement.SetPathStr(full_path);
-  return AppendSyncQueryString(sync_server.ReplaceComponents(path_replacement),
-                               client_id);
 }
 
 }  // namespace
@@ -133,7 +109,6 @@ void SyncManagerImpl::Init(InitArgs* args) {
   DCHECK(!initialized_);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!args->cache_guid.empty());
-  DCHECK(args->post_factory);
   DCHECK(!args->poll_interval.is_zero());
   DCHECK(args->cancelation_signal);
   DVLOG(1) << "SyncManager starting Init...";
@@ -162,17 +137,8 @@ void SyncManagerImpl::Init(InitArgs* args) {
   sync_status_tracker_->SetHasKeystoreKey(
       !sync_encryption_handler_->GetKeystoreKeysHandler()->NeedKeystoreKey());
 
-  if (args->enable_local_sync_backend) {
-    VLOG(1) << "Running against local sync backend.";
-    sync_status_tracker_->SetLocalBackendFolder(
-        args->local_sync_backend_folder.AsUTF8Unsafe());
-    connection_manager_ = std::make_unique<LoopbackConnectionManager>(
-        args->local_sync_backend_folder);
-  } else {
-    connection_manager_ = std::make_unique<SyncServerConnectionManager>(
-        MakeConnectionURL(args->service_url, args->cache_guid),
-        std::move(args->post_factory), args->cancelation_signal);
-  }
+  connection_manager_ = args->engine_components_factory->BuildConnectionManager(
+      args->cache_guid, args->cancelation_signal);
   connection_manager_->AddListener(this);
 
   DVLOG(1) << "Setting sync client ID: " << args->cache_guid;
@@ -188,20 +154,16 @@ void SyncManagerImpl::Init(InitArgs* args) {
   cycle_context_ = args->engine_components_factory->BuildContext(
       connection_manager_.get(), args->extensions_activity, listeners,
       &debug_info_event_listener_, data_type_registry_.get(), args->cache_guid,
-      args->birthday, args->bag_of_chips, args->poll_interval);
+      args->birthday, args->bag_of_chips, args->poll_interval,
+      args->account_email, args->sync_access_token_fetcher);
   scheduler_ = args->engine_components_factory->BuildScheduler(
-      name_, cycle_context_.get(), args->cancelation_signal,
-      args->enable_local_sync_backend);
+      name_, cycle_context_.get(), args->cancelation_signal);
 
   scheduler_->Start(SyncScheduler::CONFIGURATION_MODE, base::Time());
 
   initialized_ = true;
 
-  if (!args->enable_local_sync_backend) {
-    network_connection_tracker_->AddNetworkConnectionObserver(this);
-  } else {
-    scheduler_->OnCredentialsUpdated();
-  }
+  network_connection_tracker_->AddNetworkConnectionObserver(this);
 
   debug_info_event_listener_.InitializationComplete();
 }
@@ -270,9 +232,8 @@ void SyncManagerImpl::StartConfiguration() {
 
 void SyncManagerImpl::UpdateCredentials(const SyncCredentials& credentials) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(!base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken));
   DCHECK(initialized_);
-
-  cycle_context_->set_account_name(credentials.email);
 
   observing_network_connectivity_changes_ = true;
   if (!connection_manager_->SetAccessTokenInfo(credentials.access_token_info)) {
@@ -286,7 +247,14 @@ void SyncManagerImpl::UpdateCredentials(const SyncCredentials& credentials) {
 
 void SyncManagerImpl::InvalidateCredentials() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(!base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken));
   connection_manager_->SetAccessTokenInfo(signin::AccessTokenInfo());
+}
+
+void SyncManagerImpl::OnCredentialsChanged() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken));
+  scheduler_->OnCredentialsUpdated();
 }
 
 void SyncManagerImpl::AddObserver(SyncManager::Observer* observer) {
@@ -336,7 +304,14 @@ void SyncManagerImpl::ShutdownOnSyncThread() {
 void SyncManagerImpl::OnConnectionChanged(
     net::NetworkChangeNotifier::ConnectionType type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!observing_network_connectivity_changes_) {
+  // In the legacy model (without token propagation), observing network
+  // connectivity changes is paused after an auth error to prevent running a
+  // sync cycle with stale/missing cached credentials down to the network layer.
+  // With kSyncUsePropagatedAccessToken enabled, the scheduler fetches an
+  // access token on demand and waits for it asynchronously before running the
+  // cycle, so network changes can be safely forwarded to trigger retry.
+  if (!observing_network_connectivity_changes_ &&
+      !base::FeatureList::IsEnabled(kSyncUsePropagatedAccessToken)) {
     DVLOG(1) << "Network change dropped.";
     return;
   }

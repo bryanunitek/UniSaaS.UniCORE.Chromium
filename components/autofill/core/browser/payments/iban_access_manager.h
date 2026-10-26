@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/payments/mandatory_reauth_manager.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
@@ -29,20 +30,23 @@ struct Suggestion;
 // IBANs.
 class IbanAccessManager {
  public:
+  enum class FailureReason { kItemNotFound, kReauthFailed, kFetchFailed };
+
   // Callback to notify the caller of the access manager when fetching the value
   // of an IBAN has finished.
-  using OnIbanFetchedCallback =
-      base::OnceCallback<void(const std::u16string& value)>;
+  using OnIbanFetchedCallback = base::OnceCallback<void(
+      base::expected<std::u16string, FailureReason> value)>;
 
   explicit IbanAccessManager(AutofillClient* client);
   IbanAccessManager(const IbanAccessManager&) = delete;
   IbanAccessManager& operator=(const IbanAccessManager&) = delete;
   virtual ~IbanAccessManager();
 
-  // Returns the full IBAN value corresponding to the input `payload`.
+  // Fetches the full IBAN value corresponding to the input `payload`.
   // As this may require a network round-trip for server IBANs,
-  //`on_iban_fetched` is run once the value is fetched. For local IBANs, value
-  // will be filled immediately.
+  // `on_iban_fetched` is run once the value is fetched or the fetch failed. For
+  // local IBANs, the value will be filled immediately unless mandatory reauth
+  // is required.
   virtual void FetchValue(const Suggestion::Payload& payload,
                           OnIbanFetchedCallback on_iban_fetched);
 

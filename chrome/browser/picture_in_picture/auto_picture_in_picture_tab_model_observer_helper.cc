@@ -5,7 +5,7 @@
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_model_observer_helper.h"
 
 #include "base/notimplemented.h"
-#include "chrome/browser/android/tab_android.h"  // nogncheck crbug.com/413572035
+#include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "content/public/browser/web_contents.h"
@@ -108,9 +108,7 @@ bool AutoPictureInPictureTabModelObserverHelper::IsTabActivated() {
   return is_tab_activated_;
 }
 
-void AutoPictureInPictureTabModelObserverHelper::DidSelectTab(
-    TabAndroid* tab,
-    TabModel::TabSelectionType type) {
+void AutoPictureInPictureTabModelObserverHelper::DidSelectTab(TabAndroid* tab) {
   // When a tab is dragged out of a window, two consecutive `DidSelectTab`
   // events are triggered: one for the primary tab being dragged and another
   // for the secondary tab that replaces it. To prevent the second event from
@@ -125,6 +123,17 @@ void AutoPictureInPictureTabModelObserverHelper::DidSelectTab(
 
 void AutoPictureInPictureTabModelObserverHelper::TabRemoved(TabAndroid* tab) {
   ReevaluateObservedModelAndState();
+}
+
+void AutoPictureInPictureTabModelObserverHelper::WillCloseTabs(
+    const std::vector<TabAndroid*>& tabs,
+    bool is_all_tabs,
+    bool allow_undo) {
+  // If the tab is closing, we shouldn't trigger Auto-PiP. We pass false to
+  // skip checking the activation status, effectively freezing the state until
+  // the tab is destroyed. It's required because when closing a tab via
+  // WillCloseTabs, Clank doesn't immediately remove the tab from the TabModel.
+  ReevaluateObservedModelAndState(false);
 }
 
 void AutoPictureInPictureTabModelObserverHelper::WillCloseTab(TabAndroid* tab) {

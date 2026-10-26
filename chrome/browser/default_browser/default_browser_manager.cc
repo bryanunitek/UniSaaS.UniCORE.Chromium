@@ -171,8 +171,6 @@ DefaultBrowserManager::DefaultBrowserManager(
                              base::Unretained(this)),
               *this);
     }
-
-    monitor_->StartMonitor();
   }
 }
 
@@ -220,7 +218,7 @@ void DefaultBrowserManager::GetDefaultBrowserState(
     DefaultBrowserCheckCompletionCallback callback) {
   shell_delegate_->StartCheckIsDefault(
       base::BindOnce(&DefaultBrowserManager::OnDefaultBrowserCheckResult,
-                     base::Unretained(this), std::move(callback)));
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void DefaultBrowserManager::OnDefaultBrowserCheckResult(
@@ -228,7 +226,7 @@ void DefaultBrowserManager::OnDefaultBrowserCheckResult(
     DefaultBrowserState default_state) {
   if (default_state == shell_integration::IS_DEFAULT ||
       default_state == shell_integration::NOT_DEFAULT) {
-    if (base::FeatureList::IsEnabled(kPerformDefaultBrowserCheckValidations)) {
+    if (IsPerformDefaultBrowserCheckValidationsEnabled()) {
       PerformDefaultBrowserCheckValidations(default_state);
     }
   }
@@ -261,12 +259,15 @@ void DefaultBrowserManager::PerformDefaultBrowserCheckValidations(
 base::CallbackListSubscription
 DefaultBrowserManager::RegisterDefaultBrowserChanged(
     DefaultBrowserChangedCallback callback) {
+  if (monitor_) {
+    monitor_->StartMonitor();
+  }
   return observers_.Add(std::move(callback));
 }
 
 void DefaultBrowserManager::OnMonitorDetectedChange() {
   GetDefaultBrowserState(base::BindOnce(&DefaultBrowserManager::NotifyObservers,
-                                        base::Unretained(this)));
+                                        weak_ptr_factory_.GetWeakPtr()));
 }
 
 void DefaultBrowserManager::NotifyObservers(DefaultBrowserState state) {
@@ -282,11 +283,11 @@ void DefaultBrowserManager::TrackTimeAfterSetterFailure(
 
   tracker_subscription_ = RegisterDefaultBrowserChanged(base::BindRepeating(
       &DefaultBrowserManager::OnDefaultBrowserStateChangedForTracker,
-      base::Unretained(this)));
+      weak_ptr_factory_.GetWeakPtr()));
 
   GetDefaultBrowserState(base::BindOnce(
       &DefaultBrowserManager::OnDefaultBrowserStateChangedForTracker,
-      base::Unretained(this)));
+      weak_ptr_factory_.GetWeakPtr()));
 }
 
 void DefaultBrowserManager::OnDefaultBrowserStateChangedForTracker(

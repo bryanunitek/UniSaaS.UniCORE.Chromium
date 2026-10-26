@@ -168,7 +168,6 @@ WorkletGlobalScope::~WorkletGlobalScope() = default;
 const BrowserInterfaceBrokerProxy&
 WorkletGlobalScope::GetBrowserInterfaceBroker() const {
   if (browser_interface_broker_proxy_.is_bound()) {
-    CHECK(IsSharedStorageWorkletGlobalScope());
     return browser_interface_broker_proxy_;
   }
 
@@ -196,7 +195,13 @@ bool WorkletGlobalScope::IsContextThread() const {
 void WorkletGlobalScope::AddConsoleMessageImpl(ConsoleMessage* console_message,
                                                bool discard_duplicates) {
   if (IsMainThreadWorkletGlobalScope()) {
+    if (!frame_) {
+      return;
+    }
     frame_->Console().AddMessage(console_message, discard_duplicates);
+    return;
+  }
+  if (!worker_thread_) {
     return;
   }
   worker_thread_->GetWorkerReportingProxy().ReportConsoleMessage(
@@ -208,21 +213,35 @@ void WorkletGlobalScope::AddConsoleMessageImpl(ConsoleMessage* console_message,
 
 void WorkletGlobalScope::AddInspectorIssue(AuditsIssue issue) {
   if (IsMainThreadWorkletGlobalScope()) {
+    if (!frame_) {
+      return;
+    }
     frame_->DomWindow()->AddInspectorIssue(std::move(issue));
   } else {
+    if (!worker_thread_) {
+      return;
+    }
     worker_thread_->GetInspectorIssueStorage()->AddInspectorIssue(
         this, std::move(issue));
   }
 }
 
-void WorkletGlobalScope::ExceptionThrown(ErrorEvent* error_event) {
+void WorkletGlobalScope::ExceptionThrown(
+    ErrorEvent* error_event,
+    SanitizeScriptErrors sanitize_script_errors) {
   if (IsMainThreadWorkletGlobalScope()) {
+    if (!frame_) {
+      return;
+    }
     MainThreadDebugger::Instance(GetIsolate())
         ->ExceptionThrown(this, error_event);
     return;
   }
+  if (!worker_thread_) {
+    return;
+  }
   if (WorkerThreadDebugger* debugger =
-          WorkerThreadDebugger::From(GetThread()->GetIsolate())) {
+          WorkerThreadDebugger::From(worker_thread_->GetIsolate())) {
     debugger->ExceptionThrown(worker_thread_, error_event);
   }
 }
@@ -304,7 +323,7 @@ void WorkletGlobalScope::FetchAndInvokeScript(
   // Step 3 to 5 are implemented in
   // WorkletModuleTreeClient::NotifyModuleTreeLoadFinished.
   auto* client = MakeGarbageCollected<WorkletModuleTreeClient>(
-      ScriptController()->GetScriptState(),
+      ScriptController()->GetScriptState(), module_url_record,
       std::move(outside_settings_task_runner), pending_tasks);
 
   auto request_context_type = mojom::blink::RequestContextType::SCRIPT;
@@ -350,7 +369,6 @@ ukm::SourceId WorkletGlobalScope::UkmSourceID() const {
 
 mojo::PendingRemote<mojom::blink::BlobURLStore>
 WorkletGlobalScope::TakeBlobUrlStorePendingRemote() {
-  DCHECK(blob_url_store_pending_remote_.is_valid());
   return std::move(blob_url_store_pending_remote_);
 }
 

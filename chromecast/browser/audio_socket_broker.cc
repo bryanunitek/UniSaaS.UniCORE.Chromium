@@ -16,9 +16,11 @@
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/timer/timer.h"
+#include "chromecast/browser/cast_navigation_ui_data.h"
 #include "chromecast/media/audio/audio_io_thread.h"
 #include "chromecast/media/audio/audio_output_service/constants.h"
 #include "chromecast/net/socket_util.h"
+#include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/platform/platform_handle.h"
 #include "net/base/net_errors.h"
 #include "net/socket/unix_domain_client_socket_posix.h"
@@ -36,16 +38,15 @@ constexpr char kSocketMsg[] = "socket-handle";
 // Helper class for sending the socket descriptors to the audio output service.
 class AudioSocketBroker::SocketFdConnection {
  public:
-  SocketFdConnection(AudioSocketBroker* socket_broker,
-                     base::ScopedFD connect_socket_fd,
+  SocketFdConnection(base::ScopedFD connect_socket_fd,
                      base::ScopedFD pending_socket_fd,
                      const std::string& audio_output_service_path,
+                     const std::string& session_id,
                      base::OnceCallback<void(base::ScopedFD)> connect_callback)
-      : socket_broker_(socket_broker),
-        socket_fd_(std::move(connect_socket_fd)),
+      : socket_fd_(std::move(connect_socket_fd)),
         pending_socket_fd_(std::move(pending_socket_fd)),
+        session_id_(session_id),
         connect_callback_(std::move(connect_callback)) {
-    DCHECK(socket_broker_);
     DCHECK(socket_fd_.is_valid());
     DCHECK(pending_socket_fd_.is_valid());
     DCHECK(connect_callback_);
@@ -71,10 +72,10 @@ class AudioSocketBroker::SocketFdConnection {
 
  private:
   void OnConnected(int result) {
-    if (result != net::OK ||
-        !base::UnixDomainSocket::SendMsg(
-            connecting_socket_->ReleaseConnectedSocket(),
-            base::as_byte_span(kSocketMsg), {socket_fd_.get()})) {
+    std::string msg = session_id_.empty() ? kSocketMsg : session_id_;
+    if (result != net::OK || !base::UnixDomainSocket::SendMsg(
+                                 connecting_socket_->ReleaseConnectedSocket(),
+                                 base::as_byte_span(msg), {socket_fd_.get()})) {
       std::move(connect_callback_).Run(base::ScopedFD());
       return;
     }
@@ -87,9 +88,9 @@ class AudioSocketBroker::SocketFdConnection {
     OnConnected(net::ERR_TIMED_OUT);
   }
 
-  AudioSocketBroker* const socket_broker_;
   base::ScopedFD socket_fd_;
   base::ScopedFD pending_socket_fd_;
+  std::string session_id_;
   base::OnceCallback<void(base::ScopedFD)> connect_callback_;
   std::unique_ptr<net::UnixDomainClientSocket> connecting_socket_;
   base::OneShotTimer connection_timeout_;
@@ -114,30 +115,34 @@ void AudioSocketBroker::Create(
     mojo::PendingReceiver<mojom::AudioSocketBroker> receiver) {
   CHECK(render_frame_host);
   // Lifecycle managed by content::DocumentService.
-  new AudioSocketBroker(*render_frame_host, std::move(receiver));
+  base::MakeSelfDeleting<AudioSocketBroker>(*render_frame_host,
+                                            std::move(receiver));
 }
 
 AudioSocketBroker& AudioSocketBroker::CreateForTesting(
     content::RenderFrameHost& render_frame_host,
     mojo::PendingReceiver<mojom::AudioSocketBroker> receiver,
     const std::string& audio_output_service_path) {
-  return *new AudioSocketBroker(render_frame_host, std::move(receiver),
-                                audio_output_service_path);
+  return *base::MakeSelfDeleting<AudioSocketBroker>(
+      render_frame_host, std::move(receiver), audio_output_service_path);
 }
 
 AudioSocketBroker::AudioSocketBroker(
     content::RenderFrameHost& render_frame_host,
-    mojo::PendingReceiver<mojom::AudioSocketBroker> receiver)
-    : AudioSocketBroker(render_frame_host,
-                        std::move(receiver),
-                        audio_output_service::
-                            kDefaultAudioOutputServiceUnixDomainSocketPath) {}
+    mojo::PendingReceiver<mojom::AudioSocketBroker> receiver,
+    base::SelfDeletingPassKey key)
+    : AudioSocketBroker(
+          render_frame_host,
+          std::move(receiver),
+          audio_output_service::kDefaultAudioOutputServiceUnixDomainSocketPath,
+          key) {}
 
 AudioSocketBroker::AudioSocketBroker(
     content::RenderFrameHost& render_frame_host,
     mojo::PendingReceiver<mojom::AudioSocketBroker> receiver,
-    const std::string& audio_output_service_path)
-    : DocumentService(render_frame_host, std::move(receiver)),
+    const std::string& audio_output_service_path,
+    base::SelfDeletingPassKey key)
+    : DocumentService(render_frame_host, std::move(receiver), key),
       audio_output_service_path_(audio_output_service_path),
       main_task_runner_(base::SequencedTaskRunner::GetCurrentDefault()) {}
 
@@ -150,13 +155,16 @@ void AudioSocketBroker::GetSocketDescriptor(
     std::move(callback).Run(mojo::PlatformHandle(base::ScopedFD()));
     return;
   }
+  std::string session_id =
+      chromecast::shell::CastNavigationUIData::GetSessionIdForWebContents(
+          content::WebContents::FromRenderFrameHost(&render_frame_host()));
 
   // Send one socket descriptor to audio output service first, and then the
   // other to the client in the renderer.
   int sock_fd1 = socket_fd1.get();
   auto socket_fd_connection = base::SequenceBound<SocketFdConnection>(
-      AudioIoThread::Get()->task_runner(), this, std::move(socket_fd2),
-      std::move(socket_fd1), audio_output_service_path_,
+      AudioIoThread::Get()->task_runner(), std::move(socket_fd2),
+      std::move(socket_fd1), audio_output_service_path_, session_id,
       base::BindPostTask(
           main_task_runner_,
           base::BindOnce(&AudioSocketBroker::OnSocketHandleSentToAudioService,

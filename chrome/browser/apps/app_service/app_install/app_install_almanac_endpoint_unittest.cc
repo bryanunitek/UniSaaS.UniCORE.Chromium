@@ -23,6 +23,7 @@
 #include "content/public/test/browser_task_environment.h"
 #include "net/http/http_request_headers.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "services/network/test/test_utils.h"
@@ -35,8 +36,6 @@ namespace {
 
 using ResponseFuture =
     base::test::TestFuture<base::expected<AppInstallData, QueryError>>;
-
-const PackageId kTestPackageId(PackageType::kWeb, "https://example.com/");
 
 }  // namespace
 
@@ -54,6 +53,7 @@ class AppInstallAlmanacEndpointTest : public testing::Test {
   Profile* profile() { return profile_.get(); }
 
  protected:
+  const PackageId package_id_{PackageType::kWeb, "https://example.com/"};
   network::TestURLLoaderFactory test_url_loader_factory_;
 
  private:
@@ -131,7 +131,7 @@ TEST_F(AppInstallAlmanacEndpointTest, GetAppInstallInfoSuccessfulResponse) {
 
   ResponseFuture response_future;
   app_install_almanac_endpoint::GetAppInstallInfo(
-      profile(), kTestPackageId, response_future.GetCallback());
+      profile(), package_id_, response_future.GetCallback());
   EXPECT_TRUE(response_future.Get().has_value());
 
   AppInstallData expected_data(
@@ -169,6 +169,48 @@ TEST_F(AppInstallAlmanacEndpointTest, GetAppInstallInfoSuccessfulResponse) {
             base::ToString(expected_data));
 }
 
+TEST_F(AppInstallAlmanacEndpointTest,
+       GetAppInstallInfoIgnoresNonHttpImageUrls) {
+  proto::AppInstallResponse response;
+  proto::AppInstallResponse_AppInstance& instance =
+      *response.mutable_app_instance();
+  instance.set_package_id("android:com.foo.app");
+  instance.set_name("Example");
+  {
+    proto::AppInstallResponse_Icon& icon = *instance.mutable_icon();
+    icon.set_url("data:image/png;base64,abc");
+    icon.set_width_in_pixels(144);
+  }
+  for (const char* url : {
+           "data:image/png;base64,abc",
+           "chrome://resources/images/icon.png",
+           "file:///tmp/icon.png",
+           "https://example.com/screenshot.png",
+       }) {
+    proto::AppInstallResponse_Screenshot& screenshot =
+        *instance.add_screenshots();
+    screenshot.set_url(url);
+    screenshot.set_mime_type("image/png");
+    screenshot.set_width_in_pixels(400);
+    screenshot.set_height_in_pixels(400);
+  }
+
+  test_url_loader_factory_.AddResponse(
+      app_install_almanac_endpoint::GetEndpointUrlForTesting().spec(),
+      response.SerializeAsString());
+
+  ResponseFuture response_future;
+  app_install_almanac_endpoint::GetAppInstallInfo(
+      profile(), package_id_, response_future.GetCallback());
+  ASSERT_TRUE(response_future.Get().has_value());
+  const AppInstallData& data = response_future.Get().value();
+
+  EXPECT_FALSE(data.icon.has_value());
+  ASSERT_EQ(data.screenshots.size(), 1u);
+  EXPECT_EQ(data.screenshots[0].url,
+            GURL("https://example.com/screenshot.png"));
+}
+
 TEST_F(AppInstallAlmanacEndpointTest, GetAppInstallInfoMinimalResponse) {
   proto::AppInstallResponse response;
   proto::AppInstallResponse_AppInstance& instance =
@@ -182,7 +224,7 @@ TEST_F(AppInstallAlmanacEndpointTest, GetAppInstallInfoMinimalResponse) {
 
   ResponseFuture response_future;
   app_install_almanac_endpoint::GetAppInstallInfo(
-      profile(), kTestPackageId, response_future.GetCallback());
+      profile(), package_id_, response_future.GetCallback());
 
   AppInstallData expected_data(PackageId(PackageType::kArc, "com.foo.app"));
   expected_data.name = "Example";
@@ -203,7 +245,7 @@ TEST_F(AppInstallAlmanacEndpointTest, GetAppInstallInfoIncompleteResponse) {
 
   ResponseFuture response_future;
   app_install_almanac_endpoint::GetAppInstallInfo(
-      profile(), kTestPackageId, response_future.GetCallback());
+      profile(), package_id_, response_future.GetCallback());
   EXPECT_EQ(response_future.Get().error().type, QueryError::kBadResponse);
 }
 
@@ -214,7 +256,7 @@ TEST_F(AppInstallAlmanacEndpointTest, GetAppInstallInfoMalformedResponse) {
 
   ResponseFuture response_future;
   app_install_almanac_endpoint::GetAppInstallInfo(
-      profile(), kTestPackageId, response_future.GetCallback());
+      profile(), package_id_, response_future.GetCallback());
   EXPECT_EQ(response_future.Get().error().type, QueryError::kBadResponse);
 }
 
@@ -245,7 +287,7 @@ TEST_F(AppInstallAlmanacEndpointTest, GetAppInstallInfoServerError) {
 
   ResponseFuture response_future;
   app_install_almanac_endpoint::GetAppInstallInfo(
-      profile(), kTestPackageId, response_future.GetCallback());
+      profile(), package_id_, response_future.GetCallback());
   EXPECT_EQ(response_future.Get().error().type, QueryError::kConnectionError);
 }
 
@@ -257,7 +299,7 @@ TEST_F(AppInstallAlmanacEndpointTest, GetAppInstallInfoNetworkError) {
 
   ResponseFuture response_future;
   app_install_almanac_endpoint::GetAppInstallInfo(
-      profile(), kTestPackageId, response_future.GetCallback());
+      profile(), package_id_, response_future.GetCallback());
   EXPECT_EQ(response_future.Get().error().type, QueryError::kConnectionError);
 }
 
@@ -270,7 +312,7 @@ TEST_F(AppInstallAlmanacEndpointTest, GetAppInstallInfoNotFound) {
 
   ResponseFuture response_future;
   app_install_almanac_endpoint::GetAppInstallInfo(
-      profile(), kTestPackageId, response_future.GetCallback());
+      profile(), package_id_, response_future.GetCallback());
   EXPECT_EQ(response_future.Get().error().type, QueryError::kBadRequest);
 }
 

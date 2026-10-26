@@ -9,9 +9,11 @@ import android.content.Context;
 import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
 import org.chromium.ui.base.WindowAndroid;
@@ -25,7 +27,9 @@ class NoPasskeysBottomSheetBridge implements NoPasskeysBottomSheetCoordinator.Na
     private long mNativeBridge;
 
     @CalledByNative
-    NoPasskeysBottomSheetBridge(long nativeNoPasskeysBottomSheetBridge, WindowAndroid window) {
+    NoPasskeysBottomSheetBridge(
+            long nativeNoPasskeysBottomSheetBridge,
+            @JniType("ui::WindowAndroid*") WindowAndroid window) {
         this(
                 nativeNoPasskeysBottomSheetBridge,
                 window.getContext(),
@@ -36,14 +40,14 @@ class NoPasskeysBottomSheetBridge implements NoPasskeysBottomSheetCoordinator.Na
     NoPasskeysBottomSheetBridge(
             long nativeNoPasskeysBottomSheetBridge,
             WeakReference<Context> context,
-            WeakReference<BottomSheetController> bottomSheetController) {
+            WeakReference<@Nullable BottomSheetController> bottomSheetController) {
         mNativeBridge = nativeNoPasskeysBottomSheetBridge;
         mNoPasskeysSheet =
                 new NoPasskeysBottomSheetCoordinator(context, bottomSheetController, this);
     }
 
     @CalledByNative
-    void show(String origin) {
+    void show(@JniType("std::string") String origin) {
         mNoPasskeysSheet.show(origin);
     }
 

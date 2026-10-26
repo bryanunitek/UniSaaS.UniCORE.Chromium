@@ -18,7 +18,6 @@
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/canonical_cookie_test_helpers.h"
 #include "net/cookies/cookie_monster.h"
-#include "net/first_party_sets/first_party_set_metadata.h"
 #include "services/network/cookie_settings.h"
 #include "services/network/restricted_cookie_manager.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -100,11 +99,8 @@ class CookieStoreTest : public testing::Test {
             /*cookies_setting_overrides=*/net::CookieSettingOverrides(),
             /*devtools_cookies_setting_overrides=*/
             net::CookieSettingOverrides(),
-            /*cookie_observer=*/mojo::NullRemote(),
-            network::RestrictedCookieManager::ComputeFirstPartySetMetadata(
-                origin_,
-                &cookie_monster_,
-                isolation_info_))) {
+            /*prefer_bound_cookie_context=*/false,
+            /*cookie_observer=*/mojo::NullRemote())) {
     mojo::SetDefaultProcessErrorHandler(base::BindRepeating(
         &CookieStoreTest::OnBadMessage, base::Unretained(this)));
   }

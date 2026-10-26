@@ -11,7 +11,8 @@
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/management/management_ui_constants.h"
 #include "chrome/browser/ui/webui/management/management_ui_handler.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -63,11 +64,14 @@ class ManagementUITest : public InProcessBrowserTest {
   policy::MockConfigurationPolicyProvider* provider() { return &provider_; }
 
   policy::ProfilePolicyConnector* profile_policy_connector() {
-    return browser()->profile()->GetProfilePolicyConnector();
+    return browser()->GetProfile()->GetProfilePolicyConnector();
   }
 
   policy::PolicyService* policy_service() {
-    return browser()->profile()->GetProfilePolicyConnector()->policy_service();
+    return browser()
+        ->GetProfile()
+        ->GetProfilePolicyConnector()
+        ->policy_service();
   }
 
  private:
@@ -94,7 +98,7 @@ IN_PROC_BROWSER_TEST_F(ManagementUITest, ManagementStateChange) {
       "    JSON.stringify(managed_result));";
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   std::string unmanaged_json =
       content::EvalJs(contents, javascript).ExtractString();
 
@@ -126,7 +130,7 @@ IN_PROC_BROWSER_TEST_F(ManagementUITest, ManagementStateChange) {
   provider()->UpdateExtensionPolicy(policy_map,
                                     kOnPremReportingExtensionBetaId);
 
-  contents = browser()->tab_strip_model()->GetActiveWebContents();
+  contents = browser()->GetTabStripModel()->GetActiveWebContents();
   std::string managed_json =
       content::EvalJs(contents, javascript).ExtractString();
 

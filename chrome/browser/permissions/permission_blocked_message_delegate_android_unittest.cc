@@ -6,7 +6,6 @@
 
 #include "base/android/jni_android.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/safe_ref.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
@@ -21,6 +20,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/elide_url.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -36,10 +36,11 @@ class MockPermissionPromptAndroid
       : permissions::PermissionPromptAndroid(web_contents, delegate) {}
   ~MockPermissionPromptAndroid() override = default;
 
-  MOCK_METHOD(const std::vector<base::SafeRef<permissions::PermissionRequest>>&,
-              Requests,
-              (),
-              (const, override));
+  MOCK_METHOD(
+      const std::vector<std::unique_ptr<permissions::PermissionRequest>>&,
+      Requests,
+      (),
+      (const, override));
 
   MOCK_METHOD(permissions::PermissionPromptDisposition,
               GetPromptDisposition,
@@ -84,7 +85,10 @@ class TestPermissionBlockedMessageDelegate
       : PermissionBlockedMessageDelegate(web_contents, std::move(delegate)) {}
   ~TestPermissionBlockedMessageDelegate() override = default;
 
-  void ResolveWithOSPrompt(ContentSettingsType content_settings_type) override {
+  void ResolveWithOSPrompt(ContentSettingsType content_settings_type,
+                           const GURL& requesting_origin) override {
+    EXPECT_EQ(requesting_origin,
+              GURL(permissions::MockPermissionRequest::kDefaultOrigin));
     // Simulate Java callback calling Accept on native.
     delegate_->Accept();
   }
@@ -141,7 +145,7 @@ class PermissionBlockedMessageDelegateAndroidTest
 
   std::unique_ptr<MockDelegate> CreateDelegateWithPrompt(
       std::unique_ptr<MockPermissionPromptAndroid>& prompt_storage,
-      const std::vector<base::SafeRef<permissions::PermissionRequest>>&
+      const std::vector<std::unique_ptr<permissions::PermissionRequest>>&
           requests) {
     prompt_storage =
         std::make_unique<MockPermissionPromptAndroid>(web_contents(), manager_);
@@ -282,8 +286,12 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest, LoudUI_Shown) {
   auto request = std::make_unique<permissions::MockPermissionRequest>(
       permissions::RequestType::kNotifications,
       permissions::PermissionRequestGestureType::GESTURE);
-  std::vector<base::SafeRef<permissions::PermissionRequest>> requests;
-  requests.push_back(request->GetSafeRef());
+  std::u16string origin = url_formatter::FormatUrlForSecurityDisplay(
+      request->requesting_origin(),
+      url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC);
+
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.push_back(std::move(request));
 
   std::unique_ptr<MockPermissionPromptAndroid> mock_prompt;
   auto delegate = CreateDelegateWithPrompt(mock_prompt, requests);
@@ -306,9 +314,6 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest, LoudUI_Shown) {
             message->GetTitle());
 
   // Verify Description contains origin
-  std::u16string origin = url_formatter::FormatUrlForSecurityDisplay(
-      request->requesting_origin(),
-      url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC);
   EXPECT_NE(std::u16string::npos, message->GetDescription().find(origin));
 
   // Verify Primary Button
@@ -324,8 +329,8 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest,
   auto request = std::make_unique<permissions::MockPermissionRequest>(
       permissions::RequestType::kNotifications,
       permissions::PermissionRequestGestureType::GESTURE);
-  std::vector<base::SafeRef<permissions::PermissionRequest>> requests;
-  requests.push_back(request->GetSafeRef());
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.push_back(std::move(request));
 
   std::unique_ptr<MockPermissionPromptAndroid> mock_prompt;
   auto delegate = CreateDelegateWithPrompt(mock_prompt, requests);
@@ -361,8 +366,8 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest, LoudUI_DismissByGesture) {
   auto request = std::make_unique<permissions::MockPermissionRequest>(
       permissions::RequestType::kNotifications,
       permissions::PermissionRequestGestureType::GESTURE);
-  std::vector<base::SafeRef<permissions::PermissionRequest>> requests;
-  requests.push_back(request->GetSafeRef());
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.push_back(std::move(request));
 
   std::unique_ptr<MockPermissionPromptAndroid> mock_prompt;
   auto delegate = CreateDelegateWithPrompt(mock_prompt, requests);
@@ -396,8 +401,8 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest, LoudUI_DismissByTimeout) {
   auto request = std::make_unique<permissions::MockPermissionRequest>(
       permissions::RequestType::kNotifications,
       permissions::PermissionRequestGestureType::GESTURE);
-  std::vector<base::SafeRef<permissions::PermissionRequest>> requests;
-  requests.push_back(request->GetSafeRef());
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.push_back(std::move(request));
 
   std::unique_ptr<MockPermissionPromptAndroid> mock_prompt;
   auto delegate = CreateDelegateWithPrompt(mock_prompt, requests);
@@ -457,8 +462,8 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest, LoudUI_SecondaryMenu_Deny) {
   auto request = std::make_unique<permissions::MockPermissionRequest>(
       permissions::RequestType::kNotifications,
       permissions::PermissionRequestGestureType::GESTURE);
-  std::vector<base::SafeRef<permissions::PermissionRequest>> requests;
-  requests.push_back(request->GetSafeRef());
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.push_back(std::move(request));
 
   std::unique_ptr<MockPermissionPromptAndroid> mock_prompt;
   auto delegate = CreateDelegateWithPrompt(mock_prompt, requests);
@@ -490,8 +495,8 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest,
   auto request = std::make_unique<permissions::MockPermissionRequest>(
       permissions::RequestType::kNotifications,
       permissions::PermissionRequestGestureType::GESTURE);
-  std::vector<base::SafeRef<permissions::PermissionRequest>> requests;
-  requests.push_back(request->GetSafeRef());
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.push_back(std::move(request));
 
   std::unique_ptr<MockPermissionPromptAndroid> mock_prompt;
   auto delegate = CreateDelegateWithPrompt(mock_prompt, requests);

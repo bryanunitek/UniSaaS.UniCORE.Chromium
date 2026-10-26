@@ -33,7 +33,6 @@
 #include "chrome/browser/startup/startup_launch_manager.h"
 #endif
 
-class Browser;
 class BrowserWindowInterface;
 class PrefRegistrySimple;
 class Profile;
@@ -149,6 +148,8 @@ class BackgroundModeManager : public BrowserCollectionObserver,
   FRIEND_TEST_ALL_PREFIXES(BackgroundModeManagerTest,
                            ProfileAttributesStorageObserver);
   FRIEND_TEST_ALL_PREFIXES(BackgroundModeManagerTest, DeleteBackgroundProfile);
+  FRIEND_TEST_ALL_PREFIXES(BackgroundModeManagerTest,
+                           ProfileDestructionKeepsLaunchOnStartupRegistration);
   FRIEND_TEST_ALL_PREFIXES(BackgroundModeManagerTest,
                            ForceInstalledExtensionsKeepAlive);
   FRIEND_TEST_ALL_PREFIXES(

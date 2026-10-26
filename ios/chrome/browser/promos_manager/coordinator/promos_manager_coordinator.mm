@@ -35,10 +35,14 @@
 #import "ios/chrome/browser/default_browser/promo/tailored/ui/all_tabs_default_browser_promo_view_provider.h"
 #import "ios/chrome/browser/default_browser/promo/tailored/ui/made_for_ios_default_browser_promo_view_provider.h"
 #import "ios/chrome/browser/default_browser/promo/tailored/ui/stay_safe_default_browser_promo_view_provider.h"
-#import "ios/chrome/browser/docking_promo/coordinator/docking_promo_display_handler.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/first_run/public/features.h"
+#import "ios/chrome/browser/home_customization/coordinator/home_customization_ephemeral_theme_promo_display_handler.h"
+#import "ios/chrome/browser/home_customization/model/home_background_customization_service.h"
+#import "ios/chrome/browser/home_customization/model/home_background_customization_service_factory.h"
+#import "ios/chrome/browser/level_up/model/level_up_promo_display_handler.h"
 #import "ios/chrome/browser/ntp/coordinator/home_background_customization_promo_display_handler.h"
+#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/post_restore_signin/ui_bundled/post_restore_signin_provider.h"
 #import "ios/chrome/browser/promos_manager/coordinator/bannered_promo_view_provider.h"
 #import "ios/chrome/browser/promos_manager/coordinator/promos_manager_coordinator+Testing.h"
@@ -56,10 +60,12 @@
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
-#import "ios/chrome/browser/shared/public/commands/credential_provider_promo_commands.h"
+#import "ios/chrome/browser/shared/public/commands/level_up_commands.h"
+#import "ios/chrome/browser/shared/public/commands/new_tab_page_commands.h"
 #import "ios/chrome/browser/shared/public/commands/picture_in_picture_commands.h"
 #import "ios/chrome/browser/shared/public/commands/promos_manager_commands.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_sign_in_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
@@ -106,9 +112,6 @@
 
   // The handler for the SceneCommands.
   id<SceneCommands> _sceneHandler;
-
-  // The handler for the CredentialProviderPromoCommands.
-  id<CredentialProviderPromoCommands> _credentialProviderPromoCommandHandler;
 }
 
 // A mediator that observes when it's a good time to display a promo.
@@ -134,16 +137,13 @@
 
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController
                                    browser:(Browser*)browser
-                              sceneHandler:(id<SceneCommands>)sceneHandler
-            credentialProviderPromoHandler:(id<CredentialProviderPromoCommands>)
-                                               credentialProviderPromoHandler {
+                              sceneHandler:(id<SceneCommands>)sceneHandler {
   DCHECK(ShouldPromoManagerDisplayPromos());
   if ((self = [super initWithBaseViewController:viewController
                                         browser:browser])) {
-    CHECK(viewController, base::NotFatalUntil::M140);
-    CHECK(browser, base::NotFatalUntil::M140);
+    CHECK(viewController);
+    CHECK(browser);
     _sceneHandler = sceneHandler;
-    _credentialProviderPromoCommandHandler = credentialProviderPromoHandler;
 
     [self registerPromos];
 
@@ -168,9 +168,9 @@
 }
 
 - (void)dealloc {
-  CHECK(!_mediator, base::NotFatalUntil::M140);
-  CHECK(!self.viewController, base::NotFatalUntil::M140);
-  CHECK(!self.banneredViewController, base::NotFatalUntil::M140);
+  CHECK(!_mediator);
+  CHECK(!self.viewController);
+  CHECK(!self.banneredViewController);
 }
 
 #pragma mark - Public
@@ -420,7 +420,9 @@
 
 // Invoked when the primary action button is tapped.
 - (void)didTapPrimaryActionButton {
-  DCHECK(self.banneredProvider);
+  if (!self.banneredProvider) {
+    return;
+  }
 
   if (![self.banneredProvider
           respondsToSelector:@selector(standardPromoPrimaryAction)]) {
@@ -433,7 +435,9 @@
 
 // Invoked when the secondary action button is tapped.
 - (void)didTapSecondaryActionButton {
-  DCHECK(self.banneredProvider);
+  if (!self.banneredProvider) {
+    return;
+  }
 
   // Sometimes the secondary action button for a PromoStyleViewController is
   // used as the dismiss action button.
@@ -450,7 +454,9 @@
 
 // Invoked when the tertiary action button is tapped.
 - (void)didTapTertiaryActionButton {
-  DCHECK(self.banneredProvider);
+  if (!self.banneredProvider) {
+    return;
+  }
 
   if (![self.banneredProvider
           respondsToSelector:@selector(standardPromoTertiaryAction)]) {
@@ -468,7 +474,9 @@
 #pragma mark - ConfirmationAlertActionHandler
 
 - (void)confirmationAlertPrimaryAction {
-  DCHECK(self.provider);
+  if (!self.provider) {
+    return;
+  }
 
   if (![self.provider
           respondsToSelector:@selector(standardPromoPrimaryAction)]) {
@@ -480,7 +488,9 @@
 }
 
 - (void)confirmationAlertSecondaryAction {
-  DCHECK(self.provider);
+  if (!self.provider) {
+    return;
+  }
 
   if (![self.provider
           respondsToSelector:@selector(standardPromoSecondaryAction)]) {
@@ -492,7 +502,9 @@
 }
 
 - (void)confirmationAlertTertiaryAction {
-  DCHECK(self.provider);
+  if (!self.provider) {
+    return;
+  }
 
   if (![self.provider
           respondsToSelector:@selector(standardPromoTertiaryAction)]) {
@@ -506,7 +518,9 @@
 
 - (void)presentationControllerDidDismiss:
     (UIPresentationController*)presentationController {
-  DCHECK(self.provider || self.banneredProvider);
+  if (!self.provider && !self.banneredProvider) {
+    return;
+  }
 
   if ([self.provider respondsToSelector:@selector(standardPromoDismissSwipe)]) {
     [self.provider standardPromoDismissSwipe];
@@ -524,7 +538,9 @@
 
 // Dismisses the promo.
 - (void)dismissPromo {
-  DCHECK(self.provider || self.banneredProvider);
+  if (!self.provider && !self.banneredProvider) {
+    return;
+  }
 
   if ([self.provider
           respondsToSelector:@selector(standardPromoDismissAction)]) {
@@ -568,14 +584,8 @@
 
   // Credentials provider promo handler.
   _displayHandlerPromos[promos_manager::Promo::CredentialProviderExtension] =
-      [[CredentialProviderPromoDisplayHandler alloc]
-          initWithHandler:_credentialProviderPromoCommandHandler];
+      [[CredentialProviderPromoDisplayHandler alloc] init];
 
-  // Docking promo handler.
-  if (IsDockingPromoV2Enabled()) {
-    _displayHandlerPromos[promos_manager::Promo::DockingPromo] =
-        [[DockingPromoDisplayHandler alloc] init];
-  }
 
   // Default browser promo handler.
   _displayHandlerPromos[promos_manager::Promo::DefaultBrowser] =
@@ -609,6 +619,29 @@
 
   _displayHandlerPromos[promos_manager::Promo::HomeBackgroundCustomization] =
       [[HomeBackgroundCustomizationPromoDisplayHandler alloc] init];
+
+  // Level Up promo handler.
+  if (IsLevelUpEnabled()) {
+    id<LevelUpCommands> levelUpHandler = HandlerForProtocol(
+        self.browser->GetCommandDispatcher(), LevelUpCommands);
+    _displayHandlerPromos[promos_manager::Promo::LevelUp] =
+        [[LevelUpPromoDisplayHandler alloc]
+            initWithLevelUpCommandsHandler:levelUpHandler];
+  }
+
+  // Ephemeral theme promo handler.
+  HomeBackgroundCustomizationService* backgroundCustomizationService =
+      HomeBackgroundCustomizationServiceFactory::GetForProfile(self.profile);
+  if (!backgroundCustomizationService
+           ->IsCustomizationDisabledOrColorManagedByPolicy() &&
+      IsNTPEphemeralThemeEnabled()) {
+    id<NewTabPageCommands> ntpHandler = HandlerForProtocol(
+        self.browser->GetCommandDispatcher(), NewTabPageCommands);
+    _displayHandlerPromos[promos_manager::Promo::EphemeralTheme] =
+        [[HomeCustomizationEphemeralThemePromoDisplayHandler alloc]
+            initWithNewTabPageCommandsHandler:ntpHandler
+                       promosManagerUIHandler:self];
+  }
 }
 
 - (void)registerStandardPromoViewProviderPromos {
@@ -646,13 +679,17 @@
 - (void)registerStandardPromoAlertProviderPromos {
   ProfileIOS* profile = self.profile;
   // Post-restore sign-in promo handler.
-  _alertProviderPromos[promos_manager::Promo::PostRestoreSignInAlert] =
+  PostRestoreSignInProvider* postRestoreSignInProvider =
       [[PostRestoreSignInProvider alloc]
             initWithSyncService:SyncServiceFactory::GetForProfile(profile)
           authenticationService:AuthenticationServiceFactory::GetForProfile(
                                     profile)
                 identityManager:IdentityManagerFactory::GetForProfile(profile)
                     prefService:profile->GetPrefs()];
+  postRestoreSignInProvider.sceneSignInHandler = HandlerForProtocol(
+      self.browser->GetCommandDispatcher(), SceneSignInCommands);
+  _alertProviderPromos[promos_manager::Promo::PostRestoreSignInAlert] =
+      postRestoreSignInProvider;
 
   PostRestoreDefaultBrowserPromoProvider* postRestoreProvider =
       [[PostRestoreDefaultBrowserPromoProvider alloc] init];

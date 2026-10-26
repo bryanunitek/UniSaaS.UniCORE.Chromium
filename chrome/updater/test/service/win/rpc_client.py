@@ -5,7 +5,6 @@
 import logging
 import os
 import socket
-import sys
 import xmlrpc.client
 
 _UPDATER_XML_RPC_PORT = 9090
@@ -16,8 +15,9 @@ RPCErrors = (socket.error, socket.herror, socket.gaierror, socket.timeout)
 
 def GetProxy():
     """Constructs a XML RPC server proxy."""
-    return xmlrpc.client.ServerProxy('http://localhost:%s' %
-                                     _UPDATER_XML_RPC_PORT)
+    return xmlrpc.client.ServerProxy(
+        'http://localhost:%s' % _UPDATER_XML_RPC_PORT
+    )
 
 
 def TestConnection():
@@ -95,8 +95,9 @@ def AnswerUpcomingUACPrompt(actions, timeout=10, wait_child=False, source=''):
     """
     try:
         proxy = GetProxy()
-        return proxy.AnswerUpcomingUACPrompt(actions, timeout, wait_child,
-                                             source)
+        return proxy.AnswerUpcomingUACPrompt(
+            actions, timeout, wait_child, source
+        )
     except RPCErrors as err:
         logging.exception(err)
         raise

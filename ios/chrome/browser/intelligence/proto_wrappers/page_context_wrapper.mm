@@ -12,7 +12,9 @@
 #import <utility>
 #import <vector>
 
+#import "base/apple/foundation_util.h"
 #import "base/barrier_closure.h"
+#import "base/base64.h"
 #import "base/check.h"
 #import "base/check_op.h"
 #import "base/feature_list.h"
@@ -50,7 +52,10 @@
 #import "ios/web/public/js_messaging/content_world.h"
 #import "ios/web/public/js_messaging/web_frame.h"
 #import "ios/web/public/js_messaging/web_frames_manager.h"
+#import "ios/web/public/ui/crw_web_view_proxy.h"
+#import "ios/web/public/ui/crw_web_view_scroll_view_proxy.h"
 #import "ios/web/public/web_state.h"
+#import "net/base/schemeful_site.h"
 #import "url/gurl.h"
 #import "url/origin.h"
 #import "url/url_constants.h"
@@ -104,10 +109,12 @@ constexpr const char kRemoteFrameTokenKey[] = "remoteToken";
 // The JavaScript to be executed on each WebState's WebFrames, which retrieves
 // the innerText of the document body, and recursively traverses through
 // same-origin nested iframes to retrieve their innerTexts as well,
-// constructing a tree structure. iframes are marked as processed with a nonce
-// to avoid duplicate text from frames, but only for the current run. Early
-// returns if the PageContext should be detached, or the frame is not the
-// top-most same-origin frame.
+// constructing a tree structure. The innerText of a node also includes text
+// inside open Shadow DOM roots, which is otherwise excluded from
+// Element.innerText. iframes are marked as processed with a nonce to avoid
+// duplicate text from frames, but only for the current run. Early returns if
+// the PageContext should be detached, or the frame is not the top-most
+// same-origin frame.
 constexpr const char16_t* kInnerTextTreeJavaScript = uR"DELIM(
 (() => {
     // Checks whether the PageContext should be detached.
@@ -128,6 +135,66 @@ constexpr const char16_t* kInnerTextTreeJavaScript = uR"DELIM(
         // Not the top-most same-origin frame, early exit.
         return null;
     }
+
+    // Direct references to `Element` members, used to read shadow roots and
+    // query descendants without going through instance properties that a
+    // hostile page could clobber (e.g. a form control named `querySelectorAll`
+    // or `shadowRoot`).
+    const shadowRootGetter =
+        Object.getOwnPropertyDescriptor(Element.prototype, 'shadowRoot')?.get;
+    const querySelectorAllMethod = Element.prototype.querySelectorAll;
+    const safeShadowRoot = (element) =>
+        element ? (shadowRootGetter ? shadowRootGetter.call(element) :
+                                      element.shadowRoot) :
+                  null;
+    const safeQuerySelectorAllAsArray = (element, selector) =>
+        Array.from(querySelectorAllMethod.call(element, selector));
+
+    // Keep this implementation in sync with `getInnerTextIncludingShadowDom()`
+    // in page_context_extractor.ts.
+    // Collects the innerText of a node, additionally piercing open Shadow DOM
+    // roots whose text is not reflected in Element.innerText. Nested shadow
+    // roots are handled through the recursion. Closed shadow roots are
+    // inaccessible from script and are skipped.
+    const getInnerTextIncludingShadowDom = (node) => {
+        if (!node) {
+            return '';
+        }
+        const texts = [];
+        if (node.innerText) {
+            texts.push(node.innerText);
+        }
+        // The node itself and its light-DOM descendants may be shadow hosts.
+        // querySelectorAll does not cross shadow boundaries, so shadow hosts
+        // nested inside another shadow tree are reached via the recursion.
+        const hosts = safeQuerySelectorAllAsArray(node, '*');
+        if (safeShadowRoot(node)) {
+            hosts.unshift(node);
+        }
+        for (const host of hosts) {
+            const shadowRoot = safeShadowRoot(host);
+            if (!shadowRoot) {
+                continue;
+            }
+            // Iterate all child nodes (not just elements) so text authored
+            // directly under the shadow root is not dropped.
+            for (const shadowChild of shadowRoot.childNodes) {
+                let shadowText = '';
+                if (shadowChild.nodeType === Node.ELEMENT_NODE) {
+                    shadowText = getInnerTextIncludingShadowDom(shadowChild);
+                } else if (shadowChild.nodeType === Node.TEXT_NODE) {
+                    shadowText = (shadowChild.textContent || '').trim();
+                }
+                if (shadowText) {
+                    texts.push(shadowText);
+                }
+            }
+        }
+        // `innerText` above collects all light-DOM text at once. Shadow-DOM
+        // chunks are therefore appended after it rather than inserted at their
+        // visual positions.
+        return texts.join('\n');
+    };
 
     // Recursively constructs the innerText tree for the passed node and its
     // children same-origin iframes.
@@ -164,7 +231,7 @@ constexpr const char16_t* kInnerTextTreeJavaScript = uR"DELIM(
         });
 
         const result = {
-            currentNodeInnerText: node.innerText,
+            currentNodeInnerText: getInnerTextIncludingShadowDom(node),
             children: childNodeInnerTexts.filter(item => item !== null),
             sourceUrl: frameURL,
             title: frameTitle,
@@ -198,6 +265,11 @@ anchorElements.forEach((anchor) => {
 
 result.links = linksArray;
   )DELIM";
+
+// We match Blue*'s PDF size limit of 64 MB.
+// TODO(crbug.com/485311221): make this configurable per-provider, e.g.
+// via Gemini's configurable params, instead of hardcoding it here.
+const NSUInteger kMaxPDFByteLimit = 64 * 1024 * 1024;
 
 }  // namespace
 
@@ -238,6 +310,11 @@ result.links = linksArray;
   // Unique pointer to the PageContext proto.
   std::unique_ptr<optimization_guide::proto::PageContext> _pageContext;
 
+  // The boxes to redact over the screenshot.
+  std::vector<CGRect> _universalBoundingBoxesForRedaction;
+
+  // Raw screenshot image before redaction masking is applied.
+  UIImage* _rawScreenshotImage;
   // The current PageContext instance's metrics logger. Only created when async
   // tasks execution is started.
   PageContextWrapperMetrics* _pageContextMetrics;
@@ -245,6 +322,10 @@ result.links = linksArray;
   // Configuration for page context extraction. Using optional avoids using
   // the constructor.
   std::optional<PageContextWrapperConfig> _config;
+
+  // The SchemefulSite of the main frame, captured synchronously at the start
+  // of extraction to prevent TOCTOU race conditions.
+  net::SchemefulSite _mainFrameSite;
 
   // Graft frames across origins.
   FrameGrafter _grafter;
@@ -277,11 +358,12 @@ result.links = linksArray;
     _asyncTasksToComplete = 0;
     _webState = webState->GetWeakPtr();
     _config = config;
+    _mainFrameSite = net::SchemefulSite(webState->GetLastCommittedURL());
     _completionCallback = std::move(completionCallback);
 
     // Create the PageContext proto/object.
     _pageContext = std::make_unique<optimization_guide::proto::PageContext>();
-    GURL url = _webState->GetVisibleURL();
+    GURL url = _webState->GetLastCommittedURL();
     if (url.SchemeIs(url::kDataScheme)) {
       _pageContext->set_url(kDataUrl);
     } else {
@@ -433,7 +515,8 @@ result.links = linksArray;
     return;
   }
 
-  if (!CanExtractPageContextForWebState(_webState.get())) {
+  if (!CanExtractPageContextForWebState(_webState.get(),
+                                        _shouldGetFullPagePDF)) {
     _notExtractable = YES;
     [self asyncWorkCompletedForPageContext];
     return;
@@ -487,8 +570,7 @@ result.links = linksArray;
     [_pageContextMetrics executionStartedForTask:PageContextTask::kPDF];
 
     _webState->CreateFullPagePdf(base::BindOnce(^(NSData* PDFData) {
-      [weakSelf encodeAndSetFullPagePDF:PDFData];
-      pageContextBarrier.Run();
+      [weakSelf encodeAndSetFullPagePDF:PDFData barrier:pageContextBarrier];
     }));
   }
 }
@@ -499,30 +581,18 @@ result.links = linksArray;
   [_pageContextMetrics executionStartedForTask:PageContextTask::kScreenshot];
 
   __weak PageContextWrapper* weakSelf = self;
-  auto callback = ^(UIImage* image) {
-    __strong __typeof(weakSelf) strongSelf = weakSelf;
-    if (!strongSelf) {
-      return;
-    }
 
-    if ([strongSelf shouldUpdateSnapshotWithImage:image]) {
-      [strongSelf updateSnapshotWithBarrier:barrier];
-      return;
-    }
-
-    [strongSelf encodeImageAndSetTabScreenshot:image];
-    barrier.Run();
-  };
-
-  // If the WebState is currently visible, update the snapshot in case the
-  // user was scrolling, otherwise retrieve the latest version in cache or on
-  // disk.
-  if (_webState->IsVisible()) {
+  // Capture a live snapshot if the WebState is visible or the cache is
+  // bypassed; otherwise retrieve the cached snapshot.
+  const bool shouldBypassCache =
+      _config->snapshot_cache_policy() ==
+      PageContextWrapperConfig::SnapshotCachePolicy::kBypassCache;
+  if (_webState->IsVisible() || shouldBypassCache) {
     auto updateSnapshotCallback =
         base::BindOnce(^(std::optional<int> result_matches) {
           // TODO(crbug.com/401282824): Log the matches count to measure text
           // highlighting precision.
-          [weakSelf updateSnapshotWithCallback:callback];
+          [weakSelf updateSnapshotWithBarrier:barrier];
         });
 
     // If there is text to highlight, do it before capturing the screenshot.
@@ -542,13 +612,32 @@ result.links = linksArray;
       std::move(updateSnapshotCallback).Run(std::nullopt);
     }
   } else {
-    SnapshotTabHelper::FromWebState(_webState.get())
-        ->RetrieveColorSnapshot(callback);
+    auto retrieveSnapshotCallback = ^(UIImage* image) {
+      __strong __typeof(weakSelf) strongSelf = weakSelf;
+      if (!strongSelf) {
+        return;
+      }
+
+      if ([strongSelf shouldUpdateSnapshotWithImage:image]) {
+        [strongSelf updateSnapshotWithBarrier:barrier];
+        return;
+      }
+
+      [strongSelf stashRawScreenshotImage:image];
+      barrier.Run();
+    };
+
+    SnapshotTabHelper* snapshotTabHelper =
+        SnapshotTabHelper::FromWebState(_webState.get());
+    if (snapshotTabHelper) {
+      snapshotTabHelper->RetrieveColorSnapshot(retrieveSnapshotCallback);
+    } else {
+      retrieveSnapshotCallback(nil);
+    }
   }
 }
 
 // Helper to extract page context for a given frame.
-// TODO(crbug.com/495446456): Clean up once the JSON experiment is done.
 - (void)extractPageContextForFrame:(web::WebFrame*)frame
                        isMainFrame:(BOOL)isMainFrame
                              nonce:(const std::string&)nonce
@@ -565,76 +654,44 @@ result.links = linksArray;
   // empty results).
   base::TimeDelta jsTimeout = _timeoutTimer.GetCurrentDelay() * 2;
 
-  if (IsPageContextIPCOptimizationEnabled()) {
-    // Callback to aggregate values from the JS execution via JSON string
-    // parsing.
-    auto callbackJson = [](PageContextWrapper* weakWrapper,
-                           base::RepeatingClosure barrier, BOOL isMainFrame,
-                           const url::Origin& securityOrigin,
-                           std::optional<autofill::LocalFrameToken> frameId,
-                           std::optional<base::Value> value) {
-      // TODO(crbug.com/454261374): Remove `withError` from args once we
-      // cleanup the old code. Can't provide an error object since the
-      // javascript feature doesn't support that.
-      [weakWrapper aggregateJavaScriptValue:value ? &value.value() : nullptr
-                                  withError:nil
-                                isMainFrame:isMainFrame
-                             securityOrigin:securityOrigin
-                            localFrameToken:frameId];
-      barrier.Run();
+  // Callback to aggregate values from the JS execution via JSON string parsing.
+  auto callback = [](PageContextWrapper* weakWrapper,
+                     base::RepeatingClosure barrier, BOOL isMainFrame,
+                     const url::Origin& securityOrigin,
+                     std::optional<autofill::LocalFrameToken> frameId,
+                     std::optional<base::Value> value) {
+    // TODO(crbug.com/454261374): Remove `withError` from args once we
+    // cleanup the old code. Can't provide an error object since the
+    // javascript feature doesn't support that.
+    [weakWrapper aggregateJavaScriptValue:value ? &value.value() : nullptr
+                                withError:nil
+                              isMainFrame:isMainFrame
+                           securityOrigin:securityOrigin
+                          localFrameToken:frameId];
+    barrier.Run();
 
-      // Defer destruction of the base::DictValue to a background thread to
-      // prevent blocking the main thread. The object is self-contained and
-      // thread-safe.
-      if (value) {
-        base::ThreadPool::PostTask(
-            FROM_HERE, {base::TaskPriority::BEST_EFFORT},
-            base::BindOnce([](base::Value v) {}, std::move(*value)));
-      }
-    };
+    // Defer destruction of the base::DictValue to a background thread to
+    // prevent blocking the main thread. The object is self-contained and
+    // thread-safe.
+    if (value) {
+      base::ThreadPool::PostTask(
+          FROM_HERE, {base::TaskPriority::BEST_EFFORT},
+          base::BindOnce([](base::Value v) {}, std::move(*value)));
+    }
+  };
 
-    extractorFeature->ExtractPageContextJSON(
-        frame, _config->graft_cross_origin_frame_content(),
-        _config->use_rich_extraction(),
-        _config->use_rich_extraction_with_actionable(),
-        _config->extract_paid_content(),
-        _config->attempt_paid_content_json_fixing(),
-        _config->include_sensitive_payments_for_redaction(), nonce, jsTimeout,
-        base::BindOnce(
-            callbackJson, weakSelf, annotatedPageContentBarrier, isMainFrame,
-            frame->GetSecurityOrigin(),
-            DeserializeFrameIdAsLocalFrameToken(frame->GetFrameId())));
-  } else {
-    // Callback to aggregate values from the JS execution via the base value
-    // received directly from WebKit.
-    auto callback = [](PageContextWrapper* weakWrapper,
-                       base::RepeatingClosure barrier, BOOL isMainFrame,
-                       const url::Origin& securityOrigin,
-                       std::optional<autofill::LocalFrameToken> frameId,
-                       const base::Value* value) {
-      // TODO(crbug.com/454261374): Remove `withError` from args once we
-      // cleanup the old code. Can't provide an error object since the
-      // javascript feature doesn't support that.
-      [weakWrapper aggregateJavaScriptValue:value
-                                  withError:nil
-                                isMainFrame:isMainFrame
-                             securityOrigin:securityOrigin
-                            localFrameToken:frameId];
-      barrier.Run();
-    };
-
-    extractorFeature->ExtractPageContext(
-        frame, _config->graft_cross_origin_frame_content(),
-        _config->use_rich_extraction(),
-        _config->use_rich_extraction_with_actionable(),
-        _config->extract_paid_content(),
-        _config->attempt_paid_content_json_fixing(),
-        _config->include_sensitive_payments_for_redaction(), nonce, jsTimeout,
-        base::BindOnce(
-            callback, weakSelf, annotatedPageContentBarrier, isMainFrame,
-            frame->GetSecurityOrigin(),
-            DeserializeFrameIdAsLocalFrameToken(frame->GetFrameId())));
-  }
+  extractorFeature->ExtractPageContext(
+      frame, _config->graft_cross_origin_frame_content(),
+      _config->use_rich_extraction(),
+      _config->use_rich_extraction_with_actionable(),
+      _config->extract_paid_content(),
+      _config->attempt_paid_content_json_fixing(),
+      _config->include_sensitive_payments_for_redaction(),
+      _config->extract_autofill_otp_redactions(),
+      _config->extract_password_screenshot_redactions(), nonce, jsTimeout,
+      base::BindOnce(callback, weakSelf, annotatedPageContentBarrier,
+                     isMainFrame, frame->GetSecurityOrigin(),
+                     DeserializeFrameIdAsLocalFrameToken(frame->GetFrameId())));
 }
 
 // Get the WebState's AnnotatedPageContent filled with innerTexts. The
@@ -743,6 +800,14 @@ result.links = linksArray;
         continue;
       }
 
+      if (_config->include_same_site_only()) {
+        net::SchemefulSite childSite(webFrame->GetSecurityOrigin());
+        if (_mainFrameSite != childSite) {
+          annotatedPageContentBarrier.Run();
+          continue;
+        }
+      }
+
       [self extractPageContextForFrame:webFrame
                            isMainFrame:NO
                                  nonce:nonce
@@ -805,6 +870,14 @@ result.links = linksArray;
         continue;
       }
 
+      if (_config->include_same_site_only()) {
+        net::SchemefulSite childSite(webFrame->GetSecurityOrigin());
+        if (_mainFrameSite != childSite) {
+          annotatedPageContentBarrier.Run();
+          continue;
+        }
+      }
+
       webFrame->ExecuteJavaScript(
           script,
           base::BindOnce(
@@ -855,9 +928,6 @@ result.links = linksArray;
     response = base::unexpected(PageContextWrapperError::kPDFDataError);
     completionStatus = PageContextCompletionStatus::kFailure;
   } else {
-    // TODO(crbug.com/483989948): Make screenshot failure blocking once
-    // 'aw, snap' snackbar is fixed.
-
     // TODO(crbug.com/509589346): CHECK `registrar` since it is known here that
     // there is a `_webState`.
     // Set the focused frame based on the collected data on the same origin and
@@ -871,10 +941,30 @@ result.links = linksArray;
 
     if (_config->graft_cross_origin_frame_content() && registrar) {
       ResolveCrossSiteFrameContent(
-          _grafter, registrar, _pageContext->mutable_annotated_page_content());
+          _grafter, registrar, _config->include_same_site_only(),
+          _pageContext->mutable_annotated_page_content(),
+          [self webFramesManager]);
     }
-    response = base::ok(std::move(_pageContext));
-    completionStatus = PageContextCompletionStatus::kSuccess;
+    if (_rawScreenshotImage) {
+      [self applyRedactionsAndEncodeScreenshot:_rawScreenshotImage];
+    }
+    // TODO(crbug.com/573337154): Translate the tree before screenshot redaction
+    // and screenshot info so `FrameGrafter` can reuse the translated geometry
+    // once password screenshot redaction is fully launched. `FrameGrafter`
+    // currently offsets redaction boxes by the iframe's `visible_bounding_box`
+    // rather than its `outer_bounding_box`, so this will also fix redaction
+    // offsets for partially scrolled iframes.
+    if (_pageContext->has_annotated_page_content()) {
+      TranslateIframeNodeGeometries(
+          _pageContext->mutable_annotated_page_content());
+    }
+    if (_shouldGetSnapshot && !_pageContext->has_tab_screenshot()) {
+      response = base::unexpected(PageContextWrapperError::kScreenshotError);
+      completionStatus = PageContextCompletionStatus::kFailure;
+    } else {
+      response = base::ok(std::move(_pageContext));
+      completionStatus = PageContextCompletionStatus::kSuccess;
+    }
   }
 
   [_pageContextMetrics executionFinishedForTask:PageContextTask::kOverall
@@ -883,52 +973,200 @@ result.links = linksArray;
   std::move(_completionCallback).Run(std::move(response));
 }
 
-// Returns YES if the image is nil and forcing the update of missing snapshots
-// is enabled.
+// Returns YES if the stored snapshot is nil and the configured policy falls
+// back to capturing a live snapshot when missing.
 - (BOOL)shouldUpdateSnapshotWithImage:(UIImage*)image {
-  return !image && _shouldForceUpdateMissingSnapshots;
+  return !image &&
+         _config->snapshot_cache_policy() !=
+             PageContextWrapperConfig::SnapshotCachePolicy::kUseCacheWhenHidden;
+}
+
+// Returns the visible web viewport rect in GetView() coordinates, insetting
+// by adjustedContentInset so DOM (0, 0) matches the snapshot origin.
+- (CGRect)visibleWebViewportRect {
+  if (!_webState || !_webState->GetView()) {
+    return CGRectZero;
+  }
+  CGRect bounds = _webState->GetView().bounds;
+  id<CRWWebViewProxy> webViewProxy = _webState->GetWebViewProxy();
+  if (webViewProxy && webViewProxy.scrollViewProxy) {
+    UIEdgeInsets insets = webViewProxy.scrollViewProxy.adjustedContentInset;
+    CGRect insetRect = UIEdgeInsetsInsetRect(bounds, insets);
+    if (!CGRectIsEmpty(insetRect) && insetRect.size.width > 0 &&
+        insetRect.size.height > 0) {
+      return insetRect;
+    }
+  }
+  return bounds;
+}
+
+// Generates a fallback snapshot directly from the WebState view using UIKit
+// rendering when WebKit's out-of-process snapshot returns an empty image (e.g.
+// before layout passes complete in headless test environments or rapid
+// navigations).
+- (UIImage*)fallbackSnapshotFromView {
+  if (!_webState || !_webState->GetView()) {
+    return nil;
+  }
+  UIView* view = _webState->GetView();
+  CGRect bounds = [self visibleWebViewportRect];
+  if (bounds.size.width <= 0 || bounds.size.height <= 0) {
+    bounds = view.bounds;
+  }
+  if (bounds.size.width <= 0 || bounds.size.height <= 0) {
+    return nil;
+  }
+  UIGraphicsImageRendererFormat* format =
+      [UIGraphicsImageRendererFormat defaultFormat];
+  UIGraphicsImageRenderer* renderer =
+      [[UIGraphicsImageRenderer alloc] initWithSize:bounds.size format:format];
+  return [renderer imageWithActions:^(UIGraphicsImageRendererContext* context) {
+    [view drawViewHierarchyInRect:CGRectMake(-bounds.origin.x, -bounds.origin.y,
+                                             view.bounds.size.width,
+                                             view.bounds.size.height)
+               afterScreenUpdates:NO];
+  }];
 }
 
 // Updates the snapshot for the given WebState, and executes the `barrier`
 // callback when finished.
 - (void)updateSnapshotWithBarrier:(base::RepeatingClosure)barrier {
-  if (!_webState) {
-    barrier.Run();
-    return;
-  }
   __weak PageContextWrapper* weakSelf = self;
-  SnapshotTabHelper::FromWebState(_webState.get())
-      ->UpdateSnapshotWithCallback(^(UIImage* image) {
-        __strong __typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf) {
-          return;
-        }
-        [strongSelf encodeImageAndSetTabScreenshot:image];
-        barrier.Run();
-      });
+  [self updateSnapshotWithCallback:^(UIImage* image) {
+    __strong __typeof(weakSelf) strongSelf = weakSelf;
+    if (!strongSelf) {
+      return;
+    }
+    [strongSelf stashRawScreenshotImage:image];
+    barrier.Run();
+  }];
 }
 
 // Updates the current WebState's snapshot with the given callback.
 - (void)updateSnapshotWithCallback:(void (^)(UIImage*))callback {
-  if (_webState) {
-    SnapshotTabHelper::FromWebState(_webState.get())
-        ->UpdateSnapshotWithCallback(callback);
+  if (!callback) {
+    return;
+  }
+  if (_webState && _webState->CanTakeSnapshot()) {
+    __weak PageContextWrapper* weakSelf = self;
+    _webState->TakeSnapshot(
+        [self visibleWebViewportRect], base::BindRepeating(^(UIImage* image) {
+          __strong __typeof(weakSelf) strongSelf = weakSelf;
+          if (!strongSelf) {
+            callback(nil);
+            return;
+          }
+          if (!image || image.size.width <= 0 || image.size.height <= 0) {
+            image = [strongSelf fallbackSnapshotFromView];
+          }
+          callback(image);
+        }));
   } else {
     callback(nil);
   }
 }
 
-// Convert UIImage snapshot to PNG, and then to base64 encoded string. Set the
-// tab screenshot on the current PageContext.
-- (void)encodeImageAndSetTabScreenshot:(UIImage*)image {
-  [self stopTextHighlighting];
+// Returns YES for any RedactionDecision enums that require screenshot
+// redaction.
+- (BOOL)shouldRedactDecisionForScreenshot:
+    (optimization_guide::proto::RedactionDecision)decision {
+  switch (decision) {
+    case optimization_guide::proto::
+        REDACTION_DECISION_REDACTED_HAS_BEEN_PASSWORD:
+    case optimization_guide::proto::
+        REDACTION_DECISION_REDACTED_CUSTOM_PASSWORD_CSS:
+    case optimization_guide::proto::
+        REDACTION_DECISION_REDACTED_CUSTOM_PASSWORD_JS:
+      return _config->extract_password_screenshot_redactions();
+    case optimization_guide::proto::
+        REDACTION_DECISION_REDACTED_IS_SENSITIVE_PAYMENT_FIELD:
+      return _config->include_sensitive_payments_for_redaction();
+    case optimization_guide::proto::REDACTION_DECISION_REDACTED_IS_OTP:
+      return _config->extract_autofill_otp_redactions();
+    case optimization_guide::proto::REDACTION_DECISION_NO_REDACTION_NECESSARY:
+    case optimization_guide::proto::
+        REDACTION_DECISION_UNREDACTED_EMPTY_PASSWORD:
+    case optimization_guide::proto::
+        REDACTION_DECISION_UNREDACTED_EMPTY_CUSTOM_PASSWORD:
+    case optimization_guide::proto::
+        REDACTION_DECISION_UNREDACTED_EMPTY_PAYMENT_FIELD:
+    case optimization_guide::proto::
+        REDACTION_DECISION_UNREDACTED_EMPTY_OTP_FIELD:
+      return NO;
+    default:
+      return NO;
+  }
+}
 
-  if (!image) {
-    [_pageContextMetrics
-        executionFinishedForTask:PageContextTask::kScreenshot
-            withCompletionStatus:PageContextCompletionStatus::kFailure];
-    DLOG(WARNING) << "Failed to fetch webpage screenshot.";
-    return;
+- (void)applyRedactionsAndEncodeScreenshot:(UIImage*)image {
+  if (_pageContext && _pageContext->has_annotated_page_content()) {
+    _grafter.CollectFormControlRedactionBoxesFromTree(
+        _pageContext->annotated_page_content().root_node());
+  }
+
+  // If the page has a non-standard zoomScale, we scale the extracted DOM layout
+  // coordinates by zoomScale so that they align 1:1 with the pixels in the
+  // screenshot bitmap captured from WKWebView.
+  CGFloat zoomScale = 1.0;
+  if (_webState && _webState->GetWebViewProxy() &&
+      _webState->GetWebViewProxy().scrollViewProxy) {
+    zoomScale = _webState->GetWebViewProxy().scrollViewProxy.zoomScale;
+  }
+
+  if (_pageContext && _pageContext->has_annotated_page_content() &&
+      _pageContext->annotated_page_content()
+          .gemini_in_chrome_page_metadata()
+          .has_screenshot_info()) {
+    auto* screenshot_info = _pageContext->mutable_annotated_page_content()
+                                ->mutable_gemini_in_chrome_page_metadata()
+                                ->mutable_screenshot_info();
+    // Centralize screenshot_size to match the captured screenshot image size.
+    screenshot_info->mutable_screenshot_size()->set_width(
+        static_cast<int32_t>(image.size.width));
+    screenshot_info->mutable_screenshot_size()->set_height(
+        static_cast<int32_t>(image.size.height));
+
+    // Scale iframe bounding boxes by zoomScale to align with the screenshot
+    // image.
+    if (zoomScale != 1.0 && zoomScale > 0) {
+      for (auto& info : *screenshot_info->mutable_iframe_info()) {
+        auto* box = info.mutable_bounding_box();
+        box->set_x(static_cast<int32_t>(box->x() * zoomScale));
+        box->set_y(static_cast<int32_t>(box->y() * zoomScale));
+        box->set_width(static_cast<int32_t>(box->width() * zoomScale));
+        box->set_height(static_cast<int32_t>(box->height() * zoomScale));
+      }
+    }
+  }
+
+  _universalBoundingBoxesForRedaction.clear();
+
+  for (const auto& entry : _grafter.universal_bounding_boxes_for_redaction()) {
+    if ([self shouldRedactDecisionForScreenshot:entry.decision]) {
+      _universalBoundingBoxesForRedaction.push_back(
+          CGRectMake(entry.visible_box.origin.x * zoomScale,
+                     entry.visible_box.origin.y * zoomScale,
+                     entry.visible_box.size.width * zoomScale,
+                     entry.visible_box.size.height * zoomScale));
+    }
+  }
+
+  if (!_universalBoundingBoxesForRedaction.empty()) {
+    UIGraphicsImageRendererFormat* format =
+        [UIGraphicsImageRendererFormat defaultFormat];
+    format.scale = image.scale;
+    format.opaque = NO;
+
+    UIGraphicsImageRenderer* renderer =
+        [[UIGraphicsImageRenderer alloc] initWithSize:image.size format:format];
+    image =
+        [renderer imageWithActions:^(UIGraphicsImageRendererContext* context) {
+          [image drawAtPoint:CGPointZero];
+          [[UIColor blackColor] setFill];
+          for (const CGRect& rect : _universalBoundingBoxesForRedaction) {
+            [[UIBezierPath bezierPathWithRect:rect] fill];
+          }
+        }];
   }
 
   NSData* imageData = UIImagePNGRepresentation(image);
@@ -943,28 +1181,70 @@ result.links = linksArray;
   NSString* base64String = [imageData base64EncodedStringWithOptions:0];
   _pageContext->set_tab_screenshot(base::SysNSStringToUTF8(base64String));
 
+  _universalBoundingBoxesForRedaction.clear();
+  _rawScreenshotImage = nil;
+
   [_pageContextMetrics
       executionFinishedForTask:PageContextTask::kScreenshot
           withCompletionStatus:PageContextCompletionStatus::kSuccess];
 }
 
-// If it exists, convert the PDF data to base64 encoded string and set it in
-// the PageContext proto.
-- (void)encodeAndSetFullPagePDF:(NSData*)PDFData {
-  if (!PDFData) {
+// Temporarily saves the raw screenshot image captured from the WebState so that
+// redactions can be applied and PNG encoding performed after APC extraction and
+// iframe coordinate grafting complete.
+- (void)stashRawScreenshotImage:(UIImage*)image {
+  [self stopTextHighlighting];
+
+  if (!image) {
     [_pageContextMetrics
-        executionFinishedForTask:PageContextTask::kPDF
+        executionFinishedForTask:PageContextTask::kScreenshot
             withCompletionStatus:PageContextCompletionStatus::kFailure];
-    DLOG(WARNING) << "Failed to fetch webpage PDF data.";
+    DLOG(WARNING) << "Failed to fetch webpage screenshot.";
     return;
   }
 
-  NSString* base64String = [PDFData base64EncodedStringWithOptions:0];
-  _pageContext->set_pdf_data(base::SysNSStringToUTF8(base64String));
+  _rawScreenshotImage = image;
+}
+
+// If it exists, convert the PDF data to base64 encoded string and set it in
+// the PageContext proto.
+- (void)setEncodedPDFData:(std::string)base64PDFData {
+  _pageContext->set_pdf_data(std::move(base64PDFData));
 
   [_pageContextMetrics
       executionFinishedForTask:PageContextTask::kPDF
           withCompletionStatus:PageContextCompletionStatus::kSuccess];
+}
+
+// If it exists, convert the PDF data to base64 encoded string and set it in
+// the PageContext proto.
+- (void)encodeAndSetFullPagePDF:(NSData*)PDFData
+                        barrier:(base::RepeatingClosure)barrier {
+  if (!PDFData || PDFData.length > kMaxPDFByteLimit) {
+    [_pageContextMetrics
+        executionFinishedForTask:PageContextTask::kPDF
+            withCompletionStatus:PageContextCompletionStatus::kFailure];
+    DLOG(WARNING)
+        << "Failed to fetch webpage PDF data (or size limit exceeded).";
+    barrier.Run();
+    return;
+  }
+
+  __weak PageContextWrapper* weakSelf = self;
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(
+          ^(NSData* data) {
+            return base::Base64Encode(base::apple::NSDataToSpan(data));
+          },
+          PDFData),
+      base::BindOnce(^(std::string base64_str) {
+        PageContextWrapper* strongSelf = weakSelf;
+        if (strongSelf) {
+          [strongSelf setEncodedPDFData:std::move(base64_str)];
+        }
+        barrier.Run();
+      }));
 }
 
 // Adds a frame's focus info to the flat array if it is focused.
@@ -1000,6 +1280,10 @@ result.links = linksArray;
   // Pick the destinations for the APC node content and frame data.
   if (isMainFrame) {
     // Main frame: Use the root node as the destination.
+    if (!_rootAPCNode) {
+      _rootAPCNode =
+          std::make_unique<optimization_guide::proto::AnnotatedPageContent>();
+    }
     destinationContentNode = _rootAPCNode->mutable_root_node();
     destinationFrameData = _rootAPCNode->mutable_main_frame_data();
 
@@ -1027,16 +1311,9 @@ result.links = linksArray;
     destinationContentNode = &content->content;
     destinationFrameData = &content->frame_data;
   } else {
-    // Grafting not possible: Add new child to the root node as the default
-    // location for the iframe node. Set that node to be an iframe node.
-    destinationContentNode =
-        _rootAPCNode->mutable_root_node()->add_children_nodes();
-    destinationContentNode->mutable_content_attributes()->set_attribute_type(
-        optimization_guide::proto::ContentAttributeType::
-            CONTENT_ATTRIBUTE_IFRAME);
-    destinationFrameData = destinationContentNode->mutable_content_attributes()
-                               ->mutable_iframe_data()
-                               ->mutable_frame_data();
+    // Grafting not possible: Drop the frame content to avoid duplicate
+    // node_id collisions and untranslated local coordinate distortion.
+    return;
   }
 
   // Destination placeholders must be set to something even if their content
@@ -1057,9 +1334,13 @@ result.links = linksArray;
           });
 
   std::optional<AutofillExtractionContext> autofill_context;
-  if (_config->extract_autofill()) {
+  if (_config->extract_autofill() ||
+      _config->extract_autofill_credit_card_redactions() ||
+      _config->include_sensitive_payments_for_redaction() ||
+      _config->extract_autofill_otp_redactions()) {
     autofill_context.emplace(_webState, localFrameToken,
                              _config->extract_autofill_credit_card_redactions(),
+                             _config->extract_autofill_otp_redactions(),
                              &_autofillSectionNumbers);
   }
 
@@ -1146,7 +1427,10 @@ result.links = linksArray;
   optimization_guide::proto::ContentNode* destinationContentNode;
 
   // Pick a destination ContentNode to fill with the iframe content.
-  if (_config->graft_cross_origin_frame_content() && localFrameToken) {
+  if (_config->graft_cross_origin_frame_content()) {
+    if (!localFrameToken) {
+      return;
+    }
     // Grafting possible: Populate iframe content by respecting the DOM
     // structure.
 
@@ -1568,6 +1852,49 @@ result.links = linksArray;
 
   std::move(_completionCallback)
       .Run(base::unexpected(PageContextWrapperError::kTimeout));
+}
+
+#pragma mark - Testing
+
+// Test-only hooks to allow synchronous unit testing of the screenshot masking
+// and redaction bounding box collection engine without requiring an
+// asynchronous WKWebView E2E snapshot round-trip.
+- (void)encodeImageAndSetTabScreenshotForTesting:(UIImage*)image {
+  [self stashRawScreenshotImage:image];
+  if (_rawScreenshotImage) {
+    [self applyRedactionsAndEncodeScreenshot:_rawScreenshotImage];
+  }
+}
+
+- (void)setBoxesToRedactForTesting:(const std::vector<CGRect>&)boxes {
+  _universalBoundingBoxesForRedaction = boxes;
+}
+
+- (const std::vector<CGRect>&)boxesToRedactForTesting {
+  return _universalBoundingBoxesForRedaction;
+}
+
+- (optimization_guide::proto::PageContext*)pageContextForTesting {
+  if (_rootAPCNode) {
+    _pageContext->mutable_annotated_page_content()->CopyFrom(*_rootAPCNode);
+  }
+  return _pageContext.get();
+}
+
+- (optimization_guide::proto::AnnotatedPageContent*)rootAPCNodeForTesting {
+  if (!_rootAPCNode) {
+    _rootAPCNode =
+        std::make_unique<optimization_guide::proto::AnnotatedPageContent>();
+  }
+  return _rootAPCNode.get();
+}
+
+- (FrameGrafter&)grafterForTesting {
+  return _grafter;
+}
+
+- (CGRect)visibleWebViewportRectForTesting {
+  return [self visibleWebViewportRect];
 }
 
 @end

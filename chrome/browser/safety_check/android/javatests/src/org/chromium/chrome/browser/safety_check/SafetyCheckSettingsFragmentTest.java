@@ -25,10 +25,10 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.chrome.browser.password_manager.PasswordManagerBackendSupportHelper;
 import org.chromium.chrome.browser.password_manager.PasswordManagerHelper;
 import org.chromium.chrome.browser.password_manager.PasswordManagerHelperJni;
@@ -39,7 +39,7 @@ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.safety_check.SafetyCheckProperties.SafeBrowsingState;
 import org.chromium.chrome.browser.safety_check.SafetyCheckProperties.UpdatesState;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.signin.base.CoreAccountInfo;
@@ -53,10 +53,7 @@ import java.util.Set;
 
 /** Tests {@link SafetyCheckSettingsFragment} together with {@link SafetyCheckViewBinder}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@DoNotBatch(
-        reason =
-                "The activity should be restarted for each test to not share saved user preferences"
-                        + " between tests.")
+@Batch(Batch.PER_CLASS)
 public class SafetyCheckSettingsFragmentTest {
     private static final String TEST_EMAIL_ADDRESS = "test@example.com";
     private static final String PASSWORDS_LOCAL = "passwords_local";
@@ -71,8 +68,8 @@ public class SafetyCheckSettingsFragmentTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Rule
-    public SettingsActivityTestRule<SafetyCheckSettingsFragment> mSettingsActivityTestRule =
-            new SettingsActivityTestRule<>(SafetyCheckSettingsFragment.class);
+    public SettingsTestRule<SafetyCheckSettingsFragment> mSettingsActivityTestRule =
+            new SettingsTestRule<>(SafetyCheckSettingsFragment.class);
 
     @Mock private SyncService mSyncService;
     @Mock private PasswordManagerUtilBridge.Natives mPasswordManagerUtilBridgeNativeMock;
@@ -85,6 +82,8 @@ public class SafetyCheckSettingsFragmentTest {
 
     @Before
     public void setUp() {
+        ChromeSharedPreferences.getInstance()
+                .removeKey(ChromePreferenceKeys.SETTINGS_SAFETY_CHECK_LAST_RUN_TIMESTAMP);
         SyncServiceFactory.setInstanceForTesting(mSyncService);
         PasswordManagerUtilBridgeJni.setInstanceForTesting(mPasswordManagerUtilBridgeNativeMock);
         PasswordManagerHelperJni.setInstanceForTesting(mPasswordManagerHelperNativeMock);

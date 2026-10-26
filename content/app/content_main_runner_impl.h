@@ -8,10 +8,10 @@
 #include <memory>
 #include <optional>
 
-#include "base/functional/callback_helpers.h"
 #include "base/memory/memory_pressure_listener_registry.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory_coordinator/memory_consumer_registry.h"
+#include "base/task/execution_fence.h"
 #include "content/browser/startup_data_impl.h"
 #include "content/public/app/content_main.h"
 #include "content/public/app/content_main_runner.h"
@@ -28,7 +28,8 @@ class DiscardableSharedMemoryManager;
 
 namespace content {
 
-class BrowserMemoryCoordinator;
+class BackgroundTracingManagerImpl;
+class BrowserMemoryCoordinatorImpl;
 class MojoIpcSupport;
 
 class ContentMainRunnerImpl : public ContentMainRunner {
@@ -63,11 +64,12 @@ class ContentMainRunnerImpl : public ContentMainRunner {
   std::optional<base::MemoryPressureListenerRegistry>
       memory_pressure_listener_registry_;
 
-  std::unique_ptr<BrowserMemoryCoordinator> browser_memory_coordinator_;
+  std::unique_ptr<BrowserMemoryCoordinatorImpl> browser_memory_coordinator_;
 
   std::unique_ptr<discardable_memory::DiscardableSharedMemoryManager>
       discardable_shared_memory_manager_;
   std::unique_ptr<MojoIpcSupport> mojo_ipc_support_;
+  std::unique_ptr<BackgroundTracingManagerImpl> background_tracing_manager_;
 
   // True if the runner has been initialized.
   bool is_initialized_ = false;
@@ -82,6 +84,10 @@ class ContentMainRunnerImpl : public ContentMainRunner {
 
   // Received in Initialize(), handed-off in Run().
   std::optional<ContentMainParams> content_main_params_;
+
+  // Disables BEST_EFFORT tasks until shutdown if the command-line includes
+  // --disable-best-effort-tasks.
+  std::optional<base::ScopedBestEffortExecutionFence> best_effort_fence_;
 };
 
 }  // namespace content

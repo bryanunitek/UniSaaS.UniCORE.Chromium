@@ -4,9 +4,12 @@
 
 package org.chromium.ui;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
+import android.util.TypedValue;
 import android.view.View;
 import android.view.View.OnLayoutChangeListener;
 import android.view.accessibility.AccessibilityEvent;
@@ -19,12 +22,14 @@ import androidx.appcompat.content.res.AppCompatResources;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.ui.listmenu.ListMenuUtils;
+import org.chromium.ui.theme.FillInContextThemeWrapper;
 import org.chromium.ui.widget.AnchoredPopupWindow;
 import org.chromium.ui.widget.ViewRectProvider;
 
 /**
- * The dropdown popup window for use on Lollipop+. Internally uses an AnchoredPopupWindow
- * anchored to a view to display a list of options.
+ * The dropdown popup window for use on Lollipop+. Internally uses an AnchoredPopupWindow anchored
+ * to a view to display a list of options.
  */
 @NullMarked
 class DropdownPopupWindowImpl
@@ -48,10 +53,10 @@ class DropdownPopupWindowImpl
      * @param context Application context.
      * @param anchorView Popup view to be anchored.
      */
-    public DropdownPopupWindowImpl(
-            Context context,
-            View anchorView) {
-        mContext = context;
+    public DropdownPopupWindowImpl(Context context, View anchorView) {
+        mContext =
+                new FillInContextThemeWrapper(
+                        context, R.style.ThemeOverlay_UI_AdaptiveDensityDefaults);
         mAnchorView = anchorView;
 
         mAnchorView.setId(R.id.dropdown_popup_window);
@@ -85,30 +90,32 @@ class DropdownPopupWindowImpl
                     }
                 };
 
-        mListView = new ListView(context);
+        mListView = new ListView(mContext);
 
         ViewRectProvider rectProvider = new ViewRectProvider(mAnchorView);
         rectProvider.setIncludePadding(true);
-        mBackground = AppCompatResources.getDrawable(context, R.drawable.menu_bg_baseline);
-        mAnchoredPopupWindow =
-                new AnchoredPopupWindow(
-                        context,
-                        mAnchorView,
-                        mBackground,
-                        mListView,
-                        rectProvider);
-        mAnchoredPopupWindow.addOnDismissListener(onDismissLitener);
-        mAnchoredPopupWindow.setLayoutObserver(this);
-        mAnchoredPopupWindow.setElevation(
-                context.getResources().getDimensionPixelSize(R.dimen.dropdown_elevation));
+        TypedValue typedValue = new TypedValue();
+        mContext.getTheme().resolveAttribute(R.attr.popupBgShadow, typedValue, true);
+        mBackground =
+                assumeNonNull(AppCompatResources.getDrawable(mContext, typedValue.resourceId));
+        ListMenuUtils.clipContentViewOutline(mListView, R.attr.popupBgCornerRadius);
         Rect paddingRect = new Rect();
         mBackground.getPadding(paddingRect);
         rectProvider.setInsetPx(0, /* top= */ paddingRect.bottom, 0, /* bottom= */ paddingRect.top);
         mHorizontalPadding = paddingRect.right + paddingRect.left;
-        mAnchoredPopupWindow.setPreferredHorizontalOrientation(
-                AnchoredPopupWindow.HorizontalOrientation.CENTER);
-        mAnchoredPopupWindow.setUpdateOrientationOnChange(true);
-        mAnchoredPopupWindow.setOutsideTouchable(true);
+        mAnchoredPopupWindow =
+                new AnchoredPopupWindow.Builder(
+                                mContext, mAnchorView, mBackground, () -> mListView, rectProvider)
+                        .addOnDismissListener(onDismissLitener)
+                        .setLayoutObserver(this)
+                        .setElevation(
+                                mContext.getResources()
+                                        .getDimensionPixelSize(R.dimen.dropdown_elevation))
+                        .setPreferredHorizontalOrientation(
+                                AnchoredPopupWindow.HorizontalOrientation.CENTER)
+                        .setUpdateOrientationOnChange(true)
+                        .setOutsideTouchable(true)
+                        .build();
     }
 
     /**
@@ -255,6 +262,12 @@ class DropdownPopupWindowImpl
     @Override
     public void setFocusable(boolean focusable) {
         mAnchoredPopupWindow.setFocusable(focusable);
+    }
+
+    /** Sets the list selector to transparent to prevent double ripple effects. */
+    @Override
+    public void setListSelectorTransparent() {
+        mListView.setSelector(android.R.color.transparent);
     }
 
     /**

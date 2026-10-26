@@ -5,16 +5,18 @@
 #include "components/search_engines/template_url_prepopulate_data_resolver.h"
 
 #include <optional>
+#include <string_view>
 
+#include "base/debug/crash_logging.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/not_fatal_until.h"
-#include "base/notreached.h"
 #include "components/prefs/pref_service.h"
 #include "components/regional_capabilities/regional_capabilities_country_id.h"
 #include "components/regional_capabilities/regional_capabilities_service.h"
 #include "components/regional_capabilities/regional_capabilities_switches.h"
 #include "components/regional_capabilities/regional_capabilities_utils.h"
+#include "components/search_engines/keyword_table.h"
 #include "components/search_engines/keyword_web_data_service.h"
 #include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_prepopulate_data.h"
@@ -47,7 +49,21 @@ std::unique_ptr<TemplateURLData> Resolver::GetEngineFromFullList(
   return TemplateURLPrepopulateData::GetPrepopulatedEngineFromFullList(
       profile_prefs_.get(),
       regional_capabilities_->GetRegionalPrepopulatedEngines(),
-      prepopulated_id);
+      regional_capabilities_->GetRegionalVariants(), prepopulated_id);
+}
+
+std::unique_ptr<TemplateURLData> Resolver::GetEngineFromFullList(
+    std::u16string_view keyword) const {
+  return TemplateURLPrepopulateData::GetPrepopulatedEngineFromFullList(
+      profile_prefs_.get(),
+      regional_capabilities_->GetRegionalPrepopulatedEngines(),
+      regional_capabilities_->GetRegionalVariants(), keyword);
+}
+
+std::vector<raw_ptr<const PrepopulatedEngine>>
+Resolver::GetAllPrepopulatedEngines() const {
+  return TemplateURLPrepopulateData::GetAllPrepopulatedEngines(
+      regional_capabilities_->GetRegionalPrepopulatedEngines());
 }
 
 std::unique_ptr<TemplateURLData> Resolver::GetFallbackSearch() const {
@@ -59,27 +75,50 @@ std::unique_ptr<TemplateURLData> Resolver::GetFallbackSearch() const {
 std::optional<BuiltinKeywordsMetadata>
 Resolver::ComputeDatabaseUpdateRequirements(
     const WDKeywordsResult::Metadata& keywords_metadata) const {
+  KeywordTable::PrepopulatedEngineMigrationSet current_migration_state;
+  if (base::FeatureList::IsEnabled(switches::kPrepopulatedEnginesMigration)) {
+    current_migration_state.Put(
+        KeywordTable::PrepopulatedEngineMigration::kMigration);
+  }
+  if (switches::ArePrepopulatedEnginesShadowVariantsEnabled()) {
+    current_migration_state.Put(
+        KeywordTable::PrepopulatedEngineMigration::kShadowVariants);
+  }
+
   BuiltinKeywordsMetadata current_metadata{
       .country_id = regional_capabilities_->GetCountryId(),
       .data_version =
           TemplateURLPrepopulateData::GetDataVersion(&profile_prefs_.get()),
-      // Always keep track of the fact that some migration may have taken place.
-      .prepopulated_engines_migration_enabled = base::FeatureList::IsEnabled(
-          switches::kPrepopulatedEnginesMigration)};
+      .prepopulated_engines_migration_state = current_migration_state,
+  };
 
-  if (keywords_metadata.prepopulated_engines_migration_enabled &&
-      !current_metadata.prepopulated_engines_migration_enabled) {
+  // Rollback check: if DB has bits set that current doesn't have.
+  if (!base::Difference(keywords_metadata.prepopulated_engines_migration_state,
+                        current_metadata.prepopulated_engines_migration_state)
+           .empty()) {
     // The keywords DB indicates that it was updated with some post-migration
-    // data, but the feature state checks indicates that the feature is not
-    // enabled.
-    // Per feature rollout planning, this should not happen, as there is no way
-    // to fully return to the previous state. The local keywords data is then
-    // going to be in an inconsistent state, where the user could be using a
-    // not-yet-listed prepopulated engine.
-    // This is a bad™ state, but not to the point where it is expected to cause
-    // crashes downstream, it it can be a non-fatal CHECK.
-    // TODO(crbug.com/446637115): Clean up once the rollout is done.
-    DUMP_WILL_BE_NOTREACHED();
+    // data, but the feature state checks indicate that the feature is not
+    // enabled. There is no way to fully return to the previous state, so the
+    // local keywords data might be inconsistent, where the user could be using
+    // a not-yet-listed prepopulated engine.
+    //
+    // The migration features are not rolled out to users yet, so this is only
+    // expected for profiles that got exposed to them through test configs,
+    // flags or non-official builds. Report it, then let the database catch up
+    // with the current feature state through the regular update below, so
+    // that each profile reports this at most once instead of on every startup.
+    // TODO(crbug.com/446637115): Once the migration features are rolled out to
+    //   users, block again on rollbacks: stop treating the migration state
+    //   rollback as a reason to update the database (see the last check
+    //   below), so that the post-migration data is preserved. Keep reporting
+    //   it, without crashing.
+    SCOPED_CRASH_KEY_NUMBER(
+        "KwdbRefresh", "db_migration_state",
+        keywords_metadata.prepopulated_engines_migration_state.ToEnumBitmask());
+    SCOPED_CRASH_KEY_NUMBER(
+        "KwdbRefresh", "current_migration_state",
+        current_metadata.prepopulated_engines_migration_state.ToEnumBitmask());
+    base::debug::DumpWithoutCrashing();
   }
 
   if (regional_capabilities::HasSearchEngineCountryListOverride()) {
@@ -108,11 +147,11 @@ Resolver::ComputeDatabaseUpdateRequirements(
     return current_metadata;
   }
 
-  if (!keywords_metadata.prepopulated_engines_migration_enabled &&
-      current_metadata.prepopulated_engines_migration_enabled) {
-    // Ensure that when we enable the migration feature for this client, the
-    // database gets updated. Continue and deliberately not do a migration if
-    // the divergence is the other way.
+  if (keywords_metadata.prepopulated_engines_migration_state !=
+      current_metadata.prepopulated_engines_migration_state) {
+    // The migration state changed, either because a new migration feature got
+    // enabled for this client, or because of a rollback (see above). Update the
+    // database so that it reflects the current state.
     return current_metadata;
   }
 
@@ -134,7 +173,7 @@ bool Resolver::IsMatch(MigrationMatch match) {
 Resolver::MigrationMatch Resolver::CompareEngineUnderMigration(
     const TemplateURLData& checked_data,
     const PrepopulatedEngine* deprecated_engine) const {
-  CHECK(deprecated_engine->migrate_to_id != 0, base::NotFatalUntil::M149);
+  CHECK_NE(deprecated_engine->migrate_to_id, 0);
 
   if (checked_data.prepopulate_id != deprecated_engine->id) {
     return MigrationMatch::kIdsDontMatch;
@@ -172,11 +211,8 @@ std::unique_ptr<TemplateURLData> Resolver::TryGetMigratedEngine(
     return {};
   }
 
-  if (pre_migration_engine.prepopulate_id == 0) {
-    // Should only be requested for prepopulated engines.
-    NOTREACHED(base::NotFatalUntil::M149);
-    return {};
-  }
+  // Should only be requested for prepopulated engines.
+  CHECK_NE(pre_migration_engine.prepopulate_id, 0);
 
   const auto& migrating_engines =
       regional_capabilities::GetMigratingPrepopulatedEngines();

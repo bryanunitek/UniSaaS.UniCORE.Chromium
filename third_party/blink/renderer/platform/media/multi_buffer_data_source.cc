@@ -6,9 +6,9 @@
 
 #include <algorithm>
 #include <memory>
+#include <ranges>
 #include <utility>
 
-#include "base/containers/adapters.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/raw_span.h"
@@ -333,13 +333,6 @@ void MultiBufferDataSource::Stop() {
   {
     base::AutoLock auto_lock(lock_);
     StopInternal_Locked();
-
-    // Cleanup resources immediately if we're already on the right thread.
-    if (render_task_runner_->BelongsToCurrentThread()) {
-      reader_.reset();
-      url_data_.reset();
-      return;
-    }
   }
 
   PostCrossThreadTask(*render_task_runner_, FROM_HERE,
@@ -393,6 +386,13 @@ int64_t MultiBufferDataSource::GetMemoryUsage() {
 
 GURL MultiBufferDataSource::GetUrlAfterRedirects() const {
   return GURL(url_data_->url());
+}
+
+GURL MultiBufferDataSource::GetUrlDataOrigin() const {
+  if (url_data_->data_origin().has_value()) {
+    return GURL(*url_data_->data_origin());
+  }
+  return GetUrlAfterRedirects();
 }
 
 void MultiBufferDataSource::Read(int64_t position,
@@ -537,7 +537,7 @@ void MultiBufferDataSource::SeekTask_Locked() {
     // Iterate backwards, because if two positions have the same
     // amount of buffered data, we probably want to prefer the latest
     // one in the array.
-    for (const auto& new_pos : base::Reversed(seek_positions_)) {
+    for (const auto& new_pos : std::views::reverse(seek_positions_)) {
       int64_t available_at_new_pos = reader_->AvailableAt(new_pos);
 
       if (total_bytes_ != kPositionNotSpecified) {
@@ -580,6 +580,12 @@ void MultiBufferDataSource::StopLoader() {
 
 void MultiBufferDataSource::SetBitrateTask(int bitrate) {
   DCHECK(render_task_runner_->BelongsToCurrentThread());
+  {
+    base::AutoLock auto_lock(lock_);
+    if (stop_signal_received_) {
+      return;
+    }
+  }
 
   bitrate_ = bitrate;
   UpdateBufferSizes();

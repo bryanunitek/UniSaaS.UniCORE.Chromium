@@ -60,16 +60,21 @@ constexpr CGFloat kLogoSize = 22;
                                    browser:browser
                                       type:InfobarType::kInfobarTypeSignin];
   if (self) {
-    CHECK(viewController, base::NotFatalUntil::M145);
-    CHECK(browser, base::NotFatalUntil::M145);
-    CHECK_EQ(browser->type(), Browser::Type::kRegular,
-             base::NotFatalUntil::M145);
+    CHECK(viewController);
+    CHECK(browser);
+    CHECK_EQ(browser->type(), Browser::Type::kRegular);
     self.shouldUseDefaultDismissal = NO;
     _promoType = promoType;
     _tracker = feature_engagement::TrackerFactory::GetForProfile(self.profile);
   }
   return self;
 }
+
+- (void)dealloc {
+  CHECK(!_mediator, base::NotFatalUntil::M156);
+}
+
+#pragma mark - ChromeCoordinator
 
 - (void)start {
   self.started = YES;
@@ -151,9 +156,9 @@ constexpr CGFloat kLogoSize = 22;
 
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
   UIImage* icon = MakeSymbolMulticolor(
-      CustomSymbolWithPointSize(kMulticolorChromeballSymbol, kLogoSize));
+      SymbolWithPointSize(SymbolMulticolorChromeball, kLogoSize));
 #else
-  UIImage* icon = CustomSymbolWithPointSize(kChromeProductSymbol, kLogoSize);
+  UIImage* icon = SymbolWithPointSize(SymbolChromeProduct, kLogoSize);
 #endif  // BUILDFLAG(IOS_USE_BRANDED_ASSETS)
 
   NSString* subtitle;
@@ -295,15 +300,15 @@ constexpr CGFloat kLogoSize = 22;
                                            DoNothingContinuationProvider()];
   __weak __typeof(self) weakSelf = self;
   _signinCoordinator.signinCompletion =
-      ^(SigninCoordinator* coordinator, SigninCoordinatorResult result,
-        id<SystemIdentity> identity) {
+      ^(SigninCoordinator* coordinator,
+        SigninCoordinatorResultOrIdentity result) {
         [weakSelf actionCallbackWithCoordinator:coordinator];
       };
   [_signinCoordinator start];
 }
 
 - (void)actionCallbackWithCoordinator:(SigninCoordinator*)coordinator {
-  CHECK_EQ(_signinCoordinator, coordinator, base::NotFatalUntil::M151);
+  CHECK_EQ(_signinCoordinator, coordinator);
   [self stopSigninCoordinator];
   [self.delegate dismissNonModalSignInPromo:self];
 }

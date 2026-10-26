@@ -4,6 +4,8 @@
 
 #include "chrome/browser/media/webrtc/webrtc_event_log_manager.h"
 
+#include <stddef.h>
+
 #include <algorithm>
 #include <array>
 #include <list>
@@ -17,7 +19,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/big_endian.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -56,6 +57,7 @@
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "google_apis/gaia/gaia_id.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_network_connection_tracker.h"
 #include "services/network/test/test_url_loader_factory.h"
@@ -137,11 +139,13 @@ constexpr int kLid = 478;
 constexpr size_t kWebAppId = 42;
 constexpr int kFrameId = 57;
 
-PeerConnectionKey GetPeerConnectionKey(RenderProcessHost* rph, int lid) {
+PeerConnectionKey GetPeerConnectionKey(RenderProcessHost* rph,
+                                       int lid,
+                                       int frame_id = kFrameId) {
   const BrowserContext* browser_context = rph->GetBrowserContext();
   const auto browser_context_id = GetBrowserContextId(browser_context);
   return PeerConnectionKey(rph->GetID().value(), lid, browser_context_id,
-                           kFrameId);
+                           frame_id);
 }
 
 bool CreateRemoteBoundLogFile(const base::FilePath& dir,
@@ -1472,6 +1476,15 @@ TEST_F(WebRtcEventLogManagerTest,
   ASSERT_TRUE(OnPeerConnectionAdded(key));
   ASSERT_TRUE(OnPeerConnectionRemoved(key));
   EXPECT_FALSE(OnPeerConnectionRemoved(key));
+}
+
+TEST_F(WebRtcEventLogManagerTest,
+       OnPeerConnectionRemovedWithDifferentFrameIdDoesNotRemoveOtherFramePc) {
+  const auto key1 = GetPeerConnectionKey(rph_.get(), kLid, kFrameId);
+  const auto key2 = GetPeerConnectionKey(rph_.get(), kLid, kFrameId + 1);
+  ASSERT_TRUE(OnPeerConnectionAdded(key1));
+  EXPECT_FALSE(OnPeerConnectionRemoved(key2));
+  EXPECT_TRUE(OnPeerConnectionRemoved(key1));
 }
 
 TEST_F(WebRtcEventLogManagerTest, OnPeerConnectionSessionIdSetReturnsTrue) {
@@ -3855,6 +3868,36 @@ TEST_F(WebRtcEventLogManagerTest, RemoteLoggingCancelledDeletesFile) {
   EXPECT_TRUE(future.Wait());
 
   EXPECT_FALSE(base::PathExists(*file_path));
+}
+
+// FinishLogging() and CancelLogging() only stop the logs of a render process.
+// Its peer connections remain known to both the local and the remote manager
+// until they are removed.
+TEST_F(WebRtcEventLogManagerTest, PeerConnectionKnownAfterFinishLogging) {
+  const auto key = GetPeerConnectionKey(rph_.get(), kLid);
+  ASSERT_TRUE(EnableLocalLogging());
+  ASSERT_TRUE(OnPeerConnectionAdded(key));
+
+  base::test::TestFuture<void> future;
+  event_log_manager_->FinishLogging(key.render_process_id,
+                                    future.GetCallback());
+  ASSERT_TRUE(future.Wait());
+
+  EXPECT_TRUE(OnPeerConnectionRemoved(key));
+}
+
+TEST_F(WebRtcEventLogManagerTest, PeerConnectionKnownAfterCancelLogging) {
+  const auto key = GetPeerConnectionKey(rph_.get(), kLid);
+  ASSERT_TRUE(EnableLocalLogging());
+  ASSERT_TRUE(OnPeerConnectionAdded(key));
+
+  const std::string kDiagnosticUuid = "123e4567-e89b-12d3-a456-426614174000";
+  base::test::TestFuture<void> future;
+  event_log_manager_->CancelLogging(key.render_process_id, kDiagnosticUuid,
+                                    future.GetCallback());
+  ASSERT_TRUE(future.Wait());
+
+  EXPECT_TRUE(OnPeerConnectionRemoved(key));
 }
 
 // Once a RenderProcessHost exits/crashes, its PeerConnections are removed,

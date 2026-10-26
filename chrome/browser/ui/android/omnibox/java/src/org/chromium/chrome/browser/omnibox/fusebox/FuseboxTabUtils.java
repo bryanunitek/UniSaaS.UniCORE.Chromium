@@ -18,6 +18,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.utilities.OnDemandBackgroundTabCaptureConfig;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.components.embedder_support.util.UrlConstants;
@@ -37,6 +38,7 @@ public class FuseboxTabUtils {
      * tabs based on specific tab model - including incognito tab model.
      *
      * @param tab The tab to be checked.
+     * @return Whether the tab is eligible for attachment.
      */
     public static boolean isTabEligibleForAttachment(@Nullable Tab tab) {
         // TODO: This also has to check the eligibility here:
@@ -50,6 +52,7 @@ public class FuseboxTabUtils {
      * Returns the whether a tab is active.
      *
      * @param tab The tab to be checked.
+     * @return Whether the tab is active.
      */
     public static boolean isTabActive(@Nullable Tab tab) {
         // Note: this intentionally accepts tabs that haven't finished loading.
@@ -64,11 +67,33 @@ public class FuseboxTabUtils {
     }
 
     /**
+     * Returns whether the tab already has live, loaded content and therefore needs no on-demand
+     * load.
+     *
+     * <p>{@link #isTabActive} only verifies that a renderer exists. A tab whose on-demand load was
+     * cancelled keeps its renderer alive but holds no loaded content, so it must additionally be
+     * treated as contentless while it is marked for reload.
+     *
+     * @param tab The tab to be checked.
+     * @return Whether the tab has loaded content.
+     */
+    public static boolean hasLoadedContent(@Nullable Tab tab) {
+        if (!isTabActive(tab)) {
+            return false;
+        }
+        if (!OnDemandBackgroundTabCaptureConfig.isCancelLoadOnDeselectionEnabled()) {
+            return true;
+        }
+        return !assumeNonNull(tab).needsReload();
+    }
+
+    /**
      * Returns the drawable given the favicon of the tab.
      *
      * @param context An Android context.
      * @param favicon The favicon of the tab.
      * @param iconSizePx The size (both width and height) to scale to.
+     * @return Scaled drawable for the tab favicon or default globe fallback.
      */
     public static Drawable getDrawableForTabFavicon(
             Context context, @Nullable Bitmap favicon, @Px int iconSizePx) {
@@ -90,6 +115,7 @@ public class FuseboxTabUtils {
      *
      * @param selector The TabModelSelector to harvest from.
      * @param attachedIds Set of tab IDs currently attached to the Fusebox.
+     * @return List of eligible recent tabs for attachment.
      */
     public static List<Tab> getEligibleRecentTabs(
             TabModelSelector selector, Set<Integer> attachedIds) {

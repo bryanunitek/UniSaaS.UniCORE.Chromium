@@ -20,6 +20,8 @@
 #include "components/omnibox/browser/autocomplete_match_type.h"
 #include "components/omnibox/browser/favicon_cache.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 namespace app_list {
@@ -28,88 +30,67 @@ namespace {
 
 using RequestSource = SearchTermsData::RequestSource;
 
-OmniboxResultAnswerType MatchTypeToAnswerType(const int type) {
-  switch (static_cast<omnibox::AnswerType>(type)) {
-    case omnibox::ANSWER_TYPE_WEATHER:
-      return OmniboxResultAnswerType::kWeather;
-    case omnibox::ANSWER_TYPE_CURRENCY:
-      return OmniboxResultAnswerType::kCurrency;
-    case omnibox::ANSWER_TYPE_DICTIONARY:
-      return OmniboxResultAnswerType::kDictionary;
-    case omnibox::ANSWER_TYPE_FINANCE:
-      return OmniboxResultAnswerType::kFinance;
-    case omnibox::ANSWER_TYPE_SUNRISE_SUNSET:
-      return OmniboxResultAnswerType::kSunrise;
-    case omnibox::ANSWER_TYPE_TRANSLATION:
-      return OmniboxResultAnswerType::kTranslation;
-    default:
-      return OmniboxResultAnswerType::kDefaultAnswer;
-  }
-}
-
 OmniboxResultType MatchTypeToOmniboxType(
-    const AutocompleteMatchType::Type type) {
+    const omnibox::AutocompleteMatchType type) {
   switch (type) {
-    case AutocompleteMatchType::URL_WHAT_YOU_TYPED:
-    case AutocompleteMatchType::HISTORY_URL:
-    case AutocompleteMatchType::HISTORY_TITLE:
-    case AutocompleteMatchType::HISTORY_BODY:
-    case AutocompleteMatchType::HISTORY_KEYWORD:
-    case AutocompleteMatchType::HISTORY_EMBEDDINGS:
-    case AutocompleteMatchType::NAVSUGGEST:
-    case AutocompleteMatchType::BOOKMARK_TITLE:
-    case AutocompleteMatchType::NAVSUGGEST_PERSONALIZED:
-    case AutocompleteMatchType::CLIPBOARD_URL:
-    case AutocompleteMatchType::PHYSICAL_WEB_DEPRECATED:
-    case AutocompleteMatchType::PHYSICAL_WEB_OVERFLOW_DEPRECATED:
-    case AutocompleteMatchType::TAB_SEARCH_DEPRECATED:
-    case AutocompleteMatchType::DOCUMENT_SUGGESTION:
-    case AutocompleteMatchType::PEDAL:
-    case AutocompleteMatchType::HISTORY_CLUSTER:
-    case AutocompleteMatchType::STARTER_PACK:
-    case AutocompleteMatchType::HISTORY_EMBEDDINGS_ANSWER:
+    case omnibox::AutocompleteMatchType::kUrlWhatYouTyped:
+    case omnibox::AutocompleteMatchType::kHistoryUrl:
+    case omnibox::AutocompleteMatchType::kHistoryTitle:
+    case omnibox::AutocompleteMatchType::kHistoryBody:
+    case omnibox::AutocompleteMatchType::kHistoryKeyword:
+    case omnibox::AutocompleteMatchType::kHistoryEmbeddings:
+    case omnibox::AutocompleteMatchType::kNavsuggest:
+    case omnibox::AutocompleteMatchType::kBookmarkTitle:
+    case omnibox::AutocompleteMatchType::kNavsuggestPersonalized:
+    case omnibox::AutocompleteMatchType::kClipboardUrl:
+    case omnibox::AutocompleteMatchType::kPhysicalWebDeprecated:
+    case omnibox::AutocompleteMatchType::kPhysicalWebOverflowDeprecated:
+    case omnibox::AutocompleteMatchType::kTabSearchDeprecated:
+    case omnibox::AutocompleteMatchType::kDocumentSuggestion:
+    case omnibox::AutocompleteMatchType::kPedal:
+    case omnibox::AutocompleteMatchType::kHistoryCluster:
+    case omnibox::AutocompleteMatchType::kStarterPack:
+    case omnibox::AutocompleteMatchType::kHistoryEmbeddingsAnswer:
       return OmniboxResultType::kDomain;
 
-    case AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED:
-    case AutocompleteMatchType::SEARCH_SUGGEST:
-    case AutocompleteMatchType::SEARCH_SUGGEST_ENTITY:
-    case AutocompleteMatchType::SEARCH_SUGGEST_TAIL:
-    case AutocompleteMatchType::SEARCH_SUGGEST_PROFILE:
-    case AutocompleteMatchType::SEARCH_OTHER_ENGINE:
-    case AutocompleteMatchType::CONTACT_DEPRECATED:
-    case AutocompleteMatchType::VOICE_SUGGEST:
-    case AutocompleteMatchType::CLIPBOARD_TEXT:
-    case AutocompleteMatchType::CLIPBOARD_IMAGE:
+    case omnibox::AutocompleteMatchType::kSearchWhatYouTyped:
+    case omnibox::AutocompleteMatchType::kSearchSuggest:
+    case omnibox::AutocompleteMatchType::kSearchSuggestEntity:
+    case omnibox::AutocompleteMatchType::kSearchSuggestTail:
+    case omnibox::AutocompleteMatchType::kSearchSuggestProfile:
+    case omnibox::AutocompleteMatchType::kSearchOtherEngine:
+    case omnibox::AutocompleteMatchType::kContactDeprecated:
+    case omnibox::AutocompleteMatchType::kVoiceSuggest:
+    case omnibox::AutocompleteMatchType::kClipboardText:
+    case omnibox::AutocompleteMatchType::kClipboardImage:
       return OmniboxResultType::kSearch;
 
-    case AutocompleteMatchType::SEARCH_HISTORY:
-    case AutocompleteMatchType::SEARCH_SUGGEST_PERSONALIZED:
+    case omnibox::AutocompleteMatchType::kSearchHistory:
+    case omnibox::AutocompleteMatchType::kSearchSuggestPersonalized:
       return OmniboxResultType::kHistory;
 
-    case AutocompleteMatchType::OPEN_TAB:
+    case omnibox::AutocompleteMatchType::kOpenTab:
       return OmniboxResultType::kOpenTab;
 
     // Currently unhandled enum values.
     // If you came here from a compile error, please contact
     // chromeos-launcher-search@google.com to determine what the correct
     // `OmniboxType` should be.
-    case AutocompleteMatchType::EXTENSION_APP_DEPRECATED:
-    case AutocompleteMatchType::CALCULATOR:
-    case AutocompleteMatchType::NULL_RESULT_MESSAGE:
-    case AutocompleteMatchType::FEATURED_ENTERPRISE_SEARCH:
+    case omnibox::AutocompleteMatchType::kExtensionAppDeprecated:
+    case omnibox::AutocompleteMatchType::kCalculator:
+    case omnibox::AutocompleteMatchType::kNullResultMessage:
+    case omnibox::AutocompleteMatchType::kFeaturedEnterpriseSearch:
     // TILE types seem to be mobile-only.
-    case AutocompleteMatchType::TILE_SUGGESTION:
-    case AutocompleteMatchType::TILE_NAVSUGGEST:
-    case AutocompleteMatchType::TILE_MOST_VISITED_SITE:
-    case AutocompleteMatchType::TILE_REPEATABLE_QUERY:
+    case omnibox::AutocompleteMatchType::kTileSuggestion:
+    case omnibox::AutocompleteMatchType::kTileNavsuggest:
+    case omnibox::AutocompleteMatchType::kTileMostVisitedSite:
+    case omnibox::AutocompleteMatchType::kTileRepeatableQuery:
+    case omnibox::AutocompleteMatchType::kTabGroup:
+    case omnibox::AutocompleteMatchType::kCrossDeviceTab:
+    case omnibox::AutocompleteMatchType::kRecentlyClosedTab:
       LOG(ERROR) << "Unhandled AutocompleteMatchType value: "
-                 << AutocompleteMatchType::ToString(type);
+                 << omnibox::AutocompleteMatchTypeToString(type);
       return OmniboxResultType::kDomain;
-
-    // NUM_TYPES is not a valid enumerator value, so fall through below.
-    case AutocompleteMatchType::NUM_TYPES:
-    default:
-      break;
   }
   // https://abseil.io/tips/147: Handle non-enumerator values.
   NOTREACHED() << "Unexpected AutocompleteMatchType value: "
@@ -117,45 +98,34 @@ OmniboxResultType MatchTypeToOmniboxType(
 }
 
 ash::SearchResultType MatchTypeToSearchResultType(
-    AutocompleteMatchType::Type type) {
+    omnibox::AutocompleteMatchType type) {
   switch (type) {
-    case AutocompleteMatchType::URL_WHAT_YOU_TYPED:
+    case omnibox::AutocompleteMatchType::kUrlWhatYouTyped:
       return ash::OMNIBOX_URL_WHAT_YOU_TYPED;
-    case AutocompleteMatchType::HISTORY_URL:
+    case omnibox::AutocompleteMatchType::kHistoryUrl:
       // A recently-visited URL that is also a bookmark is handled manually when
       // constructing the result.
       return ash::OMNIBOX_RECENTLY_VISITED_WEBSITE;
-    case AutocompleteMatchType::HISTORY_TITLE:
+    case omnibox::AutocompleteMatchType::kHistoryTitle:
       return ash::OMNIBOX_RECENT_DOC_IN_DRIVE;
-    case AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED:
+    case omnibox::AutocompleteMatchType::kSearchWhatYouTyped:
       return ash::OMNIBOX_WEB_QUERY;
-    case AutocompleteMatchType::SEARCH_HISTORY:
+    case omnibox::AutocompleteMatchType::kSearchHistory:
       return ash::OMNIBOX_SEARCH_HISTORY;
-    case AutocompleteMatchType::SEARCH_SUGGEST:
+    case omnibox::AutocompleteMatchType::kSearchSuggest:
       return ash::OMNIBOX_SEARCH_SUGGEST;
-    case AutocompleteMatchType::SEARCH_SUGGEST_PERSONALIZED:
+    case omnibox::AutocompleteMatchType::kSearchSuggestPersonalized:
       return ash::OMNIBOX_SUGGEST_PERSONALIZED;
-    case AutocompleteMatchType::BOOKMARK_TITLE:
+    case omnibox::AutocompleteMatchType::kBookmarkTitle:
       return ash::OMNIBOX_BOOKMARK;
-    case AutocompleteMatchType::SEARCH_SUGGEST_ENTITY:
+    case omnibox::AutocompleteMatchType::kSearchSuggestEntity:
       return ash::OMNIBOX_SEARCH_SUGGEST_ENTITY;
-    case AutocompleteMatchType::NAVSUGGEST:
+    case omnibox::AutocompleteMatchType::kNavsuggest:
       return ash::OMNIBOX_NAVSUGGEST;
-    case AutocompleteMatchType::CALCULATOR:
+    case omnibox::AutocompleteMatchType::kCalculator:
       return ash::OMNIBOX_CALCULATOR;
     default:
       return ash::SEARCH_RESULT_TYPE_BOUNDARY;
-  }
-}
-
-OmniboxTextType ColorTypeToType(omnibox::FormattedString::ColorType type) {
-  switch (type) {
-    case omnibox::FormattedString::COLOR_ON_SURFACE_POSITIVE:
-      return OmniboxTextType::kPositive;
-    case omnibox::FormattedString::COLOR_ON_SURFACE_NEGATIVE:
-      return OmniboxTextType::kNegative;
-    default:
-      return OmniboxTextType::kUnset;
   }
 }
 
@@ -206,6 +176,41 @@ std::unique_ptr<OmniboxResultData> CreateBaseResult(
 }
 
 }  // namespace
+
+constexpr net::NetworkTrafficAnnotationTag kOmniboxTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("cros_launcher_omnibox", R"(
+        semantics {
+          sender: "Chrome OS Launcher"
+          description:
+            "Chrome OS provides search suggestions when a user types a query "
+            "into the launcher. This request downloads an image icon for a "
+            "suggested result in order to provide more information."
+          trigger:
+            "Change of results for the query typed by the user into the "
+            "launcher."
+          internal {
+            contacts {
+              owners: "//chrome/browser/ash/app_list/OWNERS"
+            }
+          }
+          user_data {
+            type: NONE
+          }
+          data:
+            "URL of the image to be downloaded. This URL corresponds to "
+            "search suggestions for the user's query."
+          destination: GOOGLE_OWNED_SERVICE
+          last_reviewed: "2026-09-23"
+        }
+        policy {
+          cookies_allowed: NO
+          setting:
+            "Search autocomplete and suggestions can be disabled in Chrome OS "
+            "settings. Image icons cannot be disabled separately to this."
+          policy_exception_justification:
+            "No content is uploaded or saved, this request downloads a "
+            "publicly available image."
+        })");
 
 ash::SearchResultTags TagsForText(const std::u16string& text,
                                   OmniboxTextType type) {
@@ -272,8 +277,7 @@ std::unique_ptr<OmniboxResultData> CreateAnswerResult(
 
   // Special case: calculator results (are the only answer results to) have no
   // explicit answer data.
-  if (match.answer_type == omnibox::ANSWER_TYPE_UNSPECIFIED) {
-    DCHECK_EQ(match.type, AutocompleteMatchType::CALCULATOR);
+  if (match.type == omnibox::AutocompleteMatchType::kCalculator) {
     result->answer_type = OmniboxResultAnswerType::kCalculator;
 
     // Calculator results come in two forms:
@@ -293,34 +297,6 @@ std::unique_ptr<OmniboxResultData> CreateAnswerResult(
     }
 
     return result;
-  }
-
-  result->answer_type = MatchTypeToAnswerType(match.answer_type);
-  result->contents = match.contents;
-
-  const auto& headline = match.answer_template->answers(0).headline();
-  if (headline.fragments_size() > 1) {
-    // Only use the second fragment as the first is equivalent to
-    // |match.contents|.
-    result->additional_contents =
-        base::UTF8ToUTF16(headline.fragments(1).text());
-    result->additional_contents_type =
-        ColorTypeToType(headline.fragments(1).color());
-  }
-  const auto& subhead = match.answer_template->answers(0).subhead();
-  if (subhead.fragments_size() > 0) {
-    result->description = base::UTF8ToUTF16(subhead.fragments(0).text());
-    result->description_type = ColorTypeToType(subhead.fragments(0).color());
-  }
-  if (subhead.fragments_size() > 1) {
-    result->additional_description =
-        base::UTF8ToUTF16(subhead.fragments(1).text());
-    result->additional_description_type =
-        ColorTypeToType(subhead.fragments(1).color());
-  }
-  if (result->answer_type == OmniboxResultAnswerType::kWeather) {
-    result->image_url = GURL(match.answer_template->answers(0).image().url());
-    result->description_a11y_label = base::UTF8ToUTF16(subhead.a11y_text());
   }
 
   return result;
@@ -346,7 +322,7 @@ std::unique_ptr<OmniboxResultData> CreateResult(
     result->metrics_type = MatchTypeToSearchResultType(match.type);
   }
 
-  if (match.type == AutocompleteMatchType::SEARCH_SUGGEST_ENTITY &&
+  if (match.type == omnibox::AutocompleteMatchType::kSearchSuggestEntity &&
       !match.image_url.is_empty()) {
     result->image_url = match.image_url;
   }

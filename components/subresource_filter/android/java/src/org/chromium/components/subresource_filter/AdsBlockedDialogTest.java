@@ -42,7 +42,6 @@ public class AdsBlockedDialogTest {
 
     @Mock private Handler mDialogHandler;
 
-    private long mNativeDialog;
     private AdsBlockedDialog mDialog;
     private PropertyModel mModalDialogModel;
     private ClickableSpan mClickableSpan;
@@ -195,7 +194,10 @@ public class AdsBlockedDialogTest {
         // Set nativeDialog to a non-zero value to pass assertion check
         mDialog =
                 new AdsBlockedDialog(
-                        1, RuntimeEnvironment.application, mModalDialogManagerMock, mDialogHandler);
+                        1,
+                        RuntimeEnvironment.getApplication(),
+                        mModalDialogManagerMock,
+                        mDialogHandler);
         mDialog.show(shouldPostDialog);
         mModalDialogModel = mDialog.getDialogModelForTesting();
         mClickableSpan = mDialog.getMessageClickableSpanForTesting();

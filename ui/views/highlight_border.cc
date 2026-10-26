@@ -4,15 +4,15 @@
 
 #include "ui/views/highlight_border.h"
 
-#include "third_party/skia/include/core/SkPath.h"
-#include "third_party/skia/include/core/SkRRect.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
+#include "ui/decoration/decoration_util.h"
+#include "ui/decoration/highlight_border_value.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/geometry/dip_util.h"
+#include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
-#include "ui/gfx/geometry/skia_conversions.h"
-#include "ui/gfx/scoped_canvas.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/views/view.h"
 
 namespace views {
@@ -25,39 +25,11 @@ void HighlightBorder::PaintBorderToCanvas(
     const gfx::Rect& bounds,
     const gfx::RoundedCornersF& corner_radii,
     Type type) {
-  cc::PaintFlags flags;
-  flags.setStrokeWidth(kHighlightBorderThickness);
-  flags.setColor(border_color);
-  flags.setStyle(cc::PaintFlags::kStroke_Style);
-  flags.setAntiAlias(true);
-
-  const float half_thickness = kHighlightBorderThickness / 2.0f;
-
-  // Scale bounds and corner radius with device scale factor to make sure
-  // border bounds match content bounds but keep border stroke width the same.
-  gfx::ScopedCanvas scoped_canvas(canvas);
-  const float dsf = canvas->UndoDeviceScaleFactor();
-  const gfx::RectF pixel_bounds = gfx::ConvertRectToPixels(bounds, dsf);
-
-  const SkVector radii[4] = {
-      {corner_radii.upper_left() * dsf,  corner_radii.upper_left() * dsf},
-      {corner_radii.upper_right() * dsf, corner_radii.upper_right() * dsf},
-      {corner_radii.lower_right() * dsf, corner_radii.lower_right() * dsf},
-      {corner_radii.lower_left() * dsf,  corner_radii.lower_left() * dsf}};
-
-  gfx::RectF outer_border_bounds(pixel_bounds);
-  outer_border_bounds.Inset(half_thickness);
-  const SkPath outer_path = SkPath::RRect(
-      SkRRect::MakeRectRadii(gfx::RectFToSkRect(outer_border_bounds), radii));
-  canvas->DrawPath(outer_path, flags);
-
-  gfx::RectF inner_border_bounds(pixel_bounds);
-  inner_border_bounds.Inset(kHighlightBorderThickness);
-  inner_border_bounds.Inset(half_thickness);
-  flags.setColor(highlight_color);
-  const SkPath inner_path = SkPath::RRect(
-      SkRRect::MakeRectRadii(gfx::RectFToSkRect(inner_border_bounds), radii));
-  canvas->DrawPath(inner_path, flags);
+  ui::decoration::DrawHighlightBorder(
+      canvas,
+      ui::decoration::HighlightBorderValue(highlight_color, border_color,
+                                           kHighlightBorderThickness),
+      corner_radii, bounds);
 }
 
 // static
@@ -80,15 +52,6 @@ SkColor HighlightBorder::GetHighlightColor(const views::View& view,
     case HighlightBorder::Type::kHighlightBorderOnShadow:
       highlight_color_id = ui::kColorCrosSystemHighlight;
       break;
-    case HighlightBorder::Type::kHighlightBorder1:
-      highlight_color_id = ui::kColorHighlightBorderHighlight1;
-      break;
-    case HighlightBorder::Type::kHighlightBorder2:
-      highlight_color_id = ui::kColorHighlightBorderHighlight2;
-      break;
-    case HighlightBorder::Type::kHighlightBorder3:
-      highlight_color_id = ui::kColorHighlightBorderHighlight3;
-      break;
   }
 
   // `view` should be embedded in a Widget to use color provider.
@@ -106,15 +69,6 @@ SkColor HighlightBorder::GetBorderColor(const views::View& view,
       break;
     case HighlightBorder::Type::kHighlightBorderOnShadow:
       border_color_id = ui::kColorCrosSystemHighlightBorder1;
-      break;
-    case HighlightBorder::Type::kHighlightBorder1:
-      border_color_id = ui::kColorHighlightBorderBorder1;
-      break;
-    case HighlightBorder::Type::kHighlightBorder2:
-      border_color_id = ui::kColorHighlightBorderBorder2;
-      break;
-    case HighlightBorder::Type::kHighlightBorder3:
-      border_color_id = ui::kColorHighlightBorderBorder3;
       break;
   }
 

@@ -8,6 +8,7 @@ import androidx.annotation.Px;
 import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
+import org.jni_zero.JniPtr;
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
@@ -17,14 +18,17 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.OmniboxMetrics;
 import org.chromium.chrome.browser.omnibox.fusebox.ComposeboxQueryControllerBridge;
+import org.chromium.chrome.browser.omnibox.fusebox.ComposeboxQueryControllerBridge.NativeComposeboxQueryControllerBridge;
 import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionIntentHandler.VoiceResult;
 import org.chromium.chrome.browser.preloading.PreloadingFeatureMap;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.components.metrics.OmniboxEventProtosIntDef.PageClassification;
 import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteResult;
 import org.chromium.components.omnibox.AutocompleteResult.VerificationPoint;
 import org.chromium.components.omnibox.AutocompleteStopReason;
+import org.chromium.components.omnibox.ToolModeProtoIntDef.ToolMode;
 import org.chromium.components.omnibox.action.OmniboxAction;
 import org.chromium.components.search_engines.TemplateUrl;
 import org.chromium.content_public.browser.NavigationHandle;
@@ -78,8 +82,7 @@ public class AutocompleteController {
     /**
      * Acquire an instance of AutocompleteController associated with the supplied Profile.
      *
-     * @return An existing (if one is available) or new (otherwise) instance of the
-     *     AutocompleteController associated with the supplied profile.
+     * @param nativeController Pointer to the native AutocompleteControllerAndroid object.
      */
     @CalledByNative
     private AutocompleteController(long nativeController) {
@@ -297,6 +300,7 @@ public class AutocompleteController {
      * @param elapsedTimeSinceModified the number of ms that passed between the user first modifying
      *     text in the omnibox and selecting a suggestion
      * @param completedLength the length of the default match's inline autocompletion if any
+     * @param action Optional OmniboxAction executed alongside the suggestion selection.
      */
     @VisibleForTesting(otherwise = VisibleForTesting.PACKAGE_PRIVATE)
     public void onSuggestionSelected(
@@ -305,7 +309,7 @@ public class AutocompleteController {
             int suggestionLine,
             int disposition,
             GURL currentPageUrl,
-            int pageClassification,
+            @PageClassification int pageClassification,
             long elapsedTimeSinceModified,
             int completedLength,
             @Nullable OmniboxAction action) {
@@ -327,7 +331,7 @@ public class AutocompleteController {
     }
 
     /**
-     * Create a native navigation observser on native side.
+     * Create a native navigation observer on native side.
      *
      * @param navigationHandle The NavigationHandle for the current navigation.
      * @param match AutocompleteMatch that was selected by the user
@@ -367,7 +371,7 @@ public class AutocompleteController {
         if (mNativeController == 0) return;
         AutocompleteControllerJni.get()
                 .setComposeboxQueryControllerBridge(
-                        mNativeController, bridge == null ? 0L : bridge.getNativeInstance());
+                        mNativeController, bridge == null ? null : bridge.getNativeInstance());
     }
 
     /**
@@ -390,15 +394,15 @@ public class AutocompleteController {
     }
 
     /**
-     * Updates searchbox stats parameters on the selected match that we will navigate to and
-     * returns the updated URL.
+     * Updates searchbox stats parameters on the selected match that we will navigate to and returns
+     * the updated URL.
      *
      * @param match the AutocompleteMatch object to get the updated destination URL for
      * @param elapsedTimeSinceInputChange the number of ms between the time the user started typing
      *     in the omnibox and the time the user has selected a suggestion
+     * @return The updated destination GURL with searchbox stats, or null if native is invalid.
      */
-    @Nullable
-    GURL updateMatchDestinationUrlWithQueryFormulationTime(
+    @Nullable GURL updateMatchDestinationUrlWithQueryFormulationTime(
             AutocompleteMatch match, long elapsedTimeSinceInputChange) {
         if (mNativeController == 0) return null;
         if (!hasValidNativeObjectRef(match, VerificationPoint.UPDATE_MATCH)) return null;
@@ -465,8 +469,9 @@ public class AutocompleteController {
                 int cursorPosition,
                 @Nullable @JniType("std::string") String desiredTld,
                 @JniType("GURL") GURL currentUrl,
-                @JniType("metrics::OmniboxEventProto::PageClassification") int pageClassification,
-                @JniType("omnibox::ToolMode") int toolMode,
+                @PageClassification @JniType("metrics::OmniboxEventProto::PageClassification")
+                        int pageClassification,
+                @ToolMode @JniType("omnibox::ToolMode") int toolMode,
                 boolean preventInlineAutocomplete,
                 boolean inKeywordMode,
                 boolean allowExactKeywordMatch,
@@ -488,7 +493,8 @@ public class AutocompleteController {
                 int matchIndex,
                 int disposition,
                 @JniType("GURL") GURL currentPageUrl,
-                @JniType("metrics::OmniboxEventProto::PageClassification") int pageClassification,
+                @PageClassification @JniType("metrics::OmniboxEventProto::PageClassification")
+                        int pageClassification,
                 long elapsedTimeSinceModified,
                 int completedLength,
                 long nativeOmniboxAction);
@@ -504,8 +510,9 @@ public class AutocompleteController {
                 @Nullable @JniType("content::WebContents*") WebContents webContents,
                 @JniType("std::u16string") String omniboxText,
                 @JniType("GURL") GURL currentUrl,
-                @JniType("metrics::OmniboxEventProto::PageClassification") int pageClassification,
-                @JniType("omnibox::ToolMode") int toolMode,
+                @PageClassification @JniType("metrics::OmniboxEventProto::PageClassification")
+                        int pageClassification,
+                @ToolMode @JniType("omnibox::ToolMode") int toolMode,
                 @JniType("std::u16string") String currentTitle);
 
         void deleteMatchElement(
@@ -515,6 +522,7 @@ public class AutocompleteController {
 
         void deleteMatch(long nativeAutocompleteControllerAndroid, long nativeAutocompleteMatch);
 
+        @JniType("GURL")
         GURL updateMatchDestinationURLWithAdditionalSearchboxStats(
                 long nativeAutocompleteControllerAndroid,
                 long nativeAutocompleteMatch,
@@ -522,7 +530,8 @@ public class AutocompleteController {
 
         void setComposeboxQueryControllerBridge(
                 long nativeAutocompleteControllerAndroid,
-                long nativeComposeboxQueryControllerBridge);
+                @Nullable JniPtr<NativeComposeboxQueryControllerBridge>
+                        composeboxQueryControllerBridge);
 
         void setVoiceMatches(
                 long nativeAutocompleteControllerAndroid,
@@ -534,9 +543,10 @@ public class AutocompleteController {
                 long nativeAutocompleteControllerAndroid,
                 @Nullable @JniType("content::WebContents*") WebContents webContents,
                 @JniType("GURL") GURL currentUrl,
-                @JniType("metrics::OmniboxEventProto::PageClassification") int pageClassification);
+                @PageClassification @JniType("metrics::OmniboxEventProto::PageClassification")
+                        int pageClassification);
 
-        // Create a navigation observser.
+        // Create a navigation observer.
         void createNavigationObserver(
                 long nativeAutocompleteControllerAndroid,
                 long mNativeNavigationHandle,

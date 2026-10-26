@@ -6,6 +6,7 @@ package org.chromium.components.browser_ui.bottomsheet;
 
 import android.content.Context;
 import android.view.GestureDetector;
+import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.VelocityTracker;
 
@@ -18,10 +19,10 @@ import org.chromium.build.annotations.Nullable;
  * A class that determines whether a sequence of motion events is a valid swipe in the context of a
  * bottom sheet. The {@link SwipeableBottomSheet} that this class is built with provides information
  * useful to determining if a swipe is valid. This class does not move the sheet itself, it only
- * provides information on if/where it should move and whether it should animate. The
- * {@link SwipeableBottomSheet} is responsible for applying the changes to the relevant views. Each
- * swipe or fling is converted into a sequence of calls to
- * {@link SwipeableBottomSheet#setSheetOffset(float, boolean)}.
+ * provides information on if/where it should move and whether it should animate. The {@link
+ * SwipeableBottomSheet} is responsible for applying the changes to the relevant views. Each swipe
+ * or fling is converted into a sequence of calls to {@link
+ * SwipeableBottomSheet#setSheetOffset(float, boolean)}.
  */
 @NullMarked
 class BottomSheetSwipeDetector extends GestureDetector.SimpleOnGestureListener {
@@ -74,13 +75,14 @@ class BottomSheetSwipeDetector extends GestureDetector.SimpleOnGestureListener {
 
         /**
          * @param event The motion event to test.
-         * @return Whether the provided motion event is inside the toolbar.
+         * @return Whether a drag gesture starting at the touch event should move the sheet.
          */
-        boolean isTouchEventInToolbar(MotionEvent event);
+        boolean shouldDragSheet(@Nullable MotionEvent event);
 
         /**
          * Check if a particular gesture or touch event should move the bottom sheet when in peeking
          * mode. If the "chrome-home-swipe-logic" flag is not set this function returns true.
+         *
          * @param initialDownEvent The event that started the scroll.
          * @param currentEvent The current motion event.
          * @return True if the bottom sheet should move.
@@ -89,10 +91,16 @@ class BottomSheetSwipeDetector extends GestureDetector.SimpleOnGestureListener {
 
         /**
          * Set the sheet's offset.
+         *
          * @param offset The target offset.
          * @param shouldAnimate Whether the sheet should animate to that position.
          */
         void setSheetOffset(float offset, boolean shouldAnimate);
+
+        /**
+         * @return Whether the UI is using large form factor configurations.
+         */
+        boolean isLargeFormFactorUiEnabled();
     }
 
     /**
@@ -106,10 +114,23 @@ class BottomSheetSwipeDetector extends GestureDetector.SimpleOnGestureListener {
             return mSheetDelegate.shouldGestureMoveSheet(e, e);
         }
 
+        private boolean isMouseEvent(MotionEvent e) {
+            if (e == null) return false;
+            return e.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE
+                    || e.isFromSource(InputDevice.SOURCE_MOUSE);
+        }
+
         @Override
         public boolean onScroll(
                 @Nullable MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
             if (e1 == null || !mSheetDelegate.shouldGestureMoveSheet(e1, e2)) return false;
+
+            // On desktop, mouse dragging should scroll the content (e.g. RecyclerView)
+            // rather than swiping the sheet.
+            if (mSheetDelegate.isLargeFormFactorUiEnabled()
+                    && (isMouseEvent(e1) || isMouseEvent(e2))) {
+                return false;
+            }
 
             // Only start scrolling if the scroll is up or down. If the user is already scrolling,
             // continue moving the sheet.
@@ -129,7 +150,8 @@ class BottomSheetSwipeDetector extends GestureDetector.SimpleOnGestureListener {
                             mSheetDelegate.getCurrentOffsetPx(), mSheetDelegate.getMaxOffsetPx());
 
             // Allow the bottom sheet's content to be scrolled up without dragging the sheet down.
-            if (!mSheetDelegate.isTouchEventInToolbar(e2)
+            boolean shouldDragSheet = mSheetDelegate.shouldDragSheet(e1);
+            if (!shouldDragSheet
                     && isSheetInMaxPosition
                     && !mSheetDelegate.isContentScrolledToTop()) {
                 return false;

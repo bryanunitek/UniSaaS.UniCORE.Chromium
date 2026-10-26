@@ -59,7 +59,8 @@ void ReadingListBrowserAgent::AddURLsToReadingList(
         IDS_IOS_READING_LIST_SNACKBAR_MESSAGE_FOR_ACCOUNT);
     std::u16string utf16Text =
         base::i18n::MessageFormatter::FormatWithNamedArgs(
-            pattern, "count", (int)urls.count, "email", account_info.email);
+            pattern, "count", (int)urls.count, "email",
+            account_info.GetEmail());
     snackbar_text = base::SysUTF16ToNSString(utf16Text);
     static_assert(syncer::IsReadingListAccountStorageEnabled());
     snackbar_action = CreateUndoActionWithReadingListURLs(urls);
@@ -126,7 +127,7 @@ void ReadingListBrowserAgent::BulkAddURLsToReadingListWithViewSnackbar(
             l10n_util::GetStringUTF16(
                 IDS_IOS_READING_LIST_SNACKBAR_MESSAGE_FOR_ACCOUNT_WITH_COUNT),
             "count", successfully_added_reading_list_items, "email",
-            GetAccountInfoFromLastAddedURL(last_valid_url).email));
+            GetAccountInfoFromLastAddedURL(last_valid_url).GetEmail()));
 
   } else {
     result = base::SysUTF16ToNSString(

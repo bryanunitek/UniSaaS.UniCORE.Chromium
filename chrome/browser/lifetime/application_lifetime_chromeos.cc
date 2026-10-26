@@ -11,7 +11,7 @@
 #include "chrome/browser/ash/boot_times_recorder/boot_times_recorder.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/lifetime/application_lifetime_chromeos.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
@@ -33,7 +33,7 @@ namespace {
 ash::UpdateEngineClient* GetUpdateEngineClient() {
   ash::UpdateEngineClient* update_engine_client =
       ash::UpdateEngineClient::Get();
-  DCHECK(update_engine_client);
+  CHECK(update_engine_client, base::NotFatalUntil::M161);
   return update_engine_client;
 }
 
@@ -89,6 +89,8 @@ void ReportSessionUMAMetrics() {
 
 void AttemptUserExit() {
   VLOG(1) << "AttemptUserExit";
+  browser_shutdown::SetShutdownTrigger(
+      browser_shutdown::ShutdownTrigger::kLogout);
   ash::BootTimesRecorder::Get()->AddLogoutTimeMarker("LogoutStarted", false);
 
   ReportSessionUMAMetrics();
@@ -123,7 +125,7 @@ void RelaunchIgnoreUnloadHandlers() {
 }
 
 void RelaunchForUpdate() {
-  DCHECK(UpdatePending());
+  CHECK(UpdatePending(), base::NotFatalUntil::M161);
   GetUpdateEngineClient()->RebootAfterUpdate();
 }
 
@@ -165,7 +167,7 @@ bool SetLocaleForNextStart(PrefService* local_state) {
 }
 
 void StopSession() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   // Only call this function once.
   static bool notified = false;
   if (notified) {

@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "components/autofill/core/browser/data_quality/addresses/profile_token_quality.h"
 #include "components/autofill/core/browser/single_field_fillers/single_field_fill_router.h"
 #include "components/autofill/core/browser/suggestions/autocomplete_suggestion_generator.h"
@@ -33,7 +34,14 @@ namespace autofill {
 // through WebDataServiceBase.
 class AutocompleteHistoryManager : public KeyedService {
  public:
-  AutocompleteHistoryManager();
+  // Delay after construction before the autocomplete table stats are queried
+  // and recorded. Avoids impact on startup.
+  static constexpr base::TimeDelta kTableStatsRecordingDelay =
+      base::Seconds(30);
+
+  AutocompleteHistoryManager(
+      scoped_refptr<AutofillWebDataService> profile_database,
+      PrefService* pref_service);
 
   AutocompleteHistoryManager(const AutocompleteHistoryManager&) = delete;
   AutocompleteHistoryManager& operator=(const AutocompleteHistoryManager&) =
@@ -44,7 +52,8 @@ class AutocompleteHistoryManager : public KeyedService {
   // Generates autocomplete suggestions for the given `trigger_field` in `form`.
   // This is achieved through an async DB query. `client` checks if the
   // requirements for generating autocomplete suggestions are met (e.g.
-  // autocomplete is enabled). Since autocomplete suggestions are always
+  // autocomplete is enabled and the field's data category is not blocked by
+  // policy for the current URL). Since autocomplete suggestions are always
   // generated last, the `on_suggestions_returned` callback may be called with
   // the suggestions for `field` or with an empty vector if no suggestions are
   // available.
@@ -61,29 +70,23 @@ class AutocompleteHistoryManager : public KeyedService {
 
   // Saves the `fields` of `form` that are eligible to be saved as new or
   // updated Autocomplete entries, which can then be served in the future as
-  // suggestions. This update is dependent on whether we are running in
-  // incognito and if Autocomplete is enabled or not. `fields` may be empty.
+  // suggestions. This update is dependent on if Autocomplete is enabled or not,
+  // and whether the field's data category is blocked by enterprise policy or
+  // user settings for the form's URL.
+  // `fields` may be empty.
   virtual void OnWillSubmitFormWithFields(
       const std::vector<FormFieldData>& fields,
-      const FormStructure* form,
-      bool is_autocomplete_enabled);
+      const FormStructure* form);
 
   virtual void CancelPendingQuery();
 
   virtual void OnRemoveCurrentSingleFieldSuggestion(
       const std::u16string& field_name,
+      const std::u16string& field_label,
       const std::u16string& value,
       SuggestionType type);
 
   virtual void OnSingleFieldSuggestionSelected(const Suggestion& suggestion);
-
-  // Initializes the instance with the given parameters.
-  // |profile_database_| is a profile-scope DB used to access autocomplete data.
-  // |is_off_the_record| indicates wheter the user is currently operating in an
-  // off-the-record context (i.e. incognito).
-  void Init(scoped_refptr<AutofillWebDataService> profile_database,
-            PrefService* pref_service,
-            bool is_off_the_record);
 
   // Returns true if the field has a meaningful `name`.
   // An input field name 'field_2' bears no semantic meaning and there is a
@@ -99,6 +102,12 @@ class AutocompleteHistoryManager : public KeyedService {
   void OnAutofillCleanupReturned(WebDataServiceBase::Handle current_handle,
       std::unique_ptr<WDTypedResult> result);
 
+  // Handles WebDataService responses for legacy table data migration.
+  void OnLegacyTableDataMigrationReturned(
+      int new_migration_generation,
+      WebDataServiceBase::Handle current_handle,
+      std::unique_ptr<WDTypedResult> migration_result);
+
   scoped_refptr<AutofillWebDataService> GetProfileDatabase() {
     return profile_database_;
   }
@@ -106,13 +115,17 @@ class AutocompleteHistoryManager : public KeyedService {
  private:
   friend class AutocompleteHistoryManagerTest;
 
-  // Returns true if the given `field` in `form` and its value are valid to be
-  // saved as a new or updated Autocomplete entry.
-  bool IsFieldValueSaveable(const FormFieldData& field,
-                            const FormStructure* form);
+  // Queries the autocomplete table stats from `profile_database_`. The result
+  // is handled by `OnAutocompleteTableStatsReturned()`.
+  void QueryAutocompleteTableStats();
+
+  // Handles WebDataService responses for autocomplete table stats.
+  void OnAutocompleteTableStatsReturned(
+      WebDataServiceBase::Handle current_handle,
+      std::unique_ptr<WDTypedResult> result);
 
   // Must outlive this object.
-  scoped_refptr<AutofillWebDataService> profile_database_;
+  const scoped_refptr<AutofillWebDataService> profile_database_;
 
   // Stores the currently used `AutocompleteSuggestionGenerator`.
   // If a new `GetSingleFieldSuggestions` request is received, the previous
@@ -120,11 +133,7 @@ class AutocompleteHistoryManager : public KeyedService {
   std::unique_ptr<AutocompleteSuggestionGenerator> suggestion_generator_;
 
   // The PrefService that this instance uses. Must outlive this instance.
-  raw_ptr<PrefService> pref_service_;
-
-
-  // Whether the service is associated with an off-the-record browser context.
-  bool is_off_the_record_ = false;
+  const raw_ptr<PrefService> pref_service_;
 
   base::WeakPtrFactory<AutocompleteHistoryManager> weak_ptr_factory_{this};
 };

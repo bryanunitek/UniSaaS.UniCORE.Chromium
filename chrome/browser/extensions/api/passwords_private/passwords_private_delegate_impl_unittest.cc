@@ -15,7 +15,8 @@
 #include "ash/constants/web_app_id_constants.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/i18n/time_formatting.h"
+#include "base/i18n/icubridge/date_time_formatter.h"
+#include "base/i18n/icubridge/icu_bridge.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/notimplemented.h"
@@ -28,6 +29,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate.h"
@@ -49,6 +51,7 @@
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/sharing/mock_password_sender_service.h"
 #include "components/password_manager/core/browser/sharing/password_sharing_recipients_downloader.h"
 #include "components/password_manager/core/browser/sharing/recipients_fetcher_impl.h"
@@ -61,6 +64,7 @@
 #include "components/version_info/channel.h"
 #include "components/webauthn/core/browser/test_passkey_model.h"
 #include "content/public/test/browser_task_environment.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -81,6 +85,7 @@ using api::passwords_private::UrlCollection;
 using device_reauth::ReauthResult;
 using password_manager::PasswordForm;
 using password_manager::PasswordRecipient;
+using password_manager::PasswordString;
 using password_manager::TestPasswordStore;
 using ::testing::_;
 using ::testing::AllOf;
@@ -109,7 +114,7 @@ constexpr char kTestUserId[] = "12345";
 constexpr char kTestUserName[] = "Theo Tester";
 constexpr char kTestEmail[] = "theo@example.com";
 constexpr char kTestProfileImageUrl[] =
-    "https://3837fjsdjaka.image.example.com";
+    "https://3837fjsdjaka.image.example.com/";
 constexpr char kTestPublicKeyBase64[] =
     "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MTI=";
 constexpr uint32_t kTestPublicKeyVersion = 42;
@@ -121,7 +126,7 @@ PasswordForm CreateSampleForm(
   form.signon_realm = "https://abc1.com";
   form.url = GURL("https://abc1.com");
   form.username_value = username;
-  form.password_value = u"test";
+  form.password_value = PasswordString(u"test");
   form.in_store = store;
   return form;
 }
@@ -215,15 +220,26 @@ class PasswordsPrivateDelegateImplTest : public testing::Test {
 
   scoped_refptr<PasswordsPrivateDelegateImpl> CreateDelegate() {
     return base::MakeRefCounted<PasswordsPrivateDelegateImpl>(
-        &testing_pref_service_, identity_test_env_.identity_manager(),
-        base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
-            &test_url_loader_factory_),
-        &password_sender_service_, &sync_service_,
-        /*trust_safety_sentiment_service=*/nullptr,
-        /*affiliation_service=*/&mock_affiliation_service_, profile_store_,
-        account_store_, &passkey_model_, &mock_bulk_leak_check_service_,
-        /*event_router=*/nullptr, &web_app_install_manager_, &enclave_manager_,
-        base::NullCallback(), base::DoNothing());
+        PasswordsPrivateDelegateImpl::Dependencies{
+            .prefs = &testing_pref_service_,
+            .identity_manager = identity_test_env_.identity_manager(),
+            .url_loader_factory = base::MakeRefCounted<
+                network::WeakWrapperSharedURLLoaderFactory>(
+                &test_url_loader_factory_),
+            .password_sender_service = &password_sender_service_,
+            .sync_service = &sync_service_,
+            .trust_safety_sentiment_service = nullptr,
+            .affiliation_service = &mock_affiliation_service_,
+            .profile_password_store = profile_store_,
+            .account_password_store = account_store_,
+            .passkey_model = &passkey_model_,
+            .bulk_leak_check_service = &mock_bulk_leak_check_service_,
+            .event_router = nullptr,
+            .web_app_install_manager = &web_app_install_manager_,
+            .enclave_manager = &enclave_manager_,
+            .device_authenticator_factory = base::NullCallback(),
+            .maybe_show_profile_switch_iph_cb = base::DoNothing(),
+        });
   }
 
   // Queries and returns the list of saved credentials, blocking until finished.
@@ -357,6 +373,64 @@ TEST_F(PasswordsPrivateDelegateImplTest,
       .WillOnce([&](const PasswordsPrivateDelegate::UiEntries& passwords) {
         EXPECT_EQ(api::passwords_private::PasswordStoreSet::kDeviceAndAccount,
                   passwords[0].stored_in);
+      });
+
+  delegate->GetSavedPasswordsList(callback.Get());
+}
+
+TEST_F(PasswordsPrivateDelegateImplTest,
+       GetSavedPasswordsList_CompromisedInfo_FeatureEnabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      password_manager::features::kPasswordCompromiseWarningInDetailsCard);
+
+  scoped_refptr<PasswordsPrivateDelegateImpl> delegate = CreateDelegate();
+  PasswordForm compromised_password =
+      CreateSampleForm(PasswordForm::Store::kProfileStore);
+  compromised_password
+      .password_issues[password_manager::InsecureType::kLeaked] =
+      password_manager::InsecurityMetadata(
+          base::Time::Now(), password_manager::IsMuted(true),
+          password_manager::TriggerBackendNotification(false));
+
+  SetUpPasswordStores({compromised_password});
+
+  base::MockCallback<PasswordsPrivateDelegate::UiEntriesCallback> callback;
+  EXPECT_CALL(callback, Run(SizeIs(1)))
+      .WillOnce([&](const PasswordsPrivateDelegate::UiEntries& passwords) {
+        ASSERT_TRUE(passwords[0].compromised_info.has_value());
+        EXPECT_THAT(passwords[0].compromised_info->compromise_types,
+                    testing::ElementsAre(
+                        api::passwords_private::CompromiseType::kLeaked));
+        EXPECT_TRUE(passwords[0].compromised_info->is_muted);
+        EXPECT_EQ("https://abc1.com/.well-known/change-password",
+                  passwords[0].change_password_url);
+      });
+
+  delegate->GetSavedPasswordsList(callback.Get());
+}
+
+TEST_F(PasswordsPrivateDelegateImplTest,
+       GetSavedPasswordsList_CompromisedInfo_FeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      password_manager::features::kPasswordCompromiseWarningInDetailsCard);
+
+  scoped_refptr<PasswordsPrivateDelegateImpl> delegate = CreateDelegate();
+  PasswordForm compromised_password =
+      CreateSampleForm(PasswordForm::Store::kProfileStore);
+  compromised_password
+      .password_issues[password_manager::InsecureType::kLeaked] =
+      password_manager::InsecurityMetadata(
+          base::Time::Now(), password_manager::IsMuted(true),
+          password_manager::TriggerBackendNotification(false));
+
+  SetUpPasswordStores({compromised_password});
+
+  base::MockCallback<PasswordsPrivateDelegate::UiEntriesCallback> callback;
+  EXPECT_CALL(callback, Run(SizeIs(1)))
+      .WillOnce([&](const PasswordsPrivateDelegate::UiEntries& passwords) {
+        EXPECT_FALSE(passwords[0].compromised_info.has_value());
       });
 
   delegate->GetSavedPasswordsList(callback.Get());
@@ -554,7 +628,7 @@ TEST_F(PasswordsPrivateDelegateImplTest,
 TEST_F(PasswordsPrivateDelegateImplTest,
        ChangeCredential_PasswordInAccountStore) {
   PasswordForm profile_form = CreateSampleForm();
-  profile_form.password_value = u"different_pass";
+  profile_form.password_value = PasswordString(u"different_pass");
   PasswordForm account_form = CreateSampleForm();
   account_form.in_store = PasswordForm::Store::kAccountStore;
   SetUpPasswordStores({profile_form, account_form});
@@ -821,28 +895,16 @@ TEST_F(
   EXPECT_EQ(u"new text", result);
 }
 
-TEST_F(PasswordsPrivateDelegateImplTest, TestShouldActivateAccountStorage) {
+TEST_F(PasswordsPrivateDelegateImplTest, IsAccountStorageActive) {
   sync_service()->SetSignedIn(signin::ConsentLevel::kSignin);
+  scoped_refptr<PasswordsPrivateDelegateImpl> delegate = CreateDelegate();
+
+  EXPECT_TRUE(delegate->IsAccountStorageActive());
+
   sync_service()->GetUserSettings()->SetSelectedType(
       syncer::UserSelectableType::kPasswords, false);
 
-  scoped_refptr<PasswordsPrivateDelegateImpl> delegate = CreateDelegate();
-  delegate->SetAccountStorageEnabled(true);
-
-  EXPECT_TRUE(sync_service()->GetUserSettings()->GetSelectedTypes().Has(
-      syncer::UserSelectableType::kPasswords));
-}
-
-TEST_F(PasswordsPrivateDelegateImplTest, TestShouldDisableAccountStorage) {
-  sync_service()->SetSignedIn(signin::ConsentLevel::kSignin);
-  ASSERT_TRUE(sync_service()->GetUserSettings()->GetSelectedTypes().Has(
-      syncer::UserSelectableType::kPasswords));
-
-  scoped_refptr<PasswordsPrivateDelegateImpl> delegate = CreateDelegate();
-  delegate->SetAccountStorageEnabled(false);
-
-  EXPECT_FALSE(sync_service()->GetUserSettings()->GetSelectedTypes().Has(
-      syncer::UserSelectableType::kPasswords));
+  EXPECT_FALSE(delegate->IsAccountStorageActive());
 }
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
@@ -1169,6 +1231,9 @@ TEST_F(PasswordsPrivateDelegateImplTest,
   EXPECT_CALL(*biometric_authenticator_ptr, Cancel).Times(0);
   EXPECT_CALL(result_callback, Run(false));
   delegate->SwitchBiometricAuthBeforeFillingState(result_callback.Get());
+  testing::Mock::VerifyAndClearExpectations(biometric_authenticator_ptr);
+
+  EXPECT_CALL(*biometric_authenticator_ptr, Cancel);
 }
 #endif
 
@@ -1183,9 +1248,10 @@ TEST_F(PasswordsPrivateDelegateImplTest, GetCredentialGroups) {
   password2.SetPasswordBackupNote(backup_password);
   api::passwords_private::BackupPasswordInfo backup_password_info;
   backup_password_info.value = base::UTF16ToUTF8(backup_password);
-  backup_password_info.creation_date =
-      base::UTF16ToUTF8(base::LocalizedTimeFormatWithPattern(
-          password2.GetPasswordBackupDateCreated().value(), "MMM dd"));
+  backup_password_info.creation_date = base::UTF16ToUTF8(
+      base::i18n::IcuBridge::GetInstance().date_time_formatter().Format(
+          password2.GetPasswordBackupDateCreated().value(),
+          base::i18n::datetime_options::MD::Medium()));
 
   SetUpPasswordStores({password1, password2});
   {

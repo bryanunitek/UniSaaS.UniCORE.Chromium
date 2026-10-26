@@ -25,6 +25,7 @@
 #import "components/password_manager/core/browser/password_store/password_form_converters.h"
 #import "components/password_manager/core/browser/password_store/password_store_change.h"
 #import "components/password_manager/core/browser/password_store/test_password_store.h"
+#import "components/password_manager/core/browser/password_string.h"
 #import "components/password_manager/core/common/password_manager_pref_names.h"
 #import "components/prefs/pref_registry_simple.h"
 #import "components/prefs/pref_service.h"
@@ -112,9 +113,6 @@ class CredentialProviderServiceTest : public PlatformTest {
 
   void SetUp() override {
     PlatformTest::SetUp();
-    // Make sure there are no favicons left from some other tests.
-    ASSERT_TRUE(DeleteFaviconsFolder());
-
     ASSERT_TRUE(scoped_temp_dir_.CreateUniqueTempDir());
     NSURL* folder_url =
         base::apple::FilePathToNSURL(scoped_temp_dir_.GetPath());
@@ -131,8 +129,6 @@ class CredentialProviderServiceTest : public PlatformTest {
   }
 
   void TearDown() override {
-    // Delete all favicon files that were created during the test.
-    EXPECT_TRUE(DeleteFaviconsFolder());
     SetFaviconsFolderURLForTesting(nil);
     ResetMaxNumberOfFaviconsForTesting();
 
@@ -213,8 +209,7 @@ class CredentialProviderServiceTest : public PlatformTest {
         });
   }
 
-  bool WaitForCredentialTimestamp(const base::Time& timestamp,
-                                  NSUInteger index) {
+  bool WaitForCredentialTimestamp(base::Time timestamp, NSUInteger index) {
     // For add and remove operations to propagate to the credential store, both
     // the message loop and the NSRunLoop need to spin.
     const int64_t lastUsedTime =
@@ -257,7 +252,7 @@ TEST_F(CredentialProviderServiceTest, FirstSync) {
   password_manager::PasswordForm form;
   form.url = GURL(kTestUrl1);
   form.username_value = kTestUsername1;
-  form.password_value = kTestPassword1;
+  form.password_value = password_manager::PasswordString(kTestPassword1);
   password_store_->AddLogin(password_manager::FromPasswordForm(form));
   base::RunLoop().RunUntilIdle();
 
@@ -275,7 +270,13 @@ TEST_F(CredentialProviderServiceTest, FirstSync) {
               base::SysUTF16ToNSString(kTestPassword1));
 }
 
-TEST_F(CredentialProviderServiceTest, TwoStores) {
+// TODO(crbug.com/575488677): Flaky on physical devices.
+#if TARGET_OS_SIMULATOR
+#define MAYBE_TwoStores TwoStores
+#else
+#define MAYBE_TwoStores DISABLED_TwoStores
+#endif
+TEST_F(CredentialProviderServiceTest, MAYBE_TwoStores) {
   password_manager::PasswordForm local_form;
   local_form.url = GURL(kTestUrl1);
   local_form.username_value = kTestUsername1;
@@ -337,13 +338,13 @@ TEST_F(CredentialProviderServiceTest, PasswordChanges) {
   form.signon_realm = kTestUrl2;
   form.action = GURL(kTestUrl2);
   form.password_element = kTestPassword1;
-  form.password_value = kTestPassword1;
+  form.password_value = password_manager::PasswordString(kTestPassword1);
   password_store_->AddLogin(password_manager::FromPasswordForm(form));
   task_environment_.RunUntilIdle();
 
   ASSERT_TRUE(WaitForCredentialCount(1u));
 
-  form.password_value = kTestPassword2;
+  form.password_value = password_manager::PasswordString(kTestPassword2);
   password_store_->UpdateLogin(password_manager::FromPasswordForm(form));
 
   // Expect that the credential in the store now has the same password.
@@ -374,7 +375,8 @@ TEST_F(CredentialProviderServiceTest, AccountChange) {
 
   // Set managed account as the primary one.
   CoreAccountInfo core_account =
-      identity_test_environment_.MakeAccountAvailable(kEmailFoo);
+      identity_test_environment_.MakeAccountAvailable(kEmailFoo)
+          .GetCoreAccountInfo();
   AccountInfo account = AccountInfo::Builder(core_account)
                             .SetHostedDomain(kManagedDomain)
                             .Build();
@@ -414,7 +416,7 @@ TEST_F(CredentialProviderServiceTest, AndroidCredential) {
   form.url = GURL(form.signon_realm);
   form.signon_realm = kAndroidRealm;
   form.password_element = kTestPassword1;
-  form.password_value = kTestPassword2;
+  form.password_value = password_manager::PasswordString(kTestPassword2);
   password_store_->AddLogin(password_manager::FromPasswordForm(form));
   task_environment_.RunUntilIdle();
 
@@ -515,7 +517,8 @@ TEST_F(CredentialProviderServiceTest, AddCredentialsWithValidURL) {
   password_manager::PasswordForm valid_password_form;
   valid_password_form.url = GURL(kTestUrl1);
   valid_password_form.username_value = kTestUsername1;
-  valid_password_form.password_value = kTestPassword1;
+  valid_password_form.password_value =
+      password_manager::PasswordString(kTestPassword1);
   password_store_->AddLogin(
       password_manager::FromPasswordForm(valid_password_form));
   task_environment_.RunUntilIdle();
@@ -528,7 +531,8 @@ TEST_F(CredentialProviderServiceTest, AddCredentialsWithValidURL) {
   password_manager::PasswordForm invalid_password_form;
   invalid_password_form.url = GURL("");
   invalid_password_form.username_value = kTestUsername2;
-  invalid_password_form.password_value = kTestPassword2;
+  invalid_password_form.password_value =
+      password_manager::PasswordString(kTestPassword2);
   password_store_->AddLogin(
       password_manager::FromPasswordForm(invalid_password_form));
   task_environment_.RunUntilIdle();
@@ -542,7 +546,8 @@ TEST_F(CredentialProviderServiceTest, AddCredentialsWithValidURL) {
   android_password_form.url = GURL(android_password_form.signon_realm);
   android_password_form.signon_realm = kAndroidRealm;
   android_password_form.password_element = kTestPassword1;
-  android_password_form.password_value = kTestPassword2;
+  android_password_form.password_value =
+      password_manager::PasswordString(kTestPassword2);
   password_store_->AddLogin(
       password_manager::FromPasswordForm(android_password_form));
   task_environment_.RunUntilIdle();
@@ -563,7 +568,8 @@ TEST_F(CredentialProviderServiceTest, AddCredentialsRefactored) {
   password_manager::PasswordForm valid_password_form;
   valid_password_form.url = GURL(kTestUrl1);
   valid_password_form.username_value = kTestUsername1;
-  valid_password_form.password_value = kTestPassword1;
+  valid_password_form.password_value =
+      password_manager::PasswordString(kTestPassword1);
   password_store_->AddLogin(
       password_manager::FromPasswordForm(valid_password_form));
   task_environment_.RunUntilIdle();
@@ -576,7 +582,8 @@ TEST_F(CredentialProviderServiceTest, AddCredentialsRefactored) {
   password_manager::PasswordForm invalid_password_form;
   invalid_password_form.url = GURL("");
   invalid_password_form.username_value = kTestUsername2;
-  invalid_password_form.password_value = kTestPassword2;
+  invalid_password_form.password_value =
+      password_manager::PasswordString(kTestPassword2);
   password_store_->AddLogin(
       password_manager::FromPasswordForm(invalid_password_form));
   task_environment_.RunUntilIdle();
@@ -590,7 +597,8 @@ TEST_F(CredentialProviderServiceTest, AddCredentialsRefactored) {
   android_password_form.url = GURL(android_password_form.signon_realm);
   android_password_form.signon_realm = kAndroidRealm;
   android_password_form.password_element = kTestPassword1;
-  android_password_form.password_value = kTestPassword2;
+  android_password_form.password_value =
+      password_manager::PasswordString(kTestPassword2);
   password_store_->AddLogin(
       password_manager::FromPasswordForm(android_password_form));
   task_environment_.RunUntilIdle();
@@ -608,7 +616,7 @@ TEST_F(CredentialProviderServiceTest, AddCredentialsRefactored_CachedFavicon) {
 
   // Create a dummy favicon file to simulate a fresh cached favicon.
   GURL url(kTestUrl1);
-  NSString* favicon_key = GetFaviconFileKey(url);
+  NSString* favicon_key = base::SysUTF8ToNSString(GetFaviconFileKey(url));
 
   NSURL* folder_url = base::apple::FilePathToNSURL(scoped_temp_dir_.GetPath());
   ASSERT_NE(nil, folder_url);
@@ -626,7 +634,8 @@ TEST_F(CredentialProviderServiceTest, AddCredentialsRefactored_CachedFavicon) {
   password_manager::PasswordForm valid_password_form;
   valid_password_form.url = url;
   valid_password_form.username_value = u"user1";
-  valid_password_form.password_value = u"pwd1";
+  valid_password_form.password_value =
+      password_manager::PasswordString(u"pwd1");
   password_store_->AddLogin(
       password_manager::FromPasswordForm(valid_password_form));
 
@@ -653,7 +662,7 @@ TEST_F(CredentialProviderServiceTest, AddCredentialsRefactored_SingleFormSkip) {
   password_manager::PasswordForm form;
   form.url = GURL("http://g.com");
   form.username_value = u"user1";
-  form.password_value = u"pwd1";
+  form.password_value = password_manager::PasswordString(u"pwd1");
 
   password_manager::PasswordStoreChangeList change_list;
   change_list.push_back(password_manager::PasswordStoreChange(
@@ -677,18 +686,19 @@ TEST_F(CredentialProviderServiceTest,
 
   // We expect exactly 1 call to FaviconForPageUrl even though we add two
   // forms with the same URL in the same batch.
-  EXPECT_CALL(favicon_loader_, FaviconForPageUrl)
-      .WillOnce(testing::InvokeWithoutArgs([&]() { favicon_called_ = true; }));
+  EXPECT_CALL(favicon_loader_, FaviconForPageUrl).WillOnce([&]() {
+    favicon_called_ = true;
+  });
 
   password_manager::PasswordForm form1;
   form1.url = GURL("http://g.com");
   form1.username_value = u"user1";
-  form1.password_value = u"pwd1";
+  form1.password_value = password_manager::PasswordString(u"pwd1");
 
   password_manager::PasswordForm form2;
   form2.url = GURL("http://g.com");
   form2.username_value = u"user2";
-  form2.password_value = u"pwd2";
+  form2.password_value = password_manager::PasswordString(u"pwd2");
 
   password_manager::PasswordStoreChangeList change_list;
   change_list.emplace_back(password_manager::PasswordStoreChange::ADD,
@@ -729,12 +739,12 @@ TEST_F(CredentialProviderServiceTest,
   password_manager::PasswordForm form1;
   form1.url = GURL("http://g1.com");
   form1.username_value = u"user1";
-  form1.password_value = u"pwd1";
+  form1.password_value = password_manager::PasswordString(u"pwd1");
 
   password_manager::PasswordForm form2;
   form2.url = GURL("http://g2.com");
   form2.username_value = u"user2";
-  form2.password_value = u"pwd2";
+  form2.password_value = password_manager::PasswordString(u"pwd2");
 
   password_manager::PasswordStoreChangeList change_list;
   change_list.push_back(password_manager::PasswordStoreChange(
@@ -768,7 +778,7 @@ TEST_F(CredentialProviderServiceTest,
   password_manager::PasswordForm form;
   form.url = GURL("http://g.com");
   form.username_value = u"user1";
-  form.password_value = u"pwd1";
+  form.password_value = password_manager::PasswordString(u"pwd1");
 
   password_manager::PasswordStoreChangeList change_list;
   change_list.push_back(password_manager::PasswordStoreChange(
@@ -833,7 +843,7 @@ TEST_F(CredentialProviderServiceTest, OnLoginsChanged_SingleOperation) {
   password_manager::PasswordForm test_form;
   test_form.url = GURL("http://example.com/login");
   test_form.username_value = u"username";
-  test_form.password_value = u"12345";
+  test_form.password_value = password_manager::PasswordString(u"12345");
 
   password_manager::PasswordStoreChangeList change_list;
   change_list.emplace_back(password_manager::PasswordStoreChange(
@@ -850,7 +860,7 @@ TEST_F(CredentialProviderServiceTest, OnLoginsChanged_SingleOperation) {
   histogram_tester.ExpectTotalCount(kSyncStoreHistogramName, 1);
 
   // Test updating a password.
-  test_form.password_value = u"54321";
+  test_form.password_value = password_manager::PasswordString(u"54321");
   change_list.clear();
   password_manager::PasswordStoreChange change(
       password_manager::PasswordStoreChange::UPDATE,

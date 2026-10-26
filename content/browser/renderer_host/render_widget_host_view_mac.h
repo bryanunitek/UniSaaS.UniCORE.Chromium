@@ -31,6 +31,7 @@
 #include "third_party/blink/public/common/page/content_to_visible_time_request.h"
 #include "third_party/blink/public/mojom/webshare/webshare.mojom.h"
 #include "ui/accelerated_widget_mac/accelerated_widget_mac.h"
+#include "ui/accessibility/ax_tree_id.h"
 #include "ui/base/cocoa/accessibility_focus_overrider.h"
 #include "ui/base/cocoa/remote_layer_api.h"
 #include "ui/base/mojom/attributed_string.mojom-forward.h"
@@ -167,14 +168,16 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
   void SetIsLoading(bool is_loading) override;
   void RenderProcessGone() override;
   void ShowWithVisibility(PageVisibilityState page_visibility) final;
-  void Destroy() override;
+  void DestroyImpl() override;
+  void OnDestroyOrDefer() override;
   void UpdateTooltipUnderCursor(const std::u16string& tooltip_text) override;
   void UpdateTooltip(const std::u16string& tooltip_text) override;
   gfx::Size GetRequestedRendererSize() override;
   bool IsSurfaceAvailableForCopy() override;
-  void CopyFromSurface(
+  void CopyFromSurfaceImpl(
       const gfx::Rect& src_rect,
       const gfx::Size& output_size,
+      bool is_copy_request_secure,
       base::TimeDelta timeout,
       base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback)
       override;
@@ -189,9 +192,11 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
   gfx::NativeViewAccessible AccessibilityGetNativeViewAccessible() override;
   gfx::NativeViewAccessible AccessibilityGetNativeViewAccessibleForWindow()
       override;
+  ui::AXTreeID AccessibilityGetParentAXTreeID() override;
   std::optional<SkColor> GetBackgroundColor() override;
   viz::SurfaceId GetFallbackSurfaceIdForTesting() const override;
   bool HasSavedCompositorFrame() const override;
+  void SetEvictOnHide(bool evict_on_hide) override;
 
   void TransformPointToRootSurface(gfx::PointF* point) override;
   gfx::Rect GetBoundsInScreen() override;
@@ -201,10 +206,8 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
   void DidNavigate() override;
 
   void CreateUnboundedSurface(
-      mojo::PendingAssociatedReceiver<blink::mojom::UnboundedSurfaceHost> host,
-      mojo::PendingAssociatedRemote<blink::mojom::UnboundedSurfaceClient>
-          client,
-      const gfx::Rect& bounds_in_dips) override;
+      const gfx::Rect& bounds_in_screen,
+      base::WeakPtr<RenderWidgetHostViewBase> subframe_view) override;
 
   blink::mojom::PointerLockResult LockPointer(bool) override;
   blink::mojom::PointerLockResult ChangePointerLock(bool) override;
@@ -550,6 +553,8 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
   // Shuts down the render_widget_host_.  This is a separate function so we can
   // invoke it from the message loop.
   void ShutdownHost();
+  void CleanUpHostObservers() override;
+  void ShutdownAndDisconnect();
 
   // Send updated vsync parameters to the top level display.
   void UpdateDisplayVSyncParameters();
@@ -570,6 +575,7 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
   // RenderWidgetHostViewBase:
   void UpdateBackgroundColor() override;
   bool HasFallbackSurface() const override;
+  void OptOutFrameEviction() override;
   std::optional<DisplayFeature> GetDisplayFeature() override;
   void DisableDisplayFeatureOverrideForEmulation() override;
   void OverrideDisplayFeatureForEmulation(
@@ -723,6 +729,8 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
   // displayed to the user in.
   NSAccessibilityRemoteUIElement* __strong remote_window_accessible_;
 
+  ui::AXTreeID parent_ax_tree_id_ = ui::AXTreeIDUnknown();
+
   // Used to force the NSApplication's focused accessibility element to be the
   // content::BrowserAccessibilityCocoa accessibility tree when the NSView for
   // this is focused.
@@ -749,6 +757,8 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
   // See description of `kDelayUpdateWindowsAfterTextInputStateChanged` for
   // details.
   base::OneShotTimer update_windows_timer_;
+
+  bool disconnected_ = false;
 
   // Factory used to safely scope delayed calls to ShutdownHost().
   base::WeakPtrFactory<RenderWidgetHostViewMac> weak_factory_;

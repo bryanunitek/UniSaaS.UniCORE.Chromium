@@ -11,6 +11,7 @@
 #import "base/scoped_observation.h"
 #import "components/bookmarks/browser/base_bookmark_model_observer.h"
 #import "components/reading_list/core/reading_list_model_observer.h"
+#import "components/send_tab_to_self/send_tab_to_self_model_observer.h"
 #import "ios/chrome/browser/browser_view/public/browser_view_visibility_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser_observer.h"
 #import "ios/chrome/browser/shared/model/browser/browser_user_data.h"
@@ -25,6 +26,10 @@ class BookmarkNode;
 namespace reading_list {
 enum EntrySource;
 }  // namespace reading_list
+
+namespace send_tab_to_self {
+class SendTabToSelfModel;
+}  // namespace send_tab_to_self
 
 class Browser;
 class BrowserViewVisibilityNotifierBrowserAgent;
@@ -46,12 +51,14 @@ class Tracker;
 
 // A browser agent that serves a central manager for all IPHs features that
 // should be triggered by tab and/or tab list changes.
-class TabBasedIPHBrowserAgent : public bookmarks::BaseBookmarkModelObserver,
-                                public BrowserUserData<TabBasedIPHBrowserAgent>,
-                                public BrowserObserver,
-                                public ReadingListModelObserver,
-                                public UrlLoadingObserver,
-                                public web::WebStateObserver {
+class TabBasedIPHBrowserAgent
+    : public bookmarks::BaseBookmarkModelObserver,
+      public BrowserUserData<TabBasedIPHBrowserAgent>,
+      public BrowserObserver,
+      public ReadingListModelObserver,
+      public send_tab_to_self::SendTabToSelfModelObserver,
+      public UrlLoadingObserver,
+      public web::WebStateObserver {
  public:
   TabBasedIPHBrowserAgent(const TabBasedIPHBrowserAgent&) = delete;
   TabBasedIPHBrowserAgent& operator=(const TabBasedIPHBrowserAgent&) = delete;
@@ -92,7 +99,13 @@ class TabBasedIPHBrowserAgent : public bookmarks::BaseBookmarkModelObserver,
                               const GURL& url,
                               reading_list::EntrySource source) override;
 
+  // send_tab_to_self::SendTabToSelfModelObserver
+  void OnModelReady() override;
+
   // UrlLoadingObserver
+  void TabDidPrerenderUrl(const GURL& url,
+                          ui::PageTransition transition_type,
+                          base::WeakPtr<web::WebState> web_state) override;
   void TabDidLoadUrl(const GURL& url,
                      ui::PageTransition transition_type,
                      base::WeakPtr<web::WebState> web_state) override;
@@ -126,6 +139,12 @@ class TabBasedIPHBrowserAgent : public bookmarks::BaseBookmarkModelObserver,
   // to reading list modifications are no longer needed, or when the reading
   // list model itself is being destroyed.
   void StopObservingReadingListModel();
+
+  // Attempts to present the Send Tab to Self omnibox IPH if eligible.
+  void AttemptSendTabToSelfIPH();
+
+  // Attempts to present the bottom omnibox IPH if eligible.
+  void AttemptBottomOmniboxIPH();
 
   // For all IPH features managed by this class, resets their tracker variables
   // to `false`, and remove currently displaying IPH views from the view.
@@ -167,6 +186,11 @@ class TabBasedIPHBrowserAgent : public bookmarks::BaseBookmarkModelObserver,
   // destroyed.
   base::ScopedObservation<ReadingListModel, ReadingListModelObserver>
       reading_list_model_observation_{this};
+  // Automatically removes this observer from the Send Tab to Self model when
+  // destroyed.
+  base::ScopedObservation<send_tab_to_self::SendTabToSelfModel,
+                          send_tab_to_self::SendTabToSelfModelObserver>
+      send_tab_to_self_model_observation_{this};
   // Observer for URL loading.
   raw_ptr<UrlLoadingNotifierBrowserAgent> url_loading_notifier_;
   // Command dispatcher for the browser; used to retrieve help handler.
@@ -184,8 +208,13 @@ class TabBasedIPHBrowserAgent : public bookmarks::BaseBookmarkModelObserver,
   // Whether the user has just tapped an adjacent tab through the tab grid; will
   // be reset to `false` once the active tab is changed.
   bool tapped_adjacent_tab_ = false;
+  // Whether the user has just navigated from the omnibox; will be reset to
+  // `false` after the navigation has completed.
+  bool loaded_from_omnibox_ = false;
   // Whether the BVC is covered by another view.
   bool is_bvc_covered_ = false;
+  // Whether the Send Tab to Self omnibox IPH has been attempted upon startup.
+  bool send_tab_to_self_iph_attempted_ = false;
 };
 
 #endif  // IOS_CHROME_BROWSER_BUBBLE_MODEL_TAB_BASED_IPH_BROWSER_AGENT_H_

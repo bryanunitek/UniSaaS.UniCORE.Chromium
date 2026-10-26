@@ -43,6 +43,8 @@ EnumTraits<MojoTabNetworkState, NativeTabNetworkState>::FromMojom(
 MojoTabAlertState EnumTraits<MojoTabAlertState, NativeTabAlertState>::ToMojom(
     NativeTabAlertState input) {
   switch (input) {
+    case NativeTabAlertState::kNone:
+      return MojoTabAlertState::kNone;
     case NativeTabAlertState::kMediaRecording:
       return MojoTabAlertState::kMediaRecording;
     case NativeTabAlertState::kTabCapturing:
@@ -79,6 +81,8 @@ MojoTabAlertState EnumTraits<MojoTabAlertState, NativeTabAlertState>::ToMojom(
       return MojoTabAlertState::kGlicAccessing;
     case NativeTabAlertState::kGlicSharing:
       return MojoTabAlertState::kGlicSharing;
+    case NativeTabAlertState::kAiModeSharing:
+      return MojoTabAlertState::kAiModeSharing;
   }
   NOTREACHED();
 }
@@ -87,6 +91,8 @@ NativeTabAlertState
 EnumTraits<MojoTabAlertState, NativeTabAlertState>::FromMojom(
     MojoTabAlertState in) {
   switch (in) {
+    case MojoTabAlertState::kNone:
+      return NativeTabAlertState::kNone;
     case MojoTabAlertState::kMediaRecording:
       return NativeTabAlertState::kMediaRecording;
     case MojoTabAlertState::kTabCapturing:
@@ -123,6 +129,8 @@ EnumTraits<MojoTabAlertState, NativeTabAlertState>::FromMojom(
       return NativeTabAlertState::kGlicAccessing;
     case MojoTabAlertState::kGlicSharing:
       return NativeTabAlertState::kGlicSharing;
+    case MojoTabAlertState::kAiModeSharing:
+      return NativeTabAlertState::kAiModeSharing;
   }
   NOTREACHED();
 }

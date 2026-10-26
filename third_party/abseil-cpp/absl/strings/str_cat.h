@@ -109,6 +109,7 @@
 
 #include "absl/base/attributes.h"
 #include "absl/base/config.h"
+#include "absl/base/macros.h"
 #include "absl/base/nullability.h"
 #include "absl/base/port.h"
 #include "absl/meta/type_traits.h"
@@ -381,7 +382,8 @@ class AlphaNum {
                             &digits_[0])) {}
 
   AlphaNum(float f)  // NOLINT(runtime/explicit)
-      : piece_(digits_, numbers_internal::SixDigitsToBuffer(f, digits_)) {}
+      : piece_(digits_, numbers_internal::SixDigitsToBuffer(
+                            static_cast<double>(f), digits_)) {}
   AlphaNum(double f)  // NOLINT(runtime/explicit)
       : piece_(digits_, numbers_internal::SixDigitsToBuffer(f, digits_)) {}
 
@@ -516,8 +518,8 @@ std::string FloatToString(Float f) {
   std::string result;
   StringResizeAndOverwrite(result, numbers_internal::kSixDigitsToBufferSize,
                            [f](char* start, size_t buf_size) {
-                             size_t size =
-                                 numbers_internal::SixDigitsToBuffer(f, start);
+                             size_t size = numbers_internal::SixDigitsToBuffer(
+                                 static_cast<double>(f), start);
                              ABSL_ASSERT(size < buf_size);
                              return size;
                            });

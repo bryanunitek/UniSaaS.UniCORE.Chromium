@@ -15,9 +15,14 @@ export function getHtml(this: IndigoImageReplacementAppElement) {
     .style="object-fit: ${this.objectFit_};">
 </img>
 
+${this.showWatermark_ ? html`
+  <div id="watermark">ai</div>
+` : ''}
+
 ${this.showOverlay_ ? html`
   <indigo-motion-overlay
       .animationState="${this.overlayAnimationState_}"
+      @entry-complete="${this.onEntryComplete_}"
       @motion-complete="${this.onMotionComplete_}">
   </indigo-motion-overlay>
 ` : ''}

@@ -19,11 +19,11 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
-/** A custom binder used to bind the zoom menu item. */
+/** A custom binder used to bind the zoom indicator popup. */
 @NullMarked
-public class PageZoomIndicatorViewBinder {
+class PageZoomIndicatorViewBinder {
     /** Handles binding the view and models changes. */
-    public static void bind(PropertyModel model, View view, PropertyKey key) {
+    static void bind(PropertyModel model, View view, PropertyKey key) {
         if (key == INCREASE_ZOOM_CALLBACK) {
             View zoomInButton = view.findViewById(R.id.zoom_in_button);
             zoomInButton.setOnClickListener(v -> model.get(INCREASE_ZOOM_CALLBACK).run());
@@ -33,17 +33,18 @@ public class PageZoomIndicatorViewBinder {
         } else if (key == INCREASE_ZOOM_ENABLED) {
             ImageButton zoomInButton = view.findViewById(R.id.zoom_in_button);
             zoomInButton.setEnabled(model.get(INCREASE_ZOOM_ENABLED));
-            zoomInButton.setFocusable(model.get(INCREASE_ZOOM_ENABLED));
+            zoomInButton.setFocusable(false);
         } else if (key == DECREASE_ZOOM_ENABLED) {
             ImageButton zoomOutButton = view.findViewById(R.id.zoom_out_button);
             zoomOutButton.setEnabled(model.get(DECREASE_ZOOM_ENABLED));
-            zoomOutButton.setFocusable(model.get(DECREASE_ZOOM_ENABLED));
+            zoomOutButton.setFocusable(false);
         } else if (key == ZOOM_PERCENT_TEXT) {
             ((TextView) view.findViewById(R.id.zoom_percentage))
                     .setText(model.get(ZOOM_PERCENT_TEXT));
         } else if (key == RESET_ZOOM_CALLBACK) {
             View resetZoomButton = view.findViewById(R.id.reset_zoom_button);
             resetZoomButton.setOnClickListener(v -> model.get(RESET_ZOOM_CALLBACK).run());
+            resetZoomButton.setFocusable(false);
         }
     }
 }

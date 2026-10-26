@@ -53,8 +53,10 @@ class CORE_EXPORT MainGap {
 
   wtf_size_t GetCrossGapBeforeStart() const;
   wtf_size_t GetCrossGapBeforeEnd() const;
+  wtf_size_t GetCrossGapBeforeCount() const;
   wtf_size_t GetCrossGapAfterStart() const;
   wtf_size_t GetCrossGapAfterEnd() const;
+  wtf_size_t GetCrossGapAfterCount() const;
 
   void IncrementRangeOfCrossGapsBefore(wtf_size_t cross_gap_index) {
     range_of_cross_gaps_before_.Increment(cross_gap_index);
@@ -105,11 +107,11 @@ class CORE_EXPORT MainGap {
 
   // In Grid, because rows and columns neatly align, we can avoid duplication by
   // storing cross gaps once and share them across all main gaps. As a result,
-  // each main gap can be mapped to all cross gaps. Unlike Grid, each flex line
-  // will have independent intersections introduced by the item flow. As such,
-  // we cannot share cross axis gap intersections across gaps in the main axis.
-  // As a result, each main gap is mapped to cross gaps that intersect it (i.e.
-  // falling either before or after that main gap).
+  // each main gap can be mapped to all cross gaps.
+  // For Flex and grid-lanes, these ranges contain the contiguous `CrossGap`
+  // runs on each side of this `MainGap`. A grid-lanes `CrossGap` belongs to one
+  // lane, so it appears in the "before" range of the following main gap and the
+  // "after" range of the preceding `MainGap`.
   CrossGapRange range_of_cross_gaps_before_;
   CrossGapRange range_of_cross_gaps_after_;
 
@@ -117,6 +119,20 @@ class CORE_EXPORT MainGap {
   // (Blocked / Empty). A main gap usually spans range [1, N) in one piece, but
   // the presence of spanning items or empty cells can break it into multiple
   // state-specific sub‑ranges.
+  //
+  // Unlike grid and multicol, grid-lanes has no shared track structure along
+  // the stacking axis. Segment bounds depend on cross gaps from both adjacent
+  // lanes. Store only spanner blocking here; paint uses the generated
+  // intersections to determine segment bounds and query each lane's empty
+  // space.
+  //
+  // TODO(javiercon): Grid-lanes segment states now come from two sources:
+  // spanner blocking from these ranges, and emptiness from paint-time queries.
+  // Grid-lanes applies visibility to segments after `rule-break` forms them,
+  // while other containers apply it while forming segments. When the other
+  // containers are changed to apply visibility after segments are formed,
+  // unify visibility handling for all containers and investigate whether
+  // spanner blocking can also be determined in paint.
   std::optional<GapSegmentStateRanges> gap_segment_state_ranges_;
 
   // Set to true when any gap segment range has a `kBlocked` state. This avoids

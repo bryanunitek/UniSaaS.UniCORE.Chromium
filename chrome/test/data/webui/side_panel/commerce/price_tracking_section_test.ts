@@ -76,7 +76,7 @@ suite('PriceTrackingSectionTest', () => {
     }
 
     assertEquals(
-        priceTrackingSection.$.toggle.getAttribute('aria-pressed')!,
+        priceTrackingSection.$.toggle.getAttribute('aria-checked')!,
         tracked ? 'true' : 'false');
   }
 
@@ -156,7 +156,7 @@ suite('PriceTrackingSectionTest', () => {
       }
     });
 
-    test(`Ignore unrealted product tracking status change`, async () => {
+    test('Ignore unrealted product tracking status change', async () => {
       priceTrackingSection.isProductTracked = tracked;
 
       document.body.appendChild(priceTrackingSection);
@@ -192,7 +192,7 @@ suite('PriceTrackingSectionTest', () => {
     });
   });
 
-  test(`Observe current product tracking status change`, async () => {
+  test('Observe current product tracking status change', async () => {
     priceTrackingSection.isProductTracked = false;
 
     document.body.appendChild(priceTrackingSection);
@@ -207,7 +207,7 @@ suite('PriceTrackingSectionTest', () => {
     checkPriceTrackingSectionRendering(false);
   });
 
-  test(`Trigger bookmark editor`, async () => {
+  test('Trigger bookmark editor', async () => {
     priceTrackingSection.isProductTracked = true;
 
     document.body.appendChild(priceTrackingSection);
@@ -227,7 +227,7 @@ suite('PriceTrackingSectionTest', () => {
             'EditedBookmarkFolderFromPriceInsightsSidePanel'));
   });
 
-  test(`Render error message`, async () => {
+  test('Render error message', async () => {
     priceTrackingSection.isProductTracked = false;
 
     document.body.appendChild(priceTrackingSection);
@@ -243,7 +243,7 @@ suite('PriceTrackingSectionTest', () => {
         priceTrackingSection.$.toggleAnnotation.textContent?.trim(),
         loadTimeData.getString('trackPriceError'));
     assertEquals(
-        priceTrackingSection.$.toggle.getAttribute('aria-pressed'), 'false');
+        priceTrackingSection.$.toggle.getAttribute('aria-checked'), 'false');
 
     callbackRouterRemote.operationFailedForBookmark(bookmarkProductInfo, false);
     await microtasksFinished();
@@ -255,10 +255,10 @@ suite('PriceTrackingSectionTest', () => {
         priceTrackingSection.$.toggleAnnotation.textContent?.trim(),
         loadTimeData.getString('trackPriceError'));
     assertEquals(
-        priceTrackingSection.$.toggle.getAttribute('aria-pressed'), 'true');
+        priceTrackingSection.$.toggle.getAttribute('aria-checked'), 'true');
   });
 
-  test(`Observe product bookmark move event`, async () => {
+  test('Observe product bookmark move event', async () => {
     priceTrackingSection.isProductTracked = true;
 
     document.body.appendChild(priceTrackingSection);

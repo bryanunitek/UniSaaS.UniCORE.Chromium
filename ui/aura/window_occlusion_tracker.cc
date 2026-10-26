@@ -4,8 +4,9 @@
 
 #include "ui/aura/window_occlusion_tracker.h"
 
+#include <ranges>
+
 #include "base/auto_reset.h"
-#include "base/containers/adapters.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/skia/include/core/SkRect.h"
 #include "third_party/skia/include/core/SkRegion.h"
@@ -13,8 +14,8 @@
 #include "ui/aura/native_window_occlusion_tracker.h"
 #include "ui/aura/window_occlusion_change_builder.h"
 #include "ui/aura/window_tree_host.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/geometry/transform.h"
@@ -179,32 +180,18 @@ float GetLayerCombinedTargetOpacity(const ui::Layer* layer) {
 
 }  // namespace
 
-WindowOcclusionTracker::InnerClient::InnerClient(
-    WindowOcclusionTracker* occlusion_tracker)
-    : occlusion_tracker_(
-          occlusion_tracker ? occlusion_tracker
-                            : Env::GetInstance()->GetWindowOcclusionTracker()) {
-  CHECK(occlusion_tracker_);
-}
-
-WindowOcclusionTracker::InnerClient::~InnerClient() = default;
-
-WindowOcclusionTracker::ScopedPause::ScopedPause(
-    WindowOcclusionTracker* occlusion_tracker)
-    : InnerClient(occlusion_tracker) {
-  occlusion_tracker_->Pause();
+WindowOcclusionTracker::ScopedPause::ScopedPause() {
+  Env::GetInstance()->GetWindowOcclusionTracker()->Pause();
 }
 
 WindowOcclusionTracker::ScopedPause::~ScopedPause() {
-  occlusion_tracker_->Unpause();
+  Env::GetInstance()->GetWindowOcclusionTracker()->Unpause();
 }
 
-WindowOcclusionTracker::ScopedExclude::ScopedExclude(
-    Window* window,
-    WindowOcclusionTracker* occlusion_tracker)
-    : InnerClient(occlusion_tracker), window_(window) {
-  window->AddObserver(this);
-  occlusion_tracker_->Exclude(window_);
+WindowOcclusionTracker::ScopedExclude::ScopedExclude(Window* window)
+    : window_(window) {
+  window_->AddObserver(this);
+  Env::GetInstance()->GetWindowOcclusionTracker()->Exclude(window_);
 }
 
 WindowOcclusionTracker::ScopedExclude::~ScopedExclude() {
@@ -219,18 +206,15 @@ void WindowOcclusionTracker::ScopedExclude::OnWindowDestroying(Window* window) {
 void WindowOcclusionTracker::ScopedExclude::Shutdown() {
   if (window_) {
     window_->RemoveObserver(this);
-    occlusion_tracker_->Unexclude(window_);
+    Env::GetInstance()->GetWindowOcclusionTracker()->Unexclude(window_);
     window_ = nullptr;
-    occlusion_tracker_ = nullptr;
   }
 }
 
-WindowOcclusionTracker::ScopedForceVisible::ScopedForceVisible(
-    Window* window,
-    WindowOcclusionTracker* occlusion_tracker)
-    : InnerClient(occlusion_tracker), window_(window) {
+WindowOcclusionTracker::ScopedForceVisible::ScopedForceVisible(Window* window)
+    : window_(window) {
   window_->AddObserver(this);
-  occlusion_tracker_->ForceWindowVisible(window_);
+  Env::GetInstance()->GetWindowOcclusionTracker()->ForceWindowVisible(window_);
 }
 
 WindowOcclusionTracker::ScopedForceVisible::~ScopedForceVisible() {
@@ -246,9 +230,9 @@ void WindowOcclusionTracker::ScopedForceVisible::OnWindowDestroying(
 void WindowOcclusionTracker::ScopedForceVisible::Shutdown() {
   if (window_) {
     window_->RemoveObserver(this);
-    occlusion_tracker_->RemoveForceWindowVisible(window_);
+    Env::GetInstance()->GetWindowOcclusionTracker()->RemoveForceWindowVisible(
+        window_);
     window_ = nullptr;
-    occlusion_tracker_ = nullptr;
   }
 }
 
@@ -296,9 +280,7 @@ void WindowOcclusionTracker::Track(Window* window) {
 
 void WindowOcclusionTracker::Untrack(Window* window) {
   auto builder =
-      occlusion_change_builder_factory_
-          ? occlusion_change_builder_factory_.Run()
-          : WindowOcclusionChangeBuilder::Create(/*disallow_unknown=*/false);
+      WindowOcclusionChangeBuilder::Create(/*disallow_unknown=*/false);
 
   DCHECK(window);
   DCHECK(window != window->GetRootWindow());
@@ -317,6 +299,24 @@ void WindowOcclusionTracker::Untrack(Window* window) {
 
   window_observations_.RemoveObservation(window);
   builder->Add(window, Window::OcclusionState::UNKNOWN, {});
+}
+
+Window::OcclusionState WindowOcclusionTracker::GetComputedOcclusionState(
+    Window* window) const {
+  auto it = tracked_windows_.find(window);
+  if (it == tracked_windows_.end()) {
+    return Window::OcclusionState::UNKNOWN;
+  }
+  return it->second.occlusion_state;
+}
+
+bool WindowOcclusionTracker::IsTracking(Window* window) const {
+  return WindowIsTracked(window);
+}
+
+void WindowOcclusionTracker::ForceComputeOcclusion() {
+  base::AutoReset<int> auto_reset(&num_pause_occlusion_tracking_, 0);
+  MaybeComputeOcclusion();
 }
 
 WindowOcclusionTracker::OcclusionData
@@ -436,26 +436,20 @@ void WindowOcclusionTracker::MaybeComputeOcclusion() {
   // Sanity check: Occlusion states in |tracked_windows_| should match those
   // returned by Window::GetOcclusionState() if the default
   // `WindowOcclusionChangeBuilder` is being used.
-  DCHECK(occlusion_change_builder_factory_ ||
-         OcclusionStatesMatch(tracked_windows_));
+  DCHECK(OcclusionStatesMatch(tracked_windows_));
 }
 
 void WindowOcclusionTracker::NotifyOcclusionState(
     std::optional<bool> exceeded_max_num_times_occlusion_recomputed) {
   std::unique_ptr<WindowOcclusionChangeBuilder> change_builder =
-      occlusion_change_builder_factory_
-          ? occlusion_change_builder_factory_.Run()
-          : WindowOcclusionChangeBuilder::Create();
+      WindowOcclusionChangeBuilder::Create();
 
   for (auto& it : tracked_windows_) {
     Window* window = it.first;
-    if (it.second.occlusion_state == Window::OcclusionState::UNKNOWN) {
-      continue;
-    }
-
     // Fallback to VISIBLE/HIDDEN if the maximum number of times that
     // occlusion can be recomputed was exceeded.
-    if (exceeded_max_num_times_occlusion_recomputed.value_or(false)) {
+    if (exceeded_max_num_times_occlusion_recomputed.value_or(false) &&
+        it.second.occlusion_state != Window::OcclusionState::UNKNOWN) {
       if (WindowIsVisible(window)) {
         it.second.occlusion_state = Window::OcclusionState::VISIBLE;
       } else {
@@ -466,6 +460,10 @@ void WindowOcclusionTracker::NotifyOcclusionState(
 
     auto occlusion_state =
         it.second.locked_occlusion_state.value_or(it.second.occlusion_state);
+    if (occlusion_state == Window::OcclusionState::UNKNOWN) {
+      continue;
+    }
+
     auto occluded_region = it.second.locked_occlusion_state
                                ? it.second.locked_occluded_region
                                : it.second.occluded_region;
@@ -529,7 +527,7 @@ bool WindowOcclusionTracker::RecomputeOcclusionImpl(
   SkRegion region_for_forced_visible_windows;
   SkRegion* occluded_region_for_children =
       force_visible ? &region_for_forced_visible_windows : occluded_region;
-  for (aura::Window* child : base::Reversed(window->children())) {
+  for (aura::Window* child : std::views::reverse(window->children())) {
     has_visible_child |= RecomputeOcclusionImpl(
         child, transform_relative_to_root, clipped_bounds_for_children,
         occluded_region_for_children);
@@ -568,10 +566,10 @@ bool WindowOcclusionTracker::VisibleWindowCanOccludeOtherWindows(
                                : window->layer()->GetCombinedOpacity();
   // Just check the alpha on this layer as an alpha on parent solid color layers
   // will not affect children's opacity.
-  if (window->layer()->type() == ui::LAYER_SOLID_COLOR) {
-    auto color = ShouldUseTargetValues() ? window->layer()->GetTargetColor()
-                                         : window->layer()->background_color();
-    combined_opacity *= SkColorGetA(color) / 255.f;
+  if (auto* layer = window->layer()->AsSolidColor()) {
+    auto color = ShouldUseTargetValues() ? layer->GetTargetColor()
+                                         : layer->background_color();
+    combined_opacity *= color.fA;
   }
   return (!window->GetTransparent() && WindowHasContent(window) &&
           combined_opacity == 1.0f &&
@@ -581,10 +579,7 @@ bool WindowOcclusionTracker::VisibleWindowCanOccludeOtherWindows(
 }
 
 bool WindowOcclusionTracker::WindowHasContent(const Window* window) const {
-  if (window->layer()->type() != ui::LAYER_NOT_DRAWN)
-    return true;
-
-  return false;
+  return !window->layer()->AsNotDrawn();
 }
 
 void WindowOcclusionTracker::CleanupAnimatedWindows() {
@@ -896,7 +891,19 @@ void WindowOcclusionTracker::Pause() {
 void WindowOcclusionTracker::Unpause() {
   --num_pause_occlusion_tracking_;
   DCHECK_GE(num_pause_occlusion_tracking_, 0);
-  MaybeComputeOcclusion();
+  if (num_pause_occlusion_tracking_ == 0) {
+    for (auto& it : tracked_windows_) {
+      if (it.second.lock_state == LockState::kUnlockPending) {
+        it.second.locked_occlusion_state.reset();
+        it.second.lock_state = LockState::kUnlocked;
+        Window* root_window = it.first->GetRootWindow();
+        if (root_window) {
+          MarkRootWindowAsDirty(root_window);
+        }
+      }
+    }
+    MaybeComputeOcclusion();
+  }
 }
 
 void WindowOcclusionTracker::Exclude(Window* window) {
@@ -945,11 +952,19 @@ void WindowOcclusionTracker::Lock(Window* window, bool lock) {
   auto& occlusion_data = tracked_window_iter->second;
 
   if (lock) {
-    occlusion_data.locked_occlusion_state = occlusion_data.occlusion_state;
-    occlusion_data.locked_occluded_region = occlusion_data.occluded_region;
+    CHECK_NE(occlusion_data.lock_state, LockState::kLocked);
+    if (occlusion_data.lock_state == LockState::kUnlocked) {
+      occlusion_data.locked_occlusion_state = occlusion_data.occlusion_state;
+      occlusion_data.locked_occluded_region = occlusion_data.occluded_region;
+    }
+    occlusion_data.lock_state = LockState::kLocked;
   } else {
-    occlusion_data.locked_occlusion_state.reset();
-    if (num_pause_occlusion_tracking_ == 0) {
+    CHECK_EQ(occlusion_data.lock_state, LockState::kLocked);
+    if (num_pause_occlusion_tracking_ > 0) {
+      occlusion_data.lock_state = LockState::kUnlockPending;
+    } else {
+      occlusion_data.locked_occlusion_state.reset();
+      occlusion_data.lock_state = LockState::kUnlocked;
       NotifyOcclusionState(
           /*exceeded_max_num_times_occlusion_recomputed=*/std::nullopt);
     }

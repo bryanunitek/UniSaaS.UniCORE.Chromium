@@ -8,6 +8,7 @@
 
 #import "base/strings/strcat.h"
 #import "base/strings/utf_string_conversions.h"
+#import "components/device_signals/core/browser/user_permission_service.h"
 #import "components/enterprise/browser/reporting/common_pref_names.h"
 #import "components/enterprise/connectors/core/features.h"
 #import "components/grit/management_resources.h"
@@ -20,6 +21,7 @@
 #import "ios/chrome/browser/enterprise/connectors/connectors_service.h"
 #import "ios/chrome/browser/enterprise/connectors/connectors_service_factory.h"
 #import "ios/chrome/browser/enterprise/connectors/connectors_util.h"
+#import "ios/chrome/browser/enterprise/signals/model/ios_user_permission_service_factory.h"
 #import "ios/chrome/browser/policy/model/browser_policy_connector_ios.h"
 #import "ios/chrome/browser/policy/ui_bundled/management_util.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
@@ -96,6 +98,14 @@ bool IsProfileReportingEnabled(PrefService* profile_prefs) {
       enterprise_reporting::kCloudProfileReportingEnabled);
 }
 
+// Whether the Device Signals disclosure should be displayed.
+bool IsDeviceSignalsDisclosureEnabled(
+    const device_signals::UserPermissionService* user_permission_service) {
+  return user_permission_service &&
+         user_permission_service->CanCollectSignals() ==
+             device_signals::UserPermission::kGranted;
+}
+
 // Whether the "Page is visited" event subsection under Chrome Enteprise
 // Connectors should be displayed. This subsection is visible if Enterprise Url
 // filtering is enabled.
@@ -105,7 +115,7 @@ bool IsPageVisitEventEnabled(ConnectorsService* connectors_service) {
              connectors_service->GetAppliedRealTimeUrlCheck());
 }
 
-// Whether the "Security event occurs" event subsection under Chrome Enteprise
+// Whether the "Security event occurs" event subsection under Chrome Enterprise
 // Connectors should be displayed. This subsection is visible if Enterprise
 // Event Reporting is enabled.
 bool IsSecurityEventEnabled(ConnectorsService* connectors_service) {
@@ -117,6 +127,14 @@ bool IsSecurityEventEnabled(ConnectorsService* connectors_service) {
 // Download connector is enabled.
 bool IsFileDownloadConnectorEnabled(ConnectorsService* connectors_service) {
   return enterprise_connectors::IsDownloadConnectorEnabled(connectors_service);
+}
+
+// Whether the "Text is entered" event subsection under Chrome Enterprise
+// Connectors should be displayed. This subsection is visible if Bulk Data Entry
+// connector is enabled.
+bool IsTextEnterConnectorEnabled(ConnectorsService* connectors_service) {
+  return enterprise_connectors::IsBulkDataEntryConnectorEnabled(
+      connectors_service);
 }
 
 // Returns the message explaining that Chrome Enterprise Connectors are turned
@@ -179,6 +197,17 @@ std::u16string GetFileDownloadEventTitle() {
 // subsection.
 std::u16string GetFileDownloadEventDescription() {
   return GetEventDescription(IDS_MANAGEMENT_FILE_DOWNLOADED_VISIBLE_DATA);
+}
+
+// Title for the Chrome Enterprise Connectors Text Enter event subsection.
+std::u16string GetTextEnterEventTitle() {
+  return GetEventTitle(IDS_MANAGEMENT_TEXT_ENTERED_EVENT);
+}
+
+// Description for the Chrome Enterprise Connectors Text Enter event
+// subsection.
+std::u16string GetTextEnterEventDescription() {
+  return GetEventDescription(IDS_MANAGEMENT_TEXT_ENTERED_VISIBLE_DATA);
 }
 
 // Creates the HTML source for the chrome://management page.
@@ -246,6 +275,14 @@ web::WebUIIOSDataSource* CreateManagementUIHTMLSource(web::WebUIIOS* web_ui) {
   source->AddLocalizedString("profileReportingLearnMore",
                              IDS_MANAGEMENT_PROFILE_REPORTING_LEARN_MORE);
 
+  // Device signals disclosure
+  source->AddLocalizedString("deviceSignalsDisclosure",
+                             IDS_MANAGEMENT_DEVICE_SIGNALS_DISCLOSURE);
+  source->AddBoolean(
+      "deviceSignalsDisclosureEnabled",
+      IsDeviceSignalsDisclosureEnabled(
+          IOSUserPermissionServiceFactory::GetForProfile(profile)));
+
   // Connectors Section
   auto* connectors_service =
       enterprise_connectors::ConnectorsServiceFactory::GetForProfile(profile);
@@ -270,6 +307,11 @@ web::WebUIIOSDataSource* CreateManagementUIHTMLSource(web::WebUIIOS* web_ui) {
                      IsFileDownloadConnectorEnabled(connectors_service));
   source->AddString("fileDownloadEventTitle", GetFileDownloadEventTitle());
   source->AddString("fileDownloadEventData", GetFileDownloadEventDescription());
+
+  source->AddBoolean("textEnterEventEnabled",
+                     IsTextEnterConnectorEnabled(connectors_service));
+  source->AddString("textEnterEventTitle", GetTextEnterEventTitle());
+  source->AddString("textEnterEventData", GetTextEnterEventDescription());
 
   source->UseStringsJs();
   source->AddResourcePaths(kManagementResources);

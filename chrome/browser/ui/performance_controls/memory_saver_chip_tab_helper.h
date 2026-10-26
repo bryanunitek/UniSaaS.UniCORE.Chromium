@@ -58,7 +58,7 @@ class MemorySaverChipTabHelper : public tabs::ContentsObservingTabFeature,
  private:
   // Threshold was selected based on the 75th percentile of tab memory usage.
   static constexpr base::ByteSize kExpandedMemorySaverChipThreshold =
-      base::MiBU(197);
+      base::MiB(197);
 
   static constexpr base::TimeDelta kExpandedMemorySaverChipFrequency =
       base::Days(1);
@@ -92,8 +92,6 @@ class MemorySaverChipTabHelper : public tabs::ContentsObservingTabFeature,
       performance_manager::user_tuning::UserPerformanceTuningManager::Observer>
       user_performance_tuning_manager_observation_{this};
   bool is_memory_saver_mode_enabled_ = false;
-
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
 #endif  // CHROME_BROWSER_UI_PERFORMANCE_CONTROLS_MEMORY_SAVER_CHIP_TAB_HELPER_H_

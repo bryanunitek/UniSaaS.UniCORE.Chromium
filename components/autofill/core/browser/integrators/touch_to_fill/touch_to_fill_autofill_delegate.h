@@ -11,9 +11,10 @@
 
 namespace autofill {
 
-// An interface for interaction with the bottom sheet UI controller, which is
-// `TouchToFillAutofillController` on Android. The delegate will supply the
-// data to show and will be notified of events by the controller.
+// An interface for interaction with the bottom sheet UI controller for
+// non-payments autofill, which is `TouchToFillAutofillController` on Android.
+// The delegate will supply the data to show and will be notified of events by
+// the controller.
 class TouchToFillAutofillDelegate {
  public:
   virtual ~TouchToFillAutofillDelegate() = default;
@@ -33,11 +34,11 @@ class TouchToFillAutofillDelegate {
   // Hides the TTF Autofill surface if one is shown.
   virtual void HideTouchToFill() = 0;
 
-  // Called when the TTF Autofill surface is shown.
-  virtual void OnShow() = 0;
-
   // Called when the user acknowledges the TTF Autofill notice.
   virtual void OnNoticeAcknowledged() = 0;
+
+  // Called when the user clicks the Manage settings link on the notice.
+  virtual void OnSettingsLinkClicked() = 0;
 
   // Called when the TTF Autofill surface is dismissed.
   virtual void OnDismissed() = 0;

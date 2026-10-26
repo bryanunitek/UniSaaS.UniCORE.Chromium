@@ -5,7 +5,6 @@
 import '../os_settings_page/settings_card.js';
 import '../settings_shared.css.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {SliderTick} from 'chrome://resources/ash/common/cr_elements/cr_slider/cr_slider.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
@@ -19,7 +18,8 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {routes} from '../router.js';
 
 import {getTemplate} from './mouse_keys_subpage.html.js';
@@ -205,12 +205,14 @@ export class SettingsMouseKeysSubpageElement extends
     Setting.kMouseKeysEnabled,
   ]);
 
-  private readonly mouseKeysDominantHandOptions_:
+  declare private readonly mouseKeysDominantHandOptions_:
       Array<{value: number, name: string}>;
-  private readonly numKeypadPreviewOptions_: KeyboardPreviewOption[];
-  private primaryKeyboardRightHandPreviewOptions_: KeyboardPreviewOption[];
-  private primaryKeyboardLeftHandPreviewOptions_: KeyboardPreviewOption[];
-  private toggleLabel_: string;
+  declare private readonly numKeypadPreviewOptions_: KeyboardPreviewOption[];
+  declare private primaryKeyboardRightHandPreviewOptions_:
+      KeyboardPreviewOption[];
+  declare private primaryKeyboardLeftHandPreviewOptions_:
+      KeyboardPreviewOption[];
+  declare private toggleLabel_: string;
 
   private getToggleLabel_(): string {
     return this.getPref('settings.a11y.mouse_keys.enabled').value ?

@@ -13,7 +13,6 @@
 
 #include "base/containers/span.h"
 #include "base/types/pass_key.h"
-#include "base/types/zip.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
@@ -22,6 +21,29 @@
 #include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill {
+
+bool ShouldRecordFillingHistory(FillingProduct filling_product) {
+  switch (filling_product) {
+    case FillingProduct::kAddress:
+    case FillingProduct::kAutofillAi:
+    case FillingProduct::kCreditCard:
+    case FillingProduct::kLoyaltyCard:
+    case FillingProduct::kOneTimePassword:
+      return true;
+    case FillingProduct::kNone:
+    case FillingProduct::kMerchantPromoCode:
+    case FillingProduct::kIban:
+    case FillingProduct::kAutocomplete:
+    case FillingProduct::kPasskey:
+    case FillingProduct::kPassword:
+    case FillingProduct::kCompose:
+    case FillingProduct::kIdentityCredential:
+    case FillingProduct::kDataList:
+    case FillingProduct::kAtMemory:
+      return false;
+  }
+  NOTREACHED();
+}
 
 FormAutofillHistory::FieldFillingEntry::FieldFillingEntry(
     std::u16string field_value,

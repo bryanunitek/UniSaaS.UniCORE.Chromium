@@ -7,6 +7,9 @@
 
 #import <Foundation/Foundation.h>
 
+#import <optional>
+
+#import "components/autofill/core/common/unique_ids.h"
 #import "components/password_manager/core/browser/password_store/password_store_interface.h"
 #import "ios/chrome/browser/autofill/manual_fill/coordinator/form_input_interaction_delegate.h"
 #import "ios/chrome/browser/autofill/model/form_suggestion_client.h"
@@ -72,6 +75,10 @@ class WebStateList;
 // Returns YES if the last focused field is of type 'password'.
 - (BOOL)lastFocusedFieldWasObfuscated;
 
+// Returns the global ID of the last focused field, or std::nullopt if no valid
+// field is focused or if the frame is non-cryptographic.
+- (std::optional<autofill::FieldGlobalId>)lastFocusedFieldGlobalId;
+
 // Returns the main filling product of the current FormInputSuggestionsProvider.
 - (autofill::FillingProduct)currentProviderMainFillingProduct;
 
@@ -81,9 +88,15 @@ class WebStateList;
 // Clears suggestions and requests suggestions again for the same form.
 - (void)resetSuggestions;
 
+// Returns the username for the given passkey suggestion.
+- (NSString*)usernameForSuggestion:(FormSuggestion*)suggestion;
+
 // Returns YES if the suggestion label with the given RP ID should show its RP
 // ID.
 - (BOOL)shouldShowRPId:(NSString*)rpId;
+
+// Handles editing the suggestion.
+- (void)openEditForSuggestion:(FormSuggestion*)suggestion;
 
 @end
 

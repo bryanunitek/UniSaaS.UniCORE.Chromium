@@ -23,7 +23,7 @@ import org.chromium.ui.widget.AnchoredPopupWindow.VerticalOrientation;
 
 /** Unit tests for the static positioning methods in {@link FlyoutPopupSpecCalculator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, shadows = ShadowView.class, qualifiers = "w600dp-h1000dp-mdpi")
+@Config(shadows = ShadowView.class, qualifiers = "w600dp-h1000dp-mdpi")
 public final class FlyoutPopupSpecCalculatorTest {
     private FlyoutPopupSpecCalculator mCalculator;
 
@@ -38,6 +38,7 @@ public final class FlyoutPopupSpecCalculatorTest {
     private int mPaddingY;
     private int mMarginPx;
     private int mMaxWidthPx;
+    private int mMaxHeightPx;
     private int mDesiredWidthPx;
     private int mDesiredHeightPx;
     private @HorizontalOrientation int mPreferredHorizontalOrientation;
@@ -92,6 +93,18 @@ public final class FlyoutPopupSpecCalculatorTest {
                 /* expectedRect= */ new Rect(250, 0, 400, 300));
     }
 
+    @Test
+    public void flyoutPopupSpecCalculatorTest_ExtraPaddingY() {
+        mContentView.setPadding(0, 5, 0, 0);
+        mCalculator = new FlyoutPopupSpecCalculator(/* extraPaddingY= */ 25);
+
+        // Total top offset = 5 (contentView padding) + 25 (extraPaddingY) = 30.
+        doTestFlyoutAnchoredPopupAtRect(
+                "Anchored with extra padding Y.",
+                /* anchoredRect= */ new Rect(0, 100, 100, 150),
+                /* expectedRect= */ new Rect(100, 70, 250, 370));
+    }
+
     /**
      * Test cases for {@link FlyoutPopupSpecCalculator#calculatePopupWindowSpec}, calculation is
      * explained at each call site.
@@ -104,10 +117,12 @@ public final class FlyoutPopupSpecCalculatorTest {
                         anchoredRect,
                         mContentView,
                         mRootWidth,
+                        mRootHeight,
                         mPaddingX,
                         mPaddingY,
                         mMarginPx,
                         mMaxWidthPx,
+                        mMaxHeightPx,
                         mDesiredWidthPx,
                         mDesiredHeightPx,
                         mPreferredHorizontalOrientation,
@@ -131,6 +146,7 @@ public final class FlyoutPopupSpecCalculatorTest {
         mPaddingY = 0;
         mMarginPx = 0;
         mMaxWidthPx = 0;
+        mMaxHeightPx = 0;
         mDesiredWidthPx = 0;
         mDesiredHeightPx = 0;
         mPreferredHorizontalOrientation = HorizontalOrientation.MAX_AVAILABLE_SPACE;

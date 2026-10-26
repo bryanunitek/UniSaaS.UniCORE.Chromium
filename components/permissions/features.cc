@@ -40,6 +40,9 @@ BASE_FEATURE(kPermissionsAIv4, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kPermissionsAIP92, base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kPermissionsAILikelihoodOrRelevance,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kPermissionOnDeviceNotificationPredictions,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -84,12 +87,6 @@ BASE_FEATURE(kRecordChooserPermissionLastVisitedTimestamps,
 
 #endif  // BUILDFLAG(IS_ANDROID)
 
-// When enabled, blocks condition to exclude auto granted permissions for
-// storage access exceptions. This will allow RWS permission grants to be
-// visible in the Embedded content settings page.
-BASE_FEATURE(kShowRelatedWebsiteSetsPermissionGrants,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 BASE_FEATURE(kCpssUseTfliteSignatureRunner, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kGlicActorPermissionsAutoReject, base::FEATURE_ENABLED_BY_DEFAULT);
@@ -122,7 +119,7 @@ BASE_FEATURE(kPermissionsGestureGatedPrompts,
 // persistently (until the tab is navigated away) if a document requests
 // notification permission.
 BASE_FEATURE(kPermanentNotificationSubscribeInPageInfo,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace features
@@ -313,6 +310,11 @@ const base::FeatureParam<bool> kPermissionsGestureGatedPromptsMuteNotifications{
 const base::FeatureParam<bool> kPermissionsGestureGatedPromptsMuteGeolocation{
     &permissions::features::kPermissionsGestureGatedPrompts, "mute_geolocation",
     false};
+
+const base::FeatureParam<bool>
+    kPermissionsGestureGatedPromptsExcludeSameOriginNavigations{
+        &permissions::features::kPermissionsGestureGatedPrompts,
+        "exclude_same_origin_navigations", false};
 
 #if !BUILDFLAG(IS_ANDROID)
 const base::FeatureParam<bool> kKeyboardLockPromptUIStyle{

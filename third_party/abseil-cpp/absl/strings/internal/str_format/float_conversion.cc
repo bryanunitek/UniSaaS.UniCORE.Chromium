@@ -149,8 +149,7 @@ class BinaryToDecimal {
     assert(exp <= std::numeric_limits<MaxFloatType>::max_exponent);
     static_assert(
         StackArray::kMaxCapacity >=
-            ChunksNeeded(std::numeric_limits<MaxFloatType>::max_exponent),
-        "");
+            ChunksNeeded(std::numeric_limits<MaxFloatType>::max_exponent));
 
     StackArray::RunWithCapacity(
         ChunksNeeded(exp),
@@ -267,8 +266,7 @@ class FractionalDigitGenerator {
     const int margin = Limits::digits + 128;
     assert(-exp >= Limits::min_exponent - margin);
     static_assert(StackArray::kMaxCapacity >=
-                      ChunksNeeded(margin - Limits::min_exponent),
-                  "");
+                      ChunksNeeded(margin - Limits::min_exponent));
     StackArray::RunWithCapacity(
         ChunksNeeded(exp), [=](absl::Span<uint32_t> input) {
           f(FractionalDigitGenerator(input, v, exp));
@@ -1178,8 +1176,7 @@ template <typename Float>
 struct Decomposed {
   using MantissaType =
       std::conditional_t<std::is_same_v<long double, Float>, uint128, uint64_t>;
-  static_assert(std::numeric_limits<Float>::digits <= sizeof(MantissaType) * 8,
-                "");
+  static_assert(std::numeric_limits<Float>::digits <= sizeof(MantissaType) * 8);
   MantissaType mantissa;
   int exponent;
 };
@@ -1499,6 +1496,7 @@ void FormatENegativeExpSlow(uint128 mantissa, int exp, bool uppercase,
         if (state.sign_char != '\0') {
           state.sink->Append(1, state.sign_char);
         }
+        state.sink->Append(padding.zeros, '0');
 
         state.sink->Append(1, static_cast<char>(first_digit + '0'));
         if (precision > 0 || state.conv.has_alt_flag()) {
@@ -1602,6 +1600,7 @@ void FormatEPositiveExpSlow(uint128 mantissa, int exp, bool uppercase,
         if (state.sign_char != '\0') {
           state.sink->Append(1, state.sign_char);
         }
+        state.sink->Append(padding.zeros, '0');
         state.sink->Append(1, static_cast<char>(first_digit + '0'));
         --digits_to_go;
         if (print_dot) {

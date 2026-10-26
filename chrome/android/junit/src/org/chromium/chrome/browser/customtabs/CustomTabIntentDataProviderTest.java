@@ -26,7 +26,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.app.tab_activity_glue.PopupCreatorImpl.EXTRA_REQUESTED_WINDOW_FEATURES;
@@ -37,12 +36,12 @@ import android.app.PendingIntent;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.Network;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Parcel;
 import android.view.ContextThemeWrapper;
 import android.view.WindowManager;
 
@@ -58,6 +57,7 @@ import androidx.browser.trusted.LaunchHandlerClientMode;
 import androidx.browser.trusted.ScreenOrientation;
 import androidx.browser.trusted.TrustedWebActivityDisplayMode;
 import androidx.browser.trusted.TrustedWebActivityIntentBuilder;
+import androidx.browser.trusted.sharing.ShareData;
 import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.Assert;
@@ -65,13 +65,12 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mockito;
-import org.robolectric.Shadows;
+import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
 
-import org.chromium.base.DeviceInfo;
 import org.chromium.base.IntentUtils;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.blink.mojom.DisplayMode;
@@ -82,10 +81,12 @@ import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntent
 import org.chromium.chrome.browser.browserservices.intents.ColorProvider;
 import org.chromium.chrome.browser.browserservices.intents.CustomButtonParams;
 import org.chromium.chrome.browser.browserservices.intents.CustomButtonParams.ButtonType;
+import org.chromium.chrome.browser.browserservices.intents.CustomTabIntentDataHolder;
 import org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider.BackgroundInteractBehavior;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.flags.CustomTabProfileType;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.google_bottom_bar.proto.IntentParams.GoogleBottomBarIntentParams;
 import org.chromium.chrome.browser.ui.google_bottom_bar.proto.IntentParams.GoogleBottomBarIntentParams.VariantLayoutType;
@@ -100,9 +101,6 @@ import java.util.function.Supplier;
 
 /** Tests for {@link CustomTabIntentDataProvider}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
-@Config(manifest = Config.NONE)
-@DisableFeatures({ChromeFeatureList.CCT_ADAPTIVE_BUTTON})
 public class CustomTabIntentDataProviderTest {
 
     private static final String BUTTON_DESCRIPTION = "buttonDescription";
@@ -249,7 +247,10 @@ public class CustomTabIntentDataProviderTest {
     @Test
     public void shareStateOn_buttonInToolbar_hasShareItemInMenu() {
         ArrayList<Bundle> buttons =
-                new ArrayList<>(Collections.singleton(createActionButtonInToolbarBundle()));
+                new ArrayList<>(
+                        Arrays.asList(
+                                createCustomActionButtonBundleWithId(1),
+                                createCustomActionButtonBundleWithId(2)));
         Intent intent =
                 new Intent()
                         .putExtra(
@@ -273,11 +274,7 @@ public class CustomTabIntentDataProviderTest {
                                 createCustomActionButtonBundleWithId(100),
                                 createCustomActionButtonBundleWithId(1)));
 
-        Intent intent =
-                new Intent()
-                        .putExtra(
-                                CustomTabsIntent.EXTRA_SHARE_STATE, CustomTabsIntent.SHARE_STATE_ON)
-                        .putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
+        Intent intent = new Intent().putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
 
         CustomTabIntentDataProvider dataProvider =
                 new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
@@ -299,11 +296,7 @@ public class CustomTabIntentDataProviderTest {
                                 createCustomActionButtonBundleWithId(100),
                                 createCustomActionButtonBundleWithId(1)));
 
-        Intent intent =
-                new Intent()
-                        .putExtra(
-                                CustomTabsIntent.EXTRA_SHARE_STATE, CustomTabsIntent.SHARE_STATE_ON)
-                        .putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
+        Intent intent = new Intent().putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
 
         CustomTabIntentDataProvider dataProvider =
                 new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
@@ -325,11 +318,7 @@ public class CustomTabIntentDataProviderTest {
                                 createCustomActionButtonBundleWithId(1),
                                 createCustomActionButtonBundleWithId(2)));
 
-        Intent intent =
-                new Intent()
-                        .putExtra(
-                                CustomTabsIntent.EXTRA_SHARE_STATE, CustomTabsIntent.SHARE_STATE_ON)
-                        .putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
+        Intent intent = new Intent().putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
 
         CustomTabIntentDataProvider dataProvider =
                 new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
@@ -361,11 +350,7 @@ public class CustomTabIntentDataProviderTest {
                                 createCustomActionButtonBundleWithId(100),
                                 createCustomActionButtonBundleWithId(1)));
 
-        Intent intent =
-                new Intent()
-                        .putExtra(
-                                CustomTabsIntent.EXTRA_SHARE_STATE, CustomTabsIntent.SHARE_STATE_ON)
-                        .putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
+        Intent intent = new Intent().putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
 
         CustomTabIntentDataProvider dataProvider =
                 new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
@@ -412,11 +397,7 @@ public class CustomTabIntentDataProviderTest {
                                 createCustomActionButtonBundleWithId(101), // SHARE
                                 createCustomActionButtonBundleWithId(1)));
 
-        Intent intent =
-                new Intent()
-                        .putExtra(
-                                CustomTabsIntent.EXTRA_SHARE_STATE, CustomTabsIntent.SHARE_STATE_ON)
-                        .putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
+        Intent intent = new Intent().putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
 
         CustomTabIntentDataProvider dataProvider =
                 new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
@@ -464,11 +445,7 @@ public class CustomTabIntentDataProviderTest {
                                 createCustomActionButtonBundleWithId(101), // SHARE
                                 createCustomActionButtonBundleWithId(1)));
 
-        Intent intent =
-                new Intent()
-                        .putExtra(
-                                CustomTabsIntent.EXTRA_SHARE_STATE, CustomTabsIntent.SHARE_STATE_ON)
-                        .putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
+        Intent intent = new Intent().putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
 
         CustomTabIntentDataProvider dataProvider =
                 new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
@@ -616,7 +593,10 @@ public class CustomTabIntentDataProviderTest {
     @Test
     public void shareStateOn_buttonInToolbarAndCustomMenuItems_hasShareItemInMenu() {
         ArrayList<Bundle> buttons =
-                new ArrayList<>(Collections.singleton(createActionButtonInToolbarBundle()));
+                new ArrayList<>(
+                        Arrays.asList(
+                                createCustomActionButtonBundleWithId(1),
+                                createCustomActionButtonBundleWithId(2)));
         Intent intent =
                 new Intent()
                         .putExtra(
@@ -898,11 +878,11 @@ public class CustomTabIntentDataProviderTest {
         assertEquals(
                 "extra.activity.referrer",
                 CustomTabIntentDataProvider.getAppIdFromReferrer(
-                        buildMockActivity("android-app://extra.activity.referrer")));
+                        buildActivityWithReferrer("android-app://extra.activity.referrer")));
         assertEquals(
                 "co.abc.xyz",
                 CustomTabIntentDataProvider.getAppIdFromReferrer(
-                        buildMockActivity("android-app://co.abc.xyz")));
+                        buildActivityWithReferrer("android-app://co.abc.xyz")));
 
         assertNonPackageUriReferrer("");
         assertNonPackageUriReferrer("invalid");
@@ -1277,84 +1257,9 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @EnableFeatures({ChromeFeatureList.SEARCH_IN_CCT})
-    public void isInteractiveOmniboxEnabled_flagEnabled() {
-        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
-        CustomTabsConnection.setInstanceForTesting(connection);
-
-        Intent intent = new CustomTabsIntent.Builder().build().intent;
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-
-        when(connection.getClientPackageNameForSession(any())).thenReturn("com.a.b.c");
-        assertTrue(dataProvider.isInteractiveOmniboxEnabled());
-
-        when(connection.getClientPackageNameForSession(any())).thenReturn(null);
-        assertTrue(dataProvider.isInteractiveOmniboxEnabled());
-    }
-
-    @Test
-    @DisableFeatures({ChromeFeatureList.SEARCH_IN_CCT})
-    public void isInteractiveOmniboxEnabled_flagDisabled() {
-        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
-        CustomTabsConnection.setInstanceForTesting(connection);
-
-        Intent intent = new CustomTabsIntent.Builder().build().intent;
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-
-        when(connection.getClientPackageNameForSession(any())).thenReturn("com.a.b.c");
-        assertFalse(dataProvider.isInteractiveOmniboxEnabled());
-
-        when(connection.getClientPackageNameForSession(any())).thenReturn(null);
-        assertFalse(dataProvider.isInteractiveOmniboxEnabled());
-    }
-
-    @Test
-    public void searchInCct_notAllowedInOffTheRecordMode() {
-        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
-        CustomTabsConnection.setInstanceForTesting(connection);
-
-        Intent intent = new CustomTabsIntent.Builder().build().intent;
-        var dataProvider =
-                spy(new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT));
-        when(dataProvider.isOffTheRecord()).thenReturn(true);
-
-        assertFalse(dataProvider.isInteractiveOmniboxAllowed());
-    }
-
-    @Test
-    public void searchInCct_notAllowedOnPartialCcts() {
-        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
-        CustomTabsConnection.setInstanceForTesting(connection);
-
-        Intent intent = new CustomTabsIntent.Builder().build().intent;
-        var dataProvider =
-                spy(new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT));
-        when(dataProvider.isPartialCustomTab()).thenReturn(true);
-
-        assertFalse(dataProvider.isInteractiveOmniboxAllowed());
-    }
-
-    @Test
-    public void searchInCct_notAllowedOnAutomotive() {
-        var shadowPkgMgr = Shadows.shadowOf(mContext.getPackageManager());
-        shadowPkgMgr.setSystemFeature(PackageManager.FEATURE_AUTOMOTIVE, /* supported= */ true);
-        assertTrue(DeviceInfo.isAutomotive());
-
-        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
-        CustomTabsConnection.setInstanceForTesting(connection);
-
-        Intent intent = new CustomTabsIntent.Builder().build().intent;
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-
-        assertFalse(dataProvider.isInteractiveOmniboxAllowed());
-    }
-
-    @Test
-    @EnableFeatures({ChromeFeatureList.SEARCH_IN_CCT})
     public void addShareOption_conventionalCct_defaultState() {
         CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
         CustomTabsConnection.setInstanceForTesting(connection);
-        when(connection.shouldEnableOmniboxForIntent(any())).thenReturn(false);
         when(connection.getClientPackageNameForSession(any())).thenReturn("com.a.b.c");
 
         Intent intent = new CustomTabsIntent.Builder().build().intent;
@@ -1369,11 +1274,9 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @EnableFeatures({ChromeFeatureList.SEARCH_IN_CCT})
     public void addShareOption_conventionalCct_disabledState() {
         CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
         CustomTabsConnection.setInstanceForTesting(connection);
-        when(connection.shouldEnableOmniboxForIntent(any())).thenReturn(false);
         when(connection.getClientPackageNameForSession(any())).thenReturn("com.a.b.c");
 
         Intent intent = new CustomTabsIntent.Builder().build().intent;
@@ -1387,74 +1290,9 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @EnableFeatures({ChromeFeatureList.SEARCH_IN_CCT})
-    public void addShareOption_searchInCct_enabledState() {
-        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
-        CustomTabsConnection.setInstanceForTesting(connection);
-        when(connection.shouldEnableOmniboxForIntent(any())).thenReturn(true);
-        when(connection.getClientPackageNameForSession(any())).thenReturn("com.a.b.c");
-
-        Intent intent = new CustomTabsIntent.Builder().build().intent;
-        intent.putExtra(CustomTabsIntent.EXTRA_SHARE_STATE, CustomTabsIntent.SHARE_STATE_ON);
-
-        // Buttons are initialized as part of the Constructor logic.
-        // Expect only the Open in Browser button, as the Share button is gated by empty Toolbar.
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-        var buttons = dataProvider.getCustomButtonsOnToolbar();
-        assertEquals(1, buttons.size());
-        assertEquals(
-                CustomButtonParams.ButtonType.CCT_OPEN_IN_BROWSER_BUTTON, buttons.get(0).getType());
-    }
-
-    @Test
-    @EnableFeatures({ChromeFeatureList.SEARCH_IN_CCT})
-    public void addOpenInBrowserOption_searchInCct_defaultState() {
-        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
-        CustomTabsConnection.setInstanceForTesting(connection);
-        when(connection.shouldEnableOmniboxForIntent(any())).thenReturn(true);
-        when(connection.getClientPackageNameForSession(any())).thenReturn("com.a.b.c");
-
-        Intent intent = new CustomTabsIntent.Builder().build().intent;
-
-        // Buttons are initialized as part of the Constructor logic.
-        // Since we're simulating an Omnibox-enabled CCT, expect the default button to be the Open
-        // in Browser.
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-        var buttons = dataProvider.getCustomButtonsOnToolbar();
-        assertEquals(1, buttons.size());
-        var button = buttons.get(0);
-        assertEquals(CustomButtonParams.ButtonType.CCT_OPEN_IN_BROWSER_BUTTON, button.getType());
-    }
-
-    @Test
-    @EnableFeatures({ChromeFeatureList.SEARCH_IN_CCT})
-    public void addOpenInBrowserOption_searchInCct_disabledState() {
-        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
-        CustomTabsConnection.setInstanceForTesting(connection);
-        when(connection.shouldEnableOmniboxForIntent(any())).thenReturn(true);
-        when(connection.getClientPackageNameForSession(any())).thenReturn("com.a.b.c");
-
-        Intent intent = new CustomTabsIntent.Builder().build().intent;
-        intent.putExtra(
-                CustomTabIntentDataProvider.EXTRA_OPEN_IN_BROWSER_STATE,
-                CustomTabIntentDataProvider.CustomTabsButtonState.BUTTON_STATE_OFF);
-
-        // Buttons are initialized as part of the Constructor logic.
-        // Since we explicitly disabled the Open in Browser button, we should pick the implicitly
-        // added Share button.
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-        var buttons = dataProvider.getCustomButtonsOnToolbar();
-        assertEquals(1, buttons.size());
-        var button = buttons.get(0);
-        assertEquals(CustomButtonParams.ButtonType.CCT_SHARE_BUTTON, button.getType());
-    }
-
-    @Test
-    @EnableFeatures({ChromeFeatureList.SEARCH_IN_CCT})
     public void addOpenInBrowserOption_conventionalCct_enabledState() {
         CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
         CustomTabsConnection.setInstanceForTesting(connection);
-        when(connection.shouldEnableOmniboxForIntent(any())).thenReturn(false);
         when(connection.getClientPackageNameForSession(any())).thenReturn("com.a.b.c");
 
         Intent intent = new CustomTabsIntent.Builder().build().intent;
@@ -1469,6 +1307,37 @@ public class CustomTabIntentDataProviderTest {
         assertEquals(1, buttons.size());
         assertEquals(
                 CustomButtonParams.ButtonType.CCT_OPEN_IN_BROWSER_BUTTON, buttons.get(0).getType());
+    }
+
+    /**
+     * A Trusted Web Activity is not an open-in-browser eligible UI type, so the state requested by
+     * the embedder is overridden.
+     *
+     * <p>Regression test: the UI type used to be resolved twice, and the open-in-browser state was
+     * derived from the first value, which was computed before the Trusted Web Activity state was
+     * known. A TWA was therefore evaluated as if it were a {@link CustomTabsUiType#DEFAULT} Custom
+     * Tab and kept the embedder's state.
+     */
+    @Test
+    public void openInBrowserState_trustedWebActivity_isDisabled() {
+        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
+        CustomTabsConnection.setInstanceForTesting(connection);
+
+        CustomTabsSession session =
+                CustomTabsSession.createMockSessionForTesting(
+                        new ComponentName(mContext, ChromeLauncherActivity.class));
+        Intent intent =
+                new TrustedWebActivityIntentBuilder(getLaunchingUrl()).build(session).getIntent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_OPEN_IN_BROWSER_STATE,
+                CustomTabIntentDataProvider.CustomTabsButtonState.BUTTON_STATE_ON);
+
+        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+
+        assertEquals(CustomTabsUiType.TRUSTED_WEB_ACTIVITY, dataProvider.getUiType());
+        assertEquals(
+                CustomTabIntentDataProvider.CustomTabsButtonState.BUTTON_STATE_OFF,
+                dataProvider.getOpenInBrowserButtonState());
     }
 
     @Test
@@ -1638,14 +1507,13 @@ public class CustomTabIntentDataProviderTest {
     private void assertNonPackageUriReferrer(String referrerStr) {
         assertEquals(
                 referrerStr,
-                CustomTabIntentDataProvider.getAppIdFromReferrer(buildMockActivity(referrerStr)));
+                CustomTabIntentDataProvider.getAppIdFromReferrer(
+                        buildActivityWithReferrer(referrerStr)));
     }
 
-    private Activity buildMockActivity(String referrer) {
-        Activity mockActivity = Mockito.mock(Activity.class);
-        Mockito.doReturn(new Intent()).when(mockActivity).getIntent();
-        Mockito.doReturn(Uri.parse(referrer)).when(mockActivity).getReferrer();
-        return mockActivity;
+    private Activity buildActivityWithReferrer(String referrer) {
+        Intent intent = new Intent().putExtra(Intent.EXTRA_REFERRER, Uri.parse(referrer));
+        return Robolectric.buildActivity(Activity.class, intent).get();
     }
 
     @Test
@@ -1963,7 +1831,9 @@ public class CustomTabIntentDataProviderTest {
                 0,
                 dataProvider.getCustomButtonsOnToolbar().size());
 
-        assertFalse("The close button should be disabled", dataProvider.isCloseButtonEnabled());
+        assertTrue("The close button should be enabled", dataProvider.isCloseButtonEnabled());
+        assertNotNull(
+                "The close button icon should be present", dataProvider.getCloseButtonDrawable());
 
         IntentUtils.setForceIsTrustedIntentForTesting(false);
     }
@@ -1991,7 +1861,9 @@ public class CustomTabIntentDataProviderTest {
                 0,
                 dataProvider.getCustomButtonsOnToolbar().size());
 
-        assertFalse("The close button should be disabled", dataProvider.isCloseButtonEnabled());
+        assertTrue("The close button should be enabled", dataProvider.isCloseButtonEnabled());
+        assertNotNull(
+                "The close button icon should be present", dataProvider.getCloseButtonDrawable());
 
         IntentUtils.setForceIsTrustedIntentForTesting(false);
     }
@@ -2137,8 +2009,7 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.CCT_ADAPTIVE_BUTTON)
-    public void testIsOptionalButtonSupported_featureEnabled() {
+    public void testIsOptionalButtonSupported_normalCct() {
         Intent intent = new CustomTabsIntent.Builder().build().intent;
         var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
         assertTrue(
@@ -2147,17 +2018,6 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @DisableFeatures(ChromeFeatureList.CCT_ADAPTIVE_BUTTON)
-    public void testIsOptionalButtonSupported_featureDisabled() {
-        Intent intent = new CustomTabsIntent.Builder().build().intent;
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-        assertFalse(
-                "Should not support optional button if feature is disabled",
-                dataProvider.isOptionalButtonSupported());
-    }
-
-    @Test
-    @EnableFeatures(ChromeFeatureList.CCT_ADAPTIVE_BUTTON)
     public void testIsOptionalButtonSupported_trustedWebActivity() {
         CustomTabsSession session =
                 CustomTabsSession.createMockSessionForTesting(
@@ -2171,18 +2031,32 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.CCT_ADAPTIVE_BUTTON)
     public void testIsOptionalButtonSupported_ephemeralCct() {
         Intent intent = new CustomTabsIntent.Builder().build().intent;
-        var dataProvider =
-                new EphemeralCustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        intent.putExtra(CustomTabsIntent.EXTRA_ENABLE_EPHEMERAL_BROWSING, true);
+        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
         assertFalse(
                 "eCCT should NOT support optional button",
                 dataProvider.isOptionalButtonSupported());
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.CCT_ADAPTIVE_BUTTON)
+    public void testEphemeralTabIntentData() {
+        Intent intent = new CustomTabsIntent.Builder().build().intent;
+        intent.putExtra(CustomTabsIntent.EXTRA_ENABLE_EPHEMERAL_BROWSING, true);
+        intent.putExtra(IntentHandler.EXTRA_LAUNCHED_FROM_PACKAGE, "com.example.app");
+        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertTrue(CustomTabIntentDataProvider.isValidEphemeralTabIntent(intent));
+        assertEquals(CustomTabProfileType.EPHEMERAL, dataProvider.getCustomTabMode());
+        assertTrue(dataProvider.isOffTheRecord());
+        assertEquals(
+                BrowserServicesIntentDataProvider.IncognitoCctCallerId.EPHEMERAL_TAB,
+                dataProvider.getFeatureIdForMetricsCollection());
+        assertNull(dataProvider.getClientPackageNameIdentitySharing());
+        assertTrue(dataProvider.getCustomButtonsOnGoogleBottomBar().isEmpty());
+    }
+
+    @Test
     public void testIsOptionalButtonSupported_incognitoCct() {
         Intent intent = new CustomTabsIntent.Builder().build().intent;
         intent.setData(Uri.parse("http://www.example.com"));
@@ -2194,9 +2068,6 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @EnableFeatures(
-            ChromeFeatureList.CCT_ADAPTIVE_BUTTON
-                    + ":open_in_browser/true/default_variant/15/contextual_only/true")
     public void testCustomActionButtonsLimitUpTo2() {
         ArrayList<Bundle> buttons =
                 new ArrayList<>(
@@ -2222,135 +2093,6 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @EnableFeatures(
-            ChromeFeatureList.CCT_ADAPTIVE_BUTTON
-                    + ":open_in_browser/true/default_variant/15/contextual_only/true")
-    public void testMtbCct_CpaOib_noCustomAction() {
-        // No custom action + all default -> Share
-        // The other slot available for MTB/CPA, showing OIB as default
-        Intent intent = new Intent();
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-        var buttons = dataProvider.getCustomButtonsOnToolbar();
-        assertEquals("There should be a single action.", 1, buttons.size());
-        assertEquals("Chrome share action", ButtonType.CCT_SHARE_BUTTON, buttons.get(0).getType());
-    }
-
-    @Test
-    @EnableFeatures(
-            ChromeFeatureList.CCT_ADAPTIVE_BUTTON
-                    + ":open_in_browser/true/default_variant/15/contextual_only/true")
-    public void testMtbCct_CpaOib_customAction() {
-        // Custom action -> custom action
-        // The other slot available for MTB/CPA, showing OIB as default
-        int customId = 100;
-        var buttons = new ArrayList<Bundle>();
-        buttons.add(createCustomActionButtonBundleWithId(customId)); // One custom action
-        Intent intent = new Intent().putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons);
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-        var actionButtons = dataProvider.getCustomButtonsOnToolbar();
-        assertEquals("There should be a single action.", 1, actionButtons.size());
-        assertEquals("Custom action ID (100).", customId, actionButtons.get(0).getId());
-    }
-
-    @Test
-    @EnableFeatures(
-            ChromeFeatureList.CCT_ADAPTIVE_BUTTON
-                    + ":open_in_browser/true/default_variant/15/contextual_only/true")
-    public void testMtbCct_CpaOib_customAction_oib() {
-        // Custom action + OIB on -> custom action + OIB
-        // No MTB/CPA
-        int customId = 100;
-        var buttons = new ArrayList<Bundle>();
-        buttons.add(createCustomActionButtonBundleWithId(customId)); // One custom action
-        Intent intent =
-                new Intent()
-                        .putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons)
-                        .putExtra(
-                                CustomTabIntentDataProvider.EXTRA_OPEN_IN_BROWSER_STATE,
-                                CustomTabIntentDataProvider.CustomTabsButtonState.BUTTON_STATE_ON);
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-        var actionButtons = dataProvider.getCustomButtonsOnToolbar();
-        assertEquals("There should be 2 actions.", 2, actionButtons.size());
-        assertEquals("Custom action ID (100).", customId, actionButtons.get(0).getId());
-        assertEquals(
-                "Chrome OIB.",
-                ButtonType.CCT_OPEN_IN_BROWSER_BUTTON,
-                actionButtons.get(1).getType());
-    }
-
-    @Test
-    @EnableFeatures(
-            ChromeFeatureList.CCT_ADAPTIVE_BUTTON
-                    + ":open_in_browser/true/default_variant/15/contextual_only/true")
-    public void testMtbCct_CpaOib_customAction_share() {
-        // Custom action + share on -> custom action + share
-        // No MTB/CPA
-        int customId = 100;
-        var buttons = new ArrayList<Bundle>();
-        buttons.add(createCustomActionButtonBundleWithId(customId)); // One custom action
-        Intent intent =
-                new Intent()
-                        .putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons)
-                        .putExtra(
-                                CustomTabsIntent.EXTRA_SHARE_STATE,
-                                CustomTabsIntent.SHARE_STATE_ON);
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-        var actionButtons = dataProvider.getCustomButtonsOnToolbar();
-        assertEquals("There should be 2 actions.", 2, actionButtons.size());
-        assertEquals("Custom action ID (100).", customId, actionButtons.get(0).getId());
-        assertEquals("Chrome Share.", ButtonType.CCT_SHARE_BUTTON, actionButtons.get(1).getType());
-    }
-
-    @Test
-    @EnableFeatures(
-            ChromeFeatureList.CCT_ADAPTIVE_BUTTON
-                    + ":open_in_browser/true/default_variant/15/contextual_only/true")
-    public void testMtbCct_CpaOib_customAction_share_oib() {
-        // Custom + Share on + OIB on -> Custom + Share
-        // No MTB/CPA
-        int customId = 100;
-        var buttons = new ArrayList<Bundle>();
-        buttons.add(createCustomActionButtonBundleWithId(customId));
-        Intent intent =
-                new Intent()
-                        .putExtra(CustomTabsIntent.EXTRA_TOOLBAR_ITEMS, buttons)
-                        .putExtra(
-                                CustomTabsIntent.EXTRA_SHARE_STATE, CustomTabsIntent.SHARE_STATE_ON)
-                        .putExtra(
-                                CustomTabIntentDataProvider.EXTRA_OPEN_IN_BROWSER_STATE,
-                                CustomTabIntentDataProvider.CustomTabsButtonState.BUTTON_STATE_ON);
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-        var actionButtons = dataProvider.getCustomButtonsOnToolbar();
-        assertEquals("There should be 2 actions.", 2, actionButtons.size());
-        assertEquals("Custom action ID (100).", customId, actionButtons.get(0).getId());
-        assertEquals("Chrome Share.", ButtonType.CCT_SHARE_BUTTON, actionButtons.get(1).getType());
-    }
-
-    @Test
-    @EnableFeatures(
-            ChromeFeatureList.CCT_ADAPTIVE_BUTTON
-                    + ":open_in_browser/true/default_variant/15/contextual_only/true")
-    public void testMtbCct_CpaOib_Share_Oib() {
-        // Share on + OIB on -> Share + OIB
-        Intent intent =
-                new Intent()
-                        .putExtra(
-                                CustomTabsIntent.EXTRA_SHARE_STATE, CustomTabsIntent.SHARE_STATE_ON)
-                        .putExtra(
-                                CustomTabIntentDataProvider.EXTRA_OPEN_IN_BROWSER_STATE,
-                                CustomTabIntentDataProvider.CustomTabsButtonState.BUTTON_STATE_ON);
-        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
-        var actionButtons = dataProvider.getCustomButtonsOnToolbar();
-        assertEquals("There should be 2 actions.", 2, actionButtons.size());
-        assertEquals(
-                "Chrome OIB.",
-                ButtonType.CCT_OPEN_IN_BROWSER_BUTTON,
-                actionButtons.get(0).getType());
-        assertEquals("Chrome Share.", ButtonType.CCT_SHARE_BUTTON, actionButtons.get(1).getType());
-    }
-
-    @Test
-    @EnableFeatures(ChromeFeatureList.CCT_ADAPTIVE_BUTTON)
     public void testMtbCct_otherConfig_customAction() {
         // Custom -> Custom
         // The other slot available for MTB/CPA
@@ -2365,7 +2107,6 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.CCT_ADAPTIVE_BUTTON)
     public void testMtbCct_otherConfig_customAction_Oib() {
         // Custom action + OIB on -> custom action + OIB
         // No MTB/CPA
@@ -2389,7 +2130,6 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.CCT_ADAPTIVE_BUTTON)
     public void testMtbCct_otherConfig_customAction_Share() {
         // Custom action + share on -> custom action + share
         // No MTB/CPA
@@ -2409,7 +2149,6 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.CCT_ADAPTIVE_BUTTON)
     public void testMtbCct_otherConfig_customAction_Share_Oib() {
         // Custom action + share on + OIB on -> custom action + share
         // No MTB/CPA
@@ -2432,7 +2171,6 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.CCT_ADAPTIVE_BUTTON)
     public void testMtbCct_otherConfig_Share_Oib() {
         // Share on + OIB on -> share + OIB
         // No MTB/CPA
@@ -2637,7 +2375,7 @@ public class CustomTabIntentDataProviderTest {
                 new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
 
         Intent outboundIntent = new Intent();
-        Supplier<Tab> tabProvider = () -> null;
+        Supplier<Tab> tabProvider = SupplierUtils.ofNull();
         int viewId = 123;
 
         dataProvider.maybeAddAdditionalContentExtrasToOutboundIntent(
@@ -2646,6 +2384,118 @@ public class CustomTabIntentDataProviderTest {
         Mockito.verify(connection)
                 .maybeAddAdditionalContentExtrasToOutboundIntent(
                         eq(tabProvider), eq(dataProvider), eq(outboundIntent), eq(viewId));
+    }
+
+    @Test
+    @DisableFeatures({
+        ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+        ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT
+    })
+    public void isCctTabSwitcherEnabled_bothFlagsDisabled_returnsFalse() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+                true);
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT,
+                true);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertFalse(provider.isCctTabSwitcherEnabled());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT)
+    @DisableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT)
+    public void isCctTabSwitcherEnabled_embedderFlagEnabled_intentExtraEnabled_returnsTrue() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT,
+                true);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertTrue(provider.isCctTabSwitcherEnabled());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT)
+    @DisableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT)
+    public void isCctTabSwitcherEnabled_embedderFlagEnabled_intentExtraDisabled_returnsFalse() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+                true);
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT,
+                false);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertFalse(provider.isCctTabSwitcherEnabled());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT)
+    @DisableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT)
+    public void isCctTabSwitcherEnabled_chromeFlagEnabled_intentExtraEnabled_returnsTrue() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+                true);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertTrue(provider.isCctTabSwitcherEnabled());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT)
+    @DisableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT)
+    public void isCctTabSwitcherEnabled_chromeFlagEnabled_intentExtraDisabled_returnsFalse() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+                false);
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT,
+                true);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertFalse(provider.isCctTabSwitcherEnabled());
+    }
+
+    @Test
+    @EnableFeatures({
+        ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+        ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT
+    })
+    public void isCctTabSwitcherEnabled_bothFlagsEnabled_eitherExtraEnabled_returnsTrue() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+                false);
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT,
+                true);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertTrue(provider.isCctTabSwitcherEnabled());
+    }
+
+    @Test
+    @EnableFeatures({
+        ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+        ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT
+    })
+    public void isCctTabSwitcherEnabled_bothFlagsEnabled_bothExtrasDisabled_returnsFalse() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+                false);
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT,
+                false);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertFalse(provider.isCctTabSwitcherEnabled());
     }
 
     private int getOibStateForType(int type) {
@@ -2679,5 +2529,110 @@ public class CustomTabIntentDataProviderTest {
         when(connection.isFirstParty(eq(PACKAGE))).thenReturn(true);
         CustomTabsConnection.setInstanceForTesting(connection);
         intent.putExtra(IntentHandler.EXTRA_CALLING_ACTIVITY_PACKAGE, PACKAGE);
+    }
+
+    @Test
+    public void testGetShareData() {
+        Intent intent = new Intent();
+        Uri fileUri = Uri.parse("content://com.example/file.jpg");
+        ShareData rawData = new ShareData("title", "text", Arrays.asList(fileUri));
+        intent.putExtra(TrustedWebActivityIntentBuilder.EXTRA_SHARE_DATA, rawData.toBundle());
+
+        CustomTabIntentDataProvider dataProvider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+
+        ShareData result = dataProvider.getShareData();
+        assertNotNull(result);
+        assertEquals("title", result.title);
+        assertEquals(fileUri, result.uris.get(0));
+    }
+
+    @Test
+    public void testGetShareData_NullWhenMissing() {
+        Intent intent = new Intent();
+        CustomTabIntentDataProvider dataProvider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertNull(dataProvider.getShareData());
+    }
+
+    @Test
+    public void testReconstructFromSavedDataHolder() {
+        Intent intent = new CustomTabsIntent.Builder().build().intent;
+        setIsTrustedCustomTab(intent);
+        intent.putExtra(CustomTabsIntent.EXTRA_ENABLE_EPHEMERAL_BROWSING, true);
+        intent.putExtra(
+                CustomTabsIntent.EXTRA_TITLE_VISIBILITY_STATE, CustomTabsIntent.SHOW_PAGE_TITLE);
+        intent.putExtra(CustomTabsIntent.EXTRA_ENABLE_URLBAR_HIDING, false);
+        intent.putExtra(CustomTabsIntent.EXTRA_INITIAL_ACTIVITY_HEIGHT_PX, 300);
+
+        CustomTabIntentDataProvider originalProvider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        CustomTabIntentDataHolder holder = originalProvider.getCustomTabIntentDataHolder();
+        assertNotNull(holder);
+
+        Parcel parcel = Parcel.obtain();
+        CustomTabIntentDataHolder restoredHolder;
+        try {
+            holder.writeToParcel(parcel, 0);
+            parcel.setDataPosition(0);
+            restoredHolder = CustomTabIntentDataHolder.CREATOR.createFromParcel(parcel);
+        } finally {
+            parcel.recycle();
+        }
+
+        // Reconstruct with an empty Intent to verify values come from restoredHolder.
+        CustomTabIntentDataProvider restoredProvider =
+                new CustomTabIntentDataProvider(
+                        new Intent(), mContext, COLOR_SCHEME_LIGHT, restoredHolder);
+        assertEquals(originalProvider.getSession(), restoredProvider.getSession());
+        assertEquals(
+                originalProvider.getClientPackageName(), restoredProvider.getClientPackageName());
+        assertEquals(originalProvider.isTrustedIntent(), restoredProvider.isTrustedIntent());
+        assertEquals(originalProvider.getCustomTabMode(), restoredProvider.getCustomTabMode());
+        assertEquals(
+                originalProvider.getTitleVisibilityState(),
+                restoredProvider.getTitleVisibilityState());
+        assertEquals(
+                originalProvider.shouldEnableUrlBarHiding(),
+                restoredProvider.shouldEnableUrlBarHiding());
+        assertEquals(
+                originalProvider.getInitialActivityHeight(),
+                restoredProvider.getInitialActivityHeight());
+    }
+
+    @Test
+    public void testReconstructIncognitoFromSavedDataHolder() {
+        Intent intent = new CustomTabsIntent.Builder().build().intent;
+        setIsTrustedCustomTab(intent);
+        intent.putExtra(IntentHandler.EXTRA_OPEN_NEW_INCOGNITO_TAB, true);
+        intent.putExtra(
+                CustomTabsIntent.EXTRA_TITLE_VISIBILITY_STATE, CustomTabsIntent.SHOW_PAGE_TITLE);
+
+        IncognitoCustomTabIntentDataProvider originalProvider =
+                new IncognitoCustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        CustomTabIntentDataHolder holder = originalProvider.getCustomTabIntentDataHolder();
+        assertNotNull(holder);
+
+        Parcel parcel = Parcel.obtain();
+        CustomTabIntentDataHolder restoredHolder;
+        try {
+            holder.writeToParcel(parcel, 0);
+            parcel.setDataPosition(0);
+            restoredHolder = CustomTabIntentDataHolder.CREATOR.createFromParcel(parcel);
+        } finally {
+            parcel.recycle();
+        }
+
+        IncognitoCustomTabIntentDataProvider restoredProvider =
+                new IncognitoCustomTabIntentDataProvider(
+                        new Intent(), mContext, COLOR_SCHEME_LIGHT, restoredHolder);
+        assertEquals(originalProvider.getSession(), restoredProvider.getSession());
+        assertEquals(
+                originalProvider.getClientPackageName(), restoredProvider.getClientPackageName());
+        assertEquals(originalProvider.isTrustedIntent(), restoredProvider.isTrustedIntent());
+        assertEquals(originalProvider.getCustomTabMode(), restoredProvider.getCustomTabMode());
+        assertEquals(
+                originalProvider.getTitleVisibilityState(),
+                restoredProvider.getTitleVisibilityState());
     }
 }

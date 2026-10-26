@@ -27,18 +27,20 @@
 #include "chrome/browser/ash/app_mode/test/network_state_mixin.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/app_window/app_window.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/base_window.h"
 #include "ui/events/test/event_generator.h"
 
 namespace ash {
@@ -126,16 +128,24 @@ IN_PROC_BROWSER_TEST_P(KioskTest, HidesShelf) {
 }
 
 IN_PROC_BROWSER_TEST_P(KioskTest, CanOpenA11ySettings) {
-  Browser* settings = OpenA11ySettings(
-      CHECK_DEREF(user_manager::UserManager::Get()->GetActiveUser()));
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ASSERT_TRUE(active_session);
+  BrowserWindowInterface* settings =
+      OpenA11ySettings(CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+          active_session->account_id())));
   ASSERT_NE(settings, nullptr);
   EXPECT_TRUE(settings->GetWindow()->IsActive());
   EXPECT_TRUE(settings->GetWindow()->IsVisible());
 }
 
 IN_PROC_BROWSER_TEST_P(KioskTest, ExitsIfOnlySettingsWindowRemainsOpen) {
-  Browser& settings = CHECK_DEREF(OpenA11ySettings(
-      CHECK_DEREF(user_manager::UserManager::Get()->GetActiveUser())));
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ASSERT_TRUE(active_session);
+  BrowserWindowInterface& settings = CHECK_DEREF(
+      OpenA11ySettings(CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+          active_session->account_id()))));
   EXPECT_GT(GlobalBrowserCollection::GetInstance()->GetSize(), 0u);
 
   // Close the app window and verify the settings browser gets closed too.
@@ -149,8 +159,12 @@ IN_PROC_BROWSER_TEST_P(KioskTest, ExitsIfOnlySettingsWindowRemainsOpen) {
 }
 
 IN_PROC_BROWSER_TEST_P(KioskTest, DoesNotExitWhenSettingsWindowCloses) {
-  Browser& settings = CHECK_DEREF(OpenA11ySettings(
-      CHECK_DEREF(user_manager::UserManager::Get()->GetActiveUser())));
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ASSERT_TRUE(active_session);
+  BrowserWindowInterface& settings = CHECK_DEREF(
+      OpenA11ySettings(CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+          active_session->account_id()))));
   EXPECT_EQ(GetLastActiveBrowserWindowInterfaceWithAnyProfile(), &settings);
 
   settings.GetWindow()->Close();

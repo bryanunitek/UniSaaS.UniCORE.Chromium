@@ -4,7 +4,7 @@
 
 package org.chromium.components.browser_ui.notifications;
 
-import static org.chromium.components.browser_ui.notifications.BitmapUtils.resizeBitmap;
+import static org.chromium.components.browser_ui.notifications.BitmapUtils.resizeBitmapByMemory;
 
 import android.app.Notification;
 import android.app.PendingIntent;
@@ -16,7 +16,6 @@ import android.os.Bundle;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.widget.RemoteViews;
 
-import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
 import androidx.core.graphics.drawable.IconCompat;
 
@@ -168,19 +167,6 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     }
 
     @Override
-    public NotificationWrapperBuilder addAction(Notification.Action action) {
-        Log.w(TAG, "Ignoring standard action in compat builder.");
-        return this;
-    }
-
-    @Override
-    public NotificationWrapperBuilder addAction(
-            Notification.Action action, int flags, int actionType, int requestCode) {
-        Log.w(TAG, "Ignoring standard action in compat builder.");
-        return this;
-    }
-
-    @Override
     public NotificationWrapperBuilder addAction(NotificationCompat.Action action) {
         mBuilder.addAction(action);
         return this;
@@ -289,10 +275,8 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
 
     @Override
     public NotificationWrapperBuilder setBigPictureStyle(
-            @NonNull Bitmap bigPicture, @Nullable CharSequence summaryText) {
-        if (bigPicture.getAllocationByteCount() / 1000 > BIG_PICTURE_BITMAP_MAX_SIZE_IN_KB) {
-            bigPicture = resizeBitmap(bigPicture, BIG_PICTURE_BITMAP_MAX_SIZE_IN_KB);
-        }
+            Bitmap bigPicture, @Nullable CharSequence summaryText) {
+        bigPicture = resizeBitmapByMemory(bigPicture, BIG_PICTURE_BITMAP_MAX_SIZE_IN_KB);
 
         NotificationCompat.BigPictureStyle style =
                 new NotificationCompat.BigPictureStyle().bigPicture(bigPicture);

@@ -30,8 +30,8 @@ std::unique_ptr<ResourceMonitor> ResourceMonitor::CreateForProcess(
   content::BrowserChildProcessHostIterator iter(content::PROCESS_TYPE_UTILITY);
   while (!iter.Done()) {
     if (iter.GetData().name == u16name) {
-      process_host =
-          content::BrowserChildProcessHost::FromID(iter.GetData().id);
+      process_host = content::BrowserChildProcessHost::FromID(
+          iter.GetData().GetChildProcessId());
       break;
     }
     ++iter;
@@ -75,8 +75,7 @@ void ResourceMonitor::OnResourceUsageUpdated(
 
   if (memory.has_value()) {
     max_resident_memory_ =
-        std::max(max_resident_memory_,
-                 memory->resident_set_size.AsDeprecatedByteCount());
+        std::max(max_resident_memory_, memory->resident_set_size);
   }
 }
 

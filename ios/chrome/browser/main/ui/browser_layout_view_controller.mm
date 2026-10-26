@@ -15,7 +15,7 @@
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_element.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_updater.h"
 #import "ios/chrome/browser/main/ui/browser_layout_consumer.h"
-#import "ios/chrome/browser/shared/coordinator/scene/state/layout_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/named_guide.h"
@@ -29,9 +29,12 @@
 
 namespace {
 constexpr CGFloat kContainedLayoutTabStripTopMargin = 4.0;
+// Minimum top margin between the TabStrip and the top of the screen when there
+// is no safe area top inset (e.g. unfolded Duo on iOS 27.0).
+constexpr CGFloat kNoSafeAreaTabStripTopMargin = 16.0;
 }  // namespace
 
-@interface BrowserLayoutViewController () <LayoutStateObserver>
+@interface BrowserLayoutViewController () <SceneLayoutStateObserver>
 @end
 
 @implementation BrowserLayoutViewController {
@@ -125,8 +128,7 @@ constexpr CGFloat kContainedLayoutTabStripTopMargin = 4.0;
   // `browserViewController`. If this happens during startup, it may be the BVC
   // adding launch screen as a child VC of this VC (BVC's parent).
   // TODO:(crbug.com/472278494): This fires frequently in stable.
-  CHECK_EQ(_browserViewController, browserViewController,
-           base::NotFatalUntil::M150);
+  CHECK_EQ(_browserViewController, browserViewController);
 
   [self updateCurrentBVCLayoutInsetsWithTopInset:[self topInset]];
 }
@@ -177,7 +179,7 @@ constexpr CGFloat kContainedLayoutTabStripTopMargin = 4.0;
   // Calculate offset based on progress (0 = collapsed/hidden, 1 =
   // expanded/visible).
   CGFloat offset =
-      AlignValueToPixel((1.0 - progress) * _fullscreenViewportInsetRange);
+      AlignValueToLowerPixel((1.0 - progress) * _fullscreenViewportInsetRange);
 
   // Update frame directly for synchronous layout.
   // We don't rely on constraints here to avoid fighting with the layout system
@@ -186,11 +188,13 @@ constexpr CGFloat kContainedLayoutTabStripTopMargin = 4.0;
   frame.origin.y = topInset - offset;
   _tabStripViewController.view.frame = frame;
 
-  // When offset >= topInset, the tab strip is fully hidden (or covered by
+  // When offset >= fadeDistance, the tab strip is fully hidden (or covered by
   // status bar area). When offset == 0, the tab strip is fully visible.
-  // Interpolate alpha from 0 to 1 as offset goes from topInset to 0.
-  CGFloat clampedOffset = std::clamp(offset, 0.0, topInset);
-  CGFloat alpha = 1.0 - (clampedOffset / topInset);
+  // Interpolate alpha from 0 to 1 as offset goes from fadeDistance to 0.
+  CGFloat fadeDistance =
+      topInset > 0 ? topInset : TabStripCollectionViewConstants.height;
+  CGFloat clampedOffset = std::clamp(offset, 0.0, fadeDistance);
+  CGFloat alpha = 1.0 - (clampedOffset / fadeDistance);
   _fadingStatusBarView.alpha = alpha;
   _tabStripViewController.view.alpha = alpha;
 }
@@ -218,6 +222,9 @@ constexpr CGFloat kContainedLayoutTabStripTopMargin = 4.0;
     CGFloat height = TabStripCollectionViewConstants.height * progress;
     agent->AddObscuredInset(UIRectEdgeTop, height);
     [self updateForFullscreenProgress:progress];
+    if (agent->is_animating()) {
+      [self.view layoutIfNeeded];
+    }
   }
 }
 
@@ -380,8 +387,12 @@ constexpr CGFloat kContainedLayoutTabStripTopMargin = 4.0;
 - (CGFloat)topInsetForContainedLayout:(BOOL)containedLayout {
   CGFloat topInset = containedLayout ? self.view.safeAreaInsets.top
                                      : self.safeAreaProvider.safeArea.top;
-  if (CanShowTabStrip(self) && containedLayout) {
-    topInset += kContainedLayoutTabStripTopMargin;
+  if (CanShowTabStrip(self)) {
+    if (containedLayout) {
+      topInset += kContainedLayoutTabStripTopMargin;
+    } else if (topInset == 0) {
+      topInset = kNoSafeAreaTabStripTopMargin;
+    }
   }
   return topInset;
 }
@@ -407,7 +418,7 @@ constexpr CGFloat kContainedLayoutTabStripTopMargin = 4.0;
   _staticStatusBarView.overrideUserInterfaceStyle = style;
 }
 
-- (void)setLayoutState:(LayoutState*)layoutState {
+- (void)setLayoutState:(SceneLayoutState*)layoutState {
   if (_layoutState == layoutState) {
     return;
   }
@@ -495,9 +506,9 @@ constexpr CGFloat kContainedLayoutTabStripTopMargin = 4.0;
                               view:self.browserViewController.view];
 }
 
-#pragma mark - LayoutStateObserver
+#pragma mark - SceneLayoutStateObserver
 
-- (void)layoutState:(LayoutState*)layoutState
+- (void)layoutState:(SceneLayoutState*)layoutState
     willChangeContainedLayout:(BOOL)containedLayoutActive
     withTransitionCoordinator:(id<LayoutTransitionCoordinating>)coordinator {
   CGFloat targetTopInset =

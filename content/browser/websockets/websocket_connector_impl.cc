@@ -14,10 +14,12 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/common/child_process_id_util.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
 #include "mojo/public/cpp/bindings/message.h"
+#include "net/base/network_handle.h"
 #include "net/http/http_request_headers.h"
 #include "net/storage_access_api/status.h"
 #include "services/network/public/cpp/features.h"
@@ -72,13 +74,17 @@ WebSocketConnectorImpl::WebSocketConnectorImpl(
     const url::Origin& origin,
     const net::IsolationInfo& isolation_info,
     network::mojom::ClientSecurityStatePtr client_security_state,
-    const base::UnguessableToken& network_restrictions_id)
+    net::StorageAccessApiStatus storage_access_api_status,
+    const base::UnguessableToken& network_restrictions_id,
+    std::optional<base::UnguessableToken> devtools_worker_token)
     : frame_id_(frame_id),
       weak_document_(std::move(weak_document)),
       origin_(MaybeTreatLocalOriginAsOpaque(origin)),
       isolation_info_(isolation_info),
       client_security_state_(std::move(client_security_state)),
-      network_restrictions_id_(network_restrictions_id) {
+      storage_access_api_status_(storage_access_api_status),
+      network_restrictions_id_(network_restrictions_id),
+      devtools_worker_token_(std::move(devtools_worker_token)) {
   CHECK(!network_restrictions_id.is_empty(), base::NotFatalUntil::M165);
 }
 
@@ -88,11 +94,12 @@ void WebSocketConnectorImpl::Connect(
     const GURL& url,
     const std::vector<std::string>& requested_protocols,
     const std::optional<std::string>& user_agent,
-    net::StorageAccessApiStatus storage_access_api_status,
     mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
         handshake_client,
-    const std::optional<base::UnguessableToken>& throttling_profile_id) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+    const std::optional<base::UnguessableToken>& throttling_profile_id,
+    network::mojom::IPAddressSpace target_address_space) {
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI),
+        base::NotFatalUntil::M159);
 
   // If the connector was created for a RenderFrame or a DedicatedWorker
   // (where `frame_routing_id` is not kRoutingIdNone), it is scoped to a
@@ -118,14 +125,23 @@ void WebSocketConnectorImpl::Connect(
   }
 
   RenderFrameHost* frame = RenderFrameHost::FromID(frame_id_);
+  net::handles::NetworkHandle target_network =
+      net::handles::kInvalidNetworkHandle;
+  if (frame) {
+    if (auto* web_contents = WebContents::FromRenderFrameHost(frame)) {
+      target_network = web_contents->GetTargetNetwork();
+    }
+  }
+
   content::ContentBrowserClient::WebSocketOptions options =
       GetContentClient()->browser()->GetWebSocketOptions(frame);
 
   content::ContentBrowserClient::WebSocketFactory factory = base::BindOnce(
       ConnectCalledByContentBrowserClient, requested_protocols,
-      storage_access_api_status, isolation_info_, frame_id_, origin_,
-      client_security_state_->Clone(), options.options,
-      std::move(throttling_profile_id), network_restrictions_id_);
+      storage_access_api_status_, isolation_info_, frame_id_,
+      devtools_worker_token_, origin_, client_security_state_->Clone(),
+      options.options, std::move(throttling_profile_id),
+      network_restrictions_id_, target_address_space, target_network);
 
   if (GetContentClient()->browser()->WillInterceptWebSocket(frame)) {
     GetContentClient()->browser()->CreateWebSocket(
@@ -138,7 +154,8 @@ void WebSocketConnectorImpl::Connect(
   if (user_agent) {
     headers.SetHeader(net::HttpRequestHeaders::kUserAgent, *user_agent);
   }
-  devtools_instrumentation::ApplyExtraHeadersForWebSocket(frame_id_, &headers);
+  devtools_instrumentation::ApplyExtraHeadersForWebSocket(
+      frame_id_, devtools_worker_token_, url, &headers);
 
   std::vector<network::mojom::HttpHeaderPtr> additional_headers;
   for (net::HttpRequestHeaders::Iterator it(headers); it.GetNext();) {
@@ -156,11 +173,14 @@ void WebSocketConnectorImpl::ConnectCalledByContentBrowserClient(
     net::StorageAccessApiStatus storage_access_api_status,
     const net::IsolationInfo& isolation_info,
     const content::GlobalRenderFrameHostId& frame_id,
+    std::optional<base::UnguessableToken> devtools_worker_token,
     const url::Origin& origin,
     network::mojom::ClientSecurityStatePtr client_security_state,
     uint32_t options,
     std::optional<base::UnguessableToken> throttling_profile_id,
     const base::UnguessableToken& network_restrictions_id,
+    network::mojom::IPAddressSpace target_address_space,
+    net::handles::NetworkHandle target_network,
     const GURL& url,
     std::vector<network::mojom::HttpHeaderPtr> additional_headers,
     mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
@@ -169,15 +189,16 @@ void WebSocketConnectorImpl::ConnectCalledByContentBrowserClient(
         auth_handler,
     mojo::PendingRemote<network::mojom::TrustedHeaderClient>
         trusted_header_client) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI),
+        base::NotFatalUntil::M159);
   RenderProcessHost* process = RenderProcessHost::FromID(frame_id.child_id);
   if (!process) {
     return;
   }
 
   net::HttpRequestHeaders extra_headers;
-  devtools_instrumentation::ApplyExtraHeadersForWebSocket(frame_id,
-                                                          &extra_headers);
+  devtools_instrumentation::ApplyExtraHeadersForWebSocket(
+      frame_id, devtools_worker_token, url, &extra_headers);
   std::erase_if(additional_headers, [&](const auto& header) {
     return extra_headers.HasHeader(header->name);
   });
@@ -205,7 +226,10 @@ void WebSocketConnectorImpl::ConnectCalledByContentBrowserClient(
       std::move(handshake_client),
       std::move(url_loader_network_service_observer), std::move(auth_handler),
       std::move(trusted_header_client), std::move(throttling_profile_id),
-      network_restrictions_id);
+      network_restrictions_id, target_address_space,
+      target_network == net::handles::kInvalidNetworkHandle
+          ? std::nullopt
+          : std::make_optional(target_network));
 }
 
 }  // namespace content

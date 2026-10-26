@@ -35,6 +35,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/web_applications/commands/manifest_silent_update_command.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
+#include "chrome/browser/web_applications/link_capturing_features.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
@@ -111,7 +112,7 @@ bool IsNavigationCapturingSettingOffByDefault(
     return false;
   }
 
-  switch (features::kNavigationCapturingDefaultState.Get()) {
+  switch (apps::features::GetNavigationCapturingDefaultState()) {
     case features::CapturingState::kReimplDefaultOff:
       return true;
     case features::CapturingState::kReimplDefaultOn:
@@ -260,11 +261,6 @@ bool WebAppRegistrar::IsSupportedDisplayModeForNavigationCapture(
       return true;
   }
 }
-
-FindBestAppInScopeOptions::FindBestAppInScopeOptions(WebAppFilter filter)
-    : filter(std::move(filter)) {}
-
-FindBestAppInScopeOptions::~FindBestAppInScopeOptions() = default;
 
 WebAppRegistrar::WebAppRegistrar(Profile* profile) : profile_(profile) {}
 
@@ -1018,6 +1014,9 @@ bool WebAppRegistrar::AppMatches(const webapps::AppId& app_id,
               case WebAppFilter::SimpleCondition::kIsolatedSubApp:
                 return app.parent_app_id() &&
                        IsIsolatedApp(*app.parent_app_id());
+              case WebAppFilter::SimpleCondition::kIsolatedSubAppDevMode:
+                return app.parent_app_id() &&
+                       IsIsolatedAppInDevMode(*app.parent_app_id());
               case WebAppFilter::SimpleCondition::kOpensInDedicatedWindow: {
                 DisplayMode display_mode = GetAppEffectiveDisplayMode(app_id);
                 return display_mode != DisplayMode::kBrowser &&
@@ -1047,14 +1046,6 @@ bool WebAppRegistrar::AppMatches(const webapps::AppId& app_id,
 std::optional<webapps::AppId> WebAppRegistrar::FindBestAppWithUrlInScope(
     const GURL& url,
     const WebAppFilter& filter,
-    WebAppScopeScoreOptions scope_score_options) const {
-  FindBestAppInScopeOptions options(filter);
-  options.scope_score_options = std::move(scope_score_options);
-  return FindBestAppWithUrlInScope(url, options);
-}
-
-std::optional<webapps::AppId> WebAppRegistrar::FindBestAppWithUrlInScope(
-    const GURL& url,
     const FindBestAppInScopeOptions& options) const {
   if (!url.is_valid()) {
     return std::nullopt;
@@ -1062,6 +1053,8 @@ std::optional<webapps::AppId> WebAppRegistrar::FindBestAppWithUrlInScope(
 
   std::optional<webapps::AppId> best_app_id;
   int best_score = 0;
+  const WebAppFilter is_isolated =
+      WebAppFilter::IsIsolatedApp() | WebAppFilter::IsIsolatedSubApp();
 
   for (const webapps::AppId& app_id : GetAppIds(options.eligibility_filter)) {
     std::optional<WebAppScope> scope = GetEffectiveScope(app_id);
@@ -1069,15 +1062,25 @@ std::optional<webapps::AppId> WebAppRegistrar::FindBestAppWithUrlInScope(
       continue;
     }
 
-    int score = scope->GetScopeScore(url, options.scope_score_options);
+    WebAppScopeScoreOptions scope_score_options = options.scope_score_options;
+    if (!options.include_isolated_web_app_scope_extensions &&
+        !scope_score_options.exclude_scope_extensions &&
+        !scope->validated_scope_extensions().empty() &&
+        AppMatches(app_id, is_isolated)) {
+      if (scope_score_options.only_consider_scope_extensions) {
+        continue;
+      }
+      scope_score_options.exclude_scope_extensions = true;
+    }
+
+    int score = scope->GetScopeScore(url, scope_score_options);
     if (score > 0 && score > best_score) {
       best_app_id = app_id;
       best_score = score;
     }
   }
 
-  if (best_app_id.has_value() &&
-      AppMatches(best_app_id.value(), options.filter)) {
+  if (best_app_id.has_value() && AppMatches(best_app_id.value(), filter)) {
     return best_app_id;
   }
 
@@ -2050,6 +2053,15 @@ std::optional<std::string> WebAppRegistrar::GetParentAppShortName(
   }
 
   return GetAppShortName(sub_app->parent_app_id().value());
+}
+
+std::optional<webapps::AppId> WebAppRegistrar::GetParentAppId(
+    const webapps::AppId& app_id) const {
+  const WebApp* web_app = GetAppById(app_id, WebAppFilter::IsIsolatedSubApp());
+  if (!web_app) {
+    return std::nullopt;
+  }
+  return *web_app->parent_app_id();
 }
 
 bool IsRegistryEqual(const Registry& registry,

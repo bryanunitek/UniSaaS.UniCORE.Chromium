@@ -21,6 +21,7 @@
 #include "third_party/blink/renderer/platform/loader/fetch/ad_tagging_utils.h"
 #include "third_party/blink/renderer/platform/loader/fetch/media_timing.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_status.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace base {
@@ -137,6 +138,7 @@ class CORE_EXPORT ImageResourceContent final
     // use this for images as well as videos.
     return base::TimeTicks();
   }
+  bool IsImage() const override { return true; }
 
   // Redirecting methods to Resource.
   const KURL& Url() const override;
@@ -147,7 +149,7 @@ class CORE_EXPORT ImageResourceContent final
   base::TimeTicks LoadStart() const override;
   base::TimeTicks LoadEnd() const override;
   AtomicString MediaType() const override;
-  bool IsCorsSameOrigin() const;
+  bool IsCorsSameOrigin() const override;
   const ResourceResponse& GetResponse() const;
   std::optional<ResourceError> GetResourceError() const;
 
@@ -301,6 +303,11 @@ class CORE_EXPORT ImageResourceContent final
 #if DCHECK_IS_ON()
   bool is_update_image_being_called_ = false;
 #endif
+};
+
+template <>
+struct DowncastTraits<ImageResourceContent> {
+  static bool AllowFrom(const MediaTiming& timing) { return timing.IsImage(); }
 };
 
 }  // namespace blink

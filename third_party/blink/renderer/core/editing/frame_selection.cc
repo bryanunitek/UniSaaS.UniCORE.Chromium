@@ -31,6 +31,7 @@
 
 #include "base/auto_reset.h"
 #include "base/trace_event/trace_event.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/scroll/scroll_into_view_params.mojom-blink.h"
 #include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/accessibility/blink_ax_event_intent.h"
@@ -74,6 +75,7 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
+#include "third_party/blink/renderer/core/html/forms/text_control_element.h"
 #include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/html/html_frame_element_base.h"
 #include "third_party/blink/renderer/core/html_names.h"
@@ -101,11 +103,38 @@
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/text_direction.h"
 #include "third_party/blink/renderer/platform/text/unicode_utilities.h"
+#include "third_party/blink/renderer/platform/widget/frame_widget.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "ui/gfx/geometry/quad_f.h"
 
 #define EDIT_DEBUG 0
 
 namespace blink {
+
+namespace {
+
+class ScopedHandlingInputEvent {
+  STACK_ALLOCATED();
+
+ public:
+  explicit ScopedHandlingInputEvent(FrameWidget* widget) : widget_(widget) {
+    if (widget_) {
+      was_handling_input_event_ = widget_->HandlingInputEvent();
+      widget_->SetHandlingInputEvent(true);
+    }
+  }
+  ~ScopedHandlingInputEvent() {
+    if (widget_) {
+      widget_->SetHandlingInputEvent(was_handling_input_event_);
+    }
+  }
+
+ private:
+  FrameWidget* widget_ = nullptr;
+  bool was_handling_input_event_ = false;
+};
+
+}  // namespace
 
 static inline bool ShouldAlwaysUseDirectionalSelection(LocalFrame* frame) {
   return frame->GetEditor().Behavior().ShouldConsiderSelectionAsDirectional();
@@ -115,7 +144,6 @@ FrameSelection::FrameSelection(LocalFrame& frame)
     : frame_(frame),
       layout_selection_(MakeGarbageCollected<LayoutSelection>(*this)),
       selection_editor_(MakeGarbageCollected<SelectionEditor>(frame)),
-      granularity_(TextGranularity::kCharacter),
       x_pos_for_vertical_arrow_navigation_(NoXPosForVerticalArrowNavigation()),
       focused_(frame.GetPage() &&
                frame.GetPage()->GetFocusController().FocusedFrame() == frame),
@@ -152,9 +180,15 @@ const SelectionInDomTree& FrameSelection::GetSelectionInDomTree() const {
 }
 
 Element* FrameSelection::RootEditableElementOrDocumentElement() const {
+  if (!IsAvailable()) {
+    return nullptr;
+  }
   // TODO(editing-dev): The use of UpdateStyleAndLayout
   // needs to be audited.  See http://crbug.com/590369 for more details.
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kSelection);
+  if (!IsAvailable()) {
+    return nullptr;
+  }
 
   Element* selection_root =
       ComputeVisibleSelectionInDomTree().RootEditableElement();
@@ -439,6 +473,13 @@ void FrameSelection::SetSelectionForAccessibility(
     const SetSelectionOptions& options) {
   ClearDocumentCachedRange();
 
+  FrameWidget* widget = nullptr;
+  if (base::FeatureList::IsEnabled(
+          features::kSetSelectionForAccessibilityHandlingInputEvent)) {
+    widget = frame_->GetWidgetForLocalRoot();
+  }
+  ScopedHandlingInputEvent scoped_handling_input_event(widget);
+
   const bool did_set = SetSelectionDeprecated(selection, options);
   CacheRangeOfDocument(CreateRange(selection.ComputeRange()));
   if (did_set)
@@ -457,7 +498,7 @@ void FrameSelection::DidChangeChildren(
 void FrameSelection::DidMergeTextNodes(
     const Text& merged_node,
     const NodeWithIndex& node_to_be_removed_with_index,
-    unsigned old_length) {
+    wtf_size_t old_length) {
   if (!document_) {
     return;  // ContextDestroyed() was already called
   }
@@ -473,9 +514,9 @@ void FrameSelection::DidSplitTextNode(const Text& text) {
 }
 
 void FrameSelection::DidUpdateCharacterData(CharacterData* data,
-                                            unsigned offset,
-                                            unsigned old_length,
-                                            unsigned new_length) {
+                                            wtf_size_t offset,
+                                            wtf_size_t old_length,
+                                            wtf_size_t new_length) {
   if (!document_) {
     return;  // ContextDestroyed() was already called
   }
@@ -840,6 +881,8 @@ bool FrameSelection::ShouldPaintCaret(const LayoutBlock& block) const {
   DCHECK(!result ||
          (ComputeVisibleSelectionInDomTree().IsCaret() &&
           (IsEditablePosition(ComputeVisibleSelectionInDomTree().Start()) ||
+           (RuntimeEnabledFeatures::ReadOnlyTextControlSelectionEnabled() &&
+            EnclosingTextControl(ComputeVisibleSelectionInDomTree().Start())) ||
            frame_->IsCaretBrowsingEnabled())));
   return result;
 }
@@ -852,6 +895,8 @@ bool FrameSelection::ShouldPaintCaret(
   DCHECK(!result ||
          (ComputeVisibleSelectionInDomTree().IsCaret() &&
           (IsEditablePosition(ComputeVisibleSelectionInDomTree().Start()) ||
+           (RuntimeEnabledFeatures::ReadOnlyTextControlSelectionEnabled() &&
+            EnclosingTextControl(ComputeVisibleSelectionInDomTree().Start())) ||
            frame_->IsCaretBrowsingEnabled())));
   return result;
 }
@@ -1391,8 +1436,8 @@ void FrameSelection::RevealSelection(
 
   // This function is needed to make sure that ComputeRectToScroll below has the
   // sticky offset info available before the computation.
-  GetDocument().EnsurePaintLocationDataValidForNode(
-      start.AnchorNode(), DocumentUpdateReason::kSelection);
+  GetDocument().UpdateStyleAndLayoutForNode(start.AnchorNode(),
+                                            DocumentUpdateReason::kSelection);
   PhysicalRect selection_rect(ComputeRectToScroll(reveal_extent_option));
   if (selection_rect == PhysicalRect()) {
     return;
@@ -1622,7 +1667,7 @@ SelectionState FrameSelection::ComputePaintingSelectionStateForCursor(
   return layout_selection_->ComputePaintingSelectionStateForCursor(position);
 }
 
-std::optional<unsigned> FrameSelection::ComputeBlockCaretCharacterOffset(
+std::optional<wtf_size_t> FrameSelection::ComputeBlockCaretCharacterOffset(
     const InlineCursor& cursor) const {
   if (GetCaretShape() != CaretShape::kBlock) {
     return std::nullopt;
@@ -1658,14 +1703,14 @@ std::optional<unsigned> FrameSelection::ComputeBlockCaretCharacterOffset(
     return std::nullopt;
   }
 
-  const std::optional<unsigned> tc_offset =
+  const std::optional<wtf_size_t> tc_offset =
       offset_mapping->GetTextContentOffset(position);
   if (!tc_offset) {
     return std::nullopt;
   }
 
-  const unsigned fragment_start = item->StartOffset();
-  const unsigned fragment_end = item->EndOffset();
+  const wtf_size_t fragment_start = item->StartOffset();
+  const wtf_size_t fragment_end = item->EndOffset();
   if (*tc_offset < fragment_start || *tc_offset >= fragment_end) {
     return std::nullopt;
   }

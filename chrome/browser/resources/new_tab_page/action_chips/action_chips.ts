@@ -1,24 +1,36 @@
 // Copyright 2025 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+import 'chrome://resources/cr_components/composebox/icons.html.js';
+import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
+import './icons.html.js';
 
+import {ToolMode} from '//resources/cr_components/composebox/composebox_query.mojom-webui.js';
 import type {TabUpload} from 'chrome://resources/cr_components/composebox/common.js';
-import {TabUploadOrigin} from 'chrome://resources/cr_components/composebox/common.js';
 import type {CrActionMenuElement} from 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
+import {getFaviconUrl} from 'chrome://resources/js/icon.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import type {FuseboxAction} from 'chrome://resources/mojo/components/omnibox/browser/fusebox_action.mojom-webui.js';
+import {QueryActionOverride} from 'chrome://resources/mojo/components/omnibox/browser/fusebox_action.mojom-webui.js';
+import {TabAttachmentSource} from 'chrome://resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import {IconType} from 'chrome://resources/mojo/components/omnibox/browser/suggest_template_info.mojom-webui.js';
 
-import {ToolMode} from '../action_chips.mojom-webui.js';
 import type {ActionChip, ActionChipsHandlerInterface, PageCallbackRouter} from '../action_chips.mojom-webui.js';
-import {IconType} from '../action_chips.mojom-webui.js';
 import {WindowProxy} from '../window_proxy.js';
 
 import {getCss} from './action_chips.css.js';
 import {getHtml} from './action_chips.html.js';
 import {ActionChipsApiProxyImpl} from './action_chips_proxy.js';
+
+export interface ActionChipClickDetail {
+  suggestion: string;
+  files: TabUpload[];
+  fuseboxAction?: FuseboxAction;
+}
 
 // Records a click metric for the given action chip icon type.
 function recordClick(iconType: IconType) {
@@ -84,6 +96,11 @@ export class ActionChipsElement extends CrLitElement {
         type: Boolean,
         reflect: true,
       },
+      smallChipsEnabled_: {
+        type: Boolean,
+        reflect: true,
+        attribute: 'small-chips-enabled',
+      },
     };
   }
 
@@ -94,6 +111,10 @@ export class ActionChipsElement extends CrLitElement {
       loadTimeData.getBoolean('ntpNextShowDismissalUIEnabled');
   protected accessor disablementContextMenuEnabled_: boolean =
       loadTimeData.getBoolean('ntpNextDisablementContextMenuEnabled');
+  protected accessor smallChipsEnabled_: boolean =
+      loadTimeData.getBoolean('ntpSmallActionChipsEnabled');
+  private webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
 
   private callbackRouter: PageCallbackRouter;
   private delayTabUploads_: boolean =
@@ -101,6 +122,43 @@ export class ActionChipsElement extends CrLitElement {
   private handler: ActionChipsHandlerInterface;
   private initialLoadStartTime_: number|null = null;
   private onActionChipChangedListenerId_: number|null = null;
+
+  // Returns the <cr-icon> icon for the chip, or an empty string if the chip
+  // has no icon or shows a favicon instead.
+  protected getIcon_(chip: ActionChip): string {
+    const oldSuffix = this.webuiRoundedIconsEnabled_ ? '' : '-old';
+    switch (chip.suggestTemplateInfo.typeIcon) {
+      case IconType.kBanana:
+        // Same image as the Nano Banana tool icon in the composebox.
+        return 'composebox:nanoBanana-custom';
+      case IconType.kGlobeWithSearchLoop:
+        return `ntp-action-chips:globe-with-search-loop${oldSuffix}`;
+      case IconType.kSubArrowRight:
+        return `ntp-action-chips:sub-arrow-right${oldSuffix}`;
+      case IconType.kDraftSpark:
+        return `ntp-action-chips:draft-spark${oldSuffix}`;
+      case IconType.kSearchLoopWithSparkle:
+        return 'ntp-action-chips:search-spark';
+      case IconType.kLightbulb:
+        return 'ntp-action-chips:lightbulb';
+      case IconType.kAttachFile:
+        return 'ntp-action-chips:attach-file';
+      case IconType.kSchool:
+        return 'ntp-action-chips:school';
+      case IconType.kInkPen:
+        return 'ntp-action-chips:ink-pen';
+      case IconType.kTab:
+        return 'ntp-action-chips:tab';
+      case IconType.kPhotoSpark:
+        return 'ntp-action-chips:photo-spark';
+      case IconType.kBolt:
+        return 'ntp-action-chips:bolt';
+      case IconType.kImageCreate:
+        return 'ntp-action-chips:image-create';
+      default:
+        return '';
+    }
+  }
 
   protected getAdditionalIconClasses_(chip: ActionChip): string {
     switch (chip.suggestTemplateInfo.typeIcon) {
@@ -116,6 +174,22 @@ export class ActionChipsElement extends CrLitElement {
         return 'icon-type-favicon';
       case IconType.kSearchLoopWithSparkle:
         return 'icon-type-search-spark';
+      case IconType.kLightbulb:
+        return 'icon-type-lightbulb';
+      case IconType.kAttachFile:
+        return 'icon-type-attach-file';
+      case IconType.kSchool:
+        return 'icon-type-school';
+      case IconType.kInkPen:
+        return 'icon-type-ink-pen';
+      case IconType.kTab:
+        return 'icon-type-tab';
+      case IconType.kPhotoSpark:
+        return 'icon-type-photo-spark';
+      case IconType.kBolt:
+        return 'icon-type-bolt';
+      case IconType.kImageCreate:
+        return 'icon-type-image-create';
       default:
         return '';
     }
@@ -135,6 +209,7 @@ export class ActionChipsElement extends CrLitElement {
         this.callbackRouter.onActionChipsChanged.addListener(
             (actionChips: ActionChip[]) => {
               this.actionChips_ = actionChips;
+              this.toggleAttribute('has-chips', actionChips.length > 0);
               this.fire(
                   kActionChipsRetrievalStateChangedEvent,
                   {state: ActionChipsRetrievalState.UPDATED});
@@ -162,10 +237,10 @@ export class ActionChipsElement extends CrLitElement {
     }
   }
 
-  protected onClick_(e: Event): void {
+  protected onClick_(e: MouseEvent|KeyboardEvent): void {
     const index = Number((e.currentTarget as HTMLElement).dataset['index']);
     const chip = this.actionChips_[index]!;
-    switch (chip.suggestTemplateInfo.preselectedTool) {
+    switch (chip.suggestTemplateInfo.fuseboxAction?.preselectedTool) {
       case ToolMode.kImageGen:
         this.handler.activateMetricsFunnel('CreateImageChip');
         break;
@@ -190,7 +265,15 @@ export class ActionChipsElement extends CrLitElement {
       default:
         // Do nothing yet...
     }
-    this.onActionChipClick_(chip);
+    this.onActionChipClick_(chip, e);
+  }
+
+  // Auxclick fires for all non-primary mouse buttons. Only handle middle clicks
+  // (button 1) to open in a new background tab, and ignore other buttons.
+  protected onAuxclick_(e: MouseEvent): void {
+    if (e.button === 1) {
+      this.onClick_(e);
+    }
   }
 
   protected onRemoveClick_(e: MouseEvent) {
@@ -200,6 +283,7 @@ export class ActionChipsElement extends CrLitElement {
     const chip = this.actionChips_[index]!;
     this.actionChips_ =
         this.actionChips_.filter((c) => c.suggestion !== chip.suggestion);
+    this.toggleAttribute('has-chips', this.actionChips_.length > 0);
   }
 
   protected onContextmenu_(e: MouseEvent) {
@@ -218,12 +302,12 @@ export class ActionChipsElement extends CrLitElement {
   }
 
 
+  // Returns a chrome://favicon2 URL, or, if the element is hosted in an
+  // extension page, the extension's /_favicon/ URL.
   protected getFaviconUrl_(url: string): string {
-    const faviconUrl = new URL('chrome://favicon2/');
-    faviconUrl.searchParams.set('size', '24');
-    faviconUrl.searchParams.set('scaleFactor', '1x');
+    const faviconUrl =
+        new URL(getFaviconUrl(url, {size: 24, scaleFactor: '1x'}));
     faviconUrl.searchParams.set('showFallbackMonogram', '');
-    faviconUrl.searchParams.set('pageUrl', url);
     return faviconUrl.href;
   }
 
@@ -231,8 +315,19 @@ export class ActionChipsElement extends CrLitElement {
     return chip.tab ? this.getFaviconUrl_(chip.tab.url) : '';
   }
 
-  private onActionChipClick_(chip: ActionChip) {
+  private onActionChipClick_(chip: ActionChip, e: MouseEvent|KeyboardEvent) {
     recordClick(chip.suggestTemplateInfo.typeIcon);
+    if (chip.suggestTemplateInfo.fuseboxAction?.queryActionOverride ===
+        QueryActionOverride.kDefault) {
+      this.handler.navigateToAim(
+          chip.suggestion, (e as MouseEvent).button || 0, {
+            altKey: e.altKey,
+            ctrlKey: e.ctrlKey,
+            metaKey: e.metaKey,
+            shiftKey: e.shiftKey,
+          });
+      return;
+    }
     const contextFiles: TabUpload[] = [];
     const tab = chip.tab;
     if (tab) {
@@ -241,15 +336,14 @@ export class ActionChipsElement extends CrLitElement {
         url: tab.url,
         title: tab.title,
         delayUpload: this.delayTabUploads_,
-        origin: TabUploadOrigin.ACTION_CHIP,
+        origin: TabAttachmentSource.kActionChip,
       };
       contextFiles.push(tabInfo);
     }
-    this.fire('action-chip-click', {
-      text: chip.suggestion,
+    this.fire<ActionChipClickDetail>('action-chip-click', {
+      suggestion: chip.suggestion,
       files: contextFiles,
-      mode: chip.suggestTemplateInfo.preselectedTool,
-      suggestInventory: chip.suggestTemplateInfo.preferredInventory,
+      fuseboxAction: chip.suggestTemplateInfo.fuseboxAction ?? undefined,
     });
   }
 
@@ -271,7 +365,7 @@ export class ActionChipsElement extends CrLitElement {
     const primaryText = chip.suggestTemplateInfo.primaryText;
     const secondaryText = chip.suggestTemplateInfo.secondaryText;
 
-    const primary = primaryText?.a11yText || primaryText?.text || '';
+    const primary = primaryText.a11yText || primaryText.text;
     const secondary = secondaryText?.a11yText || secondaryText?.text || '';
 
     if (primary && secondary) {

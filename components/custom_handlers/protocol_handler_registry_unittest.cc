@@ -277,6 +277,42 @@ TEST_F(ProtocolHandlerRegistryTest, DeniedProtocolIsntHandledUntilAccepted) {
   ASSERT_TRUE(registry()->IsHandledProtocol("news"));
 }
 
+// A refused handler must not be offered for the scheme, nor be promoted when
+// the accepted handler is removed.
+TEST_F(ProtocolHandlerRegistryTest,
+       IgnoredHandlerIsNotAllowedToHandleProtocol) {
+  ProtocolHandler accepted = CreateProtocolHandler("news", "accepted");
+  ProtocolHandler refused = CreateProtocolHandler("news", "refused");
+  registry()->OnAcceptRegisterProtocolHandler(accepted);
+  registry()->OnIgnoreRegisterProtocolHandler(refused);
+
+  EXPECT_FALSE(registry()->IsRegistered(refused));
+  EXPECT_TRUE(registry()->IsIgnored(refused));
+
+  registry()->RemoveDefaultHandler("news");
+
+  EXPECT_FALSE(registry()->IsDefault(refused));
+  EXPECT_TRUE(registry()->GetHandlerFor("news").IsEmpty());
+  EXPECT_FALSE(registry()->IsHandledProtocol("news"));
+}
+
+// Refusing a handler that is currently the default, e.g. after "Allow" then
+// "Deny" in the same bubble, removes it and hands the default back to the
+// handler that had it before.
+TEST_F(ProtocolHandlerRegistryTest, IgnoringTheDefaultFallsBackToOldDefault) {
+  ProtocolHandler ph1 = CreateProtocolHandler("news", "test1");
+  ProtocolHandler ph2 = CreateProtocolHandler("news", "test2");
+  registry()->OnAcceptRegisterProtocolHandler(ph1);
+  registry()->OnAcceptRegisterProtocolHandler(ph2);
+  ASSERT_TRUE(registry()->IsDefault(ph2));
+
+  registry()->OnIgnoreRegisterProtocolHandler(ph2);
+
+  EXPECT_TRUE(registry()->IsDefault(ph1));
+  EXPECT_FALSE(registry()->IsRegistered(ph2));
+  EXPECT_TRUE(registry()->IsIgnored(ph2));
+}
+
 TEST_F(ProtocolHandlerRegistryTest, ClearDefaultMakesProtocolNotHandled) {
   registry()->OnAcceptRegisterProtocolHandler(test_protocol_handler());
   registry()->ClearDefault("news");
@@ -340,6 +376,48 @@ TEST_F(ProtocolHandlerRegistryTest, Encode) {
   EXPECT_EQ("news", recreated.protocol());
   EXPECT_EQ(GURL("https://example.com"), recreated.url());
   EXPECT_EQ(now, recreated.last_modified());
+}
+
+// A handler at the kExtensionFeatures security level with no extension_id is an
+// orphan: extension cleanup keys off the extension_id, so such a handler can
+// never be removed on uninstall/disable. Builds from before the extension_id
+// was populated at registration time could persist one to prefs, where its
+// elevated level would keep validating a cross-origin URL indefinitely.
+// IsAllowedExtensionHandler() must reject it so it is dropped when reloaded
+// rather than silently re-registered with its elevated privileges intact.
+TEST_F(ProtocolHandlerRegistryTest,
+       ExtensionFeaturesHandlerWithoutExtensionIdIsRejected) {
+  base::Time now = base::Time::Now();
+  const GURL cross_origin_url("https://attacker.example/steal?url=%s");
+
+  ProtocolHandler orphan(
+      "mailto", cross_origin_url, /*app_id=*/std::nullopt,
+      /*extension_id=*/std::nullopt, now,
+      /*is_confirmed=*/true, /*is_allowed_in_incognito=*/false,
+      blink::ProtocolHandlerSecurityLevel::kExtensionFeatures);
+  // The orphan is well-formed per the HTML spec (safelisted scheme, trustworthy
+  // URL); it is the missing extension association -- a concern separate from
+  // IsValid() -- that must disqualify it.
+  EXPECT_TRUE(orphan.IsValid());
+  EXPECT_FALSE(orphan.IsAllowedExtensionHandler());
+
+  // The same handler is allowed once it is associated with an extension.
+  ProtocolHandler tagged(
+      "mailto", cross_origin_url, /*app_id=*/std::nullopt,
+      /*extension_id=*/"ext_id_123", now,
+      /*is_confirmed=*/true, /*is_allowed_in_incognito=*/false,
+      blink::ProtocolHandlerSecurityLevel::kExtensionFeatures);
+  EXPECT_TRUE(tagged.IsAllowedExtensionHandler());
+
+  // Reload the orphan through the pref serialization round-trip that startup
+  // performs. Every registration path funnels through RegisterProtocolHandler,
+  // which rejects it, so it must not become a live handler.
+  ProtocolHandler reloaded =
+      ProtocolHandler::CreateProtocolHandler(orphan.Encode());
+  EXPECT_FALSE(reloaded.IsAllowedExtensionHandler());
+  registry()->OnAcceptRegisterProtocolHandler(reloaded);
+  EXPECT_TRUE(registry()->GetHandlersFor("mailto").empty());
+  EXPECT_FALSE(registry()->IsHandledProtocol("mailto"));
 }
 
 // CreateProtocolHandler must default is_allowed_in_incognito to false.
@@ -483,6 +561,38 @@ TEST_F(ProtocolHandlerRegistryTest, TestExtensionProtocolHandlers) {
         registry()->GetExtensionProtocolHandlers(kIdBar);
     ASSERT_EQ(static_cast<size_t>(1), handlers.size());
   }
+}
+
+// A handler accepted through the registerProtocolHandler permission prompt is
+// confirmed, but it still uses the elevated kExtension security level, so --
+// like any extension handler -- it must not take the default away from a
+// non-extension handler (here a predefined default, as Chrome OS ships for
+// mailto/webcal). The unconfirmed, manifest-declared case is already covered by
+// ProtocolHandlersManagerBrowserTest.ExtensionRegistrationConflictSameScheme;
+// this pins the confirmed/runtime case, which is what tagging
+// navigator.registerProtocolHandler handlers as extension handlers introduced,
+// and guards against re-exempting confirmed handlers from the rule. Regression
+// coverage for the Chrome OS ProtocolHandlerApiTest.Registration failure.
+TEST_F(ProtocolHandlerRegistryTest,
+       ConfirmedExtensionHandlerDoesNotOverrideNonExtensionDefault) {
+  const std::string kExtensionId("abcdefghijklmnopabcdefghijklmnop");
+
+  // Install a predefined non-extension default handler, as Chrome OS does for
+  // mailto at startup.
+  RecreateRegistry(false);
+  ProtocolHandler predefined =
+      CreateProtocolHandler("mailto", GURL("https://predefined.test/%s"));
+  registry()->AddPredefinedHandler(predefined);
+  registry()->InitProtocolSettings();
+  ASSERT_TRUE(registry()->IsDefault(predefined));
+
+  ProtocolHandler js_handler = CreateExtensionProtocolHandler(
+      "mailto", GURL("https://runtime.test/%s"), kExtensionId);
+  js_handler.Confirm();
+  ASSERT_TRUE(js_handler.is_confirmed());
+  registry()->OnAcceptRegisterProtocolHandler(js_handler);
+  EXPECT_TRUE(registry()->IsDefault(predefined));
+  EXPECT_FALSE(registry()->IsDefault(js_handler));
 }
 
 TEST_F(ProtocolHandlerRegistryTest, TestEnabledDisabled) {
@@ -1268,10 +1378,14 @@ TEST_F(ProtocolHandlerRegistryTest, ProtocolHandlerSecurityLevels) {
            "f2d8c47d-17d0-4bf5-8f0a-76e42cbed3bf/%s"),
       blink::ProtocolHandlerSecurityLevel::kExtensionFeatures));
 
-  // ext+foo scheme.
-  EXPECT_TRUE(ProtocolHandlerCanRegisterProtocol(
-      "ext+foo", https_handler_url,
-      blink::ProtocolHandlerSecurityLevel::kExtensionFeatures));
+  // ext+foo scheme. The ext+ prefix is only valid at the kExtensionFeatures
+  // level, which is reserved for extension handlers, so register one via the
+  // extension factory (which supplies the required extension id). Extension
+  // handlers start unconfirmed, so check the handler list rather than
+  // IsHandledProtocol.
+  registry()->OnAcceptRegisterProtocolHandler(CreateExtensionProtocolHandler(
+      "ext+foo", https_handler_url, "extension_id"));
+  EXPECT_FALSE(registry()->GetHandlersFor("ext+foo").empty());
 }
 
 TEST_F(ProtocolHandlerRegistryTest, OnlyExtensionHandlersUnconfirmed) {
@@ -1396,73 +1510,24 @@ TEST_P(ProtocolHandlerRegistrySchemeTest, SafelistedSchemes) {
   }
 }
 
-namespace {
-
-enum class CredentialsTestMode {
-  kStripCredentials,
-  kKeepCredentials,
-};
-
-}  // namespace
-
-class ProtocolHandlerRegistryCredentialsTest
-    : public ProtocolHandlerRegistryTest,
-      public ::testing::WithParamInterface<CredentialsTestMode> {
- public:
-  ~ProtocolHandlerRegistryCredentialsTest() override = default;
-
- private:
-  void SetUp() override {
-    ProtocolHandlerRegistryTest::SetUp();
-    if (GetParam() == CredentialsTestMode::kStripCredentials) {
-      scoped_feature_list_.InitAndEnableFeature(
-          features::kStripCredentialsForExternalProtocolHandler);
-    } else {
-      scoped_feature_list_.InitAndDisableFeature(
-          features::kStripCredentialsForExternalProtocolHandler);
-    }
-  }
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    ProtocolHandlerRegistryCredentialsTest,
-    testing::Values(CredentialsTestMode::kStripCredentials,
-                    CredentialsTestMode::kKeepCredentials));
-
 // See
 // https://html.spec.whatwg.org/multipage/system-state.html#security-and-privacy
 // guidance on mitigating credential leaks.
-TEST_P(ProtocolHandlerRegistryCredentialsTest,
-       NoCredentialsForStandardSchemes) {
+TEST_F(ProtocolHandlerRegistryTest, NoCredentialsForStandardSchemes) {
   ProtocolHandler ph =
       CreateProtocolHandler("ftp", GURL("https://example.com/url=%s"));
   registry()->OnAcceptRegisterProtocolHandler(ph);
 
   EXPECT_EQ(ph.TranslateUrl(GURL("ftp://example/y")),
             GURL("https://example.com/url=ftp%3A%2F%2Fexample%2Fy"));
-  if (GetParam() == CredentialsTestMode::kStripCredentials) {
-    EXPECT_EQ(ph.TranslateUrl(GURL("ftp://user@example/y")),
-              GURL("https://example.com/url=ftp%3A%2F%2Fexample%2Fy"));
-    EXPECT_EQ(ph.TranslateUrl(GURL("ftp://:password@example/y")),
-              GURL("https://example.com/url=ftp%3A%2F%2Fexample%2Fy"));
-    EXPECT_EQ(ph.TranslateUrl(GURL("ftp://user:password@example/y")),
-              GURL("https://example.com/url=ftp%3A%2F%2Fexample%2Fy"));
-    EXPECT_EQ(ph.TranslateUrl(GURL("ftp://user:password@example/y#ref")),
-              GURL("https://example.com/url=ftp%3A%2F%2Fexample%2Fy%23ref"));
-  } else {
-    EXPECT_EQ(ph.TranslateUrl(GURL("ftp://user@example/y")),
-              GURL("https://example.com/url=ftp%3A%2F%2Fuser%40example%2Fy"));
-    EXPECT_EQ(
-        ph.TranslateUrl(GURL("ftp://:password@example/y")),
-        GURL("https://example.com/url=ftp%3A%2F%2F%3Apassword%40example%2Fy"));
-    EXPECT_EQ(ph.TranslateUrl(GURL("ftp://user:password@example/y")),
-              GURL("https://example.com/"
-                   "url=ftp%3A%2F%2Fuser%3Apassword%40example%2Fy"));
-    EXPECT_EQ(ph.TranslateUrl(GURL("ftp://user:password@example/y#ref")),
-              GURL("https://example.com/"
-                   "url=ftp%3A%2F%2Fuser%3Apassword%40example%2Fy%23ref"));
-  }
+  EXPECT_EQ(ph.TranslateUrl(GURL("ftp://user@example/y")),
+            GURL("https://example.com/url=ftp%3A%2F%2Fexample%2Fy"));
+  EXPECT_EQ(ph.TranslateUrl(GURL("ftp://:password@example/y")),
+            GURL("https://example.com/url=ftp%3A%2F%2Fexample%2Fy"));
+  EXPECT_EQ(ph.TranslateUrl(GURL("ftp://user:password@example/y")),
+            GURL("https://example.com/url=ftp%3A%2F%2Fexample%2Fy"));
+  EXPECT_EQ(ph.TranslateUrl(GURL("ftp://user:password@example/y#ref")),
+            GURL("https://example.com/url=ftp%3A%2F%2Fexample%2Fy%23ref"));
 }
 
 TEST_F(ProtocolHandlerRegistryTest, CredentialsForNonStandardSchemes) {

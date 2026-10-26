@@ -42,11 +42,12 @@
 #include "third_party/blink/renderer/modules/webaudio/audio_node_output.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_processing_event.h"
 #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
+#include "third_party/blink/renderer/modules/webaudio/realtime_audio_destination_handler.h"
 #include "third_party/blink/renderer/modules/webaudio/realtime_audio_destination_node.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
-#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -90,17 +91,15 @@ uint32_t ChooseBufferSize(uint32_t callback_buffer_size) {
 
 }  // namespace
 
-ScriptProcessorNode::ScriptProcessorNode(BaseAudioContext& context,
+ScriptProcessorNode::ScriptProcessorNode(base::PassKey<ScriptProcessorNode>,
+                                         BaseAudioContext& context,
                                          float sample_rate,
                                          uint32_t buffer_size,
                                          uint32_t number_of_input_channels,
                                          uint32_t number_of_output_channels)
     : AudioNode(context), ActiveScriptWrappable<ScriptProcessorNode>({}) {
-  // Regardless of the allowed buffer sizes, we still need to process at the
-  // granularity of the AudioNode.
-  if (buffer_size < context.renderQuantumSize()) {
-    buffer_size = context.renderQuantumSize();
-  }
+  CHECK_GE(buffer_size, context.renderQuantumSize());
+  CHECK_EQ(buffer_size % context.renderQuantumSize(), 0u);
 
   // Create double buffers on both the input and output sides.
   // These AudioBuffers will be directly accessed in the main thread by
@@ -189,25 +188,23 @@ ScriptProcessorNode* ScriptProcessorNode::Create(
   if (number_of_input_channels > BaseAudioContext::MaxNumberOfChannels()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        StrCat({"number of input channels (",
-                String::Number(number_of_input_channels), ") exceeds maximum (",
-                String::Number(BaseAudioContext::MaxNumberOfChannels()),
-                ")."}));
+        Format("number of input channels ({}) exceeds maximum ({}).",
+               number_of_input_channels,
+               BaseAudioContext::MaxNumberOfChannels()));
     return nullptr;
   }
 
   if (number_of_output_channels > BaseAudioContext::MaxNumberOfChannels()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        StrCat(
-            {"number of output channels (",
-             String::Number(number_of_output_channels), ") exceeds maximum (",
-             String::Number(BaseAudioContext::MaxNumberOfChannels()), ")."}));
+        Format("number of output channels ({}) exceeds maximum ({}).",
+               number_of_output_channels,
+               BaseAudioContext::MaxNumberOfChannels()));
     return nullptr;
   }
 
   // Sanitize user-supplied buffer size.
-  uint32_t buffer_size;
+  uint32_t buffer_size = 0;
   switch (requested_buffer_size) {
     case 0:
       // Choose an appropriate size.  For an AudioContext that is not closed, we
@@ -215,7 +212,7 @@ ScriptProcessorNode* ScriptProcessorNode::Create(
       if (context.HasRealtimeConstraint() && !context.IsContextCleared()) {
         RealtimeAudioDestinationHandler& destination_handler =
             static_cast<RealtimeAudioDestinationHandler&>(
-                context.destination()->GetAudioDestinationHandler());
+                context.destinationNode()->GetAudioDestinationHandler());
         buffer_size =
             ChooseBufferSize(destination_handler.GetCallbackBufferSize());
       } else {
@@ -238,14 +235,25 @@ ScriptProcessorNode* ScriptProcessorNode::Create(
     default:
       exception_state.ThrowDOMException(
           DOMExceptionCode::kIndexSizeError,
-          StrCat({"buffer size (", String::Number(requested_buffer_size),
-                  ") must be 0 or a power of two between 256 and 16384."}));
+          Format("buffer size ({}) must be 0 or a power of two between 256 and "
+                 "16384.",
+                 requested_buffer_size));
       return nullptr;
   }
 
+  uint32_t render_quantum_size = context.renderQuantumSize();
+  if (render_quantum_size == 0 || buffer_size % render_quantum_size != 0) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotSupportedError,
+        Format("buffer size ({}) must be a multiple of the context render "
+               "quantum size ({}).",
+               buffer_size, render_quantum_size));
+    return nullptr;
+  }
+
   ScriptProcessorNode* node = MakeGarbageCollected<ScriptProcessorNode>(
-      context, context.sampleRate(), buffer_size, number_of_input_channels,
-      number_of_output_channels);
+      base::PassKey<ScriptProcessorNode>(), context, context.sampleRate(),
+      buffer_size, number_of_input_channels, number_of_output_channels);
 
   if (!node) {
     return nullptr;

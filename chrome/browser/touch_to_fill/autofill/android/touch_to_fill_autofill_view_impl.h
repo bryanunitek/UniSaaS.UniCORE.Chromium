@@ -7,6 +7,7 @@
 
 #include <jni.h>
 
+#include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/touch_to_fill/autofill/android/touch_to_fill_autofill_view.h"
 
@@ -31,14 +32,23 @@ class TouchToFillAutofillViewImpl : public TouchToFillAutofillView {
   // TouchToFillAutofillView:
   bool ShowPersonalContextNotice(
       TouchToFillAutofillController* controller) override;
+  bool ShowPrivateInferenceNotice(
+      TouchToFillAutofillController* controller) override;
   void Hide() override;
 
   // JNI methods.
   void OnNoticeAcknowledged(JNIEnv* env);
+  void OnSettingsLinkClicked(JNIEnv* env);
   void OnDismissed(JNIEnv* env);
 
  private:
+  // Creates the Java counterpart if it does not exist yet and sets the
+  // `controller_`. Returns whether the Java counterpart is available.
+  bool EnsureJavaBridge(TouchToFillAutofillController* controller);
+
   // The corresponding Java TouchToFillAutofillViewBridge.
+  base::android::ScopedJavaGlobalRef<jobject> java_object_;
+  raw_ptr<TouchToFillAutofillController> controller_ = nullptr;
   raw_ptr<content::WebContents> web_contents_;
 };
 }  // namespace autofill

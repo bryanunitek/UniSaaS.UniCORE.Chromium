@@ -23,7 +23,7 @@
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/profiles/profile_colors_util.h"
 #include "chrome/browser/ui/webui/signin/signin_url_utils.h"
 #include "chrome/browser/ui/webui/signin/sync_confirmation_handler.h"
@@ -39,6 +39,7 @@
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
@@ -99,7 +100,10 @@ std::string SyncConfirmationUI::GetSyncBenefitsListJSON(
 
     base::DictValue bookmarks;
     bookmarks.Set(kSyncBenefitTitleKey, titleKey);
-    bookmarks.Set(kSyncBenefitIconNameKey, "signin:star-outline");
+    bookmarks.Set(kSyncBenefitIconNameKey,
+                  (base::FeatureList::IsEnabled(features::kWebUIRoundedIcons)
+                       ? "signin:star"
+                       : "signin:star-outline-old"));
     sync_benefits_list.Append(std::move(bookmarks));
   }
 
@@ -107,7 +111,10 @@ std::string SyncConfirmationUI::GetSyncBenefitsListJSON(
                                        UserSelectableType::kPasswords})) {
     base::DictValue autofill;
     autofill.Set(kSyncBenefitTitleKey, kSyncBenefitAutofillStringName);
-    autofill.Set(kSyncBenefitIconNameKey, "signin:assignment-outline");
+    autofill.Set(kSyncBenefitIconNameKey,
+                 (base::FeatureList::IsEnabled(features::kWebUIRoundedIcons)
+                      ? "signin:assignment"
+                      : "signin:assignment-outline-old"));
     sync_benefits_list.Append(std::move(autofill));
   }
 
@@ -115,7 +122,10 @@ std::string SyncConfirmationUI::GetSyncBenefitsListJSON(
                                        UserSelectableType::kApps})) {
     base::DictValue extensions;
     extensions.Set(kSyncBenefitTitleKey, kSyncBenefitExtensionsStringName);
-    extensions.Set(kSyncBenefitIconNameKey, "signin:extension-outline");
+    extensions.Set(kSyncBenefitIconNameKey,
+                   (base::FeatureList::IsEnabled(features::kWebUIRoundedIcons)
+                        ? "signin:chrome-extension"
+                        : "signin:extension-outline-old"));
     sync_benefits_list.Append(std::move(extensions));
   }
 
@@ -124,7 +134,11 @@ std::string SyncConfirmationUI::GetSyncBenefitsListJSON(
   base::DictValue history_and_more;
   history_and_more.Set(kSyncBenefitTitleKey,
                        kSyncBenefitHistoryAndMoreStringName);
-  history_and_more.Set(kSyncBenefitIconNameKey, "signin:devices");
+  history_and_more.Set(
+      kSyncBenefitIconNameKey,
+      (base::FeatureList::IsEnabled(features::kWebUIRoundedIcons)
+           ? "signin:devices"
+           : "signin:devices-old"));
   sync_benefits_list.Append(std::move(history_and_more));
 
   return base::WriteJson(sync_benefits_list).value_or("");
@@ -157,13 +171,8 @@ SyncConfirmationUI::SyncConfirmationUI(content::WebUI* web_ui)
        IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_CONFIRMATION_JS},
       {"sync_confirmation_refresh.js",
        IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_CONFIRMATION_REFRESH_JS},
-      {chrome::kChromeUISyncConfirmationLoadingPath,
-       IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_LOADING_CONFIRMATION_HTML},
   };
   source->AddResourcePaths(kResources);
-
-  AddStringResource(source, "syncLoadingConfirmationTitle",
-                    IDS_SYNC_LOADING_CONFIRMATION_TITLE);
 
   bool is_first_run_desktop_refresh_enabled = false;
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
@@ -191,7 +200,7 @@ SyncConfirmationUI::SyncConfirmationUI(content::WebUI* web_ui)
                                  &strings);
   source->AddLocalizedStrings(strings);
 
-  if (url.GetQuery().find("debug") != std::string::npos) {
+  if (url.query().find("debug") != std::string::npos) {
     // Not intended to be hooked to anything. The dialog will not initialize it
     // so we force it here.
     InitializeMessageHandlerWithBrowser(nullptr);
@@ -200,7 +209,8 @@ SyncConfirmationUI::SyncConfirmationUI(content::WebUI* web_ui)
 
 SyncConfirmationUI::~SyncConfirmationUI() = default;
 
-void SyncConfirmationUI::InitializeMessageHandlerWithBrowser(Browser* browser) {
+void SyncConfirmationUI::InitializeMessageHandlerWithBrowser(
+    BrowserWindowInterface* browser) {
   web_ui()->AddMessageHandler(std::make_unique<SyncConfirmationHandler>(
       profile_, js_localized_string_to_ids_map_, browser));
 }
@@ -253,11 +263,11 @@ void SyncConfirmationUI::InitializeForSyncConfirmation(
         "sync_confirmation_app_refresh.html.js",
         IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_CONFIRMATION_APP_REFRESH_HTML_JS);
     source->AddResourcePath(
-        "images/profile_picker_light_background.svg",
-        IDR_SIGNIN_IMAGES_PROFILE_PICKER_LIGHT_BACKGROUND_SVG);
+        "images/shared_gradient_light_background.svg",
+        IDR_SIGNIN_IMAGES_SHARED_GRADIENT_LIGHT_BACKGROUND_SVG);
     source->AddResourcePath(
-        "images/profile_picker_dark_background.svg",
-        IDR_SIGNIN_IMAGES_PROFILE_PICKER_DARK_BACKGROUND_SVG);
+        "images/shared_gradient_dark_background.svg",
+        IDR_SIGNIN_IMAGES_SHARED_GRADIENT_DARK_BACKGROUND_SVG);
   }
 
   // TODO(crbug.com/40242558): Refactor SyncConfirmationStyle based on the
@@ -304,7 +314,7 @@ void SyncConfirmationUI::InitializeForSyncConfirmation(
         g_browser_process->profile_manager()
             ->GetProfileAttributesStorage()
             .GetProfileAttributesWithPath(profile_->GetPath());
-    DCHECK(entry);
+    CHECK(entry, base::NotFatalUntil::M162);
     std::u16string gaia_name = entry->GetGAIANameToDisplay();
     if (gaia_name.empty()) {
       gaia_name = entry->GetLocalProfileName();

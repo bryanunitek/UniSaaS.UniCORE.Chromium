@@ -4,6 +4,7 @@
 
 #include "android_webview/browser/gfx/output_surface_provider_webview.h"
 
+#include <optional>
 #include <utility>
 
 #include "android_webview/browser/gfx/aw_gl_surface_external_stencil.h"
@@ -33,6 +34,7 @@
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_share_group.h"
 #include "ui/gl/gl_surface_egl.h"
+#include "ui/gl/gl_switches.h"
 #include "ui/gl/gl_utils.h"
 #include "ui/gl/init/gl_factory.h"
 
@@ -78,24 +80,153 @@ GLSurfaceContextPair GetRealContextForVulkan() {
   return std::make_pair(std::move(surface), std::move(context));
 }
 
-void OnContextLost(std::unique_ptr<bool> expect_loss,
-                   bool synthetic_loss,
-                   gpu::error::ContextLostReason context_lost_reason) {
-  if (expect_loss && *expect_loss)
-    return;
+scoped_refptr<gpu::SharedContextState> CreateSharedContextStateHelper(
+    AwVulkanContextProvider* vulkan_context_provider,
+    const AwGrContextOptionsProvider* gr_context_options_provider,
+    bool enable_vulkan,
+    gl::GLSurface* gl_surface,
+    GLSurfaceContextPair real_context) {
+  gl::GLDisplayEGL* display = gl::GLSurfaceEGL::GetGLDisplayEGL();
+  const bool is_angle =
+      !enable_vulkan && display->ext->b_EGL_ANGLE_external_context_and_surface;
 
-  static ::crash_reporter::CrashKeyString<10> reason_key(
-      crash_keys::kContextLossReason);
-  reason_key.Set(base::NumberToString(static_cast<int>(context_lost_reason)));
+  scoped_refptr<gl::GLContext> gl_context;
+  gpu::GpuDriverBugWorkarounds workarounds(
+      GpuServiceWebView::GetInstance()
+          ->gpu_feature_info()
+          .enabled_gpu_driver_bug_workarounds);
 
-  // TODO(crbug.com/40143203): Debugging contexts losts. WebView will
-  // intentionally crash in HardwareRenderer::OnViz::DisplayOutputSurface
-  // that will happen after this callback. That crash happens on viz thread and
-  // doesn't have any useful information. Crash here on RenderThread to
-  // understand the reason of context losts.
-  // If this implementation changes, need to ensure `expect_loss` access from
-  // MarkAllowContextLoss is still valid.
-  LOG(FATAL) << "Non owned context lost!";
+  // The SharedContextState expect to receive a GLSurface that was used to
+  // create the GLContext. In case of Vulkan, a GLContext is passed, but
+  // |gl_surface| is a AWGLSurface, which wraps the real GLSurface that was
+  // used to create a context.
+  scoped_refptr<gl::GLSurface> gl_surface_for_scs;
+  if (!enable_vulkan ||
+      !base::FeatureList::IsEnabled(::features::kSkipDisabledGLContextOnDrDC)) {
+    // If failed to create real context for vulkan, just fallback to using
+    // GLNonOwnedContext instead of crashing.
+    if (enable_vulkan && real_context.second) {
+      gl_context = std::move(real_context.second);
+      gl_surface_for_scs = std::move(real_context.first);
+    } else {
+      auto share_group = base::MakeRefCounted<gl::GLShareGroup>();
+      gl::GLContextAttribs attribs;
+      // For ANGLE EGL, we need to create ANGLE context from the current native
+      // EGL context and restore state of the native EGL context when releasing
+      // the ANGLE context.
+      attribs.angle_create_from_external_context = is_angle;
+
+      // By default client arrays are disabled as they are not supported by
+      // Chrome's IPC architecture. However, they are required for WebView's
+      // usage (in particular, for supporting complex clips).
+      attribs.allow_client_arrays = true;
+
+      // Skip validation when dcheck is off.
+#if DCHECK_IS_ON()
+      attribs.can_skip_validation = false;
+#else
+      attribs.can_skip_validation = true;
+#endif
+      gl_context =
+          gl::init::CreateGLContext(share_group.get(), gl_surface, attribs);
+      gl_context->MakeCurrent(gl_surface);
+      gl_surface_for_scs = gl_surface;
+    }
+  }
+
+  auto* share_group = gl_context ? gl_context->share_group() : nullptr;
+  // Context loss is checked and handled on RenderThread in
+  // HardwareRenderer::CrashOnContextLoss(), so no immediate OnContextLost
+  // callback handler is required here.
+  auto shared_context_state = base::MakeRefCounted<gpu::SharedContextState>(
+      share_group, std::move(gl_surface_for_scs), std::move(gl_context),
+      /*use_virtualized_gl_contexts=*/false, base::DoNothing(),
+      GpuServiceWebView::GetInstance()->gpu_preferences().gr_context_type,
+      vulkan_context_provider, /*dawn_context_provider=*/nullptr,
+      /*peak_memory_monitor=*/nullptr,
+      /*direct_rendering_display_compositor_enabled=*/false,
+      /*created_on_compositor_gpu_thread=*/false, gr_context_options_provider);
+  if (!enable_vulkan) {
+    shared_context_state->InitializeGL(
+        GpuServiceWebView::GetInstance()->gpu_preferences(), workarounds,
+        GpuServiceWebView::GetInstance()->gpu_feature_info());
+  }
+
+  shared_context_state->InitializeSkia(
+      GpuServiceWebView::GetInstance()->gpu_preferences(), workarounds);
+
+  return shared_context_state;
+}
+
+scoped_refptr<gpu::SharedContextState> GetOrCreateSharedContextState(
+    AwVulkanContextProvider* vulkan_context_provider,
+    const AwGrContextOptionsProvider* gr_context_options_provider,
+    bool enable_vulkan,
+    gl::GLSurface* gl_surface,
+    GLSurfaceContextPair real_context) {
+  static base::NoDestructor<base::WeakPtr<gpu::SharedContextState>>
+      cached_shared_context_state;
+  // The `is_angle` value which was used to create the cached
+  // SharedContextState. Note that this can not be recomputed from the cached
+  // SharedContextState's GLVersionInfo: the latter is derived from GL_RENDERER,
+  // which reports ANGLE whenever the underlying driver is ANGLE - including
+  // when Android itself uses ANGLE as the system GLES driver while Chrome runs
+  // on native EGL. `is_angle` below instead answers the question we care about
+  // here, namely whether *our* EGL implementation is ANGLE.
+  static std::optional<bool> cached_is_angle;
+
+  gl::GLDisplayEGL* display = gl::GLSurfaceEGL::GetGLDisplayEGL();
+  const bool is_angle =
+      !enable_vulkan && display->ext->b_EGL_ANGLE_external_context_and_surface;
+
+  if (*cached_shared_context_state &&
+      !(*cached_shared_context_state)->context_lost()) {
+    auto* shared_context_state = cached_shared_context_state->get();
+    // Validate that the existing SharedContextState has the same properties
+    // we would use if creating a new one.
+    CHECK_EQ(shared_context_state->IsUsingGL(), !enable_vulkan);
+    CHECK_EQ(
+        shared_context_state->gr_context_type(),
+        GpuServiceWebView::GetInstance()->gpu_preferences().gr_context_type);
+    CHECK(!shared_context_state->use_virtualized_gl_contexts());
+    if (enable_vulkan) {
+      CHECK_EQ(shared_context_state->vk_context_provider(),
+               vulkan_context_provider);
+    } else {
+      CHECK(shared_context_state->feature_info());
+      CHECK_EQ(cached_is_angle.value(), is_angle);
+    }
+    return base::WrapRefCounted(shared_context_state);
+  }
+
+  // To avoid confusion of sharing the first WebView's gl_surface_ globally,
+  // we create an independent dummy surface for the SharedContextState.
+  scoped_refptr<gl::GLSurface> dummy_surface;
+
+  if (enable_vulkan) {
+    if (real_context.first) {
+      dummy_surface =
+          base::MakeRefCounted<AwGLSurface>(display, real_context.first);
+    }
+  } else {
+    // SharedContextState only uses this as a default anchor surface, so
+    // a basic AwGLSurface is sufficient instead of AwGLSurfaceExternalStencil.
+    dummy_surface = base::MakeRefCounted<AwGLSurface>(display, is_angle);
+  }
+
+  if (dummy_surface) {
+    dummy_surface->Initialize(gl::GLSurfaceFormat());
+  }
+
+  scoped_refptr<gpu::SharedContextState> shared_context_state =
+      CreateSharedContextStateHelper(
+          vulkan_context_provider, gr_context_options_provider, enable_vulkan,
+          dummy_surface ? dummy_surface.get() : gl_surface,
+          std::move(real_context));
+
+  *cached_shared_context_state = shared_context_state->GetWeakPtr();
+  cached_is_angle = is_angle;
+  return shared_context_state;
 }
 
 }  // namespace
@@ -123,29 +254,32 @@ OutputSurfaceProviderWebView::OutputSurfaceProviderWebView(
 }
 
 OutputSurfaceProviderWebView::~OutputSurfaceProviderWebView() {
-  // We must destroy |gl_surface_| before |shared_context_state_|, so we will
-  // still have context. Note that with ANGLE we are not actually guaranteed to
-  // have a current context at this point, so ensure that it is current here (if
-  // not using ANGLE, RenderThreadManager::DestroyHardwareRendererOnRT() ensures
-  // that there is a current context via its creation of a
-  // ScopedAppGLStateRestoreImpl instance, which creates a placeholder context).
-  // NOTE: |shared_context_state_| holds a ref to surface, but it explicitly
-  // drops it before releasing the context.
-  if (gl_surface_->is_angle()) {
-    shared_context_state_->MakeCurrent(nullptr);
+  if (gl_surface_) {
+    // We must destroy |gl_surface_| before |shared_context_state_|, so we will
+    // still have context. Note that with ANGLE we are not actually guaranteed
+    // to have a current context at this point, so ensure that it is current
+    // here (if not using ANGLE,
+    // RenderThreadManager::DestroyHardwareRendererOnRT() ensures that there is
+    // a current context via its creation of a ScopedAppGLStateRestoreImpl
+    // instance, which creates a placeholder context). NOTE:
+    // |shared_context_state_| holds a ref to surface, but it explicitly drops
+    // it before releasing the context.
+    if (gl_surface_->is_angle()) {
+      shared_context_state_->MakeCurrent(nullptr);
+    }
+    // Given this surface is held by gl::GLContext as a default surface,
+    // releasing it here doesn't result in destruction of the GL objects (namely
+    // the stencil buffer) when it's released. As a result, when the surface is
+    // finally destroyed (happens when the context that also holds that is
+    // destroyed), the stencil buffer is destroyed on a wrong context resulting
+    // in a no context crash. Thus, explicitly ask to destroy the fb here.
+    gl_surface_->DestroyExternalStencilFramebuffer();
+    gl_surface_.reset();
   }
-  // Given this surface is held by gl::GLContext as a default surface, releasing
-  // it here doesn't result in destruction of the GL objects (namely the stencil
-  // buffer) when it's released. As a result, when the surface is finally
-  // destroyed (happens when the context that also holds that is destroyed), the
-  // stencil buffer is destroyed on a wrong context resulting in a no context
-  // crash. Thus, explicitly ask to destroy the fb here.
-  gl_surface_->DestroyExternalStencilFramebuffer();
-  gl_surface_.reset();
 }
 
 void OutputSurfaceProviderWebView::InitializeContext() {
-  DCHECK(!gl_surface_) << "InitializeContext() called twice";
+  DCHECK(!shared_context_state_) << "InitializeContext() called twice";
   gl::GLDisplayEGL* display = gl::GLSurfaceEGL::GetGLDisplayEGL();
   // If EGL supports EGL_ANGLE_external_context_and_surface, then we will create
   // an ANGLE context for the current native GL context.
@@ -155,85 +289,38 @@ void OutputSurfaceProviderWebView::InitializeContext() {
   GLSurfaceContextPair real_context;
   if (enable_vulkan_) {
     DCHECK(!is_angle);
-    real_context = GetRealContextForVulkan();
-    gl_surface_ =
-        base::MakeRefCounted<AwGLSurface>(display, real_context.first);
+    if (!base::FeatureList::IsEnabled(
+            ::features::kSkipDisabledGLContextOnDrDC)) {
+      real_context = GetRealContextForVulkan();
+      gl_surface_ =
+          base::MakeRefCounted<AwGLSurface>(display, real_context.first);
+    }
   } else {
     // We need to draw to FBO for External Stencil support with SkiaRenderer
     gl_surface_ =
         base::MakeRefCounted<AwGLSurfaceExternalStencil>(display, is_angle);
   }
-
-  bool result = gl_surface_->Initialize(gl::GLSurfaceFormat());
-  DCHECK(result);
-
-  scoped_refptr<gl::GLContext> gl_context;
-  gpu::GpuDriverBugWorkarounds workarounds(
-      GpuServiceWebView::GetInstance()
-          ->gpu_feature_info()
-          .enabled_gpu_driver_bug_workarounds);
-
-  // The SharedContextState expect to receive a GLSurface that was used to
-  // create the GLContext. In case of Vulkan, a GLContext is passed, but
-  // |gl_surface| is a AWGLSurface, which wraps the real GLSurface that was
-  // used to create a context.
-  scoped_refptr<gl::GLSurface> gl_surface_for_scs;
-  // If failed to create real context for vulkan, just fallback to using
-  // GLNonOwnedContext instead of crashing.
-  if (enable_vulkan_ && real_context.second) {
-    gl_context = std::move(real_context.second);
-    gl_surface_for_scs = std::move(real_context.first);
-  } else {
-    auto share_group = base::MakeRefCounted<gl::GLShareGroup>();
-    gl::GLContextAttribs attribs;
-    // For ANGLE EGL, we need to create ANGLE context from the current native
-    // EGL context and restore state of the native EGL context when releasing
-    // the ANGLE context.
-    attribs.angle_create_from_external_context = is_angle;
-
-    // By default client arrays are disabled as they are not supported by
-    // Chrome's IPC architecture. However, they are required for WebView's
-    // usage (in particular, for supporting complex clips).
-    attribs.allow_client_arrays = true;
-
-    // Skip validation when dcheck is off.
-#if DCHECK_IS_ON()
-    attribs.can_skip_validation = false;
-#else
-    attribs.can_skip_validation = true;
-#endif
-    gl_context = gl::init::CreateGLContext(share_group.get(), gl_surface_.get(),
-                                           attribs);
-    gl_context->MakeCurrent(gl_surface_.get());
-    gl_surface_for_scs = gl_surface_;
+  if (gl_surface_) {
+    bool result = gl_surface_->Initialize(gl::GLSurfaceFormat());
+    DCHECK(result);
   }
 
-  auto* share_group = gl_context->share_group();
-  auto expect_context_loss_ptr = std::make_unique<bool>(false);
-  expect_context_loss_ = expect_context_loss_ptr.get();
-  shared_context_state_ = base::MakeRefCounted<gpu::SharedContextState>(
-      share_group, std::move(gl_surface_for_scs), std::move(gl_context),
-      /*use_virtualized_gl_contexts=*/false,
-      base::BindOnce(&OnContextLost, std::move(expect_context_loss_ptr)),
-      GpuServiceWebView::GetInstance()->gpu_preferences().gr_context_type,
-      vulkan_context_provider_, /*dawn_context_provider=*/nullptr,
-      /*peak_memory_monitor=*/nullptr,
-      /*direct_rendering_display_compositor_enabled=*/false,
-      /*created_on_compositor_gpu_thread=*/false,
-      aw_gr_context_options_provider_.get());
-  if (!enable_vulkan_) {
-    shared_context_state_->InitializeGL(
-        GpuServiceWebView::GetInstance()->gpu_preferences(), workarounds,
-        GpuServiceWebView::GetInstance()->gpu_feature_info());
+  if (base::FeatureList::IsEnabled(
+          features::kWebViewSingleSharedContextState)) {
+    shared_context_state_ = GetOrCreateSharedContextState(
+        vulkan_context_provider_, aw_gr_context_options_provider_.get(),
+        enable_vulkan_, gl_surface_.get(), std::move(real_context));
+    return;
   }
 
-  shared_context_state_->InitializeSkia(
-      GpuServiceWebView::GetInstance()->gpu_preferences(), workarounds);
+  shared_context_state_ = CreateSharedContextStateHelper(
+      vulkan_context_provider_, aw_gr_context_options_provider_.get(),
+      enable_vulkan_, gl_surface_.get(), std::move(real_context));
 }
 
 std::unique_ptr<viz::DisplayCompositorMemoryAndTaskController>
 OutputSurfaceProviderWebView::CreateDisplayController() {
-  DCHECK(gl_surface_)
+  DCHECK(shared_context_state_)
       << "InitializeContext() must be called before CreateOutputSurface()";
 
   auto skia_dependency = std::make_unique<SkiaOutputSurfaceDependencyWebView>(
@@ -247,21 +334,13 @@ std::unique_ptr<viz::OutputSurface>
 OutputSurfaceProviderWebView::CreateOutputSurface(
     viz::DisplayCompositorMemoryAndTaskController*
         display_compositor_controller) {
-  DCHECK(gl_surface_)
+  DCHECK(shared_context_state_)
       << "InitializeContext() must be called before CreateOutputSurface()";
   DCHECK(display_compositor_controller)
       << "CreateDisplayController() must be called before "
          "CreateOutputSurface()";
   return viz::SkiaOutputSurfaceImpl::Create(
       display_compositor_controller, renderer_settings_, debug_settings());
-}
-
-void OutputSurfaceProviderWebView::MarkAllowContextLoss() {
-  // This is safe because either the OnContextLost callback has run and we've
-  // already crashed or it has not run and this pointer is still valid.
-  if (expect_context_loss_)
-    *expect_context_loss_ = true;
-  expect_context_loss_ = nullptr;
 }
 
 }  // namespace android_webview

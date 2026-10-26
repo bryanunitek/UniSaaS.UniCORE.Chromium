@@ -38,7 +38,7 @@ content::WebContents* GetActiveWebContents(Profile* profile) {
 
 void SigninUiDelegateImplAndroid::ShowSigninUI(
     Profile* profile,
-    bool enable_sync,
+    bool enable_history_sync,
     signin_metrics::AccessPoint access_point,
     signin_metrics::PromoAction promo_action,
     const std::string& extension_name) {
@@ -73,7 +73,7 @@ void SigninUiDelegateImplAndroid::ShowSigninUI(
 void SigninUiDelegateImplAndroid::ShowReauthUI(
     Profile* profile,
     const std::string& email,
-    bool enable_sync,
+    bool enable_history_sync,
     signin_metrics::AccessPoint access_point,
     signin_metrics::PromoAction promo_action) {
   CHECK(profile);
@@ -86,7 +86,7 @@ void SigninUiDelegateImplAndroid::ShowReauthUI(
   }
   CoreAccountId account_id = IdentityManagerFactory::GetForProfile(profile)
                                  ->FindExtendedAccountInfoByEmailAddress(email)
-                                 .account_id;
+                                 .GetAccountId();
   CHECK(!account_id.empty());
   SigninBridgeFactory::GetForProfile(profile)->StartUpdateCredentialsFlow(
       TabAndroid::FromWebContents(web_contents),

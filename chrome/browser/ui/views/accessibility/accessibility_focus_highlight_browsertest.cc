@@ -9,11 +9,13 @@
 #include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "cc/test/pixel_comparator.h"
 #include "cc/test/pixel_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
@@ -140,7 +142,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
   AccessibilityFocusHighlight::SkipActivationCheckForTesting();
   AccessibilityFocusHighlight::UseDefaultColorForTesting();
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityFocusHighlightEnabled, true);
 
   // The web page has a background with a specific color. Keep looping until we
@@ -162,7 +164,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
 
   // Focus something.
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   std::string script("document.getElementById('div').focus();");
   EXPECT_TRUE(content::ExecJs(web_contents, script));
 
@@ -184,7 +186,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
                       "</a>")));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::FocusChangedObserver observer(web_contents);
   std::string script("document.getElementById('link').focus();");
   ASSERT_TRUE(content::ExecJs(web_contents, script));
@@ -244,7 +246,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
   AccessibilityFocusHighlight::SetNoFadeForTesting();
   AccessibilityFocusHighlight::SkipActivationCheckForTesting();
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityFocusHighlightEnabled, true);
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
@@ -254,7 +256,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
                                                 "</a>")));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::FocusChangedObserver observer(web_contents);
   std::string script("document.getElementById('link').focus();");
   ASSERT_TRUE(content::ExecJs(web_contents, script));

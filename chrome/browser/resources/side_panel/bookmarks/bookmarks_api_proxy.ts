@@ -30,9 +30,6 @@ export interface BookmarksApiProxy {
   createFolder(parentId: string, title: string): Promise<{newFolderId: string}>;
   deleteBookmarks(ids: string[]): Promise<void>;
   dropBookmarks(parentId: string): Promise<void>;
-  editBookmarks(
-      ids: string[], newTitle: string|undefined, newUrl: string|undefined,
-      newParentId: string|undefined): void;
   getIncognitoAvailableCount(ids: string[]): Promise<{incognitoCount: number}>;
   undo(): void;
   renameBookmark(id: string, title: string): void;
@@ -44,8 +41,8 @@ export interface BookmarksApiProxy {
   showContextMenu(id: string, x: number, y: number, source: ActionSource): void;
   contextMenuOpenBookmarkInNewTab(ids: string[], source: ActionSource): void;
   contextMenuOpenBookmarkInNewWindow(ids: string[], source: ActionSource): void;
-  contextMenuOpenBookmarkInIncognitoWindow(ids: string[], source: ActionSource):
-      void;
+  contextMenuOpenBookmarkInOffTheRecordWindow(
+      ids: string[], source: ActionSource): void;
   contextMenuOpenBookmarkInNewTabGroup(ids: string[], source: ActionSource):
       void;
   contextMenuOpenBookmarkInSplitView(ids: string[], source: ActionSource): void;
@@ -89,9 +86,9 @@ export class BookmarksApiProxyImpl implements BookmarksApiProxy {
     this.handler.executeOpenInNewWindowCommand(ids, source);
   }
 
-  contextMenuOpenBookmarkInIncognitoWindow(
+  contextMenuOpenBookmarkInOffTheRecordWindow(
       ids: string[], source: ActionSource) {
-    this.handler.executeOpenInIncognitoWindowCommand(ids, source);
+    this.handler.executeOpenInOffTheRecordWindowCommand(ids, source);
   }
 
   contextMenuOpenBookmarkInNewTabGroup(ids: string[], source: ActionSource) {
@@ -133,26 +130,6 @@ export class BookmarksApiProxyImpl implements BookmarksApiProxy {
 
   dropBookmarks(parentId: string) {
     return this.handler.dropBookmarks(parentId);
-  }
-
-  editBookmarks(
-      ids: string[], newTitle: string|undefined, newUrl: string|undefined,
-      newParentId: string|undefined) {
-    // Current use cases do not expect one of newTitle and newUrl to be
-    // provided without the other.
-    if (newTitle !== undefined && newUrl !== undefined) {
-      ids.forEach(id => {
-        // TODO(crbug.com/408181043): Keeping this extensions call as an
-        // exception since this dialog will not be used anymore after Butter for
-        // Bookmarks will be launched.
-        chrome.bookmarks.update(id, {title: newTitle, url: newUrl});
-      });
-    }
-    if (newParentId) {
-      ids.forEach(id => {
-        this.handler.moveBookmark(BigInt(id), newParentId);
-      });
-    }
   }
 
   getActiveUrl() {

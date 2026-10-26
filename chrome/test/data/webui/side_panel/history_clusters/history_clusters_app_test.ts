@@ -54,7 +54,11 @@ suite('HistoryClustersAppWithEmbeddingsTest', () => {
   }
 
   test('SwitchesSearchIcon', async () => {
-    assertEquals('history-embeddings:search', app.$.searchbox.iconOverride);
+    assertEquals(
+        loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'history-embeddings:search-spark' :
+            'history-embeddings:search-old',
+        app.$.searchbox.iconOverride);
 
     // Disable history embeddings and verify icon has switched.
     loadTimeData.overrideValues({enableHistoryEmbeddings: false});
@@ -224,12 +228,8 @@ suite('HistoryClustersAppWithEmbeddingsTest', () => {
 
     function dispatchNativeInput(
         inputEvent: Partial<InputEvent>, inputValue: string) {
-      app.$.searchbox.dispatchEvent(
-          new CustomEvent('search-term-native-input', {
-            detail: {e: inputEvent, inputValue},
-            composed: true,
-            bubbles: true,
-          }));
+      app.$.searchbox.fire(
+          'search-term-native-input', {e: inputEvent, inputValue});
     }
 
     dispatchNativeInput({data: 'a'}, 'a');

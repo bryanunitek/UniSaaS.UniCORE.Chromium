@@ -9,57 +9,46 @@
 #include <vector>
 
 #include "base/functional/callback_helpers.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notimplemented.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/types/expected.h"
-#include "base/values.h"
-#include "chrome/browser/glic/public/glic_instance.h"
-#include "chrome/browser/glic/public/glic_invoke_options.h"
-#include "chrome/browser/glic/public/glic_keyed_service.h"
-#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
-#include "chrome/browser/glic/public/glic_passkeys.h"
+#include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/navigator/browser_navigator.h"
-#include "chrome/browser/ui/navigator/browser_navigator_params.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/ai_overlay_dialog/page_context_monitor.h"
-#include "components/input/native_web_keyboard_event.h"
+#include "chrome/browser/ui/webui/ai_overlay_dialog/tools/generated_tool_definitions.h"
+#include "chrome/common/actor.mojom.h"
+#include "chrome/common/chrome_render_frame.mojom.h"
+#include "components/bookmarks/browser/bookmark_model.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
-#include "components/sessions/content/session_tab_helper.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/translate/core/browser/translate_download_manager.h"
 #include "components/translate/core/browser/translate_manager.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/page_navigator.h"
 #include "content/public/browser/render_frame_host.h"
-#include "content/public/browser/render_widget_host.h"
-#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
-#include "ui/events/base_event_utils.h"
-#include "ui/events/event.h"
-#include "ui/events/event_constants.h"
-#include "ui/events/keycodes/keyboard_codes.h"
-#include "ui/events/types/scroll_types.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
+#include "url/gurl.h"
 #include "url/url_util.h"
 
 namespace {
-
-void RecordToolCallInvoked(std::string_view tool_name) {
-  base::UmaHistogramBoolean(
-      base::StrCat({"AI.OverlayDialog.ToolCallInvoked.", tool_name}), true);
-}
 
 std::optional<base::TimeDelta> ParseTimecode(const std::string& timecode) {
   std::vector<std::string> parts = base::SplitString(
@@ -98,20 +87,56 @@ AiOverlayTools::AiOverlayTools(
 
 AiOverlayTools::~AiOverlayTools() = default;
 
+void AiOverlayTools::BindRegistryReceiver(
+    mojo::PendingReceiver<ai_overlay_dialog::mojom::AiOverlayToolRegistry>
+        registry_receiver) {
+  registry_receiver_.Bind(std::move(registry_receiver));
+}
+
+// static
+void AiOverlayTools::RecordToolCallInvoked(std::string_view tool_name) {
+  base::UmaHistogramBoolean(
+      base::StrCat({"AI.OverlayDialog.ToolCallInvoked.", tool_name}), true);
+}
+
+// static
+glic::InvokeWithAutoSubmitPasskey AiOverlayTools::GetGlicPassKey() {
+  return glic::InvokeWithAutoSubmitPasskeyProvider::GetPassKey();
+}
+
+content::WebContents* AiOverlayTools::GetActiveWebContents() const {
+  TabListInterface* tab_list = TabListInterface::From(browser());
+  if (!tab_list) {
+    return nullptr;
+  }
+  tabs::TabInterface* tab = tab_list->GetActiveTab();
+  return tab ? tab->GetContents() : nullptr;
+}
+
 void AiOverlayTools::OpenUrl(const std::string& url_string,
                              bool new_tab,
                              OpenUrlCallback callback) {
   RecordToolCallInvoked("OpenUrl");
   GURL url(url_string);
-  if (!url.is_valid()) {
+  if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS()) {
     std::move(callback).Run(base::unexpected("Invalid URL"));
     return;
   }
 
+  if (!browser()) {
+    std::move(callback).Run(base::unexpected("No browser window available"));
+    return;
+  }
+
   WindowOpenDisposition disposition =
-      new_tab ? WindowOpenDisposition::NEW_FOREGROUND_TAB
-              : WindowOpenDisposition::CURRENT_TAB;
-  browser_->OpenGURL(url, disposition);
+      new_tab ? WindowOpenDisposition::kNewForegroundTab
+              : WindowOpenDisposition::kCurrentTab;
+  // TODO(crbug.com/534887116): Report the navigation outcome instead of
+  // succeeding immediately. On Android, OpenURL() may start the navigation
+  // asynchronously.
+  browser()->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
+                         url, disposition, ui::PAGE_TRANSITION_LINK),
+                     /*navigation_handle_callback=*/{});
   std::move(callback).Run(std::monostate());
 }
 
@@ -154,47 +179,9 @@ void AiOverlayTools::PerformSearch(const std::string& query,
   OpenUrl(url.spec(), new_tab, std::move(callback));
 }
 
-void AiOverlayTools::SwitchTab(const std::string& query,
-                               SwitchTabCallback callback) {
-  RecordToolCallInvoked("SwitchTab");
-  std::string query_lower = base::ToLowerASCII(query);
-  TabStripModel* tab_strip_model = browser_->GetTabStripModel();
-  for (int i = 0; i < tab_strip_model->count(); ++i) {
-    content::WebContents* contents = tab_strip_model->GetWebContentsAt(i);
-    std::string title =
-        base::ToLowerASCII(base::UTF16ToUTF8(contents->GetTitle()));
-    std::string url = base::ToLowerASCII(contents->GetURL().spec());
-    if (title.find(query_lower) != std::string::npos ||
-        url.find(query_lower) != std::string::npos) {
-      tab_strip_model->ActivateTabAt(i);
-      browser_->GetWindow()->Activate();
-
-      auto result = ai_overlay_dialog::mojom::SwitchTabResult::New();
-      result->title = base::UTF16ToUTF8(contents->GetTitle());
-      result->url = contents->GetURL();
-      result->tab_id = sessions::SessionTabHelper::IdForTab(contents).id();
-
-      std::move(callback).Run(std::move(result));
-      return;
-    }
-  }
-  std::move(callback).Run(base::unexpected("No matching tab found"));
-}
-
-void AiOverlayTools::CloseCurrentTab(CloseCurrentTabCallback callback) {
-  RecordToolCallInvoked("CloseCurrentTab");
-  if (browser_->GetTabStripModel()->count() > 0) {
-    browser_->GetTabStripModel()->CloseSelectedTabs();
-    std::move(callback).Run(std::monostate());
-  } else {
-    std::move(callback).Run(base::unexpected("No active tab to close"));
-  }
-}
-
 void AiOverlayTools::GoBack(GoBackCallback callback) {
   RecordToolCallInvoked("GoBack");
-  content::WebContents* contents =
-      browser_->GetTabStripModel()->GetActiveWebContents();
+  content::WebContents* contents = GetActiveWebContents();
   if (contents && contents->GetController().CanGoBack()) {
     contents->GetController().GoBack();
     std::move(callback).Run(std::monostate());
@@ -205,8 +192,7 @@ void AiOverlayTools::GoBack(GoBackCallback callback) {
 
 void AiOverlayTools::GoForward(GoForwardCallback callback) {
   RecordToolCallInvoked("GoForward");
-  content::WebContents* contents =
-      browser_->GetTabStripModel()->GetActiveWebContents();
+  content::WebContents* contents = GetActiveWebContents();
   if (contents && contents->GetController().CanGoForward()) {
     contents->GetController().GoForward();
     std::move(callback).Run(std::monostate());
@@ -217,8 +203,7 @@ void AiOverlayTools::GoForward(GoForwardCallback callback) {
 
 void AiOverlayTools::ReloadPage(ReloadPageCallback callback) {
   RecordToolCallInvoked("ReloadPage");
-  content::WebContents* contents =
-      browser_->GetTabStripModel()->GetActiveWebContents();
+  content::WebContents* contents = GetActiveWebContents();
   if (contents) {
     contents->GetController().Reload(content::ReloadType::NORMAL, true);
     std::move(callback).Run(std::monostate());
@@ -263,10 +248,14 @@ void AiOverlayTools::OnAnnotationAgentDisconnected() {
 void AiOverlayTools::FindAndHighlight(const std::string& query,
                                       FindAndHighlightCallback callback) {
   RecordToolCallInvoked("FindAndHighlight");
-  content::WebContents* contents =
-      browser_->GetTabStripModel()->GetActiveWebContents();
+  content::WebContents* contents = GetActiveWebContents();
   if (!contents) {
     std::move(callback).Run(base::unexpected("No active tab"));
+    return;
+  }
+  if (!contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()) {
+    std::move(callback).Run(base::unexpected(
+        "FindAndHighlight is only supported on HTTP/HTTPS pages"));
     return;
   }
 
@@ -297,51 +286,9 @@ void AiOverlayTools::FindAndHighlight(const std::string& query,
       /*search_range_start_node_id=*/std::nullopt);
 }
 
-void AiOverlayTools::Scroll(
-    ai_overlay_dialog::mojom::ScrollGranularity granularity,
-    double magnitude,
-    ScrollCallback callback) {
-  RecordToolCallInvoked("Scroll");
-  content::WebContents* contents =
-      browser_->GetTabStripModel()->GetActiveWebContents();
-  if (!contents || !contents->GetRenderWidgetHostView()) {
-    std::move(callback).Run(base::unexpected("No active tab or view"));
-    return;
-  }
-
-  content::RenderWidgetHost* widget_host =
-      contents->GetRenderWidgetHostView()->GetRenderWidgetHost();
-
-  auto get_key_code =
-      [](ai_overlay_dialog::mojom::ScrollGranularity granularity,
-         double magnitude) {
-        switch (granularity) {
-          case ai_overlay_dialog::mojom::ScrollGranularity::kPage:
-            return (magnitude > 0) ? ui::VKEY_NEXT : ui::VKEY_PRIOR;
-          case ai_overlay_dialog::mojom::ScrollGranularity::kDocument:
-            return (magnitude > 0) ? ui::VKEY_END : ui::VKEY_HOME;
-        }
-      };
-
-  ui::KeyboardCode key_code = get_key_code(granularity, magnitude);
-
-  // For Document granularity, we only need to send the key once to reach the
-  // end or start. For Page granularity, we send it for each page requested.
-  ui::KeyEvent pressed_event(ui::EventType::kKeyPressed, key_code, ui::EF_NONE);
-  ui::KeyEvent released_event(ui::EventType::kKeyReleased, key_code,
-                              ui::EF_NONE);
-  widget_host->ForwardKeyboardEvent(
-      input::NativeWebKeyboardEvent(pressed_event));
-  widget_host->ForwardKeyboardEvent(
-      input::NativeWebKeyboardEvent(released_event));
-
-  std::move(callback).Run(std::monostate());
-}
-
 void AiOverlayTools::PlayVideo(PlayVideoCallback callback) {
   RecordToolCallInvoked("PlayVideo");
-  content::WebContents* contents =
-      browser_->GetTabStripModel()->GetActiveWebContents();
+  content::WebContents* contents = GetActiveWebContents();
   if (!contents) {
     std::move(callback).Run(base::unexpected("No active tab"));
     return;
@@ -359,8 +306,7 @@ void AiOverlayTools::PlayVideo(PlayVideoCallback callback) {
 
 void AiOverlayTools::PauseVideo(PauseVideoCallback callback) {
   RecordToolCallInvoked("PauseVideo");
-  content::WebContents* contents =
-      browser_->GetTabStripModel()->GetActiveWebContents();
+  content::WebContents* contents = GetActiveWebContents();
   if (!contents) {
     std::move(callback).Run(base::unexpected("No active tab"));
     return;
@@ -376,51 +322,10 @@ void AiOverlayTools::PauseVideo(PauseVideoCallback callback) {
   }
 }
 
-void AiOverlayTools::InvokeGlic(const std::string& prompt,
-                                InvokeGlicCallback callback) {
-  RecordToolCallInvoked("InvokeGlic");
-  glic::GlicKeyedService* glic_service =
-      glic::GlicKeyedServiceFactory::GetGlicKeyedService(
-          browser_->GetProfile());
-
-  if (!glic_service) {
-    std::move(callback).Run(base::unexpected("Glic service not available"));
-    return;
-  }
-
-  auto* active_tab = browser_->GetTabStripModel()->GetActiveTab();
-  if (!active_tab) {
-    std::move(callback).Run(base::unexpected("No active tab"));
-    return;
-  }
-  glic::GlicInvokeOptions options(glic::Target(*active_tab),
-                                  glic::mojom::InvocationSource::kOsButton);
-  options.prompts.push_back(prompt);
-
-  auto split_callback = base::SplitOnceCallback(std::move(callback));
-
-  options.on_success = base::BindOnce(
-      [](InvokeGlicCallback cb) {
-        std::move(cb).Run(base::ok("Glic panel opened and task completed."));
-      },
-      std::move(split_callback.first));
-
-  options.on_error = base::BindOnce(
-      [](InvokeGlicCallback cb, glic::GlicInvokeError error) {
-        std::move(cb).Run(base::unexpected("Glic invocation failed"));
-      },
-      std::move(split_callback.second));
-
-  glic_service->InvokeWithAutoSubmit(
-      glic::InvokeWithAutoSubmitPasskeyProvider::GetPassKey(),
-      std::move(options));
-}
-
 void AiOverlayTools::SeekToTimestamp(const std::string& timecode,
                                      SeekToTimestampCallback callback) {
   RecordToolCallInvoked("SeekToTimestamp");
-  content::WebContents* contents =
-      browser_->GetTabStripModel()->GetActiveWebContents();
+  content::WebContents* contents = GetActiveWebContents();
   if (!contents) {
     std::move(callback).Run(base::unexpected("No active tab"));
     return;
@@ -444,8 +349,7 @@ void AiOverlayTools::SeekToTimestamp(const std::string& timecode,
 
 void AiOverlayTools::TranslatePage(const std::string& target_language,
                                    TranslatePageCallback callback) {
-  content::WebContents* contents =
-      browser_->GetTabStripModel()->GetActiveWebContents();
+  content::WebContents* contents = GetActiveWebContents();
   if (!contents) {
     std::move(callback).Run(base::unexpected("No active tab"));
     return;
@@ -481,6 +385,210 @@ void AiOverlayTools::TranslatePage(const std::string& target_language,
   }
 
   std::move(callback).Run(std::monostate());
+}
+
+void AiOverlayTools::AddBookmark(AddBookmarkCallback callback) {
+  RecordToolCallInvoked("AddBookmark");
+  Profile* profile = browser_->GetProfile();
+  bookmarks::BookmarkModel* bookmark_model =
+      BookmarkModelFactory::GetForBrowserContext(profile);
+  if (!bookmark_model || !bookmark_model->loaded()) {
+    std::move(callback).Run(base::unexpected("Bookmark model not loaded"));
+    return;
+  }
+
+  content::WebContents* active_contents = GetActiveWebContents();
+  if (!active_contents) {
+    std::move(callback).Run(base::unexpected("No active tab"));
+    return;
+  }
+
+  const GURL& target_url = active_contents->GetVisibleURL();
+  const std::u16string& title = active_contents->GetTitle();
+
+  const bookmarks::BookmarkNode* other_node = bookmark_model->other_node();
+  bookmark_model->AddNewURL(other_node, other_node->children().size(), title,
+                            target_url);
+  std::move(callback).Run(std::monostate());
+}
+
+void AiOverlayTools::RemoveBookmark(RemoveBookmarkCallback callback) {
+  RecordToolCallInvoked("RemoveBookmark");
+  Profile* profile = browser_->GetProfile();
+  bookmarks::BookmarkModel* bookmark_model =
+      BookmarkModelFactory::GetForBrowserContext(profile);
+  if (!bookmark_model || !bookmark_model->loaded()) {
+    std::move(callback).Run(base::unexpected("Bookmark model not loaded"));
+    return;
+  }
+
+  content::WebContents* active_contents = GetActiveWebContents();
+  if (!active_contents) {
+    std::move(callback).Run(base::unexpected("No active tab"));
+    return;
+  }
+
+  const GURL& target_url = active_contents->GetVisibleURL();
+  std::vector<raw_ptr<const bookmarks::BookmarkNode, VectorExperimental>>
+      nodes = bookmark_model->GetNodesByURL(target_url);
+  if (nodes.empty()) {
+    std::move(callback).Run(base::unexpected("Active tab is not bookmarked"));
+    return;
+  }
+
+  for (const auto& node : nodes) {
+    bookmark_model->Remove(node.get(),
+                           bookmarks::metrics::BookmarkEditSource::kUser,
+                           FROM_HERE);
+  }
+  std::move(callback).Run(std::monostate());
+}
+
+void AiOverlayTools::SetText(const blink::DOMNodeIdType& dom_node_id,
+                             const std::string& text,
+                             SetTextCallback callback) {
+  RecordToolCallInvoked("SetText");
+  // TODO(crbug.com/540575255): Scope form editing actions to the target
+  // WebContents active when tool invocation was requested.
+  content::WebContents* contents = GetActiveWebContents();
+  if (!contents) {
+    std::move(callback).Run(base::unexpected("No active tab"));
+    return;
+  }
+
+  // TODO(crbug.com/540584855): Support targeting subframes/iframes when Page
+  // Content Summary includes iframe DOM node IDs.
+  content::RenderFrameHost* rfh = contents->GetPrimaryMainFrame();
+  if (!rfh) {
+    std::move(callback).Run(base::unexpected("No main frame"));
+    return;
+  }
+
+  mojo::AssociatedRemote<chrome::mojom::ChromeRenderFrame> chrome_render_frame;
+  rfh->GetRemoteAssociatedInterfaces()->GetInterface(&chrome_render_frame);
+
+  auto type_action = actor::mojom::TypeAction::New();
+  type_action->mode = actor::mojom::TypeAction::Mode::kDeleteExisting;
+  type_action->text = text;
+  type_action->follow_by_enter = false;
+
+  auto invocation = actor::mojom::ToolInvocation::New();
+  invocation->task_id = actor::TaskId();
+  invocation->target =
+      actor::mojom::ToolTarget::NewDomNodeId(dom_node_id.value());
+  invocation->action =
+      actor::mojom::ToolAction::NewType(std::move(type_action));
+
+  auto* raw_frame = chrome_render_frame.get();
+  raw_frame->InvokeTool(
+      std::move(invocation),
+      base::BindOnce(
+          [](mojo::AssociatedRemote<chrome::mojom::ChromeRenderFrame> remote,
+             SetTextCallback cb, actor::mojom::ActionResultPtr res) {
+            if (res && res->code == actor::mojom::ActionResultCode::kOk) {
+              std::move(cb).Run(base::ok(std::monostate()));
+            } else {
+              std::move(cb).Run(base::unexpected(
+                  res ? res->message : "Input field not found or hidden"));
+            }
+          },
+          std::move(chrome_render_frame), std::move(callback)));
+}
+
+void AiOverlayTools::ClickElement(const blink::DOMNodeIdType& dom_node_id,
+                                  ClickElementCallback callback) {
+  RecordToolCallInvoked("ClickElement");
+  content::WebContents* contents = GetActiveWebContents();
+  if (!contents) {
+    std::move(callback).Run(base::unexpected("No active tab"));
+    return;
+  }
+
+  content::RenderFrameHost* rfh = contents->GetPrimaryMainFrame();
+  if (!rfh) {
+    std::move(callback).Run(base::unexpected("No main frame"));
+    return;
+  }
+
+  mojo::AssociatedRemote<chrome::mojom::ChromeRenderFrame> chrome_render_frame;
+  rfh->GetRemoteAssociatedInterfaces()->GetInterface(&chrome_render_frame);
+
+  auto click_action = actor::mojom::ClickAction::New();
+  click_action->type = actor::mojom::ClickType::kLeft;
+  click_action->count = actor::mojom::ClickCount::kSingle;
+
+  auto invocation = actor::mojom::ToolInvocation::New();
+  invocation->task_id = actor::TaskId();
+  invocation->target =
+      actor::mojom::ToolTarget::NewDomNodeId(dom_node_id.value());
+  invocation->action =
+      actor::mojom::ToolAction::NewClick(std::move(click_action));
+
+  auto* raw_frame = chrome_render_frame.get();
+  raw_frame->InvokeTool(
+      std::move(invocation),
+      base::BindOnce(
+          [](mojo::AssociatedRemote<chrome::mojom::ChromeRenderFrame> remote,
+             ClickElementCallback cb, actor::mojom::ActionResultPtr res) {
+            if (res && res->code == actor::mojom::ActionResultCode::kOk) {
+              std::move(cb).Run(base::ok(std::monostate()));
+            } else {
+              std::move(cb).Run(base::unexpected(
+                  (res && !res->message.empty())
+                      ? res->message
+                      : "Element not found or non-clickable"));
+            }
+          },
+          std::move(chrome_render_frame), std::move(callback)));
+}
+
+void AiOverlayTools::SelectOption(const blink::DOMNodeIdType& dom_node_id,
+                                  const std::string& value,
+                                  SelectOptionCallback callback) {
+  RecordToolCallInvoked("SelectOption");
+  content::WebContents* contents = GetActiveWebContents();
+  if (!contents) {
+    std::move(callback).Run(base::unexpected("No active tab"));
+    return;
+  }
+
+  content::RenderFrameHost* rfh = contents->GetPrimaryMainFrame();
+  if (!rfh) {
+    std::move(callback).Run(base::unexpected("No main frame"));
+    return;
+  }
+
+  mojo::AssociatedRemote<chrome::mojom::ChromeRenderFrame> chrome_render_frame;
+  rfh->GetRemoteAssociatedInterfaces()->GetInterface(&chrome_render_frame);
+
+  auto select_action = actor::mojom::SelectAction::New();
+  select_action->value = value;
+
+  auto invocation = actor::mojom::ToolInvocation::New();
+  invocation->task_id = actor::TaskId();
+  invocation->target =
+      actor::mojom::ToolTarget::NewDomNodeId(dom_node_id.value());
+  invocation->action =
+      actor::mojom::ToolAction::NewSelect(std::move(select_action));
+
+  auto* raw_frame = chrome_render_frame.get();
+  raw_frame->InvokeTool(
+      std::move(invocation),
+      base::BindOnce(
+          [](mojo::AssociatedRemote<chrome::mojom::ChromeRenderFrame> remote,
+             SelectOptionCallback cb, actor::mojom::ActionResultPtr res) {
+            if (res && res->code == actor::mojom::ActionResultCode::kOk) {
+              std::move(cb).Run(base::ok(std::monostate()));
+            } else {
+              std::move(cb).Run(base::unexpected(
+                  res ? res->message : "Dropdown element or option value not found"));
+            }
+          },
+          std::move(chrome_render_frame), std::move(callback)));
+}
+
+void AiOverlayTools::GetToolDefinitions(GetToolDefinitionsCallback callback) {
+  std::move(callback).Run(kBuiltInToolDefinitionsJson);
 }
 
 }  // namespace ttc

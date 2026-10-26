@@ -44,6 +44,7 @@
 #include "third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -120,9 +121,16 @@ void DisplayLockContext::SetRequestedState(EContentVisibility state) {
   NotifyRenderAffectingStateChanged();
 
   // Since our state changed, check if we need to create a scoped force update
-  // object.
-  element_->GetDocument().GetDisplayLockDocumentState().ForceLockIfNeeded(
-      element_.Get());
+  // object. This is only needed if a lock is requested: there is nothing to
+  // force if we are unlocking. This matters, since DetachLayoutTree() requests
+  // an unlock, and it can be called during slot assignment recalc, where flat
+  // tree traversal (as done by ForceLockIfNeeded()) is not allowed. Such a
+  // traversal could recalc the slot assignment of another shadow root, while
+  // the assigned nodes of the slots being recalculated are not up to date.
+  if (state_ != EContentVisibility::kVisible) {
+    element_->GetDocument().GetDisplayLockDocumentState().ForceLockIfNeeded(
+        element_.Get());
+  }
 }
 
 const ComputedStyle* DisplayLockContext::AdjustElementStyle(
@@ -264,8 +272,8 @@ void DisplayLockContext::Lock() {
   }
 
   // If there are any pending updates, we cancel them, as the fast updates
-  // can't detect a locked display.
-  // See: ../paint/README.md#Transform-update-optimization for more information
+  // can't detect a locked display. See:
+  // ../paint/README.md#Property-tree-update-optimization
   document_->View()->RemoveAllPendingUpdates();
 
   // There are two ways we can get locked:
@@ -282,28 +290,11 @@ void DisplayLockContext::Lock() {
     MarkForStyleRecalcIfNeeded();
   }
 
-  // TODO(vmpstr): Note when an 'auto' context gets locked, we should clear
-  // the ancestor scroll anchors. This is a workaround for a behavior that
-  // happens when the user quickly scrolls (e.g. scrollbar scrolls) into an
-  // area that only has locked content. We can get into a loop that will
-  // keep unlocking an element, which may shrink it to be out of the viewport,
-  // and thus relocking it again. It is is also possible that we selected the
-  // scroller itself or one of the locked elements as the anchor, so we don't
-  // actually shift the scroll and the loop continues indefinitely. The user
-  // can easily get out of the loop by scrolling since that triggers a new
-  // scroll anchor selection. The work-around for us is also to pick a new
-  // scroll anchor for the scroller that has a newly-locked context. The
-  // reason it works is that it causes us to pick an anchor while the element
-  // is still unlocked, so when it gets relocked we shift the scroll to
-  // whatever visible content we had. The TODO here is to figure out if there
-  // is a better way to solve this. In either case, we have to select a new
-  // scroll anchor to get out of this behavior.
-  element_->NotifyPriorityScrollAnchorStatusChanged();
-
   // We need to notify the AX cache (if it exists) to update |element_|'s
   // children in the AX cache.
-  if (AXObjectCache* cache = element_->GetDocument().ExistingAXObjectCache())
+  if (AXObjectCache* cache = element_->GetDocument().ExistingAXObjectCache()) {
     cache->ChildrenChanged(element_);
+  }
 
   // If we have top layer elements in our subtree, we have to detach their
   // layout objects, since otherwise they would be hoisted out of our subtree.
@@ -312,8 +303,29 @@ void DisplayLockContext::Lock() {
   // Schedule ContentVisibilityAutoStateChange event if needed.
   ScheduleStateChangeEventIfNeeded();
 
-  if (!element_->GetLayoutObject())
+  if (!element_->GetLayoutObject()) {
     return;
+  }
+
+  if (CanDirtyStyle()) {
+    // TODO(vmpstr): Note when an 'auto' context gets locked, we should clear
+    // the ancestor scroll anchors. This is a workaround for a behavior that
+    // happens when the user quickly scrolls (e.g. scrollbar scrolls) into an
+    // area that only has locked content. We can get into a loop that will
+    // keep unlocking an element, which may shrink it to be out of the viewport,
+    // and thus relocking it again. It is is also possible that we selected the
+    // scroller itself or one of the locked elements as the anchor, so we don't
+    // actually shift the scroll and the loop continues indefinitely. The user
+    // can easily get out of the loop by scrolling since that triggers a new
+    // scroll anchor selection. The work-around for us is also to pick a new
+    // scroll anchor for the scroller that has a newly-locked context. The
+    // reason it works is that it causes us to pick an anchor while the element
+    // is still unlocked, so when it gets relocked we shift the scroll to
+    // whatever visible content we had. The TODO here is to figure out if there
+    // is a better way to solve this. In either case, we have to select a new
+    // scroll anchor to get out of this behavior.
+    element_->NotifyPriorityScrollAnchorStatusChanged();
+  }
 
   // If this element is a scroller, then stash its current scroll offset, so
   // that we can restore it when needed.
@@ -498,7 +510,7 @@ void DisplayLockContext::UpgradeForcedScope(ForcedPhase old_phase,
     }
     if (!old_forced_info.is_forced(ForcedPhase::kPrePaint) &&
         forced_info_.is_forced(ForcedPhase::kPrePaint)) {
-      MarkAncestorsForPrePaintIfNeeded();
+      MarkForPrePaintIfNeeded();
     }
 
     if (emit_warnings && document_ &&
@@ -546,8 +558,8 @@ void DisplayLockContext::NotifyForcedUpdateScopeEnded(ForcedPhase phase) {
   // Since we do perform updates in a locked display if we're in a forced
   // update scope, when ending a forced update scope in a locked display, we
   // remove all pending updates, to prevent them from being executed in a
-  // locked display.
-  // See: ../paint/README.md#Transform-update-optimization for more information
+  // locked display. See:
+  // ../paint/README.md#Property-tree-update-optimization
   if (is_locked_) {
     document_->View()->RemoveAllPendingUpdates();
   }
@@ -608,7 +620,7 @@ void DisplayLockContext::Unlock() {
   // Now that we know we have a layout object, we should ensure that we can
   // reach the rest of the phases as well.
   MarkForLayoutIfNeeded();
-  MarkAncestorsForPrePaintIfNeeded();
+  MarkForPrePaintIfNeeded();
   MarkNeedsRepaintAndPaintArtifactCompositorUpdate();
   MarkNeedsCullRectUpdate();
 
@@ -705,6 +717,12 @@ bool DisplayLockContext::MarkForLayoutIfNeeded() {
       // different time / opportunity to restore the offset.
       layout_object->SetChildNeedsLayout();
       child_layout_was_blocked_ = false;
+      if (RuntimeEnabledFeatures::MarkAncestorsOnDisplayLockUnlockEnabled()) {
+        // |SetChildNeedsLayout()| skips the ancestors when this object was
+        // already child-dirty, but dirty-bit propagation from the locked
+        // subtree stopped here, so they are clean.
+        layout_object->MarkContainerChainForLayout();
+      }
     } else {
       // Since the dirty layout propagation stops at the locked element, we need
       // to mark its ancestors as dirty here so that it will be traversed to on
@@ -716,7 +734,7 @@ bool DisplayLockContext::MarkForLayoutIfNeeded() {
   return false;
 }
 
-bool DisplayLockContext::MarkAncestorsForPrePaintIfNeeded() {
+bool DisplayLockContext::MarkForPrePaintIfNeeded() {
   // TODO(vmpstr): We should add a compositing phase for proper bookkeeping.
   bool compositing_dirtied = MarkForCompositingUpdatesIfNeeded();
   bool visual_overflow_dirtied = MarkForVisualOverflowRecalcIfNeeded();
@@ -730,26 +748,15 @@ bool DisplayLockContext::MarkAncestorsForPrePaintIfNeeded() {
     // update, then ensure to mark self as needing the update. This sets up the
     // correct flags for PrePaint to recompute the necessary values and
     // propagate the information into the subtree.
-    if (needs_effective_allowed_touch_action_update_ ||
-        layout_object->EffectiveAllowedTouchActionChanged() ||
-        layout_object->DescendantEffectiveAllowedTouchActionChanged()) {
-      // Note that although the object itself should have up to date value, in
-      // order to force recalc of the whole subtree, we mark it as needing an
-      // update.
-      layout_object->MarkEffectiveAllowedTouchActionChanged();
+    PrePaintSubtreeWalkReasons reasons = pre_paint_subtree_walk_reasons_;
+    reasons.PutAll(layout_object->GetPrePaintSubtreeWalkReasons());
+    reasons.PutAll(layout_object->GetDescendantPrePaintSubtreeWalkReasons());
+    if (!reasons.empty()) {
+      layout_object->SetNeedsPrePaintSubtreeWalk(reasons);
     }
-    if (needs_blocking_wheel_event_handler_update_ ||
-        layout_object->BlockingWheelEventHandlerChanged() ||
-        layout_object->DescendantBlockingWheelEventHandlerChanged()) {
-      // Note that although the object itself should have up to date value, in
-      // order to force recalc of the whole subtree, we mark it as needing an
-      // update.
-      layout_object->MarkBlockingWheelEventHandlerChanged();
-    }
-    if (needs_soft_navigation_context_update_ ||
-        layout_object->SoftNavigationContextChanged() ||
-        layout_object->DescendantSoftNavigationContextChanged()) {
-      layout_object->MarkSoftNavigationContextChanged();
+    if (RuntimeEnabledFeatures::ClearDisplayLockPrePaintFlagsEnabled()) {
+      needs_pre_paint_subtree_walk_ = false;
+      pre_paint_subtree_walk_reasons_.Clear();
     }
     return true;
   }
@@ -842,12 +849,14 @@ bool DisplayLockContext::IsElementDirtyForPrePaint() const {
   if (auto* layout_object = element_->GetLayoutObject()) {
     return PrePaintTreeWalk::ObjectRequiresPrePaint(*layout_object) ||
            PrePaintTreeWalk::ObjectRequiresTreeBuilderContext(*layout_object) ||
-           needs_prepaint_subtree_walk_ ||
-           needs_effective_allowed_touch_action_update_ ||
-           needs_blocking_wheel_event_handler_update_ ||
-           needs_soft_navigation_context_update_;
+           IsContextDirtyForPrePaint();
   }
   return false;
+}
+
+bool DisplayLockContext::IsContextDirtyForPrePaint() const {
+  return needs_pre_paint_subtree_walk_ ||
+         !pre_paint_subtree_walk_reasons_.empty();
 }
 
 void DisplayLockContext::DidMoveToNewDocument(Document& old_document) {
@@ -1207,8 +1216,9 @@ bool DisplayLockContext::SubtreeHasTopLayerElement() const {
 }
 
 void DisplayLockContext::DetachDescendantTopLayerElements() {
-  if (!ConnectedToView() || !SubtreeHasTopLayerElement())
+  if (!ConnectedToView() || !SubtreeHasTopLayerElement()) {
     return;
+  }
 
   std::optional<StyleEngine::DetachLayoutTreeScope> detach_scope;
   if (!document_->InStyleRecalc()) {
@@ -1222,9 +1232,16 @@ void DisplayLockContext::DetachDescendantTopLayerElements() {
   // since we would remove the ::backdrop pseudo when the layout object
   // disappears). This means that we're potentially modifying the list as we're
   // traversing it. Instead of doing that, make a copy.
-  auto top_layer_elements = document_->TopLayerElements();
-  for (auto top_layer_element : top_layer_elements) {
-    auto* ancestor = top_layer_element.Get();
+  HeapVector<Member<Element>> top_layer_elements =
+      document_->TopLayerElements();
+
+  for (Member<Element>& top_layer_element : top_layer_elements) {
+    if (top_layer_element->IsBackdropPseudoElement() &&
+        top_layer_element->parentElement() == element_) {
+      // Keep rendering the ::backdrop for a content-visibility:hidden element.
+      continue;
+    }
+    Element* ancestor = top_layer_element.Get();
     while ((ancestor = FlatTreeTraversal::ParentElement(*ancestor))) {
       if (ancestor == element_) {
         top_layer_element->DetachLayoutTree();

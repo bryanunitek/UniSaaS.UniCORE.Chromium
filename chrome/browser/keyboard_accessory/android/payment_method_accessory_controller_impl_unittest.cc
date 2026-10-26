@@ -10,7 +10,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_data.h"
-#include "chrome/browser/keyboard_accessory/test_utils/android/mock_manual_filling_controller.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/autofill/content/browser/test_autofill_client_injector.h"
@@ -29,18 +28,19 @@
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager_test_api.h"
+#include "components/autofill/core/browser/foundations/mock_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
 #include "components/autofill/core/browser/foundations/test_autofill_driver.h"
 #include "components/autofill/core/browser/foundations/test_browser_autofill_manager.h"
 #include "components/autofill/core/browser/payments/constants.h"
 #include "components/autofill/core/browser/payments/iban_access_manager.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
-#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
-#include "components/autofill/core/browser/test_utils/valuables_data_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_util.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
+#include "components/autofill/core/browser/test_utils/valuables_data_test_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/credit_card_network_identifiers.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom.h"
@@ -76,6 +76,7 @@ class TestAccessManager : public CreditCardAccessManager {
   using CreditCardAccessManager::CreditCardAccessManager;
   void FetchCreditCard(
       const CreditCard* card,
+      bool require_user_confirmation,
       OnCreditCardFetchedCallback on_credit_card_fetched) override {
     std::move(on_credit_card_fetched).Run(CHECK_DEREF(card));
   }
@@ -108,8 +109,8 @@ class PaymentMethodAccessoryControllerTestBase
         .set_credit_card_access_manager(
             std::make_unique<TestAccessManager>(&autofill_manager()));
     PaymentMethodAccessoryControllerImpl::CreateForWebContentsForTesting(
-        web_contents(), mock_mf_controller_.AsWeakPtr(), &paydm(),
-        &valuables_data_manager(), &autofill_manager(), &autofill_driver());
+        web_contents(), &paydm(), &valuables_data_manager(),
+        &autofill_manager(), &autofill_driver());
     controller()->RegisterFillingSourceObserver(filling_source_observer_.Get());
     paydm().SetPrefService(profile()->GetPrefs());
     paydm().SetSyncServiceForTest(&sync_service_);
@@ -161,7 +162,6 @@ class PaymentMethodAccessoryControllerTestBase
   syncer::TestSyncService sync_service_;
   TestPaymentsDataManager paydm_;
   TestValuablesDataManager valuables_data_manager_;
-  testing::NiceMock<MockManualFillingController> mock_mf_controller_;
   GURL url_;
   TestAutofillClientInjector<TestContentAutofillClient>
       autofill_client_injector_;
@@ -539,6 +539,8 @@ TEST_F(PaymentMethodAccessoryControllerTest,
 // Tests that promo codes are shown.
 TEST_F(PaymentMethodAccessoryControllerTest,
        RefreshSuggestionsWithPromoCodeOffers) {
+  base::test::ScopedFeatureList scoped_feature_list(
+      features::kAutofillEnableWalletDirectOffers);
   CreditCard card = test::GetCreditCard();
   paydm().AddCreditCard(card);
   // Getting a promo code whose |merchant_origins| contains AutofillClient's
@@ -805,10 +807,6 @@ class PaymentMethodAccessoryControllerTestForBnpl
  public:
   PaymentMethodAccessoryControllerTestForBnpl()
       : PaymentMethodAccessoryControllerTestBase(GURL("https://example.com")) {}
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{
-      features::kAutofillTouchToFillShowManualFillForVcnFix};
 };
 
 TEST_F(PaymentMethodAccessoryControllerTestForBnpl,
@@ -833,6 +831,7 @@ TEST_F(PaymentMethodAccessoryControllerTestForBnpl,
       mojom::ActionPersistence::kFill, form.global_id(),
       form.fields().front().global_id(), FillingPayload(&bnpl_card),
       AutofillTriggerSource::kKeyboardAccessoryOrBottomSheet,
+      /*require_user_confirmation=*/false,
       /*blocked_fields=*/{});
 
   std::u16string cvc = u"123";
@@ -870,6 +869,57 @@ TEST_F(PaymentMethodAccessoryControllerTestForBnpl,
           .AppendSimpleField(AccessorySuggestionType::kCreditCardNameFull,
                              bnpl_card.GetRawInfo(CREDIT_CARD_NAME_FULL))
           .AppendSimpleField(AccessorySuggestionType::kCreditCardCvc, cvc)
+          .Build());
+}
+
+class PlatformAutofillTestClient : public TestContentAutofillClient {
+ public:
+  using TestContentAutofillClient::TestContentAutofillClient;
+
+  bool HasPersonalDataManager() const override { return false; }
+
+  TestPersonalDataManager& GetPersonalDataManager() override { NOTREACHED(); }
+
+  bool UsesPlatformAutofill() const override { return true; }
+
+  std::unique_ptr<AutofillManager> CreateManager(
+      base::PassKey<ContentAutofillDriver> pass_key,
+      ContentAutofillDriver& driver) override {
+    return std::make_unique<testing::NiceMock<MockAutofillManager>>(&driver);
+  }
+};
+
+class PaymentMethodAccessoryControllerPlatformAutofillTest
+    : public ChromeRenderViewHostTestHarness {
+ protected:
+  TestAutofillClientInjector<PlatformAutofillTestClient>
+      autofill_client_injector_;
+};
+
+TEST_F(PaymentMethodAccessoryControllerPlatformAutofillTest,
+       DoesNotCrashWhenUsingPlatformAutofill) {
+  NavigateAndCommit(GURL("https://example.com"));
+  FocusWebContentsOnMainFrame();
+
+  PaymentMethodAccessoryController* controller =
+      PaymentMethodAccessoryController::GetOrCreate(web_contents());
+  ASSERT_TRUE(controller);
+
+  base::MockCallback<AccessoryController::FillingSourceObserver> observer;
+  controller->RegisterFillingSourceObserver(observer.Get());
+  EXPECT_CALL(observer, Run(controller, IsFillingSourceAvailable(false)));
+  controller->RefreshSuggestions();
+
+  EXPECT_EQ(
+      controller->GetSheetData(),
+      AccessorySheetData::Builder(
+          AccessoryTabType::CREDIT_CARDS,
+          l10n_util::GetStringUTF16(
+              IDS_MANUAL_FILLING_CREDIT_CARD_SHEET_EMPTY_MESSAGE))
+          .AppendFooterCommand(
+              l10n_util::GetStringUTF16(
+                  IDS_MANUAL_FILLING_CREDIT_CARD_SHEET_ALL_ADDRESSES_LINK),
+              AccessoryAction::MANAGE_CREDIT_CARDS)
           .Build());
 }
 

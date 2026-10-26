@@ -4,20 +4,32 @@
 
 #include "chrome/browser/ui/search_promotion/search_promotion_manager.h"
 
+#include <memory>
+#include <optional>
 #include <string_view>
 #include <utility>
 
 #include "base/feature_list.h"
+#include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/notimplemented.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_split.h"
 #include "base/task/thread_pool.h"
+#include "base/version.h"
+#include "chrome/browser/feature_engagement/tracker_factory.h"
+#include "chrome/browser/platform_experience/delegated_tasks/delegated_task_runner.h"
+#include "chrome/browser/platform_experience/delegated_tasks/peh_launcher.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/segmentation_platform/segmentation_platform_service_factory.h"
 #include "chrome/browser/shell_integration.h"
+#include "chrome/browser/ui/search_promotion/register_search_promotion_task.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
+#include "components/feature_engagement/public/event_constants.h"
 #include "components/feature_engagement/public/feature_constants.h"
-#include "components/segmentation_platform/public/constants.h"
-#include "components/segmentation_platform/public/segment_selection_result.h"
+#include "components/feature_engagement/public/tracker.h"
+#include "components/segmentation_platform/embedder/default_model/chrome_user_engagement.h"
+#include "components/segmentation_platform/public/result.h"
 #include "components/segmentation_platform/public/segmentation_platform_service.h"
 #include "url/gurl.h"
 
@@ -37,27 +49,56 @@ enum class DefaultBrowserType {
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/search/enums.xml:SearchPromotionDefaultBrowserType)
 
+// Checks if a verified PEH binary exists on disk and meets `min_version_str`.
+SearchPromotionPehEligibility CheckPehEligibility(
+    std::unique_ptr<platform_experience::PehLauncher> launcher,
+    std::string min_version_str) {
+  if (!launcher) {
+    return SearchPromotionPehEligibility::kLauncherUnavailable;
+  }
+  const base::Version min_version(min_version_str);
+  if (!min_version.IsValid()) {
+    return SearchPromotionPehEligibility::kMinVersionInvalid;
+  }
+  const base::FilePath path = launcher->GetBinaryPath();
+  if (path.empty()) {
+    return SearchPromotionPehEligibility::kBinaryNotFound;
+  }
+  if (!launcher->IsBinaryVerified(path)) {
+    return SearchPromotionPehEligibility::kBinaryNotVerified;
+  }
+  const base::Version version = launcher->GetBinaryVersion(path);
+  if (!version.IsValid()) {
+    return SearchPromotionPehEligibility::kBinaryVersionInvalid;
+  }
+  if (version < min_version) {
+    return SearchPromotionPehEligibility::kBinaryVersionTooLow;
+  }
+  return SearchPromotionPehEligibility::kEligible;
+}
+
 }  // namespace
 
-SearchPromotionManager::SearchPromotionManager(Profile& profile)
-    : profile_(profile) {
+SearchPromotionManager::SearchPromotionManager(
+    Profile& profile,
+    CreateTaskRunnerCallback create_task_runner_callback,
+    CreatePehLauncherCallback create_peh_launcher_callback)
+    : profile_(profile),
+      create_task_runner_callback_(std::move(create_task_runner_callback)) {
   // SearchPromotionManager is currently a Windows-only feature intended to
   // promote specific search-related behaviors. On other platforms, the
   // manager remains inert.
 
   // Cache feature state to avoid repeated lookups on every navigation.
-  is_promo_allowed_ = base::FeatureList::IsEnabled(
-      feature_engagement::kIPHSearchPromotionFeature);
-  if (is_promo_allowed_) {
-    std::string arm_str = feature_engagement::kSearchPromotionArm.Get();
-    if (arm_str == feature_engagement::kSearchPromotionArmA) {
-      arm_ = feature_engagement::kSearchPromotionArmA;
-    } else if (arm_str == feature_engagement::kSearchPromotionArmB) {
-      arm_ = feature_engagement::kSearchPromotionArmB;
-    } else {
-      // If no valid experiment arm is specified, disable the promotion.
-      is_promo_allowed_ = false;
-    }
+  if (base::FeatureList::IsEnabled(
+          feature_engagement::kIPHSearchPromotionFeature)) {
+    action_ = feature_engagement::kSearchPromotionAction.Get();
+    ParseCohorts(feature_engagement::kSearchPromotionCohort.Get());
+  }
+
+  if (action_ != feature_engagement::SearchPromotionAction::kDisabled) {
+    QueryEngagementLevel();
+    QueryPehEligibility(std::move(create_peh_launcher_callback));
   }
 }
 
@@ -65,11 +106,14 @@ SearchPromotionManager::~SearchPromotionManager() = default;
 
 void SearchPromotionManager::OnTargetURLVisited(
     BrowserUserEducationInterface& user_education) {
-  if (!is_promo_allowed_) {
+  if (action_ == feature_engagement::SearchPromotionAction::kDisabled) {
     return;
   }
 
-  if (!IsEngagementLowEnough()) {
+  // Record baseline evaluation across all evaluated users (including Control).
+  base::UmaHistogramBoolean("Search.SearchPromotion.Evaluated", true);
+
+  if (!is_peh_eligible_.value_or(false) || !IsEngagementEligible()) {
     return;
   }
 
@@ -80,6 +124,11 @@ void SearchPromotionManager::OnTargetURLVisited(
       ->StartCheckIsDefault(
           base::BindOnce(&SearchPromotionManager::RecordDefaultBrowserState,
                          weak_ptr_factory_.GetWeakPtr()));
+
+  // Control group: record default browser state for parity, but do not show UI.
+  if (action_ == feature_engagement::SearchPromotionAction::kControl) {
+    return;
+  }
 
   user_education::FeaturePromoParams params(
       feature_engagement::kIPHSearchPromotionFeature);
@@ -100,13 +149,32 @@ void SearchPromotionManager::RecordDefaultBrowserState(
       shell_integration::DefaultWebClientState::NUM_DEFAULT_STATES);
 }
 
-void SearchPromotionManager::OnPromoAccepted() {
-  was_accepted_ = true;
-  if (arm_ == feature_engagement::kSearchPromotionArmA) {
-    PerformArmA();
-  } else if (arm_ == feature_engagement::kSearchPromotionArmB) {
-    PerformArmB();
+void SearchPromotionManager::ExecuteAction() {
+  switch (action_) {
+    case feature_engagement::SearchPromotionAction::kOpen:
+      PerformOpen();
+      break;
+    case feature_engagement::SearchPromotionAction::kInstall:
+      PerformInstall();
+      break;
+    case feature_engagement::SearchPromotionAction::kDisabled:
+    case feature_engagement::SearchPromotionAction::kControl:
+      break;
   }
+}
+
+void SearchPromotionManager::OnPromoAccepted() {
+  // Prevent duplicate acceptance handling if triggered multiple times (e.g.
+  // accidental double clicks).
+  if (was_accepted_) {
+    return;
+  }
+  was_accepted_ = true;
+  if (auto* tracker = feature_engagement::TrackerFactory::GetForBrowserContext(
+          &profile_.get())) {
+    tracker->NotifyEvent(feature_engagement::events::kSearchPromotionAccepted);
+  }
+  ExecuteAction();
 }
 
 void SearchPromotionManager::OnPromoClosed() {
@@ -123,12 +191,11 @@ void SearchPromotionManager::OnPromoClosed() {
             GURL("https://google.com"));
       }),
       base::BindOnce(&SearchPromotionManager::OnDefaultBrowserNameRetrieved,
-                     weak_ptr_factory_.GetWeakPtr(), accepted, arm_));
+                     weak_ptr_factory_.GetWeakPtr(), accepted));
 }
 
 void SearchPromotionManager::OnDefaultBrowserNameRetrieved(
     bool accepted,
-    std::string_view arm,
     const std::u16string& name) {
   // Retrieve the localized name of the default browser application and map it
   // to a categorized DefaultBrowserType enum.
@@ -145,69 +212,213 @@ void SearchPromotionManager::OnDefaultBrowserNameRetrieved(
     type = DefaultBrowserType::kFirefox;
   }
 
-  // `arm` is compared using std::string_view to avoid raw pointer
-  // comparisons, which can fail if compiler optimizations assign different
-  // addresses to the same string across translation units.
-  if (accepted) {
-    if (arm == feature_engagement::kSearchPromotionArmA) {
-      base::UmaHistogramEnumeration(
-          "Search.SearchPromotion.DefaultBrowserType.Accepted.ArmA", type);
-    } else if (arm == feature_engagement::kSearchPromotionArmB) {
-      base::UmaHistogramEnumeration(
-          "Search.SearchPromotion.DefaultBrowserType.Accepted.ArmB", type);
-    }
-  } else {
-    if (arm == feature_engagement::kSearchPromotionArmA) {
-      base::UmaHistogramEnumeration(
-          "Search.SearchPromotion.DefaultBrowserType.Dismissed.ArmA", type);
-    } else if (arm == feature_engagement::kSearchPromotionArmB) {
-      base::UmaHistogramEnumeration(
-          "Search.SearchPromotion.DefaultBrowserType.Dismissed.ArmB", type);
-    }
+  std::string_view action_suffix;
+  switch (action_) {
+    case feature_engagement::SearchPromotionAction::kOpen:
+      action_suffix = "Open";
+      break;
+    case feature_engagement::SearchPromotionAction::kInstall:
+      action_suffix = "Install";
+      break;
+    case feature_engagement::SearchPromotionAction::kDisabled:
+    case feature_engagement::SearchPromotionAction::kControl:
+      break;
+  }
+
+  if (!action_suffix.empty()) {
+    std::string histogram_name =
+        base::StrCat({"Search.SearchPromotion.DefaultBrowserType.",
+                      accepted ? "Accepted." : "Dismissed.", action_suffix});
+    base::UmaHistogramEnumeration(histogram_name, type);
   }
 }
 
 bool SearchPromotionManager::IsPromoAllowedForTesting() const {
-  return is_promo_allowed_;
+  return action_ == feature_engagement::SearchPromotionAction::kOpen ||
+         action_ == feature_engagement::SearchPromotionAction::kInstall;
 }
 
-bool SearchPromotionManager::IsEngagementLowEnoughForTesting() const {
-  return IsEngagementLowEnough();
+std::string_view SearchPromotionManager::GetEngagementLabelForTesting() const {
+  return engagement_label_;
 }
 
-bool SearchPromotionManager::IsEngagementLowEnough() const {
-  // Checking profile_->IsRegularProfile() is not required here.
+std::optional<bool> SearchPromotionManager::IsPehEligibleForTesting() const {
+  return is_peh_eligible_;
+}
+
+const base::flat_set<feature_engagement::SearchPromotionCohort>&
+SearchPromotionManager::GetAllowedCohortsForTesting() const {
+  return allowed_cohorts_;
+}
+
+void SearchPromotionManager::QueryPehEligibility(
+    CreatePehLauncherCallback create_peh_launcher_callback) {
+  auto launcher = create_peh_launcher_callback
+                      ? std::move(create_peh_launcher_callback).Run()
+                      : std::make_unique<platform_experience::PehLauncher>();
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&CheckPehEligibility, std::move(launcher),
+                     feature_engagement::kSearchPromotionMinPehVersion.Get()),
+      base::BindOnce(&SearchPromotionManager::OnPehEligibilityRetrieved,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void SearchPromotionManager::OnPehEligibilityRetrieved(
+    SearchPromotionPehEligibility eligibility) {
+  is_peh_eligible_ = (eligibility == SearchPromotionPehEligibility::kEligible);
+  base::UmaHistogramEnumeration("Search.SearchPromotion.PehEligible",
+                                eligibility);
+}
+
+void SearchPromotionManager::ParseCohorts(std::string_view cohort_param) {
+  for (std::string_view token :
+       base::SplitStringPiece(cohort_param, ",", base::TRIM_WHITESPACE,
+                              base::SPLIT_WANT_NONEMPTY)) {
+    if (token == feature_engagement::kSearchPromotionCohortAll) {
+      allowed_cohorts_.insert(feature_engagement::SearchPromotionCohort::kAll);
+    } else if (token == feature_engagement::kSearchPromotionCohortLow) {
+      allowed_cohorts_.insert(feature_engagement::SearchPromotionCohort::kLow);
+    } else if (token == feature_engagement::kSearchPromotionCohortMedium) {
+      allowed_cohorts_.insert(
+          feature_engagement::SearchPromotionCohort::kMedium);
+    } else if (token == feature_engagement::kSearchPromotionCohortPower) {
+      allowed_cohorts_.insert(
+          feature_engagement::SearchPromotionCohort::kPower);
+    }
+  }
+
+  // If empty, omitted, or if all tokens are unrecognized, safely default to
+  // targeting all cohorts.
+  if (allowed_cohorts_.empty()) {
+    allowed_cohorts_.insert(feature_engagement::SearchPromotionCohort::kAll);
+  }
+}
+
+bool SearchPromotionManager::IsEngagementEligible() const {
+  if (allowed_cohorts_.contains(
+          feature_engagement::SearchPromotionCohort::kAll)) {
+    return true;
+  }
+  if (allowed_cohorts_.contains(
+          feature_engagement::SearchPromotionCohort::kLow) &&
+      (engagement_label_ == kEngagementLabelOneDay ||
+       engagement_label_ == kEngagementLabelLow)) {
+    return true;
+  }
+  if (allowed_cohorts_.contains(
+          feature_engagement::SearchPromotionCohort::kMedium) &&
+      engagement_label_ == kEngagementLabelMedium) {
+    return true;
+  }
+  if (allowed_cohorts_.contains(
+          feature_engagement::SearchPromotionCohort::kPower) &&
+      engagement_label_ == kEngagementLabelPower) {
+    return true;
+  }
+  return false;
+}
+
+void SearchPromotionManager::QueryEngagementLevel() {
   // SearchPromotionManagerFactory instantiates this KeyedService only for
   // regular, non-incognito profiles using ProfileSelection::kOriginalOnly
   // in chrome/browser/ui/search_promotion/search_promotion_manager_factory.cc.
-
   auto* service =
       segmentation_platform::SegmentationPlatformServiceFactory::GetForProfile(
           &profile_.get());
   if (!service) {
-    return false;
+    return;
   }
 
-  // Query the segmentation platform for the cached low user engagement result
-  // (defined as active fewer than 9 days out of the last 28 days). Caching on
-  // startup ensures this lookup is fast and non-blocking.
-  segmentation_platform::SegmentSelectionResult result =
-      service->GetCachedSegmentResult(
-          segmentation_platform::kChromeLowUserEngagementSegmentationKey);
+  segmentation_platform::PredictionOptions options;
+  options.on_demand_execution = false;
 
-  if (!result.is_ready || !result.segment.has_value()) {
-    return false;
+  // Query the segmentation platform for the user engagement result.
+  service->GetClassificationResult(
+      segmentation_platform::ChromeUserEngagement::kChromeUserEngagementKey,
+      options, nullptr,
+      base::BindOnce(&SearchPromotionManager::OnEngagementResultRetrieved,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void SearchPromotionManager::OnEngagementResultRetrieved(
+    const segmentation_platform::ClassificationResult& result) {
+  if (result.status == segmentation_platform::PredictionStatus::kSucceeded &&
+      !result.ordered_labels.empty()) {
+    // The computed classification label is at index 0.
+    engagement_label_ = result.ordered_labels[0];
+  }
+}
+
+void SearchPromotionManager::RunRegisterTask(
+    std::unique_ptr<RegisterSearchPromotionTask> task) {
+  // Guard against invalid tasks or tasks already in flight.
+  if (!task || task_runner_ ||
+      action_ == feature_engagement::SearchPromotionAction::kDisabled) {
+    return;
   }
 
-  return result.segment.value() ==
-         segmentation_platform::proto::SegmentId::
-             OPTIMIZATION_TARGET_SEGMENTATION_CHROME_LOW_USER_ENGAGEMENT;
+  task_runner_ = create_task_runner_callback_.Run();
+  task_runner_->Run(std::move(task),
+                    feature_engagement::kSearchPromotionMinPehVersion.Get(),
+                    base::BindOnce(&SearchPromotionManager::OnTaskCompleted,
+                                   weak_ptr_factory_.GetWeakPtr()));
 }
 
-void SearchPromotionManager::PerformArmA() {
-  NOTIMPLEMENTED();
+void SearchPromotionManager::OnTaskCompleted(
+    platform_experience::DelegatedTaskResult result) {
+  if (result.exit_code_or_status.has_value()) {
+    auto exit_code = static_cast<SearchPromotionExitCode>(
+        result.exit_code_or_status.value());
+    std::string_view variant = SearchPromotionExitCodeToString(exit_code);
+    if (!variant.empty()) {
+      base::UmaHistogramSparse("Search.SearchPromotion.DelegatedTaskExitCode",
+                               static_cast<int>(exit_code));
+      base::UmaHistogramMediumTimes(
+          base::StrCat({"Search.SearchPromotion.Duration.", variant}),
+          result.execution_time);
+    }
+  }
+  task_runner_.reset();
 }
 
-void SearchPromotionManager::PerformArmB() {
-  NOTIMPLEMENTED();
+void SearchPromotionManager::PerformOpen() {
+  std::string store_url_str =
+      feature_engagement::kSearchPromotionStoreUrl.Get();
+  GURL store_url(store_url_str);
+  if (!store_url.is_valid()) {
+    return;
+  }
+  RunRegisterTask(std::make_unique<RegisterSearchPromotionTask>(
+      /*post_install_url=*/store_url, /*extension_id=*/""));
+}
+
+void SearchPromotionManager::PerformInstall() {
+  std::string extension_id =
+      feature_engagement::kSearchPromotionExtensionId.Get();
+  std::string instructions_url_str =
+      feature_engagement::kSearchPromotionInstructionsUrl.Get();
+  GURL instructions_url(instructions_url_str);
+  if (extension_id.empty() || !instructions_url.is_valid()) {
+    return;
+  }
+
+  // With an escape hatch, PEH opens store_url instead if the extension isn't
+  // installed in time. An unusable store_url falls back to the regular install
+  // so an accepted promo is never dropped.
+  GURL escape_hatch_url;
+  std::optional<base::TimeDelta> escape_hatch_time =
+      feature_engagement::GetSearchPromotionEscapeHatchTime();
+  if (escape_hatch_time.has_value()) {
+    GURL store_url(feature_engagement::kSearchPromotionStoreUrl.Get());
+    if (store_url.is_valid() && store_url.SchemeIsHTTPOrHTTPS()) {
+      escape_hatch_url = std::move(store_url);
+    } else {
+      escape_hatch_time.reset();
+    }
+  }
+
+  RunRegisterTask(std::make_unique<RegisterSearchPromotionTask>(
+      /*post_install_url=*/instructions_url, /*extension_id=*/extension_id,
+      escape_hatch_url, escape_hatch_time));
 }

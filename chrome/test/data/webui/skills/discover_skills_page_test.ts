@@ -4,6 +4,7 @@
 
 import 'chrome://skills/discover_skills_page.js';
 
+import type {CrButtonElement} from '//resources/cr_elements/cr_button/cr_button.js';
 import type {CrToastElement} from '//resources/cr_elements/cr_toast/cr_toast.js';
 import {CrRouter} from 'chrome://resources/js/cr_router.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -45,8 +46,10 @@ suite('DiscoverSkillsPage', function() {
       curatedBy: '',
       imageUrl: '',
       source: SkillSource.kFirstParty,
+      enabled: true,
       creationTime: {internalValue: 0n},
       lastUpdateTime: {internalValue: 0n},
+      category: '',
       ...overrides,
     };
   }
@@ -188,13 +191,17 @@ suite('DiscoverSkillsPage', function() {
     assertTrue(!!cards[0]);
     const card = cards[0];
     await card.updateComplete;
-    const saveButton1 = card.$.saveButton;
+    const saveButton1 =
+        card.shadowRoot.querySelector<CrButtonElement>('#saveButton');
+    assertTrue(!!saveButton1);
     assertFalse(saveButton1.disabled);
 
     assertTrue(!!cards[1]);
     const card1 = cards[1];
     await card1.updateComplete;
-    const saveButton2 = card1.$.saveButton;
+    const saveButton2 =
+        card1.shadowRoot.querySelector<CrButtonElement>('#saveButton');
+    assertTrue(!!saveButton2);
     assertFalse(saveButton2.disabled);
 
     saveButton1.click();
@@ -223,7 +230,9 @@ suite('DiscoverSkillsPage', function() {
     const card = cards[0];
     await card.updateComplete;
 
-    const saveButton1 = card.$.saveButton;
+    const saveButton1 =
+        card.shadowRoot.querySelector<CrButtonElement>('#saveButton');
+    assertTrue(!!saveButton1);
     assertFalse(saveButton1.disabled);
 
     saveButton1.click();
@@ -252,7 +261,9 @@ suite('DiscoverSkillsPage', function() {
     const card = cards[0];
     await card.updateComplete;
 
-    const saveButton1 = card.$.saveButton;
+    const saveButton1 =
+        card.shadowRoot.querySelector<CrButtonElement>('#saveButton');
+    assertTrue(!!saveButton1);
     assertFalse(saveButton1.disabled);
 
     saveButton1.click();
@@ -339,7 +350,7 @@ suite('DiscoverSkillsPage', function() {
     assertTrue(!!card);
     await microtasksFinished();
 
-    const img = card.$.illustrationImage;
+    const img = card.shadowRoot.querySelector('#illustrationImage');
     assertTrue(!!img);
     assertEquals(imageUrl, img.getAttribute('auto-src'));
   });

@@ -10,11 +10,15 @@
 #import "components/search_engines/template_url_service.h"
 #import "ios/chrome/browser/download/model/external_app_util.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ios/public/provider/chrome/browser/mini_map/mini_map_api.h"
 
 namespace {
 
 // Checks if the Default Search Engine is Google.
 bool IsGoogleDSE(TemplateURLService* template_url_service) {
+  if (!template_url_service) {
+    return false;
+  }
   const TemplateURL* default_provider =
       template_url_service->GetDefaultSearchProvider();
   if (!default_provider) {
@@ -30,7 +34,9 @@ bool IsGoogleDSE(TemplateURLService* template_url_service) {
 MiniMapService::MiniMapService(PrefService* pref_service,
                                TemplateURLService* template_url_service)
     : pref_service_(pref_service), template_url_service_(template_url_service) {
-  template_url_service_->AddObserver(this);
+  if (template_url_service_) {
+    template_url_service_->AddObserver(this);
+  }
   is_dse_google_ = IsGoogleDSE(template_url_service_);
 
   mini_map_enabled_pref_.Init(
@@ -38,6 +44,9 @@ MiniMapService::MiniMapService(PrefService* pref_service,
       base::BindRepeating(&MiniMapService::OnPrefChanged,
                           weak_factory_.GetWeakPtr()));
   is_mini_map_enabled_ = mini_map_enabled_pref_.GetValue();
+
+  is_maps_native_preview_bypass_enabled_ =
+      ios::provider::IsMapsNativePreviewBypassEnabled();
 
   // Start the application observer
   MiniMapService::MiniMapAppObserver::GetInstance();
@@ -66,6 +75,10 @@ bool MiniMapService::IsDSEGoogle() {
 bool MiniMapService::IsGoogleMapsInstalled() {
   return MiniMapService::MiniMapAppObserver::GetInstance()
       ->IsGoogleMapsInstalled();
+}
+
+bool MiniMapService::IsMapsNativePreviewBypassEnabled() {
+  return is_maps_native_preview_bypass_enabled_;
 }
 
 #pragma mark - TemplateURLServiceObserver

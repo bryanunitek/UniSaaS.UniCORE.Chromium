@@ -14,7 +14,6 @@ namespace remoting {
 
 namespace {
 
-constexpr char kFtlResourcePrefix[] = "chromoting_ftl_";
 constexpr char kGmailDomain[] = "gmail.com";
 constexpr char kGooglemailDomain[] = "googlemail.com";
 
@@ -24,7 +23,7 @@ std::string NormalizeSignalingId(const std::string& id) {
   std::string email;
   std::string resource;
   if (SplitSignalingIdResource(id, &email, &resource)) {
-    std::string normalized_email = resource.find(kFtlResourcePrefix) == 0
+    std::string normalized_email = resource.starts_with(kFtlResourcePrefix)
                                        ? GetCanonicalEmail(email)
                                        : base::ToLowerASCII(email);
     return normalized_email + "/" + resource;
@@ -85,12 +84,12 @@ bool IsValidFtlSignalingId(const std::string& signaling_id) {
     LOG(ERROR) << "Failed to split signaling id: " << signaling_id;
     return false;
   }
-  if (!base::StartsWith(resource, kFtlResourcePrefix)) {
+  if (!resource.starts_with(kFtlResourcePrefix)) {
     LOG(ERROR) << "Signaling id resource does not start with a valid prefix: "
                << resource;
     return false;
   }
-  std::string registration_id = resource.substr(sizeof(kFtlResourcePrefix) - 1);
+  std::string registration_id = resource.substr(kFtlResourcePrefix.length());
   if (!base::Uuid::ParseLowercase(registration_id).is_valid()) {
     LOG(ERROR) << "Signaling id contains an invalid registration id: "
                << registration_id;

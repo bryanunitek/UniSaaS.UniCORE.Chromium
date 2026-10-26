@@ -9,41 +9,34 @@
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/autofill/payments/mandatory_reauth_bubble_controller_impl.h"
 #include "chrome/browser/ui/autofill/payments/mandatory_reauth_ui.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/autofill/payments/dialog_view_ids.h"
 #include "chrome/browser/ui/views/autofill/payments/mandatory_reauth_confirmation_bubble_view.h"
-#include "chrome/browser/ui/views/autofill/payments/mandatory_reauth_icon_view.h"
 #include "chrome/browser/ui/views/autofill/payments/mandatory_reauth_opt_in_bubble_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/page_action/page_action_view.h"
-#include "chrome/browser/ui/views/page_action/test_support/page_action_test_support.h"
+#include "chrome/browser/ui/views/page_action/page_action_view_interface.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_accessor.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/autofill/core/browser/metrics/payments/mandatory_reauth_metrics.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "ui/events/base_event_utils.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/bubble/bubble_frame_view.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/test/widget_test.h"
 
 namespace autofill {
 
-class MandatoryReauthBubbleViewUiTest
-    : public InProcessBrowserTest,
-      public ::testing::WithParamInterface<bool> {
+class MandatoryReauthBubbleViewUiTest : public InProcessBrowserTest {
  public:
-  MandatoryReauthBubbleViewUiTest() {
-    feature_list_.InitAndEnableFeatureWithParameters(
-        ::features::kPageActionsMigration,
-        {
-            {
-                ::features::kPageActionsMigrationAutofillMandatoryReauth.name,
-                GetParam() ? "true" : "false",
-            },
-        });
-  }
-
+  MandatoryReauthBubbleViewUiTest() = default;
   ~MandatoryReauthBubbleViewUiTest() override = default;
   MandatoryReauthBubbleViewUiTest(const MandatoryReauthBubbleViewUiTest&) =
       delete;
@@ -52,10 +45,10 @@ class MandatoryReauthBubbleViewUiTest
 
   // InProcessBrowserTest:
   void SetUpOnMainThread() override {
-    auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+    auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
     MandatoryReauthBubbleControllerImpl::CreateForWebContents(web_contents);
     MandatoryReauthBubbleControllerImpl* controller = GetController();
-    DCHECK(controller);
+    CHECK(controller, base::NotFatalUntil::M162);
   }
 
   void ShowBubble() {
@@ -82,16 +75,20 @@ class MandatoryReauthBubbleViewUiTest
     }
   }
 
-  bool IsIconVisible() { return GetIconView() && GetIconView()->GetVisible(); }
+  bool IsIconVisible() {
+    return page_actions::PageActionTestAccessor(browser(),
+                                                kActionAutofillMandatoryReauth)
+        .GetVisible();
+  }
 
   MandatoryReauthBubbleControllerImpl* GetController() {
-    if (!browser() || !browser()->tab_strip_model() ||
-        !browser()->tab_strip_model()->GetActiveWebContents()) {
+    if (!browser() || !browser()->GetTabStripModel() ||
+        !browser()->GetTabStripModel()->GetActiveWebContents()) {
       return nullptr;
     }
 
     return MandatoryReauthBubbleControllerImpl::FromWebContents(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
   }
 
   views::BubbleDialogDelegate* GetReauthBubble() {
@@ -122,16 +119,15 @@ class MandatoryReauthBubbleViewUiTest
         controller->GetBubbleView());
   }
 
-  IconLabelBubbleView* GetIconView() {
+  page_actions::PageActionViewInterface* GetIconView() {
     BrowserView* browser_view =
         BrowserView::GetBrowserViewForBrowser(browser());
 
     auto* provider = browser_view->toolbar_button_provider();
-    IconLabelBubbleView* icon = page_actions::GetIconLabelBubbleViewForTesting(
-        provider->GetPageActionViewInterface(kActionAutofillMandatoryReauth),
-        kActionAutofillMandatoryReauth);
+    auto* icon =
+        provider->GetPageActionViewInterface(kActionAutofillMandatoryReauth);
 
-    DCHECK(icon);
+    CHECK(icon, base::NotFatalUntil::M162);
     return icon;
   }
 
@@ -195,10 +191,9 @@ class MandatoryReauthBubbleViewUiTest
 
  protected:
   test::AutofillBrowserTestEnvironment autofill_test_environment_;
-  base::test::ScopedFeatureList feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest, ShowBubble) {
+IN_PROC_BROWSER_TEST_F(MandatoryReauthBubbleViewUiTest, ShowBubble) {
   base::HistogramTester histogram_tester;
   ShowBubble();
   EXPECT_TRUE(GetReauthBubble());
@@ -210,7 +205,7 @@ IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest, ShowBubble) {
       autofill_metrics::MandatoryReauthOptInBubbleOffer::kShown, 1);
 }
 
-IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest,
+IN_PROC_BROWSER_TEST_F(MandatoryReauthBubbleViewUiTest,
                        ClickOptInCancelButton) {
   base::HistogramTester histogram_tester;
   ShowBubble();
@@ -225,7 +220,7 @@ IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest,
       autofill_metrics::MandatoryReauthOptInBubbleResult::kCancelled, 1);
 }
 
-IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest, ClickOptInOkButton) {
+IN_PROC_BROWSER_TEST_F(MandatoryReauthBubbleViewUiTest, ClickOptInOkButton) {
   base::HistogramTester histogram_tester;
   ShowBubble();
   EXPECT_CALL(accept_callback, Run).Times(1);
@@ -239,7 +234,7 @@ IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest, ClickOptInOkButton) {
       autofill_metrics::MandatoryReauthOptInBubbleResult::kAccepted, 1);
 }
 
-IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest, ClickOptInCloseButton) {
+IN_PROC_BROWSER_TEST_F(MandatoryReauthBubbleViewUiTest, ClickOptInCloseButton) {
   base::HistogramTester histogram_tester;
   ShowBubble();
   EXPECT_CALL(close_callback, Run).Times(1);
@@ -253,7 +248,7 @@ IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest, ClickOptInCloseButton) {
       autofill_metrics::MandatoryReauthOptInBubbleResult::kClosed, 1);
 }
 
-IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest, ReshowOptInBubble) {
+IN_PROC_BROWSER_TEST_F(MandatoryReauthBubbleViewUiTest, ReshowOptInBubble) {
   base::HistogramTester histogram_tester;
   ShowBubble();
   ClickOnCloseButton(GetReauthBubble());
@@ -267,7 +262,7 @@ IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest, ReshowOptInBubble) {
       autofill_metrics::MandatoryReauthOptInBubbleOffer::kShown, 1);
 }
 
-IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest,
+IN_PROC_BROWSER_TEST_F(MandatoryReauthBubbleViewUiTest,
                        ReshowConfirmationBubble) {
   base::HistogramTester histogram_tester;
   ShowBubble();
@@ -283,7 +278,7 @@ IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest,
       1);
 }
 
-IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest,
+IN_PROC_BROWSER_TEST_F(MandatoryReauthBubbleViewUiTest,
                        ClickConfirmationCloseButton) {
   ShowBubble();
   ClickOnOkButton(GetReauthBubble());
@@ -302,7 +297,7 @@ IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest,
             MandatoryReauthBubbleType::kInactive);
 }
 
-IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest,
+IN_PROC_BROWSER_TEST_F(MandatoryReauthBubbleViewUiTest,
                        ClickConfirmationSettingsLink) {
   base::HistogramTester histogram_tester;
   ShowBubble();
@@ -319,9 +314,5 @@ IN_PROC_BROWSER_TEST_P(MandatoryReauthBubbleViewUiTest,
           kSettingsLinkClicked,
       1);
 }
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         MandatoryReauthBubbleViewUiTest,
-                         ::testing::Bool());
 
 }  // namespace autofill

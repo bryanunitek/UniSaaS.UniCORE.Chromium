@@ -18,6 +18,7 @@
 #include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "pdf/buildflags.h"
 #include "pdf/page_orientation.h"
 #include "pdf/ui/thumbnail.h"
@@ -46,8 +47,10 @@ class PDFiumEngine;
 class PdfRect;
 class Thumbnail;
 struct AccessibilityCharInfo;
+struct AccessibilityFormGraphicInfo;
 struct AccessibilityHighlightInfo;
 struct AccessibilityImageInfo;
+struct AccessibilityLineSegment;
 struct AccessibilityLinkInfo;
 struct AccessibilityStructureElement;
 struct AccessibilityTextFieldInfo;
@@ -85,8 +88,12 @@ class PDFiumPage {
   PDFiumPage(PDFiumEngine* engine, uint32_t i);
   PDFiumPage(const PDFiumPage&) = delete;
   PDFiumPage& operator=(const PDFiumPage&) = delete;
-  PDFiumPage(PDFiumPage&& that);
+  PDFiumPage(PDFiumPage&& that) = delete;
+  PDFiumPage& operator=(PDFiumPage&& that) = delete;
   ~PDFiumPage();
+
+  base::WeakPtr<PDFiumPage> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
+  void InvalidateWeakPtrs() { weak_factory_.InvalidateWeakPtrs(); }
 
   // Unloads the PDFium data for this page from memory. Returns true if the
   // unload happened, or false if an unload preventer blocked it.
@@ -176,9 +183,14 @@ class PDFiumPage {
   // bounding boxes.
   std::vector<AccessibilityHighlightInfo> GetHighlightInfo();
 
-  // For all the text fields on the page, get their properties like name,
-  // value, bounding boxes, etc.
-  std::vector<AccessibilityTextFieldInfo> GetTextFieldInfo();
+  // For all the graphics (diagrams containing both graphical primitives and
+  // text) on the page, get their underlying text ranges and bounding boxes,
+  // sorted by text run index.
+  std::vector<AccessibilityFormGraphicInfo> GetFormGraphicInfo();
+
+  // Returns the straight line segments stroked by the page's top-level path
+  // objects, such as table borders.
+  std::vector<AccessibilityLineSegment> GetLineSegmentInfo();
 
   // Traverses the entire struct tree of the page recursively and extracts the
   // text run type or the alt text from struct tree elements corresponding to
@@ -318,8 +330,8 @@ class PDFiumPage {
   friend class PDFiumPageLinkTest;
   friend class PDFiumTestBase;
 
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageButtonTest, PopulateButtons);
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageChoiceFieldTest, PopulateChoiceFields);
+  FRIEND_TEST_ALL_PREFIXES(PDFiumPageHeuristicEnhancementsTest,
+                           AnnotLinkReplacesDuplicateWebLink);
   FRIEND_TEST_ALL_PREFIXES(PDFiumPageHighlightTest, PopulateHighlights);
   FRIEND_TEST_ALL_PREFIXES(PDFiumPageImageForOcrTest, LowResolutionImage);
   FRIEND_TEST_ALL_PREFIXES(PDFiumPageImageForOcrTest, HighResolutionImage);
@@ -331,7 +343,6 @@ class PDFiumPage {
   FRIEND_TEST_ALL_PREFIXES(PDFiumPageLinkTest, GetLinkTarget);
   FRIEND_TEST_ALL_PREFIXES(PDFiumPageLinkTest, GetUTF8LinkTarget);
   FRIEND_TEST_ALL_PREFIXES(PDFiumPageLinkTest, LinkGeneration);
-  FRIEND_TEST_ALL_PREFIXES(PDFiumPageTextFieldTest, PopulateTextFields);
 
   // Key: Marked content id for the text element as specified in the struct
   //      tree.
@@ -342,12 +353,6 @@ class PDFiumPage {
   //      tree.
   // Value: Index of the image in the `images_` vector.
   using MarkedContentIdToImageMap = std::map<int, size_t>;
-
-  // Track which text run indices have been associated with a structured node in
-  // order to discover which text runs are unassociated with structured
-  // elements. This information is used to determine how to interleave
-  // structured and unstructured content in the final AXTree.
-  std::set<size_t> associated_text_run_indices_;
 
   struct Link {
     Link();
@@ -397,68 +402,13 @@ class PDFiumPage {
     std::string note_text;
   };
 
-  // Represents a form field within the page.
-  struct FormField {
-    FormField();
-    FormField(const FormField& other);
-    ~FormField();
+  // Represents a graphic containing both graphical primitives and text.
+  struct Graphic {
+    int32_t start_char_index = -1;
+    int32_t char_count = 0;
 
+    // The bounding rect of the graphic in screen coordinates.
     gfx::Rect bounding_rect;
-    // Represents the name of form field as defined in the field dictionary.
-    std::string name;
-    // Represents the flags of form field as defined in the field dictionary.
-    int flags;
-  };
-
-  // Represents a text field within the page.
-  struct TextField : FormField {
-    TextField();
-    TextField(const TextField& other);
-    ~TextField();
-
-    std::string value;
-  };
-
-  // Represents a choice field option.
-  struct ChoiceFieldOption {
-    ChoiceFieldOption();
-    ChoiceFieldOption(const ChoiceFieldOption& other);
-    ~ChoiceFieldOption();
-
-    std::string name;
-    bool is_selected;
-  };
-
-  // Represents a choice field within the page.
-  struct ChoiceField : FormField {
-    ChoiceField();
-    ChoiceField(const ChoiceField& other);
-    ~ChoiceField();
-
-    std::vector<ChoiceFieldOption> options;
-  };
-
-  // Represents a button within the page.
-  struct Button : FormField {
-    Button();
-    Button(const Button& other);
-    ~Button();
-
-    std::string value;
-    // A button can be of type radio, checkbox or push button.
-    int type;
-    // Represents if the radio button or checkbox is checked.
-    bool is_checked = false;
-    // Represents count of controls in the control group. A group of
-    // interactive form annotations is collectively called a form control
-    // group. Here an interactive form annotation should be either a radio
-    // button or a checkbox.
-    uint32_t control_count = 0;
-    // Represents index of the control in the control group. A group of
-    // interactive form annotations is collectively called a form control
-    // group. Here an interactive form annotation should be either a radio
-    // button or a checkbox. Value of `control_index` is -1 for push button.
-    int control_index = -1;
   };
 
   // Returns a link index if the given character index is over a link, or -1
@@ -472,18 +422,14 @@ class PDFiumPage {
   void PopulateAnnotationLinks();
   // Calculate the locations of images on the page.
   void CalculateImages();
+  // Calculate the locations and character ranges of graphics on the page.
+  void CalculateGraphics();
+  // Returns the straight line segments on the page.
+  std::vector<AccessibilityLineSegment> CalculateLineSegments();
   // Populate annotations like highlight and text field on the page.
   void PopulateAnnotations();
   // Populate `highlights_` with `annot`.
   void PopulateHighlight(FPDF_ANNOTATION annot);
-  // Populate `text_fields_` with `annot`.
-  void PopulateTextField(FPDF_ANNOTATION annot);
-  // Populate `choice_fields_` with `annot`.
-  void PopulateChoiceField(FPDF_ANNOTATION annot);
-  // Populate `buttons_` with `annot`.
-  void PopulateButton(FPDF_ANNOTATION annot);
-  // Populate form fields like text field, choice field and button on the page.
-  void PopulateFormField(FPDF_ANNOTATION annot);
   // Returns link type and fills target associated with a destination. Returns
   // NONSELECTABLE_AREA if detection failed.
   Area GetDestinationTarget(FPDF_DEST destination, LinkTarget* target);
@@ -525,9 +471,6 @@ class PDFiumPage {
       FPDF_STRUCTELEMENT element,
       std::set<FPDF_STRUCTELEMENT>& visited_elements);
 
-  bool PopulateFormFieldProperties(FPDF_ANNOTATION annot,
-                                   FormField* form_field);
-
   // Generates and sends the thumbnail using `send_callback`.
   void GenerateAndSendThumbnail(float device_pixel_ratio,
                                 SendThumbnailCallback send_callback);
@@ -540,19 +483,25 @@ class PDFiumPage {
   int preventing_text_page_unload_count_ = 0;
   gfx::Rect rect_;
   bool calculated_text_runs_ = false;
-  MarkedContentIdToTextRunInfoMap marked_content_id_to_text_runs_map_;
   // Text runs are sorted by character index.
   std::vector<AccessibilityTextRunInfo> text_runs_;
+  MarkedContentIdToTextRunInfoMap marked_content_id_to_text_runs_map_;
+  // Track which text run indices have been associated with a structured node in
+  // order to discover which text runs are unassociated with structured
+  // elements. This information is used to determine how to interleave
+  // structured and unstructured content in the final AXTree.
+  std::set<size_t> associated_text_run_indices_;
   bool calculated_links_ = false;
   std::vector<Link> links_;
   bool calculated_images_ = false;
   MarkedContentIdToImageMap marked_content_id_to_images_map_;
   std::vector<Image> images_;
+  bool calculated_graphics_ = false;
+  std::vector<Graphic> graphics_;
+  // Null until calculated, since a page may have no line segments.
+  std::optional<std::vector<AccessibilityLineSegment>> line_segments_;
   bool calculated_annotations_ = false;
   std::vector<Highlight> highlights_;
-  std::vector<TextField> text_fields_;
-  std::vector<ChoiceField> choice_fields_;
-  std::vector<Button> buttons_;
   bool calculated_page_object_text_run_breaks_ = false;
   // The set of character indices on which text runs need to be broken for page
   // objects.
@@ -565,6 +514,8 @@ class PDFiumPage {
   // this page has never been Searchified, then this is null.
   std::optional<bool> has_searchify_added_text_;
 #endif
+
+  base::WeakPtrFactory<PDFiumPage> weak_factory_{this};
 };
 
 constexpr uint32_t MakeARGB(unsigned int a,

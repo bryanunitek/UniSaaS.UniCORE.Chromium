@@ -16,25 +16,36 @@
 #include "chrome/browser/ash/app_list/search/search_controller.h"
 #include "chrome/browser/ash/app_list/search/test/test_search_controller.h"
 #include "chrome/browser/ash/app_list/test/test_app_list_controller_delegate.h"
+#include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/favicon/favicon_service_factory.h"
+#include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
+#include "components/account_id/account_id.h"
+#include "components/account_id/account_id_literal.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
 #include "components/omnibox/browser/autocomplete_controller_config.h"
 #include "components/omnibox/browser/fake_autocomplete_provider_client.h"
-#include "components/omnibox/browser/suggestion_answer.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/session_manager/test/user_session_test_environment.h"
+#include "components/user_manager/user_manager.h"
 #include "components/variations/scoped_variations_ids_provider.h"
 #include "components/variations/variations_ids_provider.h"
 #include "content/public/test/browser_task_environment.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/omnibox_proto/answer_type.pb.h"
 
 namespace app_list::test {
 
 namespace {
+
+constexpr auto kAccountId =
+    AccountId::Literal::FromUserEmailGaiaId("user@example.com",
+                                            GaiaId::Literal("12345"));
 
 // Helper functions to populate search results.
 // Currently only the ones that may affect test results are filled.
@@ -46,13 +57,12 @@ AutocompleteMatch NewOmniboxResult(const std::string& url) {
   result.stripped_destination_url = GURL(url);
   result.contents = u"contents";
   result.description = u"description";
-  result.type = AutocompleteMatchType::BOOKMARK_TITLE;
+  result.type = omnibox::AutocompleteMatchType::kBookmarkTitle;
 
   return result;
 }
 
-AutocompleteMatch NewAnswerResult(const std::string& url,
-                                  omnibox::AnswerType answer_type) {
+AutocompleteMatch NewCalculatorResult(const std::string& url) {
   AutocompleteMatch result;
 
   result.relevance = 1.0;
@@ -60,10 +70,7 @@ AutocompleteMatch NewAnswerResult(const std::string& url,
   result.stripped_destination_url = GURL(url);
   result.contents = u"contents";
   result.description = u"description";
-  omnibox::RichAnswerTemplate answer_template;
-  answer_template.add_answers();
-  result.answer_template = answer_template;
-  result.answer_type = answer_type;
+  result.type = omnibox::AutocompleteMatchType::kCalculator;
 
   return result;
 }
@@ -76,7 +83,7 @@ AutocompleteMatch NewOpenTabResult(const std::string& url) {
   result.stripped_destination_url = GURL(url);
   result.contents = u"contents";
   result.description = u"description";
-  result.type = AutocompleteMatchType::OPEN_TAB;
+  result.type = omnibox::AutocompleteMatchType::kOpenTab;
 
   return result;
 }
@@ -111,6 +118,15 @@ class OmniboxProviderTest : public testing::Test {
     profile_manager_ = std::make_unique<TestingProfileManager>(
         TestingBrowserProcess::GetGlobal());
     ASSERT_TRUE(profile_manager_->SetUp());
+
+    // OmniboxProvider resolves the history service through
+    // ash::HistoryServiceProvider, which keys on the user's account. Register a
+    // logged-in user so that account resolves to `profile_`'s browser context.
+    user_session_env_ = std::make_unique<ash::test::UserSessionTestEnvironment>(
+        TestingBrowserProcess::GetGlobal()->local_state());
+    ASSERT_TRUE(user_session_env_->AddRegularUser(kAccountId));
+    user_session_env_->LogIn(kAccountId);
+
     // The profile needs a template URL service for history Omnibox results.
     profile_ = profile_manager_->CreateTestingProfile(
         chrome::kInitialProfile,
@@ -118,6 +134,10 @@ class OmniboxProviderTest : public testing::Test {
             TemplateURLServiceFactory::GetInstance(),
             base::BindRepeating(
                 &TemplateURLServiceFactory::BuildInstanceFor)}});
+    // TODO(crbug.com/40225390): Use ProfileUserManagerController.
+    ash::AnnotatedAccountId::Set(profile_, kAccountId);
+    user_manager::UserManager::Get()->OnUserProfileCreated(
+        kAccountId, profile_->GetPrefs());
 
     // Create client of our provider.
     search_controller_ = std::make_unique<TestSearchController>();
@@ -128,6 +148,11 @@ class OmniboxProviderTest : public testing::Test {
     auto provider = std::make_unique<OmniboxProvider>(
         profile_, list_controller_.get(),
         TemplateURLServiceFactory::GetForProfile(profile_),
+        BookmarkModelFactory::GetForBrowserContext(profile_),
+        FaviconServiceFactory::GetForProfile(
+            profile_, ServiceAccessType::EXPLICIT_ACCESS),
+        HistoryServiceFactory::GetForProfile(
+            profile_, ServiceAccessType::EXPLICIT_ACCESS),
         /*provider_types=*/0);
     provider_ = provider.get();
     search_controller_->AddProvider(std::move(provider));
@@ -143,8 +168,12 @@ class OmniboxProviderTest : public testing::Test {
     provider_ = nullptr;
     search_controller_.reset();
     list_controller_.reset();
+    // Detach the user from its profile before the profile (and its prefs) are
+    // destroyed, so the user's PrefService pointer never dangles.
+    user_manager::UserManager::Get()->OnUserProfileWillBeDestroyed(kAccountId);
     profile_ = nullptr;
     profile_manager_->DeleteTestingProfile(chrome::kInitialProfile);
+    user_session_env_.reset();
   }
 
   void ProduceResults(const AutocompleteResult& results) {
@@ -177,6 +206,7 @@ class OmniboxProviderTest : public testing::Test {
 
   std::unique_ptr<TestingProfileManager> profile_manager_;
   raw_ptr<TestingProfile> profile_;
+  std::unique_ptr<ash::test::UserSessionTestEnvironment> user_session_env_;
 
   raw_ptr<OmniboxProvider> provider_;
 };
@@ -189,8 +219,7 @@ TEST_F(OmniboxProviderTest, Basic) {
   AutocompleteResult result;
 
   to_produce.emplace_back(NewOmniboxResult("https://example.com/result"));
-  to_produce.emplace_back(NewAnswerResult(
-      "https://example.com/answer", omnibox::AnswerType::ANSWER_TYPE_WEATHER));
+  to_produce.emplace_back(NewCalculatorResult("https://example.com/answer"));
   to_produce.emplace_back(NewOpenTabResult("https://example.com/open_tab"));
   result.AppendMatches(to_produce);
   ProduceResults(std::move(result));
@@ -241,8 +270,7 @@ TEST_F(OmniboxProviderTest, BadUrls) {
   AutocompleteResult result;
 
   to_produce.emplace_back(NewOmniboxResult(""));
-  to_produce.emplace_back(
-      NewAnswerResult("badscheme", omnibox::AnswerType::ANSWER_TYPE_WEATHER));
+  to_produce.emplace_back(NewCalculatorResult("badscheme"));
   to_produce.emplace_back(NewOpenTabResult("http://?k=v"));
   // `destination_url` should be DCHECKed for validity when adding matches.
   EXPECT_DCHECK_DEATH_WITH(result.AppendMatches(to_produce), "");
@@ -261,7 +289,7 @@ TEST_F(OmniboxProviderTest, Deduplicate) {
   auto history_result = NewOmniboxResult("https://example.com/result_1");
   history_result.contents = u"history";
   history_result.description = u"history description";
-  history_result.type = AutocompleteMatchType::SEARCH_HISTORY;
+  history_result.type = omnibox::AutocompleteMatchType::kSearchHistory;
 
   std::vector<AutocompleteMatch> to_produce;
   AutocompleteResult result;
@@ -293,9 +321,7 @@ TEST_F(OmniboxProviderTest, UnhandledUrls) {
   AutocompleteResult result;
 
   to_produce.emplace_back(NewOmniboxResult("https://drive.google.com/doc1"));
-  to_produce.emplace_back(
-      NewAnswerResult("https://docs.google.com/doc2",
-                      omnibox::AnswerType::ANSWER_TYPE_FINANCE));
+  to_produce.emplace_back(NewCalculatorResult("https://docs.google.com/doc2"));
   to_produce.emplace_back(NewOpenTabResult("https://drive.google.com/doc1"));
   to_produce.emplace_back(NewOpenTabResult("https://docs.google.com/doc2"));
   to_produce.emplace_back(NewOpenTabResult("file:///docs/doc3"));
@@ -323,8 +349,7 @@ TEST_F(OmniboxProviderTest, WebSearchControl) {
   AutocompleteResult result;
 
   to_produce.emplace_back(NewOmniboxResult("https://example.com/result"));
-  to_produce.emplace_back(NewAnswerResult(
-      "https://example.com/answer", omnibox::AnswerType::ANSWER_TYPE_WEATHER));
+  to_produce.emplace_back(NewCalculatorResult("https://example.com/answer"));
   to_produce.emplace_back(NewOpenTabResult("https://example.com/open_tab"));
   result.AppendMatches(to_produce);
   ProduceResults(std::move(result));

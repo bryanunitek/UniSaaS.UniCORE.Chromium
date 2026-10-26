@@ -12,7 +12,7 @@
 #include "components/tab_groups/tab_group_id.h"
 
 class TabStripModel;
-class Browser;
+class BrowserWindowInterface;
 
 namespace content {
 class WebContents;
@@ -54,7 +54,7 @@ class LocalTabGroupListener {
 
   // Updates the saved group with the new tab and tracks it for further changes.
   void AddTabFromLocal(tabs::TabInterface* local_tab,
-                       TabStripModel* tab_strip_model,
+                       const TabStripModel* tab_strip_model,
                        int index);
 
   // Moves the SavedTab associated with `web_contents` in the TabStripModel to
@@ -89,7 +89,7 @@ class LocalTabGroupListener {
                                TabStripModel* tab_strip_model,
                                int target_index_in_tab_strip);
   void OpenWebContentsFromSync(SavedTabGroupTab tab,
-                               Browser* browser,
+                               BrowserWindowInterface* browser,
                                int index_in_tabstrip);
 
   // Removes any tabs in the local group that aren't in the saved group.

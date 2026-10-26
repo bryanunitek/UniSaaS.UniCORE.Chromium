@@ -4,8 +4,6 @@
 
 from mojom_parser_test_case import MojomParserTestCase
 
-from mojom.generate import module
-
 
 class StableAttributeTest(MojomParserTestCase):
   """Tests covering usage of the [Stable] attribute."""
@@ -15,7 +13,8 @@ class StableAttributeTest(MojomParserTestCase):
     and the resulting parser outputs are tagged accordingly."""
     mojom = 'test.mojom'
     self.WriteFile(
-        mojom, """\
+      mojom,
+      """\
         [Stable] enum TestEnum { kFoo };
         enum UnstableEnum { kBar };
         [Stable] struct TestStruct { TestEnum a; };
@@ -24,7 +23,8 @@ class StableAttributeTest(MojomParserTestCase):
         union UnstableUnion { UnstableEnum a; UnstableStruct b; };
         [Stable] interface TestInterface { Foo@0(TestUnion x) => (); };
         interface UnstableInterface { Foo(UnstableUnion x) => (); };
-        """)
+        """,
+    )
     self.ParseMojoms([mojom])
 
     m = self.LoadModule(mojom)
@@ -48,9 +48,11 @@ class StableAttributeTest(MojomParserTestCase):
     self.ExtractTypes('[Stable] enum E { A }; [Stable] struct S { E e; };')
     self.ExtractTypes('[Stable] struct S {}; [Stable] struct T { S s; };')
     self.ExtractTypes(
-        '[Stable] struct S {}; [Stable] struct T { array<S> ss; };')
+      '[Stable] struct S {}; [Stable] struct T { array<S> ss; };'
+    )
     self.ExtractTypes(
-        '[Stable] interface F {}; [Stable] struct T { pending_remote<F> f; };')
+      '[Stable] interface F {}; [Stable] struct T { pending_remote<F> f; };'
+    )
 
     with self.assertRaisesRegex(Exception, 'because it depends on E'):
       self.ExtractTypes('enum E { A }; [Stable] struct S { E e; };')
@@ -64,10 +66,12 @@ class StableAttributeTest(MojomParserTestCase):
       self.ExtractTypes('struct T {}; [Stable] struct S { map<T, int32> xs; };')
     with self.assertRaisesRegex(Exception, 'because it depends on F'):
       self.ExtractTypes(
-          'interface F {}; [Stable] struct S { pending_remote<F> f; };')
+        'interface F {}; [Stable] struct S { pending_remote<F> f; };'
+      )
     with self.assertRaisesRegex(Exception, 'because it depends on F'):
       self.ExtractTypes(
-          'interface F {}; [Stable] struct S { pending_receiver<F> f; };')
+        'interface F {}; [Stable] struct S { pending_receiver<F> f; };'
+      )
 
   def testStableUnion(self):
     """A [Stable] union is valid if all its fields' types are also stable."""
@@ -76,9 +80,11 @@ class StableAttributeTest(MojomParserTestCase):
     self.ExtractTypes('[Stable] enum E { A }; [Stable] union U { E e; };')
     self.ExtractTypes('[Stable] struct S {}; [Stable] union U { S s; };')
     self.ExtractTypes(
-        '[Stable] struct S {}; [Stable] union U { array<S> ss; };')
+      '[Stable] struct S {}; [Stable] union U { array<S> ss; };'
+    )
     self.ExtractTypes(
-        '[Stable] interface F {}; [Stable] union U { pending_remote<F> f; };')
+      '[Stable] interface F {}; [Stable] union U { pending_remote<F> f; };'
+    )
 
     with self.assertRaisesRegex(Exception, 'because it depends on E'):
       self.ExtractTypes('enum E { A }; [Stable] union U { E e; };')
@@ -92,10 +98,12 @@ class StableAttributeTest(MojomParserTestCase):
       self.ExtractTypes('struct T {}; [Stable] union U { map<T, int32> xs; };')
     with self.assertRaisesRegex(Exception, 'because it depends on F'):
       self.ExtractTypes(
-          'interface F {}; [Stable] union U { pending_remote<F> f; };')
+        'interface F {}; [Stable] union U { pending_remote<F> f; };'
+      )
     with self.assertRaisesRegex(Exception, 'because it depends on F'):
       self.ExtractTypes(
-          'interface F {}; [Stable] union U { pending_receiver<F> f; };')
+        'interface F {}; [Stable] union U { pending_receiver<F> f; };'
+      )
 
   def testStableInterface(self):
     """A [Stable] interface is valid if all its methods' parameter types are
@@ -111,17 +119,20 @@ class StableAttributeTest(MojomParserTestCase):
 
     with self.assertRaisesRegex(Exception, 'because it depends on E'):
       self.ExtractTypes(
-          'enum E { A, B, C }; [Stable] interface F { A@0(E e); };')
+        'enum E { A, B, C }; [Stable] interface F { A@0(E e); };'
+      )
     with self.assertRaisesRegex(Exception, 'because it depends on E'):
       self.ExtractTypes(
-          'enum E { A, B, C }; [Stable] interface F { A@0(int32 x) => (E e); };'
+        'enum E { A, B, C }; [Stable] interface F { A@0(int32 x) => (E e); };'
       )
     with self.assertRaisesRegex(Exception, 'because it depends on S'):
       self.ExtractTypes(
-          'struct S {}; [Stable] interface F { A@0(int32 x) => (S s); };')
+        'struct S {}; [Stable] interface F { A@0(int32 x) => (S s); };'
+      )
     with self.assertRaisesRegex(Exception, 'because it depends on S'):
       self.ExtractTypes(
-          'struct S {}; [Stable] interface F { A@0(S s) => (bool b); };')
+        'struct S {}; [Stable] interface F { A@0(S s) => (bool b); };'
+      )
 
     with self.assertRaisesRegex(Exception, 'explicit method ordinals'):
       self.ExtractTypes('[Stable] interface F { A() => (); };')

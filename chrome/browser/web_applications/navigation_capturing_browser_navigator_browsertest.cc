@@ -5,17 +5,21 @@
 #include <vector>
 
 #include "base/strings/strcat.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/apps/app_service/app_registry_cache_waiter.h"
 #include "chrome/browser/apps/link_capturing/link_capturing_feature_test_support.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params_utils.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/web_applications/navigation_capturing_process.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
@@ -36,9 +40,14 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "net/test/embedded_test_server/controllable_http_response.h"
 #include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/mojom/manifest/manifest_launch_handler.mojom-shared.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
+#include "ui/views/widget/any_widget_observer.h"
+#include "ui/views/widget/widget.h"
+#include "url/origin.h"
 
 namespace web_app {
 
@@ -135,22 +144,22 @@ class NavigationCapturingBrowserNavigatorBrowserTest
     return app_id;
   }
 
-  std::pair<Browser*, Browser*> GetTwoDistinctBrowsersForSameApp(
-      const webapps::AppId& app_id,
-      const GURL& url_to_navigate_to) {
+  std::pair<BrowserWindowInterface*, BrowserWindowInterface*>
+  GetTwoDistinctBrowsersForSameApp(const webapps::AppId& app_id,
+                                   const GURL& url_to_navigate_to) {
     // First, launch an app browser.
-    Browser* app_browser_to_use = LaunchWebAppBrowser(app_id);
+    BrowserWindowInterface* app_browser_to_use = LaunchWebAppBrowser(app_id);
 
     // Second, create another app browser (LaunchWebAppBrowser() will not work
     // since the launch handling mode makes it look for an existing instance).
     // Mimic navigation capturing via shift click into a new window.
-    Browser* second_app_browser = nullptr;
+    BrowserWindowInterface* second_app_browser = nullptr;
     {
       NavigateParams params(app_browser_to_use, url_to_navigate_to,
                             ui::PAGE_TRANSITION_LINK);
-      params.disposition = WindowOpenDisposition::NEW_WINDOW;
+      params.disposition = WindowOpenDisposition::kNewWindow;
       Navigate(&params);
-      second_app_browser = params.browser->GetBrowserForMigrationOnly();
+      second_app_browser = params.browser;
     }
     EXPECT_NE(nullptr, second_app_browser);
     EXPECT_NE(second_app_browser, app_browser_to_use);
@@ -197,7 +206,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
   ASSERT_TRUE(future.Wait());
   base::HistogramTester histograms;
   // Create a new browser which will be considered the most recently active one.
-  Browser* new_browser =
+  BrowserWindowInterface* new_browser =
       ui_test_utils::OpenNewEmptyWindowAndWaitUntilActivated(profile());
   chrome::NewTab(new_browser, NewTabTypes::kNoUserAction);
 
@@ -207,7 +216,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
   NavigateParams params(browser(), GetLandingPage(), ui::PAGE_TRANSITION_LINK);
   params.source_contents =
       new_browser->tab_strip_model()->GetActiveWebContents();
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   Navigate(&params);
   content::WebContents* new_tab = new_tab_observer.Wait();
 
@@ -242,7 +251,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
 
   // Use LaunchBrowserForWebAppInTab to ensure the app is recognized as running.
   // This opens the app in a tab (since it's forced to kBrowser).
-  Browser* app_browser =
+  BrowserWindowInterface* app_browser =
       ::web_app::LaunchBrowserForWebAppInTab(profile(), app_id);
   ASSERT_TRUE(app_browser);
 
@@ -254,7 +263,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
   apps::test::FlushLaunchQueuesForAllBrowserTabs();
   AwaitMetricsAvailableFromRenderer();
 
-  Browser* new_browser =
+  BrowserWindowInterface* new_browser =
       ui_test_utils::OpenNewEmptyWindowAndWaitUntilActivated(profile());
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(new_browser, GURL(url::kAboutBlankURL)));
@@ -266,7 +275,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
                          ui::PAGE_TRANSITION_LINK);
   params2.source_contents =
       new_browser->tab_strip_model()->GetActiveWebContents();
-  params2.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  params2.disposition = WindowOpenDisposition::kNewBackgroundTab;
   Navigate(&params2);
   content::WebContents* new_tab2 = new_tab_observer2.Wait();
   ASSERT_TRUE(new_tab2);
@@ -298,8 +307,8 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
   const webapps::AppId& app_id =
       InstallWebAppInNewTabAndClose(browser(), GetNavigateExistingUrl());
 
-  Browser* app_browser_1 = nullptr;
-  Browser* app_browser_2 = nullptr;
+  BrowserWindowInterface* app_browser_1 = nullptr;
+  BrowserWindowInterface* app_browser_2 = nullptr;
   std::tie(app_browser_1, app_browser_2) =
       GetTwoDistinctBrowsersForSameApp(app_id, GetNavigateExistingUrl());
   EXPECT_TRUE(WebAppBrowserController::IsForWebApp(app_browser_1, app_id));
@@ -312,7 +321,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
   {
     NavigateParams params(app_browser_1, GetNavigateExistingSecondUrl(),
                           ui::PAGE_TRANSITION_LINK);
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     params.source_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     Navigate(&params);
@@ -356,8 +365,8 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
 
   // Launch 2 distinct app_browsers for the same app_id. Since `app_browser_2`
   // is created last, ensure that is activated.
-  Browser* app_browser_1 = nullptr;
-  Browser* app_browser_2 = nullptr;
+  BrowserWindowInterface* app_browser_1 = nullptr;
+  BrowserWindowInterface* app_browser_2 = nullptr;
   std::tie(app_browser_1, app_browser_2) =
       GetTwoDistinctBrowsersForSameApp(app_id, GetFocusExistingUrl());
   EXPECT_TRUE(WebAppBrowserController::IsForWebApp(app_browser_1, app_id));
@@ -372,7 +381,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
                           ui::PAGE_TRANSITION_LINK);
     params.source_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     Navigate(&params);
   }
 
@@ -419,8 +428,8 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
   // Launch 2 distinct app_browsers for the same app_id. Since `app_browser_2`
   // is created last, ensure that is activated, and will be used for launching
   // a web app.
-  Browser* app_browser_1 = nullptr;
-  Browser* app_browser_2 = nullptr;
+  BrowserWindowInterface* app_browser_1 = nullptr;
+  BrowserWindowInterface* app_browser_2 = nullptr;
   std::tie(app_browser_1, app_browser_2) =
       GetTwoDistinctBrowsersForSameApp(app_id, GetFocusExistingUrl());
   EXPECT_TRUE(WebAppBrowserController::IsForWebApp(app_browser_1, app_id));
@@ -429,11 +438,11 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
   // Since the web_app has a client_mode of `focus-existing`, `app_browser_2`
   // should be activated with no navigations happening.
   {
-    NavigateParams params(browser()->profile(), GetFocusExistingSecondUrl(),
+    NavigateParams params(browser()->GetProfile(), GetFocusExistingSecondUrl(),
                           ui::PAGE_TRANSITION_LINK);
     params.source_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     Navigate(&params);
   }
 
@@ -465,7 +474,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
       embedded_test_server()->GetURL("/web_apps/simple2/index.html");
 
   // Open the browser and navigate to out-of-scope url.
-  Browser* app_browser = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowser(app_id);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, out_of_scope));
   content::WaitForLoadStop(
       app_browser->tab_strip_model()->GetActiveWebContents());
@@ -480,10 +489,10 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
                           ui::PAGE_TRANSITION_LINK);
     params.source_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     Navigate(&params);
   }
-  Browser* new_app_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* new_app_browser = browser_created_observer.Wait();
 
   test::CompletePageLoadForAllWebContents();
   apps::test::FlushLaunchQueuesForAllBrowserTabs();
@@ -505,6 +514,68 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
           NavigationCapturingDisplayModeResult::kAppStandaloneFinalStandalone));
 }
 
+// Regression test for b/534356407: an app window showing an in-scope document
+// that committed an opaque origin (here via `Content-Security-Policy: sandbox`)
+// is cross-origin to the app, so it must not be chosen for focus-existing. The
+// captured navigation must not be cancelled and dispatched into it (which would
+// leak the URL and swallow the navigation); a new app window should open at the
+// target URL instead.
+IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
+                       FocusExistingSkipsOpaqueOriginAppWindow) {
+  const webapps::AppId& app_id =
+      InstallWebAppInNewTabAndClose(browser(), GetFocusExistingUrl());
+  const GURL sandboxed_url = embedded_test_server()->GetURL(
+      "/web_apps/simple_focus_existing/sandboxed.html");
+
+  // Put the only app window on the sandboxed, in-scope page.
+  BrowserWindowInterface* sandboxed_app_browser = LaunchWebAppBrowser(app_id);
+  content::WebContents* sandboxed_contents =
+      sandboxed_app_browser->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(sandboxed_app_browser, sandboxed_url));
+  ASSERT_TRUE(content::WaitForLoadStop(sandboxed_contents));
+  ASSERT_TRUE(sandboxed_contents->GetPrimaryMainFrame()
+                  ->GetLastCommittedOrigin()
+                  .opaque());
+  // The page really did install a launch consumer, so the empty-launch-params
+  // check below is meaningful.
+  ASSERT_EQ(true,
+            content::EvalJs(sandboxed_contents, "launchConsumerInstalled"));
+
+  // Capture a link click from a browser tab into the app.
+  ui_test_utils::BrowserCreatedObserver browser_created_observer;
+  {
+    NavigateParams params(browser()->GetProfile(), GetFocusExistingSecondUrl(),
+                          ui::PAGE_TRANSITION_LINK);
+    params.source_contents =
+        browser()->tab_strip_model()->GetActiveWebContents();
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
+    Navigate(&params);
+  }
+  BrowserWindowInterface* new_app_browser = browser_created_observer.Wait();
+
+  test::CompletePageLoadForAllWebContents();
+  apps::test::FlushLaunchQueuesForAllBrowserTabs();
+
+  ASSERT_NE(new_app_browser, sandboxed_app_browser);
+  EXPECT_TRUE(WebAppBrowserController::IsForWebApp(new_app_browser, app_id));
+
+  // The navigation happened, in a new app window, and that window got the
+  // launch.
+  content::WebContents* new_contents =
+      new_app_browser->GetTabStripModel()->GetActiveWebContents();
+  EXPECT_EQ(GetFocusExistingSecondUrl(), new_contents->GetLastCommittedURL());
+  EXPECT_THAT(apps::test::GetLaunchParamUrlsInContents(
+                  new_contents, "launchParamsTargetUrls"),
+              testing::ElementsAre(GetFocusExistingSecondUrl()));
+
+  // The sandboxed window was left alone and received nothing.
+  EXPECT_EQ(sandboxed_url, sandboxed_contents->GetLastCommittedURL());
+  EXPECT_THAT(apps::test::GetLaunchParamUrlsInContents(
+                  sandboxed_contents, "launchParamsTargetUrls"),
+              testing::IsEmpty());
+}
+
 IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
                        NavigateExistingIgnoresNonHtml) {
   const webapps::AppId app_id =
@@ -514,7 +585,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
       "/web_apps/simple_focus_existing/basic-48.png");
 
   // Open the browser and navigate to an in-scope image (non-html item);
-  Browser* app_browser = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowser(app_id);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, image_url));
   content::WaitForLoadStop(
       app_browser->tab_strip_model()->GetActiveWebContents());
@@ -528,10 +599,10 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
                           ui::PAGE_TRANSITION_LINK);
     params.source_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     Navigate(&params);
   }
-  Browser* new_app_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* new_app_browser = browser_created_observer.Wait();
   test::CompletePageLoadForAllWebContents();
   apps::test::FlushLaunchQueuesForAllBrowserTabs();
   AwaitMetricsAvailableFromRenderer();
@@ -582,7 +653,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // Create a new browser which will be considered the most recently active
   // one.
-  Browser* new_browser =
+  BrowserWindowInterface* new_browser =
       ui_test_utils::OpenNewEmptyWindowAndWaitUntilActivated(profile());
   chrome::NewTab(new_browser, NewTabTypes::kNoUserAction);
 
@@ -594,7 +665,7 @@ IN_PROC_BROWSER_TEST_F(
     NavigateParams params(browser(), GetFinalPage(), ui::PAGE_TRANSITION_LINK);
     params.source_contents =
         new_browser->tab_strip_model()->GetActiveWebContents();
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     Navigate(&params);
     content::NavigationController::LoadURLParams load_url_params =
         LoadURLParamsFromNavigateParams(&params);
@@ -645,7 +716,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
 
   // Create a new browser which will be considered the most recently active
   // one.
-  Browser* new_browser =
+  BrowserWindowInterface* new_browser =
       ui_test_utils::OpenNewEmptyWindowAndWaitUntilActivated(profile());
   chrome::NewTab(new_browser, NewTabTypes::kNoUserAction);
 
@@ -657,7 +728,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
     NavigateParams params(browser(), GetFinalPage(), ui::PAGE_TRANSITION_LINK);
     params.source_contents =
         new_browser->tab_strip_model()->GetActiveWebContents();
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     Navigate(&params);
   }
 
@@ -696,7 +767,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // Launch app in an app browser that will be passed in as the browser for
   // NavigateParams.
-  Browser* app_browser_to_use = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* app_browser_to_use = LaunchWebAppBrowser(app_id);
 
   // Change the web app's user display mode to kBrowser
   base::test::TestFuture<void> future;
@@ -721,7 +792,7 @@ IN_PROC_BROWSER_TEST_F(
     NavigateParams params(app_browser_to_use, GetNavigateExistingSecondUrl(),
                           ui::PAGE_TRANSITION_LINK);
     params.source_contents = blank_new_tab;
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     Navigate(&params);
     content::NavigationController::LoadURLParams load_url_params =
         LoadURLParamsFromNavigateParams(&params);
@@ -767,7 +838,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // Launch app in an app browser that will be passed in as the browser for
   // NavigateParams.
-  Browser* app_browser_to_use = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* app_browser_to_use = LaunchWebAppBrowser(app_id);
 
   // Change the web app's user display mode to kBrowser
   base::test::TestFuture<void> future;
@@ -790,7 +861,7 @@ IN_PROC_BROWSER_TEST_F(
                           ui::PAGE_TRANSITION_LINK);
     params.source_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     Navigate(&params);
   }
 
@@ -850,7 +921,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
   // this repro flaky - it could pass even without the fix.
   NavigateParams params(browser(), app_url, ui::PAGE_TRANSITION_LINK);
   params.initiating_profile = profile();
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   params.source_contents = contents;
   std::unique_ptr<NavigationCapturingProcess> process =
       NavigationCapturingProcess::MaybeHandleAppNavigation(params);
@@ -905,7 +976,7 @@ IN_PROC_BROWSER_TEST_F(LaunchQueueLatencyMetricBrowserTest,
   ASSERT_TRUE(future.Wait());
 
   // Create a new browser which will be considered the most recently active one.
-  Browser* new_browser =
+  BrowserWindowInterface* new_browser =
       ui_test_utils::OpenNewEmptyWindowAndWaitUntilActivated(profile());
   chrome::NewTab(new_browser, NewTabTypes::kNoUserAction);
 
@@ -917,7 +988,7 @@ IN_PROC_BROWSER_TEST_F(LaunchQueueLatencyMetricBrowserTest,
                           ui::PAGE_TRANSITION_LINK);
     params.source_contents =
         new_browser->tab_strip_model()->GetActiveWebContents();
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     Navigate(&params);
   }
 
@@ -933,7 +1004,7 @@ IN_PROC_BROWSER_TEST_F(LaunchQueueLatencyMetricBrowserTest,
 
   // Reloading the tab should not measure the latency of launch params being
   // enqueued again, and the launch params are not sent again.
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   content::WaitForLoadStop(new_tab);
   apps::test::FlushLaunchQueuesForAllBrowserTabs();
   AwaitMetricsAvailableFromRenderer();
@@ -971,7 +1042,7 @@ IN_PROC_BROWSER_TEST_F(LaunchContainerMetricMeasurementTest,
                           ui::PAGE_TRANSITION_LINK);
     params.source_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     Navigate(&params);
     content::NavigationController::LoadURLParams load_url_params =
         LoadURLParamsFromNavigateParams(&params);
@@ -1042,7 +1113,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingWithRedirectionBrowserNavigatorTest,
   ASSERT_TRUE(future.Wait());
   InstallTestWebApp(GetRedirectFromPage(), mojom::UserDisplayMode::kStandalone);
   // Create a new browser which will be considered the most recently active one.
-  Browser* new_browser =
+  BrowserWindowInterface* new_browser =
       ui_test_utils::OpenNewEmptyWindowAndWaitUntilActivated(profile());
   chrome::NewTab(new_browser, NewTabTypes::kNoUserAction);
 
@@ -1054,7 +1125,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingWithRedirectionBrowserNavigatorTest,
                         ui::PAGE_TRANSITION_LINK);
   params.source_contents =
       new_browser->tab_strip_model()->GetActiveWebContents();
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   Navigate(&params);
   content::WebContents* new_tab = new_tab_observer.Wait();
   content::WaitForLoadStop(new_tab);
@@ -1083,7 +1154,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingWithRedirectionBrowserNavigatorTest,
   // browser tab after redirection.
   InstallTestWebApp(GetRedirectFromPage(), mojom::UserDisplayMode::kStandalone);
   // Create a new browser which will be considered the most recently active one.
-  Browser* new_browser =
+  BrowserWindowInterface* new_browser =
       ui_test_utils::OpenNewEmptyWindowAndWaitUntilActivated(profile());
   chrome::NewTab(new_browser, NewTabTypes::kNoUserAction);
 
@@ -1095,7 +1166,7 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingWithRedirectionBrowserNavigatorTest,
                         ui::PAGE_TRANSITION_LINK);
   params.source_contents =
       new_browser->tab_strip_model()->GetActiveWebContents();
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   Navigate(&params);
   content::WebContents* new_tab = new_tab_observer.Wait();
   content::WaitForLoadStop(new_tab);
@@ -1110,6 +1181,220 @@ IN_PROC_BROWSER_TEST_F(NavigationCapturingWithRedirectionBrowserNavigatorTest,
 
   // Make sure that web contents is a tab in `browser()` and not `new_browser`.
   EXPECT_NE(browser()->tab_strip_model()->GetIndexOfWebContents(new_tab),
+            TabStripModel::kNoTab);
+}
+
+IN_PROC_BROWSER_TEST_F(NavigationCapturingWithRedirectionBrowserNavigatorTest,
+                       RedirectReparentWindowClosedOnShow) {
+  // Test that if an app window is closed during presentation following a
+  // redirect reparenting, the browser gracefully handles the window closure
+  // without crashing.
+  InstallTestWebApp(GetLandingPage(), mojom::UserDisplayMode::kStandalone);
+
+  base::RunLoop run_loop;
+  views::AnyWidgetObserver observer(views::test::AnyWidgetTestPasskey{});
+  bool closed_app_widget = false;
+  observer.set_shown_callback(
+      base::BindLambdaForTesting([&](views::Widget* widget) {
+        if (!closed_app_widget) {
+          BrowserView* browser_view =
+              BrowserView::GetBrowserViewForNativeWindow(
+                  widget->GetNativeWindow());
+          if (browser_view && browser_view->browser()->GetType() ==
+                                  BrowserWindowInterface::Type::TYPE_APP) {
+            closed_app_widget = true;
+            widget->CloseNow();
+            run_loop.Quit();
+          }
+        }
+      }));
+
+  NavigateParams params(browser(), GetRedirectFromPage(),
+                        ui::PAGE_TRANSITION_LINK);
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
+  Navigate(&params);
+  run_loop.Run();
+
+  EXPECT_TRUE(closed_app_widget);
+  EXPECT_TRUE(browser());
+}
+
+class NavigationCapturingControllableRedirectionBrowserNavigatorTest
+    : public NavigationCapturingWithRedirectionBrowserNavigatorTest {
+ public:
+  void SetUpOnMainThread() override {
+    controllable_redirect_response_ =
+        std::make_unique<net::test_server::ControllableHttpResponse>(
+            embedded_test_server(), kControllableRedirectPath);
+    NavigationCapturingWithRedirectionBrowserNavigatorTest::SetUpOnMainThread();
+  }
+
+  GURL GetControllableRedirectUrl() const {
+    return embedded_test_server()->GetURL(kControllableRedirectPath);
+  }
+
+ protected:
+  static constexpr char kControllableRedirectPath[] =
+      "/web_apps/simple2/controllable_redirect.html";
+  std::unique_ptr<net::test_server::ControllableHttpResponse>
+      controllable_redirect_response_;
+};
+
+IN_PROC_BROWSER_TEST_F(
+    NavigationCapturingControllableRedirectionBrowserNavigatorTest,
+    RedirectOutOfScopeInitiatingBrowserClosed) {
+  // Regression test for https://crbug.com/573285920: if the browser specified
+  // in NavigateParams::browser is destroyed while an initially captured
+  // navigation is held mid-request before redirecting out-of-scope,
+  // HandleRedirect must not dereference a dangling pointer and should fall back
+  // to an existing tabbed browser.
+  InstallTestWebApp(GetRedirectFromPage(), mojom::UserDisplayMode::kStandalone);
+
+  BrowserWindowInterface* source_browser =
+      ui_test_utils::OpenNewEmptyWindowAndWaitUntilActivated(profile());
+  chrome::NewTab(source_browser, NewTabTypes::kNoUserAction);
+  base::WeakPtr<BrowserWindowInterface> source_browser_weak =
+      source_browser->GetWeakPtr();
+
+  ui_test_utils::AllBrowserTabAddedWaiter new_tab_observer;
+  NavigateParams params(source_browser, GetControllableRedirectUrl(),
+                        ui::PAGE_TRANSITION_LINK);
+  params.source_contents =
+      source_browser->GetTabStripModel()->GetActiveWebContents();
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
+  Navigate(&params);
+  content::WebContents* new_tab = new_tab_observer.Wait();
+  ASSERT_TRUE(new_tab);
+
+  controllable_redirect_response_->WaitForRequest();
+  CloseBrowserSynchronously(source_browser);
+  ASSERT_FALSE(source_browser_weak);
+
+  controllable_redirect_response_->Send(
+      base::StrCat({"HTTP/1.1 302 Found\r\nLocation: ", GetLandingPage().spec(),
+                    "\r\nContent-Type: text/html\r\n\r\n"}));
+  controllable_redirect_response_->Done();
+
+  content::WaitForLoadStop(new_tab);
+  apps::test::FlushLaunchQueuesForAllBrowserTabs();
+
+  EXPECT_NE(browser()->GetTabStripModel()->GetIndexOfWebContents(new_tab),
+            TabStripModel::kNoTab);
+}
+
+IN_PROC_BROWSER_TEST_F(NavigationCapturingWithRedirectionBrowserNavigatorTest,
+                       RedirectOutOfScopeFromDocumentPictureInPictureBrowser) {
+  // Regression test for https://crbug.com/574907939: when
+  // NavigateParams::browser is a Document Picture-in-Picture window, an
+  // out-of-scope redirect that reparents back to a tabbed browser must not
+  // reparent into the PiP window.
+  InstallTestWebApp(GetRedirectFromPage(), mojom::UserDisplayMode::kStandalone);
+
+  BrowserWindowCreateParams pip_params =
+      BrowserWindowCreateParams::CreateForPictureInPicture(
+          /*app_name=*/"", /*trusted_source=*/true, profile(),
+          /*user_gesture=*/true);
+  BrowserWindowInterface* pip_browser =
+      CreateBrowserWindow(std::move(pip_params));
+  ASSERT_TRUE(pip_browser);
+  ASSERT_TRUE(DesktopBrowserWindowCapabilities::IsDocumentPictureInPicture(
+      pip_browser));
+  chrome::AddTabAt(pip_browser, GURL(url::kAboutBlankURL), -1, true);
+
+  ui_test_utils::AllBrowserTabAddedWaiter new_tab_observer;
+  NavigateParams params(pip_browser, GetRedirectFromPage(),
+                        ui::PAGE_TRANSITION_LINK);
+  params.source_contents =
+      pip_browser->GetTabStripModel()->GetActiveWebContents();
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
+  Navigate(&params);
+  content::WebContents* new_tab = new_tab_observer.Wait();
+  ASSERT_TRUE(new_tab);
+
+  content::WaitForLoadStop(new_tab);
+  apps::test::FlushLaunchQueuesForAllBrowserTabs();
+
+  EXPECT_NE(browser()->GetTabStripModel()->GetIndexOfWebContents(new_tab),
+            TabStripModel::kNoTab);
+  EXPECT_EQ(pip_browser->GetTabStripModel()->GetIndexOfWebContents(new_tab),
+            TabStripModel::kNoTab);
+}
+
+IN_PROC_BROWSER_TEST_F(NavigationCapturingWithRedirectionBrowserNavigatorTest,
+                       RedirectOutOfScopeFromPopupBrowser) {
+  // Regression test for https://crbug.com/574907939 (popup variant): when
+  // NavigateParams::browser is a TYPE_POPUP window, an out-of-scope redirect
+  // that reparents back to a tabbed browser must reparent into a TYPE_NORMAL
+  // browser rather than the popup window.
+  InstallTestWebApp(GetRedirectFromPage(), mojom::UserDisplayMode::kStandalone);
+
+  BrowserWindowCreateParams popup_params(BrowserWindowInterface::TYPE_POPUP,
+                                         *profile(),
+                                         /*from_user_gesture=*/true);
+  BrowserWindowInterface* popup_browser =
+      CreateBrowserWindow(std::move(popup_params));
+  ASSERT_TRUE(popup_browser);
+  ASSERT_EQ(popup_browser->GetType(), BrowserWindowInterface::TYPE_POPUP);
+  chrome::AddTabAt(popup_browser, GURL(url::kAboutBlankURL), -1, true);
+
+  ui_test_utils::AllBrowserTabAddedWaiter new_tab_observer;
+  NavigateParams params(popup_browser, GetRedirectFromPage(),
+                        ui::PAGE_TRANSITION_LINK);
+  params.source_contents =
+      popup_browser->GetTabStripModel()->GetActiveWebContents();
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
+  Navigate(&params);
+  content::WebContents* new_tab = new_tab_observer.Wait();
+  ASSERT_TRUE(new_tab);
+
+  content::WaitForLoadStop(new_tab);
+  apps::test::FlushLaunchQueuesForAllBrowserTabs();
+
+  EXPECT_NE(browser()->GetTabStripModel()->GetIndexOfWebContents(new_tab),
+            TabStripModel::kNoTab);
+  EXPECT_EQ(popup_browser->GetTabStripModel()->GetIndexOfWebContents(new_tab),
+            TabStripModel::kNoTab);
+}
+
+IN_PROC_BROWSER_TEST_F(NavigationCapturingBrowserNavigatorBrowserTest,
+                       MiddleClickBrowserAppFromDocumentPictureInPicture) {
+  // Regression test for https://crbug.com/574907939: middle-clicking a kBrowser
+  // web app link when NavigateParams::browser is a Document Picture-in-Picture
+  // window must open the background tab in a normal tabbed browser rather than
+  // the PiP window.
+  const webapps::AppId& app_id = InstallTestWebApp(
+      GetDisplayBrowserUrl(), mojom::UserDisplayMode::kBrowser,
+      blink::mojom::ManifestLaunchHandler_ClientMode::kNavigateExisting);
+  EXPECT_EQ(apps::test::EnableLinkCapturingByUser(profile(), app_id),
+            base::ok());
+
+  BrowserWindowCreateParams pip_params =
+      BrowserWindowCreateParams::CreateForPictureInPicture(
+          /*app_name=*/"", /*trusted_source=*/true, profile(),
+          /*user_gesture=*/true);
+  BrowserWindowInterface* pip_browser =
+      CreateBrowserWindow(std::move(pip_params));
+  ASSERT_TRUE(pip_browser);
+  ASSERT_TRUE(DesktopBrowserWindowCapabilities::IsDocumentPictureInPicture(
+      pip_browser));
+  chrome::AddTabAt(pip_browser, GURL(url::kAboutBlankURL), -1, true);
+
+  ui_test_utils::AllBrowserTabAddedWaiter new_tab_observer;
+  NavigateParams params(pip_browser, GetDisplayBrowserUrl(),
+                        ui::PAGE_TRANSITION_LINK);
+  params.source_contents =
+      pip_browser->GetTabStripModel()->GetActiveWebContents();
+  params.disposition = WindowOpenDisposition::kNewBackgroundTab;
+  Navigate(&params);
+  content::WebContents* new_tab = new_tab_observer.Wait();
+  ASSERT_TRUE(new_tab);
+
+  content::WaitForLoadStop(new_tab);
+  apps::test::FlushLaunchQueuesForAllBrowserTabs();
+
+  EXPECT_NE(browser()->GetTabStripModel()->GetIndexOfWebContents(new_tab),
+            TabStripModel::kNoTab);
+  EXPECT_EQ(pip_browser->GetTabStripModel()->GetIndexOfWebContents(new_tab),
             TabStripModel::kNoTab);
 }
 

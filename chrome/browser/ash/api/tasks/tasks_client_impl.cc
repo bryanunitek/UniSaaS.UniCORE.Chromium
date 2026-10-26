@@ -25,10 +25,10 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
-#include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "components/policy/core/browser/url_list/policy_blocklist_service.h"
 #include "components/policy/core/browser/url_list/url_blocklist_manager.h"
 #include "components/prefs/pref_service.h"
+#include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "google_apis/common/api_error_codes.h"
 #include "google_apis/common/request_sender.h"
@@ -130,14 +130,14 @@ TasksClientImpl::TasksFetchState::TasksFetchState() = default;
 TasksClientImpl::TasksFetchState::~TasksFetchState() = default;
 
 TasksClientImpl::TasksClientImpl(
-    PrefService* pref_service,
-    apps::AppServiceProxy* app_service_proxy,
+    const PrefService* pref_service,
+    apps::AppRegistryCache* app_registry_cache,
     PolicyBlocklistService* policy_blocklist_service,
     const TasksClientImpl::CreateRequestSenderCallback&
         create_request_sender_callback,
     net::NetworkTrafficAnnotationTag traffic_annotation_tag)
     : pref_service_(pref_service),
-      app_service_proxy_(app_service_proxy),
+      app_registry_cache_(app_registry_cache),
       policy_blocklist_service_(policy_blocklist_service),
       create_request_sender_callback_(create_request_sender_callback),
       traffic_annotation_tag_(traffic_annotation_tag) {}
@@ -156,11 +156,11 @@ bool TasksClientImpl::IsDisabledByAdmin() const {
   }
 
   // 2) Check if the Calendar app (home app for Tasks) is disabled by policy.
-  if (!app_service_proxy_) {
+  if (!app_registry_cache_) {
     return true;
   }
   auto calendar_app_readiness = apps::Readiness::kUnknown;
-  app_service_proxy_->AppRegistryCache().ForOneApp(
+  app_registry_cache_->ForOneApp(
       ash::kGoogleCalendarAppId,
       [&calendar_app_readiness](const apps::AppUpdate& update) {
         calendar_app_readiness = update.Readiness();
@@ -358,11 +358,6 @@ void TasksClientImpl::OnGlanceablesBubbleClosed(base::OnceClosure callback) {
   base::RepeatingClosure barrier_closure =
       base::BarrierClosure(num_tasks_completed, std::move(callback));
 
-  // TODO(b/323975767): Generalize this histogram to the Tasks API.
-  base::UmaHistogramCounts100(
-      "Ash.Glanceables.Api.Tasks.SimultaneousMarkAsCompletedRequestsCount",
-      num_tasks_completed);
-
   for (const auto& [task_list_id, task_ids] : pending_completed_tasks_) {
     for (const auto& task_id : task_ids) {
       auto* const request_sender = GetRequestSender();
@@ -422,11 +417,9 @@ void TasksClientImpl::OnTaskListsPageFetched(
       std::make_move_iterator(result.value()->mutable_items()->end()));
 
   if (result.value()->next_page_token().empty()) {
-    // TODO(b/323975767): Generalize these histograms to the Tasks API.
+    // TODO(b/323975767): Generalize this histogram to the Tasks API.
     base::UmaHistogramCounts100(
         "Ash.Glanceables.Api.Tasks.GetTaskLists.PagesCount", page_number);
-    base::UmaHistogramCounts100("Ash.Glanceables.Api.Tasks.TaskListsCount",
-                                accumulated_raw_task_lists.size());
     // Get the fresh data from the Google Task API request successfully.
     RunGetTaskListsCallbacks(FetchStatus::kFresh, ApiErrorCode::HTTP_SUCCESS,
                              std::move(accumulated_raw_task_lists));
@@ -482,11 +475,9 @@ void TasksClientImpl::OnTasksPageFetched(
       std::make_move_iterator(result.value()->mutable_items()->end()));
 
   if (result.value()->next_page_token().empty()) {
-    // TODO(b/323975767): Generalize these histograms to the Tasks API.
+    // TODO(b/323975767): Generalize this histogram to the Tasks API.
     base::UmaHistogramCounts100("Ash.Glanceables.Api.Tasks.GetTasks.PagesCount",
                                 page_number);
-    base::UmaHistogramCounts100("Ash.Glanceables.Api.Tasks.RawTasksCount",
-                                accumulated_raw_tasks.size());
     // Get the fresh data from the Google Task API request successfully.
     RunGetTasksCallbacks(task_list_id, FetchStatus::kFresh,
                          ApiErrorCode::HTTP_SUCCESS,
@@ -560,9 +551,6 @@ void TasksClientImpl::RunGetTasksCallbacks(
       iter->second.Add(std::move(item));
     }
 
-    // TODO(b/323975767): Generalize this histogram to the Tasks API.
-    base::UmaHistogramCounts100("Ash.Glanceables.Api.Tasks.ProcessedTasksCount",
-                                iter->second.item_count());
     fetch_state->last_updated_time = base::Time::Now();
   }
 

@@ -9,15 +9,14 @@
 
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks.mojom.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_ui_interface.h"
-#include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_ui_service.h"
 #include "components/contextual_tasks/public/contextual_tasks_service.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/lens_server_proto/aim_communication.pb.h"
 #include "ui/base/interaction/element_tracker.h"
 
 namespace base {
@@ -25,7 +24,10 @@ class Uuid;
 }
 
 namespace lens {
+class ClientToAimMessage;
+class InjectInput;
 class InputPlateParametersRequest;
+class UpdateThreadContextLibrary;
 }
 
 namespace contextual_tasks {
@@ -38,8 +40,7 @@ mojom::ComposeboxPositionPtr InputPlateConfigToMojo(
 
 class ContextualTasksPageHandler
     : public contextual_tasks::mojom::PageHandler,
-      public contextual_tasks::ContextualTasksService::Observer,
-      public PinnedToolbarActionsModel::Observer {
+      public contextual_tasks::ContextualTasksService::Observer {
  public:
   ContextualTasksPageHandler(
       mojo::PendingReceiver<contextual_tasks::mojom::PageHandler> receiver,
@@ -51,6 +52,8 @@ class ContextualTasksPageHandler
 
   // contextual_tasks::mojom::PageHandler:
   void GetThreadUrl(GetThreadUrlCallback callback) override;
+  void MoveActiveTabToNewThreadIfShared(
+      MoveActiveTabToNewThreadIfSharedCallback callback) override;
   void GetUrlForTask(const base::Uuid& uuid,
                      GetUrlForTaskCallback callback) override;
   void SetTaskId(const base::Uuid& uuid) override;
@@ -61,26 +64,15 @@ class ContextualTasksPageHandler
                           IsPendingErrorPageCallback callback) override;
   void IsEmbeddedPageErrorDocument(
       IsEmbeddedPageErrorDocumentCallback callback) override;
-  void CloseSidePanel() override;
-  void ShowThreadHistory() override;
   void IsShownInTab(IsShownInTabCallback callback) override;
-  void OpenMyActivityUi() override;
-  void OpenFeedbackUi() override;
   void OpenOnboardingHelpUi() override;
-  void OpenUrl(const GURL& url, WindowOpenDisposition disposition) override;
-  void MoveTaskUiToNewTab() override;
-  void OnTabClickedFromSourcesMenu(int32_t tab_id, const GURL& url) override;
-  void OnFileClickedFromSourcesMenu(const GURL& url) override;
-  void OnImageClickedFromSourcesMenu(const GURL& url) override;
+  void OpenAskGHelpUi() override;
   void OnWebviewMessage(const std::vector<uint8_t>& message) override;
   void GetCommonSearchParams(bool is_dark_mode,
                              bool is_side_panel,
                              GetCommonSearchParamsCallback callback) override;
   void OnboardingTooltipDismissed() override;
-  void LensSearchTooltipDismissed() override;
-  void ReopenTabs() override;
-  void PinSidePanel() override;
-  void UnpinSidePanel() override;
+  void AskGTooltipDismissed() override;
   void OnContextMenuOpened() override;
   void NotifySmartTabSharingTryItIphResult(bool accepted) override;
   void NotifySmartTabSharingDefaultOnIphResult(bool accepted) override;
@@ -90,8 +82,7 @@ class ContextualTasksPageHandler
       const contextual_tasks::ContextualWindowId& window_id) override;
   void CloseWindow(
       const contextual_tasks::ContextualWindowId& window_id) override;
-  void MaybeTriggerPinningPromo() override;
-  void PostMessageToWebview(const lens::ClientToAimMessage& message);
+  void PostAimMessage(const lens::ClientToAimMessage& message);
 
   // contextual_tasks::ContextualTasksService::Observer:
   void OnTaskAdded(
@@ -101,20 +92,13 @@ class ContextualTasksPageHandler
       const contextual_tasks::ContextualTask& task,
       contextual_tasks::ContextualTasksService::TriggerSource source) override;
 
-  void set_skip_feedback_ui_for_testing(bool skip) {
-    skip_feedback_ui_for_testing_ = skip;
-  }
-
-  // PinnedToolbarActionsModel::Observer:
-  void OnActionsChanged() override;
-
  private:
+  void OnCookieSyncCompleted();
   void UpdateContextForTask(const base::Uuid& task_id);
   void OnReceivedUpdatedThreadContextLibrary(
       const lens::UpdateThreadContextLibrary& message);
   void OnReceivedInjectInput(const lens::InjectInput& inject_input);
   void OnReceivedRemoveInjectedInput(const std::string& id);
-  void OnPinStateChanged(bool is_pinned);
 
   mojo::Receiver<contextual_tasks::mojom::PageHandler> receiver_;
   raw_ptr<contextual_tasks::ContextualTasksUIInterface> web_ui_controller_;
@@ -122,15 +106,9 @@ class ContextualTasksPageHandler
   raw_ptr<contextual_tasks::ContextualTasksService> contextual_tasks_service_;
   raw_ptr<contextual_tasks::ContextualTasksPanelController> panel_controller_;
 
-  bool skip_feedback_ui_for_testing_ = false;
-
   base::ScopedObservation<contextual_tasks::ContextualTasksService,
                           contextual_tasks::ContextualTasksService::Observer>
       contextual_tasks_service_observation_{this};
-
-  base::ScopedObservation<PinnedToolbarActionsModel,
-                          PinnedToolbarActionsModel::Observer>
-      pinned_toolbar_actions_model_observation_{this};
 
   base::WeakPtrFactory<ContextualTasksPageHandler> weak_ptr_factory_{this};
 };

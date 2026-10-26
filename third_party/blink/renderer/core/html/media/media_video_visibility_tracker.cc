@@ -21,6 +21,7 @@
 #include "third_party/blink/renderer/platform/graphics/paint/display_item.h"
 #include "third_party/blink/renderer/platform/graphics/paint/display_item_list.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_artifact.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/skia_conversions.h"
@@ -269,7 +270,7 @@ bool IsPerceptuallyVisible(const LayoutObject* layout) {
   // invisible. HasNonZeroEffectiveOpacity() is a pre-calculated check
   // performed during the PrePaint lifecycle phase.
   return layout && layout->HasNonZeroEffectiveOpacity() &&
-         layout->StyleRef().Visibility() == EVisibility::kVisible;
+         layout->Style().Visibility() == EVisibility::kVisible;
 }
 
 void RecordVideoOcclusionState(
@@ -282,9 +283,9 @@ void RecordVideoOcclusionState(
 
   for (wtf_size_t i = 0; i < occluding_rects.size(); ++i) {
     const auto& rect = gfx::SkIRectToRect(occluding_rects[i]);
-    occluding_rects_stream << String::Format(
-        "[x: %d, y: %d, width: %d, height: %d]", rect.x(), rect.y(),
-        rect.width(), rect.height());
+    occluding_rects_stream << Format("[x: {}, y: {}, width: {}, height: {}]",
+                                     rect.x(), rect.y(), rect.width(),
+                                     rect.height());
     if (i < occluding_rects.size() - 1) {
       occluding_rects_stream << ", ";
     }
@@ -298,33 +299,31 @@ void RecordVideoOcclusionState(
   const String intersection_rect_string =
       intersection_rect.IsEmpty()
           ? "None"
-          : String::Format("x: %d, y: %d, width: %d, height: %d",
-                           intersection_rect.X().ToInt(),
-                           intersection_rect.Y().ToInt(),
-                           intersection_rect.Width().ToInt(),
-                           intersection_rect.Height().ToInt());
+          : Format("x: {}, y: {}, width: {}, height: {}",
+                   intersection_rect.X().ToInt(), intersection_rect.Y().ToInt(),
+                   intersection_rect.Width().ToInt(),
+                   intersection_rect.Height().ToInt());
 
   const auto& video_element_rect = occlusion_state.video_element_rect;
   const String video_element_rect_string =
       video_element_rect.IsEmpty()
           ? "None"
-          : String::Format("x: %d, y: %d, width: %d, height: %d",
-                           video_element_rect.X().ToInt(),
-                           video_element_rect.Y().ToInt(),
-                           video_element_rect.Width().ToInt(),
-                           video_element_rect.Height().ToInt());
+          : Format("x: {}, y: {}, width: {}, height: {}",
+                   video_element_rect.X().ToInt(),
+                   video_element_rect.Y().ToInt(),
+                   video_element_rect.Width().ToInt(),
+                   video_element_rect.Height().ToInt());
 
-  const String occlusion_state_string = UNSAFE_TODO(String::Format(
-      "has sufficiently visible video: {%s}, occluded area: {%.2f}, occluding "
-      "rects: {%s}, intersection rect: {%s}, video element rect: {%s}, "
-      "visibility threshold: {%d}",
+  const String occlusion_state_string = Format(
+      "has sufficiently visible video: {{{}}}, occluded area: {{{:.2f}}}, "
+      "occluding rects: {{{}}}, intersection rect: {{{}}}, video element rect: "
+      "{{{}}}, visibility threshold: {{{}}}",
       has_sufficiently_visible_video ? "True" : "False",
-      occlusion_state.occluded_area, occluding_rects_stream.str().c_str(),
-      intersection_rect_string.Ascii().c_str(),
-      video_element_rect_string.Ascii().c_str(), visibility_threshold));
+      occlusion_state.occluded_area, occluding_rects_stream.str(),
+      intersection_rect_string.Ascii(), video_element_rect_string.Ascii(),
+      visibility_threshold);
 
-  video_element.RecordVideoOcclusionState(
-      occlusion_state_string.Ascii().c_str());
+  video_element.RecordVideoOcclusionState(occlusion_state_string.Ascii());
 }
 
 }  // anonymous namespace
@@ -521,9 +520,8 @@ MediaVideoVisibilityTracker::GetClientIdsSet(
 
   wtf_size_t begin_index = 0;
   wtf_size_t end_index = display_item_list.size();
-  while (begin_index < end_index &&
-         UNSAFE_TODO(display_item_list[begin_index]).ClientId() !=
-             start_after_display_item_client_id) {
+  while (begin_index < end_index && display_item_list[begin_index].ClientId() !=
+                                        start_after_display_item_client_id) {
     begin_index++;
   }
 
@@ -546,9 +544,8 @@ MediaVideoVisibilityTracker::GetClientIdsSet(
   // still appear in other locations within the list, however for most cases,
   // these `DisplayItem` types are painted last.
   int not_content_type_count = 0;
-  while (
-      end_index > begin_index &&
-      !IsContentType(UNSAFE_TODO(display_item_list[end_index - 1]).GetType())) {
+  while (end_index > begin_index &&
+         !IsContentType(display_item_list[end_index - 1].GetType())) {
     not_content_type_count++;
     end_index--;
   }
@@ -563,7 +560,7 @@ MediaVideoVisibilityTracker::GetClientIdsSet(
 
   MediaVideoVisibilityTracker::ClientIdsSet set;
   for (const auto& display_item :
-       UNSAFE_TODO(display_item_list.ItemsInRange(begin_index, end_index))) {
+       display_item_list.ItemsInRange(begin_index, end_index)) {
     if (display_item.ClientId() != kInvalidDisplayItemClientId) {
       set.insert(display_item.ClientId());
     }
@@ -590,7 +587,10 @@ MediaVideoVisibilityTracker::GetClientIdsSet(
 ListBasedHitTestBehavior MediaVideoVisibilityTracker::ComputeOcclusion(
     const ClientIdsSet& client_ids_set,
     Metrics& counts,
-    const Node& node) {
+    const Node& node,
+    const PhysicalRect*,
+    const gfx::QuadF*,
+    const cc::Region*) {
   counts.total_hit_tested_nodes++;
 
   if (node == VideoElement()) {

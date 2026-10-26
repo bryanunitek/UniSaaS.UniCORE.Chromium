@@ -11,6 +11,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.graphics.Rect;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
 
 import androidx.annotation.Nullable;
 import androidx.test.annotation.UiThreadTest;
@@ -37,12 +38,14 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features;
 import org.chromium.chrome.browser.browser_controls.BottomControlsStacker;
 import org.chromium.chrome.browser.browser_controls.BottomControlsStacker.LayerType;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
 import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanel.StateChangeReason;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.overlay_panel.PanelState;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
@@ -68,7 +71,6 @@ public class OverlayPanelBaseTest {
 
     private static final int MOCK_TOOLBAR_HEIGHT = 100;
     private static final int CHIN_HEIGHT = 30;
-    private static final Integer READALOUD_HEIGHT = 90;
 
     @ClassRule
     public static BaseActivityTestRule<BlankUiTestActivity> activityTestRule =
@@ -78,7 +80,6 @@ public class OverlayPanelBaseTest {
 
     @Mock private LayoutManagerImpl mLayoutManager;
     @Mock private BrowserControlsStateProvider mBrowserControlsStateProvider;
-    @Mock private ViewGroup mCompositorViewHolder;
     @Mock private Profile mProfile;
     @Mock private Tab mTab;
     @Mock private InsetObserver mInsetObserver;
@@ -89,6 +90,7 @@ public class OverlayPanelBaseTest {
     private ArgumentCaptor<BrowserControlsStateProvider.Observer>
             mBrowserControlsStateProviderObserverCaptor;
 
+    private ViewGroup mCompositorViewHolder;
     Activity mActivity;
     ActivityWindowAndroid mWindowAndroid;
     MockOverlayPanel mNoExpandPanel;
@@ -96,6 +98,8 @@ public class OverlayPanelBaseTest {
 
     /** Mock OverlayPanel. */
     private static class MockOverlayPanel extends OverlayPanel {
+        private float mBasePageDesiredOffset;
+
         public MockOverlayPanel(
                 Context context,
                 LayoutManagerImpl layoutManager,
@@ -142,6 +146,20 @@ public class OverlayPanelBaseTest {
                     return 0.0f;
             }
         }
+
+        public void setBasePageDesiredOffset(float offset) {
+            mBasePageDesiredOffset = offset;
+        }
+
+        @Override
+        protected float calculateBasePageDesiredOffset() {
+            return mBasePageDesiredOffset;
+        }
+
+        @Override
+        public void updateBasePageTargetY() {
+            super.updateBasePageTargetY();
+        }
     }
 
     /** A MockOverlayPanel that does not support the EXPANDED panel state. */
@@ -186,6 +204,7 @@ public class OverlayPanelBaseTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mActivity = activityTestRule.getActivity();
+                    mCompositorViewHolder = new FrameLayout(mActivity);
                     mWindowAndroid =
                             new ActivityWindowAndroid(
                                     mActivity,
@@ -604,5 +623,78 @@ public class OverlayPanelBaseTest {
         float midHeight = (peekHeight + maxedHeight) / 2.f;
         mExpandPanel.setClampedPanelHeight(midHeight);
         Assert.assertEquals(midHeight, mExpandPanel.getHeight(), MathUtils.EPSILON);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"OverlayPanelBase"})
+    @UiThreadTest
+    @Features.EnableFeatures(ChromeFeatureList.CONTEXTUAL_PANEL_CLOSE_BUTTON)
+    public void testBasePageBrightness_enableCloseButtonFeature() {
+        mExpandPanel.setPanelHeight(mExpandPanel.getPanelHeightFromState(PanelState.PEEKED));
+        Assert.assertEquals(1.0f, mExpandPanel.getBasePageBrightness(), MathUtils.EPSILON);
+
+        mExpandPanel.setPanelHeight(mExpandPanel.getPanelHeightFromState(PanelState.EXPANDED));
+        Assert.assertEquals(1.0f, mExpandPanel.getBasePageBrightness(), MathUtils.EPSILON);
+
+        mExpandPanel.setPanelHeight(mExpandPanel.getPanelHeightFromState(PanelState.MAXIMIZED));
+        Assert.assertEquals(1.0f, mExpandPanel.getBasePageBrightness(), MathUtils.EPSILON);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"OverlayPanelBase"})
+    @UiThreadTest
+    @Features.DisableFeatures(ChromeFeatureList.CONTEXTUAL_PANEL_CLOSE_BUTTON)
+    public void testBasePageBrightness_disableCloseButtonFeature() {
+        mExpandPanel.setPanelHeight(mExpandPanel.getPanelHeightFromState(PanelState.PEEKED));
+        Assert.assertEquals(1.0f, mExpandPanel.getBasePageBrightness(), MathUtils.EPSILON);
+
+        mExpandPanel.setPanelHeight(mExpandPanel.getPanelHeightFromState(PanelState.EXPANDED));
+        Assert.assertEquals(0.7f, mExpandPanel.getBasePageBrightness(), MathUtils.EPSILON);
+
+        mExpandPanel.setPanelHeight(mExpandPanel.getPanelHeightFromState(PanelState.MAXIMIZED));
+        Assert.assertEquals(0.4f, mExpandPanel.getBasePageBrightness(), MathUtils.EPSILON);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"OverlayPanelBase"})
+    @UiThreadTest
+    public void testBasePageTargetY_topControlsLocked_minHeightEqualsHeight() {
+        mExpandPanel.onLayoutChanged(400, 1000, 0);
+        mExpandPanel.setIsFullWidthSizePanelForTesting(true);
+        mExpandPanel.setBasePageDesiredOffset(-100.0f);
+
+        // When top controls min-height is less than height, controls are unlocked.
+        when(mBrowserControlsStateProvider.getTopControlsHeight()).thenReturn(100);
+        when(mBrowserControlsStateProvider.getTopControlsMinHeight()).thenReturn(0);
+        mExpandPanel.updateBasePageTargetY();
+        Assert.assertEquals(-100.0f, mExpandPanel.getBasePageTargetY(), MathUtils.EPSILON);
+
+        // When top controls min-height equals height, controls are locked and offset is 0.
+        when(mBrowserControlsStateProvider.getTopControlsMinHeight()).thenReturn(100);
+        mExpandPanel.updateBasePageTargetY();
+        Assert.assertEquals(0.0f, mExpandPanel.getBasePageTargetY(), MathUtils.EPSILON);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"OverlayPanelBase"})
+    @UiThreadTest
+    public void testBasePageTargetY_topControlsLocked_visibilityForced() {
+        mExpandPanel.onLayoutChanged(400, 1000, 0);
+        mExpandPanel.setIsFullWidthSizePanelForTesting(true);
+        mExpandPanel.setBasePageDesiredOffset(-100.0f);
+
+        // When visibility is not forced, controls are unlocked.
+        when(mBrowserControlsStateProvider.isVisibilityForced()).thenReturn(false);
+        mExpandPanel.updateBasePageTargetY();
+        Assert.assertEquals(-100.0f, mExpandPanel.getBasePageTargetY(), MathUtils.EPSILON);
+
+        // When visibility is forced, controls are locked and offset is 0.
+        when(mBrowserControlsStateProvider.isVisibilityForced()).thenReturn(true);
+        mExpandPanel.updateBasePageTargetY();
+        Assert.assertEquals(0.0f, mExpandPanel.getBasePageTargetY(), MathUtils.EPSILON);
     }
 }

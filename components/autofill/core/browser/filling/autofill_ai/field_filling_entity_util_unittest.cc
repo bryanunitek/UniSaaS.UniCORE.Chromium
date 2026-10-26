@@ -13,6 +13,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "components/autofill/core/browser/autofill_ai_form_rationalization.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/autofill_format_string.h"
 #include "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
@@ -25,15 +26,16 @@
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/form_structure_test_api.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
-#include "components/autofill/core/browser/geo/alternative_state_name_map_test_utils.h"
+#include "components/autofill/core/browser/geo/alternative_state_name_map_test_util.h"
+#include "components/autofill/core/browser/network/autofill_ai/mock_autofill_ai_personal_context_access_manager.h"
 #include "components/autofill/core/browser/proto/api_v1.pb.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
-#include "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
+#include "components/autofill/core/browser/test_utils/entity_data_test_util.h"
 #include "components/autofill/core/browser/webdata/autofill_ai/entity_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_test_helper.h"
 #include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -54,6 +56,7 @@ using ::i18n::addressinput::TestdataSource;
 using ::testing::ElementsAre;
 using ::testing::IsEmpty;
 using ::testing::Pointee;
+using ::testing::Return;
 using ::testing::UnorderedElementsAre;
 using FieldPrediction =
     AutofillQueryResponse::FormSuggestion::FieldSuggestion::FieldPrediction;
@@ -165,6 +168,13 @@ class FieldFillingEntityUtilTest : public testing::Test {
 
   FieldGlobalId field(size_t i) const { return form_.fields()[i]->global_id(); }
 
+  DenseSet<EntityType> GetEntityTypesBeingFetchedForField(
+      const AutofillField& field) {
+    return GetEntityTypesBeingFetched(
+        RationalizeAndDetermineAttributeTypes(form_.fields(), field.section()),
+        field, client_);
+  }
+
  private:
   base::test::ScopedFeatureList scoped_feature_list_{
       features::kAutofillAiWithDataSchema};
@@ -271,6 +281,163 @@ TEST_F(FieldFillingEntityUtilTest, FillingUnavailable) {
   test_api(form()).SetFieldTypes({CREDIT_CARD_NAME_FULL, NAME_FULL},
                                  {CREDIT_CARD_NAME_FULL, NO_SERVER_DATA});
   EXPECT_THAT(GetFieldsFillableByAutofillAi(form(), client()), IsEmpty());
+}
+
+TEST_F(FieldFillingEntityUtilTest, GetEntityTypesBeingFetched) {
+  test_api(form()).SetFieldTypes({PASSPORT_NUMBER, NAME_FULL});
+  const AutofillField& passport_field = *form().field(0);
+
+  // When access manager is null, returns empty.
+  client().set_personal_context_access_manager(nullptr);
+  EXPECT_THAT(GetEntityTypesBeingFetchedForField(passport_field), IsEmpty());
+
+  testing::NiceMock<MockAutofillAiPersonalContextAccessManager> access_manager;
+  client().set_personal_context_access_manager(&access_manager);
+  using RequestStatus = AutofillAiPersonalContextAccessManager::RequestStatus;
+
+  // When `ServerHasSpiiPresenceSignal` is false, returns empty.
+  ON_CALL(access_manager,
+          ServerHasSpiiPresenceSignal(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(false));
+  ON_CALL(access_manager,
+          GetPrefetchStatusByEntityType(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(RequestStatus::kPending));
+  EXPECT_THAT(GetEntityTypesBeingFetchedForField(passport_field), IsEmpty());
+
+  // When status is not `kPending` (e.g. `kSuccess`), returns empty.
+  ON_CALL(access_manager,
+          ServerHasSpiiPresenceSignal(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(true));
+  ON_CALL(access_manager,
+          GetPrefetchStatusByEntityType(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(RequestStatus::kSuccess));
+  EXPECT_THAT(GetEntityTypesBeingFetchedForField(passport_field), IsEmpty());
+
+  // When `ServerHasSpiiPresenceSignal` is true and status is `kPending`,
+  // returns the entity type for both the static field and the adjacent dynamic
+  // field.
+  ON_CALL(access_manager,
+          GetPrefetchStatusByEntityType(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(RequestStatus::kPending));
+  EXPECT_THAT(GetEntityTypesBeingFetchedForField(passport_field),
+              UnorderedElementsAre(EntityType(EntityTypeName::kPassport)));
+  EXPECT_THAT(GetEntityTypesBeingFetchedForField(*form().field(1)),
+              UnorderedElementsAre(EntityType(EntityTypeName::kPassport)));
+}
+
+// Tests that a dynamic Autofill AI field (`NAME_FULL`) in a form without any
+// static Autofill AI entity fields returns no pending entity types even when
+// `kPassport` prefetch status is `kPending` on the page.
+TEST_F(FieldFillingEntityUtilTest,
+       GetEntityTypesBeingFetched_DynamicFieldWithoutEntityForm) {
+  testing::NiceMock<MockAutofillAiPersonalContextAccessManager> access_manager;
+  client().set_personal_context_access_manager(&access_manager);
+  using RequestStatus = AutofillAiPersonalContextAccessManager::RequestStatus;
+
+  test_api(form()).SetFieldTypes({NAME_FULL, ADDRESS_HOME_LINE1});
+
+  ON_CALL(access_manager,
+          ServerHasSpiiPresenceSignal(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(true));
+  ON_CALL(access_manager,
+          GetPrefetchStatusByEntityType(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(RequestStatus::kPending));
+
+  EXPECT_THAT(GetEntityTypesBeingFetchedForField(*form().field(0)), IsEmpty());
+}
+
+// Tests that a dynamic Autofill AI field (`NAME_FULL`) separated by more than
+// `kMaxPropagationDistance` (5) fields from the nearest entity/dynamic field
+// of `kPassport` returns no pending entity types, while an adjacent
+// `NAME_FULL` field and the static `PASSPORT_NUMBER` field return `kPassport`.
+TEST_F(FieldFillingEntityUtilTest,
+       GetEntityTypesBeingFetched_DynamicFieldTooFarFromEntityField) {
+  testing::NiceMock<MockAutofillAiPersonalContextAccessManager> access_manager;
+  client().set_personal_context_access_manager(&access_manager);
+  using RequestStatus = AutofillAiPersonalContextAccessManager::RequestStatus;
+
+  // `form()` starts with 2 fields; push 6 more so we have 8 fields total.
+  for (int i = 0; i < 6; ++i) {
+    test_api(form()).PushField(
+        test::CreateTestFormField("", "", "", FormControlType::kInputText));
+  }
+  // Field 0 (`NAME_FULL`) is at distance 6 (> `kMaxPropagationDistance` = 5)
+  // from Field 6 (`NAME_FULL`), whereas Field 6 (`NAME_FULL`) is at distance 1
+  // from Field 7 (`PASSPORT_NUMBER`).
+  test_api(form()).SetFieldTypes({NAME_FULL, ADDRESS_HOME_LINE1,
+                                  ADDRESS_HOME_LINE2, ADDRESS_HOME_CITY,
+                                  ADDRESS_HOME_STATE, PHONE_HOME_WHOLE_NUMBER,
+                                  NAME_FULL, PASSPORT_NUMBER});
+
+  ON_CALL(access_manager,
+          ServerHasSpiiPresenceSignal(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(true));
+  ON_CALL(access_manager,
+          GetPrefetchStatusByEntityType(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(RequestStatus::kPending));
+
+  EXPECT_THAT(GetEntityTypesBeingFetchedForField(*form().field(0)), IsEmpty());
+  EXPECT_THAT(GetEntityTypesBeingFetchedForField(*form().field(6)),
+              UnorderedElementsAre(EntityType(EntityTypeName::kPassport)));
+  EXPECT_THAT(GetEntityTypesBeingFetchedForField(*form().field(7)),
+              UnorderedElementsAre(EntityType(EntityTypeName::kPassport)));
+}
+
+// Tests that a dynamic Autofill AI field (`NAME_FULL`) in a different
+// `Section` from the static `PASSPORT_NUMBER` field returns no pending entity
+// types even when `kPassport` prefetch status is `kPending`.
+TEST_F(FieldFillingEntityUtilTest,
+       GetEntityTypesBeingFetched_DynamicFieldInDifferentSection) {
+  testing::NiceMock<MockAutofillAiPersonalContextAccessManager> access_manager;
+  client().set_personal_context_access_manager(&access_manager);
+  using RequestStatus = AutofillAiPersonalContextAccessManager::RequestStatus;
+
+  test_api(form()).SetFieldTypes({NAME_FULL, PASSPORT_NUMBER});
+  form().field(0)->set_section(
+      Section::FromAutocomplete(Section::Autocomplete("section-1")));
+  form().field(1)->set_section(
+      Section::FromAutocomplete(Section::Autocomplete("section-2")));
+
+  ON_CALL(access_manager,
+          ServerHasSpiiPresenceSignal(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(true));
+  ON_CALL(access_manager,
+          GetPrefetchStatusByEntityType(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(RequestStatus::kPending));
+
+  EXPECT_THAT(GetEntityTypesBeingFetchedForField(*form().field(0)), IsEmpty());
+  EXPECT_THAT(GetEntityTypesBeingFetchedForField(*form().field(1)),
+              UnorderedElementsAre(EntityType(EntityTypeName::kPassport)));
+}
+
+TEST_F(FieldFillingEntityUtilTest, GetFieldsFillableByAutofillAi_BeingFetched) {
+  testing::NiceMock<MockAutofillAiPersonalContextAccessManager> access_manager;
+  client().set_personal_context_access_manager(&access_manager);
+  using RequestStatus = AutofillAiPersonalContextAccessManager::RequestStatus;
+
+  test_api(form()).SetFieldTypes({PASSPORT_NUMBER, NAME_FULL},
+                                 {PASSPORT_NUMBER, NO_SERVER_DATA});
+
+  // No entities exist in EntityDataManager.
+  EXPECT_THAT(GetFillableEntityInstances(client()), IsEmpty());
+
+  ON_CALL(access_manager, ServerHasSpiiPresenceSignal)
+      .WillByDefault(Return(false));
+  ON_CALL(access_manager, GetPrefetchStatusByEntityType)
+      .WillByDefault(Return(RequestStatus::kNotStarted));
+
+  // Server has data available and prefetch is pending for Passport.
+  ON_CALL(access_manager,
+          ServerHasSpiiPresenceSignal(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(true));
+  ON_CALL(access_manager,
+          GetPrefetchStatusByEntityType(EntityType(EntityTypeName::kPassport)))
+      .WillByDefault(Return(RequestStatus::kPending));
+
+  // Even though there are no entity instances stored yet, fields belonging to
+  // the pending entity type are considered fillable.
+  EXPECT_THAT(GetFieldsFillableByAutofillAi(form(), client()),
+              ElementsAre(field(0), field(1)));
 }
 
 // Tests that WillFillSensitiveAttributes() correctly identifies whether a
@@ -1008,6 +1175,22 @@ TEST_F(GetFillValueForEntityTest_Date, MonthStringAbbreviations) {
       GetFillValueForEntity(passport(), field, mojom::ActionPersistence::kFill,
                             /*app_locale=*/""),
       u"Dec");
+}
+
+// Tests that `GetTargetFieldOrigin` returns the given origin if it is not
+// opaque, and falls back to the primary main frame origin when opaque.
+TEST_F(FieldFillingEntityUtilTest, GetTargetFieldOrigin) {
+  TestAutofillClient client;
+  client.set_last_committed_primary_main_frame_url(
+      GURL("https://primary-main-frame.com"));
+
+  url::Origin non_opaque_origin =
+      url::Origin::Create(GURL("https://field-origin.com"));
+  EXPECT_EQ(GetTargetFieldOrigin(non_opaque_origin, client), non_opaque_origin);
+
+  url::Origin opaque_origin;
+  EXPECT_EQ(GetTargetFieldOrigin(opaque_origin, client),
+            url::Origin::Create(GURL("https://primary-main-frame.com")));
 }
 
 }  // namespace

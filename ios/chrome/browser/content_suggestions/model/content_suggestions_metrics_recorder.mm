@@ -10,12 +10,14 @@
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
 #import "components/favicon_base/favicon_types.h"
+#import "components/ntp_tiles/features.h"
 #import "components/ntp_tiles/metrics.h"
 #import "components/ntp_tiles/ntp_tile_impression.h"
 #import "components/ntp_tiles/tile_visual_type.h"
 #import "components/prefs/pref_service.h"
 #import "ios/chrome/browser/content_suggestions/model/content_suggestions_metrics_constants.h"
 #import "ios/chrome/browser/content_suggestions/model/content_suggestions_metrics_recorder.h"
+#import "ios/chrome/browser/content_suggestions/most_visited_tiles/public/metrics.h"
 #import "ios/chrome/browser/content_suggestions/most_visited_tiles/ui/most_visited_item.h"
 #import "ios/chrome/browser/content_suggestions/public/content_suggestions_constants.h"
 #import "ios/chrome/browser/content_suggestions/set_up_list/public/set_up_list_utils.h"
@@ -31,16 +33,38 @@ namespace {
 
 const float kMaxModuleEngagementIndex = 50;
 
+// Returns the visual type of a favicon for metrics logging.
+ntp_tiles::TileVisualType GetVisualTypeFromAttributes(
+    FaviconAttributes* attributes) {
+  if (!attributes) {
+    return ntp_tiles::TileVisualType::NONE;
+  } else if (attributes.faviconImage) {
+    return ntp_tiles::TileVisualType::ICON_REAL;
+  }
+  return attributes.defaultBackgroundColor
+             ? ntp_tiles::TileVisualType::ICON_DEFAULT
+             : ntp_tiles::TileVisualType::ICON_COLOR;
 }
+
+// Returns the icon type of a favicon for metrics logging.
+favicon_base::IconType GetIconTypeFromAttributes(
+    FaviconAttributes* attributes) {
+  favicon_base::IconType icon_type = favicon_base::IconType::kInvalid;
+  if (attributes.faviconImage) {
+    FaviconAttributesWithPayload* favicon_attributes =
+        base::apple::ObjCCastStrict<FaviconAttributesWithPayload>(attributes);
+    icon_type = favicon_attributes.iconType;
+  }
+  return icon_type;
+}
+
+}  // namespace
 
 @implementation ContentSuggestionsMetricsRecorder
 
-- (void)disconnect {
-}
-
 #pragma mark - Public
 
-- (void)recordMagicStackModuleEngagementForType:
++ (void)recordMagicStackModuleEngagementForType:
             (ContentSuggestionsModuleType)type
                                         atIndex:(int)index {
   UMA_HISTOGRAM_ENUMERATION(kMagicStackModuleEngagementHistogram, type);
@@ -86,6 +110,7 @@ const float kMaxModuleEngagementIndex = 50;
       break;
     case ContentSuggestionsModuleType::kTipsWithProductImage:
     case ContentSuggestionsModuleType::kTips:
+    case ContentSuggestionsModuleType::kTipsNTPThemeActionable:
       UMA_HISTOGRAM_EXACT_LINEAR(kMagicStackModuleEngagementTipsIndexHistogram,
                                  index, kMaxModuleEngagementIndex);
       break;
@@ -111,11 +136,11 @@ const float kMaxModuleEngagementIndex = 50;
   }
 }
 
-- (void)recordReturnToRecentTabTileShown {
++ (void)recordReturnToRecentTabTileShown {
   base::RecordAction(base::UserMetricsAction(kShowReturnToRecentTabTileAction));
 }
 
-- (void)recordShortcutTileTapped:(NTPCollectionShortcutType)shortcutType {
++ (void)recordShortcutTileTapped:(NTPCollectionShortcutType)shortcutType {
   switch (shortcutType) {
     case NTPCollectionShortcutTypeBookmark:
       base::RecordAction(base::UserMetricsAction(kShowBookmarksAction));
@@ -135,7 +160,7 @@ const float kMaxModuleEngagementIndex = 50;
   }
 }
 
-- (void)recordTabResumptionTabOpened:(ShopCardData*)shopCardData {
++ (void)recordTabResumptionTabOpened:(ShopCardData*)shopCardData {
   base::RecordAction(base::UserMetricsAction(kOpenMostRecentTabAction));
   if (shopCardData) {
     if (shopCardData.shopCardItemType == ShopCardItemType::kPriceDropOnTab) {
@@ -147,7 +172,7 @@ const float kMaxModuleEngagementIndex = 50;
   }
 }
 
-- (void)recordTabResumptionImpressionWithCustomization:
++ (void)recordTabResumptionImpressionWithCustomization:
             (ShopCardData*)shopCardData
                                                atIndex:(int)index {
   if (shopCardData) {
@@ -161,48 +186,54 @@ const float kMaxModuleEngagementIndex = 50;
   }
 }
 
-- (void)recordMostVisitedTilesShown {
++ (void)recordMostVisitedTilesShown {
   base::RecordAction(base::UserMetricsAction(kShowMostVisitedAction));
 }
 
-- (void)recordMostVisitedTileShown:(MostVisitedItem*)item
++ (void)recordMostVisitedTileShown:(MostVisitedItem*)item
                            atIndex:(NSInteger)index {
   ntp_tiles::metrics::RecordTileImpression(ntp_tiles::NTPTileImpression(
       index, item.source, item.titleSource,
-      [self getVisualTypeFromAttributes:item.attributes],
-      [self getIconTypeFromAttributes:item.attributes], item.URL));
+      GetVisualTypeFromAttributes(item.attributes),
+      GetIconTypeFromAttributes(item.attributes), item.URL));
+  if (ntp_tiles::GetAimButtonRefactorArm() ==
+      ntp_tiles::AimButtonRefactorArm::kAimAsMvt) {
+    if ([item isAIMTile]) {
+      RecordAimTileImpressionAtIndex(static_cast<int>(index));
+    }
+  }
 }
 
-- (void)recordMostVisitedTileOpened:(MostVisitedItem*)item
++ (void)recordMostVisitedTileOpened:(MostVisitedItem*)item
                             atIndex:(NSInteger)index {
   base::RecordAction(base::UserMetricsAction(kMostVisitedAction));
 
   ntp_tiles::metrics::RecordTileClick(ntp_tiles::NTPTileImpression(
       index, item.source, item.titleSource,
-      [self getVisualTypeFromAttributes:item.attributes],
-      [self getIconTypeFromAttributes:item.attributes], item.URL));
+      GetVisualTypeFromAttributes(item.attributes),
+      GetIconTypeFromAttributes(item.attributes), item.URL));
 
   new_tab_page_uma::RecordNTPAction(
       false, true, new_tab_page_uma::ACTION_OPENED_MOST_VISITED_ENTRY);
 }
 
-- (void)recordMostVisitedTileRemoved {
++ (void)recordMostVisitedTileRemoved {
   base::RecordAction(base::UserMetricsAction(kMostVisitedUrlBlacklistedAction));
 }
 
-- (void)recordSetUpListShown {
++ (void)recordSetUpListShown {
   set_up_list_metrics::RecordDisplayed();
 }
 
-- (void)recordSetUpListItemShown:(SetUpListItemType)type {
++ (void)recordSetUpListItemShown:(SetUpListItemType)type {
   set_up_list_metrics::RecordItemDisplayed(type);
 }
 
-- (void)recordSetUpListItemSelected:(SetUpListItemType)type {
++ (void)recordSetUpListItemSelected:(SetUpListItemType)type {
   set_up_list_metrics::RecordItemSelected(type);
 }
 
-- (void)recordShopCardImpression:(ShopCardData*)shopCardData
++ (void)recordShopCardImpression:(ShopCardData*)shopCardData
                          atIndex:(int)index {
   if (shopCardData.shopCardItemType ==
       ShopCardItemType::kPriceDropForTrackedProducts) {
@@ -214,7 +245,7 @@ const float kMaxModuleEngagementIndex = 50;
   }
 }
 
-- (void)recordShopCardOpened:(ShopCardData*)shopCardData {
++ (void)recordShopCardOpened:(ShopCardData*)shopCardData {
   if (shopCardData.shopCardItemType ==
       ShopCardItemType::kPriceDropForTrackedProducts) {
     base::RecordAction(base::UserMetricsAction(kShopCardWithPriceTrackingOpen));
@@ -223,40 +254,13 @@ const float kMaxModuleEngagementIndex = 50;
   }
 }
 
-- (void)recordContentNotificationSnackbarEvent:
++ (void)recordContentNotificationSnackbarEvent:
     (ContentNotificationSnackbarEvent)event {
   UMA_HISTOGRAM_ENUMERATION(kContentNotificationSnackbarEventHistogram, event);
   if (event == ContentNotificationSnackbarEvent::kActionButtonTapped) {
     base::RecordAction(
         base::UserMetricsAction(kContentNotificationSnackbarAction));
   }
-}
-
-#pragma mark - Private
-
-// Returns the visual type of a favicon for metrics logging.
-- (ntp_tiles::TileVisualType)getVisualTypeFromAttributes:
-    (FaviconAttributes*)attributes {
-  if (!attributes) {
-    return ntp_tiles::TileVisualType::NONE;
-  } else if (attributes.faviconImage) {
-    return ntp_tiles::TileVisualType::ICON_REAL;
-  }
-  return attributes.defaultBackgroundColor
-             ? ntp_tiles::TileVisualType::ICON_DEFAULT
-             : ntp_tiles::TileVisualType::ICON_COLOR;
-}
-
-// Returns the icon type of a favicon for metrics logging.
-- (favicon_base::IconType)getIconTypeFromAttributes:
-    (FaviconAttributes*)attributes {
-  favicon_base::IconType icon_type = favicon_base::IconType::kInvalid;
-  if (attributes.faviconImage) {
-    FaviconAttributesWithPayload* favicon_attributes =
-        base::apple::ObjCCastStrict<FaviconAttributesWithPayload>(attributes);
-    icon_type = favicon_attributes.iconType;
-  }
-  return icon_type;
 }
 
 @end

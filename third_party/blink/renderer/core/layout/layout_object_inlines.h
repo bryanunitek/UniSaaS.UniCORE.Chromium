@@ -22,12 +22,12 @@ inline const ComputedStyle& LayoutObject::FirstLineStyleRef() const {
     if (const ComputedStyle* first_line_style = FirstLineStyleWithoutFallback())
       return *first_line_style;
   }
-  return StyleRef();
+  return Style();
 }
 
-inline const ComputedStyle& LayoutObject::StyleRef(bool first_line) const {
+inline const ComputedStyle& LayoutObject::Style(bool first_line) const {
   NOT_DESTROYED();
-  return first_line ? FirstLineStyleRef() : StyleRef();
+  return first_line ? FirstLineStyleRef() : Style();
 }
 
 // SetNeedsLayout() won't cause full paint invalidations as
@@ -40,11 +40,11 @@ inline void LayoutObject::SetNeedsLayout(
 #if DCHECK_IS_ON()
   DCHECK(!IsSetNeedsLayoutForbidden());
 #endif
-  bool already_needed_layout = bitfields_.SelfNeedsFullLayout();
+  bool already_needed_layout = SelfNeedsFullLayout();
   SetSelfNeedsFullLayout(true);
   SetNeedsOverflowRecalc();
   SetSubgridMinMaxSizesCacheDirty(true);
-  SetTableColumnConstraintDirty(true);
+  SetTableColumnConstraintsDirty(true);
   if (!already_needed_layout) {
     DEVTOOLS_TIMELINE_TRACE_EVENT_INSTANT_WITH_CATEGORIES(
         TRACE_DISABLED_BY_DEFAULT("devtools.timeline.invalidationTracking"),

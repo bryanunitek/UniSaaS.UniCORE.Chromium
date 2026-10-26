@@ -36,6 +36,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/check_is_test.h"
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
@@ -44,6 +45,7 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "net/base/net_errors.h"
 #include "services/network/public/cpp/cross_origin_embedder_policy.h"
 #include "services/network/public/mojom/cookie_manager.mojom-blink.h"
 #include "services/network/public/mojom/cross_origin_embedder_policy.mojom.h"
@@ -72,6 +74,7 @@
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/fetch/fetch_request_data.h"
 #include "third_party/blink/renderer/core/fetch/global_fetch.h"
 #include "third_party/blink/renderer/core/frame/reporting_context.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
@@ -273,11 +276,6 @@ ServiceWorkerGlobalScope::ServiceWorkerGlobalScope(
 
 ServiceWorkerGlobalScope::~ServiceWorkerGlobalScope() = default;
 
-bool ServiceWorkerGlobalScope::ShouldInstallV8Extensions() const {
-  return Platform::Current()->AllowScriptExtensionForServiceWorker(
-      WebSecurityOrigin(GetSecurityOrigin()));
-}
-
 // https://w3c.github.io/ServiceWorker/#update
 void ServiceWorkerGlobalScope::FetchAndRunClassicScript(
     const KURL& script_url,
@@ -324,21 +322,9 @@ void ServiceWorkerGlobalScope::FetchAndRunClassicScript(
 
   // Step 9.6. "Fetch request, and asynchronously wait to run the remaining
   // steps as part of fetch's process response for the response response."
-  WorkerClassicScriptLoader* classic_script_loader =
-      MakeGarbageCollected<WorkerClassicScriptLoader>();
-  classic_script_loader->LoadTopLevelScriptAsynchronously(
-      *this,
-      CreateOutsideSettingsFetcher(outside_settings_object,
-                                   outside_resource_timing_notifier),
-      script_url, std::move(worker_main_script_load_params), context_type,
-      destination, network::mojom::RequestMode::kSameOrigin,
-      network::mojom::CredentialsMode::kSameOrigin,
-      BindOnce(&ServiceWorkerGlobalScope::DidReceiveResponseForClassicScript,
-               WrapWeakPersistent(this), WrapPersistent(classic_script_loader)),
-      BindOnce(&ServiceWorkerGlobalScope::DidFetchClassicScript,
-               WrapWeakPersistent(this), WrapPersistent(classic_script_loader),
-               stack_id),
-      {});
+  FetchClassicScript(script_url, std::move(worker_main_script_load_params),
+                     outside_settings_object, outside_resource_timing_notifier,
+                     context_type, destination, stack_id);
 }
 
 void ServiceWorkerGlobalScope::FetchAndRunModuleScript(
@@ -416,72 +402,6 @@ void ServiceWorkerGlobalScope::DidEvaluateScript() {
 AssociatedInterfaceRegistry&
 ServiceWorkerGlobalScope::GetAssociatedInterfaceRegistry() {
   return associated_inteface_registy_;
-}
-
-void ServiceWorkerGlobalScope::DidReceiveResponseForClassicScript(
-    WorkerClassicScriptLoader* classic_script_loader) {
-  DCHECK(IsContextThread());
-  probe::DidReceiveScriptResponse(this, classic_script_loader->Identifier());
-}
-
-// https://w3c.github.io/ServiceWorker/#update
-void ServiceWorkerGlobalScope::DidFetchClassicScript(
-    WorkerClassicScriptLoader* classic_script_loader,
-    const v8_inspector::V8StackTraceId& stack_id) {
-  DCHECK(IsContextThread());
-
-  // Step 9. "If the algorithm asynchronously completes with null, then:"
-  if (classic_script_loader->Failed()) {
-    // Step 9.1. "Invoke Reject Job Promise with job and TypeError."
-    // Step 9.2. "If newestWorker is null, invoke Clear Registration algorithm
-    // passing registration as its argument."
-    // Step 9.3. "Invoke Finish Job with job and abort these steps."
-    // The browser process takes care of these steps.
-    ReportingProxy().DidFailToFetchClassicScript();
-    // Close the worker global scope to terminate the thread.
-    close();
-    return;
-  }
-  // The app cache ID is not used.
-  ReportingProxy().DidFetchScript();
-  probe::ScriptImported(this, classic_script_loader->Identifier(),
-                        classic_script_loader->SourceText());
-
-  // Step 10. "If hasUpdatedResources is false, then:"
-  //   Step 10.1. "Invoke Resolve Job Promise with job and registration."
-  //   Steo 10.2. "Invoke Finish Job with job and abort these steps."
-  // Step 11. "Let worker be a new service worker."
-  // Step 12. "Set worker's script url to job's script url, worker's script
-  // resource to script, worker's type to job's worker type, and worker's
-  // script resource map to updatedResourceMap."
-  // Step 13. "Append url to worker's set of used scripts."
-  // The browser process takes care of these steps.
-
-  // Step 14. "Set worker's script resource's HTTPS state to httpsState."
-  // This is done in the constructor of WorkerGlobalScope.
-
-  // Step 15. "Set worker's script resource's referrer policy to
-  // referrerPolicy."
-  auto referrer_policy = network::mojom::ReferrerPolicy::kDefault;
-  if (!classic_script_loader->GetReferrerPolicy().IsNull()) {
-    SecurityPolicy::ReferrerPolicyFromHeaderValue(
-        classic_script_loader->GetReferrerPolicy(),
-        kDoNotSupportReferrerPolicyLegacyKeywords, &referrer_policy);
-  }
-
-  // Step 16. "Invoke Run Service Worker algorithm given worker, with the force
-  // bypass cache for importscripts flag set if job’s force bypass cache flag
-  // is set, and with the following callback steps given evaluationStatus:"
-  RunClassicScript(
-      classic_script_loader->ResponseURL(), referrer_policy,
-      classic_script_loader->GetContentSecurityPolicy()
-          ? mojo::Clone(classic_script_loader->GetContentSecurityPolicy()
-                            ->GetParsedPolicies())
-          : Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
-      classic_script_loader->GetDocumentPolicy(),
-      classic_script_loader->OriginTrialTokens(),
-      classic_script_loader->SourceText(),
-      classic_script_loader->ReleaseCachedMetadata(), stack_id);
 }
 
 // https://w3c.github.io/ServiceWorker/#run-service-worker-algorithm
@@ -563,28 +483,8 @@ void ServiceWorkerGlobalScope::LoadAndRunInstalledClassicScript(
       // TODO(crbug.com/488089240): Plumb Document Policy in Service Workers.
       DocumentPolicy::DocumentPolicyBundle{},
       script_data->CreateOriginTrialTokens().get(),
-      script_data->TakeSourceText(), script_data->TakeMetaData(), stack_id);
-}
-
-// https://w3c.github.io/ServiceWorker/#run-service-worker-algorithm
-void ServiceWorkerGlobalScope::RunClassicScript(
-    const KURL& response_url,
-    network::mojom::ReferrerPolicy response_referrer_policy,
-    Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
-    DocumentPolicy::DocumentPolicyBundle response_document_policy,
-    const Vector<String>* response_origin_trial_tokens,
-    const String& source_code,
-    std::unique_ptr<Vector<uint8_t>> cached_meta_data,
-    const v8_inspector::V8StackTraceId& stack_id) {
-  // Step 4.5-4.11 are implemented in Initialize().
-  Initialize(response_url, response_referrer_policy, std::move(response_csp),
-             std::move(response_document_policy), response_origin_trial_tokens);
-
-  // Step 4.12. "Let evaluationStatus be the result of running the classic
-  // script script if script is a classic script, otherwise, the result of
-  // running the module script script if script is a module script."
-  EvaluateClassicScript(response_url, source_code, std::move(cached_meta_data),
-                        stack_id);
+      script_data->TakeSourceText(), script_data->TakeMetaData(), stack_id,
+      script_data->GetScriptEncoding());
 }
 
 ServiceWorkerClients* ServiceWorkerGlobalScope::clients() {
@@ -712,7 +612,7 @@ ServiceWorker* ServiceWorkerGlobalScope::GetOrCreateServiceWorker(
 bool ServiceWorkerGlobalScope::AddEventListenerInternal(
     const AtomicString& event_type,
     EventListener* listener,
-    const AddEventListenerOptionsResolved* options) {
+    const AddEventListenerOptionsResolved& options) {
   if (did_evaluate_script_) {
     String message = StrCat(
         {"Event handler of '", event_type,
@@ -736,7 +636,8 @@ bool ServiceWorkerGlobalScope::FetchClassicImportedScript(
     const KURL& script_url,
     KURL* out_response_url,
     String* out_source_code,
-    std::unique_ptr<Vector<uint8_t>>* out_cached_meta_data) {
+    std::unique_ptr<Vector<uint8_t>>* out_cached_meta_data,
+    TextEncoding* out_response_encoding) {
   // InstalledScriptsManager is used only for starting installed service
   // workers.
   if (installed_scripts_manager_) {
@@ -750,13 +651,15 @@ bool ServiceWorkerGlobalScope::FetchClassicImportedScript(
     *out_response_url = script_url;
     *out_source_code = script_data->TakeSourceText();
     *out_cached_meta_data = script_data->TakeMetaData();
+    *out_response_encoding = script_data->GetScriptEncoding();
     // TODO(shimazu): Add appropriate probes for inspector.
     return true;
   }
   // This is a new service worker. Proceed with importing scripts and installing
   // them.
   return WorkerGlobalScope::FetchClassicImportedScript(
-      script_url, out_response_url, out_source_code, out_cached_meta_data);
+      script_url, out_response_url, out_source_code, out_cached_meta_data,
+      out_response_encoding);
 }
 
 ResourceLoadScheduler::ThrottleOptionOverride
@@ -814,6 +717,8 @@ void ServiceWorkerGlobalScope::Trace(Visitor* visitor) const {
   visitor->Trace(controller_receivers_);
   visitor->Trace(remote_associated_interfaces_);
   visitor->Trace(associated_interfaces_receiver_);
+  visitor->Trace(active_fetch_respond_with_observers_);
+  visitor->Trace(race_network_requests_);
   WorkerGlobalScope::Trace(visitor);
 }
 
@@ -821,6 +726,68 @@ bool ServiceWorkerGlobalScope::HasRelatedFetchEvent(
     const KURL& request_url) const {
   auto it = unresponded_fetch_event_counts_.find(request_url);
   return it != unresponded_fetch_event_counts_.end();
+}
+
+void ServiceWorkerGlobalScope::MaybeRecordFetchError(
+    int net_error_code,
+    const FetchRequestData* request_data) {
+  DCHECK(IsContextThread());
+  if (request_data && request_data->ServiceWorkerRaceNetworkRequestToken()) {
+    base::UnguessableToken token =
+        request_data->ServiceWorkerRaceNetworkRequestToken();
+    ServiceWorkerRaceNetworkRequestLoaderState loader_state =
+        GetRaceNetworkRequestLoaderState(token);
+    race_network_request_loader_states_.erase(String(token.ToString()));
+    base::UmaHistogramSparse(
+        "ServiceWorker.FetchInFetchHandler.RaceFetchNetError", -net_error_code);
+    if (loader_state ==
+        ServiceWorkerRaceNetworkRequestLoaderState::kRaceLoaderUsed) {
+      base::UmaHistogramSparse(
+          "ServiceWorker.FetchInFetchHandler.RaceURLLoaderNetError",
+          -net_error_code);
+    }
+    if (net_error_code == net::OK) {
+      base::UmaHistogramEnumeration(
+          "ServiceWorker.FetchInFetchHandler."
+          "RaceNetworkRequestLoaderState.Success",
+          loader_state);
+      return;
+    }
+    base::UmaHistogramEnumeration(
+        "ServiceWorker.FetchInFetchHandler."
+        "RaceNetworkRequestLoaderState.Failure",
+        loader_state);
+    for (const auto& entry : active_fetch_respond_with_observers_) {
+      if (entry.value->race_network_request_token() &&
+          *entry.value->race_network_request_token() == token) {
+        entry.value->OnRaceFetchError(net_error_code);
+        return;
+      }
+    }
+    base::UmaHistogramSparse(
+        "ServiceWorker.FetchInFetchHandler.PostRespondWithRaceFetchNetError",
+        -net_error_code);
+    if (loader_state ==
+        ServiceWorkerRaceNetworkRequestLoaderState::kRaceLoaderUsed) {
+      base::UmaHistogramSparse(
+          "ServiceWorker.FetchInFetchHandler."
+          "PostRespondWithRaceURLLoaderNetError",
+          -net_error_code);
+    }
+    return;
+  }
+  if (net_error_code == net::OK ||
+      active_fetch_respond_with_observers_.empty()) {
+    return;
+  }
+  if (request_data) {
+    for (const auto& entry : active_fetch_respond_with_observers_) {
+      if (entry.value->request_url() == request_data->Url()) {
+        entry.value->OnRegularFetchError(net_error_code);
+        return;
+      }
+    }
+  }
 }
 
 bool ServiceWorkerGlobalScope::HasRangeFetchEvent(
@@ -880,18 +847,21 @@ void ServiceWorkerGlobalScope::importScripts(
 CachedMetadataHandler*
 ServiceWorkerGlobalScope::CreateWorkerScriptCachedMetadataHandler(
     const KURL& script_url,
-    std::unique_ptr<Vector<uint8_t>> meta_data) {
+    std::unique_ptr<Vector<uint8_t>> meta_data,
+    TextEncoding encoding) {
   return MakeGarbageCollected<ServiceWorkerScriptCachedMetadataHandler>(
-      this, script_url, std::move(meta_data));
+      this, script_url, std::move(meta_data), std::move(encoding));
 }
 
-void ServiceWorkerGlobalScope::ExceptionThrown(ErrorEvent* event) {
-  WorkerGlobalScope::ExceptionThrown(event);
+void ServiceWorkerGlobalScope::ExceptionThrown(
+    ErrorEvent* event,
+    SanitizeScriptErrors sanitize_script_errors) {
+  WorkerGlobalScope::ExceptionThrown(event, sanitize_script_errors);
   if (WorkerThreadDebugger* debugger =
-          WorkerThreadDebugger::From(GetThread()->GetIsolate()))
+          WorkerThreadDebugger::From(GetThread()->GetIsolate())) {
     debugger->ExceptionThrown(GetThread(), event);
+  }
 }
-
 void ServiceWorkerGlobalScope::CountCacheStorageInstalledScript(
     uint64_t script_size,
     uint64_t script_metadata_size) {
@@ -1013,7 +983,8 @@ void ServiceWorkerGlobalScope::RespondToFetchEventWithNoResponse(
     bool range_request,
     std::optional<network::DataElementChunkedDataPipe> request_body,
     base::TimeTicks event_dispatch_time,
-    base::TimeTicks respond_with_settled_time) {
+    base::TimeTicks respond_with_settled_time,
+    mojom::blink::ServiceWorkerFetchHandlerErrorsPtr errors) {
   DCHECK(IsContextThread());
   TRACE_EVENT("ServiceWorker",
               "ServiceWorkerGlobalScope::RespondToFetchEventWithNoResponse",
@@ -1036,7 +1007,8 @@ void ServiceWorkerGlobalScope::RespondToFetchEventWithNoResponse(
     pending_streaming_upload_fetch_events_.insert(fetch_event_id, fetch_event);
   }
 
-  response_callback->OnFallback(std::move(request_body), std::move(timing));
+  response_callback->OnFallback(std::move(request_body), std::move(timing),
+                                std::move(errors));
 }
 void ServiceWorkerGlobalScope::OnStreamingUploadCompletion(int fetch_event_id) {
   pending_streaming_upload_fetch_events_.erase(fetch_event_id);
@@ -1048,7 +1020,8 @@ void ServiceWorkerGlobalScope::RespondToFetchEvent(
     bool range_request,
     mojom::blink::FetchAPIResponsePtr response,
     base::TimeTicks event_dispatch_time,
-    base::TimeTicks respond_with_settled_time) {
+    base::TimeTicks respond_with_settled_time,
+    mojom::blink::ServiceWorkerFetchHandlerErrorsPtr errors) {
   DCHECK(IsContextThread());
   TRACE_EVENT("ServiceWorker", "ServiceWorkerGlobalScope::RespondToFetchEvent",
               perfetto::Flow::ProcessScoped(
@@ -1067,7 +1040,8 @@ void ServiceWorkerGlobalScope::RespondToFetchEvent(
 
   NoteRespondedToFetchEvent(request_url, range_request);
 
-  response_callback->OnResponse(std::move(response), std::move(timing));
+  response_callback->OnResponse(std::move(response), std::move(timing),
+                                std::move(errors));
 }
 
 void ServiceWorkerGlobalScope::RespondToFetchEventWithResponseStream(
@@ -1077,7 +1051,8 @@ void ServiceWorkerGlobalScope::RespondToFetchEventWithResponseStream(
     mojom::blink::FetchAPIResponsePtr response,
     mojom::blink::ServiceWorkerStreamHandlePtr body_as_stream,
     base::TimeTicks event_dispatch_time,
-    base::TimeTicks respond_with_settled_time) {
+    base::TimeTicks respond_with_settled_time,
+    mojom::blink::ServiceWorkerFetchHandlerErrorsPtr errors) {
   DCHECK(IsContextThread());
   TRACE_EVENT("ServiceWorker",
               "ServiceWorkerGlobalScope::RespondToFetchEventWithResponseStream",
@@ -1096,8 +1071,9 @@ void ServiceWorkerGlobalScope::RespondToFetchEventWithResponseStream(
 
   NoteRespondedToFetchEvent(request_url, range_request);
 
-  response_callback->OnResponseStream(
-      std::move(response), std::move(body_as_stream), std::move(timing));
+  response_callback->OnResponseStream(std::move(response),
+                                      std::move(body_as_stream),
+                                      std::move(timing), std::move(errors));
 }
 
 void ServiceWorkerGlobalScope::DidHandleFetchEvent(
@@ -1110,6 +1086,8 @@ void ServiceWorkerGlobalScope::DidHandleFetchEvent(
               perfetto::TerminatingFlow::ProcessScoped(
                   event_id, kServiceWorkerGlobalScopeTraceScope),
               "status", MojoEnumToString(status));
+
+  active_fetch_respond_with_observers_.erase(event_id);
 
   // Delete the URLLoaderFactory for the RaceNetworkRequest if it's not used.
   RemoveItemFromRaceNetworkRequests(event_id);
@@ -1505,6 +1483,7 @@ void ServiceWorkerGlobalScope::AbortCallbackForFetchEvent(
     response_callback_iter->value->TakeValue().reset();
     fetch_response_callbacks_.erase(response_callback_iter);
   }
+  active_fetch_respond_with_observers_.erase(event_id);
   RemoveItemFromRaceNetworkRequests(event_id);
 
   // Run the event callback with the error code.
@@ -1544,6 +1523,7 @@ void ServiceWorkerGlobalScope::StartFetchEvent(
   auto* respond_with_observer = MakeGarbageCollected<FetchRespondWithObserver>(
       this, event_id, std::move(corp_checker), *params->request,
       wait_until_observer);
+  active_fetch_respond_with_observers_.Set(event_id, respond_with_observer);
   FetchEventInit* event_init = FetchEventInit::Create();
   event_init->setCancelable(true);
   // Note on how clientId / resultingClientID are set:
@@ -2688,8 +2668,7 @@ void ServiceWorkerGlobalScope::RecordQueuingTime(base::TimeTicks created_time) {
 }
 
 bool ServiceWorkerGlobalScope::IsInFencedFrame() const {
-  return GetAncestorFrameType() ==
-         mojom::blink::AncestorFrameType::kFencedFrame;
+  return false;
 }
 
 void ServiceWorkerGlobalScope::NotifyWebSocketActivity() {
@@ -2779,16 +2758,111 @@ bool ServiceWorkerGlobalScope::SetAttributeEventListener(
   return WorkerGlobalScope::SetAttributeEventListener(event_type, listener);
 }
 
+ServiceWorkerGlobalScope::RaceNetworkRequestInfo::RaceNetworkRequestInfo(
+    ExecutionContext* execution_context,
+    int fetch_event_id,
+    mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
+        url_loader_factory,
+    bool fallback_on_disconnect_enabled)
+    : fetch_event_id_(fetch_event_id),
+      url_loader_factory_remote_(execution_context) {
+  if (fallback_on_disconnect_enabled) {
+    url_loader_factory_remote_.Bind(
+        std::move(url_loader_factory),
+        execution_context->GetTaskRunner(TaskType::kNetworking));
+  } else {
+    pending_url_loader_factory_ = std::move(url_loader_factory);
+  }
+}
+
+mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
+ServiceWorkerGlobalScope::RaceNetworkRequestInfo::TakePendingRemote() {
+  if (url_loader_factory_remote_.is_bound()) {
+    return url_loader_factory_remote_.Unbind();
+  }
+  return std::move(pending_url_loader_factory_);
+}
+
+bool ServiceWorkerGlobalScope::RaceNetworkRequestInfo::IsValid() const {
+  return !is_disconnected_ && (pending_url_loader_factory_.is_valid() ||
+                               url_loader_factory_remote_.is_bound());
+}
+
+void ServiceWorkerGlobalScope::RaceNetworkRequestInfo::HandleDisconnected() {
+  is_disconnected_ = true;
+  if (url_loader_factory_remote_.is_bound()) {
+    url_loader_factory_remote_.reset();
+  }
+}
+
 std::optional<mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>>
 ServiceWorkerGlobalScope::FindRaceNetworkRequestURLLoaderFactory(
     const base::UnguessableToken& token) {
-  if (RaceNetworkRequestInfo result =
-          race_network_requests_.Take(String(token.ToString()));
-      result.IsValid()) {
-    fetch_event_ids_to_token_map_.erase(result.fetch_event_id);
-    return std::move(result.url_loader_factory);
+  const String token_key = String(token.ToString());
+  ServiceWorkerRaceNetworkRequestLoaderState state =
+      ServiceWorkerRaceNetworkRequestLoaderState::kFallbackDueToNoFactory;
+  std::optional<mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>>
+      factory;
+
+  if (Member<RaceNetworkRequestInfo> info =
+          race_network_requests_.Take(token_key)) {
+    fetch_event_ids_to_token_map_.erase(info->fetch_event_id());
+    if (info->is_disconnected()) {
+      state =
+          ServiceWorkerRaceNetworkRequestLoaderState::kFallbackDueToDisconnect;
+    } else if (info->IsValid()) {
+      state = ServiceWorkerRaceNetworkRequestLoaderState::kRaceLoaderUsed;
+      factory = info->TakePendingRemote();
+    }
+  } else if (auto it = race_network_request_loader_states_.find(token_key);
+             it != race_network_request_loader_states_.end() &&
+             it->value ==
+                 ServiceWorkerRaceNetworkRequestLoaderState::kRaceLoaderUsed) {
+    state = ServiceWorkerRaceNetworkRequestLoaderState::
+        kFallbackDueToAlreadyConsumed;
   }
-  return std::nullopt;
+
+  race_network_request_loader_states_.Set(token_key, state);
+  base::UmaHistogramEnumeration(
+      "ServiceWorker.FetchInFetchHandler.RaceNetworkRequestLoaderState", state);
+  return factory;
+}
+
+ServiceWorkerRaceNetworkRequestLoaderState
+ServiceWorkerGlobalScope::GetRaceNetworkRequestLoaderState(
+    const base::UnguessableToken& token) const {
+  if (token.is_empty()) {
+    return ServiceWorkerRaceNetworkRequestLoaderState::kInvalidToken;
+  }
+  const String token_key = String(token.ToString());
+  auto it = race_network_request_loader_states_.find(token_key);
+  if (it != race_network_request_loader_states_.end()) {
+    return it->value;
+  }
+  return ServiceWorkerRaceNetworkRequestLoaderState::kNotFound;
+}
+
+void ServiceWorkerGlobalScope::InsertNewItemToRaceNetworkRequestsForTesting(
+    int fetch_event_id,
+    const base::UnguessableToken& token,
+    mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
+        url_loader_factory,
+    const KURL& request_url) {
+  CHECK_IS_TEST();
+  InsertNewItemToRaceNetworkRequests(
+      fetch_event_id, token, std::move(url_loader_factory), request_url);
+}
+
+void ServiceWorkerGlobalScope::RemoveItemFromRaceNetworkRequestsForTesting(
+    int fetch_event_id) {
+  CHECK_IS_TEST();
+  RemoveItemFromRaceNetworkRequests(fetch_event_id);
+}
+
+void ServiceWorkerGlobalScope::OnRaceNetworkRequestDisconnectedForTesting(
+    const base::UnguessableToken& token) {
+  CHECK_IS_TEST();
+  OnRaceNetworkRequestDisconnected(token);
 }
 
 void ServiceWorkerGlobalScope::InsertNewItemToRaceNetworkRequests(
@@ -2798,11 +2872,21 @@ void ServiceWorkerGlobalScope::InsertNewItemToRaceNetworkRequests(
         url_loader_factory,
     const KURL& request_url) {
   auto race_network_request_token = String(token.ToString());
-  RaceNetworkRequestInfo info{
-      .fetch_event_id = fetch_event_id,
-      .url_loader_factory = std::move(url_loader_factory)};
-  auto insert_result = race_network_requests_.insert(race_network_request_token,
-                                                     std::move(info));
+  race_network_request_loader_states_.Set(
+      race_network_request_token,
+      ServiceWorkerRaceNetworkRequestLoaderState::kNotInitiated);
+  const bool fallback_on_disconnect_enabled = base::FeatureList::IsEnabled(
+      features::kServiceWorkerRaceNetworkRequestFallbackOnDisconnect);
+  auto* info = MakeGarbageCollected<RaceNetworkRequestInfo>(
+      this, fetch_event_id, std::move(url_loader_factory),
+      fallback_on_disconnect_enabled);
+  if (fallback_on_disconnect_enabled) {
+    info->remote().set_disconnect_handler(blink::BindOnce(
+        &ServiceWorkerGlobalScope::OnRaceNetworkRequestDisconnected,
+        WrapWeakPersistent(this), token));
+  }
+  auto insert_result =
+      race_network_requests_.insert(race_network_request_token, info);
   CHECK(insert_result.is_new_entry) << "Collided UnguessableToken";
   fetch_event_ids_to_token_map_.insert(fetch_event_id,
                                        std::move(race_network_request_token));
@@ -2810,11 +2894,37 @@ void ServiceWorkerGlobalScope::InsertNewItemToRaceNetworkRequests(
 
 void ServiceWorkerGlobalScope::RemoveItemFromRaceNetworkRequests(
     int fetch_event_id) {
+  // If `fetch_event_id` is still present in `fetch_event_ids_to_token_map_`,
+  // `FindRaceNetworkRequestURLLoaderFactory` was never called for this fetch
+  // event (i.e. `fetch(event.request)` was not initiated). Clean up the unused
+  // `kNotInitiated` entry to prevent memory leaks.
   if (const String token_to_remove =
           fetch_event_ids_to_token_map_.Take(fetch_event_id);
       !token_to_remove.empty()) {
     race_network_requests_.erase(token_to_remove);
+    race_network_request_loader_states_.erase(token_to_remove);
   }
+}
+
+void ServiceWorkerGlobalScope::OnRaceNetworkRequestDisconnected(
+    const base::UnguessableToken& token) {
+  const String token_key = String(token.ToString());
+  auto it = race_network_requests_.find(token_key);
+  if (it != race_network_requests_.end()) {
+    it->value->HandleDisconnected();
+  }
+}
+
+void ServiceWorkerGlobalScope::AllowPopupCapabilityDelegation() {
+  popup_capability_token_.Activate();
+}
+
+bool ServiceWorkerGlobalScope::ConsumePopupCapabilityDelegation() {
+  return popup_capability_token_.ConsumeIfActive();
+}
+
+bool ServiceWorkerGlobalScope::IsPopupCapabilityDelegationAllowed() const {
+  return popup_capability_token_.IsActive();
 }
 
 }  // namespace blink
